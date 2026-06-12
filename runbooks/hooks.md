@@ -3,8 +3,8 @@
 원칙: **트리거는 결정적으로, 판단은 인-컨텍스트로.** 훅은 LLM/모델 API 를 절대 호출하지 않는다 —
 텍스트를 주입하거나 플래그를 만질 뿐이고, 판단은 작업 맥락이 살아있는 세션이 한다.
 
-소스(단일 출처): `workflow-std/hooks/` (3 스크립트 + `settings-hooks.json` 템플릿 + `test-hooks.sh`).
-배포: `workflow-std/tools/build-context.mjs` 가 `--publish`(team-context) 와 `--install-hooks <dir>…`(독푸드)
+소스(단일 출처): `workflow-std/hooks/` (제품 레포 — 3 스크립트 + `settings-hooks.json` 템플릿 + `test-hooks.sh`).
+배포: `workflow-std/generator/build-context.mjs` 가 `--publish`(context-setup) 와 `--install-hooks <dir>…`(독푸드)
 경로에서 `<target>/.claude/hooks/*.mjs` + `<target>/.claude/settings.json`(hooks 블록 비파괴 머지)을 에밋한다.
 
 ## 1. 훅 계약 (공식 문서 검증 완료 — ground truth)

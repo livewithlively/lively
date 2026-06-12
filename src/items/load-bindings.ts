@@ -1,4 +1,4 @@
-// 수동 신원 바인딩 로더 — 컨텍스트 소스 레포(workflow-std)의 members/*.md frontmatter 가
+// 수동 신원 바인딩 로더 — 조직콘텐츠 레포(lively-org)의 members/*.md frontmatter 가
 // canonical person/신원 바인딩의 ground truth. 여기서 읽어 person + person_identity(origin='manual',
 // state='confirmed') 로 upsert 한다. 변경이 실제로 있을 때만 person_identity_audit 기록.
 //
@@ -194,7 +194,7 @@ export function readBindingsDir(dir: string): { persons: BindingPerson[]; files:
 
 function defaultMembersDir(): string {
   const here = dirname(fileURLToPath(import.meta.url)); // dist/items
-  return process.env.BINDINGS_DIR ?? resolve(here, "../../../workflow-std/members");
+  return process.env.BINDINGS_DIR ?? resolve(here, "../../../lively-org/members");
 }
 
 // ── upsert (호출자가 트랜잭션/클라이언트 소유) ──
