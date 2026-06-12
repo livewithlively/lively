@@ -9,7 +9,7 @@ tools:
   - lively:curate_item_mapping
 env:
   - ITEMS_DATABASE_URL
-  - DOMAINMAP_URL
+  - DOMAINMAP_DATABASE_URL
   - DOMAINMAP_DEFAULT_REPO
 trigger: on-demand + subscription (in-session /loop) — never headless/programmatic
 ---

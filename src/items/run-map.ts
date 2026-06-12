@@ -1,6 +1,6 @@
 // 결정적 매퍼 CLI (Plane B 결정적 플러밍, DESIGN §10.5) — run-backfill.ts 패턴.
 // 사용: node --env-file-if-exists=.env dist/items/run-map.js [--repo X] [--since ISO] [--system discord,notion] [--limit N]
-//   필요 env: ITEMS_DATABASE_URL, DOMAINMAP_URL, DOMAINMAP_DEFAULT_REPO
+//   필요 env: ITEMS_DATABASE_URL, DOMAINMAP_DATABASE_URL, DOMAINMAP_DEFAULT_REPO
 // D2~D5 / P1~P4 전부 mapped_by='rule', state='proposed' 로 멱등 upsert. LLM 0.
 import { initItemSchema } from "./store.js";
 import { runDeterministicMapping } from "./mapping-run.js";

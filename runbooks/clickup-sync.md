@@ -11,7 +11,7 @@ tools:
   - lively:pm_task_archive
 env:
   - ITEMS_DATABASE_URL
-  - DOMAINMAP_URL
+  - DOMAINMAP_DATABASE_URL
   - CLICKUP_API_TOKEN
   - CLICKUP_EXCLUDE_LIST_IDS
 trigger: on-demand + suggested in-session loop — 스케줄러 미설치(아래 §6)

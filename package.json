@@ -4,13 +4,16 @@
   "private": true,
   "description": "Lively 통합 컨텍스트 스토어 — 사내 MCP 게이트웨이 (memory/context/code/db)",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "parity": "npm run build && node --env-file-if-exists=.env scripts/parity-check.mjs"
+    "parity": "npm run build && node --env-file-if-exists=.env scripts/parity-check.mjs",
+    "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.19.0",

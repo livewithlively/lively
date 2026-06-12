@@ -4,12 +4,19 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema } from "./items/store.js";
+import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { registerWebUi } from "./web.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
 const app = express();
+
+// domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
+// HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
+// bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
+app.use("/api/webhook", domainmapWebhookRouter());
+
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();

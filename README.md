@@ -23,7 +23,7 @@
 | 인증 | `src/auth/bearer.ts` | 1단계 정적 토큰. 2단계 OAuth로 이 파일만 교체 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — items·mapping·context·pm·domainmap-curation |
 | 도메인/프로젝트 | `src/capabilities/context.ts` | `context_overview`/`domain_list`/`domain_get`/`project_list`/`debt_list`/`repo_list` + **authoring 쓰기 `propose_domain`/`domain_deprecate`** — domainmap 프록시 |
-| domainmap 클라 | `src/domainmap/client.ts` | domainmap `/api/*` 호출 (`DOMAINMAP_URL`) |
+| domainmap 엔진 | `src/domainmap/` | 흡수된 엔진 모듈 — `db.ts`(전용 pg Pool) · `core/`(reconcile·changelog·domains·mappings·debts·projects·refresh·queries) · `cli.ts`(호스트 CLI) · `webhook.ts`(HMAC push-refresh) (`DOMAINMAP_DATABASE_URL`) |
 | PM (ClickUp) | `src/capabilities/pm.ts` · `src/connectors/clickup.ts` | `pm_task_*` 6툴 write-through(+`pm_write_audit`) + 폴링 증분 싱크(`run-sync`) — `runbooks/clickup-sync.md` |
 | DB | `src/tools/db.ts` | `db_schema` / `db_query` (방화벽·RLS·timeout·감사 골격) |
 | DB 안전장치 | `src/db/firewall.ts` | 단일 SELECT 만 허용 |
@@ -68,14 +68,14 @@ Docker: `docker compose up --build`
 
 ## domainmap 통합 (도메인/프로젝트 맥락)
 
-도메인/프로젝트/부채는 **모듈/서비스 `domain-map`(store-core + runbook, DB는 lc-items-db 인스턴스의 `domainmap` database)이 canonical 소스**다.
-게이트웨이는 그 HTTP API(`/api/*`)를 프록시한다(`src/domainmap/client.ts`) — **읽기 + 화이트리스트 쓰기**(2026-06-11 갱신).
+도메인/프로젝트/부채는 **게이트웨이에 흡수된 domainmap 엔진(`src/domainmap/`, DB는 lc-items-db 인스턴스의 `domainmap` database)이 canonical 소스**다.
+(2026-06-12 Stage⑥) 구 `domain-map` 서비스(:7700)의 store-core/서버/CLI 를 모듈로 흡수 — capability 가 코어를 직접 호출한다(**읽기 + 화이트리스트 쓰기**, HTTP 프록시 제거).
 
 - 읽기 툴: `context_overview` · `domain_list` · `domain_get` · `project_list` · `debt_list` · `repo_list`
 - **(2026-06-11) 도메인 authoring 쓰기:** `propose_domain`(evidence 필수→change_log, proposed 착지) · `domain_deprecate` — MCP/REST.
 - **(2026-06-11) 큐레이션 UI 통합:** 게이트웨이 `/ui`가 domainmap 큐레이션(확인/수정/병합/매핑/부채/이력/되돌리기)을 흡수 — REST 전용 capability 12 op, 화이트리스트+감사. 구 `:7700` UI는 퇴역 배너.
-- 설정: `DOMAINMAP_URL`, `DOMAINMAP_DEFAULT_REPO` (`.env`)
-- **보안:** domainmap 엔 auth 없음 → 게이트웨이 뒤 사내망 전용, 직접 노출 금지.
+- 설정: `DOMAINMAP_DATABASE_URL`, `DOMAINMAP_DEFAULT_REPO`, `WEBHOOK_SECRET`, `SYNC_BLOCKED_REPOS`, `DOMAINMAP_REPOS_DIR` (`.env`)
+- **보안:** 모든 읽기/쓰기는 게이트웨이 bearer 뒤(웹훅만 자체 HMAC fail-closed). 엔진 DB 는 게이트웨이 DATABASE_URL(읽기전용 리플리카)과 분리.
 - **체인:** `domain_get → data_entity(예: Brand[prisma:database]) → db_query(그 테이블, 읽기전용 RLS)`.
   domainmap=맵, `db_query`=실데이터. 두 DB(맵 DB vs 제품 DB) 연결.
 

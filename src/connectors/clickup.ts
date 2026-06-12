@@ -9,7 +9,7 @@
 // 액터 컨벤션(load-bearing): clickup 신원의 external_id 는 **소문자 이메일**(없으면 숫자 id 문자열) —
 // daon 의 manual 신원(clickup / 'lively@lvly.io')이 정확히 매치되어야 한다(resolveActor 정확 일치 룩업).
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
-import { dmPost } from "../domainmap/client.js";
+import { syncProject } from "../domainmap/core/projects.js";
 
 export type { Connector, RawItem, BackfillOpts };
 
@@ -380,11 +380,12 @@ export async function syncProjects(
   for (const list of lists) {
     const base = { listId: list.id, listName: list.name ?? list.id };
     try {
-      const r = (await dmPost(
-        "/api/repo/productivity/project/sync",
+      // Stage⑥ 직결: 구 dmPost('/api/repo/productivity/project/sync', payload, 'daon', agent) 와
+      // 동일 시맨틱 — 코어 syncProject 가 SYNC_BLOCKED_REPOS 가드·409 소유-repo 안내를 그대로 수행.
+      const r = (await syncProject(
+        "productivity",
         toProjectSyncPayload(list, ctx),
-        "daon",
-        { actorType: "agent" },
+        { type: "agent", id: "daon" },
       )) as { id?: number; key?: string; action?: string };
       out.push({ ...base, ok: true, action: r.action, projectKey: r.key, projectId: r.id });
     } catch (err) {

@@ -1,7 +1,7 @@
 // Item store — DESIGN §5 canonical schema. 모든 소스(Slack/Discord/Notion…)가 여기로 정규화돼 들어온다.
 // 별도 Postgres(ITEMS_DATABASE_URL). 도메인/프로젝트는 (repo, key) 소프트참조로 연결(domainmap 은 별 DB).
 import pg from "pg";
-import { resolveRepo } from "../domainmap/client.js";
+import { resolveRepo } from "../domainmap/core/types.js";
 import {
   loadCandidates,
   validateDomainKey,

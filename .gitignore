@@ -8,3 +8,6 @@ dist
 *.swo
 *.sw?
 *~
+
+# domainmap 웹훅 클론 캐시
+var/repos/

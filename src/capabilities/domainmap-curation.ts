@@ -1,13 +1,23 @@
 // domainmap 큐레이션 그룹 capability — 게이트웨이가 domainmap 쓰기를 흡수하는 단일 표면(Stage②+⑤).
 // propose_domain·domain_deprecate 만 MCP 노출(도메인 authoring — Phase C ⑤ 의도적 확장), 나머지 REST 전용.
 // (현 MCP 표면 = 21툴: 기존 13 + pm 6 + domainmap authoring 2.)
-// 화이트리스트 원칙: free-form 프록시 금지 — 아래 14개 op(읽기 3 + 쓰기 11)만 통과하며
-// 게이트웨이가 zod/parse 로 입력을 선검증하고, 모든 쓰기는 audit 로그 + x-actor(user.userId)로 위임한다.
-// domainmap 측 검증·change_log 기록은 store-core 가 단일 경로로 수행(이중 감사 = 의도된 설계).
-// actor-type 매핑: ctx.source==='mcp' → x-actor-type:'agent'(에이전트 쓰기는 도메인 단에서 가드),
-// 웹/기타 → 헤더 생략(human 기본, 기존 거동 무변경).
+// Stage⑥: 엔진 흡수 — dmGet/dmPost/dmPatch(HTTP) 대신 src/domainmap/core/* 직결.
+// 에러 표면 byte-compat: dmWrite 가 코어의 e.status 4xx → HttpError(status,msg) 번역(구 dmWrite 와 동일),
+// dmRead 가 읽기 에러를 구 dmGet 엔벨로프로 재현. reassign 의 UNIQUE 충돌은 코어가 raw pg 에러로
+// 전파하고 여기(dm_mapping_move) 한 곳에서만 err.code==='23505' → 409 한국어로 번역한다.
+// 화이트리스트 원칙: free-form 표면 금지 — 아래 14개 op(읽기 3 + 쓰기 11)만 통과하며
+// 게이트웨이가 zod/parse 로 입력을 선검증하고, 모든 쓰기는 audit 로그 + actor(user.userId)로 위임한다.
+// domainmap 측 검증·change_log 기록은 코어가 단일 경로로 수행(이중 감사 = 의도된 설계).
+// actor-type 매핑: ctx.source==='mcp' → actor.type 'agent'(에이전트 쓰기는 도메인 단에서 가드),
+// 웹/기타 → 'human'(구 x-actor-type 헤더 생략과 동일 — 기존 거동 무변경).
 import { z } from "zod";
-import { dmGet, dmPost, dmPatch, DmUpstreamError } from "../domainmap/client.js";
+import { dmRead, dmWrite, webActor } from "./domainmap-compat.js";
+import { domainDetail, listDebts } from "../domainmap/core/queries.js";
+import { history, restore } from "../domainmap/core/changelog.js";
+import { confirmDomain, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
+import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/core/mappings.js";
+import { confirmProject } from "../domainmap/core/projects.js";
+import { setDebtStatus } from "../domainmap/core/debts.js";
 import { logger } from "../log.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import { HttpError } from "./rest-util.js";
@@ -16,7 +26,7 @@ import type { LivelyUser } from "../context.js";
 const enc = encodeURIComponent;
 
 // ── 공용 파서 ──
-// repo 는 path 세그먼트/쿼리로 받아 domainmap URL 에 삽입되므로 형식 화이트리스트로 잠근다.
+// repo 는 코어 SQL 파라미터로 들어가지만(주입 불가) 형식 화이트리스트는 기존대로 유지한다.
 const REPO_RE = /^[A-Za-z0-9._-]+$/;
 function parseRepo(v: unknown): string {
   if (typeof v !== "string" || !v.trim()) throw new HttpError(400, "repo 필수 — 레포를 선택하세요");
@@ -33,7 +43,7 @@ function parseId(v: unknown, name = "id"): number {
 // 쓰기 공통 audit — mapping.ts 의 curate audit 패턴과 동일 필드(by/source) + 식별 페이로드.
 // '시도' 시점이 아니라 결과 시점에 기록한다: 성공 = outcome:'ok' + changeId(있으면),
 // 실패 = outcome:'failed' + status — 거부된 시도가 실행된 것처럼 읽히는 포렌식 혼동 방지.
-// (권위 감사는 domainmap change_log(x-actor)가 담당 — 이중 감사는 의도된 설계.)
+// (권위 감사는 domainmap change_log(actor)가 담당 — 이중 감사는 의도된 설계.)
 async function audited<T>(
   action: string, user: LivelyUser, ctx: CapabilityCtx | undefined,
   extra: Record<string, unknown>, fn: () => Promise<T>,
@@ -46,8 +56,7 @@ async function audited<T>(
     return result;
   } catch (err) {
     // 키 충돌 주의: extra 에 status(debt 목표 상태 등)가 있을 수 있어 HTTP 코드는 httpStatus 로.
-    const httpStatus = err instanceof HttpError ? err.status
-      : err instanceof DmUpstreamError ? err.upstreamStatus : undefined;
+    const httpStatus = err instanceof HttpError ? err.status : undefined;
     logger.info({ ...base, outcome: "failed", ...(httpStatus !== undefined ? { httpStatus } : {}),
       error: err instanceof Error ? err.message : String(err) });
     throw err;
@@ -59,7 +68,7 @@ const zid = z.number().int().positive();
 // ════════ 읽기 3종 ════════
 // 경로 설계(충돌 회피): 기존 proxy = GET /api/ui/domainmap/:repo/:kind (2세그·DM_KINDS 동결).
 // 신규 읽기는 1세그(debts/history — repo 는 쿼리파람)와 3세그(:repo/domain/:id)만 사용해
-// 등록 순서와 무관하게 비충돌. unknown repo 는 dmGet 특성상 502 로 표면화(기존 proxy 와 동일 거동).
+// 등록 순서와 무관하게 비충돌. unknown repo 는 dmRead 엔벨로프로 502 표면화(기존 proxy 와 동일 거동).
 
 const dmDomainDetail: Capability = {
   name: "dm_domain_detail",
@@ -76,7 +85,7 @@ const dmDomainDetail: Capability = {
     }],
   },
   handler: async (input: { repo: string; id: number }) =>
-    dmGet(`/api/repo/${enc(input.repo)}/domain/${input.id}`),
+    dmRead(`/api/repo/${enc(input.repo)}/domain/${input.id}`, () => domainDetail(input.repo, input.id)),
 };
 
 const dmDebtList: Capability = {
@@ -93,7 +102,8 @@ const dmDebtList: Capability = {
       parse: (req) => ({ repo: parseRepo(req.query.repo) }),
     }],
   },
-  handler: async (input: { repo: string }) => dmGet(`/api/repo/${enc(input.repo)}/debts`),
+  handler: async (input: { repo: string }) =>
+    dmRead(`/api/repo/${enc(input.repo)}/debts`, () => listDebts(input.repo)),
 };
 
 const dmHistory: Capability = {
@@ -121,7 +131,7 @@ const dmHistory: Capability = {
     }],
   },
   handler: async (input: { repo: string; limit: number }) =>
-    dmGet(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}`),
+    dmRead(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}`, () => history(input.repo, input.limit)),
 };
 
 // ════════ 쓰기 9종 — 전부 POST(게이트웨이 표면에서 PATCH 는 POST 로 모델링, RestMount 유니온 유지) ════════
@@ -142,7 +152,7 @@ const dmDomainConfirm: Capability = {
   },
   handler: async (input: { id: number }, user, ctx) =>
     audited("domain_confirm", user, ctx, { id: input.id },
-      () => dmPost(`/api/domain/${input.id}/confirm`, {}, user.userId)),
+      () => dmWrite(() => confirmDomain(input.id, webActor(user.userId)))),
 };
 
 const dmDomainEdit: Capability = {
@@ -193,11 +203,12 @@ const dmDomainEdit: Capability = {
       throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/crossCutting 중 1개 이상");
     }
     return audited("domain_edit", user, ctx, { id: input.id, fields: Object.keys(input).filter((k) => k !== "id") }, () => {
-      const body: Record<string, unknown> = {};
-      if (input.name !== undefined) body.name = input.name;
-      if (input.description !== undefined) body.description = input.description;
-      if (input.crossCutting !== undefined) body.cross_cutting = input.crossCutting;
-      return dmPatch(`/api/domain/${input.id}`, body, user.userId);
+      const patch: Record<string, unknown> = {};
+      if (input.name !== undefined) patch.name = input.name;
+      if (input.description !== undefined) patch.description = input.description;
+      if (input.crossCutting !== undefined) patch.cross_cutting = input.crossCutting;
+      // 구 PATCH /api/domain/:id 는 x-actor-type 미전송 = human(auto-confirm) — 동일 actor 매핑.
+      return dmWrite(() => editDomainById(input.id, patch, webActor(user.userId)));
     });
   },
 };
@@ -224,7 +235,7 @@ const dmDomainMerge: Capability = {
   },
   handler: async (input: { fromId: number; intoId: number }, user, ctx) =>
     audited("domain_merge", user, ctx, { fromId: input.fromId, intoId: input.intoId },
-      () => dmPost("/api/domain/merge", { from_id: input.fromId, into_id: input.intoId }, user.userId)),
+      () => dmWrite(() => mergeDomains(input.fromId, input.intoId, webActor(user.userId)))),
 };
 
 const dmMappingConfirm: Capability = {
@@ -243,7 +254,7 @@ const dmMappingConfirm: Capability = {
   },
   handler: async (input: { id: number }, user, ctx) =>
     audited("mapping_confirm", user, ctx, { id: input.id },
-      () => dmPost(`/api/mapping/${input.id}/confirm`, {}, user.userId)),
+      () => dmWrite(() => confirmMapping(input.id, webActor(user.userId)))),
 };
 
 const dmMappingReject: Capability = {
@@ -262,7 +273,7 @@ const dmMappingReject: Capability = {
   },
   handler: async (input: { id: number }, user, ctx) =>
     audited("mapping_reject", user, ctx, { id: input.id },
-      () => dmPost(`/api/mapping/${input.id}/reject`, {}, user.userId)),
+      () => dmWrite(() => rejectMapping(input.id, webActor(user.userId)))),
 };
 
 const dmMappingMove: Capability = {
@@ -285,13 +296,12 @@ const dmMappingMove: Capability = {
   handler: async (input: { id: number; domainId: number }, user, ctx) =>
     audited("mapping_move", user, ctx, { id: input.id, domainId: input.domainId }, async () => {
       try {
-        return await dmPatch(`/api/mapping/${input.id}`, { domain_id: input.domainId }, user.userId);
+        return await dmWrite(() => reassignMapping(input.id, input.domainId, webActor(user.userId)));
       } catch (err) {
-        // store-core.reassignMapping 은 UNIQUE(repo,target,domain) 미가드 — 같은 타깃이 이미 대상 영역에
-        // 매핑돼 있으면 raw pg 500('duplicate key …'). 사용자에게 영어 pg 에러 대신 409 한국어로.
-        // 본문은 클라이언트행 메시지에서 제외됐으므로 DmUpstreamError.upstreamBody 로 분기.
-        // 주의: 문자열 매칭이라 pg 메시지 포맷이 바뀌면 깨질 수 있음(그땐 502 로 강등될 뿐 — 안전측).
-        if (err instanceof DmUpstreamError && err.upstreamBody.includes("duplicate key")) {
+        // 코어 reassignMapping 은 UNIQUE(repo,target,domain) 미가드 — 같은 타깃이 이미 대상 영역에
+        // 매핑돼 있으면 raw pg 에러(code 23505)가 그대로 전파된다(코어가 잡지 않는 것이 계약).
+        // 사용자에게 영어 pg 에러 대신 409 한국어로 — 번역은 이 capability 한 곳의 책임.
+        if ((err as { code?: string })?.code === "23505") {
           throw new HttpError(409, "대상 영역에 같은 코드/데이터 매핑이 이미 있습니다 — 이동 대신 이 행을 제외하세요");
         }
         throw err;
@@ -324,13 +334,13 @@ const dmDebtStatus: Capability = {
   },
   handler: async (input: { id: number; status: string }, user, ctx) =>
     audited("debt_status", user, ctx, { id: input.id, status: input.status },
-      () => dmPatch(`/api/debt/${input.id}`, { status: input.status }, user.userId)),
+      () => dmWrite(() => setDebtStatus(input.id, input.status, webActor(user.userId)))),
 };
 
 const dmProjectConfirm: Capability = {
   name: "dm_project_confirm",
   title: "domainmap 프로젝트 확인",
-  description: "프로젝트 확정(status='confirmed', origin='human') — domainmap 신규 엔드포인트 wrap. 반환 {id, change_id}.",
+  description: "프로젝트 확정(status='confirmed', origin='human'). 반환 {id, change_id}.",
   scope: "context",
   input: { id: zid },
   expose: {
@@ -343,7 +353,7 @@ const dmProjectConfirm: Capability = {
   },
   handler: async (input: { id: number }, user, ctx) =>
     audited("project_confirm", user, ctx, { id: input.id },
-      () => dmPost(`/api/project/${input.id}/confirm`, {}, user.userId)),
+      () => dmWrite(() => confirmProject(input.id, webActor(user.userId)))),
 };
 
 const dmRestore: Capability = {
@@ -363,7 +373,7 @@ const dmRestore: Capability = {
   handler: async (input: { changeId: number }, user, ctx) =>
     // restoreOf = 되돌린 대상 change id(입력) — 성공 라인의 changeId(restore 가 만든 새 change)와 키 분리.
     audited("restore", user, ctx, { restoreOf: input.changeId },
-      () => dmPost(`/api/restore/${input.changeId}`, {}, user.userId)),
+      () => dmWrite(() => restore(input.changeId, webActor(user.userId)))),
 };
 
 // ════════ 도메인 authoring 2종 — 이 그룹 최초의 expose.mcp=true(Phase C ⑤) ════════
@@ -430,10 +440,11 @@ const proposeDomain: Capability = {
       throw new HttpError(400, "evidence 필수 — 이 도메인이 필요한 근거를 적어주세요");
     }
     return audited("domain_propose", user, ctx, { repo: input.repo, key: input.key }, () =>
-      dmPost(`/api/repo/${enc(input.repo)}/domain/propose`, {
+      // 구 라우트 typedActor: MCP 경유 = x-actor-type 'agent', 그 외 human — 동일 매핑 재현.
+      dmWrite(() => coreProposeDomain(input.repo, {
         key: input.key, name: input.name, description: input.description,
         evidence: input.evidence, cross_cutting: input.crossCutting,
-      }, user.userId, ctx?.source === "mcp" ? { actorType: "agent" } : undefined));
+      }, webActor(user.userId, ctx?.source === "mcp" ? "agent" : "human"))));
   },
 };
 
@@ -460,8 +471,8 @@ const domainDeprecate: Capability = {
   },
   handler: async (input: { id: number; undo?: boolean }, user, ctx) =>
     audited("domain_deprecate", user, ctx, { id: input.id, ...(input.undo ? { undo: true } : {}) }, () =>
-      dmPost(`/api/domain/${input.id}/${input.undo ? "undeprecate" : "deprecate"}`, {},
-        user.userId, ctx?.source === "mcp" ? { actorType: "agent" } : undefined)),
+      dmWrite(() => setDomainState(input.id, input.undo ? "active" : "deprecated",
+        webActor(user.userId, ctx?.source === "mcp" ? "agent" : "human")))),
 };
 
 export const domainmapCurationCapabilities: Capability[] = [

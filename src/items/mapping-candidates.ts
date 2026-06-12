@@ -1,17 +1,16 @@
 // domainmap 후보 캐시 — 매핑 검증/추출 vocab 의 단일 소스.
-// IO 는 읽기 전용(dmGet) 만. resolveRepo 1회 + domains/projects/entities 각 1회 GET 후 인메모리 맵 구성.
+// IO 는 읽기 전용(core queries) 만. resolveRepo 1회 + domains/projects/entities 각 1회 조회 후 인메모리 맵 구성.
 // 매퍼 run(추출)과 propose write-path(검증)가 같은 Candidates 를 공유해 vocab 불일치를 막는다.
-import { dmGet, resolveRepo } from "../domainmap/client.js";
+// Stage⑥ 직결: 구 dmGet(HTTP) → core 직호출. 런타임 타입 변화 주의 — started_at/ended_at 은
+// HTTP 시절 ISO 문자열이었지만 직결 후 pg Date 로 온다(직렬화 표면은 동일 ISO; 코드 내 문자열 연산 없음 — grep 검증됨).
+import { resolveRepo, type DomainListItem, type EntityListItem, type ProjectListItem } from "../domainmap/core/types.js";
+import { listDomainsApi, listProjectsApi, listEntitiesApi } from "../domainmap/core/queries.js";
 
-const enc = encodeURIComponent;
-
-// domainmap 응답에서 우리가 쓰는 필드만 좁게 선언(dmGet 은 unknown 반환).
-export interface DomainRow { key: string; name?: string; description?: string }
-export interface ProjectRow {
-  key: string; name?: string; description?: string;
-  started_at?: string; ended_at?: string;
-}
-interface EntityRow { name?: string; domain?: { key?: string | null } | null }
+// domainmap 코어의 리스트 타입에서 우리가 쓰는 필드만 Pick 으로 좁힌다 —
+// 같은 이름·다른 shape 의 중복 선언 금지(코어 types.ts 가 단일 소스).
+export type DomainRow = Pick<DomainListItem, "key" | "name" | "description">;
+export type ProjectRow = Pick<ProjectListItem, "key" | "name" | "description" | "started_at" | "ended_at">;
+type EntityRow = Pick<EntityListItem, "name" | "domain">;
 
 export interface Candidates {
   repo: string;
@@ -28,9 +27,9 @@ export interface Candidates {
 export async function loadCandidates(repo?: string): Promise<Candidates> {
   const r = resolveRepo(repo);
   const [domainsRaw, projectsRaw, entitiesRaw] = await Promise.all([
-    dmGet(`/api/repo/${enc(r)}/domains`),
-    dmGet(`/api/repo/${enc(r)}/projects`),
-    dmGet(`/api/repo/${enc(r)}/entities`),
+    listDomainsApi(r),
+    listProjectsApi(r),
+    listEntitiesApi(r),
   ]);
 
   const domainsByKey = new Map<string, DomainRow>();

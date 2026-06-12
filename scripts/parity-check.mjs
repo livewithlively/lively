@@ -35,11 +35,12 @@ function fail(msg) { console.error(`FATAL: ${msg}`); process.exit(2); }
 const { token, user } = pickToken();
 
 // ── 사전 헬스체크(fail-fast): 어느 한쪽이 죽으면 양측이 '동일하게' 실패해 파리티가 무의미 ──
-const DM = (process.env.DOMAINMAP_URL ?? "http://localhost:7700").replace(/\/$/, "");
+// Stage⑥: domainmap 엔진 직결 — 구 :7700 fetch 대신 DOMAINMAP_DATABASE_URL 로 SELECT 1.
+if (!process.env.DOMAINMAP_DATABASE_URL) fail("DOMAINMAP_DATABASE_URL 미설정 — .env 확인");
 try {
-  const r = await fetch(`${DM}/api/repos`);
-  if (!r.ok) fail(`domainmap 헬스체크 실패: ${r.status}`);
-} catch (e) { fail(`domainmap 연결 실패 — ${e.message}`); }
+  const { dmPool } = await import("../dist/domainmap/db.js");
+  await dmPool().query("SELECT 1");
+} catch (e) { fail(`domainmap DB 연결 실패 — ${e.message}`); }
 try { await itemsPool.query("SELECT 1"); } catch (e) { fail(`items DB 연결 실패 — ${e.message}`); }
 
 // 결정적 대상 아이템: 최소 id + 소형 본문(full 변형용).

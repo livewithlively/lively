@@ -1,6 +1,6 @@
 // ClickUp 원샷 싱크 (phase B) — 프로젝트 레지스트리 싱크 + 태스크 증분/전체 + declared 매핑 + 커서.
 // 사용: node --env-file-if-exists=.env dist/connectors/run-sync.js clickup [--full]
-//   필요 env: ITEMS_DATABASE_URL, DOMAINMAP_URL, CLICKUP_API_TOKEN (+선택 CLICKUP_EXCLUDE_LIST_IDS)
+//   필요 env: ITEMS_DATABASE_URL, DOMAINMAP_DATABASE_URL, CLICKUP_API_TOKEN (+선택 CLICKUP_EXCLUDE_LIST_IDS)
 // 멱등: 아이템은 (prov_system,prov_instance,external_id) upsert, 프로젝트는 domainmap syncProject
 // (무변경 재싱크 = action 'unchanged'), declared 매핑은 ON CONFLICT — 두 번 돌려도 중복 없음.
 // 커서는 **모든 단계 성공 후에만** 전진 — 중도 실패 run 은 같은 윈도를 다음 run 이 재폴링한다(유실 없음).
