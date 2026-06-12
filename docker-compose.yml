@@ -1,0 +1,13 @@
+services:
+  store:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - LOG_LEVEL=info
+      - AUTH_TOKENS_JSON=${AUTH_TOKENS_JSON}
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_STATEMENT_TIMEOUT_MS=5000
+      - DB_MAX_ROWS=1000
+    restart: unless-stopped

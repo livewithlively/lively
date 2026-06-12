@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.log
+
+# 에디터 스왑/임시 (vim 등) — 시크릿 유출 방지
+*.swp
+*.swo
+*.sw?
+*~
