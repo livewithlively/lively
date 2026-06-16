@@ -18,14 +18,20 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   const authOnly = requireBearerAuth({ verifier });
   const authItems = requireBearerAuth({ verifier, requiredScopes: ["items"] });
   const authContext = requireBearerAuth({ verifier, requiredScopes: ["context"] });
-  const mw = (scope: "items" | "context" | null): express.RequestHandler =>
-    scope === "items" ? authItems : scope === "context" ? authContext : authOnly;
+  const authAdmin = requireBearerAuth({ verifier, requiredScopes: ["admin"] });
+  const mw = (scope: "items" | "context" | "admin" | null): express.RequestHandler =>
+    scope === "items" ? authItems
+      : scope === "context" ? authContext
+      : scope === "admin" ? authAdmin
+      : authOnly;
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {
       const input = mount.parse(req); // 기존 qstr/qint/parseMappingBody 검증 그대로(HttpError → wrap)
       // 웹은 partial user 허용(me 가 null-default 구성) — MCP 의 resolveUser throw 와 다른 기존 정책 유지.
       const user = (req.auth?.extra ?? {}) as unknown as LivelyUser;
+      // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
+      res.setHeader("Cache-Control", "no-store");
       res.json(await cap.handler(input, user, { source: "web" }));
     });
     for (const path of mount.paths) {

@@ -15,6 +15,7 @@ const state = {
   inbox: { filters: { missing: 'either', repo: '', system: '', type: '', since: '' } }, // 페이지네이션 오프셋은 renderInbox 로컬
   domainsRepo: '',
   dm: { section: 'areas', filter: 'all', selectedId: null, cursor: -1, rows: [] }, // 도메인(domainmap 큐레이션) 페이지 상태
+  admin: { data: null, sel: 'managed-policy', memberSel: null, memorySel: null }, // 관리(전달) 페이지 상태
 };
 let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0;            // datalist 등 고유 id 카운터
@@ -1785,6 +1786,9 @@ async function route() {
     } else if (page === 'domains') {
       setActiveTab('domains');
       await renderDomains(view, segs[1] || null, params);
+    } else if (page === 'admin') {
+      setActiveTab('admin');
+      await renderAdmin(view, segs[1] || null);
     } else {
       setActiveTab('overview');
       await renderOverview(view);
@@ -1809,7 +1813,383 @@ async function boot() {
   }
   hideGate();
   document.getElementById('user-email').textContent = state.me.email || state.me.userId || '';
+  // admin scope 보유자에게만 '관리' 탭 노출(서버가 1차 게이트 — UI 는 2차 가시성).
+  const adminTab = document.getElementById('admin-tab');
+  if (adminTab) adminTab.hidden = !(state.me.scopes && state.me.scopes.includes('admin'));
   getStats().catch(() => { /* 싱크 칩만 생략(개요 진입 시 재시도) */ });
   route();
 }
 boot();
+
+// ════════════════════════════════════════════════════════════════════
+// 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
+// '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
+// ════════════════════════════════════════════════════════════════════
+const ADMIN_SECTIONS = [
+  { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy' },
+  { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults' },
+  { key: 'memory', label: '팀 메모리', meaning: 'memory' },
+  { key: 'members', label: '구성원', meaning: 'member' },
+  { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
+  { key: 'publish', label: '발행 · 배포', meaning: null },
+];
+
+async function loadAdmin(force) {
+  if (!state.admin.data || force) state.admin.data = await api('/api/ui/org');
+  return state.admin.data;
+}
+
+function meaningRow(k, v) {
+  return el('div', { class: 'meaning-row' },
+    el('span', { class: 'meaning-k', text: k }),
+    el('span', { class: 'meaning-v', text: v }));
+}
+// '구성원에게 미치는 효과' 카드 — 의미 인지의 핵심 컴포넌트.
+function meaningCard(m) {
+  if (!m) return null;
+  const tag = { critical: '절대 규칙', identity: '신원 · 매칭', infra: '연결 · 배포', normal: '' }[m.tone] || '';
+  return el('div', { class: 'meaning meaning-' + m.tone },
+    el('div', { class: 'meaning-head' },
+      el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'meaning-title', text: '이 내용이 구성원에게 미치는 효과' }),
+      tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
+    el('p', { class: 'meaning-what', text: m.what }),
+    el('div', { class: 'meaning-grid' },
+      meaningRow('누가 받나', m.reach),
+      meaningRow('언제 도달', m.when),
+      meaningRow('어디에 나타나나', m.where)),
+    el('div', { class: 'meaning-ex' },
+      el('span', { class: 'meaning-ex-label', text: '예시' }),
+      el('span', { text: m.example })));
+}
+
+function adminRowMeta(key, data) {
+  if (key === 'managed-policy' || key === 'org-defaults') {
+    const s = data.sections[key];
+    return s && s.body_md && s.body_md.trim() ? '작성됨 · v' + s.version : '비어 있음';
+  }
+  if (key === 'memory') return data.memory.length + '개 문서';
+  if (key === 'members') return data.members.length + '명';
+  if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
+  if (key === 'publish') return '구성원에게 게시';
+  return '';
+}
+
+async function renderAdmin(view, sub) {
+  if (!(state.me && state.me.scopes && state.me.scopes.includes('admin'))) {
+    view.replaceChildren(errorNote(new Error('관리 권한(admin)이 필요합니다'), '접근 불가'));
+    return;
+  }
+  let data;
+  try { data = await loadAdmin(); }
+  catch (e) { view.replaceChildren(errorNote(e, '관리 데이터를 불러오지 못했습니다')); return; }
+
+  const sel = sub || state.admin.sel || 'managed-policy';
+  state.admin.sel = sel;
+
+  const list = el('div', { class: 'split-list card admin-nav' });
+  for (const s of ADMIN_SECTIONS) {
+    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
+      el('div', { class: 'row-title', text: s.label }),
+      el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
+  }
+  const detail = el('div', { class: 'split-detail' });
+  renderAdminDetail(detail, sel, data);
+
+  view.replaceChildren(el('div', {},
+    el('div', { class: 'card-head admin-head' },
+      el('h2', { text: '관리 — 전달' }),
+      el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })),
+    el('div', { class: 'split' }, list, detail)));
+  applyReveal([list, detail]);
+}
+
+function renderAdminDetail(detail, sel, data) {
+  if (sel === 'managed-policy' || sel === 'org-defaults') return sectionEditor(detail, sel, data);
+  if (sel === 'memory') return memoryEditor(detail, data);
+  if (sel === 'members') return membersEditor(detail, data);
+  if (sel === 'profile') return profileEditor(detail, data);
+  if (sel === 'publish') return publishPanel(detail, data);
+}
+
+// ── 섹션(강제규칙·회사맥락) markdown 에디터 ──
+function sectionEditor(detail, key, data) {
+  const meaning = data.meaning[key];
+  const sec = data.sections[key] || { body_md: '', version: 0 };
+  const ta = el('textarea', { rows: '18', class: 'admin-ta', 'aria-label': meaning ? meaning.label : key });
+  ta.value = sec.body_md || '';
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const r = await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section: key, body_md: ta.value }) });
+      data.sections[key] = r.section;
+      status.textContent = '저장됨 · v' + r.section.version;
+      toast('저장됨 — 발행하면 구성원에게 반영됩니다');
+    } catch (e) { toast(e.message, true); status.textContent = ''; }
+    saveBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('div', { class: 'card-head' },
+      el('h2', { text: meaning ? meaning.label : key }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '멤버 미리보기', onclick: showMemberPreview })),
+    el('p', { class: 'admin-hint', text: 'markdown 으로 작성하세요. 저장은 초안이고, [발행]해야 구성원이 받습니다.' }),
+    ta,
+    el('div', { class: 'admin-actions' }, saveBtn, status),
+    meaningCard(meaning)));
+}
+
+// 멤버가 실제 읽는 컨텍스트 미리보기(WYSIWYG) — 오버레이.
+async function showMemberPreview() {
+  try {
+    const r = await api('/api/ui/org/preview');
+    overlay('구성원의 AI가 매 세션 실제로 읽는 내용',
+      el('p', { class: 'admin-hint', text: '아래가 모든 구성원의 대화 첫머리에 주입되는 정적 컨텍스트입니다(라이브 현황은 별도로 매 세션 자동 추가).' }),
+      el('pre', { class: 'admin-preview', text: r.context || '(비어 있음)' }));
+  } catch (e) { toast(e.message, true); }
+}
+
+// ── 구성원 ──
+function membersEditor(detail, data) {
+  const meaning = data.meaning['member'];
+  const sel = state.admin.memberSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 구성원 추가',
+    onclick: () => { state.admin.memberSel = '__new__'; renderAdminDetail(detail, 'members', data); } }));
+  for (const m of data.members) {
+    listCol.append(el('div', { class: 'mini-row' + (m.id === sel ? ' sel' : ''),
+      onclick: () => { state.admin.memberSel = m.id; renderAdminDetail(detail, 'members', data); } },
+      el('div', { class: 'mini-title', text: (m.display_name || m.id) },
+        m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })),
+      el('div', { class: 'mini-meta', text: (m.kind || 'human') + (m.email ? ' · ' + m.email : '') + ' · 계정 ' + (m.identities ? m.identities.length : 0) })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active' }
+    : data.members.find((m) => m.id === sel);
+  if (editing) memberForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: '왼쪽에서 구성원을 고르거나 추가하세요.' }), meaningCard(meaning));
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '구성원' }),
+    el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function memberForm(root, m, data, detail, isNew) {
+  const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자, 예: yoon)', disabled: isNew ? null : '' });
+  const nameIn = el('input', { type: 'text', value: m.display_name || '', placeholder: '표시 이름' });
+  const emailIn = el('input', { type: 'text', value: m.email || '', placeholder: '대표 이메일(매칭 키)' });
+  const kindSel = el('select', {}, ...['human', 'agent', 'system'].map((k) => el('option', { value: k, text: k })));
+  kindSel.value = m.kind || 'human';
+  const stateSel = el('select', {}, ...['active', 'inactive'].map((k) => el('option', { value: k, text: k === 'active' ? '활성' : '비활성' })));
+  stateSel.value = m.state || 'active';
+  const bodyTa = el('textarea', { rows: '4', placeholder: '개인 레이어(역할/호칭/담당 — 선택)' });
+  bodyTa.value = m.body_md || '';
+
+  // 외부 계정 연결(identities) — 신원 매칭 키. 구조화 행 + 추가/삭제.
+  const idnWrap = el('div', { class: 'idn-wrap' });
+  const idnRows = [];
+  function addIdn(idn) {
+    const sysIn = el('input', { type: 'text', value: (idn && idn.system) || '', placeholder: 'slack / discord / notion …', class: 'idn-sys' });
+    const extIn = el('input', { type: 'text', value: (idn && idn.external_id) || '', placeholder: '외부 계정 ID', class: 'idn-ext' });
+    const emIn = el('input', { type: 'text', value: (idn && idn.email) || '', placeholder: '이메일(선택)', class: 'idn-em' });
+    const rm = el('button', { class: 'btn-text', text: '✕', title: '삭제' });
+    const row = el('div', { class: 'idn-row' }, sysIn, extIn, emIn, rm);
+    const rec = { row, sysIn, extIn, emIn };
+    rm.addEventListener('click', () => { row.remove(); const i = idnRows.indexOf(rec); if (i >= 0) idnRows.splice(i, 1); });
+    idnRows.push(rec);
+    idnWrap.append(row);
+  }
+  (m.identities || []).forEach(addIdn);
+
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    const identities = idnRows.map((r) => ({ system: r.sysIn.value.trim(), external_id: r.extIn.value.trim(), email: r.emIn.value.trim() || undefined }))
+      .filter((x) => x.system && x.external_id);
+    const payload = {
+      id: idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
+      email: emailIn.value.trim(), identities, body_md: bodyTa.value, state: stateSel.value,
+    };
+    if (!payload.id) { toast('아이디는 필수입니다', true); return; }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true);
+      state.admin.memberSel = payload.id;
+      toast('저장됨 — 신원 매칭에 즉시 반영됩니다');
+      renderAdminDetail(detail, 'members', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) {
+    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '설치 토큰 발급',
+      onclick: () => mintInstallToken(m) }));
+    actions.append(el('button', { class: 'btn-text', text: '제거',
+      onclick: async () => {
+        if (!confirm(`구성원 '${m.display_name || m.id}' 제거?`)) return;
+        try { await api('/api/ui/org/member/remove', { method: 'POST', body: JSON.stringify({ id: m.id }) });
+          await loadAdmin(true); state.admin.memberSel = null; toast('제거됨'); renderAdminDetail(detail, 'members', state.admin.data); }
+        catch (e) { toast(e.message, true); }
+      } }));
+  }
+
+  root.replaceChildren(
+    field('아이디', idIn), field('표시 이름', nameIn), field('종류', kindSel),
+    field('대표 이메일', emailIn), field('상태', stateSel),
+    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
+      el('button', { class: 'btn-text', text: '+ 계정 추가', onclick: () => addIdn(null) })),
+    field('개인 레이어', bodyTa),
+    actions,
+    meaningCard(data.meaning['member']));
+}
+
+async function mintInstallToken(m) {
+  let adminScope = false;
+  const adminChk = el('input', { type: 'checkbox' });
+  adminChk.addEventListener('change', () => { adminScope = adminChk.checked; });
+  const out = el('div', {});
+  const go = el('button', { class: 'btn btn-primary', text: '토큰 발급' });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const scopes = adminScope ? ['items', 'context', 'admin'] : ['items', 'context'];
+      const r = await api('/api/ui/org/token', { method: 'POST',
+        body: JSON.stringify({ userId: m.id, memberId: m.id, email: m.email || undefined, scopes, label: m.display_name || m.id }) });
+      const origin = window.location.origin;
+      const cmd = `curl -fsSL -H "Authorization: Bearer ${r.token}" ${origin}/install -o /tmp/lively.tgz \\\n  && mkdir -p /tmp/lively-setup && tar -xzf /tmp/lively.tgz -C /tmp/lively-setup \\\n  && LIVELY_TOKEN=${r.token} bash /tmp/lively-setup/setup/setup-mac.sh`;
+      out.replaceChildren(
+        el('p', { class: 'admin-hint', text: '아래 한 줄을 구성원에게 전달하세요(터미널에 붙여넣기). 토큰은 지금만 보입니다 — 안전 채널로 전달.' }),
+        el('pre', { class: 'admin-preview', text: cmd }),
+        copyButton(() => cmd, '명령 복사'),
+        el('div', { class: 'admin-status', text: 'scope: ' + r.scopes.join(', ') }));
+      await loadAdmin(true);
+    } catch (e) { toast(e.message, true); go.disabled = false; }
+  });
+  overlay(`'${m.display_name || m.id}' 설치 토큰 발급`,
+    el('p', { class: 'admin-hint', text: '발급하면 이 구성원이 한 줄 명령으로 설치합니다(git 불필요). 토큰은 발급 직후 1회만 표시됩니다.' }),
+    el('label', { class: 'admin-check' }, adminChk, ' 관리자 권한(admin)도 포함'),
+    el('p', { class: 'admin-warn', text: '⚠ 관리자 권한은 조직 전체 설정·구성원 데이터를 편집할 수 있습니다 — 신뢰하는 사람에게만 부여하세요.' }),
+    go, out);
+}
+
+// ── 팀 메모리 ──
+function memoryEditor(detail, data) {
+  const sel = state.admin.memorySel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 메모리 추가',
+    onclick: () => { state.admin.memorySel = '__new__'; renderAdminDetail(detail, 'memory', data); } }));
+  for (const mem of data.memory) {
+    listCol.append(el('div', { class: 'mini-row' + (mem.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.memorySel = mem.name; renderAdminDetail(detail, 'memory', data); } },
+      el('div', { class: 'mini-title', text: (mem.title || mem.name) }, mem.in_index ? el('span', { class: 'pill pill-ok', text: '인덱스' }) : null),
+      el('div', { class: 'mini-meta', text: mem.name })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { name: '', title: '', body_md: '', in_index: true }
+    : data.memory.find((x) => x.name === sel);
+  if (editing) memoryForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: '팀이 승인한 공식 지식만 둡니다(개인 메모는 각자 로컬).' }), meaningCard(data.meaning['memory']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '팀 메모리' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function memoryForm(root, mem, data, detail, isNew) {
+  const nameIn = el('input', { type: 'text', value: mem.name, placeholder: '파일명(예: agent-context-architecture)', disabled: isNew ? null : '' });
+  const titleIn = el('input', { type: 'text', value: mem.title || '', placeholder: '제목' });
+  const idxChk = el('input', { type: 'checkbox' }); idxChk.checked = mem.in_index !== false;
+  const bodyTa = el('textarea', { rows: '12', placeholder: 'markdown 본문' }); bodyTa.value = mem.body_md || '';
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('파일명 필수', true); return; }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/org/memory', { method: 'POST', body: JSON.stringify({ name: nameIn.value.trim(), title: titleIn.value.trim(), in_index: idxChk.checked, body_md: bodyTa.value }) });
+      await loadAdmin(true); state.admin.memorySel = nameIn.value.trim(); toast('저장됨');
+      renderAdminDetail(detail, 'memory', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`메모리 '${mem.title || mem.name}' 제거?`)) return;
+    try { await api('/api/ui/org/memory/remove', { method: 'POST', body: JSON.stringify({ name: mem.name }) });
+      await loadAdmin(true); state.admin.memorySel = null; toast('제거됨'); renderAdminDetail(detail, 'memory', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(field('파일명', nameIn), field('제목', titleIn),
+    el('label', { class: 'admin-check' }, idxChk, ' 메모리 인덱스(MEMORY.md)에 노출'),
+    field('본문', bodyTa), actions, meaningCard(data.meaning['memory']));
+}
+
+// ── 조직 · 연결 ──
+function profileEditor(detail, data) {
+  const p = data.profile;
+  const dnIn = el('input', { type: 'text', value: p.display_name || '', placeholder: '조직 표시명' });
+  const gwIn = el('input', { type: 'text', value: p.gateway_url || '', placeholder: 'http://게이트웨이:포트' });
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const r = await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ display_name: dnIn.value.trim(), gateway_url: gwIn.value.trim() }) });
+      data.profile = r.profile; toast('저장됨'); status.textContent = '저장됨';
+    } catch (e) { toast(e.message, true); }
+    saveBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '조직 · 연결' }),
+    field('조직 표시명', dnIn), meaningCard(data.meaning['display_name']),
+    field('게이트웨이 주소', gwIn), meaningCard(data.meaning['gateway-url']),
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
+}
+
+// ── 발행 · 배포 ──
+function publishPanel(detail, data) {
+  const pm = data.publishMeaning || {};
+  const runBtn = el('button', { class: 'btn btn-primary', text: '발행(검증)' });
+  const result = el('div', { class: 'admin-status' });
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true; result.textContent = '발행 중…';
+    try {
+      const r = await api('/api/ui/org/publish', { method: 'POST', body: '{}' });
+      result.replaceChildren(el('span', { class: 'pill pill-ok', text: '발행 OK' }),
+        ' AGENTS.md ' + (r.artifactBytes != null ? (r.artifactBytes / 1024).toFixed(1) + ' KiB' : '?'),
+        r.warning ? el('span', { class: 'pill pill-warn', text: r.warning }) : null);
+      toast('발행 검증 완료 — 구성원은 설치/재설치로 받습니다');
+    } catch (e) { result.textContent = ''; toast(e.message, true); }
+    runBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '발행 · 배포' }),
+    el('p', { class: 'admin-what', text: pm.what || '' }),
+    el('p', { class: 'admin-hint', text: pm.effect || '' }),
+    el('p', { class: 'admin-hint', text: pm.note || '' }),
+    el('div', { class: 'admin-actions' }, runBtn, result),
+    el('div', { class: 'meaning meaning-infra' },
+      el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원 설치 방법' })),
+      el('p', { class: 'meaning-what', text: '구성원은 git 없이 한 줄로 설치합니다 — [구성원] 탭에서 각자 토큰을 발급하면 그 사람 전용 설치 명령이 나옵니다.' }))));
+}
+
+// ── 공용 UI 헬퍼 ──
+function field(label, control) {
+  return el('div', { class: 'field' }, el('label', { class: 'field-label', text: label }), control);
+}
+function copyButton(getText, label) {
+  const b = el('button', { class: 'btn btn-ghost btn-sm', text: label || '복사' });
+  b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(getText()); toast('복사됨'); }
+    catch { toast('복사 실패 — 직접 선택해 복사하세요', true); }
+  });
+  return b;
+}
+function overlay(title, ...content) {
+  const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
+  const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
+  const back = el('div', { class: 'ov-back' }, box);
+  close.addEventListener('click', () => back.remove());
+  back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+  return back;
+}

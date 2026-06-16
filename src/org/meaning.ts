@@ -1,0 +1,92 @@
+// 의미 가이드(legibility) — 비개발자 관리자가 편집/확인하는 각 org-content 항목이
+// "실제 구성원의 AI 세션에서 무엇을 의미·통제하는가"를 평이한 한국어로 구조화한 단일 출처.
+// 웹 관리 UI 의 '구성원에게 미치는 효과' 패널이 이 데이터를 그대로 렌더한다(코드 분석 매핑의 산물).
+//
+// 필드 의미:
+//  what   — 이 항목이 무엇인지(한 줄).
+//  reach  — 누가 받는가.
+//  when   — 언제 멤버에게 도달하는가(타이밍).
+//  where  — 멤버의 세션 어디에 나타나는가.
+//  example— 바꾸면 멤버에게 생기는 구체적 변화(예시 1개).
+//  tone   — UI 강조용('critical' = 절대 규칙류, 'normal', 'identity' = 신원/매칭, 'infra' = 연결).
+
+export interface FieldMeaning {
+  key: string;
+  label: string;
+  what: string;
+  reach: string;
+  when: string;
+  where: string;
+  example: string;
+  tone: "critical" | "normal" | "identity" | "infra";
+}
+
+export const MEANING: Record<string, FieldMeaning> = {
+  "managed-policy": {
+    key: "managed-policy",
+    label: "강제 규칙",
+    what: "어떤 개인·프로젝트 설정으로도 덮을 수 없는 조직의 절대 규칙입니다.",
+    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
+    when: "매 대화(세션)가 시작될 때 자동으로, 맨 먼저 주입됩니다.",
+    where: "구성원이 AI를 켜면 대화 첫머리 최상단에 — AI가 그 무엇보다 우선해 지킵니다.",
+    example: "여기에 '고객 개인정보는 절대 출력하지 않는다'를 추가하면, 다음 대화부터 모든 구성원의 AI가 이를 강제로 지킵니다.",
+    tone: "critical",
+  },
+  "org-defaults": {
+    key: "org-defaults",
+    label: "회사 맥락 · 페르소나 · 업무방식",
+    what: "회사가 누구인지, AI가 어떤 성격·말투로 일하는지, 팀의 일하는 방식입니다.",
+    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
+    when: "매 대화가 시작될 때 자동으로 주입됩니다(강제 규칙 바로 다음).",
+    where: "구성원의 AI가 응답을 만들 때 바탕에 깔리는 기본 맥락입니다.",
+    example: "'근거 없이 단정하지 말 것'을 업무방식에 추가하면, 모든 구성원의 AI가 다음 대화부터 더 신중하게 답합니다.",
+    tone: "normal",
+  },
+  "memory": {
+    key: "memory",
+    label: "팀 공유 메모리",
+    what: "팀이 승인한 공식 지식·의사결정 스냅샷(정설 메모리)입니다.",
+    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
+    when: "매 대화에 주입되며, AI가 필요할 때 참조합니다(강제 규칙보다 약한 우선순위).",
+    where: "구성원의 AI가 '우리 팀은 이렇게 결정했다'를 알아야 할 때 꺼내 쓰는 배경지식입니다.",
+    example: "새 아키텍처 결정을 메모리에 올리면, 모든 구성원의 AI가 그 결정을 전제로 일관되게 답합니다.",
+    tone: "normal",
+  },
+  "member": {
+    key: "member",
+    label: "구성원 신원",
+    what: "한 사람(또는 에이전트·시스템)의 정식 신원과 외부 계정 연결(이메일·Discord·Slack 등)입니다.",
+    reach: "그 구성원 + 게이트웨이의 데이터 조회 전반",
+    when: "저장 즉시 — 게이트웨이의 신원 매칭에 바로 반영됩니다.",
+    where: "AI가 'search_items', '담당자에게 할당' 등으로 사람을 가로질러 찾을 때 쓰는 매칭 키입니다.",
+    example: "어떤 사람의 Slack 계정을 연결하면, 그때부터 AI가 그 사람의 Slack 발언·작업을 한 사람으로 묶어 보여줍니다.",
+    tone: "identity",
+  },
+  "gateway-url": {
+    key: "gateway-url",
+    label: "게이트웨이 주소",
+    what: "구성원의 AI가 라이브 현황(미매핑 아이템·도메인·최근 활동 등)을 가져오는 사내 서버 주소입니다.",
+    reach: "모든 구성원의 AI(라이브 데이터 연결)",
+    when: "구성원이 설치를 다시 실행한 뒤부터 새 주소를 씁니다.",
+    where: "매 대화 첫머리의 '라이브 현황' 블록을 어디서 가져올지 결정합니다.",
+    example: "서버를 옮겨 주소를 바꾸면, 구성원이 재설치한 뒤부터 새 주소에서 라이브 현황을 받습니다(연결 실패 시엔 정적 컨텍스트만 — 안전).",
+    tone: "infra",
+  },
+  "display_name": {
+    key: "display_name",
+    label: "조직 표시명",
+    what: "이 조직/팀의 이름입니다.",
+    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
+    when: "구성원이 설치를 다시 실행한 뒤부터 반영됩니다.",
+    where: "매 대화 컨텍스트의 머리말과 라이브 현황 헤더에 나타납니다.",
+    example: "표시명을 바꾸면 모든 구성원의 컨텍스트 머리말이 그 이름으로 갱신됩니다.",
+    tone: "infra",
+  },
+};
+
+// 발행/배포 흐름의 의미(관리 UI '발행' 행동 옆에 표시).
+export const PUBLISH_MEANING = {
+  what: "지금까지 편집한 조직 맥락을, 구성원이 받을 수 있는 설치 묶음으로 굳히는 단계입니다.",
+  effect: "발행하면 구성원이 한 줄 명령(또는 재설치)로 최신 맥락을 받습니다. 라이브 현황은 발행과 무관하게 매 대화 자동 갱신됩니다.",
+  note: "발행 전 편집은 구성원에게 보이지 않습니다 — 발행이 '게시' 버튼입니다.",
+};

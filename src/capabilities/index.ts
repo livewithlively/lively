@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { contextCapabilities } from "./context.js";
+import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
 import { itemCapabilities } from "./items.js";
 import { mappingCapabilities } from "./mapping.js";
@@ -30,6 +31,7 @@ const all: Capability[] = [
   me, ...contextCapabilities, ...itemCapabilities, ...mappingCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...pmCapabilities, // MCP 21툴(기존 13 + pm 6 + domainmap authoring 2 — Phase C ⑤ 의도적 확장)
+  ...deliveryCapabilities, // 전달/관리(admin scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰
 ];
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));

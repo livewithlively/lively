@@ -25,7 +25,8 @@ export interface Capability {
   title: string;
   description: string;
   // 요청 principal 에게 요구하는 스코프. null = bearer 인증만(예: me).
-  scope: "items" | "context" | null;
+  // admin = 전달/관리 표면(org-content 편집·발행·구성원/토큰) — 비개발자 관리자 전용.
+  scope: "items" | "context" | "admin" | null;
   // MCP inputSchema(zod raw shape) — REST 는 이걸 안 쓰고 mount.parse 가 검증.
   input: ZodRawShape;
   expose: {
