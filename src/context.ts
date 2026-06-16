@@ -4,8 +4,12 @@
 export interface LivelyUser {
   userId: string;
   email: string;
-  scopes: string[]; // 접근 가능 capability: memory | context | code | db
+  scopes: string[]; // 접근 가능 capability: items | context | admin | runtime | db | memory | code (단일 출처: capabilities/scopes.ts)
   projects: string[]; // 접근 가능 프로젝트 슬러그, "*" = 전체
+  // 인증 출처 — 'static'=AUTH_TOKENS_JSON(회수 불가), 'db'=auth_token(즉시 회수 가능).
+  // 정적 토큰은 admin/runtime 행위가 거부된다(B5: 회수 불가 토큰으로 fleet 코드 푸시 금지).
+  tokenSource?: "static" | "db";
+  tokenHashPrefix?: string; // DB 토큰 sha256 prefix(감사 상관추적용 — 비밀 아님)
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

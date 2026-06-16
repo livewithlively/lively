@@ -563,3 +563,12 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 설치 미니터(구성원 선택 + 발급) */
 .install-minter { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .install-minter select { flex: 1; min-width: 0; }
+
+/* 커스텀 훅 · AI 도구(런타임 권한) */
+.admin-subhead { font-size: 13px; font-weight: 800; color: var(--ink); margin: 18px 0 4px; }
+.warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+.builtin-toggles { margin-top: 10px; }
+.builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }
+.builtin-row:last-child { border-bottom: none; }
+.builtin-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.builtin-row .admin-check { margin: 0; }

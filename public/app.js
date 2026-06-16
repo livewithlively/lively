@@ -1833,11 +1833,19 @@ const ADMIN_SECTIONS = [
   { key: 'tokens', label: '토큰', meaning: null },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
   { key: 'runtime', label: '런타임 · 훅', meaning: 'runtime' },
+  { key: 'custom-hooks', label: '커스텀 훅', meaning: 'custom-hook' },
+  { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
   { key: 'publish', label: '발행', meaning: null },
   { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
 ];
-const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp']; // 비-admin 에게 숨김(쓰기/인프라 전용)
+const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp']; // admin 권한 전용(쓰기/인프라)
+const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
+function sectionHidden(key, data) {
+  if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
+  if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
+  return false;
+}
 
 async function loadAdmin(force) {
   if (!state.admin.data || force) state.admin.data = await api('/api/ui/org');
@@ -1881,6 +1889,8 @@ function adminRowMeta(key, data) {
   if (key === 'deploy') return 'OS별 명령 복사';
   if (key === 'runtime') { const rc = data.runtimeConfig; if (!rc) return ''; const off = Object.values(rc.hooks || {}).filter((v) => v === false).length; return (off ? off + '개 훅 꺼짐' : '훅 전체 켜짐') + ' · work-roots ' + (rc.work_roots || []).length; }
   if (key === 'mcp') return (data.mcpServers || []).length + '개 서버';
+  if (key === 'custom-hooks') return (data.orgHooks || []).length + '개 훅';
+  if (key === 'tools') { const t = (data.tools || []).filter((x) => x.kind !== 'builtin'); return t.length ? t.length + '개 툴' : '기본'; }
   return '';
 }
 
@@ -1890,14 +1900,15 @@ async function renderAdmin(view, sub) {
   catch (e) { view.replaceChildren(errorNote(e, '관리 데이터를 불러오지 못했습니다')); return; }
   const canEdit = !!data.canEdit;
   state.admin.canEdit = canEdit;
+  state.admin.canRuntime = !!data.canRuntime;
 
   let sel = sub || state.admin.sel || 'managed-policy';
-  if (ADMIN_ONLY.includes(sel) && !canEdit) sel = 'managed-policy'; // admin 전용 섹션은 비-admin 진입 차단
+  if (sectionHidden(sel, data)) sel = 'managed-policy'; // 권한 없는 섹션 진입 차단(admin/runtime)
   state.admin.sel = sel;
 
   const list = el('div', { class: 'split-list card admin-nav' });
   for (const s of ADMIN_SECTIONS) {
-    if (ADMIN_ONLY.includes(s.key) && !canEdit) continue;
+    if (sectionHidden(s.key, data)) continue;
     list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
@@ -1922,6 +1933,8 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'tokens') return tokensPanel(detail, data);
   if (sel === 'profile') return profileEditor(detail, data);
   if (sel === 'runtime') return runtimeEditor(detail, data);
+  if (sel === 'custom-hooks') return customHookEditor(detail, data);
+  if (sel === 'tools') return toolsEditor(detail, data);
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
@@ -2020,7 +2033,7 @@ function memberForm(root, m, data, detail, isNew) {
   bodyTa.value = m.body_md || '';
 
   // 권한(scopes) — 이 구성원이 받는 토큰의 권한. 변경 시 활성 토큰에도 즉시 반영(서버).
-  const SCOPE_OPTS = [['items', '아이템 조회'], ['context', '컨텍스트'], ['admin', '관리자(편집·발행)']];
+  const SCOPE_OPTS = [['items', '아이템 조회'], ['context', '컨텍스트'], ['admin', '관리자(편집·발행)'], ['runtime', '런타임(훅·툴 정의)']];
   const scopeChks = {};
   const scopeWrap = el('div', { class: 'scope-wrap' });
   for (const [sk, label] of SCOPE_OPTS) {
@@ -2254,6 +2267,9 @@ function runtimeEditor(detail, data) {
   }
   const noticeTa = el('textarea', { rows: '3', placeholder: '비우면 기본 안내문 사용' }); noticeTa.value = rc.writeback_notice || '';
   const wrTa = el('textarea', { rows: '4', placeholder: '/Users/you/repo\n줄당 절대경로 한 개' }); wrTa.value = (rc.work_roots || []).join('\n');
+  // http_proxy 툴 안전 화이트리스트(B15) — 툴은 이 목록 안에서만 외부 호출/시크릿 참조 가능.
+  const envTa = el('textarea', { rows: '3', placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름 한 개(값 아님)' }); envTa.value = (rc.allowed_auth_envs || []).join('\n');
+  const hostTa = el('textarea', { rows: '3', placeholder: 'api.acme.com\n.internal.acme.com (앞에 . = 서브도메인 허용)' }); hostTa.value = (rc.url_allowlist || []).join('\n');
   const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
@@ -2261,7 +2277,9 @@ function runtimeEditor(detail, data) {
     try {
       const hooks = {}; for (const [k] of HOOK_OPTS) hooks[k] = chks[k].checked;
       const work_roots = wrTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots }) });
+      const allowed_auth_envs = envTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
+      const url_allowlist = hostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
+      const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots, allowed_auth_envs, url_allowlist }) });
       data.runtimeConfig = r.runtimeConfig; status.textContent = '저장됨'; toast('저장됨 — 구성원 다음 세션부터 반영');
     } catch (e) { toast(e.message, true); status.textContent = ''; }
     saveBtn.disabled = false;
@@ -2272,6 +2290,10 @@ function runtimeEditor(detail, data) {
     field('활성 훅', hookWrap),
     field('writeback 너지 문구 (선택)', noticeTa),
     field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa),
+    el('div', { class: 'admin-subhead', text: 'AI 도구(http_proxy) 안전 화이트리스트' }),
+    el('p', { class: 'admin-hint', text: 'AI 도구가 외부를 호출할 수 있는 범위 — 이 목록 밖은 전부 차단됩니다(SSRF 방어).' }),
+    field('허용 인증 환경변수 이름 (allowed_auth_envs)', envTa),
+    field('허용 호스트 (url_allowlist)', hostTa),
     el('div', { class: 'admin-actions' }, saveBtn, status),
     meaningCard(data.meaning['runtime'])));
 }
@@ -2333,6 +2355,172 @@ function mcpForm(root, s, data, detail, isNew) {
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     actions, meaningCard(data.meaning['mcp']));
   syncTransport();
+}
+
+// ── 커스텀 훅 — runtime 권한 ──
+function customHookEditor(detail, data) {
+  const hooks = data.orgHooks || [];
+  const sel = state.admin.hookSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 커스텀 훅 추가',
+    onclick: () => { state.admin.hookSel = '__new__'; renderAdminDetail(detail, 'custom-hooks', data); } }));
+  for (const h of hooks) {
+    listCol.append(el('div', { class: 'mini-row' + (h.id === sel ? ' sel' : ''),
+      onclick: () => { state.admin.hookSel = h.id; renderAdminDetail(detail, 'custom-hooks', data); } },
+      el('div', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-meta', text: h.event + (h.matcher ? ' · ' + h.matcher : '') + ' · ' + (h.harness || 'all') })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__'
+    ? { id: '', label: '', harness: 'all', event: 'PostToolUse', matcher: '', source_code: '', timeout_sec: 10, note: '', enabled: true }
+    : hooks.find((h) => h.id === sel);
+  if (editing) hookForm(right, editing, data, detail, sel === '__new__');
+  else right.append(
+    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }),
+    meaningCard(data.meaning['custom-hook']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '커스텀 훅' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function hookForm(root, h, data, detail, isNew) {
+  const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
+  const labelIn = el('input', { type: 'text', value: h.label || '', placeholder: '표시 이름(선택)' });
+  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw'].map((x) => el('option', { value: x, text: x })));
+  harnessSel.value = h.harness || 'all';
+  const eventSel = el('select', {}, ...['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'].map((x) => el('option', { value: x, text: x })));
+  eventSel.value = h.event || 'PostToolUse';
+  const matcherIn = el('input', { type: 'text', value: h.matcher || '', placeholder: '예: Bash (PreToolUse/PostToolUse 의 도구 매처)' });
+  const codeTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '#!/usr/bin/env node\n// 훅 입력은 stdin(JSON), 응답은 stdout / exit code' });
+  codeTa.value = h.source_code || '';
+  const timeoutIn = el('input', { type: 'number', value: String(h.timeout_sec || 10), min: '1', max: '120' });
+  const enChk = el('input', { type: 'checkbox' }); enChk.checked = h.enabled !== false;
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!idIn.value.trim()) { toast('id 필수', true); return; }
+    if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
+    saveBtn.disabled = true;
+    try {
+      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, enabled: enChk.checked };
+      await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true); state.admin.hookSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'custom-hooks', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`커스텀 훅 '${h.id}' 제거? 다음 세션부터 실행되지 않습니다(미접속 머신은 직전 상태 유지).`)) return;
+    try { await api('/api/ui/org/hook/remove', { method: 'POST', body: JSON.stringify({ id: h.id }) }); await loadAdmin(true); state.admin.hookSel = null; toast('제거됨'); renderAdminDetail(detail, 'custom-hooks', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(
+    el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }),
+    field('id', idIn), field('표시 이름', labelIn),
+    field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel),
+    field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn),
+    field('코드 (Node.js)', codeTa),
+    field('타임아웃(초, 1~120)', timeoutIn),
+    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    actions, meaningCard(data.meaning['custom-hook']));
+}
+
+// ── AI 도구(MCP 툴) — runtime 권한 ──
+function toolsEditor(detail, data) {
+  const proxyTools = (data.tools || []).filter((t) => t.kind === 'http_proxy');
+  const sel = state.admin.toolSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 도구 추가',
+    onclick: () => { state.admin.toolSel = '__new__'; renderAdminDetail(detail, 'tools', data); } }));
+  for (const t of proxyTools) {
+    listCol.append(el('div', { class: 'mini-row' + (t.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.toolSel = t.name; renderAdminDetail(detail, 'tools', data); } },
+      el('div', { class: 'mini-title', text: t.name },
+        t.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null,
+        t.auto_approve ? el('span', { class: 'pill pill-warn', text: '자동승인' }) : null),
+      el('div', { class: 'mini-meta', text: (t.method || 'GET') + ' · ' + (t.scope || '-') })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__'
+    ? { name: '', kind: 'http_proxy', enabled: true, auto_approve: false, title: '', description: '', scope: 'items', method: 'GET', url: '', auth_env: '', input_schema: '', note: '' }
+    : proxyTools.find((t) => t.name === sel);
+  if (editing) toolForm(right, editing, data, detail, sel === '__new__');
+  else right.append(
+    el('p', { class: 'admin-hint', text: '사내 API를 AI 도구로 래핑합니다. 저장 즉시(재설치 없이) 구성원 AI가 씁니다. 호출은 런타임 설정의 화이트리스트 안에서만, 인증은 환경변수 이름으로만.' }),
+    builtinToggles(data),
+    meaningCard(data.meaning['tool']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'AI 도구(툴)' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function builtinToggles(data) {
+  const byName = {}; for (const t of (data.tools || [])) if (t.kind === 'builtin') byName[t.name] = t;
+  const wrap = el('div', { class: 'builtin-toggles' },
+    el('div', { class: 'admin-subhead', text: '빌트인 도구 (게이트웨이 기본)' }),
+    el('p', { class: 'admin-hint', text: '끄면 구성원 AI 도구 목록에서 사라집니다(즉시). 자동승인을 켜면 구성원 설치 시 확인 없이 실행되도록 설정됩니다.' }));
+  for (const name of (data.builtins || [])) {
+    const row = byName[name] || { name, enabled: true, auto_approve: false };
+    const enChk = el('input', { type: 'checkbox' }); enChk.checked = row.enabled !== false;
+    const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = !!row.auto_approve;
+    const save = async () => {
+      try { await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify({ name, kind: 'builtin', enabled: enChk.checked, auto_approve: aaChk.checked }) }); await loadAdmin(true); toast('저장됨'); }
+      catch (e) { toast(e.message, true); }
+    };
+    enChk.addEventListener('change', save); aaChk.addEventListener('change', save);
+    wrap.append(el('div', { class: 'builtin-row' },
+      el('span', { class: 'builtin-name', text: name }),
+      el('label', { class: 'admin-check' }, enChk, ' 사용'),
+      el('label', { class: 'admin-check' }, aaChk, ' 자동승인')));
+  }
+  return wrap;
+}
+
+function toolForm(root, t, data, detail, isNew) {
+  const policy = data.toolPolicy || { allowed_auth_envs: [], url_allowlist: [] };
+  const nameIn = el('input', { type: 'text', value: t.name, placeholder: '도구 이름 (소문자/숫자/_-)', disabled: isNew ? null : '' });
+  const titleIn = el('input', { type: 'text', value: t.title || '', placeholder: '표시 이름(선택)' });
+  const descTa = el('textarea', { rows: '2', placeholder: 'AI에게 이 도구가 무엇인지 설명(AI가 언제 쓸지 판단)' }); descTa.value = t.description || '';
+  const scopeSel = el('select', {}, ...['items', 'context', 'db', 'memory', 'code'].map((s) => el('option', { value: s, text: s })));
+  scopeSel.value = t.scope || 'items';
+  const methodSel = el('select', {}, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => el('option', { value: m, text: m })));
+  methodSel.value = t.method || 'GET';
+  const urlIn = el('input', { type: 'text', value: t.url || '', placeholder: 'https://api.acme.com/v1/search' });
+  let authEl;
+  if (policy.allowed_auth_envs.length) {
+    authEl = el('select', {}, el('option', { value: '', text: '(인증 없음)' }), ...policy.allowed_auth_envs.map((e) => el('option', { value: e, text: e })));
+    authEl.value = t.auth_env || '';
+  } else {
+    authEl = el('input', { type: 'text', value: '', placeholder: '런타임 설정 > allowed_auth_envs 를 먼저 등록하세요', disabled: '' });
+  }
+  const schemaTa = el('textarea', { rows: '5', class: 'admin-ta', placeholder: '{ "type":"object", "properties": { "q": {"type":"string"} }, "required":["q"] }' });
+  schemaTa.value = typeof t.input_schema === 'string' ? t.input_schema : (t.input_schema ? JSON.stringify(t.input_schema, null, 2) : '');
+  const enChk = el('input', { type: 'checkbox' }); enChk.checked = t.enabled !== false;
+  const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = !!t.auto_approve;
+  const hostHint = el('p', { class: 'admin-hint', text: policy.url_allowlist.length ? '허용 호스트: ' + policy.url_allowlist.join(', ') : '⚠ 허용 호스트가 없습니다 — 런타임 설정 > url_allowlist 에 먼저 추가해야 호출됩니다.' });
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('이름 필수', true); return; }
+    let schema;
+    if (schemaTa.value.trim()) { try { schema = JSON.parse(schemaTa.value); } catch { toast('입력 스키마가 올바른 JSON 이 아닙니다', true); return; } }
+    saveBtn.disabled = true;
+    try {
+      const payload = { name: nameIn.value.trim(), kind: 'http_proxy', enabled: enChk.checked, auto_approve: aaChk.checked, title: titleIn.value.trim() || null, description: descTa.value.trim(), scope: scopeSel.value, method: methodSel.value, url: urlIn.value.trim(), auth_env: (authEl.value || '').trim() || null, input_schema: schema };
+      await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true); state.admin.toolSel = payload.name; toast('저장됨 — 구성원 다음 대화부터 즉시'); renderAdminDetail(detail, 'tools', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`도구 '${t.name}' 제거? 구성원 AI 도구 목록에서 즉시 사라집니다.`)) return;
+    try { await api('/api/ui/org/tool/remove', { method: 'POST', body: JSON.stringify({ name: t.name }) }); await loadAdmin(true); state.admin.toolSel = null; toast('제거됨'); renderAdminDetail(detail, 'tools', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(
+    field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa),
+    field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel),
+    field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint,
+    field('인증 환경변수 (auth_env)', authEl),
+    field('입력 스키마 (JSON Schema, 선택)', schemaTa),
+    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'),
+    actions, meaningCard(data.meaning['tool']));
 }
 
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──

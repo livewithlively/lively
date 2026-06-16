@@ -6,10 +6,14 @@
 import type express from "express";
 import type { ZodRawShape } from "zod";
 import type { LivelyUser } from "../context.js";
+import type { Scope } from "./scopes.js";
 
-// 어댑터가 주입하는 호출 맥락 — audit.source('mcp'|'web') 구분용. handler 가 쓰기 fn 에 전달.
+// 어댑터가 주입하는 호출 맥락 — audit.source('mcp'|'web') 구분 + 감사 보강(B23). handler 가 쓰기 fn 에 전달.
 export interface CapabilityCtx {
   source?: string;
+  actor?: string;           // 안정 식별자(userId 우선) — 감사 actor
+  tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
+  ip?: string;              // 요청 IP
 }
 
 // REST 마운트 1개 — paths 배열로 기존 alias(propose/confirm 이중 경로 등)를 표현.
@@ -25,8 +29,9 @@ export interface Capability {
   title: string;
   description: string;
   // 요청 principal 에게 요구하는 스코프. null = bearer 인증만(예: me).
-  // admin = 전달/관리 표면(org-content 편집·발행·구성원/토큰) — 비개발자 관리자 전용.
-  scope: "items" | "context" | "admin" | null;
+  // admin = 전달/관리 표면(org-content 편집·발행·구성원/토큰), runtime = 멤버 머신에서 실행되는 것(훅·툴) 정의.
+  // 허용 scope 의 단일 진실원천은 ./scopes.ts — web.ts mw() 가 여기서 fail-closed 게이트를 파생한다.
+  scope: Scope | null;
   // MCP inputSchema(zod raw shape) — REST 는 이걸 안 쓰고 mount.parse 가 검증.
   input: ZodRawShape;
   expose: {

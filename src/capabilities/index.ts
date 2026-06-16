@@ -51,7 +51,7 @@ export function registerMcpCapabilities(server: McpServer, names: string[]): voi
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
-        return json(await cap.handler(args, u, { source: "mcp" }));
+        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId }));
       },
     );
   }

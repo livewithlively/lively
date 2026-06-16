@@ -3,6 +3,11 @@
 // 멤버 쓰기는 person/person_identity 로도 동기화 → 비개발자의 UI 편집이 즉시 게이트웨이 신원 매칭에 반영.
 import crypto from "node:crypto";
 import { itemsPool } from "../items/store.js";
+import { isScope } from "../capabilities/scopes.js";
+import { redactDeep } from "./redact.js";
+
+// 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
+export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
 
 export interface OrgProfile {
   name: string | null;
@@ -62,12 +67,16 @@ async function audit(
   after: unknown,
   actor: string | undefined,
   source: string | undefined,
+  meta?: { tokenHashPrefix?: string | null; ip?: string | null },
 ): Promise<void> {
+  // B20: before/after 를 굳히기 전 시크릿 redaction — 감사 로그가 평문 토큰/키의 사본이 되지 않게.
+  const b = before == null ? null : JSON.stringify(redactDeep(before));
+  const a = after == null ? null : JSON.stringify(redactDeep(after));
   await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source)
-     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7)`,
-    [entity, key, op, before == null ? null : JSON.stringify(before),
-     after == null ? null : JSON.stringify(after), actor ?? null, source ?? null],
+    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, token_hash_prefix, req_ip)
+     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9)`,
+    [entity, key, op, b, a, actor ?? null, source ?? null,
+     meta?.tokenHashPrefix ?? null, meta?.ip ?? null],
   );
 }
 
@@ -208,9 +217,10 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
 
 // 구성원의 활성 토큰 scope 를 일괄 갱신(권한편집 즉시 적용).
 export async function updateMemberTokenScopes(memberId: string, scopes: string[]): Promise<void> {
+  const valid = scopes.filter(isScope); // B4: 허용 scope 만 활성 토큰에 전파(손상/위조 차단)
   await itemsPool.query(
     `UPDATE auth_token SET scopes=$2::jsonb WHERE member_id=$1 AND revoked_at IS NULL`,
-    [memberId, JSON.stringify(scopes)],
+    [memberId, JSON.stringify(valid)],
   );
 }
 
@@ -364,7 +374,9 @@ export async function verifyDbToken(token: string): Promise<{ userId: string; em
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : fb;
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
-    return { userId: row.user_id, email: row.email ?? "", scopes: strArr(row.scopes, []), projects: strArr(row.projects, ["*"]) };
+    // B4: scope 를 허용 집합(capabilities/scopes.ts)으로 필터 — JSONB 손상·마이그레이션 버그·위조로
+    //  admin/runtime 같은 고위험 scope 가 섞여 들어와도 검증 시점에 떨군다(보안 경계 재확인).
+    return { userId: row.user_id, email: row.email ?? "", scopes: strArr(row.scopes, []).filter(isScope), projects: strArr(row.projects, ["*"]) };
   } catch {
     return null;
   }
@@ -388,6 +400,8 @@ export interface OrgRuntimeConfig {
   hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean };
   writeback_notice: string | null;
   work_roots: string[];
+  allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
+  url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -395,9 +409,13 @@ export interface OrgRuntimeConfig {
 
 const DEFAULT_HOOKS = { session_preload: true, work_flag: true, stop_writeback_gate: true };
 
+const strArrSafe = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, version, updated_at, updated_by FROM org_runtime_config WHERE id=1`,
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, version, updated_at, updated_by
+       FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
   const hooksRaw = (row?.hooks ?? {}) as Record<string, unknown>;
@@ -408,7 +426,9 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
-    work_roots: Array.isArray(row?.work_roots) ? (row!.work_roots as string[]).filter((x) => typeof x === "string") : [],
+    work_roots: strArrSafe(row?.work_roots),
+    allowed_auth_envs: strArrSafe(row?.allowed_auth_envs),
+    url_allowlist: strArrSafe(row?.url_allowlist).map((s) => s.toLowerCase()),
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -416,23 +436,34 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
 }
 
 export async function updateRuntimeConfig(
-  patch: { hooks?: Partial<OrgRuntimeConfig["hooks"]>; writeback_notice?: string | null; work_roots?: string[] },
+  patch: {
+    hooks?: Partial<OrgRuntimeConfig["hooks"]>;
+    writeback_notice?: string | null;
+    work_roots?: string[];
+    allowed_auth_envs?: string[];
+    url_allowlist?: string[];
+  },
   actor?: string,
   source?: string,
+  meta?: { tokenHashPrefix?: string | null; ip?: string | null },
 ): Promise<OrgRuntimeConfig> {
   const before = await getRuntimeConfig();
   const hooks = { ...before.hooks, ...(patch.hooks ?? {}) };
   const writebackNotice = patch.writeback_notice !== undefined ? patch.writeback_notice : before.writeback_notice;
   const workRoots = patch.work_roots !== undefined ? patch.work_roots : before.work_roots;
+  const allowedAuthEnvs = patch.allowed_auth_envs !== undefined ? patch.allowed_auth_envs : before.allowed_auth_envs;
+  const urlAllowlist = patch.url_allowlist !== undefined ? patch.url_allowlist.map((s) => s.toLowerCase()) : before.url_allowlist;
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,1,now(),$4)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,1,now(),$6)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
-       work_roots=EXCLUDED.work_roots, version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots), actor ?? null],
+       work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
+       version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), actor ?? null],
   );
   const after = await getRuntimeConfig();
-  await audit("org_runtime_config", "1", "update", before, after, actor, source);
+  await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
 }
 
@@ -517,4 +548,237 @@ export async function removeMcpServer(name: string, actor?: string, source?: str
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_mcp_server WHERE name=$1`, [name]);
   await audit("org_mcp_server", name, "delete", before, null, actor, source);
+}
+
+// ════════ 커스텀 훅 — org_hook ════════
+export type HookHarness = "claude" | "codex" | "openclaw" | "all";
+export interface OrgHook {
+  id: string;
+  label: string | null;
+  harness: HookHarness;
+  event: string;
+  matcher: string | null;
+  source_code: string;
+  timeout_sec: number;
+  note: string | null;
+  enabled: boolean;
+  sort: number;
+  version: number;
+  content_hash: string | null;
+  created_by: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+function mapHook(row: Record<string, unknown>): OrgHook {
+  return {
+    id: row.id as string,
+    label: (row.label as string) ?? null,
+    harness: row.harness as HookHarness,
+    event: row.event as string,
+    matcher: (row.matcher as string) ?? null,
+    source_code: (row.source_code as string) ?? "",
+    timeout_sec: (row.timeout_sec as number) ?? 10,
+    note: (row.note as string) ?? null,
+    enabled: row.enabled !== false,
+    sort: (row.sort as number) ?? 0,
+    version: (row.version as number) ?? 1,
+    content_hash: (row.content_hash as string) ?? null,
+    created_by: (row.created_by as string) ?? null,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+
+export async function listOrgHooks(): Promise<OrgHook[]> {
+  const r = await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook ORDER BY sort, id`);
+  return r.rows.map(mapHook);
+}
+
+// 런너 fetch 용 — enabled 훅만. harness 지정 시 그 하네스 또는 'all' 만.
+export async function listEnabledHooks(harness?: string): Promise<OrgHook[]> {
+  const r = harness
+    ? await itemsPool.query(
+        `SELECT ${HOOK_COLS} FROM org_hook WHERE enabled=true AND (harness=$1 OR harness='all') ORDER BY sort, id`, [harness])
+    : await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook WHERE enabled=true ORDER BY sort, id`);
+  return r.rows.map(mapHook);
+}
+
+export async function getOrgHook(id: string): Promise<OrgHook | null> {
+  const r = await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook WHERE id=$1`, [id]);
+  return r.rows[0] ? mapHook(r.rows[0]) : null;
+}
+
+export interface OrgHookInput {
+  id: string;
+  label?: string | null;
+  harness?: HookHarness;
+  event?: string;
+  matcher?: string | null;
+  source_code?: string;
+  timeout_sec?: number;
+  note?: string | null;
+  enabled?: boolean;
+  sort?: number;
+}
+
+export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promise<OrgHook> {
+  const before = await getOrgHook(h.id);
+  const harness = h.harness ?? before?.harness ?? "all";
+  const event = h.event ?? before?.event;
+  if (!event) throw new Error("event 필수"); // delivery 가 먼저 검증하지만 store 계층 방어
+  const sourceCode = h.source_code ?? before?.source_code ?? "";
+  const contentHash = sha256(sourceCode);
+  await itemsPool.query(
+    `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,now(),$13)
+     ON CONFLICT (id) DO UPDATE SET
+       label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, matcher=EXCLUDED.matcher,
+       source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note,
+       enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,
+       version=org_hook.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [h.id, h.label ?? before?.label ?? null, harness, event, h.matcher ?? before?.matcher ?? null,
+     sourceCode, h.timeout_sec ?? before?.timeout_sec ?? 10, h.note ?? before?.note ?? null,
+     h.enabled ?? before?.enabled ?? true, h.sort ?? before?.sort ?? 0, contentHash,
+     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null],
+  );
+  const after = await getOrgHook(h.id);
+  await audit("org_hook", h.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
+  return after as OrgHook;
+}
+
+export async function removeOrgHook(id: string, ctx: WriteCtx = {}): Promise<void> {
+  const before = await getOrgHook(id);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_hook WHERE id=$1`, [id]);
+  await audit("org_hook", id, "delete", before, null, ctx.actor, ctx.source, ctx);
+}
+
+// ════════ 조직 정의 MCP 툴 — org_tool ════════
+export type ToolKind = "http_proxy" | "builtin" | "prompt";
+export interface OrgTool {
+  name: string;
+  kind: ToolKind;
+  enabled: boolean;
+  title: string | null;
+  description: string;
+  scope: string | null;
+  input_schema: unknown;
+  method: string | null;
+  url: string | null;
+  auth_env: string | null;
+  auto_approve: boolean;
+  note: string | null;
+  sort: number;
+  version: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+const DEFAULT_INPUT_SCHEMA = { type: "object", properties: {}, additionalProperties: false };
+
+function mapTool(row: Record<string, unknown>): OrgTool {
+  return {
+    name: row.name as string,
+    kind: row.kind as ToolKind,
+    enabled: row.enabled !== false,
+    title: (row.title as string) ?? null,
+    description: (row.description as string) ?? "",
+    scope: (row.scope as string) ?? null,
+    input_schema: row.input_schema ?? DEFAULT_INPUT_SCHEMA,
+    method: (row.method as string) ?? null,
+    url: (row.url as string) ?? null,
+    auth_env: (row.auth_env as string) ?? null,
+    auto_approve: row.auto_approve === true,
+    note: (row.note as string) ?? null,
+    sort: (row.sort as number) ?? 0,
+    version: (row.version as number) ?? 1,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, note, sort, version, updated_at, updated_by";
+
+export async function listTools(): Promise<OrgTool[]> {
+  const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
+  return r.rows.map(mapTool);
+}
+
+// /mcp 동적 등록용 — enabled 인 http_proxy 툴만.
+export async function listEnabledProxyTools(): Promise<OrgTool[]> {
+  const r = await itemsPool.query(
+    `SELECT ${TOOL_COLS} FROM org_tool WHERE enabled=true AND kind='http_proxy' ORDER BY sort, name`);
+  return r.rows.map(mapTool);
+}
+
+// (A) 빌트인 게이팅 — 비활성화된 빌트인 툴 이름 집합(buildServer 가 등록 제외).
+export async function listDisabledBuiltins(): Promise<Set<string>> {
+  const r = await itemsPool.query(`SELECT name FROM org_tool WHERE kind='builtin' AND enabled=false`);
+  return new Set(r.rows.map((row) => (row as { name: string }).name));
+}
+
+// 설치 번들용 — auto_approve 가 켜진(그리고 enabled) 툴 이름. 멤버 settings 의 무확인 실행 허용목록에 들어간다.
+export async function listAutoApproveTools(): Promise<{ name: string; kind: ToolKind }[]> {
+  const r = await itemsPool.query(
+    `SELECT name, kind FROM org_tool WHERE auto_approve=true AND enabled=true ORDER BY name`);
+  return r.rows.map((row) => ({ name: (row as { name: string }).name, kind: (row as { kind: ToolKind }).kind }));
+}
+
+export async function getTool(name: string): Promise<OrgTool | null> {
+  const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool WHERE name=$1`, [name]);
+  return r.rows[0] ? mapTool(r.rows[0]) : null;
+}
+
+export interface OrgToolInput {
+  name: string;
+  kind?: ToolKind;
+  enabled?: boolean;
+  title?: string | null;
+  description?: string;
+  scope?: string | null;
+  input_schema?: unknown;
+  method?: string | null;
+  url?: string | null;
+  auth_env?: string | null;
+  auto_approve?: boolean;
+  note?: string | null;
+  sort?: number;
+}
+
+export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<OrgTool> {
+  const before = await getTool(t.name);
+  const kind = t.kind ?? before?.kind ?? "http_proxy";
+  const isProxy = kind === "http_proxy";
+  // http_proxy 가 아닌 행(빌트인 게이팅)은 url/method/auth_env/scope/input_schema 를 비운다(잔류 방지).
+  const url = isProxy ? (t.url ?? before?.url ?? null) : null;
+  const method = isProxy ? (t.method ?? before?.method ?? null) : null;
+  const authEnv = isProxy ? (t.auth_env ?? before?.auth_env ?? null) : null;
+  const scope = isProxy ? (t.scope ?? before?.scope ?? null) : null;
+  const inputSchema = isProxy ? (t.input_schema ?? before?.input_schema ?? DEFAULT_INPUT_SCHEMA) : DEFAULT_INPUT_SCHEMA;
+  await itemsPool.query(
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,1,now(),$14)
+     ON CONFLICT (name) DO UPDATE SET
+       kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
+       scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
+       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
+     t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
+     t.auto_approve ?? before?.auto_approve ?? false, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
+     ctx.actor ?? null],
+  );
+  const after = await getTool(t.name);
+  await audit("org_tool", t.name, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
+  return after as OrgTool;
+}
+
+export async function removeTool(name: string, ctx: WriteCtx = {}): Promise<void> {
+  const before = await getTool(name);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_tool WHERE name=$1`, [name]);
+  await audit("org_tool", name, "delete", before, null, ctx.actor, ctx.source, ctx);
 }

@@ -94,7 +94,7 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
 // 런타임 번들 주입 — DB(org_runtime_config·org_mcp_server)를 발행 묶음 .lively/ 에 굳힌다.
 //  설치기(user-install.mjs)가 이걸 ~/.lively/ 로 복사하고, 훅·register-clients 가 런타임에 읽는다.
 async function writeRuntimeBundle(stageDir: string): Promise<void> {
-  const { getRuntimeConfig, listMcpServers } = await import("./store.js");
+  const { getRuntimeConfig, listMcpServers, listAutoApproveTools } = await import("./store.js");
   const dir = join(stageDir, ".lively");
   await mkdir(dir, { recursive: true });
   const cfg = await getRuntimeConfig();
@@ -106,6 +106,10 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
     .filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)) // 불완전 서버(http인데 url없음 등) 제외
     .map((s) => ({ name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env }));
   await writeFile(join(dir, "mcp-servers.json"), JSON.stringify({ servers: mcps }, null, 2) + "\n");
+  // auto-approve — 멤버 설치기가 settings.json 의 무확인 실행 허용목록(permissions.allow)에 머지.
+  //  MCP 툴 이름은 하네스에서 'mcp__lively__<tool>' 로 노출되므로 그 형태로 굳힌다(lively=등록 라벨).
+  const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+  await writeFile(join(dir, "auto-approve.json"), JSON.stringify({ allow: autoApprove }, null, 2) + "\n");
 }
 
 // 멤버 컨텍스트 미리보기 — 구성원의 AI 가 매 세션 실제로 읽는 정적 컨텍스트(WYSIWYG).
