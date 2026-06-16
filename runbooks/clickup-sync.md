@@ -81,8 +81,9 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
   조회: `SELECT at, action, by_user, outcome, detail FROM pm_write_audit ORDER BY at DESC LIMIT 20;`
 - ClickUp 쓰기 성공 후 에코만 실패하면 `미러 반영 실패 … 다음 run-sync 가 수렴` 에러 — **create 를
   맹목 재시도하지 말 것**(ClickUp 태스크가 중복된다; 미러는 다음 run-sync 가 채운다).
-- 스코프는 'items' 재사용(2인 조직 — curate 쓰기와 동급 표면). 추후 분리하려면 capabilities/types.ts
-  scope union + web.ts mw + AUTH_TOKENS_JSON(시크릿) 3곳 변경 — 의도적으로 보류한 업그레이드 경로.
+- 스코프는 'items' 재사용(2인 조직 — curate 쓰기와 동급 표면). 추후 분리하려면 **`src/capabilities/scopes.ts`
+  의 SCOPES 배열(단일 진실원천)** 1곳만 — types union·web.ts `mw()`·토큰 검증이 전부 거기서 파생된다(2026-06-16
+  scope 단일상수화 완료; 신규 scope 추가 시 mw 가 자동 fail-closed). + AUTH_TOKENS_JSON/구성원 scope 부여.
 
 ## 4. 도그푸드 스케줄 (제안 — **설치하지 않음**)
 

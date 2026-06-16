@@ -18,19 +18,35 @@
 | 영역 | 파일 | 비고 |
 |---|---|---|
 | 엔트리포인트 | `src/index.ts` | Express + Streamable HTTP + bearer 인증 |
-| 서버 조립 | `src/server.ts` | 능력 계층 등록 — **MCP 표면 22툴**(`scripts/parity-check.mjs`의 EXPECTED_MCP_SURFACE 로 동결, REST/MCP 패리티 42) |
+| 서버 조립 | `src/server.ts` · `src/capabilities/dynamic-tools.ts` | 능력 계층 등록 — **MCP 표면 22툴**(`scripts/parity-check.mjs`의 EXPECTED_MCP_SURFACE 로 동결) + 웹 정의 `org_tool`(http_proxy) `/mcp` **동적 등록**(SSRF 가드)·빌트인 on/off 게이팅 |
 | **보안 경계** | `src/context.ts` | `resolveUser → requireScope` — 모든 툴 첫 줄 |
 | 인증 | `src/auth/bearer.ts` | 1단계 정적 토큰. 2단계 OAuth로 이 파일만 교체 |
-| **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — items·mapping·context·pm·domainmap-curation |
+| **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — items·mapping·context·pm·domainmap-curation·**delivery(웹 관리/전달)** |
+| **전달/관리** | `src/capabilities/delivery.ts` | 웹 `/ui` '관리' 탭 — org-content(강제규칙·맥락·메모리·구성원)·토큰·**커스텀 훅(`org_hook`)·AI 도구(`org_tool`)·MCP 서버·런타임 설정**. admin/runtime scope·REST 전용(에이전트 비노출). 항목별 '구성원에게 미치는 효과' 의미 패널 + auto-approve |
 | 도메인/프로젝트 | `src/capabilities/context.ts` | `context_overview`/`domain_list`/`domain_get`/`project_list`/`debt_list`/`repo_list` + **authoring 쓰기 `propose_domain`/`domain_deprecate`** — domainmap 프록시 |
 | domainmap 엔진 | `src/domainmap/` | 흡수된 엔진 모듈 — `db.ts`(전용 pg Pool) · `core/`(reconcile·changelog·domains·mappings·debts·projects·refresh·queries) · `cli.ts`(호스트 CLI) · `webhook.ts`(HMAC push-refresh) (`DOMAINMAP_DATABASE_URL`) |
 | PM (ClickUp) | `src/capabilities/pm.ts` · `src/connectors/clickup.ts` | `pm_task_*` 6툴 write-through(+`pm_write_audit`) + 폴링 증분 싱크(`run-sync`) — `runbooks/clickup-sync.md` |
 | DB | `src/tools/db.ts` | `db_sources` / `db_schema` / `db_query` — 멀티 데이터소스(`source` 인자·`DB_SOURCES_JSON`), 방화벽·RLS·timeout·감사 |
-| DB 안전장치 | `src/db/firewall.ts` · `src/db/sources.ts` | 단일 SELECT + 위험함수(`set_config`/`current_setting` 등) 차단 · 소스 레지스트리 |
+| DB 안전장치 | `src/db/firewall.ts` · `src/db/sources.ts` | 단일 SELECT + 위험함수(`set_config`/`current_setting` 등) 차단 + 민감 테이블(`auth_token`·`org_*`) deny · 소스 레지스트리 |
 | RLS 예시 | `sql/rls-example.sql` | 읽기전용 role + 행 정책 |
 | 클라 등록 | `scripts/register-clients.sh` | 4종 등록 |
 
 > `memory_*`/`code_*` 툴은 **컷**(DESIGN §10.6 — canonical 메모리는 git 컨텍스트 레포). `src/tools/memory.ts`·`code.ts`는 미등록 보존 파일.
+
+## 권한 스코프 (scope)
+
+허용 scope 단일 진실원천: **`src/capabilities/scopes.ts`** (여기서 types union·웹 `mw()`·토큰 검증을 전부 파생). 토큰/구성원에 부여하고 capability·MCP 툴이 요구한다.
+
+| scope | 의미 |
+|---|---|
+| `items` · `context` | 아이템 조회 · 컨텍스트(도메인맵 등) |
+| `db` (`db:<source>`) | `db_query`/`db_schema`(전 소스 또는 특정 소스) |
+| `admin` | 데이터/정책 관리(섹션·구성원·메모리·토큰·발행) |
+| `runtime` | **멤버 머신에서 실행되는 것 정의** — 커스텀 훅·AI 도구. admin 과 분리(admin ⊉ runtime) |
+| `memory` · `code` | 예약 |
+
+- **정적 토큰(`AUTH_TOKENS_JSON`)은 admin/runtime 행위 거부**(`DANGEROUS_SCOPES`) — 회수 불가 토큰으로 fleet 코드/정책 변경 금지(kill-switch). DB 토큰(`auth_token`, revoke 즉시)만 관리 권한 행사.
+- 웹 `mw()`는 미지 scope 를 **fail-closed(403)** — 분기 누락으로 "인증만으로 통과"하는 권한 구멍 차단.
 
 ## 실행
 

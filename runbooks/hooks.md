@@ -1,9 +1,9 @@
-# 훅 패키지 런북 — 세션 훅 3종 (Phase C ④) + 도메인 authoring (⑤) 운영 노트
+# 훅 패키지 런북 — 세션 훅 3종 + 커스텀 훅 런너 (Phase C ④) + 도메인 authoring (⑤) 운영 노트
 
 원칙: **트리거는 결정적으로, 판단은 인-컨텍스트로.** 훅은 LLM/모델 API 를 절대 호출하지 않는다 —
 텍스트를 주입하거나 플래그를 만질 뿐이고, 판단은 작업 맥락이 살아있는 세션이 한다.
 
-소스(단일 출처): `workflow-std/hooks/` (제품 레포 — 3 스크립트 + `settings-hooks.json` 템플릿 + `test-hooks.sh`).
+소스(단일 출처): `workflow-std/hooks/` (제품 레포 — 4 스크립트: session-preload·work-flag·stop-writeback-gate·**run-custom**(커스텀 훅 런너) + `settings-hooks.json` 템플릿 + `test-hooks.sh`).
 배포: `workflow-std/generator/build-context.mjs` 가 `--publish`(context-setup) 와 `--install-hooks <dir>…`(독푸드)
 경로에서 `<target>/.claude/hooks/*.mjs` + `<target>/.claude/settings.json`(hooks 블록 비파괴 머지)을 에밋한다.
 
@@ -15,7 +15,7 @@
 | `work-flag.mjs` | PostToolUse ×2 — `mcp__lively__(curate_item_mapping\|propose_domain\|domain_deprecate\|pm_task_.*)` 와 `Edit\|Write\|MultiEdit\|NotebookEdit` | hook-input JSON (session_id, tool_name …) | 출력 없음, 항상 exit 0. 플래그 파일만 touch |
 | `stop-writeback-gate.mjs` | Stop (matcher 없음) | hook-input JSON (`stop_hook_active` 포함) | 차단 시에만 `{"decision":"block","reason":…}` + exit 0 (동일 라이브 세션 재가동). 그 외 무출력 exit 0 |
 
-> **memory_write 의도적 제외** — 현 MCP 표면(21툴)에 없고(컷 — 소스 스텁만 보존, 영속 0), 노출되더라도 플래그하면
+> **memory_write 의도적 제외** — 현 MCP 표면(22툴)에 없고(컷 — 소스 스텁만 보존, 영속 0), 노출되더라도 플래그하면
 > '이미 기록함'(.writeback) 오판을 만든다. 실제 영속이 구현되는 커밋에서 settings-hooks.json 매처와
 > work-flag.mjs `WRITE_TOOLS` 에 **동시에** 추가하고 재배포(--install-hooks ×3 + --publish)할 것.
 
@@ -29,6 +29,12 @@
 4. `<sid>.blocked` 존재 (이미 1회 너지) → 통과
 5. 그 외(worked 만 있음) → `.blocked` touch + decision:block — 기록(curate_item_mapping /
    pm_task_update_status·comment / propose_domain) 또는 그대로 재종료 안내
+
+## 1.5 커스텀 훅 런너 (run-custom.mjs — 2026-06-16)
+- 웹 관리(**runtime** scope)에서 정의하는 커스텀 훅(`org_hook`)을 실행하는 **불변 런너**. 본문(source_code)은 멤버 디스크에 저장하지 않는다 — 매 세션 게이트웨이 `GET /api/ui/org/runner/hooks?harness=&event=`(멤버 토큰 인증, `delivery.ts org_runner_hooks`)에서 enabled 훅을 받아 임시파일로 실행 후 삭제.
+- 이벤트당 고정 엔트리 1개로 settings 에 박힌다(SessionStart·UserPromptSubmit·PreToolUse·PostToolUse·Stop·SubagentStop·Notification). 커스텀 훅 추가/삭제는 settings 재작성 불요 — 동적성은 전부 서버측.
+- **fail-CLOSED + grace 캐시(10분)**: 게이트웨이 미도달 시 최근 성공 캐시만, 만료되면 무실행 → enabled=false/제거가 다음 세션부터 즉시 무효(실효 kill-switch). `content_hash` 필수+일치만 실행. `timeout_sec` 마다 SIGKILL(no-block 불변식). `LIVELY_OFF=1` 최상단 종료. SessionStart 만 stdout 을 컨텍스트로 주입, 그 외 이벤트는 부수효과만(v1: 차단 불가).
+- 설계/검증: `research/2026-06-16-hook-tool-crud-구현.md`.
 
 ## 2. 플래그 생명주기
 - 디렉토리: `os.tmpdir()/lively-hooks/` (전 플랫폼 동일; macOS 는 유저별 0700 `$TMPDIR`=/var/folders/…/T),
@@ -52,7 +58,7 @@
 - preload 토큰은 items+context 양 스코프 필요(inbox/stats=items, domainmap proxy=context).
 
 ## 5. 비활성화 / 트러블슈팅
-- 전역 끄기: `LIVELY_HOOKS_OFF=1` — 3 스크립트 모두 공통으로 즉시 exit 0.
+- 전역 끄기: `LIVELY_OFF=1`(구 `LIVELY_HOOKS_OFF` alias) — 4 스크립트 모두(런너 포함) 공통으로 즉시 exit 0.
 - 영구 제거: 프로젝트 `.claude/settings.json` 의 hooks 블록에서 해당 entry 삭제(다른 키는 보존).
 - 모든 스크립트는 페일오픈: 에러/타임아웃 → exit 0 무출력. 훅이 실제 작업을 막는 일은 구조적으로 없다.
 - 유닛테스트: `bash workflow-std/hooks/test-hooks.sh` (라이브 케이스는 `LIVE=1`).
@@ -75,7 +81,7 @@ POSIX 셸 전제다. Windows(ps1) 멤버는 훅이 조용히 실패할 수 있�
 — 해당 멤버에게는 `LIVELY_HOOKS_OFF=1` 안내.
 
 ## 9. 도메인 authoring (⑤) 운영 노트
-- MCP 표면 21툴 — `propose_domain`(evidence 필수, status='proposed' 생성, 보호 리포 lively 403)과
+- MCP 표면 22툴 — `propose_domain`(evidence 필수, status='proposed' 생성, 보호 리포 lively 403)과
   `domain_deprecate`(state active↔deprecated, merged 는 400) 추가. MCP 경유 쓰기는 `x-actor-type: agent`
   로 전달되어 domainmap change_log 에 actor_type='agent' 로 영속된다.
 - **domain_deprecate 도 agent 한정 보호 리포 가드** — `setDomainState` 가 actor.type==='agent' 이면
