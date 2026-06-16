@@ -470,6 +470,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-head { margin-bottom: 4px; }
 .admin-sub { font-size: 13px; font-weight: 600; color: var(--muted-head); }
 .admin-nav { padding: 0; }
+/* nav 행은 <a> — .row 가 display 를 안 줘서 inline 으로 떨어지면 블록 자식(title/meta)과 충돌해 높이가 부풂. 명시 block. */
+.admin-nav .row { display: block; }
 .admin-hint { font-size: 13px; color: var(--ink-sub); margin: 4px 0 12px; line-height: 1.5; }
 .admin-what { font-size: 14.5px; font-weight: 600; color: var(--ink); margin: 2px 0 8px; }
 .admin-status { font-size: 13px; font-weight: 600; color: var(--muted-head); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
