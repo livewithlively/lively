@@ -1831,7 +1831,8 @@ const ADMIN_SECTIONS = [
   { key: 'memory', label: '팀 메모리', meaning: 'memory' },
   { key: 'members', label: '구성원', meaning: 'member' },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
-  { key: 'publish', label: '발행 · 배포', meaning: null },
+  { key: 'publish', label: '발행', meaning: null },
+  { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
 ];
 
 async function loadAdmin(force) {
@@ -1872,6 +1873,7 @@ function adminRowMeta(key, data) {
   if (key === 'members') return data.members.length + '명';
   if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
   if (key === 'publish') return '구성원에게 게시';
+  if (key === 'deploy') return 'OS별 명령 복사';
   return '';
 }
 
@@ -1912,6 +1914,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'profile') return profileEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
+  if (sel === 'deploy') return deployPanel(detail, data);
 }
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 ──
@@ -2212,6 +2215,44 @@ function publishPanel(detail, data) {
     el('div', { class: 'meaning meaning-infra' },
       el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원 설치 방법' })),
       el('p', { class: 'meaning-what', text: '구성원은 git 없이 한 줄로 설치합니다 — [구성원] 탭에서 각자 토큰을 발급하면 그 사람 전용 설치 명령이 나옵니다.' }))));
+}
+
+// ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
+function deployPanel(detail, data) {
+  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const os = state.admin.deployOs || 'mac';
+  state.admin.deployOs = os;
+  const osTabs = el('div', { class: 'os-tabs' },
+    ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
+      class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
+      onclick: () => { state.admin.deployOs = o; renderAdminDetail(detail, 'deploy', data); } })));
+  const blocks = deployCommands(gw, os).map((c) => el('div', { class: 'deploy-block' },
+    el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
+      c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
+    el('p', { class: 'admin-hint', text: c.note }),
+    el('pre', { class: 'admin-preview', text: c.cmd })));
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '설치 · 업데이트 · 제거' }), osTabs),
+    el('p', { class: 'admin-hint', text: '설치는 각자 토큰이 필요합니다([구성원] 탭에서 발급 시 토큰 박힌 명령이 나옴). 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다.' }),
+    ...blocks));
+}
+
+function deployCommands(gw, os) {
+  if (os === 'windows') {
+    return [
+      { title: '설치 (PowerShell)', note: '구성원 토큰 필요(<TOKEN> 교체). Windows 는 현재 컨텍스트+MCP 지원 — 세션 훅은 준비 중.',
+        cmd: `$T="<TOKEN>"; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "${gw}/install" -OutFile "$env:TEMP\\lv.tgz"; tar -xzf "$env:TEMP\\lv.tgz" -C "$env:TEMP"; $env:LIVELY_TOKEN=$T; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\setup\\setup-windows.ps1"` },
+      { title: '업데이트 / 제거', note: 'Windows 전용 업데이트·제거 스크립트는 준비 중입니다. 갱신은 설치 재실행, 제거는 가이드(사용가이드.md) 참조.', cmd: '(준비 중)' },
+    ];
+  }
+  return [
+    { title: '설치', note: '구성원 토큰 필요 — [구성원] 탭에서 발급하면 토큰 박힌 완성형 명령이 나옵니다. 아래는 템플릿(<TOKEN> 교체).',
+      cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh` },
+    { title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
+      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" bash /tmp/lv/setup/setup-mac.sh` },
+    { title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 서버에서도 토큰을 회수해야 합니다.',
+      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
+  ];
 }
 
 // ── 공용 UI 헬퍼 ──

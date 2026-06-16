@@ -543,3 +543,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 권한(scopes) 체크박스 */
 .scope-wrap { display: flex; flex-direction: column; gap: 2px; }
 .scope-opt { margin: 2px 0; }
+
+/* 배포 안내(설치/업데이트/제거) */
+.os-tabs { display: flex; gap: 6px; }
+.deploy-block { margin: 16px 0 4px; }
+.deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.deploy-head h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
+.deploy-block .admin-preview { white-space: pre-wrap; }
