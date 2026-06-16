@@ -102,9 +102,9 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
     JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || undefined }, null, 2) + "\n");
   const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 어드민 런타임 설정에서 중앙 관리. env LIVELY_WORK_ROOTS 로도 augment.";
   await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
-  const mcps = (await listMcpServers()).filter((s) => s.enabled).map((s) => ({
-    name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env,
-  }));
+  const mcps = (await listMcpServers())
+    .filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)) // 불완전 서버(http인데 url없음 등) 제외
+    .map((s) => ({ name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env }));
   await writeFile(join(dir, "mcp-servers.json"), JSON.stringify({ servers: mcps }, null, 2) + "\n");
 }
 

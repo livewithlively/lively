@@ -26,7 +26,9 @@ if [ -n "$MCP_FILE" ] && [ -f "$MCP_FILE" ] && command -v node >/dev/null 2>&1; 
       [ -z "$name" ] && continue
       claude mcp remove "$name" 2>/dev/null || true
       if [ "$transport" = "stdio" ]; then
-        [ -n "$command" ] && { claude mcp add --transport stdio --scope user "$name" $command && echo "  ✓ $name (stdio)" || echo "  ⚠️ $name 등록 실패"; }
+        # $command 는 의도적 word-split(claude stdio 는 command+args 를 분리 인자로 받음). glob 확장만 차단(set -f).
+        #  한계: 단일 인자에 공백이 있는 경로/값은 미지원(현재 command 는 공백구분 토큰만).
+        [ -n "$command" ] && { set -f; claude mcp add --transport stdio --scope user "$name" $command && echo "  ✓ $name (stdio)" || echo "  ⚠️ $name 등록 실패"; set +f; }
       else
         tok=""; [ -n "$auth_env" ] && eval "tok=\${$auth_env:-}"
         if [ -n "$tok" ]; then

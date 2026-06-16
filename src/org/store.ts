@@ -425,8 +425,10 @@ export async function updateRuntimeConfig(
   const writebackNotice = patch.writeback_notice !== undefined ? patch.writeback_notice : before.writeback_notice;
   const workRoots = patch.work_roots !== undefined ? patch.work_roots : before.work_roots;
   await itemsPool.query(
-    `UPDATE org_runtime_config SET hooks=$1::jsonb, writeback_notice=$2, work_roots=$3::jsonb,
-       version=version+1, updated_at=now(), updated_by=$4 WHERE id=1`,
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,1,now(),$4)
+     ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
+       work_roots=EXCLUDED.work_roots, version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots), actor ?? null],
   );
   const after = await getRuntimeConfig();
@@ -491,6 +493,9 @@ export interface McpServerInput {
 export async function upsertMcpServer(m: McpServerInput, actor?: string, source?: string): Promise<McpServer> {
   const before = await getMcpServer(m.name);
   const transport = m.transport ?? before?.transport ?? "http";
+  // transport 와 맞지 않는 필드는 비운다(http↔stdio 전환 시 옛 url/command 잔류로 인한 잘못된 상태 방지).
+  const url = transport === "http" ? (m.url ?? before?.url ?? null) : null;
+  const command = transport === "stdio" ? (m.command ?? before?.command ?? null) : null;
   await itemsPool.query(
     `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,now(),$9)
@@ -498,7 +503,7 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
        transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
        note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [m.name, transport, m.url ?? before?.url ?? null, m.command ?? before?.command ?? null,
+    [m.name, transport, url, command,
      m.auth_env ?? before?.auth_env ?? null, m.note ?? before?.note ?? null,
      m.enabled ?? before?.enabled ?? true, m.sort ?? before?.sort ?? 0, actor ?? null],
   );

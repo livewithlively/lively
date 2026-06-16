@@ -253,8 +253,10 @@ export const deliveryCapabilities: Capability[] = [
     "훅 on/off·work-roots·writeback 너지문구 — 세션 훅이 동적 fetch(scope null, 멤버 토큰 OK).",
     [{ method: "GET", paths: ["/api/ui/org/runtime-config"], parse: () => ({}) }],
     async () => {
+      // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는
+      //  비-admin 에게 노출 안 함 — 설치 번들(.lively/work-roots, 멤버 본인 설치 경로)로만 전달.
       const c = await getRuntimeConfig();
-      return { hooks: c.hooks, work_roots: c.work_roots, writeback_notice: c.writeback_notice };
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots 목록·writeback 너지문구를 저장한다.",
@@ -286,7 +288,7 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/org/mcp-servers"], parse: () => ({}) }],
     async () => {
       const all = await listMcpServers();
-      return { servers: all.filter((s) => s.enabled).map((s) => ({
+      return { servers: all.filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)).map((s) => ({
         name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
       })) };
     }),
