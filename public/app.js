@@ -2258,37 +2258,70 @@ function tokensPanel(detail, data) {
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
 function deployPanel(detail, data) {
   const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const canEdit = state.admin.canEdit;
   const os = state.admin.deployOs || 'mac';
   state.admin.deployOs = os;
   const osTabs = el('div', { class: 'os-tabs' },
     ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
       class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
       onclick: () => { state.admin.deployOs = o; renderAdminDetail(detail, 'deploy', data); } })));
-  const blocks = deployCommands(gw, os).map((c) => el('div', { class: 'deploy-block' },
+  const staticBlock = (c) => el('div', { class: 'deploy-block' },
     el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
       c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
     el('p', { class: 'admin-hint', text: c.note }),
-    el('pre', { class: 'admin-preview', text: c.cmd })));
+    el('pre', { class: 'admin-preview', text: c.cmd }));
+  // 설치 블록: mac + admin 이면 구성원 선택→발급→실토큰 명령(인터랙티브), 아니면 템플릿.
+  const blocks = deployCommands(gw, os).map((c) =>
+    (c.kind === 'install' && os === 'mac' && canEdit) ? installMinterBlock(data, gw) : staticBlock(c));
   detail.replaceChildren(el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '설치 · 업데이트 · 제거' }), osTabs),
-    el('p', { class: 'admin-hint', text: '설치는 각자 토큰이 필요합니다([구성원] 탭에서 발급 시 토큰 박힌 명령이 나옴). 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다.' }),
+    el('p', { class: 'admin-hint', text: '설치는 구성원별 토큰이 필요합니다(아래에서 구성원 선택 → 발급 → 토큰 박힌 명령). 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다.' }),
     ...blocks));
+}
+
+// 설치 미니터 — 구성원 선택 + 발급 → 그 사람 토큰이 박힌 완성형 설치 명령(복사).
+function installMinterBlock(data, gw) {
+  const result = el('div', {});
+  const sel = el('select', {}, ...(data.members || []).map((m) =>
+    el('option', { value: m.id, text: (m.display_name || m.id) + ' · ' + ((m.scopes || []).join('/') || '-') })));
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '토큰 발급 → 명령 생성' });
+  go.addEventListener('click', async () => {
+    const m = (data.members || []).find((x) => x.id === sel.value) || { id: sel.value };
+    if (!m.id) { toast('구성원을 선택하세요', true); return; }
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token', { method: 'POST',
+        body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
+      const cmd = `T=${r.token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
+      result.replaceChildren(
+        el('p', { class: 'admin-hint', text: '✓ ' + (m.display_name || m.id) + ' 토큰 발급됨(scope: ' + r.scopes.join('/') + '). 아래 명령을 전달하세요 — 토큰은 지금만 보입니다.' }),
+        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+        el('pre', { class: 'admin-preview', text: cmd }));
+      await loadAdmin(true);
+    } catch (e) { toast(e.message, true); }
+    go.disabled = false;
+  });
+  return el('div', { class: 'deploy-block' },
+    el('h3', { text: '설치' }),
+    el('p', { class: 'admin-hint', text: '구성원을 고르고 발급하면 그 사람 토큰이 박힌 설치 명령이 바로 나옵니다(git 불필요).' }),
+    el('div', { class: 'install-minter' }, sel, go),
+    result);
 }
 
 function deployCommands(gw, os) {
   if (os === 'windows') {
     return [
-      { title: '설치 (PowerShell)', note: '구성원 토큰 필요(<TOKEN> 교체). Windows 는 현재 컨텍스트+MCP 지원 — 세션 훅은 준비 중.',
+      { kind: 'install', title: '설치 (PowerShell)', note: '구성원 토큰 필요(<TOKEN> 교체). Windows 는 현재 컨텍스트+MCP 지원 — 세션 훅은 준비 중.',
         cmd: `$T="<TOKEN>"; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "${gw}/install" -OutFile "$env:TEMP\\lv.tgz"; tar -xzf "$env:TEMP\\lv.tgz" -C "$env:TEMP"; $env:LIVELY_TOKEN=$T; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\setup\\setup-windows.ps1"` },
-      { title: '업데이트 / 제거', note: 'Windows 전용 업데이트·제거 스크립트는 준비 중입니다. 갱신은 설치 재실행, 제거는 가이드(사용가이드.md) 참조.', cmd: '(준비 중)' },
+      { kind: 'info', title: '업데이트 / 제거', note: 'Windows 전용 업데이트·제거 스크립트는 준비 중입니다. 갱신은 설치 재실행, 제거는 가이드(사용가이드.md) 참조.', cmd: '(준비 중)' },
     ];
   }
   return [
-    { title: '설치', note: '구성원 토큰 필요 — [구성원] 탭에서 발급하면 토큰 박힌 완성형 명령이 나옵니다. 아래는 템플릿(<TOKEN> 교체).',
+    { kind: 'install', title: '설치', note: '구성원 토큰 필요 — 아래에서 구성원을 골라 발급하면 토큰 박힌 완성형 명령이 나옵니다. (아래는 템플릿: <TOKEN> 교체)',
       cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh` },
-    { title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
+    { kind: 'update', title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
       cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" bash /tmp/lv/setup/setup-mac.sh` },
-    { title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 서버에서도 토큰을 회수해야 합니다.',
+    { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 서버에서도 토큰을 회수해야 합니다.',
       cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
   ];
 }
@@ -2297,11 +2330,29 @@ function deployCommands(gw, os) {
 function field(label, control) {
   return el('div', { class: 'field' }, el('label', { class: 'field-label', text: label }), control);
 }
+// 클립보드 복사 — navigator.clipboard 는 보안 컨텍스트(https/localhost)에서만 동작한다.
+// http://dev.lvly.io:8080 같은 비보안 origin 에선 undefined 이므로, execCommand('copy') 텍스트영역 폴백을 쓴다.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* 폴백으로 */ }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
 function copyButton(getText, label) {
   const b = el('button', { class: 'btn btn-ghost btn-sm', text: label || '복사' });
   b.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(getText()); toast('복사됨'); }
-    catch { toast('복사 실패 — 직접 선택해 복사하세요', true); }
+    if (await copyText(getText())) toast('복사됨');
+    else toast('복사 실패 — 명령을 직접 선택해 복사하세요', true);
   });
   return b;
 }
