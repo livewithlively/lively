@@ -15,9 +15,9 @@
 | `work-flag.mjs` | PostToolUse ×2 — `mcp__lively__(curate_item_mapping\|propose_domain\|domain_deprecate\|pm_task_.*)` 와 `Edit\|Write\|MultiEdit\|NotebookEdit` | hook-input JSON (session_id, tool_name …) | 출력 없음, 항상 exit 0. 플래그 파일만 touch |
 | `stop-writeback-gate.mjs` | Stop (matcher 없음) | hook-input JSON (`stop_hook_active` 포함) | 차단 시에만 `{"decision":"block","reason":…}` + exit 0 (동일 라이브 세션 재가동). 그 외 무출력 exit 0 |
 
-> **memory_write 의도적 제외** — 현 MCP 표면(22툴)에 없고(컷 — 소스 스텁만 보존, 영속 0), 노출되더라도 플래그하면
-> '이미 기록함'(.writeback) 오판을 만든다. 실제 영속이 구현되는 커밋에서 settings-hooks.json 매처와
-> work-flag.mjs `WRITE_TOOLS` 에 **동시에** 추가하고 재배포(--install-hooks ×3 + --publish)할 것.
+> **memory_save 는 work-flag 에서 의도적 제외** — 06-16 부터 MCP 표면(24툴)에 라이브(org_memory 영속, memory scope).
+> 그러나 work-flag.mjs `WRITE_TOOLS`·settings-hooks 매처에는 **넣지 않는다** — memory_save 는 *조직 공유 메모리 저작*이지
+> 프로젝트 라이트백이 아니라, 플래그하면 '이미 기록함'(.writeback) 오판을 만든다(프로젝트 작업 감지와 분리 유지).
 
 매처의 MCP 서버명은 **클라이언트 등록 라벨 `lively`** (`register-clients.sh` 의 MCP_LABEL) —
 서버 self-name 'context-ontology' 가 아니다.
@@ -81,7 +81,7 @@ POSIX 셸 전제다. Windows(ps1) 멤버는 훅이 조용히 실패할 수 있�
 — 해당 멤버에게는 `LIVELY_HOOKS_OFF=1` 안내.
 
 ## 9. 도메인 authoring (⑤) 운영 노트
-- MCP 표면 22툴 — `propose_domain`(evidence 필수, status='proposed' 생성, 보호 리포 lively 403)과
+- MCP 표면 24툴 — `propose_domain`(evidence 필수, status='proposed' 생성, 보호 리포 lively 403)과
   `domain_deprecate`(state active↔deprecated, merged 는 400) 추가. MCP 경유 쓰기는 `x-actor-type: agent`
   로 전달되어 domainmap change_log 에 actor_type='agent' 로 영속된다.
 - **domain_deprecate 도 agent 한정 보호 리포 가드** — `setDomainState` 가 actor.type==='agent' 이면
