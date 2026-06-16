@@ -1,21 +1,51 @@
 import pg from "pg";
-import { getSourceConfig } from "./sources.js";
+import { getSourceConfig, resolveConnectionString, type DbSource } from "./sources.js";
 
 // 데이터소스별 lazy 풀 레지스트리 — db_query/db_schema 가 source 이름으로 풀을 얻는다.
-// 각 소스는 반드시 읽기 전용 리플리카 + 읽기 전용 role 로 접속할 것(sources.ts / .env).
-// (domainmap dmPool 의 lazy 패턴과 동일 — import 시점이 아니라 첫 사용 시 생성. 소스별 풀 분리라
-//  한 소스 과부하가 다른 소스의 연결을 막지 않는다.)
-const pools = new Map<string, pg.Pool>();
+// 각 소스는 반드시 읽기 전용 리플리카 + 읽기 전용 role 로 접속할 것(sources.ts / .env / org_db_source).
+// 풀 키 = `name@fingerprint` — url/authMode/secretSource 가 바뀌면(UI 편집) 자연히 새 풀이 생기고 옛 풀은 drain.
+// 값은 Promise<pg.Pool> — getPool 이 async(resolveConnectionString await)라, 생성 프라미스를 await 전에 즉시
+//  등록해 'check-then-set' 경쟁(동시 첫 접근이 풀을 둘 만들어 하나가 end() 없이 고아)을 막는다.
+const pools = new Map<string, Promise<pg.Pool>>();
 
-export function getPool(source: string): pg.Pool {
-  const existing = pools.get(source);
-  if (existing) return existing;
+function fingerprint(src: DbSource): string {
+  return `${src.url}|${src.authMode}|${src.secretSource ?? ""}`;
+}
+
+export async function getPool(source: string): Promise<pg.Pool> {
   const cfg = getSourceConfig(source);
   if (!cfg) throw new Error(`알 수 없는 db source '${source}'`);
   if (cfg.driver !== "postgres") {
     throw new Error(`db source '${source}' driver '${cfg.driver}' 미지원(pg-only)`);
   }
-  const pool = new pg.Pool({ connectionString: cfg.url, max: 10 });
-  pools.set(source, pool);
-  return pool;
+  const key = `${source}@${fingerprint(cfg)}`;
+  const existing = pools.get(key);
+  if (existing) return existing;
+  // 같은 이름의 옛 fingerprint 풀이 있으면 detach 후 비동기 drain(in-flight 보호).
+  for (const [k, op] of pools) {
+    if (k.startsWith(`${source}@`) && k !== key) {
+      pools.delete(k);
+      void op.then((p) => p.end()).catch(() => { /* drain 실패 무시 — 이미 detach */ });
+    }
+  }
+  // 생성 프라미스를 await 이전에 즉시 등록 → check-then-set 사이에 await 가 없어 인터리브 창이 사라진다.
+  const created = (async (): Promise<pg.Pool> => {
+    const poolCfg = await resolveConnectionString(cfg);
+    return new pg.Pool({ ...poolCfg, max: 10 });
+  })();
+  pools.set(key, created);
+  created.catch(() => {
+    if (pools.get(key) === created) pools.delete(key); // 생성 실패 시 키 제거(재시도 가능)
+  });
+  return created;
+}
+
+// 소스 upsert/remove 시 호출 — 해당 이름의 모든 풀(현/구 fingerprint)을 detach 후 drain.
+export function invalidatePool(source: string): void {
+  for (const [k, p] of pools) {
+    if (k === source || k.startsWith(`${source}@`)) {
+      pools.delete(k);
+      void p.then((pool) => pool.end()).catch(() => { /* drain 실패 무시 */ });
+    }
+  }
 }

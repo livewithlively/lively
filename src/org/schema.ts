@@ -226,6 +226,45 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS url_allowlist JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본). ──
+  // 인프라 시크릿(DATABASE_URL·ITEMS_DATABASE_URL 등)을 UI 로 참조해 게이트웨이 자기 DB 를 탈취하는 권한상승 차단.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_db_secret_refs JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
+  // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
+  // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름/
+  //  파일경로/role/path)만. 실제 비번 등은 런타임에 참조에서 해소(src/db/sources.ts resolveConnectionString).
+  //  env(DB_SOURCES_JSON) 소스와 병합되며, 여기 행은 무재시작 반영(db_query 가 매 호출 읽음 + 캐시 무효화).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_source(
+      name TEXT PRIMARY KEY,
+      driver TEXT NOT NULL DEFAULT 'postgres',
+      url TEXT,
+      auth_mode TEXT NOT NULL DEFAULT 'password',
+      auth_ref TEXT,
+      rls TEXT,
+      max_rows INT,
+      timeout_ms INT,
+      note TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_driver_chk') THEN
+        ALTER TABLE org_db_source ADD CONSTRAINT org_db_source_driver_chk CHECK (driver = 'postgres');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_auth_mode_chk') THEN
+        ALTER TABLE org_db_source ADD CONSTRAINT org_db_source_auth_mode_chk
+          CHECK (auth_mode IN ('password','iam','mtls','vault'));
+      END IF;
+    END $$;
+  `);
+
   // ── org_content_audit 확장: 회수 대상 즉시 특정용 token 해시 prefix + 요청 IP(B23). ──
   await itemsPool.query(`
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS token_hash_prefix TEXT;

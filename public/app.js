@@ -1836,10 +1836,11 @@ const ADMIN_SECTIONS = [
   { key: 'custom-hooks', label: '커스텀 훅', meaning: 'custom-hook' },
   { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
+  { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source' },
   { key: 'publish', label: '발행', meaning: null },
   { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
 ];
-const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp']; // admin 권한 전용(쓰기/인프라)
+const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp', 'db-sources']; // admin 권한 전용(쓰기/인프라)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 function sectionHidden(key, data) {
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
@@ -1889,6 +1890,7 @@ function adminRowMeta(key, data) {
   if (key === 'deploy') return 'OS별 명령 복사';
   if (key === 'runtime') { const rc = data.runtimeConfig; if (!rc) return ''; const off = Object.values(rc.hooks || {}).filter((v) => v === false).length; return (off ? off + '개 훅 꺼짐' : '훅 전체 켜짐') + ' · work-roots ' + (rc.work_roots || []).length; }
   if (key === 'mcp') return (data.mcpServers || []).length + '개 서버';
+  if (key === 'db-sources') return ((data.dbSources || []).length + (data.envSources || []).length) + '개 소스';
   if (key === 'custom-hooks') return (data.orgHooks || []).length + '개 훅';
   if (key === 'tools') { const t = (data.tools || []).filter((x) => x.kind !== 'builtin'); return t.length ? t.length + '개 툴' : '기본'; }
   return '';
@@ -1936,6 +1938,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'custom-hooks') return customHookEditor(detail, data);
   if (sel === 'tools') return toolsEditor(detail, data);
   if (sel === 'mcp') return mcpEditor(detail, data);
+  if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
 }
@@ -2357,6 +2360,89 @@ function mcpForm(root, s, data, detail, isNew) {
   syncTransport();
 }
 
+// ── DB 데이터소스 — admin 전용. db_query/db_schema 가 읽는 외부 운영 DB(읽기전용). ──
+function dbSourceEditor(detail, data) {
+  const sources = data.dbSources || [];
+  const envSources = data.envSources || [];
+  const sel = state.admin.dbSrcSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ DB 소스 추가',
+    onclick: () => { state.admin.dbSrcSel = '__new__'; renderAdminDetail(detail, 'db-sources', data); } }));
+  for (const s of sources) {
+    listCol.append(el('div', { class: 'mini-row' + (s.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.dbSrcSel = s.name; renderAdminDetail(detail, 'db-sources', data); } },
+      el('div', { class: 'mini-title', text: s.name }, s.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-meta', text: (s.host || '-') + ' · ' + (s.auth_mode || 'password') + (s.rls ? ' · RLS' : '') })));
+  }
+  // env 소스(.env/DB_SOURCES_JSON) — 읽기 전용(여기선 편집 불가).
+  for (const s of envSources) {
+    listCol.append(el('div', { class: 'mini-row mini-ro' },
+      el('div', { class: 'mini-title', text: s.name }, el('span', { class: 'pill', text: 'env' })),
+      el('div', { class: 'mini-meta', text: (s.host || '-') + ' · 읽기 전용(.env)' })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__'
+    ? { name: '', driver: 'postgres', url: '', auth_mode: 'password', auth_ref: '', rls: '', max_rows: '', timeout_ms: '', note: '', enabled: true }
+    : sources.find((s) => s.name === sel);
+  if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
+  else right.append(
+    el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }),
+    meaningCard(data.meaning['db-source']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'DB 데이터소스' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function dbSourceForm(root, s, data, detail, isNew) {
+  const allowed = (data.runtimeConfig && data.runtimeConfig.allowed_db_secret_refs) || [];
+  const nameIn = el('input', { type: 'text', value: s.name, placeholder: '소스 이름(영문/숫자)', disabled: isNew ? null : '' });
+  const urlIn = el('input', { type: 'text', value: '', placeholder: isNew ? 'postgres://readonly@host:5432/db (비번 제외)' : ('현재 host: ' + (s.host || '-') + ' · 변경 시에만 입력(비번 제외)') });
+  const modeSel = el('select', {},
+    el('option', { value: 'password', text: 'password (env 참조)' }),
+    el('option', { value: 'iam', text: 'iam (후속)', disabled: '' }),
+    el('option', { value: 'mtls', text: 'mtls (후속)', disabled: '' }),
+    el('option', { value: 'vault', text: 'vault (후속)', disabled: '' }));
+  modeSel.value = s.auth_mode || 'password';
+  const refIn = el('input', { type: 'text', value: s.auth_ref || '', placeholder: '예: ANALYTICS_DB_PW (env 이름, 값 아님)' });
+  const refHint = el('p', { class: 'admin-hint', text: allowed.length ? '참조 가능한 env: ' + allowed.join(', ') : '⚠ 먼저 [런타임 · 훅]에서 allowed_db_secret_refs 에 env 이름을 추가하세요(비번 없는 DB면 비워도 됩니다)' });
+  const rlsIn = el('input', { type: 'text', value: s.rls || '', placeholder: 'app.current_user (비우면 행수준 격리 없음)' });
+  const maxIn = el('input', { type: 'number', value: (s.max_rows == null ? '' : s.max_rows), placeholder: '기본 1000' });
+  const toIn = el('input', { type: 'number', value: (s.timeout_ms == null ? '' : s.timeout_ms), placeholder: '기본 5000' });
+  const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
+  const enChk = el('input', { type: 'checkbox' }); enChk.checked = s.enabled !== false;
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('이름 필수', true); return; }
+    saveBtn.disabled = true;
+    try {
+      const urlV = urlIn.value.trim();
+      if (isNew && !urlV) { toast('접속 URL 필수', true); saveBtn.disabled = false; return; }
+      const payload = {
+        name: nameIn.value.trim(), driver: 'postgres', auth_mode: modeSel.value,
+        auth_ref: refIn.value.trim() || null,
+        rls: rlsIn.value.trim() || null,
+        max_rows: maxIn.value ? Number(maxIn.value) : null,
+        timeout_ms: toIn.value ? Number(toIn.value) : null,
+        note: noteIn.value.trim() || null, enabled: enChk.checked,
+      };
+      if (urlV) payload.url = urlV; // 빈칸 = url 미변경(수정 시)
+      await api('/api/ui/org/db-source', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true); state.admin.dbSrcSel = payload.name; toast('저장됨 — 즉시 조회 가능'); renderAdminDetail(detail, 'db-sources', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`DB 소스 '${s.name}' 제거?`)) return;
+    try { await api('/api/ui/org/db-source/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.dbSrcSel = null; toast('제거됨'); renderAdminDetail(detail, 'db-sources', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(
+    field('이름', nameIn), field('접속 URL (비번 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel),
+    field('비번 환경변수 이름 (auth_ref)', refIn), refHint,
+    field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn),
+    field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    actions, meaningCard(data.meaning['db-source']));
+}
+
 // ── 커스텀 훅 — runtime 권한 ──
 function customHookEditor(detail, data) {
   const hooks = data.orgHooks || [];
@@ -2551,8 +2637,9 @@ function deployPanel(detail, data) {
 function installCmd(gw, os, token) {
   if (os === 'windows') {
     // 맥과 동일: 번들 기반 설치(git clone 없음·토큰 프롬프트 없음) + 설치된 하네스 감지(claude/codex) → --harness.
-    //  claude 면 mcp add, codex 면 LIVELY_TOKEN user-env(setx — codex MCP 인증, 새 터미널부터 적용).
-    return `$T="${token}"; $G="${gw}"; $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ setx LIVELY_TOKEN $T | Out-Null }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")`;
+    //  claude 면 mcp add, codex 면 현재 세션 $env:LIVELY_TOKEN + PowerShell $PROFILE 에 "파일→env 수화" 블록
+    //  (Mac rc 패턴과 동일·토큰 리터럴은 ~/.lively/token 한 곳만 · setx 레지스트리 리터럴 제거). 새 PowerShell 부터 적용.
+    return `$T="${token}"; $G="${gw}"; $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(-not $env:LIVELY_TOKEN -and (Test-Path "$HOME\\.lively\\token")){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")`;
   }
   return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
 }
@@ -2614,7 +2701,7 @@ function deployCommands(gw, os) {
     return [
       { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
       { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치(설치된 하네스 자동 감지). ⚠ Windows 미검증 — 테스트 후 사용.',
-        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ setx LIVELY_TOKEN $T | Out-Null }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
+        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(-not $env:LIVELY_TOKEN -and (Test-Path "$HOME\\.lively\\token")){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
       { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [토큰] 탭에서 회수. ⚠ Windows 미검증.',
         cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
     ];

@@ -402,6 +402,7 @@ export interface OrgRuntimeConfig {
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
   url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
+  allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -414,7 +415,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -429,6 +430,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     work_roots: strArrSafe(row?.work_roots),
     allowed_auth_envs: strArrSafe(row?.allowed_auth_envs),
     url_allowlist: strArrSafe(row?.url_allowlist).map((s) => s.toLowerCase()),
+    allowed_db_secret_refs: strArrSafe(row?.allowed_db_secret_refs),
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -442,6 +444,7 @@ export async function updateRuntimeConfig(
     work_roots?: string[];
     allowed_auth_envs?: string[];
     url_allowlist?: string[];
+    allowed_db_secret_refs?: string[];
   },
   actor?: string,
   source?: string,
@@ -453,14 +456,16 @@ export async function updateRuntimeConfig(
   const workRoots = patch.work_roots !== undefined ? patch.work_roots : before.work_roots;
   const allowedAuthEnvs = patch.allowed_auth_envs !== undefined ? patch.allowed_auth_envs : before.allowed_auth_envs;
   const urlAllowlist = patch.url_allowlist !== undefined ? patch.url_allowlist.map((s) => s.toLowerCase()) : before.url_allowlist;
+  const allowedDbSecretRefs = patch.allowed_db_secret_refs !== undefined ? patch.allowed_db_secret_refs : before.allowed_db_secret_refs;
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,1,now(),$6)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,1,now(),$7)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
+       allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), actor ?? null],
   );
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
@@ -548,6 +553,104 @@ export async function removeMcpServer(name: string, actor?: string, source?: str
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_mcp_server WHERE name=$1`, [name]);
   await audit("org_mcp_server", name, "delete", before, null, actor, source);
+}
+
+// ════════ DB 데이터소스 레지스트리 — org_db_source ════════
+// 시크릿 미저장: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode + auth_ref(참조)만. db_query 가 매 호출
+//  병합 로드(env∪DB) → upsert/remove 는 무재시작 반영(src/db/sources.ts refreshSources + pool.invalidate).
+export interface DbSourceRow {
+  name: string;
+  driver: string;
+  url: string | null;
+  auth_mode: "password" | "iam" | "mtls" | "vault";
+  auth_ref: string | null;
+  rls: string | null;
+  max_rows: number | null;
+  timeout_ms: number | null;
+  note: string | null;
+  enabled: boolean;
+  sort: number;
+  version: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+function mapDbSource(row: Record<string, unknown>): DbSourceRow {
+  return {
+    name: row.name as string,
+    driver: (row.driver as string) ?? "postgres",
+    url: (row.url as string) ?? null,
+    auth_mode: (row.auth_mode as DbSourceRow["auth_mode"]) ?? "password",
+    auth_ref: (row.auth_ref as string) ?? null,
+    rls: (row.rls as string) ?? null,
+    max_rows: typeof row.max_rows === "number" ? row.max_rows : null,
+    timeout_ms: typeof row.timeout_ms === "number" ? row.timeout_ms : null,
+    note: (row.note as string) ?? null,
+    enabled: row.enabled !== false,
+    sort: (row.sort as number) ?? 0,
+    version: (row.version as number) ?? 1,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+const DBSRC_COLS = "name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, sort, version, updated_at, updated_by";
+
+export async function listDbSources(): Promise<DbSourceRow[]> {
+  const r = await itemsPool.query(`SELECT ${DBSRC_COLS} FROM org_db_source ORDER BY sort, name`);
+  return r.rows.map(mapDbSource);
+}
+
+export async function getDbSource(name: string): Promise<DbSourceRow | null> {
+  const r = await itemsPool.query(`SELECT ${DBSRC_COLS} FROM org_db_source WHERE name=$1`, [name]);
+  return r.rows[0] ? mapDbSource(r.rows[0]) : null;
+}
+
+export interface DbSourceInput {
+  name: string;
+  driver?: string;
+  url?: string | null;
+  auth_mode?: "password" | "iam" | "mtls" | "vault";
+  auth_ref?: string | null;
+  rls?: string | null;
+  max_rows?: number | null;
+  timeout_ms?: number | null;
+  note?: string | null;
+  enabled?: boolean;
+  sort?: number;
+}
+
+export async function upsertDbSource(s: DbSourceInput, actor?: string, source?: string): Promise<DbSourceRow> {
+  const before = await getDbSource(s.name);
+  // undefined = 미변경(이전값 유지), 명시 null = 클리어(rls 끄기 등) — null 의미를 보존한다.
+  const keep = <T>(v: T | null | undefined, prev: T | null | undefined): T | null =>
+    v !== undefined ? (v ?? null) : (prev ?? null);
+  const driver = s.driver ?? before?.driver ?? "postgres";
+  const authMode = s.auth_mode ?? before?.auth_mode ?? "password";
+  const enabled = s.enabled ?? before?.enabled ?? true;
+  const sort = s.sort ?? before?.sort ?? 0;
+  await itemsPool.query(
+    `INSERT INTO org_db_source(name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,now(),$12)
+     ON CONFLICT (name) DO UPDATE SET
+       driver=EXCLUDED.driver, url=EXCLUDED.url, auth_mode=EXCLUDED.auth_mode, auth_ref=EXCLUDED.auth_ref,
+       rls=EXCLUDED.rls, max_rows=EXCLUDED.max_rows, timeout_ms=EXCLUDED.timeout_ms, note=EXCLUDED.note,
+       enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
+       version=org_db_source.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [s.name, driver, keep(s.url, before?.url), authMode, keep(s.auth_ref, before?.auth_ref),
+     keep(s.rls, before?.rls), keep(s.max_rows, before?.max_rows), keep(s.timeout_ms, before?.timeout_ms),
+     keep(s.note, before?.note), enabled, sort, actor ?? null],
+  );
+  const after = await getDbSource(s.name);
+  await audit("org_db_source", s.name, before ? "update" : "insert", before, after, actor, source);
+  return after as DbSourceRow;
+}
+
+export async function removeDbSource(name: string, actor?: string, source?: string): Promise<void> {
+  const before = await getDbSource(name);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_db_source WHERE name=$1`, [name]);
+  await audit("org_db_source", name, "delete", before, null, actor, source);
 }
 
 // ════════ 커스텀 훅 — org_hook ════════

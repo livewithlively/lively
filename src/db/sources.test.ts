@@ -1,7 +1,7 @@
 // 순수 설정 파서 단위 체크 — 테스트 러너 없이 node:assert 로 자급(빌드+typecheck 가 게이트).
 // 실행: npm run build && node dist/db/sources.test.js
 import assert from "node:assert/strict";
-import { loadSources, pickDefaultFrom, pickSourceFrom, DEFAULT_SOURCE } from "./sources.js";
+import { loadSources, pickDefaultFrom, pickSourceFrom, resolveConnectionString, DEFAULT_SOURCE } from "./sources.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -146,5 +146,30 @@ throws(
   /source 명시 필요/,
 );
 throws("pickSourceFrom: 소스 0개 → 에러", () => pickSourceFrom(loadSources({})), /등록된 DB 소스 없음/);
+
+// ── 인증 평면(authMode/secretSource/origin) + connectionString 조립 ──
+t("env 소스는 authMode=password, secretSource=null, origin=env", () => {
+  const d = loadSources({ DATABASE_URL: "postgres://ro@h/app" }).get(DEFAULT_SOURCE)!;
+  assert.equal(d.authMode, "password");
+  assert.equal(d.secretSource, null);
+  assert.equal(d.origin, "env");
+});
+
+const at = async (name: string, fn: () => Promise<void>): Promise<void> => {
+  await fn();
+  pass++;
+  console.log(`ok  ${name}`);
+};
+
+await at("resolveConnectionString: env 소스 → connectionString 만(비번 미주입)", async () => {
+  const d = loadSources({ DATABASE_URL: "postgres://ro@h/app" }).get(DEFAULT_SOURCE)!;
+  const cfg = await resolveConnectionString(d);
+  assert.equal(cfg.connectionString, "postgres://ro@h/app");
+  assert.equal(cfg.password, undefined);
+});
+await at("resolveConnectionString: iam 미지원 → throw", async () => {
+  const base = loadSources({ DATABASE_URL: "postgres://ro@h/app" }).get(DEFAULT_SOURCE)!;
+  await assert.rejects(() => resolveConnectionString({ ...base, authMode: "iam" }), /미지원/);
+});
 
 console.log(`\n${pass} checks passed`);

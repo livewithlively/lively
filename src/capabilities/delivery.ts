@@ -21,8 +21,13 @@ import {
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listTools, upsertTool, removeTool,
+  listDbSources, upsertDbSource, removeDbSource,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
+  type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
+import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
+import { invalidatePool } from "../db/pool.js";
+import { refreshSources, listSourceConfigs } from "../db/sources.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -79,6 +84,14 @@ const slug = (v: unknown, name: string): string => {
   return s;
 };
 
+// DB 소스 응답 마스킹 — url 원문은 노출하지 않는다(host·user·db명·잠재 시크릿). host 만 파생 노출,
+//  auth_ref 는 이름(시크릿 값 아님)만. 편집 시 url 은 변경할 때만 재입력(빈칸=미변경).
+const maskDbSource = (s: DbSourceRow): Record<string, unknown> => ({
+  name: s.name, driver: s.driver, host: s.url ? (hostOfUrl(s.url) ?? null) : null,
+  auth_mode: s.auth_mode, auth_ref: s.auth_ref, rls: s.rls, max_rows: s.max_rows, timeout_ms: s.timeout_ms,
+  note: s.note, enabled: s.enabled, sort: s.sort, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by,
+});
+
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
   restRead("org_overview", "조직 전달 개요",
@@ -100,6 +113,12 @@ export const deliveryCapabilities: Capability[] = [
       const tokens = isAdmin ? await listTokens() : [];
       const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
       const mcpServers = isAdmin ? await listMcpServers() : [];
+      const dbSources = isAdmin ? await listDbSources() : [];
+      if (isAdmin) await refreshSources();
+      const dbNames = new Set(dbSources.map((s) => s.name));
+      const envSources = isAdmin
+        ? listSourceConfigs().filter((s) => s.origin === "env" && !dbNames.has(s.name)).map((s) => ({ name: s.name, host: s.url ? (hostOfUrl(s.url) ?? null) : null, rls: s.rls }))
+        : [];
       // runtime 권한자: 커스텀 훅·툴 목록 + 빌트인 목록 + 툴 정책(allowlist — 시크릿 아님).
       const orgHooks = isRuntime ? await listOrgHooks() : [];
       const tools = isRuntime ? await listTools() : [];
@@ -107,6 +126,7 @@ export const deliveryCapabilities: Capability[] = [
       const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
       return {
         profile, sections: sectionMap, members: memberRows, memory, tokens, runtimeConfig, mcpServers,
+        dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? [...RESERVED_TOOL_NAMES] : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
@@ -497,6 +517,88 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const name = str(input.name, "name", 64).trim().toLowerCase();
       await removeTool(name, wctx(user, ctx));
+      return { ok: true };
+    }),
+
+  // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════
+  // db_query/db_schema 가 읽는 외부 운영 DB. 시크릿 미저장: url=비번 없는 접속문자열, 인증은 auth_mode+auth_ref(참조).
+  restOnly("org_db_sources", "DB 데이터소스 목록",
+    "관리자용 DB 소스 목록 — 접속 url(비번 가능)은 host 만, auth_ref 는 이름만 노출. allowedSecretRefs=참조 가능한 env 화이트리스트.",
+    [{ method: "GET", paths: ["/api/ui/org/db-sources"], parse: () => ({}) }],
+    async (_input: Record<string, unknown>, user: LivelyUser) => {
+      const all = await listDbSources();
+      const cfg = await getRuntimeConfig();
+      return { sources: all.map(maskDbSource), allowedSecretRefs: cfg.allowed_db_secret_refs, meaning: MEANING["db-source"] };
+    }),
+  restOnly("org_db_source_upsert", "DB 데이터소스 추가·수정",
+    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(풀 회수).",
+    [{ method: "POST", paths: ["/api/ui/org/db-source"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const name = slug(input.name, "name");
+      const driver = input.driver === undefined ? "postgres" : str(input.driver, "driver", 20);
+      if (driver !== "postgres") throw new HttpError(400, "driver 는 postgres 만 지원합니다(1차 pg-only)");
+      const authMode = input.auth_mode === undefined ? "password" : str(input.auth_mode, "auth_mode", 12);
+      if (!["password", "iam", "mtls", "vault"].includes(authMode)) throw new HttpError(400, "auth_mode 는 password|iam|mtls|vault");
+      if (authMode !== "password") throw new HttpError(400, `auth_mode '${authMode}' 는 아직 지원되지 않습니다(1차 password 만 — iam/mtls/vault 후속)`);
+
+      // url — 비번 인라인 hard-block + SSRF(외부 host 만 — 사설/메타데이터 IP 차단).
+      let url: string | null | undefined;
+      if (input.url !== undefined) {
+        if (input.url === null || input.url === "") url = null;
+        else {
+          url = str(input.url, "url", 1000).trim();
+          assertNoHardSecrets(url, "url");
+          // pg 파서 기준 검사(검증=접속 일치) — new URL 이 못 보는 ?host=/?password=/?hostaddr= 쿼리파라미터 우회 차단.
+          const ins = inspectConnString(url);
+          if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름)로 참조하세요");
+          if (ins.hasHostAddr) throw new HttpError(400, "url 에 hostaddr 파라미터는 허용되지 않습니다");
+          if (!ins.host) throw new HttpError(400, "url 이 올바른 접속문자열이 아닙니다(host 없음)");
+          if (await isHostBlocked(ins.host)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${ins.host} — 외부 DB host 만 허용됩니다`);
+        }
+      }
+      // auth_ref — 환경변수 이름 형식 + 화이트리스트(인프라 시크릿 차단).
+      let authRef: string | null | undefined;
+      if (input.auth_ref !== undefined) {
+        if (input.auth_ref === null || input.auth_ref === "") authRef = null;
+        else {
+          authRef = str(input.auth_ref, "auth_ref", 100).trim();
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef)) throw new HttpError(400, "auth_ref 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
+          const cfg = await getRuntimeConfig();
+          if (!isSecretRefAllowed(authRef, cfg.allowed_db_secret_refs)) {
+            throw new HttpError(400, `auth_ref '${authRef}' 는 허용목록(allowed_db_secret_refs)에 없습니다 — 런타임 설정에 먼저 추가하세요`);
+          }
+        }
+      }
+      let rls: string | null | undefined;
+      if (input.rls !== undefined) rls = (input.rls === null || input.rls === "") ? null : str(input.rls, "rls", 200).trim();
+      const posIntOpt = (v: unknown, label: string): number | null | undefined => {
+        if (v === undefined) return undefined;
+        if (v === null || v === "") return null;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, `${label} 는 양의 정수여야 합니다`);
+        return n;
+      };
+      const payload: DbSourceInput = {
+        name, driver, auth_mode: authMode as DbSourceInput["auth_mode"], url, auth_ref: authRef, rls,
+        max_rows: posIntOpt(input.max_rows, "max_rows"),
+        timeout_ms: posIntOpt(input.timeout_ms, "timeout_ms"),
+        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+      };
+      const src = await upsertDbSource(payload, actorOf(user), "web");
+      invalidatePool(name);
+      await refreshSources(true); // 무재시작 반영
+      return { source: maskDbSource(src) };
+    }),
+  restOnly("org_db_source_remove", "DB 데이터소스 제거",
+    "DB 데이터소스를 제거한다(db_query 즉시 반영 — 풀 회수).",
+    [{ method: "POST", paths: ["/api/ui/org/db-source/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const name = slug(input.name, "name");
+      await removeDbSource(name, actorOf(user), "web");
+      invalidatePool(name);
+      await refreshSources(true);
       return { ok: true };
     }),
 ];
