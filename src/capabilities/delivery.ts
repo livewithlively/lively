@@ -192,7 +192,6 @@ export const deliveryCapabilities: Capability[] = [
       for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       const { token, tokenHash } = await mintToken({
         userId,
-        email: input.email === undefined ? null : str(input.email, "email", 200).trim(),
         scopes,
         label: input.label === undefined ? null : str(input.label, "label", 200).trim(),
         memberId,

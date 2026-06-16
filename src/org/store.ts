@@ -295,22 +295,10 @@ export async function removeMemory(name: string, actor?: string, source?: string
 }
 
 // ── auth_token (DB 기반 bearer) ──
-export interface DbToken {
-  user_id: string;
-  email: string | null;
-  scopes: string[];
-  projects: string[];
-  label: string | null;
-  member_id: string | null;
-  created_at: string;
-  last_used_at: string | null;
-  revoked_at: string | null;
-}
-
 // 발급 — 평문 토큰을 1회 반환(저장은 해시만). prefix 'lvk_' 로 verifyDbToken 의 빠른 게이팅 가능.
+// email 은 토큰에 저장하지 않는다 — 귀속/표시용 email 은 member_id → org_member 에서 파생(중복·stale 제거).
 export async function mintToken(input: {
   userId: string;
-  email?: string | null;
   scopes: string[];
   projects?: string[];
   label?: string | null;
@@ -319,9 +307,9 @@ export async function mintToken(input: {
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
   await itemsPool.query(
-    `INSERT INTO auth_token(token_hash, user_id, email, scopes, projects, label, member_id, created_by)
-       VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8)`,
-    [tokenHash, input.userId, input.email ?? null, JSON.stringify(input.scopes),
+    `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by)
+       VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7)`,
+    [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null],
   );
   await audit("auth_token", input.userId, "mint",
@@ -332,7 +320,6 @@ export async function mintToken(input: {
 export interface TokenMeta {
   token_hash: string;
   user_id: string;
-  email: string | null;
   scopes: string[];
   label: string | null;
   member_id: string | null;
@@ -343,7 +330,7 @@ export interface TokenMeta {
 
 export async function listTokens(): Promise<TokenMeta[]> {
   const r = await itemsPool.query(
-    `SELECT token_hash, user_id, email, scopes, label, member_id, created_at, last_used_at, revoked_at
+    `SELECT token_hash, user_id, scopes, label, member_id, created_at, last_used_at, revoked_at
        FROM auth_token ORDER BY created_at DESC`,
   );
   return r.rows as TokenMeta[];
@@ -362,9 +349,11 @@ export async function revokeToken(tokenHash: string, actor?: string, source?: st
 export async function verifyDbToken(token: string): Promise<{ userId: string; email: string; scopes: string[]; projects: string[] } | null> {
   if (!process.env.ITEMS_DATABASE_URL) return null;
   try {
+    // email 은 토큰이 아니라 구성원에서 파생(같은 쿼리 LEFT JOIN — 라운드트립 0, 항상 최신).
     const r = await itemsPool.query(
-      `SELECT user_id, email, scopes, projects FROM auth_token
-         WHERE token_hash=$1 AND revoked_at IS NULL`,
+      `SELECT t.user_id, m.email AS email, t.scopes, t.projects
+         FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
+        WHERE t.token_hash=$1 AND t.revoked_at IS NULL`,
       [sha256(token)],
     );
     const row = r.rows[0] as { user_id: string; email: string | null; scopes: unknown; projects: unknown } | undefined;

@@ -2092,7 +2092,7 @@ async function mintInstallToken(m) {
     try {
       // scope 미전달 → 서버가 이 구성원의 권한(scopes)을 사용.
       const r = await api('/api/ui/org/token', { method: 'POST',
-        body: JSON.stringify({ userId: m.id, memberId: m.id, email: m.email || undefined, label: m.display_name || m.id }) });
+        body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
       const origin = window.location.origin;
       const cmd = `curl -fsSL -H "Authorization: Bearer ${r.token}" ${origin}/install -o /tmp/lively.tgz \\\n  && mkdir -p /tmp/lively-setup && tar -xzf /tmp/lively.tgz -C /tmp/lively-setup \\\n  && LIVELY_TOKEN=${r.token} bash /tmp/lively-setup/setup/setup-mac.sh`;
       out.replaceChildren(

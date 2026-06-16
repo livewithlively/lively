@@ -102,7 +102,6 @@ export async function initOrgSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS auth_token(
       token_hash TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
-      email TEXT,
       scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
       projects JSONB NOT NULL DEFAULT '["*"]'::jsonb,
       label TEXT,
@@ -113,5 +112,7 @@ export async function initOrgSchema(): Promise<void> {
       revoked_at TIMESTAMPTZ);
     CREATE INDEX IF NOT EXISTS auth_token_user_idx ON auth_token(user_id);
     CREATE INDEX IF NOT EXISTS auth_token_member_idx ON auth_token(member_id);
+    -- email 은 토큰에 저장하지 않는다(귀속 표시용 → member_id 로 파생). 기존 DB 의 중복 컬럼 제거(멱등).
+    ALTER TABLE auth_token DROP COLUMN IF EXISTS email;
   `);
 }
