@@ -346,16 +346,16 @@ await report("dm(h) 무토큰 쓰기 401", async () => {
 });
 
 // ════════ tools/list — 최종 MCP 표면 보고 ════════
-// 표면 동결: 아래 21개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 21툴') + src/tools/* 등록 배열.
+// 표면 동결: 아래 22개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
+// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 22툴') + src/tools/* 등록 배열.
 // 표면을 의도적으로 바꿀 때는 freeze 주석과 이 배열을 같은 커밋에서 함께 갱신한다.
 const EXPECTED_MCP_SURFACE = [
-  "context_overview", "curate_item_mapping", "db_query", "db_schema", "debt_list",
+  "context_overview", "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
   "domain_deprecate", "domain_get", "domain_list", "get_item", "list_unmapped",
   "mapping_candidates", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
   "propose_domain", "repo_list", "search_items",
-]; // 21
+]; // 22
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -363,7 +363,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(21)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(22)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 

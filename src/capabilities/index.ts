@@ -29,7 +29,7 @@ const me: Capability = {
 const all: Capability[] = [
   me, ...contextCapabilities, ...itemCapabilities, ...mappingCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
-  ...pmCapabilities, // MCP 21툴(기존 13 + pm 6 + domainmap authoring 2 — Phase C ⑤ 의도적 확장)
+  ...pmCapabilities, // MCP 22툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 — db_* 는 src/tools/db.ts 직접 등록)
 ];
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
