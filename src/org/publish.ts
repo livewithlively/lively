@@ -123,7 +123,8 @@ export async function previewMemberContext(orgName: string): Promise<string> {
   const policy = await getSection("managed-policy");
   const defaults = await getSection("org-defaults");
   const { listMemory } = await import("./store.js");
-  const memory = await listMemory();
+  // 격리 강제 미러(materialize 와 동일): internal 메모리는 멤버 미리보기에도 안 나온다.
+  const memory = (await listMemory()).filter((m) => m.visibility !== "internal");
   const memIndex = memory.filter((m) => m.in_index).length
     ? "# Canonical Memory Index\n\n" + memory.filter((m) => m.in_index)
         .map((m) => `- ${m.title?.trim() || m.name}`).join("\n")

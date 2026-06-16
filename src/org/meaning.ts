@@ -45,9 +45,9 @@ export const MEANING: Record<string, FieldMeaning> = {
   "memory": {
     key: "memory",
     label: "팀 공유 메모리",
-    what: "팀이 승인한 공식 지식·의사결정 스냅샷(정설 메모리)입니다.",
-    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
-    when: "매 대화에 주입되며, AI가 필요할 때 참조합니다(강제 규칙보다 약한 우선순위).",
+    what: "팀이 승인한 공식 지식·의사결정 스냅샷(정설 메모리)입니다. 가시성 'internal' 로 저장하면 멤버에 배포되지 않고 게이트웨이 조회(memory_search) 전용이 됩니다.",
+    reach: "member: 모든 구성원 + 그들이 쓰는 모든 AI / internal: 게이트웨이에서 memory_search 로 조회하는 AI만(멤버 미배포)",
+    when: "member 는 매 대화에 주입되며 AI가 필요할 때 참조합니다(강제 규칙보다 약한 우선순위). internal 은 주입되지 않고 필요 시 조회됩니다.",
     where: "구성원의 AI가 '우리 팀은 이렇게 결정했다'를 알아야 할 때 꺼내 쓰는 배경지식입니다.",
     example: "새 아키텍처 결정을 메모리에 올리면, 모든 구성원의 AI가 그 결정을 전제로 일관되게 답합니다.",
     tone: "normal",

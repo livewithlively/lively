@@ -4,8 +4,9 @@ import { registerDbTools } from "./tools/db.js";
 import { registerItemTools } from "./tools/items.js";
 import { registerMappingTools } from "./tools/mapping.js";
 import { registerPmTools } from "./tools/pm.js";
+import { registerMemoryTools } from "./tools/memory.js";
 
-// memory_*: 컷 (canonical 메모리는 git 컨텍스트 레포; 라이브는 향후 memory-타입 Item)
+// memory_*: 팀 공유 메모리(org_memory) 저장/검색 — memory scope. member 배포는 추가로 admin 필요(tools/memory.ts).
 // code_*: 보류 (개발자는 레포 내 네이티브 툴; 필요시 공식 GitHub MCP 래핑) — tools/code.ts 보존만
 //
 // disabledBuiltins: (A) 빌트인 게이팅 — org_tool(kind='builtin', enabled=false) 로 끈 빌트인 툴 이름 집합.
@@ -23,5 +24,6 @@ export function buildServer(disabledBuiltins?: ReadonlySet<string>): McpServer {
   registerItemTools(server);    // 크로스소스 Item (Slack/Jira/GitHub …)
   registerMappingTools(server); // item→domain/project 매핑 (inbox/후보/propose) — LLM seam
   registerPmTools(server);      // PM 쓰기(write-through ClickUp 미러) — phase B
+  registerMemoryTools(server);  // 팀 공유 메모리 저장/검색 (memory scope) — org_memory
   return server;
 }

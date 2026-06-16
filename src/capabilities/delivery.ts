@@ -124,8 +124,11 @@ export const deliveryCapabilities: Capability[] = [
       const tools = isRuntime ? await listTools() : [];
       const rc = isRuntime ? (runtimeConfig ?? await getRuntimeConfig()) : null;
       const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
+      // internal 메모리는 admin 만 본다(발행 choke-point materialize/publish 와 동일한 격리를 이 읽기 API 에도 강제).
+      //  비-admin 은 member 가시성 메모리만(어차피 그들에게 배포되는 것). 단일 불변식: internal 은 어떤 멤버 경로로도 안 나간다.
+      const memoryRows = isAdmin ? memory : memory.filter((m) => m.visibility !== "internal");
       return {
-        profile, sections: sectionMap, members: memberRows, memory, tokens, runtimeConfig, mcpServers,
+        profile, sections: sectionMap, members: memberRows, memory: memoryRows, tokens, runtimeConfig, mcpServers,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? [...RESERVED_TOOL_NAMES] : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
@@ -207,15 +210,29 @@ export const deliveryCapabilities: Capability[] = [
 
   // ── 메모리 upsert/remove ──
   restOnly("org_memory_upsert", "메모리 추가·수정",
-    "정설 메모리 문서를 저장한다(in_index=true 면 MEMORY.md 인덱스에 노출).",
+    "정설 메모리 문서를 저장한다(in_index=true 면 MEMORY.md 인덱스에 노출. visibility=internal 은 멤버 미배포).",
     [{ method: "POST", paths: ["/api/ui/org/memory"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
+      let visibility: "member" | "internal" | undefined;
+      if (input.visibility !== undefined) {
+        if (input.visibility !== "member" && input.visibility !== "internal") {
+          throw new HttpError(400, "visibility 는 member|internal 이어야 합니다");
+        }
+        visibility = input.visibility;
+      }
+      // domain_key: 빈 문자열/null → 귀속 해제(null). 미전송(undefined) → 기존 보존.
+      const domainKey = input.domain_key === undefined ? undefined : (String(input.domain_key).trim() || null);
+      const domainRepo = domainKey === undefined ? undefined
+        : (domainKey ? (String(input.domain_repo ?? "productivity").trim() || "productivity") : null);
       const memory = await upsertMemory({
         name: slug(input.name, "name"),
         title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
         body_md: input.body_md === undefined ? undefined : str(input.body_md, "body_md", 40000),
         in_index: input.in_index === undefined ? undefined : Boolean(input.in_index),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+        visibility,
+        domain_key: domainKey,
+        domain_repo: domainRepo,
       }, actorOf(user), "web");
       return { memory };
     }),

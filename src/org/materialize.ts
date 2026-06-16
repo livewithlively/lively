@@ -74,8 +74,9 @@ export async function materializeOrgContent(): Promise<Materialized> {
     await writeFile(join(dir, "org", "managed-policy.md"), policy.body_md);
   }
 
-  // memory/MEMORY.md + memory/<name>.md — 선택.
-  const memory = await listMemory();
+  // memory/MEMORY.md + memory/<name>.md — 선택. **격리 강제**: visibility='internal' 메모리는 발행에서 제외
+  //  (인덱스도 본문 파일도 멤버에 안 나간다). 이 필터가 internal 격리의 단일 choke-point — 제거 금지.
+  const memory = (await listMemory()).filter((m) => m.visibility !== "internal");
   if (memory.length) {
     await writeFile(join(dir, "memory", "MEMORY.md"), buildMemoryIndex(memory));
     for (const m of memory) {

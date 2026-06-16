@@ -44,6 +44,10 @@ export interface OrgMemory {
   body_md: string;
   in_index: boolean;
   sort: number;
+  // 'member'=발행 시 전 멤버 배포. 'internal'=발행 제외(게이트웨이 pull 전용). 격리는 materialize/publish 필터가 강제.
+  visibility: "member" | "internal";
+  domain_key: string | null;   // domainmap 도메인 귀속(슬러그 약결합 — FK 아님)
+  domain_repo: string | null;  // 그 도메인의 repo(domainmap 은 repo 별 스코프)
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -257,20 +261,43 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
 }
 
 // ── org_memory ──
+const MEMORY_COLS = `name, title, body_md, in_index, sort, visibility, domain_key, domain_repo, version, updated_at, updated_by`;
+
 export async function listMemory(): Promise<OrgMemory[]> {
   const r = await itemsPool.query(
-    `SELECT name, title, body_md, in_index, sort, version, updated_at, updated_by
-       FROM org_memory ORDER BY sort, name`,
+    `SELECT ${MEMORY_COLS} FROM org_memory ORDER BY sort, name`,
   );
   return r.rows as OrgMemory[];
 }
 
 export async function getMemory(name: string): Promise<OrgMemory | null> {
   const r = await itemsPool.query(
-    `SELECT name, title, body_md, in_index, sort, version, updated_at, updated_by FROM org_memory WHERE name=$1`,
-    [name],
+    `SELECT ${MEMORY_COLS} FROM org_memory WHERE name=$1`, [name],
   );
   return (r.rows[0] as OrgMemory) ?? null;
+}
+
+// memory_search 백엔드 — title/body_md ILIKE + visibility/domain 필터(pgvector 의미검색은 후속). 본문은 스니펫만.
+export async function searchMemory(opts: {
+  query: string; visibility?: "member" | "internal" | "all"; domainKey?: string | null; limit?: number;
+}): Promise<{ name: string; title: string | null; visibility: string; domain_key: string | null; snippet: string; updated_at: string | null }[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const like = `%${opts.query.replace(/[\\%_]/g, (m) => "\\" + m)}%`; // LIKE 메타문자 이스케이프
+  params.push(like); where.push(`(title ILIKE $${params.length} OR body_md ILIKE $${params.length})`); // 기본 escape=백슬래시
+  if (opts.visibility && opts.visibility !== "all") { params.push(opts.visibility); where.push(`visibility=$${params.length}`); }
+  if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
+  params.push(Math.min(Math.max(opts.limit ?? 10, 1), 50));
+  const r = await itemsPool.query(
+    `SELECT name, title, visibility, domain_key, body_md, updated_at FROM org_memory
+       WHERE ${where.join(" AND ")} ORDER BY updated_at DESC NULLS LAST LIMIT $${params.length}`,
+    params,
+  );
+  return r.rows.map((row: Record<string, unknown>) => ({
+    name: row.name as string, title: (row.title as string) ?? null, visibility: row.visibility as string,
+    domain_key: (row.domain_key as string) ?? null, updated_at: (row.updated_at as string) ?? null,
+    snippet: String(row.body_md ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+  }));
 }
 
 export interface MemoryInput {
@@ -279,18 +306,26 @@ export interface MemoryInput {
   body_md?: string;
   in_index?: boolean;
   sort?: number;
+  visibility?: "member" | "internal";
+  domain_key?: string | null;
+  domain_repo?: string | null;
 }
 
 export async function upsertMemory(mem: MemoryInput, actor?: string, source?: string): Promise<OrgMemory> {
   const before = await getMemory(mem.name);
   await itemsPool.query(
-    `INSERT INTO org_memory(name, title, body_md, in_index, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,1,now(),$6)
+    `INSERT INTO org_memory(name, title, body_md, in_index, sort, visibility, domain_key, domain_repo, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,now(),$9)
      ON CONFLICT (name) DO UPDATE SET
        title=EXCLUDED.title, body_md=EXCLUDED.body_md, in_index=EXCLUDED.in_index, sort=EXCLUDED.sort,
+       visibility=EXCLUDED.visibility, domain_key=EXCLUDED.domain_key, domain_repo=EXCLUDED.domain_repo,
        version=org_memory.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [mem.name, mem.title ?? before?.title ?? null, mem.body_md ?? before?.body_md ?? "",
-     mem.in_index ?? before?.in_index ?? true, mem.sort ?? before?.sort ?? 0, actor ?? null],
+     mem.in_index ?? before?.in_index ?? true, mem.sort ?? before?.sort ?? 0,
+     mem.visibility ?? before?.visibility ?? "member",
+     mem.domain_key === undefined ? (before?.domain_key ?? null) : mem.domain_key,
+     mem.domain_repo === undefined ? (before?.domain_repo ?? null) : mem.domain_repo,
+     actor ?? null],
   );
   const after = await getMemory(mem.name);
   await audit("org_memory", mem.name, before ? "update" : "insert", before, after, actor, source);

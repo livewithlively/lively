@@ -2117,8 +2117,10 @@ function memoryEditor(detail, data) {
   for (const mem of data.memory) {
     listCol.append(el('div', { class: 'mini-row' + (mem.name === sel ? ' sel' : ''),
       onclick: () => { state.admin.memorySel = mem.name; renderAdminDetail(detail, 'memory', data); } },
-      el('div', { class: 'mini-title', text: (mem.title || mem.name) }, mem.in_index ? el('span', { class: 'pill pill-ok', text: '인덱스' }) : null),
-      el('div', { class: 'mini-meta', text: mem.name })));
+      el('div', { class: 'mini-title', text: (mem.title || mem.name) },
+        mem.visibility === 'internal' ? el('span', { class: 'pill', text: 'internal' }) : null,
+        mem.in_index ? el('span', { class: 'pill pill-ok', text: '인덱스' }) : null),
+      el('div', { class: 'mini-meta', text: mem.name + (mem.domain_key ? ' · ' + mem.domain_key : '') })));
   }
   const right = el('div', {});
   const editing = sel === '__new__' ? { name: '', title: '', body_md: '', in_index: true }
@@ -2138,6 +2140,11 @@ function memoryForm(root, mem, data, detail, isNew) {
   const nameIn = el('input', { type: 'text', value: mem.name, placeholder: '파일명(예: agent-context-architecture)', disabled: isNew ? null : '' });
   const titleIn = el('input', { type: 'text', value: mem.title || '', placeholder: '제목' });
   const idxChk = el('input', { type: 'checkbox' }); idxChk.checked = mem.in_index !== false;
+  const visSel = el('select', {},
+    el('option', { value: 'member', text: 'member — 발행 시 전 구성원에 배포' }),
+    el('option', { value: 'internal', text: 'internal — 멤버 미배포(게이트웨이 조회 전용)' }));
+  visSel.value = mem.visibility === 'internal' ? 'internal' : 'member';
+  const domIn = el('input', { type: 'text', value: mem.domain_key || '', placeholder: '도메인 슬러그(선택, 예: workflow-standardization)' });
   const bodyTa = el('textarea', { rows: '12', placeholder: 'markdown 본문' }); bodyTa.value = mem.body_md || '';
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
@@ -2145,7 +2152,7 @@ function memoryForm(root, mem, data, detail, isNew) {
     if (!nameIn.value.trim()) { toast('파일명 필수', true); return; }
     saveBtn.disabled = true;
     try {
-      await api('/api/ui/org/memory', { method: 'POST', body: JSON.stringify({ name: nameIn.value.trim(), title: titleIn.value.trim(), in_index: idxChk.checked, body_md: bodyTa.value }) });
+      await api('/api/ui/org/memory', { method: 'POST', body: JSON.stringify({ name: nameIn.value.trim(), title: titleIn.value.trim(), in_index: idxChk.checked, body_md: bodyTa.value, visibility: visSel.value, domain_key: domIn.value.trim() }) });
       await loadAdmin(true); state.admin.memorySel = nameIn.value.trim(); toast('저장됨');
       renderAdminDetail(detail, 'memory', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
@@ -2158,6 +2165,7 @@ function memoryForm(root, mem, data, detail, isNew) {
     catch (e) { toast(e.message, true); }
   } }));
   root.replaceChildren(field('파일명', nameIn), field('제목', titleIn),
+    field('가시성', visSel), field('도메인', domIn),
     el('label', { class: 'admin-check' }, idxChk, ' 메모리 인덱스(MEMORY.md)에 노출'),
     field('본문', bodyTa), actions, meaningCard(data.meaning['memory']));
 }
