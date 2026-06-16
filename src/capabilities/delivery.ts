@@ -12,7 +12,7 @@ import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import {
   getOrgProfile, updateOrgProfile, listSections, updateSection,
-  listMembers, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
+  listMembers, getMember, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   type MemberIdentity,
 } from "../org/store.js";
@@ -23,6 +23,11 @@ const actorOf = (u: LivelyUser): string => u?.email || u?.userId || "unknown";
 const restOnly = (name: string, title: string, description: string,
   rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
   ({ name, title, description, scope: "admin", input: {}, expose: { mcp: false, rest }, handler });
+
+// 읽기 전용(read) — scope null = 인증만. 비-admin 구성원도 공유 컨텍스트를 읽을 수 있게(핸들러가 admin 여부로 민감 필드 redact).
+const restRead = (name: string, title: string, description: string,
+  rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
+  ({ name, title, description, scope: null, input: {}, expose: { mcp: false, rest }, handler });
 
 const SCOPES_ALLOWED = new Set(["items", "context", "admin", "db", "memory", "code"]);
 
@@ -55,33 +60,30 @@ const slug = (v: unknown, name: string): string => {
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
-  restOnly("org_overview", "조직 전달 개요",
-    "org-content(프로필·섹션·구성원·메모리·토큰) 전체 + '구성원에게 미치는 효과' 가이드를 한 번에 로드한다.",
+  restRead("org_overview", "조직 전달 개요",
+    "org-content(프로필·섹션·구성원·메모리) + '구성원에게 미치는 효과' 가이드를 로드. admin 은 토큰·구성원 상세까지, 비-admin 은 읽기 전용(민감 필드 redact).",
     [{ method: "GET", paths: ["/api/ui/org"], parse: () => ({}) }],
-    async () => {
-      const [profile, sections, members, memory, tokens] = await Promise.all([
-        getOrgProfile(), listSections(), listMembers(), listMemory(), listTokens(),
+    async (_input: unknown, user: LivelyUser) => {
+      const isAdmin = !!(user?.scopes && user.scopes.includes("admin"));
+      const [profile, sections, members, memory] = await Promise.all([
+        getOrgProfile(), listSections(), listMembers(), listMemory(),
       ]);
-      // 구성원 토큰 상태(활성 토큰 보유?) 부가.
-      const memberRows = await Promise.all(members.map(async (m) => ({
-        ...m, hasToken: await memberHasActiveToken(m.id),
-      })));
       const sectionMap: Record<string, { body_md: string; version: number; updated_at: string | null; updated_by: string | null }> = {};
       for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by };
+      // 비-admin: 구성원은 이름/종류/상태만(이메일·신원·개인레이어 redact), 토큰 목록은 비노출.
+      const memberRows = isAdmin
+        ? await Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id) })))
+        : members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [] }));
+      const tokens = isAdmin ? (await listTokens()).map((t) => ({ ...t, token_hash: t.token_hash.slice(0, 12) })) : [];
       return {
-        profile,
-        sections: sectionMap,
-        members: memberRows,
-        memory,
-        tokens: tokens.map((t) => ({ ...t, token_hash: t.token_hash.slice(0, 12) })), // 평문/전체해시 비노출
-        meaning: MEANING,
-        publishMeaning: PUBLISH_MEANING,
+        profile, sections: sectionMap, members: memberRows, memory, tokens,
+        meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin,
       };
     }),
 
   // ── 멤버 컨텍스트 미리보기(WYSIWYG: 구성원 AI 가 실제 읽는 정적 컨텍스트) ──
-  restOnly("org_preview", "멤버 컨텍스트 미리보기",
-    "구성원의 AI 가 매 세션 첫머리에 실제로 읽는 정적 컨텍스트를 렌더한다(발행 전 확인용).",
+  restRead("org_preview", "멤버 컨텍스트 미리보기",
+    "구성원의 AI 가 매 세션 첫머리에 실제로 읽는 정적 컨텍스트를 렌더한다(공유 맥락 — 비-admin 도 열람).",
     [{ method: "GET", paths: ["/api/ui/org/preview"], parse: () => ({}) }],
     async () => {
       const p = await getOrgProfile();
@@ -126,6 +128,12 @@ export const deliveryCapabilities: Capability[] = [
       const id = slug(input.id, "id");
       const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
+      let scopes: string[] | undefined;
+      if (input.scopes !== undefined) {
+        if (!Array.isArray(input.scopes)) throw new HttpError(400, "scopes 는 배열이어야 합니다");
+        scopes = input.scopes.map((s) => str(s, "scopes[]", 20));
+        for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
+      }
       const member = await upsertMember({
         id, kind,
         display_name: input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim(),
@@ -133,6 +141,7 @@ export const deliveryCapabilities: Capability[] = [
         identities: input.identities === undefined ? undefined : parseIdentities(input.identities),
         body_md: input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000),
         state: input.state === undefined ? undefined : (str(input.state, "state", 10) as "active" | "inactive"),
+        scopes,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, actorOf(user), "web");
       return { member };
@@ -173,7 +182,11 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/token"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = slug(input.userId ?? input.memberId, "userId");
-      const rawScopes = Array.isArray(input.scopes) && input.scopes.length ? input.scopes : ["items", "context"];
+      const memberId = input.memberId === undefined ? userId : slug(input.memberId, "memberId");
+      // scope 미지정 시 구성원에 설정된 권한을 기본값으로(구성원 메뉴의 권한이 토큰 권한의 진실원천).
+      let rawScopes: unknown[];
+      if (Array.isArray(input.scopes) && input.scopes.length) rawScopes = input.scopes;
+      else { const mem = await getMember(memberId); rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context"]; }
       const scopes = rawScopes.map((s) => str(s, "scopes[]", 20));
       for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       const { token, tokenHash } = await mintToken({
@@ -181,7 +194,7 @@ export const deliveryCapabilities: Capability[] = [
         email: input.email === undefined ? null : str(input.email, "email", 200).trim(),
         scopes,
         label: input.label === undefined ? null : str(input.label, "label", 200).trim(),
-        memberId: input.memberId === undefined ? userId : slug(input.memberId, "memberId"),
+        memberId,
       }, actorOf(user), "web");
       return { token, tokenHash: tokenHash.slice(0, 12), userId, scopes }; // 평문 token 은 이 응답에서만
     }),

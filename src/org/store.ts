@@ -27,6 +27,7 @@ export interface OrgMember {
   identities: MemberIdentity[];
   body_md: string;
   state: "active" | "inactive";
+  scopes: string[]; // 권한(발급 토큰의 scope)
   sort: number;
   version: number;
   updated_at: string | null;
@@ -148,6 +149,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
     state: row.state as OrgMember["state"],
+    scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
@@ -155,20 +157,15 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
+const MEMBER_COLS = "id, kind, display_name, email, identities, body_md, state, scopes, sort, version, updated_at, updated_by";
+
 export async function listMembers(): Promise<OrgMember[]> {
-  const r = await itemsPool.query(
-    `SELECT id, kind, display_name, email, identities, body_md, state, sort, version, updated_at, updated_by
-       FROM org_member ORDER BY sort, id`,
-  );
+  const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
   return r.rows.map(mapMember);
 }
 
 export async function getMember(id: string): Promise<OrgMember | null> {
-  const r = await itemsPool.query(
-    `SELECT id, kind, display_name, email, identities, body_md, state, sort, version, updated_at, updated_by
-       FROM org_member WHERE id=$1`,
-    [id],
-  );
+  const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
@@ -180,6 +177,7 @@ export interface MemberInput {
   identities?: MemberIdentity[];
   body_md?: string;
   state?: "active" | "inactive";
+  scopes?: string[];
   sort?: number;
 }
 
@@ -187,22 +185,33 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   const before = await getMember(m.id);
   const kind = m.kind ?? before?.kind ?? "human";
   const identities = m.identities ?? before?.identities ?? [];
+  const scopes = m.scopes ?? before?.scopes ?? ["items", "context"];
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, state, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,1,now(),$9)
+    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9,1,now(),$10)
      ON CONFLICT (id) DO UPDATE SET
        kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, email=EXCLUDED.email,
-       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, state=EXCLUDED.state, sort=EXCLUDED.sort,
+       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.id, kind, m.display_name ?? before?.display_name ?? null, m.email ?? before?.email ?? null,
      JSON.stringify(identities), m.body_md ?? before?.body_md ?? "",
-     m.state ?? before?.state ?? "active", m.sort ?? before?.sort ?? 0, actor ?? null],
+     m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );
   const after = await getMember(m.id);
   await audit("org_member", m.id, before ? "update" : "insert", before, after, actor, source);
   // person/person_identity 동기화 — UI 편집이 즉시 게이트웨이 신원 매칭에 반영(load-bindings 와 동일 계약).
   if (after) await syncMemberToPerson(after);
+  // 권한 변경 시 그 구성원의 활성 토큰에도 즉시 반영(발급 후 권한 회수/확대가 바로 먹게).
+  if (m.scopes) await updateMemberTokenScopes(m.id, scopes);
   return after as OrgMember;
+}
+
+// 구성원의 활성 토큰 scope 를 일괄 갱신(권한편집 즉시 적용).
+export async function updateMemberTokenScopes(memberId: string, scopes: string[]): Promise<void> {
+  await itemsPool.query(
+    `UPDATE auth_token SET scopes=$2::jsonb WHERE member_id=$1 AND revoked_at IS NULL`,
+    [memberId, JSON.stringify(scopes)],
+  );
 }
 
 export async function removeMember(id: string, actor?: string, source?: string): Promise<void> {

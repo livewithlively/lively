@@ -536,3 +536,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ov-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
 .admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
 .admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
+
+/* 관리 좌:우 너비 3:7 (오른쪽 내용이 더 많음) */
+.admin-split .split-list { flex: 3; }
+.admin-split .split-detail { flex: 7; }
+/* 권한(scopes) 체크박스 */
+.scope-wrap { display: flex; flex-direction: column; gap: 2px; }
+.scope-opt { margin: 2px 0; }
