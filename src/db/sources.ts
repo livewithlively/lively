@@ -8,8 +8,9 @@
 //   인증은 authMode(password|iam|mtls|vault) + secretSource(참조)로 — 비번은 런타임에 env 에서 해소
 //   (resolveConnectionString). 1차 구현은 authMode='password' 만(iam/mtls/vault 는 자리만, 미지원 throw).
 import pg from "pg";
+import { parse } from "pg-connection-string";
 import { listDbSources, getRuntimeConfig } from "../org/store.js";
-import { isSecretRefAllowed, inspectConnString, isHostBlocked } from "./source-guard.js";
+import { isSecretRefAllowed, pinHost } from "./source-guard.js";
 
 export type AuthMode = "password" | "iam" | "mtls" | "vault";
 
@@ -231,25 +232,50 @@ export async function resolveConnectionString(src: DbSource): Promise<pg.PoolCon
     throw new Error(`db source '${src.name}' auth_mode '${src.authMode}' 미지원 — 1차 password 만(iam/mtls/vault 후속)`);
   }
   if (!src.url) throw new Error(`db source '${src.name}' url 미설정`);
-  // 런타임 SSRF 재검증(origin=db 만 — env 소스는 운영자 직접 설정이라 내부 host 정상). 저장-시점 우회·DNS
-  //  리바인딩을 완화: 연결 직전 pg 실제 host 를 fail-closed 재검사 + hostaddr 금지.
-  if (src.origin === "db") {
-    const ins = inspectConnString(src.url);
-    if (ins.hasHostAddr) throw new Error(`db source '${src.name}' url 에 hostaddr 파라미터 금지`);
-    if (!ins.host || (await isHostBlocked(ins.host))) {
-      throw new Error(`db source '${src.name}' host '${ins.host ?? "?"}' 차단(사설/메타데이터 IP)`);
-    }
-  }
-  const out: pg.PoolConfig = { connectionString: src.url };
+
+  // 비번 해소(공통) — DB 엔 비번 미저장: secretSource(env) 화이트리스트 통과 시 런타임 주입.
+  let password: string | undefined;
   if (src.secretSource) {
-    // 런타임 2차 방어: 화이트리스트 재확인 후 env 에서 비번 해소(DB 엔 비번 미저장).
     const rc = await getRuntimeConfig();
     if (!isSecretRefAllowed(src.secretSource, rc.allowed_db_secret_refs)) {
       throw new Error(`db source '${src.name}' auth_ref '${src.secretSource}' 가 허용목록(allowed_db_secret_refs)에 없습니다`);
     }
-    const pw = process.env[src.secretSource];
-    if (pw) out.password = pw;
+    password = process.env[src.secretSource] || undefined;
   }
+
+  // env 소스(운영자 직접 설정, 내부 host 정상): connectionString 그대로.
+  if (src.origin !== "db") {
+    const out: pg.PoolConfig = { connectionString: src.url };
+    if (password) out.password = password;
+    return out;
+  }
+
+  // DB 소스(웹 등록): IP-pin — 검증된 공인 IP 로 connect 고정(DNS 리바인딩·멀티앤서 우회 완전 차단).
+  //  같은 pg 파서로 분해(검증=접속 일치), host 만 IP 로 치환하고 TLS 는 원래 호스트명을 servername 으로 검증한다.
+  const p = parse(src.url) as unknown as {
+    host?: string | null; port?: string | null; user?: string | null; database?: string | null;
+    hostaddr?: string | null; ssl?: boolean | Record<string, unknown>;
+  };
+  if (typeof p.hostaddr === "string" && p.hostaddr.trim() !== "") {
+    throw new Error(`db source '${src.name}' url 에 hostaddr 파라미터 금지`);
+  }
+  const host = typeof p.host === "string" && p.host.trim() !== "" ? p.host.replace(/^\[|\]$/g, "") : null;
+  if (!host) throw new Error(`db source '${src.name}' url 에 host 가 없습니다`);
+  const ip = await pinHost(host); // 검증 + 공인 IP 핀(사설/메타데이터/리바인딩 차단)
+
+  const out: pg.PoolConfig = {
+    host: ip,
+    port: p.port ? Number(p.port) : undefined,
+    user: p.user ?? undefined,
+    database: p.database ?? undefined,
+  };
+  // TLS: IP 로 치환했으므로 인증서/SNI 검증은 원래 호스트명(servername)으로. p.ssl: {}(require)|false(disable)|undefined.
+  if (p.ssl && typeof p.ssl === "object") {
+    out.ssl = { ...(p.ssl as Record<string, unknown>), servername: host } as pg.PoolConfig["ssl"];
+  } else if (p.ssl === true) {
+    out.ssl = { servername: host } as pg.PoolConfig["ssl"];
+  }
+  if (password) out.password = password;
   return out;
 }
 

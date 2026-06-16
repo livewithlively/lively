@@ -1,7 +1,7 @@
 // DB 소스 보안 가드 단위 체크 — SSRF(IP 차단) + 시크릿 참조 화이트리스트.
 // 실행: npm run build && node dist/db/source-guard.test.js
 import assert from "node:assert/strict";
-import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "./source-guard.js";
+import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, pinHost } from "./source-guard.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -45,5 +45,10 @@ await at("우회 시도: 공인 host 로 위장한 ?host=127.0.0.1 → 추출 ho
   assert.equal(h, "127.0.0.1");
   assert.equal(await isHostBlocked(h ?? ""), true);
 });
+
+// ── pinHost(검증된 공인 IP 핀 — DNS 리바인딩/멀티앤서 우회 차단) ──
+await at("pinHost: 공인 IP 리터럴 → 그대로", async () => assert.equal(await pinHost("8.8.8.8"), "8.8.8.8"));
+await at("pinHost: 사설 IP → 거부", async () => { await assert.rejects(() => pinHost("10.0.0.5"), /차단/); });
+await at("pinHost: 메타데이터 IP → 거부", async () => { await assert.rejects(() => pinHost("169.254.169.254"), /차단/); });
 
 console.log(`\n${pass} checks passed`);

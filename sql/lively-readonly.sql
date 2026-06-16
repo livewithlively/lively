@@ -31,3 +31,17 @@ ALTER ROLE mcp_readonly SET statement_timeout = '5s';
 -- user_id / author_id 를 가진 테이블(conversations, conversation_participants,
 -- messages, user_profiles, careers, sns_content_notes ...)에 동일 패턴으로 확장.
 -- v0(팀 flat-trust)에서는 RLS 없이 read-only role + 쿼리 방화벽 + timeout 만으로 시작 가능.
+
+-- 3) (선택·방어심층) RLS GUC 잠금 — 사용자 SQL 이 app.current_user 를 못 덮어쓰게 -------------
+-- 게이트웨이 firewall(src/db/firewall.ts)이 이미 사용자 SQL 의 set_config/current_setting 을 AST 로 차단하나,
+-- 앱 우회를 대비한 DB 레이어 '최종' 방어다. 직접 set_config 호출을 막고, 게이트웨이만 SECURITY DEFINER 함수로 주입한다.
+-- ⚠ 적용 시 게이트웨이 주입 경로(execReadQuery 의 set_config)를 이 함수 호출로 바꿔야 하며, 멀티 데이터소스에선
+--   각 소스 DB 마다 이 함수가 배포돼야 한다(미배포 소스는 표준 set_config 경로 유지) → 단계적 적용 권장.
+--
+--   CREATE OR REPLACE FUNCTION lively_set_user(uid text) RETURNS void
+--     LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS
+--     $$ SELECT set_config('app.current_user', uid, true) $$;
+--   REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) FROM PUBLIC;
+--   GRANT  EXECUTE ON FUNCTION lively_set_user(text) TO mcp_readonly;
+--   -- 이후 mcp_readonly 의 임의 SQL 은 set_config 직접 호출이 불가 → app.current_user 덮어쓰기 차단.
+--   -- 게이트웨이는 SELECT set_config(...) 대신 SELECT lively_set_user($1) 로 주입(후속: db.ts execReadQuery 분기).

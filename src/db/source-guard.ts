@@ -56,3 +56,22 @@ export async function isHostBlocked(host: string): Promise<boolean> {
 export function isSecretRefAllowed(ref: string, allowed: string[]): boolean {
   return allowed.includes(ref);
 }
+
+// host 를 검증된 공인 IP '하나'로 핀해 반환(DB 소스 connect 대상으로 고정). DNS 리바인딩·멀티앤서 우회 차단:
+//  도메인의 A 레코드 중 하나라도 사설/메타데이터면 거부(every public 일 때만 통과), 통과하면 그 공인 IP 로 고정.
+//  pg 는 이 IP 로 직접 connect(재resolve 없음)하고, TLS 는 원래 호스트명을 servername 으로 검증한다(resolveConnectionString).
+export async function pinHost(host: string): Promise<string> {
+  if (net.isIP(host)) {
+    if (isBlockedIp(host)) throw new Error(`차단된 host(사설/메타데이터 IP): ${host}`);
+    return host;
+  }
+  let addrs: { address: string }[];
+  try {
+    addrs = await dns.lookup(host, { all: true });
+  } catch {
+    throw new Error(`host resolve 실패: ${host}`);
+  }
+  if (!addrs.length) throw new Error(`host resolve 결과 없음: ${host}`);
+  if (addrs.some((a) => isBlockedIp(a.address))) throw new Error(`차단된 host(일부 응답이 사설/메타데이터 IP): ${host}`);
+  return addrs[0].address; // 검증된 공인 IP 로 핀
+}
