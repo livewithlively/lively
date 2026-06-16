@@ -152,4 +152,83 @@ export async function initOrgSchema(): Promise<void> {
       END IF;
     END $$;
   `);
+
+  // ── org_hook — 커스텀 훅(관리자 정의, 구성원 머신에서 실행). 본문(source_code)은 멤버 디스크에 굳히지 ──
+  // 않고 불변 런너가 매 세션 게이트웨이에서 fetch 해 실행한다(회수=다음 세션 무효, kill-switch). 내장 훅 3종은
+  // org_runtime_config.hooks 토글로 별도 관리(여기는 커스텀 전용). content_hash=sha256(source_code)는 런너 무결성 게이트용.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_hook(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      harness TEXT NOT NULL DEFAULT 'all',
+      event TEXT NOT NULL,
+      matcher TEXT,
+      source_code TEXT NOT NULL DEFAULT '',
+      timeout_sec INT NOT NULL DEFAULT 10,
+      note TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      content_hash TEXT,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_hook'::regclass AND conname='org_hook_harness_chk') THEN
+        ALTER TABLE org_hook ADD CONSTRAINT org_hook_harness_chk CHECK (harness IN ('claude','codex','openclaw','all'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_hook'::regclass AND conname='org_hook_event_chk') THEN
+        ALTER TABLE org_hook ADD CONSTRAINT org_hook_event_chk CHECK (event IN
+          ('SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','SubagentStop','Notification'));
+      END IF;
+    END $$;
+  `);
+
+  // ── org_tool — 조직 정의 MCP 툴. kind='http_proxy'(사내 API 래핑, 게이트웨이가 /mcp 에 동적 노출 → 재설치 ──
+  // 불요) | 'builtin'(빌트인 툴 on/off·auto_approve 게이팅 행) | 'prompt'(예약·미구현). scope 는 http_proxy 호출
+  // 권한(admin·NULL 금지, 앱 강제). auth_env=환경변수 '이름'만(시크릿 금지). auto_approve=설치 시 멤버 settings 의
+  // 무확인 실행 허용목록에 넣을지(기본 false).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_tool(
+      name TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'http_proxy',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      title TEXT,
+      description TEXT NOT NULL DEFAULT '',
+      scope TEXT,
+      input_schema JSONB NOT NULL DEFAULT '{"type":"object","properties":{},"additionalProperties":false}'::jsonb,
+      method TEXT,
+      url TEXT,
+      auth_env TEXT,
+      auto_approve BOOLEAN NOT NULL DEFAULT false,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_tool'::regclass AND conname='org_tool_kind_chk') THEN
+        ALTER TABLE org_tool ADD CONSTRAINT org_tool_kind_chk CHECK (kind IN ('http_proxy','builtin','prompt'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_tool'::regclass AND conname='org_tool_method_chk') THEN
+        ALTER TABLE org_tool ADD CONSTRAINT org_tool_method_chk CHECK (method IS NULL OR method IN ('GET','POST','PUT','PATCH','DELETE'));
+      END IF;
+    END $$;
+  `);
+
+  // ── org_runtime_config 확장: http_proxy 안전 화이트리스트(B15). 둘 다 기본 빈 배열(deny-all). ──
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_auth_envs JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS url_allowlist JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
+  // ── org_content_audit 확장: 회수 대상 즉시 특정용 token 해시 prefix + 요청 IP(B23). ──
+  await itemsPool.query(`
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS token_hash_prefix TEXT;
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS req_ip TEXT;
+  `);
 }

@@ -5,20 +5,27 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Capability } from "./types.js";
+import type { Capability, CapabilityCtx } from "./types.js";
 import { HttpError } from "./rest-util.js";
+import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
+import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
+import { assertHookId, RESERVED_TOOL_NAMES } from "../org/identity.js";
+import { assertNoHardSecrets } from "../org/redact.js";
 import {
   getOrgProfile, updateOrgProfile, listSections, updateSection,
   listMembers, getMember, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
-  type MemberIdentity,
+  listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
+  listTools, upsertTool, removeTool,
+  type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
 } from "../org/store.js";
 
-const actorOf = (u: LivelyUser): string => u?.email || u?.userId || "unknown";
+// 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
+const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
 
 // REST 전용 capability 의 MCP 필드 기본값(input 미사용).
 const restOnly = (name: string, title: string, description: string,
@@ -30,7 +37,20 @@ const restRead = (name: string, title: string, description: string,
   rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
   ({ name, title, description, scope: null, input: {}, expose: { mcp: false, rest }, handler });
 
-const SCOPES_ALLOWED = new Set(["items", "context", "admin", "db", "memory", "code"]);
+// runtime 권한 — 멤버 머신에서 실행되는 것(커스텀 훅·MCP 툴)을 정의. admin 과 분리(admin ⊉ runtime).
+//  expose.mcp=false: 에이전트가 스스로 훅/툴을 만들지 못하게(웹 REST 전용).
+const restRuntime = (name: string, title: string, description: string,
+  rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
+  ({ name, title, description, scope: "runtime", input: {}, expose: { mcp: false, rest }, handler });
+
+// 쓰기 감사 맥락 — actor(userId)·토큰해시·IP 를 store 로 전달(B23).
+const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
+  ({ actor: actorOf(u), source: ctx?.source ?? "web", tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null });
+
+const HOOK_EVENTS = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification"]);
+const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "all"]);
+const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
+const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
 function parseIdentities(raw: unknown): MemberIdentity[] {
   if (raw === undefined || raw === null) return [];
@@ -66,6 +86,7 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/org"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const isAdmin = !!(user?.scopes && user.scopes.includes("admin"));
+      const isRuntime = !!(user?.scopes && user.scopes.includes("runtime")); // 훅·툴 관리 권한(admin 과 분리)
       const [profile, sections, members, memory] = await Promise.all([
         getOrgProfile(), listSections(), listMembers(), listMemory(),
       ]);
@@ -79,9 +100,15 @@ export const deliveryCapabilities: Capability[] = [
       const tokens = isAdmin ? await listTokens() : [];
       const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
       const mcpServers = isAdmin ? await listMcpServers() : [];
+      // runtime 권한자: 커스텀 훅·툴 목록 + 빌트인 목록 + 툴 정책(allowlist — 시크릿 아님).
+      const orgHooks = isRuntime ? await listOrgHooks() : [];
+      const tools = isRuntime ? await listTools() : [];
+      const rc = isRuntime ? (runtimeConfig ?? await getRuntimeConfig()) : null;
+      const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
       return {
         profile, sections: sectionMap, members: memberRows, memory, tokens, runtimeConfig, mcpServers,
-        meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin,
+        orgHooks, tools, builtins: isRuntime ? [...RESERVED_TOOL_NAMES] : [], toolPolicy,
+        meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }),
 
@@ -210,9 +237,14 @@ export const deliveryCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      // 자가발급은 회수 가능한 DB 토큰만 만든다 — 회수 불가한 정적 토큰으로는 금지(킬스위치 세탁 방지).
+      //  (scope-null capability 라 web.ts 의 B3/B5 게이트가 안 걸린다 → 여기서 직접 차단.)
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 자가발급할 수 없습니다 — 관리자에게 발급을 요청하세요");
       const mem = await getMember(userId);
-      const base = mem?.scopes?.length ? mem.scopes : (Array.isArray(user.scopes) ? user.scopes : ["items", "context"]);
-      const scopes = base.filter((s) => SCOPES_ALLOWED.has(s));
+      const presented = Array.isArray(user.scopes) ? user.scopes : [];
+      const base = mem?.scopes?.length ? mem.scopes : presented;
+      // 설치용 토큰 — fleet 제어(admin/runtime)는 자가발급 불가 + 제시한 토큰의 권한을 초과 불가(scope 증폭 차단).
+      const scopes = base.filter((s) => SCOPES_ALLOWED.has(s) && !DANGEROUS_SCOPES.has(s as Scope) && presented.includes(s));
       const { token } = await mintToken(
         { userId, scopes, label: (mem?.display_name || userId) + " (self)", memberId: userId },
         actorOf(user), "web-self");
@@ -259,10 +291,13 @@ export const deliveryCapabilities: Capability[] = [
       return { hooks: c.hooks, writeback_notice: c.writeback_notice };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
-    "훅 활성/비활성·work-roots 목록·writeback 너지문구를 저장한다.",
+    "훅 활성/비활성·work-roots·writeback 너지 + http_proxy 안전 화이트리스트(allowed_auth_envs·url_allowlist)를 저장한다.",
     [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
-      const patch: { hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[] } = {};
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const patch: {
+        hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
+        allowed_auth_envs?: string[]; url_allowlist?: string[];
+      } = {};
       if (input.hooks !== undefined) {
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
@@ -279,7 +314,19 @@ export const deliveryCapabilities: Capability[] = [
         if (!Array.isArray(input.work_roots)) throw new HttpError(400, "work_roots 는 배열이어야 합니다");
         patch.work_roots = input.work_roots.map((r) => str(r, "work_roots[]", 500).trim()).filter(Boolean);
       }
-      return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), "web") };
+      if (input.allowed_auth_envs !== undefined) {
+        if (!Array.isArray(input.allowed_auth_envs)) throw new HttpError(400, "allowed_auth_envs 는 배열이어야 합니다");
+        patch.allowed_auth_envs = input.allowed_auth_envs.map((e) => str(e, "allowed_auth_envs[]", 100).trim()).filter(Boolean);
+        for (const e of patch.allowed_auth_envs) {
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) throw new HttpError(400, `allowed_auth_envs 항목 '${e}' 는 환경변수 이름 형식이어야 합니다`);
+        }
+      }
+      if (input.url_allowlist !== undefined) {
+        if (!Array.isArray(input.url_allowlist)) throw new HttpError(400, "url_allowlist 는 배열이어야 합니다");
+        patch.url_allowlist = input.url_allowlist.map((u) => str(u, "url_allowlist[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
+        { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }),
 
   // ── MCP 서버 레지스트리 ──
@@ -327,6 +374,129 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeMcpServer(slug(input.name, "name"), actorOf(user), "web");
+      return { ok: true };
+    }),
+
+  // ════════ 커스텀 훅 CRUD (runtime 권한) ════════
+  restRuntime("org_hooks", "커스텀 훅 목록",
+    "조직 커스텀 훅 전체(소스 포함) — runtime 권한 전용. 멤버 런너 fetch 는 org_runner_hooks(별도).",
+    [{ method: "GET", paths: ["/api/ui/org/hooks"], parse: () => ({}) }],
+    async () => ({ hooks: await listOrgHooks(), meaning: MEANING["custom-hook"] })),
+  restRuntime("org_hook_upsert", "커스텀 훅 추가·수정",
+    "구성원 머신에서 실행되는 커스텀 훅을 저장한다(runtime). 본문은 멤버 디스크에 굳히지 않고 런너가 매 세션 fetch.",
+    [{ method: "POST", paths: ["/api/ui/org/hook"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const id = assertHookId(input.id);
+      const event = str(input.event, "event", 40);
+      if (!HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
+      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      const sourceCode = str(input.source_code ?? "", "source_code", 16384);
+      assertNoHardSecrets(sourceCode, "source_code"); // B20: 평문 시크릿 hard-block
+      const matcher = (input.matcher === undefined || input.matcher === null || input.matcher === "")
+        ? null : str(input.matcher, "matcher", 500);
+      const timeout = input.timeout_sec === undefined ? 10 : Number(input.timeout_sec);
+      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
+      const hook = await upsertOrgHook({
+        id,
+        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
+        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+      }, wctx(user, ctx));
+      return { hook };
+    }),
+  restRuntime("org_hook_remove", "커스텀 훅 제거",
+    "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
+    [{ method: "POST", paths: ["/api/ui/org/hook/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      await removeOrgHook(assertHookId(input.id), wctx(user, ctx));
+      return { ok: true };
+    }),
+
+  // ── 런너 fetch — 멤버 런너(run-custom.mjs)가 매 세션 호출. 인증된 멤버면 OK(scope null). ──
+  // 멤버 머신이 그 훅을 '실행'하므로 source 를 받는 게 정상(관리 목록 org_hooks 와 달리 redact 안 함).
+  restRead("org_runner_hooks", "런너 훅 fetch",
+    "멤버 런너가 현재 활성 커스텀 훅(소스+content_hash)을 받아 실행한다. harness/event 로 필터.",
+    [{ method: "GET", paths: ["/api/ui/org/runner/hooks"],
+      parse: (req) => ({ harness: req.query.harness, event: req.query.event }) }],
+    async (input: Record<string, unknown>) => {
+      const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
+      const event = typeof input.event === "string" && input.event ? input.event : undefined;
+      let hooks = await listEnabledHooks(harness);
+      if (event) hooks = hooks.filter((h) => h.event === event);
+      return { hooks: hooks.map((h) => ({
+        id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
+        content_hash: h.content_hash, timeout_sec: h.timeout_sec,
+      })) };
+    }),
+
+  // ════════ MCP 툴 CRUD (runtime 권한) ════════
+  restRuntime("org_tools", "AI 도구(툴) 목록",
+    "조직 정의 MCP 툴(http_proxy) + 빌트인 토글 상태 + 툴 정책(allowlist) — runtime 권한 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/tools"], parse: () => ({}) }],
+    async () => {
+      const cfg = await getRuntimeConfig();
+      return {
+        tools: await listTools(), builtins: [...RESERVED_TOOL_NAMES],
+        toolPolicy: { allowed_auth_envs: cfg.allowed_auth_envs, url_allowlist: cfg.url_allowlist },
+        meaning: MEANING["tool"],
+      };
+    }),
+  restRuntime("org_tool_upsert", "AI 도구 추가·수정",
+    "조직 MCP 툴을 저장한다(runtime). http_proxy=사내 API 래핑(게이트웨이가 즉시 노출), builtin=빌트인 on/off·auto_approve.",
+    [{ method: "POST", paths: ["/api/ui/org/tool"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const kind = input.kind === undefined ? "http_proxy" : str(input.kind, "kind", 12);
+      if (kind !== "http_proxy" && kind !== "builtin") throw new HttpError(400, "kind 는 http_proxy|builtin 만 허용됩니다(prompt 미지원)");
+      const rawName = str(input.name, "name", 64).trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(rawName)) throw new HttpError(400, "name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
+      if (kind === "http_proxy" && RESERVED_TOOL_NAMES.has(rawName)) throw new HttpError(400, `name '${rawName}' 는 빌트인 도구와 충돌합니다`);
+      if (kind === "builtin" && !RESERVED_TOOL_NAMES.has(rawName)) throw new HttpError(400, `'${rawName}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
+      const base: OrgToolInput = {
+        name: rawName, kind: kind as ToolKind,
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        auto_approve: input.auto_approve === undefined ? undefined : Boolean(input.auto_approve),
+        title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
+        description: input.description === undefined ? undefined : str(input.description, "description", 2000),
+        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+      };
+      if (kind === "http_proxy") {
+        const scope = str(input.scope ?? "items", "scope", 12);
+        if (!TOOL_SCOPES.has(scope)) throw new HttpError(400, `scope 는 ${[...TOOL_SCOPES].join("|")} 만 허용됩니다(admin·null 불가)`);
+        const method = (input.method === undefined ? "GET" : str(input.method, "method", 8)).toUpperCase();
+        if (!TOOL_METHODS.has(method)) throw new HttpError(400, "method 는 GET|POST|PUT|PATCH|DELETE");
+        const url = str(input.url, "url", 1000).trim();
+        let parsed: URL;
+        try { parsed = new URL(url); } catch { throw new HttpError(400, "url 은 절대 URL 이어야 합니다"); }
+        if (parsed.protocol !== "https:") throw new HttpError(400, "url 은 https 여야 합니다");
+        assertNoHardSecrets(url, "url");
+        if (input.input_schema !== undefined && input.input_schema !== null) assertSafeJsonSchema(input.input_schema);
+        let authEnv: string | null = null;
+        if (input.auth_env !== undefined && input.auth_env !== null && input.auth_env !== "") {
+          authEnv = str(input.auth_env, "auth_env", 100).trim();
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authEnv)) throw new HttpError(400, "auth_env 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
+          const cfg = await getRuntimeConfig();
+          if (!cfg.allowed_auth_envs.includes(authEnv)) {
+            throw new HttpError(400, `auth_env '${authEnv}' 는 허용 목록(allowed_auth_envs)에 없습니다 — 런타임 설정에 먼저 추가하세요`);
+          }
+        }
+        base.scope = scope;
+        base.method = method;
+        base.url = url;
+        base.auth_env = authEnv;
+        base.input_schema = input.input_schema ?? undefined;
+      }
+      return { tool: await upsertTool(base, wctx(user, ctx)) };
+    }),
+  restRuntime("org_tool_remove", "AI 도구 제거",
+    "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",
+    [{ method: "POST", paths: ["/api/ui/org/tool/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const name = str(input.name, "name", 64).trim().toLowerCase();
+      await removeTool(name, wctx(user, ctx));
       return { ok: true };
     }),
 ];

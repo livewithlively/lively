@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { LivelyUser } from "../context.js";
 import { verifyDbToken } from "../org/store.js";
+
+const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 
 // 1단계 정적 토큰의 만료(초 단위 Unix). SDK 가 expiresAt 를 필수로 요구한다.
 const TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -46,13 +49,18 @@ export class BearerVerifier {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    // 1) 정적 테이블(AUTH_TOKENS_JSON) — 기존 경로, 무변경.
+    // 1) 정적 테이블(AUTH_TOKENS_JSON) — 회수 불가 토큰. tokenSource:'static' 으로 표시해
+    //    admin/runtime 행위를 거부한다(B5: revoke 안 되는 토큰으로 fleet 코드/정책 변경 금지).
     const staticUser = this.tokens[token];
-    if (staticUser) return authInfo(staticUser, token);
+    if (staticUser) return authInfo({ ...staticUser, tokenSource: "static" }, token);
     // 2) DB 토큰(auth_token) — 'lvk_' prefix 만 조회(정적 토큰은 DB hit 회피). revoke 시 즉시 무효.
+    //    tokenHashPrefix 는 감사 상관추적용(회수 대상 즉시 특정 — 비밀 아님).
     if (token.startsWith("lvk_")) {
       const dbUser = await verifyDbToken(token);
-      if (dbUser) return authInfo({ ...dbUser } as LivelyUser, token);
+      if (dbUser) return authInfo(
+        { ...dbUser, tokenSource: "db", tokenHashPrefix: sha256Hex(token).slice(0, 12) } as LivelyUser,
+        token,
+      );
     }
     throw new InvalidTokenError("invalid token"); // → 401
   }

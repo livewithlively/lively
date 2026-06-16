@@ -5,6 +5,8 @@ import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
+import { listDisabledBuiltins } from "./org/store.js";
+import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { registerWebUi } from "./web.js";
@@ -31,7 +33,11 @@ app.get("/healthz", (_req, res) => {
 // 모든 MCP 요청은 bearer 인증 필수 → req.auth 가 핸들러의 extra.authInfo 로 전달됨.
 // Stateless: 요청마다 새 서버+트랜스포트 (수평 확장 단순).
 app.post("/mcp", auth, async (req, res) => {
-  const server = buildServer();
+  // (A) 빌트인 게이팅 + (B) 동적 org_tool 등록 — DB 의존(ITEMS_DATABASE_URL). 실패는 fail-open(기본 표면 유지).
+  let disabled: Set<string> | undefined;
+  try { disabled = await listDisabledBuiltins(); } catch { disabled = undefined; }
+  const server = buildServer(disabled);
+  try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     transport.close();
