@@ -15,6 +15,7 @@ const state = {
   inbox: { filters: { missing: 'either', repo: '', system: '', type: '', since: '' } }, // 페이지네이션 오프셋은 renderInbox 로컬
   domainsRepo: '',
   dm: { section: 'areas', filter: 'all', selectedId: null, cursor: -1, rows: [] }, // 도메인(domainmap 큐레이션) 페이지 상태
+  admin: { data: null, sel: 'managed-policy', memberSel: null, memorySel: null }, // 관리(전달) 페이지 상태
 };
 let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0;            // datalist 등 고유 id 카운터
@@ -1785,6 +1786,9 @@ async function route() {
     } else if (page === 'domains') {
       setActiveTab('domains');
       await renderDomains(view, segs[1] || null, params);
+    } else if (page === 'admin') {
+      setActiveTab('admin');
+      await renderAdmin(view, segs[1] || null);
     } else {
       setActiveTab('overview');
       await renderOverview(view);
@@ -1809,7 +1813,671 @@ async function boot() {
   }
   hideGate();
   document.getElementById('user-email').textContent = state.me.email || state.me.userId || '';
+  // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
+  const adminTab = document.getElementById('admin-tab');
+  if (adminTab) adminTab.hidden = false;
   getStats().catch(() => { /* 싱크 칩만 생략(개요 진입 시 재시도) */ });
   route();
 }
 boot();
+
+// ════════════════════════════════════════════════════════════════════
+// 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
+// '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
+// ════════════════════════════════════════════════════════════════════
+const ADMIN_SECTIONS = [
+  { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy' },
+  { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults' },
+  { key: 'memory', label: '팀 메모리', meaning: 'memory' },
+  { key: 'members', label: '구성원', meaning: 'member' },
+  { key: 'tokens', label: '토큰', meaning: null },
+  { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
+  { key: 'runtime', label: '런타임 · 훅', meaning: 'runtime' },
+  { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
+  { key: 'publish', label: '발행', meaning: null },
+  { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
+];
+const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp']; // 비-admin 에게 숨김(쓰기/인프라 전용)
+
+async function loadAdmin(force) {
+  if (!state.admin.data || force) state.admin.data = await api('/api/ui/org');
+  return state.admin.data;
+}
+
+function meaningRow(k, v) {
+  return el('div', { class: 'meaning-row' },
+    el('span', { class: 'meaning-k', text: k }),
+    el('span', { class: 'meaning-v', text: v }));
+}
+// '구성원에게 미치는 효과' 카드 — 의미 인지의 핵심 컴포넌트.
+function meaningCard(m) {
+  if (!m) return null;
+  const tag = { critical: '절대 규칙', identity: '신원 · 매칭', infra: '연결 · 배포', normal: '' }[m.tone] || '';
+  return el('div', { class: 'meaning meaning-' + m.tone },
+    el('div', { class: 'meaning-head' },
+      el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'meaning-title', text: '이 내용이 구성원에게 미치는 효과' }),
+      tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
+    el('p', { class: 'meaning-what', text: m.what }),
+    el('div', { class: 'meaning-grid' },
+      meaningRow('누가 받나', m.reach),
+      meaningRow('언제 도달', m.when),
+      meaningRow('어디에 나타나나', m.where)),
+    el('div', { class: 'meaning-ex' },
+      el('span', { class: 'meaning-ex-label', text: '예시' }),
+      el('span', { text: m.example })));
+}
+
+function adminRowMeta(key, data) {
+  if (key === 'managed-policy' || key === 'org-defaults') {
+    const s = data.sections[key];
+    return s && s.body_md && s.body_md.trim() ? '작성됨 · v' + s.version : '비어 있음';
+  }
+  if (key === 'memory') return data.memory.length + '개 문서';
+  if (key === 'members') return data.members.length + '명';
+  if (key === 'tokens') return (data.tokens || []).filter((t) => !t.revoked_at).length + '개 활성';
+  if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
+  if (key === 'publish') return '구성원에게 게시';
+  if (key === 'deploy') return 'OS별 명령 복사';
+  if (key === 'runtime') { const rc = data.runtimeConfig; if (!rc) return ''; const off = Object.values(rc.hooks || {}).filter((v) => v === false).length; return (off ? off + '개 훅 꺼짐' : '훅 전체 켜짐') + ' · work-roots ' + (rc.work_roots || []).length; }
+  if (key === 'mcp') return (data.mcpServers || []).length + '개 서버';
+  return '';
+}
+
+async function renderAdmin(view, sub) {
+  let data;
+  try { data = await loadAdmin(); }
+  catch (e) { view.replaceChildren(errorNote(e, '관리 데이터를 불러오지 못했습니다')); return; }
+  const canEdit = !!data.canEdit;
+  state.admin.canEdit = canEdit;
+
+  let sel = sub || state.admin.sel || 'managed-policy';
+  if (ADMIN_ONLY.includes(sel) && !canEdit) sel = 'managed-policy'; // admin 전용 섹션은 비-admin 진입 차단
+  state.admin.sel = sel;
+
+  const list = el('div', { class: 'split-list card admin-nav' });
+  for (const s of ADMIN_SECTIONS) {
+    if (ADMIN_ONLY.includes(s.key) && !canEdit) continue;
+    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
+      el('div', { class: 'row-title', text: s.label }),
+      el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
+  }
+  const detail = el('div', { class: 'split-detail' });
+  renderAdminDetail(detail, sel, data);
+
+  view.replaceChildren(el('div', {},
+    el('div', { class: 'card-head admin-head' },
+      el('h2', { text: '관리 — 전달' }),
+      canEdit
+        ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })
+        : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
+    el('div', { class: 'split admin-split' }, list, detail)));
+  applyReveal([list, detail]);
+}
+
+function renderAdminDetail(detail, sel, data) {
+  if (sel === 'managed-policy' || sel === 'org-defaults') return sectionEditor(detail, sel, data);
+  if (sel === 'memory') return memoryEditor(detail, data);
+  if (sel === 'members') return membersEditor(detail, data);
+  if (sel === 'tokens') return tokensPanel(detail, data);
+  if (sel === 'profile') return profileEditor(detail, data);
+  if (sel === 'runtime') return runtimeEditor(detail, data);
+  if (sel === 'mcp') return mcpEditor(detail, data);
+  if (sel === 'publish') return publishPanel(detail, data);
+  if (sel === 'deploy') return deployPanel(detail, data);
+}
+
+// ── 섹션(강제규칙·회사맥락) markdown 에디터 ──
+function sectionEditor(detail, key, data) {
+  const canEdit = state.admin.canEdit;
+  const meaning = data.meaning[key];
+  const sec = data.sections[key] || { body_md: '', version: 0 };
+  const ta = el('textarea', { rows: '18', class: 'admin-ta', 'aria-label': meaning ? meaning.label : key });
+  ta.value = sec.body_md || '';
+  ta.readOnly = !canEdit;
+  const body = [
+    el('div', { class: 'card-head' },
+      el('h2', { text: meaning ? meaning.label : key }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '멤버 미리보기', onclick: showMemberPreview })),
+    el('p', { class: 'admin-hint', text: canEdit ? 'markdown 으로 작성하세요. 저장은 초안이고, [발행]해야 구성원이 받습니다.' : '읽기 전용 — 이 내용이 모든 구성원의 세션에 주입됩니다.' }),
+    ta,
+  ];
+  if (canEdit) {
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+    const status = el('span', { class: 'admin-status' });
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      try {
+        const r = await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section: key, body_md: ta.value }) });
+        data.sections[key] = r.section;
+        status.textContent = '저장됨 · v' + r.section.version;
+        toast('저장됨 — 발행하면 구성원에게 반영됩니다');
+      } catch (e) { toast(e.message, true); status.textContent = ''; }
+      saveBtn.disabled = false;
+    });
+    body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
+  }
+  body.push(meaningCard(meaning));
+  detail.replaceChildren(el('div', { class: 'card' }, ...body));
+}
+
+// 멤버가 실제 읽는 컨텍스트 미리보기(WYSIWYG) — 오버레이.
+async function showMemberPreview() {
+  try {
+    const r = await api('/api/ui/org/preview');
+    overlay('구성원의 AI가 매 세션 실제로 읽는 내용',
+      el('p', { class: 'admin-hint', text: '아래가 모든 구성원의 대화 첫머리에 주입되는 정적 컨텍스트입니다(라이브 현황은 별도로 매 세션 자동 추가).' }),
+      el('pre', { class: 'admin-preview', text: r.context || '(비어 있음)' }));
+  } catch (e) { toast(e.message, true); }
+}
+
+// ── 구성원 ──
+function membersEditor(detail, data) {
+  const canEdit = state.admin.canEdit;
+  const meaning = data.meaning['member'];
+  const sel = state.admin.memberSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  if (canEdit) listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 구성원 추가',
+    onclick: () => { state.admin.memberSel = '__new__'; renderAdminDetail(detail, 'members', data); } }));
+  for (const m of data.members) {
+    const meta = canEdit
+      ? (m.kind || 'human') + (m.email ? ' · ' + m.email : '') + ' · 권한 ' + ((m.scopes || []).join('/') || '-')
+      : (m.kind || 'human') + (m.state && m.state !== 'active' ? ' · ' + m.state : '');
+    listCol.append(el('div', { class: 'mini-row' + (m.id === sel ? ' sel' : ''),
+      onclick: () => { state.admin.memberSel = m.id; renderAdminDetail(detail, 'members', data); } },
+      el('div', { class: 'mini-title', text: (m.display_name || m.id) },
+        canEdit ? (m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })) : null),
+      el('div', { class: 'mini-meta', text: meta })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] }
+    : data.members.find((m) => m.id === sel);
+  if (editing) memberForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: canEdit ? '왼쪽에서 구성원을 고르거나 추가하세요.' : '읽기 전용 — 이름·종류만 표시됩니다(이메일·계정·권한은 관리자만).' }), meaningCard(meaning));
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '구성원' }),
+    el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function memberForm(root, m, data, detail, isNew) {
+  // 읽기 전용(비-admin): 폼 대신 요약(민감 필드는 서버가 이미 redact).
+  if (!state.admin.canEdit) {
+    root.replaceChildren(
+      el('h3', { text: m.display_name || m.id }),
+      el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }),
+      meaningCard(data.meaning['member']));
+    return;
+  }
+  const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자, 예: yoon)', disabled: isNew ? null : '' });
+  const nameIn = el('input', { type: 'text', value: m.display_name || '', placeholder: '표시 이름' });
+  const emailIn = el('input', { type: 'text', value: m.email || '', placeholder: '대표 이메일(매칭 키)' });
+  const kindSel = el('select', {}, ...['human', 'agent', 'system'].map((k) => el('option', { value: k, text: k })));
+  kindSel.value = m.kind || 'human';
+  const stateSel = el('select', {}, ...['active', 'inactive'].map((k) => el('option', { value: k, text: k === 'active' ? '활성' : '비활성' })));
+  stateSel.value = m.state || 'active';
+  const bodyTa = el('textarea', { rows: '4', placeholder: '개인 레이어(역할/호칭/담당 — 선택)' });
+  bodyTa.value = m.body_md || '';
+
+  // 권한(scopes) — 이 구성원이 받는 토큰의 권한. 변경 시 활성 토큰에도 즉시 반영(서버).
+  const SCOPE_OPTS = [['items', '아이템 조회'], ['context', '컨텍스트'], ['admin', '관리자(편집·발행)']];
+  const scopeChks = {};
+  const scopeWrap = el('div', { class: 'scope-wrap' });
+  for (const [sk, label] of SCOPE_OPTS) {
+    const chk = el('input', { type: 'checkbox' });
+    chk.checked = (m.scopes || []).includes(sk);
+    scopeChks[sk] = chk;
+    scopeWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label + ' (' + sk + ')'));
+  }
+
+  // 외부 계정 연결(identities) — 신원 매칭 키. 구조화 행 + 추가/삭제.
+  const idnWrap = el('div', { class: 'idn-wrap' });
+  const idnRows = [];
+  function addIdn(idn) {
+    const sysIn = el('input', { type: 'text', value: (idn && idn.system) || '', placeholder: 'slack / discord / notion …', class: 'idn-sys' });
+    const extIn = el('input', { type: 'text', value: (idn && idn.external_id) || '', placeholder: '외부 계정 ID', class: 'idn-ext' });
+    const emIn = el('input', { type: 'text', value: (idn && idn.email) || '', placeholder: '이메일(선택)', class: 'idn-em' });
+    const rm = el('button', { class: 'btn-text', text: '✕', title: '삭제' });
+    const row = el('div', { class: 'idn-row' }, sysIn, extIn, emIn, rm);
+    const rec = { row, sysIn, extIn, emIn };
+    rm.addEventListener('click', () => { row.remove(); const i = idnRows.indexOf(rec); if (i >= 0) idnRows.splice(i, 1); });
+    idnRows.push(rec);
+    idnWrap.append(row);
+  }
+  (m.identities || []).forEach(addIdn);
+
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    const identities = idnRows.map((r) => ({ system: r.sysIn.value.trim(), external_id: r.extIn.value.trim(), email: r.emIn.value.trim() || undefined }))
+      .filter((x) => x.system && x.external_id);
+    const payload = {
+      id: idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
+      email: emailIn.value.trim(), identities, body_md: bodyTa.value, state: stateSel.value,
+      scopes: SCOPE_OPTS.map(([sk]) => sk).filter((sk) => scopeChks[sk].checked),
+    };
+    if (!payload.id) { toast('아이디는 필수입니다', true); return; }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true);
+      state.admin.memberSel = payload.id;
+      toast('저장됨 — 신원 매칭에 즉시 반영됩니다');
+      renderAdminDetail(detail, 'members', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) {
+    // 토큰 발급은 [토큰] 탭으로 이동(구성원별 발급) — 여기선 신원/권한 편집만.
+    actions.append(el('button', { class: 'btn-text', text: '제거',
+      onclick: async () => {
+        if (!confirm(`구성원 '${m.display_name || m.id}' 제거?`)) return;
+        try { await api('/api/ui/org/member/remove', { method: 'POST', body: JSON.stringify({ id: m.id }) });
+          await loadAdmin(true); state.admin.memberSel = null; toast('제거됨'); renderAdminDetail(detail, 'members', state.admin.data); }
+        catch (e) { toast(e.message, true); }
+      } }));
+  }
+
+  root.replaceChildren(
+    field('아이디', idIn), field('표시 이름', nameIn), field('종류', kindSel),
+    field('대표 이메일', emailIn), field('상태', stateSel),
+    field('권한 (이 구성원 토큰의 scope)', scopeWrap),
+    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
+      el('button', { class: 'btn-text', text: '+ 계정 추가', onclick: () => addIdn(null) })),
+    field('개인 레이어', bodyTa),
+    actions,
+    meaningCard(data.meaning['member']));
+}
+
+
+// ── 팀 메모리 ──
+function memoryEditor(detail, data) {
+  const canEdit = state.admin.canEdit;
+  const sel = state.admin.memorySel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  if (canEdit) listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 메모리 추가',
+    onclick: () => { state.admin.memorySel = '__new__'; renderAdminDetail(detail, 'memory', data); } }));
+  for (const mem of data.memory) {
+    listCol.append(el('div', { class: 'mini-row' + (mem.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.memorySel = mem.name; renderAdminDetail(detail, 'memory', data); } },
+      el('div', { class: 'mini-title', text: (mem.title || mem.name) }, mem.in_index ? el('span', { class: 'pill pill-ok', text: '인덱스' }) : null),
+      el('div', { class: 'mini-meta', text: mem.name })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { name: '', title: '', body_md: '', in_index: true }
+    : data.memory.find((x) => x.name === sel);
+  if (editing) memoryForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: '팀이 승인한 공식 지식만 둡니다(개인 메모는 각자 로컬).' }), meaningCard(data.meaning['memory']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '팀 메모리' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function memoryForm(root, mem, data, detail, isNew) {
+  if (!state.admin.canEdit) {
+    root.replaceChildren(
+      el('h3', { text: mem.title || mem.name }),
+      el('pre', { class: 'admin-preview', text: mem.body_md || '(비어 있음)' }));
+    return;
+  }
+  const nameIn = el('input', { type: 'text', value: mem.name, placeholder: '파일명(예: agent-context-architecture)', disabled: isNew ? null : '' });
+  const titleIn = el('input', { type: 'text', value: mem.title || '', placeholder: '제목' });
+  const idxChk = el('input', { type: 'checkbox' }); idxChk.checked = mem.in_index !== false;
+  const bodyTa = el('textarea', { rows: '12', placeholder: 'markdown 본문' }); bodyTa.value = mem.body_md || '';
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('파일명 필수', true); return; }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/org/memory', { method: 'POST', body: JSON.stringify({ name: nameIn.value.trim(), title: titleIn.value.trim(), in_index: idxChk.checked, body_md: bodyTa.value }) });
+      await loadAdmin(true); state.admin.memorySel = nameIn.value.trim(); toast('저장됨');
+      renderAdminDetail(detail, 'memory', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`메모리 '${mem.title || mem.name}' 제거?`)) return;
+    try { await api('/api/ui/org/memory/remove', { method: 'POST', body: JSON.stringify({ name: mem.name }) });
+      await loadAdmin(true); state.admin.memorySel = null; toast('제거됨'); renderAdminDetail(detail, 'memory', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(field('파일명', nameIn), field('제목', titleIn),
+    el('label', { class: 'admin-check' }, idxChk, ' 메모리 인덱스(MEMORY.md)에 노출'),
+    field('본문', bodyTa), actions, meaningCard(data.meaning['memory']));
+}
+
+// ── 조직 · 연결 ──
+function profileEditor(detail, data) {
+  const canEdit = state.admin.canEdit;
+  const p = data.profile;
+  const dnIn = el('input', { type: 'text', value: p.display_name || '', placeholder: '조직 표시명' });
+  const gwIn = el('input', { type: 'text', value: p.gateway_url || '', placeholder: 'http://게이트웨이:포트' });
+  if (!canEdit) { dnIn.disabled = true; gwIn.disabled = true; }
+  const body = [
+    el('h2', { text: '조직 · 연결' }),
+    field('조직 표시명', dnIn), meaningCard(data.meaning['display_name']),
+    field('게이트웨이 주소', gwIn), meaningCard(data.meaning['gateway-url']),
+  ];
+  if (canEdit) {
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+    const status = el('span', { class: 'admin-status' });
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      try {
+        const r = await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ display_name: dnIn.value.trim(), gateway_url: gwIn.value.trim() }) });
+        data.profile = r.profile; toast('저장됨'); status.textContent = '저장됨';
+      } catch (e) { toast(e.message, true); }
+      saveBtn.disabled = false;
+    });
+    body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
+  }
+  detail.replaceChildren(el('div', { class: 'card' }, ...body));
+}
+
+// ── 발행 · 배포 ──
+function publishPanel(detail, data) {
+  const pm = data.publishMeaning || {};
+  const runBtn = el('button', { class: 'btn btn-primary', text: '발행(검증)' });
+  const result = el('div', { class: 'admin-status' });
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true; result.textContent = '발행 중…';
+    try {
+      const r = await api('/api/ui/org/publish', { method: 'POST', body: '{}' });
+      result.replaceChildren(el('span', { class: 'pill pill-ok', text: '발행 OK' }),
+        ' AGENTS.md ' + (r.artifactBytes != null ? (r.artifactBytes / 1024).toFixed(1) + ' KiB' : '?'),
+        r.warning ? el('span', { class: 'pill pill-warn', text: r.warning }) : null);
+      toast('발행 검증 완료 — 구성원은 설치/재설치로 받습니다');
+    } catch (e) { result.textContent = ''; toast(e.message, true); }
+    runBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '발행 · 배포' }),
+    el('p', { class: 'admin-what', text: pm.what || '' }),
+    el('p', { class: 'admin-hint', text: pm.effect || '' }),
+    el('p', { class: 'admin-hint', text: pm.note || '' }),
+    el('div', { class: 'admin-actions' }, runBtn, result),
+    el('div', { class: 'meaning meaning-infra' },
+      el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원 설치 방법' })),
+      el('p', { class: 'meaning-what', text: '구성원은 git 없이 한 줄로 설치합니다 — [구성원] 탭에서 각자 토큰을 발급하면 그 사람 전용 설치 명령이 나옵니다.' }))));
+}
+
+// ── 토큰 (발급 현황 + 즉시 회수) — admin 전용 ──
+function tokensPanel(detail, data) {
+  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const tokens = data.tokens || [];
+  const active = tokens.filter((t) => !t.revoked_at);
+  const revoked = tokens.filter((t) => t.revoked_at);
+  const tokenRow = (t, isActive) => {
+    const meta = (t.user_id || '') + ' · ' + ((t.scopes || []).join('/') || '-')
+      + ' · 발급 ' + (t.created_at ? t.created_at.slice(0, 10) : '?')
+      + (t.last_used_at ? ' · 마지막 ' + relTime(t.last_used_at) : ' · 미사용');
+    const right = isActive
+      ? el('button', { class: 'btn btn-ghost btn-sm', text: '회수', onclick: async (e) => {
+          if (!confirm(`토큰 '${t.label || t.user_id}' 회수? 즉시 무효화됩니다(되돌릴 수 없음).`)) return;
+          e.target.disabled = true;
+          try {
+            await api('/api/ui/org/token/revoke', { method: 'POST', body: JSON.stringify({ tokenHash: t.token_hash }) });
+            await loadAdmin(true); toast('회수됨 — 즉시 무효'); renderAdminDetail(detail, 'tokens', state.admin.data);
+          } catch (err) { toast(err.message, true); e.target.disabled = false; }
+        } })
+      : el('span', { class: 'pill', text: '회수됨' });
+    return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') },
+      el('div', { class: 'token-main' },
+        el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }),
+        el('div', { class: 'mini-meta', text: meta })),
+      right);
+  };
+  const children = [
+    el('h2', { text: '토큰' }),
+    el('p', { class: 'admin-hint', text: '구성원별로 토큰을 발급(배포용)하고, 발급된 토큰을 회수합니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
+    installMinterBlock(data, gw),
+  ];
+  if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '활성 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
+  else children.push(el('p', { class: 'admin-hint', text: '활성 토큰이 없습니다 — [구성원] 탭에서 발급하세요.' }));
+  if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '회수됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
+  detail.replaceChildren(el('div', { class: 'card' }, ...children));
+}
+
+// ── 런타임 · 훅 (훅 on/off · work-roots · 너지 문구) — admin 전용 ──
+function runtimeEditor(detail, data) {
+  const rc = data.runtimeConfig || { hooks: { session_preload: true, work_flag: true, stop_writeback_gate: true }, writeback_notice: '', work_roots: [] };
+  const HOOK_OPTS = [
+    ['session_preload', '세션 시작 컨텍스트 주입 (session-preload)'],
+    ['work_flag', '작업 플래그 (work-flag)'],
+    ['stop_writeback_gate', '종료 시 기록 너지 (writeback-gate)'],
+  ];
+  const chks = {};
+  const hookWrap = el('div', { class: 'scope-wrap' });
+  for (const [k, label] of HOOK_OPTS) {
+    const chk = el('input', { type: 'checkbox' }); chk.checked = rc.hooks[k] !== false; chks[k] = chk;
+    hookWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label));
+  }
+  const noticeTa = el('textarea', { rows: '3', placeholder: '비우면 기본 안내문 사용' }); noticeTa.value = rc.writeback_notice || '';
+  const wrTa = el('textarea', { rows: '4', placeholder: '/Users/you/repo\n줄당 절대경로 한 개' }); wrTa.value = (rc.work_roots || []).join('\n');
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const hooks = {}; for (const [k] of HOOK_OPTS) hooks[k] = chks[k].checked;
+      const work_roots = wrTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
+      const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots }) });
+      data.runtimeConfig = r.runtimeConfig; status.textContent = '저장됨'; toast('저장됨 — 구성원 다음 세션부터 반영');
+    } catch (e) { toast(e.message, true); status.textContent = ''; }
+    saveBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '런타임 · 훅' }),
+    el('p', { class: 'admin-hint', text: '구성원 머신의 리플렉스(훅) 동작과 작업 폴더를 중앙에서 제어. 변경은 다음 세션에 자동 반영(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로.' }),
+    field('활성 훅', hookWrap),
+    field('writeback 너지 문구 (선택)', noticeTa),
+    field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status),
+    meaningCard(data.meaning['runtime'])));
+}
+
+// ── MCP 서버 레지스트리 — admin 전용 ──
+function mcpEditor(detail, data) {
+  const servers = data.mcpServers || [];
+  const sel = state.admin.mcpSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ MCP 서버 추가',
+    onclick: () => { state.admin.mcpSel = '__new__'; renderAdminDetail(detail, 'mcp', data); } }));
+  for (const s of servers) {
+    listCol.append(el('div', { class: 'mini-row' + (s.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.mcpSel = s.name; renderAdminDetail(detail, 'mcp', data); } },
+      el('div', { class: 'mini-title', text: s.name }, s.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-meta', text: (s.transport || 'http') + ' · ' + (s.transport === 'stdio' ? (s.command || '-') : (s.url || '-')) })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
+  if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }), meaningCard(data.meaning['mcp']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'MCP 서버' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function mcpForm(root, s, data, detail, isNew) {
+  const nameIn = el('input', { type: 'text', value: s.name, placeholder: '서버 이름(영문/숫자)', disabled: isNew ? null : '' });
+  const transSel = el('select', {}, ...['http', 'stdio'].map((t) => el('option', { value: t, text: t })));
+  transSel.value = s.transport || 'http';
+  const urlIn = el('input', { type: 'text', value: s.url || '', placeholder: 'http://host:port/mcp' });
+  const cmdIn = el('input', { type: 'text', value: s.command || '', placeholder: 'node /path/server.mjs --arg' });
+  const authIn = el('input', { type: 'text', value: s.auth_env || '', placeholder: '예: ACME_TOKEN (값 아님)' });
+  const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
+  const enChk = el('input', { type: 'checkbox' }); enChk.checked = s.enabled !== false;
+  const urlField = field('URL (http)', urlIn);
+  const cmdField = field('command (stdio)', cmdIn);
+  const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
+  transSel.addEventListener('change', syncTransport);
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('이름 필수', true); return; }
+    saveBtn.disabled = true;
+    try {
+      const http = transSel.value === 'http';
+      const payload = { name: nameIn.value.trim(), transport: transSel.value, url: http ? urlIn.value.trim() : null, command: http ? null : cmdIn.value.trim(), auth_env: authIn.value.trim() || null, note: noteIn.value.trim() || null, enabled: enChk.checked };
+      await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true); state.admin.mcpSel = payload.name; toast('저장됨 — 다음 설치/업데이트 시 등록'); renderAdminDetail(detail, 'mcp', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`MCP 서버 '${s.name}' 제거?`)) return;
+    try { await api('/api/ui/org/mcp-server/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.mcpSel = null; toast('제거됨'); renderAdminDetail(detail, 'mcp', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(
+    field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField,
+    field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn),
+    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    actions, meaningCard(data.meaning['mcp']));
+  syncTransport();
+}
+
+// ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
+function deployPanel(detail, data) {
+  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const canEdit = state.admin.canEdit;
+  const os = state.admin.deployOs || 'mac';
+  state.admin.deployOs = os;
+  const osTabs = el('div', { class: 'os-tabs' },
+    ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
+      class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
+      onclick: () => { state.admin.deployOs = o; renderAdminDetail(detail, 'deploy', data); } })));
+  const staticBlock = (c) => el('div', { class: 'deploy-block' },
+    el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
+      c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
+    el('p', { class: 'admin-hint', text: c.note }),
+    el('pre', { class: 'admin-preview', text: c.cmd }));
+  // 설치 블록: 본인 토큰 자가발급(어드민·비어드민 동일). 업데이트·제거는 설치된 토큰 자동 읽기.
+  const blocks = deployCommands(gw, os).map((c) =>
+    c.kind === 'install' ? installSelfBlock(gw, os) : staticBlock(c));
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '설치 · 업데이트 · 제거' }), osTabs),
+    el('p', { class: 'admin-hint', text: '본인 머신에 설치/업데이트/제거하는 명령입니다. 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다. (다른 구성원에게 배포할 토큰은 [토큰] 탭에서.)' }),
+    ...blocks));
+}
+
+// OS별 설치 명령(토큰 박음).
+function installCmd(gw, os, token) {
+  if (os === 'windows') {
+    // 맥과 동일: 번들 기반 설치(git clone 없음·토큰 프롬프트 없음) + 설치된 하네스 감지(claude/codex) → --harness.
+    //  claude 면 mcp add, codex 면 LIVELY_TOKEN user-env(setx — codex MCP 인증, 새 터미널부터 적용).
+    return `$T="${token}"; $G="${gw}"; $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ setx LIVELY_TOKEN $T | Out-Null }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")`;
+  }
+  return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
+}
+
+// 설치(본인) — 자가발급으로 본인 토큰 → 본인 설치 명령. admin/비admin 동일.
+function installSelfBlock(gw, os) {
+  const result = el('div', {});
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '내 토큰 발급 → 설치 명령' });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      const cmd = installCmd(gw, os, r.token);
+      result.replaceChildren(
+        el('p', { class: 'admin-hint', text: '✓ 본인 토큰 발급됨(scope: ' + (r.scopes || []).join('/') + '). 본인 머신에서 아래를 실행하세요 — 토큰은 지금만 보입니다.' }),
+        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+        el('pre', { class: 'admin-preview', text: cmd }));
+    } catch (e) { toast(e.message, true); }
+    go.disabled = false;
+  });
+  return el('div', { class: 'deploy-block' },
+    el('h3', { text: '설치 (본인 머신)' }),
+    el('p', { class: 'admin-hint', text: '본인 토큰을 발급해 본인 머신에 설치합니다(git 불필요). 새 기기/재설치 시 사용.' }),
+    el('div', { class: 'install-minter' }, go),
+    result);
+}
+
+// 설치 미니터 — 구성원 선택 + 발급 → 그 사람 토큰이 박힌 완성형 설치 명령(복사).
+function installMinterBlock(data, gw) {
+  const result = el('div', {});
+  const sel = el('select', {}, ...(data.members || []).map((m) =>
+    el('option', { value: m.id, text: (m.display_name || m.id) + ' · ' + ((m.scopes || []).join('/') || '-') })));
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '토큰 발급 → 명령 생성' });
+  go.addEventListener('click', async () => {
+    const m = (data.members || []).find((x) => x.id === sel.value) || { id: sel.value };
+    if (!m.id) { toast('구성원을 선택하세요', true); return; }
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token', { method: 'POST',
+        body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
+      const cmd = installCmd(gw, 'mac', r.token);
+      result.replaceChildren(
+        el('p', { class: 'admin-hint', text: '✓ ' + (m.display_name || m.id) + ' 토큰 발급됨(scope: ' + r.scopes.join('/') + '). 아래 macOS 설치 명령을 전달하세요(Windows는 본인이 설치 탭에서). 토큰은 지금만 보입니다.' }),
+        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+        el('pre', { class: 'admin-preview', text: cmd }));
+      await loadAdmin(true);
+    } catch (e) { toast(e.message, true); }
+    go.disabled = false;
+  });
+  return el('div', { class: 'deploy-block' },
+    el('h3', { text: '설치' }),
+    el('p', { class: 'admin-hint', text: '구성원을 고르고 발급하면 그 사람 토큰이 박힌 설치 명령이 바로 나옵니다(git 불필요).' }),
+    el('div', { class: 'install-minter' }, sel, go),
+    result);
+}
+
+function deployCommands(gw, os) {
+  if (os === 'windows') {
+    return [
+      { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
+      { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치(설치된 하네스 자동 감지). ⚠ Windows 미검증 — 테스트 후 사용.',
+        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ setx LIVELY_TOKEN $T | Out-Null }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
+      { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [토큰] 탭에서 회수. ⚠ Windows 미검증.',
+        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
+    ];
+  }
+  return [
+    { kind: 'install', title: '설치', note: '구성원 토큰 필요 — 아래에서 구성원을 골라 발급하면 토큰 박힌 완성형 명령이 나옵니다. (아래는 템플릿: <TOKEN> 교체)',
+      cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh` },
+    { kind: 'update', title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
+      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" bash /tmp/lv/setup/setup-mac.sh` },
+    { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 서버에서도 토큰을 회수해야 합니다.',
+      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
+  ];
+}
+
+// ── 공용 UI 헬퍼 ──
+function field(label, control) {
+  return el('div', { class: 'field' }, el('label', { class: 'field-label', text: label }), control);
+}
+// 클립보드 복사 — navigator.clipboard 는 보안 컨텍스트(https/localhost)에서만 동작한다.
+// http://dev.lvly.io:8080 같은 비보안 origin 에선 undefined 이므로, execCommand('copy') 텍스트영역 폴백을 쓴다.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* 폴백으로 */ }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+function copyButton(getText, label) {
+  const b = el('button', { class: 'btn btn-ghost btn-sm', text: label || '복사' });
+  b.addEventListener('click', async () => {
+    if (await copyText(getText())) toast('복사됨');
+    else toast('복사 실패 — 명령을 직접 선택해 복사하세요', true);
+  });
+  return b;
+}
+function overlay(title, ...content) {
+  const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
+  const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
+  const back = el('div', { class: 'ov-back' }, box);
+  close.addEventListener('click', () => back.remove());
+  back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+  return back;
+}

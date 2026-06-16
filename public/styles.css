@@ -465,3 +465,101 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ════════ 관리(전달/관리) — workflow-std 흡수 섹션 ════════ */
+.admin-head { margin-bottom: 4px; }
+.admin-sub { font-size: 13px; font-weight: 600; color: var(--muted-head); }
+.admin-nav { padding: 0; }
+/* nav 행은 <a> — .row 가 display 를 안 줘서 inline 으로 떨어지면 블록 자식(title/meta)과 충돌해 높이가 부풂. 명시 block. */
+.admin-nav .row { display: block; }
+.admin-hint { font-size: 13px; color: var(--ink-sub); margin: 4px 0 12px; line-height: 1.5; }
+.admin-what { font-size: 14.5px; font-weight: 600; color: var(--ink); margin: 2px 0 8px; }
+.admin-status { font-size: 13px; font-weight: 600; color: var(--muted-head); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 2px; }
+.admin-ta { width: 100%; min-height: 320px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.6; }
+.admin-add { margin: 12px; }
+
+/* 편집 폼 필드 */
+.field { margin: 12px 0; }
+.field-label { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted-head); margin-bottom: 5px; }
+.field input[type="text"], .field select, .field textarea { width: 100%; }
+.admin-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); margin: 8px 0; }
+
+/* 좌(목록)·우(편집) 2단 */
+.admin-two { display: flex; gap: 18px; align-items: flex-start; margin-top: 8px; }
+.admin-sublist { flex: 0 0 230px; min-width: 0; border-right: 1px solid var(--line); padding-right: 4px; }
+.admin-two > div:last-child { flex: 1; min-width: 0; }
+@media (max-width: 760px) { .admin-two { flex-direction: column; } .admin-sublist { flex-basis: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); } }
+.mini-row { padding: 10px 12px; border-radius: 9px; cursor: pointer; }
+.mini-row:hover { background: var(--bg-tint); }
+.mini-row.sel { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--blue); }
+.mini-title { font-size: 14px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.mini-meta { font-size: 12px; font-weight: 600; color: var(--muted-2); margin-top: 2px; }
+
+/* identities(외부 계정 연결) 에디터 */
+.idn-wrap { display: flex; flex-direction: column; gap: 6px; }
+.idn-row { display: flex; gap: 6px; align-items: center; }
+.idn-row .idn-sys { flex: 0 0 130px; }
+.idn-row input { width: 100%; }
+
+/* pill */
+.pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: var(--bg-tint-2); color: var(--muted-head); }
+.pill-ok { background: var(--bg-success); color: var(--mint-deep); }
+.pill-warn { background: #FFF6E9; color: #B5791E; }
+
+/* ── 의미 패널(meaning) — '구성원에게 미치는 효과'. 의미 인지의 핵심. ── */
+.meaning { margin-top: 18px; border: 1px solid var(--line-note); border-radius: 13px; background: var(--bg-note); padding: 15px 17px; }
+.meaning-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.meaning-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: 0 0 auto; }
+.meaning-title { font-size: 12.5px; font-weight: 800; color: var(--ink-note); letter-spacing: -0.2px; }
+.meaning-tag { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; background: #fff; color: var(--ink-note); border: 1px solid var(--line-note); margin-left: auto; }
+.meaning-what { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 0 11px; line-height: 1.55; }
+.meaning-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 11px; }
+.meaning-row { display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
+.meaning-k { flex: 0 0 92px; font-weight: 700; color: var(--muted-head); }
+.meaning-v { color: var(--ink-sub); }
+.meaning-ex { font-size: 13px; color: var(--ink-sub); background: #fff; border-radius: 9px; padding: 10px 12px; line-height: 1.55; }
+.meaning-ex-label { font-weight: 800; color: var(--blue-deep); margin-right: 8px; }
+/* tone 변주: 절대 규칙은 코랄, 신원은 민트, 연결은 청록 */
+.meaning-critical { border-color: #F3D2CD; background: #FFF6F4; }
+.meaning-critical .meaning-dot { background: var(--coral); }
+.meaning-critical .meaning-ex-label { color: var(--coral-text); }
+.meaning-identity { border-color: var(--line-net-2); background: var(--bg-success); }
+.meaning-identity .meaning-dot { background: var(--mint-deep); }
+.meaning-identity .meaning-ex-label { color: var(--mint-deep); }
+.meaning-infra .meaning-dot { background: var(--teal); }
+
+/* 미리보기/명령 오버레이 */
+.ov-back { position: fixed; inset: 0; background: rgba(21,35,59,.42); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 200; overflow: auto; }
+.ov-box { background: var(--bg); border-radius: 16px; box-shadow: 0 24px 64px rgba(21,35,59,.28); max-width: 760px; width: 100%; padding: 22px 24px; }
+.ov-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.ov-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
+.admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
+.admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
+
+/* 관리 좌:우 너비 3:7 (오른쪽 내용이 더 많음) */
+.admin-split .split-list { flex: 3; }
+.admin-split .split-detail { flex: 7; }
+/* 권한(scopes) 체크박스 */
+.scope-wrap { display: flex; flex-direction: column; gap: 2px; }
+.scope-opt { margin: 2px 0; }
+
+/* 배포 안내(설치/업데이트/제거) */
+.os-tabs { display: flex; gap: 6px; }
+.deploy-block { margin: 16px 0 4px; }
+.deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.deploy-head h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
+.deploy-block .admin-preview { white-space: pre-wrap; }
+
+/* 토큰 회수 패널 */
+.token-section { margin-top: 14px; }
+.token-section-h { font-size: 12.5px; font-weight: 700; color: var(--muted-head); margin: 4px 0 6px; }
+.token-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line-row); }
+.token-row:last-child { border-bottom: none; }
+.token-main { min-width: 0; }
+.token-label { font-size: 14px; font-weight: 700; color: var(--ink); }
+.token-revoked { opacity: .55; }
+
+/* 설치 미니터(구성원 선택 + 발급) */
+.install-minter { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
+.install-minter select { flex: 1; min-width: 0; }
