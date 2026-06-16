@@ -75,7 +75,7 @@ function assertNoForbiddenFunctions(ast: unknown): void {
 //  정의가 자유 SELECT 로 새어나갈 수 있다 → 코드로 deny(배포 토폴로지와 무관한 방어). 운영 권장 보강:
 //  db_query 리플리카에서 이 테이블들을 물리 제외 + 기동 시 자가검증 + RLS.
 const DENIED_TABLES = new Set([
-  "auth_token", "org_content_audit", "org_hook", "org_tool", "org_mcp_server",
+  "auth_token", "org_content_audit", "org_hook", "org_tool", "org_mcp_server", "org_db_source",
 ]);
 
 /**

@@ -112,6 +112,16 @@ export const MEANING: Record<string, FieldMeaning> = {
     example: "재고조회 API를 툴로 추가하면 다음 대화부터 모두가 조회합니다. 권한을 'items'로 두면 그 권한 보유자만 씁니다. 인증은 환경변수 이름(auth_env)으로만 — 토큰 값은 저장하지 않습니다. auto-approve를 켜면 구성원 확인 없이 자동 실행되니 주의하세요.",
     tone: "infra",
   },
+  "db-source": {
+    key: "db-source",
+    label: "DB 데이터소스",
+    what: "구성원의 AI가 db_query/db_schema 로 조회하는 외부 운영 DB(읽기전용 창)입니다.",
+    reach: "db 권한을 가진 구성원의 AI(해당 소스 접근 권한자).",
+    when: "저장 즉시 — 재시작 없이 다음 db_query 부터 조회 가능합니다.",
+    where: "구성원 AI가 'db_sources' 로 소스를 고르고 'db_query' 로 그 DB를 읽을 때 쓰입니다.",
+    example: "분석용 리플리카를 추가하면 다음 대화부터 그 DB를 조회할 수 있습니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조하며, 읽기전용 role + RLS 전제입니다.",
+    tone: "infra",
+  },
   "display_name": {
     key: "display_name",
     label: "조직 표시명",

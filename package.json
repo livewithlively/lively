@@ -12,7 +12,7 @@
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/db/sources.test.js && node dist/db/firewall.test.js && node dist/tools/db.test.js && node dist/items/mapping-extract.test.js",
+    "test": "npm run build && node dist/db/sources.test.js && node dist/db/source-guard.test.js && node dist/db/firewall.test.js && node dist/tools/db.test.js && node dist/items/mapping-extract.test.js",
     "parity": "npm run build && node --env-file-if-exists=.env scripts/parity-check.mjs",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js"
   },
@@ -21,6 +21,7 @@
     "express": "^4.19.2",
     "node-sql-parser": "^5.3.0",
     "pg": "^8.13.1",
+    "pg-connection-string": "^2.13.0",
     "pino": "^9.5.0",
     "zod": "^3.23.8"
   },

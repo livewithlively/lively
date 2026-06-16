@@ -1,15 +1,17 @@
 // 멀티 데이터소스 레지스트리 — db_query/db_schema 가 호출 시 고르는 '읽기 창'들의 설정.
-// 저장형 맥락(items/domainmap)과는 무관하다: 여기 등록되는 소스는 전부 외부 운영 DB 로의
-// 읽기전용 창이며, 게이트웨이는 이들에 아무것도 저장하지 않는다(BEGIN READ ONLY → SELECT → ROLLBACK).
+// 두 출처를 병합한다: (1) env(DB_SOURCES_JSON·DATABASE_URL — 운영자 직접, origin='env', 읽기전용),
+//   (2) DB(org_db_source — 웹 UI 로 관리, origin='db', 무재시작 반영). 이름 충돌 시 DB 가 env 를 덮어쓴다.
+// 저장형 맥락(items/domainmap)과는 무관: 여기 소스는 전부 외부 운영 DB 로의 읽기전용 창이며 게이트웨이는
+//   아무것도 저장하지 않는다(BEGIN READ ONLY → SELECT → ROLLBACK).
 //
-// 후방호환: 기존 DATABASE_URL 은 'default' 소스로 자동 등록된다(단일 소스 사용자는 무변경).
-// 추가 소스는 DB_SOURCES_JSON 으로 명명 등록한다:
-//   DB_SOURCES_JSON='{
-//     "ops":       {"url":"postgres://ro@host/lively","rls":"app.current_user"},
-//     "analytics": {"url":"postgres://ro@warehouse/dw","rls":null}
-//   }'
-// rls: SET LOCAL <rls> = <userId> 로 주입할 GUC 이름. 키를 주지 않으면 null(행수준 격리 없음 —
-//   테이블수준 격리는 읽기전용 role 책임). default 소스만 후방호환으로 'app.current_user' 가 기본.
+// 시크릿: env 소스의 url 은 비번을 포함할 수 있다(운영자 직접). DB 소스의 url 은 비번 없는 접속문자열이고
+//   인증은 authMode(password|iam|mtls|vault) + secretSource(참조)로 — 비번은 런타임에 env 에서 해소
+//   (resolveConnectionString). 1차 구현은 authMode='password' 만(iam/mtls/vault 는 자리만, 미지원 throw).
+import pg from "pg";
+import { listDbSources, getRuntimeConfig } from "../org/store.js";
+import { isSecretRefAllowed, inspectConnString, isHostBlocked } from "./source-guard.js";
+
+export type AuthMode = "password" | "iam" | "mtls" | "vault";
 
 export interface DbSource {
   name: string;
@@ -18,6 +20,9 @@ export interface DbSource {
   rls: string | null; // null = 행수준 격리 없음(SET LOCAL 미주입)
   maxRows: number;
   timeoutMs: number;
+  authMode: AuthMode;
+  secretSource: string | null; // password: 비번 env 이름(DB 소스) | null(env 소스 — url 에 비번 포함)
+  origin: "env" | "db";
 }
 
 export const DEFAULT_SOURCE = "default";
@@ -79,6 +84,9 @@ function normalizeSource(
     rls,
     maxRows: posIntOr(cfg.maxRows, defMaxRows, `db source '${name}' maxRows`),
     timeoutMs: posIntOr(cfg.timeoutMs, defTimeout, `db source '${name}' timeoutMs`),
+    authMode: "password",
+    secretSource: null, // env 소스 — 비번은 url 에 포함(운영자 직접)
+    origin: "env",
   };
 }
 
@@ -88,7 +96,6 @@ export function loadSources(env: NodeJS.ProcessEnv = process.env): Map<string, D
   const defTimeout = envInt(env, "DB_STATEMENT_TIMEOUT_MS", 5000);
   const sources = new Map<string, DbSource>();
 
-  // 1) DB_SOURCES_JSON 명명 소스(있으면)
   const raw = env.DB_SOURCES_JSON;
   if (raw && raw.trim() !== "") {
     let parsed: unknown;
@@ -106,7 +113,6 @@ export function loadSources(env: NodeJS.ProcessEnv = process.env): Map<string, D
     }
   }
 
-  // 2) DATABASE_URL → 'default' 소스(명시 default 가 없을 때만). 후방호환: 현행 db_query 동작 보존.
   if (env.DATABASE_URL && env.DATABASE_URL.trim() !== "" && !sources.has(DEFAULT_SOURCE)) {
     sources.set(DEFAULT_SOURCE, {
       name: DEFAULT_SOURCE,
@@ -115,25 +121,13 @@ export function loadSources(env: NodeJS.ProcessEnv = process.env): Map<string, D
       rls: "app.current_user", // 현행 db_query 의 RLS 주입을 그대로 보존
       maxRows: defMaxRows,
       timeoutMs: defTimeout,
+      authMode: "password",
+      secretSource: null,
+      origin: "env",
     });
   }
 
   return sources;
-}
-
-// ── 모듈 캐시 — env 는 프로세스 수명 동안 고정이므로 1회 로드 ──
-let _cache: Map<string, DbSource> | null = null;
-function sources(): Map<string, DbSource> {
-  if (!_cache) _cache = loadSources();
-  return _cache;
-}
-
-export function getSourceConfig(name: string): DbSource | undefined {
-  return sources().get(name);
-}
-
-export function listSourceConfigs(): DbSource[] {
-  return [...sources().values()];
 }
 
 // 순수 — 맵에서 기본 소스 선택: 'default'(DATABASE_URL) 우선 → 소스 1개면 그것 → 그 외 null.
@@ -143,9 +137,7 @@ export function pickDefaultFrom(s: Map<string, DbSource>): string | null {
   return null;
 }
 
-// 순수 — D1 정책으로 source 해석:
-//  · 명시되면 그대로(존재 검증, 없으면 에러)
-//  · 미지정이면 pickDefaultFrom — default/단일이면 그것, 다중이고 default 없으면 에러(명시 강제)
+// 순수 — D1 정책으로 source 해석.
 export function pickSourceFrom(s: Map<string, DbSource>, given?: string): string {
   if (s.size === 0) {
     throw new Error("등록된 DB 소스 없음 — DATABASE_URL 또는 DB_SOURCES_JSON 설정 필요");
@@ -163,17 +155,107 @@ export function pickSourceFrom(s: Map<string, DbSource>, given?: string): string
   );
 }
 
-// 미지정 호출의 기본 소스(런타임 캐시 기반).
+// ── DB(org_db_source) 소스 로드 ── 시크릿 없는 메타만. fail-open(DB 불가 시 env 소스만으로 진행).
+async function loadDbSources(): Promise<Map<string, DbSource>> {
+  const m = new Map<string, DbSource>();
+  if (!process.env.ITEMS_DATABASE_URL) return m;
+  const defMaxRows = envInt(process.env, "DB_MAX_ROWS", 1000);
+  const defTimeout = envInt(process.env, "DB_STATEMENT_TIMEOUT_MS", 5000);
+  let rows: Awaited<ReturnType<typeof listDbSources>>;
+  try {
+    rows = await listDbSources();
+  } catch {
+    return m;
+  }
+  for (const r of rows) {
+    if (!r.enabled || r.driver !== "postgres" || !r.url) continue;
+    m.set(r.name, {
+      name: r.name,
+      url: r.url,
+      driver: "postgres",
+      rls: r.rls,
+      maxRows: typeof r.max_rows === "number" && r.max_rows > 0 ? r.max_rows : defMaxRows,
+      timeoutMs: typeof r.timeout_ms === "number" && r.timeout_ms > 0 ? r.timeout_ms : defTimeout,
+      authMode: r.auth_mode,
+      secretSource: r.auth_ref,
+      origin: "db",
+    });
+  }
+  return m;
+}
+
+// ── 병합 스냅샷(env 1회 메모 + DB 짧은 TTL) ──
+let _envCache: Map<string, DbSource> | null = null;
+let _snapshot: Map<string, DbSource> | null = null;
+let _dbLoadedAt = 0;
+const DB_TTL_MS = 5000;
+
+// 동기 스냅샷 — tools/db.ts 진입부에서 refreshSources() 가 먼저 await 된 전제. 미초기화면 env 만.
+function sources(): Map<string, DbSource> {
+  if (_snapshot) return _snapshot;
+  if (!_envCache) _envCache = loadSources();
+  return _envCache;
+}
+
+// env(불변, 1회) + DB(org_db_source, TTL 만료 시 재쿼리)를 병합해 스냅샷 교체. DB 소스가 이름 충돌 시 우선.
+export async function refreshSources(force = false): Promise<void> {
+  if (!_envCache) _envCache = loadSources();
+  const now = Date.now();
+  if (!force && _snapshot && now - _dbLoadedAt < DB_TTL_MS) return;
+  const db = await loadDbSources();
+  const merged = new Map<string, DbSource>(_envCache);
+  for (const [k, v] of db) merged.set(k, v); // DB 우선(env 와 이름 충돌 시)
+  _snapshot = merged;
+  _dbLoadedAt = now;
+}
+
+export function getSourceConfig(name: string): DbSource | undefined {
+  return sources().get(name);
+}
+
+export function listSourceConfigs(): DbSource[] {
+  return [...sources().values()];
+}
+
 export function defaultSourceName(): string | null {
   return pickDefaultFrom(sources());
 }
 
-// 호출에서 source 해석(런타임 캐시 기반).
 export function resolveSourceName(given?: string): string {
   return pickSourceFrom(sources(), given);
 }
 
-// 테스트 전용 — 모듈 캐시 무효화(런타임 경로에서는 호출하지 않는다).
+// ── auth_mode 별 pg 접속 설정 조립 ── DB 엔 비번 미저장: password 면 secretSource(env)에서 런타임 해소.
+export async function resolveConnectionString(src: DbSource): Promise<pg.PoolConfig> {
+  if (src.authMode !== "password") {
+    throw new Error(`db source '${src.name}' auth_mode '${src.authMode}' 미지원 — 1차 password 만(iam/mtls/vault 후속)`);
+  }
+  if (!src.url) throw new Error(`db source '${src.name}' url 미설정`);
+  // 런타임 SSRF 재검증(origin=db 만 — env 소스는 운영자 직접 설정이라 내부 host 정상). 저장-시점 우회·DNS
+  //  리바인딩을 완화: 연결 직전 pg 실제 host 를 fail-closed 재검사 + hostaddr 금지.
+  if (src.origin === "db") {
+    const ins = inspectConnString(src.url);
+    if (ins.hasHostAddr) throw new Error(`db source '${src.name}' url 에 hostaddr 파라미터 금지`);
+    if (!ins.host || (await isHostBlocked(ins.host))) {
+      throw new Error(`db source '${src.name}' host '${ins.host ?? "?"}' 차단(사설/메타데이터 IP)`);
+    }
+  }
+  const out: pg.PoolConfig = { connectionString: src.url };
+  if (src.secretSource) {
+    // 런타임 2차 방어: 화이트리스트 재확인 후 env 에서 비번 해소(DB 엔 비번 미저장).
+    const rc = await getRuntimeConfig();
+    if (!isSecretRefAllowed(src.secretSource, rc.allowed_db_secret_refs)) {
+      throw new Error(`db source '${src.name}' auth_ref '${src.secretSource}' 가 허용목록(allowed_db_secret_refs)에 없습니다`);
+    }
+    const pw = process.env[src.secretSource];
+    if (pw) out.password = pw;
+  }
+  return out;
+}
+
+// 테스트 전용 — 모듈 캐시 무효화.
 export function _resetSourcesCacheForTest(): void {
-  _cache = null;
+  _envCache = null;
+  _snapshot = null;
+  _dbLoadedAt = 0;
 }

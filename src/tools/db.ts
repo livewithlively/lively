@@ -4,7 +4,7 @@ import type pg from "pg";
 import { getPool } from "../db/pool.js";
 import { assertSafeSelect } from "../db/firewall.js";
 import { auditQuery } from "../db/audit.js";
-import { getSourceConfig, listSourceConfigs, resolveSourceName } from "../db/sources.js";
+import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess } from "../context.js";
 
 export interface DbQueryResult {
@@ -43,7 +43,7 @@ export function registerDbTools(server: McpServer): void {
     {
       title: "DB 소스 목록",
       description:
-        "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 여기서 확인한다. 접속 URL·자격증명은 노출하지 않는다. allowed=현재 토큰으로 접근 가능 여부, rls=행수준 격리(SET LOCAL) 적용 여부.",
+        "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 여기서 확인한다. 접속 URL·자격증명은 노출하지 않는다. allowed=현재 토큰으로 접근 가능 여부, rls=행수준 격리 적용 여부, origin=env(운영자 직접)|db(웹 관리).",
       inputSchema: {},
     },
     async (_args, extra) => {
@@ -51,9 +51,12 @@ export function registerDbTools(server: McpServer): void {
       if (!hasAnyDbAccess(user)) {
         throw new Error(`Forbidden: user '${user.userId}' lacks any 'db' scope`);
       }
+      await refreshSources(); // env∪DB 병합 스냅샷 최신화(웹에서 추가한 소스 즉시 반영)
       const sources = listSourceConfigs().map((s) => ({
         name: s.name,
         driver: s.driver,
+        authMode: s.authMode,
+        origin: s.origin,
         rls: s.rls !== null, // GUC 이름 자체는 비노출 — 행수준 격리 적용 여부만
         maxRows: s.maxRows,
         timeoutMs: s.timeoutMs,
@@ -74,9 +77,11 @@ export function registerDbTools(server: McpServer): void {
     },
     async ({ table, source }, extra) => {
       const user = resolveUser(extra);
+      await refreshSources();
       const src = resolveSourceName(source);
       requireDbSource(user, src);
-      const client = await getPool(src).connect();
+      const pool = await getPool(src);
+      const client = await pool.connect();
       try {
         const sql = table
           ? `SELECT column_name, data_type, is_nullable
@@ -109,13 +114,16 @@ export function registerDbTools(server: McpServer): void {
     },
     async ({ sql, source }, extra) => {
       const user = resolveUser(extra);
+      await refreshSources();
       const src = resolveSourceName(source);
       requireDbSource(user, src); // 방어선 0: 소스별 권한
       assertSafeSelect(sql); // 방어선 1·2: 쿼리 방화벽
-      const cfg = getSourceConfig(src)!; // resolveSourceName 통과 = 존재 보장
+      const cfg = getSourceConfig(src);
+      if (!cfg) throw new Error(`db source '${src}' 설정을 찾을 수 없습니다`); // 리프레시-삭제 경합 방어
 
       const started = Date.now();
-      const client = await getPool(src).connect();
+      const pool = await getPool(src);
+      const client = await pool.connect();
       try {
         const out = await execReadQuery(client, cfg, user.userId, sql);
         auditQuery({ userId: user.userId, source: src, sql, rowCount: out.rowCount, ms: Date.now() - started, ok: true });
