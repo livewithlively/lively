@@ -74,7 +74,8 @@ export const deliveryCapabilities: Capability[] = [
       const memberRows = isAdmin
         ? await Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id) })))
         : members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [] }));
-      const tokens = isAdmin ? (await listTokens()).map((t) => ({ ...t, token_hash: t.token_hash.slice(0, 12) })) : [];
+      // admin 에겐 전체 token_hash 노출 — 회수 핸들로 필요. 해시는 비가역(평문 토큰 복원 불가)이라 안전.
+      const tokens = isAdmin ? await listTokens() : [];
       return {
         profile, sections: sectionMap, members: memberRows, memory, tokens,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin,

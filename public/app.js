@@ -1830,6 +1830,7 @@ const ADMIN_SECTIONS = [
   { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults' },
   { key: 'memory', label: '팀 메모리', meaning: 'memory' },
   { key: 'members', label: '구성원', meaning: 'member' },
+  { key: 'tokens', label: '토큰', meaning: null },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
   { key: 'publish', label: '발행', meaning: null },
   { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
@@ -1871,6 +1872,7 @@ function adminRowMeta(key, data) {
   }
   if (key === 'memory') return data.memory.length + '개 문서';
   if (key === 'members') return data.members.length + '명';
+  if (key === 'tokens') return (data.tokens || []).filter((t) => !t.revoked_at).length + '개 활성';
   if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
   if (key === 'publish') return '구성원에게 게시';
   if (key === 'deploy') return 'OS별 명령 복사';
@@ -1885,12 +1887,12 @@ async function renderAdmin(view, sub) {
   state.admin.canEdit = canEdit;
 
   let sel = sub || state.admin.sel || 'managed-policy';
-  if (sel === 'publish' && !canEdit) sel = 'managed-policy'; // 발행은 쓰기 전용
+  if ((sel === 'publish' || sel === 'tokens') && !canEdit) sel = 'managed-policy'; // 발행·토큰은 admin 전용
   state.admin.sel = sel;
 
   const list = el('div', { class: 'split-list card admin-nav' });
   for (const s of ADMIN_SECTIONS) {
-    if (s.key === 'publish' && !canEdit) continue;
+    if ((s.key === 'publish' || s.key === 'tokens') && !canEdit) continue;
     list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
@@ -1912,6 +1914,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'managed-policy' || sel === 'org-defaults') return sectionEditor(detail, sel, data);
   if (sel === 'memory') return memoryEditor(detail, data);
   if (sel === 'members') return membersEditor(detail, data);
+  if (sel === 'tokens') return tokensPanel(detail, data);
   if (sel === 'profile') return profileEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
@@ -2215,6 +2218,41 @@ function publishPanel(detail, data) {
     el('div', { class: 'meaning meaning-infra' },
       el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원 설치 방법' })),
       el('p', { class: 'meaning-what', text: '구성원은 git 없이 한 줄로 설치합니다 — [구성원] 탭에서 각자 토큰을 발급하면 그 사람 전용 설치 명령이 나옵니다.' }))));
+}
+
+// ── 토큰 (발급 현황 + 즉시 회수) — admin 전용 ──
+function tokensPanel(detail, data) {
+  const tokens = data.tokens || [];
+  const active = tokens.filter((t) => !t.revoked_at);
+  const revoked = tokens.filter((t) => t.revoked_at);
+  const tokenRow = (t, isActive) => {
+    const meta = (t.user_id || '') + ' · ' + ((t.scopes || []).join('/') || '-')
+      + ' · 발급 ' + (t.created_at ? t.created_at.slice(0, 10) : '?')
+      + (t.last_used_at ? ' · 마지막 ' + relTime(t.last_used_at) : ' · 미사용');
+    const right = isActive
+      ? el('button', { class: 'btn btn-ghost btn-sm', text: '회수', onclick: async (e) => {
+          if (!confirm(`토큰 '${t.label || t.user_id}' 회수? 즉시 무효화됩니다(되돌릴 수 없음).`)) return;
+          e.target.disabled = true;
+          try {
+            await api('/api/ui/org/token/revoke', { method: 'POST', body: JSON.stringify({ tokenHash: t.token_hash }) });
+            await loadAdmin(true); toast('회수됨 — 즉시 무효'); renderAdminDetail(detail, 'tokens', state.admin.data);
+          } catch (err) { toast(err.message, true); e.target.disabled = false; }
+        } })
+      : el('span', { class: 'pill', text: '회수됨' });
+    return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') },
+      el('div', { class: 'token-main' },
+        el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }),
+        el('div', { class: 'mini-meta', text: meta })),
+      right);
+  };
+  const children = [
+    el('h2', { text: '토큰' }),
+    el('p', { class: 'admin-hint', text: '발급된 접속 토큰입니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
+  ];
+  if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '활성 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
+  else children.push(el('p', { class: 'admin-hint', text: '활성 토큰이 없습니다 — [구성원] 탭에서 발급하세요.' }));
+  if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '회수됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
+  detail.replaceChildren(el('div', { class: 'card' }, ...children));
 }
 
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──

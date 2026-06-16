@@ -550,3 +550,12 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .deploy-head h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
 .deploy-block .admin-preview { white-space: pre-wrap; }
+
+/* 토큰 회수 패널 */
+.token-section { margin-top: 14px; }
+.token-section-h { font-size: 12.5px; font-weight: 700; color: var(--muted-head); margin: 4px 0 6px; }
+.token-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line-row); }
+.token-row:last-child { border-bottom: none; }
+.token-main { min-width: 0; }
+.token-label { font-size: 14px; font-weight: 700; color: var(--ink); }
+.token-revoked { opacity: .55; }
