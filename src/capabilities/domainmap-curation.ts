@@ -1,6 +1,6 @@
 // domainmap 큐레이션 그룹 capability — 게이트웨이가 domainmap 쓰기를 흡수하는 단일 표면(Stage②+⑤).
 // propose_domain·domain_deprecate 만 MCP 노출(도메인 authoring — Phase C ⑤ 의도적 확장), 나머지 REST 전용.
-// (현 MCP 표면 = 21툴: 기존 13 + pm 6 + domainmap authoring 2.)
+// (현 MCP 표면 = 22툴: 기존 13 + pm 6 + domainmap authoring 2 + db_sources 1.)
 // Stage⑥: 엔진 흡수 — dmGet/dmPost/dmPatch(HTTP) 대신 src/domainmap/core/* 직결.
 // 에러 표면 byte-compat: dmWrite 가 코어의 e.status 4xx → HttpError(status,msg) 번역(구 dmWrite 와 동일),
 // dmRead 가 읽기 에러를 구 dmGet 엔벨로프로 재현. reassign 의 UNIQUE 충돌은 코어가 raw pg 에러로

@@ -18,15 +18,15 @@
 | 영역 | 파일 | 비고 |
 |---|---|---|
 | 엔트리포인트 | `src/index.ts` | Express + Streamable HTTP + bearer 인증 |
-| 서버 조립 | `src/server.ts` | 능력 계층 등록 — **MCP 표면 21툴**(`scripts/parity-check.mjs`의 EXPECTED_MCP_SURFACE 로 동결, REST/MCP 패리티 42) |
+| 서버 조립 | `src/server.ts` | 능력 계층 등록 — **MCP 표면 22툴**(`scripts/parity-check.mjs`의 EXPECTED_MCP_SURFACE 로 동결, REST/MCP 패리티 42) |
 | **보안 경계** | `src/context.ts` | `resolveUser → requireScope` — 모든 툴 첫 줄 |
 | 인증 | `src/auth/bearer.ts` | 1단계 정적 토큰. 2단계 OAuth로 이 파일만 교체 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — items·mapping·context·pm·domainmap-curation |
 | 도메인/프로젝트 | `src/capabilities/context.ts` | `context_overview`/`domain_list`/`domain_get`/`project_list`/`debt_list`/`repo_list` + **authoring 쓰기 `propose_domain`/`domain_deprecate`** — domainmap 프록시 |
 | domainmap 엔진 | `src/domainmap/` | 흡수된 엔진 모듈 — `db.ts`(전용 pg Pool) · `core/`(reconcile·changelog·domains·mappings·debts·projects·refresh·queries) · `cli.ts`(호스트 CLI) · `webhook.ts`(HMAC push-refresh) (`DOMAINMAP_DATABASE_URL`) |
 | PM (ClickUp) | `src/capabilities/pm.ts` · `src/connectors/clickup.ts` | `pm_task_*` 6툴 write-through(+`pm_write_audit`) + 폴링 증분 싱크(`run-sync`) — `runbooks/clickup-sync.md` |
-| DB | `src/tools/db.ts` | `db_schema` / `db_query` (방화벽·RLS·timeout·감사 골격) |
-| DB 안전장치 | `src/db/firewall.ts` | 단일 SELECT 만 허용 |
+| DB | `src/tools/db.ts` | `db_sources` / `db_schema` / `db_query` — 멀티 데이터소스(`source` 인자·`DB_SOURCES_JSON`), 방화벽·RLS·timeout·감사 |
+| DB 안전장치 | `src/db/firewall.ts` · `src/db/sources.ts` | 단일 SELECT + 위험함수(`set_config`/`current_setting` 등) 차단 · 소스 레지스트리 |
 | RLS 예시 | `sql/rls-example.sql` | 읽기전용 role + 행 정책 |
 | 클라 등록 | `scripts/register-clients.sh` | 4종 등록 |
 
@@ -65,6 +65,11 @@ Docker: `docker compose up --build`
 
 > RLS = 행 필터, 게이트웨이 = 컬럼 마스킹(PII). 방화벽은 보조 방어선이고,
 > **진짜 권한 경계는 읽기전용 role + RLS** 다.
+
+> **멀티 데이터소스:** `DB_SOURCES_JSON` 으로 여러 운영 DB 를 명명 등록하고 `db_query`/`db_schema` 의
+> `source` 인자로 고른다(미지정 시 `default`=`DATABASE_URL`; 다중+default없음이면 명시 필수, `db_sources` 로 목록 확인).
+> 소스별 `rls` GUC·`maxRows`·`timeoutMs` 오버라이드 — **`rls` 미지정 소스는 행수준 격리 없음**(테이블수준은 읽기전용 role 책임;
+> `default` 만 후방호환으로 `app.current_user`). 권한은 스코프 `db`(전 소스) 또는 `db:<source>`(특정). 1차 pg-only. (설계: `research/2026-06-16-멀티db읽기-설계.md`)
 
 ## domainmap 통합 (도메인/프로젝트 맥락)
 

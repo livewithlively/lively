@@ -28,3 +28,22 @@ export function requireScope(user: LivelyUser, scope: string): void {
 export function canAccessProject(user: LivelyUser, project: string): boolean {
   return user.projects.includes("*") || user.projects.includes(project);
 }
+
+// ── DB 데이터소스 접근(db_query/db_schema/db_sources) ──
+// 권한은 기존 scopes[] 를 재사용한다(컬럼 마이그레이션 불필요):
+//   'db'          → 모든 소스 허용(후방호환 — 기존 db 스코프 토큰 무변경)
+//   'db:<source>' → 특정 소스만 허용(세밀화)
+export function canAccessDbSource(user: LivelyUser, source: string): boolean {
+  return user.scopes.includes("db") || user.scopes.includes(`db:${source}`);
+}
+
+export function requireDbSource(user: LivelyUser, source: string): void {
+  if (!canAccessDbSource(user, source)) {
+    throw new Error(`Forbidden: user '${user.userId}' lacks db access to source '${source}'`);
+  }
+}
+
+// 디스커버리(db_sources) 진입 게이트 — 어떤 형태든 db 권한이 하나라도 있으면 목록 열람 가능.
+export function hasAnyDbAccess(user: LivelyUser): boolean {
+  return user.scopes.some((s) => s === "db" || s.startsWith("db:"));
+}
