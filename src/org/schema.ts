@@ -115,4 +115,41 @@ export async function initOrgSchema(): Promise<void> {
     -- email 은 토큰에 저장하지 않는다(귀속 표시용 → member_id 로 파생). 기존 DB 의 중복 컬럼 제거(멱등).
     ALTER TABLE auth_token DROP COLUMN IF EXISTS email;
   `);
+
+  // ── org_runtime_config — 런타임(훅) 설정 단일행: 훅 on/off · work-roots · writeback 너지 문구. ──
+  // 멤버 머신에 materialize → ~/.lively/hooks-config.json + work-roots. 훅이 런타임에 읽음(fail-open).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_runtime_config(
+      id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      hooks JSONB NOT NULL DEFAULT '{"session_preload":true,"work_flag":true,"stop_writeback_gate":true}'::jsonb,
+      writeback_notice TEXT,
+      work_roots JSONB NOT NULL DEFAULT '[]'::jsonb,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    INSERT INTO org_runtime_config(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // ── org_mcp_server — 조직 MCP 서버 레지스트리. register-clients/어댑터가 멤버 하네스에 등록. ──
+  // 시크릿 금지: 인증은 auth_env(환경변수 '이름'만, 값 아님). transport http(url) | stdio(command).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_mcp_server(
+      name TEXT PRIMARY KEY,
+      transport TEXT NOT NULL DEFAULT 'http',
+      url TEXT,
+      command TEXT,
+      auth_env TEXT,
+      note TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_transport_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_transport_chk CHECK (transport IN ('http','stdio'));
+      END IF;
+    END $$;
+  `);
 }

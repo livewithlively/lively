@@ -3,7 +3,7 @@
 //  → import 호출이면 게이트웨이 프로세스를 죽인다. subprocess 는 프로세스 격리 + 출력 캡처 + 무위험.
 //  이것이 우리가 합의한 'delivery 인터페이스'의 구현(웹은 이 인터페이스에만 의존, 내부 기제는 교체 가능).
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +70,8 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
   try {
     const res = await runPublish(stage, harness);
     if (!res.ok) throw new Error("발행 아티팩트 생성 실패");
+    // 런타임 설정/ MCP 목록을 번들 .lively/ 에 주입(DB → 설치기가 ~/.lively 로 복사).
+    await writeRuntimeBundle(stage);
     // tar -czf - -C <stage> .  → stdout 로 받기.
     const buf = await new Promise<Buffer>((resolve, reject) => {
       const child = spawn("tar", ["-czf", "-", "-C", stage, "."]);
@@ -87,6 +89,23 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
   } finally {
     await rm(stage, { recursive: true, force: true }).catch((err) => logger.warn({ err }, "발행 stage 정리 실패"));
   }
+}
+
+// 런타임 번들 주입 — DB(org_runtime_config·org_mcp_server)를 발행 묶음 .lively/ 에 굳힌다.
+//  설치기(user-install.mjs)가 이걸 ~/.lively/ 로 복사하고, 훅·register-clients 가 런타임에 읽는다.
+async function writeRuntimeBundle(stageDir: string): Promise<void> {
+  const { getRuntimeConfig, listMcpServers } = await import("./store.js");
+  const dir = join(stageDir, ".lively");
+  await mkdir(dir, { recursive: true });
+  const cfg = await getRuntimeConfig();
+  await writeFile(join(dir, "hooks-config.json"),
+    JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || undefined }, null, 2) + "\n");
+  const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 어드민 런타임 설정에서 중앙 관리. env LIVELY_WORK_ROOTS 로도 augment.";
+  await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
+  const mcps = (await listMcpServers()).filter((s) => s.enabled).map((s) => ({
+    name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env,
+  }));
+  await writeFile(join(dir, "mcp-servers.json"), JSON.stringify({ servers: mcps }, null, 2) + "\n");
 }
 
 // 멤버 컨텍스트 미리보기 — 구성원의 AI 가 매 세션 실제로 읽는 정적 컨텍스트(WYSIWYG).

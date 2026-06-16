@@ -1832,9 +1832,12 @@ const ADMIN_SECTIONS = [
   { key: 'members', label: '구성원', meaning: 'member' },
   { key: 'tokens', label: '토큰', meaning: null },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
+  { key: 'runtime', label: '런타임 · 훅', meaning: 'runtime' },
+  { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
   { key: 'publish', label: '발행', meaning: null },
   { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
 ];
+const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp']; // 비-admin 에게 숨김(쓰기/인프라 전용)
 
 async function loadAdmin(force) {
   if (!state.admin.data || force) state.admin.data = await api('/api/ui/org');
@@ -1876,6 +1879,8 @@ function adminRowMeta(key, data) {
   if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
   if (key === 'publish') return '구성원에게 게시';
   if (key === 'deploy') return 'OS별 명령 복사';
+  if (key === 'runtime') { const rc = data.runtimeConfig; if (!rc) return ''; const off = Object.values(rc.hooks || {}).filter((v) => v === false).length; return (off ? off + '개 훅 꺼짐' : '훅 전체 켜짐') + ' · work-roots ' + (rc.work_roots || []).length; }
+  if (key === 'mcp') return (data.mcpServers || []).length + '개 서버';
   return '';
 }
 
@@ -1887,12 +1892,12 @@ async function renderAdmin(view, sub) {
   state.admin.canEdit = canEdit;
 
   let sel = sub || state.admin.sel || 'managed-policy';
-  if ((sel === 'publish' || sel === 'tokens') && !canEdit) sel = 'managed-policy'; // 발행·토큰은 admin 전용
+  if (ADMIN_ONLY.includes(sel) && !canEdit) sel = 'managed-policy'; // admin 전용 섹션은 비-admin 진입 차단
   state.admin.sel = sel;
 
   const list = el('div', { class: 'split-list card admin-nav' });
   for (const s of ADMIN_SECTIONS) {
-    if ((s.key === 'publish' || s.key === 'tokens') && !canEdit) continue;
+    if (ADMIN_ONLY.includes(s.key) && !canEdit) continue;
     list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
@@ -1916,6 +1921,8 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'tokens') return tokensPanel(detail, data);
   if (sel === 'profile') return profileEditor(detail, data);
+  if (sel === 'runtime') return runtimeEditor(detail, data);
+  if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
 }
@@ -2231,6 +2238,103 @@ function tokensPanel(detail, data) {
   detail.replaceChildren(el('div', { class: 'card' }, ...children));
 }
 
+// ── 런타임 · 훅 (훅 on/off · work-roots · 너지 문구) — admin 전용 ──
+function runtimeEditor(detail, data) {
+  const rc = data.runtimeConfig || { hooks: { session_preload: true, work_flag: true, stop_writeback_gate: true }, writeback_notice: '', work_roots: [] };
+  const HOOK_OPTS = [
+    ['session_preload', '세션 시작 컨텍스트 주입 (session-preload)'],
+    ['work_flag', '작업 플래그 (work-flag)'],
+    ['stop_writeback_gate', '종료 시 기록 너지 (writeback-gate)'],
+  ];
+  const chks = {};
+  const hookWrap = el('div', { class: 'scope-wrap' });
+  for (const [k, label] of HOOK_OPTS) {
+    const chk = el('input', { type: 'checkbox' }); chk.checked = rc.hooks[k] !== false; chks[k] = chk;
+    hookWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label));
+  }
+  const noticeTa = el('textarea', { rows: '3', placeholder: '비우면 기본 안내문 사용' }); noticeTa.value = rc.writeback_notice || '';
+  const wrTa = el('textarea', { rows: '4', placeholder: '/Users/you/repo\n줄당 절대경로 한 개' }); wrTa.value = (rc.work_roots || []).join('\n');
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const hooks = {}; for (const [k] of HOOK_OPTS) hooks[k] = chks[k].checked;
+      const work_roots = wrTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
+      const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots }) });
+      data.runtimeConfig = r.runtimeConfig; status.textContent = '저장됨'; toast('저장됨 — 구성원 다음 세션부터 반영');
+    } catch (e) { toast(e.message, true); status.textContent = ''; }
+    saveBtn.disabled = false;
+  });
+  detail.replaceChildren(el('div', { class: 'card' },
+    el('h2', { text: '런타임 · 훅' }),
+    el('p', { class: 'admin-hint', text: '구성원 머신의 리플렉스(훅) 동작과 작업 폴더를 중앙에서 제어. 변경은 다음 세션에 자동 반영(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로.' }),
+    field('활성 훅', hookWrap),
+    field('writeback 너지 문구 (선택)', noticeTa),
+    field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status),
+    meaningCard(data.meaning['runtime'])));
+}
+
+// ── MCP 서버 레지스트리 — admin 전용 ──
+function mcpEditor(detail, data) {
+  const servers = data.mcpServers || [];
+  const sel = state.admin.mcpSel;
+  const listCol = el('div', { class: 'admin-sublist' });
+  listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ MCP 서버 추가',
+    onclick: () => { state.admin.mcpSel = '__new__'; renderAdminDetail(detail, 'mcp', data); } }));
+  for (const s of servers) {
+    listCol.append(el('div', { class: 'mini-row' + (s.name === sel ? ' sel' : ''),
+      onclick: () => { state.admin.mcpSel = s.name; renderAdminDetail(detail, 'mcp', data); } },
+      el('div', { class: 'mini-title', text: s.name }, s.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-meta', text: (s.transport || 'http') + ' · ' + (s.transport === 'stdio' ? (s.command || '-') : (s.url || '-')) })));
+  }
+  const right = el('div', {});
+  const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
+  if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
+  else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }), meaningCard(data.meaning['mcp']));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'MCP 서버' }), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+function mcpForm(root, s, data, detail, isNew) {
+  const nameIn = el('input', { type: 'text', value: s.name, placeholder: '서버 이름(영문/숫자)', disabled: isNew ? null : '' });
+  const transSel = el('select', {}, ...['http', 'stdio'].map((t) => el('option', { value: t, text: t })));
+  transSel.value = s.transport || 'http';
+  const urlIn = el('input', { type: 'text', value: s.url || '', placeholder: 'http://host:port/mcp' });
+  const cmdIn = el('input', { type: 'text', value: s.command || '', placeholder: 'node /path/server.mjs --arg' });
+  const authIn = el('input', { type: 'text', value: s.auth_env || '', placeholder: '예: ACME_TOKEN (값 아님)' });
+  const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
+  const enChk = el('input', { type: 'checkbox' }); enChk.checked = s.enabled !== false;
+  const urlField = field('URL (http)', urlIn);
+  const cmdField = field('command (stdio)', cmdIn);
+  const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
+  transSel.addEventListener('change', syncTransport);
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    if (!nameIn.value.trim()) { toast('이름 필수', true); return; }
+    saveBtn.disabled = true;
+    try {
+      const http = transSel.value === 'http';
+      const payload = { name: nameIn.value.trim(), transport: transSel.value, url: http ? urlIn.value.trim() : null, command: http ? null : cmdIn.value.trim(), auth_env: authIn.value.trim() || null, note: noteIn.value.trim() || null, enabled: enChk.checked };
+      await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
+      await loadAdmin(true); state.admin.mcpSel = payload.name; toast('저장됨 — 다음 설치/업데이트 시 등록'); renderAdminDetail(detail, 'mcp', state.admin.data);
+    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
+  });
+  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+    if (!confirm(`MCP 서버 '${s.name}' 제거?`)) return;
+    try { await api('/api/ui/org/mcp-server/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.mcpSel = null; toast('제거됨'); renderAdminDetail(detail, 'mcp', state.admin.data); }
+    catch (e) { toast(e.message, true); }
+  } }));
+  root.replaceChildren(
+    field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField,
+    field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn),
+    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    actions, meaningCard(data.meaning['mcp']));
+  syncTransport();
+}
+
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
 function deployPanel(detail, data) {
   const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
@@ -2258,7 +2362,8 @@ function deployPanel(detail, data) {
 // OS별 설치 명령(토큰 박음).
 function installCmd(gw, os, token) {
   if (os === 'windows') {
-    return `$T="${token}"; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "${gw}/install" -OutFile "$env:TEMP\\lv.tgz"; tar -xzf "$env:TEMP\\lv.tgz" -C "$env:TEMP"; $env:LIVELY_TOKEN=$T; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\setup\\setup-windows.ps1"`;
+    // 맥과 동일: 다운받은 번들에서 설치(git clone 없음·토큰 프롬프트 없음). user-install.mjs 는 크로스플랫폼.
+    return `$T="${token}"; $G="${gw}"; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T"; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp`;
   }
   return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
 }

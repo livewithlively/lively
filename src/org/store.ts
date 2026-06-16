@@ -382,3 +382,134 @@ export async function memberHasActiveToken(memberId: string): Promise<boolean> {
     return false;
   }
 }
+
+// ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
+export interface OrgRuntimeConfig {
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean };
+  writeback_notice: string | null;
+  work_roots: string[];
+  version: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+const DEFAULT_HOOKS = { session_preload: true, work_flag: true, stop_writeback_gate: true };
+
+export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
+  const r = await itemsPool.query(
+    `SELECT hooks, writeback_notice, work_roots, version, updated_at, updated_by FROM org_runtime_config WHERE id=1`,
+  );
+  const row = r.rows[0] as Record<string, unknown> | undefined;
+  const hooksRaw = (row?.hooks ?? {}) as Record<string, unknown>;
+  return {
+    hooks: {
+      session_preload: hooksRaw.session_preload !== false,
+      work_flag: hooksRaw.work_flag !== false,
+      stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
+    },
+    writeback_notice: (row?.writeback_notice as string) ?? null,
+    work_roots: Array.isArray(row?.work_roots) ? (row!.work_roots as string[]).filter((x) => typeof x === "string") : [],
+    version: (row?.version as number) ?? 1,
+    updated_at: (row?.updated_at as string) ?? null,
+    updated_by: (row?.updated_by as string) ?? null,
+  };
+}
+
+export async function updateRuntimeConfig(
+  patch: { hooks?: Partial<OrgRuntimeConfig["hooks"]>; writeback_notice?: string | null; work_roots?: string[] },
+  actor?: string,
+  source?: string,
+): Promise<OrgRuntimeConfig> {
+  const before = await getRuntimeConfig();
+  const hooks = { ...before.hooks, ...(patch.hooks ?? {}) };
+  const writebackNotice = patch.writeback_notice !== undefined ? patch.writeback_notice : before.writeback_notice;
+  const workRoots = patch.work_roots !== undefined ? patch.work_roots : before.work_roots;
+  await itemsPool.query(
+    `UPDATE org_runtime_config SET hooks=$1::jsonb, writeback_notice=$2, work_roots=$3::jsonb,
+       version=version+1, updated_at=now(), updated_by=$4 WHERE id=1`,
+    [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots), actor ?? null],
+  );
+  const after = await getRuntimeConfig();
+  await audit("org_runtime_config", "1", "update", before, after, actor, source);
+  return after;
+}
+
+// ════════ MCP 서버 레지스트리 — org_mcp_server ════════
+export interface McpServer {
+  name: string;
+  transport: "http" | "stdio";
+  url: string | null;
+  command: string | null;
+  auth_env: string | null;
+  note: string | null;
+  enabled: boolean;
+  sort: number;
+  version: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+function mapMcp(row: Record<string, unknown>): McpServer {
+  return {
+    name: row.name as string,
+    transport: row.transport as McpServer["transport"],
+    url: (row.url as string) ?? null,
+    command: (row.command as string) ?? null,
+    auth_env: (row.auth_env as string) ?? null,
+    note: (row.note as string) ?? null,
+    enabled: row.enabled !== false,
+    sort: (row.sort as number) ?? 0,
+    version: (row.version as number) ?? 1,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by";
+
+export async function listMcpServers(): Promise<McpServer[]> {
+  const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server ORDER BY sort, name`);
+  return r.rows.map(mapMcp);
+}
+
+export async function getMcpServer(name: string): Promise<McpServer | null> {
+  const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server WHERE name=$1`, [name]);
+  return r.rows[0] ? mapMcp(r.rows[0]) : null;
+}
+
+export interface McpServerInput {
+  name: string;
+  transport?: "http" | "stdio";
+  url?: string | null;
+  command?: string | null;
+  auth_env?: string | null;
+  note?: string | null;
+  enabled?: boolean;
+  sort?: number;
+}
+
+export async function upsertMcpServer(m: McpServerInput, actor?: string, source?: string): Promise<McpServer> {
+  const before = await getMcpServer(m.name);
+  const transport = m.transport ?? before?.transport ?? "http";
+  await itemsPool.query(
+    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,now(),$9)
+     ON CONFLICT (name) DO UPDATE SET
+       transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
+       note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
+       version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [m.name, transport, m.url ?? before?.url ?? null, m.command ?? before?.command ?? null,
+     m.auth_env ?? before?.auth_env ?? null, m.note ?? before?.note ?? null,
+     m.enabled ?? before?.enabled ?? true, m.sort ?? before?.sort ?? 0, actor ?? null],
+  );
+  const after = await getMcpServer(m.name);
+  await audit("org_mcp_server", m.name, before ? "update" : "insert", before, after, actor, source);
+  return after as McpServer;
+}
+
+export async function removeMcpServer(name: string, actor?: string, source?: string): Promise<void> {
+  const before = await getMcpServer(name);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_mcp_server WHERE name=$1`, [name]);
+  await audit("org_mcp_server", name, "delete", before, null, actor, source);
+}

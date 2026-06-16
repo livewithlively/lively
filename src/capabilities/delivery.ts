@@ -14,6 +14,7 @@ import {
   getOrgProfile, updateOrgProfile, listSections, updateSection,
   listMembers, getMember, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
+  getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   type MemberIdentity,
 } from "../org/store.js";
 
@@ -76,8 +77,10 @@ export const deliveryCapabilities: Capability[] = [
         : members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [] }));
       // admin 에겐 전체 token_hash 노출 — 회수 핸들로 필요. 해시는 비가역(평문 토큰 복원 불가)이라 안전.
       const tokens = isAdmin ? await listTokens() : [];
+      const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
+      const mcpServers = isAdmin ? await listMcpServers() : [];
       return {
-        profile, sections: sectionMap, members: memberRows, memory, tokens,
+        profile, sections: sectionMap, members: memberRows, memory, tokens, runtimeConfig, mcpServers,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin,
       };
     }),
@@ -243,5 +246,85 @@ export const deliveryCapabilities: Capability[] = [
       } finally {
         await rm(dir, { recursive: true, force: true }).catch(() => { /* 임시디렉토리 정리 실패 무시 */ });
       }
+    }),
+
+  // ── 런타임 설정(훅 on/off · work-roots · 너지) ──
+  restRead("org_runtime_config", "런타임 설정 조회",
+    "훅 on/off·work-roots·writeback 너지문구 — 세션 훅이 동적 fetch(scope null, 멤버 토큰 OK).",
+    [{ method: "GET", paths: ["/api/ui/org/runtime-config"], parse: () => ({}) }],
+    async () => {
+      const c = await getRuntimeConfig();
+      return { hooks: c.hooks, work_roots: c.work_roots, writeback_notice: c.writeback_notice };
+    }),
+  restOnly("org_runtime_update", "런타임 설정 수정",
+    "훅 활성/비활성·work-roots 목록·writeback 너지문구를 저장한다.",
+    [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const patch: { hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[] } = {};
+      if (input.hooks !== undefined) {
+        const h = input.hooks;
+        if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
+        patch.hooks = {};
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate"]) {
+          if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
+        }
+      }
+      if (input.writeback_notice !== undefined) {
+        patch.writeback_notice = (input.writeback_notice === null || input.writeback_notice === "")
+          ? null : str(input.writeback_notice, "writeback_notice", 2000);
+      }
+      if (input.work_roots !== undefined) {
+        if (!Array.isArray(input.work_roots)) throw new HttpError(400, "work_roots 는 배열이어야 합니다");
+        patch.work_roots = input.work_roots.map((r) => str(r, "work_roots[]", 500).trim()).filter(Boolean);
+      }
+      return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), "web") };
+    }),
+
+  // ── MCP 서버 레지스트리 ──
+  restRead("org_mcp_servers", "MCP 서버 목록 조회",
+    "활성 MCP 서버 목록 — register-clients/세션훅이 fetch해 멤버 하네스에 등록(scope null). 시크릿 없음(auth_env=변수명).",
+    [{ method: "GET", paths: ["/api/ui/org/mcp-servers"], parse: () => ({}) }],
+    async () => {
+      const all = await listMcpServers();
+      return { servers: all.filter((s) => s.enabled).map((s) => ({
+        name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
+      })) };
+    }),
+  restOnly("org_mcp_upsert", "MCP 서버 추가·수정",
+    "조직 MCP 서버를 저장한다. transport http(url)|stdio(command). 인증은 auth_env(환경변수 이름만 — 시크릿 금지).",
+    [{ method: "POST", paths: ["/api/ui/org/mcp-server"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const name = slug(input.name, "name");
+      let transport: "http" | "stdio" | undefined;
+      if (input.transport !== undefined) {
+        const t = str(input.transport, "transport", 10);
+        if (t !== "http" && t !== "stdio") throw new HttpError(400, "transport 는 http|stdio 만 허용됩니다");
+        transport = t;
+      }
+      let authEnv: string | null | undefined;
+      if (input.auth_env !== undefined) {
+        if (input.auth_env === null || input.auth_env === "") authEnv = null;
+        else {
+          authEnv = str(input.auth_env, "auth_env", 100).trim();
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authEnv)) throw new HttpError(400, "auth_env 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
+        }
+      }
+      const server = await upsertMcpServer({
+        name, transport,
+        url: input.url === undefined ? undefined : (input.url === null || input.url === "" ? null : str(input.url, "url", 1000).trim()),
+        command: input.command === undefined ? undefined : (input.command === null || input.command === "" ? null : str(input.command, "command", 2000).trim()),
+        auth_env: authEnv,
+        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+      }, actorOf(user), "web");
+      return { server };
+    }),
+  restOnly("org_mcp_remove", "MCP 서버 제거",
+    "조직 MCP 서버를 제거한다.",
+    [{ method: "POST", paths: ["/api/ui/org/mcp-server/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      await removeMcpServer(slug(input.name, "name"), actorOf(user), "web");
+      return { ok: true };
     }),
 ];
