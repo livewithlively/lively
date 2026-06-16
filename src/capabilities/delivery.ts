@@ -198,6 +198,24 @@ export const deliveryCapabilities: Capability[] = [
       }, actorOf(user), "web");
       return { token, tokenHash: tokenHash.slice(0, 12), userId, scopes }; // 평문 token 은 이 응답에서만
     }),
+
+  // ── 본인 토큰 자가발급(설치 탭) — 인증된 구성원이 자기 토큰을 만든다. admin 불요. ──
+  // userId 는 principal 에서 강제(타인 발급 불가), scope 는 본인 member.scopes(없으면 현재 scope) — 상승 불가.
+  restRead("org_token_mint_self", "본인 토큰 발급",
+    "현재 로그인한 구성원이 본인 설치 토큰을 발급한다(설치/재설치용). userId·scope 는 principal 로 고정.",
+    [{ method: "POST", paths: ["/api/ui/org/token/self"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const mem = await getMember(userId);
+      const base = mem?.scopes?.length ? mem.scopes : (Array.isArray(user.scopes) ? user.scopes : ["items", "context"]);
+      const scopes = base.filter((s) => SCOPES_ALLOWED.has(s));
+      const { token } = await mintToken(
+        { userId, scopes, label: (mem?.display_name || userId) + " (self)", memberId: userId },
+        actorOf(user), "web-self");
+      return { token, scopes, userId };
+    }),
+
   restOnly("org_token_revoke", "토큰 회수",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],

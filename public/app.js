@@ -2062,8 +2062,7 @@ function memberForm(root, m, data, detail, isNew) {
 
   const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
   if (!isNew) {
-    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '설치 토큰 발급',
-      onclick: () => mintInstallToken(m) }));
+    // 토큰 발급은 [토큰] 탭으로 이동(구성원별 발급) — 여기선 신원/권한 편집만.
     actions.append(el('button', { class: 'btn-text', text: '제거',
       onclick: async () => {
         if (!confirm(`구성원 '${m.display_name || m.id}' 제거?`)) return;
@@ -2084,31 +2083,6 @@ function memberForm(root, m, data, detail, isNew) {
     meaningCard(data.meaning['member']));
 }
 
-async function mintInstallToken(m) {
-  const out = el('div', {});
-  const go = el('button', { class: 'btn btn-primary', text: '토큰 발급' });
-  go.addEventListener('click', async () => {
-    go.disabled = true;
-    try {
-      // scope 미전달 → 서버가 이 구성원의 권한(scopes)을 사용.
-      const r = await api('/api/ui/org/token', { method: 'POST',
-        body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
-      const origin = window.location.origin;
-      const cmd = `curl -fsSL -H "Authorization: Bearer ${r.token}" ${origin}/install -o /tmp/lively.tgz \\\n  && mkdir -p /tmp/lively-setup && tar -xzf /tmp/lively.tgz -C /tmp/lively-setup \\\n  && LIVELY_TOKEN=${r.token} bash /tmp/lively-setup/setup/setup-mac.sh`;
-      out.replaceChildren(
-        el('p', { class: 'admin-hint', text: '아래 한 줄을 구성원에게 전달하세요(터미널에 붙여넣기). 토큰은 지금만 보입니다 — 안전 채널로 전달.' }),
-        el('pre', { class: 'admin-preview', text: cmd }),
-        copyButton(() => cmd, '명령 복사'),
-        el('div', { class: 'admin-status', text: 'scope: ' + r.scopes.join(', ') }));
-      await loadAdmin(true);
-    } catch (e) { toast(e.message, true); go.disabled = false; }
-  });
-  const curScopes = (m.scopes || ['items', 'context']).join('/');
-  overlay(`'${m.display_name || m.id}' 설치 토큰 발급`,
-    el('p', { class: 'admin-hint', text: '이 구성원의 권한(' + curScopes + ')으로 토큰을 발급합니다. 권한을 바꾸려면 [구성원] 폼의 권한을 먼저 수정하세요. 토큰은 발급 직후 1회만 표시됩니다.' }),
-    m.scopes && m.scopes.includes('admin') ? el('p', { class: 'admin-warn', text: '⚠ 이 구성원은 관리자(admin) 권한입니다 — 조직 전체 설정·구성원 데이터를 편집할 수 있습니다.' }) : null,
-    go, out);
-}
 
 // ── 팀 메모리 ──
 function memoryEditor(detail, data) {
@@ -2222,6 +2196,7 @@ function publishPanel(detail, data) {
 
 // ── 토큰 (발급 현황 + 즉시 회수) — admin 전용 ──
 function tokensPanel(detail, data) {
+  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
   const tokens = data.tokens || [];
   const active = tokens.filter((t) => !t.revoked_at);
   const revoked = tokens.filter((t) => t.revoked_at);
@@ -2247,7 +2222,8 @@ function tokensPanel(detail, data) {
   };
   const children = [
     el('h2', { text: '토큰' }),
-    el('p', { class: 'admin-hint', text: '발급된 접속 토큰입니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
+    el('p', { class: 'admin-hint', text: '구성원별로 토큰을 발급(배포용)하고, 발급된 토큰을 회수합니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
+    installMinterBlock(data, gw),
   ];
   if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '활성 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
   else children.push(el('p', { class: 'admin-hint', text: '활성 토큰이 없습니다 — [구성원] 탭에서 발급하세요.' }));
@@ -2270,13 +2246,44 @@ function deployPanel(detail, data) {
       c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
     el('p', { class: 'admin-hint', text: c.note }),
     el('pre', { class: 'admin-preview', text: c.cmd }));
-  // 설치 블록: mac + admin 이면 구성원 선택→발급→실토큰 명령(인터랙티브), 아니면 템플릿.
+  // 설치 블록: 본인 토큰 자가발급(어드민·비어드민 동일). 업데이트·제거는 설치된 토큰 자동 읽기.
   const blocks = deployCommands(gw, os).map((c) =>
-    (c.kind === 'install' && os === 'mac' && canEdit) ? installMinterBlock(data, gw) : staticBlock(c));
+    c.kind === 'install' ? installSelfBlock(gw, os) : staticBlock(c));
   detail.replaceChildren(el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '설치 · 업데이트 · 제거' }), osTabs),
-    el('p', { class: 'admin-hint', text: '설치는 구성원별 토큰이 필요합니다(아래에서 구성원 선택 → 발급 → 토큰 박힌 명령). 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다.' }),
+    el('p', { class: 'admin-hint', text: '본인 머신에 설치/업데이트/제거하는 명령입니다. 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다. (다른 구성원에게 배포할 토큰은 [토큰] 탭에서.)' }),
     ...blocks));
+}
+
+// OS별 설치 명령(토큰 박음).
+function installCmd(gw, os, token) {
+  if (os === 'windows') {
+    return `$T="${token}"; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "${gw}/install" -OutFile "$env:TEMP\\lv.tgz"; tar -xzf "$env:TEMP\\lv.tgz" -C "$env:TEMP"; $env:LIVELY_TOKEN=$T; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\setup\\setup-windows.ps1"`;
+  }
+  return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
+}
+
+// 설치(본인) — 자가발급으로 본인 토큰 → 본인 설치 명령. admin/비admin 동일.
+function installSelfBlock(gw, os) {
+  const result = el('div', {});
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '내 토큰 발급 → 설치 명령' });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      const cmd = installCmd(gw, os, r.token);
+      result.replaceChildren(
+        el('p', { class: 'admin-hint', text: '✓ 본인 토큰 발급됨(scope: ' + (r.scopes || []).join('/') + '). 본인 머신에서 아래를 실행하세요 — 토큰은 지금만 보입니다.' }),
+        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+        el('pre', { class: 'admin-preview', text: cmd }));
+    } catch (e) { toast(e.message, true); }
+    go.disabled = false;
+  });
+  return el('div', { class: 'deploy-block' },
+    el('h3', { text: '설치 (본인 머신)' }),
+    el('p', { class: 'admin-hint', text: '본인 토큰을 발급해 본인 머신에 설치합니다(git 불필요). 새 기기/재설치 시 사용.' }),
+    el('div', { class: 'install-minter' }, go),
+    result);
 }
 
 // 설치 미니터 — 구성원 선택 + 발급 → 그 사람 토큰이 박힌 완성형 설치 명령(복사).
@@ -2292,9 +2299,9 @@ function installMinterBlock(data, gw) {
     try {
       const r = await api('/api/ui/org/token', { method: 'POST',
         body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
-      const cmd = `T=${r.token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T bash /tmp/lv/setup/setup-mac.sh`;
+      const cmd = installCmd(gw, 'mac', r.token);
       result.replaceChildren(
-        el('p', { class: 'admin-hint', text: '✓ ' + (m.display_name || m.id) + ' 토큰 발급됨(scope: ' + r.scopes.join('/') + '). 아래 명령을 전달하세요 — 토큰은 지금만 보입니다.' }),
+        el('p', { class: 'admin-hint', text: '✓ ' + (m.display_name || m.id) + ' 토큰 발급됨(scope: ' + r.scopes.join('/') + '). 아래 macOS 설치 명령을 전달하세요(Windows는 본인이 설치 탭에서). 토큰은 지금만 보입니다.' }),
         el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
         el('pre', { class: 'admin-preview', text: cmd }));
       await loadAdmin(true);
@@ -2311,9 +2318,11 @@ function installMinterBlock(data, gw) {
 function deployCommands(gw, os) {
   if (os === 'windows') {
     return [
-      { kind: 'install', title: '설치 (PowerShell)', note: '구성원 토큰 필요(<TOKEN> 교체). Windows 는 현재 컨텍스트+MCP 지원 — 세션 훅은 준비 중.',
-        cmd: `$T="<TOKEN>"; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "${gw}/install" -OutFile "$env:TEMP\\lv.tgz"; tar -xzf "$env:TEMP\\lv.tgz" -C "$env:TEMP"; $env:LIVELY_TOKEN=$T; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\setup\\setup-windows.ps1"` },
-      { kind: 'info', title: '업데이트 / 제거', note: 'Windows 전용 업데이트·제거 스크립트는 준비 중입니다. 갱신은 설치 재실행, 제거는 가이드(사용가이드.md) 참조.', cmd: '(준비 중)' },
+      { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
+      { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치 + MCP 재등록. ⚠ Windows 미검증 — 테스트 후 사용. (세션 훅은 현재 Windows 미지원, 컨텍스트+MCP만.)',
+        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T"; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp` },
+      { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [토큰] 탭에서 회수. ⚠ Windows 미검증.',
+        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
     ];
   }
   return [
