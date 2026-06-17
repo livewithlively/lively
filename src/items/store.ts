@@ -9,6 +9,11 @@ import {
   type Candidates,
 } from "./mapping-candidates.js";
 import { logger } from "../log.js";
+import {
+  mirrorKnowledgeFromRawItem,
+  mirrorKnowledgeProject,
+  mirrorSupersedeSiblingProjects,
+} from "../org/knowledge-mirror.js";
 
 export const itemsPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL });
 
@@ -251,6 +256,18 @@ export async function initItemSchema(): Promise<void> {
       detail JSONB);
     CREATE INDEX IF NOT EXISTS pm_write_audit_at_idx ON pm_write_audit(at DESC);
   `);
+
+  // ── P-V3-3c item → item_legacy 프리즈(비파괴·롤백 가능) ──
+  //  D-ARCH: knowledge_unit 이 단일 캐노니컬 표면. item 은 **레거시**로 동결한다 — 단,
+  //  ① item 은 여전히 search_items/get_item/list_unmapped 읽기경로의 진실(안전 서브셋: shape 어댑터 미채택,
+  //     아래 보고 참조) ② FK(item_domain/item_project/relation/audit)·BIGSERIAL·ON CONFLICT·connector_state 가
+  //     전부 item 물리테이블에 묶여 있어 물리 리네임은 이들을 동시에 깨뜨린다.
+  //  따라서 프리즈는 **비파괴 알리아스 뷰**로 한다: 물리 테이블 item 은 그대로 두고(데이터·FK·인덱스 무손상),
+  //  item_legacy 라는 읽기전용 VIEW 를 만들어 '이 데이터는 레거시 동결 스냅샷, 캐노니컬은 knowledge_unit' 임을
+  //  스키마 레벨에서 명문화한다. 신 활동은 ingestItems/declareItemProject 의 듀얼라이트로 knowledge_unit(observed)에
+  //  라이브 적재된다(ctx_* 표면). 멱등(CREATE OR REPLACE VIEW).
+  //  롤백: DROP VIEW item_legacy; (물리 데이터는 애초에 안 건드렸으므로 복원 불요 — item 이 곧 원본).
+  await itemsPool.query(`CREATE OR REPLACE VIEW item_legacy AS SELECT * FROM item;`);
 }
 
 // pm_* 쓰기 감사행 — pm.ts audited() 전용 writer(append-only). 실패해도 op 를 깨면 안 되는
@@ -462,6 +479,15 @@ export async function ingestItems(items: RawItem[]): Promise<number> {
          it.occurred_at ?? null, it.updated_at ?? null,
          JSON.stringify(it.fields ?? {}), it.raw != null ? JSON.stringify(it.raw) : null],
       );
+      // ── P-V3-3c 듀얼라이트: knowledge_unit observed 미러(가산·라이브) ──
+      //  H1 redact 는 mirror 내부. best-effort: 미러 실패가 item 적재(외부 계약)를 깨면 안 되므로 try/catch로
+      //  격리 — logger.warn 만 하고 item 적재는 계속(미러는 다음 싱크가 멱등 수렴). 분류 불가 조합은 false 반환(skip).
+      try {
+        await mirrorKnowledgeFromRawItem(client, it);
+      } catch (err) {
+        logger.warn({ err, system: it.provenance.system, externalId: it.provenance.external_id },
+          "knowledge_unit 미러 적재 실패(무시) — item 적재는 계속, 다음 싱크가 수렴");
+      }
       n++;
     }
   } finally {
@@ -735,7 +761,34 @@ export async function declareItemProject(
     : "updated";
   const logFn = action.startsWith("overrode") ? logger.warn.bind(logger) : logger.info.bind(logger);
   logFn({ audit: "item_project_declare", itemId: input.itemId, repo, key: input.projectKey, action, source: audit.source, actor: audit.actor });
+  // ── P-V3-3c 듀얼라이트: knowledge_unit_project 미러(declared 매핑). best-effort(미러 실패가 레거시 매핑 계약을 안 깸). ──
+  await mirrorDeclaredProject(input.itemId, repo, input.projectKey, input.confidence ?? null, input.evidence ?? null);
   return { itemId: input.itemId, repo, key: input.projectKey, mappedBy: "declared", state: "confirmed", action };
+}
+
+// declared 매핑의 ku 미러 — item 좌표(prov_system, external_id)를 조회해 unitName 으로 knowledge_unit_project 반영.
+//  유닛 미러가 없는(분류 불가) 좌표면 mirrorKnowledgeProject 가 조용히 skip. best-effort(throw 안 함).
+async function mirrorDeclaredProject(
+  itemId: number, repo: string, projectKey: string, confidence: number | null, evidence: string | null,
+): Promise<void> {
+  try {
+    const coord = (await itemsPool.query(
+      `SELECT prov_system, external_id FROM item WHERE id=$1`, [itemId],
+    )).rows[0] as { prov_system: string; external_id: string } | undefined;
+    if (!coord) return;
+    const client = await itemsPool.connect();
+    try {
+      await mirrorKnowledgeProject(
+        client,
+        { system: coord.prov_system, externalId: coord.external_id },
+        { repo, projectKey, mappedBy: "declared", confidence, state: "confirmed", evidence },
+      );
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    logger.warn({ err, itemId, repo, projectKey }, "knowledge_unit_project 미러 실패(무시) — 레거시 매핑은 반영됨");
+  }
 }
 
 // ── 선언 매핑 형제 강등 — 리스트 간 이동 수렴(declared 단일 진실) ──
@@ -771,6 +824,24 @@ export async function supersedeSiblingDeclaredProjects(
       audit: "item_project_declare_supersede", itemId: input.itemId, repo,
       kept: input.keepProjectKey, demoted, source: audit.source, actor: audit.actor,
     });
+  }
+  // ── P-V3-3c 듀얼라이트: ku 미러에도 형제 declared 강등 반영(리스트 이동 수렴). best-effort. ──
+  try {
+    const coord = (await itemsPool.query(
+      `SELECT prov_system, external_id FROM item WHERE id=$1`, [input.itemId],
+    )).rows[0] as { prov_system: string; external_id: string } | undefined;
+    if (coord) {
+      const client = await itemsPool.connect();
+      try {
+        await mirrorSupersedeSiblingProjects(
+          client, { system: coord.prov_system, externalId: coord.external_id }, input.keepProjectKey, repo,
+        );
+      } finally {
+        client.release();
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, itemId: input.itemId, repo }, "knowledge_unit_project supersede 미러 실패(무시)");
   }
   return demoted;
 }
