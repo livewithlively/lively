@@ -13,7 +13,7 @@
 //  - tally 키 문자열('domain:insert','mapping:skip-nodomain' 등 콜론 합성)은 한 글자도 불변
 // upsert* 는 비공개 — ingest 만이 reconcile 진입점이다.
 import { one, withTx, type Db } from "../db.js";
-import type { Actor, IngestResult } from "./types.js";
+import { httpErr, isReservedProvenanceKey, PROVENANCE_KEY_PREFIXES, type Actor, type IngestResult } from "./types.js";
 import { logChange } from "./changelog.js";
 import { upsertRepo } from "./repos.js";
 import { upsertDebtRow } from "./debts.js";
@@ -107,9 +107,16 @@ async function upsertMapping(
 async function upsertProject(db: Db, repo_id: number, run_id: number, actor: Actor, p: any): Promise<{ id: number; action: string }> {
   const ex = await one(db, "SELECT * FROM project WHERE repo_id=$1 AND key=$2", [repo_id, p.key]);
   if (!ex) {
+    // P-V3-4b 네임스페이스 가드(M-나): doc-derived(code_grouping) 신규 key 가 PM-provenance 접두
+    //  ('clickup-' 등)를 침범 못 하게 막는다 — initiative 의 키 공간 보존(붕뜸 재발 방지). 기존 행(ex)
+    //  UPDATE 는 통과(이미 적재된 데이터 비파괴), 신규 INSERT 만 차단한다.
+    if (isReservedProvenanceKey(p.key)) {
+      throw httpErr(400, `project key '${p.key}' uses a reserved PM-provenance prefix — doc-derived(code_grouping) projects cannot use ${PROVENANCE_KEY_PREFIXES.join("/")} keys (those belong to connector-synced initiatives)`);
+    }
     // 신뢰우선: 자동 정의 프로젝트는 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 보존.
-    const r = await one(db, `INSERT INTO project(repo_id,key,name,description,kind,status,origin,started_at,ended_at,source_ref,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,'confirmed',$6,$7,$8,$9,$10,$10) RETURNING id`,
+    // doc-derived 정의 경로 → provenance_kind='code_grouping'(P-V3-4b 붕뜸 해소).
+    const r = await one(db, `INSERT INTO project(repo_id,key,name,description,kind,status,origin,provenance_kind,started_at,ended_at,source_ref,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,'confirmed',$6,'code_grouping',$7,$8,$9,$10,$10) RETURNING id`,
       [repo_id, p.key, p.name, p.description ?? "", p.kind ?? null, actor.type,
        p.started_at ?? null, p.ended_at ?? null, p.source_ref ?? null, now()]);
     await logChange(db, {

@@ -69,11 +69,13 @@ export async function syncProject(repoName: string, payload: unknown, actor: Act
       if (!ex) {
         // INSERT — deterministic key (prov_system prefix avoids collision with doc-derived keys).
         const key = p.key ?? slugKey(`${prov_system}-${external_id}`);
+        // PM-provenance 싱크는 항상 provenance_kind='initiative'(P-V3-4b 붕뜸 해소) — external_id/prov_system
+        //  보유가 곧 initiative 의 정의. (커넥터 payload 의 p.kind 는 별 축인 분류 라벨; provenance_kind 와 무관.)
         const r = await one(client,
-          `INSERT INTO project(repo_id,key,name,description,kind,status,origin,
+          `INSERT INTO project(repo_id,key,name,description,kind,status,origin,provenance_kind,
                                prov_system,prov_instance,external_id,external_url,state,fields,raw,
                                started_at,ended_at,last_synced_at,created_at,updated_at)
-           VALUES($1,$2,$3,$4,$5,'confirmed','source',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$15) RETURNING id`,
+           VALUES($1,$2,$3,$4,$5,'confirmed','source','initiative',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$15) RETURNING id`,
           [repo.id, key, p.name, p.description ?? "", p.kind ?? "initiative",
            prov_system, prov_instance, external_id, p.external_url ?? null, state,
            p.fields != null ? JSON.stringify(p.fields) : null, p.raw != null ? JSON.stringify(p.raw) : null,

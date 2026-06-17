@@ -296,10 +296,13 @@ export async function listProjectsApi(name: string): Promise<ProjectListItem[]> 
     out.push({
       id: p.id, key: p.key, name: p.name, description: p.description, kind: p.kind, status: p.status, origin: p.origin,
       started_at: p.started_at, ended_at: p.ended_at,
-      // ?? null 4종은 null 명시 방출 — pre-migration NULL 컬럼도 키가 있어야 한다(키 생략 금지).
+      // ?? null 5종은 null 명시 방출 — pre-migration NULL 컬럼도 키가 있어야 한다(키 생략 금지).
       state: p.state ?? null, prov_system: p.prov_system ?? null,
       external_url: p.external_url ?? null, last_synced_at: p.last_synced_at ?? null,
       touched_code: c.touched_code, touched_entities: c.touched_entities,
+      // P-V3-4b: 붕뜸 해소 — DB 백필값 우선, NULL 행은 동일 휴리스틱으로 즉석 분류(스키마 마이그 전 폴백).
+      provenance_kind: p.provenance_kind
+        ?? ((p.external_id != null || p.origin === "human") ? "initiative" : "code_grouping"),
     });
   }
   return out;

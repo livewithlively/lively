@@ -70,6 +70,38 @@ export async function init(): Promise<string> {
   ALTER TABLE project ADD COLUMN IF NOT EXISTS raw JSONB;
   ALTER TABLE project ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
   `);
+  // ── P-V3-4b: project '붕뜸' 해소 — provenance_kind 분리(D-PROJ/M-나) ──
+  // 한 project 테이블에 의미가 다른 두 종이 섞여 있던 것(붕뜸)을 명시 컬럼으로 가른다:
+  //   - 'initiative'   = PM 도구(clickup 등) provenance 보유(external_id/prov_system) — 사람이 도구에서
+  //                      선언한 실제 이니셔티브. W(작업) 유닛이 여기에 링크된다.
+  //   - 'code_grouping'= 문서·코드에서 파생(external_id NULL·origin=agent) — 코드유닛 묶음(project_touch).
+  // 물리 분리(별 테이블)가 아니라 분류 컬럼: UNIQUE(repo,key)·project_provenance_uq·project_touch FK 가
+  // 이미 라이브 49행·touch 558을 잡고 있어, 테이블을 쪼개면 cross-table 마이그가 라이브 데이터 수술이 된다.
+  // 대신 (a) 분류 컬럼 + CHECK 로 의미를 못박고, (b) 네임스페이스는 doc-derived 가 PM provenance 접두
+  // ('clickup-' 등)를 못 쓰게 막아(아래 syncProject/propose 가드) 충돌을 원천 차단한다(실측: 현 49행 충돌 0).
+  await pool.query(`ALTER TABLE project ADD COLUMN IF NOT EXISTS provenance_kind TEXT;`);
+  // 백필 — 기존 49행 분류(멱등: provenance_kind 이미 채워진 행은 건드리지 않음).
+  //   initiative: PM provenance(external_id/prov_system) 보유 — origin='source' 4행.
+  //   initiative: provenance 없지만 사람이 직접 선언한 이니셔티브(origin='human') — 1행(예: 'infra-cicd').
+  //     (계획의 4/45 휴리스틱 'origin=agent→code_grouping' 과 정합: human 행은 agent 가 아니라 제외되며,
+  //      doc-파생이 아니라 사람이 선언한 이니셔티브이므로 initiative 가 의미적으로 옳다.)
+  //   code_grouping: doc-derived(external_id NULL AND origin='agent') — 44행.
+  await pool.query(`
+  UPDATE project SET provenance_kind =
+    CASE WHEN external_id IS NOT NULL OR origin='human' THEN 'initiative' ELSE 'code_grouping' END
+  WHERE provenance_kind IS NULL;
+  `);
+  // CHECK — 백필 후에 추가(기존 행이 enum 밖이면 ADD CONSTRAINT 가 실패하므로 순서 강제).
+  //  NULL 허용(미래 pre-migration 행 안전 폴백) + 두 값만.
+  await pool.query(`
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='project'::regclass AND conname='project_provenance_kind_chk') THEN
+      ALTER TABLE project ADD CONSTRAINT project_provenance_kind_chk
+        CHECK (provenance_kind IS NULL OR provenance_kind IN ('initiative','code_grouping'));
+    END IF;
+  END $$;
+  `);
   // Provenance dedup: one project row per (prov_system, prov_instance, external_id).
   // NULLS NOT DISTINCT (PG15+) closes the prov_instance=NULL dup hole; partial WHERE
   // keeps the 45 doc-derived rows (external_id IS NULL) entirely outside the index.
