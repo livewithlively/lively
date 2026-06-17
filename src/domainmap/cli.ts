@@ -19,6 +19,8 @@ import { ingest } from "./core/reconcile.js";
 import { refresh } from "./core/refresh.js";
 import { restore, historyGlobal } from "./core/changelog.js";
 import { domainSet as coreDomainSet } from "./core/domains.js";
+import { refreshFromFilesystem, type RenamePrefix } from "./core/refresh-fs.js";
+import { evaluateDomainStructureDebt } from "./core/domain-debt.js";
 
 async function show(repo: string): Promise<void> {
   const pool = dmPool();
@@ -79,11 +81,39 @@ try {
     if (!pos[0]) { console.error("usage: refresh <repo>  (payload JSON on stdin)"); process.exitCode = 1; }
     else console.log(JSON.stringify(await refresh(pos[0], readFileSync(0, "utf8"), actor), null, 2));
   }
+  else if (cmd === "refresh-scan") {
+    // refresh-scan <repo> <rootPath> [--rename=from:to ...] [--head=<sha>] [--stack=<json>]
+    //   파일시스템 워크 기반 결정론적 구조 리프레시(git diff 가 닿지 못하는 드리프트 복구용).
+    //   저장된 active code_unit path 를 rootPath 기준으로 실재 프로브 → R(rename, 매핑 보존)/
+    //   D(soft-remove + orphan flag) change 를 만들어 기존 refresh() 엔진에 먹인다. 비파괴.
+    //   --rename 은 구→신 prefix 이전 규칙(반복 가능), --head 는 last_refreshed_sha 체크포인트(freshness 해소),
+    //   --stack 은 detected_stack 보정(JSON). 자동화면 --actor-type=agent --actor-id=<id>.
+    if (!pos[0] || !pos[1]) { console.error("usage: refresh-scan <repo> <rootPath> [--rename=from:to ...] [--head=<sha>] [--stack=<json>]"); process.exitCode = 1; }
+    else {
+      const renameVals = rest.filter((a) => a.startsWith("--rename=")).map((a) => a.slice("--rename=".length));
+      const renamePrefixes: RenamePrefix[] = renameVals.map((v) => {
+        const i = v.indexOf(":");
+        if (i < 0) throw new Error(`--rename 형식은 from:to — 받음: ${v}`);
+        return { from: v.slice(0, i), to: v.slice(i + 1) };
+      });
+      const headSha = typeof flags.head === "string" ? flags.head : null;
+      const detectedStack = typeof flags.stack === "string" ? JSON.parse(flags.stack) : undefined;
+      const evalDomainDebt = flags["eval-domain-debt"] === true;
+      const out = await refreshFromFilesystem(pos[0], pos[1], actor, { renamePrefixes, headSha, detectedStack, evalDomainDebt });
+      console.log(JSON.stringify(out, null, 2));
+    }
+  }
+  else if (cmd === "eval-domain-debt") {
+    // eval-domain-debt <repo> — 결정론적 도메인-레벨 구조 부채(G-diff 슬라이스) 자동 평가·upsert.
+    //   vanished(active=0,removed>0)/eroded(active>0,removed>0)를 kind='domain_debt' 로 멱등 생성.
+    if (!pos[0]) { console.error("usage: eval-domain-debt <repo>  [--actor-type=agent --actor-id=<id>]"); process.exitCode = 1; }
+    else console.log(JSON.stringify(await evaluateDomainStructureDebt(pos[0], actor), null, 2));
+  }
   else if (cmd === "show") await show(pos[0]);
   else if (cmd === "list-domains") await listDomains(pos[0]);
   else if (cmd === "history") await historyCmd(flags);
   else if (cmd === "domain-set") await domainSet(pos[0], pos[1], flags, actor);
   else if (cmd === "restore") { const r = await restore(Number(pos[0]), actor); console.log("restored change #" + pos[0], JSON.stringify(r)); }
-  else console.log("commands: init | ingest (<stdin json) | refresh <repo> (<stdin json) | show <repo> | list-domains <repo> | history [--limit=N] | domain-set <repo> <key> --name= --description= --actor=<id> | restore <change_id> --actor=<id>");
+  else console.log("commands: init | ingest (<stdin json) | refresh <repo> (<stdin json) | refresh-scan <repo> <rootPath> [--rename=from:to] [--head=sha] [--stack=json] [--eval-domain-debt] | eval-domain-debt <repo> | show <repo> | list-domains <repo> | history [--limit=N] | domain-set <repo> <key> --name= --description= --actor=<id> | restore <change_id> --actor=<id>");
 } catch (e) { console.error("ERROR:", (e as Error).message); process.exitCode = 1; }
 await endPool();

@@ -30,6 +30,26 @@ export function sanitizeCloneUrl(raw: unknown): string | null {
   }
 }
 
+// 구조층(detected_stack/code_unit/mapping)이 '낡았을 수 있음'을 소비자(인덱스·웹·에이전트)에게
+// 알리는 freshness 신호. PURE·DB-무접촉·git-무접촉(읽기 경로는 싸야 하고 클론 존재에 의존하면 안 됨) —
+// 오직 이미 로드된 repo 행 메타데이터(last_refreshed_sha/last_scan_at)와 active code_unit 수만으로 판정.
+//   - never_refreshed: code_unit 이 있는데 last_refreshed_sha 가 한 번도 안 찍혔다(증분 refresh 미실행).
+//       → 부트스트랩 스냅샷 이후 코드가 움직였어도 구조층이 못 따라왔을 수 있다는 신호.
+//   - empty: 스캔된 적이 없다(code_unit 0) — stale 이 아니라 '미초기화'로 구분(소비자가 다르게 취급).
+//   stale=true 면 소비자는 '구조층이 현 코드와 어긋날 수 있음'을 가정하고 refresh/재스캔을 권고할 수 있다.
+//   (P3 인덱스의 freshness 와 정합: 둘 다 last_refreshed_sha 체크포인트를 단일 진실로 쓴다.)
+export function computeFreshness(repoRow: any, activeCodeUnits: number): {
+  stale: boolean; reason: string; last_refreshed_sha: string | null; last_scan_at: unknown;
+} {
+  const sha = repoRow.last_refreshed_sha ?? null;
+  let reason: string;
+  let stale: boolean;
+  if (activeCodeUnits === 0) { reason = "empty"; stale = false; }
+  else if (sha == null) { reason = "never_refreshed"; stale = true; }
+  else { reason = "checkpoint"; stale = false; }
+  return { stale, reason, last_refreshed_sha: sha, last_scan_at: repoRow.last_scan_at ?? null };
+}
+
 export async function listRepos(): Promise<any[]> {
   const pool = dmPool();
   const repos = await q(pool, "SELECT * FROM repo ORDER BY name");
@@ -42,7 +62,10 @@ export async function listRepos(): Promise<any[]> {
       (SELECT COUNT(*)::int FROM mapping WHERE repo_id=$1) mappings,
       (SELECT COUNT(*)::int FROM debt_finding WHERE repo_id=$1) debts,
       (SELECT COUNT(*)::int FROM change_log WHERE repo_id=$1) changes`, [r.id]);
-    out.push({ name: r.name, clone_url: sanitizeCloneUrl(r.git_url), detected_stack: r.detected_stack ?? {}, totals: t });
+    out.push({
+      name: r.name, clone_url: sanitizeCloneUrl(r.git_url), detected_stack: r.detected_stack ?? {}, totals: t,
+      freshness: computeFreshness(r, t.code_units),
+    });
   }
   return out;
 }
@@ -58,7 +81,7 @@ export async function overview(name: string): Promise<any> {
     (SELECT COUNT(*)::int FROM debt_finding WHERE repo_id=$1) debts,
     (SELECT COUNT(*)::int FROM change_log WHERE repo_id=$1) changes`, [r.id]);
   const scan_runs = await q(pool, "SELECT id,runbook,harness,actor_type,actor_id,started_at,finished_at,summary FROM scan_run WHERE repo_id=$1 ORDER BY id DESC LIMIT 20", [r.id]);
-  return { repo: { name: r.name, detected_stack: r.detected_stack ?? {}, root_path: r.root_path, last_scan_at: r.last_scan_at, last_refreshed_sha: r.last_refreshed_sha ?? null }, totals, scan_runs };
+  return { repo: { name: r.name, detected_stack: r.detected_stack ?? {}, root_path: r.root_path, last_scan_at: r.last_scan_at, last_refreshed_sha: r.last_refreshed_sha ?? null }, totals, scan_runs, freshness: computeFreshness(r, totals.code_units) };
 }
 
 export async function listDomainsApi(name: string): Promise<DomainListItem[]> {
