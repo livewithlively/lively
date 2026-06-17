@@ -4,7 +4,7 @@
 // 모든 쓰기는 org_content_audit(append-only)에 before/after 를 남기고 version 을 올린다(store.ts audit 과 동일 계약,
 //  redactDeep 로 시크릿 제거). 검색은 title/body_md ILIKE + kind/lifecycle/domain 필터(pgvector 의미검색은 후속).
 import { itemsPool } from "../items/store.js";
-import { redactDeep } from "./redact.js";
+import { redactDeep, redactString } from "./redact.js";
 import { embeddingsUsable, embedOne, toVectorLiteral } from "../embeddings/index.js";
 import { logger } from "../log.js";
 
@@ -32,6 +32,20 @@ export interface KnowledgeUnit {
   author: string | null;
   source_ref: string | null;
   as_of: string | null;
+  // 외부출처/동기화 좌표(P-V3-3a 컬럼) — 저작물은 NULL, 커넥터 수집물(A/W)은 채워짐.
+  source: string;                    // 'authored' | 외부 시스템명(clickup/notion/…)
+  external_system: string | null;
+  external_instance: string | null;
+  external_id: string | null;
+  external_url: string | null;
+  occurred_at: string | null;
+  last_synced_at: string | null;
+  parent_external_id: string | null;
+  parent_name: string | null;
+  // ⚠ H1-c: fields/raw 는 커넥터 원본 보존물 — 적재 시 redact 했더라도 pull 경로(getKnowledge)에서
+  //  한 번 더 redactDeep 로 마스킹한다(defense-in-depth: 적재 전 레거시·우회 INSERT 도 새지 않게).
+  fields: Record<string, unknown>;
+  raw: unknown;
   sort: number;
   version: number;
   updated_at: string | null;
@@ -39,9 +53,13 @@ export interface KnowledgeUnit {
 }
 
 export const KNOWLEDGE_COLS =
-  "name, kind, kinds, title, body_md, domain_key, domain_repo, lifecycle, supersedes, confidence, author, source_ref, as_of, sort, version, updated_at, updated_by";
+  "name, kind, kinds, title, body_md, domain_key, domain_repo, lifecycle, supersedes, confidence, author, source_ref, as_of, " +
+  "source, external_system, external_instance, external_id, external_url, occurred_at, last_synced_at, parent_external_id, parent_name, fields, raw, " +
+  "sort, version, updated_at, updated_by";
 
-function mapKnowledge(row: Record<string, unknown>): KnowledgeUnit {
+// mapKnowledgeRaw — DB row → KnowledgeUnit (마스킹 없는 원본). 쓰기경로(upsert 의 필드 보존·감사 before)
+//  전용 — 마스킹된 값을 다시 DB 에 써넣어 원본을 손상시키지 않도록 한다. **외부로 반환하지 않는다**(getKnowledgeRaw 만 사용).
+function mapKnowledgeRaw(row: Record<string, unknown>): KnowledgeUnit {
   return {
     name: row.name as string,
     kind: (row.kind as string) ?? "K",
@@ -56,10 +74,36 @@ function mapKnowledge(row: Record<string, unknown>): KnowledgeUnit {
     author: (row.author as string) ?? null,
     source_ref: (row.source_ref as string) ?? null,
     as_of: (row.as_of as string) ?? null,
+    source: (row.source as string) ?? "authored",
+    external_system: (row.external_system as string) ?? null,
+    external_instance: (row.external_instance as string) ?? null,
+    external_id: (row.external_id as string) ?? null,
+    external_url: (row.external_url as string) ?? null,
+    occurred_at: (row.occurred_at as string) ?? null,
+    last_synced_at: (row.last_synced_at as string) ?? null,
+    parent_external_id: (row.parent_external_id as string) ?? null,
+    parent_name: (row.parent_name as string) ?? null,
+    fields: (row.fields && typeof row.fields === "object") ? (row.fields as Record<string, unknown>) : {},
+    raw: row.raw ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
     updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+// mapKnowledge — 외부 반환용. **H1-c**: 본문/원본 보존 필드(title/body_md/fields/raw)를 mapKnowledgeRaw 위에서
+//  redact 한다 — getKnowledge·listKnowledge·ctx_cat·memory_get 등 **모든 읽기(pull) 경로가 이 한 함수를 거치므로**,
+//  여기 한 곳의 마스킹이 평문 시크릿 유출을 전 표면에서 차단한다(인덱스 비주입 H2 만으론 pull 우회됨).
+//  비-본문 메타(name/kind/source/external_* 등)는 서버 좌표라 마스킹 대상 아님(검색·링크 보존).
+function mapKnowledge(row: Record<string, unknown>): KnowledgeUnit {
+  const u = mapKnowledgeRaw(row);
+  return {
+    ...u,
+    title: u.title == null ? null : redactString(u.title),
+    body_md: redactString(u.body_md),
+    fields: redactDeep(u.fields),
+    raw: u.raw == null ? null : redactDeep(u.raw),
   };
 }
 
@@ -87,6 +131,15 @@ export async function getKnowledge(name: string): Promise<KnowledgeUnit | null> 
     `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit WHERE name=$1`, [name],
   );
   return r.rows[0] ? mapKnowledge(r.rows[0]) : null;
+}
+
+// 내부 전용(비-redact) — 쓰기경로의 before 스냅샷·미변경 필드 보존용. **외부로 반환 금지**(마스킹된 값을 DB 에
+//  되쓰면 원본이 손상된다 → upsert 가 미변경 body 를 보존할 때는 원본을 읽어야 한다). audit 은 별도 redactDeep 적용.
+async function getKnowledgeRaw(name: string): Promise<KnowledgeUnit | null> {
+  const r = await itemsPool.query(
+    `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit WHERE name=$1`, [name],
+  );
+  return r.rows[0] ? mapKnowledgeRaw(r.rows[0]) : null;
 }
 
 export async function listKnowledge(opts: {
@@ -261,10 +314,11 @@ export interface KnowledgeSearchHit {
 }
 
 function mapSearchRow(row: Record<string, unknown>): KnowledgeSearchHit {
+  // H1-c: title/snippet 도 pull 표면(ctx_grep/memory_search) → redactString 으로 마스킹(인덱스 게이트와 동일 정책).
   return {
-    name: row.name as string, title: (row.title as string) ?? null,
+    name: row.name as string, title: row.title == null ? null : redactString(String(row.title)),
     domain_key: (row.domain_key as string) ?? null, updated_at: (row.updated_at as string) ?? null,
-    snippet: String(row.body_md ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+    snippet: redactString(String(row.body_md ?? "")).replace(/\s+/g, " ").trim().slice(0, 240),
   };
 }
 
@@ -374,7 +428,9 @@ function confidenceFor(source: string | undefined): KnowledgeConfidence {
 // upsert — ON CONFLICT(name) version+1(낙관락 관례) + audit + confidence 서버강제. lifecycle 기본 'active'.
 //  undefined 인자는 미변경(이전값 유지), 명시 null 은 클리어 — null 의미를 보존한다.
 export async function upsertKnowledge(unit: KnowledgeInput, actor?: string, source?: string): Promise<KnowledgeUnit> {
-  const before = await getKnowledge(unit.name);
+  // H1-c: before 는 **원본(비-redact)** 으로 읽는다 — 미변경 필드(body_md/title 등)를 마스킹된 값으로
+  //  되쓰지 않게(redact 된 before 를 보존하면 원본 손상). 감사·반환은 아래에서 redact 된 뷰로 다시 읽는다.
+  const before = await getKnowledgeRaw(unit.name);
   const confidence = confidenceFor(source);
   const kind = unit.kind ?? before?.kind ?? "K";
   // 이름 충돌 가드: 섹션(R)과 메모리(비R)는 단일 name PK 를 공유하므로, 기존 단위의 R-여부를 뒤집는
@@ -409,11 +465,13 @@ export async function upsertKnowledge(unit: KnowledgeInput, actor?: string, sour
      unit.as_of === undefined ? (before?.as_of ?? null) : unit.as_of,
      unit.sort ?? before?.sort ?? 0, actor ?? null],
   );
+  // 감사·반환은 redact 된 뷰(getKnowledge) — auditKnowledge 가 다시 redactDeep 하지만 일관성 위해 마스킹 뷰 사용.
   const after = await getKnowledge(unit.name);
   await auditKnowledge(unit.name, before ? "update" : "insert", before, after, actor, source);
 
   // 임베딩 갱신(enabled 시 best-effort) — 본문을 임베딩해 embedding 컬럼에 UPDATE. 실패는 무시(검색이 ILIKE 로
   //  폴백하므로 무해). OFF 면 embeddingsUsable()=false 라 진입조차 안 함(컬럼 없음 → UPDATE 미실행).
+  //  임베딩 입력은 마스킹 무관(검색 회상 품질용) — after.body_md(마스킹)/unit.body_md 중 가용한 것.
   if (embeddingsUsable()) {
     try {
       const vec = await embedOne(after?.body_md ?? unit.body_md ?? "");

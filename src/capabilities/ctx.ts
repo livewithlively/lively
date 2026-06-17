@@ -89,7 +89,7 @@ const ctxLs = coExposed(
     const rows = await listKnowledge({ kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null });
     const entries = rows.slice(0, limit).map((u) => ({
       name: u.name, kind: u.kind, title: u.title, domain_key: u.domain_key,
-      lifecycle: u.lifecycle, updated_at: u.updated_at,
+      lifecycle: u.lifecycle, confidence: u.confidence, updated_at: u.updated_at,
     }));
     return { entries, count: entries.length };
   },
