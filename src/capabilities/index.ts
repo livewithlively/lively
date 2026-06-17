@@ -31,8 +31,8 @@ const me: Capability = {
 const all: Capability[] = [
   me, ...contextCapabilities, ...itemCapabilities, ...mappingCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
-  ...pmCapabilities, // MCP 29툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 4 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
-  ...ctxCapabilities, // ctx_*(P1b) — FS형 컨텍스트(memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts
+  ...pmCapabilities, // MCP 31툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
+  ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts
   ...deliveryCapabilities, // 전달/관리(admin scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰
 ];
 

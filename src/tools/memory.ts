@@ -158,5 +158,5 @@ export function registerMemoryTools(server: McpServer): void {
 
   // ctx_*(P1b) — FS형 컨텍스트(ls/grep/cat/save). memory scope 공유라 여기서 MCP 등록한다.
   //  memory_* 와 달리 capability 레지스트리(src/capabilities/ctx.ts)의 thin 재등록 — 구조화 JSON 반환(parity 대상).
-  registerMcpCapabilities(server, ["ctx_ls", "ctx_grep", "ctx_cat", "ctx_save"]);
+  registerMcpCapabilities(server, ["ctx_ls", "ctx_grep", "ctx_cat", "ctx_save", "ctx_overview", "ctx_set_lifecycle"]);
 }

@@ -12,6 +12,9 @@ import { logger } from "../log.js";
 //  source='mcp'(에이전트 생산) → 'ai', source='web'(사람 편집) → 'human', 그 외/지정 → 'rule'.
 export type KnowledgeConfidence = "ai" | "rule" | "human";
 export type KnowledgeLifecycle = "active" | "rejected" | "superseded";
+// lifecycle 화이트리스트(런타임) — setLifecycle 검증 1곳. schema CHECK(knowledge_unit_lifecycle_chk)와 동치.
+//  ReadonlySet<string> 로 노출(has 는 임의 문자열 입력 검증용) — 멤버 값 자체는 리터럴로 고정.
+export const KNOWLEDGE_LIFECYCLES: ReadonlySet<string> = new Set<KnowledgeLifecycle>(["active", "rejected", "superseded"]);
 
 export interface KnowledgeUnit {
   name: string;
@@ -88,17 +91,63 @@ export async function listKnowledge(opts: {
   kind?: string | null;
   lifecycle?: KnowledgeLifecycle | null;
   domainKey?: string | null;
+  confidence?: string | null;
 } = {}): Promise<KnowledgeUnit[]> {
   const where: string[] = [];
   const params: unknown[] = [];
   if (opts.kind) { params.push(opts.kind); where.push(`kind=$${params.length}`); }
   if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
   if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
+  if (opts.confidence) { params.push(opts.confidence); where.push(`confidence=$${params.length}`); } // Review 피드용
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const r = await itemsPool.query(
     `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit ${clause} ORDER BY sort, name`, params,
   );
   return r.rows.map(mapKnowledge);
+}
+
+// ── overview — kind_registry LEFT JOIN active knowledge_unit 집계(웹 UI 대시보드용). ──
+//  kind_registry 정렬순(sort, kind) 으로 종류별 active 개수·최신 갱신시각, 전체 active 합,
+//  Review 대기(confidence='ai' AND lifecycle='active') 카운트를 한 번에 반환. 소수 쿼리.
+export interface KnowledgeOverviewKind {
+  kind: string; label: string; injection_mode: string;
+  active_count: number; latest_updated_at: string | null;
+}
+export interface KnowledgeOverview {
+  kinds: KnowledgeOverviewKind[];
+  total_active: number;
+  review_pending: number;
+}
+
+export async function overviewKnowledge(): Promise<KnowledgeOverview> {
+  // kind 별 집계 — registry 가 좌측(종류 0건도 행 유지), active 만 집계(LEFT JOIN 조건절).
+  const kindsRes = await itemsPool.query(
+    `SELECT r.kind, r.label, r.injection_mode,
+            COUNT(k.name)::int AS active_count,
+            MAX(k.updated_at) AS latest_updated_at
+       FROM kind_registry r
+       LEFT JOIN knowledge_unit k ON k.kind = r.kind AND k.lifecycle = 'active'
+      GROUP BY r.kind, r.label, r.injection_mode, r.sort
+      ORDER BY r.sort, r.kind`,
+  );
+  // 전체 active + Review 대기(ai·active)를 한 행으로.
+  const aggRes = await itemsPool.query(
+    `SELECT COUNT(*) FILTER (WHERE lifecycle='active')::int AS total_active,
+            COUNT(*) FILTER (WHERE lifecycle='active' AND confidence='ai')::int AS review_pending
+       FROM knowledge_unit`,
+  );
+  const agg = aggRes.rows[0] ?? {};
+  return {
+    kinds: kindsRes.rows.map((row) => ({
+      kind: row.kind as string,
+      label: (row.label as string) ?? "",
+      injection_mode: (row.injection_mode as string) ?? "manual",
+      active_count: Number(row.active_count) || 0,
+      latest_updated_at: (row.latest_updated_at as string) ?? null,
+    })),
+    total_active: Number(agg.total_active) || 0,
+    review_pending: Number(agg.review_pending) || 0,
+  };
 }
 
 // 검색 — org_memory searchMemory 의 ILIKE 백엔드를 knowledge_unit 에 이식 + kind/lifecycle/domain 필터.
@@ -275,6 +324,26 @@ export async function upsertKnowledge(unit: KnowledgeInput, actor?: string, sour
     }
   }
 
+  return after as KnowledgeUnit;
+}
+
+// setLifecycle — lifecycle 만 전환(사람의 사후 반려/복원 — 신뢰우선 모델). version+1 + audit.
+//  upsertKnowledge 의 본문/메타 경로를 타지 않는 좁은 쓰기(다른 필드 불변·confidence 도 그대로 보존).
+//  없는 name 은 '없음' 토큰 throw(wrap→404), 잘못된 lifecycle 은 '허용' 토큰 throw(wrap→400).
+export async function setLifecycle(
+  name: string, lifecycle: string, actor?: string, source?: string,
+): Promise<KnowledgeUnit> {
+  if (!KNOWLEDGE_LIFECYCLES.has(lifecycle)) {
+    throw new Error(`lifecycle 은 ${[...KNOWLEDGE_LIFECYCLES].join("|")} 만 허용됩니다`);
+  }
+  const before = await getKnowledge(name);
+  if (!before) throw new Error(`메모리/유닛 없음: ${name}`);
+  await itemsPool.query(
+    `UPDATE knowledge_unit SET lifecycle=$2, version=version + 1, updated_at=now(), updated_by=$3 WHERE name=$1`,
+    [name, lifecycle, actor ?? null],
+  );
+  const after = await getKnowledge(name);
+  await auditKnowledge(name, "set_lifecycle", before, after, actor, source);
   return after as KnowledgeUnit;
 }
 

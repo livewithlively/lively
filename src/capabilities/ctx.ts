@@ -5,7 +5,7 @@
 // 데이터층은 P1a(org/knowledge.ts) 위임: confidence·lifecycle 은 서버강제(입력 금지), 쓰기는
 //  assertNoHardSecrets + audit + version+1. 입력 검증은 어댑터 경계(MCP=zod input / REST=mount.parse).
 import { z } from "zod";
-import { getKnowledge, listKnowledge, searchKnowledge, upsertKnowledge } from "../org/knowledge.js";
+import { getKnowledge, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
 import { listDomainsApi } from "../domainmap/core/queries.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
@@ -66,6 +66,7 @@ const ctxLs = coExposed(
     kind: z.string().max(2).optional(),
     domain: z.string().max(100).optional(),
     lifecycle: z.enum(["active", "rejected", "superseded"]).optional(),
+    confidence: z.string().max(16).optional(),
     limit: z.number().int().min(1).max(200).default(100),
   },
   [{
@@ -76,15 +77,16 @@ const ctxLs = coExposed(
       kind: qstr(req.query.kind, "kind", 2),
       domain: qstr(req.query.domain, "domain", 100),
       lifecycle: qlifecycle(req.query.lifecycle),
+      confidence: qstr(req.query.confidence, "confidence", 16),
       limit: qint(req.query.limit, "limit", 100, 1, 200),
     }),
   }],
-  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; limit?: number }) => {
+  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; confidence?: string; limit?: number }) => {
     const fromPath = parsePath(input.path);
     const kind = input.kind ?? fromPath.kind ?? null;     // 명시 인자 우선, path 는 보조
     const domainKey = input.domain ?? fromPath.domain ?? null;
     const limit = input.limit ?? 100;
-    const rows = await listKnowledge({ kind, domainKey, lifecycle: input.lifecycle ?? null });
+    const rows = await listKnowledge({ kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null });
     const entries = rows.slice(0, limit).map((u) => ({
       name: u.name, kind: u.kind, title: u.title, domain_key: u.domain_key,
       lifecycle: u.lifecycle, updated_at: u.updated_at,
@@ -193,7 +195,7 @@ const ctxSave = coExposed(
   async (
     input: { note: string; title?: string; kind?: string; kinds?: string[]; domain?: string; name?: string; supersedes?: string },
     user: LivelyUser,
-    _ctx?: CapabilityCtx,
+    ctx?: CapabilityCtx,
   ) => {
     // 신규 쓰기경로 — 평문 시크릿은 저장 자체를 거부(hard-block).
     assertNoHardSecrets(input.note, "note");
@@ -226,7 +228,7 @@ const ctxSave = coExposed(
       }
     }
 
-    // confidence='ai' 서버강제(source='mcp'). lifecycle 은 upsert 가 기본 'active' — 입력 경로 없음.
+    // confidence 는 어댑터 source 로 서버강제(mcp→ai / web→human, knowledge.confidenceFor). lifecycle 은 upsert 기본 'active'.
     const saved = await upsertKnowledge({
       name,
       kind: input.kind ?? "K",
@@ -236,10 +238,54 @@ const ctxSave = coExposed(
       domain_key: domainKey,
       domain_repo: domainKey ? repo : null,
       supersedes: input.supersedes ?? null,
-    }, user.userId, "mcp");
+    }, user.userId, ctx?.source ?? "mcp");
 
     return { saved: { name: saved.name, kind: saved.kind, domain_key: saved.domain_key, lifecycle: saved.lifecycle, version: saved.version } };
   },
 );
 
-export const ctxCapabilities: Capability[] = [ctxLs, ctxGrep, ctxCat, ctxSave];
+// ── ctx_overview — kind_registry × active knowledge_unit 집계(웹 UI 대시보드용). overviewKnowledge 위임. ──
+const ctxOverview = coExposed(
+  "ctx_overview",
+  "컨텍스트 개요(overview)",
+  "통합 지식스토어를 종류(kind)별로 집계한다 — 각 종류의 active 단위 수·최신 갱신시각, 전체 active 합, " +
+    "Review 대기 수(에이전트 생산 active = confidence 'ai'). 대시보드/리뷰 진입점.",
+  {},
+  [{
+    method: "GET",
+    paths: ["/api/ui/ctx/overview"],
+    parse: () => ({}),
+  }],
+  async () => overviewKnowledge(),
+);
+
+// ── ctx_set_lifecycle — lifecycle 만 전환(사람의 사후 반려/복원 — 신뢰우선 모델). setLifecycle 위임. ──
+//  없는 name → setLifecycle 이 '없음' throw(REST=404 / MCP isError), 잘못된 lifecycle 은 zod/parse 단계에서 거부(400).
+const ctxSetLifecycle = coExposed(
+  "ctx_set_lifecycle",
+  "컨텍스트 상태전환(set-lifecycle)",
+  "한 지식단위의 lifecycle 만 전환한다(active=유효·rejected=반려·superseded=대체). 본문/메타는 불변 — " +
+    "사람이 에이전트 생산물을 사후 반려하거나 복원하는 경로(신뢰우선: 저장은 무게이트, 반려는 사후).",
+  {
+    name: z.string().min(1).max(64),
+    lifecycle: z.enum(["active", "rejected", "superseded"]),
+  },
+  [{
+    method: "POST",
+    paths: ["/api/ui/ctx/set-lifecycle"],
+    parse: (req) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const name = qstr(body.name, "name", 64);
+      if (!name) throw new HttpError(400, "name 필수");
+      const lifecycle = qlifecycle(body.lifecycle); // 화이트리스트 위반 시 '허용' 400
+      if (!lifecycle) throw new HttpError(400, "lifecycle 필수");
+      return { name, lifecycle };
+    },
+  }],
+  async (input: { name: string; lifecycle: Lifecycle }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const saved = await setLifecycle(input.name, input.lifecycle, user.userId, ctx?.source ?? "web");
+    return { name: saved.name, lifecycle: saved.lifecycle, version: saved.version };
+  },
+);
+
+export const ctxCapabilities: Capability[] = [ctxLs, ctxGrep, ctxCat, ctxSave, ctxOverview, ctxSetLifecycle];
