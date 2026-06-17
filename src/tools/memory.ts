@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { getMemory, upsertMemory, searchMemory } from "../org/store.js";
 import { listDomainsApi } from "../domainmap/core/queries.js";
+import { registerMcpCapabilities } from "../capabilities/index.js";
 
 // 조직 공유 메모리(org_memory) MCP 표면 — 하네스 네이티브 메모리를 조직이 공유(에이전트 생산·소비, 단일 풀).
 // 진실원천=items DB(org_memory). 인덱스(제목·요약)는 발행 시 항상-주입 컨텍스트로, 본문은 memory_search pull.
@@ -154,4 +155,8 @@ export function registerMemoryTools(server: McpServer): void {
       return { content: [{ type: "text", text: `${head}\n\n${m.body_md}` }] };
     },
   );
+
+  // ctx_*(P1b) — FS형 컨텍스트(ls/grep/cat/save). memory scope 공유라 여기서 MCP 등록한다.
+  //  memory_* 와 달리 capability 레지스트리(src/capabilities/ctx.ts)의 thin 재등록 — 구조화 JSON 반환(parity 대상).
+  registerMcpCapabilities(server, ["ctx_ls", "ctx_grep", "ctx_cat", "ctx_save"]);
 }

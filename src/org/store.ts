@@ -5,6 +5,10 @@ import crypto from "node:crypto";
 import { itemsPool } from "../items/store.js";
 import { isScope } from "../capabilities/scopes.js";
 import { redactDeep } from "./redact.js";
+import {
+  getKnowledge, listKnowledge, searchKnowledge, upsertKnowledge, removeKnowledge,
+  type KnowledgeUnit,
+} from "./knowledge.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -113,20 +117,21 @@ export async function updateOrgProfile(
   return after;
 }
 
-// ── org_content (섹션 markdown) ──
+// ── org_content (섹션 markdown) — knowledge_unit kind='R' 위 얇은 래퍼(캐노니컬 단일진실). ──
+//  매핑: section ↔ name(=section), kind='R'. 반환 shape(OrgSection)은 불변(소비자 무수정).
+function knowledgeToSection(k: KnowledgeUnit): OrgSection {
+  return { section: k.name, body_md: k.body_md, version: k.version, updated_at: k.updated_at, updated_by: k.updated_by };
+}
+
 export async function getSection(section: string): Promise<OrgSection | null> {
-  const r = await itemsPool.query(
-    `SELECT section, body_md, version, updated_at, updated_by FROM org_content WHERE section=$1`,
-    [section],
-  );
-  return (r.rows[0] as OrgSection) ?? null;
+  const k = await getKnowledge(section);
+  return k && k.kind === "R" ? knowledgeToSection(k) : null;
 }
 
 export async function listSections(): Promise<OrgSection[]> {
-  const r = await itemsPool.query(
-    `SELECT section, body_md, version, updated_at, updated_by FROM org_content ORDER BY section`,
-  );
-  return r.rows as OrgSection[];
+  const rows = await listKnowledge({ kind: "R" });
+  // 기존 계약: section 이름 정렬(listKnowledge 는 sort, name — R 은 시드 sort 동일이라 name 정렬과 동치).
+  return rows.map(knowledgeToSection).sort((a, b) => a.section.localeCompare(b.section));
 }
 
 export async function updateSection(
@@ -135,18 +140,8 @@ export async function updateSection(
   actor?: string,
   source?: string,
 ): Promise<OrgSection> {
-  const before = await getSection(section);
-  await itemsPool.query(
-    `INSERT INTO org_content(section, body_md, version, updated_at, updated_by)
-       VALUES($1,$2,1,now(),$3)
-     ON CONFLICT (section) DO UPDATE SET
-       body_md = EXCLUDED.body_md, version = org_content.version + 1,
-       updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [section, body_md, actor ?? null],
-  );
-  const after = await getSection(section);
-  await audit("org_content", section, before ? "update" : "insert", before, after, actor, source);
-  return after as OrgSection;
+  const k = await upsertKnowledge({ name: section, kind: "R", body_md }, actor, source);
+  return knowledgeToSection(k);
 }
 
 // ── org_member ──
@@ -257,43 +252,35 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
   }
 }
 
-// ── org_memory — 단일 공유 풀(에이전트 생산·소비). member/internal 분리 폐기(2026-06-17). ──
-const MEMORY_COLS = `name, title, body_md, sort, domain_key, domain_repo, version, updated_at, updated_by`;
+// ── org_memory — 단일 공유 풀(에이전트 생산·소비). knowledge_unit kind<>'R' 위 얇은 래퍼(캐노니컬). ──
+//  매핑: memory ↔ kind<>'R'(메모는 kind='K' 로 신규 생성). 반환 shape(OrgMemory)은 불변(소비자 무수정).
+//  member/internal 분리 폐기(2026-06-17).
+function knowledgeToMemory(k: KnowledgeUnit): OrgMemory {
+  return {
+    name: k.name, title: k.title, body_md: k.body_md, sort: k.sort,
+    domain_key: k.domain_key, domain_repo: k.domain_repo,
+    version: k.version, updated_at: k.updated_at, updated_by: k.updated_by,
+  };
+}
 
 export async function listMemory(): Promise<OrgMemory[]> {
-  const r = await itemsPool.query(
-    `SELECT ${MEMORY_COLS} FROM org_memory ORDER BY sort, name`,
-  );
-  return r.rows as OrgMemory[];
+  // 메모리 = 규칙(R)이 아닌 전 종류. listKnowledge 는 sort, name 정렬(기존 org_memory 계약과 동일).
+  const rows = await listKnowledge();
+  return rows.filter((k) => k.kind !== "R").map(knowledgeToMemory);
 }
 
 export async function getMemory(name: string): Promise<OrgMemory | null> {
-  const r = await itemsPool.query(
-    `SELECT ${MEMORY_COLS} FROM org_memory WHERE name=$1`, [name],
-  );
-  return (r.rows[0] as OrgMemory) ?? null;
+  const k = await getKnowledge(name);
+  return k && k.kind !== "R" ? knowledgeToMemory(k) : null;
 }
 
-// memory_search 백엔드 — title/body_md ILIKE + domain 필터(pgvector 의미검색은 후속). 본문은 스니펫만.
+// memory_search 백엔드 — searchKnowledge(ILIKE)에 위임 + 규칙(R) 제외. 반환행은 기존과 동일.
 export async function searchMemory(opts: {
   query: string; domainKey?: string | null; limit?: number;
 }): Promise<{ name: string; title: string | null; domain_key: string | null; snippet: string; updated_at: string | null }[]> {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  const like = `%${opts.query.replace(/[\\%_]/g, (m) => "\\" + m)}%`; // LIKE 메타문자 이스케이프
-  params.push(like); where.push(`(title ILIKE $${params.length} OR body_md ILIKE $${params.length})`); // 기본 escape=백슬래시
-  if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
-  params.push(Math.min(Math.max(opts.limit ?? 10, 1), 50));
-  const r = await itemsPool.query(
-    `SELECT name, title, domain_key, body_md, updated_at FROM org_memory
-       WHERE ${where.join(" AND ")} ORDER BY updated_at DESC NULLS LAST LIMIT $${params.length}`,
-    params,
-  );
-  return r.rows.map((row: Record<string, unknown>) => ({
-    name: row.name as string, title: (row.title as string) ?? null,
-    domain_key: (row.domain_key as string) ?? null, updated_at: (row.updated_at as string) ?? null,
-    snippet: String(row.body_md ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
-  }));
+  // 메모리 = 규칙(R) 제외 전 종류. searchKnowledge 가 서버사이드 kindNot 으로 R 을 빼고 정상 top-N 반환
+  //  (구 후필터 방식은 R 이 상위 50건을 차지하면 메모리가 limit 미만으로 반환되는 회귀가 있었음 — 제거).
+  return searchKnowledge({ query: opts.query, domainKey: opts.domainKey ?? null, kindNot: "R", lifecycle: null, limit: opts.limit });
 }
 
 export interface MemoryInput {
@@ -306,30 +293,18 @@ export interface MemoryInput {
 }
 
 export async function upsertMemory(mem: MemoryInput, actor?: string, source?: string): Promise<OrgMemory> {
-  const before = await getMemory(mem.name);
-  await itemsPool.query(
-    `INSERT INTO org_memory(name, title, body_md, sort, domain_key, domain_repo, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,1,now(),$7)
-     ON CONFLICT (name) DO UPDATE SET
-       title=EXCLUDED.title, body_md=EXCLUDED.body_md, sort=EXCLUDED.sort,
-       domain_key=EXCLUDED.domain_key, domain_repo=EXCLUDED.domain_repo,
-       version=org_memory.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [mem.name, mem.title ?? before?.title ?? null, mem.body_md ?? before?.body_md ?? "",
-     mem.sort ?? before?.sort ?? 0,
-     mem.domain_key === undefined ? (before?.domain_key ?? null) : mem.domain_key,
-     mem.domain_repo === undefined ? (before?.domain_repo ?? null) : mem.domain_repo,
-     actor ?? null],
-  );
-  const after = await getMemory(mem.name);
-  await audit("org_memory", mem.name, before ? "update" : "insert", before, after, actor, source);
-  return after as OrgMemory;
+  const k = await upsertKnowledge({
+    name: mem.name, kind: "K", title: mem.title, body_md: mem.body_md, sort: mem.sort,
+    domain_key: mem.domain_key, domain_repo: mem.domain_repo,
+  }, actor, source);
+  return knowledgeToMemory(k);
 }
 
 export async function removeMemory(name: string, actor?: string, source?: string): Promise<void> {
-  const before = await getMemory(name);
-  if (!before) return;
-  await itemsPool.query(`DELETE FROM org_memory WHERE name=$1`, [name]);
-  await audit("org_memory", name, "delete", before, null, actor, source);
+  // 규칙(R)이 아닌 단위만 메모리로 취급해 삭제(잘못된 종류 삭제 방지).
+  const k = await getKnowledge(name);
+  if (!k || k.kind === "R") return;
+  await removeKnowledge(name, actor, source);
 }
 
 // ── auth_token (DB 기반 bearer) ──

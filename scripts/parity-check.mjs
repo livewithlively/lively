@@ -345,17 +345,62 @@ await report("dm(h) 무토큰 쓰기 401", async () => {
   await res.text().catch(() => "");
 });
 
+// ════════ ctx_*(P1b) — FS형 컨텍스트. 읽기 3종 co-exposed deep-equal(REST=MCP 동일 JSON),
+//          쓰기 ctx_save 는 검증에러 경로만(note 누락 → 양 어댑터 동일 에러·무쓰기). ════════
+// ls: 전 풀 메타 목록(데이터 유무 무관 동일). limit/lifecycle 변형으로 어댑터 경계 매핑 검증.
+await expectEqual("ctx_ls ↔ GET /api/ui/ctx/ls", ["ctx_ls", { limit: 50 }], "/api/ui/ctx/ls?limit=50");
+await expectEqual("ctx_ls{kind:R,lifecycle:active} ↔ /api/ui/ctx/ls?kind&lifecycle",
+  ["ctx_ls", { kind: "R", lifecycle: "active", limit: 50 }], "/api/ui/ctx/ls?kind=R&lifecycle=active&limit=50");
+// path 접두 파생(D/<domain>/) — 명시 인자 없이 path 만으로 kind/domain 동일 파생.
+await expectEqual("ctx_ls{path:'K/'} ↔ /api/ui/ctx/ls?path=K/",
+  ["ctx_ls", { path: "K/", limit: 50 }], `/api/ui/ctx/ls?path=${encodeURIComponent("K/")}&limit=50`);
+
+// grep: 부분일치 스니펫(데이터 유무 무관 동일 — 0건이면 양쪽 {matches:[]}).
+await expectEqual("ctx_grep ↔ GET /api/ui/ctx/grep",
+  ["ctx_grep", { query: "피벗", limit: 5 }], `/api/ui/ctx/grep?query=${encodeURIComponent("피벗")}&limit=5`);
+await expectEqual("ctx_grep{kind} ↔ /api/ui/ctx/grep?kind",
+  ["ctx_grep", { query: "도메인", kind: "R", limit: 5 }], `/api/ui/ctx/grep?query=${encodeURIComponent("도메인")}&kind=R&limit=5`);
+
+// cat: 없는 name → 양 어댑터 404/isError(부재 계약, get_item 정합 — REST 404, MCP isError).
+await report("ctx_cat{없는 name} — 양 어댑터 404/isError", async () => {
+  const m = await mcp("ctx_cat", { name: "__parity_absent__" });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  const r = await rest("/api/ui/ctx/cat?name=__parity_absent__");
+  assert.strictEqual(r.status, 404, `REST ${r.status}: ${JSON.stringify(r.json)}`);
+  assert.ok((r.json?.error ?? "").includes("없음"), `REST 메시지에 '없음' 없음: ${r.json?.error}`);
+});
+
+// ctx_save 검증에러 — note 누락. MCP=zod isError, REST=mount.parse 400 "note 필수"(무쓰기·무 audit).
+await report("ctx_save(a) note 누락 — 양 어댑터 거부(무쓰기)", async () => {
+  const m = await mcp("ctx_save", { title: "no body" });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  const r = await rest("/api/ui/ctx/save", { method: "POST", body: JSON.stringify({ title: "no body" }) });
+  assert.strictEqual(r.status, 400, `REST ${r.status}: ${JSON.stringify(r.json)}`);
+  assert.ok((r.json?.error ?? "").includes("note"), `REST 메시지에 'note' 없음: ${r.json?.error}`);
+});
+
+// ctx_save 이름충돌 — 기존 R 섹션(managed-policy)명으로 저장 시 가드 거부. MCP isError / REST 400(무쓰기·무 audit).
+//  (knowledge_unit 에 managed-policy(R) 가 마이그로 존재 — initOrgSchema 가 부팅 시 보장.)
+await report("ctx_save(b) 섹션명 충돌 — 양 어댑터 거부(무쓰기)", async () => {
+  const m = await mcp("ctx_save", { name: "managed-policy", note: "__parity_collision__" });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  const r = await rest("/api/ui/ctx/save", { method: "POST", body: JSON.stringify({ name: "managed-policy", note: "__parity_collision__" }) });
+  assert.strictEqual(r.status, 400, `REST ${r.status}: ${JSON.stringify(r.json)}`);
+  assert.ok((r.json?.error ?? "").includes("충돌"), `REST 메시지에 '충돌' 없음: ${r.json?.error}`);
+});
+
 // ════════ tools/list — 최종 MCP 표면 보고 ════════
-// 표면 동결: 아래 22개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 22툴') + src/tools/* 등록 배열.
+// 표면 동결: 아래 29개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
+// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 29툴') + src/tools/* 등록 배열.
 // 표면을 의도적으로 바꿀 때는 freeze 주석과 이 배열을 같은 커밋에서 함께 갱신한다.
 const EXPECTED_MCP_SURFACE = [
-  "context_overview", "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
+  "context_overview", "ctx_cat", "ctx_grep", "ctx_ls", "ctx_save",
+  "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
   "domain_deprecate", "domain_get", "domain_list", "get_item", "list_unmapped",
   "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
   "propose_domain", "repo_list", "search_items",
-]; // 25 (06-17 memory_get 추가 — 전문 조회)
+]; // 29 (06-17 ctx_* 4종 추가 — P1b FS형 컨텍스트; memory_get 포함)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -363,7 +408,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(25)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(29)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 

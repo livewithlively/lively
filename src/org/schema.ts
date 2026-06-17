@@ -277,4 +277,120 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS token_hash_prefix TEXT;
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS req_ip TEXT;
   `);
+
+  // ════════ P1a 통합 지식스토어(데이터층) — knowledge_unit 단일 캐노니컬 ════════
+  // org_memory(메모) + org_content(규칙/페르소나)을 하나의 지식 단위 테이블로 통합. 기존 store 함수는
+  //  이 위 얇은 래퍼로 재구현(시그니처 불변, 듀얼라이트 없음). 임베딩/pgvector 는 이번 범위 밖(ILIKE 검색만).
+  //  원본 org_memory/org_content 는 보존(드롭·수정 금지 — 롤백용). 부팅 시 1회 비파괴 복사로 캐노니컬에 채운다.
+
+  // ── kind_registry — 지식 종류 분류 + 주입 정책 메타. 12 kind 시드(아래). ──
+  // injection_mode = 멤버 컨텍스트에 어떻게 노출되는가(enforced/always/recalled/manual/query/digest).
+  //  domain_scoped = domainmap 도메인 귀속을 갖는 종류인지. cardinality = 한 종류당 한 단위(one)인지 다수(many)인지.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS kind_registry(
+      kind TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      injection_mode TEXT NOT NULL DEFAULT 'manual',
+      audience TEXT,
+      cardinality TEXT NOT NULL DEFAULT 'many',
+      domain_scoped BOOLEAN NOT NULL DEFAULT false,
+      description TEXT NOT NULL DEFAULT '',
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='kind_registry'::regclass AND conname='kind_registry_mode_chk') THEN
+        ALTER TABLE kind_registry ADD CONSTRAINT kind_registry_mode_chk
+          CHECK (injection_mode IN ('enforced','always','recalled','manual','query','digest'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='kind_registry'::regclass AND conname='kind_registry_card_chk') THEN
+        ALTER TABLE kind_registry ADD CONSTRAINT kind_registry_card_chk CHECK (cardinality IN ('one','many'));
+      END IF;
+    END $$;
+  `);
+
+  // ── knowledge_unit — 통합 지식 단위(캐노니컬). name PK(슬러그). kind=주분류, kinds=다중분류(예약, 기본 []). ──
+  //  lifecycle: active(유효) | rejected(폐기) | superseded(supersedes 가 가리키는 신판으로 대체됨).
+  //  confidence: ai(에이전트 생산) | rule(규칙 파생) | human(사람 확정) — upsert 에서 source 로 서버강제.
+  //  domain_key/domain_repo: domainmap 약결합(FK 아님). embedding 컬럼은 pgvector 미가용이라 이번 범위 밖.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_unit(
+      name TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'K',
+      kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
+      title TEXT,
+      body_md TEXT NOT NULL DEFAULT '',
+      domain_key TEXT,
+      domain_repo TEXT,
+      lifecycle TEXT NOT NULL DEFAULT 'active',
+      supersedes TEXT,
+      confidence TEXT NOT NULL DEFAULT 'human',
+      author TEXT,
+      source_ref TEXT,
+      as_of TIMESTAMPTZ,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kind_chk') THEN
+        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kind_chk
+          CHECK (kind IN ('F','D','K','R','H','S','G','A','W','M','L','Z'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_lifecycle_chk') THEN
+        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_lifecycle_chk
+          CHECK (lifecycle IN ('active','rejected','superseded'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_confidence_chk') THEN
+        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_confidence_chk
+          CHECK (confidence IN ('ai','rule','human'));
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS knowledge_unit_kind_idx ON knowledge_unit(kind);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_lifecycle_idx ON knowledge_unit(lifecycle);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_idx ON knowledge_unit(domain_key);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_updated_idx ON knowledge_unit(updated_at DESC);
+  `);
+
+  // ── 12 kind 시드(ON CONFLICT DO NOTHING — 멱등). cardinality 전부 'many'. ──
+  await itemsPool.query(`
+    INSERT INTO kind_registry(kind, label, injection_mode, domain_scoped, audience, cardinality) VALUES
+      ('R','Rule/Policy/Persona','enforced',false,'context','many'),
+      ('K','Knowledge note','recalled',false,'memory','many'),
+      ('D','Domain knowledge','recalled',true,'memory','many'),
+      ('F','Fact','recalled',false,'memory','many'),
+      ('H','How-to/Runbook','recalled',true,'memory','many'),
+      ('S','Schema/Structure','digest',true,'memory','many'),
+      ('G','Glossary/Graph','digest',true,'memory','many'),
+      ('A','Artifact','query',false,'memory','many'),
+      ('W','Work/Task','query',false,'memory','many'),
+      ('M','Memo','manual',false,'memory','many'),
+      ('L','Link/Ref','manual',false,'memory','many'),
+      ('Z','Misc','manual',false,'memory','many')
+    ON CONFLICT (kind) DO NOTHING;
+  `);
+
+  // ── 1회 비파괴 데이터복사(멱등) — 기존 org_memory/org_content → knowledge_unit. ──
+  //  INSERT ... SELECT ... ON CONFLICT(name) DO NOTHING 라 재실행해도 무피해(이미 있는 name 은 건드리지 않음).
+  //  원본 테이블은 보존(드롭·수정 금지 — 롤백용). version/updated_at/updated_by 보존, confidence='human', lifecycle='active'.
+  //  org_memory → kind='K'(지식노트). domain_key/domain_repo 도 함께 복사.
+  await itemsPool.query(`
+    INSERT INTO knowledge_unit(name, kind, title, body_md, domain_key, domain_repo, lifecycle, confidence, sort, version, updated_at, updated_by)
+      SELECT name, 'K', title, body_md, domain_key, domain_repo, 'active', 'human', sort, version, updated_at, updated_by
+        FROM org_memory
+    ON CONFLICT (name) DO NOTHING;
+  `);
+  //  org_content('managed-policy','org-defaults') → kind='R'(규칙/정책/페르소나). name=section.
+  await itemsPool.query(`
+    INSERT INTO knowledge_unit(name, kind, title, body_md, lifecycle, confidence, version, updated_at, updated_by)
+      SELECT section, 'R', NULL, body_md, 'active', 'human', version, updated_at, updated_by
+        FROM org_content WHERE section IN ('managed-policy','org-defaults')
+    ON CONFLICT (name) DO NOTHING;
+  `);
 }
