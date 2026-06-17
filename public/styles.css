@@ -247,11 +247,54 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .detail-title { font-size: 20px; font-weight: 800; color: var(--ink); margin: 0 0 6px; line-height: 1.35; }
 .detail-meta { font-size: 13px; font-weight: 600; color: var(--muted-2); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .sec-label { font-size: 13px; font-weight: 700; color: var(--muted-head); margin: 22px 0 8px; }
+.sec-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .body-text {
   white-space: pre-wrap; word-break: break-word;
   font-size: 15px; line-height: 1.55; color: var(--ink-sub); margin: 0;
   font-family: inherit;
 }
+
+/* ── 렌더된 마크다운 본문 — DESIGN 절제(기존 토큰만, 새 컬러 없음). ── */
+.md-rendered { font-size: 15px; line-height: 1.6; color: var(--ink-sub); word-break: break-word; }
+.md-rendered > .md > :first-child { margin-top: 0; }
+.md-rendered > .md > :last-child { margin-bottom: 0; }
+.md-p { margin: 0 0 12px; }
+.md-h { color: var(--ink); font-weight: 800; line-height: 1.35; margin: 22px 0 8px; }
+.md-h1 { font-size: 19px; }
+.md-h2 { font-size: 17px; }
+.md-h3 { font-size: 15.5px; }
+.md-h4, .md-h5, .md-h6 { font-size: 14px; color: var(--ink-sub); }
+.md-rendered strong { font-weight: 800; color: var(--ink); }
+.md-rendered em { font-style: italic; }
+.md-code {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.88em; background: var(--bg-tint); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; word-break: break-all;
+}
+.md-pre {
+  background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin: 0 0 12px; overflow: auto; white-space: pre;
+}
+.md-pre code {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.55; color: var(--ink); background: none; border: 0; padding: 0;
+}
+.md-list { margin: 0 0 12px; padding-left: 22px; }
+.md-list li { margin: 2px 0; }
+.md-list .md-list { margin-bottom: 0; }
+.md-quote {
+  margin: 0 0 12px; padding: 4px 14px; border-left: 3px solid var(--line-note);
+  color: var(--ink-sub); background: var(--bg-note); border-radius: 0 8px 8px 0;
+}
+.md-quote > :last-child { margin-bottom: 0; }
+.md-hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+.md-link { color: var(--blue); text-decoration: underline; word-break: break-all; }
+.md-link:hover { color: var(--blue-deep); }
+.md-table { border-collapse: collapse; margin: 0 0 12px; font-size: 13.5px; display: block; overflow-x: auto; }
+.md-table th, .md-table td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; vertical-align: top; }
+.md-table th { background: var(--bg-tint); font-weight: 700; color: var(--ink); }
+.md-raw-toggle { flex: none; }
+.unit-body-raw { margin-top: 0; }
 details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted-head); margin-top: 20px; }
 .fields-table { margin-top: 8px; font-size: 12.5px; color: var(--ink-sub); border-collapse: collapse; }
 .fields-table td { padding: 3px 14px 3px 0; vertical-align: top; word-break: break-all; }
