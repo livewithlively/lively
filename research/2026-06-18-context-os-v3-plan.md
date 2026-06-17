@@ -42,4 +42,7 @@
 
 ## 진행 로그
 - **P-V3-1 주입 배선 ✅ (커밋 3b2b21f, :8080 라이브)** — 훅 소스는 이미 org_preview 인덱스 fetch하나 설치본(06-12) stale→재발행으로 배선 활성. redact 출력게이트(materialize.ts=정적/라이브/웹 단일소스 + publish.ts, 마스킹·fail-open, 합성시크릿 5종 [REDACTED] 실증). org 테스트 선작성(materialize.test 6). 검증: 블로커0, preview·훅 stdout 둘다 Knowledge Index 주입 실증, 멱등 byte-identical, test100·parity54·31툴 불변. 잔여(계획정합): H1-c pull redact→P-V3-3, 오프라인 context.md 인덱스→P-V3-5(진실원천 이원화 화해와 함께).
-- (P-V3-2 착수: ground-truth 스키마+시드 + 런북 빌더 + 웹 #/learn + 하드코딩 제거 + G/kinds 정합)
+- **P-V3-2 ground-truth+런북+웹 ✅ (커밋 8c578ac, :8080 라이브)** — kind_registry +criteria/storage/delivery·12 kind 정의 + data_source(4소스·discord=dropped) + kinds[] CHECK(L-가) + 런북 빌더→knowledge-types.md(168줄) + 웹 #/learn(12카드+소스표·XSS실증) + 하드코딩 RECALLED_KINDS→registry 조회. G=Glossary/Graph 3곳 일관(L-라, debt=domainmap federate). non-stale 실증. /api/ui/learn=12kind·4소스 라이브. test·parity 55·31툴 불변. 블로커0.
+- **P-V3-3 단일스토어 데이터층 = 3분할**(라이브 데이터 수술 위험 분산): 3a 스키마 확장(additive)·3b 커넥터 적재 전환·3c 읽기 전환+item_legacy. item 비파괴 보존 끝까지.
+- **P-V3-3a 스키마 확장 ✅ (커밋 예정, DB 라이브 적용됨)** — knowledge_unit +12컬럼(source/external_system·instance·id·url/sync_state/occurred·last_synced/parent_*/fields/raw, 43행 source='authored' 백필) + 6인덱스(external 부분UNIQUE 멱등키·source·occurred·parent·title/body trgm GIN) + observed enum(H2: 인덱스 영구제외·overview observed_count 분리·검토큐 제외 실증) + 조인테이블 knowledge_unit_domain/project(다중귀속·cascade·CHECK) + pg_trgm v1.6. 멱등 3x·43행/12kind 무손상·DB통합테스트 7. parity 55·31툴 불변. 잔여(계획정합): H1-c pull redact·external_instance NULL 가드·app.js confidenceDot=P-V3-3b. (DB-스키마 --check CLI 부재 → schema-p3a.test 가 information_schema/pg_constraint 명시검사로 M-다 동치.)
+- (P-V3-3b 착수: 커넥터 적재 전환 + item→knowledge_unit 마이그(idempotent·비파괴·redact H1·observed·다중도메인 보존) + H1-c pull redact + app.js observed UI)

@@ -6,6 +6,7 @@
 // 멱등 마이그레이션 패턴은 items/store.ts 와 동일: CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS
 //  + pg_constraint 프로브로 CHECK enum 멱등 적용. 부팅 시 1회(비치명적) 호출.
 import { itemsPool } from "../items/store.js";
+import { logger } from "../log.js";
 
 export async function initOrgSchema(): Promise<void> {
   // ── org_profile — 단일 행(id=1): 조직 표시명 + 게이트웨이 주소. ──
@@ -377,10 +378,17 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_lifecycle_chk
           CHECK (lifecycle IN ('active','rejected','superseded'));
       END IF;
+      -- H2(P-V3-3a): confidence 에 'observed' 추가 — 커넥터 수집물(A/W)의 신뢰축. 큐레이션된 ai/rule/human 과
+      --  의미가 다르다: observed = '관측된 외부 사실'(주입 인덱스 영구 제외 + overview 별도 카운트 + 검토 큐 제외,
+      --  배선은 knowledge.ts/materialize.ts). 멱등: 구 3값 CHECK(=observed 미포함)면 DROP 후 4값 재생성, 이미
+      --  observed 포함이면 no-op(매 부팅 DROP/ADD 락 churn 회피). fresh DB 면 바로 4값. 기존 43행(ai/rule/human)
+      --  은 4값의 부분집합이라 무손상(재검증 통과). item_domain_state_chk 멱등 패턴과 동일(pg_get_constraintdef 프로브).
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_confidence_chk') THEN
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_confidence_chk'
+                       AND pg_get_constraintdef(oid) LIKE '%observed%') THEN
+        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_confidence_chk;
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_confidence_chk
-          CHECK (confidence IN ('ai','rule','human'));
+          CHECK (confidence IN ('ai','rule','human','observed'));
       END IF;
       -- L-가(P-V3-2): kinds[] 다중분류 가드 — 모든 원소가 유효 kind 문자여야 한다(17/43 실사용). 빈 배열은 통과.
       --  CHECK 는 서브쿼리 불가 → jsonb 부분집합 연산자 <@ 로 검증: kinds 가 12 kind 화이트리스트 배열의 부분집합인지.
@@ -398,6 +406,111 @@ export async function initOrgSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS knowledge_unit_domain_idx ON knowledge_unit(domain_key);
     CREATE INDEX IF NOT EXISTS knowledge_unit_updated_idx ON knowledge_unit(updated_at DESC);
   `);
+
+  // ════════ P-V3-3a 단일스토어 스키마 확장(가산적) — knowledge_unit 이 커넥터 활동(kind=A/W)을 흡수할 ════════
+  //  컬럼/배선만 준비한다. **실제 데이터 적재·읽기경로 전환·item→item_legacy 리네임은 P-V3-3b/3c**(여기서 안 함).
+  //  발견 A 의 item(prov_*/external_id/parent/fields/raw/2시간축) 풍부함을 흡수할 컬럼 세트를 비파괴로 추가.
+  //  전부 ADD COLUMN IF NOT EXISTS 라 기존 43행/12 kind 에 영향 0(신 컬럼은 NULL/기본값으로 채워짐).
+
+  // ── knowledge_unit 외부출처/동기화/스레드/원본보존 컬럼(커넥터 적재 흡수용). ──
+  //  source: 단위의 출처 분류 — 'authored'(저작물: 기존 R/K/메모, 기본값) | 외부 시스템명(커넥터 적재 A/W).
+  //  external_*: 동기화물의 출처 좌표(system/instance/id/url). item 의 prov_system/prov_instance/external_id/external_url 대응.
+  //  occurred_at: 사건 발생시각, last_synced_at: 마지막 동기화 시각 — as_of/updated_at 과 더불어 '2시간축'(발생 vs 반영).
+  //  parent_external_id + parent_name: 스레드/서브태스크 자기참조(parent_external_id=외부좌표, parent_name=내부 PK 연결).
+  //  fields/raw: 커넥터 원본 보존(item.fields/raw 대응). ⚠ H1 — 이 두 컬럼은 적재 시 ingest 가 redactDeep 후 써야 함
+  //   (적재 전환은 P-V3-3b 책임). 본 페이즈는 컬럼만 추가(데이터 미적재라 유출면 없음).
+  await itemsPool.query(`
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'authored';
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_system TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_instance TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_url TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS parent_external_id TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS parent_name TEXT;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS raw JSONB;
+  `);
+
+  // ── 동기화물 멱등 upsert 키 — UNIQUE(external_system, external_instance, external_id) WHERE external_id IS NOT NULL. ──
+  //  부분 유니크 인덱스: 저작물(external_id IS NULL)은 name PK 만, 동기화물은 (system,instance,id)로 upsert(item 의
+  //  UNIQUE(prov_system,prov_instance,external_id) 대응). external_instance NULL 도 키 일부 — pg 는 NULL 을 distinct 로
+  //  보므로 (sys,NULL,id) 중복은 막히지 않지만, 커넥터는 instance 를 항상 채운다(없으면 ''로 정규화 — 적재층 P-V3-3b 책임).
+  //  name PK 와 공존: 같은 행이 name(내부) + external 좌표(외부) 둘 다 가질 수 있다.
+  await itemsPool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS knowledge_unit_external_uidx
+      ON knowledge_unit(external_system, external_instance, external_id)
+      WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS knowledge_unit_source_idx ON knowledge_unit(source);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_occurred_idx ON knowledge_unit(occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_parent_idx ON knowledge_unit(parent_name);
+  `);
+
+  // ── 다중도메인/다중프로젝트 매핑 조인(item_domain/item_project 구조 참고) — A/W 단위가 도메인 여러개에 ──
+  //  귀속 가능하게. name↔domain key(repo 스코프) + mapped_by/confidence/state/evidence. 기존 단일 domain_key
+  //  컬럼은 저작물(R/K) 편의로 유지하되, 조인 테이블이 다중의 캐노니컬(P-V3-3b 적재가 채움 — 본 페이즈는 테이블만).
+  //  PK(name, repo, domain_key): 한 단위가 (repo,key) 별로 한 번 매핑. FK(name) ON DELETE CASCADE — 단위 삭제 시 매핑도.
+  //  mapped_by/state CHECK 는 item_domain 과 동일 enum(rule/llm/manual/declared, proposed/confirmed/rejected).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_unit_domain(
+      name TEXT REFERENCES knowledge_unit(name) ON DELETE CASCADE,
+      repo TEXT, domain_key TEXT,
+      mapped_by TEXT NOT NULL DEFAULT 'rule',
+      confidence REAL,
+      state TEXT NOT NULL DEFAULT 'proposed',
+      evidence TEXT,
+      PRIMARY KEY(name, repo, domain_key));
+    CREATE TABLE IF NOT EXISTS knowledge_unit_project(
+      name TEXT REFERENCES knowledge_unit(name) ON DELETE CASCADE,
+      repo TEXT, project_key TEXT,
+      mapped_by TEXT NOT NULL DEFAULT 'rule',
+      confidence REAL,
+      state TEXT NOT NULL DEFAULT 'proposed',
+      evidence TEXT,
+      PRIMARY KEY(name, repo, project_key));
+    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_key_idx  ON knowledge_unit_domain(repo, domain_key);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_state_idx ON knowledge_unit_domain(state);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_project_key_idx  ON knowledge_unit_project(repo, project_key);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_project_state_idx ON knowledge_unit_project(state);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_state_chk') THEN
+        ALTER TABLE knowledge_unit_domain ADD CONSTRAINT knowledge_unit_domain_state_chk
+          CHECK (state IN ('proposed','confirmed','rejected'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_mappedby_chk') THEN
+        ALTER TABLE knowledge_unit_domain ADD CONSTRAINT knowledge_unit_domain_mappedby_chk
+          CHECK (mapped_by IN ('rule','llm','manual','declared'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit_project'::regclass AND conname='knowledge_unit_project_state_chk') THEN
+        ALTER TABLE knowledge_unit_project ADD CONSTRAINT knowledge_unit_project_state_chk
+          CHECK (state IN ('proposed','confirmed','rejected'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit_project'::regclass AND conname='knowledge_unit_project_mappedby_chk') THEN
+        ALTER TABLE knowledge_unit_project ADD CONSTRAINT knowledge_unit_project_mappedby_chk
+          CHECK (mapped_by IN ('rule','llm','manual','declared'));
+      END IF;
+    END $$;
+  `);
+
+  // ── M-라 성능: pg_trgm 확장 + title/body_md GIN trgm 인덱스(pgvector 없이 ILIKE 가속). ──
+  //  item 흡수로 knowledge_unit 급증 시 searchKnowledge 의 ILIKE full-scan 을 가속한다(gin_trgm_ops 가 ILIKE '%...%' 지원).
+  //  ⚠ graceful: 확장 미가용(권한/미설치 서버)이면 CREATE EXTENSION 또는 GIN 생성이 throw → 별 트랜잭션으로 감싸
+  //   catch 후 warn(부팅·검색 무중단, ILIKE 는 인덱스 없이도 동작). embedding(pgvector)과 독립 — trgm 부재여도 OK.
+  try {
+    await itemsPool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await itemsPool.query(`
+      CREATE INDEX IF NOT EXISTS knowledge_unit_title_trgm_idx ON knowledge_unit USING gin (title gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS knowledge_unit_body_trgm_idx  ON knowledge_unit USING gin (body_md gin_trgm_ops);
+    `);
+  } catch (err) {
+    logger.warn({ err }, "pg_trgm 확장/인덱스 생성 실패(무시) — ILIKE 검색은 인덱스 없이 동작(graceful)");
+  }
 
   // ── 12 kind 캐노니컬 정의 시드(ground-truth) — label/injection_mode/domain_scoped/audience/sort 골격 + ──
   //  P-V3-2 의 description(정의)·criteria(분류기준: 언제 이 kind 인가 + 인접 kind 구분)·storage(저장방식)·

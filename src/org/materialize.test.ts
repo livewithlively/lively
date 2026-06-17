@@ -83,6 +83,18 @@ t("lifecycle!=active 는 방어적으로 제외", () => {
   assert.ok(!idx.includes("ctx_cat name=dead"));
 });
 
+// ── H2(P-V3-3a): confidence='observed'(커넥터 수집물) 는 recalled kind(K/D) 여도 인덱스에서 영구 제외 ──
+t("H2: observed 는 recalled kind(K/D) 여도 주입 인덱스에서 영구 제외", () => {
+  const idx = buildKnowledgeIndex([
+    unit({ name: "curated", kind: "K", title: "큐레이션 지식", confidence: "human" }),
+    unit({ name: "obsK", kind: "K", title: "수집된 K", confidence: "observed" }),
+    unit({ name: "obsD", kind: "D", title: "수집된 D", confidence: "observed", domain_key: "billing" }),
+  ]);
+  assert.ok(idx.includes("ctx_cat name=curated"), "큐레이션 K 는 포함");
+  assert.ok(!idx.includes("ctx_cat name=obsK"), "observed K 는 인덱스 제외");
+  assert.ok(!idx.includes("ctx_cat name=obsD"), "observed D 는 인덱스 제외");
+});
+
 // ── 재발행 멱등(L): 같은 입력 → 같은 출력, 인덱스 블록 중복 누적 없음 ──
 t("멱등: 같은 입력 2회 호출 → 동일 출력(중복 누적 0)", () => {
   const units = [

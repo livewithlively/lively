@@ -10,7 +10,9 @@ import { logger } from "../log.js";
 
 // confidence 는 호출자가 자칭하지 못한다 — 쓰기 출처(source)로 서버에서 강제한다.
 //  source='mcp'(에이전트 생산) → 'ai', source='web'(사람 편집) → 'human', 그 외/지정 → 'rule'.
-export type KnowledgeConfidence = "ai" | "rule" | "human";
+//  H2(P-V3-3a): 'observed' = 커넥터 수집물(A/W)의 신뢰축 — 큐레이션(ai/rule/human)과 의미가 다르다(주입 인덱스
+//   영구 제외 + overview 별도 카운트 + 검토 큐 제외). 적재는 P-V3-3b 책임(confidenceFor 는 커넥터 경로 추가 시 확장).
+export type KnowledgeConfidence = "ai" | "rule" | "human" | "observed";
 export type KnowledgeLifecycle = "active" | "rejected" | "superseded";
 // lifecycle 화이트리스트(런타임) — setLifecycle 검증 1곳. schema CHECK(knowledge_unit_lifecycle_chk)와 동치.
 //  ReadonlySet<string> 로 노출(has 는 임의 문자열 입력 검증용) — 멤버 값 자체는 리터럴로 고정.
@@ -115,25 +117,29 @@ export interface KnowledgeOverviewKind {
 }
 export interface KnowledgeOverview {
   kinds: KnowledgeOverviewKind[];
-  total_active: number;
-  review_pending: number;
+  total_active: number;       // 큐레이션된 active(confidence != 'observed') — observed 수집물 제외
+  review_pending: number;     // Review 대기(ai·active) — observed 는 ai 가 아니라 자연 제외
+  observed_count: number;     // H2(P-V3-3a): 커넥터 수집물(confidence='observed', active) **별도 카운트**("수집물 N")
 }
 
 export async function overviewKnowledge(): Promise<KnowledgeOverview> {
   // kind 별 집계 — registry 가 좌측(종류 0건도 행 유지), active 만 집계(LEFT JOIN 조건절).
+  //  H2: active_count 는 **큐레이션된**(observed 제외) active 만 — 수집물은 별도 observed_count 로 분리한다.
   const kindsRes = await itemsPool.query(
     `SELECT r.kind, r.label, r.injection_mode,
             COUNT(k.name)::int AS active_count,
             MAX(k.updated_at) AS latest_updated_at
        FROM kind_registry r
-       LEFT JOIN knowledge_unit k ON k.kind = r.kind AND k.lifecycle = 'active'
+       LEFT JOIN knowledge_unit k ON k.kind = r.kind AND k.lifecycle = 'active' AND k.confidence <> 'observed'
       GROUP BY r.kind, r.label, r.injection_mode, r.sort
       ORDER BY r.sort, r.kind`,
   );
-  // 전체 active + Review 대기(ai·active)를 한 행으로.
+  // 전체 active(큐레이션, observed 제외) + Review 대기(ai·active) + 수집물(observed·active)를 한 행으로.
+  //  H2: total_active 는 observed 를 빼서 '큐레이션 active' 의미를 지키고, observed 는 별도 카운트로 노출.
   const aggRes = await itemsPool.query(
-    `SELECT COUNT(*) FILTER (WHERE lifecycle='active')::int AS total_active,
-            COUNT(*) FILTER (WHERE lifecycle='active' AND confidence='ai')::int AS review_pending
+    `SELECT COUNT(*) FILTER (WHERE lifecycle='active' AND confidence <> 'observed')::int AS total_active,
+            COUNT(*) FILTER (WHERE lifecycle='active' AND confidence='ai')::int AS review_pending,
+            COUNT(*) FILTER (WHERE lifecycle='active' AND confidence='observed')::int AS observed_count
        FROM knowledge_unit`,
   );
   const agg = aggRes.rows[0] ?? {};
@@ -147,6 +153,7 @@ export async function overviewKnowledge(): Promise<KnowledgeOverview> {
     })),
     total_active: Number(agg.total_active) || 0,
     review_pending: Number(agg.review_pending) || 0,
+    observed_count: Number(agg.observed_count) || 0,
   };
 }
 

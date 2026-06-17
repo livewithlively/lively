@@ -248,8 +248,9 @@ const ctxSave = coExposed(
 const ctxOverview = coExposed(
   "ctx_overview",
   "컨텍스트 개요(overview)",
-  "통합 지식스토어를 종류(kind)별로 집계한다 — 각 종류의 active 단위 수·최신 갱신시각, 전체 active 합, " +
-    "Review 대기 수(에이전트 생산 active = confidence 'ai'). 대시보드/리뷰 진입점.",
+  "통합 지식스토어를 종류(kind)별로 집계한다 — 각 종류의 active 단위 수(큐레이션, observed 제외)·최신 갱신시각, " +
+    "전체 active 합, Review 대기 수(에이전트 생산 active = confidence 'ai'), 수집물 수(observed_count = 커넥터 수집물). " +
+    "검토 큐는 confidence='ai' 라 observed(수집물)는 자연 제외된다. 대시보드/리뷰 진입점.",
   {},
   [{
     method: "GET",

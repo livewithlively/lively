@@ -87,7 +87,10 @@ export function buildKnowledgeIndex(
   let emitted = 0; // 전체 cap 누계.
   for (const { kind, label } of recalledKinds) {
     // lifecycle!='active' 제외(호출자가 active 만 넘기더라도 방어적으로 한 번 더 거른다).
-    const rows = units.filter((u) => u.kind === kind && u.lifecycle === "active");
+    // H2(P-V3-3a): confidence='observed'(커넥터 수집물) 는 **주입 인덱스에서 영구 제외** — 큐레이션된
+    //  지식(ai/rule/human)만 항상-주입 인덱스에 노출한다. 수집물은 query 시 ctx_grep 로만 도달(인덱스 비주입 불변식).
+    //  recalled kind(K/D/F/H)는 보통 저작물이라 observed 가 거의 없지만, 흡수 후 observed K/D 가 생겨도 인덱스 비주입을 보장.
+    const rows = units.filter((u) => u.kind === kind && u.lifecycle === "active" && u.confidence !== "observed");
     if (!rows.length) continue;
     // 섹션 내 updated_at DESC(없으면 as_of), Date-안전.
     const sorted = [...rows].sort((a, b) => (ts(b.updated_at) || ts(b.as_of)) - (ts(a.updated_at) || ts(a.as_of)));
