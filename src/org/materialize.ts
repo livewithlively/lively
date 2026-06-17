@@ -17,9 +17,12 @@ export interface Materialized {
 // 메모리 인덱스(MEMORY.md) 생성 — 전 메모리의 제목·요약을 **비-링크** 텍스트로. **전문은 `memory_get name=X`** 로 pull.
 //  비-링크인 이유: generator collectArtifactFiles 가 `](name.md)` 링크를 따라 본문을 디스크에 복사하므로, 링크를
 //  없애 follow 를 원천 차단(본문 비배포 보장). cap=최신 MAX 건(네이티브 200줄 아날로그), 초과분은 memory_search.
-export function buildMemoryIndex(rows: { name: string; title: string | null; body_md: string; updated_at: string | null }[]): string {
+export function buildMemoryIndex(rows: { name: string; title: string | null; body_md: string; updated_at: string | Date | null }[]): string {
   const MAX = 100;
-  const sorted = [...rows].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")).slice(0, MAX);
+  // updated_at 은 pg 드라이버가 **Date** 로 반환(타입은 string|null 이지만 런타임 Date). 문자열 가정(localeCompare) 금지 —
+  //  타임스탬프(number)로 비교해 Date/string/null 모두 안전(이걸 어기면 preview/install 생성이 500 으로 터진다).
+  const ts = (u: string | Date | null): number => { const d = u ? new Date(u).getTime() : 0; return Number.isFinite(d) ? d : 0; };
+  const sorted = [...rows].sort((a, b) => ts(b.updated_at) - ts(a.updated_at)).slice(0, MAX);
   const lines = ["# Memory Index", "(제목·요약만. 전문은 `memory_get name=<name>`, 검색은 `memory_search`)", ""];
   for (const m of sorted) {
     const title = m.title?.trim() || m.name;
