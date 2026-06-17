@@ -7,7 +7,7 @@ import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
 import { getSection } from "./store.js";
 import { redactString } from "./redact.js";
@@ -17,6 +17,24 @@ import { logger } from "../log.js";
 function generatorPath(): string {
   if (process.env.WORKFLOW_STD_DIR) return join(process.env.WORKFLOW_STD_DIR, "generator", "build-context.mjs");
   return fileURLToPath(new URL("../../../workflow-std/generator/build-context.mjs", import.meta.url));
+}
+
+// generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
+//  materialize 한 DB-org 트리에 적용한다(P-V3-5 Part A: 정적 폴백 context.md 도 DB 단일소스).
+//  buildStaticContext 는 순수 함수(process.exit 안 함 — generate 의 필수파일 가드는 materialize 가 항상 채움)라
+//  in-process import 가 안전하다(runPublish 의 subprocess 격리 이유는 잘못된 입력 시 process.exit(1) 인데,
+//  materialize 산출물은 항상 org/org-defaults.md 를 보장하므로 그 경로를 타지 않는다).
+async function loadBuildStaticContext(): Promise<
+  (orgRoot: string, orgName?: string) => { context: string; orgName: string }
+> {
+  const genUrl = process.env.WORKFLOW_STD_DIR
+    ? pathToFileURL(join(process.env.WORKFLOW_STD_DIR, "generator", "build-context.mjs")).href
+    : new URL("../../../workflow-std/generator/build-context.mjs", import.meta.url).href;
+  const mod = await import(genUrl);
+  if (typeof mod.buildStaticContext !== "function") {
+    throw new Error("generator 에 buildStaticContext export 가 없습니다 (workflow-std 버전 불일치)");
+  }
+  return mod.buildStaticContext;
 }
 
 interface RunResult { code: number; stdout: string; stderr: string }
@@ -59,7 +77,35 @@ export async function runPublish(outDir: string, harness = "claude"): Promise<Pu
     let artifactBytes = 0;
     try { artifactBytes = (await readFile(join(outDir, "AGENTS.md"))).byteLength; } catch { /* 무시 */ }
     const warning = artifactBytes > 32 * 1024 ? "AGENTS.md 가 32KiB 를 초과 — Codex 한도 주의" : undefined;
+    // P-V3-5 Part A: 오프라인 폴백 context.md 도 발행물에 함께 굳힌다 — DB-materialize 한 같은 트리에서
+    //  buildStaticContext 로 구워, AGENTS.md(=generator 발행)와 동일 DB Knowledge Index 를 갖는 단일소스.
+    //  설치기(user-install.mjs)가 발행물 context.md 를 ~/.lively/context.md 로 복사(AGENTS.md 파생 대신).
+    //  멱등: 같은 DB 상태 → byte-identical(buildKnowledgeIndex 결정적). 재발행이 인덱스 중복 누적 안 함.
+    try {
+      const buildStaticContext = await loadBuildStaticContext();
+      const { context } = buildStaticContext(mat.dir, mat.orgName);
+      await writeFile(join(outDir, "context.md"), context);
+    } catch (err) {
+      // fail-soft: context.md 굽기 실패해도 발행 자체는 성공(설치기가 AGENTS.md 파생으로 폴백).
+      logger.warn({ err }, "정적 context.md 발행 실패 — 설치기가 AGENTS.md 파생으로 폴백");
+    }
     return { ok: true, artifactBytes, log: r.stdout.trim(), warning };
+  } finally {
+    await mat.cleanup().catch((err) => logger.warn({ err }, "materialize 임시디렉토리 정리 실패"));
+  }
+}
+
+// 오프라인 폴백 정적 context.md(DB 진실원천) — materialize(DB) → buildStaticContext.
+//  진실원천 이원화 해소: 정적(이 함수)·라이브(previewMemberContext)·웹·발행 모두 DB buildKnowledgeIndex 단일소스.
+//  어댑터/설치기가 게이트웨이 가용 시 이걸 받아 ~/.lively/context.md 에 박고(DB-인덱스), 다운 시 파일기반 폴백.
+//  멱등: 같은 DB 상태 → 같은 출력(buildKnowledgeIndex 결정적). 재발행 시 인덱스 중복 0.
+export async function materializeStaticContext(): Promise<{ context: string; orgName: string }> {
+  if (!process.env.ITEMS_DATABASE_URL) throw new Error("ITEMS_DATABASE_URL 미설정 — 정적 컨텍스트 발행 불가");
+  const mat = await materializeOrgContent();
+  try {
+    const buildStaticContext = await loadBuildStaticContext();
+    const { context, orgName } = buildStaticContext(mat.dir, mat.orgName);
+    return { context, orgName };
   } finally {
     await mat.cleanup().catch((err) => logger.warn({ err }, "materialize 임시디렉토리 정리 실패"));
   }
