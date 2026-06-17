@@ -12,7 +12,7 @@
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node dist/db/sources.test.js && node dist/db/source-guard.test.js && node dist/db/firewall.test.js && node dist/tools/db.test.js && node dist/items/mapping-extract.test.js && node dist/domainmap/core/refresh-fs.test.js && node dist/org/materialize.test.js && node --env-file-if-exists=.env dist/org/schema-p3a.test.js && node --env-file-if-exists=.env dist/org/migrate-items.test.js && node --env-file-if-exists=.env dist/org/dualwrite.test.js",
+    "test": "npm run build && node dist/db/sources.test.js && node dist/db/source-guard.test.js && node dist/db/firewall.test.js && node dist/tools/db.test.js && node dist/items/mapping-extract.test.js && node dist/domainmap/core/refresh-fs.test.js && node dist/org/materialize.test.js && node --env-file-if-exists=.env dist/org/schema-p3a.test.js && node --env-file-if-exists=.env dist/org/migrate-items.test.js && node --env-file-if-exists=.env dist/org/dualwrite.test.js && node --env-file-if-exists=.env dist/domainmap/core/crud.test.js",
     "parity": "npm run build && node --env-file-if-exists=.env scripts/parity-check.mjs",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js"
   },

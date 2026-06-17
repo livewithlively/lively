@@ -68,6 +68,22 @@ export type DomainStateResult =
 
 // P6a 신뢰우선: propose_domain 도 proposed 림보 없이 confirmed 로 착지(evidence 는 provenance 로 보존).
 export interface ProposeDomainResult { repo: string; id: number; key: string; status: "confirmed"; change_id: number }
+
+// P-V3-4a: 통제어휘 도메인 CRUD. domain_create 는 propose 와 달리 evidence 게이트 없이 통제어휘를
+//  채워넣는 경로 — 결과 shape 은 동일 키 집합(repo/id/key/status/change_id). status 'confirmed' 고정.
+export interface CreateDomainResult { repo: string; id: number; key: string; status: "confirmed"; change_id: number }
+// domain_rename = soft-alias(H3): 물리 key 불변 + (old_key→new_key) 별칭 적재 + 표시명(name) 갱신.
+//  aliased=true 면 신규 별칭 행 적재됨, false 면 name-only 변경(별칭 불필요·동일 key). after 는 표시 갱신값.
+export interface RenameDomainResult {
+  repo: string; id: number; key: string; old_key: string; new_key: string;
+  aliased: boolean; change_id: number; after: { name: unknown };
+}
+// repo CRUD — domainmap 자기완결 엔티티(cross-DB cascade 없음). state 축 active|deprecated.
+export interface RepoCreateResult { id: number; name: string; change_id: number }
+export interface RepoRenameResult { id: number; old_name: string; new_name: string; change_id: number }
+export type RepoStateResult =
+  | { id: number; name: string; change_id: number; state: string }
+  | { id: number; name: string; action: "unchanged"; state: string };
 export interface MergeResult { from_id: number; into_id: number; moved_mappings: number; folded_mappings: number; change_id: number }
 export interface ReassignResult {
   id: number; change_id: number;

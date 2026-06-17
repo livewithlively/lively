@@ -100,5 +100,31 @@ export async function init(): Promise<string> {
     END IF;
   END $$;
   `);
+  // ── P-V3-4a: repo CRUD lifecycle + domain rename soft-alias(H3) ──
+  // repo.state: repo_deprecate 가 쓰는 lifecycle 축. NULL=active(pre-migration 행). repo 는 cross-DB
+  //  cascade 가 없는 도메인맵 자기완결 엔티티라 컬럼 추가만으로 충분(deprecate=숨김 신호, 삭제 아님).
+  await pool.query(`ALTER TABLE repo ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'active';`);
+  await pool.query(`
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='repo'::regclass AND conname='repo_state_chk') THEN
+      ALTER TABLE repo ADD CONSTRAINT repo_state_chk
+        CHECK (state IS NULL OR state IN ('active','deprecated'));
+    END IF;
+  END $$;
+  `);
+  // domain_alias: soft-alias 매핑(repo_id, old_key → new_key). domain_rename 이 물리 domain.key 를
+  //  건드리지 않는 이유(H3): items DB(knowledge_unit.domain_key 약결합 슬러그)와 domainmap DB 는 별 DB라
+  //  cross-DB 트랜잭션 불가 — 물리 key 를 바꾸면 items 쪽 매핑이 원자적으로 못 따라온다. 대신 물리 key 는
+  //  고정하고, 표시명(domain.name)만 갱신하며 (old_key → new_key) 별칭만 적재한다. 읽기/검증이 alias 를
+  //  해소(resolveDomainKey)해 옛 슬러그가 가리키던 도메인을 계속 찾는다. UNIQUE(repo_id, old_key) —
+  //  한 옛키는 한 곳만 가리킨다. new_key 는 domain.key(물리) 와 같을 수도, 더 옛 별칭일 수도(체인) 있어
+  //  resolveDomainKey 가 사이클 가드와 함께 해소한다.
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS domain_alias(
+    id SERIAL PRIMARY KEY, repo_id INT NOT NULL,
+    old_key TEXT NOT NULL, new_key TEXT NOT NULL, created_at TIMESTAMPTZ,
+    UNIQUE(repo_id, old_key));
+  `);
   return "initialized schema";
 }

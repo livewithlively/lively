@@ -9,6 +9,7 @@ import { contextCapabilities } from "./context.js";
 import { ctxCapabilities } from "./ctx.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
+import { domainmapCrudCapabilities } from "./domainmap-crud.js";
 import { itemCapabilities } from "./items.js";
 import { mappingCapabilities } from "./mapping.js";
 import { pmCapabilities } from "./pm.js";
@@ -31,12 +32,14 @@ const me: Capability = {
 const all: Capability[] = [
   me, ...contextCapabilities, ...itemCapabilities, ...mappingCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
-  ...pmCapabilities, // MCP 31툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
+  ...domainmapCrudCapabilities, // P-V3-4a: repo/domain 통제어휘 CRUD 5종 — 전부 expose.mcp=true(MCP+REST)
+  ...pmCapabilities, // MCP 36툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 + crud 5 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
   ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
 ];
-// MCP 표면 = 31툴(변동 없음 — P-V3-2 의 'learn' 은 expose.mcp=false REST 전용이라 MCP 표면 불포함).
-//  REST 전용 신엔드포인트: GET /api/ui/learn(kind_registry+data_source ground-truth). parity smoke 케이스 동기화됨.
+// MCP 표면 = 36툴(P-V3-4a 에서 31→36: domain_create·domain_rename·repo_create·repo_rename·repo_deprecate 추가).
+//  REST 전용 신엔드포인트(MCP 표면 불포함): GET /api/ui/learn(kind_registry+data_source ground-truth).
+//  새 CRUD 5종은 MCP+REST co-exposed(쓰기라 parity 는 검증에러-only). parity smoke/표면 케이스 동기화됨.
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
 

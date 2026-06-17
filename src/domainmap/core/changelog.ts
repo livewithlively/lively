@@ -45,7 +45,7 @@ const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_ent
 // interpolated UPDATE identifiers are provably safe and never trust JSONB keys.
 // `id` is deliberately excluded: it's the WHERE target, never a SET column.
 const RESTORE_COLUMNS: Record<string, Set<string>> = {
-  repo: new Set(["name", "root_path", "detected_stack", "created_at", "last_scan_at"]),
+  repo: new Set(["name", "root_path", "detected_stack", "created_at", "last_scan_at", "state", "last_refreshed_sha", "git_url", "default_branch"]),
   scan_run: new Set(["repo_id", "runbook", "harness", "actor_type", "actor_id", "started_at", "finished_at", "summary"]),
   domain: new Set(["repo_id", "key", "name", "description", "state", "cross_cutting", "origin", "status", "created_at", "updated_at"]),
   code_unit: new Set(["repo_id", "kind", "path", "label", "created_at", "state", "prev_path", "updated_at"]),

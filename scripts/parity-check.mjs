@@ -349,6 +349,40 @@ await report("dm(m) MCP propose_domain evidence 누락 isError", async () => {
   assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
 });
 
+// ════════ P-V3-4a 통제어휘 CRUD(domain_create·domain_rename·repo_create·repo_rename·repo_deprecate) ════════
+//  전부 expose.mcp=true(MCP+REST co-exposed). 쓰기라 동일 페이로드 deep-equal 짝 없음 — 검증에러 경로만
+//  (parse/zod 단계 throw → 코어 도달 0, 도메인맵 쓰기·audit 행 0: productivity 라이브 데이터 비파괴 컨벤션 유지).
+await expectRestError("crud(a) repo_create 이름 형식", "/api/ui/domainmap/repo/create",
+  { method: "POST", body: JSON.stringify({ name: "bad repo!" }) }, 400, "repo 형식이 잘못되었습니다");
+await expectRestError("crud(b) repo_rename newName 누락", "/api/ui/domainmap/repo/rename",
+  { method: "POST", body: JSON.stringify({ name: REPO }) }, 400, "repo 필수");
+await expectRestError("crud(c) repo_deprecate name 누락", "/api/ui/domainmap/repo/deprecate",
+  { method: "POST", body: "{}" }, 400, "repo 필수");
+await expectRestError("crud(d) domain_create repo 형식", "/api/ui/domainmap/domain/create",
+  { method: "POST", body: JSON.stringify({ repo: "bad repo!", key: "k1", name: "X" }) }, 400, "repo 형식이 잘못되었습니다");
+await expectRestError("crud(e) domain_create key 형식", "/api/ui/domainmap/domain/create",
+  { method: "POST", body: JSON.stringify({ repo: REPO, key: "BAD KEY", name: "X" }) }, 400, "슬러그");
+await expectRestError("crud(f) domain_rename 빈 변경", "/api/ui/domainmap/domain/1/rename",
+  { method: "POST", body: "{}" }, 400, "변경할 필드가 필수입니다");
+await expectRestError("crud(g) domain_rename id 비정수", "/api/ui/domainmap/domain/abc/rename",
+  { method: "POST", body: JSON.stringify({ newName: "X" }) }, 400, "양의 정수");
+// MCP 측: zod 가 필수/형식 위반을 isError 로 거부(handler 미도달 — 무쓰기).
+await report("crud(h) MCP domain_create key 누락 isError", async () => {
+  const m = await mcp("domain_create", { repo: REPO, name: "X" });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+});
+// M-마 권한: repo rename/deprecate 는 agent(MCP) 금지 — 핸들러 가드 403(코어 도달 0·무쓰기).
+await report("crud(i) MCP repo_rename agent 금지(403)", async () => {
+  const m = await mcp("repo_rename", { name: REPO, newName: "__crud_parity_nope__" });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  assert.ok(m.errText.includes("사람(웹)만 가능"), `메시지 불일치: ${m.errText}`);
+});
+await report("crud(j) MCP repo_deprecate agent 금지(403)", async () => {
+  const m = await mcp("repo_deprecate", { name: REPO });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  assert.ok(m.errText.includes("사람(웹)만 가능"), `메시지 불일치: ${m.errText}`);
+});
+
 // 토큰 없는 쓰기 = 401(쓰기 경로가 인증 뒤에 있는지).
 await report("dm(h) 무토큰 쓰기 401", async () => {
   const res = await fetch(`http://${HOST}:${PORT}/api/ui/domainmap/mapping/1/confirm`,
@@ -428,17 +462,17 @@ await report("ctx_set_lifecycle(b) 잘못된 lifecycle — 양 어댑터 거부(
 });
 
 // ════════ tools/list — 최종 MCP 표면 보고 ════════
-// 표면 동결: 아래 31개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 31툴') + src/tools/* 등록 배열.
+// 표면 동결: 아래 36개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
+// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 36툴') + src/tools/* 등록 배열.
 // 표면을 의도적으로 바꿀 때는 freeze 주석과 이 배열을 같은 커밋에서 함께 갱신한다.
 const EXPECTED_MCP_SURFACE = [
   "context_overview", "ctx_cat", "ctx_grep", "ctx_ls", "ctx_overview", "ctx_save", "ctx_set_lifecycle",
   "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
-  "domain_deprecate", "domain_get", "domain_list", "get_item", "list_unmapped",
+  "domain_create", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "get_item", "list_unmapped",
   "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
-  "propose_domain", "repo_list", "search_items",
-]; // 31 (06-17 ctx_* 6종 — P1b ls/grep/cat/save + P4a overview/set_lifecycle; memory_get 포함)
+  "propose_domain", "repo_create", "repo_deprecate", "repo_list", "repo_rename", "search_items",
+]; // 36 (P-V3-4a 5종 추가: domain_create·domain_rename·repo_create·repo_rename·repo_deprecate)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();

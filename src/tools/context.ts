@@ -15,5 +15,11 @@ export function registerContextTools(server: McpServer): void {
     // MCP 표면 등록은 도메인 패밀리인 여기서 한다(expose.mcp:true 플립과 원자 커밋).
     "propose_domain",
     "domain_deprecate",
+    // P-V3-4a: repo/domain 통제어휘 CRUD 5종(domainmap-crud 그룹) — 같은 도메인 패밀리라 여기서 등록.
+    "repo_create",
+    "repo_rename",
+    "repo_deprecate",
+    "domain_create",
+    "domain_rename",
   ]);
 }

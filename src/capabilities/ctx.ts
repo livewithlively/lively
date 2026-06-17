@@ -7,6 +7,8 @@
 import { z } from "zod";
 import { getKnowledge, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
 import { listDomainsApi } from "../domainmap/core/queries.js";
+import { getRepo } from "../domainmap/core/repos.js";
+import { resolveDomainKey } from "../domainmap/core/domain-alias.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
 import { HttpError, qstr, qint } from "./rest-util.js";
@@ -200,16 +202,25 @@ const ctxSave = coExposed(
     // 신규 쓰기경로 — 평문 시크릿은 저장 자체를 거부(hard-block).
     assertNoHardSecrets(input.note, "note");
 
-    // 도메인: 지정되면 존재 검증(domainmap 다운=fail-open, 약결합 슬러그라 저장은 진행).
+    // 도메인: 지정되면 통제어휘 엄격 검증(P-V3-4a) — domain_list 에 없는 키는 거부.
+    //  단 (a) domainmap 다운/repo 미존재 = graceful(약결합 슬러그라 저장은 진행 — 가용성 우선),
+    //     (b) soft-alias 해소: 옛 슬러그(rename 으로 별칭이 된 키)는 canonical 로 접어 통과시키고
+    //         knowledge_unit 에는 canonical key 를 저장한다(옛 별칭 적체 방지). 해소도 graceful.
     const repo = DEFAULT_DOMAIN_REPO;
     let domainKey: string | null = null;
     if (input.domain) {
       let domains: Awaited<ReturnType<typeof listDomainsApi>> | null = null;
       try { domains = await listDomainsApi(repo); } catch { domains = null; }
-      if (domains && domains.length && !domains.some((d) => d.key === input.domain)) {
+      let candidate = input.domain;
+      // alias 해소(best-effort) — repo id 를 못 얻거나 도메인맵이 죽으면 원본 슬러그 유지(graceful).
+      try {
+        const r = await getRepo(repo);
+        candidate = await resolveDomainKey(r.id, input.domain);
+      } catch { /* graceful: 원본 슬러그 유지 */ }
+      if (domains && domains.length && !domains.some((d) => d.key === candidate)) {
         throw new Error(`도메인 '${input.domain}' 없음(repo=${repo}). domain_list 로 확인하세요.`);
       }
-      domainKey = input.domain;
+      domainKey = candidate;
     }
 
     // 이름: 주어지면 검증, 아니면 title|note 슬러그(자동생성끼리 충돌 시 -2.. 증가).
