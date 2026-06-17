@@ -75,10 +75,13 @@ Stop-block 의 재가동은 **동일 인터랙티브 세션의 연속**(구독 �
 - settings 는 **세션 시작 시 스냅샷** — 훅 배포는 다음 세션부터 적용된다. 배포 직후 기존 세션으로
   검증하면 거짓 음성. 신규 훅 첫 인지 시 trust 확인 프롬프트가 뜰 수 있다(정상).
 
-## 8. Windows 미지원 캐비앗
-스크립트는 node 라 크로스플랫폼이지만 settings 의 `node "$CLAUDE_PROJECT_DIR/.claude/hooks/…"` 인용이
-POSIX 셸 전제다. Windows(ps1) 멤버는 훅이 조용히 실패할 수 있다(페일오픈이라 차단은 없음, 에러 노이즈만)
-— 해당 멤버에게는 `LIVELY_HOOKS_OFF=1` 안내.
+## 8. Windows 훅 — **지원됨** (구 "미지원" 캐비앗은 오정보, 2026-06-17 정정)
+Claude Code 는 **Windows 에서 훅을 정상 실행**한다(공식 docs: Windows 비지원 캐비앗 없음; SessionStart stdout
+주입도 Mac 동일). 우리 설치기(`user-install.mjs`)는 Windows 용으로 **절대경로 forward-slash** 커맨드
+(`node "C:/Users/<user>/.lively/hooks/…"`)를 생성 — POSIX 셸 변수 의존이 없어 Git Bash/PowerShell/cmd 어디서
+실행돼도 동작한다(구 `$CLAUDE_PROJECT_DIR` 인용 가정은 더는 안 씀). **유일 주의: `~/.lively` 경로 일치** —
+`setup-windows.ps1` 이 `$env:USERPROFILE`(=Node `os.homedir()`)에 써야 훅이 token/context.md 를 읽는다
+(PowerShell `$HOME` 은 도메인/로밍/OneDrive 계정서 갈림 — 06-17 ps1 수정). 끄려면 `LIVELY_OFF=1`.
 
 ## 9. 도메인 authoring (⑤) 운영 노트
 - MCP 표면 24툴 — `propose_domain`(evidence 필수, status='proposed' 생성, 보호 리포 lively 403)과
