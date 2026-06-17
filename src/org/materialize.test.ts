@@ -97,4 +97,18 @@ t("멱등: 같은 입력 2회 호출 → 동일 출력(중복 누적 0)", () => 
   assert.equal((a.match(/## Knowledge \(K\)/g) ?? []).length, 1, "K 섹션 헤더 1개");
 });
 
+// ── P-V3-2 하드코딩 제거: 섹션 정책(recalled kind)을 인자로 주입(=kind_registry 가 권위, non-stale) ──
+t("recalledKinds 인자가 섹션/순서/라벨을 결정한다(레지스트리 주입)", () => {
+  const units = [
+    unit({ name: "k1", kind: "K", title: "지식" }),
+    unit({ name: "f1", kind: "F", title: "사실" }),
+    unit({ name: "h1", kind: "H", title: "절차" }),
+  ];
+  // 레지스트리가 F 만 recalled 라고 말하면(가상 정책) F 섹션만 나오고 K/H 는 제외돼야 한다(상수 하드코딩 아님 증명).
+  const idx = buildKnowledgeIndex(units, [{ kind: "F", label: "사실섹션" }]);
+  assert.ok(idx.includes("## 사실섹션 (F)"), "인자로 준 라벨/순서로 섹션 출력");
+  assert.ok(idx.includes("ctx_cat name=f1"), "F 는 포함");
+  assert.ok(!idx.includes("ctx_cat name=k1") && !idx.includes("ctx_cat name=h1"), "인자에 없는 kind 는 제외");
+});
+
 console.log(`\n${pass} checks passed`);

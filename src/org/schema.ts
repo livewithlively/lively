@@ -286,6 +286,8 @@ export async function initOrgSchema(): Promise<void> {
   // ── kind_registry — 지식 종류 분류 + 주입 정책 메타. 12 kind 시드(아래). ──
   // injection_mode = 멤버 컨텍스트에 어떻게 노출되는가(enforced/always/recalled/manual/query/digest).
   //  domain_scoped = domainmap 도메인 귀속을 갖는 종류인지. cardinality = 한 종류당 한 단위(one)인지 다수(many)인지.
+  // P-V3-2(D-GT): description 외에 **분류기준(criteria)·저장방식(storage)·전달방식(delivery)** 을 ground-truth 로
+  //  채운다(비파괴 ADD COLUMN, 멱등). 런북(LLM)·웹(#/learn, 비개발자)이 여기서 렌더 → non-stale 단일 출처.
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS kind_registry(
       kind TEXT PRIMARY KEY,
@@ -299,6 +301,10 @@ export async function initOrgSchema(): Promise<void> {
       version INT NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
+    -- P-V3-2: 분류기준/저장방식/전달방식(ground-truth 확장, 비파괴·멱등). description 과 함께 런북·웹이 렌더.
+    ALTER TABLE kind_registry ADD COLUMN IF NOT EXISTS criteria TEXT NOT NULL DEFAULT '';
+    ALTER TABLE kind_registry ADD COLUMN IF NOT EXISTS storage TEXT NOT NULL DEFAULT '';
+    ALTER TABLE kind_registry ADD COLUMN IF NOT EXISTS delivery TEXT NOT NULL DEFAULT '';
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='kind_registry'::regclass AND conname='kind_registry_mode_chk') THEN
@@ -308,6 +314,31 @@ export async function initOrgSchema(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='kind_registry'::regclass AND conname='kind_registry_card_chk') THEN
         ALTER TABLE kind_registry ADD CONSTRAINT kind_registry_card_chk CHECK (cardinality IN ('one','many'));
+      END IF;
+    END $$;
+  `);
+
+  // ── data_source — 소스별 수집방식 레지스트리(ground-truth). 어떤 외부 시스템에서 무엇이 어떻게 수집되어 ──
+  //  knowledge_unit 의 어느 kind 로 적재되는지를 비개발자도 읽도록 명문화. status=active(수집중) | dropped
+  //  (수집중단, 커넥터 코드는 유지). collection_method = 수집 방식 설명(자유텍스트). into_kinds = 적재 kind 목록.
+  //  시크릿 금지(토큰/URL 없음 — 시스템명·라벨·설명만). 시드는 아래(discord=dropped, notion/clickup/slack=active).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS data_source(
+      system TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      collection_method TEXT NOT NULL DEFAULT '',
+      cadence TEXT,
+      into_kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='data_source'::regclass AND conname='data_source_status_chk') THEN
+        ALTER TABLE data_source ADD CONSTRAINT data_source_status_chk CHECK (status IN ('active','dropped'));
       END IF;
     END $$;
   `);
@@ -351,6 +382,16 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_confidence_chk
           CHECK (confidence IN ('ai','rule','human'));
       END IF;
+      -- L-가(P-V3-2): kinds[] 다중분류 가드 — 모든 원소가 유효 kind 문자여야 한다(17/43 실사용). 빈 배열은 통과.
+      --  CHECK 는 서브쿼리 불가 → jsonb 부분집합 연산자 <@ 로 검증: kinds 가 12 kind 화이트리스트 배열의 부분집합인지.
+      --  ('[]'<@whitelist=true, 잘못된 문자 포함 시 false). jsonb_typeof 로 배열 형태도 강제.
+      --  기존 데이터가 위반하면 ADD CONSTRAINT 가 throw(=조기 발견) → 비파괴 가드(현 17행은 전부 유효 문자, 실측 확인).
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kinds_chk') THEN
+        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kinds_chk CHECK (
+          jsonb_typeof(kinds) = 'array'
+          AND kinds <@ '["F","D","K","R","H","S","G","A","W","M","L","Z"]'::jsonb);
+      END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS knowledge_unit_kind_idx ON knowledge_unit(kind);
     CREATE INDEX IF NOT EXISTS knowledge_unit_lifecycle_idx ON knowledge_unit(lifecycle);
@@ -358,22 +399,108 @@ export async function initOrgSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS knowledge_unit_updated_idx ON knowledge_unit(updated_at DESC);
   `);
 
-  // ── 12 kind 시드(ON CONFLICT DO NOTHING — 멱등). cardinality 전부 'many'. ──
+  // ── 12 kind 캐노니컬 정의 시드(ground-truth) — label/injection_mode/domain_scoped/audience/sort 골격 + ──
+  //  P-V3-2 의 description(정의)·criteria(분류기준: 언제 이 kind 인가 + 인접 kind 구분)·storage(저장방식)·
+  //  delivery(전달방식 = injection_mode 의 의미)·예시. 비개발자도 이해할 쉬운 한국어.
+  //  멱등 정책: ON CONFLICT(kind) DO UPDATE — **정의 4필드(description/criteria/storage/delivery)는 코드가
+  //  캐노니컬**이라 부팅 시마다 시드값으로 정렬한다(현 12행은 정의가 ''로 비어 있어 이 갱신으로 채워진다).
+  //  웹 #/learn 은 읽기전용 렌더라 사용자가 정의를 편집하지 않는다 → DO UPDATE 가 사람 편집을 덮을 위험 없음.
+  //  (non-stale 실증은 'DB 직접 편집 → 런북 재빌드 + 웹 재조회가 즉시 반영' — initOrgSchema 재부팅 전까지 유효.)
+  //  ⚠ D-G 결정(2026-06-18 v3 plan §1): G = **Glossary/Graph**. '도메인 부채(debt)'는 domainmap 의 debt_finding 을
+  //   federate(파생 뷰)로 다루며 knowledge_unit 의 kind 가 아니다 → 스펙·런북·웹 3곳 모두 G=Glossary 로 일관(중복정의 금지).
   await itemsPool.query(`
-    INSERT INTO kind_registry(kind, label, injection_mode, domain_scoped, audience, cardinality) VALUES
-      ('R','Rule/Policy/Persona','enforced',false,'context','many'),
-      ('K','Knowledge note','recalled',false,'memory','many'),
-      ('D','Domain knowledge','recalled',true,'memory','many'),
-      ('F','Fact','recalled',false,'memory','many'),
-      ('H','How-to/Runbook','recalled',true,'memory','many'),
-      ('S','Schema/Structure','digest',true,'memory','many'),
-      ('G','Glossary/Graph','digest',true,'memory','many'),
-      ('A','Artifact','query',false,'memory','many'),
-      ('W','Work/Task','query',false,'memory','many'),
-      ('M','Memo','manual',false,'memory','many'),
-      ('L','Link/Ref','manual',false,'memory','many'),
-      ('Z','Misc','manual',false,'memory','many')
-    ON CONFLICT (kind) DO NOTHING;
+    INSERT INTO kind_registry(kind, label, injection_mode, domain_scoped, audience, cardinality, sort, description, criteria, storage, delivery) VALUES
+      ('R','Rule/Policy/Persona','enforced',false,'context','many',10,
+        '조직이 모든 AI 세션에 강제하는 규칙·정책·페르소나. "반드시/금지" 같은 행동 규범과 AI 의 말투·역할.',
+        '"항상/반드시/절대" 지켜야 하는 강제 규범이면 R. 한 번 일어난 사실(F)·방법 절차(H)·배경 지식(K/D)과 구분: R 은 위반하면 안 되는 명령형이다. 페르소나(AI 역할·말투)도 R.',
+        '강제규칙(managed-policy)·회사맥락(org-defaults) 섹션으로 저장. 본문 전체가 보존된다.',
+        '강제 주입(enforced): 모든 세션 컨텍스트 최상단에 전문이 그대로 들어간다.'),
+      ('K','Knowledge note','recalled',false,'memory','many',20,
+        '일반 지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각. 특정 도메인에 매이지 않는 범용 지식.',
+        '배경·맥락·정리된 생각이면 K. 도메인에 묶이면 D, 한 줄 확정 사실이면 F, 절차면 H. 가장 기본값(애매하면 K).',
+        '지식 단위로 저장(제목+본문). 본문은 전문 보존, 검색 대상.',
+        '검색 회상(recalled): 인덱스(제목·요약)는 항상 주입, 전문은 관련할 때 검색으로 회상.'),
+      ('D','Domain knowledge','recalled',true,'memory','many',30,
+        '특정 도메인(결제·인증 등 사업/제품 영역)에 귀속된 지식. domainmap 의 도메인에 묶인다.',
+        'K 와 같되 **특정 도메인에 명확히 속하면** D(도메인 키 부여). 도메인 경계가 모호하면 K. 도메인의 용어 정의 자체는 G.',
+        '지식 단위로 저장하되 domain_key(domainmap 약결합)를 부여. 도메인별로 묶여 탐색된다.',
+        '검색 회상(recalled): 도메인 섹션으로 인덱스에 노출, 전문은 검색 회상.'),
+      ('F','Fact','recalled',false,'memory','many',40,
+        '단일 확정 사실 — 짧고 검증 가능한 한 조각의 진실(예: "프로덕션 리전은 서울").',
+        '한 줄로 끝나는 검증된 사실이면 F. 여러 사실·배경 서술이면 K, 절차면 H. 변할 수 있는 의견·결정 배경은 F 아님.',
+        '지식 단위로 저장(짧은 본문). 사실 단위라 보통 한 단락.',
+        '검색 회상(recalled): 인덱스에 노출, 관련 시 회상.'),
+      ('H','How-to/Runbook','recalled',true,'memory','many',50,
+        '하우투·런북 — 무엇을 어떤 순서로 하는지의 재현 가능한 절차(예: 배포 방법, 동기화 실행법).',
+        '"이렇게 한다"는 단계별 절차면 H. 사실(F)·배경 지식(K)과 구분: H 는 따라 하면 결과가 재현된다. 도메인 절차여도 H(도메인 키 부여 가능).',
+        '지식 단위로 저장(단계 목록 본문). domain_key 부여 가능.',
+        '검색 회상(recalled): 인덱스에 노출, 필요할 때 전문 회상.'),
+      ('S','Schema/Structure','digest',true,'memory','many',60,
+        '스키마·구조 — 데이터 모델, 테이블/필드 구조, 시스템 구성도 같은 형태 정의.',
+        '데이터/시스템의 **구조·형태**(필드·관계·구성)면 S. 용어의 뜻 정의는 G, 절차는 H. 구조는 "무엇으로 이뤄졌나"를 답한다.',
+        '지식 단위로 저장. domain_key 부여 가능(스키마는 보통 도메인 귀속).',
+        '다이제스트(digest): 요약 형태로 노출(구조 전체가 아니라 개요만).'),
+      ('G','Glossary/Graph','digest',true,'memory','many',70,
+        '용어집·관계 그래프 — 도메인 용어의 정의와 용어 간 관계. "이 말이 무슨 뜻인가"의 단일 출처.',
+        '도메인 **용어의 뜻 정의**나 용어 간 관계면 G. 구조(필드 형태)는 S, 배경 지식은 D. (도메인 부채는 G 아님 — domainmap 의 debt_finding 으로 별도 관리.)',
+        '지식 단위로 저장. domain_key 부여(용어는 도메인 귀속).',
+        '다이제스트(digest): 용어 요약으로 노출.'),
+      ('A','Artifact','query',false,'memory','many',80,
+        '산출물 — 커넥터가 수집한 활동/메시지/문서 같은 원천 자료(Slack 대화, Notion 문서 등).',
+        '외부 시스템에서 **수집된 원천 활동/문서**면 A. 사람이 정리한 지식이 아니라 raw 수집물이다. 태스크는 W.',
+        '커넥터가 적재(source/external_id/원본 필드). 보통 자동 수집물이라 양이 많다.',
+        '질의 시(query): 평소엔 인덱스에 안 올라가고, 에이전트가 필요할 때 검색·조회.'),
+      ('W','Work/Task','query',false,'memory','many',90,
+        '작업·태스크 — PM 도구(ClickUp 등)의 태스크/이슈. 진행 상태를 가진 일.',
+        '진행 상태(미정/진행/완료)를 가진 **일/태스크**면 W. 수집된 메시지·문서는 A. 절차 설명은 H.',
+        '커넥터/pm_* 가 적재(external_id·상태). 작업 단위.',
+        '질의 시(query): 필요할 때 조회(작업 현황 검색).'),
+      ('M','Memo','manual',false,'memory','many',100,
+        '메모 — 가벼운 임시 기록. 분류가 애매하거나 잠깐 적어두는 것.',
+        '정식 지식으로 다듬기 전 **가벼운 임시 기록**이면 M. 정리되면 K/D 등으로 승격. 영구 규칙은 R.',
+        '지식 단위로 저장(짧은 본문).',
+        '수동(manual): 자동 주입 안 함. 사람이 직접 찾아볼 때만.'),
+      ('L','Link/Ref','manual',false,'memory','many',110,
+        '링크·참조 — 외부 문서/URL 로의 포인터. 본문보다 "어디를 보라"가 핵심.',
+        '본문 대신 **외부 위치로의 참조**가 핵심이면 L. 내용을 정리해 담으면 K.',
+        '지식 단위로 저장(URL·참조를 본문에).',
+        '수동(manual): 사람이 참조할 때만.'),
+      ('Z','Misc','manual',false,'memory','many',120,
+        '기타 — 위 어디에도 안 맞는 나머지. 분류 보류함.',
+        '11개 어디에도 명확히 안 맞으면 Z(임시). 가능하면 더 맞는 kind 로 재분류 권장.',
+        '지식 단위로 저장.',
+        '수동(manual): 자동 주입 안 함.')
+    ON CONFLICT (kind) DO UPDATE SET
+      label=EXCLUDED.label, injection_mode=EXCLUDED.injection_mode, domain_scoped=EXCLUDED.domain_scoped,
+      audience=EXCLUDED.audience, cardinality=EXCLUDED.cardinality, sort=EXCLUDED.sort,
+      description=EXCLUDED.description, criteria=EXCLUDED.criteria, storage=EXCLUDED.storage, delivery=EXCLUDED.delivery,
+      updated_at=now();
+  `);
+
+  // ── data_source 시드(소스별 수집방식, 멱등 DO UPDATE — 정의 ground-truth). ──
+  //  discord=dropped(수집 중단, 커넥터 코드는 유지), notion/clickup/slack=active. into_kinds = 적재 kind.
+  await itemsPool.query(`
+    INSERT INTO data_source(system, label, status, collection_method, cadence, into_kinds, sort, note) VALUES
+      ('clickup','ClickUp','active',
+        'ClickUp 커넥터가 리스트→프로젝트로 매핑하고, 태스크를 작업 단위로 가져온다. pm_* 툴로 태스크를 직접 쓰기도 한다.',
+        '주기 동기화(run-sync)', '["W"]'::jsonb, 10,
+        '프로젝트 provenance=initiative 와 연결. 태스크는 W kind 로 적재.'),
+      ('notion','Notion','active',
+        'Notion 커넥터가 지정한 페이지/데이터베이스의 문서를 가져온다.',
+        '동기화(run-sync/backfill)', '["A"]'::jsonb, 20,
+        '문서 본문은 산출물(A)로 수집. 시크릿은 적재 전 redact.'),
+      ('slack','Slack','active',
+        'Slack 커넥터가 지정 채널의 메시지/스레드를 활동으로 가져온다.',
+        '동기화(run-sync/backfill)', '["A"]'::jsonb, 30,
+        '대화는 산출물(A)로 수집.'),
+      ('discord','Discord','dropped',
+        '(수집 중단) Discord 커넥터로 채널 메시지를 가져오던 경로. 커넥터 코드는 유지하나 현재 수집하지 않는다.',
+        NULL, '["A"]'::jsonb, 40,
+        '수집 재개 시 status=active 로 전환하면 됨(커넥터 보존).')
+    ON CONFLICT (system) DO UPDATE SET
+      label=EXCLUDED.label, status=EXCLUDED.status, collection_method=EXCLUDED.collection_method,
+      cadence=EXCLUDED.cadence, into_kinds=EXCLUDED.into_kinds, sort=EXCLUDED.sort, note=EXCLUDED.note,
+      updated_at=now();
   `);
 
   // ── 1회 비파괴 데이터복사(멱등) — 기존 org_memory/org_content → knowledge_unit. ──

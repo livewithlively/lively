@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getOrgProfile, getSection, listMembers } from "./store.js";
-import { listKnowledge, type KnowledgeUnit } from "./knowledge.js";
+import { listKnowledge, kindsByInjectionMode, type KnowledgeUnit } from "./knowledge.js";
 import { redactString } from "./redact.js";
 
 export interface Materialized {
@@ -16,15 +16,28 @@ export interface Materialized {
   cleanup: () => Promise<void>;
 }
 
-// 항상-주입 인덱스에 포함하는 'recalled' kind — kind_registry.injection_mode='recalled'(schema.ts:365-368 시드).
-//  R=enforced(전문 주입), S/G=digest, A/W=query, M/L/Z=manual 은 인덱스에서 제외(여기 하드코딩하되 출처는 그 시드).
-//  순서 = 섹션 출력 순서(K→D→F→H). 라벨도 시드의 label 과 정합.
-const RECALLED_KINDS: { kind: string; label: string }[] = [
+// 항상-주입 인덱스에 포함하는 'recalled' kind 정책의 **단일 출처는 kind_registry**(injection_mode='recalled').
+//  P-V3-2(하드코딩 제거): 정책 상수를 kind_registry 조회로 대체 — recalledKindsForIndex() 가 라이브로 읽는다(non-stale).
+//  R=enforced(전문 주입), S/G=digest, A/W=query, M/L/Z=manual 은 인덱스에서 제외(registry 가 권위).
+// 아래 상수는 **DB 미가용 폴백 + 순수함수 테스트용 기본값**일 뿐(레지스트리가 빈/미초기화일 때만 사용). 순서 K→D→F→H.
+const FALLBACK_RECALLED_KINDS: { kind: string; label: string }[] = [
   { kind: "K", label: "Knowledge" },
   { kind: "D", label: "Domain" },
   { kind: "F", label: "Fact" },
   { kind: "H", label: "How-to" },
 ];
+
+// 라이브 정책 — kind_registry.injection_mode='recalled' 행을 sort 순으로(non-stale). 빈 결과면 폴백.
+//  DB 오류는 폴백으로 흡수(fail-open — 인덱스 생성이 정책 조회 실패로 500 나면 안 됨).
+export async function recalledKindsForIndex(): Promise<{ kind: string; label: string }[]> {
+  try {
+    const rows = await kindsByInjectionMode("recalled");
+    return rows.length ? rows : FALLBACK_RECALLED_KINDS;
+  } catch {
+    return FALLBACK_RECALLED_KINDS;
+  }
+}
+
 const PER_KIND_CAP = 50; // kind 당 상한(섹션 폭주 방지). 전체 cap 100 과 함께 작동.
 const TOTAL_CAP = 100;   // 전체 인덱스 줄 상한(네이티브 200줄 아날로그).
 
@@ -59,7 +72,12 @@ function freshness(u: KnowledgeUnit, now: number): string {
 //  assertNoHardSecrets 로 hard-block 하지만, 그 게이트 도입(06-16) 전 적재된 레거시 유닛은 통과하지 못했다.
 //  서빙 경로에서 throw(=컨텍스트 전면 거부)는 과해서, 여기서는 redactString 으로 **마스킹**한다(defense-in-depth,
 //  fail-open 보존). 제목/요약 각 라인을 emit 직전 redactString 통과 — 단일 choke-point 가 정적·라이브·web 모두 덮는다.
-export function buildKnowledgeIndex(units: KnowledgeUnit[]): string {
+//  recalledKinds 인자(섹션 정책)는 호출자가 kind_registry 에서 읽어 넘긴다(non-stale). 생략 시 폴백 상수 —
+//  순수함수 단위테스트(DB 불요)는 인자 없이 호출해 결정적으로 검증한다.
+export function buildKnowledgeIndex(
+  units: KnowledgeUnit[],
+  recalledKinds: { kind: string; label: string }[] = FALLBACK_RECALLED_KINDS,
+): string {
   const now = Date.now(); // freshness 기준점 — 1회만(아래 절대값 비교에만 사용).
   const lines = [
     "# Knowledge Index",
@@ -67,7 +85,7 @@ export function buildKnowledgeIndex(units: KnowledgeUnit[]): string {
     "",
   ];
   let emitted = 0; // 전체 cap 누계.
-  for (const { kind, label } of RECALLED_KINDS) {
+  for (const { kind, label } of recalledKinds) {
     // lifecycle!='active' 제외(호출자가 active 만 넘기더라도 방어적으로 한 번 더 거른다).
     const rows = units.filter((u) => u.kind === kind && u.lifecycle === "active");
     if (!rows.length) continue;
@@ -146,7 +164,8 @@ export async function materializeOrgContent(): Promise<Materialized> {
   //  recalled kind(K/D/F/H) active 만 buildKnowledgeIndex 가 섹션화(단일 소스 — previewMemberContext 와 공유).
   const knowledge = await listKnowledge({ lifecycle: "active" });
   if (knowledge.length) {
-    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge));
+    const recalled = await recalledKindsForIndex(); // kind_registry 정책(non-stale) — 하드코딩 제거
+    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge, recalled));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)

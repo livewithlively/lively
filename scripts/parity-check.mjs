@@ -211,6 +211,18 @@ await report("smoke: GET /api/ui/domainmap/:repo/entities (REST, kind 화이트�
   assert.strictEqual(r.status, 200, `REST ${r.status}: ${JSON.stringify(r.json)}`);
   assert.ok(Array.isArray(r.json), "entities 응답이 배열이 아님");
 });
+// P-V3-2: /api/ui/learn — ground-truth(kind_registry + data_source) 렌더 화면의 단일 출처(REST 전용, MCP 비노출).
+//  12 kind 정의가 비어 있지 않고(정의 채움 실증), data_source 시드(discord=dropped 포함)가 노출되는지.
+await report("smoke: GET /api/ui/learn (REST, ground-truth 렌더)", async () => {
+  const r = await rest("/api/ui/learn");
+  assert.strictEqual(r.status, 200, `REST ${r.status}: ${JSON.stringify(r.json)}`);
+  assert.ok(Array.isArray(r.json.kinds) && r.json.kinds.length === 12, "kinds 12개여야 함");
+  const k = r.json.kinds[0];
+  assert.ok(k.kind && k.label && "criteria" in k && "storage" in k && "delivery" in k, "kind 행에 분류기준/저장/전달 필드");
+  assert.ok(r.json.kinds.every((x) => x.description && x.criteria && x.storage && x.delivery), "12 kind 정의 4필드 전부 채워짐");
+  assert.ok(Array.isArray(r.json.sources) && r.json.sources.length >= 1, "data_source 시드 노출");
+  assert.ok(r.json.sources.some((s) => s.system === "discord" && s.status === "dropped"), "discord=dropped 시드");
+});
 
 // ════════ curate — VALIDATION-ERROR 경로만(쓰기·audit 행 0: 전부 INSERT 이전 throw / 0행 매치) ════════
 async function expectBothError(name, mcpArgs, restPath, restBody, restStatus, substr) {

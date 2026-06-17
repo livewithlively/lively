@@ -33,8 +33,10 @@ const all: Capability[] = [
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...pmCapabilities, // MCP 31툴(기존 13 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
   ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts
-  ...deliveryCapabilities, // 전달/관리(admin scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰
+  ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
 ];
+// MCP 표면 = 31툴(변동 없음 — P-V3-2 의 'learn' 은 expose.mcp=false REST 전용이라 MCP 표면 불포함).
+//  REST 전용 신엔드포인트: GET /api/ui/learn(kind_registry+data_source ground-truth). parity smoke 케이스 동기화됨.
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
 

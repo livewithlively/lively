@@ -25,6 +25,7 @@ import {
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
+import { learnGroundTruth } from "../org/knowledge.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
@@ -142,6 +143,14 @@ export const deliveryCapabilities: Capability[] = [
       const name = p.display_name?.trim() || p.name?.trim() || "조직";
       return { context: await previewMemberContext(name) };
     }),
+
+  // ── 지식유형/수집 ground-truth(#/learn) — kind_registry + data_source 를 그대로 렌더(비개발자 학습 화면). ──
+  //  D-GT: 분류기준·저장방식·전달방식·소스별 수집방식의 단일 출처. 읽기전용(scope null = 인증만), REST 전용.
+  //  런북(build-classify-runbook.mjs)과 동일 데이터(learnGroundTruth) → 양 표면 non-stale 일관.
+  restRead("learn", "지식유형/수집 안내",
+    "통합 지식스토어가 분류하는 12개 지식 종류(정의·분류기준·저장방식·전달방식)와 데이터소스별 수집방식을 ground-truth(kind_registry·data_source)에서 그대로 반환한다(비개발자 학습 화면 #/learn).",
+    [{ method: "GET", paths: ["/api/ui/learn"], parse: () => ({}) }],
+    async () => learnGroundTruth()),
 
   // ── 프로필(표시명·게이트웨이 주소) ──
   restOnly("org_update_profile", "조직 프로필 수정",

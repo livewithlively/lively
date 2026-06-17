@@ -41,4 +41,5 @@
 각 페이즈 완료 시: 커밋 해시·변경파일·게이트결과·적대검증 발견/수정·라이브 배포·e2e 결과·잔여리스크를 본 문서 말미 "진행 로그"에 추가(또는 보고). 모든 주장은 실측.
 
 ## 진행 로그
-- (P-V3-1 착수 예정)
+- **P-V3-1 주입 배선 ✅ (커밋 3b2b21f, :8080 라이브)** — 훅 소스는 이미 org_preview 인덱스 fetch하나 설치본(06-12) stale→재발행으로 배선 활성. redact 출력게이트(materialize.ts=정적/라이브/웹 단일소스 + publish.ts, 마스킹·fail-open, 합성시크릿 5종 [REDACTED] 실증). org 테스트 선작성(materialize.test 6). 검증: 블로커0, preview·훅 stdout 둘다 Knowledge Index 주입 실증, 멱등 byte-identical, test100·parity54·31툴 불변. 잔여(계획정합): H1-c pull redact→P-V3-3, 오프라인 context.md 인덱스→P-V3-5(진실원천 이원화 화해와 함께).
+- (P-V3-2 착수: ground-truth 스키마+시드 + 런북 빌더 + 웹 #/learn + 하드코딩 제거 + G/kinds 정합)

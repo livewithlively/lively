@@ -150,6 +150,103 @@ export async function overviewKnowledge(): Promise<KnowledgeOverview> {
   };
 }
 
+// ════════ ground-truth 레지스트리(kind_registry + data_source) — 런북·웹 #/learn 단일 출처(D-GT). ════════
+// 지식유형/분류기준/저장방식/전달방식을 DB 한 곳에 두고 런북(LLM)·웹(비개발자)이 여기서 렌더(non-stale).
+//  하드코딩(materialize.ts RECALLED_KINDS 등) 제거의 원천. 전부 읽기(시드는 schema.ts).
+
+export interface KindRegistryRow {
+  kind: string;
+  label: string;
+  injection_mode: string;
+  audience: string | null;
+  cardinality: string;
+  domain_scoped: boolean;
+  description: string;
+  criteria: string;
+  storage: string;
+  delivery: string;
+  sort: number;
+}
+
+const KIND_REGISTRY_COLS =
+  "kind, label, injection_mode, audience, cardinality, domain_scoped, description, criteria, storage, delivery, sort";
+
+function mapKindRegistry(row: Record<string, unknown>): KindRegistryRow {
+  return {
+    kind: row.kind as string,
+    label: (row.label as string) ?? "",
+    injection_mode: (row.injection_mode as string) ?? "manual",
+    audience: (row.audience as string) ?? null,
+    cardinality: (row.cardinality as string) ?? "many",
+    domain_scoped: !!row.domain_scoped,
+    description: (row.description as string) ?? "",
+    criteria: (row.criteria as string) ?? "",
+    storage: (row.storage as string) ?? "",
+    delivery: (row.delivery as string) ?? "",
+    sort: (row.sort as number) ?? 0,
+  };
+}
+
+// 전체 kind 레지스트리(정의 ground-truth). sort, kind 순.
+export async function listKindRegistry(): Promise<KindRegistryRow[]> {
+  const r = await itemsPool.query(
+    `SELECT ${KIND_REGISTRY_COLS} FROM kind_registry ORDER BY sort, kind`,
+  );
+  return r.rows.map(mapKindRegistry);
+}
+
+// injection_mode 로 kind 목록 — materialize.ts 가 하드코딩 RECALLED_KINDS 대신 이걸로(non-stale).
+//  {kind,label} 의 sort 순 배열을 반환. 빈 레지스트리(스키마 미초기화)면 빈 배열(호출자 폴백 없이 안전).
+export async function kindsByInjectionMode(mode: string): Promise<{ kind: string; label: string }[]> {
+  const r = await itemsPool.query(
+    `SELECT kind, label FROM kind_registry WHERE injection_mode=$1 ORDER BY sort, kind`, [mode],
+  );
+  return r.rows.map((row) => ({ kind: row.kind as string, label: (row.label as string) ?? (row.kind as string) }));
+}
+
+export interface DataSourceRow {
+  system: string;
+  label: string;
+  status: string;          // 'active' | 'dropped'
+  collection_method: string;
+  cadence: string | null;
+  into_kinds: string[];
+  note: string | null;
+  sort: number;
+}
+
+const DATA_SOURCE_COLS = "system, label, status, collection_method, cadence, into_kinds, note, sort";
+
+function mapDataSource(row: Record<string, unknown>): DataSourceRow {
+  return {
+    system: row.system as string,
+    label: (row.label as string) ?? "",
+    status: (row.status as string) ?? "active",
+    collection_method: (row.collection_method as string) ?? "",
+    cadence: (row.cadence as string) ?? null,
+    into_kinds: Array.isArray(row.into_kinds) ? (row.into_kinds as string[]) : [],
+    note: (row.note as string) ?? null,
+    sort: (row.sort as number) ?? 0,
+  };
+}
+
+export async function listDataSources(): Promise<DataSourceRow[]> {
+  const r = await itemsPool.query(
+    `SELECT ${DATA_SOURCE_COLS} FROM data_source ORDER BY sort, system`,
+  );
+  return r.rows.map(mapDataSource);
+}
+
+// learn ground-truth 묶음 — 웹 #/learn(GET /api/ui/learn)·런북 빌더 공용. kind 정의 + 소스별 수집방식.
+export interface LearnGroundTruth {
+  kinds: KindRegistryRow[];
+  sources: DataSourceRow[];
+}
+export async function learnGroundTruth(): Promise<LearnGroundTruth> {
+  const [kinds, sources] = await Promise.all([listKindRegistry(), listDataSources()]);
+  return { kinds, sources };
+}
+
 // 검색 — org_memory searchMemory 의 ILIKE 백엔드를 knowledge_unit 에 이식 + kind/lifecycle/domain 필터.
 //  본문은 스니펫(240자)만. LIKE 메타문자(\ % _)는 백슬래시 이스케이프(기본 escape=백슬래시).
 export interface KnowledgeSearchHit {
