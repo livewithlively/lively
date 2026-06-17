@@ -243,7 +243,7 @@ export const deliveryCapabilities: Capability[] = [
       // scope 미지정 시 구성원에 설정된 권한을 기본값으로(구성원 메뉴의 권한이 토큰 권한의 진실원천).
       let rawScopes: unknown[];
       if (Array.isArray(input.scopes) && input.scopes.length) rawScopes = input.scopes;
-      else { const mem = await getMember(memberId); rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context"]; }
+      else { const mem = await getMember(memberId); rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context", "memory"]; }
       const scopes = rawScopes.map((s) => str(s, "scopes[]", 20));
       for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       const { token, tokenHash } = await mintToken({

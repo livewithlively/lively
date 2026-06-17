@@ -195,7 +195,7 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   const before = await getMember(m.id);
   const kind = m.kind ?? before?.kind ?? "human";
   const identities = m.identities ?? before?.identities ?? [];
-  const scopes = m.scopes ?? before?.scopes ?? ["items", "context"];
+  const scopes = m.scopes ?? before?.scopes ?? ["items", "context", "memory"];
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, state, scopes, sort, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9,1,now(),$10)

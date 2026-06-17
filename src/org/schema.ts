@@ -48,8 +48,8 @@ export async function initOrgSchema(): Promise<void> {
       version INT NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
-    -- scopes = 구성원 권한(발급 토큰의 scope). 기존 테이블엔 ADD COLUMN(멱등).
-    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context"]'::jsonb;
+    -- scopes = 구성원 권한(발급 토큰의 scope). memory 기본 포함(단일 공유 풀=에이전트 생산·소비, 06-17).
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory"]'::jsonb;
   `);
   await itemsPool.query(`
     DO $$ BEGIN
