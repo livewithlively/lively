@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
 import { getSection } from "./store.js";
+import { redactString } from "./redact.js";
 import { logger } from "../log.js";
 
 // generator(build-context.mjs) 경로 — env 오버라이드 또는 sibling 레이아웃 기본값.
@@ -134,5 +135,9 @@ export async function previewMemberContext(orgName: string): Promise<string> {
     defaults?.body_md?.trim() ? strip(defaults.body_md) : "",
     memIndex,
   ];
-  return sections.filter(Boolean).join("\n\n") + "\n";
+  // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 실제로 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext
+  //  의 live 소스)다. memIndex 는 buildKnowledgeIndex 가 이미 마스킹하나, policy/defaults 는 06-16 write-gate 이전
+  //  레거시 본문이 평문 시크릿을 품을 수 있으므로 조립 후 한 번 더 redactString 으로 마스킹한다(서빙 경로 = throw 금지,
+  //  fail-open 보존 — 마스킹만). 쓰기경로 hard-block(assertNoHardSecrets)과 이중 안전망.
+  return redactString(sections.filter(Boolean).join("\n\n")) + "\n";
 }

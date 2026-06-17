@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getOrgProfile, getSection, listMembers } from "./store.js";
 import { listKnowledge, type KnowledgeUnit } from "./knowledge.js";
+import { redactString } from "./redact.js";
 
 export interface Materialized {
   dir: string;
@@ -53,6 +54,11 @@ function freshness(u: KnowledgeUnit, now: number): string {
 //  전문은 `ctx_cat name=X`, 검색은 `ctx_grep` 로 pull. 비-링크인 이유: generator collectArtifactFiles 가 `](name.md)`
 //  링크를 따라 본문을 디스크에 복사하므로, 링크를 없애 follow 를 원천 차단(본문 비배포 보장).
 //  입력은 listKnowledge({lifecycle:"active"}) 전체 — 여기서 recalled kind 필터·섹션화한다(단일 소스).
+// H1-b 시크릿 출력게이트(v3 P-V3-1): 이 인덱스가 **항상-주입**(SessionStart 훅·정적 context.md·preview·web learn)의
+//  단일 소스이므로, 제목/요약에 평문 시크릿이 섞이면 컨텍스트로 유출된다. 쓰기경로(ctx_save/org section)는
+//  assertNoHardSecrets 로 hard-block 하지만, 그 게이트 도입(06-16) 전 적재된 레거시 유닛은 통과하지 못했다.
+//  서빙 경로에서 throw(=컨텍스트 전면 거부)는 과해서, 여기서는 redactString 으로 **마스킹**한다(defense-in-depth,
+//  fail-open 보존). 제목/요약 각 라인을 emit 직전 redactString 통과 — 단일 choke-point 가 정적·라이브·web 모두 덮는다.
 export function buildKnowledgeIndex(units: KnowledgeUnit[]): string {
   const now = Date.now(); // freshness 기준점 — 1회만(아래 절대값 비교에만 사용).
   const lines = [
@@ -73,7 +79,8 @@ export function buildKnowledgeIndex(units: KnowledgeUnit[]): string {
     for (const u of sorted.slice(0, take)) {
       const title = u.title?.trim() || u.name;
       const firstLine = (u.body_md.split("\n").map((l) => l.trim()).find(Boolean) ?? "").replace(/^#+\s*/, "").slice(0, 80);
-      lines.push(`- ${title}${firstLine ? " — " + firstLine : ""}  · ctx_cat name=${u.name}  · ${freshness(u, now)}`);
+      // H1-b: title/요약은 사용자/레거시 유래 자유텍스트 → emit 직전 시크릿 마스킹(name/freshness 는 서버 생성·무위험).
+      lines.push(`- ${redactString(title)}${firstLine ? " — " + redactString(firstLine) : ""}  · ctx_cat name=${u.name}  · ${freshness(u, now)}`);
     }
     emitted += take;
     const hidden = sorted.length - take; // per-kind 캡 또는 전체 cap 으로 잘린 분.
