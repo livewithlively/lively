@@ -122,12 +122,12 @@ export async function previewMemberContext(orgName: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
   const policy = await getSection("managed-policy");
   const defaults = await getSection("org-defaults");
-  const { listMemory } = await import("./store.js");
-  // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildMemoryIndex 를 그대로
-  //  재사용(정렬 updated_at DESC·cap 100·요약·꼬리줄 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
-  const { buildMemoryIndex } = await import("./materialize.js");
-  const memory = await listMemory();
-  const memIndex = memory.length ? buildMemoryIndex(memory).trim() : "";
+  const { listKnowledge } = await import("./knowledge.js");
+  // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildKnowledgeIndex 를 그대로
+  //  재사용(recalled kind 섹션화·updated_at DESC·cap 100·freshness 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
+  const { buildKnowledgeIndex } = await import("./materialize.js");
+  const knowledge = await listKnowledge({ lifecycle: "active" });
+  const memIndex = knowledge.length ? buildKnowledgeIndex(knowledge).trim() : "";
   const sections = [
     header,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",

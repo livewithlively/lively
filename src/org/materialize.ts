@@ -6,7 +6,8 @@
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getOrgProfile, getSection, listMembers, listMemory } from "./store.js";
+import { getOrgProfile, getSection, listMembers } from "./store.js";
+import { listKnowledge, type KnowledgeUnit } from "./knowledge.js";
 
 export interface Materialized {
   dir: string;
@@ -14,22 +15,73 @@ export interface Materialized {
   cleanup: () => Promise<void>;
 }
 
-// 메모리 인덱스(MEMORY.md) 생성 — 전 메모리의 제목·요약을 **비-링크** 텍스트로. **전문은 `memory_get name=X`** 로 pull.
-//  비-링크인 이유: generator collectArtifactFiles 가 `](name.md)` 링크를 따라 본문을 디스크에 복사하므로, 링크를
-//  없애 follow 를 원천 차단(본문 비배포 보장). cap=최신 MAX 건(네이티브 200줄 아날로그), 초과분은 memory_search.
-export function buildMemoryIndex(rows: { name: string; title: string | null; body_md: string; updated_at: string | Date | null }[]): string {
-  const MAX = 100;
-  // updated_at 은 pg 드라이버가 **Date** 로 반환(타입은 string|null 이지만 런타임 Date). 문자열 가정(localeCompare) 금지 —
-  //  타임스탬프(number)로 비교해 Date/string/null 모두 안전(이걸 어기면 preview/install 생성이 500 으로 터진다).
-  const ts = (u: string | Date | null): number => { const d = u ? new Date(u).getTime() : 0; return Number.isFinite(d) ? d : 0; };
-  const sorted = [...rows].sort((a, b) => ts(b.updated_at) - ts(a.updated_at)).slice(0, MAX);
-  const lines = ["# Memory Index", "(제목·요약만. 전문은 `memory_get name=<name>`, 검색은 `memory_search`)", ""];
-  for (const m of sorted) {
-    const title = m.title?.trim() || m.name;
-    const firstLine = (m.body_md.split("\n").map((l) => l.trim()).find(Boolean) ?? "").replace(/^#+\s*/, "").slice(0, 80);
-    lines.push(`- ${title}${firstLine ? " — " + firstLine : ""}  · memory_get name=${m.name}`);
+// 항상-주입 인덱스에 포함하는 'recalled' kind — kind_registry.injection_mode='recalled'(schema.ts:365-368 시드).
+//  R=enforced(전문 주입), S/G=digest, A/W=query, M/L/Z=manual 은 인덱스에서 제외(여기 하드코딩하되 출처는 그 시드).
+//  순서 = 섹션 출력 순서(K→D→F→H). 라벨도 시드의 label 과 정합.
+const RECALLED_KINDS: { kind: string; label: string }[] = [
+  { kind: "K", label: "Knowledge" },
+  { kind: "D", label: "Domain" },
+  { kind: "F", label: "Fact" },
+  { kind: "H", label: "How-to" },
+];
+const PER_KIND_CAP = 50; // kind 당 상한(섹션 폭주 방지). 전체 cap 100 과 함께 작동.
+const TOTAL_CAP = 100;   // 전체 인덱스 줄 상한(네이티브 200줄 아날로그).
+
+// updated_at/as_of 는 pg 드라이버가 **Date** 로 반환(타입은 string|null 이지만 런타임 Date). 문자열 가정(localeCompare) 금지 —
+//  타임스탬프(number)로 비교해 Date/string/null 모두 안전(이걸 어기면 preview/install 생성이 500 으로 터진다).
+const ts = (u: string | Date | null): number => { const d = u ? new Date(u).getTime() : 0; return Number.isFinite(d) ? d : 0; };
+
+// freshness — updated_at(없으면 as_of) 기준 상대시간. 시간차는 |now - then| 절대값 비교만(Date.now() 1회).
+//  ts() 패턴 유지(Date/string/null 안전). 미래 ts/0 은 '방금'.
+function freshness(u: KnowledgeUnit, now: number): string {
+  const t = ts(u.updated_at) || ts(u.as_of);
+  if (!t) return "방금";
+  const diff = Math.abs(now - t);
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "방금";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(d / 365)}y`;
+}
+
+// 항상-주입 지식 인덱스(MEMORY.md) — recalled kind(K/D/F/H)만 kind별 섹션으로. 제목·요약·freshness 를 **비-링크** 텍스트로.
+//  전문은 `ctx_cat name=X`, 검색은 `ctx_grep` 로 pull. 비-링크인 이유: generator collectArtifactFiles 가 `](name.md)`
+//  링크를 따라 본문을 디스크에 복사하므로, 링크를 없애 follow 를 원천 차단(본문 비배포 보장).
+//  입력은 listKnowledge({lifecycle:"active"}) 전체 — 여기서 recalled kind 필터·섹션화한다(단일 소스).
+export function buildKnowledgeIndex(units: KnowledgeUnit[]): string {
+  const now = Date.now(); // freshness 기준점 — 1회만(아래 절대값 비교에만 사용).
+  const lines = [
+    "# Knowledge Index",
+    "(제목·요약만. 전문은 `ctx_cat name=<name>`, 검색은 `ctx_grep`)",
+    "",
+  ];
+  let emitted = 0; // 전체 cap 누계.
+  for (const { kind, label } of RECALLED_KINDS) {
+    // lifecycle!='active' 제외(호출자가 active 만 넘기더라도 방어적으로 한 번 더 거른다).
+    const rows = units.filter((u) => u.kind === kind && u.lifecycle === "active");
+    if (!rows.length) continue;
+    // 섹션 내 updated_at DESC(없으면 as_of), Date-안전.
+    const sorted = [...rows].sort((a, b) => (ts(b.updated_at) || ts(b.as_of)) - (ts(a.updated_at) || ts(a.as_of)));
+    const room = Math.max(0, TOTAL_CAP - emitted);
+    const take = Math.min(sorted.length, PER_KIND_CAP, room);
+    lines.push(`## ${label} (${kind})`);
+    for (const u of sorted.slice(0, take)) {
+      const title = u.title?.trim() || u.name;
+      const firstLine = (u.body_md.split("\n").map((l) => l.trim()).find(Boolean) ?? "").replace(/^#+\s*/, "").slice(0, 80);
+      lines.push(`- ${title}${firstLine ? " — " + firstLine : ""}  · ctx_cat name=${u.name}  · ${freshness(u, now)}`);
+    }
+    emitted += take;
+    const hidden = sorted.length - take; // per-kind 캡 또는 전체 cap 으로 잘린 분.
+    if (hidden > 0) lines.push(`- … 외 ${hidden}건 (ctx_grep 로 검색)`);
+    lines.push("");
   }
-  if (rows.length > MAX) lines.push(`- … 외 ${rows.length - MAX}건 (memory_search 로 검색)`);
+  // 트레일링 빈 줄 제거 후 단일 개행 종결(기존 출력 관례).
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
   return lines.join("\n") + "\n";
 }
 
@@ -82,11 +134,12 @@ export async function materializeOrgContent(): Promise<Materialized> {
     await writeFile(join(dir, "org", "managed-policy.md"), policy.body_md);
   }
 
-  // memory/MEMORY.md — 인덱스(제목·요약)만 발행. **본문 파일은 디스크에 안 쓴다** — 본문은 memory_search(게이트웨이
+  // memory/MEMORY.md — 인덱스(제목·요약·freshness)만 발행. **본문 파일은 디스크에 안 쓴다** — 본문은 ctx_cat(게이트웨이
   //  pull)로 가져온다. 인덱스가 비-링크라 generator 의 본문 follow 도 안 걸림 → 본문 비배포 보장.
-  const memory = await listMemory();
-  if (memory.length) {
-    await writeFile(join(dir, "memory", "MEMORY.md"), buildMemoryIndex(memory));
+  //  recalled kind(K/D/F/H) active 만 buildKnowledgeIndex 가 섹션화(단일 소스 — previewMemberContext 와 공유).
+  const knowledge = await listKnowledge({ lifecycle: "active" });
+  if (knowledge.length) {
+    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)
