@@ -26,7 +26,7 @@
 | 도메인/프로젝트 | `src/capabilities/context.ts` | `context_overview`/`domain_list`/`domain_get`/`project_list`/`debt_list`/`repo_list` + **authoring 쓰기 `propose_domain`/`domain_deprecate`** — domainmap 프록시 |
 | domainmap 엔진 | `src/domainmap/` | 흡수된 엔진 모듈 — `db.ts`(전용 pg Pool) · `core/`(reconcile·changelog·domains·mappings·debts·projects·refresh·queries) · `cli.ts`(호스트 CLI) · `webhook.ts`(HMAC push-refresh) (`DOMAINMAP_DATABASE_URL`) |
 | PM (ClickUp) | `src/capabilities/pm.ts` · `src/connectors/clickup.ts` | `pm_task_*` 6툴 write-through(+`pm_write_audit`) + 폴링 증분 싱크(`run-sync`) — `runbooks/clickup-sync.md` |
-| 팀 메모리 | `src/tools/memory.ts` · `src/org/store.ts` | `memory_save`/`memory_search`(`memory` scope) — `org_memory` 저장/검색. visibility member\|internal(internal=멤버 미배포: 발행·읽기 API 제외) + domain 자동분류(domainmap) |
+| 팀 메모리 | `src/tools/memory.ts` · `src/org/store.ts` | `memory_save`/`memory_search`(`memory` scope) — `org_memory` **단일 공유 풀**(에이전트 생산·소비). 인덱스(제목·요약)는 발행 시 주입, 본문은 memory_search pull. domain 자동분류 |
 | DB | `src/tools/db.ts` | `db_sources` / `db_schema` / `db_query` — 멀티 데이터소스(`source` 인자·`DB_SOURCES_JSON`), 방화벽·RLS·timeout·감사 |
 | DB 안전장치 | `src/db/firewall.ts` · `src/db/sources.ts` | 단일 SELECT + 위험함수(`set_config`/`current_setting` 등) 차단 + 민감 테이블(`auth_token`·`org_*`) deny · 소스 레지스트리 |
 | RLS 예시 | `sql/rls-example.sql` | 읽기전용 role + 행 정책 |
@@ -106,7 +106,7 @@ Docker: `docker compose up --build`
 - [x] ~~`context_*`~~ → **domainmap 읽기 프록시로 구현·실데이터 e2e 검증**(repo=lively). 남은 것: confirmed/proposed 필터 옵션.
 - [x] **(2026-06-11)** 도메인 authoring(`propose_domain`/`domain_deprecate`) + ClickUp 커넥터/`pm_*` + person 신원 2층 + 훅 패키지 연동 — 상세는 `runbooks/clickup-sync.md`·`runbooks/hooks.md`, DESIGN §12.
 - [ ] `db_query` — **라이블리 실제 제품 DB(AWS RDS) 연결**(읽기전용 리플리카 + RLS). 정보: `lively/infra/terraform`. + 컬럼 마스킹.
-- [x] **(2026-06-16)** `memory_save`/`memory_search` — `org_memory` 저장/검색(텍스트검색·domain 자동분류·visibility member\|internal 격리, `memory` scope). pgvector 의미검색은 후속. 설계 `research/2026-06-16-memory-save-flow.md`.
+- [x] **(2026-06-16→17)** `memory_save`/`memory_search` — `org_memory` **단일 공유 풀**(텍스트검색·domain 자동분류, `memory` scope). member/internal·visibility·in_index 분리는 06-17 폐기(과설계 — 에이전트 생산·소비 단일 풀). 재설계 `research/2026-06-17-shared-agent-memory-redesign.md`. pgvector 의미검색은 후속.
 - [x] ~~`code_*` — ripgrep 미러 / Sourcegraph / 공식 GitHub MCP 합성~~ → **보류/컷**(개발자는 레포 내 네이티브 툴; 필요시 공식 GitHub MCP 래핑).
 - [ ] 인증 2단계 — Google SSO 기반 OAuth 2.1 (`mcpAuthRouter` + jose), `bearer.ts` 교체
 
