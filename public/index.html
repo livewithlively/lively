@@ -11,7 +11,7 @@
 <body>
 
 <!-- 스킵 링크 — 해시 라우터와 충돌하지 않게 JS 가 포커스만 이동(app.js) -->
-<a id="skip-link" class="skip-link" href="#/overview">본문 바로가기</a>
+<a id="skip-link" class="skip-link" href="#/map">본문 바로가기</a>
 
 <!-- 토큰 게이트 — 토큰 없거나 401 시 표시 -->
 <section id="gate" hidden>
@@ -29,13 +29,12 @@
 <!-- 앱 셸 -->
 <div id="app" hidden>
   <header class="topbar">
-    <a class="wordmark" href="#/overview">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub">Context</span></a>
+    <a class="wordmark" href="#/map">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub">Context</span></a>
     <nav class="tabs" aria-label="주 메뉴">
-      <a href="#/overview" data-tab="overview">개요</a>
-      <a href="#/items" data-tab="items">탐색</a>
-      <a href="#/inbox" data-tab="inbox">큐레이션</a>
-      <a href="#/domains" data-tab="domains">도메인</a>
-      <a href="#/admin" data-tab="admin" id="admin-tab" hidden>관리</a>
+      <a href="#/map" data-tab="map">지식 지도</a>
+      <a href="#/browse" data-tab="browse">탐색</a>
+      <a href="#/review" data-tab="review">검토<span class="tab-count" id="review-count" hidden></span></a>
+      <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
     </nav>
     <div class="topbar-right">
       <span class="sync-chip" id="sync-chip" hidden><span class="dot-static" aria-hidden="true"></span><span id="sync-label"></span></span>

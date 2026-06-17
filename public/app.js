@@ -1,21 +1,62 @@
 // Lively Context 웹 UI — 프레임워크 없는 해시 라우팅 SPA-lite.
 // 보안 규칙: 모든 데이터 텍스트는 textContent/createElement 만 사용(innerHTML 에 데이터 주입 금지 —
 // discord/notion 본문 XSS 방어). 토큰은 localStorage 에만, 절대 로그/URL 에 싣지 않는다.
+//
+// IA(2026-06-17 재설계): 12 질적유형(kind) × 컨테이너로 분류된 지식을 비개발자가 조회·CRUD.
+//  파일탐색기 메타포 — 폴더=kind/domain, 파일=지식단위(unit). 5 화면:
+//   1) 지식 지도(#/map)   — ctx_overview. kind 카드 + 시스템 건강. 오리엔테이션.
+//   2) 탐색(#/browse)      — ctx_ls/ctx_grep. 좌 kind 트리 + grep 검색 + 필터 목록.
+//   3) 유닛 상세(#/u/<name>) — ctx_cat 전문 + 메타 패널 + 편집(ctx_save)/반려(set-lifecycle).
+//   4) 검토(#/review)      — confidence=ai·active 피드(에이전트 생산물) → reject/edit.
+//   5) 관리(#/system)      — kind 레지스트리 열람 + 기존 관리(커넥터/소스/훅/멤버/토큰) 흡수.
 'use strict';
 
 const TOKEN_KEY = 'lively_ui_token';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// kind 메타데이터(레지스트리 정합 — schema.ts 시드와 동일). injection_mode 는 서버 overview 가 권위.
+//  여기 라벨/한글설명/아이콘은 표시 보강용(서버 label 우선, 없으면 이 표를 폴백).
+const KIND_META = {
+  R: { label: 'Rule/Policy/Persona', ko: '규칙 · 정책 · 페르소나' },
+  K: { label: 'Knowledge note', ko: '지식 노트' },
+  D: { label: 'Domain knowledge', ko: '도메인 지식' },
+  F: { label: 'Fact', ko: '사실' },
+  H: { label: 'How-to/Runbook', ko: '하우투 · 런북' },
+  S: { label: 'Schema/Structure', ko: '스키마 · 구조' },
+  G: { label: 'Glossary/Graph', ko: '용어집 · 그래프' },
+  A: { label: 'Artifact', ko: '산출물' },
+  W: { label: 'Work/Task', ko: '작업 · 태스크' },
+  M: { label: 'Memo', ko: '메모' },
+  L: { label: 'Link/Ref', ko: '링크 · 참조' },
+  Z: { label: 'Misc', ko: '기타' },
+};
+// 주입 모드 한글 라벨 + 한 줄 설명(비개발자 친화 — '어떻게 멤버에게 노출되나').
+const INJECTION_LABEL = {
+  enforced: '강제 주입',
+  always:   '항상 주입',
+  recalled: '검색 회상',
+  digest:   '다이제스트',
+  query:    '질의 시',
+  manual:   '수동',
+};
+const INJECTION_HINT = {
+  enforced: '모든 세션 컨텍스트 최상단에 강제로 들어갑니다(규칙·정책).',
+  always:   '항상 컨텍스트에 포함됩니다.',
+  recalled: '관련될 때 의미검색으로 회상됩니다.',
+  digest:   '요약(다이제스트) 형태로 노출됩니다.',
+  query:    '에이전트가 필요로 질의할 때만 조회됩니다.',
+  manual:   '사람이 직접 참조할 때만 쓰입니다.',
+};
+// confidence(신뢰 출처) 라벨 — ai=에이전트 생산, human=사람 확정, rule=규칙 파생.
+const CONFIDENCE_LABEL = { ai: '에이전트', human: '사람', rule: '규칙' };
+// lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
+const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
+
 const state = {
   me: null,
-  stats: null,          // /api/ui/stats 캐시 (개요 + 싱크 칩 + 필터 옵션 공유)
-  repos: null,          // /api/ui/repos 캐시
-  candidates: new Map(),// repo → Promise<candidates>
-  items: { filters: { q: '', system: '', type: '', repo: '', domainKey: '', projectKey: '', since: '' }, rows: [], offset: 0, done: false, loaded: false, selectedId: null },
-  inbox: { filters: { missing: 'either', repo: '', system: '', type: '', since: '' } }, // 페이지네이션 오프셋은 renderInbox 로컬
-  domainsRepo: '',
-  dm: { section: 'areas', filter: 'all', selectedId: null, cursor: -1, rows: [] }, // 도메인(domainmap 큐레이션) 페이지 상태
-  admin: { data: null, sel: 'managed-policy', memberSel: null, memorySel: null }, // 관리(전달) 페이지 상태
+  overview: null,        // /api/ui/ctx/overview 캐시(지도 + 검토 배지 + 탐색 kind 트리 공유)
+  browse: { filters: { kind: '', domain: '', lifecycle: 'active', confidence: '', q: '' }, entries: [], loaded: false },
+  admin: { data: null, sel: 'kinds', memberSel: null, memorySel: null }, // 관리(전달) 페이지 상태
 };
 let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0;            // datalist 등 고유 id 카운터
@@ -76,11 +117,11 @@ async function api(path, opts = {}) {
 }
 
 // ── 시간/숫자 ──
-// 마지막 싱크가 며칠 전일 수 있음 — 분/시간/일 폴백('분' 가정 금지).
+// 마지막 갱신이 며칠 전일 수 있음 — 분/시간/일 폴백('분' 가정 금지).
 function relTime(iso) {
-  if (!iso) return '시간 정보 없음';
+  if (!iso) return '갱신 기록 없음';
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '시간 정보 없음';
+  if (Number.isNaN(t)) return '갱신 기록 없음';
   const m = Math.floor((Date.now() - t) / 60000);
   if (m < 1) return '방금 전';
   if (m < 60) return m + '분 전';
@@ -96,34 +137,14 @@ function absTime(iso) {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR');
 }
 const fmtNum = (n) => Number(n || 0).toLocaleString('ko-KR');
-const STATE_LABEL = { proposed: '제안됨', confirmed: '확정', rejected: '기각됨' };
-const BY_LABEL = { rule: '규칙', llm: 'LLM', manual: '수동' };
+const kindLabel = (k) => (KIND_META[k] && KIND_META[k].ko) || (KIND_META[k] && KIND_META[k].label) || k;
 
-// ── 토스트 — undo = { changeId, onUndone }: domainmap change_id 되돌리기(최신 1건만, 6초) ──
-function toast(msg, isError, undo) {
+// ── 토스트 ──
+function toast(msg, isError) {
   const box = document.getElementById('toasts');
-  if (undo) for (const old of box.querySelectorAll('.toast[data-undo]')) old.remove();
   const t = el('div', { class: 'toast' + (isError ? ' coral' : ''), text: msg });
-  if (undo && undo.changeId) {
-    t.dataset.undo = '1';
-    const btn = el('button', { class: 'btn-text', text: '실행 취소' });
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      try {
-        await api('/api/ui/domainmap/restore/' + encodeURIComponent(undo.changeId), { method: 'POST', body: JSON.stringify({}) });
-        t.remove();
-        toast('되돌렸습니다');
-        if (undo.onUndone) undo.onUndone();
-      } catch (e) {
-        // 400(dependent rows 등) — 서버 메시지 그대로 표시, 재시도 없음.
-        t.remove();
-        toast('되돌리지 못했습니다 — ' + e.message, true);
-      }
-    });
-    t.append(btn);
-  }
-  document.getElementById('toasts').append(t);
-  setTimeout(() => t.remove(), undo ? 6000 : 3600);
+  box.append(t);
+  setTimeout(() => t.remove(), 3600);
 }
 
 // ── 스킵 링크 — href 를 따라가면 해시 라우터가 오작동하므로 JS 로 포커스만 이동(§8) ──
@@ -133,42 +154,29 @@ document.getElementById('skip-link').addEventListener('click', (ev) => {
   if (v) { v.setAttribute('tabindex', '-1'); v.focus(); }
 });
 
-// ── 탐색 리스트 캐시 동기화 — 디테일/인박스에서 제안·확정 성공 시 같은 세션의 목록 배지가
-//    구식('제안됨')으로 남지 않게 해당 행의 매핑 엔트리를 갱신/추가 ──
-function patchItemsCache(itemId, kind, repo, key, newState, newBy) {
-  const row = state.items.rows.find((r) => String(r.id) === String(itemId));
-  if (!row) return;
-  const arr = kind === 'domain' ? (row.domains = row.domains || []) : (row.projects = row.projects || []);
-  const ex = arr.find((m) => m.repo === repo && m.key === key);
-  if (ex) { ex.state = newState; ex.by = newBy; }
-  else arr.push({ repo, key, state: newState, by: newBy });
-}
-
 // ── 캐시 로더 ──
-function getStats(force) {
-  if (!force && state.stats) return Promise.resolve(state.stats);
-  return api('/api/ui/stats').then((s) => { state.stats = s; updateSyncChip(); return s; });
-}
-function getRepos(force) {
-  if (!force && state.repos) return Promise.resolve(state.repos);
-  return api('/api/ui/repos').then((r) => { state.repos = r; return r; });
-}
-function getCandidates(repo) {
-  if (!state.candidates.has(repo)) {
-    const p = api('/api/ui/candidates?repo=' + encodeURIComponent(repo))
-      .catch((e) => { state.candidates.delete(repo); throw e; });
-    state.candidates.set(repo, p);
-  }
-  return state.candidates.get(repo);
+function getOverview(force) {
+  if (!force && state.overview) return Promise.resolve(state.overview);
+  return api('/api/ui/ctx/overview').then((o) => { state.overview = o; updateSyncChip(); updateReviewBadge(); return o; });
 }
 
 function updateSyncChip() {
   const chip = document.getElementById('sync-chip');
   const label = document.getElementById('sync-label');
-  if (state.stats && state.stats.lastOccurredAt) {
-    label.textContent = relTime(state.stats.lastOccurredAt) + ' 싱크';
-    chip.hidden = false;
+  if (!state.overview || !state.overview.kinds) return;
+  // 전 kind 중 가장 최근 갱신시각을 '살아있음' 신호로(§7 — 마지막 갱신 노출).
+  let latest = null;
+  for (const k of state.overview.kinds) {
+    if (k.latest_updated_at && (!latest || k.latest_updated_at > latest)) latest = k.latest_updated_at;
   }
+  if (latest) { label.textContent = relTime(latest) + ' 갱신'; chip.hidden = false; }
+}
+function updateReviewBadge() {
+  const badge = document.getElementById('review-count');
+  if (!badge) return;
+  const n = state.overview ? state.overview.review_pending : 0;
+  if (n > 0) { badge.textContent = String(n); badge.hidden = false; }
+  else badge.hidden = true;
 }
 
 // ── 토큰 게이트 ──
@@ -211,1546 +219,451 @@ document.getElementById('gate-form').addEventListener('submit', async (ev) => {
 // ── 에러 표시 헬퍼 ──
 function errorNote(e, prefix) {
   if (e && e.status === 403) {
-    return el('div', { class: 'note', text: '이 토큰에 필요한 권한(items/context)이 없습니다.' });
+    return el('div', { class: 'note', text: '이 토큰에 필요한 권한(memory)이 없습니다.' });
   }
   return el('div', { class: 'note', text: (prefix || '불러오지 못했습니다') + ' — ' + (e && e.message ? e.message : '알 수 없는 오류') });
 }
 
-// ── 매핑 배지(리스트/카드 공용) ──
-function badgeRow(item) {
-  const maps = [];
-  for (const d of item.domains || []) maps.push({ kind: 'domain', repo: d.repo, key: d.key, state: d.state });
-  for (const p of item.projects || []) maps.push({ kind: 'project', repo: p.repo, key: p.key, state: p.state });
-  if (!maps.length) return null;
-  const repoSet = new Set(maps.map((m) => m.repo));
-  const showRepo = repoSet.size > 1; // 멀티레포일 때만 "repo:key" 프리픽스
-  const wrap = el('div', { class: 'badge-row' });
-  for (const m of maps.slice(0, 4)) {
-    wrap.append(
-      el('span', { class: 'pill ' + (m.kind === 'domain' ? 'pill-domain' : 'pill-project'), text: (showRepo ? m.repo + ':' : '') + m.key }),
-      el('span', { class: 'pill pill-state ' + m.state, text: STATE_LABEL[m.state] || m.state }),
-    );
-  }
-  if (maps.length > 4) wrap.append(el('span', { class: 'pill pill-more', text: '+' + (maps.length - 4) }));
-  return wrap;
+// ── 공용: 상태 점 + 라벨(§0.5 — 채운 필 금지, 6px 점 + 무채 텍스트) ──
+function lifecycleDot(lifecycle) {
+  const cls = lifecycle === 'active' ? 'st ok' : (lifecycle === 'rejected' ? 'st dim' : 'st');
+  return el('span', { class: cls, text: LIFECYCLE_LABEL[lifecycle] || lifecycle });
+}
+function confidenceDot(confidence) {
+  // ai=점만(중립), human=민트(사람 확정=살아있음), rule=연회색.
+  const cls = confidence === 'human' ? 'st ok' : (confidence === 'rule' ? 'st dim' : 'st');
+  return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
 }
 
-function rowTitle(item) {
-  if (item.title) return item.title;
-  const s = (item.snippet || '').replace(/\s+/g, ' ').trim();
-  return s ? s.slice(0, 80) : '(내용 없음)';
-}
-
-function itemRow(item, selected) {
-  const meta = [item.system, item.actor || '작성자 미상', relTime(item.occurred_at)].join(' · ');
-  const row = el('div', { class: 'row' + (selected ? ' sel' : ''), role: 'link', tabindex: '0' },
-    el('div', { class: 'row-title', text: rowTitle(item) }),
-    el('div', { class: 'row-meta' }, meta, item.parent_id ? el('span', { class: 'thread-mark', text: '  ↳ 스레드' }) : null),
-    badgeRow(item),
+// ════════════════════════════════════════════
+// 1) 지식 지도 #/map — ctx_overview. kind 카드 + 시스템 건강.
+// ════════════════════════════════════════════
+async function renderMap(view) {
+  view.replaceChildren(skeleton('지식 지도를 불러오는 중'));
+  const o = await getOverview(true);
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '지식 ', el('span', { class: 'accent', text: '지도' })),
+    el('p', { class: 'sub', text: '회사의 살아있는 맥락을 종류(kind)별로 한눈에. 폴더(종류)를 열면 그 안의 지식 단위를 볼 수 있습니다.' }),
   );
-  const go = () => { location.hash = '#/items/' + item.id; };
-  row.addEventListener('click', go);
-  row.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-  return row;
-}
 
-// ════════════════════════════════════════════
-// 1) 개요 #/overview
-// ════════════════════════════════════════════
-async function renderOverview(view) {
-  view.replaceChildren(
-    el('div', { class: 'skel-stack' },
-      el('div', { class: 'skel', style: 'min-height:220px' }),
-      el('div', { class: 'loading-caption', text: '통계 불러오는 중…' }),
+  // 시스템 건강 — 조용한 숫자 + 여백(§0.5 제품 히어로).
+  const health = el('div', { class: 'card health-card' },
+    el('div', { class: 'stat-row' },
+      stat(fmtNum(o.total_active), '활성 지식 단위', '건'),
+      stat(fmtNum(o.kinds.filter((k) => k.active_count > 0).length), '사용 중인 종류', '/ ' + o.kinds.length),
+      reviewStat(o.review_pending),
     ),
   );
-  let stats, recent;
-  try {
-    [stats, recent] = await Promise.all([getStats(true), api('/api/ui/items?limit=8')]);
-  } catch (e) {
-    if (e.status === 401) return;
-    view.replaceChildren(errorNote(e, '통계를 불러오지 못했습니다'));
-    return;
-  }
-  const recentRows = (recent && recent.rows) || [];
 
-  // ── 페이지 헤더(§0.5 calm — 그라데이션/SVG 글로우 없이 숫자 타이포만) ──
-  const confirmedTotal = stats.coverage.reduce((a, c) => a + c.domainConfirmed + c.projectConfirmed, 0);
-  const statRow = el('div', { class: 'stat-row' },
-    el('div', { class: 'stat' },
-      el('div', { class: 'num' }, fmtNum(stats.total), el('small', { text: '건' })),
-      el('div', { class: 'lbl', text: '전체 아이템' })),
-    stats.bySystem.map((s) => el('div', { class: 'stat' },
-      el('div', { class: 'num', text: fmtNum(s.count) }),
-      el('div', { class: 'lbl', text: s.system }))),
-    el('div', { class: 'stat' },
-      el('div', { class: 'num' }, fmtNum(confirmedTotal), el('small', { text: '건' })),
-      el('div', { class: 'lbl', text: '확정 매핑' })),
-  );
-  const systems = stats.bySystem.map((s) => s.system).join('·') || '소스';
-  const hero = el('section', { class: 'page-head' },
-    el('h1', { text: '개요' }),
-    el('p', { class: 'sub', text: systems + '의 대화와 문서가 도메인 지도에 연결됩니다.' }),
-    statRow,
-  );
-
-  // ── 커버리지 카드 ──
-  const covCard = el('section', { class: 'card' }, el('h2', { text: '레포별 매핑 커버리지' }));
-  if (!stats.coverage.length) {
-    covCard.append(el('p', { class: 'empty', text: '아직 매핑된 레포가 없습니다. run-map을 실행하거나 큐레이션에서 직접 제안하세요.' }));
-  } else {
-    for (const c of stats.coverage) {
-      const line = (lbl, items, proposed, confirmed) => {
-        const pct = stats.total ? Math.min(100, Math.round(items / stats.total * 100)) : 0;
-        const stat = el('span', { class: 'cov-stat' },
-          fmtNum(items) + '/' + fmtNum(stats.total) + ' · 제안 ' + fmtNum(proposed) + ' · 확정 ',
-          confirmed > 0 ? el('span', { class: 'ok', text: fmtNum(confirmed) }) : String(confirmed));
-        return el('div', { class: 'cov-line' },
-          el('span', { class: 'cov-lbl', text: lbl }),
-          el('div', { class: 'track' }, el('div', { class: 'fill', style: 'width:' + pct + '%' })),
-          stat);
-      };
-      covCard.append(el('div', { class: 'cov-repo' },
-        el('div', { class: 'cov-name', text: c.repo }),
-        line('도메인', c.domainItems, c.domainProposed, c.domainConfirmed),
-        line('프로젝트', c.projectItems, c.projectProposed, c.projectConfirmed),
-      ));
-    }
-  }
-
-  // ── 최근 유입 카드 ──
-  const recentCard = el('section', { class: 'card' },
-    el('div', { class: 'card-head' },
-      el('h2', { text: '최근 유입' }),
-      el('span', { class: 'caption', text: '마지막 싱크 ' + relTime(stats.lastOccurredAt) })),
-  );
-  const listBox = el('div', { class: 'list-box', style: 'margin-top:4px' });
-  if (!recentRows.length) listBox.append(el('div', { class: 'empty', text: '아직 싱크된 아이템이 없습니다.' }));
-  for (const it of recentRows) {
-    const r = el('div', { class: 'row', role: 'link', tabindex: '0' },
-      el('div', { class: 'row-title', text: rowTitle(it) }),
-      el('div', { class: 'row-meta', text: [it.system, it.actor || '작성자 미상', relTime(it.occurred_at)].join(' · ') }));
-    r.addEventListener('click', () => { location.hash = '#/items/' + it.id; });
-    r.addEventListener('keydown', (e) => { if (e.key === 'Enter') location.hash = '#/items/' + it.id; });
-    listBox.append(r);
-  }
-  recentCard.append(listBox);
-  // 14일 미니 바 — 실데이터(recentDaily), 오늘은 민트.
-  // 날짜 키는 서버(uiStats)와 동일하게 Asia/Seoul 고정 — UTC 키를 쓰면 KST 00~09시에 하루가 밀림.
-  const byDay = new Map((stats.recentDaily || []).map((d) => [d.day, d.count]));
-  const days = [];
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86400000);
-    days.push(d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' })); // sv-SE = YYYY-MM-DD
-  }
-  const max = Math.max(1, ...days.map((d) => byDay.get(d) || 0));
-  const bars = el('div', { class: 'bars' });
-  days.forEach((d, i) => {
-    const c = byDay.get(d) || 0;
-    bars.append(el('div', {
-      class: 'bar' + (i === 13 ? ' today' : ''),
-      style: 'height:' + (4 + Math.round(28 * c / max)) + 'px',
-      title: d + ' · ' + c + '건',
-    }));
-  });
-  recentCard.append(el('div', { class: 'caption', style: 'margin-top:14px', text: '최근 14일 유입' }), bars);
-
-  const grid = el('div', { class: 'grid-2' }, covCard, recentCard);
-  view.replaceChildren(hero, grid);
-  applyReveal([hero, covCard, recentCard]);
-}
-
-// ════════════════════════════════════════════
-// 2) 탐색 #/items, #/items/:id
-// ════════════════════════════════════════════
-async function renderItems(view, detailId, params) {
-  // 해시 쿼리 프리필(도메인 페이지에서 진입 등).
-  if (params && [...params.keys()].length) {
-    const f = state.items.filters;
-    for (const k of ['q', 'system', 'type', 'repo', 'domainKey', 'projectKey', 'since']) {
-      if (params.has(k)) f[k] = params.get(k);
-    }
-    state.items.loaded = false; // 필터가 바뀌었으니 재조회
-    history.replaceState(null, '', '#/items'); // 프리필 1회 소비
-  }
-  state.items.selectedId = detailId || null;
-
-  let stats = null, repos = null;
-  try { stats = await getStats(); } catch (e) { if (e.status === 401) return; }
-  try { repos = await getRepos(); } catch (_) { /* context 스코프 없거나 다운 — 레포 필터만 비활성 */ }
-
-  const f = state.items.filters;
-  const mkSelect = (name, options, value, onchange, extra) => {
-    const s = el('select', Object.assign({ 'aria-label': name }, extra));
-    for (const o of options) s.append(el('option', { value: o.value, text: o.label }));
-    s.value = value;
-    s.addEventListener('change', onchange);
-    return s;
-  };
-  const optAll = (label) => ({ value: '', label });
-
-  const searchInput = el('input', { type: 'search', placeholder: '제목·본문 검색', value: f.q, 'aria-label': '검색' });
-  let debounceTimer = null;
-  searchInput.addEventListener('input', () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => { f.q = searchInput.value.trim(); resetAndFetch(); }, 300);
-  });
-
-  const systemSel = mkSelect('시스템',
-    [optAll('시스템 전체'), ...((stats && stats.bySystem) || []).map((s) => ({ value: s.system, label: s.system }))],
-    f.system, () => { f.system = systemSel.value; resetAndFetch(); });
-  const typeSel = mkSelect('타입',
-    [optAll('타입 전체'), ...((stats && stats.byType) || []).map((t) => ({ value: t.type, label: t.type }))],
-    f.type, () => { f.type = typeSel.value; resetAndFetch(); });
-  const repoSel = mkSelect('레포',
-    [optAll('레포 전체'), ...(((repos && repos.repos) || []).map((r) => ({ value: r, label: r })))],
-    f.repo, async () => { f.repo = repoSel.value; await fillKeySelects(); resetAndFetch(); });
-  const domainSel = mkSelect('도메인 키', [optAll('도메인 전체')], f.domainKey,
-    () => { f.domainKey = domainSel.value; resetAndFetch(); });
-  const projectSel = mkSelect('프로젝트 키', [optAll('프로젝트 전체')], f.projectKey,
-    () => { f.projectKey = projectSel.value; resetAndFetch(); });
-  const sinceInput = el('input', { type: 'date', value: f.since ? f.since.slice(0, 10) : '', 'aria-label': '이후 날짜' });
-  sinceInput.addEventListener('change', () => {
-    f.since = sinceInput.value ? new Date(sinceInput.value + 'T00:00:00').toISOString() : '';
-    resetAndFetch();
-  });
-  const resetBtn = el('button', { class: 'btn-text', text: '초기화', onclick: () => {
-    state.items.filters = { q: '', system: '', type: '', repo: '', domainKey: '', projectKey: '', since: '' };
-    state.items.loaded = false;
-    route();
-  } });
-
-  async function fillKeySelects() {
-    const repo = f.repo;
-    for (const [sel, kind] of [[domainSel, 'domains'], [projectSel, 'projects']]) {
-      // 비활성 사유를 title 만이 아니라 옵션 텍스트로도 노출(보조기술/시각 동일 정보).
-      const base = kind === 'domains' ? '도메인' : '프로젝트';
-      sel.replaceChildren(el('option', { value: '', text: repo ? base + ' 전체' : base + ' — 레포 먼저 선택' }));
-      sel.disabled = !repo;
-      sel.title = repo ? '' : '레포를 먼저 선택하세요';
-    }
-    if (!repo) { f.domainKey = ''; f.projectKey = ''; return; }
-    try {
-      const c = await getCandidates(repo);
-      for (const d of c.domains) domainSel.append(el('option', { value: d.key, text: d.key + (d.name ? ' — ' + d.name : '') }));
-      for (const p of c.projects) projectSel.append(el('option', { value: p.key, text: p.key + (p.name ? ' — ' + p.name : '') }));
-      domainSel.value = f.domainKey || '';
-      projectSel.value = f.projectKey || '';
-      if (domainSel.value !== f.domainKey) f.domainKey = '';
-      if (projectSel.value !== f.projectKey) f.projectKey = '';
-    } catch (_) {
-      // 후보 로드 실패(domainmap 다운 등) — 키 셀렉트는 빈 상태로 둠
-    }
-  }
-
-  const filterBar = el('div', { class: 'panel filter-bar' },
-    searchInput, systemSel, typeSel, repoSel, domainSel, projectSel, sinceInput, resetBtn);
-
-  const listBox = el('div', { class: 'list-box' });
-  const countCap = el('span', { class: 'caption', text: '' });
-  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '더 보기', onclick: () => fetchPage(true) });
-  moreBtn.hidden = true;
-  const listFoot = el('div', { class: 'list-foot' }, moreBtn, countCap);
-  const detailPane = el('div', { class: 'split-detail' });
-
-  function renderList() {
-    listBox.replaceChildren();
-    if (!state.items.rows.length) {
-      listBox.append(el('div', { class: 'empty', text: '조건에 맞는 아이템이 없습니다. 필터를 줄여보세요.' }));
-    }
-    for (const it of state.items.rows) listBox.append(itemRow(it, String(it.id) === String(state.items.selectedId)));
-    countCap.textContent = fmtNum(state.items.rows.length) + '건 표시 중';
-    moreBtn.hidden = state.items.done;
-  }
-
-  async function fetchPage(append) {
-    const usp = new URLSearchParams();
-    if (f.q) usp.set('q', f.q);
-    if (f.system) usp.set('system', f.system);
-    if (f.type) usp.set('type', f.type);
-    if (f.repo) usp.set('repo', f.repo);
-    if (f.domainKey) usp.set('domainKey', f.domainKey);
-    if (f.projectKey) usp.set('projectKey', f.projectKey);
-    if (f.since) usp.set('since', f.since);
-    usp.set('limit', '30');
-    usp.set('offset', String(append ? state.items.offset : 0));
-    try {
-      const data = await api('/api/ui/items?' + usp.toString());
-      const rows = (data && data.rows) || [];
-      if (append) state.items.rows = state.items.rows.concat(rows);
-      else state.items.rows = rows;
-      state.items.offset = state.items.rows.length;
-      state.items.done = rows.length < 30;
-      state.items.loaded = true;
-      renderList();
-    } catch (e) {
-      if (e.status === 401) return;
-      listBox.replaceChildren(errorNote(e, '아이템을 불러오지 못했습니다'));
-    }
-  }
-  function resetAndFetch() { state.items.offset = 0; fetchPage(false); }
-
-  const split = el('div', { class: 'split' },
-    el('div', { class: 'split-list' }, listBox, listFoot),
-    detailPane);
-  view.replaceChildren(filterBar, split);
-  applyReveal([filterBar, split]);
-
-  await fillKeySelects();
-  if (state.items.loaded) renderList(); else await fetchPage(false);
-
-  if (detailId) renderDetail(detailPane, detailId);
-  else detailPane.append(el('div', { class: 'detail-card' },
-    el('p', { class: 'empty', text: '왼쪽 목록에서 아이템을 선택하세요.' })));
-}
-
-// ── 디테일 페인 ──
-async function renderDetail(pane, id) {
-  pane.replaceChildren(el('div', { class: 'skel', style: 'min-height:200px' }));
-  let data;
-  try {
-    data = await api('/api/ui/items/' + encodeURIComponent(id));
-  } catch (e) {
-    if (e.status === 401) return;
-    pane.replaceChildren(errorNote(e, '아이템을 불러오지 못했습니다'));
-    return;
-  }
-  const item = data.item;
-  const card = el('div', { class: 'detail-card' });
-
-  // 헤더.
-  const head = el('div', {},
-    el('h3', { class: 'detail-title', text: item.title || '(제목 없음)' }),
-    el('div', { class: 'detail-meta' },
-      el('span', { text: item.type }), el('span', { text: '·' }),
-      el('span', { text: item.system }), el('span', { text: '·' }),
-      el('span', { text: item.actor || '작성자 미상' }), el('span', { text: '·' }),
-      el('span', { text: absTime(item.occurred_at) }),
-      el('span', { class: 'caption', text: '(' + relTime(item.occurred_at) + ')' }),
-      item.external_url
-        ? el('a', { class: 'btn btn-ghost btn-sm', href: item.external_url, target: '_blank', rel: 'noopener noreferrer', text: '원본 보기 ↗' })
-        : null,
-    ));
-  card.append(head);
-
-  // 스레드(대화형) — 부모 체인 → 현재 → 답글.
-  const th = data.thread || { ancestors: [], children: [] };
-  if (th.ancestors.length || th.children.length) {
-    card.append(el('div', { class: 'sec-label', text: '스레드' }));
-    const thread = el('div', { class: 'thread' });
-    const bubble = (row, cls) => {
-      const b = el('div', { class: 'bubble' + (cls ? ' ' + cls : ''), role: cls === 'current' ? null : 'link', tabindex: cls === 'current' ? null : '0' },
-        el('div', { class: 'bubble-head' },
-          el('span', { text: row.actor || '작성자 미상' }),
-          el('span', { class: 'when', text: relTime(row.occurred_at) })),
-        el('div', { class: 'bubble-body', text: (row.snippet || row.title || '').slice(0, 280) }));
-      if (cls !== 'current') {
-        const go = () => { location.hash = '#/items/' + row.id; };
-        b.addEventListener('click', go);
-        b.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-      }
-      return b;
-    };
-    for (const a of th.ancestors) thread.append(bubble(a));
-    thread.append(bubble({ actor: item.actor, occurred_at: item.occurred_at, snippet: item.title || (item.body || '').slice(0, 280) }, 'current'));
-    if (th.children.length) {
-      thread.append(el('div', { class: 'caption', text: '답글 ' + th.children.length + '개' }));
-      for (const c of th.children) thread.append(bubble(c, 'child'));
-    }
-    card.append(thread);
-  }
-
-  // 본문 — 클램프 3단(3,000자 → 20k → ?full=1 전체, 50k 단위 rAF 분할 렌더).
-  card.append(el('div', { class: 'sec-label', text: '본문' }));
-  const total = Number(item.body_length || 0);
-  const body = item.body || '';
-  const pre = el('pre', { class: 'body-text' });
-  if (!body) {
-    pre.textContent = '(본문 없음)';
-    card.append(pre);
-  } else if (total <= 3000) {
-    pre.textContent = body;
-    card.append(pre);
-  } else {
-    pre.textContent = body.slice(0, 3000) + '\n…';
-    const overServer = total > 20000;
-    const btn = el('button', {
-      class: 'btn btn-ghost btn-sm',
-      style: 'margin-top:10px',
-      text: (overServer ? '전체 불러오기' : '전체 보기') + ' (총 ' + fmtNum(total) + '자)',
-    });
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      if (!overServer) { pre.textContent = body; btn.remove(); return; }
-      try {
-        const full = await api('/api/ui/items/' + encodeURIComponent(id) + '?full=1');
-        const text = (full.item && full.item.body) || '';
-        // 518k 문서 잭 방지 — 50k 단위 텍스트 노드 분할 append.
-        pre.textContent = '';
-        let i = 0;
-        (function step() {
-          if (i >= text.length) return;
-          pre.append(document.createTextNode(text.slice(i, i + 50000)));
-          i += 50000;
-          requestAnimationFrame(step);
-        })();
-        btn.remove();
-      } catch (e) {
-        btn.disabled = false;
-        toast('본문을 불러오지 못했습니다 — ' + e.message, true);
-      }
-    });
-    card.append(pre, btn);
-  }
-
-  // 필드(접힘).
-  const fields = item.fields && typeof item.fields === 'object' ? Object.entries(item.fields) : [];
-  if (fields.length) {
-    const tbl = el('table', { class: 'fields-table' });
-    for (const [k, v] of fields) {
-      tbl.append(el('tr', {}, el('td', { text: k }), el('td', { text: typeof v === 'string' ? v : JSON.stringify(v) })));
-    }
-    card.append(el('details', { class: 'fields' }, el('summary', { text: '필드' }), tbl));
-  }
-
-  // 매핑 섹션.
-  card.append(el('div', { class: 'sec-label', text: '매핑' }));
-  const mapsBox = el('div', {});
-  const renderMapGroup = (label, rows, kind, keyField) => {
-    if (!rows.length) return;
-    mapsBox.append(el('div', { class: 'caption', style: 'margin-top:6px', text: label }));
-    for (const m of rows) {
-      const row = el('div', { class: 'map-row' },
-        el('span', { class: 'pill ' + (kind === 'domain' ? 'pill-domain' : 'pill-project'), text: m[keyField] }),
-        el('span', { class: 'pill pill-state ' + m.state, text: STATE_LABEL[m.state] || m.state }),
-        el('span', { class: 'chip-by', text: BY_LABEL[m.mapped_by] || m.mapped_by }),
-        el('span', { class: 'caption', text: m.repo }),
-        m.confidence != null ? el('span', { class: 'caption', text: Number(m.confidence).toFixed(2) }) : null,
-      );
-      if (m.state === 'proposed') {
-        const cBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '확정' });
-        const rBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '기각' });
-        cBtn.addEventListener('click', async () => {
-          cBtn.disabled = true; rBtn.disabled = true;
-          try {
-            await api('/api/ui/confirm', { method: 'POST', body: JSON.stringify({ kind, itemId: Number(id), key: m[keyField], repo: m.repo }) });
-            row.querySelector('.pill-state').textContent = STATE_LABEL.confirmed;
-            row.querySelector('.pill-state').className = 'pill pill-state confirmed';
-            row.querySelector('.chip-by').textContent = BY_LABEL.manual;
-            cBtn.remove(); rBtn.remove();
-            row.classList.add('flash');
-            toast('확정되었습니다');
-            state.stats = null; // 커버리지 통계 무효화
-            patchItemsCache(id, kind, m.repo, m[keyField], 'confirmed', 'manual'); // 목록 배지 구식 방지
-          } catch (e) {
-            cBtn.disabled = false; rBtn.disabled = false;
-            toast('확정 실패 — ' + e.message, true);
-          }
-        });
-        // 기각 — state='rejected' 전이. 서버 기본 제외라 reload 후엔 자동 숨김; 이번 렌더에선 칩만 전환.
-        rBtn.addEventListener('click', async () => {
-          // 기각 사유(선택) — audit.evidence 로 기록(CLI 발 기각과 감사 완전성 대칭). 취소(null)는 중단.
-          const reason = prompt('기각 사유 (선택 — audit에 기록됩니다. 빈 값 가능)');
-          if (reason === null) return;
-          cBtn.disabled = true; rBtn.disabled = true;
-          try {
-            const body = { kind, itemId: Number(id), key: m[keyField], repo: m.repo };
-            if (reason.trim()) body.evidence = reason.trim();
-            await api('/api/ui/reject', { method: 'POST', body: JSON.stringify(body) });
-            row.querySelector('.pill-state').textContent = STATE_LABEL.rejected;
-            row.querySelector('.pill-state').className = 'pill pill-state rejected';
-            cBtn.remove(); rBtn.remove();
-            toast('기각되었습니다 — 확정으로만 부활 가능');
-            state.stats = null; // 커버리지 통계 무효화
-            patchItemsCache(id, kind, m.repo, m[keyField], 'rejected', m.mapped_by);
-          } catch (e) {
-            cBtn.disabled = false; rBtn.disabled = false;
-            toast('기각 실패 — ' + e.message, true);
-          }
-        });
-        row.append(cBtn, rBtn);
-      }
-      mapsBox.append(row);
-      // 인용 그라운딩 — evidence 가 있는 행만(실데이터: llm). rule 행은 블록 생략.
-      if (m.evidence) mapsBox.append(el('div', { class: 'evidence', text: m.evidence }));
-    }
-  };
-  renderMapGroup('도메인', data.domains || [], 'domain', 'domain_key');
-  renderMapGroup('프로젝트', data.projects || [], 'project', 'project_key');
-  if (!(data.domains || []).length && !(data.projects || []).length) {
-    mapsBox.append(el('p', { class: 'caption', text: '아직 매핑이 없습니다. 아래에서 직접 제안하세요.' }));
-  }
-  card.append(mapsBox);
-
-  // ＋ 매핑 추가(인라인 제안 폼).
-  const addBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-top:10px', text: '＋ 매핑 추가' });
-  addBtn.addEventListener('click', async () => {
-    addBtn.disabled = true;
-    const form = await buildProposeForm(Number(id), () => renderDetail(pane, id));
-    addBtn.replaceWith(form);
-  });
-  card.append(addBtn);
-
-  pane.replaceChildren(card);
-  // 포커스 관리(§8) — 라우트 재구축으로 포커스가 body 로 초기화되므로 디테일 카드로 이동
-  // (키보드 사용자가 상단바·필터·행 전체를 다시 통과하지 않게).
-  card.setAttribute('tabindex', '-1');
-  card.focus({ preventScroll: true });
-}
-
-// 인라인 제안 폼(디테일/공용) — repo·키 셀렉터, evidence/confidence 선택.
-async function buildProposeForm(itemId, onDone) {
-  let kind = 'domain';
-  let repos = [];
-  try { repos = ((await getRepos()) || {}).repos || []; } catch (_) { /* 아래 빈 상태 처리 */ }
-
-  const form = el('div', { class: 'propose-form' });
-  const kindBtns = {};
-  const kindToggle = el('div', { class: 'kind-toggle', role: 'group', 'aria-label': '매핑 종류' });
-  for (const [k, label] of [['domain', '도메인'], ['project', '프로젝트']]) {
-    kindBtns[k] = el('button', { type: 'button', class: k === kind ? 'on' : '', 'aria-pressed': String(k === kind), text: label });
-    kindBtns[k].addEventListener('click', () => {
-      kind = k;
-      for (const kk of Object.keys(kindBtns)) {
-        kindBtns[kk].className = kk === kind ? 'on' : '';
-        kindBtns[kk].setAttribute('aria-pressed', String(kk === kind));
-      }
-      refreshKeys();
-    });
-    kindToggle.append(kindBtns[k]);
-  }
-  const repoSel = el('select', { 'aria-label': '레포' });
-  for (const r of repos) repoSel.append(el('option', { value: r, text: r }));
-  if (!repos.length) repoSel.append(el('option', { value: '', text: '(레포 없음)' }));
-  const keyId = 'cand-' + (++uid);
-  const keyInput = el('input', { type: 'text', list: keyId, placeholder: '키 검색·선택', 'aria-label': '매핑 키' });
-  const keyList = el('datalist', { id: keyId });
-  const evidenceTa = el('textarea', { rows: '2', placeholder: '근거 인용 (선택)', 'aria-label': '근거' });
-  const confInput = el('input', { type: 'number', min: '0', max: '1', step: '0.05', placeholder: 'confidence (선택)', 'aria-label': 'confidence', style: 'width:150px' });
-  const inlineNote = el('p', { class: 'inline-note' });
-  inlineNote.hidden = true;
-  const submit = el('button', { class: 'btn btn-primary btn-sm', text: '제안' });
-
-  async function refreshKeys() {
-    keyList.replaceChildren();
-    const repo = repoSel.value;
-    if (!repo) return;
-    try {
-      const c = await getCandidates(repo);
-      const rows = kind === 'domain' ? c.domains : c.projects;
-      for (const r of rows) keyList.append(el('option', { value: r.key, label: r.name || r.key }));
-    } catch (e) {
-      inlineNote.textContent = '후보를 불러오지 못했습니다 — ' + e.message;
-      inlineNote.hidden = false;
-    }
-  }
-  repoSel.addEventListener('change', refreshKeys);
-
-  submit.addEventListener('click', async () => {
-    const key = keyInput.value.trim();
-    if (!key) { inlineNote.textContent = '키를 입력하세요.'; inlineNote.hidden = false; return; }
-    if (!repoSel.value) { inlineNote.textContent = 'repo 필수 — 레포를 선택하세요.'; inlineNote.hidden = false; return; }
-    submit.disabled = true;
-    inlineNote.hidden = true;
-    const body = { kind, itemId, key, repo: repoSel.value };
-    if (evidenceTa.value.trim()) body.evidence = evidenceTa.value.trim();
-    if (confInput.value !== '') body.confidence = Number(confInput.value);
-    try {
-      const r = await api('/api/ui/propose', { method: 'POST', body: JSON.stringify(body) });
-      // 보호 경로는 200 + skipped-* — 반드시 action 분기(성공으로 오인 금지).
-      if (r.action === 'inserted' || r.action === 'refreshed') {
-        patchItemsCache(itemId, kind, body.repo, key, 'proposed', 'manual'); // 목록 배지 동기화
-      }
-      if (r.action === 'inserted') { toast('제안됨'); state.stats = null; onDone && onDone(); }
-      else if (r.action === 'refreshed') { toast('갱신됨'); onDone && onDone(); }
-      else if (r.action === 'skipped-rejected') {
-        inlineNote.textContent = '기각된 매핑 — 확정으로만 부활 가능합니다.';
-        inlineNote.hidden = false;
-        submit.disabled = false;
-      }
-      else {
-        inlineNote.textContent = '보호된 매핑이라 건너뜀 — 확정·수동 행은 덮지 않습니다.';
-        inlineNote.hidden = false;
-        submit.disabled = false;
-      }
-    } catch (e) {
-      inlineNote.textContent = '제안 실패 — ' + e.message;
-      inlineNote.hidden = false;
-      submit.disabled = false;
-    }
-  });
-
-  form.append(
-    el('div', { class: 'form-row' }, kindToggle, repoSel, keyInput),
-    el('div', { class: 'form-row' }, evidenceTa, confInput, submit),
-    keyList, inlineNote,
-  );
-  await refreshKeys();
-  return form;
-}
-
-// ════════════════════════════════════════════
-// 3) 큐레이션 #/inbox
-// ════════════════════════════════════════════
-async function renderInbox(view) {
-  const f = state.inbox.filters;
-  let stats = null, repos = null;
-  try { stats = await getStats(); } catch (e) { if (e.status === 401) return; }
-  try { repos = await getRepos(); } catch (_) { /* 레포 셀렉터만 축소 */ }
-  const repoList = (repos && repos.repos) || [];
-
-  const banner = el('div', { class: 'note', text: '미매핑은 신호입니다 — 억지로 매핑하지 마세요. 맞는 후보가 없으면 그대로 두는 것이 맞습니다.' });
-
-  const mkSelect = (label, options, value, onchange) => {
-    const s = el('select', { 'aria-label': label });
-    for (const o of options) s.append(el('option', { value: o.value, text: o.label }));
-    s.value = value;
-    s.addEventListener('change', onchange);
-    return s;
-  };
-  const missingSel = mkSelect('미매핑 기준', [
-    { value: 'either', label: '하나라도 없음' },
-    { value: 'domain', label: '도메인 없음' },
-    { value: 'project', label: '프로젝트 없음' },
-    { value: 'both', label: '둘 다 없음' },
-  ], f.missing, () => { f.missing = missingSel.value; refetch(); });
-  const repoSel = mkSelect('레포', [
-    { value: '', label: '전체(레포 무관)' },
-    ...repoList.map((r) => ({ value: r, label: r })),
-  ], f.repo, () => { f.repo = repoSel.value; refetch(); });
-  const systemSel = mkSelect('시스템',
-    [{ value: '', label: '시스템 전체' }, ...((stats && stats.bySystem) || []).map((s) => ({ value: s.system, label: s.system }))],
-    f.system, () => { f.system = systemSel.value; refetch(); });
-  const typeSel = mkSelect('타입',
-    [{ value: '', label: '타입 전체' }, ...((stats && stats.byType) || []).map((t) => ({ value: t.type, label: t.type }))],
-    f.type, () => { f.type = typeSel.value; refetch(); });
-  const sinceInput = el('input', { type: 'date', value: f.since ? f.since.slice(0, 10) : '', 'aria-label': '이후 날짜' });
-  sinceInput.addEventListener('change', () => {
-    f.since = sinceInput.value ? new Date(sinceInput.value + 'T00:00:00').toISOString() : '';
-    refetch();
-  });
-
-  const countNum = el('div', { class: 'num-big', text: '—' });
-  const countCap = el('div', { class: 'caption', text: '기준: ' + (f.repo ? f.repo + ' 레포 미매핑' : '레포 무관 미매핑') });
-  const controls = el('div', { class: 'panel filter-bar' },
-    missingSel,
-    el('label', { class: 'fld' }, '레포 선택 시 그 레포 기준 미매핑', repoSel),
-    systemSel, typeSel, sinceInput,
-    el('div', { style: 'margin-left:auto;text-align:right' }, countNum, countCap),
-  );
-
-  const grid = el('div', { class: 'inbox-grid' });
-  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '더 보기', onclick: () => fetchPage(true) });
-  moreBtn.hidden = true;
-  const footCap = el('span', { class: 'caption' });
-  const foot = el('div', { class: 'list-foot' }, moreBtn, footCap);
-  view.replaceChildren(banner, el('div', { style: 'margin-top:14px' }, controls), grid, foot);
-  applyReveal([banner, controls, grid]);
-
-  let total = 0;  // 서버 count(현재 필터 기준 총 미매핑)
-  let offset = 0; // 누적 오프셋 — 카드 제거 시 보정해 '더 보기' 건너뜀 방지
-
-  function renderCount() {
-    // §2 num 레시피 — 숫자만 num 스케일, '미매핑'·'건'은 단위(small --muted-2)로 분리.
-    countNum.replaceChildren(el('small', { text: '미매핑' }), fmtNum(total), el('small', { text: '건' }));
-  }
-  function renderFoot() {
-    const shown = grid.querySelectorAll('.inbox-card').length;
-    footCap.textContent = fmtNum(shown) + '건 표시 중 / 총 ' + fmtNum(total) + '건';
-    moreBtn.hidden = offset >= total;
-  }
-
-  // 서버 unmappedItemsUi 와 같은 의미(레포 선택 시 그 레포 기준) — 제안 후 로컬 제거/유지 판정용.
-  function matchesMissing(item) {
-    const inRepo = (m) => !f.repo || m.repo === f.repo;
-    const hasD = (item.domains || []).some(inRepo);
-    const hasP = (item.projects || []).some(inRepo);
-    if (f.missing === 'domain') return !hasD;
-    if (f.missing === 'project') return !hasP;
-    if (f.missing === 'both') return !hasD && !hasP;
-    return !hasD || !hasP; // either(기본)
-  }
-
-  async function fetchPage(append) {
-    countCap.textContent = '기준: ' + (f.repo ? f.repo + ' 레포 미매핑' : '레포 무관 미매핑');
-    if (!append) {
-      offset = 0;
-      grid.replaceChildren(
-        el('div', { class: 'skel', style: 'min-height:130px' }),
-        el('div', { class: 'skel', style: 'min-height:130px' }),
-        el('div', { class: 'skel', style: 'min-height:130px' }));
-      footCap.textContent = '';
-      moreBtn.hidden = true;
-    }
-    moreBtn.disabled = true;
-    const usp = new URLSearchParams();
-    usp.set('missing', f.missing);
-    if (f.repo) usp.set('repo', f.repo);
-    if (f.system) usp.set('system', f.system);
-    if (f.type) usp.set('type', f.type);
-    if (f.since) usp.set('since', f.since);
-    usp.set('limit', '20');
-    usp.set('offset', String(append ? offset : 0));
-    let data;
-    try {
-      data = await api('/api/ui/inbox?' + usp.toString());
-    } catch (e) {
-      moreBtn.disabled = false;
-      if (e.status === 401) return;
-      if (append) toast('더 불러오지 못했습니다 — ' + e.message, true);
-      else grid.replaceChildren(errorNote(e, '미매핑 아이템을 불러오지 못했습니다'));
-      return;
-    }
-    moreBtn.disabled = false;
-    total = data.count;
-    renderCount();
-    if (!append) grid.replaceChildren();
-    if (!append && !data.rows.length) {
-      // 빈 상태 — 미니 정적 네트워크(펄스 없음).
-      const svg = sv('svg', { viewBox: '0 0 120 60', width: '120', height: '60', fill: 'none' },
-        sv('line', { x1: '60', y1: '30', x2: '20', y2: '14', stroke: 'var(--line-net-2)', 'stroke-width': '2' }),
-        sv('line', { x1: '60', y1: '30', x2: '100', y2: '44', stroke: 'var(--line-net-2)', 'stroke-width': '2' }),
-        sv('circle', { cx: '60', cy: '30', r: '8', fill: 'var(--blue)' }),
-        sv('circle', { cx: '20', cy: '14', r: '5', fill: 'var(--mint)' }),
-        sv('circle', { cx: '100', cy: '44', r: '5', fill: 'var(--node-mint-soft)' }));
-      grid.append(el('div', { class: 'empty' }, svg, '미매핑 아이템이 없습니다. 새 아이템이 싱크되면 여기에 표시됩니다.'));
-      return;
-    }
-    for (const it of data.rows) grid.append(inboxCard(it));
-    offset += data.rows.length;
-    renderFoot();
-  }
-  function refetch() { return fetchPage(false); }
-
-  function inboxCard(item) {
-    const defaultRepo = f.repo || repoList[0] || '';
-    const card = el('section', { class: 'card inbox-card' });
-    // 제목 = 디테일 링크(스레드·전체 본문·기존 근거를 보고 제안할 수 있게) + 명시적 '자세히 →'.
-    card.append(el('div', { class: 'inbox-head' },
-      el('h3', { class: 'inbox-title' }, el('a', { href: '#/items/' + item.id, text: rowTitle(item) })),
-      el('span', { style: 'white-space:nowrap' },
-        el('a', { class: 'inbox-detail-link', href: '#/items/' + item.id, text: '자세히 →' }),
-        item.external_url ? el('a', { class: 'caption', style: 'margin-left:10px', href: item.external_url, target: '_blank', rel: 'noopener noreferrer', text: '원본 ↗' }) : null,
+  // kind 카드 그리드 — 라벨·active수·injection_mode·최신성.
+  const grid = el('div', { class: 'kind-grid' });
+  const cards = [];
+  for (const k of o.kinds) {
+    const meta = KIND_META[k.kind] || {};
+    const card = el('a', {
+      class: 'kind-card' + (k.active_count === 0 ? ' empty' : ''),
+      href: '#/browse?kind=' + encodeURIComponent(k.kind),
+      role: 'link', tabindex: '0',
+    },
+      el('div', { class: 'kind-card-top' },
+        el('span', { class: 'kind-glyph', 'aria-hidden': 'true', text: k.kind }),
+        el('span', { class: 'kind-inject', title: INJECTION_HINT[k.injection_mode] || '', text: INJECTION_LABEL[k.injection_mode] || k.injection_mode }),
       ),
-    ));
-    card.append(el('div', { class: 'row-meta', text: [item.system, item.actor || '작성자 미상', relTime(item.occurred_at)].join(' · ') }));
-    // discord 는 title 이 본문 머리와 동일한 경우가 많음 — 정규화 후 중복이면 스니펫 생략.
-    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    if (item.title && item.snippet && !norm(item.snippet).startsWith(norm(item.title))) {
-      card.append(el('p', { class: 'snippet-2l', text: item.snippet }));
-    }
-
-    // 매핑 배지 — either 기준이라 한쪽만 매핑된 경우 부분 배지 + proposed 행은 바로 확정 가능.
-    const badgesSlot = el('div', {});
-    function renderBadges() {
-      const maps = [];
-      for (const d of item.domains || []) maps.push({ kind: 'domain', m: d });
-      for (const p of item.projects || []) maps.push({ kind: 'project', m: p });
-      if (!maps.length) { badgesSlot.replaceChildren(); return; }
-      const showRepo = new Set(maps.map((x) => x.m.repo)).size > 1;
-      const wrap = el('div', { class: 'badge-row' });
-      for (const { kind, m } of maps) {
-        wrap.append(
-          el('span', { class: 'pill ' + (kind === 'domain' ? 'pill-domain' : 'pill-project'), text: (showRepo ? m.repo + ':' : '') + m.key }),
-          el('span', { class: 'pill pill-state ' + m.state, text: STATE_LABEL[m.state] || m.state }),
-        );
-        if (m.state === 'proposed') {
-          const cBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '확정' });
-          const rBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '기각' });
-          cBtn.addEventListener('click', async () => {
-            cBtn.disabled = true; rBtn.disabled = true;
-            try {
-              await api('/api/ui/confirm', { method: 'POST', body: JSON.stringify({ kind, itemId: Number(item.id), key: m.key, repo: m.repo }) });
-              m.state = 'confirmed'; m.by = 'manual';
-              state.stats = null;
-              patchItemsCache(item.id, kind, m.repo, m.key, 'confirmed', 'manual');
-              toast('확정되었습니다');
-              renderBadges();
-              card.classList.add('flash');
-            } catch (e) {
-              cBtn.disabled = false; rBtn.disabled = false;
-              toast('확정 실패 — ' + e.message, true);
-            }
-          });
-          // 기각 — 서버 기본 제외라 reload 후 자동 숨김. 이번 렌더에선 기각됨 칩으로 전환만.
-          rBtn.addEventListener('click', async () => {
-            // 기각 사유(선택) — audit.evidence 로 기록(CLI 발 기각과 감사 완전성 대칭). 취소(null)는 중단.
-            const reason = prompt('기각 사유 (선택 — audit에 기록됩니다. 빈 값 가능)');
-            if (reason === null) return;
-            cBtn.disabled = true; rBtn.disabled = true;
-            try {
-              const body = { kind, itemId: Number(item.id), key: m.key, repo: m.repo };
-              if (reason.trim()) body.evidence = reason.trim();
-              await api('/api/ui/reject', { method: 'POST', body: JSON.stringify(body) });
-              m.state = 'rejected';
-              state.stats = null;
-              patchItemsCache(item.id, kind, m.repo, m.key, 'rejected', m.by);
-              toast('기각되었습니다 — 확정으로만 부활 가능');
-              renderBadges();
-            } catch (e) {
-              cBtn.disabled = false; rBtn.disabled = false;
-              toast('기각 실패 — ' + e.message, true);
-            }
-          });
-          wrap.append(cBtn, rBtn);
-        }
-      }
-      badgesSlot.replaceChildren(wrap);
-    }
-    renderBadges();
-    card.append(badgesSlot);
-
-    // 제안 성공으로 missing 에서 벗어나면 이 카드만 제거(그리드 전체 refetch 금지 — 포커스·스크롤 보존).
-    function removeCard() {
-      card.classList.add('flash');
-      setTimeout(() => {
-        const next = card.nextElementSibling || card.previousElementSibling;
-        card.remove();
-        total = Math.max(0, total - 1);
-        offset = Math.max(0, offset - 1); // 서버 오프셋 시프트 보정
-        renderCount();
-        renderFoot();
-        if (!grid.querySelectorAll('.inbox-card').length) { refetch(); return; }
-        if (next) { const t = next.querySelector('a, button, select, input'); if (t) t.focus(); }
-      }, 450);
-    }
-
-    const strip = el('div', { class: 'curation-strip' });
-    for (const [kind, title] of [['domain', '도메인 제안'], ['project', '프로젝트 제안']]) {
-      const repoSel2 = el('select', { 'aria-label': title + ' 레포' });
-      for (const r of repoList) repoSel2.append(el('option', { value: r, text: r }));
-      if (!repoList.length) repoSel2.append(el('option', { value: '', text: '(레포 없음)' }));
-      if (defaultRepo) repoSel2.value = defaultRepo;
-      const keySel = el('select', { 'aria-label': title + ' 키' }, el('option', { value: '', text: '키 선택' }));
-      const evInput = el('input', { type: 'text', placeholder: '근거 인용 (선택)', 'aria-label': '근거' });
-      const goBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '제안' }); // 카드 반복 액션 = 무채(§0.5 예산)
-      const note = el('p', { class: 'inline-note' });
-      note.hidden = true;
-
-      async function fillKeys() {
-        keySel.replaceChildren(el('option', { value: '', text: '키 선택' }));
-        if (!repoSel2.value) return;
-        try {
-          const c = await getCandidates(repoSel2.value);
-          for (const r of (kind === 'domain' ? c.domains : c.projects)) {
-            keySel.append(el('option', { value: r.key, text: r.key + (r.name ? ' — ' + r.name : '') }));
-          }
-        } catch (e) {
-          note.textContent = '후보를 불러오지 못했습니다 — ' + e.message;
-          note.hidden = false;
-        }
-      }
-      repoSel2.addEventListener('change', fillKeys);
-      fillKeys();
-
-      goBtn.addEventListener('click', async () => {
-        if (!keySel.value) { note.textContent = '키를 선택하세요.'; note.hidden = false; return; }
-        if (!repoSel2.value) { note.textContent = 'repo 필수 — 레포를 선택하세요.'; note.hidden = false; return; }
-        goBtn.disabled = true;
-        note.hidden = true;
-        const body = { kind, itemId: Number(item.id), key: keySel.value, repo: repoSel2.value }; // pg 가 BIGINT id 를 문자열로 반환 — 숫자 강제
-        if (evInput.value.trim()) body.evidence = evInput.value.trim();
-        try {
-          const r = await api('/api/ui/propose', { method: 'POST', body: JSON.stringify(body) });
-          if (r.action === 'inserted' || r.action === 'refreshed') {
-            toast(r.action === 'inserted' ? '제안됨' : '갱신됨');
-            state.stats = null;
-            patchItemsCache(item.id, kind, body.repo, body.key, 'proposed', 'manual');
-            // 로컬 매핑 갱신 → missing 재평가(서버 unmappedItemsUi 와 동일 기준).
-            const arr = kind === 'domain' ? (item.domains = item.domains || []) : (item.projects = item.projects || []);
-            const ex = arr.find((mm) => mm.repo === body.repo && mm.key === body.key);
-            if (ex) { ex.state = 'proposed'; ex.by = 'manual'; }
-            else arr.push({ repo: body.repo, key: body.key, state: 'proposed', by: 'manual' });
-            if (!matchesMissing(item)) { removeCard(); return; }
-            renderBadges();
-            card.classList.add('flash');
-            goBtn.disabled = false;
-          } else if (r.action === 'skipped-rejected') {
-            note.textContent = '기각된 매핑 — 확정으로만 부활 가능합니다.';
-            note.hidden = false;
-            goBtn.disabled = false;
-          } else {
-            note.textContent = '보호된 매핑이라 건너뜀 — 확정·수동 행은 덮지 않습니다.';
-            note.hidden = false;
-            goBtn.disabled = false;
-          }
-        } catch (e) {
-          note.textContent = '제안 실패 — ' + e.message;
-          note.hidden = false;
-          goBtn.disabled = false;
-        }
-      });
-
-      strip.append(el('div', { class: 'mini-form' },
-        el('div', { class: 'mf-title', text: title }),
-        el('div', { class: 'mf-row' }, repoSel2, keySel),
-        el('div', { class: 'mf-row' }, evInput, goBtn),
-        note,
-      ));
-    }
-    card.append(strip);
-    return card;
+      el('div', { class: 'kind-card-name', text: meta.ko || k.label || k.kind }),
+      el('div', { class: 'kind-card-sub', text: k.label || (meta.label || '') }),
+      el('div', { class: 'kind-card-foot' },
+        el('span', { class: 'kind-card-num' }, String(k.active_count), el('small', {}, ' 건')),
+        k.latest_updated_at
+          ? el('span', { class: 'kind-card-fresh' }, k.active_count > 0 ? el('span', { class: 'dot6 ok', 'aria-hidden': 'true' }) : null, relTime(k.latest_updated_at))
+          : el('span', { class: 'kind-card-fresh dim', text: '비어 있음' }),
+      ),
+    );
+    cards.push(card);
+    grid.append(card);
   }
 
-  await refetch();
+  view.replaceChildren(head, health, el('div', { class: 'eyebrow', text: '종류별 지식' }), grid);
+  applyReveal([health, ...cards]);
+  document.getElementById('view').focus?.();
+}
+
+function stat(num, label, unit) {
+  return el('div', { class: 'stat' },
+    el('div', { class: 'num' }, num, unit ? el('small', {}, ' ' + unit) : null),
+    el('div', { class: 'lbl', text: label }));
+}
+// 검토 대기 — 0 이면 무채(건강), >0 이면 클릭 가능(검토로 이동).
+function reviewStat(n) {
+  if (!n) {
+    return el('div', { class: 'stat' },
+      el('div', { class: 'num' }, '0'),
+      el('div', { class: 'lbl', text: '검토 대기 없음' }));
+  }
+  const s = el('a', { class: 'stat stat-link', href: '#/review' },
+    el('div', { class: 'num' }, fmtNum(n), el('small', {}, ' 건')),
+    el('div', { class: 'lbl' }, el('span', { class: 'dot6 ok', 'aria-hidden': 'true' }), ' 검토 대기'));
+  return s;
 }
 
 // ════════════════════════════════════════════
-// 4) 도메인 #/domains, #/domains/:id — domainmap 큐레이션 표면(구 :7700 UI 흡수, §0.5 calm)
+// 2) 탐색 #/browse — 좌 kind/domain 트리 + grep 검색 + 필터 목록.
 // ════════════════════════════════════════════
-const DM_STATE_LABEL = { proposed: '제안됨', confirmed: '확정', rejected: '기각됨' };
-const DM_ORIGIN_LABEL = { human: '사람', agent: 'AI' };
-const DEBT_STATUS_LABEL = { open: '열림', ack: '확인함', resolved: '해결됨', dismissed: '무시함' };
-const DEBT_STATUSES = ['open', 'ack', 'resolved', 'dismissed'];
-const OP_LABEL = { insert: '추가', update: '수정', reassign: '이동', merge: '병합', drift: '드리프트', restore: '되돌림', rename: '이름변경', remove: '제거', revive: '복원', retomb: '경로해제' };
+async function renderBrowse(view, params) {
+  // URL 파라미터 → 필터 동기화(지도 카드 클릭 진입 등).
+  const f = state.browse.filters;
+  if (params) {
+    if (params.has('kind')) f.kind = params.get('kind') || '';
+    if (params.has('domain')) f.domain = params.get('domain') || '';
+    if (params.has('q')) f.q = params.get('q') || '';
+    if (params.has('lifecycle')) f.lifecycle = params.get('lifecycle') || '';
+    if (params.has('confidence')) f.confidence = params.get('confidence') || '';
+  }
 
-const dmApi = {
-  domains: (repo) => api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/domains'),
-  projects: (repo) => api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/projects'),
-  detail: (repo, id) => api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/domain/' + encodeURIComponent(id)),
-  debts: (repo) => api('/api/ui/domainmap/debts?repo=' + encodeURIComponent(repo)),
-  history: (repo) => api('/api/ui/domainmap/history?repo=' + encodeURIComponent(repo) + '&limit=80'),
-  post: (path, body) => api('/api/ui/domainmap' + path, { method: 'POST', body: JSON.stringify(body || {}) }),
-};
+  const o = await getOverview(false);
 
-// 상태 점(6px)+무채 라벨 — domainmap status 용.
-function dmStatusChip(status) {
-  const cls = status === 'confirmed' ? ' ok' : status === 'rejected' ? ' dim' : '';
-  return el('span', { class: 'st' + cls, text: DM_STATE_LABEL[status] || status });
+  // 좌측: kind 트리(폴더) — 전체 + 각 kind. domain 필터는 입력으로(자유 슬러그).
+  const tree = el('nav', { class: 'browse-tree', 'aria-label': 'kind 트리' });
+  tree.append(treeItem('전체', '', f.kind === '', o.total_active));
+  for (const k of o.kinds) {
+    tree.append(treeItem((KIND_META[k.kind] && KIND_META[k.kind].ko) || k.label || k.kind, k.kind, f.kind === k.kind, k.active_count, k.kind));
+  }
+
+  // 상단 검색 + 필터 바.
+  const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색(grep)', value: f.q, 'aria-label': '검색어' });
+  const domainInput = el('input', { type: 'text', placeholder: '도메인 키(예: billing)', value: f.domain, 'aria-label': '도메인', class: 'flt-domain' });
+  const lifecycleSel = selectFilter([
+    ['active', '유효'], ['', '전체 상태'], ['rejected', '반려'], ['superseded', '대체됨'],
+  ], f.lifecycle);
+  const confidenceSel = selectFilter([
+    ['', '전체 출처'], ['ai', '에이전트'], ['human', '사람'], ['rule', '규칙'],
+  ], f.confidence);
+
+  const listBox = el('div', { class: 'list-box browse-list' });
+  const foot = el('div', { class: 'list-foot' });
+
+  function syncHash() {
+    const p = new URLSearchParams();
+    if (f.kind) p.set('kind', f.kind);
+    if (f.domain) p.set('domain', f.domain);
+    if (f.q) p.set('q', f.q);
+    if (f.lifecycle && f.lifecycle !== 'active') p.set('lifecycle', f.lifecycle);
+    if (f.confidence) p.set('confidence', f.confidence);
+    const qs = p.toString();
+    history.replaceState(null, '', '#/browse' + (qs ? '?' + qs : ''));
+  }
+
+  async function refetch() {
+    listBox.replaceChildren(skeletonRows(4));
+    foot.replaceChildren();
+    try {
+      let entries;
+      if (f.q.trim()) {
+        // grep 경로 — 스니펫 포함. lifecycle/confidence 는 grep 백엔드 미지원이라 클라이언트에서 표시만.
+        const r = await api('/api/ui/ctx/grep?' + new URLSearchParams(
+          Object.assign({ query: f.q.trim(), limit: '50' }, f.kind ? { kind: f.kind } : {}, f.domain ? { domain: f.domain } : {})));
+        entries = (r.matches || []).map((m) => ({ ...m, _snippet: m.snippet }));
+      } else {
+        const p = new URLSearchParams({ limit: '200' });
+        if (f.kind) p.set('kind', f.kind);
+        if (f.domain) p.set('domain', f.domain);
+        if (f.lifecycle) p.set('lifecycle', f.lifecycle);
+        if (f.confidence) p.set('confidence', f.confidence);
+        const r = await api('/api/ui/ctx/ls?' + p.toString());
+        entries = r.entries || [];
+      }
+      state.browse.entries = entries;
+      renderEntries(listBox, entries, !!f.q.trim());
+      foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.q.trim() ? ' (검색)' : '') }));
+    } catch (e) {
+      listBox.replaceChildren(errorNote(e, '목록을 불러오지 못했습니다'));
+    }
+  }
+
+  let qTimer = null;
+  qInput.addEventListener('input', () => { f.q = qInput.value; clearTimeout(qTimer); qTimer = setTimeout(() => { syncHash(); refetch(); }, 280); });
+  domainInput.addEventListener('change', () => { f.domain = domainInput.value.trim(); syncHash(); refetch(); });
+  lifecycleSel.addEventListener('change', () => { f.lifecycle = lifecycleSel.value; syncHash(); refetch(); });
+  confidenceSel.addEventListener('change', () => { f.confidence = confidenceSel.value; syncHash(); refetch(); });
+  tree.addEventListener('click', (ev) => {
+    const item = ev.target.closest('[data-kind-val]');
+    if (!item) return;
+    ev.preventDefault();
+    f.kind = item.dataset.kindVal;
+    for (const a of tree.querySelectorAll('[data-kind-val]')) a.classList.toggle('on', a.dataset.kindVal === f.kind);
+    syncHash(); refetch();
+  });
+
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '탐색'),
+    el('p', { class: 'sub', text: '종류(폴더)·도메인·상태로 좁히거나, 검색어로 제목·본문을 grep 합니다. 항목을 누르면 전문과 메타를 봅니다.' }),
+  );
+  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, domainInput, lifecycleSel, confidenceSel,
+    el('button', { class: 'btn btn-primary btn-sm', text: '+ 새 지식', onclick: () => openSaveOverlay(f.kind, f.domain, refetch) }));
+
+  const layout = el('div', { class: 'browse-layout' },
+    el('aside', { class: 'browse-side' }, el('div', { class: 'eyebrow', text: '종류' }), tree),
+    el('section', { class: 'browse-main' }, filterBar, listBox, foot),
+  );
+  view.replaceChildren(head, layout);
+  applyReveal([layout]);
+  refetch();
 }
-function debtStatusChip(status) {
-  const cls = status === 'resolved' ? ' ok' : status === 'dismissed' ? ' dim' : status === 'open' ? ' warn' : '';
-  return el('span', { class: 'st' + cls, text: DEBT_STATUS_LABEL[status] || status });
-}
-// 이력 diff 값 국문화 — 상태/원천만 번역, 그 외 원문(객체는 JSON).
-function dmDiffValue(key, v) {
-  if (v == null) return '—';
-  if (key === 'status') return DM_STATE_LABEL[v] || DEBT_STATUS_LABEL[v] || String(v);
-  if (key === 'origin') return DM_ORIGIN_LABEL[v] || String(v);
-  if (typeof v === 'boolean') return v ? '예' : '아니요';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+
+function treeItem(label, kindVal, on, count, glyph) {
+  return el('a', { class: 'tree-item' + (on ? ' on' : ''), href: '#', 'data-kind-val': kindVal, role: 'button', tabindex: '0' },
+    glyph ? el('span', { class: 'tree-glyph', 'aria-hidden': 'true', text: glyph }) : el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: '∗' }),
+    el('span', { class: 'tree-label', text: label }),
+    el('span', { class: 'tree-count', text: count != null ? String(count) : '' }));
 }
 
-let dmKeyHandler = null; // 도메인 페이지 전역 키보드(j/k/Enter/x) — 페이지 이탈 시 자가 해제
+function selectFilter(opts, sel) {
+  const s = el('select');
+  for (const [v, t] of opts) s.append(el('option', { value: v, text: t }));
+  s.value = sel || '';
+  return s;
+}
 
-async function renderDomains(view, domainId, params) {
-  let repos;
+function renderEntries(box, entries, isSearch) {
+  if (!entries.length) {
+    box.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 지식 단위가 없습니다. 필터를 넓히거나 새 지식을 추가하세요.' }));
+    return;
+  }
+  box.replaceChildren();
+  for (const e of entries) {
+    const metaBits = [];
+    if (e.kind) metaBits.push(kindBadge(e.kind));
+    if (e.domain_key) metaBits.push(el('span', { class: 'mono', text: e.domain_key }));
+    const row = el('div', { class: 'row', role: 'link', tabindex: '0' },
+      el('div', { class: 'row-title', text: e.title || e.name }),
+      el('div', { class: 'row-meta' }, ...interleave(metaBits, ' · '),
+        e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null,
+        '  ', relTime(e.updated_at)),
+      isSearch && e._snippet ? el('div', { class: 'snippet-2l', text: e._snippet }) : null,
+    );
+    const go = () => { location.hash = '#/u/' + encodeURIComponent(e.name); };
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
+    box.append(row);
+  }
+}
+
+function kindBadge(k) {
+  return el('span', { class: 'kind-badge', title: kindLabel(k) }, el('span', { class: 'kb-glyph', text: k }), el('span', { class: 'kb-ko', text: kindLabel(k) }));
+}
+function interleave(arr, sep) {
+  const out = [];
+  arr.forEach((n, i) => { if (i) out.push(sep); out.push(n); });
+  return out;
+}
+
+// ════════════════════════════════════════════
+// 3) 유닛 상세 #/u/<name> — ctx_cat 전문 + 메타 패널 + 편집/반려.
+// ════════════════════════════════════════════
+async function renderUnit(view, name) {
+  view.replaceChildren(skeleton('지식 단위를 불러오는 중'));
+  let u;
   try {
-    repos = await getRepos();
+    u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
   } catch (e) {
-    if (e.status === 401) return;
-    view.replaceChildren(errorNote(e, 'domainmap에 연결하지 못했습니다. 서비스 상태를 확인하세요'));
-    return;
+    if (e.status === 404) {
+      view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식 단위' })),
+        el('div', { class: 'note', text: "'" + name + "' 을(를) 찾을 수 없습니다. 탐색에서 이름을 확인하세요." }),
+        el('a', { class: 'btn btn-ghost btn-sm', href: '#/browse', text: '← 탐색으로' }));
+      return;
+    }
+    throw e;
   }
-  const repoList = repos.repos || [];
-  if (repos.domainmapError) {
-    const retryBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '다시 시도' });
-    retryBtn.addEventListener('click', async () => {
-      retryBtn.disabled = true;
-      try { await getRepos(true); } catch (_) { /* 아래 renderDomains 가 에러 표시 */ }
-      renderDomains(view, domainId, params);
-    });
-    view.replaceChildren(
-      el('div', { class: 'note', text: repos.domainmapError + ' 서비스 상태를 확인하세요.' }),
-      el('div', { style: 'margin-top:12px' }, retryBtn),
-    );
-    return;
-  }
-  if (!repoList.length) {
-    view.replaceChildren(el('div', { class: 'empty', text: '등록된 레포가 없습니다. domainmap에 레포를 먼저 추가하세요.' }));
-    return;
-  }
+  drawUnit(view, u);
+}
 
-  // repo 결정: ?repo= 파라미터 > 기억된 선택 > 첫 레포. 딥링크(#/domains/:id)는 영역 섹션 강제.
-  const wantRepo = params && params.get('repo');
-  if (wantRepo && repoList.includes(wantRepo)) state.domainsRepo = wantRepo;
-  if (!state.domainsRepo || !repoList.includes(state.domainsRepo)) state.domainsRepo = repoList[0] || '';
-  const dm = state.dm;
-  if (domainId) { dm.selectedId = Number(domainId); dm.section = 'areas'; }
+function drawUnit(view, u) {
+  const backRow = el('div', { class: 'crumbs' },
+    el('a', { class: 'crumb-link', href: '#/browse', text: '탐색' }), el('span', { class: 'crumb-sep', text: ' / ' }),
+    el('a', { class: 'crumb-link', href: '#/browse?kind=' + encodeURIComponent(u.kind), text: kindLabel(u.kind) }),
+    u.domain_key ? el('span', {}, el('span', { class: 'crumb-sep', text: ' / ' }), el('span', { class: 'mono', text: u.domain_key })) : null,
+  );
 
-  // ── 페이지 골격: repo 셀렉터 + 섹션 탭 + 콘텐츠 ──
-  const pills = el('div', { class: 'repo-pills' });
-  for (const r of repoList) {
-    const pill = el('button', { class: 'repo-pill' + (r === state.domainsRepo ? ' on' : ''), text: r });
-    pill.addEventListener('click', () => {
-      if (state.domainsRepo === r) return;
-      state.domainsRepo = r;
-      dm.selectedId = null; dm.cursor = -1; dm.rows = [];
-      history.replaceState(null, '', '#/domains?repo=' + encodeURIComponent(r));
-      for (const p of pills.children) p.classList.toggle('on', p.textContent === r);
-      renderSection();
-    });
-    pills.append(pill);
-  }
-  const SECTIONS = [['areas', '영역'], ['projects', '프로젝트'], ['debts', '이슈'], ['history', '변경 이력']];
-  const tabs = el('div', { class: 'seg-tabs', role: 'tablist' });
-  for (const [key, label] of SECTIONS) {
-    const b = el('button', { class: key === dm.section ? 'on' : '', role: 'tab', 'aria-selected': String(key === dm.section), text: label });
-    b.addEventListener('click', () => {
-      dm.section = key;
-      for (const t of tabs.children) {
-        t.classList.toggle('on', t === b);
-        t.setAttribute('aria-selected', String(t === b));
-      }
-      renderSection();
-    });
-    tabs.append(b);
-  }
-  const content = el('div', {});
-  view.replaceChildren(pills, tabs, content);
-  applyReveal([pills, tabs, content]);
+  // 본문(전문). 보안: 마크다운을 HTML 파싱하지 않고 pre-wrap 텍스트로(innerHTML 금지).
+  const body = el('div', { class: 'body-text unit-body', text: u.body_md || '(본문 없음)' });
 
-  const loading = (msg) => el('div', { class: 'skel-stack', style: 'margin-top:16px' },
-    el('div', { class: 'skel', style: 'min-height:180px' }),
-    el('div', { class: 'loading-caption', text: msg }));
-  const dmError = (e, retry) => {
-    const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-top:10px', text: '다시 시도' });
-    btn.addEventListener('click', retry);
-    return el('div', { style: 'margin-top:16px' },
-      el('div', { class: 'note', text: 'domainmap에 연결하지 못했습니다 — ' + (e && e.message || '알 수 없는 오류') + '. 서비스 상태를 확인하세요.' }), btn);
-  };
+  // 메타 패널(우) — kind·kinds·confidence·lifecycle·supersedes·author·source_ref·as_of·version.
+  const metaRows = [
+    ['종류(kind)', kindLabel(u.kind) + ' (' + u.kind + ')'],
+    Array.isArray(u.kinds) && u.kinds.length ? ['추가 종류', u.kinds.join(', ')] : null,
+    ['도메인', u.domain_key ? (u.domain_key + (u.domain_repo ? ' · ' + u.domain_repo : '')) : '—'],
+    ['신뢰 출처', CONFIDENCE_LABEL[u.confidence] || u.confidence],
+    ['supersedes', u.supersedes || '—'],
+    ['작성자', u.author || '—'],
+    ['출처(source_ref)', u.source_ref || '—'],
+    ['기준 시각(as_of)', u.as_of ? absTime(u.as_of) : '—'],
+    ['버전', 'v' + u.version],
+    ['마지막 갱신', (u.updated_at ? absTime(u.updated_at) : '—') + (u.updated_by ? ' · ' + u.updated_by : '')],
+  ].filter(Boolean);
+  const metaTable = el('table', { class: 'fields-table' });
+  for (const [k, v] of metaRows) metaTable.append(el('tr', {}, el('td', { text: k }), el('td', { text: v })));
 
-  function renderSection() {
-    dm.cursor = -1; dm.rows = [];
-    if (dm.section === 'projects') return renderProjectsSec();
-    if (dm.section === 'debts') return renderDebtsSec();
-    if (dm.section === 'history') return renderHistorySec();
-    return renderAreasSec();
+  // 상태 액션 — 신뢰우선 모델의 사후 반려/복원(채운 버튼 1개=주행동만, 나머지 ghost).
+  const actions = el('div', { class: 'unit-actions' });
+  actions.append(el('button', { class: 'btn btn-primary btn-sm', text: '편집', onclick: () => openEditOverlay(u) }));
+  if (u.lifecycle === 'active') {
+    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '반려', onclick: () => changeLifecycle(u.name, 'rejected', view) }));
+  } else if (u.lifecycle === 'rejected') {
+    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '복원', onclick: () => changeLifecycle(u.name, 'active', view) }));
   }
 
-  // ════════ 영역 섹션 (two-pane) ════════
-  async function renderAreasSec() {
-    content.replaceChildren(loading('영역 불러오는 중…'));
-    let domains;
-    try { domains = await dmApi.domains(state.domainsRepo); }
-    catch (e) { if (e.status === 401) return; content.replaceChildren(dmError(e, renderAreasSec)); return; }
-    domains = Array.isArray(domains) ? domains : [];
+  const main = el('div', { class: 'detail-card' },
+    el('div', { class: 'unit-title-row' },
+      el('h1', { class: 'detail-title', text: u.title || u.name }),
+      lifecycleDot(u.lifecycle),
+    ),
+    el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: u.name }), confidenceDot(u.confidence)),
+    actions,
+    el('div', { class: 'sec-label', text: '본문' }),
+    body,
+  );
+  const side = el('aside', { class: 'unit-side' },
+    el('div', { class: 'eyebrow', text: '메타데이터' }),
+    metaTable,
+  );
 
-    const filters = el('div', { class: 'dm-filters', role: 'group', 'aria-label': '영역 필터' });
-    const listBox = el('div', { class: 'list-box' });
-    const detailPane = el('div', { class: 'split-detail' });
-    const hint = el('div', { class: 'kbd-hint', text: '↑↓ 영역 이동 · j/k 행 이동 · Enter 확인 · x 제외' });
-    content.replaceChildren(
-      el('div', { class: 'split' },
-        el('div', { class: 'split-list' }, filters, listBox, hint),
-        detailPane));
+  const head = el('div', { class: 'page-head unit-head' }, backRow);
+  view.replaceChildren(head, el('div', { class: 'unit-layout' }, main, side));
+  applyReveal([main, side]);
+}
 
-    // '확인 필요' = status proposed 이거나 proposed 매핑 보유(구 UI 식 그대로), '이슈' = debts>0.
-    const needReview = (d) => d.status === 'proposed' || (d.proposed || 0) > 0;
-    const counts = {
-      all: domains.length,
-      review: domains.filter(needReview).length,
-      issues: domains.filter((d) => (d.debts || 0) > 0).length,
-    };
-    for (const [key, label] of [['all', '전체'], ['review', '확인 필요'], ['issues', '이슈']]) {
-      const b = el('button', { class: key === dm.filter ? 'on' : '', 'aria-pressed': String(key === dm.filter), text: label + ' ' + counts[key] });
-      b.addEventListener('click', () => {
-        dm.filter = key;
-        for (const x of filters.children) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); }
-        renderList();
-      });
-      filters.append(b);
+async function changeLifecycle(name, lifecycle, view) {
+  try {
+    await api('/api/ui/ctx/set-lifecycle', { method: 'POST', body: JSON.stringify({ name, lifecycle }) });
+    toast(lifecycle === 'rejected' ? '반려했습니다' : (lifecycle === 'active' ? '복원했습니다' : '상태를 바꿨습니다'));
+    state.overview = null; // 검토 배지·지도 카운트 무효화
+    getOverview(true).catch(() => {});
+    // 상세 재로딩
+    const u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
+    drawUnit(view, u);
+  } catch (e) {
+    toast('상태 변경 실패 — ' + e.message, true);
+  }
+}
+
+// ════════════════════════════════════════════
+// 4) 검토 #/review — confidence=ai·lifecycle=active 피드(에이전트 생산물) → reject/edit.
+// ════════════════════════════════════════════
+async function renderReview(view) {
+  view.replaceChildren(skeleton('검토 대기 항목을 불러오는 중'));
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '검토'),
+    el('p', { class: 'sub', text: '에이전트가 생산한 지식(신뢰 출처=에이전트)을 사후 검토합니다. 저장은 무게이트(신뢰 우선), 반려는 여기서 — 보고 내려둘지 결정하세요.' }),
+  );
+  const listBox = el('div', { class: 'list-box' });
+  view.replaceChildren(head, listBox);
+
+  try {
+    const r = await api('/api/ui/ctx/ls?' + new URLSearchParams({ confidence: 'ai', lifecycle: 'active', limit: '200' }));
+    const entries = r.entries || [];
+    if (!entries.length) {
+      listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 에이전트 생산물이 없습니다. 모두 확인되었습니다.' }));
+      return;
     }
-
-    function visibleDomains() {
-      if (dm.filter === 'review') return domains.filter(needReview);
-      if (dm.filter === 'issues') return domains.filter((d) => (d.debts || 0) > 0);
-      return domains;
-    }
-
-    function areaRow(d) {
-      const row = el('div', { class: 'row' + (Number(dm.selectedId) === Number(d.id) ? ' sel' : ''), role: 'link', tabindex: '0', 'data-did': d.id },
-        el('div', { class: 'dm-row' },
-          el('span', { class: 'dot6' + (d.status === 'confirmed' ? ' ok' : ''), 'aria-hidden': 'true' }),
-          el('span', { class: 'nm', text: d.name || d.key }),
-          el('span', { class: 'mono', text: d.key })),
-        // '제안 N' = 확인 필요 필터에 걸린 이유 노출(확정 영역도 proposed 매핑이 있으면 포함되므로).
-        el('div', { class: 'dm-counts', text: '코드 ' + fmtNum(d.units) + ' · 데이터 ' + fmtNum(d.entities) + ' · 이슈 ' + fmtNum(d.debts) + ((d.proposed || 0) > 0 ? ' · 제안 ' + fmtNum(d.proposed) : '') }),
-      );
-      const go = () => selectArea(d.id);
-      row.addEventListener('click', go);
-      // 매핑 커서 활성 중엔 Enter 를 전역 핸들러(installKeys)에 양보 — 커서 행 '확인'이 우선(힌트 문구와 일치).
-      row.addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (dm.cursor >= 0) return; go(); } });
-      return row;
-    }
-
-    function renderList() {
-      const vis = visibleDomains();
-      listBox.replaceChildren();
-      if (!vis.length) {
-        const msg = dm.filter === 'review' ? '확인할 제안이 없습니다 — 모든 영역이 확정 상태입니다.'
-          : dm.filter === 'issues' ? '열린 이슈가 없습니다.'
-          : '아직 영역이 없습니다. domain-map 스캔을 먼저 실행하세요.';
-        listBox.append(el('div', { class: 'empty', text: msg }));
-        return;
-      }
-      const core = vis.filter((d) => !d.cross_cutting);
-      const cross = vis.filter((d) => d.cross_cutting);
-      if (core.length) {
-        listBox.append(el('div', { class: 'dm-group-head', text: '핵심 영역' }));
-        for (const d of core) listBox.append(areaRow(d));
-      }
-      if (cross.length) {
-        listBox.append(el('div', { class: 'dm-group-head', text: '지원 영역' }));
-        for (const d of cross) listBox.append(areaRow(d));
-      }
-    }
-
-    function selectArea(id) {
-      dm.selectedId = Number(id);
-      dm.cursor = -1; dm.rows = [];
-      history.replaceState(null, '', '#/domains/' + id + '?repo=' + encodeURIComponent(state.domainsRepo));
-      for (const r of listBox.querySelectorAll('.row')) r.classList.toggle('sel', Number(r.dataset.did) === Number(id));
-      loadDetail(id);
-    }
-
-    // 좌측 카운트만 재계산(매핑 op 후) — 목록 DOM 재구축하되 스크롤 보존.
-    async function refreshListCounts() {
-      try {
-        const fresh = await dmApi.domains(state.domainsRepo);
-        if (Array.isArray(fresh)) {
-          domains = fresh;
-          const sc = listBox.scrollTop;
-          counts.all = domains.length;
-          counts.review = domains.filter(needReview).length;
-          counts.issues = domains.filter((d) => (d.debts || 0) > 0).length;
-          const labels = ['전체 ' + counts.all, '확인 필요 ' + counts.review, '이슈 ' + counts.issues];
-          [...filters.children].forEach((b, i) => { b.textContent = labels[i]; });
-          renderList();
-          listBox.scrollTop = sc;
-        }
-      } catch (_) { /* 카운트 갱신 실패는 치명 아님 */ }
-    }
-
-    // ── 우측 상세 ──
-    async function loadDetail(id) {
-      detailPane.replaceChildren(el('div', { class: 'skel', style: 'min-height:200px' }), el('div', { class: 'loading-caption', text: '영역 불러오는 중…' }));
-      let data;
-      try { data = await dmApi.detail(state.domainsRepo, id); }
-      catch (e) {
-        if (e.status === 401) return;
-        detailPane.replaceChildren(el('div', { class: 'detail-card' }, errorNote(e, '영역을 불러오지 못했습니다')));
-        return;
-      }
-      renderDetail(data);
-    }
-
-    function renderDetail(data) {
-      const d = data.domain;
-      const card = el('div', { class: 'detail-card' });
-      dm.rows = []; dm.cursor = -1;
-
-      // 헤더 + 서술.
-      card.append(el('div', {},
-        el('h3', { class: 'detail-title', text: d.name || d.key }),
-        el('div', { class: 'detail-meta' },
-          el('span', { class: 'mono', text: d.key }),
-          dmStatusChip(d.status),
-          d.cross_cutting ? el('span', { class: 'caption', text: '지원 영역' }) : null),
-        d.description ? el('p', { class: 'body-text', style: 'margin-top:10px', text: d.description }) : null,
-      )); // el() 경유 — null 자식 스킵
-
-      // 액션 — [확인] = 이 화면 유일한 채운 primary(확정이면 숨김), 나머지 전부 ghost.
-      const actions = el('div', { class: 'dm-actions' });
-      if (d.status !== 'confirmed') {
-        const okBtn = el('button', { class: 'btn btn-primary btn-sm', text: '확인' });
-        okBtn.addEventListener('click', async () => {
-          okBtn.disabled = true;
-          try {
-            const r = await dmApi.post('/domain/' + d.id + '/confirm', {});
-            toast('영역을 확정했습니다', false, { changeId: r.change_id, onUndone: () => { refreshListCounts(); loadDetail(d.id); } });
-            refreshListCounts();
-            loadDetail(d.id);
-          } catch (e) { okBtn.disabled = false; toast('확정 실패 — ' + e.message, true); }
-        });
-        actions.append(okBtn);
-      }
-      const editBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '수정' });
-      const editSlot = el('div', {});
-      editBtn.addEventListener('click', () => {
-        if (editSlot.firstChild) { editSlot.replaceChildren(); return; }
-        editSlot.replaceChildren(buildEditForm(d));
-      });
-      actions.append(editBtn);
-      // 다른 영역에 합치기 — select(타 영역), 선택 시 confirm() 후 merge.
-      const others = domains.filter((x) => Number(x.id) !== Number(d.id));
-      if (others.length) {
-        const mergeSel = el('select', { 'aria-label': '다른 영역에 합치기' },
-          el('option', { value: '', text: '다른 영역에 합치기…' }),
-          others.map((x) => el('option', { value: x.id, text: (x.name || x.key) + ' (' + x.key + ')' })));
-        mergeSel.addEventListener('change', async () => {
-          const into = mergeSel.value;
-          if (!into) return;
-          const target = others.find((x) => String(x.id) === String(into));
-          if (!window.confirm('"' + (d.name || d.key) + '" 영역을 "' + (target.name || target.key) + '"에 합칠까요? 매핑이 모두 이동합니다.')) {
-            mergeSel.value = ''; return;
-          }
-          mergeSel.disabled = true;
-          try {
-            const r = await dmApi.post('/domain/merge', { fromId: Number(d.id), intoId: Number(into) });
-            toast('영역을 합쳤습니다 — 이동 ' + fmtNum(r.moved_mappings) + ' · 중복 제외 ' + fmtNum(r.folded_mappings), false,
-              { changeId: r.change_id, onUndone: () => renderAreasSec() });
-            dm.selectedId = Number(into);
-            renderAreasSec();
-          } catch (e) { mergeSel.disabled = false; mergeSel.value = ''; toast('합치기 실패 — ' + e.message, true); }
-        });
-        actions.append(mergeSel);
-      }
-      card.append(actions, editSlot);
-
-      function buildEditForm(dom) {
-        const nameIn = el('input', { type: 'text', value: dom.name || '', 'aria-label': '영역 이름' });
-        const descTa = el('textarea', { rows: '3', 'aria-label': '영역 서술' });
-        descTa.value = dom.description || '';
-        const ccCb = el('input', { type: 'checkbox', 'aria-label': '지원 영역(cross-cutting)' });
-        ccCb.checked = !!dom.cross_cutting;
-        const saveBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '저장' });
-        const cancelBtn = el('button', { class: 'btn-text', text: '취소' });
-        cancelBtn.addEventListener('click', () => editSlot.replaceChildren());
-        saveBtn.addEventListener('click', async () => {
-          const name = nameIn.value.trim();
-          if (!name) { toast('이름을 입력하세요', true); return; }
-          saveBtn.disabled = true;
-          try {
-            const r = await dmApi.post('/domain/' + dom.id + '/edit', { name, description: descTa.value, crossCutting: ccCb.checked });
-            toast('저장했습니다 — 영역이 확정 처리되었습니다', false, { changeId: r.change_id, onUndone: () => { refreshListCounts(); loadDetail(dom.id); } });
-            refreshListCounts();
-            loadDetail(dom.id);
-          } catch (e) { saveBtn.disabled = false; toast('저장 실패 — ' + e.message, true); }
-        });
-        return el('div', { class: 'dm-edit' },
-          el('label', { class: 'fld' }, '이름', nameIn),
-          el('label', { class: 'fld' }, '서술', descTa),
-          el('div', { class: 'frow' },
-            el('label', { style: 'display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-sub)' }, ccCb, '지원 영역(cross-cutting)'),
-            saveBtn, cancelBtn),
-          el('p', { class: 'caption', text: '저장하면 이 영역은 확정 처리됩니다.' }), // auto-confirm 정직 노출
-        );
-      }
-
-      // ── 매핑 행(코드 유닛/데이터 엔티티 공용) ──
-      function mappingRow(rowData, kind) {
-        const m = rowData.mapping || {};
-        const removed = rowData.state === 'removed';
-        const label = kind === 'code' ? (rowData.path || rowData.label) : (rowData.name || rowData.label);
-        // 주의: DOM .append(null) 은 'null' 텍스트가 되므로 조건부 자식은 el() 경유(널 스킵).
-        const row = el('div', { class: 'maprow' + (removed ? ' removed' : '') },
-          el('span', { class: 'mono', text: label }),
-          removed ? el('span', { class: 'meta', text: '삭제됨' }) : null,
-          el('span', { class: 'meta', text: rowData.kind + (kind === 'data' && rowData.source ? ' · ' + rowData.source : '') }),
-          dmStatusChip(m.status),
-          m.confidence != null ? el('span', { class: 'conf', text: '신뢰도 ' + Math.round(Number(m.confidence) * 100) + '%' }) : null,
-          el('span', { class: 'meta', text: DM_ORIGIN_LABEL[m.origin] || m.origin || '' }),
-        );
-        const acts = el('span', { style: 'display:inline-flex;gap:6px;align-items:center' });
-        const doOp = async (op, label2) => {
-          try {
-            const r = await dmApi.post('/mapping/' + m.id + '/' + op, {});
-            // 낙관적 갱신: 이 행만 교체(전체 refetch 금지 — 포커스·스크롤 보존).
-            m.status = op === 'reject' ? 'rejected' : 'confirmed';
-            m.origin = 'human';
-            const fresh = mappingRow(rowData, kind);
-            const i = dm.rows.findIndex((x) => x.el === row);
-            if (i >= 0) { dm.rows[i].el = fresh; if (dm.cursor === i) fresh.classList.add('cur'); }
-            row.replaceWith(fresh);
-            toast(label2, false, { changeId: r.change_id, onUndone: () => loadDetail(d.id) });
-            refreshListCounts();
-          } catch (e) { toast('실패 — ' + e.message, true); }
-        };
-        if (m.status === 'proposed') {
-          const ok = el('button', { class: 'btn btn-ghost btn-sm', text: '확인' });
-          ok.addEventListener('click', () => doOp('confirm', '매핑을 확정했습니다'));
-          const no = el('button', { class: 'btn btn-ghost btn-sm', text: '제외' });
-          no.addEventListener('click', () => doOp('reject', '매핑을 제외했습니다'));
-          acts.append(ok, no);
-        } else if (m.status === 'rejected') {
-          const re = el('button', { class: 'btn btn-ghost btn-sm', text: '다시 확인' });
-          re.addEventListener('click', () => doOp('confirm', '매핑을 다시 확정했습니다'));
-          acts.append(re);
-        }
-        if (others.length) {
-          const moveSel = el('select', { 'aria-label': '영역 이동(이동하면 확정됩니다)', title: '이동하면 확정됩니다' },
-            el('option', { value: '', text: '영역 이동…' }),
-            others.map((x) => el('option', { value: x.id, text: x.name || x.key })));
-          moveSel.addEventListener('change', async () => {
-            const to = moveSel.value;
-            if (!to) return;
-            moveSel.disabled = true;
+    listBox.replaceChildren();
+    for (const e of entries) {
+      const row = el('div', { class: 'review-row' },
+        el('div', { class: 'review-main' },
+          el('a', { class: 'review-title', href: '#/u/' + encodeURIComponent(e.name), text: e.title || e.name }),
+          el('div', { class: 'row-meta' }, kindBadge(e.kind),
+            e.domain_key ? el('span', {}, '  ', el('span', { class: 'mono', text: e.domain_key })) : null,
+            '  ', relTime(e.updated_at)),
+        ),
+        el('div', { class: 'review-acts' },
+          el('a', { class: 'btn btn-ghost btn-sm', href: '#/u/' + encodeURIComponent(e.name), text: '보기 · 편집' }),
+          el('button', { class: 'btn btn-ghost btn-sm', text: '반려', onclick: async (ev) => {
+            ev.preventDefault();
             try {
-              const r = await dmApi.post('/mapping/' + m.id + '/move', { domainId: Number(to) });
-              toast('이동했습니다(확정 전이)', false, { changeId: r.change_id, onUndone: () => loadDetail(d.id) });
-              // 이동 = 이 영역에서 사라짐 — 행 제거 + 커서 시퀀스에서 빼고 좌측 카운트 갱신.
-              const i = dm.rows.findIndex((x) => x.el === row);
-              if (i >= 0) { dm.rows.splice(i, 1); if (dm.cursor >= dm.rows.length) dm.cursor = dm.rows.length - 1; }
-              row.remove();
-              refreshListCounts();
-            } catch (e) { moveSel.disabled = false; moveSel.value = ''; toast('이동 실패 — ' + e.message, true); }
-          });
-          acts.append(moveSel);
-        }
-        row.append(acts);
-        return row;
-      }
-
-      const cu = data.code_units || [];
-      card.append(el('div', { class: 'sec-label', text: '코드 유닛 (' + cu.length + ')' }));
-      const cuBox = el('div', { class: 'map-sec' });
-      if (!cu.length) cuBox.append(el('p', { class: 'caption', text: '매핑된 코드 유닛이 없습니다.' }));
-      for (const r of cu) { const node = mappingRow(r, 'code'); dm.rows.push({ el: node, data: r }); cuBox.append(node); }
-      card.append(cuBox);
-
-      const de = data.data_entities || [];
-      card.append(el('div', { class: 'sec-label', text: '데이터 엔티티 (' + de.length + ')' }));
-      const deBox = el('div', { class: 'map-sec' });
-      if (!de.length) deBox.append(el('p', { class: 'caption', text: '매핑된 데이터 엔티티가 없습니다.' }));
-      for (const r of de) { const node = mappingRow(r, 'data'); dm.rows.push({ el: node, data: r }); deBox.append(node); }
-      card.append(deBox);
-
-      // 이슈(이 영역의 코드 경로를 인용하는 debts).
-      const debts = data.debts || [];
-      card.append(el('div', { class: 'sec-label', text: '이슈 (' + debts.length + ')' }));
-      if (!debts.length) card.append(el('p', { class: 'caption', text: '이 영역을 인용하는 이슈가 없습니다.' }));
-      else {
-        const dBox = el('div', { class: 'list-box', style: 'margin-top:4px' });
-        for (const dt of debts) dBox.append(debtRow(dt, () => loadDetail(d.id)));
-        card.append(dBox, el('p', { class: 'caption', style: 'margin-top:6px', text: '이슈는 레포 단위 — 다른 영역에도 나타날 수 있습니다.' }));
-      }
-
-      detailPane.replaceChildren(card);
-    }
-
-    renderList();
-    // 키보드: ↑↓ = 영역 목록(목록엔 j/k 도 허용 — 단 상세 커서 활성 시 행 우선), j/k = 매핑 행 커서, Enter/x = 행 액션.
-    installKeys({
-      moveArea: (dir) => {
-        const rows = [...listBox.querySelectorAll('.row')];
-        if (!rows.length) return;
-        const idx = rows.findIndex((r) => r.classList.contains('sel'));
-        const next = rows[Math.max(0, Math.min(rows.length - 1, (idx < 0 ? 0 : idx + dir)))];
-        if (next && Number(next.dataset.did) !== Number(dm.selectedId)) {
-          selectArea(next.dataset.did);
-          next.scrollIntoView({ block: 'nearest' });
-        }
-      },
-      moveCursor: (dir) => {
-        if (!dm.rows.length) return;
-        const next = dm.cursor < 0 ? (dir > 0 ? 0 : dm.rows.length - 1) : Math.max(0, Math.min(dm.rows.length - 1, dm.cursor + dir));
-        if (dm.cursor >= 0 && dm.rows[dm.cursor]) dm.rows[dm.cursor].el.classList.remove('cur');
-        dm.cursor = next;
-        const cur = dm.rows[dm.cursor].el;
-        cur.classList.add('cur');
-        cur.scrollIntoView({ block: 'nearest' });
-      },
-      enter: () => {
-        const r = dm.rows[dm.cursor];
-        if (!r) return;
-        const st = r.data.mapping && r.data.mapping.status;
-        const btns = [...r.el.querySelectorAll('button')];
-        const target = btns.find((b) => b.textContent === '확인' || b.textContent === '다시 확인');
-        if ((st === 'proposed' || st === 'rejected') && target) target.click();
-      },
-      exclude: () => {
-        const r = dm.rows[dm.cursor];
-        if (!r) return;
-        const st = r.data.mapping && r.data.mapping.status;
-        const target = [...r.el.querySelectorAll('button')].find((b) => b.textContent === '제외');
-        if (st === 'proposed' && target) target.click();
-      },
-    });
-
-    if (dm.selectedId && domains.some((x) => Number(x.id) === Number(dm.selectedId))) loadDetail(dm.selectedId);
-    else {
-      dm.selectedId = null;
-      detailPane.replaceChildren(el('div', { class: 'detail-card' },
-        el('p', { class: 'empty', text: '왼쪽 목록에서 영역을 선택하세요.' })));
-    }
-  }
-
-  // 전역 키 리스너 1개 — input/textarea/select/contentEditable 포커스 가드(구 UI 가드 복제),
-  // 도메인 뷰가 DOM 에서 사라지면 자가 해제.
-  function installKeys(h) {
-    if (dmKeyHandler) { document.removeEventListener('keydown', dmKeyHandler); dmKeyHandler = null; }
-    const onKey = (e) => {
-      if (!document.body.contains(content)) {
-        document.removeEventListener('keydown', onKey);
-        if (dmKeyHandler === onKey) dmKeyHandler = null;
-        return;
-      }
-      const t = e.target;
-      if (t && (t.matches && t.matches('input, textarea, select') || t.isContentEditable)) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (dm.section !== 'areas') return;
-      if (e.key === 'ArrowDown') { e.preventDefault(); h.moveArea(1); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); h.moveArea(-1); }
-      else if (e.key === 'j') { e.preventDefault(); if (dm.rows.length) h.moveCursor(1); else h.moveArea(1); }
-      else if (e.key === 'k') { e.preventDefault(); if (dm.rows.length) h.moveCursor(-1); else h.moveArea(-1); }
-      else if (e.key === 'Enter' && dm.cursor >= 0) { e.preventDefault(); h.enter(); }
-      else if (e.key === 'x' && dm.cursor >= 0) { e.preventDefault(); h.exclude(); }
-    };
-    dmKeyHandler = onKey;
-    document.addEventListener('keydown', onKey);
-  }
-
-  // ── 이슈(debt) 행 — 상세/이슈 섹션 공용 ──
-  function debtRow(dt, onChanged) {
-    const sel = el('select', { 'aria-label': '이슈 상태' },
-      DEBT_STATUSES.map((s) => el('option', { value: s, text: DEBT_STATUS_LABEL[s] })));
-    sel.value = dt.status;
-    const chipSlot = el('span', {}, debtStatusChip(dt.status));
-    sel.addEventListener('change', async () => {
-      const prev = dt.status;
-      const next = sel.value;
-      sel.disabled = true;
-      // 낙관적 갱신 — 실패 시 원복.
-      dt.status = next;
-      chipSlot.replaceChildren(debtStatusChip(next));
-      try {
-        const r = await dmApi.post('/debt/' + dt.id + '/status', { status: next });
-        toast('이슈 상태를 변경했습니다 — ' + DEBT_STATUS_LABEL[next], false, { changeId: r.change_id, onUndone: onChanged });
-        sel.disabled = false;
-      } catch (e) {
-        dt.status = prev;
-        sel.value = prev;
-        chipSlot.replaceChildren(debtStatusChip(prev));
-        sel.disabled = false;
-        toast('상태 변경 실패 — ' + e.message, true);
-      }
-    });
-    const refs = Array.isArray(dt.cited_refs) ? dt.cited_refs : [];
-    return el('div', { class: 'debt-row' },
-      el('div', { class: 'debt-head' },
-        el('span', { class: 'caption', text: dt.kind || '' }),
-        el('span', { class: 'debt-title', text: dt.title || '(제목 없음)' }),
-        chipSlot, sel,
-        el('span', { class: 'caption', text: DM_ORIGIN_LABEL[dt.origin] || dt.origin || '' })),
-      dt.detail ? el('p', { class: 'debt-detail', text: dt.detail }) : null,
-      refs.length ? el('div', { class: 'debt-refs' },
-        refs.map((rf) => el('span', { class: 'mono', text: typeof rf === 'string' ? rf : (rf && rf.path) || JSON.stringify(rf) }))) : null,
-    );
-  }
-
-  // ════════ 프로젝트 섹션 ════════
-  async function renderProjectsSec() {
-    content.replaceChildren(loading('프로젝트 불러오는 중…'));
-    let projects;
-    try { projects = await dmApi.projects(state.domainsRepo); }
-    catch (e) { if (e.status === 401) return; content.replaceChildren(dmError(e, renderProjectsSec)); return; }
-    projects = Array.isArray(projects) ? projects : [];
-    if (!projects.length) {
-      content.replaceChildren(el('div', { class: 'empty', text: '등록된 프로젝트가 없습니다.' }));
-      return;
-    }
-    const box = el('div', { class: 'list-box' });
-    for (const p of projects) {
-      const period = p.started_at ? String(p.started_at).slice(0, 10) + ' — ' + (p.ended_at ? String(p.ended_at).slice(0, 10) : '') : '';
-      const row = el('div', { class: 'row', style: 'cursor:default' },
-        el('div', { class: 'dm-row' },
-          el('span', { class: 'dot6' + (p.status === 'confirmed' ? ' ok' : ''), 'aria-hidden': 'true' }),
-          el('span', { class: 'nm', text: p.name || p.key }),
-          el('span', { class: 'mono', text: p.key }),
-          p.kind ? el('span', { class: 'caption', text: p.kind }) : null,
-          dmStatusChip(p.status)),
-        el('div', { class: 'dm-counts' },
-          '코드 ' + fmtNum(p.touched_code) + ' · 데이터 ' + fmtNum(p.touched_entities) + (period ? ' · ' + period : '')),
-        p.description ? el('p', { class: 'debt-detail', text: p.description }) : null,
+              await api('/api/ui/ctx/set-lifecycle', { method: 'POST', body: JSON.stringify({ name: e.name, lifecycle: 'rejected' }) });
+              row.classList.add('flash');
+              setTimeout(() => row.remove(), reducedMotion() ? 0 : 350);
+              toast('반려했습니다');
+              state.overview = null; getOverview(true).then(() => { if (!listBox.querySelector('.review-row')) listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 항목이 없습니다.' })); }).catch(() => {});
+            } catch (err) { toast('반려 실패 — ' + err.message, true); }
+          } }),
+        ),
       );
-      if (p.status === 'proposed') {
-        const ok = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-top:8px', text: '확인' });
-        ok.addEventListener('click', async () => {
-          ok.disabled = true;
-          try {
-            const r = await dmApi.post('/project/' + p.id + '/confirm', {});
-            p.status = 'confirmed';
-            row.querySelector('.dot6').classList.add('ok');
-            row.querySelector('.st').replaceWith(dmStatusChip('confirmed'));
-            ok.remove();
-            toast('프로젝트를 확정했습니다', false, { changeId: r.change_id, onUndone: () => renderProjectsSec() });
-          } catch (e) { ok.disabled = false; toast('확정 실패 — ' + e.message, true); }
-        });
-        row.append(ok);
-      }
-      box.append(row);
+      listBox.append(row);
     }
-    content.replaceChildren(box);
+  } catch (e) {
+    listBox.replaceChildren(errorNote(e, '검토 목록을 불러오지 못했습니다'));
   }
+}
 
-  // ════════ 이슈 섹션(레포 전체) ════════
-  async function renderDebtsSec() {
-    content.replaceChildren(loading('이슈 불러오는 중…'));
-    let debts;
-    try { debts = await dmApi.debts(state.domainsRepo); }
-    catch (e) { if (e.status === 401) return; content.replaceChildren(dmError(e, renderDebtsSec)); return; }
-    debts = Array.isArray(debts) ? debts : [];
-    if (!debts.length) {
-      content.replaceChildren(el('div', { class: 'empty', text: '열린 이슈가 없습니다.' }));
-      return;
-    }
-    const box = el('div', { class: 'list-box' });
-    for (const dt of debts) box.append(debtRow(dt, () => renderDebtsSec()));
-    content.replaceChildren(box);
-  }
+// ════════════════════════════════════════════
+// 저장/편집 오버레이 — ctx_save(웹→confidence=human 자동).
+// ════════════════════════════════════════════
+function openSaveOverlay(presetKind, presetDomain, onDone) {
+  saveOverlay({ kind: presetKind || 'K', domain: presetDomain || '' }, false, onDone);
+}
+function openEditOverlay(u) {
+  saveOverlay(u, true, () => { location.hash = '#/u/' + encodeURIComponent(u.name); route(); });
+}
 
-  // ════════ 변경 이력 섹션 ════════
-  async function renderHistorySec() {
-    content.replaceChildren(loading('변경 이력 불러오는 중…'));
-    let rows;
-    try { rows = await dmApi.history(state.domainsRepo); }
-    catch (e) { if (e.status === 401) return; content.replaceChildren(dmError(e, renderHistorySec)); return; }
-    rows = Array.isArray(rows) ? rows : [];
-    if (!rows.length) {
-      content.replaceChildren(el('div', { class: 'empty', text: '변경 이력이 없습니다. 첫 큐레이션이 여기에 기록됩니다.' }));
-      return;
-    }
-    const box = el('div', { class: 'list-box' });
-    for (const r of rows) {
-      const who = r.actor_type === 'human' ? (r.actor_id || '사람') : 'AI';
-      const head = el('div', { class: 'hist-head' },
-        el('span', { class: 'when', text: relTime(r.at) }),
-        el('span', { class: 'who', text: who }),
-        el('span', { class: 'op', text: OP_LABEL[r.op] || r.op }),
-        el('span', { class: 'mono', text: r.entity_type + '#' + r.entity_id }));
-      // 되돌리기 — op==='restore' 행에는 숨김(restore-of-restore 루프 방지, 구 UI 동일).
-      if (r.op !== 'restore') {
-        const undoBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '되돌리기' });
-        undoBtn.addEventListener('click', async () => {
-          undoBtn.disabled = true;
-          try {
-            await dmApi.post('/restore/' + r.id, {});
-            toast('되돌렸습니다');
-            renderHistorySec();
-          } catch (e) {
-            undoBtn.disabled = false;
-            toast('되돌리지 못했습니다 — ' + e.message, true); // 400 메시지 보존, 재시도 없음
-          }
-        });
-        head.append(undoBtn);
-      }
-      const rowEl = el('div', { class: 'hist-row' }, head);
-      if (r.note) rowEl.append(el('div', { class: 'hist-note', text: r.note }));
-      // 변경 키만의 before→after 미니 diff.
-      const before = r.before && typeof r.before === 'object' ? r.before : null;
-      const after = r.after && typeof r.after === 'object' ? r.after : null;
-      if (before || after) {
-        // '변경 키만': 양쪽 다 있으면 after 의 키만(restore 의 before=전체 스냅샷 노이즈 차단),
-        // insert(before=null)/delete(after=null)는 있는 쪽 키 전부.
-        const baseKeys = before && after ? Object.keys(after) : Object.keys(after || before || {});
-        const keys = baseKeys
-          .filter((k) => JSON.stringify(before && before[k]) !== JSON.stringify(after && after[k]));
-        if (keys.length) {
-          rowEl.append(el('div', { class: 'hist-diff' }, keys.map((k) => el('div', {},
-            el('span', { class: 'k', text: k + ' ' }),
-            dmDiffValue(k, before && before[k]),
-            el('span', { class: 'arrow', text: ' → ' }),
-            dmDiffValue(k, after && after[k])))));
-        }
-      }
-      box.append(rowEl);
-    }
-    content.replaceChildren(box);
-  }
+function saveOverlay(u, isEdit, onDone) {
+  const titleIn = el('input', { type: 'text', value: u.title || '', placeholder: '제목(선택)' });
+  const kindSel = el('select');
+  for (const k of Object.keys(KIND_META)) kindSel.append(el('option', { value: k, text: k + ' · ' + KIND_META[k].ko }));
+  kindSel.value = u.kind || 'K';
+  const domainIn = el('input', { type: 'text', value: u.domain_key || '', placeholder: '도메인 키(선택, 예: billing)' });
+  const nameIn = el('input', { type: 'text', value: u.name || '', placeholder: '이름(생략 시 자동 생성)', disabled: isEdit ? 'disabled' : null });
+  const bodyIn = el('textarea', { class: 'admin-ta', placeholder: '본문(markdown)' }); bodyIn.value = u.body_md || '';
 
-  renderSection();
+  const back = overlayBox(isEdit ? '지식 편집' : '새 지식 저장',
+    el('p', { class: 'admin-hint', text: isEdit ? '웹에서 편집하면 신뢰 출처가 사람(human)으로 기록됩니다.' : '웹에서 저장하면 신뢰 출처가 사람(human)으로 기록됩니다. confidence·상태는 서버가 정합니다.' }),
+    field('제목', titleIn),
+    el('div', { class: 'frow' }, field('종류(kind)', kindSel), field('도메인', domainIn)),
+    isEdit ? null : field('이름(name)', nameIn),
+    field('본문', bodyIn),
+  );
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isEdit ? '저장' : '저장' });
+  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+  saveBtn.addEventListener('click', async () => {
+    const note = bodyIn.value.trim();
+    if (!note) { toast('본문은 비울 수 없습니다', true); return; }
+    saveBtn.disabled = true;
+    const payload = { note, title: titleIn.value.trim() || undefined, kind: kindSel.value, domain: domainIn.value.trim() || undefined };
+    if (isEdit) payload.name = u.name;
+    else if (nameIn.value.trim()) payload.name = nameIn.value.trim();
+    try {
+      const r = await api('/api/ui/ctx/save', { method: 'POST', body: JSON.stringify(payload) });
+      back.remove();
+      toast(isEdit ? '저장했습니다' : ('저장했습니다 — ' + (r.saved && r.saved.name)));
+      state.overview = null; getOverview(true).catch(() => {});
+      if (onDone) onDone(r.saved);
+    } catch (e) {
+      saveBtn.disabled = false;
+      toast('저장 실패 — ' + e.message, true);
+    }
+  });
+  back.querySelector('.ov-box').append(el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+}
+
+// ── 공용 작은 컴포넌트 (field() 는 관리 블록의 동일 정의 재사용) ──
+function skeleton(caption) {
+  return el('div', {}, el('p', { class: 'loading-caption', text: caption + '…' }),
+    el('div', { class: 'skel-stack' }, el('div', { class: 'skel' }), el('div', { class: 'skel' }), el('div', { class: 'skel' })));
+}
+function skeletonRows(n) {
+  const box = el('div', {});
+  for (let i = 0; i < n; i++) box.append(el('div', { class: 'row' }, el('div', { class: 'skel', style: 'min-height:18px;border:none;background:var(--bg-tint)' })));
+  return box;
+}
+// 모달 오버레이(저장/편집 폼) — admin 의 overlay() 와 같은 ESC/배경클릭 닫기. 셸 재사용.
+function overlayBox(title, ...content) {
+  const box = el('div', { class: 'ov-box' },
+    el('div', { class: 'ov-head' }, el('h3', { text: title }),
+      el('button', { class: 'btn-text', text: '닫기', onclick: () => back.remove() })),
+    ...content);
+  const back = el('div', { class: 'ov-back' }, box);
+  back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+  return back;
 }
 
 // ── 라우터 ──
@@ -1775,23 +688,23 @@ async function route() {
   if (!localStorage.getItem(TOKEN_KEY)) { showGate(); return; }
   const { segs, params } = parseHash();
   const view = $view();
-  const page = segs[0] || 'overview';
+  const page = segs[0] || 'map';
   try {
-    if (page === 'items') {
-      setActiveTab('items');
-      await renderItems(view, segs[1] || null, params);
-    } else if (page === 'inbox') {
-      setActiveTab('inbox');
-      await renderInbox(view);
-    } else if (page === 'domains') {
-      setActiveTab('domains');
-      await renderDomains(view, segs[1] || null, params);
-    } else if (page === 'admin') {
-      setActiveTab('admin');
-      await renderAdmin(view, segs[1] || null);
+    if (page === 'browse') {
+      setActiveTab('browse');
+      await renderBrowse(view, params);
+    } else if (page === 'u') {
+      setActiveTab('browse'); // 유닛 상세는 탐색의 하위 — 탐색 탭 활성 유지
+      await renderUnit(view, decodeURIComponent(segs.slice(1).join('/')));
+    } else if (page === 'review') {
+      setActiveTab('review');
+      await renderReview(view);
+    } else if (page === 'system') {
+      setActiveTab('system');
+      await renderSystem(view, segs[1] || null);
     } else {
-      setActiveTab('overview');
-      await renderOverview(view);
+      setActiveTab('map');
+      await renderMap(view);
     }
   } catch (e) {
     if (e && e.status === 401) return;
@@ -1814,9 +727,9 @@ async function boot() {
   hideGate();
   document.getElementById('user-email').textContent = state.me.email || state.me.userId || '';
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
-  const adminTab = document.getElementById('admin-tab');
-  if (adminTab) adminTab.hidden = false;
-  getStats().catch(() => { /* 싱크 칩만 생략(개요 진입 시 재시도) */ });
+  const sysTab = document.getElementById('system-tab');
+  if (sysTab) sysTab.hidden = false;
+  getOverview().catch(() => { /* 칩/배지만 생략(지도 진입 시 재시도) */ });
   route();
 }
 boot();
@@ -1826,6 +739,7 @@ boot();
 // '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
 // ════════════════════════════════════════════════════════════════════
 const ADMIN_SECTIONS = [
+  { key: 'kinds', label: '지식 종류 레지스트리', meaning: null },
   { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy' },
   { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults' },
   { key: 'memory', label: '팀 메모리', meaning: 'memory' },
@@ -1878,6 +792,7 @@ function meaningCard(m) {
 }
 
 function adminRowMeta(key, data) {
+  if (key === 'kinds') return (state.overview ? state.overview.kinds.length : 12) + '개 종류';
   if (key === 'managed-policy' || key === 'org-defaults') {
     const s = data.sections[key];
     return s && s.body_md && s.body_md.trim() ? '작성됨 · v' + s.version : '비어 있음';
@@ -1896,6 +811,11 @@ function adminRowMeta(key, data) {
   return '';
 }
 
+// System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
+async function renderSystem(view, sub) {
+  return renderAdmin(view, sub);
+}
+
 async function renderAdmin(view, sub) {
   let data;
   try { data = await loadAdmin(); }
@@ -1904,14 +824,14 @@ async function renderAdmin(view, sub) {
   state.admin.canEdit = canEdit;
   state.admin.canRuntime = !!data.canRuntime;
 
-  let sel = sub || state.admin.sel || 'managed-policy';
-  if (sectionHidden(sel, data)) sel = 'managed-policy'; // 권한 없는 섹션 진입 차단(admin/runtime)
+  let sel = sub || state.admin.sel || 'kinds';
+  if (sectionHidden(sel, data)) sel = 'kinds'; // 권한 없는 섹션 진입 차단(admin/runtime)
   state.admin.sel = sel;
 
   const list = el('div', { class: 'split-list card admin-nav' });
   for (const s of ADMIN_SECTIONS) {
     if (sectionHidden(s.key, data)) continue;
-    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/admin/' + s.key },
+    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key },
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
   }
@@ -1920,7 +840,7 @@ async function renderAdmin(view, sub) {
 
   view.replaceChildren(el('div', {},
     el('div', { class: 'card-head admin-head' },
-      el('h2', { text: '관리 — 전달' }),
+      el('h2', { text: '관리' }),
       canEdit
         ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })
         : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
@@ -1929,6 +849,7 @@ async function renderAdmin(view, sub) {
 }
 
 function renderAdminDetail(detail, sel, data) {
+  if (sel === 'kinds') return kindsRegistry(detail, data);
   if (sel === 'managed-policy' || sel === 'org-defaults') return sectionEditor(detail, sel, data);
   if (sel === 'memory') return memoryEditor(detail, data);
   if (sel === 'members') return membersEditor(detail, data);
@@ -1941,6 +862,40 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'publish') return publishPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
+}
+
+// ── 지식 종류 레지스트리(읽기 전용 열람) — 12 질적유형 + 주입정책 메타. ctx_overview 데이터 재사용. ──
+function kindsRegistry(detail, data) {
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '지식 종류 레지스트리' })),
+    el('p', { class: 'admin-hint', text: '통합 지식스토어가 분류하는 12개 질적 종류(kind)와, 각 종류가 구성원의 AI 세션에 어떻게 주입되는지(injection mode)입니다. 종류를 누르면 그 안의 지식 단위를 탐색합니다.' }),
+  );
+  const o = state.overview;
+  if (!o) {
+    card.append(el('p', { class: 'admin-hint', text: '개요를 불러오는 중…' }));
+    getOverview(false).then(() => { if (state.admin.sel === 'kinds') renderAdminDetail(detail, 'kinds', data); }).catch(() => {});
+    detail.replaceChildren(card);
+    return;
+  }
+  const tbl = el('table', { class: 'fields-table kinds-table' });
+  tbl.append(el('tr', {},
+    el('td', { class: 'kr-h', text: '종류' }), el('td', { class: 'kr-h', text: '주입 모드' }),
+    el('td', { class: 'kr-h', text: '활성 단위' }), el('td', { class: 'kr-h', text: '최신 갱신' })));
+  for (const k of o.kinds) {
+    const meta = KIND_META[k.kind] || {};
+    const row = el('tr', { class: 'kr-row', role: 'link', tabindex: '0' },
+      el('td', {}, el('span', { class: 'kind-badge' }, el('span', { class: 'kb-glyph', text: k.kind }), el('span', { class: 'kb-ko', text: meta.ko || k.label || k.kind }))),
+      el('td', {}, el('span', { class: 'inject-tag', title: INJECTION_HINT[k.injection_mode] || '', text: INJECTION_LABEL[k.injection_mode] || k.injection_mode })),
+      el('td', { class: 'kr-num', text: String(k.active_count) }),
+      el('td', { text: k.latest_updated_at ? relTime(k.latest_updated_at) : '—' }),
+    );
+    const go = () => { location.hash = '#/browse?kind=' + encodeURIComponent(k.kind); };
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
+    tbl.append(row);
+  }
+  card.append(tbl);
+  detail.replaceChildren(card);
 }
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 ──
