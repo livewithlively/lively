@@ -90,7 +90,16 @@ export function buildKnowledgeIndex(
     // H2(P-V3-3a): confidence='observed'(커넥터 수집물) 는 **주입 인덱스에서 영구 제외** — 큐레이션된
     //  지식(ai/rule/human)만 항상-주입 인덱스에 노출한다. 수집물은 query 시 ctx_grep 로만 도달(인덱스 비주입 불변식).
     //  recalled kind(K/D/F/H)는 보통 저작물이라 observed 가 거의 없지만, 흡수 후 observed K/D 가 생겨도 인덱스 비주입을 보장.
-    const rows = units.filter((u) => u.kind === kind && u.lifecycle === "active" && u.confidence !== "observed");
+    // H4(P-V3-6): **증류 후보**(source_ref 가 'distill:' 접두)도 주입 인덱스에서 제외 — 규칙판이 활동에서 자동
+    //  추출한 미검토 K/D 후보는 검토 큐(confidence='ai')엔 뜨지만 항상-주입엔 안 들어간다('승인 시 인덱스 진입').
+    //  사람이 confirm 하면 confidence='human'·source_ref=NULL 로 승격되어 이 제외에서 벗어나 인덱스로 진입한다.
+    const rows = units.filter(
+      (u) =>
+        u.kind === kind &&
+        u.lifecycle === "active" &&
+        u.confidence !== "observed" &&
+        !(u.source_ref ?? "").startsWith("distill:"),
+    );
     if (!rows.length) continue;
     // 섹션 내 updated_at DESC(없으면 as_of), Date-안전.
     const sorted = [...rows].sort((a, b) => (ts(b.updated_at) || ts(b.as_of)) - (ts(a.updated_at) || ts(a.as_of)));
