@@ -21,7 +21,8 @@ const repoList: Capability = {
   title: "매핑된 레포 목록",
   description:
     "레포 목록의 union — domainmap 에 매핑된 레포(domainmapRepos) ∪ item 매핑테이블에 등장하는 레포(mappingRepos), " +
-    "합집합은 repos. domainmap 다운 시에도 부분 성공(domainmapError 필드). 다른 도메인/프로젝트 툴의 repo 이름을 찾을 때 먼저 호출.",
+    "합집합은 repos. domainmap 다운 시에도 부분 성공(domainmapError 필드). 다른 도메인/프로젝트 툴의 repo 이름을 찾을 때 먼저 호출. " +
+    "각 domainmapRepos 항목은 clone_url(자격증명 제거된 git clone 주소, 미설정 시 null) 을 포함 — 소스가 로컬에 없으면 이 주소로 클론한다(접근 인증은 멤버 본인의 GitHub 자격증명).",
   scope: "context",
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/repos"], parse: () => ({}) }] },
