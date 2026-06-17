@@ -5,6 +5,8 @@
 //  redactDeep 로 시크릿 제거). 검색은 title/body_md ILIKE + kind/lifecycle/domain 필터(pgvector 의미검색은 후속).
 import { itemsPool } from "../items/store.js";
 import { redactDeep } from "./redact.js";
+import { embeddingsUsable, embedOne, toVectorLiteral } from "../embeddings/index.js";
+import { logger } from "../log.js";
 
 // confidence 는 호출자가 자칭하지 못한다 — 쓰기 출처(source)로 서버에서 강제한다.
 //  source='mcp'(에이전트 생산) → 'ai', source='web'(사람 편집) → 'human', 그 외/지정 → 'rule'.
@@ -101,6 +103,18 @@ export async function listKnowledge(opts: {
 
 // 검색 — org_memory searchMemory 의 ILIKE 백엔드를 knowledge_unit 에 이식 + kind/lifecycle/domain 필터.
 //  본문은 스니펫(240자)만. LIKE 메타문자(\ % _)는 백슬래시 이스케이프(기본 escape=백슬래시).
+export interface KnowledgeSearchHit {
+  name: string; title: string | null; domain_key: string | null; snippet: string; updated_at: string | null;
+}
+
+function mapSearchRow(row: Record<string, unknown>): KnowledgeSearchHit {
+  return {
+    name: row.name as string, title: (row.title as string) ?? null,
+    domain_key: (row.domain_key as string) ?? null, updated_at: (row.updated_at as string) ?? null,
+    snippet: String(row.body_md ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+  };
+}
+
 export async function searchKnowledge(opts: {
   query: string;
   kind?: string | null;
@@ -108,26 +122,77 @@ export async function searchKnowledge(opts: {
   domainKey?: string | null;
   lifecycle?: KnowledgeLifecycle | null;
   limit?: number;
-}): Promise<{ name: string; title: string | null; domain_key: string | null; snippet: string; updated_at: string | null }[]> {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  const like = `%${opts.query.replace(/[\\%_]/g, (m) => "\\" + m)}%`; // LIKE 메타문자 이스케이프
-  params.push(like); where.push(`(title ILIKE $${params.length} OR body_md ILIKE $${params.length})`);
-  if (opts.kind) { params.push(opts.kind); where.push(`kind=$${params.length}`); }
-  if (opts.kindNot) { params.push(opts.kindNot); where.push(`kind <> $${params.length}`); }
-  if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
-  if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
-  params.push(Math.min(Math.max(opts.limit ?? 10, 1), 50));
-  const r = await itemsPool.query(
-    `SELECT name, title, domain_key, body_md, updated_at FROM knowledge_unit
-       WHERE ${where.join(" AND ")} ORDER BY updated_at DESC NULLS LAST LIMIT $${params.length}`,
-    params,
-  );
-  return r.rows.map((row: Record<string, unknown>) => ({
-    name: row.name as string, title: (row.title as string) ?? null,
-    domain_key: (row.domain_key as string) ?? null, updated_at: (row.updated_at as string) ?? null,
-    snippet: String(row.body_md ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
-  }));
+}): Promise<KnowledgeSearchHit[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
+
+  // ── 공통 필터 빌더 — ILIKE/벡터 양 경로가 동일 kind/lifecycle/domain WHERE 를 공유한다. ──
+  const buildFilters = (params: unknown[]): string[] => {
+    const where: string[] = [];
+    if (opts.kind) { params.push(opts.kind); where.push(`kind=$${params.length}`); }
+    if (opts.kindNot) { params.push(opts.kindNot); where.push(`kind <> $${params.length}`); }
+    if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
+    if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
+    return where;
+  };
+
+  // ── ILIKE 검색(현 동작, 항상 실행) — OFF 기본에선 이 경로만 탄다(동작 변화 0). ──
+  const ilike = async (): Promise<KnowledgeSearchHit[]> => {
+    const params: unknown[] = [];
+    const like = `%${opts.query.replace(/[\\%_]/g, (m) => "\\" + m)}%`; // LIKE 메타문자 이스케이프
+    params.push(like);
+    const where = [`(title ILIKE $${params.length} OR body_md ILIKE $${params.length})`, ...buildFilters(params)];
+    params.push(limit);
+    const r = await itemsPool.query(
+      `SELECT name, title, domain_key, body_md, updated_at FROM knowledge_unit
+         WHERE ${where.join(" AND ")} ORDER BY updated_at DESC NULLS LAST LIMIT $${params.length}`,
+      params,
+    );
+    return r.rows.map(mapSearchRow);
+  };
+
+  // OFF 기본/provider 미사용/컬럼 미가용 → 임베딩 코드 경로 진입조차 안 함. 반환 shape·snippet 240 불변.
+  if (!embeddingsUsable()) return ilike();
+
+  // ── ON 경로: ILIKE 후보 ∪ 코사인 top-N 을 RRF(Reciprocal Rank Fusion)로 병합. 실패하면 ILIKE 폴백. ──
+  try {
+    const vec = await embedOne(opts.query);
+    if (!vec) return ilike(); // 임베딩 계산 실패 → 폴백
+
+    const ilikeHits = await ilike();
+
+    // 벡터 후보: 같은 필터 + embedding NOT NULL, 코사인거리 오름차순 top-N(over-fetch 로 병합 품질 확보).
+    const vparams: unknown[] = [];
+    const where = ["embedding IS NOT NULL", ...buildFilters(vparams)];
+    vparams.push(toVectorLiteral(vec)); const vecIdx = vparams.length;
+    vparams.push(Math.min(limit * 4, 50)); const limIdx = vparams.length;
+    const vr = await itemsPool.query(
+      `SELECT name, title, domain_key, body_md, updated_at FROM knowledge_unit
+         WHERE ${where.join(" AND ")}
+         ORDER BY embedding <=> $${vecIdx}::vector LIMIT $${limIdx}`,
+      vparams,
+    );
+    const vecHits = vr.rows.map(mapSearchRow);
+
+    // RRF 병합(k=60) — 두 랭킹의 역수합 점수로 정렬, name 으로 중복 제거. 동점 안정정렬은 삽입 순서.
+    const K = 60;
+    const score = new Map<string, number>();
+    const byName = new Map<string, KnowledgeSearchHit>();
+    const accum = (hits: KnowledgeSearchHit[]) => {
+      hits.forEach((h, i) => {
+        score.set(h.name, (score.get(h.name) ?? 0) + 1 / (K + i + 1));
+        if (!byName.has(h.name)) byName.set(h.name, h);
+      });
+    };
+    accum(ilikeHits);
+    accum(vecHits);
+    return [...byName.keys()]
+      .sort((a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0))
+      .slice(0, limit)
+      .map((n) => byName.get(n)!);
+  } catch (err) {
+    logger.warn({ err }, "하이브리드 검색 실패 — ILIKE 로 폴백");
+    return ilike();
+  }
 }
 
 export interface KnowledgeInput {
@@ -193,6 +258,23 @@ export async function upsertKnowledge(unit: KnowledgeInput, actor?: string, sour
   );
   const after = await getKnowledge(unit.name);
   await auditKnowledge(unit.name, before ? "update" : "insert", before, after, actor, source);
+
+  // 임베딩 갱신(enabled 시 best-effort) — 본문을 임베딩해 embedding 컬럼에 UPDATE. 실패는 무시(검색이 ILIKE 로
+  //  폴백하므로 무해). OFF 면 embeddingsUsable()=false 라 진입조차 안 함(컬럼 없음 → UPDATE 미실행).
+  if (embeddingsUsable()) {
+    try {
+      const vec = await embedOne(after?.body_md ?? unit.body_md ?? "");
+      if (vec) {
+        await itemsPool.query(
+          `UPDATE knowledge_unit SET embedding=$2::vector WHERE name=$1`,
+          [unit.name, toVectorLiteral(vec)],
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, name: unit.name }, "임베딩 저장 실패(무시) — 검색은 ILIKE 폴백");
+    }
+  }
+
   return after as KnowledgeUnit;
 }
 

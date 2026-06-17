@@ -5,6 +5,7 @@ import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
+import { embeddingsEnabled, initEmbeddings } from "./embeddings/index.js";
 import { listDisabledBuiltins } from "./org/store.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { buildInstallBundle } from "./org/publish.js";
@@ -83,6 +84,9 @@ const server = app.listen(PORT, () => {
       .catch((err) => logger.error({ err }, "item schema init failed"));
     initOrgSchema()
       .then(() => logger.info("org schema ready"))
+      // 임베딩 초기화(OFF 기본 — enabled 일 때만, 비치명). pgvector 부재 시 initEmbeddings 가 graceful 폴백
+      //  (warn 후 throw 없이 반환)하므로 catch 는 방어선일 뿐. OFF 면 진입조차 안 한다 → 동작 변화 0.
+      .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
       .catch((err) => logger.error({ err }, "org schema init failed"));
   }
 });
