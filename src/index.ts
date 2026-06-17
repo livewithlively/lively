@@ -73,14 +73,21 @@ app.get("/install", auth, async (_req, res) => {
 // Lively Context 웹 UI — /api/ui/*(REST, 동일 verifier 재사용) + /ui(정적 프론트).
 registerWebUi(app, verifier);
 
-// Item store + org-content 스키마 보장(비치명적) — ITEMS_DATABASE_URL 설정 시에만.
-if (process.env.ITEMS_DATABASE_URL) {
-  initItemSchema()
-    .then(() => logger.info("item schema ready"))
-    .catch((err) => logger.error({ err }, "item schema init failed"));
-  initOrgSchema()
-    .then(() => logger.info("org schema ready"))
-    .catch((err) => logger.error({ err }, "org schema init failed"));
-}
-
-app.listen(PORT, () => logger.info(`context-ontology listening on :${PORT}/mcp`));
+const server = app.listen(PORT, () => {
+  logger.info(`context-ontology listening on :${PORT}/mcp`);
+  // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
+  //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
+  if (process.env.ITEMS_DATABASE_URL) {
+    initItemSchema()
+      .then(() => logger.info("item schema ready"))
+      .catch((err) => logger.error({ err }, "item schema init failed"));
+    initOrgSchema()
+      .then(() => logger.info("org schema ready"))
+      .catch((err) => logger.error({ err }, "org schema init failed"));
+  }
+});
+// 포트 바인딩 실패(구 게이트웨이 미종료 등) → 마이그레이션 미실행 보장 + 즉시 종료(half-state 방지).
+server.on("error", (err) => {
+  logger.error({ err }, `listen failed on :${PORT} — 스키마 마이그레이션 미실행, 종료`);
+  process.exit(1);
+});

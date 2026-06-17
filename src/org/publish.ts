@@ -123,12 +123,11 @@ export async function previewMemberContext(orgName: string): Promise<string> {
   const policy = await getSection("managed-policy");
   const defaults = await getSection("org-defaults");
   const { listMemory } = await import("./store.js");
-  // 격리 강제 미러(materialize 와 동일): internal 메모리는 멤버 미리보기에도 안 나온다.
-  const memory = (await listMemory()).filter((m) => m.visibility !== "internal");
-  const memIndex = memory.filter((m) => m.in_index).length
-    ? "# Canonical Memory Index\n\n" + memory.filter((m) => m.in_index)
-        .map((m) => `- ${m.title?.trim() || m.name}`).join("\n")
-    : "";
+  // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildMemoryIndex 를 그대로
+  //  재사용(정렬 updated_at DESC·cap 100·요약·꼬리줄 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
+  const { buildMemoryIndex } = await import("./materialize.js");
+  const memory = await listMemory();
+  const memIndex = memory.length ? buildMemoryIndex(memory).trim() : "";
   const sections = [
     header,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",

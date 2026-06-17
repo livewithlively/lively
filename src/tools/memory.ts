@@ -4,9 +4,10 @@ import { resolveUser, requireScope } from "../context.js";
 import { getMemory, upsertMemory, searchMemory } from "../org/store.js";
 import { listDomainsApi } from "../domainmap/core/queries.js";
 
-// 팀 공유 메모리(org_memory) MCP 표면 — "맥락 없는 세션도 한 콜로 공유메모리 업로드".
-// 진실원천=items DB(org_memory). 발행 시 visibility='member' 만 멤버에 배포(materialize/publish 필터),
-//  'internal' 은 게이트웨이 pull 전용(memory_search). 도메인 귀속은 domainmap(repo='productivity') 약결합.
+// 조직 공유 메모리(org_memory) MCP 표면 — 하네스 네이티브 메모리를 조직이 공유(에이전트 생산·소비, 단일 풀).
+// 진실원천=items DB(org_memory). 인덱스(제목·요약)는 발행 시 항상-주입 컨텍스트로, 본문은 memory_search pull.
+//  도메인 귀속은 domainmap(repo='productivity') 약결합. (member/internal 분리는 2026-06-17 폐기 — 과설계.)
+// 공유 blast-radius 는 감사(org_content_audit)+주기적 prune+kill-switch(LIVELY_OFF)로 관리(per-memory 권한 아님).
 const DEFAULT_DOMAIN_REPO = "productivity"; // 제품 자신의 도메인맵 repo (repo='lively'=구제품 앱 — 무관)
 
 // 슬러그 생성 — title/note 에서 ASCII kebab. 한글/특수문자뿐이면 'mem-<hash>' 폴백. STRICT_SLUG 준수.
@@ -45,29 +46,20 @@ export function registerMemoryTools(server: McpServer): void {
   server.registerTool(
     "memory_save",
     {
-      title: "팀 공유 메모리에 저장",
+      title: "공유 메모리에 저장",
       description:
-        "팀 공유 메모리(조직 정설 지식)에 한 콜로 저장한다. domain 생략 시 도메인맵으로 자동분류. " +
-        "visibility=internal(기본): 멤버에 배포 안 됨, 게이트웨이 memory_search 로만 조회. " +
-        "visibility=member: 다음 발행 때 전 구성원에 배포(admin 권한 필요). name 생략 시 제목/본문에서 자동 생성.",
+        "조직 공유 메모리에 한 콜로 저장한다(에이전트가 생산·소비하는 단일 풀). domain 생략 시 도메인맵으로 자동분류. " +
+        "name 생략 시 제목/본문에서 자동 생성, 같은 name 재지정 시 갱신. 제목·요약은 인덱스로 공유되고 본문은 memory_search 로 조회된다.",
       inputSchema: {
         note: z.string().min(1).max(40000).describe("저장할 지식 본문(markdown)"),
         title: z.string().max(200).optional().describe("제목(인덱스/검색 표시용)"),
         domain: z.string().max(100).optional().describe("도메인 슬러그(생략 시 자동분류). domain_list 로 확인 가능"),
-        visibility: z.enum(["internal"]).optional().describe("internal 만 지원(멤버 미배포). member(전원 배포)는 웹 관리 전용"),
         name: z.string().max(64).optional().describe("메모리 식별자(생략 시 자동 생성). 같은 name 재지정 시 갱신"),
       },
     },
-    async ({ note, title, domain, visibility, name }, extra) => {
+    async ({ note, title, domain, name }, extra) => {
       const user = resolveUser(extra);
       requireScope(user, "memory");
-      // 보안: MCP 저장은 internal 전용(멤버 미배포). member(전 구성원 매세션 주입)는 에이전트/토큰이 fleet 컨텍스트를
-      //  주입하는 통로가 되지 않게 웹 관리(admin·web.ts mw 가 정적토큰 거부=B5)로만 허용. zod 가 'internal' 만 받지만
-      //  방어적으로 한 번 더 막는다.
-      const vis: "member" | "internal" = visibility === undefined ? "internal" : visibility;
-      if (vis !== "internal") {
-        throw new Error("memory_save 는 internal 메모리만 저장합니다. member(전 구성원 배포)는 웹 관리 화면에서 발행하세요.");
-      }
 
       // 도메인: 지정되면 존재 검증(fail-open), 생략되면 자동분류.
       const repo = DEFAULT_DOMAIN_REPO;
@@ -87,18 +79,12 @@ export function registerMemoryTools(server: McpServer): void {
         else domainNote = " (도메인 미분류 — 정확히 하려면 domain 인자 지정 권장)";
       }
 
-      // 이름: 주어지면 검증·갱신(upsert), 아니면 생성(충돌 시 -2.. 부여, 덮어쓰기 방지).
+      // 이름: 주어지면 그 name 으로 갱신(upsert), 아니면 생성(자동생성끼리 충돌 시 -2.. 부여).
       let memName: string;
       if (name) {
         memName = name.trim().toLowerCase();
         if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(memName)) {
           throw new Error("name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
-        }
-        // 보안: 명시 name 으로 기존 **member** 메모리를 덮어쓰면 본문 변조 + member→internal 강등으로 발행에서
-        //  사라진다(fleet 회수). member 메모리 수정은 admin/웹 전용 — 에이전트(memory scope)는 거부. internal 갱신은 허용.
-        const existing = await getMemory(memName);
-        if (existing && existing.visibility === "member") {
-          throw new Error(`'${memName}' 은 member(전원 배포) 메모리입니다 — 에이전트가 덮어쓸 수 없습니다(웹 관리에서 수정하세요).`);
         }
       } else {
         const baseSlug = toSlug(title || note);
@@ -114,19 +100,14 @@ export function registerMemoryTools(server: McpServer): void {
         name: memName,
         title: title ?? null,
         body_md: note,
-        in_index: false, // 에이전트 생성은 기본 비인덱스(멤버 MEMORY.md 인덱스 승급은 admin 이 웹에서)
-        visibility: vis,
         domain_key: domainKey,
         domain_repo: domainKey ? repo : null,
       }, user.userId, "mcp");
 
-      const reach = vis === "internal"
-        ? "internal — 멤버에 배포되지 않습니다(게이트웨이 memory_search 로만 조회)."
-        : "member — 다음 발행 때 전 구성원에 배포됩니다.";
       return {
         content: [{
           type: "text",
-          text: `✓ 메모리 저장: ${saved.name} [${saved.visibility}]${domainKey ? ` · 도메인 ${domainKey}` : ""}${domainNote}\n${reach}`,
+          text: `✓ 메모리 저장: ${saved.name}${domainKey ? ` · 도메인 ${domainKey}` : ""}${domainNote}\n인덱스로 공유됨(본문은 memory_search 로 조회).`,
         }],
       };
     },
@@ -135,22 +116,21 @@ export function registerMemoryTools(server: McpServer): void {
   server.registerTool(
     "memory_search",
     {
-      title: "팀 공유 메모리 검색",
-      description: "팀 공유 메모리를 제목/본문 텍스트로 검색한다(internal·member 모두 조회 가능). domain/visibility 로 필터.",
+      title: "공유 메모리 검색",
+      description: "조직 공유 메모리를 제목/본문 텍스트로 검색해 본문(스니펫)을 가져온다. domain 으로 필터.",
       inputSchema: {
         query: z.string().min(1).describe("검색어(제목·본문 부분일치)"),
         domain: z.string().optional().describe("도메인 슬러그로 필터"),
-        visibility: z.enum(["member", "internal", "all"]).default("all").describe("가시성 필터(기본 all)"),
         limit: z.number().int().min(1).max(50).default(10),
       },
     },
-    async ({ query, domain, visibility, limit }, extra) => {
+    async ({ query, domain, limit }, extra) => {
       const user = resolveUser(extra);
       requireScope(user, "memory");
-      const rows = await searchMemory({ query, visibility, domainKey: domain ?? null, limit });
+      const rows = await searchMemory({ query, domainKey: domain ?? null, limit });
       if (!rows.length) return { content: [{ type: "text", text: `메모리 검색 결과 없음: "${query}"` }] };
       const text = rows.map((r) =>
-        `### ${r.title ?? r.name} [${r.visibility}]${r.domain_key ? ` · ${r.domain_key}` : ""} (${r.name})\n${r.snippet}`,
+        `### ${r.title ?? r.name}${r.domain_key ? ` · ${r.domain_key}` : ""} (${r.name})\n${r.snippet}`,
       ).join("\n\n");
       return { content: [{ type: "text", text }] };
     },

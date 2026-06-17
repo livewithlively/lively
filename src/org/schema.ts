@@ -64,31 +64,24 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
-  // ── org_memory — 정설 메모리 문서(memory/<name>.md). MEMORY.md 인덱스는 in_index=true 행에서 생성. ──
-  // visibility: 'member'=발행 시 전 멤버에 배포(인덱스 주입+본문 디스크). 'internal'=발행 경로에서 제외
-  //  (멤버 미주입/미배포 — 게이트웨이 memory_search 로만 pull). 기본 'member'(기존 행 후방호환). 격리 강제는
-  //  materialize/publish 가 visibility<>'internal' 필터로 구현(스키마 컬럼만으로는 격리 안 됨 — 코드 choke-point).
-  // domain_key/domain_repo: domainmap 도메인 귀속(평면 메모리를 도메인-스코프로). FK 아님(domainmap 은 별도 DB) —
-  //  슬러그 약결합. 자동분류(memory_save) 또는 수동 지정.
+  // ── org_memory — 단일 공유 풀(에이전트 생산·소비). 인덱스(요약)는 발행 시 항상-주입 컨텍스트로, 본문은 ──
+  //  memory_search(게이트웨이 pull)로. visibility(member/internal) 분리는 2026-06-17 폐기 — 과설계였음.
+  //  domain_key/domain_repo: domainmap 도메인 귀속(슬러그 약결합, FK 아님). 자동분류(memory_save) 또는 수동.
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS org_memory(
       name TEXT PRIMARY KEY,
       title TEXT,
       body_md TEXT NOT NULL DEFAULT '',
-      in_index BOOLEAN NOT NULL DEFAULT true,
       sort INT NOT NULL DEFAULT 0,
       version INT NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
-    ALTER TABLE org_memory ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'member';
     ALTER TABLE org_memory ADD COLUMN IF NOT EXISTS domain_key TEXT;
     ALTER TABLE org_memory ADD COLUMN IF NOT EXISTS domain_repo TEXT;
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='org_memory'::regclass AND conname='org_memory_visibility_chk') THEN
-        ALTER TABLE org_memory ADD CONSTRAINT org_memory_visibility_chk CHECK (visibility IN ('member','internal'));
-      END IF;
-    END $$;
+    -- 단순화 폐기(down-migration, 멱등): 구코드가 더는 안 읽음. visibility CHECK 는 컬럼 드롭 시 함께 사라짐.
+    --  in_index 도 폐기 — 전 메모리가 인덱스에 들어감(cap 으로 관리). 파괴적이라 index.ts 가 listen 성공 후에만 실행.
+    ALTER TABLE org_memory DROP COLUMN IF EXISTS visibility;
+    ALTER TABLE org_memory DROP COLUMN IF EXISTS in_index;
   `);
 
   // ── org_content_audit — append-only 감사 로그(item_mapping_audit/change_log 대응물). ──

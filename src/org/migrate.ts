@@ -109,12 +109,8 @@ export async function migrateOrgContent(orgDir: string, dry: boolean): Promise<s
     }
   }
 
-  // ── 메모리(memory/*.md, MEMORY.md 인덱스로 in_index 결정) ──
+  // ── 메모리(memory/*.md → 단일 공유 풀. 전 메모리가 인덱스에 들어감 — in_index 분기 폐기) ──
   if (has("memory")) {
-    const indexNames = new Set<string>();
-    if (has("memory/MEMORY.md")) {
-      for (const m of read("memory/MEMORY.md").matchAll(/\]\(([^)#:]+?)(?:\.md)?\)/g)) indexNames.add(m[1]);
-    }
     for (const f of readdirSync(join(orgDir, "memory")).filter((x) => x.endsWith(".md") && x !== "MEMORY.md").sort()) {
       const memName = f.replace(/\.md$/, "");
       const text = read(join("memory", f));
@@ -123,9 +119,8 @@ export async function migrateOrgContent(orgDir: string, dry: boolean): Promise<s
         name: memName,
         title: h1 ? h1[1].trim() : memName,
         body_md: text,
-        in_index: indexNames.has(memName),
       }, "migrate", "migration");
-      log.push(`memory: ${memName}${indexNames.has(memName) ? " [index]" : ""}`);
+      log.push(`memory: ${memName}`);
     }
   }
 
