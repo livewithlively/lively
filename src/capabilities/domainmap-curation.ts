@@ -19,6 +19,7 @@ import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/cor
 import { confirmProject } from "../domainmap/core/projects.js";
 import { setDebtStatus } from "../domainmap/core/debts.js";
 import { logger } from "../log.js";
+import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import type { LivelyUser } from "../context.js";
@@ -202,6 +203,7 @@ const dmDomainEdit: Capability = {
     if (input.name === undefined && input.description === undefined && input.crossCutting === undefined) {
       throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/crossCutting 중 1개 이상");
     }
+    if (input.description !== undefined) assertNoHardSecrets(input.description, "description"); // P8: 영역 설명 평문 시크릿 hard-block
     return audited("domain_edit", user, ctx, { id: input.id, fields: Object.keys(input).filter((k) => k !== "id") }, () => {
       const patch: Record<string, unknown> = {};
       if (input.name !== undefined) patch.name = input.name;
@@ -439,6 +441,9 @@ const proposeDomain: Capability = {
     if (typeof input.evidence !== "string" || !input.evidence.trim()) {
       throw new HttpError(400, "evidence 필수 — 이 도메인이 필요한 근거를 적어주세요");
     }
+    // P8: 설명/근거는 MCP(에이전트)로도 쓰이는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
+    if (input.description !== undefined) assertNoHardSecrets(input.description, "description");
+    assertNoHardSecrets(input.evidence, "evidence");
     return audited("domain_propose", user, ctx, { repo: input.repo, key: input.key }, () =>
       // 구 라우트 typedActor: MCP 경유 = x-actor-type 'agent', 그 외 human — 동일 매핑 재현.
       dmWrite(() => coreProposeDomain(input.repo, {

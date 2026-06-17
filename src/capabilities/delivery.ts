@@ -169,6 +169,7 @@ export const deliveryCapabilities: Capability[] = [
       if (section === "managed-policy" && Buffer.byteLength(body, "utf8") > 16 * 1024) {
         throw new HttpError(400, "강제 규칙이 너무 깁니다(16KiB 초과) — 짧고 절대적인 규칙만 두세요");
       }
+      assertNoHardSecrets(body, "body_md"); // P8: 강제규칙/회사맥락은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
       return { section: await updateSection(section, body, actorOf(user), "web") };
     }),
 
@@ -186,12 +187,15 @@ export const deliveryCapabilities: Capability[] = [
         scopes = input.scopes.map((s) => str(s, "scopes[]", 20));
         for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       }
+      // 개인레이어 본문(body_md)은 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
+      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       const member = await upsertMember({
         id, kind,
         display_name: input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim(),
         email: input.email === undefined ? undefined : str(input.email, "email", 200).trim(),
         identities: input.identities === undefined ? undefined : parseIdentities(input.identities),
-        body_md: input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000),
+        body_md: memberBody,
         state: input.state === undefined ? undefined : (str(input.state, "state", 10) as "active" | "inactive"),
         scopes,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -215,10 +219,13 @@ export const deliveryCapabilities: Capability[] = [
       const domainKey = input.domain_key === undefined ? undefined : (String(input.domain_key).trim() || null);
       const domainRepo = domainKey === undefined ? undefined
         : (domainKey ? (String(input.domain_repo ?? "productivity").trim() || "productivity") : null);
+      // 공유 메모리 본문(body_md)은 에이전트/사람이 읽는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
+      const memoryBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 40000);
+      if (memoryBody !== undefined) assertNoHardSecrets(memoryBody, "body_md"); // P8
       const memory = await upsertMemory({
         name: slug(input.name, "name"),
         title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
-        body_md: input.body_md === undefined ? undefined : str(input.body_md, "body_md", 40000),
+        body_md: memoryBody,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
         domain_key: domainKey,
         domain_repo: domainRepo,
