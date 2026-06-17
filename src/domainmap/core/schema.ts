@@ -15,7 +15,7 @@ export async function init(): Promise<string> {
   CREATE TABLE IF NOT EXISTS domain(
     id SERIAL PRIMARY KEY, repo_id INT, key TEXT, name TEXT, description TEXT,
     state TEXT DEFAULT 'active', cross_cutting BOOLEAN DEFAULT false,
-    origin TEXT, status TEXT DEFAULT 'proposed', created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
+    origin TEXT, status TEXT DEFAULT 'confirmed', created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
     UNIQUE(repo_id, key));
   CREATE TABLE IF NOT EXISTS code_unit(
     id SERIAL PRIMARY KEY, repo_id INT, kind TEXT, path TEXT, label TEXT,
@@ -25,7 +25,7 @@ export async function init(): Promise<string> {
     created_at TIMESTAMPTZ, UNIQUE(repo_id, kind, name, source));
   CREATE TABLE IF NOT EXISTS mapping(
     id SERIAL PRIMARY KEY, repo_id INT, target_kind TEXT, target_id INT,
-    domain_id INT, origin TEXT, confidence REAL, status TEXT DEFAULT 'proposed',
+    domain_id INT, origin TEXT, confidence REAL, status TEXT DEFAULT 'confirmed',
     run_id INT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
     UNIQUE(repo_id, target_kind, target_id, domain_id));
   CREATE TABLE IF NOT EXISTS debt_finding(
@@ -34,7 +34,7 @@ export async function init(): Promise<string> {
     created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, UNIQUE(repo_id, title));
   CREATE TABLE IF NOT EXISTS project(
     id SERIAL PRIMARY KEY, repo_id INT, key TEXT, name TEXT, description TEXT,
-    kind TEXT, status TEXT DEFAULT 'proposed', origin TEXT,
+    kind TEXT, status TEXT DEFAULT 'confirmed', origin TEXT,
     started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, source_ref TEXT,
     created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, UNIQUE(repo_id, key));
   CREATE TABLE IF NOT EXISTS project_touch(

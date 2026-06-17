@@ -12,21 +12,24 @@ import { getRepo } from "./repos.js";
 const now = () => new Date().toISOString();
 
 // Edit a domain by its numeric id; stamp the editing actor's origin.
-// HUMAN path (default): auto-confirm — byte-compat with the original behavior.
-// AGENT path (actor.type==='agent'): may ONLY edit status='proposed' rows, and the
-// edit keeps status='proposed' (human curation owns the proposed→confirmed transition).
-// Agent edit on a confirmed row => 403 (human-confirmed definitions are agent-immutable
-// here; agents must go through drift/propose flows instead).
+// HUMAN path (default): auto-confirm + origin='human' — byte-compat with the original behavior.
+// AGENT path (actor.type==='agent'): may ONLY edit non-human-owned rows, and the edit
+// keeps the row's current status (P6a trust-default: agent-authored rows already land
+// confirmed, so the agent edits its own confirmed rows in place; human curation owns the
+// transition to origin='human').
+// Agent edit on a non-agent-owned row (origin≠'agent', i.e. human-curated) => 403
+// (human-curated definitions are agent-immutable here; agents must go through drift/propose
+// flows instead). Domains are never origin='source' (only syncProject sets that, on projects).
 export async function editDomainById(id: number, patch: Record<string, unknown>, actor: Actor): Promise<DomainEditResult> {
   const pool = dmPool();
   const ex = await one(pool, "SELECT * FROM domain WHERE id=$1", [id]);
   if (!ex) throw httpErr(404, "no such domain: " + id);
   const isAgent = actor.type === "agent";
-  if (isAgent && ex.status === "confirmed") {
-    throw httpErr(403, `agent cannot edit a confirmed domain: ${id} (human curation owns it)`);
+  if (isAgent && ex.origin !== "agent") {
+    throw httpErr(403, `agent cannot edit a human-curated domain: ${id} (human curation owns it)`);
   }
   const origin = isAgent ? "agent" : "human";
-  const status = isAgent ? ex.status : "confirmed"; // agent: keep proposed; human: auto-confirm (기존 거동)
+  const status = isAgent ? ex.status : "confirmed"; // agent: keep current status; human: confirm + own (기존 거동)
   const before = { name: ex.name, description: ex.description, cross_cutting: ex.cross_cutting, status: ex.status, origin: ex.origin };
   const name = patch.name ?? ex.name;
   const description = patch.description ?? ex.description;
@@ -34,17 +37,20 @@ export async function editDomainById(id: number, patch: Record<string, unknown>,
   const after = { name, description, cross_cutting, status, origin };
   await pool.query("UPDATE domain SET name=$1,description=$2,cross_cutting=$3,status=$4,origin=$5,updated_at=$6 WHERE id=$7",
     [name, description, cross_cutting, status, origin, now(), id]);
-  const note = isAgent ? "agent edit (kept proposed)" : `${origin} edit (auto-confirm)`;
+  const note = isAgent ? "agent edit (kept status)" : `${origin} edit (auto-confirm)`;
   const cid = await logChange(pool, {
     repoId: ex.repo_id, entityType: "domain", entityId: id, op: "update", actor, before, after, note,
   });
   return { id, change_id: cid, after };
 }
 
-// Day-2 domain authoring: create a single status='proposed' domain with REQUIRED
-// evidence. The evidence is persisted in change_log.note (no schema addition) —
-// surfaced via history. Reuses the SYNC_BLOCKED_REPOS deny-list (store-level guard:
-// HTTP route, CLI and any future entrypoint all pass through here).
+// Day-2 domain authoring: create a single domain with REQUIRED evidence.
+// P6a 신뢰우선(trust-default): proposed 림보 없이 곧바로 status='confirmed' 로 착지하고
+// origin=actor.type 로 '누가 만들었나'를 보존(evidence 는 게이트가 아니라 provenance 로 유지).
+// 사람은 사후에 edit/deprecate/merge 로 큐레이션한다(reject 경로는 매핑 단위로 유지).
+// The evidence is persisted in change_log.note (no schema addition) — surfaced via history.
+// Reuses the SYNC_BLOCKED_REPOS deny-list (store-level guard: HTTP route, CLI and any
+// future entrypoint all pass through here).
 // INSERT mirrors reconcile.upsertDomain's columns; state='active' is explicit because
 // every domain read filters state<>'merged' (NULL-hostile under future filters).
 export async function proposeDomain(repoName: string, fields: Record<string, unknown> | null | undefined, actor: Actor): Promise<ProposeDomainResult> {
@@ -67,13 +73,13 @@ export async function proposeDomain(repoName: string, fields: Record<string, unk
   const ex = await one(pool, "SELECT id FROM domain WHERE repo_id=$1 AND key=$2", [r.id, key]);
   if (ex) throw httpErr(409, `domain key already exists in repo '${repoName}': ${key} (#${ex.id})`);
   const row = await one(pool, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
-    VALUES($1,$2,$3,$4,'active',$5,$6,'proposed',$7,$7) RETURNING id`,
+    VALUES($1,$2,$3,$4,'active',$5,$6,'confirmed',$7,$7) RETURNING id`,
     [r.id, key, name, description, !!f.cross_cutting, actor.type, now()]);
   const cid = await logChange(pool, {
     repoId: r.id, entityType: "domain", entityId: row.id, op: "insert", actor,
-    before: null, after: { key, name, status: "proposed" }, note: "propose (evidence): " + evidence,
+    before: null, after: { key, name, status: "confirmed" }, note: "propose (evidence): " + evidence,
   });
-  return { repo: repoName, id: row.id, key, status: "proposed", change_id: cid };
+  return { repo: repoName, id: row.id, key, status: "confirmed", change_id: cid };
 }
 
 // Domain lifecycle: active <-> deprecated. 'merged' rows are terminal (mergeDomains

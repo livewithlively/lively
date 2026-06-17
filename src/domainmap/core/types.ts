@@ -66,7 +66,8 @@ export type DomainStateResult =
   | { id: number; change_id: number; state: string }
   | { id: number; action: "unchanged"; state: string };
 
-export interface ProposeDomainResult { repo: string; id: number; key: string; status: "proposed"; change_id: number }
+// P6a 신뢰우선: propose_domain 도 proposed 림보 없이 confirmed 로 착지(evidence 는 provenance 로 보존).
+export interface ProposeDomainResult { repo: string; id: number; key: string; status: "confirmed"; change_id: number }
 export interface MergeResult { from_id: number; into_id: number; moved_mappings: number; folded_mappings: number; change_id: number }
 export interface ReassignResult {
   id: number; change_id: number;

@@ -1,7 +1,13 @@
-// ingest(reconcile) 정책 전체 = '사람 확정(confirmed) 절대 미덮어쓰기' 불변식의 단일 거처.
-// store-core.mjs 의 reconciliation-aware upsert 군 + ingest 를 시맨틱 무수정 이식:
-//  - confirmed+agent 차이 → op='drift' 기록 후 human 값 보존(덮어쓰기 금지)
-//  - mapping kept-confirmed/kept-rejected 는 change_log 무기록
+// ingest(reconcile) 정책 전체 = '비-agent 소유(origin∈{human,source}) 절대 미덮어쓰기' 불변식의 단일 거처.
+// store-core.mjs 의 reconciliation-aware upsert 군 + ingest 를 시맨틱 이식하되,
+// P6a 신뢰우선(trust-default, 공동대표 확정 2026-06-17)으로 자동매핑/정의의 착지 상태를 개정:
+//  - 자동매핑/도메인/프로젝트는 proposed 림보 없이 곧바로 status='confirmed' 로 착지(AI 매핑=참).
+//    origin(actor.type: agent|human, syncProject 는 'source')이 '누가 만들었나'를 보존 —
+//    이제 confirmed 라고 다 사람·툴 소유가 아니다(agent 도 confirmed).
+//  - '미덮어쓰기' 가드는 status='confirmed' 가 아니라 origin≠'agent' 로 키한다(이제 agent 도
+//    confirmed 로 착지하므로 status 만으로는 권위 소유를 식별 못 한다). 비-agent 소유 행과
+//    agent 제안이 다르면 → op='drift' 기록 후 기존 값 보존(덮어쓰기 금지). agent 자기 확정행은 갱신.
+//  - mapping kept-* (비-agent 소유 또는 rejected)는 change_log 무기록
 //  - code_unit/data_entity insert-only + change_log 무기록(비대칭 보존 — ingest 경로 한정)
 //  - 모든 쓰기는 단일 트랜잭션(withTx): 중도 실패 = 전체 롤백, 부분 상태 없음
 //  - tally 키 문자열('domain:insert','mapping:skip-nodomain' 등 콜론 합성)은 한 글자도 불변
@@ -17,8 +23,10 @@ const now = () => new Date().toISOString();
 async function upsertDomain(db: Db, repo_id: number, run_id: number, actor: Actor, d: any): Promise<string> {
   const ex = await one(db, "SELECT * FROM domain WHERE repo_id=$1 AND key=$2", [repo_id, d.key]);
   if (!ex) {
+    // 신뢰우선: 자동 정의는 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 가
+    // '누가 만들었나'(agent/human)를 보존 — 사람 큐레이션 식별은 status 가 아니라 origin='human'.
     const r = await one(db, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,'proposed',$8,$8) RETURNING id`,
+      VALUES($1,$2,$3,$4,$5,$6,$7,'confirmed',$8,$8) RETURNING id`,
       [repo_id, d.key, d.name, d.description ?? "", d.state ?? "active", !!d.cross_cutting, actor.type, now()]);
     await logChange(db, {
       repoId: repo_id, entityType: "domain", entityId: r.id, op: "insert", actor, runId: run_id,
@@ -26,7 +34,8 @@ async function upsertDomain(db: Db, repo_id: number, run_id: number, actor: Acto
     });
     return "insert";
   }
-  if (ex.status === "confirmed" && actor.type === "agent") {
+  // 비-agent 소유(origin∈{human,source}) 행은 agent 덮어쓰기 차단 — agent 자기 확정행만 정상 갱신(멱등 재인제스트).
+  if (ex.origin !== "agent" && actor.type === "agent") {
     if (ex.name !== d.name || (ex.description || "") !== (d.description || "")) {
       await logChange(db, {
         repoId: repo_id, entityType: "domain", entityId: ex.id, op: "drift", actor, runId: run_id,
@@ -75,8 +84,9 @@ async function upsertMapping(
   const ex = await one(db, "SELECT * FROM mapping WHERE repo_id=$1 AND target_kind=$2 AND target_id=$3 AND domain_id=$4",
     [repo_id, target_kind, target_id, domain_id]);
   if (!ex) {
+    // 신뢰우선: 자동매핑은 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 보존.
     const r = await one(db, `INSERT INTO mapping(repo_id,target_kind,target_id,domain_id,origin,confidence,status,run_id,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,'proposed',$7,$8,$8) RETURNING id`,
+      VALUES($1,$2,$3,$4,$5,$6,'confirmed',$7,$8,$8) RETURNING id`,
       [repo_id, target_kind, target_id, domain_id, actor.type, confidence ?? null, run_id, now()]);
     await logChange(db, {
       repoId: repo_id, entityType: "mapping", entityId: r.id, op: "insert", actor, runId: run_id,
@@ -84,7 +94,9 @@ async function upsertMapping(
     });
     return "insert";
   }
-  if (ex.status === "confirmed" || ex.status === "rejected") return "kept-" + ex.status;
+  // 비-agent 소유(origin∈{human,source})거나 rejected 면 보존(kept-*) — agent 자기 확정행 재인제스트는 unchanged.
+  // (매핑 행은 이 경로에서 갱신할 가변 필드가 없어 agent-confirmed 는 사실상 no-op = unchanged.)
+  if (ex.origin !== "agent" || ex.status === "rejected") return "kept-" + ex.status;
   return "unchanged";
 }
 
@@ -95,8 +107,9 @@ async function upsertMapping(
 async function upsertProject(db: Db, repo_id: number, run_id: number, actor: Actor, p: any): Promise<{ id: number; action: string }> {
   const ex = await one(db, "SELECT * FROM project WHERE repo_id=$1 AND key=$2", [repo_id, p.key]);
   if (!ex) {
+    // 신뢰우선: 자동 정의 프로젝트는 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 보존.
     const r = await one(db, `INSERT INTO project(repo_id,key,name,description,kind,status,origin,started_at,ended_at,source_ref,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,'proposed',$6,$7,$8,$9,$10,$10) RETURNING id`,
+      VALUES($1,$2,$3,$4,$5,'confirmed',$6,$7,$8,$9,$10,$10) RETURNING id`,
       [repo_id, p.key, p.name, p.description ?? "", p.kind ?? null, actor.type,
        p.started_at ?? null, p.ended_at ?? null, p.source_ref ?? null, now()]);
     await logChange(db, {
@@ -118,7 +131,8 @@ async function upsertProject(db: Db, repo_id: number, run_id: number, actor: Act
   const changed = cur.name !== proposed.name || (cur.description || "") !== (proposed.description || "")
     || (cur.kind || "") !== (proposed.kind || "") || (cur.source_ref || "") !== (proposed.source_ref || "")
     || !sameDate(cur.started_at, proposed.started_at) || !sameDate(cur.ended_at, proposed.ended_at);
-  if (ex.status === "confirmed" && actor.type === "agent") {
+  // 비-agent 소유(origin∈{human,source}) 행은 agent 덮어쓰기 차단 — agent 자기 확정행만 정상 갱신(멱등 재인제스트).
+  if (ex.origin !== "agent" && actor.type === "agent") {
     if (changed) {
       await logChange(db, {
         repoId: repo_id, entityType: "project", entityId: ex.id, op: "drift", actor, runId: run_id,

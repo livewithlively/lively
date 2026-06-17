@@ -158,7 +158,7 @@ const dmDomainConfirm: Capability = {
 const dmDomainEdit: Capability = {
   name: "dm_domain_edit",
   title: "domainmap 영역 수정",
-  description: "영역 수정 {name?, description?, crossCutting?} — ⚠ human(웹) 경로만 저장 시 자동 확정(auto-confirm) 전이. agent(MCP) 경로는 confirmed 행 403·proposed 행만 수정 가능(status 유지). UI 는 '저장하면 확정 처리됩니다' 를 명시할 것.",
+  description: "영역 수정 {name?, description?, crossCutting?} — ⚠ human(웹) 경로만 저장 시 자동 확정(auto-confirm)+origin='human' 전이. agent(MCP) 경로는 human-소유(origin='human') 행 403·그 외 행만 수정 가능(status 유지). UI 는 '저장하면 확정 처리됩니다' 를 명시할 것.",
   scope: "context",
   // REST 는 mount.parse 가 검증(이 shape 는 expose.mcp=false 라 미실행 — 문서/드리프트 가드용).
   // '최소 1개 필드' cross-field 규칙은 ZodRawShape 로 표현 불가 → handler 가드로 두 계층 일치.
@@ -385,8 +385,8 @@ const proposeDomain: Capability = {
   name: "propose_domain",
   title: "도메인 제안",
   description:
-    "새 도메인을 status='proposed' 로 제안한다(day-2 authoring). evidence 필수 — 이 도메인이 왜 필요한지의 근거(change_log 에 영속). " +
-    "사람이 확정(confirm)하기 전까지 proposed 로 유지되며, 보호 리포(lively)는 403 으로 차단된다. 반환 {repo,id,key,status,change_id}.",
+    "새 도메인을 정의한다(day-2 authoring). 신뢰우선(trust-default): proposed 림보 없이 곧바로 status='confirmed' 로 착지하고 origin 으로 작성자(agent/human)를 기록한다. " +
+    "evidence 필수 — 이 도메인이 왜 필요한지의 근거(change_log 에 영속). 사람은 사후에 edit/deprecate/merge 로 큐레이션하며, 보호 리포(lively)는 403 으로 차단된다. 반환 {repo,id,key,status,change_id}.",
   scope: "context",
   input: {
     repo: z.string().regex(REPO_RE).max(100),
