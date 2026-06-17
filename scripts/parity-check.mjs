@@ -352,10 +352,10 @@ await report("dm(h) 무토큰 쓰기 401", async () => {
 const EXPECTED_MCP_SURFACE = [
   "context_overview", "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
   "domain_deprecate", "domain_get", "domain_list", "get_item", "list_unmapped",
-  "mapping_candidates", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
+  "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
   "propose_domain", "repo_list", "search_items",
-]; // 24 (06-16 memory_save/memory_search 추가 — 팀 공유 메모리)
+]; // 25 (06-17 memory_get 추가 — 전문 조회)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -363,7 +363,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(24)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(25)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 

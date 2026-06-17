@@ -14,19 +14,19 @@ export interface Materialized {
   cleanup: () => Promise<void>;
 }
 
-// 메모리 인덱스(MEMORY.md) 생성 — 전 메모리의 제목·요약을 **비-링크** 텍스트로(본문은 memory_search pull).
+// 메모리 인덱스(MEMORY.md) 생성 — 전 메모리의 제목·요약을 **비-링크** 텍스트로. **전문은 `memory_get name=X`** 로 pull.
 //  비-링크인 이유: generator collectArtifactFiles 가 `](name.md)` 링크를 따라 본문을 디스크에 복사하므로, 링크를
 //  없애 follow 를 원천 차단(본문 비배포 보장). cap=최신 MAX 건(네이티브 200줄 아날로그), 초과분은 memory_search.
 export function buildMemoryIndex(rows: { name: string; title: string | null; body_md: string; updated_at: string | null }[]): string {
   const MAX = 100;
   const sorted = [...rows].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")).slice(0, MAX);
-  const lines = ["# Memory Index", "(제목·요약만. 본문은 `memory_search` 로 조회)", ""];
+  const lines = ["# Memory Index", "(제목·요약만. 전문은 `memory_get name=<name>`, 검색은 `memory_search`)", ""];
   for (const m of sorted) {
     const title = m.title?.trim() || m.name;
     const firstLine = (m.body_md.split("\n").map((l) => l.trim()).find(Boolean) ?? "").replace(/^#+\s*/, "").slice(0, 80);
-    lines.push(`- ${title}${firstLine ? " — " + firstLine : ""}  · memory_search name=${m.name}`);
+    lines.push(`- ${title}${firstLine ? " — " + firstLine : ""}  · memory_get name=${m.name}`);
   }
-  if (rows.length > MAX) lines.push(`- … 외 ${rows.length - MAX}건 (memory_search 로 조회)`);
+  if (rows.length > MAX) lines.push(`- … 외 ${rows.length - MAX}건 (memory_search 로 검색)`);
   return lines.join("\n") + "\n";
 }
 

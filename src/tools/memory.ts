@@ -107,7 +107,7 @@ export function registerMemoryTools(server: McpServer): void {
       return {
         content: [{
           type: "text",
-          text: `✓ 메모리 저장: ${saved.name}${domainKey ? ` · 도메인 ${domainKey}` : ""}${domainNote}\n인덱스로 공유됨(본문은 memory_search 로 조회).`,
+          text: `✓ 메모리 저장: ${saved.name}${domainKey ? ` · 도메인 ${domainKey}` : ""}${domainNote}\n인덱스로 공유됨(전문은 memory_get name=${saved.name}, 검색은 memory_search).`,
         }],
       };
     },
@@ -117,7 +117,7 @@ export function registerMemoryTools(server: McpServer): void {
     "memory_search",
     {
       title: "공유 메모리 검색",
-      description: "조직 공유 메모리를 제목/본문 텍스트로 검색해 본문(스니펫)을 가져온다. domain 으로 필터.",
+      description: "조직 공유 메모리를 제목/본문 텍스트로 검색한다. 결과는 **스니펫(잘림)** — 전문은 결과의 name 으로 `memory_get` 호출.",
       inputSchema: {
         query: z.string().min(1).describe("검색어(제목·본문 부분일치)"),
         domain: z.string().optional().describe("도메인 슬러그로 필터"),
@@ -130,9 +130,28 @@ export function registerMemoryTools(server: McpServer): void {
       const rows = await searchMemory({ query, domainKey: domain ?? null, limit });
       if (!rows.length) return { content: [{ type: "text", text: `메모리 검색 결과 없음: "${query}"` }] };
       const text = rows.map((r) =>
-        `### ${r.title ?? r.name}${r.domain_key ? ` · ${r.domain_key}` : ""} (${r.name})\n${r.snippet}`,
+        `### ${r.title ?? r.name}${r.domain_key ? ` · ${r.domain_key}` : ""} (${r.name})\n${r.snippet}\n…전문: memory_get name=${r.name}`,
       ).join("\n\n");
       return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "memory_get",
+    {
+      title: "공유 메모리 전문 조회",
+      description: "공유 메모리의 **전문(full body)** 을 name 으로 가져온다(memory_search 스니펫 잘림 없이). 인덱스·memory_search 에서 얻은 name 으로 호출.",
+      inputSchema: {
+        name: z.string().min(1).max(64).describe("메모리 식별자(name) — 인덱스/검색 결과의 name"),
+      },
+    },
+    async ({ name }, extra) => {
+      const user = resolveUser(extra);
+      requireScope(user, "memory");
+      const m = await getMemory(name.trim().toLowerCase());
+      if (!m) return { content: [{ type: "text", text: `메모리 없음: '${name}' (name 확인 — 인덱스/memory_search 결과의 name)` }] };
+      const head = `# ${m.title ?? m.name}${m.domain_key ? ` (도메인: ${m.domain_key})` : ""}  ·  ${m.name}`;
+      return { content: [{ type: "text", text: `${head}\n\n${m.body_md}` }] };
     },
   );
 }
