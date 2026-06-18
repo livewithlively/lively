@@ -73,4 +73,5 @@
 ## 진행 로그
 - **V4-P1 분류코어 additive ✅ (커밋 4574fc0, :8080 라이브)** — kind_registry R/K/H/W v4 정의(legacy 보존)·domain.space+business 시드6(37도메인)·provenance 라벨(컬럼 confidence 불변·mapping REAL 무오염)·런북/웹 4kind(legacy graceful)·golden core-mode 재캡처(68). 무중단(kind CHECK 12값·데이터 UPDATE 0·ku 116[45+71] 무손상). 블로커0. 실측정정: ku 116·domain 31.
 - **⚠️ P2 LLM 키 부재**: .env에 ANTHROPIC_API_KEY 없음·SDK 미설치 → 독립스크립트 LLM 불가. **재분류는 워크플로 에이전트(모델접근)로 = 키 불요.** P2 분할: **P2a=기계 흡수+CHECK narrow+registry 정리(결정론)**, **P2b=LLM area/kind 분류(워크플로)**. 런타임 인입 LLM(P4)=키 게이트+기계폴백(현 KIND_MAP), 키 확보 시 활성.
-- (V4-P2a 착수: 백업 → A/D/F/M/L/Z→K 흡수(56행) → kind/kinds CHECK narrow(R,K,H,W, DROP+probe) → registry legacy행 제거(R/K/H/W만) → S/G federate(0행, 표면 제거). 멱등·비파괴.)
+- **V4-P2a 기계 흡수 ✅ (커밋 2d22da5, :8080 라이브)** — A/D/F/M→K 56행(+kinds[] 17정규화), CHECK narrow(R,K,H,W), registry 4행, S/G federate(0행 무손실). 백업 ku/kud/kup _v4bak_p2a. 멱등(재실행 md5 동일·쓰기0)·116/observed71/kud154 무손상. 라이브 K84/R2/W30·learn 4kind. test157·parity65·36툴·golden68. 블로커0. (distill D→K 임시브리지=P3 제거, 인입 KIND_MAP 기계폴백=P4 LLM.)
+- (V4-P2b 착수: LLM area/kind 분류[워크플로 에이전트=키불요]. 116유닛 → staging → kind 정교화(K→H 등)·area((space,key) 37 vocab)·provenance 오라벨 수정(rule 34). 결과=mapped_by='llm'·state='proposed'(자동 active X·큐레이션). 백업·멱등·4중가드.)
