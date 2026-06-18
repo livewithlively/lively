@@ -34,6 +34,18 @@
 
 > `memory_save`/`memory_search` 는 **라이브**(06-16 — `org_memory` 팀 공유 메모리, `memory` scope). `code_*` 툴은 **컷**(DESIGN §10.6); `src/tools/code.ts` 는 미등록 보존 파일.
 
+## 조직 지식의 진실원천(SoT) = ku 단일홈 (research·lively-org 동결)
+
+> 설계 캐노니컬: `research/2026-06-18-context-os-v4-plan.md` §I. (참조용 포인터 — 이 문서 자체가 SoT 가 아니라 아래 정의가 SoT.)
+
+**우리 지식**(research·결정·설계·런북·정리된 K)의 **유일한 집은 `knowledge_unit`(ku) DB** 다. `ctx_save` 로 그 자리에서(in-flow) **전문**을 ku 에 직접 기록한다 — 레포에 `.md` 를 새로 만들거나 ku→파일 포인터를 쓰지 않는다. 주입·검색·발행·정적 폴백 모두 **DB `knowledge_unit` 단일 소스**(`buildKnowledgeIndex`)에서 나오며, 파일 트리를 캐노니컬로 읽는 런타임/부팅 경로는 없다.
+
+- **`research/*.md` 와 `lively-org` 레포 = 지식 SoT 에서 은퇴(동결)** — 백업/생성물로 강등. 새 조직 지식은 레포가 아니라 ku 로 들어간다.
+  - `research/*.md` → 설계 이력 포인터(예: 본 README 의 `research/...` 링크) + 1회 시드 소스(`scripts/migrate-content.mjs`, **READ-ONLY**·CLI 전용, 부팅 미배선).
+  - `lively-org` → 발행/배포 아티팩트의 출판 홈(예: 훅 생성물 `session-preload.mjs` 재발행) + 신원 바인딩 원본(`members/*.md`, 지식이 아니라 person/identity 계약 — `src/items/load-bindings.ts`, CLI 마이그 전용) + 1회 org-content 마이그(`src/org/migrate.ts`, CLI 전용·부팅 미배선).
+- **외부 원본**(클릭업·노션·코드)은 외부 소유 → 게이트웨이는 **미러(provenance=observed)** 로만 둔다. 복제하지 말고, 파생 인사이트만 `K` 로 별도 저작.
+- 주입문/쓰기가이드(`org-defaults` 본문·`ctx_save` desc·`session-preload` 훅)는 "캐노니컬은 ku / `lively-org`=동결"로 일관 — `src/org/publish.ts:22-23` 와 `src/org/static-context.test.ts` 가 "stale 파일기반 Canonical 아님(=DB 인덱스)" 을 회귀로 못박는다.
+
 ## 권한 스코프 (scope)
 
 허용 scope 단일 진실원천: **`src/capabilities/scopes.ts`** (여기서 types union·웹 `mw()`·토큰 검증을 전부 파생). 토큰/구성원에 부여하고 capability·MCP 툴이 요구한다.

@@ -20,25 +20,19 @@
 import type pg from "pg";
 import { redactDeep, redactString } from "./redact.js";
 import type { RawItem } from "../items/store.js";
+// V4-P4(P4-dedup): dedup 정체성 키 도출 단일 출처. KIND_MAP·unitName·instance 정규화는
+//  external-identity.ts 가 캐노니컬(migrate-items-to-ku.mjs 와 공유 — 복붙 2벌→1벌, byte-identical).
+import { unitName, kindForSource, normalizeExternalInstance } from "./external-identity.js";
+// V4-P4(P4-ingest): 인입 분류 게이트. 무키면 기계 폴백(kindForSource = 종전 KIND_MAP 동작과 byte-identical),
+//  키 있으면 LLM 분류. **현 .env 무키 → 이 경로는 휴면이라 미러 kind 산출이 오늘과 100% 동일**.
+import { classifyIngest } from "./ingest-classify.js";
 
-// (type, system) → kind. V4-P2a: 본질 4종 R/K/H/W 로 narrow — notion doc=산출물→**K**(A 흡수, 외부수집은
-//  provenance=observed 가 잡음), clickup task→W. data_source.into_kinds 와 정합(notion into_kinds 는 표기 A 이나
-//  실 적재 kind=K — P5 #/learn 정합 시 갱신). migrate-items-to-ku.mjs 의 KIND_MAP 와 동일(SQL 동치 보장).
-//  미정의는 undefined(미러 skip). ※ 인입 LLM 분류 패스(P4)가 키 확보 시 이 기계폴백을 대체·정교화한다.
-const KIND_MAP: Record<string, string> = {
-  "task:clickup": "W",
-  "doc:notion": "K",
-};
-
-export function unitName(system: string, externalId: string): string {
-  let s = `${system}-${externalId}`.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+/, "");
-  if (!s || !/^[a-z0-9]/.test(s)) s = "ku-" + s; // 선두 비영숫자 방어
-  return s.slice(0, 64);
-}
+export { unitName };
 
 // (type, system) → kind 또는 null(미정의 조합 — 미러 skip). 노출(테스트·호출자가 분류 가능 판단용).
+//  중앙 kindForSource(undefined 반환)를 기존 string|null 계약으로 normalize.
 export function knowledgeKindFor(type: string, system: string): string | null {
-  return KIND_MAP[`${type}:${system}`] ?? null;
+  return kindForSource(type, system) ?? null;
 }
 
 // ── 단일 item(RawItem) → knowledge_unit observed 미러 upsert. ingestItems 의 트랜잭션 client 공유. ──
@@ -47,12 +41,21 @@ export function knowledgeKindFor(type: string, system: string): string | null {
 export async function mirrorKnowledgeFromRawItem(client: pg.PoolClient, it: RawItem): Promise<boolean> {
   const system = it.provenance.system;
   const externalId = it.provenance.external_id;
-  const kind = knowledgeKindFor(it.type, system);
+  // V4-P4(P4-ingest): kind 산출을 classifyIngest 경유로 일원화. **무키(현 .env) = kindForSource(현 KIND_MAP)
+  //  와 byte-identical** — 종전 knowledgeKindFor(it.type, system) 결과와 정확히 동일(아래 무키 분기는 즉시
+  //  기계 폴백). 키 확보 시에만 LLM 이 kind 를 판단(area 제안은 별도 큐레이션, 미러 행은 미사용). area/classifiedBy
+  //  는 미러 INSERT 가 confidence='observed' 를 직접 박으므로 라이브 미러 provenance 에 영향 없음.
+  const classification = await classifyIngest({
+    text: `${it.title ?? ""}\n${it.body ?? ""}`,
+    source: `${it.type}:${system}`,
+    externalSystem: system,
+  });
+  const kind = classification.kind;
   if (!kind || !externalId) return false;
 
   const name = unitName(system, externalId);
-  // external_instance NULL→'' 정규화(부분 UNIQUE 중복차단 갭 메움).
-  const instance = it.provenance.instance == null ? "" : String(it.provenance.instance);
+  // external_instance NULL→'' 정규화(부분 UNIQUE 중복차단 갭 메움). 중앙 helper(external-identity.ts).
+  const instance = normalizeExternalInstance(it.provenance.instance);
 
   // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
   const title = it.title == null ? null : redactString(String(it.title));

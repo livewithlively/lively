@@ -30,24 +30,17 @@
 
 import { itemsPool } from "../dist/items/store.js";
 import { redactDeep, redactString } from "../dist/org/redact.js";
+// V4-P4(P4-dedup): dedup 정체성 키 도출 단일 출처. KIND_MAP·unitName 은 src/org/external-identity.ts 가
+//  캐노니컬(빌드 산출물 ../dist/org/external-identity.js — knowledge-mirror.ts 와 공유, 복붙 2벌→1벌, byte-identical).
+//  이 스크립트는 기존부터 ../dist/* 를 import 한다(npm run build 후 존재). 미정의 (type,system) 은 undefined(skip).
+import { KIND_MAP, unitName, normalizeExternalInstance } from "../dist/org/external-identity.js";
+
+// migrate-items.test.ts 가 이 스크립트에서 unitName 을 named import — 중앙 모듈 함수를 그대로 재노출(계약 보존).
+export { unitName };
 
 const DRY = process.argv.includes("--dry");
 const ACTOR = "migration:P-V3-3b";
 const SOURCE = "migration"; // org_content_audit.source 표기용(여기선 직접 INSERT 라 감사는 보고로 대체)
-
-// (type, system) → kind. V4-P2a: 본질 4종 R/K/H/W — notion doc=산출물→K(A 흡수, observed 가 외부수집 표현),
-//  clickup→W. knowledge-mirror.ts 의 KIND_MAP 와 동일(SQL 동치 보장). 미정의는 null(skip).
-const KIND_MAP = {
-  "task:clickup": "W",
-  "doc:notion": "K",
-};
-
-// 안정 슬러그 — `${system}-${external_id}`. 소문자, 영숫자/_/- 외는 '-', 64자 상한, 선두 영숫자 보장.
-export function unitName(system, externalId) {
-  let s = `${system}-${externalId}`.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+/, "");
-  if (!s || !/^[a-z0-9]/.test(s)) s = "ku-" + s; // 선두 비영숫자 방어
-  return s.slice(0, 64);
-}
 
 // ── 메인 적재: item → knowledge_unit (observed). redact 후 INSERT … ON CONFLICT(external uidx) DO UPDATE. ──
 //  opts.where: 테스트가 임시 접두 행만 대상으로 좁힐 수 있게(기본 = 전체 item).
@@ -65,8 +58,8 @@ export async function migrateItems(report, opts = {}) {
     if (!kind) { report.skipped.push({ id: it.id, key }); continue; }
 
     const name = unitName(it.prov_system, it.external_id);
-    // external_instance NULL→'' 정규화(부분 UNIQUE 중복차단 갭 메움 — pg NULL distinct 회피).
-    const instance = it.prov_instance == null ? "" : String(it.prov_instance);
+    // external_instance NULL→'' 정규화(부분 UNIQUE 중복차단 갭 메움 — pg NULL distinct 회피). 중앙 helper.
+    const instance = normalizeExternalInstance(it.prov_instance);
 
     // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹. title/body 는 문자열, fields/raw 는 깊은 순회.
     const title = it.title == null ? null : redactString(String(it.title));
