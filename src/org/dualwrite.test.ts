@@ -49,9 +49,9 @@ async function main(): Promise<void> {
 
   try {
     // ── 분류 매핑 단언(데이터 의존 없음) ──
-    await t("knowledgeKindFor: clickup task→W, notion doc→A, slack message→null(skip)", async () => {
+    await t("knowledgeKindFor: clickup task→W, notion doc→K(V4-P2a A 흡수), slack message→null(skip)", async () => {
       assert.equal(knowledgeKindFor("task", "clickup"), "W");
-      assert.equal(knowledgeKindFor("doc", "notion"), "A");
+      assert.equal(knowledgeKindFor("doc", "notion"), "K");
       assert.equal(knowledgeKindFor("message", "slack"), null);
     });
 

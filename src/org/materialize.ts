@@ -18,12 +18,10 @@ export interface Materialized {
 
 // 항상-주입 인덱스에 포함하는 'recalled' kind 정책의 **단일 출처는 kind_registry**(injection_mode='recalled').
 //  P-V3-2(하드코딩 제거): 정책 상수를 kind_registry 조회로 대체 — recalledKindsForIndex() 가 라이브로 읽는다(non-stale).
-//  R=enforced(전문 주입), S/G=digest, A/W=query, M/L/Z=manual 은 인덱스에서 제외(registry 가 권위).
-// 아래 상수는 **DB 미가용 폴백 + 순수함수 테스트용 기본값**일 뿐(레지스트리가 빈/미초기화일 때만 사용). 순서 K→D→F→H.
+//  R=enforced(전문 주입), W=query 는 인덱스에서 제외(registry 가 권위). V4-P2a: 본질 4종 R/K/H/W — recalled=K/H.
+// 아래 상수는 **DB 미가용 폴백 + 순수함수 테스트용 기본값**일 뿐(레지스트리가 빈/미초기화일 때만 사용). 순서 K→H.
 const FALLBACK_RECALLED_KINDS: { kind: string; label: string }[] = [
   { kind: "K", label: "Knowledge" },
-  { kind: "D", label: "Domain" },
-  { kind: "F", label: "Fact" },
   { kind: "H", label: "How-to" },
 ];
 

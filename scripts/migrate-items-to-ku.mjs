@@ -35,10 +35,11 @@ const DRY = process.argv.includes("--dry");
 const ACTOR = "migration:P-V3-3b";
 const SOURCE = "migration"; // org_content_audit.source 표기용(여기선 직접 INSERT 라 감사는 보고로 대체)
 
-// (type, system) → kind. data_source.into_kinds 와 정합(clickup→W, notion→A). 미정의는 null(skip).
+// (type, system) → kind. V4-P2a: 본질 4종 R/K/H/W — notion doc=산출물→K(A 흡수, observed 가 외부수집 표현),
+//  clickup→W. knowledge-mirror.ts 의 KIND_MAP 와 동일(SQL 동치 보장). 미정의는 null(skip).
 const KIND_MAP = {
   "task:clickup": "W",
-  "doc:notion": "A",
+  "doc:notion": "K",
 };
 
 // 안정 슬러그 — `${system}-${external_id}`. 소문자, 영숫자/_/- 외는 '-', 64자 상한, 선두 영숫자 보장.

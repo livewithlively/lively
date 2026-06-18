@@ -21,11 +21,13 @@ import type pg from "pg";
 import { redactDeep, redactString } from "./redact.js";
 import type { RawItem } from "../items/store.js";
 
-// (type, system) → kind. data_source.into_kinds 와 정합(clickup task→W, notion doc→A).
-//  migrate-items-to-ku.mjs 의 KIND_MAP 와 동일(SQL 동치 보장). 미정의는 undefined(미러 skip).
+// (type, system) → kind. V4-P2a: 본질 4종 R/K/H/W 로 narrow — notion doc=산출물→**K**(A 흡수, 외부수집은
+//  provenance=observed 가 잡음), clickup task→W. data_source.into_kinds 와 정합(notion into_kinds 는 표기 A 이나
+//  실 적재 kind=K — P5 #/learn 정합 시 갱신). migrate-items-to-ku.mjs 의 KIND_MAP 와 동일(SQL 동치 보장).
+//  미정의는 undefined(미러 skip). ※ 인입 LLM 분류 패스(P4)가 키 확보 시 이 기계폴백을 대체·정교화한다.
 const KIND_MAP: Record<string, string> = {
   "task:clickup": "W",
-  "doc:notion": "A",
+  "doc:notion": "K",
 };
 
 export function unitName(system: string, externalId: string): string {

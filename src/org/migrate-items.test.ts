@@ -84,12 +84,12 @@ async function main(): Promise<void> {
     const r1 = { units: [] as unknown[], skipped: [] as unknown[], redactedCount: 0, domainRows: 0, projectRows: 0 };
     await migrateItems(r1, { where: `external_id LIKE '${PREFIX}%'` });
 
-    await t("적재: 합성 2건이 observed A/W 로 복사(W=clickup, A=notion)", async () => {
+    await t("적재: 합성 2건이 observed K/W 로 복사(W=clickup, K=notion; V4-P2a A→K)", async () => {
       const w = await getKnowledge(W_NAME);
       const a = await getKnowledge(A_NAME);
       assert.ok(w && a, "두 유닛 적재됨");
       assert.equal(w!.kind, "W");
-      assert.equal(a!.kind, "A");
+      assert.equal(a!.kind, "K"); // V4-P2a: notion doc=산출물→K(흡수), observed 가 외부수집 표현
       assert.equal(w!.confidence, "observed");
       assert.equal(a!.confidence, "observed");
       assert.equal(w!.source, "clickup");

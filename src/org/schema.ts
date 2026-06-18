@@ -368,10 +368,20 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     DO $$ BEGIN
+      -- V4-P2a(분류 재설계): kind = 본질 4종 **R·K·H·W** 로 narrow. 흡수: A/D/F/M/L/Z→K,
+      --  S/G→domainmap 파생(federated, ku kind 아님). 데이터 흡수(UPDATE)는 scripts/v4-absorb-kinds.mjs 가
+      --  1회 수행(56행)하고, 여기서는 *제약/시드*만 4값으로 굳힌다. 멱등 패턴 = confidence_chk 와 동일
+      --  (pg_get_constraintdef 프로브로 "이미 4값(레거시 문자 미포함)이면 스킵", 아니면 DROP 후 4값 재ADD).
+      --  ⚠ 반드시 데이터 흡수 *후*에만 narrow 가 통과한다 — 잔존 A/D/F/M 이 있으면 ADD CONSTRAINT 가 throw.
+      --   부팅 순서상 마이그 스크립트가 먼저 흡수했으므로 안전(미흡수 DB 에선 throw=조기발견 가드).
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kind_chk') THEN
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kind_chk'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%''A''%'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%''D''%'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%''F''%') THEN
+        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_kind_chk;
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kind_chk
-          CHECK (kind IN ('F','D','K','R','H','S','G','A','W','M','L','Z'));
+          CHECK (kind IN ('R','K','H','W'));
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_lifecycle_chk') THEN
@@ -390,15 +400,20 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_confidence_chk
           CHECK (confidence IN ('ai','rule','human','observed'));
       END IF;
-      -- L-가(P-V3-2): kinds[] 다중분류 가드 — 모든 원소가 유효 kind 문자여야 한다(17/43 실사용). 빈 배열은 통과.
-      --  CHECK 는 서브쿼리 불가 → jsonb 부분집합 연산자 <@ 로 검증: kinds 가 12 kind 화이트리스트 배열의 부분집합인지.
-      --  ('[]'<@whitelist=true, 잘못된 문자 포함 시 false). jsonb_typeof 로 배열 형태도 강제.
-      --  기존 데이터가 위반하면 ADD CONSTRAINT 가 throw(=조기 발견) → 비파괴 가드(현 17행은 전부 유효 문자, 실측 확인).
+      -- L-가(P-V3-2): kinds[] 다중분류 가드 — 모든 원소가 유효 kind 문자여야 한다. 빈 배열은 통과.
+      --  V4-P2a: 화이트리스트도 본질 4종 **R/K/H/W** 로 narrow(흡수원소→K 정규화는 마이그 스크립트가 1회 수행).
+      --  CHECK 는 서브쿼리 불가 → jsonb 부분집합 연산자 <@ 로 검증: kinds 가 4 kind 화이트리스트의 부분집합인지.
+      --  멱등: confidence_chk 와 동일 DROP+probe(이미 4값=레거시 문자 미포함이면 스킵, 아니면 DROP 후 4값 재ADD).
+      --  반드시 kinds[] 정규화 *후*에만 통과(잔존 A/D/F 원소가 있으면 throw=조기발견).
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kinds_chk') THEN
+                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kinds_chk'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%"A"%'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%"D"%'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%"F"%') THEN
+        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_kinds_chk;
         ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kinds_chk CHECK (
           jsonb_typeof(kinds) = 'array'
-          AND kinds <@ '["F","D","K","R","H","S","G","A","W","M","L","Z"]'::jsonb);
+          AND kinds <@ '["R","K","H","W"]'::jsonb);
       END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS knowledge_unit_kind_idx ON knowledge_unit(kind);
@@ -519,14 +534,12 @@ export async function initOrgSchema(): Promise<void> {
   //  캐노니컬**이라 부팅 시마다 시드값으로 정렬한다. 웹 #/learn 은 읽기전용 렌더라 사용자가 정의를 편집하지
   //  않는다 → DO UPDATE 가 사람 편집을 덮을 위험 없음.
   //
-  //  ⚠ V4-P1(분류 재설계, 2026-06-18 v4 plan §1.A): 본질 kind = **R·K·H·W 4종**.
+  //  ⚠ V4-P2a(분류 재설계, 2026-06-18 v4 plan §1.A): 본질 kind = **R·K·H·W 4종만 시드**.
   //   - R(규칙/정책/페르소나)=강제, K(지식노트, A/D/F/M/L/Z 흡수)=회상, H(런북/절차)=회상, W(작업)=질의.
-  //   - **A/D/F/M/S/G/L/Z 행은 P1 에서 *제거하지 않는다*(additive·무중단)** — 라이브 56 legacy-kind
-  //     유닛(A41/D6/F7/M2)이 아직 그 kind 라 registry 룩업이 깨지면 안 된다. kind CHECK narrow + 이 행들
-  //     제거 + 데이터 흡수(A/D/F/M/L/Z→K, S/G→domainmap federate)는 **P2**가 원자 수행한다.
-  //   - legacy 행 description 에는 V4 흡수 방향을 명기(런북/웹이 그대로 렌더해 사람이 통합 방향을 본다).
-  //   - injection_mode 는 R=enforced / K·H=recalled / W=query(이미 정합). legacy 행 injection_mode 는
-  //     P1 에서 불변(legacy 유닛이 기존대로 회상/질의돼야 무중단) — P2 흡수 시 K/H/W 로 합류한다.
+  //   - **A/D/F/G/S/M/L/Z 행은 P2a 에서 시드 제거 + 부팅 DELETE 로 정리**(데이터 흡수 *후*). 데이터 마이그
+  //     (A/D/F/M/L/Z→K, S/G=domainmap federate 0행)는 scripts/v4-absorb-kinds.mjs 가 1회 수행. 이 시드+DELETE 가
+  //     소스 캐노니컬이라 부팅마다 4kind 로 정렬·정리(스크립트 미실행 DB 도 시드는 4행, 데이터 흡수만 스크립트 의존).
+  //   - injection_mode: R=enforced / K·H=recalled / W=query. materialize FALLBACK·web #/learn 은 라이브 registry 읽음.
   await itemsPool.query(`
     INSERT INTO kind_registry(kind, label, injection_mode, domain_scoped, audience, cardinality, sort, description, criteria, storage, delivery) VALUES
       ('R','Rule/Policy/Persona','enforced',false,'context','many',10,
@@ -535,65 +548,28 @@ export async function initOrgSchema(): Promise<void> {
         '강제규칙(managed-policy)·회사맥락(org-defaults) 섹션으로 저장. 본문 전체가 보존된다.',
         '강제 주입(enforced): 맥락과 무관하게 모든 세션 컨텍스트 최상단에 전문이 그대로 들어간다(R 만 항상 주입).'),
       ('K','Knowledge note','recalled',false,'memory','many',20,
-        '지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각, 사실, 도메인 지식, 메모·링크까지 아우르는 일반 지식. 4 본질 종류 중 가장 큰 기본값(R·K·H·W).',
-        '강제 규범(R)·절차(H)·작업(W)이 아닌 거의 모든 저작 지식은 K. 배경·맥락·사실·도메인 지식·메모·외부 링크가 다 K 로 모인다(주제는 종류가 아니라 area=domain 으로 구분, 출처는 provenance 로 구분). 애매하면 K.',
+        '지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각, 사실, 도메인 지식, 메모·링크까지 아우르는 일반 지식. 4 본질 종류 중 가장 큰 기본값(R·K·H·W). (구 A/D/F/M/L/Z 흡수.)',
+        '강제 규범(R)·절차(H)·작업(W)이 아닌 거의 모든 저작 지식은 K. 배경·맥락·사실·도메인 지식·메모·외부 링크·산출물이 다 K 로 모인다(주제는 종류가 아니라 area=domain 으로 구분, 출처는 provenance 로 구분). 애매하면 K.',
         '지식 단위로 저장(제목+본문). 본문은 전문 보존, 검색 대상. 주제 귀속은 area(domain_key, product/business)로 단다.',
         '검색 회상(recalled): 인덱스(제목·요약)에 노출, 전문은 일에 맞춰 area+검색으로 그때 소환(on-demand).'),
-      ('D','Domain knowledge','recalled',true,'memory','many',30,
-        '(V4 legacy — K 로 통합 예정) 특정 도메인에 귀속된 지식. V4 에서 도메인은 *종류*가 아니라 area(domain_key) 축이라, 본질은 K 이고 주제는 area 로 단다. P2 가 K 로 흡수한다.',
-        'V4 신규 분류에선 D 를 쓰지 말고 K + area(domain_key) 를 쓴다(도메인은 종류가 아닌 area 축). 기존 D 유닛은 P2 가 K 로 재분류한다.',
-        '지식 단위로 저장하되 domain_key(domainmap 약결합)를 부여. 도메인별로 묶여 탐색된다.',
-        '검색 회상(recalled): 도메인 섹션으로 인덱스에 노출, 전문은 검색 회상.'),
-      ('F','Fact','recalled',false,'memory','many',40,
-        '(V4 legacy — K 로 통합 예정) 단일 확정 사실. V4 에선 사실도 지식이므로 본질은 K 다. P2 가 K 로 흡수한다.',
-        'V4 신규 분류에선 F 대신 K 를 쓴다. 기존 F 유닛은 P2 가 K 로 재분류한다.',
-        '지식 단위로 저장(짧은 본문). 사실 단위라 보통 한 단락.',
-        '검색 회상(recalled): 인덱스에 노출, 관련 시 회상.'),
       ('H','How-to/Runbook','recalled',true,'memory','many',50,
         '하우투·런북 — 무엇을 어떤 순서로 하는지의 재현 가능한 절차(예: 배포 방법, 동기화 실행법). 라이블리 AI 워크플로 표준화의 핵심 산물. 4 본질 종류 중 하나(R·K·H·W).',
         '"이렇게 한다"는 단계별 절차면 H. 배경 지식(K)과 구분: H 는 따라 하면 결과가 재현된다. 도메인 절차여도 H(area=domain 부여 가능).',
         '지식 단위로 저장(단계 목록 본문). 주제 귀속은 area(domain_key) 부여 가능.',
         '검색 회상(recalled): 인덱스에 노출, 필요할 때 area+검색으로 전문 소환(on-demand).'),
-      ('S','Schema/Structure','digest',true,'memory','many',60,
-        '(V4 legacy — domainmap 파생으로 이관 예정) 스키마·구조. V4 에선 구조는 글(지식단위)이 아니라 노드+엣지라 domainmap 파생 그래프(federated 뷰)로 다룬다(ku 종류 아님). 라이브 0행. P2 가 제거.',
-        'V4 신규 분류에선 S 를 쓰지 않는다 — 구조는 domainmap(코드/데이터 구조)에서 파생해 federated 로 본다.',
-        '지식 단위로 저장. domain_key 부여 가능(스키마는 보통 도메인 귀속).',
-        '다이제스트(digest): 요약 형태로 노출(구조 전체가 아니라 개요만).'),
-      ('G','Glossary/Graph','digest',true,'memory','many',70,
-        '(V4 legacy — domainmap 파생으로 이관 예정) 용어집·관계 그래프. V4 에선 용어/관계도 노드+엣지라 domainmap 파생(federated 뷰)으로 다룬다(ku 종류 아님). 라이브 0행. P2 가 제거.',
-        'V4 신규 분류에선 G 를 쓰지 않는다 — 용어/관계는 domainmap 에서 파생해 federated 로 본다. (도메인 부채도 ku 종류 아님 — domainmap 의 debt_finding.)',
-        '지식 단위로 저장. domain_key 부여(용어는 도메인 귀속).',
-        '다이제스트(digest): 용어 요약으로 노출.'),
-      ('A','Artifact','query',false,'memory','many',80,
-        '(V4 legacy — K 로 통합 예정) 산출물(수집된 활동/메시지/문서). V4 에선 산출물=독자대상 지식포장이라 본질은 K 이고, 외부/수집 여부는 출처(provenance=observed)가 잡는다. P2 가 K 로 흡수.',
-        'V4 신규 분류에선 A 대신 K(+provenance=observed for 미러)를 쓴다. 기존 A 유닛은 P2 가 K 로 재분류한다.',
-        '커넥터가 적재(source/external_id/원본 필드). 보통 자동 수집물이라 양이 많다.',
-        '질의 시(query): 평소엔 인덱스에 안 올라가고, 에이전트가 필요할 때 검색·조회.'),
       ('W','Work/Task','query',false,'memory','many',90,
         '작업·태스크 — PM 도구(ClickUp 등)의 태스크/이슈. 진행 상태·담당을 가진 일. 4 본질 종류 중 하나(R·K·H·W).',
         '진행 상태(미정/진행/완료)·담당을 가진 **일/태스크**면 W. 절차 설명은 H, 정리된 지식은 K. 수집된 외부 활동/문서는 출처(provenance=observed)로 들어온 W/K 미러다.',
         '커넥터/pm_* 가 적재(external_id·상태). 작업 단위.',
-        '질의 시(query): 필요할 때 조회(작업 현황 검색).'),
-      ('M','Memo','manual',false,'memory','many',100,
-        '(V4 legacy — K 로 통합 예정) 가벼운 임시 기록. V4 에선 메모도 지식이라 본질은 K 다. P2 가 K 로 흡수.',
-        'V4 신규 분류에선 M 대신 K 를 쓴다. 기존 M 유닛은 P2 가 K 로 재분류한다.',
-        '지식 단위로 저장(짧은 본문).',
-        '수동(manual): 자동 주입 안 함. 사람이 직접 찾아볼 때만.'),
-      ('L','Link/Ref','manual',false,'memory','many',110,
-        '(V4 legacy — K 로 통합 예정) 외부 문서/URL 포인터. V4 에선 링크도 지식이라 본질은 K 다. P2 가 K 로 흡수.',
-        'V4 신규 분류에선 L 대신 K 를 쓴다(참조를 본문에). 라이브 0행.',
-        '지식 단위로 저장(URL·참조를 본문에).',
-        '수동(manual): 사람이 참조할 때만.'),
-      ('Z','Misc','manual',false,'memory','many',120,
-        '(V4 legacy — K 로 통합 예정) 분류 보류함. V4 에선 애매한 것도 K 가 기본값이다. P2 가 K 로 흡수.',
-        'V4 신규 분류에선 Z 대신 K 를 쓴다(K 가 가장 큰 기본값). 라이브 0행.',
-        '지식 단위로 저장.',
-        '수동(manual): 자동 주입 안 함.')
+        '질의 시(query): 필요할 때 조회(작업 현황 검색).')
     ON CONFLICT (kind) DO UPDATE SET
       label=EXCLUDED.label, injection_mode=EXCLUDED.injection_mode, domain_scoped=EXCLUDED.domain_scoped,
       audience=EXCLUDED.audience, cardinality=EXCLUDED.cardinality, sort=EXCLUDED.sort,
       description=EXCLUDED.description, criteria=EXCLUDED.criteria, storage=EXCLUDED.storage, delivery=EXCLUDED.delivery,
       updated_at=now();
+    -- V4-P2a: legacy kind 행 정리(흡수돼 ku 가 더는 쓰지 않음). 멱등 — 이미 없으면 no-op.
+    --  A/D/F/M/L/Z=K 로 흡수, S/G=domainmap 파생(federated, ku kind 아님). 데이터 흡수가 선행돼야 안전(스크립트가 보장).
+    DELETE FROM kind_registry WHERE kind IN ('A','D','F','G','S','M','L','Z');
   `);
 
   // ── data_source 시드(소스별 수집방식, 멱등 DO UPDATE — 정의 ground-truth). ──
@@ -606,15 +582,15 @@ export async function initOrgSchema(): Promise<void> {
         '프로젝트 provenance=initiative 와 연결. 태스크는 W kind 로 적재.'),
       ('notion','Notion','active',
         'Notion 커넥터가 지정한 페이지/데이터베이스의 문서를 가져온다.',
-        '동기화(run-sync/backfill)', '["A"]'::jsonb, 20,
-        '문서 본문은 산출물(A)로 수집. 시크릿은 적재 전 redact.'),
+        '동기화(run-sync/backfill)', '["K"]'::jsonb, 20,
+        '문서 본문은 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed. 시크릿은 적재 전 redact.'),
       ('slack','Slack','active',
         'Slack 커넥터가 지정 채널의 메시지/스레드를 활동으로 가져온다.',
-        '동기화(run-sync/backfill)', '["A"]'::jsonb, 30,
-        '대화는 산출물(A)로 수집.'),
+        '동기화(run-sync/backfill)', '["K"]'::jsonb, 30,
+        '대화는 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed.'),
       ('discord','Discord','dropped',
         '(수집 중단) Discord 커넥터로 채널 메시지를 가져오던 경로. 커넥터 코드는 유지하나 현재 수집하지 않는다.',
-        NULL, '["A"]'::jsonb, 40,
+        NULL, '["K"]'::jsonb, 40,
         '수집 재개 시 status=active 로 전환하면 됨(커넥터 보존).')
     ON CONFLICT (system) DO UPDATE SET
       label=EXCLUDED.label, status=EXCLUDED.status, collection_method=EXCLUDED.collection_method,

@@ -98,8 +98,9 @@ async function main(): Promise<void> {
     await seedWorkUnits(3, { project: PROJ, projectDeclared: true });
     await seedWorkUnits(5, { project: PROJ_PROPOSED, projectDeclared: false });
 
-    // ── (1)(2) 규칙 산출 — runRules 가 우리 합성 데이터에서 hot 도메인 D 후보 + declared 프로젝트 K 후보만 뽑아야 ──
-    await t("규칙: hot 도메인 D 후보 + declared 프로젝트 K 후보만(cold/proposed 제외)", async () => {
+    // ── (1)(2) 규칙 산출 — runRules 가 우리 합성 데이터에서 hot 도메인 K(+domain_key) 후보 + declared 프로젝트 K 후보 ──
+    //  V4-P2a: 도메인 후보 kind D→K(도메인=area 축, domain_key 로 표현).
+    await t("규칙: hot 도메인 K(+domain_key) 후보 + declared 프로젝트 K 후보만(cold/proposed 제외)", async () => {
       const cands = (await runRules(OPTS)).filter(
         (c) => c.seed.includes(REPO),
       );
@@ -107,7 +108,8 @@ async function main(): Promise<void> {
       const proj = cands.filter((c) => c.rule === "project-cluster");
       // hot 도메인만(cold 는 1 W < 3 → 제외)
       assert.equal(dom.length, 1, `domain 후보 1개여야(hot만), got ${dom.length}`);
-      assert.equal(dom[0].kind, "D");
+      assert.equal(dom[0].kind, "K"); // V4-P2a: D→K
+      assert.equal(dom[0].domain_key, DOM_HOT, "도메인 후보는 domain_key(area 축)로 도메인 표현");
       assert.ok(dom[0].seed.includes(DOM_HOT), "hot 도메인 시드여야");
       assert.ok(!dom.some((c) => c.seed.includes(DOM_COLD)), "cold 도메인은 후보 아님");
       assert.ok(dom[0].evidence.includes("4건"), "evidence 에 W 4건 명시");
@@ -197,13 +199,13 @@ async function main(): Promise<void> {
 
     // ── (7) 주입 격리 — buildKnowledgeIndex 가 distill 후보(ai·distill source_ref)를 제외한다. ──
     await t("주입 격리: buildKnowledgeIndex 가 distill 후보 제외(검토엔 뜨지만 인덱스 비주입)", async () => {
-      // 살아있는 distill D 후보 하나 확보(앞에서 b/c 도메인 후보가 생성됨).
+      // 살아있는 distill 후보 하나 확보(V4-P2a: 도메인 후보도 K + domain_key). source_ref 마커로 식별.
       const cand = (await listKnowledge({ lifecycle: "active" })).find(
-        (u) => (u.source_ref ?? "").startsWith(DISTILL_SOURCE_PREFIX) && (u.source_ref ?? "").includes(REPO) && u.kind === "D",
+        (u) => (u.source_ref ?? "").startsWith(DISTILL_SOURCE_PREFIX) && (u.source_ref ?? "").includes(REPO) && u.kind === "K" && !!u.domain_key,
       );
-      assert.ok(cand, "살아있는 distill D 후보 존재");
-      // D kind 를 recalled 로 넘겨 인덱스 빌드 — distill 후보 name 이 인덱스 본문에 없어야 한다.
-      const idx = buildKnowledgeIndex(await listKnowledge({ lifecycle: "active" }), [{ kind: "D", label: "작업영역" }]);
+      assert.ok(cand, "살아있는 distill 도메인 후보(K+domain_key) 존재");
+      // K kind 를 recalled 로 넘겨 인덱스 빌드 — distill 후보(ai·마커) name 이 인덱스 본문에 없어야 한다.
+      const idx = buildKnowledgeIndex(await listKnowledge({ lifecycle: "active" }), [{ kind: "K", label: "노트" }]);
       assert.ok(!idx.includes(cand!.name), `distill 후보 '${cand!.name}' 가 인덱스에 주입되면 안 됨`);
       // 대조군: confirm 한 후보(human·마커 없음)는 인덱스에 들어와야(K kind). PROJ 후보를 K 로 confirm 했었음.
       const promoted = (await listKnowledge({ lifecycle: "active" })).find(

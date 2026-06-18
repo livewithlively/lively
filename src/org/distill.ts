@@ -39,7 +39,7 @@ export interface DistillCandidate {
   rule: string;            // 규칙 id (예 'domain-workload')
   seed: string;            // 멱등 시드 (예 'productivity/domain-cartography')
   name: string;            // knowledge_unit name (결정론)
-  kind: "K" | "D";
+  kind: "K";               // V4-P2a: 본질 4종 narrow — 도메인은 area(domain_key) 축이라 후보는 K(+domain_key). (distill 은 P3 에서 제거.)
   title: string;
   body_md: string;
   domain_key: string | null;
@@ -111,7 +111,7 @@ async function ruleDomainWorkload(minWork: number, repos?: string[]): Promise<Di
       rule: "domain-workload",
       seed,
       name: candidateName("domain-workload", seed),
-      kind: "D" as const,
+      kind: "K" as const, // V4-P2a: 도메인은 area(domain_key) 축 — 후보는 K + domain_key(아래)로 area 표현
       title: `활성 작업영역: ${domainKey}`,
       body_md:
         `도메인 '${domainKey}'(repo \`${repo}\`)에 최근 작업(observed W task)이 ${n}건 매핑되어 ` +

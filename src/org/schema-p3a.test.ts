@@ -74,8 +74,8 @@ async function main(): Promise<void> {
       const okName = PREFIX + "obs1";
       await itemsPool.query(
         `INSERT INTO knowledge_unit(name, kind, confidence, lifecycle, source, external_system, external_id)
-           VALUES($1,'A','observed','active','slack','slack','ext-1')
-         ON CONFLICT (name) DO UPDATE SET confidence='observed'`, [okName]);
+           VALUES($1,'K','observed','active','slack','slack','ext-1')
+         ON CONFLICT (name) DO UPDATE SET confidence='observed'`, [okName]); // V4-P2a: A→K(흡수), observed 가 외부수집 표현
       const got = (await itemsPool.query(`SELECT confidence FROM knowledge_unit WHERE name=$1`, [okName])).rows[0];
       assert.equal(got.confidence, "observed");
       // 잘못된 값은 CHECK 위반(에러) — SAVEPOINT 없이 단일 쿼리라 트랜잭션 오염 없음.
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     // ── (2) 다중도메인/프로젝트 조인 + cascade ──
     await t("다중도메인 조인: 한 단위가 도메인 여러개 귀속 + cascade 삭제", async () => {
       const name = PREFIX + "multi";
-      await upsertKnowledge({ name, kind: "A", title: "수집물", body_md: "z" }, "test", "mcp"); // → ai
+      await upsertKnowledge({ name, kind: "K", title: "수집물", body_md: "z" }, "test", "mcp"); // → ai (V4-P2a: A→K)
       await itemsPool.query(
         `INSERT INTO knowledge_unit_domain(name, repo, domain_key, mapped_by, confidence, state)
            VALUES ($1,'r','billing','rule',0.9,'confirmed'), ($1,'r','auth','llm',0.5,'proposed')
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
 
     await t("조인 테이블 CHECK: state/mapped_by enum 위반 거부", async () => {
       const name = PREFIX + "multi"; // 위에서 cascade 로 비었지만 단위가 없으므로 FK 위반 전에 단위 재생성.
-      await upsertKnowledge({ name, kind: "A", body_md: "z" }, "test", "mcp");
+      await upsertKnowledge({ name, kind: "K", body_md: "z" }, "test", "mcp"); // V4-P2a: A→K
       await assert.rejects(
         itemsPool.query(`INSERT INTO knowledge_unit_domain(name, repo, domain_key, state) VALUES($1,'r','d','bogus')`, [name]),
         /state_chk|violates check/i,
@@ -148,14 +148,17 @@ async function main(): Promise<void> {
       await removeKnowledge(name, "test", "mcp");
     });
 
-    // ── (3) 멱등 재실행: initOrgSchema 2회 더 호출해도 throw 없음 + 43행/12kind 무손상 ──
-    await t("멱등: initOrgSchema 재실행 무피해 + 12 kind 유지", async () => {
+    // ── (3) 멱등 재실행: initOrgSchema 2회 더 호출해도 throw 없음 + 4 kind(R/K/H/W) 무손상 ──
+    //  V4-P2a: 본질 4종 narrow — 시드 4행 + legacy DELETE 가 멱등(재실행해도 4 유지).
+    await t("멱등: initOrgSchema 재실행 무피해 + 4 kind(R/K/H/W) 유지", async () => {
       const kindBefore = (await itemsPool.query(`SELECT count(*)::int n FROM kind_registry`)).rows[0].n;
       await initOrgSchema();
       await initOrgSchema();
       const kindAfter = (await itemsPool.query(`SELECT count(*)::int n FROM kind_registry`)).rows[0].n;
       assert.equal(kindAfter, kindBefore, "kind_registry 행수 불변(멱등)");
-      assert.equal(kindAfter, 12, "12 kind 유지");
+      assert.equal(kindAfter, 4, "4 kind(R/K/H/W) 유지");
+      const kinds = (await itemsPool.query(`SELECT kind FROM kind_registry ORDER BY kind`)).rows.map((r) => r.kind);
+      assert.deepEqual(kinds, ["H", "K", "R", "W"], "R/K/H/W 만 남음(legacy 제거)");
     });
 
   } finally {
