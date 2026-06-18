@@ -138,7 +138,7 @@ export async function init(): Promise<string> {
   //  provenance_kind ADD 패턴 재사용(비파괴·멱등): ① ADD COLUMN DEFAULT 'product' → ② 기존행 백필
   //  (DEFAULT 가 신규행만 채우므로 NULL 일 수 있는 기존행을 명시 백필) → ③ 백필 후 CHECK(순서 강제 —
   //  enum 밖 행이 있으면 ADD CONSTRAINT throw). 코드매핑/부채/touch 는 space 와 무관(product 만 git
-  //  스캔으로 채워짐). business 시드6 은 아래 seedBusinessAreas 가 적재(repo=productivity).
+  //  스캔으로 채워짐). business 시드6 은 아래 블록이 고객-불변 sentinel repo '_org' 아래 적재(키 전역 멱등).
   await pool.query(`ALTER TABLE domain ADD COLUMN IF NOT EXISTS space TEXT DEFAULT 'product';`);
   await pool.query(`UPDATE domain SET space='product' WHERE space IS NULL;`);
   await pool.query(`
@@ -150,24 +150,37 @@ export async function init(): Promise<string> {
     END IF;
   END $$;
   `);
-  // ── business 시드6(B): space='business' 도메인행(repo=productivity, 코드매핑 없음). 멱등 — 이미 있는
-  //  (repo,key) 는 건드리지 않는다(사람 편집 보존). origin='human'·status='confirmed'(통제어휘 시드).
-  //  productivity repo 가 아직 없으면(부팅 순서) graceful skip — 다음 부팅에 적재된다.
+  // ── business 시드6(B): space='business' 통제어휘 도메인행(코드매핑 없음 — §B vocab-only).
+  //  **고객-불변**(P6 적대검증 적발: 옛 코드는 repo='productivity' 라이블리 내부 레포명에 하드코딩 → 신규
+  //   셀프호스트는 그 레포가 없어 business 6 area 통째 누락). 교정:
+  //   (a) 시드 가드 = key 가 *어느 repo* 에도 space='business' 로 없을 때만 적재(NOT EXISTS) — 키 전역 멱등.
+  //       라이브는 6개가 이미 'productivity' 아래 존재 → missing=0 → IF 블록 통째 skip → **라이브 무변화**.
+  //   (b) 호스트 = 고객-불변 sentinel repo '_org'(조직 평면, 코드 없음). domain.repo_id 가 nullable 이나
+  //       UNIQUE(repo_id,key) 가 NULL 을 distinct 취급해 ON CONFLICT 멱등이 깨지므로, sentinel repo 로 호스팅.
+  //       sentinel 은 *적재가 필요할 때만* 생성(라이브엔 안 생김). 신규 고객은 6개를 '_org' 아래 받음.
   await pool.query(`
   DO $$
-  DECLARE prod_id INT;
+  DECLARE host_id INT;
+  DECLARE missing INT;
   BEGIN
-    SELECT id INTO prod_id FROM repo WHERE name='productivity';
-    IF prod_id IS NOT NULL THEN
+    SELECT count(*) INTO missing FROM (VALUES
+      ('gtm'),('business-model-pricing'),('fundraising'),('market-competition'),('brand'),('org')
+    ) AS v(key)
+    WHERE NOT EXISTS (SELECT 1 FROM domain d WHERE d.key=v.key AND d.space='business');
+    IF missing > 0 THEN
+      INSERT INTO repo(name, created_at) VALUES('_org', now()) ON CONFLICT (name) DO NOTHING;
+      SELECT id INTO host_id FROM repo WHERE name='_org';
       INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
-      VALUES
-        (prod_id,'gtm','GTM(시장진입)','고객 획득·세일즈·마케팅·파트너십 등 시장 진입 전략 기능.','active',false,'human','confirmed','business',now(),now()),
-        (prod_id,'business-model-pricing','비즈니스모델·가격','수익모델·가격정책·요금제·과금 구조 기능.','active',false,'human','confirmed','business',now(),now()),
-        (prod_id,'fundraising','펀드레이징','투자유치·IR·자금조달·캡테이블 기능.','active',false,'human','confirmed','business',now(),now()),
-        (prod_id,'market-competition','시장·경쟁','시장 규모·경쟁사·포지셔닝·경쟁지도 기능.','active',false,'human','confirmed','business',now(),now()),
-        (prod_id,'brand','브랜드','브랜드 아이덴티티·메시징·디자인 언어 기능.','active',false,'human','confirmed','business',now(),now()),
-        (prod_id,'org','조직','채용·조직설계·운영·문화 등 조직 기능.','active',false,'human','confirmed','business',now(),now())
-      ON CONFLICT (repo_id, key) DO NOTHING;
+      SELECT host_id, v.key, v.name, v.descr, 'active', false, 'human', 'confirmed', 'business', now(), now()
+      FROM (VALUES
+        ('gtm','GTM(시장진입)','고객 획득·세일즈·마케팅·파트너십 등 시장 진입 전략 기능.'),
+        ('business-model-pricing','비즈니스모델·가격','수익모델·가격정책·요금제·과금 구조 기능.'),
+        ('fundraising','펀드레이징','투자유치·IR·자금조달·캡테이블 기능.'),
+        ('market-competition','시장·경쟁','시장 규모·경쟁사·포지셔닝·경쟁지도 기능.'),
+        ('brand','브랜드','브랜드 아이덴티티·메시징·디자인 언어 기능.'),
+        ('org','조직','채용·조직설계·운영·문화 등 조직 기능.')
+      ) AS v(key,name,descr)
+      WHERE NOT EXISTS (SELECT 1 FROM domain d WHERE d.key=v.key AND d.space='business');
     END IF;
   END $$;
   `);

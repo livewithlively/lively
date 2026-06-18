@@ -10,6 +10,7 @@ import { listDisabledBuiltins } from "./org/store.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
+import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
 import { registerWebUi } from "./web.js";
 import { logger } from "./log.js";
 
@@ -88,6 +89,14 @@ const server = app.listen(PORT, () => {
       //  (warn 후 throw 없이 반환)하므로 catch 는 방어선일 뿐. OFF 면 진입조차 안 한다 → 동작 변화 0.
       .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
       .catch((err) => logger.error({ err }, "org schema init failed"));
+  }
+  // domainmap 스키마(AREA 축: domain.space + business 시드6) — items/org 와 별 DB(DOMAINMAP_DATABASE_URL).
+  //  부팅 배선 누락 시 신규 셀프호스트가 4축 중 AREA 만 통째로 못 받음(P6 적대검증 적발) → 부팅에 명시 배선.
+  //  멱등(CREATE TABLE IF NOT EXISTS + ON CONFLICT)·비치명(catch). 라이브 단일테넌트는 이미 적재라 무변화.
+  if (process.env.DOMAINMAP_DATABASE_URL) {
+    initDomainmapSchema()
+      .then(() => logger.info("domainmap schema ready"))
+      .catch((err) => logger.error({ err }, "domainmap schema init failed"));
   }
 });
 // 포트 바인딩 실패(구 게이트웨이 미종료 등) → 마이그레이션 미실행 보장 + 즉시 종료(half-state 방지).
