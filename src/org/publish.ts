@@ -171,11 +171,12 @@ export async function previewMemberContext(orgName: string): Promise<string> {
   const defaults = await getSection("org-defaults");
   const { listKnowledge } = await import("./knowledge.js");
   // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildKnowledgeIndex 를 그대로
-  //  재사용(recalled kind 섹션화·updated_at DESC·cap 100·freshness 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
-  const { buildKnowledgeIndex, recalledKindsForIndex } = await import("./materialize.js");
+  //  재사용(v4: R 전문 + area 지도 + 쓰기 가이드 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
+  const { buildKnowledgeIndex, areaMapForIndex } = await import("./materialize.js");
   const knowledge = await listKnowledge({ lifecycle: "active" });
-  // recalled kind 섹션 정책은 kind_registry 가 권위(non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
-  const memIndex = knowledge.length ? buildKnowledgeIndex(knowledge, await recalledKindsForIndex()).trim() : "";
+  // area 지도는 라이브 조회(domainmap+items 조인, non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
+  const areaMap = await areaMapForIndex();
+  const memIndex = (knowledge.length || areaMap.length) ? buildKnowledgeIndex(knowledge, areaMap).trim() : "";
   const sections = [
     header,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",

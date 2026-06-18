@@ -159,8 +159,11 @@ const ctxCat = coExposed(
 const ctxSave = coExposed(
   "ctx_save",
   "컨텍스트 저장(save)",
-  "통합 지식스토어에 한 콜로 저장한다(에이전트 생산·소비 단일 풀). name 생략 시 제목/본문에서 자동 생성, " +
-    "같은 name 재지정 시 갱신. kind 기본 'K'. 출처(provenance, 컬럼 confidence)·lifecycle 은 서버가 채널로 강제하므로 입력하지 않는다(MCP→ai / 웹→human).",
+  "통합 지식스토어(ku)에 한 콜로 전문 저장한다(조직 지식의 유일한 집 — 레포 .md 새로 만들지 말 것). 지속될 지식이 " +
+    "생기면 그 자리에서(in-flow) 요약이 아닌 **전문**을 담는다. name 생략 시 제목/본문에서 자동 생성, 같은 name 재지정 시 갱신. " +
+    "분류(판단): kind = R(강제규칙·페르소나)·K(지식·산출물, 기본)·H(절차·런북)·W(작업). area = domain 인자로 지정(통제어휘 — " +
+    "주입된 area 지도의 key). 외부(클릭업·노션·코드)는 복제 금지 — 미러(observed)로 두고 파생 인사이트만 K 로 저작. " +
+    "출처(provenance, 컬럼 confidence)·lifecycle 은 서버가 채널로 강제하므로 입력하지 않는다(MCP→ai / 웹→human).",
   {
     note: z.string().min(1).max(40000),
     title: z.string().max(200).optional(),

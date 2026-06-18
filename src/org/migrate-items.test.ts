@@ -138,13 +138,13 @@ async function main(): Promise<void> {
       assert.equal(projs[0].confidence, null);
     });
 
-    await t("observed 인덱스 제외(buildKnowledgeIndex) — 수집물은 항상-주입 인덱스에 없음", async () => {
-      // recalled kind(K/D/F/H)만 인덱스 대상이지만, observed A/W 가 K/D 로 잘못 새지 않음을 보장하기 위해
-      //  active 전체를 넘겨 인덱스를 만들고, 합성 유닛 name 이 인덱스에 없음을 확인(confidence='observed' 제외).
+    await t("수집물(W·K)은 항상-주입 인덱스에 없음(V4-P3: R 전문만 주입, K/H/W 정적 미주입)", async () => {
+      // V4-P3: 주입 = R 전문 + area 지도 + 쓰기 가이드. 'observed 제외 필터'는 폐기됐고, 대신 K/H/W 가 *kind 로서*
+      //  정적 주입되지 않는다(area 지도로 발견·검색 소환). 합성 W(kind=W)·A→K(kind=K) 둘 다 인덱스에 없어야 한다.
       const all = await listKnowledge({ lifecycle: "active" });
       const idx = buildKnowledgeIndex(all);
-      assert.ok(!idx.includes(W_NAME), "W observed 유닛 인덱스 비주입");
-      assert.ok(!idx.includes(A_NAME), "A observed 유닛 인덱스 비주입");
+      assert.ok(!idx.includes(W_NAME), "W 유닛 인덱스 비주입(W 는 정적 주입 kind 아님)");
+      assert.ok(!idx.includes(A_NAME), "A→K 유닛 인덱스 비주입(K 는 정적 주입 kind 아님)");
     });
 
     await t("overview: observed 2건이 observed_count 로만 집계(total_active/review 영향 0)", async () => {

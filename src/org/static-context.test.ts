@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { materializeStaticContext, previewMemberContext } from "./publish.js";
 import { getOrgProfile } from "./store.js";
 import { listKnowledge } from "./knowledge.js";
-import { buildKnowledgeIndex, recalledKindsForIndex } from "./materialize.js";
+import { buildKnowledgeIndex, areaMapForIndex } from "./materialize.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void>): Promise<void> => {
@@ -43,20 +43,19 @@ async function main(): Promise<void> {
     const name = p.display_name?.trim() || p.name?.trim() || "조직";
     const live = await previewMemberContext(name);
     const { context: stat } = await materializeStaticContext();
-    // 둘 다 buildKnowledgeIndex(listKnowledge active, recalledKindsForIndex) 단일소스에서 인덱스를 굽는다.
+    // V4-P3: 둘 다 buildKnowledgeIndex(listKnowledge active, areaMapForIndex) 단일소스에서 인덱스를 굽는다
+    //  (R 전문 + area 지도 + 쓰기 가이드). recalled 제목리스트·캡·observed제외 폐기.
     const knowledge = await listKnowledge({ lifecycle: "active" });
-    const idx = knowledge.length ? buildKnowledgeIndex(knowledge, await recalledKindsForIndex()).trim() : "";
+    const areaMap = await areaMapForIndex();
+    const idx = (knowledge.length || areaMap.length) ? buildKnowledgeIndex(knowledge, areaMap).trim() : "";
     if (idx) {
       // 인덱스 본문(Knowledge Index 헤더부터)이 양 표면에 동일하게 들어있어야 단일소스.
       const head = idx.split("\n").slice(0, 2).join("\n"); // 헤더 2줄(제목 + 안내)
       assert.ok(live.includes(head), "라이브 preview 에 동일 인덱스 헤더 포함");
       assert.ok(stat.includes(head), "정적 context 에 동일 인덱스 헤더 포함");
-      // 인덱스 첫 항목(있으면)이 양쪽에 동일하게 존재 — 같은 DB·같은 빌더 산출 증명.
-      const firstEntry = idx.split("\n").find((l) => l.startsWith("- ") && l.includes("ctx_cat name="));
-      if (firstEntry) {
-        assert.ok(live.includes(firstEntry), "라이브에 인덱스 첫 항목 존재");
-        assert.ok(stat.includes(firstEntry), "정적에 인덱스 첫 항목 존재");
-      }
+      // 쓰기 가이드 블록(항상 박힘)이 양쪽에 동일하게 존재 — 같은 DB·같은 빌더 산출 증명.
+      assert.ok(live.includes("## 지식 쓰기 가이드"), "라이브에 쓰기 가이드 존재");
+      assert.ok(stat.includes("## 지식 쓰기 가이드"), "정적에 쓰기 가이드 존재");
     }
   });
 
