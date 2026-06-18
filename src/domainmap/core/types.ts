@@ -120,6 +120,8 @@ export interface TouchProjectRef { key: string; name: string; kind: string | nul
 export interface DomainListItem {
   id: number; key: string; name: string; description: string | null;
   state: string | null; cross_cutting: boolean; origin: string | null; status: string;
+  // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능). 항상 방출(?? 'product').
+  space: string;
   units: number; entities: number; debts: number; proposed: number;
 }
 

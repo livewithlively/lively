@@ -161,7 +161,7 @@ const domainCreate: Capability = {
   description:
     "repo 하위에 도메인(통제어휘 1개)을 만든다. propose_domain 과 달리 evidence 게이트 없는 어휘 추가 경로. " +
     "key(소문자 슬러그)·name·repo 필수, 중복/형식·rename 별칭 충돌 검증, 보호 리포 403. 신뢰우선(confirmed). " +
-    "반환 {repo,id,key,status,change_id}.",
+    "space='product'(코드앵커 도메인, 기본)|'business'(코드매핑 없는 비즈니스 기능). 반환 {repo,id,key,status,change_id}.",
   scope: "context",
   input: {
     repo: z.string().regex(REPO_RE).max(100),
@@ -169,6 +169,7 @@ const domainCreate: Capability = {
     name: z.string().trim().min(1).max(200),
     description: z.string().max(4000).optional(),
     crossCutting: z.boolean().optional(),
+    space: z.enum(["product", "business"]).optional().describe("product(코드앵커 도메인, 기본)|business(비즈니스 기능)"),
   },
   expose: {
     mcp: true,
@@ -186,17 +187,21 @@ const domainCreate: Capability = {
           if (typeof b.crossCutting !== "boolean") throw new HttpError(400, "crossCutting 은 boolean 이어야 합니다");
           out.crossCutting = b.crossCutting;
         }
+        if (b.space !== undefined) {
+          if (b.space !== "product" && b.space !== "business") throw new HttpError(400, "space 는 product|business 여야 합니다");
+          out.space = b.space;
+        }
         return out;
       },
     }],
   },
   handler: async (
-    input: { repo: string; key: string; name: string; description?: string; crossCutting?: boolean }, user, ctx,
+    input: { repo: string; key: string; name: string; description?: string; crossCutting?: boolean; space?: "product" | "business" }, user, ctx,
   ) => {
     if (input.description !== undefined) assertNoHardSecrets(input.description, "description"); // P8 평문 시크릿 hard-block
     return audited("domain_create", user, ctx, { repo: input.repo, key: input.key }, () =>
       dmWrite(() => coreCreateDomain(input.repo, {
-        key: input.key, name: input.name, description: input.description, cross_cutting: input.crossCutting,
+        key: input.key, name: input.name, description: input.description, cross_cutting: input.crossCutting, space: input.space,
       }, webActor(user.userId, actorType(ctx)))));
   },
 };

@@ -34,11 +34,22 @@ function render({ kinds, sources }) {
   L.push("> 재빌드한다. 웹 `#/learn`(GET `/api/ui/learn`)이 같은 데이터를 렌더하므로 두 표면은 항상 일치한다.");
   L.push("");
   L.push("이 문서는 (1) LLM 이 지식을 마이그/증류·분류할 때 읽는 **분류 지침**이자 (2) 사람이 읽는 안내다.");
-  L.push("통합 지식스토어(`knowledge_unit`)는 모든 지식을 아래 12개 종류(kind) 중 하나로 분류한다.");
+  L.push("");
+  L.push("## 0. V4 분류 모델 — 본질 종류 4종 × 주제(area) × 출처(provenance)");
+  L.push("");
+  L.push("- **종류(kind) = 본질만, 4종: R·K·H·W.**");
+  L.push("  - **R**(규칙/정책/페르소나) = 모든 세션에 강제하는 규범·말투. **항상 주입.**");
+  L.push("  - **K**(지식 노트) = 거의 모든 저작 지식(배경·사실·도메인 지식·메모·링크를 다 흡수). 가장 큰 기본값.");
+  L.push("  - **H**(하우투/런북) = 재현 가능한 단계별 절차.");
+  L.push("  - **W**(작업/태스크) = 상태·담당을 가진 일.");
+  L.push("- **주제(area) = 종류가 아니라 별도 축**: `(space, key)` 2단. `space=product`(코드앵커 도메인) · `space=business`(비즈니스 기능: gtm·가격·펀딩·시장경쟁·브랜드·조직). 한 단위가 area 에 안 묶이거나(전사) 여럿에 묶일 수 있다.");
+  L.push("- **출처(provenance) = 종류가 아니라 기계적 사실**(컬럼명은 `confidence` 유지): `observed`(외부 시스템 살아있는 미러) · `human`(사람 저작/승인) · `ai`(AI 생성) · `rule`(시스템 결정론 파생). 출처는 가치·주입을 결정하지 않는다.");
+  L.push("- **S(구조)·G(용어집/그래프) 는 ku 종류가 아니다** — 모양이 글이 아니라 노드+엣지라 domainmap 파생 그래프(**federated 뷰**)로 다룬다. 도메인 부채도 ku 아님(domainmap `debt_finding`).");
+  L.push("- ⚠ 아래 표의 **D·F·A·M·S·G·L·Z 는 통합 예정 legacy 종류**다(P1 무중단 유지 — 라이브 유닛이 아직 그 종류라 정상 렌더). **신규 분류에선 쓰지 말고** D/F/A/M/L/Z→K, S/G→domainmap federate 로 보낸다(데이터 흡수는 P2).");
   L.push("");
 
-  // ── 1. 12 지식 종류 ──
-  L.push("## 1. 지식 종류 12종 — 정의·분류기준·저장·전달");
+  // ── 1. 지식 종류 정의(4 본질 + legacy 보존) ──
+  L.push("## 1. 지식 종류 — 정의·분류기준·저장·전달 (본질 4종 R·K·H·W + 통합 예정 legacy)");
   L.push("");
   for (const k of kinds) {
     L.push(`### ${k.kind} — ${k.label}`);
@@ -79,11 +90,12 @@ function render({ kinds, sources }) {
   // ── 4. 증류·분류 지침(LLM) ──
   L.push("## 4. 증류·마이그레이션 분류 지침 (LLM)");
   L.push("");
-  L.push("- 기본값은 K(일반 지식 노트). 애매하면 K 로 두고 더 맞는 종류가 분명할 때만 좁힌다.");
-  L.push("- 강제 규범(반드시/금지)·페르소나는 R. 단계별 절차는 H. 한 줄 확정 사실은 F.");
-  L.push("- 특정 도메인에 명확히 속하는 지식은 D(도메인 키 부여). 도메인 용어의 *뜻* 정의는 G, 데이터/시스템 *구조*는 S.");
-  L.push("- 커넥터가 수집한 원천 활동/문서는 A, PM 태스크는 W — 사람이 정리한 지식과 구분한다.");
-  L.push("- 도메인 **부채**는 이 분류에 없다 — domainmap 의 `debt_finding` 으로 별도 관리한다(G 는 용어집/그래프).");
+  L.push("- **종류(kind)는 R·K·H·W 4종 중에서만 고른다.** 기본값은 K — 강제 규범(R)·절차(H)·작업(W)이 아니면 거의 다 K.");
+  L.push("  - 강제 규범(반드시/금지)·페르소나 → **R**. 재현 가능한 단계별 절차 → **H**. 상태·담당을 가진 일 → **W**.");
+  L.push("  - 배경·사실·도메인 지식·메모·링크는 모두 → **K**(주제는 area, 출처는 provenance 로 따로 단다).");
+  L.push("- **주제(area)는 종류와 별개 축**: 특정 도메인에 속하면 area(domain_key, space=product) 를 단다. 비즈니스 기능이면 space=business 의 key(gtm 등). 전사면 null.");
+  L.push("- **출처(provenance, 컬럼 confidence)는 기계가 채널로 박는 사실**이라 LLM 이 *판단*하지 않는다: 외부 미러=observed, 사람=human, AI=ai, 결정론 파생=rule.");
+  L.push("- **D·F·A·M·S·G·L·Z 는 통합 예정 legacy** — 신규로 부여하지 말 것. D/F/A/M/L/Z 는 K 로, S/G 는 domainmap 파생(federated)으로 본다. 도메인 부채는 ku 가 아니라 domainmap `debt_finding`.");
   L.push("- 한 단위가 둘 이상 종류에 걸치면 주분류(kind) 하나 + 다중분류(kinds[])로 보조 종류를 단다.");
   L.push("");
 

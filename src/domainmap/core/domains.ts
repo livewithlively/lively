@@ -104,6 +104,10 @@ export async function createDomain(repoName: string, fields: Record<string, unkn
   if (!name || name.length > 200) bad("name required (1~200 chars)");
   const description = f.description == null ? "" : String(f.description);
   if (description.length > 4000) bad("description too long (max 4000 chars)");
+  // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인, 기본) | 'business'(코드매핑 없는 비즈니스 기능).
+  //  미지정·빈값은 'product'(domainmap 본래 의미 유지 — 기존 거동 byte-compat). enum 밖이면 400.
+  const space = f.space == null || f.space === "" ? "product" : String(f.space);
+  if (space !== "product" && space !== "business") bad(`bad space: '${space}' (allowed: product|business)`);
   const pool = dmPool();
   const r = await getRepo(repoName); // 404 on unknown repo
   // alias 해소: 옛 별칭으로도 같은 도메인을 가리키면 중복(예: old_key 가 'billing' alias 인데 'billing' 재생성).
@@ -112,9 +116,9 @@ export async function createDomain(repoName: string, fields: Record<string, unkn
   if (ex) throw httpErr(409, `domain key already exists in repo '${repoName}': ${key} (#${ex.id})`);
   const aliasRow = await one(pool, "SELECT id FROM domain_alias WHERE repo_id=$1 AND old_key=$2", [r.id, key]);
   if (aliasRow) throw httpErr(409, `domain key '${key}' is a rename-alias in repo '${repoName}' — choose a different key`);
-  const row = await one(pool, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
-    VALUES($1,$2,$3,$4,'active',$5,$6,'confirmed',$7,$7) RETURNING id`,
-    [r.id, key, name, description, !!f.cross_cutting, actor.type, now()]);
+  const row = await one(pool, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
+    VALUES($1,$2,$3,$4,'active',$5,$6,'confirmed',$7,$8,$8) RETURNING id`,
+    [r.id, key, name, description, !!f.cross_cutting, actor.type, space, now()]);
   const cid = await logChange(pool, {
     repoId: r.id, entityType: "domain", entityId: row.id, op: "insert", actor,
     before: null, after: { key, name, status: "confirmed" }, note: "create domain (controlled vocab)",

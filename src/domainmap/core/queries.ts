@@ -102,6 +102,9 @@ export async function listDomainsApi(name: string): Promise<DomainListItem[]> {
     out.push({
       id: d.id, key: d.key, name: d.name, description: d.description,
       state: d.state, cross_cutting: d.cross_cutting, origin: d.origin, status: d.status,
+      // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능).
+      //  pre-migration NULL 행은 백필이 'product' 로 채우지만 ?? 'product' 로 키 항상 방출(키 생략 금지 — 표면 계약).
+      space: d.space ?? "product",
       units: c.units, entities: c.entities, debts: 0, proposed: c.proposed,
     });
   }

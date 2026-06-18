@@ -25,8 +25,9 @@ async function upsertDomain(db: Db, repo_id: number, run_id: number, actor: Acto
   if (!ex) {
     // 신뢰우선: 자동 정의는 proposed 림보 없이 곧바로 confirmed 로 착지. origin=actor.type 가
     // '누가 만들었나'(agent/human)를 보존 — 사람 큐레이션 식별은 status 가 아니라 origin='human'.
-    const r = await one(db, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,'confirmed',$8,$8) RETURNING id`,
+    // V4-P1: space — 코드스캔(reconcile) 파생 도메인은 항상 'product'(코드앵커 보유). business 는 vocab-only(create 경로).
+    const r = await one(db, `INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,'confirmed','product',$8,$8) RETURNING id`,
       [repo_id, d.key, d.name, d.description ?? "", d.state ?? "active", !!d.cross_cutting, actor.type, now()]);
     await logChange(db, {
       repoId: repo_id, entityType: "domain", entityId: r.id, op: "insert", actor, runId: run_id,

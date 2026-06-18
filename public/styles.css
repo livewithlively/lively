@@ -744,6 +744,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .learn-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 26px; }
 @media (max-width: 820px) { .learn-kinds { grid-template-columns: 1fr; } }
 .learn-kind { padding: 18px 20px 16px; }
+/* V4: 통합 예정(legacy) 종류 카드 — 약하게(graceful, 무중단 — 행은 유지하되 신규 분류엔 안 씀) */
+.learn-kind-legacy { opacity: .72; }
 .learn-kind-head { display: flex; align-items: center; gap: 11px; }
 .learn-kind-titles { flex: 1; min-width: 0; }
 .learn-kind-name { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.25; }

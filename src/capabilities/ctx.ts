@@ -160,7 +160,7 @@ const ctxSave = coExposed(
   "ctx_save",
   "컨텍스트 저장(save)",
   "통합 지식스토어에 한 콜로 저장한다(에이전트 생산·소비 단일 풀). name 생략 시 제목/본문에서 자동 생성, " +
-    "같은 name 재지정 시 갱신. kind 기본 'K'. confidence·lifecycle 은 서버가 강제하므로 입력하지 않는다.",
+    "같은 name 재지정 시 갱신. kind 기본 'K'. 출처(provenance, 컬럼 confidence)·lifecycle 은 서버가 채널로 강제하므로 입력하지 않는다(MCP→ai / 웹→human).",
   {
     note: z.string().min(1).max(40000),
     title: z.string().max(200).optional(),
@@ -259,9 +259,9 @@ const ctxSave = coExposed(
 const ctxOverview = coExposed(
   "ctx_overview",
   "컨텍스트 개요(overview)",
-  "통합 지식스토어를 종류(kind)별로 집계한다 — 각 종류의 active 단위 수(큐레이션, observed 제외)·최신 갱신시각, " +
-    "전체 active 합, Review 대기 수(에이전트 생산 active = confidence 'ai'), 수집물 수(observed_count = 커넥터 수집물). " +
-    "검토 큐는 confidence='ai' 라 observed(수집물)는 자연 제외된다. 대시보드/리뷰 진입점.",
+  "통합 지식스토어를 종류(kind)별로 집계한다 — 각 종류의 active 단위 수(저작물, 출처=observed 제외)·최신 갱신시각, " +
+    "전체 active 합, Review 대기 수(AI 생성 active = 출처 'ai'), 외부 미러 수(observed_count = 커넥터 미러). " +
+    "검토 큐는 출처(provenance)='ai' 라 observed(외부 미러)는 자연 제외된다. 대시보드/리뷰 진입점.",
   {},
   [{
     method: "GET",

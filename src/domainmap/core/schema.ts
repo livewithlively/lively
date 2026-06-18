@@ -132,6 +132,45 @@ export async function init(): Promise<string> {
     END IF;
   END $$;
   `);
+  // ── V4-P1 area 2단(B): domain.space — 주제(area)의 상위 축. ──
+  //  space='product'  = 코드앵커·부채추적·CRUD 를 갖는 제품 도메인(domainmap 본래 의미, 31행 전부 이쪽).
+  //  space='business' = 코드매핑 없는 비즈니스 기능(gtm·가격·펀딩·시장경쟁·브랜드·조직) — vocab-only.
+  //  provenance_kind ADD 패턴 재사용(비파괴·멱등): ① ADD COLUMN DEFAULT 'product' → ② 기존행 백필
+  //  (DEFAULT 가 신규행만 채우므로 NULL 일 수 있는 기존행을 명시 백필) → ③ 백필 후 CHECK(순서 강제 —
+  //  enum 밖 행이 있으면 ADD CONSTRAINT throw). 코드매핑/부채/touch 는 space 와 무관(product 만 git
+  //  스캔으로 채워짐). business 시드6 은 아래 seedBusinessAreas 가 적재(repo=productivity).
+  await pool.query(`ALTER TABLE domain ADD COLUMN IF NOT EXISTS space TEXT DEFAULT 'product';`);
+  await pool.query(`UPDATE domain SET space='product' WHERE space IS NULL;`);
+  await pool.query(`
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='domain'::regclass AND conname='domain_space_chk') THEN
+      ALTER TABLE domain ADD CONSTRAINT domain_space_chk
+        CHECK (space IS NULL OR space IN ('product','business'));
+    END IF;
+  END $$;
+  `);
+  // ── business 시드6(B): space='business' 도메인행(repo=productivity, 코드매핑 없음). 멱등 — 이미 있는
+  //  (repo,key) 는 건드리지 않는다(사람 편집 보존). origin='human'·status='confirmed'(통제어휘 시드).
+  //  productivity repo 가 아직 없으면(부팅 순서) graceful skip — 다음 부팅에 적재된다.
+  await pool.query(`
+  DO $$
+  DECLARE prod_id INT;
+  BEGIN
+    SELECT id INTO prod_id FROM repo WHERE name='productivity';
+    IF prod_id IS NOT NULL THEN
+      INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
+      VALUES
+        (prod_id,'gtm','GTM(시장진입)','고객 획득·세일즈·마케팅·파트너십 등 시장 진입 전략 기능.','active',false,'human','confirmed','business',now(),now()),
+        (prod_id,'business-model-pricing','비즈니스모델·가격','수익모델·가격정책·요금제·과금 구조 기능.','active',false,'human','confirmed','business',now(),now()),
+        (prod_id,'fundraising','펀드레이징','투자유치·IR·자금조달·캡테이블 기능.','active',false,'human','confirmed','business',now(),now()),
+        (prod_id,'market-competition','시장·경쟁','시장 규모·경쟁사·포지셔닝·경쟁지도 기능.','active',false,'human','confirmed','business',now(),now()),
+        (prod_id,'brand','브랜드','브랜드 아이덴티티·메시징·디자인 언어 기능.','active',false,'human','confirmed','business',now(),now()),
+        (prod_id,'org','조직','채용·조직설계·운영·문화 등 조직 기능.','active',false,'human','confirmed','business',now(),now())
+      ON CONFLICT (repo_id, key) DO NOTHING;
+    END IF;
+  END $$;
+  `);
   // ── P-V3-4a: repo CRUD lifecycle + domain rename soft-alias(H3) ──
   // repo.state: repo_deprecate 가 쓰는 lifecycle 축. NULL=active(pre-migration 행). repo 는 cross-DB
   //  cascade 가 없는 도메인맵 자기완결 엔티티라 컬럼 추가만으로 충분(deprecate=숨김 신호, 삭제 아님).
