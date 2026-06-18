@@ -326,17 +326,19 @@ export async function searchKnowledge(opts: {
   query: string;
   kind?: string | null;
   kindNot?: string | null;
+  confidenceNot?: string | null;   // V4-P5: memory_search 가 observed 수집물을 제외할 때(큐레이션 surface MECE)
   domainKey?: string | null;
   lifecycle?: KnowledgeLifecycle | null;
   limit?: number;
 }): Promise<KnowledgeSearchHit[]> {
   const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
 
-  // ── 공통 필터 빌더 — ILIKE/벡터 양 경로가 동일 kind/lifecycle/domain WHERE 를 공유한다. ──
+  // ── 공통 필터 빌더 — ILIKE/벡터 양 경로가 동일 kind/confidence/lifecycle/domain WHERE 를 공유한다. ──
   const buildFilters = (params: unknown[]): string[] => {
     const where: string[] = [];
     if (opts.kind) { params.push(opts.kind); where.push(`kind=$${params.length}`); }
     if (opts.kindNot) { params.push(opts.kindNot); where.push(`kind <> $${params.length}`); }
+    if (opts.confidenceNot) { params.push(opts.confidenceNot); where.push(`confidence <> $${params.length}`); }
     if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
     if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
     return where;

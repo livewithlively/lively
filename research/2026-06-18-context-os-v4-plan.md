@@ -54,7 +54,8 @@
 - **V4-P2 데이터 재분류(LLM)**: kind 흡수(A/D/F/M/L/Z→K) + LLM area/kind 재분류(114, 특히 71 observed) + provenance 오라벨 수정. 백업·멱등.
 - **V4-P3 주입·검색 재작성 + 쓰기가이드 + distill 제거**: buildKnowledgeIndex→규칙+area지도(중요도/observed제외 폐기)·session-preload·쓰기가이드 주입·distill.ts 제거·"lively-org=SoT" 문구 갱신.
 - **V4-P4 SoT 단일홈 + 인입 판단 + dedup**: ku 캐노니컬(레포-SoT 동결)·커넥터/스캔/운영 LLM분류 패스·dedup 키 중앙화.
-- **V4-P5 웹**: #/learn 신택소노미·area 필터(space)·어휘CRUD context스코프·팀메모리 observed 버그·훅 주입 가시화 UI.
+- **V4-P4 SoT+인입+dedup ✅ (커밋 f1c5030, 재배포·라이브 검증)** — dedup: external-identity.ts 단일홈(KIND_MAP/kindForSource/unitName/conflictKey), 복붙 2→1(mirror import·migrate.mjs dist import), 골든4(REF오라클 동치). ingest: ingest-classify.ts classifyIngest() — 무키=mechanicalFallback byte-identical(전 KIND_MAP 오라클), 키=fetch haiku-4-5 forced tool_use(새 dep0)·4중가드·graceful폴백, 9테스트, 활성화=.env ANTHROPIC_API_KEY. SoT: research/lively-org 캐노니컬 읽기 코드경로 0(전부 isMain CLI/신원축/백업), README 명문화, 주입문 일관. 게이트 build/typecheck/test/parity36·65 pass. 라이브 kinds=H,K,R,W·active45·observed71·learn4 무회귀. 적대검증 전 finding info·블로커0.
+- **V4-P5 웹**: #/learn 신택소노미(KIND_META 12→4)·area 필터(space product/business)·어휘CRUD context스코프·팀메모리 observed 버그(store.ts:269)·훅 주입 가시화 UI·vocab 37→36 문구.
 - **V4-P6 최종 종합검증**: 라이브 시스템 e2e + 회귀.
 
 ## 설계 확정 (w7oy1kg5e — 빌드 에이전트 필독)
@@ -71,7 +72,7 @@
 - **distill 제거(P3)**: distill.ts/test/scripts + package.json:15 + materialize.ts distill source_ref 절 한 커밋. 라이브 0건.
 
 ## 진행 로그
-- **V4-P1 분류코어 additive ✅ (커밋 4574fc0, :8080 라이브)** — kind_registry R/K/H/W v4 정의(legacy 보존)·domain.space+business 시드6(37도메인)·provenance 라벨(컬럼 confidence 불변·mapping REAL 무오염)·런북/웹 4kind(legacy graceful)·golden core-mode 재캡처(68). 무중단(kind CHECK 12값·데이터 UPDATE 0·ku 116[45+71] 무손상). 블로커0. 실측정정: ku 116·domain 31.
+- **V4-P1 분류코어 additive ✅ (커밋 4574fc0, :8080 라이브)** — kind_registry R/K/H/W v4 정의(legacy 보존)·domain.space+business 시드6(active 36도메인=product30+business6; '37'은 merged product 1행 오포함 오라벨 — P5 정정)·provenance 라벨(컬럼 confidence 불변·mapping REAL 무오염)·런북/웹 4kind(legacy graceful)·golden core-mode 재캡처(68). 무중단(kind CHECK 12값·데이터 UPDATE 0·ku 116[45+71] 무손상). 블로커0. 실측정정: ku 116·domain active 36.
 - **⚠️ P2 LLM 키 부재**: .env에 ANTHROPIC_API_KEY 없음·SDK 미설치 → 독립스크립트 LLM 불가. **재분류는 워크플로 에이전트(모델접근)로 = 키 불요.** P2 분할: **P2a=기계 흡수+CHECK narrow+registry 정리(결정론)**, **P2b=LLM area/kind 분류(워크플로)**. 런타임 인입 LLM(P4)=키 게이트+기계폴백(현 KIND_MAP), 키 확보 시 활성.
 - **V4-P2a 기계 흡수 ✅ (커밋 2d22da5, :8080 라이브)** — A/D/F/M→K 56행(+kinds[] 17정규화), CHECK narrow(R,K,H,W), registry 4행, S/G federate(0행 무손실). 백업 ku/kud/kup _v4bak_p2a. 멱등(재실행 md5 동일·쓰기0)·116/observed71/kud154 무손상. 라이브 K84/R2/W30·learn 4kind. test157·parity65·36툴·golden68. 블로커0. (distill D→K 임시브리지=P3 제거, 인입 KIND_MAP 기계폴백=P4 LLM.)
 - **V4-P2b LLM area/kind 분류 ✅ (커밋 49bd8c1, 라이브)** — 워크플로 10병렬(키불요). area llm-proposed 161(state=proposed·구조적 격리=buildKnowledgeIndex가 ku만 읽음)·provenance rule34→ai19/human15(rule 0·observed71 무손)·kind 보수0적용(human무override 입증·conf<0.85 보류5=P5). ku116/kup70 불변·백업 p2b·멱등. test157·parity65·36툴. 블로커0. (vocab 실제 36[product30+business6], 문서 '37' 오라벨=P5 정정.)

@@ -26,6 +26,7 @@ import {
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
 import { learnGroundTruth } from "../org/knowledge.js";
+import { previewHooks } from "../org/hooks-preview.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
@@ -456,6 +457,14 @@ export const deliveryCapabilities: Capability[] = [
       await removeOrgHook(assertHookId(input.id), wctx(user, ctx));
       return { ok: true };
     }),
+
+  // ── 훅 주입 가시화(J절) — 설치된 세션 훅이 각자 실제로 무엇을 주입하는지 최종 메시지 미리보기. ──
+  //  읽기 전용(scope null = 인증만 — 공유 컨텍스트 가시화, org_preview/learn 과 동일 평면). 게이트웨이가 소스인
+  //  부분은 previewMemberContext 단일 함수, 훅-로컬 템플릿은 설치 파일에서 추출(드리프트 0). redact choke-point 통과.
+  restRead("org_hooks_preview", "훅 주입 미리보기",
+    "설치된 세션 훅(session-preload·work-flag·stop-writeback-gate)이 각자 세션 컨텍스트에 실제로 주입하는 최종 메시지를 충실도(exact/approximate)와 함께 반환한다.",
+    [{ method: "GET", paths: ["/api/ui/org/hooks/preview"], parse: () => ({}) }],
+    async () => previewHooks()),
 
   // ── 런너 fetch — 멤버 런너(run-custom.mjs)가 매 세션 호출. 인증된 멤버면 OK(scope null). ──
   // 멤버 머신이 그 훅을 '실행'하므로 source 를 받는 게 정상(관리 목록 org_hooks 와 달리 redact 안 함).

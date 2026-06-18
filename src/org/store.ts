@@ -264,9 +264,12 @@ function knowledgeToMemory(k: KnowledgeUnit): OrgMemory {
 }
 
 export async function listMemory(): Promise<OrgMemory[]> {
-  // 메모리 = 규칙(R)이 아닌 전 종류. listKnowledge 는 sort, name 정렬(기존 org_memory 계약과 동일).
+  // 팀 메모리 = 규칙(R)이 아닌 **큐레이션** 단위만. listKnowledge 는 sort, name 정렬(기존 org_memory 계약과 동일).
+  //  V4-P5: observed(외부 시스템 살아있는 미러 — 클릭업·노션 71건)는 큐레이션이 아니라 수집물이므로 제외한다.
+  //  (memory_* surface=큐레이션, ctx_*/search_items=observed 포함이 설계 의도. overview observed_count·search_items
+  //   는 별도로 observed 를 노출하므로 여기서 빼도 가시성 손실 없음.) 큐레이션만 보여야 함(이전엔 R 만 빼 112건 노출).
   const rows = await listKnowledge();
-  return rows.filter((k) => k.kind !== "R").map(knowledgeToMemory);
+  return rows.filter((k) => k.kind !== "R" && k.confidence !== "observed").map(knowledgeToMemory);
 }
 
 export async function getMemory(name: string): Promise<OrgMemory | null> {
@@ -278,9 +281,11 @@ export async function getMemory(name: string): Promise<OrgMemory | null> {
 export async function searchMemory(opts: {
   query: string; domainKey?: string | null; limit?: number;
 }): Promise<{ name: string; title: string | null; domain_key: string | null; snippet: string; updated_at: string | null }[]> {
-  // 메모리 = 규칙(R) 제외 전 종류. searchKnowledge 가 서버사이드 kindNot 으로 R 을 빼고 정상 top-N 반환
-  //  (구 후필터 방식은 R 이 상위 50건을 차지하면 메모리가 limit 미만으로 반환되는 회귀가 있었음 — 제거).
-  return searchKnowledge({ query: opts.query, domainKey: opts.domainKey ?? null, kindNot: "R", lifecycle: null, limit: opts.limit });
+  // 팀 메모리 = 규칙(R) + observed(외부 미러) 제외 큐레이션만. searchKnowledge 가 서버사이드 kindNot/confidenceNot 으로
+  //  빼고 정상 top-N 반환(구 후필터 방식은 R 이 상위 50건을 차지하면 limit 미만 반환 회귀가 있어 제거).
+  //  V4-P5 MECE: memory_* surface(memory_search 포함)=큐레이션. observed 수집물은 ctx_grep/search_items 가
+  //  노출하고 listMemory 도 제외하므로, memory_search 도 일관되게 observed 를 제외한다(ctx_grep/search_items 는 불변).
+  return searchKnowledge({ query: opts.query, domainKey: opts.domainKey ?? null, kindNot: "R", confidenceNot: "observed", lifecycle: null, limit: opts.limit });
 }
 
 export interface MemoryInput {
