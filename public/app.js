@@ -2,7 +2,7 @@
 // 보안 규칙: 모든 데이터 텍스트는 textContent/createElement 만 사용(innerHTML 에 데이터 주입 금지 —
 // discord/notion 본문 XSS 방어). 토큰은 localStorage 에만, 절대 로그/URL 에 싣지 않는다.
 //
-// IA(2026-06-17 재설계): 12 질적유형(kind) × 컨테이너로 분류된 지식을 비개발자가 조회·CRUD.
+// IA(v4 2026-06-18): 4 질적유형(kind R/K/H/W; S/G=domainmap federated) × area(space product|business)로 분류된 지식을 비개발자가 조회·CRUD.
 //  파일탐색기 메타포 — 폴더=kind/domain, 파일=지식단위(unit). 5 화면:
 //   1) 지식 지도(#/map)   — ctx_overview. kind 카드 + 시스템 건강. 오리엔테이션.
 //   2) 탐색(#/browse)      — ctx_ls/ctx_grep. 좌 kind 트리 + grep 검색 + 필터 목록.
@@ -1384,7 +1384,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'deploy') return deployPanel(detail, data);
 }
 
-// ── 지식 종류 레지스트리(읽기 전용 열람) — 12 질적유형 + 주입정책 메타. ctx_overview 데이터 재사용. ──
+// ── 지식 종류 레지스트리(읽기 전용 열람) — 4 질적유형(R/K/H/W) + S/G federated + 주입정책 메타. ctx_overview 데이터 재사용. ──
 function kindsRegistry(detail, data) {
   const card = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '지식 종류 레지스트리' })),
