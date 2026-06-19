@@ -1,9 +1,10 @@
 // repo 테이블 헬퍼 — writer 전원(ingest/refresh/sync/propose)과 webhook 이 공유하는
 // 유일한 횡단 SQL. 한 곳에 두지 않으면 4중 복제된다(store-core.mjs 의 repo helpers 이식).
 import type pg from "pg";
-import { dmPool, one, type Db } from "../db.js";
+import { dmPool, one, withTx, type Db } from "../db.js";
 import {
-  httpErr, syncBlockedRepos, type Actor, type RepoCreateResult, type RepoRenameResult, type RepoStateResult,
+  httpErr, syncBlockedRepos, type Actor, type RepoCreateResult, type RepoDeleteResult,
+  type RepoRenameResult, type RepoStateResult,
 } from "./types.js";
 import { logChange } from "./changelog.js";
 
@@ -97,6 +98,56 @@ export async function renameRepo(name: string, newName: string, actor: Actor): P
     before: { name: oldNm }, after: { name: newNm }, note: `rename repo '${oldNm}'→'${newNm}'`,
   });
   return { id: ex.id, old_name: oldNm, new_name: newNm, change_id: cid };
+}
+
+// hardDeleteRepo — repo 영구삭제(deprecate=숨김 보존과 구분). repo 는 domainmap 자기완결 엔티티라
+//  cross-DB cascade 없음(knowledge_unit 은 domain_repo 슬러그만 들고 repo PK 참조 없음 — V5 탈-repo 이후엔
+//  domain_repo 도 안 채운다). 따라서 repo cascade 는 단일 DB(domainmap) 안에서 안전. 기본 가드:
+//   살아있는 자식(domain state<>'merged' / code_unit / data_entity)이 있으면 거부하고 카운트 반환(blocked).
+//   force=true 면 cascade — repo_id 로 묶인 전 자식(mapping/project_touch/project/code_unit/data_entity/
+//   debt_finding/domain_alias/domain/scan_run)을 한 트랜잭션에서 삭제 후 repo 행 삭제. 보호 리포는 403.
+//  change_log 는 자식 행을 지우되 '삭제' 감사 1행을 마지막에 남긴다(이력 보존 — repo_id 는 사라진 repo 참조).
+export async function hardDeleteRepo(name: string, force: boolean, actor: Actor): Promise<RepoDeleteResult> {
+  const nm = (name ?? "").trim();
+  if (syncBlockedRepos().has(nm)) throw httpErr(403, `repo '${nm}' is write-protected (hard-delete blocked; see SYNC_BLOCKED_REPOS)`);
+  const pool = dmPool();
+  const ex = await one(pool, "SELECT id FROM repo WHERE name=$1", [nm]);
+  if (!ex) throw httpErr(404, "no such repo: " + nm);
+  const rid = ex.id;
+  const counts = await one(pool, `SELECT
+      (SELECT COUNT(*)::int FROM domain WHERE repo_id=$1 AND state<>'merged') domains,
+      (SELECT COUNT(*)::int FROM code_unit WHERE repo_id=$1) code_units,
+      (SELECT COUNT(*)::int FROM data_entity WHERE repo_id=$1) data_entities`, [rid]);
+  const domains = Number(counts?.domains) || 0;
+  const code_units = Number(counts?.code_units) || 0;
+  const data_entities = Number(counts?.data_entities) || 0;
+  if (!force && (domains > 0 || code_units > 0 || data_entities > 0)) {
+    return { blocked: true, id: rid, name: nm, refs: { domains, code_units, data_entities } };
+  }
+  return withTx(async (client) => {
+    const del = async (sql: string): Promise<number> => (await client.query(sql, [rid])).rowCount ?? 0;
+    // 자식 먼저(참조 순서) — domainmap 엔 FK 가 없어 순서 무관하나 의미상 leaf→root.
+    const mappings = await del("DELETE FROM mapping WHERE repo_id=$1");
+    const project_touches = await del("DELETE FROM project_touch WHERE repo_id=$1");
+    const projects = await del("DELETE FROM project WHERE repo_id=$1");
+    const code = await del("DELETE FROM code_unit WHERE repo_id=$1");
+    const entities = await del("DELETE FROM data_entity WHERE repo_id=$1");
+    const debts = await del("DELETE FROM debt_finding WHERE repo_id=$1");
+    const aliases = await del("DELETE FROM domain_alias WHERE repo_id=$1");
+    const doms = await del("DELETE FROM domain WHERE repo_id=$1");
+    await del("DELETE FROM scan_run WHERE repo_id=$1");
+    await del("DELETE FROM change_log WHERE repo_id=$1"); // 자식 이력 정리 — 아래서 삭제 1행 남김
+    await client.query("DELETE FROM repo WHERE id=$1", [rid]);
+    await logChange(client, {
+      repoId: rid, entityType: "repo", entityId: rid, op: "delete", actor,
+      before: { name: nm }, after: null,
+      note: `hard-delete repo '${nm}' (cascade domains=${doms}, code=${code}, entities=${entities}, mappings=${mappings}, projects=${projects})`,
+    });
+    return {
+      deleted: true, id: rid, name: nm,
+      removed: { domains: doms, code_units: code, data_entities: entities, mappings, projects, project_touches, debts, aliases },
+    };
+  });
 }
 
 // repo deprecate/undeprecate — 삭제가 아니라 숨김 신호(도메인/매핑 보존). 보호 리포 가드.

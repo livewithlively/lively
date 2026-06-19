@@ -21,5 +21,8 @@ export function registerContextTools(server: McpServer): void {
     "repo_deprecate",
     "domain_create",
     "domain_rename",
+    // hard-delete(영구삭제) 2종 — deprecate(숨김)와 별개의 비가역 삭제. 핸들러가 agent(MCP) 금지 가드.
+    "domain_delete",
+    "repo_delete",
   ]);
 }

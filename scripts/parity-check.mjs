@@ -409,6 +409,28 @@ await report("crud(j) MCP repo_deprecate agent 금지(403)", async () => {
   assert.ok(m.errText.includes("사람(웹)만 가능"), `메시지 불일치: ${m.errText}`);
 });
 
+// ════════ hard-delete(영구삭제) — 검증에러/권한 경로만(parse·zod·agent-deny throw → 코어 도달 0·무삭제) ════════
+//  실제 삭제는 비파괴 컨벤션상 e2e-sandbox 에서. 여기선 (a) parse 검증 (b) agent(MCP) 금지 403 만.
+await expectRestError("del(a) domain_delete id 비정수", "/api/ui/domainmap/domain/abc/delete",
+  { method: "POST", body: "{}" }, 400, "양의 정수");
+await expectRestError("del(b) domain_delete force 비boolean", "/api/ui/domainmap/domain/1/delete",
+  { method: "POST", body: JSON.stringify({ force: "yes" }) }, 400, "force 는 boolean");
+await expectRestError("del(c) repo_delete name 누락", "/api/ui/domainmap/repo/delete",
+  { method: "POST", body: "{}" }, 400, "repo 필수");
+await expectRestError("del(d) repo_delete name 형식", "/api/ui/domainmap/repo/delete",
+  { method: "POST", body: JSON.stringify({ name: "bad repo!" }) }, 400, "repo 형식이 잘못되었습니다");
+// agent(MCP) 금지 403 — hard-delete 는 비가역이라 사람(웹) 전용(핸들러 가드, 코어 도달 0·무삭제).
+await report("del(e) MCP domain_delete agent 금지(403)", async () => {
+  const m = await mcp("domain_delete", { id: 1 });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  assert.ok(m.errText.includes("영구삭제는 사람(웹)만 가능"), `메시지 불일치: ${m.errText}`);
+});
+await report("del(f) MCP repo_delete agent 금지(403)", async () => {
+  const m = await mcp("repo_delete", { name: REPO });
+  assert.strictEqual(m.ok, false, `MCP 가 에러여야 함 — 받음: ${JSON.stringify(m.payload)}`);
+  assert.ok(m.errText.includes("영구삭제는 사람(웹)만 가능"), `메시지 불일치: ${m.errText}`);
+});
+
 // 토큰 없는 쓰기 = 401(쓰기 경로가 인증 뒤에 있는지).
 await report("dm(h) 무토큰 쓰기 401", async () => {
   const res = await fetch(`http://${HOST}:${PORT}/api/ui/domainmap/mapping/1/confirm`,
@@ -494,11 +516,11 @@ await report("ctx_set_lifecycle(b) 잘못된 lifecycle — 양 어댑터 거부(
 const EXPECTED_MCP_SURFACE = [
   "context_overview", "ctx_cat", "ctx_grep", "ctx_ls", "ctx_overview", "ctx_save", "ctx_set_lifecycle",
   "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
-  "domain_create", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "list_unmapped",
+  "domain_create", "domain_delete", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "list_unmapped",
   "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
-  "propose_domain", "repo_create", "repo_deprecate", "repo_list", "repo_rename",
-]; // 34 (item 폐기 2026-06: search_items·get_item 제거로 36→34. 흡수: ctx_ls/ctx_grep system/since/source/type + ctx_cat thread)
+  "propose_domain", "repo_create", "repo_delete", "repo_deprecate", "repo_list", "repo_rename",
+]; // 36 (hard-delete 추가: domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item 제거로 36→34→36)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -506,7 +528,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(34)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(36)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 

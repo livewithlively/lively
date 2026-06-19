@@ -7,6 +7,7 @@ import { z } from "zod";
 import { dmRead } from "./domainmap-compat.js";
 import { resolveRepo } from "../domainmap/core/types.js";
 import { listRepos, overview, listDomainsApi, listAllDomains, domainDetail, listProjectsApi, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
+import { domainActiveCounts } from "../org/knowledge.js";
 import { listMappingRepos, uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
 import { DM_KINDS, HttpError } from "./rest-util.js";
@@ -110,11 +111,24 @@ const domainList: Capability = {
 const allDomains: Capability = {
   name: "all_domains",
   title: "통합 도메인 목록(탈-repo)",
-  description: "전 repo + business(조직평면) 통제어휘를 평면으로 반환 — 웹 도메인 드롭다운 전용(REST only).",
+  description: "전 repo + business(조직평면) 통제어휘를 평면으로 반환 — 웹 도메인 드롭다운/좌측 위계 전용(REST only). " +
+    "각 항목에 active_count(그 도메인 key 에 귀속된 active ku 보유수, observed 제외)를 붙인다 — 좌측 위계 '존재하는 세부구분만 노출'(count>0 필터)·space별 그룹용.",
   scope: "context",
   input: {},
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/domains"], parse: () => ({}) }] },
-  handler: async () => dmRead(`/api/domains`, () => listAllDomains()),
+  handler: async () => {
+    // domainmap 통제어휘(전 space) + items DB 의 도메인별 active ku 카운트(cross-DB)를 key 로 조인.
+    //  domainmap 다운이어도 카운트는 items DB 라 독립 — 단 도메인 목록 자체가 없으면 빈 배열(dmRead 가 처리).
+    const domains = await dmRead(`/api/domains`, () => listAllDomains());
+    let countByKey = new Map<string, number>();
+    try {
+      const counts = await domainActiveCounts();
+      countByKey = new Map(counts.map((c) => [c.domain_key, c.active_count]));
+    } catch { countByKey = new Map(); } // items DB 일시 장애 시 카운트 0 폴백(목록은 보존 — 가용성 우선)
+    return (Array.isArray(domains) ? domains : []).map((d) => ({
+      ...d, active_count: countByKey.get(d.key) ?? 0,
+    }));
+  },
 };
 
 const domainGet: Capability = {

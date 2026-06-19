@@ -42,6 +42,17 @@ function qsource(v: unknown): string | undefined {
   return s;
 }
 
+// REST orderBy 파싱 — updated_at|name|sort 화이트리스트(정렬축). 위반은 400.
+//  검토·탐색 기본은 최신순(updated_at) — 핸들러가 미지정 시 'updated_at' 을 데이터층에 넘긴다.
+const ORDER_BYS = new Set(["updated_at", "name", "sort"]);
+type OrderBy = "updated_at" | "name" | "sort";
+function qorderby(v: unknown): OrderBy | undefined {
+  const s = qstr(v, "orderBy", 16);
+  if (s === undefined) return undefined;
+  if (!ORDER_BYS.has(s)) throw new HttpError(400, `orderBy 는 ${[...ORDER_BYS].join("|")} 만 허용됩니다`);
+  return s as OrderBy;
+}
+
 // path 접두 파생(단순 파싱) — 'K/' → {kind:'K'}, 'D/billing/' → {kind:'D', domain:'billing'}.
 //  명시 kind/domain 인자가 우선(path 는 보조). 슬래시 분해 후 첫 토큰=kind, 둘째=domain.
 function parsePath(path: string | undefined): { kind?: string; domain?: string } {
@@ -79,6 +90,7 @@ const ctxLs = coExposed(
     since: z.string().max(64).optional().describe("ISO8601 — occurred_at 이 시각 이후만"),
     source: z.enum(["observed", "authored"]).optional().describe("observed=커넥터 미러만 / authored=저작물만"),
     type: z.enum(["message", "task", "change", "doc", "note"]).optional().describe("원 활동 type(fields._item_type)"),
+    orderBy: z.enum(["updated_at", "name", "sort"]).optional().describe("정렬 기준 — updated_at(최신순, 기본)|name|sort"),
     limit: z.number().int().min(1).max(200).default(100),
   },
   [{
@@ -94,17 +106,20 @@ const ctxLs = coExposed(
       since: qiso(req.query.since),
       source: qsource(req.query.source),
       type: qtype(req.query.type),
+      orderBy: qorderby(req.query.orderBy),
       limit: qint(req.query.limit, "limit", 100, 1, 200),
     }),
   }],
-  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; confidence?: string; system?: string; since?: string; source?: string; type?: string; limit?: number }) => {
+  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; confidence?: string; system?: string; since?: string; source?: string; type?: string; orderBy?: OrderBy; limit?: number }) => {
     const fromPath = parsePath(input.path);
     const kind = input.kind ?? fromPath.kind ?? null;     // 명시 인자 우선, path 는 보조
     const domainKey = input.domain ?? fromPath.domain ?? null;
     const limit = input.limit ?? 100;
+    // 탐색 기본 = 최신순(updated_at DESC) — 미지정 시 'updated_at'(데이터층 기본은 레거시 'sort'라 표면에서 강제).
     const rows = await listKnowledge({
       kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null,
       system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+      orderBy: input.orderBy ?? "updated_at",
     });
     const entries = rows.slice(0, limit).map((u) => ({
       name: u.name, kind: u.kind, title: u.title, domain_key: u.domain_key,
@@ -128,6 +143,7 @@ const ctxGrep = coExposed(
     since: z.string().max(64).optional().describe("ISO8601 — occurred_at 이 시각 이후만"),
     source: z.enum(["observed", "authored"]).optional().describe("observed=커넥터 미러만 / authored=저작물만"),
     type: z.enum(["message", "task", "change", "doc", "note"]).optional().describe("원 활동 type(fields._item_type)"),
+    orderBy: z.enum(["updated_at", "name", "sort"]).optional().describe("정렬 기준 — updated_at(최신순, 기본)|name|sort (하이브리드 검색 ON 시엔 관련도 우선)"),
     limit: z.number().int().min(1).max(50).default(10),
   },
   [{
@@ -144,15 +160,18 @@ const ctxGrep = coExposed(
         since: qiso(req.query.since),
         source: qsource(req.query.source),
         type: qtype(req.query.type),
+        orderBy: qorderby(req.query.orderBy),
         limit: qint(req.query.limit, "limit", 10, 1, 50),
       };
     },
   }],
-  async (input: { query: string; kind?: string; domain?: string; system?: string; since?: string; source?: string; type?: string; limit?: number }) => {
+  async (input: { query: string; kind?: string; domain?: string; system?: string; since?: string; source?: string; type?: string; orderBy?: OrderBy; limit?: number }) => {
     // 통합 FS 뷰라 모든 kind(R 규칙/페르소나 포함) 검색 — 구 memory_search 는 R 제외(레거시 호환). 의도적 차이.
+    //  검색 기본 정렬 = 최신순(updated_at) — ILIKE 경로에 적용(미지정→데이터층 기본 'updated_at'과 동일).
     const matches = await searchKnowledge({
       query: input.query, kind: input.kind ?? null, domainKey: input.domain ?? null,
       system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+      orderBy: input.orderBy ?? "updated_at",
       limit: input.limit ?? 10,
     });
     return { matches };

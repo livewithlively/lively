@@ -14,6 +14,17 @@ import { logger } from "../log.js";
 //   영구 제외 + overview 별도 카운트 + 검토 큐 제외). 적재는 P-V3-3b 책임(confidenceFor 는 커넥터 경로 추가 시 확장).
 export type KnowledgeConfidence = "ai" | "rule" | "human" | "observed";
 export type KnowledgeLifecycle = "active" | "rejected" | "superseded";
+// ── 정렬축(orderBy) — 윤상민 결정: 정렬 기본 = 최신순(updated_at DESC), 드롭다운으로 기준 선택. ──
+//  화이트리스트 → SQL ORDER BY 절(파라미터 바인딩 불가 영역이라 절대 사용자 문자열 직삽 금지: enum→상수절 매핑).
+//  'updated_at' = 최신순(updated_at DESC NULLS LAST, 동률 name) — 검토/탐색 기본.
+//  'name' = 이름 오름차순. 'sort' = 기존 고정정렬(sort, name) — 레거시 호환(명시 지정 시에만).
+export type KnowledgeOrderBy = "updated_at" | "name" | "sort";
+export const KNOWLEDGE_ORDER_BYS: ReadonlySet<string> = new Set<KnowledgeOrderBy>(["updated_at", "name", "sort"]);
+const ORDER_BY_CLAUSE: Record<KnowledgeOrderBy, string> = {
+  updated_at: "updated_at DESC NULLS LAST, name",
+  name: "name ASC",
+  sort: "sort, name",
+};
 // lifecycle 화이트리스트(런타임) — setLifecycle 검증 1곳. schema CHECK(knowledge_unit_lifecycle_chk)와 동치.
 //  ReadonlySet<string> 로 노출(has 는 임의 문자열 입력 검증용) — 멤버 값 자체는 리터럴로 고정.
 export const KNOWLEDGE_LIFECYCLES: ReadonlySet<string> = new Set<KnowledgeLifecycle>(["active", "rejected", "superseded"]);
@@ -192,6 +203,9 @@ export async function listKnowledge(opts: {
   since?: string | null;     // occurred_at >= ISO8601 — 구 search_items.since
   source?: string | null;    // 'observed'(커넥터 미러만) | 'authored'(저작물만) — 미러/저작 구분
   itemType?: string | null;  // 원 item.type(message/task/change/doc/note) — fields._item_type 무손실 복원
+  // 정렬 — 미지정(undefined/null)이면 'sort'(레거시 고정 ORDER BY sort,name) 유지(기존 거동 byte-compat).
+  //  탐색/검토 표면(ctx_ls 등)은 어댑터에서 'updated_at'(최신순)을 기본으로 넘긴다 — 데이터층은 명시 인자만 신뢰.
+  orderBy?: KnowledgeOrderBy | null;
 } = {}): Promise<KnowledgeUnit[]> {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -208,10 +222,88 @@ export async function listKnowledge(opts: {
   else if (opts.source === "authored") { where.push(`confidence<>'observed'`); }
   if (opts.itemType) { params.push(opts.itemType); where.push(`fields->>'_item_type' = $${params.length}`); }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  // ORDER BY 는 화이트리스트(KNOWLEDGE_ORDER_BYS)에서만 상수절을 고르므로 SQL 인젝션 불가. 미지정→'sort'(레거시).
+  const orderClause = ORDER_BY_CLAUSE[(opts.orderBy && KNOWLEDGE_ORDER_BYS.has(opts.orderBy)) ? opts.orderBy : "sort"];
   const r = await itemsPool.query(
-    `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit ${clause} ORDER BY sort, name`, params,
+    `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit ${clause} ORDER BY ${orderClause}`, params,
   );
   return r.rows.map(mapKnowledge);
+}
+
+// ════════ 도메인 귀속 카운트(cross-DB) — domainmap 도메인이 items DB(knowledge_unit·kud·kup)에서 ════════
+//  몇 개의 ku 에 참조되는지 집계한다. domainmap DB(repo/domain)와 items DB 는 별 DB라 FK·조인 불가 —
+//  domain_key 슬러그 약결합만 있다. hard-delete 가드(연결 있으면 막고 카운트 안내)와 좌측 위계(도메인별
+//  active ku 보유수, count>0 만 노출)가 이 헬퍼를 쓴다. 캐노니컬 귀속축 2개를 모두 센다:
+//   ① knowledge_unit.domain_key (저작물 R/K 의 단일 귀속 — 기존 컬럼)
+//   ② knowledge_unit_domain(kud) state<>'rejected' (A/W 다중귀속 조인 — P-V3-3b 적재가 채움)
+//  active 여부는 ①에선 lifecycle='active', ②에선 조인한 knowledge_unit 의 lifecycle 로 판정한다.
+
+// 한 도메인 key 의 귀속 카운트(hard-delete 가드용). active=lifecycle='active' 만, total=전 lifecycle.
+//  kud/kup 까지 분해해 호출자가 cascade 영향 범위를 안내할 수 있게 한다.
+export interface DomainKnowledgeRefs {
+  domain_key: string;
+  ku_active: number;   // knowledge_unit.domain_key=key AND lifecycle='active'
+  ku_total: number;    // knowledge_unit.domain_key=key (전 lifecycle)
+  kud_rows: number;    // knowledge_unit_domain(다중귀속) state<>'rejected' 행 수
+  kup_rows: number;    // (참고) project 매핑 — 도메인 삭제와 직접관계 없으나 동일 표면 제공 위해 0 고정 미사용
+  total: number;       // ku_total + kud_rows (삭제가 영향 주는 cross-DB 행 합 — 가드 임계)
+}
+
+export async function domainKnowledgeRefs(domainKey: string): Promise<DomainKnowledgeRefs> {
+  // ① 단일 귀속 컬럼(domain_key) — active/total 분리.
+  const colRes = await itemsPool.query(
+    `SELECT COUNT(*) FILTER (WHERE lifecycle='active')::int AS ku_active,
+            COUNT(*)::int AS ku_total
+       FROM knowledge_unit WHERE domain_key=$1`, [domainKey],
+  );
+  // ② 다중귀속 조인(kud) — rejected 제외(살아있는 매핑만 영향). repo 무관(domain_key 만으로 — V5 탈-repo).
+  const kudRes = await itemsPool.query(
+    `SELECT COUNT(*)::int AS kud_rows FROM knowledge_unit_domain WHERE domain_key=$1 AND state<>'rejected'`,
+    [domainKey],
+  );
+  const ku_active = Number(colRes.rows[0]?.ku_active) || 0;
+  const ku_total = Number(colRes.rows[0]?.ku_total) || 0;
+  const kud_rows = Number(kudRes.rows[0]?.kud_rows) || 0;
+  return { domain_key: domainKey, ku_active, ku_total, kud_rows, kup_rows: 0, total: ku_total + kud_rows };
+}
+
+// hard-delete cascade 의 items-DB 쪽 실행 — 도메인 삭제 force 시 호출. domain_key 약결합을 끊는다:
+//  ① knowledge_unit.domain_key=key 인 행은 domain_key=NULL 로 클리어(단위 자체는 보존 — 도메인만 사라짐).
+//  ② knowledge_unit_domain(kud) 의 그 key 매핑 행은 물리 삭제(약결합 조인이라 보존가치 없음).
+//  단위(knowledge_unit) 자체는 절대 지우지 않는다(도메인 폐기 ≠ 지식 폐기). 반환: 영향 행 수.
+export async function clearDomainKnowledgeRefs(
+  domainKey: string,
+): Promise<{ ku_cleared: number; kud_deleted: number }> {
+  const clr = await itemsPool.query(
+    `UPDATE knowledge_unit SET domain_key=NULL, domain_repo=NULL, updated_at=now()
+       WHERE domain_key=$1`, [domainKey],
+  );
+  const del = await itemsPool.query(
+    `DELETE FROM knowledge_unit_domain WHERE domain_key=$1`, [domainKey],
+  );
+  return { ku_cleared: clr.rowCount ?? 0, kud_deleted: del.rowCount ?? 0 };
+}
+
+// 좌측 위계 "존재하는 세부구분만 노출" — 도메인별 active ku 보유수 집계(전 domain_key 한 번에).
+//  ①(domain_key 컬럼, lifecycle='active') ∪ ②(kud state<>'rejected' 조인 active) 를 key 별로 합산해
+//  count>0 인 key 만 의미가 있다(호출자가 0 필터). repo-비의존(domain_key 만) — V5 탈-repo 평면.
+//  큐레이션 표면 일관: observed(커넥터 미러)는 active_count 에서 제외(confidence<>'observed') — overview 와 동일.
+export interface DomainActiveCount { domain_key: string; active_count: number }
+export async function domainActiveCounts(): Promise<DomainActiveCount[]> {
+  // 단일귀속(컬럼) + 다중귀속(kud) 을 UNION ALL 로 합쳐 key 별 distinct ku 를 센다(중복 ku 이중계수 방지).
+  //  distinct(name) — 같은 ku 가 컬럼·kud 양쪽에 같은 key 로 잡혀도 1로 센다.
+  const r = await itemsPool.query(
+    `SELECT domain_key, COUNT(DISTINCT name)::int AS active_count FROM (
+        SELECT name, domain_key FROM knowledge_unit
+          WHERE domain_key IS NOT NULL AND lifecycle='active' AND confidence<>'observed'
+        UNION ALL
+        SELECT k.name, kud.domain_key FROM knowledge_unit_domain kud
+          JOIN knowledge_unit k ON k.name = kud.name
+          WHERE kud.state<>'rejected' AND k.lifecycle='active' AND k.confidence<>'observed'
+              AND kud.domain_key IS NOT NULL
+     ) u GROUP BY domain_key HAVING COUNT(DISTINCT name) > 0 ORDER BY domain_key`,
+  );
+  return r.rows.map((row) => ({ domain_key: row.domain_key as string, active_count: Number(row.active_count) || 0 }));
 }
 
 // ── thread(스레드) — item 폐기·ku 흡수: 구 get_item.thread(ancestors/children)를 ku 의 parent_name
@@ -430,9 +522,14 @@ export async function searchKnowledge(opts: {
   since?: string | null;
   source?: string | null;
   itemType?: string | null;
+  // 정렬 — ILIKE 경로 ORDER BY 축(화이트리스트). 미지정→'updated_at'(검색 기본=최신순, 기존 거동 byte-compat:
+  //  ILIKE 경로는 이미 updated_at DESC 고정이었다). 하이브리드(벡터 ON) 경로는 RRF 랭킹이라 orderBy 무관(관련도 우선).
+  orderBy?: KnowledgeOrderBy | null;
   limit?: number;
 }): Promise<KnowledgeSearchHit[]> {
   const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
+  // ILIKE 경로 ORDER BY — 화이트리스트 상수절(인젝션 불가). 미지정→'updated_at'(기존 ILIKE 고정정렬과 동일).
+  const ilikeOrder = ORDER_BY_CLAUSE[(opts.orderBy && KNOWLEDGE_ORDER_BYS.has(opts.orderBy)) ? opts.orderBy : "updated_at"];
 
   // ── 공통 필터 빌더 — ILIKE/벡터 양 경로가 동일 kind/confidence/lifecycle/domain WHERE 를 공유한다. ──
   const buildFilters = (params: unknown[]): string[] => {
@@ -460,7 +557,7 @@ export async function searchKnowledge(opts: {
     params.push(limit);
     const r = await itemsPool.query(
       `SELECT name, title, domain_key, body_md, updated_at FROM knowledge_unit
-         WHERE ${where.join(" AND ")} ORDER BY updated_at DESC NULLS LAST LIMIT $${params.length}`,
+         WHERE ${where.join(" AND ")} ORDER BY ${ilikeOrder} LIMIT $${params.length}`,
       params,
     );
     return r.rows.map(mapSearchRow);

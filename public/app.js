@@ -73,14 +73,17 @@ const ACTOR_KIND_LABEL = { human: '사람', ai: 'AI', connector: '커넥터', sy
 const CHANNEL_LABEL = { mcp: '에이전트(MCP)', web: '웹', connector: '커넥터싱크', cli: 'CLI', migration: '이관', unknown: '경로 미상' };
 // 리비전 op(작업) 라벨 — 본문 수정(insert/update)과 상태변경(set_lifecycle)/삭제(delete) 구분.
 const REV_OP_LABEL = { insert: '생성', update: '수정', set_lifecycle: '상태 변경', delete: '삭제' };
+// 정렬 옵션(탐색·검토 공용) — 백엔드 orderBy 화이트리스트(updated_at|name|sort)와 1:1.
+const SORT_OPTS = [['updated_at', '최신순'], ['name', '이름순'], ['sort', '수동 정렬순']];
 // lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
 const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
 
 const state = {
   me: null,
   overview: null,        // /api/ui/ctx/overview 캐시(지도 + 검토 배지 + 탐색 kind 트리 공유)
-  browse: { filters: { kind: '', space: '', domain: '', lifecycle: 'active', confidence: '', q: '' }, entries: [], loaded: false },
-  admin: { data: null, sel: 'kinds', memberSel: null, memorySel: null, repoSel: null }, // 관리(전달) 페이지 상태
+  browse: { filters: { kind: '', space: '', domain: '', lifecycle: 'active', confidence: '', q: '', orderBy: 'updated_at' }, entries: [], loaded: false },
+  reviewOrderBy: 'updated_at', // 검토 피드 정렬(기본 최신순)
+  admin: { data: null, sel: 'kinds', memberSel: null, memorySel: null, repoSel: null, navCollapsed: false }, // 관리(전달) 페이지 상태
   domains: {},           // P-V3-4a: repo별 도메인 통제어휘 캐시 { [repo]: {list, repos, loaded, error} }
   allDomains: null,      // V5 탈-repo: 전 repo + business 통합 통제어휘 캐시(저장/필터 드롭다운) {list, loaded, error}
 };
@@ -621,45 +624,55 @@ async function renderBrowse(view, params) {
     if (params.has('q')) f.q = params.get('q') || '';
     if (params.has('lifecycle')) f.lifecycle = params.get('lifecycle') || '';
     if (params.has('confidence')) f.confidence = params.get('confidence') || '';
+    if (params.has('orderBy')) f.orderBy = params.get('orderBy') || 'updated_at';
   }
+  if (!f.orderBy) f.orderBy = 'updated_at';
 
   const o = await getOverview(false);
+  const domSlot = await loadAllDomains();
 
-  // 좌측: kind 트리(폴더) — 전체 + 각 kind. domain 필터는 입력으로(자유 슬러그).
+  // ── 좌측 1차: 주제 위계 — space(제품/비즈니스) > domain(통제어휘). count>0 도메인만 노출(백엔드 active_count). ──
+  //  도메인맵/도메인목록 down 이면 graceful 생략(kind 트리만). 선택 토글은 syncHash+refetch.
+  const SPACE_LABEL = { product: '제품 도메인', business: '비즈니스 기능' };
+  const areaNav = el('nav', { class: 'browse-tree area-tree', 'aria-label': '주제(space·도메인) 위계' });
+  areaNav.append(areaItem('전체 주제', '', '', f.space === '' && f.domain === '', null, '∗'));
+  if (!domSlot.error) {
+    const bySpace = { product: [], business: [] };
+    for (const d of domSlot.list) {
+      if (!(Number(d.active_count) > 0)) continue; // count>0 인 세부구분만 — '존재하는 것만 노출'
+      const sp = (d.space || 'product') === 'business' ? 'business' : 'product';
+      bySpace[sp].push(d);
+    }
+    for (const sp of ['product', 'business']) {
+      const doms = bySpace[sp];
+      if (!doms.length) continue;
+      // space 헤더(1차) — 클릭 시 그 space 전체(도메인 미지정).
+      areaNav.append(areaItem(SPACE_LABEL[sp], sp, '', f.space === sp && f.domain === '', null, sp === 'business' ? '◴' : '◆', 'area-space'));
+      for (const d of doms) {
+        const label = (d.name && d.name !== d.key) ? d.name : d.key;
+        areaNav.append(areaItem(label, sp, d.key, f.domain === d.key, Number(d.active_count), '·', 'area-domain'));
+      }
+    }
+  }
+
+  // ── 좌측 2차: kind 트리(종류). 주제와 병존하는 2차축. ──
   const tree = el('nav', { class: 'browse-tree', 'aria-label': 'kind 트리' });
   tree.append(treeItem('전체', '', f.kind === '', o.total_active));
   for (const k of o.kinds) {
     tree.append(treeItem(kindMeta(k.kind).ko || k.label || k.kind, k.kind, f.kind === k.kind, k.active_count, k.kind));
   }
 
-  // 상단 검색 + 필터 바.
+  // 상단 검색 + 필터 바(주제 필터는 좌측 위계로 이동 — 여기엔 검색·상태·출처·정렬만).
   const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색(grep)', value: f.q, 'aria-label': '검색어' });
-  // 주제(area)는 2단 — 1차 space(제품/비즈니스) → 2차 domain(통제어휘). space 선택 시 도메인 드롭다운을
-  //  그 space 로 좁힌다. 도메인은 자유텍스트 폐기(통제어휘 드롭다운). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadAllDomains();
-  const spaceSel = buildSpaceSelect(f.space);
-  spaceSel.setAttribute('aria-label', '주제 영역(space)');
-  let domainInput;
-  // 도메인 select 를 (재)생성해 현재 space 로 좁힌다 — 필터바 안에서 교체 가능하게 래퍼에 담는다.
-  const domSlotWrap = el('span', { class: 'flt-domain-wrap' });
-  function buildDomainInput() {
-    let inp;
-    if (domSlot.error) {
-      inp = el('input', { type: 'text', placeholder: '도메인 키(목록 불가 — 직접 입력)', value: f.domain, 'aria-label': '도메인', class: 'flt-domain', title: domSlot.error });
-    } else {
-      inp = buildDomainSelect(domSlot, f.domain, f.space, '— 전체 도메인 —');
-      inp.setAttribute('aria-label', '도메인');
-    }
-    inp.addEventListener('change', () => { f.domain = inp.value.trim(); syncHash(); refetch(); });
-    domainInput = inp;
-    domSlotWrap.replaceChildren(inp);
-  }
   const lifecycleSel = selectFilter([
     ['active', '유효'], ['', '전체 상태'], ['rejected', '반려'], ['superseded', '대체됨'],
   ], f.lifecycle);
   const confidenceSel = selectFilter([
     ['', '전체 출처'], ['ai', 'AI'], ['human', '사람'], ['rule', '규칙'], ['observed', '외부 미러(커넥터)'],
   ], f.confidence);
+  // 정렬 — 최신순(updated_at, 기본)/이름순(name)/수동(sort). 백엔드 orderBy 화이트리스트.
+  const orderSel = selectFilter(SORT_OPTS, f.orderBy);
+  orderSel.setAttribute('aria-label', '정렬');
 
   const listBox = el('div', { class: 'list-box browse-list' });
   const foot = el('div', { class: 'list-foot' });
@@ -672,6 +685,7 @@ async function renderBrowse(view, params) {
     if (f.q) p.set('q', f.q);
     if (f.lifecycle && f.lifecycle !== 'active') p.set('lifecycle', f.lifecycle);
     if (f.confidence) p.set('confidence', f.confidence);
+    if (f.orderBy && f.orderBy !== 'updated_at') p.set('orderBy', f.orderBy);
     const qs = p.toString();
     history.replaceState(null, '', '#/browse' + (qs ? '?' + qs : ''));
   }
@@ -684,7 +698,7 @@ async function renderBrowse(view, params) {
       if (f.q.trim()) {
         // grep 경로 — 스니펫 포함. lifecycle/confidence 는 grep 백엔드 미지원이라 클라이언트에서 표시만.
         const r = await api('/api/ui/ctx/grep?' + new URLSearchParams(
-          Object.assign({ query: f.q.trim(), limit: '50' }, f.kind ? { kind: f.kind } : {}, f.domain ? { domain: f.domain } : {})));
+          Object.assign({ query: f.q.trim(), limit: '50', orderBy: f.orderBy || 'updated_at' }, f.kind ? { kind: f.kind } : {}, f.domain ? { domain: f.domain } : {})));
         entries = (r.matches || []).map((m) => ({ ...m, _snippet: m.snippet }));
       } else {
         const p = new URLSearchParams({ limit: '200' });
@@ -692,6 +706,7 @@ async function renderBrowse(view, params) {
         if (f.domain) p.set('domain', f.domain);
         if (f.lifecycle) p.set('lifecycle', f.lifecycle);
         if (f.confidence) p.set('confidence', f.confidence);
+        p.set('orderBy', f.orderBy || 'updated_at');
         const r = await api('/api/ui/ctx/ls?' + p.toString());
         entries = r.entries || [];
       }
@@ -703,21 +718,11 @@ async function renderBrowse(view, params) {
     }
   }
 
-  buildDomainInput(); // 초기 도메인 select 생성(현재 space 반영, change 리스너 포함)
   let qTimer = null;
   qInput.addEventListener('input', () => { f.q = qInput.value; clearTimeout(qTimer); qTimer = setTimeout(() => { syncHash(); refetch(); }, 280); });
-  // space(1차) 변경 → 도메인 드롭다운을 그 space 로 재생성. 현재 도메인이 새 space 에 없으면 도메인 해제(혼선 방지).
-  spaceSel.addEventListener('change', () => {
-    f.space = spaceSel.value;
-    if (f.space && f.domain && !domSlot.error) {
-      const cur = domSlot.list.find((d) => d.key === f.domain);
-      if (cur && (cur.space || 'product') !== f.space) f.domain = '';
-    }
-    buildDomainInput();
-    syncHash(); refetch();
-  });
   lifecycleSel.addEventListener('change', () => { f.lifecycle = lifecycleSel.value; syncHash(); refetch(); });
   confidenceSel.addEventListener('change', () => { f.confidence = confidenceSel.value; syncHash(); refetch(); });
+  orderSel.addEventListener('change', () => { f.orderBy = orderSel.value; syncHash(); refetch(); });
   tree.addEventListener('click', (ev) => {
     const item = ev.target.closest('[data-kind-val]');
     if (!item) return;
@@ -726,21 +731,45 @@ async function renderBrowse(view, params) {
     for (const a of tree.querySelectorAll('[data-kind-val]')) a.classList.toggle('on', a.dataset.kindVal === f.kind);
     syncHash(); refetch();
   });
+  // 좌측 주제 위계 클릭 — space(1차)/domain(2차) 동시 설정. 'on' 클래스 재계산.
+  areaNav.addEventListener('click', (ev) => {
+    const item = ev.target.closest('[data-area-space]');
+    if (!item) return;
+    ev.preventDefault();
+    f.space = item.dataset.areaSpace || '';
+    f.domain = item.dataset.areaDomain || '';
+    for (const a of areaNav.querySelectorAll('[data-area-space]')) {
+      a.classList.toggle('on', (a.dataset.areaSpace || '') === f.space && (a.dataset.areaDomain || '') === f.domain);
+    }
+    syncHash(); refetch();
+  });
 
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '탐색'),
-    el('p', { class: 'sub', text: '종류(폴더)·주제(제품 도메인/비즈니스 기능)·상태로 좁히거나, 검색어로 제목·본문을 grep 합니다. 주제는 영역(space)을 먼저 고르면 도메인 목록이 좁혀집니다. 항목을 누르면 전문과 메타를 봅니다.' }),
+    el('p', { class: 'sub', text: '왼쪽에서 주제(제품 도메인/비즈니스 기능)나 종류로 좁히고, 위에서 상태·출처·정렬을 고르거나 검색어로 제목·본문을 grep 합니다. 항목을 누르면 전문과 메타를 봅니다.' }),
   );
-  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, spaceSel, domSlotWrap, lifecycleSel, confidenceSel,
+  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, lifecycleSel, confidenceSel, orderSel,
     el('button', { class: 'btn btn-primary btn-sm', text: '+ 새 지식', onclick: () => openSaveOverlay(f.kind, f.domain, refetch) }));
 
   const layout = el('div', { class: 'browse-layout' },
-    el('aside', { class: 'browse-side' }, el('div', { class: 'eyebrow', text: '종류' }), tree),
+    el('aside', { class: 'browse-side' },
+      el('div', { class: 'eyebrow', text: '주제' }), areaNav,
+      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '종류' }), tree),
     el('section', { class: 'browse-main' }, filterBar, listBox, foot),
   );
   view.replaceChildren(head, layout);
   applyReveal([layout]);
   refetch();
+}
+
+// 주제 위계 행 — space(1차)/domain(2차) 둘 다 data-* 로 들고 클릭 위임에서 동시 설정.
+//  variant: '' | 'area-space'(1차 헤더) | 'area-domain'(2차, 들여쓰기). glyph/count 는 보조.
+function areaItem(label, space, domain, on, count, glyph, variant) {
+  return el('a', { class: 'tree-item' + (variant ? ' ' + variant : '') + (on ? ' on' : ''), href: '#',
+    'data-area-space': space, 'data-area-domain': domain, role: 'button', tabindex: '0' },
+    el('span', { class: 'tree-glyph' + (variant === 'area-domain' ? ' all' : ''), 'aria-hidden': 'true', text: glyph || '·' }),
+    el('span', { class: 'tree-label', text: label }),
+    el('span', { class: 'tree-count', text: count != null ? String(count) : '' }));
 }
 
 function treeItem(label, kindVal, on, count, glyph) {
@@ -958,14 +987,19 @@ function drawUnit(view, u) {
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
     bodyWrap,
   );
-  const side = el('aside', { class: 'unit-side' },
-    el('div', { class: 'eyebrow', text: '메타데이터' }),
+  // 우측 메타 패널을 접이식으로 — 접으면 본문(main)이 전체 너비를 쓴다(layout 에 .meta-collapsed 토글).
+  //  details/summary 자체로 메타테이블/이력을 접고, summary 클릭 시 layout 클래스를 갱신해 그리드도 재배치.
+  const metaDetails = el('details', { class: 'unit-side-details', open: '' },
+    el('summary', { class: 'unit-side-summary' }, '메타데이터 · 수정 이력'),
     metaTable,
     buildHistorySection(u),
   );
+  const side = el('aside', { class: 'unit-side' }, metaDetails);
+  const layout = el('div', { class: 'unit-layout' }, main, side);
+  metaDetails.addEventListener('toggle', () => { layout.classList.toggle('meta-collapsed', !metaDetails.open); });
 
   const head = el('div', { class: 'page-head unit-head' }, backRow);
-  view.replaceChildren(head, el('div', { class: 'unit-layout' }, main, side));
+  view.replaceChildren(head, layout);
   applyReveal([main, side]);
 }
 
@@ -1025,11 +1059,18 @@ async function renderReview(view) {
     el('h1', {}, '검토'),
     el('p', { class: 'sub', text: 'AI 에이전트가 생성한 지식(출처=AI)을 사후 검토합니다. 저장은 무게이트(신뢰 우선), 반려는 여기서 — 보고 내려둘지 결정하세요.' }),
   );
+  // 정렬 — 검토 피드도 최신순 기본(백엔드 orderBy). 새로 생성된 에이전트 산출물부터 보이게.
+  const orderSel = selectFilter(SORT_OPTS, state.reviewOrderBy || 'updated_at');
+  orderSel.setAttribute('aria-label', '정렬');
+  orderSel.addEventListener('change', () => { state.reviewOrderBy = orderSel.value; load(); });
+  const filterBar = el('div', { class: 'filter-bar review-filter' }, el('span', { class: 'field-label', text: '정렬' }), orderSel);
   const listBox = el('div', { class: 'list-box' });
-  view.replaceChildren(head, listBox);
+  view.replaceChildren(head, filterBar, listBox);
 
+  async function load() {
+  listBox.replaceChildren(skeletonRows(4));
   try {
-    const r = await api('/api/ui/ctx/ls?' + new URLSearchParams({ confidence: 'ai', lifecycle: 'active', limit: '200' }));
+    const r = await api('/api/ui/ctx/ls?' + new URLSearchParams({ confidence: 'ai', lifecycle: 'active', limit: '200', orderBy: state.reviewOrderBy || 'updated_at' }));
     const entries = r.entries || [];
     if (!entries.length) {
       listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 에이전트 생산물이 없습니다. 모두 확인되었습니다.' }));
@@ -1063,6 +1104,8 @@ async function renderReview(view) {
   } catch (e) {
     listBox.replaceChildren(errorNote(e, '검토 목록을 불러오지 못했습니다'));
   }
+  }
+  load();
 }
 
 // ════════════════════════════════════════════
@@ -1162,7 +1205,92 @@ function openSaveOverlay(presetKind, presetDomain, onDone) {
   saveOverlay({ kind: presetKind || 'K', domain: presetDomain || '' }, false, onDone);
 }
 function openEditOverlay(u) {
-  saveOverlay(u, true, () => { location.hash = '#/u/' + encodeURIComponent(u.name); route(); });
+  // 편집은 모달이 아니라 별도 라우트(#/u/<name>/edit) — split view 에디터 + 실시간 프리뷰.
+  location.hash = '#/u/' + encodeURIComponent(u.name) + '/edit';
+}
+
+// ════════════════════════════════════════════
+// 지식 편집 페이지 #/u/<name>/edit — split view(좌 textarea 에디터 | 우 실시간 마크다운 프리뷰).
+//  모달(saveOverlay) 대신 전체 페이지. 입력 즉시(디바운스) renderMarkdown 으로 우측을 다시 그린다.
+//  저장=ctx_save(웹→confidence=human). XSS: 프리뷰는 renderMarkdown(createElement+textContent)만 — innerHTML 0.
+// ════════════════════════════════════════════
+async function renderEditPage(view, name) {
+  view.replaceChildren(skeleton('편집할 지식 단위를 불러오는 중'));
+  let u;
+  try {
+    u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
+  } catch (e) {
+    if (e.status === 404) {
+      view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식 단위' })),
+        el('div', { class: 'note', text: "'" + name + "' 을(를) 찾을 수 없습니다." }),
+        el('a', { class: 'btn btn-ghost btn-sm', href: '#/browse', text: '← 탐색으로' }));
+      return;
+    }
+    throw e;
+  }
+  drawEditPage(view, u);
+}
+
+function drawEditPage(view, u) {
+  const backHref = '#/u/' + encodeURIComponent(u.name);
+  const crumbs = el('div', { class: 'crumbs' },
+    el('a', { class: 'crumb-link', href: '#/browse', text: '탐색' }), el('span', { class: 'crumb-sep', text: ' / ' }),
+    el('a', { class: 'crumb-link', href: backHref, text: u.title || u.name }), el('span', { class: 'crumb-sep', text: ' / ' }),
+    el('span', { text: '편집' }));
+
+  // 메타 입력(제목·종류·도메인) — 좁은 상단 바. 본문만 split.
+  const titleIn = el('input', { type: 'text', value: u.title || '', placeholder: '제목(선택)' });
+  const kindSel = el('select');
+  for (const k of CORE_KIND_KEYS) kindSel.append(el('option', { value: k, text: k + ' · ' + KIND_META[k].ko }));
+  if (u.kind && !isCoreKind(u.kind)) kindSel.append(el('option', { value: u.kind, text: u.kind + ' · ' + (kindMeta(u.kind).ko || u.kind) + ' (현재 값 · 통합 예정)' }));
+  kindSel.value = u.kind || 'K';
+
+  // 본문 split view — 좌 에디터, 우 프리뷰. 입력 즉시(디바운스 120ms) 프리뷰 갱신.
+  const bodyIn = el('textarea', { class: 'edit-editor', placeholder: '본문(markdown) — 입력하면 오른쪽에 실시간으로 서식이 보입니다.', spellcheck: 'false' });
+  bodyIn.value = u.body_md || '';
+  const preview = el('div', { class: 'edit-preview md-rendered' });
+  const renderPreview = () => {
+    const md = renderMarkdown(bodyIn.value);
+    preview.replaceChildren();
+    if (bodyIn.value.trim()) preview.append(md);
+    else preview.append(el('p', { class: 'admin-hint', text: '(본문을 입력하면 여기에 미리보기가 표시됩니다)' }));
+  };
+  let pvTimer = null;
+  bodyIn.addEventListener('input', () => { clearTimeout(pvTimer); pvTimer = setTimeout(renderPreview, 120); });
+
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' });
+  const cancelBtn = el('a', { class: 'btn btn-ghost btn-sm', href: backHref, text: '취소' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    const note = bodyIn.value.trim();
+    if (!note) { toast('본문은 비울 수 없습니다', true); return; }
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/ctx/save', { method: 'POST', body: JSON.stringify({
+        note, name: u.name, title: titleIn.value.trim() || undefined, kind: kindSel.value,
+        domain: (u.domain_key || undefined),
+      }) });
+      toast('저장했습니다');
+      state.overview = null; getOverview(true).catch(() => {});
+      location.hash = backHref; // 저장 후 상세로 복귀(route 가 최신 fetch)
+    } catch (e) { saveBtn.disabled = false; toast('저장 실패 — ' + e.message, true); }
+  });
+
+  const metaBar = el('div', { class: 'edit-meta-bar' },
+    field('제목', titleIn), field('종류(kind)', kindSel),
+    el('div', { class: 'edit-meta-static' }, el('span', { class: 'field-label', text: '도메인 · 이름(불변)' }),
+      el('div', { class: 'mono edit-static-val', text: (u.domain_key || '—') + ' · ' + u.name })));
+
+  const split = el('div', { class: 'edit-split' },
+    el('div', { class: 'edit-pane' }, el('div', { class: 'edit-pane-label', text: '에디터 (Markdown)' }), bodyIn),
+    el('div', { class: 'edit-pane' }, el('div', { class: 'edit-pane-label', text: '미리보기 (실시간)' }), preview));
+
+  const head = el('div', { class: 'page-head unit-head' }, crumbs,
+    el('p', { class: 'admin-hint', text: '웹에서 편집하면 출처(provenance)가 사람(human)으로 기록됩니다. 왼쪽에 입력하면 오른쪽에 즉시 서식이 보입니다.' }));
+  view.replaceChildren(head, metaBar, split, el('div', { class: 'edit-actions' }, saveBtn, cancelBtn, status));
+  renderPreview();
+  applyReveal([metaBar, split]);
+  bodyIn.focus();
 }
 
 async function saveOverlay(u, isEdit, onDone) {
@@ -1265,7 +1393,13 @@ async function route() {
       await renderBrowse(view, params);
     } else if (page === 'u') {
       setActiveTab('browse'); // 유닛 상세는 탐색의 하위 — 탐색 탭 활성 유지
-      await renderUnit(view, decodeURIComponent(segs.slice(1).join('/')));
+      // #/u/<name>/edit → 편집 페이지(split view), 그 외 → 상세. name 에 '/' 가 있을 수 있어 마지막 'edit' 만 분리.
+      const rest = segs.slice(1);
+      if (rest.length > 1 && rest[rest.length - 1] === 'edit') {
+        await renderEditPage(view, decodeURIComponent(rest.slice(0, -1).join('/')));
+      } else {
+        await renderUnit(view, decodeURIComponent(rest.join('/')));
+      }
     } else if (page === 'learn') {
       setActiveTab('learn');
       await renderLearn(view);
@@ -1320,9 +1454,9 @@ const ADMIN_SECTIONS = [
   { key: 'members', label: '구성원', meaning: 'member' },
   { key: 'tokens', label: '토큰', meaning: null },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
-  { key: 'runtime', label: '런타임 · 훅', meaning: 'runtime' },
-  { key: 'hooks-preview', label: '훅 주입 미리보기', meaning: null },
-  { key: 'custom-hooks', label: '커스텀 훅', meaning: 'custom-hook' },
+  { key: 'runtime', label: '런타임 훅 (기본 리플렉스 ON/OFF)', meaning: 'runtime' },
+  { key: 'hooks-preview', label: '훅 주입 미리보기 (세션 주입물 확인)', meaning: null },
+  { key: 'custom-hooks', label: '커스텀 훅 (코드 정의 · CRUD)', meaning: 'custom-hook' },
   { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source' },
@@ -1425,13 +1559,24 @@ async function renderAdmin(view, sub) {
   const detail = el('div', { class: 'split-detail' });
   renderAdminDetail(detail, sel, data);
 
+  // 좌측 nav 접기 토글 — 접으면 우측 detail 이 전체 너비(좁은 화면에서 우 섹션이 아래로 wrap 되지 않게).
+  const collapsed = !!state.admin.navCollapsed;
+  const split = el('div', { class: 'split admin-split' + (collapsed ? ' nav-collapsed' : '') }, list, detail);
+  const navToggle = el('button', { class: 'btn btn-ghost btn-sm admin-nav-toggle',
+    text: collapsed ? '☰ 메뉴 펼치기' : '☰ 메뉴 접기',
+    onclick: () => {
+      state.admin.navCollapsed = !state.admin.navCollapsed;
+      split.classList.toggle('nav-collapsed', state.admin.navCollapsed);
+      navToggle.textContent = state.admin.navCollapsed ? '☰ 메뉴 펼치기' : '☰ 메뉴 접기';
+    } });
+
   view.replaceChildren(el('div', {},
     el('div', { class: 'card-head admin-head' },
-      el('h2', { text: '관리' }),
+      el('div', { class: 'admin-head-l' }, navToggle, el('h2', { text: '관리' })),
       canEdit
         ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })
         : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
-    el('div', { class: 'split admin-split' }, list, detail)));
+    split));
   applyReveal([list, detail]);
 }
 
@@ -1518,7 +1663,9 @@ async function domainsReposPanel(detail, data) {
     repoBar.append(
       el('button', { class: 'btn btn-ghost btn-sm', text: '+ 레포', onclick: () => repoCrudOverlay(null, detail, data) }),
       el('button', { class: 'btn-text', text: '이름변경', onclick: () => repoCrudOverlay({ name: repo, mode: 'rename' }, detail, data) }),
-      el('button', { class: 'btn-text', text: '폐기', onclick: () => repoCrudOverlay({ name: repo, mode: 'deprecate' }, detail, data) }));
+      el('button', { class: 'btn-text', text: '폐기', onclick: () => repoCrudOverlay({ name: repo, mode: 'deprecate' }, detail, data) }),
+      // 영구삭제(hard-delete) — 폐기(숨김 보존)와 구분. 연결 자식이 있으면 서버가 막고 카운트 반환(2단 확인).
+      el('button', { class: 'btn-text btn-text-danger', text: '영구삭제', onclick: () => deleteRepoFlow(repo, detail, data) }));
   }
   card.append(repoBar);
 
@@ -1546,7 +1693,15 @@ async function domainsReposPanel(detail, data) {
     const tbl = el('table', { class: 'fields-table' });
     tbl.append(el('tr', {}, el('td', { class: 'kr-h', text: '슬러그(key)' }), el('td', { class: 'kr-h', text: '이름' }), el('td', { class: 'kr-h', text: '상태' }), canEdit ? el('td', { class: 'kr-h', text: '' }) : null));
     for (const d of items) {
-      const actions = canEdit ? el('td', {}, el('button', { class: 'btn-text', text: '이름변경', onclick: () => domainCrudOverlay(d, repo, detail, data, sec.space) })) : null;
+      const noun = sec.space === 'business' ? '비즈니스 기능' : '도메인';
+      const actions = canEdit ? el('td', { class: 'row-actions' },
+        el('button', { class: 'btn-text', text: '이름변경', onclick: () => domainCrudOverlay(d, repo, detail, data, sec.space) }),
+        // 폐기(deprecate) — 숨김 보존(기존 매핑 유효). 영구삭제(hard-delete)와 구분.
+        d.state === 'deprecated'
+          ? null
+          : el('button', { class: 'btn-text', text: '폐기', onclick: () => deprecateDomainFlow(d, repo, detail, data, noun) }),
+        // 영구삭제 — 연결(매핑·귀속 ku)이 있으면 서버가 막고 카운트 반환(2단 확인 다이얼로그).
+        el('button', { class: 'btn-text btn-text-danger', text: '영구삭제', onclick: () => deleteDomainFlow(d, repo, detail, data, noun) })) : null;
       tbl.append(el('tr', {},
         el('td', {}, el('span', { class: 'mono', text: d.key })),
         el('td', { text: d.name || '—' }),
@@ -1595,6 +1750,77 @@ async function renderProjectsSection(card, repo) {
     }
     card.append(ptbl);
   }
+}
+
+// ── 도메인/레포 비활(deprecate)·영구삭제(hard-delete) 플로우 ──
+//  윤상민 결정: 어휘 삭제 = 비활(가역·숨김) + 영구삭제(비가역·hard-delete) 둘 다 제공. 권한: hard-delete 는
+//  사람(웹) 전용(서버가 agent 403). UI 가드: 연결이 있으면 서버가 blocked+카운트를 주므로 2단 확인으로 force.
+
+// 도메인 id 해소 — 목록(loadDomains)엔 key 만 있어, id 가 필요한 deprecate/delete 전에 :repo/domains 에서 찾는다.
+async function resolveDomainId(repo, key) {
+  const rows = await api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/domains');
+  const dom = (Array.isArray(rows) ? rows : []).find((x) => x.key === key);
+  return dom ? dom.id : null;
+}
+
+async function deprecateDomainFlow(d, repo, detail, data, noun) {
+  if (!confirm(`${noun} '${d.key}'를 폐기(숨김)하시겠습니까?\n\n기존 매핑·지식은 보존되고 목록에서 숨김 신호만 남습니다(가역 — 영구삭제 아님).`)) return;
+  try {
+    const id = await resolveDomainId(repo, d.key);
+    if (!id) { toast('도메인 id 를 찾지 못했습니다', true); return; }
+    await api('/api/ui/domainmap/domain/' + id + '/deprecate', { method: 'POST', body: JSON.stringify({}) });
+    toast(noun + ' 폐기됨(숨김)');
+    domainsReposPanel(detail, data);
+  } catch (e) { toast('실패 — ' + e.message, true); }
+}
+
+async function deleteDomainFlow(d, repo, detail, data, noun) {
+  let id;
+  try {
+    id = await resolveDomainId(repo, d.key);
+    if (!id) { toast('도메인 id 를 찾지 못했습니다', true); return; }
+  } catch (e) { toast('실패 — ' + e.message, true); return; }
+  // 1차 확인 — 비가역 경고. force 없이 호출해 연결 카운트를 먼저 확인(서버가 blocked 면 카운트 반환).
+  if (!confirm(`${noun} '${d.key}'를 영구삭제하시겠습니까?\n\n폐기(숨김)와 달리 행 자체가 사라집니다(비가역). 귀속된 지식 단위는 보존되고 도메인 표시만 비워집니다.`)) return;
+  try {
+    const r = await api('/api/ui/domainmap/domain/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) });
+    if (r && r.blocked) {
+      // 연결이 있어 막힘 — 카운트를 보여주고 2차(force) 확인.
+      const refs = r.refs || {};
+      const msg = `${noun} '${d.key}'에 연결이 있습니다:\n` +
+        `· 도메인맵 매핑 ${refs.mappings || 0}건\n` +
+        `· 귀속 지식(active) ${refs.ku_active || 0}건 / 전체 ${refs.ku_total || 0}건\n` +
+        `· 다중귀속(kud) ${refs.kud_rows || 0}건\n\n` +
+        `그래도 영구삭제하면 매핑·별칭은 삭제되고, 지식 단위는 보존되되 이 도메인 표시만 비워집니다(domain_key 클리어). 계속할까요?`;
+      if (!confirm(msg)) return;
+      await api('/api/ui/domainmap/domain/' + id + '/delete', { method: 'POST', body: JSON.stringify({ force: true }) });
+      toast(noun + ' 영구삭제됨(연결 정리)');
+    } else {
+      toast(noun + ' 영구삭제됨');
+    }
+    state.allDomains = null; // 통합 도메인 캐시 무효화(좌측 위계/드롭다운 갱신)
+    domainsReposPanel(detail, data);
+  } catch (e) { toast('실패 — ' + e.message, true); }
+}
+
+async function deleteRepoFlow(repo, detail, data) {
+  if (!confirm(`레포 '${repo}'를 영구삭제하시겠습니까?\n\n폐기(숨김)와 달리 레포와 그 하위 전체(도메인·코드유닛·매핑·프로젝트·부채)가 사라집니다(비가역).`)) return;
+  try {
+    const r = await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name: repo }) });
+    if (r && r.blocked) {
+      const refs = r.refs || {};
+      const msg = `레포 '${repo}'에 살아있는 자식이 있습니다:\n` +
+        `· 도메인 ${refs.domains || 0}개\n· 코드유닛 ${refs.code_units || 0}개\n· 데이터엔티티 ${refs.data_entities || 0}개\n\n` +
+        `그래도 영구삭제하면 이 자식들이 모두 함께 삭제됩니다(cascade). 계속할까요?`;
+      if (!confirm(msg)) return;
+      await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name: repo, force: true }) });
+      toast('레포 영구삭제됨(하위 cascade)');
+    } else {
+      toast('레포 영구삭제됨');
+    }
+    state.domains.__repos__ = null; state.admin.repoSel = null; state.allDomains = null;
+    domainsReposPanel(detail, data);
+  } catch (e) { toast('실패 — ' + e.message, true); }
 }
 
 // repo create/rename/deprecate 오버레이.
@@ -2023,9 +2249,9 @@ function runtimeEditor(detail, data) {
     saveBtn.disabled = false;
   });
   detail.replaceChildren(el('div', { class: 'card' },
-    el('h2', { text: '런타임 · 훅' }),
-    el('p', { class: 'admin-hint', text: '구성원 머신의 리플렉스(훅) 동작과 작업 폴더를 중앙에서 제어. 변경은 다음 세션에 자동 반영(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로.' }),
-    field('활성 훅', hookWrap),
+    el('h2', { text: '런타임 훅 (기본 리플렉스)' }),
+    el('p', { class: 'admin-hint', text: '게이트웨이가 제공하는 기본 세션 훅(리플렉스)의 ON/OFF 와 작업 폴더를 중앙에서 제어합니다. 구성원 머신은 매 세션 게이트웨이에서 훅을 받아 실행하므로(runner fetch), 변경은 다음 세션에 자동 반영됩니다(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로. ※ 코드까지 직접 정의하는 사내 훅은 ‘커스텀 훅’에서, 각 훅이 실제로 주입하는 메시지는 ‘훅 주입 미리보기’에서.' }),
+    field('기본 리플렉스 훅 ON/OFF', hookWrap),
     field('writeback 너지 문구 (선택)', noticeTa),
     field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa),
     el('div', { class: 'admin-subhead', text: 'AI 도구(http_proxy) 안전 화이트리스트' }),
@@ -2042,7 +2268,7 @@ function runtimeEditor(detail, data) {
 //  드리프트 정직성: 서버가 fidelity(exact/approximate)와 source 를 함께 주므로 그대로 표기(근사면 사유 명시).
 function hooksPreviewPanel(detail, data) {
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '훅 주입 미리보기' })),
+    el('div', { class: 'card-head' }, el('h2', { text: '훅 주입 미리보기 (읽기 전용)' })),
     el('p', { class: 'admin-hint', text: '구성원 머신에 설치된 세션 훅이 각자 세션 컨텍스트에 실제로 무엇을 주입하는지, 그 최종 메시지를 보여줍니다. 훅을 고르면 그 훅이 넣는 메시지 전문을 미리볼 수 있습니다. exact=게이트웨이/설치파일이 단일 출처(드리프트 없음), approximate=멤버 머신이 세션마다 동적으로 덧붙이는 부분이 있어 일부만 재현됩니다.' }));
   detail.replaceChildren(card);
 
@@ -2279,7 +2505,7 @@ function customHookEditor(detail, data) {
   else right.append(
     el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }),
     meaningCard(data.meaning['custom-hook']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '커스텀 훅' }), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '커스텀 훅 (코드 정의)' }), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function hookForm(root, h, data, detail, isNew) {

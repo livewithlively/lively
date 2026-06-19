@@ -93,6 +93,27 @@ export interface RenameDomainResult {
 // repo CRUD — domainmap 자기완결 엔티티(cross-DB cascade 없음). state 축 active|deprecated.
 export interface RepoCreateResult { id: number; name: string; change_id: number }
 export interface RepoRenameResult { id: number; old_name: string; new_name: string; change_id: number }
+// hard-delete(영구삭제) — deprecate(숨김 보존)와 구분. 가드 모드(연결 있으면 거부+카운트)는 별 shape:
+//  blocked=true 면 삭제 안 함(refs 카운트만 반환), force 로 재호출하면 cascade 실행(deleted=true).
+//  domain hard-delete 의 domainmap-DB 내부 cascade(mapping/alias)와 cross-DB(kud/ku) 영향은 capability 가 합산.
+export interface DomainDeleteBlocked {
+  blocked: true; id: number; key: string; repo: string;
+  refs: { mappings: number };   // 이 도메인을 target 으로 하는 살아있는(status<>'rejected') mapping 행 수
+}
+export interface DomainDeleteDone {
+  deleted: true; id: number; key: string; repo: string;
+  removed: { mappings: number; aliases: number };  // cascade 로 지운 domainmap-DB 행 수
+}
+export type DomainDeleteResult = DomainDeleteBlocked | DomainDeleteDone;
+export interface RepoDeleteBlocked {
+  blocked: true; id: number; name: string;
+  refs: { domains: number; code_units: number; data_entities: number };
+}
+export interface RepoDeleteDone {
+  deleted: true; id: number; name: string;
+  removed: { domains: number; code_units: number; data_entities: number; mappings: number; projects: number; project_touches: number; debts: number; aliases: number };
+}
+export type RepoDeleteResult = RepoDeleteBlocked | RepoDeleteDone;
 export type RepoStateResult =
   | { id: number; name: string; change_id: number; state: string }
   | { id: number; name: string; action: "unchanged"; state: string };

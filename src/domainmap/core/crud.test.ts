@@ -9,8 +9,8 @@
 import assert from "node:assert/strict";
 import { dmPool, endPool } from "../db.js";
 import { init } from "./schema.js";
-import { createRepo, renameRepo, setRepoState, getRepo } from "./repos.js";
-import { createDomain, renameDomain } from "./domains.js";
+import { createRepo, renameRepo, setRepoState, getRepo, hardDeleteRepo } from "./repos.js";
+import { createDomain, renameDomain, domainDeleteRefs, hardDeleteDomain } from "./domains.js";
 import { resolveDomainKey } from "./domain-alias.js";
 import type { Actor } from "./types.js";
 
@@ -139,6 +139,63 @@ async function main(): Promise<void> {
       await expectErr(() => createDomain("lively", { key: "x", name: "x" }, HUMAN), 403, "write-protected");
     });
 
+    // ── domain hard-delete(영구삭제) — domainmap-DB cascade/guard. 원 REPO 비파괴(전용 도메인만 생성·삭제). ──
+    await t("domain_delete — 매핑 없는 도메인 cascade 삭제 + 별칭 정리", async () => {
+      const d = await createDomain(REPO, { key: "deldom", name: "삭제대상" }, HUMAN);
+      // 별칭 적재(deldom-alias → deldom) — hard-delete 가 물리key 별칭을 함께 지우는지 확인.
+      await renameDomain(d.id, { newKey: "deldom-alias" }, HUMAN);
+      const refs = await domainDeleteRefs(d.id);
+      assert.equal(refs.key, "deldom");
+      assert.equal(refs.liveMappings, 0, "매핑 없음");
+      const res = await hardDeleteDomain(d.id, HUMAN);
+      assert.ok("deleted" in res && res.deleted === true);
+      assert.equal(res.removed.aliases, 1, "물리key 가리키던 별칭 1행 삭제");
+      const gone = await pool.query("SELECT id FROM domain WHERE id=$1", [d.id]);
+      assert.equal(gone.rows.length, 0, "도메인 행 영구삭제");
+      const al = await pool.query("SELECT id FROM domain_alias WHERE repo_id=$1 AND old_key='deldom-alias'", [repoId]);
+      assert.equal(al.rows.length, 0, "별칭 행도 삭제");
+    });
+    await t("domain_delete — merged 도메인 400 / 없는 id 404", async () => {
+      await expectErr(() => domainDeleteRefs(999999999), 404, "no such domain");
+      // merged 시뮬: 새 도메인 만들어 state='merged' 강제 후 거부 확인.
+      const md = await createDomain(REPO, { key: "mergeddel", name: "x" }, HUMAN);
+      await pool.query("UPDATE domain SET state='merged' WHERE id=$1", [md.id]);
+      await expectErr(() => domainDeleteRefs(md.id), 400, "merged");
+      await expectErr(() => hardDeleteDomain(md.id, HUMAN), 400, "merged");
+      await pool.query("DELETE FROM domain WHERE id=$1", [md.id]); // 정리
+    });
+
+    // ── repo hard-delete(영구삭제) — 자식 가드 + force cascade. **전용 2차 repo**(원 REPO 비파괴) ──
+    await t("repo_delete — 자식 가드/force cascade(전용 합성 repo, 원 REPO 무영향)", async () => {
+      const REPO_DEL = "crudtest-del-" + Math.random().toString(36).slice(2, 8);
+      const r2 = await createRepo(REPO_DEL, HUMAN);
+      try {
+        const dr = await createDomain(REPO_DEL, { key: "guarddom", name: "가드" }, HUMAN);
+        // 자식 있으면 blocked(무삭제).
+        const blocked = await hardDeleteRepo(REPO_DEL, false, HUMAN);
+        assert.ok("blocked" in blocked && blocked.blocked === true, "자식 도메인 있으니 blocked");
+        assert.ok(blocked.refs.domains >= 1, "도메인 카운트 안내");
+        const still = await pool.query("SELECT id FROM domain WHERE id=$1", [dr.id]);
+        assert.equal(still.rows.length, 1, "blocked 면 무삭제");
+        // force cascade — repo+자식 전삭제.
+        const res = await hardDeleteRepo(REPO_DEL, true, HUMAN);
+        assert.ok("deleted" in res && res.deleted === true);
+        assert.ok(res.removed.domains >= 1, "도메인 cascade 삭제");
+        const goneRepo = await pool.query("SELECT id FROM repo WHERE id=$1", [r2.id]);
+        assert.equal(goneRepo.rows.length, 0, "repo 행 영구삭제");
+        const goneDom = await pool.query("SELECT id FROM domain WHERE repo_id=$1", [r2.id]);
+        assert.equal(goneDom.rows.length, 0, "repo 하위 도메인 전삭제");
+      } finally {
+        // 혹시 cascade 전 단계에서 실패하면 합성 2차 repo 잔여 정리(비파괴 보증).
+        await pool.query("DELETE FROM domain WHERE repo_id=$1", [r2.id]);
+        await pool.query("DELETE FROM change_log WHERE repo_id=$1", [r2.id]);
+        await pool.query("DELETE FROM repo WHERE id=$1", [r2.id]);
+      }
+    });
+    await t("repo_delete — 보호 리포(lively) 403", async () => {
+      await expectErr(() => hardDeleteRepo("lively", false, HUMAN), 403, "write-protected");
+    });
+
     // ── repo rename/deprecate ──
     await t("repo_rename — 이름변경(물리, soft-alias 불요)", async () => {
       const r = await renameRepo(REPO, REPO2, HUMAN);
@@ -162,7 +219,7 @@ async function main(): Promise<void> {
       await expectErr(() => setRepoState("lively", "deprecated", HUMAN), 403, "write-protected");
     });
 
-    console.log(`\nP-V3-4a CRUD 테스트 전부 통과 (${pass}건)`);
+    console.log(`\nP-V3-4a CRUD + hard-delete 테스트 전부 통과 (${pass}건)`);
   } finally {
     await cleanup();
     await endPool();

@@ -785,3 +785,71 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .src-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; }
 .dot6.dim { background: var(--muted-2); }
 .learn-cadence { color: var(--muted-2); }
+
+/* ════════ 신규(8개 화면 개선) ════════ */
+
+/* (1) 지식 편집 페이지 #/u/<name>/edit — split view(좌 에디터 | 우 실시간 프리뷰) */
+.edit-meta-bar { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin: 6px 0 16px; }
+.edit-meta-bar .field { margin: 0; flex: 1; min-width: 180px; }
+.edit-meta-static { flex: 1; min-width: 180px; }
+.edit-static-val { display: block; font-size: 13px; color: var(--ink-sub); padding: 7px 0; word-break: break-all; }
+.edit-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+.edit-pane { display: flex; flex-direction: column; min-width: 0; }
+.edit-pane-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted-head); margin-bottom: 6px; }
+.edit-editor {
+  width: 100%; min-height: 60vh; resize: vertical; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13.5px; line-height: 1.6; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); color: var(--ink); tab-size: 2;
+}
+.edit-editor:focus { outline: none; border-color: var(--blue); }
+.edit-preview {
+  min-height: 60vh; max-height: 78vh; overflow: auto; padding: 14px 18px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint);
+}
+.edit-preview > .md > :first-child { margin-top: 0; }
+.edit-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 18px 0 8px; }
+@media (max-width: 820px) { .edit-split { grid-template-columns: 1fr; } .edit-editor, .edit-preview { min-height: 42vh; } }
+
+/* (3) 유닛 상세 — 메타 패널 접이식. 접으면 본문(detail-card)이 전체 너비 */
+.unit-side-details { width: 100%; }
+.unit-side-summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
+.unit-side-summary::-webkit-details-marker { display: none; }
+.unit-side-summary::before { content: '▾ '; color: var(--muted); }
+.unit-side-details:not([open]) .unit-side-summary::before { content: '▸ '; }
+/* 접힘 상태(layout 클래스) — 우측 패널을 좁게 접고 본문에 너비 양보 */
+.unit-layout.meta-collapsed .unit-side { flex: 0 0 auto; background: none; border: none; padding: 0; position: static; }
+.unit-layout.meta-collapsed .detail-card { flex: 1 1 100%; }
+.unit-layout.meta-collapsed { flex-wrap: wrap; }
+.unit-layout.meta-collapsed .unit-side { order: 2; width: 100%; }
+
+/* (4) 좌측 주제(space>domain) 위계 */
+.area-tree { margin-bottom: 6px; }
+.area-tree .area-space { font-weight: 700; margin-top: 4px; }
+.area-tree .area-space .tree-label { font-weight: 700; color: var(--ink); }
+.area-tree .area-domain { padding-left: 22px; }
+.area-tree .area-domain .tree-label { font-weight: 600; }
+.area-tree .area-domain .tree-glyph { width: 16px; height: 16px; font-size: 10px; }
+
+/* (6) 관리 nav 접기 + 반응형(우 섹션 wrap 방지) */
+.admin-head-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.admin-head-l h2 { margin: 0; }
+.admin-nav-toggle { flex: none; }
+.admin-split.nav-collapsed .split-list { display: none; }
+.admin-split.nav-collapsed .split-detail { flex: 1 1 100%; }
+/* admin-two(좌 목록·우 편집) 가 좁은 화면에서 wrap 되지 않게 — 기존 760 breakpoint 보강 */
+.admin-two { flex-wrap: nowrap; }
+@media (max-width: 760px) { .admin-two { flex-wrap: wrap; } }
+@media (max-width: 1020px) {
+  .admin-split { flex-direction: column; }
+  .admin-split .split-detail { position: static; width: 100%; }
+}
+
+/* (7) 영구삭제(hard-delete) 위험 버튼 + 행 액션 묶음 */
+.btn-text-danger { color: var(--coral-text); }
+.btn-text-danger:hover { color: var(--coral); }
+.row-actions { white-space: nowrap; }
+.row-actions .btn-text { padding: 4px 6px; }
+
+/* (검토) 정렬 필터 바 */
+.review-filter { margin: 0 0 12px; align-items: center; }
+.review-filter .field-label { margin: 0; }

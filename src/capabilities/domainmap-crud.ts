@@ -11,8 +11,14 @@
 //   3) scope='context' + bearer — domainmap-curation 과 동일 인가 평면.
 import { z } from "zod";
 import { dmWrite, webActor } from "./domainmap-compat.js";
-import { createDomain as coreCreateDomain, renameDomain as coreRenameDomain } from "../domainmap/core/domains.js";
-import { createRepo as coreCreateRepo, renameRepo as coreRenameRepo, setRepoState } from "../domainmap/core/repos.js";
+import {
+  createDomain as coreCreateDomain, renameDomain as coreRenameDomain,
+  domainDeleteRefs, hardDeleteDomain,
+} from "../domainmap/core/domains.js";
+import {
+  createRepo as coreCreateRepo, renameRepo as coreRenameRepo, setRepoState, hardDeleteRepo,
+} from "../domainmap/core/repos.js";
+import { domainKnowledgeRefs, clearDomainKnowledgeRefs } from "../org/knowledge.js";
 import { logger } from "../log.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx } from "./types.js";
@@ -250,6 +256,112 @@ const domainRename: Capability = {
   },
 };
 
+// hard-delete(영구삭제)는 비가역 — agent(MCP) 금지, 사람(웹)만. deprecate(가역·숨김)와 권한이 다르다.
+function denyAgentHardDelete(ctx: CapabilityCtx | undefined, what: string): void {
+  if (ctx?.source === "mcp") {
+    throw new HttpError(403, `${what} 영구삭제는 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(비가역). 비활성(deprecate)은 가능합니다`);
+  }
+}
+
+// ════════ hard-delete(영구삭제) 2종 — deprecate(숨김 보존)와 별개의 비가역 삭제 ════════
+
+const domainDelete: Capability = {
+  name: "domain_delete",
+  title: "도메인 영구삭제(hard-delete)",
+  description:
+    "도메인(통제어휘 1개)을 영구삭제한다 — deprecate(숨김 보존)와 달리 행 자체를 지운다(비가역). " +
+    "비즈니스 기능(space='business')도 동일 경로로 삭제(id 로 지정). 안전기본: 연결된 지식(ku domain_key·다중귀속 kud) 또는 " +
+    "도메인맵 매핑이 있으면 **막고 카운트를 반환**한다(blocked:true). force:true 면 cascade — 도메인맵 매핑/별칭/도메인 행 삭제 + " +
+    "items DB 의 ku domain_key 클리어(단위 자체는 보존)·kud 매핑 행 삭제. ⚠ 사람(웹)만 가능 — 에이전트(MCP)는 403. " +
+    "merged 도메인은 400, 보호 리포는 403. 반환(삭제): {deleted,id,key,repo,removed:{mappings,aliases,ku_cleared,kud_deleted}}.",
+  scope: "context",
+  input: { id: zid, force: z.boolean().optional().describe("연결이 있어도 cascade 삭제(기본 false — 연결 있으면 막고 카운트)") },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/domainmap/domain/:id/delete"],
+      parse: (req) => {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "domain id 는 양의 정수여야 합니다");
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const out: Record<string, unknown> = { id };
+        if (b.force !== undefined) {
+          if (typeof b.force !== "boolean") throw new HttpError(400, "force 는 boolean 이어야 합니다");
+          out.force = b.force;
+        }
+        return out;
+      },
+    }],
+  },
+  handler: async (input: { id: number; force?: boolean }, user, ctx) => {
+    denyAgentHardDelete(ctx, "도메인");
+    return audited("domain_delete", user, ctx, { id: input.id, ...(input.force ? { force: true } : {}) }, async () => {
+      // ① 사전조회(삭제 없음): 도메인 key/repo + 도메인맵 살아있는 매핑 카운트. merged/보호리포/없음은 throw.
+      const refs = await dmWrite(() => domainDeleteRefs(input.id));
+      // ② cross-DB(items): 이 key 에 귀속된 ku(단일 domain_key + 다중귀속 kud) 카운트.
+      const ku = await domainKnowledgeRefs(refs.key);
+      const totalLinks = refs.liveMappings + ku.total;
+      // ③ 가드: force 아니고 연결 있으면 막고 카운트 안내(삭제 0).
+      if (!input.force && totalLinks > 0) {
+        return {
+          blocked: true, id: refs.id, key: refs.key, repo: refs.repo,
+          refs: {
+            mappings: refs.liveMappings, ku_active: ku.ku_active, ku_total: ku.ku_total, kud_rows: ku.kud_rows,
+            total: totalLinks,
+          },
+          hint: "연결을 끊거나 force:true 로 cascade 삭제하세요(ku 단위는 보존되고 domain_key 만 클리어됩니다)",
+        };
+      }
+      // ④ cascade: 도메인맵 쪽(매핑/별칭/도메인) 삭제 + items 쪽(ku domain_key 클리어·kud 삭제).
+      const dm = await dmWrite(() => hardDeleteDomain(input.id, webActor(user.userId, actorType(ctx))));
+      const cleared = await clearDomainKnowledgeRefs(refs.key);
+      // dm 은 deleted shape — removed 에 cross-DB 카운트를 합쳐 단일 결과로.
+      return {
+        ...dm,
+        removed: { ...(dm as { removed: Record<string, number> }).removed, ku_cleared: cleared.ku_cleared, kud_deleted: cleared.kud_deleted },
+      };
+    });
+  },
+};
+
+const repoDelete: Capability = {
+  name: "repo_delete",
+  title: "레포 영구삭제(hard-delete)",
+  description:
+    "레포(repo)와 그 하위 전체(도메인/코드유닛/데이터엔티티/매핑/프로젝트/부채/별칭)를 영구삭제한다(비가역). " +
+    "deprecate(숨김 보존)와 다르다. 안전기본: 살아있는 자식(도메인/코드유닛/데이터엔티티)이 있으면 **막고 카운트 반환**(blocked:true). " +
+    "force:true 면 cascade 삭제. repo 는 도메인맵 자기완결 엔티티라 cross-DB cascade 없음(knowledge_unit 은 repo 직접참조 없음). " +
+    "⚠ 사람(웹)만 가능 — 에이전트(MCP)는 403. 보호 리포는 403. 반환(삭제): {deleted,id,name,removed:{...}}.",
+  scope: "context",
+  input: {
+    name: z.string().trim().min(1).max(100).regex(REPO_RE),
+    force: z.boolean().optional().describe("자식이 있어도 cascade 삭제(기본 false — 있으면 막고 카운트)"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/domainmap/repo/delete"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const out: Record<string, unknown> = { name: parseRepo(b.name) };
+        if (b.force !== undefined) {
+          if (typeof b.force !== "boolean") throw new HttpError(400, "force 는 boolean 이어야 합니다");
+          out.force = b.force;
+        }
+        return out;
+      },
+    }],
+  },
+  handler: async (input: { name: string; force?: boolean }, user, ctx) => {
+    denyAgentHardDelete(ctx, "레포");
+    return audited("repo_delete", user, ctx, { name: input.name, ...(input.force ? { force: true } : {}) }, () =>
+      dmWrite(() => hardDeleteRepo(input.name, !!input.force, webActor(user.userId, actorType(ctx)))));
+  },
+};
+
 export const domainmapCrudCapabilities: Capability[] = [
   repoCreate, repoRename, repoDeprecate, domainCreate, domainRename,
+  domainDelete, repoDelete,
 ];

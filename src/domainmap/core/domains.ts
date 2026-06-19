@@ -4,8 +4,8 @@
 import { dmPool, one, q, withTx } from "../db.js";
 import {
   httpErr, syncBlockedRepos, type Actor, type CreateDomainResult, type CurationResult,
-  type DomainEditResult, type DomainSetResult, type DomainStateResult, type MergeResult,
-  type ProposeDomainResult, type RenameDomainResult,
+  type DomainDeleteResult, type DomainEditResult, type DomainSetResult, type DomainStateResult,
+  type MergeResult, type ProposeDomainResult, type RenameDomainResult,
 } from "./types.js";
 import { logChange } from "./changelog.js";
 import { getRepo } from "./repos.js";
@@ -228,6 +228,57 @@ export async function setDomainState(id: number, state: string, actor: Actor): P
     note: state === "deprecated" ? "deprecate domain" : "undeprecate domain",
   });
   return { id, change_id: cid, state };
+}
+
+// domainDeleteRefs — hard-delete 가드 사전조회(삭제 없음). 도메인 key/repo + domainmap-DB 쪽 살아있는
+//  (status<>'rejected') mapping 카운트를 반환한다. capability 가 이걸 cross-DB(kud/ku) 카운트와 합산해
+//  '연결 있으면 막고 카운트 안내'(blocked) 판정을 내린다(가드 결정은 한 곳=capability). merged/보호리포/없음은 throw.
+export interface DomainDeleteRefs { id: number; key: string; repo: string; repo_id: number; liveMappings: number }
+export async function domainDeleteRefs(id: number): Promise<DomainDeleteRefs> {
+  const pool = dmPool();
+  const ex = await one(pool, "SELECT * FROM domain WHERE id=$1", [id]);
+  if (!ex) throw httpErr(404, "no such domain: " + id);
+  if (ex.state === "merged") throw httpErr(400, "cannot hard-delete a merged domain: " + id);
+  const repoRow = await one(pool, "SELECT name FROM repo WHERE id=$1", [ex.repo_id]);
+  const repoName = repoRow?.name ?? "";
+  if (syncBlockedRepos().has(repoName)) {
+    throw httpErr(403, `repo '${repoName}' is write-protected (domain hard-delete blocked; see SYNC_BLOCKED_REPOS)`);
+  }
+  const live = await one(pool,
+    "SELECT COUNT(*)::int AS n FROM mapping WHERE domain_id=$1 AND status<>'rejected'", [id]);
+  return { id, key: ex.key, repo: repoName, repo_id: ex.repo_id, liveMappings: Number(live?.n) || 0 };
+}
+
+// hardDeleteDomain — 도메인 영구삭제 실행(deprecate=숨김 보존과 구분). domainmap-DB cascade 만 여기 책임
+//  (cross-DB kud/ku 클리어는 capability 가 org/knowledge.clearDomainKnowledgeRefs 로). 가드 결정은 호출 전
+//  domainDeleteRefs 로 capability 가 내린다 — 이 함수는 항상 cascade 한다(force 전제). merged/없음은 재확인 throw.
+//  cascade: 모든 mapping(rejected 포함 — 도메인이 사라지므로 잔류 무의미) + 물리key 별칭 + 도메인 행을 한 TX 에서.
+//  ⚠ alias 는 new_key=물리key 로 적재되므로(soft-alias) 물리 key 로 가리키는 별칭 전부를 지운다.
+export async function hardDeleteDomain(id: number, actor: Actor): Promise<DomainDeleteResult> {
+  const pool = dmPool();
+  const ex = await one(pool, "SELECT * FROM domain WHERE id=$1", [id]);
+  if (!ex) throw httpErr(404, "no such domain: " + id);
+  if (ex.state === "merged") throw httpErr(400, "cannot hard-delete a merged domain: " + id);
+  const repoRow = await one(pool, "SELECT name FROM repo WHERE id=$1", [ex.repo_id]);
+  const repoName = repoRow?.name ?? "";
+  if (syncBlockedRepos().has(repoName)) {
+    throw httpErr(403, `repo '${repoName}' is write-protected (domain hard-delete blocked; see SYNC_BLOCKED_REPOS)`);
+  }
+  return withTx(async (client) => {
+    const delMap = await client.query("DELETE FROM mapping WHERE domain_id=$1", [id]);
+    const delAlias = await client.query("DELETE FROM domain_alias WHERE repo_id=$1 AND new_key=$2", [ex.repo_id, ex.key]);
+    await client.query("DELETE FROM domain WHERE id=$1", [id]);
+    await logChange(client, {
+      repoId: ex.repo_id, entityType: "domain", entityId: id, op: "delete", actor,
+      before: { key: ex.key, name: ex.name, state: ex.state },
+      after: null,
+      note: `hard-delete domain '${ex.key}' (cascade mappings=${delMap.rowCount ?? 0}, aliases=${delAlias.rowCount ?? 0})`,
+    });
+    return {
+      deleted: true, id, key: ex.key, repo: repoName,
+      removed: { mappings: delMap.rowCount ?? 0, aliases: delAlias.rowCount ?? 0 },
+    };
+  });
 }
 
 // CLI convenience: edit a domain by (repo, key). Wraps editDomainById.
