@@ -1,24 +1,16 @@
-// domainmap 엔진 전용 DB 연결 — DOMAINMAP_DATABASE_URL 단독 (비즈니스 SQL 없음).
-// 게이트웨이 메인 DATABASE_URL(읽기전용 lively 리플리카)로 절대 폴백하지 않는다 —
-// 폴백하면 '조용히 잘못된 DB'에 쓰는 최악의 사고가 된다. 미설정이면 명시적 throw.
-// Pool 은 lazy: import 시점이 아니라 첫 사용 시 생성 — DOMAINMAP_DATABASE_URL 없는
-// 프로세스(예: items 전용 러너)가 이 모듈을 간접 import 해도 부팅이 죽지 않는다.
+// domainmap 엔진 DB 연결 — **통합 DB(P0+P1)**: domainmap 테이블이 items DB(ITEMS_DATABASE_URL)로
+// 물리 병합돼, domainmap 엔진도 items 의 단일 풀(itemsPool)을 그대로 쓴다. 게이트웨이 메인
+// DATABASE_URL(읽기전용 lively 리플리카)로는 절대 폴백하지 않는다(쓰기 통합 DB ≠ 읽기전용 리플리카).
 import pg from "pg";
-
-let pool: pg.Pool | null = null;
+import { itemsPool } from "../items/store.js";
 
 export type Db = pg.Pool | pg.PoolClient;
 
+// 단일 풀 반환 — withTx 한 트랜잭션 안에서 knowledge_unit + domain/activity 등 cross-table 원자 쓰기가
+// 가능해진다(통합의 핵심 이유). 옵션B(풀 2개·같은 DB)는 JOIN 만 되고 단일 txn 원자성을 못 얻으므로 폐기.
+// itemsPool 은 store.ts 모듈 평가 시 생성되는 const — dmPool() 은 런타임 호출이라 순환 import 안전(TDZ 무관).
 export function dmPool(): pg.Pool {
-  if (!pool) {
-    const url = process.env.DOMAINMAP_DATABASE_URL;
-    if (!url) {
-      // 문구 주의: wrap() 의 400 토큰(미지정/필수/형식)·404 토큰(없음) 회피 — 설정 사고는 5xx 가 맞다.
-      throw new Error("DOMAINMAP_DATABASE_URL 미설정 — domainmap 엔진 비활성");
-    }
-    pool = new pg.Pool({ connectionString: url });
-  }
-  return pool;
+  return itemsPool;
 }
 
 // store-core.mjs 의 q/one 과 동일한 헬퍼 — 단 db 를 첫 인자로 명시(기본 pool 숨김 의존 제거).
@@ -45,9 +37,9 @@ export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Prom
   }
 }
 
-// CLI 전용 종료 — 게이트웨이 프로세스는 절대 호출 금지(공용 풀 닫힘 사고 방지;
-// CLI 는 프로세스가 분리돼 있어 안전).
+// CLI 전용 종료 — 게이트웨이 프로세스는 절대 호출 금지(공용 풀 닫힘 사고 방지).
+// 통합 후 dmPool=itemsPool 이므로 CLI 종료는 공용 itemsPool 을 닫는다(CLI 는 분리 프로세스라 안전;
+// 게이트웨이가 부르면 공용 풀이 닫혀 사고. 호출처는 domainmap/cli.ts 종료 경로뿐).
 export async function endPool(): Promise<void> {
-  if (pool) await pool.end();
-  pool = null;
+  await itemsPool.end();
 }

@@ -82,24 +82,20 @@ const server = app.listen(PORT, () => {
   registerTerminal(app, server, verifier);
   // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
   //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
+  // 통합 DB(P0+P1): items/org/domainmap 이 한 DB(ITEMS_DATABASE_URL)에 병합됨. 세 init 을 **직렬** 체인으로
+  //  보장한다 — activity_ku_ref/activity_task 가 knowledge_unit(name)을 FK 로 참조하므로 initOrgSchema(=
+  //  knowledge_unit 생성)가 initDomainmapSchema(=activity 생성)보다 반드시 먼저 끝나야 한다(분리 .then 은
+  //  레이스 → FK 'relation does not exist' 로 activity 스키마 통째 누락). listen 성공 후 실행 불변식 유지.
   if (process.env.ITEMS_DATABASE_URL) {
     initItemSchema()
       .then(() => logger.info("item schema ready"))
-      .catch((err) => logger.error({ err }, "item schema init failed"));
-    initOrgSchema()
+      .then(() => initOrgSchema())
       .then(() => logger.info("org schema ready"))
-      // 임베딩 초기화(OFF 기본 — enabled 일 때만, 비치명). pgvector 부재 시 initEmbeddings 가 graceful 폴백
-      //  (warn 후 throw 없이 반환)하므로 catch 는 방어선일 뿐. OFF 면 진입조차 안 한다 → 동작 변화 0.
-      .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
-      .catch((err) => logger.error({ err }, "org schema init failed"));
-  }
-  // domainmap 스키마(AREA 축: domain.space + business 시드6) — items/org 와 별 DB(DOMAINMAP_DATABASE_URL).
-  //  부팅 배선 누락 시 신규 셀프호스트가 4축 중 AREA 만 통째로 못 받음(P6 적대검증 적발) → 부팅에 명시 배선.
-  //  멱등(CREATE TABLE IF NOT EXISTS + ON CONFLICT)·비치명(catch). 라이브 단일테넌트는 이미 적재라 무변화.
-  if (process.env.DOMAINMAP_DATABASE_URL) {
-    initDomainmapSchema()
+      .then(() => initDomainmapSchema())
       .then(() => logger.info("domainmap schema ready"))
-      .catch((err) => logger.error({ err }, "domainmap schema init failed"));
+      // 임베딩 초기화(OFF 기본 — enabled 일 때만, 비치명). pgvector 부재 시 graceful 폴백(warn 후 반환).
+      .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
+      .catch((err) => logger.error({ err }, "schema init failed"));
   }
 });
 // 포트 바인딩 실패(구 게이트웨이 미종료 등) → 마이그레이션 미실행 보장 + 즉시 종료(half-state 방지).
