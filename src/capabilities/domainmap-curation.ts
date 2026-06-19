@@ -14,7 +14,7 @@ import { z } from "zod";
 import { dmRead, dmWrite, webActor } from "./domainmap-compat.js";
 import { domainDetail, listDebts } from "../domainmap/core/queries.js";
 import { history, restore } from "../domainmap/core/changelog.js";
-import { confirmDomain, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
+import { confirmDomain, domainSetShould, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
 import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/core/mappings.js";
 import { confirmProject } from "../domainmap/core/projects.js";
 import { setDebtStatus } from "../domainmap/core/debts.js";
@@ -487,10 +487,33 @@ const domainDeprecate: Capability = {
         webActor(user.userId, ctx?.source === "mcp" ? "agent" : "human")))),
 };
 
+const domainSetShouldCap: Capability = {
+  name: "domain_set_should",
+  title: "도메인 의도(should) 설정",
+  description:
+    "도메인의 의도(should=당위 스펙)를 설정한다. is(코드 구조)와 별 축 — 이번 작업에 주입된 기획·대화 맥락에서 도메인의 '무엇을 해야 하는가'가 " +
+    "바뀌었음을 인지하면 갱신한다(stop훅 should-재조정 경로). agent(MCP)는 agent-소유 도메인만 갱신 가능(human-큐레이션 도메인은 403 — 사람은 웹에서). " +
+    "should 와 is 의 괴리는 domain_debt(should_no_is)로 드러난다. 빈 문자열이면 의도 비움. 반환 {id, change_id, after}.",
+  scope: "context",
+  input: {
+    repo: z.string().regex(REPO_RE).max(100),
+    key: z.string().trim().min(1).max(100).regex(KEY_RE).describe("도메인 슬러그(domain_list 의 key)"),
+    should: z.string().max(8000).describe("도메인 의도(당위 스펙) — 빈 문자열이면 비움"),
+  },
+  expose: { mcp: true, rest: false },
+  handler: async (input: { repo: string; key: string; should: string }, user, ctx) => {
+    assertNoHardSecrets(input.should, "should"); // 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
+    return audited("domain_set_should", user, ctx, { repo: input.repo, key: input.key }, () =>
+      dmWrite(() => domainSetShould(input.repo, input.key, input.should,
+        webActor(user.userId, ctx?.source === "mcp" ? "agent" : "human"))));
+  },
+};
+
 export const domainmapCurationCapabilities: Capability[] = [
   dmDomainDetail, dmDebtList, dmHistory,
   dmDomainConfirm, dmDomainEdit, dmDomainMerge,
   dmMappingConfirm, dmMappingReject, dmMappingMove,
   dmDebtStatus, dmProjectConfirm, dmRestore,
   proposeDomain, domainDeprecate, // expose.mcp=true — 도메인 authoring(⑤)
+  domainSetShouldCap, // P4: expose.mcp=true — should(의도) 재조정(stop훅 경로)
 ];

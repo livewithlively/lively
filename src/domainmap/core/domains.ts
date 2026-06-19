@@ -51,6 +51,16 @@ export async function editDomainById(id: number, patch: Record<string, unknown>,
   return { id, change_id: cid, after };
 }
 
+// P4: 도메인 의도(should) 갱신 — stop훅 should-재조정 경로(에이전트가 맥락에서 의도 변화를 인지하면 호출).
+//  (repo,key)→id 해소 후 editDomainById 재사용 → agent 가 human-소유 도메인을 못 바꾸는 가드(403)·should
+//  스냅샷·감사(change_log)·origin 처리를 그대로 상속(별 경로 중복 금지). is(코드)는 안 건드린다.
+export async function domainSetShould(repo: string, key: string, should: string, actor: Actor): Promise<DomainEditResult> {
+  const r = await getRepo(repo); // 404 on unknown repo
+  const ex = await one(dmPool(), "SELECT id FROM domain WHERE repo_id=$1 AND key=$2", [r.id, key]);
+  if (!ex) throw httpErr(404, `no such domain: '${key}' in repo '${repo}'`);
+  return editDomainById(ex.id, { should }, actor);
+}
+
 // Day-2 domain authoring: create a single domain with REQUIRED evidence.
 // P6a 신뢰우선(trust-default): proposed 림보 없이 곧바로 status='confirmed' 로 착지하고
 // origin=actor.type 로 '누가 만들었나'를 보존(evidence 는 게이트가 아니라 provenance 로 유지).

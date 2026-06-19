@@ -21,6 +21,8 @@ export function registerContextTools(server: McpServer): void {
     "repo_deprecate",
     "domain_create",
     "domain_rename",
+    "domain_set_should", // P4: 도메인 의도(should) 재조정 — stop훅 should-reconcile 경로
+
     // hard-delete(영구삭제) 2종 — deprecate(숨김)와 별개의 비가역 삭제. 핸들러가 agent(MCP) 금지 가드.
     "domain_delete",
     "repo_delete",

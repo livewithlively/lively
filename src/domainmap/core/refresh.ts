@@ -52,7 +52,7 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
   const p: any = typeof payload === "string" ? JSON.parse(payload) : payload;
   const rawChanges: any[] = Array.isArray(p.changes) ? p.changes : [];
   const act: Actor = actor ?? { type: "agent", id: "agent" };
-  return withTx(async (client) => {
+  const result = await withTx(async (client) => {
     // Resolve repo inside the txn so a bad name rolls back cleanly with a 404.
     const repo = await one(client, "SELECT * FROM repo WHERE name=$1", [repoName]);
     if (!repo) throw httpErr(404, "no such repo: " + repoName);
@@ -219,4 +219,12 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
     await client.query("UPDATE scan_run SET finished_at=$1, summary=$2 WHERE id=$3", [now(), JSON.stringify(tally), run_id]);
     return { repo: repoName, run_id, base: p.base ?? repo.last_refreshed_sha ?? null, head: p.head ?? null, tally };
   });
+  // P4 옵션ii — is-reconcile 백스톱: 하네스 밖 변경이 refresh 로 들어온 뒤 should↔is debt 를 재평가한다
+  //  (stop훅이 1차 경로, 이건 온디맨드 보정 — 깃헙액션 트리거 아님). best-effort(읽기 + debt upsert 만,
+  //  refresh 의 '매핑 무변경' 불변식과 무관). domain-debt 가 should_no_is/active_commits(통합 DB join)까지 본다.
+  try {
+    const { evaluateDomainStructureDebt } = await import("./domain-debt.js");
+    await evaluateDomainStructureDebt(repoName, act);
+  } catch { /* 백스톱 실패는 refresh 결과를 막지 않는다 */ }
+  return result;
 }

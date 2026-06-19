@@ -517,11 +517,11 @@ const EXPECTED_MCP_SURFACE = [
   "activity_list", "activity_log",
   "context_overview", "ctx_cat", "ctx_grep", "ctx_ls", "ctx_overview", "ctx_save", "ctx_set_lifecycle",
   "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
-  "domain_create", "domain_delete", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "list_unmapped",
+  "domain_create", "domain_delete", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "domain_set_should", "list_unmapped",
   "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
   "propose_domain", "repo_create", "repo_delete", "repo_deprecate", "repo_list", "repo_rename",
-]; // 38 (P3: activity_log·activity_list 추가 36→38. hard-delete: domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item 제거 36→34→36)
+]; // 39 (P4: domain_set_should 추가 38→39. P3: activity_log·activity_list 36→38. hard-delete: domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item 36→34→36)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -529,7 +529,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(38)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(39)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 
