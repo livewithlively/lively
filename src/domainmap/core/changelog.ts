@@ -21,23 +21,25 @@ export interface LogChangeArgs {
   before?: unknown;
   after?: unknown;
   note?: string | null;
+  // 통합 후(P2): 이 변경을 유발한 작업(activity) 귀속. optional — 기존 호출부 무변경(점진 배선).
+  activityId?: number | null;
 }
 
 // 유일한 change_log writer. before/after 는 명시적 JSON.stringify(객체→jsonb),
 // at 은 클라이언트측 now() — store-core 와 동일(서버시간 아님).
 export async function logChange(db: Db, a: LogChangeArgs): Promise<number> {
   const r = await one(db,
-    `INSERT INTO change_log(repo_id,entity_type,entity_id,op,actor_type,actor_id,run_id,at,before,after,note)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    `INSERT INTO change_log(repo_id,entity_type,entity_id,op,actor_type,actor_id,run_id,at,before,after,note,activity_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [a.repoId, a.entityType, a.entityId, a.op, a.actor.type, a.actor.id, a.runId ?? null, now(),
-     a.before ? JSON.stringify(a.before) : null, a.after ? JSON.stringify(a.after) : null, a.note ?? null]);
+     a.before ? JSON.stringify(a.before) : null, a.after ? JSON.stringify(a.after) : null, a.note ?? null, a.activityId ?? null]);
   return r.id;
 }
 
 // Restore: revert a change_log entry to its 'before' snapshot.
 // Tables a restore is allowed to touch. entity_type is system-written (never user
 // input), but this allow-list keeps the interpolated identifier provably safe.
-const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_entity", "mapping", "debt_finding", "project", "project_touch"]);
+const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_entity", "mapping", "debt_finding", "project", "project_touch", "activity", "activity_touch"]);
 
 // Per-table allow-list of restorable columns (mirrors the schema in init()).
 // A 'before' snapshot is attacker-influenced only via change_log content, which is
@@ -47,7 +49,7 @@ const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_ent
 const RESTORE_COLUMNS: Record<string, Set<string>> = {
   repo: new Set(["name", "root_path", "detected_stack", "created_at", "last_scan_at", "state", "last_refreshed_sha", "git_url", "default_branch"]),
   scan_run: new Set(["repo_id", "runbook", "harness", "actor_type", "actor_id", "started_at", "finished_at", "summary"]),
-  domain: new Set(["repo_id", "key", "name", "description", "state", "cross_cutting", "origin", "status", "created_at", "updated_at"]),
+  domain: new Set(["repo_id", "key", "name", "description", "state", "cross_cutting", "origin", "status", "created_at", "updated_at", "should"]),
   code_unit: new Set(["repo_id", "kind", "path", "label", "created_at", "state", "prev_path", "updated_at"]),
   data_entity: new Set(["repo_id", "kind", "name", "source", "created_at"]),
   mapping: new Set(["repo_id", "target_kind", "target_id", "domain_id", "origin", "confidence", "status", "run_id", "created_at", "updated_at"]),
@@ -55,6 +57,8 @@ const RESTORE_COLUMNS: Record<string, Set<string>> = {
   project: new Set(["repo_id", "key", "name", "description", "kind", "status", "origin", "started_at", "ended_at", "source_ref", "created_at", "updated_at",
     "prov_system", "prov_instance", "external_id", "external_url", "state", "fields", "raw", "last_synced_at"]),
   project_touch: new Set(["repo_id", "target_kind", "target_id", "project_id", "commit_count", "first_at", "last_at", "origin", "created_at"]),
+  activity: new Set(["type", "title", "body", "author_person", "author_agent", "session_id", "repo_id", "commit_sha", "committed_at", "external_system", "external_instance", "external_id", "external_url", "should_review", "is_review", "created_at"]),
+  activity_touch: new Set(["activity_id", "target_kind", "target_id", "created_at"]),
 };
 
 // Columns that reference each restorable row. Used to refuse a hard DELETE

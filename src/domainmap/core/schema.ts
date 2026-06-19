@@ -215,5 +215,87 @@ export async function init(): Promise<string> {
     old_key TEXT NOT NULL, new_key TEXT NOT NULL, created_at TIMESTAMPTZ,
     UNIQUE(repo_id, old_key));
   `);
+  // ── 작업(Activity) 모델 (통합 DB 신설 P2) — domainmap 구조(is)와 ku(should/맥락)를 잇는 이벤트 레이어. ──
+  //  과업(Task)=knowledge_unit(kind='W')은 그대로 두고, '작업'은 과업을 향해 실제로 한 행위(이벤트)다.
+  //  commit 은 작업의 한 유형(commit_sha 보유, activity_touch 로 code_unit 연결 → is 갱신). comment/decision/
+  //  status_change/review 는 PM 코멘트 미러 가능(external_*). 한 트랜잭션(withTx=itemsPool)에서 activity +
+  //  activity_task(과업 n:n) + activity_ku_ref(산출/참조 ku) + activity_touch(코드)를 원자 기록(통합의 산물).
+  //  *_review = 3-state('na'|'checked_no_change'|'changed') — "점검했으나 수정 안 됨"을 안 한 것과 구분 명시기록.
+  //  author_person=토큰 신원, author_agent='어떤 AI'(모델/세션 — 하네스가 activity_log 인자로 명시 전달).
+  //  ku FK 는 ON DELETE CASCADE(knowledge_unit_domain 선례와 동형 — 링크만 소멸, activity 이벤트는 생존).
+  //  *** initOrgSchema(knowledge_unit 생성) 가 이 init 보다 먼저 끝나야 FK 해소(index.ts 직렬체인이 보장). ***
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS activity(
+    id SERIAL PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    author_person TEXT,
+    author_agent TEXT,
+    session_id TEXT,
+    repo_id INT,
+    commit_sha TEXT,
+    committed_at TIMESTAMPTZ,
+    external_system TEXT, external_instance TEXT, external_id TEXT, external_url TEXT,
+    should_review TEXT NOT NULL DEFAULT 'na',
+    is_review TEXT NOT NULL DEFAULT 'na',
+    created_at TIMESTAMPTZ);
+  CREATE TABLE IF NOT EXISTS activity_task(
+    activity_id INT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+    ku_name TEXT NOT NULL REFERENCES knowledge_unit(name) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ,
+    PRIMARY KEY(activity_id, ku_name));
+  CREATE TABLE IF NOT EXISTS activity_ku_ref(
+    id SERIAL PRIMARY KEY,
+    activity_id INT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+    ku_name TEXT NOT NULL REFERENCES knowledge_unit(name) ON DELETE CASCADE,
+    relation TEXT NOT NULL,
+    created_at TIMESTAMPTZ,
+    UNIQUE(activity_id, ku_name, relation));
+  CREATE TABLE IF NOT EXISTS activity_touch(
+    id SERIAL PRIMARY KEY,
+    activity_id INT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+    target_kind TEXT NOT NULL, target_id INT NOT NULL,
+    created_at TIMESTAMPTZ,
+    UNIQUE(activity_id, target_kind, target_id));
+  `);
+  // external 멱등 — PM 코멘트 라운드트립(comment:clickup) dedup. external_id 보유 행만(부분), NULLS NOT
+  //  DISTINCT(PG15+)로 instance=NULL 중복 구멍 차단. knowledge_unit/project 외부키 인덱스와 동형.
+  await pool.query(`
+  CREATE UNIQUE INDEX IF NOT EXISTS activity_external_uq
+    ON activity(external_system, external_instance, external_id) NULLS NOT DISTINCT
+    WHERE external_id IS NOT NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_author_idx ON activity(author_person, author_agent);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_committed_idx ON activity(committed_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_repo_idx ON activity(repo_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_touch_target_idx ON activity_touch(target_kind, target_id);`);
+  // type/review/relation CHECK — 신설이라 백필 불요. pg_constraint 프로브 멱등(기존 idiom).
+  await pool.query(`
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_type_chk') THEN
+      ALTER TABLE activity ADD CONSTRAINT activity_type_chk
+        CHECK (type IN ('commit','comment','decision','status_change','review'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_should_review_chk') THEN
+      ALTER TABLE activity ADD CONSTRAINT activity_should_review_chk
+        CHECK (should_review IN ('na','checked_no_change','changed'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_is_review_chk') THEN
+      ALTER TABLE activity ADD CONSTRAINT activity_is_review_chk
+        CHECK (is_review IN ('na','checked_no_change','changed'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity_ku_ref'::regclass AND conname='activity_ku_ref_relation_chk') THEN
+      ALTER TABLE activity_ku_ref ADD CONSTRAINT activity_ku_ref_relation_chk
+        CHECK (relation IN ('produced','references','decided'));
+    END IF;
+  END $$;
+  `);
+  // change_log.activity_id — 이 변경을 유발한 작업 귀속(누가/왜). FK 없이 plain INT(change_log 의
+  //  (entity_type,entity_id) FK-less 관성 유지 — 과거 project 감사행도 NULL 로 안전).
+  await pool.query(`ALTER TABLE change_log ADD COLUMN IF NOT EXISTS activity_id INT;`);
+  // domain.should — 의도(당위) 스펙 1급화. is(코드 구조)와 별 축: should=의도, description=자유서술,
+  //  evidence(propose 근거)와도 구분. 맥락(주입 기획서/대화)에서 갱신, is 와의 괴리가 debt(P5).
+  await pool.query(`ALTER TABLE domain ADD COLUMN IF NOT EXISTS should TEXT;`);
   return "initialized schema";
 }
