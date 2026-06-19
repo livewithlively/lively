@@ -15,8 +15,10 @@ export async function init(): Promise<string> {
   CREATE TABLE IF NOT EXISTS domain(
     id SERIAL PRIMARY KEY, repo_id INT, key TEXT, name TEXT, description TEXT,
     state TEXT DEFAULT 'active', cross_cutting BOOLEAN DEFAULT false,
-    origin TEXT, status TEXT DEFAULT 'confirmed', created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
-    UNIQUE(repo_id, key));
+    origin TEXT, status TEXT DEFAULT 'confirmed', created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ);
+    -- area 탈-repo(V5): domain 유니크는 (space,key) — 부분유니크 인덱스로 아래에서 건다(merged 제외).
+    --  옛 인라인 UNIQUE(repo_id,key) 는 repo_id NULL(business 조직평면)을 distinct 취급해 멱등을 깨므로 폐기.
+    --  CREATE TABLE 인라인이 아닌 별도 인덱스인 이유: 부분(WHERE state<>'merged')·NULL-merge 의미가 필요.
   CREATE TABLE IF NOT EXISTS code_unit(
     id SERIAL PRIMARY KEY, repo_id INT, kind TEXT, path TEXT, label TEXT,
     created_at TIMESTAMPTZ, UNIQUE(repo_id, path));
@@ -138,7 +140,7 @@ export async function init(): Promise<string> {
   //  provenance_kind ADD 패턴 재사용(비파괴·멱등): ① ADD COLUMN DEFAULT 'product' → ② 기존행 백필
   //  (DEFAULT 가 신규행만 채우므로 NULL 일 수 있는 기존행을 명시 백필) → ③ 백필 후 CHECK(순서 강제 —
   //  enum 밖 행이 있으면 ADD CONSTRAINT throw). 코드매핑/부채/touch 는 space 와 무관(product 만 git
-  //  스캔으로 채워짐). business 시드6 은 아래 블록이 고객-불변 sentinel repo '_org' 아래 적재(키 전역 멱등).
+  //  스캔으로 채워짐). business 시드6 은 아래 블록이 repo_id=NULL(조직평면) 로 직삽입한다(키 전역 멱등·V5 탈-repo).
   await pool.query(`ALTER TABLE domain ADD COLUMN IF NOT EXISTS space TEXT DEFAULT 'product';`);
   await pool.query(`UPDATE domain SET space='product' WHERE space IS NULL;`);
   await pool.query(`
@@ -150,39 +152,42 @@ export async function init(): Promise<string> {
     END IF;
   END $$;
   `);
-  // ── business 시드6(B): space='business' 통제어휘 도메인행(코드매핑 없음 — §B vocab-only).
-  //  **고객-불변**(P6 적대검증 적발: 옛 코드는 repo='productivity' 라이블리 내부 레포명에 하드코딩 → 신규
-  //   셀프호스트는 그 레포가 없어 business 6 area 통째 누락). 교정:
-  //   (a) 시드 가드 = key 가 *어느 repo* 에도 space='business' 로 없을 때만 적재(NOT EXISTS) — 키 전역 멱등.
-  //       라이브는 6개가 이미 'productivity' 아래 존재 → missing=0 → IF 블록 통째 skip → **라이브 무변화**.
-  //   (b) 호스트 = 고객-불변 sentinel repo '_org'(조직 평면, 코드 없음). domain.repo_id 가 nullable 이나
-  //       UNIQUE(repo_id,key) 가 NULL 을 distinct 취급해 ON CONFLICT 멱등이 깨지므로, sentinel repo 로 호스팅.
-  //       sentinel 은 *적재가 필요할 때만* 생성(라이브엔 안 생김). 신규 고객은 6개를 '_org' 아래 받음.
+  // ── area 탈-repo(V5): domain 유니크를 (space,key) 부분유니크 인덱스로 승격 + 옛 UNIQUE(repo_id,key) 폐기. ──
+  //  순서(부팅 멱등): ① (space,key) 부분유니크 인덱스 생성(merged 제외 — 활성 도메인이 merged 잔재와 충돌 안 함,
+  //   NULL repo_id 무관 멱등) → ② 옛 자동제약 domain_repo_id_key_key 존재 시 DROP(pg_constraint 프로브) →
+  //   ③ business 시드는 인덱스 생성 후(아래) — 부분유니크 + NOT EXISTS 가드가 함께 성립해야 멱등.
+  //  이 인덱스가 product/business 양쪽을 (space,key)로 못박아 repo_id 유무(business=NULL 조직평면)와 무관하게
+  //   멱등을 보장한다(옛 UNIQUE 는 NULL 을 distinct 취급해 business 멱등을 깼다).
   await pool.query(`
-  DO $$
-  DECLARE host_id INT;
-  DECLARE missing INT;
-  BEGIN
-    SELECT count(*) INTO missing FROM (VALUES
-      ('gtm'),('business-model-pricing'),('fundraising'),('market-competition'),('brand'),('org')
-    ) AS v(key)
-    WHERE NOT EXISTS (SELECT 1 FROM domain d WHERE d.key=v.key AND d.space='business');
-    IF missing > 0 THEN
-      INSERT INTO repo(name, created_at) VALUES('_org', now()) ON CONFLICT (name) DO NOTHING;
-      SELECT id INTO host_id FROM repo WHERE name='_org';
-      INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
-      SELECT host_id, v.key, v.name, v.descr, 'active', false, 'human', 'confirmed', 'business', now(), now()
-      FROM (VALUES
-        ('gtm','GTM(시장진입)','고객 획득·세일즈·마케팅·파트너십 등 시장 진입 전략 기능.'),
-        ('business-model-pricing','비즈니스모델·가격','수익모델·가격정책·요금제·과금 구조 기능.'),
-        ('fundraising','펀드레이징','투자유치·IR·자금조달·캡테이블 기능.'),
-        ('market-competition','시장·경쟁','시장 규모·경쟁사·포지셔닝·경쟁지도 기능.'),
-        ('brand','브랜드','브랜드 아이덴티티·메시징·디자인 언어 기능.'),
-        ('org','조직','채용·조직설계·운영·문화 등 조직 기능.')
-      ) AS v(key,name,descr)
-      WHERE NOT EXISTS (SELECT 1 FROM domain d WHERE d.key=v.key AND d.space='business');
+  CREATE UNIQUE INDEX IF NOT EXISTS domain_space_key_uq ON domain(space, key) WHERE state <> 'merged';
+  `);
+  await pool.query(`
+  DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conrelid='domain'::regclass AND conname='domain_repo_id_key_key') THEN
+      ALTER TABLE domain DROP CONSTRAINT domain_repo_id_key_key;
     END IF;
   END $$;
+  `);
+  // ── business 시드6(B): space='business' 통제어휘 도메인행(코드매핑 없음 — §B vocab-only).
+  //  **고객-불변·탈-repo(V5)**: business 는 조직평면 area 라 코드 레포에 귀속되지 않는다 → repo_id=NULL 직삽입.
+  //   (옛 코드는 라이블리 내부 레포명('productivity')에 하드코딩 또는 sentinel '_org' 레포로 호스팅했으나,
+  //    repo_id nullable + (space,key) 부분유니크로 sentinel 레포가 불필요해졌다 — '_org' 폐기.)
+  //   멱등: key 가 어느 곳에도 space='business'(state<>'merged')로 없을 때만 적재(NOT EXISTS) — 키 전역 멱등.
+  //   라이브는 6개가 이미 존재 → 6행 모두 skip → **부팅 시 라이브 무변화**(데이터 이행은 별도 마이그 스크립트).
+  //   부분유니크 domain_space_key_uq 가 repo_id NULL 에서도 (business,key) 중복을 차단 → ON CONFLICT 불요.
+  await pool.query(`
+  INSERT INTO domain(repo_id,key,name,description,state,cross_cutting,origin,status,space,created_at,updated_at)
+  SELECT NULL, v.key, v.name, v.descr, 'active', false, 'human', 'confirmed', 'business', now(), now()
+  FROM (VALUES
+    ('gtm','GTM(시장진입)','고객 획득·세일즈·마케팅·파트너십 등 시장 진입 전략 기능.'),
+    ('business-model-pricing','비즈니스모델·가격','수익모델·가격정책·요금제·과금 구조 기능.'),
+    ('fundraising','펀드레이징','투자유치·IR·자금조달·캡테이블 기능.'),
+    ('market-competition','시장·경쟁','시장 규모·경쟁사·포지셔닝·경쟁지도 기능.'),
+    ('brand','브랜드','브랜드 아이덴티티·메시징·디자인 언어 기능.'),
+    ('org','조직','채용·조직설계·운영·문화 등 조직 기능.')
+  ) AS v(key,name,descr)
+  WHERE NOT EXISTS (SELECT 1 FROM domain d WHERE d.key=v.key AND d.space='business' AND d.state<>'merged');
   `);
   // ── P-V3-4a: repo CRUD lifecycle + domain rename soft-alias(H3) ──
   // repo.state: repo_deprecate 가 쓰는 lifecycle 축. NULL=active(pre-migration 행). repo 는 cross-DB

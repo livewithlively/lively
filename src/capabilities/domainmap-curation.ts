@@ -388,7 +388,7 @@ const proposeDomain: Capability = {
   title: "도메인 제안",
   description:
     "새 도메인을 정의한다(day-2 authoring). 신뢰우선(trust-default): proposed 림보 없이 곧바로 status='confirmed' 로 착지하고 origin 으로 작성자(agent/human)를 기록한다. " +
-    "evidence 필수 — 이 도메인이 왜 필요한지의 근거(change_log 에 영속). 사람은 사후에 edit/deprecate/merge 로 큐레이션하며, 보호 리포(lively)는 403 으로 차단된다. 반환 {repo,id,key,status,change_id}.",
+    "evidence 필수 — 이 도메인이 왜 필요한지의 근거(change_log 에 영속). 사람은 사후에 edit/deprecate/merge 로 큐레이션하며, 예약된 리포는 403 으로 차단된다. 반환 {repo,id,key,status,change_id}.",
   scope: "context",
   input: {
     repo: z.string().regex(REPO_RE).max(100),

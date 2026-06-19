@@ -6,15 +6,11 @@
 //  assertNoHardSecrets + audit + version+1. 입력 검증은 어댑터 경계(MCP=zod input / REST=mount.parse).
 import { z } from "zod";
 import { getKnowledge, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
-import { listDomainsApi } from "../domainmap/core/queries.js";
-import { getRepo } from "../domainmap/core/repos.js";
-import { resolveDomainKey } from "../domainmap/core/domain-alias.js";
+import { listAllDomains } from "../domainmap/core/queries.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
 import { HttpError, qstr, qint } from "./rest-util.js";
 import type { LivelyUser } from "../context.js";
-
-const DEFAULT_DOMAIN_REPO = "productivity"; // memory_* 와 동일 — 제품 자신의 도메인맵 repo
 
 // co-exposed 헬퍼 — mcp:true + REST 마운트를 한 번에 선언(delivery 의 restOnly 류는 mcp:false 전용이라 별도).
 //  scope 는 전부 'memory'. handler 본문은 도메인 로직만(스코프 게이트는 어댑터가 처리).
@@ -205,25 +201,22 @@ const ctxSave = coExposed(
     // 신규 쓰기경로 — 평문 시크릿은 저장 자체를 거부(hard-block).
     assertNoHardSecrets(input.note, "note");
 
-    // 도메인: 지정되면 통제어휘 엄격 검증(P-V3-4a) — domain_list 에 없는 키는 거부.
-    //  단 (a) domainmap 다운/repo 미존재 = graceful(약결합 슬러그라 저장은 진행 — 가용성 우선),
-    //     (b) soft-alias 해소: 옛 슬러그(rename 으로 별칭이 된 키)는 canonical 로 접어 통과시키고
-    //         knowledge_unit 에는 canonical key 를 저장한다(옛 별칭 적체 방지). 해소도 graceful.
-    const repo = DEFAULT_DOMAIN_REPO;
+    // 도메인: 지정되면 통제어휘 엄격 검증(V5 탈-repo) — 전 repo·전 space 통합 domain_list(listAllDomains)에
+    //  없는 key 는 거부. domain 귀속은 repo-비의존(business 는 repo 없는 조직평면, product 도 key 만으로 귀속).
+    //  graceful: domainmap 다운/빈 목록이면 약결합 슬러그라 저장은 진행(가용성 우선).
+    //  space 모호: 같은 key 가 product·business 양쪽에 있으면(현 라이브 0건) 비결정 — 거부하고 명시 요구.
     let domainKey: string | null = null;
     if (input.domain) {
-      let domains: Awaited<ReturnType<typeof listDomainsApi>> | null = null;
-      try { domains = await listDomainsApi(repo); } catch { domains = null; }
-      let candidate = input.domain;
-      // alias 해소(best-effort) — repo id 를 못 얻거나 도메인맵이 죽으면 원본 슬러그 유지(graceful).
-      try {
-        const r = await getRepo(repo);
-        candidate = await resolveDomainKey(r.id, input.domain);
-      } catch { /* graceful: 원본 슬러그 유지 */ }
-      if (domains && domains.length && !domains.some((d) => d.key === candidate)) {
-        throw new Error(`도메인 '${input.domain}' 없음(repo=${repo}). domain_list 로 확인하세요.`);
+      let domains: Awaited<ReturnType<typeof listAllDomains>> | null = null;
+      try { domains = await listAllDomains(); } catch { domains = null; }
+      if (domains && domains.length) {
+        const matches = domains.filter((d) => d.key === input.domain);
+        if (!matches.length) throw new Error(`도메인 '${input.domain}' 없음. domain_list 로 확인하세요.`);
+        if (matches.length > 1) {
+          throw new Error(`도메인 '${input.domain}' 가 여러 space(${matches.map((m) => m.space).join("/")})에 있어 모호합니다 — 고유 key 로 지정하세요.`);
+        }
       }
-      domainKey = candidate;
+      domainKey = input.domain;
     }
 
     // 이름: 주어지면 검증, 아니면 title|note 슬러그(자동생성끼리 충돌 시 -2.. 증가).
@@ -250,7 +243,7 @@ const ctxSave = coExposed(
       title: input.title ?? null,
       body_md: input.note,
       domain_key: domainKey,
-      domain_repo: domainKey ? repo : null,
+      domain_repo: null, // V5 탈-repo: 도메인 귀속은 key 만(repo-비의존). domain_repo 컬럼은 더 안 채운다.
       supersedes: input.supersedes ?? null,
     }, user.userId, ctx?.source ?? "mcp");
 

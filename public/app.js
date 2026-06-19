@@ -77,8 +77,11 @@ const state = {
   browse: { filters: { kind: '', space: '', domain: '', lifecycle: 'active', confidence: '', q: '' }, entries: [], loaded: false },
   admin: { data: null, sel: 'kinds', memberSel: null, memorySel: null, repoSel: null }, // 관리(전달) 페이지 상태
   domains: {},           // P-V3-4a: repo별 도메인 통제어휘 캐시 { [repo]: {list, repos, loaded, error} }
+  allDomains: null,      // V5 탈-repo: 전 repo + business 통합 통제어휘 캐시(저장/필터 드롭다운) {list, loaded, error}
 };
-const DEFAULT_REPO = 'productivity'; // 제품 자신의 도메인맵 repo(ctx_save DEFAULT_DOMAIN_REPO 와 정합)
+// V5 탈-repo: 도메인 귀속은 repo-비의존(business=조직평면). 저장/필터 드롭다운은 통합 목록(loadAllDomains)을
+//  쓰고, 어휘CRUD 화면만 repo별 product 도메인(loadDomains)을 유지한다(코드앵커·debt 가 repo 스코프).
+const VOCAB_CRUD_DEFAULT_REPO = 'productivity'; // 어휘관리 화면 repo 셀렉터 폴백 기본(product 도메인 CRUD 전용)
 let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0;            // datalist 등 고유 id 카운터
 
@@ -552,7 +555,7 @@ async function renderMap(view) {
   document.getElementById('view').focus?.();
 
   // 비동기 area 로드(렌더 차단 안 함) — 성공 시에만 영역 카드 노출.
-  loadDomains(DEFAULT_REPO).then((slot) => {
+  loadAllDomains().then((slot) => {
     if (slot.error || !slot.list.length) return;
     const counts = { product: 0, business: 0 };
     for (const d of slot.list) { const sp = (d.space || 'product') === 'business' ? 'business' : 'product'; counts[sp]++; }
@@ -628,7 +631,7 @@ async function renderBrowse(view, params) {
   const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색(grep)', value: f.q, 'aria-label': '검색어' });
   // 주제(area)는 2단 — 1차 space(제품/비즈니스) → 2차 domain(통제어휘). space 선택 시 도메인 드롭다운을
   //  그 space 로 좁힌다. 도메인은 자유텍스트 폐기(통제어휘 드롭다운). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadDomains(DEFAULT_REPO);
+  const domSlot = await loadAllDomains();
   const spaceSel = buildSpaceSelect(f.space);
   spaceSel.setAttribute('aria-label', '주제 영역(space)');
   let domainInput;
@@ -752,8 +755,23 @@ function selectFilter(opts, sel) {
 // ── P-V3-4a 도메인 통제어휘 select ──
 // 도메인은 자유 키워드가 아니라 repo 하위 통제 어휘. 드롭다운은 domain_list(=/api/ui/domainmap/:repo/domains)로
 // 채운다. 도메인맵이 죽거나 repo 미존재면 graceful: 캐시에 error 를 남기고 호출부가 자유입력 폴백을 쓴다.
+// V5 탈-repo 통합 도메인 캐시 — 전 repo + business(조직평면) 통제어휘. 저장/필터 드롭다운의 단일 소스.
+//  /api/ui/domains(listAllDomains)는 (space,key) 평면 — repo 컬럼 없음. 도메인맵 down 이면 error 로 graceful.
+async function loadAllDomains(force) {
+  const cached = state.allDomains;
+  if (cached && cached.loaded && !force) return cached;
+  const slot = { list: [], loaded: false, error: null };
+  state.allDomains = slot;
+  try {
+    const rows = await api('/api/ui/domains');
+    slot.list = (rows || []).map((d) => ({ key: d.key, name: d.name, state: d.state, cross_cutting: d.cross_cutting, space: d.space || 'product' }));
+    slot.loaded = true;
+  } catch (e) { slot.error = e.message || '도메인 목록을 불러오지 못했습니다'; slot.loaded = true; }
+  return slot;
+}
+
 async function loadDomains(repo, force) {
-  const key = repo || DEFAULT_REPO;
+  const key = repo || VOCAB_CRUD_DEFAULT_REPO;
   const cached = state.domains[key];
   if (cached && cached.loaded && !force) return cached;
   const slot = { list: [], loaded: false, error: null };
@@ -771,7 +789,7 @@ async function loadDomains(repo, force) {
 // repo 셀렉터 — repo_list union 의 repos[] 로 채운다(domainmap ∪ 매핑테이블). 단일 repo 면 라벨만.
 async function loadRepos() {
   if (state.domains.__repos__) return state.domains.__repos__;
-  let repos = [DEFAULT_REPO];
+  let repos = [VOCAB_CRUD_DEFAULT_REPO];
   try { const r = await api('/api/ui/repos'); if (r && Array.isArray(r.repos) && r.repos.length) repos = r.repos; }
   catch (_) { /* graceful: 기본 repo 만 */ }
   state.domains.__repos__ = repos;
@@ -1107,7 +1125,7 @@ async function saveOverlay(u, isEdit, onDone) {
   }
   kindSel.value = u.kind || 'K';
   // 도메인: 통제어휘 드롭다운(자유텍스트 폐기). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadDomains(DEFAULT_REPO);
+  const domSlot = await loadAllDomains();
   const domainIn = domSlot.error
     ? el('input', { type: 'text', value: u.domain_key || '', placeholder: '도메인 키(목록 불가 — 직접 입력)', title: domSlot.error })
     : buildDomainSelect(domSlot, u.domain_key || '');
@@ -1306,7 +1324,7 @@ function meaningCard(m) {
 
 function adminRowMeta(key, data) {
   if (key === 'kinds') return (state.overview ? state.overview.kinds.length : 4) + '개 종류';
-  if (key === 'domains-repos') { const s = state.domains[DEFAULT_REPO]; return s && s.loaded && !s.error ? s.list.length + '개 도메인' : '통제 어휘 관리'; }
+  if (key === 'domains-repos') { const s = state.domains[VOCAB_CRUD_DEFAULT_REPO]; return s && s.loaded && !s.error ? s.list.length + '개 도메인' : '통제 어휘 관리'; }
   if (key === 'managed-policy' || key === 'org-defaults') {
     const s = data.sections[key];
     return s && s.body_md && s.body_md.trim() ? '작성됨 · v' + s.version : '비어 있음';
@@ -1434,7 +1452,7 @@ async function domainsReposPanel(detail, data) {
   detail.replaceChildren(card);
 
   const repos = await loadRepos();
-  let repo = state.admin.repoSel || (repos.includes(DEFAULT_REPO) ? DEFAULT_REPO : repos[0]);
+  let repo = state.admin.repoSel || (repos.includes(VOCAB_CRUD_DEFAULT_REPO) ? VOCAB_CRUD_DEFAULT_REPO : repos[0]);
   if (!repos.includes(repo)) repo = repos[0];
   state.admin.repoSel = repo;
 
@@ -1800,7 +1818,7 @@ async function memoryForm(root, mem, data, detail, isNew) {
   const nameIn = el('input', { type: 'text', value: mem.name, placeholder: '파일명(예: agent-context-architecture)', disabled: isNew ? null : '' });
   const titleIn = el('input', { type: 'text', value: mem.title || '', placeholder: '제목' });
   // 도메인: 통제어휘 드롭다운(자유텍스트 폐기). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadDomains(DEFAULT_REPO);
+  const domSlot = await loadAllDomains();
   const domIn = domSlot.error
     ? el('input', { type: 'text', value: mem.domain_key || '', placeholder: '도메인 슬러그(목록 불가 — 직접 입력)', title: domSlot.error })
     : buildDomainSelect(domSlot, mem.domain_key || '');

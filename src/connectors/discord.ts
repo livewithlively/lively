@@ -195,7 +195,7 @@ async function discordGet<T>(path: string, token: string): Promise<T> {
     const res = await fetch(url, {
       headers: {
         Authorization: `Bot ${token}`,
-        "User-Agent": "context-ontology (https://lively, 0.1.0)",
+        "User-Agent": "context-ontology (https://example.invalid, 0.1.0)",
         accept: "application/json",
       },
     });

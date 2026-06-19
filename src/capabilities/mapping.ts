@@ -27,7 +27,7 @@ const listUnmapped: Capability = {
   input: {
     // 문자열은 qstr(REST) 거동 미러링: trim + 길이 상한 — 같은 논리 입력이 표면별로 갈리지 않게.
     missing: z.enum(["domain", "project", "either", "both"]).default("either"),
-    repo: z.string().trim().max(200).optional().describe("이 repo 기준 미매핑으로 스코프(예: productivity). 미지정 시 전 repo 통합 기준"),
+    repo: z.string().trim().max(200).optional().describe("이 repo 기준 미매핑으로 스코프(예: main). 미지정 시 전 repo 통합 기준"),
     system: z.string().trim().max(100).optional().describe("discord | notion …"),
     type: z.enum(["message", "task", "change", "doc", "note"]).optional(),
     since: z.string().optional().describe("ISO8601 — 이 시각 이후만"),

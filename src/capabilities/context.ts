@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { dmRead } from "./domainmap-compat.js";
 import { resolveRepo } from "../domainmap/core/types.js";
-import { listRepos, overview, listDomainsApi, domainDetail, listProjectsApi, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
+import { listRepos, overview, listDomainsApi, listAllDomains, domainDetail, listProjectsApi, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
 import { listMappingRepos, uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
 import { DM_KINDS, HttpError } from "./rest-util.js";
@@ -104,6 +104,19 @@ const domainList: Capability = {
   },
 };
 
+// 탈-repo(V5) 통합 도메인 목록 — 전 repo + repo_id NULL(business) 통제어휘. 웹 드롭다운/검증의 단일 소스.
+//  listDomainsApi(:repo) 는 product 도메인 repo별 조회(어휘CRUD·debt·코드앵커 계약)로 유지하고, repo-비의존
+//  소비자(저장 드롭다운·area space 필터)는 이 평면 목록을 쓴다. units/debt 카운트는 비포함(드롭다운 전용).
+const allDomains: Capability = {
+  name: "all_domains",
+  title: "통합 도메인 목록(탈-repo)",
+  description: "전 repo + business(조직평면) 통제어휘를 평면으로 반환 — 웹 도메인 드롭다운 전용(REST only).",
+  scope: "context",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/domains"], parse: () => ({}) }] },
+  handler: async () => dmRead(`/api/domains`, () => listAllDomains()),
+};
+
 const domainGet: Capability = {
   name: "domain_get",
   title: "도메인 상세",
@@ -181,5 +194,5 @@ const domainmapProxy: Capability = {
 };
 
 export const contextCapabilities: Capability[] = [
-  repoList, contextOverview, itemsStats, domainList, domainGet, projectList, debtList, domainmapProxy,
+  repoList, contextOverview, itemsStats, domainList, allDomains, domainGet, projectList, debtList, domainmapProxy,
 ];

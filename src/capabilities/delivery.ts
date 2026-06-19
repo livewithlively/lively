@@ -226,9 +226,9 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/memory"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       // domain_key: 빈 문자열/null → 귀속 해제(null). 미전송(undefined) → 기존 보존.
+      // V5 탈-repo: 도메인 귀속은 key 만(repo-비의존) — domain_repo 는 항상 null(귀속 변경 시) / 보존(미전송 시).
       const domainKey = input.domain_key === undefined ? undefined : (String(input.domain_key).trim() || null);
-      const domainRepo = domainKey === undefined ? undefined
-        : (domainKey ? (String(input.domain_repo ?? "productivity").trim() || "productivity") : null);
+      const domainRepo = domainKey === undefined ? undefined : null;
       // 공유 메모리 본문(body_md)은 에이전트/사람이 읽는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
       const memoryBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 40000);
       if (memoryBody !== undefined) assertNoHardSecrets(memoryBody, "body_md"); // P8

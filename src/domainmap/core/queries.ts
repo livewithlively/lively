@@ -127,6 +127,25 @@ export async function listDomainsApi(name: string): Promise<DomainListItem[]> {
   return out;
 }
 
+// ── 탈-repo(V5) 도메인 통제어휘 조회 — 전 repo + repo_id NULL(business 조직평면) 통합. ──
+//  listDomainsApi(repo) 는 product 도메인 repo별 조회(어휘CRUD·debt·코드앵커가 repo 스코프 필요)로 유지하고,
+//  도메인 해소·검증·드롭다운 같은 repo-비의존 소비자는 이 헬퍼를 쓴다. (space,key) 전역유니크(부분유니크
+//  domain_space_key_uq)라 같은 key 가 한 space 에 하나뿐 — 단, 같은 key 가 product·business 양쪽에 있으면
+//  두 행이 나오므로(현 라이브 0건) 소비자가 space 로 구분한다. units/debt 카운트는 비포함(드롭다운·검증 전용).
+export interface AllDomainItem {
+  key: string; name: string | null; description: string | null;
+  space: string; state: string | null; cross_cutting: boolean | null;
+}
+export async function listAllDomains(): Promise<AllDomainItem[]> {
+  const pool = dmPool();
+  const rows = await q(pool, `SELECT key, name, description, space, state, cross_cutting
+    FROM domain WHERE state<>'merged' ORDER BY space, cross_cutting, key`);
+  return rows.map((d) => ({
+    key: d.key, name: d.name ?? null, description: d.description ?? null,
+    space: d.space ?? "product", state: d.state ?? null, cross_cutting: d.cross_cutting ?? null,
+  }));
+}
+
 export async function domainDetail(name: string, id: number): Promise<any> {
   const pool = dmPool();
   const r = await getRepo(name);

@@ -27,14 +27,14 @@ export function saneLimit(limit: unknown, def = 50, max = 500): number {
 }
 
 // 싱크 보호 리포 deny-list — 커넥터 싱크/도메인 authoring 이 절대 쓰면 안 되는 리포.
-// 기본 'lively'(레거시, 불가침 가드레일). SYNC_BLOCKED_REPOS 환경변수(콤마 구분)로 박스별 재정의.
+// 기본은 빈 set(보호 대상 없음). 보호할 리포는 SYNC_BLOCKED_REPOS 환경변수(콤마 구분)로만 지정한다.
 // 가드는 라우트가 아니라 코어 함수 — HTTP·CLI·미래의 다른 진입점이 전부 같은 가드를 통과한다.
 // lazy 1회 계산: 모듈 로드 시점의 env 의존(--env-file 순서 사고) 제거.
 let blocked: Set<string> | null = null;
 export function syncBlockedRepos(): Set<string> {
   if (!blocked) {
     blocked = new Set(
-      (process.env.SYNC_BLOCKED_REPOS ?? "lively").split(",").map((s) => s.trim()).filter(Boolean));
+      (process.env.SYNC_BLOCKED_REPOS ?? "").split(",").map((s) => s.trim()).filter(Boolean));
   }
   return blocked;
 }

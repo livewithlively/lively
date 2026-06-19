@@ -77,7 +77,7 @@ const repoCreate: Capability = {
   title: "레포 생성",
   description:
     "새 레포(repo)를 도메인맵에 만든다 — 도메인의 상위 통제 계층. 이름 형식(A-Za-z0-9._-)·중복 검증, " +
-    "보호/예약 리포(lively 등) 이름은 403. 신뢰우선(곧바로 active). 반환 {id,name,change_id}.",
+    "예약된 리포 이름은 403. 신뢰우선(곧바로 active). 반환 {id,name,change_id}.",
   scope: "context",
   input: { name: z.string().trim().min(1).max(100).regex(REPO_RE).describe("레포 이름") },
   expose: {

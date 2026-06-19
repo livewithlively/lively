@@ -23,7 +23,7 @@ const searchItems: Capability = {
     query: z.string().trim().max(200).optional().describe("제목/본문 텍스트 부분일치"),
     type: z.enum(["message", "task", "change", "doc", "note"]).optional(),
     system: z.string().trim().max(100).optional().describe("slack | discord | notion …"),
-    repo: z.string().trim().max(200).optional().describe("매핑 필터를 이 repo 로 한정(예: productivity). 단독 지정 시 그 repo 에 매핑된 아이템만"),
+    repo: z.string().trim().max(200).optional().describe("매핑 필터를 이 repo 로 한정(예: main). 단독 지정 시 그 repo 에 매핑된 아이템만"),
     domainKey: z.string().trim().max(200).optional(),
     projectKey: z.string().trim().max(200).optional(),
     since: z.string().optional().describe("ISO8601 — 이 시각 이후만"),

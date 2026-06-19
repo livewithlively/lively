@@ -53,7 +53,7 @@ export async function setLastRefreshedSha(client: pg.PoolClient, repoId: number,
 
 // ── P-V3-4a: repo CRUD(통제어휘 상위 계층). repo 는 domainmap 자기완결 엔티티(cross-DB cascade 없음 —
 //  knowledge_unit 은 domain_key 슬러그만 약결합으로 들고, repo 직접참조 없음). 따라서 repo 쓰기는 단일
-//  DB 안에서 안전. 보호 리포(SYNC_BLOCKED_REPOS, 기본 'lively') 가드: rename/deprecate 만 적용한다
+//  DB 안에서 안전. 보호 리포(SYNC_BLOCKED_REPOS, 기본 빈 set) 가드: rename/deprecate 만 적용한다
 //  (create 는 신규 이름이므로 보호대상일 수 없음 — 단, 보호 리포 이름으로 만들려는 시도는 막는다).
 
 // repo 생성 — 이름 형식·중복 검증. detected_stack 빈 객체로 초기화(ingest 가 추후 채움).
