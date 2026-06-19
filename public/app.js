@@ -634,35 +634,43 @@ async function renderBrowse(view, params) {
   const o = await getOverview(false);
   const domSlot = await loadAllDomains();
 
-  // ── 좌측 1차: 주제 위계 — space(제품/비즈니스) > domain(통제어휘). count>0 도메인만 노출(백엔드 active_count). ──
-  //  도메인맵/도메인목록 down 이면 graceful 생략(kind 트리만). 선택 토글은 syncHash+refetch.
+  // ── 좌측 = 종류(kind, 위) + 주제 위계(space>domain, 아래). 카운트는 절대수치가 아니라 **facet**(현재 다른 필터와의
+  //  교집합) — refetch 응답의 facets 로 buildSide 가 갱신한다(kind=지식 선택 시 주제 카운트도 '그 도메인의 지식 수'). ──
   const SPACE_LABEL = { product: '제품 도메인', business: '비즈니스 기능' };
-  const areaNav = el('nav', { class: 'browse-tree area-tree', 'aria-label': '주제(space·도메인) 위계' });
-  areaNav.append(areaItem('전체 주제', '', '', f.space === '' && f.domain === '', null, '∗'));
-  if (!domSlot.error) {
-    const bySpace = { product: [], business: [] };
-    for (const d of domSlot.list) {
-      if (!(Number(d.active_count) > 0)) continue; // count>0 인 세부구분만 — '존재하는 것만 노출'
-      const sp = (d.space || 'product') === 'business' ? 'business' : 'product';
-      bySpace[sp].push(d);
+  const side = el('aside', { class: 'browse-side' });
+  function buildSide(facets) {
+    const domF = (facets && facets.domains) || {};
+    const kindF = (facets && facets.kinds) || {};
+    // 종류(kind) — 4종 항상 표시(선택지). '전체'=facet 합(현재 필터에서 kind 무관 총). 카운트=교집합.
+    const tree = el('nav', { class: 'browse-tree', 'aria-label': 'kind 트리' });
+    const kindTotal = Object.values(kindF).reduce((a, b) => a + (Number(b) || 0), 0);
+    tree.append(treeItem('전체', '', f.kind === '', kindTotal));
+    for (const k of o.kinds) {
+      tree.append(treeItem(kindMeta(k.kind).ko || k.label || k.kind, k.kind, f.kind === k.kind, Number(kindF[k.kind]) || 0, k.kind));
     }
-    for (const sp of ['product', 'business']) {
-      const doms = bySpace[sp];
-      if (!doms.length) continue;
-      // space 헤더(1차) — 클릭 시 그 space 전체(도메인 미지정).
-      areaNav.append(areaItem(SPACE_LABEL[sp], sp, '', f.space === sp && f.domain === '', null, sp === 'business' ? '◴' : '◆', 'area-space'));
-      for (const d of doms) {
-        const label = (d.name && d.name !== d.key) ? d.name : d.key;
-        areaNav.append(areaItem(label, sp, d.key, f.domain === d.key, Number(d.active_count), '·', 'area-domain'));
+    // 주제(space>domain) — facet count>0 도메인만(현재 필터 교집합). 도메인목록 down 이면 생략.
+    const areaNav = el('nav', { class: 'browse-tree area-tree', 'aria-label': '주제(space·도메인) 위계' });
+    areaNav.append(areaItem('전체 주제', '', '', f.space === '' && f.domain === '', null, '∗'));
+    if (!domSlot.error) {
+      const bySpace = { product: [], business: [] };
+      for (const d of domSlot.list) {
+        const cnt = Number(domF[d.key]) || 0;
+        if (!(cnt > 0)) continue; // 현재 필터 교집합으로 존재하는 도메인만
+        const sp = (d.space || 'product') === 'business' ? 'business' : 'product';
+        bySpace[sp].push({ d, cnt });
+      }
+      for (const sp of ['product', 'business']) {
+        if (!bySpace[sp].length) continue;
+        areaNav.append(areaItem(SPACE_LABEL[sp], sp, '', f.space === sp && f.domain === '', null, sp === 'business' ? '◴' : '◆', 'area-space'));
+        for (const { d, cnt } of bySpace[sp]) {
+          const label = (d.name && d.name !== d.key) ? d.name : d.key;
+          areaNav.append(areaItem(label, sp, d.key, f.domain === d.key, cnt, '·', 'area-domain'));
+        }
       }
     }
-  }
-
-  // ── 좌측 2차: kind 트리(종류). 주제와 병존하는 2차축. ──
-  const tree = el('nav', { class: 'browse-tree', 'aria-label': 'kind 트리' });
-  tree.append(treeItem('전체', '', f.kind === '', o.total_active));
-  for (const k of o.kinds) {
-    tree.append(treeItem(kindMeta(k.kind).ko || k.label || k.kind, k.kind, f.kind === k.kind, k.active_count, k.kind));
+    side.replaceChildren(
+      el('div', { class: 'eyebrow', text: '종류' }), tree,
+      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '주제' }), areaNav);
   }
 
   // 상단 검색 + 필터 바(주제 필터는 좌측 위계로 이동 — 여기엔 검색·상태·출처·정렬만).
@@ -697,12 +705,12 @@ async function renderBrowse(view, params) {
     listBox.replaceChildren(skeletonRows(4));
     foot.replaceChildren();
     try {
-      let entries;
+      let entries, facets;
       if (f.q.trim()) {
         // grep 경로 — 스니펫 포함. lifecycle/confidence 는 grep 백엔드 미지원이라 클라이언트에서 표시만.
         const r = await api('/api/ui/ctx/grep?' + new URLSearchParams(
           Object.assign({ query: f.q.trim(), limit: '50', orderBy: f.orderBy || 'updated_at' }, f.kind ? { kind: f.kind } : {}, f.domain ? { domain: f.domain } : {})));
-        entries = (r.matches || []).map((m) => ({ ...m, _snippet: m.snippet }));
+        entries = (r.matches || []).map((m) => ({ ...m, _snippet: m.snippet })); facets = r.facets;
       } else {
         const p = new URLSearchParams({ limit: '200' });
         if (f.kind) p.set('kind', f.kind);
@@ -711,9 +719,10 @@ async function renderBrowse(view, params) {
         if (f.confidence) p.set('confidence', f.confidence);
         p.set('orderBy', f.orderBy || 'updated_at');
         const r = await api('/api/ui/ctx/ls?' + p.toString());
-        entries = r.entries || [];
+        entries = r.entries || []; facets = r.facets;
       }
       state.browse.entries = entries;
+      buildSide(facets); // 좌측 카운트 = 현재 필터 교집합(facet)으로 갱신
       renderEntries(listBox, entries, !!f.q.trim());
       foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.q.trim() ? ' (검색)' : '') }));
     } catch (e) {
@@ -726,25 +735,12 @@ async function renderBrowse(view, params) {
   lifecycleSel.addEventListener('change', () => { f.lifecycle = lifecycleSel.value; syncHash(); refetch(); });
   confidenceSel.addEventListener('change', () => { f.confidence = confidenceSel.value; syncHash(); refetch(); });
   orderSel.addEventListener('change', () => { f.orderBy = orderSel.value; syncHash(); refetch(); });
-  tree.addEventListener('click', (ev) => {
-    const item = ev.target.closest('[data-kind-val]');
-    if (!item) return;
-    ev.preventDefault();
-    f.kind = item.dataset.kindVal;
-    for (const a of tree.querySelectorAll('[data-kind-val]')) a.classList.toggle('on', a.dataset.kindVal === f.kind);
-    syncHash(); refetch();
-  });
-  // 좌측 주제 위계 클릭 — space(1차)/domain(2차) 동시 설정. 'on' 클래스 재계산.
-  areaNav.addEventListener('click', (ev) => {
-    const item = ev.target.closest('[data-area-space]');
-    if (!item) return;
-    ev.preventDefault();
-    f.space = item.dataset.areaSpace || '';
-    f.domain = item.dataset.areaDomain || '';
-    for (const a of areaNav.querySelectorAll('[data-area-space]')) {
-      a.classList.toggle('on', (a.dataset.areaSpace || '') === f.space && (a.dataset.areaDomain || '') === f.domain);
-    }
-    syncHash(); refetch();
+  // 좌측 클릭 위임(side 컨테이너 — buildSide 가 내부를 교체해도 핸들러 유지). 'on' 표시는 refetch→buildSide 가 f 기준 재계산.
+  side.addEventListener('click', (ev) => {
+    const kItem = ev.target.closest('[data-kind-val]');
+    if (kItem) { ev.preventDefault(); f.kind = kItem.dataset.kindVal; syncHash(); refetch(); return; }
+    const aItem = ev.target.closest('[data-area-space]');
+    if (aItem) { ev.preventDefault(); f.space = aItem.dataset.areaSpace || ''; f.domain = aItem.dataset.areaDomain || ''; syncHash(); refetch(); return; }
   });
 
   const head = el('div', { class: 'page-head' },
@@ -755,9 +751,7 @@ async function renderBrowse(view, params) {
     el('button', { class: 'btn btn-primary btn-sm', text: '+ 새 지식', onclick: () => openSaveOverlay(f.kind, f.domain, refetch) }));
 
   const layout = el('div', { class: 'browse-layout' },
-    el('aside', { class: 'browse-side' },
-      el('div', { class: 'eyebrow', text: '종류' }), tree,
-      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '주제' }), areaNav),
+    side,
     el('section', { class: 'browse-main' }, filterBar, listBox, foot),
   );
   view.replaceChildren(head, layout);
@@ -1483,9 +1477,7 @@ function teardownTerminal() {
   termSession = null;
 }
 
-async function renderTerminal(view, sub) {
-  teardownTerminal();
-  if (sub) { await renderTerminalSession(view, sub); return; }
+async function renderTerminal(view) {
   view.replaceChildren(skeleton('세션을 불러오는 중'));
   let data, cfg;
   try { [data, cfg] = await Promise.all([api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config')]); }
@@ -1505,21 +1497,21 @@ function termRow(s, cfg, view) {
   const meta = el('div', { class: 'term-row-meta' },
     el('div', { class: 'term-row-title' },
       el('span', { text: s.label }),
+      el('span', { class: 'term-badge', text: s.visibility === 'private' ? '비공개' : '공개' }),
       s.autoApprove ? el('span', { class: 'term-badge danger', text: '자동승인' }) : null,
-      s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null),
+      s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null,
+      (!s.owned && s.owner) ? el('span', { class: 'term-badge', text: '@' + s.owner }) : null),
     el('div', { class: 'caption', text: harnessLabel + ' · ' + (s.dir || '') }));
-  const open = el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => { location.hash = '#/terminal/' + encodeURIComponent(s.id); } });
-  const rename = el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: async () => {
-    const name = prompt('새 이름', s.label); if (name == null) return;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/rename', { method: 'POST', body: JSON.stringify({ label: name }) }); toast('이름 변경됨'); renderTerminal(view); }
-    catch (e) { toast('실패 — ' + e.message, true); }
-  } });
-  const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
-    if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); renderTerminal(view); }
-    catch (e) { toast('실패 — ' + e.message, true); }
-  } });
-  return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, open, rename, del));
+  const actions = [el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id), '_blank') })];
+  if (s.owned) {
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openTermEdit(s, view) }));
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
+      if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); renderTerminal(view); }
+      catch (e) { toast('실패 — ' + e.message, true); }
+    } }));
+  }
+  return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
 }
 
 function openTermCreateForm(cfg, view) {
@@ -1527,8 +1519,12 @@ function openTermCreateForm(cfg, view) {
   const harnesses = cfg.harnesses || [];
   const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
   const rootSel = el('select', { class: 'term-input' }, ...roots.map((r) => el('option', { value: r.key }, r.label)));
-  const subI = el('input', { class: 'term-input', type: 'text', placeholder: '하위 폴더 (선택 — 예: productivity)' });
+  const pickerBox = el('div', { class: 'term-picker' });
+  let pickerPath = '';
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+  const visSel = el('select', { class: 'term-input' },
+    el('option', { value: 'public' }, '공개 — 모든 멤버가 열람 가능한 세션 (팀 내부 세션은 팀원만 열람가능)'),
+    el('option', { value: 'private' }, '비공개 — 나에게만 보이고 나만 열 수 있는 세션'));
   const flagsBox = el('div', { class: 'term-flags' });
   const autoCb = el('input', { type: 'checkbox' });
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
@@ -1549,9 +1545,45 @@ function openTermCreateForm(cfg, view) {
   harnessSel.addEventListener('change', renderFlags);
   renderFlags();
 
+  // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색. 새 폴더는 '＋ 새 폴더 만들기…'.
+  async function loadPicker() {
+    pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
+    let data;
+    try { data = await api('/api/ui/terminal/browse?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(pickerPath)); }
+    catch (e) { pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더를 불러오지 못했습니다: ' + e.message })); return; }
+    pickerPath = data.path || '';
+    const rootLabel = (roots.find((r) => r.key === rootSel.value) || {}).label || rootSel.value;
+    const crumb = el('div', { class: 'term-crumb' }, el('a', { class: 'crumb', text: rootLabel, onclick: () => { pickerPath = ''; loadPicker(); } }));
+    let acc = '';
+    for (const seg of (pickerPath ? pickerPath.split('/') : [])) {
+      acc = acc ? acc + '/' + seg : seg; const p = acc;
+      crumb.append(el('span', { class: 'crumb-sep', text: ' / ' }), el('a', { class: 'crumb', text: seg, onclick: () => { pickerPath = p; loadPicker(); } }));
+    }
+    const parentPath = data.parent; // '' = 루트로, null = 이미 루트(상위 없음)
+    const sel = el('select', { class: 'term-input', onchange: () => {
+      const v = sel.value; sel.value = '';
+      if (v === '__up__') { pickerPath = parentPath || ''; loadPicker(); return; }
+      if (v === '__new__') { newPickerFolder(); return; }
+      if (v) { pickerPath = (pickerPath ? pickerPath + '/' : '') + v; loadPicker(); }
+    } },
+      el('option', { value: '' }, data.dirs.length ? '하위 폴더로 이동…' : '(하위 폴더 없음)'),
+      (pickerPath ? el('option', { value: '__up__' }, '⬆ 상위 폴더로') : null),
+      ...data.dirs.map((d) => el('option', { value: d }, '📁 ' + d)),
+      el('option', { value: '__new__' }, '＋ 새 폴더 만들기…'));
+    pickerBox.replaceChildren(crumb, sel, el('div', { class: 'caption', text: '여기서 시작: /' + pickerPath }));
+  }
+  async function newPickerFolder() {
+    const name = prompt('새 폴더 이름'); if (!name || !name.trim()) return;
+    const rel = (pickerPath ? pickerPath + '/' : '') + name.trim();
+    try { await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(rel), { method: 'POST' }); pickerPath = rel; loadPicker(); }
+    catch (e) { toast('폴더 생성 실패 — ' + e.message, true); }
+  }
+  rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
+  loadPicker();
+
   const back = overlay('새 세션',
-    field('이름', labelI), field('작업 위치', rootSel), field('하위 폴더', subI), field('하네스', harnessSel),
-    flagsBox, autoWrap,
+    field('이름', labelI), field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel),
+    field('공개 범위', visSel), flagsBox, autoWrap,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
@@ -1559,11 +1591,27 @@ function openTermCreateForm(cfg, view) {
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-            label: labelI.value, rootKey: rootSel.value, subpath: subI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked }) });
+            label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value }) });
           back.remove(); toast('세션 생성됨');
-          if (out && out.session) location.hash = '#/terminal/' + encodeURIComponent(out.session.id);
-          else renderTerminal(view);
+          if (out && out.session) window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id), '_blank');
+          renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
+      } })));
+}
+
+// 세션 수정 — 이름·공개범위(visibility). 소유자만(서버가 강제).
+function openTermEdit(s, view) {
+  const labelI = el('input', { class: 'term-input', type: 'text', value: s.label });
+  const visSel = el('select', { class: 'term-input' },
+    el('option', { value: 'public', selected: s.visibility !== 'private' ? '' : null }, '공개 — 모든 멤버가 열람 가능한 세션 (팀 내부 세션은 팀원만 열람가능)'),
+    el('option', { value: 'private', selected: s.visibility === 'private' ? '' : null }, '비공개 — 나에게만 보이고 나만 열 수 있는 세션'));
+  const back = overlay('세션 수정',
+    field('이름', labelI), field('공개 범위', visSel),
+    el('div', { class: 'ov-actions' },
+      el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, visibility: visSel.value }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
+        catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
       } })));
 }
 
@@ -1674,7 +1722,7 @@ async function route() {
       await renderSystem(view, segs[1] || null);
     } else if (page === 'terminal') {
       setActiveTab('terminal');
-      await renderTerminal(view, segs[1] ? decodeURIComponent(segs[1]) : null);
+      await renderTerminal(view);
     } else {
       setActiveTab('map');
       await renderMap(view);

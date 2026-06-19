@@ -5,14 +5,11 @@ import { resolveRepo } from "../domainmap/core/types.js";
 import {
   loadCandidates,
   validateDomainKey,
-  validateProjectKey,
   type Candidates,
 } from "./mapping-candidates.js";
 import { logger } from "../log.js";
 import {
   mirrorKnowledgeFromRawItem,
-  mirrorKnowledgeProject,
-  mirrorSupersedeSiblingProjects,
 } from "../org/knowledge-mirror.js";
 
 // 통합 DB(P1): domainmap 엔진(dmPool)도 이 풀을 공유한다 — withTx 장기점유 + 커넥터 ingest +
@@ -354,7 +351,6 @@ export async function resolveParents(): Promise<number> {
 export interface UiCoverageRow {
   repo: string;
   domainItems: number; domainProposed: number; domainConfirmed: number;
-  projectItems: number; projectProposed: number; projectConfirmed: number;
 }
 export interface UiStats {
   total: number;
@@ -369,15 +365,15 @@ export interface UiStats {
 // 개요 히어로/커버리지 카드용 통계 집계 — item 폐기 컷오버로 knowledge_unit(observed 미러)+kud/kup 기준.
 //  total/bySystem/byType/daily 는 observed 수집물(confidence='observed')만(저작물 R/K/H 제외 — 활동 통계 의미 보존).
 //  type 은 fields._item_type(원 item.type 무손실 보존). threadReplies 는 parent_name 보유 수.
-//  coverage 는 kud/kup(살아있는 매핑 proposed|confirmed)만 — 구 item_domain/item_project 카운트와 동의미.
+//  coverage 는 kud(살아있는 매핑 proposed|confirmed)만 — 구 item_domain 카운트와 동의미.
 export async function uiStats(): Promise<UiStats> {
   const OBS = `confidence='observed'`;
-  const coverageSql = (table: "knowledge_unit_domain" | "knowledge_unit_project") => `
+  const coverageSql = (table: "knowledge_unit_domain") => `
     SELECT repo, count(DISTINCT name) FILTER (WHERE state IN ('proposed','confirmed'))::int AS items,
            count(DISTINCT name) FILTER (WHERE state='confirmed')::int AS confirmed,
            count(DISTINCT name) FILTER (WHERE state='proposed')::int AS proposed
     FROM ${table} GROUP BY repo`;
-  const [head, bySystem, byType, daily, dom, proj] = await Promise.all([
+  const [head, bySystem, byType, daily, dom] = await Promise.all([
     itemsPool.query(`SELECT count(*)::int AS total, max(occurred_at) AS last,
                             count(*) FILTER (WHERE parent_name IS NOT NULL)::int AS replies
                      FROM knowledge_unit WHERE ${OBS}`),
@@ -387,19 +383,13 @@ export async function uiStats(): Promise<UiStats> {
     itemsPool.query(`SELECT (occurred_at AT TIME ZONE 'Asia/Seoul')::date::text AS day, count(*)::int AS count
                      FROM knowledge_unit WHERE ${OBS} AND occurred_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1`),
     itemsPool.query(coverageSql("knowledge_unit_domain")),
-    itemsPool.query(coverageSql("knowledge_unit_project")),
   ]);
   const cov = new Map<string, UiCoverageRow>();
   const blank = (repo: string): UiCoverageRow =>
-    ({ repo, domainItems: 0, domainProposed: 0, domainConfirmed: 0, projectItems: 0, projectProposed: 0, projectConfirmed: 0 });
+    ({ repo, domainItems: 0, domainProposed: 0, domainConfirmed: 0 });
   for (const r of dom.rows as { repo: string; items: number; confirmed: number; proposed: number }[]) {
     const c = cov.get(r.repo) ?? blank(r.repo);
     c.domainItems = r.items; c.domainProposed = r.proposed; c.domainConfirmed = r.confirmed;
-    cov.set(r.repo, c);
-  }
-  for (const r of proj.rows as { repo: string; items: number; confirmed: number; proposed: number }[]) {
-    const c = cov.get(r.repo) ?? blank(r.repo);
-    c.projectItems = r.items; c.projectProposed = r.proposed; c.projectConfirmed = r.confirmed;
     cov.set(r.repo, c);
   }
   const h = head.rows[0] as { total: number; last: Date | null; replies: number };
@@ -414,12 +404,11 @@ export async function uiStats(): Promise<UiStats> {
   };
 }
 
-// 매핑 테이블에 등장하는 repo 목록 — repo 셀렉터의 단일 소스. item 폐기 컷오버로 kud/kup 기준.
+// 매핑 테이블에 등장하는 repo 목록 — repo 셀렉터의 단일 소스. item 폐기 컷오버로 kud 기준.
 // rejected-only repo 는 제외(살아있는 매핑이 있는 repo 만).
 export async function listMappingRepos(): Promise<string[]> {
   const r = await itemsPool.query(
-    `SELECT DISTINCT repo FROM knowledge_unit_domain WHERE state <> 'rejected'
-     UNION SELECT DISTINCT repo FROM knowledge_unit_project WHERE state <> 'rejected' ORDER BY 1`);
+    `SELECT DISTINCT repo FROM knowledge_unit_domain WHERE state <> 'rejected' ORDER BY 1`);
   return (r.rows as { repo: string }[]).map((x) => x.repo);
 }
 

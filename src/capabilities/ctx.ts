@@ -5,7 +5,7 @@
 // 데이터층은 P1a(org/knowledge.ts) 위임: confidence·lifecycle 은 서버강제(입력 금지), 쓰기는
 //  assertNoHardSecrets + audit + version+1. 입력 검증은 어댑터 경계(MCP=zod input / REST=mount.parse).
 import { z } from "zod";
-import { getKnowledge, knowledgeThread, listKnowledge, listKnowledgeRevisions, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
+import { facetCounts, getKnowledge, knowledgeThread, listKnowledge, listKnowledgeRevisions, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
 import { listAllDomains } from "../domainmap/core/queries.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
@@ -73,6 +73,22 @@ function toSlug(seed: string): string {
   return "mem-" + h.toString(36);
 }
 
+// 마크다운 본문 → 평문 발췌(탐색 카드 미리보기용). 코드블록·링크·헤더·강조 기호를 제거하고
+//  공백을 단일화해 첫 n자만. 본문 자체는 안 싣고 이 발췌만 목록에 실어 페이로드 비대화를 막는다(전문=ctx_cat).
+function mdExcerpt(body: string | null | undefined, n: number): string | null {
+  if (!body) return null;
+  const plain = body
+    .replace(/```[\s\S]*?```/g, " ")            // 코드블록
+    .replace(/`([^`]*)`/g, "$1")                // 인라인 코드
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")  // 링크/이미지 → 텍스트만
+    .replace(/^#{1,6}\s+/gm, "")                // 헤더 기호
+    .replace(/[*_~>#|]/g, "")                   // 강조·인용·표 기호
+    .replace(/\s+/g, " ")                       // 공백 단일화
+    .trim();
+  if (!plain) return null;
+  return plain.length > n ? plain.slice(0, n).trimEnd() + "…" : plain;
+}
+
 // ── ctx_ls — listKnowledge 위임(kind/domain/lifecycle 필터 + path 접두 파생). limit 은 핸들러에서 slice. ──
 const ctxLs = coExposed(
   "ctx_ls",
@@ -124,8 +140,16 @@ const ctxLs = coExposed(
     const entries = rows.slice(0, limit).map((u) => ({
       name: u.name, kind: u.kind, title: u.title, domain_key: u.domain_key,
       lifecycle: u.lifecycle, confidence: u.confidence, updated_at: u.updated_at,
+      // 카드 본문 미리보기 — body_md(이미 redact 적용) 에서 마크다운 기호/공백을 정리한 평문 첫부분.
+      //  본문은 안 싣고 발췌만(목록 페이로드 비대화 방지). 전문은 ctx_cat.
+      excerpt: mdExcerpt(u.body_md, 200),
     }));
-    return { entries, count: entries.length };
+    // 좌측 facet 카운트(주제·종류) — 현재 필터와의 교집합(자기 축 제외). 목록과 동일 기준이라 카운트=목록수.
+    const facets = await facetCounts({
+      kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null,
+      system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+    });
+    return { entries, count: entries.length, facets };
   },
 );
 
@@ -174,7 +198,12 @@ const ctxGrep = coExposed(
       orderBy: input.orderBy ?? "updated_at",
       limit: input.limit ?? 10,
     });
-    return { matches };
+    // 검색 결과 기준 좌측 facet(주제·종류) — q+현재 필터 교집합(자기 축 제외). grep 은 lifecycle 미지원이라 생략.
+    const facets = await facetCounts({
+      kind: input.kind ?? null, domainKey: input.domain ?? null, q: input.query,
+      system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+    });
+    return { matches, facets };
   },
 );
 

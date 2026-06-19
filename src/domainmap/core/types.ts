@@ -39,18 +39,6 @@ export function syncBlockedRepos(): Set<string> {
   return blocked;
 }
 
-// ── P-V3-4b: project provenance_kind 네임스페이스 가드(M-나) ──
-// PM-provenance 프로젝트(initiative)의 key 는 syncProject 가 slugKey(`${prov_system}-${external_id}`)로
-// 만들어 항상 PM 시스템 접두를 단다(실측: 4행 전부 'clickup-…'). doc-derived(code_grouping) project 가
-// 같은 접두로 key 를 만들면 같은 UNIQUE(repo,key) 공간에서 두 의미가 충돌할 수 있다('붕뜸'의 잠재 재발).
-// 그래서 doc-derived 경로(reconcile.upsertProject)는 이 접두 집합을 예약어로 막는다 — initiative 의
-// 네임스페이스를 doc-derived 가 침범 못 하게(실측 현 49행 충돌 0; 이 가드는 미래 재발 방지).
-export const PROVENANCE_KEY_PREFIXES = ["clickup-", "jira-", "linear-", "asana-", "notion-"] as const;
-export function isReservedProvenanceKey(key: unknown): boolean {
-  const k = String(key ?? "").toLowerCase();
-  return PROVENANCE_KEY_PREFIXES.some((p) => k.startsWith(p));
-}
-
 // repo 인자 해소 — 구 domainmap/client.ts 에서 이주(에러 문구 byte 동일 — wrap() 의 '미지정' 400 토큰).
 export function resolveRepo(repo?: string): string {
   const r = repo ?? (process.env.DOMAINMAP_DEFAULT_REPO ?? "");
@@ -124,11 +112,6 @@ export interface ReassignResult {
 }
 export interface RestoreResult { restored: number; change_id: number; action: "deleted" | "reverted"; table: string; entity_id: number }
 
-// syncProject — unchanged 응답에 change_id 키 부재가 계약(유니온으로 고정).
-export type SyncProjectResult =
-  | { repo: string; id: number; key: string; action: "insert" | "update"; change_id: number }
-  | { repo: string; id: number; key: string; action: "unchanged" };
-
 export interface IngestResult { repo: string; run_id: number; tally: Record<string, number> }
 // refresh — tally 는 카운터 + (file granularity 시) aggregation 객체가 섞인다.
 export interface RefreshResult { repo: string; run_id: number; base: unknown; head: unknown; tally: Record<string, unknown> }
@@ -136,7 +119,6 @@ export interface RefreshResult { repo: string; run_id: number; base: unknown; he
 // 읽기 리스트 아이템(queries.ts 가 구성하는 리터럴) — in-process 소비자(items/mapping-candidates 등)는
 // 이 타입에서 Pick 으로 좁혀 쓴다(같은 이름·다른 shape 의 중복 선언 금지).
 export interface BestDomainRef { id: number; key: string; name: string; cross_cutting: boolean; status: string }
-export interface TouchProjectRef { key: string; name: string; kind: string | null; last_at: Date | null; commit_count: number | null }
 
 export interface DomainListItem {
   id: number; key: string; name: string; description: string | null;
@@ -147,24 +129,14 @@ export interface DomainListItem {
   units: number; entities: number; debts: number; proposed: number;
 }
 
-export interface ProjectListItem {
-  id: number; key: string; name: string; description: string | null; kind: string | null;
-  status: string; origin: string | null; started_at: Date | null; ended_at: Date | null;
-  state: string | null; prov_system: string | null; external_url: string | null; last_synced_at: Date | null;
-  touched_code: number; touched_entities: number;
-  // P-V3-4b: '붕뜸' 해소 — initiative(PM provenance) vs code_grouping(doc-derived) 구분.
-  //  pre-migration NULL 행은 백필이 채우지만, ?? null 로 키 항상 방출(키 생략 금지 — 표면 계약).
-  provenance_kind: string | null;
-}
-
 export interface EntityListItem {
   id: number; name: string; source: string | null; kind: string | null;
-  domain: BestDomainRef | null; projects: TouchProjectRef[];
+  domain: BestDomainRef | null;
 }
 
 export interface CodeListItem {
   id: number; path: string; kind: string | null; label: string; state: string; prev_path: string | null;
-  domain: BestDomainRef | null; projects: TouchProjectRef[];
+  domain: BestDomainRef | null;
 }
 
 export interface DebtListItem {

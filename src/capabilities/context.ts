@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { dmRead } from "./domainmap-compat.js";
 import { resolveRepo } from "../domainmap/core/types.js";
-import { listRepos, overview, listDomainsApi, listAllDomains, domainDetail, listProjectsApi, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
+import { listRepos, overview, listDomainsApi, listAllDomains, domainDetail, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
 import { domainActiveCounts } from "../org/knowledge.js";
 import { listMappingRepos, uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
@@ -144,19 +144,6 @@ const domainGet: Capability = {
   },
 };
 
-const projectList: Capability = {
-  name: "project_list",
-  title: "프로젝트 목록",
-  description: "프로젝트(이니셔티브)와 상태.",
-  scope: "context",
-  input: { repo: z.string().optional() },
-  expose: { mcp: true, rest: false },
-  handler: async (input: { repo?: string }) => {
-    const r = resolveRepo(input.repo);
-    return dmRead(`/api/repo/${enc(r)}/projects`, () => listProjectsApi(r));
-  },
-};
-
 const debtList: Capability = {
   name: "debt_list",
   title: "도메인 부채 목록",
@@ -174,7 +161,6 @@ const debtList: Capability = {
 // 화이트리스트에 debts 없음(기존 그대로 — 표면 동결, 추가 금지).
 const DM_KIND_FN: Record<string, (repo: string) => Promise<unknown>> = {
   domains: listDomainsApi,
-  projects: listProjectsApi,
   entities: listEntitiesApi,
   overview,
 };
@@ -183,7 +169,7 @@ const DM_KIND_FN: Record<string, (repo: string) => Promise<unknown>> = {
 const domainmapProxy: Capability = {
   name: "domainmap_proxy",
   title: "domainmap 읽기 프록시",
-  description: "domainmap repo/:kind 읽기 (kind ∈ domains|projects|entities|overview) — 웹 UI 전용.",
+  description: "domainmap repo/:kind 읽기 (kind ∈ domains|entities|overview) — 웹 UI 전용.",
   scope: "context",
   input: { repo: z.string(), kind: z.string() },
   expose: {
@@ -208,5 +194,5 @@ const domainmapProxy: Capability = {
 };
 
 export const contextCapabilities: Capability[] = [
-  repoList, contextOverview, itemsStats, domainList, allDomains, domainGet, projectList, debtList, domainmapProxy,
+  repoList, contextOverview, itemsStats, domainList, allDomains, domainGet, debtList, domainmapProxy,
 ];

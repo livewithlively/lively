@@ -1,8 +1,7 @@
 // P-V3-3c — 커넥터/pm 적재 → knowledge_unit observed A/W 미러(라이브 듀얼라이트).
 //
 //   P-V3-3b 의 일회성 마이그(scripts/migrate-items-to-ku.mjs)를 **라이브 적재 경로**로 끌어올린다:
-//   ingestItems 가 item 에 upsert 할 때마다 같은 트랜잭션에서 knowledge_unit 에 observed 미러를 함께 쓰고,
-//   declareItemProject(커넥터 싱크·pm write-through 의 유일한 매핑 경로)가 knowledge_unit_project 미러를 함께 쓴다.
+//   ingestItems 가 item 에 upsert 할 때마다 같은 트랜잭션에서 knowledge_unit 에 observed 미러를 함께 쓴다.
 //   item(레거시·읽기경로 스냅샷)은 **그대로 보존** — 미러는 가산(additive). 신 활동이 ctx_* 표면에 즉시 표면화된다.
 //
 //   재사용(P-V3-3b 동치 — SQL byte 동등):
@@ -122,42 +121,4 @@ export async function mirrorKnowledgeFromRawItem(client: pg.PoolClient, it: RawI
     );
   }
   return true;
-}
-
-// ── declared/매핑 미러 — item_domain/item_project 쓰기와 짝으로 knowledge_unit_domain/_project 에 반영. ──
-//  name = unitName(system, externalId)(미러 유닛의 캐노니컬 PK). 유닛 미러가 없는(분류 불가) 좌표면
-//  knowledge_unit FK(name) 위반이 나므로, **유닛 존재를 전제로** 호출돼야 한다(커넥터 경로는 W=clickup 만
-//  declare 하므로 항상 유닛 존재). 멱등 ON CONFLICT DO UPDATE.
-export async function mirrorKnowledgeProject(
-  client: pg.PoolClient,
-  coord: { system: string; externalId: string },
-  m: { repo: string; projectKey: string; mappedBy: string; confidence?: number | null; state?: string; evidence?: string | null },
-): Promise<void> {
-  const name = unitName(coord.system, coord.externalId);
-  // 미러 유닛이 없으면(분류 불가 조합) FK 위반 — 조용히 skip(레거시 item 매핑은 보존됨).
-  const exists = ((await client.query(`SELECT 1 FROM knowledge_unit WHERE name=$1`, [name])).rowCount ?? 0) > 0;
-  if (!exists) return;
-  await client.query(
-    `INSERT INTO knowledge_unit_project(name, repo, project_key, mapped_by, confidence, state, evidence)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (name, repo, project_key) DO UPDATE SET
-       mapped_by=EXCLUDED.mapped_by, confidence=EXCLUDED.confidence, state=EXCLUDED.state, evidence=EXCLUDED.evidence`,
-    [name, m.repo, m.projectKey, m.mappedBy ?? "declared", m.confidence ?? null, m.state ?? "confirmed", m.evidence ?? null],
-  );
-}
-
-// supersede 미러 — 형제 declared 행 강등(리스트 이동 수렴)을 knowledge_unit_project 에도 반영.
-//  현재 키가 아닌 declared 행을 state='rejected' 로(레거시 supersedeSiblingDeclaredProjects 와 동치).
-export async function mirrorSupersedeSiblingProjects(
-  client: pg.PoolClient,
-  coord: { system: string; externalId: string },
-  keepProjectKey: string,
-  repo: string,
-): Promise<void> {
-  const name = unitName(coord.system, coord.externalId);
-  await client.query(
-    `UPDATE knowledge_unit_project SET state='rejected'
-      WHERE name=$1 AND repo=$2 AND mapped_by='declared' AND project_key <> $3 AND state <> 'rejected'`,
-    [name, repo, keepProjectKey],
-  );
 }

@@ -10,8 +10,9 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, renameSession } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
+import { registerTerminalFiles } from "./terminal-files.js";
 
 const COOKIE = "lively_term";
 const PREFIX = "/terminal";
@@ -72,13 +73,18 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const session = await createSession(userOf(req), {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove,
+      autoApprove: !!b.autoApprove, visibility: String(b.visibility ?? "public"),
     });
     res.setHeader("Cache-Control", "no-store");
     res.json({ session });
   }));
-  app.post("/api/ui/terminal/sessions/:id/rename", auth, wrap(async (req, res) => {
-    await renameSession(userOf(req), req.params.id, String((req.body as Record<string, unknown> | undefined)?.label ?? ""));
+  // 세션 수정 — 이름·공개범위(visibility) 변경. 소유자만.
+  app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    await editSession(userOf(req), req.params.id, {
+      label: b.label !== undefined ? String(b.label) : undefined,
+      visibility: b.visibility !== undefined ? String(b.visibility) : undefined,
+    });
     res.json({ ok: true });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -86,6 +92,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.json({ ok: true });
   }));
 
+  registerTerminalFiles(app, verifier);
   setupPtyUpgrade(server, lookupTicket);
-  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws)");
+  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws, files)");
 }

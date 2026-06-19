@@ -4,9 +4,9 @@
 import { z } from "zod";
 import {
   unmappedUnitsUi, mappingKeyCountsUnit,
-  proposeUnitDomain, proposeUnitProject,
-  confirmUnitDomain, confirmUnitProject,
-  rejectUnitDomain, rejectUnitProject,
+  proposeUnitDomain,
+  confirmUnitDomain,
+  rejectUnitDomain,
   type MappedBy,
 } from "../org/knowledge-mapping.js";
 import { loadCandidates } from "../items/mapping-candidates.js";
@@ -20,13 +20,13 @@ const listUnmapped: Capability = {
   name: "list_unmapped",
   title: "미매핑 아이템 inbox",
   description:
-    "도메인/프로젝트 매핑이 없는 아이템을 나열(잔여 표면화). 응답 {count, rows}. missing=domain|project|either|both. " +
+    "도메인 매핑이 없는 아이템을 나열(잔여 표면화). 응답 {count, rows}. missing=domain|either. " +
     "repo 지정 시 '그 repo 기준 미매핑'(다른 repo 에만 매핑된 아이템도 포함) — 멀티 repo 큐레이션은 repo 명시 권장. " +
     "기각(rejected)만 남은 아이템은 미매핑으로 취급되어 여기 복귀한다. 억지 매핑하지 말 것 — 미매핑은 신호.",
   scope: "items",
   input: {
     // 문자열은 qstr(REST) 거동 미러링: trim + 길이 상한 — 같은 논리 입력이 표면별로 갈리지 않게.
-    missing: z.enum(["domain", "project", "either", "both"]).default("either"),
+    missing: z.enum(["domain", "either"]).default("either"),
     repo: z.string().trim().max(200).optional().describe("이 repo 기준 미매핑으로 스코프(예: main). 미지정 시 전 repo 통합 기준"),
     system: z.string().trim().max(100).optional().describe("discord | notion …"),
     type: z.enum(["message", "task", "change", "doc", "note"]).optional(),
@@ -41,7 +41,7 @@ const listUnmapped: Capability = {
       paths: ["/api/ui/inbox"],
       parse: (req) => {
         const missingRaw = qstr(req.query.missing, "missing", 20) ?? "either";
-        if (!MISSING_VALUES.has(missingRaw)) throw new HttpError(400, "missing 은 domain|project|either|both 만 허용됩니다");
+        if (!MISSING_VALUES.has(missingRaw)) throw new HttpError(400, "missing 은 domain|either 만 허용됩니다");
         return {
           missing: missingRaw,
           repo: qstr(req.query.repo, "repo", 200),
@@ -55,7 +55,7 @@ const listUnmapped: Capability = {
     }],
   },
   handler: async (input: {
-    missing?: "domain" | "project" | "either" | "both";
+    missing?: "domain" | "either";
     repo?: string; system?: string; type?: string; since?: string; limit?: number; offset?: number;
   }) => unmappedUnitsUi(input),
 };
@@ -67,7 +67,7 @@ const mappingCandidates: Capability = {
   name: "mapping_candidates",
   title: "매핑 후보 vocab",
   description:
-    "한 repo 의 도메인(key+description)·프로젝트(key+기간)·엔티티(name→domain)를 한 번에 반환. propose 전 후보를 grounding 하는 용도.",
+    "한 repo 의 도메인(key+description)·엔티티(name→domain)를 한 번에 반환. propose 전 후보를 grounding 하는 용도.",
   scope: "items",
   input: { repo: z.string().trim().max(200).optional() },
   expose: {
@@ -87,9 +87,6 @@ const mappingCandidates: Capability = {
     return {
       repo: c.repo,
       domains: [...c.domainsByKey.values()].map((d) => ({ key: d.key, name: d.name, description: d.description })),
-      projects: [...c.projectsByKey.values()].map((p) => ({
-        key: p.key, name: p.name, description: p.description, started_at: p.started_at, ended_at: p.ended_at,
-      })),
       entities: [...c.entityToDomainKey.entries()].map(([name, domainKey]) => ({ name, domainKey })),
     };
   },
@@ -99,7 +96,7 @@ const mappingCandidates: Capability = {
 const mappingCounts: Capability = {
   name: "mapping_counts",
   title: "키별 매핑 카운트",
-  description: "repo 의 도메인/프로젝트 키별 아이템 수(+confirmed 수) — 웹 도메인 페이지 grounding 용(REST 전용).",
+  description: "repo 의 도메인 키별 아이템 수(+confirmed 수) — 웹 도메인 페이지 grounding 용(REST 전용).",
   scope: "items",
   input: { repo: z.string() },
   expose: {
@@ -119,7 +116,7 @@ const mappingCounts: Capability = {
 
 interface CurateInput {
   action: "propose" | "confirm" | "reject";
-  kind: "domain" | "project";
+  kind: "domain";
   name: string; // ku 좌표(knowledge_unit.name) — item 폐기 컷오버로 itemId 대체
   key: string;
   repo?: string;
@@ -139,7 +136,7 @@ const curateItemMapping: Capability = {
   name: "curate_item_mapping",
   title: "지식단위 매핑 큐레이션(제안/확정/기각)",
   description:
-    "knowledge_unit(ku)→domain/project 매핑의 단일 쓰기 op. 좌표는 ku.name(예: clickup-86abc123). " +
+    "knowledge_unit(ku)→domain 매핑의 단일 쓰기 op. 좌표는 ku.name(예: clickup-86abc123). " +
     "action=propose: state='proposed' 제안 — 이 툴에서는 mappedBy='llm' 만 허용(기본값, evidence 근거 인용 필수·영속; " +
     "'rule'/'manual' 은 거부 — rule 행은 mapping-run, manual 행은 웹/CLI 의 사람 경로 전용), " +
     "confirmed/manual/rejected 행은 보호되어 action='skipped-*' 로 보고(덮어쓰기 없음), provenance 강등 금지, 멀티도메인 허용. " +
@@ -150,7 +147,7 @@ const curateItemMapping: Capability = {
   scope: "items",
   input: {
     action: z.enum(["propose", "confirm", "reject"]),
-    kind: z.enum(["domain", "project"]),
+    kind: z.enum(["domain"]),
     name: z.string().trim().min(1).max(64).describe("knowledge_unit.name(ku 좌표 — 예: clickup-86abc123)"),
     key: z.string().trim().min(1).max(200), // REST parseMappingBody 의 trim 과 거동 일치(어댑터 경계 파리티)
     repo: z.string().trim().max(200).optional(),
@@ -188,19 +185,13 @@ const curateItemMapping: Capability = {
           `MCP propose 는 mappedBy='llm' 만 허용됩니다(받은 값: ${mappedBy}) — rule 행은 mapping-run, manual 행은 웹/CLI 경로`,
         );
       }
-      return input.kind === "domain"
-        ? proposeUnitDomain({ ...base, domainKey: input.key, mappedBy }, { audit })
-        : proposeUnitProject({ ...base, projectKey: input.key, mappedBy }, { audit });
+      return proposeUnitDomain({ ...base, domainKey: input.key, mappedBy }, { audit });
     }
     if (input.action === "confirm") {
-      return input.kind === "domain"
-        ? confirmUnitDomain({ ...base, domainKey: input.key }, { audit })
-        : confirmUnitProject({ ...base, projectKey: input.key }, { audit });
+      return confirmUnitDomain({ ...base, domainKey: input.key }, { audit });
     }
     // reject — evidence 는 기각 사유(reason)로 audit.evidence 에 영속.
-    return input.kind === "domain"
-      ? rejectUnitDomain({ name: input.name, domainKey: input.key, repo: input.repo, reason: input.evidence }, { audit })
-      : rejectUnitProject({ name: input.name, projectKey: input.key, repo: input.repo, reason: input.evidence }, { audit });
+    return rejectUnitDomain({ name: input.name, domainKey: input.key, repo: input.repo, reason: input.evidence }, { audit });
   },
 };
 

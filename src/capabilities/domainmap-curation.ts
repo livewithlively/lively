@@ -5,7 +5,7 @@
 // 에러 표면 byte-compat: dmWrite 가 코어의 e.status 4xx → HttpError(status,msg) 번역(구 dmWrite 와 동일),
 // dmRead 가 읽기 에러를 구 dmGet 엔벨로프로 재현. reassign 의 UNIQUE 충돌은 코어가 raw pg 에러로
 // 전파하고 여기(dm_mapping_move) 한 곳에서만 err.code==='23505' → 409 한국어로 번역한다.
-// 화이트리스트 원칙: free-form 표면 금지 — 아래 14개 op(읽기 3 + 쓰기 11)만 통과하며
+// 화이트리스트 원칙: free-form 표면 금지 — 아래 13개 op(읽기 3 + 쓰기 10)만 통과하며
 // 게이트웨이가 zod/parse 로 입력을 선검증하고, 모든 쓰기는 audit 로그 + actor(user.userId)로 위임한다.
 // domainmap 측 검증·change_log 기록은 코어가 단일 경로로 수행(이중 감사 = 의도된 설계).
 // actor-type 매핑: ctx.source==='mcp' → actor.type 'agent'(에이전트 쓰기는 도메인 단에서 가드),
@@ -16,7 +16,6 @@ import { domainDetail, listDebts } from "../domainmap/core/queries.js";
 import { history, restore } from "../domainmap/core/changelog.js";
 import { confirmDomain, domainSetShould, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
 import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/core/mappings.js";
-import { confirmProject } from "../domainmap/core/projects.js";
 import { setDebtStatus } from "../domainmap/core/debts.js";
 import { logger } from "../log.js";
 import { assertNoHardSecrets } from "../org/redact.js";
@@ -135,7 +134,7 @@ const dmHistory: Capability = {
     dmRead(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}`, () => history(input.repo, input.limit)),
 };
 
-// ════════ 쓰기 9종 — 전부 POST(게이트웨이 표면에서 PATCH 는 POST 로 모델링, RestMount 유니온 유지) ════════
+// ════════ 쓰기 8종 — 전부 POST(게이트웨이 표면에서 PATCH 는 POST 로 모델링, RestMount 유니온 유지) ════════
 
 const dmDomainConfirm: Capability = {
   name: "dm_domain_confirm",
@@ -346,25 +345,6 @@ const dmDebtStatus: Capability = {
       () => dmWrite(() => setDebtStatus(input.id, input.status, webActor(user.userId)))),
 };
 
-const dmProjectConfirm: Capability = {
-  name: "dm_project_confirm",
-  title: "domainmap 프로젝트 확인",
-  description: "프로젝트 확정(status='confirmed', origin='human'). 반환 {id, change_id}.",
-  scope: "context",
-  input: { id: zid },
-  expose: {
-    mcp: false,
-    rest: [{
-      method: "POST",
-      paths: ["/api/ui/domainmap/project/:id/confirm"],
-      parse: (req) => ({ id: parseId(req.params.id, "project id") }),
-    }],
-  },
-  handler: async (input: { id: number }, user, ctx) =>
-    audited("project_confirm", user, ctx, { id: input.id },
-      () => dmWrite(() => confirmProject(input.id, webActor(user.userId)))),
-};
-
 const dmRestore: Capability = {
   name: "dm_restore",
   title: "domainmap 변경 되돌리기",
@@ -513,7 +493,7 @@ export const domainmapCurationCapabilities: Capability[] = [
   dmDomainDetail, dmDebtList, dmHistory,
   dmDomainConfirm, dmDomainEdit, dmDomainMerge,
   dmMappingConfirm, dmMappingReject, dmMappingMove,
-  dmDebtStatus, dmProjectConfirm, dmRestore,
+  dmDebtStatus, dmRestore,
   proposeDomain, domainDeprecate, // expose.mcp=true — 도메인 authoring(⑤)
   domainSetShouldCap, // P4: expose.mcp=true — should(의도) 재조정(stop훅 경로)
 ];

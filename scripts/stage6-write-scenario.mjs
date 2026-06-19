@@ -7,7 +7,7 @@
 //   단, new 모드에서 reassign 충돌이 '정말 raw pg(code 23505)'로 전파되는지 별도 단언(콘솔)한다.
 // 시나리오(repo=productivity, actor stage6): ingest 보호/드리프트/신규 → confirm → edit(human/agent 403)
 // → propose+confirm → merge(fold) → deprecate/no-op/undeprecate → restore must-fail → mapping
-// confirm/reject/reassign + 충돌 must-fail → debt 상태 3연 → project confirm → syncProject 4연(409 포함).
+// confirm/reject/reassign + 충돌 must-fail → debt 상태 3연.
 // 쓰기는 전부 scratch DB 에만 — 라이브 무영향.
 import { writeFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -33,7 +33,6 @@ if (mode === "new") {
     domains: await import("../dist/domainmap/core/domains.js"),
     mappings: await import("../dist/domainmap/core/mappings.js"),
     debts: await import("../dist/domainmap/core/debts.js"),
-    projects: await import("../dist/domainmap/core/projects.js"),
     reconcile: await import("../dist/domainmap/core/reconcile.js"),
     db: await import("../dist/domainmap/db.js"),
   };
@@ -85,11 +84,6 @@ async function readDebts() {
   if (mode === "old") return (await httpJson("GET", `/api/repo/${REPO}/debts`)).body;
   return JSON.parse(JSON.stringify(await core.queries.listDebts(REPO)));
 }
-async function readProjects() {
-  if (mode === "old") return (await httpJson("GET", `/api/repo/${REPO}/projects`)).body;
-  return JSON.parse(JSON.stringify(await core.queries.listProjectsApi(REPO)));
-}
-
 async function domainConfirm(id) {
   if (mode === "old") return httpJson("POST", `/api/domain/${id}/confirm`, {}, { "x-actor": ACTOR_ID });
   return coreCall(() => core.domains.confirmDomain(id, human)); // confirmEntity(dead dispatch) 제거 — 동일 shape
@@ -134,10 +128,6 @@ async function debtStatus(id, status) {
   if (mode === "old") return httpJson("PATCH", `/api/debt/${id}`, { status }, { "x-actor": ACTOR_ID });
   return coreCall(() => core.debts.setDebtStatus(id, status, human));
 }
-async function projectConfirm(id) {
-  if (mode === "old") return httpJson("POST", `/api/project/${id}/confirm`, {}, { "x-actor": ACTOR_ID });
-  return coreCall(() => core.projects.confirmProject(id, human));
-}
 async function ingest(payload) {
   if (mode === "old") {
     // server.mjs 는 ingest 라우트가 없다 — 구 엔진의 정식 ingest 진입점인 store.mjs CLI 를
@@ -153,13 +143,6 @@ async function ingest(payload) {
     return { status: 200, body: JSON.parse(out) };
   }
   return coreCall(() => core.reconcile.ingest(payload));
-}
-async function syncProject(repo, payload) {
-  if (mode === "old") {
-    return httpJson("POST", `/api/repo/${repo}/project/sync`, payload,
-      { "x-actor": "daon", "x-actor-type": "agent" });
-  }
-  return coreCall(() => core.projects.syncProject(repo, payload, { type: "agent", id: "daon" }));
 }
 
 // ── ingest payloads (양 모드 동일 — old 모드는 셸이 store.mjs ingest 로 선실행하고 그 출력을 주입) ──
@@ -182,12 +165,6 @@ export const INGEST_A = {
   ],
   debts: [
     { kind: "scenario", title: "stage6 동등성 검증용 debt", detail: "stage6", cited_refs: ["stage6/alpha"] },
-  ],
-  projects: [
-    { key: "stage6-proj", name: "스테이지6 프로젝트", description: "동등성", kind: "initiative", started_at: "2026-06-01T00:00:00.000Z", ended_at: "2026-06-10T00:00:00.000Z", source_ref: "stage6" },
-  ],
-  touches: [
-    { project_key: "stage6-proj", target_kind: "code_unit", target: "stage6/alpha", commit_count: 3, first_at: "2026-06-02T00:00:00.000Z", last_at: "2026-06-09T00:00:00.000Z" },
   ],
 };
 export const INGEST_B = {
@@ -312,29 +289,6 @@ let idC;
     const r = await debtStatus(d.id, st);
     record(`9:debt-${st}`, r.status, r.body);
   }
-}
-
-// step 10 — project confirm
-{
-  const ps = await readProjects();
-  const p = ps.find((x) => x.key === "stage6-proj");
-  assert.ok(p, "stage6 프로젝트 못 찾음");
-  const r = await projectConfirm(p.id);
-  record("10:project-confirm", r.status, r.body);
-}
-
-// step 11 — syncProject insert / unchanged(change_id 무) / update / 타 repo 409
-{
-  const base = { prov_system: "stage6tool", prov_instance: "inst1", external_id: "EXT-1", name: "싱크 프로젝트", state: "active" };
-  const r1 = await syncProject(REPO, base);
-  record("11a:sync-insert", r1.status, r1.body);
-  const r2 = await syncProject(REPO, base);
-  record("11b:sync-unchanged", r2.status, r2.body);
-  assert.ok(!("change_id" in (r2.body ?? {})), "unchanged 응답에 change_id 가 있음");
-  const r3 = await syncProject(REPO, { ...base, name: "싱크 프로젝트 (개명)", state: "completed" });
-  record("11c:sync-update", r3.status, r3.body);
-  const r4 = await syncProject("e2e-sandbox", base); // provenance 전역 유니크 → 409 소유 repo 안내
-  record("11d:sync-conflict-409", r4.status, r4.body);
 }
 
 writeFileSync(`/tmp/stage6-golden/write-${mode}.json`, JSON.stringify(results, null, 2) + "\n");

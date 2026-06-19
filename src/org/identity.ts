@@ -18,7 +18,7 @@ export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "me",
   // search_items/get_item 폐기(item 흡수 → ctx_ls/ctx_grep/ctx_cat). 매핑 큐레이션 3종은 유지.
   "list_unmapped", "mapping_candidates", "curate_item_mapping",
-  "domain_list", "domain_get", "domain_deprecate", "project_list", "repo_list", "debt_list",
+  "domain_list", "domain_get", "domain_deprecate", "repo_list", "debt_list",
   "db_query", "db_schema", "context_overview", "propose_domain",
   "pm_task_create", "pm_task_update_status", "pm_task_assign", "pm_task_comment", "pm_task_link", "pm_task_archive",
   "memory_save", "memory_search", "memory_get",

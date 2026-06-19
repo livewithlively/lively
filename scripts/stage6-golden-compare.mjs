@@ -45,7 +45,7 @@ if (mode === "core") {
   const domainIds = manifest.domainIds;
   const REPOS = Object.keys(domainIds);
 
-  const { listRepos, overview, listDomainsApi, domainDetail, queue, listDebts, listCodeApi, listEntitiesApi, listProjectsApi } =
+  const { listRepos, overview, listDomainsApi, domainDetail, queue, listDebts, listCodeApi, listEntitiesApi } =
     await import("../dist/domainmap/core/queries.js");
   const { history } = await import("../dist/domainmap/core/changelog.js");
   const { endPool } = await import("../dist/domainmap/db.js");
@@ -58,7 +58,6 @@ if (mode === "core") {
     compare(`${repo}/queue`, ser(await queue(repo)), `${dir}/queue.json`);
     compare(`${repo}/debts`, ser(await listDebts(repo)), `${dir}/debts.json`);
     compare(`${repo}/entities`, ser(await listEntitiesApi(repo)), `${dir}/entities.json`);
-    compare(`${repo}/projects`, ser(await listProjectsApi(repo)), `${dir}/projects.json`);
     compare(`${repo}/code`, ser(await listCodeApi(repo, false)), `${dir}/code.json`);
     compare(`${repo}/code?includeRemoved`, ser(await listCodeApi(repo, true)), `${dir}/code-includeRemoved.json`);
     compare(`${repo}/history(기본50)`, ser(await history(repo)), `${dir}/history-default.json`);

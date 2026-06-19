@@ -29,7 +29,6 @@ async function main(): Promise<void> {
   // 정리(이전 잔여 + 종료 시) — 임시 접두 행만 삭제(실 데이터 무영향).
   const cleanup = async (): Promise<void> => {
     await itemsPool.query(`DELETE FROM knowledge_unit_domain  WHERE name LIKE $1`, [PREFIX + "%"]);
-    await itemsPool.query(`DELETE FROM knowledge_unit_project WHERE name LIKE $1`, [PREFIX + "%"]);
     await itemsPool.query(`DELETE FROM knowledge_unit         WHERE name LIKE $1`, [PREFIX + "%"]);
   };
   await cleanup();
@@ -46,17 +45,16 @@ async function main(): Promise<void> {
       }
     });
 
-    await t("신 인덱스/테이블 존재: external uidx · trgm(가용시) · 조인 테이블 2종", async () => {
+    await t("신 인덱스/테이블 존재: external uidx · trgm(가용시) · 조인 테이블", async () => {
       const idx = (await itemsPool.query(
         `SELECT indexname FROM pg_indexes WHERE tablename='knowledge_unit'`,
       )).rows.map((r) => r.indexname as string);
       assert.ok(idx.includes("knowledge_unit_external_uidx"), "부분 유니크 인덱스 누락");
       assert.ok(idx.includes("knowledge_unit_source_idx"));
       const tabs = (await itemsPool.query(
-        `SELECT to_regclass('knowledge_unit_domain') d, to_regclass('knowledge_unit_project') p`,
+        `SELECT to_regclass('knowledge_unit_domain') d`,
       )).rows[0];
       assert.ok(tabs.d, "knowledge_unit_domain 누락");
-      assert.ok(tabs.p, "knowledge_unit_project 누락");
       // pg_trgm 은 가용 시에만(graceful) — 가용이면 인덱스도 있어야.
       const trgm = (await itemsPool.query(`SELECT 1 FROM pg_extension WHERE extname='pg_trgm'`)).rowCount;
       if (trgm) {
@@ -112,7 +110,7 @@ async function main(): Promise<void> {
       assert.equal(after.review_pending - before.review_pending, 0, "observed 는 검토 큐에 영향 0");
     });
 
-    // ── (2) 다중도메인/프로젝트 조인 + cascade ──
+    // ── (2) 다중도메인 조인 + cascade ──
     await t("다중도메인 조인: 한 단위가 도메인 여러개 귀속 + cascade 삭제", async () => {
       const name = PREFIX + "multi";
       await upsertKnowledge({ name, kind: "K", title: "수집물", body_md: "z" }, "test", "mcp"); // → ai (V4-P2a: A→K)
@@ -120,14 +118,8 @@ async function main(): Promise<void> {
         `INSERT INTO knowledge_unit_domain(name, repo, domain_key, mapped_by, confidence, state)
            VALUES ($1,'r','billing','rule',0.9,'confirmed'), ($1,'r','auth','llm',0.5,'proposed')
          ON CONFLICT DO NOTHING`, [name]);
-      await itemsPool.query(
-        `INSERT INTO knowledge_unit_project(name, repo, project_key, mapped_by, state)
-           VALUES ($1,'r','proj-x','declared','confirmed')
-         ON CONFLICT DO NOTHING`, [name]);
       const dCount = (await itemsPool.query(`SELECT count(*)::int n FROM knowledge_unit_domain WHERE name=$1`, [name])).rows[0].n;
-      const pCount = (await itemsPool.query(`SELECT count(*)::int n FROM knowledge_unit_project WHERE name=$1`, [name])).rows[0].n;
       assert.equal(dCount, 2, "도메인 2개 귀속");
-      assert.equal(pCount, 1, "프로젝트 1개 귀속");
       // cascade: 단위 삭제 → 조인 행도 삭제.
       await removeKnowledge(name, "test", "mcp");
       const dAfter = (await itemsPool.query(`SELECT count(*)::int n FROM knowledge_unit_domain WHERE name=$1`, [name])).rows[0].n;

@@ -29,7 +29,7 @@ function save(dir, file, payload) {
   writeFileSync(`${OUT}/${dir}/${file}`, payload);
 }
 
-const { listRepos, overview, listDomainsApi, domainDetail, queue, listDebts, listCodeApi, listEntitiesApi, listProjectsApi } =
+const { listRepos, overview, listDomainsApi, domainDetail, queue, listDebts, listCodeApi, listEntitiesApi } =
   await import("../dist/domainmap/core/queries.js");
 const { history } = await import("../dist/domainmap/core/changelog.js");
 const { dmPool, endPool } = await import("../dist/domainmap/db.js");
@@ -56,7 +56,6 @@ for (const repo of REPOS) {
   save(dir, "queue.json", ser(await queue(repo)));
   save(dir, "debts.json", ser(await listDebts(repo)));
   save(dir, "entities.json", ser(await listEntitiesApi(repo)));
-  save(dir, "projects.json", ser(await listProjectsApi(repo)));
   save(dir, "code.json", ser(await listCodeApi(repo, false)));
   save(dir, "code-includeRemoved.json", ser(await listCodeApi(repo, true)));
   save(dir, "history-default.json", ser(await history(repo)));

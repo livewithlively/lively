@@ -21,6 +21,11 @@
   .term-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border, #ccc);
     border-radius: 8px; font: inherit; background: var(--bg, #fff); color: inherit; }
   .term-flags { display: flex; flex-direction: column; gap: 8px; }
+  .term-picker { display: flex; flex-direction: column; gap: 5px; }
+  .term-crumb { font-size: 12px; }
+  .term-crumb .crumb { color: var(--accent, #16a37f); cursor: pointer; }
+  .term-crumb .crumb:hover { text-decoration: underline; }
+  .term-crumb .crumb-sep { color: var(--fg-muted, #999); }
   .term-auto { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13px; color: #b04a3a; line-height: 1.4; }
   .term-wrap { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 360px; }
   .term-bar { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; }

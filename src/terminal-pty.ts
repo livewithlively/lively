@@ -6,7 +6,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "./log.js";
-import { TMUX_BIN, sessionOwner, sessionDir } from "./terminal-sessions.js";
+import { TMUX_BIN, canAttach, sessionDir, ensureSessionOpts } from "./terminal-sessions.js";
 
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
@@ -21,8 +21,9 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const tk = lookupTicket(req.headers.cookie);
       if (!tk) { socket.destroy(); return; }
       const id = url.searchParams.get("session") || "";
-      const owner = await sessionOwner(id).catch(() => null);
-      if (!owner || owner !== tk.userId) { socket.destroy(); return; }
+      const ok = await canAttach(id, tk.userId).catch(() => false);
+      if (!ok) { socket.destroy(); return; }
+      await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
       wss.handleUpgrade(req, socket, head, (ws) => attach(ws, id));
     })();
   });

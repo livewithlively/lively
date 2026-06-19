@@ -1,7 +1,7 @@
-// ClickUp 커넥터 (phase B) — ClickUp API v2 → canonical RawItem + domainmap 프로젝트 싱크.
-// 리스트(프로젝트 단위) 나열 → 리스트별 태스크 백필/팀 단위 증분 폴(date_updated_gt)
-// → 태스크 1건을 type:"task" RawItem 으로 정규화. 캐노니컬 진입은 run-sync.js(프로젝트 싱크 +
-// 태스크 + declared 매핑); SPI backfill 은 태스크 RawItem 만 흘린다(run-backfill 호환).
+// ClickUp 커넥터 (phase B) — ClickUp API v2 → canonical RawItem.
+// 리스트 나열 → 리스트별 태스크 백필/팀 단위 증분 폴(date_updated_gt)
+// → 태스크 1건을 type:"task" RawItem 으로 정규화. 캐노니컬 진입은 run-sync.js(태스크 + 커서);
+// SPI backfill 은 태스크 RawItem 만 흘린다(run-backfill 호환).
 //
 // 인증: Authorization: <CLICKUP_API_TOKEN> (Bearer 접두사 없음 — personal token 컨벤션).
 // rate limit: 100 req/min/token — X-RateLimit-Remaining=0 선제 대기 + 429 시 retry-after 재시도.
@@ -9,13 +9,6 @@
 // 액터 컨벤션(load-bearing): clickup 신원의 external_id 는 **소문자 이메일**(없으면 숫자 id 문자열) —
 // daon 의 manual 신원(clickup / 'lively@lvly.io')이 정확히 매치되어야 한다(resolveActor 정확 일치 룩업).
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
-import { syncProject } from "../domainmap/core/projects.js";
-import { resolveRepo } from "../domainmap/core/types.js";
-
-// 고객 배포 불변: 커넥터 대상 repo·actor 를 코드에 하드코딩하지 않는다(고객사 노출 금지). repo 는
-//  DOMAINMAP_DEFAULT_REPO(resolveRepo, 미설정 시 throw — 설정 강제), actor 는 LIVELY_CONNECTOR_ACTOR
-//  (미설정 시 중립 'connector'). 옛 'productivity'/'daon' 리터럴 제거.
-const CONNECTOR_ACTOR = process.env.LIVELY_CONNECTOR_ACTOR || "connector";
 
 export type { Connector, RawItem, BackfillOpts };
 
@@ -142,35 +135,6 @@ export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
       list_name: task.list?.name ?? null,
     },
     raw: task,
-  };
-}
-
-// 프로젝트 키 컨벤션 — domainmap syncProject 의 기본 slugKey('clickup-<listid>')와 일치.
-export const taskProjectKey = (listId: string): string => `clickup-${listId}`;
-
-// 리스트 1개 → domainmap project/sync 페이로드.
-// description: 빈 content 는 **생략**(omit) — syncProject 의 `p.description ?? ex.description` 이
-// 큐레이션된 기존 설명(예: 프로젝트 46)을 보존한다(load-bearing — 빈 문자열을 보내면 영구 소실).
-// fields: 비휘발 메타만(space[, folder(숨김 아님일 때만)]) — task_count 같은 휘발 값을 넣으면
-// 매 싱크가 change_log churn 이 된다.
-export function toProjectSyncPayload(
-  list: ClickUpList, ctx: ToRawItemCtx,
-): Record<string, unknown> {
-  const { teamId } = ctx;
-  const description = list.content?.trim() ? list.content : undefined;
-  const fields: Record<string, unknown> = {};
-  if (list.space?.name) fields.space = list.space.name;
-  if (list.folder && !list.folder.hidden && list.folder.name) fields.folder = list.folder.name;
-  return {
-    prov_system: "clickup",
-    prov_instance: teamId,
-    external_id: list.id,
-    name: list.name ?? list.id,
-    ...(description !== undefined ? { description } : {}),
-    state: list.archived ? "archived" : "active",
-    external_url: `https://app.clickup.com/${teamId}/v/li/${list.id}`,
-    fields,
-    raw: list,
   };
 }
 
@@ -370,37 +334,6 @@ export async function linkTasks(taskId: string, linksTo: string): Promise<unknow
   });
 }
 
-// ── domainmap 프로젝트 싱크 — 리스트(프로젝트 단위)별 1 POST. repo 는 'productivity' 하드코딩
-// (DOMAINMAP_DEFAULT_REPO='lively' 에 절대 의존하지 않는다 — lively 는 서버측 403 백스톱도 있음). ──
-export interface ProjectSyncResult {
-  listId: string; listName: string;
-  ok: boolean;
-  action?: string; projectKey?: string; projectId?: number;
-  error?: string;
-}
-
-export async function syncProjects(
-  lists: ClickUpList[], ctx: ToRawItemCtx,
-): Promise<ProjectSyncResult[]> {
-  const out: ProjectSyncResult[] = [];
-  for (const list of lists) {
-    const base = { listId: list.id, listName: list.name ?? list.id };
-    try {
-      // 코어 syncProject 가 SYNC_BLOCKED_REPOS 가드·409 소유-repo 안내를 그대로 수행. repo/actor 는
-      //  배포 설정에서(하드코딩 금지 — 고객사 노출 방지).
-      const r = (await syncProject(
-        resolveRepo(),
-        toProjectSyncPayload(list, ctx),
-        { type: "agent", id: CONNECTOR_ACTOR },
-      )) as { id?: number; key?: string; action?: string };
-      out.push({ ...base, ok: true, action: r.action, projectKey: r.key, projectId: r.id });
-    } catch (err) {
-      out.push({ ...base, ok: false, error: (err as Error).message });
-    }
-  }
-  return out;
-}
-
 // 허용(=싱크 대상) 리스트 나열: 스페이스 → (폴더 리스트, 전방호환) + folderless(active/archived 패스)
 // → 제외 denylist 적용. archived 패스가 있어 툴에서 보관한 리스트도 state='archived' 로 수렴한다.
 export async function enumerateLists(teamId: string): Promise<ClickUpList[]> {
@@ -422,7 +355,7 @@ export async function enumerateLists(teamId: string): Promise<ClickUpList[]> {
 }
 
 // ── Connector SPI 구현 — 태스크 RawItem 스트림(run-backfill.js clickup 호환).
-// 캐노니컬 진입은 run-sync.js(프로젝트 싱크 + declared 매핑 + 커서) — 여기는 태스크만.
+// 캐노니컬 진입은 run-sync.js(태스크 + 커서) — 여기는 태스크만.
 export const clickupConnector: Connector = {
   name: "clickup",
 

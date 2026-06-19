@@ -1,7 +1,7 @@
 // item 폐기·ku 컷오버 — 매핑 큐레이션의 ku-좌표(knowledge_unit.name) 단일 쓰기/읽기 경로.
 //
-//   store.ts 의 item_domain/item_project 가드레일(propose/confirm/reject/declare/supersede)을
-//   knowledge_unit_domain/_project 로 1:1 포팅하되, **좌표를 itemId(BIGINT) → name(TEXT, ku 내부 PK)** 로
+//   store.ts 의 item_domain 가드레일(propose/confirm/reject)을
+//   knowledge_unit_domain 로 1:1 포팅하되, **좌표를 itemId(BIGINT) → name(TEXT, ku 내부 PK)** 로
 //   바꾼다. 매핑 큐레이션이 item 테이블을 전혀 읽지/쓰지 않게 만드는 컷오버의 코어.
 //
 //   동일 가드레일(불변식 보존):
@@ -14,7 +14,7 @@
 import { itemsPool } from "../items/store.js";
 import { resolveRepo } from "../domainmap/core/types.js";
 import {
-  loadCandidates, validateDomainKey, validateProjectKey, type Candidates,
+  loadCandidates, validateDomainKey, type Candidates,
 } from "../items/mapping-candidates.js";
 import { logger } from "../log.js";
 
@@ -66,11 +66,11 @@ async function validateProposeBase(
 
 // upsert 결과 해석 + 감사 로깅. 0행 = WHERE 가드로 보호된 행(throw 안 함). store.ts finishPropose 와 동치.
 async function finishPropose(
-  audit: string, table: "knowledge_unit_domain" | "knowledge_unit_project", keyCol: "domain_key" | "project_key",
+  audit: string, table: "knowledge_unit_domain", keyCol: "domain_key",
   name: string, repo: string, key: string, mappedBy: string,
   r: { rowCount: number | null; rows: unknown[] }, auditCtx: { source: string; actor: string },
 ): Promise<ProposeResult> {
-  const target = table === "knowledge_unit_domain" ? "domain" : "project";
+  const target = "domain";
   if ((r.rowCount ?? 0) === 0) {
     const cur = (await itemsPool.query(
       `SELECT state, mapped_by FROM ${table} WHERE name=$1 AND repo=$2 AND ${keyCol}=$3`,
@@ -100,7 +100,7 @@ async function finishPropose(
 
 // 공통 propose — domain/project 분기는 테이블/키컬럼/target 만 다르다.
 async function proposeUnit(
-  table: "knowledge_unit_domain" | "knowledge_unit_project", keyCol: "domain_key" | "project_key", target: "domain" | "project",
+  table: "knowledge_unit_domain", keyCol: "domain_key", target: "domain",
   input: { name: string; key: string; mappedBy: MappedBy; repo?: string; confidence?: number; evidence?: string },
   candidates: Candidates, repo: string, audit: { source: string; actor: string },
 ): Promise<ProposeResult> {
@@ -137,24 +137,13 @@ export async function proposeUnitDomain(
     { ...input, key: input.domainKey }, candidates, repo, auditDefaults(deps?.audit));
 }
 
-// ku → project 제안.
-export async function proposeUnitProject(
-  input: { name: string; projectKey: string; mappedBy: MappedBy; repo?: string; confidence?: number; evidence?: string },
-  deps?: { candidates?: Candidates; audit?: AuditCtx },
-): Promise<ProposeResult> {
-  const { repo, candidates } = await validateProposeBase(input, deps);
-  if (!validateProjectKey(candidates, input.projectKey)) throw new Error(`project_key ${input.projectKey} 검증 실패(repo=${repo})`);
-  return proposeUnit("knowledge_unit_project", "project_key", "project",
-    { ...input, key: input.projectKey }, candidates, repo, auditDefaults(deps?.audit));
-}
-
 // ── 확정(proposed → confirmed) — state='confirmed', mapped_by='manual'(사람 진실). ──
 export interface ConfirmResult {
   name: string; repo: string; key: string; mappedBy: "manual"; state: "confirmed";
   action: "inserted" | "updated";
 }
 async function confirmUnit(
-  table: "knowledge_unit_domain" | "knowledge_unit_project", keyCol: "domain_key" | "project_key", target: "domain" | "project",
+  table: "knowledge_unit_domain", keyCol: "domain_key", target: "domain",
   name: string, key: string, repo: string, confidence: number | null, evidence: string | null,
   audit: { source: string; actor: string },
 ): Promise<ConfirmResult> {
@@ -190,16 +179,6 @@ export async function confirmUnitDomain(
     input.name, input.domainKey, repo, input.confidence ?? null, input.evidence ?? null, auditDefaults(deps?.audit));
 }
 
-export async function confirmUnitProject(
-  input: { name: string; projectKey: string; repo?: string; confidence?: number; evidence?: string },
-  deps?: { candidates?: Candidates; audit?: AuditCtx },
-): Promise<ConfirmResult> {
-  const { repo, candidates } = await validateProposeBase({ ...input, mappedBy: "manual" }, deps);
-  if (!validateProjectKey(candidates, input.projectKey)) throw new Error(`project_key ${input.projectKey} 검증 실패(repo=${repo})`);
-  return confirmUnit("knowledge_unit_project", "project_key", "project",
-    input.name, input.projectKey, repo, input.confidence ?? null, input.evidence ?? null, auditDefaults(deps?.audit));
-}
-
 // ── 기각(→ rejected) — store.ts rejectMapping 의 ku-좌표 대응물(CTE 원자, TOCTOU 제거). ──
 export interface RejectResult {
   name: string; repo: string; key: string; mappedBy: string;
@@ -207,12 +186,12 @@ export interface RejectResult {
   action: "rejected" | "already-rejected";
 }
 async function rejectMapping(
-  table: "knowledge_unit_domain" | "knowledge_unit_project", keyCol: "domain_key" | "project_key",
+  table: "knowledge_unit_domain", keyCol: "domain_key",
   input: { name: string; key: string; repo?: string; reason?: string },
   deps?: { audit?: AuditCtx },
 ): Promise<RejectResult> {
   const repo = resolveRepo(input.repo);
-  const target = table === "knowledge_unit_domain" ? "domain" : "project";
+  const target = "domain";
   const audit = auditDefaults(deps?.audit);
   const r = await itemsPool.query(
     `WITH up AS (
@@ -261,101 +240,14 @@ export async function rejectUnitDomain(
     { name: input.name, key: input.domainKey, repo: input.repo, reason: input.reason }, deps);
 }
 
-export async function rejectUnitProject(
-  input: { name: string; projectKey: string; repo?: string; reason?: string },
-  deps?: { audit?: AuditCtx },
-): Promise<RejectResult> {
-  return rejectMapping("knowledge_unit_project", "project_key",
-    { name: input.name, key: input.projectKey, repo: input.repo, reason: input.reason }, deps);
-}
-
-// ── 선언(declared) 쓰기 경로 — 커넥터 싱크/pm 에코 전용(좌표 직접: system/external_id). ──
-//  store.ts declareItemProject 의 ku-좌표 대응물. mirrorKnowledgeProject 와 달리 이건 큐레이션 캐노니컬
-//  (kud/kup)에 직접 쓴다 — 듀얼라이트 제거 후 단일 진실. 유닛 미러가 없는(분류 불가) 좌표면 ku 행 부재라
-//  validateProposeBase 가 '없음' throw → 호출자(커넥터)는 declarable 게이트로 미리 걸러야 한다(W=clickup 만 declare).
-export interface DeclareResult {
-  name: string; repo: string; key: string; mappedBy: "declared"; state: "confirmed";
-  action: "inserted" | "updated" | "overrode-rejected" | "overrode-manual";
-}
-export async function declareUnitProject(
-  input: { name: string; projectKey: string; repo?: string; confidence?: number; evidence?: string },
-  deps?: { candidates?: Candidates; audit?: AuditCtx },
-): Promise<DeclareResult> {
-  const { repo, candidates } = await validateProposeBase({ ...input, mappedBy: "manual" }, deps);
-  if (!validateProjectKey(candidates, input.projectKey)) throw new Error(`project_key ${input.projectKey} 검증 실패(repo=${repo})`);
-  const audit = deps?.audit?.source
-    ? auditDefaults(deps.audit)
-    : auditDefaults({ ...deps?.audit, source: "connector-sync" });
-  const r = await itemsPool.query(
-    `WITH prev AS (
-       SELECT state, mapped_by FROM knowledge_unit_project WHERE name=$1 AND repo=$2 AND project_key=$3
-     ), up AS (
-       INSERT INTO knowledge_unit_project(name,repo,project_key,mapped_by,confidence,state,evidence)
-       VALUES($1,$2,$3,'declared',$4,'confirmed',$5)
-       ON CONFLICT (name,repo,project_key) DO UPDATE
-         SET mapped_by='declared', state='confirmed',
-             confidence=COALESCE(EXCLUDED.confidence, knowledge_unit_project.confidence),
-             evidence=COALESCE(EXCLUDED.evidence, knowledge_unit_project.evidence)
-       RETURNING (xmax=0) AS inserted
-     )
-     INSERT INTO knowledge_unit_mapping_audit(target,name,repo,key,mapped_by,action,state,confidence,evidence,source,actor)
-     SELECT 'project',$1,$2,$3,'declared',
-            CASE WHEN up.inserted THEN 'declared-inserted'
-                 WHEN prev.state='rejected' THEN 'declared-overrode-rejected'
-                 WHEN prev.mapped_by='manual' THEN 'declared-overrode-manual'
-                 ELSE 'declared-updated' END,'confirmed',$4,$5,$6,$7
-     FROM up LEFT JOIN prev ON TRUE
-     RETURNING action`,
-    [input.name, repo, input.projectKey, input.confidence ?? null, input.evidence ?? null, audit.source, audit.actor],
-  );
-  const auditAction = (r.rows[0] as { action: string }).action;
-  const action: DeclareResult["action"] = auditAction === "declared-inserted" ? "inserted"
-    : auditAction === "declared-overrode-rejected" ? "overrode-rejected"
-    : auditAction === "declared-overrode-manual" ? "overrode-manual"
-    : "updated";
-  const logFn = action.startsWith("overrode") ? logger.warn.bind(logger) : logger.info.bind(logger);
-  logFn({ audit: "knowledge_unit_project_declare", name: input.name, repo, key: input.projectKey, action, source: audit.source, actor: audit.actor });
-  return { name: input.name, repo, key: input.projectKey, mappedBy: "declared", state: "confirmed", action };
-}
-
-// ── 선언 매핑 형제 강등 — 리스트 이동 수렴(declared 단일 진실). store.ts supersedeSiblingDeclaredProjects 대응물. ──
-export async function supersedeSiblingDeclaredUnitProjects(
-  input: { name: string; keepProjectKey: string; repo?: string },
-  deps?: { audit?: AuditCtx },
-): Promise<string[]> {
-  const repo = resolveRepo(input.repo);
-  const audit = auditDefaults(deps?.audit);
-  const r = await itemsPool.query(
-    `WITH up AS (
-       UPDATE knowledge_unit_project SET state='rejected'
-       WHERE name=$1 AND repo=$2 AND mapped_by='declared'
-         AND project_key <> $3 AND state <> 'rejected'
-       RETURNING project_key
-     )
-     INSERT INTO knowledge_unit_mapping_audit(target,name,repo,key,mapped_by,action,state,evidence,source,actor)
-     SELECT 'project',$1,$2,up.project_key,'declared','declared-superseded','rejected',$4,$5,$6 FROM up
-     RETURNING key`,
-    [input.name, repo, input.keepProjectKey,
-     `superseded by ${input.keepProjectKey} (컨테이너 이동 수렴)`, audit.source, audit.actor],
-  );
-  const demoted = (r.rows as { key: string }[]).map((x) => x.key);
-  if (demoted.length) {
-    logger.warn({
-      audit: "knowledge_unit_project_declare_supersede", name: input.name, repo,
-      kept: input.keepProjectKey, demoted, source: audit.source, actor: audit.actor,
-    });
-  }
-  return demoted;
-}
-
 // ════════ 읽기(큐레이션 inbox/카운트) — item 좌표 → ku 좌표(name) ════════
 
 export interface UnmappedUnitsParams {
-  missing?: "domain" | "project" | "either" | "both";
+  missing?: "domain" | "either";
   repo?: string; system?: string; type?: string; since?: string; limit?: number; offset?: number;
 }
 
-// 큐레이션 inbox(ku) — observed 미러 ku 중 도메인/프로젝트 매핑이 없는 단위. '매핑 있음' = state IN
+// 큐레이션 inbox(ku) — observed 미러 ku 중 도메인 매핑이 없는 단위. '매핑 있음' = state IN
 //  ('proposed','confirmed')(rejected-only 는 미매핑 복귀). repo 는 NOT EXISTS 내부 스코프.
 //  observed 한정(confidence='observed') — 저작물(R/K/H)은 큐레이션 inbox 대상이 아니다.
 export async function unmappedUnitsUi(p: UnmappedUnitsParams): Promise<{ count: number; rows: unknown[] }> {
@@ -366,14 +258,8 @@ export async function unmappedUnitsUi(p: UnmappedUnitsParams): Promise<{ count: 
   const noDomain = () => p.repo
     ? `NOT EXISTS (SELECT 1 FROM knowledge_unit_domain d WHERE d.name=k.name AND d.repo=${ph(p.repo)} AND d.${LIVE})`
     : `NOT EXISTS (SELECT 1 FROM knowledge_unit_domain d WHERE d.name=k.name AND d.${LIVE})`;
-  const noProject = () => p.repo
-    ? `NOT EXISTS (SELECT 1 FROM knowledge_unit_project pr WHERE pr.name=k.name AND pr.repo=${ph(p.repo)} AND pr.${LIVE})`
-    : `NOT EXISTS (SELECT 1 FROM knowledge_unit_project pr WHERE pr.name=k.name AND pr.${LIVE})`;
-  const missing = p.missing ?? "either";
-  if (missing === "domain") where.push(noDomain());
-  else if (missing === "project") where.push(noProject());
-  else if (missing === "both") where.push(`(${noDomain()} AND ${noProject()})`);
-  else where.push(`(${noDomain()} OR ${noProject()})`);
+  // missing 은 domain|either 로 축소(project 폐기) — 둘 다 '도메인 미매핑' 동일 의미.
+  where.push(noDomain());
   if (p.system) where.push(`k.external_system = ${ph(p.system)}`);
   if (p.type) where.push(`k.fields->>'_item_type' = ${ph(p.type)}`);
   if (p.since) where.push(`k.occurred_at >= ${ph(p.since)}`);
@@ -390,7 +276,7 @@ export async function unmappedUnitsUi(p: UnmappedUnitsParams): Promise<{ count: 
   return { count, rows };
 }
 
-// 리스트 행 — item uiListSelect 의 ku 대응(name 키, _item_type → type, 매핑 배지는 kud/kup). rejected 배지 제외.
+// 리스트 행 — item uiListSelect 의 ku 대응(name 키, _item_type → type, 매핑 배지는 kud). rejected 배지 제외.
 function uiUnitListSelect(): string {
   return `
   SELECT k.name AS id, k.fields->>'_item_type' AS type, k.external_system AS system,
@@ -399,23 +285,16 @@ function uiUnitListSelect(): string {
          k.external_url, k.occurred_at, k.parent_name AS parent_id, k.author AS actor,
          (SELECT COALESCE(json_agg(json_build_object('repo', d.repo, 'key', d.domain_key, 'state', d.state, 'by', d.mapped_by)
                                    ORDER BY d.repo, d.domain_key), '[]'::json)
-            FROM knowledge_unit_domain d WHERE d.name = k.name AND d.state <> 'rejected') AS domains,
-         (SELECT COALESCE(json_agg(json_build_object('repo', pr.repo, 'key', pr.project_key, 'state', pr.state, 'by', pr.mapped_by)
-                                   ORDER BY pr.repo, pr.project_key), '[]'::json)
-            FROM knowledge_unit_project pr WHERE pr.name = k.name AND pr.state <> 'rejected') AS projects
+            FROM knowledge_unit_domain d WHERE d.name = k.name AND d.state <> 'rejected') AS domains
   FROM knowledge_unit k`;
 }
 
 // 키별 매핑 카운트(ku) — mappingKeyCounts 의 ku 대응물. rejected 제외.
 export async function mappingKeyCountsUnit(repo: string): Promise<{
   domains: { key: string; count: number; confirmed: number }[];
-  projects: { key: string; count: number; confirmed: number }[];
 }> {
   const domains = (await itemsPool.query(
     `SELECT domain_key AS key, count(*)::int AS count, count(*) FILTER (WHERE state='confirmed')::int AS confirmed
      FROM knowledge_unit_domain WHERE repo=$1 AND state <> 'rejected' GROUP BY 1 ORDER BY 2 DESC`, [repo])).rows;
-  const projects = (await itemsPool.query(
-    `SELECT project_key AS key, count(*)::int AS count, count(*) FILTER (WHERE state='confirmed')::int AS confirmed
-     FROM knowledge_unit_project WHERE repo=$1 AND state <> 'rejected' GROUP BY 1 ORDER BY 2 DESC`, [repo])).rows;
-  return { domains, projects };
+  return { domains };
 }

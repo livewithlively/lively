@@ -474,6 +474,7 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS parent_name TEXT;
     ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS raw JSONB;
+    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS summary TEXT;
   `);
 
   // ── 동기화물 멱등 upsert 키 — UNIQUE(external_system, external_instance, external_id) WHERE external_id IS NOT NULL. ──

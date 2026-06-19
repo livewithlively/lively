@@ -161,7 +161,6 @@ await mcpCap("repo_list.json", "repo_list", {});
 for (const repo of REPOS) {
   await mcpCap("context_overview.json", "context_overview", { repo }, { sub: repo });
   await mcpCap("domain_list.json", "domain_list", { repo }, { sub: repo });
-  await mcpCap("project_list.json", "project_list", { repo }, { sub: repo });
   await mcpCap("debt_list.json", "debt_list", { repo }, { sub: repo });
   for (const id of domainIds[repo]) {
     await mcpCap(`domain-get-${id}.json`, "domain_get", { id, repo }, { sub: repo });

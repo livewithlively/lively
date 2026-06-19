@@ -10,22 +10,15 @@
 // 실익 없이 union/AUTH_TOKENS_JSON 변경만 유발(런북에 업그레이드 경로로 문서화).
 import { z } from "zod";
 import { ingestItems, recordPmWriteAudit } from "../items/store.js";
-import {
-  declareUnitProject, supersedeSiblingDeclaredUnitProjects,
-} from "../org/knowledge-mapping.js";
 import { unitName } from "../org/external-identity.js";
 import { logActivity } from "../domainmap/core/activity.js";
-import { resolveRepo } from "../domainmap/core/types.js";
-import { loadCandidates, validateProjectKey } from "../items/mapping-candidates.js";
 import {
   getTeam, getMembersEmailMap, getTask, createTask, updateTask, createTaskComment, linkTasks,
-  getExcludedListIds, toRawItem, taskProjectKey, type ClickUpTask,
+  getExcludedListIds, toRawItem, type ClickUpTask,
 } from "../connectors/clickup.js";
 import { logger } from "../log.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
-
-const REPO = resolveRepo(); // 대상 repo 는 배포 설정(DOMAINMAP_DEFAULT_REPO)에서 — 하드코딩 금지(고객사 노출 방지).
 
 // ── 쓰기 공통 audit — domainmap-curation.ts 의 audited() idiom(결과 시점 기록). ──
 // 성공 = outcome:'ok', 실패 = outcome:'failed' + error. ClickUp 쓰기는 성공했는데 에코만 실패한
@@ -63,14 +56,10 @@ async function audited<T>(
 
 // ── 에코 업서트 — ClickUp 응답 task 를 폴과 **동일한** 순수 변환으로 미러에 반영. ──
 // fields 에 via/initiator 스탬프(transient — 다음 폴이 정규화하며 사라짐, 내구 기록은 audit).
-// declare 는 declareItemProject(유일한 mapped_by='declared' 경로) — repo 'productivity' 고정.
 // 에코 **선검증**(create 외 5 op 는 임의 taskId 를 받으므로 여기가 리스트 게이트):
 //  · excluded 리스트(CLICKUP_EXCLUDE_LIST_IDS): run-sync 가 영원히 안 긁는다 — ingest 하면 영구
 //    스테일 미러 행이 되므로 **미러 자체를 스킵**(mirrored:false + 경고; ClickUp 쓰기는 성공이므로
-//    op 는 성공으로 반환 — 과거엔 ingest 후 declare throw 로 false-failure + '다음 run-sync 가
-//    수렴' 이라는 거짓 힌트를 냈다).
-//  · 미동기화 리스트(후보 vocab 에 없음): item 은 에코하되 declare 만 스킵(경고) — 다음 run-sync 가
-//    프로젝트 싱크 후 매핑을 수렴한다(이 힌트는 참).
+//    op 는 성공으로 반환).
 async function echoTask(
   task: ClickUpTask, user: LivelyUser,
 ): Promise<{ name: string | null; projectKey: string | null; mirrored: boolean; warning?: string }> {
@@ -82,31 +71,12 @@ async function echoTask(
       logger.warn({ audit: "pm_echo_skipped", taskId: task.id, listId, reason: "excluded-list" });
       return { name: null, projectKey: null, mirrored: false, warning };
     }
-    const declaredKey = listId ? taskProjectKey(listId) : null;
-    const declarable = declaredKey !== null
-      && validateProjectKey(await loadCandidates(REPO), declaredKey);
     const raw = toRawItem(task, { teamId });
     raw.fields = { ...raw.fields, via: "harness", initiator: user.userId };
     // item 폐기 컷오버: ingestItems 가 ku observed 미러를 동기 적재(read-your-writes) → ku 좌표 name 즉시 도출.
     await ingestItems([raw]);
     const name = unitName("clickup", task.id);
-    if (declaredKey && declarable) {
-      await declareUnitProject(
-        { name, projectKey: declaredKey, repo: REPO, evidence: `pm write-through by ${user.userId}` },
-        { audit: { source: "pm-write", actor: user.userId } },
-      );
-      // 리스트 간 이동 수렴(run-sync 와 동일 reconcile) — 옛 리스트 declared 행 강등(대부분 no-op).
-      await supersedeSiblingDeclaredUnitProjects(
-        { name, keepProjectKey: declaredKey, repo: REPO },
-        { audit: { source: "pm-write", actor: user.userId } },
-      );
-      return { name, projectKey: declaredKey, mirrored: true };
-    }
-    const warning = declaredKey
-      ? `리스트 ${listId}(${declaredKey}) 미동기화 — 단위는 에코됨, 매핑은 다음 run-sync 가 수렴`
-      : `태스크에 리스트 정보 없음 — 매핑 스킵`;
-    logger.warn({ audit: "pm_echo_declare_skipped", taskId: task.id, listId, projectKey: declaredKey });
-    return { name, projectKey: null, mirrored: true, warning };
+    return { name, projectKey: null, mirrored: true };
   } catch (err) {
     // ClickUp 쓰기는 이미 성공 — 미러만 스테일. 다음 run-sync 가 수렴하므로 재시도 금지(특히 create).
     const e = new Error(
@@ -163,13 +133,7 @@ const pmTaskCreate: Capability = {
     user, ctx,
   ) => {
     const listId = normalizeListId(input.listKeyOrId);
-    const projectKey = taskProjectKey(listId);
     return audited("task_create", user, ctx, { listId, title: input.title }, async () => {
-      // 제로-쓰기 보장: ClickUp 호출 **전에** 후보 vocab 으로 리스트 존재를 선검증.
-      const candidates = await loadCandidates(REPO);
-      if (!validateProjectKey(candidates, projectKey)) {
-        throw new Error(`리스트/프로젝트 후보 없음: ${projectKey} — run-sync 로 먼저 동기화하세요`);
-      }
       const teamId = (await getTeam()).id;
       const assignees = input.assigneeEmails?.length
         ? await resolveAssigneeIds(teamId, input.assigneeEmails)

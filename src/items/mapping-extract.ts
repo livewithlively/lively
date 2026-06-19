@@ -1,5 +1,5 @@
 // 순수 결정적 추출기 — IO/DB/fetch 없음. 단위 테스트 가능(커넥터 toRawItem 스타일).
-// 모든 함수는 "이미 받아온" 후보 vocab(도메인/프로젝트/엔티티명)을 인자로 받아 순수하게 유지한다.
+// 모든 함수는 "이미 받아온" 후보 vocab(도메인/엔티티명)을 인자로 받아 순수하게 유지한다.
 // DESIGN §7: 매핑은 구조적·명시참조 우선, 미매핑은 신호 — 규칙을 넓혀 억지 매핑하지 않는다.
 
 // Notion 본문은 ~500KB 까지 옴 — 정규식 스캔 전 항상 capText 로 bound.
@@ -156,25 +156,6 @@ export function extractDomainSlugTokens(
   // name 의 유의미 토큰(영문 길이>=4)도 보조 신호 — key 와 1:1 매핑이 아니므로 name 만으론 약함.
   // 여기선 key 기반 매치만 반환(name 토큰은 D6 LLM 판단으로 넘김 — 억지 매핑 방지).
   void domainNames;
-  return [...matched];
-}
-
-// P1 — 프로젝트 slug(key) 매칭. 도메인과 동일 단어경계 규칙.
-export function extractProjectSlugs(
-  text: string,
-  projectKeys: string[],
-  projectNames: string[],
-): string[] {
-  const t = capText(text);
-  if (!t) return [];
-  const lower = t.toLowerCase();
-  const matched = new Set<string>();
-  for (const key of projectKeys) {
-    if (!key) continue;
-    const re = new RegExp(`(?<![a-z0-9-])${escapeRe(key.toLowerCase())}(?![a-z0-9-])`);
-    if (re.test(lower)) matched.add(key);
-  }
-  void projectNames;
   return [...matched];
 }
 

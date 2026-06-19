@@ -30,8 +30,8 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
 }
 
 export const ITEM_TYPES = new Set(["message", "task", "change", "doc", "note"]);
-export const MISSING_VALUES = new Set(["domain", "project", "either", "both"]);
-export const DM_KINDS = new Set(["domains", "projects", "entities", "overview"]);
+export const MISSING_VALUES = new Set(["domain", "either"]);
+export const DM_KINDS = new Set(["domains", "entities", "overview"]);
 
 export function qstr(v: unknown, name: string, max = 200): string | undefined {
   if (v === undefined) return undefined;
@@ -69,12 +69,12 @@ export function qtype(v: unknown): string | undefined {
 // propose/confirm/reject 공통 body 검증 — confidence 범위는 store 가 검증하지 않으므로 여기서(zod 는 MCP 계층).
 // '' tolerance(confidence/evidence 빈 문자열 허용) 포함 byte-compat.
 export interface MappingBody {
-  kind: "domain" | "project"; name: string; key: string; repo: string;
+  kind: "domain"; name: string; key: string; repo: string;
   confidence?: number; evidence?: string;
 }
 export function parseMappingBody(body: unknown): MappingBody {
   const b = (body ?? {}) as Record<string, unknown>;
-  if (b.kind !== "domain" && b.kind !== "project") throw new HttpError(400, "kind 는 domain|project 만 허용됩니다");
+  if (b.kind !== "domain") throw new HttpError(400, "kind 는 domain 만 허용됩니다");
   // item 폐기 컷오버: 좌표는 knowledge_unit.name(예: clickup-86abc123) — 구 itemId(정수) 대체.
   if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 64) throw new HttpError(400, "name 은 1~64자 문자열(ku 좌표)이어야 합니다");
   if (typeof b.key !== "string" || !b.key.trim() || b.key.length > 200) throw new HttpError(400, "key 는 1~200자 문자열이어야 합니다");

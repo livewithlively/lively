@@ -33,12 +33,12 @@ const all: Capability[] = [
   me, ...contextCapabilities, ...mappingCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...domainmapCrudCapabilities, // P-V3-4a: repo/domain 통제어휘 CRUD 5종 + hard-delete 2종(domain_delete·repo_delete) — 전부 expose.mcp=true(MCP+REST)
-  ...pmCapabilities, // MCP 36툴(hard-delete 2종 추가. item 폐기로 search_items/get_item 2종 제거: 기존 11 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 + crud 7 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
+  ...pmCapabilities, // MCP 35툴(P8 project_list 제거 36→35. hard-delete 2종 추가. item 폐기로 search_items/get_item 2종 제거: 기존 11 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 + crud 7 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
   ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts. item 흡수: ctx_ls/ctx_grep 에 system/since/source/type 필터 + ctx_cat thread.
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory, co-exposed). MCP 등록은 src/tools/activity.ts. 36→38.
 ];
-// MCP 표면 = 39툴(P4 domain_set_should 추가 38→39. P3 activity_log·activity_list 36→38. hard-delete 2종 domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item
+// MCP 표면 = 38툴(P8 project_list 제거 39→38. P4 domain_set_should 추가 38→39. P3 activity_log·activity_list 36→38. hard-delete 2종 domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item
 //  제거로 36→34, hard-delete 로 34→36. ku 가 단일 캐노니컬 표면 —
 //  활동검색은 ctx_ls/ctx_grep(system/since/source/type), 단건상세/스레드는 ctx_cat(thread:true) 가 흡수).
 //  REST 전용 신엔드포인트(MCP 표면 불포함): GET /api/ui/learn(kind_registry+data_source ground-truth).

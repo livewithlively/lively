@@ -6,7 +6,7 @@
 import { dmPool, one, q, type Db } from "../db.js";
 import {
   httpErr, type BestDomainRef, type CodeListItem, type DebtListItem, type DomainListItem,
-  type EntityListItem, type ProjectListItem, type TouchProjectRef,
+  type EntityListItem,
 } from "./types.js";
 import { getRepo } from "./repos.js";
 // 반환 타입 방침: 리터럴 객체를 '구성'하는 리스트 읽기 4+1종은 types.ts 의 *ListItem 으로 키 집합을
@@ -253,24 +253,8 @@ async function bestDomainByTarget(db: Db, repo_id: number, target_kind: string):
   return out;
 }
 
-// Projects touching each target, sorted by last_at desc. Returns a Map<target_id, projects[]>.
-async function projectsByTarget(db: Db, repo_id: number, target_kind: string): Promise<Map<number, TouchProjectRef[]>> {
-  const rows = await q(db, `
-    SELECT pt.target_id, p.key, p.name, p.kind, pt.last_at, pt.commit_count
-    FROM project_touch pt JOIN project p ON p.id=pt.project_id
-    WHERE pt.repo_id=$1 AND pt.target_kind=$2
-    ORDER BY pt.target_id, pt.last_at DESC NULLS LAST, p.key`, [repo_id, target_kind]);
-  const out = new Map<number, TouchProjectRef[]>();
-  for (const x of rows) {
-    if (!out.has(x.target_id)) out.set(x.target_id, []);
-    out.get(x.target_id)!.push({ key: x.key, name: x.name, kind: x.kind, last_at: x.last_at, commit_count: x.commit_count });
-  }
-  return out;
-}
-
 // GET /api/repo/:name/code — flat code_unit list; the client builds the directory
-// tree from `path`. Each row carries its best-mapping domain (or null) and the
-// projects that touched it (last_at desc).
+// tree from `path`. Each row carries its best-mapping domain (or null).
 // `includeRemoved` (default false): when false, soft-removed code_units (state=
 // 'removed') are excluded so the tree reflects the live repo. COALESCE covers
 // pre-migration rows with NULL state (treated as active).
@@ -282,51 +266,21 @@ export async function listCodeApi(name: string, includeRemoved = false): Promise
     : await q(pool, `SELECT id,path,kind,label,COALESCE(state,'active') state,prev_path FROM code_unit
         WHERE repo_id=$1 AND COALESCE(state,'active')='active' ORDER BY path`, [r.id]);
   const dom = await bestDomainByTarget(pool, r.id, "code_unit");
-  const proj = await projectsByTarget(pool, r.id, "code_unit");
   return units.map((u) => ({
     id: u.id, path: u.path, kind: u.kind, label: u.label ?? u.path,
     state: u.state, prev_path: u.prev_path ?? null, // null 은 명시 방출(키 생략 아님)
     domain: dom.get(u.id) ?? null,
-    projects: proj.get(u.id) ?? [],
   }));
 }
 
-// GET /api/repo/:name/entities — flat data_entity list with best-mapping domain + projects.
+// GET /api/repo/:name/entities — flat data_entity list with best-mapping domain.
 export async function listEntitiesApi(name: string): Promise<EntityListItem[]> {
   const pool = dmPool();
   const r = await getRepo(name);
   const ents = await q(pool, "SELECT id,name,source,kind FROM data_entity WHERE repo_id=$1 ORDER BY name,source", [r.id]);
   const dom = await bestDomainByTarget(pool, r.id, "data_entity");
-  const proj = await projectsByTarget(pool, r.id, "data_entity");
   return ents.map((e) => ({
     id: e.id, name: e.name, source: e.source, kind: e.kind,
     domain: dom.get(e.id) ?? null,
-    projects: proj.get(e.id) ?? [],
   }));
-}
-
-// GET /api/repo/:name/projects — the Project layer with touched_code / touched_entities counts.
-export async function listProjectsApi(name: string): Promise<ProjectListItem[]> {
-  const pool = dmPool();
-  const r = await getRepo(name);
-  const rows = await q(pool, "SELECT * FROM project WHERE repo_id=$1 ORDER BY ended_at DESC NULLS LAST, key", [r.id]);
-  const out: ProjectListItem[] = [];
-  for (const p of rows) {
-    const c = await one(pool, `SELECT
-      (SELECT COUNT(*)::int FROM project_touch WHERE repo_id=$1 AND project_id=$2 AND target_kind='code_unit') touched_code,
-      (SELECT COUNT(*)::int FROM project_touch WHERE repo_id=$1 AND project_id=$2 AND target_kind='data_entity') touched_entities`,
-      [r.id, p.id]);
-    out.push({
-      id: p.id, key: p.key, name: p.name, description: p.description, kind: p.kind, status: p.status, origin: p.origin,
-      started_at: p.started_at, ended_at: p.ended_at,
-      // ?? null 5종은 null 명시 방출 — pre-migration NULL 컬럼도 키가 있어야 한다(키 생략 금지).
-      state: p.state ?? null, prov_system: p.prov_system ?? null,
-      external_url: p.external_url ?? null, last_synced_at: p.last_synced_at ?? null,
-      touched_code: c.touched_code, touched_entities: c.touched_entities,
-      // P-V3-4b: 붕뜸 해소 — DB 백필값 우선, NULL 행은 동일 휴리스틱으로 즉석 분류(스키마 마이그 전 폴백).
-      provenance_kind: p.provenance_kind
-        ?? ((p.external_id != null || p.origin === "human") ? "initiative" : "code_grouping"),
-    });
-  }
-  return out;
 }

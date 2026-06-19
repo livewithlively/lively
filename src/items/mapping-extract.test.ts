@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   BODY_SCAN_CAP, capText,
   extractIssueKeys, extractHashRefs, extractCloseRefs,
-  extractEntityTokens, extractDomainSlugTokens, extractProjectSlugs,
+  extractEntityTokens, extractDomainSlugTokens,
   parseDiscordDeepLink, parseNotionPageId, extractUrls,
 } from "./mapping-extract.js";
 
@@ -72,13 +72,10 @@ t("capText: BODY_SCAN_CAP 초과 본문 truncate", () => {
   assert.deepEqual(extractEntityTokens(big, ["Campaign"]), []);
 });
 
-// ── extractDomainSlugTokens / extractProjectSlugs ──
+// ── extractDomainSlugTokens ──
 t("domainSlug: 하이픈 슬러그 매치, 무관 토큰 미매치", () => {
   assert.deepEqual(extractDomainSlugTokens("commerce-shop 관련", ["commerce-shop", "feed-posts"], []), ["commerce-shop"]);
   assert.deepEqual(extractDomainSlugTokens("#회의 잡담", ["commerce-shop"], []), []);
-});
-t("projectSlug: 슬러그 매치", () => {
-  assert.deepEqual(extractProjectSlugs("explore-feed 작업", ["explore-feed"], []), ["explore-feed"]);
 });
 
 // ── parseDiscordDeepLink / parseNotionPageId ──

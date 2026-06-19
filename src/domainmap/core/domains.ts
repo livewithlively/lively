@@ -23,7 +23,7 @@ const now = () => new Date().toISOString();
 // transition to origin='human').
 // Agent edit on a non-agent-owned row (origin≠'agent', i.e. human-curated) => 403
 // (human-curated definitions are agent-immutable here; agents must go through drift/propose
-// flows instead). Domains are never origin='source' (only syncProject sets that, on projects).
+// flows instead). Domains are never origin='source'.
 export async function editDomainById(id: number, patch: Record<string, unknown>, actor: Actor): Promise<DomainEditResult> {
   const pool = dmPool();
   const ex = await one(pool, "SELECT * FROM domain WHERE id=$1", [id]);

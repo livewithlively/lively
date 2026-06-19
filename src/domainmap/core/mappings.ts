@@ -36,7 +36,6 @@ export async function rejectMapping(id: number, actor: Actor): Promise<CurationR
 
 // reassign — UNIQUE(repo_id,target_kind,target_id,domain_id) 충돌(pg 23505)을 절대 잡지 않는다.
 // raw pg 에러 전파가 계약: 409 한국어 번역은 capability 계층(dm_mapping_move) 한 곳의 책임이다.
-// (projects.syncProject 의 23505→409 자체 번역과 패턴이 다른 것은 의도 — 통일 금지.)
 export async function reassignMapping(id: number, domain_id: number, actor: Actor): Promise<ReassignResult> {
   const pool = dmPool();
   const ex = await one(pool, "SELECT * FROM mapping WHERE id=$1", [id]);

@@ -34,6 +34,7 @@ export interface KnowledgeUnit {
   kind: string;
   kinds: string[];
   title: string | null;
+  summary: string | null;      // PM·디자이너용 한 줄 요약 제목(탐색 카드 표시). NULL 이면 title 폴백.
   body_md: string;
   domain_key: string | null;   // domainmap 도메인 귀속(슬러그 약결합 — FK 아님)
   domain_repo: string | null;  // 그 도메인의 repo(domainmap 은 repo 별 스코프)
@@ -64,7 +65,7 @@ export interface KnowledgeUnit {
 }
 
 export const KNOWLEDGE_COLS =
-  "name, kind, kinds, title, body_md, domain_key, domain_repo, lifecycle, supersedes, confidence, author, source_ref, as_of, " +
+  "name, kind, kinds, title, summary, body_md, domain_key, domain_repo, lifecycle, supersedes, confidence, author, source_ref, as_of, " +
   "source, external_system, external_instance, external_id, external_url, occurred_at, last_synced_at, parent_external_id, parent_name, fields, raw, " +
   "sort, version, updated_at, updated_by";
 
@@ -76,6 +77,7 @@ function mapKnowledgeRaw(row: Record<string, unknown>): KnowledgeUnit {
     kind: (row.kind as string) ?? "K",
     kinds: Array.isArray(row.kinds) ? (row.kinds as string[]) : [],
     title: (row.title as string) ?? null,
+    summary: (row.summary as string) ?? null,
     body_md: (row.body_md as string) ?? "",
     domain_key: (row.domain_key as string) ?? null,
     domain_repo: (row.domain_repo as string) ?? null,
@@ -112,6 +114,7 @@ function mapKnowledge(row: Record<string, unknown>): KnowledgeUnit {
   return {
     ...u,
     title: u.title == null ? null : redactString(u.title),
+    summary: u.summary == null ? null : redactString(u.summary),
     body_md: redactString(u.body_md),
     fields: redactDeep(u.fields),
     raw: u.raw == null ? null : redactDeep(u.raw),
@@ -228,6 +231,40 @@ export async function listKnowledge(opts: {
     `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit ${clause} ORDER BY ${orderClause}`, params,
   );
   return r.rows.map(mapKnowledge);
+}
+
+// ════════ facet 카운트 — 탐색 좌측(주제·종류)의 카운트를 절대수치가 아니라 현재 필터와의 교집합으로. ════════
+//  표준 faceted navigation: 각 축의 카운트는 '그 축만 빼고' 나머지 현재 필터를 적용한 결과(다른 값 선택 시 미리보기).
+//   - domains facet: kind/lifecycle/confidence/system/.../q 적용(domain 제외) → domain_key 별 카운트.
+//   - kinds   facet: domain/lifecycle/confidence/.../q 적용(kind 제외) → kind 별 카운트.
+//  목록(listKnowledge/ctx_ls)과 동일 WHERE 빌더라 '카운트=클릭 시 목록 수'가 보장된다(domain_key 컬럼 기준).
+export async function facetCounts(opts: {
+  kind?: string | null; lifecycle?: KnowledgeLifecycle | null; domainKey?: string | null;
+  confidence?: string | null; system?: string | null; since?: string | null; source?: string | null;
+  itemType?: string | null; q?: string | null;
+} = {}): Promise<{ domains: Record<string, number>; kinds: Record<string, number> }> {
+  const buildWhere = (exclude: "domain" | "kind") => {
+    const where: string[] = []; const params: unknown[] = [];
+    if (opts.kind && exclude !== "kind") { params.push(opts.kind); where.push(`kind=$${params.length}`); }
+    if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
+    if (opts.domainKey && exclude !== "domain") { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
+    if (opts.confidence) { params.push(opts.confidence); where.push(`confidence=$${params.length}`); }
+    if (opts.system) { params.push(opts.system); where.push(`external_system=$${params.length}`); }
+    if (opts.since) { params.push(opts.since); where.push(`occurred_at >= $${params.length}`); }
+    if (opts.source === "observed") where.push(`confidence='observed'`);
+    else if (opts.source === "authored") where.push(`confidence<>'observed'`);
+    if (opts.itemType) { params.push(opts.itemType); where.push(`fields->>'_item_type' = $${params.length}`); }
+    if (opts.q) { params.push(`%${opts.q}%`); where.push(`(title ILIKE $${params.length} OR body_md ILIKE $${params.length})`); }
+    return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+  };
+  const dw = buildWhere("domain");
+  const dClause = dw.clause ? `${dw.clause} AND domain_key IS NOT NULL` : "WHERE domain_key IS NOT NULL";
+  const dr = await itemsPool.query(`SELECT domain_key AS k, COUNT(*)::int c FROM knowledge_unit ${dClause} GROUP BY domain_key`, dw.params);
+  const kw = buildWhere("kind");
+  const kr = await itemsPool.query(`SELECT kind AS k, COUNT(*)::int c FROM knowledge_unit ${kw.clause} GROUP BY kind`, kw.params);
+  const domains: Record<string, number> = {}; for (const row of dr.rows) domains[row.k as string] = Number(row.c);
+  const kinds: Record<string, number> = {}; for (const row of kr.rows) kinds[row.k as string] = Number(row.c);
+  return { domains, kinds };
 }
 
 // ════════ 도메인 귀속 카운트(cross-DB) — domainmap 도메인이 items DB(knowledge_unit·kud·kup)에서 ════════

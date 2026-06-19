@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>터미널 · Lively Box</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231e1e2e'/%3E%3Cpath d='M4 5l3 3-3 3M8 11h4' stroke='%2316C79A' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Fira+Code:wght@400;600&family=Source+Code+Pro:wght@400;600&family=IBM+Plex+Mono:wght@400;600&family=Roboto+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff; --bg2: #f4f5f7; --fg: #1f2328; --fg-dim: #6b7280; --border: #e5e7eb;
+    --accent: #16a37f; --danger: #c0392b; --term-bg: #1e1e2e;
+  }
+  html[data-theme="dark"] {
+    --bg: #181825; --bg2: #1e1e2e; --fg: #cdd6f4; --fg-dim: #9399b2; --border: #313244;
+    --accent: #16C79A; --danger: #f38ba8; --term-bg: #1e1e2e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--fg); overflow: hidden; }
+  #ws { display: flex; height: 100vh; }
+
+  /* 좌측 파일 익스플로러 (VSCode식, 기본 접힘) */
+  #explorer { width: 0; flex: 0 0 auto; overflow: hidden; border-right: 1px solid var(--border);
+    background: var(--bg2); transition: width .14s ease; display: flex; flex-direction: column; }
+  #explorer.open { width: 280px; }
+  #explorer.drag { outline: 2px dashed var(--accent); outline-offset: -6px; background: color-mix(in srgb, var(--accent) 10%, var(--bg2)); }
+  #explorer.drag::after { content: '여기에 놓아 업로드'; position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; font-size: 12px; color: var(--accent); }
+  #explorer { position: relative; }
+  .exp-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+  .exp-head .spacer { flex: 1; }
+  .exp-path { padding: 6px 12px; font-size: 11px; color: var(--fg-dim); font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #exp-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
+  .exp-item { display: flex; align-items: center; gap: 7px; padding: 4px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .exp-item:hover { background: rgba(127,127,127,.12); }
+  .exp-item .ic { width: 16px; text-align: center; opacity: .8; }
+  .exp-item .sz { margin-left: auto; font-size: 11px; color: var(--fg-dim); }
+  .exp-dl { margin-left: 6px; opacity: 0; font-size: 11px; color: var(--fg-dim); }
+  .exp-item:hover .exp-dl { opacity: 1; }
+
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #tabbar { display: flex; align-items: stretch; gap: 2px; background: var(--bg2); border-bottom: 1px solid var(--border);
+    padding: 0 6px; overflow-x: auto; min-height: 40px; }
+  .tab { display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 13px; cursor: pointer;
+    border: none; background: transparent; color: var(--fg-dim); border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tab.active { color: var(--fg); border-bottom-color: var(--accent); background: var(--bg); }
+  .tab .x { opacity: .6; padding: 0 2px; border-radius: 4px; }
+  .tab .x:hover { opacity: 1; background: rgba(127,127,127,.25); }
+
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+  .toolbar .title { font-weight: 600; font-size: 13px; }
+  .toolbar .sub { font-family: ui-monospace, monospace; font-size: 11px; color: var(--fg-dim); }
+  .toolbar .spacer { flex: 1; }
+  .tbtn { border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 7px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  .tbtn:hover { border-color: var(--accent); }
+  .status { font-size: 12px; color: var(--fg-dim); }
+  .status.ok { color: var(--accent); }
+  .status.err { color: var(--danger); }
+
+  #panes { flex: 1; min-height: 0; position: relative; }
+  .pane { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .pane.active { display: flex; }
+  #term-host { flex: 1; min-height: 0; background: var(--term-bg); padding: 6px 8px; }
+  .preview-body { flex: 1; overflow: auto; padding: 20px 26px; background: var(--bg); }
+  .preview-body img { max-width: 100%; }
+  .preview-body pre.raw { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; }
+
+  /* 설정 팝오버 */
+  .pop-back { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .pop { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; width: 340px; max-width: 92vw; }
+  .pop h3 { margin: 0 0 12px; font-size: 15px; }
+  .pop .field { margin-bottom: 12px; }
+  .pop label { display: block; font-size: 12px; color: var(--fg-dim); margin-bottom: 4px; }
+  .pop select, .pop input { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); font: inherit; }
+  .pop .pop-close { margin-top: 6px; }
+
+  /* 마크다운 미리보기 */
+  .md { line-height: 1.65; font-size: 14px; }
+  .md h1,.md h2,.md h3 { margin: 1.2em 0 .5em; line-height: 1.3; }
+  .md pre.md-pre { background: var(--bg2); padding: 12px 14px; border-radius: 8px; overflow: auto; }
+  .md code.md-code { background: rgba(127,127,127,.18); padding: 1px 5px; border-radius: 5px; font-family: ui-monospace, monospace; }
+  .md table.md-table { border-collapse: collapse; margin: 1em 0; }
+  .md .md-table th, .md .md-table td { border: 1px solid var(--border); padding: 6px 10px; }
+  .md blockquote.md-quote { border-left: 3px solid var(--accent); margin: 1em 0; padding: 2px 14px; color: var(--fg-dim); }
+  .md a.md-link { color: var(--accent); }
+  .gate-msg { padding: 40px; text-align: center; color: var(--fg-dim); }
+  .unsupported { display: flex; align-items: center; justify-content: center; height: 100%; }
+  .unsupported-card { text-align: center; padding: 28px 32px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg2); }
+  .unsupported-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .unsupported-sub { font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg-dim); margin-bottom: 16px; }
+  .unsupported-actions { display: flex; gap: 8px; justify-content: center; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<input id="upload-input" type="file" hidden multiple>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" defer></script>
+<script src="./md.js" defer></script>
+<script src="./terminal.js" defer></script>
+</body>
+</html>
