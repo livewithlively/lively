@@ -14,6 +14,7 @@ import {
   declareUnitProject, supersedeSiblingDeclaredUnitProjects,
 } from "../org/knowledge-mapping.js";
 import { unitName } from "../org/external-identity.js";
+import { logActivity } from "../domainmap/core/activity.js";
 import { loadCandidates, validateProjectKey } from "../items/mapping-candidates.js";
 import {
   getTeam, getMembersEmailMap, getTask, createTask, updateTask, createTaskComment, linkTasks,
@@ -246,6 +247,20 @@ const pmTaskComment: Capability = {
       // 코멘트 응답은 부분({id,hist_id,date}) — 전체 태스크를 후속 GET 해서 에코.
       const task = await getTask(input.taskId);
       const echo = await echoTask(task, user);
+      // 작업(activity) 라운드트립(P3): ClickUp 코멘트 = comment 유형 작업으로 동시 기록. best-effort —
+      //  throw 금지(activity 실패가 ClickUp 코멘트 성공을 회귀시키면 안 됨). external(clickup,commentId)로 멱등,
+      //  과업(W ku)=echo.name(=unitName('clickup',taskId))에 연결. should/is 점검은 stop훅의 명시 activity_log 가 한다.
+      try {
+        if (res.id) {
+          await logActivity({
+            type: "comment", title: input.text.slice(0, 200),
+            taskKuNames: echo.name ? [echo.name] : [],
+            external_system: "clickup", external_id: String(res.id),
+          }, user.userId);
+        }
+      } catch (err) {
+        logger.warn({ err, taskId: input.taskId }, "activity(comment) 기록 실패(무시 — ClickUp 코멘트는 성공)");
+      }
       return { taskId: input.taskId, commentId: res.id ?? null, ...echo };
     }),
 };
