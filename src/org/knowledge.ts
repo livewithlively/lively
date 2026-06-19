@@ -290,18 +290,13 @@ export async function clearDomainKnowledgeRefs(
 //  큐레이션 표면 일관: observed(커넥터 미러)는 active_count 에서 제외(confidence<>'observed') — overview 와 동일.
 export interface DomainActiveCount { domain_key: string; active_count: number }
 export async function domainActiveCounts(): Promise<DomainActiveCount[]> {
-  // 단일귀속(컬럼) + 다중귀속(kud) 을 UNION ALL 로 합쳐 key 별 distinct ku 를 센다(중복 ku 이중계수 방지).
-  //  distinct(name) — 같은 ku 가 컬럼·kud 양쪽에 같은 key 로 잡혀도 1로 센다.
+  // 좌측 위계 카운트 = 탐색 목록(ctx_ls 의 domain 필터 = knowledge_unit.domain_key 컬럼)과 **동일 기준**.
+  //  kud(다중귀속)는 현재 전부 state='proposed'(미확정 LLM 제안·검토 큐)라 확정 귀속이 아님 — 포함하면
+  //  카운트만 부풀고 목록(domain_key 컬럼)과 불일치한다(숫자≠실제 문서수). 다중귀속 확정은 검토탭 큐레이션 몫.
   const r = await itemsPool.query(
-    `SELECT domain_key, COUNT(DISTINCT name)::int AS active_count FROM (
-        SELECT name, domain_key FROM knowledge_unit
-          WHERE domain_key IS NOT NULL AND lifecycle='active' AND confidence<>'observed'
-        UNION ALL
-        SELECT k.name, kud.domain_key FROM knowledge_unit_domain kud
-          JOIN knowledge_unit k ON k.name = kud.name
-          WHERE kud.state<>'rejected' AND k.lifecycle='active' AND k.confidence<>'observed'
-              AND kud.domain_key IS NOT NULL
-     ) u GROUP BY domain_key HAVING COUNT(DISTINCT name) > 0 ORDER BY domain_key`,
+    `SELECT domain_key, COUNT(DISTINCT name)::int AS active_count FROM knowledge_unit
+       WHERE domain_key IS NOT NULL AND lifecycle='active' AND confidence<>'observed'
+       GROUP BY domain_key HAVING COUNT(DISTINCT name) > 0 ORDER BY domain_key`,
   );
   return r.rows.map((row) => ({ domain_key: row.domain_key as string, active_count: Number(row.active_count) || 0 }));
 }

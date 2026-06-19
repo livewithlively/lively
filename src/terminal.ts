@@ -1,92 +1,91 @@
-// 중앙 박스 도그푸드 — ttyd 터미널을 정문(:8080) 뒤로 forward-proxy.
-// DESIGN(central-box-design) §2-2: 엔진(ttyd)은 독립 포트로 노출하지 않고 localhost 에 두며,
-//  '단일 정문'(이 게이트웨이)이 인증한 신원만 통과시킨다. 도그푸드라 forward-auth 헤더 주입 대신
-//  /api/ui 와 동일한 BearerVerifier 로 '티켓 쿠키'를 발급해 /terminal HTTP·WS 프록시를 게이트한다.
-//
-// 전제: ttyd 가 다음으로 떠 있어야 한다(외부 비노출 — 127.0.0.1 only, reverse-proxy base-path):
-//   ttyd -i 127.0.0.1 -p 7681 -b /terminal -W tmux new -A -s dogfood
+// 중앙 박스 — 터미널 세션 매니저 정문. ([[central-box-design]] 경로 D: ttyd 대신 xterm.js+node-pty 깊은 통합)
+// REST(/api/ui/terminal/*, Bearer) = 세션 목록·생성·이름변경·삭제 + 설정(루트·하네스 카탈로그).
+// WS(/terminal/ws, ticket 쿠키) = PTY 스트림(terminal-pty.ts). 브라우저는 Authorization 헤더를 WS/네비에
+// 못 실으므로, Bearer 로 인증된 멤버에게 HttpOnly 티켓 쿠키(userId 보유)를 발급해 WS 소유권 판정에 쓴다.
 import type express from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
-import httpProxy from "http-proxy";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
+import type { LivelyUser } from "./context.js";
+import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, renameSession } from "./terminal-sessions.js";
+import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 
-const TTYD_TARGET = process.env.TTYD_TARGET ?? "http://127.0.0.1:7681";
-const PREFIX = "/terminal";
 const COOKIE = "lively_term";
-const TICKET_TTL_MS = 12 * 60 * 60 * 1000; // 12h — 도그푸드용
+const PREFIX = "/terminal";
+const TICKET_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 
-// 인메모리 티켓 스토어 — 게이트웨이 재시작 시 비워짐(도그푸드 OK). ticket -> 만료(epoch ms).
-const tickets = new Map<string, number>();
-
-function issueTicket(): string {
+// 인메모리 티켓 — 재기동 시 비워짐(도그푸드 OK). ticket -> { userId, exp(epoch ms) }.
+const tickets = new Map<string, { userId: string; exp: number }>();
+function issueTicket(userId: string): string {
   const t = crypto.randomBytes(18).toString("hex");
-  tickets.set(t, Date.now() + TICKET_TTL_MS);
+  tickets.set(t, { userId, exp: Date.now() + TICKET_TTL_MS });
   return t;
 }
-
-// 쿠키 헤더에서 유효한(미만료) 터미널 티켓이 있는지. 만료분은 그 자리에서 청소.
-function hasValidTicket(cookieHeader?: string): boolean {
-  if (!cookieHeader) return false;
+const lookupTicket: TicketLookup = (cookieHeader) => {
+  if (!cookieHeader) return null;
   for (const part of cookieHeader.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0 || part.slice(0, eq).trim() !== COOKIE) continue;
-    const tok = part.slice(eq + 1).trim();
-    const exp = tickets.get(tok);
-    if (exp && exp > Date.now()) return true;
-    if (exp) tickets.delete(tok);
+    const key = part.slice(eq + 1).trim();
+    const rec = tickets.get(key);
+    if (rec && rec.exp > Date.now()) return { userId: rec.userId };
+    if (rec) tickets.delete(key);
   }
-  return false;
-}
+  return null;
+};
+
+const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
+const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 export function registerTerminal(app: express.Express, server: Server, verifier: BearerVerifier): void {
-  const proxy = httpProxy.createProxyServer({ target: TTYD_TARGET, ws: true, changeOrigin: true });
+  // 도그푸드: 인증만(authOnly) — 모든 멤버가 터미널 사용 가능. 정식화 시 'code'/'terminal' scope 게이트로 좁힌다.
+  const auth = requireBearerAuth({ verifier });
 
-  // ttyd 미기동 등 프록시 에러 — HTTP 면 502, WS(소켓) 면 소켓 종료.
-  proxy.on("error", (err, _req, res) => {
-    logger.warn({ err }, "ttyd proxy error (ttyd 미기동?)");
-    const r = res as unknown as { writeHead?: (...a: unknown[]) => void; end?: (b?: string) => void; headersSent?: boolean; destroy?: () => void };
-    if (typeof r?.writeHead === "function" && !r.headersSent) {
-      r.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
-      r.end?.("terminal backend unavailable — ttyd not running");
-    } else {
-      r?.destroy?.();
-    }
-  });
-
-  // 1) 티켓 발급 — 정문 인증(Bearer) 통과한 멤버에게만 HttpOnly 쿠키 발급. UI 가 토큰으로 호출.
-  app.post("/api/ui/terminal/ticket", requireBearerAuth({ verifier }), (_req, res) => {
-    const t = issueTicket();
-    res.setHeader(
-      "Set-Cookie",
-      `${COOKIE}=${t}; HttpOnly; Path=${PREFIX}; SameSite=Lax; Max-Age=${Math.floor(TICKET_TTL_MS / 1000)}`,
-    );
+  // 티켓 발급 — WS 가 쓸 HttpOnly 쿠키(userId 바인딩).
+  app.post("/api/ui/terminal/ticket", auth, (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!uid) { res.status(403).json({ error: "no user identity" }); return; }
+    const t = issueTicket(uid);
+    res.setHeader("Set-Cookie", `${COOKIE}=${t}; HttpOnly; Path=${PREFIX}; SameSite=Lax; Max-Age=${Math.floor(TICKET_TTL_MS / 1000)}`);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   });
 
-  // 2) HTTP 프록시 — /terminal/* → ttyd. 경로 mount(app.use(PREFIX,..)) 는 req.url 의 prefix 를 떼므로
-  //    ttyd base-path(/terminal)와 어긋난다 → prefix 를 보존하려고 전역 미들웨어에서 직접 분기한다.
-  app.use((req, res, next) => {
-    if (!req.url.startsWith(PREFIX)) return next();
-    if (!hasValidTicket(req.headers.cookie)) {
-      res.status(401).type("text/plain").send("unauthorized — Lively UI 에서 터미널을 여세요");
-      return;
-    }
-    proxy.web(req, res);
+  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그.
+  app.get("/api/ui/terminal/config", auth, (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
+      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+    });
   });
 
-  // 3) WS 업그레이드 — /terminal* 만 처리(그 외 업그레이드는 미관여). 티켓 검증 후 ttyd 로 프록시.
-  server.on("upgrade", (req, socket, head) => {
-    if (!req.url || !req.url.startsWith(PREFIX)) return;
-    if (!hasValidTicket(req.headers.cookie)) {
-      socket.destroy();
-      return;
-    }
-    proxy.ws(req, socket, head);
-  });
+  app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ sessions: await listSessions(userOf(req)) });
+  }));
+  app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const session = await createSession(userOf(req), {
+      label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
+      harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
+      autoApprove: !!b.autoApprove,
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ session });
+  }));
+  app.post("/api/ui/terminal/sessions/:id/rename", auth, wrap(async (req, res) => {
+    await renameSession(userOf(req), req.params.id, String((req.body as Record<string, unknown> | undefined)?.label ?? ""));
+    res.json({ ok: true });
+  }));
+  app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    await killSession(userOf(req), req.params.id);
+    res.json({ ok: true });
+  }));
 
-  logger.info(`terminal mounted at ${PREFIX} → ${TTYD_TARGET}`);
+  setupPtyUpgrade(server, lookupTicket);
+  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws)");
 }

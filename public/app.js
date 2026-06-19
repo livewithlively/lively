@@ -753,8 +753,8 @@ async function renderBrowse(view, params) {
 
   const layout = el('div', { class: 'browse-layout' },
     el('aside', { class: 'browse-side' },
-      el('div', { class: 'eyebrow', text: '주제' }), areaNav,
-      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '종류' }), tree),
+      el('div', { class: 'eyebrow', text: '종류' }), tree,
+      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '주제' }), areaNav),
     el('section', { class: 'browse-main' }, filterBar, listBox, foot),
   );
   view.replaceChildren(head, layout);
@@ -1366,6 +1366,182 @@ function overlayBox(title, ...content) {
   return back;
 }
 
+// ════════════════════════════════════════════════════════════════════
+// 터미널 세션 매니저 (#/terminal) — 중앙 박스 경로 D: xterm.js + 서버 node-pty(tmux).
+//  목록/생성폼/CRUD → REST(/api/ui/terminal/*), PTY 스트림 → WS(/terminal/ws, ticket 쿠키).
+//  보기(폰트·크기·테마·커서)는 사용자별 localStorage 영속 + 실시간 적용. 보안: el()/textContent 만.
+// ════════════════════════════════════════════════════════════════════
+const TERM_PREFS_KEY = 'lively_term_prefs';
+const TERM_FONTS = [
+  { v: 'JetBrains Mono, D2Coding, Menlo, monospace', label: 'JetBrains Mono' },
+  { v: 'D2Coding, Menlo, monospace', label: 'D2Coding' },
+  { v: 'Menlo, Monaco, monospace', label: 'Menlo' },
+  { v: 'SFMono-Regular, "SF Mono", monospace', label: 'SF Mono' },
+  { v: 'Consolas, "Courier New", monospace', label: 'Consolas' },
+];
+const TERM_THEMES = {
+  dark:      { name: '다크',      theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#585b70' } },
+  light:     { name: '라이트',    theme: { background: '#fdfdfd', foreground: '#2a2a2a', cursor: '#5566ff', selectionBackground: '#cfe3ff' } },
+  solarized: { name: 'Solarized', theme: { background: '#002b36', foreground: '#93a1a1', cursor: '#cb4b16', selectionBackground: '#073642' } },
+  dracula:   { name: 'Dracula',   theme: { background: '#282a36', foreground: '#f8f8f2', cursor: '#ff79c6', selectionBackground: '#44475a' } },
+};
+function termPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(TERM_PREFS_KEY) || '{}'); } catch (_) { /* 기본값 */ }
+  return Object.assign({ fontFamily: TERM_FONTS[0].v, fontSize: 14, theme: 'dark', cursorStyle: 'bar' }, p);
+}
+function saveTermPrefs(p) { try { localStorage.setItem(TERM_PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
+
+// 활성 터미널(세션) — 라우트 이탈/재진입 시 정리한다(ws 종료 + xterm dispose + 리스너 제거).
+let termSession = null;
+function teardownTerminal() {
+  if (!termSession) return;
+  try { if (termSession.ws) termSession.ws.close(); } catch (_) { /* noop */ }
+  try { if (termSession.term) termSession.term.dispose(); } catch (_) { /* noop */ }
+  if (termSession.onResize) window.removeEventListener('resize', termSession.onResize);
+  termSession = null;
+}
+
+async function renderTerminal(view, sub) {
+  teardownTerminal();
+  if (sub) { await renderTerminalSession(view, sub); return; }
+  view.replaceChildren(skeleton('세션을 불러오는 중'));
+  let data, cfg;
+  try { [data, cfg] = await Promise.all([api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config')]); }
+  catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
+  const head = el('div', { class: 'page-head' },
+    el('h1', { text: '터미널 세션' }),
+    el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) }));
+  const list = el('div', { class: 'term-list' });
+  const sessions = (data && data.sessions) || [];
+  if (!sessions.length) list.append(el('div', { class: 'empty', text: '세션이 없습니다. "새 세션"으로 Claude Code / Codex / 셸 세션을 만드세요.' }));
+  for (const s of sessions) list.append(termRow(s, cfg, view));
+  view.replaceChildren(head, list);
+}
+
+function termRow(s, cfg, view) {
+  const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness;
+  const meta = el('div', { class: 'term-row-meta' },
+    el('div', { class: 'term-row-title' },
+      el('span', { text: s.label }),
+      s.autoApprove ? el('span', { class: 'term-badge danger', text: '자동승인' }) : null,
+      s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null),
+    el('div', { class: 'caption', text: harnessLabel + ' · ' + (s.dir || '') }));
+  const open = el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => { location.hash = '#/terminal/' + encodeURIComponent(s.id); } });
+  const rename = el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: async () => {
+    const name = prompt('새 이름', s.label); if (name == null) return;
+    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/rename', { method: 'POST', body: JSON.stringify({ label: name }) }); toast('이름 변경됨'); renderTerminal(view); }
+    catch (e) { toast('실패 — ' + e.message, true); }
+  } });
+  const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
+    if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
+    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); renderTerminal(view); }
+    catch (e) { toast('실패 — ' + e.message, true); }
+  } });
+  return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, open, rename, del));
+}
+
+function openTermCreateForm(cfg, view) {
+  const roots = cfg.roots || [];
+  const harnesses = cfg.harnesses || [];
+  const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
+  const rootSel = el('select', { class: 'term-input' }, ...roots.map((r) => el('option', { value: r.key }, r.label)));
+  const subI = el('input', { class: 'term-input', type: 'text', placeholder: '하위 폴더 (선택 — 예: productivity)' });
+  const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+  const flagsBox = el('div', { class: 'term-flags' });
+  const autoCb = el('input', { type: 'checkbox' });
+  const autoWrap = el('label', { class: 'term-auto' }, autoCb,
+    el('span', { text: ' 자동 승인 (위험) — 에이전트가 확인 없이 파일 수정·명령 실행. 공유 폴더에선 특히 주의.' }));
+
+  function renderFlags() {
+    const h = harnesses.find((x) => x.key === harnessSel.value) || {};
+    flagsBox.replaceChildren();
+    for (const f of (h.flags || [])) {
+      let ctrl;
+      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || '(기본)')));
+      else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
+      else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
+      flagsBox.append(el('div', { class: 'field' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
+    }
+    autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
+  }
+  harnessSel.addEventListener('change', renderFlags);
+  renderFlags();
+
+  const back = overlay('새 세션',
+    field('이름', labelI), field('작업 위치', rootSel), field('하위 폴더', subI), field('하네스', harnessSel),
+    flagsBox, autoWrap,
+    el('div', { class: 'ov-actions' },
+      el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true;
+        const flags = {};
+        for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
+        try {
+          const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+            label: labelI.value, rootKey: rootSel.value, subpath: subI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked }) });
+          back.remove(); toast('세션 생성됨');
+          if (out && out.session) location.hash = '#/terminal/' + encodeURIComponent(out.session.id);
+          else renderTerminal(view);
+        } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
+      } })));
+}
+
+async function renderTerminalSession(view, id) {
+  const prefs = termPrefs();
+  const backLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/terminal', text: '← 세션 목록' });
+  const status = el('span', { class: 'caption', text: '연결 중…' });
+  const gear = el('button', { class: 'btn btn-ghost btn-sm', text: '⚙ 보기 설정', onclick: () => openTermSettings() });
+  const bar = el('div', { class: 'term-bar' }, backLink, el('span', { class: 'term-bar-id', text: decodeURIComponent(id) }), el('span', { style: 'flex:1' }), status, gear);
+  const host = el('div', { class: 'term-host' });
+  view.replaceChildren(el('div', { class: 'term-wrap' }, bar, host));
+
+  if (!window.Terminal || !window.FitAddon) { status.textContent = '터미널 라이브러리 로드 실패 (xterm)'; return; }
+  const term = new Terminal({
+    fontFamily: prefs.fontFamily, fontSize: prefs.fontSize, cursorStyle: prefs.cursorStyle, cursorBlink: true,
+    theme: (TERM_THEMES[prefs.theme] || TERM_THEMES.dark).theme, scrollback: 5000, allowProposedApi: true,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  try { fit.fit(); } catch (_) { /* noop */ }
+
+  try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
+  catch (e) { status.textContent = '인증 실패 — ' + e.message; return; }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(id));
+  const onResize = () => { try { fit.fit(); } catch (_) { /* noop */ } if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ } } };
+  termSession = { ws, term, fit, onResize };
+  window.addEventListener('resize', onResize);
+
+  ws.onopen = () => { status.textContent = '연결됨'; onResize(); term.focus(); };
+  ws.onmessage = (e) => { if (typeof e.data === 'string') term.write(e.data); };
+  ws.onclose = () => { status.textContent = '연결 종료'; };
+  ws.onerror = () => { status.textContent = '연결 오류'; };
+  term.onData((d) => { if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
+}
+
+function openTermSettings() {
+  if (!termSession || !termSession.term) { toast('열린 터미널이 없습니다', true); return; }
+  const term = termSession.term;
+  const prefs = termPrefs();
+  const fontSel = el('select', { class: 'term-input' }, ...TERM_FONTS.map((f) => el('option', { value: f.v, selected: f.v === prefs.fontFamily ? '' : null }, f.label)));
+  const sizeI = el('input', { class: 'term-input', type: 'number', min: '9', max: '28', value: String(prefs.fontSize) });
+  const themeSel = el('select', { class: 'term-input' }, ...Object.entries(TERM_THEMES).map(([k, v]) => el('option', { value: k, selected: k === prefs.theme ? '' : null }, v.name)));
+  const cursorSel = el('select', { class: 'term-input' }, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === prefs.cursorStyle ? '' : null }, c)));
+  const apply = () => {
+    const p = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value };
+    term.options.fontFamily = p.fontFamily; term.options.fontSize = p.fontSize; term.options.cursorStyle = p.cursorStyle;
+    term.options.theme = (TERM_THEMES[p.theme] || TERM_THEMES.dark).theme;
+    saveTermPrefs(p);
+    if (termSession && termSession.onResize) termSession.onResize();
+  };
+  for (const c of [fontSel, themeSel, cursorSel]) c.addEventListener('change', apply);
+  sizeI.addEventListener('input', apply);
+  overlay('터미널 보기 설정', field('폰트', fontSel), field('크기(px)', sizeI), field('테마', themeSel), field('커서', cursorSel),
+    el('div', { class: 'caption', text: '설정은 이 브라우저에 저장되어 다음에도 적용됩니다.' }));
+}
+
 // ── 라우터 ──
 function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -1385,6 +1561,7 @@ function setActiveTab(name) {
 }
 
 async function route() {
+  teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
   if (!localStorage.getItem(TOKEN_KEY)) { showGate(); return; }
   const { segs, params } = parseHash();
   const view = $view();
@@ -1411,6 +1588,9 @@ async function route() {
     } else if (page === 'system') {
       setActiveTab('system');
       await renderSystem(view, segs[1] || null);
+    } else if (page === 'terminal') {
+      setActiveTab('terminal');
+      await renderTerminal(view, segs[1] ? decodeURIComponent(segs[1]) : null);
     } else {
       setActiveTab('map');
       await renderMap(view);

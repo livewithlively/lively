@@ -667,7 +667,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 
 /* ── 2) 탐색 ── */
 .browse-layout { display: flex; gap: 22px; align-items: flex-start; margin-top: 8px; }
-.browse-side { flex: 0 0 218px; min-width: 0; position: sticky; top: 80px; }
+.browse-side { flex: 0 0 218px; min-width: 0; position: sticky; top: 80px; max-height: calc(100vh - 96px); overflow-y: auto; overscroll-behavior: contain; }
 .browse-main { flex: 1; min-width: 0; }
 @media (max-width: 820px) { .browse-layout { flex-direction: column; } .browse-side { position: static; flex-basis: auto; width: 100%; } }
 
