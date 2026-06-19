@@ -19,6 +19,7 @@ const unit = (over: Partial<KnowledgeUnit>): KnowledgeUnit => ({
   kind: "K",
   kinds: [],
   title: null,
+  summary: null,
   body_md: "",
   domain_key: null,
   domain_repo: null,
