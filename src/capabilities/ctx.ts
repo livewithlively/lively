@@ -5,11 +5,11 @@
 // 데이터층은 P1a(org/knowledge.ts) 위임: confidence·lifecycle 은 서버강제(입력 금지), 쓰기는
 //  assertNoHardSecrets + audit + version+1. 입력 검증은 어댑터 경계(MCP=zod input / REST=mount.parse).
 import { z } from "zod";
-import { getKnowledge, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
+import { getKnowledge, knowledgeThread, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
 import { listAllDomains } from "../domainmap/core/queries.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
-import { HttpError, qstr, qint } from "./rest-util.js";
+import { HttpError, qstr, qint, qiso, qtype } from "./rest-util.js";
 import type { LivelyUser } from "../context.js";
 
 // co-exposed 헬퍼 — mcp:true + REST 마운트를 한 번에 선언(delivery 의 restOnly 류는 mcp:false 전용이라 별도).
@@ -31,6 +31,15 @@ function qlifecycle(v: unknown): Lifecycle | undefined {
   if (s === undefined) return undefined;
   if (!LIFECYCLES.has(s)) throw new HttpError(400, `lifecycle 은 ${[...LIFECYCLES].join("|")} 만 허용됩니다`);
   return s as Lifecycle;
+}
+
+// REST source 파싱 — observed|authored 화이트리스트(item 흡수 필터). 위반은 400.
+const SOURCES = new Set(["observed", "authored"]);
+function qsource(v: unknown): string | undefined {
+  const s = qstr(v, "source", 16);
+  if (s === undefined) return undefined;
+  if (!SOURCES.has(s)) throw new HttpError(400, `source 는 ${[...SOURCES].join("|")} 만 허용됩니다`);
+  return s;
 }
 
 // path 접두 파생(단순 파싱) — 'K/' → {kind:'K'}, 'D/billing/' → {kind:'D', domain:'billing'}.
@@ -58,13 +67,18 @@ const ctxLs = coExposed(
   "ctx_ls",
   "컨텍스트 목록(ls)",
   "통합 지식스토어를 파일시스템처럼 나열한다. path 접두('K/' 'D/billing/')로 kind/domain 을 파생하거나 인자로 직접 필터. " +
-    "본문 없이 메타(name/kind/title/domain/lifecycle/updated_at)만 — 본문은 ctx_cat 으로.",
+    "본문 없이 메타(name/kind/title/domain/lifecycle/updated_at)만 — 본문은 ctx_cat 으로. " +
+    "활동(외부 미러)도 흡수: system(slack/clickup/notion)·since(occurred_at 이후)·source(observed=미러만/authored=저작만)·type(message/task/change/doc/note) 필터(구 search_items 대체).",
   {
     path: z.string().max(256).optional(),
     kind: z.string().max(2).optional(),
     domain: z.string().max(100).optional(),
     lifecycle: z.enum(["active", "rejected", "superseded"]).optional(),
     confidence: z.string().max(16).optional(),
+    system: z.string().max(100).optional().describe("external_system 필터(slack | clickup | notion …)"),
+    since: z.string().max(64).optional().describe("ISO8601 — occurred_at 이 시각 이후만"),
+    source: z.enum(["observed", "authored"]).optional().describe("observed=커넥터 미러만 / authored=저작물만"),
+    type: z.enum(["message", "task", "change", "doc", "note"]).optional().describe("원 활동 type(fields._item_type)"),
     limit: z.number().int().min(1).max(200).default(100),
   },
   [{
@@ -76,15 +90,22 @@ const ctxLs = coExposed(
       domain: qstr(req.query.domain, "domain", 100),
       lifecycle: qlifecycle(req.query.lifecycle),
       confidence: qstr(req.query.confidence, "confidence", 16),
+      system: qstr(req.query.system, "system", 100),
+      since: qiso(req.query.since),
+      source: qsource(req.query.source),
+      type: qtype(req.query.type),
       limit: qint(req.query.limit, "limit", 100, 1, 200),
     }),
   }],
-  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; confidence?: string; limit?: number }) => {
+  async (input: { path?: string; kind?: string; domain?: string; lifecycle?: Lifecycle; confidence?: string; system?: string; since?: string; source?: string; type?: string; limit?: number }) => {
     const fromPath = parsePath(input.path);
     const kind = input.kind ?? fromPath.kind ?? null;     // 명시 인자 우선, path 는 보조
     const domainKey = input.domain ?? fromPath.domain ?? null;
     const limit = input.limit ?? 100;
-    const rows = await listKnowledge({ kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null });
+    const rows = await listKnowledge({
+      kind, domainKey, lifecycle: input.lifecycle ?? null, confidence: input.confidence ?? null,
+      system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+    });
     const entries = rows.slice(0, limit).map((u) => ({
       name: u.name, kind: u.kind, title: u.title, domain_key: u.domain_key,
       lifecycle: u.lifecycle, confidence: u.confidence, updated_at: u.updated_at,
@@ -97,11 +118,16 @@ const ctxLs = coExposed(
 const ctxGrep = coExposed(
   "ctx_grep",
   "컨텍스트 검색(grep)",
-  "통합 지식스토어를 제목/본문 텍스트로 검색한다(부분일치). 결과는 **스니펫(잘림)** — 전문은 결과 name 으로 ctx_cat.",
+  "통합 지식스토어를 제목/본문 텍스트로 검색한다(부분일치). 결과는 **스니펫(잘림)** — 전문은 결과 name 으로 ctx_cat. " +
+    "활동(외부 미러)도 흡수: system·since·source(observed/authored)·type 필터(구 search_items 대체).",
   {
     query: z.string().min(1),
     kind: z.string().max(2).optional(),
     domain: z.string().max(100).optional(),
+    system: z.string().max(100).optional().describe("external_system 필터(slack | clickup | notion …)"),
+    since: z.string().max(64).optional().describe("ISO8601 — occurred_at 이 시각 이후만"),
+    source: z.enum(["observed", "authored"]).optional().describe("observed=커넥터 미러만 / authored=저작물만"),
+    type: z.enum(["message", "task", "change", "doc", "note"]).optional().describe("원 활동 type(fields._item_type)"),
     limit: z.number().int().min(1).max(50).default(10),
   },
   [{
@@ -114,14 +140,20 @@ const ctxGrep = coExposed(
         query,
         kind: qstr(req.query.kind, "kind", 2),
         domain: qstr(req.query.domain, "domain", 100),
+        system: qstr(req.query.system, "system", 100),
+        since: qiso(req.query.since),
+        source: qsource(req.query.source),
+        type: qtype(req.query.type),
         limit: qint(req.query.limit, "limit", 10, 1, 50),
       };
     },
   }],
-  async (input: { query: string; kind?: string; domain?: string; limit?: number }) => {
+  async (input: { query: string; kind?: string; domain?: string; system?: string; since?: string; source?: string; type?: string; limit?: number }) => {
     // 통합 FS 뷰라 모든 kind(R 규칙/페르소나 포함) 검색 — 구 memory_search 는 R 제외(레거시 호환). 의도적 차이.
     const matches = await searchKnowledge({
-      query: input.query, kind: input.kind ?? null, domainKey: input.domain ?? null, limit: input.limit ?? 10,
+      query: input.query, kind: input.kind ?? null, domainKey: input.domain ?? null,
+      system: input.system ?? null, since: input.since ?? null, source: input.source ?? null, itemType: input.type ?? null,
+      limit: input.limit ?? 10,
     });
     return { matches };
   },
@@ -131,22 +163,25 @@ const ctxGrep = coExposed(
 const ctxCat = coExposed(
   "ctx_cat",
   "컨텍스트 전문(cat)",
-  "한 지식단위의 **전문(full body)** + 메타 전체를 name 으로 가져온다(ctx_grep 스니펫 잘림 없이). 없으면 error 필드.",
-  { name: z.string().min(1).max(64) },
+  "한 지식단위의 **전문(full body)** + 메타 전체를 name 으로 가져온다(ctx_grep 스니펫 잘림 없이). 없으면 error 필드. " +
+    "thread:true 면 외부 미러 활동의 스레드(ancestors 부모체인 + children 직계답글, parent_name 재귀)도 포함(구 get_item.thread 대체).",
+  { name: z.string().min(1).max(64), thread: z.boolean().optional().describe("스레드(부모체인/답글) 포함 — 기본 false") },
   [{
     method: "GET",
     paths: ["/api/ui/ctx/cat"],
     parse: (req) => {
       const name = qstr(req.query.name, "name", 64);
       if (!name) throw new HttpError(400, "name 필수");
-      return { name };
+      return { name, thread: req.query.thread === "1" };
     },
   }],
-  async (input: { name: string }) => {
+  async (input: { name: string; thread?: boolean }) => {
     const unit = await getKnowledge(input.name);
     // 부재는 get_item 과 동일 계약으로 404(throw) — REST=404 / MCP=isError, 양 어댑터 일관.
     if (!unit) throw new HttpError(404, `없음: '${input.name}' (name 확인 — ctx_ls/ctx_grep 결과의 name)`);
-    return unit;
+    if (!input.thread) return unit; // 기본: 스레드 생략(토큰 절약)
+    const thread = await knowledgeThread(input.name);
+    return { ...unit, thread };
   },
 );
 

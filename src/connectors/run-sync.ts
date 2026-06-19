@@ -5,11 +5,15 @@
 // (무변경 재싱크 = action 'unchanged'), declared 매핑은 ON CONFLICT — 두 번 돌려도 중복 없음.
 // 커서는 **모든 단계 성공 후에만** 전진 — 중도 실패 run 은 같은 윈도를 다음 run 이 재폴링한다(유실 없음).
 import {
-  initItemSchema, ingestItems, resolveParents, declareItemProject,
-  supersedeSiblingDeclaredProjects,
-  getConnectorState, setConnectorState, getItemIdsByExternalIds,
+  initItemSchema, ingestItems, resolveParents,
+  getConnectorState, setConnectorState,
   type RawItem,
 } from "../items/store.js";
+import {
+  declareUnitProject, supersedeSiblingDeclaredUnitProjects,
+} from "../org/knowledge-mapping.js";
+import { initOrgSchema } from "../org/schema.js";
+import { unitName } from "../org/external-identity.js";
 import { loadCandidates } from "../items/mapping-candidates.js";
 import {
   getTeam, enumerateLists, syncProjects, fetchListTasks, fetchTeamTasks,
@@ -28,7 +32,8 @@ if (name !== "clickup") {
   process.exit(1);
 }
 
-await initItemSchema();
+await initItemSchema();   // person/connector_state 등 보조 스키마
+await initOrgSchema();    // item 폐기 컷오버: ku(knowledge_unit*) 단일 표면 — 미러/매핑이 여기 적재
 
 // ── 1) 컨테이너 나열 + 프로젝트 레지스트리 싱크 (태스크 작업 전에) ──
 const team = await getTeam();
@@ -111,19 +116,19 @@ await flush();
 const linked = await resolveParents();
 
 // ── 5) declared 매핑 — 태스크가 속한 리스트 = 프로젝트(툴 구조가 진실; 단일 쓰기 경로) ──
-const ids = await getItemIdsByExternalIds("clickup", teamId, [...seen.keys()]);
+//  item 폐기 컷오버: itemId 플러밍(getItemIdsByExternalIds) 제거 — ku 좌표 name=unitName(system, external_id)을
+//  직접 도출해 ku 매핑(kud/kup)에 declare. ku external 멱등키가 itemId 멱등키를 대체한다.
 let declared = 0;
 let declareFailed = 0;
 for (const [externalId, meta] of seen) {
   if (!meta.listId) continue;
   if (failedListIds.has(meta.listId)) continue; // 프로젝트 싱크 실패 리스트는 declare 스킵(다음 run 수렴)
-  const itemId = ids.get(externalId);
-  if (!itemId) { declareFailed++; console.error(`[clickup] item id 조회 실패 external_id=${externalId}`); continue; }
+  const name = unitName("clickup", externalId);
   try {
     const projectKey = taskProjectKey(meta.listId);
-    await declareItemProject(
+    await declareUnitProject(
       {
-        itemId,
+        name,
         projectKey,
         repo: REPO,
         evidence: `clickup list ${meta.listId} (${listNameById.get(meta.listId) ?? "?"})`,
@@ -131,15 +136,15 @@ for (const [externalId, meta] of seen) {
       { candidates, audit: { source: "connector-sync", actor: "daon" } },
     );
     // 리스트 간 이동 수렴 — 옛 리스트의 declared 행 강등(대부분 no-op; 멱등).
-    // 한 아이템 = declared 1행 불변식. manual/rule/llm 매핑은 건드리지 않는다.
-    await supersedeSiblingDeclaredProjects(
-      { itemId, keepProjectKey: projectKey, repo: REPO },
+    // 한 단위 = declared 1행 불변식. manual/rule/llm 매핑은 건드리지 않는다.
+    await supersedeSiblingDeclaredUnitProjects(
+      { name, keepProjectKey: projectKey, repo: REPO },
       { audit: { source: "connector-sync", actor: "daon" } },
     );
     declared++;
   } catch (err) {
     declareFailed++;
-    console.error(`[clickup] declare 실패 item=${itemId} list=${meta.listId}:`, err);
+    console.error(`[clickup] declare 실패 name=${name} list=${meta.listId}:`, err);
   }
 }
 

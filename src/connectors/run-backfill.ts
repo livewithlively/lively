@@ -2,6 +2,7 @@
 // 사용: node --env-file-if-exists=.env dist/connectors/run-backfill.js <slack|discord|notion> [--since ISO8601]
 //   필요 env: ITEMS_DATABASE_URL + 해당 커넥터 토큰(SLACK_BOT_TOKEN/DISCORD_BOT_TOKEN/NOTION_TOKEN)
 import { initItemSchema, ingestItems, resolveParents, type RawItem } from "../items/store.js";
+import { initOrgSchema } from "../org/schema.js";
 import { connectors } from "./index.js";
 import { logger } from "../log.js";
 
@@ -15,7 +16,8 @@ if (!conn) {
   process.exit(1);
 }
 
-await initItemSchema();
+await initItemSchema();   // person/connector_state 등 보조 스키마
+await initOrgSchema();    // item 폐기 컷오버: ku(knowledge_unit*) 단일 표면 — 미러가 여기 적재
 
 let batch: RawItem[] = [];
 let total = 0;

@@ -147,6 +147,11 @@ export async function listKnowledge(opts: {
   lifecycle?: KnowledgeLifecycle | null;
   domainKey?: string | null;
   confidence?: string | null;
+  // ── item 폐기·ku 흡수: search_items 의 활동필터 3종을 ku 좌표로 흡수(ku 가 출처정보 보존) ──
+  system?: string | null;    // external_system 필터(slack/clickup/notion …) — 구 search_items.system
+  since?: string | null;     // occurred_at >= ISO8601 — 구 search_items.since
+  source?: string | null;    // 'observed'(커넥터 미러만) | 'authored'(저작물만) — 미러/저작 구분
+  itemType?: string | null;  // 원 item.type(message/task/change/doc/note) — fields._item_type 무손실 복원
 } = {}): Promise<KnowledgeUnit[]> {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -154,11 +159,62 @@ export async function listKnowledge(opts: {
   if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
   if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
   if (opts.confidence) { params.push(opts.confidence); where.push(`confidence=$${params.length}`); } // Review 피드용
+  if (opts.system) { params.push(opts.system); where.push(`external_system=$${params.length}`); }
+  if (opts.since) { params.push(opts.since); where.push(`occurred_at >= $${params.length}`); }
+  // source 흡수 필터: 라이브 ku 의 source 컬럼은 observed 미러의 경우 **시스템명**(clickup/notion), 저작물은
+  //  'authored' 다. observed/authored 구분의 캐노니컬 축은 confidence(='observed' = 커넥터 미러). 따라서
+  //  source='observed' → confidence='observed', source='authored' → confidence<>'observed' 로 매핑한다.
+  if (opts.source === "observed") { where.push(`confidence='observed'`); }
+  else if (opts.source === "authored") { where.push(`confidence<>'observed'`); }
+  if (opts.itemType) { params.push(opts.itemType); where.push(`fields->>'_item_type' = $${params.length}`); }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const r = await itemsPool.query(
     `SELECT ${KNOWLEDGE_COLS} FROM knowledge_unit ${clause} ORDER BY sort, name`, params,
   );
   return r.rows.map(mapKnowledge);
+}
+
+// ── thread(스레드) — item 폐기·ku 흡수: 구 get_item.thread(ancestors/children)를 ku 의 parent_name
+//    자기참조로 무손실 재구성한다. item.getItemThread 는 parent_id(BIGINT)로 재귀했지만 ku 는 parent_name
+//    (TEXT 슬러그=내부 PK)로 재귀 — knowledge_unit_parent_idx(parent_name) 존재. depth 가드 20(사이클 방어).
+//    스니펫만(풀바디 금지) + redactString(pull 표면 마스킹 정책 일관). 루트가 먼저(depth DESC). ──
+export interface KnowledgeThreadRow {
+  name: string; parent_name: string | null; kind: string; external_system: string | null;
+  title: string | null; snippet: string; external_url: string | null;
+  occurred_at: string | null;
+}
+function mapThreadRow(row: Record<string, unknown>): KnowledgeThreadRow {
+  return {
+    name: row.name as string,
+    parent_name: (row.parent_name as string) ?? null,
+    kind: row.kind as string,
+    external_system: (row.external_system as string) ?? null,
+    title: row.title == null ? null : redactString(String(row.title)),
+    snippet: redactString(String(row.body_md ?? "")).replace(/\s+/g, " ").trim().slice(0, 400),
+    external_url: (row.external_url as string) ?? null,
+    occurred_at: (row.occurred_at as string) ?? null,
+  };
+}
+export async function knowledgeThread(
+  name: string,
+): Promise<{ ancestors: KnowledgeThreadRow[]; children: KnowledgeThreadRow[] }> {
+  const ancestors = (await itemsPool.query(
+    `WITH RECURSIVE up(name, parent_name, kind, external_system, title, body_md, external_url, occurred_at, depth) AS (
+       SELECT k.name, k.parent_name, k.kind, k.external_system, k.title, k.body_md, k.external_url, k.occurred_at, 0
+       FROM knowledge_unit k WHERE k.name = $1
+       UNION ALL
+       SELECT p.name, p.parent_name, p.kind, p.external_system, p.title, p.body_md, p.external_url, p.occurred_at, up.depth + 1
+       FROM knowledge_unit p JOIN up ON p.name = up.parent_name WHERE up.depth < 20)
+     SELECT name, parent_name, kind, external_system, title, body_md, external_url, occurred_at
+     FROM up WHERE name <> $1 ORDER BY depth DESC`,
+    [name],
+  )).rows.map(mapThreadRow);
+  const children = (await itemsPool.query(
+    `SELECT name, parent_name, kind, external_system, title, body_md, external_url, occurred_at
+     FROM knowledge_unit WHERE parent_name = $1 ORDER BY occurred_at ASC NULLS LAST LIMIT 200`,
+    [name],
+  )).rows.map(mapThreadRow);
+  return { ancestors, children };
 }
 
 // ── overview — kind_registry LEFT JOIN active knowledge_unit 집계(웹 UI 대시보드용). ──
@@ -329,6 +385,11 @@ export async function searchKnowledge(opts: {
   confidenceNot?: string | null;   // V4-P5: memory_search 가 observed 수집물을 제외할 때(큐레이션 surface MECE)
   domainKey?: string | null;
   lifecycle?: KnowledgeLifecycle | null;
+  // ── item 폐기·ku 흡수: 활동필터(system/since/source/itemType) — listKnowledge 와 동일 의미 ──
+  system?: string | null;
+  since?: string | null;
+  source?: string | null;
+  itemType?: string | null;
   limit?: number;
 }): Promise<KnowledgeSearchHit[]> {
   const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50);
@@ -341,6 +402,12 @@ export async function searchKnowledge(opts: {
     if (opts.confidenceNot) { params.push(opts.confidenceNot); where.push(`confidence <> $${params.length}`); }
     if (opts.lifecycle) { params.push(opts.lifecycle); where.push(`lifecycle=$${params.length}`); }
     if (opts.domainKey) { params.push(opts.domainKey); where.push(`domain_key=$${params.length}`); }
+    if (opts.system) { params.push(opts.system); where.push(`external_system=$${params.length}`); }
+    if (opts.since) { params.push(opts.since); where.push(`occurred_at >= $${params.length}`); }
+    // source observed/authored → confidence 축(listKnowledge 와 동일 매핑 — source 컬럼은 미러의 경우 시스템명).
+    if (opts.source === "observed") { where.push(`confidence='observed'`); }
+    else if (opts.source === "authored") { where.push(`confidence<>'observed'`); }
+    if (opts.itemType) { params.push(opts.itemType); where.push(`fields->>'_item_type' = $${params.length}`); }
     return where;
   };
 

@@ -60,7 +60,11 @@ export async function mirrorKnowledgeFromRawItem(client: pg.PoolClient, it: RawI
   // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
   const title = it.title == null ? null : redactString(String(it.title));
   const body = redactString(String(it.body ?? ""));
-  const fields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {});
+  // item 폐기·ku 흡수: 원 item.type(message/task/change/doc/note)을 fields._item_type 에 가산 보존한다.
+  //  type → kind 는 lossy(여러 type 이 한 kind 로 collapse 가능) — _item_type 은 ku 단독으로 type 필터를
+  //  무손실 복원하기 위한 출처 보존(ctx_ls/ctx_grep 의 type 필터가 fields->>'_item_type' 로 동작). redact 무관(enum 토큰).
+  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const fields = { ...baseFields, _item_type: it.type };
   const raw = it.raw == null ? null : redactDeep(it.raw);
 
   // parent_name = 부모 item 의 unitName(같은 system) — 스레드 자기참조 내부 PK 연결.

@@ -9,10 +9,11 @@
 // 스코프: 'items' 재사용 — curate_item_mapping(쓰기)과 동급 표면, 2인 조직에서 별도 'pm' 스코프 분리는
 // 실익 없이 union/AUTH_TOKENS_JSON 변경만 유발(런북에 업그레이드 경로로 문서화).
 import { z } from "zod";
+import { ingestItems, recordPmWriteAudit } from "../items/store.js";
 import {
-  ingestItems, declareItemProject, supersedeSiblingDeclaredProjects,
-  getItemIdsByExternalIds, recordPmWriteAudit,
-} from "../items/store.js";
+  declareUnitProject, supersedeSiblingDeclaredUnitProjects,
+} from "../org/knowledge-mapping.js";
+import { unitName } from "../org/external-identity.js";
 import { loadCandidates, validateProjectKey } from "../items/mapping-candidates.js";
 import {
   getTeam, getMembersEmailMap, getTask, createTask, updateTask, createTaskComment, linkTasks,
@@ -70,41 +71,40 @@ async function audited<T>(
 //    프로젝트 싱크 후 매핑을 수렴한다(이 힌트는 참).
 async function echoTask(
   task: ClickUpTask, user: LivelyUser,
-): Promise<{ itemId: number | null; projectKey: string | null; mirrored: boolean; warning?: string }> {
+): Promise<{ name: string | null; projectKey: string | null; mirrored: boolean; warning?: string }> {
   try {
     const teamId = task.team_id ?? (await getTeam()).id;
     const listId = task.list?.id ?? null;
     if (listId && getExcludedListIds().has(listId)) {
       const warning = `리스트 ${listId} 는 싱크 제외 대상(CLICKUP_EXCLUDE_LIST_IDS) — 미러 미반영(ClickUp 쓰기는 성공)`;
       logger.warn({ audit: "pm_echo_skipped", taskId: task.id, listId, reason: "excluded-list" });
-      return { itemId: null, projectKey: null, mirrored: false, warning };
+      return { name: null, projectKey: null, mirrored: false, warning };
     }
     const declaredKey = listId ? taskProjectKey(listId) : null;
     const declarable = declaredKey !== null
       && validateProjectKey(await loadCandidates(REPO), declaredKey);
     const raw = toRawItem(task, { teamId });
     raw.fields = { ...raw.fields, via: "harness", initiator: user.userId };
+    // item 폐기 컷오버: ingestItems 가 ku observed 미러를 동기 적재(read-your-writes) → ku 좌표 name 즉시 도출.
     await ingestItems([raw]);
-    const ids = await getItemIdsByExternalIds("clickup", teamId, [task.id]);
-    const itemId = ids.get(task.id);
-    if (!itemId) throw new Error(`에코 item 조회 실패(external_id=${task.id})`);
+    const name = unitName("clickup", task.id);
     if (declaredKey && declarable) {
-      await declareItemProject(
-        { itemId, projectKey: declaredKey, repo: REPO, evidence: `pm write-through by ${user.userId}` },
+      await declareUnitProject(
+        { name, projectKey: declaredKey, repo: REPO, evidence: `pm write-through by ${user.userId}` },
         { audit: { source: "pm-write", actor: user.userId } },
       );
       // 리스트 간 이동 수렴(run-sync 와 동일 reconcile) — 옛 리스트 declared 행 강등(대부분 no-op).
-      await supersedeSiblingDeclaredProjects(
-        { itemId, keepProjectKey: declaredKey, repo: REPO },
+      await supersedeSiblingDeclaredUnitProjects(
+        { name, keepProjectKey: declaredKey, repo: REPO },
         { audit: { source: "pm-write", actor: user.userId } },
       );
-      return { itemId, projectKey: declaredKey, mirrored: true };
+      return { name, projectKey: declaredKey, mirrored: true };
     }
     const warning = declaredKey
-      ? `리스트 ${listId}(${declaredKey}) 미동기화 — item 은 에코됨, 매핑은 다음 run-sync 가 수렴`
+      ? `리스트 ${listId}(${declaredKey}) 미동기화 — 단위는 에코됨, 매핑은 다음 run-sync 가 수렴`
       : `태스크에 리스트 정보 없음 — 매핑 스킵`;
     logger.warn({ audit: "pm_echo_declare_skipped", taskId: task.id, listId, projectKey: declaredKey });
-    return { itemId, projectKey: null, mirrored: true, warning };
+    return { name, projectKey: null, mirrored: true, warning };
   } catch (err) {
     // ClickUp 쓰기는 이미 성공 — 미러만 스테일. 다음 run-sync 가 수렴하므로 재시도 금지(특히 create).
     const e = new Error(

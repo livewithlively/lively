@@ -58,7 +58,7 @@ export const MEANING: Record<string, FieldMeaning> = {
     what: "한 사람(또는 에이전트·시스템)의 정식 신원과 외부 계정 연결(이메일·Discord·Slack 등)입니다.",
     reach: "그 구성원 + 게이트웨이의 데이터 조회 전반",
     when: "저장 즉시 — 게이트웨이의 신원 매칭에 바로 반영됩니다.",
-    where: "AI가 'search_items', '담당자에게 할당' 등으로 사람을 가로질러 찾을 때 쓰는 매칭 키입니다.",
+    where: "AI가 ctx_grep(통합 지식 검색), '담당자에게 할당' 등으로 사람을 가로질러 찾을 때 쓰는 매칭 키입니다.",
     example: "어떤 사람의 Slack 계정을 연결하면, 그때부터 AI가 그 사람의 Slack 발언·작업을 한 사람으로 묶어 보여줍니다.",
     tone: "identity",
   },

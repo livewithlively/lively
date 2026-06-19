@@ -3,12 +3,12 @@
 // 쓰기는 store.ts 의 propose/confirm/reject 단일 검증 경로만 위임(가드레일 throw — free-form SQL 없음).
 import { z } from "zod";
 import {
-  unmappedItemsUi, mappingKeyCounts,
-  proposeItemDomain, proposeItemProject,
-  confirmItemDomain, confirmItemProject,
-  rejectItemDomain, rejectItemProject,
+  unmappedUnitsUi, mappingKeyCountsUnit,
+  proposeUnitDomain, proposeUnitProject,
+  confirmUnitDomain, confirmUnitProject,
+  rejectUnitDomain, rejectUnitProject,
   type MappedBy,
-} from "../items/store.js";
+} from "../org/knowledge-mapping.js";
 import { loadCandidates } from "../items/mapping-candidates.js";
 import { logger } from "../log.js";
 import type { Capability } from "./types.js";
@@ -57,7 +57,7 @@ const listUnmapped: Capability = {
   handler: async (input: {
     missing?: "domain" | "project" | "either" | "both";
     repo?: string; system?: string; type?: string; since?: string; limit?: number; offset?: number;
-  }) => unmappedItemsUi(input),
+  }) => unmappedUnitsUi(input),
 };
 
 // 직렬화(Map→배열)는 핸들러 소속 — REST/MCP byte-identical.
@@ -114,13 +114,13 @@ const mappingCounts: Capability = {
       },
     }],
   },
-  handler: async (input: { repo: string }) => mappingKeyCounts(input.repo),
+  handler: async (input: { repo: string }) => mappingKeyCountsUnit(input.repo),
 };
 
 interface CurateInput {
   action: "propose" | "confirm" | "reject";
   kind: "domain" | "project";
-  itemId: number;
+  name: string; // ku 좌표(knowledge_unit.name) — item 폐기 컷오버로 itemId 대체
   key: string;
   repo?: string;
   evidence?: string;
@@ -137,9 +137,10 @@ interface CurateInput {
 // confirm/reject 는 mappedBy 무시(사람 진실). 보호 경로는 양쪽 다 성공 + action='skipped-*'.
 const curateItemMapping: Capability = {
   name: "curate_item_mapping",
-  title: "item 매핑 큐레이션(제안/확정/기각)",
+  title: "지식단위 매핑 큐레이션(제안/확정/기각)",
   description:
-    "item→domain/project 매핑의 단일 쓰기 op. action=propose: state='proposed' 제안 — 이 툴에서는 mappedBy='llm' 만 허용(기본값, evidence 근거 인용 필수·영속; " +
+    "knowledge_unit(ku)→domain/project 매핑의 단일 쓰기 op. 좌표는 ku.name(예: clickup-86abc123). " +
+    "action=propose: state='proposed' 제안 — 이 툴에서는 mappedBy='llm' 만 허용(기본값, evidence 근거 인용 필수·영속; " +
     "'rule'/'manual' 은 거부 — rule 행은 mapping-run, manual 행은 웹/CLI 의 사람 경로 전용), " +
     "confirmed/manual/rejected 행은 보호되어 action='skipped-*' 로 보고(덮어쓰기 없음), provenance 강등 금지, 멀티도메인 허용. " +
     "action=confirm: state='confirmed'+mapped_by='manual' 로 못박음(기각된 행의 부활 경로이기도 함). " +
@@ -150,7 +151,7 @@ const curateItemMapping: Capability = {
   input: {
     action: z.enum(["propose", "confirm", "reject"]),
     kind: z.enum(["domain", "project"]),
-    itemId: z.number().int().positive(),
+    name: z.string().trim().min(1).max(64).describe("knowledge_unit.name(ku 좌표 — 예: clickup-86abc123)"),
     key: z.string().trim().min(1).max(200), // REST parseMappingBody 의 trim 과 거동 일치(어댑터 경계 파리티)
     repo: z.string().trim().max(200).optional(),
     evidence: z.string().max(4000).optional().describe("propose(llm): 본문 인용+매치 근거(필수) · reject: 기각 사유(audit 기록)"),
@@ -174,9 +175,9 @@ const curateItemMapping: Capability = {
     const audit = { source: ctx?.source ?? "unknown", actor: user.userId ?? "unknown" };
     logger.info({
       audit: `curate_${input.action}`, by: user.userId, source: audit.source,
-      kind: input.kind, itemId: input.itemId, key: input.key, repo: input.repo,
+      kind: input.kind, name: input.name, key: input.key, repo: input.repo,
     });
-    const base = { itemId: input.itemId, repo: input.repo, confidence: input.confidence, evidence: input.evidence };
+    const base = { name: input.name, repo: input.repo, confidence: input.confidence, evidence: input.evidence };
     if (input.action === "propose") {
       const mappedBy: MappedBy = input.mappedBy ?? "llm"; // MCP 기본 llm — evidence 필수(store 가드레일)
       // MCP propose 는 llm 만: 'rule' 자칭은 evidence 가드(validateProposeBase 의 llm-only 검사) 우회,
@@ -188,18 +189,18 @@ const curateItemMapping: Capability = {
         );
       }
       return input.kind === "domain"
-        ? proposeItemDomain({ ...base, domainKey: input.key, mappedBy }, { audit })
-        : proposeItemProject({ ...base, projectKey: input.key, mappedBy }, { audit });
+        ? proposeUnitDomain({ ...base, domainKey: input.key, mappedBy }, { audit })
+        : proposeUnitProject({ ...base, projectKey: input.key, mappedBy }, { audit });
     }
     if (input.action === "confirm") {
       return input.kind === "domain"
-        ? confirmItemDomain({ ...base, domainKey: input.key }, { audit })
-        : confirmItemProject({ ...base, projectKey: input.key }, { audit });
+        ? confirmUnitDomain({ ...base, domainKey: input.key }, { audit })
+        : confirmUnitProject({ ...base, projectKey: input.key }, { audit });
     }
     // reject — evidence 는 기각 사유(reason)로 audit.evidence 에 영속.
     return input.kind === "domain"
-      ? rejectItemDomain({ itemId: input.itemId, domainKey: input.key, repo: input.repo, reason: input.evidence }, { audit })
-      : rejectItemProject({ itemId: input.itemId, projectKey: input.key, repo: input.repo, reason: input.evidence }, { audit });
+      ? rejectUnitDomain({ name: input.name, domainKey: input.key, repo: input.repo, reason: input.evidence }, { audit })
+      : rejectUnitProject({ name: input.name, projectKey: input.key, repo: input.repo, reason: input.evidence }, { audit });
   },
 };
 

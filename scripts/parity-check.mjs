@@ -43,17 +43,16 @@ try {
 } catch (e) { fail(`domainmap DB 연결 실패 — ${e.message}`); }
 try { await itemsPool.query("SELECT 1"); } catch (e) { fail(`items DB 연결 실패 — ${e.message}`); }
 
-// 결정적 대상 아이템: 최소 id + 소형 본문(full 변형용).
-const firstId = Number((await itemsPool.query("SELECT id FROM item ORDER BY id LIMIT 1")).rows[0]?.id);
-if (!Number.isFinite(firstId)) fail("items DB 에 아이템이 없음");
-const smallRow = (await itemsPool.query(
-  "SELECT id FROM item WHERE length(body) BETWEEN 1 AND 2000 ORDER BY id LIMIT 1")).rows[0];
-const smallId = Number(smallRow?.id ?? firstId);
-// rejected 매핑 보유 아이템(있으면) — includeRejected 변형이 실데이터로 의미 있게 갈리는 대상.
-const rejRow = (await itemsPool.query(
-  `SELECT item_id FROM item_domain WHERE state='rejected'
-   UNION SELECT item_id FROM item_project WHERE state='rejected' ORDER BY item_id LIMIT 1`)).rows[0];
-const rejId = Number(rejRow?.item_id ?? firstId);
+// item 폐기·ku 흡수(2026-06): search_items/get_item parity 케이스 제거(툴 표면에서 제거됨).
+//  활동검색/스레드는 ctx_ls/ctx_grep/ctx_cat 이 흡수 — ctx_* 의 자체 parity 케이스가 커버한다.
+//  결정적 ku 미러 name(스레드 parity 용): notion 미러 중 parent_name 보유 행(자식)·그 부모.
+const ctxChildRow = (await itemsPool.query(
+  "SELECT name FROM knowledge_unit WHERE source<>'authored' AND parent_name IS NOT NULL ORDER BY name LIMIT 1")).rows[0];
+const ctxThreadName = ctxChildRow?.name ?? null; // 없으면 스레드 케이스 skip
+// curate_item_mapping 은 ku 좌표(knowledge_unit.name) — 검증에러 parity 용 실재 observed ku name 1건.
+const firstName = (await itemsPool.query(
+  "SELECT name FROM knowledge_unit WHERE source<>'authored' ORDER BY name LIMIT 1")).rows[0]?.name;
+if (!firstName) fail("knowledge_unit(observed)에 단위가 없음(curate parity 대상)");
 
 // ── REST 측: express + registerWebUi (ephemeral 포트 — listen(0), OS 가 빈 포트 할당) ──
 const app = express();
@@ -133,31 +132,29 @@ async function expectEqual(name, mcpArgsCall, restPath) {
 // ════════ co-exposed deep-equal 커버리지 ════════
 await expectEqual("repo_list ↔ GET /api/ui/repos", ["repo_list", {}], "/api/ui/repos");
 
-await expectEqual("search_items{repo} ↔ /api/ui/items?repo",
-  ["search_items", { repo: REPO, limit: 5 }], `/api/ui/items?repo=${REPO}&limit=5`);
-await expectEqual("search_items{query} ↔ /api/ui/items?q",
-  ["search_items", { query: "피벗", limit: 5 }], `/api/ui/items?q=${encodeURIComponent("피벗")}&limit=5`);
-await expectEqual("search_items{domainKey+repo} ↔ /api/ui/items?domainKey",
-  ["search_items", { domainKey: "domain-cartography", repo: REPO, limit: 5 }],
-  `/api/ui/items?domainKey=domain-cartography&repo=${REPO}&limit=5`);
+// ── item 흡수: ctx_ls/ctx_grep 의 활동필터(system/since/source/type) ↔ REST 동치 ──
+await expectEqual("ctx_ls{system} ↔ /api/ui/ctx/ls?system",
+  ["ctx_ls", { system: "notion", limit: 5 }], "/api/ui/ctx/ls?system=notion&limit=5");
+await expectEqual("ctx_ls{source:observed} ↔ /api/ui/ctx/ls?source",
+  ["ctx_ls", { source: "observed", limit: 5 }], "/api/ui/ctx/ls?source=observed&limit=5");
+await expectEqual("ctx_ls{type:doc} ↔ /api/ui/ctx/ls?type",
+  ["ctx_ls", { type: "doc", limit: 5 }], "/api/ui/ctx/ls?type=doc&limit=5");
+await expectEqual("ctx_grep{query,system} ↔ /api/ui/ctx/grep?query&system",
+  ["ctx_grep", { query: "a", system: "clickup", limit: 5 }],
+  `/api/ui/ctx/grep?query=${encodeURIComponent("a")}&system=clickup&limit=5`);
 
-// includeRejected 변형 — REST 의 '1' 문자열→boolean 매핑이 정확히 어댑터 경계 코드(파리티의 핵심 대상).
-await expectEqual("search_items{repo,includeRejected} ↔ /api/ui/items?repo&includeRejected=1",
-  ["search_items", { repo: REPO, limit: 5, includeRejected: true }],
-  `/api/ui/items?repo=${REPO}&limit=5&includeRejected=1`);
-
-await expectEqual(`get_item{id:${firstId},thread} ↔ /api/ui/items/${firstId}`,
-  ["get_item", { id: firstId, thread: true }], `/api/ui/items/${firstId}`);
-await expectEqual(`get_item{id:${smallId},full} ↔ /api/ui/items/${smallId}?full=1`,
-  ["get_item", { id: smallId, thread: true, full: true }], `/api/ui/items/${smallId}?full=1`);
-await expectEqual(`get_item{id:${rejId},includeRejected} ↔ /api/ui/items/${rejId}?includeRejected=1`,
-  ["get_item", { id: rejId, thread: true, includeRejected: true }], `/api/ui/items/${rejId}?includeRejected=1`);
-// MCP 전용 토큰 다이어트 경로 — thread:false 면 페이로드에 thread 키 자체가 없어야 한다.
-await report("smoke: get_item{thread:false} 는 thread 키 생략 (MCP)", async () => {
-  const m = await mcp("get_item", { id: firstId, thread: false });
-  assert.ok(m.ok, `MCP 에러: ${m.errText}`);
-  assert.ok(!("thread" in m.payload), "thread:false 인데 thread 키가 존재");
-});
+// ── item 흡수: ctx_cat thread(parent_name 재귀) ↔ REST 동치 — 미러 자식 행이 있을 때만 ──
+if (ctxThreadName) {
+  await expectEqual(`ctx_cat{thread} ↔ /api/ui/ctx/cat?thread=1 (${ctxThreadName})`,
+    ["ctx_cat", { name: ctxThreadName, thread: true }],
+    `/api/ui/ctx/cat?name=${encodeURIComponent(ctxThreadName)}&thread=1`);
+  // MCP 전용 토큰 다이어트 — thread 생략(기본) 시 페이로드에 thread 키 없음.
+  await report("smoke: ctx_cat{thread 생략} 은 thread 키 없음 (MCP)", async () => {
+    const m = await mcp("ctx_cat", { name: ctxThreadName });
+    assert.ok(m.ok, `MCP 에러: ${m.errText}`);
+    assert.ok(!("thread" in m.payload), "thread 미요청인데 thread 키가 존재");
+  });
+}
 
 await expectEqual("list_unmapped ↔ /api/ui/inbox",
   ["list_unmapped", { missing: "either", repo: REPO, limit: 5 }],
@@ -240,40 +237,40 @@ async function expectBothError(name, mcpArgs, restPath, restBody, restStatus, su
 
 // (a) vocab 불일치 — validateDomainKey 가 INSERT 이전에 throw(행·audit 무생성).
 await expectBothError("curate(a) vocab 불일치 propose",
-  { action: "propose", kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO, evidence: "parity" },
-  "/api/ui/propose", { kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO, evidence: "parity" },
+  { action: "propose", kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO, evidence: "parity" },
+  "/api/ui/propose", { kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO, evidence: "parity" },
   400, "domain_key __parity_nope__ 검증 실패");
 
-// (b) 존재하지 않는 itemId — item 존재 검증이 INSERT 이전에 throw.
-await expectBothError("curate(b) 없는 item propose",
-  { action: "propose", kind: "domain", itemId: 999999999, key: "__parity_nope__", repo: REPO, evidence: "parity" },
-  "/api/ui/propose", { kind: "domain", itemId: 999999999, key: "__parity_nope__", repo: REPO, evidence: "parity" },
-  404, "item 999999999 없음");
+// (b) 존재하지 않는 ku name — knowledge_unit 존재 검증이 INSERT 이전에 throw.
+await expectBothError("curate(b) 없는 ku propose",
+  { action: "propose", kind: "domain", name: "__no_such_ku__", key: "__parity_nope__", repo: REPO, evidence: "parity" },
+  "/api/ui/propose", { kind: "domain", name: "__no_such_ku__", key: "__parity_nope__", repo: REPO, evidence: "parity" },
+  404, "knowledge_unit __no_such_ku__ 없음");
 
 // (c) 존재하지 않는 매핑 reject — 행 부재 throw(UPDATE 매치 0, 무쓰기).
 await expectBothError("curate(c) 없는 매핑 reject",
-  { action: "reject", kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO },
-  "/api/ui/reject", { kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO },
+  { action: "reject", kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO },
+  "/api/ui/reject", { kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO },
   404, "매핑 없음");
 
 // (d) MCP 전용: propose evidence 누락(mappedBy 기본 llm) — REST 는 mappedBy='manual' 서버 강제라 비대상.
 await report("curate(d) MCP llm evidence 필수", async () => {
-  const m = await mcp("curate_item_mapping", { action: "propose", kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO });
+  const m = await mcp("curate_item_mapping", { action: "propose", kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO });
   assert.strictEqual(m.ok, false, "MCP 가 에러여야 함");
   assert.ok(m.errText.includes("llm 매핑은 근거(evidence) 필수"), `메시지 불일치: ${m.errText}`);
 });
 
 // (e) confirm vocab 불일치 — validateDomainKey 가 INSERT 이전에 throw(무쓰기). confirm 와이어링/alias 커버.
 await expectBothError("curate(e) vocab 불일치 confirm",
-  { action: "confirm", kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO },
-  "/api/ui/confirm", { kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO },
+  { action: "confirm", kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO },
+  "/api/ui/confirm", { kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO },
   400, "domain_key __parity_nope__ 검증 실패");
 
 // (f) MCP 전용 가드레일: propose 의 mappedBy='manual'/'rule' 자칭 차단(핸들러 throw — store 도달 전, 무쓰기).
 await report("curate(f) MCP propose mappedBy 자칭 차단", async () => {
   for (const by of ["manual", "rule"]) {
     const m = await mcp("curate_item_mapping",
-      { action: "propose", kind: "domain", itemId: firstId, key: "__parity_nope__", repo: REPO, evidence: "parity", mappedBy: by });
+      { action: "propose", kind: "domain", name: firstName, key: "__parity_nope__", repo: REPO, evidence: "parity", mappedBy: by });
     assert.strictEqual(m.ok, false, `mappedBy=${by} 가 에러여야 함`);
     assert.ok(m.errText.includes("MCP propose 는 mappedBy='llm' 만 허용"), `메시지 불일치(${by}): ${m.errText}`);
   }
@@ -462,17 +459,17 @@ await report("ctx_set_lifecycle(b) 잘못된 lifecycle — 양 어댑터 거부(
 });
 
 // ════════ tools/list — 최종 MCP 표면 보고 ════════
-// 표면 동결: 아래 36개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 36툴') + src/tools/* 등록 배열.
+// 표면 동결: 아래 34개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
+// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 34툴') + src/tools/* 등록 배열.
 // 표면을 의도적으로 바꿀 때는 freeze 주석과 이 배열을 같은 커밋에서 함께 갱신한다.
 const EXPECTED_MCP_SURFACE = [
   "context_overview", "ctx_cat", "ctx_grep", "ctx_ls", "ctx_overview", "ctx_save", "ctx_set_lifecycle",
   "curate_item_mapping", "db_query", "db_schema", "db_sources", "debt_list",
-  "domain_create", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "get_item", "list_unmapped",
+  "domain_create", "domain_deprecate", "domain_get", "domain_list", "domain_rename", "list_unmapped",
   "mapping_candidates", "memory_get", "memory_save", "memory_search", "pm_task_archive", "pm_task_assign", "pm_task_comment",
   "pm_task_create", "pm_task_link", "pm_task_update_status", "project_list",
-  "propose_domain", "repo_create", "repo_deprecate", "repo_list", "repo_rename", "search_items",
-]; // 36 (P-V3-4a 5종 추가: domain_create·domain_rename·repo_create·repo_rename·repo_deprecate)
+  "propose_domain", "repo_create", "repo_deprecate", "repo_list", "repo_rename",
+]; // 34 (item 폐기 2026-06: search_items·get_item 제거로 36→34. 흡수: ctx_ls/ctx_grep system/since/source/type + ctx_cat thread)
 if (!DIRECT) {
   await report("tools/list 표면 보고", async () => {
     const { tools } = await client.listTools();
@@ -480,7 +477,7 @@ if (!DIRECT) {
     console.log(`  MCP tools (${names.length}): ${names.join(", ")}`);
     assert.ok(!names.includes("propose_item_domain") && !names.includes("propose_item_project"), "구 propose 툴이 남아있음");
     assert.deepStrictEqual(names, EXPECTED_MCP_SURFACE,
-      "MCP 표면이 동결 목록(31)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
+      "MCP 표면이 동결 목록(34)과 다름 — 의도적 변경이면 EXPECTED_MCP_SURFACE + freeze 주석(src/capabilities/index.ts) 동시 갱신");
   });
 }
 

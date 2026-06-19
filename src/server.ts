@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerContextTools } from "./tools/context.js";
 import { registerDbTools } from "./tools/db.js";
-import { registerItemTools } from "./tools/items.js";
 import { registerMappingTools } from "./tools/mapping.js";
 import { registerPmTools } from "./tools/pm.js";
 import { registerMemoryTools } from "./tools/memory.js";
@@ -21,7 +20,7 @@ export function buildServer(disabledBuiltins?: ReadonlySet<string>): McpServer {
   }
   registerContextTools(server); // 도메인/프로젝트/부채 (domainmap)
   registerDbTools(server);      // 제품 DB (읽기전용)
-  registerItemTools(server);    // 크로스소스 Item (Slack/Jira/GitHub …)
+  // (search_items/get_item 폐기 — ku 단일표면. 활동검색=ctx_ls/ctx_grep, 단건상세/스레드=ctx_cat 이 흡수.)
   registerMappingTools(server); // item→domain/project 매핑 (inbox/후보/propose) — LLM seam
   registerPmTools(server);      // PM 쓰기(write-through ClickUp 미러) — phase B
   registerMemoryTools(server);  // 팀 공유 메모리 저장/검색 (memory scope) — org_memory

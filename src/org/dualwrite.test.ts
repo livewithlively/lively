@@ -1,12 +1,14 @@
-// P-V3-3c 듀얼라이트 — ingestItems/declareItemProject → knowledge_unit observed 미러(라이브 적재).
+// item 폐기 컷오버 — ingestItems/declareUnitProject → knowledge_unit observed 미러(라이브·단일쓰기).
+//  (구 'P-V3-3c 듀얼라이트' 테스트를 ku 단일쓰기로 정정 — item INSERT 듀얼라이트는 제거됨.)
 //  실행: npm run build && node --env-file-if-exists=.env dist/org/dualwrite.test.js
 //  ITEMS_DATABASE_URL 미설정이면 graceful skip(빌드 게이트 통과). **비파괴**: 합성 좌표('dwtest__' external_id)만
-//  생성/대상으로 하고 finally 에서 정리 — 실 item·실 knowledge_unit 무영향.
+//  생성/대상으로 하고 finally 에서 정리 — 실 knowledge_unit 무영향.
 //  커버: (1) ingestItems 가 clickup task 를 ku observed W 로 미러(저작이 아닌 수집물) (2) 🔴H1 적재 redact +
-//        H1-c pull redact (3) declareItemProject 가 knowledge_unit_project 미러 (4) 멱등(재적재=신규 0) (5)
-//        분류 불가 조합(slack message)은 미러 skip(레거시 item 만) (6) item(레거시) 무손상 (7) item_legacy 뷰 동치.
+//        H1-c pull redact (3) declareUnitProject 가 knowledge_unit_project 에 직접 declared 매핑 (4) 멱등(재적재=신규 0)
+//        (5) 분류 불가 조합(slack message)은 미러 skip(ku 행 없음) (6) item 무쓰기(컷오버 — 듀얼라이트 제거 검증).
 import assert from "node:assert/strict";
-import { itemsPool, initItemSchema, ingestItems, declareItemProject, getItemIdsByExternalIds, type RawItem } from "../items/store.js";
+import { itemsPool, initItemSchema, ingestItems, type RawItem } from "../items/store.js";
+import { declareUnitProject } from "./knowledge-mapping.js";
 import { initOrgSchema } from "./schema.js";
 import { getKnowledge } from "./knowledge.js";
 import { unitName, knowledgeKindFor } from "./knowledge-mirror.js";
@@ -43,7 +45,6 @@ async function main(): Promise<void> {
     await itemsPool.query(`DELETE FROM knowledge_unit_project WHERE name = ANY($1)`, [[W_NAME, M_NAME]]);
     await itemsPool.query(`DELETE FROM knowledge_unit_domain  WHERE name = ANY($1)`, [[W_NAME, M_NAME]]);
     await itemsPool.query(`DELETE FROM knowledge_unit         WHERE name = ANY($1)`, [[W_NAME, M_NAME]]);
-    await itemsPool.query(`DELETE FROM item WHERE external_id LIKE $1`, [PREFIX + "%"]);
   };
   await cleanup();
 
@@ -105,37 +106,27 @@ async function main(): Promise<void> {
       assert.ok(!db.ft.includes(FAKE_GH) && !db.rt.includes(FAKE_OPENAI), "DB 저장 fields/raw 평문 없음");
     });
 
-    await t("분류 불가(slack message)는 ku 미러 skip — 레거시 item 만 적재", async () => {
+    await t("분류 불가(slack message)는 ku 미러 skip — ku 행 없음(컷오버: item 무쓰기)", async () => {
       const m = await getKnowledge(M_NAME);
       assert.equal(m, null, "slack message 는 ku 미러 없음");
-      const mItem = (await itemsPool.query(`SELECT count(*)::int n FROM item WHERE external_id=$1`, [M_EXT])).rows[0].n;
-      assert.equal(mItem, 1, "slack message 는 레거시 item 에는 적재됨");
-    });
-
-    await t("item(레거시) 무손상 — 합성 2건 모두 item 에 존재 + item_legacy 뷰 동치", async () => {
-      const ic = (await itemsPool.query(`SELECT count(*)::int n FROM item WHERE external_id LIKE $1`, [PREFIX + "%"])).rows[0].n;
-      assert.equal(ic, 2, "item 2건(task+message)");
-      const lc = (await itemsPool.query(`SELECT count(*)::int n FROM item_legacy WHERE external_id LIKE $1`, [PREFIX + "%"])).rows[0].n;
-      assert.equal(lc, 2, "item_legacy 뷰도 동일 2건(동결 스냅샷 동치)");
     });
 
     if (someProjectKey) {
-      const ids = await getItemIdsByExternalIds("clickup", TEAM, [W_EXT]);
-      const wId = ids.get(W_EXT)!;
-      await declareItemProject(
-        { itemId: wId, projectKey: someProjectKey, repo: "productivity", evidence: "dualwrite test" },
+      await declareUnitProject(
+        { name: W_NAME, projectKey: someProjectKey, repo: "productivity", evidence: "cutover test" },
         { candidates: cands, audit: { source: "dualwrite-test", actor: "test" } },
       );
-      await t("declareItemProject: knowledge_unit_project 미러(declared·confirmed)", async () => {
+      await t("declareUnitProject: knowledge_unit_project 직접 declared(confirmed) — item_project 무쓰기", async () => {
         const p = (await itemsPool.query(
           `SELECT project_key, mapped_by, state FROM knowledge_unit_project WHERE name=$1`, [W_NAME])).rows;
-        assert.equal(p.length, 1, "ku_project 미러 1건");
+        assert.equal(p.length, 1, "ku_project 매핑 1건");
         assert.equal(p[0].project_key, someProjectKey);
         assert.equal(p[0].mapped_by, "declared");
         assert.equal(p[0].state, "confirmed");
-        // 레거시 item_project 도 동시 반영(듀얼).
-        const ip = (await itemsPool.query(`SELECT count(*)::int n FROM item_project WHERE item_id=$1`, [wId])).rows[0].n;
-        assert.equal(ip, 1, "레거시 item_project 도 반영");
+        // 감사행이 ku-좌표 audit 에 남았는지(검증경로 입증).
+        const aud = (await itemsPool.query(
+          `SELECT count(*)::int n FROM knowledge_unit_mapping_audit WHERE name=$1 AND target='project'`, [W_NAME])).rows[0].n;
+        assert.ok(aud >= 1, "knowledge_unit_mapping_audit 에 declare 감사행");
       });
     } else {
       console.log("skip  declare 미러 단언 — productivity 후보 프로젝트 0건(vocab 없음)");

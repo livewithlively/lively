@@ -513,6 +513,30 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // ── item 폐기·ku 컷오버: knowledge_unit_mapping_audit — kud/kup 쓰기의 append-only 감사층. ──
+  //  item_mapping_audit(item_id 좌표)의 ku-좌표 대응물(name 좌표). 매핑 큐레이션이 item 무의존이 되면
+  //  모든 propose/confirm/reject/declare 쓰기가 이 테이블에 검증경로 통과 증거를 남긴다(우회 SQL 쓰기는
+  //  감사행이 없어 드러남). append-only 불변식: UPDATE/DELETE 코드 경로 없음. FK 없음(의도 — ku 행이
+  //  지워져도 이력 보존). item_mapping_audit 은 비파괴 보존(레거시 이력) — 이 테이블은 가산.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_unit_mapping_audit(
+      id BIGSERIAL PRIMARY KEY,
+      at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      target TEXT NOT NULL CHECK (target IN ('domain','project')),
+      name TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      key TEXT NOT NULL,
+      mapped_by TEXT,
+      action TEXT NOT NULL,
+      state TEXT,
+      confidence REAL,
+      evidence TEXT,
+      source TEXT,
+      actor TEXT);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_name_idx ON knowledge_unit_mapping_audit(name);
+    CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_at_idx   ON knowledge_unit_mapping_audit(at DESC);
+  `);
+
   // ── M-라 성능: pg_trgm 확장 + title/body_md GIN trgm 인덱스(pgvector 없이 ILIKE 가속). ──
   //  item 흡수로 knowledge_unit 급증 시 searchKnowledge 의 ILIKE full-scan 을 가속한다(gin_trgm_ops 가 ILIKE '%...%' 지원).
   //  ⚠ graceful: 확장 미가용(권한/미설치 서버)이면 CREATE EXTENSION 또는 GIN 생성이 throw → 별 트랜잭션으로 감싸
@@ -573,7 +597,8 @@ export async function initOrgSchema(): Promise<void> {
   `);
 
   // ── data_source 시드(소스별 수집방식, 멱등 DO UPDATE — 정의 ground-truth). ──
-  //  discord=dropped(수집 중단, 커넥터 코드는 유지), notion/clickup/slack=active. into_kinds = 적재 kind.
+  //  notion/clickup=active(KIND_MAP 정의 → 미러 적재), slack/discord=dropped(message:* 미정의 → 미러 skip, ku 0건).
+  //  into_kinds 는 **실제 적재** kind 만(KIND_MAP 과 정합): clickup=[W], notion=[K], slack/discord=[](미적재).
   await itemsPool.query(`
     INSERT INTO data_source(system, label, status, collection_method, cadence, into_kinds, sort, note) VALUES
       ('clickup','ClickUp','active',
@@ -584,14 +609,14 @@ export async function initOrgSchema(): Promise<void> {
         'Notion 커넥터가 지정한 페이지/데이터베이스의 문서를 가져온다.',
         '동기화(run-sync/backfill)', '["K"]'::jsonb, 20,
         '문서 본문은 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed. 시크릿은 적재 전 redact.'),
-      ('slack','Slack','active',
-        'Slack 커넥터가 지정 채널의 메시지/스레드를 활동으로 가져온다.',
-        '동기화(run-sync/backfill)', '["K"]'::jsonb, 30,
-        '대화는 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed.'),
+      ('slack','Slack','dropped',
+        '(미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip).',
+        NULL, '[]'::jsonb, 30,
+        '적재하려면 KIND_MAP 에 message:slack 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 slack 0건.'),
       ('discord','Discord','dropped',
-        '(수집 중단) Discord 커넥터로 채널 메시지를 가져오던 경로. 커넥터 코드는 유지하나 현재 수집하지 않는다.',
-        NULL, '["K"]'::jsonb, 40,
-        '수집 재개 시 status=active 로 전환하면 됨(커넥터 보존).')
+        '(미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip).',
+        NULL, '[]'::jsonb, 40,
+        '적재하려면 KIND_MAP 에 message:discord 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 discord 0건.')
     ON CONFLICT (system) DO UPDATE SET
       label=EXCLUDED.label, status=EXCLUDED.status, collection_method=EXCLUDED.collection_method,
       cadence=EXCLUDED.cadence, into_kinds=EXCLUDED.into_kinds, sort=EXCLUDED.sort, note=EXCLUDED.note,
