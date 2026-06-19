@@ -965,8 +965,9 @@ function drawUnit(view, u) {
     ['버전', 'v' + u.version],
     ['마지막 갱신', (u.updated_at ? absTime(u.updated_at) : '—') + (u.updated_by ? ' · ' + u.updated_by : '')],
   ].filter(Boolean);
-  const metaTable = el('table', { class: 'fields-table' });
-  for (const [k, v] of metaRows) metaTable.append(el('tr', {}, el('td', { text: k }), el('td', { text: v })));
+  // 메타 — 본문 위 가로 바(라벨:값, 와이드에서 auto-fill 다열 grid). 우측 절반 점유 폐기.
+  const metaBar = el('div', { class: 'unit-metabar' });
+  for (const [k, v] of metaRows) metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: k }), el('span', { class: 'umeta-v', text: v })));
 
   // 상태 액션 — 신뢰우선 모델의 사후 반려/복원(채운 버튼 1개=주행동만, 나머지 ghost).
   const actions = el('div', { class: 'unit-actions' });
@@ -977,30 +978,31 @@ function drawUnit(view, u) {
     actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '복원', onclick: () => changeLifecycle(u.name, 'active', view) }));
   }
 
-  const main = el('div', { class: 'detail-card' },
+  // 메타는 상단 접이식 바(기본 펼침). 수정 이력은 본문 아래 별도 접이식. 단일 컬럼 — 본문이 가독폭을 갖는다.
+  const metaWrap = el('details', { class: 'unit-meta-details', open: '' },
+    el('summary', { class: 'unit-meta-summary' }, '메타데이터'),
+    metaBar,
+  );
+  const histSection = buildHistorySection(u);
+  const historyWrap = histSection ? el('details', { class: 'unit-history-details' },
+    el('summary', { class: 'unit-meta-summary' }, '수정 이력'),
+    histSection,
+  ) : null;
+  const main = el('div', { class: 'detail-card unit-card' },
     el('div', { class: 'unit-title-row' },
       el('h1', { class: 'detail-title', text: u.title || u.name }),
       lifecycleDot(u.lifecycle),
     ),
     el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: u.name }), confidenceDot(u.confidence)),
     actions,
+    metaWrap,
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
     bodyWrap,
+    historyWrap,
   );
-  // 우측 메타 패널을 접이식으로 — 접으면 본문(main)이 전체 너비를 쓴다(layout 에 .meta-collapsed 토글).
-  //  details/summary 자체로 메타테이블/이력을 접고, summary 클릭 시 layout 클래스를 갱신해 그리드도 재배치.
-  const metaDetails = el('details', { class: 'unit-side-details', open: '' },
-    el('summary', { class: 'unit-side-summary' }, '메타데이터 · 수정 이력'),
-    metaTable,
-    buildHistorySection(u),
-  );
-  const side = el('aside', { class: 'unit-side' }, metaDetails);
-  const layout = el('div', { class: 'unit-layout' }, main, side);
-  metaDetails.addEventListener('toggle', () => { layout.classList.toggle('meta-collapsed', !metaDetails.open); });
-
   const head = el('div', { class: 'page-head unit-head' }, backRow);
-  view.replaceChildren(head, layout);
-  applyReveal([main, side]);
+  view.replaceChildren(head, main);
+  applyReveal([main]);
 }
 
 // 수정 이력(작성자/리비전) 섹션 — 누가(actor_kind 뱃지)·언제(절대시각)·어떤경로(channel 뱃지)·무슨작업(op)을 타임라인으로.
@@ -1454,9 +1456,10 @@ const ADMIN_SECTIONS = [
   { key: 'members', label: '구성원', meaning: 'member' },
   { key: 'tokens', label: '토큰', meaning: null },
   { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
-  { key: 'runtime', label: '런타임 훅 (기본 리플렉스 ON/OFF)', meaning: 'runtime' },
-  { key: 'hooks-preview', label: '훅 주입 미리보기 (세션 주입물 확인)', meaning: null },
-  { key: 'custom-hooks', label: '커스텀 훅 (코드 정의 · CRUD)', meaning: 'custom-hook' },
+  // 훅 — '커스텀 훅'(임의 코드 정의 = 일반)이 상위, '런타임 훅'(빌트인 리플렉스 토글 = 특수)과 '주입 미리보기'는 그 하위.
+  { key: 'custom-hooks', label: '커스텀 훅 (코드 정의)', meaning: 'custom-hook' },
+  { key: 'runtime', label: '런타임 훅 (빌트인 리플렉스 ON/OFF)', meaning: 'runtime', indent: true },
+  { key: 'hooks-preview', label: '주입 미리보기 (세션 주입물 확인)', meaning: null, indent: true },
   { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source' },
@@ -1550,9 +1553,12 @@ async function renderAdmin(view, sub) {
   state.admin.sel = sel;
 
   const list = el('div', { class: 'split-list card admin-nav' });
+  // 훅 자식(런타임·미리보기) 들여쓰기는 부모('커스텀 훅')가 보일 때만 — 권한 게이팅으로 부모가 숨으면 고아 '└' 방지.
+  const hookParentVisible = !sectionHidden('custom-hooks', data);
   for (const s of ADMIN_SECTIONS) {
     if (sectionHidden(s.key, data)) continue;
-    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key },
+    const indentCls = (s.indent && hookParentVisible) ? ' admin-nav-child' : '';
+    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : '') + indentCls, href: '#/system/' + s.key },
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
   }

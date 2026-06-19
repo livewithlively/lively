@@ -36,6 +36,7 @@
       <a href="#/learn" data-tab="learn">안내</a>
       <a href="#/review" data-tab="review">검토<span class="tab-count" id="review-count" hidden></span></a>
       <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
+      <a href="/terminal/" id="terminal-tab" title="원격 터미널(도그푸드)">터미널</a>
     </nav>
     <div class="topbar-right">
       <span class="sync-chip" id="sync-chip" hidden><span class="dot-static" aria-hidden="true"></span><span id="sync-label"></span></span>
@@ -48,5 +49,20 @@
 <div id="toasts" aria-live="polite"></div>
 
 <script src="./app.js" defer></script>
+<!-- 중앙 박스 도그푸드 — 터미널 탭: 정문 토큰으로 티켓 쿠키 발급 후 ttyd 새 탭 오픈(해시 라우터 미관여). -->
+<script>
+(function () {
+  var link = document.getElementById('terminal-tab');
+  if (!link) return;
+  link.addEventListener('click', function (e) {
+    e.preventDefault();
+    var token = localStorage.getItem('lively_ui_token');
+    if (!token) { alert('먼저 액세스 토큰으로 로그인하세요.'); return; }
+    fetch('/api/ui/terminal/ticket', { method: 'POST', headers: { Authorization: 'Bearer ' + token } })
+      .then(function (r) { if (!r.ok) throw new Error('ticket ' + r.status); window.open('/terminal/', '_blank'); })
+      .catch(function (err) { alert('터미널 인증 실패: ' + err.message); });
+  });
+})();
+</script>
 </body>
 </html>

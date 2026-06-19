@@ -146,7 +146,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 .split-detail { flex: 1.35; min-width: 0; position: sticky; top: 80px; }
 @media (max-width: 960px) {
   .grid-2 { grid-template-columns: 1fr; }
-  .split { flex-direction: column; }
+  .split:not(.admin-split) { flex-direction: column; }
   .split-detail { position: static; width: 100%; }
 }
 
@@ -581,8 +581,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
 
 /* 관리 좌:우 너비 3:7 (오른쪽 내용이 더 많음) */
-.admin-split .split-list { flex: 3; }
-.admin-split .split-detail { flex: 7; }
+/* 탐색탭처럼 좌측 고정폭 nav + 우측 detail — 좁아져도 row 유지(아래로 안 내려감). */
+.admin-split .split-list { flex: 0 0 220px; }
+.admin-split .split-detail { flex: 1; }
 /* 권한(scopes) 체크박스 */
 .scope-wrap { display: flex; flex-direction: column; gap: 2px; }
 .scope-opt { margin: 2px 0; }
@@ -810,17 +811,21 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .edit-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 18px 0 8px; }
 @media (max-width: 820px) { .edit-split { grid-template-columns: 1fr; } .edit-editor, .edit-preview { min-height: 42vh; } }
 
-/* (3) 유닛 상세 — 메타 패널 접이식. 접으면 본문(detail-card)이 전체 너비 */
-.unit-side-details { width: 100%; }
-.unit-side-summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
-.unit-side-summary::-webkit-details-marker { display: none; }
-.unit-side-summary::before { content: '▾ '; color: var(--muted); }
-.unit-side-details:not([open]) .unit-side-summary::before { content: '▸ '; }
-/* 접힘 상태(layout 클래스) — 우측 패널을 좁게 접고 본문에 너비 양보 */
-.unit-layout.meta-collapsed .unit-side { flex: 0 0 auto; background: none; border: none; padding: 0; position: static; }
-.unit-layout.meta-collapsed .detail-card { flex: 1 1 100%; }
-.unit-layout.meta-collapsed { flex-wrap: wrap; }
-.unit-layout.meta-collapsed .unit-side { order: 2; width: 100%; }
+/* (v5b) 유닛 상세 — 단일 컬럼. 메타는 상단 가로 바, 본문은 가독폭. 우측 절반 패널 폐기. */
+.unit-card { width: 100%; }
+/* 메타 바 — 라벨:값 카드. 와이드에서 auto-fill 로 여러 열을 채워 가로 공간 활용. */
+.unit-metabar { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 20px; margin: 4px 0 6px; }
+.umeta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.umeta-k { font-size: 11px; color: var(--muted); letter-spacing: .01em; }
+.umeta-v { font-size: 13px; color: var(--ink); word-break: break-word; }
+.unit-meta-details, .unit-history-details { width: 100%; margin: 8px 0; border-top: 1px solid var(--line); padding-top: 8px; }
+.unit-meta-summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
+.unit-meta-summary::-webkit-details-marker { display: none; }
+.unit-meta-summary::before { content: '▾ '; color: var(--muted); }
+.unit-meta-details:not([open]) .unit-meta-summary::before, .unit-history-details:not([open]) .unit-meta-summary::before { content: '▸ '; }
+/* 본문 가독폭 — 와이드에서 카드는 전체너비를 쓰되 본문 텍스트 줄길이는 읽기 좋게 제한. */
+.unit-card .unit-body, .unit-card .md-rendered { max-width: 78ch; }
+.unit-card .md-rendered .unit-body { max-width: none; }
 
 /* (4) 좌측 주제(space>domain) 위계 */
 .area-tree { margin-bottom: 6px; }
@@ -834,13 +839,19 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-head-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .admin-head-l h2 { margin: 0; }
 .admin-nav-toggle { flex: none; }
+/* 훅 계층 — '런타임 훅'·'주입 미리보기'는 '커스텀 훅'의 하위(들여쓰기 + 연결선). */
+.admin-nav .row.admin-nav-child { padding-left: 34px; position: relative; }
+.admin-nav .row.admin-nav-child .row-title { font-size: 13px; color: var(--ink-sub); }
+.admin-nav .row.admin-nav-child::before { content: '└'; position: absolute; left: 17px; top: 13px; color: var(--muted); font-size: 11px; }
 .admin-split.nav-collapsed .split-list { display: none; }
 .admin-split.nav-collapsed .split-detail { flex: 1 1 100%; }
 /* admin-two(좌 목록·우 편집) 가 좁은 화면에서 wrap 되지 않게 — 기존 760 breakpoint 보강 */
 .admin-two { flex-wrap: nowrap; }
 @media (max-width: 760px) { .admin-two { flex-wrap: wrap; } }
-@media (max-width: 1020px) {
+/* 좌측 nav(220px)+detail 가 더는 안 들어갈 만큼 좁을 때만 스택(탐색탭 820 패턴에 맞춤). */
+@media (max-width: 720px) {
   .admin-split { flex-direction: column; }
+  .admin-split .split-list { flex: 1 1 auto; }
   .admin-split .split-detail { position: static; width: 100%; }
 }
 

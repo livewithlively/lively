@@ -12,6 +12,7 @@ import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
 import { registerWebUi } from "./web.js";
+import { registerTerminal } from "./terminal.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -77,6 +78,8 @@ registerWebUi(app, verifier);
 
 const server = app.listen(PORT, () => {
   logger.info(`context-ontology listening on :${PORT}/mcp`);
+  // 중앙 박스 도그푸드 — ttyd 터미널을 정문 뒤로 프록시(/terminal). server 핸들(upgrade)이 필요해 listen 후 배선.
+  registerTerminal(app, server, verifier);
   // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
   //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
   if (process.env.ITEMS_DATABASE_URL) {
