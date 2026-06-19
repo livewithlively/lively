@@ -798,7 +798,7 @@ async function loadAllDomains(force) {
   state.allDomains = slot;
   try {
     const rows = await api('/api/ui/domains');
-    slot.list = (rows || []).map((d) => ({ key: d.key, name: d.name, state: d.state, cross_cutting: d.cross_cutting, space: d.space || 'product' }));
+    slot.list = (rows || []).map((d) => ({ key: d.key, name: d.name, state: d.state, cross_cutting: d.cross_cutting, space: d.space || 'product', active_count: d.active_count }));
     slot.loaded = true;
   } catch (e) { slot.error = e.message || '도메인 목록을 불러오지 못했습니다'; slot.loaded = true; }
   return slot;
