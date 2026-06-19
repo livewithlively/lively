@@ -10,6 +10,12 @@
 // daon 의 manual 신원(clickup / 'lively@lvly.io')이 정확히 매치되어야 한다(resolveActor 정확 일치 룩업).
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { syncProject } from "../domainmap/core/projects.js";
+import { resolveRepo } from "../domainmap/core/types.js";
+
+// 고객 배포 불변: 커넥터 대상 repo·actor 를 코드에 하드코딩하지 않는다(고객사 노출 금지). repo 는
+//  DOMAINMAP_DEFAULT_REPO(resolveRepo, 미설정 시 throw — 설정 강제), actor 는 LIVELY_CONNECTOR_ACTOR
+//  (미설정 시 중립 'connector'). 옛 'productivity'/'daon' 리터럴 제거.
+const CONNECTOR_ACTOR = process.env.LIVELY_CONNECTOR_ACTOR || "connector";
 
 export type { Connector, RawItem, BackfillOpts };
 
@@ -380,12 +386,12 @@ export async function syncProjects(
   for (const list of lists) {
     const base = { listId: list.id, listName: list.name ?? list.id };
     try {
-      // Stage⑥ 직결: 구 dmPost('/api/repo/productivity/project/sync', payload, 'daon', agent) 와
-      // 동일 시맨틱 — 코어 syncProject 가 SYNC_BLOCKED_REPOS 가드·409 소유-repo 안내를 그대로 수행.
+      // 코어 syncProject 가 SYNC_BLOCKED_REPOS 가드·409 소유-repo 안내를 그대로 수행. repo/actor 는
+      //  배포 설정에서(하드코딩 금지 — 고객사 노출 방지).
       const r = (await syncProject(
-        "productivity",
+        resolveRepo(),
         toProjectSyncPayload(list, ctx),
-        { type: "agent", id: "daon" },
+        { type: "agent", id: CONNECTOR_ACTOR },
       )) as { id?: number; key?: string; action?: string };
       out.push({ ...base, ok: true, action: r.action, projectKey: r.key, projectId: r.id });
     } catch (err) {

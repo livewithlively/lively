@@ -14,6 +14,7 @@ import {
 } from "../org/knowledge-mapping.js";
 import { initOrgSchema } from "../org/schema.js";
 import { unitName } from "../org/external-identity.js";
+import { resolveRepo } from "../domainmap/core/types.js";
 import { loadCandidates } from "../items/mapping-candidates.js";
 import {
   getTeam, enumerateLists, syncProjects, fetchListTasks, fetchTeamTasks,
@@ -21,7 +22,8 @@ import {
 } from "./clickup.js";
 import { logger } from "../log.js";
 
-const REPO = "productivity"; // ClickUp 작업은 항상 productivity — lively 기본값에 절대 의존 금지.
+const REPO = resolveRepo(); // 대상 repo 는 배포 설정(DOMAINMAP_DEFAULT_REPO)에서 — 하드코딩 금지(고객사 노출 방지).
+const CONNECTOR_ACTOR = process.env.LIVELY_CONNECTOR_ACTOR || "connector"; // actor 신원도 설정에서(중립 폴백).
 const CURSOR_EPSILON_MS = 1000; // date_updated_gt 는 strict greater-than — 동일 ms 경계 유실 방지 재폴링.
 
 const name = process.argv[2];
@@ -133,13 +135,13 @@ for (const [externalId, meta] of seen) {
         repo: REPO,
         evidence: `clickup list ${meta.listId} (${listNameById.get(meta.listId) ?? "?"})`,
       },
-      { candidates, audit: { source: "connector-sync", actor: "daon" } },
+      { candidates, audit: { source: "connector-sync", actor: CONNECTOR_ACTOR } },
     );
     // 리스트 간 이동 수렴 — 옛 리스트의 declared 행 강등(대부분 no-op; 멱등).
     // 한 단위 = declared 1행 불변식. manual/rule/llm 매핑은 건드리지 않는다.
     await supersedeSiblingDeclaredUnitProjects(
       { name, keepProjectKey: projectKey, repo: REPO },
-      { audit: { source: "connector-sync", actor: "daon" } },
+      { audit: { source: "connector-sync", actor: CONNECTOR_ACTOR } },
     );
     declared++;
   } catch (err) {

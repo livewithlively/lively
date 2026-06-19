@@ -194,7 +194,8 @@ export function readBindingsDir(dir: string): { persons: BindingPerson[]; files:
 
 function defaultMembersDir(): string {
   const here = dirname(fileURLToPath(import.meta.url)); // dist/items
-  return process.env.BINDINGS_DIR ?? resolve(here, "../../../lively-org/members");
+  void here; // (기본 경로 하드코딩 제거 — 조직콘텐츠 레포명은 고객사마다 다름)
+  return process.env.BINDINGS_DIR ?? ""; // 미설정이면 멤버 바인딩 없음(consumer existsSync 가드로 skip).
 }
 
 // ── upsert (호출자가 트랜잭션/클라이언트 소유) ──

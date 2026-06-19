@@ -116,7 +116,7 @@ async function llmClassify(apiKey: string, doFetch: FetchLike, args: ClassifyIng
                 kind: {
                   type: "string",
                   enum: ["R", "K", "H", "W"],
-                  description: "본질 종류: R=규칙(항상 적용), K=지식(연구·결정·설계·산출물), H=절차/런북, W=작업(액션·상태).",
+                  description: "본질 종류: R=규칙(항상 적용), K=지식(연구·결정·설계·산출물), H=절차/런북, W=과업(태스크·상태·담당).",
                 },
                 area: {
                   type: ["string", "null"],

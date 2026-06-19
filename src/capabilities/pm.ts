@@ -15,6 +15,7 @@ import {
 } from "../org/knowledge-mapping.js";
 import { unitName } from "../org/external-identity.js";
 import { logActivity } from "../domainmap/core/activity.js";
+import { resolveRepo } from "../domainmap/core/types.js";
 import { loadCandidates, validateProjectKey } from "../items/mapping-candidates.js";
 import {
   getTeam, getMembersEmailMap, getTask, createTask, updateTask, createTaskComment, linkTasks,
@@ -24,7 +25,7 @@ import { logger } from "../log.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 
-const REPO = "productivity"; // pm 쓰기는 항상 productivity — lively 기본값에 절대 의존 금지.
+const REPO = resolveRepo(); // 대상 repo 는 배포 설정(DOMAINMAP_DEFAULT_REPO)에서 — 하드코딩 금지(고객사 노출 방지).
 
 // ── 쓰기 공통 audit — domainmap-curation.ts 의 audited() idiom(결과 시점 기록). ──
 // 성공 = outcome:'ok', 실패 = outcome:'failed' + error. ClickUp 쓰기는 성공했는데 에코만 실패한
