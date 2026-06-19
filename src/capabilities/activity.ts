@@ -2,7 +2,7 @@
 //  memory_*/ctx_* 와 동일). 핸들러는 thin — 입력 파싱 후 domainmap/core/activity 의 store 호출.
 //  author_person=ctx.actor(토큰 신원=누가), author_agent='어떤 AI'(호출자가 명시 — 모델/하네스 id). 사람×AI 집계의 축.
 import { z } from "zod";
-import { logActivity, listActivities } from "../domainmap/core/activity.js";
+import { logActivity, listActivities, dashPeople } from "../domainmap/core/activity.js";
 import type { Capability } from "./types.js";
 
 const activityLog: Capability = {
@@ -93,4 +93,23 @@ const activityList: Capability = {
   }),
 };
 
-export const activityCapabilities: Capability[] = [activityLog, activityList];
+// 사람×AI 작업현황 대시보드 — REST 전용(mcp:false 라 MCP/parity 표면 불변). 통합 DB 단일 SQL 집계를
+//  그대로 반환. author_person 별로 묶이고 그 안에 author_agent 별 {유형분포·과업수·마지막활동}.
+const dashPeopleCap: Capability = {
+  name: "dash_people",
+  title: "작업 현황(사람×AI)",
+  description: "사람(author_person)별로 묶고 그 안에서 어떤 AI(author_agent)별로 작업(activity)을 집계한 현황. 웹 대시보드 전용.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "GET",
+      paths: ["/api/ui/dash/people"],
+      parse: () => ({}),
+    }],
+  },
+  handler: async () => ({ people: await dashPeople() }),
+};
+
+export const activityCapabilities: Capability[] = [activityLog, activityList, dashPeopleCap];

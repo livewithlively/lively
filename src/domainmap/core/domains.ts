@@ -34,13 +34,16 @@ export async function editDomainById(id: number, patch: Record<string, unknown>,
   }
   const origin = isAgent ? "agent" : "human";
   const status = isAgent ? ex.status : "confirmed"; // agent: keep current status; human: confirm + own (기존 거동)
-  const before = { name: ex.name, description: ex.description, cross_cutting: ex.cross_cutting, status: ex.status, origin: ex.origin };
+  const before = { name: ex.name, description: ex.description, cross_cutting: ex.cross_cutting, status: ex.status, origin: ex.origin, should: ex.should };
   const name = patch.name ?? ex.name;
   const description = patch.description ?? ex.description;
   const cross_cutting = patch.cross_cutting ?? ex.cross_cutting;
-  const after = { name, description, cross_cutting, status, origin };
-  await pool.query("UPDATE domain SET name=$1,description=$2,cross_cutting=$3,status=$4,origin=$5,updated_at=$6 WHERE id=$7",
-    [name, description, cross_cutting, status, origin, now(), id]);
+  // P5: should(의도 스펙) 편집 — stop훅의 should 재조정/사람 큐레이션이 맥락에서 도메인 당위를 갱신하는 경로.
+  //  patch.should===undefined 면 미변경(기존값 유지), null/'' 명시 시 비움. is(코드)와 독립 축.
+  const should = patch.should !== undefined ? patch.should : ex.should;
+  const after = { name, description, cross_cutting, status, origin, should };
+  await pool.query("UPDATE domain SET name=$1,description=$2,cross_cutting=$3,status=$4,origin=$5,should=$6,updated_at=$7 WHERE id=$8",
+    [name, description, cross_cutting, status, origin, should, now(), id]);
   const note = isAgent ? "agent edit (kept status)" : `${origin} edit (auto-confirm)`;
   const cid = await logChange(pool, {
     repoId: ex.repo_id, entityType: "domain", entityId: id, op: "update", actor, before, after, note,

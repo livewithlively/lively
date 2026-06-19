@@ -167,6 +167,7 @@ const dmDomainEdit: Capability = {
     id: zid,
     name: z.string().min(1).max(200).optional(),
     description: z.string().max(4000).optional(),
+    should: z.string().max(8000).optional(), // P5: 의도(당위) 스펙 — is(코드)와 별 축. 빈 문자열이면 비움.
     crossCutting: z.boolean().optional(),
   },
   expose: {
@@ -190,25 +191,31 @@ const dmDomainEdit: Capability = {
           if (typeof b.crossCutting !== "boolean") throw new HttpError(400, "crossCutting 은 boolean 이어야 합니다");
           out.crossCutting = b.crossCutting;
         }
-        if (out.name === undefined && out.description === undefined && out.crossCutting === undefined) {
-          throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/crossCutting 중 1개 이상");
+        if (b.should !== undefined) {
+          if (typeof b.should !== "string" || b.should.length > 8000) throw new HttpError(400, "should 는 8000자 이하 문자열이어야 합니다");
+          out.should = b.should;
+        }
+        if (out.name === undefined && out.description === undefined && out.crossCutting === undefined && out.should === undefined) {
+          throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/should/crossCutting 중 1개 이상");
         }
         return out;
       },
     }],
   },
-  handler: async (input: { id: number; name?: string; description?: string; crossCutting?: boolean }, user, ctx) => {
+  handler: async (input: { id: number; name?: string; description?: string; should?: string; crossCutting?: boolean }, user, ctx) => {
     // cross-field 규칙(최소 1개 필드)은 ZodRawShape 로 표현 불가 — REST 는 parse 가 막지만,
     // expose.mcp 전환 등 다른 어댑터 경유 시에도 동일 검증이 되도록 handler 에서 한 번 더 가드.
-    if (input.name === undefined && input.description === undefined && input.crossCutting === undefined) {
-      throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/crossCutting 중 1개 이상");
+    if (input.name === undefined && input.description === undefined && input.crossCutting === undefined && input.should === undefined) {
+      throw new HttpError(400, "수정할 필드가 필수입니다 — name/description/should/crossCutting 중 1개 이상");
     }
     if (input.description !== undefined) assertNoHardSecrets(input.description, "description"); // P8: 영역 설명 평문 시크릿 hard-block
+    if (input.should !== undefined) assertNoHardSecrets(input.should, "should"); // 의도 스펙도 평문 시크릿 hard-block
     return audited("domain_edit", user, ctx, { id: input.id, fields: Object.keys(input).filter((k) => k !== "id") }, () => {
       const patch: Record<string, unknown> = {};
       if (input.name !== undefined) patch.name = input.name;
       if (input.description !== undefined) patch.description = input.description;
       if (input.crossCutting !== undefined) patch.cross_cutting = input.crossCutting;
+      if (input.should !== undefined) patch.should = input.should;
       // 구 PATCH /api/domain/:id 는 x-actor-type 미전송 = human(auto-confirm) — 동일 actor 매핑.
       return dmWrite(() => editDomainById(input.id, patch, webActor(user.userId)));
     });

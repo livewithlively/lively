@@ -124,23 +124,38 @@ t("deepEqualUnordered: 값/키 집합 다르면 다름", () => {
 });
 
 // ── classifyDomainDebt(G-diff 슬라이스 — 결정론적 구조→의도 발산) ──
-t("classifyDomainDebt: active=0 removed>0 → vanished", () => {
-  const f = classifyDomainDebt([{ key: "d1", name: "도메인1", active_units: 0, removed_units: 3 }]);
+t("classifyDomainDebt: active=0 removed>0 should없음 → vanished", () => {
+  const f = classifyDomainDebt([{ key: "d1", name: "도메인1", should: null, active_units: 0, removed_units: 3, active_commits: 0 }]);
   assert.equal(f.length, 1);
   assert.equal(f[0].severity, "vanished");
   assert.match(f[0].title, /구조 증발/);
 });
 t("classifyDomainDebt: active>0 removed>0 → eroded", () => {
-  const f = classifyDomainDebt([{ key: "d2", name: "도메인2", active_units: 4, removed_units: 1 }]);
+  const f = classifyDomainDebt([{ key: "d2", name: "도메인2", should: null, active_units: 4, removed_units: 1, active_commits: 0 }]);
   assert.equal(f.length, 1);
   assert.equal(f[0].severity, "eroded");
   assert.match(f[0].title, /구조 침식/);
 });
-t("classifyDomainDebt: removed=0 → 부채 아님(빈 배열)", () => {
+t("classifyDomainDebt: removed=0 should없음 → 부채 아님(빈 배열)", () => {
   const f = classifyDomainDebt([
-    { key: "d3", name: "도메인3", active_units: 6, removed_units: 0 },
-    { key: "d4", name: "도메인4", active_units: 0, removed_units: 0 },
+    { key: "d3", name: "도메인3", should: null, active_units: 6, removed_units: 0, active_commits: 0 },
+    { key: "d4", name: "도메인4", should: null, active_units: 0, removed_units: 0, active_commits: 0 },
   ]);
+  assert.equal(f.length, 0);
+});
+// P5: should 선언 + active=0 → should_no_is(의도-구조 괴리). removed 유무 무관(should-only 도 잡음).
+t("classifyDomainDebt: should선언 active=0 → should_no_is(removed 0/>0 모두)", () => {
+  const f = classifyDomainDebt([
+    { key: "d5", name: "도메인5", should: "이 도메인은 X를 해야 한다", active_units: 0, removed_units: 0, active_commits: 0 },
+    { key: "d6", name: "도메인6", should: "Y 의도", active_units: 0, removed_units: 2, active_commits: 1 },
+  ]);
+  assert.equal(f.length, 2);
+  assert.equal(f[0].severity, "should_no_is");
+  assert.match(f[0].title, /의도-구조 괴리/);
+  assert.equal(f[1].severity, "should_no_is");
+});
+t("classifyDomainDebt: should선언이어도 active>0·removed=0 이면 부채 아님", () => {
+  const f = classifyDomainDebt([{ key: "d7", name: "도메인7", should: "의도", active_units: 3, removed_units: 0, active_commits: 0 }]);
   assert.equal(f.length, 0);
 });
 

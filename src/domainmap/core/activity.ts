@@ -123,6 +123,58 @@ export interface ListActivitiesFilter {
   limit?: number;
 }
 
+// 사람×AI 작업현황(대시보드) — author_person(누가) × author_agent(어떤 AI) 2단 집계.
+//  통합 DB 네이티브: activity ⨝ activity_task(과업 distinct 수)를 (person,agent) grain 으로 GROUP BY 한
+//  방에 집계한다(메모리 조인 금지). 유형 분포는 FILTER 집계, 과업수는 COUNT(DISTINCT ku_name).
+//  반환행은 (person,agent) 평면 → capability/핸들러가 person 으로 묶어 nested 로 shape(결과 row 정형만; 조인 아님).
+//  author_person/author_agent 가 NULL 인 행도 GROUP BY 가 한 버킷으로 모은다(NULL 의미는 표현 계층에서 '미상'/'직접').
+export interface DashAgentRow {
+  author_agent: string | null;
+  count: number;
+  byType: Record<string, number>;
+  tasks: number;
+  lastActiveAt: string | null;
+}
+export async function dashPeople(): Promise<{ author_person: string | null; total: number; agents: DashAgentRow[] }[]> {
+  // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review.
+  const rows = await q(dmPool(), `
+    SELECT a.author_person, a.author_agent,
+           COUNT(*)::int AS count,
+           COUNT(*) FILTER (WHERE a.type='commit')::int        AS t_commit,
+           COUNT(*) FILTER (WHERE a.type='comment')::int       AS t_comment,
+           COUNT(*) FILTER (WHERE a.type='decision')::int      AS t_decision,
+           COUNT(*) FILTER (WHERE a.type='status_change')::int AS t_status_change,
+           COUNT(*) FILTER (WHERE a.type='review')::int        AS t_review,
+           COUNT(DISTINCT atk.ku_name)::int AS tasks,
+           MAX(COALESCE(a.committed_at, a.created_at)) AS last_active_at
+    FROM activity a
+    LEFT JOIN activity_task atk ON atk.activity_id = a.id
+    GROUP BY a.author_person, a.author_agent`);
+  // (person,agent) 평면행 → person 으로 묶고 그 안에 agent 행 배열. 정형(shape)일 뿐 조인 아님.
+  const byPerson = new Map<string, { author_person: string | null; total: number; agents: DashAgentRow[] }>();
+  for (const r of rows) {
+    const personKey = r.author_person === null ? " __null__" : String(r.author_person);
+    let bucket = byPerson.get(personKey);
+    if (!bucket) { bucket = { author_person: r.author_person ?? null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
+    const lastActiveAt = r.last_active_at ? new Date(r.last_active_at).toISOString() : null;
+    bucket.total += r.count;
+    bucket.agents.push({
+      author_agent: r.author_agent ?? null,
+      count: r.count,
+      byType: { commit: r.t_commit, comment: r.t_comment, decision: r.t_decision, status_change: r.t_status_change, review: r.t_review },
+      tasks: r.tasks,
+      lastActiveAt,
+    });
+  }
+  // 각 사람의 AI 행은 최근활동 desc. 사람 카드도 최근활동 desc(가장 최근 활동한 사람부터).
+  const personLast = (p: { agents: DashAgentRow[] }) =>
+    p.agents.reduce((mx, ag) => (ag.lastActiveAt && (!mx || ag.lastActiveAt > mx) ? ag.lastActiveAt : mx), null as string | null);
+  const people = [...byPerson.values()];
+  for (const p of people) p.agents.sort((x, y) => (y.lastActiveAt || "").localeCompare(x.lastActiveAt || ""));
+  people.sort((a, b) => (personLast(b) || "").localeCompare(personLast(a) || ""));
+  return people;
+}
+
 // 작업 목록(최신순 — committed_at 우선, 없으면 created_at). 필터: 작성자·AI·유형·과업(ku)·repo.
 export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   const lim = saneLimit(f.limit, 50, 200);

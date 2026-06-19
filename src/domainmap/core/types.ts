@@ -66,10 +66,10 @@ export function resolveRepo(repo?: string): string {
 // 단순 큐레이션 쓰기의 공통 결과 — confirm{Domain,Mapping,Project}/rejectMapping/setDebtStatus.
 export interface CurationResult { id: number; change_id: number }
 
-// editDomainById — after 의 키 5개가 계약(값은 patch/row 패스스루라 unknown).
+// editDomainById — after 의 키가 계약(값은 patch/row 패스스루라 unknown). P5: should(의도 스펙) 추가.
 export interface DomainEditResult {
   id: number; change_id: number;
-  after: { name: unknown; description: unknown; cross_cutting: unknown; status: string; origin: string };
+  after: { name: unknown; description: unknown; cross_cutting: unknown; status: string; origin: string; should: unknown };
 }
 export type DomainSetResult = { domain: string } & DomainEditResult;
 
@@ -140,6 +140,7 @@ export interface TouchProjectRef { key: string; name: string; kind: string | nul
 
 export interface DomainListItem {
   id: number; key: string; name: string; description: string | null;
+  should: string | null; // P5: 의도(당위) 스펙 — is(units)와 별 축. 괴리=domain-debt(should_no_is).
   state: string | null; cross_cutting: boolean; origin: string | null; status: string;
   // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능). 항상 방출(?? 'product').
   space: string;

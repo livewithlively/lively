@@ -101,6 +101,7 @@ export async function listDomainsApi(name: string): Promise<DomainListItem[]> {
     // structure issues that cite this domain's mapped code paths
     out.push({
       id: d.id, key: d.key, name: d.name, description: d.description,
+      should: d.should ?? null, // P5: 의도(당위) 스펙 — is(units/code)와 별 축. 괴리는 domain-debt(should_no_is).
       state: d.state, cross_cutting: d.cross_cutting, origin: d.origin, status: d.status,
       // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능).
       //  pre-migration NULL 행은 백필이 'product' 로 채우지만 ?? 'product' 로 키 항상 방출(키 생략 금지 — 표면 계약).
@@ -133,15 +134,15 @@ export async function listDomainsApi(name: string): Promise<DomainListItem[]> {
 //  domain_space_key_uq)라 같은 key 가 한 space 에 하나뿐 — 단, 같은 key 가 product·business 양쪽에 있으면
 //  두 행이 나오므로(현 라이브 0건) 소비자가 space 로 구분한다. units/debt 카운트는 비포함(드롭다운·검증 전용).
 export interface AllDomainItem {
-  key: string; name: string | null; description: string | null;
+  key: string; name: string | null; description: string | null; should: string | null;
   space: string; state: string | null; cross_cutting: boolean | null;
 }
 export async function listAllDomains(): Promise<AllDomainItem[]> {
   const pool = dmPool();
-  const rows = await q(pool, `SELECT key, name, description, space, state, cross_cutting
+  const rows = await q(pool, `SELECT key, name, description, should, space, state, cross_cutting
     FROM domain WHERE state<>'merged' ORDER BY space, cross_cutting, key`);
   return rows.map((d) => ({
-    key: d.key, name: d.name ?? null, description: d.description ?? null,
+    key: d.key, name: d.name ?? null, description: d.description ?? null, should: d.should ?? null,
     space: d.space ?? "product", state: d.state ?? null, cross_cutting: d.cross_cutting ?? null,
   }));
 }

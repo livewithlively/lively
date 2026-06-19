@@ -77,6 +77,9 @@ const REV_OP_LABEL = { insert: '생성', update: '수정', set_lifecycle: '상�
 const SORT_OPTS = [['updated_at', '최신순'], ['name', '이름순'], ['sort', '수동 정렬순']];
 // lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
 const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
+// 작업(activity) 유형 라벨 — 백엔드 activity.type(commit/comment/decision/status_change/review)과 1:1. 작업 현황 대시보드 유형분포 표시용.
+const ACTIVITY_TYPE_LABEL = { commit: '커밋', comment: '코멘트', decision: '결정', status_change: '상태 변경', review: '검토' };
+const ACTIVITY_TYPE_ORDER = ['commit', 'comment', 'decision', 'status_change', 'review'];
 
 const state = {
   me: null,
@@ -1111,6 +1114,84 @@ async function renderReview(view) {
 }
 
 // ════════════════════════════════════════════
+// 작업 현황 #/dash — 사람(author_person) × 그 사람의 AI(author_agent)별 작업 집계.
+//  GET /api/ui/dash/people 의 통합 DB 단일 집계를 그대로 렌더(사람 카드 → AI별 행: 작업수·유형분포·과업수·마지막활동).
+//  사람/AI 이름은 전부 데이터(author_person/author_agent)에서만 옴 — 고유명 하드코딩 없음.
+// ════════════════════════════════════════════
+async function renderDashboard(view, _params) {
+  view.replaceChildren(skeleton('작업 현황을 불러오는 중'));
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '작업 ', el('span', { class: 'accent', text: '현황' })),
+    el('p', { class: 'sub', text: '사람별로, 그리고 그 사람이 쓴 AI별로 어떤 작업이 얼마나 이뤄졌는지 한눈에. 작업수·유형 분포·연결된 과업 수·마지막 활동 시각.' }),
+  );
+  let data;
+  try {
+    data = await api('/api/ui/dash/people');
+  } catch (e) {
+    view.replaceChildren(head, errorNote(e, '작업 현황을 불러오지 못했습니다'));
+    return;
+  }
+  const people = (data && data.people) || [];
+  if (!people.length) {
+    view.replaceChildren(head, el('div', { class: 'empty', text: '아직 기록된 작업이 없습니다.' }));
+    return;
+  }
+
+  const cards = [];
+  for (const p of people) {
+    const personName = p.author_person || '미상';
+    const totalTasks = (p.agents || []).reduce((s, a) => s + (a.tasks || 0), 0);
+    const personLast = (p.agents || []).reduce((mx, a) => (a.lastActiveAt && (!mx || a.lastActiveAt > mx) ? a.lastActiveAt : mx), null);
+
+    const cardHead = el('div', { class: 'page-head', style: 'margin:0 0 4px' },
+      el('h2', { style: 'margin:0', text: personName }),
+      el('div', { class: 'row-meta' },
+        el('strong', { text: fmtNum(p.total) }), ' 작업',
+        '  ', el('span', { text: fmtNum(totalTasks) + ' 과업' }),
+        personLast ? el('span', {}, '  ', relTime(personLast)) : null,
+      ),
+    );
+
+    const rows = el('div', { class: 'list-box' });
+    for (const a of (p.agents || [])) {
+      const agentName = a.author_agent || '직접 (AI 미상)';
+      const typeChips = el('div', { class: 'row-meta' },
+        ...interleave(
+          ACTIVITY_TYPE_ORDER
+            .filter((t) => (a.byType && a.byType[t]) > 0)
+            .map((t) => el('span', {}, el('span', { class: 'mono', text: String(a.byType[t]) }), ' ' + (ACTIVITY_TYPE_LABEL[t] || t))),
+          el('span', { 'aria-hidden': 'true', text: '·' }),
+        ),
+      );
+      const row = el('div', { class: 'review-row' },
+        el('div', { class: 'review-main' },
+          el('div', { class: 'review-title', text: agentName }),
+          (a.byType && ACTIVITY_TYPE_ORDER.some((t) => a.byType[t] > 0))
+            ? typeChips
+            : el('div', { class: 'row-meta dim', text: '유형 기록 없음' }),
+        ),
+        el('div', { class: 'review-acts', style: 'gap:18px;align-items:center' },
+          el('div', { style: 'text-align:right' },
+            el('div', {}, el('strong', { text: fmtNum(a.count) }), el('small', {}, ' 작업')),
+            el('div', { class: 'row-meta dim' }, fmtNum(a.tasks) + ' 과업'),
+          ),
+          el('div', { class: 'row-meta dim', style: 'min-width:84px;text-align:right' },
+            a.lastActiveAt ? relTime(a.lastActiveAt) : '활동 기록 없음'),
+        ),
+      );
+      rows.append(row);
+    }
+
+    const card = el('section', { class: 'card' }, cardHead, rows);
+    cards.push(card);
+  }
+
+  view.replaceChildren(head, ...cards);
+  applyReveal(cards);
+  document.getElementById('view').focus?.();
+}
+
+// ════════════════════════════════════════════
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
 //  V4: 종류(kind)·주제(area=space+domain)·출처(provenance)는 별개 축 — 종류는 본질, 주제는 도메인, 출처는 채널 사실.
@@ -1585,6 +1666,9 @@ async function route() {
     } else if (page === 'review') {
       setActiveTab('review');
       await renderReview(view);
+    } else if (page === 'dash') {
+      setActiveTab('dash');
+      await renderDashboard(view, params);
     } else if (page === 'system') {
       setActiveTab('system');
       await renderSystem(view, segs[1] || null);

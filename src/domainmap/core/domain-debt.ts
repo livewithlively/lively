@@ -19,13 +19,15 @@ import { upsertDebtRow } from "./debts.js";
 export interface DomainStructureCount {
   key: string;
   name: string;
+  should: string | null;  // P5: 의도(당위) 스펙 — 선언됐는데 is(코드)가 없으면 should_no_is
   active_units: number;   // 비-rejected 매핑 + active code_unit
   removed_units: number;  // 비-rejected 매핑 + removed code_unit (confirmed 이 보존된 orphan)
+  active_commits: number; // P5: 이 도메인 코드를 건드린 commit 작업(activity) 수 — 통합 DB 네이티브 join(통합 전 불가)
 }
 
 export interface DomainDebtFinding {
   key: string;
-  severity: "vanished" | "eroded";
+  severity: "vanished" | "eroded" | "should_no_is";
   title: string;
   detail: string;
 }
@@ -35,14 +37,30 @@ export interface DomainDebtFinding {
 export function classifyDomainDebt(rows: DomainStructureCount[]): DomainDebtFinding[] {
   const out: DomainDebtFinding[] = [];
   for (const r of rows) {
-    if (r.removed_units <= 0) continue;
+    const hasShould = !!(r.should && r.should.trim());
     if (r.active_units === 0) {
-      out.push({
-        key: r.key, severity: "vanished",
-        title: `도메인 구조 증발: ${r.name} (${r.key})`,
-        detail: `도메인 '${r.name}'(${r.key})의 확정-매핑 code_unit ${r.removed_units}건이 모두 removed 상태이고 살아있는(active) 매핑 코드가 0건이다. 의도(도메인 should)는 선언돼 있으나 구조(is)에 구현 코드가 없다 — 도메인 폐기/재구현/경계 재검토가 필요(should-only 또는 코드 이전 누락).`,
-      });
-    } else {
+      if (hasShould) {
+        // P5 핵심 — 의도(should)는 선언됐는데 산 코드(is)가 0. 통합 DB 라 commit 작업(activity)도 함께 본다.
+        const cause = r.removed_units > 0
+          ? `확정-매핑 code_unit ${r.removed_units}건이 모두 removed — 코드가 증발했다`
+          : `구현된 적이 없다(should-only)`;
+        out.push({
+          key: r.key, severity: "should_no_is",
+          title: `의도-구조 괴리: ${r.name} (${r.key})`,
+          detail: `도메인 '${r.name}'(${r.key})에 의도(should)가 선언돼 있으나 살아있는(active) 매핑 코드(is)가 0건이다 — ${cause}.`
+            + (r.active_commits > 0 ? ` 관련 commit 작업 ${r.active_commits}건이 기록돼 있어 한때 작업이 있었다.` : ``)
+            + ` 의도를 코드로 구현하거나, 의도를 폐기/재정의해야 한다(should↔is 정합).`,
+        });
+      } else if (r.removed_units > 0) {
+        // should 미선언 + 코드 증발 — 구조 신호만(의도 불명).
+        out.push({
+          key: r.key, severity: "vanished",
+          title: `도메인 구조 증발: ${r.name} (${r.key})`,
+          detail: `도메인 '${r.name}'(${r.key})의 확정-매핑 code_unit ${r.removed_units}건이 모두 removed 상태이고 살아있는(active) 매핑 코드가 0건이다. 의도(should)도 미선언 — 도메인 폐기/재구현/경계 재검토가 필요.`,
+        });
+      }
+      // else: active=0, removed=0, should 없음 → 빈 도메인(부채 아님, skip).
+    } else if (r.removed_units > 0) {
       out.push({
         key: r.key, severity: "eroded",
         title: `도메인 구조 침식: ${r.name} (${r.key})`,
@@ -57,13 +75,19 @@ export function classifyDomainDebt(rows: DomainStructureCount[]): DomainDebtFind
 // listDomainsApi 의 units 카운트와 동일 정신 — COALESCE state, status<>'rejected').
 async function readDomainStructureCounts(db: Db, repoId: number): Promise<DomainStructureCount[]> {
   return q(db, `
-    SELECT d.key, d.name,
+    SELECT d.key, d.name, d.should,
       (SELECT COUNT(*)::int FROM mapping m JOIN code_unit cu ON cu.id=m.target_id
          WHERE m.repo_id=$1 AND m.target_kind='code_unit' AND m.domain_id=d.id
          AND m.status<>'rejected' AND COALESCE(cu.state,'active')='active') active_units,
       (SELECT COUNT(*)::int FROM mapping m JOIN code_unit cu ON cu.id=m.target_id
          WHERE m.repo_id=$1 AND m.target_kind='code_unit' AND m.domain_id=d.id
-         AND m.status<>'rejected' AND cu.state='removed') removed_units
+         AND m.status<>'rejected' AND cu.state='removed') removed_units,
+      -- P5: 통합 DB 네이티브 join — 이 도메인 코드를 건드린 commit 작업(activity) 수(통합 전엔 별 DB라 불가).
+      (SELECT COUNT(DISTINCT a.id)::int FROM activity a
+         JOIN activity_touch at2 ON at2.activity_id=a.id AND at2.target_kind='code_unit'
+         JOIN mapping m ON m.target_kind='code_unit' AND m.target_id=at2.target_id
+           AND m.domain_id=d.id AND m.status<>'rejected'
+         WHERE a.type='commit') active_commits
     FROM domain d
     WHERE d.repo_id=$1 AND d.state<>'merged'
     ORDER BY d.key`, [repoId]);
