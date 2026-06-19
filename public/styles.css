@@ -711,6 +711,27 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .unit-side .fields-table { font-size: 13px; }
 .unit-side .fields-table td { padding: 5px 14px 5px 0; }
 @media (max-width: 820px) { .unit-layout { flex-direction: column; } .unit-side { position: static; width: 100%; } }
+
+/* 수정 이력(작성자/리비전) 타임라인 — 메타 패널 하단 접이식 */
+.rev-details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.rev-summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--ink-sub); list-style: none; }
+.rev-summary::-webkit-details-marker { display: none; }
+.rev-summary::before { content: '▸ '; color: var(--muted); }
+.rev-details[open] .rev-summary::before { content: '▾ '; }
+.rev-count { color: var(--muted); font-weight: 600; }
+.rev-list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.rev-row { font-size: 12.5px; border-left: 2px solid var(--line); padding: 2px 0 2px 10px; }
+.rev-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rev-ver { font-weight: 700; color: var(--ink); }
+.rev-op { color: var(--ink-sub); font-weight: 600; }
+.rev-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; background: var(--bg-tint-2); color: var(--ink-note); }
+.rev-actor-ai { background: #EEF4FF; color: var(--blue-deep); }
+.rev-actor-human { background: var(--bg-success); color: var(--mint-deep); }
+.rev-actor-connector { background: #FBF3EE; color: var(--coral-text); }
+.rev-actor-system { background: var(--bg-tint-2); color: var(--muted-head); }
+.rev-chan { background: var(--bg-tint); color: var(--ink-sub); }
+.rev-meta { margin-top: 3px; color: var(--muted); }
+.rev-snippet { margin-top: 4px; color: var(--ink-sub); font-size: 12px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
 .unit-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .unit-title-row .detail-title { margin: 0; }
 .unit-actions { display: flex; gap: 8px; margin: 16px 0 4px; flex-wrap: wrap; }

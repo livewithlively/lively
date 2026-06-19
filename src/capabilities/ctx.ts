@@ -5,7 +5,7 @@
 // 데이터층은 P1a(org/knowledge.ts) 위임: confidence·lifecycle 은 서버강제(입력 금지), 쓰기는
 //  assertNoHardSecrets + audit + version+1. 입력 검증은 어댑터 경계(MCP=zod input / REST=mount.parse).
 import { z } from "zod";
-import { getKnowledge, knowledgeThread, listKnowledge, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
+import { getKnowledge, knowledgeThread, listKnowledge, listKnowledgeRevisions, overviewKnowledge, searchKnowledge, setLifecycle, upsertKnowledge } from "../org/knowledge.js";
 import { listAllDomains } from "../domainmap/core/queries.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import type { Capability, CapabilityCtx, RestMount } from "./types.js";
@@ -164,24 +164,35 @@ const ctxCat = coExposed(
   "ctx_cat",
   "컨텍스트 전문(cat)",
   "한 지식단위의 **전문(full body)** + 메타 전체를 name 으로 가져온다(ctx_grep 스니펫 잘림 없이). 없으면 error 필드. " +
-    "thread:true 면 외부 미러 활동의 스레드(ancestors 부모체인 + children 직계답글, parent_name 재귀)도 포함(구 get_item.thread 대체).",
-  { name: z.string().min(1).max(64), thread: z.boolean().optional().describe("스레드(부모체인/답글) 포함 — 기본 false") },
+    "thread:true 면 외부 미러 활동의 스레드(ancestors 부모체인 + children 직계답글, parent_name 재귀)도 포함(구 get_item.thread 대체). " +
+    "history:true 면 **수정 이력**(누가/언제/어떤경로 mcp·web·connector/내용 스냅샷, 최신순)을 history 키로 포함(기본 OFF — 토큰 절약). " +
+    "기본 응답에도 작성자(updated_by/author)는 포함된다(노출 — 숨기지 않음).",
+  {
+    name: z.string().min(1).max(64),
+    thread: z.boolean().optional().describe("스레드(부모체인/답글) 포함 — 기본 false"),
+    history: z.boolean().optional().describe("수정 이력(누가/언제/경로/내용 history) 포함 — 기본 false(opt-in)"),
+  },
   [{
     method: "GET",
     paths: ["/api/ui/ctx/cat"],
     parse: (req) => {
       const name = qstr(req.query.name, "name", 64);
       if (!name) throw new HttpError(400, "name 필수");
-      return { name, thread: req.query.thread === "1" };
+      return { name, thread: req.query.thread === "1", history: req.query.history === "1" };
     },
   }],
-  async (input: { name: string; thread?: boolean }) => {
+  async (input: { name: string; thread?: boolean; history?: boolean }) => {
     const unit = await getKnowledge(input.name);
     // 부재는 get_item 과 동일 계약으로 404(throw) — REST=404 / MCP=isError, 양 어댑터 일관.
     if (!unit) throw new HttpError(404, `없음: '${input.name}' (name 확인 — ctx_ls/ctx_grep 결과의 name)`);
-    if (!input.thread) return unit; // 기본: 스레드 생략(토큰 절약)
-    const thread = await knowledgeThread(input.name);
-    return { ...unit, thread };
+    let out: Record<string, unknown> = { ...unit };
+    if (input.thread) out.thread = await knowledgeThread(input.name); // 토큰 절약: opt-in 일 때만
+    if (input.history) {
+      const h = await listKnowledgeRevisions(input.name, 20);
+      out.history = h.revisions; // [{version,op,at,actor,actor_kind,channel,title,body_snippet}]
+      out.history_count = h.count;
+    }
+    return out;
   },
 );
 

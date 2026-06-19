@@ -156,6 +156,35 @@ if (ctxThreadName) {
   });
 }
 
+// ── 수정이력(작성자/리비전): ctx_cat history opt-in ↔ REST 동치. history=1 시 history(배열)+history_count 포함. ──
+const ctxHistName = (await itemsPool.query(
+  `SELECT entity_key AS name FROM org_content_audit WHERE entity='knowledge_unit'
+     AND entity_key IN (SELECT name FROM knowledge_unit) GROUP BY entity_key ORDER BY entity_key LIMIT 1`)).rows[0]?.name;
+if (ctxHistName) {
+  await expectEqual(`ctx_cat{history} ↔ /api/ui/ctx/cat?history=1 (${ctxHistName})`,
+    ["ctx_cat", { name: ctxHistName, history: true }],
+    `/api/ui/ctx/cat?name=${encodeURIComponent(ctxHistName)}&history=1`);
+  // 토큰 다이어트 — history 생략(기본) 시 history/history_count 키 없음.
+  await report("smoke: ctx_cat{history 생략} 은 history 키 없음 (MCP)", async () => {
+    const m = await mcp("ctx_cat", { name: ctxHistName });
+    assert.ok(m.ok, `MCP 에러: ${m.errText}`);
+    assert.ok(!("history" in m.payload), "history 미요청인데 history 키가 존재");
+  });
+  // history opt-in 시 행 shape 검증(누가/언제/경로/내용 노출 — 작성자 숨기지 않음).
+  await report("smoke: ctx_cat{history} 행 shape(version/op/actor/actor_kind/channel) (MCP)", async () => {
+    const m = await mcp("ctx_cat", { name: ctxHistName, history: true });
+    assert.ok(m.ok, `MCP 에러: ${m.errText}`);
+    assert.ok(Array.isArray(m.payload.history), "history 가 배열이 아님");
+    assert.ok(typeof m.payload.history_count === "number", "history_count 가 숫자가 아님");
+    if (m.payload.history.length) {
+      for (const k of ["version", "op", "at", "actor", "actor_kind", "channel"]) {
+        assert.ok(k in m.payload.history[0], `history 행에 ${k} 없음`);
+      }
+      assert.ok(typeof m.payload.history[0].version === "number", "version 이 숫자가 아님(뷰 int 캐스트 확인)");
+    }
+  });
+}
+
 await expectEqual("list_unmapped ↔ /api/ui/inbox",
   ["list_unmapped", { missing: "either", repo: REPO, limit: 5 }],
   `/api/ui/inbox?missing=either&repo=${REPO}&limit=5`);

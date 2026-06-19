@@ -279,6 +279,33 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS req_ip TEXT;
   `);
 
+  // ── 수정이력(작성자/리비전) — org_content_audit 가 *이미* knowledge_unit 의 append-only 리비전 소스다 ──
+  //  (entity='knowledge_unit' 행 586건: insert/update/set_lifecycle/delete + before/after = redactDeep 후 full
+  //   KnowledgeUnit JSONB 스냅샷 + actor + source). 윤상민 요구("누가 사람/AI·어떤경로 mcp/web/connector·언제·내용
+  //   history")를 **신 테이블 없이** 2개 가산 컬럼 + 편의 뷰로 충족한다(신 테이블은 586행 백필·이중감사·기존
+  //   wrap 호환 리스크만 키움 — view 채택). 스냅샷 채택(이미 full after 스냅샷이라 diff 파생은 읽기 시 인접 비교).
+  //   · actor_kind = 누가(사람/AI) — 진실원천은 org_member.kind(신원)지 channel 이 아님(yoon 이 mcp 로 써도 human).
+  //   · channel    = 어떤 경로(mcp/web/connector/cli/migration) — source 컬럼이 이미 채널(어댑터가 결정적 주입).
+  //  CHECK 는 NULL 허용(레거시 source 에 cleanup/test 등 잡값 존재 → 신규 쓰기만 enum 강제, 기존행 무손상).
+  await itemsPool.query(`
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS actor_kind TEXT;
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS channel    TEXT;
+  `);
+  await itemsPool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_content_audit'::regclass AND conname='org_content_audit_actor_kind_chk') THEN
+        ALTER TABLE org_content_audit ADD CONSTRAINT org_content_audit_actor_kind_chk
+          CHECK (actor_kind IS NULL OR actor_kind IN ('human','ai','connector','system','unknown'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_content_audit'::regclass AND conname='org_content_audit_channel_chk') THEN
+        ALTER TABLE org_content_audit ADD CONSTRAINT org_content_audit_channel_chk
+          CHECK (channel IS NULL OR channel IN ('mcp','web','connector','cli','migration','unknown'));
+      END IF;
+    END $$;
+  `);
+
   // ════════ P1a 통합 지식스토어(데이터층) — knowledge_unit 단일 캐노니컬 ════════
   // org_memory(메모) + org_content(규칙/페르소나)을 하나의 지식 단위 테이블로 통합. 기존 store 함수는
   //  이 위 얇은 래퍼로 재구현(시그니처 불변, 듀얼라이트 없음). 임베딩/pgvector 는 이번 범위 밖(ILIKE 검색만).
@@ -535,6 +562,34 @@ export async function initOrgSchema(): Promise<void> {
       actor TEXT);
     CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_name_idx ON knowledge_unit_mapping_audit(name);
     CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_at_idx   ON knowledge_unit_mapping_audit(at DESC);
+  `);
+
+  // ── knowledge_unit_revision — ku 전용 수정이력 뷰(작성자/리비전 노출 표면). ──
+  //  org_content_audit(entity='knowledge_unit') 를 캐노니컬 리비전 소스로 채택하고 ku-전용으로 투영한다.
+  //  version = (name 내) at,id 순 1-base 순번(audit 기준 진실 — ku.version 과 별개; set_lifecycle 도 행을 남기므로
+  //  대체로 일치하나 view 가 진실). before/after = 그 시점 redactDeep 스냅샷(시크릿 이미 마스킹·시점 보존).
+  //  actor_kind=누가(사람/AI), channel=어떤경로 — 둘 다 평문 노출(비-본문 메타라 redact 대상 아님). 백필은
+  //  사실상 불요(audit 가 이미 시간순 보존 → row_number 가 자동 v1,v2.. 부여). 컬럼 actor_kind/channel 의
+  //  레거시 백필은 scripts/backfill-ku-revision.mjs(멱등·비파괴)가 담당.
+  // DROP+CREATE(멱등·비파괴 — 뷰는 데이터 미보유) — 컬럼 타입(version int 캐스트) 변경은 CREATE OR REPLACE 가
+  //  거부(checkViewColumns)하므로 DROP IF EXISTS 선행. 뷰 의존객체 없음(다른 뷰/룰이 참조 안 함).
+  await itemsPool.query(`DROP VIEW IF EXISTS knowledge_unit_revision`);
+  await itemsPool.query(`
+    CREATE VIEW knowledge_unit_revision AS
+      SELECT id,
+             entity_key AS name,
+             op,
+             (row_number() OVER (PARTITION BY entity_key ORDER BY at, id))::int AS version,
+             at,
+             actor,
+             actor_kind,
+             channel,
+             source,
+             token_hash_prefix,
+             before,
+             after
+        FROM org_content_audit
+       WHERE entity='knowledge_unit';
   `);
 
   // ── M-라 성능: pg_trgm 확장 + title/body_md GIN trgm 인덱스(pgvector 없이 ILIKE 가속). ──

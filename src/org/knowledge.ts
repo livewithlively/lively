@@ -107,7 +107,45 @@ function mapKnowledge(row: Record<string, unknown>): KnowledgeUnit {
   };
 }
 
+// ── actor_kind 도출(누가: 사람/AI/커넥터/시스템) — 서버강제(confidenceFor 와 같은 철학: 호출자 자칭 금지). ──
+//  진실원천은 org_member.kind(신원)지 channel(경로)이 아니다 — 같은 사람(yoon)이 mcp/web 양쪽으로 써도 'human'.
+//  우선순위: ① connector(채널/액터 슬러그) ② migration(시스템) ③ org_member.kind 조회(agent→ai, human→human,
+//  system→system) ④ org_member 미존재(email-actor 등) → unknown. member.kind 는 짧은 TTL 캐시(부팅 후 안정).
+type ActorKind = "human" | "ai" | "connector" | "system" | "unknown";
+const memberKindCache = new Map<string, { kind: string | null; at: number }>();
+const MEMBER_KIND_TTL_MS = 60_000;
+
+async function memberKindOf(actor: string): Promise<string | null> {
+  const hit = memberKindCache.get(actor);
+  if (hit && Date.now() - hit.at < MEMBER_KIND_TTL_MS) return hit.kind;
+  let kind: string | null = null;
+  try {
+    // actor=bearer user_id 가 org_member.id 또는 email 과 매칭될 수 있다(dabetai@snu.ac.kr 류 email-actor 대비).
+    const r = await itemsPool.query(
+      `SELECT kind FROM org_member WHERE id=$1 OR email=$1 LIMIT 1`, [actor],
+    );
+    kind = (r.rows[0]?.kind as string) ?? null;
+  } catch { kind = null; }
+  memberKindCache.set(actor, { kind, at: Date.now() });
+  return kind;
+}
+
+export async function deriveActorKind(
+  actor: string | undefined, channel: string | undefined,
+): Promise<ActorKind> {
+  if (channel === "connector" || (actor && actor.startsWith("connector:"))) return "connector";
+  if (channel === "migration" || (actor && actor.startsWith("migration"))) return "system";
+  if (!actor) return "unknown";
+  const mk = await memberKindOf(actor);
+  if (mk === "agent") return "ai";
+  if (mk === "human") return "human";
+  if (mk === "system") return "system";
+  return "unknown";
+}
+
 // ── 감사(append-only) — store.ts audit 과 동일 계약. before/after 는 redactDeep 후 굳힌다. ──
+//  수정이력(작성자/리비전): source 가 곧 channel(어떤 경로) — 별도 컬럼 채움. actor_kind(누가)는 서버가 actor+channel
+//  로 도출(deriveActorKind, 호출자 자칭 금지). knowledge_unit_revision 뷰가 이 행들을 ku-전용 이력으로 투영한다.
 async function auditKnowledge(
   key: string | null,
   op: string,
@@ -118,10 +156,12 @@ async function auditKnowledge(
 ): Promise<void> {
   const b = before == null ? null : JSON.stringify(redactDeep(before));
   const a = after == null ? null : JSON.stringify(redactDeep(after));
+  const channel = source ?? null;            // source = 어댑터 채널(mcp/web/connector/migration). NULL 허용.
+  const actorKind = await deriveActorKind(actor, channel ?? undefined);
   await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source)
-     VALUES('knowledge_unit',$1,$2,$3::jsonb,$4::jsonb,$5,$6)`,
-    [key, op, b, a, actor ?? null, source ?? null],
+    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
+     VALUES('knowledge_unit',$1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8)`,
+    [key, op, b, a, actor ?? null, source ?? null, channel, actorKind],
   );
 }
 
@@ -583,4 +623,55 @@ export async function removeKnowledge(name: string, actor?: string, source?: str
   if (!before) return;
   await itemsPool.query(`DELETE FROM knowledge_unit WHERE name=$1`, [name]);
   await auditKnowledge(name, "delete", before, null, actor, source);
+}
+
+// ── 수정이력(작성자/리비전) 조회 — knowledge_unit_revision 뷰 위임. 윤상민 요구(누가/언제/경로/내용 history). ──
+//  한 ku(name)의 리비전을 최신순(version DESC)으로. body_md/title 은 after 스냅샷(이미 redactDeep 적용)에서 추출 —
+//  목록은 스니펫(토큰 절약), 단건 diff 는 후속(인접 after 비교). actor_kind/channel/actor/at 평문 노출(메타라 마스킹 무관).
+export interface KnowledgeRevision {
+  version: number;
+  op: string;
+  at: string | null;
+  actor: string | null;
+  actor_kind: string | null;
+  channel: string | null;
+  title: string | null;
+  body_snippet: string | null;
+}
+
+const SNIPPET_LEN = 240;
+function snippetOf(snap: unknown, key: "body_md" | "title"): string | null {
+  if (!snap || typeof snap !== "object") return null;
+  const v = (snap as Record<string, unknown>)[key];
+  if (typeof v !== "string" || !v) return null;
+  return key === "body_md" && v.length > SNIPPET_LEN ? v.slice(0, SNIPPET_LEN) + "…" : v;
+}
+
+export async function listKnowledgeRevisions(
+  name: string, limit = 20,
+): Promise<{ name: string; revisions: KnowledgeRevision[]; count: number }> {
+  const lim = Math.max(1, Math.min(limit, 200));
+  // count 는 전체 리비전, revisions 는 최신 lim 건(version DESC). after 스냅샷에서 본문/제목 추출(삭제행은 before).
+  const r = await itemsPool.query(
+    `SELECT version, op, at, actor, actor_kind, channel, after, before
+       FROM knowledge_unit_revision WHERE name=$1 ORDER BY version DESC LIMIT $2`,
+    [name, lim],
+  );
+  const c = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM knowledge_unit_revision WHERE name=$1`, [name],
+  );
+  const revisions: KnowledgeRevision[] = r.rows.map((row) => {
+    const snap = row.op === "delete" ? row.before : row.after; // delete 는 after=null → before 스냅샷
+    return {
+      version: row.version as number,
+      op: row.op as string,
+      at: (row.at as string) ?? null,
+      actor: (row.actor as string) ?? null,
+      actor_kind: (row.actor_kind as string) ?? null,
+      channel: (row.channel as string) ?? null,
+      title: snippetOf(snap, "title"),
+      body_snippet: snippetOf(snap, "body_md"),
+    };
+  });
+  return { name, revisions, count: (c.rows[0]?.n as number) ?? 0 };
 }

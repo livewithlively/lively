@@ -71,6 +71,19 @@ export async function mirrorKnowledgeFromRawItem(client: pg.PoolClient, it: RawI
   const parentName = it.parent_external_id ? unitName(system, it.parent_external_id) : null;
   const author = `connector:${system}`;
 
+  // ── 수정이력(작성자/리비전) 게이트 — 미러는 고빈도(매 싱크 다수 행 UPDATE)라 무조건 audit append 하면
+  //  org_content_audit 가 노이즈로 비대해진다(last_synced_at-only 재싱크 포함). 따라서 **본문 실변경
+  //  (body_md/title diff) 시에만** 리비전을 남긴다. upsert 전에 기존 행의 title/body 를 읽어 비교한다.
+  //  존재하지 않으면(insert) → 리비전 1건(v1). 본문 동일(no-op 재싱크) → 리비전 생략(행은 last_synced_at 만 갱신).
+  const prev = await client.query(
+    `SELECT title, body_md FROM knowledge_unit WHERE name=$1`, [name],
+  );
+  const prevRow = prev.rows[0] as { title: string | null; body_md: string } | undefined;
+  const isInsert = !prevRow;
+  const contentChanged = isInsert
+    || (prevRow.title ?? null) !== (title ?? null)
+    || (prevRow.body_md ?? "") !== (body ?? "");
+
   await client.query(
     `INSERT INTO knowledge_unit(
         name, kind, title, body_md, lifecycle, confidence, source,
@@ -94,6 +107,20 @@ export async function mirrorKnowledgeFromRawItem(client: pg.PoolClient, it: RawI
      it.occurred_at ?? null, it.parent_external_id ?? null, parentName,
      JSON.stringify(fields), raw == null ? null : JSON.stringify(raw), author],
   );
+
+  // ── 수정이력 리비전 append(본문 실변경 시에만 — 노이즈 게이트). channel='connector', actor='connector:<system>',
+  //  actor_kind='connector'. after = 미러 행의 시점 스냅샷(title/body_md/kind/source 등 — redact 는 위에서 이미 적용).
+  //  before 는 직전 행(있으면). 같은 트랜잭션 client 로 append(미러 쓰기와 원자적). FK 없음(append-only).
+  if (contentChanged) {
+    const beforeSnap = isInsert ? null : { name, title: prevRow!.title, body_md: prevRow!.body_md };
+    const afterSnap = { name, kind, title, body_md: body, source: system, confidence: "observed", author };
+    await client.query(
+      `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
+       VALUES('knowledge_unit',$1,$2,$3::jsonb,$4::jsonb,$5,'connector','connector','connector')`,
+      [name, isInsert ? "insert" : "update",
+       beforeSnap == null ? null : JSON.stringify(beforeSnap), JSON.stringify(afterSnap), author],
+    );
+  }
   return true;
 }
 

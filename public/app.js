@@ -68,6 +68,11 @@ const INJECTION_HINT = {
 //  V4-C: 'confidence' 컬럼/enum 은 물리적으로 불변 — UI 라벨만 '출처(provenance)'로 의미를 명확히 한다(출처는 채널이
 //  기계로 박는 사실이지 신뢰도·가치가 아니다). observed 는 외부 *살아있는 미러* — 진실·편집은 외부에 있다.
 const CONFIDENCE_LABEL = { ai: 'AI', human: '사람', rule: '규칙', observed: '외부 미러' };
+// 수정이력(작성자/리비전) 라벨 — actor_kind=누가(사람/AI/커넥터/시스템), channel=어떤 경로(에이전트/웹/커넥터싱크/이관).
+const ACTOR_KIND_LABEL = { human: '사람', ai: 'AI', connector: '커넥터', system: '시스템', unknown: '미상' };
+const CHANNEL_LABEL = { mcp: '에이전트(MCP)', web: '웹', connector: '커넥터싱크', cli: 'CLI', migration: '이관', unknown: '경로 미상' };
+// 리비전 op(작업) 라벨 — 본문 수정(insert/update)과 상태변경(set_lifecycle)/삭제(delete) 구분.
+const REV_OP_LABEL = { insert: '생성', update: '수정', set_lifecycle: '상태 변경', delete: '삭제' };
 // lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
 const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
 
@@ -864,7 +869,8 @@ async function renderUnit(view, name) {
   view.replaceChildren(skeleton('지식 단위를 불러오는 중'));
   let u;
   try {
-    u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
+    // history=1 — 수정 이력(누가/언제/경로/내용) 동반 fetch(메타 패널 아래 '수정 이력' 섹션 렌더).
+    u = await api('/api/ui/ctx/cat?history=1&name=' + encodeURIComponent(name));
   } catch (e) {
     if (e.status === 404) {
       view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식 단위' })),
@@ -907,13 +913,24 @@ function drawUnit(view, u) {
   bodyWrap.append(rendered, rawView);
 
   // 메타 패널(우) — kind·kinds·confidence·lifecycle·supersedes·author·source_ref·as_of·version.
+  // 작성자(노출 — 숨기지 않음): 라이브 author 컬럼은 authored 행에서 NULL 이라 무의미 → updated_by(=actor) 우선.
+  //  최신 리비전의 actor_kind(누가)/channel(경로) 라벨을 함께 보여 "yoon (사람·웹)" 형태로 식별성을 높인다.
+  const latestRev = Array.isArray(u.history) && u.history.length ? u.history[0] : null;
+  const authorActor = u.updated_by || u.author || null;
+  let authorLabel = '—';
+  if (authorActor) {
+    const akKo = latestRev && latestRev.actor_kind ? (ACTOR_KIND_LABEL[latestRev.actor_kind] || latestRev.actor_kind) : null;
+    const chKo = latestRev && latestRev.channel ? (CHANNEL_LABEL[latestRev.channel] || latestRev.channel) : null;
+    const suffix = (akKo || chKo) ? ' (' + [akKo, chKo].filter(Boolean).join(' · ') + ')' : '';
+    authorLabel = authorActor + suffix;
+  }
   const metaRows = [
     ['종류(kind)', kindLabel(u.kind) + ' (' + u.kind + ')'],
     Array.isArray(u.kinds) && u.kinds.length ? ['추가 종류', u.kinds.join(', ')] : null,
     ['도메인', u.domain_key ? (u.domain_key + (u.domain_repo ? ' · ' + u.domain_repo : '')) : '—'],
     ['출처(provenance)', CONFIDENCE_LABEL[u.confidence] || u.confidence],
     ['supersedes', u.supersedes || '—'],
-    ['작성자', u.author || '—'],
+    ['작성자/마지막 편집', authorLabel],
     ['출처(source_ref)', u.source_ref || '—'],
     ['기준 시각(as_of)', u.as_of ? absTime(u.as_of) : '—'],
     ['버전', 'v' + u.version],
@@ -944,11 +961,45 @@ function drawUnit(view, u) {
   const side = el('aside', { class: 'unit-side' },
     el('div', { class: 'eyebrow', text: '메타데이터' }),
     metaTable,
+    buildHistorySection(u),
   );
 
   const head = el('div', { class: 'page-head unit-head' }, backRow);
   view.replaceChildren(head, el('div', { class: 'unit-layout' }, main, side));
   applyReveal([main, side]);
+}
+
+// 수정 이력(작성자/리비전) 섹션 — 누가(actor_kind 뱃지)·언제(절대시각)·어떤경로(channel 뱃지)·무슨작업(op)을 타임라인으로.
+//  접이식(<details>): 기본 접힘(토큰/공간 절약). 본문 스냅샷(body_snippet)은 행 펼침 없이 회색 보조텍스트로.
+//  보안: 모든 텍스트 textContent(el) — innerHTML 미사용. 데이터 없으면 섹션 생략.
+function buildHistorySection(u) {
+  const revs = Array.isArray(u.history) ? u.history : [];
+  if (!revs.length) return null;
+  const list = el('div', { class: 'rev-list' });
+  for (const r of revs) {
+    const akKo = r.actor_kind ? (ACTOR_KIND_LABEL[r.actor_kind] || r.actor_kind) : null;
+    const chKo = r.channel ? (CHANNEL_LABEL[r.channel] || r.channel) : null;
+    const opKo = REV_OP_LABEL[r.op] || r.op;
+    const badges = el('div', { class: 'rev-badges' },
+      el('span', { class: 'rev-ver mono', text: 'v' + r.version }),
+      el('span', { class: 'rev-op', text: opKo }),
+      akKo ? el('span', { class: 'rev-badge rev-actor-' + (r.actor_kind || 'unknown'), text: akKo }) : null,
+      chKo ? el('span', { class: 'rev-badge rev-chan', text: chKo }) : null,
+    );
+    const meta = el('div', { class: 'rev-meta' },
+      el('span', { class: 'rev-actor', text: r.actor || '—' }),
+      el('span', { class: 'rev-sep', text: ' · ' }),
+      el('span', { class: 'rev-time', text: r.at ? absTime(r.at) : '—' }),
+    );
+    const row = el('div', { class: 'rev-row' }, badges, meta);
+    if (r.body_snippet) row.append(el('div', { class: 'rev-snippet', text: r.body_snippet }));
+    list.append(row);
+  }
+  const count = typeof u.history_count === 'number' ? u.history_count : revs.length;
+  const summary = el('summary', { class: 'rev-summary' },
+    '수정 이력', el('span', { class: 'rev-count', text: ' (' + count + ')' }));
+  const det = el('details', { class: 'rev-details' }, summary, list);
+  return det;
 }
 
 async function changeLifecycle(name, lifecycle, view) {
@@ -957,8 +1008,8 @@ async function changeLifecycle(name, lifecycle, view) {
     toast(lifecycle === 'rejected' ? '반려했습니다' : (lifecycle === 'active' ? '복원했습니다' : '상태를 바꿨습니다'));
     state.overview = null; // 검토 배지·지도 카운트 무효화
     getOverview(true).catch(() => {});
-    // 상세 재로딩
-    const u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
+    // 상세 재로딩(이력 동반 — 방금 set_lifecycle 리비전이 타임라인에 반영되도록)
+    const u = await api('/api/ui/ctx/cat?history=1&name=' + encodeURIComponent(name));
     drawUnit(view, u);
   } catch (e) {
     toast('상태 변경 실패 — ' + e.message, true);
