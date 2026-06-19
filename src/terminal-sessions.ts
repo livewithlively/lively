@@ -30,12 +30,12 @@ export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude",
     autoApproveFlag: "--dangerously-skip-permissions",
-    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델. 예: sonnet · opus · haiku", type: "text" }],
+    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델", type: "select", choices: ["", "opus", "sonnet", "haiku"] }],
   },
   {
     key: "codex", label: "Codex", bin: "codex",
     autoApproveFlag: "--yolo",
-    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델", type: "text" }],
+    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델(gpt-5.5)", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] }],
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];

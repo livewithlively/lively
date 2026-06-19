@@ -347,7 +347,12 @@ function boot() {
   applyFit();
   window.addEventListener('resize', doResize);
 
-  connect();
+  // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 현재 ws 를 참조해 전송.
+  term.onData((d) => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
+  // 탭이 백그라운드→포그라운드로 돌아오면, 끊겨 있을 때 즉시 재연결.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && (!ws || ws.readyState >= 2)) { reconnectDelay = 1000; connectNow(); } });
+
+  connectNow();
 }
 
 async function connect() {

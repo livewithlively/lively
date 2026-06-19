@@ -39,7 +39,7 @@ export async function logChange(db: Db, a: LogChangeArgs): Promise<number> {
 // Restore: revert a change_log entry to its 'before' snapshot.
 // Tables a restore is allowed to touch. entity_type is system-written (never user
 // input), but this allow-list keeps the interpolated identifier provably safe.
-const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_entity", "mapping", "debt_finding", "project", "project_touch", "activity", "activity_touch"]);
+const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_entity", "mapping", "debt_finding", "activity", "activity_touch"]);
 
 // Per-table allow-list of restorable columns (mirrors the schema in init()).
 // A 'before' snapshot is attacker-influenced only via change_log content, which is
@@ -54,9 +54,6 @@ const RESTORE_COLUMNS: Record<string, Set<string>> = {
   data_entity: new Set(["repo_id", "kind", "name", "source", "created_at"]),
   mapping: new Set(["repo_id", "target_kind", "target_id", "domain_id", "origin", "confidence", "status", "run_id", "created_at", "updated_at"]),
   debt_finding: new Set(["repo_id", "kind", "title", "detail", "cited_refs", "status", "origin", "run_id", "created_at", "updated_at"]),
-  project: new Set(["repo_id", "key", "name", "description", "kind", "status", "origin", "started_at", "ended_at", "source_ref", "created_at", "updated_at",
-    "prov_system", "prov_instance", "external_id", "external_url", "state", "fields", "raw", "last_synced_at"]),
-  project_touch: new Set(["repo_id", "target_kind", "target_id", "project_id", "commit_count", "first_at", "last_at", "origin", "created_at"]),
   activity: new Set(["type", "title", "body", "author_person", "author_agent", "session_id", "repo_id", "commit_sha", "committed_at", "external_system", "external_instance", "external_id", "external_url", "should_review", "is_review", "created_at"]),
   activity_touch: new Set(["activity_id", "target_kind", "target_id", "created_at"]),
 };
@@ -69,13 +66,9 @@ async function restoreDependents(table: string, eid: number, _cur: unknown, db: 
     case "domain":
       return q(db, "SELECT id FROM mapping WHERE domain_id=$1 LIMIT 1", [eid]);
     case "code_unit":
-      return q(db, `SELECT id FROM mapping WHERE target_kind='code_unit' AND target_id=$1
-        UNION ALL SELECT id FROM project_touch WHERE target_kind='code_unit' AND target_id=$1 LIMIT 1`, [eid]);
+      return q(db, "SELECT id FROM mapping WHERE target_kind='code_unit' AND target_id=$1 LIMIT 1", [eid]);
     case "data_entity":
-      return q(db, `SELECT id FROM mapping WHERE target_kind='data_entity' AND target_id=$1
-        UNION ALL SELECT id FROM project_touch WHERE target_kind='data_entity' AND target_id=$1 LIMIT 1`, [eid]);
-    case "project":
-      return q(db, "SELECT id FROM project_touch WHERE project_id=$1 LIMIT 1", [eid]);
+      return q(db, "SELECT id FROM mapping WHERE target_kind='data_entity' AND target_id=$1 LIMIT 1", [eid]);
     case "scan_run":
       return q(db, "SELECT id FROM mapping WHERE run_id=$1 UNION ALL SELECT id FROM debt_finding WHERE run_id=$1 LIMIT 1", [eid]);
     case "repo": {
@@ -85,12 +78,10 @@ async function restoreDependents(table: string, eid: number, _cur: unknown, db: 
         UNION ALL SELECT 1 FROM data_entity WHERE repo_id=$1
         UNION ALL SELECT 1 FROM mapping WHERE repo_id=$1
         UNION ALL SELECT 1 FROM debt_finding WHERE repo_id=$1
-        UNION ALL SELECT 1 FROM project WHERE repo_id=$1
-        UNION ALL SELECT 1 FROM project_touch WHERE repo_id=$1
         UNION ALL SELECT 1 FROM scan_run WHERE repo_id=$1 LIMIT 1`, [eid]);
     }
     default:
-      return []; // mapping, debt_finding, project_touch: leaf rows, nothing references them.
+      return []; // mapping, debt_finding, activity_touch: leaf rows, nothing references them.
   }
 }
 

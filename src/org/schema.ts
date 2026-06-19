@@ -505,18 +505,8 @@ export async function initOrgSchema(): Promise<void> {
       state TEXT NOT NULL DEFAULT 'proposed',
       evidence TEXT,
       PRIMARY KEY(name, repo, domain_key));
-    CREATE TABLE IF NOT EXISTS knowledge_unit_project(
-      name TEXT REFERENCES knowledge_unit(name) ON DELETE CASCADE,
-      repo TEXT, project_key TEXT,
-      mapped_by TEXT NOT NULL DEFAULT 'rule',
-      confidence REAL,
-      state TEXT NOT NULL DEFAULT 'proposed',
-      evidence TEXT,
-      PRIMARY KEY(name, repo, project_key));
     CREATE INDEX IF NOT EXISTS knowledge_unit_domain_key_idx  ON knowledge_unit_domain(repo, domain_key);
     CREATE INDEX IF NOT EXISTS knowledge_unit_domain_state_idx ON knowledge_unit_domain(state);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_project_key_idx  ON knowledge_unit_project(repo, project_key);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_project_state_idx ON knowledge_unit_project(state);
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_state_chk') THEN
@@ -526,16 +516,6 @@ export async function initOrgSchema(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_mappedby_chk') THEN
         ALTER TABLE knowledge_unit_domain ADD CONSTRAINT knowledge_unit_domain_mappedby_chk
-          CHECK (mapped_by IN ('rule','llm','manual','declared'));
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit_project'::regclass AND conname='knowledge_unit_project_state_chk') THEN
-        ALTER TABLE knowledge_unit_project ADD CONSTRAINT knowledge_unit_project_state_chk
-          CHECK (state IN ('proposed','confirmed','rejected'));
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit_project'::regclass AND conname='knowledge_unit_project_mappedby_chk') THEN
-        ALTER TABLE knowledge_unit_project ADD CONSTRAINT knowledge_unit_project_mappedby_chk
           CHECK (mapped_by IN ('rule','llm','manual','declared'));
       END IF;
     END $$;

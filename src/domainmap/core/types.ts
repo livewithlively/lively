@@ -99,7 +99,7 @@ export interface RepoDeleteBlocked {
 }
 export interface RepoDeleteDone {
   deleted: true; id: number; name: string;
-  removed: { domains: number; code_units: number; data_entities: number; mappings: number; projects: number; project_touches: number; debts: number; aliases: number };
+  removed: { domains: number; code_units: number; data_entities: number; mappings: number; debts: number; aliases: number };
 }
 export type RepoDeleteResult = RepoDeleteBlocked | RepoDeleteDone;
 export type RepoStateResult =

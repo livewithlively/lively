@@ -34,15 +34,6 @@ export async function init(): Promise<string> {
     id SERIAL PRIMARY KEY, repo_id INT, kind TEXT, title TEXT, detail TEXT,
     cited_refs JSONB, status TEXT DEFAULT 'open', origin TEXT, run_id INT,
     created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, UNIQUE(repo_id, title));
-  CREATE TABLE IF NOT EXISTS project(
-    id SERIAL PRIMARY KEY, repo_id INT, key TEXT, name TEXT, description TEXT,
-    kind TEXT, status TEXT DEFAULT 'confirmed', origin TEXT,
-    started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ, source_ref TEXT,
-    created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, UNIQUE(repo_id, key));
-  CREATE TABLE IF NOT EXISTS project_touch(
-    id SERIAL PRIMARY KEY, repo_id INT, target_kind TEXT, target_id INT,
-    project_id INT, commit_count INT, first_at TIMESTAMPTZ, last_at TIMESTAMPTZ,
-    origin TEXT, created_at TIMESTAMPTZ, UNIQUE(repo_id, target_kind, target_id, project_id));
   CREATE TABLE IF NOT EXISTS change_log(
     id SERIAL PRIMARY KEY, repo_id INT, entity_type TEXT, entity_id INT,
     op TEXT, actor_type TEXT, actor_id TEXT, run_id INT, at TIMESTAMPTZ,
@@ -61,68 +52,8 @@ export async function init(): Promise<string> {
   -- private repos (the org configures it in the DB) — it is NEVER logged or returned.
   ALTER TABLE repo ADD COLUMN IF NOT EXISTS git_url TEXT;
   ALTER TABLE repo ADD COLUMN IF NOT EXISTS default_branch TEXT DEFAULT 'main';
-  -- PM-tool project provenance (설계결정 2026-06-11 §1-②). lifecycle 'state'(tool truth:
-  -- active|completed|archived|cancelled)는 curation 'status'(proposed|confirmed)와 별개 축.
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS prov_system TEXT;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS prov_instance TEXT;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS external_id TEXT;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS external_url TEXT;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS state TEXT;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS fields JSONB;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS raw JSONB;
-  ALTER TABLE project ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
   `);
-  // ── P-V3-4b: project '붕뜸' 해소 — provenance_kind 분리(D-PROJ/M-나) ──
-  // 한 project 테이블에 의미가 다른 두 종이 섞여 있던 것(붕뜸)을 명시 컬럼으로 가른다:
-  //   - 'initiative'   = PM 도구(clickup 등) provenance 보유(external_id/prov_system) — 사람이 도구에서
-  //                      선언한 실제 이니셔티브. W(작업) 유닛이 여기에 링크된다.
-  //   - 'code_grouping'= 문서·코드에서 파생(external_id NULL·origin=agent) — 코드유닛 묶음(project_touch).
-  // 물리 분리(별 테이블)가 아니라 분류 컬럼: UNIQUE(repo,key)·project_provenance_uq·project_touch FK 가
-  // 이미 라이브 49행·touch 558을 잡고 있어, 테이블을 쪼개면 cross-table 마이그가 라이브 데이터 수술이 된다.
-  // 대신 (a) 분류 컬럼 + CHECK 로 의미를 못박고, (b) 네임스페이스는 doc-derived 가 PM provenance 접두
-  // ('clickup-' 등)를 못 쓰게 막아(아래 syncProject/propose 가드) 충돌을 원천 차단한다(실측: 현 49행 충돌 0).
-  await pool.query(`ALTER TABLE project ADD COLUMN IF NOT EXISTS provenance_kind TEXT;`);
-  // 백필 — 기존 49행 분류(멱등: provenance_kind 이미 채워진 행은 건드리지 않음).
-  //   initiative: PM provenance(external_id/prov_system) 보유 — origin='source' 4행.
-  //   initiative: provenance 없지만 사람이 직접 선언한 이니셔티브(origin='human') — 1행(예: 'infra-cicd').
-  //     (계획의 4/45 휴리스틱 'origin=agent→code_grouping' 과 정합: human 행은 agent 가 아니라 제외되며,
-  //      doc-파생이 아니라 사람이 선언한 이니셔티브이므로 initiative 가 의미적으로 옳다.)
-  //   code_grouping: doc-derived(external_id NULL AND origin='agent') — 44행.
-  await pool.query(`
-  UPDATE project SET provenance_kind =
-    CASE WHEN external_id IS NOT NULL OR origin='human' THEN 'initiative' ELSE 'code_grouping' END
-  WHERE provenance_kind IS NULL;
-  `);
-  // CHECK — 백필 후에 추가(기존 행이 enum 밖이면 ADD CONSTRAINT 가 실패하므로 순서 강제).
-  //  NULL 허용(미래 pre-migration 행 안전 폴백) + 두 값만.
-  await pool.query(`
-  DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid='project'::regclass AND conname='project_provenance_kind_chk') THEN
-      ALTER TABLE project ADD CONSTRAINT project_provenance_kind_chk
-        CHECK (provenance_kind IS NULL OR provenance_kind IN ('initiative','code_grouping'));
-    END IF;
-  END $$;
-  `);
-  // Provenance dedup: one project row per (prov_system, prov_instance, external_id).
-  // NULLS NOT DISTINCT (PG15+) closes the prov_instance=NULL dup hole; partial WHERE
-  // keeps the 45 doc-derived rows (external_id IS NULL) entirely outside the index.
-  await pool.query(`
-  CREATE UNIQUE INDEX IF NOT EXISTS project_provenance_uq
-    ON project(prov_system, prov_instance, external_id) NULLS NOT DISTINCT
-    WHERE external_id IS NOT NULL;
-  `);
-  // project.state lifecycle enum CHECK — 앱 레벨 SYNC_STATES 검증과 별개로 아웃오브밴드 SQL 의
-  // 엉뚱한 state 를 DB 불변식으로 차단(items 스토어의 CHECK 마이그레이션과 같은 pg_constraint 프로브 멱등).
-  await pool.query(`
-  DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid='project'::regclass AND conname='project_state_chk') THEN
-      ALTER TABLE project ADD CONSTRAINT project_state_chk
-        CHECK (state IS NULL OR state IN ('active','completed','archived','cancelled'));
-    END IF;
-  END $$;
-  `);
+  // (P8: project/project_touch + provenance_kind/uq/state_chk DDL 제거 — initiative 드롭·task→W 만 유지.)
   // domain.state lifecycle CHECK — 컬럼은 이미 존재(active 기본). 'merged' 는 mergeDomains 가
   // 라이브로 쓰는 값이라 반드시 포함, 'deprecated' 는 ⑤ lifecycle 추가분. NULL 허용(pre-migration 행).
   await pool.query(`

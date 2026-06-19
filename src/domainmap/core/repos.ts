@@ -128,8 +128,6 @@ export async function hardDeleteRepo(name: string, force: boolean, actor: Actor)
     const del = async (sql: string): Promise<number> => (await client.query(sql, [rid])).rowCount ?? 0;
     // 자식 먼저(참조 순서) — domainmap 엔 FK 가 없어 순서 무관하나 의미상 leaf→root.
     const mappings = await del("DELETE FROM mapping WHERE repo_id=$1");
-    const project_touches = await del("DELETE FROM project_touch WHERE repo_id=$1");
-    const projects = await del("DELETE FROM project WHERE repo_id=$1");
     const code = await del("DELETE FROM code_unit WHERE repo_id=$1");
     const entities = await del("DELETE FROM data_entity WHERE repo_id=$1");
     const debts = await del("DELETE FROM debt_finding WHERE repo_id=$1");
@@ -141,11 +139,11 @@ export async function hardDeleteRepo(name: string, force: boolean, actor: Actor)
     await logChange(client, {
       repoId: rid, entityType: "repo", entityId: rid, op: "delete", actor,
       before: { name: nm }, after: null,
-      note: `hard-delete repo '${nm}' (cascade domains=${doms}, code=${code}, entities=${entities}, mappings=${mappings}, projects=${projects})`,
+      note: `hard-delete repo '${nm}' (cascade domains=${doms}, code=${code}, entities=${entities}, mappings=${mappings})`,
     });
     return {
       deleted: true, id: rid, name: nm,
-      removed: { domains: doms, code_units: code, data_entities: entities, mappings, projects, project_touches, debts, aliases },
+      removed: { domains: doms, code_units: code, data_entities: entities, mappings, debts, aliases },
     };
   });
 }

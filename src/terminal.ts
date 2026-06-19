@@ -13,6 +13,8 @@ import { logger } from "./log.js";
 import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
+import { listTeams, createTeam, editTeam, deleteTeam } from "./terminal-teams.js";
+import { listMembers } from "./org/store.js";
 
 const COOKIE = "lively_term";
 const PREFIX = "/terminal";
@@ -55,14 +57,19 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.json({ ok: true });
   });
 
-  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그.
-  app.get("/api/ui/terminal/config", auth, (_req, res) => {
+  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 팀원 후보(구성원 디렉터리).
+  app.get("/api/ui/terminal/config", auth, wrap(async (_req, res) => {
+    // 팀원 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
+    const members = (await listMembers().catch(() => []))
+      .filter((m) => m.state !== "inactive" && m.kind !== "system")
+      .map((m) => ({ id: m.id, name: m.display_name || m.id, kind: m.kind }));
     res.setHeader("Cache-Control", "no-store");
     res.json({
       roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
       harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+      members,
     });
-  });
+  }));
 
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -73,7 +80,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const session = await createSession(userOf(req), {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove, visibility: String(b.visibility ?? "public"),
+      autoApprove: !!b.autoApprove, visibility: String(b.visibility ?? "public"), team: b.team !== undefined ? String(b.team) : undefined,
     });
     res.setHeader("Cache-Control", "no-store");
     res.json({ session });
@@ -89,6 +96,32 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     await killSession(userOf(req), req.params.id);
+    res.json({ ok: true });
+  }));
+
+  // ── 팀 폴더 — 공유 워크스페이스 하위 폴더 + 멤버 ACL. 세션을 그 안에 묶어 팀원만 열람·접속. ──
+  app.get("/api/ui/terminal/teams", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ teams: await listTeams(userOf(req)) });
+  }));
+  app.post("/api/ui/terminal/teams", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const team = await createTeam(userOf(req), { label: String(b.label ?? ""), members: b.members });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ team });
+  }));
+  // 팀 수정(이름·팀원) — 소유자만(서버가 강제).
+  app.post("/api/ui/terminal/teams/:id", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    await editTeam(userOf(req), req.params.id, {
+      label: b.label !== undefined ? String(b.label) : undefined,
+      members: b.members,
+    });
+    res.json({ ok: true });
+  }));
+  // 팀 해제 — 마커만 제거(폴더·파일 보존). 소유자만.
+  app.delete("/api/ui/terminal/teams/:id", auth, wrap(async (req, res) => {
+    await deleteTeam(userOf(req), req.params.id);
     res.json({ ok: true });
   }));
 
