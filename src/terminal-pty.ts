@@ -33,9 +33,15 @@ function attach(ws: WebSocket, id: string): void {
   let term: IPty | undefined;
   sessionDir(id)
     .then((cwd) => {
-      term = ptySpawn(TMUX_BIN, ["attach", "-t", id], {
-        name: "xterm-256color", cols: 80, rows: 24, cwd,
-        env: process.env as Record<string, string>,
+      // 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로 잡혀 한글(멀티바이트)
+      //  렌더가 깨진다. UTF-8 로케일을 강제(env) + `tmux -u`(로케일과 무관하게 UTF-8 출력)로 이중 보장.
+      const env = { ...process.env } as Record<string, string>;
+      if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
+        env.LANG = "en_US.UTF-8";
+        env.LC_CTYPE = "en_US.UTF-8";
+      }
+      term = ptySpawn(TMUX_BIN, ["-u", "attach", "-t", id], {
+        name: "xterm-256color", cols: 80, rows: 24, cwd, env,
       });
       term.onData((d) => { try { ws.send(d); } catch { /* socket closed */ } });
       term.onExit(() => { try { ws.close(); } catch { /* already closed */ } });

@@ -12,8 +12,8 @@
 // 웹/기타 → 'human'(구 x-actor-type 헤더 생략과 동일 — 기존 거동 무변경).
 import { z } from "zod";
 import { dmRead, dmWrite, webActor } from "./domainmap-compat.js";
-import { domainDetail, listDebts } from "../domainmap/core/queries.js";
-import { history, restore } from "../domainmap/core/changelog.js";
+import { domainDetail, listDebts, listDomainsApi } from "../domainmap/core/queries.js";
+import { history, restore, shouldChangeHistory, commitIsChangeHistory } from "../domainmap/core/changelog.js";
 import { confirmDomain, domainSetShould, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
 import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/core/mappings.js";
 import { setDebtStatus } from "../domainmap/core/debts.js";
@@ -132,6 +132,47 @@ const dmHistory: Capability = {
   },
   handler: async (input: { repo: string; limit: number }) =>
     dmRead(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}`, () => history(input.repo, input.limit)),
+};
+
+// 도메인맵 탭(회사맥락 하위) 단일 read — 한 레포의 should(의도)/is(구조)/debt(괴리)와 그 변화의 두 축
+//  이력(should 변경=의도 재조정, commit→is 변경=구조 변화)을 한 번에. 경로 1세그(domainmap/map)라
+//  proxy(:repo/:kind 2세그)·debts/history 와 비충돌. handler 는 thin composition(코어 read 4종 병렬 조합).
+const dmDomainmapView: Capability = {
+  name: "dm_domainmap_view",
+  title: "도메인 맵(should/is/debt + 변경이력)",
+  description:
+    "한 레포의 도메인 맵 전경 — 도메인별 should(의도)/is(매핑 코드 수)/debt 카운트, debt 상세, " +
+    "should 변경 이력(의도를 누가/어떤 작업으로 어떻게 바꿨나), commit→is 변경 이력(어떤 commit 이 코드 구조를 바꿨나). 웹 도메인맵 탭 전용(REST only).",
+  scope: "context",
+  input: { repo: z.string().regex(REPO_RE).max(100), limit: z.number().int().min(1).max(500).default(100) },
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "GET",
+      paths: ["/api/ui/domainmap/map"],
+      parse: (req) => {
+        const repo = parseRepo(req.query.repo);
+        const raw = req.query.limit;
+        let limit = 100;
+        if (raw !== undefined && raw !== "") {
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n < 1 || n > 500) throw new HttpError(400, "limit 은(는) 1~500 사이 정수여야 합니다");
+          limit = n;
+        }
+        return { repo, limit };
+      },
+    }],
+  },
+  handler: async (input: { repo: string; limit: number }) =>
+    dmRead(`/api/repo/${enc(input.repo)}/map`, async () => {
+      const [domains, debts, should_changes, is_commit_changes] = await Promise.all([
+        listDomainsApi(input.repo),
+        listDebts(input.repo),
+        shouldChangeHistory(input.repo, input.limit),
+        commitIsChangeHistory(input.repo, input.limit),
+      ]);
+      return { repo: input.repo, domains, debts, should_changes, is_commit_changes };
+    }),
 };
 
 // ════════ 쓰기 8종 — 전부 POST(게이트웨이 표면에서 PATCH 는 POST 로 모델링, RestMount 유니온 유지) ════════
@@ -490,7 +531,7 @@ const domainSetShouldCap: Capability = {
 };
 
 export const domainmapCurationCapabilities: Capability[] = [
-  dmDomainDetail, dmDebtList, dmHistory,
+  dmDomainDetail, dmDebtList, dmHistory, dmDomainmapView,
   dmDomainConfirm, dmDomainEdit, dmDomainMerge,
   dmMappingConfirm, dmMappingReject, dmMappingMove,
   dmDebtStatus, dmRestore,

@@ -88,14 +88,6 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     res.json({ ok: true });
   }));
 
-  // tmux 히스토리 정리(리사이즈로 쌓인 중복 프롬프트 제거). force=1 은 무조건, 아니면 경량 세션만.
-  app.post("/api/ui/terminal/sessions/:id/tidy", auth, wrap(async (req, res) => {
-    const id = req.params.id;
-    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션 접근 권한이 없습니다");
-    const cleared = await tidyHistory(id, req.query.force === "1");
-    res.json({ ok: true, cleared });
-  }));
-
   // 업로드(raw 스트림 → 파일). content-type 무관(express.json 은 json 만 소비하므로 스트림 보존).
   app.put("/api/ui/terminal/sessions/:id/file", auth, wrap(async (req, res) => {
     const { abs } = await resolveInSession(req, true);

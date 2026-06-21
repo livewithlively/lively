@@ -580,6 +580,58 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
 .admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
 
+/* 관리 가로 중분류 바(기본 설정 · 회사·조직 · AI 동작/연결) — '관리' 머리글과 좌우 split 사이.
+   세그먼트형(밑줄 강조). 상단 .tabs 와 시각 언어를 맞추되 카드 안이라 살짝 담백하게. */
+.admin-cats {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  margin: 4px 0 16px; padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.admin-cat {
+  padding: 9px 16px; border-radius: 9px 9px 0 0;
+  font-size: 14px; font-weight: 700; color: var(--ink-sub);
+  text-decoration: none; white-space: nowrap;
+  border-bottom: 2px solid transparent; margin-bottom: -3px;
+}
+.admin-cat:hover { color: var(--ink); background: var(--bg-tint); }
+.admin-cat.active { color: var(--blue); border-bottom-color: var(--blue); }
+@media (max-width: 560px) { .admin-cat { padding: 8px 11px; font-size: 13px; } }
+
+/* 상위 탭(회사 맥락·시작하기)의 가로 중분류 바 — 페이지 맨 위에 깔리는 보조 탭 스트립(.admin-cats 와 같은 시각 언어). */
+.sub-cats {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  margin: 0 0 18px; border-bottom: 1px solid var(--line);
+}
+.sub-cat {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 16px; border-radius: 9px 9px 0 0;
+  font-size: 14px; font-weight: 700; color: var(--ink-sub);
+  text-decoration: none; white-space: nowrap;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.sub-cat:hover { color: var(--ink); background: var(--bg-tint); }
+.sub-cat.active { color: var(--blue); border-bottom-color: var(--blue); }
+@media (max-width: 560px) { .sub-cat { padding: 8px 11px; font-size: 13px; } }
+
+/* 가이드(#/learn) — 목적 카드 + '지식 하나' 예시 + 쉬운 용어집 */
+.guide-lead { font-size: 14.5px; line-height: 1.65; color: var(--ink); margin: 0 0 12px; }
+.guide-what-rows { margin-top: 4px; }
+.guide-kinds-intro { margin: -2px 0 14px; }
+/* '지식 하나'가 뭔지 — 실제 한 개 예시 카드(추상 개념을 눈으로) */
+.gloss-example { border: 1px solid var(--line-net); border-radius: 12px; padding: 14px 16px; background: var(--bg-tint); margin: 4px 0 2px; }
+.gloss-example-tag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 2px 9px; margin-bottom: 8px; }
+.gloss-example-title { font-size: 16px; font-weight: 800; color: var(--ink); }
+.gloss-example-body { font-size: 14px; line-height: 1.6; color: var(--ink-sub); margin-top: 4px; }
+/* 쉬운 용어집(규칙/지식/절차/할일) */
+.gloss-list { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.gloss-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line-row); }
+.gloss-row:last-child { border-bottom: none; }
+.gloss-glyph { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; color: var(--blue); background: var(--bg-punch); border-radius: 7px; }
+.gloss-main { min-width: 0; }
+.gloss-ko { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.gloss-code { font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+.gloss-desc { font-size: 13.5px; color: var(--ink-sub); line-height: 1.5; margin-top: 1px; }
+
 /* 관리 좌:우 너비 3:7 (오른쪽 내용이 더 많음) */
 /* 탐색탭처럼 좌측 고정폭 nav + 우측 detail — 좁아져도 row 유지(아래로 안 내려감). */
 .admin-split .split-list { flex: 0 0 220px; }
@@ -910,16 +962,13 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .area-tree .area-domain .tree-label { font-weight: 600; }
 .area-tree .area-domain .tree-glyph { width: 16px; height: 16px; font-size: 10px; }
 
-/* (6) 관리 nav 접기 + 반응형(우 섹션 wrap 방지) */
+/* (6) 관리 헤더 + 반응형(우 섹션 wrap 방지) */
 .admin-head-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .admin-head-l h2 { margin: 0; }
-.admin-nav-toggle { flex: none; }
 /* 훅 계층 — '런타임 훅'·'주입 미리보기'는 '커스텀 훅'의 하위(들여쓰기 + 연결선). */
 .admin-nav .row.admin-nav-child { padding-left: 34px; position: relative; }
 .admin-nav .row.admin-nav-child .row-title { font-size: 13px; color: var(--ink-sub); }
 .admin-nav .row.admin-nav-child::before { content: '└'; position: absolute; left: 17px; top: 13px; color: var(--muted); font-size: 11px; }
-.admin-split.nav-collapsed .split-list { display: none; }
-.admin-split.nav-collapsed .split-detail { flex: 1 1 100%; }
 /* admin-two(좌 목록·우 편집) 가 좁은 화면에서 wrap 되지 않게 — 기존 760 breakpoint 보강 */
 .admin-two { flex-wrap: nowrap; }
 @media (max-width: 760px) { .admin-two { flex-wrap: wrap; } }
@@ -939,3 +988,64 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* (검토) 정렬 필터 바 */
 .review-filter { margin: 0 0 12px; align-items: center; }
 .review-filter .field-label { margin: 0; }
+
+/* 터미널 — 팀 폴더 / 헤더 액션 / 팀원 체크리스트 */
+.term-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.term-section-title { font-size: 15px; font-weight: 700; color: var(--ink-sub); margin: 20px 0 8px; }
+.term-checklist { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; }
+.term-check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; padding: 3px 2px; }
+.term-check input { margin: 0; flex: 0 0 auto; }
+.term-input:disabled { background: var(--bg-soft, #f4f4f6); color: var(--ink-sub); cursor: default; }
+
+/* ════ 도메인 맵 (#/domainmap) — 회사맥락 하위. should(의도)·is(구조) 2열 + 괴리/변경이력. ════ */
+.dm-section { margin-top: 16px; }
+.dm-section-hint { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.dm-list { display: flex; flex-direction: column; gap: 10px; }
+
+/* 도메인 카드 — should | is 2열 + 괴리 칩 */
+.dm-dom { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--bg); }
+.dm-dom.has-debt { border-color: var(--line-net-2); }
+.dm-dom-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dm-dom-key { font-size: 13px; font-weight: 700; color: var(--ink); }
+.dm-dom-name { font-size: 13.5px; color: var(--ink-sub); }
+.dm-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.dm-debt-chip { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #9A5B2E; background: #FBF1E7; border: 1px solid #F0DCC4; border-radius: 999px; padding: 1px 9px; }
+.dm-axes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+@media (max-width: 720px) { .dm-axes { grid-template-columns: 1fr; } }
+.dm-axis { display: flex; flex-direction: column; gap: 5px; padding: 9px 11px; border-radius: 9px; background: var(--bg-tint); border: 1px solid var(--line); }
+.dm-should { background: #F2FBF8; border-color: #DCEFE8; }   /* 의도 = 민트 계열(서비스 포인트 컬러) */
+.dm-axis-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--ink-sub); text-transform: uppercase; }
+.dm-axis-val { font-size: 13px; color: var(--ink); line-height: 1.5; }
+.dm-axis-empty { font-size: 12.5px; color: var(--muted-2); font-style: italic; }
+.dm-prop { color: var(--ink-sub); }
+
+/* 괴리(debt) — should↔is 괴리는 좌측 색띠 강조 */
+.dm-debt { border: 1px solid var(--line); border-left: 3px solid var(--line-net-2); border-radius: 9px; padding: 10px 12px; background: var(--bg); }
+.dm-sev-should_no_is { border-left-color: #C9742E; background: #FCF6EF; }
+.dm-sev-vanished { border-left-color: #B5534A; }
+.dm-sev-eroded { border-left-color: #C2A23E; }
+.dm-debt-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dm-sev-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; }
+.dm-debt-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.dm-debt-status { margin-left: auto; font-size: 11px; color: var(--muted-2); }
+.dm-debt-detail { font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; margin-top: 5px; }
+
+/* 변경 이력(should·is 공통) */
+.dm-change { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: var(--bg); }
+.dm-change-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dm-change-dom { font-size: 12.5px; color: var(--ink-sub); }
+.dm-change-when { margin-left: auto; font-size: 12px; color: var(--muted-2); }
+.dm-diff { display: flex; align-items: stretch; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.dm-diff-side { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; border-radius: 8px; background: var(--bg-tint); border: 1px solid var(--line); }
+.dm-after { background: #F2FBF8; border-color: #DCEFE8; }
+.dm-diff-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted-2); }
+.dm-diff-val { font-size: 12.5px; color: var(--ink); line-height: 1.45; white-space: pre-wrap; }
+.dm-diff-arrow { align-self: center; color: var(--ink-sub); font-weight: 700; }
+.dm-change-by { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--ink-sub); }
+.dm-by-act { display: inline-flex; align-items: center; gap: 6px; }
+.dm-act-title { color: var(--ink); }
+.dm-change-who { margin-left: auto; color: var(--muted-2); }
+.dm-change-noact { color: var(--muted-2); font-style: italic; }
+.dm-op-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; }
+.dm-is-ent { font-size: 12.5px; }
+.dm-commit { font-size: 11.5px; color: var(--ink-sub); }

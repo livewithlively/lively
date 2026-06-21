@@ -45,6 +45,7 @@ export interface SessionInfo {
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   visibility: Visibility; owner: string; owned: boolean; created: number; attached: boolean;
   team: string; // 소속 팀 폴더 id(@box_team). 빈값 = 팀 밖(최상위) 세션.
+  flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; visibility: string; team?: string; }
 
@@ -81,8 +82,9 @@ async function getOpt(name: string, opt: string): Promise<string> {
 }
 
 // 단일 tmux 호출로 모든 box-* 세션 + @box_* 메타를 읽는다(#{@user-option} 포맷 지원).
-// @box_team 은 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드 team 을 먼저 파싱).
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_visibility}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_team}\t#{@box_label}";
+// @box_team·@box_flags 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
+//  @box_flags 는 JSON(탭 없음 — 값은 SAFE_VALUE_RE 통과)이라 탭 구분 파싱에 안전.
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_visibility}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_team}\t#{@box_flags}\t#{@box_label}";
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   let out = "";
@@ -92,7 +94,7 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, vis, harness, dir, auto, team, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, vis, harness, dir, auto, team, flagsRaw, ...labelParts] = line.split("\t");
     const visibility = normVis(vis);
     const owned = !!owner && owner === me;
     const teamId = team || "";
@@ -102,10 +104,12 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
     } else if (!owned && visibility !== "public") {
       continue;                                          // 팀 밖 비공개 + 남의 것 → 숨김
     }
+    let flags: Record<string, string> = {};
+    try { if (flagsRaw) flags = JSON.parse(flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
     sessions.push({
       id: name, label: (labelParts.join("\t") || name), harness: harness || "shell", dir: dir || "",
       autoApprove: auto === "1", visibility, owner: owner || "", owned,
-      created: Number(created) || 0, attached: Number(attached) > 0, team: teamId,
+      created: Number(created) || 0, attached: Number(attached) > 0, team: teamId, flags,
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
@@ -127,16 +131,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");
 
   const cmd: string[] = [];
+  const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
     cmd.push(harness.bin);
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
       if (raw === undefined || raw === null || raw === "") continue;
-      if (def.type === "bool") { if (raw) cmd.push(def.name); continue; }
+      if (def.type === "bool") { if (raw) { cmd.push(def.name); appliedFlags[def.name] = "1"; } continue; }
       const v = String(raw);
-      if (def.type === "select") { if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`); cmd.push(def.name, v); continue; }
+      if (def.type === "select") { if (!def.choices?.includes(v)) throw new HttpError(400, `${def.label} 값이 허용 목록에 없습니다`); cmd.push(def.name, v); appliedFlags[def.name] = v; continue; }
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
-      cmd.push(def.name, v);
+      cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
   }
@@ -152,15 +157,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
+  await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_visibility", visibility]);
   if (teamId) await tmux(["set-option", "-t", id, "@box_team", teamId]);
-  // 마우스 OFF — 휠을 tmux 가 가로채지 않게 해 xterm 이 직접 스크롤(브라우저식 휠 스크롤) + 드래그=xterm 선택→복사.
-  //  (mouse on 이면 휠이 tmux copy-mode 로 가서 shift/option 없이는 스크롤 불가 — off 로 일반 스크롤 확보.)
-  //  window-size largest + aggressive-resize off: 작은 피커가 창 못 줄이게(다중 클라 화면 깨짐·리사이즈 churn 방지).
-  await tmuxQuiet(["set-option", "-t", id, "mouse", "off"]);
+  // 스크롤 줄중복·리사이즈 개선: 휠→tmux copy-mode + window-size largest(작은 피커가 창 못 줄임).
+  await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "largest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, visibility, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, team: teamId };
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, visibility, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, team: teamId, flags: appliedFlags };
 }
 
 interface OwnerVis { owner: string; visibility: Visibility; team: string; }
@@ -223,7 +227,7 @@ export async function sessionDir(id: string): Promise<string> {
 //  (aggressive-resize 는 정반대로 '가장 작은' 클라에 맞춰서 이 버그의 원인 — 사용 안 함.)
 export async function ensureSessionOpts(id: string): Promise<void> {
   if (!ID_RE.test(id)) return;
-  await tmuxQuiet(["set-option", "-t", id, "mouse", "off"]);
+  await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "largest"]);
 }

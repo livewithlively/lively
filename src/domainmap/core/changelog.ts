@@ -137,3 +137,54 @@ export async function history(name: string, limit: unknown = 50): Promise<any[]>
 export async function historyGlobal(limit: unknown): Promise<any[]> {
   return q(dmPool(), "SELECT * FROM change_log ORDER BY id DESC LIMIT $1", [limit]);
 }
+
+// ── 도메인맵 탭(should↔is) 전용 열람 2종 — change_log 를 의도(should)/구조(is) 축으로 슬라이스. ──
+// 둘 다 읽기 전용 SELECT 이지만 change_log 소유 파일(여기)에 둔다(queries.ts 는 감사테이블 무접촉 격리).
+
+// (1) should 변경 이력 — domain.should(의도)가 실제로 달라진 change_log 행만(NULL-aware IS DISTINCT FROM:
+//  NULL→값, 값→NULL, 값→다른값 모두 잡고 동일값/둘다NULL 은 제외). 그 변경을 유발한 작업(activity)을
+//  activity_id 로 LEFT JOIN(귀속 없으면 activity_* null). before/after 는 도메인 전체 스냅샷이라 should
+//  필드만 추출(->>'should'). 현 도메인 key/name 도 함께(개명 후에도 식별).
+export async function shouldChangeHistory(name: string, limit: unknown = 50): Promise<any[]> {
+  const r = await getRepo(name);
+  return q(dmPool(), `
+    SELECT cl.id AS change_id, cl.at, cl.op, cl.entity_id AS domain_id,
+           cl.actor_type, cl.actor_id, cl.note,
+           cl.before->>'should' AS should_before,
+           cl.after->>'should'  AS should_after,
+           d.key AS domain_key, d.name AS domain_name,
+           a.id AS activity_id, a.type AS activity_type, a.title AS activity_title,
+           a.author_person, a.author_agent, a.commit_sha,
+           a.committed_at AS activity_committed_at, a.created_at AS activity_created_at
+    FROM change_log cl
+    LEFT JOIN domain d ON d.id = cl.entity_id
+    LEFT JOIN activity a ON a.id = cl.activity_id
+    WHERE cl.repo_id = $1
+      AND cl.entity_type = 'domain'
+      AND (cl.before->>'should') IS DISTINCT FROM (cl.after->>'should')
+    ORDER BY cl.id DESC LIMIT $2`, [r.id, saneLimit(limit)]);
+}
+
+// (2) commit→is 변경 이력 — is(코드 구조 = code_unit/mapping/data_entity) 변경을 그 변경을 유발한
+//  commit 작업(activity.type='commit')으로 INNER JOIN(commit 이 일으킨 것만; activity_id 미배선 행은 자연 제외).
+//  mapping 변경은 before/after 에 domain_id 가 있어 '어느 도메인의 is 가 바뀌었나' 귀속(after 우선, remove 면 before).
+//  code_unit 변경은 엔티티 라벨(path)로 표시. before/after 풀스냅샷도 함께 반환해 프론트가 '어떻게 바꿨나'를 표현.
+export async function commitIsChangeHistory(name: string, limit: unknown = 50): Promise<any[]> {
+  const r = await getRepo(name);
+  return q(dmPool(), `
+    SELECT cl.id AS change_id, cl.at, cl.op, cl.entity_type, cl.entity_id,
+           cl.actor_type, cl.actor_id, cl.note, cl.before, cl.after,
+           cu.path AS code_path, cu.label AS code_label, cu.kind AS code_kind,
+           dm.key AS domain_key, dm.name AS domain_name,
+           a.id AS activity_id, a.title AS activity_title, a.commit_sha,
+           a.author_person, a.author_agent,
+           a.committed_at AS activity_committed_at, a.created_at AS activity_created_at
+    FROM change_log cl
+    JOIN activity a ON a.id = cl.activity_id AND a.type = 'commit'
+    LEFT JOIN code_unit cu ON cl.entity_type = 'code_unit' AND cu.id = cl.entity_id
+    LEFT JOIN domain dm ON cl.entity_type = 'mapping'
+       AND dm.id = NULLIF(COALESCE(cl.after->>'domain_id', cl.before->>'domain_id'), '')::int
+    WHERE cl.repo_id = $1
+      AND cl.entity_type IN ('code_unit','mapping','data_entity')
+    ORDER BY cl.id DESC LIMIT $2`, [r.id, saneLimit(limit)]);
+}

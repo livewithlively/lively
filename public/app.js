@@ -8,7 +8,8 @@
 //   2) 탐색(#/browse)      — ctx_ls/ctx_grep. 좌 kind 트리 + grep 검색 + 필터 목록.
 //   3) 유닛 상세(#/u/<name>) — ctx_cat 전문 + 메타 패널 + 편집(ctx_save)/반려(set-lifecycle).
 //   4) 검토(#/review)      — confidence=ai·active 피드(에이전트 생산물) → reject/edit.
-//   5) 관리(#/system)      — kind 레지스트리 열람 + 기존 관리(커넥터/소스/훅/멤버/토큰) 흡수.
+//   5) 관리(#/system)      — 3 중분류(기본 설정·회사·조직·AI 동작/연결 고급) 가로 탭으로 묶은 조직 관리(연결/멤버/토큰/발행·규칙/맥락/메모리/용어·훅/툴/MCP/DB).
+//   +  가이드(#/learn)      — 비개발자용: 서비스 목적 + 지식종류/용어 + 내 컴퓨터 설치(관리에서 '지식종류 레지스트리'·'설치'를 이리로 이관).
 'use strict';
 
 const TOKEN_KEY = 'lively_ui_token';
@@ -148,7 +149,7 @@ function safeHref(raw) {
   if (url.startsWith('#') || url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) return url;
   if (url.startsWith('//')) return url;
   // 스킴이 있으면 화이트리스트만. 스킴 추출 전 제어문자(개행/탭) 제거 — `java\nscript:` 우회 차단.
-  const stripped = url.replace(/[ -]/g, '');
+  const stripped = url.replace(/[\x00-\x1f\x7f]/g, '');
   const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(stripped);
   if (m) {
     const scheme = m[1].toLowerCase();
@@ -509,6 +510,44 @@ function confidenceDot(confidence) {
 // ════════════════════════════════════════════
 // 1) 지식 지도 #/map — ctx_overview. kind 카드 + 시스템 건강.
 // ════════════════════════════════════════════
+// '회사 맥락' 상위 탭의 가로 중분류(지도·탐색·검토) — 관리 탭 .admin-cats 와 같은 패턴.
+//  세 하위뷰(renderMap/Browse/Review) 맨 위에 동일하게 깔아 한 탭처럼 묶는다. 검토 대기 배지는 상위 탭(updateReviewBadge).
+const CTX_SUBS = [
+  { key: 'map', label: '지도', href: '#/map' },
+  { key: 'browse', label: '탐색', href: '#/browse' },
+  { key: 'domainmap', label: '도메인 맵', href: '#/domainmap' },
+  { key: 'review', label: '검토', href: '#/review' },
+];
+function ctxSubBar(active) {
+  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '회사 맥락' });
+  for (const s of CTX_SUBS) {
+    const on = s.key === active;
+    const a = el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
+      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label });
+    if (s.key === 'review') { // 하위 칩에도 검토 대기 건수(상위 탭 배지와 별개)
+      const n = state.overview ? state.overview.review_pending : 0;
+      if (n > 0) a.append(el('span', { class: 'tab-count', text: String(n) }));
+    }
+    bar.append(a);
+  }
+  return bar;
+}
+
+// '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
+const START_SUBS = [
+  { key: 'install', label: '설치', href: '#/install' },
+  { key: 'learn', label: '사용설명서', href: '#/learn' },
+];
+function startSubBar(active) {
+  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '시작하기' });
+  for (const s of START_SUBS) {
+    const on = s.key === active;
+    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
+      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label }));
+  }
+  return bar;
+}
+
 async function renderMap(view) {
   view.replaceChildren(skeleton('지식 지도를 불러오는 중'));
   const o = await getOverview(true);
@@ -565,7 +604,7 @@ async function renderMap(view) {
   const areaEyebrow = el('div', { class: 'eyebrow', text: '주제 영역 (area)' });
   areaEyebrow.hidden = true; areaWrap.hidden = true;
 
-  view.replaceChildren(head, health, el('div', { class: 'eyebrow', text: '종류별 지식' }), grid, areaEyebrow, areaWrap);
+  view.replaceChildren(ctxSubBar('map'), head, health, el('div', { class: 'eyebrow', text: '종류별 지식' }), grid, areaEyebrow, areaWrap);
   applyReveal([health, ...cards]);
   document.getElementById('view').focus?.();
 
@@ -758,7 +797,7 @@ async function renderBrowse(view, params) {
     side,
     el('section', { class: 'browse-main' }, filterBar, listBox, foot),
   );
-  view.replaceChildren(head, layout);
+  view.replaceChildren(ctxSubBar('browse'), head, layout);
   applyReveal([layout]);
   refetch();
 }
@@ -1068,7 +1107,7 @@ async function renderReview(view) {
   orderSel.addEventListener('change', () => { state.reviewOrderBy = orderSel.value; load(); });
   const filterBar = el('div', { class: 'filter-bar review-filter' }, el('span', { class: 'field-label', text: '정렬' }), orderSel);
   const listBox = el('div', { class: 'list-box' });
-  view.replaceChildren(head, filterBar, listBox);
+  view.replaceChildren(ctxSubBar('review'), head, filterBar, listBox);
 
   async function load() {
   listBox.replaceChildren(skeletonRows(4));
@@ -1109,6 +1148,171 @@ async function renderReview(view) {
   }
   }
   load();
+}
+
+// ════════════════════════════════════════════
+// 도메인 맵 #/domainmap — 회사맥락 하위. 도메인마다 should(의도)·is(코드 구조)를 나란히 두고
+//  둘의 괴리(debt)를 드러낸다. + 두 축의 변화 이력: 의도(should) 변경(누가·어떤 작업으로) /
+//  커밋이 구조(is)를 바꾼 이력. 단일 read GET /api/ui/domainmap/map?repo= 가 4묶음을 한 번에 준다.
+// ════════════════════════════════════════════
+// debt 제목 접두사로 should↔is 괴리 종류 판별(서버 domainmap/core/domain-debt.ts 의 title 규약과 1:1).
+const DM_SEV_OF = (title) => /의도-구조 괴리/.test(title) ? 'should_no_is'
+  : /구조 증발/.test(title) ? 'vanished' : /구조 침식/.test(title) ? 'eroded' : 'other';
+const DM_SEV_LABEL = { should_no_is: '의도-구조 괴리', vanished: '구조 증발', eroded: '구조 침식', other: '이슈' };
+const DM_SEV_RANK = { should_no_is: 0, vanished: 1, eroded: 2, other: 3 };
+// change_log op 어휘(서버 changelog.ts 불변) → 한국어 라벨.
+const DM_OP_LABEL = { insert: '추가', update: '수정', drift: '드리프트', rename: '이름변경', remove: '제거',
+  revive: '복구', retomb: '재제거', merge: '병합', reassign: '재배치', restore: '되돌림' };
+
+async function renderDomainmap(view, params) {
+  view.replaceChildren(ctxSubBar('domainmap'), skeleton('도메인 맵을 불러오는 중'));
+  const repos = await loadRepos();
+  let repo = (params && params.get('repo')) || state.dmRepo
+    || (repos.includes(VOCAB_CRUD_DEFAULT_REPO) ? VOCAB_CRUD_DEFAULT_REPO : repos[0]);
+  if (!repos.includes(repo)) repo = repos[0];
+  state.dmRepo = repo;
+
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '도메인 ', el('span', { class: 'accent', text: '맵' })),
+    el('p', { class: 'sub', text: '도메인마다 의도(should)와 코드 구조(is)를 나란히 두고, 둘의 괴리(debt)를 드러냅니다. 아래에서 의도가 어떻게 바뀌어 왔는지, 어떤 커밋이 구조를 바꿨는지도 볼 수 있습니다.' }),
+  );
+
+  // repo 셀렉터 — 복수일 때만(단일이면 라벨 생략, 작업현황/어휘관리와 동일 패턴).
+  let repoBar = null;
+  if (repos.length > 1) {
+    const sel = el('select', { class: 'flt-domain' });
+    for (const r of repos) sel.append(el('option', { value: r, text: r }));
+    sel.value = repo;
+    sel.addEventListener('change', () => { state.dmRepo = sel.value; location.hash = '#/domainmap?repo=' + encodeURIComponent(sel.value); });
+    repoBar = el('div', { class: 'filter-bar' }, el('span', { class: 'field-label', text: '레포' }), sel);
+  }
+
+  let data;
+  try {
+    data = await api('/api/ui/domainmap/map?' + new URLSearchParams({ repo, limit: '150' }));
+  } catch (e) {
+    view.replaceChildren(...[ctxSubBar('domainmap'), head, repoBar, errorNote(e, '도메인 맵을 불러오지 못했습니다')].filter(Boolean));
+    return;
+  }
+  const domains = data.domains || [];
+  const debts = (data.debts || []).filter((d) => d.status !== 'resolved' && d.status !== 'dismissed');
+  const shoulds = data.should_changes || [];
+  const isChanges = data.is_commit_changes || [];
+
+  // ── 요약 스탯 ──
+  const withShould = domains.filter((d) => d.should && d.should.trim()).length;
+  const gapCount = debts.filter((d) => DM_SEV_OF(d.title) === 'should_no_is').length;
+  const statCard = el('div', { class: 'card' }, el('div', { class: 'stat-row' },
+    stat(fmtNum(domains.length), '도메인', '개'),
+    stat(fmtNum(withShould), '의도(should) 설정됨', '/ ' + domains.length),
+    stat(fmtNum(debts.length), '괴리·이슈(debt)', gapCount ? ('· 괴리 ' + gapCount) : '건'),
+  ));
+
+  // ── 도메인별 should | is | debt ──
+  const tone = (d) => (d.debts > 0 ? ' has-debt' : '');
+  function domainRow(d) {
+    const hasShould = !!(d.should && d.should.trim());
+    return el('div', { class: 'dm-dom' + tone(d) },
+      el('div', { class: 'dm-dom-head' },
+        el('span', { class: 'mono dm-dom-key', text: d.key }),
+        d.name && d.name !== d.key ? el('span', { class: 'dm-dom-name', text: d.name }) : null,
+        d.cross_cutting ? el('span', { class: 'dm-tag', text: '횡단' }) : null,
+        d.space === 'business' ? el('span', { class: 'dm-tag', text: '비즈니스' }) : null,
+        d.debts > 0 ? el('span', { class: 'dm-debt-chip', text: '괴리 ' + fmtNum(d.debts) }) : null,
+      ),
+      el('div', { class: 'dm-axes' },
+        el('div', { class: 'dm-axis dm-should' },
+          el('span', { class: 'dm-axis-label', text: '의도 · should' }),
+          hasShould
+            ? el('span', { class: 'dm-axis-val', text: d.should })
+            : el('span', { class: 'dm-axis-empty', text: '아직 설정 안 됨' })),
+        el('div', { class: 'dm-axis dm-is' },
+          el('span', { class: 'dm-axis-label', text: '구조 · is' }),
+          el('span', { class: 'dm-axis-val' },
+            el('strong', { text: fmtNum(d.units) }), ' 코드',
+            d.entities ? el('span', {}, ' · ', el('strong', { text: fmtNum(d.entities) }), ' 엔티티') : null,
+            d.proposed ? el('span', { class: 'dm-prop', text: ' · 제안 ' + fmtNum(d.proposed) }) : null,
+            (!d.units && !d.entities) ? el('span', { class: 'dm-axis-empty', text: '  매핑된 코드 없음' }) : null)),
+      ),
+    );
+  }
+
+  // ── 괴리(debt) — should↔is 괴리 먼저, 그다음 구조 신호 ──
+  const debtSorted = [...debts].sort((a, b) => DM_SEV_RANK[DM_SEV_OF(a.title)] - DM_SEV_RANK[DM_SEV_OF(b.title)]);
+  function debtRow(dt) {
+    const sev = DM_SEV_OF(dt.title);
+    return el('div', { class: 'dm-debt dm-sev-' + sev },
+      el('div', { class: 'dm-debt-top' },
+        el('span', { class: 'dm-sev-tag', text: DM_SEV_LABEL[sev] }),
+        el('span', { class: 'dm-debt-title', text: dt.title }),
+        dt.status && dt.status !== 'open' ? el('span', { class: 'dm-debt-status', text: dt.status }) : null),
+      dt.detail ? el('div', { class: 'dm-debt-detail', text: dt.detail }) : null,
+    );
+  }
+
+  // ── 의도(should) 변경 이력 — 누가·어떤 작업으로 의도를 어떻게 바꿨나(before→after) ──
+  const valOr = (s, fallback) => (s && s.trim() ? s : fallback);
+  function shouldChangeRow(c) {
+    return el('div', { class: 'dm-change' },
+      el('div', { class: 'dm-change-top' },
+        el('span', { class: 'mono', text: c.domain_key || ('#' + c.domain_id) }),
+        c.domain_name ? el('span', { class: 'dm-change-dom', text: c.domain_name }) : null,
+        el('span', { class: 'dm-change-when', text: relTime(c.at) })),
+      el('div', { class: 'dm-diff' },
+        el('div', { class: 'dm-diff-side dm-before' },
+          el('span', { class: 'dm-diff-label', text: '이전' }),
+          el('span', { class: 'dm-diff-val', text: valOr(c.should_before, '(없음)') })),
+        el('span', { class: 'dm-diff-arrow', 'aria-hidden': 'true', text: '→' }),
+        el('div', { class: 'dm-diff-side dm-after' },
+          el('span', { class: 'dm-diff-label', text: '이후' }),
+          el('span', { class: 'dm-diff-val', text: valOr(c.should_after, '(없음)') }))),
+      el('div', { class: 'dm-change-by' },
+        c.activity_id
+          ? el('span', { class: 'dm-by-act' }, actTypeTag(c.activity_type), el('span', { class: 'dm-act-title', text: c.activity_title || '' }))
+          : el('span', { class: 'dm-change-noact', text: '작업 귀속 없음' }),
+        el('span', { class: 'dm-change-who', text: (c.author_person || c.actor_id || '미상') + (c.author_agent ? ' · ' + c.author_agent : '') })),
+    );
+  }
+
+  // ── 커밋 → 구조(is) 변경 이력 — 어떤 커밋이 code_unit/매핑을 어떻게 바꿨나 ──
+  function isChangeRow(c) {
+    const label = c.entity_type === 'code_unit' ? (c.code_path || c.code_label || ('code_unit #' + c.entity_id))
+      : c.entity_type === 'mapping' ? ('매핑' + (c.domain_key ? ' → ' + c.domain_key : ''))
+        : (c.entity_type + ' #' + c.entity_id);
+    return el('div', { class: 'dm-change' },
+      el('div', { class: 'dm-change-top' },
+        el('span', { class: 'dm-op-tag', text: DM_OP_LABEL[c.op] || c.op }),
+        el('span', { class: 'mono dm-is-ent', text: label }),
+        el('span', { class: 'dm-change-when', text: relTime(c.at) })),
+      el('div', { class: 'dm-change-by' },
+        el('span', { class: 'dm-by-act' }, actTypeTag('commit'), el('span', { class: 'dm-act-title', text: c.activity_title || '' })),
+        c.commit_sha ? el('span', { class: 'mono dm-commit', text: c.commit_sha.slice(0, 8) }) : null,
+        el('span', { class: 'dm-change-who', text: (c.author_person || c.actor_id || '미상') + (c.author_agent ? ' · ' + c.author_agent : '') })),
+    );
+  }
+
+  function section(title, hint, rows, emptyText) {
+    const box = el('div', { class: 'card dm-section' },
+      el('div', { class: 'card-head' }, el('h2', { text: title }),
+        hint ? el('span', { class: 'dm-section-hint', text: hint }) : null));
+    box.append(rows.length
+      ? el('div', { class: 'dm-list' }, ...rows)
+      : el('div', { class: 'empty', text: emptyText }));
+    return box;
+  }
+
+  const nodes = [
+    ctxSubBar('domainmap'), head, repoBar, statCard,
+    section('도메인별 의도(should) · 구조(is) · 괴리(debt)', repos.length > 1 ? repo : null,
+      domains.map(domainRow), '이 레포에 도메인이 없습니다.'),
+    section('괴리(debt) — 의도와 구조의 간극', gapCount ? ('should↔is 괴리 ' + fmtNum(gapCount) + '건 포함') : null,
+      debtSorted.map(debtRow), '표면화된 괴리·이슈가 없습니다.'),
+    section('의도(should) 변경 이력', '누가 · 어떤 작업으로 의도를 바꿨나',
+      shoulds.map(shouldChangeRow), '아직 의도(should) 변경 기록이 없습니다. 의도를 설정·수정하면 여기 쌓입니다.'),
+    section('커밋 → 구조(is) 변경 이력', '어떤 커밋이 코드 구조를 바꿨나',
+      isChanges.map(isChangeRow), '아직 커밋이 구조(is)를 바꾼 기록이 없습니다. commit 작업이 코드를 건드리면 여기 쌓입니다.'),
+  ].filter(Boolean);
+  view.replaceChildren(...nodes);
 }
 
 // ════════════════════════════════════════════
@@ -1322,79 +1526,69 @@ async function renderDashboard(view, params) {
 //  §0.5 절제: 무채색 카드 + 작은 상태 점만, 채운 배지 금지. 자유텍스트는 안전 마크다운 렌더 재사용.
 // ════════════════════════════════════════════
 async function renderLearn(view) {
-  view.replaceChildren(skeleton('지식유형 안내를 불러오는 중'));
-  let data;
-  try { data = await api('/api/ui/learn'); }
-  catch (e) { view.replaceChildren(errorNote(e, '안내를 불러오지 못했습니다')); return; }
-
+  // 가이드 — 비개발자용 '개념·용어'만. 핵심: '여기 담기는 지식 하나가 실제로 뭔지'를 예시로 와닿게.
+  //  설치는 별도 [설치] 탭, 어려운 레지스트리(주입모드·수집방식)는 제거. 정적 — API 불필요.
   const head = el('div', { class: 'page-head' },
-    el('h1', {}, '지식 ', el('span', { class: 'accent', text: '안내' })),
-    el('p', { class: 'sub', text: '회사의 지식은 세 축으로 정리됩니다 — 본질 종류(kind: R·K·H·W 4종), 주제(area: 제품 도메인/비즈니스 기능), 출처(provenance: 외부 미러·사람·AI·규칙). 아래는 각 종류의 정의·저장·전달과 데이터소스별 수집방식이며, 시스템의 실제 분류 기준(ground-truth)을 그대로 보여줍니다. ‘통합 예정(legacy)’으로 표시된 종류는 K 또는 domainmap 으로 합쳐지는 중입니다.' }),
+    el('h1', {}, '사용 ', el('span', { class: 'accent', text: '설명서' })),
+    el('p', { class: 'sub', text: '이 도구가 무엇이고, 안에 담기는 ‘지식’ 하나가 실제로 어떤 건지 쉽게 설명합니다. 한 번만 읽어두면 됩니다. (설치는 옆 [설치]에서.)' }),
   );
 
-  // ── 1. 지식 종류(본질 4종 R·K·H·W + 통합 예정 legacy) ── (각 종류 = 무채색 카드: 글리프+이름+전달방식 점 / 정의·분류기준·저장·전달)
-  // V4: 본질 종류 4종은 그대로, 그 외(D/F/A/M/S/G/L/Z)는 '통합 예정(legacy)' 태그로 graceful 표시(무중단 — 행은 유지).
-  const kindsWrap = el('div', { class: 'learn-kinds' });
-  for (const k of (data.kinds || [])) {
-    const meta = kindMeta(k.kind);
-    const legacy = !isCoreKind(k.kind);
-    const card = el('section', { class: 'card learn-kind' + (legacy ? ' learn-kind-legacy' : '') },
-      el('div', { class: 'learn-kind-head' },
-        el('span', { class: 'kind-glyph', 'aria-hidden': 'true', text: k.kind }),
-        el('div', { class: 'learn-kind-titles' },
-          el('div', { class: 'learn-kind-name', text: meta.ko || k.label || k.kind }),
-          el('div', { class: 'learn-kind-en', text: k.label || (meta.label || '') }),
-        ),
-        legacy ? el('span', { class: 'src-status', title: 'V4: 본질 4종(R·K·H·W)으로 통합 예정 — 신규 분류엔 쓰지 않습니다.' },
-          el('span', { class: 'dot6 dim', 'aria-hidden': 'true' }), '통합 예정') : null,
-        el('span', { class: 'inject-tag', title: INJECTION_HINT[k.injection_mode] || '',
-          text: INJECTION_LABEL[k.injection_mode] || k.injection_mode }),
-      ),
-    );
-    if (k.description) card.append(el('div', { class: 'learn-def' }, renderMarkdown(k.description)));
-    const rows = el('div', { class: 'learn-rows' });
-    if (k.criteria) rows.append(learnRow('언제 이 종류인가', k.criteria));
-    if (k.storage) rows.append(learnRow('저장방식', k.storage));
-    if (k.delivery) rows.append(learnRow('전달방식', k.delivery));
-    rows.append(learnRow('도메인 귀속', k.domain_scoped ? '예 (도메인에 묶입니다)' : '아니오'));
-    card.append(rows);
-    // 그 종류의 지식 단위로 바로 탐색.
-    card.append(el('div', { class: 'learn-kind-foot' },
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/browse?kind=' + encodeURIComponent(k.kind), text: '이 종류 탐색 →' })));
-    kindsWrap.append(card);
-  }
-
-  // ── 2. 데이터소스별 수집방식 ── (담백한 표 + 상태 점)
-  const srcCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '데이터소스별 수집방식' })),
-    el('p', { class: 'admin-hint', text: '외부 시스템에서 무엇이 어떻게 수집되어 어느 종류로 적재되는지입니다. ‘중단’은 현재 수집하지 않는 상태로, 연결(커넥터)은 보존됩니다.' }),
+  // ── A. 이 서비스가 뭔가요(목적) — 비개발자용 한눈 설명 ──
+  const whatCard = el('div', { class: 'card guide-what' },
+    el('div', { class: 'card-head' }, el('h2', { text: '이 서비스가 뭔가요' })),
+    el('p', { class: 'guide-lead', text: '팀이 쓰는 AI(예: Claude Code)가 매번 같은 배경을 다시 설명하지 않아도 되도록, 회사의 공통 맥락·규칙·기억을 한곳에 모아두는 저장소입니다. 여기 정리해두면, 설치한 모든 구성원의 AI가 세션을 시작할 때 이 내용을 자동으로 읽고 일합니다.' }));
+  const whatRows = el('div', { class: 'learn-rows guide-what-rows' });
+  whatRows.append(
+    learnRow('무엇을 담나', '회사 규칙·페르소나, 팀이 쌓은 지식과 절차, 진행 중인 과업, 자주 쓰는 용어 등 — AI가 알고 있어야 할 회사 맥락 전부.'),
+    learnRow('어떻게 전달되나', '구성원이 한 번 설치하면, AI 세션이 열릴 때마다 최신 내용이 자동으로 들어갑니다. 사람이 매번 복사·설명할 필요가 없습니다.'),
+    learnRow('누가 바꾸나', '관리자는 [관리] 탭에서 규칙·맥락·메모리를 편집하고 [발행]하면 모두에게 반영됩니다. 구성원은 한 번만 설치하면 끝입니다.'),
+    learnRow('처음이라면', '옆 [설치]에서 내 컴퓨터에 설치부터 하세요. 그다음은 자동입니다.'),
   );
-  const sources = data.sources || [];
-  if (!sources.length) {
-    srcCard.append(el('p', { class: 'admin-hint', text: '등록된 데이터소스가 없습니다.' }));
-  } else {
-    const tbl = el('table', { class: 'fields-table learn-src-table' });
-    tbl.append(el('tr', {},
-      el('td', { class: 'kr-h', text: '소스' }), el('td', { class: 'kr-h', text: '상태' }),
-      el('td', { class: 'kr-h', text: '수집방식' }), el('td', { class: 'kr-h', text: '적재 종류' })));
-    for (const s of sources) {
-      const dropped = s.status === 'dropped';
-      tbl.append(el('tr', {},
-        el('td', {}, el('b', { text: s.label || s.system })),
-        el('td', {}, el('span', { class: 'src-status' },
-          el('span', { class: 'dot6 ' + (dropped ? 'dim' : 'ok'), 'aria-hidden': 'true' }),
-          dropped ? '중단' : '수집중')),
-        el('td', {}, el('span', { text: s.collection_method || '—' }),
-          s.cadence ? el('span', { class: 'learn-cadence', text: ' · ' + s.cadence }) : null),
-        el('td', {}, el('span', { class: 'mono', text: (s.into_kinds || []).join(', ') || '—' })),
-      ));
-    }
-    srcCard.append(tbl);
-  }
+  whatCard.append(whatRows);
 
-  view.replaceChildren(head, el('div', { class: 'eyebrow', text: '지식 종류 (본질 R·K·H·W + 통합 예정 legacy)' }), kindsWrap,
-    el('div', { class: 'eyebrow', text: '데이터 수집' }), srcCard);
+  // B. '지식 하나'가 실제로 뭔지 — 예시 카드로 구체화(추상 개념을 눈으로). 그다음 종류 4가지. (정적 — API 불필요)
+  const unitCard = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '여기 담기는 ‘지식’ 하나가 뭔가요' })),
+    el('p', { class: 'guide-lead', text: '회사 지식이 한 덩어리씩 쌓입니다. 덩어리 하나는 제목과 내용으로 된 짧은 글이에요 — 메모 한 장, 문서 한 페이지 같은 겁니다. 예를 들면 이런 모습이에요:' }));
+  const example = el('div', { class: 'gloss-example' },
+    el('span', { class: 'gloss-example-tag', text: '예시 · 규칙' }),
+    el('div', { class: 'gloss-example-title', text: 'push 전 빌드 + 린트' }),
+    el('div', { class: 'gloss-example-body', text: '코드를 올리기 전 반드시 빌드와 린트를 통과시킨다. 깨진 코드가 공유되지 않게.' }));
+  unitCard.append(example);
+  unitCard.append(el('p', { class: 'admin-hint', style: 'margin:16px 0 8px', text: '글 하나하나는 성격에 따라 네 가지로 나뉩니다 (이름 옆 알파벳은 시스템이 쓰는 약자):' }));
+  const GLOSS = [
+    ['R', '규칙', 'AI가 항상 지켜야 할 회사 규칙'],
+    ['K', '지식', '자료·결정·조사처럼 쌓인 지식'],
+    ['H', '절차', '“이런 일은 이렇게” 하는 방법'],
+    ['W', '할 일', '지금 진행 중인 과업'],
+  ];
+  const glossList = el('div', { class: 'gloss-list' });
+  for (const [g, ko, desc] of GLOSS) {
+    glossList.append(el('div', { class: 'gloss-row' },
+      el('span', { class: 'gloss-glyph', 'aria-hidden': 'true', text: g }),
+      el('div', { class: 'gloss-main' },
+        el('div', {}, el('span', { class: 'gloss-ko', text: ko }), el('span', { class: 'gloss-code', text: ' (' + g + ')' })),
+        el('div', { class: 'gloss-desc', text: desc }))));
+  }
+  unitCard.append(glossList, el('p', { class: 'admin-hint', style: 'margin-top:14px' }, '실제 지식들은 ',
+    el('a', { href: '#/browse', text: '[탐색] 탭' }), ' 에서 하나씩 열어볼 수 있어요.'));
+
+  view.replaceChildren(startSubBar('learn'), head, whatCard, el('div', { class: 'eyebrow', text: '용어' }), unitCard);
   document.getElementById('view').focus?.();
+}
+
+// 설치 탭(#/install) — 모든 구성원 필수 첫 행동. 관리의 설치 패널(deployPanel) 재사용 — 게이트웨이 주소는 org 프로필에서(비-admin 도 안전: tokens redact).
+async function renderInstall(view) {
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '내 컴퓨터에 ', el('span', { class: 'accent', text: '설치' })),
+    el('p', { class: 'sub', text: '이 도구를 쓰려면 본인 컴퓨터에 한 번 설치해야 합니다. 설치하면 AI(예: Claude Code) 세션에 회사 공통 맥락이 자동으로 들어옵니다. 새 기기·재설치·업데이트도 여기서 합니다.' }),
+  );
+  const slot = el('div', { class: 'guide-install' });
+  slot.append(el('p', { class: 'admin-hint', text: '설치 안내를 준비하는 중…' }));
+  view.replaceChildren(startSubBar('install'), head, slot);
+  document.getElementById('view').focus?.();
+  loadAdmin().then((adminData) => deployPanel(slot, adminData))
+    .catch((e) => slot.replaceChildren(el('p', { class: 'admin-hint', text: '설치 안내를 불러오지 못했습니다 — ' + ((e && e.message) || e) })));
 }
 
 // 안내 카드 안의 라벨 + 값 한 줄 — 값은 안전 마크다운 렌더(자유텍스트의 인라인 서식 허용, HTML 주입 불가).
@@ -1606,47 +1800,153 @@ function teardownTerminal() {
   termSession = null;
 }
 
-async function renderTerminal(view) {
-  view.replaceChildren(skeleton('세션을 불러오는 중'));
-  let data, cfg;
-  try { [data, cfg] = await Promise.all([api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config')]); }
-  catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
-  const head = el('div', { class: 'page-head' },
-    el('h1', { text: '터미널 세션' }),
-    el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) }));
-  const list = el('div', { class: 'term-list' });
-  const sessions = (data && data.sessions) || [];
-  if (!sessions.length) list.append(el('div', { class: 'empty', text: '세션이 없습니다. "새 세션"으로 Claude Code / Codex / 셸 세션을 만드세요.' }));
-  for (const s of sessions) list.append(termRow(s, cfg, view));
-  view.replaceChildren(head, list);
+// 작업자(작성자) = 로그인 사용자. 서버가 토큰으로 owner 를 강제하므로 표시 전용(타인 선택 불가).
+function memberName(cfg, id) {
+  const m = ((cfg && cfg.members) || []).find((x) => x.id === id);
+  return (m && m.name) || id || '';
+}
+function myName(cfg) {
+  const id = (state.me && state.me.userId) || '';
+  return memberName(cfg, id) || (state.me && state.me.email) || id || '나';
+}
+// 세션 생성 시각 — '6월 19일 22:17'(브라우저 로컬 타임존). created 는 epoch 초.
+function fmtTermDate(sec) {
+  const n = Number(sec) || 0;
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  if (isNaN(d.getTime())) return '';
+  const p = (x) => String(x).padStart(2, '0');
+  return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-function termRow(s, cfg, view) {
-  const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness;
+async function renderTerminal(view, teamId) {
+  view.replaceChildren(skeleton('세션을 불러오는 중'));
+  let data, cfg, td;
+  try { [data, cfg, td] = await Promise.all([
+    api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config'), api('/api/ui/terminal/teams'),
+  ]); }
+  catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
+  const sessions = (data && data.sessions) || [];
+  const teams = (td && td.teams) || [];
+  if (teamId) { renderTeamView(view, cfg, teams, sessions, teamId); return; }
+
+  const head = el('div', { class: 'page-head' },
+    el('h1', { text: '터미널 세션' }),
+    el('div', { class: 'term-head-actions' },
+      el('button', { class: 'btn btn-ghost', text: '+ 새 팀', onclick: () => openTeamCreateForm(cfg, view) }),
+      el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view, null) })));
+
+  const body = el('div', {});
+  // 팀 폴더 / 공개 세션 / 비공개 세션 — 세 섹션. 섹션 사이엔 구분선(term-section--div).
+  const top = sessions.filter((s) => !s.team);
+  const pub = top.filter((s) => s.visibility !== 'private');
+  const priv = top.filter((s) => s.visibility === 'private');
+  const sections = [];
+  if (teams.length) {
+    const tlist = el('div', { class: 'term-list' });
+    for (const t of teams) tlist.append(teamRow(t, cfg, view));
+    sections.push([termSectionHead('팀 폴더', '팀원만 보고 열 수 있는 폴더입니다.'), tlist]);
+  }
+  sections.push([termSectionHead('공개 세션', '모든 멤버에게 보이는 세션입니다.'),
+    termSessionList(pub, cfg, view, '공개 세션이 없습니다. "새 세션"으로 만드세요.')]);
+  sections.push([termSectionHead('비공개 세션', '나에게만 보이는 세션입니다.'),
+    termSessionList(priv, cfg, view, '비공개 세션이 없습니다.')]);
+  sections.forEach(([secHead, secList], i) => {
+    if (i > 0) secHead.classList.add('term-section--div'); // 첫 섹션 빼고 위에 구분선
+    body.append(secHead, secList);
+  });
+
+  view.replaceChildren(head, body);
+}
+
+// 섹션 제목 + 한 줄 설명(desc 없으면 제목만).
+function termSectionHead(title, desc) {
+  return el('div', { class: 'term-section' },
+    el('div', { class: 'term-section-title', text: title }),
+    desc ? el('div', { class: 'caption term-section-desc', text: desc }) : null);
+}
+// 세션 목록(비면 안내 문구).
+function termSessionList(items, cfg, view, emptyText) {
+  const list = el('div', { class: 'term-list' });
+  if (!items.length) list.append(el('div', { class: 'empty', text: emptyText }));
+  for (const s of items) list.append(termRow(s, cfg, view, null));
+  return list;
+}
+
+// 팀 폴더 행(루트 화면). 열기=팀 진입, 소유자는 팀원 관리·해제.
+function teamRow(t, cfg, view) {
+  const count = (t.members ? t.members.length : 0) + 1; // +1 = 소유자
   const meta = el('div', { class: 'term-row-meta' },
     el('div', { class: 'term-row-title' },
-      el('span', { text: s.label }),
-      el('span', { class: 'term-badge', text: s.visibility === 'private' ? '비공개' : '공개' }),
-      s.autoApprove ? el('span', { class: 'term-badge danger', text: '자동승인' }) : null,
-      s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null,
-      (!s.owned && s.owner) ? el('span', { class: 'term-badge', text: '@' + s.owner }) : null),
-    el('div', { class: 'caption', text: harnessLabel + ' · ' + (s.dir || '') }));
-  const actions = [el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id), '_blank') })];
-  if (s.owned) {
-    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openTermEdit(s, view) }));
-    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
-      if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); renderTerminal(view); }
+      el('span', { text: '📁 ' + t.label }),
+      t.owned ? el('span', { class: 'term-badge', text: '내 팀' }) : null),
+    el('div', { class: 'caption', text: '구성원 ' + count + '명' + ((t.memberNames && t.memberNames.length) ? ' · ' + t.memberNames.join(', ') : '') }));
+  const actions = [el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => { location.hash = '#/terminal?team=' + encodeURIComponent(t.id); } })];
+  if (t.owned) {
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '팀원 관리', onclick: () => openTeamManageForm(t, cfg, view) }));
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '해제', onclick: async () => {
+      if (!confirm('팀 "' + t.label + '"을(를) 해제할까요? 폴더와 파일은 그대로 두고 팀 묶음(접근 제한)만 풉니다.')) return;
+      try { await api('/api/ui/terminal/teams/' + encodeURIComponent(t.id), { method: 'DELETE' }); toast('팀 해제됨'); renderTerminal(view, null); }
       catch (e) { toast('실패 — ' + e.message, true); }
     } }));
   }
   return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
 }
 
-function openTermCreateForm(cfg, view) {
+// 팀 진입 화면 — 루트와 동일 UI(세션 목록 + 새 세션), 단 이 팀 폴더로 스코프.
+function renderTeamView(view, cfg, teams, sessions, teamId) {
+  const back = el('a', { class: 'btn btn-ghost btn-sm', href: '#/terminal', text: '← 터미널 홈' });
+  const team = teams.find((t) => t.id === teamId);
+  if (!team) {
+    view.replaceChildren(el('div', { class: 'page-head' }, el('div', { class: 'term-head-actions' }, back), el('h1', { text: '팀 폴더' })),
+      el('div', { class: 'empty', text: '접근할 수 없는 팀이거나 존재하지 않습니다.' }));
+    return;
+  }
+  const count = (team.members ? team.members.length : 0) + 1;
+  const head = el('div', { class: 'page-head' },
+    el('div', { class: 'term-head-actions' }, back,
+      el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view, team) }),
+      team.owned ? el('button', { class: 'btn btn-ghost', text: '팀원 관리', onclick: () => openTeamManageForm(team, cfg, view) }) : null),
+    el('h1', { text: '📁 ' + team.label }),
+    el('div', { class: 'caption', text: '이 팀 폴더의 세션은 팀원만 보고 열 수 있습니다 · 구성원 ' + count + '명' + ((team.memberNames && team.memberNames.length) ? ' (' + team.memberNames.join(', ') + ')' : '') }));
+  const mine = sessions.filter((s) => s.team === teamId);
+  const list = el('div', { class: 'term-list' });
+  if (!mine.length) list.append(el('div', { class: 'empty', text: '이 팀에 세션이 없습니다. "새 세션"으로 만드세요.' }));
+  for (const s of mine) list.append(termRow(s, cfg, view, team));
+  view.replaceChildren(head, list);
+}
+
+function termRow(s, cfg, view, team) {
+  const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness;
+  const author = memberName(cfg, s.owner) || s.owner || '?';
+  const created = fmtTermDate(s.created);
+  const meta = el('div', { class: 'term-row-meta' },
+    el('div', { class: 'term-row-title' },
+      el('span', { class: 'term-row-name', title: s.label, text: s.label }),
+      el('span', { class: 'term-badge author', text: '👤 ' + author }),
+      el('span', { class: 'term-badge', text: s.visibility === 'private' ? '비공개' : '공개' }),
+      s.autoApprove ? el('span', { class: 'term-badge danger', text: '자동승인' }) : null,
+      s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null),
+    el('div', { class: 'caption', text: harnessLabel + (created ? ' · ' + created : '') + (s.dir ? ' · ' + s.dir : '') }));
+  const reRender = () => renderTerminal(view, team ? team.id : null);
+  const actions = [el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id), '_blank') })];
+  if (s.owned) {
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openTermEdit(s, cfg, view, team) }));
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
+      if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
+      catch (e) { toast('실패 — ' + e.message, true); }
+    } }));
+  }
+  return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
+}
+
+// 새 세션. team 이 주어지면 그 팀 폴더로 스코프(작업 위치 고정, team 태그 전달).
+function openTermCreateForm(cfg, view, team) {
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
+  const authorI = el('input', { class: 'term-input', type: 'text', value: myName(cfg), disabled: '' });
   const rootSel = el('select', { class: 'term-input' }, ...roots.map((r) => el('option', { value: r.key }, r.label)));
   const pickerBox = el('div', { class: 'term-picker' });
   let pickerPath = '';
@@ -1674,7 +1974,7 @@ function openTermCreateForm(cfg, view) {
   harnessSel.addEventListener('change', renderFlags);
   renderFlags();
 
-  // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색. 새 폴더는 '＋ 새 폴더 만들기…'.
+  // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색. 팀 컨텍스트면 폴더 고정.
   async function loadPicker() {
     pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
     let data;
@@ -1707,40 +2007,133 @@ function openTermCreateForm(cfg, view) {
     try { await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(rel), { method: 'POST' }); pickerPath = rel; loadPicker(); }
     catch (e) { toast('폴더 생성 실패 — ' + e.message, true); }
   }
-  rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
-  loadPicker();
+  if (!team) {
+    rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
+    loadPicker();
+  }
 
-  const back = overlay('새 세션',
-    field('이름', labelI), field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel),
+  // 팀 컨텍스트면 작업 위치/폴더 대신 고정된 '팀 폴더' 표시 필드.
+  const locFields = team
+    ? [field('팀 폴더', el('input', { class: 'term-input', type: 'text', value: '📁 ' + team.label, disabled: '' }))]
+    : [field('작업 위치', rootSel), field('폴더', pickerBox)];
+
+  const back = overlay(team ? ('새 세션 · ' + team.label) : '새 세션',
+    field('이름', labelI), field('작업자', authorI), locFields, field('하네스', harnessSel),
     field('공개 범위', visSel), flagsBox, autoWrap,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
+        const payload = team
+          ? { label: labelI.value, rootKey: 'shared', subpath: team.id, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value, team: team.id }
+          : { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value };
         try {
-          const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-            label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value }) });
+          const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           back.remove(); toast('세션 생성됨');
           if (out && out.session) window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id), '_blank');
-          renderTerminal(view);
+          renderTerminal(view, team ? team.id : null);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));
 }
 
-// 세션 수정 — 이름·공개범위(visibility). 소유자만(서버가 강제).
-function openTermEdit(s, view) {
+// 세션 수정 — 이름·공개범위만 변경 가능(소유자만, 서버가 강제). 작업폴더·하네스·모델·자동승인은
+//  생성 시 실행 명령에 박혀(돌고 있는 LLM/셸 프로세스) 사후 변경 불가 → '현재값'을 비활성으로 보여주고
+//  왜 못 바꾸는지(닫고 새로 켜야 함) 안내한다. "기능 미구현"이 아니라 "구조상 고정"임을 분명히.
+function openTermEdit(s, cfg, view, team) {
+  const harnesses = (cfg && cfg.harnesses) || [];
+  const harness = harnesses.find((h) => h.key === s.harness) || {};
+  // ── 변경 가능 ──
   const labelI = el('input', { class: 'term-input', type: 'text', value: s.label });
   const visSel = el('select', { class: 'term-input' },
     el('option', { value: 'public', selected: s.visibility !== 'private' ? '' : null }, '공개 — 모든 멤버가 열람 가능한 세션 (팀 내부 세션은 팀원만 열람가능)'),
     el('option', { value: 'private', selected: s.visibility === 'private' ? '' : null }, '비공개 — 나에게만 보이고 나만 열 수 있는 세션'));
+  // ── 생성 시 고정(비활성 표시) ──
+  const ro = (val) => el('input', { class: 'term-input', type: 'text', value: val, disabled: '' });
+  const author = memberName(cfg, s.owner) || s.owner || '?';
+  const flagFields = (harness.flags || []).map((f) => {
+    const raw = (s.flags && s.flags[f.name] != null) ? String(s.flags[f.name]) : '';
+    const shown = f.type === 'bool' ? (raw ? '켜짐' : '꺼짐') : (raw || '(기본)');
+    return field(f.label, ro(shown));
+  });
+  const autoShown = harness.hasAutoApprove ? (s.autoApprove ? '켜짐 (위험)' : '꺼짐') : '해당 없음';
+  const lockNote = el('div', { class: 'term-lock-note' },
+    el('span', { text: '🔒 작업 폴더 · 하네스 · 모델 · 자동 승인은 세션을 처음 켤 때 정해집니다. 바꾸려면 실행 중인 LLM(또는 셸)을 닫고 새로 켜야 하므로 여기서는 수정할 수 없습니다 — 바꾸려면 새 세션을 만드세요.' }));
+
   const back = overlay('세션 수정',
-    field('이름', labelI), field('공개 범위', visSel),
+    field('이름', labelI),
+    field('공개 범위', visSel),
+    lockNote,
+    field('작업자', ro(author)),
+    field('작업 폴더', ro(s.dir || '(기본)')),
+    field('하네스', ro(harness.label || s.harness || '?')),
+    flagFields,
+    field('자동 승인', ro(autoShown)),
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
         ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, visibility: visSel.value }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, visibility: visSel.value }) }); back.remove(); toast('수정됨'); renderTerminal(view, team ? team.id : null); }
         catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
+      } })));
+}
+
+// 새 팀 — 공유 워크스페이스에 폴더를 만들고 선택한 구성원만 접근. 소유자(나)는 자동 포함.
+function openTeamCreateForm(cfg, view) {
+  const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 그로스팀' });
+  const meId = (state.me && state.me.userId) || '';
+  const others = (cfg.members || []).filter((m) => m.id !== meId);
+  const checks = others.map((m) => {
+    const cb = el('input', { type: 'checkbox', 'data-mid': m.id });
+    return { id: m.id, cb, row: el('label', { class: 'term-check' }, cb, el('span', { text: m.name + (m.kind === 'agent' ? ' (AI)' : '') })) };
+  });
+  const listBox = checks.length
+    ? el('div', { class: 'term-checklist' }, ...checks.map((c) => c.row))
+    : el('div', { class: 'caption', text: '추가할 다른 구성원이 없습니다 — 나만 접근하는 팀이 됩니다.' });
+  const back = overlay('새 팀',
+    field('팀 이름', labelI),
+    field('소유자', el('input', { class: 'term-input', type: 'text', value: myName(cfg), disabled: '' })),
+    field('팀원 (선택한 구성원만 이 팀 폴더·세션에 접근)', listBox),
+    el('div', { class: 'ov-actions' },
+      el('button', { class: 'btn btn-primary', text: '팀 만들기', onclick: async (ev) => {
+        if (!labelI.value.trim()) { toast('팀 이름을 입력하세요', true); return; }
+        ev.currentTarget.disabled = true;
+        const picked = checks.filter((c) => c.cb.checked).map((c) => c.id);
+        try {
+          const out = await api('/api/ui/terminal/teams', { method: 'POST', body: JSON.stringify({ label: labelI.value, members: picked }) });
+          back.remove(); toast('팀 생성됨');
+          if (out && out.team) location.hash = '#/terminal?team=' + encodeURIComponent(out.team.id);
+          else renderTerminal(view, null);
+        } catch (e) { ev.currentTarget.disabled = false; toast('팀 생성 실패 — ' + e.message, true); }
+      } })));
+}
+
+// 팀원 관리 — 이름·팀원 수정(소유자만). 저장 후 현재 보던 화면 유지.
+function openTeamManageForm(team, cfg, view) {
+  const labelI = el('input', { class: 'term-input', type: 'text', value: team.label });
+  const current = new Set(team.members || []);
+  const others = (cfg.members || []).filter((m) => m.id !== team.owner);
+  const checks = others.map((m) => {
+    const cb = el('input', { type: 'checkbox', 'data-mid': m.id });
+    if (current.has(m.id)) cb.checked = true;
+    return { id: m.id, cb, row: el('label', { class: 'term-check' }, cb, el('span', { text: m.name + (m.kind === 'agent' ? ' (AI)' : '') })) };
+  });
+  const listBox = checks.length
+    ? el('div', { class: 'term-checklist' }, ...checks.map((c) => c.row))
+    : el('div', { class: 'caption', text: '추가할 다른 구성원이 없습니다.' });
+  const back = overlay('팀원 관리 · ' + team.label,
+    field('팀 이름', labelI),
+    field('소유자', el('input', { class: 'term-input', type: 'text', value: memberName(cfg, team.owner), disabled: '' })),
+    field('팀원 (선택한 구성원만 이 팀 폴더·세션에 접근)', listBox),
+    el('div', { class: 'ov-actions' },
+      el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
+        if (!labelI.value.trim()) { toast('팀 이름을 입력하세요', true); return; }
+        ev.currentTarget.disabled = true;
+        const picked = checks.filter((c) => c.cb.checked).map((c) => c.id);
+        try {
+          await api('/api/ui/terminal/teams/' + encodeURIComponent(team.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, members: picked }) });
+          back.remove(); toast('팀 수정됨');
+          renderTerminal(view, parseHash().params.get('team') || null);
+        } catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
       } })));
 }
 
@@ -1826,10 +2219,10 @@ async function route() {
   const page = segs[0] || 'map';
   try {
     if (page === 'browse') {
-      setActiveTab('browse');
+      setActiveTab('ctx'); // '회사 맥락' 상위 탭(지도·탐색·검토 묶음)
       await renderBrowse(view, params);
     } else if (page === 'u') {
-      setActiveTab('browse'); // 유닛 상세는 탐색의 하위 — 탐색 탭 활성 유지
+      setActiveTab('ctx'); // 유닛 상세는 탐색의 하위 — '회사 맥락' 상위 탭 활성 유지
       // #/u/<name>/edit → 편집 페이지(split view), 그 외 → 상세. name 에 '/' 가 있을 수 있어 마지막 'edit' 만 분리.
       const rest = segs.slice(1);
       if (rest.length > 1 && rest[rest.length - 1] === 'edit') {
@@ -1838,11 +2231,17 @@ async function route() {
         await renderUnit(view, decodeURIComponent(rest.join('/')));
       }
     } else if (page === 'learn') {
-      setActiveTab('learn');
+      setActiveTab('start'); // '시작하기' 상위 탭(설치·사용설명서 묶음)
       await renderLearn(view);
+    } else if (page === 'install') {
+      setActiveTab('start');
+      await renderInstall(view);
     } else if (page === 'review') {
-      setActiveTab('review');
+      setActiveTab('ctx');
       await renderReview(view);
+    } else if (page === 'domainmap') {
+      setActiveTab('ctx'); // 도메인 맵은 '회사 맥락' 상위 탭의 하위 뷰(지도·탐색과 동급)
+      await renderDomainmap(view, params);
     } else if (page === 'dash') {
       setActiveTab('dash');
       await renderDashboard(view, params);
@@ -1851,9 +2250,9 @@ async function route() {
       await renderSystem(view, segs[1] || null);
     } else if (page === 'terminal') {
       setActiveTab('terminal');
-      await renderTerminal(view);
+      await renderTerminal(view, params.get('team'));
     } else {
-      setActiveTab('map');
+      setActiveTab('ctx');
       await renderMap(view);
     }
   } catch (e) {
@@ -1888,24 +2287,34 @@ boot();
 // 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
 // '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
 // ════════════════════════════════════════════════════════════════════
+// 관리 중분류(가로 탭, 2026-06-20) — 비개발자가 14개 섹션에서 길잃지 않게 3분류로 묶는다.
+//  ① 기본 설정: 접속·구성원·토큰·발행(굴러가게 하는 기본기) ② 회사·조직: 규칙·맥락·메모리·용어(AI에 가르치는 내용)
+//  ③ AI 동작·연결(고급): 훅·도구·MCP·DB(AI가 실제 어떻게 동작/어떤 데이터에 닿나).
+//  '지식 종류 레지스트리'·'설치'는 관리에서 빼 #/learn(가이드)로 이관 — 전자=용어설명, 후자=구성원 셋업.
+const ADMIN_GROUPS = [
+  { key: 'basic', label: '기본 설정' },
+  { key: 'org', label: '회사·조직' },
+  { key: 'ai', label: 'AI 동작·연결 (고급)' },
+];
 const ADMIN_SECTIONS = [
-  { key: 'kinds', label: '지식 종류 레지스트리', meaning: null },
-  { key: 'domains-repos', label: '도메인 · 레포', meaning: null },
-  { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy' },
-  { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults' },
-  { key: 'memory', label: '팀 메모리', meaning: 'memory' },
-  { key: 'members', label: '구성원', meaning: 'member' },
-  { key: 'tokens', label: '토큰', meaning: null },
-  { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url' },
-  // 훅 — '커스텀 훅'(임의 코드 정의 = 일반)이 상위, '런타임 훅'(빌트인 리플렉스 토글 = 특수)과 '주입 미리보기'는 그 하위.
-  { key: 'custom-hooks', label: '커스텀 훅 (코드 정의)', meaning: 'custom-hook' },
-  { key: 'runtime', label: '런타임 훅 (빌트인 리플렉스 ON/OFF)', meaning: 'runtime', indent: true },
-  { key: 'hooks-preview', label: '주입 미리보기 (세션 주입물 확인)', meaning: null, indent: true },
-  { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool' },
-  { key: 'mcp', label: 'MCP 서버', meaning: 'mcp' },
-  { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source' },
-  { key: 'publish', label: '발행', meaning: null },
-  { key: 'deploy', label: '설치 · 업데이트 · 제거', meaning: null },
+  // ① 기본 설정 — 한 번 세팅하면 굴러가는 기본기(누가 쓰나·어떻게 연결·반영).
+  { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url', group: 'basic' },
+  { key: 'members', label: '구성원', meaning: 'member', group: 'basic' },
+  { key: 'tokens', label: '토큰', meaning: null, group: 'basic' },
+  { key: 'publish', label: '발행', meaning: null, group: 'basic' },
+  // ② 회사·조직 — 회사가 AI에 가르치는 내용(규칙·맥락·메모리·통제어휘).
+  { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy', group: 'org' },
+  { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults', group: 'org' },
+  { key: 'memory', label: '팀 메모리', meaning: 'memory', group: 'org' },
+  { key: 'domains-repos', label: '도메인 · 레포', meaning: null, group: 'org' },
+  // ③ AI 동작·연결 (고급) — AI가 실제 어떻게 동작/어떤 데이터에 닿나.
+  //  훅 — '커스텀 훅'(임의 코드 정의 = 일반)이 상위, '런타임 훅'(빌트인 리플렉스 토글 = 특수)과 '주입 미리보기'는 그 하위.
+  { key: 'custom-hooks', label: '커스텀 훅 (코드 정의)', meaning: 'custom-hook', group: 'ai' },
+  { key: 'runtime', label: '런타임 훅 (빌트인 리플렉스 ON/OFF)', meaning: 'runtime', indent: true, group: 'ai' },
+  { key: 'hooks-preview', label: '주입 미리보기 (세션 주입물 확인)', meaning: null, indent: true, group: 'ai' },
+  { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool', group: 'ai' },
+  { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
+  { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
 ];
 const ADMIN_ONLY = ['publish', 'tokens', 'runtime', 'mcp', 'db-sources']; // admin 권한 전용(쓰기/인프라)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
@@ -1989,14 +2398,29 @@ async function renderAdmin(view, sub) {
   //  엄격히 요구하므로(admin 자동 함의 없음 — web.ts mw), 버튼 노출도 context 보유로만 판정해 403 오작동을 막는다.
   state.admin.canContext = hasScope('context');
 
-  let sel = sub || state.admin.sel || 'kinds';
-  if (sectionHidden(sel, data)) sel = 'kinds'; // 권한 없는 섹션 진입 차단(admin/runtime)
+  // 선택 섹션 — 없거나 권한으로 숨으면 첫 노출 섹션으로(과거 디폴트 'kinds'는 가이드로 이관돼 제거).
+  const visibleSections = ADMIN_SECTIONS.filter((s) => !sectionHidden(s.key, data));
+  let sel = sub || state.admin.sel;
+  if (!sel || !visibleSections.some((s) => s.key === sel)) sel = (visibleSections[0] || ADMIN_SECTIONS[0]).key;
   state.admin.sel = sel;
+  // 활성 중분류 = 선택 섹션이 속한 그룹(URL/선택이 단일 진실 — 별도 상태 불필요).
+  const activeGroup = (ADMIN_SECTIONS.find((s) => s.key === sel) || ADMIN_SECTIONS[0]).group;
+
+  // ── 가로 중분류 바 — 클릭 시 그 분류의 첫 노출 섹션으로 이동. 권한으로 그룹 전체가 숨으면 탭도 숨김. ──
+  const groupBar = el('div', { class: 'admin-cats', role: 'tablist', 'aria-label': '관리 중분류' });
+  for (const g of ADMIN_GROUPS) {
+    const first = visibleSections.find((s) => s.group === g.key);
+    if (!first) continue;
+    const on = g.key === activeGroup;
+    groupBar.append(el('a', { class: 'admin-cat' + (on ? ' active' : ''), href: '#/system/' + first.key,
+      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: g.label }));
+  }
 
   const list = el('div', { class: 'split-list card admin-nav' });
   // 훅 자식(런타임·미리보기) 들여쓰기는 부모('커스텀 훅')가 보일 때만 — 권한 게이팅으로 부모가 숨으면 고아 '└' 방지.
   const hookParentVisible = !sectionHidden('custom-hooks', data);
   for (const s of ADMIN_SECTIONS) {
+    if (s.group !== activeGroup) continue; // 활성 중분류 섹션만 좌측 nav 에.
     if (sectionHidden(s.key, data)) continue;
     const indentCls = (s.indent && hookParentVisible) ? ' admin-nav-child' : '';
     list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : '') + indentCls, href: '#/system/' + s.key },
@@ -2006,23 +2430,15 @@ async function renderAdmin(view, sub) {
   const detail = el('div', { class: 'split-detail' });
   renderAdminDetail(detail, sel, data);
 
-  // 좌측 nav 접기 토글 — 접으면 우측 detail 이 전체 너비(좁은 화면에서 우 섹션이 아래로 wrap 되지 않게).
-  const collapsed = !!state.admin.navCollapsed;
-  const split = el('div', { class: 'split admin-split' + (collapsed ? ' nav-collapsed' : '') }, list, detail);
-  const navToggle = el('button', { class: 'btn btn-ghost btn-sm admin-nav-toggle',
-    text: collapsed ? '☰ 메뉴 펼치기' : '☰ 메뉴 접기',
-    onclick: () => {
-      state.admin.navCollapsed = !state.admin.navCollapsed;
-      split.classList.toggle('nav-collapsed', state.admin.navCollapsed);
-      navToggle.textContent = state.admin.navCollapsed ? '☰ 메뉴 펼치기' : '☰ 메뉴 접기';
-    } });
+  const split = el('div', { class: 'split admin-split' }, list, detail);
 
   view.replaceChildren(el('div', {},
     el('div', { class: 'card-head admin-head' },
-      el('div', { class: 'admin-head-l' }, navToggle, el('h2', { text: '관리' })),
+      el('div', { class: 'admin-head-l' }, el('h2', { text: '관리' })),
       canEdit
         ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })
         : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
+    groupBar,
     split));
   applyReveal([list, detail]);
 }
