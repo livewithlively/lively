@@ -62,12 +62,12 @@ function toast(msg, isErr) {
 }
 
 // ── 상태 ──
-let term, fit, ws, statusEl, explorerEl, tabbarEl, panesEl, termPane;
+let term, fit, ws, statusEl, explorerEl, tabbarEl, panesEl, termPane, titleEl;
 let curDir = '';
 const tabs = []; // { id, label, pane, closable }
 let activeId = 'term';
 
-let lastCols = 0, lastRows = 0, resizeTimer = null;
+let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
 // fit 후 '크기가 실제로 바뀐 경우에만' pty resize 전송 — 불필요한 SIGWINCH(→ 쉘 프롬프트 재출력이
 //  tmux 히스토리에 중복으로 쌓이는 원인) 제거.
 function applyFit() {
@@ -87,6 +87,24 @@ function forceRedraw() {
   if (ws && ws.readyState === 1) { lastCols = term.cols; lastRows = term.rows; try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ } }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
+// 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에
+//  셀 크기를 재 cols/rows 가 어긋날 수 있다. 그래서 '폰트 준비(document.fonts.ready) + 소켓 open'
+//  이후 forceRedraw('화면 복구')를 한 번 자동 실행해 현재 창에 정확히 맞춘다. 가드로 진입당 1회만.
+function initialSettleRedraw() {
+  if (didInitialFit) return;
+  didInitialFit = true;
+  const run = () => {
+    // 폰트 로드 후 글자 셀 폭 '재측정'을 강제 — fontSize 를 +1 했다 즉시 되돌려, xterm 의 CharSizeService
+    //  재측정 + 렌더러 글리프 아틀라스 재생성을 유발한다(환경설정에서 크기 바꿨다 되돌리면 정상화되는 것과
+    //  동일 원리). fit/refresh 만으로는 자간(특히 한글 더블폭 셀)이 폰트 로드 전 측정값으로 굳는 게 안 풀린다.
+    //  같은 값으로 다시 세팅하면 xterm 이 무변동으로 건너뛰므로, 반드시 다른 값(+1)을 한 번 거친다.
+    try { const fs = term.options.fontSize; term.options.fontSize = fs + 1; term.options.fontSize = fs; } catch (_) { /* noop */ }
+    // 셀 px 가 바뀌었으니 그 위에서 grid 재맞춤(cols/rows)·pty 재전송·재렌더.
+    try { requestAnimationFrame(forceRedraw); } catch (_) { forceRedraw(); }
+  };
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => setTimeout(run, 60)).catch(() => setTimeout(run, 120));
+  else setTimeout(run, 120);
+}
 
 function loadRenderer() {
   try {
@@ -100,13 +118,8 @@ function loadRenderer() {
   try { if (window.CanvasAddon && window.CanvasAddon.CanvasAddon) term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (_) { /* DOM 폴백 */ }
 }
 
-// 복사/붙여넣기 — 터미널에서 Ctrl/Cmd+C(선택 있으면 복사, 없으면 SIGINT) · Ctrl/Cmd+V(붙여넣기).
-//  비보안 origin(http)이면 clipboard API 가 없어 복사는 execCommand 폴백, 붙여넣기는 네이티브 paste 이벤트로 흘림.
-function copyText(text) {
-  if (!text) return;
-  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).catch(() => execCopy(text)); }
-  else execCopy(text);
-}
+// 복사/붙여넣기 — Ctrl/Cmd+C(선택 있으면 복사, 없으면 SIGINT 통과) · Ctrl/Cmd+V(붙여넣기).
+//  http(비보안 origin)에선 navigator.clipboard 가 없어 execCommand 폴백, 붙여넣기는 네이티브 paste 이벤트로 흘림.
 function execCopy(text) {
   try {
     const ta = document.createElement('textarea');
@@ -116,19 +129,25 @@ function execCopy(text) {
   } catch (_) { /* noop */ }
   try { term.focus(); } catch (_) { /* noop */ }
 }
+function copyText(text) {
+  if (!text) return;
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(() => execCopy(text));
+  else execCopy(text);
+  toast('복사됨');
+}
 function setupClipboard() {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
-    if (k === 'c' && term.hasSelection()) { copyText(term.getSelection()); toast('복사됨'); return false; }
+    if (k === 'c' && term.hasSelection()) { copyText(term.getSelection()); return false; }
     if (k === 'v') {
       if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext) {
         navigator.clipboard.readText().then((t) => { if (t) term.paste(t); }).catch(() => { /* 권한거부 */ });
         return false;
       }
-      return true; // http origin → 네이티브 paste(Cmd+V/Ctrl+V) 이벤트가 xterm 으로 흘러 붙여넣어짐
+      return true; // http origin → 네이티브 paste(Cmd/Ctrl+V)가 xterm 으로 흘러 붙여넣어짐
     }
     return true;
   });
@@ -291,7 +310,7 @@ function openSettings() {
   for (const c of [fontSel, themeSel, cursorSel]) c.addEventListener('change', apply);
   sizeI.addEventListener('input', apply);
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
-    el('div', { class: 'pop' }, el('h3', { text: '보기 설정' }),
+    el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
       el('div', { class: 'field' }, el('label', { text: '크기(px)' }), sizeI),
       el('div', { class: 'field' }, el('label', { text: '테마' }), themeSel),
@@ -303,6 +322,15 @@ function openSettings() {
 
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
+
+// 세션 이름(라벨) — 상단 제목을 세션 id 대신 사람이 정한 이름으로. (id 는 제목 tooltip 으로 보존.)
+async function loadSessionLabel() {
+  try {
+    const data = await api('/api/ui/terminal/sessions');
+    const s = ((data && data.sessions) || []).find((x) => x.id === SESSION_ID);
+    if (s && s.label) { titleEl.textContent = s.label; document.title = s.label + ' · Lively'; }
+  } catch (_) { /* 라벨 못 가져오면 기본 제목 유지 */ }
+}
 
 function boot() {
   const p = prefs();
@@ -319,13 +347,14 @@ function boot() {
       el('button', { class: 'tbtn', text: '⟳', title: '새로고침', onclick: () => loadDir(curDir) })),
     el('div', { id: 'exp-path', class: 'exp-path' }), el('div', { id: 'exp-list' }));
   statusEl = el('span', { class: 'status', text: '연결 중…' });
+  // 제목 = 세션 이름(라벨). 로드 전엔 '터미널', 로드되면 loadSessionLabel 이 교체. id 는 tooltip 으로 보존.
+  titleEl = el('span', { class: 'title', text: '터미널', title: SESSION_ID });
   const toolbar = el('div', { class: 'toolbar' },
-    el('button', { class: 'tbtn', text: '📁 파일', title: '파일 탐색기', onclick: toggleExplorer }),
-    el('span', { class: 'title', text: '터미널' }),
-    el('span', { class: 'sub', text: SESSION_ID }),
+    el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
+    titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    el('button', { class: 'tbtn', text: '⟳ 다시 그리기', title: '리사이즈·재렌더', onclick: forceRedraw }),
-    el('button', { class: 'tbtn', text: '⚙ 보기', onclick: openSettings }));
+    el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 현재 창에 맞춰 복구', onclick: forceRedraw }),
+    el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }));
   const host = el('div', { id: 'term-host' });
   termPane = el('div', { class: 'pane active' }, host);
   tabbarEl = el('div', { id: 'tabbar' });
@@ -335,10 +364,16 @@ function boot() {
   tabs.push({ id: 'term', label: '터미널', pane: termPane, closable: false });
   renderTabbar();
   setupDnd();
+  loadSessionLabel();
 
-  // xterm — scrollback 충분히 둠: 세션이 mouse off 라 휠이 이 스크롤백을 직접 굴린다(= 브라우저식 마우스 스크롤).
-  //  렌더러는 WebGL(폴백 Canvas) — DOM 렌더러의 스크롤 잔상/중복 아티팩트 회피.
-  term = new Terminal({ fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true, theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 5000, allowProposedApi: true });
+  // xterm — scrollback 0: 히스토리는 tmux(copy-mode)가 전담 → xterm 자체 스크롤백과 tmux 재그림이 겹치는
+  //  '줄 중복' 원천 제거. 렌더러는 WebGL(폴백 Canvas) — DOM 렌더러의 스크롤 잔상/중복 아티팩트 회피.
+  term = new Terminal({
+    fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
+    theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 0, allowProposedApi: true,
+    // tmux mouse on 이라도 선택할 수 있게: macOS 는 Option+드래그(iTerm 습관), 공통으로 Shift+드래그.
+    macOptionClickForcesSelection: true, rightClickSelectsWord: true,
+  });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(host);
@@ -346,6 +381,10 @@ function boot() {
   setupClipboard();
   applyFit();
   window.addEventListener('resize', doResize);
+  // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
+  //  없으므로). 그 타이밍에 fit 이 한 번 작게 잡히면 80x24 기본으로 굳어 화면을 안 채운다 → 호스트를
+  //  ResizeObserver 로 직접 감시해 초기 사이징·탐색기 폭변화까지 모두 재맞춤(observe 시 1회 즉시 발화).
+  try { if (window.ResizeObserver) { const ro = new ResizeObserver(doResize); ro.observe(host); } } catch (_) { /* noop */ }
 
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 현재 ws 를 참조해 전송.
   term.onData((d) => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
@@ -355,20 +394,41 @@ function boot() {
   connectNow();
 }
 
-async function connect() {
+// 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
+let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false;
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connectNow, reconnectDelay);
+  reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5000); // 지수 백오프, 최대 5s
+}
+async function connectNow() {
+  if (connecting) return;
+  if (ws && ws.readyState <= 1) return; // 이미 OPEN/CONNECTING
+  connecting = true;
+  clearTimeout(reconnectTimer);
+  // 재기동 시 인메모리 티켓이 비워지므로 매 연결마다 티켓을 새로 발급받는다.
   try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
-  catch (e) { statusEl.textContent = '인증 실패 — ' + e.message; statusEl.className = 'status err'; return; }
+  catch (e) { connecting = false; statusEl.textContent = '재연결 중…'; statusEl.className = 'status err'; scheduleReconnect(); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
-  ws.onopen = () => {
+  const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
+  ws = sock;
+  sock.onopen = () => {
+    connecting = false; wasConnected = true; reconnectDelay = 1500;
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
-    applyFit(); setTimeout(applyFit, 350); // 폰트 로드 후 1회 재측정(크기 바뀔 때만 재전송 — dedupe)
+    lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화
+    applyFit(); setTimeout(applyFit, 350);
+    initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
     term.focus();
   };
-  ws.onmessage = (e) => { if (typeof e.data === 'string') term.write(e.data); };
-  ws.onclose = () => { statusEl.textContent = '연결 종료'; statusEl.className = 'status err'; };
-  ws.onerror = () => { statusEl.textContent = '연결 오류'; statusEl.className = 'status err'; };
-  term.onData((d) => { if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
+  sock.onmessage = (e) => { if (typeof e.data === 'string') term.write(e.data); };
+  sock.onclose = () => {
+    if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
+    connecting = false;
+    statusEl.textContent = wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…';
+    statusEl.className = 'status err';
+    scheduleReconnect();
+  };
+  sock.onerror = () => { /* onclose 가 뒤따른다 */ };
 }
 
 let explorerLoaded = false;
