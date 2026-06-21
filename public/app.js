@@ -80,6 +80,10 @@ const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대
 // 작업(activity) 유형 라벨 — 백엔드 activity.type(commit/comment/decision/status_change/review)과 1:1. 작업 현황 대시보드 유형분포 표시용.
 const ACTIVITY_TYPE_LABEL = { commit: '커밋', comment: '코멘트', decision: '결정', status_change: '상태 변경', review: '검토' };
 const ACTIVITY_TYPE_ORDER = ['commit', 'comment', 'decision', 'status_change', 'review'];
+// 작업↔지식 연결 관계 라벨(activity_ku_ref.relation) — produced=산출, references=참조, decided=결정 근거.
+const REF_REL_LABEL = { produced: '산출', references: '참조', decided: '결정' };
+// should/is 점검 결과 라벨(activity.should_review/is_review) — 도메인 의도(should)·코드구조(is) 점검 3-state.
+const REVIEW_LABEL = { na: '해당 없음', checked_no_change: '점검함(변화 없음)', changed: '변경됨' };
 
 const state = {
   me: null,
@@ -1108,80 +1112,205 @@ async function renderReview(view) {
 }
 
 // ════════════════════════════════════════════
-// 작업 현황 #/dash — 사람(author_person) × 그 사람의 AI(author_agent)별 작업 집계.
-//  GET /api/ui/dash/people 의 통합 DB 단일 집계를 그대로 렌더(사람 카드 → AI별 행: 작업수·유형분포·과업수·마지막활동).
-//  사람/AI 이름은 전부 데이터(author_person/author_agent)에서만 옴 — 고유명 하드코딩 없음.
+// 작업 현황 #/dash — PM/PO 가 "전 구성원이 무엇을 했고 지금 무엇을 하는지" 파악하는 화면.
+//  세 층: ① 구성원 요약(사람별 AI·작업수·마지막활동 + 최근 작업 제목 한 줄) ② 필터(구성원·유형 칩)
+//  ③ 작업 타임라인(실제 작업 — 펼치면 본문·연결 과업·산출/참조 지식·바뀐 것). 클릭=펼침이 핵심(드릴인).
+//  요약 집계는 GET /api/ui/dash/people, 타임라인은 GET /api/ui/activity/list(연결 곁들임). 고유명 하드코딩 없음.
 // ════════════════════════════════════════════
-async function renderDashboard(view, _params) {
+// 유형별 점 색(스캔용 — §0.5: 채운 필 금지, 6px 점 + 무채 라벨). commit=민트, decision=파랑, review=코랄, 나머지=중립.
+const ACT_TYPE_TONE = { commit: 'mint', decision: 'blue', review: 'coral', comment: 'muted', status_change: 'teal' };
+function actTypeTag(type) {
+  return el('span', { class: 'act-type tone-' + (ACT_TYPE_TONE[type] || 'muted') },
+    el('span', { class: 'act-type-dot', 'aria-hidden': 'true' }),
+    ACTIVITY_TYPE_LABEL[type] || type);
+}
+
+async function renderDashboard(view, params) {
+  if (!state.dash) state.dash = { expanded: new Set(), filter: { person: '', agent: '', type: '' } };
+  // 딥링크(#/dash?person=..&type=..)면 그 필터로 시작. 이후 칩 클릭은 state 로 즉시 반영(무재요청).
+  if (params && (params.get('person') || params.get('type') || params.get('agent'))) {
+    state.dash.filter = { person: params.get('person') || '', agent: params.get('agent') || '', type: params.get('type') || '' };
+  }
+  const f = state.dash.filter;
+
   view.replaceChildren(skeleton('작업 현황을 불러오는 중'));
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '작업 ', el('span', { class: 'accent', text: '현황' })),
-    el('p', { class: 'sub', text: '사람별로, 그리고 그 사람이 쓴 AI별로 어떤 작업이 얼마나 이뤄졌는지 한눈에. 작업수·유형 분포·연결된 과업 수·마지막 활동 시각.' }),
+    el('p', { class: 'sub', text: '구성원이 어떤 작업을 했고 지금 무엇을 하고 있는지 한눈에. 작업을 누르면 — 무엇을 했고 어떤 과업·지식과 연결됐는지 — 상세가 펼쳐집니다.' }),
   );
-  let data;
+
+  let people = [];
+  let feed = [];
   try {
-    data = await api('/api/ui/dash/people');
+    const [pp, ff] = await Promise.all([
+      api('/api/ui/dash/people').then((d) => (d && d.people) || []),
+      api('/api/ui/activity/list?limit=200').then((d) => (Array.isArray(d) ? d : (d && d.rows) || [])),
+    ]);
+    people = pp; feed = ff;
   } catch (e) {
     view.replaceChildren(head, errorNote(e, '작업 현황을 불러오지 못했습니다'));
     return;
   }
-  const people = (data && data.people) || [];
-  if (!people.length) {
-    view.replaceChildren(head, el('div', { class: 'empty', text: '아직 기록된 작업이 없습니다.' }));
+
+  if (!feed.length && !people.length) {
+    view.replaceChildren(head, el('div', { class: 'empty', text: '아직 기록된 작업이 없습니다. AI가 작업(activity)을 남기면 여기 구성원·AI별로 쌓입니다.' }));
     return;
   }
 
-  const cards = [];
-  for (const p of people) {
-    const personName = p.author_person || '미상';
-    const totalTasks = (p.agents || []).reduce((s, a) => s + (a.tasks || 0), 0);
-    const personLast = (p.agents || []).reduce((mx, a) => (a.lastActiveAt && (!mx || a.lastActiveAt > mx) ? a.lastActiveAt : mx), null);
+  // 사람별 '가장 최근 작업'(피드는 최신순 → 사람별 첫 등장이 최신). 요약 한 줄 + 마지막 활동 시각 보강.
+  const latestByPerson = new Map();
+  for (const a of feed) { const k = a.author_person || ''; if (!latestByPerson.has(k)) latestByPerson.set(k, a); }
 
-    const cardHead = el('div', { class: 'page-head', style: 'margin:0 0 4px' },
-      el('h2', { style: 'margin:0', text: personName }),
-      el('div', { class: 'row-meta' },
-        el('strong', { text: fmtNum(p.total) }), ' 작업',
-        '  ', el('span', { text: fmtNum(totalTasks) + ' 과업' }),
-        personLast ? el('span', {}, '  ', relTime(personLast)) : null,
-      ),
+  // ── 필터 갱신: state 만 바꾸고 in-place 재도색(요약 active·칩 active·피드). 해시 라우팅 왕복 없음. ──
+  const setFilter = (patch) => { Object.assign(f, patch); paint(); };
+
+  // ── 층 ② 필터 바(구성원 + 유형) ──
+  const filterBar = el('div', { class: 'dash-filters' });
+  function chip(label, on, onClick, extraCls) {
+    return el('button', { class: 'dash-chip' + (on ? ' active' : '') + (extraCls ? ' ' + extraCls : ''), type: 'button', onclick: onClick }, label);
+  }
+  function paintFilters() {
+    const personChips = el('div', { class: 'dash-chip-group' },
+      el('span', { class: 'dash-chip-label', text: '구성원' }),
+      chip('전체', !f.person, () => setFilter({ person: '', agent: '' })),
+      ...people.filter((p) => p.author_person).map((p) =>
+        chip(p.author_person, f.person === p.author_person, () => setFilter({ person: f.person === p.author_person ? '' : p.author_person, agent: '' }))),
     );
-
-    const rows = el('div', { class: 'list-box' });
-    for (const a of (p.agents || [])) {
-      const agentName = a.author_agent || '직접 (AI 미상)';
-      const typeChips = el('div', { class: 'row-meta' },
-        ...interleave(
-          ACTIVITY_TYPE_ORDER
-            .filter((t) => (a.byType && a.byType[t]) > 0)
-            .map((t) => el('span', {}, el('span', { class: 'mono', text: String(a.byType[t]) }), ' ' + (ACTIVITY_TYPE_LABEL[t] || t))),
-          el('span', { 'aria-hidden': 'true', text: '·' }),
-        ),
-      );
-      const row = el('div', { class: 'review-row' },
-        el('div', { class: 'review-main' },
-          el('div', { class: 'review-title', text: agentName }),
-          (a.byType && ACTIVITY_TYPE_ORDER.some((t) => a.byType[t] > 0))
-            ? typeChips
-            : el('div', { class: 'row-meta dim', text: '유형 기록 없음' }),
-        ),
-        el('div', { class: 'review-acts', style: 'gap:18px;align-items:center' },
-          el('div', { style: 'text-align:right' },
-            el('div', {}, el('strong', { text: fmtNum(a.count) }), el('small', {}, ' 작업')),
-            el('div', { class: 'row-meta dim' }, fmtNum(a.tasks) + ' 과업'),
-          ),
-          el('div', { class: 'row-meta dim', style: 'min-width:84px;text-align:right' },
-            a.lastActiveAt ? relTime(a.lastActiveAt) : '활동 기록 없음'),
-        ),
-      );
-      rows.append(row);
-    }
-
-    const card = el('section', { class: 'card' }, cardHead, rows);
-    cards.push(card);
+    const typeChips = el('div', { class: 'dash-chip-group' },
+      el('span', { class: 'dash-chip-label', text: '유형' }),
+      chip('전체', !f.type, () => setFilter({ type: '' })),
+      ...ACTIVITY_TYPE_ORDER.filter((t) => feed.some((a) => a.type === t)).map((t) =>
+        chip(ACTIVITY_TYPE_LABEL[t], f.type === t, () => setFilter({ type: f.type === t ? '' : t }))),
+    );
+    filterBar.replaceChildren(personChips, typeChips);
   }
 
-  view.replaceChildren(head, ...cards);
-  applyReveal(cards);
+  // ── 층 ① 구성원 요약 ──
+  const summaryBox = el('div', { class: 'list-box dash-summary' });
+  function summaryRow(p) {
+    const name = p.author_person;
+    const key = name || '';
+    const selectable = !!name;
+    const on = selectable && f.person === key;
+    const totalTasks = (p.agents || []).reduce((s, a) => s + (a.tasks || 0), 0);
+    const last = (p.agents || []).reduce((mx, a) => (a.lastActiveAt && (!mx || a.lastActiveAt > mx) ? a.lastActiveAt : mx), null);
+    const aiChips = (p.agents || []).map((a) => el('span', { class: 'dash-ai' },
+      el('span', { class: 'dash-ai-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'dash-ai-name', text: a.author_agent || '직접' }),
+      el('span', { class: 'dash-ai-n', text: fmtNum(a.count) })));
+    const latest = latestByPerson.get(key);
+    const row = el('div', { class: 'dash-person' + (on ? ' active' : '') + (selectable ? '' : ' static'),
+      role: selectable ? 'button' : null, tabindex: selectable ? '0' : null,
+      'aria-pressed': selectable ? (on ? 'true' : 'false') : null },
+      el('div', { class: 'dash-person-top' },
+        el('span', { class: 'dash-person-name', text: name || '미상' }),
+        el('span', { class: 'dash-person-meta' },
+          el('strong', { text: fmtNum(p.total) }), ' 작업 · ', fmtNum(totalTasks) + ' 과업 · ',
+          last ? relTime(last) : '활동 없음'),
+      ),
+      aiChips.length ? el('div', { class: 'dash-ai-row' }, ...aiChips) : null,
+      latest ? el('div', { class: 'dash-latest' },
+        el('span', { class: 'dash-latest-label', text: '최근' }), actTypeTag(latest.type),
+        el('span', { class: 'dash-latest-title', text: latest.title })) : null,
+    );
+    if (selectable) {
+      const go = () => setFilter({ person: on ? '' : key, agent: '' });
+      row.addEventListener('click', go);
+      row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
+    }
+    return row;
+  }
+
+  // ── 층 ③ 작업 타임라인(펼침형) ──
+  const feedBox = el('div', { class: 'list-box dash-feed' });
+  function activityDetail(a, when) {
+    const box = el('div', { class: 'act-detail' });
+    if (a.body) box.append(renderMarkdown(a.body));
+    if ((a.tasks || []).length) {
+      box.append(el('div', { class: 'act-group' },
+        el('div', { class: 'act-group-label', text: '연결된 과업' }),
+        el('div', { class: 'act-links' }, ...a.tasks.map((t) => el('a', { class: 'act-link', href: '#/u/' + encodeURIComponent(t.name) },
+          el('span', { class: 'kb-glyph', text: 'W' }),
+          el('span', { class: 'act-link-title', text: t.title || t.name }),
+          (t.lifecycle && t.lifecycle !== 'active') ? lifecycleDot(t.lifecycle) : null)))));
+    }
+    if ((a.refs || []).length) {
+      box.append(el('div', { class: 'act-group' },
+        el('div', { class: 'act-group-label', text: '산출·참조 지식' }),
+        el('div', { class: 'act-links' }, ...a.refs.map((r) => el('a', { class: 'act-link', href: '#/u/' + encodeURIComponent(r.name) },
+          el('span', { class: 'act-rel', text: REF_REL_LABEL[r.relation] || r.relation }),
+          el('span', { class: 'act-link-title', text: r.title || r.name }))))));
+    }
+    const facts = [];
+    if (a.touchCount) facts.push(['건드린 코드', fmtNum(a.touchCount) + '곳']);
+    if (a.commit_sha) facts.push(['커밋', a.commit_sha.slice(0, 10)]);
+    facts.push(['도메인 의도(should) 점검', REVIEW_LABEL[a.should_review] || a.should_review || '—']);
+    facts.push(['코드 구조(is) 점검', REVIEW_LABEL[a.is_review] || a.is_review || '—']);
+    if (a.external_system) facts.push(['외부 출처', a.external_system]);
+    if (a.session_id) facts.push(['세션', String(a.session_id).slice(0, 8)]);
+    facts.push(['기록 시각', absTime(when) || '—']);
+    box.append(el('div', { class: 'act-facts' }, ...facts.map(([k, v]) =>
+      el('div', { class: 'act-fact' }, el('span', { class: 'act-fact-k', text: k }), el('span', { class: 'act-fact-v', text: String(v) })))));
+    return box;
+  }
+  function activityCard(a) {
+    const open = state.dash.expanded.has(a.id);
+    const when = a.committed_at || a.created_at;
+    const meta = [
+      el('span', { class: 'act-who', text: a.author_person || '미상' }),
+      el('span', { class: 'act-ai', text: a.author_agent || '직접' }),
+      el('span', { text: relTime(when) }),
+    ];
+    if (a.repo) meta.push(el('span', { class: 'mono', text: a.repo }));
+    if ((a.tasks || []).length) meta.push(el('span', { text: fmtNum(a.tasks.length) + ' 과업' }));
+    const sigs = [];
+    if (a.should_review === 'changed') sigs.push(el('span', { class: 'act-sig sig-should', text: '의도 변경' }));
+    if (a.is_review === 'changed') sigs.push(el('span', { class: 'act-sig sig-is', text: '구조 변경' }));
+    const headRow = el('div', { class: 'act-head', role: 'button', tabindex: '0', 'aria-expanded': open ? 'true' : 'false' },
+      el('span', { class: 'act-caret', 'aria-hidden': 'true', text: open ? '▾' : '▸' }),
+      el('div', { class: 'act-head-main' },
+        el('div', { class: 'act-titleline' }, actTypeTag(a.type), el('span', { class: 'act-title', text: a.title })),
+        el('div', { class: 'row-meta act-meta' }, ...interleave(meta, el('span', { class: 'act-sep', 'aria-hidden': 'true', text: '·' })), ...sigs),
+      ),
+    );
+    const toggle = () => { if (open) state.dash.expanded.delete(a.id); else state.dash.expanded.add(a.id); renderFeed(); };
+    headRow.addEventListener('click', toggle);
+    headRow.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } });
+    const card = el('div', { class: 'act-card' + (open ? ' open' : '') }, headRow);
+    if (open) card.append(activityDetail(a, when));
+    return card;
+  }
+  function renderFeed() {
+    const filtered = feed.filter((a) =>
+      (!f.person || (a.author_person || '') === f.person)
+      && (!f.agent || (a.author_agent || '') === f.agent)
+      && (!f.type || a.type === f.type));
+    if (!filtered.length) {
+      feedBox.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 작업이 없습니다. 위 필터를 넓혀 보세요.' }));
+      return;
+    }
+    feedBox.replaceChildren(...filtered.map(activityCard));
+  }
+
+  function paint() {
+    paintFilters();
+    summaryBox.replaceChildren(...people.map(summaryRow));
+    renderFeed();
+  }
+
+  const sec = (title, hint) => el('div', { class: 'dash-sec-head' },
+    el('h2', { class: 'dash-sec-title', text: title }), hint ? el('span', { class: 'dash-sec-hint', text: hint }) : null);
+
+  view.replaceChildren(
+    head,
+    sec('구성원', '누가 어떤 AI로 얼마나 — 눌러서 그 사람 작업만 보기'),
+    summaryBox,
+    sec('작업 타임라인', '최근 작업부터 — 작업을 눌러 상세를 펼칩니다'),
+    filterBar,
+    feedBox,
+  );
+  paint();
+  applyReveal([summaryBox, feedBox]);
   document.getElementById('view').focus?.();
 }
 

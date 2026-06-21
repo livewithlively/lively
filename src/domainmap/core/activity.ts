@@ -176,6 +176,8 @@ export async function dashPeople(): Promise<{ author_person: string | null; tota
 }
 
 // 작업 목록(최신순 — committed_at 우선, 없으면 created_at). 필터: 작성자·AI·유형·과업(ku)·repo.
+//  웹 작업현황 피드의 원천 — 행마다 연결(과업/산출·참조 지식/코드 touch)을 곁들여 드릴인(상세 펼침)이 N+1 없이
+//  맥락을 보이게 한다. body 는 그대로 반환(펼침 본문). repo 는 id→name 으로 표시화.
 export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   const lim = saneLimit(f.limit, 50, 200);
   const where: string[] = [];
@@ -187,11 +189,31 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   let join = "";
   if (f.task_ku) { args.push(f.task_ku); join = `JOIN activity_task atk ON atk.activity_id=a.id AND atk.ku_name=$${args.length}`; }
   args.push(lim);
-  return q(dmPool(), `
+  const rows = await q(dmPool(), `
     SELECT a.id, a.type, a.title, a.body, a.author_person, a.author_agent, a.session_id,
            a.commit_sha, a.committed_at, a.should_review, a.is_review, a.created_at,
-           a.external_system, a.external_url
+           a.external_system, a.external_url, r.name AS repo
     FROM activity a ${join}
+    LEFT JOIN repo r ON r.id = a.repo_id
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
     ORDER BY COALESCE(a.committed_at, a.created_at) DESC LIMIT $${args.length}`, args);
+  if (!rows.length) return rows;
+  // 연결을 한 방에 곁들인다(id IN ANY) — knowledge_unit JOIN 으로 과업/지식 제목까지(같은 풀이라 조인 가능).
+  const ids = rows.map((r: any) => r.id);
+  const [taskRows, refRows, touchRows] = await Promise.all([
+    q(dmPool(), `SELECT atk.activity_id, atk.ku_name AS name, ku.title, ku.lifecycle
+                   FROM activity_task atk LEFT JOIN knowledge_unit ku ON ku.name = atk.ku_name
+                  WHERE atk.activity_id = ANY($1) ORDER BY atk.created_at`, [ids]),
+    q(dmPool(), `SELECT akr.activity_id, akr.ku_name AS name, akr.relation, ku.title
+                   FROM activity_ku_ref akr LEFT JOIN knowledge_unit ku ON ku.name = akr.ku_name
+                  WHERE akr.activity_id = ANY($1) ORDER BY akr.created_at`, [ids]),
+    q(dmPool(), `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
+                  WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),
+  ]);
+  const byId = new Map<number, any>();
+  for (const r of rows) { r.tasks = []; r.refs = []; r.touchCount = 0; byId.set(r.id, r); }
+  for (const t of taskRows) byId.get(t.activity_id)?.tasks.push({ name: t.name, title: t.title, lifecycle: t.lifecycle });
+  for (const rf of refRows) byId.get(rf.activity_id)?.refs.push({ name: rf.name, title: rf.title, relation: rf.relation });
+  for (const t of touchRows) { const row = byId.get(t.activity_id); if (row) row.touchCount = t.n; }
+  return rows;
 }

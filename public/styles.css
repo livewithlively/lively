@@ -746,6 +746,81 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .review-title:hover { color: var(--blue); }
 .review-acts { display: flex; gap: 8px; flex: none; }
 
+/* ════════ 작업 현황(#/dash) — 구성원 요약 + 작업 타임라인(펼침형). §0.5 절제: 채운 필 금지, 점·라인으로 위계. ════════ */
+/* 섹션 헤더 */
+.dash-sec-head { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 10px; flex-wrap: wrap; }
+.dash-sec-title { margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); }
+.dash-sec-hint { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+
+/* 유형 태그(점 + 라벨) — 색은 점에만 */
+.act-type { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; flex: none; }
+.act-type-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); flex: none; }
+.act-type.tone-mint  .act-type-dot { background: var(--mint); }
+.act-type.tone-blue  .act-type-dot { background: var(--blue); }
+.act-type.tone-coral .act-type-dot { background: var(--coral); }
+.act-type.tone-teal  .act-type-dot { background: var(--teal); }
+.act-type.tone-muted .act-type-dot { background: var(--muted-2); }
+
+/* ① 구성원 요약 */
+.dash-summary .dash-person { display: block; padding: 14px 16px; border-bottom: 1px solid var(--line-row); }
+.dash-summary .dash-person:last-child { border-bottom: none; }
+.dash-person[role="button"] { cursor: pointer; transition: background .12s; }
+.dash-person[role="button"]:hover { background: var(--bg-tint); }
+.dash-person.active { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--blue); }
+.dash-person-top { display: flex; align-items: baseline; gap: 12px; justify-content: space-between; }
+.dash-person-name { font-size: 15.5px; font-weight: 800; color: var(--ink); }
+.dash-person-meta { font-size: 12.5px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
+.dash-person-meta strong { color: var(--ink); }
+.dash-ai-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.dash-ai { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-tint); font-size: 12px; font-weight: 600; color: var(--ink-sub); }
+.dash-ai-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--node-blue-soft); flex: none; }
+.dash-ai-name { color: var(--ink-sub); }
+.dash-ai-n { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted-head); }
+.dash-latest { display: flex; align-items: baseline; gap: 8px; margin-top: 9px; min-width: 0; }
+.dash-latest-label { font-size: 11.5px; font-weight: 700; color: var(--muted); flex: none; }
+.dash-latest-title { font-size: 13px; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ② 필터 칩 */
+.dash-filters { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 12px; }
+.dash-chip-group { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.dash-chip-label { font-size: 12px; font-weight: 700; color: var(--muted-head); margin-right: 4px; }
+.dash-chip { padding: 5px 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
+.dash-chip:hover { border-color: var(--blue); color: var(--ink); }
+.dash-chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* ③ 작업 타임라인(펼침형) */
+.dash-feed .act-card { border-bottom: 1px solid var(--line-row); }
+.dash-feed .act-card:last-child { border-bottom: none; }
+.act-head { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; cursor: pointer; transition: background .12s; }
+.act-head:hover { background: var(--bg-tint); }
+.act-card.open > .act-head { background: var(--bg-tint); }
+.act-caret { color: var(--muted-2); font-size: 11px; line-height: 1.7; flex: none; width: 12px; }
+.act-head-main { flex: 1; min-width: 0; }
+.act-titleline { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.act-title { font-size: 14.5px; font-weight: 700; color: var(--ink); line-height: 1.4; }
+.act-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.act-meta .act-who { color: var(--ink-sub); font-weight: 700; }
+.act-meta .act-ai { color: var(--muted-head); }
+.act-meta .act-sep { color: var(--muted-3); }
+.act-sig { padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; border: 1px solid var(--line-net-2); color: var(--ink-note); background: var(--bg-punch); }
+.act-sig.sig-is { color: var(--mint-deep); background: var(--bg-success); border-color: var(--node-mint-soft); }
+
+/* 펼친 상세 */
+.act-detail { padding: 4px 16px 18px 38px; }
+.act-detail .md { font-size: 13.5px; color: var(--ink-sub); line-height: 1.6; }
+.act-group { margin-top: 14px; }
+.act-group-label { font-size: 11.5px; font-weight: 800; color: var(--muted-head); text-transform: none; margin-bottom: 7px; }
+.act-links { display: flex; flex-direction: column; gap: 6px; }
+.act-link { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); color: var(--ink); font-size: 13px; font-weight: 600; text-decoration: none; max-width: 100%; }
+.act-link:hover { border-color: var(--blue); }
+.act-link-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.act-rel { font-size: 11px; font-weight: 800; color: var(--muted-head); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; flex: none; }
+.act-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 22px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-row); }
+@media (max-width: 600px) { .act-facts { grid-template-columns: 1fr; } }
+.act-fact { display: flex; gap: 10px; font-size: 12.5px; align-items: baseline; }
+.act-fact-k { color: var(--muted-head); font-weight: 600; flex: none; min-width: 120px; }
+.act-fact-v { color: var(--ink-sub); font-weight: 600; min-width: 0; word-break: break-word; }
+
 /* ── 저장/편집 오버레이 액션 ── */
 .ov-actions { display: flex; gap: 10px; margin-top: 16px; }
 .ov-box .frow { display: flex; gap: 12px; flex-wrap: wrap; }
