@@ -20,6 +20,11 @@
   .term-badge.danger { background: #fdecec; color: #c0392b; border-color: #f5c6c6; }
   .term-badge.author { background: var(--bg-tint, #f6faff); color: var(--muted-head, #7a88a3); border-color: var(--line, #e6ecf5); }
   .term-row-name { flex: 0 0 200px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-fold { display: flex; align-items: center; gap: 5px; width: 100%; margin-top: 10px; padding: 8px 12px;
+    background: var(--bg-tint, #f6faff); border: 1px solid var(--line, #e6ecf5); border-radius: 10px;
+    font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub, #5a6b85); cursor: pointer; text-align: left; }
+  .term-fold:hover { border-color: var(--blue, #2d6bf0); color: var(--ink, #15233b); }
+  .term-fold-caret { font-size: 10px; width: 12px; }
   .term-section { margin-top: 18px; }
   .term-section--div { border-top: 1px solid var(--line, #e6ecf5); padding-top: 18px; }
   .term-section .term-section-title { margin: 0 0 4px; }

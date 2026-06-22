@@ -188,4 +188,28 @@ t("v4-j: R 은 sort→name 안정 순서로 전문 주입", () => {
   assert.ok(idx.indexOf("### A규칙") < idx.indexOf("### Z규칙"), "동 sort 는 name 오름차순");
 });
 
+// ── (v4-k) 중복 주입 방지: org_content 섹션 R(managed-policy·org-defaults)은 R 전문 섹션에서 제외. ──
+//  이 둘은 전용 경로(머리말 prepend·생성기 org/*.md)로 세션당 1회 전달되므로, 인덱스 R 섹션에 또 실으면
+//  한 컨텍스트에 같은 규칙이 두 번 박힌다. 사용자-저작 R ku 는 전용 경로가 없어 그대로 전문 주입돼야 한다.
+t("v4-k: managed-policy·org-defaults 는 R 전문 섹션에서 제외(중복 주입 방지), 사용자 R 은 주입", () => {
+  const idx = buildKnowledgeIndex([
+    unit({ name: "managed-policy", kind: "R", title: "강제 규칙", body_md: "정책 본문 — 여기 한 번만" }),
+    unit({ name: "org-defaults", kind: "R", title: "회사 맥락", body_md: "맥락 본문 — 여기 한 번만" }),
+    unit({ name: "custom-rule", kind: "R", title: "사내 규칙", body_md: "사내 규칙 전문" }),
+  ]);
+  assert.ok(!idx.includes("정책 본문 — 여기 한 번만"), "managed-policy 전문은 R 섹션에 안 실림(머리말 단일 출처)");
+  assert.ok(!idx.includes("맥락 본문 — 여기 한 번만"), "org-defaults 전문은 R 섹션에 안 실림(머리말 단일 출처)");
+  assert.ok(idx.includes("### 사내 규칙") && idx.includes("사내 규칙 전문"), "사용자-저작 R ku 는 전문 주입");
+});
+
+// ── (v4-l) 섹션 R 만 있고 사용자 R 이 없으면 R 섹션 자체가 안 뜬다(빈 헤더 잔존 금지). ──
+t("v4-l: 섹션 R 만 있으면 '## 강제 규칙' 헤더가 안 남는다", () => {
+  const idx = buildKnowledgeIndex([
+    unit({ name: "managed-policy", kind: "R", title: "강제 규칙", body_md: "정책 본문" }),
+    unit({ name: "org-defaults", kind: "R", title: "회사 맥락", body_md: "맥락 본문" }),
+  ], [area({ space: "product", key: "k1", name: "n1", active_units: 1 })]);
+  assert.ok(!idx.includes("## 강제 규칙 (R · 항상 적용)"), "제외 후 R 단위 0 → R 섹션 헤더 없음");
+  assert.ok(idx.includes("## area 지도"), "다른 섹션은 정상 렌더");
+});
+
 console.log(`\n${pass} checks passed`);

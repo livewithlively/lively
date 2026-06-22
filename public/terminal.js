@@ -320,6 +320,39 @@ function openSettings() {
   document.body.append(back);
 }
 
+// 사용법 안내 — 이 터미널이 실제로 지원하는 동작(코드 근거)만 담는다(추측 키 금지). 비개발자 온보딩용.
+function openHelp() {
+  const kb = (keys, desc) => el('div', { class: 'help-item' },
+    el('span', { class: 'k' }, ...keys.map((t) => el('span', { class: 'kbd', text: t }))),
+    el('span', { class: 'd', text: desc }));
+  const tool = (name, desc) => el('div', { class: 'help-line' }, el('b', { text: name }), el('span', { text: ' — ' + desc }));
+  const sec = (title, ...items) => el('div', { class: 'help-sec' }, el('h4', { text: title }), el('div', { class: 'help-list' }, ...items));
+  const pop = el('div', { class: 'pop pop-help' },
+    el('h3', { text: '사용법 안내' }),
+    el('p', { class: 'help-intro', text: '이 화면은 “터미널”이라 일반 웹페이지와 조작이 조금 달라요. 자주 쓰는 것만 모았어요.' }),
+    sec('선택 · 복사 · 붙여넣기',
+      kb(['Shift'], '누른 채 드래그하면 텍스트 선택 — 그냥 드래그는 안 돼요 (Mac은 Option 도 가능)'),
+      kb(['우클릭'], '단어 선택'),
+      kb(['⌘C'], '복사 (Windows는 Ctrl+C) — 먼저 선택하세요. 선택이 없으면 작업을 멈춤'),
+      kb(['⌘V'], '붙여넣기 (Windows는 Ctrl+V)')),
+    sec('화면 보기',
+      kb(['휠 ↑'], '위로 스크롤해서 이전 출력 보기'),
+      kb(['q'], '스크롤(과거 보기)을 끝내고 입력으로 돌아오기')),
+    sec('도구 — 오른쪽 위 버튼',
+      tool('공유 워크스페이스 열기', '왼쪽에서 파일 업로드·다운로드 (끌어다 놓아도 업로드)'),
+      tool('화면 복구', '글자·줄이 깨져 보일 때 현재 창에 맞춰 다시 그림 (새로고침 아님)'),
+      tool('환경 설정', '글꼴 · 글자 크기 · 테마 · 커서 모양 바꾸기')),
+    sec('클로드 코드 — 에이전트',
+      kb(['Enter'], '한국어로 자연스럽게 지시하고 보내기'),
+      kb(['Esc'], '에이전트가 하던 작업 멈추기'),
+      kb(['/'], '쓸 수 있는 명령 목록 보기')),
+    el('p', { class: 'help-note', text: '연결이 끊겨도 자동으로 다시 연결되고 세션·작업은 그대로 유지돼요. 이 창은 Esc 또는 바깥을 눌러 닫을 수 있어요.' }),
+    el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() }));
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+}
+
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
 
@@ -354,7 +387,8 @@ function boot() {
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 현재 창에 맞춰 복구', onclick: forceRedraw }),
-    el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }));
+    el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
+    el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
   const host = el('div', { id: 'term-host' });
   termPane = el('div', { class: 'pane active' }, host);
   tabbarEl = el('div', { id: 'tabbar' });

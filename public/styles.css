@@ -122,6 +122,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 }
 .card h2 { margin: 0 0 14px; font-size: 17px; font-weight: 800; color: var(--ink); }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.card-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 /* 화이트 패널(필터 바 등) */
 .panel { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
@@ -622,6 +623,12 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .gloss-example-tag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 2px 9px; margin-bottom: 8px; }
 .gloss-example-title { font-size: 16px; font-weight: 800; color: var(--ink); }
 .gloss-example-body { font-size: 14px; line-height: 1.6; color: var(--ink-sub); margin-top: 4px; }
+/* 네 종류(R/K/H/W) 각각 + 쉬운 예시 한 개씩 */
+.kind-ex-list { display: flex; flex-direction: column; gap: 18px; margin-top: 6px; }
+.kind-ex { padding-top: 16px; border-top: 1px solid var(--line-row); }
+.kind-ex:first-child { padding-top: 4px; border-top: none; }
+.kind-ex-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 9px; }
+.kind-ex .gloss-example { margin: 0; }
 /* 쉬운 용어집(규칙/지식/절차/할일) */
 .gloss-list { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
 .gloss-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line-row); }
@@ -646,6 +653,70 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .deploy-head h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
 .deploy-block .admin-preview { white-space: pre-wrap; }
+
+/* ── 시작하기 > 설치 — 비개발자용 단계별 온보딩 ── */
+.install-guide { display: flex; flex-direction: column; gap: 18px; }
+.install-intro .guide-lead, .install-next .guide-lead { margin-bottom: 10px; }
+/* 어디서 쓰나 — 두 갈래 선택 카드 */
+.mode-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+@media (max-width: 720px) { .mode-choice { grid-template-columns: 1fr; } }
+.mode-card { border: 1.5px solid var(--line-net); border-radius: 13px; padding: 16px 18px; cursor: pointer;
+  background: var(--bg); transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease; }
+.mode-card:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.mode-card.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.mode-card-top { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+.mode-card-radio { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
+.mode-card.active .mode-card-radio { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
+.mode-card-tag { font-size: 12px; font-weight: 700; color: var(--blue); }
+.mode-card-title { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; }
+.mode-card-hint { font-size: 13px; color: var(--ink-sub); line-height: 1.5; margin-top: 4px; }
+/* 모드별 한 줄 강조 콜아웃 */
+.install-callout { display: flex; flex-direction: column; gap: 4px; background: var(--bg-tint); border-color: var(--line-net); }
+.callout-strong { font-size: 16px; font-weight: 800; color: var(--ink); margin: 0; }
+.callout-sub { font-size: 13.5px; color: var(--ink-sub); line-height: 1.6; margin: 0; }
+.note-ul { padding-left: 18px; }
+/* 준비물 체크리스트 */
+.install-checks { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.install-check { display: flex; gap: 11px; align-items: flex-start; }
+.check-mark { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; color: var(--blue); background: var(--bg-punch); border-radius: 999px; }
+.check-main { min-width: 0; }
+.check-k { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.check-v { font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; margin-top: 1px; }
+/* OS 선택(설치 단계 헤더) */
+.os-pick { display: flex; align-items: center; gap: 8px; }
+.os-pick-label { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+/* 번호 매긴 단계 */
+.step-list { display: flex; flex-direction: column; }
+.step { display: flex; gap: 14px; align-items: flex-start; padding: 18px 0; border-top: 1px solid var(--line-row); }
+.step:first-child { border-top: none; padding-top: 6px; }
+.step-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+.step-body { min-width: 0; flex: 1; }
+.step-title { font-size: 15.5px; font-weight: 800; color: var(--ink); margin-bottom: 6px; }
+.step-p { font-size: 14px; line-height: 1.6; color: var(--ink); margin: 0 0 6px; }
+.step-note { font-size: 13.5px; line-height: 1.55; color: var(--ink-sub); margin: 4px 0 0; }
+.step-ul { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.step-ul li { font-size: 13.5px; line-height: 1.55; color: var(--ink-sub); }
+.step-ul li b, .step-p b, .step-note b { color: var(--ink); }
+.install-ok { font-size: 13.5px; font-weight: 600; color: var(--blue-deep); margin: 6px 0; }
+.install-cmd-slot:empty { display: none; }
+/* 키캡(키보드·메뉴 강조) */
+.kbd { display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; font-weight: 700;
+  color: var(--ink); background: var(--bg-tint); border: 1px solid var(--line-net); border-bottom-width: 2px;
+  border-radius: 6px; padding: 1px 7px; margin: 0 1px; line-height: 1.7; white-space: nowrap; }
+/* 확인용 한 줄 명령 */
+.cmd-line { display: flex; align-items: center; gap: 10px; background: var(--bg-tint); border: 1px solid var(--line-net);
+  border-radius: 10px; padding: 9px 12px; margin: 8px 0; }
+.cmd-line-text { flex: 1; min-width: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; color: var(--ink);
+  overflow-x: auto; white-space: nowrap; }
+/* 유지보수(접힘) */
+.install-maint { border: 1px solid var(--line); border-radius: 14px; padding: 4px 18px; background: var(--bg-tint); }
+.install-maint > summary { cursor: pointer; font-size: 14px; font-weight: 700; color: var(--ink-sub); padding: 12px 0; list-style: none; }
+.install-maint > summary::-webkit-details-marker { display: none; }
+.install-maint > summary::before { content: "▸ "; color: var(--muted-head); }
+.install-maint[open] > summary::before { content: "▾ "; }
+.install-maint[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
 
 /* 토큰 회수 패널 */
 .token-section { margin-top: 14px; }

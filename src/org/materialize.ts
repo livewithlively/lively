@@ -104,13 +104,20 @@ export const WRITE_GUIDE_BLOCK = [
 //  fail-open 보존). 단일 choke-point 가 정적·라이브·web 을 모두 덮는다.
 // areaMap 인자는 호출자가 areaMapForIndex() 로 라이브 조회해 넘긴다(non-stale·두 DB 조인). 생략 시 빈 지도 —
 //  순수함수 단위테스트(DB 불요)는 인자 없이/명시 지도로 호출해 결정적으로 검증한다.
+//
+// 중복 주입 방지: org_content 섹션 R(managed-policy·org-defaults)은 **전용 경로로 세션당 1회**만 전달된다
+//  — 라이브는 previewMemberContext 가 머리말에 strip 후 prepend, 발행물은 생성기가 org/*.md 로 별도 합성.
+//  그래서 아래 R 전문 섹션에서는 이 둘을 제외한다(과거엔 여기서도 전문을 실어 한 컨텍스트에 같은 규칙이 두 번
+//  박혔다). 사용자-저작 R ku(ctx_save)는 전용 경로가 없으므로 여기서 전문 주입한다(유일한 집).
+const SECTION_R_NAMES = new Set<string>(["managed-policy", "org-defaults"]);
+
 export function buildKnowledgeIndex(
   units: KnowledgeUnit[],
   areaMap: AreaMapEntry[] = [],
 ): string {
   const lines = [
     "# Knowledge Index",
-    "(공유 조직 지식. **강제규칙은 아래 전문**이 항상 적용된다. 그 외 지식·절차·작업은 area 지도로 발견해 " +
+    "(공유 조직 지식. **강제 규칙·페르소나는 전문이 항상 적용**된다. 그 외 지식·절차·작업은 area 지도로 발견해 " +
       "`ctx_grep`/`memory_search`/`ctx_cat name=<name>` 로 그때 소환한다.)",
     "",
   ];
@@ -118,7 +125,7 @@ export function buildKnowledgeIndex(
   // ── (a) R(규칙) 전문 — enforced. lifecycle='active' 인 kind='R' 만, sort→name 순으로 전문 주입. ──
   //  방어적 lifecycle 재확인(호출자가 active 만 넘기더라도). title 헤더 + 본문 전문(redact). 비-링크.
   const rules = units
-    .filter((u) => u.kind === "R" && u.lifecycle === "active")
+    .filter((u) => u.kind === "R" && u.lifecycle === "active" && !SECTION_R_NAMES.has(u.name))
     .sort((a, b) => (a.sort - b.sort) || a.name.localeCompare(b.name));
   if (rules.length) {
     lines.push("## 강제 규칙 (R · 항상 적용)", "");

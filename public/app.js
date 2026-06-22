@@ -92,6 +92,7 @@ const state = {
   browse: { filters: { kind: '', space: '', domain: '', lifecycle: 'active', confidence: '', q: '', orderBy: 'updated_at' }, entries: [], loaded: false },
   reviewOrderBy: 'updated_at', // 검토 피드 정렬(기본 최신순)
   admin: { data: null, sel: 'kinds', memberSel: null, memorySel: null, repoSel: null, navCollapsed: false }, // 관리(전달) 페이지 상태
+  start: { mode: 'web', os: 'mac', token: null }, // '시작하기 > 설치' 온보딩 상태(쓰는곳 web|local + 선택 OS + 자가발급 토큰 1회 캐시)
   domains: {},           // P-V3-4a: repo별 도메인 통제어휘 캐시 { [repo]: {list, repos, loaded, error} }
   allDomains: null,      // V5 탈-repo: 전 repo + business 통합 통제어휘 캐시(저장/필터 드롭다운) {list, loaded, error}
 };
@@ -1541,54 +1542,276 @@ async function renderLearn(view) {
   whatRows.append(
     learnRow('무엇을 담나', '회사 규칙·페르소나, 팀이 쌓은 지식과 절차, 진행 중인 과업, 자주 쓰는 용어 등 — AI가 알고 있어야 할 회사 맥락 전부.'),
     learnRow('어떻게 전달되나', '구성원이 한 번 설치하면, AI 세션이 열릴 때마다 최신 내용이 자동으로 들어갑니다. 사람이 매번 복사·설명할 필요가 없습니다.'),
-    learnRow('누가 바꾸나', '관리자는 [관리] 탭에서 규칙·맥락·메모리를 편집하고 [발행]하면 모두에게 반영됩니다. 구성원은 한 번만 설치하면 끝입니다.'),
-    learnRow('처음이라면', '옆 [설치]에서 내 컴퓨터에 설치부터 하세요. 그다음은 자동입니다.'),
+    learnRow('누가 바꾸나', '관리자는 [관리] 탭에서 규칙·맥락·메모리를 편집하고 [변경사항 적용]하면 모두에게 반영됩니다. 구성원은 한 번만 설치하면 끝입니다.'),
+    learnRow('처음이라면', '바로 시작하려면 [설치 단계](#/install)를 그대로 따라 하세요 — 5분이면 끝납니다. 그다음은 자동입니다.'),
   );
   whatCard.append(whatRows);
 
   // B. '지식 하나'가 실제로 뭔지 — 예시 카드로 구체화(추상 개념을 눈으로). 그다음 종류 4가지. (정적 — API 불필요)
   const unitCard = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '여기 담기는 ‘지식’ 하나가 뭔가요' })),
-    el('p', { class: 'guide-lead', text: '회사 지식이 한 덩어리씩 쌓입니다. 덩어리 하나는 제목과 내용으로 된 짧은 글이에요 — 메모 한 장, 문서 한 페이지 같은 겁니다. 예를 들면 이런 모습이에요:' }));
-  const example = el('div', { class: 'gloss-example' },
-    el('span', { class: 'gloss-example-tag', text: '예시 · 규칙' }),
-    el('div', { class: 'gloss-example-title', text: 'push 전 빌드 + 린트' }),
-    el('div', { class: 'gloss-example-body', text: '코드를 올리기 전 반드시 빌드와 린트를 통과시킨다. 깨진 코드가 공유되지 않게.' }));
-  unitCard.append(example);
-  unitCard.append(el('p', { class: 'admin-hint', style: 'margin:16px 0 8px', text: '글 하나하나는 성격에 따라 네 가지로 나뉩니다 (이름 옆 알파벳은 시스템이 쓰는 약자):' }));
+    el('p', { class: 'guide-lead', text: '회사 지식이 한 덩어리씩 쌓입니다. 덩어리 하나는 제목과 내용으로 된 짧은 글이에요 — 메모 한 장, 문서 한 페이지 같은 겁니다. 성격에 따라 네 가지로 나뉘는데, 각각 이런 모습이에요 (이름 옆 알파벳은 시스템이 쓰는 약자):' }));
+  // 네 종류(R/K/H/W) 각각 — 비개발자가 한눈에 이해할 쉬운 예시를 하나씩. [글자, 한글이름, 설명, 예시제목, 예시내용]
   const GLOSS = [
-    ['R', '규칙', 'AI가 항상 지켜야 할 회사 규칙'],
-    ['K', '지식', '자료·결정·조사처럼 쌓인 지식'],
-    ['H', '절차', '“이런 일은 이렇게” 하는 방법'],
-    ['W', '할 일', '지금 진행 중인 과업'],
+    ['R', '규칙', 'AI가 항상 지켜야 할 회사 규칙',
+      '추측으로 답하지 않기', '확실한 근거가 없으면 “잘 모르겠다”고 말한다. 그럴듯하게 지어내지 않는다.'],
+    ['K', '지식', '자료·결정·조사처럼 쌓인 지식',
+      '경쟁사 가격 비교 (2월 조사)', 'A사 월 9,900원, B사 월 14,000원, 우리 월 12,000원 — 우리가 중간 가격대.'],
+    ['H', '절차', '“이런 일은 이렇게” 하는 방법',
+      '새 팀원이 오면 하는 일', '① 슬랙·노션에 초대한다 → ② 필요한 권한을 준다 → ③ 환영 점심을 잡는다.'],
+    ['W', '할 일', '지금 진행 중인 과업',
+      '홈페이지 가격 페이지 새로 만들기', '이번 주까지 · 담당 원준. 새 요금제 3가지를 보기 좋게 정리하기.'],
   ];
-  const glossList = el('div', { class: 'gloss-list' });
-  for (const [g, ko, desc] of GLOSS) {
-    glossList.append(el('div', { class: 'gloss-row' },
-      el('span', { class: 'gloss-glyph', 'aria-hidden': 'true', text: g }),
-      el('div', { class: 'gloss-main' },
-        el('div', {}, el('span', { class: 'gloss-ko', text: ko }), el('span', { class: 'gloss-code', text: ' (' + g + ')' })),
-        el('div', { class: 'gloss-desc', text: desc }))));
+  const glossList = el('div', { class: 'kind-ex-list' });
+  for (const [g, ko, desc, exTitle, exBody] of GLOSS) {
+    glossList.append(el('div', { class: 'kind-ex' },
+      el('div', { class: 'kind-ex-head' },
+        el('span', { class: 'gloss-glyph', 'aria-hidden': 'true', text: g }),
+        el('div', { class: 'gloss-main' },
+          el('div', {}, el('span', { class: 'gloss-ko', text: ko }), el('span', { class: 'gloss-code', text: ' (' + g + ')' })),
+          el('div', { class: 'gloss-desc', text: desc }))),
+      el('div', { class: 'gloss-example' },
+        el('span', { class: 'gloss-example-tag', text: '예시' }),
+        el('div', { class: 'gloss-example-title', text: exTitle }),
+        el('div', { class: 'gloss-example-body', text: exBody }))));
   }
-  unitCard.append(glossList, el('p', { class: 'admin-hint', style: 'margin-top:14px' }, '실제 지식들은 ',
+  unitCard.append(glossList, el('p', { class: 'admin-hint', style: 'margin-top:16px' }, '실제 지식들은 ',
     el('a', { href: '#/browse', text: '[탐색] 탭' }), ' 에서 하나씩 열어볼 수 있어요.'));
 
   view.replaceChildren(startSubBar('learn'), head, whatCard, el('div', { class: 'eyebrow', text: '용어' }), unitCard);
   document.getElementById('view').focus?.();
 }
 
-// 설치 탭(#/install) — 모든 구성원 필수 첫 행동. 관리의 설치 패널(deployPanel) 재사용 — 게이트웨이 주소는 org 프로필에서(비-admin 도 안전: tokens redact).
+// 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
+//  핵심: 쓰는 곳이 두 갈래라 시작법이 다르다 — (web) 라이블리 [터미널] 탭=서버에서 claude/codex 가 돌고
+//  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
+//  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
   const head = el('div', { class: 'page-head' },
-    el('h1', {}, '내 컴퓨터에 ', el('span', { class: 'accent', text: '설치' })),
-    el('p', { class: 'sub', text: '이 도구를 쓰려면 본인 컴퓨터에 한 번 설치해야 합니다. 설치하면 AI(예: Claude Code) 세션에 회사 공통 맥락이 자동으로 들어옵니다. 새 기기·재설치·업데이트도 여기서 합니다.' }),
+    el('h1', {}, 'AI 쓰기 ', el('span', { class: 'accent', text: '시작하기' })),
+    el('p', { class: 'sub', text: '라이블리에서 AI(Claude Code·Codex)를 쓰는 방법은 두 가지입니다. 아래에서 본인 상황을 고르면, 그에 맞춰 차근차근 안내합니다.' }),
   );
-  const slot = el('div', { class: 'guide-install' });
-  slot.append(el('p', { class: 'admin-hint', text: '설치 안내를 준비하는 중…' }));
+  const slot = el('div', { class: 'install-guide' });
+  slot.append(skeleton('설치 안내를 준비하는 중'));
   view.replaceChildren(startSubBar('install'), head, slot);
   document.getElementById('view').focus?.();
-  loadAdmin().then((adminData) => deployPanel(slot, adminData))
-    .catch((e) => slot.replaceChildren(el('p', { class: 'admin-hint', text: '설치 안내를 불러오지 못했습니다 — ' + ((e && e.message) || e) })));
+  loadAdmin().then((data) => drawInstallGuide(slot, data))
+    .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
+}
+
+// 설치 가이드 — 먼저 '어디서 쓰나'(web/local) 를 고르게 하고, 고른 모드의 가이드만 렌더. slot 안만 교체.
+function drawInstallGuide(slot, data) {
+  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const mode = state.start.mode === 'local' ? 'local' : 'web';
+
+  // ── 0. 먼저 이게 뭔가요(짧게) ──
+  const intro = el('div', { class: 'card install-intro' },
+    el('div', { class: 'card-head' }, el('h2', { text: '먼저, 이게 뭔가요' })),
+    el('p', { class: 'guide-lead', text: '이걸 쓰면 AI(Claude Code·Codex)가 우리 회사의 규칙·맥락·기억을 “이미 아는 채로” 일을 시작합니다. 매번 배경을 다시 설명할 필요가 없어져요.' }),
+    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '개념·용어가 더 궁금하면 ',
+      el('a', { href: '#/learn', text: '[사용설명서]' }), ' 를 먼저 봐도 좋아요.'));
+
+  // ── 1. 어디서 쓰나 — 두 갈래 선택(카드 클릭 시 아래 가이드가 바뀜) ──
+  const chooser = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '어디서 AI를 쓰실 건가요?' })),
+    el('p', { class: 'admin-hint', text: '본인이 주로 쓰는 곳을 고르세요. 둘은 시작법이 다릅니다(둘 다 써도 됩니다).' }),
+    el('div', { class: 'mode-choice' },
+      modeCard('web', '라이블리 웹의 [터미널] 탭', '설치 필요 없음 · 웹에서 바로',
+        '브라우저만 있으면 끝. 빠르게 써보거나 비개발자에게 추천.', mode, slot, data),
+      modeCard('local', '내 컴퓨터의 터미널', '한 번 설치 필요 · 약 5분',
+        '내 노트북(맥/윈도우) 터미널에서 직접 claude·codex 를 켜서 쓰는 분.', mode, slot, data)));
+
+  const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data);
+  slot.replaceChildren(intro, chooser, ...guide);
+}
+
+// 모드 선택 카드(웹 터미널 탭 vs 내 컴퓨터). 선택 시 재렌더.
+function modeCard(key, title, tag, hint, active, slot, data) {
+  const on = key === active;
+  const pick = () => { if (state.start.mode !== key) { state.start.mode = key; drawInstallGuide(slot, data); } };
+  return el('div', {
+    class: 'mode-card' + (on ? ' active' : ''), role: 'button', tabindex: '0',
+    'aria-pressed': on ? 'true' : 'false',
+    onclick: pick,
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } },
+  },
+    el('div', { class: 'mode-card-top' },
+      el('span', { class: 'mode-card-radio', 'aria-hidden': 'true' }),
+      el('span', { class: 'mode-card-tag', text: tag })),
+    el('div', { class: 'mode-card-title', text: title }),
+    el('div', { class: 'mode-card-hint', text: hint }));
+}
+
+// (web) 라이블리 [터미널] 탭에서 쓰는 사람 — 내 컴퓨터엔 설치 0. 서버에서 claude/codex 가 회사맥락 가진 채 돈다.
+function webGuideNodes() {
+  const callout = el('div', { class: 'card install-callout' },
+    el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 안 깔아도 됩니다.' }),
+    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 설치돼 있어요. 웹 브라우저만 있으면 바로 시작할 수 있습니다.' }));
+
+  const steps = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '쓰는 순서' })),
+    el('div', { class: 'step-list' },
+      installStep(1, '위쪽 메뉴에서 [터미널] 탭 열기',
+        el('p', { class: 'step-p' }, '맨 위 메뉴에서 ', el('a', { href: '#/terminal', text: '[터미널]' }), ' 을 누르세요.')),
+      installStep(2, '[+ 새 세션] 누르기',
+        el('p', { class: 'step-p', text: '오른쪽 위 파란 [+ 새 세션] 버튼을 누르면 만들기 창이 떠요.' })),
+      installStep(3, '작업 폴더와 AI를 고르고 [만들기]',
+        el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }),
+          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하고 [만들기]를 누르세요.'),
+        el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })),
+      installStep(4, '열린 창에서 바로 대화하기',
+        el('p', { class: 'step-p', text: '까만 창(터미널)이 열리면 거기에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
+        el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어, 다음에 [터미널] 탭에서 다시 이어서 쓸 수 있어요.' }))));
+
+  const note = el('div', { class: 'card install-next' },
+    el('div', { class: 'card-head' }, el('h2', { text: '참고' })),
+    el('ul', { class: 'step-ul note-ul' },
+      el('li', {}, '이 방식이 되려면 ', el('b', { text: '관리자가 서버에 라이블리를 한 번 설치' }), '해 둬야 합니다. 보통 이미 돼 있으니 그냥 쓰면 되고, 안 되면 관리자에게 알려주세요.'),
+      el('li', {}, '세션은 팀원과 ', el('b', { text: '공유' }), '하거나 ', el('b', { text: '비공개' }), '로 둘 수 있어요(만들 때 선택).'),
+      el('li', {}, '내 노트북 터미널에서 직접 쓰고 싶으면, 위에서 ', el('b', { text: '[내 컴퓨터의 터미널]' }), ' 을 골라 설치하세요.')));
+
+  return [callout, steps, note];
+}
+
+// (local) 내 컴퓨터 터미널에서 쓰는 사람 — 내 머신에 한 번 설치. OS 토글로 단계가 바뀐다.
+function localGuideNodes(gw, slot, data) {
+  const os = state.start.os === 'windows' ? 'windows' : 'mac';
+  const isWin = os === 'windows';
+
+  const callout = el('div', { class: 'card install-callout' },
+    el('div', { class: 'callout-strong', text: '내 컴퓨터에 한 번 설치합니다 (약 5분).' }),
+    el('p', { class: 'callout-sub', text: '설치하면 내 노트북에서 claude(또는 codex)를 켤 때마다 회사 맥락이 자동으로 들어와요. 처음 딱 한 번만 하면 끝입니다.' }));
+
+  // ── 준비물 — 대부분 이미 있음. 막히기 쉬운 node 는 확인법까지 명시(없으면 hooks 미설치=조용한 반쪽설치). ──
+  const needs = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '준비물 (잠깐 확인)' })),
+    el('p', { class: 'admin-hint', text: '아래만 있으면 됩니다. 대부분 이미 갖춰져 있어요.' }),
+    checklist([
+      ['내 컴퓨터 (Mac 또는 Windows)', '회사에서 쓰는 본인 노트북이면 됩니다.'],
+      ['터미널 앱', '맥·윈도우에 기본으로 들어 있어요. 여는 법은 아래 1단계에서 알려드립니다.'],
+      ['Node.js (거의 항상 이미 있음)', '터미널을 연 뒤(아래 1단계) node -v 를 입력해 v20 같은 숫자가 보이면 통과예요. 안 보이면 nodejs.org 에서 ‘LTS’ 설치 파일을 받아 더블클릭하세요.'],
+      ['회사 계정', '설치 마지막에 회사 계정으로 로그인하는 브라우저 창이 한 번 뜹니다.'],
+    ]));
+
+  // ── 2. 단계 — OS 토글을 카드 헤더에 두고, 단계 본문이 OS 에 맞게 바뀐다 ──
+  const osTabs = el('div', { class: 'os-tabs' },
+    ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
+      class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
+      onclick: () => { if (state.start.os !== o) { state.start.os = o; drawInstallGuide(slot, data); } } })));
+
+  const term = isWin
+    ? installStep(1, '터미널(PowerShell) 열기',
+        el('p', { class: 'step-p' }, '화면 왼쪽 아래 ', kbd('시작'), ' 버튼을 누르고 ',
+          kbd('powershell'), ' 라고 입력 → 목록에서 ', el('b', { text: 'Windows PowerShell' }), ' 을 클릭하세요.'),
+        el('p', { class: 'step-note', text: '파란색 글자 입력 창이 하나 뜹니다. 이게 명령을 붙여넣을 곳이에요.' }))
+    : installStep(1, '터미널 열기',
+        el('p', { class: 'step-p' }, '키보드에서 ', kbd('⌘'), ' + ', kbd('스페이스바'),
+          ' 를 동시에 눌러 검색창을 띄우고, ', kbd('터미널'), ' 이라고 입력한 뒤 ', kbd('Enter'), ' 를 누르세요.'),
+        el('p', { class: 'step-note', text: '글자만 있는 작은 창이 하나 뜹니다. 이게 ‘터미널’이고, 여기에 명령을 붙여넣게 됩니다.' }));
+
+  const mint = installStep(2, '내 설치 명령 만들기',
+    el('p', { class: 'step-p', text: '아래 버튼을 누르면 ‘나만의 설치 명령’이 만들어집니다. 이 명령에는 본인 전용 접속 토큰이 들어 있으니 남과 공유하지 마세요(토큰은 지금 한 번만 보입니다). 만든 다음 [명령 복사]를 누르세요.' }),
+    installCmdBox(gw, os, slot, data));
+
+  const run = installStep(3, '명령 붙여넣고 실행하기',
+    el('p', { class: 'step-p' }, '1단계에서 연 터미널 창을 클릭한 다음, 방금 복사한 명령을 붙여넣고(',
+      isWin ? kbd('Ctrl') : kbd('⌘'), ' + ', kbd('V'), ') ', kbd('Enter'), ' 를 누르세요.'),
+    el('p', { class: 'step-note', text: '명령이 길어 보여도 한 줄이에요 — 통째로 붙여넣으면 됩니다. 그러면 알아서 진행됩니다. 도중에 이런 게 나올 수 있어요:' }),
+    el('ul', { class: 'step-ul' },
+      el('li', {}, 'Claude Code 가 없으면 ', el('b', { text: '“설치할까요? [y/N]”' }), ' 라고 물어봐요 → ', kbd('y'), ' 를 누르고 ', kbd('Enter'), '.'),
+      el('li', {}, '회사 계정 ', el('b', { text: '로그인 브라우저 창' }), ' 이 뜨면 회사 계정으로 로그인하세요.'),
+      el('li', {}, el('b', { text: '“=== 끝! ===”' }), ' 비슷한 메시지가 보이면 설치가 끝난 거예요.')));
+
+  const verify = installStep(4, '잘 됐는지 확인하기',
+    el('p', { class: 'step-p' }, '같은 터미널에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'),
+    cmdLine('claude mcp list'),
+    el('p', { class: 'step-note' }, '목록에 ', el('b', { text: 'lively' }), ' 가 보이면 성공이에요. ',
+      '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다.'));
+
+  const steps = el('div', { class: 'card' },
+    el('div', { class: 'card-head' },
+      el('h2', { text: '설치 단계' }),
+      el('div', { class: 'os-pick' }, el('span', { class: 'os-pick-label', text: '내 컴퓨터' }), osTabs)),
+    isWin ? el('p', { class: 'admin-warn', text: '⚠ Windows 설치는 아직 검증이 충분치 않습니다. 막히면 관리자에게 알려주세요.' }) : null,
+    el('div', { class: 'step-list' }, term, mint, run, verify));
+
+  // ── 3. 끝났어요 — 이제 뭘 하나 ──
+  const next = el('div', { class: 'card install-next' },
+    el('div', { class: 'card-head' }, el('h2', { text: '끝났어요 — 이제 뭘 하나요' })),
+    el('p', { class: 'guide-lead', text: '설치가 끝나면 평소처럼 Claude Code 를 켜서 일하면 됩니다. 어느 폴더에서 켜든 회사 공통 맥락·규칙이 자동으로 함께 들어가요. 매번 회사 사정을 설명하지 않아도 됩니다.' }),
+    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '회사에 어떤 맥락이 쌓여 있는지 둘러보려면 ',
+      el('a', { href: '#/map', text: '[회사 맥락]' }), ' 탭으로 가보세요. (자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
+
+  // ── 4. 유지보수(접힘) — 처음엔 필요 없음. 나중에 업데이트/제거할 때만. ──
+  const staticBlock = (c) => el('div', { class: 'deploy-block' },
+    el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
+      c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
+    el('p', { class: 'admin-hint', text: c.note }),
+    el('pre', { class: 'admin-preview', text: c.cmd }));
+  const maint = el('details', { class: 'install-maint' },
+    el('summary', { text: '＋ 나중에 필요할 때: 업데이트 · 제거 (지금은 안 봐도 됩니다)' }),
+    el('p', { class: 'admin-hint', text: '처음 설치에는 필요 없습니다. 나중에 라이블리를 최신으로 갱신하거나, 내 컴퓨터에서 지울 때만 쓰는 명령이에요. 업데이트·제거는 설치된 토큰을 자동으로 읽어, 토큰을 다시 넣을 필요가 없습니다.' }),
+    ...deployCommands(gw, os).filter((c) => c.kind !== 'install').map(staticBlock));
+
+  return [callout, needs, steps, next, maint];
+}
+
+// 번호 매긴 설치 단계 한 칸.
+function installStep(n, title, ...body) {
+  return el('div', { class: 'step' },
+    el('div', { class: 'step-num', 'aria-hidden': 'true', text: String(n) }),
+    el('div', { class: 'step-body' },
+      el('div', { class: 'step-title', text: title }),
+      ...body));
+}
+
+// 자가발급 토큰으로 본인 설치 명령을 만들어 보여주는 박스(step 2 내부). 토큰은 state.start.token 에 캐시.
+function installCmdBox(gw, os, slot, data) {
+  const result = el('div', { class: 'install-cmd-slot' });
+  const draw = () => {
+    if (!state.start.token) { result.replaceChildren(); return; }
+    const cmd = installCmd(gw, os, state.start.token);
+    result.replaceChildren(
+      el('p', { class: 'install-ok', text: '✓ 내 설치 명령이 만들어졌어요. [명령 복사]를 누른 뒤 3단계로 가세요. (이 토큰은 지금만 보입니다.)' }),
+      el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+      el('pre', { class: 'admin-preview', text: cmd }));
+  };
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: state.start.token ? '명령 다시 만들기' : '내 설치 명령 만들기' });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      state.start.token = r.token;
+      go.textContent = '명령 다시 만들기';
+      draw();
+    } catch (e) { toast(e.message, true); }
+    go.disabled = false;
+  });
+  draw();
+  return el('div', {}, el('div', { class: 'install-minter' }, go), result);
+}
+
+// 복사 가능한 한 줄 명령(확인용 등 — 토큰 없는 짧은 명령).
+function cmdLine(cmd) {
+  return el('div', { class: 'cmd-line' },
+    el('code', { class: 'cmd-line-text', text: cmd }),
+    copyButton(() => cmd, '복사'));
+}
+
+// 키캡(키보드 키·메뉴 항목 강조) — 비개발자용 시각 힌트.
+function kbd(label) { return el('span', { class: 'kbd', text: label }); }
+
+// 준비물 체크리스트.
+function checklist(items) {
+  const wrap = el('div', { class: 'install-checks' });
+  for (const [k, v] of items) {
+    wrap.append(el('div', { class: 'install-check' },
+      el('span', { class: 'check-mark', 'aria-hidden': 'true', text: '✓' }),
+      el('div', { class: 'check-main' },
+        el('div', { class: 'check-k', text: k }),
+        el('div', { class: 'check-v', text: v }))));
+  }
+  return wrap;
 }
 
 // 안내 카드 안의 라벨 + 값 한 줄 — 값은 안전 마크다운 렌더(자유텍스트의 인라인 서식 허용, HTML 주입 불가).
@@ -1847,8 +2070,10 @@ async function renderTerminal(view, teamId) {
     for (const t of teams) tlist.append(teamRow(t, cfg, view));
     sections.push([termSectionHead('팀 폴더', '팀원만 보고 열 수 있는 폴더입니다.'), tlist]);
   }
+  const pubMine = pub.filter((s) => s.owned);
+  const pubOthers = pub.filter((s) => !s.owned);
   sections.push([termSectionHead('공개 세션', '모든 멤버에게 보이는 세션입니다.'),
-    termSessionList(pub, cfg, view, '공개 세션이 없습니다. "새 세션"으로 만드세요.')]);
+    termPublicSection(pubMine, pubOthers, cfg, view)]);
   sections.push([termSectionHead('비공개 세션', '나에게만 보이는 세션입니다.'),
     termSessionList(priv, cfg, view, '비공개 세션이 없습니다.')]);
   sections.forEach(([secHead, secList], i) => {
@@ -1865,12 +2090,34 @@ function termSectionHead(title, desc) {
     el('div', { class: 'term-section-title', text: title }),
     desc ? el('div', { class: 'caption term-section-desc', text: desc }) : null);
 }
-// 세션 목록(비면 안내 문구).
+// 세션 목록(비면 안내 문구 — emptyText 가 있을 때만).
 function termSessionList(items, cfg, view, emptyText) {
   const list = el('div', { class: 'term-list' });
-  if (!items.length) list.append(el('div', { class: 'empty', text: emptyText }));
+  if (!items.length && emptyText) list.append(el('div', { class: 'empty', text: emptyText }));
   for (const s of items) list.append(termRow(s, cfg, view, null));
   return list;
+}
+// 공개 세션 = 내 것 + 다른 멤버 것. 남의 공개 세션은 계속 쌓이므로 기본 접고(N개) 펼쳐 보게 한다.
+function termPublicSection(pubMine, pubOthers, cfg, view) {
+  const wrap = el('div', {});
+  if (pubMine.length) wrap.append(termSessionList(pubMine, cfg, view, ''));
+  else if (!pubOthers.length) wrap.append(termSessionList([], cfg, view, '공개 세션이 없습니다. "새 세션"으로 만드세요.'));
+  else wrap.append(el('div', { class: 'caption', style: 'margin-top:10px', text: '내가 만든 공개 세션은 없습니다.' }));
+  if (pubOthers.length) {
+    const list = termSessionList(pubOthers, cfg, view, '');
+    list.style.display = 'none';
+    const caret = el('span', { class: 'term-fold-caret', text: '▾' });
+    const toggle = el('button', { class: 'term-fold', type: 'button' },
+      caret, el('span', { text: '다른 멤버의 공개 세션 ' + pubOthers.length + '개' }));
+    toggle.addEventListener('click', () => {
+      const open = list.style.display === 'none';
+      list.style.display = open ? '' : 'none';
+      caret.textContent = open ? '▴' : '▾';
+      toggle.classList.toggle('open', open);
+    });
+    wrap.append(toggle, list);
+  }
+  return wrap;
 }
 
 // 팀 폴더 행(루트 화면). 열기=팀 진입, 소유자는 팀원 관리·해제.
@@ -2298,15 +2545,15 @@ const ADMIN_GROUPS = [
 ];
 const ADMIN_SECTIONS = [
   // ① 기본 설정 — 한 번 세팅하면 굴러가는 기본기(누가 쓰나·어떻게 연결·반영).
-  { key: 'profile', label: '조직 · 연결', meaning: 'gateway-url', group: 'basic' },
+  { key: 'profile', label: '조직 정보 · 연결', meaning: 'gateway-url', group: 'basic' },
   { key: 'members', label: '구성원', meaning: 'member', group: 'basic' },
-  { key: 'tokens', label: '토큰', meaning: null, group: 'basic' },
-  { key: 'publish', label: '발행', meaning: null, group: 'basic' },
+  { key: 'tokens', label: '접속 권한', meaning: null, group: 'basic' },
+  { key: 'publish', label: '변경사항 적용', meaning: null, group: 'basic' },
   // ② 회사·조직 — 회사가 AI에 가르치는 내용(규칙·맥락·메모리·통제어휘).
-  { key: 'managed-policy', label: '강제 규칙', meaning: 'managed-policy', group: 'org' },
-  { key: 'org-defaults', label: '회사 맥락 · 페르소나', meaning: 'org-defaults', group: 'org' },
-  { key: 'memory', label: '팀 메모리', meaning: 'memory', group: 'org' },
-  { key: 'domains-repos', label: '도메인 · 레포', meaning: null, group: 'org' },
+  { key: 'managed-policy', label: 'AI 필수 규칙', meaning: 'managed-policy', group: 'org' },
+  { key: 'org-defaults', label: '회사 소개 · AI 성격', meaning: 'org-defaults', group: 'org' },
+  { key: 'memory', label: '팀 공유 메모리', meaning: 'memory', group: 'org' },
+  { key: 'domains-repos', label: '주제 분류', meaning: null, group: 'org' },
   // ③ AI 동작·연결 (고급) — AI가 실제 어떻게 동작/어떤 데이터에 닿나.
   //  훅 — '커스텀 훅'(임의 코드 정의 = 일반)이 상위, '런타임 훅'(빌트인 리플렉스 토글 = 특수)과 '주입 미리보기'는 그 하위.
   { key: 'custom-hooks', label: '커스텀 훅 (코드 정의)', meaning: 'custom-hook', group: 'ai' },
@@ -2341,37 +2588,91 @@ function meaningRow(k, v) {
     el('span', { class: 'meaning-k', text: k }),
     el('span', { class: 'meaning-v', text: v }));
 }
-// '구성원에게 미치는 효과' 카드 — 의미 인지의 핵심 컴포넌트.
-function meaningCard(m) {
-  if (!m) return null;
-  const tag = { critical: '절대 규칙', identity: '신원 · 매칭', infra: '연결 · 배포', normal: '' }[m.tone] || '';
+// 비개발자용 카드 카피 — 서버 MEANING(기술적·장황) 위에 클라에서 덮어쓴다(즉시 반복, 서버 재시작 불요).
+//  키 = 섹션 meaning 키. 없는 키(고급 훅·MCP·DB·툴 등)는 서버 카피로 폴백.
+const MEANING_KO = {
+  'managed-policy': {
+    label: 'AI 필수 규칙',
+    what: '회사의 모든 AI가 무조건 지켜야 하는 규칙이에요. 개인이 끄거나 바꿀 수 없어요.',
+    reach: '모든 구성원과 그들이 쓰는 AI',
+    when: '대화를 시작할 때 가장 먼저 적용돼요',
+    where: 'AI가 답을 만들 때 무엇보다 우선해서 지켜요',
+    example: "'고객 개인정보는 절대 보여주지 않기'를 넣으면, 그때부터 모두의 AI가 무조건 그렇게 해요.",
+  },
+  'org-defaults': {
+    label: '회사 소개 · AI 성격',
+    what: '회사가 어떤 곳인지, AI가 어떤 성격·말투로 일하는지, 우리 팀이 일하는 방식이에요.',
+    reach: '모든 구성원과 그들이 쓰는 AI',
+    when: '대화를 시작할 때 자동으로 깔려요 (필수 규칙 다음)',
+    where: 'AI가 답할 때 바탕에 깔리는 기본 분위기예요',
+    example: "'근거 없이 단정하지 않기'를 더하면, 그때부터 모두의 AI가 더 신중하게 답해요.",
+  },
+  'memory': {
+    label: '팀 공유 메모리',
+    what: '팀이 함께 쌓아두는 메모예요. AI가 필요할 때 꺼내 봅니다.',
+    reach: '모든 구성원과 그들이 쓰는 AI',
+    when: '제목은 늘 보이고, 자세한 내용은 AI가 필요할 때 찾아봐요',
+    where: "AI가 '우리 팀이 전에 이렇게 정했지'를 떠올려야 할 때 참고해요",
+    example: '새로 내린 결정을 메모로 올리면, 모두의 AI가 그 결정을 알고 일관되게 답해요.',
+  },
+  'member': {
+    label: '구성원 정보',
+    what: '한 사람(또는 AI·시스템)이 누구인지, 어떤 계정(이메일·슬랙 등)을 쓰는지예요.',
+    reach: '그 사람 + 전체 검색·연결',
+    when: '저장하면 바로 반영돼요',
+    where: "AI가 사람을 찾거나 '담당자에게 맡기기' 할 때 쓰는 정보예요",
+    example: '어떤 사람의 슬랙 계정을 연결하면, AI가 그 사람의 슬랙 활동을 한 사람으로 묶어 봐요.',
+  },
+  'gateway-url': {
+    label: '서버 주소',
+    what: '구성원의 AI가 실시간 현황을 받아오는 우리 회사 서버 주소예요.',
+    reach: '모든 구성원의 AI',
+    when: '구성원이 다시 설치한 다음부터 새 주소를 써요',
+    where: "대화 첫머리의 '실시간 현황'을 어디서 가져올지 정해요",
+    example: '서버를 옮겨 주소를 바꾸면, 재설치 후부터 새 주소에서 현황을 받아요. (연결이 안 되면 기본 내용만 보여서 안전해요.)',
+  },
+  'display_name': {
+    label: '조직 이름',
+    what: '이 팀(조직)의 이름이에요.',
+    reach: '모든 구성원과 그들이 쓰는 AI',
+    when: '구성원이 다시 설치한 다음부터 반영돼요',
+    where: '대화 맨 앞 머리말과 현황 제목에 나와요',
+    example: '이름을 바꾸면 모두의 대화 머리말이 그 이름으로 바뀌어요.',
+  },
+};
+function meaningOf(m) { return (m && MEANING_KO[m.key]) ? { ...m, ...MEANING_KO[m.key] } : m; }
+
+// '쉽게 말하면' 카드 — 이 설정이 구성원에게 실제로 무슨 일을 하는지 비개발자 말로.
+function meaningCard(m0) {
+  if (!m0) return null;
+  const m = meaningOf(m0);
+  const tag = { critical: '꼭 지킴', identity: '신원', infra: '연결', normal: '' }[m.tone] || '';
   return el('div', { class: 'meaning meaning-' + m.tone },
     el('div', { class: 'meaning-head' },
       el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
-      el('span', { class: 'meaning-title', text: '이 내용이 구성원에게 미치는 효과' }),
+      el('span', { class: 'meaning-title', text: '이 내용이 하는 일' }),
       tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
     el('p', { class: 'meaning-what', text: m.what }),
     el('div', { class: 'meaning-grid' },
-      meaningRow('누가 받나', m.reach),
-      meaningRow('언제 도달', m.when),
-      meaningRow('어디에 나타나나', m.where)),
+      meaningRow('누가 보나', m.reach),
+      meaningRow('언제 적용되나', m.when),
+      meaningRow('어디에 쓰이나', m.where)),
     el('div', { class: 'meaning-ex' },
-      el('span', { class: 'meaning-ex-label', text: '예시' }),
+      el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
       el('span', { text: m.example })));
 }
 
 function adminRowMeta(key, data) {
   if (key === 'kinds') return (state.overview ? state.overview.kinds.length : 4) + '개 종류';
-  if (key === 'domains-repos') { const s = state.domains[VOCAB_CRUD_DEFAULT_REPO]; return s && s.loaded && !s.error ? s.list.length + '개 도메인' : '통제 어휘 관리'; }
-  if (key === 'managed-policy' || key === 'org-defaults') {
-    const s = data.sections[key];
-    return s && s.body_md && s.body_md.trim() ? '작성됨 · v' + s.version : '비어 있음';
-  }
-  if (key === 'memory') return data.memory.length + '개 문서';
-  if (key === 'members') return data.members.length + '명';
-  if (key === 'tokens') return (data.tokens || []).filter((t) => !t.revoked_at).length + '개 활성';
-  if (key === 'profile') return data.profile.gateway_url ? '연결됨' : '게이트웨이 미설정';
-  if (key === 'publish') return '구성원에게 게시';
+  // 회색 보조설명 = '이게 무슨 탭인지' 짧은 설명(개수·시각 아님). 비개발자가 한눈에 알게.
+  if (key === 'profile') return '조직 이름과 서버 주소';
+  if (key === 'members') return '함께 쓰는 사람';
+  if (key === 'tokens') return '구성원에게 접속 열쇠 발급';
+  if (key === 'publish') return '바꾼 내용을 구성원에게 반영';
+  if (key === 'managed-policy') return 'AI가 항상 지킬 규칙';
+  if (key === 'org-defaults') return '회사 배경과 AI 말투';
+  if (key === 'memory') return '팀이 함께 쌓는 메모';
+  if (key === 'domains-repos') return '지식을 정리하는 주제';
   if (key === 'deploy') return 'OS별 명령 복사';
   if (key === 'runtime') { const rc = data.runtimeConfig; if (!rc) return ''; const off = Object.values(rc.hooks || {}).filter((v) => v === false).length; return (off ? off + '개 훅 꺼짐' : '훅 전체 켜짐') + ' · work-roots ' + (rc.work_roots || []).length; }
   if (key === 'mcp') return (data.mcpServers || []).length + '개 서버';
@@ -2436,7 +2737,7 @@ async function renderAdmin(view, sub) {
     el('div', { class: 'card-head admin-head' },
       el('div', { class: 'admin-head-l' }, el('h2', { text: '관리' })),
       canEdit
-        ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 발행 후 구성원에게 반영됩니다' })
+        ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') + ' · 편집은 [변경사항 적용] 후 구성원에게 반영돼요' })
         : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
     groupBar,
     split));
@@ -2505,7 +2806,7 @@ async function domainsReposPanel(detail, data) {
   // 어휘 CRUD 는 context 스코프(admin 완화). context 없으면 읽기 전용으로 목록만.
   const canEdit = state.admin.canContext;
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '도메인 · 레포' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '주제 분류' }),
       canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
     el('p', { class: 'admin-hint', text: '주제(area)는 2단입니다 — 영역(space): 제품 도메인(코드앵커·부채추적) 또는 비즈니스 기능(GTM·가격·펀딩·시장경쟁·브랜드·조직). 도메인·기능은 자유 키워드가 아니라 레포 하위의 통제 어휘이며, 여기서 관리한 어휘만 지식 저장 시 고를 수 있습니다. 이름변경은 옛 슬러그를 보존하는 별칭 방식이라(물리 키 불변) 기존 지식이 끊기지 않습니다.' }));
   detail.replaceChildren(card);
@@ -2763,38 +3064,57 @@ function domainCrudOverlay(d, repo, detail, data, space) {
   back.querySelector('.ov-box').append(el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
 }
 
-// ── 섹션(강제규칙·회사맥락) markdown 에디터 ──
+// ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
 function sectionEditor(detail, key, data) {
   const canEdit = state.admin.canEdit;
   const meaning = data.meaning[key];
   const sec = data.sections[key] || { body_md: '', version: 0 };
-  const ta = el('textarea', { rows: '18', class: 'admin-ta', 'aria-label': meaning ? meaning.label : key });
-  ta.value = sec.body_md || '';
-  ta.readOnly = !canEdit;
-  const body = [
-    el('div', { class: 'card-head' },
-      el('h2', { text: meaning ? meaning.label : key }),
-      el('button', { class: 'btn btn-ghost btn-sm', text: '멤버 미리보기', onclick: showMemberPreview })),
-    el('p', { class: 'admin-hint', text: canEdit ? 'markdown 으로 작성하세요. 저장은 초안이고, [발행]해야 구성원이 받습니다.' : '읽기 전용 — 이 내용이 모든 구성원의 세션에 주입됩니다.' }),
-    ta,
-  ];
-  if (canEdit) {
-    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-    const status = el('span', { class: 'admin-status' });
-    saveBtn.addEventListener('click', async () => {
-      saveBtn.disabled = true;
-      try {
-        const r = await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section: key, body_md: ta.value }) });
-        data.sections[key] = r.section;
-        status.textContent = '저장됨 · v' + r.section.version;
-        toast('저장됨 — 발행하면 구성원에게 반영됩니다');
-      } catch (e) { toast(e.message, true); status.textContent = ''; }
-      saveBtn.disabled = false;
-    });
-    body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
+  const title = meaning ? meaningOf(meaning).label : key;
+
+  // editing 은 로컬 상태 — 섹션에 진입(renderAdminDetail 재호출)할 때마다 항상 읽기 전용으로 시작.
+  function render(editing) {
+    const ta = el('textarea', { rows: '18', class: 'admin-ta', 'aria-label': title });
+    ta.value = sec.body_md || '';
+    ta.readOnly = !editing;
+
+    const headBtns = el('div', { class: 'card-head-actions' },
+      el('button', { class: 'btn btn-ghost btn-sm', text: '미리보기', onclick: showMemberPreview }),
+      canEdit
+        ? (editing
+            ? el('button', { class: 'btn btn-ghost btn-sm', text: '보기', onclick: () => render(false) })
+            : el('button', { class: 'btn btn-primary btn-sm', text: '수정', onclick: () => render(true) }))
+        : null);
+
+    const body = [
+      el('div', { class: 'card-head' }, el('h2', { text: title }), headBtns),
+      el('p', { class: 'admin-hint', text: editing
+        ? '여기 적은 내용은 [변경사항 적용]을 눌러야 구성원에게 반영돼요(그 전엔 나만 보는 초안).'
+        : (canEdit ? '구성원에게 보이는 모습이에요. 고치려면 [수정]을 누르세요.' : '읽기 전용 — 이 내용이 모든 구성원의 AI에 깔립니다.') }),
+      ta,
+    ];
+
+    if (editing) {
+      const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+      const status = el('span', { class: 'admin-status' });
+      saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true;
+        try {
+          const r = await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section: key, body_md: ta.value }) });
+          data.sections[key] = r.section;
+          sec.body_md = r.section.body_md; sec.version = r.section.version; // [보기] 전환 시 최신본 노출
+          status.textContent = '저장됨 · v' + r.section.version;
+          toast('저장됨 — [변경사항 적용]하면 구성원에게 반영돼요');
+        } catch (e) { toast(e.message, true); status.textContent = ''; }
+        saveBtn.disabled = false;
+      });
+      body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
+    }
+
+    body.push(meaningCard(meaning));
+    detail.replaceChildren(el('div', { class: 'card' }, ...body));
   }
-  body.push(meaningCard(meaning));
-  detail.replaceChildren(el('div', { class: 'card' }, ...body));
+
+  render(false);
 }
 
 // 멤버가 실제 읽는 컨텍스트 미리보기(WYSIWYG) — 오버레이.
@@ -2856,7 +3176,7 @@ function memberForm(root, m, data, detail, isNew) {
   bodyTa.value = m.body_md || '';
 
   // 권한(scopes) — 이 구성원이 받는 토큰의 권한. 변경 시 활성 토큰에도 즉시 반영(서버).
-  const SCOPE_OPTS = [['items', '아이템 조회'], ['context', '컨텍스트'], ['admin', '관리자(편집·발행)'], ['runtime', '런타임(훅·툴 정의)']];
+  const SCOPE_OPTS = [['items', '아이템 조회'], ['context', '컨텍스트'], ['admin', '관리자(편집·적용)'], ['runtime', '런타임(훅·툴 정의)']];
   const scopeChks = {};
   const scopeWrap = el('div', { class: 'scope-wrap' });
   for (const [sk, label] of SCOPE_OPTS) {
@@ -2945,7 +3265,7 @@ function memoryEditor(detail, data) {
     : data.memory.find((x) => x.name === sel);
   if (editing) memoryForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: '팀이 승인한 공식 지식만 둡니다(개인 메모는 각자 로컬).' }), meaningCard(data.meaning['memory']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '팀 메모리' }), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '팀 공유 메모리' }), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 async function memoryForm(root, mem, data, detail, isNew) {
@@ -2994,7 +3314,7 @@ function profileEditor(detail, data) {
   const gwIn = el('input', { type: 'text', value: p.gateway_url || '', placeholder: 'http://게이트웨이:포트' });
   if (!canEdit) { dnIn.disabled = true; gwIn.disabled = true; }
   const body = [
-    el('h2', { text: '조직 · 연결' }),
+    el('h2', { text: '조직 정보 · 연결' }),
     field('조직 표시명', dnIn), meaningCard(data.meaning['display_name']),
     field('게이트웨이 주소', gwIn), meaningCard(data.meaning['gateway-url']),
   ];
@@ -3014,31 +3334,28 @@ function profileEditor(detail, data) {
   detail.replaceChildren(el('div', { class: 'card' }, ...body));
 }
 
-// ── 발행 · 배포 ──
+// ── 변경사항 적용(옛 '발행') ──
 function publishPanel(detail, data) {
-  const pm = data.publishMeaning || {};
-  const runBtn = el('button', { class: 'btn btn-primary', text: '발행(검증)' });
+  const runBtn = el('button', { class: 'btn btn-primary', text: '구성원에게 적용하기' });
   const result = el('div', { class: 'admin-status' });
   runBtn.addEventListener('click', async () => {
-    runBtn.disabled = true; result.textContent = '발행 중…';
+    runBtn.disabled = true; result.textContent = '적용 중…';
     try {
-      const r = await api('/api/ui/org/publish', { method: 'POST', body: '{}' });
-      result.replaceChildren(el('span', { class: 'pill pill-ok', text: '발행 OK' }),
-        ' AGENTS.md ' + (r.artifactBytes != null ? (r.artifactBytes / 1024).toFixed(1) + ' KiB' : '?'),
-        r.warning ? el('span', { class: 'pill pill-warn', text: r.warning }) : null);
-      toast('발행 검증 완료 — 구성원은 설치/재설치로 받습니다');
+      await api('/api/ui/org/publish', { method: 'POST', body: '{}' });
+      result.replaceChildren(el('span', { class: 'pill pill-ok', text: '적용 완료' }), ' 구성원이 받을 준비가 됐어요.');
+      toast('적용됐어요 — 구성원은 설치/재설치로 최신 내용을 받아요');
     } catch (e) { result.textContent = ''; toast(e.message, true); }
     runBtn.disabled = false;
   });
   detail.replaceChildren(el('div', { class: 'card' },
-    el('h2', { text: '발행 · 배포' }),
-    el('p', { class: 'admin-what', text: pm.what || '' }),
-    el('p', { class: 'admin-hint', text: pm.effect || '' }),
-    el('p', { class: 'admin-hint', text: pm.note || '' }),
+    el('h2', { text: '변경사항 적용' }),
+    el('p', { class: 'admin-what', text: '관리 탭에서 바꾼 내용(규칙·회사 소개·메모리 등)을 구성원이 실제로 받을 수 있게 반영하는 버튼이에요.' }),
+    el('p', { class: 'admin-hint', text: '누르기 전 수정은 나만 보는 초안이에요. 누르면 구성원이 명령 한 줄(또는 재설치)로 최신 내용을 받아요.' }),
+    el('p', { class: 'admin-hint', text: '실시간 현황(최근 활동 등)은 이 버튼과 상관없이 늘 자동으로 갱신돼요.' }),
     el('div', { class: 'admin-actions' }, runBtn, result),
     el('div', { class: 'meaning meaning-infra' },
-      el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원 설치 방법' })),
-      el('p', { class: 'meaning-what', text: '구성원은 git 없이 한 줄로 설치합니다 — [구성원] 탭에서 각자 토큰을 발급하면 그 사람 전용 설치 명령이 나옵니다.' }))));
+      el('div', { class: 'meaning-head' }, el('span', { class: 'meaning-dot' }), el('span', { class: 'meaning-title', text: '구성원은 어떻게 받나요?' })),
+      el('p', { class: 'meaning-what', text: '구성원은 [시작하기] > [설치]에서 자기 전용 설치 명령을 받아 한 줄로 설치해요(git 필요 없음).' }))));
 }
 
 // ── 토큰 (발급 현황 + 즉시 회수) — admin 전용 ──
@@ -3068,7 +3385,7 @@ function tokensPanel(detail, data) {
       right);
   };
   const children = [
-    el('h2', { text: '토큰' }),
+    el('h2', { text: '접속 권한' }),
     el('p', { class: 'admin-hint', text: '구성원별로 토큰을 발급(배포용)하고, 발급된 토큰을 회수합니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
     installMinterBlock(data, gw),
   ];
