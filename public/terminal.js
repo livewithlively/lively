@@ -68,6 +68,87 @@ const tabs = []; // { id, label, pane, closable }
 let activeId = 'term';
 
 let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
+
+// ── tmux control-mode 파서 ──
+// 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
+//  `\x1bP1000p` 도입자 → CRLF 줄 단위로 %output / %begin..%end / 각종 %알림.
+//  %output %<pane> <value> : value 는 비출력문자·백슬래시를 8진(\ooo)으로 이스케이프 → 바이트 복원해 xterm 에 write.
+//  %begin <t> <num> <flags> … %end/%error(같은 num) = 명령 응답 블록. 내용 있는 블록 = capture-pane 백필
+//   (서버는 capture 외엔 '내용 있는' 명령을 내지 않는다 — send-keys/refresh-client 는 빈 응답).
+// 옛 방식(plain attach)도 같은 코드로 받게: 도입자가 없으면 raw 모드로 자동 폴백(그대로 term.write).
+const DCS_INTRO = '\x1bP1000p';
+const BACKFILL_LINES = 600; // 첫 연결 시 capture-pane 로 회수할 히스토리 줄 수(현재 화면+모듈러 스크롤백 복원)
+const _te = new TextEncoder();
+function decodeOctal(v) {
+  // %output value 복원 → 원래 바이트열(Uint8Array). 두 종류가 섞여 있다:
+  //  · \ooo(8진) = tmux 가 이스케이프한 '비출력' 바이트(ESC/CR/백슬래시 \134 등) → raw 바이트로 push.
+  //  · 그 외 리터럴 문자 = 이미 디코드된 출력 문자(ASCII + 한글 등 멀티바이트, node-pty 가 UTF-8 디코드함)
+  //    → 리터럴 런을 모아 UTF-8 로 '재인코딩'해 바이트로(한글을 c&0xff 로 깨지 않게). 마지막에 term.write 가 UTF-8 디코드.
+  const out = [];
+  let lit = '';
+  const flush = () => { if (lit) { const b = _te.encode(lit); for (let k = 0; k < b.length; k++) out.push(b[k]); lit = ''; } };
+  for (let i = 0; i < v.length; i++) {
+    if (v.charCodeAt(i) === 92) { // '\'
+      let oct = '', j = i + 1;
+      while (j < v.length && oct.length < 3 && v[j] >= '0' && v[j] <= '7') oct += v[j++];
+      if (oct) { flush(); out.push(parseInt(oct, 8) & 0xff); i = j - 1; continue; }
+      lit += '\\';
+    } else lit += v[i];
+  }
+  flush();
+  return new Uint8Array(out);
+}
+function makeControl(opts) {
+  // opts: { write(Uint8Array), backfill(string), onExit() }
+  let mode = null;        // null=미정, 'control', 'raw'
+  let sniff = '';         // 도입자 판별용 초기 누적
+  let buf = '';           // 부분 줄 잔여
+  let inBlock = false, blockNum = '', blockLines = [];
+  function handleLine(line) {
+    if (inBlock) {
+      if ((line.startsWith('%end ') || line.startsWith('%error ')) && line.split(' ')[2] === blockNum) {
+        inBlock = false;
+        const content = blockLines.join('\r\n'); blockLines = [];
+        if (content.length) opts.backfill(content); // 내용 있는 블록 = capture 백필
+        return;
+      }
+      blockLines.push(line);
+      return;
+    }
+    if (line.startsWith('%output ')) {
+      const rest = line.slice(8);          // '%<pane> <value>'
+      const sp = rest.indexOf(' ');
+      if (sp >= 0) opts.write(decodeOctal(rest.slice(sp + 1)));
+    } else if (line.startsWith('%extended-output ')) {
+      const m = line.match(/^%extended-output \S+ \d+ .*? : (.*)$/); // pause-after 형태
+      if (m) opts.write(decodeOctal(m[1]));
+    } else if (line.startsWith('%begin ')) {
+      inBlock = true; blockNum = line.split(' ')[2] || ''; blockLines = [];
+    } else if (line.startsWith('%exit')) {
+      opts.onExit();
+    }
+    // 그 외 %session-changed/%window-*/%layout-change/%pane-mode-changed … 알림은 무시
+  }
+  function feed(data) {
+    if (mode === 'raw') { opts.write(data); return; }
+    if (mode === null) {
+      sniff += data;
+      if (DCS_INTRO.startsWith(sniff)) return;            // 아직 도입자 prefix — 더 받아 판별
+      if (sniff.startsWith(DCS_INTRO)) { mode = 'control'; buf = sniff.slice(DCS_INTRO.length); }
+      else { mode = 'raw'; opts.write(sniff); }           // 도입자 없음 → 옛 raw 스트림
+      sniff = '';
+      if (mode !== 'control') return;
+    } else { buf += data; }
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      let line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      handleLine(line);
+    }
+  }
+  return { feed, isControl: () => mode === 'control' };
+}
+let ctrl = null, didBackfill = false; // didBackfill: 페이지 로드 후 첫 control 연결만 백필(재연결 중복 방지)
 // fit 후 '크기가 실제로 바뀐 경우에만' pty resize 전송 — 불필요한 SIGWINCH(→ 쉘 프롬프트 재출력이
 //  tmux 히스토리에 중복으로 쌓이는 원인) 제거.
 function applyFit() {
@@ -150,6 +231,23 @@ function setupClipboard() {
       return true; // http origin → 네이티브 paste(Cmd/Ctrl+V)가 xterm 으로 흘러 붙여넣어짐
     }
     return true;
+  });
+}
+
+// 마우스 휠 = 스크롤바처럼 로컬 스크롤백을 직접 오르내림(하드 요구사항). control mode 에선 xterm 이
+//  스크롤백을 소유하므로 normal buffer 에선 휠을 항상 로컬 스크롤로 처리하고 앱으로 흘리지 않는다(false 반환).
+//  단 pane 안의 alt-screen 앱(vim/less 등)은 그쪽이 휠을 쓰도록 그대로 전달(true).
+function setupWheel() {
+  if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
+  term.attachCustomWheelEventHandler((e) => {
+    try { if (term.buffer.active.type === 'alternate') return true; } catch (_) { /* noop */ }
+    let lines;
+    if (e.deltaMode === 1) lines = e.deltaY;                 // line 단위
+    else if (e.deltaMode === 2) lines = e.deltaY * term.rows; // page 단위
+    else lines = e.deltaY / 18;                               // pixel → 대략 셀높이로 환산
+    const n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
+    if (n) term.scrollLines(n);
+    return false;
   });
 }
 
@@ -400,11 +498,13 @@ function boot() {
   setupDnd();
   loadSessionLabel();
 
-  // xterm — scrollback 0: 히스토리는 tmux(copy-mode)가 전담 → xterm 자체 스크롤백과 tmux 재그림이 겹치는
-  //  '줄 중복' 원천 제거. 렌더러는 WebGL(폴백 Canvas) — DOM 렌더러의 스크롤 잔상/중복 아티팩트 회피.
+  // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
+  //  직접 소유한다(iTerm 처럼). 그래서 scrollback 을 충분히 둔다 → 휠 스크롤이 로컬 버퍼를 직접 오르내리고
+  //  resume/재출력이 신선하게 반영(옛 tmux copy-mode 의 '얼어붙은 히스토리' 문제 해소). 옛 줄중복은 우리가
+  //  tmux 전체 재그림이 아니라 pane 출력만 받으므로 구조적으로 발생하지 않는다. 렌더러는 WebGL(폴백 Canvas).
   term = new Terminal({
     fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
-    theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 0, allowProposedApi: true,
+    theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 10000, allowProposedApi: true,
     // tmux mouse on 이라도 선택할 수 있게: macOS 는 Option+드래그(iTerm 습관), 공통으로 Shift+드래그.
     macOptionClickForcesSelection: true, rightClickSelectsWord: true,
   });
@@ -413,6 +513,7 @@ function boot() {
   term.open(host);
   loadRenderer();
   setupClipboard();
+  setupWheel();
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
@@ -446,15 +547,28 @@ async function connectNow() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
   ws = sock;
+  // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.
+  ctrl = makeControl({
+    write: (data) => { try { term.write(data); } catch (_) { /* noop */ } },
+    // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
+    //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
+    backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J'); term.write(text); } catch (_) { /* noop */ } },
+    onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
+  });
   sock.onopen = () => {
     connecting = false; wasConnected = true; reconnectDelay = 1500;
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
-    lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화
+    lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
     term.focus();
   };
-  sock.onmessage = (e) => { if (typeof e.data === 'string') term.write(e.data); };
+  sock.onmessage = (e) => {
+    if (typeof e.data !== 'string') return;
+    ctrl.feed(e.data);
+    // control mode 로 확인되면 페이지 로드 후 첫 연결에 한 번만 현재 화면+스크롤백 백필(재연결 시엔 생략 — 중복 방지).
+    if (!didBackfill && ctrl.isControl()) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } }
+  };
   sock.onclose = () => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     connecting = false;
