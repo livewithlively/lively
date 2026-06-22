@@ -47,11 +47,11 @@ t("리사이즈 → refresh-client -C, 1..2000 클램프", () => {
   assert.equal(resizeToRefresh(99999, 99999), "refresh-client -C 2000x2000");
 });
 
-t("백필 → capture-pane, 0..100000 클램프 + 비정상 입력 방어", () => {
-  assert.equal(captureCmd(600), "capture-pane -peq -S -600 -E -");
-  assert.equal(captureCmd(-1), "capture-pane -peq -S -0 -E -");
-  assert.equal(captureCmd(1e9), "capture-pane -peq -S -100000 -E -");
-  assert.equal(captureCmd(NaN), "capture-pane -peq -S -0 -E -");
+t("백필 → capture-pane(-N 줄끝 보존), 0..100000 클램프 + 비정상 입력 방어", () => {
+  assert.equal(captureCmd(600), "capture-pane -peqN -S -600 -E -");
+  assert.equal(captureCmd(-1), "capture-pane -peqN -S -0 -E -");
+  assert.equal(captureCmd(1e9), "capture-pane -peqN -S -100000 -E -");
+  assert.equal(captureCmd(NaN), "capture-pane -peqN -S -0 -E -");
 });
 
 console.log(`\n${pass} passed`);

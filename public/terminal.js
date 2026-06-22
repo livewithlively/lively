@@ -113,10 +113,12 @@ function makeControl(opts) {
       const head = ascii(pending, s, Math.min(e, s + 8));
       if ((head.startsWith('%end ') || head.startsWith('%error ')) && ascii(pending, s, e).split(' ')[2] === blockNum) {
         inBlock = false;
-        // 블록(capture 백필) 내용 = 실제 ESC + 리터럴 멀티바이트(줄 안에선 안 쪼개짐). \r\n 으로 합쳐 한 번에 디코드.
-        let len = 0; for (const p of blockParts) len += p.length; len += Math.max(0, blockParts.length - 1) * 2;
+        // 블록(capture 백필) 내용 = 실제 ESC + 리터럴 멀티바이트(줄 안에선 안 쪼개짐). 줄 사이 구분자는
+        //  `\e[0m\r\n`(SGR 리셋 + CRLF) — capture-pane -N 으로 보존한 줄 끝 배경색이 '다음 줄'로 새지 않게 한다.
+        const SEP = [0x1b, 0x5b, 0x30, 0x6d, 0x0d, 0x0a]; // \e[0m\r\n
+        let len = 0; for (const p of blockParts) len += p.length; len += Math.max(0, blockParts.length - 1) * SEP.length;
         const merged = new Uint8Array(len); let off = 0;
-        for (let k = 0; k < blockParts.length; k++) { if (k) { merged[off++] = 0x0d; merged[off++] = 0x0a; } merged.set(blockParts[k], off); off += blockParts[k].length; }
+        for (let k = 0; k < blockParts.length; k++) { if (k) { for (let z = 0; z < SEP.length; z++) merged[off++] = SEP[z]; } merged.set(blockParts[k], off); off += blockParts[k].length; }
         blockParts = [];
         const text = new TextDecoder('utf-8').decode(merged);
         if (text.length) opts.backfill(text);
@@ -565,7 +567,7 @@ async function connectNow() {
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
-    backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J'); term.write(text); } catch (_) { /* noop */ } },
+    backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text); } catch (_) { /* noop */ } },
     onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {

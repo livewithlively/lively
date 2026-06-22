@@ -57,10 +57,11 @@ export function resizeToRefresh(c: number, r: number): string {
   const cc = Math.min(Math.max(1, Math.trunc(c)), 2000), rr = Math.min(Math.max(1, Math.trunc(r)), 2000);
   return `refresh-client -C ${cc}x${rr}`;
 }
-// 백필: -p stdout, -e 색/속성 이스케이프 보존, -q 조용히. -S -n: n 줄 히스토리부터, -E -: 가시영역 끝까지.
+// 백필: -p stdout, -e 색/속성 이스케이프 보존, -q 조용히, -N 줄 끝 공백 보존(= 배경색으로 줄 끝까지
+//  채운 셀을 유지 — Claude 프롬프트의 회색 배경 채움이 재접속 복원 때 잘리지 않게). -S -n ~ -E -: 히스토리~가시영역.
 export function captureCmd(n: number): string {
   const nn = Math.min(Math.max(0, Math.trunc(Number(n) || 0)), 100000);
-  return `capture-pane -peq -S -${nn} -E -`;
+  return `capture-pane -peqN -S -${nn} -E -`;
 }
 
 function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown }): void {
