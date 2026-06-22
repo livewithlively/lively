@@ -573,6 +573,15 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .meaning-identity .meaning-ex-label { color: var(--mint-deep); }
 .meaning-infra .meaning-dot { background: var(--teal); }
 
+/* '이게 뭐예요?' 트리거 — 제목 옆에 밋밋한(덜 활성화) 회색 텍스트. 클릭 시 팝업으로 설명 노출 */
+.section-title { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.field-label-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.field-label-row .field-label { margin-bottom: 0; }
+.meaning-trigger { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: -0.2px; }
+.meaning-trigger:hover { color: var(--ink-sub); text-decoration: underline; }
+.meaning-trigger-icon { font-size: 12px; color: var(--muted); line-height: 1; }
+.meaning-pop { margin-top: 0; }
+
 /* 미리보기/명령 오버레이 */
 .ov-back { position: fixed; inset: 0; background: rgba(21,35,59,.42); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 200; overflow: auto; }
 .ov-box { background: var(--bg); border-radius: 16px; box-shadow: 0 24px 64px rgba(21,35,59,.28); max-width: 760px; width: 100%; padding: 22px 24px; }
@@ -653,6 +662,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .deploy-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .deploy-head h3 { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
 .deploy-block .admin-preview { white-space: pre-wrap; }
+/* 토큰 발급 후 '이렇게 전달하세요' 단계 안내 */
+.minter-steps { margin: 4px 0 10px; padding-left: 20px; list-style: decimal; }
+.minter-steps li { font-size: 13px; line-height: 1.6; color: var(--ink-sub); margin: 3px 0; }
+.minter-steps li b { color: var(--ink); }
 
 /* ── 시작하기 > 설치 — 비개발자용 단계별 온보딩 ── */
 .install-guide { display: flex; flex-direction: column; gap: 18px; }
@@ -787,6 +800,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kind-card-num small { font-size: 13px; font-weight: 600; color: var(--muted-2); letter-spacing: 0; }
 .kind-card-fresh { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .kind-card-fresh.dim { color: var(--muted-2); }
+/* 주제 영역 카드(제품/비즈니스) — 보통 2장이라 auto-fill 4칸의 우측 빈칸이 생긴다. flex+중앙정렬로 빈칸 없애고
+   카드 폭은 위 종류 카드와 비슷하게 유지(과하게 넓어지지 않게 cap). */
+.area-grid { display: flex; flex-wrap: wrap; justify-content: center; }
+.area-grid > .area-card { flex: 1 1 240px; max-width: 340px; }
 
 /* ── 2) 탐색 ── */
 .browse-layout { display: flex; gap: 22px; align-items: flex-start; margin-top: 8px; }
@@ -812,6 +829,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 
 .browse-filter { margin-bottom: 4px; }
 .browse-filter .flt-domain { flex: 0 0 200px; min-width: 0; }
+/* 도메인 맵 등 filter-bar 의 레포 select — 기본이 너무 좁아 레포명이 잘렸다(browse 는 위에서 별도 폭 지정). */
+.flt-domain { min-width: 220px; }
 .browse-list .row { display: block; }
 .browse-list .snippet-2l { margin-top: 6px; }
 

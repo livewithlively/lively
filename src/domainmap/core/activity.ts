@@ -135,7 +135,8 @@ export interface DashAgentRow {
   tasks: number;
   lastActiveAt: string | null;
 }
-export async function dashPeople(): Promise<{ author_person: string | null; total: number; agents: DashAgentRow[] }[]> {
+export interface DashPersonRow { author_person: string | null; display_name: string | null; total: number; agents: DashAgentRow[] }
+export async function dashPeople(): Promise<DashPersonRow[]> {
   // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review.
   const rows = await q(dmPool(), `
     SELECT a.author_person, a.author_agent,
@@ -151,11 +152,11 @@ export async function dashPeople(): Promise<{ author_person: string | null; tota
     LEFT JOIN activity_task atk ON atk.activity_id = a.id
     GROUP BY a.author_person, a.author_agent`);
   // (person,agent) 평면행 → person 으로 묶고 그 안에 agent 행 배열. 정형(shape)일 뿐 조인 아님.
-  const byPerson = new Map<string, { author_person: string | null; total: number; agents: DashAgentRow[] }>();
+  const byPerson = new Map<string, DashPersonRow>();
   for (const r of rows) {
     const personKey = r.author_person === null ? " __null__" : String(r.author_person);
     let bucket = byPerson.get(personKey);
-    if (!bucket) { bucket = { author_person: r.author_person ?? null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
+    if (!bucket) { bucket = { author_person: r.author_person ?? null, display_name: null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
     const lastActiveAt = r.last_active_at ? new Date(r.last_active_at).toISOString() : null;
     bucket.total += r.count;
     bucket.agents.push({
@@ -166,12 +167,26 @@ export async function dashPeople(): Promise<{ author_person: string | null; tota
       lastActiveAt,
     });
   }
-  // 각 사람의 AI 행은 최근활동 desc. 사람 카드도 최근활동 desc(가장 최근 활동한 사람부터).
+  // 명부 합류 — 활동이 0건이어도 팀 전원이 보이도록 활성 '사람' 구성원(org_member)을 끌어온다(PM/PO 가 전원을 본다).
+  //  작성자(사람) 축은 human 만(agent/system 제외) — AI 는 author_agent 축(카드 내 AI 칩)으로 따로 표현되므로 사람 축
+  //  중복 방지. 활동 버킷이 이미 있으면 표시명만 채우고, 없으면 빈 버킷(활동 0)으로 새로 만든다. org_member 는 같은 풀(dmPool).
+  const members = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  for (const m of members) {
+    const key = String(m.id);
+    const bucket = byPerson.get(key);
+    if (!bucket) byPerson.set(key, { author_person: m.id, display_name: m.display_name ?? null, total: 0, agents: [] });
+    else if (!bucket.display_name) bucket.display_name = m.display_name ?? null;
+  }
+  // 각 사람의 AI 행은 최근활동 desc. 사람 카드는 최근활동 desc(가장 최근 활동한 사람부터), 무활동 구성원은 표시명순으로 뒤에.
   const personLast = (p: { agents: DashAgentRow[] }) =>
     p.agents.reduce((mx, ag) => (ag.lastActiveAt && (!mx || ag.lastActiveAt > mx) ? ag.lastActiveAt : mx), null as string | null);
   const people = [...byPerson.values()];
   for (const p of people) p.agents.sort((x, y) => (y.lastActiveAt || "").localeCompare(x.lastActiveAt || ""));
-  people.sort((a, b) => (personLast(b) || "").localeCompare(personLast(a) || ""));
+  people.sort((a, b) => {
+    const la = personLast(a) || "", lb = personLast(b) || "";
+    if (la !== lb) return lb.localeCompare(la);
+    return (a.display_name || a.author_person || "").localeCompare(b.display_name || b.author_person || "");
+  });
   return people;
 }
 

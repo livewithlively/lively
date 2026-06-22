@@ -602,7 +602,7 @@ async function renderMap(view) {
   // 주제(area) 섹션 — space(제품/비즈니스) 2단의 1차 축. domainmap 에서 도메인을 받아 space 로 묶어
   //  각 영역을 browse?space= 로 진입하는 카드로 보여준다(2차 domain 은 탐색에서). domainmap down 시 graceful 생략.
   const areaWrap = el('div', { class: 'kind-grid area-grid' });
-  const areaEyebrow = el('div', { class: 'eyebrow', text: '주제 영역 (area)' });
+  const areaEyebrow = el('div', { class: 'eyebrow', text: '주제 영역' });
   areaEyebrow.hidden = true; areaWrap.hidden = true;
 
   view.replaceChildren(ctxSubBar('map'), head, health, el('div', { class: 'eyebrow', text: '종류별 지식' }), grid, areaEyebrow, areaWrap);
@@ -620,10 +620,7 @@ async function renderMap(view) {
     ];
     for (const sc of SPACE_CARDS) {
       if (!counts[sc.space]) continue;
-      areaWrap.append(el('a', { class: 'kind-card', href: '#/browse?space=' + sc.space, role: 'link', tabindex: '0' },
-        el('div', { class: 'kind-card-top' },
-          el('span', { class: 'kind-glyph', 'aria-hidden': 'true', text: sc.space === 'product' ? '제품' : '사업' }),
-          el('span', { class: 'kind-inject', text: 'area' })),
+      areaWrap.append(el('a', { class: 'kind-card area-card', href: '#/browse?space=' + sc.space, role: 'link', tabindex: '0' },
         el('div', { class: 'kind-card-name', text: sc.name }),
         el('div', { class: 'kind-card-sub', text: sc.sub }),
         el('div', { class: 'kind-card-foot' },
@@ -1365,6 +1362,8 @@ async function renderDashboard(view, params) {
   // 사람별 '가장 최근 작업'(피드는 최신순 → 사람별 첫 등장이 최신). 요약 한 줄 + 마지막 활동 시각 보강.
   const latestByPerson = new Map();
   for (const a of feed) { const k = a.author_person || ''; if (!latestByPerson.has(k)) latestByPerson.set(k, a); }
+  // 작성자 표시명(명부) — 피드 카드도 id 대신 표시명으로(요약·칩과 일관). people 에 display_name 동봉.
+  const displayName = (pid) => { if (!pid) return ''; const m = people.find((p) => p.author_person === pid); return (m && m.display_name) || pid; };
 
   // ── 필터 갱신: state 만 바꾸고 in-place 재도색(요약 active·칩 active·피드). 해시 라우팅 왕복 없음. ──
   const setFilter = (patch) => { Object.assign(f, patch); paint(); };
@@ -1379,7 +1378,7 @@ async function renderDashboard(view, params) {
       el('span', { class: 'dash-chip-label', text: '구성원' }),
       chip('전체', !f.person, () => setFilter({ person: '', agent: '' })),
       ...people.filter((p) => p.author_person).map((p) =>
-        chip(p.author_person, f.person === p.author_person, () => setFilter({ person: f.person === p.author_person ? '' : p.author_person, agent: '' }))),
+        chip(p.display_name || p.author_person, f.person === p.author_person, () => setFilter({ person: f.person === p.author_person ? '' : p.author_person, agent: '' }))),
     );
     const typeChips = el('div', { class: 'dash-chip-group' },
       el('span', { class: 'dash-chip-label', text: '유형' }),
@@ -1393,9 +1392,9 @@ async function renderDashboard(view, params) {
   // ── 층 ① 구성원 요약 ──
   const summaryBox = el('div', { class: 'list-box dash-summary' });
   function summaryRow(p) {
-    const name = p.author_person;
-    const key = name || '';
-    const selectable = !!name;
+    const key = p.author_person || '';
+    const name = p.display_name || p.author_person;
+    const selectable = !!p.author_person;
     const on = selectable && f.person === key;
     const totalTasks = (p.agents || []).reduce((s, a) => s + (a.tasks || 0), 0);
     const last = (p.agents || []).reduce((mx, a) => (a.lastActiveAt && (!mx || a.lastActiveAt > mx) ? a.lastActiveAt : mx), null);
@@ -1462,7 +1461,7 @@ async function renderDashboard(view, params) {
     const open = state.dash.expanded.has(a.id);
     const when = a.committed_at || a.created_at;
     const meta = [
-      el('span', { class: 'act-who', text: a.author_person || '미상' }),
+      el('span', { class: 'act-who', text: displayName(a.author_person) || '미상' }),
       el('span', { class: 'act-ai', text: a.author_agent || '직접' }),
       el('span', { text: relTime(when) }),
     ];
@@ -2642,24 +2641,39 @@ const MEANING_KO = {
 };
 function meaningOf(m) { return (m && MEANING_KO[m.key]) ? { ...m, ...MEANING_KO[m.key] } : m; }
 
-// '쉽게 말하면' 카드 — 이 설정이 구성원에게 실제로 무슨 일을 하는지 비개발자 말로.
+// '이게 뭐예요?' — 기본은 화면에 설명을 깔지 않고 작은 트리거 하나만 둔다. 궁금한 사람이 누르면
+//  팝업(overlay)으로 전체 설명(요약·누가/언제/어디·예시)을 보여준다. 예전엔 항상-펼침(이후 한 줄 요약+토글)
+//  이라 9개 섹션마다 같은 골격이 반복돼 화면이 무거웠다(윤상민 06-22 지적: "반복·둥둥 뜸"). 단일 함수라
+//  모든 섹션에 일괄 적용. tone 색·카피는 팝업 안에서 그대로 보존.
 function meaningCard(m0) {
   if (!m0) return null;
   const m = meaningOf(m0);
   const tag = { critical: '꼭 지킴', identity: '신원', infra: '연결', normal: '' }[m.tone] || '';
-  return el('div', { class: 'meaning meaning-' + m.tone },
-    el('div', { class: 'meaning-head' },
-      el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
-      el('span', { class: 'meaning-title', text: '이 내용이 하는 일' }),
-      tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
-    el('p', { class: 'meaning-what', text: m.what }),
-    el('div', { class: 'meaning-grid' },
-      meaningRow('누가 보나', m.reach),
-      meaningRow('언제 적용되나', m.when),
-      meaningRow('어디에 쓰이나', m.where)),
-    el('div', { class: 'meaning-ex' },
-      el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
-      el('span', { text: m.example })));
+  const trigger = el('button', { class: 'meaning-trigger', type: 'button', 'aria-haspopup': 'dialog' },
+    el('span', { class: 'meaning-trigger-icon', 'aria-hidden': 'true', text: 'ⓘ' }),
+    el('span', { text: '이게 뭐예요?' }));
+  trigger.addEventListener('click', () => {
+    overlay(m.label || '이게 뭐예요?',
+      el('div', { class: 'meaning meaning-' + m.tone + ' meaning-pop' },
+        el('div', { class: 'meaning-head' },
+          el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
+          el('span', { class: 'meaning-title', text: '구성원에게 미치는 효과' }),
+          tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
+        el('p', { class: 'meaning-what', text: m.what }),
+        el('div', { class: 'meaning-grid' },
+          meaningRow('누가 보나', m.reach),
+          meaningRow('언제 적용되나', m.when),
+          meaningRow('어디에 쓰이나', m.where)),
+        el('div', { class: 'meaning-ex' },
+          el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
+          el('span', { text: m.example }))));
+  });
+  return trigger;
+}
+
+// 섹션 제목 + 바로 옆 '이게 뭐예요?' 트리거(meaningCard 가 트리거 노드를 돌려준다). 제목 우측에 밋밋하게 붙는다.
+function sectionTitle(titleText, m) {
+  return el('div', { class: 'section-title' }, el('h2', { text: titleText }), meaningCard(m));
 }
 
 function adminRowMeta(key, data) {
@@ -3086,7 +3100,9 @@ function sectionEditor(detail, key, data) {
         : null);
 
     const body = [
-      el('div', { class: 'card-head' }, el('h2', { text: title }), headBtns),
+      el('div', { class: 'card-head' },
+        el('div', { class: 'section-title' }, el('h2', { text: title }), meaningCard(meaning)),
+        headBtns),
       el('p', { class: 'admin-hint', text: editing
         ? '여기 적은 내용은 [변경사항 적용]을 눌러야 구성원에게 반영돼요(그 전엔 나만 보는 초안).'
         : (canEdit ? '구성원에게 보이는 모습이에요. 고치려면 [수정]을 누르세요.' : '읽기 전용 — 이 내용이 모든 구성원의 AI에 깔립니다.') }),
@@ -3110,7 +3126,6 @@ function sectionEditor(detail, key, data) {
       body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
     }
 
-    body.push(meaningCard(meaning));
     detail.replaceChildren(el('div', { class: 'card' }, ...body));
   }
 
@@ -3149,10 +3164,10 @@ function membersEditor(detail, data) {
   const editing = sel === '__new__' ? { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] }
     : data.members.find((m) => m.id === sel);
   if (editing) memberForm(right, editing, data, detail, sel === '__new__');
-  else right.append(el('p', { class: 'admin-hint', text: canEdit ? '왼쪽에서 구성원을 고르거나 추가하세요.' : '읽기 전용 — 이름·종류만 표시됩니다(이메일·계정·권한은 관리자만).' }), meaningCard(meaning));
+  else right.append(el('p', { class: 'admin-hint', text: canEdit ? '왼쪽에서 구성원을 고르거나 추가하세요.' : '읽기 전용 — 이름·종류만 표시됩니다(이메일·계정·권한은 관리자만).' }));
 
   detail.replaceChildren(el('div', { class: 'card' },
-    el('h2', { text: '구성원' }),
+    sectionTitle('구성원', meaning),
     el('div', { class: 'admin-two' }, listCol, right)));
 }
 
@@ -3161,8 +3176,7 @@ function memberForm(root, m, data, detail, isNew) {
   if (!state.admin.canEdit) {
     root.replaceChildren(
       el('h3', { text: m.display_name || m.id }),
-      el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }),
-      meaningCard(data.meaning['member']));
+      el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }));
     return;
   }
   const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자, 예: yoon)', disabled: isNew ? null : '' });
@@ -3242,8 +3256,7 @@ function memberForm(root, m, data, detail, isNew) {
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
       el('button', { class: 'btn-text', text: '+ 계정 추가', onclick: () => addIdn(null) })),
     field('개인 레이어', bodyTa),
-    actions,
-    meaningCard(data.meaning['member']));
+    actions);
 }
 
 
@@ -3264,8 +3277,8 @@ function memoryEditor(detail, data) {
   const editing = sel === '__new__' ? { name: '', title: '', body_md: '' }
     : data.memory.find((x) => x.name === sel);
   if (editing) memoryForm(right, editing, data, detail, sel === '__new__');
-  else right.append(el('p', { class: 'admin-hint', text: '팀이 승인한 공식 지식만 둡니다(개인 메모는 각자 로컬).' }), meaningCard(data.meaning['memory']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '팀 공유 메모리' }), el('div', { class: 'admin-two' }, listCol, right)));
+  else right.append(el('p', { class: 'admin-hint', text: '팀이 승인한 공식 지식만 둡니다(개인 메모는 각자 로컬).' }));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('팀 공유 메모리', data.meaning['memory']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 async function memoryForm(root, mem, data, detail, isNew) {
@@ -3303,7 +3316,7 @@ async function memoryForm(root, mem, data, detail, isNew) {
   } }));
   root.replaceChildren(field('파일명', nameIn), field('제목', titleIn),
     field('도메인', domIn),
-    field('본문', bodyTa), actions, meaningCard(data.meaning['memory']));
+    field('본문', bodyTa), actions);
 }
 
 // ── 조직 · 연결 ──
@@ -3315,8 +3328,8 @@ function profileEditor(detail, data) {
   if (!canEdit) { dnIn.disabled = true; gwIn.disabled = true; }
   const body = [
     el('h2', { text: '조직 정보 · 연결' }),
-    field('조직 표시명', dnIn), meaningCard(data.meaning['display_name']),
-    field('게이트웨이 주소', gwIn), meaningCard(data.meaning['gateway-url']),
+    fieldWithHelp('조직 표시명', dnIn, data.meaning['display_name']),
+    fieldWithHelp('게이트웨이 주소', gwIn, data.meaning['gateway-url']),
   ];
   if (canEdit) {
     const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
@@ -3386,11 +3399,15 @@ function tokensPanel(detail, data) {
   };
   const children = [
     el('h2', { text: '접속 권한' }),
-    el('p', { class: 'admin-hint', text: '구성원별로 토큰을 발급(배포용)하고, 발급된 토큰을 회수합니다. 회수하면 게이트웨이 재시작 없이 즉시 무효화됩니다(오프보딩). 평문 토큰은 발급 시 1회만 표시되고 저장되지 않습니다.' }),
+    el('p', { class: 'admin-hint', text: '구성원의 AI가 회사 게이트웨이에 연결할 때 쓰는 개인 접속 열쇠(토큰)입니다 — 사람마다 하나씩 발급해 건넵니다.' }),
+    el('div', { class: 'meaning-grid', style: 'margin:2px 0 12px' },
+      meaningRow('언제 발급하나', '새 구성원이 합류하거나 누가 처음 쓰기 시작할 때. 그 사람 몫으로 발급하면 열쇠가 박힌 설치 명령이 바로 나오고, 그 사람이 설치할 때 한 번만 쓰입니다.'),
+      meaningRow('언제 회수하나', '퇴사·기기 분실 등 그 사람의 접속을 끊어야 할 때. 회수하면 서버를 다시 켤 필요 없이 그 즉시 막힙니다(되돌릴 수 없음).')),
+    el('p', { class: 'admin-hint', text: '열쇠 원본은 발급 직후 딱 한 번만 보이고 어디에도 저장되지 않습니다 — 그때 복사해 전달하세요.' }),
     installMinterBlock(data, gw),
   ];
-  if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '활성 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
-  else children.push(el('p', { class: 'admin-hint', text: '활성 토큰이 없습니다 — [구성원] 탭에서 발급하세요.' }));
+  if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '발급됨 · 사용 중 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
+  else children.push(el('p', { class: 'admin-hint', text: '아직 발급한 접속 열쇠가 없습니다 — 위 ‘설치’ 칸에서 구성원을 골라 발급하세요.' }));
   if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '회수됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
   detail.replaceChildren(el('div', { class: 'card' }, ...children));
 }
@@ -3429,7 +3446,7 @@ function runtimeEditor(detail, data) {
     saveBtn.disabled = false;
   });
   detail.replaceChildren(el('div', { class: 'card' },
-    el('h2', { text: '런타임 훅 (기본 리플렉스)' }),
+    sectionTitle('런타임 훅 (기본 리플렉스)', data.meaning['runtime']),
     el('p', { class: 'admin-hint', text: '게이트웨이가 제공하는 기본 세션 훅(리플렉스)의 ON/OFF 와 작업 폴더를 중앙에서 제어합니다. 구성원 머신은 매 세션 게이트웨이에서 훅을 받아 실행하므로(runner fetch), 변경은 다음 세션에 자동 반영됩니다(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로. ※ 코드까지 직접 정의하는 사내 훅은 ‘커스텀 훅’에서, 각 훅이 실제로 주입하는 메시지는 ‘훅 주입 미리보기’에서.' }),
     field('기본 리플렉스 훅 ON/OFF', hookWrap),
     field('writeback 너지 문구 (선택)', noticeTa),
@@ -3438,8 +3455,7 @@ function runtimeEditor(detail, data) {
     el('p', { class: 'admin-hint', text: 'AI 도구가 외부를 호출할 수 있는 범위 — 이 목록 밖은 전부 차단됩니다(SSRF 방어).' }),
     field('허용 인증 환경변수 이름 (allowed_auth_envs)', envTa),
     field('허용 호스트 (url_allowlist)', hostTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status),
-    meaningCard(data.meaning['runtime'])));
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
 
 // ── 훅 주입 미리보기(V4-P5 J절) — 설치된 3 세션 훅이 각자 세션에 실제로 주입하는 최종 메시지를 보여준다. ──
@@ -3538,8 +3554,8 @@ function mcpEditor(detail, data) {
   const right = el('div', {});
   const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
   if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
-  else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }), meaningCard(data.meaning['mcp']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'MCP 서버' }), el('div', { class: 'admin-two' }, listCol, right)));
+  else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('MCP 서버', data.meaning['mcp']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function mcpForm(root, s, data, detail, isNew) {
@@ -3577,7 +3593,7 @@ function mcpForm(root, s, data, detail, isNew) {
     field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField,
     field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
-    actions, meaningCard(data.meaning['mcp']));
+    actions);
   syncTransport();
 }
 
@@ -3607,9 +3623,8 @@ function dbSourceEditor(detail, data) {
     : sources.find((s) => s.name === sel);
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
-    el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }),
-    meaningCard(data.meaning['db-source']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'DB 데이터소스' }), el('div', { class: 'admin-two' }, listCol, right)));
+    el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function dbSourceForm(root, s, data, detail, isNew) {
@@ -3661,7 +3676,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
     field('비번 환경변수 이름 (auth_ref)', refIn), refHint,
     field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn),
     field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'),
-    actions, meaningCard(data.meaning['db-source']));
+    actions);
 }
 
 // ── 커스텀 훅 — runtime 권한 ──
@@ -3683,9 +3698,8 @@ function customHookEditor(detail, data) {
     : hooks.find((h) => h.id === sel);
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
-    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }),
-    meaningCard(data.meaning['custom-hook']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: '커스텀 훅 (코드 정의)' }), el('div', { class: 'admin-two' }, listCol, right)));
+    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커스텀 훅 (코드 정의)', data.meaning['custom-hook']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function hookForm(root, h, data, detail, isNew) {
@@ -3726,7 +3740,7 @@ function hookForm(root, h, data, detail, isNew) {
     field('코드 (Node.js)', codeTa),
     field('타임아웃(초, 1~120)', timeoutIn),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
-    actions, meaningCard(data.meaning['custom-hook']));
+    actions);
 }
 
 // ── AI 도구(MCP 툴) — runtime 권한 ──
@@ -3751,9 +3765,8 @@ function toolsEditor(detail, data) {
   if (editing) toolForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: '사내 API를 AI 도구로 래핑합니다. 저장 즉시(재설치 없이) 구성원 AI가 씁니다. 호출은 런타임 설정의 화이트리스트 안에서만, 인증은 환경변수 이름으로만.' }),
-    builtinToggles(data),
-    meaningCard(data.meaning['tool']));
-  detail.replaceChildren(el('div', { class: 'card' }, el('h2', { text: 'AI 도구(툴)' }), el('div', { class: 'admin-two' }, listCol, right)));
+    builtinToggles(data));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('AI 도구(툴)', data.meaning['tool']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function builtinToggles(data) {
@@ -3827,7 +3840,7 @@ function toolForm(root, t, data, detail, isNew) {
     field('입력 스키마 (JSON Schema, 선택)', schemaTa),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'),
-    actions, meaningCard(data.meaning['tool']));
+    actions);
 }
 
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
@@ -3893,7 +3906,7 @@ function installMinterBlock(data, gw) {
   const result = el('div', {});
   const sel = el('select', {}, ...(data.members || []).map((m) =>
     el('option', { value: m.id, text: (m.display_name || m.id) + ' · ' + ((m.scopes || []).join('/') || '-') })));
-  const go = el('button', { class: 'btn btn-primary btn-sm', text: '토큰 발급 → 명령 생성' });
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '설치 명령 만들기' });
   go.addEventListener('click', async () => {
     const m = (data.members || []).find((x) => x.id === sel.value) || { id: sel.value };
     if (!m.id) { toast('구성원을 선택하세요', true); return; }
@@ -3902,8 +3915,15 @@ function installMinterBlock(data, gw) {
       const r = await api('/api/ui/org/token', { method: 'POST',
         body: JSON.stringify({ userId: m.id, memberId: m.id, label: m.display_name || m.id }) });
       const cmd = installCmd(gw, 'mac', r.token);
+      const name = m.display_name || m.id;
       result.replaceChildren(
-        el('p', { class: 'admin-hint', text: '✓ ' + (m.display_name || m.id) + ' 토큰 발급됨(scope: ' + r.scopes.join('/') + '). 아래 macOS 설치 명령을 전달하세요(Windows는 본인이 설치 탭에서). 토큰은 지금만 보입니다.' }),
+        el('p', { class: 'install-ok', text: '✓ ' + name + ' 님 접속 토큰이 발급됐어요 (권한: ' + r.scopes.join('/') + ').' }),
+        el('p', { class: 'admin-hint', text: '아래는 ' + name + ' 님 전용 macOS 설치 명령이에요(토큰이 안에 들어 있습니다). 이렇게 전달하세요:' }),
+        el('ol', { class: 'minter-steps' },
+          el('li', {}, el('b', { text: '아래 [명령 복사]' }), ' 버튼으로 명령을 통째로 복사하세요.'),
+          el('li', {}, name + ' 님에게 ', el('b', { text: '1:1로(슬랙·메신저 DM 등) 전달' }), '하세요 — 토큰이 들어 있으니 공개 채널·단톡방엔 올리지 마세요.'),
+          el('li', {}, name + ' 님이 받은 명령을 ', el('b', { text: '본인 Mac 터미널에 붙여넣고 한 번 실행' }), '하면 끝이에요. 그러면 그분 컴퓨터의 AI(claude·codex)에 회사 맥락·규칙이 자동으로 연결됩니다.')),
+        el('p', { class: 'admin-hint', text: '⚠ 이 토큰은 지금 이 화면에서만 보여요(닫으면 다시 볼 수 없습니다 — 잃어버리면 다시 만들면 돼요). 받는 분이 Windows라면, 그분이 직접 [시작하기] > [설치] 화면에서 본인 명령을 만들어 설치하면 됩니다.' }),
         el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
         el('pre', { class: 'admin-preview', text: cmd }));
       await loadAdmin(true);
@@ -3940,6 +3960,12 @@ function deployCommands(gw, os) {
 // ── 공용 UI 헬퍼 ──
 function field(label, control) {
   return el('div', { class: 'field' }, el('label', { class: 'field-label', text: label }), control);
+}
+// 필드 라벨 바로 옆에 '이게 뭐예요?' 트리거를 붙이는 변형(필드 단위 설명용).
+function fieldWithHelp(label, control, m) {
+  return el('div', { class: 'field' },
+    el('div', { class: 'field-label-row' }, el('label', { class: 'field-label', text: label }), meaningCard(m)),
+    control);
 }
 // 클립보드 복사 — navigator.clipboard 는 보안 컨텍스트(https/localhost)에서만 동작한다.
 // http://dev.lvly.io:8080 같은 비보안 origin 에선 undefined 이므로, execCommand('copy') 텍스트영역 폴백을 쓴다.
