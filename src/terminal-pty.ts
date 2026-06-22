@@ -94,8 +94,11 @@ function attach(ws: WebSocket, id: string): void {
       }
       // control mode: `-CC`(echo off) + `-u`(UTF-8). 폴백: plain attach.
       const args = CONTROL_MODE ? ["-u", "-CC", "attach", "-t", id] : ["-u", "attach", "-t", id];
-      term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env });
-      term.onData((d) => { try { ws.send(d); } catch { /* socket closed */ } });
+      // encoding:null → onData 가 Buffer(raw 바이트). 바이너리 프레임으로 그대로 relay하고 서버는 UTF-8 디코드를
+      //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
+      //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
+      term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env, encoding: null });
+      term.onData((d) => { try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ } });
       term.onExit(() => { try { ws.close(); } catch { /* already closed */ } });
       ws.on("message", (raw) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };

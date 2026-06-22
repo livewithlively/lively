@@ -76,75 +76,87 @@ let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
 //  %begin <t> <num> <flags> … %end/%error(같은 num) = 명령 응답 블록. 내용 있는 블록 = capture-pane 백필
 //   (서버는 capture 외엔 '내용 있는' 명령을 내지 않는다 — send-keys/refresh-client 는 빈 응답).
 // 옛 방식(plain attach)도 같은 코드로 받게: 도입자가 없으면 raw 모드로 자동 폴백(그대로 term.write).
-const DCS_INTRO = '\x1bP1000p';
+const DCS_BYTES = [0x1b, 0x50, 0x31, 0x30, 0x30, 0x30, 0x70]; // 도입자 \x1bP1000p (바이트)
 const BACKFILL_LINES = 600; // 첫 연결 시 capture-pane 로 회수할 히스토리 줄 수(현재 화면+모듈러 스크롤백 복원)
-const _te = new TextEncoder();
-function decodeOctal(v) {
-  // %output value 복원 → 원래 바이트열(Uint8Array). 두 종류가 섞여 있다:
-  //  · \ooo(8진) = tmux 가 이스케이프한 '비출력' 바이트(ESC/CR/백슬래시 \134 등) → raw 바이트로 push.
-  //  · 그 외 리터럴 문자 = 이미 디코드된 출력 문자(ASCII + 한글 등 멀티바이트, node-pty 가 UTF-8 디코드함)
-  //    → 리터럴 런을 모아 UTF-8 로 '재인코딩'해 바이트로(한글을 c&0xff 로 깨지 않게). 마지막에 term.write 가 UTF-8 디코드.
-  const out = [];
-  let lit = '';
-  const flush = () => { if (lit) { const b = _te.encode(lit); for (let k = 0; k < b.length; k++) out.push(b[k]); lit = ''; } };
-  for (let i = 0; i < v.length; i++) {
-    if (v.charCodeAt(i) === 92) { // '\'
-      let oct = '', j = i + 1;
-      while (j < v.length && oct.length < 3 && v[j] >= '0' && v[j] <= '7') oct += v[j++];
-      if (oct) { flush(); out.push(parseInt(oct, 8) & 0xff); i = j - 1; continue; }
-      lit += '\\';
-    } else lit += v[i];
-  }
-  flush();
-  return new Uint8Array(out);
-}
+// control-mode 파서는 '바이트 레벨'로 동작한다(서버가 raw 바이너리로 보냄). 이유: tmux 는 멀티바이트 UTF-8
+//  문자를 %output 알림 '경계'에서 쪼갤 수 있는데(문자의 앞바이트가 한 %output 끝, 뒷바이트가 다음 %output
+//  시작 — 사이에 `\n%output %<pane> ` 프레이밍이 끼어듦), 스트림을 문자열로 먼저 디코드하면 그 자리가 깨진다(�).
+//  → %output 의 '값 바이트'만 모아 streaming UTF-8 디코더(경계의 partial 바이트를 버퍼링)로 디코드해 재조립한다.
 function makeControl(opts) {
-  // opts: { write(Uint8Array), backfill(string), onExit() }
-  let mode = null;        // null=미정, 'control', 'raw'
-  let sniff = '';         // 도입자 판별용 초기 누적
-  let buf = '';           // 부분 줄 잔여
-  let inBlock = false, blockNum = '', blockLines = [];
-  function handleLine(line) {
+  // opts: { write(string), backfill(string), onExit() }
+  let mode = null;                  // null=미정, 'control', 'raw'
+  let pending = new Uint8Array(0);  // 부분 줄/도입자 판별용 바이트 잔여
+  let inBlock = false, blockNum = '', blockParts = [];
+  const outDec = new TextDecoder('utf-8'); // 라이브 %output 전용 — stream:true 로 %output 경계 분할 재조립
+  const rawDec = new TextDecoder('utf-8'); // legacy raw 모드 전용 streaming 디코더
+  const ascii = (b, s, e) => { let r = ''; for (let i = s; i < e; i++) r += String.fromCharCode(b[i]); return r; };
+  function append(chunk) {
+    if (pending.length === 0) { pending = chunk; return; }
+    const c = new Uint8Array(pending.length + chunk.length); c.set(pending); c.set(chunk, pending.length); pending = c;
+  }
+  // 값 바이트의 \ooo(8진) → raw 바이트로 복원(리터럴 바이트는 그대로). ASCII 전용 연산이라 경계 안전.
+  function octalDecode(b, s, e) {
+    const out = [];
+    for (let i = s; i < e; i++) {
+      if (b[i] === 0x5c) { // '\'
+        let o = '', j = i + 1;
+        while (j < e && o.length < 3 && b[j] >= 0x30 && b[j] <= 0x37) { o += String.fromCharCode(b[j]); j++; }
+        if (o.length) { out.push(parseInt(o, 8) & 0xff); i = j - 1; continue; }
+        out.push(0x5c);
+      } else out.push(b[i]);
+    }
+    return new Uint8Array(out);
+  }
+  function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 제거.
+    let e = e0; if (e > s && pending[e - 1] === 0x0d) e--;
     if (inBlock) {
-      if ((line.startsWith('%end ') || line.startsWith('%error ')) && line.split(' ')[2] === blockNum) {
+      const head = ascii(pending, s, Math.min(e, s + 8));
+      if ((head.startsWith('%end ') || head.startsWith('%error ')) && ascii(pending, s, e).split(' ')[2] === blockNum) {
         inBlock = false;
-        const content = blockLines.join('\r\n'); blockLines = [];
-        if (content.length) opts.backfill(content); // 내용 있는 블록 = capture 백필
+        // 블록(capture 백필) 내용 = 실제 ESC + 리터럴 멀티바이트(줄 안에선 안 쪼개짐). \r\n 으로 합쳐 한 번에 디코드.
+        let len = 0; for (const p of blockParts) len += p.length; len += Math.max(0, blockParts.length - 1) * 2;
+        const merged = new Uint8Array(len); let off = 0;
+        for (let k = 0; k < blockParts.length; k++) { if (k) { merged[off++] = 0x0d; merged[off++] = 0x0a; } merged.set(blockParts[k], off); off += blockParts[k].length; }
+        blockParts = [];
+        const text = new TextDecoder('utf-8').decode(merged);
+        if (text.length) opts.backfill(text);
         return;
       }
-      blockLines.push(line);
+      blockParts.push(pending.slice(s, e));
       return;
     }
-    if (line.startsWith('%output ')) {
-      const rest = line.slice(8);          // '%<pane> <value>'
-      const sp = rest.indexOf(' ');
-      if (sp >= 0) opts.write(decodeOctal(rest.slice(sp + 1)));
-    } else if (line.startsWith('%extended-output ')) {
-      const m = line.match(/^%extended-output \S+ \d+ .*? : (.*)$/); // pause-after 형태
-      if (m) opts.write(decodeOctal(m[1]));
-    } else if (line.startsWith('%begin ')) {
-      inBlock = true; blockNum = line.split(' ')[2] || ''; blockLines = [];
-    } else if (line.startsWith('%exit')) {
-      opts.onExit();
+    if (ascii(pending, s, Math.min(e, s + 8)) === '%output ') {
+      let p = s + 8; while (p < e && pending[p] !== 0x20) p++;   // pane id 스킵
+      const vstart = p + 1;
+      if (vstart <= e) { const str = outDec.decode(octalDecode(pending, vstart, e), { stream: true }); if (str) opts.write(str); }
+      return;
     }
-    // 그 외 %session-changed/%window-*/%layout-change/%pane-mode-changed … 알림은 무시
+    const head = ascii(pending, s, Math.min(e, s + 18));
+    if (head.startsWith('%begin ')) { inBlock = true; blockNum = ascii(pending, s, e).split(' ')[2] || ''; blockParts = []; }
+    else if (head.startsWith('%extended-output ')) {            // pause-after 형태: `... : <value>`
+      const full = ascii(pending, s, Math.min(e, s + 200)); const mk = full.indexOf(' : ');
+      if (mk >= 0) { const str = outDec.decode(octalDecode(pending, s + mk + 3, e), { stream: true }); if (str) opts.write(str); }
+    }
+    else if (head.startsWith('%exit')) opts.onExit();
+    // 그 외 %session-changed/%window-*/%layout-change … 알림 무시
   }
-  function feed(data) {
-    if (mode === 'raw') { opts.write(data); return; }
+  function processLines() {
+    let start = 0;
+    for (let i = 0; i < pending.length; i++) if (pending[i] === 0x0a) { handleLine(start, i); start = i + 1; }
+    pending = start ? pending.slice(start) : pending;
+  }
+  function feed(bytes) { // Uint8Array
+    if (mode === 'raw') { const s = rawDec.decode(bytes, { stream: true }); if (s) opts.write(s); return; }
+    append(bytes);
     if (mode === null) {
-      sniff += data;
-      if (DCS_INTRO.startsWith(sniff)) return;            // 아직 도입자 prefix — 더 받아 판별
-      if (sniff.startsWith(DCS_INTRO)) { mode = 'control'; buf = sniff.slice(DCS_INTRO.length); }
-      else { mode = 'raw'; opts.write(sniff); }           // 도입자 없음 → 옛 raw 스트림
-      sniff = '';
-      if (mode !== 'control') return;
-    } else { buf += data; }
-    let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      let line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-      if (line.endsWith('\r')) line = line.slice(0, -1);
-      handleLine(line);
+      const n = Math.min(pending.length, DCS_BYTES.length);
+      for (let i = 0; i < n; i++) if (pending[i] !== DCS_BYTES[i]) { // 도입자 아님 → raw 폴백
+        mode = 'raw'; const s = rawDec.decode(pending, { stream: true }); pending = new Uint8Array(0); if (s) opts.write(s); return;
+      }
+      if (pending.length < DCS_BYTES.length) return;  // 더 받아 판별
+      mode = 'control'; pending = pending.slice(DCS_BYTES.length);
     }
+    processLines();
   }
   return { feed, isControl: () => mode === 'control' };
 }
@@ -546,10 +558,11 @@ async function connectNow() {
   catch (e) { connecting = false; statusEl.textContent = '재연결 중…'; statusEl.className = 'status err'; scheduleReconnect(); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
+  sock.binaryType = 'arraybuffer'; // 서버가 raw 바이트(바이너리)로 보냄 → 바이트 레벨 파싱(멀티바이트 경계 안전)
   ws = sock;
   // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.
   ctrl = makeControl({
-    write: (data) => { try { term.write(data); } catch (_) { /* noop */ } },
+    write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
     backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J'); term.write(text); } catch (_) { /* noop */ } },
@@ -564,8 +577,9 @@ async function connectNow() {
     term.focus();
   };
   sock.onmessage = (e) => {
-    if (typeof e.data !== 'string') return;
-    ctrl.feed(e.data);
+    const bytes = (e.data instanceof ArrayBuffer) ? new Uint8Array(e.data) : (typeof e.data === 'string' ? new TextEncoder().encode(e.data) : null);
+    if (!bytes) return;
+    ctrl.feed(bytes);
     // control mode 로 확인되면 페이지 로드 후 첫 연결에 한 번만 현재 화면+스크롤백 백필(재연결 시엔 생략 — 중복 방지).
     if (!didBackfill && ctrl.isControl()) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } }
   };
