@@ -175,11 +175,17 @@ function applyFit() {
 }
 // 창 드래그 중 리사이즈 폭주 방지 — 디바운스.
 function doResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyFit, 130); }
-// '다시 그리기' 버튼 — 즉시 fit + 강제 재전송 + 재렌더(현재 크기로 화면을 다시 그림).
+// '화면 복구' 버튼 — fit + 크기 재전송 후, control mode 면 tmux 에서 화면을 다시 '캡처'해 깨끗이 복원한다.
+//  (term.refresh 만으로는 이미 깨지거나 중복된 xterm 버퍼를 그대로 다시 그릴 뿐 → 리사이즈로 깨진 화면·이력
+//   중복이 안 풀린다. capture-pane 백필은 clear + 현재 화면 재수신이라 그 상태를 실제로 복원한다.)
 function forceRedraw() {
   if (!fit || !term) return;
   try { fit.fit(); } catch (_) { /* noop */ }
-  if (ws && ws.readyState === 1) { lastCols = term.cols; lastRows = term.rows; try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ } }
+  if (ws && ws.readyState === 1) {
+    lastCols = term.cols; lastRows = term.rows;
+    try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
+    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } } // 깨끗이 재캡처
+  }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
 // 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에
