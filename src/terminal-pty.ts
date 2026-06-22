@@ -37,8 +37,8 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
   });
 }
 
-// 한 줄 tmux 컨트롤 명령 전송(개행 종단). control-mode tmux 는 stdin 에서 명령을 줄 단위로 읽는다.
-function ctrlCmd(term: IPty, line: string): void { try { term.write(line + "\n"); } catch { /* socket closed */ } }
+// 컨트롤 명령 전송 함수 타입. 시작 레이스(아래) 때문에 'term 직접 쓰기'가 아니라 attach 가 주는 버퍼링 send 를 쓴다.
+type SendCmd = (line: string) => void;
 
 // ── 클라 의도 → 안전한 tmux 명령(순수 함수, 테스트 대상). d/c/r/n 은 모두 서버가 검증·인코딩 →
 //  클라가 임의 tmux 명령(kill-server 등)을 주입할 수 없다(입력은 hex 로만 인코딩되어 개행/공백 인젝션 불가).
@@ -63,13 +63,13 @@ export function captureCmd(n: number): string {
   return `capture-pane -peq -S -${nn} -E -`;
 }
 
-function handleControlMsg(term: IPty, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown }): void {
+function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown }): void {
   if (msg.t === "i" && typeof msg.d === "string") {
-    for (const cmd of inputToSendKeys(msg.d)) ctrlCmd(term, cmd);
+    for (const cmd of inputToSendKeys(msg.d)) send(cmd);
   } else if (msg.t === "r" && Number.isInteger(msg.c) && Number.isInteger(msg.r)) {
-    ctrlCmd(term, resizeToRefresh(msg.c as number, msg.r as number));
+    send(resizeToRefresh(msg.c as number, msg.r as number));
   } else if (msg.t === "cap") {
-    ctrlCmd(term, captureCmd(Number(msg.n)));
+    send(captureCmd(Number(msg.n)));
   }
 }
 
@@ -98,13 +98,25 @@ function attach(ws: WebSocket, id: string): void {
       //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
       term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env, encoding: null });
-      term.onData((d) => { try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ } });
+      // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
+      //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
+      //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
+      let ready = false;
+      const cmdQueue: string[] = [];
+      const sendCmd: SendCmd = (line) => {
+        if (!ready) { cmdQueue.push(line); return; }
+        try { term?.write(line + "\n"); } catch { /* socket closed */ }
+      };
+      term.onData((d) => {
+        if (!ready) { ready = true; for (const q of cmdQueue) { try { term?.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
+        try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ }
+      });
       term.onExit(() => { try { ws.close(); } catch { /* already closed */ } });
       ws.on("message", (raw) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
         try { msg = JSON.parse(raw.toString()); } catch { return; }
         if (!term) return;
-        if (CONTROL_MODE) handleControlMsg(term, msg);
+        if (CONTROL_MODE) handleControlMsg(sendCmd, msg);
         else handleLegacyMsg(term, msg);
       });
       const cleanup = () => { try { term?.kill(); } catch { /* already gone */ } };
