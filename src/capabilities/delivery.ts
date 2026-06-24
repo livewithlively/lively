@@ -18,7 +18,7 @@ import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
   getOrgProfile, updateOrgProfile, listSections, updateSection,
-  listMembers, getMember, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
+  listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
@@ -57,7 +57,9 @@ const restRuntime = (name: string, title: string, description: string,
 const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
   ({ actor: actorOf(u), source: ctx?.source ?? "web", tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null });
 
-const HOOK_EVENTS = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification"]);
+// 커스텀 훅(org_hook)이 붙을 수 있는 이벤트 — DB 제약(org_hook_event_chk)·run-custom 배선(runnerHooksBlock)과 일치 유지.
+//  Claude 31개 이벤트 중 저빈도·유용한 라이프사이클만 노출(MessageDisplay 등 상시발화는 perf 위해 제외). Codex 는 SessionStart/PostToolUse/Stop 만 지원.
+const HOOK_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"]);
 const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "all"]);
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -245,6 +247,11 @@ export const deliveryCapabilities: Capability[] = [
       const hasExplicitId = input.id !== undefined && String(input.id).trim() !== "";
       const id = hasExplicitId ? slug(input.id, "id") : await uniqueMemberId(email ? email.split("@")[0] : (displayName || "member"));
       const existed = hasExplicitId ? await getMember(id) : null; // 자동 id 는 항상 신규
+      // 이메일 = 로그인 키 → 유일해야 한다(다른 멤버가 같은 이메일이면 거부, 대소문자 무시). 본인(편집)은 허용.
+      if (email) {
+        const taken = await memberIdByEmail(email);
+        if (taken && taken !== id) throw new HttpError(400, "이미 사용 중인 이메일입니다 — 다른 이메일을 쓰세요");
+      }
       let scopes: string[] | undefined;
       if (input.scopes !== undefined) {
         if (!Array.isArray(input.scopes)) throw new HttpError(400, "scopes 는 배열이어야 합니다");

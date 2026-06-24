@@ -57,10 +57,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     const body = (req.body ?? {}) as Record<string, unknown>;
     const result = await verifyLogin(String(body.email ?? ""), String(body.password ?? ""));
     if (!result.ok) {
-      const msg = result.reason === "locked"
-        ? "로그인 시도가 많아 잠시 잠겼습니다(15분 후 재시도)"
-        : "이메일 또는 비밀번호가 올바르지 않습니다";
-      res.status(401).json({ error: msg }); return;
+      res.status(401).json({ error: "이메일 또는 비밀번호가 올바르지 않습니다" }); return;
     }
     const { sessionId, expiresAt } = await createSession(result.memberId,
       { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null });

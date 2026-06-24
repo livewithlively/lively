@@ -102,7 +102,18 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     if (!m) { m = {}; valuesByTask.set(r.task_id, m); }
     m[String(r.field_id)] = r.value;
   }
-  const withValues = (row: ProjectRow) => ({ ...row, field_values: valuesByTask.get(row.id) ?? {} });
+  // 태그 — 리스트뷰 행에 칩으로 표시(프론트가 최대 2 + "+N"). allTaskIds 한 번에 페치 후 매핑.
+  const tagsByTask = new Map<number, unknown[]>();
+  if (allTaskIds.length) {
+    const tagRows = await q(itemsPool,
+      `SELECT l.task_id, t.id, t.name, t.color FROM task_tag_link l JOIN task_tag t ON t.id=l.tag_id
+       WHERE l.task_id = ANY($1) ORDER BY lower(t.name)`, [allTaskIds]);
+    for (const r of tagRows as Array<{ task_id: number; id: number; name: string; color: string | null }>) {
+      let a = tagsByTask.get(r.task_id); if (!a) { a = []; tagsByTask.set(r.task_id, a); }
+      a.push({ id: r.id, name: r.name, color: r.color });
+    }
+  }
+  const withValues = (row: ProjectRow) => ({ ...row, field_values: valuesByTask.get(row.id) ?? {}, tags: tagsByTask.get(row.id) ?? [] });
 
   const tasks = taskRows.map((t) => ({
     ...withValues(t),

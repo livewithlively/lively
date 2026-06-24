@@ -195,6 +195,13 @@ export async function getMember(id: string): Promise<OrgMember | null> {
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
+// 이메일로 멤버 id 조회(대소문자 무시) — 이메일=로그인 키라 유일성 검증용. 없으면 null.
+export async function memberIdByEmail(email: string): Promise<string | null> {
+  const r = await itemsPool.query(
+    `SELECT id FROM org_member WHERE email IS NOT NULL AND email <> '' AND lower(email)=lower($1) LIMIT 1`, [email]);
+  return r.rows[0] ? (r.rows[0] as { id: string }).id : null;
+}
+
 export interface MemberInput {
   id: string;
   kind?: "human" | "agent" | "system";

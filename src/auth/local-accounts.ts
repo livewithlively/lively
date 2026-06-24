@@ -11,8 +11,6 @@ const scryptAsync = promisify(crypto.scrypt) as (
 // scrypt 파라미터 — N=2^14(16384)·r=8·p=1. N*r*128=16MB < 기본 maxmem(32MB). OWASP 권장 범위.
 const SCRYPT = { N: 16384, r: 8, p: 1 } as const;
 const KEYLEN = 64;
-const MAX_FAILED = 5;
-const LOCK_MS = 15 * 60 * 1000; // 15분
 // 계정 미존재 시에도 동일 비용을 태워 이메일 열거(timing) 완화.
 const BURN_SALT = crypto.randomBytes(16);
 
@@ -76,9 +74,10 @@ export function generateInitialPassword(): string {
 
 export type LoginResult =
   | { ok: true; memberId: string; mustChange: boolean }
-  | { ok: false; reason: "invalid" | "locked" | "no_account" };
+  | { ok: false; reason: "invalid" | "no_account" };
 
-// 로그인 검증 — 이메일(대소문자 무시) → 활성 멤버 → credential 확인 + 락아웃. 성공 시 memberId 반환.
+// 로그인 검증 — 이메일(대소문자 무시) → 활성 멤버 → credential 확인. 성공 시 memberId 반환.
+//  (실패 횟수 락아웃은 제거 — 윤상민 2026-06-24. timing-burn 은 이메일 열거 완화로 유지.)
 export async function verifyLogin(email: string, plain: string): Promise<LoginResult> {
   const e = (email ?? "").trim().toLowerCase();
   if (!e || !plain) { await burn(plain || "x"); return { ok: false, reason: "invalid" }; }
@@ -87,25 +86,11 @@ export async function verifyLogin(email: string, plain: string): Promise<LoginRe
   const member = mr.rows[0] as { id: string } | undefined;
   if (!member) { await burn(plain); return { ok: false, reason: "no_account" }; }
   const cr = await itemsPool.query(
-    `SELECT password_hash, must_change, failed_attempts, locked_until FROM member_credential WHERE member_id=$1`,
-    [member.id]);
-  const cred = cr.rows[0] as
-    { password_hash: string; must_change: boolean; failed_attempts: number; locked_until: string | null } | undefined;
+    `SELECT password_hash, must_change FROM member_credential WHERE member_id=$1`, [member.id]);
+  const cred = cr.rows[0] as { password_hash: string; must_change: boolean } | undefined;
   if (!cred) { await burn(plain); return { ok: false, reason: "no_account" }; }
-  if (cred.locked_until && new Date(cred.locked_until).getTime() > Date.now()) {
-    await burn(plain); return { ok: false, reason: "locked" };
-  }
   const good = await verifyPassword(plain, cred.password_hash);
-  if (!good) {
-    const attempts = (cred.failed_attempts ?? 0) + 1;
-    const locked = attempts >= MAX_FAILED;
-    await itemsPool.query(
-      `UPDATE member_credential SET failed_attempts=$2, locked_until=$3 WHERE member_id=$1`,
-      [member.id, locked ? 0 : attempts, locked ? new Date(Date.now() + LOCK_MS).toISOString() : null]);
-    return { ok: false, reason: locked ? "locked" : "invalid" };
-  }
-  await itemsPool.query(
-    `UPDATE member_credential SET failed_attempts=0, locked_until=NULL WHERE member_id=$1`, [member.id]);
+  if (!good) return { ok: false, reason: "invalid" };
   return { ok: true, memberId: member.id, mustChange: !!cred.must_change };
 }
 

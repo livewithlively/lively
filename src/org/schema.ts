@@ -157,11 +157,11 @@ export async function initOrgSchema(): Promise<void> {
                      WHERE conrelid='org_hook'::regclass AND conname='org_hook_harness_chk') THEN
         ALTER TABLE org_hook ADD CONSTRAINT org_hook_harness_chk CHECK (harness IN ('claude','codex','openclaw','all'));
       END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='org_hook'::regclass AND conname='org_hook_event_chk') THEN
-        ALTER TABLE org_hook ADD CONSTRAINT org_hook_event_chk CHECK (event IN
-          ('SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','SubagentStop','Notification'));
-      END IF;
+      -- 이벤트 집합 확장(2026-06-24): 기존 제약은 DROP+ADD 로 갱신한다(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
+      --  Claude 라이프사이클 이벤트 추가(SessionEnd·PreCompact·PostCompact). delivery.HOOK_EVENTS·runnerHooksBlock 와 일치 유지.
+      ALTER TABLE org_hook DROP CONSTRAINT IF EXISTS org_hook_event_chk;
+      ALTER TABLE org_hook ADD CONSTRAINT org_hook_event_chk CHECK (event IN
+        ('SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PostToolUse','Stop','SubagentStop','Notification','PreCompact','PostCompact'));
     END $$;
   `);
 
@@ -539,6 +539,13 @@ export async function initOrgSchema(): Promise<void> {
       user_agent TEXT);
     CREATE INDEX IF NOT EXISTS web_session_member_idx ON web_session(member_id);
   `);
+
+  // ── 멤버 이메일 유일성(로그인 아이디) — 부분 유니크(비어있지 않은 이메일만, 대소문자 무시). ──
+  //  앱 레벨(org_member_upsert)이 1차 방어, 이 인덱스가 DB 보증. 기존 중복 데이터가 있으면 생성 실패 →
+  //  **비치명적**으로 보류(중복 정리 후 다음 부팅에 자동 적용). 앱 검증은 그 사이에도 신규 중복을 막는다.
+  await itemsPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS org_member_email_lc_uniq ON org_member (lower(email)) WHERE email IS NOT NULL AND email <> ''`,
+  ).catch((e) => { console.warn("[org schema] 멤버 이메일 유니크 인덱스 보류(기존 중복 데이터?):", (e as Error)?.message); });
 
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }
