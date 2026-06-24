@@ -1189,10 +1189,10 @@ async function renderDomainmap(view, params) {
   try {
     data = await api('/api/ui/domainmap/map?' + new URLSearchParams({ repo, limit: '150' }));
   } catch (e) {
-    view.replaceChildren(...[head, knowledgeSubBar('domainmap'), repoBar, errorNote(e, '도메인 맵을 불러오지 못했습니다')].filter(Boolean));
+    view.replaceChildren(...[head, repoBar, errorNote(e, '도메인 맵을 불러오지 못했습니다')].filter(Boolean));
     return;
   }
-  const nodes = [head, knowledgeSubBar('domainmap'), repoBar,
+  const nodes = [head, repoBar,
     ...domainmapBody(data, repos.length > 1 ? repo : null)].filter(Boolean);
   view.replaceChildren(...nodes);
 }
@@ -1355,93 +1355,6 @@ function slugifyKey(name) {
     .replace(/[^a-z0-9\s_-]/g, '').replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
-async function renderCategories(view, space, params) {
-  if (!SPACE_LABEL[space]) space = 'business';
-  view.replaceChildren(spaceSubBar(null, space), skeleton('카테고리를 불러오는 중'));
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '카테', el('span', { class: 'accent', text: '고리' })),
-    el('p', { class: 'sub', text: space === 'product'
-      ? '제품을 이루는 도메인 — 각 도메인의 의도(should)와 코드 구조(is), 둘의 괴리, 도메인 사이 의존 관계까지.'
-      : '맥락을 나누는 분류축. ' + SPACE_LABEL[space] + ' 영역의 카테고리마다 정의·범위·규칙(should)을 둔다.' }),
-  );
-
-  const reload = () => renderCategories(view, space, params);
-
-  let cats;
-  try {
-    cats = await api('/api/ui/categories?' + new URLSearchParams({ space }))
-      .then((d) => (d && d.categories) || []);
-  } catch (e) {
-    view.replaceChildren(spaceSubBar(null, space), head, errorNote(e, '카테고리를 불러오지 못했습니다'));
-    return;
-  }
-
-  const isProduct = space === 'product';
-  const newBtn = el('button', { class: 'btn btn-primary btn-sm', text: '+ 새 카테고리',
-    onclick: () => openCategoryForm(space, null, reload) });
-  const listCard = el('div', { class: 'card' },
-    el('div', { class: 'card-head' },
-      el('h2', { text: isProduct ? '도메인' : (SPACE_LABEL[space] + ' 카테고리') }),
-      el('div', { class: 'card-head-actions' }, newBtn)));
-  if (!cats.length) {
-    listCard.append(el('div', { class: 'empty', text: isProduct
-      ? '아직 도메인이 없습니다. ‘+ 새 카테고리’로 첫 도메인을 만드세요.'
-      : '아직 카테고리가 없습니다. ‘+ 새 카테고리’로 시작하세요.' }));
-  } else {
-    listCard.append(el('div', { class: 'cat-list' }, ...cats.map((c) => categoryCard(c, space, reload))));
-  }
-
-  const nodes = [spaceSubBar(null, space), head, listCard];
-
-  // 제품 space — 도메인맵(should/is/debt) + 도메인 의존 관계 섹션을 목록 아래에 덧붙인다.
-  if (isProduct) {
-    const dmHost = el('div', { class: 'cat-dm-host' }, skeleton('도메인 맵을 불러오는 중'));
-    const edgeHost = el('div', { class: 'cat-edge-host' });
-    nodes.push(dmHost, edgeHost);
-    // 도메인맵 — renderDomainmap 과 동일한 본문 빌더(domainmapBody) 공유.
-    api('/api/ui/domainmap/map?' + new URLSearchParams({ repo: 'lively', limit: '150' }))
-      .then((data) => {
-        dmHost.replaceChildren(el('div', { class: 'cat-sec-head' },
-          el('h2', { class: 'cat-sec-title', text: '도메인 맵 — 의도(should) · 구조(is) · 괴리(debt)' })),
-          ...domainmapBody(data));
-      })
-      .catch((e) => dmHost.replaceChildren(errorNote(e, '도메인 맵을 불러오지 못했습니다')));
-    // 도메인 의존 관계 — category-edges(should 사람작성 + is 스캔소유 읽기전용). 도메인 목록(cats)을 셀렉터로.
-    renderCategoryEdges(edgeHost, cats);
-  }
-
-  view.replaceChildren(...nodes);
-}
-
-// 카테고리 한 장(카드) — 이름(굵게) + should(정의·범위·규칙, 흐리게) + [수정][삭제]. domainmap dm-dom 시각과 통일.
-function categoryCard(c, space, reload) {
-  const hasShould = !!(c.should && c.should.trim());
-  const editBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '수정',
-    onclick: () => openCategoryForm(space, c, reload) });
-  const delBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제',
-    onclick: async () => {
-      if (!confirm('‘' + (c.name || c.key) + '’ 카테고리를 삭제할까요?')) return;
-      delBtn.disabled = true;
-      try {
-        await api('/api/ui/categories/' + c.id + '/delete', { method: 'POST' });
-        toast('삭제했습니다');
-        reload();
-      } catch (e) { toast('실패 — ' + e.message, true); delBtn.disabled = false; }
-    } });
-  return el('div', { class: 'cat-card' },
-    el('div', { class: 'cat-card-head' },
-      el('span', { class: 'cat-card-name', text: c.name || c.key }),
-      el('span', { class: 'mono cat-card-key', text: c.key }),
-      c.cross_cutting ? el('span', { class: 'dm-tag', text: '횡단' }) : null,
-      el('div', { class: 'cat-card-actions' }, editBtn, delBtn)),
-    hasShould
-      ? el('div', { class: 'cat-card-should', text: c.should })
-      : el('div', { class: 'cat-card-should empty', text: '정의·범위·규칙(should)이 아직 없습니다.' }),
-    c.description ? el('div', { class: 'cat-card-desc', text: c.description }) : null,
-  );
-}
-
-// 카테고리 생성/수정 모달 — overlayBox 셸. existing 이 있으면 수정(이름·설명·should만), 없으면 생성(+ key).
 function openCategoryForm(space, existing, reload) {
   const editing = !!existing;
   const nameIn = el('input', { type: 'text', placeholder: '카테고리 이름', maxlength: '200',
@@ -1491,120 +1404,23 @@ function openCategoryForm(space, existing, reload) {
 
 // 도메인 의존 관계(category-edges) — should(사람 작성·편집/삭제 가능) + is(스캔 소유·읽기전용)를 한 섹션에.
 //  domains = 제품 카테고리 목록(셀렉터 옵션). 자체 fetch → 행 렌더 + should-edge 추가 폼.
-function renderCategoryEdges(host, domains) {
-  const nameOf = (id) => { const d = domains.find((x) => String(x.id) === String(id)); return d ? (d.name || d.key) : ('#' + id); };
-  host.replaceChildren(el('div', { class: 'card cat-edges-card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '도메인 의존 관계' })),
-    skeletonRows(3)));
-  reloadEdges();
-
-  async function reloadEdges() {
-    let shouldEdges = [], isEdges = [];
-    try {
-      shouldEdges = await api('/api/ui/category-edges?axis=should').then((d) => (d && d.edges) || []);
-      isEdges = await api('/api/ui/category-edges?axis=is').then((d) => (d && d.edges) || []);
-    } catch (e) {
-      host.replaceChildren(el('div', { class: 'card cat-edges-card' },
-        el('div', { class: 'card-head' }, el('h2', { text: '도메인 의존 관계' })),
-        errorNote(e, '의존 관계를 불러오지 못했습니다')));
-      return;
-    }
-    paint(shouldEdges, isEdges);
-  }
-
-  function edgeRow(e, editable) {
-    const row = el('div', { class: 'cat-edge-row' },
-      el('span', { class: 'cat-edge-from', text: e.from_name || e.from_key || ('#' + e.from_category_id) }),
-      el('span', { class: 'dm-diff-arrow', 'aria-hidden': 'true', text: '→' }),
-      el('span', { class: 'cat-edge-to', text: e.to_name || e.to_key || ('#' + e.to_category_id) }),
-      el('span', { class: 'cat-edge-meta', text: (e.axis || '') + (e.relation ? ' · ' + e.relation : '') }));
-    if (editable) {
-      const x = el('button', { class: 'btn-text cat-edge-del', text: '✕', title: '삭제',
-        onclick: async () => {
-          x.disabled = true;
-          try { await api('/api/ui/category-edges/' + e.id + '/delete', { method: 'POST' }); toast('삭제했습니다'); reloadEdges(); }
-          catch (err) { toast('실패 — ' + err.message, true); x.disabled = false; }
-        } });
-      row.append(x);
-    } else {
-      row.append(el('span', { class: 'cat-edge-ro', text: '스캔' }));
-    }
-    return row;
-  }
-
-  function paint(shouldEdges, isEdges) {
-    const card = el('div', { class: 'card cat-edges-card' },
-      el('div', { class: 'card-head' }, el('h2', { text: '도메인 의존 관계' }),
-        el('span', { class: 'dm-section-hint', text: 'should=의도한 의존(사람) · is=코드가 실제 부르는 의존(스캔)' })));
-
-    // should 의존 추가 폼 — 두 도메인 셀렉터 + relation + 추가.
-    const fromSel = el('select', { class: 'flt-domain' }, el('option', { value: '', text: '— from 도메인 —' }),
-      ...domains.map((d) => el('option', { value: String(d.id), text: d.name || d.key })));
-    const toSel = el('select', { class: 'flt-domain' }, el('option', { value: '', text: '— to 도메인 —' }),
-      ...domains.map((d) => el('option', { value: String(d.id), text: d.name || d.key })));
-    const relIn = el('input', { type: 'text', placeholder: '관계 (선택, 예: depends_on)', maxlength: '80', style: 'min-width:160px' });
-    const addBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '+ 의존 추가',
-      onclick: async () => {
-        const from = fromSel.value, to = toSel.value;
-        if (!from || !to) { toast('from·to 도메인을 모두 고르세요', true); return; }
-        if (from === to) { toast('같은 도메인끼리는 연결할 수 없습니다', true); return; }
-        addBtn.disabled = true;
-        try {
-          await api('/api/ui/category-edges', { method: 'POST', body: JSON.stringify({
-            from_category_id: Number(from), to_category_id: Number(to), relation: relIn.value.trim() || undefined,
-          }) });
-          toast('의존을 추가했습니다');
-          reloadEdges();
-        } catch (e) { toast('실패 — ' + e.message, true); addBtn.disabled = false; }
-      } });
-    card.append(el('div', { class: 'cat-edge-form' }, fromSel,
-      el('span', { class: 'dm-diff-arrow', 'aria-hidden': 'true', text: '→' }), toSel, relIn, addBtn));
-
-    // should 의존(편집 가능)
-    card.append(el('div', { class: 'cat-edge-group-label', text: '의도한 의존 (should · 사람)' }));
-    card.append(shouldEdges.length
-      ? el('div', { class: 'cat-edge-list' }, ...shouldEdges.map((e) => edgeRow(e, true)))
-      : el('div', { class: 'empty', text: '아직 의도한 의존이 없습니다. 위에서 추가하세요.' }));
-
-    // is 의존(읽기 전용 — 스캔 소유)
-    card.append(el('div', { class: 'cat-edge-group-label', text: '실제 의존 (is · 스캔, 읽기 전용)' }));
-    card.append(isEdges.length
-      ? el('div', { class: 'cat-edge-list' }, ...isEdges.map((e) => edgeRow(e, false)))
-      : el('div', { class: 'empty', text: '스캔이 잡은 코드 의존이 아직 없습니다.' }));
-
-    host.replaceChildren(card);
-  }
+function knowledgeSubBar(active) {
+  // space 하위 탭(사업·제품·시스템)만. 도메인-코드 의존성(코드구조)은 독립 탭으로 분리(2026-06-24).
+  return spaceSubBar('#/knowledge', SPACE_LABEL[active] ? active : '');
 }
 
-// ════════════════════════════════════════════
-// 지식 #/knowledge — 맥락의 기록(Knowledge). 분류축(카테고리)·기록(지식)·변화(프로젝트) 중 '기록'.
-//  지식은 두 직교축을 갖는다: injection ∈ {always(항상 주입·규칙/페르소나), recalled(검색 소환)},
-//  provenance ∈ {authored(저작), observed(외부 미러)}. lifecycle/confidence 는 ku 와 동일 어휘.
-//  사업·제품·시스템(space) + 통계 + 검토 하위 탭. space 뷰 = 좌(카테고리 사이드바)/우(지식 목록) 2분할.
-//  데이터: GET /api/ui/knowledge(목록)·/api/ui/knowledge/:name(상세)·/lifecycle·/category, GET /api/ui/categories(사이드바).
-// ════════════════════════════════════════════
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
 const KN_INJECTION_LABEL = { always: '항상 주입', recalled: '검색' };
 const KN_INJECTION_HINT = {
   always: '규칙·페르소나처럼 모든 세션에 항상 주입됩니다.',
   recalled: '관련될 때 의미검색으로 소환됩니다.',
 };
-// provenance(출처축) 한글 라벨 — authored=사람·AI 가 이 시스템에 직접 저작, observed=외부 시스템의 살아있는 미러.
+// provenance(출처축) 한글 라벨 — authored=직접 저작, observed=외부 시스템의 살아있는 미러.
 const KN_PROVENANCE_LABEL = { authored: '저작', observed: '외부 미러' };
 const KN_PROVENANCE_HINT = {
   authored: '이 시스템에 직접 저작한 지식입니다.',
   observed: '외부 시스템에서 가져온 살아있는 미러입니다(진실·편집은 외부에).',
 };
-
-// 지식 하위 탭 — spaceSubBar(#/knowledge) 재사용(사업·제품·시스템)만. 통계·검토 칩은 제거됨.
-function knowledgeSubBar(active) {
-  // space 하위 탭(사업·제품·시스템) + '도메인-코드 의존성'(구 '코드구조' top 탭 → WIKI 하위로 편입).
-  const bar = spaceSubBar('#/knowledge', SPACE_LABEL[active] ? active : '');
-  const on = active === 'domainmap';
-  bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: '#/domainmap',
-    role: 'tab', 'aria-selected': on ? 'true' : 'false', text: '도메인-코드 의존성' }));
-  return bar;
-}
 
 // injection/provenance 칩 — 종류 뱃지(kindBadge)와 같은 작은 인라인 표식. title 로 한 줄 설명 노출.
 function knInjectChip(injection) {
@@ -2793,8 +2609,19 @@ function pjvAddRow(projectId, status, members, reload, body, countEl) {
   const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
-  const collapse = () => { row.replaceChildren(trigger); };
-  const expand = () => { row.replaceChildren(input); input.focus(); };
+  const collapse = () => { row.classList.remove('editing'); row.replaceChildren(trigger); };
+  // 펼침: 태스크 행과 동일한 그리드 — 입력은 '이름' 컬럼에만 두고 담당자·마감·우선순위 셀은 자리를 유지한다
+  //  (클릭업 + Add Task 처럼 컬럼을 안 가림). 비-이름 셀은 생성 전이라 비활성 자리표시만.
+  const expand = () => {
+    row.classList.add('editing');
+    row.replaceChildren(
+      el('div', { class: 'pjv-trow-title-cell' }, input),
+      el('div', { class: 'pjv-tcell' }),
+      el('div', { class: 'pjv-tcell' }),
+      el('div', { class: 'pjv-tcell' }),
+      el('div', { class: 'pjv-tcell pjv-tcell-add' }));
+    input.focus();
+  };
   trigger.onclick = expand;
   input.addEventListener('blur', () => { if (!input.value.trim()) collapse(); });
   let busy = false;
@@ -2927,45 +2754,6 @@ function pjvKnowledgeSection(projectId, required, produced) {
 //  ClickUp 미러 과업(W)·activity 작업과 분리된 가벼운 보드. 상태 토글(진행중↔완료)이 핵심 상호작용.
 //  데이터: GET /api/ui/projects · POST /api/ui/projects · POST /api/ui/projects/:id/status (scope=memory).
 // ════════════════════════════════════════════
-async function renderProjects(view) {
-  view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })),
-  );
-
-  let projects;
-  try {
-    projects = await api('/api/ui/projects').then((d) => (d && d.projects) || []);
-  } catch (e) {
-    view.replaceChildren(head, errorNote(e, '프로젝트를 불러오지 못했습니다'));
-    return;
-  }
-
-  const reload = () => renderProjects(view);
-  const active = projects.filter((p) => p.status === 'active');
-  const done = projects.filter((p) => p.status === 'done');
-
-  const newBtn = el('button', { class: 'btn btn-primary', text: '+ 새 프로젝트',
-    onclick: () => openProjectForm(reload) });
-
-  view.replaceChildren(
-    head,
-    el('div', { class: 'card-head', style: 'margin: 6px 0 14px' },
-      el('div', {},
-        el('span', { class: 'eyebrow', text: '내 프로젝트' }),
-        el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 속한 프로젝트 — 진행 중과 완료.' })),
-      el('div', { class: 'card-head-actions' }, newBtn)),
-    projectSection('진행 중', active, '아직 진행 중인 프로젝트가 없습니다. ‘+ 새 프로젝트’로 시작하세요.', reload, false),
-    projectSection('완료', done, '완료한 프로젝트가 아직 없습니다.', reload, true),
-    el('div', { class: 'card-head', style: 'margin: 24px 0 14px' },
-      el('div', {},
-        el('span', { class: 'eyebrow', text: '회사 전체' }),
-        el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))),
-    companyTimelineSection(),
-  );
-}
-
-// 보드 하단 — 회사 전체 작업 타임라인(최신순, 사람 필터 없음, 유형 필터 + 6개·더보기). 디자인은 프로젝트 카드 통일.
 function companyTimelineSection() {
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   const body = el('div', {});
@@ -3165,41 +2953,6 @@ function openProjectForm(reload) {
 
 // 프로젝트 상세 #/projects/:id — 전용 페이지. 헤더(이름·상태·팀원·폴더) + 3섹션(공유폴더·터미널·타임라인).
 //  ※ 섹션 본문은 단계적으로 채운다(현재 골격 — 다음 단계에서 파일/세션/타임라인 배선).
-async function renderProjectDetail(view, idStr) {
-  const id = Number(idStr);
-  const backLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects', text: '← 프로젝트' });
-  view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
-  let data;
-  try { data = await api('/api/ui/projects/' + id); }
-  catch (e) {
-    view.replaceChildren(el('div', { class: 'page-head' }, backLink), errorNote(e, '프로젝트를 불러오지 못했습니다'));
-    return;
-  }
-  const p = data.project; const members = data.members || [];
-  const isDone = p.status === 'done';
-  const reload = () => renderProjectDetail(view, idStr);
-
-  const head = el('div', { class: 'page-head' },
-    el('div', { style: 'margin-bottom:18px' }, backLink),
-    el('h1', { style: 'margin-bottom:14px' }, p.name, ' ', el('span', { class: 'pill-state', text: isDone ? '완료' : '진행 중' })));
-  if (p.description) head.append(el('p', { class: 'sub', text: p.description }));
-  // 팀원 — 제목 바로 아래 한 줄로 간단히(박스 없이): 라벨 + 칩 + 수정 링크.
-  const teamChips = members.length
-    ? members.map((m) => el('span', { class: 'proj-team-chip' },
-        el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
-        el('span', { text: m.display_name || m.member_id })))
-    : [el('span', { class: 'admin-hint', text: '아직 팀원이 없어요' })];
-  head.append(el('div', { class: 'proj-team-row' },
-    ...teamChips,
-    el('button', { class: 'proj-team-edit', type: 'button', text: '팀원 수정', onclick: () => openMembersEdit(id, members.map((m) => m.member_id), reload) })));
-
-  view.replaceChildren(head,
-    projectFolderSection(id),
-    projectTerminalSection(id, members, state.me && state.me.userId),
-    projectTimelineSection(id, members));
-}
-
-// 인증 fetch 다운로드 — api() 는 json 전용이라 파일은 직접 blob 처리(Bearer 수동).
 async function authDownload(url, filename) {
   const token = localStorage.getItem(TOKEN_KEY);
   let res;
@@ -3336,6 +3089,71 @@ function fileIconSvg(name, isDir) {
   return node;
 }
 
+// ── 공유 폴더 미리보기(맥 Finder 느낌) — 이미지=실제 썸네일, 그 외=타입별 색 문서 아이콘(라벨), 폴더=폴더. ──
+const FILE_TYPE_META = {
+  pdf: { label: 'PDF', cls: 'ft-pdf' },
+  doc: { label: 'DOC', cls: 'ft-word' }, docx: { label: 'DOC', cls: 'ft-word' }, hwp: { label: 'HWP', cls: 'ft-word' }, hwpx: { label: 'HWP', cls: 'ft-word' },
+  ppt: { label: 'PPT', cls: 'ft-ppt' }, pptx: { label: 'PPT', cls: 'ft-ppt' }, key: { label: 'KEY', cls: 'ft-ppt' },
+  xls: { label: 'XLS', cls: 'ft-xls' }, xlsx: { label: 'XLS', cls: 'ft-xls' }, csv: { label: 'CSV', cls: 'ft-xls' },
+  zip: { label: 'ZIP', cls: 'ft-zip' }, tar: { label: 'TAR', cls: 'ft-zip' }, gz: { label: 'GZ', cls: 'ft-zip' }, rar: { label: 'RAR', cls: 'ft-zip' }, '7z': { label: '7Z', cls: 'ft-zip' },
+  mp3: { label: 'MP3', cls: 'ft-av' }, wav: { label: 'WAV', cls: 'ft-av' }, m4a: { label: 'M4A', cls: 'ft-av' }, flac: { label: 'FLAC', cls: 'ft-av' },
+  mp4: { label: 'MP4', cls: 'ft-av' }, mov: { label: 'MOV', cls: 'ft-av' }, webm: { label: 'WEBM', cls: 'ft-av' }, mkv: { label: 'MKV', cls: 'ft-av' },
+  md: { label: 'MD', cls: 'ft-txt' }, txt: { label: 'TXT', cls: 'ft-txt' }, rtf: { label: 'RTF', cls: 'ft-txt' },
+};
+function fileThumb(id, it, rel, base) {
+  if (it.type === 'dir') return folderThumb();
+  const ext = fileExt(it.name);
+  if (IMG_EXTS.includes(ext)) return imageThumb(id, rel, base, it.name);
+  return docIcon(ext);
+}
+// 폴더 — 맥 느낌 소프트 블루(두 톤).
+function folderThumb() {
+  const n = sv('svg', { class: 'ft ft-folder', viewBox: '0 0 48 40', fill: 'none', 'aria-hidden': 'true' });
+  n.append(sv('path', { class: 'ft-folder-tab', d: 'M4 9a3 3 0 0 1 3-3h10.5l4 4H4z' }));
+  n.append(sv('path', { class: 'ft-folder-body', d: 'M4 12a3 3 0 0 1 3-3h34a3 3 0 0 1 3 3v19a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z' }));
+  return n;
+}
+// 타입별 색 문서 아이콘 — 흰 페이지 + 접힌 모서리 + 색 띠 + 라벨(PDF/DOC/PPT/XLS …).
+function docIcon(ext) {
+  const meta = FILE_TYPE_META[ext] || { label: (String(ext || '').toUpperCase().slice(0, 4) || 'FILE'), cls: 'ft-generic' };
+  const n = sv('svg', { class: 'ft ft-file ' + meta.cls, viewBox: '0 0 40 48', fill: 'none', 'aria-hidden': 'true' });
+  n.append(sv('path', { class: 'ft-page', d: 'M6 2.5h17.5L34 13v30.5a2.5 2.5 0 0 1-2.5 2.5h-25A2.5 2.5 0 0 1 4 43.5V5A2.5 2.5 0 0 1 6 2.5z' }));
+  n.append(sv('path', { class: 'ft-fold', d: 'M23.5 2.5V11a2 2 0 0 0 2 2H34z' }));
+  n.append(sv('rect', { class: 'ft-band', x: 4, y: 29, width: 30, height: 12, rx: 2.5 }));
+  const t = sv('text', { class: 'ft-label', x: 19, y: 37.8, 'text-anchor': 'middle' }); t.textContent = meta.label;
+  n.append(t);
+  return n;
+}
+// 이미지 — 실제 썸네일. 파일 API 가 Bearer 인증이라 <img src> 직접 불가 → blob fetch 후 objectURL. 보일 때 지연 로드.
+function imageThumb(id, rel, base, name) {
+  const wrap = el('div', { class: 'ft ft-img' });
+  const img = el('img', { alt: name });
+  wrap.append(img);
+  wrap._loadThumb = async () => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const url = (base || '/api/ui/projects/') + id + '/file?path=' + encodeURIComponent(rel);
+    try {
+      const res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+      if (!res.ok) { wrap.classList.add('ft-img-err'); return; }
+      img.src = URL.createObjectURL(await res.blob());
+      wrap.classList.add('loaded');
+    } catch (_) { wrap.classList.add('ft-img-err'); }
+  };
+  thumbObserve(wrap);
+  return wrap;
+}
+// 지연 로드 — 화면(+여유 200px)에 들어올 때 _loadThumb() 1회. IntersectionObserver 없으면 즉시.
+let _thumbObserver = null;
+function thumbObserve(wrap) {
+  if (typeof IntersectionObserver === 'undefined') { if (wrap._loadThumb) wrap._loadThumb(); return; }
+  if (!_thumbObserver) {
+    _thumbObserver = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) { _thumbObserver.unobserve(e.target); if (e.target._loadThumb) e.target._loadThumb(); }
+    }, { rootMargin: '200px' });
+  }
+  _thumbObserver.observe(wrap);
+}
+
 // 텍스트로 열어 편집 가능한 확장자(화이트리스트). 그 외 바이너리(docx/xlsx/zip 등)는 textarea 로 열면 깨지므로 다운로드.
 const TEXT_EXTS = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'js', 'ts', 'tsx', 'jsx', 'mjs', 'cjs',
   'py', 'sh', 'bash', 'zsh', 'rb', 'go', 'rs', 'c', 'cc', 'cpp', 'h', 'hpp', 'java', 'kt', 'swift', 'php',
@@ -3401,7 +3219,7 @@ async function openFileViewer(id, rel, name, reload, base) {
 function projFileCardEl(id, it, rel, onDir, reload, base, select) {
   const isDir = it.type === 'dir';
   const c = el('div', { class: 'proj-file-card' + (select ? ' select-mode' : ''), title: it.name },
-    el('div', { class: 'proj-file-card-ic', text: isDir ? '📁' : iconFor(it.name) }),
+    el('div', { class: 'proj-file-card-ic' }, fileThumb(id, it, rel, base)),
     el('div', { class: 'proj-file-card-nm', text: it.name }),
     el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }));
   if (select) {
@@ -3434,7 +3252,7 @@ function projFileRowEl(id, it, rel, onDir, reload, base) {
     isDir ? null : fileIconBtn('↓', '다운로드', (ev) => { ev.stopPropagation(); authDownload(B + id + '/file?download=1&path=' + encodeURIComponent(rel), it.name); }),
     fileIconBtn('✕', '삭제', (ev) => { ev.stopPropagation(); deleteEntry(id, rel, it.name, isDir, reload, B); }, true));
   const row = el('div', { class: 'proj-file-lrow' },
-    el('span', { class: 'proj-file-lic' }, fileIconSvg(it.name, isDir)),
+    el('span', { class: 'proj-file-lic' }, fileThumb(id, it, rel, B)),
     el('span', { class: 'proj-file-lnm' + (isDir ? ' is-dir' : ''), text: it.name, title: it.name }),
     el('span', { class: 'proj-file-lsz', text: isDir ? '' : fmtSize(it.size) }),
     acts);
@@ -5420,11 +5238,8 @@ async function route() {
       setActiveTab('ctx');
       await renderReview(view);
     } else if (page === 'domainmap') {
-      setActiveTab('knowledge'); // 도메인-코드 의존성 — WIKI 하위 탭(knowledgeSubBar)
+      setActiveTab('domainmap'); // 코드구조 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
-    } else if (page === 'categories') {
-      setActiveTab('categories'); // 카테고리(분류축) — 사업·제품·시스템 space 별 분류 트리 CRUD
-      await renderCategories(view, segs[1] || 'business', params);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // 지식(맥락의 기록) — 사업·제품·시스템 + 통계·검토. injection/provenance 직교축.
       await renderKnowledge(view, segs[1] || 'business', params);
@@ -5442,9 +5257,6 @@ async function route() {
       setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 대시보드·작업현황·사업·제품·시스템 하위탭.
       if (segs[1] === 'p' && segs[2]) await renderProjectV2Detail(view, segs[2]);
       else await renderProjectsV2(view, segs[1] || 'dashboard', params);
-    } else if (page === 'dash') {
-      setActiveTab('dash');
-      await renderDashboard(view, params);
     } else if (page === 'system') {
       setActiveTab('system');
       await renderSystem(view, segs[1] || null);

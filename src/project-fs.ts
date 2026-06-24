@@ -59,6 +59,17 @@ export function dirToProjectFolder(dir: string): string | null {
   return path.relative(PROJECT_SHARED_BASE, path.resolve(dir));
 }
 
+// folder('project/<name>' 또는 'legacy-project/<name>')의 양형 변형 — 원본 + 반대 prefix 형(있으면).
+//  입장 게이트가 아카이브(project↔legacy) 드리프트에도 같은 프로젝트를 찾게 하는 폴백용(과허용 아님 — 멤버십은 별도 검증).
+export function folderVariants(folder: string): string[] {
+  const rel = String(folder || "").replace(/^[/\\]+/, "");
+  const out = [rel];
+  const pPre = PROJECT_SUBDIR + "/", lPre = LEGACY_SUBDIR + "/";
+  if (rel.startsWith(pPre)) out.push(lPre + rel.slice(pPre.length));
+  else if (rel.startsWith(lPre)) out.push(pPre + rel.slice(lPre.length));
+  return out;
+}
+
 // 완료(archive=true: project/ → legacy-project/) 또는 복귀(false: 반대)로 폴더 이동. 새 상대경로 반환.
 //  대상에 같은 이름 있으면 -2,-3 회피(덮어쓰기 금지). 원본 폴더가 없으면(이미 이동/삭제) 목표 경로만 관용 반환.
 export async function moveProjectFolder(folder: string, archive: boolean): Promise<string> {

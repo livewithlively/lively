@@ -11,9 +11,9 @@ import crypto from "node:crypto";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { teamDir, isTeamMemberById, myTeamIds } from "./terminal-teams.js";
-import { dirToProjectFolder } from "./project-fs.js";
-import { projectAccessByFolder } from "./org/store.js";
-import { projectAccessByFolder as projectAccessByFolderV6 } from "./v6/project-store.js";
+import { dirToProjectFolder, folderVariants } from "./project-fs.js";
+import { projectAccessByFolder, isProjectMember } from "./org/store.js";
+import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6 } from "./v6/project-store.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -50,7 +50,7 @@ export interface SessionInfo {
   team: string; // 소속 팀 폴더 id(@box_team). 빈값 = 팀 밖(최상위) 세션.
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; visibility: string; team?: string; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; visibility: string; team?: string; projectId?: number; projectSrc?: "v6" | "org"; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -163,6 +163,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_visibility", visibility]);
   if (teamId) await tmux(["set-option", "-t", id, "@box_team", teamId]);
+  // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — 입장 게이트(canAttach)가 폴더 문자열이 아니라 이 id 로 멤버십을
+  //  판정하게 해, 폴더 이름변경·접미사(-N)·아카이브(legacy-project/)·이동에도 입장이 끊기지 않게 한다.
+  if (input.projectId) {
+    await tmux(["set-option", "-t", id, "@box_project", String(input.projectId)]);
+    await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
+  }
   // 스크롤 줄중복·리사이즈 개선: 휠→tmux copy-mode + window-size largest(작은 피커가 창 못 줄임).
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
@@ -182,11 +188,21 @@ export async function canAttach(id: string, userId: string): Promise<boolean> {
   const m = await ownerVis(id);
   if (!m) return false;
   // 프로젝트 폴더 세션은 '공동 세션' — 그 프로젝트 팀원(생성자 포함)만 입장(공개여도 외부 차단).
-  //  폴더는 레거시(org_project)·v6(project) 어느 쪽 프로젝트에도 속할 수 있다. UI 프로젝트 탭은 v6 에
-  //  세션을 만들므로 둘 다 확인해야 한다 — 안 그러면 v6 프로젝트 세션은 생성자 본인도 입장이 거부된다.
   const dir = await sessionDir(id);
   const folder = dirToProjectFolder(dir);
-  if (folder) return (await projectAccessByFolder(folder, userId)) || (await projectAccessByFolderV6(folder, userId));
+  if (folder) {
+    // 1순위: 세션에 박힌 프로젝트 id 로 멤버십 판정 — 폴더 이름변경·접미사·아카이브·이동에 면역. src 로 v6/org 스토어 선택.
+    const pid = Number(await getOpt(id, "@box_project")) || 0;
+    if (pid) {
+      const src = await getOpt(id, "@box_project_src");
+      if (src === "org" ? await isProjectMember(pid, userId) : await isProjectMemberV6(pid, userId)) return true;
+    }
+    // 폴백(구 세션·id 없음): 폴더 기준 — project/ ↔ legacy-project/ 양형 × v6·org 양쪽. 여전히 멤버십을 요구(과허용 없음).
+    for (const f of folderVariants(folder)) {
+      if ((await projectAccessByFolder(f, userId)) || (await projectAccessByFolderV6(f, userId))) return true;
+    }
+    return false;
+  }
   if (m.team && !(await isTeamMemberById(m.team, userId))) return false; // 팀 멤버 아니면 공개여도 차단
   return m.owner === userId || m.visibility === "public";
 }

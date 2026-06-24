@@ -690,9 +690,14 @@ async function connectNow() {
     // control mode 로 확인되면 페이지 로드 후 첫 연결에 한 번만 현재 화면+스크롤백 백필(재연결 시엔 생략 — 중복 방지).
     if (!didBackfill && ctrl.isControl()) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } }
   };
-  sock.onclose = () => {
+  sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     connecting = false;
+    if (e && e.code === 4403) { // 서버가 입장 거부 — 무한 재연결 대신 이유를 명확히 안내하고 멈춘다.
+      clearTimeout(reconnectTimer);
+      gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
+      return;
+    }
     statusEl.textContent = wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…';
     statusEl.className = 'status err';
     scheduleReconnect();

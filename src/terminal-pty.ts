@@ -30,7 +30,13 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       if (!tk) { socket.destroy(); return; }
       const id = url.searchParams.get("session") || "";
       const ok = await canAttach(id, tk.userId).catch(() => false);
-      if (!ok) { socket.destroy(); return; }
+      if (!ok) {
+        // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 4403 으로 닫아
+        //  terminal.js 가 명확히 '입장 불가'를 띄우고 재연결을 멈추게 한다. 거부는 그동안 무로그였으므로 진단 로그도 남긴다.
+        logger.info({ id, userId: tk.userId }, "ws attach 거부(프로젝트 접근권 없음 또는 세션-프로젝트 불일치)");
+        wss.handleUpgrade(req, socket, head, (ws) => { try { ws.close(4403, "no-access"); } catch { /* noop */ } });
+        return;
+      }
       await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
       wss.handleUpgrade(req, socket, head, (ws) => attach(ws, id));
     })();
