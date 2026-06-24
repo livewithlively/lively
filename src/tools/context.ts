@@ -3,27 +3,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMcpCapabilities } from "../capabilities/index.js";
 
+// v6 컷오버(2026-06): 레거시 domain_* / propose_domain 의 MCP 등록 제거 — v6 category_*(tools/v6.ts)가 대체.
+//  capability 객체·REST 마운트는 보존(구 웹 탭 + domainmap 이 REST 로 계속 사용) — 여기 이름목록에서만 뺐다.
+//  repo_*(통제어휘 CRUD·하드딜리트)·context_overview·debt_list 는 v6 미대체라 MCP 유지.
 export function registerContextTools(server: McpServer): void {
   registerMcpCapabilities(server, [
     "repo_list",         // domainmap ∪ 매핑테이블 union 객체(부분성공 내성)
     "context_overview",  // domainmap overview + items 통계 흡수
-    "domain_list",
-    "domain_get",
     "debt_list",
-    // 도메인 authoring 쓰기 2종(⑤) — capability 는 domainmap-curation 그룹 소속이지만
-    // MCP 표면 등록은 도메인 패밀리인 여기서 한다(expose.mcp:true 플립과 원자 커밋).
-    "propose_domain",
-    "domain_deprecate",
-    // P-V3-4a: repo/domain 통제어휘 CRUD 5종(domainmap-crud 그룹) — 같은 도메인 패밀리라 여기서 등록.
+    // P-V3-4a: repo 통제어휘 CRUD(domainmap-crud 그룹) — domain_* 는 v6 category_* 로 이관, repo_* 만 유지.
     "repo_create",
     "repo_rename",
     "repo_deprecate",
-    "domain_create",
-    "domain_rename",
-    "domain_set_should", // P4: 도메인 의도(should) 재조정 — stop훅 should-reconcile 경로
-
-    // hard-delete(영구삭제) 2종 — deprecate(숨김)와 별개의 비가역 삭제. 핸들러가 agent(MCP) 금지 가드.
-    "domain_delete",
+    // hard-delete(영구삭제) — deprecate(숨김)와 별개의 비가역 삭제. 핸들러가 agent(MCP) 금지 가드.
     "repo_delete",
   ]);
 }

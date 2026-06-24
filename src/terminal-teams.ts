@@ -27,7 +27,9 @@ export function teamDir(id: string): string {
 }
 
 interface TeamMeta { owner: string; label: string; members: string[]; created: number; }
-export interface TeamInfo { id: string; label: string; owner: string; owned: boolean; members: string[]; memberNames: string[]; created: number; }
+// accessible = 내가 owner/member 라 '들어갈' 수 있는가. 팀 폴더는 모두에게 보이되(목록·이름·구성원),
+//  입장(세션 열람/생성)은 accessible=true 만 허용한다.
+export interface TeamInfo { id: string; label: string; owner: string; owned: boolean; accessible: boolean; members: string[]; memberNames: string[]; created: number; }
 
 async function readMeta(id: string): Promise<TeamMeta | null> {
   let raw: string;
@@ -75,7 +77,7 @@ async function validMemberIds(ids: unknown): Promise<string[]> {
 }
 
 function toInfo(id: string, meta: TeamMeta, me: string, names: Map<string, string>): TeamInfo {
-  return { id, label: meta.label, owner: meta.owner, owned: meta.owner === me, members: meta.members, memberNames: meta.members.map((m) => names.get(m) || m), created: meta.created };
+  return { id, label: meta.label, owner: meta.owner, owned: meta.owner === me, accessible: isMember(meta, me), members: meta.members, memberNames: meta.members.map((m) => names.get(m) || m), created: meta.created };
 }
 
 export async function listTeams(user: LivelyUser): Promise<TeamInfo[]> {
@@ -87,16 +89,18 @@ export async function listTeams(user: LivelyUser): Promise<TeamInfo[]> {
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith(".") || !TEAM_ID_RE.test(e.name)) continue;
     const meta = await readMeta(e.name).catch(() => null);
-    if (!meta || !isMember(meta, me)) continue; // 마커 없음(일반 폴더) 또는 접근 권한 없음 → 숨김
+    if (!meta) continue; // 마커 없음(일반 폴더) → 숨김. 팀이면 비멤버여도 노출(입장만 차단).
     out.push(toInfo(e.name, meta, me, names));
   }
-  out.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
+  // 접근 가능(내 팀) 먼저 → 소유 먼저 → 최신 먼저.
+  out.sort((a, b) => (Number(b.accessible) - Number(a.accessible)) || (Number(b.owned) - Number(a.owned)) || (b.created - a.created));
   return out;
 }
 
-// 내가 접근 가능한 팀 id 집합 — listSessions 필터용(세션당 마커 read 회피).
+// 내가 '접근 가능한' 팀 id 집합 — listSessions 의 팀 세션 가시성 게이트용(비멤버에 팀 세션 노출 방지).
+//  팀 폴더 자체는 모두에게 보이지만(accessible=false 포함), 세션 게이트는 accessible 만 통과시킨다.
 export async function myTeamIds(user: LivelyUser): Promise<Set<string>> {
-  return new Set((await listTeams(user)).map((t) => t.id));
+  return new Set((await listTeams(user)).filter((t) => t.accessible).map((t) => t.id));
 }
 
 export async function createTeam(user: LivelyUser, input: { label: string; members: unknown }): Promise<TeamInfo> {

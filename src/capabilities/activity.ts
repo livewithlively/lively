@@ -2,7 +2,7 @@
 //  memory_*/ctx_* 와 동일). 핸들러는 thin — 입력 파싱 후 domainmap/core/activity 의 store 호출.
 //  author_person=ctx.actor(토큰 신원=누가), author_agent='어떤 AI'(호출자가 명시 — 모델/하네스 id). 사람×AI 집계의 축.
 import { z } from "zod";
-import { logActivity, listActivities, dashPeople } from "../domainmap/core/activity.js";
+import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../domainmap/core/activity.js";
 import type { Capability } from "./types.js";
 
 const activityLog: Capability = {
@@ -14,11 +14,13 @@ const activityLog: Capability = {
     "should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
     "실질 지식(의사결정·산출물)은 ctx_save 로 ku 에 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
     "author_agent='어떤 AI'(모델/하네스 id), session_id=세션 — 사람×AI 작업현황 집계의 축. " +
-    "external(system+id) 지정 시 멱등 upsert(PM 코멘트 라운드트립 재호출 안전).",
+    "external(system+id) 지정 시 멱등 upsert(PM 코멘트 라운드트립 재호출 안전). " +
+    "title 은 기술 상세 제목(펼쳤을 때 표시), summary 는 작업현황 피드 겉에 보이는 짧은 라벨 '중분류 - 내용'(예: '웹 페이지 수정 - 작업현황 UI 개선') — 둘 다 채워라(summary 없으면 title 로 폴백).",
   scope: "memory",
   input: {
     type: z.enum(["commit", "comment", "decision", "status_change", "review"]).describe("작업 유형"),
-    title: z.string().min(1).max(500).describe("한 줄 진척 요약(얇게 — 실질 내용은 ku_refs 로 참조)"),
+    title: z.string().min(1).max(500).describe("기술 상세 제목(펼침에 표시 — 정확한 기술 용어 OK). 얇게 — 실질 내용은 ku_refs 로 참조"),
+    summary: z.string().max(120).optional().describe("작업현황 겉(접힘)에 보일 짧은 라벨 '중분류 - 내용' 형식(예: '웹 페이지 수정 - 작업현황 UI 개선', '배포 - 도메인 맵 탭'). 한 문장 설명이 아니라 라벨처럼 짧게(기술용어·약어 지양). 상세 설명은 title/body 에. 생략 시 title 로 폴백"),
     body: z.string().max(20000).optional().describe("짧은 메모(선택)"),
     task_ku_names: z.array(z.string()).optional().describe("이 작업이 속한 과업(W ku) name 목록(n:n)"),
     ku_refs: z.array(z.object({
@@ -45,7 +47,7 @@ const activityLog: Capability = {
   handler: async (input: any, user, ctx) => {
     const authorPerson = ctx?.actor ?? user?.userId ?? null;
     const res = await logActivity({
-      type: input.type, title: input.title, body: input.body ?? null,
+      type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       taskKuNames: input.task_ku_names, kuRefs: input.ku_refs, touches: input.touches,
       commit_sha: input.commit_sha ?? null, repo: input.repo ?? null, committed_at: input.committed_at ?? null,
       author_agent: input.author_agent ?? null, session_id: input.session_id ?? null,
@@ -109,7 +111,47 @@ const dashPeopleCap: Capability = {
       parse: () => ({}),
     }],
   },
-  handler: async () => ({ people: await dashPeople() }),
+  // viewer=토큰 신원(ctx.actor) — 그의 '내 목록'(dash_watch)+나 자신만 집계(개인화). 명부 전체 나열 안 함.
+  handler: async (_input: any, user: any, ctx: any) => ({ people: await dashPeople(ctx?.actor ?? user?.userId ?? null) }),
 };
 
-export const activityCapabilities: Capability[] = [activityLog, activityList, dashPeopleCap];
+// 편집 팝업용 — 전체 활성 '사람' 구성원(검색·체크는 프론트). REST 전용.
+const dashMembersCap: Capability = {
+  name: "dash_members",
+  title: "작업 현황 — 구성원 후보",
+  description: "내 목록 편집 팝업에서 고를 수 있는 활성 '사람' 구성원 전체. 웹 대시보드 전용.",
+  scope: "memory",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/dash/members"], parse: () => ({}) }] },
+  handler: async () => ({ members: await listDashMembers() }),
+};
+
+// 내 목록 읽기 — 뷰어(ctx.actor)의 watch member_id 목록(나 자신 제외 — 항상 표시되므로).
+const dashWatchGetCap: Capability = {
+  name: "dash_watch_get",
+  title: "작업 현황 — 내 목록 조회",
+  description: "현재 사용자의 작업현황 '내 목록'(구성원 워치리스트) member_id 배열. 웹 대시보드 전용.",
+  scope: "memory",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/dash/watch"], parse: () => ({}) }] },
+  handler: async (_input: any, user: any, ctx: any) => ({
+    me: ctx?.actor ?? user?.userId ?? null,
+    member_ids: await getWatch(ctx?.actor ?? user?.userId ?? null),
+  }),
+};
+
+// 내 목록 저장(통째 교체) — 뷰어 본인 것만. body.member_ids 배열.
+const dashWatchSetCap: Capability = {
+  name: "dash_watch_set",
+  title: "작업 현황 — 내 목록 저장",
+  description: "현재 사용자의 작업현황 '내 목록'을 member_ids 배열로 통째 교체(set). 본인 것만. 웹 대시보드 전용.",
+  scope: "memory",
+  input: { member_ids: z.array(z.string()).describe("내 목록에 둘 구성원 id 배열(통째 교체)") },
+  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/dash/watch"], parse: (req: any) => ({ member_ids: req.body?.member_ids ?? [] }) }] },
+  handler: async (input: any, user: any, ctx: any) =>
+    setWatch(ctx?.actor ?? user?.userId ?? null, Array.isArray(input.member_ids) ? input.member_ids : []),
+};
+
+export const activityCapabilities: Capability[] = [
+  activityLog, activityList, dashPeopleCap, dashMembersCap, dashWatchGetCap, dashWatchSetCap,
+];

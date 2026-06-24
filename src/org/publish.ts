@@ -146,7 +146,8 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   const cfg = await getRuntimeConfig();
   await writeFile(join(dir, "hooks-config.json"),
-    JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || undefined }, null, 2) + "\n");
+    JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || undefined,
+      write_tools: cfg.write_tools?.length ? cfg.write_tools : undefined }, null, 2) + "\n");
   const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 어드민 런타임 설정에서 중앙 관리. env LIVELY_WORK_ROOTS 로도 augment.";
   await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
   const mcps = (await listMcpServers())
@@ -169,14 +170,16 @@ export async function previewMemberContext(orgName: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
   const policy = await getSection("managed-policy");
   const defaults = await getSection("org-defaults");
-  const { listKnowledge } = await import("./knowledge.js");
+  const { listKnowledge } = await import("../v6/knowledge-store.js");
   // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildKnowledgeIndex 를 그대로
-  //  재사용(v4: R 전문 + area 지도 + 쓰기 가이드 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
-  const { buildKnowledgeIndex, areaMapForIndex } = await import("./materialize.js");
-  const knowledge = await listKnowledge({ lifecycle: "active" });
-  // area 지도는 라이브 조회(domainmap+items 조인, non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
-  const areaMap = await areaMapForIndex();
-  const memIndex = (knowledge.length || areaMap.length) ? buildKnowledgeIndex(knowledge, areaMap).trim() : "";
+  //  재사용(v6: injection=always 전문 + 카테고리 지도 + 쓰기 가이드 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
+  const { buildKnowledgeIndex, categoryMapForIndex, loadGuideTemplate, wikiCategoryMap } = await import("./materialize.js");
+  const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
+  // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
+  const categoryMap = await categoryMapForIndex();
+  // 컨텍스트 온톨로지 가이드 템플릿도 DB 섹션에서 로드 — materialize(발행물)와 동일 소스(편집값 우선·비면 기본값).
+  const guide = await loadGuideTemplate();
+  const memIndex = (knowledge.length || categoryMap.length) ? buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()).trim() : "";
   const sections = [
     header,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",

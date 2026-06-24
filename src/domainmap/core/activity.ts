@@ -14,6 +14,7 @@ export interface ActivityTouch { target_kind: string; target_id: number }
 export interface LogActivityInput {
   type: string;
   title: string;
+  summary?: string | null;
   body?: string | null;
   taskKuNames?: string[];
   kuRefs?: ActivityRef[];
@@ -70,20 +71,20 @@ export async function logActivity(input: LogActivityInput, authorPerson: string 
       action = "update";
       id = existing.id;
       await client.query(
-        `UPDATE activity SET type=$1,title=$2,body=$3,
+        `UPDATE activity SET type=$1,title=$2,body=$3,summary=COALESCE($14,summary),
            author_person=COALESCE($4,author_person),author_agent=COALESCE($5,author_agent),
            session_id=COALESCE($6,session_id),repo_id=COALESCE($7,repo_id),commit_sha=COALESCE($8,commit_sha),
            committed_at=COALESCE($9,committed_at),external_url=COALESCE($10,external_url),
            should_review=$11,is_review=$12 WHERE id=$13`,
         [input.type, input.title, input.body ?? null, authorPerson, input.author_agent ?? null, input.session_id ?? null,
-         repoId, input.commit_sha ?? null, input.committed_at ?? null, input.external_url ?? null, sr, ir, id]);
+         repoId, input.commit_sha ?? null, input.committed_at ?? null, input.external_url ?? null, sr, ir, id, input.summary ?? null]);
     } else {
       action = "insert";
       const r = await one(client,
-        `INSERT INTO activity(type,title,body,author_person,author_agent,session_id,repo_id,commit_sha,committed_at,
+        `INSERT INTO activity(type,title,summary,body,author_person,author_agent,session_id,repo_id,commit_sha,committed_at,
            external_system,external_instance,external_id,external_url,should_review,is_review,created_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
-        [input.type, input.title, input.body ?? null, authorPerson, input.author_agent ?? null, input.session_id ?? null,
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+        [input.type, input.title, input.summary ?? null, input.body ?? null, authorPerson, input.author_agent ?? null, input.session_id ?? null,
          repoId, input.commit_sha ?? null, input.committed_at ?? null,
          ck?.externalSystem ?? null, ck ? ck.externalInstance : null, ck?.externalId ?? null, input.external_url ?? null,
          sr, ir, now()]);
@@ -136,9 +137,20 @@ export interface DashAgentRow {
   lastActiveAt: string | null;
 }
 export interface DashPersonRow { author_person: string | null; display_name: string | null; total: number; agents: DashAgentRow[] }
-export async function dashPeople(): Promise<DashPersonRow[]> {
-  // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review.
-  const rows = await q(dmPool(), `
+export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]> {
+  // 개인화 — 뷰어의 '내 목록'(dash_watch) + 나 자신만 보인다(30명 전원 나열 방지). watch 비면 = 나만.
+  //  뷰어가 명부에 없고 watch 도 없으면(관리/외부 토큰) 빈 화면 방지로 전체 활성 멤버 폴백.
+  const members = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  const memberById = new Map<string, any>(members.map((m: any) => [String(m.id), m]));
+  const watch = await q(dmPool(), "SELECT member_id FROM dash_watch WHERE owner=$1", [viewer ?? ""]);
+  const targetIds = new Set<string>();
+  if (viewer && memberById.has(viewer)) targetIds.add(viewer);
+  for (const r of watch) if (memberById.has(String(r.member_id))) targetIds.add(String(r.member_id));
+  if (targetIds.size === 0) for (const id of memberById.keys()) targetIds.add(id);
+  const ids = [...targetIds];
+
+  // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review. 내 목록 작성자만 집계.
+  const rows = ids.length ? await q(dmPool(), `
     SELECT a.author_person, a.author_agent,
            COUNT(*)::int AS count,
            COUNT(*) FILTER (WHERE a.type='commit')::int        AS t_commit,
@@ -150,13 +162,14 @@ export async function dashPeople(): Promise<DashPersonRow[]> {
            MAX(COALESCE(a.committed_at, a.created_at)) AS last_active_at
     FROM activity a
     LEFT JOIN activity_task atk ON atk.activity_id = a.id
-    GROUP BY a.author_person, a.author_agent`);
+    WHERE a.author_person = ANY($1)
+    GROUP BY a.author_person, a.author_agent`, [ids]) : [];
   // (person,agent) 평면행 → person 으로 묶고 그 안에 agent 행 배열. 정형(shape)일 뿐 조인 아님.
   const byPerson = new Map<string, DashPersonRow>();
   for (const r of rows) {
-    const personKey = r.author_person === null ? " __null__" : String(r.author_person);
+    const personKey = String(r.author_person);
     let bucket = byPerson.get(personKey);
-    if (!bucket) { bucket = { author_person: r.author_person ?? null, display_name: null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
+    if (!bucket) { bucket = { author_person: r.author_person, display_name: null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
     const lastActiveAt = r.last_active_at ? new Date(r.last_active_at).toISOString() : null;
     bucket.total += r.count;
     bucket.agents.push({
@@ -170,12 +183,11 @@ export async function dashPeople(): Promise<DashPersonRow[]> {
   // 명부 합류 — 활동이 0건이어도 팀 전원이 보이도록 활성 '사람' 구성원(org_member)을 끌어온다(PM/PO 가 전원을 본다).
   //  작성자(사람) 축은 human 만(agent/system 제외) — AI 는 author_agent 축(카드 내 AI 칩)으로 따로 표현되므로 사람 축
   //  중복 방지. 활동 버킷이 이미 있으면 표시명만 채우고, 없으면 빈 버킷(활동 0)으로 새로 만든다. org_member 는 같은 풀(dmPool).
-  const members = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
-  for (const m of members) {
-    const key = String(m.id);
-    const bucket = byPerson.get(key);
-    if (!bucket) byPerson.set(key, { author_person: m.id, display_name: m.display_name ?? null, total: 0, agents: [] });
-    else if (!bucket.display_name) bucket.display_name = m.display_name ?? null;
+  for (const id of ids) {
+    const m = memberById.get(id);
+    const bucket = byPerson.get(id);
+    if (!bucket) byPerson.set(id, { author_person: id, display_name: m?.display_name ?? null, total: 0, agents: [] });
+    else if (!bucket.display_name) bucket.display_name = m?.display_name ?? null;
   }
   // 각 사람의 AI 행은 최근활동 desc. 사람 카드는 최근활동 desc(가장 최근 활동한 사람부터), 무활동 구성원은 표시명순으로 뒤에.
   const personLast = (p: { agents: DashAgentRow[] }) =>
@@ -188,6 +200,34 @@ export async function dashPeople(): Promise<DashPersonRow[]> {
     return (a.display_name || a.author_person || "").localeCompare(b.display_name || b.author_person || "");
   });
   return people;
+}
+
+// '내 목록'(dash_watch) — 작업현황 구성원 섹션을 뷰어별로 추리는 개인 워치리스트. owner=뷰어 토큰 신원(ctx.actor).
+//  피커(편집 팝업)용 활성 '사람' 구성원 전체. 검색·체크는 프론트에서.
+export async function listDashMembers(): Promise<{ id: string; display_name: string | null }[]> {
+  const rows = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  return rows.map((m: any) => ({ id: String(m.id), display_name: m.display_name ?? null }));
+}
+export async function getWatch(owner: string | null): Promise<string[]> {
+  if (!owner) return [];
+  const rows = await q(dmPool(), "SELECT member_id FROM dash_watch WHERE owner=$1 ORDER BY sort, member_id", [owner]);
+  return rows.map((r: any) => String(r.member_id));
+}
+// 내 목록 통째 교체(set semantics). 유효 활성 멤버만, 자기 자신 제외(뷰어는 항상 보이므로 dashPeople 가 합류).
+export async function setWatch(owner: string | null, memberIds: string[]): Promise<{ count: number }> {
+  if (!owner) throw new Error("내 목록을 저장할 사용자 신원이 없습니다");
+  const valid = new Set((await listDashMembers()).map((m) => m.id));
+  const clean = [...new Set((memberIds ?? []).map(String))].filter((id) => valid.has(id) && id !== owner);
+  return withTx(async (client) => {
+    await client.query("DELETE FROM dash_watch WHERE owner=$1", [owner]);
+    let i = 0;
+    for (const id of clean) {
+      await client.query(
+        "INSERT INTO dash_watch(owner, member_id, sort, created_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        [owner, id, i++, now()]);
+    }
+    return { count: clean.length };
+  });
 }
 
 // 작업 목록(최신순 — committed_at 우선, 없으면 created_at). 필터: 작성자·AI·유형·과업(ku)·repo.
@@ -205,7 +245,7 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   if (f.task_ku) { args.push(f.task_ku); join = `JOIN activity_task atk ON atk.activity_id=a.id AND atk.ku_name=$${args.length}`; }
   args.push(lim);
   const rows = await q(dmPool(), `
-    SELECT a.id, a.type, a.title, a.body, a.author_person, a.author_agent, a.session_id,
+    SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent, a.session_id,
            a.commit_sha, a.committed_at, a.should_review, a.is_review, a.created_at,
            a.external_system, a.external_url, r.name AS repo
     FROM activity a ${join}

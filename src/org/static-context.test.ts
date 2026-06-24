@@ -7,8 +7,8 @@
 import assert from "node:assert/strict";
 import { materializeStaticContext, previewMemberContext } from "./publish.js";
 import { getOrgProfile } from "./store.js";
-import { listKnowledge } from "./knowledge.js";
-import { buildKnowledgeIndex, areaMapForIndex } from "./materialize.js";
+import { listKnowledge } from "../v6/knowledge-store.js";
+import { buildKnowledgeIndex, categoryMapForIndex } from "./materialize.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void>): Promise<void> => {
@@ -43,11 +43,11 @@ async function main(): Promise<void> {
     const name = p.display_name?.trim() || p.name?.trim() || "조직";
     const live = await previewMemberContext(name);
     const { context: stat } = await materializeStaticContext();
-    // V4-P3: 둘 다 buildKnowledgeIndex(listKnowledge active, areaMapForIndex) 단일소스에서 인덱스를 굽는다
-    //  (R 전문 + area 지도 + 쓰기 가이드). recalled 제목리스트·캡·observed제외 폐기.
-    const knowledge = await listKnowledge({ lifecycle: "active" });
-    const areaMap = await areaMapForIndex();
-    const idx = (knowledge.length || areaMap.length) ? buildKnowledgeIndex(knowledge, areaMap).trim() : "";
+    // V6: 둘 다 buildKnowledgeIndex(v6 listKnowledge active, categoryMapForIndex) 단일소스에서 인덱스를 굽는다
+    //  (injection=always 전문 + 카테고리 지도 + 쓰기 가이드). recalled 제목리스트·캡·observed제외 폐기.
+    const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
+    const categoryMap = await categoryMapForIndex();
+    const idx = (knowledge.length || categoryMap.length) ? buildKnowledgeIndex(knowledge, categoryMap).trim() : "";
     if (idx) {
       // 인덱스 본문(Knowledge Index 헤더부터)이 양 표면에 동일하게 들어있어야 단일소스.
       const head = idx.split("\n").slice(0, 2).join("\n"); // 헤더 2줄(제목 + 안내)

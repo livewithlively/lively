@@ -645,6 +645,7 @@ export interface KnowledgeInput {
   kind?: string;
   kinds?: string[];
   title?: string | null;
+  summary?: string | null;     // 카드 표시용 '쉬운 한 줄' 요약(undefined=보존, null=클리어 → title 폴백)
   body_md?: string;
   domain_key?: string | null;
   domain_repo?: string | null;
@@ -681,17 +682,18 @@ export async function upsertKnowledge(unit: KnowledgeInput, actor?: string, sour
   const kinds = unit.kinds ?? before?.kinds ?? [];
   const lifecycle = unit.lifecycle ?? before?.lifecycle ?? "active";
   await itemsPool.query(
-    `INSERT INTO knowledge_unit(name, kind, kinds, title, body_md, domain_key, domain_repo,
+    `INSERT INTO knowledge_unit(name, kind, kinds, title, summary, body_md, domain_key, domain_repo,
         lifecycle, supersedes, confidence, author, source_ref, as_of, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
+       VALUES($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
      ON CONFLICT (name) DO UPDATE SET
-       kind=EXCLUDED.kind, kinds=EXCLUDED.kinds, title=EXCLUDED.title, body_md=EXCLUDED.body_md,
+       kind=EXCLUDED.kind, kinds=EXCLUDED.kinds, title=EXCLUDED.title, summary=EXCLUDED.summary, body_md=EXCLUDED.body_md,
        domain_key=EXCLUDED.domain_key, domain_repo=EXCLUDED.domain_repo,
        lifecycle=EXCLUDED.lifecycle, supersedes=EXCLUDED.supersedes, confidence=EXCLUDED.confidence,
        author=EXCLUDED.author, source_ref=EXCLUDED.source_ref, as_of=EXCLUDED.as_of, sort=EXCLUDED.sort,
        version=knowledge_unit.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [unit.name, kind, JSON.stringify(kinds),
      unit.title ?? before?.title ?? null,
+     unit.summary === undefined ? (before?.summary ?? null) : unit.summary,
      unit.body_md ?? before?.body_md ?? "",
      unit.domain_key === undefined ? (before?.domain_key ?? null) : unit.domain_key,
      unit.domain_repo === undefined ? (before?.domain_repo ?? null) : unit.domain_repo,

@@ -3,7 +3,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { getMemory, upsertMemory, searchMemory } from "../org/store.js";
 import { listAllDomains } from "../domainmap/core/queries.js";
-import { registerMcpCapabilities } from "../capabilities/index.js";
 
 // 조직 공유 메모리(org_memory) MCP 표면 — 하네스 네이티브 메모리를 조직이 공유(에이전트 생산·소비, 단일 풀).
 // 진실원천=items DB(org_memory). 인덱스(제목·요약)는 발행 시 항상-주입 컨텍스트로, 본문은 memory_search pull.
@@ -158,7 +157,8 @@ export function registerMemoryTools(server: McpServer): void {
     },
   );
 
-  // ctx_*(P1b) — FS형 컨텍스트(ls/grep/cat/save). memory scope 공유라 여기서 MCP 등록한다.
-  //  memory_* 와 달리 capability 레지스트리(src/capabilities/ctx.ts)의 thin 재등록 — 구조화 JSON 반환(parity 대상).
-  registerMcpCapabilities(server, ["ctx_ls", "ctx_grep", "ctx_cat", "ctx_save", "ctx_overview", "ctx_set_lifecycle"]);
+  // v6 컷오버(2026-06): 레거시 ctx_*(ls/grep/cat/save/overview/set_lifecycle) MCP 등록 제거 —
+  //  v6 knowledge_*(tools/v6.ts)가 대체(ctx_grep→knowledge_search, ctx_overview→knowledge_overview,
+  //  ctx_cat→knowledge_get, ctx_ls→knowledge_list, ctx_save→knowledge_save, ctx_set_lifecycle→knowledge_set_lifecycle).
+  //  ctx capability 객체·REST 마운트는 보존(구 웹 탭이 REST 로 계속 사용). memory_*(org_memory)는 v6 미이관이라 유지.
 }

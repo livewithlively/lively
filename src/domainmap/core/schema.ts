@@ -160,6 +160,7 @@ export async function init(): Promise<string> {
     id SERIAL PRIMARY KEY,
     type TEXT NOT NULL,
     title TEXT NOT NULL,
+    summary TEXT,
     body TEXT,
     author_person TEXT,
     author_agent TEXT,
@@ -189,6 +190,12 @@ export async function init(): Promise<string> {
     target_kind TEXT NOT NULL, target_id INT NOT NULL,
     created_at TIMESTAMPTZ,
     UNIQUE(activity_id, target_kind, target_id));
+  CREATE TABLE IF NOT EXISTS dash_watch(
+    owner TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    sort INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ,
+    PRIMARY KEY(owner, member_id));
   `);
   // external 멱등 — PM 코멘트 라운드트립(comment:clickup) dedup. external_id 보유 행만(부분), NULLS NOT
   //  DISTINCT(PG15+)로 instance=NULL 중복 구멍 차단. knowledge_unit/project 외부키 인덱스와 동형.
@@ -201,6 +208,9 @@ export async function init(): Promise<string> {
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_committed_idx ON activity(committed_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_repo_idx ON activity(repo_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_touch_target_idx ON activity_touch(target_kind, target_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS dash_watch_owner_idx ON dash_watch(owner);`);
+  // summary — 비개발자도 한눈에 읽는 쉬운 한 줄(겉에 노출). title 은 기술 상세(펼침). 기존 DB 보강(신규 설치는 위 DDL).
+  await pool.query(`ALTER TABLE activity ADD COLUMN IF NOT EXISTS summary TEXT;`);
   // type/review/relation CHECK — 신설이라 백필 불요. pg_constraint 프로브 멱등(기존 idiom).
   await pool.query(`
   DO $$ BEGIN

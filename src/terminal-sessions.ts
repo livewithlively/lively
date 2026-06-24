@@ -11,6 +11,9 @@ import crypto from "node:crypto";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { teamDir, isTeamMemberById, myTeamIds } from "./terminal-teams.js";
+import { dirToProjectFolder } from "./project-fs.js";
+import { projectAccessByFolder } from "./org/store.js";
+import { projectAccessByFolder as projectAccessByFolderV6 } from "./v6/project-store.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -178,6 +181,12 @@ async function ownerVis(id: string): Promise<OwnerVis | null> {
 export async function canAttach(id: string, userId: string): Promise<boolean> {
   const m = await ownerVis(id);
   if (!m) return false;
+  // 프로젝트 폴더 세션은 '공동 세션' — 그 프로젝트 팀원(생성자 포함)만 입장(공개여도 외부 차단).
+  //  폴더는 레거시(org_project)·v6(project) 어느 쪽 프로젝트에도 속할 수 있다. UI 프로젝트 탭은 v6 에
+  //  세션을 만들므로 둘 다 확인해야 한다 — 안 그러면 v6 프로젝트 세션은 생성자 본인도 입장이 거부된다.
+  const dir = await sessionDir(id);
+  const folder = dirToProjectFolder(dir);
+  if (folder) return (await projectAccessByFolder(folder, userId)) || (await projectAccessByFolderV6(folder, userId));
   if (m.team && !(await isTeamMemberById(m.team, userId))) return false; // 팀 멤버 아니면 공개여도 차단
   return m.owner === userId || m.visibility === "public";
 }

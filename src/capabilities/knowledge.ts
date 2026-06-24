@@ -1,0 +1,261 @@
+// v6 knowledge capability — 지식 CRUD + lifecycle + 카테고리 연결.
+//  레거시 ctx_*/memory_* 와 병행(REST-only 로 시작 — 웹 지식 탭이 소비). MCP 노출은 컷오버에서 일괄.
+//  scope='memory'(조직 지식 — ctx_* 와 동일). injection/provenance 는 v6 직교축.
+import { z } from "zod";
+import { HttpError } from "./rest-util.js";
+import type { Capability } from "./types.js";
+import {
+  listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, knowledgeOverview,
+} from "../v6/knowledge-store.js";
+
+const knowledgeList: Capability = {
+  name: "knowledge_list",
+  title: "지식 목록",
+  description: "지식을 space/카테고리/injection/provenance/검색어로 조회(맥락의 기록).",
+  scope: "memory",
+  // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy 도 선택.
+  input: {
+    space: z.string().optional(),
+    categoryId: z.number().int().positive().optional(),
+    injection: z.enum(["always", "recalled"]).optional(),
+    provenance: z.enum(["authored", "observed"]).optional(),
+    lifecycle: z.enum(["active", "superseded"]).optional(),
+    q: z.string().optional(),
+    orderBy: z.enum(["name", "updated_at"]).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return {
+          space: query.space ? String(query.space) : undefined,
+          categoryId: query.category ? Number(query.category) : undefined,
+          injection: query.injection ? String(query.injection) : undefined,
+          provenance: query.provenance ? String(query.provenance) : undefined,
+          lifecycle: query.lifecycle ? String(query.lifecycle) : undefined,
+          q: query.q ? String(query.q) : undefined,
+          orderBy: query.orderBy ? String(query.orderBy) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any) => ({ entries: await listKnowledge(input) }),
+};
+
+const knowledgeGet: Capability = {
+  name: "knowledge_get",
+  title: "지식 상세",
+  description: "지식 1건 + 매핑된 카테고리.",
+  scope: "memory",
+  input: { name: z.string().min(1).max(64) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/:name"],
+      parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
+  },
+  handler: async (input: any) => {
+    const knowledge = await getKnowledge(input.name);
+    if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
+    return { knowledge };
+  },
+};
+
+const knowledgeSave: Capability = {
+  name: "knowledge_save",
+  title: "지식 저장",
+  description: "지식 전문 저장(injection/provenance 포함). name 없으면 자동 슬러그.",
+  scope: "memory",
+  input: {
+    name: z.string().max(64).optional(),
+    title: z.string().max(200).optional(),
+    body_md: z.string().min(1).max(40000),
+    injection: z.enum(["always", "recalled"]).optional(),
+    provenance: z.enum(["authored", "observed"]).optional(),
+    supersedes: z.string().max(64).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const body_md = String(b.body_md ?? b.note ?? "").trim();
+        if (!body_md) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
+        const injection = b.injection ? String(b.injection) : undefined;
+        if (injection && !["always", "recalled"].includes(injection)) throw new HttpError(400, "injection 은 always|recalled");
+        const provenance = b.provenance ? String(b.provenance) : undefined;
+        if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
+        return {
+          name: b.name ? String(b.name) : undefined,
+          title: b.title ? String(b.title) : undefined,
+          body_md, injection, provenance,
+          supersedes: b.supersedes ? String(b.supersedes) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { knowledge: await upsertKnowledge(input, writeCtx) };
+  },
+};
+
+const knowledgeSetLifecycle: Capability = {
+  name: "knowledge_set_lifecycle",
+  title: "지식 lifecycle",
+  description: "active/superseded 전환(대체 표시 등). 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능).",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    lifecycle: z.enum(["active", "superseded"]),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/lifecycle"],
+      parse: (req) => {
+        const lifecycle = String(((req.body ?? {}) as Record<string, unknown>).lifecycle ?? "");
+        if (!["active", "superseded"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|superseded");
+        return { name: String(req.params?.name ?? ""), lifecycle };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
+  },
+};
+
+// WIKI 핀 토글 — is_wiki 만 갱신. 핀된 지식의 제목+메타가 가이드 ${wiki} 로 매 세션 항상-주입(본문 제외).
+const knowledgeSetWiki: Capability = {
+  name: "knowledge_set_wiki",
+  title: "WIKI 핀 토글",
+  description: "지식을 WIKI 인덱스에 핀(고정)하거나 해제한다. 핀된 지식의 제목+메타가 컨텍스트 온톨로지 가이드의 ${wiki} 위치에 매 세션 항상-주입된다(본문 제외 — 인덱스).",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    is_wiki: z.boolean(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/wiki"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { name: String(req.params?.name ?? ""), is_wiki: b.is_wiki === true };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { knowledge: await setKnowledgeWiki(input.name, input.is_wiki, writeCtx) };
+  },
+};
+
+// 삭제(휴지통) — 활성 목록에서 제거하되 감사 스냅샷으로 보존(content_restore 로 복원). 제거의 유일 경로
+//  (가역 숨김 '반려' 는 폐기 — 삭제가 복원가능이라 흡수). ⚠ 사람(웹)만 — 에이전트(MCP)는 403. deny pattern 은 domain_delete 동형.
+const knowledgeDelete: Capability = {
+  name: "knowledge_delete",
+  title: "지식 삭제(휴지통)",
+  description:
+    "지식을 삭제한다 — 활성 목록·검색·주입에서 사라지되 감사 스냅샷(before)으로 보존되어 content_restore(휴지통)로 복원 가능. " +
+    "연결(카테고리·프로젝트 필요/산출·활동)은 FK CASCADE 로 정리된다(복원 시 링크는 돌아오지 않음). " +
+    "지식 제거의 유일 경로(가역 숨김 '반려' 는 폐기). ⚠ 사람(웹)만 — 에이전트(MCP)는 403(비가역).",
+  scope: "memory",
+  input: { name: z.string().min(1).max(64) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/delete"],
+      parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    if (ctx?.source === "mcp") {
+      throw new HttpError(403, "지식 삭제는 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(비가역). 정정은 같은 이름으로 덮어쓰기(저장)하세요");
+    }
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const before = await deleteKnowledge(input.name, writeCtx);
+    return { deleted: true, name: input.name, title: (before as any)?.title ?? null };
+  },
+};
+
+const knowledgeLinkCategory: Capability = {
+  name: "knowledge_link_category",
+  title: "지식↔카테고리",
+  description: "지식을 카테고리에 연결(또는 unlink=true 로 해제).",
+  scope: "memory",
+  // 핸들러가 읽는 이름(REST 는 :name 경로 + body 'category_id'→categoryId 매핑). state 기본=confirmed(REST 와 동일).
+  input: {
+    name: z.string().min(1).max(64),
+    categoryId: z.number().int().positive(),
+    unlink: z.boolean().optional(),
+    state: z.string().max(32).default("confirmed"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/category"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const categoryId = Number(b.category_id);
+        if (!Number.isInteger(categoryId)) throw new HttpError(400, "category_id 가 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), categoryId,
+          unlink: b.unlink === true, state: b.state ? String(b.state) : "confirmed",
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    if (input.unlink) { await unlinkKnowledgeCategory(input.name, input.categoryId, writeCtx); return { unlinked: true }; }
+    await linkKnowledgeCategory(input.name, input.categoryId, input.state, writeCtx);
+    return { linked: true };
+  },
+};
+
+// 검색 — title/body_md ILIKE + 스니펫(레거시 ctx_grep 대체). injection/provenance 로 좁힐 수 있음.
+const knowledgeSearch: Capability = {
+  name: "knowledge_search",
+  title: "지식 검색",
+  description: "지식을 제목/본문 텍스트로 검색한다. 결과는 **스니펫(잘림)** — 전문은 결과의 name 으로 knowledge_get 호출.",
+  scope: "memory",
+  input: {
+    q: z.string().min(1),
+    injection: z.enum(["always", "recalled"]).optional(),
+    provenance: z.enum(["authored", "observed"]).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/search"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        const q = String(query.q ?? "").trim();
+        if (!q) throw new HttpError(400, "q(검색어)가 필요합니다");
+        return {
+          q,
+          injection: query.injection ? String(query.injection) : undefined,
+          provenance: query.provenance ? String(query.provenance) : undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any) => ({
+    entries: await searchKnowledge(input.q, { injection: input.injection, provenance: input.provenance, limit: input.limit }),
+  }),
+};
+
+// 개요 — injection/provenance/space 별 집계 + review_pending(레거시 ctx_overview 대체).
+const knowledgeOverviewCap: Capability = {
+  name: "knowledge_overview",
+  title: "지식 개요",
+  description: "지식 집계(injection·provenance·space 별 건수, 활성 총계, 검토대기=observed·active).",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/overview"], parse: () => ({}) }],
+  },
+  handler: async () => await knowledgeOverview(),
+};
+
+// ⚠ REST 마운트 순서 주의 — knowledgeSearch(/knowledge/search)·knowledgeOverviewCap(/knowledge/overview)는
+//  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
+//  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
+export const knowledgeCapabilities: Capability[] = [
+  knowledgeList, knowledgeSearch, knowledgeOverviewCap, knowledgeGet,
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
+];

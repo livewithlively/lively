@@ -68,20 +68,24 @@
 <!-- 앱 셸 -->
 <div id="app" hidden>
   <header class="topbar">
-    <a class="wordmark" href="#/map">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub">Context</span></a>
+    <a class="wordmark" href="#/install">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub">Context</span></a>
     <nav class="tabs" aria-label="주 메뉴">
       <a href="#/install" data-tab="start">시작하기</a>
       <a href="#/terminal" data-tab="terminal" id="terminal-tab">터미널</a>
-      <a href="#/dash" data-tab="dash">작업 현황</a>
-      <a href="#/map" data-tab="ctx">회사 맥락</a>
+      <a href="#/projects2" data-tab="projects2">프로젝트</a>
+      <a href="#/domainmap" data-tab="domainmap">코드구조</a>
+      <a href="#/knowledge" data-tab="knowledge">WIKI</a>
       <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
     </nav>
     <div class="topbar-right">
-      <span class="sync-chip" id="sync-chip" hidden><span class="dot-static" aria-hidden="true"></span><span id="sync-label"></span></span>
+      <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
       <span class="user-email" id="user-email"></span>
     </div>
   </header>
   <main id="view"></main>
+  <footer class="app-foot">
+    <span class="sync-chip" id="sync-chip" hidden><span class="dot-static" aria-hidden="true"></span><span id="sync-label"></span></span>
+  </footer>
 </div>
 
 <div id="toasts" aria-live="polite"></div>

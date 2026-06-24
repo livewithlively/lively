@@ -42,6 +42,16 @@ export const MEANING: Record<string, FieldMeaning> = {
     example: "'근거 없이 단정하지 말 것'을 업무방식에 추가하면, 모든 구성원의 AI가 다음 대화부터 더 신중하게 답합니다.",
     tone: "normal",
   },
+  "context-ontology-guide": {
+    key: "context-ontology-guide",
+    label: "컨텍스트 온톨로지 가이드",
+    what: "매 대화 첫머리에 깔리는 '지식 인덱스(Knowledge Index)' 전체 틀입니다. AI에게 공유 지식이 무엇이고, 주제(area)로 어떻게 검색하며, 알게 된 것을 어디에·어떻게 기록할지 알려주는 뼈대입니다. ${area}(주제 목록)·${rules}(강제 규칙)는 실제 데이터로 자동 채워집니다.",
+    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
+    when: "매 대화 첫머리에 항상 주입됩니다(회사 규칙·소개 다음, 지식 인덱스 자리).",
+    where: "구성원의 AI가 공유 지식을 이해·검색·기록하는 방식의 기준입니다.",
+    example: "잘못 바꾸면 모든 구성원의 AI가 지식을 엉뚱하게 정리하거나 못 찾을 수 있습니다. 특히 ${area}를 지우면 주제 목록이 사라집니다. 평소엔 기본값 그대로 두는 게 안전합니다.",
+    tone: "critical",
+  },
   "memory": {
     key: "memory",
     label: "팀 공유 메모리",

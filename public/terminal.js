@@ -6,6 +6,8 @@
 const TOKEN_KEY = 'lively_ui_token';
 const PREFS_KEY = 'lively_term_prefs';
 const SESSION_ID = new URLSearchParams(location.search).get('session') || '';
+// 세션 라벨 — 입장 링크가 ?label= 로 실어 보낸다(프로젝트/팀 세션은 개인 /sessions 목록에 없어 API 폴백이 못 찾음).
+const SESSION_LABEL = new URLSearchParams(location.search).get('label') || '';
 
 const FONTS = [
   { v: "'JetBrains Mono', monospace", label: 'JetBrains Mono' },
@@ -236,22 +238,85 @@ function copyText(text) {
   else execCopy(text);
   toast('복사됨');
 }
+// 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
+function sendInput(d) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
+// 텍스트 붙여넣기 — 여러 줄(줄바꿈 포함)은 bracketed paste(\e[200~ … \e[201~)로 감싸 한 덩어리로 전달한다.
+//  그래야 안에서 도는 프로그램(클로드 코드·zsh/bash)이 중간 줄바꿈을 'Enter(전송)'로 오인하지 않는다.
+//  tmux control mode 에선 inner 의 DECSET 2004 가 xterm 까지 안 와 term.paste 가 감싸지 못하므로 직접 감싼다.
+function pasteText(t) {
+  if (!t) return;
+  if (/[\r\n]/.test(t)) sendInput('\x1b[200~' + t.replace(/\r\n/g, '\n') + '\x1b[201~');
+  else sendInput(t);
+}
+// 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 상대경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
+//  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
+//  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
+async function dropFileToAgent(file) {
+  if (!file) return;
+  const pad = (n) => String(n).padStart(2, '0');
+  const d = new Date();
+  const stamp = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  let name = (file.name || 'pasted').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
+  if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
+  const rel = 'uploads/' + stamp + '-' + name;
+  toast('업로드 중… ' + name);
+  try {
+    const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+    if (!res.ok) { const j = await res.json().catch(() => null); throw new Error((j && j.error) || ('' + res.status)); }
+  } catch (e) { toast('업로드 실패 — ' + e.message, true); return; }
+  sendInput(' ' + rel + ' '); // 경로를 입력창에 삽입(앞뒤 공백) — 전송은 사용자가
+  toast('경로 삽입됨 — ' + rel + ' (설명 적고 Enter)');
+  if (explorerLoaded) loadDir(curDir);
+}
 function setupClipboard() {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
+    // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로
+    //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' })); } catch (_) { /* noop */ } }
+      return false;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
     if (k === 'c' && term.hasSelection()) { copyText(term.getSelection()); return false; }
     if (k === 'v') {
-      if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext) {
-        navigator.clipboard.readText().then((t) => { if (t) term.paste(t); }).catch(() => { /* 권한거부 */ });
-        return false;
+      // 붙여넣기는 네이티브 paste 이벤트(setupPaste)가 처리한다 — 이미지 업로드+경로, 여러 줄은 bracketed paste.
+      //  Mac Cmd+V 는 그대로 흘려 paste 이벤트가 뜨게 한다(xterm 은 Cmd 키로 셸에 아무 것도 안 보냄).
+      //  Ctrl+V 는 xterm 이 \x16(SYN)을 셸로 보내는 걸 막아야 해서 가로채고, 보안 컨텍스트면 클립보드 API 로 직접 처리.
+      if (e.metaKey && !e.ctrlKey) return true;
+      if (navigator.clipboard && navigator.clipboard.read && window.isSecureContext) {
+        navigator.clipboard.read().then(async (its) => {
+          for (const it of its) {
+            const t = (it.types || []).find((x) => x.startsWith('image/'));
+            if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
+            else if ((it.types || []).includes('text/plain')) pasteText(await (await it.getType('text/plain')).text());
+          }
+        }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
       }
-      return true; // http origin → 네이티브 paste(Cmd/Ctrl+V)가 xterm 으로 흘러 붙여넣어짐
+      return false;
     }
     return true;
   });
+}
+// 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
+//  capture 단계에서 xterm 텍스트영역보다 먼저 잡아 기본 붙여넣기를 막고 우리가 처리(중복 방지). 이미지=업로드+경로, 텍스트=bracketed.
+function setupPaste() {
+  const dz = panesEl || document.body;
+  dz.addEventListener('paste', (e) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const img = [...(dt.items || [])].find((it) => it.kind === 'file' && (it.type || '').startsWith('image/'));
+    if (img) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      const blob = img.getAsFile();
+      if (blob) dropFileToAgent(blob);
+      return;
+    }
+    const text = dt.getData('text/plain') || dt.getData('text') || '';
+    if (text) { e.preventDefault(); e.stopImmediatePropagation(); pasteText(text); }
+  }, true);
 }
 
 // 마우스 휠 = 스크롤바처럼 로컬 스크롤백을 직접 오르내림(하드 요구사항). control mode 에선 xterm 이
@@ -372,6 +437,24 @@ function setupDnd() {
     if (files.length) uploadMany(files, curDir);
   });
 }
+// 터미널 화면에 파일(이미지 등)을 끌어다 놓으면 작업폴더로 업로드하고 경로를 입력창에 꽂는다(에이전트가 읽게).
+//  파일 드래그일 때만 가로채고(텍스트 드래그는 그대로), 드롭 위치 강조는 인라인 아웃라인으로 표시.
+function setupTermDrop() {
+  const dz = panesEl;
+  if (!dz) return;
+  const off = () => { dz.style.outline = ''; dz.style.outlineOffset = ''; };
+  dz.addEventListener('dragover', (e) => {
+    if (!(e.dataTransfer && [...e.dataTransfer.types].includes('Files'))) return;
+    e.preventDefault(); dz.style.outline = '2px dashed #4a9eff'; dz.style.outlineOffset = '-4px';
+  });
+  dz.addEventListener('dragleave', (e) => { if (e.target === dz) off(); });
+  dz.addEventListener('drop', async (e) => {
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    if (!files.length) return;
+    e.preventDefault(); off();
+    for (const f of files) await dropFileToAgent(f);
+  });
+}
 
 // ── 미리보기 ──
 const IMG_RE = /\.(png|jpe?g|gif|svg|webp|bmp|ico|avif)$/i;
@@ -443,29 +526,40 @@ function openHelp() {
   const kb = (keys, desc) => el('div', { class: 'help-item' },
     el('span', { class: 'k' }, ...keys.map((t) => el('span', { class: 'kbd', text: t }))),
     el('span', { class: 'd', text: desc }));
-  const tool = (name, desc) => el('div', { class: 'help-line' }, el('b', { text: name }), el('span', { text: ' — ' + desc }));
-  const sec = (title, ...items) => el('div', { class: 'help-sec' }, el('h4', { text: title }), el('div', { class: 'help-list' }, ...items));
+  const tool = (name, desc) => el('div', { class: 'help-tool' },
+    el('b', { text: name }), el('span', { text: ' — ' + desc }));
+  const sec = (title, ...items) => el('div', { class: 'help-sec' },
+    el('div', { class: 'help-sec-t', text: title }),
+    el('div', { class: 'help-list' }, ...items));
   const pop = el('div', { class: 'pop pop-help' },
-    el('h3', { text: '사용법 안내' }),
-    el('p', { class: 'help-intro', text: '이 화면은 “터미널”이라 일반 웹페이지와 조작이 조금 달라요. 자주 쓰는 것만 모았어요.' }),
-    sec('선택 · 복사 · 붙여넣기',
-      kb(['Shift'], '누른 채 드래그하면 텍스트 선택 — 그냥 드래그는 안 돼요 (Mac은 Option 도 가능)'),
-      kb(['우클릭'], '단어 선택'),
-      kb(['⌘C'], '복사 (Windows는 Ctrl+C) — 먼저 선택하세요. 선택이 없으면 작업을 멈춤'),
-      kb(['⌘V'], '붙여넣기 (Windows는 Ctrl+V)')),
-    sec('화면 보기',
-      kb(['휠 ↑'], '위로 스크롤해서 이전 출력 보기'),
-      kb(['q'], '스크롤(과거 보기)을 끝내고 입력으로 돌아오기')),
-    sec('도구 — 오른쪽 위 버튼',
-      tool('공유 워크스페이스 열기', '왼쪽에서 파일 업로드·다운로드 (끌어다 놓아도 업로드)'),
-      tool('화면 복구', '글자·줄이 깨져 보일 때 현재 창에 맞춰 다시 그림 (새로고침 아님)'),
-      tool('환경 설정', '글꼴 · 글자 크기 · 테마 · 커서 모양 바꾸기')),
-    sec('클로드 코드 — 에이전트',
-      kb(['Enter'], '한국어로 자연스럽게 지시하고 보내기'),
-      kb(['Esc'], '에이전트가 하던 작업 멈추기'),
-      kb(['/'], '쓸 수 있는 명령 목록 보기')),
-    el('p', { class: 'help-note', text: '연결이 끊겨도 자동으로 다시 연결되고 세션·작업은 그대로 유지돼요. 이 창은 Esc 또는 바깥을 눌러 닫을 수 있어요.' }),
-    el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() }));
+    el('button', { class: 'help-x', title: '닫기', text: '✕', onclick: () => back.remove() }),
+    el('div', { class: 'help-head' },
+      el('h3', { text: '사용법 안내' }),
+      el('p', { class: 'help-intro', text: '터미널이 처음이어도 이것만 알면 입력이 훨씬 빨라져요.' })),
+    el('div', { class: 'help-body' },
+      sec('이전에 친 명령 다시 쓰기',
+        kb(['↑ ↓'], '바로 전에 입력한 명령들을 위/아래로 불러오기'),
+        kb(['Ctrl R'], '예전 명령을 검색해서 찾기 (일부만 쳐도 됩니다)'),
+        kb(['Tab'], '입력하다 누르면 파일·명령 이름 자동완성')),
+      sec('한 줄에서 커서 이동',
+        kb(['Option ←/→'], '한 단어씩 건너뛰며 이동 (Windows는 Alt)'),
+        kb(['Ctrl A'], '줄 맨 앞으로'),
+        kb(['Ctrl E'], '줄 맨 끝으로')),
+      sec('잘못 친 것 지우기',
+        kb(['Ctrl U'], '지금 친 줄을 통째로 지우기'),
+        kb(['Ctrl W'], '커서 앞 단어 하나 지우기'),
+        kb(['Ctrl K'], '커서 오른쪽을 끝까지 지우기')),
+      sec('화면 · 실행',
+        kb(['Ctrl L'], '화면 비우기 (위로 스크롤하면 남아 있음)'),
+        kb(['Ctrl C'], '멈춘·실행 중인 명령 강제 중단'),
+        kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
+      sec('도구 (오른쪽 위 버튼)',
+        tool('공유 워크스페이스', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
+        tool('화면 복구', '글자·줄이 깨질 때 다시 그림'),
+        tool('환경 설정', '글꼴·크기·테마·커서 모양')),
+      sec('클로드 코드',
+        kb(['Esc'], '에이전트가 하던 작업 멈추기'),
+        kb(['/'], '쓸 수 있는 명령 목록'))));
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -479,8 +573,10 @@ async function loadSessionLabel() {
   try {
     const data = await api('/api/ui/terminal/sessions');
     const s = ((data && data.sessions) || []).find((x) => x.id === SESSION_ID);
-    if (s && s.label) { titleEl.textContent = s.label; document.title = s.label + ' · Lively'; }
-  } catch (_) { /* 라벨 못 가져오면 기본 제목 유지 */ }
+    if (s && s.label) { titleEl.textContent = s.label; document.title = s.label + ' · Lively'; return; }
+  } catch (_) { /* 무시하고 폴백 */ }
+  // 개인 세션 목록에 없으면(프로젝트/팀 세션) URL ?label= 로 받은 이름을 쓴다.
+  if (SESSION_LABEL) { titleEl.textContent = SESSION_LABEL; document.title = SESSION_LABEL + ' · Lively'; }
 }
 
 function boot() {
@@ -498,8 +594,9 @@ function boot() {
       el('button', { class: 'tbtn', text: '⟳', title: '새로고침', onclick: () => loadDir(curDir) })),
     el('div', { id: 'exp-path', class: 'exp-path' }), el('div', { id: 'exp-list' }));
   statusEl = el('span', { class: 'status', text: '연결 중…' });
-  // 제목 = 세션 이름(라벨). 로드 전엔 '터미널', 로드되면 loadSessionLabel 이 교체. id 는 tooltip 으로 보존.
-  titleEl = el('span', { class: 'title', text: '터미널', title: SESSION_ID });
+  // 제목 = 세션 이름(라벨). URL ?label= 이 있으면 즉시 그 이름, 없으면 '터미널' → loadSessionLabel 이 보정. id 는 tooltip.
+  titleEl = el('span', { class: 'title', text: SESSION_LABEL || '터미널', title: SESSION_ID });
+  if (SESSION_LABEL) document.title = SESSION_LABEL + ' · Lively';
   const toolbar = el('div', { class: 'toolbar' },
     el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
     titleEl,
@@ -516,6 +613,7 @@ function boot() {
   tabs.push({ id: 'term', label: '터미널', pane: termPane, closable: false });
   renderTabbar();
   setupDnd();
+  setupTermDrop();
   loadSessionLabel();
 
   // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
@@ -533,6 +631,7 @@ function boot() {
   term.open(host);
   loadRenderer();
   setupClipboard();
+  setupPaste();
   setupWheel();
   applyFit();
   window.addEventListener('resize', doResize);

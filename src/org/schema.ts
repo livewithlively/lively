@@ -240,6 +240,19 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_db_secret_refs JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: db 데이터소스가 접속 가능한 host 화이트리스트(deny-all 기본). ──
+  // 웹 등록 소스는 SSRF 가드로 사설/localhost 를 막는다(브라우저 임의입력 신뢰 불가). 운영자가 admin 으로 여기에
+  //  명시한 host 만 사설/내부 DB(예: localhost 의 items)를 db 소스로 접속 허용 — 신뢰경계를 운영자에 고정.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_db_hosts JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: write_tools — work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록. ──
+  // 비면(기본 '[]') 훅 내장 v6 기본목록 사용(writeback_notice 와 동형 오버라이드). 온톨로지 변경 시 재배포 없이 웹에서 갱신.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS write_tools JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
   // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름/
   //  파일경로/role/path)만. 실제 비번 등은 런타임에 참조에서 해소(src/db/sources.ts resolveConnectionString).
@@ -271,6 +284,46 @@ export async function initOrgSchema(): Promise<void> {
           CHECK (auth_mode IN ('password','iam','mtls','vault'));
       END IF;
     END $$;
+  `);
+
+  // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).
+  await itemsPool.query(`ALTER TABLE org_member ADD COLUMN IF NOT EXISTS status_message TEXT;`);
+
+  // ── org_project — 라이블리 자체 프로젝트(사람이 :8080 웹에서 직접 선언·관리). ──
+  //  ClickUp 미러 과업(W ku)·activity 작업과 독립한 전용 저장. status: 'active'(진행중) | 'done'(완료)
+  //  토글이 핵심. 완료 시 completed_at 기록. created_by=토큰 신원. folder=공유 워크스페이스 기준 상대경로
+  //  (예: 'project/데모데이') — 프로젝트 전용 폴더·터미널 세션의 작업 디렉토리. 팀원은 project_member.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_project(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      folder TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ);
+    ALTER TABLE org_project ADD COLUMN IF NOT EXISTS folder TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_project'::regclass AND conname='org_project_status_chk') THEN
+        ALTER TABLE org_project ADD CONSTRAINT org_project_status_chk CHECK (status IN ('active','done'));
+      END IF;
+    END $$;
+  `);
+
+  // ── project_member — 프로젝트 팀원(n:n). org_member.id 참조(사람). 생성 팝업에서 선택, 타임라인 스코프. ──
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS project_member(
+      project_id INT NOT NULL REFERENCES org_project(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      sort INT NOT NULL DEFAULT 0,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (project_id, member_id));
+    ALTER TABLE project_member ADD COLUMN IF NOT EXISTS sort INT NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS project_member_member_idx ON project_member(member_id);
   `);
 
   // ── org_content_audit 확장: 회수 대상 즉시 특정용 token 해시 prefix + 요청 IP(B23). ──

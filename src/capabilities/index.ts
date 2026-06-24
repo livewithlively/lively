@@ -13,6 +13,11 @@ import { domainmapCrudCapabilities } from "./domainmap-crud.js";
 import { mappingCapabilities } from "./mapping.js";
 import { pmCapabilities } from "./pm.js";
 import { activityCapabilities } from "./activity.js";
+import { projectCapabilities } from "./projects.js";
+import { categoryCapabilities } from "./categories.js";
+import { knowledgeCapabilities } from "./knowledge.js";
+import { projectV6Capabilities } from "./projects-v6.js";
+import { trashCapabilities } from "./trash.js";
 import type { Capability, RestMount } from "./types.js";
 
 // ── me — 토큰 게이트 확인(스코프 불요, REST 전용). 핸들러가 partial user 에서 null-default 구성. ──
@@ -37,6 +42,11 @@ const all: Capability[] = [
   ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts. item 흡수: ctx_ls/ctx_grep 에 system/since/source/type 필터 + ctx_cat thread.
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory, co-exposed). MCP 등록은 src/tools/activity.ts. 36→38.
+  ...projectCapabilities, // 라이블리 자체 프로젝트 보드(project_list/create/set_status) — scope=memory, REST 전용(웹 프로젝트 탭). MCP 표면 불변.
+  ...categoryCapabilities, // v6: 카테고리(사업/제품/시스템) CRUD + 도메인 의존엣지(should) — scope=context, REST 전용(웹 3탭). MCP 노출은 컷오버에서 일괄.
+  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory, REST 전용(웹 지식 탭). MCP 노출은 컷오버에서 일괄.
+  ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory, REST 전용(/api/ui/v6/projects, 웹 프로젝트 탭). MCP 노출은 컷오버에서 일괄.
+  ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).
 ];
 // MCP 표면 = 38툴(P8 project_list 제거 39→38. P4 domain_set_should 추가 38→39. P3 activity_log·activity_list 36→38. hard-delete 2종 domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item
 //  제거로 36→34, hard-delete 로 34→36. ku 가 단일 캐노니컬 표면 —

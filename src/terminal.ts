@@ -15,6 +15,7 @@ import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listTeams, createTeam, editTeam, deleteTeam } from "./terminal-teams.js";
 import { listMembers } from "./org/store.js";
+import { isProjectSessionDir } from "./project-fs.js";
 
 const COOKIE = "lively_term";
 const PREFIX = "/terminal";
@@ -73,7 +74,9 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
 
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ sessions: await listSessions(userOf(req)) });
+    // 프로젝트 폴더 세션은 '프로젝트 공동 세션' — 터미널 탭에선 숨기고 프로젝트 페이지에서만 관리(팀원 전용).
+    const all = await listSessions(userOf(req));
+    res.json({ sessions: all.filter((s) => !isProjectSessionDir(s.dir)) });
   }));
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;

@@ -51,4 +51,12 @@ await at("pinHost: 공인 IP 리터럴 → 그대로", async () => assert.equal(
 await at("pinHost: 사설 IP → 거부", async () => { await assert.rejects(() => pinHost("10.0.0.5"), /차단/); });
 await at("pinHost: 메타데이터 IP → 거부", async () => { await assert.rejects(() => pinHost("169.254.169.254"), /차단/); });
 
+// ── allowedHosts 화이트리스트(운영자 명시 — 사설/localhost SSRF 면제) ──
+await at("isHostBlocked: 허용목록 127.0.0.1 → 통과(차단 안 함)", async () => assert.equal(await isHostBlocked("127.0.0.1", ["127.0.0.1"]), false));
+await at("isHostBlocked: 허용목록 대소문자 무시", async () => assert.equal(await isHostBlocked("DB.INTERNAL", ["db.internal"]), false));
+await at("isHostBlocked: 허용목록 밖 사설 IP → 여전히 차단", async () => assert.equal(await isHostBlocked("10.0.0.5", ["127.0.0.1"]), true));
+await at("pinHost: 허용목록 사설 IP → 그대로 핀", async () => assert.equal(await pinHost("10.0.0.5", ["10.0.0.5"]), "10.0.0.5"));
+await at("pinHost: 허용목록 127.0.0.1 → 그대로 핀", async () => assert.equal(await pinHost("127.0.0.1", ["127.0.0.1"]), "127.0.0.1"));
+await at("pinHost: 허용목록 밖 사설 IP → 여전히 거부", async () => { await assert.rejects(() => pinHost("10.0.0.5", ["127.0.0.1"]), /차단/); });
+
 console.log(`\n${pass} checks passed`);

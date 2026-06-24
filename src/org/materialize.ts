@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getOrgProfile, getSection, listMembers } from "./store.js";
-import { listKnowledge, type KnowledgeUnit } from "./knowledge.js";
+import { listKnowledge, type KnowledgeRow } from "../v6/knowledge-store.js";
 import { redactString } from "./redact.js";
 import { logger } from "../log.js";
 
@@ -21,21 +21,21 @@ export interface Materialized {
 // v3 까지의 주입 = recalled-kind(K/H) 제목·요약 리스트 + 중요도 캡 + observed 제외 + distill 제외.
 // v4 결정(plan §F·§J): **주입 = 검색(retrieval)**. 정적 랭킹/중요도/제목리스트 폐기.
 //   (a) R(규칙) **전문 항상 주입**(enforced — 맥락무관 강제).
-//   (b) **area 지도** — 전 area(space+key+name+active 유닛수)를 *작고 완전하게* 나열. 에이전트는 이 지도로
-//       어떤 주제가 있는지 알고, 일에 맞춰 `area+검색`(ctx_grep/memory_search/ctx_ls domain=)으로 그때 소환한다.
+//   (b) **카테고리 지도** — 전 카테고리(space+key+name+active 유닛수)를 *작고 완전하게* 나열. 에이전트는 이 지도로
+//       어떤 주제가 있는지 알고, 일에 맞춰 `카테고리+검색`(ctx_grep/memory_search/ctx_ls domain=)으로 그때 소환한다.
 //   (c) **쓰기 가이드** — 언제/어디/무엇/분류/외부 를 헤더에 안내(지속지식이 생기면 in-flow 로 ctx_save).
 // 제거: PER_KIND_CAP/TOTAL_CAP(중요도 캡)·recalled-kind 제목 리스트·observed 인덱스제외 필터·distill source_ref 제외절.
-//   → K/H/W 는 정적 주입하지 않는다(area 지도로 발견·검색으로 소환). importance 축 없음(맥락 상대적).
+//   → K/H/W 는 정적 주입하지 않는다(카테고리 지도로 발견·검색으로 소환). importance 축 없음(맥락 상대적).
 //   → observed 는 '주입 결정 안 함'으로 의미전환(주입은 출처 아닌 kind/검색이 결정) — overview observed_count·
 //     팀메모리 구분은 별도로 유지(P5 정합).
 // redact 게이트(assertNoHardSecrets 쓰기경로 + redactString 서빙경로)는 v4 에서도 유지(defense-in-depth).
 
-// area 지도 한 항목 — domain(dmPool)에서 space/key/name, knowledge_unit_domain(itemsPool)에서 active 유닛수.
-export interface AreaMapEntry {
-  space: string;          // 'product'(코드앵커 도메인) | 'business'(비즈니스 기능 vocab)
-  key: string;            // domain_key(소환 시 domain= 인자)
+// 카테고리 지도 한 항목 — v6 category(space/key/name) + knowledge_category(active 지식수). 모두 itemsPool 단일 DB.
+export interface CategoryMapEntry {
+  space: string;          // 'business' | 'product'(코드앵커) | 'system' — v6 category.space
+  key: string;            // category.key(소환 시 domain= 인자)
   name: string;           // 사람용 표시명
-  active_units: number;   // 이 area 에 매핑된 active knowledge_unit 수(state<>'rejected'). 발견용 메타.
+  active_units: number;   // 이 카테고리에 매핑된 active knowledge 수(kc.state<>'rejected'). 발견용 메타.
 }
 
 // updated_at/as_of 는 pg 드라이버가 **Date** 로 반환(타입은 string|null 이지만 런타임 Date). 문자열 가정(localeCompare) 금지 —
@@ -45,38 +45,37 @@ const ts = (u: string | Date | null): number => { const d = u ? new Date(u).getT
 // ── (라이브 헬퍼) R(규칙) 전문 — kind='R', lifecycle='active'. enforced 주입 대상. sort, name 순. ──
 //  buildKnowledgeIndex 는 순수함수라 units 인자에서 R 을 직접 필터한다(아래). 이 헬퍼는 호출자 편의용(미사용 가능).
 
-// ── (라이브 헬퍼) area 지도 — domainmap(space/key/name) + items(active 유닛수) 조인. 두 DB 라 메모리 조인. ──
-//  fail-open: 어느 한 쪽이 죽어도 인덱스 생성이 500 나면 안 된다(빈 지도 반환 → 헤더만, 안내문은 유지).
-export async function areaMapForIndex(): Promise<AreaMapEntry[]> {
+// ── (라이브 헬퍼) 카테고리 지도 — v6 category(space/key/name) + knowledge_category(active 지식수). 단일 DB(itemsPool). ──
+//  V6: domain/knowledge_unit_domain → category/knowledge_category. 한 DB라 메모리 조인 불필요 — 두 쿼리(전 카테고리 + 카운트)면 충분.
+//  fail-open: 조회가 죽어도 인덱스 생성이 500 나면 안 된다(빈 지도 반환 → 헤더만, 안내문은 유지).
+export async function categoryMapForIndex(): Promise<CategoryMapEntry[]> {
   try {
-    const { dmPool } = await import("../domainmap/db.js");
     const { itemsPool } = await import("../items/store.js");
-    // (1) 전 area — merged 제외. V5 탈-repo: (space,key) 전역유니크라 repo 조인 없이 나열(business=repo_id NULL).
-    const domRows = (await dmPool().query(
-      `SELECT d.space, d.key, d.name, d.cross_cutting
-         FROM domain d
-        WHERE d.state <> 'merged'
-        ORDER BY d.space, d.cross_cutting, d.key`,
+    // (1) 전 카테고리 — merged 제외. (space,key) 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
+    const catRows = (await itemsPool.query(
+      `SELECT c.id, c.space, c.key, c.name, c.cross_cutting
+         FROM category c
+        WHERE c.state <> 'merged'
+        ORDER BY c.space, c.cross_cutting, c.key`,
     )).rows;
-    // (2) active 유닛수/area — knowledge_unit_domain(active 매핑) ⋈ knowledge_unit(active). domain_key 단독 키(V5 탈-repo).
+    // (2) active 지식수/category — knowledge_category(rejected 제외) ⋈ knowledge(active). category_id 로 집계 후 key 로 환원.
     const cntRows = (await itemsPool.query(
-      `SELECT kud.domain_key, COUNT(DISTINCT ku.name)::int AS n
-         FROM knowledge_unit_domain kud
-         JOIN knowledge_unit ku ON ku.name = kud.name
-        WHERE ku.lifecycle = 'active' AND kud.state <> 'rejected'
-          AND kud.domain_key IS NOT NULL
-        GROUP BY kud.domain_key`,
+      `SELECT kc.category_id, COUNT(DISTINCT k.name)::int AS n
+         FROM knowledge_category kc
+         JOIN knowledge k ON k.name = kc.name AND k.lifecycle = 'active'
+        WHERE kc.state <> 'rejected'
+        GROUP BY kc.category_id`,
     )).rows;
-    const cnt = new Map<string, number>();
-    for (const r of cntRows) cnt.set(r.domain_key as string, Number(r.n) || 0);
-    return domRows.map((d) => ({
-      space: (d.space as string) ?? "product",
-      key: d.key as string,
-      name: (d.name as string) ?? (d.key as string),
-      active_units: cnt.get(d.key as string) ?? 0,
+    const cnt = new Map<number, number>();
+    for (const r of cntRows) cnt.set(Number(r.category_id), Number(r.n) || 0);
+    return catRows.map((c) => ({
+      space: (c.space as string) ?? "product",
+      key: c.key as string,
+      name: (c.name as string) ?? (c.key as string),
+      active_units: cnt.get(Number(c.id)) ?? 0,
     }));
   } catch (err) {
-    logger.warn({ err }, "area 지도 조회 실패 — 빈 지도로 폴백(인덱스는 R 전문·가이드만)");
+    logger.warn({ err }, "카테고리 지도 조회 실패 — 빈 지도로 폴백(인덱스는 R 전문·가이드만)");
     return [];
   }
 }
@@ -89,82 +88,171 @@ export const WRITE_GUIDE_BLOCK = [
   "지속될 지식이 생기면(연구·결정·설계·런북) **그 자리에서(in-flow)** 기록한다 — 나중에 몰아서가 아니라.",
   "- **어디:** 조직 지식의 유일한 집은 ku(`ctx_save`로 전문 직접 기록). 레포에 `.md` 파일을 새로 만들거나 포인터만 남기지 않는다.",
   "- **무엇:** 요약·링크가 아니라 **전문**을 담는다(나중의 나/동료가 그것만 읽고 일할 수 있게).",
-  "- **분류(판단):** `kind` = R(강제규칙·페르소나)·K(지식·산출물)·H(절차·런북)·W(과업). `area` = 위 area 지도의 (space, key) 로 `domain=` 지정.",
+  "- **분류(판단):** `kind` = R(강제규칙·페르소나)·K(지식·산출물)·H(절차·런북)·W(과업). `카테고리` = 위 카테고리 지도의 (space, key) 로 `domain=` 지정.",
   "- **외부(클릭업·노션·코드):** 원본은 외부 소유 → 미러(observed)로 둔다. 복제하지 말고, 거기서 얻은 **파생 인사이트만** 별도 K 로 저작한다.",
 ].join("\n");
 
-// ── 항상-주입 지식 인덱스(MEMORY.md) — v4: R 전문 + area 지도 + 쓰기 가이드. ──
-//  입력 units = listKnowledge({lifecycle:"active"}) 전체. 여기서 R 만 전문으로 추려 주입하고, K/H/W 는 정적
-//  주입하지 않는다(area 지도로 발견·검색 소환). 비-링크 텍스트(본문 follow 차단 불변식 유지 — generator 가
-//  `](name.md)` 링크를 디스크로 복사하지 않게).
-// H1-b 시크릿 출력게이트(v3 P-V3-1): 이 인덱스가 **항상-주입**(SessionStart 훅·정적 context.md·preview·web learn)의
-//  단일 소스이므로 평문 시크릿이 섞이면 컨텍스트로 유출된다. 쓰기경로(ctx_save/org section)는 assertNoHardSecrets
-//  로 hard-block 하지만, 그 게이트 도입(06-16) 전 적재된 레거시 유닛은 통과하지 못했다. 서빙 경로에서 throw(컨텍스트
-//  전면 거부)는 과해서, 여기서는 R 전문·area 표시명을 emit 직전 redactString 으로 **마스킹**한다(defense-in-depth,
-//  fail-open 보존). 단일 choke-point 가 정적·라이브·web 을 모두 덮는다.
-// areaMap 인자는 호출자가 areaMapForIndex() 로 라이브 조회해 넘긴다(non-stale·두 DB 조인). 생략 시 빈 지도 —
-//  순수함수 단위테스트(DB 불요)는 인자 없이/명시 지도로 호출해 결정적으로 검증한다.
+// ── 컨텍스트 온톨로지 가이드(주입 골격) — buildKnowledgeIndex 가 굽는 Knowledge Index **전체 템플릿**. ──
+//  06-23 재설계(윤상민): 3섹션으로 쪼개지 않고 **하나의 편집 가능한 템플릿**. 동적 데이터는 플레이스홀더로 주입:
+//   `${categories}` = 카테고리 지도 항목(space별 'key — name (N)'), `${rules}` = 사용자-저작 강제 규칙(R) 전문.
+//  편집값(섹션)이 비거나 DB 가 없으면 이 상수로 폴백 → 계약(온톨로지 골격) 안 깨짐. 기본값은 코드가 단일 출처
+//  (WRITE_GUIDE_BLOCK 을 끝에 임베드 — 쓰기 가이드도 이 한 템플릿의 일부).
+export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
+  "# Knowledge Index",
+  "",
+  "${rules}## 컨텍스트 온톨로지 개념 (맥락, 카테고리, 프로젝트, 지식)",
+  "",
+  "**맥락(Context)** 은 일할 때 알아야 할 조직의 모든 것이다. 세 축으로 본다.",
+  "",
+  "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 3 space: **사업**(개발 불필요 업무)·**제품**(개발 필요 업무)·**시스템**(조직·업무방식 등 메타). 각 space 아래 하위 카테고리가 있고, **제품의 하위 카테고리 = 도메인**이다. 도메인은 정의·범위·규칙(**should**) + 코드 구현·의존(**is**) + 둘의 갭(**debt**) + 도메인 간 관계(엣지)를 합쳐 **도메인맵**을 이룬다.",
+  "- **지식 — 맥락의 *기록*(정적).** 지속되는 사실·결정·설계·런북. 여러 카테고리에 n:n 매핑. 두 직교 속성 — **injection**(`always`=항상 주입되는 규칙·페르소나 / `recalled`=검색 소환), **provenance**(`authored`=저작 / `observed`=외부 미러).",
+  "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 여러 카테고리에 n:n. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
+  "",
+  "## 카테고리 (주제 — 검색으로 소환)",
+  "관련 카테고리가 보이면 그걸로 검색(`knowledge_search`/`knowledge_list` category=)해 지식을 그때 소환한다.",
+  "",
+  "${categories}## 맥락 로드/기록 가이드",
+  "",
+  "*맥락을 다루는 규칙은 (조건 발동 훅이 아니라) 여기에 명시한다 — stop 훅 등은 보조 리마인더일 뿐이다.*",
+  "",
+  "**로드 — 필요한 맥락을 그때 소환한다 (전부 미리 읽지 않는다).**",
+  "- 위 **카테고리** 목록에서 관련 주제를 찾는다.",
+  "- 지식: `knowledge_search`(검색어) · `knowledge_list`(space·category·injection 필터) · `knowledge_get`(name→전문).",
+  "- 도메인맵: `category_list` / `category_get`(should·is·debt·의존 엣지) · `category_edge_list`.",
+  "- 프로젝트: `project_list_v6` / `project_get_v6`(태스크 위계·필요/산출지식).",
+  "- 라이브 데이터(코드·DB): `db_query` · `context_overview`.",
+  "",
+  "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
+  "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
+  "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다(type=commit/decision/review…). 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",
+  "- 프로젝트/태스크: `task_create_v6` / `task_set_status_v6`, 필요·산출지식은 `project_link_knowledge_v6`.",
+  "- 도메인 의도: should 변경은 `category_update`, 도메인 간 의존(should 엣지)은 `category_edge_set` — is 엣지는 코드 스캔이 채운다.",
+  "- 외부(클릭업·노션·코드): 원본은 외부 소유 → 미러(`observed`)로 둔다. 복제하지 말고, 거기서 얻은 **파생 인사이트만** 별도 지식(`authored`)으로 저작한다.",
+  "",
+  "**원칙**",
+  "- 조직 지식의 유일한 집은 **지식 스토어**다 — 레포에 `.md`를 새로 만들거나 포인터만 남기지 않는다.",
+  "- 전문을 담는다 — 나중의 나/동료가 그것만 읽고 일할 수 있도록.",
+].join("\n");
+
+// 가이드 섹션 키(단일) — 웹 관리 '컨텍스트 온톨로지 가이드' 탭. updateSection(kind='R') 로 저장.
+export const CONTEXT_ONTOLOGY_GUIDE_SECTION = "context-ontology-guide";
+
+// 섹션 키 → 코드 기본값(편집기 프리필·되돌리기·계약 폴백). delivery 가 화이트리스트·기본값 노출에 재사용.
+export const GUIDE_SECTION_DEFAULTS: Record<string, string> = {
+  [CONTEXT_ONTOLOGY_GUIDE_SECTION]: DEFAULT_CONTEXT_ONTOLOGY_GUIDE,
+};
+
+// 가이드 템플릿을 DB 에서 로드(라이브 주입·발행물 양 경로 공유). 빈/부재면 undefined → buildKnowledgeIndex 가 기본값 폴백.
+//  getSection 은 store 가 이미 import 됨(순환 없음). 조회 실패 시 undefined(폴백).
+export async function loadGuideTemplate(): Promise<string | undefined> {
+  try { const s = await getSection(CONTEXT_ONTOLOGY_GUIDE_SECTION); return s?.body_md?.trim() || undefined; }
+  catch { return undefined; }
+}
+
+// ── 항상-주입 지식 인덱스(MEMORY.md) — 컨텍스트 온톨로지 가이드 템플릿 + 동적 플레이스홀더(${rules}/${categories}). ──
+//  입력 units = v6 listKnowledge({lifecycle:"active"}) 전체. injection='always'(규칙·페르소나)만 전문으로 추려
+//  ${rules} 에 박고, recalled 지식은 정적 주입하지 않는다(카테고리 지도로 발견·검색 소환). 비-링크 텍스트(본문 follow 차단 불변식 유지).
+// H1-b 시크릿 출력게이트: 이 인덱스가 **항상-주입**(훅·정적 context.md·preview·web)의 단일 소스이므로 평문 시크릿이
+//  섞이면 유출된다. 쓰기경로(ctx_save/org section)는 assertNoHardSecrets 로 hard-block 하지만 그 전 적재 레거시는
+//  통과 못 했다. 서빙 경로에선 throw(전면 거부) 대신 **조립 결과 전체**를 emit 직전 redactString 으로 마스킹한다
+//  (defense-in-depth·fail-open — 편집 가능해진 템플릿·동적 블록 모두 단일 choke-point 통과).
+// categoryMap 인자는 호출자가 categoryMapForIndex() 로 라이브 조회해 넘긴다(non-stale·두 DB 조인). 생략 시 빈 지도.
+// guideTemplate(편집값) 생략/공백이면 DEFAULT_CONTEXT_ONTOLOGY_GUIDE 폴백(순수함수·결정적 단위테스트 유지).
 //
-// 중복 주입 방지: org_content 섹션 R(managed-policy·org-defaults)은 **전용 경로로 세션당 1회**만 전달된다
-//  — 라이브는 previewMemberContext 가 머리말에 strip 후 prepend, 발행물은 생성기가 org/*.md 로 별도 합성.
-//  그래서 아래 R 전문 섹션에서는 이 둘을 제외한다(과거엔 여기서도 전문을 실어 한 컨텍스트에 같은 규칙이 두 번
-//  박혔다). 사용자-저작 R ku(ctx_save)는 전용 경로가 없으므로 여기서 전문 주입한다(유일한 집).
-const SECTION_R_NAMES = new Set<string>(["managed-policy", "org-defaults"]);
+// 중복 주입 방지: org_content 섹션 R(managed-policy·org-defaults)·가이드 섹션은 ${rules} 전문 주입에서 제외 —
+//  앞 둘은 전용 경로(머리말 prepend·생성기 org/*.md)로 세션당 1회 전달되고, 가이드 섹션은 그 자체가 이 템플릿이다.
+const SECTION_R_NAMES = new Set<string>([
+  "managed-policy", "org-defaults", CONTEXT_ONTOLOGY_GUIDE_SECTION,
+]);
+
+// ${rules} 치환 블록 — 사용자-저작 항상-주입 지식(섹션 제외) 전문. 없으면 "". 있으면 헤더+전문, 뒤따르는 ## 와 분리되게 \n\n 종결.
+//  V6: kind='R' → injection='always'(규칙·페르소나 항상 주입). 섹션 제외/정렬/전문 emit 동일.
+function buildRulesBlock(units: KnowledgeRow[]): string {
+  const rules = units
+    .filter((u) => u.injection === "always" && u.lifecycle === "active" && !SECTION_R_NAMES.has(u.name))
+    .sort((a, b) => (Number(a.sort) - Number(b.sort)) || a.name.localeCompare(b.name));
+  if (!rules.length) return "";
+  const out: string[] = ["## 강제 규칙 (R · 항상 적용)", ""];
+  for (const u of rules) {
+    out.push(`### ${u.title?.trim() || u.name}`);
+    const body = (u.body_md ?? "").trim();
+    if (body) out.push(body);
+    out.push("");
+  }
+  return out.join("\n").trimEnd() + "\n\n";
+}
+
+// ${categories} 치환 블록 — 전 카테고리를 space(product→business)별 'key — name (N)'. 없으면 "". 뒤따르는 ## 와 분리되게 \n\n 종결.
+function buildCategoryBlock(categoryMap: CategoryMapEntry[]): string {
+  if (!categoryMap.length) return "";
+  const order = (s: string): number => (s === "product" ? 0 : s === "business" ? 1 : 2);
+  const spaces = [...new Set(categoryMap.map((a) => a.space))].sort((x, y) => order(x) - order(y) || x.localeCompare(y));
+  const out: string[] = [];
+  for (const sp of spaces) {
+    out.push(`### ${sp}`);
+    for (const a of categoryMap.filter((x) => x.space === sp)) {
+      const n = a.active_units > 0 ? ` (${a.active_units})` : "";
+      out.push(`- ${a.key} — ${a.name}${n}`);
+    }
+    out.push("");
+  }
+  return out.join("\n").trimEnd() + "\n\n";
+}
+
+// is_wiki 핀 지식의 name→대표 category.key(confirmed 우선) 라이브 조회 — buildWikiBlock 의 category 칩 소스.
+//  categoryMapForIndex 와 동형(itemsPool dynamic import·fail-open 빈 맵). 호출자가 buildKnowledgeIndex 4번째 인자로 넘긴다.
+export async function wikiCategoryMap(): Promise<Map<string, string>> {
+  try {
+    const { itemsPool } = await import("../items/store.js");
+    const rows = (await itemsPool.query(
+      `SELECT DISTINCT ON (kc.name) kc.name, c.key
+         FROM knowledge_category kc
+         JOIN category c ON c.id = kc.category_id
+         JOIN knowledge k ON k.name = kc.name AND k.is_wiki AND k.lifecycle = 'active'
+        WHERE kc.state <> 'rejected' AND c.state <> 'merged'
+        ORDER BY kc.name, (kc.state = 'confirmed') DESC, c.cross_cutting DESC, kc.category_id`)).rows;
+    const m = new Map<string, string>();
+    for (const r of rows) m.set(r.name as string, r.key as string);
+    return m;
+  } catch (err) {
+    logger.warn({ err }, "wiki category 맵 조회 실패 — 빈 맵 폴백(wiki 블록은 category 칩 없이 렌더)");
+    return new Map();
+  }
+}
+
+// ${wiki} 치환 블록 — is_wiki 핀 지식의 '소환키 — 제목 · category' 한 줄씩(본문 제외, 인덱스). 없으면 "". 뒤 ## 와 \n\n 분리.
+//  wikiCats = name→대표 category.key(wikiCategoryMap 라이브 조회). buildRulesBlock 과 동일 정렬(sort,name). 본문 follow 차단 위해 비-링크.
+function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): string {
+  const wiki = units
+    .filter((u) => u.is_wiki && u.lifecycle === "active")
+    .sort((a, b) => (Number(a.sort) - Number(b.sort)) || a.name.localeCompare(b.name));
+  if (!wiki.length) return "";
+  const out: string[] = ["## WIKI 인덱스 (핀 — 제목·소환키만, 본문은 `ctx_cat`/`memory_get` 으로)", ""];
+  for (const u of wiki) {
+    const cat = wikiCats.get(u.name);
+    out.push(`- ${u.name} — ${u.title?.trim() || u.name}${cat ? ` · ${cat}` : ""}`);
+  }
+  return out.join("\n").trimEnd() + "\n\n";
+}
 
 export function buildKnowledgeIndex(
-  units: KnowledgeUnit[],
-  areaMap: AreaMapEntry[] = [],
+  units: KnowledgeRow[],
+  categoryMap: CategoryMapEntry[] = [],
+  guideTemplate?: string,
+  wikiCats: Map<string, string> = new Map(),
 ): string {
-  const lines = [
-    "# Knowledge Index",
-    "(공유 조직 지식. **강제 규칙·페르소나는 전문이 항상 적용**된다. 그 외 지식·절차·작업은 area 지도로 발견해 " +
-      "`ctx_grep`/`memory_search`/`ctx_cat name=<name>` 로 그때 소환한다.)",
-    "",
-  ];
-
-  // ── (a) R(규칙) 전문 — enforced. lifecycle='active' 인 kind='R' 만, sort→name 순으로 전문 주입. ──
-  //  방어적 lifecycle 재확인(호출자가 active 만 넘기더라도). title 헤더 + 본문 전문(redact). 비-링크.
-  const rules = units
-    .filter((u) => u.kind === "R" && u.lifecycle === "active" && !SECTION_R_NAMES.has(u.name))
-    .sort((a, b) => (a.sort - b.sort) || a.name.localeCompare(b.name));
-  if (rules.length) {
-    lines.push("## 강제 규칙 (R · 항상 적용)", "");
-    for (const u of rules) {
-      const title = (u.title?.trim() || u.name);
-      lines.push(`### ${redactString(title)}`);
-      const body = redactString(u.body_md ?? "").trim();
-      if (body) lines.push(body);
-      lines.push("");
-    }
-  }
-
-  // ── (b) area 지도 — 전 area 를 space 별로 작게·완전하게. 발견용(소환은 검색). active 0 인 area 도 *완전성*을 ──
-  //  위해 나열한다(주제 존재 자체가 정보 — 빈 area 는 검색해도 안 나옴을 알 수 있음). space 헤더 → 'key — name (N)'.
-  if (areaMap.length) {
-    lines.push("## area 지도 (주제 — 검색으로 소환)",
-      "일과 관련된 area 가 보이면 `domain=<key>` 로 검색(`ctx_grep`/`ctx_ls`/`memory_search`)해 해당 지식·절차를 그때 가져온다.",
-      "");
-    // space 안정 정렬: product → business 순(나머지는 알파벳). 이미 areaMapForIndex 가 space, key 정렬해 옴.
-    const order = (s: string): number => (s === "product" ? 0 : s === "business" ? 1 : 2);
-    const spaces = [...new Set(areaMap.map((a) => a.space))].sort((x, y) => order(x) - order(y) || x.localeCompare(y));
-    for (const sp of spaces) {
-      const inSpace = areaMap.filter((a) => a.space === sp);
-      lines.push(`### ${redactString(sp)}`);
-      for (const a of inSpace) {
-        const n = a.active_units > 0 ? ` (${a.active_units})` : "";
-        lines.push(`- ${redactString(a.key)} — ${redactString(a.name)}${n}`);
-      }
-      lines.push("");
-    }
-  }
-
-  // ── (c) 쓰기 가이드 — 단일 상수 블록(WRITE_GUIDE_BLOCK). 항상 박는다. ──
-  lines.push(WRITE_GUIDE_BLOCK);
-  lines.push("");
-
-  // 트레일링 빈 줄 제거 후 단일 개행 종결(기존 출력 관례 — WYSIWYG byte-identical 유지).
-  while (lines.length && lines[lines.length - 1] === "") lines.pop();
-  return lines.join("\n") + "\n";
+  // 편집값(섹션) 우선, 비면 코드 기본 템플릿(계약 폴백).
+  const tpl = (typeof guideTemplate === "string" && guideTemplate.trim()) ? guideTemplate : DEFAULT_CONTEXT_ONTOLOGY_GUIDE;
+  // 동적 블록 치환 — 함수형 replacement(치환문자열의 $ 특수해석 회피). ${rules}=R 전문, ${categories}=카테고리 지도, ${wiki}=핀 인덱스.
+  const assembled = tpl
+    .replace(/\$\{rules\}/g, () => buildRulesBlock(units))
+    .replace(/\$\{categories\}/g, () => buildCategoryBlock(categoryMap))
+    .replace(/\$\{wiki\}/g, () => buildWikiBlock(units, wikiCats));
+  // 조립 결과 전체 마스킹(편집 가능 템플릿·동적 블록 모두) + 빈 플레이스홀더로 생긴 과잉 공백/트레일링 정리 → 단일 개행 종결.
+  return redactString(assembled)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd() + "\n";
 }
 
 // YAML 스칼라 안전화 — load-bindings 미니 파서는 "..."/'...' 인용 스칼라를 받지만 \" 언이스케이프는 안 한다.
@@ -216,15 +304,18 @@ export async function materializeOrgContent(): Promise<Materialized> {
     await writeFile(join(dir, "org", "managed-policy.md"), policy.body_md);
   }
 
-  // memory/MEMORY.md — v4 인덱스(R 전문 + area 지도 + 쓰기 가이드)만 발행. **본문 파일은 디스크에 안 쓴다** —
+  // memory/MEMORY.md — v4 인덱스(R 전문 + 카테고리 지도 + 쓰기 가이드)만 발행. **본문 파일은 디스크에 안 쓴다** —
   //  K/H/W 본문은 ctx_cat(게이트웨이 pull)로 가져온다. 인덱스가 비-링크라 generator 의 본문 follow 도 안 걸림.
-  //  buildKnowledgeIndex 가 단일 소스(previewMemberContext 와 공유) — area 지도는 라이브 조회(areaMapForIndex).
-  const knowledge = await listKnowledge({ lifecycle: "active" });
-  const areaMap = await areaMapForIndex();
-  // R 전문이 있거나(규칙) area 지도가 있으면 인덱스 발행(쓰기 가이드는 항상 동반). 둘 다 없어도 가이드는 의미가
-  //  있으나, 완전 빈 DB 에선 인덱스를 생략한다(기존 관례 — knowledge.length 가드).
-  if (knowledge.length || areaMap.length) {
-    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge, areaMap));
+  //  buildKnowledgeIndex 가 단일 소스(previewMemberContext 와 공유) — 카테고리 지도는 라이브 조회(categoryMapForIndex).
+  const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
+  const categoryMap = await categoryMapForIndex();
+  // 컨텍스트 온톨로지 가이드 템플릿은 DB 섹션에서 — 라이브 미리보기(previewMemberContext)와 동일 소스라
+  //  발행물↔미리보기 일치. 편집 안 했으면 빈 섹션 → buildKnowledgeIndex 가 코드 기본 템플릿 폴백.
+  const guide = await loadGuideTemplate();
+  // R 전문이 있거나(규칙) 카테고리 지도가 있으면 인덱스 발행(쓰기 가이드는 템플릿에 항상 동반). 둘 다 없어도 가이드는
+  //  의미가 있으나, 완전 빈 DB 에선 인덱스를 생략한다(기존 관례 — knowledge.length 가드).
+  if (knowledge.length || categoryMap.length) {
+    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)

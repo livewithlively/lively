@@ -13,17 +13,25 @@ export interface DebtUpsertInput {
   detail?: string;
   cited_refs?: unknown[];
   note?: string | null;
+  // V6: 도메인부채(should↔is)는 category 귀속 — category_id 가 주어지면 debt_finding.category_id 로 키.
+  //  (구조부채 flagStructuralDrift 는 repo_id 키 유지 — class C, 미설정.) 둘 다 미설정이면 repo_id 키(레거시).
+  category_id?: number | null;
 }
 
-// ingest 경로 upsert — store-core.upsertDebt verbatim (change_log after={title}, note 없음).
+// ingest 경로 upsert — store-core.upsertDebt 시맨틱. V6: d.category_id 가 있으면 (category_id,title) 키
+//  (debt_finding_category_title_uq), 없으면 (repo_id,title) 키(레거시 구조부채 경로). repo_id 는 provenance 로
+//  항상 INSERT(category 경로도 어느 레포 스캔에서 났는지 보존 — change_log 도 repo_id 로 귀속).
 export async function upsertDebtRow(
   db: Db, repo_id: number, run_id: number | null, actor: Actor, d: DebtUpsertInput,
 ): Promise<string> {
-  const ex = await one(db, "SELECT * FROM debt_finding WHERE repo_id=$1 AND title=$2", [repo_id, d.title]);
+  const byCat = d.category_id != null;
+  const ex = byCat
+    ? await one(db, "SELECT * FROM debt_finding WHERE category_id=$1 AND title=$2", [d.category_id, d.title])
+    : await one(db, "SELECT * FROM debt_finding WHERE repo_id=$1 AND title=$2", [repo_id, d.title]);
   if (!ex) {
-    const r = await one(db, `INSERT INTO debt_finding(repo_id,kind,title,detail,cited_refs,status,origin,run_id,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,'open',$6,$7,$8,$8) RETURNING id`,
-      [repo_id, d.kind, d.title, d.detail ?? "", JSON.stringify(d.cited_refs ?? []), actor.type, run_id, now()]);
+    const r = await one(db, `INSERT INTO debt_finding(repo_id,category_id,kind,title,detail,cited_refs,status,origin,run_id,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$9) RETURNING id`,
+      [repo_id, d.category_id ?? null, d.kind, d.title, d.detail ?? "", JSON.stringify(d.cited_refs ?? []), actor.type, run_id, now()]);
     await logChange(db, {
       repoId: repo_id, entityType: "debt_finding", entityId: r.id, op: "insert", actor, runId: run_id,
       before: null, after: { title: d.title }, note: null,

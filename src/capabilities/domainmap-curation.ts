@@ -12,8 +12,9 @@
 // 웹/기타 → 'human'(구 x-actor-type 헤더 생략과 동일 — 기존 거동 무변경).
 import { z } from "zod";
 import { dmRead, dmWrite, webActor } from "./domainmap-compat.js";
-import { domainDetail, listDebts, listDomainsApi } from "../domainmap/core/queries.js";
-import { history, restore, shouldChangeHistory, commitIsChangeHistory } from "../domainmap/core/changelog.js";
+import { domainDetail, listDebts } from "../domainmap/core/queries.js";
+import { history, restore } from "../domainmap/core/changelog.js";
+import { productDomainmapView } from "../v6/domainmap-store.js";
 import { confirmDomain, domainSetShould, editDomainById, mergeDomains, proposeDomain as coreProposeDomain, setDomainState } from "../domainmap/core/domains.js";
 import { confirmMapping, rejectMapping, reassignMapping } from "../domainmap/core/mappings.js";
 import { setDebtStatus } from "../domainmap/core/debts.js";
@@ -163,15 +164,14 @@ const dmDomainmapView: Capability = {
       },
     }],
   },
+  // v6 컷오버: 소스를 레거시 domain/mapping/debt(레포 스코프)에서 category(space='product') 로 교체.
+  //  응답 shape 동일(domains/debts/should_changes/is_commit_changes) — 카테고리 탭 제품 도메인맵 + 구 #/domainmap 둘 다 무변경 렌더.
+  //  repo 파람은 accept-and-ignore(category 는 repo-free) — back-compat 위해 입력 repo 를 응답 repo 키로 echo.
+  //  dmRead 엔벨로프는 유지(읽기 에러를 구 dmGet shape 로 재현). 골든리드 핀 queries.ts 는 무수정 — v6 reader 신규.
   handler: async (input: { repo: string; limit: number }) =>
     dmRead(`/api/repo/${enc(input.repo)}/map`, async () => {
-      const [domains, debts, should_changes, is_commit_changes] = await Promise.all([
-        listDomainsApi(input.repo),
-        listDebts(input.repo),
-        shouldChangeHistory(input.repo, input.limit),
-        commitIsChangeHistory(input.repo, input.limit),
-      ]);
-      return { repo: input.repo, domains, debts, should_changes, is_commit_changes };
+      const view = await productDomainmapView(input.limit);
+      return { ...view, repo: input.repo };
     }),
 };
 

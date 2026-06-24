@@ -8,9 +8,12 @@ import {
   type Candidates,
 } from "./mapping-candidates.js";
 import { logger } from "../log.js";
+// v6 컷오버: 커넥터 미러는 v6 knowledge/project 로 적재한다(구 knowledge_unit 미러는 dead/parallel 로 보존).
+//  소스로 갈라 적재: clickup task → project(level=task/subtask), notion 등 K류 → knowledge(observed).
+//  멱등(external 부분유니크)·감사 노이즈 게이트·H1 redact 는 connector-mirror 내부에 이식돼 있다.
 import {
-  mirrorKnowledgeFromRawItem,
-} from "../org/knowledge-mirror.js";
+  mirrorExternalToV6,
+} from "../v6/connector-mirror.js";
 
 // 통합 DB(P1): domainmap 엔진(dmPool)도 이 풀을 공유한다 — withTx 장기점유 + 커넥터 ingest +
 // activity_log 원자기록의 동시 부하를 감안해 max 명시(기본 10 → 20, 풀 고갈 방지).
@@ -297,12 +300,13 @@ async function resolveActor(
   return ins.person_id;
 }
 
-// 멱등 upsert: (external_system, external_instance, external_id) 가 키 — knowledge_unit observed 미러 단독.
-//  ── item 폐기 컷오버: 구 `INSERT INTO item` 듀얼라이트 제거. ku(knowledge_unit)가 단일 캐노니컬 표면이라
-//     커넥터/pm 인입은 mirrorKnowledgeFromRawItem 만 호출한다(item 무의존). person 신원(resolveActor)은
-//     ku.author='connector:<system>' 와 별개 신원층이라 보존 — actor 정보가 있으면 person 에 계속 해소·적재한다
-//     (드랍 스크립트가 person 을 보존 대상으로 명시). parent 링크는 ku.parent_name(자기참조)로 적재시 즉시 도출됨
-//     (구 resolveParents 의 별도 패스 불필요 — mirror 가 parent_name 을 직접 채운다). ──
+// 멱등 upsert: (external_system, external_instance, external_id) 가 키 — v6 외부 미러(knowledge/project) 단독.
+//  ── v6 컷오버: 커넥터/pm 인입은 mirrorExternalToV6 만 호출한다(item·knowledge_unit 무의존). 소스로 갈라
+//     clickup task → project(level=task/subtask), notion 등 → knowledge(observed) 로 적재한다. person 신원
+//     (resolveActor)은 created_by/author='connector:<system>' 와 별개 신원층이라 보존 — actor 정보가 있으면
+//     person 에 계속 해소·적재한다(드랍 스크립트가 person 을 보존 대상으로 명시). 구 knowledge_unit 미러
+//     (knowledge-mirror.ts)는 dead/parallel 로 보존(삭제 안 함 — 롤백/회귀 테스트 참조용). knowledge 의 parent
+//     링크는 parent_name(자기참조)로 적재시 즉시 도출(구 resolveParents 별도 패스 불필요 — mirror 가 직접 채움). ──
 export async function ingestItems(items: RawItem[]): Promise<number> {
   const client = await itemsPool.connect();
   const actorCache = new Map<string, string>();
@@ -316,14 +320,15 @@ export async function ingestItems(items: RawItem[]): Promise<number> {
           { ...it.actor, external_id: it.actor.external_id }, actorCache,
         );
       }
-      // ── knowledge_unit observed 미러(단일 캐노니컬 쓰기). H1 redact 는 mirror 내부. 분류 불가 조합은 false(skip). ──
+      // ── v6 외부 미러(단일 캐노니컬 쓰기). H1 redact 는 mirror 내부. 라우팅 불가 조합(slack 등)은 false(skip). ──
+      //  clickup task → project(level=task/subtask), notion 등 → knowledge(observed). external 멱등 + 감사 게이트 내부.
       //  best-effort: 미러 실패가 인입(외부 계약·read-your-writes)을 깨면 안 되므로 try/catch 격리 —
       //  logger.warn 만 하고 다음 싱크가 멱등 수렴(external 멱등키 ON CONFLICT). 카운트는 인입 시도 단위.
       try {
-        await mirrorKnowledgeFromRawItem(client, it);
+        await mirrorExternalToV6(client, it);
       } catch (err) {
         logger.warn({ err, system: it.provenance.system, externalId: it.provenance.external_id },
-          "knowledge_unit 미러 적재 실패(무시) — 다음 싱크가 수렴");
+          "v6 외부 미러 적재 실패(무시) — 다음 싱크가 수렴");
       }
       n++;
     }

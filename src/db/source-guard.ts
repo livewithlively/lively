@@ -40,7 +40,10 @@ export function hostOfUrl(url: string): string | null {
 // host 가 사설/메타데이터 대역인지(SSRF). IP 리터럴은 즉시, 도메인은 resolve 후.
 //  멀티앤서: A 레코드 중 '하나라도' 사설이면 차단(pg 기본 lookup 이 사설 응답을 고를 수 있어 fail-closed).
 //  resolve 실패/결과 없음 = true(fail-closed).
-export async function isHostBlocked(host: string): Promise<boolean> {
+//  allowedHosts: 운영자가 런타임설정(allowed_db_hosts)에 명시한 host 는 SSRF 검사 면제(내부/localhost DB 허용).
+//   브라우저 임의입력은 화이트리스트 밖이면 여전히 차단 — 운영자만 admin 으로 host 를 등록할 수 있다.
+export async function isHostBlocked(host: string, allowedHosts: string[] = []): Promise<boolean> {
+  if (allowedHosts.includes(host.toLowerCase())) return false; // 운영자 명시 허용 — SSRF 검사 면제
   if (net.isIP(host)) return isBlockedIp(host);
   let addrs: { address: string }[];
   try {
@@ -60,9 +63,12 @@ export function isSecretRefAllowed(ref: string, allowed: string[]): boolean {
 // host 를 검증된 공인 IP '하나'로 핀해 반환(DB 소스 connect 대상으로 고정). DNS 리바인딩·멀티앤서 우회 차단:
 //  도메인의 A 레코드 중 하나라도 사설/메타데이터면 거부(every public 일 때만 통과), 통과하면 그 공인 IP 로 고정.
 //  pg 는 이 IP 로 직접 connect(재resolve 없음)하고, TLS 는 원래 호스트명을 servername 으로 검증한다(resolveConnectionString).
-export async function pinHost(host: string): Promise<string> {
+//  allowedHosts: 운영자 명시 허용 host 는 사설/loopback 도 핀 허용(localhost 내부 DB 접속용). IP 리터럴은 그대로,
+//   도메인(localhost 등)은 resolve 후 첫 IP 로 핀(DNS 리바인딩 차단은 유지하되 사설 거부만 면제).
+export async function pinHost(host: string, allowedHosts: string[] = []): Promise<string> {
+  const allowed = allowedHosts.includes(host.toLowerCase()); // 운영자 명시 허용 — 사설/메타데이터 거부 면제
   if (net.isIP(host)) {
-    if (isBlockedIp(host)) throw new Error(`차단된 host(사설/메타데이터 IP): ${host}`);
+    if (!allowed && isBlockedIp(host)) throw new Error(`차단된 host(사설/메타데이터 IP): ${host}`);
     return host;
   }
   let addrs: { address: string }[];
@@ -72,6 +78,6 @@ export async function pinHost(host: string): Promise<string> {
     throw new Error(`host resolve 실패: ${host}`);
   }
   if (!addrs.length) throw new Error(`host resolve 결과 없음: ${host}`);
-  if (addrs.some((a) => isBlockedIp(a.address))) throw new Error(`차단된 host(일부 응답이 사설/메타데이터 IP): ${host}`);
-  return addrs[0].address; // 검증된 공인 IP 로 핀
+  if (!allowed && addrs.some((a) => isBlockedIp(a.address))) throw new Error(`차단된 host(일부 응답이 사설/메타데이터 IP): ${host}`);
+  return addrs[0].address; // 검증된(또는 운영자 허용) IP 로 핀
 }

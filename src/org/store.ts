@@ -6,9 +6,16 @@ import { itemsPool } from "../items/store.js";
 import { isScope } from "../capabilities/scopes.js";
 import { redactDeep } from "./redact.js";
 import {
-  getKnowledge, listKnowledge, searchKnowledge, upsertKnowledge, removeKnowledge,
+  getKnowledge, listKnowledge, upsertKnowledge,
   type KnowledgeUnit,
 } from "./knowledge.js";
+// WIKI 인덱스(팀 메모리) v6 cutover(2026-06-23): memory 함수만 v6 knowledge 사용(구/신 한 파일 공존).
+//  section(규칙·가이드)은 아직 구 knowledge.js(kind='R') — knowledge_unit 드랍 시 함께 이관 예정.
+import {
+  getKnowledge as getK6, listKnowledge as listK6, searchKnowledge as searchK6,
+  upsertKnowledge as upsertK6, deleteKnowledge as deleteK6, linkKnowledgeCategory as linkCat6,
+  type KnowledgeRow,
+} from "../v6/knowledge-store.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -45,10 +52,12 @@ export interface OrgMember {
 export interface OrgMemory {
   name: string;
   title: string | null;
+  summary: string | null;      // 카드 표시용 '쉬운 한 줄' 요약(NULL 이면 title 폴백). 실제 제목·본문과 별개.
   body_md: string;
   sort: number;
-  domain_key: string | null;   // domainmap 도메인 귀속(슬러그 약결합 — FK 아님)
-  domain_repo: string | null;  // 그 도메인의 repo(domainmap 은 repo 별 스코프)
+  domain_key: string | null;   // v6: 대표 category.key(표시용). 구 domainmap 도메인 약결합의 후신.
+  domain_repo: string | null;  // v6 미사용(항상 null) — category 는 repo 비종속. 호환 위해 필드 유지.
+  is_wiki: boolean;            // WIKI 핀 — 제목+메타가 가이드 ${wiki} 로 항상-주입(본문 제외).
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -252,45 +261,64 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
   }
 }
 
-// ── org_memory — 단일 공유 풀(에이전트 생산·소비). knowledge_unit kind<>'R' 위 얇은 래퍼(캐노니컬). ──
-//  매핑: memory ↔ kind<>'R'(메모는 kind='K' 로 신규 생성). 반환 shape(OrgMemory)은 불변(소비자 무수정).
-//  member/internal 분리 폐기(2026-06-17).
-function knowledgeToMemory(k: KnowledgeUnit): OrgMemory {
+// ── org_memory(WIKI 인덱스) — v6 knowledge 위 얇은 래퍼(2026-06-23 cutover). 진실원천=v6 knowledge. ──
+//  매핑: memory ↔ injection='recalled'(규칙 아님) ∧ provenance='authored'(외부 미러 아님). 신규 메모=recalled/authored.
+//  구 kind<>'R' ∧ confidence<>'observed' 와 동치. OrgMemory shape 불변(delivery·UI·MCP 무수정) — domain_key=대표 category.key.
+function knowledgeToMemory(k: KnowledgeRow, domainKey: string | null = null): OrgMemory {
   return {
-    name: k.name, title: k.title, body_md: k.body_md, sort: k.sort,
-    domain_key: k.domain_key, domain_repo: k.domain_repo,
-    version: k.version, updated_at: k.updated_at, updated_by: k.updated_by,
+    name: k.name, title: k.title, summary: k.summary, body_md: k.body_md, sort: Number(k.sort) || 0,
+    domain_key: domainKey, domain_repo: null, is_wiki: !!k.is_wiki,
+    version: k.version, updated_at: k.updated_at as string | null, updated_by: k.updated_by as string | null,
   };
 }
 
+// 여러 지식의 대표 category.key(confirmed 우선, 교차관심사 우선) — 카드 domain 칩 표시용. knowledge_category ⋈ category.
+async function repCategoryKeys(names: string[]): Promise<Map<string, string>> {
+  if (!names.length) return new Map();
+  const r = await itemsPool.query(
+    `SELECT DISTINCT ON (kc.name) kc.name, c.key
+       FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
+      WHERE kc.name = ANY($1) AND kc.state <> 'rejected' AND c.state <> 'merged'
+      ORDER BY kc.name, (kc.state = 'confirmed') DESC, c.cross_cutting DESC, kc.category_id`,
+    [names]);
+  const m = new Map<string, string>();
+  for (const row of r.rows) m.set(row.name as string, row.key as string);
+  return m;
+}
+
 export async function listMemory(): Promise<OrgMemory[]> {
-  // 팀 메모리 = 규칙(R)이 아닌 **큐레이션** 단위만. listKnowledge 는 sort, name 정렬(기존 org_memory 계약과 동일).
-  //  V4-P5: observed(외부 시스템 살아있는 미러 — 클릭업·노션 71건)는 큐레이션이 아니라 수집물이므로 제외한다.
-  //  (memory_* surface=큐레이션, ctx_grep/ctx_ls=observed 포함이 설계 의도. overview observed_count·ctx_grep
-  //   는 별도로 observed 를 노출하므로 여기서 빼도 가시성 손실 없음.) 큐레이션만 보여야 함(이전엔 R 만 빼 112건 노출).
-  const rows = await listKnowledge();
-  return rows.filter((k) => k.kind !== "R" && k.confidence !== "observed").map(knowledgeToMemory);
+  // WIKI 인덱스 = injection≠'always'(규칙·페르소나)만 제외. provenance 필터 없음 — authored·observed(외부 미러) 둘 다 포함(윤상민 2026-06-24).
+  const rows = await listK6({ injection: "recalled", lifecycle: "active", limit: 500 });
+  const cats = await repCategoryKeys(rows.map((r) => r.name));
+  return rows.map((k) => knowledgeToMemory(k, cats.get(k.name) ?? null));
 }
 
 export async function getMemory(name: string): Promise<OrgMemory | null> {
-  const k = await getKnowledge(name);
-  return k && k.kind !== "R" ? knowledgeToMemory(k) : null;
+  const k = await getK6(name);
+  if (!k || k.injection === "always") return null; // 규칙(R)은 메모리 아님
+  const cats = (k.categories as { key: string; state: string }[] | undefined) ?? [];
+  const rep = cats.find((c) => c.state === "confirmed") ?? cats[0];
+  return knowledgeToMemory(k, rep?.key ?? null);
 }
 
-// memory_search 백엔드 — searchKnowledge(ILIKE)에 위임 + 규칙(R) 제외. 반환행은 기존과 동일.
+// memory_search 백엔드 — v6 searchKnowledge(ILIKE) + injection≠'always' 한정(provenance 무관 — observed 미러 포함). domainKey 는 대표 category 후필터.
 export async function searchMemory(opts: {
   query: string; domainKey?: string | null; limit?: number;
 }): Promise<{ name: string; title: string | null; domain_key: string | null; snippet: string; updated_at: string | null }[]> {
-  // 팀 메모리 = 규칙(R) + observed(외부 미러) 제외 큐레이션만. searchKnowledge 가 서버사이드 kindNot/confidenceNot 으로
-  //  빼고 정상 top-N 반환(구 후필터 방식은 R 이 상위 50건을 차지하면 limit 미만 반환 회귀가 있어 제거).
-  //  V4-P5 MECE: memory_* surface(memory_search 포함)=큐레이션. observed 수집물은 ctx_grep/ctx_ls 가
-  //  노출하고 listMemory 도 제외하므로, memory_search 도 일관되게 observed 를 제외한다(ctx_grep/ctx_ls 는 불변).
-  return searchKnowledge({ query: opts.query, domainKey: opts.domainKey ?? null, kindNot: "R", confidenceNot: "observed", lifecycle: null, limit: opts.limit });
+  const rows = await searchK6(opts.query, { injection: "recalled", limit: opts.limit });
+  const cats = await repCategoryKeys(rows.map((r) => r.name));
+  let out = rows.map((r) => ({
+    name: r.name, title: r.title, domain_key: cats.get(r.name) ?? null,
+    snippet: r.snippet, updated_at: r.updated_at as string | null,
+  }));
+  if (opts.domainKey) out = out.filter((r) => r.domain_key === opts.domainKey);
+  return out;
 }
 
 export interface MemoryInput {
   name: string;
   title?: string | null;
+  summary?: string | null;     // 카드 표시용 '쉬운 한 줄'(미전송=보존, null=클리어 → title 폴백)
   body_md?: string;
   sort?: number;
   domain_key?: string | null;
@@ -298,18 +326,25 @@ export interface MemoryInput {
 }
 
 export async function upsertMemory(mem: MemoryInput, actor?: string, source?: string): Promise<OrgMemory> {
-  const k = await upsertKnowledge({
-    name: mem.name, kind: "K", title: mem.title, body_md: mem.body_md, sort: mem.sort,
-    domain_key: mem.domain_key, domain_repo: mem.domain_repo,
-  }, actor, source);
-  return knowledgeToMemory(k);
+  // 메모는 항상 recalled/authored(규칙·미러 아님). summary/sort 는 v6 컬럼에 직접 보존.
+  const k = await upsertK6({
+    name: mem.name, title: mem.title ?? undefined, body_md: mem.body_md ?? "",
+    summary: mem.summary, sort: mem.sort, injection: "recalled", provenance: "authored",
+  }, { actor: actor ?? null, source });
+  // domain_key(=category.key) 주어지면 그 category 에 link(비파괴 — 기존 매핑 보존). category.key 는 space 가로질러 유니크.
+  let domainKey: string | null = null;
+  if (mem.domain_key) {
+    const cat = (await itemsPool.query(
+      `SELECT id, key FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [mem.domain_key])).rows[0];
+    if (cat) { await linkCat6(k.name, cat.id as number, "confirmed", { actor: actor ?? null, source }); domainKey = cat.key as string; }
+  }
+  return knowledgeToMemory(k, domainKey);
 }
 
 export async function removeMemory(name: string, actor?: string, source?: string): Promise<void> {
-  // 규칙(R)이 아닌 단위만 메모리로 취급해 삭제(잘못된 종류 삭제 방지).
-  const k = await getKnowledge(name);
-  if (!k || k.kind === "R") return;
-  await removeKnowledge(name, actor, source);
+  const k = await getK6(name);
+  if (!k || k.injection === "always") return; // 규칙(R)은 메모리로 삭제 안 함
+  await deleteK6(name, { actor: actor ?? null, source });
 }
 
 // ── auth_token (DB 기반 bearer) ──
@@ -411,6 +446,8 @@ export interface OrgRuntimeConfig {
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
   url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
   allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
+  allowed_db_hosts: string[]; // db 소스가 접속 가능한 host 화이트리스트(소문자, deny-all 기본) — 사설/localhost SSRF 면제 대상
+  write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -423,7 +460,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -439,6 +476,8 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     allowed_auth_envs: strArrSafe(row?.allowed_auth_envs),
     url_allowlist: strArrSafe(row?.url_allowlist).map((s) => s.toLowerCase()),
     allowed_db_secret_refs: strArrSafe(row?.allowed_db_secret_refs),
+    allowed_db_hosts: strArrSafe(row?.allowed_db_hosts).map((s) => s.toLowerCase()),
+    write_tools: strArrSafe(row?.write_tools),
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -453,6 +492,8 @@ export async function updateRuntimeConfig(
     allowed_auth_envs?: string[];
     url_allowlist?: string[];
     allowed_db_secret_refs?: string[];
+    allowed_db_hosts?: string[];
+    write_tools?: string[];
   },
   actor?: string,
   source?: string,
@@ -465,15 +506,18 @@ export async function updateRuntimeConfig(
   const allowedAuthEnvs = patch.allowed_auth_envs !== undefined ? patch.allowed_auth_envs : before.allowed_auth_envs;
   const urlAllowlist = patch.url_allowlist !== undefined ? patch.url_allowlist.map((s) => s.toLowerCase()) : before.url_allowlist;
   const allowedDbSecretRefs = patch.allowed_db_secret_refs !== undefined ? patch.allowed_db_secret_refs : before.allowed_db_secret_refs;
+  const allowedDbHosts = patch.allowed_db_hosts !== undefined ? patch.allowed_db_hosts.map((s) => s.toLowerCase()) : before.allowed_db_hosts;
+  const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,1,now(),$7)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,1,now(),$9)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
-       allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs,
+       allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
+       write_tools=EXCLUDED.write_tools,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(writeTools), actor ?? null],
   );
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
@@ -892,4 +936,192 @@ export async function removeTool(name: string, ctx: WriteCtx = {}): Promise<void
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_tool WHERE name=$1`, [name]);
   await audit("org_tool", name, "delete", before, null, ctx.actor, ctx.source, ctx);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// org_project — 라이블리 자체 프로젝트 보드(사람이 선언·관리, ClickUp 과업·activity 작업과 독립).
+//  status: 'active'(진행중) | 'done'(완료). 진행중↔완료 토글이 핵심 상호작용. 모든 쓰기는 audit 동반.
+// ════════════════════════════════════════════════════════════════════
+export interface OrgProject {
+  id: number;
+  name: string;
+  description: string | null;
+  status: string;
+  folder: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  members?: { member_id: string; display_name: string | null }[]; // 보드 타일 아바타용(listProjects 만 채움)
+}
+
+export interface ProjectMember { member_id: string; role: string; display_name: string | null; kind: string | null; status_message: string | null; }
+
+const PROJECT_COLS = "id, name, description, status, folder, created_by, created_at, updated_at, completed_at";
+
+// 진행중(active) 먼저 → 진행중은 최근 갱신순, 완료(done)는 완료시각 최신순. 프론트가 status 로 두 섹션 분리.
+// viewer 지정 시 본인이 생성자이거나 팀원인 프로젝트만(초대받은 프로젝트만 보드에 노출).
+export async function listProjects(viewer?: string | null): Promise<OrgProject[]> {
+  const where = viewer
+    ? `WHERE (org_project.created_by = $1 OR EXISTS(SELECT 1 FROM project_member pmv WHERE pmv.project_id = org_project.id AND pmv.member_id = $1))`
+    : "";
+  const r = await itemsPool.query(
+    `SELECT ${PROJECT_COLS},
+            COALESCE((SELECT json_agg(json_build_object('member_id', pm.member_id, 'display_name', m.display_name) ORDER BY pm.sort, pm.member_id)
+              FROM project_member pm LEFT JOIN org_member m ON m.id = pm.member_id WHERE pm.project_id = org_project.id), '[]') AS members
+       FROM org_project
+       ${where}
+      ORDER BY (status='active') DESC,
+               CASE WHEN status='active' THEN updated_at ELSE completed_at END DESC NULLS LAST,
+               id DESC`,
+    viewer ? [viewer] : [],
+  );
+  return r.rows as OrgProject[];
+}
+
+export async function getProject(id: number): Promise<OrgProject | null> {
+  const r = await itemsPool.query(`SELECT ${PROJECT_COLS} FROM org_project WHERE id=$1`, [id]);
+  return (r.rows[0] as OrgProject) ?? null;
+}
+
+export async function createProject(
+  input: { name: string; description?: string | null; folder?: string | null },
+  ctx: WriteCtx = {},
+): Promise<OrgProject> {
+  const name = (input.name ?? "").trim();
+  if (!name) throw new Error("프로젝트 이름이 비어 있습니다");
+  const r = await itemsPool.query(
+    `INSERT INTO org_project(name, description, status, folder, created_by)
+     VALUES($1, $2, 'active', $3, $4) RETURNING ${PROJECT_COLS}`,
+    [name, (input.description ?? "").trim() || null, input.folder ?? null, ctx.actor ?? null],
+  );
+  const after = r.rows[0] as OrgProject;
+  await audit("org_project", String(after.id), "insert", null, after, ctx.actor, ctx.source, ctx);
+  return after;
+}
+
+// ── project_member — 팀원 조회/통째교체. member_id 는 org_member.id(사람) 기준 유효성 필터. ──
+export async function listProjectMembers(projectId: number): Promise<ProjectMember[]> {
+  const r = await itemsPool.query(
+    `SELECT pm.member_id, pm.role, m.display_name, m.kind, m.status_message
+       FROM project_member pm
+       LEFT JOIN org_member m ON m.id = pm.member_id
+      WHERE pm.project_id = $1
+      ORDER BY pm.sort, (pm.role='lead') DESC, m.sort NULLS LAST, pm.member_id`,
+    [projectId],
+  );
+  return r.rows as ProjectMember[];
+}
+
+// 본인 상태메시지 설정 — actor 본인 org_member 만(capability handler 가 actor 를 강제 전달).
+export async function setMemberStatus(memberId: string, message: string): Promise<{ member_id: string; status_message: string | null }> {
+  if (!memberId) throw new Error("사용자 신원이 없습니다");
+  const msg = (message || "").trim().slice(0, 200) || null;
+  await itemsPool.query(`UPDATE org_member SET status_message=$2, updated_at=now() WHERE id=$1`, [memberId, msg]);
+  return { member_id: memberId, status_message: msg };
+}
+
+export async function setProjectMembers(
+  projectId: number,
+  memberIds: string[],
+  ctx: WriteCtx = {},
+): Promise<string[]> {
+  const valid = new Set((await listMembers().catch(() => [])).map((m) => m.id));
+  const ids = [...new Set((memberIds || []).filter((id) => typeof id === "string" && valid.has(id)))];
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM project_member WHERE project_id=$1", [projectId]);
+    for (let i = 0; i < ids.length; i++) {
+      await client.query(
+        "INSERT INTO project_member(project_id, member_id, sort) VALUES($1,$2,$3)",
+        [projectId, ids[i], i], // 배열 순서 = 진열 순서(드래그앤드롭으로 재배치된 순서 보존)
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  await audit("project_member", String(projectId), "update", null, { member_ids: ids }, ctx.actor, ctx.source, ctx);
+  return ids;
+}
+
+// ── 프로젝트 접근권한 — 생성자(created_by) 또는 팀원(project_member)이면 true. 공동 세션 게이트용. ──
+export async function isProjectMember(projectId: number, memberId: string): Promise<boolean> {
+  if (!memberId) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM org_project p
+      WHERE p.id=$1 AND (p.created_by=$2 OR EXISTS(
+        SELECT 1 FROM project_member pm WHERE pm.project_id=p.id AND pm.member_id=$2)) LIMIT 1`,
+    [projectId, memberId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+// folder(상대경로) 기준 동일 판정 — 세션 dir → folder 로 프로젝트를 찾아 게이트(canAttach).
+export async function projectAccessByFolder(folder: string, memberId: string): Promise<boolean> {
+  if (!folder || !memberId) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM org_project p
+      WHERE p.folder=$1 AND (p.created_by=$2 OR EXISTS(
+        SELECT 1 FROM project_member pm WHERE pm.project_id=p.id AND pm.member_id=$2)) LIMIT 1`,
+    [folder, memberId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
+//  activity 는 itemsPool 동일 DB(FK knowledge_unit). project_member.member_id ↔ activity.author_person 조인.
+export interface ProjectActivity {
+  id: number; type: string; title: string | null; summary: string | null;
+  author_person: string | null; author_agent: string | null;
+  commit_sha: string | null; committed_at: string | null; created_at: string | null;
+  external_system: string | null; external_url: string | null;
+}
+export async function listProjectActivities(
+  projectId: number, authorPerson?: string, limit = 100,
+): Promise<ProjectActivity[]> {
+  const params: unknown[] = [projectId];
+  let personFilter = "";
+  if (authorPerson) { params.push(authorPerson); personFilter = ` AND a.author_person = $${params.length}`; }
+  params.push(Math.min(Math.max(Number(limit) || 100, 1), 200));
+  const r = await itemsPool.query(
+    `SELECT a.id, a.type, a.title, a.summary, a.author_person, a.author_agent,
+            a.commit_sha, a.committed_at, a.created_at, a.external_system, a.external_url
+       FROM activity a
+       JOIN project_member pm ON pm.member_id = a.author_person AND pm.project_id = $1
+      ${personFilter}
+      ORDER BY COALESCE(a.committed_at, a.created_at) DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  return r.rows as ProjectActivity[];
+}
+
+export async function setProjectStatus(
+  id: number,
+  status: string,
+  ctx: WriteCtx = {},
+  newFolder?: string,
+): Promise<OrgProject> {
+  if (status !== "active" && status !== "done") throw new Error("status 는 'active' 또는 'done' 이어야 합니다");
+  const before = await getProject(id);
+  if (!before) throw new Error("프로젝트 없음");
+  // 완료(done)로 갈 때 completed_at 최초 1회 기록(재완료해도 보존), 진행중 복귀 시 비움.
+  // newFolder 지정 시 folder 도 갱신(완료=legacy-project 로 이동, 복귀=project 로 이동 후 새 경로).
+  const setFolder = newFolder !== undefined ? ", folder=$3" : "";
+  const params: unknown[] = newFolder !== undefined ? [id, status, newFolder] : [id, status];
+  const r = await itemsPool.query(
+    `UPDATE org_project
+       SET status=$2,
+           completed_at = CASE WHEN $2='done' THEN COALESCE(completed_at, now()) ELSE NULL END,
+           updated_at = now()${setFolder}
+     WHERE id=$1 RETURNING ${PROJECT_COLS}`,
+    params,
+  );
+  const after = r.rows[0] as OrgProject;
+  await audit("org_project", String(id), "update", before, after, ctx.actor, ctx.source, ctx);
+  return after;
 }

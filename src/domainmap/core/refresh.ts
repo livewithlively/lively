@@ -11,8 +11,8 @@
 //   status 'M' modify path  (structural no-op; content re-eval is the LLM pass)
 //
 // HARD INVARIANT (enforced in code below; do not weaken):
-//   refresh() NEVER changes any mapping.domain_id and NEVER re-derives a confirmed
-//   mapping from a path. The only mapping/project_touch "preservation" mechanism is
+//   refresh() NEVER changes any mapping.category_id (구 domain_id) and NEVER re-derives
+//   a confirmed mapping from a path. The only mapping/project_touch "preservation" mechanism is
 //   ROW IDENTITY: a rename UPDATEs the SAME code_unit row (same id), so every mapping
 //   and project_touch that references that id survives untouched — refresh issues no
 //   write whatsoever against the `mapping` table. Deletes are SOFT (state='removed')
@@ -184,9 +184,11 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
         });
         tally.deleted++;
         // If a CONFIRMED mapping pointed here, flag an orphan (do NOT delete the mapping).
-        const conf = await q(client, `SELECT m.id, d.key domain_key, d.name domain_name
-          FROM mapping m JOIN domain d ON d.id=m.domain_id
-          WHERE m.repo_id=$1 AND m.target_kind='code_unit' AND m.target_id=$2 AND m.status='confirmed'`, [repo_id, ex.id]);
+        //  V6: mapping.domain_id→category_id, domain→category(space='product'). 매핑은 타깃(code_unit.id)으로
+        //  스코프(repo_id 잉여) — 그 code_unit 의 confirmed 매핑이 닿는 category 라벨을 부채 문구에 쓴다.
+        const conf = await q(client, `SELECT m.id, c.key domain_key, c.name domain_name
+          FROM mapping m JOIN category c ON c.id=m.category_id
+          WHERE m.target_kind='code_unit' AND m.target_id=$1 AND m.status='confirmed'`, [ex.id]);
         if (conf.length) {
           const domLabel = conf.map((c2) => `${c2.domain_name} (${c2.domain_key})`).join(", ");
           await flagStructuralDrift(client, repo_id, run_id, act, {

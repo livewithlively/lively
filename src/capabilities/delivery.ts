@@ -12,6 +12,7 @@ import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
+import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { assertHookId, RESERVED_TOOL_NAMES } from "../org/identity.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
@@ -107,6 +108,11 @@ export const deliveryCapabilities: Capability[] = [
       ]);
       const sectionMap: Record<string, { body_md: string; version: number; updated_at: string | null; updated_by: string | null }> = {};
       for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by };
+      // 컨텍스트 온톨로지 가이드 섹션 — DB 행이 없으면(편집 전) 코드 기본 템플릿을 채워 편집기가 '현재 유효 텍스트'를 보여준다(version:0=미저장).
+      //  buildKnowledgeIndex 도 같은 기본값으로 폴백하므로 화면=실주입 일치. sectionDefaults 는 '기본값 되돌리기' 버튼용.
+      for (const [k, def] of Object.entries(GUIDE_SECTION_DEFAULTS)) {
+        if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, updated_at: null, updated_by: null };
+      }
       // 비-admin: 구성원은 이름/종류/상태만(이메일·신원·개인레이어 redact), 토큰 목록은 비노출.
       const memberRows = isAdmin
         ? await Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id) })))
@@ -128,7 +134,8 @@ export const deliveryCapabilities: Capability[] = [
       const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
       // 메모리는 단일 공유 풀 — 전 구성원이 읽는 조직 지식이므로 비-admin 에도 그대로 노출(member/internal 격리 폐기).
       return {
-        profile, sections: sectionMap, members: memberRows, memory, tokens, runtimeConfig, mcpServers,
+        profile, sections: sectionMap, sectionDefaults: GUIDE_SECTION_DEFAULTS,
+        members: memberRows, memory, tokens, runtimeConfig, mcpServers,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? [...RESERVED_TOOL_NAMES] : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
@@ -144,6 +151,22 @@ export const deliveryCapabilities: Capability[] = [
       const name = p.display_name?.trim() || p.name?.trim() || "조직";
       return { context: await previewMemberContext(name) };
     }),
+
+  // ── 컨텍스트 온톨로지 가이드 미리보기 — '이 편집 부분만'(Knowledge Index) 을 렌더한다. ──
+  //  body_md(미저장 편집값)를 받아 ${rules}/${area} 를 라이브 데이터로 채워 실제 주입 모습을 보여준다(WYSIWYG, 편집 즉시).
+  //  body_md 생략/공백이면 buildKnowledgeIndex 가 코드 기본 템플릿으로 폴백. 공유 맥락 미리보기라 scope null(인증만).
+  {
+    name: "org_guide_preview", title: "컨텍스트 온톨로지 가이드 미리보기",
+    description: "컨텍스트 온톨로지 가이드 템플릿(편집값)에 카테고리·강제규칙을 채워 실제 주입되는 Knowledge Index 만 렌더한다(전체 맥락 아님).",
+    scope: null, input: {}, expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/guide-preview"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>) => {
+      const bodyMd = typeof input?.body_md === "string" ? input.body_md : undefined;
+      const { buildKnowledgeIndex, categoryMapForIndex, wikiCategoryMap } = await import("../org/materialize.js");
+      const { listKnowledge } = await import("../v6/knowledge-store.js");
+      const [knowledge, categoryMap, wikiCats] = await Promise.all([listKnowledge({ lifecycle: "active", limit: 500 }), categoryMapForIndex(), wikiCategoryMap()]);
+      return { context: buildKnowledgeIndex(knowledge, categoryMap, bodyMd, wikiCats) };
+    },
+  },
 
   // ── 지식유형/수집 ground-truth(#/learn) — kind_registry + data_source 를 그대로 렌더(비개발자 학습 화면). ──
   //  D-GT: 분류기준·저장방식·전달방식·소스별 수집방식의 단일 출처. 읽기전용(scope null = 인증만), REST 전용.
@@ -165,21 +188,27 @@ export const deliveryCapabilities: Capability[] = [
       return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
     }),
 
-  // ── 섹션(강제규칙·회사맥락) markdown 편집 ──
+  // ── 섹션 markdown 편집 — 강제규칙·회사맥락 + 컨텍스트 온톨로지 가이드(Knowledge Index 전체 템플릿). ──
   restOnly("org_update_section", "조직 섹션 수정",
-    "강제규칙(managed-policy)·회사맥락(org-defaults) markdown 을 저장한다.",
+    "강제규칙(managed-policy)·회사맥락(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide) markdown 을 저장한다.",
     [{ method: "POST", paths: ["/api/ui/org/section"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const section = str(input.section, "section", 50);
-      if (section !== "managed-policy" && section !== "org-defaults") {
-        throw new HttpError(400, "section 은 managed-policy|org-defaults 만 허용됩니다");
+      // 허용 섹션 = 코어 2개 + 가이드 1개(GUIDE_SECTION_DEFAULTS 키). 그 외는 거부(임의 R ku 우회 차단).
+      const isGuide = Object.prototype.hasOwnProperty.call(GUIDE_SECTION_DEFAULTS, section);
+      if (section !== "managed-policy" && section !== "org-defaults" && !isGuide) {
+        throw new HttpError(400, "허용되지 않은 섹션입니다(managed-policy|org-defaults|context-ontology-guide)");
       }
       const body = str(input.body_md ?? "", "body_md", 60000);
       // managed-policy 는 32KiB 한도(Codex) — 합성 문서 머리에 항상 실리므로 길면 경고가 아니라 차단.
       if (section === "managed-policy" && Buffer.byteLength(body, "utf8") > 16 * 1024) {
         throw new HttpError(400, "강제 규칙이 너무 깁니다(16KiB 초과) — 짧고 절대적인 규칙만 두세요");
       }
-      assertNoHardSecrets(body, "body_md"); // P8: 강제규칙/회사맥락은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
+      // 가이드 템플릿은 인덱스 골격이라 길지 않아야 한다 — 16KiB 초과 차단(과편집·본문 오입력 방지).
+      if (isGuide && Buffer.byteLength(body, "utf8") > 16 * 1024) {
+        throw new HttpError(400, "가이드가 너무 깁니다(16KiB 초과) — 인덱스 골격 안내만 두세요");
+      }
+      assertNoHardSecrets(body, "body_md"); // P8: 가이드/규칙/맥락은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
       return { section: await updateSection(section, body, actorOf(user), "web") };
     }),
 
@@ -235,6 +264,8 @@ export const deliveryCapabilities: Capability[] = [
       const memory = await upsertMemory({
         name: slug(input.name, "name"),
         title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
+        // 카드 표시용 '쉬운 한 줄' — 빈 문자열은 클리어(null → title 폴백), 미전송은 보존(undefined).
+        summary: input.summary === undefined ? undefined : (str(input.summary, "summary", 200).trim() || null),
         body_md: memoryBody,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
         domain_key: domainKey,
@@ -331,15 +362,16 @@ export const deliveryCapabilities: Capability[] = [
       // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는
       //  비-admin 에게 노출 안 함 — 설치 번들(.lively/work-roots, 멤버 본인 설치 경로)로만 전달.
       const c = await getRuntimeConfig();
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice };
+      // write_tools(기록 인정 툴 목록)도 훅이 동적으로 읽음 — 툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK).
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice, write_tools: c.write_tools };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
-    "훅 활성/비활성·work-roots·writeback 너지 + http_proxy 안전 화이트리스트(allowed_auth_envs·url_allowlist)를 저장한다.",
+    "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts)를 저장한다.",
     [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
-        allowed_auth_envs?: string[]; url_allowlist?: string[];
+        allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[]; write_tools?: string[];
       } = {};
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -367,6 +399,19 @@ export const deliveryCapabilities: Capability[] = [
       if (input.url_allowlist !== undefined) {
         if (!Array.isArray(input.url_allowlist)) throw new HttpError(400, "url_allowlist 는 배열이어야 합니다");
         patch.url_allowlist = input.url_allowlist.map((u) => str(u, "url_allowlist[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      if (input.allowed_db_hosts !== undefined) {
+        if (!Array.isArray(input.allowed_db_hosts)) throw new HttpError(400, "allowed_db_hosts 는 배열이어야 합니다");
+        patch.allowed_db_hosts = input.allowed_db_hosts.map((h) => str(h, "allowed_db_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      if (input.write_tools !== undefined) {
+        if (!Array.isArray(input.write_tools)) throw new HttpError(400, "write_tools 는 배열이어야 합니다");
+        // 비우면 훅 내장 기본목록 사용(오버라이드 해제). 각 항목은 lively MCP 툴 '이름' 형식(접두사 mcp__lively__ 없이).
+        patch.write_tools = input.write_tools.map((t) => str(t, "write_tools[]", 100).trim()).filter(Boolean);
+        for (const t of patch.write_tools) {
+          if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(t)) throw new HttpError(400, `write_tools 항목 '${t}' 는 툴 이름 형식이어야 합니다(영문/숫자/_)`);
+        }
+        if (patch.write_tools.length > 100) throw new HttpError(400, "write_tools 가 너무 많습니다(100개 이하)");
       }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
@@ -565,6 +610,7 @@ export const deliveryCapabilities: Capability[] = [
     "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(풀 회수).",
     [{ method: "POST", paths: ["/api/ui/org/db-source"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
+      const cfg = await getRuntimeConfig(); // host·auth_ref 화이트리스트 검증 공용(운영자 통제 경계)
       const name = slug(input.name, "name");
       const driver = input.driver === undefined ? "postgres" : str(input.driver, "driver", 20);
       if (driver !== "postgres") throw new HttpError(400, "driver 는 postgres 만 지원합니다(1차 pg-only)");
@@ -584,7 +630,7 @@ export const deliveryCapabilities: Capability[] = [
           if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름)로 참조하세요");
           if (ins.hasHostAddr) throw new HttpError(400, "url 에 hostaddr 파라미터는 허용되지 않습니다");
           if (!ins.host) throw new HttpError(400, "url 이 올바른 접속문자열이 아닙니다(host 없음)");
-          if (await isHostBlocked(ins.host)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${ins.host} — 외부 DB host 만 허용됩니다`);
+          if (await isHostBlocked(ins.host, cfg.allowed_db_hosts)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${ins.host} — 외부 DB host 만 허용됩니다(사설/localhost 는 런타임설정 allowed_db_hosts 에 먼저 등록하세요)`);
         }
       }
       // auth_ref — 환경변수 이름 형식 + 화이트리스트(인프라 시크릿 차단).
@@ -594,7 +640,6 @@ export const deliveryCapabilities: Capability[] = [
         else {
           authRef = str(input.auth_ref, "auth_ref", 100).trim();
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef)) throw new HttpError(400, "auth_ref 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
-          const cfg = await getRuntimeConfig();
           if (!isSecretRefAllowed(authRef, cfg.allowed_db_secret_refs)) {
             throw new HttpError(400, `auth_ref '${authRef}' 는 허용목록(allowed_db_secret_refs)에 없습니다 — 런타임 설정에 먼저 추가하세요`);
           }

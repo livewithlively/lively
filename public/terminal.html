@@ -71,33 +71,37 @@
   .preview-body pre.raw { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; }
 
   /* 설정 팝오버 */
-  .pop-back { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .pop-back { position: fixed; inset: 0; background: rgba(0,0,0,.38); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 50; }
   .pop { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; width: 340px; max-width: 92vw; }
   .pop h3 { margin: 0 0 12px; font-size: 15px; }
   .pop .field { margin-bottom: 12px; }
   .pop label { display: block; font-size: 12px; color: var(--fg-dim); margin-bottom: 4px; }
   .pop select, .pop input { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); font: inherit; }
   .pop .pop-close { margin-top: 6px; }
-  /* 사용법 안내 팝업 */
-  .pop.pop-help { width: 500px; max-width: 92vw; max-height: 82vh; overflow: auto; }
-  .pop.pop-help h3 { margin: 0 0 4px; font-size: 16px; }
-  .help-intro { margin: 0 0 4px; font-size: 12.5px; color: var(--fg-dim); line-height: 1.55; }
-  .help-sec { margin-top: 18px; }
-  .help-sec h4 { margin: 0 0 9px; font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--accent); }
-  .help-list { border: 1px solid var(--border); border-radius: 11px; overflow: hidden; background: var(--bg); }
-  .help-item, .help-line { padding: 9px 13px; font-size: 13px; line-height: 1.5; border-top: 1px solid var(--border); }
-  .help-list > :first-child { border-top: none; }
-  .help-item { display: flex; gap: 14px; align-items: baseline; }
-  .help-item .k { flex: 0 0 132px; display: flex; flex-wrap: wrap; gap: 5px; }
+  /* 사용법 안내 팝업 — 미니멀(보더리스 리스트 · 키캡 정렬 · 여백 위주) */
+  .pop.pop-help { position: relative; width: 460px; max-width: 92vw; max-height: 82vh; padding: 0; overflow: hidden;
+    display: flex; flex-direction: column; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,.28);
+    animation: helpPop .16s ease-out; }
+  @keyframes helpPop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+  .help-x { position: absolute; top: 15px; right: 15px; width: 28px; height: 28px; border: none; background: transparent;
+    color: var(--fg-dim); font-size: 14px; line-height: 1; border-radius: 7px; cursor: pointer; z-index: 1; }
+  .help-x:hover { background: rgba(127,127,127,.12); color: var(--fg); }
+  .help-head { flex: 0 0 auto; padding: 22px 24px 14px; border-bottom: 1px solid var(--border); }
+  .pop.pop-help h3 { margin: 0; font-size: 16px; font-weight: 700; }
+  .help-intro { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-dim); line-height: 1.5; }
+  .help-body { flex: 1 1 auto; overflow: auto; padding: 6px 24px 20px; }
+  .help-sec { margin-top: 20px; }
+  .help-sec-t { margin: 0 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .03em; color: var(--fg-dim); }
+  .help-list { display: flex; flex-direction: column; }
+  .help-item { display: flex; gap: 14px; align-items: baseline; padding: 5px 0; font-size: 13px; line-height: 1.5; }
+  .help-item .k { flex: 0 0 104px; display: flex; flex-wrap: wrap; gap: 5px; }
   .help-item .d { flex: 1; min-width: 0; color: var(--fg); }
-  .help-line b { color: var(--fg); font-weight: 700; }
-  .help-line span { color: var(--fg-dim); }
-  .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; padding: 2px 8px;
-    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 7px; background: var(--bg2); color: var(--fg);
+  .help-tool { padding: 5px 0; font-size: 13px; line-height: 1.5; }
+  .help-tool b { color: var(--fg); font-weight: 700; }
+  .help-tool span { color: var(--fg-dim); }
+  .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); color: var(--fg);
     font-family: ui-monospace, monospace; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-  .help-note { margin-top: 16px; padding: 11px 13px; font-size: 12.5px; line-height: 1.55; color: var(--fg-dim);
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; }
-  .pop.pop-help .pop-close { width: 100%; margin-top: 16px; padding: 9px; }
 
   /* 마크다운 미리보기 */
   .md { line-height: 1.65; font-size: 14px; }

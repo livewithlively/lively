@@ -32,6 +32,19 @@ export interface IngestClassification {
 // kind 통제어휘(본질 4종, V4-P2a CHECK narrow 와 정합). LLM 응답 가드.
 const VALID_KINDS = new Set(["R", "K", "H", "W"]);
 
+// ── v6 라우팅 — 외부 미러를 어느 v6 엔티티로 적재할지 결정(connector-mirror 가 호출). ──
+//  v6 는 kind(R/K/H/W) 컬럼을 폐기하고 외부 작업(구 W ku)을 project(level=task/subtask)로 흡수했으므로,
+//  미러는 **소스로 갈라** 적재한다: clickup task → project, notion 등 K류 → knowledge(observed).
+//  구 KIND_MAP(kindForSource)의 의미를 **그대로 재사용**(재인코딩 없음 — 단일 source 표): kind 'W'(=작업)이면
+//  project, 그 외 정의된 kind(K 등 — 지식/산출물)이면 knowledge, 미정의(undefined = slack 등)이면 null(미러 skip).
+//  v6 에 kind 가 없으므로 'W'/'K' 라벨 자체는 미적재 — 라우팅 분기에만 쓴다(task 의 "drop the kind notion" 충족).
+export type V6IngestTarget = "project" | "knowledge" | null;
+export function routeIngestV6(type: string, system: string): V6IngestTarget {
+  const kind = kindForSource(type, system);
+  if (kind === undefined) return null; // 미정의 조합 — 미러 skip(보수적, 임의 분류 금지).
+  return kind === "W" ? "project" : "knowledge"; // W=작업→project, 그 외(K 등)=지식→knowledge(observed).
+}
+
 // 무키 기계 폴백 — 현 미러 인입이 kind 를 정하던 방식과 **정확히 동일**(external-identity 중앙 함수).
 //  knowledge-mirror.knowledgeKindFor / 종전 KIND_MAP[`${type}:${system}`] 와 byte-identical.
 function mechanicalFallback(source: string): IngestClassification {

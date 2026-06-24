@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { redactString } from "./redact.js";
 import { previewMemberContext } from "./publish.js";
-import { getOrgProfile } from "./store.js";
+import { getOrgProfile, getRuntimeConfig } from "./store.js";
 
 export interface HookPreview {
   id: string;
@@ -100,9 +100,14 @@ export async function previewHooks(): Promise<{ hooks: HookPreview[] }> {
   };
 
   // ── 3) stop-writeback-gate (Stop) — '작업했으나 기록 안 한' 세션 종료 시 1회 너지. ──
-  //  주입 메시지 = 훅 파일의 REASON 상수(설치 파일 단일 출처에서 추출, 복붙 금지). decision:block 의 reason.
+  //  실제 훅 로직 = readHooksConfig()?.writeback_notice || REASON. 즉 어드민이 runtime-config 에 너지문구를
+  //  설정하면 그게 우선이고, 없으면 설치 훅 파일의 REASON 기본값. 미리보기도 이 effective 값을 그대로 보여줘야
+  //  드리프트(미리보기≠실주입)가 없다 — DB 오버라이드 우선, 폴백은 파일 REASON 추출(복붙 금지·설치 단일 출처).
   const stopSrc = await readHookSrc("stop-writeback-gate.mjs");
-  const reason = stopSrc ? extractConstString(stopSrc, "REASON") : null;
+  const fileReason = stopSrc ? extractConstString(stopSrc, "REASON") : null;
+  const rc = await getRuntimeConfig().catch(() => null);
+  const override = rc?.writeback_notice?.trim() ? rc.writeback_notice.trim() : null;
+  const reason = override ?? fileReason;
   const stop: HookPreview = {
     id: "stop-writeback-gate",
     title: "종료 시 기록 너지(조건부 1회)",
@@ -110,7 +115,9 @@ export async function previewHooks(): Promise<{ hooks: HookPreview[] }> {
     // 조건(lively work 세션 · 파일작업 O · 기록 X · 세션당 1회) 충족 시에만 아래 reason 이 주입된다.
     message: redactString(reason ?? "(설치된 stop-writeback-gate 훅의 너지 문구를 읽지 못했습니다)"),
     fidelity: reason ? "exact" : "approximate",
-    source: reason ? join(hooksDir(), "stop-writeback-gate.mjs") + " (REASON 상수)" : "(훅 파일 미발견)",
+    source: override
+      ? "gateway:runtime-config (writeback_notice 오버라이드 — 어드민 설정값)"
+      : (fileReason ? join(hooksDir(), "stop-writeback-gate.mjs") + " (REASON 기본값)" : "(훅 파일 미발견)"),
   };
 
   return { hooks: [preload, workFlag, stop] };

@@ -11,8 +11,13 @@ import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
+import { initV6Schema } from "./v6/schema.js";
 import { registerWebUi } from "./web.js";
 import { registerTerminal } from "./terminal.js";
+import { registerProjectRoutes, registerProjectV6Routes } from "./project-routes.js";
+import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
+import { listProjectActivities } from "./org/store.js";
+import { createProjectFolder } from "./project-fs.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -75,6 +80,22 @@ app.get("/install", auth, async (_req, res) => {
 
 // Lively Context 웹 UI — /api/ui/*(REST, 동일 verifier 재사용) + /ui(정적 프론트).
 registerWebUi(app, verifier);
+// 프로젝트 상세 — 공유 폴더(파일)·터미널 세션·타임라인. 직접 라우트(파일 스트림이라 capability restMounts 미적합).
+registerProjectRoutes(app, verifier);
+// v6(projects2) 상세 — 동일 파일/세션/타임라인 로직, 데이터만 v6 project. folder 비면 lazy 생성(데이터 쓰기, 스키마 불변).
+registerProjectV6Routes(app, verifier, {
+  getProject: async (id) => {
+    const p = await v6GetProject(id);
+    return p ? { id: p.id, name: p.name, folder: p.folder } : undefined;
+  },
+  isProjectMember: (id, m) => v6IsProjectMember(id, m),
+  listProjectActivities: (id, a, l) => listProjectActivities(id, a, l),
+  ensureFolder: async (project) => {
+    const folder = await createProjectFolder(project.name);
+    await v6SetProjectFolder(project.id, folder, { source: "web" });
+    return folder;
+  },
+});
 
 const server = app.listen(PORT, () => {
   logger.info(`context-ontology listening on :${PORT}/mcp`);
@@ -93,6 +114,9 @@ const server = app.listen(PORT, () => {
       .then(() => logger.info("org schema ready"))
       .then(() => initDomainmapSchema())
       .then(() => logger.info("domainmap schema ready"))
+      // v6 그린필드 스키마(category/knowledge/project + 정션) — 레거시 이후 직렬(FK 순서: category→knowledge/project→정션→activity·mapping·debt ALTER).
+      .then(() => initV6Schema())
+      .then(() => logger.info("v6 schema ready"))
       // 임베딩 초기화(OFF 기본 — enabled 일 때만, 비치명). pgvector 부재 시 graceful 폴백(warn 후 반환).
       .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
       .catch((err) => logger.error({ err }, "schema init failed"));
