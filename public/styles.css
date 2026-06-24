@@ -1343,9 +1343,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjv-tasks-card .pjv-addrow.editing,
 .pjv-trow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px 92px 112px 34px;
+  grid-template-columns: minmax(0, 1fr) 104px 100px 124px 34px;
   align-items: center;
-  gap: 4px;
+  gap: 18px;
 }
 .pjv-addrow.editing { padding: 2px 6px; }
 .pjv-thead {
@@ -1381,9 +1381,11 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjv-trow-subs[hidden] { display: none; }
 
 /* 상태 점 — 빈 원(할 일)·반채움(진행)·체크(완료) */
-.pjv-status-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 10px; line-height: 1; }
+.pjv-status-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 10px; line-height: 1; }
 .pjv-status-dot:hover { border-color: var(--blue); }
 .pjv-status-dot.sm { width: 15px; height: 15px; font-size: 9px; cursor: default; }
+/* 할 일 = 점선 원(클릭업식). 진행 중·완료는 실선으로 되돌린다. */
+.pjv-status-dot.inprog, .pjv-status-dot.done { border-style: solid; }
 .pjv-status-dot.inprog { border-color: var(--blue); color: var(--blue); }
 .pjv-status-dot.done { background: var(--mint); border-color: var(--mint); color: #fff; }
 .pjv-status-glyph { display: inline-flex; }
@@ -1407,8 +1409,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 
 /* 우선순위 깃발 */
 .pjv-flag { display: inline-flex; align-items: center; gap: 4px; }
-.pjv-flag-glyph { font-size: 14.5px; line-height: 1; }
-.pjv-flag-label { font-size: 13.5px; font-weight: 600; }
+.pjv-flag-glyph { font-size: 16px; line-height: 1; }
+.pjv-flag-label { font-size: 15px; font-weight: 600; }
 .pjv-flag.urgent { color: var(--coral-text); }
 .pjv-flag.high { color: #E08A2B; }
 .pjv-flag.normal { color: var(--blue); }
@@ -1426,6 +1428,18 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 인라인 추가행(클릭업식) + 빈 상태 */
 .pjv-task-total { font-size: 12px; font-weight: 600; color: var(--muted-2); }
 .pjv-empty-hint { font-size: 14px; color: var(--ink-sub); padding: 12px 6px 2px; line-height: 1.5; }
+
+/* Closed 토글 버튼(클릭업식 툴바 필) + popover + 스위치 — 닫힌(완료) 항목 노출 제어. */
+.pjv-closed-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 10px 4px 8px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-closed-btn:hover { background: var(--bg-tint); color: var(--ink); }
+.pjv-closed-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
+.pjv-closed-ic { width: 15px; height: 15px; flex: none; }
+.pjv-closed-pop { min-width: 172px; padding: 4px; }
+.pjv-closed-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; font-size: 13px; color: var(--ink); }
+.pjv-switch { position: relative; flex: none; width: 34px; height: 20px; border: none; border-radius: 999px; background: var(--muted-3); cursor: pointer; padding: 0; transition: background .15s ease; }
+.pjv-switch.on { background: var(--blue); }
+.pjv-switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s ease; }
+.pjv-switch.on .pjv-switch-knob { transform: translateX(14px); }
 .pjv-empty-hint b { color: var(--ink); }
 .pjv-empty-chip { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 600; color: var(--blue); background: var(--bg-tint-2); border-radius: 6px; padding: 1px 7px; }
 .pjv-addrow { padding: 2px 0; }
