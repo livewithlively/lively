@@ -1,14 +1,8 @@
 // Item store — DESIGN §5 canonical schema. 모든 소스(Slack/Discord/Notion…)가 여기로 정규화돼 들어온다.
 // 별도 Postgres(ITEMS_DATABASE_URL). 도메인/프로젝트는 (repo, key) 소프트참조로 연결(domainmap 은 별 DB).
 import pg from "pg";
-import { resolveRepo } from "../domainmap/core/types.js";
-import {
-  loadCandidates,
-  validateDomainKey,
-  type Candidates,
-} from "./mapping-candidates.js";
 import { logger } from "../log.js";
-// v6 컷오버: 커넥터 미러는 v6 knowledge/project 로 적재한다(구 knowledge_unit 미러는 dead/parallel 로 보존).
+// v6 컷오버: 커넥터 미러는 v6 knowledge/project 로 적재한다(구 knowledge_unit 미러·테이블은 2026-06-24 제거됨).
 //  소스로 갈라 적재: clickup task → project(level=task/subtask), notion 등 K류 → knowledge(observed).
 //  멱등(external 부분유니크)·감사 노이즈 게이트·H1 redact 는 connector-mirror 내부에 이식돼 있다.
 import {
@@ -42,7 +36,7 @@ export interface RawItem {
 
 export async function initItemSchema(): Promise<void> {
   // ── item 폐기 컷오버: item/item_domain/item_project/relation/item_mapping_audit/item_legacy CREATE 제거. ──
-  //  ku(knowledge_unit*)가 단일 캐노니컬 표면(initOrgSchema 가 생성). 이 함수는 더 이상 item 물리 객체를
+  //  v6 knowledge 가 단일 캐노니컬 표면(initV6Schema 가 생성). 이 함수는 더 이상 item 물리 객체를
   //  만들지 않는다 → 재기동해도 드랍된 레거시 테이블이 되살아나지 않는다(drop-item-legacy.mjs 의 '스키마
   //  재생성 방지' 요건 충족). 보존(item 무관 보조층): person/person_identity(actor 신원), connector_state
   //  (증분 커서), pm_write_audit(pm op 감사). 라이브 드랍 전까지 기존 item 테이블/데이터는 비파괴로 남아 있다
@@ -338,12 +332,7 @@ export async function ingestItems(items: RawItem[]): Promise<number> {
   return n;
 }
 
-// ── item 폐기 컷오버: 구 resolveParents(parent_external_id → item.parent_id 별도 패스)는 ku 의 parent_name
-//    자기참조를 mirror 가 적재 시점에 즉시 채우므로 불필요해졌다. 호출자(run-sync/run-backfill) 호환을 위해
-//    no-op 셰임으로 남긴다(0 반환 — 'linked' 카운트는 ku parent_name 으로 이미 해소됨). ──
-export async function resolveParents(): Promise<number> {
-  return 0;
-}
+// v6 컷오버: 구 resolveParents(parent_external_id→별도 패스) 제거 — parent_name 자기참조를 connector-mirror 가 적재 시점에 즉시 채운다.
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -367,36 +356,23 @@ export interface UiStats {
   coverage: UiCoverageRow[];
 }
 
-// 개요 히어로/커버리지 카드용 통계 집계 — item 폐기 컷오버로 knowledge_unit(observed 미러)+kud/kup 기준.
-//  total/bySystem/byType/daily 는 observed 수집물(confidence='observed')만(저작물 R/K/H 제외 — 활동 통계 의미 보존).
-//  type 은 fields._item_type(원 item.type 무손실 보존). threadReplies 는 parent_name 보유 수.
-//  coverage 는 kud(살아있는 매핑 proposed|confirmed)만 — 구 item_domain 카운트와 동의미.
+// 개요 히어로/커버리지 카드용 통계 집계 — v6 knowledge(provenance='observed' 외부미러) 기준. coverage 는 category=repo-free 라 빈 배열.
+//  total/bySystem/byType/daily 는 observed 수집물(provenance='observed')만(저작물 R/K/H 제외 — 활동 통계 의미 보존).
+//  type 은 fields._item_type(원 item.type 무손실 보존). threadReplies 는 parent_name 보유 수. coverage 는 v6에서 항상 빈 배열.
 export async function uiStats(): Promise<UiStats> {
-  const OBS = `confidence='observed'`;
-  const coverageSql = (table: "knowledge_unit_domain") => `
-    SELECT repo, count(DISTINCT name) FILTER (WHERE state IN ('proposed','confirmed'))::int AS items,
-           count(DISTINCT name) FILTER (WHERE state='confirmed')::int AS confirmed,
-           count(DISTINCT name) FILTER (WHERE state='proposed')::int AS proposed
-    FROM ${table} GROUP BY repo`;
-  const [head, bySystem, byType, daily, dom] = await Promise.all([
+  // v6 컷오버(2026-06-24): observed 외부미러 통계 소스를 knowledge_unit → knowledge(provenance='observed')로 리포인트.
+  const OBS = `provenance='observed'`;
+  //  repo별 도메인 매핑 coverage 는 knowledge_unit_domain 폐기로 사라짐(category=repo-free) → 빈 coverage 유지.
+  const [head, bySystem, byType, daily] = await Promise.all([
     itemsPool.query(`SELECT count(*)::int AS total, max(occurred_at) AS last,
                             count(*) FILTER (WHERE parent_name IS NOT NULL)::int AS replies
-                     FROM knowledge_unit WHERE ${OBS}`),
-    itemsPool.query(`SELECT external_system AS system, count(*)::int AS count FROM knowledge_unit WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
-    itemsPool.query(`SELECT fields->>'_item_type' AS type, count(*)::int AS count FROM knowledge_unit WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
+                     FROM knowledge WHERE ${OBS}`),
+    itemsPool.query(`SELECT external_system AS system, count(*)::int AS count FROM knowledge WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
+    itemsPool.query(`SELECT fields->>'_item_type' AS type, count(*)::int AS count FROM knowledge WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
     // 일자 키는 Asia/Seoul 고정 — 클라이언트(app.js 스파크라인)도 같은 TZ 로 키를 만들므로 서버 TZ 에 흔들리지 않음.
     itemsPool.query(`SELECT (occurred_at AT TIME ZONE 'Asia/Seoul')::date::text AS day, count(*)::int AS count
-                     FROM knowledge_unit WHERE ${OBS} AND occurred_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1`),
-    itemsPool.query(coverageSql("knowledge_unit_domain")),
+                     FROM knowledge WHERE ${OBS} AND occurred_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1`),
   ]);
-  const cov = new Map<string, UiCoverageRow>();
-  const blank = (repo: string): UiCoverageRow =>
-    ({ repo, domainItems: 0, domainProposed: 0, domainConfirmed: 0 });
-  for (const r of dom.rows as { repo: string; items: number; confirmed: number; proposed: number }[]) {
-    const c = cov.get(r.repo) ?? blank(r.repo);
-    c.domainItems = r.items; c.domainProposed = r.proposed; c.domainConfirmed = r.confirmed;
-    cov.set(r.repo, c);
-  }
   const h = head.rows[0] as { total: number; last: Date | null; replies: number };
   return {
     total: h.total,
@@ -405,15 +381,9 @@ export async function uiStats(): Promise<UiStats> {
     bySystem: bySystem.rows,
     byType: byType.rows,
     recentDaily: daily.rows,
-    coverage: [...cov.values()].sort((a, b) => a.repo.localeCompare(b.repo)),
+    coverage: [], // v6: category=repo-free → per-repo coverage 개념 없음(빈 배열)
   };
 }
 
-// 매핑 테이블에 등장하는 repo 목록 — repo 셀렉터의 단일 소스. item 폐기 컷오버로 kud 기준.
-// rejected-only repo 는 제외(살아있는 매핑이 있는 repo 만).
-export async function listMappingRepos(): Promise<string[]> {
-  const r = await itemsPool.query(
-    `SELECT DISTINCT repo FROM knowledge_unit_domain WHERE state <> 'rejected' ORDER BY 1`);
-  return (r.rows as { repo: string }[]).map((x) => x.repo);
-}
+// v6 컷오버: 구 listMappingRepos(knowledge_unit_domain 기준 repo 목록) 제거 — category 는 repo-free라 개념 소멸. repo 목록은 listReposV6 단일 소스.
 

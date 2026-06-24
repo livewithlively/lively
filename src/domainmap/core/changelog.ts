@@ -39,7 +39,8 @@ export async function logChange(db: Db, a: LogChangeArgs): Promise<number> {
 // Restore: revert a change_log entry to its 'before' snapshot.
 // Tables a restore is allowed to touch. entity_type is system-written (never user
 // input), but this allow-list keeps the interpolated identifier provably safe.
-const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_entity", "mapping", "debt_finding", "activity", "activity_touch"]);
+// v6 드랍(2026-06-24): "domain" 제거(테이블 드랍 → category 는 org_content_audit/content_restore 경로로 복원).
+const RESTORABLE = new Set(["repo", "scan_run", "code_unit", "data_entity", "mapping", "debt_finding", "activity", "activity_touch"]);
 
 // Per-table allow-list of restorable columns (mirrors the schema in init()).
 // A 'before' snapshot is attacker-influenced only via change_log content, which is
@@ -49,10 +50,10 @@ const RESTORABLE = new Set(["repo", "scan_run", "domain", "code_unit", "data_ent
 const RESTORE_COLUMNS: Record<string, Set<string>> = {
   repo: new Set(["name", "root_path", "detected_stack", "created_at", "last_scan_at", "state", "last_refreshed_sha", "git_url", "default_branch"]),
   scan_run: new Set(["repo_id", "runbook", "harness", "actor_type", "actor_id", "started_at", "finished_at", "summary"]),
-  domain: new Set(["repo_id", "key", "name", "description", "state", "cross_cutting", "origin", "status", "created_at", "updated_at", "should"]),
   code_unit: new Set(["repo_id", "kind", "path", "label", "created_at", "state", "prev_path", "updated_at"]),
   data_entity: new Set(["repo_id", "kind", "name", "source", "created_at"]),
-  mapping: new Set(["repo_id", "target_kind", "target_id", "domain_id", "origin", "confidence", "status", "run_id", "created_at", "updated_at"]),
+  // v6: mapping 은 category_id 로 착지(구 domain_id 폐기). 옛 domain_id 스냅샷은 비복원(레거시).
+  mapping: new Set(["repo_id", "target_kind", "target_id", "category_id", "origin", "confidence", "status", "run_id", "created_at", "updated_at"]),
   debt_finding: new Set(["repo_id", "kind", "title", "detail", "cited_refs", "status", "origin", "run_id", "created_at", "updated_at"]),
   activity: new Set(["type", "title", "body", "author_person", "author_agent", "session_id", "repo_id", "commit_sha", "committed_at", "external_system", "external_instance", "external_id", "external_url", "should_review", "is_review", "created_at"]),
   activity_touch: new Set(["activity_id", "target_kind", "target_id", "created_at"]),
@@ -63,8 +64,7 @@ const RESTORE_COLUMNS: Record<string, Set<string>> = {
 // delete would orphan mappings/debts/scan-run-scoped rows.
 async function restoreDependents(table: string, eid: number, _cur: unknown, db: Db): Promise<any[]> {
   switch (table) {
-    case "domain":
-      return q(db, "SELECT id FROM mapping WHERE domain_id=$1 LIMIT 1", [eid]);
+    // v6 드랍: "domain" 케이스 제거(테이블 드랍). category 의존성은 mapping.category_id(FK CASCADE)가 관리.
     case "code_unit":
       return q(db, "SELECT id FROM mapping WHERE target_kind='code_unit' AND target_id=$1 LIMIT 1", [eid]);
     case "data_entity":
@@ -72,9 +72,8 @@ async function restoreDependents(table: string, eid: number, _cur: unknown, db: 
     case "scan_run":
       return q(db, "SELECT id FROM mapping WHERE run_id=$1 UNION ALL SELECT id FROM debt_finding WHERE run_id=$1 LIMIT 1", [eid]);
     case "repo": {
-      // Almost everything is repo-scoped; any child row blocks the delete.
-      return q(db, `SELECT 1 FROM domain WHERE repo_id=$1
-        UNION ALL SELECT 1 FROM code_unit WHERE repo_id=$1
+      // 레포 스코프 자식(코드측)이 있으면 삭제 차단. v6: domain 은 repo-free(category)라 union 에서 제외.
+      return q(db, `SELECT 1 FROM code_unit WHERE repo_id=$1
         UNION ALL SELECT 1 FROM data_entity WHERE repo_id=$1
         UNION ALL SELECT 1 FROM mapping WHERE repo_id=$1
         UNION ALL SELECT 1 FROM debt_finding WHERE repo_id=$1
@@ -145,46 +144,3 @@ export async function historyGlobal(limit: unknown): Promise<any[]> {
 //  NULL→값, 값→NULL, 값→다른값 모두 잡고 동일값/둘다NULL 은 제외). 그 변경을 유발한 작업(activity)을
 //  activity_id 로 LEFT JOIN(귀속 없으면 activity_* null). before/after 는 도메인 전체 스냅샷이라 should
 //  필드만 추출(->>'should'). 현 도메인 key/name 도 함께(개명 후에도 식별).
-export async function shouldChangeHistory(name: string, limit: unknown = 50): Promise<any[]> {
-  const r = await getRepo(name);
-  return q(dmPool(), `
-    SELECT cl.id AS change_id, cl.at, cl.op, cl.entity_id AS domain_id,
-           cl.actor_type, cl.actor_id, cl.note,
-           cl.before->>'should' AS should_before,
-           cl.after->>'should'  AS should_after,
-           d.key AS domain_key, d.name AS domain_name,
-           a.id AS activity_id, a.type AS activity_type, a.title AS activity_title,
-           a.author_person, a.author_agent, a.commit_sha,
-           a.committed_at AS activity_committed_at, a.created_at AS activity_created_at
-    FROM change_log cl
-    LEFT JOIN domain d ON d.id = cl.entity_id
-    LEFT JOIN activity a ON a.id = cl.activity_id
-    WHERE cl.repo_id = $1
-      AND cl.entity_type = 'domain'
-      AND (cl.before->>'should') IS DISTINCT FROM (cl.after->>'should')
-    ORDER BY cl.id DESC LIMIT $2`, [r.id, saneLimit(limit)]);
-}
-
-// (2) commit→is 변경 이력 — is(코드 구조 = code_unit/mapping/data_entity) 변경을 그 변경을 유발한
-//  commit 작업(activity.type='commit')으로 INNER JOIN(commit 이 일으킨 것만; activity_id 미배선 행은 자연 제외).
-//  mapping 변경은 before/after 에 domain_id 가 있어 '어느 도메인의 is 가 바뀌었나' 귀속(after 우선, remove 면 before).
-//  code_unit 변경은 엔티티 라벨(path)로 표시. before/after 풀스냅샷도 함께 반환해 프론트가 '어떻게 바꿨나'를 표현.
-export async function commitIsChangeHistory(name: string, limit: unknown = 50): Promise<any[]> {
-  const r = await getRepo(name);
-  return q(dmPool(), `
-    SELECT cl.id AS change_id, cl.at, cl.op, cl.entity_type, cl.entity_id,
-           cl.actor_type, cl.actor_id, cl.note, cl.before, cl.after,
-           cu.path AS code_path, cu.label AS code_label, cu.kind AS code_kind,
-           dm.key AS domain_key, dm.name AS domain_name,
-           a.id AS activity_id, a.title AS activity_title, a.commit_sha,
-           a.author_person, a.author_agent,
-           a.committed_at AS activity_committed_at, a.created_at AS activity_created_at
-    FROM change_log cl
-    JOIN activity a ON a.id = cl.activity_id AND a.type = 'commit'
-    LEFT JOIN code_unit cu ON cl.entity_type = 'code_unit' AND cu.id = cl.entity_id
-    LEFT JOIN domain dm ON cl.entity_type = 'mapping'
-       AND dm.id = NULLIF(COALESCE(cl.after->>'domain_id', cl.before->>'domain_id'), '')::int
-    WHERE cl.repo_id = $1
-      AND cl.entity_type IN ('code_unit','mapping','data_entity')
-    ORDER BY cl.id DESC LIMIT $2`, [r.id, saneLimit(limit)]);
-}

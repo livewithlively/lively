@@ -11,23 +11,16 @@
 //   3) scope='context' + bearer — domainmap-curation 과 동일 인가 평면.
 import { z } from "zod";
 import { dmWrite, webActor } from "./domainmap-compat.js";
-import {
-  createDomain as coreCreateDomain, renameDomain as coreRenameDomain,
-  domainDeleteRefs, hardDeleteDomain,
-} from "../domainmap/core/domains.js";
+// v6: 도메인 CRUD(create/rename/delete)는 category(space='product')로 cutover — 구 domains.ts(domain 테이블) 폐기.
+//  '주제 분류' 관리섹션이 이 REST 를 호출(리스트는 이미 category 읽기) → 쓰기도 category 로 일치(단일 DB·FK CASCADE).
 import {
   createRepo as coreCreateRepo, renameRepo as coreRenameRepo, setRepoState, hardDeleteRepo,
 } from "../domainmap/core/repos.js";
-import { domainKnowledgeRefs, clearDomainKnowledgeRefs } from "../org/knowledge.js";
-import { logger } from "../log.js";
-import { assertNoHardSecrets } from "../org/redact.js";
+import { makeAudited } from "./audit-log.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import { HttpError } from "./rest-util.js";
-import type { LivelyUser } from "../context.js";
 
 const REPO_RE = /^[A-Za-z0-9._-]+$/;
-const KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
-const zid = z.number().int().positive();
 
 function parseRepo(v: unknown): string {
   if (typeof v !== "string" || !v.trim()) throw new HttpError(400, "repo 필수 — 레포를 선택하세요");
@@ -35,37 +28,9 @@ function parseRepo(v: unknown): string {
   if (s.length > 100 || !REPO_RE.test(s)) throw new HttpError(400, "repo 형식이 잘못되었습니다");
   return s;
 }
-function parseKey(v: unknown, name = "key"): string {
-  if (typeof v !== "string" || !KEY_RE.test(v.trim()) || v.trim().length > 100) {
-    throw new HttpError(400, `${name} 는 소문자 슬러그(a-z0-9, -) 1~100자여야 합니다`);
-  }
-  return v.trim();
-}
-function parseName(v: unknown, name = "name"): string {
-  if (typeof v !== "string" || !v.trim() || v.trim().length > 200) {
-    throw new HttpError(400, `${name} 은 1~200자 문자열이어야 합니다`);
-  }
-  return v.trim();
-}
 
 // audit — domainmap-curation.audited 와 동일 시맨틱(결과 시점 ok/failed, change_id/httpStatus 분리).
-async function audited<T>(
-  action: string, user: LivelyUser, ctx: CapabilityCtx | undefined,
-  extra: Record<string, unknown>, fn: () => Promise<T>,
-): Promise<T> {
-  const base = { audit: "domainmap_crud", action, by: user.userId, source: ctx?.source ?? "unknown", ...extra };
-  try {
-    const result = await fn();
-    const changeId = (result as { change_id?: unknown } | null)?.change_id;
-    logger.info({ ...base, outcome: "ok", ...(changeId !== undefined ? { changeId } : {}) });
-    return result;
-  } catch (err) {
-    const httpStatus = err instanceof HttpError ? err.status : undefined;
-    logger.info({ ...base, outcome: "failed", ...(httpStatus !== undefined ? { httpStatus } : {}),
-      error: err instanceof Error ? err.message : String(err) });
-    throw err;
-  }
-}
+const audited = makeAudited("domainmap_crud");
 
 // repo rename/deprecate 의 agent 금지 가드(M-마 capability 층). repo 는 인프라 엔티티 —
 //  에이전트가 day-2 로 만드는 것(create)까지는 허용하되, 기존 repo 의 개명·폐기는 사람 큐레이션 전용.
@@ -159,102 +124,8 @@ const repoDeprecate: Capability = {
   },
 };
 
-// ════════ domain CRUD 2종(create·rename) — edit(설명)·deprecate 는 domainmap-curation 그룹에 기존 존재 ════════
 
-const domainCreate: Capability = {
-  name: "domain_create",
-  title: "도메인 생성",
-  description:
-    "repo 하위에 도메인(통제어휘 1개)을 만든다. propose_domain 과 달리 evidence 게이트 없는 어휘 추가 경로. " +
-    "key(소문자 슬러그)·name·repo 필수, 중복/형식·rename 별칭 충돌 검증, 보호 리포 403. 신뢰우선(confirmed). " +
-    "space='product'(코드앵커 도메인, 기본)|'business'(코드매핑 없는 비즈니스 기능). 반환 {repo,id,key,status,change_id}.",
-  scope: "context",
-  input: {
-    repo: z.string().regex(REPO_RE).max(100),
-    key: z.string().trim().min(1).max(100).regex(KEY_RE).describe("소문자 슬러그 (a-z0-9, -)"),
-    name: z.string().trim().min(1).max(200),
-    description: z.string().max(4000).optional(),
-    crossCutting: z.boolean().optional(),
-    space: z.enum(["product", "business"]).optional().describe("product(코드앵커 도메인, 기본)|business(비즈니스 기능)"),
-  },
-  expose: {
-    mcp: true,
-    rest: [{
-      method: "POST",
-      paths: ["/api/ui/domainmap/domain/create"],
-      parse: (req) => {
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const out: Record<string, unknown> = { repo: parseRepo(b.repo), key: parseKey(b.key), name: parseName(b.name) };
-        if (b.description !== undefined) {
-          if (typeof b.description !== "string" || b.description.length > 4000) throw new HttpError(400, "description 은 4000자 이하 문자열이어야 합니다");
-          out.description = b.description;
-        }
-        if (b.crossCutting !== undefined) {
-          if (typeof b.crossCutting !== "boolean") throw new HttpError(400, "crossCutting 은 boolean 이어야 합니다");
-          out.crossCutting = b.crossCutting;
-        }
-        if (b.space !== undefined) {
-          if (b.space !== "product" && b.space !== "business") throw new HttpError(400, "space 는 product|business 여야 합니다");
-          out.space = b.space;
-        }
-        return out;
-      },
-    }],
-  },
-  handler: async (
-    input: { repo: string; key: string; name: string; description?: string; crossCutting?: boolean; space?: "product" | "business" }, user, ctx,
-  ) => {
-    if (input.description !== undefined) assertNoHardSecrets(input.description, "description"); // P8 평문 시크릿 hard-block
-    return audited("domain_create", user, ctx, { repo: input.repo, key: input.key }, () =>
-      dmWrite(() => coreCreateDomain(input.repo, {
-        key: input.key, name: input.name, description: input.description, cross_cutting: input.crossCutting, space: input.space,
-      }, webActor(user.userId, actorType(ctx)))));
-  },
-};
 
-const domainRename: Capability = {
-  name: "domain_rename",
-  title: "도메인 이름변경(soft-alias)",
-  description:
-    "도메인의 표시명(newName)·슬러그(newKey)를 바꾼다. ⚠ soft-alias(H3): 물리 key 는 불변이고 " +
-    "(물리key→newKey) 별칭만 적재 — items DB 와 domainmap DB 가 별 DB라 cross-DB 트랜잭션이 불가하기 때문. " +
-    "옛/새 슬러그 모두 같은 도메인으로 해소된다. merged 도메인 400, 슬러그 충돌 409, 보호 리포 403, " +
-    "agent 가 human-소유 도메인 rename 시 403. newKey/newName 중 1개 이상 필수. 반환 {repo,id,key,old_key,new_key,aliased,after,change_id}.",
-  scope: "context",
-  input: {
-    id: zid,
-    newKey: z.string().trim().min(1).max(100).regex(KEY_RE).optional().describe("새 슬러그(선택) — 물리 key 가 아니라 별칭으로 적재"),
-    newName: z.string().trim().min(1).max(200).optional().describe("새 표시명(선택)"),
-  },
-  expose: {
-    mcp: true,
-    rest: [{
-      method: "POST",
-      paths: ["/api/ui/domainmap/domain/:id/rename"],
-      parse: (req) => {
-        const id = Number(req.params.id);
-        if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "domain id 는 양의 정수여야 합니다");
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const out: Record<string, unknown> = { id };
-        if (b.newKey !== undefined) out.newKey = parseKey(b.newKey, "newKey");
-        if (b.newName !== undefined) out.newName = parseName(b.newName, "newName");
-        if (out.newKey === undefined && out.newName === undefined) {
-          throw new HttpError(400, "변경할 필드가 필수입니다 — newKey/newName 중 1개 이상");
-        }
-        return out;
-      },
-    }],
-  },
-  handler: async (input: { id: number; newKey?: string; newName?: string }, user, ctx) => {
-    // cross-layer 가드(다른 어댑터 경유에도 동일 검증).
-    if (input.newKey === undefined && input.newName === undefined) {
-      throw new HttpError(400, "변경할 필드가 필수입니다 — newKey/newName 중 1개 이상");
-    }
-    return audited("domain_rename", user, ctx,
-      { id: input.id, ...(input.newKey ? { newKey: input.newKey } : {}), ...(input.newName ? { renamed: true } : {}) },
-      () => dmWrite(() => coreRenameDomain(input.id, { newKey: input.newKey, newName: input.newName }, webActor(user.userId, actorType(ctx)))));
-  },
-};
 
 // hard-delete(영구삭제)는 비가역 — agent(MCP) 금지, 사람(웹)만. deprecate(가역·숨김)와 권한이 다르다.
 function denyAgentHardDelete(ctx: CapabilityCtx | undefined, what: string): void {
@@ -265,65 +136,6 @@ function denyAgentHardDelete(ctx: CapabilityCtx | undefined, what: string): void
 
 // ════════ hard-delete(영구삭제) 2종 — deprecate(숨김 보존)와 별개의 비가역 삭제 ════════
 
-const domainDelete: Capability = {
-  name: "domain_delete",
-  title: "도메인 영구삭제(hard-delete)",
-  description:
-    "도메인(통제어휘 1개)을 영구삭제한다 — deprecate(숨김 보존)와 달리 행 자체를 지운다(비가역). " +
-    "비즈니스 기능(space='business')도 동일 경로로 삭제(id 로 지정). 안전기본: 연결된 지식(ku domain_key·다중귀속 kud) 또는 " +
-    "도메인맵 매핑이 있으면 **막고 카운트를 반환**한다(blocked:true). force:true 면 cascade — 도메인맵 매핑/별칭/도메인 행 삭제 + " +
-    "items DB 의 ku domain_key 클리어(단위 자체는 보존)·kud 매핑 행 삭제. ⚠ 사람(웹)만 가능 — 에이전트(MCP)는 403. " +
-    "merged 도메인은 400, 보호 리포는 403. 반환(삭제): {deleted,id,key,repo,removed:{mappings,aliases,ku_cleared,kud_deleted}}.",
-  scope: "context",
-  input: { id: zid, force: z.boolean().optional().describe("연결이 있어도 cascade 삭제(기본 false — 연결 있으면 막고 카운트)") },
-  expose: {
-    mcp: true,
-    rest: [{
-      method: "POST",
-      paths: ["/api/ui/domainmap/domain/:id/delete"],
-      parse: (req) => {
-        const id = Number(req.params.id);
-        if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "domain id 는 양의 정수여야 합니다");
-        const b = (req.body ?? {}) as Record<string, unknown>;
-        const out: Record<string, unknown> = { id };
-        if (b.force !== undefined) {
-          if (typeof b.force !== "boolean") throw new HttpError(400, "force 는 boolean 이어야 합니다");
-          out.force = b.force;
-        }
-        return out;
-      },
-    }],
-  },
-  handler: async (input: { id: number; force?: boolean }, user, ctx) => {
-    denyAgentHardDelete(ctx, "도메인");
-    return audited("domain_delete", user, ctx, { id: input.id, ...(input.force ? { force: true } : {}) }, async () => {
-      // ① 사전조회(삭제 없음): 도메인 key/repo + 도메인맵 살아있는 매핑 카운트. merged/보호리포/없음은 throw.
-      const refs = await dmWrite(() => domainDeleteRefs(input.id));
-      // ② cross-DB(items): 이 key 에 귀속된 ku(단일 domain_key + 다중귀속 kud) 카운트.
-      const ku = await domainKnowledgeRefs(refs.key);
-      const totalLinks = refs.liveMappings + ku.total;
-      // ③ 가드: force 아니고 연결 있으면 막고 카운트 안내(삭제 0).
-      if (!input.force && totalLinks > 0) {
-        return {
-          blocked: true, id: refs.id, key: refs.key, repo: refs.repo,
-          refs: {
-            mappings: refs.liveMappings, ku_active: ku.ku_active, ku_total: ku.ku_total, kud_rows: ku.kud_rows,
-            total: totalLinks,
-          },
-          hint: "연결을 끊거나 force:true 로 cascade 삭제하세요(ku 단위는 보존되고 domain_key 만 클리어됩니다)",
-        };
-      }
-      // ④ cascade: 도메인맵 쪽(매핑/별칭/도메인) 삭제 + items 쪽(ku domain_key 클리어·kud 삭제).
-      const dm = await dmWrite(() => hardDeleteDomain(input.id, webActor(user.userId, actorType(ctx))));
-      const cleared = await clearDomainKnowledgeRefs(refs.key);
-      // dm 은 deleted shape — removed 에 cross-DB 카운트를 합쳐 단일 결과로.
-      return {
-        ...dm,
-        removed: { ...(dm as { removed: Record<string, number> }).removed, ku_cleared: cleared.ku_cleared, kud_deleted: cleared.kud_deleted },
-      };
-    });
-  },
-};
 
 const repoDelete: Capability = {
   name: "repo_delete",
@@ -331,7 +143,7 @@ const repoDelete: Capability = {
   description:
     "레포(repo)와 그 하위 전체(도메인/코드유닛/데이터엔티티/매핑/프로젝트/부채/별칭)를 영구삭제한다(비가역). " +
     "deprecate(숨김 보존)와 다르다. 안전기본: 살아있는 자식(도메인/코드유닛/데이터엔티티)이 있으면 **막고 카운트 반환**(blocked:true). " +
-    "force:true 면 cascade 삭제. repo 는 도메인맵 자기완결 엔티티라 cross-DB cascade 없음(knowledge_unit 은 repo 직접참조 없음). " +
+    "force:true 면 cascade 삭제. repo 는 도메인맵 자기완결 엔티티라 cross-DB cascade 없음(v6 knowledge 는 repo 직접참조 없음). " +
     "⚠ 사람(웹)만 가능 — 에이전트(MCP)는 403. 보호 리포는 403. 반환(삭제): {deleted,id,name,removed:{...}}.",
   scope: "context",
   input: {
@@ -361,7 +173,8 @@ const repoDelete: Capability = {
   },
 };
 
+// v6 은퇴(2026-06-24): domainCreate/Rename/Delete 정의·등록 제거 — '주제 분류' 패널 폐기 +
+//  v6 category CRUD(categories.ts/category-store)가 단일 표면. repo CRUD 는 실엔티티라 유지.
 export const domainmapCrudCapabilities: Capability[] = [
-  repoCreate, repoRename, repoDeprecate, domainCreate, domainRename,
-  domainDelete, repoDelete,
+  repoCreate, repoRename, repoDeprecate, repoDelete,
 ];

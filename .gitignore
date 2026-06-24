@@ -11,3 +11,9 @@ dist
 
 # domainmap 웹훅 클론 캐시
 var/repos/
+
+# 시크릿·로컬 백업·DB 덤프·로그 — 커밋 금지(2026-06-24)
+.env.bak*
+*.predropbak.*
+/logs/
+/backups/

@@ -6,7 +6,7 @@ import { itemsPool } from "../items/store.js";
 
 export type Db = pg.Pool | pg.PoolClient;
 
-// 단일 풀 반환 — withTx 한 트랜잭션 안에서 knowledge_unit + domain/activity 등 cross-table 원자 쓰기가
+// 단일 풀 반환 — withTx 한 트랜잭션 안에서 knowledge + category/activity 등 cross-table 원자 쓰기가
 // 가능해진다(통합의 핵심 이유). 옵션B(풀 2개·같은 DB)는 JOIN 만 되고 단일 txn 원자성을 못 얻으므로 폐기.
 // itemsPool 은 store.ts 모듈 평가 시 생성되는 const — dmPool() 은 런타임 호출이라 순환 import 안전(TDZ 무관).
 export function dmPool(): pg.Pool {

@@ -62,18 +62,17 @@ export async function previewHooks(): Promise<{ hooks: HookPreview[] }> {
 
   // ── 1) session-preload (SessionStart) — 세션 첫머리 org-context 주입. ──
   //  게이트웨이 단일 출처: previewMemberContext(= /api/ui/org/preview = buildKnowledgeIndex). 드리프트 0.
-  //  멤버 머신에서는 여기에 [라이브 현황 블록 + 쓰기가이드 요약]이 세션마다 동적으로 덧붙는다(서버 재현 불가)
-  //  → fidelity=approximate, note 로 차이 명시. org-context 본문 자체는 게이트웨이와 byte-identical(exact).
+  //  멤버 훅은 이 정적 org-context 만 주입한다(구 [라이브 현황] 동적 블록은 v6 컷오버로 폐기 — ~/.lively/hooks/session-preload.mjs:114).
+  //  쓰기가이드는 정적 컨텍스트(buildKnowledgeIndex)에 이미 포함이라 동적 아님. → 동적 부분이 없어 미리보기 = 실제 주입과 byte-identical. fidelity=exact.
   let preloadMsg: string;
   let preloadFidelity: HookPreview["fidelity"];
   try {
     const ctx = await previewMemberContext(orgName);
     preloadMsg =
       ctx.trimEnd() +
-      "\n\n— 위 org-context 는 게이트웨이가 매 세션 동일하게 주입하는 부분입니다(이 미리보기와 byte-identical).\n" +
-      "  멤버 머신에서는 여기에 [라이브 현황(미매핑/검토대기/최근 아이템)]과 [쓰기가이드 요약] 블록이\n" +
-      "  세션마다 동적으로 덧붙습니다(머신·시점 의존 — 이 미리보기에는 미포함).";
-    preloadFidelity = "approximate";
+      "\n\n— 위 org-context 가 게이트웨이가 매 세션 주입하는 전부입니다(이 미리보기와 byte-identical).\n" +
+      "  멤버 훅(session-preload)은 이 정적 org-context 만 주입합니다.";
+    preloadFidelity = "exact";
   } catch {
     preloadMsg = "(org-context 미리보기를 불러오지 못했습니다)";
     preloadFidelity = "approximate";

@@ -13,7 +13,8 @@ import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
-import { assertHookId, RESERVED_TOOL_NAMES } from "../org/identity.js";
+import { assertHookId } from "../org/identity.js";
+import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
   getOrgProfile, updateOrgProfile, listSections, updateSection,
@@ -21,7 +22,7 @@ import {
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
-  listTools, upsertTool, removeTool,
+  listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
   type DbSourceInput, type DbSourceRow,
@@ -31,6 +32,7 @@ import { previewHooks } from "../org/hooks-preview.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
+import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -86,6 +88,21 @@ const slug = (v: unknown, name: string): string => {
   if (!/^[A-Za-z0-9가-힣_-]+$/.test(s)) throw new HttpError(400, `${name} 은 영문/숫자/한글/_/- 만 허용됩니다`);
   return s;
 };
+// 이메일 형식 검증 — 이메일이 곧 로그인 아이디라, 생성 시점에 막아 로그인 매칭과 일관성을 맞춘다(실용적 미니 체크).
+const assertEmail = (v: string): void => {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new HttpError(400, "이메일 형식이 올바르지 않습니다");
+};
+// 멤버 아이디 = **불변 내부키**(auth_token·web_session·member_credential·project_member·activity·person·터미널세션·감사가
+//  전부 참조). 이메일은 가변(변경 시 전 참조 깨짐)·agent/system 은 null → 내부키로 부적합. 그래서 별도 surrogate.
+//  단 관리자가 직접 만들 필요는 없으므로 신규는 이메일 로컬파트(없으면 표시이름)에서 자동·유니크 생성한다.
+const slugifyId = (s: string): string =>
+  (s || "").toLowerCase().replace(/[^a-z0-9가-힣_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "member";
+async function uniqueMemberId(base: string): Promise<string> {
+  const b = slugifyId(base);
+  if (!(await getMember(b))) return b;
+  for (let i = 2; i < 1000; i++) { const c = `${b}-${i}`; if (!(await getMember(c))) return c; } // 충돌 시 -2,-3…
+  return `${b}-${Math.floor(performance.now())}`;
+}
 
 // DB 소스 응답 마스킹 — url 원문은 노출하지 않는다(host·user·db명·잠재 시크릿). host 만 파생 노출,
 //  auth_ref 는 이름(시크릿 값 아님)만. 편집 시 url 은 변경할 때만 재입력(빈칸=미변경).
@@ -114,8 +131,9 @@ export const deliveryCapabilities: Capability[] = [
         if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, updated_at: null, updated_by: null };
       }
       // 비-admin: 구성원은 이름/종류/상태만(이메일·신원·개인레이어 redact), 토큰 목록은 비노출.
+      const credSet = isAdmin ? await membersWithCredentials() : new Set<string>();
       const memberRows = isAdmin
-        ? await Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id) })))
+        ? await Promise.all(members.map(async (m) => ({ ...m, hasToken: await memberHasActiveToken(m.id), hasAccount: credSet.has(m.id) })))
         : members.map((m) => ({ id: m.id, kind: m.kind, display_name: m.display_name, email: null, identities: [], body_md: "", state: m.state, scopes: [] }));
       // admin 에겐 전체 token_hash 노출 — 회수 핸들로 필요. 해시는 비가역(평문 토큰 복원 불가)이라 안전.
       const tokens = isAdmin ? await listTokens() : [];
@@ -137,7 +155,7 @@ export const deliveryCapabilities: Capability[] = [
         profile, sections: sectionMap, sectionDefaults: GUIDE_SECTION_DEFAULTS,
         members: memberRows, memory, tokens, runtimeConfig, mcpServers,
         dbSources: dbSources.map(maskDbSource), envSources,
-        orgHooks, tools, builtins: isRuntime ? [...RESERVED_TOOL_NAMES] : [], toolPolicy,
+        orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }),
@@ -217,9 +235,16 @@ export const deliveryCapabilities: Capability[] = [
     "구성원 신원(표시명·이메일·외부계정 연결·개인레이어)을 저장한다. person/person_identity 로도 동기화.",
     [{ method: "POST", paths: ["/api/ui/org/member"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const id = slug(input.id, "id");
       const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
+      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 이메일 = 로그인 아이디 → 형식 검증(생성·로그인 일관). 빈 값은 허용(로그인 불요 멤버 — 계정 미발급).
+      const email = input.email === undefined ? undefined : str(input.email, "email", 200).trim();
+      if (email) assertEmail(email);
+      // 아이디: 명시되면 그대로(편집·고급), 없으면 신규 생성 → 이메일/표시이름에서 자동·유니크(관리자 비관여, 불변 내부키).
+      const hasExplicitId = input.id !== undefined && String(input.id).trim() !== "";
+      const id = hasExplicitId ? slug(input.id, "id") : await uniqueMemberId(email ? email.split("@")[0] : (displayName || "member"));
+      const existed = hasExplicitId ? await getMember(id) : null; // 자동 id 는 항상 신규
       let scopes: string[] | undefined;
       if (input.scopes !== undefined) {
         if (!Array.isArray(input.scopes)) throw new HttpError(400, "scopes 는 배열이어야 합니다");
@@ -231,15 +256,37 @@ export const deliveryCapabilities: Capability[] = [
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       const member = await upsertMember({
         id, kind,
-        display_name: input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim(),
-        email: input.email === undefined ? undefined : str(input.email, "email", 200).trim(),
+        display_name: displayName,
+        email,
         identities: input.identities === undefined ? undefined : parseIdentities(input.identities),
         body_md: memberBody,
         state: input.state === undefined ? undefined : (str(input.state, "state", 10) as "active" | "inactive"),
         scopes,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, actorOf(user), "web");
-      return { member };
+      // 신규 human 멤버 → 로컬 로그인 계정 자동 발급(초기 비번 1회 반환 — 관리자가 멤버에게 전달).
+      //  로그인이 이메일 기준이라 **유효 이메일이 있을 때만** 발급(없으면 못 쓰는 계정 → 발급 안 함).
+      //  agent/system·기존 멤버·이미 계정 있음도 제외.
+      let initialPassword: string | undefined;
+      if (!existed && member.kind === "human" && member.email && !(await hasCredential(id))) {
+        initialPassword = generateInitialPassword();
+        await setMemberPassword(id, initialPassword, { mustChange: true, actor: actorOf(user) });
+      }
+      return { member, initialPassword };
+    }),
+  // ── 구성원 비밀번호 재설정 — 임시 비번 1회 반환(관리자가 멤버에게 전달). 첫 로그인 후 변경 권장(must_change). ──
+  restOnly("org_member_reset_password", "구성원 비밀번호 재설정",
+    "구성원의 로컬 로그인 비밀번호를 임시 비번으로 재설정한다(1회 반환). 멤버는 이 비번으로 로그인 후 변경한다.",
+    [{ method: "POST", paths: ["/api/ui/org/member/reset-password"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = slug(input.id, "id");
+      const m = await getMember(id);
+      if (!m) throw new HttpError(404, "구성원을 찾을 수 없습니다");
+      if (m.kind !== "human") throw new HttpError(400, "사람(human) 구성원만 로그인 계정을 가질 수 있습니다");
+      if (!m.email) throw new HttpError(400, "이메일이 없어 로그인 계정을 만들 수 없습니다 — 먼저 구성원에 이메일을 설정하세요");
+      const password = generateInitialPassword();
+      await setMemberPassword(id, password, { mustChange: true, actor: actorOf(user) });
+      return { id, password };
     }),
   restOnly("org_member_remove", "구성원 제거",
     "org_member 에서 구성원을 제거한다(person 행은 참조무결성 위해 보존).",
@@ -362,8 +409,10 @@ export const deliveryCapabilities: Capability[] = [
       // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는
       //  비-admin 에게 노출 안 함 — 설치 번들(.lively/work-roots, 멤버 본인 설치 경로)로만 전달.
       const c = await getRuntimeConfig();
-      // write_tools(기록 인정 툴 목록)도 훅이 동적으로 읽음 — 툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK).
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice, write_tools: c.write_tools };
+      // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
+      //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
+      const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice, write_tools: c.write_tools, auto_approve: autoApprove };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts)를 저장한다.",
@@ -535,7 +584,7 @@ export const deliveryCapabilities: Capability[] = [
     async () => {
       const cfg = await getRuntimeConfig();
       return {
-        tools: await listTools(), builtins: [...RESERVED_TOOL_NAMES],
+        tools: await listTools(), builtins: toolCandidates(),
         toolPolicy: { allowed_auth_envs: cfg.allowed_auth_envs, url_allowlist: cfg.url_allowlist },
         meaning: MEANING["tool"],
       };
@@ -548,8 +597,8 @@ export const deliveryCapabilities: Capability[] = [
       if (kind !== "http_proxy" && kind !== "builtin") throw new HttpError(400, "kind 는 http_proxy|builtin 만 허용됩니다(prompt 미지원)");
       const rawName = str(input.name, "name", 64).trim().toLowerCase();
       if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(rawName)) throw new HttpError(400, "name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
-      if (kind === "http_proxy" && RESERVED_TOOL_NAMES.has(rawName)) throw new HttpError(400, `name '${rawName}' 는 빌트인 도구와 충돌합니다`);
-      if (kind === "builtin" && !RESERVED_TOOL_NAMES.has(rawName)) throw new HttpError(400, `'${rawName}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
+      if (kind === "http_proxy" && isBuiltinToolName(rawName)) throw new HttpError(400, `name '${rawName}' 는 빌트인 도구와 충돌합니다`);
+      if (kind === "builtin" && !isBuiltinToolName(rawName)) throw new HttpError(400, `'${rawName}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
       const base: OrgToolInput = {
         name: rawName, kind: kind as ToolKind,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),

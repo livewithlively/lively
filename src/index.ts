@@ -5,8 +5,9 @@ import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
-import { embeddingsEnabled, initEmbeddings } from "./embeddings/index.js";
-import { listDisabledBuiltins } from "./org/store.js";
+import { listBuiltinOverrides } from "./org/store.js";
+import { buildToolCandidates } from "./capabilities/index.js";
+import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
@@ -14,13 +15,16 @@ import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
 import { initV6Schema } from "./v6/schema.js";
 import { registerWebUi } from "./web.js";
 import { registerTerminal } from "./terminal.js";
-import { registerProjectRoutes, registerProjectV6Routes } from "./project-routes.js";
+import { registerProjectV6Routes } from "./project-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder } from "./project-fs.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
+
+// 부팅 시 MCP 툴 후보 주입 — registry(정적) + db 직접등록. 웹 도구탭(org_tools)·검증(org_tool_upsert)·http_proxy 섀도잉 차단이 참조.
+setToolCandidates(buildToolCandidates());
 
 const app = express();
 
@@ -42,9 +46,9 @@ app.get("/healthz", (_req, res) => {
 // Stateless: 요청마다 새 서버+트랜스포트 (수평 확장 단순).
 app.post("/mcp", auth, async (req, res) => {
   // (A) 빌트인 게이팅 + (B) 동적 org_tool 등록 — DB 의존(ITEMS_DATABASE_URL). 실패는 fail-open(기본 표면 유지).
-  let disabled: Set<string> | undefined;
-  try { disabled = await listDisabledBuiltins(); } catch { disabled = undefined; }
-  const server = buildServer(disabled);
+  let overrides: Map<string, boolean> | undefined;
+  try { overrides = await listBuiltinOverrides(); } catch { overrides = undefined; }
+  const server = buildServer(overrides);
   try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
@@ -80,9 +84,8 @@ app.get("/install", auth, async (_req, res) => {
 
 // Lively Context 웹 UI — /api/ui/*(REST, 동일 verifier 재사용) + /ui(정적 프론트).
 registerWebUi(app, verifier);
-// 프로젝트 상세 — 공유 폴더(파일)·터미널 세션·타임라인. 직접 라우트(파일 스트림이라 capability restMounts 미적합).
-registerProjectRoutes(app, verifier);
 // v6(projects2) 상세 — 동일 파일/세션/타임라인 로직, 데이터만 v6 project. folder 비면 lazy 생성(데이터 쓰기, 스키마 불변).
+// (v1 registerProjectRoutes/projects.ts 폐기 2026-06-24 — projects2(v6) 통합, 고아 v1 제거)
 registerProjectV6Routes(app, verifier, {
   getProject: async (id) => {
     const p = await v6GetProject(id);
@@ -104,9 +107,9 @@ const server = app.listen(PORT, () => {
   // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
   //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
   // 통합 DB(P0+P1): items/org/domainmap 이 한 DB(ITEMS_DATABASE_URL)에 병합됨. 세 init 을 **직렬** 체인으로
-  //  보장한다 — activity_ku_ref/activity_task 가 knowledge_unit(name)을 FK 로 참조하므로 initOrgSchema(=
-  //  knowledge_unit 생성)가 initDomainmapSchema(=activity 생성)보다 반드시 먼저 끝나야 한다(분리 .then 은
-  //  레이스 → FK 'relation does not exist' 로 activity 스키마 통째 누락). listen 성공 후 실행 불변식 유지.
+  //  보장한다 — initV6Schema 의 activity_knowledge·project 정션이 knowledge/project/activity 를 FK 참조하므로
+  //  initOrgSchema·initDomainmapSchema 가 먼저 끝나야 한다(분리 .then 은 레이스 → FK 'relation does not exist').
+  //  (구 activity_ku_ref/activity_task→knowledge_unit FK 는 2026-06-24 v6 드랍됨.) listen 성공 후 실행 불변식 유지.
   if (process.env.ITEMS_DATABASE_URL) {
     initItemSchema()
       .then(() => logger.info("item schema ready"))
@@ -117,8 +120,7 @@ const server = app.listen(PORT, () => {
       // v6 그린필드 스키마(category/knowledge/project + 정션) — 레거시 이후 직렬(FK 순서: category→knowledge/project→정션→activity·mapping·debt ALTER).
       .then(() => initV6Schema())
       .then(() => logger.info("v6 schema ready"))
-      // 임베딩 초기화(OFF 기본 — enabled 일 때만, 비치명). pgvector 부재 시 graceful 폴백(warn 후 반환).
-      .then(() => { if (embeddingsEnabled()) return initEmbeddings(); })
+      // 임베딩(pgvector) 폐기(2026-06-24): v6 knowledge 검색은 ILIKE 비-벡터 — embeddings 모듈 제거됨.
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
 });

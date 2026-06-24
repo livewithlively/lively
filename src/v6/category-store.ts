@@ -3,6 +3,7 @@
 //  감사는 org_content_audit(entity='category') — knowledge/domain 과 동일 append-only 패턴.
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
+import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 
 const CATEGORY_COLS =
   `id, space, key, name, description, should, cross_cutting, origin, status, state, created_at, updated_at`;
@@ -20,21 +21,9 @@ export interface CategoryEdgeRow {
   from_key?: string; to_key?: string; from_name?: string | null; to_name?: string | null;
 }
 
-type WriteCtx = { actor?: string | null; source?: string };
-
-// append-only 감사(org_content_audit, entity='category'). actor_kind 는 서버 파생(채널 신뢰 아님).
-async function auditCategory(entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> {
-  const source = ctx?.source ?? null;
-  const actorKind = source === "mcp" ? "ai" : source === "web" ? "human" : null;
-  await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
-     VALUES('category',$1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8)`,
-    [entityKey, op,
-     before == null ? null : JSON.stringify(before),
-     after == null ? null : JSON.stringify(after),
-     ctx?.actor ?? null, source, source, actorKind],
-  );
-}
+// append-only 감사(org_content_audit, entity='category') — 공유 헬퍼 위임.
+const auditCategory = (entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
+  auditOrgContent("category", entityKey, op, before, after, ctx);
 
 export async function listCategories(space?: string): Promise<CategoryRow[]> {
   if (space) {
@@ -99,16 +88,7 @@ export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ dele
 //  복원되지 않는다(카테고리 본체만). 이미 존재하면 거부. (space/key 유니크 충돌 시 DB 가 throw.)
 //  사람전용 게이트는 capability 계층(content_restore)에서 선행.
 export async function restoreCategory(before: Record<string, unknown>, ctx?: WriteCtx): Promise<CategoryRow> {
-  const id = before.id as number | undefined;
-  if (id == null) throw new Error("복원 스냅샷에 id 가 없습니다");
-  if (await one(itemsPool, `SELECT 1 FROM category WHERE id=$1`, [id])) {
-    throw new Error(`카테고리 #${id} 은(는) 이미 존재합니다(삭제 상태가 아님)`);
-  }
-  const cols = CATEGORY_COLS.split(",").map((c) => c.trim());
-  const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-  const values = cols.map((c) => before[c] ?? null);
-  const after: CategoryRow = await one(itemsPool,
-    `INSERT INTO category(${cols.join(", ")}) VALUES(${placeholders}) RETURNING ${CATEGORY_COLS}`, values);
+  const after = await restoreSnapshot<CategoryRow>("category", CATEGORY_COLS, "id", before);
   await auditCategory(`${after.space}/${after.key}`, "restore", null, after, ctx);
   return after;
 }

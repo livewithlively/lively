@@ -36,6 +36,20 @@ export async function execReadQuery(
   return { columns: result.fields.map((f) => f.name), rows, rowCount: rows.length, truncated };
 }
 
+// db 직접등록 툴(capability 레지스트리 밖) — 웹 도구 토글 후보·http_proxy 섀도잉 차단에 쓰인다.
+// registerDbTools 본문의 server.registerTool 이름·title 과 동기 유지.
+export const DB_TOOLS = [
+  { name: "db_sources", title: "DB 소스 목록",
+    description: "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 확인한다(접속 URL·자격증명 비노출).",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "db_schema", title: "DB 스키마 조회",
+    description: "테이블/컬럼 메타데이터를 반환한다. table 을 주면 그 컬럼만, 없으면 테이블 목록. source 로 데이터소스를 고른다.",
+    inputSchema: { type: "object", properties: { table: { type: "string" }, source: { type: "string" } } } },
+  { name: "db_query", title: "읽기 전용 SQL 실행",
+    description: "단일 SELECT 문만 실행한다. 결과는 사용자 권한(RLS)에 따라 자동 필터된다. 쓰기/DDL 불가, 행수·실행시간 제한.",
+    inputSchema: { type: "object", required: ["sql"], properties: { sql: { type: "string", description: "실행할 단일 SELECT 문" }, source: { type: "string", description: "데이터소스 이름(db_sources 로 확인)" } } } },
+] as const;
+
 export function registerDbTools(server: McpServer): void {
   // 등록된 읽기 데이터소스 디스커버리 — 자유 SQL 전에 여기서 소스 이름을 확인한다(접속 URL·자격증명 미노출).
   server.registerTool(

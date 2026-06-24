@@ -3,6 +3,8 @@
 //  itemsPool 직접 + q/one 헬퍼(domainmap/db) 재사용. 감사 org_content_audit(entity='project', entity_key=id).
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
+import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
+import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
@@ -24,20 +26,9 @@ export interface ProjectRow {
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
-type WriteCtx = { actor?: string | null; source?: string };
-
-// append-only 감사(org_content_audit, entity='project'). actor_kind 는 서버 파생(채널 신뢰 아님).
-async function auditProject(entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> {
-  const source = ctx?.source ?? null;
-  const actorKind = source === "mcp" ? "ai" : source === "web" ? "human" : null;
-  await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
-     VALUES('project',$1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8)`,
-    [entityKey, op,
-     before == null ? null : JSON.stringify(before),
-     after == null ? null : JSON.stringify(after),
-     ctx?.actor ?? null, source, source, actorKind]);
-}
+// append-only 감사(org_content_audit, entity='project') — 공유 헬퍼 위임.
+const auditProject = (entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
+  auditOrgContent("project", entityKey, op, before, after, ctx);
 
 // ── 조회 ──────────────────────────────────────────────────────────────────
 export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string }
@@ -77,6 +68,7 @@ export interface ProjectDetail extends ProjectRow {
   tasks: unknown[];
   categories: unknown[];
   knowledge: { required: unknown[]; produced: unknown[] };
+  fields: unknown[]; // 커스텀 필드(클릭업형 컬럼) 정의 — 루트 프로젝트 단위. 값은 각 task 의 field_values 에.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -100,9 +92,21 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     subtaskRows = await q(itemsPool,
       `SELECT ${PROJECT_COLS} FROM project WHERE parent_id=ANY($1) AND level='subtask' ORDER BY sort, id`, [taskIds]);
   }
+  // 커스텀 필드(클릭업형 컬럼) — 정의는 루트 프로젝트 단위, 값은 (field,task) 단위. 한 번에 페치해 task 트리에 매핑(N+1 회피).
+  const fields = await listProjectFields(id);
+  const allTaskIds = [...taskIds, ...subtaskRows.map((s) => s.id)];
+  const valueRows = fields.length && allTaskIds.length ? await getFieldValuesForTasks(allTaskIds) : [];
+  const valuesByTask = new Map<number, Record<string, unknown>>();
+  for (const r of valueRows) {
+    let m = valuesByTask.get(r.task_id);
+    if (!m) { m = {}; valuesByTask.set(r.task_id, m); }
+    m[String(r.field_id)] = r.value;
+  }
+  const withValues = (row: ProjectRow) => ({ ...row, field_values: valuesByTask.get(row.id) ?? {} });
+
   const tasks = taskRows.map((t) => ({
-    ...t,
-    subtasks: subtaskRows.filter((s) => s.parent_id === t.id),
+    ...withValues(t),
+    subtasks: subtaskRows.filter((s) => s.parent_id === t.id).map(withValues),
   }));
 
   // 카테고리(project_category JOIN category) — 사업/제품/시스템 탐색.
@@ -121,7 +125,7 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     produced: kRows.filter((r) => r.relation === "produced"),
   };
 
-  return { ...project, members, tasks, categories, knowledge };
+  return { ...project, members, tasks, categories, knowledge, fields };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
@@ -199,21 +203,25 @@ export async function deleteProject(id: number, ctx?: WriteCtx): Promise<Project
   return before;
 }
 
+// 작업(task/subtask) 삭제 — 프로젝트 삭제와 동형(삭제 + 감사 스냅샷 → content_restore/#trash 에서 본체 복원).
+//  하위(subtask)는 parent_id ON DELETE CASCADE 로 함께 삭제되고, 태그·체크리스트·의존성 등 task FK 연결도 cascade 정리.
+//  복원 시엔 스냅샷 본체 1행만 돌아온다(cascade 된 하위·연결은 미복원 — 프로젝트 복원과 동일 한계). 소유권 게이트는
+//  task_update 와 동형(인증 사용자=가능) — capability 계층에서 처리.
+export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+  if (!before) throw new Error(`작업 #${id} 없음`);
+  await itemsPool.query(`DELETE FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+  await auditProject(String(id), "delete", before, null, ctx);
+  return before;
+}
+
 // 복원 — 마지막 delete 의 before 스냅샷(프로젝트 본문 1행)을 원래 id 로 재적재한다. 자식 작업·팀원·
 //  카테고리/지식 연결은 삭제 시 cascade 됐으므로 복원되지 않는다(프로젝트 본체만). 이미 존재하면 거부.
 //  사람전용 게이트는 capability 계층(content_restore)에서 선행.
 export async function restoreProject(before: Record<string, unknown>, ctx?: WriteCtx): Promise<ProjectRow> {
-  const id = before.id as number | undefined;
-  if (id == null) throw new Error("복원 스냅샷에 id 가 없습니다");
-  if (await one(itemsPool, `SELECT 1 FROM project WHERE id=$1`, [id])) {
-    throw new Error(`프로젝트 #${id} 은(는) 이미 존재합니다(삭제 상태가 아님)`);
-  }
-  const cols = PROJECT_COLS.split(",").map((c) => c.trim());
-  const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-  const values = cols.map((c) => before[c] ?? null);
-  const after: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(${cols.join(", ")}) VALUES(${placeholders}) RETURNING ${PROJECT_COLS}`, values);
-  await auditProject(String(id), "restore", null, after, ctx);
+  const after = await restoreSnapshot<ProjectRow>("project", PROJECT_COLS, "id", before);
+  await auditProject(String(after.id), "restore", null, after, ctx);
   return after;
 }
 

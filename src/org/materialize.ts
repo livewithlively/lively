@@ -38,9 +38,6 @@ export interface CategoryMapEntry {
   active_units: number;   // 이 카테고리에 매핑된 active knowledge 수(kc.state<>'rejected'). 발견용 메타.
 }
 
-// updated_at/as_of 는 pg 드라이버가 **Date** 로 반환(타입은 string|null 이지만 런타임 Date). 문자열 가정(localeCompare) 금지 —
-//  타임스탬프(number)로 비교해 Date/string/null 모두 안전(이걸 어기면 preview/install 생성이 500 으로 터진다).
-const ts = (u: string | Date | null): number => { const d = u ? new Date(u).getTime() : 0; return Number.isFinite(d) ? d : 0; };
 
 // ── (라이브 헬퍼) R(규칙) 전문 — kind='R', lifecycle='active'. enforced 주입 대상. sort, name 순. ──
 //  buildKnowledgeIndex 는 순수함수라 units 인자에서 R 을 직접 필터한다(아래). 이 헬퍼는 호출자 편의용(미사용 가능).
@@ -80,23 +77,11 @@ export async function categoryMapForIndex(): Promise<CategoryMapEntry[]> {
   }
 }
 
-// ── 쓰기 가이드 블록(plan §J) — 주입 헤더에 항상 박는다. *언제·어디·무엇·분류·외부* 한 곳. ──
-//  단일 출처: 이 상수가 주입(buildKnowledgeIndex)·미리보기·발행물·웹 learn 의 가이드 문구를 결정한다(non-stale).
-//  비-링크 텍스트(generator collectArtifactFiles 의 `](name.md)` follow 차단 불변식 유지).
-export const WRITE_GUIDE_BLOCK = [
-  "## 지식 쓰기 가이드",
-  "지속될 지식이 생기면(연구·결정·설계·런북) **그 자리에서(in-flow)** 기록한다 — 나중에 몰아서가 아니라.",
-  "- **어디:** 조직 지식의 유일한 집은 ku(`ctx_save`로 전문 직접 기록). 레포에 `.md` 파일을 새로 만들거나 포인터만 남기지 않는다.",
-  "- **무엇:** 요약·링크가 아니라 **전문**을 담는다(나중의 나/동료가 그것만 읽고 일할 수 있게).",
-  "- **분류(판단):** `kind` = R(강제규칙·페르소나)·K(지식·산출물)·H(절차·런북)·W(과업). `카테고리` = 위 카테고리 지도의 (space, key) 로 `domain=` 지정.",
-  "- **외부(클릭업·노션·코드):** 원본은 외부 소유 → 미러(observed)로 둔다. 복제하지 말고, 거기서 얻은 **파생 인사이트만** 별도 K 로 저작한다.",
-].join("\n");
-
 // ── 컨텍스트 온톨로지 가이드(주입 골격) — buildKnowledgeIndex 가 굽는 Knowledge Index **전체 템플릿**. ──
 //  06-23 재설계(윤상민): 3섹션으로 쪼개지 않고 **하나의 편집 가능한 템플릿**. 동적 데이터는 플레이스홀더로 주입:
 //   `${categories}` = 카테고리 지도 항목(space별 'key — name (N)'), `${rules}` = 사용자-저작 강제 규칙(R) 전문.
 //  편집값(섹션)이 비거나 DB 가 없으면 이 상수로 폴백 → 계약(온톨로지 골격) 안 깨짐. 기본값은 코드가 단일 출처
-//  (WRITE_GUIDE_BLOCK 을 끝에 임베드 — 쓰기 가이드도 이 한 템플릿의 일부).
+//  (쓰기 가이드는 이 템플릿의 '## 맥락 로드/기록 가이드' 섹션으로 통합 — 별도 블록 없음. 06-23 재설계).
 export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "# Knowledge Index",
   "",
@@ -124,14 +109,19 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
   "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
+  "- WIKI 인덱스 핀: 어떤 지식이 **모두가 항상 인덱스에서 봐야 할 만큼** 중요하면 `knowledge_set_wiki`로 핀한다 — 핀된 지식의 제목·소환키가 아래 **WIKI 인덱스**에 항상 노출되어 전원이 발견한다(본문은 여전히 `knowledge_get`/검색으로 소환).",
   "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다(type=commit/decision/review…). 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",
   "- 프로젝트/태스크: `task_create_v6` / `task_set_status_v6`, 필요·산출지식은 `project_link_knowledge_v6`.",
   "- 도메인 의도: should 변경은 `category_update`, 도메인 간 의존(should 엣지)은 `category_edge_set` — is 엣지는 코드 스캔이 채운다.",
   "- 외부(클릭업·노션·코드): 원본은 외부 소유 → 미러(`observed`)로 둔다. 복제하지 말고, 거기서 얻은 **파생 인사이트만** 별도 지식(`authored`)으로 저작한다.",
   "",
   "**원칙**",
-  "- 조직 지식의 유일한 집은 **지식 스토어**다 — 레포에 `.md`를 새로 만들거나 포인터만 남기지 않는다.",
+  "- 조직 지식의 유일한 집은 **WIKI**(지식 스토어)다 — 레포에 `.md`를 새로 만들거나 포인터만 남기지 않는다.",
   "- 전문을 담는다 — 나중의 나/동료가 그것만 읽고 일할 수 있도록.",
+  "- **로컬 메모리와 WIKI는 직교다.** 당신 하네스의 로컬 메모리(예: Claude `~/.claude/.../memory`, Codex 메모리)는 이 세션/머신 한정 **사적 작업버퍼** — 조직 지식(남에게도 가치 있는 것)은 거기 쌓지 말고 WIKI(`knowledge_save`)에 올린다. 로컬에 두면 동료가 못 보고, 이 인덱스와 따로 늙어 어긋난다.",
+  "- 조직 지식의 **발견**은 이 인덱스(매 세션 주입)가 전담한다 — 로컬 메모리에 WIKI 포인터를 두지 않는다(중복·드리프트).",
+  "",
+  "${wiki}",
 ].join("\n");
 
 // 가이드 섹션 키(단일) — 웹 관리 '컨텍스트 온톨로지 가이드' 탭. updateSection(kind='R') 로 저장.
@@ -149,7 +139,7 @@ export async function loadGuideTemplate(): Promise<string | undefined> {
   catch { return undefined; }
 }
 
-// ── 항상-주입 지식 인덱스(MEMORY.md) — 컨텍스트 온톨로지 가이드 템플릿 + 동적 플레이스홀더(${rules}/${categories}). ──
+// ── 항상-주입 지식 인덱스(Knowledge Index — 본문 헤더 '# Knowledge Index') — 가이드 템플릿 + 동적 플레이스홀더(${rules}/${categories}/${wiki}). ──
 //  입력 units = v6 listKnowledge({lifecycle:"active"}) 전체. injection='always'(규칙·페르소나)만 전문으로 추려
 //  ${rules} 에 박고, recalled 지식은 정적 주입하지 않는다(카테고리 지도로 발견·검색 소환). 비-링크 텍스트(본문 follow 차단 불변식 유지).
 // H1-b 시크릿 출력게이트: 이 인덱스가 **항상-주입**(훅·정적 context.md·preview·web)의 단일 소스이므로 평문 시크릿이
@@ -227,7 +217,7 @@ function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): s
     .filter((u) => u.is_wiki && u.lifecycle === "active")
     .sort((a, b) => (Number(a.sort) - Number(b.sort)) || a.name.localeCompare(b.name));
   if (!wiki.length) return "";
-  const out: string[] = ["## WIKI 인덱스 (핀 — 제목·소환키만, 본문은 `ctx_cat`/`memory_get` 으로)", ""];
+  const out: string[] = ["## WIKI 인덱스 (핀 — 제목·소환키만, 본문은 `knowledge_get` 으로)", ""];
   for (const u of wiki) {
     const cat = wikiCats.get(u.name);
     out.push(`- ${u.name} — ${u.title?.trim() || u.name}${cat ? ` · ${cat}` : ""}`);

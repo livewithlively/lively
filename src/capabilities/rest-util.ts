@@ -29,8 +29,6 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
   };
 }
 
-export const ITEM_TYPES = new Set(["message", "task", "change", "doc", "note"]);
-export const MISSING_VALUES = new Set(["domain", "either"]);
 export const DM_KINDS = new Set(["domains", "entities", "overview"]);
 
 export function qstr(v: unknown, name: string, max = 200): string | undefined {
@@ -58,37 +56,4 @@ export function qiso(v: unknown): string | undefined {
   return s;
 }
 
-export function qtype(v: unknown): string | undefined {
-  const s = qstr(v, "type", 20);
-  if (s !== undefined && !ITEM_TYPES.has(s)) {
-    throw new HttpError(400, `type 은 ${[...ITEM_TYPES].join("|")} 만 허용됩니다`);
-  }
-  return s;
-}
-
-// propose/confirm/reject 공통 body 검증 — confidence 범위는 store 가 검증하지 않으므로 여기서(zod 는 MCP 계층).
-// '' tolerance(confidence/evidence 빈 문자열 허용) 포함 byte-compat.
-export interface MappingBody {
-  kind: "domain"; name: string; key: string; repo: string;
-  confidence?: number; evidence?: string;
-}
-export function parseMappingBody(body: unknown): MappingBody {
-  const b = (body ?? {}) as Record<string, unknown>;
-  if (b.kind !== "domain") throw new HttpError(400, "kind 는 domain 만 허용됩니다");
-  // item 폐기 컷오버: 좌표는 knowledge_unit.name(예: clickup-86abc123) — 구 itemId(정수) 대체.
-  if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 64) throw new HttpError(400, "name 은 1~64자 문자열(ku 좌표)이어야 합니다");
-  if (typeof b.key !== "string" || !b.key.trim() || b.key.length > 200) throw new HttpError(400, "key 는 1~200자 문자열이어야 합니다");
-  if (typeof b.repo !== "string" || !b.repo.trim()) throw new HttpError(400, "repo 필수 — 레포를 선택하세요");
-  let confidence: number | undefined;
-  if (b.confidence !== undefined && b.confidence !== null && b.confidence !== "") {
-    const c = Number(b.confidence);
-    if (!Number.isFinite(c) || c < 0 || c > 1) throw new HttpError(400, "confidence 는 0~1 사이 숫자여야 합니다");
-    confidence = c;
-  }
-  let evidence: string | undefined;
-  if (b.evidence !== undefined && b.evidence !== null && b.evidence !== "") {
-    if (typeof b.evidence !== "string" || b.evidence.length > 4000) throw new HttpError(400, "evidence 는 4000자 이하 문자열이어야 합니다");
-    evidence = b.evidence;
-  }
-  return { kind: b.kind, name: b.name.trim(), key: b.key.trim(), repo: b.repo.trim(), confidence, evidence };
-}
+// v6 은퇴(2026-06-24): qtype·MappingBody·parseMappingBody(구 item→domain 매핑 body 검증) 제거 — 매핑 서브시스템 폐기.

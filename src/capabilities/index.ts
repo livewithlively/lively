@@ -1,24 +1,27 @@
 // capability 레지스트리 조립 + 어댑터 2개(Stage①).
-// - registerMcpCapabilities(server, names): tools/*.ts 가 호출하는 MCP 자동 등록
-//   (resolveUser→requireScope→handler→json, throw 는 SDK 가 isError:true 로 변환).
+// - registerMcpCapabilities(server): registry 의 expose.mcp:true capability 를 전부 자동 등록
+//   (resolveUser→requireScope→handler→json, throw 는 SDK 가 isError:true 로 변환). MCP 표면 단일 SoT.
 // - restMounts(): web.ts 가 순회 마운트하는 [capability, mount] 목록.
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { contextCapabilities } from "./context.js";
-import { ctxCapabilities } from "./ctx.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
 import { domainmapCrudCapabilities } from "./domainmap-crud.js";
-import { mappingCapabilities } from "./mapping.js";
-import { pmCapabilities } from "./pm.js";
+// v6 은퇴(2026-06-24): mappingCapabilities(list_unmapped·mapping_candidates·curate_item_mapping) 폐기 — 레거시 item→domain 매핑(knowledge_unit_domain), v6 knowledge_link_category 대체.
 import { activityCapabilities } from "./activity.js";
-import { projectCapabilities } from "./projects.js";
 import { categoryCapabilities } from "./categories.js";
 import { knowledgeCapabilities } from "./knowledge.js";
 import { projectV6Capabilities } from "./projects-v6.js";
+import { taskDetailV6Capabilities } from "./task-detail-v6.js";
+import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { trashCapabilities } from "./trash.js";
 import type { Capability, RestMount } from "./types.js";
+import { DB_TOOLS } from "../tools/db.js";
+import type { ToolCandidate } from "./mcp-surface.js";
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 // ── me — 토큰 게이트 확인(스코프 불요, REST 전용). 핸들러가 partial user 에서 null-default 구성. ──
 const me: Capability = {
@@ -35,36 +38,44 @@ const me: Capability = {
 };
 
 const all: Capability[] = [
-  me, ...contextCapabilities, ...mappingCapabilities,
+  me, ...contextCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...domainmapCrudCapabilities, // P-V3-4a: repo/domain 통제어휘 CRUD 5종 + hard-delete 2종(domain_delete·repo_delete) — 전부 expose.mcp=true(MCP+REST)
-  ...pmCapabilities, // MCP 35툴(P8 project_list 제거 36→35. hard-delete 2종 추가. item 폐기로 search_items/get_item 2종 제거: 기존 11 + pm 6 + domainmap authoring 2 + db_sources 1 + memory 3 + ctx 6 + crud 7 — db_*·memory_* 는 src/tools/{db,memory}.ts 직접 등록)
-  ...ctxCapabilities, // ctx_*(P1b/P4a) — FS형 컨텍스트 6종(ls/grep/cat/save/overview/set_lifecycle, memory scope, co-exposed mcp+rest) — MCP 등록은 src/tools/memory.ts. item 흡수: ctx_ls/ctx_grep 에 system/since/source/type 필터 + ctx_cat thread.
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
-  ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory, co-exposed). MCP 등록은 src/tools/activity.ts. 36→38.
-  ...projectCapabilities, // 라이블리 자체 프로젝트 보드(project_list/create/set_status) — scope=memory, REST 전용(웹 프로젝트 탭). MCP 표면 불변.
-  ...categoryCapabilities, // v6: 카테고리(사업/제품/시스템) CRUD + 도메인 의존엣지(should) — scope=context, REST 전용(웹 3탭). MCP 노출은 컷오버에서 일괄.
-  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory, REST 전용(웹 지식 탭). MCP 노출은 컷오버에서 일괄.
-  ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory, REST 전용(/api/ui/v6/projects, 웹 프로젝트 탭). MCP 노출은 컷오버에서 일괄.
+  ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory). expose.mcp:true → 자동 등록.
+  ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).
+  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_set_wiki 만 mcp:false(REST 전용).
+  ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 대부분 expose.mcp:true(자동등록)+REST. project_delete_v6·task_update_v6·task_delete_v6 는 mcp:false(REST 전용).
+  ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory, REST 전용(/api/ui/v6/tasks/:id/*).
+  ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory, REST 전용(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).
 ];
-// MCP 표면 = 38툴(P8 project_list 제거 39→38. P4 domain_set_should 추가 38→39. P3 activity_log·activity_list 36→38. hard-delete 2종 domain_delete·repo_delete. item 폐기 2026-06: search_items·get_item
-//  제거로 36→34, hard-delete 로 34→36. ku 가 단일 캐노니컬 표면 —
-//  활동검색은 ctx_ls/ctx_grep(system/since/source/type), 단건상세/스레드는 ctx_cat(thread:true) 가 흡수).
-//  REST 전용 신엔드포인트(MCP 표면 불포함): GET /api/ui/learn(kind_registry+data_source ground-truth).
-//  search_items/get_item 의 REST(/api/ui/items, /api/ui/items/:id)도 동반 제거 — 웹 app.js 미사용(영향 없음).
+// MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
+//  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
+//  Phase 2(2026-06-24): names 배열 이중게이트 폐기 → expose.mcp 단일 SoT. domain_*·propose_domain 은 v6 category_* 로 이관(mcp:false, REST 보존),
+//  knowledge_set_wiki·project_delete_v6·task_update_v6·task_delete_v6 도 mcp:false(REST 전용). item(search_items·get_item)·mapping 은 폐기됨.
+//  ku/knowledge 가 단일 캐노니컬 표면 — 지식 검색/단건 knowledge_search·knowledge_get, 활동 activity_list·activity_log. REST 전용: GET /api/ui/learn(kind_registry+data_source ground-truth).
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
 
 const json = (d: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(d, null, 2) }] });
 
-// MCP 어댑터 — 이름 목록을 받아 레지스트리에서 찾아 자동 등록. 미등록/비노출 이름은 부팅 시 즉시 throw
-// (오타가 런타임까지 살아남지 않게).
-export function registerMcpCapabilities(server: McpServer, names: string[]): void {
-  for (const name of names) {
-    const cap = registry.get(name);
-    if (!cap) throw new Error(`capability '${name}' 레지스트리에 없음`);
-    if (!cap.expose.mcp) throw new Error(`capability '${name}' 은 MCP 노출 대상이 아님`);
+// ── MCP 표면 노출 판정 (웹 후보 buildToolCandidates 와 실제 노출 registerMcpCapabilities 가 공유하는 단일 SoT) ──
+// 후보 = expose.mcp:true 인 capability(= "이건 MCP 도구다" 선언). 그 외(순수 웹 REST: org_*/dm_*/dash_*/task 상세)는 expose.mcp:false → MCP 표면 아님.
+//  expose.mcp:false 는 org_tool 에 builtin 행이 잘못 들어와도 절대 노출 안 됨(표면 오염/취약 차단).
+// "기본은 꺼두되 운영자가 켤 수 있는" 도구(knowledge_set_wiki·project_delete_v6)도 expose.mcp:true(후보)로 두고,
+//  기본 미노출은 org_tool 시드(enabled=false, schema init)로 표현한다 — 노출 상태의 SoT 는 DB(org_tool).
+//  expose.mcp 는 "MCP 도구냐"만 선언하고 노출 여부를 코드에 하드코딩하지 않는다(구 MCP_TOGGLE_CANDIDATES Set 폐기 — stale 원천 제거).
+export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, boolean>): boolean {
+  if (!cap.expose.mcp) return false;
+  return overrides?.has(cap.name) ? overrides.get(cap.name)! : true;
+}
+
+// MCP 어댑터 — registry capability 를 isToolExposed 단일 판정으로 등록(후보 + 코드기본 + 운영자 override 한 경로).
+// (과거엔 tools/*.ts 가 이름목록을 넘기는 이중 게이트라 expose.mcp:true 인데 목록 누락 시 "고스트"가 생겼다.)
+export function registerMcpCapabilities(server: McpServer, overrides?: ReadonlyMap<string, boolean>): void {
+  for (const cap of registry.values()) {
+    if (!isToolExposed(cap, overrides)) continue;
     server.registerTool(
       cap.name,
       { title: cap.title, description: cap.description, inputSchema: cap.input },
@@ -75,6 +86,32 @@ export function registerMcpCapabilities(server: McpServer, names: string[]): voi
       },
     );
   }
+}
+
+// capability.input(zod raw shape) → JSON Schema(하네스가 tools/list 에서 보는 입력 표면). 변환 실패 시 빈 객체 스키마.
+function toInputSchema(input: unknown): unknown {
+  try {
+    return zodToJsonSchema(z.object((input ?? {}) as z.ZodRawShape), { $refStrategy: "none" });
+  } catch { return { type: "object", properties: {} }; }
+}
+
+// 웹 도구탭·검증용 후보 — expose.mcp:true 인 capability + db 직접등록. 부팅 시 mcp-surface 에 주입.
+//  여기 후보 집합 == registerMcpCapabilities 가 노출할 수 있는 집합(isToolExposed) — 둘 다 expose.mcp 를 본다.
+//  description/inputSchema 는 하네스가 보는 MCP 표면 그대로(웹 도구탭에서 운영자가 확인). db 직등록은 db.ts 의 DB_TOOLS 가 보유.
+export function buildToolCandidates(): ToolCandidate[] {
+  const out: ToolCandidate[] = [];
+  for (const cap of registry.values()) {
+    if (!cap.expose.mcp) continue;
+    out.push({
+      name: cap.name, title: cap.title, description: cap.description,
+      defaultExposed: cap.expose.mcp, kind: "capability", inputSchema: toInputSchema(cap.input),
+    });
+  }
+  for (const d of DB_TOOLS) out.push({
+    name: d.name, title: d.title, description: d.description,
+    defaultExposed: true, kind: "db", inputSchema: d.inputSchema,
+  });
+  return out;
 }
 
 // REST 어댑터 입력 — web.ts 가 순회하며 동일 경로(+alias)에 마운트한다.

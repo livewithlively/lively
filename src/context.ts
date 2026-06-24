@@ -6,9 +6,10 @@ export interface LivelyUser {
   email: string;
   scopes: string[]; // 접근 가능 capability: items | context | admin | runtime | db | memory | code (단일 출처: capabilities/scopes.ts)
   projects: string[]; // 접근 가능 프로젝트 슬러그, "*" = 전체
-  // 인증 출처 — 'static'=AUTH_TOKENS_JSON(회수 불가), 'db'=auth_token(즉시 회수 가능).
-  // 정적 토큰은 admin/runtime 행위가 거부된다(B5: 회수 불가 토큰으로 fleet 코드 푸시 금지).
-  tokenSource?: "static" | "db";
+  // 인증 출처 — 'static'=AUTH_TOKENS_JSON(회수 불가), 'db'=auth_token(즉시 회수 가능),
+  //  'session'=웹 로그인 세션(사람 본인, scope=멤버 LIVE). 정적 토큰만 admin/runtime 행위가 거부된다
+  //  (B5: 회수 불가 토큰으로 fleet 코드 푸시 금지 — 세션·DB 토큰은 허용).
+  tokenSource?: "static" | "db" | "session";
   tokenHashPrefix?: string; // DB 토큰 sha256 prefix(감사 상관추적용 — 비밀 아님)
 }
 

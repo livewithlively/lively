@@ -1,7 +1,7 @@
 // G(도메인 부채) 자동 평가 — 의도(should)와 구조(is)의 diff 중 *결정론적으로 깨끗이 떨어지는 슬라이스*만.
 //
-// 정직한 범위 선언: 일반적인 'D/K knowledge_unit(의도) ↔ S domainmap(구조)' 시맨틱 diff 는
-// 의미 판단(어느 knowledge_unit 이 어느 domain 에 해당하나)을 요하고, 두 스토어 간 canonical join
+// 정직한 범위 선언: 일반적인 '지식(의도) ↔ domainmap(구조)' 시맨틱 diff 는
+// 의미 판단(어느 지식이 어느 domain 에 해당하나)을 요하고, 두 스토어 간 canonical join
 // key 가 없다 — 이건 NL/임베딩 판단이라 '무리한 자동분해'다(보류, 보고 참조). 대신 여기서는
 // domainmap 테이블만으로 결정론적으로 계산되는 *구조→의도 발산* 신호 두 종을 debt_finding 으로
 // 자동 생성한다(둘 다 도메인의 should 가 코드 구조에서 증발한 케이스 — domain-debt 도메인 정의 그대로):

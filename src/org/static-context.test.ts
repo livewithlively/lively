@@ -53,9 +53,9 @@ async function main(): Promise<void> {
       const head = idx.split("\n").slice(0, 2).join("\n"); // 헤더 2줄(제목 + 안내)
       assert.ok(live.includes(head), "라이브 preview 에 동일 인덱스 헤더 포함");
       assert.ok(stat.includes(head), "정적 context 에 동일 인덱스 헤더 포함");
-      // 쓰기 가이드 블록(항상 박힘)이 양쪽에 동일하게 존재 — 같은 DB·같은 빌더 산출 증명.
-      assert.ok(live.includes("## 지식 쓰기 가이드"), "라이브에 쓰기 가이드 존재");
-      assert.ok(stat.includes("## 지식 쓰기 가이드"), "정적에 쓰기 가이드 존재");
+      // 로드/기록 가이드(항상 박힘)가 양쪽에 동일하게 존재 — 같은 DB·같은 빌더 산출 증명.
+      assert.ok(live.includes("## 맥락 로드/기록 가이드"), "라이브에 로드/기록 가이드 존재");
+      assert.ok(stat.includes("## 맥락 로드/기록 가이드"), "정적에 로드/기록 가이드 존재");
     }
   });
 

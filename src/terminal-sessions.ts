@@ -12,7 +12,6 @@ import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { teamDir, isTeamMemberById, myTeamIds } from "./terminal-teams.js";
 import { dirToProjectFolder, folderVariants } from "./project-fs.js";
-import { projectAccessByFolder, isProjectMember } from "./org/store.js";
 import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6 } from "./v6/project-store.js";
 
 const execFileAsync = promisify(execFile);
@@ -194,12 +193,12 @@ export async function canAttach(id: string, userId: string): Promise<boolean> {
     // 1순위: 세션에 박힌 프로젝트 id 로 멤버십 판정 — 폴더 이름변경·접미사·아카이브·이동에 면역. src 로 v6/org 스토어 선택.
     const pid = Number(await getOpt(id, "@box_project")) || 0;
     if (pid) {
-      const src = await getOpt(id, "@box_project_src");
-      if (src === "org" ? await isProjectMember(pid, userId) : await isProjectMemberV6(pid, userId)) return true;
+      // org_project 폐기(2026-06) — 모든 프로젝트 세션은 v6 project. src 구분 제거(org 분기는 DROP된 테이블 참조였음).
+      if (await isProjectMemberV6(pid, userId)) return true;
     }
     // 폴백(구 세션·id 없음): 폴더 기준 — project/ ↔ legacy-project/ 양형 × v6·org 양쪽. 여전히 멤버십을 요구(과허용 없음).
     for (const f of folderVariants(folder)) {
-      if ((await projectAccessByFolder(f, userId)) || (await projectAccessByFolderV6(f, userId))) return true;
+      if (await projectAccessByFolderV6(f, userId)) return true;
     }
     return false;
   }

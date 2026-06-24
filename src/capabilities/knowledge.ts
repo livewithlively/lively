@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, knowledgeOverview,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge,
 } from "../v6/knowledge-store.js";
 
 const knowledgeList: Capability = {
@@ -64,7 +64,7 @@ const knowledgeGet: Capability = {
 const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
-  description: "지식 전문 저장(injection/provenance 포함). name 없으면 자동 슬러그.",
+  description: "지식 전문 저장. **신규는 category(분류) 1개 이상 필수**(category_list 의 key 배열 — 미분류 저장 금지). injection/provenance 포함. name 없으면 자동 슬러그.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -73,6 +73,7 @@ const knowledgeSave: Capability = {
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
+    category: z.array(z.string()).optional(),
   },
   expose: {
     mcp: true,
@@ -85,11 +86,14 @@ const knowledgeSave: Capability = {
         if (injection && !["always", "recalled"].includes(injection)) throw new HttpError(400, "injection 은 always|recalled");
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
+        const category = Array.isArray(b.category) ? b.category.map(String)
+          : (b.category ? [String(b.category)] : undefined);
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
           body_md, injection, provenance,
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
+          category,
         };
       } }],
   },
@@ -238,24 +242,10 @@ const knowledgeSearch: Capability = {
   }),
 };
 
-// 개요 — injection/provenance/space 별 집계 + review_pending(레거시 ctx_overview 대체).
-const knowledgeOverviewCap: Capability = {
-  name: "knowledge_overview",
-  title: "지식 개요",
-  description: "지식 집계(injection·provenance·space 별 건수, 활성 총계, 검토대기=observed·active).",
-  scope: "memory",
-  input: {},
-  expose: {
-    mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/knowledge/overview"], parse: () => ({}) }],
-  },
-  handler: async () => await knowledgeOverview(),
-};
-
-// ⚠ REST 마운트 순서 주의 — knowledgeSearch(/knowledge/search)·knowledgeOverviewCap(/knowledge/overview)는
+// ⚠ REST 마운트 순서 주의 — knowledgeSearch(/knowledge/search)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeSearch, knowledgeOverviewCap, knowledgeGet,
+  knowledgeList, knowledgeSearch, knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
 ];

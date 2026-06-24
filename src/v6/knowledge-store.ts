@@ -3,13 +3,13 @@
 //  knowledge_category(n:n)로 카테고리 매핑. 감사 org_content_audit(entity='knowledge'). 갱신 시 version+1.
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
+import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
    as_of, parent_name, summary, author, source_ref, sort, is_wiki, version, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
-const K_COL_LIST = K_COLS.split(",").map((c) => c.trim()); // 복원 재적재용 컬럼 순서
 
 export interface KnowledgeRow {
   name: string; title: string | null; body_md: string;
@@ -19,24 +19,13 @@ export interface KnowledgeRow {
   [k: string]: unknown;
 }
 
-type WriteCtx = { actor?: string | null; source?: string };
-
 function slugify(s: string): string {
   return ((s || "untitled").toLowerCase().trim()
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
 
-async function auditKnowledge(name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> {
-  const source = ctx?.source ?? null;
-  const actorKind = source === "mcp" ? "ai" : source === "web" ? "human" : null;
-  await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
-     VALUES('knowledge',$1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8)`,
-    [name, op,
-     before == null ? null : JSON.stringify(before),
-     after == null ? null : JSON.stringify(after),
-     ctx?.actor ?? null, source, source, actorKind]);
-}
+const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
+  auditOrgContent("knowledge", name, op, before, after, ctx);
 
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
@@ -79,7 +68,7 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; category?: string[] },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow> {
   let name: string;
@@ -94,6 +83,16 @@ export async function upsertKnowledge(
     }
   }
   const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  // 미분류 금지(2026-06-24): category(분류) key→id 해소. 신규는 1개 이상 필수, 미존재 key 는 INSERT 전 차단(미분류·오타 생성 방지).
+  const catIds: number[] = [];
+  for (const key of (input.category ?? [])) {
+    const cat = await one(itemsPool, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
+    if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
+    catIds.push((cat as { id: number }).id);
+  }
+  if (!before && !catIds.length) {
+    throw new Error("신규 지식은 category(분류) 1개 이상 필수 — category_list 의 key 를 지정하세요(미분류 저장 금지).");
+  }
   // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값. injection/provenance 는 명시 우선·기존 보존.
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
   const injection = input.injection ?? (before?.injection as string) ?? "recalled";
@@ -114,6 +113,7 @@ export async function upsertKnowledge(
     [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, ctx?.actor ?? null]);
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
+  for (const id of catIds) await linkKnowledgeCategory(name, id, "confirmed", ctx);
   return after;
 }
 
@@ -151,16 +151,8 @@ export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<Kno
 // 복원 — 마지막 delete 의 before 스냅샷(전문)을 그대로 재적재한다. 본문/메타는 삭제 시점 그대로,
 //  복원 사실(누가/언제)은 감사 op='restore' 로 기록된다. 이미 존재하면(삭제 상태 아님) 거부.
 export async function restoreKnowledge(before: Record<string, unknown>, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const name = before.name as string | undefined;
-  if (!name) throw new Error("복원 스냅샷에 name 이 없습니다");
-  if (await one(itemsPool, `SELECT 1 FROM knowledge WHERE name=$1`, [name])) {
-    throw new Error(`지식 '${name}' 은(는) 이미 존재합니다(삭제 상태가 아님)`);
-  }
-  const placeholders = K_COL_LIST.map((_, i) => `$${i + 1}`).join(", ");
-  const values = K_COL_LIST.map((c) => before[c] ?? null);
-  const after: KnowledgeRow = await one(itemsPool,
-    `INSERT INTO knowledge(${K_COL_LIST.join(", ")}) VALUES(${placeholders}) RETURNING ${K_COLS}`, values);
-  await auditKnowledge(name, "restore", null, after, ctx);
+  const after = await restoreSnapshot<KnowledgeRow>("knowledge", K_COLS, "name", before);
+  await auditKnowledge(after.name, "restore", null, after, ctx);
   return after;
 }
 
@@ -189,41 +181,6 @@ export async function searchKnowledge(
     }
     return { ...r, snippet: snippet.replace(/\s+/g, " ").trim() };
   });
-}
-
-// 개요 — injection/provenance/space 별 집계 + review_pending(observed·active). 레거시 ctx_overview 대체.
-export interface KnowledgeOverview {
-  total_active: number;
-  review_pending: number;
-  by_injection: Record<string, number>;
-  by_provenance: Record<string, number>;
-  by_space: Record<string, number>;
-}
-export async function knowledgeOverview(): Promise<KnowledgeOverview> {
-  const [byInjection, byProvenance, totals, bySpace] = await Promise.all([
-    q(itemsPool, `SELECT injection, COUNT(*)::int AS n FROM knowledge WHERE lifecycle='active' GROUP BY injection`),
-    q(itemsPool, `SELECT provenance, COUNT(*)::int AS n FROM knowledge WHERE lifecycle='active' GROUP BY provenance`),
-    one(itemsPool,
-      `SELECT COUNT(*) FILTER (WHERE lifecycle='active')::int AS total_active,
-              COUNT(*) FILTER (WHERE provenance='observed' AND lifecycle='active')::int AS review_pending
-       FROM knowledge`),
-    q(itemsPool,
-      `SELECT c.space, COUNT(DISTINCT k.name)::int AS n
-       FROM knowledge k
-       JOIN knowledge_category kc ON kc.name=k.name AND kc.state<>'rejected'
-       JOIN category c ON c.id=kc.category_id
-       WHERE k.lifecycle='active'
-       GROUP BY c.space`),
-  ]);
-  const toMap = (rows: any[], key: string) =>
-    Object.fromEntries(rows.map((r) => [r[key], r.n])) as Record<string, number>;
-  return {
-    total_active: totals?.total_active ?? 0,
-    review_pending: totals?.review_pending ?? 0,
-    by_injection: toMap(byInjection, "injection"),
-    by_provenance: toMap(byProvenance, "provenance"),
-    by_space: toMap(bySpace, "space"),
-  };
 }
 
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {

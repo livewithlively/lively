@@ -9,10 +9,11 @@ const activityLog: Capability = {
   name: "activity_log",
   title: "작업(activity) 기록",
   description:
-    "과업(W ku)을 향해 한 작업(activity)을 기록한다 — type=commit/comment/decision/status_change/review. " +
+    "프로젝트(task)를 진척시킨 작업(activity)을 기록한다 — type=commit/comment/decision/status_change/review. " +
     "commit 유형은 commit_sha+touches(건드린 code_unit/data_entity)로 is(코드구조) 갱신 근거가 되고, 모든 유형은 " +
     "should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
-    "실질 지식(의사결정·산출물)은 ctx_save 로 ku 에 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
+    "실질 지식(의사결정·산출물)은 knowledge_save 로 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
+    "진척시킨 프로젝트/태스크는 project_id(task_create_v6 의 id)로 연결한다. " +
     "author_agent='어떤 AI'(모델/하네스 id), session_id=세션 — 사람×AI 작업현황 집계의 축. " +
     "external(system+id) 지정 시 멱등 upsert(PM 코멘트 라운드트립 재호출 안전). " +
     "title 은 기술 상세 제목(펼쳤을 때 표시), summary 는 작업현황 피드 겉에 보이는 짧은 라벨 '중분류 - 내용'(예: '웹 페이지 수정 - 작업현황 UI 개선') — 둘 다 채워라(summary 없으면 title 로 폴백).",
@@ -22,11 +23,11 @@ const activityLog: Capability = {
     title: z.string().min(1).max(500).describe("기술 상세 제목(펼침에 표시 — 정확한 기술 용어 OK). 얇게 — 실질 내용은 ku_refs 로 참조"),
     summary: z.string().max(120).optional().describe("작업현황 겉(접힘)에 보일 짧은 라벨 '중분류 - 내용' 형식(예: '웹 페이지 수정 - 작업현황 UI 개선', '배포 - 도메인 맵 탭'). 한 문장 설명이 아니라 라벨처럼 짧게(기술용어·약어 지양). 상세 설명은 title/body 에. 생략 시 title 로 폴백"),
     body: z.string().max(20000).optional().describe("짧은 메모(선택)"),
-    task_ku_names: z.array(z.string()).optional().describe("이 작업이 속한 과업(W ku) name 목록(n:n)"),
+    project_id: z.number().int().positive().optional().describe("이 작업이 진척시킨 프로젝트(task/subtask) id(project_list_v6/task_create_v6). 미존재 id 면 무시"),
     ku_refs: z.array(z.object({
       name: z.string(),
       relation: z.enum(["produced", "references", "decided"]),
-    })).optional().describe("산출/참조/결정한 지식 ku 연결"),
+    })).optional().describe("산출/참조/결정한 지식(knowledge) name 연결 — v6 knowledge 에 있어야 함(없으면 skippedKnowledge)"),
     touches: z.array(z.object({
       target_kind: z.enum(["code_unit", "data_entity"]),
       target_id: z.number().int(),
@@ -48,7 +49,7 @@ const activityLog: Capability = {
     const authorPerson = ctx?.actor ?? user?.userId ?? null;
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
-      taskKuNames: input.task_ku_names, kuRefs: input.ku_refs, touches: input.touches,
+      projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
       commit_sha: input.commit_sha ?? null, repo: input.repo ?? null, committed_at: input.committed_at ?? null,
       author_agent: input.author_agent ?? null, session_id: input.session_id ?? null,
       external_system: input.external_system ?? null, external_id: input.external_id ?? null,
@@ -64,13 +65,13 @@ const activityList: Capability = {
   title: "작업(activity) 목록",
   description:
     "작업(activity)을 최신순으로 조회한다(commit/comment/decision 등). 필터: author_person(누가)·author_agent(어떤 AI)·" +
-    "type·task_ku(과업 ku name)·repo. 사람×AI 작업현황의 원천.",
+    "type·project_id(진척시킨 프로젝트/태스크)·repo. 사람×AI 작업현황의 원천.",
   scope: "memory",
   input: {
     author_person: z.string().optional().describe("작성자(사람) 식별자로 필터"),
     author_agent: z.string().optional().describe("어떤 AI(모델/하네스)로 필터"),
     type: z.string().optional(),
-    task_ku: z.string().optional().describe("과업(W ku) name 으로 필터"),
+    project_id: z.number().int().positive().optional().describe("이 프로젝트(task) id 를 진척시킨 작업만"),
     repo: z.string().optional(),
     limit: z.number().int().min(1).max(200).optional(),
   },
@@ -83,7 +84,7 @@ const activityList: Capability = {
         author_person: req.query.author_person ? String(req.query.author_person) : undefined,
         author_agent: req.query.author_agent ? String(req.query.author_agent) : undefined,
         type: req.query.type ? String(req.query.type) : undefined,
-        task_ku: req.query.task_ku ? String(req.query.task_ku) : undefined,
+        project_id: req.query.project_id ? Number(req.query.project_id) : undefined,
         repo: req.query.repo ? String(req.query.repo) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : undefined,
       }),
@@ -91,7 +92,7 @@ const activityList: Capability = {
   },
   handler: async (input: any) => listActivities({
     author_person: input.author_person, author_agent: input.author_agent, type: input.type,
-    task_ku: input.task_ku, repo: input.repo, limit: input.limit,
+    project_id: input.project_id, repo: input.repo, limit: input.limit,
   }),
 };
 

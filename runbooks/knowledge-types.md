@@ -77,8 +77,8 @@
 |---|---|---|---|---|
 | ClickUp | 수집중(active) | ClickUp 커넥터가 리스트→프로젝트로 매핑하고, 태스크를 작업 단위로 가져온다. pm_* 툴로 태스크를 직접 쓰기도 한다. | 주기 동기화(run-sync) | W |
 | Notion | 수집중(active) | Notion 커넥터가 지정한 페이지/데이터베이스의 문서를 가져온다. | 동기화(run-sync/backfill) | K |
-| Slack | 중단(dropped) | (미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip). | — |  |
-| Discord | 중단(dropped) | (미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip). | — |  |
+| Slack | 중단(dropped) | (미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip). | — |  |
+| Discord | 중단(dropped) | (미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip). | — |  |
 
 ## 4. 증류·마이그레이션 분류 지침 (LLM)
 

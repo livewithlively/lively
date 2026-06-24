@@ -54,72 +54,31 @@ export function resolveRepo(repo?: string): string {
 // 단순 큐레이션 쓰기의 공통 결과 — confirm{Domain,Mapping,Project}/rejectMapping/setDebtStatus.
 export interface CurationResult { id: number; change_id: number }
 
-// editDomainById — after 의 키가 계약(값은 patch/row 패스스루라 unknown). P5: should(의도 스펙) 추가.
-export interface DomainEditResult {
-  id: number; change_id: number;
-  after: { name: unknown; description: unknown; cross_cutting: unknown; status: string; origin: string; should: unknown };
-}
-export type DomainSetResult = { domain: string } & DomainEditResult;
-
-// setDomainState — no-op 은 change_id '키 부재'가 계약(추가 금지): 유니온으로 컴파일 타임 검증.
-export type DomainStateResult =
-  | { id: number; change_id: number; state: string }
-  | { id: number; action: "unchanged"; state: string };
-
-// P6a 신뢰우선: propose_domain 도 proposed 림보 없이 confirmed 로 착지(evidence 는 provenance 로 보존).
-export interface ProposeDomainResult { repo: string; id: number; key: string; status: "confirmed"; change_id: number }
-
-// P-V3-4a: 통제어휘 도메인 CRUD. domain_create 는 propose 와 달리 evidence 게이트 없이 통제어휘를
-//  채워넣는 경로 — 결과 shape 은 동일 키 집합(repo/id/key/status/change_id). status 'confirmed' 고정.
-export interface CreateDomainResult { repo: string; id: number; key: string; status: "confirmed"; change_id: number }
-// domain_rename = soft-alias(H3): 물리 key 불변 + (old_key→new_key) 별칭 적재 + 표시명(name) 갱신.
-//  aliased=true 면 신규 별칭 행 적재됨, false 면 name-only 변경(별칭 불필요·동일 key). after 는 표시 갱신값.
-export interface RenameDomainResult {
-  repo: string; id: number; key: string; old_key: string; new_key: string;
-  aliased: boolean; change_id: number; after: { name: unknown };
-}
-// repo CRUD — domainmap 자기완결 엔티티(cross-DB cascade 없음). state 축 active|deprecated.
+// v6 은퇴(2026-06-24): 도메인 authoring 결과타입(DomainEdit/Set/State·Propose/Create/RenameDomainResult) 제거 — domain authoring 은 category_* 로 대체됨.
+// repo CRUD — domainmap 자기완결 엔티티. state 축 active|deprecated.
 export interface RepoCreateResult { id: number; name: string; change_id: number }
 export interface RepoRenameResult { id: number; old_name: string; new_name: string; change_id: number }
 // hard-delete(영구삭제) — deprecate(숨김 보존)와 구분. 가드 모드(연결 있으면 거부+카운트)는 별 shape:
 //  blocked=true 면 삭제 안 함(refs 카운트만 반환), force 로 재호출하면 cascade 실행(deleted=true).
-//  domain hard-delete 의 domainmap-DB 내부 cascade(mapping/alias)와 cross-DB(kud/ku) 영향은 capability 가 합산.
-export interface DomainDeleteBlocked {
-  blocked: true; id: number; key: string; repo: string;
-  refs: { mappings: number };   // 이 도메인을 target 으로 하는 살아있는(status<>'rejected') mapping 행 수
-}
-export interface DomainDeleteDone {
-  deleted: true; id: number; key: string; repo: string;
-  removed: { mappings: number; aliases: number };  // cascade 로 지운 domainmap-DB 행 수
-}
-export type DomainDeleteResult = DomainDeleteBlocked | DomainDeleteDone;
 export interface RepoDeleteBlocked {
   blocked: true; id: number; name: string;
-  refs: { domains: number; code_units: number; data_entities: number };
+  refs: { code_units: number; data_entities: number }; // v6: category 는 repo-free라 repo 삭제 차단/카운트에서 제외
 }
 export interface RepoDeleteDone {
   deleted: true; id: number; name: string;
-  removed: { domains: number; code_units: number; data_entities: number; mappings: number; debts: number; aliases: number };
+  removed: { code_units: number; data_entities: number; mappings: number; debts: number };
 }
 export type RepoDeleteResult = RepoDeleteBlocked | RepoDeleteDone;
 export type RepoStateResult =
   | { id: number; name: string; change_id: number; state: string }
   | { id: number; name: string; action: "unchanged"; state: string };
-export interface MergeResult { from_id: number; into_id: number; moved_mappings: number; folded_mappings: number; change_id: number }
-export interface ReassignResult {
-  id: number; change_id: number;
-  after: { domain_id: number; status: string; origin: string };
-}
 export interface RestoreResult { restored: number; change_id: number; action: "deleted" | "reverted"; table: string; entity_id: number }
 
 export interface IngestResult { repo: string; run_id: number; tally: Record<string, number> }
 // refresh — tally 는 카운터 + (file granularity 시) aggregation 객체가 섞인다.
 export interface RefreshResult { repo: string; run_id: number; base: unknown; head: unknown; tally: Record<string, unknown> }
 
-// 읽기 리스트 아이템(queries.ts 가 구성하는 리터럴) — in-process 소비자(items/mapping-candidates 등)는
-// 이 타입에서 Pick 으로 좁혀 쓴다(같은 이름·다른 shape 의 중복 선언 금지).
-export interface BestDomainRef { id: number; key: string; name: string; cross_cutting: boolean; status: string }
-
+// 읽기 리스트 아이템(queries.ts 가 구성하는 리터럴).
 export interface DomainListItem {
   id: number; key: string; name: string; description: string | null;
   should: string | null; // P5: 의도(당위) 스펙 — is(units)와 별 축. 괴리=domain-debt(should_no_is).
@@ -127,16 +86,6 @@ export interface DomainListItem {
   // V4-P1 area 2단(B): space — 'product'(코드앵커 도메인) | 'business'(vocab-only 비즈니스 기능). 항상 방출(?? 'product').
   space: string;
   units: number; entities: number; debts: number; proposed: number;
-}
-
-export interface EntityListItem {
-  id: number; name: string; source: string | null; kind: string | null;
-  domain: BestDomainRef | null;
-}
-
-export interface CodeListItem {
-  id: number; path: string; kind: string | null; label: string; state: string; prev_path: string | null;
-  domain: BestDomainRef | null;
 }
 
 export interface DebtListItem {

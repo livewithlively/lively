@@ -2,6 +2,7 @@
 // 이 식별자는 멤버 머신의 settings.json 마커 · codex TOML 키 · `claude mcp` 인자로 흐른다.
 // 따라서 ASCII·길이상한을 강제하고(파일경로/키 주입 차단), 내장 훅/빌트인 툴 이름과의 충돌을 거부한다.
 import { HttpError } from "../capabilities/rest-util.js";
+import { isBuiltinToolName } from "../capabilities/mcp-surface.js";
 
 // 소문자 영숫자로 시작, 영숫자/_/- 1~64자. 한글·대문자·공백·점 불가.
 export const STRICT_SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -12,17 +13,9 @@ export const RESERVED_HOOK_IDS: ReadonlySet<string> = new Set([
   "session_preload", "work_flag", "stop_writeback_gate", "run-custom",
 ]);
 
-// 게이트웨이가 노출하는 빌트인 MCP 툴 이름 — 동적 org_tool(http_proxy) 이름이 이들을 섀도잉하지 못하게.
-// (org_tool kind='builtin' 게이팅 행은 이 이름을 '참조'하는 것이라 예외 — store.upsertTool 에서 분기.)
-export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "me",
-  // search_items/get_item 폐기(item 흡수 → ctx_ls/ctx_grep/ctx_cat). 매핑 큐레이션 3종은 유지.
-  "list_unmapped", "mapping_candidates", "curate_item_mapping",
-  "domain_list", "domain_get", "domain_deprecate", "repo_list", "debt_list",
-  "db_query", "db_schema", "context_overview", "propose_domain",
-  "pm_task_create", "pm_task_update_status", "pm_task_assign", "pm_task_comment", "pm_task_link", "pm_task_archive",
-  "memory_save", "memory_search", "memory_get",
-]);
+// 게이트웨이 빌트인 MCP 툴 이름은 부팅 시 mcp-surface(registry capability + db 직접등록)에 주입된다 — isBuiltinToolName 으로 조회.
+// (하드코딩 RESERVED_TOOL_NAMES 폐기 2026-06-24: 실제 MCP 표면과 어긋나 stale 였음. http_proxy 이름이 빌트인을 섀도잉
+//  못하게 차단 + kind='builtin' 게이팅 행은 빌트인 이름을 '참조'하는 것이라 존재해야 함을 검증.)
 
 export function assertHookId(id: unknown): string {
   if (typeof id !== "string") throw new HttpError(400, "id 는 문자열이어야 합니다");
@@ -37,10 +30,10 @@ export function assertToolName(name: unknown, kind: string): string {
   if (typeof name !== "string") throw new HttpError(400, "name 은 문자열이어야 합니다");
   const s = name.trim().toLowerCase();
   if (!STRICT_SLUG.test(s)) throw new HttpError(400, "name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
-  if (kind !== "builtin" && RESERVED_TOOL_NAMES.has(s)) {
+  if (kind !== "builtin" && isBuiltinToolName(s)) {
     throw new HttpError(400, `name '${s}' 는 빌트인 도구와 충돌합니다 — 다른 이름을 쓰세요`);
   }
-  if (kind === "builtin" && !RESERVED_TOOL_NAMES.has(s)) {
+  if (kind === "builtin" && !isBuiltinToolName(s)) {
     throw new HttpError(400, `'${s}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
   }
   return s;

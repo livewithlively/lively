@@ -1,8 +1,8 @@
 // Context OS v6 스키마 — greenfield 온톨로지 재설계.
 //  맥락(Context) = Category(분류축) + Knowledge(맥락의 기록) + Project(맥락의 변화).
-//  레거시(domain/knowledge_unit/org_project)와 **병행**(비파괴) — 읽기경로 컷오버까지 보존, 롤백 가능.
+//  컷오버 완료(2026-06-24): 레거시 domain/knowledge_unit/org_project 는 드랍됨 — v6 가 단일 캐노니컬.
 //  단일 통합 DB(itemsPool — db.ts dmPool()→itemsPool). 신규 정션은 같은 DB라 **진짜 FK** 를 쓴다.
-//  ⚠ 호출 순서: index.ts 직렬체인에서 initOrgSchema(knowledge_unit)·initDomainmapSchema(domain/activity/
+//  ⚠ 호출 순서: index.ts 직렬체인에서 initOrgSchema(kind_registry/data_source 등)·initDomainmapSchema(activity/
 //   mapping/debt) **이후** 호출 — activity_knowledge.activity_id 와 activity/mapping/debt ALTER 가 그 테이블에 의존.
 //  내부 FK 순서: category → knowledge/project → 정션(knowledge_category/project_*) → activity/mapping/debt ALTER.
 //  멱등: CREATE TABLE IF NOT EXISTS · ADD COLUMN IF NOT EXISTS · CHECK 은 pg_constraint 프로브(기존 idiom 그대로).
@@ -70,7 +70,7 @@ export async function initV6Schema(): Promise<string> {
   // ── 3) knowledge — 구 knowledge_unit 대체. kind(R/K/H/W) **폐기**(직교축으로 분리). ──
   //  injection=always(구 kind=R 규칙·페르소나 — 항상 주입, materialize 의 급소) | recalled(검색 소환).
   //  provenance=authored(저작) | observed(외부 미러 — 구 confidence='observed'). confidence 는 저작신뢰로 유지.
-  //  외부좌표/스레드/원본보존 컬럼은 구 knowledge_unit(org/schema.ts:504-518) 동형(커넥터 미러 흡수).
+  //  외부좌표/스레드/원본보존 컬럼은 구 knowledge_unit 동형(커넥터 미러 흡수) — 구 테이블은 v6 드랍됨.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS knowledge(
       name TEXT PRIMARY KEY,
@@ -286,6 +286,113 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS mapping_category_idx ON mapping(category_id);
     ALTER TABLE debt_finding ADD COLUMN IF NOT EXISTS category_id INT REFERENCES category(id) ON DELETE CASCADE;
     CREATE UNIQUE INDEX IF NOT EXISTS debt_finding_category_title_uq ON debt_finding(category_id, title) WHERE category_id IS NOT NULL;
+  `);
+
+  // ── 11) 태스크 상세(클릭업형 모달) — 태그·시간추적·체크리스트·의존성. 모두 task/subtask 행(project.id) 귀속. ──
+  //  댓글/활동 피드는 전용 테이블 없이 재활용한다: ① 사용자 댓글 = activity(project_id=task id, type='comment'),
+  //  ② 시스템 이벤트(상태변경·담당자·우선순위·기간·이름·설명·생성) = org_content_audit(entity='project', entity_key=task id)
+  //  의 before/after 를 읽기경로에서 diff. → 새 이벤트 테이블 불필요, 전 이력 자동 포착. (org-wide activity/대시보드 오염도 없음 —
+  //  태스크 댓글의 project_id 는 '태스크' id 라 프로젝트 타임라인(project_id=프로젝트) 필터에 안 잡힘.)
+  //  member/assignee = org_member.id 문자열(리스트뷰 assignee 관례와 동일, FK 없음 — 미러/외부 신원도 허용).
+  await pool.query(`
+    -- 태그 레지스트리(워크스페이스 공용, 색상) + 태스크↔태그 정션. 이름은 대소문자 무시 유일.
+    CREATE TABLE IF NOT EXISTS task_tag(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      color TEXT,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS task_tag_name_uidx ON task_tag(lower(name));
+    CREATE TABLE IF NOT EXISTS task_tag_link(
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      tag_id INT NOT NULL REFERENCES task_tag(id) ON DELETE CASCADE,
+      added_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(task_id, tag_id));
+    CREATE INDEX IF NOT EXISTS task_tag_link_tag_idx ON task_tag_link(tag_id);
+
+    -- 시간추적 — 실행중(ended_at NULL)=타이머, 종료/수동입력=duration_seconds 확정. source=timer|manual.
+    CREATE TABLE IF NOT EXISTS task_time_entry(
+      id SERIAL PRIMARY KEY,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      member TEXT,
+      started_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      duration_seconds INT,
+      note TEXT,
+      source TEXT NOT NULL DEFAULT 'timer',
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_time_entry_task_idx ON task_time_entry(task_id);
+    -- 한 (task,member) 당 실행중 타이머는 최대 1개(부분 유니크 — 이중 시작 방지).
+    CREATE UNIQUE INDEX IF NOT EXISTS task_time_running_uidx ON task_time_entry(task_id, member) WHERE ended_at IS NULL;
+
+    -- 체크리스트(태스크 안 가벼운 점검) + 항목(담당자·완료). 서브태스크보다 가벼운 점검용.
+    CREATE TABLE IF NOT EXISTS task_checklist(
+      id SERIAL PRIMARY KEY,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      sort INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_checklist_task_idx ON task_checklist(task_id);
+    CREATE TABLE IF NOT EXISTS task_checklist_item(
+      id SERIAL PRIMARY KEY,
+      checklist_id INT NOT NULL REFERENCES task_checklist(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      done BOOLEAN NOT NULL DEFAULT false,
+      assignee TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_checklist_item_cl_idx ON task_checklist_item(checklist_id);
+
+    -- 의존성/연결 — type=blocking|waiting_on|linked. 쓰기경로가 역방향을 동기(상호적: blocking↔waiting_on, linked↔linked).
+    CREATE TABLE IF NOT EXISTS task_link(
+      from_task INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      to_task INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(from_task, to_task, type));
+    CREATE INDEX IF NOT EXISTS task_link_to_idx ON task_link(to_task);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='task_link'::regclass AND conname='task_link_type_chk') THEN
+        ALTER TABLE task_link ADD CONSTRAINT task_link_type_chk CHECK (type IN ('blocking','waiting_on','linked'));
+      END IF;
+    END $$;
+  `);
+
+  // ── ⑫ 커스텀 필드(클릭업형 "+ 컬럼 추가") — 루트 프로젝트에 형식을 지정해 컬럼을 정의하고, 그 아래 모든 ──
+  //  task/subtask 가 컬럼별 값을 갖는다. field_type=text|textarea|number|money|date|dropdown|labels|checkbox|
+  //  website|email|phone|rating|progress|tshirt|location(프론트 FIELD_TYPES 와 1:1). config=타입별 설정(dropdown/
+  //  labels=options[], money=currency, rating=max …), value=타입별 형태(JSONB) — 둘 다 자유형이라 쓰기경로(store)가 검증.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_field(
+      id SERIAL PRIMARY KEY,
+      project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      field_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sort INT NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_field_project_idx ON task_field(project_id);
+
+    -- 태스크별 필드값 — (field, task) 1행. 값 해제 시 행 삭제(부재=무값). 필드 삭제 시 FK CASCADE 로 값 동반 제거.
+    CREATE TABLE IF NOT EXISTS task_field_value(
+      field_id INT NOT NULL REFERENCES task_field(id) ON DELETE CASCADE,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      value JSONB,
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(field_id, task_id));
+    CREATE INDEX IF NOT EXISTS task_field_value_task_idx ON task_field_value(task_id);
+  `);
+
+  // ── ⑧ 댓글 반응(클릭업식 이모지 리액션) — 댓글=activity(type=comment)의 id 에 (emoji, member) 토글. ──
+  //  activity 는 initDomainmapSchema 가 먼저 생성(존재 보장) → 진짜 FK(같은 DB). 댓글 삭제 시 반응 동반 제거.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_comment_reaction(
+      activity_id INT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      member TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(activity_id, emoji, member));
+    CREATE INDEX IF NOT EXISTS task_comment_reaction_act_idx ON task_comment_reaction(activity_id);
   `);
 
   return "initialized v6 schema";

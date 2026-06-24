@@ -6,9 +6,11 @@
 import { z } from "zod";
 import { dmRead } from "./domainmap-compat.js";
 import { resolveRepo } from "../domainmap/core/types.js";
-import { listRepos, overview, listDomainsApi, listAllDomains, domainDetail, listDebts, listEntitiesApi } from "../domainmap/core/queries.js";
-import { domainActiveCounts } from "../org/knowledge.js";
-import { listMappingRepos, uiStats } from "../items/store.js";
+// v6: 레포-스코프 도메인 읽기(context_overview·domain_list·domain_get·debt_list)는 repo-free category 리더로 cutover.
+//  레거시 queries.ts(overview/listDomainsApi/domainDetail/listDebts)는 골든리드 핀이라 무변형 — 소비자만 v6 로 repoint.
+//  listRepos/listAllDomains/listEntitiesApi 는 아직 레거시(repo_list·all_domains·domainmap_proxy — 후속 슬라이스).
+import { productOverview, listProductDomains, listProductDebts, listProductEntities, listReposV6 } from "../v6/domainmap-store.js";
+import { uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
 import { DM_KINDS, HttpError } from "./rest-util.js";
 
@@ -32,12 +34,12 @@ const repoList: Capability = {
     let domainmapError: string | null = null;
     try {
       // pg status 에러는 dmRead 가 구 dmGet 엔벨로프로 감싼다 — domainmapError 필드 거동 보존.
-      const raw = await dmRead("/api/repos", () => listRepos());
+      const raw = await dmRead("/api/repos", () => listReposV6()); // v6: domains 카운트=category-도달
       domainmapRepos = Array.isArray(raw) ? raw : [];
     } catch (err) {
       domainmapError = `domainmap 에 연결하지 못했습니다 — ${(err as Error).message}`;
     }
-    const mappingRepos = await listMappingRepos(); // rejected-only repo 제외 버전
+    const mappingRepos: string[] = []; // v6: category=repo-free — 매핑 repo 개념 소멸(repo 목록은 listReposV6 단일 소스)
     const names = new Set<string>(mappingRepos);
     for (const r of domainmapRepos) {
       if (typeof r === "string") names.add(r);
@@ -67,83 +69,15 @@ const contextOverview: Capability = {
     const wantItems = (user.scopes ?? []).includes("items");
     // domainmap 다운 시 throw 유지(코어 데이터) — repo_list 와 달리 부분 성공 없음.
     const [ov, items] = await Promise.all([
-      dmRead(`/api/repo/${enc(r)}/overview`, () => overview(r)),
+      dmRead(`/api/repo/${enc(r)}/overview`, () => productOverview()), // v6: repo-free(category 전체) — repo 파람 무시
       wantItems ? uiStats() : Promise.resolve(null),
     ]);
     return { ...(ov as Record<string, unknown>), items };
   },
 };
 
-// 아이템 스토어 통계 — REST 전용(/api/ui/stats byte-compat). context_overview 가 items 필드로
-// embed 하는 것과 동일한 단일 uiStats() 를 공유한다(파리티의 근거).
-const itemsStats: Capability = {
-  name: "items_stats",
-  title: "아이템 스토어 통계",
-  description: "아이템 스토어 개요 통계(uiStats) — REST /api/ui/stats 전용. MCP 는 context_overview.items 로 동일 객체를 본다.",
-  scope: "items",
-  input: {},
-  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/stats"], parse: () => ({}) }] },
-  handler: async () => uiStats(),
-};
-
-const domainList: Capability = {
-  name: "domain_list",
-  title: "도메인 목록",
-  description: "비즈니스 도메인 분류 목록. query 를 주면 key/name 소문자 부분일치로 필터.",
-  scope: "context",
-  input: { repo: z.string().optional(), query: z.string().optional() },
-  expose: { mcp: true, rest: false },
-  handler: async (input: { repo?: string; query?: string }) => {
-    // query 필터는 핸들러 소속(툴 계층 아님) — REST 노출해도 동일 결과 보장.
-    const r = resolveRepo(input.repo);
-    const rows = await dmRead(`/api/repo/${enc(r)}/domains`, () => listDomainsApi(r));
-    if (input.query && Array.isArray(rows)) {
-      const ql = input.query.toLowerCase();
-      return rows.filter((d) => `${d.key ?? ""} ${d.name ?? ""}`.toLowerCase().includes(ql));
-    }
-    return rows;
-  },
-};
-
-// 탈-repo(V5) 통합 도메인 목록 — 전 repo + repo_id NULL(business) 통제어휘. 웹 드롭다운/검증의 단일 소스.
-//  listDomainsApi(:repo) 는 product 도메인 repo별 조회(어휘CRUD·debt·코드앵커 계약)로 유지하고, repo-비의존
-//  소비자(저장 드롭다운·area space 필터)는 이 평면 목록을 쓴다. units/debt 카운트는 비포함(드롭다운 전용).
-const allDomains: Capability = {
-  name: "all_domains",
-  title: "통합 도메인 목록(탈-repo)",
-  description: "전 repo + business(조직평면) 통제어휘를 평면으로 반환 — 웹 도메인 드롭다운/좌측 위계 전용(REST only). " +
-    "각 항목에 active_count(그 도메인 key 에 귀속된 active ku 보유수, observed 제외)를 붙인다 — 좌측 위계 '존재하는 세부구분만 노출'(count>0 필터)·space별 그룹용.",
-  scope: "context",
-  input: {},
-  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/domains"], parse: () => ({}) }] },
-  handler: async () => {
-    // domainmap 통제어휘(전 space) + items DB 의 도메인별 active ku 카운트(cross-DB)를 key 로 조인.
-    //  domainmap 다운이어도 카운트는 items DB 라 독립 — 단 도메인 목록 자체가 없으면 빈 배열(dmRead 가 처리).
-    const domains = await dmRead(`/api/domains`, () => listAllDomains());
-    let countByKey = new Map<string, number>();
-    try {
-      const counts = await domainActiveCounts();
-      countByKey = new Map(counts.map((c) => [c.domain_key, c.active_count]));
-    } catch { countByKey = new Map(); } // items DB 일시 장애 시 카운트 0 폴백(목록은 보존 — 가용성 우선)
-    return (Array.isArray(domains) ? domains : []).map((d) => ({
-      ...d, active_count: countByKey.get(d.key) ?? 0,
-    }));
-  },
-};
-
-const domainGet: Capability = {
-  name: "domain_get",
-  title: "도메인 상세",
-  description: "한 도메인의 상세 — 매핑된 코드/데이터 엔티티 포함. 도메인↔코드↔DB테이블 추적에 사용(이후 db_query 와 연계).",
-  scope: "context",
-  input: { id: z.number().int(), repo: z.string().optional() },
-  expose: { mcp: true, rest: false },
-  handler: async (input: { id: number; repo?: string }) => {
-    const r = resolveRepo(input.repo);
-    return dmRead(`/api/repo/${enc(r)}/domain/${input.id}`, () => domainDetail(r, input.id));
-  },
-};
-
+// v6 은퇴(2026-06-24): items_stats(REST /api/ui/stats — 웹 미사용, observed 통계는 context_overview.items 가 MCP 노출)
+//  + all_domains(REST /api/ui/domains — 웹 도메인 드롭다운 폐기로 소비자 0)는 제거. category 목록은 category_list 가 단일 표면.
 const debtList: Capability = {
   name: "debt_list",
   title: "도메인 부채 목록",
@@ -153,16 +87,16 @@ const debtList: Capability = {
   expose: { mcp: true, rest: false },
   handler: async (input: { repo?: string }) => {
     const r = resolveRepo(input.repo);
-    return dmRead(`/api/repo/${enc(r)}/debts`, () => listDebts(r));
+    return dmRead(`/api/repo/${enc(r)}/debts`, () => listProductDebts()); // v6: repo-free category 부채
   },
 };
 
 // domainmap 읽기 — kind 화이트리스트(구 프록시 시절 오픈 프록시 차단 규약 유지). UI 전용(REST only).
 // 화이트리스트에 debts 없음(기존 그대로 — 표면 동결, 추가 금지).
 const DM_KIND_FN: Record<string, (repo: string) => Promise<unknown>> = {
-  domains: listDomainsApi,
-  entities: listEntitiesApi,
-  overview,
+  domains: () => listProductDomains(), // v6: repo-free
+  entities: () => listProductEntities(), // v6: data_entity + best category
+  overview: () => productOverview(),   // v6: repo-free
 };
 // code 는 DM_KINDS 밖(표면 동결) — queue/code 읽기는 코어(core/queries.ts)에만 존재한다(그쪽 주석 참조).
 
@@ -194,5 +128,5 @@ const domainmapProxy: Capability = {
 };
 
 export const contextCapabilities: Capability[] = [
-  repoList, contextOverview, itemsStats, domainList, allDomains, domainGet, debtList, domainmapProxy,
+  repoList, contextOverview, debtList, domainmapProxy,
 ];

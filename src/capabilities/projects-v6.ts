@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus,
-  createTask, updateTaskStatus, updateTask, setProjectMembers, isProjectMember,
+  createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, isProjectMember,
   linkProjectCategory, unlinkProjectCategory,
   linkProjectKnowledge, unlinkProjectKnowledge,
 } from "../v6/project-store.js";
@@ -371,7 +371,27 @@ const taskUpdateV6: Capability = {
   },
 };
 
+// ── 작업 삭제 — task/subtask 삭제(삭제+감사 스냅샷 → #/trash 복원). 하위·태그·체크리스트·의존성은 FK CASCADE 정리. ──
+//  소유권 게이트는 task_update_v6 와 동형(인증 사용자=가능). REST-only. status 전용 엔드포인트와 경로 충돌 없음(/delete 접미).
+const taskDeleteV6: Capability = {
+  name: "task_delete_v6",
+  title: "작업 삭제(v6)",
+  description: "작업(task/subtask)을 삭제한다. 하위·태그·체크리스트·의존성은 FK CASCADE 로 정리되고, 감사 스냅샷으로 #/trash 에서 본체를 복원할 수 있다. 웹 프로젝트 탭 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/delete"],
+      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const task = await deleteTaskNode(input.id, writeCtx);
+    return { deleted: true, id: input.id, task };
+  },
+};
+
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6,
 ];

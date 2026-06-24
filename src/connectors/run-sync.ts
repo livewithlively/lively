@@ -4,7 +4,7 @@
 // 멱등: 아이템은 (prov_system,prov_instance,external_id) upsert — 두 번 돌려도 중복 없음.
 // 커서는 **모든 단계 성공 후에만** 전진 — 중도 실패 run 은 같은 윈도를 다음 run 이 재폴링한다(유실 없음).
 import {
-  initItemSchema, ingestItems, resolveParents,
+  initItemSchema, ingestItems,
   getConnectorState, setConnectorState,
   type RawItem,
 } from "../items/store.js";
@@ -26,7 +26,7 @@ if (name !== "clickup") {
 }
 
 await initItemSchema();   // person/connector_state 등 보조 스키마
-await initOrgSchema();    // item 폐기 컷오버: ku(knowledge_unit*) 단일 표면 — 미러/매핑이 여기 적재
+await initOrgSchema();    // v6 컷오버: 미러/매핑은 v6 knowledge(ingestItems→connector-mirror)에 적재 — initOrgSchema 는 org_*/kind_registry/data_source 시드
 
 // ── 1) 컨테이너 나열 (태스크 작업 전에) ──
 const team = await getTeam();
@@ -93,7 +93,6 @@ for (const task of tasks) {
   }
 }
 await flush();
-const linked = await resolveParents();
 
 // ── 6) 커서 전진 — **전 단계 성공(failed=false) 후에만**. max(이전, 이번 run 관측 최대). ──
 // 부분 실패 run 은 커서를 동결한다: 실패 리스트의 archived 패스/백필 누락분을 다음 run 이
@@ -108,7 +107,7 @@ if (advanceCursor) {
 logger.info({
   mode: incremental ? "incremental" : "full",
   lists: lists.length,
-  tasks: seen.size, ingested, parentLinked: linked,
+  tasks: seen.size, ingested,
   cursorMs: advanceCursor ? Math.max(prevMaxMs, maxSeenMs) : prevMaxMs,
   cursorAdvanced: advanceCursor,
 }, "clickup 싱크 완료");

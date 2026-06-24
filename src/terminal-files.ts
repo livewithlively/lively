@@ -9,7 +9,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
-import { canAttach, sessionDir, resolveRootPath, tidyHistory } from "./terminal-sessions.js";
+import { canAttach, sessionDir, resolveRootPath } from "./terminal-sessions.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
 const MAX_PREVIEW = 2 * 1024 * 1024; // 2MB

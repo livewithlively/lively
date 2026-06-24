@@ -7,6 +7,9 @@
 //  DB 는 물리 통합(dmPool()=itemsPool)이라 category(items)와 code_unit/debt_finding/activity(domainmap)를 한 풀에서 조인한다.
 import { itemsPool } from "../items/store.js";
 import { q } from "../domainmap/db.js";
+import { httpErr } from "../domainmap/core/types.js";
+// queries.ts 의 순수 헬퍼(domain 테이블 무관 — clone_url 시크릿 제거·freshness 계산)만 재사용(골든리드 무변형).
+import { sanitizeCloneUrl, computeFreshness } from "../domainmap/core/queries.js";
 
 // 레거시 DomainListItem(types.ts:123) 과 키 집합 동형 + repos(v6 멀티레포 신호) 가산.
 //  units/entities/debts/proposed 는 ::int 캐스트(미캐스트 시 pg int8 → string, 프론트 fmtNum 깨짐).
@@ -117,4 +120,94 @@ export async function productDomainmapView(limit = 100): Promise<{
   ]);
   // repo 키: category 는 repo-free 라 라벨로 'product' 고정(레거시는 입력 repo 명). 프론트는 repo 키를 안 읽음.
   return { repo: "product", domains, debts, should_changes, is_commit_changes };
+}
+
+// ── repo-free 개요(구 overview(repo) 대체) — 제품 전체(category) 기준 집계. ──
+//  레포-스코프 폐기(v6 결정): code_unit/data_entity/mapping/debt 는 전 레포 합산, domains=product category 수.
+//  context_overview(MCP) 가 이걸 서빙 — repo 파람은 accept-and-ignore(category=repo-free). scan_runs/repos 는 다중레포 신호.
+export async function productOverview(): Promise<any> {
+  const totals = (await q(itemsPool, `SELECT
+    (SELECT COUNT(*)::int FROM category WHERE space='product' AND state<>'merged') domains,
+    (SELECT COUNT(*)::int FROM code_unit WHERE COALESCE(state,'active')='active') code_units,
+    (SELECT COUNT(*)::int FROM data_entity) data_entities,
+    (SELECT COUNT(*)::int FROM mapping WHERE category_id IS NOT NULL AND status<>'rejected') mappings,
+    (SELECT COUNT(*)::int FROM debt_finding WHERE category_id IS NOT NULL AND status NOT IN ('resolved','dismissed')) debts,
+    (SELECT COUNT(*)::int FROM change_log) changes`))[0];
+  const scan_runs = await q(itemsPool,
+    `SELECT s.id, r.name AS repo, s.runbook, s.harness, s.actor_type, s.actor_id, s.started_at, s.finished_at, s.summary
+       FROM scan_run s LEFT JOIN repo r ON r.id=s.repo_id ORDER BY s.id DESC LIMIT 20`);
+  const repos = await q(itemsPool, "SELECT name FROM repo ORDER BY name");
+  return { space: "product", totals, scan_runs, repos: repos.map((r: any) => r.name) };
+}
+
+// ── repo-free 도메인 상세(구 domainDetail(repo,id) 대체) — category(space='product') 1건 + 매핑 코드/엔티티(전 레포) + 부채. ──
+//  code_unit 은 멀티레포라 repo 명을 같이 방출(repo-free 뷰에서 어느 레포 코드인지 식별). 매핑 status 무관(removed 포함 — 레거시 동일, 부채 가시화).
+export async function productDomainDetail(id: number): Promise<any> {
+  const cat = (await q(itemsPool, "SELECT * FROM category WHERE id=$1 AND space='product'", [id]))[0];
+  if (!cat) throw httpErr(404, "no such product category: " + id);
+  const code_units = await q(itemsPool, `
+    SELECT cu.id, cu.kind, cu.path, cu.label, COALESCE(cu.state,'active') state, rp.name AS repo,
+           m.id mid, m.status mstatus, m.origin morigin, m.confidence mconf
+      FROM mapping m JOIN code_unit cu ON cu.id=m.target_id
+      LEFT JOIN repo rp ON rp.id=cu.repo_id
+     WHERE m.category_id=$1 AND m.target_kind='code_unit' ORDER BY rp.name, cu.path`, [id]);
+  const data_entities = await q(itemsPool, `
+    SELECT de.id, de.kind, de.name, de.source, m.id mid, m.status mstatus, m.origin morigin, m.confidence mconf
+      FROM mapping m JOIN data_entity de ON de.id=m.target_id
+     WHERE m.category_id=$1 AND m.target_kind='data_entity' ORDER BY de.name`, [id]);
+  const debts = await q(itemsPool,
+    `SELECT id,kind,title,detail,cited_refs,status,origin FROM debt_finding WHERE category_id=$1 ORDER BY id`, [id]);
+  return {
+    domain: {
+      id: cat.id, key: cat.key, name: cat.name, description: cat.description, should: cat.should ?? null,
+      state: cat.state, cross_cutting: cat.cross_cutting, origin: cat.origin, status: cat.status, space: cat.space ?? "product",
+    },
+    code_units: code_units.map((x: any) => ({
+      id: x.id, kind: x.kind, path: x.path, label: x.label ?? x.path, state: x.state ?? "active", repo: x.repo ?? null,
+      mapping: { id: x.mid, status: x.mstatus, origin: x.morigin, confidence: x.mconf },
+    })),
+    data_entities: data_entities.map((x: any) => ({
+      id: x.id, kind: x.kind, name: x.name, source: x.source, state: "active",
+      mapping: { id: x.mid, status: x.mstatus, origin: x.morigin, confidence: x.mconf },
+    })),
+    debts,
+  };
+}
+
+// ── 엔티티 vocab(구 listEntitiesApi 대체) — data_entity + best category(mapping.category_id). repo-free. ──
+//  mapping-candidates(매핑 검증 vocab)·domainmap_proxy(entities) 가 소비. domain 자리에 {key} 방출(구 shape 호환).
+export async function listProductEntities(): Promise<{ id: number; name: string; source: string | null; kind: string; domain: { key: string } | null }[]> {
+  const rows = await q(itemsPool, `
+    SELECT de.id, de.name, de.source, de.kind,
+      (SELECT c.key FROM mapping m JOIN category c ON c.id=m.category_id
+        WHERE m.target_kind='data_entity' AND m.target_id=de.id
+          AND m.category_id IS NOT NULL AND m.status<>'rejected'
+        ORDER BY m.confidence DESC NULLS LAST, m.category_id ASC LIMIT 1) AS domain_key
+    FROM data_entity de ORDER BY de.name, de.source`);
+  return rows.map((e: any) => ({ id: e.id, name: e.name, source: e.source ?? null, kind: e.kind, domain: e.domain_key ? { key: e.domain_key } : null }));
+}
+
+// v6 은퇴(2026-06-24): listAllCategories(평면 vocab 목록)·categoryActiveCounts(카테고리별 active 지식수)는
+//  유일 소비자였던 all_domains(/api/ui/domains) 제거로 고아 → 삭제. 카테고리 목록은 category_list(category-store) 단일 표면.
+
+// ── 레포 목록(구 listRepos 대체) — repo 는 실엔티티(유지). domains 카운트만 category-도달 기준으로 v6화. ──
+//  domains = 그 레포 code_unit 이 매핑으로 닿는 distinct category 수(멀티레포 — category 는 repo-free라 '도달' 개념).
+export async function listReposV6(): Promise<any[]> {
+  const repos = await q(itemsPool, "SELECT * FROM repo ORDER BY name");
+  const out: any[] = [];
+  for (const r of repos) {
+    const t = (await q(itemsPool, `SELECT
+      (SELECT COUNT(DISTINCT m.category_id)::int FROM mapping m JOIN code_unit cu ON cu.id=m.target_id
+         WHERE cu.repo_id=$1 AND m.target_kind='code_unit' AND m.category_id IS NOT NULL AND m.status<>'rejected') domains,
+      (SELECT COUNT(*)::int FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active') code_units,
+      (SELECT COUNT(*)::int FROM data_entity WHERE repo_id=$1) data_entities,
+      (SELECT COUNT(*)::int FROM mapping WHERE repo_id=$1) mappings,
+      (SELECT COUNT(*)::int FROM debt_finding WHERE repo_id=$1) debts,
+      (SELECT COUNT(*)::int FROM change_log WHERE repo_id=$1) changes`, [r.id]))[0];
+    out.push({
+      name: r.name, clone_url: sanitizeCloneUrl(r.git_url), detected_stack: r.detected_stack ?? {}, totals: t,
+      freshness: computeFreshness(r, t.code_units),
+    });
+  }
+  return out;
 }

@@ -126,7 +126,7 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
    라이블리 토큰(`lvk_`)이면 `org_token_revoke`(또는 발급 시 받은 전체 해시로 회수) — 게이트웨이 재시작 불요.
 2. **새 값을 외부에 주입.** (d)1 처럼 `.env`/매니저에 새 값. **이름은 그대로 둘 수 있다**(참조가 env 이름이라
    값만 바꾸면 런타임이 새 값을 해소 — DB 소스는 풀 회수로 무재시작 반영).
-3. **콘텐츠/로그에서 제거.** 평문이 콘텐츠 본문에 들어갔다면: 해당 knowledge_unit/section/member/domain 을
+3. **콘텐츠/로그에서 제거.** 평문이 콘텐츠 본문에 들어갔다면: 해당 knowledge/section/member/category 를
    수정(이제 `assertNoHardSecrets` 가 재저장을 막으므로 정제 후 저장). 감사 로그(`org_content_audit`)는
    append-only 라 redactDeep 으로 이미 마스킹돼 있다 — 마스킹 누락 패턴이면 redact.ts 패턴을 보강.
 4. **스캔으로 확인.** `scripts/scan-content-secrets.mjs` 로 hit 0 재확인.
@@ -141,8 +141,8 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 node --env-file=/tmp/.../.env scripts/scan-content-secrets.mjs
 ```
 
-- 대상: items DB(`knowledge_unit` name/title/body_md, `org_member` display_name/email/body_md/identities)
-  + domainmap DB(`domain` name/description, `debt_finding` title/detail).
+- 대상: items DB(`knowledge` name/title/body_md, `org_member` display_name/email/body_md/identities)
+  + `category` name/description, `debt_finding` title/detail.
 - `assertNoHardSecrets` + `redactDeep`(redact.ts 단일 출처)을 전수 적용. **값 비출력** — 위치(테이블/PK/
   컬럼)와 패턴 라벨(hard/masked)만 보고.
 - hit ≥ 1 → `exit 1`(CI 후보). DB 미설정 소스는 skip(보고만, fail 아님).

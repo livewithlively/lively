@@ -6,7 +6,6 @@
 // 멱등 마이그레이션 패턴은 items/store.ts 와 동일: CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS
 //  + pg_constraint 프로브로 CHECK enum 멱등 적용. 부팅 시 1회(비치명적) 호출.
 import { itemsPool } from "../items/store.js";
-import { logger } from "../log.js";
 
 export async function initOrgSchema(): Promise<void> {
   // ── org_profile — 단일 행(id=1): 조직 표시명 + 게이트웨이 주소. ──
@@ -22,16 +21,7 @@ export async function initOrgSchema(): Promise<void> {
     INSERT INTO org_profile(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
   `);
 
-  // ── org_content — 섹션별 markdown 본문. 현재 섹션: 'managed-policy', 'org-defaults'. ──
-  // 매 세션 멤버 컨텍스트 최상단에 주입되는 두 코어 문서. version 은 낙관적 잠금 + 변경 감지용.
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS org_content(
-      section TEXT PRIMARY KEY,
-      body_md TEXT NOT NULL DEFAULT '',
-      version INT NOT NULL DEFAULT 1,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_by TEXT);
-  `);
+  // org_content/org_memory 폐기(2026-06-24) — v6 knowledge 컷오버 완료(store 함수=v6 래퍼). knowledge_unit 복사 후 원본 DROP.
 
   // ── org_member — 구성원 authoring 레코드(members/<id>.md 의 DB 표현). ──
   // identities JSONB = [{system, external_id, email?, instance?, display_name?}]. body_md = 개인 레이어 본문.
@@ -65,25 +55,6 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
-  // ── org_memory — 단일 공유 풀(에이전트 생산·소비). 인덱스(요약)는 발행 시 항상-주입 컨텍스트로, 본문은 ──
-  //  memory_search(게이트웨이 pull)로. visibility(member/internal) 분리는 2026-06-17 폐기 — 과설계였음.
-  //  domain_key/domain_repo: domainmap 도메인 귀속(슬러그 약결합, FK 아님). 자동분류(memory_save) 또는 수동.
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS org_memory(
-      name TEXT PRIMARY KEY,
-      title TEXT,
-      body_md TEXT NOT NULL DEFAULT '',
-      sort INT NOT NULL DEFAULT 0,
-      version INT NOT NULL DEFAULT 1,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_by TEXT);
-    ALTER TABLE org_memory ADD COLUMN IF NOT EXISTS domain_key TEXT;
-    ALTER TABLE org_memory ADD COLUMN IF NOT EXISTS domain_repo TEXT;
-    -- 단순화 폐기(down-migration, 멱등): 구코드가 더는 안 읽음. visibility CHECK 는 컬럼 드롭 시 함께 사라짐.
-    --  in_index 도 폐기 — 전 메모리가 인덱스에 들어감(cap 으로 관리). 파괴적이라 index.ts 가 listen 성공 후에만 실행.
-    ALTER TABLE org_memory DROP COLUMN IF EXISTS visibility;
-    ALTER TABLE org_memory DROP COLUMN IF EXISTS in_index;
-  `);
 
   // ── org_content_audit — append-only 감사 로그(item_mapping_audit/change_log 대응물). ──
   // 모든 org-content 쓰기는 여기 before/after 스냅샷을 남긴다. FK 없음(행 삭제 후에도 이력 보존).
@@ -228,6 +199,56 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // 빌트인 도구 정책 시드 — 운영자 웹 최종 편집본(노출 enabled + 자동승인 auto_approve)을 신규 게이트웨이 기본으로 박는다.
+  //  노출/자동승인 상태의 SoT 는 org_tool(DB). expose.mcp 는 "MCP 도구냐"만 선언하고, 노출·자동승인은 여기(DB)가 정한다.
+  //  ON CONFLICT DO NOTHING = 최초 1회만 — 기존 인스턴스의 운영자 변경을 덮지 않는다(시드는 신규 설치 기본값일 뿐).
+  //  현 정책: 대부분 빌트인 노출+자동승인, project_delete_v6 만 OFF(위험한 영구 삭제). 시드에 없는 신규 도구는
+  //  org_tool 행 없음 → expose.mcp 기본(노출) + auto_approve OFF 로 동작 — 필요하면 웹 도구탭에서 토글한다.
+  await itemsPool.query(`
+    INSERT INTO org_tool(name, kind, enabled, auto_approve) VALUES
+      ('activity_list','builtin',true,true),
+      ('activity_log','builtin',true,true),
+      ('category_create','builtin',true,true),
+      ('category_delete','builtin',true,true),
+      ('category_edge_list','builtin',true,true),
+      ('category_edge_remove','builtin',true,true),
+      ('category_edge_set','builtin',true,true),
+      ('category_get','builtin',true,true),
+      ('category_list','builtin',true,true),
+      ('category_update','builtin',true,true),
+      ('content_restore','builtin',true,true),
+      ('context_overview','builtin',true,true),
+      ('db_query','builtin',true,true),
+      ('db_schema','builtin',true,true),
+      ('db_sources','builtin',true,true),
+      ('debt_list','builtin',true,true),
+      ('deleted_list','builtin',true,true),
+      ('knowledge_delete','builtin',true,true),
+      ('knowledge_get','builtin',true,true),
+      ('knowledge_link_category','builtin',true,true),
+      ('knowledge_list','builtin',true,true),
+      ('knowledge_save','builtin',true,true),
+      ('knowledge_search','builtin',true,true),
+      ('knowledge_set_lifecycle','builtin',true,true),
+      ('knowledge_set_wiki','builtin',true,true),
+      ('project_create_v6','builtin',true,true),
+      ('project_delete_v6','builtin',false,false),
+      ('project_get_v6','builtin',true,true),
+      ('project_link_category_v6','builtin',true,true),
+      ('project_link_knowledge_v6','builtin',true,true),
+      ('project_list_v6','builtin',true,true),
+      ('project_set_members_v6','builtin',true,true),
+      ('project_set_status_v6','builtin',true,true),
+      ('repo_create','builtin',true,true),
+      ('repo_delete','builtin',true,true),
+      ('repo_deprecate','builtin',true,true),
+      ('repo_list','builtin',true,true),
+      ('repo_rename','builtin',true,true),
+      ('task_create_v6','builtin',true,true),
+      ('task_set_status_v6','builtin',true,true)
+    ON CONFLICT (name) DO NOTHING;
+  `);
+
   // ── org_runtime_config 확장: http_proxy 안전 화이트리스트(B15). 둘 다 기본 빈 배열(deny-all). ──
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_auth_envs JSONB NOT NULL DEFAULT '[]'::jsonb;
@@ -289,34 +310,11 @@ export async function initOrgSchema(): Promise<void> {
   // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).
   await itemsPool.query(`ALTER TABLE org_member ADD COLUMN IF NOT EXISTS status_message TEXT;`);
 
-  // ── org_project — 라이블리 자체 프로젝트(사람이 :8080 웹에서 직접 선언·관리). ──
-  //  ClickUp 미러 과업(W ku)·activity 작업과 독립한 전용 저장. status: 'active'(진행중) | 'done'(완료)
-  //  토글이 핵심. 완료 시 completed_at 기록. created_by=토큰 신원. folder=공유 워크스페이스 기준 상대경로
-  //  (예: 'project/데모데이') — 프로젝트 전용 폴더·터미널 세션의 작업 디렉토리. 팀원은 project_member.
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS org_project(
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      folder TEXT,
-      created_by TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      completed_at TIMESTAMPTZ);
-    ALTER TABLE org_project ADD COLUMN IF NOT EXISTS folder TEXT;
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='org_project'::regclass AND conname='org_project_status_chk') THEN
-        ALTER TABLE org_project ADD CONSTRAINT org_project_status_chk CHECK (status IN ('active','done'));
-      END IF;
-    END $$;
-  `);
-
-  // ── project_member — 프로젝트 팀원(n:n). org_member.id 참조(사람). 생성 팝업에서 선택, 타임라인 스코프. ──
+  // ── project_member — 프로젝트 팀원(n:n). project(v6).id 참조 — v6/schema 가 FK 를 project 로 ALTER한다. ──
+  //  레거시 org_project 는 폐기(2026-06-24, projects2/v6 통합 — 고아 v1 제거 + 테이블 DROP). project_member 는 v6 소유로 잔존.
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS project_member(
-      project_id INT NOT NULL REFERENCES org_project(id) ON DELETE CASCADE,
+      project_id INT NOT NULL,
       member_id TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'member',
       sort INT NOT NULL DEFAULT 0,
@@ -332,9 +330,9 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS req_ip TEXT;
   `);
 
-  // ── 수정이력(작성자/리비전) — org_content_audit 가 *이미* knowledge_unit 의 append-only 리비전 소스다 ──
-  //  (entity='knowledge_unit' 행 586건: insert/update/set_lifecycle/delete + before/after = redactDeep 후 full
-  //   KnowledgeUnit JSONB 스냅샷 + actor + source). 윤상민 요구("누가 사람/AI·어떤경로 mcp/web/connector·언제·내용
+  // ── 수정이력(작성자/리비전) — org_content_audit 가 지식·섹션 쓰기의 append-only 리비전 소스다 ──
+  //  (v6: entity='knowledge' 행 — insert/update/set_lifecycle/delete + before/after = redactDeep 후 full 스냅샷 + actor + source.
+  //   구 entity='knowledge_unit' 이력행은 비파괴 보존되나 투영 뷰 knowledge_unit_revision 은 v6 드랍됨.) 윤상민 요구("누가 사람/AI·어떤경로 mcp/web/connector·언제·내용
   //   history")를 **신 테이블 없이** 2개 가산 컬럼 + 편의 뷰로 충족한다(신 테이블은 586행 백필·이중감사·기존
   //   wrap 호환 리스크만 키움 — view 채택). 스냅샷 채택(이미 full after 스냅샷이라 diff 파생은 읽기 시 인접 비교).
   //   · actor_kind = 누가(사람/AI) — 진실원천은 org_member.kind(신원)지 channel 이 아님(yoon 이 mcp 로 써도 human).
@@ -359,10 +357,9 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
-  // ════════ P1a 통합 지식스토어(데이터층) — knowledge_unit 단일 캐노니컬 ════════
-  // org_memory(메모) + org_content(규칙/페르소나)을 하나의 지식 단위 테이블로 통합. 기존 store 함수는
-  //  이 위 얇은 래퍼로 재구현(시그니처 불변, 듀얼라이트 없음). 임베딩/pgvector 는 이번 범위 밖(ILIKE 검색만).
-  //  원본 org_memory/org_content 는 보존(드롭·수정 금지 — 롤백용). 부팅 시 1회 비파괴 복사로 캐노니컬에 채운다.
+  // ════════ 지식유형/수집 ground-truth(데이터층) — kind_registry + data_source ════════
+  // v6 컷오버(2026-06-24): 지식 본체는 v6 knowledge 테이블(src/v6/schema.ts)이 캐노니컬 — 구 knowledge_unit 통합스토어는 드랍됨.
+  //  이 섹션은 #/learn ground-truth 용 별도 메타 테이블 2종(kind_registry=지식종류 정의, data_source=소스별 수집방식)만 시드한다.
 
   // ── kind_registry — 지식 종류 분류 + 주입 정책 메타. 12 kind 시드(아래). ──
   // injection_mode = 멤버 컨텍스트에 어떻게 노출되는가(enforced/always/recalled/manual/query/digest).
@@ -400,7 +397,7 @@ export async function initOrgSchema(): Promise<void> {
   `);
 
   // ── data_source — 소스별 수집방식 레지스트리(ground-truth). 어떤 외부 시스템에서 무엇이 어떻게 수집되어 ──
-  //  knowledge_unit 의 어느 kind 로 적재되는지를 비개발자도 읽도록 명문화. status=active(수집중) | dropped
+  //  v6 knowledge 의 어느 kind 로 적재되는지를 비개발자도 읽도록 명문화. status=active(수집중) | dropped
   //  (수집중단, 커넥터 코드는 유지). collection_method = 수집 방식 설명(자유텍스트). into_kinds = 적재 kind 목록.
   //  시크릿 금지(토큰/URL 없음 — 시스템명·라벨·설명만). 시드는 아래(discord=dropped, notion/clickup/slack=active).
   await itemsPool.query(`
@@ -424,221 +421,22 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
-  // ── knowledge_unit — 통합 지식 단위(캐노니컬). name PK(슬러그). kind=주분류, kinds=다중분류(예약, 기본 []). ──
-  //  lifecycle: active(유효) | rejected(폐기) | superseded(supersedes 가 가리키는 신판으로 대체됨).
-  //  confidence: ai(에이전트 생산) | rule(규칙 파생) | human(사람 확정) — upsert 에서 source 로 서버강제.
-  //  domain_key/domain_repo: domainmap 약결합(FK 아님). embedding 컬럼은 pgvector 미가용이라 이번 범위 밖.
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS knowledge_unit(
-      name TEXT PRIMARY KEY,
-      kind TEXT NOT NULL DEFAULT 'K',
-      kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
-      title TEXT,
-      body_md TEXT NOT NULL DEFAULT '',
-      domain_key TEXT,
-      domain_repo TEXT,
-      lifecycle TEXT NOT NULL DEFAULT 'active',
-      supersedes TEXT,
-      confidence TEXT NOT NULL DEFAULT 'human',
-      author TEXT,
-      source_ref TEXT,
-      as_of TIMESTAMPTZ,
-      sort INT NOT NULL DEFAULT 0,
-      version INT NOT NULL DEFAULT 1,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_by TEXT);
-    DO $$ BEGIN
-      -- V4-P2a(분류 재설계): kind = 본질 4종 **R·K·H·W** 로 narrow. 흡수: A/D/F/M/L/Z→K,
-      --  S/G→domainmap 파생(federated, ku kind 아님). 데이터 흡수(UPDATE)는 scripts/v4-absorb-kinds.mjs 가
-      --  1회 수행(56행)하고, 여기서는 *제약/시드*만 4값으로 굳힌다. 멱등 패턴 = confidence_chk 와 동일
-      --  (pg_get_constraintdef 프로브로 "이미 4값(레거시 문자 미포함)이면 스킵", 아니면 DROP 후 4값 재ADD).
-      --  ⚠ 반드시 데이터 흡수 *후*에만 narrow 가 통과한다 — 잔존 A/D/F/M 이 있으면 ADD CONSTRAINT 가 throw.
-      --   부팅 순서상 마이그 스크립트가 먼저 흡수했으므로 안전(미흡수 DB 에선 throw=조기발견 가드).
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kind_chk'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%''A''%'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%''D''%'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%''F''%') THEN
-        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_kind_chk;
-        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kind_chk
-          CHECK (kind IN ('R','K','H','W'));
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_lifecycle_chk') THEN
-        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_lifecycle_chk
-          CHECK (lifecycle IN ('active','rejected','superseded'));
-      END IF;
-      -- H2(P-V3-3a): confidence 에 'observed' 추가 — 커넥터 수집물(A/W)의 신뢰축. 큐레이션된 ai/rule/human 과
-      --  의미가 다르다: observed = '관측된 외부 사실'(주입 인덱스 영구 제외 + overview 별도 카운트 + 검토 큐 제외,
-      --  배선은 knowledge.ts/materialize.ts). 멱등: 구 3값 CHECK(=observed 미포함)면 DROP 후 4값 재생성, 이미
-      --  observed 포함이면 no-op(매 부팅 DROP/ADD 락 churn 회피). fresh DB 면 바로 4값. 기존 43행(ai/rule/human)
-      --  은 4값의 부분집합이라 무손상(재검증 통과). item_domain_state_chk 멱등 패턴과 동일(pg_get_constraintdef 프로브).
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_confidence_chk'
-                       AND pg_get_constraintdef(oid) LIKE '%observed%') THEN
-        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_confidence_chk;
-        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_confidence_chk
-          CHECK (confidence IN ('ai','rule','human','observed'));
-      END IF;
-      -- L-가(P-V3-2): kinds[] 다중분류 가드 — 모든 원소가 유효 kind 문자여야 한다. 빈 배열은 통과.
-      --  V4-P2a: 화이트리스트도 본질 4종 **R/K/H/W** 로 narrow(흡수원소→K 정규화는 마이그 스크립트가 1회 수행).
-      --  CHECK 는 서브쿼리 불가 → jsonb 부분집합 연산자 <@ 로 검증: kinds 가 4 kind 화이트리스트의 부분집합인지.
-      --  멱등: confidence_chk 와 동일 DROP+probe(이미 4값=레거시 문자 미포함이면 스킵, 아니면 DROP 후 4값 재ADD).
-      --  반드시 kinds[] 정규화 *후*에만 통과(잔존 A/D/F 원소가 있으면 throw=조기발견).
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit'::regclass AND conname='knowledge_unit_kinds_chk'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%"A"%'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%"D"%'
-                       AND pg_get_constraintdef(oid) NOT LIKE '%"F"%') THEN
-        ALTER TABLE knowledge_unit DROP CONSTRAINT IF EXISTS knowledge_unit_kinds_chk;
-        ALTER TABLE knowledge_unit ADD CONSTRAINT knowledge_unit_kinds_chk CHECK (
-          jsonb_typeof(kinds) = 'array'
-          AND kinds <@ '["R","K","H","W"]'::jsonb);
-      END IF;
-    END $$;
-    CREATE INDEX IF NOT EXISTS knowledge_unit_kind_idx ON knowledge_unit(kind);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_lifecycle_idx ON knowledge_unit(lifecycle);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_idx ON knowledge_unit(domain_key);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_updated_idx ON knowledge_unit(updated_at DESC);
-  `);
-
-  // ════════ P-V3-3a 단일스토어 스키마 확장(가산적) — knowledge_unit 이 커넥터 활동(kind=A/W)을 흡수할 ════════
-  //  컬럼/배선만 준비한다. **실제 데이터 적재·읽기경로 전환·item→item_legacy 리네임은 P-V3-3b/3c**(여기서 안 함).
-  //  발견 A 의 item(prov_*/external_id/parent/fields/raw/2시간축) 풍부함을 흡수할 컬럼 세트를 비파괴로 추가.
-  //  전부 ADD COLUMN IF NOT EXISTS 라 기존 43행/12 kind 에 영향 0(신 컬럼은 NULL/기본값으로 채워짐).
-
-  // ── knowledge_unit 외부출처/동기화/스레드/원본보존 컬럼(커넥터 적재 흡수용). ──
-  //  source: 단위의 출처 분류 — 'authored'(저작물: 기존 R/K/메모, 기본값) | 외부 시스템명(커넥터 적재 A/W).
-  //  external_*: 동기화물의 출처 좌표(system/instance/id/url). item 의 prov_system/prov_instance/external_id/external_url 대응.
-  //  occurred_at: 사건 발생시각, last_synced_at: 마지막 동기화 시각 — as_of/updated_at 과 더불어 '2시간축'(발생 vs 반영).
-  //  parent_external_id + parent_name: 스레드/서브태스크 자기참조(parent_external_id=외부좌표, parent_name=내부 PK 연결).
-  //  fields/raw: 커넥터 원본 보존(item.fields/raw 대응). ⚠ H1 — 이 두 컬럼은 적재 시 ingest 가 redactDeep 후 써야 함
-  //   (적재 전환은 P-V3-3b 책임). 본 페이즈는 컬럼만 추가(데이터 미적재라 유출면 없음).
-  await itemsPool.query(`
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'authored';
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_system TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_instance TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_id TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS external_url TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS parent_external_id TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS parent_name TEXT;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS raw JSONB;
-    ALTER TABLE knowledge_unit ADD COLUMN IF NOT EXISTS summary TEXT;
-  `);
-
-  // ── 동기화물 멱등 upsert 키 — UNIQUE(external_system, external_instance, external_id) WHERE external_id IS NOT NULL. ──
-  //  부분 유니크 인덱스: 저작물(external_id IS NULL)은 name PK 만, 동기화물은 (system,instance,id)로 upsert(item 의
-  //  UNIQUE(prov_system,prov_instance,external_id) 대응). external_instance NULL 도 키 일부 — pg 는 NULL 을 distinct 로
-  //  보므로 (sys,NULL,id) 중복은 막히지 않지만, 커넥터는 instance 를 항상 채운다(없으면 ''로 정규화 — 적재층 P-V3-3b 책임).
-  //  name PK 와 공존: 같은 행이 name(내부) + external 좌표(외부) 둘 다 가질 수 있다.
-  await itemsPool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS knowledge_unit_external_uidx
-      ON knowledge_unit(external_system, external_instance, external_id)
-      WHERE external_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS knowledge_unit_source_idx ON knowledge_unit(source);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_occurred_idx ON knowledge_unit(occurred_at DESC);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_parent_idx ON knowledge_unit(parent_name);
-  `);
-
-  // ── 다중도메인/다중프로젝트 매핑 조인(item_domain/item_project 구조 참고) — A/W 단위가 도메인 여러개에 ──
-  //  귀속 가능하게. name↔domain key(repo 스코프) + mapped_by/confidence/state/evidence. 기존 단일 domain_key
-  //  컬럼은 저작물(R/K) 편의로 유지하되, 조인 테이블이 다중의 캐노니컬(P-V3-3b 적재가 채움 — 본 페이즈는 테이블만).
-  //  PK(name, repo, domain_key): 한 단위가 (repo,key) 별로 한 번 매핑. FK(name) ON DELETE CASCADE — 단위 삭제 시 매핑도.
-  //  mapped_by/state CHECK 는 item_domain 과 동일 enum(rule/llm/manual/declared, proposed/confirmed/rejected).
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS knowledge_unit_domain(
-      name TEXT REFERENCES knowledge_unit(name) ON DELETE CASCADE,
-      repo TEXT, domain_key TEXT,
-      mapped_by TEXT NOT NULL DEFAULT 'rule',
-      confidence REAL,
-      state TEXT NOT NULL DEFAULT 'proposed',
-      evidence TEXT,
-      PRIMARY KEY(name, repo, domain_key));
-    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_key_idx  ON knowledge_unit_domain(repo, domain_key);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_domain_state_idx ON knowledge_unit_domain(state);
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_state_chk') THEN
-        ALTER TABLE knowledge_unit_domain ADD CONSTRAINT knowledge_unit_domain_state_chk
-          CHECK (state IN ('proposed','confirmed','rejected'));
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='knowledge_unit_domain'::regclass AND conname='knowledge_unit_domain_mappedby_chk') THEN
-        ALTER TABLE knowledge_unit_domain ADD CONSTRAINT knowledge_unit_domain_mappedby_chk
-          CHECK (mapped_by IN ('rule','llm','manual','declared'));
-      END IF;
-    END $$;
-  `);
-
-  // ── item 폐기·ku 컷오버: knowledge_unit_mapping_audit — kud/kup 쓰기의 append-only 감사층. ──
-  //  item_mapping_audit(item_id 좌표)의 ku-좌표 대응물(name 좌표). 매핑 큐레이션이 item 무의존이 되면
-  //  모든 propose/confirm/reject/declare 쓰기가 이 테이블에 검증경로 통과 증거를 남긴다(우회 SQL 쓰기는
-  //  감사행이 없어 드러남). append-only 불변식: UPDATE/DELETE 코드 경로 없음. FK 없음(의도 — ku 행이
-  //  지워져도 이력 보존). item_mapping_audit 은 비파괴 보존(레거시 이력) — 이 테이블은 가산.
-  await itemsPool.query(`
-    CREATE TABLE IF NOT EXISTS knowledge_unit_mapping_audit(
-      id BIGSERIAL PRIMARY KEY,
-      at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      target TEXT NOT NULL CHECK (target IN ('domain','project')),
-      name TEXT NOT NULL,
-      repo TEXT NOT NULL,
-      key TEXT NOT NULL,
-      mapped_by TEXT,
-      action TEXT NOT NULL,
-      state TEXT,
-      confidence REAL,
-      evidence TEXT,
-      source TEXT,
-      actor TEXT);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_name_idx ON knowledge_unit_mapping_audit(name);
-    CREATE INDEX IF NOT EXISTS knowledge_unit_mapping_audit_at_idx   ON knowledge_unit_mapping_audit(at DESC);
-  `);
-
-  // ── knowledge_unit_revision — ku 전용 수정이력 뷰(작성자/리비전 노출 표면). ──
-  //  org_content_audit(entity='knowledge_unit') 를 캐노니컬 리비전 소스로 채택하고 ku-전용으로 투영한다.
-  //  version = (name 내) at,id 순 1-base 순번(audit 기준 진실 — ku.version 과 별개; set_lifecycle 도 행을 남기므로
-  //  대체로 일치하나 view 가 진실). before/after = 그 시점 redactDeep 스냅샷(시크릿 이미 마스킹·시점 보존).
-  //  actor_kind=누가(사람/AI), channel=어떤경로 — 둘 다 평문 노출(비-본문 메타라 redact 대상 아님). 백필은
-  //  사실상 불요(audit 가 이미 시간순 보존 → row_number 가 자동 v1,v2.. 부여). 컬럼 actor_kind/channel 의
-  //  레거시 백필은 scripts/backfill-ku-revision.mjs(멱등·비파괴)가 담당.
-  // DROP+CREATE(멱등·비파괴 — 뷰는 데이터 미보유) — 컬럼 타입(version int 캐스트) 변경은 CREATE OR REPLACE 가
-  //  거부(checkViewColumns)하므로 DROP IF EXISTS 선행. 뷰 의존객체 없음(다른 뷰/룰이 참조 안 함).
+  // ── knowledge_unit 폐기(2026-06-24): v6 knowledge 컷오버 완료 — DROP. ──
+  //  지식(기록)=knowledge, 섹션(규칙·페르소나)=knowledge injection='always', observed 통계=knowledge provenance='observed',
+  //  도메인 active 카운트=knowledge_category 기준 집계. 임베딩(pgvector)·구 미러는 폐기.
+  //  knowledge_unit_revision(뷰)·knowledge_unit_mapping_audit(구 item→domain 매핑 감사)·knowledge_unit_domain 동반 드랍.
+  //  org_content_audit 의 entity='knowledge_unit' 이력행은 비파괴 보존(투영 뷰만 제거). kind_registry/data_source(별도 테이블)는 유지.
   await itemsPool.query(`DROP VIEW IF EXISTS knowledge_unit_revision`);
-  await itemsPool.query(`
-    CREATE VIEW knowledge_unit_revision AS
-      SELECT id,
-             entity_key AS name,
-             op,
-             (row_number() OVER (PARTITION BY entity_key ORDER BY at, id))::int AS version,
-             at,
-             actor,
-             actor_kind,
-             channel,
-             source,
-             token_hash_prefix,
-             before,
-             after
-        FROM org_content_audit
-       WHERE entity='knowledge_unit';
-  `);
+  await itemsPool.query(`DROP TABLE IF EXISTS knowledge_unit_mapping_audit`);
+  await itemsPool.query(`DROP TABLE IF EXISTS knowledge_unit_domain`);
+  await itemsPool.query(`DROP TABLE IF EXISTS knowledge_unit CASCADE`);
 
-  // ── M-라 성능: pg_trgm 확장 + title/body_md GIN trgm 인덱스(pgvector 없이 ILIKE 가속). ──
-  //  item 흡수로 knowledge_unit 급증 시 searchKnowledge 의 ILIKE full-scan 을 가속한다(gin_trgm_ops 가 ILIKE '%...%' 지원).
-  //  ⚠ graceful: 확장 미가용(권한/미설치 서버)이면 CREATE EXTENSION 또는 GIN 생성이 throw → 별 트랜잭션으로 감싸
-  //   catch 후 warn(부팅·검색 무중단, ILIKE 는 인덱스 없이도 동작). embedding(pgvector)과 독립 — trgm 부재여도 OK.
-  try {
-    await itemsPool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
-    await itemsPool.query(`
-      CREATE INDEX IF NOT EXISTS knowledge_unit_title_trgm_idx ON knowledge_unit USING gin (title gin_trgm_ops);
-      CREATE INDEX IF NOT EXISTS knowledge_unit_body_trgm_idx  ON knowledge_unit USING gin (body_md gin_trgm_ops);
-    `);
-  } catch (err) {
-    logger.warn({ err }, "pg_trgm 확장/인덱스 생성 실패(무시) — ILIKE 검색은 인덱스 없이 동작(graceful)");
-  }
+  // ── 고아 레거시 테이블 폐기(2026-06-24): org_content/org_memory→v6 knowledge 컷오버 완료, org_project→v6 project 대체. ──
+  //  위(:25) 주석이 "폐기"라 선언했으나 실제 DROP문이 없어 DB에 잔존했다(라이브 read 0 — v6-migrate 스크립트만 참조).
+  //  멱등 DROP 으로 스키마 자기정합·재빌드 안전성 확보. org_content_audit(감사 로그)는 별개라 유지.
+  await itemsPool.query(`DROP TABLE IF EXISTS org_content CASCADE`);
+  await itemsPool.query(`DROP TABLE IF EXISTS org_memory CASCADE`);
+  await itemsPool.query(`DROP TABLE IF EXISTS org_project CASCADE`);
 
   // ── kind 캐노니컬 정의 시드(ground-truth) — label/injection_mode/domain_scoped/audience/sort 골격 + ──
   //  description(정의)·criteria(분류기준: 언제 이 kind 인가 + 인접 kind 구분)·storage(저장방식)·
@@ -699,11 +497,11 @@ export async function initOrgSchema(): Promise<void> {
         '동기화(run-sync/backfill)', '["K"]'::jsonb, 20,
         '문서 본문은 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed. 시크릿은 적재 전 redact.'),
       ('slack','Slack','dropped',
-        '(미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip).',
+        '(미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip).',
         NULL, '[]'::jsonb, 30,
         '적재하려면 KIND_MAP 에 message:slack 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 slack 0건.'),
       ('discord','Discord','dropped',
-        '(미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 knowledge_unit 으로 적재되지 않는다(미러 skip).',
+        '(미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip).',
         NULL, '[]'::jsonb, 40,
         '적재하려면 KIND_MAP 에 message:discord 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 discord 0건.')
     ON CONFLICT (system) DO UPDATE SET
@@ -712,21 +510,35 @@ export async function initOrgSchema(): Promise<void> {
       updated_at=now();
   `);
 
-  // ── 1회 비파괴 데이터복사(멱등) — 기존 org_memory/org_content → knowledge_unit. ──
-  //  INSERT ... SELECT ... ON CONFLICT(name) DO NOTHING 라 재실행해도 무피해(이미 있는 name 은 건드리지 않음).
-  //  원본 테이블은 보존(드롭·수정 금지 — 롤백용). version/updated_at/updated_by 보존, confidence='human', lifecycle='active'.
-  //  org_memory → kind='K'(지식노트). domain_key/domain_repo 도 함께 복사.
+  // ── member_credential — 로컬 로그인 자격(P4). 비번은 scrypt 해시만 저장(평문·복원 불가). ──
+  //  member_id = org_member.id. must_change=초기 비번(관리자 발급) → 첫 로그인 후 변경 권장.
+  //  failed_attempts+locked_until 로 브루트포스 완화. OIDC 도입 시에도 이 테이블은 로컬 폴백(IdP 없는 고객)으로 유지.
   await itemsPool.query(`
-    INSERT INTO knowledge_unit(name, kind, title, body_md, domain_key, domain_repo, lifecycle, confidence, sort, version, updated_at, updated_by)
-      SELECT name, 'K', title, body_md, domain_key, domain_repo, 'active', 'human', sort, version, updated_at, updated_by
-        FROM org_memory
-    ON CONFLICT (name) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS member_credential(
+      member_id TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      must_change BOOLEAN NOT NULL DEFAULT false,
+      failed_attempts INT NOT NULL DEFAULT 0,
+      locked_until TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
   `);
-  //  org_content('managed-policy','org-defaults') → kind='R'(규칙/정책/페르소나). name=section.
+
+  // ── web_session — 사람 웹 로그인 세션(P4). HttpOnly 쿠키가 나르는 평문 세션ID 는 저장 안 함(sha256 만). ──
+  //  revoke=logout/회수, expires_at 만료. scope 는 저장하지 않는다 — 인증 시 org_member.scopes 를 LIVE 로 읽어
+  //  desync 를 원천 차단(토큰과 달리 세션은 사람이 본인으로 행위 → 멤버 권한 그대로, 최소권한 캡 없음).
   await itemsPool.query(`
-    INSERT INTO knowledge_unit(name, kind, title, body_md, lifecycle, confidence, version, updated_at, updated_by)
-      SELECT section, 'R', NULL, body_md, 'active', 'human', version, updated_at, updated_by
-        FROM org_content WHERE section IN ('managed-policy','org-defaults')
-    ON CONFLICT (name) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS web_session(
+      session_hash TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      ip TEXT,
+      user_agent TEXT);
+    CREATE INDEX IF NOT EXISTS web_session_member_idx ON web_session(member_id);
   `);
+
+  // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

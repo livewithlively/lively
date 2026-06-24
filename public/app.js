@@ -2,69 +2,16 @@
 // 보안 규칙: 모든 데이터 텍스트는 textContent/createElement 만 사용(innerHTML 에 데이터 주입 금지 —
 // discord/notion 본문 XSS 방어). 토큰은 localStorage 에만, 절대 로그/URL 에 싣지 않는다.
 //
-// IA(v4 2026-06-18): 4 질적유형(kind R/K/H/W; S/G=domainmap federated) × area(space product|business)로 분류된 지식을 비개발자가 조회·CRUD.
-//  파일탐색기 메타포 — 폴더=kind/domain, 파일=지식단위(unit). 5 화면:
-//   1) 지식 지도(#/map)   — ctx_overview. kind 카드 + 시스템 건강. 오리엔테이션.
-//   2) 탐색(#/browse)      — ctx_ls/ctx_grep. 좌 kind 트리 + grep 검색 + 필터 목록.
-//   3) 유닛 상세(#/u/<name>) — ctx_cat 전문 + 메타 패널 + 편집(ctx_save)/반려(set-lifecycle).
-//   4) 검토(#/review)      — confidence=ai·active 피드(에이전트 생산물) → reject/edit.
-//   5) 관리(#/system)      — 3 중분류(기본 설정·회사·조직·AI 동작/연결 고급) 가로 탭으로 묶은 조직 관리(연결/멤버/토큰·규칙/맥락/메모리/용어·훅/툴/MCP/DB).
-//   +  가이드(#/learn)      — 비개발자용: 서비스 목적 + 지식종류/용어 + 내 컴퓨터 설치(관리에서 '지식종류 레지스트리'·'설치'를 이리로 이관).
+// IA(2026-06-24): 지식을 두 직교축 injection(always 항상주입 / recalled 검색소환) × provenance(authored 저작 / observed 외부미러)
+//  으로 분류해 비개발자가 조회·편집·핀. 주요 화면:
+//   · 지식(#/knowledge/<space>) — 사업·제품·시스템 + 📌 인덱스(핀 전용 뷰) + 통계·검토. 좌 카테고리 사이드바 + 검색/필터 목록.
+//   · 지식 상세(#/k/<name>)      — 전문(markdown) + 메타 + 연결 카테고리 + 편집·핀·삭제. (생성=목록 '+ 추가')
+//   · 프로젝트(#/projects2) · 코드구조(#/domainmap) · 관리(#/system) · 가이드(#/learn) · 휴지통(#/trash) · 터미널(#/terminal).
 'use strict';
 
 const TOKEN_KEY = 'lively_ui_token';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// kind 메타데이터(V4: 본질 4종만 — R·K·H·W). injection_mode 는 서버 overview 가 권위.
-//  여기 라벨/한글설명은 표시 보강용(서버 label 우선, 없으면 이 표를 폴백 — overview label 권위 정책 유지).
-//  V4-P2a 에서 A/D/F/M/L/Z→K 흡수, S/G→domainmap federated(ku kind 아님). 그래서 ku 데이터는 R/K/H/W 만.
-//  S/G 는 ku 종류가 아니라 domainmap 파생(구조/용어집) — 새 분류 선택지에서 제외하되, 혹시 옛 데이터가
-//  남아 서버 overview 에 등장하면 federated 라벨로 graceful 표시한다(아래 FEDERATED_META + isFederatedKind).
-const KIND_META = {
-  R: { label: 'Rule/Policy/Persona', ko: '규칙 · 정책 · 페르소나' },
-  K: { label: 'Knowledge', ko: '지식' },
-  H: { label: 'How-to/Runbook', ko: '절차 · 런북' },
-  W: { label: 'Work/Task', ko: '작업' },
-};
-// federated 종류(domainmap 파생 — ku kind 아님). overview/검색에 옛 행이 남으면 read-only 로만 표시.
-//  S/G 외에 흡수된 legacy(D/F/A/M/L/Z)도 혹시 잔존 시 graceful 라벨을 위해 넣어둔다(분류 선택지엔 미노출).
-const FEDERATED_META = {
-  S: { label: 'Structure (federated)', ko: '구조 (domainmap 파생)' },
-  G: { label: 'Glossary (federated)', ko: '용어집 (domainmap 파생)' },
-};
-const LEGACY_META = {
-  D: { label: 'Domain (→K)', ko: '도메인 (통합됨)' },
-  F: { label: 'Fact (→K)', ko: '사실 (통합됨)' },
-  A: { label: 'Artifact (→K)', ko: '산출물 (통합됨)' },
-  M: { label: 'Memo (→K)', ko: '메모 (통합됨)' },
-  L: { label: 'Link (→K)', ko: '링크 (통합됨)' },
-  Z: { label: 'Misc (→K)', ko: '기타 (통합됨)' },
-};
-// 새 분류(ctx_save)에서 고를 수 있는 본질 종류 — R·K·H·W 만(legacy/federated 는 신규 선택 불가).
-const CORE_KIND_KEYS = ['R', 'K', 'H', 'W'];
-const isFederatedKind = (k) => Object.prototype.hasOwnProperty.call(FEDERATED_META, k);
-const isCoreKind = (k) => Object.prototype.hasOwnProperty.call(KIND_META, k);
-// 표시용 종류 메타 해소 — core → federated → legacy 순. 못 찾으면 빈 객체.
-function kindMeta(k) {
-  return KIND_META[k] || FEDERATED_META[k] || LEGACY_META[k] || {};
-}
-// 주입 모드 한글 라벨 + 한 줄 설명(비개발자 친화 — '어떻게 멤버에게 노출되나').
-const INJECTION_LABEL = {
-  enforced: '강제 주입',
-  always:   '항상 주입',
-  recalled: '검색 회상',
-  digest:   '다이제스트',
-  query:    '질의 시',
-  manual:   '수동',
-};
-const INJECTION_HINT = {
-  enforced: '모든 세션 컨텍스트 최상단에 강제로 들어갑니다(규칙·정책).',
-  always:   '항상 컨텍스트에 포함됩니다.',
-  recalled: '관련될 때 의미검색으로 회상됩니다.',
-  digest:   '요약(다이제스트) 형태로 노출됩니다.',
-  query:    '에이전트가 필요로 질의할 때만 조회됩니다.',
-  manual:   '사람이 직접 참조할 때만 쓰입니다.',
-};
 // 출처(provenance) 라벨 — ai=AI 에이전트 생성, human=사람 저작/승인, rule=시스템 결정론 파생, observed=외부 시스템 미러(커넥터 원천).
 //  V4-C: 'confidence' 컬럼/enum 은 물리적으로 불변 — UI 라벨만 '출처(provenance)'로 의미를 명확히 한다(출처는 채널이
 //  기계로 박는 사실이지 신뢰도·가치가 아니다). observed 는 외부 *살아있는 미러* — 진실·편집은 외부에 있다.
@@ -88,11 +35,9 @@ const REVIEW_LABEL = { na: '해당 없음', checked_no_change: '점검함(변화
 
 const state = {
   me: null,
-  overview: null,        // /api/ui/ctx/overview 캐시(지도 + 검토 배지 + 탐색 kind 트리 공유)
-  browse: { filters: { kind: '', space: '', domain: '', lifecycle: 'active', confidence: '', q: '', orderBy: 'updated_at' }, entries: [], loaded: false },
   knowledge: { space: 'business', category: '', injection: '', provenance: '', q: '' }, // 지식 탭(#/knowledge) 필터 상태(2분할 뷰)
   reviewOrderBy: 'updated_at', // 검토 피드 정렬(기본 최신순)
-  admin: { data: null, sel: 'kinds', memberSel: null, memberEditing: false, memberAddPreselect: null, memorySel: null, repoSel: null, navCollapsed: false }, // 관리(전달) 페이지 상태
+  admin: { data: null, sel: null, memberSel: null, memberEditing: false, memberAddPreselect: null, memorySel: null, repoSel: null, navCollapsed: false }, // 관리(전달) 페이지 상태
   start: { mode: 'web', os: 'mac', token: null }, // '시작하기 > 설치' 온보딩 상태(쓰는곳 web|local + 선택 OS + 자가발급 토큰 1회 캐시)
   domains: {},           // P-V3-4a: repo별 도메인 통제어휘 캐시 { [repo]: {list, repos, loaded, error} }
   allDomains: null,      // V5 탈-repo: 전 repo + business 통합 통제어휘 캐시(저장/필터 드롭다운) {list, loaded, error}
@@ -380,7 +325,8 @@ async function api(path, opts = {}) {
   const res = await fetch(path, Object.assign({}, opts, { headers }));
   if (res.status === 401) {
     localStorage.removeItem(TOKEN_KEY);
-    showGate('토큰이 무효화되었습니다. 다시 입력하세요.');
+    state.me = null;
+    showGate('세션이 만료되었습니다. 다시 로그인하세요.');
     const e = new Error('인증이 필요합니다'); e.status = 401; throw e;
   }
   let data = null;
@@ -414,7 +360,6 @@ function absTime(iso) {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR');
 }
 const fmtNum = (n) => Number(n || 0).toLocaleString('ko-KR');
-const kindLabel = (k) => { const m = kindMeta(k); return m.ko || m.label || k; };
 
 // ── 토스트 ──
 function toast(msg, isError) {
@@ -431,31 +376,6 @@ document.getElementById('skip-link').addEventListener('click', (ev) => {
   if (v) { v.setAttribute('tabindex', '-1'); v.focus(); }
 });
 
-// ── 캐시 로더 ──
-function getOverview(force) {
-  if (!force && state.overview) return Promise.resolve(state.overview);
-  return api('/api/ui/ctx/overview').then((o) => { state.overview = o; updateSyncChip(); updateReviewBadge(); return o; });
-}
-
-function updateSyncChip() {
-  const chip = document.getElementById('sync-chip');
-  const label = document.getElementById('sync-label');
-  if (!state.overview || !state.overview.kinds) return;
-  // 전 kind 중 가장 최근 갱신시각을 '살아있음' 신호로(§7 — 마지막 갱신 노출).
-  let latest = null;
-  for (const k of state.overview.kinds) {
-    if (k.latest_updated_at && (!latest || k.latest_updated_at > latest)) latest = k.latest_updated_at;
-  }
-  if (latest) { label.textContent = relTime(latest) + ' 갱신'; chip.hidden = false; }
-}
-function updateReviewBadge() {
-  const badge = document.getElementById('review-count');
-  if (!badge) return;
-  const n = state.overview ? state.overview.review_pending : 0;
-  if (n > 0) { badge.textContent = String(n); badge.hidden = false; }
-  else badge.hidden = true;
-}
-
 // ── 토큰 게이트 ──
 function showGate(message) {
   document.getElementById('app').hidden = true;
@@ -469,24 +389,39 @@ function hideGate() {
   document.getElementById('gate').hidden = true;
   document.getElementById('app').hidden = false;
 }
+// 토큰 로그인(고급) 토글 — 클릭 시 토큰 입력칸을 보였다 숨긴다.
+document.getElementById('gate-token-toggle').addEventListener('click', () => {
+  const t = document.getElementById('gate-input');
+  t.hidden = !t.hidden;
+  if (!t.hidden) t.focus();
+});
+
 document.getElementById('gate-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const input = document.getElementById('gate-input');
   const err = document.getElementById('gate-error');
-  const v = input.value.trim();
-  if (!v) return;
+  const tokenIn = document.getElementById('gate-input');
+  const tokenVal = (tokenIn && !tokenIn.hidden) ? tokenIn.value.trim() : '';
   try {
-    const res = await fetch('/api/ui/me', { headers: { Authorization: 'Bearer ' + v } });
-    if (res.ok) {
-      localStorage.setItem(TOKEN_KEY, v);
-      input.value = '';
-      err.hidden = true;
-      hideGate();
-      boot();
+    if (tokenVal) {
+      // 고급: 토큰 로그인 — /api/ui/me 로 검증 후 localStorage 저장(bearer, 에이전트/서비스용).
+      const res = await fetch('/api/ui/me', { headers: { Authorization: 'Bearer ' + tokenVal } });
+      if (!res.ok) { err.textContent = '토큰이 유효하지 않습니다.'; err.hidden = false; return; }
+      localStorage.setItem(TOKEN_KEY, tokenVal);
     } else {
-      err.textContent = '토큰이 유효하지 않습니다.';
-      err.hidden = false;
+      // 기본: 이메일+비밀번호 로그인 → 세션 쿠키.
+      const email = document.getElementById('gate-email').value.trim();
+      const password = document.getElementById('gate-password').value;
+      if (!email || !password) { err.textContent = '이메일과 비밀번호를 입력하세요.'; err.hidden = false; return; }
+      const res = await fetch('/api/ui/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) { err.textContent = (data && data.error) || '로그인에 실패했습니다.'; err.hidden = false; return; }
+      localStorage.removeItem(TOKEN_KEY); // 세션 쿠키 사용 — 토큰 불필요
     }
+    document.getElementById('gate-password').value = '';
+    if (tokenIn) tokenIn.value = '';
+    err.hidden = true;
+    hideGate();
+    boot();
   } catch (_) {
     err.textContent = '서버에 연결하지 못했습니다.';
     err.hidden = false;
@@ -513,12 +448,6 @@ function confidenceDot(confidence) {
   return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
 }
 
-// ════════════════════════════════════════════
-// 1) 지식 지도 #/map — ctx_overview. kind 카드 + 시스템 건강.
-// ════════════════════════════════════════════
-// '회사 맥락' 상위 탭의 가로 중분류(지도·탐색·검토) — 관리 탭 .admin-cats 와 같은 패턴.
-//  세 하위뷰(renderMap/Browse/Review) 맨 위에 동일하게 깔아 한 탭처럼 묶는다. 검토 대기 배지는 상위 탭(updateReviewBadge).
-
 // '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
 const START_SUBS = [
   { key: 'install', label: '설치', href: '#/install' },
@@ -540,37 +469,7 @@ function selectFilter(opts, sel) {
 // ── P-V3-4a 도메인 통제어휘 select ──
 // 도메인은 자유 키워드가 아니라 repo 하위 통제 어휘. 드롭다운은 domain_list(=/api/ui/domainmap/:repo/domains)로
 // 채운다. 도메인맵이 죽거나 repo 미존재면 graceful: 캐시에 error 를 남기고 호출부가 자유입력 폴백을 쓴다.
-// V5 탈-repo 통합 도메인 캐시 — 전 repo + business(조직평면) 통제어휘. 저장/필터 드롭다운의 단일 소스.
-//  /api/ui/domains(listAllDomains)는 (space,key) 평면 — repo 컬럼 없음. 도메인맵 down 이면 error 로 graceful.
-async function loadAllDomains(force) {
-  const cached = state.allDomains;
-  if (cached && cached.loaded && !force) return cached;
-  const slot = { list: [], loaded: false, error: null };
-  state.allDomains = slot;
-  try {
-    const rows = await api('/api/ui/domains');
-    slot.list = (rows || []).map((d) => ({ key: d.key, name: d.name, state: d.state, cross_cutting: d.cross_cutting, space: d.space || 'product', active_count: d.active_count }));
-    slot.loaded = true;
-  } catch (e) { slot.error = e.message || '도메인 목록을 불러오지 못했습니다'; slot.loaded = true; }
-  return slot;
-}
-
-async function loadDomains(repo, force) {
-  const key = repo || VOCAB_CRUD_DEFAULT_REPO;
-  const cached = state.domains[key];
-  if (cached && cached.loaded && !force) return cached;
-  const slot = { list: [], loaded: false, error: null };
-  state.domains[key] = slot;
-  try {
-    const rows = await api('/api/ui/domainmap/' + encodeURIComponent(key) + '/domains');
-    // merged 제외는 서버가 이미 함. deprecated 는 표시하되 라벨에 표기(기존 매핑 유효 — 큐레이션 신호).
-    //  V4-P5: space(product|business) — 서버 listDomainsApi 가 항상 방출(?? 'product'). area 1차 필터에 쓴다.
-    slot.list = (rows || []).map((d) => ({ key: d.key, name: d.name, state: d.state, cross_cutting: d.cross_cutting, space: d.space || 'product' }));
-    slot.loaded = true;
-  } catch (e) { slot.error = e.message || '도메인 목록을 불러오지 못했습니다'; slot.loaded = true; }
-  return slot;
-}
-
+// v6 은퇴(2026-06-24): loadAllDomains/loadDomains(구 도메인 통제어휘 드롭다운 — 주제분류 패널 폐기) 제거. 카테고리 관리는 관리→위지설정.
 // repo 셀렉터 — repo_list union 의 repos[] 로 채운다(domainmap ∪ 매핑테이블). 단일 repo 면 라벨만.
 async function loadRepos() {
   if (state.domains.__repos__) return state.domains.__repos__;
@@ -581,28 +480,7 @@ async function loadRepos() {
   return repos;
 }
 
-// 통제어휘 <select> 빌드. current 가 목록에 없으면(옛 별칭·도메인맵 down) 그 값을 보존 옵션으로 추가해
-// 무심코 도메인이 비워지지 않게 한다. 빈 선택('도메인 없음') 항상 포함.
-//  space 인자(product|business)가 주어지면 그 space 의 도메인만 노출(area 2단 — 1차 space → 2차 domain).
-//  단, current 가 다른 space 라도 보존(끊김 방지). emptyLabel 로 빈 옵션 라벨 커스터마이즈.
-function buildDomainSelect(slot, current, space, emptyLabel) {
-  const s = el('select', { class: 'flt-domain' });
-  s.append(el('option', { value: '', text: emptyLabel || '— 도메인 없음 —' }));
-  const have = new Set();
-  for (const d of slot.list) {
-    if (space && (d.space || 'product') !== space) continue; // area 1차(space) 필터
-    have.add(d.key);
-    const label = d.key + (d.name && d.name !== d.key ? ' · ' + d.name : '') + (d.state === 'deprecated' ? ' (폐기)' : '');
-    s.append(el('option', { value: d.key, text: label }));
-  }
-  if (current && !have.has(current)) {
-    // 옛 별칭/미존재/다른 space — 보존 옵션(서버가 alias 해소 또는 graceful 통과). 비표준임을 표기.
-    s.append(el('option', { value: current, text: current + ' (현재 값 · 목록 외)' }));
-  }
-  s.value = current || '';
-  return s;
-}
-// space(area 1차) <select> — 전체/제품/비즈니스. 도메인 드롭다운을 1차로 좁힌다.
+// v6 은퇴(2026-06-24): buildDomainSelect(구 도메인 통제어휘 <select>) 제거 — 주제분류 패널 폐기.
 function interleave(arr, sep) {
   const out = [];
   arr.forEach((n, i) => { if (i) out.push(sep); out.push(n); });
@@ -610,7 +488,7 @@ function interleave(arr, sep) {
 }
 
 // ════════════════════════════════════════════
-// 3) 유닛 상세 #/u/<name> — ctx_cat 전문 + 메타 패널 + 편집/반려.
+// 도메인 맵(#/domainmap?repo=) — should/is/debt 코드구조 뷰.
 // ════════════════════════════════════════════
 async function renderDomainmap(view, params) {
   view.replaceChildren(skeleton('도메인 맵을 불러오는 중'));
@@ -855,15 +733,19 @@ function openCategoryForm(space, existing, reload) {
 // 도메인 의존 관계(category-edges) — should(사람 작성·편집/삭제 가능) + is(스캔 소유·읽기전용)를 한 섹션에.
 //  domains = 제품 카테고리 목록(셀렉터 옵션). 자체 fetch → 행 렌더 + should-edge 추가 폼.
 function knowledgeSubBar(active) {
-  // space 하위 탭(사업·제품·시스템)만. 도메인-코드 의존성(코드구조)은 독립 탭으로 분리(2026-06-24).
-  return spaceSubBar('#/knowledge', SPACE_LABEL[active] ? active : '');
+  // space 하위 탭(사업·제품·시스템) + 📌 인덱스(핀 전용 뷰). 도메인-코드 의존성(코드구조)은 독립 탭으로 분리(2026-06-24).
+  const bar = spaceSubBar('#/knowledge', SPACE_LABEL[active] ? active : '');
+  const onPinned = active === 'pinned';
+  bar.append(el('a', { class: 'sub-cat' + (onPinned ? ' active' : ''), href: '#/knowledge/pinned',
+    role: 'tab', 'aria-selected': onPinned ? 'true' : 'false', title: '핀된 지식만 — 매 대화 첫머리에 깔리는 WIKI 인덱스', text: '📌 인덱스' }));
+  return bar;
 }
 
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
 const KN_INJECTION_LABEL = { always: '항상 주입', recalled: '검색' };
 const KN_INJECTION_HINT = {
   always: '규칙·페르소나처럼 모든 세션에 항상 주입됩니다.',
-  recalled: '관련될 때 의미검색으로 소환됩니다.',
+  recalled: '평소엔 주입 안 됨 — AI가 관련될 때 키워드로 검색해 직접 찾아봅니다(자동·시맨틱 아님).',
 };
 // provenance(출처축) 한글 라벨 — authored=직접 저작, observed=외부 시스템의 살아있는 미러.
 const KN_PROVENANCE_LABEL = { authored: '저작', observed: '외부 미러' };
@@ -887,6 +769,8 @@ function knProvChip(provenance) {
 function knRow(e, select) {
   const titleEl = el('div', { class: 'row-title', text: e.title || e.name });
   const metaEl = el('div', { class: 'row-meta' },
+    e.is_wiki ? el('span', { class: 'row-pin-wrap' },
+      el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '📌 인덱스' }), '  ') : null,
     knInjectChip(e.injection), ' ', knProvChip(e.provenance),
     e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null,
     '  ', relTime(e.updated_at));
@@ -914,12 +798,38 @@ function knRow(e, select) {
   return row;
 }
 
-// 지식 탭 진입 — sub ∈ {business, product, system, stats, review}. space 셋이면 2분할 뷰, 그 외 통계/검토.
+// 지식 탭 진입 — sub ∈ {business, product, system, stats, review, pinned}. space 셋이면 2분할 뷰, 그 외 통계/검토/핀.
 async function renderKnowledge(view, sub, params) {
   if (sub === 'stats') return renderKnowledgeStats(view);
   if (sub === 'review') return renderKnowledgeReview(view);
+  if (sub === 'pinned') return renderKnowledgePinned(view);
   const space = SPACE_LABEL[sub] ? sub : 'business';
   return renderKnowledgeSpace(view, space, params);
+}
+
+// 📌 인덱스(핀 전용 뷰) — is_wiki=true 지식만. 핀된 지식의 제목·분류가 매 세션 첫머리(가이드 ${wiki})에 항상 주입된다(본문 제외).
+//  핀/해제는 각 지식 상세(#/k/<name>)에서. 여기는 '무엇이 깔리는지' 한눈에 보는 읽기 뷰.
+async function renderKnowledgePinned(view) {
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '📌 ', el('span', { class: 'accent', text: '인덱스' })),
+    el('p', { class: 'sub', text: '핀한 지식 — 제목·분류가 매 대화 첫머리(가이드의 WIKI 인덱스)에 항상 깔립니다. 본문은 제외(필요할 때 AI가 찾아봄). 핀/해제는 각 지식 상세에서 합니다.' }),
+  );
+  const listBox = el('div', { class: 'list-box' });
+  const foot = el('div', { class: 'list-foot' });
+  view.replaceChildren(head, knowledgeSubBar('pinned'), listBox, foot);
+  listBox.replaceChildren(skeletonRows(4));
+  try {
+    const r = await api('/api/ui/knowledge?' + new URLSearchParams({ limit: '500', orderBy: 'updated_at' }));
+    const pinned = ((r && r.entries) || []).filter((e) => e.is_wiki);
+    if (!pinned.length) {
+      listBox.replaceChildren(el('div', { class: 'empty', text: '핀된 지식이 없습니다. 지식 상세에서 ‘📌 핀’을 눌러 매 대화에 깔 항목을 고르세요.' }));
+      return;
+    }
+    listBox.replaceChildren(...pinned.map((e) => knRow(e)));
+    foot.replaceChildren(el('span', { class: 'caption', text: pinned.length + '건 핀됨' }));
+  } catch (e) {
+    listBox.replaceChildren(errorNote(e, '핀된 지식을 불러오지 못했습니다'));
+  }
 }
 
 // space 뷰(사업·제품·시스템) — 좌측 카테고리 사이드바(필터) + 우측 지식 목록(검색·injection·provenance 필터).
@@ -946,7 +856,10 @@ async function renderKnowledgeSpace(view, space, params) {
   const head = el('div', { class: 'page-head' },
     el('div', { class: 'page-head-row' },
       el('h1', {}, '지', el('span', { class: 'accent', text: '식' })),
-      el('div', { style: 'display:flex; gap:8px; align-items:center;' }, selectBtn,
+      el('div', { style: 'display:flex; gap:8px; align-items:center;' },
+        hasScope('memory') ? el('button', { class: 'btn btn-ghost btn-sm', text: '+ 추가',
+          title: '새 지식을 작성합니다', onclick: () => openKnowledgeEditor(null, { isNew: true, onSaved: () => refetch() }) }) : null,
+        selectBtn,
         el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }))),
     el('p', { class: 'sub', text: '맥락의 기록 — ' + SPACE_LABEL[space] + ' 영역의 지식. 왼쪽에서 카테고리로 좁히고, 위에서 검색·주입·출처로 거릅니다. 주입(항상/검색)과 출처(저작/외부 미러)는 직교 두 축입니다.' }),
   );
@@ -1206,16 +1119,24 @@ async function renderKnowledgeDetail(view, name) {
           rawToggle.textContent = showingRaw ? '서식 보기' : '원문 보기'; } })
     : null;
 
-  // 메타 — injection/provenance/lifecycle/source + 출처(provenance 라벨)/버전/갱신.
+  // 메타 — v6 핵심 축(주입·출처)·상태·버전·갱신만 항상 노출. 외부 미러(provenance=observed)일 때만 외부 출처 상세를 펼친다.
+  //  정리(2026-06-24): 구 '출처 채널(source)' 행 제거(쓰기 채널이라 provenance 와 중복) · '신뢰(confidence)'는 v6 축이 아닌
+  //  파생 신호(AI/사람 작성)라 'AI 생성'일 때만 '작성 주체'로 압축 · source_ref 라벨을 '참조'로(출처 3중복 해소).
+  //  recalled = '검색 소환'(AI가 관련될 때 키워드 검색으로 직접 찾는 것 — 자동·시맨틱 아님, query 가 아니라 recall).
+  const isMirror = k.provenance === 'observed' || k.external_system || k.external_id || k.external_url;
   const metaRows = [
     ['주입(injection)', (KN_INJECTION_LABEL[k.injection] || k.injection || '—') + (k.injection ? ' · ' + (KN_INJECTION_HINT[k.injection] || '') : '')],
     ['출처(provenance)', (KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—') + (k.provenance ? ' · ' + (KN_PROVENANCE_HINT[k.provenance] || '') : '')],
     ['상태(lifecycle)', LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle || '—'],
-    ['출처 채널(source)', k.source || '—'],
-    ['신뢰(confidence)', CONFIDENCE_LABEL[k.confidence] || k.confidence || '—'],
-    k.supersedes ? ['supersedes', k.supersedes] : null,
-    k.source_ref ? ['출처(source_ref)', k.source_ref] : null,
-    k.external_url ? ['외부 링크', k.external_url] : null,
+    k.confidence === 'ai' ? ['작성 주체', 'AI 생성'] : null,
+    k.author ? ['작성자', k.author] : null,
+    k.supersedes ? ['대체함(supersedes)', k.supersedes] : null,
+    isMirror && k.external_system ? ['외부 출처', k.external_system + (k.external_instance ? ' · ' + k.external_instance : '')] : null,
+    isMirror && k.external_id ? ['외부 ID', k.external_id] : null,
+    isMirror && k.external_url ? ['외부 링크', k.external_url] : null,
+    isMirror && k.occurred_at ? ['발생 시각', absTime(k.occurred_at)] : null,
+    isMirror && k.last_synced_at ? ['마지막 동기화', absTime(k.last_synced_at)] : null,
+    k.source_ref ? ['참조(source_ref)', k.source_ref] : null,
     ['버전', 'v' + (k.version != null ? k.version : '—')],
     ['마지막 갱신', (k.updated_at ? absTime(k.updated_at) : '—') + (k.updated_by ? ' · ' + k.updated_by : '')],
   ].filter(Boolean);
@@ -1229,9 +1150,26 @@ async function renderKnowledgeDetail(view, name) {
         title: (SPACE_LABEL[c.space] || c.space || '') + ' · ' + (c.key || ''), text: c.name || c.key })))
     : el('div', { class: 'kn-cat-empty', text: '연결된 카테고리가 없습니다.' });
 
-  // 상태 액션 — 삭제(휴지통)만, 우측 정렬. 반려(가역 숨김)는 폐기 — 제거는 삭제로 통일(감사 스냅샷으로 #/trash 에서 복원).
-  //  사람 전용(서버가 403 재검증).
+  // 상태 액션 — 편집·핀(memory 권한자)·삭제(휴지통), 우측 정렬. 편집/핀은 지식 자신에서 직접(관리탭 WIKI 인덱스 흡수, 2026-06-24).
+  //  핀: is_wiki 토글 → 제목·분류가 매 대화 첫머리(가이드 ${wiki})에 항상 주입(본문 제외). 삭제는 사람 전용(서버 403 재검증).
   const actions = el('div', { class: 'unit-actions unit-actions-end' });
+  if (hasScope('memory')) {
+    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '편집',
+      onclick: () => openKnowledgeEditor(k, { isNew: false, onSaved: () => renderKnowledgeDetail(view, k.name) }) }));
+    const pinBtn = el('button', { class: 'btn btn-ghost btn-sm',
+      text: k.is_wiki ? '📌 핀 해제' : '📍 인덱스에 핀',
+      title: '핀하면 제목·분류가 매 대화 첫머리(WIKI 인덱스)에 항상 깔립니다(본문 제외, 필요할 때 AI가 찾아봄).',
+      onclick: async () => {
+        pinBtn.disabled = true;
+        try {
+          await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/wiki',
+            { method: 'POST', body: JSON.stringify({ is_wiki: !k.is_wiki }) });
+          toast(k.is_wiki ? '핀을 해제했습니다' : '인덱스에 핀했습니다');
+          renderKnowledgeDetail(view, k.name);
+        } catch (e) { toast('핀 변경 실패 — ' + e.message, true); pinBtn.disabled = false; }
+      } });
+    actions.append(pinBtn);
+  }
   actions.append(el('button', { class: 'btn btn-ghost btn-sm btn-danger', text: '삭제',
     onclick: () => knDelete(k.name, view) }));
 
@@ -1243,7 +1181,8 @@ async function renderKnowledgeDetail(view, name) {
       el('h1', { class: 'detail-title', text: k.title || k.name }),
       lifecycleDot(k.lifecycle)),
     el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }),
-      knInjectChip(k.injection), knProvChip(k.provenance)),
+      knInjectChip(k.injection), knProvChip(k.provenance),
+      k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null),
     actions.childNodes.length ? actions : null,
     metaWrap,
     el('div', { class: 'sec-label', text: '카테고리' }), catSection,
@@ -1274,6 +1213,87 @@ async function knDelete(name, view) {
   } catch (e) {
     toast('삭제 실패 — ' + e.message, true);
   }
+}
+
+// 지식 생성·편집 — WIKI 탭의 단일 편집 표면(관리탭 'WIKI 인덱스' 흡수, 2026-06-24). 비파괴 upsert(POST /api/ui/knowledge):
+//  주입·출처·핀·요약·기존 카테고리는 미전송 시 서버가 보존 → 편집이 다른 축을 망치지 않는다.
+//  (org/memory 는 injection 을 recalled 로 강제 덮어써서 규칙·미러를 손상 → 쓰지 않음.)
+async function openKnowledgeEditor(seed, opts) {
+  opts = opts || {};
+  const isNew = !!opts.isNew;
+  const k = seed || {};
+  const nameIn = el('input', { type: 'text', value: k.name || '', placeholder: '파일명 (소문자 영문·숫자·-, 비우면 제목에서 자동)' });
+  if (!isNew) nameIn.disabled = true; // 이름=식별자, 생성 후 불변
+  const titleIn = el('input', { type: 'text', value: k.title || '', placeholder: '제목' });
+  const injSel = el('select', {},
+    el('option', { value: 'recalled', text: '검색 소환 (기본)' }),
+    el('option', { value: 'always', text: '항상 주입 (규칙·페르소나)' }));
+  injSel.value = k.injection || 'recalled';
+  const provSel = el('select', {},
+    el('option', { value: 'authored', text: '저작 (기본)' }),
+    el('option', { value: 'observed', text: '외부 미러' }));
+  provSel.value = k.provenance || 'authored';
+  const bodyTa = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문' });
+  bodyTa.value = k.body_md || '';
+
+  // 카테고리(선택) — 전 space 카테고리 한 셀렉터(optgroup). value=category id. 편집 시 기존 첫 매핑을 미리 선택.
+  const origCatId = (Array.isArray(k.categories) ? k.categories.filter((c) => c.state !== 'rejected') : [])
+    .map((c) => c.category_id).filter(Boolean)[0] || '';
+  const catSel = el('select', {}, el('option', { value: '', text: '— 카테고리 없음 —' }));
+  loadCategoriesForSelect(catSel, origCatId); // 비동기 채움(모달은 즉시 열림)
+
+  const status = el('span', { class: 'admin-status' });
+  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+  const root = el('div', { class: 'mem-modal' },
+    isNew ? field('파일명', nameIn) : null,
+    field('제목', titleIn),
+    field('주입(injection)', injSel),
+    field('출처(provenance)', provSel),
+    field('카테고리 (선택)', catSel),
+    field('본문', bodyTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status));
+  const back = overlay(isNew ? '지식 추가' : ('지식 편집 · ' + (k.title || k.name)), root);
+
+  saveBtn.addEventListener('click', async () => {
+    const body = bodyTa.value.trim();
+    if (!body) { toast('본문을 입력하세요', true); return; }
+    saveBtn.disabled = true;
+    try {
+      const payload = { title: titleIn.value.trim() || undefined, body_md: body,
+        injection: injSel.value, provenance: provSel.value };
+      if (isNew) { if (nameIn.value.trim()) payload.name = nameIn.value.trim(); }
+      else payload.name = k.name;
+      const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+      const savedName = (r && r.knowledge && r.knowledge.name) || payload.name || k.name;
+      // 카테고리 — 고른 게 있고 기존과 다르면 link(비파괴 — 기존 매핑 보존, 끊지 않음). 비워도 기존을 끊지 않음.
+      const catId = catSel.value ? Number(catSel.value) : null;
+      if (catId && String(catId) !== String(origCatId)) {
+        try {
+          await api('/api/ui/knowledge/' + encodeURIComponent(savedName) + '/category',
+            { method: 'POST', body: JSON.stringify({ category_id: catId }) });
+        } catch (e) { toast('지식은 저장됨 — 카테고리 연결만 실패: ' + e.message, true); }
+      }
+      toast(isNew ? '지식을 추가했습니다' : '저장했습니다');
+      back.remove();
+      if (opts.onSaved) opts.onSaved(savedName);
+    } catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; }
+  });
+}
+
+// 카테고리 셀렉터 채우기 — 3 space 병렬 fetch → optgroup(사업·제품·시스템). 실패해도 '없음'만 유지(graceful).
+async function loadCategoriesForSelect(sel, current) {
+  const spaces = [['business', '사업'], ['product', '제품'], ['system', '시스템']];
+  await Promise.all(spaces.map(async ([sp, label]) => {
+    try {
+      const d = await api('/api/ui/categories?' + new URLSearchParams({ space: sp }));
+      const cats = (d && d.categories) || [];
+      if (!cats.length) return;
+      const og = el('optgroup', { label });
+      for (const c of cats) og.append(el('option', { value: String(c.id), text: c.name || c.key }));
+      sel.append(og);
+    } catch (_) { /* graceful */ }
+  }));
+  if (current) sel.value = String(current);
 }
 
 // ════════════════════════════════════════════
@@ -1344,7 +1364,7 @@ const PJV_STATUS_LABEL = { active: '진행 중', done: '완료' };
 function projectSubBar(active) {
   const bar = spaceSubBar('#/projects2', SPACE_LABEL[active] ? active : '');
   // 앞쪽에 대시보드·작업 현황 칩을 끼워 넣는다(space 칩보다 먼저).
-  const lead = [['dashboard', '대시보드', '#/projects2/dashboard'], ['activity', '작업 현황', '#/projects2/activity']];
+  const lead = [['dashboard', '대시보드', '#/projects2/dashboard']];
   const refNode = bar.firstChild;
   for (const [key, label, href] of lead) {
     const on = key === active;
@@ -1356,12 +1376,6 @@ function projectSubBar(active) {
 
 // 프로젝트(v2) 진입 — sub ∈ {dashboard, activity, business, product, system}.
 async function renderProjectsV2(view, sub, params) {
-  if (sub === 'activity') {
-    // 작업 현황 — 기존 대시보드를 그대로 재사용. 하위 호스트에 렌더(renderDashboard 가 호스트 children 을 교체).
-    const host = el('div', {});
-    view.replaceChildren(projectSubBar('activity'), host);
-    return renderDashboard(host, params);
-  }
   if (SPACE_LABEL[sub]) return renderProjectV2Space(view, sub, params);
   return renderProjectV2Board(view);
 }
@@ -1494,7 +1508,6 @@ async function renderProjectV2Space(view, space, params) {
   view.replaceChildren(projectSubBar(space), skeleton('프로젝트를 불러오는 중'));
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })),
-    el('p', { class: 'sub', text: '맥락의 변화 — ' + SPACE_LABEL[space] + ' 영역의 프로젝트. 왼쪽에서 카테고리로 좁히고, 위에서 상태로 거릅니다.' }),
   );
 
   // 좌측 카테고리 사이드바(이 space 의 카테고리 + '전체'). 지식 탭의 knSideItem 재사용.
@@ -1660,7 +1673,7 @@ async function renderProjectV2Detail(view, idStr) {
   //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
   //  '연결된 지식'은 헤더의 '프로젝트 세부 설정' 팝업으로 이동(규칙과 함께). 페이지 본문에선 제외.
   view.replaceChildren(head,
-    pjvTasksSection(id, p.tasks || [], members, reload),
+    pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
     projectTerminalSection(id, members, meId, V6_BASE),
     projectTimelineSection(id, members, V6_BASE));
@@ -1953,7 +1966,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
 const PJV_TASK_STATUS = {
   todo:        { label: '할 일',   bucket: 'todo',        glyph: '',  cls: 'todo' },
   in_progress: { label: '진행 중', bucket: 'in_progress', glyph: '◐', cls: 'inprog' },
-  done:        { label: '완료',    bucket: 'done',        glyph: '✓', cls: 'done' },
+  done:        { label: 'Closed',  bucket: 'done',        glyph: '✓', cls: 'done' },
 };
 const PJV_STATUS_ORDER = ['todo', 'in_progress', 'done'];
 // 레거시 'active'(구 토글)·클릭업 미러 적재값을 'todo' 버킷으로 흡수. 그 외 미지정도 todo.
@@ -2037,63 +2050,121 @@ function pjvStatusControl(t, reload) {
 }
 
 // 담당자(아바타/이니셜, 클릭→프로젝트 팀원 선택 + '담당 없음').
-function pjvAssigneeControl(t, members, reload) {
-  const cur = t.assignee ? (members.find((m) => m.member_id === t.assignee) || null) : null;
-  const btn = el('button', { class: 'pjv-cell-btn' + (t.assignee ? '' : ' empty'), type: 'button', title: '담당자' });
-  if (t.assignee) {
-    const name = cur ? (cur.display_name || cur.member_id) : t.assignee;
-    btn.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(t.assignee), text: initials(name) }));
-  } else {
-    btn.append(el('span', { class: 'pjv-cell-ph', text: '＋' }));
+// 빈 상태 회색 라인 아이콘(클릭업식) — 담당자=사람＋ · 마감일=달력＋ · 우선순위=깃발. 색은 CSS(.pjv-cell-ico).
+function pjvIcon(kind) {
+  const svg = (...kids) => sv('svg', { class: 'pjv-cell-ico', viewBox: '0 0 24 24', width: '17', height: '17',
+    fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, ...kids);
+  if (kind === 'assignee') { // 사람 + (담당자 지정)
+    return svg(
+      sv('circle', { cx: '9.5', cy: '8', r: '3.4' }),
+      sv('path', { d: 'M3.7 19a5.8 5.8 0 0 1 11.6 0' }),
+      sv('path', { d: 'M18.8 13.6v4.6M16.5 15.9h4.6' }));
+  }
+  if (kind === 'due') { // 달력 + (마감일 지정)
+    return svg(
+      sv('rect', { x: '3.3', y: '5', width: '17.4', height: '15.2', rx: '2.4' }),
+      sv('path', { d: 'M3.3 9.3h17.4' }),
+      sv('path', { d: 'M8 2.8v3.6M16 2.8v3.6' }),
+      sv('path', { d: 'M12 12.2v4.6M9.7 14.5h4.6' }));
+  }
+  return svg( // 깃발 (우선순위)
+    sv('path', { d: 'M6 20.5V4' }),
+    sv('path', { d: 'M6 4.7h10.3l-2.4 3.3 2.4 3.3H6z' }));
+}
+
+// 담당자 다중 지정 — assignee 컬럼에 JSON 배열(["yoon","jang"]) 저장. 단일 문자열("yoon")은 레거시로 하위호환.
+//  서버는 assignee 를 검증없이 문자열 그대로 저장하고 SQL 필터도 없어, 배열 직렬화만으로 다중이 된다(조인테이블 불요).
+function pjvAssignees(t) {
+  const a = t && t.assignee;
+  if (a == null) return [];
+  if (Array.isArray(a)) return a.filter(Boolean);
+  const s = String(a).trim();
+  if (!s) return [];
+  if (s[0] === '[') { try { const arr = JSON.parse(s); return Array.isArray(arr) ? arr.filter(Boolean) : [s]; } catch (_) { return [s]; } }
+  return [s];
+}
+function pjvAssigneeWrite(ids) {
+  const a = [...new Set((ids || []).filter(Boolean))];
+  return a.length ? JSON.stringify(a) : null;
+}
+// 저장만(전체 reload 없이) — 다중 토글 중 메뉴를 닫지 않으려고 낙관적 갱신 + 백그라운드 저장.
+function pjvSaveTask(taskId, patch) {
+  return api('/api/ui/v6/tasks/' + taskId, { method: 'POST', body: JSON.stringify(patch) }).catch((e) => toast('수정 실패 — ' + e.message, true));
+}
+
+// 담당자 셀(다중) — 페이스파일 아바타(최대 3 + N) / 빈 아이콘. 메뉴=팀원 토글(체크 유지, 닫지 않음) + 담당 없음.
+function pjvAssigneeControl(t, members, apply) {
+  const nameOf = (id) => { const m = members.find((x) => x.member_id === id); return m ? (m.display_name || m.member_id) : id; };
+  const btn = el('button', { class: 'pjv-cell-btn', type: 'button', title: '담당자' });
+  function render() {
+    const ids = pjvAssignees(t);
+    btn.className = 'pjv-cell-btn' + (ids.length ? '' : ' empty');
+    if (ids.length) {
+      const faces = el('span', { class: 'pjv-asg-faces' });
+      for (const id of ids.slice(0, 3)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(id), title: nameOf(id), text: initials(nameOf(id)) }));
+      if (ids.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (ids.length - 3) }));
+      btn.replaceChildren(faces);
+    } else {
+      btn.replaceChildren(pjvIcon('assignee'));
+    }
   }
   btn.onclick = (e) => {
     e.stopPropagation();
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(btn, menu);
-    const none = el('button', { class: 'pjv-menu-item' + (!t.assignee ? ' sel' : ''), type: 'button' },
+    const menu = el('div', { class: 'pjv-menu pjv-asg-menu' });
+    pjvPopover(btn, menu);
+    const setIds = (ids) => { t.assignee = pjvAssigneeWrite(ids); render(); apply({ assignee: t.assignee }); rebuild(); };
+    const none = el('button', { class: 'pjv-menu-item', type: 'button' },
       el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '담당 없음' }));
-    none.onclick = () => { close(); if (t.assignee) pjvPatchTask(t.id, { assignee: null }, reload); };
-    menu.append(none);
-    for (const m of members) {
-      const sel = t.assignee === m.member_id;
-      const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
-        el('span', { text: m.display_name || m.member_id }));
-      item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { assignee: m.member_id }, reload); };
-      menu.append(item);
+    none.onclick = (ev) => { ev.stopPropagation(); setIds([]); };
+    const itemsBox = el('div', {});
+    menu.append(none, itemsBox);
+    function rebuild() {
+      const ids = pjvAssignees(t);
+      none.className = 'pjv-menu-item' + (!ids.length ? ' sel' : '');
+      itemsBox.replaceChildren(...members.map((m) => {
+        const on = ids.includes(m.member_id);
+        const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
+          el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+          el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }),
+          el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
+        item.onclick = (ev) => { ev.stopPropagation(); const c = pjvAssignees(t); setIds(c.includes(m.member_id) ? c.filter((x) => x !== m.member_id) : [...c, m.member_id]); };
+        return item;
+      }));
+      if (!members.length) itemsBox.append(el('div', { class: 'pjv-menu-empty', text: '팀원을 먼저 추가하세요' }));
     }
-    if (!members.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '팀원을 먼저 추가하세요' }));
+    rebuild();
   };
+  render();
   return btn;
 }
 
 // 마감일(YYYY-MM-DD, 표시는 m/d). 클릭→날짜입력 + 지우기.
-function pjvDueControl(t, reload) {
+function pjvDueControl(t, apply) {
   const overdue = pjvIsOverdue(t);
   const btn = el('button', { class: 'pjv-cell-btn' + (t.due_date ? '' : ' empty'), type: 'button', title: '마감일' });
   btn.append(t.due_date
     ? el('span', { class: 'pjv-due-text' + (overdue ? ' overdue' : ''), text: pjvFmtDate(t.due_date) })
-    : el('span', { class: 'pjv-cell-ph', text: '＋' }));
+    : pjvIcon('due'));
   btn.onclick = (e) => {
     e.stopPropagation();
     const input = el('input', { type: 'date', class: 'pjv-date-input', value: t.due_date || '' });
     const wrap = el('div', { class: 'pjv-menu pjv-date-pop' }, input,
       t.due_date ? el('button', { class: 'pjv-menu-item danger', type: 'button', text: '마감일 지우기',
-        onclick: () => { close(); pjvPatchTask(t.id, { due_date: null }, reload); } }) : null);
+        onclick: () => { close(); apply({ due_date: null }); } }) : null);
     const close = pjvPopover(btn, wrap);
     setTimeout(() => { input.focus(); if (input.showPicker) { try { input.showPicker(); } catch (_) { /* noop */ } } }, 0);
-    input.onchange = () => { const v = input.value || null; close(); pjvPatchTask(t.id, { due_date: v }, reload); };
+    input.onchange = () => { const v = input.value || null; close(); apply({ due_date: v }); };
   };
   return btn;
 }
 
 // 우선순위(깃발, 색상). 클릭→긴급/높음/보통/낮음/없음.
-function pjvPriorityControl(t, reload) {
+function pjvPriorityControl(t, apply) {
   const m = t.priority ? PJV_PRIORITY[t.priority] : null;
   const btn = el('button', { class: 'pjv-cell-btn' + (m ? '' : ' empty'), type: 'button', title: '우선순위' });
   btn.append(m
     ? el('span', { class: 'pjv-flag ' + m.cls }, el('span', { class: 'pjv-flag-glyph', text: '⚑' }), el('span', { class: 'pjv-flag-label', text: m.label }))
-    : el('span', { class: 'pjv-cell-ph', text: '⚑' }));
+    : pjvIcon('priority'));
   btn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu' });
@@ -2104,58 +2175,766 @@ function pjvPriorityControl(t, reload) {
       const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
         el('span', { class: 'pjv-flag ' + pm.cls }, el('span', { class: 'pjv-flag-glyph', text: '⚑' })),
         el('span', { text: pm.label }));
-      item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { priority: key }, reload); };
+      item.onclick = () => { close(); if (!sel) apply({ priority: key }); };
       menu.append(item);
     }
     const none = el('button', { class: 'pjv-menu-item' + (!t.priority ? ' sel' : ''), type: 'button' },
       el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '없음' }));
-    none.onclick = () => { close(); if (t.priority) pjvPatchTask(t.id, { priority: null }, reload); };
+    none.onclick = () => { close(); if (t.priority) apply({ priority: null }); };
     menu.append(none);
   };
   return btn;
 }
 
-// 태스크 섹션 — 컬럼 헤더 + 상태 그룹(할 일/진행 중/완료) + 클릭업식 인라인 추가.
-//  할 일·진행 중 그룹은 비어도 항상 표시(추가행 노출 → 빈 프로젝트에서도 바로 추가). 완료는 항목 있을 때만.
-function pjvTasksSection(projectId, tasks, members, reload) {
+// 닫힌(완료=Closed) 항목 표시 상태 — 클릭업 'Closed' 토글. 세션 동안 유지(reload 무관). 기본 숨김.
+const pjvClosedView = { tasks: false, subtasks: false };
+
+// 체크-원 아이콘(Closed 버튼용).
+function pjvCheckCircle() {
+  const n = sv('svg', { class: 'pjv-closed-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.9, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }));
+  n.append(sv('path', { d: 'M8.5 12.3l2.4 2.4 4.6-5' }));
+  return n;
+}
+// 토글 스위치 행(라벨 + iOS식 스위치). after() = 상태 반영 후 재렌더.
+function pjvSwitchRow(label, getOn, setOn, after) {
+  const sw = el('button', { class: 'pjv-switch' + (getOn() ? ' on' : ''), type: 'button', role: 'switch', 'aria-checked': getOn() ? 'true' : 'false' }, el('span', { class: 'pjv-switch-knob' }));
+  sw.onclick = (e) => { e.stopPropagation(); const nv = !getOn(); setOn(nv); sw.classList.toggle('on', nv); sw.setAttribute('aria-checked', nv ? 'true' : 'false'); after(); };
+  return el('div', { class: 'pjv-closed-row' }, el('span', { class: 'pjv-closed-row-label', text: label }), sw);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 커스텀 필드(클릭업형 "+ 컬럼 추가") — 우선순위 옆 (+) 로 형식을 지정해 컬럼을 추가하고, 각 태스크에 값을 채운다.
+//  백엔드 task_field/task_field_value(루트 프로젝트 단위 정의 + 태스크별 값). FIELD_TYPES 는 store 의 것과 1:1.
+//  아이콘은 우리 서비스 톤(단색 라인, currentColor, 형태로 구분 — 컬러 이모지 금지)으로 직접 제작.
+// ════════════════════════════════════════════════════════════════════════════
+
+// 옵션(드롭다운/라벨) 색 팔레트 — 차분한 톤(채도 절제). 추가 순서대로 라운드로빈.
+const PJV_FIELD_PALETTE = ['#6b7cff', '#2bb3a3', '#e6913a', '#e0688e', '#9268d6', '#3f9ae0', '#56b877', '#dd6450', '#7f8aa3'];
+// 통화 — 금액 필드. 기본 원화.
+const PJV_CURRENCIES = {
+  KRW: { symbol: '₩', label: '원 (₩)' }, USD: { symbol: '$', label: '달러 ($)' },
+  EUR: { symbol: '€', label: '유로 (€)' }, JPY: { symbol: '¥', label: '엔 (¥)' },
+};
+// 필드 형식 정의 — key 는 백엔드 field_type 과 동일. w=컬럼 px 폭, config=설정 단계 종류(옵션/통화/별점/진행률).
+const PJV_FIELD_TYPES = [
+  { key: 'text',     label: '텍스트',       desc: '한 줄 텍스트',       w: 150 },
+  { key: 'textarea', label: '긴 텍스트',     desc: '여러 줄 메모',       w: 180 },
+  { key: 'number',   label: '숫자',         desc: '정수·소수',         w: 104 },
+  { key: 'money',    label: '금액',         desc: '통화 단위 숫자',     w: 120, config: 'money' },
+  { key: 'date',     label: '날짜',         desc: '날짜 선택',         w: 108 },
+  { key: 'dropdown', label: '드롭다운',      desc: '옵션 1개 선택',      w: 148, config: 'options' },
+  { key: 'labels',   label: '라벨',         desc: '옵션 여러 개 선택',   w: 184, config: 'options' },
+  { key: 'checkbox', label: '체크박스',      desc: '예 / 아니오',        w: 86 },
+  { key: 'website',  label: '웹사이트',      desc: 'URL 링크',          w: 156 },
+  { key: 'email',    label: '이메일',       desc: '메일 주소',         w: 168 },
+  { key: 'phone',    label: '전화',         desc: '전화번호',          w: 148 },
+  { key: 'rating',   label: '별점',         desc: '별 점수',           w: 128, config: 'rating' },
+  { key: 'progress', label: '진행률',       desc: '0–100% 막대',       w: 136, config: 'progress' },
+  { key: 'tshirt',   label: '티셔츠 사이즈',  desc: 'XS–XXL',           w: 104 },
+  { key: 'location', label: '위치',         desc: '장소·주소',         w: 156 },
+  { key: 'files',     label: '파일',         desc: '공유 폴더에서 선택',  w: 150 },
+  { key: 'relationship', label: '관계',      desc: '태스크 연결',        w: 184 },
+  { key: 'progress_auto', label: '진행률(자동)', desc: '하위 완료율 자동',  w: 136 },
+];
+const PJV_FIELD_BY_KEY = Object.fromEntries(PJV_FIELD_TYPES.map((f) => [f.key, f]));
+const PJV_TSHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
+
+// 라인 아이콘 글리프(24x24, currentColor) — 형태만으로 형식을 구분(파일 아이콘 idiom 과 동일 톤).
+const PJV_FIELD_ICON_PATHS = {
+  text:     [['polyline', { points: '5 7 5 4 19 4 19 7' }], ['line', { x1: 12, y1: 4, x2: 12, y2: 20 }], ['line', { x1: 9, y1: 20, x2: 15, y2: 20 }]],
+  textarea: [['line', { x1: 4, y1: 6, x2: 20, y2: 6 }], ['line', { x1: 4, y1: 11, x2: 20, y2: 11 }], ['line', { x1: 4, y1: 16, x2: 13, y2: 16 }]],
+  number:   [['line', { x1: 9.5, y1: 4, x2: 7.5, y2: 20 }], ['line', { x1: 16.5, y1: 4, x2: 14.5, y2: 20 }], ['line', { x1: 4, y1: 9, x2: 20, y2: 9 }], ['line', { x1: 4, y1: 15, x2: 20, y2: 15 }]],
+  money:    [['line', { x1: 12, y1: 3, x2: 12, y2: 21 }], ['path', { d: 'M16 6.8H10.1a2.85 2.85 0 0 0 0 5.7h3.8a2.85 2.85 0 0 1 0 5.7H8' }]],
+  date:     [['rect', { x: 3, y: 5, width: 18, height: 16, rx: 2.5 }], ['line', { x1: 3, y1: 9.5, x2: 21, y2: 9.5 }], ['line', { x1: 8, y1: 3, x2: 8, y2: 7 }], ['line', { x1: 16, y1: 3, x2: 16, y2: 7 }]],
+  dropdown: [['rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.5 }], ['polyline', { points: '8.5 10 12 13.5 15.5 10' }]],
+  labels:   [['path', { d: 'M3.6 12.4 11 5a2 2 0 0 1 1.42-.6H19A1.4 1.4 0 0 1 20.4 5.8v6.6a2 2 0 0 1-.6 1.42l-7.4 7.4a1.55 1.55 0 0 1-2.2 0l-6.6-6.6a1.55 1.55 0 0 1 0-2.2Z' }], ['circle', { cx: 16, cy: 8, r: 1.25 }]],
+  checkbox: [['rect', { x: 4, y: 4, width: 16, height: 16, rx: 3.5 }], ['polyline', { points: '8.4 12.4 11 15 16 9.4' }]],
+  website:  [['circle', { cx: 12, cy: 12, r: 9 }], ['line', { x1: 3, y1: 12, x2: 21, y2: 12 }], ['path', { d: 'M12 3c2.6 2.7 2.6 15.3 0 18' }], ['path', { d: 'M12 3c-2.6 2.7-2.6 15.3 0 18' }]],
+  email:    [['rect', { x: 3, y: 5, width: 18, height: 14, rx: 2.5 }], ['polyline', { points: '4 7.5 12 13 20 7.5' }]],
+  phone:    [['path', { d: 'M6.5 3h3l1.6 4.2-2.3 1.5a11 11 0 0 0 4.9 4.9l1.5-2.3 4.2 1.6v3a2 2 0 0 1-2.1 2A15.5 15.5 0 0 1 4.5 5.1 2 2 0 0 1 6.5 3Z' }]],
+  rating:   [['path', { d: 'M12 4.3l2.34 4.74 5.23.76-3.78 3.69.89 5.2L12 16.9l-4.68 2.46.89-5.2-3.78-3.69 5.23-.76Z' }]],
+  progress: [['rect', { x: 3, y: 9, width: 18, height: 6, rx: 3 }], ['path', { d: 'M6.2 12h6', 'stroke-width': 3.2, 'stroke-linecap': 'round' }]],
+  tshirt:   [['path', { d: 'M8.2 3.5 4 6.5l2.1 3.2 1.9-1.1V19a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V8.6l1.9 1.1L20 6.5l-4.2-3a2.4 2.4 0 0 1-3.8 1.4 2.4 2.4 0 0 1-3.8-1.4Z' }]],
+  location: [['path', { d: 'M12 21s-6.4-5.3-6.4-10.4A6.4 6.4 0 0 1 18.4 10.6C18.4 15.7 12 21 12 21Z' }], ['circle', { cx: 12, cy: 10.4, r: 2.3 }]],
+  files:    [['path', { d: 'M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' }]],
+  relationship: [['path', { d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' }], ['path', { d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' }]],
+  progress_auto: [['path', { d: 'M5.5 17.5a8 8 0 1 1 13 0' }], ['path', { d: 'M12 13l3.4-3.4' }]],
+};
+function pjvFieldIcon(key, cls) {
+  const node = sv('svg', { class: 'pjv-ficon' + (cls ? ' ' + cls : ''), viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  for (const [t, a] of (PJV_FIELD_ICON_PATHS[key] || PJV_FIELD_ICON_PATHS.text)) node.append(sv(t, a));
+  return node;
+}
+function pjvPlusIcon() {
+  const n = sv('svg', { class: 'pjv-addcol-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('line', { x1: 12, y1: 8, x2: 12, y2: 16 }), sv('line', { x1: 8, y1: 12, x2: 16, y2: 12 }));
+  return n;
+}
+function pjvStarGlyph(on) {
+  const n = sv('svg', { class: 'pjv-fstar-ic', viewBox: '0 0 24 24', fill: on ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M12 4.3l2.34 4.74 5.23.76-3.78 3.69.89 5.2L12 16.9l-4.68 2.46.89-5.2-3.78-3.69 5.23-.76Z' }));
+  return n;
+}
+function pjvCheckGlyph(on) {
+  const n = sv('svg', { class: 'pjv-fcheck-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('rect', { x: 4, y: 4, width: 16, height: 16, rx: 4 }));
+  if (on) n.append(sv('polyline', { points: '8.4 12.4 11 15 16 9' }));
+  return n;
+}
+function pjvOptChip(o) {
+  return el('span', { class: 'pjv-fopt', style: '--opt:' + (o.color || PJV_FIELD_PALETTE[0]) },
+    el('span', { class: 'pjv-fopt-dot' }), el('span', { class: 'pjv-fopt-label', text: o.label }));
+}
+function pjvCheckMini(on) {
+  const n = sv('svg', { class: 'pjv-check-mini' + (on ? ' on' : ''), viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('rect', { x: 4, y: 4, width: 16, height: 16, rx: 4 }));
+  if (on) n.append(sv('polyline', { points: '8.4 12.4 11 15 16 9' }));
+  return n;
+}
+
+// 그리드 템플릿 — 기본(이름·담당자·마감·우선순위) + 커스텀 필드 폭들 + 더보기. thead/행/추가행에 인라인 적용.
+function pjvGridTemplate(fields) {
+  const extra = (fields || []).map((f) => ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px').join(' ');
+  return 'minmax(0, 1fr) 96px 92px 112px' + (extra ? ' ' + extra : '') + ' 34px';
+}
+function pjvHasFieldValue(v) {
+  return !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));
+}
+function pjvUrlText(v) { return String(v).replace(/^https?:\/\//i, '').replace(/\/$/, ''); }
+
+// 값 표시 노드(읽기) — 타입별. 셀 버튼 안에 들어간다.
+function pjvFieldDisplay(field, value) {
+  const type = field.field_type;
+  const cfg = field.config || {};
+  if (type === 'dropdown') {
+    const o = (cfg.options || []).find((x) => x.id === value);
+    return o ? pjvOptChip(o) : el('span', { class: 'pjv-fval', text: String(value) });
+  }
+  if (type === 'labels') {
+    const opts = cfg.options || [];
+    const wrap = el('span', { class: 'pjv-flabels' });
+    for (const id of (Array.isArray(value) ? value : [])) {
+      const o = opts.find((x) => x.id === id);
+      wrap.append(o ? pjvOptChip(o) : el('span', { class: 'pjv-fval', text: String(id) }));
+    }
+    return wrap;
+  }
+  if (type === 'money') {
+    const c = PJV_CURRENCIES[cfg.currency] || PJV_CURRENCIES.KRW;
+    const n = Number(value);
+    return el('span', { class: 'pjv-fval', text: c.symbol + (Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(value)) });
+  }
+  if (type === 'number') {
+    const n = Number(value);
+    return el('span', { class: 'pjv-fval', text: Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(value) });
+  }
+  if (type === 'date') return el('span', { class: 'pjv-fval', text: pjvFmtDate(value) });
+  if (type === 'progress') {
+    const pct = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+    return el('span', { class: 'pjv-fprog' },
+      el('span', { class: 'pjv-fprog-track' }, el('span', { class: 'pjv-fprog-fill', style: 'width:' + pct + '%' })),
+      el('span', { class: 'pjv-fprog-num', text: pct + '%' }));
+  }
+  if (type === 'files') {
+    const arr = Array.isArray(value) ? value : [];
+    return el('span', { class: 'pjv-ffiles' }, pjvFieldIcon('files', 'pjv-fmini'),
+      el('span', { class: 'pjv-fval', text: arr.length === 1 ? arr[0].name : arr.length + '개' }));
+  }
+  if (type === 'relationship') {
+    const arr = Array.isArray(value) ? value : [];
+    const w = el('span', { class: 'pjv-frel' });
+    for (const r of arr.slice(0, 2)) w.append(el('span', { class: 'pjv-rel-chip', text: r.name || ('#' + r.id), title: r.name }));
+    if (arr.length > 2) w.append(el('span', { class: 'pjv-rel-more', text: '+' + (arr.length - 2) }));
+    return w;
+  }
+  if (type === 'tshirt') return el('span', { class: 'pjv-fsize', text: String(value) });
+  if (type === 'website') return el('span', { class: 'pjv-fval pjv-flink', text: pjvUrlText(value) });
+  return el('span', { class: 'pjv-fval', text: String(value) }); // text/textarea/email/phone/location
+}
+
+// 한 셀의 컨트롤 — 낙관적 로컬 갱신 + 백그라운드 저장(전체 reload 없이 부드럽게). 옵션 추가 등 정의 변경은 reload.
+function pjvFieldControl(t, field, reload) {
+  let value = (t.field_values || {})[field.id];
+  value = value === undefined ? null : value;
+  const cell = el('span', { class: 'pjv-fcell-wrap' });
+  const persist = (v) => {
+    const prev = value; value = v;
+    render();
+    api('/api/ui/v6/tasks/' + t.id + '/fields/' + field.id, { method: 'POST', body: JSON.stringify({ value: v }) })
+      .then(() => { (t.field_values || (t.field_values = {}))[field.id] = v; })
+      .catch((e) => { value = prev; render(); toast('수정 실패 — ' + e.message, true); });
+  };
+  function render() { cell.replaceChildren(pjvFieldInner(t, field, value, persist, reload)); }
+  render();
+  return cell;
+}
+
+// 셀 내부 — 인라인 상호작용(체크박스·별점)은 셀 자체가 컨트롤, 그 외는 값 버튼(클릭→팝오버 편집기).
+function pjvFieldInner(t, field, value, persist, reload) {
+  const type = field.field_type;
+  if (type === 'checkbox') {
+    const on = value === true;
+    const btn = el('button', { class: 'pjv-fcheck' + (on ? ' on' : ''), type: 'button', title: field.name, 'aria-pressed': on ? 'true' : 'false' }, pjvCheckGlyph(on));
+    btn.onclick = (e) => { e.stopPropagation(); persist(!on); };
+    return btn;
+  }
+  if (type === 'rating') {
+    const max = Math.max(1, Math.min(10, Number(field.config && field.config.max) || 5));
+    const cur = Number(value) || 0;
+    const wrap = el('span', { class: 'pjv-frating', title: field.name });
+    for (let i = 1; i <= max; i++) {
+      const on = i <= cur;
+      const star = el('button', { class: 'pjv-fstar' + (on ? ' on' : ''), type: 'button', 'aria-label': i + '점' }, pjvStarGlyph(on));
+      star.onclick = (e) => { e.stopPropagation(); persist(i === cur ? null : i); };
+      wrap.append(star);
+    }
+    return wrap;
+  }
+  if (type === 'progress_auto') {
+    const pct = pjvAutoProgress(t);
+    if (pct === null) return el('span', { class: 'pjv-cell-btn empty', title: '하위 태스크가 없어요(자동 진행률)', style: 'cursor:default' }, el('span', { class: 'pjv-cell-ph', text: '—' }));
+    return el('span', { class: 'pjv-fprog', title: '하위 태스크 ' + pct + '% 완료(자동)' },
+      el('span', { class: 'pjv-fprog-track' }, el('span', { class: 'pjv-fprog-fill', style: 'width:' + pct + '%' })),
+      el('span', { class: 'pjv-fprog-num', text: pct + '%' }));
+  }
+  const has = pjvHasFieldValue(value);
+  const btn = el('button', { class: 'pjv-cell-btn' + (has ? '' : ' empty'), type: 'button', title: field.name },
+    has ? pjvFieldDisplay(field, value) : el('span', { class: 'pjv-cell-ph', text: '＋' }));
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    if (type === 'dropdown') return pjvFieldDropdownEditor(btn, t, field, value, persist, reload);
+    if (type === 'labels') return pjvFieldLabelsEditor(btn, t, field, value, persist, reload);
+    if (type === 'date') return pjvFieldDateEditor(btn, value, persist);
+    if (type === 'progress') return pjvFieldProgressEditor(btn, value, persist);
+    if (type === 'files') return pjvFieldFilesEditor(btn, t, field, value, persist);
+    if (type === 'relationship') return pjvFieldRelEditor(btn, t, field, value, persist);
+    if (type === 'tshirt') return pjvFieldTshirtEditor(btn, value, persist);
+    if (type === 'textarea') return pjvFieldTextareaEditor(btn, field, value, persist);
+    return pjvFieldTextEditor(btn, field, value, persist);
+  };
+  return btn;
+}
+
+// 텍스트류 편집기(text/number/money/website/email/phone/location) — 입력 + 저장/지우기. Enter 저장.
+function pjvFieldTextEditor(anchor, field, value, persist) {
+  const type = field.field_type;
+  const itype = (type === 'number' || type === 'money') ? 'number' : type === 'website' ? 'url' : type === 'email' ? 'email' : type === 'phone' ? 'tel' : 'text';
+  const input = el('input', { type: itype, class: 'pjv-field-input', value: value == null ? '' : String(value),
+    placeholder: (PJV_FIELD_BY_KEY[type] && PJV_FIELD_BY_KEY[type].desc) || '',
+    inputmode: (type === 'number' || type === 'money') ? 'decimal' : null });
+  const coerce = (v) => {
+    if (type === 'number' || type === 'money') { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : undefined; }
+    return v;
+  };
+  const save = () => {
+    const raw = input.value.trim();
+    if (raw === '') { close(); persist(null); return; }
+    const out = coerce(raw);
+    if (out === undefined) { toast('숫자를 입력하세요', true); return; }
+    close(); persist(out);
+  };
+  const actions = el('div', { class: 'pjv-fe-actions' },
+    el('button', { class: 'pjv-fe-btn primary', type: 'button', text: '저장', onclick: save }),
+    (type === 'website' && pjvHasFieldValue(value)) ? el('a', { class: 'pjv-fe-btn', href: safeHref(String(value)) || '#', target: '_blank', rel: 'noopener', text: '열기 ↗' }) : null,
+    pjvHasFieldValue(value) ? el('button', { class: 'pjv-fe-btn danger', type: 'button', text: '지우기', onclick: () => { close(); persist(null); } }) : null);
+  const close = pjvPopover(anchor, el('div', { class: 'pjv-field-editor' }, input, actions));
+  setTimeout(() => { input.focus(); if (input.select) input.select(); }, 0);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+}
+
+// 긴 텍스트 편집기 — textarea + 저장/지우기. Cmd/Ctrl+Enter 저장.
+function pjvFieldTextareaEditor(anchor, field, value, persist) {
+  const ta = el('textarea', { class: 'pjv-field-textarea', rows: '4', placeholder: '여러 줄 메모', maxlength: '4000' });
+  ta.value = value == null ? '' : String(value);
+  const save = () => { const v = ta.value.trim(); close(); persist(v === '' ? null : v); };
+  const actions = el('div', { class: 'pjv-fe-actions' },
+    el('button', { class: 'pjv-fe-btn primary', type: 'button', text: '저장', onclick: save }),
+    pjvHasFieldValue(value) ? el('button', { class: 'pjv-fe-btn danger', type: 'button', text: '지우기', onclick: () => { close(); persist(null); } }) : null);
+  const close = pjvPopover(anchor, el('div', { class: 'pjv-field-editor wide' }, ta, actions));
+  setTimeout(() => { ta.focus(); }, 0);
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); } });
+}
+
+// 날짜 편집기 — 마감일과 동형(YYYY-MM-DD).
+function pjvFieldDateEditor(anchor, value, persist) {
+  const input = el('input', { type: 'date', class: 'pjv-date-input', value: typeof value === 'string' ? value : '' });
+  const wrap = el('div', { class: 'pjv-menu pjv-date-pop' }, input,
+    pjvHasFieldValue(value) ? el('button', { class: 'pjv-menu-item danger', type: 'button', text: '지우기', onclick: () => { close(); persist(null); } }) : null);
+  const close = pjvPopover(anchor, wrap);
+  setTimeout(() => { input.focus(); if (input.showPicker) { try { input.showPicker(); } catch (_) { /* noop */ } } }, 0);
+  input.onchange = () => { const v = input.value || null; close(); persist(v); };
+}
+
+// 진행률 편집기 — 슬라이더 + 숫자(0–100).
+function pjvFieldProgressEditor(anchor, value, persist) {
+  const cur = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const range = el('input', { type: 'range', class: 'pjv-prog-range', min: '0', max: '100', step: '5', value: String(cur) });
+  const num = el('input', { type: 'number', class: 'pjv-prog-num-input', min: '0', max: '100', value: String(cur) });
+  range.oninput = () => { num.value = range.value; };
+  num.oninput = () => { const n = Math.max(0, Math.min(100, Number(num.value) || 0)); range.value = String(n); };
+  const save = () => { const n = Math.max(0, Math.min(100, Math.round(Number(num.value) || 0))); close(); persist(n === 0 ? null : n); };
+  const wrap = el('div', { class: 'pjv-field-editor pjv-prog-editor' },
+    el('div', { class: 'pjv-prog-row' }, range, el('span', { class: 'pjv-prog-pct' }, num, el('span', { text: '%' }))),
+    el('div', { class: 'pjv-fe-actions' },
+      el('button', { class: 'pjv-fe-btn primary', type: 'button', text: '저장', onclick: save }),
+      pjvHasFieldValue(value) ? el('button', { class: 'pjv-fe-btn danger', type: 'button', text: '지우기', onclick: () => { close(); persist(null); } }) : null));
+  const close = pjvPopover(anchor, wrap);
+}
+
+// 티셔츠 사이즈 — 고정 옵션(XS–XXL) 메뉴.
+function pjvFieldTshirtEditor(anchor, value, persist) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  for (const s of PJV_TSHIRT_SIZES) {
+    const sel = value === s;
+    const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-fsize', text: s }));
+    item.onclick = () => { close(); persist(sel ? null : s); };
+    menu.append(item);
+  }
+  const none = el('button', { class: 'pjv-menu-item' + (value == null ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '없음' }));
+  none.onclick = () => { close(); if (value != null) persist(null); };
+  menu.append(none);
+}
+
+// 하위 태스크 완료율(자동) — 진행률(자동) 필드용. 하위 없으면 null. (클릭업 Progress Auto 의 하위 기반 버전)
+function pjvAutoProgress(t) {
+  const subs = (t && t.subtasks) || [];
+  if (!subs.length) return null;
+  const done = subs.filter((s) => s.status === 'done').length;
+  return Math.round((done / subs.length) * 100);
+}
+
+// 파일 필드 — 공유 폴더에서 선택(참조). 업로드가 아니라 프로젝트 공유폴더의 기존 파일을 골라 연결한다.
+//  값=[{name, path, size}](path=공유폴더 상대경로). 연결 해제해도 실제 파일은 안 지워진다(참조만 끊음).
+function pjvFieldFilesEditor(anchor, t, field, value, persist) {
+  let selected = Array.isArray(value) ? value.slice() : [];
+  const B = '/api/ui/v6/projects/' + field.project_id;
+  const wrap = el('div', { class: 'pjv-field-editor pjv-files-editor' });
+  const close = pjvPopover(anchor, wrap);
+  let curPath = '';
+  let curData = null;
+  const chips = el('div', { class: 'pjv-files-selected' });
+  const crumb = el('div', { class: 'pjv-files-crumb' });
+  const rowsBox = el('div', { class: 'pjv-files-browser' });
+  const renderChips = () => {
+    chips.replaceChildren(el('span', { class: 'pjv-files-sel-label', text: '연결된 파일 ' + selected.length + '개' }));
+    for (const s of selected) {
+      chips.append(el('span', { class: 'pjv-rel-chip removable' },
+        el('button', { class: 'pjv-chip-dl', type: 'button', title: '다운로드', text: '↓', onclick: () => authDownload(B + '/file?download=1&path=' + encodeURIComponent(s.path), s.name) }),
+        el('span', { class: 'pjv-files-name', text: s.name, title: s.path }),
+        el('button', { class: 'pjv-rel-x', type: 'button', title: '연결 해제', text: '✕', onclick: () => { selected = selected.filter((x) => x.path !== s.path); persist(selected.length ? selected.slice() : null); renderChips(); refreshRows(); } })));
+    }
+  };
+  const refreshRows = () => {
+    rowsBox.replaceChildren();
+    const items = (curData && curData.items) || [];
+    if (!items.length) { rowsBox.append(el('div', { class: 'pjv-files-empty', text: '빈 폴더예요' })); return; }
+    for (const it of items) {
+      const childPath = curPath ? curPath + '/' + it.name : it.name;
+      if (it.type === 'dir') {
+        rowsBox.append(el('button', { class: 'pjv-files-row dir', type: 'button', onclick: () => { curPath = childPath; load(); } },
+          fileIconSvg(it.name, true), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-chev', text: '›' })));
+      } else {
+        const on = selected.some((x) => x.path === childPath);
+        const row = el('button', { class: 'pjv-files-row file' + (on ? ' on' : ''), type: 'button' },
+          pjvCheckMini(on), fileIconSvg(it.name, false), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-size', text: fmtSize(it.size) }));
+        row.onclick = () => {
+          if (on) selected = selected.filter((x) => x.path !== childPath);
+          else selected.push({ name: it.name, path: childPath, size: it.size });
+          persist(selected.length ? selected.slice() : null);
+          renderChips(); refreshRows();
+        };
+        rowsBox.append(row);
+      }
+    }
+  };
+  const renderCrumb = () => {
+    crumb.replaceChildren(el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: '루트', onclick: () => { curPath = ''; load(); } }));
+    let acc = '';
+    for (const p of (curPath ? curPath.split('/') : [])) {
+      acc = acc ? acc + '/' + p : p; const target = acc;
+      crumb.append(el('span', { class: 'pjv-files-crumb-sep', text: '/' }), el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: p, onclick: () => { curPath = target; load(); } }));
+    }
+  };
+  const load = async () => {
+    rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+    try { curData = await api(B + '/files?path=' + encodeURIComponent(curPath)); }
+    catch (e) { curData = { items: [] }; renderCrumb(); rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '공유 폴더를 불러오지 못했어요' })); return; }
+    renderCrumb(); refreshRows();
+  };
+  wrap.append(el('div', { class: 'pjv-files-head2', text: '공유 폴더에서 파일 선택' }), chips, crumb, rowsBox);
+  renderChips(); load();
+}
+
+// 관계(태스크 연결) 필드 — 같은 프로젝트의 다른 태스크를 검색해 연결. 값=[{id, name}]. (link-targets 재활용)
+function pjvFieldRelEditor(anchor, t, field, value, persist) {
+  let linked = Array.isArray(value) ? value.slice() : [];
+  const B = '/api/ui/v6/projects/' + field.project_id;
+  const chips = el('div', { class: 'pjv-rel-chips' });
+  const results = el('div', { class: 'pjv-rel-results' });
+  const search = el('input', { type: 'text', class: 'pjv-field-input', placeholder: '연결할 태스크 검색…' });
+  let timer = null;
+  const renderChips = () => {
+    chips.replaceChildren();
+    if (!linked.length) { chips.append(el('span', { class: 'pjv-files-empty', text: '연결된 태스크가 없어요' })); return; }
+    for (const r of linked) {
+      chips.append(el('span', { class: 'pjv-rel-chip removable' }, el('span', { text: r.name || ('#' + r.id) }),
+        el('button', { class: 'pjv-rel-x', type: 'button', title: '연결 해제', text: '✕', onclick: () => { linked = linked.filter((x) => x.id !== r.id); persist(linked.length ? linked.slice() : null); renderChips(); doSearch(); } })));
+    }
+  };
+  const doSearch = async () => {
+    let targets = [];
+    try { const d = await api(B + '/link-targets?exclude=' + t.id + '&q=' + encodeURIComponent(search.value.trim())); targets = (d && d.targets) || []; }
+    catch (e) { results.replaceChildren(el('div', { class: 'pjv-files-empty', text: '검색 실패' })); return; }
+    const avail = targets.filter((x) => !linked.some((l) => l.id === x.id));
+    results.replaceChildren();
+    if (!avail.length) { results.append(el('div', { class: 'pjv-files-empty', text: '결과가 없어요' })); return; }
+    for (const x of avail) {
+      const row = el('button', { class: 'pjv-rel-result', type: 'button' },
+        el('span', { class: 'pjv-rel-result-name', text: x.name }), el('span', { class: 'pjv-rel-add', text: '＋ 연결' }));
+      row.onclick = () => { linked.push({ id: x.id, name: x.name }); persist(linked.slice()); renderChips(); doSearch(); };
+      results.append(row);
+    }
+  };
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(doSearch, 220); };
+  const wrap = el('div', { class: 'pjv-field-editor pjv-rel-editor' }, chips, search, results);
+  const close = pjvPopover(anchor, wrap);
+  renderChips(); doSearch();
+  setTimeout(() => search.focus(), 0);
+}
+
+// 드롭다운 편집기 — 옵션 1개 선택 + 없음 + 즉석 옵션 추가.
+function pjvFieldDropdownEditor(anchor, t, field, value, persist, reload) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  for (const o of (field.config && field.config.options) || []) {
+    const sel = value === o.id;
+    const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvOptChip(o));
+    item.onclick = () => { close(); persist(sel ? null : o.id); };
+    menu.append(item);
+  }
+  const none = el('button', { class: 'pjv-menu-item' + (value == null ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '없음' }));
+  none.onclick = () => { close(); if (value != null) persist(null); };
+  menu.append(none);
+  menu.append(pjvAddOptionRow(field, async (opt) => {
+    close();
+    try { await api('/api/ui/v6/tasks/' + t.id + '/fields/' + field.id, { method: 'POST', body: JSON.stringify({ value: opt.id }) }); } catch (_) { /* noop */ }
+    reload();
+  }));
+}
+
+// 라벨 편집기 — 옵션 여러 개(토글, 즉시 저장·셀 실시간 갱신, 팝오버 유지) + 즉석 옵션 추가.
+function pjvFieldLabelsEditor(anchor, t, field, value, persist, reload) {
+  const selected = Array.isArray(value) ? value.slice() : [];
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  for (const o of (field.config && field.config.options) || []) {
+    const item = el('button', { class: 'pjv-menu-item' + (selected.includes(o.id) ? ' sel' : ''), type: 'button' }, pjvCheckMini(selected.includes(o.id)), pjvOptChip(o));
+    item.onclick = () => {
+      const on = selected.includes(o.id);
+      if (on) selected.splice(selected.indexOf(o.id), 1); else selected.push(o.id);
+      item.classList.toggle('sel', !on);
+      item.replaceChildren(pjvCheckMini(!on), pjvOptChip(o));
+      persist(selected.length ? selected.slice() : null);
+    };
+    menu.append(item);
+  }
+  menu.append(pjvAddOptionRow(field, async (opt) => {
+    close();
+    try { await api('/api/ui/v6/tasks/' + t.id + '/fields/' + field.id, { method: 'POST', body: JSON.stringify({ value: [...selected, opt.id] }) }); } catch (_) { /* noop */ }
+    reload();
+  }));
+}
+
+// 즉석 옵션 추가 행 — 입력 + Enter. 필드 config 에 옵션 추가 후 onAdded(opt) 콜백.
+function pjvAddOptionRow(field, onAdded) {
+  const inp = el('input', { type: 'text', class: 'pjv-opt-add-input', placeholder: '＋ 옵션 추가', maxlength: '40' });
+  const row = el('div', { class: 'pjv-opt-add' }, inp);
+  inp.onclick = (e) => e.stopPropagation();
+  inp.addEventListener('keydown', async (e) => {
+    e.stopPropagation();
+    if (e.key !== 'Enter') return;
+    const label = inp.value.trim(); if (!label) return;
+    inp.disabled = true;
+    try { onAdded(await pjvAddFieldOption(field, label)); }
+    catch (err) { toast('옵션 추가 실패 — ' + err.message, true); inp.disabled = false; }
+  });
+  return row;
+}
+async function pjvAddFieldOption(field, label) {
+  const opts = (field.config && field.config.options) || [];
+  const opt = { id: 'o' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), label: label.slice(0, 40), color: PJV_FIELD_PALETTE[opts.length % PJV_FIELD_PALETTE.length] };
+  const config = Object.assign({}, field.config, { options: [...opts, opt] });
+  await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ config }) });
+  return opt;
+}
+
+// ── 컬럼 헤더(커스텀 필드) — 아이콘 + 이름 + ⋯ 메뉴(이름변경/옵션편집/삭제) ──
+function pjvColumnHead(field, projectId, reload) {
+  const cell = el('div', { class: 'pjv-tcell pjv-thcol' },
+    pjvFieldIcon(field.field_type, 'pjv-thcol-ic'),
+    el('span', { class: 'pjv-thcol-name', text: field.name, title: field.name }));
+  const menuBtn = el('button', { class: 'pjv-thcol-menu', type: 'button', text: '⋯', 'aria-label': field.name + ' 컬럼 설정' });
+  menuBtn.onclick = (e) => { e.stopPropagation(); pjvColumnMenu(menuBtn, field, projectId, reload); };
+  cell.append(menuBtn);
+  return cell;
+}
+function pjvColumnMenu(anchor, field, projectId, reload) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
+  menu.append(mk('이름 변경', () => pjvRenameColumn(anchor, field, reload)));
+  const meta = PJV_FIELD_BY_KEY[field.field_type];
+  if (meta && meta.config === 'options') menu.append(mk('옵션 편집', () => pjvEditColumnOptions(field, reload)));
+  menu.append(mk('컬럼 삭제', () => pjvDeleteColumn(field, reload), true));
+}
+function pjvRenameColumn(anchor, field, reload) {
+  const input = el('input', { type: 'text', class: 'pjv-rename-input', value: field.name, maxlength: '120' });
+  const close = pjvPopover(anchor, el('div', { class: 'pjv-menu pjv-rename-pop' }, input));
+  input.onkeydown = async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); const v = input.value.trim(); close();
+    if (v && v !== field.name) {
+      try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ name: v }) }); reload(); }
+      catch (err) { toast('수정 실패 — ' + err.message, true); }
+    }
+  };
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+function pjvEditColumnOptions(field, reload) {
+  const ob = pjvOptionsBuilder((field.config && field.config.options) || []);
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+  const back = overlayBox('옵션 편집 · ' + field.name,
+    el('div', { class: 'field' }, ob.el),
+    el('div', { class: 'ov-actions' }, saveBtn, el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() })));
+  saveBtn.onclick = async () => {
+    const options = ob.get();
+    if (!options.length) { toast('옵션을 1개 이상 두세요', true); return; }
+    saveBtn.disabled = true;
+    const config = Object.assign({}, field.config, { options });
+    try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ config }) }); back.remove(); reload(); }
+    catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; }
+  };
+}
+function pjvDeleteColumn(field, reload) {
+  if (!confirm("'" + field.name + "' 컬럼을 삭제할까요?\n\n이 컬럼의 모든 값이 함께 사라집니다.")) return;
+  (async () => {
+    try { await api('/api/ui/v6/fields/' + field.id + '/delete', { method: 'POST', body: JSON.stringify({}) }); toast('컬럼을 삭제했어요'); reload(); }
+    catch (e) { toast('삭제 실패 — ' + e.message, true); }
+  })();
+}
+
+// ── 옵션 빌더(생성/편집 공용) — 색 점(클릭=색 순환)·라벨·삭제 + 추가. 기존 id 보존(값 깨짐 방지). ──
+function pjvOptionsBuilder(initial) {
+  const rows = el('div', { class: 'pjv-optb-rows' });
+  const data = [];
+  const addRow = (o) => {
+    o = o || {};
+    const item = { id: o.id || null, label: o.label || '', color: o.color || PJV_FIELD_PALETTE[data.length % PJV_FIELD_PALETTE.length] };
+    data.push(item);
+    let ci = Math.max(0, PJV_FIELD_PALETTE.indexOf(item.color));
+    const dot = el('button', { class: 'pjv-optb-dot', type: 'button', style: '--opt:' + item.color, title: '색상 변경' });
+    dot.onclick = () => { ci = (ci + 1) % PJV_FIELD_PALETTE.length; item.color = PJV_FIELD_PALETTE[ci]; dot.style.setProperty('--opt', item.color); };
+    const inp = el('input', { type: 'text', class: 'pjv-optb-input', value: item.label, placeholder: '옵션 이름', maxlength: '40' });
+    inp.oninput = () => { item.label = inp.value; };
+    const rm = el('button', { class: 'pjv-optb-rm', type: 'button', text: '✕', title: '삭제' });
+    const rowEl = el('div', { class: 'pjv-optb-row' }, dot, inp, rm);
+    rm.onclick = () => { const i = data.indexOf(item); if (i >= 0) data.splice(i, 1); rowEl.remove(); };
+    rows.append(rowEl);
+  };
+  (initial && initial.length ? initial : [{}, {}]).forEach(addRow);
+  const addBtn = el('button', { class: 'pjv-optb-add', type: 'button', text: '＋ 옵션 추가', onclick: () => addRow(null) });
+  return {
+    el: el('div', { class: 'pjv-optb' }, rows, addBtn),
+    get: () => data.filter((d) => d.label.trim()).map((d) => ({
+      id: d.id || ('o' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36)),
+      label: d.label.trim().slice(0, 40), color: d.color,
+    })),
+  };
+}
+
+// ── (+) 컬럼 추가 버튼 + Fields 패널(클릭업형: 검색 · 새로 만들기/기존 항목 탭 · 형식 목록 · 설정 폼) ──
+function pjvAddColumnButton(projectId, reload) {
+  const btn = el('button', { class: 'pjv-addcol-btn', type: 'button', title: '컬럼 추가', 'aria-label': '컬럼 추가' }, pjvPlusIcon());
+  btn.onclick = (e) => { e.stopPropagation(); pjvOpenFieldsPanel(btn, projectId, reload); };
+  return btn;
+}
+function pjvOpenFieldsPanel(anchor, projectId, reload) {
+  const panel = el('div', { class: 'pjv-fields-panel' });
+  const close = pjvPopover(anchor, panel);
+  let catalog = null;
+  const showPicker = (tab) => {
+    tab = tab || 'new';
+    const search = el('input', { type: 'text', class: 'pjv-fields-search', placeholder: '필드 검색…' });
+    const tNew = el('button', { class: 'pjv-fields-tab' + (tab === 'new' ? ' on' : ''), type: 'button', text: '새로 만들기', onclick: () => showPicker('new') });
+    const tExist = el('button', { class: 'pjv-fields-tab' + (tab === 'existing' ? ' on' : ''), type: 'button', text: '기존 항목', onclick: () => showPicker('existing') });
+    const list = el('div', { class: 'pjv-fields-list' });
+    panel.replaceChildren(
+      el('div', { class: 'pjv-fields-head' }, el('span', { class: 'pjv-fields-title', text: '필드' })),
+      search, el('div', { class: 'pjv-fields-tabs' }, tNew, tExist), list);
+    const renderNew = () => {
+      const qs = search.value.trim().toLowerCase();
+      const matches = PJV_FIELD_TYPES.filter((f) => !qs || f.label.toLowerCase().includes(qs) || f.desc.toLowerCase().includes(qs) || f.key.includes(qs));
+      list.replaceChildren();
+      if (!matches.length) { list.append(el('div', { class: 'pjv-fields-empty', text: '일치하는 형식이 없어요' })); return; }
+      list.append(el('div', { class: 'pjv-fields-sec', text: '필드 형식' }));
+      for (const f of matches) {
+        const row = el('button', { class: 'pjv-field-opt', type: 'button' },
+          el('span', { class: 'pjv-field-opt-ic' }, pjvFieldIcon(f.key)),
+          el('span', { class: 'pjv-field-opt-tx' }, el('span', { class: 'pjv-field-opt-name', text: f.label }), el('span', { class: 'pjv-field-opt-desc', text: f.desc })));
+        row.onclick = () => panel.replaceChildren(pjvFieldConfigForm(projectId, f, reload, close, () => showPicker('new')));
+        list.append(row);
+      }
+    };
+    const renderExisting = async () => {
+      list.replaceChildren(el('div', { class: 'pjv-fields-empty', text: '불러오는 중…' }));
+      if (catalog === null) { try { catalog = await api('/api/ui/v6/projects/' + projectId + '/field-catalog').then((d) => d.fields || []); } catch (_) { catalog = []; } }
+      const qs = search.value.trim().toLowerCase();
+      const matches = catalog.filter((c) => !qs || String(c.name).toLowerCase().includes(qs));
+      list.replaceChildren();
+      if (!matches.length) { list.append(el('div', { class: 'pjv-fields-empty', text: '다른 프로젝트에 만든 필드가 없어요' })); return; }
+      for (const c of matches) {
+        const meta = PJV_FIELD_BY_KEY[c.field_type];
+        const row = el('button', { class: 'pjv-field-opt', type: 'button' },
+          el('span', { class: 'pjv-field-opt-ic' }, pjvFieldIcon(c.field_type)),
+          el('span', { class: 'pjv-field-opt-tx' }, el('span', { class: 'pjv-field-opt-name', text: c.name }), el('span', { class: 'pjv-field-opt-desc', text: meta ? meta.label : c.field_type })));
+        row.onclick = () => pjvCreateField(projectId, { field_type: c.field_type, name: c.name, config: c.config || {} }, reload, close);
+        list.append(row);
+      }
+    };
+    search.oninput = () => { tab === 'new' ? renderNew() : renderExisting(); };
+    (tab === 'new' ? renderNew : renderExisting)();
+    setTimeout(() => search.focus(), 0);
+  };
+  showPicker('new');
+}
+// 형식 선택 후 설정 폼 — 이름 + (옵션/통화/별점) 설정 → 만들기.
+function pjvFieldConfigForm(projectId, f, reload, close, back) {
+  const wrap = el('div', { class: 'pjv-fcfg' });
+  wrap.append(el('div', { class: 'pjv-fcfg-head' },
+    el('button', { class: 'pjv-fcfg-back', type: 'button', text: '←', title: '뒤로', onclick: back }),
+    el('span', { class: 'pjv-fcfg-ic' }, pjvFieldIcon(f.key)),
+    el('span', { class: 'pjv-fcfg-title', text: f.label })));
+  const nameIn = el('input', { type: 'text', class: 'pjv-fcfg-name', value: f.label, maxlength: '120', placeholder: '필드 이름' });
+  wrap.append(el('label', { class: 'pjv-fcfg-lbl', text: '이름' }), nameIn);
+  let getConfig = () => ({});
+  if (f.config === 'options') {
+    const ob = pjvOptionsBuilder([]);
+    wrap.append(el('label', { class: 'pjv-fcfg-lbl', text: '옵션' }), ob.el);
+    getConfig = () => ({ options: ob.get() });
+  } else if (f.config === 'money') {
+    const sel = el('select', { class: 'pjv-fcfg-sel' });
+    for (const [code, c] of Object.entries(PJV_CURRENCIES)) sel.append(el('option', { value: code, text: c.label }));
+    sel.value = 'KRW';
+    wrap.append(el('label', { class: 'pjv-fcfg-lbl', text: '통화' }), sel);
+    getConfig = () => ({ currency: sel.value, symbol: PJV_CURRENCIES[sel.value].symbol });
+  } else if (f.config === 'rating') {
+    const sel = el('select', { class: 'pjv-fcfg-sel' });
+    for (const n of [3, 5, 10]) sel.append(el('option', { value: String(n), text: n + '점 만점' }));
+    sel.value = '5';
+    wrap.append(el('label', { class: 'pjv-fcfg-lbl', text: '별 개수' }), sel);
+    getConfig = () => ({ max: Number(sel.value) });
+  }
+  const createBtn = el('button', { class: 'pjv-fcfg-create', type: 'button', text: '만들기' });
+  createBtn.onclick = () => {
+    const name = nameIn.value.trim() || f.label;
+    const config = getConfig();
+    if (f.config === 'options' && (!config.options || !config.options.length)) { toast('옵션을 1개 이상 추가하세요', true); return; }
+    pjvCreateField(projectId, { field_type: f.key, name, config }, reload, close);
+  };
+  wrap.append(el('div', { class: 'pjv-fcfg-actions' }, createBtn, el('button', { class: 'pjv-fcfg-cancel', type: 'button', text: '취소', onclick: back })));
+  setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+  return wrap;
+}
+async function pjvCreateField(projectId, payload, reload, close) {
+  try { await api('/api/ui/v6/projects/' + projectId + '/fields', { method: 'POST', body: JSON.stringify(payload) }); if (close) close(); toast('컬럼을 추가했어요'); reload(); }
+  catch (e) { toast('컬럼 추가 실패 — ' + e.message, true); }
+}
+
+// 더블클릭 → 하위 태스크 인라인 생성(클릭업식). 같은 행에 입력칸 1개만, Enter=생성, Esc/빈 blur=취소.
+function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
+  const existing = subBox.querySelector('.pjv-subadd');
+  if (existing) { const i = existing.querySelector('input'); if (i) i.focus(); return; }
+  const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '하위 태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
+  const row = el('div', { class: 'pjv-subadd' }, input);
+  subBox.append(row);
+  setTimeout(() => input.focus(), 0);
+  let busy = false;
+  input.addEventListener('blur', () => { if (!input.value.trim()) row.remove(); });
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') { input.value = ''; row.remove(); return; }
+    if (e.key !== 'Enter') return;
+    const name = input.value.trim(); if (!name || busy) return;
+    busy = true; input.disabled = true;
+    try { await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: parentTask.id }) }); reload(); }
+    catch (err) { toast('추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
+  });
+}
+
+// 태스크 섹션 — [태스크 N개][Closed 토글] 헤더 + 컬럼헤더 + 상태 그룹(할 일/진행 중/Closed). 클릭업식 리스트뷰.
+//  할 일·진행 중은 비어도 항상 표시(인라인 추가행). Closed(완료) 그룹은 기본 숨김 — 헤더의 Closed 토글로만 노출.
+//  fields = 커스텀 필드 정의(루트 프로젝트). 컬럼 헤더·각 행에 필드 셀을 끼우고 grid-template 을 동적으로.
+function pjvTasksSection(projectId, tasks, members, reload, fields) {
+  fields = fields || [];
   const card = el('div', { class: 'card pjv-tasks-card', style: 'margin-bottom:18px' });
+
+  // Closed 토글 버튼 — 누르면 태스크/하위태스크 popover. 활성(노출 중) 시 파란 강조.
+  const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 항목 표시' },
+    pjvCheckCircle(), el('span', { text: 'Closed' }));
+  const syncBtn = () => closedBtn.classList.toggle('active', pjvClosedView.tasks || pjvClosedView.subtasks);
+  syncBtn();
+
+  // 본문 — Closed 토글 시 서버 재요청 없이 즉시 재렌더(이미 받은 tasks 를 필터).
+  const body = el('div', { class: 'pjv-tasks-body' });
+  const renderGroups = () => {
+    body.replaceChildren();
+    if (!tasks.length) {
+      body.append(el('div', { class: 'pjv-empty-hint' },
+        el('b', { text: '아직 태스크가 없어요.' }),
+        ' 아래 ', el('span', { class: 'pjv-empty-chip', text: '＋ 태스크' }),
+        ' 를 눌러 이름을 적고 Enter — 첫 할 일을 추가하세요.'));
+    }
+    // 별도 컬럼헤더 행 없음 — 컬럼 라벨은 첫(맨 위) 그룹 헤더에 합친다(withCols).
+    const buckets = { todo: [], in_progress: [], done: [] };
+    for (const t of tasks) buckets[pjvStatusMeta(t.status).bucket].push(t);
+    let firstShown = true;
+    for (const key of ['in_progress', 'todo', 'done']) { // 진행 중을 할 일 위로(기본 레이아웃)
+      if (key === 'done' && !pjvClosedView.tasks) continue; // Closed 그룹은 토글 시에만 노출
+      body.append(pjvStatusGroup(projectId, key, buckets[key], members, reload, fields, firstShown));
+      firstShown = false;
+    }
+  };
+
+  // Closed 버튼 = 직접 토글. 한 번 누르면 닫힌(완료) 태스크가 보이고 버튼이 활성(파란) 상태, 다시 누르면 숨김.
+  //  하위 닫힘 항목도 함께 따라오게 묶는다(Closed = '닫힌 것 보기' 한 동작).
+  closedBtn.onclick = (e) => {
+    e.stopPropagation();
+    const nv = !pjvClosedView.tasks;
+    pjvClosedView.tasks = nv;
+    pjvClosedView.subtasks = nv;
+    syncBtn();
+    renderGroups();
+  };
+
   card.append(el('div', { class: 'card-head' },
     el('h2', { text: '태스크' }),
     el('div', { class: 'card-head-actions' },
-      el('span', { class: 'pjv-task-total', text: tasks.length ? tasks.length + '개' : '' }))));
-
-  if (!tasks.length) {
-    card.append(el('div', { class: 'pjv-empty-hint' },
-      el('b', { text: '아직 태스크가 없어요.' }),
-      ' 아래 ', el('span', { class: 'pjv-empty-chip', text: '＋ 태스크' }),
-      ' 를 눌러 이름을 적고 Enter — 첫 할 일을 추가하세요.'));
-  }
-
-  card.append(el('div', { class: 'pjv-trow pjv-thead' },
-    el('div', { class: 'pjv-trow-title-cell', text: '이름' }),
-    el('div', { class: 'pjv-tcell', text: '담당자' }),
-    el('div', { class: 'pjv-tcell', text: '마감일' }),
-    el('div', { class: 'pjv-tcell', text: '우선순위' }),
-    el('div', { class: 'pjv-tcell pjv-tcell-add' })));
-
-  const buckets = { todo: [], in_progress: [], done: [] };
-  for (const t of tasks) buckets[pjvStatusMeta(t.status).bucket].push(t);
-
-  for (const key of PJV_STATUS_ORDER) {
-    const list = buckets[key];
-    if (key === 'done' && !list.length) continue; // 완료는 항목 있을 때만(추가행 없음)
-    card.append(pjvStatusGroup(projectId, key, list, members, reload));
-  }
+      closedBtn)));
+  card.append(body);
+  renderGroups();
   return card;
 }
 
 // 상태 그룹 — head(캐럿·점·라벨·개수) + body(행들 + 인라인 추가행). 완료 그룹엔 추가행 없음.
-function pjvStatusGroup(projectId, key, list, members, reload) {
+// withCols=true 면(첫 그룹) 별도 컬럼헤더 행 대신 이 그룹 헤더에 컬럼 라벨(담당자/마감일/우선순위+커스텀)을 합쳐 컬럼 위에 정렬한다.
+function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols) {
   const m = PJV_TASK_STATUS[key];
   const body = el('div', { class: 'pjv-tgroup-body' });
-  for (const t of list) body.append(pjvTaskRow(projectId, t, members, reload, 0));
+  for (const t of list) body.append(pjvTaskRow(projectId, t, members, reload, 0, fields));
   const countEl = el('span', { class: 'pjv-tgroup-count', text: String(list.length) });
-  if (key !== 'done') body.append(pjvAddRow(projectId, key, members, reload, body, countEl));
+  if (key !== 'done') body.append(pjvAddRow(projectId, key, members, reload, body, countEl, fields));
 
   let gopen = true;
   const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
@@ -2163,62 +2942,107 @@ function pjvStatusGroup(projectId, key, list, members, reload) {
     gopen = !gopen; gcaret.textContent = gopen ? '▾' : '▸';
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
   };
-  return el('div', { class: 'pjv-tgroup' },
-    el('div', { class: 'pjv-tgroup-head ' + m.cls },
-      el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
-      el('span', { class: 'pjv-tgroup-label', text: m.label }), countEl, gcaret),
-    body);
+  const dot = el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+  const labelEl = el('span', { class: 'pjv-tgroup-label', text: m.label });
+
+  let head;
+  if (withCols) {
+    // 컬럼 라벨을 행 그리드에 맞춰 헤더에 합침(별도 thead 없음). 좌측 첫 칸 = 그룹 라벨.
+    head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls },
+      el('div', { class: 'pjv-trow-title-cell' }, dot, labelEl, countEl, gcaret),
+      el('div', { class: 'pjv-tcell pjv-colhead', text: '담당자' }),
+      el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }),
+      el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }),
+      ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)),
+      el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
+    head.style.gridTemplateColumns = pjvGridTemplate(fields);
+  } else {
+    head = el('div', { class: 'pjv-tgroup-head ' + m.cls }, dot, labelEl, countEl, gcaret);
+  }
+  return el('div', { class: 'pjv-tgroup' }, head, body);
 }
 
 // 인라인 추가행(클릭업식) — 클릭→입력칸, Enter=생성(연속 추가 위해 입력 유지·낙관적 삽입), Esc/빈 blur=접기.
 //  생성은 그 그룹 상태로(todo 외엔 생성 후 status 패치). 모달 없이 그 자리에서 바로.
-function pjvAddRow(projectId, status, members, reload, body, countEl) {
+function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
   const row = el('div', { class: 'pjv-addrow' });
   const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
-  const collapse = () => { row.classList.remove('editing'); row.replaceChildren(trigger); };
-  // 펼침: 태스크 행과 동일한 그리드 — 입력은 '이름' 컬럼에만 두고 담당자·마감·우선순위 셀은 자리를 유지한다
-  //  (클릭업 + Add Task 처럼 컬럼을 안 가림). 비-이름 셀은 생성 전이라 비활성 자리표시만.
+  // 생성 전 드래프트 — 담당자·마감·우선순위를 미리 지정해 생성 직후 한 번에 적용(클릭업식). 셀은 행과 동일.
+  const draft = { assignee: null, due_date: null, priority: null };
+  const cAssignee = el('div', { class: 'pjv-tcell' });
+  const cDue = el('div', { class: 'pjv-tcell' });
+  const cPriority = el('div', { class: 'pjv-tcell' });
+  const setDraft = (p) => { Object.assign(draft, p); paintCells(); setTimeout(() => { if (row.classList.contains('editing')) input.focus(); }, 0); };
+  function paintCells() {
+    cAssignee.replaceChildren(pjvAssigneeControl(draft, members, (p) => { Object.assign(draft, p); }));
+    cDue.replaceChildren(pjvDueControl(draft, setDraft));
+    cPriority.replaceChildren(pjvPriorityControl(draft, setDraft));
+  }
+  const collapse = () => { row.classList.remove('editing'); draft.assignee = draft.due_date = draft.priority = null; row.replaceChildren(trigger); };
+  // 펼침: 태스크 행과 동일한 그리드 — 이름 입력 + 담당자·마감·우선순위 드래프트 셀(생성 시 적용). 커스텀 필드는 생성 후 행에서.
   const expand = () => {
     row.classList.add('editing');
+    row.style.gridTemplateColumns = pjvGridTemplate(fields);
+    paintCells();
     row.replaceChildren(
       el('div', { class: 'pjv-trow-title-cell' }, input),
-      el('div', { class: 'pjv-tcell' }),
-      el('div', { class: 'pjv-tcell' }),
-      el('div', { class: 'pjv-tcell' }),
+      cAssignee, cDue, cPriority,
+      ...(fields || []).map(() => el('div', { class: 'pjv-tcell' })),
       el('div', { class: 'pjv-tcell pjv-tcell-add' }));
     input.focus();
   };
   trigger.onclick = expand;
-  input.addEventListener('blur', () => { if (!input.value.trim()) collapse(); });
   let busy = false;
-  input.addEventListener('keydown', async (e) => {
-    if (e.key === 'Escape') { input.value = ''; collapse(); return; }
-    if (e.key !== 'Enter') return;
+  // 생성 — Enter(keepOpen=연속추가) 또는 바깥클릭. 생성 후 드래프트(담당자·마감·우선순위)를 한 번에 패치.
+  const commit = async (keepOpen) => {
+    if (busy) return;
     const name = input.value.trim();
-    if (!name || busy) return;
+    if (!name) { if (!keepOpen) collapse(); return; }
     busy = true; input.disabled = true;
     try {
       const created = await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => d && d.task);
       if (created && status !== 'todo') {
-        await api('/api/ui/v6/tasks/' + created.id, { method: 'POST', body: JSON.stringify({ status }) }).catch(() => { /* 상태만 실패해도 생성은 유지 */ });
+        await api('/api/ui/v6/tasks/' + created.id, { method: 'POST', body: JSON.stringify({ status }) }).catch(() => {});
       }
-      const t = Object.assign({ priority: null, assignee: null, due_date: null }, created, { status, subtasks: [] });
-      body.insertBefore(pjvTaskRow(projectId, t, members, reload, 0), row); // 추가행 위에 삽입(연속 추가)
+      const patch = {};
+      if (draft.assignee) patch.assignee = draft.assignee;
+      if (draft.due_date) patch.due_date = draft.due_date;
+      if (draft.priority) patch.priority = draft.priority;
+      if (created && Object.keys(patch).length) {
+        await api('/api/ui/v6/tasks/' + created.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => {});
+      }
+      const t = Object.assign({ priority: null, assignee: null, due_date: null }, created, patch, { status, subtasks: [], field_values: {} });
+      body.insertBefore(pjvTaskRow(projectId, t, members, reload, 0, fields), row);
       if (countEl) countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
       const card = row.closest('.pjv-tasks-card');
       const hint = card && card.querySelector('.pjv-empty-hint');
-      if (hint) hint.remove(); // 빈 상태 안내 제거
-      input.value = ''; input.disabled = false; busy = false; input.focus();
+      if (hint) hint.remove();
+      input.value = ''; input.disabled = false; busy = false;
+      draft.assignee = draft.due_date = draft.priority = null; paintCells();
+      if (keepOpen) input.focus(); else collapse();
     } catch (err) { toast('추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
+  };
+  // 바깥클릭(=커밋) 가드 — 셀 팝오버 편집 중이거나 행 내부 포커스면 보류(드래프트 설정 중 조기 생성 방지).
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (busy || !row.classList.contains('editing')) return;
+      if (document.querySelector('.pjv-pop')) return;        // 셀 팝오버 편집 중
+      if (row.contains(document.activeElement)) return;       // 행 내부 포커스(셀 버튼 등)
+      commit(false);
+    }, 130);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { input.value = ''; collapse(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
   });
   collapse();
   return row;
 }
 
 // 행 오른쪽 끝 ⋯ 더보기 메뉴(클릭업식) — 하위 태스크 추가(상위만)·이름 변경·삭제.
-function pjvRowMore(projectId, t, depth, reload) {
+function pjvRowMore(projectId, t, depth, reload, onAddSub) {
   const btn = el('button', { class: 'pjv-trow-more', type: 'button', title: '더보기', 'aria-label': '태스크 작업' , text: '⋯' });
   btn.onclick = (e) => {
     e.stopPropagation();
@@ -2229,7 +3053,7 @@ function pjvRowMore(projectId, t, depth, reload) {
       b.onclick = () => { close(); onPick(); };
       return b;
     };
-    if (depth === 0) menu.append(mkItem('하위 태스크 추가', () => pjvAddTask(projectId, t.id, reload)));
+    if (depth === 0 && onAddSub) menu.append(mkItem('하위 태스크 추가', onAddSub));
     menu.append(mkItem('이름 변경', () => pjvRenameTask(btn, t, reload)));
     menu.append(mkItem('삭제', () => pjvDeleteTask(t, reload), true));
   };
@@ -2263,9 +3087,12 @@ function pjvDeleteTask(t, reload) {
 }
 
 // 태스크 한 행 — [캐럿][상태점] 제목 [하위수] | 담당자 | 마감일 | 우선순위 | [⋯]. 하위는 중첩(상위만 하위 추가 가능).
-function pjvTaskRow(projectId, t, members, reload, depth) {
+function pjvTaskRow(projectId, t, members, reload, depth, fields) {
   depth = depth || 0;
-  const subs = t.subtasks || [];
+  fields = fields || [];
+  // 닫힌(완료) 하위는 Closed>하위태스크 토글 시에만 노출(클릭업 동형).
+  const allSubs = t.subtasks || [];
+  const subs = pjvClosedView.subtasks ? allSubs : allSubs.filter((s) => s.status !== 'done');
   const isDone = t.status === 'done';
   const wrap = el('div', { class: 'pjv-trow-wrap' });
 
@@ -2281,24 +3108,63 @@ function pjvTaskRow(projectId, t, members, reload, depth) {
     subs.length ? el('span', { class: 'pjv-trow-subcount', title: subs.length + '개 하위', text: String(subs.length) }) : null);
   if (depth) titleCell.style.paddingLeft = (depth * 22) + 'px';
 
-  const moreBtn = pjvRowMore(projectId, t, depth, reload);
-
-  wrap.append(el('div', { class: 'pjv-trow' },
-    titleCell,
-    el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, reload)),
-    el('div', { class: 'pjv-tcell' }, pjvDueControl(t, reload)),
-    el('div', { class: 'pjv-tcell' }, pjvPriorityControl(t, reload)),
-    el('div', { class: 'pjv-tcell pjv-tcell-add' }, moreBtn)));
-
+  // 하위 영역 — 하위 행도 pjvTaskRow 재귀라 담당자·마감일·우선순위·커스텀필드까지 상위와 완전 동일하게 동작.
   const subBox = el('div', { class: 'pjv-trow-subs' });
   subBox.hidden = true;
   if (subs.length && depth < 4) {
-    for (const s of subs) subBox.append(pjvTaskRow(projectId, s, members, reload, depth + 1));
+    for (const s of subs) subBox.append(pjvTaskRow(projectId, s, members, reload, depth + 1, fields));
     caret.onclick = () => {
       open = !open; caret.textContent = open ? '▾' : '▸';
       caret.setAttribute('aria-expanded', open ? 'true' : 'false'); subBox.hidden = !open;
     };
   }
+
+  // ⋯메뉴 '하위 태스크 추가'(상위 depth 0 만) → 부모 아래 인라인 입력행 펼치고 포커스. 모달/박스 없음.
+  let subAddRow = null;
+  const startAddSub = () => {
+    subBox.hidden = false; open = true;
+    if (caret.tagName === 'BUTTON') { caret.textContent = '▾'; caret.setAttribute('aria-expanded', 'true'); }
+    if (!subAddRow) {
+      const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '하위 태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
+      const tcell = el('div', { class: 'pjv-trow-title-cell' }, input);
+      tcell.style.paddingLeft = ((depth + 1) * 22) + 'px';
+      subAddRow = el('div', { class: 'pjv-addrow editing pjv-subaddrow' }, tcell,
+        el('div', { class: 'pjv-tcell' }), el('div', { class: 'pjv-tcell' }), el('div', { class: 'pjv-tcell' }),
+        ...fields.map(() => el('div', { class: 'pjv-tcell' })),
+        el('div', { class: 'pjv-tcell pjv-tcell-add' }));
+      subAddRow.style.gridTemplateColumns = pjvGridTemplate(fields);
+      let busy = false;
+      const remove = () => { if (subAddRow) { subAddRow.remove(); subAddRow = null; } };
+      const commit = async () => {
+        if (busy) return; const name = input.value.trim();
+        if (!name) { remove(); return; }
+        busy = true; input.disabled = true;
+        try {
+          await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: t.id }) });
+          reload();
+        } catch (err) { toast('하위 추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { input.value = ''; remove(); }
+        else if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      });
+      subBox.append(subAddRow);
+    }
+    const inp = subAddRow.querySelector('input'); if (inp) inp.focus();
+  };
+
+  const moreBtn = pjvRowMore(projectId, t, depth, reload, depth === 0 ? startAddSub : null);
+
+  const rowEl = el('div', { class: 'pjv-trow' },
+    titleCell,
+    el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, (p) => pjvSaveTask(t.id, p))),
+    el('div', { class: 'pjv-tcell' }, pjvDueControl(t, (p) => pjvPatchTask(t.id, p, reload))),
+    el('div', { class: 'pjv-tcell' }, pjvPriorityControl(t, (p) => pjvPatchTask(t.id, p, reload))),
+    ...fields.map((f) => el('div', { class: 'pjv-tcell pjv-fcell' }, pjvFieldControl(t, f, reload))),
+    el('div', { class: 'pjv-tcell pjv-tcell-add' }, moreBtn));
+  rowEl.style.gridTemplateColumns = pjvGridTemplate(fields);
+  wrap.append(rowEl);
   wrap.append(subBox);
   return wrap;
 }
@@ -2628,6 +3494,14 @@ const FILE_ICON_GLYPHS = {
   archive: [['rect', { x: 4, y: 4, width: 16, height: 4, rx: 1 }], ['path', { d: 'M5.5 8v10a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V8' }], ['line', { x1: 10.5, y1: 12, x2: 13.5, y2: 12 }]],
   code:    [['polyline', { points: '15 7 20 12 15 17' }], ['polyline', { points: '9 7 4 12 9 17' }]],
 };
+// 파일/폴더 단색 라인 아이콘 — 동시 리팩터가 이 함수 정의를 지우고 호출처(공유폴더 참조목록·파일 필드·설정 참고파일)는
+//  남겨 ReferenceError(fileIconSvg is not defined)가 났다. fileKind·FILE_ICON_GLYPHS(둘 다 생존)에 기반해 복구.
+function fileIconSvg(name, isDir) {
+  const kind = isDir ? 'dir' : fileKind(name);
+  const node = sv('svg', { class: 'fic fic-' + kind, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  for (const [t, a] of (FILE_ICON_GLYPHS[kind] || FILE_ICON_GLYPHS.file)) node.append(sv(t, a));
+  return node;
+}
 function fileThumb(id, it, rel, base) {
   if (it.type === 'dir') return folderThumb();
   const ext = fileExt(it.name);
@@ -2641,6 +3515,18 @@ function folderThumb() {
   n.append(sv('path', { class: 'ft-folder-body', d: 'M4 12a3 3 0 0 1 3-3h34a3 3 0 0 1 3 3v19a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z' }));
   return n;
 }
+// 타입별 파일 라벨/색 — 동시 리팩터가 이 const 정의를 지우고 docIcon 의 사용처만 남겨 공유 폴더 파일 아이콘이
+//  ReferenceError(FILE_TYPE_META is not defined)로 깨졌다(→ '폴더를 불러오지 못했습니다'). 사용처 바로 위에 복구.
+const FILE_TYPE_META = {
+  pdf: { label: 'PDF', cls: 'ft-pdf' },
+  doc: { label: 'DOC', cls: 'ft-word' }, docx: { label: 'DOC', cls: 'ft-word' }, hwp: { label: 'HWP', cls: 'ft-word' }, hwpx: { label: 'HWP', cls: 'ft-word' },
+  ppt: { label: 'PPT', cls: 'ft-ppt' }, pptx: { label: 'PPT', cls: 'ft-ppt' }, key: { label: 'KEY', cls: 'ft-ppt' },
+  xls: { label: 'XLS', cls: 'ft-xls' }, xlsx: { label: 'XLS', cls: 'ft-xls' }, csv: { label: 'CSV', cls: 'ft-xls' },
+  zip: { label: 'ZIP', cls: 'ft-zip' }, tar: { label: 'TAR', cls: 'ft-zip' }, gz: { label: 'GZ', cls: 'ft-zip' }, rar: { label: 'RAR', cls: 'ft-zip' }, '7z': { label: '7Z', cls: 'ft-zip' },
+  mp3: { label: 'MP3', cls: 'ft-av' }, wav: { label: 'WAV', cls: 'ft-av' }, m4a: { label: 'M4A', cls: 'ft-av' }, flac: { label: 'FLAC', cls: 'ft-av' },
+  mp4: { label: 'MP4', cls: 'ft-av' }, mov: { label: 'MOV', cls: 'ft-av' }, webm: { label: 'WEBM', cls: 'ft-av' }, mkv: { label: 'MKV', cls: 'ft-av' },
+  md: { label: 'MD', cls: 'ft-txt' }, txt: { label: 'TXT', cls: 'ft-txt' }, rtf: { label: 'RTF', cls: 'ft-txt' },
+};
 // 타입별 색 문서 아이콘 — 흰 페이지 + 접힌 모서리 + 색 띠 + 라벨(PDF/DOC/PPT/XLS …).
 function docIcon(ext) {
   const meta = FILE_TYPE_META[ext] || { label: (String(ext || '').toUpperCase().slice(0, 4) || 'FILE'), cls: 'ft-generic' };
@@ -3575,7 +4461,7 @@ async function renderDashboard(view, params) {
     if ((a.tasks || []).length) {
       box.append(el('div', { class: 'act-group' },
         el('div', { class: 'act-group-label', text: '연결된 과업' }),
-        el('div', { class: 'act-links' }, ...a.tasks.map((t) => el('a', { class: 'act-link', href: '#/u/' + encodeURIComponent(t.name) },
+        el('div', { class: 'act-links' }, ...a.tasks.map((t) => el('a', { class: 'act-link', href: '#/k/' + encodeURIComponent(t.name) },
           el('span', { class: 'kb-glyph', text: 'W' }),
           el('span', { class: 'act-link-title', text: t.title || t.name }),
           (t.lifecycle && t.lifecycle !== 'active') ? lifecycleDot(t.lifecycle) : null)))));
@@ -3583,7 +4469,7 @@ async function renderDashboard(view, params) {
     if ((a.refs || []).length) {
       box.append(el('div', { class: 'act-group' },
         el('div', { class: 'act-group-label', text: '산출·참조 지식' }),
-        el('div', { class: 'act-links' }, ...a.refs.map((r) => el('a', { class: 'act-link', href: '#/u/' + encodeURIComponent(r.name) },
+        el('div', { class: 'act-links' }, ...a.refs.map((r) => el('a', { class: 'act-link', href: '#/k/' + encodeURIComponent(r.name) },
           el('span', { class: 'act-rel', text: REF_REL_LABEL[r.relation] || r.relation }),
           el('span', { class: 'act-link-title', text: r.title || r.name }))))));
     }
@@ -3742,7 +4628,7 @@ async function renderLearn(view) {
   whatRows.append(
     learnRow('무엇을 담나', '회사 규칙·페르소나, 팀이 쌓은 지식과 절차, 진행 중인 과업, 자주 쓰는 용어 등 — AI가 알고 있어야 할 회사 맥락 전부.'),
     learnRow('어떻게 전달되나', '구성원이 한 번 설치하면, AI 세션이 열릴 때마다 최신 내용이 자동으로 들어갑니다. 사람이 매번 복사·설명할 필요가 없습니다.'),
-    learnRow('누가 바꾸나', '관리자는 [관리] 탭에서 규칙·맥락·메모리를 편집·저장하면, 구성원이 다음에 설치/업데이트할 때 자동으로 받습니다. 구성원은 한 번만 설치하면 끝입니다.'),
+    learnRow('누가 바꾸나', '관리자는 [관리] 탭에서 규칙·분류를, [WIKI] 탭에서 지식을 편집·저장하면, 구성원이 다음에 설치/업데이트할 때 자동으로 받습니다. 구성원은 한 번만 설치하면 끝입니다.'),
     learnRow('처음이라면', '바로 시작하려면 [설치 단계](#/install)를 그대로 따라 하세요 — 5분이면 끝납니다. 그다음은 자동입니다.'),
   );
   whatCard.append(whatRows);
@@ -3903,10 +4789,10 @@ function localGuideNodes(gw, slot, data) {
         el('p', { class: 'step-note', text: '글자만 있는 작은 창이 하나 뜹니다. 이게 ‘터미널’이고, 여기에 명령을 붙여넣게 됩니다.' }));
 
   const mint = installStep(2, '내 설치 명령 만들기',
-    el('p', { class: 'step-p' }, '관리자에게 받은 접속 토큰(이 화면에 ', el('b', { text: '처음 들어올 때 입력한 그 토큰' }),
-      ')을 아래 칸에 붙여넣고 ', el('b', { text: '[설치 명령 만들기]' }), ' 를 누르세요. 그러면 그 토큰이 들어간 설치 명령이 만들어집니다.'),
-    el('p', { class: 'step-note', text: '토큰은 본인 것이니 남과 공유하지 마세요. 만든 다음 [명령 복사]를 누르면 됩니다. (토큰을 잊었다면 관리자에게 다시 받으세요.)' }),
-    installCmdBox(gw, os));
+    el('p', { class: 'step-p' }, '아래 ', el('b', { text: '[설치 명령 만들기]' }),
+      ' 를 누르면 본인 전용 설치 명령이 자동으로 만들어집니다 — 토큰을 직접 다룰 필요가 없어요.'),
+    el('p', { class: 'step-note', text: '명령에는 본인 접속 키가 들어 있으니 남과 공유하지 마세요. 만든 다음 [명령 복사]를 누르면 됩니다.' }),
+    installSelfCmdBox(gw, os));
 
   const run = installStep(3, '명령 붙여넣고 실행하기',
     el('p', { class: 'step-p' }, '1단계에서 연 터미널 창을 클릭한 다음, 방금 복사한 명령을 붙여넣고(',
@@ -4000,6 +4886,28 @@ function installCmdBox(gw, os) {
   tokenIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); make(); } });
   draw();
   return el('div', {}, el('div', { class: 'install-minter' }, tokenIn, go), err, result);
+}
+
+// 설치 명령 셀프 베이크(P3) — 로그인된 본인이 [설치 명령 만들기] 한 번으로 본인 토큰을 자동 발급해 명령에 굽는다.
+//  토큰을 손으로 만지지 않는다(self-mint = admin/runtime 제외 저권한). 기본 설치 플로우.
+function installSelfCmdBox(gw, os) {
+  const result = el('div', { class: 'install-cmd-slot' });
+  const go = el('button', { class: 'btn btn-primary btn-sm', text: '설치 명령 만들기' });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      const cmd = installCmd(gw, os, r.token);
+      result.replaceChildren(
+        el('p', { class: 'install-ok', text: '✓ 설치 명령이 만들어졌어요 — [명령 복사]를 누른 뒤 3단계로 가세요. (본인 접속 키가 들어 있으니 공유 금지.)' }),
+        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
+        el('pre', { class: 'admin-preview', text: cmd }));
+    } catch (e) {
+      result.replaceChildren(el('p', { class: 'install-token-err', text: '발급 실패 — ' + e.message }));
+    }
+    go.disabled = false;
+  });
+  return el('div', {}, el('div', { class: 'install-minter' }, go), result);
 }
 
 // 복사 가능한 한 줄 명령(확인용 등 — 토큰 없는 짧은 명령).
@@ -4598,7 +5506,7 @@ function setActiveTab(name) {
 
 async function route() {
   teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
-  if (!localStorage.getItem(TOKEN_KEY)) { showGate(); return; }
+  if (!state.me) { showGate(); return; } // 인증 상태는 boot()/로그인이 state.me 로 표시(세션 쿠키 또는 토큰)
   const { segs, params } = parseHash();
   const view = $view();
   const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
@@ -4648,8 +5556,7 @@ window.addEventListener('hashchange', route);
 
 // ── 부팅 ──
 async function boot() {
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) { showGate(); return; }
+  // 세션 쿠키 또는 bearer 토큰 중 하나로 인증(/api/ui/me). 둘 다 없으면 401 → 게이트.
   try {
     state.me = await api('/api/ui/me');
   } catch (e) {
@@ -4657,14 +5564,29 @@ async function boot() {
     showGate('서버에 연결하지 못했습니다 — ' + e.message);
     return;
   }
+  if (!state.me || !state.me.userId) { showGate(); return; }
   hideGate();
   document.getElementById('user-email').textContent = state.me.email || state.me.userId || '';
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
   const sysTab = document.getElementById('system-tab');
   if (sysTab) sysTab.hidden = false;
-  getOverview().catch(() => { /* 칩/배지만 생략(지도 진입 시 재시도) */ });
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.hidden = false;
   route();
 }
+
+// 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트.
+(() => {
+  const btn = document.getElementById('logout-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    try { await fetch('/api/ui/logout', { method: 'POST' }); } catch (_) { /* noop */ }
+    localStorage.removeItem(TOKEN_KEY);
+    state.me = null;
+    btn.hidden = true;
+    showGate('로그아웃되었습니다.');
+  });
+})();
 boot();
 
 // ════════════════════════════════════════════════════════════════════
@@ -4695,8 +5617,8 @@ const ADMIN_SECTIONS = [
   // ③ 조직 지식 설정 — 회사가 AI에 쌓아 가르치는 맥락(규칙·소개/성격·메모리·주제 분류).
   { key: 'managed-policy', label: 'AI 필수 규칙', meaning: 'managed-policy', group: 'knowledge' },
   { key: 'org-defaults', label: '회사 소개 · AI 성격', meaning: 'org-defaults', group: 'knowledge' },
-  { key: 'memory', label: 'WIKI 인덱스', meaning: 'memory', group: 'knowledge' },
-  { key: 'domains-repos', label: '주제 분류', meaning: null, group: 'knowledge' },
+  // WIKI 인덱스(memory) 섹션은 WIKI 탭(#/knowledge)으로 흡수(2026-06-24) — 핀·생성·편집을 지식 자신에서. 관리탭 중복 제거.
+  // '주제 분류'(domains-repos) 패널 폐기(2026-06-24) — 레거시 domain CRUD. '카테고리 설정'(wiki-categories=v6 category-store)으로 일원화.
   // 컨텍스트 온톨로지 가이드 — 매 대화에 깔리는 지식 인덱스 전체 템플릿(고급). ${area}/${rules} 자동 주입. 잘못 바꾸면 위험 → 경고 배너+되돌리기.
   { key: 'context-ontology-guide', label: '컨텍스트 온톨로지 가이드 (고급)', meaning: 'context-ontology-guide', group: 'knowledge', scaffold: true },
   // ④ AI 동작·연결 (고급) — AI가 실제 어떻게 동작/어떤 데이터에 닿나.
@@ -4705,7 +5627,7 @@ const ADMIN_SECTIONS = [
   { key: 'runtime', label: '런타임 훅 (빌트인 리플렉스 ON/OFF)', meaning: 'runtime', indent: true, group: 'ai' },
   { key: 'custom-hooks', label: '커스텀 훅 (코드 정의)', meaning: 'custom-hook', indent: true, group: 'ai' },
   { key: 'hooks-preview', label: '주입 미리보기 (세션 주입물 확인)', meaning: null, indent: true, group: 'ai' },
-  { key: 'tools', label: 'AI 도구(툴)', meaning: 'tool', group: 'ai' },
+  { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
 ];
@@ -4713,7 +5635,7 @@ const ADMIN_ONLY = ['member-add', 'tokens', 'runtime', 'mcp', 'db-sources']; // 
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
-const CONTEXT_EDIT = ['domains-repos', 'wiki-categories']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
+const CONTEXT_EDIT = ['wiki-categories']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
 // 컨텍스트 온톨로지 가이드 섹션 — 매 대화에 깔리는 지식 인덱스 전체 템플릿. 잘못 바꾸면 모든 AI 동작이 망가질 수 있어 경고+되돌리기를 단다.
 const SCAFFOLD_SECTIONS = ['context-ontology-guide'];
 // 플레이스홀더 안내 — 편집창에 보여줄 자동주입 토큰 설명.
@@ -4833,7 +5755,6 @@ function sectionTitle(titleText, m) {
 }
 
 function adminRowMeta(key, data) {
-  if (key === 'kinds') return (state.overview ? state.overview.kinds.length : 4) + '개 종류';
   // 회색 보조설명 = '이게 무슨 탭인지' 짧은 설명(개수·시각 아님). 비개발자가 한눈에 알게.
   if (key === 'profile') return '조직 이름과 서버 주소';
   if (key === 'members') return '함께 쓰는 사람';
@@ -4841,9 +5762,7 @@ function adminRowMeta(key, data) {
   if (key === 'tokens') return '발급된 접속 열쇠 현황·정리';
   if (key === 'managed-policy') return 'AI가 항상 지킬 규칙';
   if (key === 'org-defaults') return '회사 배경과 AI 말투';
-  if (key === 'memory') return '팀이 함께 쌓는 메모';
   if (key === 'context-ontology-guide') return '⚠️ 지식 인덱스 전체 틀 (뼈대)';
-  if (key === 'domains-repos') return '지식을 정리하는 주제';
   if (key === 'wiki-categories') return '사업·제품·시스템 분류축 CRUD';
   if (key === 'hooks-group') return '세션에 자동으로 끼어드는 동작';
   if (key === 'deploy') return 'OS별 명령 복사';
@@ -4918,11 +5837,8 @@ async function renderAdmin(view, sub) {
 }
 
 function renderAdminDetail(detail, sel, data) {
-  if (sel === 'kinds') return kindsRegistry(detail, data);
-  if (sel === 'domains-repos') return domainsReposPanel(detail, data);
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
   if (sel === 'managed-policy' || sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
-  if (sel === 'memory') return memoryEditor(detail, data);
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'member-add') return memberAddPanel(detail, data);
   if (sel === 'tokens') return tokensPanel(detail, data);
@@ -4935,43 +5851,6 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
-}
-
-// ── 지식 종류 레지스트리(읽기 전용 열람) — 4 질적유형(R/K/H/W) + S/G federated + 주입정책 메타. ctx_overview 데이터 재사용. ──
-function kindsRegistry(detail, data) {
-  const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '지식 종류 레지스트리' })),
-    el('p', { class: 'admin-hint', text: '통합 지식스토어가 분류하는 본질 종류(kind: R·K·H·W 4종)와, 각 종류가 구성원의 AI 세션에 어떻게 주입되는지(injection mode)입니다. 종류를 누르면 그 안의 지식 단위를 탐색합니다. S·G(구조·용어집)는 종류가 아니라 domainmap 파생(federated)으로 별도 표시됩니다.' }),
-  );
-  const o = state.overview;
-  if (!o) {
-    card.append(el('p', { class: 'admin-hint', text: '개요를 불러오는 중…' }));
-    getOverview(false).then(() => { if (state.admin.sel === 'kinds') renderAdminDetail(detail, 'kinds', data); }).catch(() => {});
-    detail.replaceChildren(card);
-    return;
-  }
-  const tbl = el('table', { class: 'fields-table kinds-table' });
-  tbl.append(el('tr', {},
-    el('td', { class: 'kr-h', text: '종류' }), el('td', { class: 'kr-h', text: '주입 모드' }),
-    el('td', { class: 'kr-h', text: '활성 단위' }), el('td', { class: 'kr-h', text: '최신 갱신' })));
-  for (const k of o.kinds) {
-    const meta = kindMeta(k.kind);
-    const fed = isFederatedKind(k.kind);
-    const row = el('tr', { class: 'kr-row', role: 'link', tabindex: '0' },
-      el('td', {}, el('span', { class: 'kind-badge' }, el('span', { class: 'kb-glyph', text: k.kind }), el('span', { class: 'kb-ko', text: meta.ko || k.label || k.kind }))),
-      el('td', {}, fed
-        ? el('span', { class: 'inject-tag', title: 'domainmap 파생(ku 종류 아님)', text: 'federated' })
-        : el('span', { class: 'inject-tag', title: INJECTION_HINT[k.injection_mode] || '', text: INJECTION_LABEL[k.injection_mode] || k.injection_mode })),
-      el('td', { class: 'kr-num', text: String(k.active_count) }),
-      el('td', { text: k.latest_updated_at ? relTime(k.latest_updated_at) : '—' }),
-    );
-    const go = () => { location.hash = '#/knowledge'; };
-    row.addEventListener('click', go);
-    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
-    tbl.append(row);
-  }
-  card.append(tbl);
-  detail.replaceChildren(card);
 }
 
 // ── P-V3-4a 도메인 · 레포 통제어휘 CRUD ──
@@ -5047,267 +5926,6 @@ async function deleteWikiCategory(c, reload) {
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 
-async function domainsReposPanel(detail, data) {
-  // 어휘 CRUD 는 context 스코프(admin 완화). context 없으면 읽기 전용으로 목록만.
-  const canEdit = state.admin.canContext;
-  const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '주제 분류' }),
-      canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
-    el('p', { class: 'admin-hint', text: '주제(area)는 2단입니다 — 영역(space): 제품 도메인(코드앵커·부채추적) 또는 비즈니스 기능(GTM·가격·펀딩·시장경쟁·브랜드·조직). 도메인·기능은 자유 키워드가 아니라 레포 하위의 통제 어휘이며, 여기서 관리한 어휘만 지식 저장 시 고를 수 있습니다. 이름변경은 옛 슬러그를 보존하는 별칭 방식이라(물리 키 불변) 기존 지식이 끊기지 않습니다.' }));
-  detail.replaceChildren(card);
-
-  const repos = await loadRepos();
-  let repo = state.admin.repoSel || (repos.includes(VOCAB_CRUD_DEFAULT_REPO) ? VOCAB_CRUD_DEFAULT_REPO : repos[0]);
-  if (!repos.includes(repo)) repo = repos[0];
-  state.admin.repoSel = repo;
-
-  // ── repo 행 ──
-  const repoSel = el('select');
-  for (const r of repos) repoSel.append(el('option', { value: r, text: r }));
-  repoSel.value = repo;
-  repoSel.addEventListener('change', () => { state.admin.repoSel = repoSel.value; domainsReposPanel(detail, data); });
-
-  const repoBar = el('div', { class: 'filter-bar' }, el('span', { class: 'field-label', text: '레포' }), repoSel);
-  if (canEdit) {
-    repoBar.append(
-      el('button', { class: 'btn btn-ghost btn-sm', text: '+ 레포', onclick: () => repoCrudOverlay(null, detail, data) }),
-      el('button', { class: 'btn-text', text: '이름변경', onclick: () => repoCrudOverlay({ name: repo, mode: 'rename' }, detail, data) }),
-      el('button', { class: 'btn-text', text: '폐기', onclick: () => repoCrudOverlay({ name: repo, mode: 'deprecate' }, detail, data) }),
-      // 영구삭제(hard-delete) — 폐기(숨김 보존)와 구분. 연결 자식이 있으면 서버가 막고 카운트 반환(2단 확인).
-      el('button', { class: 'btn-text btn-text-danger', text: '영구삭제', onclick: () => deleteRepoFlow(repo, detail, data) }));
-  }
-  card.append(repoBar);
-
-  // ── 도메인 목록 ──
-  const slot = await loadDomains(repo, true); // force: CRUD 직후 최신 반영
-  if (slot.error) { card.append(el('p', { class: 'admin-hint', text: '도메인 목록을 불러오지 못했습니다 — ' + slot.error })); return; }
-
-  // 어휘를 영역(space)별로 분리 — 제품 도메인(코드앵커) / 비즈니스 기능(vocab-only). 각각 별도 CRUD.
-  const bySpace = { product: [], business: [] };
-  for (const d of slot.list) { const sp = (d.space || 'product') === 'business' ? 'business' : 'product'; bySpace[sp].push(d); }
-
-  const SPACE_SECTIONS = [
-    { space: 'product', title: '제품 도메인', addLabel: '+ 새 도메인', empty: '이 레포에 제품 도메인이 없습니다. + 새 도메인으로 통제 어휘를 추가하세요.',
-      hint: '코드앵커·부채추적이 붙는 제품 영역입니다.' },
-    { space: 'business', title: '비즈니스 기능', addLabel: '+ 새 비즈니스 기능', empty: '비즈니스 기능이 없습니다. + 새 비즈니스 기능으로 추가하세요(코드매핑 없음).',
-      hint: 'GTM·가격·펀딩·시장경쟁·브랜드·조직 등 코드매핑 없는 비즈니스 영역입니다(vocab-only).' },
-  ];
-  for (const sec of SPACE_SECTIONS) {
-    const items = bySpace[sec.space];
-    const head = el('div', { class: 'card-head', style: 'margin-top:14px' }, el('h3', { text: sec.title + ' (' + items.length + ')' }));
-    if (canEdit) head.append(el('button', { class: 'btn btn-primary btn-sm', text: sec.addLabel, onclick: () => domainCrudOverlay(null, repo, detail, data, sec.space) }));
-    card.append(head);
-    card.append(el('p', { class: 'admin-hint', text: sec.hint }));
-    if (!items.length) { card.append(el('p', { class: 'empty', text: sec.empty })); continue; }
-    const tbl = el('table', { class: 'fields-table' });
-    tbl.append(el('tr', {}, el('td', { class: 'kr-h', text: '슬러그(key)' }), el('td', { class: 'kr-h', text: '이름' }), el('td', { class: 'kr-h', text: '상태' }), canEdit ? el('td', { class: 'kr-h', text: '' }) : null));
-    for (const d of items) {
-      const noun = sec.space === 'business' ? '비즈니스 기능' : '도메인';
-      const actions = canEdit ? el('td', { class: 'row-actions' },
-        el('button', { class: 'btn-text', text: '이름변경', onclick: () => domainCrudOverlay(d, repo, detail, data, sec.space) }),
-        // 폐기(deprecate) — 숨김 보존(기존 매핑 유효). 영구삭제(hard-delete)와 구분.
-        d.state === 'deprecated'
-          ? null
-          : el('button', { class: 'btn-text', text: '폐기', onclick: () => deprecateDomainFlow(d, repo, detail, data, noun) }),
-        // 영구삭제 — 연결(매핑·귀속 ku)이 있으면 서버가 막고 카운트 반환(2단 확인 다이얼로그).
-        el('button', { class: 'btn-text btn-text-danger', text: '영구삭제', onclick: () => deleteDomainFlow(d, repo, detail, data, noun) })) : null;
-      tbl.append(el('tr', {},
-        el('td', {}, el('span', { class: 'mono', text: d.key })),
-        el('td', { text: d.name || '—' }),
-        el('td', { text: (d.state === 'deprecated' ? '폐기' : '활성') + (d.cross_cutting ? ' · 횡단' : '') }),
-        actions));
-    }
-    card.append(tbl);
-  }
-
-  // ── P-V3-4b: 프로젝트(이니셔티브 vs 코드 그룹) — '붕뜸' 해소 설명 + provenance_kind 구분 목록 ──
-  //  읽기 전용(GET projects 프록시). 두 종이 한 테이블에 섞여 헷갈리던 것을 사람이 이해하도록 명문화.
-  renderProjectsSection(card, repo);
-}
-
-// 프로젝트 목록 — provenance_kind 로 이니셔티브/코드 그룹을 갈라 보여준다(붕뜸 해소의 사람 이해 표면).
-async function renderProjectsSection(card, repo) {
-  card.append(el('div', { class: 'card-head', style: 'margin-top:18px' }, el('h3', { text: '프로젝트' })));
-  card.append(el('p', { class: 'admin-hint' },
-    '한 ‘프로젝트’ 칸에는 의미가 다른 두 종류가 들어 있습니다. ',
-    el('b', { text: '이니셔티브' }), '는 PM 도구(ClickUp 등)에서 사람이 선언한 실제 과제로, 작업(W) 단위가 여기에 연결됩니다. ',
-    el('b', { text: '코드 그룹' }), '은 문서·코드에서 자동으로 묶인 코드 단위 묶음입니다. 이 둘을 구분해 표시합니다.'));
-  let rows;
-  try { rows = await api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/projects'); }
-  catch (e) { card.append(el('p', { class: 'admin-hint', text: '프로젝트 목록을 불러오지 못했습니다 — ' + (e.message || '') })); return; }
-  rows = Array.isArray(rows) ? rows : [];
-  const groups = [
-    { kind: 'initiative', label: '이니셔티브 (PM 도구 출처 · 작업 연결 대상)', dot: 'ok' },
-    { kind: 'code_grouping', label: '코드 그룹 (문서·코드 파생)', dot: 'dim' },
-  ];
-  for (const g of groups) {
-    const items = rows.filter((p) => (p.provenance_kind || 'code_grouping') === g.kind);
-    if (!items.length) continue;
-    const sub = el('div', { class: 'card-head', style: 'margin-top:10px' },
-      el('h4', {}, el('span', { class: 'dot6 ' + g.dot, 'aria-hidden': 'true' }), ' ' + g.label + ' (' + items.length + ')'));
-    card.append(sub);
-    const ptbl = el('table', { class: 'fields-table' });
-    const isInit = g.kind === 'initiative';
-    ptbl.append(el('tr', {},
-      el('td', { class: 'kr-h', text: '슬러그(key)' }), el('td', { class: 'kr-h', text: '이름' }),
-      el('td', { class: 'kr-h', text: isInit ? '출처' : '코드 touch' })));
-    for (const p of items) {
-      ptbl.append(el('tr', {},
-        el('td', {}, el('span', { class: 'mono', text: p.key })),
-        el('td', { text: p.name || '—' }),
-        el('td', { text: isInit ? (p.prov_system || '사람 큐레이션') : String(p.touched_code || 0) })));
-    }
-    card.append(ptbl);
-  }
-}
-
-// ── 도메인/레포 비활(deprecate)·영구삭제(hard-delete) 플로우 ──
-//  윤상민 결정: 어휘 삭제 = 비활(가역·숨김) + 영구삭제(비가역·hard-delete) 둘 다 제공. 권한: hard-delete 는
-//  사람(웹) 전용(서버가 agent 403). UI 가드: 연결이 있으면 서버가 blocked+카운트를 주므로 2단 확인으로 force.
-
-// 도메인 id 해소 — 목록(loadDomains)엔 key 만 있어, id 가 필요한 deprecate/delete 전에 :repo/domains 에서 찾는다.
-async function resolveDomainId(repo, key) {
-  const rows = await api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/domains');
-  const dom = (Array.isArray(rows) ? rows : []).find((x) => x.key === key);
-  return dom ? dom.id : null;
-}
-
-async function deprecateDomainFlow(d, repo, detail, data, noun) {
-  if (!confirm(`${noun} '${d.key}'를 폐기(숨김)하시겠습니까?\n\n기존 매핑·지식은 보존되고 목록에서 숨김 신호만 남습니다(가역 — 영구삭제 아님).`)) return;
-  try {
-    const id = await resolveDomainId(repo, d.key);
-    if (!id) { toast('도메인 id 를 찾지 못했습니다', true); return; }
-    await api('/api/ui/domainmap/domain/' + id + '/deprecate', { method: 'POST', body: JSON.stringify({}) });
-    toast(noun + ' 폐기됨(숨김)');
-    domainsReposPanel(detail, data);
-  } catch (e) { toast('실패 — ' + e.message, true); }
-}
-
-async function deleteDomainFlow(d, repo, detail, data, noun) {
-  let id;
-  try {
-    id = await resolveDomainId(repo, d.key);
-    if (!id) { toast('도메인 id 를 찾지 못했습니다', true); return; }
-  } catch (e) { toast('실패 — ' + e.message, true); return; }
-  // 1차 확인 — 비가역 경고. force 없이 호출해 연결 카운트를 먼저 확인(서버가 blocked 면 카운트 반환).
-  if (!confirm(`${noun} '${d.key}'를 영구삭제하시겠습니까?\n\n폐기(숨김)와 달리 행 자체가 사라집니다(비가역). 귀속된 지식 단위는 보존되고 도메인 표시만 비워집니다.`)) return;
-  try {
-    const r = await api('/api/ui/domainmap/domain/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) });
-    if (r && r.blocked) {
-      // 연결이 있어 막힘 — 카운트를 보여주고 2차(force) 확인.
-      const refs = r.refs || {};
-      const msg = `${noun} '${d.key}'에 연결이 있습니다:\n` +
-        `· 도메인맵 매핑 ${refs.mappings || 0}건\n` +
-        `· 귀속 지식(active) ${refs.ku_active || 0}건 / 전체 ${refs.ku_total || 0}건\n` +
-        `· 다중귀속(kud) ${refs.kud_rows || 0}건\n\n` +
-        `그래도 영구삭제하면 매핑·별칭은 삭제되고, 지식 단위는 보존되되 이 도메인 표시만 비워집니다(domain_key 클리어). 계속할까요?`;
-      if (!confirm(msg)) return;
-      await api('/api/ui/domainmap/domain/' + id + '/delete', { method: 'POST', body: JSON.stringify({ force: true }) });
-      toast(noun + ' 영구삭제됨(연결 정리)');
-    } else {
-      toast(noun + ' 영구삭제됨');
-    }
-    state.allDomains = null; // 통합 도메인 캐시 무효화(좌측 위계/드롭다운 갱신)
-    domainsReposPanel(detail, data);
-  } catch (e) { toast('실패 — ' + e.message, true); }
-}
-
-async function deleteRepoFlow(repo, detail, data) {
-  if (!confirm(`레포 '${repo}'를 영구삭제하시겠습니까?\n\n폐기(숨김)와 달리 레포와 그 하위 전체(도메인·코드유닛·매핑·프로젝트·부채)가 사라집니다(비가역).`)) return;
-  try {
-    const r = await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name: repo }) });
-    if (r && r.blocked) {
-      const refs = r.refs || {};
-      const msg = `레포 '${repo}'에 살아있는 자식이 있습니다:\n` +
-        `· 도메인 ${refs.domains || 0}개\n· 코드유닛 ${refs.code_units || 0}개\n· 데이터엔티티 ${refs.data_entities || 0}개\n\n` +
-        `그래도 영구삭제하면 이 자식들이 모두 함께 삭제됩니다(cascade). 계속할까요?`;
-      if (!confirm(msg)) return;
-      await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name: repo, force: true }) });
-      toast('레포 영구삭제됨(하위 cascade)');
-    } else {
-      toast('레포 영구삭제됨');
-    }
-    state.domains.__repos__ = null; state.admin.repoSel = null; state.allDomains = null;
-    domainsReposPanel(detail, data);
-  } catch (e) { toast('실패 — ' + e.message, true); }
-}
-
-// repo create/rename/deprecate 오버레이.
-function repoCrudOverlay(opt, detail, data) {
-  const isNew = !opt;
-  const mode = opt && opt.mode;
-  if (mode === 'deprecate') {
-    if (!confirm(`레포 '${opt.name}'를 폐기하시겠습니까? (도메인·매핑은 보존되고 목록에서 숨김 신호만 남습니다)`)) return;
-    api('/api/ui/domainmap/repo/deprecate', { method: 'POST', body: JSON.stringify({ name: opt.name }) })
-      .then(() => { toast('레포 폐기됨'); domainsReposPanel(detail, data); })
-      .catch((e) => toast('실패 — ' + e.message, true));
-    return;
-  }
-  const nameIn = el('input', { type: 'text', value: isNew ? '' : '', placeholder: 'A-Za-z0-9._- (예: lively-app)' });
-  const back = overlayBox(isNew ? '새 레포' : `레포 이름변경 — ${opt.name}`,
-    el('p', { class: 'admin-hint', text: isNew ? '도메인의 상위 통제 계층입니다. 보호 리포(lively 등) 이름은 거부됩니다.' : '레포는 도메인맵 자기완결 엔티티라 물리 이름변경이 안전합니다(도메인·매핑 보존).' }),
-    field(isNew ? '레포 이름' : '새 이름', nameIn));
-  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '생성' : '변경' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  saveBtn.addEventListener('click', async () => {
-    const v = nameIn.value.trim();
-    if (!v) { toast('이름을 입력하세요', true); return; }
-    saveBtn.disabled = true;
-    try {
-      if (isNew) { await api('/api/ui/domainmap/repo/create', { method: 'POST', body: JSON.stringify({ name: v }) }); state.admin.repoSel = v; toast('레포 생성됨'); }
-      else { await api('/api/ui/domainmap/repo/rename', { method: 'POST', body: JSON.stringify({ name: opt.name, newName: v }) }); state.admin.repoSel = v; toast('레포 이름변경됨'); }
-      state.domains.__repos__ = null; // repo 목록 캐시 무효화
-      back.remove(); domainsReposPanel(detail, data);
-    } catch (e) { saveBtn.disabled = false; toast('실패 — ' + e.message, true); }
-  });
-  back.querySelector('.ov-box').append(el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-}
-
-// domain create/rename 오버레이. rename 은 soft-alias(물리 key 불변) 명시.
-//  space(product|business): create 시 area 1차 영역. product=제품 도메인(코드앵커)·business=비즈니스 기능(vocab-only).
-//   서버 domain_create 가 space 인자를 받는다(미지정 시 product 기본). rename 은 space 불변(생성 시 결정).
-function domainCrudOverlay(d, repo, detail, data, space) {
-  const isNew = !d;
-  const sp = space === 'business' ? 'business' : 'product';
-  const isBiz = sp === 'business';
-  const nounNew = isBiz ? '비즈니스 기능' : '도메인';
-  const keyIn = el('input', { type: 'text', value: isNew ? '' : d.key, placeholder: isBiz ? '소문자 슬러그 (예: gtm)' : '소문자 슬러그 (예: billing)', disabled: isNew ? null : '' });
-  const nameIn = el('input', { type: 'text', value: isNew ? '' : (d.name || ''), placeholder: isBiz ? '표시 이름 (예: 시장 진입)' : '표시 이름 (예: 결제)' });
-  const newKeyIn = isNew ? null : el('input', { type: 'text', value: '', placeholder: '새 슬러그(선택) — 옛 슬러그는 별칭으로 보존' });
-  const back = overlayBox(isNew ? `새 ${nounNew} — ${repo}` : `${nounNew} 이름변경 — ${d.key}`,
-    el('p', { class: 'admin-hint', text: isNew
-      ? (isBiz ? '비즈니스 기능을 추가합니다(코드매핑 없는 vocab-only 어휘). 슬러그는 소문자·숫자·하이픈만.' : '레포 하위 제품 도메인 통제 어휘를 추가합니다. 슬러그는 소문자·숫자·하이픈만.')
-      : '이름변경은 soft-alias 방식입니다 — 물리 슬러그(key)는 바뀌지 않고, 새 슬러그를 적으면 별칭으로 적재됩니다. 기존 지식의 옛 슬러그는 그대로 이를 가리킵니다(끊기지 않음).' }),
-    isNew ? field('슬러그(key)', keyIn) : field('현재 슬러그(불변)', keyIn),
-    field(isNew ? '표시 이름' : '새 표시 이름', nameIn),
-    newKeyIn ? field('새 슬러그(선택)', newKeyIn) : null);
-  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '생성' : '변경' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    try {
-      if (isNew) {
-        const key = keyIn.value.trim(), name = nameIn.value.trim();
-        if (!key || !name) { toast('슬러그와 이름이 필요합니다', true); saveBtn.disabled = false; return; }
-        await api('/api/ui/domainmap/domain/create', { method: 'POST', body: JSON.stringify({ repo, key, name, space: sp }) });
-        toast(nounNew + ' 생성됨');
-      } else {
-        const newKey = newKeyIn.value.trim(), newName = nameIn.value.trim();
-        const payload = {};
-        if (newName && newName !== d.name) payload.newName = newName;
-        if (newKey) payload.newKey = newKey;
-        if (!payload.newName && !payload.newKey) { toast('변경할 새 이름 또는 새 슬러그를 입력하세요', true); saveBtn.disabled = false; return; }
-        // rename 은 도메인 id 가 필요 — 목록에는 key 만 있어 id 를 도메인 상세에서 확인. domain_list 는 id 포함.
-        const dom = (await api('/api/ui/domainmap/' + encodeURIComponent(repo) + '/domains')).find((x) => x.key === d.key);
-        if (!dom) { toast('도메인 id 를 찾지 못했습니다', true); saveBtn.disabled = false; return; }
-        await api('/api/ui/domainmap/domain/' + dom.id + '/rename', { method: 'POST', body: JSON.stringify(payload) });
-        toast('도메인 이름변경됨 (옛 슬러그는 별칭으로 보존)');
-      }
-      back.remove(); domainsReposPanel(detail, data);
-    } catch (e) { saveBtn.disabled = false; toast('실패 — ' + e.message, true); }
-  });
-  back.querySelector('.ov-box').append(el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-}
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
 function sectionEditor(detail, key, data) {
@@ -5448,6 +6066,20 @@ const MEMBER_SCOPE_OPTS = [
 ];
 const MEMBER_SCOPE_LABEL = Object.fromEntries(MEMBER_SCOPE_OPTS);
 
+// 멤버 계정 발급/재설정 시 — 로그인 주소·이메일·임시 비번을 1회 표시(관리자가 1:1 전달). overlay 재사용.
+function showInitialAccount(id, name, email, password, data) {
+  const gw = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
+  const webUrl = gw + '/ui/';
+  const dn = name || id;
+  overlay('로그인 계정 · ' + dn,
+    el('p', { class: 'admin-hint', text: dn + ' 님의 로그인 계정 정보예요. 아래를 1:1로(슬랙·메신저 DM 등) 전달하세요 — 비밀번호는 지금만 보입니다.' }),
+    field('로그인 주소', el('div', { class: 'admin-ro', text: webUrl })),
+    field('이메일 (로그인 아이디)', el('div', { class: 'admin-ro', text: email || '⚠ 이메일 미설정 — 멤버에 이메일을 넣어야 로그인됩니다' })),
+    el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '임시 비밀번호' }), copyButton(() => password, '비밀번호 복사')),
+    el('pre', { class: 'admin-preview', text: password }),
+    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → [시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다. (비밀번호는 첫 로그인 후 변경 권장.)' }));
+}
+
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
 //  권한 있는 사람(canEdit)만 [수정] 버튼이 보이고, 누르면 편집모드로 전환(memberForm). 비-admin 은 버튼 없음.
 function memberRead(root, m, data, detail) {
@@ -5475,9 +6107,20 @@ function memberRead(root, m, data, detail) {
     kids.push(el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }));
   }
   if (canEdit) {
-    kids.push(el('div', { class: 'admin-actions' },
+    const acts = el('div', { class: 'admin-actions' },
       el('button', { class: 'btn btn-primary', text: '수정',
-        onclick: () => { state.admin.memberEditing = true; renderAdminDetail(detail, 'members', data); } })));
+        onclick: () => { state.admin.memberEditing = true; renderAdminDetail(detail, 'members', data); } }));
+    if ((m.kind || 'human') === 'human') {
+      acts.append(el('button', { class: 'btn btn-ghost', text: '비밀번호 재설정',
+        onclick: async () => {
+          if (!confirm(`'${m.display_name || m.id}' 님의 로그인 비밀번호를 임시 비번으로 재설정할까요?`)) return;
+          try {
+            const r = await api('/api/ui/org/member/reset-password', { method: 'POST', body: JSON.stringify({ id: m.id }) });
+            showInitialAccount(m.id, m.display_name, m.email, r.password, data);
+          } catch (e) { toast(e.message, true); }
+        } }));
+    }
+    kids.push(acts);
   }
   root.replaceChildren(...kids);
 }
@@ -5487,9 +6130,11 @@ function memberRead(root, m, data, detail) {
 function memberForm(root, m, data, detail, isNew, opts = {}) {
   // 읽기 전용(비-admin): 폼 대신 요약(민감 필드는 서버가 이미 redact). (정상 흐름은 memberRead 가 처리 — 안전망.)
   if (!state.admin.canEdit) { memberRead(root, m, data, detail); return; }
-  const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자, 예: yoon)', disabled: isNew ? null : '' });
+  // 아이디 = 불변 내부키(토큰·세션·활동이력·프로젝트·감사가 참조 — 가변 이메일과 분리). 신규는 서버가 이메일에서
+  //  자동·유니크 생성(폼에서 숨김 — 관리자 비관여). 기존 멤버는 표시만(변경 불가).
+  const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자)', disabled: '' });
   const nameIn = el('input', { type: 'text', value: m.display_name || '', placeholder: '표시 이름' });
-  const emailIn = el('input', { type: 'text', value: m.email || '', placeholder: '대표 이메일(매칭 키)' });
+  const emailIn = el('input', { type: 'email', value: m.email || '', placeholder: '대표 이메일(로그인 아이디)' });
   const kindSel = el('select', {}, ...['human', 'agent', 'system'].map((k) => el('option', { value: k, text: k })));
   kindSel.value = m.kind || 'human';
   const stateSel = el('select', {}, ...['active', 'inactive'].map((k) => el('option', { value: k, text: k === 'active' ? '활성' : '비활성' })));
@@ -5532,18 +6177,22 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
       .filter((x) => x.system && x.external_id);
     const knownScopes = SCOPE_OPTS.map(([sk]) => sk);
     const payload = {
-      id: idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
+      // 신규는 아이디를 보내지 않는다 — 서버가 이메일/표시이름에서 불변 내부키를 자동·유니크 생성(관리자 비관여).
+      id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
       email: emailIn.value.trim(), identities, body_md: bodyTa.value, state: stateSel.value,
       // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
       scopes: [...knownScopes.filter((sk) => scopeChks[sk].checked), ...(m.scopes || []).filter((sk) => !knownScopes.includes(sk))],
     };
-    if (!payload.id) { toast('아이디는 필수입니다', true); return; }
     saveBtn.disabled = true;
     try {
-      await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify(payload) });
+      const res = await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify(payload) });
+      const savedId = (res && res.member && res.member.id) || payload.id; // 서버가 자동 생성한 아이디 반영
       await loadAdmin(true);
-      if (opts.onSaved) { opts.onSaved(payload); return; }
-      state.admin.memberSel = payload.id;
+      // 신규 human 멤버면 초기 비밀번호가 1회 반환됨 — 관리자에게 전달용으로 표시.
+      if (res && res.initialPassword) showInitialAccount(savedId, payload.display_name, payload.email, res.initialPassword, data);
+      else if (isNew && kindSel.value === 'human' && !payload.email) toast('이메일이 없어 로그인 계정은 안 만들었어요 — 이메일 넣고 [비밀번호 재설정]으로 발급하세요', true);
+      if (opts.onSaved) { opts.onSaved({ ...payload, id: savedId }); return; }
+      state.admin.memberSel = savedId;
       state.admin.memberEditing = false; // 저장 후 보기 모드로 복귀
       toast('저장됨 — 신원 매칭에 즉시 반영됩니다');
       renderAdminDetail(detail, 'members', state.admin.data);
@@ -5575,7 +6224,7 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
   }
 
   root.replaceChildren(
-    field('아이디', idIn), field('표시 이름', nameIn), field('종류', kindSel),
+    isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('종류', kindSel),
     field('대표 이메일', emailIn), field('상태', stateSel),
     field('권한 (이 구성원 토큰의 scope)', scopeWrap),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
@@ -5612,122 +6261,6 @@ function memberAddPanel(detail, data) {
   state.admin.memberAddPreselect = null; // 1회성 미리선택 — 다음 렌더에 잔류 방지
 
   detail.replaceChildren(card);
-}
-
-
-// ── 팀 메모리 ──
-function memoryEditor(detail, data) {
-  const canEdit = state.admin.canEdit;
-  const card = el('div', { class: 'card' }, sectionTitle('WIKI 인덱스', data.meaning['memory']));
-  const head = el('div', { class: 'mem-grid-head' },
-    el('p', { class: 'admin-hint', text: '팀이 함께 쌓는 위키(지식)입니다. 카드를 누르면 ' + (canEdit ? '편집 창' : '내용') + '이 열립니다. 📌 핀한 항목은 제목·분류가 매 대화 첫머리(가이드의 ${wiki} 위치)에 깔립니다 — 본문은 제외(필요할 때 AI가 찾아봄).' }));
-  if (canEdit) head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '+ 위키 추가',
-    onclick: () => openMemoryModal({ name: '', title: '', body_md: '' }, data, detail, true) }));
-  card.append(head);
-
-  if (!data.memory.length) {
-    card.append(el('p', { class: 'empty', text: '아직 위키가 없습니다.' + (canEdit ? " 위 '+ 위키 추가'로 만들어 보세요." : '') }));
-  } else {
-    const grid = el('div', { class: 'mem-grid' });
-    for (const mem of data.memory) {
-      grid.append(el('div', { class: 'mem-card' + (mem.is_wiki ? ' mem-card-pinned' : ''), role: 'button', tabindex: '0',
-        onclick: () => openMemoryModal(mem, data, detail, false),
-        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMemoryModal(mem, data, detail, false); } } },
-        el('div', { class: 'mem-card-title', text: (mem.is_wiki ? '📌 ' : '') + (mem.summary || mem.title || mem.name) }),
-        el('div', { class: 'mem-card-name', text: mem.name }),
-        mem.domain_key ? el('span', { class: 'mem-card-dom', text: mem.domain_key }) : null));
-    }
-    card.append(grid);
-  }
-  detail.replaceChildren(card);
-}
-
-// 메모리 편집/추가 — 카드 클릭 시 팝업(overlay). 기존 메모리는 먼저 **보기 모드**(서식 렌더된 마크다운)로,
-//  관리자가 '수정하기'를 누르면 편집폼으로 전환한다. 신규는 바로 편집폼. 저장/제거 성공 후 그리드 재렌더 + 팝업 닫기.
-function openMemoryModal(mem, data, detail, isNew) {
-  const root = el('div', { class: 'mem-modal' });
-  const back = overlay(isNew ? '메모리 추가' : (mem.title || mem.name), root);
-  if (isNew) memoryForm(root, mem, data, detail, true, () => back.remove());
-  else memoryRead(root, mem, data, detail, () => back.remove());
-}
-
-// 보기 모드 — 메타(도메인·파일명·마지막 편집) + 본문을 **서식있는 마크다운**으로 렌더(가독성↑, raw 마크다운 노출 X).
-//  본문은 내부 스크롤(.mem-read-body)로 팝업 세로가 안정적이게. 관리자에겐 '수정하기' 버튼(→ 편집폼), 비관리자는 보기 전용.
-function memoryRead(root, mem, data, detail, onClose) {
-  const meta = el('div', { class: 'mem-read-meta' });
-  if (mem.domain_key) meta.append(el('span', { class: 'mem-card-dom', text: mem.domain_key }));
-  meta.append(el('span', { class: 'mem-read-name', text: mem.name }));
-  if (mem.updated_at || mem.updated_by) {
-    meta.append(el('span', { class: 'mem-read-upd',
-      text: '마지막 편집' + (mem.updated_by ? ' · ' + mem.updated_by : '') + (mem.updated_at ? ' · ' + absTime(mem.updated_at) : '') }));
-  }
-  const body = (mem.body_md && mem.body_md.trim())
-    ? el('div', { class: 'md-rendered mem-read-body' }, renderMarkdown(mem.body_md))
-    : el('p', { class: 'empty', text: '(본문이 비어 있음)' });
-  const kids = [meta, body];
-  if (state.admin.canEdit) {
-    const pinBtn = el('button', { class: 'btn btn-ghost btn-sm',
-      text: mem.is_wiki ? '📌 WIKI 핀 해제' : '📍 WIKI 인덱스에 핀',
-      title: 'WIKI 핀: 제목·분류가 매 대화 첫머리(가이드 ${wiki})에 항상 주입됩니다(본문 제외).',
-      onclick: async () => {
-        pinBtn.disabled = true;
-        try {
-          await api('/api/ui/knowledge/' + encodeURIComponent(mem.name) + '/wiki',
-            { method: 'POST', body: JSON.stringify({ is_wiki: !mem.is_wiki }) });
-          await loadAdmin(true);
-          toast(mem.is_wiki ? 'WIKI 핀 해제됨' : 'WIKI 인덱스에 핀됨');
-          renderAdminDetail(detail, 'memory', state.admin.data);
-          if (onClose) onClose();
-        } catch (e) { toast(e.message, true); pinBtn.disabled = false; }
-      } });
-    kids.push(el('div', { class: 'ov-actions' },
-      el('button', { class: 'btn btn-primary btn-sm', text: '수정하기',
-        onclick: () => memoryForm(root, mem, data, detail, false, onClose, true) }),
-      pinBtn));
-  }
-  root.replaceChildren(...kids);
-}
-
-async function memoryForm(root, mem, data, detail, isNew, onClose, fromRead) {
-  // 보기 전용 사용자가 어쩌다 여기로 오면 보기 모드로 폴백(편집폼 미노출).
-  if (!state.admin.canEdit) { memoryRead(root, mem, data, detail, onClose); return; }
-  const nameIn = el('input', { type: 'text', value: mem.name, placeholder: '파일명(예: agent-context-architecture)', disabled: isNew ? null : '' });
-  const titleIn = el('input', { type: 'text', value: mem.title || '', placeholder: '제목' });
-  // 카드에 보이는 '쉬운 한 줄' — 실제 제목·본문과 별개. 비우면 제목으로 폴백.
-  const summaryIn = el('input', { type: 'text', value: mem.summary || '', placeholder: '카드에 보일 쉬운 한 줄 (비우면 제목 사용)' });
-  // 도메인: 통제어휘 드롭다운(자유텍스트 폐기). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadAllDomains();
-  const domIn = domSlot.error
-    ? el('input', { type: 'text', value: mem.domain_key || '', placeholder: '도메인 슬러그(목록 불가 — 직접 입력)', title: domSlot.error })
-    : buildDomainSelect(domSlot, mem.domain_key || '');
-  const bodyTa = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문' }); bodyTa.value = mem.body_md || '';
-  const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
-  const status = el('span', { class: 'admin-status' });
-  saveBtn.addEventListener('click', async () => {
-    if (!nameIn.value.trim()) { toast('파일명 필수', true); return; }
-    saveBtn.disabled = true;
-    try {
-      await api('/api/ui/org/memory', { method: 'POST', body: JSON.stringify({ name: nameIn.value.trim(), title: titleIn.value.trim(), summary: summaryIn.value.trim(), body_md: bodyTa.value, domain_key: domIn.value.trim() }) });
-      await loadAdmin(true); state.admin.memorySel = nameIn.value.trim(); toast('저장됨');
-      renderAdminDetail(detail, 'memory', state.admin.data);
-      if (onClose) onClose();
-    } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
-  });
-  const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
-  // 보기 모드에서 진입한 편집이면 '취소'로 다시 보기 모드로(팝업은 유지).
-  if (fromRead) actions.append(el('button', { class: 'btn-text', text: '취소',
-    onclick: () => memoryRead(root, mem, data, detail, onClose) }));
-  if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
-    if (!confirm(`메모리 '${mem.title || mem.name}' 제거?`)) return;
-    try { await api('/api/ui/org/memory/remove', { method: 'POST', body: JSON.stringify({ name: mem.name }) });
-      await loadAdmin(true); state.admin.memorySel = null; toast('제거됨'); renderAdminDetail(detail, 'memory', state.admin.data);
-      if (onClose) onClose(); }
-    catch (e) { toast(e.message, true); }
-  } }));
-  root.replaceChildren(field('파일명', nameIn), field('제목', titleIn),
-    field('카드에 보이는 쉬운 한 줄', summaryIn),
-    field('도메인', domIn),
-    field('본문', bodyTa), actions);
 }
 
 // ── 조직 · 연결 ──
@@ -6183,27 +6716,66 @@ function toolsEditor(detail, data) {
   else right.append(
     el('p', { class: 'admin-hint', text: '사내 API를 AI 도구로 래핑합니다. 저장 즉시(재설치 없이) 구성원 AI가 씁니다. 호출은 런타임 설정의 화이트리스트 안에서만, 인증은 환경변수 이름으로만.' }),
     builtinToggles(data));
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('AI 도구(툴)', data.meaning['tool']), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('AI 도구(MCP)', data.meaning['tool']), el('div', { class: 'admin-two' }, listCol, right)));
+}
+
+// MCP inputSchema(JSON Schema)의 properties → 필드 목록(이름:타입·필수여부·제약·설명). 하네스가 tools/list 에서 보는 입력 표면.
+function mcpFieldsEl(schema) {
+  const props = (schema && schema.properties) || {};
+  const req = (schema && schema.required) || [];
+  const keys = Object.keys(props);
+  if (!keys.length) return el('div', { class: 'admin-hint', text: '입력 필드 없음' });
+  return el('ul', { style: 'margin:2px 0; padding-left:18px' }, ...keys.map((k) => {
+    const p = props[k] || {};
+    let t = p.type || (p.anyOf || p.oneOf ? 'union' : '?');
+    if (p.enum) t = p.enum.join(' | ');
+    const c = [];
+    if (p.minLength != null) c.push('min ' + p.minLength);
+    if (p.maxLength != null) c.push('max ' + p.maxLength);
+    if (p.minimum != null) c.push('≥' + p.minimum);
+    if (p.maximum != null) c.push('≤' + p.maximum);
+    return el('li', {},
+      el('code', { text: k }),
+      el('span', { class: 'mini-meta', text: ' : ' + t + (req.includes(k) ? ' · 필수' : ' · 선택') + (c.length ? ' · ' + c.join(', ') : '') }),
+      p.description ? el('div', { class: 'admin-hint', style: 'margin:0', text: p.description }) : null);
+  }));
 }
 
 function builtinToggles(data) {
   const byName = {}; for (const t of (data.tools || [])) if (t.kind === 'builtin') byName[t.name] = t;
   const wrap = el('div', { class: 'builtin-toggles' },
-    el('div', { class: 'admin-subhead', text: '빌트인 도구 (게이트웨이 기본)' }),
-    el('p', { class: 'admin-hint', text: '끄면 구성원 AI 도구 목록에서 사라집니다(즉시). 자동승인을 켜면 구성원 설치 시 확인 없이 실행되도록 설정됩니다.' }));
-  for (const name of (data.builtins || [])) {
-    const row = byName[name] || { name, enabled: true, auto_approve: false };
-    const enChk = el('input', { type: 'checkbox' }); enChk.checked = row.enabled !== false;
-    const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = !!row.auto_approve;
+    el('div', { class: 'admin-subhead', text: '빌트인 도구 (MCP 노출)' }),
+    el('p', { class: 'admin-hint', text: '게이트웨이 MCP 도구의 노출을 켜고 끕니다(즉시). 코드 기본값을 덮어쓰며, 「기본 미노출」 도구도 여기서 켤 수 있습니다. 자동승인을 켜면 구성원 설치 시 확인 없이 실행됩니다.' }));
+  // 노출 정렬: 기본 노출 먼저, 기본 미노출(켤 수 있는 후보)을 아래로. 같은 그룹은 이름순.
+  const cands = (data.builtins || []).map((c) => (typeof c === 'string' ? { name: c, title: '', defaultExposed: true } : c))
+    .slice().sort((a, b) => (a.defaultExposed === b.defaultExposed ? a.name.localeCompare(b.name) : (a.defaultExposed ? -1 : 1)));
+  for (const cand of cands) {
+    const name = cand.name;
+    const def = cand.defaultExposed !== false;       // 코드 기본값(expose.mcp)
+    const override = byName[name];                    // org_tool builtin 행(있으면 운영자 재정의)
+    const exposed = override ? override.enabled !== false : def;  // 최종 노출
+    const enChk = el('input', { type: 'checkbox' }); enChk.checked = exposed;
+    const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = override ? !!override.auto_approve : false;
     const save = async () => {
       try { await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify({ name, kind: 'builtin', enabled: enChk.checked, auto_approve: aaChk.checked }) }); await loadAdmin(true); toast('저장됨'); }
       catch (e) { toast(e.message, true); }
     };
     enChk.addEventListener('change', save); aaChk.addEventListener('change', save);
+    // MCP 상세 — 하네스가 보는 description + inputSchema(필드). 접힘 기본, 클릭 시 펼침.
+    const detail = el('div', { style: 'display:none; margin:2px 0 8px 14px; padding:6px 10px; border-left:2px solid var(--border, #ddd)' },
+      cand.description ? el('p', { class: 'admin-hint', style: 'white-space:pre-wrap; margin:0 0 6px', text: cand.description }) : null,
+      el('div', { class: 'admin-subhead', text: '입력 필드 (MCP inputSchema)' }),
+      mcpFieldsEl(cand.inputSchema));
+    const expand = el('button', { class: 'btn btn-ghost btn-sm', text: 'MCP 상세 ▾',
+      onclick: () => { const open = detail.style.display === 'none'; detail.style.display = open ? 'block' : 'none'; expand.textContent = open ? 'MCP 상세 ▴' : 'MCP 상세 ▾'; } });
     wrap.append(el('div', { class: 'builtin-row' },
-      el('span', { class: 'builtin-name', text: name }),
-      el('label', { class: 'admin-check' }, enChk, ' 사용'),
-      el('label', { class: 'admin-check' }, aaChk, ' 자동승인')));
+      el('span', { class: 'builtin-name', text: name },
+        cand.title ? el('span', { class: 'mini-meta', text: ' · ' + cand.title }) : null,
+        !def ? el('span', { class: 'pill', text: '기본 미노출' }) : null,
+        (override && exposed !== def) ? el('span', { class: 'pill pill-warn', text: '재정의' }) : null),
+      el('label', { class: 'admin-check' }, enChk, ' 노출'),
+      el('label', { class: 'admin-check' }, aaChk, ' 자동승인'),
+      expand), detail);
   }
   return wrap;
 }
@@ -6422,3 +6994,1142 @@ function overlay(title, ...content) {
   document.body.append(back);
   return back;
 }
+
+// ==== [task-detail-modal] 아래는 클릭업형 태스크 상세 모달(append-only 반영) ====
+// ════════════════════════════════════════════
+// 태스크 상세 모달(클릭업형 팝업) — 태스크 행 클릭 시 2-pane 팝업.
+//  좌: 타입/제목/필드그리드(상태·기간·시간추적·담당자·우선순위·태그)·설명(MD)·하위·의존성·체크리스트·첨부.
+//  우: Activity(댓글 + 시스템이벤트 피드 + 작성기).
+//  데이터: GET /api/ui/v6/tasks/:id/detail 1회 페치, 각 편집은 전용 엔드포인트 패치 후 모달만 refresh.
+//  닫을 때 변경 있었으면 페이지 reload() 로 리스트 반영. 보안: el()/textContent/renderMarkdown 만.
+// ════════════════════════════════════════════
+const PJV_LINK_TYPE = {
+  blocking:   { label: '막고 있음',  short: 'blocking' },
+  waiting_on: { label: '기다리는 중', short: 'waiting on' },
+  linked:     { label: '연결됨',     short: 'linked' },
+};
+
+function pjvFmtDuration(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return h + '시간 ' + (m ? m + '분' : '').trim();
+  if (m) return m + '분 ' + (s ? s + '초' : '').trim();
+  return s + '초';
+}
+function pjvFmtClock(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const z = (x) => String(x).padStart(2, '0');
+  return (h ? h + ':' : '') + z(m) + ':' + z(s);
+}
+
+// 모달 열기 — pageReload 는 리스트뷰 재페인트(변경 시 닫을 때 호출). 하위/연결 태스크로 점프 가능.
+// ── 태스크 모달 Activity 작성기 — 아이콘/이모지/멘션/첨부 헬퍼(클릭업식). 단색 라인 아이콘(우리 톤). ──
+const PJV_TM_ICONS = {
+  plus:      { p: [['circle', { cx: 12, cy: 12, r: 9 }], ['line', { x1: 12, y1: 8.5, x2: 12, y2: 15.5 }], ['line', { x1: 8.5, y1: 12, x2: 15.5, y2: 12 }]] },
+  paperclip: { p: [['path', { d: 'M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' }]] },
+  at:        { p: [['circle', { cx: 12, cy: 12, r: 3.8 }], ['path', { d: 'M15.8 12v1.6a2.4 2.4 0 0 0 4.8 0V12a8.6 8.6 0 1 0-3.4 6.8' }]] },
+  smile:     { p: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M8.5 14.5a4 4 0 0 0 7 0' }], ['line', { x1: 9, y1: 9.5, x2: 9.01, y2: 9.5 }], ['line', { x1: 15, y1: 9.5, x2: 15.01, y2: 9.5 }]] },
+  check:     { p: [['rect', { x: 4, y: 4, width: 16, height: 16, rx: 3.5 }], ['polyline', { points: '8.5 12.4 11 15 16 9' }]] },
+  video:     { p: [['rect', { x: 3, y: 6, width: 13, height: 12, rx: 2 }], ['path', { d: 'M16 10l5-3v10l-5-3z' }]] },
+  mic:       { p: [['rect', { x: 9, y: 3, width: 6, height: 11, rx: 3 }], ['path', { d: 'M6 11.5a6 6 0 0 0 12 0' }], ['line', { x1: 12, y1: 17.5, x2: 12, y2: 21 }]] },
+  more:      { p: [['circle', { cx: 5.5, cy: 12, r: 1.5 }], ['circle', { cx: 12, cy: 12, r: 1.5 }], ['circle', { cx: 18.5, cy: 12, r: 1.5 }]], fill: true },
+  like:      { p: [['path', { d: 'M7 10.6V19H4.8A1.3 1.3 0 0 1 3.5 17.7v-5.8A1.3 1.3 0 0 1 4.8 10.6z' }], ['path', { d: 'M7 10.6l3.6-6.4a1.8 1.8 0 0 1 3.4.9V9h4.6a1.8 1.8 0 0 1 1.78 2.1l-1 6A1.8 1.8 0 0 1 18.6 19H7' }]] },
+  send:      { p: [['path', { d: 'M4.5 12 20 4.5 15.5 20l-4-6z' }], ['line', { x1: 11.5, y1: 14, x2: 20, y2: 4.5 }]] },
+};
+function pjvtmIcon(name) {
+  const def = PJV_TM_ICONS[name] || PJV_TM_ICONS.plus;
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: def.fill ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': def.fill ? 0 : 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  for (const [t, a] of def.p) n.append(sv(t, a));
+  return n;
+}
+const PJV_TM_EMOJIS = ['👍', '❤️', '😄', '🎉', '👀', '🙌', '🔥', '✅', '🚀', '😢', '😮', '🙏', '💯', '👏', '🤔', '💡'];
+function pjvtmEmojiPicker(anchor, onPick) {
+  const grid = el('div', { class: 'pjv-tm-emoji-grid' });
+  const close = pjvPopover(anchor, grid);
+  for (const e of PJV_TM_EMOJIS) {
+    const b = el('button', { class: 'pjv-tm-emoji', type: 'button', text: e });
+    b.onclick = () => { close(); onPick(e); };
+    grid.append(b);
+  }
+}
+function pjvtmMentionMenu(anchor, members, insert) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  if (!members || !members.length) { menu.append(el('div', { class: 'pjv-menu-empty', text: '팀원이 없어요' })); return; }
+  for (const m of members) {
+    const nm = m.display_name || m.member_id;
+    const item = el('button', { class: 'pjv-menu-item', type: 'button' },
+      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(nm) }), el('span', { text: nm }));
+    item.onclick = () => { close(); insert('@' + nm + ' '); };
+    menu.append(item);
+  }
+}
+function pjvtmTypeMenu(anchor) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  const b = el('button', { class: 'pjv-menu-item sel', type: 'button' }, el('span', { text: 'Comment' }));
+  b.onclick = () => close();
+  menu.append(b, el('div', { class: 'pjv-menu-empty', text: '다른 유형은 준비 중' }));
+}
+// 공유 폴더 첨부 — 파일 클릭 시 작성기에 [📎 이름](#file:상대경로) 마크다운 삽입(렌더 후 authDownload 로 다운로드).
+function pjvtmAttachPicker(anchor, o) {
+  const pid = o.d.project && o.d.project.id;
+  if (!pid) { toast('이 태스크의 프로젝트 폴더를 찾을 수 없어요', true); return; }
+  const B = '/api/ui/v6/projects/' + pid;
+  const crumb = el('div', { class: 'pjv-files-crumb' });
+  const rowsBox = el('div', { class: 'pjv-files-browser' });
+  const close = pjvPopover(anchor, el('div', { class: 'pjv-field-editor pjv-files-editor' },
+    el('div', { class: 'pjv-files-head2', text: '공유 폴더에서 첨부' }), crumb, rowsBox));
+  let curPath = '';
+  const load = async () => {
+    rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+    let data;
+    try { data = await api(B + '/files?path=' + encodeURIComponent(curPath)); }
+    catch (e) { rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '공유 폴더를 불러오지 못했어요' })); return; }
+    crumb.replaceChildren(el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: '루트', onclick: () => { curPath = ''; load(); } }));
+    let acc = '';
+    for (const p of (curPath ? curPath.split('/') : [])) {
+      acc = acc ? acc + '/' + p : p; const tg = acc;
+      crumb.append(el('span', { class: 'pjv-files-crumb-sep', text: '/' }), el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: p, onclick: () => { curPath = tg; load(); } }));
+    }
+    rowsBox.replaceChildren();
+    const items = data.items || [];
+    if (!items.length) { rowsBox.append(el('div', { class: 'pjv-files-empty', text: '빈 폴더예요' })); return; }
+    for (const it of items) {
+      const childPath = curPath ? curPath + '/' + it.name : it.name;
+      if (it.type === 'dir') rowsBox.append(el('button', { class: 'pjv-files-row dir', type: 'button', onclick: () => { curPath = childPath; load(); } },
+        fileIconSvg(it.name, true), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-chev', text: '›' })));
+      else rowsBox.append(el('button', { class: 'pjv-files-row file', type: 'button', onclick: () => { o.insertAtCursor('[📎 ' + it.name + '](#file:' + encodeURIComponent(childPath) + ') '); close(); } },
+        fileIconSvg(it.name, false), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-size', text: fmtSize(it.size) })));
+    }
+  };
+  load();
+}
+// 렌더된 댓글의 #file: 링크 → 클릭 시 인증 다운로드(평문 링크는 401 이므로 가로채 authDownload).
+function pjvtmWireFileLinks(node, cctx) {
+  if (!node || !node.querySelectorAll) return;
+  node.querySelectorAll('a[href^="#file:"]').forEach((a) => {
+    const rel = decodeURIComponent(a.getAttribute('href').slice(6));
+    a.classList.add('pjv-tm-filelink');
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!cctx.projectId) { toast('프로젝트 폴더를 찾을 수 없어요', true); return; }
+      authDownload('/api/ui/v6/projects/' + cctx.projectId + '/file?download=1&path=' + encodeURIComponent(rel), a.textContent.replace(/^📎\s*/, ''));
+    });
+  });
+}
+function pjvtmInsertMenu(anchor, o) {
+  const menu = el('div', { class: 'pjv-menu' });
+  const close = pjvPopover(anchor, menu);
+  const item = (icon, label, fn) => { const b = el('button', { class: 'pjv-menu-item', type: 'button' }, pjvtmIcon(icon), el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
+  menu.append(item('paperclip', '공유 폴더 파일 첨부', () => pjvtmAttachPicker(anchor, o)));
+  menu.append(item('at', '멘션', () => pjvtmMentionMenu(anchor, o.members, o.insertAtCursor)));
+  menu.append(item('smile', '이모지', () => pjvtmEmojiPicker(anchor, (e) => o.insertAtCursor(e))));
+  menu.append(item('check', '체크리스트 항목', () => o.insertAtCursor('\n- [ ] ')));
+}
+// 작성기 하단 툴바(클릭업식) — ＋·Comment▼ · 📎·@·😊·✓·🎥·🎤·⋯ · ➤(전송). 구현가능은 배선, 미지원은 정직 안내.
+function pjvtmComposerToolbar(o) {
+  const bar = el('div', { class: 'pjv-tm-toolbar' });
+  const tool = (icon, title, fn, soon) => {
+    const b = el('button', { class: 'pjv-tm-tool' + (soon ? ' soon' : ''), type: 'button', title }, pjvtmIcon(icon));
+    b.onclick = (e) => fn(e);
+    return b;
+  };
+  bar.append(tool('plus', '삽입', (e) => pjvtmInsertMenu(e.currentTarget, o)));
+  const typePill = el('button', { class: 'pjv-tm-ctypepill', type: 'button', title: '댓글 유형' }, el('span', { text: 'Comment' }), el('span', { class: 'pjv-tm-type-caret', text: '▾' }));
+  typePill.onclick = () => pjvtmTypeMenu(typePill);
+  bar.append(typePill, el('span', { class: 'pjv-tm-tool-sep' }));
+  bar.append(tool('paperclip', '공유 폴더 파일 첨부', (e) => pjvtmAttachPicker(e.currentTarget, o)));
+  bar.append(tool('at', '멘션', (e) => pjvtmMentionMenu(e.currentTarget, o.members, o.insertAtCursor)));
+  bar.append(tool('smile', '이모지', (e) => pjvtmEmojiPicker(e.currentTarget, (em) => o.insertAtCursor(em))));
+  bar.append(tool('check', '체크리스트 항목', () => o.insertAtCursor('\n- [ ] ')));
+  bar.append(tool('video', '화면 녹화 (준비 중)', () => toast('화면 녹화는 준비 중이에요'), true));
+  bar.append(tool('mic', '음성 입력 (준비 중)', () => toast('음성 입력은 준비 중이에요'), true));
+  bar.append(tool('more', '더보기 (준비 중)', () => toast('추가 도구는 준비 중이에요'), true));
+  bar.append(el('span', { class: 'pjv-tm-tool-spacer' }));
+  bar.append(o.sendBtn);
+  return bar;
+}
+
+// ── 태그 색 팔레트(클릭업식) + 태그 편집 아이콘(기어/휴지통/없음/뒤로). ──
+const PJV_TAG_COLORS = ['#8b7fd6', '#6b8fff', '#4aa3e0', '#2bb3a3', '#56b877', '#e0b341', '#e8853a', '#e98aa8', '#d96bb0', '#b07fd6', '#a98e7d', '#cfd6e0', '#98a3b5'];
+const PJV_TAG_NONE = '#aab3c2';
+function pjvtmGearIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 3.2 }));
+  for (const [x1, y1, x2, y2] of [[12, 3.4, 12, 6], [12, 18, 12, 20.6], [3.4, 12, 6, 12], [18, 12, 20.6, 12], [6, 6, 7.8, 7.8], [16.2, 16.2, 18, 18], [6, 18, 7.8, 16.2], [16.2, 7.8, 18, 6]]) n.append(sv('line', { x1, y1, x2, y2 }));
+  return n;
+}
+function pjvtmTrashIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('polyline', { points: '4 7 20 7' }), sv('path', { d: 'M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2' }), sv('path', { d: 'M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12' }));
+  return n;
+}
+function pjvtmNoneIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 8 }), sv('line', { x1: 6.4, y1: 6.4, x2: 17.6, y2: 17.6 }));
+  return n;
+}
+function pjvtmBackIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('polyline', { points: '14 6 8 12 14 18' }));
+  return n;
+}
+
+function pjvOpenTaskModal(taskId, pageReload) {
+  let dirty = false;
+  let tickTimer = null;
+  const back = el('div', { class: 'pjv-tm-back' });
+  const box = el('div', { class: 'pjv-tm' });
+  back.append(box);
+  back.addEventListener('mousedown', (e) => { if (e.target === back) closeModal(); });
+  const onKey = (e) => { if (e.key === 'Escape') { const pop = document.querySelector('.pjv-pop'); if (!pop) closeModal(); } };
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(back);
+  document.body.classList.add('pjv-tm-open');
+
+  function closeModal() {
+    if (tickTimer) clearInterval(tickTimer);
+    document.removeEventListener('keydown', onKey, true);
+    document.body.classList.remove('pjv-tm-open');
+    back.remove();
+    if (dirty && pageReload) pageReload();
+  }
+
+  box.append(el('div', { class: 'pjv-tm-loading' }, '불러오는 중…'));
+  load();
+
+  async function load() {
+    let d;
+    try { d = await api('/api/ui/v6/tasks/' + taskId + '/detail'); }
+    catch (e) { box.replaceChildren(el('div', { class: 'pjv-tm-loading' }, errorNote ? errorNote(e, '태스크를 불러오지 못했습니다') : ('실패 — ' + e.message),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: closeModal }))); return; }
+    render(d);
+  }
+  // 편집 후 부분 갱신: 서버가 돌려준 조각으로 d 를 갱신하고 해당 영역만 다시 그릴 수도 있으나, 단순·정확을 위해 전체 재페치.
+  function refresh() { dirty = true; load(); }
+
+  function render(d) {
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    const t = d.task;
+    const members = d.members || [];
+    const _prevMain = box.querySelector('.pjv-tm-main');
+    const _prevScroll = _prevMain ? _prevMain.scrollTop : 0;
+    box.replaceChildren(
+      pjvtmMain(d, t, members, refresh, closeModal, pageReload),
+      pjvtmSide(d, t, refresh),
+    );
+    const _newMain = box.querySelector('.pjv-tm-main');
+    if (_newMain && _prevScroll) _newMain.scrollTop = _prevScroll;
+    // 실행중 타이머 라이브 틱
+    const running = d.time && d.time.running;
+    if (running) {
+      const elc = box.querySelector('.pjv-tm-timer-live');
+      const base = d.time.total_seconds || 0;
+      const startedMs = new Date(running.started_at).getTime();
+      const upd = () => { if (elc) elc.textContent = pjvFmtClock(base + (Date.now() - startedMs) / 1000); };
+      upd(); tickTimer = setInterval(upd, 1000);
+    }
+  }
+
+  // ── 좌측(상세) ──
+  function pjvtmMain(d, t, members, refresh, closeModal, pageReload) {
+    const main = el('div', { class: 'pjv-tm-main' });
+
+    // 상단바: 브레드크럼(프로젝트명) + 닫기
+    main.append(el('div', { class: 'pjv-tm-top' },
+      el('div', { class: 'pjv-tm-crumb' },
+        d.project ? el('a', { class: 'pjv-tm-crumb-link', href: '#/projects2/p/' + d.project.id, text: d.project.name, onclick: () => closeModal() }) : null,
+        el('span', { class: 'pjv-tm-crumb-sep', text: d.project ? ' /' : '' })),
+      el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
+
+    // 타입 pill + 하위수
+    const subs = t.subtasks || [];
+    main.append(el('div', { class: 'pjv-tm-typebar' },
+      el('span', { class: 'pjv-tm-typepill' },
+        el('span', { class: 'pjv-tm-typedot' }),
+        el('span', { text: t.level === 'subtask' ? 'Subtask' : 'Task' })),
+      subs.length ? el('span', { class: 'pjv-tm-subcount', title: subs.length + '개 하위', text: '⌥ ' + subs.length }) : null));
+
+    // 제목(편집 가능)
+    const titleIn = el('textarea', { class: 'pjv-tm-title', rows: '1', maxlength: '200', spellcheck: 'false' });
+    titleIn.value = t.name || '(제목 없음)';
+    const autoGrow = () => { titleIn.style.height = 'auto'; titleIn.style.height = titleIn.scrollHeight + 'px'; };
+    setTimeout(autoGrow, 0);
+    titleIn.addEventListener('input', autoGrow);
+    const saveTitle = () => {
+      const v = titleIn.value.trim();
+      if (v && v !== t.name) pjvPatchTask(t.id, { name: v }, refresh);
+    };
+    titleIn.addEventListener('blur', saveTitle);
+    titleIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); titleIn.blur(); } });
+    main.append(titleIn);
+
+    // 필드 그리드(2열): 좌(상태·기간·시간추적) 우(담당자·우선순위·태그)
+    main.append(el('div', { class: 'pjv-tm-fields' },
+      pjvtmFieldRow('◎', '상태', pjvtmStatusField(t, refresh)),
+      pjvtmFieldRow('👤', '담당자', pjvtmAssigneeField(t, members, refresh)),
+      pjvtmFieldRow('🗓', '기간', pjvtmDatesField(t, refresh)),
+      pjvtmFieldRow('⚑', '우선순위', pjvtmPriorityField(t, refresh)),
+      pjvtmFieldRow('⏱', '시간 추적', pjvtmTimeField(d, t, refresh)),
+      pjvtmFieldRow('🏷', '태그', pjvtmTagsField(d, t, refresh))));
+
+    // 설명(마크다운)
+    main.append(pjvtmDescription(t, refresh));
+
+    // 하위 태스크
+    main.append(pjvtmSubtasks(d, t, members, refresh, pageReload));
+
+    // 의존성 / 연결
+    main.append(pjvtmLinks(d, t, refresh));
+
+    // 체크리스트
+    main.append(pjvtmChecklists(d, t, members, refresh));
+    main.append(pjvtmAttachments(d, t, refresh));
+
+    return main;
+  }
+
+  function pjvtmFieldRow(glyph, label, control) {
+    return el('div', { class: 'pjv-tm-field' },
+      el('span', { class: 'pjv-tm-field-ico', 'aria-hidden': 'true', text: glyph }),
+      el('span', { class: 'pjv-tm-field-label', text: label }),
+      el('div', { class: 'pjv-tm-field-val' }, control));
+  }
+
+  // 상태 — 색 pill(라벨). 클릭 → 메뉴.
+  function pjvtmStatusField(t, refresh) {
+    const meta = pjvStatusMeta(t.status);
+    const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' },
+      meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null,
+      el('span', { text: meta.label.toUpperCase() }));
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(btn, menu);
+      for (const key of PJV_STATUS_ORDER) {
+        const m = PJV_TASK_STATUS[key];
+        const sel = meta.bucket === key;
+        const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
+          el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+          el('span', { text: m.label }));
+        item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { status: key }, refresh); };
+        menu.append(item);
+      }
+    };
+    return btn;
+  }
+
+  function pjvtmAssigneeField(t, members, refresh) {
+    const cur = t.assignee ? (members.find((m) => m.member_id === t.assignee) || null) : null;
+    const btn = el('button', { class: 'pjv-tm-valbtn' + (t.assignee ? '' : ' empty'), type: 'button' });
+    if (t.assignee) {
+      const name = cur ? (cur.display_name || cur.member_id) : t.assignee;
+      btn.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(t.assignee), text: initials(name) }),
+        el('span', { class: 'pjv-tm-valtext', text: name }));
+    } else { btn.append(el('span', { text: 'Empty' })); }
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(btn, menu);
+      const none = el('button', { class: 'pjv-menu-item' + (!t.assignee ? ' sel' : ''), type: 'button' },
+        el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '담당 없음' }));
+      none.onclick = () => { close(); if (t.assignee) pjvPatchTask(t.id, { assignee: null }, refresh); };
+      menu.append(none);
+      for (const m of members) {
+        const sel = t.assignee === m.member_id;
+        const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
+          el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+          el('span', { text: m.display_name || m.member_id }));
+        item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { assignee: m.member_id }, refresh); };
+        menu.append(item);
+      }
+      if (!members.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '프로젝트 팀원을 먼저 추가하세요' }));
+    };
+    return btn;
+  }
+
+  // 기간 — start → due, 각각 날짜 picker.
+  function pjvtmDatesField(t, refresh) {
+    const wrap = el('div', { class: 'pjv-tm-dates' });
+    const mk = (field, ph) => {
+      const val = t[field];
+      const overdue = field === 'due_date' && pjvIsOverdue(t);
+      const b = el('button', { class: 'pjv-tm-datebtn' + (val ? '' : ' empty') + (overdue ? ' overdue' : ''), type: 'button' },
+        el('span', { text: val ? pjvFmtDate(val) : ph }));
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const input = el('input', { type: 'date', class: 'pjv-date-input', value: val || '' });
+        const wrapPop = el('div', { class: 'pjv-menu pjv-date-pop' }, input,
+          val ? el('button', { class: 'pjv-menu-item danger', type: 'button', text: '지우기',
+            onclick: () => { close(); pjvPatchTask(t.id, { [field]: null }, refresh); } }) : null);
+        const close = pjvPopover(b, wrapPop);
+        setTimeout(() => { input.focus(); if (input.showPicker) { try { input.showPicker(); } catch (_) {} } }, 0);
+        input.onchange = () => { const v = input.value || null; close(); pjvPatchTask(t.id, { [field]: v }, refresh); };
+      };
+      return b;
+    };
+    wrap.append(mk('start_date', 'Start'), el('span', { class: 'pjv-tm-datearrow', text: '→' }), mk('due_date', 'Due'));
+    return wrap;
+  }
+
+  function pjvtmPriorityField(t, refresh) {
+    const m = t.priority ? PJV_PRIORITY[t.priority] : null;
+    const btn = el('button', { class: 'pjv-tm-valbtn' + (m ? '' : ' empty'), type: 'button' });
+    btn.append(m
+      ? el('span', { class: 'pjv-flag ' + m.cls }, el('span', { class: 'pjv-flag-glyph', text: '⚑' }), el('span', { class: 'pjv-flag-label', text: m.label }))
+      : el('span', { text: 'Empty' }));
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(btn, menu);
+      for (const key of PJV_PRIORITY_ORDER) {
+        const pm = PJV_PRIORITY[key];
+        const sel = t.priority === key;
+        const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
+          el('span', { class: 'pjv-flag ' + pm.cls }, el('span', { class: 'pjv-flag-glyph', text: '⚑' })),
+          el('span', { text: pm.label }));
+        item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { priority: key }, refresh); };
+        menu.append(item);
+      }
+      const none = el('button', { class: 'pjv-menu-item' + (!t.priority ? ' sel' : ''), type: 'button' },
+        el('span', { class: 'pjv-cell-ph sm', text: '∅' }), el('span', { text: '없음' }));
+      none.onclick = () => { close(); if (t.priority) pjvPatchTask(t.id, { priority: null }, refresh); };
+      menu.append(none);
+    };
+    return btn;
+  }
+
+  // 시간추적 — 총합 + 타이머 토글 + 수동입력 + 엔트리 목록(팝오버).
+  function pjvtmTimeField(d, t, refresh) {
+    const time = d.time || { entries: [], total_seconds: 0, running: null };
+    const wrap = el('div', { class: 'pjv-tm-time' });
+    const running = time.running;
+    const playBtn = el('button', { class: 'pjv-tm-timebtn' + (running ? ' on' : ''), type: 'button',
+      title: running ? '타이머 정지' : '타이머 시작' },
+      el('span', { text: running ? '⏸' : '▶' }),
+      el('span', { text: running ? '정지' : 'Start' }));
+    playBtn.onclick = async () => {
+      playBtn.disabled = true;
+      try { await api('/api/ui/v6/tasks/' + t.id + '/time', { method: 'POST', body: JSON.stringify({ action: running ? 'stop' : 'start' }) }); refresh(); }
+      catch (e) { toast('실패 — ' + e.message, true); playBtn.disabled = false; }
+    };
+    wrap.append(playBtn);
+    if (time.total_seconds > 0 || running) {
+      wrap.append(el('span', { class: 'pjv-tm-timer-live', text: pjvFmtClock(time.total_seconds || 0) }));
+    }
+    // 더보기(수동 입력 + 엔트리 목록)
+    const more = el('button', { class: 'pjv-tm-timemore', type: 'button', title: '시간 기록', text: '⋯' });
+    more.onclick = (e) => { e.stopPropagation(); pjvtmTimePop(more, d, t, refresh); };
+    wrap.append(more);
+    return wrap;
+  }
+  function pjvtmTimePop(anchor, d, t, refresh) {
+    const time = d.time || { entries: [] };
+    const pop = el('div', { class: 'pjv-menu pjv-tm-timepop' });
+    const close = pjvPopover(anchor, pop);
+    // 수동 입력
+    const hh = el('input', { type: 'number', min: '0', class: 'pjv-tm-tnum', placeholder: '0' });
+    const mm = el('input', { type: 'number', min: '0', max: '59', class: 'pjv-tm-tnum', placeholder: '0' });
+    const addBtn = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '추가' });
+    addBtn.onclick = async () => {
+      const secs = (Number(hh.value) || 0) * 3600 + (Number(mm.value) || 0) * 60;
+      if (secs <= 0) { toast('시간을 입력하세요', true); return; }
+      addBtn.disabled = true;
+      try { await api('/api/ui/v6/tasks/' + t.id + '/time', { method: 'POST', body: JSON.stringify({ action: 'add', seconds: secs }) }); close(); refresh(); }
+      catch (e) { toast('실패 — ' + e.message, true); addBtn.disabled = false; }
+    };
+    pop.append(el('div', { class: 'pjv-tm-tmanual' },
+      el('span', { class: 'pjv-tm-tlabel', text: '수동 입력' }),
+      hh, el('span', { text: '시간' }), mm, el('span', { text: '분' }), addBtn));
+    // 엔트리 목록
+    if (time.entries && time.entries.length) {
+      const list = el('div', { class: 'pjv-tm-tentries' });
+      for (const en of time.entries) {
+        if (en.ended_at == null) continue; // 실행중은 위 라이브 표시
+        const row = el('div', { class: 'pjv-tm-tentry' },
+          el('span', { text: pjvFmtDuration(en.duration_seconds || 0) }),
+          el('span', { class: 'pjv-tm-tentry-src', text: en.source === 'manual' ? '수동' : '타이머' }),
+          el('button', { class: 'pjv-tm-tentry-x', type: 'button', title: '삭제', text: '✕',
+            onclick: async () => {
+              try { await api('/api/ui/v6/tasks/' + t.id + '/time', { method: 'POST', body: JSON.stringify({ action: 'delete', entry_id: en.id }) }); close(); refresh(); }
+              catch (e) { toast('실패 — ' + e.message, true); } } }));
+        list.append(row);
+      }
+      pop.append(list);
+    }
+  }
+
+  // 태그 — 칩 + 추가(자동완성). 색상은 등록시 랜덤/지정(여기선 팔레트 순환).
+  // 태그 필드 — 칩(색·× 제거) + Empty/＋. 변경은 로컬 갱신 + 백그라운드 저장(모달 풀 refresh 없이 부드럽게).
+  function pjvtmTagsField(d, t, refresh) {
+    const wrap = el('div', { class: 'pjv-tm-tags' });
+    const render = () => {
+      wrap.replaceChildren();
+      for (const tag of (d.tags || [])) wrap.append(pjvtmTagChip(tag, () => removeTag(tag.id)));
+      const addBtn = el('button', { class: 'pjv-tm-tagadd' + ((d.tags || []).length ? '' : ' empty'), type: 'button', text: (d.tags || []).length ? '＋' : 'Empty' });
+      addBtn.onclick = (e) => { e.stopPropagation(); pjvtmTagPop(addBtn, d, t, render); };
+      wrap.append(addBtn);
+    };
+    const removeTag = async (tagId) => {
+      d.tags = (d.tags || []).filter((x) => x.id !== tagId); render();
+      try { await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ tag_id: tagId, remove: true }) }); }
+      catch (e) { toast('실패 — ' + e.message, true); }
+    };
+    render();
+    return wrap;
+  }
+  function pjvtmTagChip(tag, onRemove) {
+    const chip = el('span', { class: 'pjv-tm-tag', style: '--tag:' + (tag.color || PJV_TAG_NONE) }, el('span', { class: 'pjv-tm-tag-name', text: tag.name }));
+    if (onRemove) {
+      const x = el('button', { class: 'pjv-tm-tag-x', type: 'button', title: '제거', text: '✕' });
+      x.onclick = (e) => { e.stopPropagation(); onRemove(); };
+      chip.append(x);
+    }
+    return chip;
+  }
+  // 태그 피커(클릭업식) — 선택칩 + 검색/생성 입력 + 기존 태그 토글 + Create 행. 각 태그 기어 → 색/이름/삭제 뷰.
+  async function pjvtmTagPop(anchor, d, t, renderField) {
+    const pop = el('div', { class: 'pjv-menu pjv-tm-tagpop' });
+    pjvPopover(anchor, pop);
+    let all = [];
+    const loadAll = async () => { try { all = await api('/api/ui/v6/tags').then((r) => (r && r.tags) || []); } catch (_) { all = []; } };
+    const selIds = () => new Set((d.tags || []).map((x) => x.id));
+    await loadAll();
+
+    function showList(query) {
+      const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '검색 또는 새 태그 이름…', maxlength: '40', value: query || '' });
+      const chips = el('div', { class: 'pjv-tm-tagpop-chips' });
+      const list = el('div', { class: 'pjv-tm-tagresults' });
+      const manageBtn = el('button', { class: 'pjv-tm-tagmanage-btn', type: 'button' }, pjvtmGearIcon(), el('span', { text: '모든 태그 관리' }));
+      manageBtn.onclick = () => showManageAll();
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagpop-top' }, chips, input),
+        el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: 'Select an option' })),
+        list, manageBtn);
+      setTimeout(() => { input.focus(); }, 0);
+      const renderChips = () => chips.replaceChildren(...(d.tags || []).map((tag) => pjvtmTagChip(tag, () => persistRemove(tag.id))));
+      const persistAdd = async (x) => {
+        if (!selIds().has(x.id)) { d.tags = [...(d.tags || []), x]; renderField(); renderChips(); renderList(); }
+        try { await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ tag_id: x.id }) }); }
+        catch (e) { toast('실패 — ' + e.message, true); }
+      };
+      const persistRemove = async (tagId) => {
+        d.tags = (d.tags || []).filter((x) => x.id !== tagId); renderField(); renderChips(); renderList();
+        try { await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ tag_id: tagId, remove: true }) }); }
+        catch (e) { toast('실패 — ' + e.message, true); }
+      };
+      const createAndAdd = async (name, color) => {
+        try {
+          const tags = await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ name, color }) }).then((r) => (r && r.tags) || []);
+          d.tags = tags; await loadAll(); renderField(); showList('');
+        } catch (e) { toast('실패 — ' + e.message, true); }
+      };
+      const renderList = () => {
+        const qq = input.value.trim();
+        const have = selIds();
+        const cand = all.filter((x) => (!qq || x.name.toLowerCase().includes(qq.toLowerCase())));
+        list.replaceChildren();
+        for (const x of cand.slice(0, 40)) {
+          const on = have.has(x.id);
+          const row = el('button', { class: 'pjv-tm-tagrow' + (on ? ' sel' : ''), type: 'button' },
+            pjvCheckMini(on),
+            el('span', { class: 'pjv-tm-tagdot', style: 'background:' + (x.color || PJV_TAG_NONE) }),
+            el('span', { class: 'pjv-tm-tagrow-name', text: x.name }));
+          row.onclick = () => (on ? persistRemove(x.id) : persistAdd(x));
+          const gear = el('button', { class: 'pjv-tm-tagrow-gear', type: 'button', title: '태그 편집' }, pjvtmGearIcon());
+          gear.onclick = (e) => { e.stopPropagation(); showColor(x, input.value); };
+          row.append(gear);
+          list.append(row);
+        }
+        if (qq && !all.some((x) => x.name.toLowerCase() === qq.toLowerCase())) {
+          const previewColor = PJV_TAG_COLORS[all.length % PJV_TAG_COLORS.length];
+          const cr = el('button', { class: 'pjv-tm-tagrow pjv-tm-tagcreate', type: 'button' },
+            el('span', { class: 'pjv-tm-tagcreate-label', text: 'Create' }),
+            el('span', { class: 'pjv-tm-tag', style: '--tag:' + previewColor }, el('span', { class: 'pjv-tm-tag-name', text: qq })),
+            el('span', { class: 'pjv-tm-tagcreate-enter', text: '↵' }));
+          cr.onclick = () => createAndAdd(qq, previewColor);
+          list.append(cr);
+        }
+        if (!list.children.length) list.append(el('div', { class: 'pjv-menu-empty', text: '이름을 입력해 새 태그를 만들어보세요.' }));
+      };
+      input.addEventListener('input', renderList);
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = input.value.trim(); if (!v) return;
+        const exact = all.find((x) => x.name.toLowerCase() === v.toLowerCase());
+        if (exact) { if (!selIds().has(exact.id)) persistAdd(exact); input.value = ''; renderList(); }
+        else createAndAdd(v, PJV_TAG_COLORS[all.length % PJV_TAG_COLORS.length]);
+      });
+      renderChips(); renderList();
+    }
+
+    function showColor(tag, backQuery, onBack) {
+      const goBack = onBack || (() => showList(backQuery));
+      const back = el('button', { class: 'pjv-tm-tagcolor-back', type: 'button', title: '뒤로' }, pjvtmBackIcon());
+      back.onclick = goBack;
+      const nameIn = el('input', { type: 'text', class: 'pjv-tm-tagcolor-name', value: tag.name, maxlength: '40' });
+      const grid = el('div', { class: 'pjv-tm-tagcolor-grid' });
+      const syncLocal = () => {
+        all = all.map((a) => (a.id === tag.id ? { ...a, name: tag.name, color: tag.color } : a));
+        d.tags = (d.tags || []).map((x) => (x.id === tag.id ? { ...x, name: tag.name, color: tag.color } : x));
+      };
+      const renderGrid = () => {
+        grid.replaceChildren();
+        for (const c of PJV_TAG_COLORS) {
+          const sw = el('button', { class: 'pjv-tm-swatch' + (tag.color === c ? ' sel' : ''), type: 'button', style: 'background:' + c + ';color:' + c, 'aria-label': '색상' });
+          sw.onclick = () => applyColor(c);
+          grid.append(sw);
+        }
+        const none = el('button', { class: 'pjv-tm-swatch none' + (!tag.color ? ' sel' : ''), type: 'button', title: '색 없음' }, pjvtmNoneIcon());
+        none.onclick = () => applyColor(null);
+        grid.append(none);
+      };
+      const applyColor = async (c) => {
+        tag.color = c; renderGrid(); syncLocal(); renderField();
+        try { await api('/api/ui/v6/tags/' + tag.id, { method: 'POST', body: JSON.stringify({ color: c }) }); }
+        catch (e) { toast('실패 — ' + e.message, true); }
+      };
+      const rename = async () => {
+        const v = nameIn.value.trim(); if (!v || v === tag.name) return;
+        try { const r = await api('/api/ui/v6/tags/' + tag.id, { method: 'POST', body: JSON.stringify({ name: v }) }).then((x) => x.tag); tag.name = r.name; syncLocal(); renderField(); }
+        catch (e) { toast('이름 변경 실패 — ' + e.message, true); nameIn.value = tag.name; }
+      };
+      const del = el('button', { class: 'pjv-tm-tagdelete', type: 'button' }, pjvtmTrashIcon(), el('span', { text: 'Delete' }));
+      del.onclick = async () => {
+        if (!confirm("'" + tag.name + "' 태그를 삭제할까요?\n모든 태스크에서 제거됩니다.")) return;
+        try { await api('/api/ui/v6/tags/' + tag.id + '/delete', { method: 'POST', body: JSON.stringify({}) }); d.tags = (d.tags || []).filter((x) => x.id !== tag.id); await loadAll(); renderField(); goBack(); }
+        catch (e) { toast('삭제 실패 — ' + e.message, true); }
+      };
+      nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rename(); } });
+      nameIn.addEventListener('blur', rename);
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagcolor-top' }, back, nameIn),
+        grid,
+        el('div', { class: 'pjv-tm-tagcolor-sep' }),
+        del);
+      renderGrid();
+      setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+    }
+
+    // 모든 태그 관리(클릭업 Tag Manager 동형) — 워크스페이스 전체 태그를 한 곳에서 보고 이름·색상·삭제(모든 태스크 반영).
+    function showManageAll() {
+      const back = el('button', { class: 'pjv-tm-tagcolor-back', type: 'button', title: '뒤로' }, pjvtmBackIcon());
+      back.onclick = () => showList('');
+      const list = el('div', { class: 'pjv-tm-tagresults' });
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagcolor-top' }, back, el('div', { class: 'pjv-tm-tagmanage-title', text: '모든 태그 관리' })),
+        el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: all.length + '개 · 클릭해 이름·색상·삭제 (모든 태스크 반영)' })),
+        list);
+      if (!all.length) { list.append(el('div', { class: 'pjv-menu-empty', text: '아직 태그가 없습니다.' })); return; }
+      for (const x of all) {
+        const row = el('button', { class: 'pjv-tm-tagrow', type: 'button' },
+          el('span', { class: 'pjv-tm-tagdot', style: 'background:' + (x.color || PJV_TAG_NONE) }),
+          el('span', { class: 'pjv-tm-tagrow-name', text: x.name }),
+          el('span', { class: 'pjv-tm-tagrow-gear' }, pjvtmGearIcon()));
+        row.onclick = () => showColor(x, '', showManageAll);
+        list.append(row);
+      }
+    }
+
+    showList('');
+  }
+
+  // 설명 — 렌더(MD) ↔ 편집 토글.
+  function pjvtmDescription(t, refresh) {
+    const sec = el('div', { class: 'pjv-tm-desc' });
+    const hasDesc = !!(t.description && t.description.trim());
+    let editing = false;
+    const paint = () => {
+      sec.replaceChildren();
+      if (editing) {
+        const ta = el('textarea', { class: 'pjv-tm-desc-ta', rows: '6', placeholder: '설명을 입력하세요 (마크다운 지원)' });
+        ta.value = t.description || '';
+        const save = el('button', { class: 'btn btn-sm btn-primary', text: '저장' });
+        const cancel = el('button', { class: 'btn btn-sm btn-ghost', text: '취소' });
+        save.onclick = () => { editing = false; const v = ta.value; if (v !== (t.description || '')) pjvPatchTask(t.id, { description: v || null }, refresh); else paint(); };
+        cancel.onclick = () => { editing = false; paint(); };
+        sec.append(ta, el('div', { class: 'pjv-tm-desc-acts' }, save, cancel));
+        setTimeout(() => ta.focus(), 0);
+      } else if (hasDesc) {
+        const body = el('div', { class: 'pjv-tm-desc-body md-rendered' }, renderMarkdown(t.description));
+        body.onclick = () => { editing = true; paint(); };
+        sec.append(body);
+      } else {
+        const add = el('button', { class: 'pjv-tm-desc-add', type: 'button', text: '＋ 설명 추가' });
+        add.onclick = () => { editing = true; paint(); };
+        sec.append(add);
+      }
+    };
+    paint();
+    return sec;
+  }
+
+  // 하위 태스크 — 헤더(N open) + 행(상태점·이름클릭→그 하위 모달·담당·우선) + 인라인 추가.
+  function pjvtmSubtasks(d, t, members, refresh, pageReload) {
+    const subs = (t.subtasks || []);
+    const openCount = subs.filter((s) => s.status !== 'done').length;
+    const sec = el('div', { class: 'pjv-tm-block' });
+    if (t.level === 'subtask') return el('div'); // 하위태스크는 더 하위 없음(백엔드 제약)
+    sec.append(el('div', { class: 'pjv-tm-block-head' },
+      el('span', { class: 'pjv-tm-block-title', text: '하위 태스크' }),
+      el('span', { class: 'pjv-tm-block-count', text: openCount + ' open' })));
+    const tableHead = el('div', { class: 'pjv-tm-sub-head' },
+      el('span', { text: '이름' }), el('span', { text: '담당자' }), el('span', { text: '우선순위' }));
+    sec.append(tableHead);
+    for (const s of subs) {
+      const smeta = pjvStatusMeta(s.status);
+      const nameBtn = el('button', { class: 'pjv-tm-sub-name', type: 'button' },
+        el('span', { class: 'pjv-status-dot sm ' + smeta.cls }, smeta.glyph ? el('span', { class: 'pjv-status-glyph', text: smeta.glyph }) : null),
+        el('span', { class: (s.status === 'done' ? 'done' : ''), text: s.name }));
+      nameBtn.onclick = () => { dirty = true; pjvOpenTaskModal(s.id, pageReload); closeModal(); };
+      sec.append(el('div', { class: 'pjv-tm-sub-row' },
+        nameBtn,
+        el('div', { class: 'pjv-tm-sub-cell' }, pjvAssigneeControl(s, members, (p) => pjvSaveTask(s.id, p))),
+        el('div', { class: 'pjv-tm-sub-cell' }, pjvPriorityControl(s, (p) => pjvPatchTask(s.id, p, refresh)))));
+    }
+    // 인라인 추가
+    const addInput = el('input', { type: 'text', class: 'pjv-tm-sub-add', placeholder: '＋ 하위 태스크 추가 후 Enter', maxlength: '200' });
+    let subBusy = false;
+    const subCommit = async () => {
+      const name = addInput.value.trim();
+      if (!name || subBusy) return;
+      subBusy = true; addInput.disabled = true;
+      try { await api('/api/ui/v6/projects/' + d.project.id + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: t.id }) }); refresh(); }
+      catch (err) { toast('실패 — ' + err.message, true); addInput.disabled = false; subBusy = false; }
+    };
+    addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); subCommit(); } });
+    addInput.addEventListener('blur', () => { subCommit(); });
+    sec.append(addInput);
+    return sec;
+  }
+
+  // 의존성/연결 — 목록 + 추가(같은 프로젝트 내 검색).
+  function pjvtmLinks(d, t, refresh) {
+    const links = d.links || [];
+    const sec = el('div', { class: 'pjv-tm-block' });
+    sec.append(el('div', { class: 'pjv-tm-block-head' },
+      el('span', { class: 'pjv-tm-block-title', text: '의존성 / 연결' })));
+    if (links.length) {
+      const byType = {};
+      for (const l of links) (byType[l.type] = byType[l.type] || []).push(l);
+      for (const type of ['blocking', 'waiting_on', 'linked']) {
+        if (!byType[type]) continue;
+        const lt = PJV_LINK_TYPE[type];
+        for (const l of byType[type]) {
+          const lmeta = pjvStatusMeta(l.status);
+          sec.append(el('div', { class: 'pjv-tm-link-row' },
+            el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }),
+            el('span', { class: 'pjv-status-dot sm ' + lmeta.cls }, lmeta.glyph ? el('span', { class: 'pjv-status-glyph', text: lmeta.glyph }) : null),
+            el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }),
+            el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
+              onclick: async () => {
+                try { await api('/api/ui/v6/tasks/' + t.id + '/links', { method: 'POST', body: JSON.stringify({ to_task: l.id, type, remove: true }) }); refresh(); }
+                catch (e) { toast('실패 — ' + e.message, true); } } })));
+        }
+      }
+    }
+    const addBtn = el('button', { class: 'pjv-tm-block-add', type: 'button', text: '↻ 항목 연결 또는 의존성 추가' });
+    addBtn.onclick = (e) => { e.stopPropagation(); pjvtmLinkPop(addBtn, d, t, refresh); };
+    sec.append(addBtn);
+    return sec;
+  }
+  function pjvtmLinkPop(anchor, d, t, refresh) {
+    const pop = el('div', { class: 'pjv-menu pjv-tm-linkpop' });
+    const typeSel = el('select', { class: 'pjv-tm-linktype-sel' },
+      el('option', { value: 'blocking', text: '막고 있음 (blocking)' }),
+      el('option', { value: 'waiting_on', text: '기다리는 중 (waiting on)' }),
+      el('option', { value: 'linked', text: '연결됨 (linked)' }));
+    const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '연결할 태스크 검색', maxlength: '100' });
+    const results = el('div', { class: 'pjv-tm-tagresults' });
+    pop.append(typeSel, input, results);
+    const close = pjvPopover(anchor, pop);
+    setTimeout(() => input.focus(), 0);
+    const have = new Set((d.links || []).map((x) => x.id));
+    const run = (typeof debounce === 'function' ? debounce : (f) => f)(async () => {
+      const q = input.value.trim();
+      let targets = [];
+      try { targets = await api('/api/ui/v6/projects/' + d.project.id + '/link-targets?exclude=' + t.id + '&q=' + encodeURIComponent(q)).then((r) => (r && r.targets) || []); } catch (_) {}
+      const cand = targets.filter((x) => !have.has(x.id));
+      results.replaceChildren(...cand.slice(0, 10).map((x) => {
+        const m = pjvStatusMeta(x.status);
+        return el('button', { class: 'pjv-menu-item', type: 'button',
+          onclick: async () => {
+            try { await api('/api/ui/v6/tasks/' + t.id + '/links', { method: 'POST', body: JSON.stringify({ to_task: x.id, type: typeSel.value }) }); close(); refresh(); }
+            catch (e) { toast('실패 — ' + e.message, true); } } },
+          el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+          el('span', { text: x.name }));
+      }));
+      if (!cand.length) results.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '결과 없음' }));
+    }, 250);
+    input.addEventListener('input', run);
+    run();
+  }
+
+  // 체크리스트 — 목록(진행률) + 항목(체크·이름·삭제) + 항목추가 + 새 체크리스트.
+  function pjvtmChecklists(d, t, members, refresh) {
+    const lists = d.checklists || [];
+    const sec = el('div', { class: 'pjv-tm-block' });
+    sec.append(el('div', { class: 'pjv-tm-block-head' },
+      el('span', { class: 'pjv-tm-block-title', text: '체크리스트' })));
+    for (const cl of lists) {
+      const done = cl.items.filter((i) => i.done).length;
+      const clBox = el('div', { class: 'pjv-tm-cl' });
+      // 제목 — 클릭하면 인라인 입력으로 바뀌어 수정(rename). Enter/blur 저장, Esc 취소.
+      const nameEl = el('span', { class: 'pjv-tm-cl-name', text: cl.name, title: '클릭해 제목 수정', role: 'button', tabindex: '0' });
+      const editName = () => {
+        const inp = el('input', { type: 'text', class: 'pjv-tm-cl-nameedit', value: cl.name, maxlength: '120' });
+        nameEl.replaceWith(inp); inp.focus(); inp.select();
+        let fin = false;
+        const finish = async (save) => {
+          if (fin) return; fin = true;
+          const nv = inp.value.trim();
+          if (save && nv && nv !== cl.name) {
+            try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'rename', checklist_id: cl.id, name: nv }) }); cl.name = nv; nameEl.textContent = nv; }
+            catch (e) { toast('제목 수정 실패 — ' + e.message, true); }
+          }
+          inp.replaceWith(nameEl);
+        };
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { finish(false); } });
+        inp.addEventListener('blur', () => finish(true));
+      };
+      nameEl.onclick = editName;
+      nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') editName(); });
+      clBox.append(el('div', { class: 'pjv-tm-cl-head' },
+        nameEl,
+        el('span', { class: 'pjv-tm-cl-prog', text: done + '/' + cl.items.length }),
+        el('button', { class: 'pjv-tm-cl-x', type: 'button', title: '체크리스트 삭제', text: '✕',
+          onclick: async () => { if (!confirm('이 체크리스트를 삭제하겠습니까?\n하위 항목도 모두 사라집니다.')) return; try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'delete', checklist_id: cl.id }) }); refresh(); } catch (e) { toast('실패 — ' + e.message, true); } } })));
+      for (const it of cl.items) {
+        const cb = el('button', { class: 'pjv-tm-cl-check' + (it.done ? ' on' : ''), type: 'button', text: it.done ? '✓' : '',
+          onclick: async () => { try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'update_item', item_id: it.id, done: !it.done }) }); refresh(); } catch (e) { toast('실패 — ' + e.message, true); } } });
+        clBox.append(el('div', { class: 'pjv-tm-cl-item' }, cb,
+          el('span', { class: 'pjv-tm-cl-itemname' + (it.done ? ' done' : ''), text: it.name }),
+          el('button', { class: 'pjv-tm-cl-x', type: 'button', title: '항목 삭제', text: '✕',
+            onclick: async () => { try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'delete_item', item_id: it.id }) }); refresh(); } catch (e) { toast('실패 — ' + e.message, true); } } })));
+      }
+      const itemIn = el('input', { type: 'text', class: 'pjv-tm-cl-add', placeholder: '＋ 항목 추가 후 Enter', maxlength: '200' });
+      // Enter 로 연속 추가 — 전체 새로고침 대신 항목을 낙관적으로 붙이고 입력 포커스를 유지(커서가 안 사라짐).
+      itemIn.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter') return;
+        const name = itemIn.value.trim(); if (!name) return;
+        itemIn.value = ''; itemIn.focus();
+        try {
+          const res = await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'add_item', checklist_id: cl.id, name }) });
+          const updated = ((res && res.checklists) || []).find((c) => c.id === cl.id);
+          const it = updated && updated.items[updated.items.length - 1];
+          if (!it) { refresh(); return; }
+          const cb = el('button', { class: 'pjv-tm-cl-check', type: 'button', text: '',
+            onclick: async () => { try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'update_item', item_id: it.id, done: true }) }); refresh(); } catch (e2) { toast('실패 — ' + e2.message, true); } } });
+          clBox.insertBefore(el('div', { class: 'pjv-tm-cl-item' }, cb,
+            el('span', { class: 'pjv-tm-cl-itemname', text: it.name }),
+            el('button', { class: 'pjv-tm-cl-x', type: 'button', title: '항목 삭제', text: '✕',
+              onclick: async () => { try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'delete_item', item_id: it.id }) }); refresh(); } catch (e2) { toast('실패 — ' + e2.message, true); } } })), itemIn);
+          const prog = clBox.querySelector('.pjv-tm-cl-prog');
+          if (prog) prog.textContent = updated.items.filter((i) => i.done).length + '/' + updated.items.length;
+        } catch (err) { toast('실패 — ' + err.message, true); }
+      });
+      clBox.append(itemIn);
+      sec.append(clBox);
+    }
+    const addBtn = el('button', { class: 'pjv-tm-block-add', type: 'button', text: '✓ 체크리스트 만들기' });
+    addBtn.onclick = async () => {
+      const name = prompt('체크리스트 이름', '체크리스트'); if (name == null) return;
+      try { await api('/api/ui/v6/tasks/' + t.id + '/checklists', { method: 'POST', body: JSON.stringify({ action: 'create', name: name || '체크리스트' }) }); refresh(); }
+      catch (e) { toast('실패 — ' + e.message, true); }
+    };
+    sec.append(addBtn);
+    return sec;
+  }
+
+  // 첨부 파일 — 프로젝트 폴더 `_attachments/task-<id>/` 재사용(기존 파일 API: 멤버게이트·50MB·미리보기·다운로드).
+  //  의존성/연결·체크리스트와 같은 레벨의 블록. 업로드=authUpload(PUT), 목록=/files, 미리보기=openFileViewer, 삭제=DELETE.
+  function pjvtmAttachments(d, t, refresh) {
+    const sec = el('div', { class: 'pjv-tm-block' });
+    sec.append(el('div', { class: 'pjv-tm-block-head' },
+      el('span', { class: 'pjv-tm-block-title', text: '첨부 파일' })));
+    const pid = d.project && d.project.id;
+    const dir = '_attachments/task-' + t.id;
+    const base = '/api/ui/v6/projects/';
+    const listBox = el('div', { class: 'pjv-tm-att-list' });
+    sec.append(listBox);
+    (async () => {
+      if (pid == null) return;
+      let files = [];
+      try {
+        const r = await api(base + pid + '/files?path=' + encodeURIComponent(dir));
+        files = ((r && r.items) || []).filter((it) => it.type === 'file');
+      } catch (_) { /* 디렉터리 없음(404) = 첨부 없음 */ }
+      for (const f of files) {
+        const rel = dir + '/' + f.name;
+        listBox.append(el('div', { class: 'pjv-tm-att' },
+          el('span', { class: 'pjv-tm-att-ico', 'aria-hidden': 'true', text: '📎' }),
+          el('button', { class: 'pjv-tm-att-name', type: 'button', text: f.name,
+            onclick: () => openFileViewer(pid, rel, f.name, refresh, base) }),
+          el('span', { class: 'pjv-tm-att-size', text: fmtSize(f.size) }),
+          el('button', { class: 'pjv-tm-att-act', type: 'button', title: '다운로드', text: '↓',
+            onclick: () => authDownload(base + pid + '/file?download=1&path=' + encodeURIComponent(rel), f.name) }),
+          el('button', { class: 'pjv-tm-att-act danger', type: 'button', title: '삭제', text: '✕',
+            onclick: async () => {
+              if (!confirm('첨부 ‘' + f.name + '’을(를) 삭제할까요?')) return;
+              try { await api(base + pid + '/file?path=' + encodeURIComponent(rel), { method: 'DELETE' }); refresh(); }
+              catch (e) { toast('삭제 실패 — ' + e.message, true); } } })));
+      }
+    })();
+    const fileInput = el('input', { type: 'file', multiple: 'true', style: 'display:none' });
+    const addBtn = el('button', { class: 'pjv-tm-block-add', type: 'button', text: '📎 파일 첨부' });
+    fileInput.addEventListener('change', async () => {
+      const picked = Array.from(fileInput.files || []);
+      if (!picked.length || pid == null) return;
+      addBtn.disabled = true; addBtn.textContent = '업로드 중…';
+      try {
+        for (const file of picked) {
+          await authUpload(base + pid + '/file?path=' + encodeURIComponent(dir + '/' + file.name), file);
+        }
+        refresh();
+      } catch (e) { toast('업로드 실패 — ' + e.message, true); addBtn.disabled = false; addBtn.textContent = '📎 파일 첨부'; }
+    });
+    // 공유 프로젝트 폴더에서 첨부 — 폴더 브라우저 팝오버에서 파일을 고르면 그 파일을 이 태스크 첨부폴더로 복사한다.
+    const attachFromFolder = () => {
+      if (pid == null) { toast('프로젝트 폴더를 찾을 수 없어요', true); return; }
+      const crumb = el('div', { class: 'pjv-files-crumb' });
+      const rowsBox = el('div', { class: 'pjv-files-browser' });
+      const close = pjvPopover(addBtn, el('div', { class: 'pjv-field-editor pjv-files-editor' },
+        el('div', { class: 'pjv-files-head2', text: '공유 프로젝트 폴더에서 첨부' }), crumb, rowsBox));
+      let curPath = '';
+      const load = async () => {
+        rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+        let data;
+        try { data = await api(base + pid + '/files?path=' + encodeURIComponent(curPath)); }
+        catch (e) { rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '폴더를 불러오지 못했어요' })); return; }
+        crumb.replaceChildren(el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: '루트', onclick: () => { curPath = ''; load(); } }));
+        let acc = '';
+        for (const p of (curPath ? curPath.split('/') : [])) { acc = acc ? acc + '/' + p : p; const tg = acc; crumb.append(el('span', { class: 'pjv-files-crumb-sep', text: '/' }), el('button', { class: 'pjv-files-crumb-btn', type: 'button', text: p, onclick: () => { curPath = tg; load(); } })); }
+        rowsBox.replaceChildren();
+        const items = data.items || [];
+        if (!items.length) { rowsBox.append(el('div', { class: 'pjv-files-empty', text: '빈 폴더예요' })); return; }
+        for (const it of items) {
+          const childPath = curPath ? curPath + '/' + it.name : it.name;
+          if (it.type === 'dir') { rowsBox.append(el('button', { class: 'pjv-files-row dir', type: 'button', onclick: () => { curPath = childPath; load(); } }, fileIconSvg(it.name, true), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-chev', text: '›' }))); continue; }
+          rowsBox.append(el('button', { class: 'pjv-files-row file', type: 'button', onclick: async () => {
+            close(); addBtn.disabled = true; addBtn.textContent = '첨부 중…';
+            try {
+              const tok = localStorage.getItem(TOKEN_KEY);
+              const blob = await fetch(base + pid + '/file?download=1&path=' + encodeURIComponent(childPath), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} }).then((r) => { if (!r.ok) throw new Error('원본 읽기 실패 (' + r.status + ')'); return r.blob(); });
+              await authUpload(base + pid + '/file?path=' + encodeURIComponent(dir + '/' + it.name), new File([blob], it.name));
+              refresh();
+            } catch (e2) { toast('첨부 실패 — ' + e2.message, true); addBtn.disabled = false; addBtn.textContent = '📎 파일 첨부'; }
+          } }, fileIconSvg(it.name, false), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-size', text: fmtSize(it.size) })));
+        }
+      };
+      load();
+    };
+    // 📎 파일 첨부 → 출처 선택(내 컴퓨터 / 공유 프로젝트 폴더).
+    addBtn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(addBtn, menu);
+      const mk = (label, onPick) => { const b = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); onPick(); }; return b; };
+      menu.append(mk('내 컴퓨터에서 업로드', () => fileInput.click()));
+      menu.append(mk('공유 프로젝트 폴더에서 선택', attachFromFolder));
+    };
+    sec.append(fileInput, addBtn);
+    return sec;
+  }
+
+  // ── 우측(Activity) — 클릭업식: 댓글 카드(반응·Reply) + 시스템 이벤트(불릿·우측 시간) + 작성기(툴바). ──
+  function pjvtmSide(d, t, refresh) {
+    const side = el('div', { class: 'pjv-tm-side' });
+    let _filterMode = 'all';
+    const _searchIn = el('input', { type: 'text', class: 'pjv-tm-search-in', placeholder: '활동 검색…' });
+    const _searchWrap = el('div', { class: 'pjv-tm-search', hidden: true }, _searchIn);
+    const _applyActFilter = () => {
+      const fe = side.querySelector('.pjv-tm-feed'); if (!fe) return;
+      const qq = (_searchIn.value || '').trim().toLowerCase();
+      for (const ch of fe.children) {
+        if (ch.classList.contains('pjv-tm-feed-empty')) continue;
+        const isEv = ch.classList.contains('pjv-tm-ev');
+        let show = _filterMode === 'all' || (_filterMode === 'comments' && !isEv) || (_filterMode === 'events' && isEv);
+        if (show && qq) show = ch.textContent.toLowerCase().includes(qq);
+        ch.hidden = !show;
+      }
+    };
+    _searchIn.addEventListener('input', _applyActFilter);
+    const _searchBtn = el('button', { class: 'pjv-tm-side-icon', type: 'button', title: '활동 검색' }, pjvtmIcon('search'));
+    _searchBtn.onclick = () => { _searchWrap.hidden = !_searchWrap.hidden; _searchBtn.classList.toggle('on', !_searchWrap.hidden); if (!_searchWrap.hidden) _searchIn.focus(); else { _searchIn.value = ''; _applyActFilter(); } };
+    let _subscribed = false;
+    const _bellBtn = el('button', { class: 'pjv-tm-side-icon', type: 'button', title: '이 태스크 활동 구독' }, pjvtmIcon('bell'));
+    _bellBtn.onclick = () => { _subscribed = !_subscribed; _bellBtn.classList.toggle('on', _subscribed); toast(_subscribed ? '이 태스크 활동을 구독합니다' : '구독을 해제했습니다'); };
+    const _filterBtn = el('button', { class: 'pjv-tm-side-icon', type: 'button', title: '필터' }, pjvtmIcon('filter'));
+    _filterBtn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(_filterBtn, menu);
+      for (const opt of [['all', '전체'], ['comments', '댓글만'], ['events', '활동만']]) {
+        menu.append(el('button', { class: 'pjv-menu-item' + (_filterMode === opt[0] ? ' sel' : ''), type: 'button', text: opt[1],
+          onclick: () => { _filterMode = opt[0]; close(); _applyActFilter(); } }));
+      }
+    };
+    side.append(el('div', { class: 'pjv-tm-side-head' },
+      el('span', { text: 'Activity' }),
+      el('div', { class: 'pjv-tm-side-tools' }, _searchBtn, _bellBtn, _filterBtn)), _searchWrap);
+    const feedBox = el('div', { class: 'pjv-tm-feed' });
+    const feed = d.feed || [];
+    const ta = el('textarea', { class: 'pjv-tm-composer', rows: '1', placeholder: '댓글을 입력하세요…' });
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px'; };
+    ta.addEventListener('input', grow);
+    const insertAtCursor = (text) => {
+      const s = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+      const e = ta.selectionEnd == null ? ta.value.length : ta.selectionEnd;
+      ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+      const pos = s + text.length; ta.focus(); try { ta.setSelectionRange(pos, pos); } catch (_) { /* noop */ } grow();
+    };
+    const cctx = { taskId: t.id, projectId: d.project && d.project.id, members: d.members || [], replyTo: (name) => insertAtCursor('@' + name + ' ') };
+    if (!feed.length) feedBox.append(el('div', { class: 'pjv-tm-feed-empty', text: '아직 활동이 없습니다. 첫 댓글을 남겨보세요.' }));
+    for (const f of feed) feedBox.append(f.kind === 'comment' ? pjvtmComment(f, cctx) : pjvtmEvent(f));
+    side.append(feedBox);
+    setTimeout(() => { feedBox.scrollTop = feedBox.scrollHeight; }, 0);
+
+    const sendBtn = el('button', { class: 'pjv-tm-send', type: 'button', title: '보내기 (Enter)' }, pjvtmIcon('send'));
+    const send = async () => {
+      const text = ta.value.trim(); if (!text) return;
+      sendBtn.disabled = true; ta.disabled = true;
+      try { await api('/api/ui/v6/tasks/' + t.id + '/comments', { method: 'POST', body: JSON.stringify({ text }) }); ta.value = ''; refresh(); }
+      catch (e) { toast('실패 — ' + e.message, true); sendBtn.disabled = false; ta.disabled = false; }
+    };
+    sendBtn.onclick = send;
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    const toolbar = pjvtmComposerToolbar({ insertAtCursor, members: d.members || [], d, sendBtn });
+    side.append(el('div', { class: 'pjv-tm-composer-box' }, ta, toolbar));
+    return side;
+  }
+  function pjvtmComment(f, cctx) {
+    const name = f.display_name || f.actor || '알 수 없음';
+    let reactions = (f.reactions || []).map((r) => ({ emoji: r.emoji, count: r.count, mine: r.mine }));
+    const footer = el('div', { class: 'pjv-tm-c-foot' });
+    const toggle = (emoji) => {
+      const i = reactions.findIndex((r) => r.emoji === emoji);
+      if (i >= 0) {
+        if (reactions[i].mine) { reactions[i].count -= 1; reactions[i].mine = false; if (reactions[i].count <= 0) reactions.splice(i, 1); }
+        else { reactions[i].count += 1; reactions[i].mine = true; }
+      } else reactions.push({ emoji, count: 1, mine: true });
+      drawFoot();
+      api('/api/ui/v6/comments/' + f.id + '/reactions', { method: 'POST', body: JSON.stringify({ emoji }) })
+        .then((res) => { if (res && res.reactions) { reactions = res.reactions; drawFoot(); } })
+        .catch((e) => toast('반응 실패 — ' + e.message, true));
+    };
+    const drawFoot = () => {
+      footer.replaceChildren();
+      const left = el('div', { class: 'pjv-tm-c-react' });
+      for (const r of reactions) left.append(el('button', { class: 'pjv-tm-react-chip' + (r.mine ? ' mine' : ''), type: 'button', title: '반응 토글', onclick: () => toggle(r.emoji) }, el('span', { text: r.emoji }), el('span', { class: 'pjv-tm-react-n', text: String(r.count) })));
+      left.append(el('button', { class: 'pjv-tm-c-act', type: 'button', title: '좋아요', onclick: () => toggle('👍') }, pjvtmIcon('like')));
+      const emo = el('button', { class: 'pjv-tm-c-act', type: 'button', title: '이모지 반응' }, pjvtmIcon('smile'));
+      emo.onclick = () => pjvtmEmojiPicker(emo, (e) => toggle(e));
+      left.append(emo);
+      footer.append(left, el('button', { class: 'pjv-tm-c-reply', type: 'button', text: 'Reply', onclick: () => cctx.replyTo(name) }));
+    };
+    drawFoot();
+    const textDiv = el('div', { class: 'pjv-tm-c-text md-rendered' }, renderMarkdown(f.body || ''));
+    pjvtmWireFileLinks(textDiv, cctx);
+    return el('div', { class: 'pjv-tm-c' },
+      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(f.actor || name), text: initials(name) }),
+      el('div', { class: 'pjv-tm-c-body' },
+        el('div', { class: 'pjv-tm-c-meta' },
+          el('span', { class: 'pjv-tm-c-who', text: name }),
+          el('span', { class: 'pjv-tm-c-time', text: ' · ' + (typeof relTime === 'function' ? relTime(f.ts) : f.ts) })),
+        textDiv, footer));
+  }
+  function pjvtmEvent(f) {
+    const name = f.display_name || f.actor || '시스템';
+    let txt;
+    if (f.field === 'created') txt = '태스크를 생성';
+    else if (f.field === 'description') txt = '설명을 수정';
+    else {
+      const tv = pjvtmEventVal(f.field, f.to);
+      if (f.to == null) txt = f.label + ' 해제';
+      else txt = f.label + ' → ' + tv;
+    }
+    return el('div', { class: 'pjv-tm-ev' },
+      el('div', { class: 'pjv-tm-ev-main' },
+        el('span', { class: 'pjv-tm-ev-dot', text: '•' }),
+        el('span', { class: 'pjv-tm-ev-who', text: name }),
+        el('span', { class: 'pjv-tm-ev-txt', text: ' ' + txt })),
+      el('span', { class: 'pjv-tm-ev-time', text: (typeof relTime === 'function' ? relTime(f.ts) : f.ts) }));
+  }
+  function pjvtmEventVal(field, v) {
+    if (v == null || v === '') return '';
+    if (field === 'status') return (pjvStatusMeta(v).label) || v;
+    if (field === 'priority') return (PJV_PRIORITY[v] && PJV_PRIORITY[v].label) || v;
+    if (field === 'assignee') return v;
+    return String(v);
+  }
+}
+
+// ── 태스크 행 제목 클릭 → 상세 모달 배선(몽키패치) ──
+//  동시 리팩터되는 pjvTaskRow 를 인플레이스 편집하지 않고 감싼다(append-only, 그쪽 작업 무손상).
+//  pjvTaskRow(projectId, t, members, reload, depth, fields[, …]) 의 인자 위치만 의존(t=1, reload=3) — 가변인자 보존.
+(function () {
+  if (typeof pjvTaskRow !== 'function' || pjvTaskRow.__tmWrapped) return;
+  const _origPjvTaskRow = pjvTaskRow;
+  pjvTaskRow = function (...args) {
+    const node = _origPjvTaskRow.apply(this, args);
+    try {
+      const t = args[1], reload = args[3];
+      const titleEl = node && node.querySelector ? node.querySelector('.pjv-trow-title') : null;
+      if (titleEl && t && t.id != null && !titleEl.dataset.tmWired) {
+        titleEl.dataset.tmWired = '1';
+        titleEl.classList.add('clickable');
+        titleEl.title = '상세 열기';
+        titleEl.addEventListener('click', function (e) { e.stopPropagation(); pjvOpenTaskModal(t.id, reload); });
+      }
+    } catch (_) { /* 구조 달라도 무해 */ }
+    return node;
+  };
+  pjvTaskRow.__tmWrapped = true;
+})();
+
+// ── 태스크 제목: 클릭=상세 모달 / 더블클릭=하위 태스크 추가(클릭업식). 위 모달 배선과 공존하도록 감싼다(append-only). ──
+//  같은 click 을 행의 캡처 단계에서 가로채 단일/더블 구분 — 위 래퍼의 제목 click(모달)을 stopImmediatePropagation 으로
+//  눌러두고: 1회=240ms 뒤 모달, 2회=하위 태스크 인라인 추가. depth 0(태스크)만. 셀/컨트롤 클릭은 그대로 통과.
+(function () {
+  if (typeof pjvTaskRow !== 'function' || pjvTaskRow.__cfDblWrapped) return;
+  const _inner = pjvTaskRow;
+  pjvTaskRow = function (...args) {
+    const node = _inner.apply(this, args);
+    try {
+      const projectId = args[0], t = args[1], reload = args[3], depth = args[4] || 0;
+      if (depth === 0 && node && node.querySelector) {
+        const rowEl = node.querySelector('.pjv-trow');
+        const titleEl = node.querySelector('.pjv-trow-title');
+        const subBox = node.querySelector('.pjv-trow-subs');
+        if (rowEl && titleEl && subBox && t && t.id != null && !rowEl.dataset.cfDbl) {
+          rowEl.dataset.cfDbl = '1';
+          titleEl.title = '클릭: 상세 열기 · 더블클릭: 하위 태스크 추가';
+          let clicks = 0, timer = null;
+          rowEl.addEventListener('click', function (e) {
+            if (!e.target.closest('.pjv-trow-title')) return; // 제목 클릭만 가로챔(셀/컨트롤은 통과)
+            e.stopImmediatePropagation(); e.preventDefault();
+            clicks++;
+            if (clicks === 1) {
+              timer = setTimeout(function () { clicks = 0; if (typeof pjvOpenTaskModal === 'function') pjvOpenTaskModal(t.id, reload); }, 240);
+            } else {
+              clearTimeout(timer); clicks = 0;
+              subBox.hidden = false;
+              const car = rowEl.querySelector('.pjv-trow-caret');
+              if (car && car.tagName === 'BUTTON') { car.textContent = '▾'; car.setAttribute('aria-expanded', 'true'); }
+              pjvShowInlineSubtask(projectId, t, subBox, reload);
+            }
+          }, true); // 캡처 — 제목 자체 click(모달) 리스너보다 먼저
+        }
+      }
+    } catch (_) { /* 구조 달라도 무해 */ }
+    return node;
+  };
+  pjvTaskRow.__cfDblWrapped = true;
+})();
+
+// 액티비티 헤더용 아이콘 추가(맵 정의 비파괴 — 키만 보강).
+PJV_TM_ICONS.search = { p: [['circle', { cx: 11, cy: 11, r: 7 }], ['line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }]] };
+PJV_TM_ICONS.bell = { p: [['path', { d: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9' }], ['path', { d: 'M13.73 21a2 2 0 0 1-3.46 0' }]] };
+PJV_TM_ICONS.filter = { p: [['line', { x1: 4, y1: 7, x2: 20, y2: 7 }], ['line', { x1: 7, y1: 12, x2: 17, y2: 12 }], ['line', { x1: 10, y1: 17, x2: 14, y2: 17 }]] };

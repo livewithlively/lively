@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { LivelyUser } from "../context.js";
 import { verifyDbToken } from "../org/store.js";
+import { isScope, DANGEROUS_SCOPES, type Scope } from "../capabilities/scopes.js";
+import { logger } from "../log.js";
 
 const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
 
@@ -26,6 +28,28 @@ function loadTokens(): TokenTable {
   return JSON.parse(raw) as TokenTable;
 }
 
+// P2: 정적 토큰(AUTH_TOKENS_JSON)은 회수 불가 → 사람·특권용으로 부적합. 로드 시 위험 scope(admin/runtime)를
+//  떨궈 정적 토큰이 절대 특권을 띠지 못하게 한다(B5 가 쓰기를 막는 것의 읽기측 보강 — canEdit 도 false 로 일관).
+//  사람형 principal 이 남아 있으면 회수가능 DB 토큰/로그인으로 이전하라고 경고한다.
+function sanitizeStaticTokens(table: TokenTable): TokenTable {
+  const principals: string[] = [];
+  for (const user of Object.values(table)) {
+    const scopes = Array.isArray(user.scopes) ? user.scopes.filter(isScope) : [];
+    const dangerous = scopes.filter((s) => DANGEROUS_SCOPES.has(s as Scope));
+    if (dangerous.length) {
+      logger.warn({ userId: user.userId, dropped: dangerous },
+        "정적 토큰에서 위험 scope 제거 — 정적 토큰은 admin/runtime 불가(회수 가능한 DB 토큰을 쓰세요)");
+    }
+    user.scopes = scopes.filter((s) => !DANGEROUS_SCOPES.has(s as Scope));
+    principals.push(user.userId);
+  }
+  if (principals.length) {
+    logger.warn({ principals },
+      "AUTH_TOKENS_JSON 정적 토큰 사용 중(회수 불가) — 사람 로그인/회수가능 DB 토큰으로 이전 권장(P2)");
+  }
+  return table;
+}
+
 function authInfo(user: LivelyUser, token: string): AuthInfo {
   return {
     token,
@@ -45,7 +69,7 @@ export class BearerVerifier {
   private tokens: TokenTable;
 
   constructor() {
-    this.tokens = loadTokens();
+    this.tokens = sanitizeStaticTokens(loadTokens());
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {

@@ -11,7 +11,6 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
-import { getProject, listProjectActivities, isProjectMember } from "./org/store.js";
 import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
 
@@ -222,17 +221,6 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     res.setHeader("Cache-Control", "no-store");
     res.json({ activities: await deps.listProjectActivities(id, authorPerson, limit) });
   }));
-}
-
-// org(org_project) 라우트 등록. 기본 export — index.ts 가 호출.
-export function registerProjectRoutes(app: express.Express, verifier: BearerVerifier): void {
-  const auth = requireBearerAuth({ verifier });
-  mountProjectRoutes(app, auth, {
-    prefix: "/api/ui/projects",
-    getProject: (id) => getProject(id),
-    isProjectMember: (id, m) => isProjectMember(id, m),
-    listProjectActivities: (id, a, l) => listProjectActivities(id, a, l),
-  });
 }
 
 // v6(project) 라우트 등록 — 같은 파일/세션/타임라인 로직, 데이터만 v6. ensureFolder 로 폴더 lazy 생성.

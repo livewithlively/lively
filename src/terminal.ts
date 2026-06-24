@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
-import { wrap, HttpError } from "./capabilities/rest-util.js";
+import { wrap } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
 import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";

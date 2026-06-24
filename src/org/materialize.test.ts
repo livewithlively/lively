@@ -3,7 +3,7 @@
 // V4-P3 재작성: v4 주입 = R(규칙) 전문 항상주입 + area 지도 + 쓰기 가이드. recalled 제목리스트·중요도캡·
 //  observed 인덱스제외·distill 제외절은 폐기됐다(아래 케이스가 그 폐기 동작을 검증). WYSIWYG(결정적·중복없음) 유지.
 import assert from "node:assert/strict";
-import { buildKnowledgeIndex, WRITE_GUIDE_BLOCK, type CategoryMapEntry } from "./materialize.js";
+import { buildKnowledgeIndex, type CategoryMapEntry } from "./materialize.js";
 import type { KnowledgeRow } from "../v6/knowledge-store.js";
 
 let pass = 0;
@@ -123,12 +123,11 @@ t("wiki-c: 대표 category 없는 핀은 칩 없이 소환키 — 제목", () =>
   assert.ok(!idx.includes("분류없음 ·"), "칩 구분자 미출력");
 });
 
-// ── (v4-e) 쓰기 가이드 블록은 항상 박힌다(plan §J — 언제/어디/무엇/분류/외부). ──
-t("v4-e: 쓰기 가이드 블록이 항상 주입된다(빈 입력에도)", () => {
+// ── (v4-e) 맥락 로드/기록 가이드는 항상 박힌다(빈 입력에도) — 06-23 재설계로 단일 템플릿에 통합(구 WRITE_GUIDE_BLOCK 폐기). ──
+t("v4-e: 맥락 로드/기록 가이드가 항상 주입된다(빈 입력에도)", () => {
   const idx = buildKnowledgeIndex([], []);
-  assert.ok(idx.includes(WRITE_GUIDE_BLOCK), "WRITE_GUIDE_BLOCK 전체가 주입");
-  assert.ok(idx.includes("## 지식 쓰기 가이드"), "가이드 헤더");
-  assert.ok(idx.includes("ctx_save"), "어디=ctx_save 안내");
+  assert.ok(idx.includes("## 맥락 로드/기록 가이드"), "로드/기록 가이드 헤더");
+  assert.ok(idx.includes("knowledge_save"), "기록=knowledge_save 안내");
   assert.ok(idx.includes("미러"), "외부=미러 안내");
 });
 
@@ -194,7 +193,7 @@ t("v4-i: 멱등 — 같은 입력 2회 호출 byte-identical(중복 누적 0)", 
   assert.equal((a.match(/# Knowledge Index/g) ?? []).length, 1, "헤더 정확히 1개");
   assert.equal((a.match(/## 강제 규칙/g) ?? []).length, 1, "R 섹션 헤더 1개");
   assert.equal((a.match(/## 카테고리/g) ?? []).length, 1, "카테고리 지도 헤더 1개");
-  assert.equal((a.match(/## 지식 쓰기 가이드/g) ?? []).length, 1, "쓰기 가이드 헤더 1개");
+  assert.equal((a.match(/## 맥락 로드\/기록 가이드/g) ?? []).length, 1, "로드/기록 가이드 헤더 1개");
 });
 
 // ── (v4-j) R sort→name 결정적 순서(WYSIWYG 안정성). ──

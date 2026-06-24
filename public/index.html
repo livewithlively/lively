@@ -50,17 +50,20 @@
 <body>
 
 <!-- 스킵 링크 — 해시 라우터와 충돌하지 않게 JS 가 포커스만 이동(app.js) -->
-<a id="skip-link" class="skip-link" href="#/map">본문 바로가기</a>
+<a id="skip-link" class="skip-link" href="#/knowledge">본문 바로가기</a>
 
-<!-- 토큰 게이트 — 토큰 없거나 401 시 표시 -->
+<!-- 로그인 게이트 — 미인증(세션·토큰 없음)이거나 401 시 표시 -->
 <section id="gate" hidden>
   <div class="gate-card">
     <div class="wordmark gate-mark">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub">Context</span></div>
-    <p class="gate-copy">사내 액세스 토큰을 입력하세요.<br>토큰은 이 브라우저에만 저장됩니다.</p>
+    <p class="gate-copy">회사 계정으로 로그인하세요.</p>
     <form id="gate-form">
-      <input id="gate-input" type="password" autocomplete="off" placeholder="액세스 토큰" aria-label="액세스 토큰">
+      <input id="gate-email" type="email" autocomplete="username" placeholder="이메일" aria-label="이메일">
+      <input id="gate-password" type="password" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
+      <input id="gate-input" type="password" autocomplete="off" placeholder="액세스 토큰" aria-label="액세스 토큰" hidden>
       <p id="gate-error" class="gate-error" hidden></p>
-      <button type="submit" class="btn btn-primary gate-btn">저장</button>
+      <button type="submit" class="btn btn-primary gate-btn">로그인</button>
+      <button type="button" id="gate-token-toggle" class="gate-token-toggle">토큰으로 로그인 (고급)</button>
     </form>
   </div>
 </section>
@@ -80,12 +83,11 @@
     <div class="topbar-right">
       <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
       <span class="user-email" id="user-email"></span>
+      <button type="button" id="logout-btn" class="logout-btn" hidden>로그아웃</button>
     </div>
   </header>
   <main id="view"></main>
-  <footer class="app-foot">
-    <span class="sync-chip" id="sync-chip" hidden><span class="dot-static" aria-hidden="true"></span><span id="sync-label"></span></span>
-  </footer>
+  <footer class="app-foot"></footer>
 </div>
 
 <div id="toasts" aria-live="polite"></div>

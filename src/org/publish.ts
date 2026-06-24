@@ -77,18 +77,10 @@ export async function runPublish(outDir: string, harness = "claude"): Promise<Pu
     let artifactBytes = 0;
     try { artifactBytes = (await readFile(join(outDir, "AGENTS.md"))).byteLength; } catch { /* 무시 */ }
     const warning = artifactBytes > 32 * 1024 ? "AGENTS.md 가 32KiB 를 초과 — Codex 한도 주의" : undefined;
-    // P-V3-5 Part A: 오프라인 폴백 context.md 도 발행물에 함께 굳힌다 — DB-materialize 한 같은 트리에서
-    //  buildStaticContext 로 구워, AGENTS.md(=generator 발행)와 동일 DB Knowledge Index 를 갖는 단일소스.
-    //  설치기(user-install.mjs)가 발행물 context.md 를 ~/.lively/context.md 로 복사(AGENTS.md 파생 대신).
-    //  멱등: 같은 DB 상태 → byte-identical(buildKnowledgeIndex 결정적). 재발행이 인덱스 중복 누적 안 함.
-    try {
-      const buildStaticContext = await loadBuildStaticContext();
-      const { context } = buildStaticContext(mat.dir, mat.orgName);
-      await writeFile(join(outDir, "context.md"), context);
-    } catch (err) {
-      // fail-soft: context.md 굽기 실패해도 발행 자체는 성공(설치기가 AGENTS.md 파생으로 폴백).
-      logger.warn({ err }, "정적 context.md 발행 실패 — 설치기가 AGENTS.md 파생으로 폴백");
-    }
+    // 정적 context.md 는 더는 발행물에 굽지 않는다(2026-06-24, 동적 전달 컷오버) — 멤버 세션 훅(session-preload)이
+    //  매 세션 /api/ui/org/preview 를 받아 ~/.lively/context.md 로 **write-back 캐시**한다(다운/오프라인 폴백 = 직전 성공분).
+    //  설치 시 1회 floor 는 user-install 이 AGENTS.md 파생으로 시드(첫 세션 전). buildStaticContext 는
+    //  라이브 엔드포인트(materializeStaticContext)에서만 계속 쓰인다 — 번들 베이킹 아님.
     return { ok: true, artifactBytes, log: r.stdout.trim(), warning };
   } finally {
     await mat.cleanup().catch((err) => logger.warn({ err }, "materialize 임시디렉토리 정리 실패"));
@@ -119,6 +111,13 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
     if (!res.ok) throw new Error("발행 아티팩트 생성 실패");
     // 런타임 설정/ MCP 목록을 번들 .lively/ 에 주입(DB → 설치기가 ~/.lively 로 복사).
     await writeRuntimeBundle(stage);
+    // 동적 전달 컷오버(2026-06-24): org-콘텐츠는 번들에 굽지 않는다 — 설치기(install-time 라이브 fetch)+세션 훅(write-back 캐시)이
+    //  ~/.lively/context.md · ~/.codex/AGENTS.md 를 라이브로 시드·갱신한다. generator 가 낸 정적 콘텐츠/병행-경로 파일은 stage 에서
+    //  제거하고 부트스트랩(.claude/hooks·settings, setup, .lively, .lively-org-name, README)만 tar 한다.
+    //  (generator 의 콘텐츠 생성 자체를 스킵하는 최적화는 후속 — 지금은 shipped 번들만 슬림.)
+    for (const p of ["AGENTS.md", "CLAUDE.md", "context.md", "memory", "org"]) {
+      await rm(join(stage, p), { recursive: true, force: true }).catch(() => { /* 없으면 무시 */ });
+    }
     // tar -czf - -C <stage> .  → stdout 로 받기.
     const buf = await new Promise<Buffer>((resolve, reject) => {
       const child = spawn("tar", ["-czf", "-", "-C", stage, "."]);
