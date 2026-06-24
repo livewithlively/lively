@@ -1352,17 +1352,19 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
   padding: 8px 6px;
   margin-top: 8px;
   border-bottom: 1px solid var(--line);
-  font-size: 12.5px; font-weight: 700; color: var(--muted-head);
+  font-size: 13.5px; font-weight: 700; color: var(--ink-sub);
+  letter-spacing: .1px;
 }
 .pjv-thead .pjv-tcell { padding-left: 2px; }
 
-/* 상태 그룹 */
-.pjv-tgroup { margin-top: 8px; }
-.pjv-tgroup-head { display: flex; align-items: center; gap: 7px; padding: 7px 6px; }
-.pjv-tgroup-caret { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 10px; padding: 0; border-radius: 4px; }
+/* 상태 그룹 — 얇은 밑줄 한 줄로만 섹션 구분(채운 바 금지). caret 은 라벨 오른쪽 끝으로. */
+.pjv-tgroup { margin-top: 16px; }
+.pjv-tgroup-head { display: flex; align-items: center; gap: 8px; padding: 5px 4px 7px; border-bottom: 1px solid var(--line); }
+.pjv-tgroup-caret { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 10px; padding: 0; border-radius: 4px; }
 .pjv-tgroup-caret:hover { color: var(--ink); background: var(--bg-tint); }
-.pjv-tgroup-label { font-size: 14px; font-weight: 700; color: var(--ink-sub); }
+.pjv-tgroup-label { font-size: 15px; font-weight: 700; color: var(--ink); letter-spacing: -.1px; }
 .pjv-tgroup-count { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+.pjv-tgroup-body { padding-top: 2px; }
 .pjv-tgroup-body[hidden] { display: none; }
 
 /* 한 행 */
@@ -1389,33 +1391,37 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 컬럼 셀 + 인라인 편집 버튼 */
 .pjv-tcell { display: flex; align-items: center; min-width: 0; }
 .pjv-tcell-add { justify-content: center; }
-.pjv-cell-btn { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: none; background: none; cursor: pointer; padding: 4px 7px; border-radius: 7px; font-size: 13.5px; color: var(--ink-sub); }
+.pjv-cell-btn { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: none; background: none; cursor: pointer; padding: 4px 7px; border-radius: 7px; font-size: 14px; color: var(--ink-sub); }
 .pjv-cell-btn:hover { background: var(--bg-tint-2); }
 .pjv-cell-btn.empty { color: var(--muted-3); }
-.pjv-cell-ph { font-size: 14px; line-height: 1; color: var(--muted-3); }
-.pjv-cell-btn:hover .pjv-cell-ph { color: var(--muted); }
-.pjv-cell-ph.sm { width: 16px; text-align: center; }
+.pjv-cell-ph { font-size: 17px; line-height: 1; color: var(--muted-2); }
+.pjv-cell-btn:hover .pjv-cell-ph { color: var(--blue); }
+.pjv-cell-ph.sm { width: 16px; text-align: center; font-size: 14px; }
 
 /* 담당자 아바타 */
 .pjv-ava { flex: none; width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 
 /* 마감일 */
-.pjv-due-text { font-size: 13.5px; color: var(--ink-sub); font-weight: 600; }
+.pjv-due-text { font-size: 14px; color: var(--ink-sub); font-weight: 600; }
 .pjv-due-text.overdue { color: var(--coral-text); }
 
 /* 우선순위 깃발 */
 .pjv-flag { display: inline-flex; align-items: center; gap: 4px; }
-.pjv-flag-glyph { font-size: 13px; line-height: 1; }
-.pjv-flag-label { font-size: 13px; font-weight: 600; }
+.pjv-flag-glyph { font-size: 14.5px; line-height: 1; }
+.pjv-flag-label { font-size: 13.5px; font-weight: 600; }
 .pjv-flag.urgent { color: var(--coral-text); }
 .pjv-flag.high { color: #E08A2B; }
 .pjv-flag.normal { color: var(--blue); }
 .pjv-flag.low { color: var(--muted-2); }
 
-/* + 하위 */
-.pjv-trow-addsub { flex: none; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--muted-3); padding: 0; width: 22px; height: 22px; border-radius: 6px; opacity: 0; transition: opacity .12s ease; }
-.pjv-trow:hover .pjv-trow-addsub { opacity: 1; }
-.pjv-trow-addsub:hover { color: var(--blue); background: var(--bg-tint); }
+/* 행 오른쪽 끝 ⋯ 더보기 버튼(클릭업식) — 평소 숨김, 행 hover 시 노출. */
+.pjv-trow-more { flex: none; border: none; background: none; cursor: pointer; font-size: 17px; line-height: 1; color: var(--muted-2); padding: 0; width: 26px; height: 24px; border-radius: 6px; opacity: 0; transition: opacity .12s ease; }
+.pjv-trow:hover .pjv-trow-more { opacity: 1; }
+.pjv-trow-more:hover { color: var(--ink); background: var(--bg-tint); }
+.pjv-trow-more:focus-visible { opacity: 1; }
+/* 이름 변경 팝오버 입력 */
+.pjv-rename-pop { padding: 5px; }
+.pjv-rename-input { width: 210px; font-size: 13.5px; padding: 6px 9px; border: 1px solid var(--line-net); border-radius: 7px; color: var(--ink); font-family: inherit; }
 
 /* 인라인 추가행(클릭업식) + 빈 상태 */
 .pjv-task-total { font-size: 12px; font-weight: 600; color: var(--muted-2); }
@@ -1490,6 +1496,14 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ps-rules-ta:focus { outline: none; border-color: var(--blue); background: #fff; }
 .ps-rules-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .ps-save-status { font-size: 12px; }
+/* 참고 파일 목록 */
+.ps-refs-list { display: flex; flex-direction: column; margin: 2px 0; }
+.ps-refs-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line-row); }
+.ps-refs-row:last-child { border-bottom: none; }
+.ps-refs-ic { flex: none; width: 18px; height: 18px; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+.ps-refs-ic .fic { width: 18px; height: 18px; }
+.ps-refs-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ps-refs-sz { flex: none; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .ps-kn-group { margin-top: 6px; }
 .ps-kn-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ps-kn-acts { display: flex; gap: 6px; flex: none; }
@@ -1548,14 +1562,14 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 공유 폴더 — 가로 카드 그리드(6열 균등 + 횡스크롤), 큰 아이콘. 파일 클릭 → 뷰어/편집 팝업. */
 .proj-file-grid { display: flex; flex-wrap: nowrap; gap: 12px; overflow-x: auto; padding: 8px 2px 14px; }
 /* 맥 데스크탑 아이콘 느낌 — 박스 없이 큰 아이콘 + 이름, 호버 시 은은한 선택 배경. */
-.proj-file-card { flex: 0 0 104px; display: flex; flex-direction: column; align-items: center; gap: 7px; border: none; border-radius: 10px; padding: 12px 6px 10px; cursor: pointer; background: transparent; transition: background .12s ease; }
+.proj-file-card { flex: 0 0 124px; display: flex; flex-direction: column; align-items: center; gap: 8px; border: none; border-radius: 10px; padding: 14px 6px 12px; cursor: pointer; background: transparent; transition: background .12s ease; }
 .proj-file-card:hover { background: var(--bg-sel); }
 .proj-file-card:active { background: var(--bg-tint-2); }
-.proj-file-card-ic { height: 52px; display: flex; align-items: center; justify-content: center; }
+.proj-file-card-ic { height: 72px; display: flex; align-items: center; justify-content: center; }
 .proj-file-card-ic .ft { filter: drop-shadow(0 1px 2px rgba(21, 35, 59, .12)); }
-.proj-file-card-ic .ft-file { width: 41px; height: 49px; }
-.proj-file-card-ic .ft-folder { width: 54px; height: auto; }
-.proj-file-card-ic .ft-img { width: 50px; height: 50px; }
+.proj-file-card-ic .ft-file { width: 57px; height: 68px; }
+.proj-file-card-ic .ft-folder { width: 76px; height: auto; }
+.proj-file-card-ic .ft-img { width: 70px; height: 70px; }
 /* ── 파일 미리보기(.ft) — 문서 색 아이콘 · 이미지 썸네일 · 폴더 ── */
 .ft { display: block; }
 .ft-page { fill: #fff; stroke: var(--line-net); stroke-width: 1; }

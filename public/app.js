@@ -81,7 +81,7 @@ const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대
 // 작업(activity) 유형 라벨 — 백엔드 activity.type(commit/comment/decision/status_change/review)과 1:1. 작업 현황 대시보드 유형분포 표시용.
 const ACTIVITY_TYPE_LABEL = { commit: '커밋', comment: '코멘트', decision: '결정', status_change: '상태 변경', review: '검토' };
 const ACTIVITY_TYPE_ORDER = ['commit', 'comment', 'decision', 'status_change', 'review'];
-// 작업↔지식 연결 관계 라벨(activity_ku_ref.relation) — produced=산출, references=참조, decided=결정 근거.
+// 작업↔지식 연결 관계 라벨(activity_knowledge.relation) — produced=산출, references=참조, decided=결정 근거.
 const REF_REL_LABEL = { produced: '산출', references: '참조', decided: '결정' };
 // should/is 점검 결과 라벨(activity.should_review/is_review) — 도메인 의도(should)·코드구조(is) 점검 3-state.
 const REVIEW_LABEL = { na: '해당 없음', checked_no_change: '점검함(변화 없음)', changed: '변경됨' };
@@ -104,6 +104,9 @@ let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0;            // datalist 등 고유 id 카운터
 
 // ── DOM 헬퍼 ──
+// 불리언 HTML 속성 — 존재만으로 참이라 setAttribute(k, false) 로는 끌 수 없다(값 'false' 여도 켜진 상태).
+//  el 에서 이들만 특수처리: 불리언 false → 미설정(끔), 그 외(true·'' 등) → 빈 속성으로 존재(켬).
+const EL_BOOL_ATTRS = new Set(['disabled', 'hidden', 'checked', 'selected', 'readonly', 'required', 'multiple', 'open', 'autofocus']);
 function el(tag, attrs, ...children) {
   const n = document.createElement(tag);
   if (attrs) {
@@ -112,6 +115,7 @@ function el(tag, attrs, ...children) {
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
       else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else if (EL_BOOL_ATTRS.has(k)) { if (v !== false) n.setAttribute(k, ''); } // false 만 끔('' / true 는 켬)
       else n.setAttribute(k, v);
     }
   }
@@ -514,309 +518,18 @@ function confidenceDot(confidence) {
 // ════════════════════════════════════════════
 // '회사 맥락' 상위 탭의 가로 중분류(지도·탐색·검토) — 관리 탭 .admin-cats 와 같은 패턴.
 //  세 하위뷰(renderMap/Browse/Review) 맨 위에 동일하게 깔아 한 탭처럼 묶는다. 검토 대기 배지는 상위 탭(updateReviewBadge).
-const CTX_SUBS = [
-  { key: 'map', label: '지도', href: '#/map' },
-  { key: 'browse', label: '탐색', href: '#/browse' },
-  { key: 'review', label: '검토', href: '#/review' },
-];
-function ctxSubBar(active) {
-  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '회사 맥락' });
-  for (const s of CTX_SUBS) {
-    const on = s.key === active;
-    const a = el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label });
-    if (s.key === 'review') { // 하위 칩에도 검토 대기 건수(상위 탭 배지와 별개)
-      const n = state.overview ? state.overview.review_pending : 0;
-      if (n > 0) a.append(el('span', { class: 'tab-count', text: String(n) }));
-    }
-    bar.append(a);
-  }
-  return bar;
-}
 
 // '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
 const START_SUBS = [
   { key: 'install', label: '설치', href: '#/install' },
   { key: 'learn', label: '사용설명서', href: '#/learn' },
 ];
-function startSubBar(active) {
-  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '시작하기' });
-  for (const s of START_SUBS) {
-    const on = s.key === active;
-    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label }));
-  }
-  return bar;
-}
-
-async function renderMap(view) {
-  view.replaceChildren(skeleton('지식 지도를 불러오는 중'));
-  const o = await getOverview(true);
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '지식 ', el('span', { class: 'accent', text: '지도' })),
-    el('p', { class: 'sub', text: '회사의 살아있는 맥락을 종류(kind)별로 한눈에. 폴더(종류)를 열면 그 안의 지식 단위를 볼 수 있습니다.' }),
-  );
-
-  // 시스템 건강 — 조용한 숫자 + 여백(§0.5 제품 히어로). total_active 는 큐레이션(observed 제외),
-  //  수집물(observed_count)은 커넥터 원천이라 별도 카운트로 분리 노출(H2 — 큐레이션과 섞지 않음).
-  const healthStats = [
-    stat(fmtNum(o.total_active), '활성 지식 단위', '건'),
-    stat(fmtNum(o.kinds.filter((k) => k.active_count > 0).length), '사용 중인 종류', '/ ' + o.kinds.length),
-  ];
-  if (o.observed_count > 0) healthStats.push(collectedStat(o.observed_count));
-  healthStats.push(reviewStat(o.review_pending));
-  const health = el('div', { class: 'card health-card' },
-    el('div', { class: 'stat-row' }, ...healthStats),
-  );
-
-  // kind 카드 그리드 — 라벨·active수·injection_mode·최신성.
-  const grid = el('div', { class: 'kind-grid' });
-  const cards = [];
-  for (const k of o.kinds) {
-    const meta = kindMeta(k.kind);
-    const fed = isFederatedKind(k.kind);
-    const card = el('a', {
-      class: 'kind-card' + (k.active_count === 0 ? ' empty' : ''),
-      href: '#/browse?kind=' + encodeURIComponent(k.kind),
-      role: 'link', tabindex: '0',
-    },
-      el('div', { class: 'kind-card-top' },
-        el('span', { class: 'kind-glyph', 'aria-hidden': 'true', text: k.kind }),
-        fed
-          ? el('span', { class: 'kind-inject', title: 'domainmap 파생(ku 종류 아님) — 읽기 전용으로 표시', text: 'federated' })
-          : el('span', { class: 'kind-inject', title: INJECTION_HINT[k.injection_mode] || '', text: INJECTION_LABEL[k.injection_mode] || k.injection_mode }),
-      ),
-      el('div', { class: 'kind-card-name', text: meta.ko || k.label || k.kind }),
-      el('div', { class: 'kind-card-sub', text: k.label || (meta.label || '') }),
-      el('div', { class: 'kind-card-foot' },
-        el('span', { class: 'kind-card-num' }, String(k.active_count), el('small', {}, ' 건')),
-        k.latest_updated_at
-          ? el('span', { class: 'kind-card-fresh' }, k.active_count > 0 ? el('span', { class: 'dot6 ok', 'aria-hidden': 'true' }) : null, relTime(k.latest_updated_at))
-          : el('span', { class: 'kind-card-fresh dim', text: '비어 있음' }),
-      ),
-    );
-    cards.push(card);
-    grid.append(card);
-  }
-
-  // 주제(area) 섹션 — space(제품/비즈니스) 2단의 1차 축. domainmap 에서 도메인을 받아 space 로 묶어
-  //  각 영역을 browse?space= 로 진입하는 카드로 보여준다(2차 domain 은 탐색에서). domainmap down 시 graceful 생략.
-  const areaWrap = el('div', { class: 'kind-grid area-grid' });
-  const areaEyebrow = el('div', { class: 'eyebrow', text: '주제 영역' });
-  areaEyebrow.hidden = true; areaWrap.hidden = true;
-
-  view.replaceChildren(ctxSubBar('map'), head, health, el('div', { class: 'eyebrow', text: '종류별 지식' }), grid, areaEyebrow, areaWrap);
-  applyReveal([health, ...cards]);
-  document.getElementById('view').focus?.();
-
-  // 비동기 area 로드(렌더 차단 안 함) — 성공 시에만 영역 카드 노출.
-  loadAllDomains().then((slot) => {
-    if (slot.error || !slot.list.length) return;
-    const counts = { product: 0, business: 0 };
-    for (const d of slot.list) { const sp = (d.space || 'product') === 'business' ? 'business' : 'product'; counts[sp]++; }
-    const SPACE_CARDS = [
-      { space: 'product', name: '제품 도메인', sub: '코드앵커·부채추적이 붙는 제품 영역' },
-      { space: 'business', name: '비즈니스 기능', sub: 'GTM·가격·펀딩·시장경쟁·브랜드·조직' },
-    ];
-    for (const sc of SPACE_CARDS) {
-      if (!counts[sc.space]) continue;
-      areaWrap.append(el('a', { class: 'kind-card area-card', href: '#/browse?space=' + sc.space, role: 'link', tabindex: '0' },
-        el('div', { class: 'kind-card-name', text: sc.name }),
-        el('div', { class: 'kind-card-sub', text: sc.sub }),
-        el('div', { class: 'kind-card-foot' },
-          el('span', { class: 'kind-card-num' }, String(counts[sc.space]), el('small', {}, ' 도메인')))));
-    }
-    if (areaWrap.childNodes.length) { areaEyebrow.hidden = false; areaWrap.hidden = false; }
-  }).catch(() => { /* graceful: area 섹션 생략 */ });
-}
-
 function stat(num, label, unit) {
   return el('div', { class: 'stat' },
     el('div', { class: 'num' }, num, unit ? el('small', {}, ' ' + unit) : null),
     el('div', { class: 'lbl', text: label }));
 }
 // 검토 대기 — 0 이면 무채(건강), >0 이면 클릭 가능(검토로 이동).
-function reviewStat(n) {
-  if (!n) {
-    return el('div', { class: 'stat' },
-      el('div', { class: 'num' }, '0'),
-      el('div', { class: 'lbl', text: '검토 대기 없음' }));
-  }
-  const s = el('a', { class: 'stat stat-link', href: '#/review' },
-    el('div', { class: 'num' }, fmtNum(n), el('small', {}, ' 건')),
-    el('div', { class: 'lbl' }, el('span', { class: 'dot6 ok', 'aria-hidden': 'true' }), ' 검토 대기'));
-  return s;
-}
-// 외부 미러(observed) — 커넥터가 가져온 외부 시스템의 살아있는 미러(출처=observed). 큐레이션 저작물과
-//  의미가 달라 별도 카운트로 노출(overview observed_count). 클릭 시 탐색을 provenance=observed 로 필터.
-function collectedStat(n) {
-  return el('a', { class: 'stat stat-link', href: '#/browse?confidence=observed' },
-    el('div', { class: 'num' }, fmtNum(n), el('small', {}, ' 건')),
-    el('div', { class: 'lbl', text: '외부 미러(커넥터)' }));
-}
-
-// ════════════════════════════════════════════
-// 2) 탐색 #/browse — 좌 kind/domain 트리 + grep 검색 + 필터 목록.
-// ════════════════════════════════════════════
-async function renderBrowse(view, params) {
-  // URL 파라미터 → 필터 동기화(지도 카드 클릭 진입 등).
-  const f = state.browse.filters;
-  if (params) {
-    if (params.has('kind')) f.kind = params.get('kind') || '';
-    if (params.has('space')) f.space = params.get('space') || '';
-    if (params.has('domain')) f.domain = params.get('domain') || '';
-    if (params.has('q')) f.q = params.get('q') || '';
-    if (params.has('lifecycle')) f.lifecycle = params.get('lifecycle') || '';
-    if (params.has('confidence')) f.confidence = params.get('confidence') || '';
-    if (params.has('orderBy')) f.orderBy = params.get('orderBy') || 'updated_at';
-  }
-  if (!f.orderBy) f.orderBy = 'updated_at';
-
-  const o = await getOverview(false);
-  const domSlot = await loadAllDomains();
-
-  // ── 좌측 = 종류(kind, 위) + 주제 위계(space>domain, 아래). 카운트는 절대수치가 아니라 **facet**(현재 다른 필터와의
-  //  교집합) — refetch 응답의 facets 로 buildSide 가 갱신한다(kind=지식 선택 시 주제 카운트도 '그 도메인의 지식 수'). ──
-  const SPACE_LABEL = { product: '제품 도메인', business: '비즈니스 기능' };
-  const side = el('aside', { class: 'browse-side' });
-  function buildSide(facets) {
-    const domF = (facets && facets.domains) || {};
-    const kindF = (facets && facets.kinds) || {};
-    // 종류(kind) — 4종 항상 표시(선택지). '전체'=facet 합(현재 필터에서 kind 무관 총). 카운트=교집합.
-    const tree = el('nav', { class: 'browse-tree', 'aria-label': 'kind 트리' });
-    const kindTotal = Object.values(kindF).reduce((a, b) => a + (Number(b) || 0), 0);
-    tree.append(treeItem('전체', '', f.kind === '', kindTotal));
-    for (const k of o.kinds) {
-      tree.append(treeItem(kindMeta(k.kind).ko || k.label || k.kind, k.kind, f.kind === k.kind, Number(kindF[k.kind]) || 0, k.kind));
-    }
-    // 주제(space>domain) — facet count>0 도메인만(현재 필터 교집합). 도메인목록 down 이면 생략.
-    const areaNav = el('nav', { class: 'browse-tree area-tree', 'aria-label': '주제(space·도메인) 위계' });
-    areaNav.append(areaItem('전체 주제', '', '', f.space === '' && f.domain === '', null, '∗'));
-    if (!domSlot.error) {
-      const bySpace = { product: [], business: [] };
-      for (const d of domSlot.list) {
-        const cnt = Number(domF[d.key]) || 0;
-        if (!(cnt > 0)) continue; // 현재 필터 교집합으로 존재하는 도메인만
-        const sp = (d.space || 'product') === 'business' ? 'business' : 'product';
-        bySpace[sp].push({ d, cnt });
-      }
-      for (const sp of ['product', 'business']) {
-        if (!bySpace[sp].length) continue;
-        areaNav.append(areaItem(SPACE_LABEL[sp], sp, '', f.space === sp && f.domain === '', null, sp === 'business' ? '◴' : '◆', 'area-space'));
-        for (const { d, cnt } of bySpace[sp]) {
-          const label = (d.name && d.name !== d.key) ? d.name : d.key;
-          areaNav.append(areaItem(label, sp, d.key, f.domain === d.key, cnt, '·', 'area-domain'));
-        }
-      }
-    }
-    side.replaceChildren(
-      el('div', { class: 'eyebrow', text: '종류' }), tree,
-      el('div', { class: 'eyebrow', style: 'margin-top:16px', text: '주제' }), areaNav);
-  }
-
-  // 상단 검색 + 필터 바(주제 필터는 좌측 위계로 이동 — 여기엔 검색·상태·출처·정렬만).
-  const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색(grep)', value: f.q, 'aria-label': '검색어' });
-  const lifecycleSel = selectFilter([
-    ['active', '유효'], ['', '전체 상태'], ['rejected', '반려'], ['superseded', '대체됨'],
-  ], f.lifecycle);
-  const confidenceSel = selectFilter([
-    ['', '전체 출처'], ['ai', 'AI'], ['human', '사람'], ['rule', '규칙'], ['observed', '외부 미러(커넥터)'],
-  ], f.confidence);
-  // 정렬 — 최신순(updated_at, 기본)/이름순(name)/수동(sort). 백엔드 orderBy 화이트리스트.
-  const orderSel = selectFilter(SORT_OPTS, f.orderBy);
-  orderSel.setAttribute('aria-label', '정렬');
-
-  const listBox = el('div', { class: 'list-box browse-list' });
-  const foot = el('div', { class: 'list-foot' });
-
-  function syncHash() {
-    const p = new URLSearchParams();
-    if (f.kind) p.set('kind', f.kind);
-    if (f.space) p.set('space', f.space);
-    if (f.domain) p.set('domain', f.domain);
-    if (f.q) p.set('q', f.q);
-    if (f.lifecycle && f.lifecycle !== 'active') p.set('lifecycle', f.lifecycle);
-    if (f.confidence) p.set('confidence', f.confidence);
-    if (f.orderBy && f.orderBy !== 'updated_at') p.set('orderBy', f.orderBy);
-    const qs = p.toString();
-    history.replaceState(null, '', '#/browse' + (qs ? '?' + qs : ''));
-  }
-
-  async function refetch() {
-    listBox.replaceChildren(skeletonRows(4));
-    foot.replaceChildren();
-    try {
-      let entries, facets;
-      if (f.q.trim()) {
-        // grep 경로 — 스니펫 포함. lifecycle/confidence 는 grep 백엔드 미지원이라 클라이언트에서 표시만.
-        const r = await api('/api/ui/ctx/grep?' + new URLSearchParams(
-          Object.assign({ query: f.q.trim(), limit: '50', orderBy: f.orderBy || 'updated_at' }, f.kind ? { kind: f.kind } : {}, f.domain ? { domain: f.domain } : {})));
-        entries = (r.matches || []).map((m) => ({ ...m, _snippet: m.snippet })); facets = r.facets;
-      } else {
-        const p = new URLSearchParams({ limit: '200' });
-        if (f.kind) p.set('kind', f.kind);
-        if (f.domain) p.set('domain', f.domain);
-        if (f.lifecycle) p.set('lifecycle', f.lifecycle);
-        if (f.confidence) p.set('confidence', f.confidence);
-        p.set('orderBy', f.orderBy || 'updated_at');
-        const r = await api('/api/ui/ctx/ls?' + p.toString());
-        entries = r.entries || []; facets = r.facets;
-      }
-      state.browse.entries = entries;
-      buildSide(facets); // 좌측 카운트 = 현재 필터 교집합(facet)으로 갱신
-      renderEntries(listBox, entries, !!f.q.trim());
-      foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.q.trim() ? ' (검색)' : '') }));
-    } catch (e) {
-      listBox.replaceChildren(errorNote(e, '목록을 불러오지 못했습니다'));
-    }
-  }
-
-  let qTimer = null;
-  qInput.addEventListener('input', () => { f.q = qInput.value; clearTimeout(qTimer); qTimer = setTimeout(() => { syncHash(); refetch(); }, 280); });
-  lifecycleSel.addEventListener('change', () => { f.lifecycle = lifecycleSel.value; syncHash(); refetch(); });
-  confidenceSel.addEventListener('change', () => { f.confidence = confidenceSel.value; syncHash(); refetch(); });
-  orderSel.addEventListener('change', () => { f.orderBy = orderSel.value; syncHash(); refetch(); });
-  // 좌측 클릭 위임(side 컨테이너 — buildSide 가 내부를 교체해도 핸들러 유지). 'on' 표시는 refetch→buildSide 가 f 기준 재계산.
-  side.addEventListener('click', (ev) => {
-    const kItem = ev.target.closest('[data-kind-val]');
-    if (kItem) { ev.preventDefault(); f.kind = kItem.dataset.kindVal; syncHash(); refetch(); return; }
-    const aItem = ev.target.closest('[data-area-space]');
-    if (aItem) { ev.preventDefault(); f.space = aItem.dataset.areaSpace || ''; f.domain = aItem.dataset.areaDomain || ''; syncHash(); refetch(); return; }
-  });
-
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '탐색'),
-    el('p', { class: 'sub', text: '왼쪽에서 주제(제품 도메인/비즈니스 기능)나 종류로 좁히고, 위에서 상태·출처·정렬을 고르거나 검색어로 제목·본문을 grep 합니다. 항목을 누르면 전문과 메타를 봅니다.' }),
-  );
-  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, lifecycleSel, confidenceSel, orderSel,
-    el('button', { class: 'btn btn-primary btn-sm', text: '+ 새 지식', onclick: () => openSaveOverlay(f.kind, f.domain, refetch) }));
-
-  const layout = el('div', { class: 'browse-layout' },
-    side,
-    el('section', { class: 'browse-main' }, filterBar, listBox, foot),
-  );
-  view.replaceChildren(ctxSubBar('browse'), head, layout);
-  applyReveal([layout]);
-  refetch();
-}
-
-// 주제 위계 행 — space(1차)/domain(2차) 둘 다 data-* 로 들고 클릭 위임에서 동시 설정.
-//  variant: '' | 'area-space'(1차 헤더) | 'area-domain'(2차, 들여쓰기). glyph/count 는 보조.
-function areaItem(label, space, domain, on, count, glyph, variant) {
-  return el('a', { class: 'tree-item' + (variant ? ' ' + variant : '') + (on ? ' on' : ''), href: '#',
-    'data-area-space': space, 'data-area-domain': domain, role: 'button', tabindex: '0' },
-    el('span', { class: 'tree-glyph' + (variant === 'area-domain' ? ' all' : ''), 'aria-hidden': 'true', text: glyph || '·' }),
-    el('span', { class: 'tree-label', text: label }),
-    el('span', { class: 'tree-count', text: count != null ? String(count) : '' }));
-}
-
-function treeItem(label, kindVal, on, count, glyph) {
-  return el('a', { class: 'tree-item' + (on ? ' on' : ''), href: '#', 'data-kind-val': kindVal, role: 'button', tabindex: '0' },
-    glyph ? el('span', { class: 'tree-glyph', 'aria-hidden': 'true', text: glyph }) : el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: '∗' }),
-    el('span', { class: 'tree-label', text: label }),
-    el('span', { class: 'tree-count', text: count != null ? String(count) : '' }));
-}
-
 function selectFilter(opts, sel) {
   const s = el('select');
   for (const [v, t] of opts) s.append(el('option', { value: v, text: t }));
@@ -890,39 +603,6 @@ function buildDomainSelect(slot, current, space, emptyLabel) {
   return s;
 }
 // space(area 1차) <select> — 전체/제품/비즈니스. 도메인 드롭다운을 1차로 좁힌다.
-function buildSpaceSelect(current) {
-  return selectFilter([['', '전체 주제'], ['product', '제품 도메인'], ['business', '비즈니스 기능']], current);
-}
-
-function renderEntries(box, entries, isSearch) {
-  if (!entries.length) {
-    box.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 지식 단위가 없습니다. 필터를 넓히거나 새 지식을 추가하세요.' }));
-    return;
-  }
-  box.replaceChildren();
-  for (const e of entries) {
-    const metaBits = [];
-    if (e.kind) metaBits.push(kindBadge(e.kind));
-    if (e.domain_key) metaBits.push(el('span', { class: 'mono', text: e.domain_key }));
-    const row = el('div', { class: 'row', role: 'link', tabindex: '0' },
-      el('div', { class: 'row-title', text: e.title || e.name }),
-      el('div', { class: 'row-meta' }, ...interleave(metaBits, ' · '),
-        e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null,
-        // 수집물(observed)은 출처 점을 함께 표기(큐레이션과 구분) — ctx_ls 가 confidence 반환(grep 결과엔 없음).
-        e.confidence === 'observed' ? el('span', {}, '  ', confidenceDot(e.confidence)) : null,
-        '  ', relTime(e.updated_at)),
-      isSearch && e._snippet ? el('div', { class: 'snippet-2l', text: e._snippet }) : null,
-    );
-    const go = () => { location.hash = '#/u/' + encodeURIComponent(e.name); };
-    row.addEventListener('click', go);
-    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
-    box.append(row);
-  }
-}
-
-function kindBadge(k) {
-  return el('span', { class: 'kind-badge', title: kindLabel(k) }, el('span', { class: 'kb-glyph', text: k }), el('span', { class: 'kb-ko', text: kindLabel(k) }));
-}
 function interleave(arr, sep) {
   const out = [];
   arr.forEach((n, i) => { if (i) out.push(sep); out.push(n); });
@@ -932,236 +612,6 @@ function interleave(arr, sep) {
 // ════════════════════════════════════════════
 // 3) 유닛 상세 #/u/<name> — ctx_cat 전문 + 메타 패널 + 편집/반려.
 // ════════════════════════════════════════════
-async function renderUnit(view, name) {
-  view.replaceChildren(skeleton('지식 단위를 불러오는 중'));
-  let u;
-  try {
-    // history=1 — 수정 이력(누가/언제/경로/내용) 동반 fetch(메타 패널 아래 '수정 이력' 섹션 렌더).
-    u = await api('/api/ui/ctx/cat?history=1&name=' + encodeURIComponent(name));
-  } catch (e) {
-    if (e.status === 404) {
-      view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식 단위' })),
-        el('div', { class: 'note', text: "'" + name + "' 을(를) 찾을 수 없습니다. 탐색에서 이름을 확인하세요." }),
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/browse', text: '← 탐색으로' }));
-      return;
-    }
-    throw e;
-  }
-  drawUnit(view, u);
-}
-
-function drawUnit(view, u) {
-  const backRow = el('div', { class: 'crumbs' },
-    el('a', { class: 'crumb-link', href: '#/browse', text: '탐색' }), el('span', { class: 'crumb-sep', text: ' / ' }),
-    el('a', { class: 'crumb-link', href: '#/browse?kind=' + encodeURIComponent(u.kind), text: kindLabel(u.kind) }),
-    u.domain_key ? el('span', {}, el('span', { class: 'crumb-sep', text: ' / ' }), el('span', { class: 'mono', text: u.domain_key })) : null,
-  );
-
-  // 본문(전문). 모든 body_md 는 마크다운(_md) — 안전 렌더러로 서식 표시(비개발자 친화).
-  // 보안(P4b): 렌더러는 createElement + textContent 로만 DOM 구성, innerHTML 류 미사용이라 HTML 주입 불가능.
-  // raw 토글로 원문(평문 pre-wrap)도 볼 수 있다.
-  const rawText = u.body_md || '';
-  const bodyWrap = el('div', { class: 'unit-body-wrap' });
-  let showingRaw = false;
-  const rendered = rawText
-    ? el('div', { class: 'unit-body md-rendered' }, renderMarkdown(rawText))
-    : el('div', { class: 'body-text unit-body', text: '(본문 없음)' });
-  const rawView = el('pre', { class: 'body-text unit-body unit-body-raw', text: rawText });
-  rawView.hidden = true;
-  const rawToggle = rawText
-    ? el('button', { class: 'btn btn-ghost btn-sm md-raw-toggle', text: '원문 보기',
-        onclick: () => {
-          showingRaw = !showingRaw;
-          rendered.hidden = showingRaw;
-          rawView.hidden = !showingRaw;
-          rawToggle.textContent = showingRaw ? '서식 보기' : '원문 보기';
-        } })
-    : null;
-  bodyWrap.append(rendered, rawView);
-
-  // 메타 패널(우) — kind·kinds·confidence·lifecycle·supersedes·author·source_ref·as_of·version.
-  // 작성자(노출 — 숨기지 않음): 라이브 author 컬럼은 authored 행에서 NULL 이라 무의미 → updated_by(=actor) 우선.
-  //  최신 리비전의 actor_kind(누가)/channel(경로) 라벨을 함께 보여 "yoon (사람·웹)" 형태로 식별성을 높인다.
-  const latestRev = Array.isArray(u.history) && u.history.length ? u.history[0] : null;
-  const authorActor = u.updated_by || u.author || null;
-  let authorLabel = '—';
-  if (authorActor) {
-    const akKo = latestRev && latestRev.actor_kind ? (ACTOR_KIND_LABEL[latestRev.actor_kind] || latestRev.actor_kind) : null;
-    const chKo = latestRev && latestRev.channel ? (CHANNEL_LABEL[latestRev.channel] || latestRev.channel) : null;
-    const suffix = (akKo || chKo) ? ' (' + [akKo, chKo].filter(Boolean).join(' · ') + ')' : '';
-    authorLabel = authorActor + suffix;
-  }
-  const metaRows = [
-    ['종류(kind)', kindLabel(u.kind) + ' (' + u.kind + ')'],
-    Array.isArray(u.kinds) && u.kinds.length ? ['추가 종류', u.kinds.join(', ')] : null,
-    ['도메인', u.domain_key ? (u.domain_key + (u.domain_repo ? ' · ' + u.domain_repo : '')) : '—'],
-    ['출처(provenance)', CONFIDENCE_LABEL[u.confidence] || u.confidence],
-    ['supersedes', u.supersedes || '—'],
-    ['작성자/마지막 편집', authorLabel],
-    ['출처(source_ref)', u.source_ref || '—'],
-    ['기준 시각(as_of)', u.as_of ? absTime(u.as_of) : '—'],
-    ['버전', 'v' + u.version],
-    ['마지막 갱신', (u.updated_at ? absTime(u.updated_at) : '—') + (u.updated_by ? ' · ' + u.updated_by : '')],
-  ].filter(Boolean);
-  // 메타 — 본문 위 가로 바(라벨:값, 와이드에서 auto-fill 다열 grid). 우측 절반 점유 폐기.
-  const metaBar = el('div', { class: 'unit-metabar' });
-  for (const [k, v] of metaRows) metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: k }), el('span', { class: 'umeta-v', text: v })));
-
-  // 상태 액션 — 신뢰우선 모델의 사후 반려/복원(채운 버튼 1개=주행동만, 나머지 ghost).
-  const actions = el('div', { class: 'unit-actions' });
-  actions.append(el('button', { class: 'btn btn-primary btn-sm', text: '편집', onclick: () => openEditOverlay(u) }));
-  if (u.lifecycle === 'active') {
-    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '반려', onclick: () => changeLifecycle(u.name, 'rejected', view) }));
-  } else if (u.lifecycle === 'rejected') {
-    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '복원', onclick: () => changeLifecycle(u.name, 'active', view) }));
-  }
-
-  // 메타는 상단 접이식 바(기본 펼침). 수정 이력은 본문 아래 별도 접이식. 단일 컬럼 — 본문이 가독폭을 갖는다.
-  const metaWrap = el('details', { class: 'unit-meta-details', open: '' },
-    el('summary', { class: 'unit-meta-summary' }, '메타데이터'),
-    metaBar,
-  );
-  const histSection = buildHistorySection(u);
-  const historyWrap = histSection ? el('details', { class: 'unit-history-details' },
-    el('summary', { class: 'unit-meta-summary' }, '수정 이력'),
-    histSection,
-  ) : null;
-  const main = el('div', { class: 'detail-card unit-card' },
-    el('div', { class: 'unit-title-row' },
-      el('h1', { class: 'detail-title', text: u.title || u.name }),
-      lifecycleDot(u.lifecycle),
-    ),
-    el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: u.name }), confidenceDot(u.confidence)),
-    actions,
-    metaWrap,
-    el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
-    bodyWrap,
-    historyWrap,
-  );
-  const head = el('div', { class: 'page-head unit-head' }, backRow);
-  view.replaceChildren(head, main);
-  applyReveal([main]);
-}
-
-// 수정 이력(작성자/리비전) 섹션 — 누가(actor_kind 뱃지)·언제(절대시각)·어떤경로(channel 뱃지)·무슨작업(op)을 타임라인으로.
-//  접이식(<details>): 기본 접힘(토큰/공간 절약). 본문 스냅샷(body_snippet)은 행 펼침 없이 회색 보조텍스트로.
-//  보안: 모든 텍스트 textContent(el) — innerHTML 미사용. 데이터 없으면 섹션 생략.
-function buildHistorySection(u) {
-  const revs = Array.isArray(u.history) ? u.history : [];
-  if (!revs.length) return null;
-  const list = el('div', { class: 'rev-list' });
-  for (const r of revs) {
-    const akKo = r.actor_kind ? (ACTOR_KIND_LABEL[r.actor_kind] || r.actor_kind) : null;
-    const chKo = r.channel ? (CHANNEL_LABEL[r.channel] || r.channel) : null;
-    const opKo = REV_OP_LABEL[r.op] || r.op;
-    const badges = el('div', { class: 'rev-badges' },
-      el('span', { class: 'rev-ver mono', text: 'v' + r.version }),
-      el('span', { class: 'rev-op', text: opKo }),
-      akKo ? el('span', { class: 'rev-badge rev-actor-' + (r.actor_kind || 'unknown'), text: akKo }) : null,
-      chKo ? el('span', { class: 'rev-badge rev-chan', text: chKo }) : null,
-    );
-    const meta = el('div', { class: 'rev-meta' },
-      el('span', { class: 'rev-actor', text: r.actor || '—' }),
-      el('span', { class: 'rev-sep', text: ' · ' }),
-      el('span', { class: 'rev-time', text: r.at ? absTime(r.at) : '—' }),
-    );
-    const row = el('div', { class: 'rev-row' }, badges, meta);
-    if (r.body_snippet) row.append(el('div', { class: 'rev-snippet', text: r.body_snippet }));
-    list.append(row);
-  }
-  const count = typeof u.history_count === 'number' ? u.history_count : revs.length;
-  const summary = el('summary', { class: 'rev-summary' },
-    '수정 이력', el('span', { class: 'rev-count', text: ' (' + count + ')' }));
-  const det = el('details', { class: 'rev-details' }, summary, list);
-  return det;
-}
-
-async function changeLifecycle(name, lifecycle, view) {
-  try {
-    await api('/api/ui/ctx/set-lifecycle', { method: 'POST', body: JSON.stringify({ name, lifecycle }) });
-    toast(lifecycle === 'rejected' ? '반려했습니다' : (lifecycle === 'active' ? '복원했습니다' : '상태를 바꿨습니다'));
-    state.overview = null; // 검토 배지·지도 카운트 무효화
-    getOverview(true).catch(() => {});
-    // 상세 재로딩(이력 동반 — 방금 set_lifecycle 리비전이 타임라인에 반영되도록)
-    const u = await api('/api/ui/ctx/cat?history=1&name=' + encodeURIComponent(name));
-    drawUnit(view, u);
-  } catch (e) {
-    toast('상태 변경 실패 — ' + e.message, true);
-  }
-}
-
-// ════════════════════════════════════════════
-// 4) 검토 #/review — confidence=ai·lifecycle=active 피드(에이전트 생산물) → reject/edit.
-// ════════════════════════════════════════════
-async function renderReview(view) {
-  view.replaceChildren(skeleton('검토 대기 항목을 불러오는 중'));
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '검토'),
-    el('p', { class: 'sub', text: 'AI 에이전트가 생성한 지식(출처=AI)을 사후 검토합니다. 저장은 무게이트(신뢰 우선), 반려는 여기서 — 보고 내려둘지 결정하세요.' }),
-  );
-  // 정렬 — 검토 피드도 최신순 기본(백엔드 orderBy). 새로 생성된 에이전트 산출물부터 보이게.
-  const orderSel = selectFilter(SORT_OPTS, state.reviewOrderBy || 'updated_at');
-  orderSel.setAttribute('aria-label', '정렬');
-  orderSel.addEventListener('change', () => { state.reviewOrderBy = orderSel.value; load(); });
-  const filterBar = el('div', { class: 'filter-bar review-filter' }, el('span', { class: 'field-label', text: '정렬' }), orderSel);
-  const listBox = el('div', { class: 'list-box' });
-  view.replaceChildren(ctxSubBar('review'), head, filterBar, listBox);
-
-  async function load() {
-  listBox.replaceChildren(skeletonRows(4));
-  try {
-    const r = await api('/api/ui/ctx/ls?' + new URLSearchParams({ confidence: 'ai', lifecycle: 'active', limit: '200', orderBy: state.reviewOrderBy || 'updated_at' }));
-    const entries = r.entries || [];
-    if (!entries.length) {
-      listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 에이전트 생산물이 없습니다. 모두 확인되었습니다.' }));
-      return;
-    }
-    listBox.replaceChildren();
-    for (const e of entries) {
-      const row = el('div', { class: 'review-row' },
-        el('div', { class: 'review-main' },
-          el('a', { class: 'review-title', href: '#/u/' + encodeURIComponent(e.name), text: e.title || e.name }),
-          el('div', { class: 'row-meta' }, kindBadge(e.kind),
-            e.domain_key ? el('span', {}, '  ', el('span', { class: 'mono', text: e.domain_key })) : null,
-            '  ', relTime(e.updated_at)),
-        ),
-        el('div', { class: 'review-acts' },
-          el('a', { class: 'btn btn-ghost btn-sm', href: '#/u/' + encodeURIComponent(e.name), text: '보기 · 편집' }),
-          el('button', { class: 'btn btn-ghost btn-sm', text: '반려', onclick: async (ev) => {
-            ev.preventDefault();
-            try {
-              await api('/api/ui/ctx/set-lifecycle', { method: 'POST', body: JSON.stringify({ name: e.name, lifecycle: 'rejected' }) });
-              row.classList.add('flash');
-              setTimeout(() => row.remove(), reducedMotion() ? 0 : 350);
-              toast('반려했습니다');
-              state.overview = null; getOverview(true).then(() => { if (!listBox.querySelector('.review-row')) listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 항목이 없습니다.' })); }).catch(() => {});
-            } catch (err) { toast('반려 실패 — ' + err.message, true); }
-          } }),
-        ),
-      );
-      listBox.append(row);
-    }
-  } catch (e) {
-    listBox.replaceChildren(errorNote(e, '검토 목록을 불러오지 못했습니다'));
-  }
-  }
-  load();
-}
-
-// ════════════════════════════════════════════
-// 도메인 맵 #/domainmap — 회사맥락 하위. 도메인마다 should(의도)·is(코드 구조)를 나란히 두고
-//  둘의 괴리(debt)를 드러낸다. + 두 축의 변화 이력: 의도(should) 변경(누가·어떤 작업으로) /
-//  커밋이 구조(is)를 바꾼 이력. 단일 read GET /api/ui/domainmap/map?repo= 가 4묶음을 한 번에 준다.
-// ════════════════════════════════════════════
-// debt 제목 접두사로 should↔is 괴리 종류 판별(서버 domainmap/core/domain-debt.ts 의 title 규약과 1:1).
-const DM_SEV_OF = (title) => /의도-구조 괴리/.test(title) ? 'should_no_is'
-  : /구조 증발/.test(title) ? 'vanished' : /구조 침식/.test(title) ? 'eroded' : 'other';
-const DM_SEV_LABEL = { should_no_is: '의도-구조 괴리', vanished: '구조 증발', eroded: '구조 침식', other: '이슈' };
-const DM_SEV_RANK = { should_no_is: 0, vanished: 1, eroded: 2, other: 3 };
-// change_log op 어휘(서버 changelog.ts 불변) → 한국어 라벨.
-const DM_OP_LABEL = { insert: '추가', update: '수정', drift: '드리프트', rename: '이름변경', remove: '제거',
-  revive: '복구', retomb: '재제거', merge: '병합', reassign: '재배치', restore: '되돌림' };
-
 async function renderDomainmap(view, params) {
   view.replaceChildren(skeleton('도메인 맵을 불러오는 중'));
   const repos = await loadRepos();
@@ -1553,8 +1003,9 @@ async function renderKnowledgeSpace(view, space, params) {
     const allOn = lastEntries.length > 0 && lastEntries.every((e) => sel.names.has(e.name));
     const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: allOn ? '전체 해제' : '전체 선택',
       onclick: () => { if (allOn) sel.names.clear(); else lastEntries.forEach((e) => sel.names.add(e.name)); paintList(); repaintBulk(); } });
-    const delBtn = el('button', { class: 'btn btn-sm btn-danger', text: '선택 삭제', disabled: n === 0,
+    const delBtn = el('button', { class: 'btn btn-sm btn-danger', text: '선택 삭제',
       onclick: () => bulkDelete(delBtn) });
+    delBtn.disabled = n === 0; // el 은 setAttribute('disabled', false) 라 여전히 비활 — 프로퍼티로 설정해야 해제됨
     bulkBar.hidden = false;
     bulkBar.replaceChildren(
       el('span', { class: 'bulk-bar-count', text: n ? n + '개 선택됨' : '삭제할 지식을 고르세요' }),
@@ -2016,17 +1467,6 @@ async function renderProjectV2Board(view) {
 }
 
 // 보드 한 섹션(진행 중 / 완료) — 카드 + 개수 배지 + 타일 그리드. renderProjects 의 projectSection 짜임 재사용.
-function pjvBoardSection(label, list, emptyText, done) {
-  const card = el('div', { class: 'card', style: 'margin-bottom:18px' },
-    el('div', { class: 'card-head' },
-      el('h3', { class: 'project-sec-title' }, label,
-        el('span', { class: 'project-count', text: String(list.length) }))));
-  if (!list.length) { card.append(el('div', { class: 'empty', text: emptyText })); return card; }
-  card.append(el('div', { class: 'project-grid' + (done ? ' done' : '') }, ...list.map(pjvBoardTile)));
-  return card;
-}
-
-// 프로젝트 타일(v2) — 이름·설명·상태 + 팀원 수. 클릭=상세(#/projects2/p/:id). projectTile 의 시각을 따른다.
 function pjvBoardTile(p) {
   const isDone = p.status === 'done';
   const tile = el('div', { class: 'project-tile' + (isDone ? ' done' : ''),
@@ -2194,30 +1634,16 @@ async function renderProjectV2Detail(view, idStr) {
     el('div', { class: 'proj-detail-back' }, backLink));
   // 상태 토글(완료/재개)은 '프로젝트 세부 설정' 팝업으로 이관 — 헤더엔 상태칩만 둔다.
   // 프로젝트 세부 설정 — 우측 액션 슬롯. 상태(완료된 프로젝트로/재개)·규칙(터미널 AI 주입)·연결된 지식 팝업.
-  const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
-    onclick: () => openProjectSettings(id, p, reload) });
-  // 삭제(작성자 본인만) — 진행중/완료 무관. 내 식별자(userId||email, 서버 actor 파생과 동일)와 created_by 일치 시에만 노출.
-  //  서버도 소유권을 재검증(403)하므로 이 숨김은 UX 용이고 권한 경계는 백엔드가 보장한다.
   const meId = (state.me && (state.me.userId || state.me.email)) || '';
-  const isMine = !!meId && p.created_by != null && String(p.created_by) === String(meId);
-  const delBtn = isMine
-    ? el('button', { class: 'btn btn-sm btn-ghost btn-text-danger', text: '삭제',
-        onclick: async () => {
-          if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음). 연결된 지식은 보존됩니다.')) return;
-          delBtn.disabled = true;
-          try {
-            await api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST' });
-            toast('프로젝트를 삭제했습니다');
-            location.hash = '#/projects2';
-          } catch (e) { toast('실패 — ' + e.message, true); delBtn.disabled = false; }
-        } })
-    : null;
-  // 제목줄 — 이름+상태칩+상태토글(좌), 세부설정·삭제(우).
+  // 삭제·팀원 수정은 '프로젝트 세부 설정' 팝업으로 이관 — 헤더 우측 액션은 설정 버튼만(권한 경계는 백엔드 403).
+  const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
+    onclick: () => openProjectSettings(id, p, reload, meId, V6_BASE) });
+  // 제목줄 — 이름+상태칩(좌), 세부설정(우).
   head.append(el('div', { class: 'proj-detail-titlebar' },
     el('div', { class: 'proj-detail-titlebox' },
       el('h1', { class: 'proj-detail-title' }, p.name),
       el('span', { class: 'pill-state' + (isDone ? '' : ' confirmed'), text: PJV_STATUS_LABEL[p.status] || p.status })),
-    el('div', { class: 'proj-detail-actions' }, settingsBtn, delBtn)));
+    el('div', { class: 'proj-detail-actions' }, settingsBtn)));
   if (p.description) head.append(el('p', { class: 'sub proj-detail-desc', text: p.description }));
   // 팀원 — 칩 행(액션과 분리) + 팀원 수정 버튼. 없으면 흐린 안내.
   const teamRow = el('div', { class: 'proj-team-row' });
@@ -2228,8 +1654,6 @@ async function renderProjectV2Detail(view, idStr) {
   } else {
     teamRow.append(el('span', { class: 'admin-hint', text: '아직 팀원이 없어요' }));
   }
-  teamRow.append(el('button', { class: 'proj-team-edit', type: 'button', text: '팀원 수정',
-    onclick: () => openMembersEdit(id, members.map((m) => m.member_id), reload, V6_BASE) }));
   head.append(teamRow);
 
   // 상세 본문 — 태스크(작업 위계)를 헤더 바로 아래 맨 위에 둔다(프로젝트의 핵심). 이어 공유 폴더 ·
@@ -2243,15 +1667,65 @@ async function renderProjectV2Detail(view, idStr) {
   applyReveal(Array.from(view.children).slice(1));
 }
 
-// ── 프로젝트 세부 설정 팝업 — ① 터미널 AI 주입 규칙 ② 연결된 지식(필요/산출). 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
-function openProjectSettings(id, p, reload) {
+// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 터미널 규칙 · 연결 지식 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
+//  (삭제·팀원 수정을 헤더에서 여기로 이관 — 헤더는 제목/상태칩/설정 버튼만.)
+function openProjectSettings(id, p, reload, meId, base) {
+  const B = base || '/api/ui/v6/projects/';
   const back = overlayBox('프로젝트 세부 설정', el('div', { class: 'proj-settings' }));
   const box = back.querySelector('.ov-box'); if (box) box.classList.add('ov-box-wide');
-  const afterStatus = () => { back.remove(); reload(); };  // 상태 바꾸면 팝업 닫고 상세 재렌더
+  const closeAndReload = () => { back.remove(); reload(); };  // 변경하면 팝업 닫고 상세 재렌더
   back.querySelector('.proj-settings').append(
-    projectStatusBlock(id, p, afterStatus),
+    projectStatusBlock(id, p, closeAndReload),
+    projectMembersBlock(id, p, closeAndReload, B),
     projectRulesBlock(id),
-    projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }));
+    projectRefsBlock(id, B),
+    projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }),
+    projectDangerBlock(id, p, meId, back));
+}
+
+// 팀원 블록 — 현재 팀원 칩 + '팀원 수정'(멀티선택 오버레이). 저장 시 설정 팝업 닫고 상세 재렌더.
+function projectMembersBlock(id, p, closeAndReload, base) {
+  const members = p.members || [];
+  const chips = el('div', { class: 'proj-team-row' });
+  if (members.length) {
+    for (const m of members) chips.append(el('span', { class: 'proj-team-chip' },
+      el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+      el('span', { text: m.display_name || (m.member_id + (m.role ? ' · ' + m.role : '')) })));
+  } else {
+    chips.append(el('span', { class: 'admin-hint', text: '아직 팀원이 없어요' }));
+  }
+  return el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: '팀원' }),
+    el('p', { class: 'ps-block-hint', text: '이 프로젝트를 함께 보고 작업할 팀원이에요.' }),
+    chips,
+    el('div', { class: 'ps-rules-actions' },
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '팀원 수정',
+        onclick: () => openMembersEdit(id, members.map((m) => m.member_id), closeAndReload, base) })));
+}
+
+// 삭제 블록 — 작성자 본인만 노출(서버도 403 재검증). 확인 후 삭제 → 팝업 닫고 목록으로.
+function projectDangerBlock(id, p, meId, back) {
+  const isMine = !!meId && p.created_by != null && String(p.created_by) === String(meId);
+  if (!isMine) {
+    return el('section', { class: 'ps-block' },
+      el('h3', { class: 'ps-block-title', text: '프로젝트 삭제' }),
+      el('p', { class: 'ps-block-hint', text: '프로젝트는 작성자만 삭제할 수 있어요.' }));
+  }
+  const delBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '프로젝트 삭제' });
+  delBtn.onclick = async () => {
+    if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음). 연결된 지식은 보존됩니다.')) return;
+    delBtn.disabled = true;
+    try {
+      await api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST' });
+      toast('프로젝트를 삭제했습니다');
+      back.remove();
+      location.hash = '#/projects2';
+    } catch (e) { toast('실패 — ' + e.message, true); delBtn.disabled = false; }
+  };
+  return el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: '프로젝트 삭제' }),
+    el('p', { class: 'ps-block-hint', text: '프로젝트와 그 안의 모든 태스크가 영구 삭제됩니다(되돌릴 수 없음). 연결된 지식은 보존돼요.' }),
+    el('div', { class: 'ps-rules-actions' }, delBtn));
 }
 
 // 상태 블록 — 진행 중 ↔ 완료 토글. (구 헤더 '완료로 표시' 버튼을 여기로 이관, 라벨 '완료된 프로젝트로'.)
@@ -2281,13 +1755,20 @@ function projectRulesBlock(id) {
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '규칙 저장', disabled: '' });
   (async () => {
     const token = localStorage.getItem(TOKEN_KEY);
-    try { const res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} }); ta.value = res.ok ? await res.text() : ''; }
+    try { const res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} }); ta.value = splitClaudeMd(res.ok ? await res.text() : '').manual; }
     catch (_) { ta.value = ''; }
     ta.disabled = false; saveBtn.disabled = false; status.textContent = '';
   })();
   saveBtn.onclick = async () => {
     saveBtn.disabled = true; status.textContent = '저장 중…';
-    try { await authUpload(url, new Blob([ta.value])); status.textContent = '저장됨 · 다음 세션부터 적용'; toast('프로젝트 규칙을 저장했습니다'); }
+    try {
+      // 참고 파일 자동 블록(LIVELY:REFS)은 보존 — 현재 CLAUDE.md 를 다시 읽어 관리 블록만 떼어 재결합한다.
+      const token = localStorage.getItem(TOKEN_KEY);
+      let cur = '';
+      try { const r = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} }); cur = r.ok ? await r.text() : ''; } catch (_) { /* */ }
+      await authUpload(url, new Blob([joinClaudeMd(ta.value, splitClaudeMd(cur).managed)]));
+      status.textContent = '저장됨 · 다음 세션부터 적용'; toast('프로젝트 규칙을 저장했습니다');
+    }
     catch (e) { status.textContent = ''; toast('저장 실패 — ' + e.message, true); }
     saveBtn.disabled = false;
   };
@@ -2296,6 +1777,93 @@ function projectRulesBlock(id) {
     el('p', { class: 'ps-block-hint', text: '이 프로젝트에서 터미널 세션을 열면, 여기 적은 규칙이 그 AI(Claude)에게 자동으로 주입됩니다. (프로젝트 폴더의 CLAUDE.md 로 저장)' }),
     ta,
     el('div', { class: 'ps-rules-actions' }, saveBtn, status));
+}
+
+// ── 참고 파일(CLAUDE.md 자동 등록) — 수동 규칙과 한 파일에서 공존하되 영역을 분리(마커로 구분, 서로 보존). ──
+const PS_REF_DIR = '참고자료';
+const PS_REF_START = '<!-- LIVELY:REFS:START (자동 관리 — 직접 수정하지 마세요) -->';
+const PS_REF_END = '<!-- LIVELY:REFS:END -->';
+// CLAUDE.md 를 (사람이 쓴 수동 규칙) / (참고 파일 자동 블록)으로 분리.
+function splitClaudeMd(text) {
+  const t = String(text || '');
+  const s = t.indexOf(PS_REF_START), e = t.indexOf(PS_REF_END);
+  if (s >= 0 && e > s) {
+    const manual = (t.slice(0, s) + t.slice(e + PS_REF_END.length)).replace(/\n{3,}/g, '\n\n').trim();
+    return { manual, managed: t.slice(s, e + PS_REF_END.length) };
+  }
+  return { manual: t.trim(), managed: '' };
+}
+// 참고 파일 목록 → CLAUDE.md 관리 블록(없으면 빈 문자열).
+function buildRefsBlock(files) {
+  if (!files || !files.length) return '';
+  const lines = files.map((f) => '- `' + PS_REF_DIR + '/' + f.name + '`').join('\n');
+  return PS_REF_START + '\n## 📎 참고 파일 (필수)\n'
+    + '작업을 시작하기 전에 아래 파일들을 **반드시 먼저 읽고** 그 내용을 따르세요. 작업 내내 이 자료를 기준으로 삼습니다.\n'
+    + lines + '\n' + PS_REF_END;
+}
+// 수동 규칙 + 관리 블록 결합(규칙 먼저, 참고 블록 끝).
+function joinClaudeMd(manual, managed) {
+  const m = String(manual || '').trim();
+  if (!managed) return m ? m + '\n' : '';
+  return (m ? m + '\n\n' : '') + managed + '\n';
+}
+
+// 참고 파일 블록 — 프로젝트 폴더 참고자료/ 에 파일 업로드 → CLAUDE.md 관리 블록에 자동 등록되어,
+//  이 프로젝트 터미널 세션 AI 가 매번 작업 전 반드시 읽도록 강제(수동 규칙과 공존, 영역 보존).
+function projectRefsBlock(id, base) {
+  const B = base || '/api/ui/v6/projects/';
+  const claudeUrl = B + id + '/file?path=' + encodeURIComponent('CLAUDE.md');
+  const listsUrl = B + id + '/files?path=' + encodeURIComponent(PS_REF_DIR);
+  const refPath = (name) => B + id + '/file?path=' + encodeURIComponent(PS_REF_DIR + '/' + name);
+  const listEl = el('div', { class: 'ps-refs-list' });
+  const status = el('span', { class: 'ps-save-status admin-hint' });
+  const fileInput = el('input', { type: 'file', multiple: true, style: 'display:none' });
+  const uploadBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 파일 올리기', onclick: () => fileInput.click() });
+
+  async function fetchFiles() {
+    try { const d = await api(listsUrl); return ((d && d.items) || []).filter((x) => x.type === 'file'); }
+    catch (_) { return []; } // 폴더 없음 = 아직 파일 없음
+  }
+  function paint(files) {
+    if (!files.length) { listEl.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '아직 참고 파일이 없어요. 올리면 매 터미널 세션에서 AI가 작업 전 반드시 읽습니다.' })); return; }
+    listEl.replaceChildren(...files.map((f) => el('div', { class: 'ps-refs-row' },
+      el('span', { class: 'ps-refs-ic' }, fileIconSvg(f.name, false)),
+      el('span', { class: 'ps-refs-nm', text: f.name, title: f.name }),
+      el('span', { class: 'ps-refs-sz', text: fmtSize(f.size) }),
+      el('button', { class: 'proj-file-iconbtn danger', type: 'button', title: '삭제', text: '✕', onclick: () => removeRef(f.name) }))));
+  }
+  async function reload() { paint(await fetchFiles()); }
+  // 참고자료/ 현재 목록을 CLAUDE.md 관리 블록으로 재생성(수동 규칙 보존).
+  async function sync() {
+    const files = await fetchFiles();
+    const token = localStorage.getItem(TOKEN_KEY);
+    let cur = '';
+    try { const r = await fetch(claudeUrl, { headers: token ? { Authorization: 'Bearer ' + token } : {} }); cur = r.ok ? await r.text() : ''; } catch (_) { /* */ }
+    await authUpload(claudeUrl, new Blob([joinClaudeMd(splitClaudeMd(cur).manual, buildRefsBlock(files))]));
+  }
+  fileInput.onchange = async () => {
+    const files = Array.from(fileInput.files || []); fileInput.value = '';
+    if (!files.length) return;
+    status.textContent = '올리는 중…';
+    try {
+      for (const f of files) await authUpload(refPath(f.name), f);
+      await sync();
+      status.textContent = '올림 · 다음 세션부터 적용'; toast('참고 파일을 추가했습니다');
+    } catch (e) { status.textContent = ''; toast('업로드 실패 — ' + e.message, true); }
+    reload();
+  };
+  async function removeRef(name) {
+    if (!confirm('참고 파일 ‘' + name + '’을(를) 삭제할까요?')) return;
+    try { await api(refPath(name), { method: 'DELETE' }); await sync(); toast('삭제했습니다'); }
+    catch (e) { toast('삭제 실패 — ' + e.message, true); }
+    reload();
+  }
+  reload();
+  return el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: '참고 파일' }),
+    el('p', { class: 'ps-block-hint', text: '여기 올린 파일은 이 프로젝트에서 터미널 세션을 열 때마다 AI가 작업 전 반드시 읽도록 강제됩니다. (프로젝트 폴더의 참고자료/ 에 저장 · CLAUDE.md 에 자동 등록)' }),
+    listEl, fileInput,
+    el('div', { class: 'ps-rules-actions' }, uploadBtn, status));
 }
 
 // 지식 블록 — 필요 지식(고르기/자동/해제 가능) + 산출 지식(표시). 변경 후 v6 상세 GET 으로 재조회해 재페인트.
@@ -2596,9 +2164,9 @@ function pjvStatusGroup(projectId, key, list, members, reload) {
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
   };
   return el('div', { class: 'pjv-tgroup' },
-    el('div', { class: 'pjv-tgroup-head ' + m.cls }, gcaret,
+    el('div', { class: 'pjv-tgroup-head ' + m.cls },
       el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
-      el('span', { class: 'pjv-tgroup-label', text: m.label }), countEl),
+      el('span', { class: 'pjv-tgroup-label', text: m.label }), countEl, gcaret),
     body);
 }
 
@@ -2649,7 +2217,52 @@ function pjvAddRow(projectId, status, members, reload, body, countEl) {
   return row;
 }
 
-// 태스크 한 행 — [캐럿][상태점] 제목 [하위수] | 담당자 | 마감일 | 우선순위 | [+하위]. 하위는 중첩(상위만 + 하위 가능).
+// 행 오른쪽 끝 ⋯ 더보기 메뉴(클릭업식) — 하위 태스크 추가(상위만)·이름 변경·삭제.
+function pjvRowMore(projectId, t, depth, reload) {
+  const btn = el('button', { class: 'pjv-trow-more', type: 'button', title: '더보기', 'aria-label': '태스크 작업' , text: '⋯' });
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu' });
+    const close = pjvPopover(btn, menu);
+    const mkItem = (label, onPick, danger) => {
+      const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label }));
+      b.onclick = () => { close(); onPick(); };
+      return b;
+    };
+    if (depth === 0) menu.append(mkItem('하위 태스크 추가', () => pjvAddTask(projectId, t.id, reload)));
+    menu.append(mkItem('이름 변경', () => pjvRenameTask(btn, t, reload)));
+    menu.append(mkItem('삭제', () => pjvDeleteTask(t, reload), true));
+  };
+  return btn;
+}
+
+// 이름 변경 — 앵커 아래 인라인 입력 팝오버. Enter 저장 / Esc·바깥클릭 취소.
+function pjvRenameTask(anchor, t, reload) {
+  const cur = t.name || t.title || '';
+  const input = el('input', { type: 'text', class: 'pjv-rename-input', value: cur, maxlength: '200' });
+  const close = pjvPopover(anchor, el('div', { class: 'pjv-menu pjv-rename-pop' }, input));
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); const v = input.value.trim(); close(); if (v && v !== cur) pjvPatchTask(t.id, { name: v }, reload); }
+  };
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+// 삭제 — 확인 후 task_delete_v6. 하위 동반 삭제 경고. #/trash 복원 가능.
+function pjvDeleteTask(t, reload) {
+  const nm = t.name || t.title || '이 태스크';
+  const nSub = (t.subtasks || []).length;
+  const msg = "'" + nm + "' 태스크를 삭제할까요?" + (nSub ? '\n\n하위 ' + nSub + '개도 함께 삭제됩니다.' : '') + '\n\n#/trash 에서 복원할 수 있습니다.';
+  if (!confirm(msg)) return;
+  (async () => {
+    try {
+      await api('/api/ui/v6/tasks/' + t.id + '/delete', { method: 'POST', body: JSON.stringify({}) });
+      toast('삭제했습니다 — #/trash 에서 복원 가능');
+      reload();
+    } catch (e) { toast('삭제 실패 — ' + e.message, true); }
+  })();
+}
+
+// 태스크 한 행 — [캐럿][상태점] 제목 [하위수] | 담당자 | 마감일 | 우선순위 | [⋯]. 하위는 중첩(상위만 하위 추가 가능).
 function pjvTaskRow(projectId, t, members, reload, depth) {
   depth = depth || 0;
   const subs = t.subtasks || [];
@@ -2668,18 +2281,14 @@ function pjvTaskRow(projectId, t, members, reload, depth) {
     subs.length ? el('span', { class: 'pjv-trow-subcount', title: subs.length + '개 하위', text: String(subs.length) }) : null);
   if (depth) titleCell.style.paddingLeft = (depth * 22) + 'px';
 
-  // 하위 추가는 상위 태스크(depth 0)에서만 — 백엔드가 subtask 의 하위 생성을 거부(parent.level='task' 요구).
-  const addSub = depth === 0
-    ? el('button', { class: 'pjv-trow-addsub', type: 'button', title: '하위 태스크 추가', text: '＋',
-        onclick: () => pjvAddTask(projectId, t.id, reload) })
-    : null;
+  const moreBtn = pjvRowMore(projectId, t, depth, reload);
 
   wrap.append(el('div', { class: 'pjv-trow' },
     titleCell,
     el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, reload)),
     el('div', { class: 'pjv-tcell' }, pjvDueControl(t, reload)),
     el('div', { class: 'pjv-tcell' }, pjvPriorityControl(t, reload)),
-    el('div', { class: 'pjv-tcell pjv-tcell-add' }, addSub)));
+    el('div', { class: 'pjv-tcell pjv-tcell-add' }, moreBtn)));
 
   const subBox = el('div', { class: 'pjv-trow-subs' });
   subBox.hidden = true;
@@ -2723,37 +2332,6 @@ function pjvAddTask(projectId, parentTaskId, reload) {
 }
 
 // 필요 지식 / 산출 지식 — 두 섹션. 각 행은 지식 상세(#/k/:name)로 링크.
-function pjvKnowledgeSection(projectId, required, produced) {
-  const card = el('div', { class: 'card', style: 'margin-bottom:18px' },
-    el('div', { class: 'card-head' }, el('h2', { text: '연결된 지식' })));
-  const group = (label, list, emptyText) => {
-    const sec = el('div', { class: 'pjv-kn-group' }, el('div', { class: 'sec-label', text: label }));
-    if (!list.length) { sec.append(el('div', { class: 'pjv-kn-empty', text: emptyText })); return sec; }
-    const box = el('div', { class: 'list-box' });
-    for (const k of list) {
-      const name = k.name || k.knowledge_name;
-      box.append(el('a', { class: 'row pjv-kn-row', href: '#/k/' + encodeURIComponent(name) },
-        el('div', { class: 'row-title', text: k.title || name }),
-        el('div', { class: 'row-meta' },
-          k.injection ? knInjectChip(k.injection) : null,
-          k.provenance ? el('span', {}, ' ', knProvChip(k.provenance)) : null,
-          k.lifecycle ? el('span', {}, '  ', lifecycleDot(k.lifecycle)) : null)));
-    }
-    sec.append(box);
-    return sec;
-  };
-  card.append(
-    group('필요 지식', required, '이 프로젝트가 참고해야 할 지식이 아직 연결되지 않았습니다.'),
-    group('산출 지식', produced, '이 프로젝트가 만들어 낸 지식이 아직 없습니다.'),
-  );
-  return card;
-}
-
-// ════════════════════════════════════════════
-// 프로젝트 #/projects — 라이블리 자체 프로젝트 보드(독립 저장). 새 만들기 + 진행 중/완료 두 섹션.
-//  ClickUp 미러 과업(W)·activity 작업과 분리된 가벼운 보드. 상태 토글(진행중↔완료)이 핵심 상호작용.
-//  데이터: GET /api/ui/projects · POST /api/ui/projects · POST /api/ui/projects/:id/status (scope=memory).
-// ════════════════════════════════════════════
 function companyTimelineSection() {
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   const body = el('div', {});
@@ -2921,38 +2499,6 @@ function memberPicker(preselected, opts) {
 }
 
 // 새 프로젝트 오버레이 폼 — 이름(필수)·설명(선택)·팀원. 생성 시 폴더 자동 생성 + 새 전용 페이지로 이동.
-function openProjectForm(reload) {
-  const nameIn = el('input', { type: 'text', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
-  const descIn = el('textarea', { rows: '3', placeholder: '간단한 설명 (선택)', maxlength: '5000' });
-  const picker = memberPicker([]);
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  const back = overlayBox('새 프로젝트',
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box),
-    el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-  setTimeout(() => nameIn.focus(), 0);
-  const go = async () => {
-    const name = nameIn.value.trim();
-    if (!name) { nameIn.focus(); toast('이름을 입력하세요', true); return; }
-    saveBtn.disabled = true;
-    try {
-      const r = await api('/api/ui/projects', { method: 'POST', body: JSON.stringify({
-        name, description: descIn.value.trim() || undefined, members: picker.getSelected(),
-      }) });
-      back.remove();
-      toast('프로젝트를 만들었습니다');
-      if (r && r.project && r.project.id) location.hash = '#/projects/' + r.project.id; // 새 전용 페이지로
-      else reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
-  };
-  saveBtn.onclick = go;
-  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-}
-
-// 프로젝트 상세 #/projects/:id — 전용 페이지. 헤더(이름·상태·팀원·폴더) + 3섹션(공유폴더·터미널·타임라인).
-//  ※ 섹션 본문은 단계적으로 채운다(현재 골격 — 다음 단계에서 파일/세션/타임라인 배선).
 async function authDownload(url, filename) {
   const token = localStorage.getItem(TOKEN_KEY);
   let res;
@@ -3081,24 +2627,6 @@ const FILE_ICON_GLYPHS = {
   audio:   [['path', { d: 'M9 17V5l10-2v12' }], ['circle', { cx: 6, cy: 17, r: 3 }], ['circle', { cx: 16, cy: 15, r: 3 }]],
   archive: [['rect', { x: 4, y: 4, width: 16, height: 4, rx: 1 }], ['path', { d: 'M5.5 8v10a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V8' }], ['line', { x1: 10.5, y1: 12, x2: 13.5, y2: 12 }]],
   code:    [['polyline', { points: '15 7 20 12 15 17' }], ['polyline', { points: '9 7 4 12 9 17' }]],
-};
-function fileIconSvg(name, isDir) {
-  const kind = isDir ? 'dir' : fileKind(name);
-  const node = sv('svg', { class: 'fic fic-' + kind, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  for (const [t, a] of (FILE_ICON_GLYPHS[kind] || FILE_ICON_GLYPHS.file)) node.append(sv(t, a));
-  return node;
-}
-
-// ── 공유 폴더 미리보기(맥 Finder 느낌) — 이미지=실제 썸네일, 그 외=타입별 색 문서 아이콘(라벨), 폴더=폴더. ──
-const FILE_TYPE_META = {
-  pdf: { label: 'PDF', cls: 'ft-pdf' },
-  doc: { label: 'DOC', cls: 'ft-word' }, docx: { label: 'DOC', cls: 'ft-word' }, hwp: { label: 'HWP', cls: 'ft-word' }, hwpx: { label: 'HWP', cls: 'ft-word' },
-  ppt: { label: 'PPT', cls: 'ft-ppt' }, pptx: { label: 'PPT', cls: 'ft-ppt' }, key: { label: 'KEY', cls: 'ft-ppt' },
-  xls: { label: 'XLS', cls: 'ft-xls' }, xlsx: { label: 'XLS', cls: 'ft-xls' }, csv: { label: 'CSV', cls: 'ft-xls' },
-  zip: { label: 'ZIP', cls: 'ft-zip' }, tar: { label: 'TAR', cls: 'ft-zip' }, gz: { label: 'GZ', cls: 'ft-zip' }, rar: { label: 'RAR', cls: 'ft-zip' }, '7z': { label: '7Z', cls: 'ft-zip' },
-  mp3: { label: 'MP3', cls: 'ft-av' }, wav: { label: 'WAV', cls: 'ft-av' }, m4a: { label: 'M4A', cls: 'ft-av' }, flac: { label: 'FLAC', cls: 'ft-av' },
-  mp4: { label: 'MP4', cls: 'ft-av' }, mov: { label: 'MOV', cls: 'ft-av' }, webm: { label: 'WEBM', cls: 'ft-av' }, mkv: { label: 'MKV', cls: 'ft-av' },
-  md: { label: 'MD', cls: 'ft-txt' }, txt: { label: 'TXT', cls: 'ft-txt' }, rtf: { label: 'RTF', cls: 'ft-txt' },
 };
 function fileThumb(id, it, rel, base) {
   if (it.type === 'dir') return folderThumb();
@@ -3889,9 +3417,12 @@ function activityTimelineRow(a, nameOf) {
 
   const linkList = (items) => el('span', { class: 'act-row-links' }, ...items.map((it) =>
     el('a', { class: 'act-row-link', href: '#/k/' + encodeURIComponent(it.name), text: it.title || it.name })));
+  // v6: 과업 = 진척시킨 프로젝트(task) — #/projects2/p/:id 로 링크(지식 refs 는 #/k/:name 유지).
   if (a.tasks && a.tasks.length) {
     detail.append(el('div', { class: 'act-row-sec' },
-      el('span', { class: 'act-row-sec-label', text: '과업' }), linkList(a.tasks)));
+      el('span', { class: 'act-row-sec-label', text: '과업' }),
+      el('span', { class: 'act-row-links' }, ...a.tasks.map((t) =>
+        el('a', { class: 'act-row-link', href: '#/projects2/p/' + t.id, text: t.title || ('#' + t.id) })))));
   }
   if (a.refs && a.refs.length) {
     const byRel = {};
@@ -4245,7 +3776,7 @@ async function renderLearn(view) {
         el('div', { class: 'gloss-example-body', text: exBody }))));
   }
   unitCard.append(glossList, el('p', { class: 'admin-hint', style: 'margin-top:16px' }, '실제 지식들은 ',
-    el('a', { href: '#/browse', text: '[탐색] 탭' }), ' 에서 하나씩 열어볼 수 있어요.'));
+    el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), ' 에서 볼 수 있어요.'));
 
   view.replaceChildren(head, el('div', { class: 'guide-cards' }, whatCard, unitCard));
   document.getElementById('view').focus?.();
@@ -4404,7 +3935,7 @@ function localGuideNodes(gw, slot, data) {
     el('div', { class: 'card-head' }, el('h2', { text: '끝났어요 — 이제 뭘 하나요' })),
     el('p', { class: 'guide-lead', text: '설치가 끝나면 평소처럼 Claude Code 를 켜서 일하면 됩니다. 어느 폴더에서 켜든 회사 공통 맥락·규칙이 자동으로 함께 들어가요. 매번 회사 사정을 설명하지 않아도 됩니다.' }),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '회사에 어떤 맥락이 쌓여 있는지 둘러보려면 ',
-      el('a', { href: '#/map', text: '[회사 맥락]' }), ' 탭으로 가보세요. (자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
+      el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 탭으로 가보세요. (자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
 
   // ── 4. 유지보수(접힘) — 처음엔 필요 없음. 나중에 업데이트/제거할 때만. ──
   const staticBlock = (c) => el('div', { class: 'deploy-block' },
@@ -4501,150 +4032,6 @@ function learnRow(label, value) {
     el('div', { class: 'learn-row-v' }, renderMarkdown(value)));
 }
 
-// ════════════════════════════════════════════
-// 저장/편집 오버레이 — ctx_save(웹→confidence=human 자동).
-// ════════════════════════════════════════════
-function openSaveOverlay(presetKind, presetDomain, onDone) {
-  saveOverlay({ kind: presetKind || 'K', domain: presetDomain || '' }, false, onDone);
-}
-function openEditOverlay(u) {
-  // 편집은 모달이 아니라 별도 라우트(#/u/<name>/edit) — split view 에디터 + 실시간 프리뷰.
-  location.hash = '#/u/' + encodeURIComponent(u.name) + '/edit';
-}
-
-// ════════════════════════════════════════════
-// 지식 편집 페이지 #/u/<name>/edit — split view(좌 textarea 에디터 | 우 실시간 마크다운 프리뷰).
-//  모달(saveOverlay) 대신 전체 페이지. 입력 즉시(디바운스) renderMarkdown 으로 우측을 다시 그린다.
-//  저장=ctx_save(웹→confidence=human). XSS: 프리뷰는 renderMarkdown(createElement+textContent)만 — innerHTML 0.
-// ════════════════════════════════════════════
-async function renderEditPage(view, name) {
-  view.replaceChildren(skeleton('편집할 지식 단위를 불러오는 중'));
-  let u;
-  try {
-    u = await api('/api/ui/ctx/cat?name=' + encodeURIComponent(name));
-  } catch (e) {
-    if (e.status === 404) {
-      view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식 단위' })),
-        el('div', { class: 'note', text: "'" + name + "' 을(를) 찾을 수 없습니다." }),
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/browse', text: '← 탐색으로' }));
-      return;
-    }
-    throw e;
-  }
-  drawEditPage(view, u);
-}
-
-function drawEditPage(view, u) {
-  const backHref = '#/u/' + encodeURIComponent(u.name);
-  const crumbs = el('div', { class: 'crumbs' },
-    el('a', { class: 'crumb-link', href: '#/browse', text: '탐색' }), el('span', { class: 'crumb-sep', text: ' / ' }),
-    el('a', { class: 'crumb-link', href: backHref, text: u.title || u.name }), el('span', { class: 'crumb-sep', text: ' / ' }),
-    el('span', { text: '편집' }));
-
-  // 메타 입력(제목·종류·도메인) — 좁은 상단 바. 본문만 split.
-  const titleIn = el('input', { type: 'text', value: u.title || '', placeholder: '제목(선택)' });
-  const kindSel = el('select');
-  for (const k of CORE_KIND_KEYS) kindSel.append(el('option', { value: k, text: k + ' · ' + KIND_META[k].ko }));
-  if (u.kind && !isCoreKind(u.kind)) kindSel.append(el('option', { value: u.kind, text: u.kind + ' · ' + (kindMeta(u.kind).ko || u.kind) + ' (현재 값 · 통합 예정)' }));
-  kindSel.value = u.kind || 'K';
-
-  // 본문 split view — 좌 에디터, 우 프리뷰. 입력 즉시(디바운스 120ms) 프리뷰 갱신.
-  const bodyIn = el('textarea', { class: 'edit-editor', placeholder: '본문(markdown) — 입력하면 오른쪽에 실시간으로 서식이 보입니다.', spellcheck: 'false' });
-  bodyIn.value = u.body_md || '';
-  const preview = el('div', { class: 'edit-preview md-rendered' });
-  const renderPreview = () => {
-    const md = renderMarkdown(bodyIn.value);
-    preview.replaceChildren();
-    if (bodyIn.value.trim()) preview.append(md);
-    else preview.append(el('p', { class: 'admin-hint', text: '(본문을 입력하면 여기에 미리보기가 표시됩니다)' }));
-  };
-  let pvTimer = null;
-  bodyIn.addEventListener('input', () => { clearTimeout(pvTimer); pvTimer = setTimeout(renderPreview, 120); });
-
-  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' });
-  const cancelBtn = el('a', { class: 'btn btn-ghost btn-sm', href: backHref, text: '취소' });
-  const status = el('span', { class: 'admin-status' });
-  saveBtn.addEventListener('click', async () => {
-    const note = bodyIn.value.trim();
-    if (!note) { toast('본문은 비울 수 없습니다', true); return; }
-    saveBtn.disabled = true;
-    try {
-      await api('/api/ui/ctx/save', { method: 'POST', body: JSON.stringify({
-        note, name: u.name, title: titleIn.value.trim() || undefined, kind: kindSel.value,
-        domain: (u.domain_key || undefined),
-      }) });
-      toast('저장했습니다');
-      state.overview = null; getOverview(true).catch(() => {});
-      location.hash = backHref; // 저장 후 상세로 복귀(route 가 최신 fetch)
-    } catch (e) { saveBtn.disabled = false; toast('저장 실패 — ' + e.message, true); }
-  });
-
-  const metaBar = el('div', { class: 'edit-meta-bar' },
-    field('제목', titleIn), field('종류(kind)', kindSel),
-    el('div', { class: 'edit-meta-static' }, el('span', { class: 'field-label', text: '도메인 · 이름(불변)' }),
-      el('div', { class: 'mono edit-static-val', text: (u.domain_key || '—') + ' · ' + u.name })));
-
-  const split = el('div', { class: 'edit-split' },
-    el('div', { class: 'edit-pane' }, el('div', { class: 'edit-pane-label', text: '에디터 (Markdown)' }), bodyIn),
-    el('div', { class: 'edit-pane' }, el('div', { class: 'edit-pane-label', text: '미리보기 (실시간)' }), preview));
-
-  const head = el('div', { class: 'page-head unit-head' }, crumbs,
-    el('p', { class: 'admin-hint', text: '웹에서 편집하면 출처(provenance)가 사람(human)으로 기록됩니다. 왼쪽에 입력하면 오른쪽에 즉시 서식이 보입니다.' }));
-  view.replaceChildren(head, metaBar, split, el('div', { class: 'edit-actions' }, saveBtn, cancelBtn, status));
-  renderPreview();
-  applyReveal([metaBar, split]);
-  bodyIn.focus();
-}
-
-async function saveOverlay(u, isEdit, onDone) {
-  const titleIn = el('input', { type: 'text', value: u.title || '', placeholder: '제목(선택)' });
-  const kindSel = el('select');
-  // 본질 4종(R·K·H·W)만 신규 선택 가능. 편집 중인 유닛이 옛 종류(federated/legacy)면 현재값을
-  //  보존 옵션으로 추가해 무심코 종류가 바뀌지 않게 한다(서버 변경 없이 표시만 — 사람이 K 로 재분류 가능).
-  for (const k of CORE_KIND_KEYS) kindSel.append(el('option', { value: k, text: k + ' · ' + KIND_META[k].ko }));
-  if (u.kind && !isCoreKind(u.kind)) {
-    kindSel.append(el('option', { value: u.kind, text: u.kind + ' · ' + (kindMeta(u.kind).ko || u.kind) + ' (현재 값 · 통합 예정)' }));
-  }
-  kindSel.value = u.kind || 'K';
-  // 도메인: 통제어휘 드롭다운(자유텍스트 폐기). 도메인맵 down 시 자유입력 폴백.
-  const domSlot = await loadAllDomains();
-  const domainIn = domSlot.error
-    ? el('input', { type: 'text', value: u.domain_key || '', placeholder: '도메인 키(목록 불가 — 직접 입력)', title: domSlot.error })
-    : buildDomainSelect(domSlot, u.domain_key || '');
-  const nameIn = el('input', { type: 'text', value: u.name || '', placeholder: '이름(생략 시 자동 생성)', disabled: isEdit ? 'disabled' : null });
-  const bodyIn = el('textarea', { class: 'admin-ta', placeholder: '본문(markdown)' }); bodyIn.value = u.body_md || '';
-
-  const back = overlayBox(isEdit ? '지식 편집' : '새 지식 저장',
-    el('p', { class: 'admin-hint', text: isEdit ? '웹에서 편집하면 출처(provenance)가 사람(human)으로 기록됩니다(마지막 저자).' : '웹에서 저장하면 출처(provenance)가 사람(human)으로 기록됩니다. 출처·상태는 서버가 정합니다.' }),
-    field('제목', titleIn),
-    el('div', { class: 'frow' }, field('종류(kind)', kindSel), field('도메인', domainIn)),
-    isEdit ? null : field('이름(name)', nameIn),
-    field('본문', bodyIn),
-  );
-  const saveBtn = el('button', { class: 'btn btn-primary', text: isEdit ? '저장' : '저장' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  saveBtn.addEventListener('click', async () => {
-    const note = bodyIn.value.trim();
-    if (!note) { toast('본문은 비울 수 없습니다', true); return; }
-    saveBtn.disabled = true;
-    const payload = { note, title: titleIn.value.trim() || undefined, kind: kindSel.value, domain: domainIn.value.trim() || undefined };
-    if (isEdit) payload.name = u.name;
-    else if (nameIn.value.trim()) payload.name = nameIn.value.trim();
-    try {
-      const r = await api('/api/ui/ctx/save', { method: 'POST', body: JSON.stringify(payload) });
-      back.remove();
-      toast(isEdit ? '저장했습니다' : ('저장했습니다 — ' + (r.saved && r.saved.name)));
-      state.overview = null; getOverview(true).catch(() => {});
-      if (onDone) onDone(r.saved);
-    } catch (e) {
-      saveBtn.disabled = false;
-      toast('저장 실패 — ' + e.message, true);
-    }
-  });
-  back.querySelector('.ov-box').append(el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-}
-
-// ── 공용 작은 컴포넌트 (field() 는 관리 블록의 동일 정의 재사용) ──
 function skeleton(caption) {
   return el('div', {}, el('p', { class: 'loading-caption', text: caption + '…' }),
     el('div', { class: 'skel-stack' }, el('div', { class: 'skel' }), el('div', { class: 'skel' }), el('div', { class: 'skel' })));
@@ -5216,27 +4603,12 @@ async function route() {
   const view = $view();
   const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
   try {
-    if (page === 'browse') {
-      setActiveTab('ctx'); // '회사 맥락' 상위 탭(지도·탐색·검토 묶음)
-      await renderBrowse(view, params);
-    } else if (page === 'u') {
-      setActiveTab('ctx'); // 유닛 상세는 탐색의 하위 — '회사 맥락' 상위 탭 활성 유지
-      // #/u/<name>/edit → 편집 페이지(split view), 그 외 → 상세. name 에 '/' 가 있을 수 있어 마지막 'edit' 만 분리.
-      const rest = segs.slice(1);
-      if (rest.length > 1 && rest[rest.length - 1] === 'edit') {
-        await renderEditPage(view, decodeURIComponent(rest.slice(0, -1).join('/')));
-      } else {
-        await renderUnit(view, decodeURIComponent(rest.join('/')));
-      }
-    } else if (page === 'learn') {
+    if (page === 'learn') {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link)
       await renderLearn(view);
     } else if (page === 'install') {
       setActiveTab('start');
       await renderInstall(view);
-    } else if (page === 'review') {
-      setActiveTab('ctx');
-      await renderReview(view);
     } else if (page === 'domainmap') {
       setActiveTab('domainmap'); // 코드구조 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
@@ -5264,8 +4636,8 @@ async function route() {
       setActiveTab('terminal');
       await renderTerminal(view, params.get('team'));
     } else {
-      setActiveTab('ctx');
-      await renderMap(view);
+      setActiveTab('start');
+      await renderInstall(view);
     }
   } catch (e) {
     if (e && e.status === 401) return;
@@ -5593,7 +4965,7 @@ function kindsRegistry(detail, data) {
       el('td', { class: 'kr-num', text: String(k.active_count) }),
       el('td', { text: k.latest_updated_at ? relTime(k.latest_updated_at) : '—' }),
     );
-    const go = () => { location.hash = '#/browse?kind=' + encodeURIComponent(k.kind); };
+    const go = () => { location.hash = '#/knowledge'; };
     row.addEventListener('click', go);
     row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
     tbl.append(row);
