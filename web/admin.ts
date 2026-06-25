@@ -1,7 +1,7 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { api, applyReveal, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
-import { skeleton } from './learn.js';
+import { overlayBox, skeleton } from './learn.js';
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -45,12 +45,14 @@ const ADMIN_SECTIONS = [
   { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
+  // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
+  { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
 ];
 const ADMIN_ONLY = ['member-add', 'tokens', 'runtime', 'mcp', 'db-sources']; // admin 권한 전용(쓰기/인프라)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
-const CONTEXT_EDIT = ['wiki-categories']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
+const CONTEXT_EDIT = ['wiki-categories', 'repos']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
 // 컨텍스트 온톨로지 가이드 섹션 — 매 대화에 깔리는 지식 인덱스 전체 템플릿. 잘못 바꾸면 모든 AI 동작이 망가질 수 있어 경고+되돌리기를 단다.
 const SCAFFOLD_SECTIONS = ['context-ontology-guide'];
 // 플레이스홀더 안내 — 편집창에 보여줄 자동주입 토큰 설명.
@@ -265,12 +267,110 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'tools') return toolsEditor(detail, data);
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
+  if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
 }
 
-// ── P-V3-4a 도메인 · 레포 통제어휘 CRUD ──
-// repo>domain 계층: repo 셀렉터 + repo CRUD, 그 아래 선택 repo 의 도메인 목록 + domain CRUD.
-//  domain_rename 은 soft-alias(물리 key 불변) — UI 에 그 의미를 명시한다.
+// ── 레포(git) 관리 — repo 테이블(=실제 git 레포)을 등록·git 연결·폐기·삭제. ──
+//  레거시('repo 통제어휘 CRUD' = repo>domain vocab 계층, 웹 미와이어)를 폐기하고 git 레포 관리로 대체.
+//  repo 는 code_unit 이 매핑되는 실 git 레포다. 여기 설정한 git_url/default_branch 는 도메인맵 스캔(webhook)과
+//  '내 컴퓨터에서 작업' 클론이 함께 쓰는 단일 소스. 편집은 context 스코프(없으면 읽기 전용).
+async function reposPanel(detail, data) {
+  const canEdit = state.admin.canContext;
+  const reload = () => reposPanel(detail, data);
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('레포를 불러오는 중')));
+  let repos;
+  try { const r = await api('/api/ui/repos'); repos = (r && r.domainmapRepos) || []; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '레포를 불러오지 못했습니다'))); return; }
+
+  const rows = el('div', { class: 'wikicat-rows' });
+  if (!repos.length) {
+    rows.append(el('div', { class: 'wikicat-empty', text: '아직 등록된 레포가 없습니다.' }));
+  } else {
+    for (const r of repos) {
+      const deprecated = (r.state || 'active') === 'deprecated';
+      const t = r.totals || {};
+      const meta = r.clone_url
+        ? el('span', { class: 'wikicat-should', title: r.clone_url },
+            el('span', { class: 'wikicat-should-label', text: 'git' }), r.clone_url + ' · ' + (r.default_branch || 'main'))
+        : el('span', { class: 'wikicat-should wikicat-should-empty' },
+            el('span', { class: 'wikicat-should-label', text: 'git' }),
+            canEdit ? 'git 미연결 — 수정에서 연결하세요' : 'git 미연결');
+      const main = el('div', { class: 'wikicat-row-main' },
+        el('span', { class: 'wikicat-name', text: r.name }),
+        el('span', { class: 'wikicat-key mono', text: (t.code_units || 0) + ' code · ' + (t.domains || 0) + ' dom' }),
+        deprecated ? el('span', { class: 'dm-tag', text: '폐기됨' }) : null,
+        meta);
+      const acts = canEdit ? el('div', { class: 'wikicat-row-acts' },
+        el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openRepoForm(r, reload) }),
+        el('button', { class: 'btn btn-ghost btn-sm', text: deprecated ? '복귀' : '폐기', onclick: () => repoSetDeprecated(r.name, deprecated, reload) }),
+        el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => repoHardDelete(r.name, reload) })) : null;
+      rows.append(el('div', { class: 'wikicat-row' }, main, acts));
+    }
+  }
+
+  const head = el('div', { class: 'wikicat-grouphead' },
+    el('span', { class: 'wikicat-grouptitle', text: '레포' }),
+    el('span', { class: 'dm-tag', text: 'git' }),
+    el('span', { class: 'wikicat-groupcount', text: String(repos.length) }));
+  if (canEdit) head.append(el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }));
+
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }),
+      canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
+    el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요.' }),
+    el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+  detail.replaceChildren(card);
+}
+
+// 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
+function openRepoForm(repo, reload) {
+  const isNew = !repo;
+  const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
+  const nameInp = el('input', { type: 'text', style: inputStyle, value: repo ? repo.name : '', placeholder: 'context-ontology' });
+  const urlInp = el('input', { type: 'text', style: inputStyle, value: (repo && repo.clone_url) || '', placeholder: 'https://github.com/org/repo.git' });
+  const branchInp = el('input', { type: 'text', style: inputStyle, value: (repo && repo.default_branch) || 'main', placeholder: 'main' });
+  const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: title }),
+    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '레포 추가' : '저장' });
+  const form = el('div', { class: 'proj-settings' },
+    block('레포 이름', isNew ? '실제 git 레포 이름 — code_unit 이 이 이름으로 매핑됩니다.' : '이름을 바꿔도 매핑·도메인은 보존됩니다.', nameInp),
+    block('git 주소 (clone URL)', '도메인맵 스캔과 로컬 작업 클론이 이 주소를 씁니다. 비우면 git 미연결.', urlInp),
+    block('기본 브랜치', '비우면 main.', branchInp),
+    el('div', { class: 'ps-rules-actions' }, saveBtn));
+  const back = overlayBox(isNew ? '레포 추가' : '레포 수정 — ' + repo.name, form);
+  const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
+  saveBtn.onclick = async () => {
+    const nm = nameInp.value.trim();
+    if (!nm) { toast('레포 이름이 필요합니다', true); return; }
+    saveBtn.disabled = true;
+    try {
+      if (isNew) await api('/api/ui/domainmap/repo/create', { method: 'POST', body: JSON.stringify({ name: nm }) });
+      else if (nm !== repo.name) await api('/api/ui/domainmap/repo/rename', { method: 'POST', body: JSON.stringify({ name: repo.name, newName: nm }) });
+      await api('/api/ui/domainmap/repo/source', { method: 'POST', body: JSON.stringify({ name: nm, git_url: urlInp.value.trim() || null, default_branch: branchInp.value.trim() || 'main' }) });
+      toast(isNew ? '레포를 추가했습니다' : '저장했습니다'); back.remove(); reload();
+    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+  };
+}
+
+async function repoSetDeprecated(name, isDeprecated, reload) {
+  try { await api('/api/ui/domainmap/repo/deprecate', { method: 'POST', body: JSON.stringify({ name, undo: isDeprecated }) }); toast(isDeprecated ? '복귀했습니다' : '폐기했습니다'); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+
+async function repoHardDelete(name, reload) {
+  if (!confirm('레포 ‘' + name + '’을(를) 영구삭제할까요?\n\n코드유닛·매핑·도메인 등 하위가 함께 삭제됩니다(되돌릴 수 없음).')) return;
+  try {
+    const r = await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name }) });
+    if (r && r.blocked) {
+      const c = r.refs || {};
+      if (!confirm('하위가 있습니다 (code ' + (c.code_units || 0) + ' · entities ' + (c.data_entities || 0) + '). 그래도 모두 cascade 삭제할까요?')) return;
+      await api('/api/ui/domainmap/repo/delete', { method: 'POST', body: JSON.stringify({ name, force: true }) });
+    }
+    toast('삭제했습니다'); reload();
+  } catch (e) { toast('실패 — ' + e.message, true); }
+}
 // ── WIKI 카테고리 관리 — 지식(위키)의 분류축(사업·제품·시스템 카테고리) CRUD. 제품 카테고리=도메인. ──
 //  카테고리 탭(#/categories)과 동일한 category-store(/api/ui/categories) — 여기 변경이 지식·프로젝트 탭 좌측에 반영.
 //  space 탭으로 나누지 않고 한 화면에 전부(컴팩트 표 — fields-table 재사용). 편집은 context 스코프(없으면 읽기 전용).

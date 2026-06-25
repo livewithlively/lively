@@ -4,6 +4,7 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
+import { getTaskTags, getTaskTime } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry 테이블 사용
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
@@ -52,6 +53,7 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
     params.push(filter.viewer);
     wh.push(`(p.created_by=$${params.length} OR EXISTS(SELECT 1 FROM project_member pmv WHERE pmv.project_id=p.id AND pmv.member_id=$${params.length}))`);
   }
+  wh.push("p.folder IS DISTINCT FROM '__board_anchor__'"); // 보드 커스텀 컬럼 앵커(숨김 프로젝트) 제외
   const where = `WHERE ${wh.join(" AND ")}`;
   // DISTINCT — 다중 카테고리 매핑 시 조인 중복 제거. ORDER BY 컬럼은 SELECT DISTINCT 대상에 포함.
   //  members = facepile 용 스칼라 서브쿼리(org_member 표시명 조인, 정렬 보존).
@@ -59,7 +61,9 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   return q(itemsPool,
     `SELECT DISTINCT ${cols},
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', pm.member_id, 'display_name', m.display_name) ORDER BY pm.sort, pm.member_id)
-         FROM project_member pm LEFT JOIN org_member m ON m.id=pm.member_id WHERE pm.project_id=p.id), '[]'::jsonb) AS members
+         FROM project_member pm LEFT JOIN org_member m ON m.id=pm.member_id WHERE pm.project_id=p.id), '[]'::jsonb) AS members,
+       (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task') AS task_count,
+       (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task' AND c.status='done') AS task_done_count
      FROM project p ${join} ${where} ORDER BY p.updated_at DESC`, params);
 }
 
@@ -69,6 +73,8 @@ export interface ProjectDetail extends ProjectRow {
   categories: unknown[];
   knowledge: { required: unknown[]; produced: unknown[] };
   fields: unknown[]; // 커스텀 필드(클릭업형 컬럼) 정의 — 루트 프로젝트 단위. 값은 각 task 의 field_values 에.
+  tags: unknown[]; // 프로젝트 자체 태그(클릭업식 메타) — task_tag_link 를 project.id 로 사용.
+  time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -136,7 +142,10 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     produced: kRows.filter((r) => r.relation === "produced"),
   };
 
-  return { ...project, members, tasks, categories, knowledge, fields };
+  // 프로젝트 자체의 태그·시간추적(클릭업식 메타) — 태스크와 동일 테이블을 project.id 로 사용.
+  const [tags, time] = await Promise.all([getTaskTags(id), getTaskTime(id)]);
+
+  return { ...project, members, tasks, categories, knowledge, fields, tags, time };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
@@ -246,6 +255,66 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status]);
   await auditProject(String(id), "set_status", before, after, ctx);
   return after;
+}
+
+// 프로젝트 이름/설명 수정(level='project'). 주어진 키만 변경(부재=무변경, description null=해제).
+export async function updateProject(
+  id: number,
+  patch: Partial<{ name: string; description: string | null;
+    priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null }>,
+  ctx?: WriteCtx,
+): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
+  if (patch.name !== undefined) set("name", patch.name);
+  if (patch.description !== undefined) set("description", patch.description);
+  if (patch.priority !== undefined) set("priority", patch.priority);
+  if (patch.assignee !== undefined) set("assignee", patch.assignee);
+  if (patch.start_date !== undefined) set("start_date", patch.start_date);
+  if (patch.due_date !== undefined) set("due_date", patch.due_date);
+  if (!sets.length) return before; // 패치 비어있음 — no-op
+  sets.push("updated_at=now()");
+  vals.push(id);
+  const after: ProjectRow = await one(itemsPool,
+    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
+  await auditProject(String(id), "update", before, after, ctx);
+  return after;
+}
+
+// ── 보드(프로젝트 목록) 커스텀 컬럼 ───────────────────────────────────────────
+//  task_field 는 루트 프로젝트(project_id)에 매이므로, 보드 전역 컬럼은 숨김 앵커 프로젝트
+//  (folder='__board_anchor__')에 정의를 달고 값은 각 프로젝트 행(task_field_value.task_id=프로젝트 id)에 둔다.
+//  앵커는 listProjects 에서 제외(보드에 안 보임). level='project' 라 FK·createField(level 체크) 통과.
+export async function getOrCreateBoardAnchor(): Promise<number> {
+  const existing: { id: number } | undefined = await one(itemsPool,
+    `SELECT id FROM project WHERE level='project' AND folder='__board_anchor__' LIMIT 1`, []);
+  if (existing) return existing.id;
+  const row: { id: number } = await one(itemsPool,
+    `INSERT INTO project(level, name, status, folder, created_at, updated_at)
+     VALUES('project', '__board__', 'active', '__board_anchor__', now(), now()) RETURNING id`, []);
+  return row.id;
+}
+
+// 보드 커스텀 컬럼 = 앵커의 필드 정의 + 프로젝트별 값(프론트가 각 프로젝트에 field_values 로 머지).
+export async function getBoardFields(): Promise<{ anchorId: number; fields: any[]; valuesByProject: Record<number, Record<string, unknown>> }> {
+  const anchorId = await getOrCreateBoardAnchor();
+  const fields = await listProjectFields(anchorId);
+  const valuesByProject: Record<number, Record<string, unknown>> = {};
+  if (fields.length) {
+    const rows: Array<{ id: number }> = await q(itemsPool,
+      `SELECT id FROM project WHERE level='project' AND folder IS DISTINCT FROM '__board_anchor__'`, []);
+    const ids = rows.map((r) => r.id);
+    const valueRows = ids.length ? await getFieldValuesForTasks(ids) : [];
+    for (const r of valueRows as Array<{ task_id: number; field_id: number; value: unknown }>) {
+      if (!valuesByProject[r.task_id]) valuesByProject[r.task_id] = {};
+      valuesByProject[r.task_id][String(r.field_id)] = r.value;
+    }
+  }
+  return { anchorId, fields, valuesByProject };
 }
 
 export async function setProjectMembers(projectId: number, memberIds: string[], ctx?: WriteCtx): Promise<string[]> {

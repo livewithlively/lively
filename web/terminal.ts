@@ -2,7 +2,6 @@
 import { api, el, errorNote, state, toast } from './core.js';
 import { checklist, skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
-import { parseHash } from './main.js';
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -60,25 +59,21 @@ function fmtTermDate(sec) {
   return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-async function renderTerminal(view, teamId) {
+async function renderTerminal(view) {
   view.replaceChildren(skeleton('세션을 불러오는 중'));
-  let data, cfg, td;
-  try { [data, cfg, td] = await Promise.all([
-    api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config'), api('/api/ui/terminal/teams'),
+  let data, cfg;
+  try { [data, cfg] = await Promise.all([
+    api('/api/ui/terminal/sessions'), api('/api/ui/terminal/config'),
   ]); }
   catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
   const sessions = (data && data.sessions) || [];
-  const teams = (td && td.teams) || [];
-  if (teamId) { renderTeamView(view, cfg, teams, sessions, teamId); return; }
 
-  const reRender = () => renderTerminal(view, null);
-  const top = sessions.filter((s) => !s.team);
-  const pub = top.filter((s) => s.visibility !== 'private');
-  const priv = top.filter((s) => s.visibility === 'private');
-  const pubMine = pub.filter((s) => s.owned);
-  const pubOthers = pub.filter((s) => !s.owned);
-  // 삭제 가능 = 내 소유 세션(공개 내것 + 비공개). 서버도 소유자 아니면 403 으로 재검증.
-  const deletable = [...pubMine, ...priv].filter((s) => s.owned);
+  const reRender = () => renderTerminal(view);
+  // 서버(listSessions)가 이미 '내 것 또는 나를 초대한' 세션만 내려준다 → owned 로 두 섹션 분기.
+  const mine = sessions.filter((s) => s.owned);
+  const invited = sessions.filter((s) => !s.owned);
+  // 삭제 가능 = 내 소유 세션. 서버도 소유자 아니면 403 으로 재검증.
+  const deletable = mine;
 
   // 선택(일괄삭제) 상태 — 리페치 없이 로컬 재페인트. ids = 선택된 세션 id 집합.
   const sel = { mode: false, ids: new Set() };
@@ -101,34 +96,23 @@ async function renderTerminal(view, teamId) {
   }
 
   function repaint() {
-    // 헤더 우측 — 생성 버튼들만. (선택/취소 토글은 '공개 세션' 섹션 헤더 우측으로 이동.)
+    // 헤더 우측 — '새 세션' 하나. 기본 비공개로 만들고, 생성 폼에서 멤버를 초대한다.
     headActions.replaceChildren(
-      el('button', { class: 'btn btn-ghost', text: '+ 새 팀', onclick: () => openTeamCreateForm(cfg, view) }),
-      el('button', { class: 'btn btn-primary', text: '+ 새 공개 세션', onclick: () => openTermCreateForm(cfg, view, null, 'public') }),
-      el('button', { class: 'btn btn-ghost', text: '+ 새 비공개 세션', onclick: () => openTermCreateForm(cfg, view, null, 'private') }));
-    // '공개 세션' 헤더 우측 토글 — 선택모드면 [취소], 평소엔 (삭제 가능한 세션이 있을 때만) [선택].
+      el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) }));
+    // '내 세션' 헤더 우측 토글 — 선택모드면 [취소], 평소엔 (삭제 가능한 세션이 있을 때만) [선택].
     const selToggle = sel.mode
       ? el('button', { class: 'btn btn-ghost btn-sm term-sel-toggle', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); repaint(); } })
       : (deletable.length
           ? el('button', { class: 'btn btn-ghost btn-sm term-sel-toggle', text: '선택', title: '여러 세션을 골라 한 번에 삭제', onclick: () => { sel.mode = true; repaint(); } })
           : null);
-    // 팀 세션 / 공개 세션 / 비공개 세션 — 세 섹션. 선택모드면 내 세션 행에 체크박스(selOpt).
+    // 내 세션 / 내가 초대받은 남의 세션 — 두 섹션. 선택모드면 내 세션 행에 체크박스(selOpt).
     const selOpt = sel.mode ? { ids: sel.ids, onToggle: repaintBulk } : null;
-    const sections: any[] = [];
-    if (teams.length) {
-      const tlist = el('div', { class: 'term-list' });
-      for (const t of teams) tlist.append(teamRow(t, cfg, view));
-      sections.push([termSectionHead('팀 세션', '같은 팀원끼리만 자유롭게 보고 열 수 있는 세션입니다.'), tlist]);
-    }
-    sections.push([termSectionHead('공개 세션', '모든 멤버에게 보이는 세션입니다.', selToggle),
-      termPublicSection(pubMine, pubOthers, cfg, view, selOpt)]);
-    sections.push([termSectionHead('비공개 세션', '나에게만 보이는 세션입니다.'),
-      termSessionList(priv, cfg, view, '비공개 세션이 없습니다.', selOpt)]);
     body.replaceChildren();
-    sections.forEach(([secHead, secList], i) => {
-      if (i > 0) secHead.classList.add('term-section--div'); // 첫 섹션 빼고 위에 구분선
-      body.append(secHead, secList);
-    });
+    const sec1 = termSectionHead('내 세션', '내가 만든 세션입니다. 기본 비공개이며, 멤버를 초대하면 그 사람도 보고 열 수 있습니다.', selToggle);
+    const sec2 = termSectionHead('내가 초대받은 남의 세션', '다른 멤버가 나를 초대한 세션입니다.');
+    sec2.classList.add('term-section--div'); // 두 번째 섹션 위에 구분선
+    body.append(sec1, termSessionList(mine, cfg, view, '아직 만든 세션이 없습니다. "새 세션"으로 만드세요.', selOpt));
+    body.append(sec2, termSessionList(invited, cfg, view, '초대받은 세션이 없습니다.'));
     repaintBulk();
   }
 
@@ -164,93 +148,26 @@ function termSectionHead(title, desc?, rightEl?) {
 function termSessionList(items, cfg, view, emptyText, sel?) {
   const list = el('div', { class: 'term-list' });
   if (!items.length && emptyText) list.append(el('div', { class: 'empty', text: emptyText }));
-  for (const s of items) list.append(termRow(s, cfg, view, null, sel));
+  for (const s of items) list.append(termRow(s, cfg, view, sel));
   return list;
 }
-// 공개 세션 = 내 것 + 다른 멤버 것. 남의 공개 세션은 계속 쌓이므로 기본 접고(N개) 펼쳐 보게 한다.
-function termPublicSection(pubMine, pubOthers, cfg, view, sel) {
-  const wrap = el('div', {});
-  if (pubMine.length) wrap.append(termSessionList(pubMine, cfg, view, '', sel));
-  else if (!pubOthers.length) wrap.append(termSessionList([], cfg, view, '공개 세션이 없습니다. "새 세션"으로 만드세요.'));
-  else wrap.append(el('div', { class: 'caption', style: 'margin-top:10px', text: '내가 만든 공개 세션은 없습니다.' }));
-  if (pubOthers.length) {
-    const list = termSessionList(pubOthers, cfg, view, '');
-    list.style.display = 'none';
-    const caret = el('span', { class: 'term-fold-caret', text: '▾' });
-    const toggle = el('button', { class: 'term-fold', type: 'button' },
-      caret, el('span', { text: '다른 멤버의 공개 세션 ' + pubOthers.length + '개' }));
-    toggle.addEventListener('click', () => {
-      const open = list.style.display === 'none';
-      list.style.display = open ? '' : 'none';
-      caret.textContent = open ? '▴' : '▾';
-      toggle.classList.toggle('open', open);
-    });
-    wrap.append(toggle, list);
-  }
-  return wrap;
-}
 
-// 팀 세션 행(루트 화면). 열기=팀 진입, 소유자는 팀원 관리·해제.
-function teamRow(t, cfg, view) {
-  const count = (t.members ? t.members.length : 0) + 1; // +1 = 소유자
-  const meta = el('div', { class: 'term-row-meta' },
-    el('div', { class: 'term-row-title' },
-      el('span', { text: '📁 ' + t.label }),
-      t.owned ? el('span', { class: 'term-badge', text: '내 팀' }) : null),
-    el('div', { class: 'caption', text: '구성원 ' + count + '명' + ((t.memberNames && t.memberNames.length) ? ' · ' + t.memberNames.join(', ') : '') }));
-  // 팀 세션은 모두에게 보이되, 멤버가 아니면 입장 불가(열기 자리에 잠금 표시).
-  //  accessible 미정의(구 백엔드 응답)면 접근가능으로 본다 — 재시작 전 회귀 방지(구 백엔드는 내 팀만 내려줌).
-  const actions = [t.accessible !== false
-    ? el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => { location.hash = '#/terminal?team=' + encodeURIComponent(t.id); } })
-    : el('button', { class: 'btn btn-ghost btn-sm', text: '🔒 팀원 전용', disabled: '', title: '이 팀의 팀원만 들어갈 수 있습니다' })];
-  if (t.owned) {
-    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '팀원 관리', onclick: () => openTeamManageForm(t, cfg, view) }));
-    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '해제', onclick: async () => {
-      if (!confirm('팀 "' + t.label + '"을(를) 해제할까요? 폴더와 파일은 그대로 두고 팀 묶음(접근 제한)만 풉니다.')) return;
-      try { await api('/api/ui/terminal/teams/' + encodeURIComponent(t.id), { method: 'DELETE' }); toast('팀 해제됨'); renderTerminal(view, null); }
-      catch (e) { toast('실패 — ' + e.message, true); }
-    } }));
-  }
-  return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
-}
-
-// 팀 진입 화면 — 루트와 동일 UI(세션 목록 + 새 세션), 단 이 팀 세션으로 스코프.
-function renderTeamView(view, cfg, teams, sessions, teamId) {
-  const back = el('a', { class: 'btn btn-ghost btn-sm', href: '#/terminal', text: '← 터미널 홈' });
-  const team = teams.find((t) => t.id === teamId);
-  if (!team || team.accessible === false) {
-    const msg = !team ? '존재하지 않는 팀입니다.' : '이 팀 세션은 팀원만 들어갈 수 있습니다. 팀 소유자에게 초대를 요청하세요.';
-    view.replaceChildren(el('div', { class: 'page-head' }, el('div', { class: 'term-head-actions' }, back), el('h1', { text: '팀 세션' })),
-      el('div', { class: 'empty', text: msg }));
-    return;
-  }
-  const ownerName = team.owned ? myName(cfg) : (memberName(cfg, team.owner) || '소유자');
-  const memberBadges = el('div', { class: 'term-members' },
-    el('span', { class: 'term-badge owner', text: '👑 ' + ownerName }),
-    ...((team.memberNames || []).map((n) => el('span', { class: 'term-badge', text: '👤 ' + n }))));
-  const head = el('div', { class: 'page-head' },
-    el('div', { class: 'term-head-actions' }, back,
-      el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view, team) }),
-      team.owned ? el('button', { class: 'btn btn-ghost', text: '팀원 관리', onclick: () => openTeamManageForm(team, cfg, view) }) : null),
-    el('h1', { text: '📁 ' + team.label }),
-    memberBadges,
-    el('div', { class: 'caption', text: '이 팀 세션은 같은 팀원끼리만 자유롭게 보고 열 수 있습니다.' }));
-  const mine = sessions.filter((s) => s.team === teamId);
-  const list = el('div', { class: 'term-list' });
-  if (!mine.length) list.append(el('div', { class: 'empty', text: '이 팀에 세션이 없습니다. "새 세션"으로 만드세요.' }));
-  for (const s of mine) list.append(termRow(s, cfg, view, team));
-  view.replaceChildren(head, list);
-}
-
-function termRow(s, cfg, view, team, sel?) {
+function termRow(s, cfg, view, sel?) {
   const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness;
   const author = memberName(cfg, s.owner) || s.owner || '?';
   const created = fmtTermDate(s.created);
+  // 공유 상태 — 내 세션이면 초대 인원(없으면 '비공개')을 보여준다. 남의 세션은 소유자(author) 배지로 충분.
+  const invites = s.invites || [];
+  const shareBadge = s.owned
+    ? (invites.length
+        ? el('span', { class: 'term-badge', title: invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + invites.length + '명' })
+        : el('span', { class: 'term-badge', text: '비공개' }))
+    : null;
   const meta = el('div', { class: 'term-row-meta' },
     el('div', { class: 'term-row-title' },
       el('span', { class: 'term-row-name', title: s.label, text: s.label }),
       el('span', { class: 'term-badge author', text: '👤 ' + author }),
-      el('span', { class: 'term-badge', text: s.visibility === 'private' ? '비공개' : '공개' }),
+      shareBadge,
       s.autoApprove ? el('span', { class: 'term-badge danger', text: '자동승인' }) : null,
       s.attached ? el('span', { class: 'term-badge', text: '접속중' }) : null),
     el('div', { class: 'caption', text: harnessLabel + (created ? ' · ' + created : '') + (s.dir ? ' · ' + s.dir : '') }));
@@ -261,10 +178,10 @@ function termRow(s, cfg, view, team, sel?) {
     cb.addEventListener('change', () => { if (cb.checked) sel.ids.add(s.id); else sel.ids.delete(s.id); if (sel.onToggle) sel.onToggle(); });
     return el('label', { class: 'term-row term-row--sel' }, el('span', { class: 'term-row-check' }, cb), meta);
   }
-  const reRender = () => renderTerminal(view, team ? team.id : null);
+  const reRender = () => renderTerminal(view);
   const actions = [el('button', { class: 'btn btn-primary btn-sm', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') })];
   if (s.owned) {
-    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openTermEdit(s, cfg, view, team) }));
+    actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     actions.push(el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
       if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
       try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
@@ -274,8 +191,8 @@ function termRow(s, cfg, view, team, sel?) {
   return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
 }
 
-// 새 세션. team 이 주어지면 그 팀 세션으로 스코프(작업 위치 고정, team 태그 전달).
-function openTermCreateForm(cfg, view, team?, fixedVis?) {
+// 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
+function openTermCreateForm(cfg, view) {
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
@@ -284,11 +201,7 @@ function openTermCreateForm(cfg, view, team?, fixedVis?) {
   const pickerBox = el('div', { class: 'term-picker' });
   let pickerPath = '';
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
-  const visSel = el('select', { class: 'term-input' },
-    el('option', { value: 'public' }, '공개 — 모든 멤버가 열람 가능한 세션 (팀 내부 세션은 팀원만 열람가능)'),
-    el('option', { value: 'private' }, '비공개 — 나에게만 보이고 나만 열 수 있는 세션'));
-  // 헤더의 '새 공개/비공개 세션' 버튼으로 들어오면 공개여부가 정해져 있으므로 자동선택+비활성(회색)으로 둔다.
-  if (fixedVis) { visSel.value = fixedVis; visSel.disabled = true; }
+  const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
   const autoCb = el('input', { type: 'checkbox' });
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
@@ -309,7 +222,7 @@ function openTermCreateForm(cfg, view, team?, fixedVis?) {
   harnessSel.addEventListener('change', renderFlags);
   renderFlags();
 
-  // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색. 팀 컨텍스트면 폴더 고정.
+  // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
   async function loadPicker() {
     pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
     let data: any;
@@ -342,48 +255,38 @@ function openTermCreateForm(cfg, view, team?, fixedVis?) {
     try { await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(rel), { method: 'POST' }); pickerPath = rel; loadPicker(); }
     catch (e) { toast('폴더 생성 실패 — ' + e.message, true); }
   }
-  if (!team) {
-    rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
-    loadPicker();
-  }
+  rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
+  loadPicker();
 
-  // 팀 컨텍스트면 작업 위치/폴더 대신 고정된 '팀 세션' 표시 필드.
-  const locFields = team
-    ? [field('팀 세션', el('input', { class: 'term-input', type: 'text', value: '📁 ' + team.label, disabled: '' }))]
-    : [field('작업 위치', rootSel), field('폴더', pickerBox)];
-
-  const newTitle = fixedVis === 'private' ? '새 비공개 세션' : (fixedVis === 'public' ? '새 공개 세션' : '새 세션');
-  const back = overlay(team ? ('새 세션 · ' + team.label) : newTitle,
-    field('이름', labelI), field('작업자', authorI), locFields, field('하네스', harnessSel),
-    field('공개 범위', visSel), flagsBox, autoWrap,
+  const back = overlay('새 세션',
+    field('이름', labelI), field('작업자', authorI),
+    field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel),
+    field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
+    flagsBox, autoWrap,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
-        const payload = team
-          ? { label: labelI.value, rootKey: 'shared', subpath: team.id, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value, team: team.id }
-          : { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, visibility: visSel.value };
+        const payload = { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected() };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           back.remove(); toast('세션 생성됨');
           if (out && out.session) window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
-          renderTerminal(view, team ? team.id : null);
+          renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));
 }
 
-// 세션 수정 — 이름·공개범위만 변경 가능(소유자만, 서버가 강제). 작업폴더·하네스·모델·자동승인은
+// 세션 수정 — 이름·초대 멤버만 변경 가능(소유자만, 서버가 강제). 작업폴더·하네스·모델·자동승인은
 //  생성 시 실행 명령에 박혀(돌고 있는 LLM/셸 프로세스) 사후 변경 불가 → '현재값'을 비활성으로 보여주고
 //  왜 못 바꾸는지(닫고 새로 켜야 함) 안내한다. "기능 미구현"이 아니라 "구조상 고정"임을 분명히.
-function openTermEdit(s, cfg, view, team) {
+function openTermEdit(s, cfg, view) {
   const harnesses = (cfg && cfg.harnesses) || [];
   const harness = harnesses.find((h) => h.key === s.harness) || {};
   // ── 변경 가능 ──
   const labelI = el('input', { class: 'term-input', type: 'text', value: s.label });
-  const visSel = el('select', { class: 'term-input' },
-    el('option', { value: 'public', selected: s.visibility !== 'private' ? '' : null }, '공개 — 모든 멤버가 열람 가능한 세션 (팀 내부 세션은 팀원만 열람가능)'),
-    el('option', { value: 'private', selected: s.visibility === 'private' ? '' : null }, '비공개 — 나에게만 보이고 나만 열 수 있는 세션'));
+  const inviteBox = buildInvitePicker(cfg, new Set(s.invites || []));
   // ── 생성 시 고정(비활성 표시) ──
   const ro = (val) => el('input', { class: 'term-input', type: 'text', value: val, disabled: '' });
   const author = memberName(cfg, s.owner) || s.owner || '?';
@@ -398,7 +301,7 @@ function openTermEdit(s, cfg, view, team) {
 
   const back = overlay('세션 수정',
     field('이름', labelI),
-    field('공개 범위', visSel),
+    field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
     lockNote,
     field('작업자', ro(author)),
     field('작업 폴더', ro(s.dir || '(기본)')),
@@ -408,69 +311,25 @@ function openTermEdit(s, cfg, view, team) {
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
         ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, visibility: visSel.value }) }); back.remove(); toast('수정됨'); renderTerminal(view, team ? team.id : null); }
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected() }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
         catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
       } })));
 }
 
-// 새 팀 — 공유 워크스페이스에 폴더를 만들고 선택한 구성원만 접근. 소유자(나)는 자동 포함.
-function openTeamCreateForm(cfg, view) {
-  const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 그로스팀' });
+// 초대 멤버 피커 — 나(state.me) 제외한 구성원 체크리스트. current(Set)로 초기 선택,
+//  selected() 로 체크된 멤버 id 배열을 돌려준다. 생성·수정 폼이 공유한다.
+function buildInvitePicker(cfg, current) {
   const meId = (state.me && state.me.userId) || '';
   const others = (cfg.members || []).filter((m) => m.id !== meId);
-  const checks = others.map((m) => {
-    const cb = el('input', { type: 'checkbox', 'data-mid': m.id });
-    return { id: m.id, cb, row: el('label', { class: 'term-check' }, cb, el('span', { text: m.name + (m.kind === 'agent' ? ' (AI)' : '') })) };
-  });
-  const listBox = checks.length
-    ? el('div', { class: 'term-checklist' }, ...checks.map((c) => c.row))
-    : el('div', { class: 'caption', text: '추가할 다른 구성원이 없습니다 — 나만 접근하는 팀이 됩니다.' });
-  const back = overlay('새 팀',
-    field('팀 이름', labelI),
-    field('소유자', el('input', { class: 'term-input', type: 'text', value: myName(cfg), disabled: '' })),
-    field('팀원 (선택한 구성원만 이 팀 세션에 접근)', listBox),
-    el('div', { class: 'ov-actions' },
-      el('button', { class: 'btn btn-primary', text: '팀 만들기', onclick: async (ev) => {
-        if (!labelI.value.trim()) { toast('팀 이름을 입력하세요', true); return; }
-        ev.currentTarget.disabled = true;
-        const picked = checks.filter((c) => c.cb.checked).map((c) => c.id);
-        try {
-          const out = await api('/api/ui/terminal/teams', { method: 'POST', body: JSON.stringify({ label: labelI.value, members: picked }) });
-          back.remove(); toast('팀 생성됨');
-          if (out && out.team) location.hash = '#/terminal?team=' + encodeURIComponent(out.team.id);
-          else renderTerminal(view, null);
-        } catch (e) { ev.currentTarget.disabled = false; toast('팀 생성 실패 — ' + e.message, true); }
-      } })));
-}
-
-// 팀원 관리 — 이름·팀원 수정(소유자만). 저장 후 현재 보던 화면 유지.
-function openTeamManageForm(team, cfg, view) {
-  const labelI = el('input', { class: 'term-input', type: 'text', value: team.label });
-  const current = new Set(team.members || []);
-  const others = (cfg.members || []).filter((m) => m.id !== team.owner);
   const checks = others.map((m) => {
     const cb = el('input', { type: 'checkbox', 'data-mid': m.id });
     if (current.has(m.id)) cb.checked = true;
     return { id: m.id, cb, row: el('label', { class: 'term-check' }, cb, el('span', { text: m.name + (m.kind === 'agent' ? ' (AI)' : '') })) };
   });
-  const listBox = checks.length
+  const box = checks.length
     ? el('div', { class: 'term-checklist' }, ...checks.map((c) => c.row))
-    : el('div', { class: 'caption', text: '추가할 다른 구성원이 없습니다.' });
-  const back = overlay('팀원 관리 · ' + team.label,
-    field('팀 이름', labelI),
-    field('소유자', el('input', { class: 'term-input', type: 'text', value: memberName(cfg, team.owner), disabled: '' })),
-    field('팀원 (선택한 구성원만 이 팀 세션에 접근)', listBox),
-    el('div', { class: 'ov-actions' },
-      el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
-        if (!labelI.value.trim()) { toast('팀 이름을 입력하세요', true); return; }
-        ev.currentTarget.disabled = true;
-        const picked = checks.filter((c) => c.cb.checked).map((c) => c.id);
-        try {
-          await api('/api/ui/terminal/teams/' + encodeURIComponent(team.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, members: picked }) });
-          back.remove(); toast('팀 수정됨');
-          renderTerminal(view, parseHash().params.get('team') || null);
-        } catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
-      } })));
+    : el('div', { class: 'caption', text: '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' });
+  return { box, selected: () => checks.filter((c) => c.cb.checked).map((c) => c.id) };
 }
 
 async function renderTerminalSession(view, id) {
@@ -531,6 +390,5 @@ function openTermSettings() {
 
 export {
   renderTerminal,
-  teamRow,
   teardownTerminal,
 };

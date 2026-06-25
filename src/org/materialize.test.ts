@@ -48,13 +48,14 @@ t("v4-a: R 규칙은 전문(body_md)이 인덱스에 주입된다(enforced)", ()
 // ── (v4-b) K/H/W 는 정적 주입하지 않는다(area 지도로 발견·검색 소환). 제목 리스트 폐기. ──
 t("v4-b: K/H/W 는 정적 주입 안 됨(제목리스트 폐기 — name 도 미노출)", () => {
   const idx = buildKnowledgeIndex([
-    unit({ name: "k1", injection: "recalled", title: "어떤 지식", body_md: "지식 본문" }),
-    unit({ name: "h1", injection: "recalled", title: "어떤 절차", body_md: "절차 본문" }),
-    unit({ name: "w1", injection: "recalled", title: "어떤 작업", body_md: "작업 본문" }),
+    // 픽스처 제목은 가이드 정적 산문과 부분문자열 충돌이 없도록 고유하게(예: "어떤 지식"은 가이드 'WIKI 인덱스 핀: 어떤 지식이…'와 충돌).
+    unit({ name: "fixK1", injection: "recalled", title: "픽스처제목ZZK", body_md: "지식 본문" }),
+    unit({ name: "fixH1", injection: "recalled", title: "픽스처제목ZZH", body_md: "절차 본문" }),
+    unit({ name: "fixW1", injection: "recalled", title: "픽스처제목ZZW", body_md: "작업 본문" }),
   ]);
-  assert.ok(!idx.includes("k1") && !idx.includes("어떤 지식"), "K 는 정적 주입 안 됨");
-  assert.ok(!idx.includes("h1") && !idx.includes("어떤 절차"), "H 는 정적 주입 안 됨");
-  assert.ok(!idx.includes("w1") && !idx.includes("어떤 작업"), "W 는 정적 주입 안 됨");
+  assert.ok(!idx.includes("fixK1") && !idx.includes("픽스처제목ZZK"), "K 는 정적 주입 안 됨");
+  assert.ok(!idx.includes("fixH1") && !idx.includes("픽스처제목ZZH"), "H 는 정적 주입 안 됨");
+  assert.ok(!idx.includes("fixW1") && !idx.includes("픽스처제목ZZW"), "W 는 정적 주입 안 됨");
   // 구 제목리스트 항목줄(`- <title> — <요약>  · ctx_cat name=<name>  · <freshness>`) 형태가 없어야 한다.
   assert.ok(!/·\s*ctx_cat name=/.test(idx), "제목리스트 폐기 — '· ctx_cat name=' 항목 줄 없음");
 });

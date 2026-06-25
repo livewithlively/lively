@@ -24,6 +24,38 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
 
+// ── grep 매처 — Claude Code(ripgrep) 직관에 맞춘 본문/제목 텍스트 매칭. "search"(의미검색)가 아니라 grep이다.
+//  · 정규식 메타문자가 있고 유효한 패턴이면 → POSIX 정규식(`~*`, 대소문자 무시)으로 grep. 예: `벡터|vector`, `task_\w+`.
+//  · 그 외(평문)면 → 공백으로 나눈 모든 토큰이 (제목이든 본문이든) 등장해야 매치(AND, 부분일치). 단일 토큰이면 단순 contains.
+//    → 다중 키워드("벡터 검색")가 통짜 구절이 아니라 토큰 AND 로 동작해 직관적. 구 단일-ILIKE 의 과소회수를 해소.
+//  · LIKE 와일드카드(`%`/`_`)는 평문 토큰에서 리터럴로 이스케이프(grep 패리티 — 구버전은 `knowledge_x` 의 `_` 가 와일드카드로 샜다).
+const REGEX_META = /[.*+?^${}()|[\]\\]/;
+function likeEscape(s: string): string { return s.replace(/[\\%_]/g, "\\$&"); }
+export type GrepPlan = { mode: "regex"; pattern: string; re: RegExp } | { mode: "tokens"; tokens: string[] };
+export function parseGrep(qstr: string): GrepPlan {
+  const t = (qstr ?? "").trim();
+  if (REGEX_META.test(t)) {
+    try { return { mode: "regex", pattern: t, re: new RegExp(t, "i") }; } catch { /* 깨진 정규식 → 토큰으로 폴백 */ }
+  }
+  const tokens = t.split(/\s+/).filter(Boolean);
+  return { mode: "tokens", tokens: tokens.length ? tokens : [t] };
+}
+// cols 중 어느 하나에 매치(OR). regex 는 패턴 1개, tokens 는 토큰마다 (cols OR) 를 AND 로 묶는다. params 에 push 하고 WHERE 절 문자열 반환.
+function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): string {
+  const colsOr = (placeholder: string) => "(" + cols.map((c) => `${c} ${placeholder}`).join(" OR ") + ")";
+  if (plan.mode === "regex") {
+    params.push(plan.pattern);
+    return colsOr(`~* $${params.length}`);
+  }
+  return plan.tokens.map((tok) => { params.push(`%${likeEscape(tok)}%`); return colsOr(`ILIKE $${params.length} ESCAPE '\\'`); }).join(" AND ");
+}
+// 스니펫용 — 본문에서 첫 매치 위치(없으면 -1). regex 는 RegExp, tokens 는 첫 토큰의 대소문자무시 indexOf.
+function grepFirstIndex(text: string, plan: GrepPlan): number {
+  if (plan.mode === "regex") { const m = plan.re.exec(text); return m ? m.index : -1; }
+  const tok = plan.tokens[0] ?? "";
+  return tok ? text.toLowerCase().indexOf(tok.toLowerCase()) : -1;
+}
+
 const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("knowledge", name, op, before, after, ctx);
 
@@ -50,7 +82,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
   if (f.lifecycle) { params.push(f.lifecycle); wh.push(`k.lifecycle=$${params.length}`); }
   else wh.push(`k.lifecycle='active'`);
-  if (f.q) { params.push(`%${f.q}%`); wh.push(`(k.title ILIKE $${params.length} OR k.body_md ILIKE $${params.length})`); }
+  if (f.q) wh.push(grepWhere(["k.title", "k.body_md"], parseGrep(f.q), params));  // grep 매처(regex|토큰 AND) — knowledge_grep 과 동일 의미
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   const order = f.orderBy === "name" ? "k.name" : "k.updated_at DESC";
   params.push(Math.min(f.limit ?? 200, 500));
@@ -156,28 +188,38 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
   return after;
 }
 
-// 검색 — title/body_md ILIKE + 매치 주변 ~160자 스니펫(레거시 ctx_grep 대체). 전문은 getKnowledge.
+// grep — title/body_md 를 grep(정규식 또는 토큰 AND) + 매치 주변 ~160자 스니펫. 전문은 getKnowledge.
+//  의미검색 아님(벡터는 추후 별도 도구). Postgres 가 정규식을 거부하면(JS 유효·POSIX 무효 드묾) 토큰 모드로 1회 폴백 — 에이전트에 에러 누출 안 함.
 export interface KnowledgeSearchRow extends KnowledgeRow { snippet: string; }
 export async function searchKnowledge(
   qstr: string,
   opts: { injection?: string; provenance?: string; limit?: number } = {},
 ): Promise<KnowledgeSearchRow[]> {
-  const params: unknown[] = [`%${qstr}%`];
-  const wh: string[] = [`(k.title ILIKE $1 OR k.body_md ILIKE $1)`, `k.lifecycle='active'`];
-  if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
-  if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
-  params.push(Math.min(opts.limit ?? 20, 100));
-  const rows: KnowledgeRow[] = await q(itemsPool,
-    `SELECT ${K_SEL} FROM knowledge k WHERE ${wh.join(" AND ")} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
-  const needle = qstr.toLowerCase();
+  const run = async (plan: GrepPlan): Promise<KnowledgeRow[]> => {
+    const params: unknown[] = [];
+    const wh: string[] = [grepWhere(["k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+    if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
+    if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
+    params.push(Math.min(opts.limit ?? 20, 100));
+    return q(itemsPool,
+      `SELECT ${K_SEL} FROM knowledge k WHERE ${wh.join(" AND ")} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
+  };
+  let plan = parseGrep(qstr);
+  let rows: KnowledgeRow[];
+  try { rows = await run(plan); }
+  catch (e) {
+    if (plan.mode !== "regex") throw e;          // 토큰 모드 실패는 진짜 에러
+    plan = { mode: "tokens", tokens: qstr.trim().split(/\s+/).filter(Boolean) || [qstr] };
+    rows = await run(plan);                       // POSIX 가 거부한 정규식 → 토큰 부분일치로 폴백
+  }
   return rows.map((r) => {
     const body = r.body_md ?? "";
-    const at = body.toLowerCase().indexOf(needle);
+    const at = grepFirstIndex(body, plan);
     let snippet: string;
     if (at < 0) snippet = body.slice(0, 160);
     else {
       const start = Math.max(0, at - 60);
-      snippet = (start > 0 ? "…" : "") + body.slice(start, at + needle.length + 100) + (at + needle.length + 100 < body.length ? "…" : "");
+      snippet = (start > 0 ? "…" : "") + body.slice(start, at + 160) + (at + 160 < body.length ? "…" : "");
     }
     return { ...r, snippet: snippet.replace(/\s+/g, " ").trim() };
   });

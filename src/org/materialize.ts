@@ -2,7 +2,7 @@
 // 이렇게 하면 검증된 file-based generator(build-context.mjs)를 한 줄도 고치지 않고 재사용한다(D: 진실원천=DB,
 // git/파일은 발행 순간의 임시 산물). generate() 규약(build-context.mjs:80-173):
 //   - 필수: org/org-defaults.md (없으면 generator 가 종료) → 비어 있으면 최소 본문을 채운다.
-//   - 선택: org/managed-policy.md, memory/MEMORY.md(+ 링크된 memory/*.md, orgHas 가드로 누락은 스킵).
+//   - 선택: org/managed-policy.md, memory/knowledge-index.md(+ 링크된 memory/*.md, orgHas 가드로 누락은 스킵).
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,7 +94,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 여러 카테고리에 n:n. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
   "",
   "## 카테고리 (주제 — 검색으로 소환)",
-  "관련 카테고리가 보이면 그걸로 검색(`knowledge_search`/`knowledge_list` category=)해 지식을 그때 소환한다.",
+  "관련 카테고리가 보이면 그걸로 검색(`knowledge_grep`/`knowledge_list` category=)해 지식을 그때 소환한다.",
   "",
   "${categories}## 맥락 로드/기록 가이드",
   "",
@@ -102,7 +102,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**로드 — 필요한 맥락을 그때 소환한다 (전부 미리 읽지 않는다).**",
   "- 위 **카테고리** 목록에서 관련 주제를 찾는다.",
-  "- 지식: `knowledge_search`(검색어) · `knowledge_list`(space·category·injection 필터) · `knowledge_get`(name→전문).",
+  "- 지식: `knowledge_grep`(텍스트 grep — 한 토큰/정규식, 자연어 문장 X) · `knowledge_list`(space·category·injection 필터) · `knowledge_get`(name→전문).",
   "- 도메인맵: `category_list` / `category_get`(should·is·debt·의존 엣지) · `category_edge_list`.",
   "- 프로젝트: `project_list_v6` / `project_get_v6`(태스크 위계·필요/산출지식).",
   "- 라이브 데이터(코드·DB): `db_query` · `context_overview`.",
@@ -294,7 +294,7 @@ export async function materializeOrgContent(): Promise<Materialized> {
     await writeFile(join(dir, "org", "managed-policy.md"), policy.body_md);
   }
 
-  // memory/MEMORY.md — v4 인덱스(R 전문 + 카테고리 지도 + 쓰기 가이드)만 발행. **본문 파일은 디스크에 안 쓴다** —
+  // memory/knowledge-index.md — v4 인덱스(R 전문 + 카테고리 지도 + 쓰기 가이드)만 발행. **본문 파일은 디스크에 안 쓴다** —
   //  K/H/W 본문은 ctx_cat(게이트웨이 pull)로 가져온다. 인덱스가 비-링크라 generator 의 본문 follow 도 안 걸림.
   //  buildKnowledgeIndex 가 단일 소스(previewMemberContext 와 공유) — 카테고리 지도는 라이브 조회(categoryMapForIndex).
   const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
@@ -305,7 +305,7 @@ export async function materializeOrgContent(): Promise<Materialized> {
   // R 전문이 있거나(규칙) 카테고리 지도가 있으면 인덱스 발행(쓰기 가이드는 템플릿에 항상 동반). 둘 다 없어도 가이드는
   //  의미가 있으나, 완전 빈 DB 에선 인덱스를 생략한다(기존 관례 — knowledge.length 가드).
   if (knowledge.length || categoryMap.length) {
-    await writeFile(join(dir, "memory", "MEMORY.md"), buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()));
+    await writeFile(join(dir, "memory", "knowledge-index.md"), buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)

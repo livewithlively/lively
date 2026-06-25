@@ -1,7 +1,7 @@
 // repo 테이블 헬퍼 — writer 전원(ingest/refresh/sync/propose)과 webhook 이 공유하는
 // 유일한 횡단 SQL. 한 곳에 두지 않으면 4중 복제된다(store-core.mjs 의 repo helpers 이식).
 import type pg from "pg";
-import { dmPool, one, withTx, type Db } from "../db.js";
+import { itemsPool, one, withTx, type Db } from "../db.js";
 import {
   httpErr, syncBlockedRepos, type Actor, type RepoCreateResult, type RepoDeleteResult,
   type RepoRenameResult, type RepoStateResult,
@@ -12,7 +12,7 @@ const now = () => new Date().toISOString();
 const REPO_NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 export async function getRepo(name: string): Promise<any> {
-  const r = await one(dmPool(), "SELECT * FROM repo WHERE name=$1", [name]);
+  const r = await one(itemsPool, "SELECT * FROM repo WHERE name=$1", [name]);
   if (!r) throw httpErr(404, "no such repo: " + name);
   return r;
 }
@@ -25,7 +25,7 @@ export async function getRepo(name: string): Promise<any> {
 export async function findRepoByNames(names: unknown[] | null | undefined): Promise<any | null> {
   for (const n of names ?? []) {
     if (n == null || n === "") continue;
-    const r = await one(dmPool(), "SELECT * FROM repo WHERE name=$1", [String(n)]);
+    const r = await one(itemsPool, "SELECT * FROM repo WHERE name=$1", [String(n)]);
     if (r) return r;
   }
   return null;
@@ -62,7 +62,7 @@ export async function createRepo(name: string, actor: Actor): Promise<RepoCreate
   const nm = (name ?? "").trim();
   if (!REPO_NAME_RE.test(nm) || nm.length > 100) throw httpErr(400, `bad repo name: '${nm}' (A-Za-z0-9._- , 1~100 chars)`);
   if (syncBlockedRepos().has(nm)) throw httpErr(403, `repo '${nm}' is reserved/write-protected (see SYNC_BLOCKED_REPOS)`);
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT id FROM repo WHERE name=$1", [nm]);
   if (ex) throw httpErr(409, `repo already exists: ${nm} (#${ex.id})`);
   const row = await one(pool,
@@ -86,7 +86,7 @@ export async function renameRepo(name: string, newName: string, actor: Actor): P
   if (!REPO_NAME_RE.test(newNm) || newNm.length > 100) throw httpErr(400, `bad new repo name: '${newNm}' (A-Za-z0-9._- , 1~100 chars)`);
   if (syncBlockedRepos().has(oldNm)) throw httpErr(403, `repo '${oldNm}' is write-protected (rename blocked; see SYNC_BLOCKED_REPOS)`);
   if (syncBlockedRepos().has(newNm)) throw httpErr(403, `cannot rename into reserved repo name '${newNm}' (see SYNC_BLOCKED_REPOS)`);
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT id FROM repo WHERE name=$1", [oldNm]);
   if (!ex) throw httpErr(404, "no such repo: " + oldNm);
   if (oldNm === newNm) throw httpErr(400, "new repo name is identical to current");
@@ -110,7 +110,7 @@ export async function renameRepo(name: string, newName: string, actor: Actor): P
 export async function hardDeleteRepo(name: string, force: boolean, actor: Actor): Promise<RepoDeleteResult> {
   const nm = (name ?? "").trim();
   if (syncBlockedRepos().has(nm)) throw httpErr(403, `repo '${nm}' is write-protected (hard-delete blocked; see SYNC_BLOCKED_REPOS)`);
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT id FROM repo WHERE name=$1", [nm]);
   if (!ex) throw httpErr(404, "no such repo: " + nm);
   const rid = ex.id;
@@ -151,7 +151,7 @@ export async function setRepoState(name: string, state: string, actor: Actor): P
   if (state !== "active" && state !== "deprecated") throw httpErr(400, `bad state: ${state} (allowed: active|deprecated)`);
   const nm = (name ?? "").trim();
   if (syncBlockedRepos().has(nm)) throw httpErr(403, `repo '${nm}' is write-protected (lifecycle change blocked; see SYNC_BLOCKED_REPOS)`);
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT id,state FROM repo WHERE name=$1", [nm]);
   if (!ex) throw httpErr(404, "no such repo: " + nm);
   if ((ex.state ?? "active") === state) return { id: ex.id, name: nm, action: "unchanged", state };
@@ -162,4 +162,28 @@ export async function setRepoState(name: string, state: string, actor: Actor): P
     note: state === "deprecated" ? "deprecate repo" : "undeprecate repo",
   });
   return { id: ex.id, name: nm, change_id: cid, state };
+}
+
+// repo git 소스 설정 — git_url(클론 주소)·default_branch 갱신. 도메인맵 스캔(webhook clone/fetch)과 로컬 작업
+//  클론이 공유하는 단일 소스. ⚠ git_url 은 민감값 — change_log 엔 url 자체가 아니라 has_git_url 불리언만 남긴다.
+//  undefined=건드리지 않음 / null·빈문자열=해제 / 문자열=설정. default_branch 는 항상 값 유지(빈 값이면 'main').
+export async function setRepoSource(
+  name: string, gitUrl: string | null | undefined, defaultBranch: string | null | undefined, actor: Actor,
+): Promise<{ id: number; name: string; change_id: number; default_branch: string; has_git_url: boolean }> {
+  const nm = (name ?? "").trim();
+  if (syncBlockedRepos().has(nm)) throw httpErr(403, `repo '${nm}' is write-protected (source change blocked; see SYNC_BLOCKED_REPOS)`);
+  const pool = itemsPool;
+  const ex = await one(pool, "SELECT id,git_url,default_branch FROM repo WHERE name=$1", [nm]);
+  if (!ex) throw httpErr(404, "no such repo: " + nm);
+  const nextUrl = gitUrl === undefined ? (ex.git_url ?? null) : (gitUrl && String(gitUrl).trim() ? String(gitUrl).trim() : null);
+  const nextBranch = (defaultBranch === undefined ? (ex.default_branch ?? null) : defaultBranch);
+  const branch = (nextBranch && String(nextBranch).trim()) ? String(nextBranch).trim() : "main";
+  await pool.query("UPDATE repo SET git_url=$1, default_branch=$2 WHERE id=$3", [nextUrl, branch, ex.id]);
+  const cid = await logChange(pool, {
+    repoId: ex.id, entityType: "repo", entityId: ex.id, op: "update", actor,
+    before: { has_git_url: !!ex.git_url, default_branch: ex.default_branch ?? null },
+    after: { has_git_url: !!nextUrl, default_branch: branch },
+    note: "set repo git source",
+  });
+  return { id: ex.id, name: nm, change_id: cid, default_branch: branch, has_git_url: !!nextUrl };
 }

@@ -63,7 +63,7 @@ async function route() {
       await renderSystem(view, segs[1] || null);
     } else if (page === 'terminal') {
       setActiveTab('terminal');
-      await renderTerminal(view, params.get('team'));
+      await renderTerminal(view);
     } else {
       setActiveTab('start');
       await renderInstall(view);

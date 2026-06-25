@@ -5,15 +5,14 @@
 import type express from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { sessionOrBearer } from "./auth/http-auth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
-import { wrap } from "./capabilities/rest-util.js";
+import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
-import { listTeams, createTeam, editTeam, deleteTeam } from "./terminal-teams.js";
 import { listMembers } from "./org/store.js";
 import { isProjectSessionDir } from "./project-fs.js";
 
@@ -46,7 +45,7 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 export function registerTerminal(app: express.Express, server: Server, verifier: BearerVerifier): void {
   // 도그푸드: 인증만(authOnly) — 모든 멤버가 터미널 사용 가능. 정식화 시 'code'/'terminal' scope 게이트로 좁힌다.
-  const auth = requireBearerAuth({ verifier });
+  const auth = sessionOrBearer(verifier); // 세션 쿠키(웹 로그인) OR bearer(에이전트) — 둘 다 수용
 
   // 티켓 발급 — WS 가 쓸 HttpOnly 쿠키(userId 바인딩).
   app.post("/api/ui/terminal/ticket", auth, (req, res) => {
@@ -58,9 +57,9 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.json({ ok: true });
   });
 
-  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 팀원 후보(구성원 디렉터리).
+  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 초대 후보(구성원 디렉터리).
   app.get("/api/ui/terminal/config", auth, wrap(async (_req, res) => {
-    // 팀원 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
+    // 초대 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
     const members = (await listMembers().catch(() => []))
       .filter((m) => m.state !== "inactive" && m.kind !== "system")
       .map((m) => ({ id: m.id, name: m.display_name || m.id, kind: m.kind }));
@@ -78,53 +77,35 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const all = await listSessions(userOf(req));
     res.json({ sessions: all.filter((s) => !isProjectSessionDir(s.dir)) });
   }));
+  // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
+  //  접근통제: canAttach(소유자·초대된 멤버·프로젝트 멤버) — 입장 가능한 사람만 이름을 읽는다.
+  app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ id: req.params.id, label: await getSessionLabel(req.params.id) });
+  }));
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const session = await createSession(userOf(req), {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove, visibility: String(b.visibility ?? "public"), team: b.team !== undefined ? String(b.team) : undefined,
+      autoApprove: !!b.autoApprove, invites: b.invites,
     });
     res.setHeader("Cache-Control", "no-store");
     res.json({ session });
   }));
-  // 세션 수정 — 이름·공개범위(visibility) 변경. 소유자만.
+  // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     await editSession(userOf(req), req.params.id, {
       label: b.label !== undefined ? String(b.label) : undefined,
-      visibility: b.visibility !== undefined ? String(b.visibility) : undefined,
+      invites: b.invites,
     });
     res.json({ ok: true });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     await killSession(userOf(req), req.params.id);
-    res.json({ ok: true });
-  }));
-
-  // ── 팀 폴더 — 공유 워크스페이스 하위 폴더 + 멤버 ACL. 세션을 그 안에 묶어 팀원만 열람·접속. ──
-  app.get("/api/ui/terminal/teams", auth, wrap(async (req, res) => {
-    res.setHeader("Cache-Control", "no-store");
-    res.json({ teams: await listTeams(userOf(req)) });
-  }));
-  app.post("/api/ui/terminal/teams", auth, wrap(async (req, res) => {
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const team = await createTeam(userOf(req), { label: String(b.label ?? ""), members: b.members });
-    res.setHeader("Cache-Control", "no-store");
-    res.json({ team });
-  }));
-  // 팀 수정(이름·팀원) — 소유자만(서버가 강제).
-  app.post("/api/ui/terminal/teams/:id", auth, wrap(async (req, res) => {
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    await editTeam(userOf(req), req.params.id, {
-      label: b.label !== undefined ? String(b.label) : undefined,
-      members: b.members,
-    });
-    res.json({ ok: true });
-  }));
-  // 팀 해제 — 마커만 제거(폴더·파일 보존). 소유자만.
-  app.delete("/api/ui/terminal/teams/:id", auth, wrap(async (req, res) => {
-    await deleteTeam(userOf(req), req.params.id);
     res.json({ ok: true });
   }));
 

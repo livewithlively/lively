@@ -199,6 +199,15 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // 개명 마이그레이션(2026-06-25): knowledge_search → knowledge_grep(의미검색 미스노머 제거 — 실동작은 grep).
+  //  시드 INSERT **앞**에서 라이브 org_tool 행을 이관해 운영자의 enabled/auto_approve 를 보존한다(뒤에 두면 시드가 기본값으로 새 행을 먼저 박음).
+  //  멱등: 새 이름 행이 이미 있으면 구 행만 제거. 'knowledge_search' 는 추후 벡터검색 도구로 재배정 예약.
+  await itemsPool.query(`
+    UPDATE org_tool SET name='knowledge_grep'
+     WHERE name='knowledge_search' AND NOT EXISTS (SELECT 1 FROM org_tool WHERE name='knowledge_grep');
+    DELETE FROM org_tool WHERE name='knowledge_search';
+  `);
+
   // 빌트인 도구 정책 시드 — 운영자 웹 최종 편집본(노출 enabled + 자동승인 auto_approve)을 신규 게이트웨이 기본으로 박는다.
   //  노출/자동승인 상태의 SoT 는 org_tool(DB). expose.mcp 는 "MCP 도구냐"만 선언하고, 노출·자동승인은 여기(DB)가 정한다.
   //  ON CONFLICT DO NOTHING = 최초 1회만 — 기존 인스턴스의 운영자 변경을 덮지 않는다(시드는 신규 설치 기본값일 뿐).
@@ -228,7 +237,7 @@ export async function initOrgSchema(): Promise<void> {
       ('knowledge_link_category','builtin',true,true),
       ('knowledge_list','builtin',true,true),
       ('knowledge_save','builtin',true,true),
-      ('knowledge_search','builtin',true,true),
+      ('knowledge_grep','builtin',true,true),
       ('knowledge_set_lifecycle','builtin',true,true),
       ('knowledge_set_wiki','builtin',true,true),
       ('project_create_v6','builtin',true,true),
@@ -244,6 +253,7 @@ export async function initOrgSchema(): Promise<void> {
       ('repo_deprecate','builtin',true,true),
       ('repo_list','builtin',true,true),
       ('repo_rename','builtin',true,true),
+      ('repo_set_source','builtin',true,true),
       ('task_create_v6','builtin',true,true),
       ('task_set_status_v6','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;

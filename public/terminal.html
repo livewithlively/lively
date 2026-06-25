@@ -112,7 +112,15 @@
   .md .md-table th, .md .md-table td { border: 1px solid var(--border); padding: 6px 10px; }
   .md blockquote.md-quote { border-left: 3px solid var(--accent); margin: 1em 0; padding: 2px 14px; color: var(--fg-dim); }
   .md a.md-link { color: var(--accent); }
-  .gate-msg { padding: 40px; text-align: center; color: var(--fg-dim); }
+  .gate-msg { padding: 40px; text-align: center; color: var(--fg-dim); white-space: pre-line; line-height: 1.6; max-width: 520px; margin: 0 auto; }
+  .gate-card { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 440px; margin: 12vh auto 0; padding: 36px 32px; text-align: center; border: 1px solid var(--border); border-radius: 16px; background: var(--bg2); }
+  .gate-icon { font-size: 30px; line-height: 1; }
+  .gate-title { font-size: 18px; font-weight: 700; color: var(--fg); margin: 0; }
+  .gate-sub { font-size: 13.5px; color: var(--fg-dim); line-height: 1.65; margin: 0; }
+  .gate-cta { display: inline-block; margin-top: 4px; padding: 10px 18px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; text-decoration: none; }
+  .gate-cta:hover { filter: brightness(1.08); }
+  .gate-retry { background: none; border: 0; color: var(--fg-dim); font-size: 12.5px; cursor: pointer; padding: 4px; text-decoration: underline; }
+  .gate-retry:hover { color: var(--fg); }
   .unsupported { display: flex; align-items: center; justify-content: center; height: 100%; }
   .unsupported-card { text-align: center; padding: 28px 32px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg2); }
   .unsupported-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }

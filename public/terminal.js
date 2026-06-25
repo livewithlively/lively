@@ -1,6 +1,7 @@
 // 중앙 박스 — 단독 전체화면 터미널 워크스페이스(새 탭). xterm.js + 서버 node-pty(tmux).
 // 좌측 접이식 파일 익스플로러(업/다운로드) · 탭 구조(터미널 + 파일 미리보기) · 보기설정(폰트/테마/크기).
-// 인증: 동일 origin localStorage 토큰(메인 UI 로그인 공유) → ticket 쿠키 발급 → WS. md 렌더는 md.js 재사용.
+// 인증: 세션 쿠키(메인 UI 이메일+비번 로그인) OR localStorage 토큰(에이전트) — 둘 다 수용(서버 sessionOrBearer).
+//  진입 시 /api/ui/me 로 실제 인증을 확인(토큰 유무로 막지 않음) → ticket 쿠키 발급 → WS. md 렌더는 md.js 재사용.
 'use strict';
 
 const TOKEN_KEY = 'lively_ui_token';
@@ -568,23 +569,44 @@ function openHelp() {
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
 
-// 세션 이름(라벨) — 상단 제목을 세션 id 대신 사람이 정한 이름으로. (id 는 제목 tooltip 으로 보존.)
-async function loadSessionLabel() {
-  try {
-    const data = await api('/api/ui/terminal/sessions');
-    const s = ((data && data.sessions) || []).find((x) => x.id === SESSION_ID);
-    if (s && s.label) { titleEl.textContent = s.label; document.title = s.label + ' · Lively'; return; }
-  } catch (_) { /* 무시하고 폴백 */ }
-  // 개인 세션 목록에 없으면(프로젝트/팀 세션) URL ?label= 로 받은 이름을 쓴다.
-  if (SESSION_LABEL) { titleEl.textContent = SESSION_LABEL; document.title = SESSION_LABEL + ' · Lively'; }
+// 미인증 진입 안내 — 메인 UI 로그인은 이메일+비밀번호(세션 쿠키)다. 이 탭은 그대로 두고, 새 탭에서 로그인한 뒤
+//  '다시 시도'를 누르면 같은 origin 세션 쿠키가 공유되어 곧바로 연결된다(세션 주소를 잃지 않게 새 탭으로 연다).
+function gateLogin() {
+  document.getElementById('root').replaceChildren(
+    el('div', { class: 'gate-card' },
+      el('div', { class: 'gate-icon', text: '🔒' }),
+      el('h2', { class: 'gate-title', text: '로그인이 필요해요' }),
+      el('p', { class: 'gate-sub', text: '이 터미널 세션을 열려면 먼저 라이블리에 로그인하세요. 새 탭에서 로그인한 뒤 이 페이지로 돌아와 ‘다시 시도’를 누르면 바로 연결됩니다.' }),
+      el('a', { class: 'gate-cta', href: '/ui/', target: '_blank', rel: 'noopener', text: '새 탭에서 로그인하기 →' }),
+      el('button', { class: 'gate-retry', text: '로그인했어요 — 다시 시도', onclick: () => boot() })));
 }
 
-function boot() {
+// 상단 제목(+브라우저 탭 제목)을 세션 이름으로 — 갱신을 한 곳으로 모은다(라이브 반영 공용).
+function setTitle(label) {
+  if (!label || !titleEl) return;
+  titleEl.textContent = label;
+  document.title = label + ' · Lively';
+}
+// 세션 이름(라벨) — id 로 서버의 '현재 이름'을 읽는다(프로젝트/팀 세션 포함). 실패하면 URL ?label= 폴백.
+//  생성 시점 ?label= 에 고정되지 않으므로 새로고침·재진입 시에도 바뀐 이름이 보인다.
+async function loadSessionLabel() {
+  try {
+    const data = await api(sUrl(''));
+    if (data && data.label) { setTitle(data.label); return; }
+  } catch (_) { /* 무시하고 폴백 */ }
+  if (SESSION_LABEL) setTitle(SESSION_LABEL);
+}
+
+async function boot() {
   const p = prefs();
   applyChrome(p.theme);
-  if (!localStorage.getItem(TOKEN_KEY)) { gate('로그인이 필요합니다. 메인 UI(/ui/)에서 토큰을 입력한 뒤 다시 여세요.'); return; }
   if (!SESSION_ID) { gate('세션이 지정되지 않았습니다. 세션 목록에서 "열기"로 진입하세요.'); return; }
   if (!window.Terminal || !window.FitAddon) { gate('터미널 라이브러리(xterm) 로드 실패.'); return; }
+  // 인증은 '토큰 유무'가 아니라 서버에 물어 확인한다 — 세션 쿠키(웹 로그인)·bearer(에이전트) 모두 /api/ui/me 가 수용.
+  //  메인 UI 가 이메일+비번 로그인(세션 쿠키)로 바뀌며 localStorage 토큰이 없는 게 정상이 됐다(옛 토큰 게이트가 오인 차단했다).
+  gate('연결 준비 중…');
+  try { await api('/api/ui/me'); }
+  catch (_) { gateLogin(); return; }
 
   // 셸 구성
   explorerEl = el('aside', { id: 'explorer' },
@@ -615,6 +637,19 @@ function boot() {
   setupDnd();
   setupTermDrop();
   loadSessionLabel();
+
+  // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
+  try {
+    const ch = new BroadcastChannel('lively-terminal');
+    ch.onmessage = (ev) => {
+      const m = ev.data;
+      if (m && m.type === 'session-label' && m.id === SESSION_ID && m.label) setTitle(m.label);
+    };
+  } catch (_) { /* BroadcastChannel 미지원 — 포커스 복귀/새로고침 시 서버값으로 보정 */ }
+  // 폴백 보정 — 이 탭이 다시 보일 때 서버의 현재 이름을 다시 읽는다(BroadcastChannel 미지원·타 브라우저·기기 케이스).
+  //  한 창의 탭 전환은 window 'focus' 가 안 뜨고 'visibilitychange' 만 뜨므로 둘 다 건다.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionLabel(); });
+  window.addEventListener('focus', () => { loadSessionLabel(); });
 
   // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
   //  직접 소유한다(iTerm 처럼). 그래서 scrollback 을 충분히 둔다 → 휠 스크롤이 로컬 버퍼를 직접 오르내리고

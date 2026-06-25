@@ -1,11 +1,11 @@
 // 중앙 박스 — 세션 작업 디렉터리(@box_dir) 파일 API. 익스플로러/업로드/다운로드/미리보기용.
-// 게이트: canAttach(소유자 OR 공개) — 터미널을 열 수 있으면 셸로 어차피 그 폴더를 만질 수 있으므로 동일 권한.
+// 게이트: canAttach(소유자 OR 초대된 멤버) — 터미널을 열 수 있으면 셸로 어차피 그 폴더를 만질 수 있으므로 동일 권한.
 // 봉쇄: 모든 경로를 @box_dir 내부로 realpath 검증(.. 탈출 차단).
 import express from "express";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { sessionOrBearer } from "./auth/http-auth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
@@ -29,7 +29,7 @@ async function resolveInSession(req: express.Request, requireFile: boolean): Pro
 }
 
 export function registerTerminalFiles(app: express.Express, verifier: BearerVerifier): void {
-  const auth = requireBearerAuth({ verifier });
+  const auth = sessionOrBearer(verifier); // 세션 쿠키(웹 로그인) OR bearer(에이전트) — 둘 다 수용
 
   // 생성폼 폴더 탐색(세션 무관) — 허용 루트 내부 디렉터리 목록. 인증된 멤버면 OK(개인 루트는 per-user 격리).
   app.get("/api/ui/terminal/browse", auth, wrap(async (req, res) => {

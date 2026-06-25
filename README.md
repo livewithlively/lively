@@ -23,7 +23,7 @@
 | 인증 | `src/auth/bearer.ts` | 정적 토큰(`AUTH_TOKENS_JSON`) + **DB 토큰**(`auth_token`, sha256·revoke 즉시·재시작 불요). 다음 단계 OAuth 로 이 파일만 교체 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — knowledge·categories·projects-v6·task-v6·activity·context·domainmap-curation·**delivery(웹 관리/전달)** |
 | **전달/관리** | `src/capabilities/delivery.ts` | 웹 `/ui` '관리' 탭 — org-content(강제규칙·맥락·WIKI 인덱스·구성원)·토큰·**커스텀 훅(`org_hook`)·AI 도구(`org_tool`)·MCP 서버·런타임 설정**. admin/runtime scope·REST 전용(에이전트 비노출). 항목별 '구성원에게 미치는 효과' 의미 패널 + auto-approve |
-| **조직 지식(WIKI)** | `src/capabilities/knowledge.ts` | `knowledge_save`/`knowledge_search`/`knowledge_get`/`knowledge_list`/`knowledge_set_lifecycle`/`knowledge_set_wiki`/`knowledge_link_category`/`knowledge_delete`(휴지통·사람전용) — 단일 `knowledge` 테이블이 진실원천(SoT). 신규 저장은 category 1개 이상 필수. 아래 §SoT 참조 |
+| **조직 지식(WIKI)** | `src/capabilities/knowledge.ts` | `knowledge_save`/`knowledge_grep`/`knowledge_get`/`knowledge_list`/`knowledge_set_lifecycle`/`knowledge_set_wiki`/`knowledge_link_category`/`knowledge_delete`(휴지통·사람전용) — 단일 `knowledge` 테이블이 진실원천(SoT). 신규 저장은 category 1개 이상 필수. 아래 §SoT 참조 |
 | **분류축(category)** | `src/capabilities/categories.ts` | `category_*`(create/update/get/list/delete·edge_*) — 사업·제품·시스템 분류축. **제품 카테고리=도메인**(탈-repo, 단일 `category` 테이블) |
 | 프로젝트/과업 | `src/capabilities/projects-v6.ts` · `src/capabilities/task-*.ts` · `src/capabilities/activity.ts` | `project_*_v6`/`task_*_v6`/`activity_*` |
 | 도메인 맥락 | `src/capabilities/context.ts` | `context_overview`/`debt_list`/`repo_list`/`all_domains` — domainmap 읽기 프록시. (`domain_list`/`domain_get` 은 **레거시** — v6 `category_*` 가 대체, REST 잔존) |
@@ -37,7 +37,7 @@
 
 ## 조직 지식의 진실원천(SoT) = 단일 `knowledge` 테이블
 
-**우리 지식**(결정·설계·런북·정리된 노트)의 **유일한 집은 v6 `knowledge` DB 테이블** 이다. `knowledge_save` 로 그 자리에서(in-flow) **전문**을 직접 기록한다 — 레포에 `.md` 를 새로 만들거나 파일 포인터를 쓰지 않는다. 주입·검색·발행·정적 폴백 모두 **DB `knowledge` 단일 소스**에서 나오며, 파일 트리를 캐노니컬로 읽는 런타임/부팅 경로는 없다. (배경·설계는 위키 참조: `knowledge_search "context-os"` / `knowledge_search "design-doc"`.)
+**우리 지식**(결정·설계·런북·정리된 노트)의 **유일한 집은 v6 `knowledge` DB 테이블** 이다. `knowledge_save` 로 그 자리에서(in-flow) **전문**을 직접 기록한다 — 레포에 `.md` 를 새로 만들거나 파일 포인터를 쓰지 않는다. 주입·검색·발행·정적 폴백 모두 **DB `knowledge` 단일 소스**에서 나오며, 파일 트리를 캐노니컬로 읽는 런타임/부팅 경로는 없다. (배경·설계는 위키 참조: `knowledge_grep "context-os"` / `knowledge_grep "design-doc"`.)
 
 - **레포의 `.md`(루트 설계문서·과거 `research/*.md`) = 지식 SoT 에서 은퇴** — 백업/생성물로 강등됐고, 새 조직 지식은 레포가 아니라 `knowledge` 로 들어간다.
 - **외부 원본**(클릭업·노션·코드)은 외부 소유 → 게이트웨이는 **미러(provenance=observed)** 로만 둔다. 복제하지 말고, 파생 인사이트만 별도 저작.
@@ -95,7 +95,7 @@ Docker: `docker compose up --build`
 > **멀티 데이터소스:** `DB_SOURCES_JSON` 으로 여러 운영 DB 를 명명 등록하고 `db_query`/`db_schema` 의
 > `source` 인자로 고른다(미지정 시 `default`=`DATABASE_URL`; 다중+default없음이면 명시 필수, `db_sources` 로 목록 확인).
 > 소스별 `rls` GUC·`maxRows`·`timeoutMs` 오버라이드 — **`rls` 미지정 소스는 행수준 격리 없음**(테이블수준은 읽기전용 role 책임;
-> `default` 만 후방호환으로 `app.current_user`). 권한은 스코프 `db`(전 소스) 또는 `db:<source>`(특정). 1차 pg-only. (설계는 위키 참조: `knowledge_search "멀티db 읽기"`)
+> `default` 만 후방호환으로 `app.current_user`). 권한은 스코프 `db`(전 소스) 또는 `db:<source>`(특정). 1차 pg-only. (설계는 위키 참조: `knowledge_grep "멀티db 읽기"`)
 
 ## 클라이언트 등록
 

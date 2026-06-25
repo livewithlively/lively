@@ -1,23 +1,16 @@
-// 발행 인터페이스 — DB(진실원천) → materialize → 기존 generator 를 subprocess 로 호출 → 발행 아티팩트/설치 번들.
-// generator 를 in-process import 하지 않는 이유: build-context.mjs 가 잘못된 입력에 process.exit(1) 을 부른다
-//  → import 호출이면 게이트웨이 프로세스를 죽인다. subprocess 는 프로세스 격리 + 출력 캡처 + 무위험.
-//  이것이 우리가 합의한 'delivery 인터페이스'의 구현(웹은 이 인터페이스에만 의존, 내부 기제는 교체 가능).
+// 발행 인터페이스 — DB(위키) → kit generator 의 buildKitBundle 을 **in-process** 호출 → 설치 번들(부트스트랩만, org-콘텐츠 0).
+// 2026-06-24 컷오버: materialize(DB→파일트리)·subprocess generator·콘텐츠 strip 를 전부 제거했다 —
+//  콘텐츠는 설치-시 라이브 fetch + 세션 훅 write-back 캐시로 전달(번들 베이킹 폐지). 따라서 발행물엔 굽지 않으므로
+//  generator 의 **순수 buildKitBundle**(process.exit 안 함)을 import 해 부트스트랩만 조립한다. buildStaticContext 는 라이브 폴백용으로만 잔존.
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
 import { getSection } from "./store.js";
 import { redactString } from "./redact.js";
 import { logger } from "../log.js";
-
-// generator(build-context.mjs) 경로 — env 오버라이드 또는 sibling 레이아웃 기본값.
-function generatorPath(): string {
-  if (process.env.WORKFLOW_STD_DIR) return join(process.env.WORKFLOW_STD_DIR, "generator", "build-context.mjs");
-  return fileURLToPath(new URL("../../../workflow-std/generator/build-context.mjs", import.meta.url));
-}
 
 // generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
 //  materialize 한 DB-org 트리에 적용한다(P-V3-5 Part A: 정적 폴백 context.md 도 DB 단일소스).
@@ -29,7 +22,7 @@ async function loadBuildStaticContext(): Promise<
 > {
   const genUrl = process.env.WORKFLOW_STD_DIR
     ? pathToFileURL(join(process.env.WORKFLOW_STD_DIR, "generator", "build-context.mjs")).href
-    : new URL("../../../workflow-std/generator/build-context.mjs", import.meta.url).href;
+    : new URL("../../kit/generator/build-context.mjs", import.meta.url).href;
   const mod = await import(genUrl);
   if (typeof mod.buildStaticContext !== "function") {
     throw new Error("generator 에 buildStaticContext export 가 없습니다 (workflow-std 버전 불일치)");
@@ -37,18 +30,18 @@ async function loadBuildStaticContext(): Promise<
   return mod.buildStaticContext;
 }
 
-interface RunResult { code: number; stdout: string; stderr: string }
-
-function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env } });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => { stdout += d.toString(); });
-    child.stderr.on("data", (d) => { stderr += d.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
-  });
+// generator 의 buildKitBundle(콘텐츠 없는 키트 조립) in-process import — buildStaticContext 와 동일 패턴(순수 함수).
+async function loadBuildKitBundle(): Promise<
+  (target: string, opts: { orgName?: string; orgLabel?: string; harness?: string }) => { copied: string[] }
+> {
+  const genUrl = process.env.WORKFLOW_STD_DIR
+    ? pathToFileURL(join(process.env.WORKFLOW_STD_DIR, "generator", "build-context.mjs")).href
+    : new URL("../../kit/generator/build-context.mjs", import.meta.url).href;
+  const mod = await import(genUrl);
+  if (typeof mod.buildKitBundle !== "function") {
+    throw new Error("generator 에 buildKitBundle export 가 없습니다 (kit 버전 불일치)");
+  }
+  return mod.buildKitBundle;
 }
 
 export interface PublishResult {
@@ -58,33 +51,17 @@ export interface PublishResult {
   warning?: string;
 }
 
-// DB → materialize → generator publish → <outDir> 에 context-setup 아티팩트 조립.
+// DB(위키) → kit generator 의 buildKitBundle in-process → <outDir> 에 부트스트랩 번들 조립(org-콘텐츠 0).
+//  materialize·subprocess·strip 불요(콘텐츠를 애초에 안 만듦). org 표시명만 프로필에서 읽어 넘긴다.
 export async function runPublish(outDir: string, harness = "claude"): Promise<PublishResult> {
-  // org-content 는 items DB 가 진실원천 — 미설정이면 발행 자체가 불가(명확한 서버 설정 에러 → 500).
   if (!process.env.ITEMS_DATABASE_URL) throw new Error("ITEMS_DATABASE_URL 미설정 — 조직 컨텍스트 발행 불가");
-  const mat = await materializeOrgContent();
-  try {
-    const gen = generatorPath();
-    // '없음' 토큰은 wrap() 이 404 로 매핑하므로 회피(이건 서버 설정/경로 오류 → 500).
-    if (!existsSync(gen)) throw new Error(`generator 실행 파일을 찾지 못함: ${gen} (WORKFLOW_STD_DIR 로 경로 지정)`);
-    const r = await run(process.execPath, [
-      gen, "--org", mat.dir, "--publish", outDir, "--harness", harness, "--org-name", mat.orgName,
-    ]);
-    if (r.code !== 0) {
-      logger.error({ stderr: r.stderr }, "generator publish 실패");
-      throw new Error(`발행 실패(generator exit ${r.code}): ${r.stderr.trim().split("\n").slice(-3).join(" ")}`);
-    }
-    let artifactBytes = 0;
-    try { artifactBytes = (await readFile(join(outDir, "AGENTS.md"))).byteLength; } catch { /* 무시 */ }
-    const warning = artifactBytes > 32 * 1024 ? "AGENTS.md 가 32KiB 를 초과 — Codex 한도 주의" : undefined;
-    // 정적 context.md 는 더는 발행물에 굽지 않는다(2026-06-24, 동적 전달 컷오버) — 멤버 세션 훅(session-preload)이
-    //  매 세션 /api/ui/org/preview 를 받아 ~/.lively/context.md 로 **write-back 캐시**한다(다운/오프라인 폴백 = 직전 성공분).
-    //  설치 시 1회 floor 는 user-install 이 AGENTS.md 파생으로 시드(첫 세션 전). buildStaticContext 는
-    //  라이브 엔드포인트(materializeStaticContext)에서만 계속 쓰인다 — 번들 베이킹 아님.
-    return { ok: true, artifactBytes, log: r.stdout.trim(), warning };
-  } finally {
-    await mat.cleanup().catch((err) => logger.warn({ err }, "materialize 임시디렉토리 정리 실패"));
-  }
+  const { getOrgProfile } = await import("./store.js");
+  const p = await getOrgProfile();
+  const orgName = p.display_name?.trim() || p.name?.trim() || "조직";
+  const orgLabel = (p.name && p.name.trim()) || "org";
+  const buildKitBundle = await loadBuildKitBundle();
+  const { copied } = buildKitBundle(outDir, { orgName, orgLabel, harness });
+  return { ok: true, artifactBytes: 0, log: `kit-bundle in-process (${copied.length} files)`, warning: undefined };
 }
 
 // 오프라인 폴백 정적 context.md(DB 진실원천) — materialize(DB) → buildStaticContext.
@@ -111,13 +88,7 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
     if (!res.ok) throw new Error("발행 아티팩트 생성 실패");
     // 런타임 설정/ MCP 목록을 번들 .lively/ 에 주입(DB → 설치기가 ~/.lively 로 복사).
     await writeRuntimeBundle(stage);
-    // 동적 전달 컷오버(2026-06-24): org-콘텐츠는 번들에 굽지 않는다 — 설치기(install-time 라이브 fetch)+세션 훅(write-back 캐시)이
-    //  ~/.lively/context.md · ~/.codex/AGENTS.md 를 라이브로 시드·갱신한다. generator 가 낸 정적 콘텐츠/병행-경로 파일은 stage 에서
-    //  제거하고 부트스트랩(.claude/hooks·settings, setup, .lively, .lively-org-name, README)만 tar 한다.
-    //  (generator 의 콘텐츠 생성 자체를 스킵하는 최적화는 후속 — 지금은 shipped 번들만 슬림.)
-    for (const p of ["AGENTS.md", "CLAUDE.md", "context.md", "memory", "org"]) {
-      await rm(join(stage, p), { recursive: true, force: true }).catch(() => { /* 없으면 무시 */ });
-    }
+    // buildKitBundle 가 org-콘텐츠를 애초에 안 만든다(부트스트랩만) — strip 불요. .lively/ 만 DB 에서 주입(위 writeRuntimeBundle).
     // tar -czf - -C <stage> .  → stdout 로 받기.
     const buf = await new Promise<Buffer>((resolve, reject) => {
       const child = spawn("tar", ["-czf", "-", "-C", stage, "."]);

@@ -7,14 +7,14 @@
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts } from "./capabilities/index.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./capabilities/scopes.js";
+import { sessionOrBearer } from "./auth/http-auth.js";
 import {
-  userFromSession, parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
+  parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
 
@@ -23,22 +23,8 @@ const userOf = (req: express.Request): LivelyUser =>
   ((req as unknown as { auth?: { extra?: unknown } }).auth?.extra ?? {}) as unknown as LivelyUser;
 
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
-  const authOnly = requireBearerAuth({ verifier });
-
-  // 세션 쿠키 우선 → 유효하면 req.auth 채우고 통과, 없으면 bearer 로 위임(미인증이면 SDK 가 401+WWW-Authenticate).
-  //  세션 user.scopes 는 멤버 LIVE(sessions.ts) → 박제 desync 없음. (.then 형: express RequestHandler 는 void 반환.)
-  const authResolve: express.RequestHandler = (req, res, next) => {
-    const sid = parseSessionCookie(req.headers.cookie);
-    if (!sid) { authOnly(req, res, next); return; }
-    userFromSession(sid).then((user) => {
-      if (user) {
-        (req as unknown as { auth: unknown }).auth = { token: "", clientId: user.userId, scopes: user.scopes, extra: user };
-        next();
-      } else {
-        authOnly(req, res, next);
-      }
-    }).catch(() => authOnly(req, res, next));
-  };
+  // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
+  const authResolve = sessionOrBearer(verifier);
 
   // scope 게이트(세션·bearer 공통). null=인증만. fail-closed(미인증 401 / 권한부족 403).
   const requireScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {

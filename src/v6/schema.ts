@@ -1,7 +1,7 @@
 // Context OS v6 스키마 — greenfield 온톨로지 재설계.
 //  맥락(Context) = Category(분류축) + Knowledge(맥락의 기록) + Project(맥락의 변화).
 //  컷오버 완료(2026-06-24): 레거시 domain/knowledge_unit/org_project 는 드랍됨 — v6 가 단일 캐노니컬.
-//  단일 통합 DB(itemsPool — db.ts dmPool()→itemsPool). 신규 정션은 같은 DB라 **진짜 FK** 를 쓴다.
+//  단일 통합 DB(itemsPool). 신규 정션은 같은 DB라 **진짜 FK** 를 쓴다.
 //  ⚠ 호출 순서: index.ts 직렬체인에서 initOrgSchema(kind_registry/data_source 등)·initDomainmapSchema(activity/
 //   mapping/debt) **이후** 호출 — activity_knowledge.activity_id 와 activity/mapping/debt ALTER 가 그 테이블에 의존.
 //  내부 FK 순서: category → knowledge/project → 정션(knowledge_category/project_*) → activity/mapping/debt ALTER.

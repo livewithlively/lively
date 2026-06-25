@@ -7,12 +7,14 @@ import express from "express";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { sessionOrBearer } from "./auth/http-auth.js";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
+import { getRepo } from "./domainmap/core/repos.js";
+import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -76,6 +78,79 @@ async function searchFiles(base: string, q: string, limit = 100): Promise<Array<
   }
   await walk(base, "", 0);
   return out;
+}
+
+// ── '내 컴퓨터에서 작업' 가이드 — 담당자가 본인 PC(원격)에서 따라 할 단계별 명령을 생성한다. 서버는 실행하지 않는다. ──
+//  전제: 코드 레포는 각자 PC에서 git 으로 받고(박스와 미동기화, git 으로 수렴), 프로젝트 '공유 폴더'만 박스와 동기화한다.
+//  경로는 담당자 홈을 모르므로 $HOME 기준. 공백·한글 경로를 위해 모든 경로 인자는 따옴표로 감싼다(~ 는 $HOME 으로 치환).
+interface GuideStep { title: string; desc: string; cmds: string[]; optional?: boolean; }
+interface LocalWorkGuide {
+  projectId: number; projectName: string; repo: string | null; worktree: boolean; branch: string | null;
+  repoPath: string | null; worktreePath: string | null; sharedLocal: string; sharedBox: string;
+  boxHost: string; repoRemote: string; harness: string; steps: GuideStep[];
+}
+// 셸 인자 인용 — 선두 ~ 를 $HOME 으로 바꾼 뒤 큰따옴표로 감싸 공백/유니코드/변수확장을 동시에 처리.
+function shq(p: string): string { return '"' + p.replace(/^~(?=\/|$)/, "$HOME") + '"'; }
+
+async function buildLocalWorkGuide(inp: {
+  projectId: number; projectName: string; projectFolder: string;
+  repo: string; repoPath: string; worktree: boolean; branch: string; harness: string;
+}): Promise<LocalWorkGuide> {
+  const sharedBox = projectAbsPath(inp.projectFolder);                 // 박스 공유폴더(동기화 원본, 절대경로)
+  const repoPath = inp.repo ? (inp.repoPath || `~/lively/repos/${inp.repo}`) : null;
+  const worktreePath = inp.repo
+    ? (inp.worktree ? `~/lively/projects/${inp.projectId}/${inp.repo}` : repoPath)
+    : null;
+  const sharedLocal = `~/lively/projects/${inp.projectId}/shared`;
+  const cwd = worktreePath || sharedLocal;
+  const boxHost = process.env.PUBLIC_BOX_HOST || "<중앙박스-호스트>";   // 동기화 대상 박스 주소(설정 연결 시 자동)
+  // 레포의 git 주소는 레포 레지스트리(관리탭 ▸ 레포(git) 관리)에서 — 자격증명 제거된 clone_url 사용. 미연결이면 안내 placeholder.
+  const repoRow = inp.repo ? await getRepo(inp.repo).catch(() => null) : null;
+  const repoRemote = sanitizeCloneUrl(repoRow?.git_url ?? null) || process.env.LIVELY_REPO_REMOTE || "<레포 git 주소 — 관리탭 ▸ 레포(git) 관리에서 연결>";
+  const harness = inp.harness === "codex" ? "codex" : "claude";
+
+  const steps: GuideStep[] = [];
+  let n = 1;
+  if (inp.repo) {
+    steps.push({
+      title: `${n++}) 레포 받기 — ${inp.repo}`,
+      desc: "이미 클론돼 있으면 이 단계는 건너뛰고, 그 경로를 위 ‘레포 경로’에 적으면 됩니다.",
+      cmds: [`git clone ${shq(repoRemote)} ${shq(repoPath as string)}`],
+      optional: true,
+    });
+    if (inp.worktree) {
+      steps.push({
+        title: `${n++}) 작업용 워크트리 만들기 (브랜치 ${inp.branch})`,
+        desc: "프로젝트 전용 브랜치로 격리된 작업 폴더를 만듭니다. 같은 레포의 다른 프로젝트와 동시에 작업해도 안 섞여요.",
+        cmds: [`cd ${shq(repoPath as string)}`, `git worktree add ${shq(worktreePath as string)} -b ${inp.branch}`],
+      });
+    } else {
+      steps.push({
+        title: `${n++}) 클론에서 바로 작업 (워크트리 미사용)`,
+        desc: "워크트리 없이 클론 폴더에서 직접 작업합니다. 같은 레포를 쓰는 다른 프로젝트와는 동시에 못 해요.",
+        cmds: [`cd ${shq(repoPath as string)}`],
+      });
+    }
+  }
+  steps.push({
+    title: `${n++}) 프로젝트 공유 폴더 동기화`,
+    desc: "팀이 함께 쓰는 공유 폴더(문서·맥락·규칙)를 내 PC와 양방향 동기화합니다. 코드가 아니라 이 폴더만 박스와 공유돼요.",
+    cmds: [
+      `mkdir -p ${shq(sharedLocal)}`,
+      `mutagen sync create --name=lively-proj-${inp.projectId} ${shq(sharedLocal)} ${shq(boxHost + ":" + sharedBox)}`,
+    ],
+  });
+  steps.push({
+    title: `${n++}) 터미널에서 작업 시작`,
+    desc: "작업 폴더로 이동해 AI 코딩 에이전트를 실행하세요. 프로젝트 규칙(CLAUDE.md)은 공유 폴더에서 자동 인식됩니다.",
+    cmds: [`cd ${shq(cwd)}`, harness],
+  });
+
+  return {
+    projectId: inp.projectId, projectName: inp.projectName, repo: inp.repo || null,
+    worktree: !!inp.repo && inp.worktree, branch: inp.repo && inp.worktree ? inp.branch : null,
+    repoPath, worktreePath, sharedLocal, sharedBox, boxHost, repoRemote, harness, steps,
+  };
 }
 
 // 한 소스(org 또는 v6)에 대해 파일/세션/타임라인 라우트를 prefix 아래 등록한다.
@@ -204,12 +279,29 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       label: String(b.label ?? ""), rootKey: "shared", subpath: project.folder,
       harness: String(b.harness ?? "shell"),
       flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove, visibility: String(b.visibility ?? "public"),
+      autoApprove: !!b.autoApprove,
+      // 프로젝트 공동 세션은 초대 목록을 쓰지 않는다 — 입장은 프로젝트 멤버십(아래 projectId)으로 게이트.
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
     });
     res.setHeader("Cache-Control", "no-store");
     res.json({ session });
+  }));
+
+  // ── ②-b '내 컴퓨터에서 작업' 가이드 — 담당자 본인 PC용 단계별 명령 생성(서버 미실행). 팀원 게이트. ──
+  app.post(`${prefix}/:id/local-work/guide`, auth, wrap(async (req, res) => {
+    const { project } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const repo = String(b.repo ?? "").trim();
+    const guide = await buildLocalWorkGuide({
+      projectId: project.id, projectName: project.name, projectFolder: project.folder,
+      repo, repoPath: String(b.repoPath ?? "").trim(),
+      worktree: !!b.worktree && !!repo,
+      branch: String(b.branch ?? "").trim() || `project/${project.id}`,
+      harness: String(b.harness ?? "claude"),
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ guide });
   }));
 
   // ── ③ 작업 타임라인 — 팀원 activity(author_person 지정 시 그 사람만) ──
@@ -234,6 +326,6 @@ export function registerProjectV6Routes(
     ensureFolder: NonNullable<ProjectDeps["ensureFolder"]>;
   },
 ): void {
-  const auth = requireBearerAuth({ verifier });
+  const auth = sessionOrBearer(verifier); // 세션 쿠키(웹 로그인) OR bearer(에이전트) — 둘 다 수용
   mountProjectRoutes(app, auth, { prefix: "/api/ui/v6/projects", ...deps });
 }

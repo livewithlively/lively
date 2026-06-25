@@ -17,7 +17,7 @@
 // 같은 의미 판단은 전부 잔여로 남긴다(저신뢰 rename flag, orphan flag, unmapped 인박스).
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { dmPool, one, q } from "../db.js";
+import { itemsPool, one, q } from "../db.js";
 import { httpErr, type Actor } from "./types.js";
 import { logChange } from "./changelog.js";
 import { refresh } from "./refresh.js";
@@ -125,7 +125,7 @@ export { deepEqualUnordered as _deepEqualUnordered };
 // detected_stack 보정(감사). refresh() 는 detected_stack 을 손대지 않으므로(ingest 전용) 별도로
 // repo 메타를 갱신하고 change_log(entity='repo', op='update')에 스냅샷한다 — 복구 가능(RESTORE_COLUMNS.repo).
 export async function correctDetectedStack(repoName: string, newStack: unknown, actor: Actor): Promise<{ before: unknown; after: unknown; change_id: number } | null> {
-  const pool = dmPool();
+  const pool = itemsPool;
   const r = await one(pool, "SELECT * FROM repo WHERE name=$1", [repoName]);
   if (!r) throw httpErr(404, "no such repo: " + repoName);
   const before = r.detected_stack ?? {};
@@ -147,7 +147,7 @@ export async function refreshFromFilesystem(
   repoName: string, rootPath: string, actor: Actor,
   opts: { renamePrefixes?: RenamePrefix[]; headSha?: string | null; detectedStack?: unknown; evalDomainDebt?: boolean } = {},
 ): Promise<{ diff: FsDiffResult; tally: Record<string, unknown>; run_id: number; stack_corrected: { before: unknown; after: unknown; change_id: number } | null; domain_debt: { findings: DomainDebtFinding[]; tally: Record<string, number> } | null }> {
-  const pool = dmPool();
+  const pool = itemsPool;
   const r = await one(pool, "SELECT id FROM repo WHERE name=$1", [repoName]);
   if (!r) throw httpErr(404, "no such repo: " + repoName);
   const rows = await q(pool, "SELECT path FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active'", [r.id]);

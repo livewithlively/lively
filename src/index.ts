@@ -23,6 +23,12 @@ import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
+// ── 프로세스 안전망(최대한 안 죽게) — launchd KeepAlive 와 함께 2중 방어. ──
+//  unhandledRejection: 미처리 promise 거부로 프로세스가 통째로 죽지 않게 — 로그만 남기고 계속(요청 1건 실패 ≠ 전체 다운).
+//  uncaughtException: 상태가 오염됐을 수 있으니 로그 후 종료 → launchd 가 즉시 새 프로세스로 재기동(깨끗한 상태).
+process.on("unhandledRejection", (reason) => logger.error({ reason }, "unhandledRejection — 무시하고 계속"));
+process.on("uncaughtException", (err) => { logger.error({ err }, "uncaughtException — 종료 후 재기동"); process.exit(1); });
+
 // 부팅 시 MCP 툴 후보 주입 — registry(정적) + db 직접등록. 웹 도구탭(org_tools)·검증(org_tool_upsert)·http_proxy 섀도잉 차단이 참조.
 setToolCandidates(buildToolCandidates());
 

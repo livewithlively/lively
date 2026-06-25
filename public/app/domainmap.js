@@ -2,6 +2,25 @@
 import { VOCAB_CRUD_DEFAULT_REPO, api, el, errorNote, fmtNum, loadRepos, relTime, stat, state } from './core.js';
 import { actTypeTag } from './dashboard.js';
 import { skeleton } from './learn.js';
+// 도메인 부채(debt) 분류·표시 — 구 app.js 에서 정의 누락이던 미정의 전역(도메인맵 탭 도입 35353c5 부터의 잠재버그)을
+//  v6 TS 분할 시 백엔드 모델 기준으로 정의(2026-06-24). domain-debt 평가기(src/domainmap/core/domain-debt.ts)가
+//  severity 를 title 접두사로 인코딩한다: '의도-구조 괴리…'=should_no_is, '도메인 구조 증발…'=vanished,
+//  '도메인 구조 침식…'=eroded. 그 외(flagStructuralDrift 등 커스텀 title)는 structural_drift 로 폴백.
+function DM_SEV_OF(title) {
+    const t = title || '';
+    if (t.startsWith('의도-구조 괴리'))
+        return 'should_no_is';
+    if (t.startsWith('도메인 구조 증발'))
+        return 'vanished';
+    if (t.startsWith('도메인 구조 침식'))
+        return 'eroded';
+    return 'structural_drift';
+}
+// 정렬 순위 — should↔is 괴리 먼저, 그다음 구조 신호(증발>침식>드리프트). 표시 라벨(한국어).
+const DM_SEV_RANK = { should_no_is: 0, vanished: 1, eroded: 2, structural_drift: 3 };
+const DM_SEV_LABEL = { should_no_is: '의도 괴리', vanished: '구조 증발', eroded: '구조 침식', structural_drift: '구조 변화' };
+// 커밋→구조(is) 변경 op 라벨 — change_log op(insert/update/delete/restore/rename). 미정의 op 는 호출부에서 raw 폴백.
+const DM_OP_LABEL = { insert: '추가', update: '수정', delete: '제거', rename: '이름변경', restore: '복원', added: '추가', removed: '제거', modified: '수정' };
 // ════════════════════════════════════════════
 // 도메인 맵(#/domainmap?repo=) — should/is/debt 코드구조 뷰.
 // ════════════════════════════════════════════

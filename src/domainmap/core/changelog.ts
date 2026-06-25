@@ -4,7 +4,7 @@
 // (3) history/historyGlobal: 열람. 읽기 경로(queries.ts)는 이 파일을 import 하지 않는다 —
 //     스냅샷 기록·역연산·열람을 한 파일에서 리뷰 가능하게 묶는 것이 응집의 핵심.
 // store-core.mjs 의 logChange/restore/history 를 시맨틱 무수정 이식(op 어휘·에러 문구 byte 동일).
-import { dmPool, one, q, type Db } from "../db.js";
+import { itemsPool, one, q, type Db } from "../db.js";
 import { httpErr, saneLimit, type Actor, type RestoreResult } from "./types.js";
 import { getRepo } from "./repos.js";
 
@@ -85,7 +85,7 @@ async function restoreDependents(table: string, eid: number, _cur: unknown, db: 
 }
 
 export async function restore(change_id: number, actor: Actor): Promise<RestoreResult> {
-  const pool = dmPool();
+  const pool = itemsPool;
   const ch = await one(pool, "SELECT * FROM change_log WHERE id=$1", [change_id]);
   if (!ch) throw httpErr(404, "no such change: " + change_id);
   const table = ch.entity_type, eid = ch.entity_id;
@@ -127,14 +127,14 @@ export async function restore(change_id: number, actor: Actor): Promise<RestoreR
 // repo 스코프 열람(HTTP /history 의 소스 — 최신순, saneLimit 기본 50/최대 500).
 export async function history(name: string, limit: unknown = 50): Promise<any[]> {
   const r = await getRepo(name);
-  return q(dmPool(),
+  return q(itemsPool,
     "SELECT id,at,op,entity_type,entity_id,actor_type,actor_id,before,after,note FROM change_log WHERE repo_id=$1 ORDER BY id DESC LIMIT $2",
     [r.id, saneLimit(limit)]);
 }
 
 // CLI 전용 글로벌 열람(전 repo 무필터, SELECT * — store.mjs historyCmd 의 쿼리 그대로).
 export async function historyGlobal(limit: unknown): Promise<any[]> {
-  return q(dmPool(), "SELECT * FROM change_log ORDER BY id DESC LIMIT $1", [limit]);
+  return q(itemsPool, "SELECT * FROM change_log ORDER BY id DESC LIMIT $1", [limit]);
 }
 
 // ── 도메인맵 탭(should↔is) 전용 열람 2종 — change_log 를 의도(should)/구조(is) 축으로 슬라이스. ──

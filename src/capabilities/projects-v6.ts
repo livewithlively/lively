@@ -4,14 +4,18 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
+import { listSessions } from "../terminal-sessions.js";
 import {
-  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus,
+  listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, isProjectMember,
   linkProjectCategory, unlinkProjectCategory,
   linkProjectKnowledge, unlinkProjectKnowledge,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
+// 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
+//  레거시·기본값 'active' 는 프론트가 '진행 중'으로 흡수(표시만). 스키마 CHECK 는 이미 4종 허용.
+const PROJECT_STATUSES = ["active", "done", "todo", "in_progress"] as const;
 const RELATIONS = ["required", "produced"] as const;
 // 태스크 전용 다단계 상태(프로젝트의 active|done 와 별개) — 리스트뷰 그룹핑 축. 우선순위 4단계(클릭업 동형).
 const TASK_STATUSES = ["todo", "in_progress", "done"] as const;
@@ -25,6 +29,11 @@ function parseId(v: unknown): number {
 function parseStatus(v: unknown): string {
   const s = String(v ?? "").trim();
   if (!(STATUSES as readonly string[]).includes(s)) throw new HttpError(400, "status 는 active|done 중 하나여야 합니다");
+  return s;
+}
+function parseProjectStatus(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!(PROJECT_STATUSES as readonly string[]).includes(s)) throw new HttpError(400, "status 는 todo|in_progress|done 중 하나여야 합니다");
   return s;
 }
 function parseRelation(v: unknown): string {
@@ -84,12 +93,25 @@ const projectListV6: Capability = {
       } }],
   },
   // mine=1 이면 viewer(토큰 신원) 기준 '내 프로젝트'만(생성자·팀원). MCP 호출은 mine 미지정 → 전체.
-  handler: async (input: any, user: any, ctx: any) => ({
-    projects: await listProjects({
+  handler: async (input: any, user: any, ctx: any) => {
+    const projects = await listProjects({
       space: input.space, categoryId: input.categoryId, status: input.status,
       viewer: input.mine ? (ctx?.actor ?? user?.userId ?? null) : undefined,
-    }),
-  }),
+    });
+    // 내 세션 수(프로젝트별) — 보드의 '내 세션' 칼럼을 '있으면 활성, 없으면 비활성'으로 칠하기 위한 신호.
+    //  tmux 세션 목록 한 번 호출 → owned(@box_owner=나) 세션을 projectId(@box_project) 로 집계. 실패해도 목록은 그대로.
+    if (input.mine && user) {
+      try {
+        const sessions = await listSessions(user);
+        const byProj = new Map<number, number>();
+        for (const s of sessions) {
+          if (s.owned && s.projectId) byProj.set(s.projectId, (byProj.get(s.projectId) || 0) + 1);
+        }
+        for (const p of projects as any[]) p.my_session_count = byProj.get(Number(p.id)) || 0;
+      } catch { /* 세션 조회 실패 → my_session_count 미부여(프론트는 0=비활성으로 처리) */ }
+    }
+    return { projects };
+  },
 };
 
 const projectGetV6: Capability = {
@@ -149,20 +171,61 @@ const projectCreateV6: Capability = {
 const projectSetStatusV6: Capability = {
   name: "project_set_status_v6",
   title: "프로젝트 상태 변경(v6)",
-  description: "프로젝트를 진행중(active)↔완료(done)로 토글. 완료 시 완료시각 기록. 웹 전용.",
+  description: "프로젝트 상태를 할 일(todo)·진행 중(in_progress)·완료(done) 로 변경(레거시 active 도 허용). 완료 시 완료시각 기록. 웹 전용.",
   scope: "memory",
-  input: { id: z.number().int().positive(), status: z.enum(STATUSES) },
+  input: { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES) },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/status"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { id: parseId(req.params?.id), status: parseStatus(b.status) };
+        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status) };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { project: await updateProjectStatus(input.id, input.status, writeCtx) };
+  },
+};
+
+// 프로젝트 이름/설명 수정 — 주어진 키만 패치(name 비우기 불가, description 빈값=해제). 웹 전용.
+const projectUpdateV6: Capability = {
+  name: "project_update_v6",
+  title: "프로젝트 수정(v6)",
+  description: "프로젝트 이름·설명을 수정한다. 주어진 키만 변경. 웹 프로젝트 탭 전용.",
+  scope: "memory",
+  input: {
+    id: z.number().int().positive(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(4000).nullable().optional(),
+    priority: z.enum(PRIORITIES).nullable().optional(),
+    assignee: z.string().nullable().optional(),
+    start_date: z.string().nullable().optional(),
+    due_date: z.string().nullable().optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const patch: Record<string, unknown> = { id: parseId(req.params?.id) };
+        if ("name" in b) {
+          const name = String(b.name ?? "").trim();
+          if (!name) throw new HttpError(400, "이름은 비울 수 없습니다");
+          patch.name = name;
+        }
+        if ("description" in b) patch.description = b.description == null ? null : String(b.description);
+        if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
+        if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
+        if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
+        if ("due_date" in b) patch.due_date = parseDateOrNull(b.due_date);
+        return patch;
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const { id, ...patch } = input;
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { project: await updateProject(id, patch, writeCtx) };
   },
 };
 
@@ -391,7 +454,21 @@ const taskDeleteV6: Capability = {
   },
 };
 
+// ── 보드(프로젝트 목록) 커스텀 컬럼 — 정의(숨김 앵커의 task_field) + 프로젝트별 값. GET 전용, 웹 보드가 머지. ──
+const boardFieldsV6: Capability = {
+  name: "board_fields_v6",
+  title: "보드 커스텀 컬럼(v6)",
+  description: "프로젝트 목록(보드)의 커스텀 컬럼 정의와 프로젝트별 값을 돌려준다. 웹 전용.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/board-fields"], parse: () => ({}) }],
+  },
+  handler: async () => await getBoardFields(),
+};
+
 export const projectV6Capabilities: Capability[] = [
-  projectListV6, projectGetV6, projectCreateV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6,
+  projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];

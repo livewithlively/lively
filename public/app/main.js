@@ -76,7 +76,7 @@ async function route() {
         }
         else if (page === 'terminal') {
             setActiveTab('terminal');
-            await renderTerminal(view, params.get('team'));
+            await renderTerminal(view);
         }
         else {
             setActiveTab('start');

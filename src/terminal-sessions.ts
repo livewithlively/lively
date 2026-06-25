@@ -1,7 +1,7 @@
 // 중앙 박스 — tmux 세션 매니저 + 큐레이트 설정(허용 루트·하네스 플래그 카탈로그).
 // 모든 tmux 호출은 execFile argv(셸 미경유) — 인젝션 차단. 세션은 box-<userSlug>-* 네임스페이스.
 // 메타는 tmux @box_* user-option 에 저장(재기동 생존, tmux SoT — DB 미사용).
-// visibility: public(보기+열기+사용, 협업) | private(소유자만). 기본 public.
+// 접근 모델: 소유자 + 초대된 멤버(@box_invites). 기본 비공개(초대 없음 = 소유자만). 공개/팀 개념 없음.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -10,13 +10,27 @@ import os from "node:os";
 import crypto from "node:crypto";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
-import { teamDir, isTeamMemberById, myTeamIds } from "./terminal-teams.js";
 import { dirToProjectFolder, folderVariants } from "./project-fs.js";
 import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6 } from "./v6/project-store.js";
+import { listMembers } from "./org/store.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
 export const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
+
+// ⚠ tmux 는 로케일이 UTF-8 이 아니면(C/POSIX) format 출력의 제어문자·멀티바이트를 '_' 로 치환한다.
+//  게이트웨이가 launchd 로 LANG/LC_* 없이 뜨면 `list-sessions -F "...\t..."` 의 탭 구분자와 한글 라벨이
+//  통째로 '_' 가 되어, split("\t") 가 안 쪼개져 라인 전체가 세션 id 로 들어가는 치명 버그가 생긴다
+//  (입장 불가 + owner 누락 → '다른 멤버' 오분류). 그래서 모든 tmux 호출에 UTF-8 로케일을 강제한다
+//  (terminal-pty 의 attach 가 이미 쓰는 패턴과 동일 — 여기 list/show/set 계열에도 일관 적용).
+const TMUX_ENV: NodeJS.ProcessEnv = (() => {
+  const env = { ...process.env };
+  if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) {
+    env.LANG = "en_US.UTF-8";
+    env.LC_CTYPE = "en_US.UTF-8";
+  }
+  return env;
+})();
 
 // ── 큐레이트 허용 루트 ──
 export interface Root { key: string; label: string; base: string; perUser?: boolean; }
@@ -42,14 +56,14 @@ export const HARNESSES: Harness[] = [
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
 
-export type Visibility = "public" | "private";
 export interface SessionInfo {
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
-  visibility: Visibility; owner: string; owned: boolean; created: number; attached: boolean;
-  team: string; // 소속 팀 폴더 id(@box_team). 빈값 = 팀 밖(최상위) 세션.
+  owner: string; owned: boolean; created: number; attached: boolean;
+  invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
+  projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; visibility: string; team?: string; projectId?: number; projectSrc?: "v6" | "org"; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -58,7 +72,22 @@ export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = /^box-[a-z0-9-]+-[a-f0-9]{8}$/;
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
-const normVis = (v: unknown): Visibility => (v === "private" ? "private" : "public");
+
+// @box_invites(JSON 문자열) → 멤버 id 배열. 깨진 값·구버전 메타는 빈 배열(=비공개로 안전 폴백).
+function parseInvites(raw: string): string[] {
+  if (!raw) return [];
+  try { const a = JSON.parse(raw); return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : []; }
+  catch { return []; }
+}
+// 초대 멤버 검증 — 실제 구성원 id 만, 소유자 제외, 중복 제거(위조·중복 초대 차단).
+async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
+  if (!Array.isArray(ids)) return [];
+  const valid = new Set((await listMembers().catch(() => [])).map((m) => m.id));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of ids) if (typeof x === "string" && x !== ownerUid && valid.has(x) && !seen.has(x)) { seen.add(x); out.push(x); }
+  return out;
+}
 
 // 허용 루트 기준 경로 해소(+봉쇄). perUser 루트는 base/<userSlug>. subpath 의 .. 탈출은 거부.
 // 세션 생성·생성폼 폴더 탐색이 공유한다(순수 path 연산 — fs 부작용 없음).
@@ -75,7 +104,7 @@ export function resolveRootPath(user: LivelyUser, rootKey: string, subpath: stri
 }
 
 async function tmux(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000 });
+  const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000, env: TMUX_ENV });
   return stdout;
 }
 async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
@@ -84,34 +113,32 @@ async function getOpt(name: string, opt: string): Promise<string> {
 }
 
 // 단일 tmux 호출로 모든 box-* 세션 + @box_* 메타를 읽는다(#{@user-option} 포맷 지원).
-// @box_team·@box_flags 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
-//  @box_flags 는 JSON(탭 없음 — 값은 SAFE_VALUE_RE 통과)이라 탭 구분 파싱에 안전.
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_visibility}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_team}\t#{@box_flags}\t#{@box_label}";
+// @box_flags·@box_invites 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
+//  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_label}";
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   let out = "";
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
   const me = ownerId(user);
-  const teams = await myTeamIds(user); // 내가 접근 가능한 팀(소유 or 멤버)
   const sessions: SessionInfo[] = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, vis, harness, dir, auto, team, flagsRaw, ...labelParts] = line.split("\t");
-    const visibility = normVis(vis);
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, ...labelParts] = line.split("\t");
     const owned = !!owner && owner === me;
-    const teamId = team || "";
-    if (teamId) {
-      if (!teams.has(teamId)) continue;                  // 팀 세션인데 그 팀 멤버 아님 → 숨김(공개여도)
-      if (visibility === "private" && !owned) continue;  // 팀 안 비공개 = 작성자만
-    } else if (!owned && visibility !== "public") {
-      continue;                                          // 팀 밖 비공개 + 남의 것 → 숨김
+    const invites = parseInvites(invitesRaw);
+    // 프로젝트 폴더 세션은 '프로젝트 공동 세션' — 소비자(프로젝트 페이지)가 프로젝트 멤버십으로 게이트하고
+    //  터미널 탭은 isProjectSessionDir 로 숨긴다. 여기서 초대 게이트를 걸면 프로젝트 멤버가 못 보는 회귀가 나므로 예외.
+    if (!dirToProjectFolder(dir || "")) {
+      if (!owned && !invites.includes(me)) continue;     // 개인 세션: 소유자 또는 초대된 사람만
     }
     let flags: Record<string, string> = {};
     try { if (flagsRaw) flags = JSON.parse(flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
     sessions.push({
       id: name, label: (labelParts.join("\t") || name), harness: harness || "shell", dir: dir || "",
-      autoApprove: auto === "1", visibility, owner: owner || "", owned,
-      created: Number(created) || 0, attached: Number(attached) > 0, team: teamId, flags,
+      autoApprove: auto === "1", owner: owner || "", owned,
+      created: Number(created) || 0, attached: Number(attached) > 0, invites, flags,
+      projectId: Number(projectRaw) || 0,
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
@@ -119,14 +146,7 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
 }
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
-  const teamId = (input.team || "").trim();
-  if (teamId && !(await isTeamMemberById(teamId, ownerId(user)))) throw new HttpError(403, "팀 접근 권한이 없습니다");
   const { abs: target } = resolveRootPath(user, input.rootKey, input.subpath);
-  if (teamId) {
-    // 팀 세션은 그 팀 폴더(또는 하위) 안에서만 — 경로 위조 차단.
-    const tdir = teamDir(teamId);
-    if (target !== tdir && !target.startsWith(tdir + path.sep)) throw new HttpError(400, "팀 폴더 밖 경로입니다");
-  }
   await fsp.mkdir(target, { recursive: true, mode: 0o700 });
 
   const harness = HARNESSES.find((h) => h.key === input.harness);
@@ -148,7 +168,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
   }
 
-  const visibility = normVis(input.visibility);
+  const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   const args = ["new-session", "-d", "-s", id, "-c", target];
   if (cmd.length) args.push(...cmd);
@@ -160,8 +180,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
-  await tmux(["set-option", "-t", id, "@box_visibility", visibility]);
-  if (teamId) await tmux(["set-option", "-t", id, "@box_team", teamId]);
+  await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — 입장 게이트(canAttach)가 폴더 문자열이 아니라 이 id 로 멤버십을
   //  판정하게 해, 폴더 이름변경·접미사(-N)·아카이브(legacy-project/)·이동에도 입장이 끊기지 않게 한다.
   if (input.projectId) {
@@ -172,21 +191,21 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "largest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, visibility, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, team: teamId, flags: appliedFlags };
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
 }
 
-interface OwnerVis { owner: string; visibility: Visibility; team: string; }
-async function ownerVis(id: string): Promise<OwnerVis | null> {
+interface OwnerMeta { owner: string; invites: string[]; }
+async function ownerMeta(id: string): Promise<OwnerMeta | null> {
   if (!ID_RE.test(id)) return null;
   const owner = await getOpt(id, "@box_owner");
   if (!owner) return null; // box 세션이지만 메타 없음(우리 것 아님) → 거부
-  return { owner, visibility: normVis(await getOpt(id, "@box_visibility")), team: await getOpt(id, "@box_team") };
+  return { owner, invites: parseInvites(await getOpt(id, "@box_invites")) };
 }
-// attach·파일접근 = (팀 세션이면 팀 멤버) AND (소유자 OR 공개). kill/edit = 소유자만.
+// attach·파일접근 = 소유자 OR 초대된 멤버. 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트. kill/edit = 소유자만.
 export async function canAttach(id: string, userId: string): Promise<boolean> {
-  const m = await ownerVis(id);
+  const m = await ownerMeta(id);
   if (!m) return false;
-  // 프로젝트 폴더 세션은 '공동 세션' — 그 프로젝트 팀원(생성자 포함)만 입장(공개여도 외부 차단).
+  // 프로젝트 폴더 세션은 '공동 세션' — 그 프로젝트 팀원(생성자 포함)만 입장(초대 목록과 무관, 멤버십이 게이트).
   const dir = await sessionDir(id);
   const folder = dirToProjectFolder(dir);
   if (folder) {
@@ -202,26 +221,26 @@ export async function canAttach(id: string, userId: string): Promise<boolean> {
     }
     return false;
   }
-  if (m.team && !(await isTeamMemberById(m.team, userId))) return false; // 팀 멤버 아니면 공개여도 차단
-  return m.owner === userId || m.visibility === "public";
+  return m.owner === userId || m.invites.includes(userId);
 }
 async function assertManage(user: LivelyUser, id: string): Promise<void> {
-  const m = await ownerVis(id);
+  const m = await ownerMeta(id);
   if (!m || m.owner !== ownerId(user)) throw new HttpError(403, "본인 세션이 아닙니다");
 }
 export async function killSession(user: LivelyUser, id: string): Promise<void> {
   await assertManage(user, id);
   await tmux(["kill-session", "-t", id]);
 }
-export async function editSession(user: LivelyUser, id: string, patch: { label?: string; visibility?: string }): Promise<void> {
+export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
     if (!clean) throw new HttpError(400, "이름이 필요합니다");
     await tmux(["set-option", "-t", id, "@box_label", clean]);
   }
-  if (patch.visibility !== undefined) {
-    await tmux(["set-option", "-t", id, "@box_visibility", normVis(patch.visibility)]);
+  if (patch.invites !== undefined) {
+    const invites = await validInvites(patch.invites, ownerId(user));
+    await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
   }
 }
 
@@ -243,6 +262,14 @@ export async function tidyHistory(id: string, force: boolean): Promise<boolean> 
 export async function sessionDir(id: string): Promise<string> {
   if (!ID_RE.test(id)) return os.homedir();
   return (await getOpt(id, "@box_dir")) || os.homedir();
+}
+
+// 단일 세션의 현재 라벨(@box_label) — 단독 터미널 페이지가 id 로 '지금 이름'을 조회한다.
+//  목록 API(/sessions)는 프로젝트 세션을 빼므로, 그 세션의 상단 제목이 생성 시점 ?label= 에 고정되던 문제를 푼다.
+//  접근통제(canAttach)는 라우트에서 — 여기선 값만 읽는다.
+export async function getSessionLabel(id: string): Promise<string> {
+  if (!ID_RE.test(id)) return "";
+  return (await getOpt(id, "@box_label")) || "";
 }
 
 // attach 시점에 스크롤·리사이즈 옵션 보장(생성 전 세션이나 옵션 누락 케이스 방어). 비치명.

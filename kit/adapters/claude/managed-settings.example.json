@@ -1,0 +1,9 @@
+{
+  "_comment": "Managed Policy 주입 예시. 배포 스크립트가 org/managed-policy.md 내용을 claudeMd 값으로 채워, OS별 managed 경로에 둔다. 이 계층은 사용자가 오버라이드 불가.",
+  "_managedPaths": {
+    "macos": "/Library/Application Support/ClaudeCode/managed-settings.json",
+    "linux": "/etc/claude-code/managed-settings.json",
+    "windows": "C:\\ProgramData\\ClaudeCode\\managed-settings.json"
+  },
+  "claudeMd": "# 조직 강제 규칙 (Managed Policy)\n\n(여기에 org/managed-policy.md 의 본문이 배포 시 주입됨)\n"
+}

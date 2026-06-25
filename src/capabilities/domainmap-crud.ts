@@ -15,6 +15,7 @@ import { dmWrite, webActor } from "./domainmap-compat.js";
 //  '주제 분류' 관리섹션이 이 REST 를 호출(리스트는 이미 category 읽기) → 쓰기도 category 로 일치(단일 DB·FK CASCADE).
 import {
   createRepo as coreCreateRepo, renameRepo as coreRenameRepo, setRepoState, hardDeleteRepo,
+  setRepoSource as coreSetRepoSource,
 } from "../domainmap/core/repos.js";
 import { makeAudited } from "./audit-log.js";
 import type { Capability, CapabilityCtx } from "./types.js";
@@ -124,6 +125,42 @@ const repoDeprecate: Capability = {
   },
 };
 
+// repo git 소스 설정 — git_url/default_branch. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스. git_url 은 민감값이라
+//  저장만(절대 로깅/반환 X — 코어가 보장). ⚠ 사람(웹)만 — 에이전트(MCP) 403(인프라 큐레이션). 보호 리포 403.
+const repoSetSource: Capability = {
+  name: "repo_set_source",
+  title: "레포 git 소스 설정",
+  description:
+    "레포의 git 클론 주소(git_url)와 기본 브랜치(default_branch)를 설정한다 — 도메인맵 스캔(webhook clone/fetch)과 " +
+    "로컬 작업 클론이 공유하는 단일 소스. git_url 은 민감값이라 저장만 하고 로깅/반환하지 않는다. " +
+    "git_url:null 이면 연결 해제. ⚠ 사람(웹)만 — 에이전트(MCP)는 403. 보호 리포는 403. 반환 {id,name,change_id,default_branch,has_git_url}.",
+  scope: "context",
+  input: {
+    name: z.string().trim().min(1).max(100).regex(REPO_RE),
+    git_url: z.string().trim().max(500).nullable().optional(),
+    default_branch: z.string().trim().max(200).nullable().optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/domainmap/repo/source"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const out: Record<string, unknown> = { name: parseRepo(b.name) };
+        if (b.git_url !== undefined) out.git_url = b.git_url === null ? null : String(b.git_url).trim();
+        if (b.default_branch !== undefined) out.default_branch = b.default_branch === null ? null : String(b.default_branch).trim();
+        return out;
+      },
+    }],
+  },
+  handler: async (input: { name: string; git_url?: string | null; default_branch?: string | null }, user, ctx) => {
+    denyAgentRepoCuration(ctx, "git 소스 설정");
+    return audited("repo_set_source", user, ctx, { name: input.name }, () =>
+      dmWrite(() => coreSetRepoSource(input.name, input.git_url, input.default_branch, webActor(user.userId, actorType(ctx)))));
+  },
+};
+
 
 
 
@@ -176,5 +213,5 @@ const repoDelete: Capability = {
 // v6 은퇴(2026-06-24): domainCreate/Rename/Delete 정의·등록 제거 — '주제 분류' 패널 폐기 +
 //  v6 category CRUD(categories.ts/category-store)가 단일 표면. repo CRUD 는 실엔티티라 유지.
 export const domainmapCrudCapabilities: Capability[] = [
-  repoCreate, repoRename, repoDeprecate, repoDelete,
+  repoCreate, repoRename, repoSetSource, repoDeprecate, repoDelete,
 ];

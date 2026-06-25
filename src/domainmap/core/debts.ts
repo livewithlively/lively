@@ -1,7 +1,7 @@
 // debt_finding 쓰기 SQL 의 단일 소유 모듈 — 같은 (repo_id,title) upsert 로직이
 // ingest 경로(reconcile.ts)와 구조 리프레시 경로(refresh.ts)에서 쓰이므로 1벌만 둔다.
 // 사람이 닫은 finding(resolved/dismissed/ack)은 재개하지 않는다('kept-<status>') — 불변식.
-import { dmPool, one, type Db } from "../db.js";
+import { itemsPool, one, type Db } from "../db.js";
 import { httpErr, type Actor, type CurationResult } from "./types.js";
 import { logChange } from "./changelog.js";
 
@@ -68,7 +68,7 @@ export async function flagStructuralDrift(
 export async function setDebtStatus(id: number, status: string, actor: Actor): Promise<CurationResult> {
   const allowed = ["open", "ack", "resolved", "dismissed"];
   if (!allowed.includes(status)) throw httpErr(400, "bad status: " + status);
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT * FROM debt_finding WHERE id=$1", [id]);
   if (!ex) throw httpErr(404, "no such finding: " + id);
   const before = { status: ex.status };

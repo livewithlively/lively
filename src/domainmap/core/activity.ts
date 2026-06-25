@@ -3,7 +3,7 @@
 //  v6: activity.project_id(과업 1:1, 구 activity_task 대체) + activity_knowledge(지식 참조→knowledge, 구 activity_ku_ref) +
 //  activity_touch(코드 footprint)를 한 트랜잭션(withTx)으로 원자 기록한다 — 통합의 산물.
 //  author_person=토큰 신원(누가), author_agent='어떤 AI'(모델/하네스 — 호출자가 명시 전달). 사람×AI 집계의 축.
-import { withTx, q, one, dmPool } from "../db.js";
+import { withTx, q, one, itemsPool } from "../db.js";
 import { saneLimit } from "./types.js";
 import { conflictKey } from "../../org/external-identity.js";
 
@@ -141,9 +141,9 @@ export interface DashPersonRow { author_person: string | null; display_name: str
 export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]> {
   // 개인화 — 뷰어의 '내 목록'(dash_watch) + 나 자신만 보인다(30명 전원 나열 방지). watch 비면 = 나만.
   //  뷰어가 명부에 없고 watch 도 없으면(관리/외부 토큰) 빈 화면 방지로 전체 활성 멤버 폴백.
-  const members = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  const members = await q(itemsPool, "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
   const memberById = new Map<string, any>(members.map((m: any) => [String(m.id), m]));
-  const watch = await q(dmPool(), "SELECT member_id FROM dash_watch WHERE owner=$1", [viewer ?? ""]);
+  const watch = await q(itemsPool, "SELECT member_id FROM dash_watch WHERE owner=$1", [viewer ?? ""]);
   const targetIds = new Set<string>();
   if (viewer && memberById.has(viewer)) targetIds.add(viewer);
   for (const r of watch) if (memberById.has(String(r.member_id))) targetIds.add(String(r.member_id));
@@ -151,7 +151,7 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
   const ids = [...targetIds];
 
   // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review. 내 목록 작성자만 집계.
-  const rows = ids.length ? await q(dmPool(), `
+  const rows = ids.length ? await q(itemsPool, `
     SELECT a.author_person, a.author_agent,
            COUNT(*)::int AS count,
            COUNT(*) FILTER (WHERE a.type='commit')::int        AS t_commit,
@@ -182,7 +182,7 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
   }
   // 명부 합류 — 활동이 0건이어도 팀 전원이 보이도록 활성 '사람' 구성원(org_member)을 끌어온다(PM/PO 가 전원을 본다).
   //  작성자(사람) 축은 human 만(agent/system 제외) — AI 는 author_agent 축(카드 내 AI 칩)으로 따로 표현되므로 사람 축
-  //  중복 방지. 활동 버킷이 이미 있으면 표시명만 채우고, 없으면 빈 버킷(활동 0)으로 새로 만든다. org_member 는 같은 풀(dmPool).
+  //  중복 방지. 활동 버킷이 이미 있으면 표시명만 채우고, 없으면 빈 버킷(활동 0)으로 새로 만든다. org_member 는 같은 풀(itemsPool).
   for (const id of ids) {
     const m = memberById.get(id);
     const bucket = byPerson.get(id);
@@ -205,12 +205,12 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
 // '내 목록'(dash_watch) — 작업현황 구성원 섹션을 뷰어별로 추리는 개인 워치리스트. owner=뷰어 토큰 신원(ctx.actor).
 //  피커(편집 팝업)용 활성 '사람' 구성원 전체. 검색·체크는 프론트에서.
 export async function listDashMembers(): Promise<{ id: string; display_name: string | null }[]> {
-  const rows = await q(dmPool(), "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  const rows = await q(itemsPool, "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
   return rows.map((m: any) => ({ id: String(m.id), display_name: m.display_name ?? null }));
 }
 export async function getWatch(owner: string | null): Promise<string[]> {
   if (!owner) return [];
-  const rows = await q(dmPool(), "SELECT member_id FROM dash_watch WHERE owner=$1 ORDER BY sort, member_id", [owner]);
+  const rows = await q(itemsPool, "SELECT member_id FROM dash_watch WHERE owner=$1 ORDER BY sort, member_id", [owner]);
   return rows.map((r: any) => String(r.member_id));
 }
 // 내 목록 통째 교체(set semantics). 유효 활성 멤버만, 자기 자신 제외(뷰어는 항상 보이므로 dashPeople 가 합류).
@@ -243,7 +243,7 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   if (f.repo) { args.push(f.repo); where.push(`a.repo_id=(SELECT id FROM repo WHERE name=$${args.length})`); }
   if (f.project_id) { args.push(f.project_id); where.push(`a.project_id=$${args.length}`); }
   args.push(lim);
-  const rows = await q(dmPool(), `
+  const rows = await q(itemsPool, `
     SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent, a.session_id,
            a.commit_sha, a.committed_at, a.should_review, a.is_review, a.created_at, a.project_id,
            a.external_system, a.external_url, r.name AS repo
@@ -257,12 +257,12 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   const projectIds = [...new Set(rows.map((r: any) => r.project_id).filter((x: any) => x != null))];
   const [projRows, refRows, touchRows] = await Promise.all([
     projectIds.length
-      ? q(dmPool(), `SELECT id, name AS title, level, status FROM project WHERE id = ANY($1)`, [projectIds])
+      ? q(itemsPool, `SELECT id, name AS title, level, status FROM project WHERE id = ANY($1)`, [projectIds])
       : Promise.resolve([]),
-    q(dmPool(), `SELECT ak.activity_id, ak.name, ak.relation, k.title
+    q(itemsPool, `SELECT ak.activity_id, ak.name, ak.relation, k.title
                    FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
                   WHERE ak.activity_id = ANY($1) ORDER BY ak.created_at`, [ids]),
-    q(dmPool(), `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
+    q(itemsPool, `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
                   WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),
   ]);
   const projById = new Map<number, any>();

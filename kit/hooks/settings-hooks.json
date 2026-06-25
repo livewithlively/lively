@@ -1,0 +1,50 @@
+{
+  "_comment": "PostToolUse 매처 mcp__lively__.* 는 모든 lively MCP 툴(읽기/쓰기)을 잡아 work-flag 에 먹인다. work-flag 가 분기: 아무 lively 툴→.lively(자가게이팅 신호), 쓰기 suffix(WRITE_TOOLS)만→.writeback. memory_write 는 WRITE_TOOLS 제외라 .writeback 오판 없음(.lively 만 — 무해). 이 키는 emitHooks/어댑터가 hooks 블록만 머지하므로 배포 settings.json 에 포함되지 않는다.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-preload.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__lively__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/work-flag.mjs\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/work-flag.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-writeback-gate.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

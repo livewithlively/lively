@@ -4,7 +4,7 @@
 //  프론트(public/app.js domainmapBody)가 읽는 도메인별 필드 이름을 그대로 방출한다:
 //    key,name,description,should,state,cross_cutting,origin,status,space,units,entities,debts,proposed
 //  category 는 멀티레포(repo_id 없음)라 repos(도달 레포 distinct 수)를 추가 신호로 더한다(프론트는 무시 — 가산·하위호환).
-//  DB 는 물리 통합(dmPool()=itemsPool)이라 category(items)와 code_unit/debt_finding/activity(domainmap)를 한 풀에서 조인한다.
+//  DB 는 물리 통합(domainmap 도 itemsPool 공유)이라 category(items)와 code_unit/debt_finding/activity(domainmap)를 한 풀에서 조인한다.
 import { itemsPool } from "../items/store.js";
 import { q } from "../domainmap/db.js";
 import { httpErr } from "../domainmap/core/types.js";
@@ -205,7 +205,8 @@ export async function listReposV6(): Promise<any[]> {
       (SELECT COUNT(*)::int FROM debt_finding WHERE repo_id=$1) debts,
       (SELECT COUNT(*)::int FROM change_log WHERE repo_id=$1) changes`, [r.id]))[0];
     out.push({
-      name: r.name, clone_url: sanitizeCloneUrl(r.git_url), detected_stack: r.detected_stack ?? {}, totals: t,
+      name: r.name, clone_url: sanitizeCloneUrl(r.git_url), default_branch: r.default_branch ?? "main", state: r.state ?? "active",
+      detected_stack: r.detected_stack ?? {}, totals: t,
       freshness: computeFreshness(r, t.code_units),
     });
   }

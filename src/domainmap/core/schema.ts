@@ -1,10 +1,10 @@
 // domainmap 스키마 init — store-core.mjs init() verbatim 이식(DDL 문자열 무수정).
 // 10개 테이블 + UNIQUE 제약 + provenance 부분 유니크 인덱스 + state CHECK(pg_constraint 프로브 멱등)
 // + code_unit/repo/project 마이그레이션 컬럼. 반환 문자열 'initialized schema' 도 계약(CLI 출력).
-import { dmPool } from "../db.js";
+import { itemsPool } from "../db.js";
 
 export async function init(): Promise<string> {
-  const pool = dmPool();
+  const pool = itemsPool;
   await pool.query(`
   CREATE TABLE IF NOT EXISTS repo(
     id SERIAL PRIMARY KEY, name TEXT UNIQUE, root_path TEXT,

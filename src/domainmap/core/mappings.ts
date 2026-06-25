@@ -1,13 +1,13 @@
 // 매핑 행 단위 큐레이션 3종 — 이 파일의 모든 함수는 매핑 1행을 다룬다(merge 의 대량 이동은
 // domains.ts 소유). store-core.mjs 의 confirm/reject/reassignMapping verbatim 이식.
-import { dmPool, one } from "../db.js";
+import { itemsPool, one } from "../db.js";
 import { httpErr, type Actor, type CurationResult } from "./types.js";
 import { logChange } from "./changelog.js";
 
 const now = () => new Date().toISOString();
 
 export async function confirmMapping(id: number, actor: Actor): Promise<CurationResult> {
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT * FROM mapping WHERE id=$1", [id]);
   if (!ex) throw httpErr(404, "no such mapping: " + id);
   const before = { status: ex.status, origin: ex.origin };
@@ -21,7 +21,7 @@ export async function confirmMapping(id: number, actor: Actor): Promise<Curation
 }
 
 export async function rejectMapping(id: number, actor: Actor): Promise<CurationResult> {
-  const pool = dmPool();
+  const pool = itemsPool;
   const ex = await one(pool, "SELECT * FROM mapping WHERE id=$1", [id]);
   if (!ex) throw httpErr(404, "no such mapping: " + id);
   const before = { status: ex.status, origin: ex.origin };

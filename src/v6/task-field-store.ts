@@ -100,11 +100,15 @@ export async function setFieldValue(
   _ctx?: WriteCtx,
 ): Promise<any> {
   const ok = await one(itemsPool,
-    `SELECT 1 AS ok FROM task_field tf WHERE tf.id=$1 AND tf.project_id = (
-       WITH RECURSIVE up AS (
-         SELECT id, parent_id, level FROM project WHERE id=$2
-         UNION ALL SELECT p.id, p.parent_id, p.level FROM project p JOIN up ON p.id = up.parent_id)
-       SELECT id FROM up WHERE level='project' LIMIT 1)`, [fieldId, taskId]);
+    `SELECT 1 AS ok FROM task_field tf WHERE tf.id=$1 AND (
+       tf.project_id = (
+         WITH RECURSIVE up AS (
+           SELECT id, parent_id, level FROM project WHERE id=$2
+           UNION ALL SELECT p.id, p.parent_id, p.level FROM project p JOIN up ON p.id = up.parent_id)
+         SELECT id FROM up WHERE level='project' LIMIT 1)
+       OR (
+         EXISTS(SELECT 1 FROM project a WHERE a.id=tf.project_id AND a.folder='__board_anchor__')
+         AND EXISTS(SELECT 1 FROM project pr WHERE pr.id=$2 AND pr.level='project')))`, [fieldId, taskId]);
   if (!ok) throw new Error("이 태스크에 속하지 않은 필드입니다");
 
   const empty = value === null || value === undefined

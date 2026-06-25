@@ -1,5 +1,5 @@
 // 프로젝트 전용 폴더 — 공유 워크스페이스의 'project/<이름>' 아래. 터미널 세션의 작업 디렉토리이자
-//  공유 폴더의 실체. 이름/경로 규칙은 terminal-teams 의 폴더 생성과 동형(한글 보존·경로위험 제거·충돌 회피).
+//  공유 폴더의 실체. 이름/경로 규칙: 한글 보존·경로위험 제거·충돌 회피(중복 시 -N 접미사).
 //  SHARED_BASE 는 terminal-sessions ROOTS 'shared' base 와 반드시 일치(순환 import 회피 위해 env 직접 읽음).
 import fsp from "node:fs/promises";
 import fs from "node:fs";

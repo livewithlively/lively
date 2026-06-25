@@ -9,7 +9,7 @@ import {
   mirrorExternalToV6,
 } from "../v6/connector-mirror.js";
 
-// 통합 DB(P1): domainmap 엔진(dmPool)도 이 풀을 공유한다 — withTx 장기점유 + 커넥터 ingest +
+// 통합 DB(P1): domainmap 엔진(itemsPool)도 이 풀을 공유한다 — withTx 장기점유 + 커넥터 ingest +
 // activity_log 원자기록의 동시 부하를 감안해 max 명시(기본 10 → 20, 풀 고갈 방지).
 export const itemsPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20 });
 

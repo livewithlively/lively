@@ -106,8 +106,8 @@ async function readDomainStructureCounts(db: Db): Promise<DomainStructureCount[]
 export async function evaluateDomainStructureDebt(
   repoName: string, actor: Actor,
 ): Promise<{ findings: DomainDebtFinding[]; tally: Record<string, number> }> {
-  const { dmPool } = await import("../db.js");
-  const pool = dmPool();
+  const { itemsPool } = await import("../db.js");
+  const pool = itemsPool;
   const r = await one(pool, "SELECT id FROM repo WHERE name=$1", [repoName]);
   if (!r) throw httpErr(404, "no such repo: " + repoName);
   // V6: 카운트는 category-global(멀티레포 union). repo 는 actor/provenance 용으로만 해소 — 부채 키는 category_id.

@@ -12,7 +12,7 @@ import {
 const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 space/카테고리/injection/provenance/검색어로 조회(맥락의 기록).",
+  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록).",
   scope: "memory",
   // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy 도 선택.
   input: {
@@ -210,14 +210,18 @@ const knowledgeLinkCategory: Capability = {
   },
 };
 
-// 검색 — title/body_md ILIKE + 스니펫(레거시 ctx_grep 대체). injection/provenance 로 좁힐 수 있음.
-const knowledgeSearch: Capability = {
-  name: "knowledge_search",
-  title: "지식 검색",
-  description: "지식을 제목/본문 텍스트로 검색한다. 결과는 **스니펫(잘림)** — 전문은 결과의 name 으로 knowledge_get 호출.",
+// grep — title/body_md 를 grep(정규식|토큰 AND) + 스니펫. injection/provenance 로 좁힐 수 있음. ⚠ 의미검색 아님(벡터는 추후 knowledge_search 로).
+const knowledgeGrep: Capability = {
+  name: "knowledge_grep",
+  title: "지식 grep",
+  description:
+    "지식 제목/본문을 **grep**(텍스트 패턴 매칭)한다 — 의미검색 아님. 단어가 본문에 그대로 등장해야 잡힌다(대소문자 무시). " +
+    "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
+    "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
+    "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **스니펫(잘림)** — 전문은 결과의 name 으로 knowledge_get.",
   scope: "memory",
   input: {
-    q: z.string().min(1),
+    q: z.string().min(1).describe("grep 패턴 — 한 토큰, 공백구분 다중토큰(AND), 또는 POSIX 정규식. 자연어 문장 금지."),
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     limit: z.number().int().min(1).max(100).optional(),
@@ -242,10 +246,10 @@ const knowledgeSearch: Capability = {
   }),
 };
 
-// ⚠ REST 마운트 순서 주의 — knowledgeSearch(/knowledge/search)는
+// ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeSearch, knowledgeGet,
+  knowledgeList, knowledgeGrep, knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
 ];
