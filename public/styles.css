@@ -734,6 +734,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 탐색탭처럼 좌측 고정폭 nav + 우측 detail — 좁아져도 row 유지(아래로 안 내려감). */
 .admin-split .split-list { flex: 0 0 220px; }
 .admin-split .split-detail { flex: 1; }
+/* 섹션 1개 그룹 — 좌측 nav 없이 본문 전폭(.split 의 상단 여백만 승계). */
+.admin-solo-detail { margin-top: 16px; }
 /* 권한(scopes) 체크박스 */
 .scope-wrap { display: flex; flex-direction: column; gap: 2px; }
 .scope-opt { margin: 2px 0; }

@@ -15,7 +15,7 @@ import { overlayBox, skeleton } from './learn.js';
 const ADMIN_GROUPS = [
   { key: 'basic', label: '기본 설정' },
   { key: 'access', label: '조직·권한 설정' },
-  { key: 'wiki', label: 'WIKI 설정' },
+  { key: 'wiki', label: '분류 체계 관리' },
   { key: 'knowledge', label: '맥락 관리 설정' },
   { key: 'ai', label: 'AI 동작·연결 (고급)' },
 ];
@@ -226,6 +226,11 @@ async function renderAdmin(view, sub) {
       role: 'tab', 'aria-selected': on ? 'true' : 'false', text: g.label }));
   }
 
+  // 활성 중분류에 실제로 보이는 섹션 — 1개뿐이면 좌측 섹션 nav 가 무의미하므로 생략하고 본문을 전폭으로.
+  //  (예: '분류 체계 관리'=카테고리 설정 1개, '기본 설정'=조직 기본 정보 1개.)
+  const groupSections = visibleSections.filter((s) => s.group === activeGroup);
+  const soloSection = groupSections.length <= 1;
+
   const list = el('div', { class: 'split-list card admin-nav' });
   // 훅 자식(런타임·커스텀·미리보기) 들여쓰기는 부모('훅')가 보일 때만 — 부모는 게이트 없어 항상 노출.
   const hookParentVisible = !sectionHidden('hooks-group', data);
@@ -237,10 +242,11 @@ async function renderAdmin(view, sub) {
       el('div', { class: 'row-title', text: s.label }),
       el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
   }
-  const detail = el('div', { class: 'split-detail' });
+  const detail = el('div', { class: soloSection ? 'admin-solo-detail' : 'split-detail' });
   renderAdminDetail(detail, sel, data);
 
-  const split = el('div', { class: 'split admin-split' }, list, detail);
+  // 섹션 1개 그룹은 좌측 nav 없이 본문만, 여러 개면 좌 nav + 본문 split.
+  const body = soloSection ? detail : el('div', { class: 'split admin-split' }, list, detail);
 
   view.replaceChildren(el('div', {},
     el('div', { class: 'card-head admin-head' },
@@ -249,8 +255,8 @@ async function renderAdmin(view, sub) {
         ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
         : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
     groupBar,
-    split));
-  applyReveal([list, detail]);
+    body));
+  applyReveal(soloSection ? [detail] : [list, detail]);
 }
 
 function renderAdminDetail(detail, sel, data) {
