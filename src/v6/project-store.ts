@@ -63,7 +63,9 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', pm.member_id, 'display_name', m.display_name) ORDER BY pm.sort, pm.member_id)
          FROM project_member pm LEFT JOIN org_member m ON m.id=pm.member_id WHERE pm.project_id=p.id), '[]'::jsonb) AS members,
        (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task') AS task_count,
-       (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task' AND c.status='done') AS task_done_count
+       (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task' AND c.status='done') AS task_done_count,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'color', t.color) ORDER BY lower(t.name))
+         FROM task_tag_link l JOIN task_tag t ON t.id=l.tag_id WHERE l.task_id=p.id), '[]'::jsonb) AS tags
      FROM project p ${join} ${where} ORDER BY p.updated_at DESC`, params);
 }
 

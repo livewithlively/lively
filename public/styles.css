@@ -2353,11 +2353,15 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-row-check.on::after { content: '✓'; }
 .pjv-trow-wrap.pjv-row-selected > .pjv-trow { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
-.pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 3px; padding-left: 10px; opacity: 0; transition: opacity .12s ease; }
+/* 제목 우측 호버 아이콘 — ⋯ 버튼과 동일 언어(테두리 없음·작게·muted). 담당자 컬럼과 겹치지 않게 우측 여백. */
+.pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; margin-right: 12px; opacity: 0; transition: opacity .12s ease; }
 .pjv-trow:hover .pjv-row-actions { opacity: 1; }
-.pjv-row-act { flex: none; width: 26px; height: 23px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; cursor: pointer; color: var(--muted); padding: 0; transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
-.pjv-row-act:hover { color: var(--blue); border-color: var(--node-blue-soft); background: var(--bg-tint); }
-.pjv-act-ic { display: block; }
+.pjv-row-act { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 6px; cursor: pointer; color: var(--muted-2); padding: 0; transition: background-color .12s ease, color .12s ease; }
+.pjv-row-act:hover { color: var(--ink); background: var(--bg-tint); }
+.pjv-act-ic { width: 16px; height: 16px; display: block; }
+/* 태스크는 조금, 프로젝트 목록은 좀 많이 크게 — 프로젝트 행은 더 큰 버튼·아이콘. */
+.pjv-proj-row .pjv-row-act { width: 30px; height: 28px; border-radius: 7px; }
+.pjv-proj-row .pjv-act-ic { width: 19px; height: 19px; }
 /* 하단 일괄작업 바 — 어두운 알약, 화면 하단 중앙 고정. 선택 1개 이상이면 .show. */
 .pjv-bulkbar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(16px); z-index: 1200; display: none; align-items: center; gap: 4px; padding: 7px 8px 7px 14px; background: #1B2942; color: #fff; border-radius: 13px; box-shadow: 0 12px 34px rgba(13,22,40,.36); opacity: 0; transition: opacity .16s ease, transform .16s ease; max-width: calc(100vw - 32px); }
 .pjv-bulkbar.show { display: inline-flex; opacity: 1; transform: translateX(-50%) translateY(0); }

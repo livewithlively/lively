@@ -674,12 +674,20 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const caret = canExpand
     ? el('button', { class: 'pjv-trow-caret', type: 'button', 'aria-expanded': 'false', text: '▸', title: nTasks + '개 태스크' })
     : el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' });
+  // 프로젝트 태그 칩(클릭업식) — task_tag_link 를 project.id 로 사용(백엔드 listProjects 가 p.tags 부여). 최대 2 + "+N".
+  const ptags = p.tags || [];
+  const ptagsEl = ptags.length ? el('span', { class: 'pjv-trow-tags' },
+    ...ptags.slice(0, 2).map((tg) => el('span', { class: 'pjv-trow-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE), title: tg.name, text: tg.name })),
+    ptags.length > 2 ? el('span', { class: 'pjv-trow-tag-more', text: '+' + (ptags.length - 2) }) : null) : null;
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     select ? null : pjvRowCheck('project', p, { reload }),
     caret, lead, title,
-    canExpand ? el('span', { class: 'pjv-trow-subcount', title: nTasks + '개 태스크', text: String(nTasks) }) : null,
+    canExpand ? el('span', { class: 'pjv-trow-subcount pjv-proj-subcount', title: nTasks + '개 태스크' },
+      pjvSubtaskIcon(), el('span', { text: String(nTasks) })) : null,
+    ptagsEl,
     select ? null : pjvRowActions([
       { title: '태스크 추가', icon: 'add', fn: () => pjvAddTask(p.id, null, reload) },
+      { title: '태그 편집', icon: 'tag', fn: (b) => pjvTagPopover(b, p, reload) },
       { title: '이름 변경', icon: 'rename', fn: (b) => pjvProjRename(b, p, reload) },
     ]));
 
@@ -1290,9 +1298,8 @@ async function renderProjectV2Detail(view, idStr) {
   };
   titleEl.onclick = editTitle;
   head.append(el('div', { class: 'proj-detail-titlebar' },
-    el('div', { class: 'proj-detail-titlebox' },
-      titleEl,
-      el('span', { class: 'pill-state' + (isDone ? '' : ' confirmed'), text: PJV_STATUS_LABEL[p.status] || p.status })),
+    // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
+    el('div', { class: 'proj-detail-titlebox' }, titleEl),
     el('div', { class: 'proj-detail-actions' }, localWorkBtn, settingsBtn)));
   // 설명 — 있으면 클릭해 수정, 없으면 '＋ 설명 추가'. (Enter 저장 / Shift+Enter 줄바꿈 / Esc 취소)
   const descWrap = el('div', { class: 'proj-detail-desc-wrap' });

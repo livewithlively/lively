@@ -18,7 +18,7 @@
 | 영역 | 파일 | 비고 |
 |---|---|---|
 | 엔트리포인트 | `src/index.ts` | Express + Streamable HTTP + bearer 인증 |
-| 서버 조립 | `src/server.ts` · `src/capabilities/dynamic-tools.ts` | 능력 계층 등록 — MCP 표면은 `expose.mcp:true` capability 자동등록(단일 SoT, 현행 카운트는 `src/capabilities/index.ts` 주석·`scripts/parity-check.mjs` 참조) + 웹 정의 `org_tool`(http_proxy) `/mcp` **동적 등록**(SSRF 가드)·빌트인 on/off 게이팅 |
+| 서버 조립 | `src/server.ts` · `src/capabilities/dynamic-tools.ts` | 능력 계층 등록 — MCP 표면은 `expose.mcp:true` capability 자동등록(단일 SoT, 현행 카운트는 `src/capabilities/index.ts` 주석 참조) + 웹 정의 `org_tool`(http_proxy) `/mcp` **동적 등록**(SSRF 가드)·빌트인 on/off 게이팅 |
 | **보안 경계** | `src/context.ts` | `resolveUser → requireScope` — 모든 툴 첫 줄 |
 | 인증 | `src/auth/bearer.ts` | 정적 토큰(`AUTH_TOKENS_JSON`) + **DB 토큰**(`auth_token`, sha256·revoke 즉시·재시작 불요). 다음 단계 OAuth 로 이 파일만 교체 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — knowledge·categories·projects-v6·task-v6·activity·context·domainmap-curation·**delivery(웹 관리/전달)** |
