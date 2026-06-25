@@ -433,7 +433,7 @@ async function wikiCategoriesPanel(detail, data) {
   }
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '카테고리 설정' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '분류 체계 관리' }),
       canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
     el('p', { class: 'admin-hint', text: '지식(위키)의 분류축입니다. 사업·제품·시스템 카테고리를 한 화면에서 추가·수정·삭제하며, 변경은 지식·프로젝트 탭 좌측 카테고리에 그대로 반영됩니다. (제품 카테고리=도메인)' }),
     list);
