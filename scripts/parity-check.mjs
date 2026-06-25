@@ -508,13 +508,8 @@ await report("ctx_set_lifecycle(b) 잘못된 lifecycle — 양 어댑터 거부(
 });
 
 // ════════ tools/list — 최종 MCP 표면 보고 ════════
-<<<<<<< Updated upstream
-// 표면 동결: 아래 34개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 34툴') + src/tools/* 등록 배열.
-=======
-// 표면 동결: 아래 25개 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
-// 단일 출처: src/capabilities/index.ts 의 freeze 주석('MCP 25툴') + src/tools/* 등록 배열.
->>>>>>> Stashed changes
+// 표면 동결: 아래 EXPECTED_MCP_SURFACE 전체 이름을 deepStrictEqual 로 고정 — 몰래 추가/누락/리네임 전부 FAIL.
+// 단일 출처: src/capabilities/index.ts 의 freeze 주석 + src/tools/* 등록 배열.
 // 표면을 의도적으로 바꿀 때는 freeze 주석과 이 배열을 같은 커밋에서 함께 갱신한다.
 const EXPECTED_MCP_SURFACE = [
   "activity_list", "activity_log",
