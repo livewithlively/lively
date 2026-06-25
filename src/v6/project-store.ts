@@ -84,10 +84,10 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!project) return undefined;
 
-  // 팀원(project_member) — 표시명·상태메시지 위해 org_member LEFT JOIN(없어도 행 보존).
-  //  status_message 는 기존 org_member 컬럼 읽기(터미널 섹션 프로필용) — v6 스키마 불변.
+  // 팀원(project_member) — 표시명은 org_member, 상태메시지는 (프로젝트,사람) 단위(pm.status_message)로 읽는다.
+  //  프로젝트1의 상태가 프로젝트2에 그대로 보이지 않게 — 전역(org_member.status_message)이 아니라 이 프로젝트 행의 값.
   const members = await q(itemsPool,
-    `SELECT pm.member_id, pm.role, pm.sort, pm.added_at, m.display_name, m.status_message
+    `SELECT pm.member_id, pm.role, pm.sort, pm.added_at, m.display_name, pm.status_message
      FROM project_member pm LEFT JOIN org_member m ON m.id=pm.member_id
      WHERE pm.project_id=$1 ORDER BY pm.sort, pm.member_id`, [id]);
 
@@ -187,6 +187,26 @@ export async function isProjectMember(projectId: number, memberId: string): Prom
         SELECT 1 FROM project_member pm WHERE pm.project_id=p.id AND pm.member_id=$2)) LIMIT 1`,
     [projectId, memberId]);
   return (r.rowCount ?? 0) > 0;
+}
+
+// 내 상태 메시지(이 프로젝트 한정) 저장 — project_member.status_message 를 (project,member) 단위로 갱신.
+//  팀원 행이 없으면(생성자라서 멤버 미등록 등) 만들어 둔다. 빈 문자열은 NULL 로 저장(상태 없음).
+export async function setProjectMemberStatus(projectId: number, memberId: string, message: string | null): Promise<string | null> {
+  const msg = (message ?? '').trim() || null;
+  await itemsPool.query(
+    `INSERT INTO project_member(project_id, member_id, status_message) VALUES($1,$2,$3)
+     ON CONFLICT (project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
+    [projectId, memberId, msg]);
+  return msg;
+}
+
+// 세션↔프로젝트 영속 기록 — 프로젝트 터미널 세션 생성 시 호출. 타임라인이 끝난 세션의 AI 작업도 이 프로젝트로 귀속할 수 있게.
+export async function recordSessionProject(sessionId: string, projectId: number): Promise<void> {
+  if (!sessionId || !projectId) return;
+  await itemsPool.query(
+    `INSERT INTO session_project(session_id, project_id) VALUES($1,$2)
+     ON CONFLICT (session_id) DO UPDATE SET project_id=EXCLUDED.project_id`,
+    [sessionId, projectId]);
 }
 
 // folder(상대경로) 기준 접근 판정 — org/store.projectAccessByFolder 의 v6(project) 짝.

@@ -80,6 +80,28 @@ async function searchFiles(base: string, q: string, limit = 100): Promise<Array<
   return out;
 }
 
+// 공유 폴더 전체의 재귀 매니페스트(파일만, 숨김 제외) — 로컬 작업 PC 가 pull 동기화의 diff 기준으로 쓴다.
+//  path=상대경로, mtime=수정시각(ms epoch), size=바이트. 숨김(.lively/.git/.DS_Store/시크릿 등)은 동기화 대상 아님.
+async function manifestFiles(base: string, limit = 5000): Promise<Array<{ path: string; mtime: number; size: number }>> {
+  const out: Array<{ path: string; mtime: number; size: number }> = [];
+  async function walk(dir: string, rel: string, depth: number): Promise<void> {
+    if (out.length >= limit || depth > 24) return;
+    let entries: fs.Dirent[];
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const childRel = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) { await walk(path.join(dir, e.name), childRel, depth + 1); continue; }
+      if (!e.isFile()) continue;
+      try { const st = await fsp.stat(path.join(dir, e.name)); out.push({ path: childRel, mtime: Math.floor(st.mtimeMs), size: st.size }); }
+      catch { /* 읽기 불가 — 스킵 */ }
+      if (out.length >= limit) return;
+    }
+  }
+  await walk(base, "", 0);
+  return out;
+}
+
 // ── '내 컴퓨터에서 작업' 가이드 — 담당자가 본인 PC(원격)에서 따라 할 단계별 명령을 생성한다. 서버는 실행하지 않는다. ──
 //  전제: 코드 레포는 각자 PC에서 git 으로 받고(박스와 미동기화, git 으로 수렴), 프로젝트 '공유 폴더'만 박스와 동기화한다.
 //  경로는 담당자 홈을 모르므로 $HOME 기준. 공백·한글 경로를 위해 모든 경로 인자는 따옴표로 감싼다(~ 는 $HOME 으로 치환).
@@ -262,6 +284,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const abs = resolveIn(base, req.query.path, true);
     await fsp.rm(abs, { recursive: true, force: true });
     res.json({ ok: true });
+  }));
+
+  // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 팀원 게이트. ──
+  app.get(`${prefix}/:id/shared/manifest`, auth, wrap(async (req, res) => {
+    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    res.setHeader("Cache-Control", "no-store");
+    const files = await manifestFiles(base);
+    const newest = files.reduce((m, f) => (f.mtime > m ? f.mtime : m), 0);
+    res.json({ files, newest, count: files.length });
   }));
 
   // ── ② 터미널 세션(공동 — 프로젝트 팀원 전용) — 목록 / 생성. 비팀원은 게이트 403. ──

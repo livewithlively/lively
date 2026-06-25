@@ -429,6 +429,13 @@ async function installShared(workRoots) {
   }
   console.log(`  ✓ ~/.lively/hooks/ (${HOOK_SCRIPTS.length}개)`);
 
+  // work.mjs — '내 컴퓨터에서 작업' 부트스트랩(사용자 호출 도구, 훅 아님) → ~/.lively/work.mjs (chmod 755).
+  {
+    const wsrc = cloneAbs(join("setup", "work.mjs"));
+    if (existsSync(wsrc)) { copyFileSync(wsrc, join(LIVELY, "work.mjs")); chmodSync(join(LIVELY, "work.mjs"), 0o755); console.log("  ✓ ~/.lively/work.mjs"); }
+    else console.log("  · ~/.lively/work.mjs 보류(번들에 setup/work.mjs 없음 — 구버전 번들)");
+  }
+
   // 런타임 자산(발행 묶음 .lively/ — 게이트웨이가 org_runtime_config·org_mcp_server 에서 주입) → ~/.lively 복사.
   //  훅(hooks-config.json)·register-clients(mcp-servers.json)가 런타임에 읽음. 없으면 스킵(구버전 번들 호환).
   for (const f of ["hooks-config.json", "mcp-servers.json", "auto-approve.json"]) {

@@ -1,10 +1,10 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, safeHref, selectFilter, state, sv, toast } from './core.js';
+import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
 import { SPACE_LABEL, knInjectChip, knProvChip, knSideItem, spaceSubBar } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, overlay } from './admin.js';
-import { PJV_TAG_NONE, pjvOpenTaskModal } from './taskmodal.js';
+import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
 
 
 // ════════════════════════════════════════════
@@ -208,6 +208,33 @@ function pjvProjFacepile(members) {
     style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
   if (arr.length > 4) faces.append(el('span', { class: 'project-face more', text: '+' + (arr.length - 4) }));
   return faces;
+}
+
+// 팀원 필드(보기 전용) — 클릭하면 팀원 목록을 쭉 보여주는 팝오버. 넣고 빼는(토글) UI 없음.
+//  팀원=담당자 — 메타에선 보기만 하고, 변경은 '프로젝트 세부 설정'에서만.
+function pjvProjTeamView(members) {
+  const arr = members || [];
+  const btn = el('button', { class: 'pjv-cell-btn' + (arr.length ? '' : ' empty'), type: 'button', title: '팀원 (보기 전용 — 변경은 프로젝트 세부 설정)' });
+  if (arr.length) {
+    const faces = el('span', { class: 'pjv-asg-faces' });
+    for (const m of arr.slice(0, 3)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+    if (arr.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (arr.length - 3) }));
+    btn.append(faces);
+  } else {
+    btn.append(pjvIcon('assignee'));
+  }
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu pjv-asg-menu pjv-team-view' });
+    pjvPopover(btn, menu);
+    menu.append(el('div', { class: 'pjv-menu-head', text: '팀원' }));
+    if (!arr.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '아직 팀원이 없어요.' }));
+    else for (const m of arr) menu.append(el('div', { class: 'pjv-team-view-row' },
+      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+      el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id })));
+    menu.append(el('div', { class: 'pjv-team-view-hint', text: '변경은 ‘프로젝트 세부 설정’에서' }));
+  };
+  return btn;
 }
 
 function projSaveQuiet(id, patch) {
@@ -637,6 +664,32 @@ async function pjvTagPopover(anchor, t, reload) {
   draw(all);
 }
 
+// 행(프로젝트/태스크/서브태스크) 태그 칩 — 보이는 칩(최대 2)에 호버 ×(제거). 클릭업식. row.id 로 /tasks/:id/tags 공유(프로젝트·태스크 동일).
+//  비면 null 반환. 제거는 낙관적(즉시 칩 제거) + 백그라운드 POST(실패 시 reload 로 복구).
+function pjvRowTagsEl(row, reload) {
+  if (!(row.tags || []).length) return null;
+  const wrap = el('span', { class: 'pjv-trow-tags' });
+  const removeTag = async (tg) => {
+    row.tags = (row.tags || []).filter((x) => x.id !== tg.id);
+    repaint();
+    try { await api('/api/ui/v6/tasks/' + row.id + '/tags', { method: 'POST', body: JSON.stringify({ tag_id: tg.id, remove: true }) }); }
+    catch (e) { toast('태그 제거 실패 — ' + e.message, true); if (reload) reload(); }
+  };
+  function repaint() {
+    wrap.replaceChildren();
+    const cur = row.tags || [];
+    for (const tg of cur.slice(0, 2)) {
+      const x = el('button', { class: 'pjv-trow-tag-x', type: 'button', title: '태그 제거', text: '✕' });
+      x.onclick = (e) => { e.stopPropagation(); removeTag(tg); };
+      wrap.append(el('span', { class: 'pjv-trow-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE), title: tg.name },
+        el('span', { class: 'pjv-trow-tag-name', text: tg.name }), x));
+    }
+    if (cur.length > 2) wrap.append(el('span', { class: 'pjv-trow-tag-more', text: '+' + (cur.length - 2) }));
+  }
+  repaint();
+  return wrap;
+}
+
 function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   fields = fields || [];
   const isDone = p.status === 'done';
@@ -674,15 +727,12 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const caret = canExpand
     ? el('button', { class: 'pjv-trow-caret', type: 'button', 'aria-expanded': 'false', text: '▸', title: nTasks + '개 태스크' })
     : el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' });
-  // 프로젝트 태그 칩(클릭업식) — task_tag_link 를 project.id 로 사용(백엔드 listProjects 가 p.tags 부여). 최대 2 + "+N".
-  const ptags = p.tags || [];
-  const ptagsEl = ptags.length ? el('span', { class: 'pjv-trow-tags' },
-    ...ptags.slice(0, 2).map((tg) => el('span', { class: 'pjv-trow-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE), title: tg.name, text: tg.name })),
-    ptags.length > 2 ? el('span', { class: 'pjv-trow-tag-more', text: '+' + (ptags.length - 2) }) : null) : null;
+  // 프로젝트 태그 칩(클릭업식) — task_tag_link 를 project.id 로 사용. 칩 호버 시 × 로 제거(pjvRowTagsEl). 최대 2 + "+N".
+  const ptagsEl = pjvRowTagsEl(p, reload);
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     select ? null : pjvRowCheck('project', p, { reload }),
     caret, lead, title,
-    canExpand ? el('span', { class: 'pjv-trow-subcount pjv-proj-subcount', title: nTasks + '개 태스크' },
+    canExpand ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico', title: nTasks + '개 태스크' },
       pjvSubtaskIcon(), el('span', { text: String(nTasks) })) : null,
     ptagsEl,
     select ? null : pjvRowActions([
@@ -690,6 +740,11 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
       { title: '태그 편집', icon: 'tag', fn: (b) => pjvTagPopover(b, p, reload) },
       { title: '이름 변경', icon: 'rename', fn: (b) => pjvProjRename(b, p, reload) },
     ]));
+  // 제목 셀 전체(글자 + 여백)를 클릭 영역으로 — 태스크 목록처럼. 캐럿·체크박스·상태점·행 액션·제목(자체 핸들러)은 제외(각자 처리).
+  titleCell.addEventListener('click', (e) => {
+    if ((e.target as Element).closest('button, input, a, .pjv-trow-caret, .pjv-row-actions, .pjv-trow-title')) return;
+    if (select && selectable) { lead.click(); } else { location.hash = '#/projects2/p/' + p.id; }
+  });
 
   const row = el('div', { class: 'pjv-trow pjv-proj-row' },
     titleCell,
@@ -746,14 +801,13 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     ? el('button', { class: 'pjv-trow-caret', type: 'button', 'aria-expanded': 'false', text: '▸' })
     : el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' });
 
-  const ttags = t.tags || [];
-  const tagsEl = ttags.length ? el('span', { class: 'pjv-trow-tags' },
-    ...ttags.slice(0, 2).map((tg) => el('span', { class: 'pjv-trow-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE), title: tg.name, text: tg.name })),
-    ttags.length > 2 ? el('span', { class: 'pjv-trow-tag-more', text: '+' + (ttags.length - 2) }) : null) : null;
+  const tagsEl = pjvRowTagsEl(t, reload);
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
+    pjvRowCheck('task', t, { reload, projectId, members }), // 프로젝트 행과 동일한 선택 체크박스(16px) — 정렬·다중선택 모두 동일하게
     caret, pjvStatusControl(t, reload),
     el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }),
-    subs.length ? el('span', { class: 'pjv-trow-subcount', title: subs.length + '개 하위', text: String(subs.length) }) : null,
+    subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico', title: subs.length + '개 하위' },
+      pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null,
     tagsEl);
   titleCell.style.paddingLeft = (depth * 22) + 'px';
 
@@ -793,7 +847,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   if (list.length) { for (const p of list) body.append(pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx)); }
   else if (statusKey === 'done' && !sepTasks.length) body.append(el('div', { class: 'pjv-proj-empty', text: '완료한 프로젝트가 아직 없습니다.' }));
   // 분리(separate) 모드 — 각 프로젝트의 태스크를 상태 버킷에 평면 행으로(프로젝트 행과 같은 그리드). 프로젝트 행 아래, 추가행 위.
-  for (const s of sepTasks) body.append(pjvProjTaskRow(s.projId, s.task, s.members, reload, 0, fields));
+  for (const s of sepTasks) body.append(pjvProjTaskRow(s.projId, s.task, s.members, reload, 1, fields));
   // 클릭업식 인라인 추가행 — 각 그룹(완료 제외) 맨 아래. 빈 그룹에선 이 행이 '시작하기' CTA. 선택(일괄삭제) 모드에선 숨김.
   if (!select && statusKey !== 'done') body.append(pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx));
 
@@ -1180,57 +1234,187 @@ function pjvProjTimeField(p, reload) {
   if (time.total_seconds > 0 || running) wrap.append(el('span', { class: 'pjv-tm-timer-live', text: pjvFmtClock2(time.total_seconds || 0) }));
   return wrap;
 }
+// 태그 팝오버 헬퍼 — 태스크 모달과 동일한 아이콘/색 팔레트(프로젝트도 같은 /tags 엔드포인트·CSS 공유).
+const PJV_TAG_PALETTE = ['#8b7fd6', '#6b8fff', '#4aa3e0', '#2bb3a3', '#56b877', '#e0b341', '#e8853a', '#e98aa8', '#d96bb0', '#b07fd6', '#a98e7d', '#cfd6e0', '#98a3b5'];
+function pjvTagGearIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 3 }));
+  n.append(sv('path', { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }));
+  return n;
+}
+function pjvTagTrashIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('polyline', { points: '4 7 20 7' }), sv('path', { d: 'M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2' }), sv('path', { d: 'M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12' }));
+  return n;
+}
+function pjvTagNoneIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 12, cy: 12, r: 8 }), sv('line', { x1: 6.4, y1: 6.4, x2: 17.6, y2: 17.6 }));
+  return n;
+}
+function pjvTagBackIcon() {
+  const n = sv('svg', { class: 'pjv-tm-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('polyline', { points: '14 6 8 12 14 18' }));
+  return n;
+}
+// 프로젝트 태그 — 태스크 모달과 동일한 클릭업식 팝오버(선택칩 + 검색/생성 + 토글 + 행별 ⚙ + '모든 태그 관리').
+//  프로젝트도 task_tag_link 를 p.id 로 공유 → 엔드포인트(/tasks/:id/tags · /tags/:id)·CSS 모두 태스크와 동일.
 function pjvProjTagsField(p, reload) {
   const wrap = el('div', { class: 'pjv-tm-tags' });
-  let tags = p.tags || [];
   const save = async (body) => {
-    try { const d = await api('/api/ui/v6/tasks/' + p.id + '/tags', { method: 'POST', body: JSON.stringify(body) }); tags = d.tags || []; p.tags = tags; return true; }
+    try { const d = await api('/api/ui/v6/tasks/' + p.id + '/tags', { method: 'POST', body: JSON.stringify(body) }); p.tags = d.tags || []; return true; }
     catch (e) { toast('태그 저장 실패 — ' + e.message, true); return false; }
+  };
+  const tagChip = (tg, onRemove) => {
+    const chip = el('span', { class: 'pjv-tm-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE) }, el('span', { class: 'pjv-tm-tag-name', text: tg.name }));
+    if (onRemove) { const x = el('button', { class: 'pjv-tm-tag-x', type: 'button', title: '제거', text: '✕' }); x.onclick = (e) => { e.stopPropagation(); onRemove(); }; chip.append(x); }
+    return chip;
   };
   const render = () => {
     wrap.replaceChildren();
-    for (const tg of tags) {
-      const x = el('button', { class: 'pjv-tm-tag-x', type: 'button', title: '제거', text: '✕' });
-      const chip = el('span', { class: 'pjv-tm-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE) }, el('span', { text: tg.name }), x);
-      x.onclick = async (e) => { e.stopPropagation(); if (await save({ tag_id: tg.id, remove: true })) render(); };
-      wrap.append(chip);
-    }
-    const add = el('button', { class: 'pjv-tm-valbtn' + (tags.length ? '' : ' empty'), type: 'button', text: tags.length ? '＋' : 'Empty' });
-    add.onclick = (e) => { e.stopPropagation(); openPicker(add); };
+    for (const tg of (p.tags || [])) wrap.append(tagChip(tg, async () => { if (await save({ tag_id: tg.id, remove: true })) render(); }));
+    const add = el('button', { class: 'pjv-tm-valbtn' + ((p.tags || []).length ? '' : ' empty'), type: 'button', text: (p.tags || []).length ? '＋' : 'Empty' });
+    add.onclick = (e) => { e.stopPropagation(); openPop(add); };
     wrap.append(add);
   };
-  const openPicker = async (anchor) => {
-    const menu = el('div', { class: 'pjv-menu pjv-proj-tagpicker' });
-    const close = pjvPopover(anchor, menu);
-    const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '검색 또는 새 태그…', maxlength: '40' });
-    const list = el('div', { class: 'pjv-proj-tagpicker-list' });
-    menu.append(input, list);
+  async function openPop(anchor) {
+    const pop = el('div', { class: 'pjv-menu pjv-tm-tagpop' });
+    pjvPopover(anchor, pop);
     let all: any[] = [];
-    try { all = await api('/api/ui/v6/tags').then((d) => d.tags || []); } catch (_) { /* graceful */ }
-    const renderList = () => {
-      const qy = input.value.trim().toLowerCase();
-      list.replaceChildren();
-      const have = new Set(tags.map((t) => t.id));
-      for (const t of all.filter((t) => !qy || (t.name || '').toLowerCase().includes(qy))) {
-        const on = have.has(t.id);
-        const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
-          el('span', { class: 'pjv-tm-tagdot', style: 'background:' + (t.color || PJV_TAG_NONE) }),
-          el('span', { text: t.name }), on ? el('span', { class: 'pjv-asg-check', text: '✓' }) : null);
-        item.onclick = async (e) => { e.stopPropagation(); if (await save(on ? { tag_id: t.id, remove: true } : { tag_id: t.id })) { render(); renderList(); } };
-        list.append(item);
+    const loadAll = async () => { try { all = await api('/api/ui/v6/tags').then((r) => (r && r.tags) || []); } catch (_) { all = []; } };
+    const selIds = () => new Set((p.tags || []).map((x) => x.id));
+    await loadAll();
+
+    function showList(query) {
+      const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '태그 검색…', maxlength: '40', value: query || '' });
+      const chips = el('div', { class: 'pjv-tm-tagpop-chips' });
+      const list = el('div', { class: 'pjv-tm-tagresults' });
+      const manageBtn = el('button', { class: 'pjv-tm-tagmanage-btn', type: 'button' }, pjvTagGearIcon(), el('span', { text: '모든 태그 관리' }));
+      manageBtn.onclick = () => showManageAll();
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagpop-top' }, chips, input),
+        el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: 'Select an option' })),
+        list, manageBtn);
+      setTimeout(() => { input.focus(); }, 0);
+      const renderChips = () => chips.replaceChildren(...(p.tags || []).map((tag) => tagChip(tag, () => persistRemove(tag.id))));
+      const persistAdd = async (x) => { if (await save({ tag_id: x.id })) { render(); renderChips(); renderList(); } };
+      const persistRemove = async (tagId) => { if (await save({ tag_id: tagId, remove: true })) { render(); renderChips(); renderList(); } };
+      const renderList = () => {
+        const qq = input.value.trim();
+        const have = selIds();
+        const cand = all.filter((x) => (!qq || x.name.toLowerCase().includes(qq.toLowerCase())));
+        list.replaceChildren();
+        for (const x of cand.slice(0, 40)) {
+          const on = have.has(x.id);
+          const row = el('button', { class: 'pjv-tm-tagrow' + (on ? ' sel' : ''), type: 'button' },
+            pjvCheckMini(on),
+            el('span', { class: 'pjv-tm-tagdot', style: 'background:' + (x.color || PJV_TAG_NONE) }),
+            el('span', { class: 'pjv-tm-tagrow-name', text: x.name }));
+          row.onclick = () => (on ? persistRemove(x.id) : persistAdd(x));
+          const gear = el('button', { class: 'pjv-tm-tagrow-gear', type: 'button', title: '태그 편집' }, pjvTagGearIcon());
+          gear.onclick = (e) => { e.stopPropagation(); showColor(x, input.value); };
+          row.append(gear);
+          list.append(row);
+        }
+        // 새 태그 생성은 '모든 태그 관리'에서만 — 검색창은 검색·토글 전용(Create 행 없음).
+        if (!list.children.length) list.append(el('div', { class: 'pjv-menu-empty', text: qq ? '검색 결과가 없습니다 — 새 태그는 아래 ‘모든 태그 관리’에서 만드세요.' : '태그가 없습니다 — ‘모든 태그 관리’에서 만드세요.' }));
+      };
+      input.addEventListener('input', renderList);
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const v = input.value.trim(); if (!v) return;
+        const exact = all.find((x) => x.name.toLowerCase() === v.toLowerCase());
+        if (exact && !selIds().has(exact.id)) { persistAdd(exact); input.value = ''; renderList(); }
+        // 일치하는 기존 태그만 추가 — 새 태그 생성은 '모든 태그 관리'에서만.
+      });
+      renderChips(); renderList();
+    }
+
+    function showColor(tag, backQuery, onBack?) {
+      const goBack = onBack || (() => showList(backQuery));
+      const back = el('button', { class: 'pjv-tm-tagcolor-back', type: 'button', title: '뒤로' }, pjvTagBackIcon());
+      back.onclick = goBack;
+      const nameIn = el('input', { type: 'text', class: 'pjv-tm-tagcolor-name', value: tag.name, maxlength: '40' });
+      const grid = el('div', { class: 'pjv-tm-tagcolor-grid' });
+      const syncLocal = () => {
+        all = all.map((a) => (a.id === tag.id ? { ...a, name: tag.name, color: tag.color } : a));
+        p.tags = (p.tags || []).map((x) => (x.id === tag.id ? { ...x, name: tag.name, color: tag.color } : x));
+      };
+      const renderGrid = () => {
+        grid.replaceChildren();
+        for (const c of PJV_TAG_PALETTE) {
+          const sw = el('button', { class: 'pjv-tm-swatch' + (tag.color === c ? ' sel' : ''), type: 'button', style: 'background:' + c + ';color:' + c, 'aria-label': '색상' });
+          sw.onclick = () => applyColor(c);
+          grid.append(sw);
+        }
+        const none = el('button', { class: 'pjv-tm-swatch none' + (!tag.color ? ' sel' : ''), type: 'button', title: '색 없음' }, pjvTagNoneIcon());
+        none.onclick = () => applyColor(null);
+        grid.append(none);
+      };
+      const applyColor = async (c) => {
+        tag.color = c; renderGrid(); syncLocal(); render();
+        try { await api('/api/ui/v6/tags/' + tag.id, { method: 'POST', body: JSON.stringify({ color: c }) }); }
+        catch (e) { toast('실패 — ' + e.message, true); }
+      };
+      const rename = async () => {
+        const v = nameIn.value.trim(); if (!v || v === tag.name) return;
+        try { const r = await api('/api/ui/v6/tags/' + tag.id, { method: 'POST', body: JSON.stringify({ name: v }) }).then((x) => x.tag); tag.name = r.name; syncLocal(); render(); }
+        catch (e) { toast('이름 변경 실패 — ' + e.message, true); nameIn.value = tag.name; }
+      };
+      const del = el('button', { class: 'pjv-tm-tagdelete', type: 'button' }, pjvTagTrashIcon(), el('span', { text: 'Delete' }));
+      del.onclick = async () => {
+        if (!confirm("'" + tag.name + "' 태그를 삭제할까요?\n모든 항목에서 제거됩니다.")) return;
+        try { await api('/api/ui/v6/tags/' + tag.id + '/delete', { method: 'POST', body: JSON.stringify({}) }); p.tags = (p.tags || []).filter((x) => x.id !== tag.id); await loadAll(); render(); goBack(); }
+        catch (e) { toast('삭제 실패 — ' + e.message, true); }
+      };
+      nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rename(); } });
+      nameIn.addEventListener('blur', rename);
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagcolor-top' }, back, nameIn),
+        grid,
+        el('div', { class: 'pjv-tm-tagcolor-sep' }),
+        del);
+      renderGrid();
+      setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+    }
+
+    function showManageAll() {
+      const back = el('button', { class: 'pjv-tm-tagcolor-back', type: 'button', title: '뒤로' }, pjvTagBackIcon());
+      back.onclick = () => showList('');
+      const list = el('div', { class: 'pjv-tm-tagresults' });
+      // 새 태그 생성은 여기('모든 태그 관리')에서만. 정의만 만들고 이 프로젝트엔 적용하지 않는다(생성 직후 링크 해제).
+      const createIn = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '＋ 새 태그 이름 입력 후 Enter', maxlength: '40' });
+      const doCreate = async () => {
+        const v = createIn.value.trim(); if (!v) return;
+        if (all.some((x) => x.name.toLowerCase() === v.toLowerCase())) { toast('이미 있는 태그입니다', true); return; }
+        createIn.disabled = true;
+        const color = PJV_TAG_PALETTE[all.length % PJV_TAG_PALETTE.length];
+        if (await save({ name: v, color })) {
+          const created = (p.tags || []).find((x) => x.name.toLowerCase() === v.toLowerCase());
+          if (created) await save({ tag_id: created.id, remove: true }); // 정의만 — 현재 프로젝트엔 미적용
+          await loadAll(); render(); showManageAll();
+        } else { createIn.disabled = false; }
+      };
+      createIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doCreate(); } });
+      pop.replaceChildren(
+        el('div', { class: 'pjv-tm-tagcolor-top' }, back, el('div', { class: 'pjv-tm-tagmanage-title', text: '모든 태그 관리' })),
+        el('div', { class: 'pjv-tm-tagpop-top' }, createIn),
+        el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: all.length + '개 · 클릭해 이름·색상·삭제 (모든 항목 반영)' })),
+        list);
+      setTimeout(() => createIn.focus(), 0);
+      if (!all.length) { list.append(el('div', { class: 'pjv-menu-empty', text: '아직 태그가 없습니다 — 위 칸에서 만들어보세요.' })); return; }
+      for (const x of all) {
+        const row = el('button', { class: 'pjv-tm-tagrow', type: 'button' },
+          el('span', { class: 'pjv-tm-tagdot', style: 'background:' + (x.color || PJV_TAG_NONE) }),
+          el('span', { class: 'pjv-tm-tagrow-name', text: x.name }),
+          el('span', { class: 'pjv-tm-tagrow-gear' }, pjvTagGearIcon()));
+        row.onclick = () => showColor(x, '', showManageAll);
+        list.append(row);
       }
-      const qv = input.value.trim();
-      if (qv && !all.some((t) => (t.name || '').toLowerCase() === qv.toLowerCase())) {
-        const create = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-tm-tagdot', style: 'background:' + PJV_TAG_NONE }), el('span', { text: '＋ 새 태그 “' + qv + '”' }));
-        create.onclick = async (e) => { e.stopPropagation(); if (await save({ name: qv })) { try { all = await api('/api/ui/v6/tags').then((x) => x.tags || []); } catch (_) { /* noop */ } input.value = ''; render(); renderList(); } };
-        list.append(create);
-      }
-      if (!list.children.length) list.append(el('div', { class: 'pjv-menu-empty', text: '이름을 입력해 새 태그를 만들어보세요.' }));
-    };
-    input.addEventListener('input', renderList);
-    renderList();
-    setTimeout(() => input.focus(), 0);
-  };
+    }
+
+    showList('');
+  }
   render();
   return wrap;
 }
@@ -1242,7 +1426,8 @@ function pjvProjMetaPanel(p, members, reload) {
     el('div', { class: 'pjv-tm-field-val' }, control));
   return el('div', { class: 'pjv-tm-fields pjv-proj-meta' },
     row('◎', '상태', pjvProjStatusPill(p, reload)),
-    row('👤', '담당자', pjvAssigneeControl(p, members, (patch) => projSaveQuiet(p.id, patch))),
+    // 팀원 = 담당자 — 클릭하면 팀원 목록만 보여주는 보기전용 팝오버(토글 없음). 변경은 '프로젝트 세부 설정'에서만.
+    row('👤', '팀원', pjvProjTeamView(members)),
     row('🗓', '기간', pjvProjDatesField(p, reload)),
     row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))),
     row('⏱', '시간 추적', pjvProjTimeField(p, reload)),
@@ -1279,6 +1464,7 @@ async function renderProjectV2Detail(view, idStr) {
   // '내 컴퓨터에서 작업' — 담당자가 본인 PC에서 이 프로젝트를 시작하는 단계별 가이드를 띄운다(웹은 실행/스트리밍 안 함).
   const localWorkBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '💻 내 컴퓨터에서 작업',
     onclick: () => openLocalWorkModal(id, p) });
+  // (코멘트는 헤더 버튼이 아니라 본문↔태스크 사이의 '코멘트' 섹션이 진입점 — projectCommentsSection. 클릭=드로어.)
   // 제목줄 — 이름(클릭해 수정)+상태칩(좌), 세부설정(우).
   const titleEl = el('h1', { class: 'proj-detail-title proj-detail-title-edit', title: '클릭해 이름 수정', text: p.name });
   const editTitle = () => {
@@ -1301,61 +1487,448 @@ async function renderProjectV2Detail(view, idStr) {
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl),
     el('div', { class: 'proj-detail-actions' }, localWorkBtn, settingsBtn)));
-  // 설명 — 있으면 클릭해 수정, 없으면 '＋ 설명 추가'. (Enter 저장 / Shift+Enter 줄바꿈 / Esc 취소)
-  const descWrap = el('div', { class: 'proj-detail-desc-wrap' });
-  const editDesc = () => {
-    const ta = el('textarea', { class: 'proj-detail-desc-ta', rows: '3', placeholder: '설명 입력 — Enter 저장, Shift+Enter 줄바꿈, Esc 취소' });
-    ta.value = p.description || '';
-    descWrap.replaceChildren(ta); ta.focus();
-    let fin = false;
-    const done = async (save) => {
-      if (fin) return; fin = true;
-      const nv = ta.value.trim();
-      if (save && nv !== (p.description || '')) {
-        try { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: nv || null }) }); p.description = nv; }
-        catch (e) { toast('설명 수정 실패 — ' + e.message, true); }
-      }
-      renderDesc();
-    };
-    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); done(true); } else if (e.key === 'Escape') done(false); });
-    ta.addEventListener('blur', () => done(true));
-  };
-  function renderDesc() {
-    descWrap.replaceChildren();
-    if (p.description) {
-      const dEl = el('p', { class: 'sub proj-detail-desc proj-detail-desc-edit', title: '클릭해 설명 수정', text: p.description });
-      dEl.onclick = editDesc;
-      descWrap.append(dEl);
-    } else {
-      const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 설명 추가' });
-      add.onclick = editDesc;
-      descWrap.append(add);
-    }
-  }
-  renderDesc();
-  head.append(descWrap);
-  // 팀원 — 칩 행(액션과 분리) + 팀원 수정 버튼. 없으면 흐린 안내.
-  const teamRow = el('div', { class: 'proj-team-row' });
-  if (members.length) {
-    for (const m of members) teamRow.append(el('span', { class: 'proj-team-chip' },
-      el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
-      el('span', { text: m.display_name || (m.member_id + (m.role ? ' · ' + m.role : '')) })));
-  } else {
-    teamRow.append(el('span', { class: 'admin-hint', text: '아직 팀원이 없어요' }));
-  }
-  head.append(teamRow);
-  // 클릭업식 메타데이터 패널 — 이름/팀원 바로 아래(태스크 박스 위). 상태·담당자·기간·우선순위·시간추적·태그.
+  // (본문은 헤더에서 빼고 태스크 위 '본문' 섹션으로 분리 — projectBodySection. 다른 섹션과 동일 위계.)
+  // 팀원 칩 행(proj-team-row) 제거 — 아래 메타 패널의 '팀원' 필드와 중복이라 한 곳(메타)만 남긴다.
+  // 클릭업식 메타데이터 패널 — 이름 바로 아래(태스크 박스 위). 상태·팀원·기간·우선순위·시간추적·태그.
   head.append(pjvProjMetaPanel(p, members, reload));
 
   // 상세 본문 — 태스크(작업 위계)를 헤더 바로 아래 맨 위에 둔다(프로젝트의 핵심). 이어 공유 폴더 ·
   //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
   //  '연결된 지식'은 헤더의 '프로젝트 세부 설정' 팝업으로 이동(규칙과 함께). 페이지 본문에선 제외.
   view.replaceChildren(head,
+    projectBodySection(id, p, reload),
+    projectCommentsSection(id, members),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
     projectTerminalSection(id, members, meId, V6_BASE, p.name),
     projectTimelineSection(id, members, V6_BASE));
   applyReveal(Array.from(view.children).slice(1));
+}
+
+// ── 본문 섹션 — 태스크 위, 다른 섹션(공유 폴더·터미널 세션·작업 타임라인)과 동일 위계·디자인(.card + .card-head). ──
+//  마크다운 렌더 + 본문 클릭/✎ 편집 버튼으로 그 자리 편집(Enter 저장·Shift+Enter 줄바꿈·Esc 취소). 길면 접힘+Expand.
+function projectBodySection(id, p, reload) {
+  const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+  const bodyWrap = el('div', { class: 'proj-body-sec' });
+  // '✎ 편집' 버튼 제거 — 본문을 클릭하면 그 자리에서 편집되고(아래 render: body.onclick=editBody / '＋ 본문 추가'), 버튼은 불필요.
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '본문' })));
+  card.append(bodyWrap);
+  const editBody = () => {
+    // 위지위그(WYSIWYG) — 렌더된 본문 '위에서 바로' 편집(contentEditable). 미리보기 따로 없음.
+    //  굵게/기울임/말머리 등을 서식 바로 누르면 그 자리에서 즉시 굵게/목록으로 보인다. 저장 시 DOM→마크다운으로 직렬화.
+    const ce = el('div', { class: 'proj-body-wysiwyg md-rendered', contenteditable: 'true', spellcheck: 'false' });
+    if (p.description && p.description.trim()) {
+      const rendered = renderMarkdown(p.description);
+      while (rendered.firstChild) ce.append(rendered.firstChild);
+    } else {
+      ce.append(el('p', {}, el('br', {})));
+    }
+    bodyWrap.replaceChildren(ce);
+    ce.focus();
+    try { const r = document.createRange(); r.selectNodeContents(ce); r.collapse(false); const sel = window.getSelection(); if (sel) { sel.removeAllRanges(); sel.addRange(r); } } catch (_) { /* noop */ }
+    const toolbar = buildWysiwygToolbar(ce);
+    let fin = false;
+    const done = async (save) => {
+      if (fin) return; fin = true;
+      toolbar.destroy();
+      const nv = save ? mdFromDom(ce) : (p.description || '');
+      if (save && nv !== (p.description || '')) {
+        try { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: nv || null }) }); p.description = nv; }
+        catch (e) { toast('본문 수정 실패 — ' + e.message, true); }
+      }
+      render();
+    };
+    // 저장=⌘/Ctrl+Enter 또는 바깥클릭(blur), 취소=Esc. (Enter 는 줄바꿈/문단)
+    ce.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); done(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    });
+    // 지연 체크 — 서식 바 클릭·링크 prompt 로 잠깐 포커스가 떠도(다시 에디터로 돌아오면) 저장/종료하지 않음.
+    ce.addEventListener('blur', () => setTimeout(() => {
+      if (document.activeElement === ce) return;
+      if (document.querySelector('.fmt-toolbar:hover')) return;
+      done(true);
+    }, 150));
+  };
+  const render = () => {
+    bodyWrap.replaceChildren();
+    if (p.description) {
+      const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(p.description));
+      body.onclick = editBody;
+      // 펼침 컨트롤(클릭업/노션식) — 접힘 땐 페이드 위에 작은 알약으로 가운데 떠 있고, 펼치면 본문 아래 가운데로.
+      const wrap = el('div', { class: 'proj-detail-body-wrap is-collapsed' });
+      const box = el('div', { class: 'proj-detail-body-box collapsed' }, body);
+      const lbl = el('span', { class: 'lbl', text: '더 보기' });
+      const caret = el('span', { class: 'caret', text: '⌄' });
+      const exBtn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, lbl, caret);
+      const exRow = el('div', { class: 'proj-detail-body-expand-row' }, exBtn);
+      exBtn.onclick = (e) => {
+        e.stopPropagation();
+        const collapsed = box.classList.toggle('collapsed');
+        wrap.classList.toggle('is-collapsed', collapsed);
+        caret.textContent = collapsed ? '⌄' : '⌃';
+        lbl.textContent = collapsed ? '더 보기' : '접기';
+      };
+      wrap.append(box, exRow);
+      bodyWrap.append(wrap);
+      // 짧은 본문(접어도 다 보이는)이면 펼침 불필요 → 펼친 채로 두고 컨트롤 숨김. (레이아웃 후 측정)
+      requestAnimationFrame(() => {
+        if (body.scrollHeight <= box.clientHeight + 2) { box.classList.remove('collapsed'); wrap.classList.remove('is-collapsed'); exRow.style.display = 'none'; }
+      });
+    } else {
+      const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 본문 추가' });
+      add.onclick = editBody;
+      bodyWrap.append(add);
+    }
+  };
+  render();
+  return card;
+}
+
+// ── 본문 에디터 서식 툴바 — 텍스트 선택 시 그 위로 떠서 선택 영역에 마크다운 서식 적용(클릭업식, 박스 없는 인라인 편집용). ──
+//  렌더러가 지원하는 서식만 노출: 제목·굵게·기울임·코드·목록·인용·링크. 버튼은 mousedown preventDefault 로 textarea 포커스(=선택·편집모드)를 유지한다.
+function buildFormatToolbar(ta) {
+  const bar = el('div', { class: 'fmt-toolbar' });
+  bar.hidden = true;
+  let lastX = 0, lastY = 0;
+  const fire = () => ta.dispatchEvent(new Event('input', { bubbles: true })); // 자동 높이 재계산
+  const wrapSel = (mark) => {
+    const s = ta.selectionStart, e = ta.selectionEnd; const sel = ta.value.slice(s, e);
+    ta.setRangeText(mark + sel + mark, s, e, 'end');
+    ta.selectionStart = s + mark.length; ta.selectionEnd = e + mark.length;
+    ta.focus(); fire(); position();
+  };
+  const prefixLines = (prefix) => {
+    const val = ta.value; const s = ta.selectionStart, e = ta.selectionEnd;
+    const ls = val.lastIndexOf('\n', s - 1) + 1;
+    let le = val.indexOf('\n', e); if (le === -1) le = val.length;
+    const block = val.slice(ls, le).split('\n').map((l) => prefix + l).join('\n');
+    ta.setRangeText(block, ls, le, 'end');
+    ta.selectionStart = ls; ta.selectionEnd = ls + block.length;
+    ta.focus(); fire(); position();
+  };
+  const insertLink = () => {
+    const s = ta.selectionStart, e = ta.selectionEnd; const sel = ta.value.slice(s, e) || '링크';
+    const url = window.prompt('링크 URL', 'https://'); if (url == null) return;
+    ta.setRangeText('[' + sel + '](' + url + ')', s, e, 'end'); ta.focus(); fire(); position();
+  };
+  const ic = (...kids) => { const n = sv('svg', { class: 'fmt-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }); for (const k of kids) n.append(k); return n; };
+  const mkBtn = (inner, title, fn, cls?) => {
+    const b = el('button', { class: 'fmt-btn' + (cls ? ' ' + cls : ''), type: 'button', title });
+    if (typeof inner === 'string') b.textContent = inner; else b.append(inner);
+    b.addEventListener('mousedown', (e) => e.preventDefault()); // textarea 포커스 유지(선택·편집모드 유지)
+    b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+    return b;
+  };
+  bar.append(
+    mkBtn('H', '제목', () => prefixLines('## '), 'fmt-h'),
+    mkBtn('B', '굵게', () => wrapSel('**'), 'fmt-b'),
+    mkBtn('I', '기울임', () => wrapSel('*'), 'fmt-i'),
+    mkBtn(ic(sv('polyline', { points: '8 8 4 12 8 16' }), sv('polyline', { points: '16 8 20 12 16 16' })), '코드', () => wrapSel('`')),
+    mkBtn(ic(sv('line', { x1: 9, y1: 6, x2: 20, y2: 6 }), sv('line', { x1: 9, y1: 12, x2: 20, y2: 12 }), sv('line', { x1: 9, y1: 18, x2: 20, y2: 18 }), sv('circle', { cx: 4.5, cy: 6, r: 1.1 }), sv('circle', { cx: 4.5, cy: 12, r: 1.1 }), sv('circle', { cx: 4.5, cy: 18, r: 1.1 })), '목록', () => prefixLines('- ')),
+    mkBtn(ic(sv('path', { d: 'M6 7h8M6 12h12M6 17h8' }), sv('path', { d: 'M3 6.5v11' })), '인용', () => prefixLines('> ')),
+    mkBtn(ic(sv('path', { d: 'M10 13a4 4 0 0 0 5.66 0l3-3a4 4 0 1 0-5.66-5.66l-1.5 1.5' }), sv('path', { d: 'M14 11a4 4 0 0 0-5.66 0l-3 3a4 4 0 1 0 5.66 5.66l1.5-1.5' })), '링크', insertLink),
+  );
+  document.body.append(bar);
+  function position() {
+    if (ta.selectionStart === ta.selectionEnd) { bar.hidden = true; return; }
+    bar.hidden = false;
+    const bw = bar.offsetWidth || 250, bh = bar.offsetHeight || 38;
+    const rect = ta.getBoundingClientRect();
+    let x = (lastX || (rect.left + rect.width / 2)) - bw / 2;
+    let y = (lastY || rect.top) - bh - 10;
+    x = Math.max(8, Math.min(x, window.innerWidth - bw - 8));
+    if (y < 8) y = (lastY || rect.top) + 18; // 위 공간 없으면 선택 아래로
+    bar.style.left = x + 'px'; bar.style.top = y + 'px';
+  }
+  const onMouseUp = (e) => { lastX = e.clientX; lastY = e.clientY; setTimeout(position, 0); };
+  const onKeyUp = (e) => { if (e.shiftKey || (e.key && e.key.indexOf('Arrow') === 0)) setTimeout(position, 0); };
+  const onScroll = () => { if (!bar.hidden) position(); };
+  ta.addEventListener('mouseup', onMouseUp);
+  ta.addEventListener('keyup', onKeyUp);
+  window.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onScroll);
+  return { destroy: () => { bar.remove(); window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); } };
+}
+
+// ── 위지위그 본문 직렬화 — contentEditable DOM → 마크다운(renderMarkdown 지원 서브셋의 역). 알 수 없는 요소는 자식만 재귀(텍스트 보존). ──
+function mdFromDom(root) {
+  // 인라인(텍스트 + 굵게/기울임/코드/링크/줄바꿈) → 마크다운 문자열.
+  const inlineMd = (node) => {
+    let out = '';
+    node.childNodes.forEach((n) => {
+      if (n.nodeType === 3) { out += n.textContent; return; }
+      if (n.nodeType !== 1) return;
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'br') { out += '\n'; return; }
+      if (tag === 'code') { out += '`' + n.textContent + '`'; return; }
+      if (tag === 'a') { const href = n.getAttribute('href') || ''; const lbl = inlineMd(n) || n.textContent; out += href ? '[' + lbl + '](' + href + ')' : lbl; return; }
+      const st = (n.getAttribute && n.getAttribute('style')) || '';
+      const bold = tag === 'strong' || tag === 'b' || /font-weight\s*:\s*(bold|[6-9]00)/.test(st);
+      const ital = tag === 'em' || tag === 'i' || /font-style\s*:\s*italic/.test(st);
+      let inner = inlineMd(n);
+      if (ital) inner = '*' + inner + '*';
+      if (bold) inner = '**' + inner + '**';
+      out += inner;
+    });
+    return out;
+  };
+  const blocks: string[] = [];
+  const walk = (node, quote) => {
+    node.childNodes.forEach((n) => {
+      if (n.nodeType === 3) { const t = n.textContent.replace(/\s+/g, ' ').trim(); if (t) blocks.push((quote ? '> ' : '') + t); return; }
+      if (n.nodeType !== 1) return;
+      const tag = n.tagName.toLowerCase();
+      const q = quote ? '> ' : '';
+      if (/^h[1-6]$/.test(tag)) { const t = inlineMd(n).trim(); if (t) blocks.push(q + '#'.repeat(Number(tag[1])) + ' ' + t); return; }
+      if (tag === 'p' || tag === 'div') {
+        const t = inlineMd(n).replace(/\n+$/, '').trim();
+        if (t) blocks.push(quote ? t.split('\n').map((l) => '> ' + l).join('\n') : t);
+        return;
+      }
+      if (tag === 'ul' || tag === 'ol') {
+        let idx = 1; const items: string[] = [];
+        n.childNodes.forEach((li: any) => { if (li.nodeType === 1 && li.tagName.toLowerCase() === 'li') { const mk = tag === 'ol' ? (idx++ + '. ') : '- '; const t = inlineMd(li).trim(); items.push(q + mk + t); } });
+        if (items.length) blocks.push(items.join('\n'));
+        return;
+      }
+      if (tag === 'blockquote') { walk(n, true); return; }
+      if (tag === 'pre') { blocks.push('```\n' + n.textContent.replace(/\n$/, '') + '\n```'); return; }
+      if (tag === 'hr') { blocks.push('---'); return; }
+      walk(n, quote); // 알 수 없는 래퍼 → 자식 블록 재귀
+    });
+  };
+  walk(root, false);
+  return blocks.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// ── 위지위그 서식 바 — contentEditable 용(execCommand). 선택 시 떠서 그 자리에서 굵게/기울임/제목/목록/인용/코드/링크 즉시 적용. ──
+function buildWysiwygToolbar(ce) {
+  const bar = el('div', { class: 'fmt-toolbar' });
+  bar.hidden = true;
+  try { document.execCommand('styleWithCSS', false, 'false'); } catch (_) { /* 시맨틱 태그(<b>/<i>) 우선 */ }
+  const exec = (cmd, val?) => { ce.focus(); try { document.execCommand(cmd, false, val); } catch (_) { /* noop */ } setTimeout(position, 0); };
+  const wrapCode = () => {
+    const sel = window.getSelection(); if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0); const txt = range.toString(); if (!txt) return;
+    const code = el('code', { class: 'md-code', text: txt });
+    range.deleteContents(); range.insertNode(code);
+    const r = document.createRange(); r.selectNodeContents(code); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+    ce.focus(); setTimeout(position, 0);
+  };
+  const insertLink = () => {
+    const sel = window.getSelection(); const txt = sel ? sel.toString() : '';
+    const url = window.prompt('링크 URL', 'https://'); if (url == null) return;
+    ce.focus();
+    if (txt) { try { document.execCommand('createLink', false, url); } catch (_) { /* noop */ } }
+    else { try { document.execCommand('insertHTML', false, '<a href="' + url.replace(/"/g, '%22') + '">' + url + '</a>'); } catch (_) { /* noop */ } }
+    setTimeout(position, 0);
+  };
+  const ic = (...kids) => { const n = sv('svg', { class: 'fmt-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }); for (const k of kids) n.append(k); return n; };
+  const mkBtn = (inner, title, fn, cls?) => {
+    const b = el('button', { class: 'fmt-btn' + (cls ? ' ' + cls : ''), type: 'button', title });
+    if (typeof inner === 'string') b.textContent = inner; else b.append(inner);
+    b.addEventListener('mousedown', (e) => e.preventDefault()); // 에디터 포커스·선택 유지
+    b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+    return b;
+  };
+  bar.append(
+    mkBtn('H', '제목', () => exec('formatBlock', 'h2'), 'fmt-h'),
+    mkBtn('B', '굵게', () => exec('bold'), 'fmt-b'),
+    mkBtn('I', '기울임', () => exec('italic'), 'fmt-i'),
+    mkBtn(ic(sv('polyline', { points: '8 8 4 12 8 16' }), sv('polyline', { points: '16 8 20 12 16 16' })), '코드', wrapCode),
+    mkBtn(ic(sv('line', { x1: 9, y1: 6, x2: 20, y2: 6 }), sv('line', { x1: 9, y1: 12, x2: 20, y2: 12 }), sv('line', { x1: 9, y1: 18, x2: 20, y2: 18 }), sv('circle', { cx: 4.5, cy: 6, r: 1.1 }), sv('circle', { cx: 4.5, cy: 12, r: 1.1 }), sv('circle', { cx: 4.5, cy: 18, r: 1.1 })), '목록', () => exec('insertUnorderedList')),
+    mkBtn(ic(sv('path', { d: 'M6 7h8M6 12h12M6 17h8' }), sv('path', { d: 'M3 6.5v11' })), '인용', () => exec('formatBlock', 'blockquote')),
+    mkBtn(ic(sv('path', { d: 'M10 13a4 4 0 0 0 5.66 0l3-3a4 4 0 1 0-5.66-5.66l-1.5 1.5' }), sv('path', { d: 'M14 11a4 4 0 0 0-5.66 0l-3 3a4 4 0 1 0 5.66 5.66l1.5-1.5' })), '링크', insertLink),
+  );
+  document.body.append(bar);
+  function position() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !ce.contains(sel.anchorNode)) { bar.hidden = true; return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { bar.hidden = true; return; }
+    bar.hidden = false;
+    const bw = bar.offsetWidth || 250, bh = bar.offsetHeight || 38;
+    let x = rect.left + rect.width / 2 - bw / 2;
+    let y = rect.top - bh - 10;
+    x = Math.max(8, Math.min(x, window.innerWidth - bw - 8));
+    if (y < 8) y = rect.bottom + 10;
+    bar.style.left = x + 'px'; bar.style.top = y + 'px';
+  }
+  const onSel = () => setTimeout(position, 0);
+  document.addEventListener('selectionchange', onSel);
+  ce.addEventListener('mouseup', onSel);
+  ce.addEventListener('keyup', onSel);
+  const onScroll = () => { if (!bar.hidden) position(); };
+  window.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onScroll);
+  return { destroy: () => { bar.remove(); document.removeEventListener('selectionchange', onSel); window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); } };
+}
+
+// ── 코멘트 섹션 — 본문↔태스크 사이, 같은 급(.card). 얇은 가로 스트립으로 최신 코멘트(아바타+이름+요약)를 카드로 쭉.
+//  세로 공간 최소(헤더 + 한 줄 카드). 섹션 어디든 클릭 → 오른쪽 드로어(openProjectComments)로 전체 보기·작성. ──
+function projectCommentsSection(id, members) {
+  const nameOf = (uid) => { const m = (members || []).find((x) => x.member_id === uid); return (m && m.display_name) || uid || '?'; };
+  const card = el('div', { class: 'card pjv-cmt-sec', style: 'margin-bottom:18px', role: 'button', tabindex: '0', title: '코멘트 열기' });
+  const countEl = el('span', { class: 'pjv-cmt-sec-count' });
+  const unreadBadge = el('span', { class: 'pjv-cmt-unread', hidden: true });
+  const strip = el('div', { class: 'pjv-cmt-strip' }, el('div', { class: 'pjv-cmt-loading', text: '불러오는 중…' }));
+  card.append(
+    el('div', { class: 'card-head pjv-cmt-sec-head' },
+      el('h3', {}, el('span', { text: '코멘트' }), countEl, unreadBadge),
+      el('span', { class: 'pjv-cmt-sec-hint', text: '클릭해 작성 · 모두 보기 →' })),
+    strip);
+  // 안 읽은 코멘트 강조 — 기기별 마지막 읽음 id(localStorage)보다 새 코멘트(내가 쓴 것 제외)를 안읽음으로. 클릭(드로어 열기)=읽음 처리.
+  const cmtMeId = (state.me && (state.me.userId || state.me.email)) || '';
+  const cmtReadKey = 'pjv_cmt_read_' + id;
+  const cmtLastRead = () => Number(localStorage.getItem(cmtReadKey)) || 0;
+  const cmtMarkRead = (list) => { const mx = Math.max(0, ...list.map((c) => Number(c.id) || 0)); if (mx) localStorage.setItem(cmtReadKey, String(mx)); };
+  let cmtLoaded: any[] = [];
+  const open = () => {
+    cmtMarkRead(cmtLoaded);
+    unreadBadge.hidden = true; card.classList.remove('pjv-cmt-has-unread');
+    strip.querySelectorAll('.pjv-cmt-mini-unread').forEach((n) => n.classList.remove('pjv-cmt-mini-unread'));
+    openProjectComments(id, members);
+  };
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  (async () => {
+    let comments: any[] = [];
+    try { const d = await api('/api/ui/v6/projects/' + id + '/comments'); comments = ((d && d.feed) || []).filter((f) => f && f.kind === 'comment'); }
+    catch (_) { strip.replaceChildren(el('div', { class: 'pjv-cmt-loading', text: '코멘트를 불러오지 못했어요' })); return; }
+    cmtLoaded = comments;
+    countEl.textContent = comments.length ? ' ' + comments.length : '';
+    const lr = cmtLastRead();
+    const isUnread = (c) => (Number(c.id) || 0) > lr && c.actor !== cmtMeId;
+    const unreadN = comments.filter(isUnread).length;
+    if (unreadN) { unreadBadge.hidden = false; unreadBadge.textContent = unreadN + '개 안 읽음'; card.classList.add('pjv-cmt-has-unread'); }
+    strip.replaceChildren();
+    if (!comments.length) {
+      strip.append(el('div', { class: 'pjv-cmt-empty-card' }, el('span', { class: 'pjv-cmt-empty-ic', text: '＋' }), el('span', { text: '첫 코멘트를 남겨보세요' })));
+      return;
+    }
+    const recent = comments.slice().reverse().slice(0, 12); // 피드는 시간 오름차순 → 최신 먼저
+    for (const c of recent) {
+      const who = c.display_name || nameOf(c.actor);
+      const preview = (c.body || '').replace(/\s+/g, ' ').trim();
+      strip.append(el('div', { class: 'pjv-cmt-mini' + (isUnread(c) ? ' pjv-cmt-mini-unread' : '') },
+        el('div', { class: 'pjv-cmt-mini-top' },
+          el('span', { class: 'pjv-cmt-mini-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }),
+          el('span', { class: 'pjv-cmt-mini-name', text: who }),
+          el('span', { class: 'pjv-cmt-mini-time', text: c.ts ? relTime(c.ts) : '' })),
+        el('div', { class: 'pjv-cmt-mini-text', text: preview })));
+    }
+  })();
+  return card;
+}
+
+// ── 코멘트 드로어 — 코멘트 섹션 클릭 → 우측에서 슬라이드되는 오버레이(상시 점유 X). 프로젝트 전체 코멘트, 모든 팀원 작성. ──
+//  저장: activity(project_id=프로젝트 id, type='comment') — v6 에서 태스크=프로젝트행이라 /tasks/:id/comments·/detail 을 프로젝트 id 로 그대로 재사용.
+function openProjectComments(id, members) {
+  const nameOf = (uid) => { const m = (members || []).find((x) => x.member_id === uid); return (m && m.display_name) || uid || '?'; };
+  const panel = el('aside', { class: 'cmt-drawer', role: 'dialog', 'aria-label': '코멘트' });
+  const back = el('div', { class: 'cmt-backdrop' }, panel);
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; back.classList.remove('open'); document.removeEventListener('keydown', onEsc); setTimeout(() => back.remove(), 220); };
+  const onEsc = (e) => { if (e.key === 'Escape') close(); };
+  back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onEsc);
+
+  let feedData: any[] = [];
+  let newestFirst = false;  // 기본 오래된→최신(최신이 아래, 작성칸 옆) — 이미지와 동일
+  let query = '';
+
+  // 헤더 SVG 아이콘 헬퍼
+  const hico = (...kids) => sv('svg', { viewBox: '0 0 24 24', width: '17', height: '17', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, ...kids);
+
+  // 작성칸(하단) — 크고 편한 입력 + 파란 전송(이미지 참고).
+  const ta = el('textarea', { class: 'cmt-input', placeholder: '댓글을 입력하세요…' });
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(Math.max(ta.scrollHeight, 56), 220) + 'px'; };
+  ta.addEventListener('input', grow);
+  const sendBtn = el('button', { class: 'cmt-send pjv-tm-send', type: 'button', title: '보내기 (⌘/Ctrl+Enter)' },
+    hico(sv('path', { d: 'M22 2L11 13' }), sv('path', { d: 'M22 2l-7 20-4-9-9-4 20-7z' })));
+  // 커서 위치 삽입(멘션·이모지·첨부·체크리스트). 태스크 모달 작성기 툴바와 동일 동작.
+  const insertAtCursor = (text) => {
+    const s = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+    const e = ta.selectionEnd == null ? ta.value.length : ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+    const pos = s + text.length; ta.focus(); try { ta.setSelectionRange(pos, pos); } catch (_) { /* noop */ } grow();
+  };
+  // 태스크 팝업 Activity 작성기 툴바 그대로 재사용 — ＋·Comment▾·📎·@·😊·✓·🎥·🎤·⋯ · ➤. 첨부는 이 프로젝트 공유 폴더.
+  const composer = el('div', { class: 'cmt-composer' }, ta,
+    pjvtmComposerToolbar({ insertAtCursor, members, sendBtn, d: { project: { id } } }));
+
+  const feedBox = el('div', { class: 'cmt-feed' }, el('div', { class: 'cmt-empty', text: '불러오는 중…' }));
+  const reactTo = async (c, emoji) => {
+    try { const d = await api('/api/ui/v6/comments/' + c.id + '/reactions', { method: 'POST', body: JSON.stringify({ emoji }) }); c.reactions = (d && d.reactions) || []; renderFeed(); }
+    catch (e) { toast('반응 실패 — ' + e.message, true); }
+  };
+  function renderFeed() {
+    let comments = feedData.filter((f) => f && f.kind === 'comment');
+    if (query) comments = comments.filter((c) => (c.body || '').toLowerCase().includes(query) || (c.display_name || nameOf(c.actor) || '').toLowerCase().includes(query));
+    if (newestFirst) comments = comments.slice().reverse();
+    feedBox.replaceChildren();
+    if (!comments.length) { feedBox.append(el('div', { class: 'cmt-empty', text: query ? '검색 결과가 없어요.' : '아직 코멘트가 없어요. 아래에서 첫 코멘트를 남겨보세요.' })); return; }
+    for (const c of comments) {
+      const who = c.display_name || nameOf(c.actor);
+      // 👍 좋아요(아웃라인 아이콘 + 개수) — 내가 눌렀으면 .on. 그 외 이모지 반응은 칩으로.
+      const like = (c.reactions || []).filter((r) => r.emoji === '👍')[0];
+      const likeBtn = el('button', { class: 'cmt-foot-btn cmt-like' + (like && like.mine ? ' on' : ''), type: 'button', title: '좋아요' },
+        sv('svg', { viewBox: '0 0 24 24', width: '15', height: '15', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+          sv('path', { d: 'M7 10v11' }), sv('path', { d: 'M7 10l4-7a2 2 0 0 1 2.6 2.5L12.5 9H19a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.8 21H7' })));
+      if (like) likeBtn.append(el('span', { class: 'cmt-like-n', text: String(like.count) }));
+      likeBtn.onclick = () => reactTo(c, '👍');
+      const reactRow = el('span', { class: 'cmt-react' }, likeBtn,
+        ...(c.reactions || []).filter((r) => r.emoji !== '👍').map((r) => {
+          const ch = el('button', { class: 'cmt-react-chip' + (r.mine ? ' mine' : ''), type: 'button', text: r.emoji + ' ' + r.count });
+          ch.onclick = () => reactTo(c, r.emoji); return ch;
+        }));
+      const replyBtn = el('button', { class: 'cmt-foot-btn cmt-reply', type: 'button', text: '답글' });
+      replyBtn.onclick = () => { ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + '@' + who + ' '; ta.focus(); grow(); };
+      feedBox.append(el('div', { class: 'cmt-card' },
+        el('span', { class: 'cmt-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }),
+        el('div', { class: 'cmt-body' },
+          el('div', { class: 'cmt-meta' }, el('span', { class: 'cmt-name', text: who }), el('span', { class: 'cmt-time', text: c.ts ? '· ' + relTime(c.ts) : '' })),
+          el('div', { class: 'cmt-text md-rendered' }, renderMarkdown(c.body || '')),
+          el('div', { class: 'cmt-foot' }, reactRow, replyBtn))));
+    }
+    if (!newestFirst && !query) setTimeout(() => { feedBox.scrollTop = feedBox.scrollHeight; }, 0); // 오래된순 → 최신이 아래, 바닥으로
+  }
+  const send = async () => {
+    const text = ta.value.trim(); if (!text) return;
+    sendBtn.disabled = true; ta.disabled = true;
+    try { const d = await api('/api/ui/v6/tasks/' + id + '/comments', { method: 'POST', body: JSON.stringify({ text }) }); ta.value = ''; grow(); feedData = (d && d.feed) || []; renderFeed(); if (newestFirst) feedBox.scrollTop = 0; }
+    catch (e) { toast('전송 실패 — ' + e.message, true); }
+    sendBtn.disabled = false; ta.disabled = false; ta.focus();
+  };
+  sendBtn.onclick = send;
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+
+  // 헤더 — '코멘트' + 정렬·검색 토글(보이는 버튼은 기능까지) + 닫기.
+  const sortBtn = el('button', { class: 'cmt-hbtn', type: 'button', title: '정렬: 오래된순' },
+    hico(sv('path', { d: 'M7 4v15M7 4L4 8M7 4l3 4' }), sv('path', { d: 'M17 20V5M17 20l-3-4M17 20l3-4' })));
+  sortBtn.onclick = () => { newestFirst = !newestFirst; sortBtn.classList.toggle('on', newestFirst); sortBtn.title = newestFirst ? '정렬: 최신순' : '정렬: 오래된순'; renderFeed(); };
+  const searchIn = el('input', { type: 'text', class: 'cmt-search-in', placeholder: '코멘트 검색…' });
+  searchIn.addEventListener('input', () => { query = searchIn.value.trim().toLowerCase(); renderFeed(); });
+  const searchBar = el('div', { class: 'cmt-search', hidden: true }, searchIn);
+  const searchBtn = el('button', { class: 'cmt-hbtn', type: 'button', title: '검색' }, hico(sv('circle', { cx: 11, cy: 11, r: 7 }), sv('path', { d: 'M21 21l-4.3-4.3' })));
+  searchBtn.onclick = () => { const willOpen = searchBar.hidden; searchBar.hidden = !willOpen; searchBtn.classList.toggle('on', willOpen); if (willOpen) searchIn.focus(); else { query = ''; searchIn.value = ''; renderFeed(); } };
+  const head = el('div', { class: 'cmt-head' }, el('h3', { text: '코멘트' }),
+    el('div', { class: 'cmt-head-actions' }, sortBtn, searchBtn,
+      el('button', { class: 'cmt-close', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: close })));
+
+  panel.append(head, searchBar, feedBox, composer);
+  document.body.append(back);
+  requestAnimationFrame(() => { back.classList.add('open'); grow(); });
+  (async () => {
+    try {
+      const d = await api('/api/ui/v6/projects/' + id + '/comments'); feedData = (d && d.feed) || []; renderFeed();
+      // 드로어를 열어 읽었으니 마지막 읽음 id 갱신(가장 최신 코멘트 id) — 섹션 안읽음 배지 해제.
+      const cs = feedData.filter((f) => f && f.kind === 'comment'); const mx = Math.max(0, ...cs.map((c) => Number(c.id) || 0)); if (mx) localStorage.setItem('pjv_cmt_read_' + id, String(mx));
+    }
+    catch (e) { feedBox.replaceChildren(el('div', { class: 'cmt-empty', text: '불러오지 못했습니다 — ' + e.message })); }
+  })();
+  setTimeout(() => ta.focus(), 180);
 }
 
 // ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 터미널 규칙 · 연결 지식 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
@@ -1390,86 +1963,157 @@ function openLocalWorkModal(id, p) {
   // 하네스
   const harnessSel = el('select', { style: inputStyle });
   harnessSel.append(el('option', { value: 'claude', text: 'Claude Code' }), el('option', { value: 'codex', text: 'Codex' }));
-  // 레포
-  const repoSel = el('select', { style: inputStyle });
-  repoSel.append(el('option', { value: '', text: '없음 (코드 레포 없이 공유 폴더만)' }));
-  // 내 PC에서의 레포 경로
-  const repoPathInp = el('input', { type: 'text', style: inputStyle, placeholder: '예) ~/lively/repos/<레포>' });
-  const repoPathBlock = block('내 PC에서 레포 경로', '이미 클론이 있으면 그 경로를, 없으면 새로 받을 경로를 적으세요.', repoPathInp);
-  // 워크트리 + 브랜치
-  const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = true;
-  const wtBlock = el('section', { class: 'ps-block' },
-    el('h3', { class: 'ps-block-title', text: '코드 작업 방식' }),
+  // 모델 · 자동승인 — 웹 터미널 카탈로그(/api/ui/terminal/config) 재사용(하네스별 모델·autoApprove 동일 규칙).
+  const modelSel = el('select', { style: inputStyle });
+  const modelBlock = block('모델', '비우면 하네스 기본 모델.', modelSel);
+  const autoChk = el('input', { type: 'checkbox' });
+  const autoBlock = el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: '자동 승인' }),
     el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer' },
-      wtChk, el('span', { text: '워크트리 생성 — 프로젝트 전용 브랜치로 격리(같은 레포 동시 작업 권장)' })));
-  const branchInp = el('input', { type: 'text', style: inputStyle, value: 'project/' + id });
-  const branchBlock = block('브랜치', '워크트리가 체크아웃할 프로젝트 전용 브랜치예요.', branchInp);
-
-  // 레포 선택 여부 / 워크트리 여부에 따라 의존 입력 표시 토글
-  const syncDeps = () => {
-    const has = !!repoSel.value;
-    repoPathBlock.style.display = has ? '' : 'none';
-    wtBlock.style.display = has ? '' : 'none';
-    branchBlock.style.display = (has && wtChk.checked) ? '' : 'none';
-    if (has && !repoPathInp.value.trim()) repoPathInp.value = '~/lively/repos/' + repoSel.value;
+      autoChk, el('span', { text: '권한 확인 건너뛰기 (claude --dangerously-skip-permissions / codex --yolo) — 내 PC에서 실행되니 주의' })));
+  const harnessCat = {};  // {claude:{models:[...],hasAuto}, codex:{...}}
+  const updateModels = () => {
+    const cat = harnessCat[harnessSel.value] || { models: [], hasAuto: true };
+    const cur = modelSel.value;
+    modelSel.replaceChildren(el('option', { value: '', text: '기본' }));
+    (cat.models || []).forEach((m) => { if (m) modelSel.append(el('option', { value: m, text: m })); });
+    if ((cat.models || []).includes(cur)) modelSel.value = cur;
+    autoBlock.style.display = cat.hasAuto === false ? 'none' : '';
+    regen();
   };
-  repoSel.addEventListener('change', syncDeps);
-  wtChk.addEventListener('change', syncDeps);
+  harnessSel.addEventListener('change', updateModels);
+  const q = (s) => '"' + String(s).replace(/"/g, '\\"') + '"';
+  const pathKey = (repo) => 'lively:workpath:' + repo;
+  const savedPath = (repo) => { try { return repo ? (localStorage.getItem(pathKey(repo)) || '') : ''; } catch (_) { return ''; } };
+  modelSel.addEventListener('change', () => regen());
+  autoChk.addEventListener('change', () => regen());
 
-  // 레포 목록(repo_list union) 로드 — 단일이면 선택해 둔다.
+  // ── 레포 N개(반복 행) — 각 행: 레포 선택 + 내 PC 경로 + 워크트리/브랜치. cloneUrlByRepo 로 git 주소 채움. ──
+  const cloneUrlByRepo = {};
+  const reposWrap = el('div', {});
+  let rows: any[] = [];
+  const repoNames = () => Object.keys(cloneUrlByRepo);
+  const fillSel = (sel) => {
+    const cur = sel.value;
+    sel.replaceChildren(el('option', { value: '', text: '— 레포 선택 —' }));
+    repoNames().forEach((n) => sel.append(el('option', { value: n, text: n })));
+    if (repoNames().includes(cur)) sel.value = cur;
+  };
+  const addRow = (initRepo = '') => {
+    const sel = el('select', { style: inputStyle });
+    const pathInp = el('input', { type: 'text', style: inputStyle, placeholder: '예) ~/dev/<레포> · Windows: C:\\Users\\..\\<레포> (비우면 기본 경로에 clone)' });
+    const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = true;
+    const branchInp = el('input', { type: 'text', style: inputStyle, value: 'project/' + id });
+    const rmBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕ 제거' });
+    fillSel(sel); if (initRepo) sel.value = initRepo;
+    pathInp.value = savedPath(sel.value);
+    const branchWrap = el('div', { style: 'margin-top:6px' }, el('p', { class: 'ps-block-hint', style: 'margin:0 0 2px', text: '브랜치' }), branchInp);
+    const branchVis = () => { branchWrap.style.display = wtChk.checked ? '' : 'none'; };
+    const rowObj: any = { sel, pathInp, wtChk, branchInp };
+    rows.push(rowObj);
+    sel.addEventListener('change', () => { pathInp.value = savedPath(sel.value); regen(); });
+    pathInp.addEventListener('input', () => regen());
+    pathInp.addEventListener('change', () => { if (sel.value && pathInp.value.trim()) { try { localStorage.setItem(pathKey(sel.value), pathInp.value.trim()); } catch (_) { /* */ } } regen(); });
+    wtChk.addEventListener('change', () => { branchVis(); regen(); });
+    branchInp.addEventListener('input', () => regen());
+    const rowEl = el('section', { class: 'ps-block', style: 'border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:10px;margin-top:8px' },
+      el('div', { style: 'display:flex;gap:8px;align-items:center' }, sel, rmBtn),
+      el('div', { style: 'margin-top:6px' }, el('p', { class: 'ps-block-hint', style: 'margin:0 0 2px', text: '내 PC 경로' }), pathInp),
+      el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:6px' }, wtChk, el('span', { text: '워크트리 생성 (전용 브랜치로 격리)' })),
+      branchWrap);
+    rowObj.el = rowEl;
+    rmBtn.onclick = () => { rowEl.remove(); rows = rows.filter((r) => r !== rowObj); regen(); };
+    branchVis(); reposWrap.append(rowEl); regen();
+  };
+  const addRepoBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 레포 추가', onclick: () => addRow() });
+
+  // 카탈로그(모델·자동승인) 로드
+  (async () => {
+    try {
+      const cfg = await api('/api/ui/terminal/config');
+      ((cfg && cfg.harnesses) || []).forEach((h) => { const mf = (h.flags || []).find((f) => f.name === '--model'); harnessCat[h.key] = { models: (mf && mf.choices) || [], hasAuto: !!h.hasAutoApprove }; });
+    } catch (_) { /* graceful */ }
+    updateModels();
+  })();
+  // 레포 목록(git 주소 포함) 로드 → 행 셀렉트 채움 + 기본 1행.
   (async () => {
     try {
       const r = await api('/api/ui/repos');
-      ((r && r.repos) || []).forEach((name) => repoSel.append(el('option', { value: name, text: name })));
-      if (r && r.repos && r.repos.length === 1) repoSel.value = r.repos[0];
+      ((r && r.domainmapRepos) || []).forEach((it) => { if (it && it.name) cloneUrlByRepo[it.name] = it.clone_url || ''; });
     } catch (_) { /* graceful: 레포 없음 */ }
-    syncDeps();
+    rows.forEach((ro) => fillSel(ro.sel));
+    if (!rows.length) addRow(repoNames().length === 1 ? repoNames()[0] : '');
+    regen();
   })();
 
+  // ── 명령 — 입력이 바뀔 때마다 자동 재생성(live). 0레포=공유폴더만 / 1=가독 플래그 / N=--repos base64. ──
   const guideWrap = el('div', { class: 'lw-guide' });
-  const genBtn = el('button', { class: 'btn btn-primary btn-sm', text: '가이드 만들기' });
-  genBtn.onclick = async () => {
-    genBtn.disabled = true;
-    try {
-      const body = { harness: harnessSel.value, repo: repoSel.value, repoPath: repoPathInp.value.trim(), worktree: wtChk.checked, branch: branchInp.value.trim() };
-      const r = await api('/api/ui/v6/projects/' + id + '/local-work/guide', { method: 'POST', body: JSON.stringify(body) });
-      renderLocalWorkGuide(guideWrap, r.guide);
-    } catch (e) { toast('가이드 생성 실패 — ' + e.message, true); }
-    genBtn.disabled = false;
-  };
+  function regen() {
+    const parts = [id, '--harness ' + harnessSel.value];
+    if (modelSel.value) parts.push('--model ' + modelSel.value);
+    if (autoChk.checked) parts.push('--auto-approve');
+    const specs = rows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim(), gitUrl: r.sel.value ? (cloneUrlByRepo[r.sel.value] || '') : '' })).filter((s) => s.name);
+    let hasUrl = true;
+    if (specs.length === 1) {
+      const s = specs[0];
+      if (s.path) parts.push('--repo-path ' + q(s.path));
+      if (s.worktree) { parts.push('--worktree'); if (s.branch) parts.push('--branch ' + q(s.branch)); }
+      if (s.gitUrl) parts.push('--git-url ' + q(s.gitUrl)); else hasUrl = false;
+    } else if (specs.length > 1) {
+      const json = JSON.stringify(specs);
+      parts.push('--repos ' + q(btoa(unescape(encodeURIComponent(json))))); // base64(UTF-8 JSON) — N레포 안전 인코딩
+      hasUrl = specs.every((s) => !!s.gitUrl);
+    }
+    renderLocalWorkCommand(guideWrap, parts.join(' '), { repo: specs.length ? specs[0].name : '', hasUrl, multi: specs.length > 1 });
+  }
 
   form.append(
-    el('p', { class: 'ps-block-hint', text: '이 프로젝트를 내 컴퓨터에서 작업하기 위한 설정이에요. 아래를 채우고 ‘가이드 만들기’를 누르면, 내 PC 터미널에서 그대로 따라 할 명령을 단계별로 만들어 드립니다.' }),
+    el('p', { class: 'ps-block-hint', text: '값을 바꾸면 아래 명령이 자동으로 갱신됩니다. 내 PC 터미널에 붙여넣어 실행하세요 — 한 번 실행하면 공유 폴더·코드 준비·실행까지 자동, 재실행해도 안전(늘 이 명령으로 접속).' }),
     block('AI 코딩 에이전트', '내 PC에서 사용할 하네스를 고르세요.', harnessSel),
-    block('사용할 레포', '이 프로젝트가 작업할 코드 레포. 한 레포를 여러 프로젝트가 공유합니다.', repoSel),
-    repoPathBlock, wtBlock, branchBlock,
-    el('div', { class: 'ps-rules-actions' }, genBtn),
+    modelBlock, autoBlock,
+    block('사용할 레포 (여러 개 가능)', '코드 레포를 선택하고 내 PC 경로를 적으세요. 비개발자는 레포 행을 모두 제거하면 공유 폴더만 받습니다.', reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
     guideWrap);
+  regen();
 }
 
-// 생성된 가이드(steps)를 모달 안에 렌더 — 각 단계 = 제목 + 설명 + 명령블록(복사 버튼).
-function renderLocalWorkGuide(wrap, g) {
-  const copyBtn = (text) => {
-    const b = el('button', { class: 'btn btn-ghost btn-sm', text: '복사' });
-    b.onclick = () => { try { navigator.clipboard.writeText(text); toast('복사됨'); } catch (_) { toast('복사 실패', true); } };
-    return b;
+// 클립보드 복사 — http(비보안 컨텍스트)에선 navigator.clipboard 가 막히므로 execCommand 폴백 + 수동선택 안내.
+function copyText(text) {
+  const fallback = () => {
+    try {
+      const t = document.createElement('textarea');
+      t.value = text; t.style.position = 'fixed'; t.style.top = '-1000px'; t.style.opacity = '0';
+      document.body.appendChild(t); t.focus(); t.select();
+      const ok = document.execCommand('copy'); document.body.removeChild(t);
+      toast(ok ? '복사됨' : '복사 실패 — 명령을 직접 드래그해 복사하세요', !ok);
+    } catch (_) { toast('복사 실패 — 명령을 직접 드래그해 복사하세요', true); }
   };
-  const steps = (g.steps || []).map((s) => {
-    const cmdText = (s.cmds || []).join('\n');
-    return el('section', { class: 'ps-block' },
-      el('h3', { class: 'ps-block-title', text: s.title + (s.optional ? '  (선택)' : '') }),
-      s.desc ? el('p', { class: 'ps-block-hint', text: s.desc }) : null,
-      cmdText ? el('div', { style: 'display:flex;gap:8px;align-items:flex-start' },
-        el('pre', { style: 'flex:1;margin:0;padding:8px 10px;background:rgba(127,127,127,.1);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre;line-height:1.5' },
-          el('code', { text: cmdText })),
-        copyBtn(cmdText)) : null);
-  });
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => toast('복사됨'), fallback); return; } } catch (_) { /* */ }
+  fallback();
+}
+
+// 만든 명령을 OS별(Mac/Linux · Windows)로 렌더 — work.mjs 경로의 홈 표기가 셸마다 달라서(윈도우는 ~ 미확장).
+function renderLocalWorkCommand(wrap, argStr, info) {
+  const cmdNix = 'node ~/.lively/work.mjs ' + argStr;
+  const cmdWin = 'node "$env:USERPROFILE\\.lively\\work.mjs" ' + argStr;
+  const cmdBlock = (label, cmd) => {
+    const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '복사' });
+    copyBtn.onclick = () => copyText(cmd);
+    return el('div', { style: 'margin-top:8px' },
+      el('p', { class: 'ps-block-hint', style: 'margin:0 0 4px', text: label }),
+      el('div', { style: 'display:flex;gap:8px;align-items:flex-start' },
+        el('pre', { style: 'flex:1;margin:0;padding:8px 10px;background:rgba(127,127,127,.1);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;line-height:1.5;user-select:all' },
+          el('code', { text: cmd })),
+        copyBtn));
+  };
+  const notes = ['내 OS에 맞는 한 줄을 터미널에 붙여넣어 실행하세요. (Node 필요)'];
+  if (info && info.repo && !info.hasUrl) notes.push('※ 이 레포는 git 주소 미설정 — --git-url 없음. 입력 경로에 레포가 이미 있어야 함(없으면 관리탭 ▸ 레포(git) 관리에서 git 주소 연결).');
+  notes.push('복사가 안 되면(보안 컨텍스트 아님) 명령을 직접 드래그해 복사하세요.');
   wrap.replaceChildren(
     el('div', { style: 'margin-top:14px;border-top:1px solid rgba(127,127,127,.18);padding-top:12px' },
-      el('h3', { class: 'ps-block-title', text: '내 PC에서 따라 하기' }),
-      el('p', { class: 'ps-block-hint', text: '아래 명령을 내 컴퓨터 터미널에서 순서대로 실행하세요. 공유 폴더(' + g.sharedBox + ')만 박스와 동기화되고, 코드 레포는 각자 PC에서 git 으로 관리됩니다.' })),
-    ...steps,
-    el('p', { class: 'ps-block-hint', text: '※ ‘' + g.boxHost + '’, ‘' + g.repoRemote + '’ 같은 자리표시자는 환경 설정이 연결되면 자동으로 채워집니다.' }));
+      el('h3', { class: 'ps-block-title', text: '내 PC에서 실행' }),
+      cmdBlock('Mac / Linux', cmdNix),
+      cmdBlock('Windows (PowerShell)', cmdWin),
+      ...notes.map((n) => el('p', { class: 'ps-block-hint', text: n }))));
 }
 
 // 팀원 블록 — 현재 팀원 칩 + '팀원 수정'(멀티선택 오버레이). 저장 시 설정 팝업 닫고 상세 재렌더.
@@ -1779,6 +2423,8 @@ function pjvPopover(anchor, content) {
   //  (동기 append·비동기 fetch) 채워져 높이가 바뀌면 ResizeObserver 로 재배치 → 항상 화면 안.
   const place = () => {
     const r = anchor.getBoundingClientRect();
+    // 앵커가 DOM 에서 떨어졌거나(재렌더로 교체) 0크기면 재배치하지 않는다 — 그대로 두지 않으면 rect=0,0 으로 좌상단에 튄다.
+    if (!anchor.isConnected || (r.width === 0 && r.height === 0)) return;
     const vw = document.documentElement.clientWidth;
     const vh = document.documentElement.clientHeight;
     const ph = pop.offsetHeight;
@@ -3011,15 +3657,13 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
 
   // el() 로 구성 — null 자식을 건너뛴다(네이티브 .append(null) 은 "null" 텍스트를 삽입하므로 금지).
   // 태그 칩(클릭업식) — 이름 옆에 최대 2개 + 나머지는 "+N". 색은 태그 색.
-  const ttags = t.tags || [];
-  const tagsEl = ttags.length ? el('span', { class: 'pjv-trow-tags' },
-    ...ttags.slice(0, 2).map((tg) => el('span', { class: 'pjv-trow-tag', style: '--tag:' + (tg.color || PJV_TAG_NONE), title: tg.name, text: tg.name })),
-    ttags.length > 2 ? el('span', { class: 'pjv-trow-tag-more', text: '+' + (ttags.length - 2) }) : null) : null;
+  const tagsEl = pjvRowTagsEl(t, reload);
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     pjvRowCheck('task', t, { reload, projectId, members }),
     caret, pjvStatusControl(t, reload),
     el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }),
-    subs.length ? el('span', { class: 'pjv-trow-subcount', title: subs.length + '개 하위', text: String(subs.length) }) : null,
+    subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico', title: subs.length + '개 하위' },
+      pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null,
     tagsEl);
   if (depth) titleCell.style.paddingLeft = (depth * 22) + 'px';
 
@@ -3999,14 +4643,14 @@ function projectTerminalSection(id, members, meId, base, projectName) {
     const input = el('input', { type: 'text', value: m.status_message || '', placeholder: '현재 상태 (예: 결제 모듈 작업 중)', maxlength: '200' });
     const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
     const back = overlayBox('내 상태 메시지',
-      el('p', { class: 'admin-hint', text: '프로필 밑에 보이는 ‘현재 상태’예요 — 팀원에게 지금 무엇을 하는지 공유됩니다.' }),
+      el('p', { class: 'admin-hint', text: '이 프로젝트에서의 ‘현재 상태’예요 — 이 프로젝트 팀원에게만 보이고, 다른 프로젝트엔 영향을 주지 않아요.' }),
       el('div', { class: 'field' }, input),
       el('div', { class: 'ov-actions' }, saveBtn, el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() })));
     setTimeout(() => input.focus(), 0);
     const go = async () => {
       saveBtn.disabled = true;
       try {
-        const r = await api('/api/ui/me/status', { method: 'POST', body: JSON.stringify({ message: input.value.trim() }) });
+        const r = await api(base + id + '/my-status', { method: 'POST', body: JSON.stringify({ message: input.value.trim() }) });
         m.status_message = r.status_message;
         back.remove(); toast('상태를 저장했습니다'); render();
       } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
@@ -4123,10 +4767,10 @@ function projectTimelineSection(id, members, base) {
     el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })),
     el('p', { class: 'proj-tl-note' },
       el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }),
-      el('span', {}, '여기엔 ', el('b', { text: 'AI와 함께 남긴 작업' }),
-        '이 자동으로 모여요 (AI 밖에서 진행한 모든 작업은 빠질 수 있어요). ',
+      el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트의 터미널 세션에서 AI와 함께 진행한 작업' }),
+        '만 모여요 (세션 밖에서 한 작업은 표시되지 않아요). ',
         el('b', { text: '확실하게 진행이 된 일을 위주로' }),
-        ' 회사 업무 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')),
+        ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')),
     chipsBar, body);
   load();
   return card;

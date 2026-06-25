@@ -9,7 +9,7 @@ import {
   startTimer, stopTimer, addManualTime, deleteTimeEntry,
   createChecklist, renameChecklist, deleteChecklist, addChecklistItem, updateChecklistItem, deleteChecklistItem,
   addTaskLink, removeTaskLink, searchLinkTargets,
-  postComment, toggleCommentReaction,
+  postComment, toggleCommentReaction, getTaskFeed,
 } from "../v6/task-detail-store.js";
 
 function parseId(v: unknown): number {
@@ -279,6 +279,22 @@ const tagDeleteV6: Capability = {
   handler: async (input: any) => ({ deleted: true, ...(await deleteTag(input.id)) }),
 };
 
+// — GET 프로젝트 코멘트 피드(드로어) — getTaskDetail 은 task/subtask 레벨만 처리하므로, 프로젝트(루트) 행의
+//   코멘트는 이 전용 GET 으로 읽는다. activity(project_id=프로젝트, type=comment) + 감사 이벤트(getTaskFeed). —
+const projectCommentsV6: Capability = {
+  name: "project_comments_v6",
+  title: "프로젝트 코멘트(v6)",
+  description: "프로젝트(루트) 행의 코멘트/활동 피드. 댓글(activity type=comment) + 시스템 이벤트. 웹 코멘트 드로어 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/comments"],
+      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: any, user: any, ctx: any) => ({ feed: await getTaskFeed(input.id, actorOf(user, ctx)) }),
+};
+
 export const taskDetailV6Capabilities: Capability[] = [
-  taskDetailV6, tagListV6, taskTagsV6, tagUpdateV6, tagDeleteV6, taskTimeV6, taskChecklistV6, taskLinksV6, linkTargetsV6, taskCommentV6, commentReactionV6,
+  taskDetailV6, tagListV6, taskTagsV6, tagUpdateV6, tagDeleteV6, taskTimeV6, taskChecklistV6, taskLinksV6, linkTargetsV6, taskCommentV6, commentReactionV6, projectCommentsV6,
 ];

@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder, folderVariants } from "./project-fs.js";
-import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6 } from "./v6/project-store.js";
+import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6, recordSessionProject } from "./v6/project-store.js";
 import { listMembers } from "./org/store.js";
 
 const execFileAsync = promisify(execFile);
@@ -186,6 +186,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (input.projectId) {
     await tmux(["set-option", "-t", id, "@box_project", String(input.projectId)]);
     await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
+    // v6 프로젝트 세션이면 세션↔프로젝트를 영속 기록 — 작업 타임라인이 이 세션의 AI 작업을 프로젝트로 귀속(끝난 세션 포함).
+    //  (org 프로젝트는 session_project FK 대상이 아니라 제외.) best-effort: 실패해도 세션 생성은 진행.
+    if (input.projectSrc !== "org") {
+      try { await recordSessionProject(id, input.projectId); } catch { /* 비치명 */ }
+    }
   }
   // 스크롤 줄중복·리사이즈 개선: 휠→tmux copy-mode + window-size largest(작은 피커가 창 못 줄임).
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);

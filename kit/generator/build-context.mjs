@@ -305,6 +305,14 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
     orgLabel,
   );
   copied.push("setup/user-uninstall.mjs");
+  // '내 컴퓨터에서 작업' 부트스트랩(사용자 호출 도구 — 훅 아님). user-install 이 ~/.lively/work.mjs 로 복사한다.
+  copyMjsWithHeader(
+    kitAbs("setup/work.mjs"),
+    join(target, "setup", "work.mjs"),
+    "workflow-std/setup/work.mjs",
+    orgLabel,
+  );
+  copied.push("setup/work.mjs");
 }
 
 // Codex(R2): user-level 전달.

@@ -1,0 +1,187 @@
+#!/usr/bin/env node
+// '내 컴퓨터에서 작업' 첫 부트스트랩 — 담당자 본인 PC 에서 1회 실행. 키트(~/.lively)로 배포된다.
+//  하는 일(설계: local-work-project-repo-design + 대화 확정):
+//   1) 프로젝트 폴더(=공유폴더, flat) 확보: ~/lively/projects/<id>/  (shared/ 중첩 없음)
+//   2) 공유폴더 pull — 게이트웨이 매니페스트(/shared/manifest)와 로컬을 비교해 바뀐/새 파일만 다운로드(단방향, 삭제 안 함)
+//   3) 코드 레포: --repo-path 사용(없거나 비면 --git-url 로 clone 폴백). --worktree 면 프로젝트폴더 아래 worktree, 아니면 add-dir
+//   4) 마커 ~/lively/projects/<id>/.lively/project.json 기록(project_id, last_pull=매니페스트 newest)
+//   5) 그 폴더에서 하네스(claude|codex) 실행
+//  ⚠ 코드(레포/worktree)는 git, 공유폴더만 pull. push 없음(pull-only). 외부 바이너리 의존 없음(node + git 만).
+//  사용: node work.mjs <projectId> [--repo-path <p>] [--worktree] [--branch <b>] [--git-url <u>] [--harness claude|codex] [--no-launch]
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+
+const HOME = os.homedir();
+const die = (m) => { console.error("[work] " + m); process.exit(1); };
+const log = (m) => console.error("[work] " + m);
+
+// ── 인자 파싱 ──
+function parseArgs(argv) {
+  const a = { _: [], worktree: false, launch: true, harness: "claude" };
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--worktree") a.worktree = true;
+    else if (t === "--no-launch") a.launch = false;
+    else if (t === "--repo-path") a.repoPath = argv[++i];
+    else if (t === "--git-url") a.gitUrl = argv[++i];
+    else if (t === "--branch") a.branch = argv[++i];
+    else if (t === "--harness") a.harness = argv[++i];
+    else if (t === "--model") a.model = argv[++i];
+    else if (t === "--auto-approve") a.autoApprove = true;
+    else if (t === "--repos") a.repos = argv[++i];
+    else a._.push(t);
+  }
+  return a;
+}
+const args = parseArgs(process.argv.slice(2));
+const projectId = String(args._[0] || "").trim();
+if (!/^\d+$/.test(projectId)) die("프로젝트 id 가 필요합니다. 사용: node work.mjs <projectId> [--repo-path ..] [--worktree] [--git-url ..]");
+const branch = args.branch || `project/${projectId}`;
+const harness = args.harness === "codex" ? "codex" : "claude";
+
+// ── 게이트웨이 base + 토큰 (session-preload 와 동일 출처) ──
+function readFirst(...candidates) {
+  for (const c of candidates) {
+    if (!c) continue;
+    if (c.env && process.env[c.env]) return process.env[c.env].trim();
+    if (c.file) { try { const v = fs.readFileSync(c.file, "utf8").trim(); if (v) return v; } catch { /* 없음 */ } }
+  }
+  return "";
+}
+let base = readFirst({ env: "LIVELY_GATEWAY_URL" }, { file: path.join(HOME, ".lively", "gateway-url") }) || "http://localhost:8080";
+base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, ""); // 끝의 /mcp·슬래시 제거 → 호스트 루트
+const token = readFirst({ env: "LIVELY_TOKEN" }, { file: path.join(HOME, ".lively", "token") });
+if (!token) die("인증 토큰을 찾을 수 없습니다(~/.lively/token). 먼저 온보딩 설치를 완료하세요.");
+
+async function jfetch(p, opts = {}) {
+  const res = await fetch(base + p, { ...opts, headers: { Authorization: "Bearer " + token, ...(opts.headers || {}) } });
+  if (!res.ok) throw new Error(`GET ${p} → ${res.status}`);
+  return res;
+}
+
+// ── 1) 프로젝트 폴더(=공유폴더, flat) ──
+const projDir = path.join(HOME, "lively", "projects", projectId);
+await fsp.mkdir(projDir, { recursive: true });
+
+// ── 2) 공유폴더 pull (매니페스트 diff → 변경분만 다운로드, 단방향·삭제 없음) ──
+async function pullShared() {
+  let manifest;
+  try { manifest = await (await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`)).json(); }
+  catch (e) { die("공유폴더 매니페스트를 가져오지 못했습니다 — " + e.message + " (프로젝트 멤버인지, 게이트웨이 동작 확인)"); }
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  let pulled = 0;
+  for (const f of files) {
+    const dest = path.join(projDir, f.path);
+    if (path.relative(projDir, dest).startsWith("..")) continue; // 경로 탈출 방어
+    let need = true;
+    try { const st = fs.statSync(dest); if (st.size === f.size && Math.floor(st.mtimeMs) >= f.mtime) need = false; } catch { /* 로컬 없음 → 받기 */ }
+    if (!need) continue;
+    const res = await jfetch(`/api/ui/v6/projects/${projectId}/file?path=${encodeURIComponent(f.path)}`);
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fsp.writeFile(dest, buf);
+    if (f.mtime) { try { const t = new Date(f.mtime); fs.utimesSync(dest, t, t); } catch { /* mtime 보존 실패 무해 */ } }
+    pulled++;
+  }
+  log(`공유폴더 pull: ${pulled}/${files.length} 파일 갱신 → ${projDir}`);
+  return manifest.newest || 0;
+}
+const newest = await pullShared();
+
+// ── 3) 코드 레포: repo-path 사용(없으면 clone 폴백) + worktree | add-dir ──
+function git(args, cwd) {
+  const r = spawnSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
+}
+function isRepo(p) { return !!p && git(["rev-parse", "--git-dir"], p).ok; }
+const expand = (p) => p && p.startsWith("~/") ? path.join(HOME, p.slice(2)) : p;
+
+// repos: --repos base64(JSON [{name?,path?,worktree,branch?,gitUrl?}]) 우선, 없으면 레거시 단일 플래그.
+let repoSpecs = [];
+if (args.repos) {
+  try { repoSpecs = JSON.parse(Buffer.from(args.repos, "base64").toString("utf8")); }
+  catch { die("--repos 파싱 실패(base64 JSON 이어야 함)"); }
+  if (!Array.isArray(repoSpecs)) repoSpecs = [];
+} else if (args.repoPath || args.gitUrl || args.worktree) {
+  repoSpecs = [{ path: args.repoPath, gitUrl: args.gitUrl, worktree: args.worktree, branch: args.branch }];
+}
+const addDirTargets = [];  // worktree 미사용 레포 → add-dir 대상
+const usedRepos = [];      // 마커에 기록
+for (const spec of repoSpecs) {
+  let rpath = expand(spec.path);
+  if (!rpath) rpath = path.join(HOME, "lively", "repos", spec.name || `proj-${projectId}`);
+  if (!isRepo(rpath)) {
+    if (!spec.gitUrl) die(`레포가 '${rpath}' 에 없습니다. 경로를 지정하거나 레포 레지스트리에서 git 주소를 연결하세요.`);
+    log(`레포 clone: ${spec.gitUrl} → ${rpath}`);
+    const c = git(["clone", spec.gitUrl, rpath]);
+    if (!c.ok) die("git clone 실패 — " + c.err);
+  }
+  const br = (spec.branch && String(spec.branch).trim()) || branch;
+  if (spec.worktree) {
+    const wtPath = path.join(projDir, path.basename(rpath));
+    if (!fs.existsSync(wtPath)) {
+      log(`worktree 생성: ${wtPath} (브랜치 ${br})`);
+      // 같은 브랜치가 이미 다른 worktree 에 있으면 -b 가 실패 → 기존 브랜치 attach 폴백.
+      let w = git(["worktree", "add", wtPath, "-b", br], rpath);
+      if (!w.ok) w = git(["worktree", "add", wtPath, br], rpath);
+      if (!w.ok) die("git worktree add 실패 — " + w.err);
+    } else log(`worktree 이미 있음: ${wtPath}`);
+    // worktree 는 projDir 하위 → cwd 기준 자동 접근(add-dir 불필요).
+    usedRepos.push({ name: spec.name || path.basename(rpath), path: rpath, worktree: true, branch: br });
+  } else {
+    addDirTargets.push(rpath);  // 클론에서 in-place → add-dir 로 접근
+    usedRepos.push({ name: spec.name || path.basename(rpath), path: rpath, worktree: false, branch: null });
+  }
+}
+
+// ── 3-b) add-dir 설정파일(host-local, 동기화 제외) — worktree 미사용 시 레포를 자동 접근 대상으로 ──
+async function writeAddDir(targets) {
+  if (!targets.length) return;
+  // Claude Code: .claude/settings.local.json 의 additionalDirectories (프로젝트-로컬, 비동기화)
+  const ccDir = path.join(projDir, ".claude");
+  await fsp.mkdir(ccDir, { recursive: true });
+  const ccFile = path.join(ccDir, "settings.local.json");
+  let cc = {}; try { cc = JSON.parse(fs.readFileSync(ccFile, "utf8")); } catch { /* 신규 */ }
+  const dirs = new Set(Array.isArray(cc.additionalDirectories) ? cc.additionalDirectories : []);
+  targets.forEach((t) => dirs.add(t));
+  cc.additionalDirectories = [...dirs];
+  await fsp.writeFile(ccFile, JSON.stringify(cc, null, 2) + "\n");
+  // Codex: ~/.codex/config.toml 의 [sandbox_workspace_write] writable_roots (이미 있는 경로는 제외)
+  try {
+    const cxFile = path.join(HOME, ".codex", "config.toml");
+    let toml = ""; try { toml = fs.readFileSync(cxFile, "utf8"); } catch { /* 신규 */ }
+    const fresh = targets.filter((t) => !toml.includes(t));
+    if (fresh.length) {
+      await fsp.mkdir(path.dirname(cxFile), { recursive: true });
+      const roots = fresh.map((t) => `"${t}"`).join(", ");
+      const ins = `[sandbox_workspace_write]\n# lively: 프로젝트 ${projectId} 레포\nwritable_roots = [${roots}]`;
+      const block = toml.includes("[sandbox_workspace_write]") ? toml.replace(/\[sandbox_workspace_write\]/, ins) : toml + "\n" + ins + "\n";
+      await fsp.writeFile(cxFile, block);
+    }
+  } catch { /* codex 미설치 등 — 무해 */ }
+  log(`add-dir 설정: ${targets.join(", ")}`);
+}
+await writeAddDir(addDirTargets);
+
+// ── 4) 마커 기록(.lively/project.json) ──
+const dotLively = path.join(projDir, ".lively");
+await fsp.mkdir(dotLively, { recursive: true });
+await fsp.writeFile(path.join(dotLively, "project.json"),
+  JSON.stringify({ project_id: Number(projectId), last_pull: newest, repos: usedRepos }, null, 2) + "\n");
+log(`마커 기록: ${path.join(dotLively, "project.json")}`);
+
+// ── 5) 하네스 실행(프로젝트 폴더에서) ──
+// 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions, codex=--yolo).
+const hargs = [];
+if (args.model) hargs.push("--model", args.model);
+if (args.autoApprove) hargs.push(harness === "codex" ? "--yolo" : "--dangerously-skip-permissions");
+const hcmd = [harness, ...hargs].join(" ");
+if (!args.launch) { log(`준비 완료. 시작: cd "${projDir}" && ${hcmd}`); process.exit(0); }
+log(`${hcmd} 실행 → ${projDir}`);
+// 윈도우는 claude/codex 가 .cmd/.ps1 셰임이라 shell:true 로 실행해야 PATH·확장자 해석이 됨(node spawn 직접실행 불가).
+const child = spawn(harness, hargs, { cwd: projDir, stdio: "inherit", shell: process.platform === "win32" });
+child.on("error", (e) => die(`${harness} 실행 실패(${e.message}). 직접: cd "${projDir}" && ${hcmd}`));
+child.on("exit", (code) => process.exit(code ?? 0));

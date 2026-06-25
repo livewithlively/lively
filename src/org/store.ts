@@ -975,11 +975,13 @@ export async function listProjectActivities(
   let personFilter = "";
   if (authorPerson) { params.push(authorPerson); personFilter = ` AND a.author_person = $${params.length}`; }
   params.push(Math.min(Math.max(Number(limit) || 100, 1), 200));
+  // 이 프로젝트의 '터미널 세션에서 한 AI 작업'만 — activity.session_id 가 session_project(이 프로젝트)에 매핑된 것.
+  //  (예전엔 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음.) 세션 매핑이 없는 작업은 제외.
   const r = await itemsPool.query(
     `SELECT a.id, a.type, a.title, a.summary, a.author_person, a.author_agent,
             a.commit_sha, a.committed_at, a.created_at, a.external_system, a.external_url
        FROM activity a
-       JOIN project_member pm ON pm.member_id = a.author_person AND pm.project_id = $1
+      WHERE a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1)
       ${personFilter}
       ORDER BY COALESCE(a.committed_at, a.created_at) DESC
       LIMIT $${params.length}`,

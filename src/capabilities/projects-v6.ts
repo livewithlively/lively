@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import { listSessions } from "../terminal-sessions.js";
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
-  createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, isProjectMember,
+  createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory,
   linkProjectKnowledge, unlinkProjectKnowledge,
 } from "../v6/project-store.js";
@@ -277,6 +277,29 @@ const projectSetMembersV6: Capability = {
   },
 };
 
+// 내 상태 메시지(이 프로젝트 한정) — (프로젝트,사람) 단위. 다른 프로젝트엔 안 보임.
+const projectMyStatusV6: Capability = {
+  name: "project_my_status_v6",
+  title: "내 상태 메시지(프로젝트별, v6)",
+  description: "이 프로젝트에서의 내 상태 메시지를 저장(project_member.status_message). (프로젝트,사람) 단위 — 다른 프로젝트엔 영향 없음. 웹 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive(), message: z.string().max(200).optional() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/my-status"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), message: b.message != null ? String(b.message) : "" };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const me = ctx?.actor ?? user?.userId ?? null;
+    if (!me) throw new HttpError(401, "로그인이 필요합니다");
+    if (!(await isProjectMember(input.id, me))) throw new HttpError(403, "이 프로젝트의 팀원만 상태를 남길 수 있습니다");
+    return { status_message: await setProjectMemberStatus(input.id, me, input.message) };
+  },
+};
+
 const projectLinkCategoryV6: Capability = {
   name: "project_link_category_v6",
   title: "프로젝트↔카테고리(v6)",
@@ -470,5 +493,6 @@ const boardFieldsV6: Capability = {
 
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];

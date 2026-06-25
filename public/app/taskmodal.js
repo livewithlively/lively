@@ -533,7 +533,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
         const selIds = () => new Set((d.tags || []).map((x) => x.id));
         await loadAll();
         function showList(query) {
-            const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '검색 또는 새 태그 이름…', maxlength: '40', value: query || '' });
+            const input = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '태그 검색…', maxlength: '40', value: query || '' });
             const chips = el('div', { class: 'pjv-tm-tagpop-chips' });
             const list = el('div', { class: 'pjv-tm-tagresults' });
             const manageBtn = el('button', { class: 'pjv-tm-tagmanage-btn', type: 'button' }, pjvtmGearIcon(), el('span', { text: '모든 태그 관리' }));
@@ -567,18 +567,6 @@ function pjvOpenTaskModal(taskId, pageReload) {
                     toast('실패 — ' + e.message, true);
                 }
             };
-            const createAndAdd = async (name, color) => {
-                try {
-                    const tags = await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ name, color }) }).then((r) => (r && r.tags) || []);
-                    d.tags = tags;
-                    await loadAll();
-                    renderField();
-                    showList('');
-                }
-                catch (e) {
-                    toast('실패 — ' + e.message, true);
-                }
-            };
             const renderList = () => {
                 const qq = input.value.trim();
                 const have = selIds();
@@ -593,14 +581,9 @@ function pjvOpenTaskModal(taskId, pageReload) {
                     row.append(gear);
                     list.append(row);
                 }
-                if (qq && !all.some((x) => x.name.toLowerCase() === qq.toLowerCase())) {
-                    const previewColor = PJV_TAG_COLORS[all.length % PJV_TAG_COLORS.length];
-                    const cr = el('button', { class: 'pjv-tm-tagrow pjv-tm-tagcreate', type: 'button' }, el('span', { class: 'pjv-tm-tagcreate-label', text: 'Create' }), el('span', { class: 'pjv-tm-tag', style: '--tag:' + previewColor }, el('span', { class: 'pjv-tm-tag-name', text: qq })), el('span', { class: 'pjv-tm-tagcreate-enter', text: '↵' }));
-                    cr.onclick = () => createAndAdd(qq, previewColor);
-                    list.append(cr);
-                }
+                // 새 태그 생성은 '모든 태그 관리' 안에서만 — 검색창에선 만들지 않는다(검색·토글 전용).
                 if (!list.children.length)
-                    list.append(el('div', { class: 'pjv-menu-empty', text: '이름을 입력해 새 태그를 만들어보세요.' }));
+                    list.append(el('div', { class: 'pjv-menu-empty', text: qq ? '검색 결과가 없습니다 — 새 태그는 아래 ‘모든 태그 관리’에서 만드세요.' : '태그가 없습니다 — ‘모든 태그 관리’에서 만드세요.' }));
             };
             input.addEventListener('input', renderList);
             input.addEventListener('keydown', (e) => {
@@ -610,14 +593,12 @@ function pjvOpenTaskModal(taskId, pageReload) {
                 if (!v)
                     return;
                 const exact = all.find((x) => x.name.toLowerCase() === v.toLowerCase());
-                if (exact) {
-                    if (!selIds().has(exact.id))
-                        persistAdd(exact);
+                if (exact && !selIds().has(exact.id)) {
+                    persistAdd(exact);
                     input.value = '';
                     renderList();
                 }
-                else
-                    createAndAdd(v, PJV_TAG_COLORS[all.length % PJV_TAG_COLORS.length]);
+                // 일치하는 기존 태그가 없으면 아무 것도 하지 않음 — 새 태그 생성은 '모든 태그 관리'에서만.
             });
             renderChips();
             renderList();
@@ -699,9 +680,40 @@ function pjvOpenTaskModal(taskId, pageReload) {
             const back = el('button', { class: 'pjv-tm-tagcolor-back', type: 'button', title: '뒤로' }, pjvtmBackIcon());
             back.onclick = () => showList('');
             const list = el('div', { class: 'pjv-tm-tagresults' });
-            pop.replaceChildren(el('div', { class: 'pjv-tm-tagcolor-top' }, back, el('div', { class: 'pjv-tm-tagmanage-title', text: '모든 태그 관리' })), el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: all.length + '개 · 클릭해 이름·색상·삭제 (모든 태스크 반영)' })), list);
+            // 새 태그 생성은 '모든 태그 관리' 안에서만. 정의만 만들고 현재 항목엔 적용하지 않는다(생성 직후 링크 해제).
+            const createIn = el('input', { type: 'text', class: 'pjv-tm-taginput', placeholder: '＋ 새 태그 이름 입력 후 Enter', maxlength: '40' });
+            const doCreate = async () => {
+                const v = createIn.value.trim();
+                if (!v)
+                    return;
+                if (all.some((x) => x.name.toLowerCase() === v.toLowerCase())) {
+                    toast('이미 있는 태그입니다', true);
+                    return;
+                }
+                const color = PJV_TAG_COLORS[all.length % PJV_TAG_COLORS.length];
+                createIn.disabled = true;
+                try {
+                    const tags = await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ name: v, color }) }).then((r) => (r && r.tags) || []);
+                    const created = (tags || []).find((x) => x.name.toLowerCase() === v.toLowerCase());
+                    if (created)
+                        await api('/api/ui/v6/tasks/' + t.id + '/tags', { method: 'POST', body: JSON.stringify({ tag_id: created.id, remove: true }) }).catch(() => { });
+                    await loadAll();
+                    renderField();
+                    showManageAll();
+                }
+                catch (e) {
+                    toast('태그 생성 실패 — ' + e.message, true);
+                    createIn.disabled = false;
+                }
+            };
+            createIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+                e.preventDefault();
+                doCreate();
+            } });
+            pop.replaceChildren(el('div', { class: 'pjv-tm-tagcolor-top' }, back, el('div', { class: 'pjv-tm-tagmanage-title', text: '모든 태그 관리' })), el('div', { class: 'pjv-tm-tagpop-top' }, createIn), el('div', { class: 'pjv-tm-tagpop-head' }, el('span', { text: all.length + '개 · 클릭해 이름·색상·삭제 (모든 태스크 반영)' })), list);
+            setTimeout(() => createIn.focus(), 0);
             if (!all.length) {
-                list.append(el('div', { class: 'pjv-menu-empty', text: '아직 태그가 없습니다.' }));
+                list.append(el('div', { class: 'pjv-menu-empty', text: '아직 태그가 없습니다 — 위 칸에서 만들어보세요.' }));
                 return;
             }
             for (const x of all) {
@@ -1291,4 +1303,4 @@ function pjvOpenTaskModal(taskId, pageReload) {
 PJV_TM_ICONS.search = { p: [['circle', { cx: 11, cy: 11, r: 7 }], ['line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }]] };
 PJV_TM_ICONS.bell = { p: [['path', { d: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9' }], ['path', { d: 'M13.73 21a2 2 0 0 1-3.46 0' }]] };
 PJV_TM_ICONS.filter = { p: [['line', { x1: 4, y1: 7, x2: 20, y2: 7 }], ['line', { x1: 7, y1: 12, x2: 17, y2: 12 }], ['line', { x1: 10, y1: 17, x2: 14, y2: 17 }]] };
-export { PJV_TAG_NONE, pjvOpenTaskModal, };
+export { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar, };

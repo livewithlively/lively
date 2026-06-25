@@ -206,6 +206,18 @@ export async function initV6Schema(): Promise<string> {
       added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (project_id, member_id));
     CREATE INDEX IF NOT EXISTS project_member_member_idx ON project_member(member_id);
+    -- 상태 메시지를 (프로젝트, 사람) 단위로 — 프로필 전역(org_member.status_message)이 아니라 프로젝트마다 따로.
+    ALTER TABLE project_member ADD COLUMN IF NOT EXISTS status_message TEXT;
+  `);
+
+  // ── 세션↔프로젝트 매핑 — 프로젝트 터미널 세션에서 한 AI 작업(activity.session_id)만 타임라인에 모으기 위한 영속 링크.
+  //   tmux @box_project 는 휘발성(끝난 세션 사라짐)이라, 세션 생성 시 여기 기록해 끝난 세션 작업도 귀속한다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS session_project(
+      session_id TEXT PRIMARY KEY,
+      project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS session_project_project_idx ON session_project(project_id);
   `);
 
   // ── 6b) project_member FK 교정 — 구 org/schema.ts(:304)가 project_member 를 org_project 참조로 **먼저**
