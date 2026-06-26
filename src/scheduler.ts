@@ -23,7 +23,8 @@ export interface CronActionDef { key: string; label: string; params: CronActionP
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [] },
   { key: "refresh_repo", label: "한 repo is 신선화", params: [{ name: "repo", label: "repo", kind: "repo", hint: "context-ontology" }] },
-  { key: "connector_sync", label: "커넥터 sync", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
+  { key: "connector_sync", label: "커넥터 sync (외부→우리)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
+  { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
   { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }] },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
