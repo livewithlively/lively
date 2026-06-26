@@ -513,7 +513,7 @@ export async function findRecommendedKnowledge(
       SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
              ${simExpr}::float8 AS similarity,
              ${sharesExpr} AS shares_category,
-             (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP} ELSE 0 END)::float8 AS score
+             (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP}::float8 ELSE 0 END)::float8 AS score
       FROM knowledge k
       WHERE k.lifecycle='active' AND NOT (k.name = ANY(${exclP}))
         AND ( ${simExpr} >= ${minP} OR ${sharesExpr} )
