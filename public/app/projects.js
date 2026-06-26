@@ -2905,8 +2905,8 @@ function projectKnowledgeBlock(id, knowledge) {
         paintList(prodBox, cur.produced, '이 프로젝트가 만들어 낸 지식이 아직 없습니다.', false);
     }
     const reqHead = el('div', { class: 'ps-kn-head' }, el('div', { class: 'sec-label', text: '필요 지식' }), el('div', { class: 'ps-kn-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 필요 지식 고르기',
-        onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동으로 고르기', title: '곧 제공됩니다',
-        onclick: () => toast('자동 고르기는 곧 제공됩니다', false) })));
+        onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동으로 고르기', title: '프로젝트 이름·설명으로 관련 지식 추천(의미검색)',
+        onclick: () => openKnowledgeRecommendPicker(id, 'required', cur.required.map(knName), refresh) })));
     paintList(reqBox, cur.required, '이 프로젝트가 참고할 지식을 골라 연결하세요.', true);
     paintList(prodBox, cur.produced, '이 프로젝트가 만들어 낸 지식이 아직 없습니다.', false);
     return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '연결된 지식' }), el('div', { class: 'ps-kn-group' }, reqHead, reqBox), el('div', { class: 'ps-kn-group' }, el('div', { class: 'sec-label', text: '산출 지식' }), prodBox));
@@ -2959,6 +2959,50 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
         }));
     }, 300);
     searchIn.addEventListener('input', run);
+}
+// ✨ 자동으로 고르기 — 프로젝트 이름·설명과 의미적으로 가까운 지식을 추천(벡터 #172, project_recommend_knowledge_v6).
+//  검색 입력 없이 즉시 추천(관련도순). 이미 연결된 건 서버가 제외. 임베딩 off/유사 없음이면 안내 + 직접 검색 유도.
+function openKnowledgeRecommendPicker(id, relation, linkedNames, onLinked) {
+    const linked = new Set(linkedNames || []);
+    const results = el('div', { class: 'ps-kn-pick-results' }, el('span', { class: 'admin-hint', text: '추천을 불러오는 중…' }));
+    overlayBox('✨ 자동 추천 · 관련 지식', el('div', { class: 'ps-kn-pick' }, el('div', { class: 'admin-hint', style: 'margin-bottom:8px', text: '의미가 비슷하거나(%), 같은 분류(📁)에 속한 지식입니다(관련도순). 필요한 것을 연결하세요.' }), results));
+    (async () => {
+        let recs;
+        try {
+            recs = await api('/api/ui/v6/projects/' + id + '/recommend-knowledge?limit=10').then((d) => (d && d.entries) || []);
+        }
+        catch (e) {
+            results.replaceChildren(errorNote(e, '추천을 불러오지 못했습니다'));
+            return;
+        }
+        const cand = recs.filter((m) => !linked.has(m.name));
+        if (!cand.length) {
+            results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '추천할 지식이 없습니다(임베딩이 꺼져 있거나 관련 지식이 없음). 직접 검색으로 골라 보세요.' }));
+            return;
+        }
+        results.replaceChildren(...cand.map((m) => {
+            const pct = Math.round((Number(m.similarity) || 0) * 100);
+            const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 연결' });
+            addBtn.onclick = async () => {
+                addBtn.disabled = true;
+                try {
+                    await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: m.name, relation }) });
+                    linked.add(m.name);
+                    addBtn.textContent = '연결됨';
+                    toast('연결했습니다');
+                    if (onLinked)
+                        onLinked();
+                }
+                catch (e) {
+                    addBtn.disabled = false;
+                    toast('연결 실패 — ' + e.message, true);
+                }
+            };
+            // 추천 이유 뱃지 — 의미 유사도(% , 점수 있을 때만) + 같은 분류(📁). 임베딩 off 면 분류만 뜬다.
+            const tags = el('span', { style: 'flex:none; display:inline-flex; gap:6px; align-items:baseline;' }, m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁 같은 분류' }) : null, pct > 0 ? el('span', { class: 'admin-hint', title: '의미 유사도(코사인)', text: pct + '%' }) : null);
+            return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' }, el('span', { text: m.title || m.name }), tags), el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
+        }));
+    })();
 }
 // ════════════════════════════════════════════
 // 태스크(클릭업형 리스트뷰) — 상태 그룹(할 일/진행 중/완료) + 컬럼(담당자·마감일·우선순위) + 인라인 편집.

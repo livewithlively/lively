@@ -467,6 +467,72 @@ export async function findSimilarKnowledge(
   }
 }
 
+// ── 추천(카테고리 인지, 벡터검색 #172) — 의미 유사도 + 카테고리 공유 가산점·구제. 프로젝트 필요지식 추천의 코어. ──
+//  순수 벡터보다 나은 점: 사람이 큐레이션한 카테고리는 강한 관련 신호 → ① 같은 카테고리면 가산점(boost)으로 상위로,
+//  ② 임계(minScore) 미달이어도 같은 카테고리면 구제(rescue)해 포함, ③ 임베딩 off 여도 카테고리만으로 추천 가능(graceful).
+//  score = 코사인유사도 + (카테고리 공유 ? boost : 0). 단일 랭킹 리스트 + shares_category 태그(왜 추천인지).
+export interface KnowledgeRecommendRow extends KnowledgeSimilarRow {
+  shares_category: boolean;  // 주어진 카테고리와 공유(가산점·구제 대상)
+  score: number;             // 정렬 기준 = similarity + 카테고리 가산점
+}
+const CATEGORY_BOOST = 0.15; // 같은 카테고리 공유 시 코사인유사도에 더하는 가산점(bge-m3 스케일 기준 보수적)
+export async function findRecommendedKnowledge(
+  opts: { text?: string; categoryIds?: number[]; exclude?: string[]; limit?: number; minScore?: number; categoryBoost?: number } = {},
+): Promise<KnowledgeRecommendRow[]> {
+  const cats = (opts.categoryIds ?? []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+  // 쿼리 임베딩(텍스트 있고 provider on 일 때만). 실패/off → null → 카테고리만으로 추천(graceful).
+  let qvec: number[] | null = null;
+  if (opts.text && opts.text.trim()) {
+    const provider = await activeEmbeddingProvider();
+    if (provider) {
+      try { const [v] = await provider.embed([opts.text.slice(0, 8000)]); qvec = v && v.length ? v : null; } catch { qvec = null; }
+    }
+  }
+  if (!qvec && !cats.length) return [];   // 의미·카테고리 둘 다 신호 없음 → 추천 불가
+  const exclude = opts.exclude ?? [];
+  const minScore = typeof opts.minScore === "number" ? opts.minScore : 0.4;
+  const boost = typeof opts.categoryBoost === "number" ? opts.categoryBoost : CATEGORY_BOOST;
+  const limit = Math.min(Math.max(opts.limit ?? 8, 1), 50);
+  try {
+    const params: unknown[] = [];
+    // similarity 식 — qvec 있을 때만 벡터 참조(off 면 NULL → 카테고리 경로만).
+    let simExpr = "NULL";
+    if (qvec) { params.push(toVectorLiteral(qvec)); simExpr = `(1 - (k.embedding_vector <=> $${params.length}::vector))`; }
+    // 카테고리 공유 식 — cats 있을 때만(rejected 매핑 제외). 없으면 false → 순수 벡터(가산점·구제 없음).
+    let sharesExpr = "false";
+    if (cats.length) {
+      params.push(cats);
+      sharesExpr = `EXISTS(SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name AND kc.state<>'rejected' AND kc.category_id = ANY($${params.length}::int[]))`;
+    }
+    params.push(exclude); const exclP = `$${params.length}::text[]`;
+    params.push(minScore); const minP = `$${params.length}`;
+    params.push(boost); const boostP = `$${params.length}`;
+    params.push(limit); const limP = `$${params.length}`;
+    // 포함 조건 = (벡터 임계 통과) OR (같은 카테고리) — 카테고리는 임계 미달도 구제. score 로 정렬(가산점 반영), 동점은 최신순.
+    const sql = `
+      SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
+             ${simExpr}::float8 AS similarity,
+             ${sharesExpr} AS shares_category,
+             (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP} ELSE 0 END)::float8 AS score
+      FROM knowledge k
+      WHERE k.lifecycle='active' AND NOT (k.name = ANY(${exclP}))
+        AND ( ${simExpr} >= ${minP} OR ${sharesExpr} )
+      ORDER BY score DESC, k.updated_at DESC
+      LIMIT ${limP}`;
+    const rows = await q(itemsPool, sql, params);
+    return rows.map((r) => ({
+      name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
+      is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,
+      similarity: r.similarity == null ? 0 : Number(r.similarity),
+      shares_category: !!r.shares_category, score: Number(r.score),
+      snippet: previewBody(r.body_md ?? ""),
+    }));
+  } catch (e) {
+    console.warn(`[embeddings] 추천 지식 조회 실패: ${(e as Error)?.message}`);
+    return [];
+  }
+}
+
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, state, created_at)

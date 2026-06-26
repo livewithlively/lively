@@ -6,6 +6,8 @@ import { q, one } from "../domainmap/db.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
 import { getTaskTags, getTaskTime } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry 테이블 사용
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
+// 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
+import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
@@ -537,4 +539,23 @@ export async function unlinkProjectKnowledge(projectId: number, name: string, re
   await itemsPool.query(
     `DELETE FROM project_knowledge WHERE project_id=$1 AND name=$2 AND relation=$3`, [projectId, name, relation]);
   await auditProject(String(projectId), "unlink_knowledge", { name, relation }, null, ctx);
+}
+
+// 필요지식 추천(벡터검색 #172) — 프로젝트 이름+설명(의미) + **프로젝트 카테고리 공유(가산점·구제)** 로 지식 추천.
+//  이미 연결된(required/produced) 지식은 제외. 임베딩 off 여도 카테고리만으로 추천 가능(graceful). 설명·카테고리 둘 다 없으면 빈 배열.
+//  '✨ 자동으로 고르기'(웹) + project_recommend_knowledge_v6(MCP)의 데이터. 카테고리 인지 랭킹은 findRecommendedKnowledge.
+export async function recommendKnowledgeForProject(
+  projectId: number, opts: { limit?: number; minScore?: number } = {},
+): Promise<KnowledgeRecommendRow[]> {
+  const project = await getProjectRow(projectId);
+  if (!project) throw new Error(`프로젝트 #${projectId} 없음`);
+  const text = [project.name, project.description].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
+  const catRows = await q(itemsPool, `SELECT category_id FROM project_category WHERE project_id=$1`, [projectId]);
+  const categoryIds = catRows.map((r) => Number(r.category_id)).filter((n) => Number.isInteger(n) && n > 0);
+  const linkedRows = await q(itemsPool, `SELECT name FROM project_knowledge WHERE project_id=$1`, [projectId]);
+  const exclude = linkedRows.map((r) => r.name);
+  if (!text && !categoryIds.length) return [];   // 의미·카테고리 신호 둘 다 없음 → 추천 불가
+  return findRecommendedKnowledge({
+    text, categoryIds, exclude, limit: opts.limit ?? 10, minScore: opts.minScore,
+  });
 }

@@ -248,6 +248,7 @@ export async function initOrgSchema(): Promise<void> {
       ('project_get_v6','builtin',true,true),
       ('project_link_category_v6','builtin',true,true),
       ('project_link_knowledge_v6','builtin',true,true),
+      ('project_recommend_knowledge_v6','builtin',true,true),
       ('project_list_v6','builtin',true,true),
       ('project_set_members_v6','builtin',true,true),
       ('project_set_status_v6','builtin',true,true),

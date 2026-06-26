@@ -15,6 +15,7 @@ import {
   createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
+  recommendKnowledgeForProject,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -420,6 +421,42 @@ const projectLinkKnowledgeV6: Capability = {
   },
 };
 
+// 필요지식 추천(벡터검색 #172) — 프로젝트 이름·설명과 의미적으로 가까운 지식을 코사인 유사도로 추천. 이미 연결된 건 제외.
+//  웹 '✨ 자동으로 고르기' + 에이전트(프로젝트 셋업 시 필요지식 후보). 추천을 project_link_knowledge_v6(required)로 연결.
+const projectRecommendKnowledgeV6: Capability = {
+  name: "project_recommend_knowledge_v6",
+  title: "프로젝트 필요지식 추천(v6)",
+  description:
+    "프로젝트 이름·설명과 **의미적으로 가까운 지식** + **프로젝트와 같은 카테고리 지식(가산점·구제)** 을 함께 추천한다(벡터검색 #172). 이미 연결된 지식은 제외. " +
+    "각 항목은 similarity(코사인 0~1)·shares_category(같은 분류 여부)·score(정렬값)를 갖는다. 추천을 project_link_knowledge_v6(relation=required)로 연결하면 된다. " +
+    "**임베딩이 꺼져 있어도 카테고리만으로 추천**(graceful); 설명·카테고리 둘 다 없으면 빈 결과. min_score(기본 0.4)는 벡터 임계(같은 카테고리는 미달도 포함), 관련도 내림차순.",
+  scope: "memory",
+  input: {
+    id: z.number().int().positive(),
+    limit: z.number().int().min(1).max(50).optional(),
+    min_score: z.number().min(0).max(1).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/recommend-knowledge"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return {
+          id: parseId(req.params?.id),
+          limit: query.limit ? Number(query.limit) : undefined,
+          min_score: query.min_score != null && query.min_score !== "" ? Number(query.min_score) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    // 웹은 상세와 동형 게이트(팀원만), MCP(에이전트 조직 조회)는 무게이트.
+    if (ctx?.source === "web" && !(await isProjectMember(input.id, ctx?.actor ?? user?.userId ?? null))) {
+      throw new HttpError(403, "초대받은 팀원만 볼 수 있습니다");
+    }
+    return { entries: await recommendKnowledgeForProject(input.id, { limit: input.limit, minScore: input.min_score }) };
+  },
+};
+
 // ── 작업(task/subtask) — :id 는 프로젝트. parent_task_id 주면 하위작업(subtask). ──
 const taskCreateV6: Capability = {
   name: "task_create_v6",
@@ -556,5 +593,5 @@ const boardFieldsV6: Capability = {
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, projectRecommendKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];
