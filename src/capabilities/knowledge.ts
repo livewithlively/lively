@@ -46,6 +46,7 @@ const knowledgeList: Capability = {
 const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
+  meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(grep→get 루프 왕복 0)
   description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악.",
   scope: "memory",
   input: {
@@ -232,6 +233,7 @@ const knowledgeLinkCategory: Capability = {
 const knowledgeGrep: Capability = {
   name: "knowledge_grep",
   title: "지식 grep",
+  meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(세션 첫 동작)
   description:
     "지식 제목/본문을 **grep**(텍스트 패턴 매칭)한다 — 의미검색 아님. 단어가 본문에 그대로 등장해야 잡힌다(대소문자 무시). " +
     "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +

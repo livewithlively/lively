@@ -38,6 +38,9 @@ export interface Capability {
     mcp: boolean;
     rest: RestMount[] | false;
   };
+  // MCP tool 의 _meta — tools/list 에 그대로 실린다(SDK registerTool config._meta → ListTools).
+  //  예: { "anthropic/alwaysLoad": true } = 하네스(Claude Code)가 이 툴을 deferred 시키지 않고 상시 로드.
+  meta?: Record<string, unknown>;
   // canonical JSON 반환. 도메인 에러는 plain Error throw —
   // REST 는 wrap() 의 한국어 부분문자열 매핑('없음'→404 등), MCP 는 SDK isError 로 변환된다.
   // 입력은 어댑터 경계에서 검증되므로 레지스트리 차원에선 넓게 받는다(각 op 파일에서 좁혀 캐스팅).

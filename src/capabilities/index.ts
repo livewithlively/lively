@@ -91,7 +91,7 @@ export function registerMcpCapabilities(server: McpServer, overrides?: ReadonlyM
     if (!isToolExposed(cap, overrides)) continue;
     server.registerTool(
       cap.name,
-      { title: cap.title, description: cap.description, inputSchema: cap.input },
+      { title: cap.title, description: cap.description, inputSchema: cap.input, ...(cap.meta ? { _meta: cap.meta } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
