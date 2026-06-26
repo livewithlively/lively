@@ -123,19 +123,22 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   return true;
 }
 
-// clickup task → project(level='task'|'subtask') 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
-//  level: parent_external_id(부모 태스크)가 surfaced 되면 'subtask', 아니면 'task'.
+// clickup task → project(level='project'|'task'|'subtask') 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
+//  level: 커넥터가 it.level 로 위계 전달(ClickUp Task 깊이→우리 level: top-level Task=project, Subtask=task, 중첩 Subtask=subtask).
+//   매핑 근거: 우리 project=추적항목(status/멤버 보유)이라 ClickUp Task 와 동형(List 아님). 단일 컨테이너 List 가 project-Task 들을 담는다.
+//   it.level 부재(타 커넥터)면 parent 유무로 폴백(no-parent=project, 있으면 task).
 //   ⚠ project.parent_id(내부 self-FK)는 v6 위계의 진실이나, 커넥터는 부모를 external_id 로만 안다.
 //   배치 적재 순서가 부모 우선을 보장하지 않으므로(부모 task 행이 아직 없을 수 있음) 여기서 parent_id 를
 //   결정적으로 채우지 않는다 → 같은 (external_system, external_instance, parent external_id)로 부모 project 가
 //   이미 있으면 그 내부 id 로 parent_id 를 링크하고, 없으면 NULL 로 둔다(다음 싱크가 멱등 재방문 시 수렴 가능).
-//   level 자체는 parent_external_id 유무로 결정(부모 미적재여도 subtask 로 표기 — 위계 평탄화 회피).
+//   level 은 it.level(커넥터 깊이판정)로 결정 — parent_id 미해소여도 level 은 정확(위계 평탄화 회피).
 async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   // 🔴H1 redact — name(title)/description(body)/external_url 평문 시크릿 마스킹.
   const name = it.title == null ? "" : redactString(String(it.title));
   const description = it.body == null ? null : redactString(String(it.body));
-  const level = it.parent_external_id ? "subtask" : "task";
+  // 깊이 기반 level: 커넥터가 it.level 로 전달(ClickUp top_level_parent 로 판정). 폴백은 no-parent=project, 있으면 task.
+  const level = it.level ?? (it.parent_external_id ? "task" : "project");
 
   // 부모 task 행(같은 외부 좌표계의 parent external_id) 내부 id 조회 — 있으면 parent_id 링크, 없으면 NULL.
   let parentId: number | null = null;

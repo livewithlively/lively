@@ -38,6 +38,7 @@ export interface ClickUpTask {
   date_updated?: string | null; // ms epoch 문자열
   archived?: boolean;
   parent?: string | null; // 부모 태스크 id (서브태스크)
+  top_level_parent?: string | null; // 최상위 부모 태스크 id (깊이 판정 — parent 와 같으면 부모가 top-level Task)
   list?: { id: string; name?: string } | null;
   team_id?: string;
   url?: string;
@@ -101,6 +102,17 @@ export function clickUpStatusCategory(type?: string | null): string {
   }
 }
 
+// ClickUp Task 깊이 → 우리 위계 level. 단일 컨테이너 List 안에서:
+//  top-level Task(parent 없음)=우리 project(추적항목, status/멤버 보유 → List 아닌 Task 와 동형),
+//  Subtask(parent=project-Task)=우리 task, 중첩 Subtask(parent=task-Subtask)=우리 subtask.
+//  깊이는 top_level_parent 로 단판정(부모가 top-level=task, 부모 자체가 서브태스크=subtask) — DB 적재순서 무관 결정적.
+//  per-connector 매핑의 ClickUp 구현(툴 #2 Jira/Linear 는 각자 엔티티타입→같은 level 로 매핑).
+export function clickUpLevel(task: ClickUpTask): "project" | "task" | "subtask" {
+  if (!task.parent) return "project";
+  const top = task.top_level_parent ?? null;
+  return !top || top === task.parent ? "task" : "subtask";
+}
+
 export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
   const { teamId } = ctx;
   const creator = task.creator ?? undefined;
@@ -128,6 +140,7 @@ export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
       : undefined,
     container_ref: task.list?.id,
     parent_external_id: task.parent ?? undefined,
+    level: clickUpLevel(task), // Task 깊이→우리 level(connector-mirror 가 project/task/subtask 적재 시 사용)
     title: task.name,
     body: task.description || task.text_content || "",
     occurred_at: msToIso(task.date_created),
@@ -274,6 +287,16 @@ export function getExcludedListIds(): Set<string> {
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
+// 허용(allow) 리스트(env CLICKUP_INCLUDE_LIST_IDS=쉼표구분). 설정 시 **이 리스트만** 싱크(나머지 전부 무시).
+//  우리 모델에선 컨테이너 List 의 top-level Task = project 라, 무관한 리스트의 태스크가 project 로 유입되는 걸 막는다.
+//  미설정이면 null(=종전 동작: 전체 - 제외목록). 툴 #2 의 per-connector 리스트 스코핑 config 의 ClickUp 구현.
+export function getIncludedListIds(): Set<string> | null {
+  const raw = process.env.CLICKUP_INCLUDE_LIST_IDS?.trim();
+  if (!raw) return null;
+  const s = new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
+  return s.size ? s : null;
+}
+
 // ── 태스크 조회 ──
 
 interface TaskPage { tasks?: ClickUpTask[]; last_page?: boolean }
@@ -352,6 +375,7 @@ export async function linkTasks(taskId: string, linksTo: string): Promise<unknow
 // → 제외 denylist 적용. archived 패스가 있어 툴에서 보관한 리스트도 state='archived' 로 수렴한다.
 export async function enumerateLists(teamId: string): Promise<ClickUpList[]> {
   const excluded = getExcludedListIds();
+  const included = getIncludedListIds(); // 설정 시 이 리스트만(컨테이너 스코핑)
   const byId = new Map<string, ClickUpList>();
   for (const space of await listSpaces(teamId)) {
     try {
@@ -365,7 +389,7 @@ export async function enumerateLists(teamId: string): Promise<ClickUpList[]> {
     for (const l of await listSpaceLists(space.id, { archived: false })) byId.set(l.id, l);
     for (const l of await listSpaceLists(space.id, { archived: true })) byId.set(l.id, { ...l, archived: true });
   }
-  return [...byId.values()].filter((l) => !excluded.has(l.id));
+  return [...byId.values()].filter((l) => !excluded.has(l.id) && (!included || included.has(l.id)));
 }
 
 // ── Connector SPI 구현 — 태스크 RawItem 스트림(run-backfill.js clickup 호환).

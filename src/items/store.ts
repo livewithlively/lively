@@ -26,6 +26,7 @@ export interface RawItem {
   actor?: { external_id?: string; display_name?: string; email?: string; is_bot?: boolean };
   container_ref?: string; // 채널/DB/페이지 id
   parent_external_id?: string; // 스레드/서브태스크 부모의 external_id (같은 system+instance)
+  level?: "project" | "task" | "subtask"; // 위계 레벨 — 커넥터가 소스 위계(예: ClickUp Task 깊이)를 우리 level 로 매핑. 부재 시 connector-mirror 가 parent 유무로 폴백(no-parent=project).
   title?: string;
   body?: string;
   occurred_at?: string; // ISO8601
