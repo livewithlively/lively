@@ -9,7 +9,7 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js"
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
-  `id, level, parent_id, name, description, status, folder, created_by,
+  `id, level, parent_id, name, description, status, status_raw, status_category, folder, created_by,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
    sort, created_at, updated_at, completed_at`;
@@ -17,6 +17,8 @@ const PROJECT_COLS =
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
   name: string; description: string | null; status: string;
+  // status_raw = 소스 원문 상태명(개방 어휘, 네이티브는 NULL). status_category = 정규 카테고리(backlog|unstarted|started|done|canceled).
+  status_raw: string | null; status_category: string | null;
   folder: string | null; created_by: string | null;
   // 태스크 필드(task/subtask 행만 채워짐; project 행은 NULL). 기간은 'YYYY-MM-DD' 문자열(schema.ts 참조).
   priority: string | null; assignee: string | null;
@@ -30,6 +32,19 @@ export interface ProjectRow {
 // append-only 감사(org_content_audit, entity='project') — 공유 헬퍼 위임.
 const auditProject = (entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("project", entityKey, op, before, after, ctx);
+
+// 네이티브 status → 정규 카테고리(크로스툴: backlog|unstarted|started|done|canceled).
+//  외부 미러 행의 카테고리는 커넥터가 소스 상태에서 직접 정한다(여기는 네이티브 active/done/todo/in_progress 만).
+export function categoryOf(status: string): string {
+  switch (status) {
+    case "done": return "done";
+    case "in_progress": return "started";
+    case "active": return "started";
+    case "todo": return "unstarted";
+    case "backlog": return "backlog";
+    default: return "unstarted";
+  }
+}
 
 // ── 조회 ──────────────────────────────────────────────────────────────────
 export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string }
@@ -162,8 +177,8 @@ export async function createProject(
 ): Promise<ProjectRow> {
   // folder = 평범한 선택 컬럼값(물리 폴더 생성 없음). TODO: 필요 시 capability 계층에서 createProjectFolder 선행.
   const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, name, description, folder, created_by, status, created_at, updated_at)
-     VALUES('project',$1,$2,$3,$4,'active',now(),now())
+    `INSERT INTO project(level, name, description, folder, created_by, status, status_category, created_at, updated_at)
+     VALUES('project',$1,$2,$3,$4,'active','started',now(),now())
      RETURNING ${PROJECT_COLS}`,
     [input.name, input.description ?? null, input.folder ?? null, ctx?.actor ?? null]);
   // 팀원 초기 등록(project_member).
@@ -278,8 +293,8 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   // done → 완료시각 기록, active 복귀 → 완료시각 해제.
   const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET status=$2, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status]);
+    `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
   return after;
 }
@@ -390,8 +405,8 @@ export async function createTask(
   // 네이티브 태스크 기본 상태 = 'todo'(다단계 상태 모델). project 의 active|done 와 구분 — 리스트뷰가 상태로 그룹.
   //  (클릭업 미러 태스크는 connector-mirror 가 'active' 로 적재 — 합집합 CHECK 가 둘 다 허용, schema.ts:5b 참조.)
   const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, parent_id, name, description, created_by, status, created_at, updated_at)
-     VALUES($1,$2,$3,$4,$5,'todo',now(),now())
+    `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, created_at, updated_at)
+     VALUES($1,$2,$3,$4,$5,'todo','unstarted',now(),now())
      RETURNING ${PROJECT_COLS}`,
     [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
@@ -403,8 +418,8 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   if (!before) throw new Error(`작업 #${id} 없음`);
   const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET status=$2, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status]);
+    `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
   return after;
 }
@@ -438,6 +453,8 @@ export async function updateTask(
     const si = vals.length;
     sets.push(`status=$${si}`);
     sets.push(`completed_at=CASE WHEN $${si}='done' THEN now() ELSE NULL END`);
+    vals.push(categoryOf(patch.status));
+    sets.push(`status_category=$${vals.length}`);
   }
   if (!sets.length) return before; // 패치 비어있음 — no-op
 

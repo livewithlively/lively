@@ -257,6 +257,30 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS project_status_idx ON project(status);
   `);
 
+  // ── 5c) status 정규화(2026-06-26, #177 다툴 일반화) — 폐쇄 enum 위에 두 축을 **가산**. 비파괴. ──
+  //  외부 PM툴(ClickUp/Jira/Linear/Notion)은 per-workspace 커스텀 상태(개방 어휘)라, 기존 status enum
+  //  (active/done/todo/in_progress)으로는 무손실 보존이 불가능하다. 두 컬럼을 더한다(기존 status·CHECK·UI 전부 불변):
+  //   · status_raw      = 소스의 **원문 상태명**(개방 어휘, CHECK 없음). 네이티브 행은 NULL(=status 가 표시값).
+  //   · status_category = **정규 카테고리**(크로스툴 공통분모): backlog|unstarted|started|done|canceled.
+  //  status 는 당분간 'CHECK 유효 네이티브 투영'으로 유지(UI 호환) — 커넥터는 카테고리→네이티브로 투영해 status 를 채우고,
+  //  원문은 status_raw, 정규값은 status_category 에 둔다. 소비자(UI·done 집계) 이행은 후속 인크리먼트.
+  //  백필은 멱등(WHERE status_category IS NULL) — 매 부팅, 신규 NULL 행(아직 미설정 쓰기경로)도 함께 수렴한다.
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS status_raw TEXT;
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS status_category TEXT;
+    ALTER TABLE project DROP CONSTRAINT IF EXISTS project_status_category_chk;
+    ALTER TABLE project ADD CONSTRAINT project_status_category_chk
+      CHECK (status_category IS NULL OR status_category IN ('backlog','unstarted','started','done','canceled'));
+    UPDATE project SET status_category = CASE
+        WHEN status='done' THEN 'done'
+        WHEN status='in_progress' THEN 'started'
+        WHEN status='active' THEN 'started'
+        WHEN status='todo' THEN 'unstarted'
+        ELSE 'unstarted' END
+      WHERE status_category IS NULL;
+    CREATE INDEX IF NOT EXISTS project_status_category_idx ON project(status_category);
+  `);
+
   // ── 6) project_member — 프로젝트 팀원(n:n, level=project). 구 project_member 동형(org/schema.ts:304). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_member(
