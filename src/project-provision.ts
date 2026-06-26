@@ -5,6 +5,7 @@
 //   (셸 없음→인젝션 불가) · clone_url 은 레지스트리 sanitize(자격증명 제거) · 레포명/브랜치명 화이트리스트 검증.
 import fsp from "node:fs/promises";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { PROJECT_SHARED_BASE, projectAbsPath } from "./project-fs.js";
@@ -100,8 +101,40 @@ export async function provisionProjectRepos(
     out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
   }
 
+  // 세션 cwd = 프로젝트 폴더(work.mjs 동형) — 워크트리는 그 폴더 하위라 그냥 접근된다. 비워크트리 클론(폴더 밖)만 add-dir.
+  await writeAddDir(projDir, projectId, out.filter((r) => !r.worktree).map((r) => r.path));
   await writeProvisionMarker(projDir, projectId, out);
   return out;
+}
+
+// add-dir — 세션 cwd(프로젝트 폴더) 밖의 레포 클론을 하네스가 접근하도록 등록(work.mjs writeAddDir 서버 포팅, 멱등).
+//  Claude Code: 프로젝트 폴더의 .claude/settings.local.json(additionalDirectories, host-local·비동기화).
+//  Codex: ~/.codex/config.toml 의 [sandbox_workspace_write] writable_roots(이미 있는 경로는 건너뜀).
+async function writeAddDir(projDir: string, projectId: number, targets: string[]): Promise<void> {
+  if (!targets.length) return;
+  // Claude Code — 프로젝트-로컬 설정
+  const ccDir = path.join(projDir, ".claude");
+  await fsp.mkdir(ccDir, { recursive: true });
+  const ccFile = path.join(ccDir, "settings.local.json");
+  let cc: Record<string, unknown> = {};
+  try { cc = JSON.parse(await fsp.readFile(ccFile, "utf8")); } catch { /* 신규 */ }
+  const dirs = new Set(Array.isArray(cc.additionalDirectories) ? cc.additionalDirectories as string[] : []);
+  targets.forEach((t) => dirs.add(t));
+  cc.additionalDirectories = [...dirs];
+  await fsp.writeFile(ccFile, JSON.stringify(cc, null, 2) + "\n");
+  // Codex — 박스 사용자 전역 config(이미 등재된 경로는 제외; 미설치/실패는 무해)
+  try {
+    const cxFile = path.join(os.homedir(), ".codex", "config.toml");
+    let toml = ""; try { toml = await fsp.readFile(cxFile, "utf8"); } catch { /* 신규 */ }
+    const fresh = targets.filter((t) => !toml.includes(t));
+    if (fresh.length) {
+      await fsp.mkdir(path.dirname(cxFile), { recursive: true });
+      const roots = fresh.map((t) => `"${t}"`).join(", ");
+      const ins = `[sandbox_workspace_write]\n# lively: 프로젝트 ${projectId} 레포\nwritable_roots = [${roots}]`;
+      const block = toml.includes("[sandbox_workspace_write]") ? toml.replace(/\[sandbox_workspace_write\]/, ins) : toml + "\n" + ins + "\n";
+      await fsp.writeFile(cxFile, block);
+    }
+  } catch { /* codex 미설치 등 — 무해 */ }
 }
 
 // .lively/project.json 의 'provisioned' 키에 박스 클론/워크트리 경로 기록(이름만 적는 'repos' 키와 분리 — 충돌 없음·비파괴).

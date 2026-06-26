@@ -350,7 +350,7 @@ function pjvProjSessionCell(p, reload) {
     title: active ? ('내 세션 ' + nSess + '개 — 클릭해 입장/추가') : '내 세션 없음 — 클릭해 만들기' },
     el('span', { class: 'pjv-sess-ico-wrap' }, pjvIcon('session'), active ? el('span', { class: 'pjv-sess-dot', 'aria-hidden': 'true' }) : null));
   // 그 자리에서 바로 '새 터미널 세션' 폼을 띄운다 — 프로젝트 안으로 들어가지 않음. 이름은 프로젝트명으로 프리필.
-  const openCreate = () => openProjectSessionForm(p.id, reload, '/api/ui/v6/projects/', p.name);
+  const openCreate = () => openProjectSessionForm(p.id, reload, '/api/ui/v6/projects/', p.name, p.repos);
   btn.onclick = (e) => {
     e.stopPropagation();
     // 활성·비활성 공통으로 같은 드롭다운을 띄운다 — 비활성도 곧장 폼이 뜨지 않고 '＋ 새 세션 만들기'를 거치게(이미지 참고).
@@ -4810,7 +4810,7 @@ function projectTerminalSection(id, members, meId, base, projectName) {
 
 // 새 프로젝트 세션 오버레이 — 터미널 탭과 같은 정보(실행기·모델 등 플래그·자동승인). 폴더는 프로젝트 폴더 고정,
 //  공개범위는 '팀원 공동'(별도 입력 없음). 생성 후 새 탭 입장.
-async function openProjectSessionForm(id, reload, base, projectName) {
+async function openProjectSessionForm(id, reload, base, projectName, projectRepos?) {
   const B = base || '/api/ui/projects/';
   let cfg: any;
   try { cfg = await api('/api/ui/terminal/config'); }
@@ -4837,26 +4837,51 @@ async function openProjectSessionForm(id, reload, base, projectName) {
   harnessSel.addEventListener('change', renderFlags);
   renderFlags();
 
-  // ── 레포에서 작업 (선택) — 박스가 레포를 준비(입력 경로에 없으면 레지스트리 clone_url 로 clone)한다. '워크트리'면
-  //  project/<id>/<repo> 격리 폴더(브랜치 project/<id>)를 만들어 거기서 세션을 열고, 끄면 프로젝트 폴더에서 연다. ──
-  const repoSel = el('select', {}, el('option', { value: '', text: '— 레포 없이 (프로젝트 폴더에서) —' }));
-  const repoPathIn = el('input', { type: 'text', placeholder: '박스 레포 경로 (비우면 workspace/repos/<레포> 에 clone)' });
-  const wtCb = el('input', { type: 'checkbox' }); wtCb.checked = true;
-  const branchIn = el('input', { type: 'text', value: 'project/' + id });
-  const branchRow = el('div', { class: 'field', style: 'margin-top:8px' }, el('label', { class: 'field-label', text: '브랜치' }), branchIn);
-  const repoDetail = el('div', { style: 'display:none;margin-top:8px;padding-left:8px;border-left:2px solid rgba(127,127,127,.2)' },
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '박스 레포 경로 (선택)' }), repoPathIn),
-    el('label', { class: 'proj-sess-auto', style: 'margin-top:8px' }, wtCb,
-      el('span', { text: ' 워크트리 생성 — 전용 브랜치로 격리하고 그 폴더에서 세션 (끄면 프로젝트 폴더에서)' })),
-    branchRow);
-  const repoSync = () => { repoDetail.style.display = repoSel.value ? '' : 'none'; branchRow.style.display = wtCb.checked ? '' : 'none'; };
-  repoSel.addEventListener('change', repoSync);
-  wtCb.addEventListener('change', repoSync);
+  // ── 레포에서 작업 (선택, 여러 개) — '내 컴퓨터에서 작업'(work.mjs)과 동일 수준: 박스가 각 레포를 준비(입력 경로에
+  //  없으면 레지스트리 clone_url 로 clone)한다. 워크트리면 project/<id>/<repo> 격리 폴더(브랜치 project/<id>). 세션은
+  //  프로젝트 폴더에서 열리고 — 워크트리는 그 하위라 접근됨, 비워크트리 클론은 add-dir(.claude/settings.local.json)로 접근. ──
+  const boxPathKey = (repo) => 'lively:boxpath:' + repo;            // 박스 경로 기억(로컬PC 경로와 별개 키)
+  const savedBoxPath = (repo) => { try { return repo ? (localStorage.getItem(boxPathKey(repo)) || '') : ''; } catch (_) { return ''; } };
+  const cloneRepoNames: string[] = [];
+  const reposWrap = el('div', {});
+  let rrows: any[] = [];
+  const fillRepoSel = (sel) => {
+    const cur = sel.value;
+    sel.replaceChildren(el('option', { value: '', text: '— 레포 선택 —' }));
+    cloneRepoNames.forEach((n) => sel.append(el('option', { value: n, text: n })));
+    if (cloneRepoNames.includes(cur)) sel.value = cur;
+  };
+  const addRepoRow = (initRepo = '') => {
+    const sel = el('select', {});
+    const pathInp = el('input', { type: 'text', placeholder: '박스 레포 경로 (비우면 workspace/repos/<레포> 에 clone)' });
+    const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = true;
+    const branchInp = el('input', { type: 'text', value: 'project/' + id });
+    const rmBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕' });
+    fillRepoSel(sel); if (initRepo) sel.value = initRepo;
+    pathInp.value = savedBoxPath(sel.value);
+    const branchWrap = el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '브랜치' }), branchInp);
+    const branchVis = () => { branchWrap.style.display = wtChk.checked ? '' : 'none'; };
+    const ro: any = { sel, pathInp, wtChk, branchInp };
+    rrows.push(ro);
+    sel.addEventListener('change', () => { pathInp.value = savedBoxPath(sel.value); });               // 레포 바꾸면 그 레포의 마지막 경로로
+    pathInp.addEventListener('change', () => { if (sel.value && pathInp.value.trim()) { try { localStorage.setItem(boxPathKey(sel.value), pathInp.value.trim()); } catch (_) { /* */ } } });
+    wtChk.addEventListener('change', branchVis);
+    const rowEl = el('section', { class: 'ps-block', style: 'border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:10px;margin-top:8px' },
+      el('div', { style: 'display:flex;gap:8px;align-items:center' }, sel, rmBtn),
+      el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '박스 레포 경로 (선택)' }), pathInp),
+      el('label', { class: 'proj-sess-auto', style: 'margin-top:6px' }, wtChk, el('span', { text: ' 워크트리 생성 (전용 브랜치로 격리)' })),
+      branchWrap);
+    ro.el = rowEl;
+    rmBtn.onclick = () => { rowEl.remove(); rrows = rrows.filter((r) => r !== ro); };
+    branchVis(); reposWrap.append(rowEl);
+  };
+  const addRepoBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 레포 추가', onclick: () => addRepoRow() });
   try {
     const rr = await api('/api/ui/repos');
-    ((rr && rr.domainmapRepos) || []).forEach((it) => { if (it && it.name) repoSel.append(el('option', { value: it.name, text: it.name })); });
-  } catch (_) { /* graceful: 레포 없음 → '레포 없이'만 */ }
-  repoSync();
+    ((rr && rr.domainmapRepos) || []).forEach((it) => { if (it && it.name) cloneRepoNames.push(it.name); });
+  } catch (_) { /* graceful: 레포 없음 */ }
+  // 이 프로젝트의 관련 레포를 기본 행으로(있으면) — 없으면 빈 채로 '+ 레포 추가' 안내.
+  (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들고 입장' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
@@ -4866,7 +4891,10 @@ async function openProjectSessionForm(id, reload, base, projectName) {
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행' }), harnessSel),
     flagsBox,
     el('div', { style: 'margin-top:10px' }, autoRow),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '레포에서 작업 (선택)' }), repoSel, repoDetail),
+    el('div', { class: 'field', style: 'margin-top:12px' },
+      el('label', { class: 'field-label', text: '레포에서 작업 (선택)' }),
+      el('div', { class: 'caption', text: '박스가 레포를 준비 — 없으면 clone, 워크트리는 격리 폴더, 비워크트리는 add-dir 로 세션에서 접근.' }),
+      reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => nameIn.focus(), 0);
   saveBtn.onclick = async () => {
@@ -4878,23 +4906,18 @@ async function openProjectSessionForm(id, reload, base, projectName) {
       if (v) flags[k] = v;
     }
     try {
-      // 레포 선택 시: 먼저 박스에 provision(clone/worktree) → 워크트리면 그 폴더(subpath)에서 세션을 연다.
-      let subpath;
-      const repo = repoSel.value;
-      if (repo) {
+      // 선택한 레포(들)를 먼저 박스에 provision(clone/worktree + 비워크트리 add-dir). 세션은 프로젝트 폴더에서 연다.
+      const specs = rrows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim() })).filter((s) => s.name);
+      if (specs.length) {
         saveBtn.textContent = '레포 준비 중… (clone 시 잠시)';
-        const pr = await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({
-          repos: [{ name: repo, path: repoPathIn.value.trim(), worktree: wtCb.checked, branch: branchIn.value.trim() }],
-        }) });
-        const prov = (pr && pr.provisioned && pr.provisioned[0]) || null;
-        if (prov && prov.worktree && prov.subpath) subpath = prov.subpath; // 워크트리는 프로젝트 폴더 안 → 세션 cwd 로
+        await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs }) });
       }
       saveBtn.textContent = '세션 여는 중…';
       const r = await api(B + id + '/sessions', { method: 'POST', body: JSON.stringify({
-        label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked, subpath,
+        label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked,
       }) });
       back.remove();
-      toast(subpath ? '레포 준비 완료 · 세션을 만들었습니다' : '세션을 만들었습니다');
+      toast(specs.length ? ('레포 ' + specs.length + '개 준비 완료 · 세션을 만들었습니다') : '세션을 만들었습니다');
       if (r && r.session && r.session.id) window.open('/ui/terminal.html?session=' + encodeURIComponent(r.session.id) + '&label=' + encodeURIComponent(r.session.label || ''), '_blank');
       reload();
     } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; saveBtn.textContent = '만들고 입장'; }
