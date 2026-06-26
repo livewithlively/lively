@@ -28,6 +28,17 @@ import { unitName, normalizeExternalInstance } from "../org/external-identity.js
 import { routeIngestV6 } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
 
+// 정규 카테고리 → CHECK 유효 네이티브 status 투영(UI 호환). 역(네이티브→카테고리)=project-store.categoryOf.
+//  네이티브 status CHECK 엔 canceled 가 없어 done 으로 투영 — 원본은 status_raw/status_category 에 보존(무손실).
+function nativeStatusOf(category: string): string {
+  switch (category) {
+    case "done": return "done";
+    case "canceled": return "done";
+    case "started": return "in_progress";
+    default: return "todo"; // backlog | unstarted
+  }
+}
+
 // 감사 append — entity 별 actor_kind='connector'/channel='connector' 고정. before/after 스냅샷은 JSON 직렬화.
 //  같은 트랜잭션 client(미러 쓰기와 원자적). FK 없는 append-only 라 대상 행 삭제 후에도 이력 보존.
 async function auditConnector(
@@ -148,28 +159,48 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     || (prevRow.name ?? "") !== (name ?? "")
     || (prevRow.description ?? null) !== (description ?? null);
 
-  // 멱등 upsert — 외부 좌표 부분유니크 ON CONFLICT. created_by='connector:<system>'. status 는 외부 상태를
-  //  v6 2값(active/done)으로 정규화하지 않고(상태 매핑은 후속) 신규는 'active', 재싱크는 기존 status 보존.
+  // 멱등 upsert — 외부 좌표 부분유니크 ON CONFLICT. created_by='connector:<system>'.
+  //  status 3컬럼: 소스 원문(status_raw) + 정규 카테고리(status_category, 어댑터가 it.fields.status_category 로 전달) +
+  //  CHECK 유효 네이티브 투영(status). ⚠ 우리 DB=master 라 **INSERT(최초 import)에서만** 외부 status 채택 —
+  //  DO UPDATE SET 에 status 3컬럼 제외(재싱크 미클로버, 외부 후속 편집 수렴은 후속 3-way 머지가 관장).
   //  parent_id 는 위에서 해소(부모 미적재면 NULL — 평탄화 아님, level 은 subtask 유지). created_at 은 insert 만.
   const author = `connector:${system}`;
+  const f = (it.fields ?? {}) as Record<string, unknown>;
+  const statusRaw = f.status != null ? String(f.status) : null;
+  const statusCategory = typeof f.status_category === "string" ? f.status_category : "unstarted";
+  const nativeStatus = nativeStatusOf(statusCategory);
   const r = await client.query(
     `INSERT INTO project(
-        level, parent_id, name, description, status, created_by,
+        level, parent_id, name, description, status, status_raw, status_category, created_by,
         external_system, external_instance, external_id, external_url,
         created_at, updated_at)
-      VALUES($1,$2,$3,$4,'active',$5,
-             $6,$7,$8,$9,
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,
+             $9,$10,$11,$12,
              now(), now())
      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         level=EXCLUDED.level, parent_id=COALESCE(EXCLUDED.parent_id, project.parent_id),
         name=EXCLUDED.name, description=EXCLUDED.description,
         external_url=EXCLUDED.external_url, updated_at=now()
-     RETURNING id`,
-    [level, parentId, name, description, author,
+     RETURNING id, (xmax = 0) AS inserted`,
+    [level, parentId, name, description, nativeStatus, statusRaw, statusCategory, author,
      system, instance, externalId, it.provenance.external_url ?? null],
   );
   const id = (r.rows[0] as { id: number }).id;
+  const inserted = (r.rows[0] as { inserted?: boolean }).inserted === true;
+  // 담당자 — 최초 import(insert)에서만 task_assignee 시드(우리 DB=master, 재싱크 미클로버). 외부 신원=email??id(actor 관례).
+  //  멀티담당자(ClickUp assignees[])를 무손실 적재. 같은 트랜잭션 client(미러 쓰기와 원자적).
+  if (inserted && Array.isArray(f.assignees)) {
+    const memberIds = [...new Set((f.assignees as Array<{ id?: unknown; email?: unknown }>)
+      .map((a) => (a?.email ? String(a.email).trim().toLowerCase() : a?.id != null ? String(a.id) : ""))
+      .filter(Boolean))];
+    let asort = 0;
+    for (const m of memberIds) {
+      await client.query(
+        `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
+        [id, m, asort++]);
+    }
+  }
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null

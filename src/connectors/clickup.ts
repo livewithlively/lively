@@ -88,6 +88,19 @@ export function msToIso(ms?: string | null): string | undefined {
   return new Date(n).toISOString();
 }
 
+// ClickUp status.type(open|custom|done|closed) → 정규 카테고리(크로스툴: backlog|unstarted|started|done|canceled).
+//  custom=워크플로 중간단계라 started 로 본다. closed=종결류 → done. 원문(status.status)은 fields.status 에 그대로 보존.
+//  per-connector 매핑의 ClickUp 구현 — 툴 #2(Jira/Linear/Notion)는 각자 어댑터에서 같은 카테고리로 매핑한다.
+export function clickUpStatusCategory(type?: string | null): string {
+  switch (type) {
+    case "done": return "done";
+    case "closed": return "done";
+    case "custom": return "started";
+    case "open": return "unstarted";
+    default: return "unstarted";
+  }
+}
+
 export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
   const { teamId } = ctx;
   const creator = task.creator ?? undefined;
@@ -123,6 +136,7 @@ export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
     fields: {
       status: task.status?.status ?? null,
       status_type: task.status?.type ?? null,
+      status_category: clickUpStatusCategory(task.status?.type),
       assignees: (task.assignees ?? []).map((a) => ({
         id: a.id,
         email: a.email?.trim().toLowerCase() ?? null,
