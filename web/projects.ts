@@ -2356,7 +2356,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     if (!q) { results.replaceChildren(el('span', { class: 'admin-hint', text: '검색어를 입력하세요.' })); return; }
     results.replaceChildren(el('span', { class: 'admin-hint', text: '검색 중…' }));
     let matches: any;
-    try { matches = await api('/api/ui/ctx/grep?query=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.matches) || []); }
+    try { matches = await api('/api/ui/knowledge/search?q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }
     catch (e) { results.replaceChildren(errorNote(e, '검색하지 못했습니다')); return; }
     const cand = matches.filter((m) => !linked.has(m.name));
     if (!cand.length) { results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '결과가 없거나 모두 이미 연결됨.' })); return; }

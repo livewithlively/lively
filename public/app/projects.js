@@ -2734,7 +2734,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
         results.replaceChildren(el('span', { class: 'admin-hint', text: '검색 중…' }));
         let matches;
         try {
-            matches = await api('/api/ui/ctx/grep?query=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.matches) || []);
+            matches = await api('/api/ui/knowledge/search?q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []);
         }
         catch (e) {
             results.replaceChildren(errorNote(e, '검색하지 못했습니다'));
