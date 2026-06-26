@@ -88,17 +88,18 @@ export async function setCodeUnitMapping(args: SetMappingArgs): Promise<{ id: nu
     if (!cat) throw httpErr(400, "no such product category: " + (args.categoryKey ?? args.categoryId));
     const ex = await one(client, "SELECT id FROM mapping WHERE target_kind='code_unit' AND target_id=$1 AND category_id=$2", [cu.id, cat.id]);
     let id: number, action: string;
+    const evidence = args.evidence.slice(0, 4000);
     if (ex) {
-      await client.query("UPDATE mapping SET status=$1, origin=$2, confidence=$3, updated_at=now() WHERE id=$4", [status, origin, confidence, ex.id]);
+      await client.query("UPDATE mapping SET status=$1, origin=$2, confidence=$3, evidence=$4, updated_at=now() WHERE id=$5", [status, origin, confidence, evidence, ex.id]);
       id = ex.id; action = "update";
     } else {
-      const r = await one(client, `INSERT INTO mapping(repo_id,target_kind,target_id,category_id,origin,confidence,status,created_at,updated_at)
-        VALUES($1,'code_unit',$2,$3,$4,$5,$6,now(),now()) RETURNING id`, [repo.id, cu.id, cat.id, origin, confidence, status]);
+      const r = await one(client, `INSERT INTO mapping(repo_id,target_kind,target_id,category_id,origin,confidence,status,evidence,created_at,updated_at)
+        VALUES($1,'code_unit',$2,$3,$4,$5,$6,$7,now(),now()) RETURNING id`, [repo.id, cu.id, cat.id, origin, confidence, status, evidence]);
       id = r.id; action = "insert";
     }
     const change_id = await logChange(client, {
       repoId: repo.id, entityType: "mapping", entityId: id, op: action === "insert" ? "insert" : "update", actor: args.actor,
-      before: null, after: { code_unit: cu.path, category: cat.key, status, origin, confidence }, note: args.evidence.slice(0, 4000),
+      before: null, after: { code_unit: cu.path, category: cat.key, status, origin, confidence }, note: evidence,
     });
     return { id, change_id, action, path: cu.path, category: cat.key, status };
   });

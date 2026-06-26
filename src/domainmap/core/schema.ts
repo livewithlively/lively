@@ -157,6 +157,8 @@ export async function init(): Promise<string> {
   //  멱등: IF EXISTS. activity_task→activity.project_id, activity_ku_ref→activity_knowledge, mapping.domain_id→category_id(v6/schema.ts) 로 대체됨.
   await pool.query(`ALTER TABLE mapping DROP CONSTRAINT IF EXISTS mapping_repo_id_target_kind_target_id_domain_id_key;`);
   await pool.query(`ALTER TABLE mapping DROP COLUMN IF EXISTS domain_id;`);
+  // evidence — 매핑 판단 근거(LLM/사람)를 행에 영속(change_log 감사와 별개로 queryable). 2026-06-26.
+  await pool.query(`ALTER TABLE mapping ADD COLUMN IF NOT EXISTS evidence TEXT;`);
   await pool.query(`DROP TABLE IF EXISTS activity_task;`);
   await pool.query(`DROP TABLE IF EXISTS activity_ku_ref;`);
   await pool.query(`DROP TABLE IF EXISTS domain_alias;`);

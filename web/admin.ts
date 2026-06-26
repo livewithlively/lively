@@ -43,6 +43,8 @@ const ADMIN_SECTIONS = [
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
   // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
   { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
+  // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
+  { key: 'cron', label: '스케줄러 (자동화)', meaning: null, group: 'ai' },
   // (외부 호출·DB 안전범위 = allowlist 별도 탭 폐기(2026-06-26) → 'AI 도구'·'DB 데이터소스' 화면 안 allowlistCard 로 인라인.)
   // 커스텀 훅(코드) — 특정 이벤트에 실행할 임의 코드. 세션 주입 지도에서 목록·요약을 보고 여기서 정의.
   { key: 'custom-hooks', label: '커스텀 훅 (코드)', meaning: 'custom-hook', group: 'ai' },
@@ -50,7 +52,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources']; // admin 권한 전용(쓰기/인프라)
+const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron']; // admin 권한 전용(쓰기/인프라)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -278,7 +280,123 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
+  if (sel === 'cron') return cronPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
+}
+
+// ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
+//  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
+async function cronPanel(detail, data) {
+  const reload = () => cronPanel(detail, data);
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
+  let jobs;
+  try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
+
+  const rows = el('div', { class: 'wikicat-rows' });
+  if (!jobs.length) rows.append(el('div', { class: 'wikicat-empty', text: '아직 스케줄 잡이 없습니다.' }));
+  for (const j of jobs) {
+    const sched = j.cron_expr ? ('cron: ' + j.cron_expr) : ('매 ' + (j.interval_sec || 0) + '초');
+    const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
+    const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
+    const main = el('div', { class: 'wikicat-row-main' },
+      el('span', { class: 'wikicat-name', text: j.label || j.id }),
+      el('span', { class: 'wikicat-key mono', text: j.action + sess }),
+      el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }),
+      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
+    const acts = el('div', { class: 'wikicat-row-acts' },
+      el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
+    rows.append(el('div', { class: 'wikicat-row' }, main, acts));
+  }
+  const head = el('div', { class: 'wikicat-grouphead' },
+    el('span', { class: 'wikicat-grouptitle', text: '스케줄 잡' }),
+    el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
+    el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, reload) }));
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '스케줄러 (자동화)' })),
+    el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 세션에 주입, 팀플랜 과금)·커넥터 sync 등. 주기는 “초” 또는 cron식.' }),
+    el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+  detail.replaceChildren(card);
+}
+
+// 잡 추가/수정 폼(오버레이) — id·이름·액션·주기(초 또는 cron식)·켬 + 액션별 params(map_unmapped=세션 피커, refresh_repo=repo, connector_sync=system).
+async function openCronForm(job, reload) {
+  const isNew = !job;
+  const params = (job && job.params) || {};
+  const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
+  const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: title }),
+    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+
+  const idInp = el('input', { type: 'text', style: inputStyle, value: job ? job.id : '', placeholder: 'my-job', ...(isNew ? {} : { disabled: true }) });
+  const labelInp = el('input', { type: 'text', style: inputStyle, value: (job && job.label) || '', placeholder: '잡 이름' });
+  const actions = [['refresh_all', '전 repo is 신선화'], ['refresh_repo', '한 repo is 신선화'], ['connector_sync', '커넥터 sync'], ['eval_domain_debt', '도메인 부채 평가'], ['map_unmapped', '미매핑 코드 LLM 분류 (세션 주입)']];
+  const actionSel = el('select', { style: inputStyle });
+  for (const [v, l] of actions) actionSel.append(el('option', { value: v, text: l, ...((job && job.action === v) ? { selected: true } : {}) }));
+  const intervalInp = el('input', { type: 'number', style: inputStyle, value: String((job && job.interval_sec) || 1800), min: '60' });
+  const cronInp = el('input', { type: 'text', style: inputStyle, value: (job && job.cron_expr) || '', placeholder: '예: 0 9 * * 1-5 (비우면 위 주기초 사용)' });
+  const enabledChk = el('input', { type: 'checkbox', ...((job ? job.enabled : false) ? { checked: true } : {}) });
+
+  const sessSel = el('select', { style: inputStyle });
+  sessSel.append(el('option', { value: '', text: '(타깃 세션 선택 — 상시 시드 세션)' }));
+  const repoInp = el('input', { type: 'text', style: inputStyle, value: params.repo || '', placeholder: 'context-ontology' });
+  const systemInp = el('input', { type: 'text', style: inputStyle, value: params.system || '', placeholder: '비우면 active 전체' });
+  const sessBlock = block('타깃 LLM 세션', '이 잡이 분류 태스크를 주입할 상시 세션(관리자 시드 — 팀플랜 과금). 세션이 lively MCP 로 직접 분류합니다.', sessSel);
+  const repoBlock = block('repo', '대상 repo 이름.', repoInp);
+  const systemBlock = block('커넥터 system', 'clickup 등. 비우면 active 전체.', systemInp);
+  const syncVis = () => {
+    const a = actionSel.value;
+    sessBlock.style.display = a === 'map_unmapped' ? '' : 'none';
+    repoBlock.style.display = a === 'refresh_repo' ? '' : 'none';
+    systemBlock.style.display = a === 'connector_sync' ? '' : 'none';
+  };
+  actionSel.onchange = syncVis;
+  try { const r = await api('/api/ui/terminal/sessions'); for (const s of ((r && r.sessions) || [])) sessSel.append(el('option', { value: s.id, text: (s.label || s.id) + ' (' + s.id + ')', ...((params.session === s.id) ? { selected: true } : {}) })); } catch { /* 세션 목록 실패해도 폼은 연다 */ }
+
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '잡 추가' : '저장' });
+  const form = el('div', { class: 'proj-settings' },
+    block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp),
+    block('이름', '관리 목록에 보일 이름.', labelInp),
+    block('액션', '게이트웨이가 실행할 작업(허용 목록).', actionSel),
+    sessBlock, repoBlock, systemBlock,
+    block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp),
+    block('cron식 (선택)', '벽시계 스케줄. 예: 0 9 * * 1-5 = 평일 09:00. 비우면 주기초.', cronInp),
+    block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))),
+    el('div', { class: 'ps-rules-actions' }, saveBtn));
+  syncVis();
+  const back = overlayBox(isNew ? '스케줄 잡 추가' : '스케줄 잡 수정 — ' + job.id, form);
+  const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
+  saveBtn.onclick = async () => {
+    const id = idInp.value.trim();
+    if (!id) { toast('잡 id 가 필요합니다', true); return; }
+    const action = actionSel.value;
+    const p: Record<string, string> = {};
+    if (action === 'map_unmapped' && sessSel.value) p.session = sessSel.value;
+    if (action === 'refresh_repo' && repoInp.value.trim()) p.repo = repoInp.value.trim();
+    if (action === 'connector_sync' && systemInp.value.trim()) p.system = systemInp.value.trim();
+    const body = { id, label: labelInp.value.trim() || null, action, params: p,
+      interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), enabled: enabledChk.checked };
+    saveBtn.disabled = true;
+    try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '잡을 추가했습니다' : '저장했습니다'); back.remove(); reload(); }
+    catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+  };
+}
+
+async function cronRunNow(id, reload) {
+  try { const r = await api('/api/ui/cron/' + encodeURIComponent(id) + '/run', { method: 'POST' }); toast('실행: ' + ((r && r.status) || 'ok')); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function cronToggle(job, reload) {
+  try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: job.id, enabled: !job.enabled }) }); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function cronDelete(id, reload) {
+  if (!confirm('스케줄 잡 ‘' + id + '’을(를) 삭제할까요?')) return;
+  try { await api('/api/ui/cron/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
 }
 
 // ── 레포(git) 관리 — repo 테이블(=실제 git 레포)을 등록·git 연결·폐기·삭제. ──
