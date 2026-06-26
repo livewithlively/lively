@@ -301,7 +301,25 @@ const knowledgeSearch: Capability = {
     mode: z.enum(["snippets", "names"]).optional().describe("snippets(기본)=스니펫 / names=name·title만"),
     context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄(grep 채널 매치 시, ripgrep -C)"),
   },
-  expose: { mcp: true, rest: false },   // MCP 전용(웹 지식탭은 grep /knowledge/search 사용 — 의미검색 UI 는 후속)
+  // MCP + REST(/api/ui/knowledge/semantic) — 웹 지식탭의 '의미검색' 토글이 소비. grep 은 /knowledge/search(불변).
+  //  ⚠ restMounts 순서: knowledgeGet(/knowledge/:name) **앞**에 둬야 'semantic'이 :name 으로 안 잡힌다(배열 순서 보장).
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/semantic"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        const q = String(query.q ?? "").trim();
+        if (!q) throw new HttpError(400, "q(검색어)가 필요합니다");
+        return {
+          q,
+          injection: query.injection ? String(query.injection) : undefined,
+          provenance: query.provenance ? String(query.provenance) : undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+          mode: query.mode ? String(query.mode) : undefined,
+          context: query.context ? Number(query.context) : undefined,
+        };
+      } }],
+  },
   handler: async (input: any) => ({
     entries: await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,

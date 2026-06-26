@@ -133,8 +133,10 @@ function knRow(e, select?) {
     knInjectChip(e.injection), ' ', knProvChip(e.provenance),
     e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null,
     '  ', relTime(e.updated_at));
+  // 의미검색/grep 결과의 매치 스니펫(있을 때만 — 목록 페치엔 없음). 한 줄로 정리.
+  const snipEl = e.snippet ? el('div', { class: 'caption', style: 'margin-top:3px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 200) }) : null;
   if (!select) {
-    const row = el('div', { class: 'row', role: 'link', tabindex: '0' }, titleEl, metaEl);
+    const row = el('div', { class: 'row', role: 'link', tabindex: '0' }, titleEl, metaEl, snipEl);
     const go = () => { location.hash = '#/k/' + encodeURIComponent(e.name); };
     row.addEventListener('click', go);
     row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
@@ -145,7 +147,7 @@ function knRow(e, select?) {
   const cb = el('input', { type: 'checkbox', class: 'row-check', tabindex: '-1', 'aria-hidden': 'true' });
   cb.checked = on0;
   const row = el('div', { class: 'row row-pick' + (on0 ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(on0) },
-    cb, el('div', { class: 'row-pick-body' }, titleEl, metaEl));
+    cb, el('div', { class: 'row-pick-body' }, titleEl, metaEl, snipEl));
   const toggle = () => {
     const on = !select.names.has(e.name);
     if (on) select.names.add(e.name); else select.names.delete(e.name);
@@ -194,9 +196,11 @@ async function renderKnowledgePinned(view) {
 // space 뷰(사업·제품·시스템) — 좌측 카테고리 사이드바(필터) + 우측 지식 목록(검색·injection·provenance 필터).
 async function renderKnowledgeSpace(view, _space, params) {
   // 공간 병합(2026-06-26) — space 인자 무시(사이드바가 3 space 통합). 카테고리/필터만 상태로.
-  const f = (state.knowledge = state.knowledge || { space: '', category: '', injection: '', provenance: '', q: '' });
+  const f = (state.knowledge = state.knowledge || { space: '', category: '', injection: '', provenance: '', q: '', semantic: true });
+  if (f.semantic === undefined) f.semantic = true;   // 의미검색 기본 on(off=grep). 임베딩 off면 서버가 grep 폴백.
   if (params) {
     if (params.has('category')) f.category = params.get('category') || '';
+    if (params.has('mode')) f.semantic = params.get('mode') !== 'grep';
     if (params.has('injection')) f.injection = params.get('injection') || '';
     if (params.has('provenance')) f.provenance = params.get('provenance') || '';
     if (params.has('q')) f.q = params.get('q') || '';
@@ -236,6 +240,9 @@ async function renderKnowledgeSpace(view, _space, params) {
 
   // 상단 필터 — 검색(q) + injection select + provenance select.
   const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색', value: f.q, 'aria-label': '검색어' });
+  // 검색 방식 — 의미검색(하이브리드 벡터+grep, 자연어/유사) 기본 vs 정확(grep). 검색어가 있을 때만 영향.
+  const modeSel = selectFilter([['semantic', '의미검색'], ['grep', '정확(grep)']], f.semantic ? 'semantic' : 'grep');
+  modeSel.setAttribute('aria-label', '검색 방식');
   const injSel = selectFilter([['', '전체 주입'], ['always', '항상 주입'], ['recalled', '검색']], f.injection);
   injSel.setAttribute('aria-label', '주입');
   const provSel = selectFilter([['', '전체 출처'], ['authored', '저작'], ['observed', '외부 미러']], f.provenance);
@@ -250,6 +257,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     if (f.injection) p.set('injection', f.injection);
     if (f.provenance) p.set('provenance', f.provenance);
     if (f.q) p.set('q', f.q);
+    if (!f.semantic) p.set('mode', 'grep');
     const qs = p.toString();
     history.replaceState(null, '', '#/knowledge' + (qs ? '?' + qs : ''));
   }
@@ -300,12 +308,22 @@ async function renderKnowledgeSpace(view, _space, params) {
     listBox.replaceChildren(skeletonRows(4));
     foot.replaceChildren();
     try {
-      const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at' });
-      if (f.category) p.set('category', f.category);
-      if (f.injection) p.set('injection', f.injection);
-      if (f.provenance) p.set('provenance', f.provenance);
-      if (f.q.trim()) p.set('q', f.q.trim());
-      const r = await api('/api/ui/knowledge?' + p.toString());
+      let r;
+      if (f.q.trim() && f.semantic) {
+        // 의미검색 — 하이브리드(벡터+grep RRF). 전역 랭킹이라 카테고리 필터는 미적용(주입/출처는 적용). 임베딩 off면 서버가 grep 폴백.
+        const p = new URLSearchParams({ q: f.q.trim(), limit: '200' });
+        if (f.injection) p.set('injection', f.injection);
+        if (f.provenance) p.set('provenance', f.provenance);
+        r = await api('/api/ui/knowledge/semantic?' + p.toString());
+      } else {
+        // 목록(빈 검색=브라우즈 / 정확검색) — 카테고리·grep 필터 적용, 최신순.
+        const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at' });
+        if (f.category) p.set('category', f.category);
+        if (f.injection) p.set('injection', f.injection);
+        if (f.provenance) p.set('provenance', f.provenance);
+        if (f.q.trim()) p.set('q', f.q.trim());
+        r = await api('/api/ui/knowledge?' + p.toString());
+      }
       const entries = (r && r.entries) || [];
       lastEntries = entries;
       // 필터로 사라진 선택 정리(이후 화면에 없는 name 은 선택 해제).
@@ -313,7 +331,7 @@ async function renderKnowledgeSpace(view, _space, params) {
       sel.names.forEach((nm) => { if (!present.has(nm)) sel.names.delete(nm); });
       paintList();
       repaintBulk();
-      foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' }));
+      foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.q.trim() && f.semantic ? ' · 의미검색(관련도순)' : '') }));
     } catch (e) {
       listBox.replaceChildren(errorNote(e, '지식을 불러오지 못했습니다'));
     }
@@ -323,6 +341,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   qInput.addEventListener('input', () => { f.q = qInput.value; clearTimeout(qTimer); qTimer = setTimeout(() => { syncHash(); refetch(); }, 280); });
   injSel.addEventListener('change', () => { f.injection = injSel.value; syncHash(); refetch(); });
   provSel.addEventListener('change', () => { f.provenance = provSel.value; syncHash(); refetch(); });
+  modeSel.addEventListener('change', () => { f.semantic = modeSel.value === 'semantic'; syncHash(); refetch(); });
   // 좌측 클릭 위임(side 컨테이너 — buildSide 가 내부를 교체해도 핸들러 유지).
   side.addEventListener('click', (ev) => {
     const item = ev.target.closest('[data-cat-val]');
@@ -332,7 +351,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     buildSide(); syncHash(); refetch();
   });
 
-  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, injSel, provSel);
+  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, injSel, provSel);
   const layout = el('div', { class: 'browse-layout' },
     side,
     el('section', { class: 'browse-main' }, filterBar, bulkBar, listBox, foot),
