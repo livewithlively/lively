@@ -12,7 +12,7 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 const regenAgents = (id: number) => ensureAgentsMd(id).catch((e) => { console.error("[regenAgents] fail id=" + id + ":", e); });
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
-  createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
+  createTask, updateTaskStatus, updateTask, deleteTaskNode, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject,
@@ -487,7 +487,10 @@ const taskCreateV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { task: await createTask(input, writeCtx) };
+    const task = await createTask(input, writeCtx);
+    const rootId = await rootProjectIdOfTaskNode(task); // 하위태스크면 부모 task→프로젝트로 거슬러 해석.
+    if (rootId) await regenAgents(rootId);              // 태스크/하위태스크 추가 → AGENTS.md 태스크 인덱스 갱신.
+    return { task };
   },
 };
 
@@ -507,7 +510,10 @@ const taskSetStatusV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { task: await updateTaskStatus(input.id, input.status, writeCtx) };
+    const task = await updateTaskStatus(input.id, input.status, writeCtx);
+    const rootId = await rootProjectIdOfTaskNode(task);
+    if (rootId) await regenAgents(rootId);  // 상태 변경 → AGENTS.md 태스크 인덱스 상태 갱신.
+    return { task };
   },
 };
 
@@ -552,7 +558,10 @@ const taskUpdateV6: Capability = {
   handler: async (input: any, user: any, ctx: any) => {
     const { id, ...patch } = input;
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { task: await updateTask(id, patch, writeCtx) };
+    const task = await updateTask(id, patch, writeCtx);
+    const rootId = await rootProjectIdOfTaskNode(task);
+    if (rootId) await regenAgents(rootId);  // 이름/상태 등 변경 → AGENTS.md 태스크 인덱스 갱신.
+    return { task };
   },
 };
 
@@ -571,7 +580,9 @@ const taskDeleteV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const task = await deleteTaskNode(input.id, writeCtx);
+    const task = await deleteTaskNode(input.id, writeCtx); // 반환 = 삭제 전 스냅샷(level/parent_id 보유).
+    const rootId = await rootProjectIdOfTaskNode(task);
+    if (rootId) await regenAgents(rootId);  // 삭제 → AGENTS.md 태스크 인덱스에서 제거.
     return { deleted: true, id: input.id, task };
   },
 };
