@@ -88,7 +88,10 @@ const knowledgeGet: Capability = {
 const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
-  description: "지식 전문 저장. **신규는 category(분류) 1개 이상 필수**(category_list 의 key 배열 — 미분류 저장 금지). injection/provenance 포함. name 없으면 자동 슬러그.",
+  description:
+    "지식 전문 저장. **신규는 category(분류) 1개 이상 필수**(category_list 의 key 배열 — 미분류 저장 금지). injection/provenance 포함. name 없으면 자동 슬러그. " +
+    "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
+    "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -129,7 +132,7 @@ const knowledgeSave: Capability = {
     if ((knowledge as any)?.version === 1) {
       const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
       if (similar.length) {
-        return { knowledge, similar, similar_note: "비슷한 기존 지식이 있습니다 — 중복이면 supersedes 로 대체하거나 한쪽으로 병합을 검토하세요." };
+        return { knowledge, similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
       }
     }
     return { knowledge };

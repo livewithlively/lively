@@ -159,6 +159,18 @@ function knRow(e, select?) {
   return row;
 }
 
+// 관련 지식 한 항목(벡터 #172) — 제목(상세 링크) + 코사인 유사도 % + 칩/갱신 + 스니펫. knowledge_similar 결과용.
+function knRelatedItem(e) {
+  const pct = Math.round((Number(e.similarity) || 0) * 100);
+  return el('a', { class: 'row', href: '#/k/' + encodeURIComponent(e.name), style: 'display:block; text-decoration:none;' },
+    el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' },
+      el('span', { text: e.title || e.name }),
+      el('span', { class: 'caption', style: 'flex:none; opacity:.7', title: '의미 유사도(코사인)', text: pct + '%' })),
+    el('div', { class: 'row-meta' }, knInjectChip(e.injection), ' ', knProvChip(e.provenance), '  ', relTime(e.updated_at)),
+    e.snippet ? el('div', { class: 'caption', style: 'margin-top:3px; opacity:.7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap',
+      text: String(e.snippet).replace(/\s+/g, ' ').trim().slice(0, 200) }) : null);
+}
+
 // 지식 탭 진입 — sub ∈ {business, product, system, stats, review, pinned}. space 셋이면 2분할 뷰, 그 외 통계/검토/핀.
 async function renderKnowledge(view, sub, params) {
   if (sub === 'stats') return renderKnowledgeStats(view);
@@ -604,6 +616,9 @@ async function renderKnowledgeDetail(view, name) {
   const metaWrap = el('details', { class: 'unit-meta-details', open: '' },
     el('summary', { class: 'unit-meta-summary' }, '메타데이터'), metaBar);
 
+  // 관련 지식(벡터 #172) — 이 지식과 의미적으로 가까운 다른 지식(코사인 유사도). 비동기 채움(임베딩 off/유사 없음=숨김).
+  const relatedBox = el('div', { class: 'kn-related', hidden: true, style: 'margin-top:18px' });
+
   const main = el('div', { class: 'detail-card unit-card' },
     el('div', { class: 'unit-title-row' },
       el('h1', { class: 'detail-title', text: k.title || k.name }),
@@ -616,9 +631,23 @@ async function renderKnowledgeDetail(view, name) {
     el('div', { class: 'sec-label', text: '카테고리' }), catSection,
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
     el('div', { class: 'unit-body-wrap' }, rendered, rawView),
+    relatedBox,
   );
   view.replaceChildren(el('div', { class: 'page-head unit-head' }, backRow), main);
   applyReveal([main]);
+  // 관련 지식 비동기 로드(주 렌더를 막지 않음). graceful — 임베딩 off/유사 없음/실패면 섹션 숨김 유지.
+  (async () => {
+    try {
+      const r = await api('/api/ui/knowledge/similar?' + new URLSearchParams({ name: k.name, limit: '6', min_score: '0.45' }));
+      const rel = (r && r.entries) || [];
+      if (!rel.length) return;
+      relatedBox.replaceChildren(
+        el('div', { class: 'sec-label', text: '관련 지식' }),
+        el('div', { class: 'list-box' }, ...rel.map(knRelatedItem)),
+      );
+      relatedBox.hidden = false;
+    } catch (_) { /* 임베딩 off 등 → 숨김 유지 */ }
+  })();
 }
 
 async function knChangeLifecycle(name, lifecycle, view) {
