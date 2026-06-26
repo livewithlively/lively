@@ -281,6 +281,23 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS project_status_category_idx ON project(status_category);
   `);
 
+  // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
+  //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).
+  //  member_id = org_member.id 또는 외부 신원(FK 없음 — 미러/외부 담당자 허용, project_member·assignee 관례와 동일).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_assignee(
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      sort INT NOT NULL DEFAULT 0,
+      added_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(task_id, member_id));
+    CREATE INDEX IF NOT EXISTS task_assignee_member_idx ON task_assignee(member_id);
+    -- 백필: 기존 단일 assignee 컬럼 → n:n(멱등, ON CONFLICT skip). 매 부팅 안전(이미 시드면 no-op).
+    INSERT INTO task_assignee(task_id, member_id, sort)
+      SELECT id, assignee, 0 FROM project WHERE assignee IS NOT NULL AND assignee <> ''
+      ON CONFLICT (task_id, member_id) DO NOTHING;
+  `);
+
   // ── 6) project_member — 프로젝트 팀원(n:n, level=project). 구 project_member 동형(org/schema.ts:304). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_member(

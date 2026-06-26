@@ -46,6 +46,18 @@ export function categoryOf(status: string): string {
   }
 }
 
+// 단일 assignee 컬럼 ↔ task_assignee n:n 동기(전환기: 컬럼=primary, n:n=가산 섀도). 멀티담당자/소비자 이행 전까지 0~1명.
+//  통째 교체 의미론(준 목록이 최종 담당자 집합). 커넥터(다중)도 이 헬퍼로 task_assignee 를 채운다.
+export async function syncTaskAssignees(taskId: number, assignees: string[]): Promise<void> {
+  await itemsPool.query(`DELETE FROM task_assignee WHERE task_id=$1`, [taskId]);
+  let sort = 0;
+  for (const m of [...new Set(assignees.map((a) => String(a).trim()).filter(Boolean))]) {
+    await itemsPool.query(
+      `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
+      [taskId, m, sort++]);
+  }
+}
+
 // ── 조회 ──────────────────────────────────────────────────────────────────
 export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string }
 
@@ -462,6 +474,8 @@ export async function updateTask(
   vals.push(id);
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} RETURNING ${PROJECT_COLS}`, vals);
+  // 단일 assignee 변경 시 task_assignee n:n 동기(전환기 가산 섀도 일관성).
+  if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
   return after;
 }
