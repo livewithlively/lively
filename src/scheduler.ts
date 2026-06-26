@@ -76,7 +76,83 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return { status: "ok", summary: { systems: out } };
   }
 
+  if (job.action === "map_unmapped") {
+    // LLM 판단주체 — 라이블리 시드 에이전트가 도메인 should+DDD 로 미매핑 인박스 분류. 환경 미설정/실패는 error(가시).
+    return runMapAgent(params);
+  }
+
   return { status: "error", summary: { error: "unknown action: " + job.action } };
+}
+
+// LLM 판단주체 — 라이블리 시드 에이전트(headless claude -p + lively MCP)를 띄워 미매핑 인박스를 도메인 should+DDD 로 분류.
+//  환경: 박스에 claude CLI(라이블리 시드 로그인) + gateway lively MCP 토큰(env). 미설정/실패는 error 반환(스케줄러 안 죽음·가시).
+//  인박스 비면 에이전트 안 띄움(비용 절약). allowedTools 로 권한 최소화. 결과는 last_summary 에 기록.
+async function runMapAgent(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  const repo = String(params.repo ?? "context-ontology");
+  const { listUnmappedCodeUnits } = await import("./domainmap/core/mappings.js");
+  let inbox: Array<{ path: string }>;
+  try { inbox = await listUnmappedCodeUnits(repo); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
+  if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0 } };
+
+  const agentCmd = String(params.agent_cmd ?? process.env.MAP_AGENT_CMD ?? "claude");
+  const tokenEnv = String(params.token_env ?? process.env.MAP_AGENT_TOKEN_ENV ?? "LIVELY_MAP_AGENT_TOKEN");
+  const token = process.env[tokenEnv];
+  const gatewayUrl = String(params.gateway_url ?? process.env.MAP_AGENT_GATEWAY_URL ?? "http://localhost:8080/mcp");
+  if (!token) {
+    return { status: "error", summary: { error: `map agent 미설정: lively MCP 토큰 env '${tokenEnv}' 없음(라이블리 시드 토큰 설정 후 활성화)`, unmapped: inbox.length } };
+  }
+
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileP = promisify(execFile);
+
+  const dir = await mkdtemp(join(tmpdir(), "map-agent-"));
+  try {
+    const mcpConfig = join(dir, "mcp.json");
+    await writeFile(mcpConfig, JSON.stringify({ mcpServers: { lively: { type: "http", url: gatewayUrl, headers: { Authorization: "Bearer " + token } } } }));
+    const r = await execFileP(agentCmd, [
+      "-p", buildMapPrompt(repo, inbox.length),
+      "--mcp-config", mcpConfig,
+      "--allowedTools", "mcp__lively__list_unmapped,mcp__lively__category_list,mcp__lively__category_get,mcp__lively__map_code_unit,Read,Grep,Glob",
+      "--output-format", "json",
+    ], { timeout: 600_000, maxBuffer: 32 * 1024 * 1024, cwd: process.cwd() });
+    const after = await listUnmappedCodeUnits(repo).catch(() => inbox); // 분류 후 잔여 인박스(검증).
+    return { status: "ok", summary: { unmapped_before: inbox.length, unmapped_after: after.length, agent_tail: (r.stdout || "").slice(-1500) } };
+  } catch (e) {
+    return { status: "error", summary: { error: (e as Error)?.message ?? String(e), unmapped: inbox.length } };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// 가이드 프롬프트 — DDD 원칙 + 라이브 도메인 should 주입 지시 + propose/근거/confidence 규약.
+//  도메인은 하드코딩 안 함: 에이전트가 category_get 으로 라이브 fetch → should 바뀌면 분류도 자동으로 따라감(자기갱신).
+function buildMapPrompt(repo: string, count: number): string {
+  return [
+    `당신은 라이블리 컨텍스트 온톨로지의 **도메인 분류 에이전트**다. repo='${repo}' 의 미매핑 코드유닛(${count}건)을 제품 도메인에 귀속시킨다.`,
+    ``,
+    `## 원칙 (DDD)`,
+    `- 도메인 = 비즈니스 능력 + 유비쿼터스 언어의 경계. 코드의 기술 레이어가 아니라 "어떤 비즈니스 능력을 구현하는가"로 판단한다.`,
+    `- 한 유닛은 그 도메인의 should(정의·범위·규칙)를 가장 직접 구현하는 도메인에 속한다.`,
+    `- 여러 도메인을 가로지르는 공유 인프라(프레임워크·게이트웨이 골격·유틸)는 cross-cutting — 가장 가까운 도메인에 proposed + evidence 에 명시.`,
+    `- 제품 도메인 대상이 아닌 것(비즈니스 문서·세일즈덱·stale 산출물·너무 coarse한 디렉토리 유닛)은 status='rejected' + evidence 에 이유.`,
+    `- **확신 없으면 추측 말고 status='proposed'+낮은 confidence**(가짜 확신 금지 — 사람/2차검증이 처리).`,
+    ``,
+    `## 절차`,
+    `1. category_list(space='product') + 각 category_get 으로 **도메인 정의(should/scope)**를 읽어라 — 이게 유일한 분류 기준이다(하드코딩 말고 라이브로).`,
+    `2. list_unmapped(repo='${repo}') 로 인박스를 가져와라.`,
+    `3. 각 유닛: path·label 을 보고, 필요하면 Read/Grep 으로 파일 헤더·내용·import 를 확인해 무슨 능력인지 파악한다.`,
+    `4. 도메인 should 와 대조해 map_code_unit 호출(target=path, category=도메인 key, origin='llm', evidence=근거 필수):`,
+    `   - 확신(헤더/이름/내용이 should 와 명백히 일치) → status='confirmed', confidence≥0.8.`,
+    `   - 불확실/cross-cutting → status='proposed', confidence<0.8, evidence 에 모호점·후보 도메인.`,
+    `   - 제품 도메인 아님 → status='rejected', evidence 에 이유.`,
+    `5. evidence(근거)는 항상 "도메인 should 의 어느 부분 ↔ 코드의 어느 신호"로 구체적으로. 근거 없는 매핑 금지(불변식).`,
+    `6. 끝나면 {confirmed, proposed, rejected} 카운트 + 한 줄 요약 출력.`,
+  ].join("\n");
 }
 
 // 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분, interval 은 now+interval.

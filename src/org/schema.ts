@@ -350,20 +350,22 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='org_cron'::regclass AND conname='org_cron_action_chk') THEN
-        ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-          CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt'));
-      END IF;
+      -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
+      ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
+      ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
+        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt','map_unmapped'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
   `);
-  // 기본 잡 시드(최초 1회만 — 운영자 변경 보존). 커밋→is 자동 반영: git_url 있는 repo 를 10분마다 결정적 refresh.
+  // 기본 잡 시드(최초 1회만 — 운영자 변경 보존).
+  //  refresh_all: 커밋→is 자동 반영(결정적, LLM 없음). map_unmapped: 미매핑→도메인 LLM 분류(라이블리 시드 에이전트) — 토큰 설정 전이라 기본 OFF.
   await itemsPool.query(`
     INSERT INTO org_cron(id, label, action, interval_sec, enabled, note) VALUES
       ('refresh-all-domainmap','도메인맵 is 신선화 (전 repo)','refresh_all',600,true,
-       'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.')
+       'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.'),
+      ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (라이블리 시드 에이전트)','map_unmapped',1800,false,
+       '라이블리 시드 에이전트(claude -p + lively MCP)가 도메인 should+DDD 로 미매핑 인박스를 분류(propose+근거→audit). 활성화 전 MCP 토큰 env(기본 LIVELY_MAP_AGENT_TOKEN) 설정 필요 → 기본 enabled=false.')
     ON CONFLICT (id) DO NOTHING;
   `);
 
