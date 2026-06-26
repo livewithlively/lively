@@ -14,6 +14,7 @@ import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
+import { provisionProjectRepos } from "./project-provision.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -255,8 +256,14 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), idOf(userOf(req)));
     const b = (req.body ?? {}) as Record<string, unknown>;
+    // cwd(subpath) 는 기본 프로젝트 폴더 — provision 된 레포 워크트리에서 열려면 그 하위경로를 받되 프로젝트 폴더 안으로 봉쇄
+    //  (타 프로젝트 폴더로 열어 이 프로젝트 멤버십을 도용하는 걸 차단). resolveRootPath 가 .. 탈출은 별도 차단.
+    let subpath = project.folder;
+    const want = String(b.subpath ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "");
+    if (want && (want === project.folder || want.startsWith(project.folder + "/"))) subpath = want;
+    else if (want) throw new HttpError(400, "세션 작업 경로가 프로젝트 폴더 밖입니다");
     const session = await createSession(userOf(req), {
-      label: String(b.label ?? ""), rootKey: "shared", subpath: project.folder,
+      label: String(b.label ?? ""), rootKey: "shared", subpath,
       harness: String(b.harness ?? "shell"),
       flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
       autoApprove: !!b.autoApprove,
@@ -268,7 +275,19 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     res.json({ session });
   }));
 
-  // ── ②-b '내 컴퓨터에서 작업'은 웹 모달이 work.mjs 한 줄을 직접 렌더(web/projects.ts) — 서버측 가이드 라우트 불필요(제거). ──
+  // ── ②-b 박스 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).
+  //  서버가 박스에서 직접 실행(work.mjs 의 서버측 대응). 결과 경로는 .lively/project.json(provisioned)에 기록. 팀원 게이트. ──
+  app.post(`${prefix}/:id/provision`, auth, wrap(async (req, res) => {
+    const { project } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const specs = Array.isArray(b.repos) ? b.repos as { name: string; path?: string; worktree?: boolean; branch?: string }[] : [];
+    if (!specs.length) throw new HttpError(400, "provision 할 레포가 없습니다");
+    const provisioned = await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ provisioned });
+  }));
+
+  // ── ②-c '내 컴퓨터에서 작업'은 웹 모달이 work.mjs 한 줄을 직접 렌더(web/projects.ts) — 서버측 가이드 라우트 불필요(제거). ──
 
   // ── ③ 작업 타임라인 — 팀원 activity(author_person 지정 시 그 사람만) ──
   app.get(`${prefix}/:id/activity`, auth, wrap(async (req, res) => {
