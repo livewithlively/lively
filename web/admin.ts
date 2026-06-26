@@ -292,8 +292,8 @@ function renderAdminDetail(detail, sel, data) {
 async function cronPanel(detail, data) {
   const reload = () => cronPanel(detail, data);
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
-  let jobs;
-  try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; }
+  let jobs; let actions: any[] = [];
+  try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; actions = (r && r.actions) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
 
   const rows = el('div', { class: 'wikicat-rows' });
@@ -310,14 +310,14 @@ async function cronPanel(detail, data) {
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }),
-      el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
     rows.append(el('div', { class: 'wikicat-row' }, main, acts));
   }
   const head = el('div', { class: 'wikicat-grouphead' },
     el('span', { class: 'wikicat-grouptitle', text: '스케줄 잡' }),
     el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
-    el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, reload) }));
+    el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload) }));
   const card = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '스케줄러 (자동화)' })),
     el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 세션에 주입, 팀플랜 과금)·커넥터 sync 등. 주기는 “초” 또는 cron식.' }),
@@ -326,9 +326,10 @@ async function cronPanel(detail, data) {
 }
 
 // 잡 추가/수정 폼(오버레이) — id·이름·액션·주기(초 또는 cron식)·켬 + 액션별 params(map_unmapped=세션 피커, refresh_repo=repo, connector_sync=system).
-async function openCronForm(job, reload) {
+// actions = 액션 레지스트리(cron_list 의 actions = CRON_ACTIONS). 드롭다운·파라미터 필드를 여기서 데이터로 생성(하드코딩 X).
+async function openCronForm(job, actions, reload) {
   const isNew = !job;
-  const params = (job && job.params) || {};
+  const jp = (job && job.params) || {};
   const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
@@ -336,51 +337,58 @@ async function openCronForm(job, reload) {
 
   const idInp = el('input', { type: 'text', style: inputStyle, value: job ? job.id : '', placeholder: 'my-job', ...(isNew ? {} : { disabled: true }) });
   const labelInp = el('input', { type: 'text', style: inputStyle, value: (job && job.label) || '', placeholder: '잡 이름' });
-  const actions = [['refresh_all', '전 repo is 신선화'], ['refresh_repo', '한 repo is 신선화'], ['connector_sync', '커넥터 sync'], ['eval_domain_debt', '도메인 부채 평가'], ['map_unmapped', '미매핑 코드 LLM 분류 (세션 주입)']];
   const actionSel = el('select', { style: inputStyle });
-  for (const [v, l] of actions) actionSel.append(el('option', { value: v, text: l, ...((job && job.action === v) ? { selected: true } : {}) }));
+  for (const a of (actions || [])) actionSel.append(el('option', { value: a.key, text: a.label }));
+  if (job && job.action) actionSel.value = job.action; // 신뢰 가능한 선택(속성 spread 대신 value 할당)
   const intervalInp = el('input', { type: 'number', style: inputStyle, value: String((job && job.interval_sec) || 1800), min: '60' });
   const cronInp = el('input', { type: 'text', style: inputStyle, value: (job && job.cron_expr) || '', placeholder: '예: 0 9 * * 1-5 (비우면 위 주기초 사용)' });
   const enabledChk = el('input', { type: 'checkbox', ...((job ? job.enabled : false) ? { checked: true } : {}) });
 
-  const sessSel = el('select', { style: inputStyle });
-  sessSel.append(el('option', { value: '', text: '(상시 세션 선택)' }));
-  const repoInp = el('input', { type: 'text', style: inputStyle, value: params.repo || '', placeholder: 'context-ontology' });
-  const systemInp = el('input', { type: 'text', style: inputStyle, value: params.system || '', placeholder: '비우면 active 전체' });
-  const sessBlock = block('타깃 상시 세션', '‘상시 세션’ 탭에서 등록한 관리 세션만 선택됩니다(개인 세션 아님). keep-alive 가 죽어도 재생성하고, 주입 시 현재 살아있는 세션으로 자동 해소됩니다. 없으면 먼저 상시 세션을 추가하세요.', sessSel);
-  const repoBlock = block('repo', '대상 repo 이름.', repoInp);
-  const systemBlock = block('커넥터 system', 'clickup 등. 비우면 active 전체.', systemInp);
-  const syncVis = () => {
-    const a = actionSel.value;
-    sessBlock.style.display = a === 'map_unmapped' ? '' : 'none';
-    repoBlock.style.display = a === 'refresh_repo' ? '' : 'none';
-    systemBlock.style.display = a === 'connector_sync' ? '' : 'none';
-  };
-  actionSel.onchange = syncVis;
-  try { const r = await api('/api/ui/managed-sessions'); for (const s of ((r && r.sessions) || [])) sessSel.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)'), ...((params.session === s.id) ? { selected: true } : {}) })); } catch { /* 목록 실패해도 폼은 연다 */ }
+  // 액션별 파라미터 — 레지스트리의 params 스펙에서 동적 생성. kind=session → 상시 세션 피커, 그 외 → 텍스트.
+  const paramsWrap = el('div');
+  const paramInputs: Record<string, any> = {};
+  let managedSessions: any[] | null = null;
+  async function renderParams() {
+    const a = (actions || []).find((x) => x.key === actionSel.value);
+    paramsWrap.replaceChildren();
+    for (const k of Object.keys(paramInputs)) delete paramInputs[k];
+    if (!a) return;
+    for (const p of (a.params || [])) {
+      let inp: any;
+      if (p.kind === 'session') {
+        inp = el('select', { style: inputStyle });
+        inp.append(el('option', { value: '', text: '(상시 세션 선택)' }));
+        if (managedSessions == null) { try { const r = await api('/api/ui/managed-sessions'); managedSessions = (r && r.sessions) || []; } catch { managedSessions = []; } }
+        for (const s of (managedSessions || [])) inp.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)') }));
+        if (jp[p.name]) inp.value = jp[p.name];
+      } else {
+        inp = el('input', { type: 'text', style: inputStyle, value: jp[p.name] || '', placeholder: p.hint || '' });
+      }
+      paramInputs[p.name] = inp;
+      paramsWrap.append(block(p.label, p.hint || '', inp));
+    }
+  }
+  actionSel.onchange = renderParams;
+  await renderParams();
 
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '잡 추가' : '저장' });
   const form = el('div', { class: 'proj-settings' },
     block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp),
     block('이름', '관리 목록에 보일 이름.', labelInp),
-    block('액션', '게이트웨이가 실행할 작업(허용 목록).', actionSel),
-    sessBlock, repoBlock, systemBlock,
+    block('액션', '게이트웨이가 실행할 작업(등록된 액션 레지스트리). 액션마다 필요한 인자가 아래에 자동으로 뜹니다.', actionSel),
+    paramsWrap,
     block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp),
     block('cron식 (선택)', '벽시계 스케줄. 예: 0 9 * * 1-5 = 평일 09:00. 비우면 주기초.', cronInp),
     block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
-  syncVis();
   const back = overlayBox(isNew ? '스케줄 잡 추가' : '스케줄 잡 수정 — ' + job.id, form);
   const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
   saveBtn.onclick = async () => {
     const id = idInp.value.trim();
     if (!id) { toast('잡 id 가 필요합니다', true); return; }
-    const action = actionSel.value;
     const p: Record<string, string> = {};
-    if (action === 'map_unmapped' && sessSel.value) p.session = sessSel.value;
-    if (action === 'refresh_repo' && repoInp.value.trim()) p.repo = repoInp.value.trim();
-    if (action === 'connector_sync' && systemInp.value.trim()) p.system = systemInp.value.trim();
-    const body = { id, label: labelInp.value.trim() || null, action, params: p,
+    for (const k of Object.keys(paramInputs)) { const v = String(paramInputs[k].value || '').trim(); if (v) p[k] = v; }
+    const body = { id, label: labelInp.value.trim() || null, action: actionSel.value, params: p,
       interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), enabled: enabledChk.checked };
     saveBtn.disabled = true;
     try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '잡을 추가했습니다' : '저장했습니다'); back.remove(); reload(); }
