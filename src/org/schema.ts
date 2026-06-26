@@ -240,6 +240,7 @@ export async function initOrgSchema(): Promise<void> {
       ('knowledge_save','builtin',true,true),
       ('knowledge_grep','builtin',true,true),
       ('knowledge_search','builtin',true,true),
+      ('knowledge_similar','builtin',true,true),
       ('knowledge_set_lifecycle','builtin',true,true),
       ('knowledge_set_wiki','builtin',true,true),
       ('project_create_v6','builtin',true,true),

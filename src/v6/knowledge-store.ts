@@ -403,6 +403,70 @@ async function rrfSearch(
   });
 }
 
+// ── 유사 지식(벡터검색 #172) — 코사인 유사도(0~1) 기반 최근접. 저장-시 중복감지·관련패널의 프리미티브. ──
+//  · raw 유사도 = 1 - (embedding_vector <=> qvec) (pgvector <=> 는 코사인 거리 → 1-거리 = 코사인 유사도).
+//    RRF score(랭크 기반, hybridSearch)와 달리 **절대 임계 비교 가능**(중복 판정 등) — 이게 proactive·dedup 의 열쇠.
+//  · 입력: name(기존 지식 → 저장된 임베딩 재사용, 재임베딩 불요) 또는 text(임시 텍스트 → 즉시 임베딩). name 우선.
+//  · 임베딩 off / 대상 임베딩 없음 / 쿼리 임베딩 실패 / SQL 실패 → 빈 배열(graceful — 호출부는 "유사 없음"으로 처리).
+const PREVIEW_CHARS = 160; // 식별용 본문 미리보기 길이(쿼리 grep 아님 — similar 는 매치 토큰이 없다)
+function previewBody(body: string): string { return body.slice(0, PREVIEW_CHARS).replace(/\s+/g, " ").trim(); }
+
+export interface KnowledgeSimilarRow {
+  name: string; title: string | null;
+  injection: string; provenance: string; is_wiki: boolean;
+  summary: string | null; updated_at: string;
+  similarity: number;   // 0~1 코사인 유사도(높을수록 유사)
+  snippet?: string;     // 본문 앞부분 미리보기(식별용)
+}
+export async function findSimilarKnowledge(
+  opts: { name?: string; text?: string; limit?: number; minScore?: number; injection?: string; provenance?: string } = {},
+): Promise<KnowledgeSimilarRow[]> {
+  // 1) 쿼리 벡터 리터럴 확보 — name(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
+  let vecLiteral: string | null = null;
+  let selfName: string | null = null;
+  if (opts.name) {
+    selfName = opts.name;
+    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1`, [opts.name]);
+    vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 대상에 임베딩 없으면 null → []
+  } else if (opts.text && opts.text.trim()) {
+    const provider = await activeEmbeddingProvider();
+    if (!provider) return [];                                            // off → 유사 없음
+    try {
+      const [v] = await provider.embed([opts.text.slice(0, 8000)]);
+      vecLiteral = v && v.length ? toVectorLiteral(v) : null;
+    } catch { return []; }                                              // 쿼리 임베딩 실패 → 빈 결과(폴백 아님 — similar 는 벡터 전용)
+  }
+  if (!vecLiteral) return [];
+  // 2) 최근접 — 코사인 거리 오름차순. 자기 자신·미임베딩·비활성 제외. minScore(코사인 유사도) 이상만.
+  const limit = Math.min(Math.max(opts.limit ?? 5, 1), 50);
+  const minScore = typeof opts.minScore === "number" ? opts.minScore : 0;
+  try {
+    const params: unknown[] = [vecLiteral]; const qp = `$1::vector`;     // $1 = 쿼리 벡터(거리·유사도·정렬에 공유)
+    const wh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+    if (selfName) { params.push(selfName); wh.push(`k.name <> $${params.length}`); }
+    if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
+    if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
+    params.push(minScore); const minP = `$${params.length}`;
+    params.push(limit); const limP = `$${params.length}`;
+    const sql = `
+      SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
+             (1 - (k.embedding_vector <=> ${qp}))::float8 AS similarity
+      FROM knowledge k
+      WHERE ${wh.join(" AND ")} AND (1 - (k.embedding_vector <=> ${qp})) >= ${minP}
+      ORDER BY k.embedding_vector <=> ${qp}
+      LIMIT ${limP}`;
+    const rows = await q(itemsPool, sql, params);
+    return rows.map((r) => ({
+      name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
+      is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,
+      similarity: Number(r.similarity), snippet: previewBody(r.body_md ?? ""),
+    }));
+  } catch (e) {
+    console.warn(`[embeddings] 유사 지식 조회 실패: ${(e as Error)?.message}`);
+    return [];                                                          // pgvector 부재 등 → 빈 결과(저장·검색 무손상)
+  }
+}
+
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, state, created_at)

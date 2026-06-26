@@ -7,7 +7,12 @@ import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
+  findSimilarKnowledge,
 } from "../v6/knowledge-store.js";
+
+// 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
+//  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
+const DEDUP_WARN_SIMILARITY = 0.6;
 
 const knowledgeList: Capability = {
   name: "knowledge_list",
@@ -118,7 +123,16 @@ const knowledgeSave: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { knowledge: await upsertKnowledge(input, writeCtx) };
+    const knowledge = await upsertKnowledge(input, writeCtx);
+    // 저장-시 중복감지(#172) — 신규(version=1)일 때만, 방금 저장된 임베딩으로 최근접 검색(재임베딩 X).
+    //  임베딩 off / 유사 없음이면 그냥 { knowledge }. 비차단 경고 — 중복이면 supersedes/병합을 사람·에이전트가 판단.
+    if ((knowledge as any)?.version === 1) {
+      const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
+      if (similar.length) {
+        return { knowledge, similar, similar_note: "비슷한 기존 지식이 있습니다 — 중복이면 supersedes 로 대체하거나 한쪽으로 병합을 검토하세요." };
+      }
+    }
+    return { knowledge };
   },
 };
 
@@ -327,10 +341,59 @@ const knowledgeSearch: Capability = {
   }),
 };
 
+// 유사 지식(벡터검색 #172) — 코사인 유사도(0~1) 기반 최근접. dedup(저장 전 확인)·관련패널의 프리미티브.
+//  search/grep 과 직교: 이건 "이 지식/텍스트와 가까운 것" 자체를 절대 유사도로 돌려준다(랭크 아님 → 임계 비교 가능).
+//  임베딩 off / 대상 임베딩 없음이면 빈 결과(검색은 knowledge_search). MCP + REST(/api/ui/knowledge/similar).
+const knowledgeSimilar: Capability = {
+  name: "knowledge_similar",
+  title: "유사 지식",
+  description:
+    "주어진 지식(name) 또는 텍스트(text)와 **의미적으로 가장 가까운** 지식을 코사인 유사도(0~1)로 찾는다. " +
+    "신규 저장 전 **중복 확인**이나 관련 지식 탐색용. name 을 주면 그 지식의 저장된 임베딩을 재사용(자기 자신 제외), text 를 주면 즉시 임베딩한다(택일). " +
+    "min_score(0~1) 이상만, 유사도 내림차순. **임베딩이 꺼져 있거나 대상에 임베딩이 없으면 빈 결과**(자연어/키워드 검색은 knowledge_search, 정확매칭은 knowledge_grep). " +
+    "knowledge_save 는 신규 저장 시 비슷한 지식이 있으면 응답 similar 로 자동 경고한다 — 이 도구는 저장 전에 미리 확인할 때.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64).optional().describe("기준 지식 이름(저장된 임베딩 재사용, 자기 제외) — text 와 택일"),
+    text: z.string().min(1).max(8000).optional().describe("기준 텍스트(즉시 임베딩) — name 과 택일"),
+    limit: z.number().int().min(1).max(50).optional(),
+    min_score: z.number().min(0).max(1).optional().describe("이 코사인 유사도(0~1) 이상만(기본 0)"),
+    injection: z.enum(["always", "recalled"]).optional(),
+    provenance: z.enum(["authored", "observed"]).optional(),
+  },
+  // REST 마운트는 knowledgeGet(/knowledge/:name) **앞**에 둬야 'similar'가 :name 으로 안 잡힌다(배열 순서 — semantic 과 동형).
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/similar"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        const name = query.name ? String(query.name) : undefined;
+        const text = query.text ? String(query.text) : undefined;
+        if (!name && !text) throw new HttpError(400, "name 또는 text 가 필요합니다");
+        return {
+          name, text,
+          limit: query.limit ? Number(query.limit) : undefined,
+          min_score: query.min_score != null && query.min_score !== "" ? Number(query.min_score) : undefined,
+          injection: query.injection ? String(query.injection) : undefined,
+          provenance: query.provenance ? String(query.provenance) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any) => {
+    if (!input.name && !input.text) throw new Error("name 또는 text 중 하나가 필요합니다");
+    return {
+      entries: await findSimilarKnowledge({
+        name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
+        injection: input.injection, provenance: input.provenance,
+      }),
+    };
+  },
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeGet,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
 ];
