@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep,
 } from "../v6/knowledge-store.js";
 
 const knowledgeList: Capability = {
@@ -46,18 +46,36 @@ const knowledgeList: Capability = {
 const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
-  description: "지식 1건 + 매핑된 카테고리.",
+  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악.",
   scope: "memory",
-  input: { name: z.string().min(1).max(64) },
+  input: {
+    name: z.string().min(1).max(64),
+    offset: z.number().int().min(1).optional().describe("부분읽기 시작 줄(1-based). offset/limit 둘 다 생략 시 전문"),
+    limit: z.number().int().min(1).max(2000).optional().describe("부분읽기 줄 수(기본 200)"),
+  },
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/knowledge/:name"],
-      parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
+      parse: (req) => ({
+        name: String(req.params?.name ?? ""),
+        offset: req.query?.offset ? Number(req.query.offset) : undefined,
+        limit: req.query?.limit ? Number(req.query.limit) : undefined,
+      }) }],
   },
   handler: async (input: any) => {
     const knowledge = await getKnowledge(input.name);
     if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
-    return { knowledge };
+    if (input.offset == null && input.limit == null) return { knowledge };
+    // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
+    const lines = (knowledge.body_md ?? "").split("\n");
+    const from = Math.max(1, input.offset ?? 1);
+    const count = Math.min(input.limit ?? 200, 2000);
+    const slice = lines.slice(from - 1, from - 1 + count);
+    const to = from - 1 + slice.length;
+    return {
+      knowledge: { ...knowledge, body_md: slice.join("\n") },
+      body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
+    };
   },
 };
 
@@ -218,13 +236,16 @@ const knowledgeGrep: Capability = {
     "지식 제목/본문을 **grep**(텍스트 패턴 매칭)한다 — 의미검색 아님. 단어가 본문에 그대로 등장해야 잡힌다(대소문자 무시). " +
     "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
     "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
-    "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get.",
+    "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
+    "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C).",
   scope: "memory",
   input: {
     q: z.string().min(1).describe("grep 패턴 — 한 토큰, 공백구분 다중토큰(AND), 또는 POSIX 정규식. 자연어 문장 금지."),
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     limit: z.number().int().min(1).max(100).optional(),
+    mode: z.enum(["snippets", "names", "count"]).optional().describe("snippets(기본)=매치 줄 스니펫 / names=name·title만 / count=총건수만"),
+    context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄 포함(기본 0, ripgrep -C)"),
   },
   expose: {
     mcp: true,
@@ -238,12 +259,22 @@ const knowledgeGrep: Capability = {
           injection: query.injection ? String(query.injection) : undefined,
           provenance: query.provenance ? String(query.provenance) : undefined,
           limit: query.limit ? Number(query.limit) : undefined,
+          mode: query.mode ? String(query.mode) : undefined,
+          context: query.context ? Number(query.context) : undefined,
         };
       } }],
   },
-  handler: async (input: any) => ({
-    entries: await searchKnowledge(input.q, { injection: input.injection, provenance: input.provenance, limit: input.limit }),
-  }),
+  handler: async (input: any) => {
+    if (input.mode === "count") {
+      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance }) };
+    }
+    return {
+      mode: input.mode ?? "snippets",
+      entries: await searchKnowledge(input.q, {
+        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
+      }),
+    };
+  },
 };
 
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는

@@ -56,6 +56,9 @@ const SNIP_LINE_CHARS = 160;  // 줄당 트림 길이(매치 주변)
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at"]
   .map((c) => "k." + c).join(", ");
+// names 모드 — body_md 도 미조회(스니펫 불필요). 발견용 메타만(가장 얕게).
+const K_GREP_NAMES_SEL = ["name", "title", "injection", "provenance", "is_wiki", "summary", "updated_at"]
+  .map((c) => "k." + c).join(", ");
 
 // 한 줄의 매치 시작 위치(없으면 -1). regex 는 줄 단위 exec, tokens 는 토큰 중 하나라도(OR) 등장하는 최좌단(트림 기준).
 function grepLineAt(line: string, plan: GrepPlan): number {
@@ -73,15 +76,31 @@ function grepTrimLine(line: string, at: number): string {
   const end = Math.min(s.length, start + SNIP_LINE_CHARS);
   return (start > 0 ? "…" : "") + s.slice(start, end).trim() + (end < s.length ? "…" : "");
 }
-// 본문에서 매치 줄들을 ripgrep 처럼 "L<n>: …". 본문 매치가 0줄이면(제목만 매치 등) 앞부분 미리보기로 폴백.
-function grepSnippet(body: string, plan: GrepPlan): string {
+// 본문에서 매치 줄들을 ripgrep 처럼 "L<n>: …". context>0 면 매치 줄 ±context 줄도 포함(-C 패리티,
+//  비연속 그룹은 ⋯ 로 구분). 본문 매치가 0줄이면(제목만 매치 등) 앞부분 미리보기로 폴백.
+function grepSnippet(body: string, plan: GrepPlan, context = 0): string {
   if (!body) return "";
   const lines = body.split("\n");
   const hits: Array<{ i: number; at: number }> = [];
   for (let i = 0; i < lines.length; i++) { const at = grepLineAt(lines[i], plan); if (at >= 0) hits.push({ i, at }); }
   if (hits.length === 0) return body.slice(0, SNIP_LINE_CHARS).replace(/\s+/g, " ").trim();
-  const out = hits.slice(0, SNIP_MAX_LINES).map(({ i, at }) => `L${i + 1}: ${grepTrimLine(lines[i], at)}`);
-  if (hits.length > SNIP_MAX_LINES) out.push(`(+${hits.length - SNIP_MAX_LINES} matches) → knowledge_get`);
+  const ctx = Math.max(0, Math.min(context, 3));
+  const atOf = new Map(hits.map(({ i, at }) => [i, at] as const));
+  const shown = hits.slice(0, SNIP_MAX_LINES);
+  const out: string[] = [];
+  const emitted = new Set<number>();
+  let prev = -1;
+  for (const { i } of shown) {
+    const lo = Math.max(0, i - ctx), hi = Math.min(lines.length - 1, i + ctx);
+    if (prev >= 0 && lo > prev + 1) out.push("  ⋯");
+    for (let j = lo; j <= hi; j++) {
+      if (emitted.has(j)) continue;
+      emitted.add(j);
+      out.push(`L${j + 1}: ${grepTrimLine(lines[j], atOf.get(j) ?? 0)}`);
+    }
+    prev = hi;
+  }
+  if (hits.length > shown.length) out.push(`(+${hits.length - shown.length} matches) → knowledge_get`);
   return out.join("\n");
 }
 
@@ -223,35 +242,57 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
 export interface KnowledgeSearchRow {
   name: string; title: string | null;
   injection: string; provenance: string; is_wiki: boolean;
-  summary: string | null; updated_at: string; snippet: string;
+  summary: string | null; updated_at: string; snippet?: string;  // names 모드는 snippet 생략
 }
-export async function searchKnowledge(
-  qstr: string,
-  opts: { injection?: string; provenance?: string; limit?: number } = {},
-): Promise<KnowledgeSearchRow[]> {
-  const run = async (plan: GrepPlan): Promise<KnowledgeRow[]> => {
-    const params: unknown[] = [];
-    const wh: string[] = [grepWhere(["k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
-    if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
-    if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
-    params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool,
-      `SELECT ${K_GREP_SEL} FROM knowledge k WHERE ${wh.join(" AND ")} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
-  };
+export type KnowledgeGrepMode = "snippets" | "names" | "count";
+// regex→token 폴백 공통화: plan 으로 쿼리하되 POSIX 가 정규식을 거부하면 토큰모드로 1회 재시도.
+async function grepExec<T>(qstr: string, runWithPlan: (plan: GrepPlan) => Promise<T>): Promise<{ result: T; plan: GrepPlan }> {
   let plan = parseGrep(qstr);
-  let rows: KnowledgeRow[];
-  try { rows = await run(plan); }
+  try { return { result: await runWithPlan(plan), plan }; }
   catch (e) {
     if (plan.mode !== "regex") throw e;          // 토큰 모드 실패는 진짜 에러
     plan = { mode: "tokens", tokens: qstr.trim().split(/\s+/).filter(Boolean) || [qstr] };
-    rows = await run(plan);                       // POSIX 가 거부한 정규식 → 토큰 부분일치로 폴백
+    return { result: await runWithPlan(plan), plan };  // POSIX 가 거부한 정규식 → 토큰 부분일치 폴백
   }
-  return rows.map((r) => ({          // body_md 는 snippet 계산용으로만 쓰고 응답에서 제외(전문 누출 방지)
-    name: r.name, title: r.title,
-    injection: r.injection, provenance: r.provenance, is_wiki: r.is_wiki,
-    summary: r.summary, updated_at: r.updated_at,
-    snippet: grepSnippet(r.body_md ?? "", plan),
-  }));
+}
+// 공통 WHERE(grep 매처 + lifecycle='active' + injection/provenance). params 에 push 하고 절 문자열 반환.
+function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: string }, params: unknown[]): string {
+  const wh: string[] = [grepWhere(["k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+  if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
+  if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
+  return wh.join(" AND ");
+}
+
+// mode='count' — 본문/스니펫 없이 매치 총건수만(페이징·존재확인용).
+export async function countKnowledgeGrep(qstr: string, opts: { injection?: string; provenance?: string } = {}): Promise<number> {
+  const { result } = await grepExec(qstr, async (plan) => {
+    const params: unknown[] = [];
+    const where = grepWhereSql(plan, opts, params);
+    const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where}`, params);
+    return Number(rows[0]?.n ?? 0);
+  });
+  return result;
+}
+
+export async function searchKnowledge(
+  qstr: string,
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number } = {},
+): Promise<KnowledgeSearchRow[]> {
+  const withBody = opts.mode !== "names";   // names 모드는 body_md/스니펫 불필요 — 더 얕게 조회
+  const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
+  const { result: rows, plan } = await grepExec(qstr, async (p) => {
+    const params: unknown[] = [];
+    const where = grepWhereSql(p, opts, params);
+    params.push(Math.min(opts.limit ?? 20, 100));
+    return q(itemsPool,
+      `SELECT ${sel} FROM knowledge k WHERE ${where} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
+  });
+  return rows.map((r) => {
+    const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at };
+    if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
+    return base;
+  });
 }
 
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
