@@ -326,6 +326,47 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
+  //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
+  //  보안: action 은 allowlist enum(임의 셸 금지 — org_hook 은 멤버 머신, 이건 게이트웨이 권한이라 블래스트 반경↑).
+  //  params = 액션 인자(예: {repo} / {system}). interval_sec = 폴 주기(최소 60 앱 강제). 단일 프로세스 전제(리더선출 불요).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_cron(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      action TEXT NOT NULL,
+      params JSONB NOT NULL DEFAULT '{}'::jsonb,
+      interval_sec INT NOT NULL DEFAULT 600,
+      cron_expr TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      last_run_at TIMESTAMPTZ,
+      last_status TEXT,
+      last_summary JSONB,
+      next_run_at TIMESTAMPTZ,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_cron'::regclass AND conname='org_cron_action_chk') THEN
+        ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
+          CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt'));
+      END IF;
+    END $$;
+    -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
+  `);
+  // 기본 잡 시드(최초 1회만 — 운영자 변경 보존). 커밋→is 자동 반영: git_url 있는 repo 를 10분마다 결정적 refresh.
+  await itemsPool.query(`
+    INSERT INTO org_cron(id, label, action, interval_sec, enabled, note) VALUES
+      ('refresh-all-domainmap','도메인맵 is 신선화 (전 repo)','refresh_all',600,true,
+       'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
   // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).
   await itemsPool.query(`ALTER TABLE org_member ADD COLUMN IF NOT EXISTS status_message TEXT;`);
 
