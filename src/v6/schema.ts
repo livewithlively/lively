@@ -7,6 +7,8 @@
 //  내부 FK 순서: category → knowledge/project → 정션(knowledge_category/project_*) → activity/mapping/debt ALTER.
 //  멱등: CREATE TABLE IF NOT EXISTS · ADD COLUMN IF NOT EXISTS · CHECK 은 pg_constraint 프로브(기존 idiom 그대로).
 import { itemsPool } from "../items/store.js";
+import { getRuntimeConfig } from "../org/store.js";
+import { ensureEmbeddingSchema } from "./embedding-provider.js";
 
 export async function initV6Schema(): Promise<string> {
   const pool = itemsPool;
@@ -478,6 +480,19 @@ export async function initV6Schema(): Promise<string> {
       PRIMARY KEY(activity_id, emoji, member));
     CREATE INDEX IF NOT EXISTS task_comment_reaction_act_idx ON task_comment_reaction(activity_id);
   `);
+
+  // ── ⑬ 임베딩(pgvector) — 벡터검색(#172) opt-in. provider≠off 일 때만 확장/컬럼(embedding_vector)/HNSW 인덱스 생성. ──
+  //  기본 off=완전 no-op(pgvector 미설치 고객 DB 무손상). fail-open: 확장 없거나 실패해도 부팅·렉시컬 검색 무손상.
+  //  설계: 지식 [[vector-search-172-design-pluggable-seam-oss]]. config SoT=org_runtime_config.embedding_config(getRuntimeConfig).
+  try {
+    const ec = await getRuntimeConfig();
+    if (ec.embedding_config.provider !== "off") {
+      const ok = await ensureEmbeddingSchema(pool, ec.embedding_config.dimensions);
+      console.log(`[v6 schema] 임베딩 스키마 ${ok ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.embedding_config.dimensions})`);
+    }
+  } catch (e) {
+    console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
+  }
 
   return "initialized v6 schema";
 }

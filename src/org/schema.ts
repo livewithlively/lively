@@ -199,13 +199,14 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
-  // 개명 마이그레이션(2026-06-25): knowledge_search → knowledge_grep(의미검색 미스노머 제거 — 실동작은 grep).
+  // 개명 마이그레이션(2026-06-25): 구 knowledge_search(의미검색 미스노머, 실동작 grep) → knowledge_grep.
   //  시드 INSERT **앞**에서 라이브 org_tool 행을 이관해 운영자의 enabled/auto_approve 를 보존한다(뒤에 두면 시드가 기본값으로 새 행을 먼저 박음).
-  //  멱등: 새 이름 행이 이미 있으면 구 행만 제거. 'knowledge_search' 는 추후 벡터검색 도구로 재배정 예약.
+  //  멱등: 새 이름(grep) 행이 없을 때만 개명. ⚠ 2026-06-26(#172): 'knowledge_search' 이름이 **진짜 벡터/하이브리드 검색 도구로 재배정**됨 →
+  //   과거의 무조건 `DELETE knowledge_search` 는 제거(이제 새 도구의 게이트 행을 매 부팅 지우면 안 됨). 개명은 grep 부재 시에만 동작하므로,
+  //   이미 grep 이 있는(개명 완료) DB 에선 no-op 이고 새 knowledge_search 시드(아래 INSERT)가 벡터검색 도구로 박힌다.
   await itemsPool.query(`
     UPDATE org_tool SET name='knowledge_grep'
      WHERE name='knowledge_search' AND NOT EXISTS (SELECT 1 FROM org_tool WHERE name='knowledge_grep');
-    DELETE FROM org_tool WHERE name='knowledge_search';
   `);
 
   // 빌트인 도구 정책 시드 — 운영자 웹 최종 편집본(노출 enabled + 자동승인 auto_approve)을 신규 게이트웨이 기본으로 박는다.
@@ -238,6 +239,7 @@ export async function initOrgSchema(): Promise<void> {
       ('knowledge_list','builtin',true,true),
       ('knowledge_save','builtin',true,true),
       ('knowledge_grep','builtin',true,true),
+      ('knowledge_search','builtin',true,true),
       ('knowledge_set_lifecycle','builtin',true,true),
       ('knowledge_set_wiki','builtin',true,true),
       ('project_create_v6','builtin',true,true),
@@ -282,6 +284,13 @@ export async function initOrgSchema(): Promise<void> {
   // 비면(기본 '[]') 훅 내장 v6 기본목록 사용(writeback_notice 와 동형 오버라이드). 온톨로지 변경 시 재배포 없이 웹에서 갱신.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS write_tools JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: embedding_config — 벡터검색(#172) 추론 seam 설정. config-over-code(고객 모델 스왑). ──
+  // 기본 {"provider":"off"} = 벡터 비활성(현행 grep/ILIKE 그대로). 켜면 OpenAI-compatible /v1/embeddings 로 임베딩.
+  // 시크릿 금지: auth_env_ref 는 환경변수 '이름'만(키 값 아님 — org_db_source.auth_ref idiom). 정규화/해석은 src/v6/embedding-provider.ts.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_config JSONB NOT NULL DEFAULT '{"provider":"off"}'::jsonb;
   `);
 
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──

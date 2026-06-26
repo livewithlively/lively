@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
 } from "../v6/knowledge-store.js";
 
 const knowledgeList: Capability = {
@@ -279,10 +279,40 @@ const knowledgeGrep: Capability = {
   },
 };
 
+// 하이브리드 검색(벡터검색 #172) — 벡터 임베딩 + 렉시컬 grep RRF 융합. grep(정확 매칭)과 직교: 의미·자연어 회수용.
+//  org/schema.ts 가 'knowledge_search' 이름을 이 벡터검색 도구로 예약해 둠(구 knowledge_search→grep 개명 후). MCP 전용.
+//  임베딩 off(기본)면 자동으로 렉시컬(grep)로 폴백 → 켜기 전에도 안전하게 동작(동작 == grep).
+const knowledgeSearch: Capability = {
+  name: "knowledge_search",
+  title: "지식 검색(하이브리드)",
+  meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — grep 과 함께 상시(의미검색이 #172 의 헤드라인 능력)
+  description:
+    "지식을 **의미 기반 하이브리드 검색**한다 — 벡터 임베딩(의미 유사) + 렉시컬 grep 을 RRF 로 융합. " +
+    "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 회수한다(단어가 본문에 그대로 없어도 잡힘). " +
+    "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
+    "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
+    "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본).",
+  scope: "memory",
+  input: {
+    q: z.string().min(1).describe("자연어 질문 또는 키워드 — 의미 유사도로 회수(grep 과 달리 문장 가능)"),
+    injection: z.enum(["always", "recalled"]).optional(),
+    provenance: z.enum(["authored", "observed"]).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    mode: z.enum(["snippets", "names"]).optional().describe("snippets(기본)=스니펫 / names=name·title만"),
+    context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄(grep 채널 매치 시, ripgrep -C)"),
+  },
+  expose: { mcp: true, rest: false },   // MCP 전용(웹 지식탭은 grep /knowledge/search 사용 — 의미검색 UI 는 후속)
+  handler: async (input: any) => ({
+    entries: await hybridSearchKnowledge(input.q, {
+      injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
+    }),
+  }),
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeGet,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
 ];

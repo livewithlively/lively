@@ -11,6 +11,8 @@ import {
   upsertKnowledge as upsertK6, deleteKnowledge as deleteK6,
   type KnowledgeRow,
 } from "../v6/knowledge-store.js";
+// 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
+import { type EmbeddingConfig, resolveEmbeddingConfig, normalizeEmbeddingConfig } from "../v6/embedding-provider.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -460,6 +462,7 @@ export interface OrgRuntimeConfig {
   allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
   allowed_db_hosts: string[]; // db 소스가 접속 가능한 host 화이트리스트(소문자, deny-all 기본) — 사설/localhost SSRF 면제 대상
   write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
+  embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -470,7 +473,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -488,6 +491,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     allowed_db_secret_refs: strArrSafe(row?.allowed_db_secret_refs),
     allowed_db_hosts: strArrSafe(row?.allowed_db_hosts).map((s) => s.toLowerCase()),
     write_tools: strArrSafe(row?.write_tools),
+    embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -504,6 +508,7 @@ export async function updateRuntimeConfig(
     allowed_db_secret_refs?: string[];
     allowed_db_hosts?: string[];
     write_tools?: string[];
+    embedding_config?: EmbeddingConfig;
   },
   actor?: string,
   source?: string,
@@ -518,16 +523,18 @@ export async function updateRuntimeConfig(
   const allowedDbSecretRefs = patch.allowed_db_secret_refs !== undefined ? patch.allowed_db_secret_refs : before.allowed_db_secret_refs;
   const allowedDbHosts = patch.allowed_db_hosts !== undefined ? patch.allowed_db_hosts.map((s) => s.toLowerCase()) : before.allowed_db_hosts;
   const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
+  // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
+  const embeddingConfig = patch.embedding_config !== undefined ? normalizeEmbeddingConfig(patch.embedding_config) : before.embedding_config;
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,1,now(),$9)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,1,now(),$10)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
-       write_tools=EXCLUDED.write_tools,
+       write_tools=EXCLUDED.write_tools, embedding_config=EXCLUDED.embedding_config,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(writeTools), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
   );
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);

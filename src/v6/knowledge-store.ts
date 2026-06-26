@@ -4,6 +4,11 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
+// 임베딩 seam(벡터검색 #172) — config 는 org_runtime_config 에서 직접 읽는다(org/store import 회피 → 무순환).
+import {
+  type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider,
+  embeddingInputText, toVectorLiteral,
+} from "./embedding-provider.js";
 
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
@@ -107,6 +112,35 @@ function grepSnippet(body: string, plan: GrepPlan, context = 0): string {
 const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("knowledge", name, op, before, after, ctx);
 
+// ── 임베딩(벡터검색 #172) — config 가 켜졌을 때만. org_runtime_config.embedding_config 를 직접 읽어 provider 해소(무순환). ──
+//  off(기본)면 null → 쓰기·검색 모두 no-op/렉시컬 폴백. 설계 [[vector-search-172-design-pluggable-seam-oss]].
+async function activeEmbeddingProvider(): Promise<EmbeddingProvider | null> {
+  try {
+    const r = await one(itemsPool, `SELECT embedding_config FROM org_runtime_config WHERE id=1`);
+    return resolveEmbeddingProvider(resolveEmbeddingConfig((r as { embedding_config?: unknown } | undefined)?.embedding_config));
+  } catch {
+    return null; // 설정 못 읽으면 안전하게 off
+  }
+}
+
+// 쓰기 경로 best-effort 임베딩 — provider on 일 때만. 실패는 삼킨다(지식은 이미 저장됨 → 백필로 보강). off=no-op.
+//  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 knowledge_save 를 깨지 않게). 차원 불일치 등은 endpoint 가 거부 → 경고만.
+async function embedKnowledgeBestEffort(name: string, fields: { title?: string | null; summary?: string | null; body_md?: string | null }): Promise<void> {
+  const provider = await activeEmbeddingProvider();
+  if (!provider) return;
+  try {
+    const text = embeddingInputText(fields);
+    if (!text) return;
+    const [vec] = await provider.embed([text]);
+    if (!vec || !vec.length) return;
+    await itemsPool.query(
+      `UPDATE knowledge SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE name=$1`,
+      [name, toVectorLiteral(vec), provider.model]);
+  } catch (e) {
+    console.warn(`[embeddings] '${name}' 임베딩 실패(best-effort, 백필로 보강): ${(e as Error)?.message}`);
+  }
+}
+
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean;
@@ -194,6 +228,8 @@ export async function upsertKnowledge(
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
   for (const id of catIds) await linkKnowledgeCategory(name, id, "confirmed", ctx);
+  // 벡터검색(#172) — 임베딩 on 이면 본문 임베딩 갱신(best-effort, off=no-op, 실패해도 저장 성공 보존).
+  await embedKnowledgeBestEffort(name, { title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
   return after;
 }
 
@@ -243,6 +279,7 @@ export interface KnowledgeSearchRow {
   name: string; title: string | null;
   injection: string; provenance: string; is_wiki: boolean;
   summary: string | null; updated_at: string; snippet?: string;  // names 모드는 snippet 생략
+  score?: number;  // 하이브리드 검색(knowledge_search)의 RRF 점수 — grep(searchKnowledge)은 미설정
 }
 export type KnowledgeGrepMode = "snippets" | "names" | "count";
 // regex→token 폴백 공통화: plan 으로 쿼리하되 POSIX 가 정규식을 거부하면 토큰모드로 1회 재시도.
@@ -290,6 +327,77 @@ export async function searchKnowledge(
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at };
+    if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
+    return base;
+  });
+}
+
+// ── 하이브리드 검색(knowledge_search, 벡터검색 #172) — 벡터(cosine) ∪ 렉시컬(grep) RRF 융합. ──
+//  · 임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchKnowledge(렉시컬)로 폴백(하위호환·safe-by-construction).
+//  · grep 과 다른 점: 단어가 본문에 그대로 없어도 의미 유사로 회수(벡터 채널). 정확 토큰/정규식은 knowledge_grep.
+//  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 벡터-only 매치는 grepSnippet 이 본문 앞부분 미리보기로 폴백.
+const RRF_K = 60;        // RRF 상수(Azure 기본). Σ 1/(k+rank) — 두 채널 모두 상위면 가산.
+const HYBRID_CANDIDATES = 50; // 각 채널(렉시컬·벡터) 후보 수 → 융합 후 limit 로 컷.
+
+export async function hybridSearchKnowledge(
+  qstr: string,
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number } = {},
+): Promise<KnowledgeSearchRow[]> {
+  const provider = await activeEmbeddingProvider();
+  if (!provider) return searchKnowledge(qstr, opts);          // off → grep 그대로(하위호환)
+  let qvec: number[] | null = null;
+  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
+  if (!qvec) return searchKnowledge(qstr, opts);               // 쿼리 임베딩 실패 → 폴백
+  try {
+    return await rrfSearch(qstr, qvec, opts);
+  } catch (e) {
+    console.warn(`[embeddings] 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
+    return searchKnowledge(qstr, opts);                        // pgvector 컬럼 부재 등 → 폴백
+  }
+}
+
+// RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
+async function rrfSearch(
+  qstr: string, qvec: number[],
+  opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number },
+): Promise<KnowledgeSearchRow[]> {
+  const withBody = opts.mode !== "names";
+  const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
+  const limit = Math.min(opts.limit ?? 20, 100);
+  const plan = parseGrep(qstr);
+  const params: unknown[] = [];
+  // 렉시컬 채널 WHERE — grep 매처 + lifecycle='active' + injection/provenance(searchKnowledge 와 동일 의미).
+  const lexWhere = grepWhereSql(plan, opts, params);
+  // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
+  const vecWh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+  if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
+  if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
+  const vecWhere = vecWh.join(" AND ");
+  params.push(toVectorLiteral(qvec)); const qp = `$${params.length}::vector`;   // 쿼리 벡터(lex/vec 양쪽 참조 가능)
+  params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
+  params.push(RRF_K); const kP = `$${params.length}`;
+  params.push(limit); const limP = `$${params.length}`;
+  const sql = `
+    WITH lex AS (
+      SELECT k.name, row_number() OVER (ORDER BY k.updated_at DESC) AS rank
+      FROM knowledge k WHERE ${lexWhere} ORDER BY k.updated_at DESC LIMIT ${candP}
+    ),
+    vec AS (
+      SELECT k.name, row_number() OVER (ORDER BY k.embedding_vector <=> ${qp}) AS rank
+      FROM knowledge k WHERE ${vecWhere} ORDER BY k.embedding_vector <=> ${qp} LIMIT ${candP}
+    ),
+    fused AS (
+      SELECT name, SUM(1.0/(${kP} + rank)) AS score
+      FROM (SELECT name, rank FROM lex UNION ALL SELECT name, rank FROM vec) u
+      GROUP BY name
+    )
+    SELECT ${sel}, f.score::float8 AS score
+    FROM fused f JOIN knowledge k ON k.name=f.name
+    ORDER BY f.score DESC LIMIT ${limP}`;
+  const rows = await q(itemsPool, sql, params);
+  return rows.map((r) => {
+    const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score) };
     if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
