@@ -319,6 +319,11 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS external_outbox_pending_idx ON external_outbox(system, created_at) WHERE done_at IS NULL;
   `);
 
+  // ── 5f) external_base(2026-06-26, #177 #6d 3-way 머지) — 마지막 양측 합의값(공통조상) JSONB. ──
+  //  {name, description, status_category}. 인바운드 머지의 base: INSERT=theirs, 아웃바운드 푸시 후=ours, 인바운드 머지 후=merged.
+  //  merge3(base, ours, theirs): theirs==base→ours유지(외부불변), ours==base→theirs채택(우리불변), 양쪽변경→ours(우리 DB master 타이브레이크).
+  await pool.query(`ALTER TABLE project ADD COLUMN IF NOT EXISTS external_base JSONB;`);
+
   // ── 6) project_member — 프로젝트 팀원(n:n, level=project). 구 project_member 동형(org/schema.ts:304). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_member(

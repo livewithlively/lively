@@ -95,9 +95,12 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
          FROM project WHERE id=$1`, [ob.entity_id]);
       if (!p || p.folder === "__board_anchor__") { await markDone(ob.id); continue; } // 삭제됨/보드앵커 → skip
       const body = mkBody(p, statusMap);
+      // 푸시하는 ours 값 → external_base 갱신(#6d 3-way 의 공통조상). 인바운드가 이 base 로 외부편집 변화를 판정.
+      const baseJson = JSON.stringify({ name: p.name, description: p.description, status_category: p.status_category });
 
       if (p.external_system === "clickup" && p.external_id) {
         await updateSafe(p.external_id, body);
+        await itemsPool.query(`UPDATE project SET external_base=$2::jsonb WHERE id=$1`, [p.id, baseJson]);
         await markDone(ob.id); pushed++;
       } else {
         // CREATE — 부모(project-Task / task-Subtask) external_id 해소. 미푸시면 defer.
@@ -113,8 +116,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         const ct = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
-          `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4, updated_at=now() WHERE id=$1`,
-          [p.id, teamId, ct.id, url]);
+          `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4, external_base=$5::jsonb, updated_at=now() WHERE id=$1`,
+          [p.id, teamId, ct.id, url, baseJson]);
         await markDone(ob.id); pushed++;
       }
     } catch (e) {

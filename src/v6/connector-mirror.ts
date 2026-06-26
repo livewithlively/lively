@@ -39,6 +39,17 @@ function nativeStatusOf(category: string): string {
   }
 }
 
+// 필드별 3-way 머지(#6d). base=마지막 합의값, ours=현 DB, theirs=인입(ClickUp). null/undefined 정규화 비교.
+//  theirs==base → ours(외부 불변, 우리 편집 보존) · ours==base → theirs(우리 불변, 외부 편집 채택) ·
+//  양쪽 변경(충돌) → ours(우리 DB=master 최종 타이브레이크). base 미상(NULL)이면 ours≠theirs 시 ours(보수적).
+function merge3<T>(base: T | null | undefined, ours: T | null | undefined, theirs: T | null | undefined): T | null {
+  const b = base ?? null, o = ours ?? null, t = theirs ?? null;
+  if (o === t) return o;   // 둘이 같음
+  if (t === b) return o;   // theirs 불변 → ours 유지
+  if (o === b) return t;   // ours 불변 → theirs 채택
+  return o;                // 충돌 → ours(우리 DB 타이브레이크)
+}
+
 // 감사 append — entity 별 actor_kind='connector'/channel='connector' 고정. before/after 스냅샷은 JSON 직렬화.
 //  같은 트랜잭션 client(미러 쓰기와 원자적). FK 없는 append-only 라 대상 행 삭제 후에도 이력 보존.
 async function auditConnector(
@@ -150,65 +161,86 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     parentId = (p.rows[0] as { id: number } | undefined)?.id ?? null;
   }
 
-  // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 name(제목)/description 비교. insert=1건, no-op=생략. ──
+  // ── 기존 행 조회 — 3-way 머지 base(external_base) + 감사 스냅샷. ──
   const prev = await client.query(
-    `SELECT id, name, description FROM project
+    `SELECT id, name, description, status, status_category, external_base FROM project
      WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
     [system, instance, externalId],
   );
-  const prevRow = prev.rows[0] as { id: number; name: string; description: string | null } | undefined;
+  const prevRow = prev.rows[0] as {
+    id: number; name: string; description: string | null;
+    status: string; status_category: string | null; external_base: Record<string, unknown> | null;
+  } | undefined;
   const isInsert = !prevRow;
-  const contentChanged = isInsert
-    || (prevRow.name ?? "") !== (name ?? "")
-    || (prevRow.description ?? null) !== (description ?? null);
 
-  // 멱등 upsert — 외부 좌표 부분유니크 ON CONFLICT. created_by='connector:<system>'.
-  //  status 3컬럼: 소스 원문(status_raw) + 정규 카테고리(status_category, 어댑터가 it.fields.status_category 로 전달) +
-  //  CHECK 유효 네이티브 투영(status). ⚠ 우리 DB=master 라 **INSERT(최초 import)에서만** 외부 status 채택 —
-  //  DO UPDATE SET 에 status 3컬럼 제외(재싱크 미클로버, 외부 후속 편집 수렴은 후속 3-way 머지가 관장).
-  //  parent_id 는 위에서 해소(부모 미적재면 NULL — 평탄화 아님, level 은 subtask 유지). created_at 은 insert 만.
   const author = `connector:${system}`;
   const f = (it.fields ?? {}) as Record<string, unknown>;
   const statusRaw = f.status != null ? String(f.status) : null;
   const statusCategory = typeof f.status_category === "string" ? f.status_category : "unstarted";
-  const nativeStatus = nativeStatusOf(statusCategory);
-  const r = await client.query(
-    `INSERT INTO project(
-        level, parent_id, name, description, status, status_raw, status_category, created_by,
-        external_system, external_instance, external_id, external_url,
-        created_at, updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,
-             $9,$10,$11,$12,
-             now(), now())
-     ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
-     DO UPDATE SET
-        level=EXCLUDED.level, parent_id=COALESCE(EXCLUDED.parent_id, project.parent_id),
-        name=EXCLUDED.name, description=EXCLUDED.description,
-        external_url=EXCLUDED.external_url, updated_at=now()
-     RETURNING id, (xmax = 0) AS inserted`,
-    [level, parentId, name, description, nativeStatus, statusRaw, statusCategory, author,
-     system, instance, externalId, it.provenance.external_url ?? null],
-  );
-  const id = (r.rows[0] as { id: number }).id;
-  const inserted = (r.rows[0] as { inserted?: boolean }).inserted === true;
-  // 담당자 — 최초 import(insert)에서만 task_assignee 시드(우리 DB=master, 재싱크 미클로버). 외부 신원=email??id(actor 관례).
-  //  멀티담당자(ClickUp assignees[])를 무손실 적재. 같은 트랜잭션 client(미러 쓰기와 원자적).
-  if (inserted && Array.isArray(f.assignees)) {
-    const memberIds = [...new Set((f.assignees as Array<{ id?: unknown; email?: unknown }>)
-      .map((a) => (a?.email ? String(a.email).trim().toLowerCase() : a?.id != null ? String(a.id) : ""))
-      .filter(Boolean))];
-    let asort = 0;
-    for (const m of memberIds) {
-      await client.query(
-        `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
-        [id, m, asort++]);
+
+  let id: number;
+  let appliedName = name;
+  let appliedDesc: string | null = description;
+  let changed: boolean;
+
+  if (isInsert) {
+    // 최초 import — theirs 채택. external_base=theirs(다음 3-way 의 공통조상). status 3컬럼·담당자도 여기서만 시드(우리 DB=master).
+    const baseJson = JSON.stringify({ name, description, status_category: statusCategory });
+    const ins = await client.query(
+      `INSERT INTO project(
+          level, parent_id, name, description, status, status_raw, status_category, created_by,
+          external_system, external_instance, external_id, external_url, external_base,
+          created_at, updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,now(),now())
+       RETURNING id`,
+      [level, parentId, name, description, nativeStatusOf(statusCategory), statusRaw, statusCategory, author,
+       system, instance, externalId, it.provenance.external_url ?? null, baseJson],
+    );
+    id = (ins.rows[0] as { id: number }).id;
+    if (Array.isArray(f.assignees)) {
+      const memberIds = [...new Set((f.assignees as Array<{ id?: unknown; email?: unknown }>)
+        .map((a) => (a?.email ? String(a.email).trim().toLowerCase() : a?.id != null ? String(a.id) : ""))
+        .filter(Boolean))];
+      let asort = 0;
+      for (const m of memberIds) {
+        await client.query(
+          `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
+          [id, m, asort++]);
+      }
     }
+    changed = true;
+  } else {
+    // 기존 행 — 필드별 3-way 머지(base/ours/theirs). 충돌=ours(우리 DB master). 인바운드는 단일프로세스(스케줄러 락+배치 순차)라 SELECT→UPDATE TOCTOU 무시가능.
+    id = prevRow!.id;
+    const base = prevRow!.external_base ?? null;
+    const mName = merge3(base?.name as string | undefined, prevRow!.name, name) ?? "";
+    const mDesc = merge3(base?.description as string | null | undefined, prevRow!.description, description);
+    const mCat = merge3(base?.status_category as string | undefined, prevRow!.status_category, statusCategory) ?? "unstarted";
+    // status_category 가 ours 로 유지되면 네이티브 status 도 ours 보존(active↔in_progress 동일카테고리 진동 방지). theirs 채택 시만 재투영.
+    const mStatus = mCat === (prevRow!.status_category ?? null) ? prevRow!.status : nativeStatusOf(mCat);
+    const newBase = JSON.stringify({ name: mName, description: mDesc, status_category: mCat });
+    await client.query(
+      `UPDATE project SET
+          level=$2, parent_id=COALESCE($3, parent_id),
+          name=$4, description=$5, status=$6, status_category=$7,
+          external_url=$8, external_base=$9::jsonb, updated_at=now()
+        WHERE id=$1`,
+      [id, level, parentId, mName, mDesc, mStatus, mCat, it.provenance.external_url ?? null, newBase]);
+    appliedName = mName; appliedDesc = mDesc;
+    // 수렴 — 머지결과가 theirs 와 다르면(우리값 우세) ClickUp 도 merged 로 끌어와야 다음 싱크 진동 안 함 → 아웃박스(같은 client, 원자적).
+    if (mName !== name || (mDesc ?? null) !== (description ?? null) || mCat !== statusCategory) {
+      await client.query(
+        `INSERT INTO external_outbox(entity_id, system, op) VALUES($1,$2,'upsert')
+         ON CONFLICT (system, entity_id) WHERE done_at IS NULL
+         DO UPDATE SET op='upsert', updated_at=now(), attempts=0, last_error=NULL`,
+        [id, system]);
+    }
+    changed = (mName !== (prevRow!.name ?? "")) || ((mDesc ?? null) !== (prevRow!.description ?? null)) || (mCat !== (prevRow!.status_category ?? null));
   }
 
-  if (contentChanged) {
-    const beforeSnap = isInsert ? null
-      : { id: prevRow!.id, name: prevRow!.name, description: prevRow!.description };
-    const afterSnap = { id, level, name, description, external_system: system, external_id: externalId, created_by: author };
+  if (changed) {
+    const beforeSnap = isInsert ? null : { id, name: prevRow!.name, description: prevRow!.description };
+    const afterSnap = { id, level, name: appliedName, description: appliedDesc, external_system: system, external_id: externalId, created_by: author };
     await auditConnector(client, "project", String(id), isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
   return true;
