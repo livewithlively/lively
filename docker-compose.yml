@@ -8,6 +8,43 @@ services:
       - LOG_LEVEL=info
       - AUTH_TOKENS_JSON=${AUTH_TOKENS_JSON}
       - DATABASE_URL=${DATABASE_URL}
+      # 조직 지식(knowledge)·v6·임베딩이 사는 쓰기 DB. 벡터검색은 이 DB 에 pgvector 확장이 있어야 한다.
+      - ITEMS_DATABASE_URL=${ITEMS_DATABASE_URL}
       - DB_STATEMENT_TIMEOUT_MS=5000
       - DB_MAX_ROWS=1000
+      # ── 벡터/하이브리드 검색(#172) — 기본 off(knowledge_search 는 grep 폴백, 무중단). ──
+      #  켜기: .env 에 EMBEDDINGS_PROVIDER=http + `docker compose --profile embeddings up`(아래 사이드카 기동) → 백필.
+      #  config 는 웹/DB(org_runtime_config.embedding_config)로도 무재시작 설정 가능(여기 env 는 부트스트랩 시드).
+      - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-off}
+      - EMBEDDINGS_BASE_URL=${EMBEDDINGS_BASE_URL:-http://embeddings:11434}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-bge-m3}
+      - EMBEDDINGS_DIMENSIONS=${EMBEDDINGS_DIMENSIONS:-1024}
+      - EMBEDDINGS_AUTH_ENV=${EMBEDDINGS_AUTH_ENV:-}
     restart: unless-stopped
+
+  # ── 임베딩 사이드카(선택, profile=embeddings) — OpenAI-compatible /v1/embeddings(Ollama, CPU). ──
+  #  스왑 가능: 다른 모델 = EMBEDDINGS_MODEL 변경 + `ollama pull <model>`; 다른 런타임/외부 API = EMBEDDINGS_BASE_URL 만 교체.
+  #  plain `docker compose up`(프로필 미지정) 시엔 기동 안 함 → store 는 off 로 떠서 grep 폴백(안전).
+  embeddings:
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+  # 최초 1회 모델 pull(멱등 — 이미 있으면 즉시 종료). store 의 임베딩 호출 전에 모델 준비.
+  embeddings-init:
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    depends_on:
+      - embeddings
+    environment:
+      - OLLAMA_HOST=embeddings:11434
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${EMBEDDINGS_MODEL:-bge-m3}'
+    restart: "no"
+
+volumes:
+  ollama-models:

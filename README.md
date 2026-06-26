@@ -79,6 +79,26 @@ items DB 감사 테이블이 별도로 보존하지만, 로그도 내구 위치�
 
 Docker: `docker compose up --build`
 
+## 벡터/하이브리드 검색 (선택 — #172)
+
+지식 검색은 두 도구다: **`knowledge_grep`**(정확 텍스트·정규식 매칭, ripgrep 식 — 항상 동작) + **`knowledge_search`**(의미·자연어 **하이브리드** — 벡터 임베딩 ∪ 렉시컬 grep 을 **RRF**(`Σ 1/(rank+60)`)로 융합). 단어가 본문에 그대로 없어도 의미로 회수한다.
+
+**기본 off** — 임베딩을 켜기 전엔 `knowledge_search` 도 grep 으로 자동 폴백한다(무중단·하위호환). 켜는 건 opt-in:
+
+```bash
+# 1) .env: EMBEDDINGS_PROVIDER=http  (기본 사이드카 = Ollama bge-m3, OpenAI-compatible /v1/embeddings)
+# 2) 임베딩 사이드카 기동(+ 모델 자동 pull)
+docker compose --profile embeddings up -d
+# 3) 기존 지식 백필(이후 저장분은 쓰기 시 자동 임베딩)
+npm run build && node --env-file-if-exists=.env scripts/backfill-embeddings.mjs
+```
+
+- **pgvector 필요** — items DB(`ITEMS_DATABASE_URL`)에 `vector` 확장. 부팅 시 `CREATE EXTENSION IF NOT EXISTS vector` + `knowledge.embedding_vector vector(N)` + HNSW(cosine) 인덱스를 멱등 생성한다(권한 없거나 확장 부재면 경고 후 **렉시컬 폴백** — 깨지지 않음).
+- **추론 seam = config-over-code(모델 스왑 자유).** provider/base_url/model/dimensions/auth_env 는 `org_runtime_config.embedding_config`(웹·DB, 무재시작) 또는 `.env` `EMBEDDINGS_*`(부트스트랩 시드)로 정한다 — DB 우선. **계약은 OpenAI-compatible `/v1/embeddings`** 라 OpenAI·로컬 TEI/vLLM·고객 자체 엔드포인트로 base_url 만 바꿔 교체 가능. 시크릿은 `EMBEDDINGS_AUTH_ENV`=환경변수 **이름**만(값 미저장).
+- **모델 교체:** `EMBEDDINGS_MODEL` 변경 → `docker compose exec embeddings ollama pull <model>` → 차원이 다르면 `EMBEDDINGS_DIMENSIONS` 도 바꾸고 `scripts/backfill-embeddings.mjs --all`. 기본 bge-m3(1024d, 다국어)는 한국어 강화 시 KURE-v1(동일 1024d → 재임베딩만)로 무손실 스왑.
+- 끄기: `EMBEDDINGS_PROVIDER=off`(또는 org_runtime_config provider=off) → 즉시 grep 으로 복귀.
+- 렉시컬 채널의 한국어 형태소 FTS(mecab-ko)·리랭커는 후속(현재 렉시컬은 ILIKE 토큰-AND·정규식, RRF 의 정확매칭 절반을 담당).
+
 ## "권한으로 조절"의 실제 구현 (자유 SQL 안전장치)
 
 `db_query` 는 자유 SELECT 를 받되, 통제를 **DB 레이어**로 내려서 안전하게 만든다:
