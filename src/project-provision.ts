@@ -18,7 +18,9 @@ const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/; // git 브랜치명(선
 const GIT_TIMEOUT_MS = 180_000;
 
 export interface RepoSpec { name: string; path?: string; worktree?: boolean; branch?: string; }
-export interface ProvisionedRepo { name: string; path: string; worktree: boolean; branch: string | null; cwd: string; cloned: boolean; }
+//  subpath = cwd 의 workspace 루트 기준 상대경로. 워크트리(project/<id>/<repo>)면 프로젝트 폴더 안이라 세션 cwd 로 쓸 수 있다
+//   (세션 POST 가 프로젝트 폴더 봉쇄를 거므로). 클론 직접작업(workspace/repos/<repo>)이면 프로젝트 폴더 밖이라 세션 cwd 불가.
+export interface ProvisionedRepo { name: string; path: string; worktree: boolean; branch: string | null; cwd: string; subpath: string; cloned: boolean; }
 
 // git 실행 — async spawn(이벤트루프 비블로킹). 셸 미사용(arg-array) → 인젝션 불가. 타임아웃 시 kill.
 function git(args: string[], cwd?: string): Promise<{ ok: boolean; out: string; err: string }> {
@@ -94,7 +96,8 @@ export async function provisionProjectRepos(
       }
       cwd = wtPath;
     }
-    out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, cloned });
+    const subpath = path.relative(PROJECT_SHARED_BASE, cwd);
+    out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
   }
 
   await writeProvisionMarker(projDir, projectId, out);
@@ -107,7 +110,7 @@ async function writeProvisionMarker(projDir: string, projectId: number, repos: P
   const file = path.join(projDir, ".lively", "project.json");
   let prev: Record<string, unknown> = {};
   try { prev = JSON.parse(await fsp.readFile(file, "utf8")); } catch { /* 신규/파손 */ }
-  const provisioned = repos.map((r) => ({ name: r.name, path: r.path, worktree: r.worktree, branch: r.branch, cwd: r.cwd }));
+  const provisioned = repos.map((r) => ({ name: r.name, path: r.path, worktree: r.worktree, branch: r.branch, cwd: r.cwd, subpath: r.subpath }));
   const next = { ...prev, project_id: projectId, provisioned };
   await fsp.mkdir(path.dirname(file), { recursive: true });
   await fsp.writeFile(file, JSON.stringify(next, null, 2) + "\n");

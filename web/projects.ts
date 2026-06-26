@@ -4836,6 +4836,28 @@ async function openProjectSessionForm(id, reload, base, projectName) {
   }
   harnessSel.addEventListener('change', renderFlags);
   renderFlags();
+
+  // ── 레포에서 작업 (선택) — 박스가 레포를 준비(입력 경로에 없으면 레지스트리 clone_url 로 clone)한다. '워크트리'면
+  //  project/<id>/<repo> 격리 폴더(브랜치 project/<id>)를 만들어 거기서 세션을 열고, 끄면 프로젝트 폴더에서 연다. ──
+  const repoSel = el('select', {}, el('option', { value: '', text: '— 레포 없이 (프로젝트 폴더에서) —' }));
+  const repoPathIn = el('input', { type: 'text', placeholder: '박스 레포 경로 (비우면 workspace/repos/<레포> 에 clone)' });
+  const wtCb = el('input', { type: 'checkbox' }); wtCb.checked = true;
+  const branchIn = el('input', { type: 'text', value: 'project/' + id });
+  const branchRow = el('div', { class: 'field', style: 'margin-top:8px' }, el('label', { class: 'field-label', text: '브랜치' }), branchIn);
+  const repoDetail = el('div', { style: 'display:none;margin-top:8px;padding-left:8px;border-left:2px solid rgba(127,127,127,.2)' },
+    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '박스 레포 경로 (선택)' }), repoPathIn),
+    el('label', { class: 'proj-sess-auto', style: 'margin-top:8px' }, wtCb,
+      el('span', { text: ' 워크트리 생성 — 전용 브랜치로 격리하고 그 폴더에서 세션 (끄면 프로젝트 폴더에서)' })),
+    branchRow);
+  const repoSync = () => { repoDetail.style.display = repoSel.value ? '' : 'none'; branchRow.style.display = wtCb.checked ? '' : 'none'; };
+  repoSel.addEventListener('change', repoSync);
+  wtCb.addEventListener('change', repoSync);
+  try {
+    const rr = await api('/api/ui/repos');
+    ((rr && rr.domainmapRepos) || []).forEach((it) => { if (it && it.name) repoSel.append(el('option', { value: it.name, text: it.name })); });
+  } catch (_) { /* graceful: 레포 없음 → '레포 없이'만 */ }
+  repoSync();
+
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들고 입장' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
   const back = overlayBox('새 터미널 세션',
@@ -4844,6 +4866,7 @@ async function openProjectSessionForm(id, reload, base, projectName) {
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행' }), harnessSel),
     flagsBox,
     el('div', { style: 'margin-top:10px' }, autoRow),
+    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '레포에서 작업 (선택)' }), repoSel, repoDetail),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => nameIn.focus(), 0);
   saveBtn.onclick = async () => {
@@ -4855,14 +4878,26 @@ async function openProjectSessionForm(id, reload, base, projectName) {
       if (v) flags[k] = v;
     }
     try {
+      // 레포 선택 시: 먼저 박스에 provision(clone/worktree) → 워크트리면 그 폴더(subpath)에서 세션을 연다.
+      let subpath;
+      const repo = repoSel.value;
+      if (repo) {
+        saveBtn.textContent = '레포 준비 중… (clone 시 잠시)';
+        const pr = await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({
+          repos: [{ name: repo, path: repoPathIn.value.trim(), worktree: wtCb.checked, branch: branchIn.value.trim() }],
+        }) });
+        const prov = (pr && pr.provisioned && pr.provisioned[0]) || null;
+        if (prov && prov.worktree && prov.subpath) subpath = prov.subpath; // 워크트리는 프로젝트 폴더 안 → 세션 cwd 로
+      }
+      saveBtn.textContent = '세션 여는 중…';
       const r = await api(B + id + '/sessions', { method: 'POST', body: JSON.stringify({
-        label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked,
+        label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked, subpath,
       }) });
       back.remove();
-      toast('세션을 만들었습니다');
+      toast(subpath ? '레포 준비 완료 · 세션을 만들었습니다' : '세션을 만들었습니다');
       if (r && r.session && r.session.id) window.open('/ui/terminal.html?session=' + encodeURIComponent(r.session.id) + '&label=' + encodeURIComponent(r.session.label || ''), '_blank');
       reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; saveBtn.textContent = '만들고 입장'; }
   };
 }
 
