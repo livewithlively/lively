@@ -14,6 +14,7 @@ import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
 import { getRepo } from "./domainmap/core/repos.js";
+import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
@@ -102,6 +103,8 @@ async function manifestFiles(base: string, limit = 5000): Promise<Array<{ path: 
   return out;
 }
 
+// AGENTS.md 생성기·규칙 로더는 ./v6/agents-md.js 로 분리(캐퍼빌리티 계층도 생성 직후 호출). 여기선 import 만.
+
 // ── '내 컴퓨터에서 작업' 가이드 — 담당자가 본인 PC(원격)에서 따라 할 단계별 명령을 생성한다. 서버는 실행하지 않는다. ──
 //  전제: 코드 레포는 각자 PC에서 git 으로 받고(박스와 미동기화, git 으로 수렴), 프로젝트 '공유 폴더'만 박스와 동기화한다.
 //  경로는 담당자 홈을 모르므로 $HOME 기준. 공백·한글 경로를 위해 모든 경로 인자는 따옴표로 감싼다(~ 는 $HOME 으로 치환).
@@ -178,6 +181,7 @@ async function buildLocalWorkGuide(inp: {
 // 한 소스(org 또는 v6)에 대해 파일/세션/타임라인 라우트를 prefix 아래 등록한다.
 function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, deps: ProjectDeps): void {
   const { prefix } = deps;
+  const isV6 = prefix.includes("/v6/");  // AGENTS.md 생성·규칙 엔드포인트는 v6 전용(getProject 가 v6).
 
   // 프로젝트 + 폴더 절대경로(검증됨). 팀원 게이트. v6 는 folder 비면 ensureFolder 로 생성.
   const projBase = async (id: number, viewerId?: string): Promise<{ project: { id: number; name: string; folder: string }; base: string }> => {
@@ -287,13 +291,30 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 팀원 게이트. ──
+  //  v6: 매니페스트 전 AGENTS.md 를 현재 프로젝트 상태로 재생성(write-if-changed) → pull 마다 최신 digest 가 따라감.
   app.get(`${prefix}/:id/shared/manifest`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    if (isV6) await ensureAgentsMd(Number(req.params.id), base).catch(() => { /* 비치명 */ });
     res.setHeader("Cache-Control", "no-store");
     const files = await manifestFiles(base);
     const newest = files.reduce((m, f) => (f.mtime > m ? f.mtime : m), 0);
     res.json({ files, newest, count: files.length });
   }));
+
+  // ── ①-c 프로젝트 규칙(AGENTS.md 의 '규칙' 영역) — 로드/저장. digest 는 자동, 규칙만 사람이 편집. v6 전용. ──
+  if (isV6) {
+    app.get(`${prefix}/:id/rules`, auth, wrap(async (req, res) => {
+      const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await readProjectAgentsMd(base));
+    }));
+    app.post(`${prefix}/:id/rules`, auth, wrap(async (req, res) => {
+      const { project, base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+      const rules = String(((req.body ?? {}) as Record<string, unknown>).rules ?? "");
+      await ensureAgentsMd(project.id, base, rules);
+      res.json({ ok: true });
+    }));
+  }
 
   // ── ② 터미널 세션(공동 — 프로젝트 팀원 전용) — 목록 / 생성. 비팀원은 게이트 403. ──
   app.get(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {

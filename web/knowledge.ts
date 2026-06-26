@@ -88,8 +88,12 @@ function openCategoryForm(space, existing, reload) {
 // 도메인 의존 관계(category-edges) — should(사람 작성·편집/삭제 가능) + is(스캔 소유·읽기전용)를 한 섹션에.
 //  domains = 제품 카테고리 목록(셀렉터 옵션). 자체 fetch → 행 렌더 + should-edge 추가 폼.
 function knowledgeSubBar(active) {
-  // space 하위 탭(사업·제품·시스템) + 📌 인덱스(핀 전용 뷰). 도메인-코드 의존성(코드구조)은 독립 탭으로 분리(2026-06-24).
-  const bar = spaceSubBar('#/knowledge', SPACE_LABEL[active] ? active : '');
+  // 공간(사업·제품·시스템) 칩 제거 — 사이드바로 통합(2026-06-26). [카테고리(둘러보기)] + [📌 인덱스]만.
+  //  사이드바가 3 space 를 한데 노출하고 우리 팀 카테고리를 상단 펼침/나머지는 접이식으로 보여준다.
+  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
+  const onBrowse = active !== 'pinned' && active !== 'stats' && active !== 'review';
+  bar.append(el('a', { class: 'sub-cat' + (onBrowse ? ' active' : ''), href: '#/knowledge',
+    role: 'tab', 'aria-selected': onBrowse ? 'true' : 'false', text: '카테고리' }));
   const onPinned = active === 'pinned';
   bar.append(el('a', { class: 'sub-cat' + (onPinned ? ' active' : ''), href: '#/knowledge/pinned',
     role: 'tab', 'aria-selected': onPinned ? 'true' : 'false', title: '핀된 지식만 — 매 대화 첫머리에 깔리는 WIKI 인덱스', text: '📌 인덱스' }));
@@ -158,8 +162,8 @@ async function renderKnowledge(view, sub, params) {
   if (sub === 'stats') return renderKnowledgeStats(view);
   if (sub === 'review') return renderKnowledgeReview(view);
   if (sub === 'pinned') return renderKnowledgePinned(view);
-  const space = SPACE_LABEL[sub] ? sub : 'business';
-  return renderKnowledgeSpace(view, space, params);
+  // 그 외(browse·구 business/product/system URL) → 카테고리 통합 둘러보기(사이드바가 3 space 노출). space 인자 무시.
+  return renderKnowledgeSpace(view, sub, params);
 }
 
 // 📌 인덱스(핀 전용 뷰) — is_wiki=true 지식만. 핀된 지식의 제목·분류가 매 세션 첫머리(가이드 ${wiki})에 항상 주입된다(본문 제외).
@@ -188,10 +192,9 @@ async function renderKnowledgePinned(view) {
 }
 
 // space 뷰(사업·제품·시스템) — 좌측 카테고리 사이드바(필터) + 우측 지식 목록(검색·injection·provenance 필터).
-async function renderKnowledgeSpace(view, space, params) {
-  const f = (state.knowledge = state.knowledge || { space, category: '', injection: '', provenance: '', q: '' });
-  // space 가 바뀌면 카테고리 필터는 초기화(다른 space 의 카테고리 id 는 무의미).
-  if (f.space !== space) { f.space = space; f.category = ''; }
+async function renderKnowledgeSpace(view, _space, params) {
+  // 공간 병합(2026-06-26) — space 인자 무시(사이드바가 3 space 통합). 카테고리/필터만 상태로.
+  const f = (state.knowledge = state.knowledge || { space: '', category: '', injection: '', provenance: '', q: '' });
   if (params) {
     if (params.has('category')) f.category = params.get('category') || '';
     if (params.has('injection')) f.injection = params.get('injection') || '';
@@ -199,7 +202,7 @@ async function renderKnowledgeSpace(view, space, params) {
     if (params.has('q')) f.q = params.get('q') || '';
   }
 
-  view.replaceChildren(knowledgeSubBar(space), skeleton('지식을 불러오는 중'));
+  view.replaceChildren(knowledgeSubBar('browse'), skeleton('지식을 불러오는 중'));
 
   // 선택(일괄삭제) 상태 — 리페치 없이 로컬 재페인트. names = 선택된 지식 name 집합.
   const sel = { mode: false, names: new Set() };
@@ -216,19 +219,17 @@ async function renderKnowledgeSpace(view, space, params) {
           title: '새 지식을 작성합니다', onclick: () => openKnowledgeEditor(null, { isNew: true, onSaved: () => refetch() }) }) : null,
         selectBtn,
         el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }))),
-    el('p', { class: 'sub', text: '맥락의 기록 — ' + SPACE_LABEL[space] + ' 영역의 지식. 왼쪽에서 카테고리로 좁히고, 위에서 검색·주입·출처로 거릅니다. 주입(항상/검색)과 출처(저작/외부 미러)는 직교 두 축입니다.' }),
+    el('p', { class: 'sub', text: '맥락의 기록 — 왼쪽 사이드바에서 카테고리(우리 팀 먼저)로 좁히고, 위에서 검색·주입·출처로 거릅니다. 주입(항상/검색)과 출처(저작/외부 미러)는 직교 두 축입니다.' }),
   );
 
-  // 좌측 카테고리 사이드바(이 space 의 카테고리 + '전체'). 클릭 = 필터(category_id).
+  // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
   const side = el('aside', { class: 'browse-side' });
-  let cats: any[] = [];
-  try {
-    cats = await api('/api/ui/categories?' + new URLSearchParams({ space })).then((d) => (d && d.categories) || []);
-  } catch (_) { /* graceful: 사이드바 카테고리 생략(목록은 계속) */ }
+  const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
+  const myIds = myCatIdSet();
+  let bySpace: any = { business: [], product: [], system: [] };
+  try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
   function buildSide() {
-    const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
-    nav.append(knSideItem('전체', '', f.category === ''));
-    for (const c of cats) nav.append(knSideItem(c.name || c.key, String(c.id), String(f.category) === String(c.id)));
+    buildSpacesNav(nav, bySpace, f.category, myIds);
     side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), nav);
   }
   buildSide();
@@ -250,7 +251,7 @@ async function renderKnowledgeSpace(view, space, params) {
     if (f.provenance) p.set('provenance', f.provenance);
     if (f.q) p.set('q', f.q);
     const qs = p.toString();
-    history.replaceState(null, '', '#/knowledge/' + space + (qs ? '?' + qs : ''));
+    history.replaceState(null, '', '#/knowledge' + (qs ? '?' + qs : ''));
   }
 
   // 목록 페인트(서버 페치 분리) — 선택 모드면 행을 체크 가능하게 렌더.
@@ -299,7 +300,7 @@ async function renderKnowledgeSpace(view, space, params) {
     listBox.replaceChildren(skeletonRows(4));
     foot.replaceChildren();
     try {
-      const p = new URLSearchParams({ space, limit: '200', orderBy: 'updated_at' });
+      const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at' });
       if (f.category) p.set('category', f.category);
       if (f.injection) p.set('injection', f.injection);
       if (f.provenance) p.set('provenance', f.provenance);
@@ -336,7 +337,7 @@ async function renderKnowledgeSpace(view, space, params) {
     side,
     el('section', { class: 'browse-main' }, filterBar, bulkBar, listBox, foot),
   );
-  view.replaceChildren(head, knowledgeSubBar(space), layout);
+  view.replaceChildren(head, knowledgeSubBar('browse'), layout);
   applyReveal([layout]);
   refetch();
 }
@@ -346,6 +347,59 @@ function knSideItem(label, catVal, on) {
   return el('a', { class: 'tree-item' + (on ? ' on' : ''), href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0' },
     el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: catVal ? '·' : '∗' }),
     el('span', { class: 'tree-label', text: label }));
+}
+
+// ── 공유 사이드바(프로젝트·위키 탭 공용, 2026-06-26) — 3 space 카테고리를 한 사이드바에 통합. ──
+//  공간 서브탭을 없애고, 보는 멤버의 '우리 팀' 카테고리(state.me.team_category_ids = 팀 소유/이해관계)를 상단에
+//  펼쳐 노출(★), 나머지는 space별 접이식(<details>)으로 접어 하위에 둔다. data-cat-val 위임은 호출부가 유지.
+//  ★오너십=우선순위, 접근제한 아님 — 모든 카테고리는 여전히 사이드바에 있고 선택·검색 가능.
+
+// 3 space 카테고리를 한 번에 — {business, product, system}. 각 항목 graceful(실패=빈 배열).
+async function fetchAllSpaceCats(): Promise<any> {
+  const out: any = { business: [], product: [], system: [] };
+  const lists = await Promise.all(SPACE_SUBS.map((s) =>
+    api('/api/ui/categories?' + new URLSearchParams({ space: s.key })).then((d) => (d && d.categories) || []).catch(() => [])));
+  SPACE_SUBS.forEach((s, i) => { out[s.key] = lists[i]; });
+  return out;
+}
+
+// 내 팀 카테고리 id 집합(state.me.team_category_ids) — 문자열 Set(catVal 비교용). 미로그인/미소속이면 빈 집합.
+function myCatIdSet(): Set<string> {
+  const ids = (state.me && (state.me as any).team_category_ids) || [];
+  return new Set((ids as any[]).map((x) => String(x)));
+}
+
+// 공유 사이드바 nav 채우기 — 우리 팀(상단 펼침 ★) + space별 접이식(나머지). nav 내부만 교체(클릭 위임은 호출부 side 에).
+//  myIds 비면(미소속) 우리 팀 그룹 생략하고 3 space 를 모두 펼쳐 노출(기존 동작에 근접). selected = 현재 선택 catVal(문자열).
+function buildSpacesNav(nav, bySpace, selected, myIds: Set<string>) {
+  nav.replaceChildren();
+  nav.append(knSideItem('전체', '', !selected || selected === ''));
+  // 우리 팀 — 전 space 에서 내 카테고리(제품→사업→시스템 순). 항상 펼침.
+  const mine: any[] = [];
+  for (const sk of ['product', 'business', 'system']) for (const c of (bySpace[sk] || [])) if (myIds.has(String(c.id))) mine.push(c);
+  const hasMine = mine.length > 0;
+  if (hasMine) {
+    const grp = el('details', { class: 'tree-group tree-group-mine', open: '' },
+      el('summary', { class: 'tree-grouphead' },
+        el('span', { class: 'tree-groupstar', 'aria-hidden': 'true', text: '★' }),
+        el('span', { class: 'tree-grouptitle', text: '우리 팀' }),
+        el('span', { class: 'tree-groupcount', text: String(mine.length) })));
+    for (const c of mine) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
+    nav.append(grp);
+  }
+  // 나머지 — space별(사업·제품·시스템). 우리 팀이 있으면 접힘 기본(무관=하위), 없으면 펼침. 선택된 카테고리가 든 그룹은 펼침.
+  for (const sk of ['business', 'product', 'system']) {
+    const rest = (bySpace[sk] || []).filter((c) => !myIds.has(String(c.id)));
+    if (!rest.length) continue;
+    const selectedHere = rest.some((c) => String(c.id) === String(selected));
+    const open = !hasMine || selectedHere;
+    const grp = el('details', { class: 'tree-group' + (hasMine ? ' tree-group-rest' : ''), ...(open ? { open: '' } : {}) },
+      el('summary', { class: 'tree-grouphead' },
+        el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] }),
+        el('span', { class: 'tree-groupcount', text: String(rest.length) })));
+    for (const c of rest) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
+    nav.append(grp);
+  }
 }
 
 // 통계 뷰 — 전 지식을 한 번 가져와 injection/provenance/space 별 집계 카드로.
@@ -706,11 +760,14 @@ function trashRow(e, view) {
 export {
   SPACE_LABEL,
   SPACE_SUBS,
+  buildSpacesNav,
+  fetchAllSpaceCats,
   knInjectChip,
   knProvChip,
   knRow,
   knSideItem,
   knowledgeSubBar,
+  myCatIdSet,
   openCategoryForm,
   renderKnowledge,
   renderKnowledgeDetail,

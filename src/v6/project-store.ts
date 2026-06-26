@@ -77,6 +77,7 @@ export interface ProjectDetail extends ProjectRow {
   fields: unknown[]; // 커스텀 필드(클릭업형 컬럼) 정의 — 루트 프로젝트 단위. 값은 각 task 의 field_values 에.
   tags: unknown[]; // 프로젝트 자체 태그(클릭업식 메타) — task_tag_link 를 project.id 로 사용.
   time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
+  repos: string[]; // 관련 레포 이름(project_repo) — AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -147,7 +148,11 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
   // 프로젝트 자체의 태그·시간추적(클릭업식 메타) — 태스크와 동일 테이블을 project.id 로 사용.
   const [tags, time] = await Promise.all([getTaskTags(id), getTaskTime(id)]);
 
-  return { ...project, members, tasks, categories, knowledge, fields, tags, time };
+  // 관련 레포(project_repo) — 레포 레지스트리 이름 배열(AGENTS.md '관련 레포' + 모달 기본값).
+  const repoRows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [id]);
+  const repos = repoRows.map((r) => r.repo);
+
+  return { ...project, members, tasks, categories, knowledge, fields, tags, time, repos };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
@@ -464,6 +469,37 @@ export async function linkProjectKnowledge(projectId: number, name: string, rela
      VALUES($1,$2,$3,now()) ON CONFLICT (project_id, name, relation) DO NOTHING`,
     [projectId, name, relation]);
   await auditProject(String(projectId), "link_knowledge", null, { name, relation }, ctx);
+}
+
+// ── 관련 레포(project_repo, n:n) — 전체 교체 셋(웹 세부설정 멀티선택). repo 레지스트리 이름 참조. ──
+export async function getProjectRepos(projectId: number): Promise<string[]> {
+  const rows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [projectId]);
+  return rows.map((r) => r.repo);
+}
+export async function setProjectRepos(projectId: number, repos: string[], ctx?: WriteCtx): Promise<string[]> {
+  const clean = [...new Set(repos.map((r) => String(r).trim()).filter(Boolean))].slice(0, 50);
+  const before = await getProjectRepos(projectId);
+  await itemsPool.query(`DELETE FROM project_repo WHERE project_id=$1`, [projectId]);
+  for (let i = 0; i < clean.length; i++) {
+    await itemsPool.query(`INSERT INTO project_repo(project_id, repo, sort) VALUES($1,$2,$3)`, [projectId, clean[i], i]);
+  }
+  await auditProject(String(projectId), "set_repos", { repos: before }, { repos: clean }, ctx);
+  return clean;
+}
+
+// ── 카테고리(project_category, n:n) — 전체 교체 셋(웹 생성 모달·세부설정 멀티선택). 단건 link/unlink 와 공존. ──
+export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<number[]> {
+  const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 50);
+  const beforeRows = await q(itemsPool, `SELECT category_id FROM project_category WHERE project_id=$1`, [projectId]);
+  const before = beforeRows.map((r) => Number(r.category_id));
+  await itemsPool.query(`DELETE FROM project_category WHERE project_id=$1`, [projectId]);
+  for (const cid of clean) {
+    await itemsPool.query(
+      `INSERT INTO project_category(project_id, category_id, added_at) VALUES($1,$2,now()) ON CONFLICT (project_id, category_id) DO NOTHING`,
+      [projectId, cid]);
+  }
+  await auditProject(String(projectId), "set_categories", { category_ids: before }, { category_ids: clean }, ctx);
+  return clean;
 }
 
 export async function unlinkProjectKnowledge(projectId: number, name: string, relation: string, ctx?: WriteCtx): Promise<void> {
