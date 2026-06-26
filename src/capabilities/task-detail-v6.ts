@@ -208,7 +208,7 @@ const linkTargetsV6: Capability = {
 const taskCommentV6: Capability = {
   name: "task_comment_v6",
   title: "태스크 댓글(v6)",
-  description: "태스크에 댓글을 단다(activity 미러, type=comment). {text}. 작성 후 갱신된 피드 반환. 웹 전용.",
+  description: "태스크에 댓글을 단다(task_comment 테이블). {text}. 작성 후 갱신된 피드 반환. 웹 전용.",
   scope: "memory",
   input: { id: z.number().int().positive(), text: z.string().min(1), parent_id: z.number().int().positive().nullable().optional() },
   expose: {
@@ -230,7 +230,7 @@ const taskCommentV6: Capability = {
 const commentReactionV6: Capability = {
   name: "task_comment_reaction_v6",
   title: "댓글 반응(v6)",
-  description: "댓글(activity)에 이모지 반응을 토글한다. {emoji}. 웹 전용.",
+  description: "댓글(task_comment)에 이모지 반응을 토글한다. {emoji}. 웹 전용.",
   scope: "memory",
   input: { id: z.number().int().positive(), emoji: z.string().min(1) },
   expose: {
@@ -281,11 +281,11 @@ const tagDeleteV6: Capability = {
 };
 
 // — GET 프로젝트 코멘트 피드(드로어) — getTaskDetail 은 task/subtask 레벨만 처리하므로, 프로젝트(루트) 행의
-//   코멘트는 이 전용 GET 으로 읽는다. activity(project_id=프로젝트, type=comment) + 감사 이벤트(getTaskFeed). —
+//   코멘트는 이 전용 GET 으로 읽는다. task_comment(task_id=프로젝트) + 감사 이벤트(getTaskFeed). —
 const projectCommentsV6: Capability = {
   name: "project_comments_v6",
   title: "프로젝트 코멘트(v6)",
-  description: "프로젝트(루트) 행의 코멘트/활동 피드. 댓글(activity type=comment) + 시스템 이벤트. 웹 코멘트 드로어 전용.",
+  description: "프로젝트(루트) 행의 코멘트/활동 피드. 댓글(task_comment) + 시스템 이벤트. 웹 코멘트 드로어 전용.",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {

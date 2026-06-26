@@ -1828,7 +1828,7 @@ function projectCommentsSection(id, members) {
 }
 
 // ── 코멘트 드로어 — 코멘트 섹션 클릭 → 우측에서 슬라이드되는 오버레이(상시 점유 X). 프로젝트 전체 코멘트, 모든 팀원 작성. ──
-//  저장: activity(project_id=프로젝트 id, type='comment') — v6 에서 태스크=프로젝트행이라 /tasks/:id/comments·/detail 을 프로젝트 id 로 그대로 재사용.
+//  저장: task_comment(task_id=프로젝트 id) — v6 에서 태스크=프로젝트행이라 /tasks/:id/comments·/detail 을 프로젝트 id 로 그대로 재사용.
 function openProjectComments(id, members) {
   const nameOf = (uid) => { const m = (members || []).find((x) => x.member_id === uid); return (m && m.display_name) || uid || '?'; };
   const panel = el('aside', { class: 'cmt-drawer', role: 'dialog', 'aria-label': '코멘트' });
