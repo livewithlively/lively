@@ -14,6 +14,22 @@ import { logger } from "./log.js";
 const TICK_MS = 30_000;             // 폴 주기(잡 due 판정 해상도). interval 잡 최소 60s 앱 강제. cron 은 분당 2틱이라 매치분 안 놓침.
 const running = new Set<string>();  // 잡당 인메모리 락 — 느린 잡이 다음 틱과 중첩되지 않게.
 
+// ── 액션 레지스트리(단일 진실원천) — 각 액션의 label + 필요 params 를 데이터로 선언. ──
+//  프론트(크론 폼)가 이걸 읽어 드롭다운·파라미터 필드를 동적 생성(하드코딩 syncVis 제거). cron_set 검증도 여기서.
+//  새 액션 추가 = 여기 1줄 + runJob 핸들러 1개(행동은 코드라 불가피 — 임의 데이터 CRUD 아님=보안경계). 스키마 CHECK 도 갱신.
+//  param kind: 'session'(상시 세션 피커) · 'repo'/'system'/'text'(텍스트). 비-필수는 비워도 됨.
+export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text"; hint?: string }
+export interface CronActionDef { key: string; label: string; params: CronActionParam[] }
+export const CRON_ACTIONS: CronActionDef[] = [
+  { key: "refresh_all", label: "전 repo is 신선화", params: [] },
+  { key: "refresh_repo", label: "한 repo is 신선화", params: [{ name: "repo", label: "repo", kind: "repo", hint: "context-ontology" }] },
+  { key: "connector_sync", label: "커넥터 sync", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
+  { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
+  { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }] },
+  { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
+];
+export const CRON_ACTION_KEYS: string[] = CRON_ACTIONS.map((a) => a.key);
+
 interface CronJob {
   id: string;
   action: string;

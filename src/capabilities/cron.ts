@@ -5,10 +5,9 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { itemsPool } from "../items/store.js";
-import { runCronById } from "../scheduler.js";
+import { runCronById, CRON_ACTIONS, CRON_ACTION_KEYS } from "../scheduler.js";
 import { isValidCron } from "../cron-expr.js";
 
-const ACTIONS = ["refresh_all", "refresh_repo", "connector_sync", "eval_domain_debt"] as const;
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 function parseCronId(v: unknown): string {
@@ -27,20 +26,20 @@ const cronList: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/cron"], parse: () => ({}) }],
   },
-  handler: async () => ({ jobs: (await itemsPool.query(`SELECT * FROM org_cron ORDER BY sort, id`)).rows }),
+  handler: async () => ({ jobs: (await itemsPool.query(`SELECT * FROM org_cron ORDER BY sort, id`)).rows, actions: CRON_ACTIONS }),
 };
 
 const cronSet: Capability = {
   name: "cron_set",
   title: "스케줄 잡 생성/수정",
   description:
-    "스케줄 잡을 upsert(id 기준). action allowlist=refresh_all|refresh_repo|connector_sync|eval_domain_debt(임의 셸 불가). " +
+    "스케줄 잡을 upsert(id 기준). action 은 등록된 액션 레지스트리(CRON_ACTIONS) 중 하나(임의 셸 불가). " +
     "스케줄 2모드: cron_expr(절대 벽시계 5필드, 예 '0 9 * * 1-5')가 있으면 그게 우선, 없으면 interval_sec(상대, 최소 60s). " +
     "cron_expr=\"\"(빈문자열)로 보내면 interval 모드로 되돌림. params=액션 인자(예: refresh_repo→{repo}, connector_sync→{system}). 커스텀 잡은 이걸로 추가.",
   scope: "admin",
   input: {
     id: z.string(),
-    action: z.enum(ACTIONS).optional(),
+    action: z.string().optional(),
     label: z.string().max(200).optional(),
     params: z.record(z.unknown()).optional(),
     interval_sec: z.number().int().min(60).optional(),
@@ -64,8 +63,8 @@ const cronSet: Capability = {
   handler: async (input: any, user: any, ctx: any) => {
     const id = parseCronId(input.id);
     const actor = ctx?.actor ?? user?.userId ?? null;
-    if (input.action && !(ACTIONS as readonly string[]).includes(input.action)) {
-      throw new HttpError(400, "action 이 allowlist 밖입니다(refresh_all|refresh_repo|connector_sync|eval_domain_debt)");
+    if (input.action && !CRON_ACTION_KEYS.includes(input.action)) {
+      throw new HttpError(400, "action 이 allowlist 밖입니다 — 등록된 액션: " + CRON_ACTION_KEYS.join(", "));
     }
     // cron_expr: ""=명시적 비움(interval 모드 복귀), 미제공=유지(수정 시), 값=검증 후 설정.
     if (input.cron_expr != null && input.cron_expr !== "" && !isValidCron(input.cron_expr)) {
