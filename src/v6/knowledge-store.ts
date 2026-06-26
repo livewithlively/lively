@@ -49,11 +49,40 @@ function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): string {
   }
   return plan.tokens.map((tok) => { params.push(`%${likeEscape(tok)}%`); return colsOr(`ILIKE $${params.length} ESCAPE '\\'`); }).join(" AND ");
 }
-// 스니펫용 — 본문에서 첫 매치 위치(없으면 -1). regex 는 RegExp, tokens 는 첫 토큰의 대소문자무시 indexOf.
-function grepFirstIndex(text: string, plan: GrepPlan): number {
-  if (plan.mode === "regex") { const m = plan.re.exec(text); return m ? m.index : -1; }
-  const tok = plan.tokens[0] ?? "";
-  return tok ? text.toLowerCase().indexOf(tok.toLowerCase()) : -1;
+// ── grep 스니펫 — 매치 줄만 "L<n>: …" 로(ripgrep 식, 여러 매치 표시). ⚠ 검색 결과는 절대 body_md 전문을 싣지 않는다
+//  (과거 {...r} 스프레드가 전문을 누출 → 토큰 폭주로 응답 잘림). 본문은 snippet 으로만 보이고, 전문은 knowledge_get.
+const SNIP_MAX_LINES = 4;     // 결과당 표시할 매치 줄 상한(초과분은 "(+N matches)")
+const SNIP_LINE_CHARS = 160;  // 줄당 트림 길이(매치 주변)
+// grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
+const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at"]
+  .map((c) => "k." + c).join(", ");
+
+// 한 줄의 매치 시작 위치(없으면 -1). regex 는 줄 단위 exec, tokens 는 토큰 중 하나라도(OR) 등장하는 최좌단(트림 기준).
+function grepLineAt(line: string, plan: GrepPlan): number {
+  if (plan.mode === "regex") { const m = plan.re.exec(line); return m ? m.index : -1; }
+  let at = -1;
+  const lower = line.toLowerCase();
+  for (const tok of plan.tokens) { const i = lower.indexOf(tok.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
+  return at;
+}
+// 한 줄을 매치 주변 SNIP_LINE_CHARS 자로 트림(탭→공백, 양끝 …).
+function grepTrimLine(line: string, at: number): string {
+  const s = line.replace(/\t/g, " ").trim();
+  if (s.length <= SNIP_LINE_CHARS) return s;
+  const start = Math.max(0, at - 48);
+  const end = Math.min(s.length, start + SNIP_LINE_CHARS);
+  return (start > 0 ? "…" : "") + s.slice(start, end).trim() + (end < s.length ? "…" : "");
+}
+// 본문에서 매치 줄들을 ripgrep 처럼 "L<n>: …". 본문 매치가 0줄이면(제목만 매치 등) 앞부분 미리보기로 폴백.
+function grepSnippet(body: string, plan: GrepPlan): string {
+  if (!body) return "";
+  const lines = body.split("\n");
+  const hits: Array<{ i: number; at: number }> = [];
+  for (let i = 0; i < lines.length; i++) { const at = grepLineAt(lines[i], plan); if (at >= 0) hits.push({ i, at }); }
+  if (hits.length === 0) return body.slice(0, SNIP_LINE_CHARS).replace(/\s+/g, " ").trim();
+  const out = hits.slice(0, SNIP_MAX_LINES).map(({ i, at }) => `L${i + 1}: ${grepTrimLine(lines[i], at)}`);
+  if (hits.length > SNIP_MAX_LINES) out.push(`(+${hits.length - SNIP_MAX_LINES} matches) → knowledge_get`);
+  return out.join("\n");
 }
 
 const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
@@ -188,9 +217,14 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
   return after;
 }
 
-// grep — title/body_md 를 grep(정규식 또는 토큰 AND) + 매치 주변 ~160자 스니펫. 전문은 getKnowledge.
+// grep — title/body_md 매칭(정규식 또는 토큰 AND) → 매치 줄 스니펫(전문 X, body_md 미포함). 전문은 getKnowledge.
 //  의미검색 아님(벡터는 추후 별도 도구). Postgres 가 정규식을 거부하면(JS 유효·POSIX 무효 드묾) 토큰 모드로 1회 폴백 — 에이전트에 에러 누출 안 함.
-export interface KnowledgeSearchRow extends KnowledgeRow { snippet: string; }
+//  결과 행 = grep 발견에 필요한 얕은 필드만 + snippet(전문 누출·토큰폭주 방지).
+export interface KnowledgeSearchRow {
+  name: string; title: string | null;
+  injection: string; provenance: string; is_wiki: boolean;
+  summary: string | null; updated_at: string; snippet: string;
+}
 export async function searchKnowledge(
   qstr: string,
   opts: { injection?: string; provenance?: string; limit?: number } = {},
@@ -202,7 +236,7 @@ export async function searchKnowledge(
     if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
-      `SELECT ${K_SEL} FROM knowledge k WHERE ${wh.join(" AND ")} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
+      `SELECT ${K_GREP_SEL} FROM knowledge k WHERE ${wh.join(" AND ")} ORDER BY k.updated_at DESC LIMIT $${params.length}`, params);
   };
   let plan = parseGrep(qstr);
   let rows: KnowledgeRow[];
@@ -212,17 +246,12 @@ export async function searchKnowledge(
     plan = { mode: "tokens", tokens: qstr.trim().split(/\s+/).filter(Boolean) || [qstr] };
     rows = await run(plan);                       // POSIX 가 거부한 정규식 → 토큰 부분일치로 폴백
   }
-  return rows.map((r) => {
-    const body = r.body_md ?? "";
-    const at = grepFirstIndex(body, plan);
-    let snippet: string;
-    if (at < 0) snippet = body.slice(0, 160);
-    else {
-      const start = Math.max(0, at - 60);
-      snippet = (start > 0 ? "…" : "") + body.slice(start, at + 160) + (at + 160 < body.length ? "…" : "");
-    }
-    return { ...r, snippet: snippet.replace(/\s+/g, " ").trim() };
-  });
+  return rows.map((r) => ({          // body_md 는 snippet 계산용으로만 쓰고 응답에서 제외(전문 누출 방지)
+    name: r.name, title: r.title,
+    injection: r.injection, provenance: r.provenance, is_wiki: r.is_wiki,
+    summary: r.summary, updated_at: r.updated_at,
+    snippet: grepSnippet(r.body_md ?? "", plan),
+  }));
 }
 
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
