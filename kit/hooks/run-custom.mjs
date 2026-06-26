@@ -33,7 +33,7 @@ const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-
 function emitContext(text) {
   if (!text) return;
   if (HARNESS === "codex") {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }) + "\n");
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: EVENT, additionalContext: text } }) + "\n");
   } else {
     process.stdout.write(text + "\n");
   }
@@ -124,8 +124,9 @@ async function main() {
     const out = runHook(hk, stdin);
     if (out && out.trim()) outputs.push(out.trim());
   }
-  // SessionStart 만 컨텍스트로 주입(추가적·안전). 그 외 이벤트는 부수효과만(v1: stdout 미전파 — 차단 불가).
-  if (EVENT === "SessionStart" && outputs.length) emitContext(outputs.join("\n\n"));
+  // SessionStart·UserPromptSubmit 의 stdout 만 컨텍스트로 주입(둘 다 Claude 가 additionalContext 로 받는 추가적·안전 이벤트).
+  //  그 외 이벤트는 부수효과만(stdout 미전파 — 차단 불가). UserPromptSubmit 주입 = #172 관련지식 자동회수(knowledge-recall 훅).
+  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit") && outputs.length) emitContext(outputs.join("\n\n"));
 }
 
 main().then(() => process.exit(0)).catch(() => process.exit(0));
