@@ -42,7 +42,10 @@ export async function rejectMapping(id: number, actor: Actor): Promise<CurationR
 //  설계(2026-06-26): 코드→도메인 매핑은 룰도 사람-per-item 도 아닌 LLM 판단 — 도메인 should(정의·범위) + DDD 가 근거.
 //   org_cron 'map_unmapped' 가 라이블리 시드 에이전트를 띄워 이 함수들을 MCP 로 호출(propose+근거 → audit → verify).
 
-// 미매핑 = active code_unit 중 비-rejected 매핑이 0건인 것(repo 스코프). 분류 대상 인박스.
+// 미매핑 인박스 = active code_unit 중 **매핑 행이 하나도 없는 것**(=아직 리뷰 안 됨). repo 스코프.
+//  rejected/proposed/confirmed 어느 것이든 매핑이 있으면 '리뷰됨'으로 인박스에서 빠진다(에이전트가 rejected 로
+//  '제품 도메인 아님'을 마킹하면 재처리 안 됨 — 2026-06-26 라이브 데모가 잡은 버그: 구 '비-rejected' 정의는
+//  rejected 유닛이 인박스에 영구 잔류해 무한 재처리됐다). 잘못된 reject 의 재오픈은 dm_mapping_* 큐레이션으로.
 export async function listUnmappedCodeUnits(repoName: string): Promise<Array<{ id: number; path: string; kind: string; label: string }>> {
   const repo = await one(itemsPool, "SELECT id FROM repo WHERE name=$1", [repoName]);
   if (!repo) throw httpErr(404, "no such repo: " + repoName);
@@ -50,8 +53,7 @@ export async function listUnmappedCodeUnits(repoName: string): Promise<Array<{ i
     SELECT cu.id, cu.path, cu.kind, cu.label
     FROM code_unit cu
     WHERE cu.repo_id=$1 AND COALESCE(cu.state,'active')='active'
-      AND NOT EXISTS (SELECT 1 FROM mapping m
-                      WHERE m.target_kind='code_unit' AND m.target_id=cu.id AND m.status<>'rejected')
+      AND NOT EXISTS (SELECT 1 FROM mapping m WHERE m.target_kind='code_unit' AND m.target_id=cu.id)
     ORDER BY cu.path`, [repo.id]);
 }
 

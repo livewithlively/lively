@@ -365,8 +365,8 @@ export async function initOrgSchema(): Promise<void> {
     INSERT INTO org_cron(id, label, action, interval_sec, enabled, note) VALUES
       ('refresh-all-domainmap','도메인맵 is 신선화 (전 repo)','refresh_all',600,true,
        'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.'),
-      ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (라이블리 시드 에이전트)','map_unmapped',1800,false,
-       '라이블리 시드 에이전트(claude -p + lively MCP)가 도메인 should+DDD 로 미매핑 인박스를 분류(propose+근거→audit). 활성화 전 MCP 토큰 env(기본 LIVELY_MAP_AGENT_TOKEN) 설정 필요 → 기본 enabled=false.')
+      ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
+       '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.')
     ON CONFLICT (id) DO NOTHING;
   `);
 

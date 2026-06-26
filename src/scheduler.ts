@@ -77,82 +77,58 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
   }
 
   if (job.action === "map_unmapped") {
-    // LLM 판단주체 — 라이블리 시드 에이전트가 도메인 should+DDD 로 미매핑 인박스 분류. 환경 미설정/실패는 error(가시).
-    return runMapAgent(params);
+    // LLM 판단주체 — 상시 LLM 세션(팀플랜 시드)에 분류 태스크 주입. 세션 미설정/부재는 error(가시).
+    return runMapInject(params);
   }
 
   return { status: "error", summary: { error: "unknown action: " + job.action } };
 }
 
-// LLM 판단주체 — 라이블리 시드 에이전트(headless claude -p + lively MCP)를 띄워 미매핑 인박스를 도메인 should+DDD 로 분류.
-//  환경: 박스에 claude CLI(라이블리 시드 로그인) + gateway lively MCP 토큰(env). 미설정/실패는 error 반환(스케줄러 안 죽음·가시).
-//  인박스 비면 에이전트 안 띄움(비용 절약). allowedTools 로 권한 최소화. 결과는 last_summary 에 기록.
-async function runMapAgent(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+// LLM 판단주체 — 상시 LLM 세션(라이블리 시드, **팀플랜 과금 내**)에 분류 태스크를 주입한다.
+//  headless `claude -p`+토큰 = API 별도 과금이라 폐기. 메커니즘: tmux send-keys 로 타깃 세션 PTY 에 프롬프트+Enter →
+//  세션의 claude 가 lively MCP(list_unmapped/category_get/map_code_unit)로 비동기 수행. 인박스 비면 주입 안 함.
+//  세션 미설정/부재는 error(가시). fire-and-forget: 주입까지가 잡 책임(매핑은 세션이 수 분에 걸쳐) — 다음 주기에 인박스 0이면 skip.
+async function runMapInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const repo = String(params.repo ?? "context-ontology");
+  const session = params.session ? String(params.session) : "";
+  if (!session) return { status: "error", summary: { error: "타깃 세션 미설정 — cron 잡 params.session 에 상시 LLM 세션 id 필요(예: box-daon-…). 관리탭에서 설정." } };
   const { listUnmappedCodeUnits } = await import("./domainmap/core/mappings.js");
   let inbox: Array<{ path: string }>;
   try { inbox = await listUnmappedCodeUnits(repo); }
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
-  if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0 } };
+  if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, session } };
 
-  const agentCmd = String(params.agent_cmd ?? process.env.MAP_AGENT_CMD ?? "claude");
-  const tokenEnv = String(params.token_env ?? process.env.MAP_AGENT_TOKEN_ENV ?? "LIVELY_MAP_AGENT_TOKEN");
-  const token = process.env[tokenEnv];
-  const gatewayUrl = String(params.gateway_url ?? process.env.MAP_AGENT_GATEWAY_URL ?? "http://localhost:8080/mcp");
-  if (!token) {
-    return { status: "error", summary: { error: `map agent 미설정: lively MCP 토큰 env '${tokenEnv}' 없음(라이블리 시드 토큰 설정 후 활성화)`, unmapped: inbox.length } };
-  }
+  const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildMapPrompt(repo, inbox.length);
+  try { await injectToSession(session, prompt); }
+  catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + session + "): " + ((e as Error)?.message ?? String(e)), session } }; }
+  return { status: "ok", summary: { injected: true, session, unmapped: inbox.length, note: "상시 세션에 분류 태스크 주입(팀플랜 과금). 매핑은 세션이 비동기 수행 — 다음 주기에 인박스 0이면 skip." } };
+}
 
-  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
+// tmux send-keys 로 세션 PTY 에 텍스트 주입(+Enter). UTF-8 로케일 강제(한글 깨짐 방지 — terminal-sessions 와 동일).
+//  text 는 **단일 라인**이어야 한다(개행은 send-keys -l 에서 조기 Enter 가 됨 → buildMapPrompt 는 1라인).
+async function injectToSession(sessionId: string, text: string): Promise<void> {
+  const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileP = promisify(execFile);
-
-  const dir = await mkdtemp(join(tmpdir(), "map-agent-"));
-  try {
-    const mcpConfig = join(dir, "mcp.json");
-    await writeFile(mcpConfig, JSON.stringify({ mcpServers: { lively: { type: "http", url: gatewayUrl, headers: { Authorization: "Bearer " + token } } } }));
-    const r = await execFileP(agentCmd, [
-      "-p", buildMapPrompt(repo, inbox.length),
-      "--mcp-config", mcpConfig,
-      "--allowedTools", "mcp__lively__list_unmapped,mcp__lively__category_list,mcp__lively__category_get,mcp__lively__map_code_unit,Read,Grep,Glob",
-      "--output-format", "json",
-    ], { timeout: 600_000, maxBuffer: 32 * 1024 * 1024, cwd: process.cwd() });
-    const after = await listUnmappedCodeUnits(repo).catch(() => inbox); // 분류 후 잔여 인박스(검증).
-    return { status: "ok", summary: { unmapped_before: inbox.length, unmapped_after: after.length, agent_tail: (r.stdout || "").slice(-1500) } };
-  } catch (e) {
-    return { status: "error", summary: { error: (e as Error)?.message ?? String(e), unmapped: inbox.length } };
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) { env.LANG = "en_US.UTF-8"; env.LC_CTYPE = "en_US.UTF-8"; }
+  await execFileP(TMUX_BIN, ["has-session", "-t", sessionId], { timeout: 5000, env });        // 부재면 throw → error.
+  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "-l", text], { timeout: 5000, env }); // 텍스트(literal).
+  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "Enter"], { timeout: 5000, env });     // 제출.
 }
 
-// 가이드 프롬프트 — DDD 원칙 + 라이브 도메인 should 주입 지시 + propose/근거/confidence 규약.
-//  도메인은 하드코딩 안 함: 에이전트가 category_get 으로 라이브 fetch → should 바뀌면 분류도 자동으로 따라감(자기갱신).
+// 가이드 프롬프트 — **단일 라인**(send-keys -l 주입용; 개행 금지). DDD + 라이브 도메인 should fetch 지시(하드코딩 X → 자기갱신) + propose/근거/confidence 규약.
+//  params.prompt 로 관리탭에서 덮어쓸 수 있음(웹 편집). count·repo 만 보간.
 function buildMapPrompt(repo: string, count: number): string {
-  return [
-    `당신은 라이블리 컨텍스트 온톨로지의 **도메인 분류 에이전트**다. repo='${repo}' 의 미매핑 코드유닛(${count}건)을 제품 도메인에 귀속시킨다.`,
-    ``,
-    `## 원칙 (DDD)`,
-    `- 도메인 = 비즈니스 능력 + 유비쿼터스 언어의 경계. 코드의 기술 레이어가 아니라 "어떤 비즈니스 능력을 구현하는가"로 판단한다.`,
-    `- 한 유닛은 그 도메인의 should(정의·범위·규칙)를 가장 직접 구현하는 도메인에 속한다.`,
-    `- 여러 도메인을 가로지르는 공유 인프라(프레임워크·게이트웨이 골격·유틸)는 cross-cutting — 가장 가까운 도메인에 proposed + evidence 에 명시.`,
-    `- 제품 도메인 대상이 아닌 것(비즈니스 문서·세일즈덱·stale 산출물·너무 coarse한 디렉토리 유닛)은 status='rejected' + evidence 에 이유.`,
-    `- **확신 없으면 추측 말고 status='proposed'+낮은 confidence**(가짜 확신 금지 — 사람/2차검증이 처리).`,
-    ``,
-    `## 절차`,
-    `1. category_list(space='product') + 각 category_get 으로 **도메인 정의(should/scope)**를 읽어라 — 이게 유일한 분류 기준이다(하드코딩 말고 라이브로).`,
-    `2. list_unmapped(repo='${repo}') 로 인박스를 가져와라.`,
-    `3. 각 유닛: path·label 을 보고, 필요하면 Read/Grep 으로 파일 헤더·내용·import 를 확인해 무슨 능력인지 파악한다.`,
-    `4. 도메인 should 와 대조해 map_code_unit 호출(target=path, category=도메인 key, origin='llm', evidence=근거 필수):`,
-    `   - 확신(헤더/이름/내용이 should 와 명백히 일치) → status='confirmed', confidence≥0.8.`,
-    `   - 불확실/cross-cutting → status='proposed', confidence<0.8, evidence 에 모호점·후보 도메인.`,
-    `   - 제품 도메인 아님 → status='rejected', evidence 에 이유.`,
-    `5. evidence(근거)는 항상 "도메인 should 의 어느 부분 ↔ 코드의 어느 신호"로 구체적으로. 근거 없는 매핑 금지(불변식).`,
-    `6. 끝나면 {confirmed, proposed, rejected} 카운트 + 한 줄 요약 출력.`,
-  ].join("\n");
+  return `미매핑 코드유닛(${count}건)을 제품 도메인에 분류하는 배치 작업이야. ` +
+    `① category_list(space=product)+각 category_get으로 도메인 should(정의·범위)를 읽어 분류 기준으로 삼아. ` +
+    `② list_unmapped(repo=${repo})로 인박스 가져와. ` +
+    `③ 각 유닛 path·label 보고 필요하면 Read/Grep으로 헤더·내용·import 확인해 어떤 비즈니스 능력인지 파악. ` +
+    `④ DDD(도메인=비즈니스 능력 경계, 기술레이어 아님)로 map_code_unit 호출: target=경로, category=도메인 key, origin=llm, ` +
+    `evidence=근거(should의 어느 부분↔코드의 어느 신호, 필수), 확신이면 status=confirmed(confidence≥0.8) 아니면 proposed, ` +
+    `제품 도메인 아닌 것(비즈니스문서·세일즈덱·stale산출물·너무 coarse한 디렉토리유닛)은 status=rejected+evidence에 이유. ` +
+    `확신없으면 추측말고 proposed. 끝나면 confirmed/proposed/rejected 카운트 요약.`;
 }
 
 // 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분, interval 은 now+interval.
