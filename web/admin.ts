@@ -1864,7 +1864,8 @@ function builtinToggles(data) {
   const byName = {}; for (const t of (data.tools || [])) if (t.kind === 'builtin') byName[t.name] = t;
   const wrap = el('div', { class: 'builtin-toggles' },
     el('div', { class: 'admin-subhead', text: '빌트인 도구 (MCP 노출)' }),
-    el('p', { class: 'admin-hint', text: '게이트웨이 MCP 도구의 노출을 켜고 끕니다(즉시). 코드 기본값을 덮어쓰며, 「기본 미노출」 도구도 여기서 켤 수 있습니다. 자동승인을 켜면 구성원 설치 시 확인 없이 실행됩니다.' }));
+    el('p', { class: 'admin-hint', text: '게이트웨이 MCP 도구의 노출을 켜고 끕니다(즉시). 코드 기본값을 덮어쓰며, 「기본 미노출」 도구도 여기서 켤 수 있습니다. 자동승인을 켜면 구성원 설치 시 확인 없이 실행됩니다.' }),
+    el('p', { class: 'admin-hint', text: '‘주입’: Claude Code가 이 도구를 세션 시작에 항상 로드(항상)할지, 필요 시 검색해 로드(Deferred)할지 정합니다 — Claude Code 전용입니다(Codex는 모든 MCP 도구를 항상 upfront 주입).' }));
   // 노출 정렬: 기본 노출 먼저, 기본 미노출(켤 수 있는 후보)을 아래로. 같은 그룹은 이름순.
   const cands = (data.builtins || []).map((c) => (typeof c === 'string' ? { name: c, title: '', defaultExposed: true } : c))
     .slice().sort((a, b) => (a.defaultExposed === b.defaultExposed ? a.name.localeCompare(b.name) : (a.defaultExposed ? -1 : 1)));
@@ -1875,11 +1876,18 @@ function builtinToggles(data) {
     const exposed = override ? override.enabled !== false : def;  // 최종 노출
     const enChk = el('input', { type: 'checkbox' }); enChk.checked = exposed;
     const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = override ? !!override.auto_approve : false;
+    // 주입모드(#187): 코드 기본값(defAlways) + 운영자 override(always_load). '' = 기본, 'always' = 항상, 'deferred' = 검색 시 로드. Claude Code 전용.
+    const defAlways = cand.alwaysLoadDefault === true;
+    const alSel = el('select', {},
+      el('option', { value: '', text: '기본(' + (defAlways ? '항상' : 'deferred') + ')' }),
+      el('option', { value: 'always', text: '항상 주입' }),
+      el('option', { value: 'deferred', text: 'Deferred' }));
+    alSel.value = (override && override.always_load != null) ? (override.always_load ? 'always' : 'deferred') : '';
     const save = async () => {
-      try { await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify({ name, kind: 'builtin', enabled: enChk.checked, auto_approve: aaChk.checked }) }); await loadAdmin(true); toast('저장됨'); }
+      try { const always_load = alSel.value === '' ? null : (alSel.value === 'always'); await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify({ name, kind: 'builtin', enabled: enChk.checked, auto_approve: aaChk.checked, always_load }) }); await loadAdmin(true); toast('저장됨'); }
       catch (e) { toast(e.message, true); }
     };
-    enChk.addEventListener('change', save); aaChk.addEventListener('change', save);
+    enChk.addEventListener('change', save); aaChk.addEventListener('change', save); alSel.addEventListener('change', save);
     // MCP 상세 — 하네스가 보는 description + inputSchema(필드). 접힘 기본, 클릭 시 펼침.
     const detail = el('div', { style: 'display:none; margin:2px 0 8px 14px; padding:6px 10px; border-left:2px solid var(--border, #ddd)' },
       cand.description ? el('p', { class: 'admin-hint', style: 'white-space:pre-wrap; margin:0 0 6px', text: cand.description }) : null,
@@ -1891,9 +1899,11 @@ function builtinToggles(data) {
       el('span', { class: 'builtin-name', text: name },
         cand.title ? el('span', { class: 'mini-meta', text: ' · ' + cand.title }) : null,
         !def ? el('span', { class: 'pill', text: '기본 미노출' }) : null,
-        (override && exposed !== def) ? el('span', { class: 'pill pill-warn', text: '재정의' }) : null),
+        (override && exposed !== def) ? el('span', { class: 'pill pill-warn', text: '재정의' }) : null,
+        (override && override.always_load != null && override.always_load !== defAlways) ? el('span', { class: 'pill pill-warn', text: '주입 재정의' }) : null),
       el('label', { class: 'admin-check' }, enChk, ' 노출'),
       el('label', { class: 'admin-check' }, aaChk, ' 자동승인'),
+      el('label', { class: 'admin-check' }, '주입 ', alSel),
       expand), detail);
   }
   return wrap;

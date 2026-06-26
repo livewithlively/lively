@@ -5,7 +5,8 @@ import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
-import { listBuiltinOverrides } from "./org/store.js";
+import { listBuiltinOverrides, listBuiltinAlwaysLoad } from "./org/store.js";
+import { agentFromHeaders } from "./org/agent-identity.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
@@ -52,10 +53,14 @@ app.get("/healthz", (_req, res) => {
 // 모든 MCP 요청은 bearer 인증 필수 → req.auth 가 핸들러의 extra.authInfo 로 전달됨.
 // Stateless: 요청마다 새 서버+트랜스포트 (수평 확장 단순).
 app.post("/mcp", auth, async (req, res) => {
-  // (A) 빌트인 게이팅 + (B) 동적 org_tool 등록 — DB 의존(ITEMS_DATABASE_URL). 실패는 fail-open(기본 표면 유지).
+  // (A) 빌트인 게이팅 + (A'') 주입모드 + (B) 동적 org_tool 등록 — DB 의존(ITEMS_DATABASE_URL). 실패는 fail-open(기본 표면 유지).
   let overrides: Map<string, boolean> | undefined;
   try { overrides = await listBuiltinOverrides(); } catch { overrides = undefined; }
-  const server = buildServer(overrides);
+  let alwaysLoad: Map<string, boolean> | undefined;
+  try { alwaysLoad = await listBuiltinAlwaysLoad(); } catch { alwaysLoad = undefined; }
+  // 하네스 신원(x-lively-harness 우선, 없으면 UA) — _meta(anthropic/alwaysLoad) 를 하네스별로 emit/생략(#187).
+  const harness = agentFromHeaders(req.headers);
+  const server = buildServer(overrides, alwaysLoad, harness);
   try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {

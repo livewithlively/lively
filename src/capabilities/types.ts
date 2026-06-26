@@ -39,8 +39,10 @@ export interface Capability {
     mcp: boolean;
     rest: RestMount[] | false;
   };
-  // MCP tool 의 _meta — tools/list 에 그대로 실린다(SDK registerTool config._meta → ListTools).
-  //  예: { "anthropic/alwaysLoad": true } = 하네스(Claude Code)가 이 툴을 deferred 시키지 않고 상시 로드.
+  // MCP tool 의 _meta — 코드 기본값. registerMcpCapabilities 가 운영자 override(org_tool.always_load)와 하네스를 반영해
+  //  최종 _meta 를 계산(resolveToolMeta)한 뒤 tools/list 에 싣는다(SDK registerTool config._meta → ListTools).
+  //  예: { "anthropic/alwaysLoad": true } = Claude Code 가 이 툴을 deferred 안 시키고 상시 로드(v2.1.121+). 관리탭에서 per-tool 토글(#187).
+  //  ⚠ anthropic/ 네임스페이스라 Claude 전용 — Codex 는 서버측 _meta deferral 미지원(전부 upfront 주입)이라 무효과.
   meta?: Record<string, unknown>;
   // canonical JSON 반환. 도메인 에러는 plain Error throw —
   // REST 는 wrap() 의 한국어 부분문자열 매핑('없음'→404 등), MCP 는 SDK isError 로 변환된다.

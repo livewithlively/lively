@@ -13,6 +13,7 @@ export interface ToolCandidate {
   defaultExposed: boolean; // 코드 기본값(expose.mcp). 운영자 override(org_tool)가 최종 결정.
   kind: "capability" | "db";
   inputSchema?: unknown;   // MCP inputSchema(JSON Schema) — 하네스가 보는 입력 필드/타입. zod→JSON Schema 변환(SDK 와 동일 표면).
+  alwaysLoadDefault?: boolean; // 코드 기본 주입모드(cap.meta 의 anthropic/alwaysLoad). 운영자 override(org_tool.always_load)가 최종 결정. 웹 토글의 '기본' 표시용(#187).
 }
 
 let _candidates: ToolCandidate[] = [];

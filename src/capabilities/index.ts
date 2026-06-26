@@ -93,12 +93,18 @@ export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, b
 
 // MCP 어댑터 — registry capability 를 isToolExposed 단일 판정으로 등록(후보 + 코드기본 + 운영자 override 한 경로).
 // (과거엔 tools/*.ts 가 이름목록을 넘기는 이중 게이트라 expose.mcp:true 인데 목록 누락 시 "고스트"가 생겼다.)
-export function registerMcpCapabilities(server: McpServer, overrides?: ReadonlyMap<string, boolean>): void {
+export function registerMcpCapabilities(
+  server: McpServer,
+  overrides?: ReadonlyMap<string, boolean>,
+  alwaysLoadOverrides?: ReadonlyMap<string, boolean>,
+  harness?: string | null,
+): void {
   for (const cap of registry.values()) {
     if (!isToolExposed(cap, overrides)) continue;
+    const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,
-      { title: cap.title, description: cap.description, inputSchema: cap.input, ...(cap.meta ? { _meta: cap.meta } : {}) },
+      { title: cap.title, description: cap.description, inputSchema: cap.input, ...(meta ? { _meta: meta } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
@@ -108,6 +114,25 @@ export function registerMcpCapabilities(server: McpServer, overrides?: ReadonlyM
       },
     );
   }
+}
+
+// 툴 _meta 계산 — alwaysLoad(상시로드) 비트를 하네스가 이해하는 키로 변환(#187 — 산출지식 mcp-tool-deferred-injection-harness-187).
+//  · 코드 기본 cap.meta(anthropic/alwaysLoad)에서 출발 → 운영자 override(org_tool.always_load: true/false)가 그 비트만 덮어쓴다(다른 _meta 키 보존).
+//  · claude-code(또는 미식별 null) → anthropic/alwaysLoad 유지(Claude Code v2.1.121+ 가 deferred 해제). 미식별도 emit = 현행 무회귀
+//    (Claude 가 UA 만 보내거나 헤더 누락해도 상시로드가 꺼지지 않게 — null 은 Claude 로 간주).
+//  · 양성 식별된 비-Anthropic 하네스(codex 등) → 이 키 무의미(Codex 는 서버 _meta defer 미지원, 전부 upfront 주입) → 제거.
+export function resolveToolMeta(
+  cap: Capability,
+  alwaysLoadOverrides?: ReadonlyMap<string, boolean>,
+  harness?: string | null,
+): Record<string, unknown> | undefined {
+  const base: Record<string, unknown> = { ...(cap.meta ?? {}) };
+  const codeDefault = cap.meta?.["anthropic/alwaysLoad"] === true;
+  const alwaysLoad = alwaysLoadOverrides?.has(cap.name) ? alwaysLoadOverrides.get(cap.name)! : codeDefault;
+  const anthropicHarness = harness == null || harness === "claude-code";
+  if (alwaysLoad && anthropicHarness) base["anthropic/alwaysLoad"] = true;
+  else delete base["anthropic/alwaysLoad"];
+  return Object.keys(base).length ? base : undefined;
 }
 
 // capability.input(zod raw shape) → JSON Schema(하네스가 tools/list 에서 보는 입력 표면). 변환 실패 시 빈 객체 스키마.
@@ -127,11 +152,12 @@ export function buildToolCandidates(): ToolCandidate[] {
     out.push({
       name: cap.name, title: cap.title, description: cap.description,
       defaultExposed: cap.expose.mcp, kind: "capability", inputSchema: toInputSchema(cap.input),
+      alwaysLoadDefault: cap.meta?.["anthropic/alwaysLoad"] === true,
     });
   }
   for (const d of DB_TOOLS) out.push({
     name: d.name, title: d.title, description: d.description,
-    defaultExposed: true, kind: "db", inputSchema: d.inputSchema,
+    defaultExposed: true, kind: "db", inputSchema: d.inputSchema, alwaysLoadDefault: false,
   });
   return out;
 }

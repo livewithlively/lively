@@ -614,6 +614,8 @@ export const deliveryCapabilities: Capability[] = [
         name: rawName, kind: kind as ToolKind,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         auto_approve: input.auto_approve === undefined ? undefined : Boolean(input.auto_approve),
+        // 주입모드(#187): undefined=유지, null=코드기본 복귀, true=항상 주입, false=deferred. 빌트인 토글 전용(Claude Code _meta).
+        always_load: input.always_load === undefined ? undefined : (input.always_load === null ? null : Boolean(input.always_load)),
         title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
         description: input.description === undefined ? undefined : str(input.description, "description", 2000),
         note: input.note === undefined ? undefined : str(input.note, "note", 500),

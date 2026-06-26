@@ -842,6 +842,7 @@ export interface OrgTool {
   url: string | null;
   auth_env: string | null;
   auto_approve: boolean;
+  always_load: boolean | null; // 주입모드 override(#187): null=코드기본, true=항상 주입, false=deferred. Claude Code _meta(anthropic/alwaysLoad)로 변환.
   note: string | null;
   sort: number;
   version: number;
@@ -864,6 +865,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
     url: (row.url as string) ?? null,
     auth_env: (row.auth_env as string) ?? null,
     auto_approve: row.auto_approve === true,
+    always_load: row.always_load == null ? null : row.always_load === true,
     note: (row.note as string) ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -872,7 +874,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
   };
 }
 
-const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, note, sort, version, updated_at, updated_by";
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, note, sort, version, updated_at, updated_by";
 
 export async function listTools(): Promise<OrgTool[]> {
   const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
@@ -902,6 +904,17 @@ export async function listBuiltinOverrides(): Promise<Map<string, boolean>> {
   }));
 }
 
+// (A'') 빌트인 주입모드 override — kind='builtin' 행 중 always_load 가 명시(NOT NULL)된 것만(name→bool). #187.
+//  null(미설정)은 코드 기본값(cap.meta 의 anthropic/alwaysLoad)을 그대로 두므로 여기 담지 않는다(map.has 로 override 유무 판정).
+//  resolveToolMeta 가 이 map 으로 Claude Code _meta(anthropic/alwaysLoad)를 하네스별 emit/생략한다.
+export async function listBuiltinAlwaysLoad(): Promise<Map<string, boolean>> {
+  const r = await itemsPool.query(`SELECT name, always_load FROM org_tool WHERE kind='builtin' AND always_load IS NOT NULL`);
+  return new Map(r.rows.map((row) => {
+    const rr = row as { name: string; always_load: boolean };
+    return [rr.name, rr.always_load === true] as [string, boolean];
+  }));
+}
+
 // 설치 번들용 — auto_approve 가 켜진(그리고 enabled) 툴 이름. 멤버 settings 의 무확인 실행 허용목록에 들어간다.
 export async function listAutoApproveTools(): Promise<{ name: string; kind: ToolKind }[]> {
   const r = await itemsPool.query(
@@ -926,6 +939,7 @@ export interface OrgToolInput {
   url?: string | null;
   auth_env?: string | null;
   auto_approve?: boolean;
+  always_load?: boolean | null; // #187 주입모드: undefined=유지, null=코드기본 복귀, true=항상, false=deferred.
   note?: string | null;
   sort?: number;
 }
@@ -940,17 +954,19 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   const authEnv = isProxy ? (t.auth_env ?? before?.auth_env ?? null) : null;
   const scope = isProxy ? (t.scope ?? before?.scope ?? null) : null;
   const inputSchema = isProxy ? (t.input_schema ?? before?.input_schema ?? DEFAULT_INPUT_SCHEMA) : DEFAULT_INPUT_SCHEMA;
+  // 주입모드(#187): undefined=기존 유지, null=코드기본 복귀, true/false=명시. ??-병합은 null 을 흘려보내므로 직접 분기.
+  const alwaysLoad = t.always_load !== undefined ? t.always_load : (before?.always_load ?? null);
   await itemsPool.query(
-    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,note,sort,version,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,1,now(),$14)
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
      ON CONFLICT (name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
-       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, note=EXCLUDED.note, sort=EXCLUDED.sort,
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
+     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
      ctx.actor ?? null],
   );
   const after = await getTool(t.name);

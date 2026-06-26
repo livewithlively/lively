@@ -197,6 +197,9 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE org_tool ADD CONSTRAINT org_tool_method_chk CHECK (method IS NULL OR method IN ('GET','POST','PUT','PATCH','DELETE'));
       END IF;
     END $$;
+    -- always_load(주입모드 override) — NULL=코드 기본값(cap.meta) 사용, true=항상 주입, false=deferred(검색 시 로드). #187.
+    --  Claude Code 만 해석하는 _meta(anthropic/alwaysLoad)로 변환된다(Codex 는 서버측 deferral 미지원). 비파괴 ADD COLUMN.
+    ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS always_load BOOLEAN;
   `);
 
   // 개명 마이그레이션(2026-06-25): 구 knowledge_search(의미검색 미스노머, 실동작 grep) → knowledge_grep.
@@ -355,7 +358,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt','map_unmapped','ensure_managed_sessions'));
+        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','connector_push','eval_domain_debt','map_unmapped','ensure_managed_sessions'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -370,6 +373,14 @@ export async function initOrgSchema(): Promise<void> {
        '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
        'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+  // #177 아웃바운드 푸시 잡 — external_outbox(우리 편집)→ClickUp. 우리 DB=master 반영. params.system='clickup'(run-push 는 clickup 전용).
+  //  검증 전이라 기본 enabled=false — 수동 run-push 1회 확인 후 관리탭/DB 로 활성화. 별도 INSERT(params 컬럼 포함).
+  await itemsPool.query(`
+    INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, note) VALUES
+      ('push-clickup','ClickUp 아웃바운드 푸시 (우리 편집→ClickUp)','connector_push','{"system":"clickup"}'::jsonb,120,false,
+       'external_outbox(pending) 드레인 → ClickUp create/update/delete. 로컬 편집을 미러에 반영(멱등, 부모 미푸시면 다음 틱 수렴). 검증 후 enabled=true.')
     ON CONFLICT (id) DO NOTHING;
   `);
 
