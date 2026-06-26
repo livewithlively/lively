@@ -68,7 +68,7 @@ const activityList: Capability = {
   name: "activity_list",
   title: "작업(activity) 목록",
   description:
-    "작업(activity)을 최신순으로 조회한다(commit/comment/decision 등). 필터: author_person(누가)·author_agent(어떤 AI)·" +
+    "작업(activity)을 최신순으로 조회한다(feature/fix/decision 등). 필터: author_person(누가)·author_agent(어떤 AI)·" +
     "type·project_id(진척시킨 프로젝트/태스크)·repo. 사람×AI 작업현황의 원천.",
   scope: "memory",
   input: {

@@ -115,6 +115,11 @@ function managedBlock(mcpUrl) {
   L.push(`url = "${mcpUrl}"`);
   L.push('bearer_token_env_var = "LIVELY_TOKEN"');
   L.push("");
+  // 작업자(AI) 식별 — 게이트웨이가 이 헤더로 어떤 하네스인지 안다(프로젝트 #182). codex 는 User-Agent 를 안 보내므로
+  //  per-harness 설치가 명시 stamp 해야 게이트웨이가 author_agent 를 자기보고 없이 권위 있게 채운다.
+  L.push("[mcp_servers.lively.http_headers]");
+  L.push('x-lively-harness = "codex"');
+  L.push("");
   // ── 훅: SessionStart(컨텍스트 주입) / PostToolUse(작업 플래그) / Stop(라이트백 게이트) ──
   L.push("[[hooks.SessionStart]]");
   L.push('matcher = "startup|resume|clear"');
