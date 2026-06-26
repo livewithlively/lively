@@ -355,7 +355,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt','map_unmapped'));
+        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','eval_domain_debt','map_unmapped','ensure_managed_sessions'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -367,8 +367,33 @@ export async function initOrgSchema(): Promise<void> {
       ('refresh-all-domainmap','도메인맵 is 신선화 (전 repo)','refresh_all',600,true,
        'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.'),
       ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
-       '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.')
+       '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
+      ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
+       'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
     ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // ── org_managed_session — 상시 에이전트 세션의 desired state(관리탭 CRUD). keep-alive(ensure_managed_sessions 크론)가 ──
+  //  실제 tmux box-* 세션을 보장(없으면 재생성). account = 어떤 라이블리 계정/프로필(=클로드 로그인)으로 띄울지 —
+  //  지금 맥미니 단일 프로필, 멀티프로필 대비 필드. session_id = 현재 살아있는 tmux 세션(provision 시 기록).
+  //  격리 워크스페이스(공유폴더 managed/<id>)·하네스·플래그·자동승인은 프로젝트 터미널 생성(createSession) 그대로 재사용.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_managed_session(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      account TEXT,
+      workspace_subpath TEXT,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+      auto_approve BOOLEAN NOT NULL DEFAULT true,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      session_id TEXT,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
   `);
 
   // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).

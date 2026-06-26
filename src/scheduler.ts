@@ -81,6 +81,12 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return runMapInject(params);
   }
 
+  if (job.action === "ensure_managed_sessions") {
+    // keep-alive — enabled 상시 세션의 tmux 세션 보장(죽었으면 재생성). 등록 0이면 no-op.
+    const { ensureAllManagedSessions } = await import("./org/managed-sessions.js");
+    return { status: "ok", summary: { sessions: await ensureAllManagedSessions() } };
+  }
+
   return { status: "error", summary: { error: "unknown action: " + job.action } };
 }
 

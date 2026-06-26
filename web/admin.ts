@@ -45,6 +45,8 @@ const ADMIN_SECTIONS = [
   { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
   // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
   { key: 'cron', label: '스케줄러 (자동화)', meaning: null, group: 'ai' },
+  // 상시 세션(에이전트) — 항상 떠있는 에이전트 세션 CRUD + 격리 워크스페이스 + keep-alive. 크론이 타깃. admin 전용.
+  { key: 'managed-sessions', label: '상시 세션 (에이전트)', meaning: null, group: 'ai' },
   // (외부 호출·DB 안전범위 = allowlist 별도 탭 폐기(2026-06-26) → 'AI 도구'·'DB 데이터소스' 화면 안 allowlistCard 로 인라인.)
   // 커스텀 훅(코드) — 특정 이벤트에 실행할 임의 코드. 세션 주입 지도에서 목록·요약을 보고 여기서 정의.
   { key: 'custom-hooks', label: '커스텀 훅 (코드)', meaning: 'custom-hook', group: 'ai' },
@@ -52,7 +54,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron']; // admin 권한 전용(쓰기/인프라)
+const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions']; // admin 권한 전용(쓰기/인프라)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -281,6 +283,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'cron') return cronPanel(detail, data);
+  if (sel === 'managed-sessions') return managedSessionsPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
 }
 
@@ -396,6 +399,95 @@ async function cronToggle(job, reload) {
 async function cronDelete(id, reload) {
   if (!confirm('스케줄 잡 ‘' + id + '’을(를) 삭제할까요?')) return;
   try { await api('/api/ui/cron/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+
+// ── 상시 세션(에이전트) — 항상 떠있는 에이전트 세션 CRUD + 격리 워크스페이스 + keep-alive. 크론(map_unmapped 등)이 타깃. ──
+//  '에이전트를 위한 프로젝트' — createSession + 공유폴더(managed/<id>) 재사용. account=라이블리 계정/프로필(클로드 로그인, 멀티프로필 대비).
+async function managedSessionsPanel(detail, data) {
+  const reload = () => managedSessionsPanel(detail, data);
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('상시 세션을 불러오는 중')));
+  let sessions; let live: string[] = [];
+  try { const r = await api('/api/ui/managed-sessions'); sessions = (r && r.sessions) || []; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '상시 세션을 불러오지 못했습니다'))); return; }
+  try { const t = await api('/api/ui/terminal/sessions'); live = ((t && t.sessions) || []).map((s) => s.id); } catch { /* 세션목록 실패 무시 */ }
+
+  const rows = el('div', { class: 'wikicat-rows' });
+  if (!sessions.length) rows.append(el('div', { class: 'wikicat-empty', text: '아직 상시 세션이 없습니다. ‘+ 상시 세션 추가’로 등록하면 keep-alive 가 항상 띄워둡니다.' }));
+  for (const m of sessions) {
+    const alive = m.session_id && live.includes(m.session_id);
+    const main = el('div', { class: 'wikicat-row-main' },
+      el('span', { class: 'wikicat-name', text: m.label || m.id }),
+      el('span', { class: 'wikicat-key mono', text: (m.account || '계정 미지정') + ' · ' + (m.harness || 'claude') }),
+      el('span', { class: 'dm-tag', text: m.enabled ? (alive ? '실행중' : '대기(재생성 예정)') : '비활성' }),
+      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '세션' }), m.session_id || '미생성'));
+    const acts = el('div', { class: 'wikicat-row-acts' },
+      el('button', { class: 'btn btn-ghost btn-sm', text: '띄우기/재생성', onclick: () => managedEnsure(m.id, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: m.enabled ? '끄기' : '켜기', onclick: () => managedToggle(m, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openManagedSessionForm(m, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => managedDelete(m.id, reload) }));
+    rows.append(el('div', { class: 'wikicat-row' }, main, acts));
+  }
+  const head = el('div', { class: 'wikicat-grouphead' },
+    el('span', { class: 'wikicat-grouptitle', text: '상시 세션' }),
+    el('span', { class: 'wikicat-groupcount', text: String(sessions.length) }),
+    el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 상시 세션 추가', onclick: () => openManagedSessionForm(null, reload) }));
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '상시 세션 (에이전트)' })),
+    el('p', { class: 'admin-hint', text: '항상 떠 있는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 돌고, keep-alive 가 죽으면 재생성합니다. 크론(미매핑 분류 등)이 이 세션에 작업을 쏩니다 — 팀플랜 과금. account = 어떤 라이블리 계정(클로드 로그인)으로 띄울지.' }),
+    el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+  detail.replaceChildren(card);
+}
+
+function openManagedSessionForm(m, reload) {
+  const isNew = !m;
+  const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
+  const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: title }),
+    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+  const idInp = el('input', { type: 'text', style: inputStyle, value: m ? m.id : '', placeholder: 'box-map-agent', ...(isNew ? {} : { disabled: true }) });
+  const labelInp = el('input', { type: 'text', style: inputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
+  const accountInp = el('input', { type: 'text', style: inputStyle, value: (m && m.account) || '', placeholder: 'daon (라이블리 계정/프로필)' });
+  const wsInp = el('input', { type: 'text', style: inputStyle, value: (m && m.workspace_subpath) || '', placeholder: '비우면 managed/<id>' });
+  const harnessSel = el('select', { style: inputStyle });
+  for (const h of ['claude', 'codex', 'shell']) harnessSel.append(el('option', { value: h, text: h, ...((m && m.harness === h) ? { selected: true } : {}) }));
+  const autoChk = el('input', { type: 'checkbox', ...((m ? m.auto_approve : true) ? { checked: true } : {}) });
+  const enabledChk = el('input', { type: 'checkbox', ...((m ? m.enabled : true) ? { checked: true } : {}) });
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '상시 세션 추가' : '저장' });
+  const form = el('div', { class: 'proj-settings' },
+    block('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp),
+    block('이름', '관리 목록·세션 탭에 보일 이름.', labelInp),
+    block('라이블리 계정/프로필', '어떤 클로드 로그인(시드)으로 띄울지. 지금은 단일 프로필 — 곧 프로필별 로그인.', accountInp),
+    block('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp),
+    block('하네스', '', harnessSel),
+    block('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))),
+    block('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))),
+    el('div', { class: 'ps-rules-actions' }, saveBtn));
+  const back = overlayBox(isNew ? '상시 세션 추가' : '상시 세션 수정 — ' + m.id, form);
+  const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
+  saveBtn.onclick = async () => {
+    const id = idInp.value.trim();
+    if (!id) { toast('세션 id 가 필요합니다', true); return; }
+    const body = { id, label: labelInp.value.trim() || null, account: accountInp.value.trim() || null,
+      workspace_subpath: wsInp.value.trim() || null, harness: harnessSel.value,
+      auto_approve: autoChk.checked, enabled: enabledChk.checked };
+    saveBtn.disabled = true;
+    try { await api('/api/ui/managed-sessions', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '추가했습니다 (켜져 있으면 곧 keep-alive 가 띄웁니다)' : '저장했습니다'); back.remove(); reload(); }
+    catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+  };
+}
+
+async function managedEnsure(id, reload) {
+  try { const r = await api('/api/ui/managed-sessions/' + encodeURIComponent(id) + '/ensure', { method: 'POST' }); toast('세션: ' + ((r && r.action) || 'ok') + (r && r.session_id ? ' (' + r.session_id + ')' : '')); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function managedToggle(m, reload) {
+  try { await api('/api/ui/managed-sessions', { method: 'POST', body: JSON.stringify({ id: m.id, enabled: !m.enabled }) }); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function managedDelete(id, reload) {
+  if (!confirm('상시 세션 등록 ‘' + id + '’을(를) 삭제할까요? (살아있는 터미널 세션은 별도로 종료)')) return;
+  try { await api('/api/ui/managed-sessions/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 
