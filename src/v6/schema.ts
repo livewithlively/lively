@@ -298,6 +298,27 @@ export async function initV6Schema(): Promise<string> {
       ON CONFLICT (task_id, member_id) DO NOTHING;
   `);
 
+  // ── 5e) external_outbox(2026-06-26, #177 아웃바운드 write-through) — 로컬 편집(web/MCP)→외부 PM(ClickUp) 푸시 큐. ──
+  //  우리 DB=master 라 로컬 변경을 외부로 흘린다. 커넥터(인바운드)는 project-store 를 우회(connector-mirror 직접 INSERT)하므로
+  //  여기 적재되지 않는다 → 인바운드→아웃바운드 루프 원천 차단(이중 방어로 enqueue 가 source='connector' skip).
+  //  pending(done_at IS NULL)은 (system, entity_id)당 1행 coalesce — 여러 편집이 한 번의 푸시로 수렴(드레인이 현재 project 행 재읽기, 멱등).
+  //  op='delete' 는 ext_id_snapshot(삭제 전 external_id)을 실어 행 CASCADE 삭제 후에도 외부 삭제 가능.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_outbox(
+      id BIGSERIAL PRIMARY KEY,
+      entity_id INT NOT NULL,                 -- project.id(project/task/subtask 행). FK 미설정(delete 후에도 행 남아야 외부 삭제 가능).
+      system TEXT NOT NULL DEFAULT 'clickup',
+      op TEXT NOT NULL CHECK (op IN ('upsert','delete')),
+      ext_id_snapshot TEXT,                   -- delete 용: enqueue 시점 external_id.
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      done_at TIMESTAMPTZ,                     -- 푸시 성공 시각(NULL=pending).
+      attempts INT NOT NULL DEFAULT 0,
+      last_error TEXT);
+    CREATE UNIQUE INDEX IF NOT EXISTS external_outbox_pending_uidx ON external_outbox(system, entity_id) WHERE done_at IS NULL;
+    CREATE INDEX IF NOT EXISTS external_outbox_pending_idx ON external_outbox(system, created_at) WHERE done_at IS NULL;
+  `);
+
   // ── 6) project_member — 프로젝트 팀원(n:n, level=project). 구 project_member 동형(org/schema.ts:304). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_member(

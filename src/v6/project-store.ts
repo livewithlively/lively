@@ -8,6 +8,8 @@ import { getTaskTags, getTaskTime } from "./task-detail-store.js"; // 프로젝�
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
+// 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
+import { enqueueExternalPush } from "./external-outbox.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
@@ -203,6 +205,7 @@ export async function createProject(
       [row.id, memberId]);
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
+  await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
   return row;
 }
 
@@ -276,6 +279,7 @@ export async function deleteProject(id: number, ctx?: WriteCtx): Promise<Project
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   await itemsPool.query(`DELETE FROM project WHERE id=$1 AND level='project'`, [id]);
   await auditProject(String(id), "delete", before, null, ctx);
+  if (before.external_id) await enqueueExternalPush(id, "delete", ctx, before.external_id); // 외부 푸시(delete) — 미러된 것만.
   return before;
 }
 
@@ -289,6 +293,7 @@ export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<Projec
   if (!before) throw new Error(`작업 #${id} 없음`);
   await itemsPool.query(`DELETE FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   await auditProject(String(id), "delete", before, null, ctx);
+  if (before.external_id) await enqueueExternalPush(id, "delete", ctx, before.external_id); // 외부 푸시(delete) — 미러된 것만.
   return before;
 }
 
@@ -310,6 +315,7 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
     `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
   return after;
 }
 
@@ -338,6 +344,7 @@ export async function updateProject(
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
   await auditProject(String(id), "update", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
   return after;
 }
 
@@ -424,6 +431,7 @@ export async function createTask(
      RETURNING ${PROJECT_COLS}`,
     [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
+  await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
   return row;
 }
 
@@ -435,6 +443,7 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
     `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
   return after;
 }
 
@@ -479,6 +488,7 @@ export async function updateTask(
   // 단일 assignee 변경 시 task_assignee n:n 동기(전환기 가산 섀도 일관성).
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
   return after;
 }
 

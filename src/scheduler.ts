@@ -76,6 +76,24 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return { status: "ok", summary: { systems: out } };
   }
 
+  if (job.action === "connector_push") {
+    // 아웃바운드 — external_outbox(우리 편집) 드레인 → 외부 PM 미러. connector_sync 와 대칭(검증된 run-push CLI 서브프로세스).
+    //  우리 DB=master 라 push 는 additive(외부 미러 생성/갱신) — 우리 데이터엔 무영향. params.system 없으면 active 전체.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileP = promisify(execFile);
+    const systems = params.system ? [String(params.system)] : await activeConnectorSystems();
+    const out: unknown[] = [];
+    for (const sys of systems) {
+      try {
+        const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
+          { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+        out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
+      } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
+    }
+    return { status: "ok", summary: { systems: out } };
+  }
+
   if (job.action === "map_unmapped") {
     // LLM 판단주체 — 상시 LLM 세션(팀플랜 시드)에 분류 태스크 주입. 세션 미설정/부재는 error(가시).
     return runMapInject(params);
