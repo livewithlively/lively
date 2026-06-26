@@ -344,10 +344,10 @@ async function openCronForm(job, reload) {
   const enabledChk = el('input', { type: 'checkbox', ...((job ? job.enabled : false) ? { checked: true } : {}) });
 
   const sessSel = el('select', { style: inputStyle });
-  sessSel.append(el('option', { value: '', text: '(타깃 세션 선택 — 상시 시드 세션)' }));
+  sessSel.append(el('option', { value: '', text: '(상시 세션 선택)' }));
   const repoInp = el('input', { type: 'text', style: inputStyle, value: params.repo || '', placeholder: 'context-ontology' });
   const systemInp = el('input', { type: 'text', style: inputStyle, value: params.system || '', placeholder: '비우면 active 전체' });
-  const sessBlock = block('타깃 LLM 세션', '이 잡이 분류 태스크를 주입할 상시 세션(관리자 시드 — 팀플랜 과금). 세션이 lively MCP 로 직접 분류합니다.', sessSel);
+  const sessBlock = block('타깃 상시 세션', '‘상시 세션’ 탭에서 등록한 관리 세션만 선택됩니다(개인 세션 아님). keep-alive 가 죽어도 재생성하고, 주입 시 현재 살아있는 세션으로 자동 해소됩니다. 없으면 먼저 상시 세션을 추가하세요.', sessSel);
   const repoBlock = block('repo', '대상 repo 이름.', repoInp);
   const systemBlock = block('커넥터 system', 'clickup 등. 비우면 active 전체.', systemInp);
   const syncVis = () => {
@@ -357,7 +357,7 @@ async function openCronForm(job, reload) {
     systemBlock.style.display = a === 'connector_sync' ? '' : 'none';
   };
   actionSel.onchange = syncVis;
-  try { const r = await api('/api/ui/terminal/sessions'); for (const s of ((r && r.sessions) || [])) sessSel.append(el('option', { value: s.id, text: (s.label || s.id) + ' (' + s.id + ')', ...((params.session === s.id) ? { selected: true } : {}) })); } catch { /* 세션 목록 실패해도 폼은 연다 */ }
+  try { const r = await api('/api/ui/managed-sessions'); for (const s of ((r && r.sessions) || [])) sessSel.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)'), ...((params.session === s.id) ? { selected: true } : {}) })); } catch { /* 목록 실패해도 폼은 연다 */ }
 
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '잡 추가' : '저장' });
   const form = el('div', { class: 'proj-settings' },

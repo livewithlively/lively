@@ -96,18 +96,31 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
 //  세션 미설정/부재는 error(가시). fire-and-forget: 주입까지가 잡 책임(매핑은 세션이 수 분에 걸쳐) — 다음 주기에 인박스 0이면 skip.
 async function runMapInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const repo = String(params.repo ?? "context-ontology");
-  const session = params.session ? String(params.session) : "";
-  if (!session) return { status: "error", summary: { error: "타깃 세션 미설정 — cron 잡 params.session 에 상시 LLM 세션 id 필요(예: box-daon-…). 관리탭에서 설정." } };
+  const sessionRef = params.session ? String(params.session) : "";
+  if (!sessionRef) return { status: "error", summary: { error: "타깃 상시 세션 미설정 — 관리탭 스케줄러에서 상시 세션을 선택하세요." } };
   const { listUnmappedCodeUnits } = await import("./domainmap/core/mappings.js");
   let inbox: Array<{ path: string }>;
   try { inbox = await listUnmappedCodeUnits(repo); }
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
-  if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, session } };
+  if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, session: sessionRef } };
+
+  // params.session = 관리세션 id. 현재 살아있는 tmux 세션으로 해소(keep-alive 보장 — 죽었으면 재생성).
+  //  managed 조회 실패(=관리세션 아님)면 raw tmux session id 로 폴백(후방호환).
+  let tmuxSession = sessionRef;
+  try {
+    const { getManagedSession, ensureManagedSession } = await import("./org/managed-sessions.js");
+    const ms = await getManagedSession(sessionRef);
+    if (ms) {
+      const ens = await ensureManagedSession(ms);
+      if (!ens.session_id) return { status: "error", summary: { error: "관리세션 '" + sessionRef + "' 의 tmux 세션을 띄우지 못함(enabled 확인)", session: sessionRef } };
+      tmuxSession = ens.session_id;
+    }
+  } catch { /* managed 조회 실패 → raw tmux id 로 시도 */ }
 
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildMapPrompt(repo, inbox.length);
-  try { await injectToSession(session, prompt); }
-  catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + session + "): " + ((e as Error)?.message ?? String(e)), session } }; }
-  return { status: "ok", summary: { injected: true, session, unmapped: inbox.length, note: "상시 세션에 분류 태스크 주입(팀플랜 과금). 매핑은 세션이 비동기 수행 — 다음 주기에 인박스 0이면 skip." } };
+  try { await injectToSession(tmuxSession, prompt); }
+  catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + tmuxSession + "): " + ((e as Error)?.message ?? String(e)), session: sessionRef, tmux: tmuxSession } }; }
+  return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, unmapped: inbox.length } };
 }
 
 // tmux send-keys 로 세션 PTY 에 텍스트 주입(+Enter). UTF-8 로케일 강제(한글 깨짐 방지 — terminal-sessions 와 동일).
