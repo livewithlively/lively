@@ -1644,6 +1644,19 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .cmt-react-chip { border: 1px solid var(--line); background: var(--bg-tint); cursor: pointer; font-size: 12px; padding: 1px 9px; border-radius: 11px; color: var(--ink-sub); line-height: 1.6; }
 .cmt-react-chip:hover { border-color: var(--line-net); }
 .cmt-react-chip.mine { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
+/* 스레드(답글) — 'N개의 답글' 칩 + 스레드 보기. 클릭업 Thread by 참고. */
+.cmt-thread-pill { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; padding: 5px 12px 5px 6px; border: 1px solid var(--line); background: var(--bg-tint); border-radius: 999px; cursor: pointer; color: var(--ink-sub); font-size: 12.5px; font-weight: 600; line-height: 1.4; transition: border-color .12s ease, background .12s ease; }
+.cmt-thread-pill:hover { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 8%, transparent); color: var(--blue); }
+.cmt-thread-pill-avas { display: inline-flex; }
+.cmt-thread-pill-ava { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 50%; color: #fff; font-size: 9.5px; font-weight: 700; border: 2px solid var(--bg); margin-left: -7px; }
+.cmt-thread-pill-avas .cmt-thread-pill-ava:first-child { margin-left: 0; }
+.cmt-thread-pill-n { white-space: nowrap; }
+.cmt-thread-pill-time { color: var(--muted-2); font-weight: 500; white-space: nowrap; }
+.cmt-thread-replies { margin: 2px 0 2px 13px; padding-left: 19px; border-left: 2px solid var(--line); }
+.cmt-thread-replies .cmt-card { padding: 12px 0; }
+.cmt-reply-card .cmt-ava { width: 28px; height: 28px; font-size: 11px; }
+.cmt-thread-empty { margin: 8px 0 4px 32px; font-size: 13px; color: var(--muted-2); }
+.cmt-back { color: var(--ink); }
 /* 작성칸 — 드로어 하단 고정(이미지처럼). 크고 편한 멀티라인 카드 + 파란 전송. */
 .cmt-composer { flex: none; margin: 10px 18px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); box-shadow: 0 1px 3px rgba(21,35,59,.04); transition: border-color .14s ease, box-shadow .14s ease; }
 .cmt-composer:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent); }
@@ -2515,3 +2528,61 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-proj-check:hover { border-color: var(--blue); }
 .pjv-proj-check.on { background: var(--blue); border-color: var(--blue); }
 .pjv-proj-check.disabled { cursor: default; opacity: .4; }
+
+/* ── 세션 주입 지도(injectionMap) — 주입 시점별 블록 + 조각 + 딥링크 (2026-06-26) ── */
+.inj-moments { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.inj-moment { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--bg); }
+.inj-moment-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.inj-moment-h { min-width: 0; }
+.inj-moment-title { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink); }
+.inj-sub { margin: 2px 0 0; color: var(--ink-sub); }
+.inj-toggle { flex: none; white-space: nowrap; }
+.inj-pieces { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 4px; }
+.inj-piece { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; }
+.inj-piece:hover { background: var(--line-row); }
+.inj-n { flex: none; width: 22px; text-align: center; color: var(--muted); font-weight: 700; }
+.inj-piece-body { flex: 1 1 auto; min-width: 0; }
+.inj-piece-label { font-weight: 600; color: var(--ink); }
+.inj-custom { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.inj-custom-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-left: 2px solid var(--line-net); }
+.inj-preview { margin-top: 8px; }
+
+/* ════ 팀 기능(2026-06-26) — 사이드바 공간 통합(우리 팀 접이식) + 분류체계 오너 + 팀 관리 ════ */
+/* 사이드바 카테고리 그룹(<details>) — 우리 팀 상단 펼침(★), 나머지 space별 접이식 */
+.tree-group { margin: 2px 0; }
+.tree-group > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 8px; user-select: none;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted-head);
+}
+.tree-group > summary::-webkit-details-marker { display: none; }
+.tree-group > summary::before {
+  content: '▸'; font-size: 9px; color: var(--muted-2); transition: transform .12s; display: inline-block; flex: none;
+}
+.tree-group[open] > summary::before { transform: rotate(90deg); }
+.tree-group > summary:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.tree-grouptitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-groupcount { font-weight: 600; color: var(--muted-2); letter-spacing: 0; }
+.tree-groupstar { color: var(--blue); font-size: 11px; flex: none; }
+.tree-group-mine > summary { color: var(--blue); }
+.tree-group-mine { margin-bottom: 6px; }
+.tree-group .tree-item { padding-left: 20px; } /* 그룹 내 들여쓰기 */
+
+/* 분류체계 관리 — 카테고리별 오너 팀(드롭다운/표시) */
+.wikicat-owner { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.wikicat-owner-label { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted-2); }
+.wikicat-owner-name { font-weight: 700; color: var(--blue); }
+.wikicat-owner-sel { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line-net-2, #d9dee6); border-radius: 6px; background: var(--bg-soft, #fff); color: var(--ink-sub); }
+
+/* 팀 관리 — 팀원 체크 + 역할 select */
+.team-members-wrap { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; padding: 2px; }
+.team-member-opt { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); padding: 5px 6px; border-radius: 7px; }
+.team-member-opt:hover { background: var(--bg-tint); }
+/* 이름은 짜부라지지 않게(min-width) + 진한 색으로 항상 보이게. 역할 select 는 우측으로 밀고, 좁으면 줄바꿈. */
+.team-member-name { flex: 1 1 auto; min-width: 90px; color: var(--ink); }
+.team-role-sel { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line-net-2, #d9dee6); border-radius: 6px; background: var(--bg-soft, #fff); flex: 0 0 auto; margin-left: auto; }
+
+/* 세션 주입 지도 — 가이드 템플릿 안 ${} 자식(들여쓰기) */
+.inj-subpieces { margin: 2px 0 2px 18px; padding-left: 12px; border-left: 2px dashed var(--line-net); }
+.inj-subpiece { padding: 5px 8px; }
+.inj-token { flex: none; min-width: 92px; font-size: 12px; font-weight: 700; color: var(--ink-note); background: var(--line-row); padding: 1px 6px; border-radius: 5px; }
