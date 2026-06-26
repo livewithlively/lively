@@ -3922,7 +3922,7 @@ function companyTimelineSection() {
   let acts: any[] = [];
   let shown = 6;
   const nameOf = (pid) => { const m = members.find((x) => x.id === pid); return (m && m.display_name) || pid || '—'; };
-  const TYPES = [['', '전체'], ['commit', '커밋'], ['comment', '코멘트'], ['decision', '결정'], ['status_change', '상태 변경'], ['review', '검토']];
+  const TYPES = [['', '전체'], ['feature', '기능'], ['fix', '수정'], ['decision', '결정'], ['docs', '문서'], ['research', '리서치'], ['review', '검토'], ['chore', '운영'], ['other', '기타']];
   const chipsBar = el('div', { class: 'proj-tl-filter' });
   const paintChips = () => chipsBar.replaceChildren(...TYPES.map(([v, label]) =>
     el('button', { class: 'proj-tl-chip' + (st.type === v ? ' active' : ''), text: label, onclick: () => { st.type = v; paintChips(); load(); } })));

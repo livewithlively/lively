@@ -11,7 +11,8 @@ import type { Scope } from "./scopes.js";
 // 어댑터가 주입하는 호출 맥락 — audit.source('mcp'|'web') 구분 + 감사 보강(B23). handler 가 쓰기 fn 에 전달.
 export interface CapabilityCtx {
   source?: string;
-  actor?: string;           // 안정 식별자(userId 우선) — 감사 actor
+  actor?: string;           // 안정 식별자(userId 우선) — 감사 actor(사람 축, author_person)
+  agent?: string;           // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 하네스(프로젝트 #182). MCP 경로만 채움
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
 }

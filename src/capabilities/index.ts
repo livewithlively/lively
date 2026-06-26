@@ -5,6 +5,7 @@
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { agentFromUserAgent, userAgentFromExtra } from "../org/agent-identity.js";
 import { contextCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -95,7 +96,9 @@ export function registerMcpCapabilities(server: McpServer, overrides?: ReadonlyM
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
-        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId }));
+        // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
+        const agent = agentFromUserAgent(userAgentFromExtra(extra)) ?? undefined;
+        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent }));
       },
     );
   }

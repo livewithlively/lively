@@ -8,8 +8,9 @@ import { overlay } from './admin.js';
 //  ③ 작업 타임라인(실제 작업 — 펼치면 본문·연결 과업·산출/참조 지식·바뀐 것). 클릭=펼침이 핵심(드릴인).
 //  요약 집계는 GET /api/ui/dash/people, 타임라인은 GET /api/ui/activity/list(연결 곁들임). 고유명 하드코딩 없음.
 // ════════════════════════════════════════════
-// 유형별 점 색(스캔용 — §0.5: 채운 필 금지, 6px 점 + 무채 라벨). commit=민트, decision=파랑, review=코랄, 나머지=중립.
-const ACT_TYPE_TONE = { commit: 'mint', decision: 'blue', review: 'coral', comment: 'muted', status_change: 'teal' };
+// 유형별 점 색(스캔용 — §0.5: 채운 필 금지, 6px 점 + 무채 라벨). 성격축 8종(프로젝트 #182).
+//  feature=민트, fix=코랄, decision=파랑, docs=틸, research=바이올렛, review=앰버, chore/other=중립.
+const ACT_TYPE_TONE = { feature: 'mint', fix: 'coral', decision: 'blue', docs: 'teal', research: 'violet', review: 'amber', chore: 'muted', other: 'muted' };
 function actTypeTag(type) {
     return el('span', { class: 'act-type tone-' + (ACT_TYPE_TONE[type] || 'muted') }, el('span', { class: 'act-type-dot', 'aria-hidden': 'true' }), ACTIVITY_TYPE_LABEL[type] || type);
 }

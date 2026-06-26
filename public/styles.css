@@ -1003,6 +1003,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .act-type.tone-blue  .act-type-dot { background: var(--blue); }
 .act-type.tone-coral .act-type-dot { background: var(--coral); }
 .act-type.tone-teal  .act-type-dot { background: var(--teal); }
+.act-type.tone-amber  .act-type-dot { background: #D9A441; }
+.act-type.tone-violet .act-type-dot { background: #8B7BD8; }
 .act-type.tone-muted .act-type-dot { background: var(--muted-2); }
 
 /* ① 구성원 요약 */

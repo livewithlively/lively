@@ -154,7 +154,10 @@ function domainmapBody(data, firstSectionHint) {
         el('span', { class: 'mono dm-is-ent', text: label }),
         el('span', { class: 'dm-change-when', text: relTime(c.at) })),
       el('div', { class: 'dm-change-by' },
-        el('span', { class: 'dm-by-act' }, actTypeTag('commit'), el('span', { class: 'dm-act-title', text: c.activity_title || '' })),
+        el('span', { class: 'dm-by-act' },
+          // is(코드구조) 변경은 커밋에서 온다 — 유형이 아니라 commit_sha 로 식별(프로젝트 #182). 정적 '커밋' 칩.
+          el('span', { class: 'act-type tone-mint' }, el('span', { class: 'act-type-dot', 'aria-hidden': 'true' }), '커밋'),
+          el('span', { class: 'dm-act-title', text: c.activity_title || '' })),
         c.commit_sha ? el('span', { class: 'mono dm-commit', text: c.commit_sha.slice(0, 8) }) : null,
         el('span', { class: 'dm-change-who', text: (c.author_person || c.actor_id || '미상') + (c.author_agent ? ' · ' + c.author_agent : '') })),
     );

@@ -2,7 +2,7 @@
 //  과업(Task)=project(level='task'), '작업'=과업을 향해 한 행위(이벤트). commit 은 작업의 한 유형.
 //  v6: activity.project_id(과업 1:1, 구 activity_task 대체) + activity_knowledge(지식 참조→knowledge, 구 activity_ku_ref) +
 //  activity_touch(코드 footprint)를 한 트랜잭션(withTx)으로 원자 기록한다 — 통합의 산물.
-//  author_person=토큰 신원(누가), author_agent='어떤 AI'(모델/하네스 — 호출자가 명시 전달). 사람×AI 집계의 축.
+//  author_person=토큰 신원(누가), author_agent='어떤 AI'(하네스 — 게이트웨이가 접속 신원/User-Agent 로 식별, 프로젝트 #182). 사람×AI 집계의 축.
 import { withTx, q, one, itemsPool } from "../db.js";
 import { saneLimit } from "./types.js";
 import { conflictKey } from "../../org/external-identity.js";
@@ -134,6 +134,7 @@ export interface DashAgentRow {
   author_agent: string | null;
   count: number;
   byType: Record<string, number>;
+  commits: number; // 커밋 동반 작업 수(commit_sha 존재) — 유형과 직교
   tasks: number;
   lastActiveAt: string | null;
 }
@@ -150,15 +151,19 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
   if (targetIds.size === 0) for (const id of memberById.keys()) targetIds.add(id);
   const ids = [...targetIds];
 
-  // 유형은 스키마 CHECK(activity_type_chk)와 동일 — commit/comment/decision/status_change/review. 내 목록 작성자만 집계.
+  // 유형은 스키마 CHECK(activity_type_chk)와 동일 — feature/fix/decision/docs/research/review/chore/other(프로젝트 #182). 내 목록 작성자만 집계.
   const rows = ids.length ? await q(itemsPool, `
     SELECT a.author_person, a.author_agent,
            COUNT(*)::int AS count,
-           COUNT(*) FILTER (WHERE a.type='commit')::int        AS t_commit,
-           COUNT(*) FILTER (WHERE a.type='comment')::int       AS t_comment,
-           COUNT(*) FILTER (WHERE a.type='decision')::int      AS t_decision,
-           COUNT(*) FILTER (WHERE a.type='status_change')::int AS t_status_change,
-           COUNT(*) FILTER (WHERE a.type='review')::int        AS t_review,
+           COUNT(*) FILTER (WHERE a.type='feature')::int   AS t_feature,
+           COUNT(*) FILTER (WHERE a.type='fix')::int       AS t_fix,
+           COUNT(*) FILTER (WHERE a.type='decision')::int  AS t_decision,
+           COUNT(*) FILTER (WHERE a.type='docs')::int      AS t_docs,
+           COUNT(*) FILTER (WHERE a.type='research')::int  AS t_research,
+           COUNT(*) FILTER (WHERE a.type='review')::int    AS t_review,
+           COUNT(*) FILTER (WHERE a.type='chore')::int     AS t_chore,
+           COUNT(*) FILTER (WHERE a.type='other')::int     AS t_other,
+           COUNT(*) FILTER (WHERE a.commit_sha IS NOT NULL)::int AS t_commits,
            COUNT(DISTINCT a.project_id)::int AS tasks,
            MAX(COALESCE(a.committed_at, a.created_at)) AS last_active_at
     FROM activity a
@@ -175,7 +180,9 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
     bucket.agents.push({
       author_agent: r.author_agent ?? null,
       count: r.count,
-      byType: { commit: r.t_commit, comment: r.t_comment, decision: r.t_decision, status_change: r.t_status_change, review: r.t_review },
+      // 유형 분포(성격) + commits=커밋 동반 작업 수(commit_sha 존재) — 커밋은 유형이 아니라 직교 메타.
+      byType: { feature: r.t_feature, fix: r.t_fix, decision: r.t_decision, docs: r.t_docs, research: r.t_research, review: r.t_review, chore: r.t_chore, other: r.t_other },
+      commits: r.t_commits,
       tasks: r.tasks,
       lastActiveAt,
     });

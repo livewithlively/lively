@@ -89,12 +89,13 @@ async function readDomainStructureCounts(db: Db): Promise<DomainStructureCount[]
       (SELECT COUNT(*)::int FROM mapping m JOIN code_unit cu ON cu.id=m.target_id
          WHERE m.target_kind='code_unit' AND m.category_id=c.id
          AND m.status<>'rejected' AND cu.state='removed') removed_units,
-      -- P5: 통합 DB 네이티브 join — 이 도메인 코드를 건드린 commit 작업(activity) 수(통합 전엔 별 DB라 불가).
+      -- P5: 통합 DB 네이티브 join — 이 도메인 코드를 건드린 커밋 작업(activity) 수(통합 전엔 별 DB라 불가).
+      --  프로젝트 #182: 커밋은 더 이상 유형이 아니라 commit_sha 존재로 식별(어떤 유형이든 커밋 동반 가능).
       (SELECT COUNT(DISTINCT a.id)::int FROM activity a
          JOIN activity_touch at2 ON at2.activity_id=a.id AND at2.target_kind='code_unit'
          JOIN mapping m ON m.target_kind='code_unit' AND m.target_id=at2.target_id
            AND m.category_id=c.id AND m.status<>'rejected'
-         WHERE a.type='commit') active_commits
+         WHERE a.commit_sha IS NOT NULL) active_commits
     FROM category c
     WHERE c.space='product' AND c.state<>'merged'
     ORDER BY c.key`);

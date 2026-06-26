@@ -66,8 +66,9 @@ export async function init(): Promise<string> {
   // v6 드랍(2026-06-24): domain_alias(소프트별칭) 폐기 — 단일 DB라 category.key 직접 변경(별칭 불요). 테이블 드랍.
   // ── 작업(Activity) 모델 (통합 DB 신설 P2) — domainmap 구조(is)와 ku(should/맥락)를 잇는 이벤트 레이어. ──
   //  과업(Task)=project(level='task', v6)이고, '작업'은 과업을 향해 실제로 한 행위(이벤트)다.
-  //  commit 은 작업의 한 유형(commit_sha 보유, activity_touch 로 code_unit 연결 → is 갱신). comment/decision/
-  //  status_change/review 는 PM 코멘트 미러 가능(external_*). 한 트랜잭션(withTx=itemsPool)에서 activity +
+  //  type=작업의 성격(feature/fix/decision/docs/research/review/chore/other, 프로젝트 #182). 커밋은 유형이 아니라
+  //  commit_sha 존재(commit_occurred 파생)로 표현 — 어떤 유형이든 commit_sha+activity_touch 로 code_unit 연결 → is 갱신.
+  //  external_* 로 PM 미러 가능(출처=external_system). 한 트랜잭션(withTx=itemsPool)에서 activity +
   //  activity_touch(코드)를 원자 기록. v6: 과업 링크=activity.project_id, 지식 참조=activity_knowledge(v6/schema.ts).
   //  *_review = 3-state('na'|'checked_no_change'|'changed') — "점검했으나 수정 안 됨"을 안 한 것과 구분 명시기록.
   //  author_person=토큰 신원, author_agent='어떤 AI'(모델/세션 — 하네스가 activity_log 인자로 명시 전달).
@@ -117,12 +118,27 @@ export async function init(): Promise<string> {
   await pool.query(`CREATE INDEX IF NOT EXISTS dash_watch_owner_idx ON dash_watch(owner);`);
   // summary — 비개발자도 한눈에 읽는 쉬운 한 줄(겉에 노출). title 은 기술 상세(펼침). 기존 DB 보강(신규 설치는 위 DDL).
   await pool.query(`ALTER TABLE activity ADD COLUMN IF NOT EXISTS summary TEXT;`);
-  // type/review/relation CHECK — 신설이라 백필 불요. pg_constraint 프로브 멱등(기존 idiom).
+  // 작업 유형(type) 재정립(2026-06-26, 프로젝트 #182) — type = "이 작업이 무엇인가"(성격). 8종:
+  //  feature(기능개발)·fix(오류수정)·decision(의사결정)·docs(문서작성)·research(리서치·조사)·
+  //  review(검토·리뷰)·chore(운영·잡무: 배포·리팩토링·의존성)·other(기타). 'commit' 은 더 이상 유형이 아니다
+  //  — 커밋 발생은 commit_sha 존재(아래 commit_occurred 파생컬럼)로 표현하고, 어떤 유형이든 커밋 메타를 동반할 수 있다.
+  //  구 comment/status_change(PM 미러 유형)는 폐기 — 미러 출처는 external_system 이 식별한다.
+  // commit_occurred — "커밋이 발생했나" 파생(생성)컬럼 = commit_sha 존재. 조회·집계 편의용, 별도 동기화 불요(STORED, PG12+).
+  await pool.query(`ALTER TABLE activity ADD COLUMN IF NOT EXISTS commit_occurred BOOLEAN GENERATED ALWAYS AS (commit_sha IS NOT NULL) STORED;`);
+  // type CHECK — 신(8종)으로 교체. 구 CHECK(정의에 'commit' 포함) 잔존 시 레거시 행을 새 어휘로 1회 remap 후 스왑.
+  //  멱등·자가치유: 신규 설치(제약 없음)는 바로 8종 추가, 이미 이관된 DB(정의에 'commit' 없음)는 무변.
+  //  ⚠ 순서: 제약을 먼저 DROP 한 뒤 remap 한다 — 구 CHECK 가 살아있는 채로 'feature'/'other' 로 UPDATE 하면 제약 위반.
   await pool.query(`
   DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_type_chk'
+               AND pg_get_constraintdef(oid) LIKE '%commit%') THEN
+      ALTER TABLE activity DROP CONSTRAINT activity_type_chk;
+      UPDATE activity SET type='feature' WHERE type='commit';          -- 커밋 작업(commit_sha 보존) → 기능개발(휴리스틱)
+      UPDATE activity SET type='other'   WHERE type IN ('comment','status_change'); -- 구 PM 미러 → 기타(external_system 이 출처 식별)
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_type_chk') THEN
       ALTER TABLE activity ADD CONSTRAINT activity_type_chk
-        CHECK (type IN ('commit','comment','decision','status_change','review'));
+        CHECK (type IN ('feature','fix','decision','docs','research','review','chore','other'));
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='activity'::regclass AND conname='activity_should_review_chk') THEN
       ALTER TABLE activity ADD CONSTRAINT activity_should_review_chk

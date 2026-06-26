@@ -9,17 +9,18 @@ const activityLog: Capability = {
   name: "activity_log",
   title: "작업(activity) 기록",
   description:
-    "프로젝트(task)를 진척시킨 작업(activity)을 기록한다 — type=commit/comment/decision/status_change/review. " +
-    "commit 유형은 commit_sha+touches(건드린 code_unit/data_entity)로 is(코드구조) 갱신 근거가 되고, 모든 유형은 " +
-    "should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
+    "프로젝트(task)를 진척시킨 작업(activity)을 기록한다. type = 이 작업이 '무엇'인가(성격): " +
+    "feature(기능개발)·fix(오류수정)·decision(의사결정)·docs(문서작성)·research(리서치·조사)·review(검토·리뷰)·chore(운영·잡무: 배포·리팩토링·의존성)·other(기타). " +
+    "커밋은 유형이 아니다 — 커밋을 했으면 그 일의 성격(예 feature/fix)을 type 으로 두고 commit_sha+repo+touches 를 함께 넘겨라(commit_sha 존재가 곧 '커밋 발생'). " +
+    "commit_sha+touches(건드린 code_unit/data_entity)는 is(코드구조) 갱신 근거가 되고, 모든 유형은 should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
     "실질 지식(의사결정·산출물)은 knowledge_save 로 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
     "진척시킨 프로젝트/태스크는 project_id(task_create_v6 의 id)로 연결한다. " +
-    "author_agent='어떤 AI'(모델/하네스 id), session_id=세션 — 사람×AI 작업현황 집계의 축. " +
+    "author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하므로 넘기지 않아도 된다(자기보고는 게이트웨이 값이 없을 때만 폴백). session_id=세션. 사람×AI 작업현황 집계의 축. " +
     "external(system+id) 지정 시 멱등 upsert(PM 코멘트 라운드트립 재호출 안전). " +
     "title 은 기술 상세 제목(펼쳤을 때 표시), summary 는 작업현황 피드 겉에 보이는 짧은 라벨 '중분류 - 내용'(예: '웹 페이지 수정 - 작업현황 UI 개선') — 둘 다 채워라(summary 없으면 title 로 폴백).",
   scope: "memory",
   input: {
-    type: z.enum(["commit", "comment", "decision", "status_change", "review"]).describe("작업 유형"),
+    type: z.enum(["feature", "fix", "decision", "docs", "research", "review", "chore", "other"]).describe("작업 유형(성격): feature·fix·decision·docs·research·review·chore·other. 커밋 여부는 유형이 아니라 commit_sha 로 표현"),
     title: z.string().min(1).max(500).describe("기술 상세 제목(펼침에 표시 — 정확한 기술 용어 OK). 얇게 — 실질 내용은 ku_refs 로 참조"),
     summary: z.string().max(120).optional().describe("작업현황 겉(접힘)에 보일 짧은 라벨 '중분류 - 내용' 형식(예: '웹 페이지 수정 - 작업현황 UI 개선', '배포 - 도메인 맵 탭'). 한 문장 설명이 아니라 라벨처럼 짧게(기술용어·약어 지양). 상세 설명은 title/body 에. 생략 시 title 로 폴백"),
     body: z.string().max(20000).optional().describe("짧은 메모(선택)"),
@@ -35,7 +36,7 @@ const activityLog: Capability = {
     commit_sha: z.string().max(64).optional(),
     repo: z.string().max(100).optional().describe("repo 이름(commit 유형)"),
     committed_at: z.string().max(40).optional().describe("ISO 시각"),
-    author_agent: z.string().max(120).optional().describe("어떤 AI(모델/하네스 id). 사람 단독이면 생략"),
+    author_agent: z.string().max(120).optional().describe("어떤 AI(모델/하네스 id) — 보통 생략한다. 게이트웨이가 접속 신원으로 자동 식별(권위)하고, 이 값은 게이트웨이가 식별 못 했을 때만 폴백으로 쓰인다(프로젝트 #182)"),
     session_id: z.string().max(200).optional(),
     external_system: z.string().max(60).optional().describe("PM 미러 시스템(예: clickup)"),
     external_id: z.string().max(200).optional(),
@@ -47,11 +48,14 @@ const activityLog: Capability = {
   expose: { mcp: true, rest: false },
   handler: async (input: any, user, ctx) => {
     const authorPerson = ctx?.actor ?? user?.userId ?? null;
+    // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 값이 권위(프로젝트 #182). 자기보고(input.author_agent)는
+    //  게이트웨이가 식별 못 했을 때만 폴백(예: UA 없는 경로). 게이트웨이 값이 있으면 그게 이긴다.
+    const authorAgent = ctx?.agent ?? input.author_agent ?? null;
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
       commit_sha: input.commit_sha ?? null, repo: input.repo ?? null, committed_at: input.committed_at ?? null,
-      author_agent: input.author_agent ?? null, session_id: input.session_id ?? null,
+      author_agent: authorAgent, session_id: input.session_id ?? null,
       external_system: input.external_system ?? null, external_id: input.external_id ?? null,
       external_url: input.external_url ?? null, external_instance: input.external_instance,
       should_review: input.should_review, is_review: input.is_review,

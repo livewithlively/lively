@@ -27,9 +27,10 @@ const REV_OP_LABEL = { insert: '생성', update: '수정', set_lifecycle: '상�
 const SORT_OPTS = [['updated_at', '최신순'], ['name', '이름순'], ['sort', '수동 정렬순']];
 // lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
 const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
-// 작업(activity) 유형 라벨 — 백엔드 activity.type(commit/comment/decision/status_change/review)과 1:1. 작업 현황 대시보드 유형분포 표시용.
-const ACTIVITY_TYPE_LABEL = { commit: '커밋', comment: '코멘트', decision: '결정', status_change: '상태 변경', review: '검토' };
-const ACTIVITY_TYPE_ORDER = ['commit', 'comment', 'decision', 'status_change', 'review'];
+// 작업(activity) 유형 라벨 — 백엔드 activity.type(성격, 프로젝트 #182)과 1:1. 작업 현황 대시보드 유형분포 표시용.
+//  type = "이 작업이 무엇인가". 커밋은 유형이 아니라 commit_sha 존재로 표현(어떤 유형이든 커밋 동반 가능).
+const ACTIVITY_TYPE_LABEL = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
+const ACTIVITY_TYPE_ORDER = ['feature', 'fix', 'decision', 'docs', 'research', 'review', 'chore', 'other'];
 // 작업↔지식 연결 관계 라벨(activity_knowledge.relation) — produced=산출, references=참조, decided=결정 근거.
 const REF_REL_LABEL = { produced: '산출', references: '참조', decided: '결정' };
 // should/is 점검 결과 라벨(activity.should_review/is_review) — 도메인 의도(should)·코드구조(is) 점검 3-state.

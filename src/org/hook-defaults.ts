@@ -5,9 +5,10 @@
 //  웹 관리 UI(세션 주입 지도 ▸ 세션 종료)는 이 기본값을 노출해 '실제 값 표시 + 기본값으로 되돌리기'를 제공한다.
 export const DEFAULT_WRITEBACK_NOTICE =
   "이 세션에서 파일 작업을 했지만 컨텍스트 스토어 기록이 없습니다. 마무리 전에 확인: " +
-  "① 한 일을 작업(activity)으로 기록 — 이번 세션에 커밋했으면 activity_log(type='commit', commit_sha, repo, " +
-  "touches=건드린 code_unit/data_entity, author_agent='어떤 AI'). 진척/결정/리뷰도 activity_log(type 맞게). " +
-  "② should/is 재조정 — commit 작업이면 그 코드가 제품 카테고리(도메인)의 구조(is)를 바꿨는지 보고, 도메인 의도(should)가 " +
+  "① 한 일을 작업(activity)으로 기록 — type 은 그 작업의 성격(feature·fix·decision·docs·research·review·chore·other). " +
+  "이번 세션에 커밋했으면 그 일의 성격을 type 으로 두고(예 type='feature'|'fix') commit_sha·repo·touches(건드린 code_unit/data_entity)를 함께 넘긴다 " +
+  "— 커밋은 유형이 아니라 commit_sha 로 표현된다. author_agent 는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. " +
+  "② should/is 재조정 — 커밋한 작업이면 그 코드가 제품 카테고리(도메인)의 구조(is)를 바꿨는지 보고, 도메인 의도(should)가 " +
   "이번에 주입된 기획·대화 맥락으로 바뀌었으면 category_update(should=…)로 갱신(도메인間 새 의도 의존이 생겼으면 " +
   "category_edge_set). 바뀐 게 없으면 activity_log 의 should_review/is_review='checked_no_change' 로 '점검함·변화없음'을 " +
   "명시 기록(안 한 것과 구분). " +
