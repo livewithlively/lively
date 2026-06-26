@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const MIN_SCORE = 0.5;        // 이 코사인 유사도 이상만 — 게이팅(관련 없으면 아무것도 안 함). bge-m3 스케일 기준 보수적.
+const MIN_SCORE = 0.6;        // 이 코사인 유사도 이상만 — 게이팅(관련 없으면 아무것도 안 함). bge-m3 기준 0.5는 모호질문에 턱걸이 노이즈가 새서 0.6으로 상향(2026-06-26).
 const LIMIT = 4;              // 주입 최대 건수(인덱스이므로 적게)
 const MIN_PROMPT_CHARS = 12;  // 너무 짧은 프롬프트(ok/네/yes 등)는 스킵(노이즈·낭비 방지)
 const FETCH_MS = 4000;
