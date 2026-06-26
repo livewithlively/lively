@@ -114,7 +114,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
   "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
   "- WIKI 인덱스 핀: 어떤 지식이 **모두가 항상 인덱스에서 봐야 할 만큼** 중요하면 `knowledge_set_wiki`로 핀한다 — 핀된 지식의 제목·소환키가 아래 **WIKI 인덱스**에 항상 노출되어 전원이 발견한다(본문은 여전히 `knowledge_get`/검색으로 소환).",
-  "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다(type=commit/decision/review…). 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",
+  "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다 — type 은 작업의 성격(feature·fix·decision·docs·research·review·chore·other). 커밋은 유형이 아니라 commit_sha 로 표현하고(어떤 유형이든 동반 가능), author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",
   "- 프로젝트/태스크: `task_create_v6` / `task_set_status_v6`, 필요·산출지식은 `project_link_knowledge_v6`.",
   "- 도메인 의도: should 변경은 `category_update`, 도메인 간 의존(should 엣지)은 `category_edge_set` — is 엣지는 코드 스캔이 채운다.",
   "- 외부(클릭업·노션·코드): 원본은 외부 소유 → 미러(`observed`)로 둔다. 복제하지 말고, 거기서 얻은 **파생 인사이트만** 별도 지식(`authored`)으로 저작한다.",
