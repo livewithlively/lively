@@ -210,7 +210,7 @@ const taskCommentV6: Capability = {
   title: "태스크 댓글(v6)",
   description: "태스크에 댓글을 단다(activity 미러, type=comment). {text}. 작성 후 갱신된 피드 반환. 웹 전용.",
   scope: "memory",
-  input: { id: z.number().int().positive(), text: z.string().min(1) },
+  input: { id: z.number().int().positive(), text: z.string().min(1), parent_id: z.number().int().positive().nullable().optional() },
   expose: {
     mcp: false,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/comments"],
@@ -218,11 +218,12 @@ const taskCommentV6: Capability = {
         const b = body(req);
         const text = String(b.text ?? "").trim();
         if (!text) throw new HttpError(400, "댓글 내용이 필요합니다");
-        return { id: parseId(req.params?.id), text };
+        const pid = b.parent_id != null ? parseId(b.parent_id) : null;
+        return { id: parseId(req.params?.id), text, parent_id: pid || null };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) =>
-    ({ feed: await postComment(input.id, input.text, { actor: actorOf(user, ctx), source: ctx?.source ?? "web" }) }),
+    ({ feed: await postComment(input.id, input.text, { actor: actorOf(user, ctx), source: ctx?.source ?? "web" }, input.parent_id ?? null) }),
 };
 
 // — POST 댓글 반응 토글(이모지) —

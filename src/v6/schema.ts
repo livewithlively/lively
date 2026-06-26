@@ -67,6 +67,65 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS category_edge_to_idx ON category_edge(to_category_id, axis);
   `);
 
+  // ── 2-b) team — 조직 내 팀(스쿼드/사일로). 카테고리 오너십의 주체. category 뒤(team_category 가 category FK 의존). ──
+  //  ★원칙: 오너십 ≠ 접근권한. 권한은 scopes[]/auth_token.projects[] 가 따로 강제 — 팀 소유는 표면화·주입의 '소프트 렌즈'다
+  //   (우리 팀 맥락을 먼저 보여줄 뿐, 다른 팀 맥락도 전원 열람·검색 가능). '분절 없는 집중'.
+  //  body_md = 팀 charter(주입될 '팀 층' — org_profile 섹션·org_member.body_md 와 같은 층, WIKI 와 직교).
+  //  lead_member_id = org_member.id(FK 없음 — project_member 관례, 미러/외부신원 허용). key 유니크(archived 제외, category idiom).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team(
+      id SERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      name TEXT,
+      description TEXT,
+      body_md TEXT,
+      lead_member_id TEXT,
+      state TEXT NOT NULL DEFAULT 'active',
+      sort INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now());
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='team'::regclass AND conname='team_state_chk') THEN
+        ALTER TABLE team ADD CONSTRAINT team_state_chk CHECK (state IN ('active','archived'));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS team_key_uq ON team(key) WHERE state <> 'archived';
+  `);
+
+  // ── 2-c) team_member — 팀원(n:n). 사람은 여러 팀 가능(겸직). member_id=org_member.id(FK 없음, project_member 관례). ──
+  //  role = lead|pm|dev|design|member (표시 메타 — '누구한테 물어봐'. 표면화/주입은 소속 여부만 보고 role 은 안 본다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_member(
+      team_id INT NOT NULL REFERENCES team(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      sort INT NOT NULL DEFAULT 0,
+      added_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (team_id, member_id));
+    CREATE INDEX IF NOT EXISTS team_member_member_idx ON team_member(member_id);
+  `);
+
+  // ── 2-d) team_category — ★핵심 경첩: 팀↔카테고리 오너십(n:n). relation=owner|stakeholder. ──
+  //  지식(knowledge_category)·프로젝트(project_category)·도메인맵이 이미 category 에 매달려 있어, 여기 한 줄(팀↔카테고리)이
+  //   팀의 맥락 귀속 전체를 끌어온다(새 축 X, 기존 축에 오너 부착). 카테고리당 owner 팀은 최대 1(부분 유니크) = '우리 팀' 기준.
+  //   stakeholder 는 여럿 허용(공유/크로스커팅 카테고리 — brand·gtm 등 여러 팀이 이해관계자).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_category(
+      team_id INT NOT NULL REFERENCES team(id) ON DELETE CASCADE,
+      category_id INT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL DEFAULT 'owner',
+      added_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (team_id, category_id));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='team_category'::regclass AND conname='team_category_relation_chk') THEN
+        ALTER TABLE team_category ADD CONSTRAINT team_category_relation_chk CHECK (relation IN ('owner','stakeholder'));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS team_category_owner_uq ON team_category(category_id) WHERE relation='owner';
+    CREATE INDEX IF NOT EXISTS team_category_team_idx ON team_category(team_id);
+    CREATE INDEX IF NOT EXISTS team_category_cat_idx ON team_category(category_id);
+  `);
+
   // ── 3) knowledge — 구 knowledge_unit 대체. kind(R/K/H/W) **폐기**(직교축으로 분리). ──
   //  injection=always(구 kind=R 규칙·페르소나 — 항상 주입, materialize 의 급소) | recalled(검색 소환).
   //  provenance=authored(저작) | observed(외부 미러 — 구 confidence='observed'). confidence 는 저작신뢰로 유지.
@@ -267,6 +326,17 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS project_knowledge_name_idx ON project_knowledge(name);
   `);
 
+  // ── 8-b) project_repo — 프로젝트↔레포(n:n, repo 레지스트리 이름 참조). AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값. ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_repo(
+      project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      repo TEXT NOT NULL,
+      sort INT NOT NULL DEFAULT 0,
+      added_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (project_id, repo));
+    CREATE INDEX IF NOT EXISTS project_repo_repo_idx ON project_repo(repo);
+  `);
+
   // ── 9) activity_knowledge — 구 activity_ku_ref 개명·repoint(→knowledge). 작업↔지식(산출/참조/결정). ──
   //  activity 는 initDomainmapSchema 가 생성(이미 존재). 구 activity_task(작업↔W ku)는 activity.project_id 로 대체.
   await pool.query(`
@@ -293,6 +363,8 @@ export async function initV6Schema(): Promise<string> {
   await pool.query(`
     ALTER TABLE activity ADD COLUMN IF NOT EXISTS project_id INT REFERENCES project(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS activity_project_idx ON activity(project_id);
+    ALTER TABLE activity ADD COLUMN IF NOT EXISTS reply_to INT REFERENCES activity(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS activity_reply_to_idx ON activity(reply_to);
     ALTER TABLE mapping ADD COLUMN IF NOT EXISTS category_id INT REFERENCES category(id) ON DELETE CASCADE;
     CREATE UNIQUE INDEX IF NOT EXISTS mapping_target_category_uq ON mapping(target_kind, target_id, category_id) WHERE category_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS mapping_category_idx ON mapping(category_id);

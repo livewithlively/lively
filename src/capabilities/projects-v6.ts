@@ -5,11 +5,16 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { listSessions } from "../terminal-sessions.js";
+import { ensureAgentsMd } from "../v6/agents-md.js";
+
+// 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
+//  폴더가 없으면(신규 생성 직후) ensureAgentsMd 내부에서 만든다. 비치명적(실패해도 본 작업은 성공).
+const regenAgents = (id: number) => ensureAgentsMd(id).catch((e) => { console.error("[regenAgents] fail id=" + id + ":", e); });
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
-  linkProjectCategory, unlinkProjectCategory,
-  linkProjectKnowledge, unlinkProjectKnowledge,
+  linkProjectCategory, unlinkProjectCategory, setProjectCategories,
+  linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -164,7 +169,9 @@ const projectCreateV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { project: await createProject(input, writeCtx) };
+    const project = await createProject(input, writeCtx);
+    await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
+    return { project };
   },
 };
 
@@ -184,7 +191,9 @@ const projectSetStatusV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { project: await updateProjectStatus(input.id, input.status, writeCtx) };
+    const project = await updateProjectStatus(input.id, input.status, writeCtx);
+    await regenAgents(input.id);
+    return { project };
   },
 };
 
@@ -225,7 +234,57 @@ const projectUpdateV6: Capability = {
   handler: async (input: any, user: any, ctx: any) => {
     const { id, ...patch } = input;
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { project: await updateProject(id, patch, writeCtx) };
+    const project = await updateProject(id, patch, writeCtx);
+    await regenAgents(id);
+    return { project };
+  },
+};
+
+// 관련 레포 설정(전체 교체) — repo 레지스트리 이름 배열. AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값. 웹 전용.
+const projectSetReposV6: Capability = {
+  name: "project_set_repos_v6",
+  title: "프로젝트 관련 레포 설정(v6)",
+  description: "프로젝트의 관련 레포(코드 레포 이름 배열)를 설정한다(전체 교체). repo 레지스트리(관리탭 ▸ 레포 관리) 이름 참조. 웹 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive(), repos: z.array(z.string()).max(50) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/repos"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const repos = Array.isArray(b.repos) ? b.repos.map((x: unknown) => String(x)) : [];
+        return { id: parseId(req.params?.id), repos };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const repos = await setProjectRepos(input.id, input.repos, writeCtx);
+    await regenAgents(input.id);
+    return { repos };
+  },
+};
+
+// 카테고리 설정(전체 교체) — 카테고리 id 배열. 생성 모달·세부설정 멀티선택. 단건 project_link_category_v6 와 공존. 웹 전용.
+const projectSetCategoriesV6: Capability = {
+  name: "project_set_categories_v6",
+  title: "프로젝트 카테고리 설정(v6)",
+  description: "프로젝트가 속한 카테고리(사업/제품/시스템) 목록을 설정한다(전체 교체). category_list 의 id 참조. 웹 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive(), categoryIds: z.array(z.number().int().positive()).max(50) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/categories"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const categoryIds = Array.isArray(b.category_ids) ? b.category_ids.map((x: unknown) => Number(x)).filter((n) => Number.isInteger(n) && n > 0) : [];
+        return { id: parseId(req.params?.id), categoryIds };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const categoryIds = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    await regenAgents(input.id);
+    return { categoryIds };
   },
 };
 
@@ -273,7 +332,9 @@ const projectSetMembersV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { member_ids: await setProjectMembers(input.id, input.members, writeCtx) };
+    const member_ids = await setProjectMembers(input.id, input.members, writeCtx);
+    await regenAgents(input.id);
+    return { member_ids };
   },
 };
 
@@ -323,8 +384,9 @@ const projectLinkCategoryV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    if (input.unlink) { await unlinkProjectCategory(input.id, input.categoryId, writeCtx); return { unlinked: true }; }
+    if (input.unlink) { await unlinkProjectCategory(input.id, input.categoryId, writeCtx); await regenAgents(input.id); return { unlinked: true }; }
     await linkProjectCategory(input.id, input.categoryId, writeCtx);
+    await regenAgents(input.id);
     return { linked: true };
   },
 };
@@ -492,7 +554,7 @@ const boardFieldsV6: Capability = {
 };
 
 export const projectV6Capabilities: Capability[] = [
-  projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];

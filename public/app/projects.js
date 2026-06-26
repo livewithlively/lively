@@ -1,6 +1,6 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
-import { SPACE_LABEL, knInjectChip, knProvChip, knSideItem, spaceSubBar } from './knowledge.js';
+import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, myCatIdSet } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
@@ -14,23 +14,21 @@ import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmoda
 //   POST /api/ui/v6/tasks/:id/status, GET /api/ui/categories(사이드바). (백엔드 projects-v6 — 이미 구현됨.)
 // ════════════════════════════════════════════
 const PJV_STATUS_LABEL = { active: '진행 중', done: '완료' };
-// 프로젝트 하위 탭 바 — spaceSubBar(#/projects2)로 사업·제품·시스템 칩을 만들고, 앞에 대시보드·작업 현황을 끼운다.
-//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard,activity,business,product,system}.
+// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][카테고리]만.
+//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, browse}.
 function projectSubBar(active) {
-    const bar = spaceSubBar('#/projects2', SPACE_LABEL[active] ? active : '');
-    // 앞쪽에 대시보드·작업 현황 칩을 끼워 넣는다(space 칩보다 먼저).
-    const lead = [['dashboard', '대시보드', '#/projects2/dashboard']];
-    const refNode = bar.firstChild;
-    for (const [key, label, href] of lead) {
+    const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '프로젝트 보기' });
+    const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '탐색', '#/projects2/browse']];
+    for (const [key, label, href] of tabs) {
         const on = key === active;
-        bar.insertBefore(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
-            role: 'tab', 'aria-selected': on ? 'true' : 'false', text: label }), refNode);
+        bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
+            role: 'tab', 'aria-selected': on ? 'true' : 'false', text: label }));
     }
     return bar;
 }
-// 프로젝트(v2) 진입 — sub ∈ {dashboard, activity, business, product, system}.
+// 프로젝트(v2) 진입 — browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
 async function renderProjectsV2(view, sub, params) {
-    if (SPACE_LABEL[sub])
+    if (sub === 'browse' || SPACE_LABEL[sub])
         return renderProjectV2Space(view, sub, params);
     return renderProjectV2Board(view);
 }
@@ -1126,30 +1124,26 @@ function pjvProjectListCard(todo, inprog, done, reload, select, canDelete, field
     return card;
 }
 // space 뷰(사업·제품·시스템) — 좌(카테고리 사이드바)/우(프로젝트 목록) 2분할. renderKnowledgeSpace 와 같은 패턴.
-async function renderProjectV2Space(view, space, params) {
-    const f = (state.projects2 = state.projects2 || { space, category: '', status: '' });
-    if (f.space !== space) {
-        f.space = space;
-        f.category = '';
-    }
+async function renderProjectV2Space(view, _space, params) {
+    // 공간 병합(2026-06-26) — space 인자 무시(사이드바가 3 space 통합). 카테고리/상태만 상태로.
+    const f = (state.projects2 = state.projects2 || { space: '', category: '', status: '' });
     if (params && params.has('category'))
         f.category = params.get('category') || '';
     if (params && params.has('status'))
         f.status = params.get('status') || '';
-    view.replaceChildren(projectSubBar(space), skeleton('프로젝트를 불러오는 중'));
+    view.replaceChildren(projectSubBar('browse'), skeleton('프로젝트를 불러오는 중'));
     const head = el('div', { class: 'page-head' }, el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })));
-    // 좌측 카테고리 사이드바(이 space 의 카테고리 + '전체'). 지식 탭의 knSideItem 재사용.
+    // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 지식 탭과 공유 빌더(buildSpacesNav).
     const side = el('aside', { class: 'browse-side' });
-    let cats = [];
+    const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
+    const myIds = myCatIdSet();
+    let bySpace = { business: [], product: [], system: [] };
     try {
-        cats = await api('/api/ui/categories?' + new URLSearchParams({ space })).then((d) => (d && d.categories) || []);
+        bySpace = await fetchAllSpaceCats();
     }
     catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
     function buildSide() {
-        const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
-        nav.append(knSideItem('전체', '', f.category === ''));
-        for (const c of cats)
-            nav.append(knSideItem(c.name || c.key, String(c.id), String(f.category) === String(c.id)));
+        buildSpacesNav(nav, bySpace, f.category, myIds);
         side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), nav);
     }
     buildSide();
@@ -1165,13 +1159,13 @@ async function renderProjectV2Space(view, space, params) {
         if (f.status)
             p.set('status', f.status);
         const qs = p.toString();
-        history.replaceState(null, '', '#/projects2/' + space + (qs ? '?' + qs : ''));
+        history.replaceState(null, '', '#/projects2/browse' + (qs ? '?' + qs : ''));
     }
     async function refetch() {
         listBox.replaceChildren(skeletonRows(4));
         foot.replaceChildren();
         try {
-            const p = new URLSearchParams({ space });
+            const p = new URLSearchParams();
             if (f.category)
                 p.set('category', f.category);
             if (f.status)
@@ -1202,7 +1196,7 @@ async function renderProjectV2Space(view, space, params) {
     });
     const filterBar = el('div', { class: 'filter-bar browse-filter' }, statusSel);
     const layout = el('div', { class: 'browse-layout' }, side, el('section', { class: 'browse-main' }, filterBar, listBox, foot));
-    view.replaceChildren(head, projectSubBar(space), layout);
+    view.replaceChildren(head, projectSubBar('browse'), layout);
     applyReveal([layout]);
     refetch();
 }
@@ -1223,9 +1217,11 @@ function openProjectV2Form(reload, prefill) {
     const nameIn = el('input', { type: 'text', value: prefill.name || '', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
     const descIn = el('textarea', { rows: '3', placeholder: '간단한 설명 (선택)', maxlength: '5000' });
     const picker = memberPicker(prefill.memberIds || [], { includeMe: true });
+    const catPicker = categoryPicker(prefill.categoryIds || []);
+    const repoPick = repoPicker(prefill.repos || []);
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0); // 프리필된 이름 전체 선택 → 바로 수정/확정 가능
     const go = async () => {
         const name = nameIn.value.trim();
@@ -1254,6 +1250,13 @@ function openProjectV2Form(reload, prefill) {
                 if (Object.keys(patch).length)
                     await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => { });
             }
+            // 선택한 카테고리(사업/제품/시스템)·관련 레포를 생성 직후 연결.
+            const catIds = catPicker.getSelected();
+            if (np && np.id && catIds.length)
+                await api('/api/ui/v6/projects/' + np.id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: catIds }) }).catch(() => { });
+            const repoNames = repoPick.getSelected();
+            if (np && np.id && repoNames.length)
+                await api('/api/ui/v6/projects/' + np.id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoNames }) }).catch(() => { });
             back.remove();
             toast('프로젝트를 만들었습니다');
             if (np && np.id)
@@ -2143,6 +2146,8 @@ function openProjectComments(id, members) {
     let feedData = [];
     let newestFirst = false; // 기본 오래된→최신(최신이 아래, 작성칸 옆) — 이미지와 동일
     let query = '';
+    let threadParent = null; // null=메인 피드, 숫자=해당 최상위 댓글의 스레드 보기
+    const repliesOf = (pid) => feedData.filter((f) => f && f.kind === 'comment' && f.reply_to != null && Number(f.reply_to) === Number(pid));
     // 헤더 SVG 아이콘 헬퍼
     const hico = (...kids) => sv('svg', { viewBox: '0 0 24 24', width: '17', height: '17', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, ...kids);
     // 작성칸(하단) — 크고 편한 입력 + 파란 전송(이미지 참고).
@@ -2176,34 +2181,105 @@ function openProjectComments(id, members) {
             toast('반응 실패 — ' + e.message, true);
         }
     };
+    // 댓글 카드 1개 — 최상위/답글 공용. isReply=true 면 답글 스타일(들여쓰기).
+    function commentCard(c, isReply) {
+        const who = c.display_name || nameOf(c.actor);
+        // 👍 좋아요(아웃라인 아이콘 + 개수) — 내가 눌렀으면 .on. 그 외 이모지 반응은 칩으로.
+        const like = (c.reactions || []).filter((r) => r.emoji === '👍')[0];
+        const likeBtn = el('button', { class: 'cmt-foot-btn cmt-like' + (like && like.mine ? ' on' : ''), type: 'button', title: '좋아요' }, sv('svg', { viewBox: '0 0 24 24', width: '15', height: '15', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, sv('path', { d: 'M7 10v11' }), sv('path', { d: 'M7 10l4-7a2 2 0 0 1 2.6 2.5L12.5 9H19a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.8 21H7' })));
+        if (like)
+            likeBtn.append(el('span', { class: 'cmt-like-n', text: String(like.count) }));
+        likeBtn.onclick = () => reactTo(c, '👍');
+        const reactRow = el('span', { class: 'cmt-react' }, likeBtn, ...(c.reactions || []).filter((r) => r.emoji !== '👍').map((r) => {
+            const ch = el('button', { class: 'cmt-react-chip' + (r.mine ? ' mine' : ''), type: 'button', text: r.emoji + ' ' + r.count });
+            ch.onclick = () => reactTo(c, r.emoji);
+            return ch;
+        }));
+        const replyBtn = el('button', { class: 'cmt-foot-btn cmt-reply', type: 'button', text: '답글' });
+        replyBtn.onclick = () => {
+            if (threadParent != null) {
+                ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + '@' + who + ' ';
+                ta.focus();
+                grow();
+            }
+            else
+                openThread(c.id); // 메인 피드 → 스레드 열기
+        };
+        const bodyKids = [
+            el('div', { class: 'cmt-meta' }, el('span', { class: 'cmt-name', text: who }), el('span', { class: 'cmt-time', text: c.ts ? '· ' + relTime(c.ts) : '' })),
+            el('div', { class: 'cmt-text md-rendered' }, renderMarkdown(c.body || '')),
+            el('div', { class: 'cmt-foot' }, reactRow, replyBtn),
+        ];
+        // 메인 피드의 최상위 카드에만 'N개의 답글' 칩 — 클릭 시 스레드 보기. (스레드 안에서는 표시 안 함)
+        if (!isReply && threadParent == null) {
+            const reps = repliesOf(c.id);
+            if (reps.length) {
+                const seen = {};
+                const avas = [];
+                for (const r of reps) {
+                    const k = r.actor || r.display_name;
+                    if (seen[k] || avas.length >= 3)
+                        continue;
+                    seen[k] = 1;
+                    const rw = r.display_name || nameOf(r.actor);
+                    avas.push(el('span', { class: 'cmt-thread-pill-ava', style: 'background:' + avatarColor(r.actor || rw), text: initials(rw) }));
+                }
+                const last = reps[reps.length - 1];
+                const pill = el('button', { class: 'cmt-thread-pill', type: 'button' }, el('span', { class: 'cmt-thread-pill-avas' }, ...avas), el('span', { class: 'cmt-thread-pill-n', text: reps.length + '개의 답글' }), el('span', { class: 'cmt-thread-pill-time', text: last && last.ts ? '· 마지막 ' + relTime(last.ts) : '' }));
+                pill.onclick = () => openThread(c.id);
+                bodyKids.push(pill);
+            }
+        }
+        return el('div', { class: 'cmt-card' + (isReply ? ' cmt-reply-card' : '') }, el('span', { class: 'cmt-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }), el('div', { class: 'cmt-body' }, ...bodyKids));
+    }
+    function openThread(pid) { threadParent = pid; query = ''; if (searchBar) {
+        searchBar.hidden = true;
+        searchBtn.classList.remove('on');
+        searchIn.value = '';
+    } renderFeed(); setTimeout(() => ta.focus(), 0); }
+    // 헤더/작성칸을 현재 모드(메인 피드 vs 스레드)에 맞춰 갱신.
+    function renderHead() {
+        const inThread = threadParent != null;
+        if (backBtn)
+            backBtn.hidden = !inThread;
+        if (headTitle)
+            headTitle.textContent = inThread ? '스레드' : '코멘트';
+        if (sortBtn)
+            sortBtn.hidden = inThread;
+        if (searchBtn)
+            searchBtn.hidden = inThread;
+        ta.placeholder = inThread ? '답글을 입력하세요…' : '댓글을 입력하세요…';
+    }
     function renderFeed() {
-        let comments = feedData.filter((f) => f && f.kind === 'comment');
+        renderHead();
+        feedBox.replaceChildren();
+        if (threadParent != null) { // ── 스레드 보기: 부모 + 답글들 ──
+            const parent = feedData.find((f) => f && f.kind === 'comment' && Number(f.id) === Number(threadParent));
+            if (!parent) {
+                threadParent = null;
+                renderFeed();
+                return;
+            }
+            feedBox.append(commentCard(parent, false));
+            const reps = repliesOf(threadParent).slice().sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+            feedBox.append(reps.length
+                ? el('div', { class: 'cmt-thread-replies' }, ...reps.map((r) => commentCard(r, true)))
+                : el('div', { class: 'cmt-thread-empty', text: '첫 답글을 남겨보세요.' }));
+            setTimeout(() => { feedBox.scrollTop = feedBox.scrollHeight; }, 0);
+            return;
+        }
+        // ── 메인 피드: 최상위 댓글만(reply_to 없음) ──
+        let comments = feedData.filter((f) => f && f.kind === 'comment' && f.reply_to == null);
         if (query)
             comments = comments.filter((c) => (c.body || '').toLowerCase().includes(query) || (c.display_name || nameOf(c.actor) || '').toLowerCase().includes(query));
         if (newestFirst)
             comments = comments.slice().reverse();
-        feedBox.replaceChildren();
         if (!comments.length) {
             feedBox.append(el('div', { class: 'cmt-empty', text: query ? '검색 결과가 없어요.' : '아직 코멘트가 없어요. 아래에서 첫 코멘트를 남겨보세요.' }));
             return;
         }
-        for (const c of comments) {
-            const who = c.display_name || nameOf(c.actor);
-            // 👍 좋아요(아웃라인 아이콘 + 개수) — 내가 눌렀으면 .on. 그 외 이모지 반응은 칩으로.
-            const like = (c.reactions || []).filter((r) => r.emoji === '👍')[0];
-            const likeBtn = el('button', { class: 'cmt-foot-btn cmt-like' + (like && like.mine ? ' on' : ''), type: 'button', title: '좋아요' }, sv('svg', { viewBox: '0 0 24 24', width: '15', height: '15', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, sv('path', { d: 'M7 10v11' }), sv('path', { d: 'M7 10l4-7a2 2 0 0 1 2.6 2.5L12.5 9H19a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.8 21H7' })));
-            if (like)
-                likeBtn.append(el('span', { class: 'cmt-like-n', text: String(like.count) }));
-            likeBtn.onclick = () => reactTo(c, '👍');
-            const reactRow = el('span', { class: 'cmt-react' }, likeBtn, ...(c.reactions || []).filter((r) => r.emoji !== '👍').map((r) => {
-                const ch = el('button', { class: 'cmt-react-chip' + (r.mine ? ' mine' : ''), type: 'button', text: r.emoji + ' ' + r.count });
-                ch.onclick = () => reactTo(c, r.emoji);
-                return ch;
-            }));
-            const replyBtn = el('button', { class: 'cmt-foot-btn cmt-reply', type: 'button', text: '답글' });
-            replyBtn.onclick = () => { ta.value = (ta.value ? ta.value.replace(/\s*$/, ' ') : '') + '@' + who + ' '; ta.focus(); grow(); };
-            feedBox.append(el('div', { class: 'cmt-card' }, el('span', { class: 'cmt-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }), el('div', { class: 'cmt-body' }, el('div', { class: 'cmt-meta' }, el('span', { class: 'cmt-name', text: who }), el('span', { class: 'cmt-time', text: c.ts ? '· ' + relTime(c.ts) : '' })), el('div', { class: 'cmt-text md-rendered' }, renderMarkdown(c.body || '')), el('div', { class: 'cmt-foot' }, reactRow, replyBtn))));
-        }
+        for (const c of comments)
+            feedBox.append(commentCard(c, false));
         if (!newestFirst && !query)
             setTimeout(() => { feedBox.scrollTop = feedBox.scrollHeight; }, 0); // 오래된순 → 최신이 아래, 바닥으로
     }
@@ -2213,13 +2289,16 @@ function openProjectComments(id, members) {
             return;
         sendBtn.disabled = true;
         ta.disabled = true;
+        const payload = { text };
+        if (threadParent != null)
+            payload.parent_id = threadParent; // 스레드 답글
         try {
-            const d = await api('/api/ui/v6/tasks/' + id + '/comments', { method: 'POST', body: JSON.stringify({ text }) });
+            const d = await api('/api/ui/v6/tasks/' + id + '/comments', { method: 'POST', body: JSON.stringify(payload) });
             ta.value = '';
             grow();
             feedData = (d && d.feed) || [];
             renderFeed();
-            if (newestFirst)
+            if (threadParent == null && newestFirst)
                 feedBox.scrollTop = 0;
         }
         catch (e) {
@@ -2248,7 +2327,11 @@ function openProjectComments(id, members) {
         searchIn.value = '';
         renderFeed();
     } };
-    const head = el('div', { class: 'cmt-head' }, el('h3', { text: '코멘트' }), el('div', { class: 'cmt-head-actions' }, sortBtn, searchBtn, el('button', { class: 'cmt-close', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: close })));
+    // 스레드 보기 → 메인 피드로 돌아가는 뒤로 버튼(메인에서는 숨김).
+    const backBtn = el('button', { class: 'cmt-hbtn cmt-back', type: 'button', title: '뒤로', hidden: true }, hico(sv('path', { d: 'M15 18l-6-6 6-6' })));
+    backBtn.onclick = () => { threadParent = null; renderFeed(); };
+    const headTitle = el('h3', { text: '코멘트' });
+    const head = el('div', { class: 'cmt-head' }, backBtn, headTitle, el('div', { class: 'cmt-head-actions' }, sortBtn, searchBtn, el('button', { class: 'cmt-close', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: close })));
     panel.append(head, searchBar, feedBox, composer);
     document.body.append(back);
     requestAnimationFrame(() => { back.classList.add('open'); grow(); });
@@ -2278,7 +2361,7 @@ function openProjectSettings(id, p, reload, meId, base) {
     if (box)
         box.classList.add('ov-box-wide');
     const closeAndReload = () => { back.remove(); reload(); }; // 변경하면 팝업 닫고 상세 재렌더
-    back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectRulesBlock(id), projectRefsBlock(id, B), projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }), projectDangerBlock(id, p, meId, back));
+    back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), projectRefsBlock(id, B), projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }), projectDangerBlock(id, p, meId, back));
 }
 // ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 단계별 가이드를 만들어 준다. ──
 //  웹은 원격 PC 터미널을 보지 않는다(스트리밍 X). 각자 자기 PC에서 터미널을 열어 쓰고, 웹은 '어떻게 시작하는지'만
@@ -2385,8 +2468,14 @@ function openLocalWorkModal(id, p) {
         }
         catch (_) { /* graceful: 레포 없음 */ }
         rows.forEach((ro) => fillSel(ro.sel));
-        if (!rows.length)
-            addRow(repoNames().length === 1 ? repoNames()[0] : '');
+        if (!rows.length) {
+            // 이 프로젝트에 매핑된 레포(관련 레포)를 기본 행으로 — 없으면 레포가 하나뿐일 때만 자동 선택.
+            const pre = ((p && p.repos) || []).filter((n) => repoNames().includes(n));
+            if (pre.length)
+                pre.forEach((n) => addRow(n));
+            else
+                addRow(repoNames().length === 1 ? repoNames()[0] : '');
+        }
         regen();
     })();
     // ── 명령 — 입력이 바뀔 때마다 자동 재생성(live). 0레포=공유폴더만 / 1=가독 플래그 / N=--repos base64. ──
@@ -2523,18 +2612,18 @@ function projectStatusBlock(id, p, afterStatus) {
     };
     return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 상태' }), el('p', { class: 'ps-block-hint', text: isDone ? '지금 완료된 프로젝트입니다. 다시 진행 중으로 되돌릴 수 있어요.' : '지금 진행 중입니다. 끝났으면 완료된 프로젝트로 옮기세요.' }), btn);
 }
-// 규칙 블록 — 프로젝트 폴더의 CLAUDE.md 를 읽어 편집·저장. 이 프로젝트 터미널 세션의 Claude 가 그 파일을 자동 로드(강제주입).
+// 규칙 블록 — 프로젝트 AGENTS.md 의 '규칙' 영역만 편집(나머지 digest 는 서버가 자동 생성). /rules 엔드포인트로 로드/저장.
+//  AGENTS.md 는 Codex 가 네이티브 로드, CLAUDE.md 는 `@AGENTS.md` 한 줄로 Claude Code 가 끌어옴(서버가 함께 관리).
 function projectRulesBlock(id) {
-    const url = '/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent('CLAUDE.md');
+    const url = '/api/ui/v6/projects/' + id + '/rules';
     const ta = el('textarea', { class: 'ps-rules-ta', rows: '8', disabled: '',
         placeholder: '이 프로젝트에서 AI가 지켰으면 하는 걸 편하게 적으세요. 예)\n· 새로 만들기 전에 비슷한 게 이미 있는지 먼저 찾아본다.\n· 큰 변경이나 삭제는 진행하기 전에 꼭 먼저 물어본다.\n· 자료를 만들 땐 근거와 출처를 같이 적는다.\n· 안 되는 건 안 된다고 솔직히 말한다.' });
     const status = el('span', { class: 'ps-save-status admin-hint', text: '불러오는 중…' });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '규칙 저장', disabled: '' });
     (async () => {
-        const token = localStorage.getItem(TOKEN_KEY);
         try {
-            const res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
-            ta.value = splitClaudeMd(res.ok ? await res.text() : '').manual;
+            const d = await api(url);
+            ta.value = (d && d.rules) || '';
         }
         catch (_) {
             ta.value = '';
@@ -2547,15 +2636,7 @@ function projectRulesBlock(id) {
         saveBtn.disabled = true;
         status.textContent = '저장 중…';
         try {
-            // 참고 파일 자동 블록(LIVELY:REFS)은 보존 — 현재 CLAUDE.md 를 다시 읽어 관리 블록만 떼어 재결합한다.
-            const token = localStorage.getItem(TOKEN_KEY);
-            let cur = '';
-            try {
-                const r = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
-                cur = r.ok ? await r.text() : '';
-            }
-            catch (_) { /* */ }
-            await authUpload(url, new Blob([joinClaudeMd(ta.value, splitClaudeMd(cur).managed)]));
+            await api(url, { method: 'POST', body: JSON.stringify({ rules: ta.value }) });
             status.textContent = '저장됨 · 다음 세션부터 적용';
             toast('프로젝트 규칙을 저장했습니다');
         }
@@ -2565,43 +2646,158 @@ function projectRulesBlock(id) {
         }
         saveBtn.disabled = false;
     };
-    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 규칙' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트에서 터미널 세션을 열면, 여기 적은 규칙이 그 AI(Claude)에게 자동으로 주입됩니다. (프로젝트 폴더의 CLAUDE.md 로 저장)' }), ta, el('div', { class: 'ps-rules-actions' }, saveBtn, status));
+    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 규칙' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트에서 터미널 세션을 열면, 여기 적은 규칙이 그 AI에게 자동으로 주입됩니다. (프로젝트 폴더의 AGENTS.md 규칙 영역으로 저장)' }), ta, el('div', { class: 'ps-rules-actions' }, saveBtn, status));
 }
-// ── 참고 파일(CLAUDE.md 자동 등록) — 수동 규칙과 한 파일에서 공존하되 영역을 분리(마커로 구분, 서로 보존). ──
-const PS_REF_DIR = '참고자료';
-const PS_REF_START = '<!-- LIVELY:REFS:START (자동 관리 — 직접 수정하지 마세요) -->';
-const PS_REF_END = '<!-- LIVELY:REFS:END -->';
-// CLAUDE.md 를 (사람이 쓴 수동 규칙) / (참고 파일 자동 블록)으로 분리.
-function splitClaudeMd(text) {
-    const t = String(text || '');
-    const s = t.indexOf(PS_REF_START), e = t.indexOf(PS_REF_END);
-    if (s >= 0 && e > s) {
-        const manual = (t.slice(0, s) + t.slice(e + PS_REF_END.length)).replace(/\n{3,}/g, '\n\n').trim();
-        return { manual, managed: t.slice(s, e + PS_REF_END.length) };
+// 관련 레포 블록 — 이 프로젝트에 매핑할 git 레포(여러 개). AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값에 쓰임.
+//  경로는 저장하지 않는다(머신마다 달라 — 로컬 경로는 .lively/project.json). 여기선 레포 '이름'만 매핑.
+function projectReposBlock(id, p) {
+    const saved = new Set((p && p.repos) || []);
+    const listEl = el('div', { class: 'ps-refs-list' });
+    const status = el('span', { class: 'ps-save-status admin-hint' });
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '관련 레포 저장', disabled: '' });
+    const checks = []; // [{name, input}]
+    function paint(names) {
+        if (!names.length) {
+            listEl.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 레포가 없어요. 관리탭 ▸ 레포(git) 관리에서 먼저 추가하세요.' }));
+            return;
+        }
+        checks.length = 0;
+        listEl.replaceChildren(...names.map((n) => {
+            const cb = el('input', { type: 'checkbox' });
+            if (saved.has(n))
+                cb.checked = true;
+            checks.push({ name: n, input: cb });
+            return el('label', { class: 'ps-refs-row', style: 'cursor:pointer' }, cb, el('span', { class: 'ps-refs-nm', text: n, title: n }));
+        }));
     }
-    return { manual: t.trim(), managed: '' };
+    (async () => {
+        let names = [];
+        try {
+            const r = await api('/api/ui/repos');
+            names = ((r && r.domainmapRepos) || []).filter((it) => it && it.name && !it.deprecated).map((it) => it.name);
+        }
+        catch (_) { /* */ }
+        // 저장됐지만 목록에 없는(폐기된) 레포도 노출 — 체크 해제로 정리 가능.
+        for (const n of saved)
+            if (!names.includes(n))
+                names.push(n);
+        paint(names.sort());
+        saveBtn.disabled = false;
+    })();
+    saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        status.textContent = '저장 중…';
+        try {
+            const repos = checks.filter((c) => c.input.checked).map((c) => c.name);
+            await api('/api/ui/v6/projects/' + id + '/repos', { method: 'POST', body: JSON.stringify({ repos }) });
+            status.textContent = '저장됨';
+            toast('관련 레포를 저장했습니다');
+        }
+        catch (e) {
+            status.textContent = '';
+            toast('저장 실패 — ' + e.message, true);
+        }
+        saveBtn.disabled = false;
+    };
+    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '관련 레포' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트가 쓰는 git 레포를 고르세요. ‘내 컴퓨터에서 작업’ 모달의 기본값이 되고, AGENTS.md 에 함께 적힙니다. (로컬 경로는 각 PC 의 .lively/project.json 에만 저장)' }), listEl, el('div', { class: 'ps-rules-actions' }, saveBtn, status));
 }
-// 참고 파일 목록 → CLAUDE.md 관리 블록(없으면 빈 문자열).
-function buildRefsBlock(files) {
-    if (!files || !files.length)
-        return '';
-    const lines = files.map((f) => '- `' + PS_REF_DIR + '/' + f.name + '`').join('\n');
-    return PS_REF_START + '\n## 📎 참고 파일 (필수)\n'
-        + '작업을 시작하기 전에 아래 파일들을 **반드시 먼저 읽고** 그 내용을 따르세요. 작업 내내 이 자료를 기준으로 삼습니다.\n'
-        + lines + '\n' + PS_REF_END;
+// ── 카테고리 멀티선택 피커 — 사업/제품/시스템(space)별 그룹 + 체크박스. 비동기 로드. { box, getSelected() } 반환. ──
+//  생성 모달·세부설정 양쪽에서 재사용. selectedIds 는 미리 체크할 카테고리 id 배열.
+function categoryPicker(selectedIds) {
+    const sel = new Set((selectedIds || []).map(Number));
+    const box = el('div', { style: 'max-height:220px;overflow:auto;border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:8px' });
+    box.append(el('div', { class: 'admin-hint', text: '불러오는 중…' }));
+    const checks = []; // [{id, input}]
+    (async () => {
+        let cats = [];
+        try {
+            cats = await api('/api/ui/categories').then((d) => (d && d.categories) || []);
+        }
+        catch (_) { /* */ }
+        if (!cats.length) {
+            box.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 카테고리가 없어요. 관리탭 ▸ 분류 체계 관리에서 먼저 만드세요.' }));
+            return;
+        }
+        const bySpace = {};
+        for (const c of cats)
+            (bySpace[c.space] = bySpace[c.space] || []).push(c);
+        const kids = [];
+        for (const sp of ['business', 'product', 'system']) {
+            const list = bySpace[sp];
+            if (!list || !list.length)
+                continue;
+            kids.push(el('div', { class: 'eyebrow', style: 'margin:6px 0 2px', text: SPACE_LABEL[sp] || sp }));
+            for (const c of list) {
+                const cb = el('input', { type: 'checkbox' });
+                if (sel.has(Number(c.id)))
+                    cb.checked = true;
+                checks.push({ id: Number(c.id), input: cb });
+                kids.push(el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer;padding:2px 2px' }, cb, el('span', { text: c.name || c.key, title: (SPACE_LABEL[c.space] || c.space) + ' · ' + (c.key || '') })));
+            }
+        }
+        box.replaceChildren(...kids);
+    })();
+    return { box, getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.id) };
 }
-// 수동 규칙 + 관리 블록 결합(규칙 먼저, 참고 블록 끝).
-function joinClaudeMd(manual, managed) {
-    const m = String(manual || '').trim();
-    if (!managed)
-        return m ? m + '\n' : '';
-    return (m ? m + '\n\n' : '') + managed + '\n';
+// ── 레포 멀티선택 피커 — 레포 레지스트리(관리탭 ▸ 레포 관리)의 비폐기 레포 체크박스. 비동기 로드. { box, getSelected() } 반환. ──
+//  생성 모달에서 사용(이름만 매핑 — 경로는 각 PC 의 .lively/project.json). selectedNames 는 미리 체크할 레포 이름.
+function repoPicker(selectedNames) {
+    const sel = new Set(selectedNames || []);
+    const box = el('div', { style: 'max-height:160px;overflow:auto;border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:8px' });
+    box.append(el('div', { class: 'admin-hint', text: '불러오는 중…' }));
+    const checks = []; // [{name, input}]
+    (async () => {
+        let names = [];
+        try {
+            const r = await api('/api/ui/repos');
+            names = ((r && r.domainmapRepos) || []).filter((it) => it && it.name && !it.deprecated).map((it) => it.name);
+        }
+        catch (_) { /* */ }
+        for (const n of sel)
+            if (!names.includes(n))
+                names.push(n); // 저장됐지만 목록에 없는 것도 노출
+        names.sort();
+        if (!names.length) {
+            box.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 레포가 없어요. 관리탭 ▸ 레포(git) 관리에서 먼저 추가하세요.' }));
+            return;
+        }
+        box.replaceChildren(...names.map((n) => {
+            const cb = el('input', { type: 'checkbox' });
+            if (sel.has(n))
+                cb.checked = true;
+            checks.push({ name: n, input: cb });
+            return el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer;padding:2px 2px' }, cb, el('span', { text: n, title: n }));
+        }));
+    })();
+    return { box, getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.name) };
 }
-// 참고 파일 블록 — 프로젝트 폴더 참고자료/ 에 파일 업로드 → CLAUDE.md 관리 블록에 자동 등록되어,
-//  이 프로젝트 터미널 세션 AI 가 매번 작업 전 반드시 읽도록 강제(수동 규칙과 공존, 영역 보존).
+// 카테고리 블록 — 이 프로젝트가 속한 카테고리(사업·제품·시스템) 멀티선택. 사업/제품/시스템 탭의 카테고리별 탐색에 쓰임.
+function projectCategoryBlock(id, p) {
+    const picker = categoryPicker(((p && p.categories) || []).map((c) => c.category_id));
+    const status = el('span', { class: 'ps-save-status admin-hint' });
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '카테고리 저장' });
+    saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        status.textContent = '저장 중…';
+        try {
+            await api('/api/ui/v6/projects/' + id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: picker.getSelected() }) });
+            status.textContent = '저장됨';
+            toast('카테고리를 저장했습니다');
+        }
+        catch (e) {
+            status.textContent = '';
+            toast('저장 실패 — ' + e.message, true);
+        }
+        saveBtn.disabled = false;
+    };
+    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '카테고리 (사업·제품·시스템)' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트가 속한 카테고리를 고르세요. 사업·제품·시스템 탭에서 카테고리별로 프로젝트를 훑을 때 쓰이고, AGENTS.md 메타데이터에도 함께 적힙니다.' }), picker.box, el('div', { class: 'ps-rules-actions' }, saveBtn, status));
+}
+// ── 참고 파일 — 프로젝트 폴더 참고자료/ 에 파일 업로드. 서버가 AGENTS.md '참고 파일' 영역에 자동 등록. ──
+const PS_REF_DIR = '참고자료';
+// 참고 파일 블록 — 참고자료/ 에 업로드/삭제 → 서버 regen(POST /rules) 으로 AGENTS.md 의 참고 파일 목록 갱신.
+//  이 프로젝트 터미널 세션 AI 가 매번 작업 전 반드시 읽도록 AGENTS.md digest 에 명시된다.
 function projectRefsBlock(id, base) {
     const B = base || '/api/ui/v6/projects/';
-    const claudeUrl = B + id + '/file?path=' + encodeURIComponent('CLAUDE.md');
     const listsUrl = B + id + '/files?path=' + encodeURIComponent(PS_REF_DIR);
     const refPath = (name) => B + id + '/file?path=' + encodeURIComponent(PS_REF_DIR + '/' + name);
     const listEl = el('div', { class: 'ps-refs-list' });
@@ -2625,17 +2821,13 @@ function projectRefsBlock(id, base) {
         listEl.replaceChildren(...files.map((f) => el('div', { class: 'ps-refs-row' }, el('span', { class: 'ps-refs-ic' }, fileIconSvg(f.name, false)), el('span', { class: 'ps-refs-nm', text: f.name, title: f.name }), el('span', { class: 'ps-refs-sz', text: fmtSize(f.size) }), el('button', { class: 'proj-file-iconbtn danger', type: 'button', title: '삭제', text: '✕', onclick: () => removeRef(f.name) }))));
     }
     async function reload() { paint(await fetchFiles()); }
-    // 참고자료/ 현재 목록을 CLAUDE.md 관리 블록으로 재생성(수동 규칙 보존).
-    async function sync() {
-        const files = await fetchFiles();
-        const token = localStorage.getItem(TOKEN_KEY);
-        let cur = '';
+    // 참고자료/ 변경 후 AGENTS.md 재생성 트리거 — 규칙은 그대로 두고 POST /rules(서버가 참고자료/ 재스캔).
+    async function regen() {
         try {
-            const r = await fetch(claudeUrl, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
-            cur = r.ok ? await r.text() : '';
+            const d = await api(B + id + '/rules');
+            await api(B + id + '/rules', { method: 'POST', body: JSON.stringify({ rules: (d && d.rules) || '' }) });
         }
-        catch (_) { /* */ }
-        await authUpload(claudeUrl, new Blob([joinClaudeMd(splitClaudeMd(cur).manual, buildRefsBlock(files))]));
+        catch (_) { /* 다음 세션에 반영 */ }
     }
     fileInput.onchange = async () => {
         const files = Array.from(fileInput.files || []);
@@ -2646,7 +2838,7 @@ function projectRefsBlock(id, base) {
         try {
             for (const f of files)
                 await authUpload(refPath(f.name), f);
-            await sync();
+            await regen();
             status.textContent = '올림 · 다음 세션부터 적용';
             toast('참고 파일을 추가했습니다');
         }
@@ -2661,7 +2853,7 @@ function projectRefsBlock(id, base) {
             return;
         try {
             await api(refPath(name), { method: 'DELETE' });
-            await sync();
+            await regen();
             toast('삭제했습니다');
         }
         catch (e) {
@@ -2670,7 +2862,7 @@ function projectRefsBlock(id, base) {
         reload();
     }
     reload();
-    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '참고 파일' }), el('p', { class: 'ps-block-hint', text: '여기 올린 파일은 이 프로젝트에서 터미널 세션을 열 때마다 AI가 작업 전 반드시 읽도록 강제됩니다. (프로젝트 폴더의 참고자료/ 에 저장 · CLAUDE.md 에 자동 등록)' }), listEl, fileInput, el('div', { class: 'ps-rules-actions' }, uploadBtn, status));
+    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '참고 파일' }), el('p', { class: 'ps-block-hint', text: '여기 올린 파일은 이 프로젝트에서 터미널 세션을 열 때마다 AI가 작업 전 반드시 읽도록 강제됩니다. (프로젝트 폴더의 참고자료/ 에 저장 · AGENTS.md 에 자동 등록)' }), listEl, fileInput, el('div', { class: 'ps-rules-actions' }, uploadBtn, status));
 }
 // 지식 블록 — 필요 지식(고르기/자동/해제 가능) + 산출 지식(표시). 변경 후 v6 상세 GET 으로 재조회해 재페인트.
 function projectKnowledgeBlock(id, knowledge) {
@@ -5550,7 +5742,7 @@ function projectTimelineSection(id, members, base) {
         chipsBar.replaceChildren(mk('전체', ''), ...(members || []).map((m) => mk(m.display_name || m.member_id, m.member_id)));
     }
     paintChips();
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })), el('p', { class: 'proj-tl-note' }, el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }), el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트의 터미널 세션에서 AI와 함께 진행한 작업' }), '만 모여요 (세션 밖에서 한 작업은 표시되지 않아요). ', el('b', { text: '확실하게 진행이 된 일을 위주로' }), ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')), chipsBar, body);
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })), el('p', { class: 'proj-tl-note' }, el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }), el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트에 연결된 작업' }), '이 모여요 — 이 프로젝트의 터미널 세션에서 AI와 함께 진행했거나, 이 프로젝트로 직접 기록된 작업입니다(다른 프로젝트의 작업은 섞이지 않아요). ', el('b', { text: '확실하게 진행이 된 일을 위주로' }), ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')), chipsBar, body);
     load();
     return card;
     async function load() {

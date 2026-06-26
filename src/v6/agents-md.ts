@@ -1,0 +1,96 @@
+// ── AGENTS.md 생성 — 프로젝트 digest(자동) + 규칙(사람). 공유 폴더에 쓰며 동기화로 각 PC 에 전달. ──
+//  ⚠ 레포 '경로'는 절대 넣지 않는다(머신마다 달라 — 로컬 경로는 .lively/project.json). 여기엔 이름·메타·태스크 인덱스·조회 key 만.
+//  호출처: (1) project-routes 의 매니페스트/규칙 엔드포인트, (2) projects-v6 캐퍼빌리티(생성·상태·팀원·레포·카테고리 변경 직후).
+//  base 를 주면 그대로 쓰고, 안 주면 프로젝트 folder 를 해결(없으면 물리 폴더 생성)해서 쓴다 — 생성 직후에도 동작.
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { getProject as getProjectV6, setProjectFolder } from "./project-store.js";
+import { projectAbsPath, createProjectFolder } from "../project-fs.js";
+
+const RULES_MARK = "<!-- LIVELY:RULES — 아래는 사람이 작성·편집 (digest 는 자동 갱신, 규칙은 보존) -->";
+const REF_DIR = "참고자료";
+const DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
+
+async function listRefFiles(base: string): Promise<string[]> {
+  try {
+    const ents = await fsp.readdir(path.join(base, REF_DIR), { withFileTypes: true });
+    return ents.filter((e) => e.isFile() && !e.name.startsWith(".")).map((e) => e.name).sort();
+  } catch { return []; }
+}
+
+function buildProjectDigest(p: any, refs: string[] = []): string {
+  const L: string[] = [];
+  L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
+  L.push("> 이 파일은 lively 가 자동 생성합니다(아래 '규칙'만 사람이 편집). 상세·최신은 lively MCP 로 조회하세요.", "");
+  L.push("## 메타데이터");
+  L.push(`- 상태: ${p.status}${p.due_date ? ` · 기한: ${p.due_date}` : ""}`);
+  if (Array.isArray(p.members) && p.members.length) L.push(`- 멤버: ${p.members.map((m: any) => m.display_name || m.member_id).join(", ")}`);
+  if (Array.isArray(p.categories) && p.categories.length) L.push(`- 카테고리(도메인): ${p.categories.map((c: any) => c.name || c.key).join(", ")}`);
+  L.push(`- 전체/최신 조회: \`project_get_v6(${p.id})\` (lively MCP)`, "");
+  if (Array.isArray(p.repos) && p.repos.length) {
+    L.push("## 관련 레포", ...p.repos.map((r: string) => `- ${r}`), "- 이 머신의 로컬 경로(클론/워크트리)는 `.lively/project.json` 참조.", "");
+  }
+  if (p.description) L.push("## 개요", String(p.description), "");
+  if (refs.length) {
+    L.push("## 참고 파일 (작업 전 반드시 읽기)", "작업을 시작하기 전에 아래 파일들을 **반드시 먼저 읽고** 그 내용을 기준으로 삼으세요.",
+      ...refs.map((f) => `- \`${REF_DIR}/${f}\``), "");
+  }
+  if (Array.isArray(p.tasks) && p.tasks.length) {
+    L.push("## 태스크 인덱스");
+    for (const t of p.tasks) {
+      L.push(`- [#${t.id}] ${t.name}${t.status ? ` (${t.status})` : ""}`);
+      for (const s of (t.subtasks || [])) L.push(`  - [#${s.id}] ${s.name}${s.status ? ` (${s.status})` : ""}`);
+    }
+    L.push("- 각 항목 상세: `project_get_v6` 의 tasks 로 id 조회.", "");
+  }
+  return L.join("\n").trim();
+}
+
+function extractRules(content: string): string | null {
+  const i = content.indexOf(RULES_MARK);
+  if (i < 0) return null;
+  return content.slice(i + RULES_MARK.length).replace(/^\s*##\s*규칙\s*\n?/, "").trim();
+}
+// 구 CLAUDE.md 의 사람 규칙(LIVELY:REFS 자동블록 제외) — AGENTS.md 최초 생성 시 1회 이관.
+function stripClaudeManaged(content: string): string {
+  const s = content.indexOf("<!-- LIVELY:REFS");
+  return (s >= 0 ? content.slice(0, s) : content).trim();
+}
+
+// 규칙(사람 편집 영역)만 읽는다 — 세부설정 규칙 블록 로드용. AGENTS.md 없으면 구 CLAUDE.md 에서 1회 이관.
+export async function readProjectAgentsMd(base: string): Promise<{ rules: string }> {
+  let existing = ""; try { existing = await fsp.readFile(path.join(base, "AGENTS.md"), "utf8"); } catch { /* 없음 */ }
+  let rules = extractRules(existing);
+  if (rules == null) { try { rules = stripClaudeManaged(await fsp.readFile(path.join(base, "CLAUDE.md"), "utf8")); } catch { rules = ""; } }
+  return { rules: rules || "" };
+}
+
+// 프로젝트 folder(없으면 물리 폴더 생성)를 절대경로로 해결. 생성 직후엔 folder 가 비어 있으므로 여기서 만든다.
+async function resolveProjectBase(p: any): Promise<string> {
+  let folder = p.folder;
+  if (!folder) {
+    folder = await createProjectFolder(p.name);
+    // 채널은 감사 제약(mcp/web/connector/cli/migration/unknown)을 따른다 — index.ts 의 ensureFolder 와 동일하게 web.
+    await setProjectFolder(p.id, folder, { source: "web" });
+  }
+  return projectAbsPath(folder);
+}
+
+// AGENTS.md(+ CLAUDE.md @import) 를 현재 프로젝트 상태로 재생성(write-if-changed). 비치명적으로 호출(.catch).
+//  base 를 주면 그대로(엔드포인트는 이미 검증된 base 보유), 안 주면 folder 해결(캐퍼빌리티 호출용).
+export async function ensureAgentsMd(projectId: number, base?: string, manualOverride?: string): Promise<void> {
+  const p = await getProjectV6(projectId).catch(() => null);
+  if (!p) return;
+  const resolvedBase = base ?? (await resolveProjectBase(p));
+  const manual = manualOverride !== undefined ? manualOverride : (await readProjectAgentsMd(resolvedBase)).rules;
+  const refs = await listRefFiles(resolvedBase);
+  const content = `${buildProjectDigest(p, refs)}\n\n${RULES_MARK}\n## 규칙\n${(manual && manual.trim()) || DEFAULT_RULES}\n`;
+  await fsp.mkdir(resolvedBase, { recursive: true });
+  const file = path.join(resolvedBase, "AGENTS.md");
+  let prev = ""; try { prev = await fsp.readFile(file, "utf8"); } catch { /* */ }
+  if (content !== prev) await fsp.writeFile(file, content);
+  // Claude Code 는 CLAUDE.md 를 로드하므로 한 줄 import 로 AGENTS.md 를 끌어온다(Codex 는 AGENTS.md 네이티브).
+  const claude = path.join(resolvedBase, "CLAUDE.md");
+  let prevC = ""; try { prevC = await fsp.readFile(claude, "utf8"); } catch { /* */ }
+  if (prevC.trim() !== "@AGENTS.md") await fsp.writeFile(claude, "@AGENTS.md\n");
+}

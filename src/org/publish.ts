@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
 import { getSection } from "./store.js";
+import { DEFAULT_WRITEBACK_NOTICE } from "./hook-defaults.js";
 import { redactString } from "./redact.js";
 import { logger } from "../log.js";
 
@@ -116,7 +117,7 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   const cfg = await getRuntimeConfig();
   await writeFile(join(dir, "hooks-config.json"),
-    JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || undefined,
+    JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || DEFAULT_WRITEBACK_NOTICE,
       write_tools: cfg.write_tools?.length ? cfg.write_tools : undefined }, null, 2) + "\n");
   const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 어드민 런타임 설정에서 중앙 관리. env LIVELY_WORK_ROOTS 로도 augment.";
   await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
@@ -136,17 +137,42 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
 const strip = (md: string): string =>
   md.replace(/^<!--[\s\S]*?-->\s*/, "").replace(/^---[\s\S]*?---\s*/, "").trim();
 
-export async function previewMemberContext(orgName: string): Promise<string> {
+// 팀 층(team-scoped) — 보는 멤버의 소속 팀 + 소유/이해관계 카테고리를 요약하는 '우리 팀' 프리앰블 + mine id 집합.
+//  ★오너십 ≠ 접근권한: 우선순위 신호일 뿐 — 다른 팀 맥락도 아래 인덱스에서 전원 열람·검색('분절 없는 집중').
+//  memberId 없거나(정적/멤버무관) 팀 미소속이면 block="" → 출력 불변(정적↔라이브 일치 불변식 유지). fail-open(조회 실패=빈 블록).
+async function buildTeamBlock(memberId: string): Promise<{ block: string; mineIds: Set<number> }> {
+  try {
+    const { memberTeams, memberCategories } = await import("../v6/team-store.js");
+    const [teams, cats] = await Promise.all([memberTeams(memberId), memberCategories(memberId)]);
+    const mineIds = new Set(cats.map((c) => Number(c.category_id)));
+    if (!teams.length) return { block: "", mineIds };
+    const fmt = (c: { name: string | null; key: string }): string => (c.name?.trim() || c.key);
+    const owned = cats.filter((c) => c.owner);
+    const stake = cats.filter((c) => !c.owner);
+    const lines = ["## 우리 팀", `- **팀:** ${teams.map((t) => t.name?.trim() || t.key).join(", ")}`];
+    if (owned.length) lines.push(`- **소유 카테고리:** ${owned.map(fmt).join(" · ")}`);
+    if (stake.length) lines.push(`- **이해관계 카테고리:** ${stake.map(fmt).join(" · ")}`);
+    lines.push("> 위 카테고리(★)의 지식·프로젝트·도메인맵을 먼저 본다 — 오너십은 우선순위일 뿐 접근제한이 아니다. 아래 인덱스의 다른 팀 맥락도 전원 열람·검색 가능('분절 없는 집중').");
+    return { block: lines.join("\n"), mineIds };
+  } catch {
+    return { block: "", mineIds: new Set() };
+  }
+}
+
+export async function previewMemberContext(orgName: string, memberId?: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
   const policy = await getSection("managed-policy");
   const defaults = await getSection("org-defaults");
+  // 팀 층 — memberId(=org_member.id, bearer 토큰 principal) 있을 때만. 훅이 멤버 토큰으로 fetch 하므로 게이트웨이가 신원을 안다.
+  const team = memberId ? await buildTeamBlock(memberId) : { block: "", mineIds: new Set<number>() };
   const { listKnowledge } = await import("../v6/knowledge-store.js");
   // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildKnowledgeIndex 를 그대로
   //  재사용(v6: injection=always 전문 + 카테고리 지도 + 쓰기 가이드 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
   const { buildKnowledgeIndex, categoryMapForIndex, loadGuideTemplate, wikiCategoryMap } = await import("./materialize.js");
   const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
   // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
-  const categoryMap = await categoryMapForIndex();
+  //  team.mineIds 주면 우리 팀 카테고리를 공간 내 상단 정렬+★(없으면 출력 불변).
+  const categoryMap = await categoryMapForIndex(team.mineIds.size ? team.mineIds : undefined);
   // 컨텍스트 온톨로지 가이드 템플릿도 DB 섹션에서 로드 — materialize(발행물)와 동일 소스(편집값 우선·비면 기본값).
   const guide = await loadGuideTemplate();
   const memIndex = (knowledge.length || categoryMap.length) ? buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()).trim() : "";
@@ -154,6 +180,7 @@ export async function previewMemberContext(orgName: string): Promise<string> {
     header,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",
     defaults?.body_md?.trim() ? strip(defaults.body_md) : "",
+    team.block,
     memIndex,
   ];
   // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 실제로 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext

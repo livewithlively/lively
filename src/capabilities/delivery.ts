@@ -13,6 +13,7 @@ import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
+import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { assertHookId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
@@ -155,6 +156,7 @@ export const deliveryCapabilities: Capability[] = [
       // 메모리는 단일 공유 풀 — 전 구성원이 읽는 조직 지식이므로 비-admin 에도 그대로 노출(member/internal 격리 폐기).
       return {
         profile, sections: sectionMap, sectionDefaults: GUIDE_SECTION_DEFAULTS,
+        writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, // 세션종료 너지 기본값 — 웹 편집기가 표시·되돌리기에 사용
         members: memberRows, memory, tokens, runtimeConfig, mcpServers,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
@@ -166,10 +168,12 @@ export const deliveryCapabilities: Capability[] = [
   restRead("org_preview", "멤버 컨텍스트 미리보기",
     "구성원의 AI 가 매 세션 첫머리에 실제로 읽는 정적 컨텍스트를 렌더한다(공유 맥락 — 비-admin 도 열람).",
     [{ method: "GET", paths: ["/api/ui/org/preview"], parse: () => ({}) }],
-    async () => {
+    async (_input, user) => {
       const p = await getOrgProfile();
       const name = p.display_name?.trim() || p.name?.trim() || "조직";
-      return { context: await previewMemberContext(name) };
+      // 팀-스코프 주입: bearer principal(=org_member.id)로 '우리 팀' 카테고리를 상단 정렬·프리앰블. 익명/미소속이면 org-wide.
+      const memberId = (user as { userId?: string } | undefined)?.userId || undefined;
+      return { context: await previewMemberContext(name, memberId) };
     }),
 
   // ── 컨텍스트 온톨로지 가이드 미리보기 — '이 편집 부분만'(Knowledge Index) 을 렌더한다. ──

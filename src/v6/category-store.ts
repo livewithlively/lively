@@ -13,7 +13,17 @@ export interface CategoryRow {
   description: string | null; should: string | null; cross_cutting: boolean;
   origin: string | null; status: string; state: string;
   created_at: string; updated_at: string;
+  // 오너 팀(team_category relation='owner') — listCategories 만 채운다(LEFT JOIN). 쓰기/감사 경로는 base 컬럼만.
+  owner_team_id?: number | null; owner_team_key?: string | null; owner_team_name?: string | null;
 }
+
+// 읽기 전용 SELECT(목록) — base 컬럼 + 오너 팀 조인. 쓰기 RETURNING/restoreSnapshot 은 CATEGORY_COLS(base)만 사용.
+const CATEGORY_SEL =
+  `${CATEGORY_COLS.split(",").map((c) => "c." + c.trim()).join(", ")},
+   tco.team_id AS owner_team_id, tot.key AS owner_team_key, tot.name AS owner_team_name`;
+const CATEGORY_OWNER_JOIN =
+  `LEFT JOIN team_category tco ON tco.category_id=c.id AND tco.relation='owner'
+   LEFT JOIN team tot ON tot.id=tco.team_id`;
 
 export interface CategoryEdgeRow {
   id: number; from_category_id: number; to_category_id: number;
@@ -28,10 +38,12 @@ const auditCategory = (entityKey: string, op: string, before: unknown, after: un
 export async function listCategories(space?: string): Promise<CategoryRow[]> {
   if (space) {
     return q(itemsPool,
-      `SELECT ${CATEGORY_COLS} FROM category WHERE space=$1 AND state<>'merged' ORDER BY name NULLS LAST, key`, [space]);
+      `SELECT ${CATEGORY_SEL} FROM category c ${CATEGORY_OWNER_JOIN}
+       WHERE c.space=$1 AND c.state<>'merged' ORDER BY c.name NULLS LAST, c.key`, [space]);
   }
   return q(itemsPool,
-    `SELECT ${CATEGORY_COLS} FROM category WHERE state<>'merged' ORDER BY space, name NULLS LAST, key`);
+    `SELECT ${CATEGORY_SEL} FROM category c ${CATEGORY_OWNER_JOIN}
+     WHERE c.state<>'merged' ORDER BY c.space, c.name NULLS LAST, c.key`);
 }
 
 export async function getCategory(id: number): Promise<CategoryRow | undefined> {

@@ -261,12 +261,17 @@ async function dropFileToAgent(file) {
   if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
   const rel = 'uploads/' + stamp + '-' + name;
   toast('업로드 중… ' + name);
+  let abs = rel; // 폴백: 서버가 절대경로를 안 주면 기존처럼 상대경로
   try {
     const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-    if (!res.ok) { const j = await res.json().catch(() => null); throw new Error((j && j.error) || ('' + res.status)); }
+    const j = await res.json().catch(() => null);
+    if (!res.ok) { throw new Error((j && j.error) || ('' + res.status)); }
+    if (j && j.path) abs = j.path; // 서버가 준 절대경로 — 클코 cwd 가 세션 루트와 달라도 바로 찾음
   } catch (e) { toast('업로드 실패 — ' + e.message, true); return; }
-  sendInput(' ' + rel + ' '); // 경로를 입력창에 삽입(앞뒤 공백) — 전송은 사용자가
-  toast('경로 삽입됨 — ' + rel + ' (설명 적고 Enter)');
+  // 절대경로엔 공백·한글이 흔해(프로젝트 폴더명) 작은따옴표로 감싼다(내부 ' 는 '\'' 로 이스케이프). 전송은 사용자가.
+  const quoted = "'" + abs.replace(/'/g, "'\\''") + "'";
+  sendInput(' ' + quoted + ' '); // 경로를 입력창에 삽입(앞뒤 공백)
+  toast('경로 삽입됨 — ' + abs + ' (설명 적고 Enter)');
   if (explorerLoaded) loadDir(curDir);
 }
 function setupClipboard() {

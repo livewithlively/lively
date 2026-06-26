@@ -104,6 +104,6 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       ws.on("finish", () => resolve());
       req.pipe(ws);
     });
-    res.json({ ok: true });
+    res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)
   }));
 }

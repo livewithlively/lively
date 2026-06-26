@@ -36,6 +36,7 @@ export interface CategoryMapEntry {
   key: string;            // category.key(소환 시 domain= 인자)
   name: string;           // 사람용 표시명
   active_units: number;   // 이 카테고리에 매핑된 active knowledge 수(kc.state<>'rejected'). 발견용 메타.
+  mine?: boolean;         // 보는 멤버의 팀이 소유/이해관계인 카테고리(team-scoped 주입에서만 채워짐 — 공간 내 상단 정렬+★).
 }
 
 
@@ -45,7 +46,9 @@ export interface CategoryMapEntry {
 // ── (라이브 헬퍼) 카테고리 지도 — v6 category(space/key/name) + knowledge_category(active 지식수). 단일 DB(itemsPool). ──
 //  V6: domain/knowledge_unit_domain → category/knowledge_category. 한 DB라 메모리 조인 불필요 — 두 쿼리(전 카테고리 + 카운트)면 충분.
 //  fail-open: 조회가 죽어도 인덱스 생성이 500 나면 안 된다(빈 지도 반환 → 헤더만, 안내문은 유지).
-export async function categoryMapForIndex(): Promise<CategoryMapEntry[]> {
+// mineIds(선택) = 보는 멤버의 팀 소유/이해관계 카테고리 id 집합(team-store.memberCategoryIds). 주어지면 entry.mine 마킹.
+//  생략(정적 발행·멤버 무관 경로)이면 mine 미설정 → 출력 불변(정적↔라이브 일치 불변식 유지).
+export async function categoryMapForIndex(mineIds?: Set<number>): Promise<CategoryMapEntry[]> {
   try {
     const { itemsPool } = await import("../items/store.js");
     // (1) 전 카테고리 — merged 제외. (space,key) 부분유니크. cross_cutting 먼저(교차관심사 상위 노출).
@@ -70,6 +73,7 @@ export async function categoryMapForIndex(): Promise<CategoryMapEntry[]> {
       key: c.key as string,
       name: (c.name as string) ?? (c.key as string),
       active_units: cnt.get(Number(c.id)) ?? 0,
+      mine: mineIds ? mineIds.has(Number(c.id)) : false,
     }));
   } catch (err) {
     logger.warn({ err }, "카테고리 지도 조회 실패 — 빈 지도로 폴백(인덱스는 R 전문·가이드만)");
@@ -180,9 +184,12 @@ function buildCategoryBlock(categoryMap: CategoryMapEntry[]): string {
   const out: string[] = [];
   for (const sp of spaces) {
     out.push(`### ${sp}`);
-    for (const a of categoryMap.filter((x) => x.space === sp)) {
+    // 우리 팀(mine) 카테고리를 공간 내 상단으로 정렬하고 ★ 마킹(표면화 사이드바 '우리 팀 우선'의 텍스트 인덱스 판본).
+    //  V8 sort 는 stable — mine 이 하나도 없으면(정적/멤버무관) 비교가 전부 0이라 기존 순서·출력 불변.
+    const ordered = [...categoryMap.filter((x) => x.space === sp)].sort((a, b) => (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
+    for (const a of ordered) {
       const n = a.active_units > 0 ? ` (${a.active_units})` : "";
-      out.push(`- ${a.key} — ${a.name}${n}`);
+      out.push(`- ${a.key} — ${a.name}${n}${a.mine ? " ★" : ""}`);
     }
     out.push("");
   }

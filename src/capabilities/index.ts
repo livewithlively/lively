@@ -16,6 +16,8 @@ import { knowledgeCapabilities } from "./knowledge.js";
 import { projectV6Capabilities } from "./projects-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
+import { teamCapabilities } from "./teams.js";
+import { memberTeams, memberCategoryIds } from "../v6/team-store.js";
 import { trashCapabilities } from "./trash.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
@@ -33,7 +35,17 @@ const me: Capability = {
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/me"], parse: () => ({}) }] },
   handler: async (_input, user) => {
     const u = (user ?? {}) as Partial<LivelyUser>;
-    return { userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [] };
+    const memberId = u.userId ?? "";
+    // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
+    //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
+    const [teams, cats] = memberId
+      ? await Promise.all([memberTeams(memberId).catch(() => []), memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] }))])
+      : [[], { all: [], owner: [] }];
+    return {
+      userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
+      teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      team_category_ids: cats.all, team_owner_category_ids: cats.owner,
+    };
   },
 };
 
@@ -44,6 +56,7 @@ const all: Capability[] = [
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory). expose.mcp:true → 자동 등록.
   ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).
+  ...teamCapabilities, // v6: 팀(스쿼드/사일로) CRUD + 멤버 + 카테고리 오너십 — scope=context. 표면화·주입의 '소프트 렌즈'(오너십≠권한). team_* expose.mcp:true(자동등록)+REST(어드민 팀 패널).
   ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_set_wiki 만 mcp:false(REST 전용).
   ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 대부분 expose.mcp:true(자동등록)+REST. project_delete_v6·task_update_v6·task_delete_v6 는 mcp:false(REST 전용).
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory, REST 전용(/api/ui/v6/tasks/:id/*).

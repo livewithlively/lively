@@ -222,13 +222,19 @@ export async function searchLinkTargets(projectId: number, exclude: number, quer
 }
 
 // ── 댓글 + 활동 피드 ────────────────────────────────────────────────────────────
-export async function postComment(taskId: number, text: string, ctx?: WriteCtx): Promise<any[]> {
+export async function postComment(taskId: number, text: string, ctx?: WriteCtx, parentId?: number | null): Promise<any[]> {
   const body = text.trim();
   if (!body) throw new Error("댓글 내용이 비어 있습니다");
+  // reply_to = 부모 댓글 id(1단계 스레드). null=최상위. 부모가 이 행의 최상위 댓글일 때만 인정(과허용·중첩 평탄화).
+  let parent: number | null = null;
+  if (parentId) {
+    const ok = await one(itemsPool, `SELECT 1 AS x FROM activity WHERE id=$1 AND project_id=$2 AND type='comment' AND reply_to IS NULL`, [parentId, taskId]);
+    if (ok) parent = parentId;
+  }
   await itemsPool.query(
-    `INSERT INTO activity(type, title, summary, body, author_person, project_id, should_review, is_review, created_at)
-     VALUES('comment', $1, $1, $2, $3, $4, 'na', 'na', now())`,
-    [body.slice(0, 200), body, ctx?.actor ?? null, taskId]);
+    `INSERT INTO activity(type, title, summary, body, author_person, project_id, reply_to, should_review, is_review, created_at)
+     VALUES('comment', $1, $1, $2, $3, $4, $5, 'na', 'na', now())`,
+    [body.slice(0, 200), body, ctx?.actor ?? null, taskId, parent]);
   return getTaskFeed(taskId);
 }
 
@@ -239,7 +245,7 @@ const FEED_FIELDS: Array<[string, string]> = [
 ];
 export async function getTaskFeed(taskId: number, viewer?: string | null): Promise<any[]> {
   const comments = await q(itemsPool,
-    `SELECT a.id, a.body, a.created_at, a.author_person AS actor, m.display_name
+    `SELECT a.id, a.body, a.created_at, a.author_person AS actor, a.reply_to, m.display_name
      FROM activity a LEFT JOIN org_member m ON m.id = a.author_person
      WHERE a.project_id=$1 AND a.type='comment' ORDER BY a.created_at`, [taskId]);
   const audits = await q(itemsPool,
@@ -263,7 +269,7 @@ export async function getTaskFeed(taskId: number, viewer?: string | null): Promi
   }
   const feed: any[] = [];
   for (const c of comments) {
-    feed.push({ kind: "comment", id: c.id, ts: c.created_at, actor: c.actor,
+    feed.push({ kind: "comment", id: c.id, ts: c.created_at, actor: c.actor, reply_to: c.reply_to ?? null,
       display_name: c.display_name, body: c.body, reactions: reactByComment.get(c.id) || [] });
   }
   for (const a of audits) {
