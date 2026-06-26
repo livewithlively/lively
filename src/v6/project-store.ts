@@ -492,6 +492,19 @@ export async function updateTask(
   return after;
 }
 
+// 작업(task/subtask) 노드의 루트 프로젝트(level='project') id 해석 — AGENTS.md 태스크 인덱스 재생성 대상.
+//  task 면 parent_id 가 곧 프로젝트, subtask 면 부모 task 를 한 단계 더 거슬러 올라간다. 해석 실패 시 undefined.
+export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: number | null }): Promise<number | undefined> {
+  if (node.level === "task") return node.parent_id ?? undefined;
+  if (node.level === "subtask") {
+    if (node.parent_id == null) return undefined;
+    const parent: ProjectRow | undefined = await one(itemsPool,
+      `SELECT ${PROJECT_COLS} FROM project WHERE id=$1`, [node.parent_id]);
+    return parent?.parent_id ?? undefined;
+  }
+  return undefined;
+}
+
 // ── 정션: 카테고리/지식 연결 ──────────────────────────────────────────────
 export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(
