@@ -1,5 +1,5 @@
-// 프로젝트 전용 폴더 — 공유 워크스페이스의 'project/<이름>' 아래. 터미널 세션의 작업 디렉토리이자
-//  공유 폴더의 실체. 이름/경로 규칙: 한글 보존·경로위험 제거·충돌 회피(중복 시 -N 접미사).
+// 프로젝트 전용 폴더 — 공유 워크스페이스의 'project/<id>' 아래. 터미널 세션의 작업 디렉토리이자
+//  공유 폴더의 실체. 폴더명 = 프로젝트 정수 id(불변·유일·경로안전: 공백·한글 없음). 사람 가독성은 폴더 내 AGENTS.md.
 //  SHARED_BASE 는 terminal-sessions ROOTS 'shared' base 와 반드시 일치(순환 import 회피 위해 env 직접 읽음).
 import fsp from "node:fs/promises";
 import fs from "node:fs";
@@ -10,23 +10,12 @@ export const PROJECT_SHARED_BASE = path.resolve(process.env.TERMINAL_ROOT_SHARED
 export const PROJECT_SUBDIR = "project"; // 사용자 지정 — workspace/project/ 아래에 프로젝트 폴더(진행 중)
 export const LEGACY_SUBDIR = "legacy-project"; // 완료 시 보관 — workspace/legacy-project/ 로 폴더 이동
 
-const cleanName = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 60);
-// 이름 → 폴더명. 한글 등 유니코드 보존, 경로위험·점시작·중복공백만 정리. 비면 'project'.
-export function slugProjectFolder(name: string): string {
-  const s = cleanName(name).replace(/[/\\]/g, "-").replace(/^\.+/, "").replace(/\s+/g, " ").trim().slice(0, 48);
-  return s || "project";
-}
-
-// 'project/<safe>' 상대경로(= 세션 subpath·DB folder) 반환 + 폴더 생성. 충돌 시 -2,-3 회피(덮어쓰기 금지).
-export async function createProjectFolder(name: string): Promise<string> {
+// 'project/<id>' 상대경로(= 세션 subpath·DB folder) 반환 + 폴더 생성(멱등). id 는 불변·유일이라
+//  충돌·공백·한글이 없어 절대경로가 항상 경로안전(웹 터미널 cwd 무관). 가독성은 폴더 내 AGENTS.md(제목·메타)가 담당.
+export async function createProjectFolder(id: number): Promise<string> {
   const baseDir = path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR);
   await fsp.mkdir(baseDir, { recursive: true }).catch(() => { /* 이미 존재 */ });
-  const base = slugProjectFolder(name);
-  let folder = base, n = 1;
-  while (fs.existsSync(path.join(baseDir, folder))) {
-    n += 1; folder = `${base}-${n}`;
-    if (n > 999) throw new HttpError(409, "프로젝트 폴더 이름이 충돌합니다");
-  }
+  const folder = String(id);
   await fsp.mkdir(path.join(baseDir, folder), { recursive: true, mode: 0o700 });
   return `${PROJECT_SUBDIR}/${folder}`;
 }

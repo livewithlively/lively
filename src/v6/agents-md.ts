@@ -65,11 +65,29 @@ export async function readProjectAgentsMd(base: string): Promise<{ rules: string
   return { rules: rules || "" };
 }
 
+// ── .lively/project.json 마커 — 호스트 로컬(공유 매니페스트가 '.' 시작 전부 제외 → 동기화 안 됨, 각 호스트가 직접 생성). ──
+//  로컬 PC 는 work.mjs 가 같은 마커를 ~/lively/projects/<id> 에 쓴다 — 박스는 프로젝트 폴더(workspace/project/<id>)에 여기서 쓴다.
+//  박스는 비개발 경작업 전용이라 레포 워크트리를 provision 하지 않음(=로컬 러너 영역) → repos 는 이름만 기록. project_id 가 핵심.
+//  멱등·비파괴: project_id/repos 가 바뀔 때만 다시 쓰고, work.mjs 등이 채운 다른 키(last_pull 등)는 보존(머지).
+async function writeProjectMarker(base: string, p: any): Promise<void> {
+  const dir = path.join(base, ".lively");
+  const file = path.join(dir, "project.json");
+  let prev: Record<string, unknown> = {};
+  let prevRaw = "";
+  try { prevRaw = await fsp.readFile(file, "utf8"); prev = JSON.parse(prevRaw); } catch { /* 신규 또는 파손 → 새로 씀 */ }
+  const repos = Array.isArray(p.repos) ? p.repos : [];
+  const next = { ...prev, project_id: p.id, repos };
+  const serialized = JSON.stringify(next, null, 2) + "\n";
+  if (serialized === prevRaw) return; // write-if-changed
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(file, serialized);
+}
+
 // 프로젝트 folder(없으면 물리 폴더 생성)를 절대경로로 해결. 생성 직후엔 folder 가 비어 있으므로 여기서 만든다.
 async function resolveProjectBase(p: any): Promise<string> {
   let folder = p.folder;
   if (!folder) {
-    folder = await createProjectFolder(p.name);
+    folder = await createProjectFolder(p.id);
     // 채널은 감사 제약(mcp/web/connector/cli/migration/unknown)을 따른다 — index.ts 의 ensureFolder 와 동일하게 web.
     await setProjectFolder(p.id, folder, { source: "web" });
   }
@@ -93,4 +111,6 @@ export async function ensureAgentsMd(projectId: number, base?: string, manualOve
   const claude = path.join(resolvedBase, "CLAUDE.md");
   let prevC = ""; try { prevC = await fsp.readFile(claude, "utf8"); } catch { /* */ }
   if (prevC.trim() !== "@AGENTS.md") await fsp.writeFile(claude, "@AGENTS.md\n");
+  // .lively/project.json 마커도 같이 보장 — 박스 프로젝트 폴더가 로컬 PC(work.mjs)와 동일하게 마커를 갖도록.
+  await writeProjectMarker(resolvedBase, p);
 }

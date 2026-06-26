@@ -2363,9 +2363,10 @@ function openProjectSettings(id, p, reload, meId, base) {
     const closeAndReload = () => { back.remove(); reload(); }; // 변경하면 팝업 닫고 상세 재렌더
     back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), projectRefsBlock(id, B), projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }), projectDangerBlock(id, p, meId, back));
 }
-// ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 단계별 가이드를 만들어 준다. ──
+// ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 시작 명령을 만들어 준다. ──
 //  웹은 원격 PC 터미널을 보지 않는다(스트리밍 X). 각자 자기 PC에서 터미널을 열어 쓰고, 웹은 '어떻게 시작하는지'만
-//  쉽고 상세히 안내한다. 모달에서 레포·경로·워크트리·하네스를 고르면 /local-work/guide 가 복사용 명령을 만들어 준다.
+//  쉽고 상세히 안내한다. 모달에서 레포·경로·워크트리·하네스를 고르면 `node ~/.lively/work.mjs <id> …` 한 줄을
+//  로컬에서 만들어 준다(renderLocalWorkCommand) — work.mjs 가 공유폴더 pull·레포·.lively 마커·실행까지 자동.
 function openLocalWorkModal(id, p) {
     const form = el('div', { class: 'proj-settings lw' });
     const back = overlayBox('💻 내 컴퓨터에서 작업 — ' + p.name, form);
