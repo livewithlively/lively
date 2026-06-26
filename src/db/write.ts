@@ -32,14 +32,24 @@ export function actorKindOf(source?: string | null): string | null {
   return source === "mcp" ? "ai" : source === "web" ? "human" : null;
 }
 
+// org_content_audit.channel CHECK 제약(org_content_audit_channel_chk)이 허용하는 값 — 이 set 또는 NULL 만 INSERT 가능.
+const AUDIT_CHANNELS = new Set(["mcp", "web", "connector", "cli", "migration", "unknown"]);
+// channel 정규화 — 허용 set 밖이면 'unknown'(catch-all)으로 강제. 호출자가 예상 밖 source 를 넘겨도 audit INSERT 가
+//  제약에 걸려 거부되고 그를 부른 상위 작업(예: regenAgents→ensureAgentsMd)이 함께 깨지는 걸 막는다. NULL 은 허용이라 보존.
+export function normalizeAuditChannel(raw?: string | null): string | null {
+  if (raw == null) return null;
+  return AUDIT_CHANNELS.has(raw) ? raw : "unknown";
+}
+
 // org_content_audit append-only INSERT(단일 진실). channel=source(어댑터가 결정적 주입). before/after 는 JSONB 직렬화.
 //  channelOverride 로 channel 을 source 와 분리(커넥터 미러처럼 source≠channel 인 경우).
+//  raw source 는 source 컬럼에 그대로 보존(포렌식) — 정규화는 channel 에만(normalizeAuditChannel).
 export async function auditOrgContent(
   entity: string, entityKey: string, op: string, before: unknown, after: unknown,
   ctx?: WriteCtx, channelOverride?: string,
 ): Promise<void> {
   const source = ctx?.source ?? null;
-  const channel = channelOverride ?? source;
+  const channel = normalizeAuditChannel(channelOverride ?? source);
   await itemsPool.query(
     `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9)`,
