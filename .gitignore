@@ -12,6 +12,9 @@ dist
 # domainmap 웹훅 클론 캐시
 var/repos/
 
+# Playwright MCP 산출물 캐시(스크린샷·트레이스 등) — 커밋 금지
+.playwright-mcp/
+
 # 시크릿·로컬 백업·DB 덤프·로그 — 커밋 금지(2026-06-24)
 .env.bak*
 *.predropbak.*
