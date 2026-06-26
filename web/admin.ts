@@ -361,6 +361,10 @@ async function openCronForm(job, actions, reload) {
         if (managedSessions == null) { try { const r = await api('/api/ui/managed-sessions'); managedSessions = (r && r.sessions) || []; } catch { managedSessions = []; } }
         for (const s of (managedSessions || [])) inp.append(el('option', { value: s.id, text: (s.label || s.id) + ' — ' + (s.account || '계정?') + (s.enabled ? '' : ' (꺼짐)') }));
         if (jp[p.name]) inp.value = jp[p.name];
+      } else if (p.kind === 'textarea') {
+        // 긴 작업 프롬프트 — 멀티라인 입력(주입 시 백엔드가 개행→공백 평탄화). value 는 속성 아닌 프로퍼티로 설정.
+        inp = el('textarea', { style: inputStyle + ';min-height:96px;resize:vertical', placeholder: p.hint || '', rows: '5' });
+        inp.value = jp[p.name] || '';
       } else {
         inp = el('input', { type: 'text', style: inputStyle, value: jp[p.name] || '', placeholder: p.hint || '' });
       }

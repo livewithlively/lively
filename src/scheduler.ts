@@ -18,7 +18,7 @@ const running = new Set<string>();  // 잡당 인메모리 락 — 느린 잡이
 //  프론트(크론 폼)가 이걸 읽어 드롭다운·파라미터 필드를 동적 생성(하드코딩 syncVis 제거). cron_set 검증도 여기서.
 //  새 액션 추가 = 여기 1줄 + runJob 핸들러 1개(행동은 코드라 불가피 — 임의 데이터 CRUD 아님=보안경계). 스키마 CHECK 도 갱신.
 //  param kind: 'session'(상시 세션 피커) · 'repo'/'system'/'text'(텍스트). 비-필수는 비워도 됨.
-export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text"; hint?: string }
+export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea"; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[] }
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [] },
@@ -27,6 +27,11 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
   { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }] },
+  // 일반 에이전트 태스크 — (세션=환경·맥락·계정) × (프롬프트=작업)으로 잡마다 임의 작업. recurring 에이전트 잡을 코드 없이 데이터로.
+  { key: "agent_inject", label: "에이전트 태스크 (세션에 프롬프트 주입)", params: [
+    { name: "session", label: "타깃 상시 세션", kind: "session", hint: "작업을 수행할 관리 세션 — 그 세션의 워크스페이스 맥락·계정(클로드 로그인)이 작업 환경을 정한다." },
+    { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "이 세션에 주입할 작업. 세션 워크스페이스 + lively MCP 로 수행. (개행은 주입 시 공백으로 합쳐짐 — 한 단락 권장.)" },
+  ] },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
 ];
 export const CRON_ACTION_KEYS: string[] = CRON_ACTIONS.map((a) => a.key);
@@ -116,6 +121,11 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return runMapInject(params);
   }
 
+  if (job.action === "agent_inject") {
+    // 일반 에이전트 태스크 — (세션=환경·맥락) × (params.prompt=작업)을 그대로 세션에 주입. 인박스 체크 없음(스케줄될 때마다 수행).
+    return runAgentInject(params);
+  }
+
   if (job.action === "ensure_managed_sessions") {
     // keep-alive — enabled 상시 세션의 tmux 세션 보장(죽었으면 재생성). 등록 0이면 no-op.
     const { ensureAllManagedSessions } = await import("./org/managed-sessions.js");
@@ -139,18 +149,9 @@ async function runMapInject(params: Record<string, unknown>): Promise<{ status: 
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, session: sessionRef } };
 
-  // params.session = 관리세션 id. 현재 살아있는 tmux 세션으로 해소(keep-alive 보장 — 죽었으면 재생성).
-  //  managed 조회 실패(=관리세션 아님)면 raw tmux session id 로 폴백(후방호환).
-  let tmuxSession = sessionRef;
-  try {
-    const { getManagedSession, ensureManagedSession } = await import("./org/managed-sessions.js");
-    const ms = await getManagedSession(sessionRef);
-    if (ms) {
-      const ens = await ensureManagedSession(ms);
-      if (!ens.session_id) return { status: "error", summary: { error: "관리세션 '" + sessionRef + "' 의 tmux 세션을 띄우지 못함(enabled 확인)", session: sessionRef } };
-      tmuxSession = ens.session_id;
-    }
-  } catch { /* managed 조회 실패 → raw tmux id 로 시도 */ }
+  let tmuxSession: string;
+  try { tmuxSession = await resolveSessionTmux(sessionRef); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), session: sessionRef } }; }
 
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildMapPrompt(repo, inbox.length);
   try { await injectToSession(tmuxSession, prompt); }
@@ -158,18 +159,49 @@ async function runMapInject(params: Record<string, unknown>): Promise<{ status: 
   return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, unmapped: inbox.length } };
 }
 
+// 일반 에이전트 태스크 주입 — map_unmapped 의 일반화. 인박스 조건 없이 params.prompt 를 타깃 세션에 그대로 주입한다.
+//  (세션=격리 워크스페이스·계정·하네스 = 작업 환경) × (prompt=작업 지시) → 잡마다 완전히 다른 recurring 에이전트 태스크.
+//  세션의 claude 가 자기 워크스페이스 맥락 + lively MCP 로 비동기 수행. fire-and-forget(주입까지가 잡 책임).
+async function runAgentInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  const sessionRef = params.session ? String(params.session) : "";
+  if (!sessionRef) return { status: "error", summary: { error: "타깃 상시 세션 미설정 — 관리탭 스케줄러에서 상시 세션을 선택하세요." } };
+  const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
+  if (!prompt) return { status: "error", summary: { error: "params.prompt 미설정 — 잡 입력값에 작업 지시(프롬프트)가 필요합니다.", session: sessionRef } };
+
+  let tmuxSession: string;
+  try { tmuxSession = await resolveSessionTmux(sessionRef); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), session: sessionRef } }; }
+
+  try { await injectToSession(tmuxSession, prompt); }
+  catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + tmuxSession + "): " + ((e as Error)?.message ?? String(e)), session: sessionRef, tmux: tmuxSession } }; }
+  return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, prompt_chars: prompt.length } };
+}
+
+// 관리세션 id → 현재 살아있는 tmux 세션 id 로 해소(keep-alive 보장 — 죽었으면 재생성). 세션 주입 잡 공용.
+//  managed 조회 성공이면 ensure 로 tmux 보장, 실패(=관리세션 아님)면 raw tmux session id 로 폴백(후방호환).
+async function resolveSessionTmux(sessionRef: string): Promise<string> {
+  const { getManagedSession, ensureManagedSession } = await import("./org/managed-sessions.js");
+  const ms = await getManagedSession(sessionRef).catch(() => null);
+  if (!ms) return sessionRef; // 관리세션 아님 → raw tmux id 로 시도(후방호환).
+  const ens = await ensureManagedSession(ms);
+  if (!ens.session_id) throw new Error("관리세션 '" + sessionRef + "' 의 tmux 세션을 띄우지 못함(enabled 확인)");
+  return ens.session_id;
+}
+
 // tmux send-keys 로 세션 PTY 에 텍스트 주입(+Enter). UTF-8 로케일 강제(한글 깨짐 방지 — terminal-sessions 와 동일).
-//  text 는 **단일 라인**이어야 한다(개행은 send-keys -l 에서 조기 Enter 가 됨 → buildMapPrompt 는 1라인).
+//  send-keys -l 은 **단일 라인**만 안전(개행=조기 Enter=중간 제출). 여기서 개행→공백으로 평탄화해 모든 주입 경로를 단일라인 안전화.
+//  (agent_inject 의 임의 멀티라인 프롬프트 대비 — 한 단락으로 합쳐 1회 제출.)
 async function injectToSession(sessionId: string, text: string): Promise<void> {
+  const oneLine = text.replace(/\s*\n\s*/g, " ").trim();
   const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileP = promisify(execFile);
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) { env.LANG = "en_US.UTF-8"; env.LC_CTYPE = "en_US.UTF-8"; }
-  await execFileP(TMUX_BIN, ["has-session", "-t", sessionId], { timeout: 5000, env });        // 부재면 throw → error.
-  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "-l", text], { timeout: 5000, env }); // 텍스트(literal).
-  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "Enter"], { timeout: 5000, env });     // 제출.
+  await execFileP(TMUX_BIN, ["has-session", "-t", sessionId], { timeout: 5000, env });          // 부재면 throw → error.
+  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "-l", oneLine], { timeout: 5000, env }); // 텍스트(literal, 1라인).
+  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "Enter"], { timeout: 5000, env });       // 제출.
 }
 
 // 가이드 프롬프트 — **단일 라인**(send-keys -l 주입용; 개행 금지). DDD + 라이브 도메인 should fetch 지시(하드코딩 X → 자기갱신) + propose/근거/confidence 규약.
