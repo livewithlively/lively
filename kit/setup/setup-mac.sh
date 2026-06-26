@@ -24,6 +24,12 @@ MCP_LABEL="lively"
 # 게이트웨이 URL 은 하드코딩하지 않는다 — LIVELY_GATEWAY 환경변수로 조직 게이트웨이를 지정한다.
 # 예: LIVELY_GATEWAY=http://<host>:8080/mcp  (없으면 아래에서 안내 후 중단)
 ORG_DEFAULT_URL="${LIVELY_GATEWAY:-}"
+# 폴백: LIVELY_GATEWAY 미지정이고 이미 설치된 머신이면 ~/.lively/gateway-url 에서 복원한다(업데이트·재실행 경로).
+# (gateway-url 은 /mcp 없이 저장되므로 다시 붙인다. 신규 설치는 이 파일이 없어 빈 값 유지 → 아래에서 안내 후 중단.)
+if [ -z "$ORG_DEFAULT_URL" ] && [ -r "$HOME/.lively/gateway-url" ]; then
+  _gw="$(cat "$HOME/.lively/gateway-url")"; _gw="${_gw%/}"
+  if [ -n "$_gw" ]; then case "$_gw" in */mcp) ORG_DEFAULT_URL="$_gw";; *) ORG_DEFAULT_URL="$_gw/mcp";; esac; fi
+fi
 
 echo
 echo "=== Lively 컨텍스트 셋업 (Mac) ==="

@@ -23,6 +23,8 @@ tar -xzf "$TMP/bundle.tgz" -C "$TMP"
 [ -f "$TMP/setup/setup-mac.sh" ] || { echo "✗ 묶음 손상(setup-mac.sh 없음)"; exit 1; }
 
 echo "[3/3] 멱등 재설치(업데이트)"
-LIVELY_TOKEN="$TOKEN" bash "$TMP/setup/setup-mac.sh"
+# setup-mac.sh 는 LIVELY_GATEWAY(=.../mcp)를 요구한다. GW 는 위에서 /mcp 가 벗겨졌으므로 다시 붙여 전달.
+case "$GW" in */mcp) GW_MCP="$GW";; *) GW_MCP="$GW/mcp";; esac
+LIVELY_TOKEN="$TOKEN" LIVELY_GATEWAY="$GW_MCP" bash "$TMP/setup/setup-mac.sh"
 
 echo "✓ 업데이트 완료 — 다음 세션부터 최신 훅/설정 적용. (콘텐츠는 매 세션 자동 갱신.)"

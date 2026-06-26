@@ -98,7 +98,7 @@ function knowledgeSubBar(active) {
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
     const onBrowse = active !== 'pinned' && active !== 'stats' && active !== 'review';
     bar.append(el('a', { class: 'sub-cat' + (onBrowse ? ' active' : ''), href: '#/knowledge',
-        role: 'tab', 'aria-selected': onBrowse ? 'true' : 'false', text: '카테고리' }));
+        role: 'tab', 'aria-selected': onBrowse ? 'true' : 'false', text: '탐색' }));
     const onPinned = active === 'pinned';
     bar.append(el('a', { class: 'sub-cat' + (onPinned ? ' active' : ''), href: '#/knowledge/pinned',
         role: 'tab', 'aria-selected': onPinned ? 'true' : 'false', title: '핀된 지식만 — 매 대화 첫머리에 깔리는 WIKI 인덱스', text: '📌 인덱스' }));

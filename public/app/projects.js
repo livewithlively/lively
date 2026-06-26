@@ -18,7 +18,7 @@ const PJV_STATUS_LABEL = { active: '진행 중', done: '완료' };
 //  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, browse}.
 function projectSubBar(active) {
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '프로젝트 보기' });
-    const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '카테고리', '#/projects2/browse']];
+    const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '탐색', '#/projects2/browse']];
     for (const [key, label, href] of tabs) {
         const on = key === active;
         bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
@@ -5742,7 +5742,7 @@ function projectTimelineSection(id, members, base) {
         chipsBar.replaceChildren(mk('전체', ''), ...(members || []).map((m) => mk(m.display_name || m.member_id, m.member_id)));
     }
     paintChips();
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })), el('p', { class: 'proj-tl-note' }, el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }), el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트의 터미널 세션에서 AI와 함께 진행한 작업' }), '만 모여요 (세션 밖에서 한 작업은 표시되지 않아요). ', el('b', { text: '확실하게 진행이 된 일을 위주로' }), ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')), chipsBar, body);
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })), el('p', { class: 'proj-tl-note' }, el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }), el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트에 연결된 작업' }), '이 모여요 — 이 프로젝트의 터미널 세션에서 AI와 함께 진행했거나, 이 프로젝트로 직접 기록된 작업입니다(다른 프로젝트의 작업은 섞이지 않아요). ', el('b', { text: '확실하게 진행이 된 일을 위주로' }), ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')), chipsBar, body);
     load();
     return card;
     async function load() {

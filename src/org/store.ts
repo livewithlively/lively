@@ -975,13 +975,17 @@ export async function listProjectActivities(
   let personFilter = "";
   if (authorPerson) { params.push(authorPerson); personFilter = ` AND a.author_person = $${params.length}`; }
   params.push(Math.min(Math.max(Number(limit) || 100, 1), 200));
-  // 이 프로젝트의 '터미널 세션에서 한 AI 작업'만 — activity.session_id 가 session_project(이 프로젝트)에 매핑된 것.
-  //  (예전엔 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음.) 세션 매핑이 없는 작업은 제외.
+  // 이 프로젝트에 연결된 작업 — 둘 중 하나면 포함:
+  //  ① activity.project_id 가 이 프로젝트(명시적 링크 — activity_log 가 직접 박는 가장 권위 있는 신호), 또는
+  //  ② activity.session_id 가 session_project(이 프로젝트의 터미널 세션)에 매핑된 것(세션 추론).
+  //  (예전엔 author_person 조인으로 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음 → 그 폭넓은 조인은 유지하지 않는다.
+  //   project_id=이 프로젝트는 정의상 이 프로젝트 작업이라 session_id 가 없어도 표시되어야 한다 — MCP activity_log 로 직접 기록한 작업 포함.)
   const r = await itemsPool.query(
     `SELECT a.id, a.type, a.title, a.summary, a.author_person, a.author_agent,
             a.commit_sha, a.committed_at, a.created_at, a.external_system, a.external_url
        FROM activity a
-      WHERE a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1)
+      WHERE (a.project_id = $1
+             OR a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1))
       ${personFilter}
       ORDER BY COALESCE(a.committed_at, a.created_at) DESC
       LIMIT $${params.length}`,
