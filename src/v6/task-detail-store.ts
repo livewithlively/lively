@@ -1,7 +1,7 @@
 // v6 태스크 상세(클릭업형 모달) 데이터 접근 — 한 태스크(project.id, level=task|subtask)에 매달리는
 //  태그·시간추적·체크리스트·의존성·댓글/활동피드. 모달의 좌(필드/하위) + 우(Activity)를 한 번에 조립한다.
-//  댓글 = activity(project_id=task, type='comment'), 시스템이벤트 = org_content_audit(entity='project') diff —
-//  전용 이벤트 테이블 없이 전 이력 포착(schema.ts ⑪ 참조). 사람 식별자(member/assignee/actor)=org_member.id.
+//  댓글 = task_comment(task_id=task) [전용 테이블, 프로젝트 #183], 시스템이벤트 = org_content_audit(entity='project') diff —
+//  시스템이벤트는 전용 테이블 없이 전 이력 포착(schema.ts ⑧·⑪ 참조). 사람 식별자(member/assignee/actor)=org_member.id.
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { type WriteCtx } from "../db/write.js";
@@ -225,29 +225,28 @@ export async function searchLinkTargets(projectId: number, exclude: number, quer
 export async function postComment(taskId: number, text: string, ctx?: WriteCtx, parentId?: number | null): Promise<any[]> {
   const body = text.trim();
   if (!body) throw new Error("댓글 내용이 비어 있습니다");
-  // reply_to = 부모 댓글 id(1단계 스레드). null=최상위. 부모가 이 행의 최상위 댓글일 때만 인정(과허용·중첩 평탄화).
+  // reply_to = 부모 댓글 id(1단계 스레드). null=최상위. 부모가 이 태스크의 최상위 댓글일 때만 인정(과허용·중첩 평탄화).
   let parent: number | null = null;
   if (parentId) {
-    const ok = await one(itemsPool, `SELECT 1 AS x FROM activity WHERE id=$1 AND project_id=$2 AND type='comment' AND reply_to IS NULL`, [parentId, taskId]);
+    const ok = await one(itemsPool, `SELECT 1 AS x FROM task_comment WHERE id=$1 AND task_id=$2 AND reply_to IS NULL`, [parentId, taskId]);
     if (ok) parent = parentId;
   }
   await itemsPool.query(
-    `INSERT INTO activity(type, title, summary, body, author_person, project_id, reply_to, should_review, is_review, created_at)
-     VALUES('comment', $1, $1, $2, $3, $4, $5, 'na', 'na', now())`,
-    [body.slice(0, 200), body, ctx?.actor ?? null, taskId, parent]);
+    `INSERT INTO task_comment(task_id, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now())`,
+    [taskId, ctx?.actor ?? null, body, parent]);
   return getTaskFeed(taskId);
 }
 
-// 피드 = 사용자 댓글(activity) + 시스템 이벤트(org_content_audit diff) 를 시간순 병합.
+// 피드 = 사용자 댓글(task_comment) + 시스템 이벤트(org_content_audit diff) 를 시간순 병합.
 const FEED_FIELDS: Array<[string, string]> = [
   ["status", "상태"], ["assignee", "담당자"], ["priority", "우선순위"],
   ["due_date", "마감일"], ["start_date", "시작일"], ["name", "이름"], ["description", "설명"],
 ];
 export async function getTaskFeed(taskId: number, viewer?: string | null): Promise<any[]> {
   const comments = await q(itemsPool,
-    `SELECT a.id, a.body, a.created_at, a.author_person AS actor, a.reply_to, m.display_name
-     FROM activity a LEFT JOIN org_member m ON m.id = a.author_person
-     WHERE a.project_id=$1 AND a.type='comment' ORDER BY a.created_at`, [taskId]);
+    `SELECT c.id, c.body, c.created_at, c.author AS actor, c.reply_to, m.display_name
+     FROM task_comment c LEFT JOIN org_member m ON m.id = c.author
+     WHERE c.task_id=$1 ORDER BY c.created_at`, [taskId]);
   const audits = await q(itemsPool,
     `SELECT a.id, a.op, a.before, a.after, a.actor, a.at, m.display_name
      FROM org_content_audit a LEFT JOIN org_member m ON m.id = a.actor
@@ -257,15 +256,15 @@ export async function getTaskFeed(taskId: number, viewer?: string | null): Promi
   const cids = comments.map((c) => c.id);
   const reactRows = cids.length
     ? await q(itemsPool,
-        `SELECT activity_id, emoji, COUNT(*)::int AS count, BOOL_OR(member = $2) AS mine
-         FROM task_comment_reaction WHERE activity_id = ANY($1)
-         GROUP BY activity_id, emoji ORDER BY activity_id, MIN(created_at)`, [cids, viewer ?? ""])
+        `SELECT comment_id, emoji, COUNT(*)::int AS count, BOOL_OR(member = $2) AS mine
+         FROM task_comment_reaction WHERE comment_id = ANY($1)
+         GROUP BY comment_id, emoji ORDER BY comment_id, MIN(created_at)`, [cids, viewer ?? ""])
     : [];
   const reactByComment = new Map<number, Array<{ emoji: string; count: number; mine: boolean }>>();
   for (const r of reactRows) {
-    const arr = reactByComment.get(r.activity_id) || [];
+    const arr = reactByComment.get(r.comment_id) || [];
     arr.push({ emoji: r.emoji, count: r.count, mine: r.mine });
-    reactByComment.set(r.activity_id, arr);
+    reactByComment.set(r.comment_id, arr);
   }
   const feed: any[] = [];
   for (const c of comments) {
@@ -292,13 +291,13 @@ export async function getTaskFeed(taskId: number, viewer?: string | null): Promi
   return feed.slice(-300);
 }
 
-// 댓글 반응 토글 — (activity_id, emoji, member) 있으면 제거, 없으면 추가. 갱신된 emoji별 집계 반환.
-export async function toggleCommentReaction(activityId: number, emoji: string, member: string): Promise<Array<{ emoji: string; count: number; mine: boolean }>> {
+// 댓글 반응 토글 — (comment_id, emoji, member) 있으면 제거, 없으면 추가. 갱신된 emoji별 집계 반환.
+export async function toggleCommentReaction(commentId: number, emoji: string, member: string): Promise<Array<{ emoji: string; count: number; mine: boolean }>> {
   const e = String(emoji).slice(0, 16);
-  const ex = await one(itemsPool, `SELECT 1 AS x FROM task_comment_reaction WHERE activity_id=$1 AND emoji=$2 AND member=$3`, [activityId, e, member]);
-  if (ex) await itemsPool.query(`DELETE FROM task_comment_reaction WHERE activity_id=$1 AND emoji=$2 AND member=$3`, [activityId, e, member]);
-  else await itemsPool.query(`INSERT INTO task_comment_reaction(activity_id, emoji, member) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, [activityId, e, member]);
+  const ex = await one(itemsPool, `SELECT 1 AS x FROM task_comment_reaction WHERE comment_id=$1 AND emoji=$2 AND member=$3`, [commentId, e, member]);
+  if (ex) await itemsPool.query(`DELETE FROM task_comment_reaction WHERE comment_id=$1 AND emoji=$2 AND member=$3`, [commentId, e, member]);
+  else await itemsPool.query(`INSERT INTO task_comment_reaction(comment_id, emoji, member) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, [commentId, e, member]);
   return q(itemsPool,
     `SELECT emoji, COUNT(*)::int AS count, BOOL_OR(member=$2) AS mine FROM task_comment_reaction
-     WHERE activity_id=$1 GROUP BY emoji ORDER BY MIN(created_at)`, [activityId, member]);
+     WHERE comment_id=$1 GROUP BY emoji ORDER BY MIN(created_at)`, [commentId, member]);
 }

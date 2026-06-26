@@ -375,10 +375,9 @@ export async function initV6Schema(): Promise<string> {
   `);
 
   // ── 11) 태스크 상세(클릭업형 모달) — 태그·시간추적·체크리스트·의존성. 모두 task/subtask 행(project.id) 귀속. ──
-  //  댓글/활동 피드는 전용 테이블 없이 재활용한다: ① 사용자 댓글 = activity(project_id=task id, type='comment'),
-  //  ② 시스템 이벤트(상태변경·담당자·우선순위·기간·이름·설명·생성) = org_content_audit(entity='project', entity_key=task id)
-  //  의 before/after 를 읽기경로에서 diff. → 새 이벤트 테이블 불필요, 전 이력 자동 포착. (org-wide activity/대시보드 오염도 없음 —
-  //  태스크 댓글의 project_id 는 '태스크' id 라 프로젝트 타임라인(project_id=프로젝트) 필터에 안 잡힘.)
+  //  활동 피드(getTaskFeed)는 둘을 시간순 병합한다: ① 사용자 댓글 = task_comment(task_id=task id) — 전용 테이블(⑧,
+  //  프로젝트 #183 에서 activity(type='comment') 재활용에서 분리), ② 시스템 이벤트(상태변경·담당자·우선순위·기간·이름·설명·생성)
+  //  = org_content_audit(entity='project', entity_key=task id)의 before/after 를 읽기경로에서 diff(전용 이벤트 테이블 없이 전 이력 자동 포착).
   //  member/assignee = org_member.id 문자열(리스트뷰 assignee 관례와 동일, FK 없음 — 미러/외부 신원도 허용).
   await pool.query(`
     -- 태그 레지스트리(워크스페이스 공용, 색상) + 태스크↔태그 정션. 이름은 대소문자 무시 유일.
@@ -469,16 +468,35 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS task_field_value_task_idx ON task_field_value(task_id);
   `);
 
-  // ── ⑧ 댓글 반응(클릭업식 이모지 리액션) — 댓글=activity(type=comment)의 id 에 (emoji, member) 토글. ──
-  //  activity 는 initDomainmapSchema 가 먼저 생성(존재 보장) → 진짜 FK(같은 DB). 댓글 삭제 시 반응 동반 제거.
+  // ── ⑧ 태스크 댓글 + 이모지 반응 — 전용 테이블(프로젝트 #183: 구 activity(type='comment') 재활용에서 분리). ──
+  //  댓글=task_comment(task_id→project, reply_to 자기FK 1단계 스레드), 반응=task_comment_reaction(comment_id→task_comment).
+  //  activity 와 분리 → activity 차원 운영(타입 리맵·project_id ON DELETE SET NULL)이 더는 댓글 정체성에 새지 않는다. 댓글 삭제 시 반응 CASCADE.
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_comment(
+      id SERIAL PRIMARY KEY,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      author TEXT,
+      body TEXT NOT NULL,
+      reply_to INT REFERENCES task_comment(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_comment_task_idx ON task_comment(task_id);
+    CREATE INDEX IF NOT EXISTS task_comment_reply_idx ON task_comment(reply_to);
+
+    -- 반응 테이블: 구 스키마(activity_id→activity)면 신 스키마(comment_id→task_comment)로 1회 이관.
+    --  전환 시점 활성 댓글 0건 → 구 반응(삭제 태스크의 고아)은 대응 댓글이 없어 폐기(프로젝트 #183 검토).
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='task_comment_reaction' AND column_name='activity_id') THEN
+        DROP TABLE task_comment_reaction;
+      END IF;
+    END $$;
     CREATE TABLE IF NOT EXISTS task_comment_reaction(
-      activity_id INT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+      comment_id INT NOT NULL REFERENCES task_comment(id) ON DELETE CASCADE,
       emoji TEXT NOT NULL,
       member TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now(),
-      PRIMARY KEY(activity_id, emoji, member));
-    CREATE INDEX IF NOT EXISTS task_comment_reaction_act_idx ON task_comment_reaction(activity_id);
+      PRIMARY KEY(comment_id, emoji, member));
+    CREATE INDEX IF NOT EXISTS task_comment_reaction_cmt_idx ON task_comment_reaction(comment_id);
   `);
 
   // ── ⑬ 임베딩(pgvector) — 벡터검색(#172) opt-in. provider≠off 일 때만 확장/컬럼(embedding_vector)/HNSW 인덱스 생성. ──
