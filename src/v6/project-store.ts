@@ -564,6 +564,17 @@ export async function unlinkProjectKnowledge(projectId: number, name: string, re
   await auditProject(String(projectId), "unlink_knowledge", { name, relation }, null, ctx);
 }
 
+// 역방향 조회 — 이 지식을 필요(required)/산출(produced)로 연결한 프로젝트 목록(위키 상세 '연결된 프로젝트').
+//  보드 앵커(__board_anchor__) 숨김 프로젝트는 제외. relation·이름 순.
+export async function projectsForKnowledge(name: string): Promise<{ project_id: number; project_name: string; status: string; relation: string }[]> {
+  const rows = await q(itemsPool,
+    `SELECT pk.project_id, pk.relation, p.name AS project_name, p.status
+     FROM project_knowledge pk JOIN project p ON p.id=pk.project_id
+     WHERE pk.name=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
+     ORDER BY pk.relation, lower(p.name)`, [name]);
+  return rows.map((r) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation }));
+}
+
 // 필요지식 추천(벡터검색 #172) — 프로젝트 이름+설명(의미) + **프로젝트 카테고리 공유(가산점·구제)** 로 지식 추천.
 //  이미 연결된(required/produced) 지식은 제외. 임베딩 off 여도 카테고리만으로 추천 가능(graceful). 설명·카테고리 둘 다 없으면 빈 배열.
 //  '✨ 자동으로 고르기'(웹) + project_recommend_knowledge_v6(MCP)의 데이터. 카테고리 인지 랭킹은 findRecommendedKnowledge.

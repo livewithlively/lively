@@ -130,6 +130,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
   padding: 24px;
 }
 .card h2 { margin: 0 0 14px; font-size: 17px; font-weight: 800; color: var(--ink); }
+/* 섹션 제목(h3) 기본 margin 제거 — h2(.card h2)와 동형. UA 기본 margin-block 이 카드 상단 패딩에 더해져 '위쪽 패딩 너무 큼'(본문·지식 흐름 등 #254)을 만들던 것. */
+.card-head h3 { margin: 0; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .card-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
@@ -990,6 +992,26 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kn-cat-chip { color: var(--ink-sub); background: var(--bg-tint); }
 .kn-cat-empty { font-size: 13px; color: var(--muted-2); margin: 4px 0 2px; }
 
+/* ── 위키 ↔ 프로젝트 연결(#255·#256·#257) — 연결된 프로젝트 칩(필요/산출) + 선택 피커. ── */
+.kn-projlinks { margin: 4px 0 2px; }
+.kn-projlink-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px; }
+.kn-projlink-group { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.kn-projlink-rel { flex: none; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 6px; letter-spacing: -.2px; }
+.kn-projlink-rel-required { color: var(--blue); background: var(--bg-tint-2); border: 1px solid var(--line-net-2); }
+.kn-projlink-rel-produced { color: #1F9D6B; background: var(--bg-success, #F0FAF5); border: 1px solid #CFEBDF; }
+.kn-projchip { gap: 6px; padding: 1px 4px 1px 9px; }
+.kn-projchip-link { color: var(--ink); text-decoration: none; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kn-projchip-link:hover { color: var(--blue); }
+.kn-projchip-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; }
+.kn-projchip-x:hover { background: var(--bg-danger, #FDECEC); color: var(--danger, #D6453C); }
+/* 선택 피커 상단 관계 토글 바 */
+.kn-projpick-bar { display: flex; align-items: center; gap: 8px; }
+.kn-projpick-rel { flex: none; }
+/* 생성 페이지 — 프로젝트 연결 스테이징 */
+.kn-create-card .field { margin-bottom: 14px; }
+.kn-create-projhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kn-staged-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
+
 /* ════════ 작업 현황(#/dash) — 구성원 요약 + 작업 타임라인(펼침형). §0.5 절제: 채운 필 금지, 점·라인으로 위계. ════════ */
 /* 섹션 헤더 */
 .dash-sec-head { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 10px; flex-wrap: wrap; }
@@ -1713,7 +1735,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjk-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; background: var(--bg); }
 .pjk-col-req { background: var(--bg-tint); border-color: var(--line-net); }
 .pjk-col-prod { background: var(--bg-success); border-color: #CFEBDF; }
-.pjk-col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pjk-col-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; }
 .pjk-col-title { font-size: 13px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
 .pjk-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line-net); font-size: 12px; font-weight: 700; color: var(--ink-sub); }
 .pjk-col-prod .pjk-count { border-color: #CFEBDF; }
@@ -1726,15 +1748,13 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjk-row-meta { flex: none; display: flex; align-items: center; }
 .pjk-row-x { flex: none; width: 22px; height: 22px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 6px; font-size: 12px; line-height: 1; }
 .pjk-row-x:hover { background: var(--bg-danger, #FDECEC); color: var(--danger, #D6453C); }
-.pjk-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* 액션(위키에서·직접 작성·자동 추천) — 각 박스 헤더 우상단으로 이동(#258). 좁으면 헤더 다음 줄로 래핑. */
+.pjk-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.pjk-acts .btn { padding: 3px 8px; font-size: 12px; }
 .pjk-arrow { flex: none; align-self: center; color: var(--muted-3); font-size: 22px; font-weight: 700; user-select: none; }
-.pjk-node { flex: none; align-self: center; display: flex; flex-direction: column; align-items: center; gap: 4px; max-width: 160px; padding: 12px 14px; border: 1.5px solid var(--line-net-2); border-radius: 12px; background: var(--bg-punch); text-align: center; }
-.pjk-node-label { font-size: 11px; font-weight: 700; color: var(--muted-head); text-transform: uppercase; letter-spacing: .3px; }
-.pjk-node-name { font-size: 13px; font-weight: 800; color: var(--ink); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjk-node-status { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); }
-.pjk-node-status.done { color: #1F9D6B; }
-.pjk-node-status.inprog { color: var(--blue); }
-.pjk-node-glyph { font-size: 11px; }
+/* 가운데 노드 — '이 프로젝트' 문구만(이름·상태 제거, 박스 축소 #258). */
+.pjk-node { flex: none; align-self: center; display: flex; align-items: center; justify-content: center; max-width: 110px; padding: 7px 12px; border: 1.5px solid var(--line-net-2); border-radius: 10px; background: var(--bg-punch); text-align: center; }
+.pjk-node-label { font-size: 12px; font-weight: 800; color: var(--ink-sub); letter-spacing: -.1px; white-space: nowrap; }
 /* 좁은 화면 — 세로 스택, 화살표는 아래 방향. */
 @media (max-width: 720px) {
   .pjk-flow { flex-direction: column; }

@@ -15,7 +15,7 @@ import {
   createTask, updateTaskStatus, updateTask, deleteTaskNode, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
-  recommendKnowledgeForProject,
+  recommendKnowledgeForProject, projectsForKnowledge,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -457,6 +457,25 @@ const projectRecommendKnowledgeV6: Capability = {
   },
 };
 
+// 역방향 — 이 지식이 연결된 프로젝트(필요/산출). 위키 상세 '연결된 프로젝트' 표시·관리(GET /api/ui/knowledge/:name/projects).
+const knowledgeProjectsV6: Capability = {
+  name: "knowledge_projects_v6",
+  title: "지식↔프로젝트 역조회(v6)",
+  description: "이 지식을 필요(required)/산출(produced)로 연결한 프로젝트 목록(project_id·project_name·status·relation). 위키 상세 '연결된 프로젝트' 표시용.",
+  scope: "memory",
+  input: { name: z.string().min(1).max(64) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/:name/projects"],
+      parse: (req) => {
+        const name = decodeURIComponent(String(req.params?.name ?? "")).trim();
+        if (!name) throw new HttpError(400, "name 이 필요합니다");
+        return { name };
+      } }],
+  },
+  handler: async (input: any) => ({ projects: await projectsForKnowledge(input.name) }),
+};
+
 // ── 작업(task/subtask) — :id 는 프로젝트. parent_task_id 주면 하위작업(subtask). ──
 const taskCreateV6: Capability = {
   name: "task_create_v6",
@@ -604,5 +623,5 @@ const boardFieldsV6: Capability = {
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, projectRecommendKnowledgeV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];
