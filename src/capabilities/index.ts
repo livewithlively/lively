@@ -62,9 +62,9 @@ const all: Capability[] = [
   ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).
   ...teamCapabilities, // v6: 팀(스쿼드/사일로) CRUD + 멤버 + 카테고리 오너십 — scope=context. 표면화·주입의 '소프트 렌즈'(오너십≠권한). team_* expose.mcp:true(자동등록)+REST(어드민 팀 패널).
   ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_set_wiki 만 mcp:false(REST 전용).
-  ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 대부분 expose.mcp:true(자동등록)+REST. project_delete_v6·task_update_v6·task_delete_v6 는 mcp:false(REST 전용).
-  ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory, REST 전용(/api/ui/v6/tasks/:id/*).
-  ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory, REST 전용(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId).
+  ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 전부 expose.mcp:true(자동등록)+REST. project_delete_v6·task_delete_v6 는 org_tool 기본 OFF(위험삭제, 운영자 토글).
+  ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
+  ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
@@ -73,7 +73,7 @@ const all: Capability[] = [
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
 //  Phase 2(2026-06-24): names 배열 이중게이트 폐기 → expose.mcp 단일 SoT. domain_*·propose_domain 은 v6 category_* 로 이관(mcp:false, REST 보존),
-//  knowledge_set_wiki·project_delete_v6·task_update_v6·task_delete_v6 도 mcp:false(REST 전용). item(search_items·get_item)·mapping 은 폐기됨.
+//  knowledge_set_wiki 만 mcp:false(REST 전용). project_delete_v6·task_delete_v6·task_field_delete_v6 는 expose.mcp:true + org_tool 기본 OFF. item(search_items·get_item)·mapping 은 폐기됨.
 //  ku/knowledge 가 단일 캐노니컬 표면 — 지식 grep/단건 knowledge_grep·knowledge_get, 활동 activity_list·activity_log. REST 전용: GET /api/ui/learn(kind_registry+data_source ground-truth).
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
@@ -83,7 +83,7 @@ const json = (d: unknown) => ({ content: [{ type: "text" as const, text: JSON.st
 // ── MCP 표면 노출 판정 (웹 후보 buildToolCandidates 와 실제 노출 registerMcpCapabilities 가 공유하는 단일 SoT) ──
 // 후보 = expose.mcp:true 인 capability(= "이건 MCP 도구다" 선언). 그 외(순수 웹 REST: org_*/dm_*/dash_*/task 상세)는 expose.mcp:false → MCP 표면 아님.
 //  expose.mcp:false 는 org_tool 에 builtin 행이 잘못 들어와도 절대 노출 안 됨(표면 오염/취약 차단).
-// "기본은 꺼두되 운영자가 켤 수 있는" 도구(knowledge_set_wiki·project_delete_v6)도 expose.mcp:true(후보)로 두고,
+// "기본은 꺼두되 운영자가 켤 수 있는" 도구(project_delete_v6·task_delete_v6·task_field_delete_v6 등 위험삭제)도 expose.mcp:true(후보)로 두고,
 //  기본 미노출은 org_tool 시드(enabled=false, schema init)로 표현한다 — 노출 상태의 SoT 는 DB(org_tool).
 //  expose.mcp 는 "MCP 도구냐"만 선언하고 노출 여부를 코드에 하드코딩하지 않는다(구 MCP_TOGGLE_CANDIDATES Set 폐기 — stale 원천 제거).
 export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, boolean>): boolean {

@@ -198,11 +198,11 @@ const projectSetStatusV6: Capability = {
   },
 };
 
-// 프로젝트 이름/설명 수정 — 주어진 키만 패치(name 비우기 불가, description 빈값=해제). 웹 전용.
+// 프로젝트 이름/설명 수정 — 주어진 키만 패치(name 비우기 불가, description 빈값=해제).
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명을 수정한다. 주어진 키만 변경. 웹 프로젝트 탭 전용.",
+  description: "프로젝트 이름·설명을 수정한다. 주어진 키만 변경.",
   scope: "memory",
   input: {
     id: z.number().int().positive(),
@@ -214,7 +214,7 @@ const projectUpdateV6: Capability = {
     due_date: z.string().nullable().optional(),
   },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
@@ -241,7 +241,7 @@ const projectUpdateV6: Capability = {
   },
 };
 
-// 관련 레포 설정(전체 교체) — repo 레지스트리 이름 배열. AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값. 웹 전용.
+// 관련 레포 설정(전체 교체) — repo 레지스트리 이름 배열. AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
 const projectSetReposV6: Capability = {
   name: "project_set_repos_v6",
   title: "프로젝트 관련 레포 설정(v6)",
@@ -249,7 +249,7 @@ const projectSetReposV6: Capability = {
   scope: "memory",
   input: { id: z.number().int().positive(), repos: z.array(z.string()).max(50) },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/repos"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
@@ -265,7 +265,7 @@ const projectSetReposV6: Capability = {
   },
 };
 
-// 카테고리 설정(전체 교체) — 카테고리 id 배열. 생성 모달·세부설정 멀티선택. 단건 project_link_category_v6 와 공존. 웹 전용.
+// 카테고리 설정(전체 교체) — 카테고리 id 배열. 생성 모달·세부설정 멀티선택. 단건 project_link_category_v6 와 공존.
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
@@ -273,7 +273,7 @@ const projectSetCategoriesV6: Capability = {
   scope: "memory",
   input: { id: z.number().int().positive(), categoryIds: z.array(z.number().int().positive()).max(50) },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/categories"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
@@ -347,7 +347,7 @@ const projectMyStatusV6: Capability = {
   scope: "memory",
   input: { id: z.number().int().positive(), message: z.string().max(200).optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/my-status"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
@@ -523,7 +523,7 @@ const taskSetStatusV6: Capability = {
 const taskUpdateV6: Capability = {
   name: "task_update_v6",
   title: "작업 필드 수정(v6)",
-  description: "작업(task/subtask)의 상태·우선순위·담당자·기간·이름·설명을 패치. 주어진 키만 변경. 웹 프로젝트 탭 전용.",
+  description: "작업(task/subtask)의 상태·우선순위·담당자·기간·이름·설명을 패치. 주어진 키만 변경.",
   scope: "memory",
   input: {
     id: z.number().int().positive(),
@@ -536,7 +536,7 @@ const taskUpdateV6: Capability = {
     due_date: z.string().nullable().optional(),
   },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
@@ -570,11 +570,11 @@ const taskUpdateV6: Capability = {
 const taskDeleteV6: Capability = {
   name: "task_delete_v6",
   title: "작업 삭제(v6)",
-  description: "작업(task/subtask)을 삭제한다. 하위·태그·체크리스트·의존성은 FK CASCADE 로 정리되고, 감사 스냅샷으로 #/trash 에서 본체를 복원할 수 있다. 웹 프로젝트 탭 전용.",
+  description: "작업(task/subtask)을 삭제한다. 하위·태그·체크리스트·의존성은 FK CASCADE 로 정리되고, 감사 스냅샷으로 #/trash 에서 본체를 복원할 수 있다.",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/delete"],
       parse: (req) => ({ id: parseId(req.params?.id) }) }],
   },
@@ -595,7 +595,7 @@ const boardFieldsV6: Capability = {
   scope: "memory",
   input: {},
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/board-fields"], parse: () => ({}) }],
   },
   handler: async () => await getBoardFields(),

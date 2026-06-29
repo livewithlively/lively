@@ -28,7 +28,7 @@ const taskDetailV6: Capability = {
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/tasks/:id/detail"],
       parse: (req) => ({ id: parseId(req.params?.id) }) }],
   },
@@ -43,10 +43,10 @@ const taskDetailV6: Capability = {
 const tagListV6: Capability = {
   name: "task_tag_list_v6",
   title: "태그 목록(v6)",
-  description: "워크스페이스 태그 레지스트리 전체(자동완성용). 웹 전용.",
+  description: "워크스페이스 태그 레지스트리 전체(자동완성용).",
   scope: "memory",
   input: {},
-  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/v6/tags"], parse: () => ({}) }] },
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/v6/tags"], parse: () => ({}) }] },
   handler: async () => ({ tags: await listAllTags() }),
 };
 
@@ -54,12 +54,12 @@ const tagListV6: Capability = {
 const taskTagsV6: Capability = {
   name: "task_tags_v6",
   title: "태스크 태그(v6)",
-  description: "태스크에 태그를 달거나 뗀다. {name|tag_id, color?, remove?}. 웹 전용.",
+  description: "태스크에 태그를 달거나 뗀다. {name|tag_id, color?, remove?}.",
   scope: "memory",
   input: { id: z.number().int().positive(), name: z.string().optional(), tag_id: z.number().optional(),
     color: z.string().optional(), remove: z.boolean().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/tags"],
       parse: (req) => {
         const b = body(req);
@@ -84,12 +84,12 @@ const taskTagsV6: Capability = {
 const taskTimeV6: Capability = {
   name: "task_time_v6",
   title: "태스크 시간추적(v6)",
-  description: "태스크 타이머/수동입력. {action: start|stop|add|delete, seconds?, note?, entry_id?}. 웹 전용.",
+  description: "태스크 타이머/수동입력. {action: start|stop|add|delete, seconds?, note?, entry_id?}.",
   scope: "memory",
   input: { id: z.number().int().positive(), action: z.enum(["start", "stop", "add", "delete"]),
     seconds: z.number().optional(), note: z.string().optional(), entry_id: z.number().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/time"],
       parse: (req) => {
         const b = body(req);
@@ -119,13 +119,13 @@ const taskTimeV6: Capability = {
 const taskChecklistV6: Capability = {
   name: "task_checklist_v6",
   title: "태스크 체크리스트(v6)",
-  description: "체크리스트/항목 CRUD. {action, checklist_id?, item_id?, name?, done?, assignee?}. 웹 전용.",
+  description: "체크리스트/항목 CRUD. {action, checklist_id?, item_id?, name?, done?, assignee?}.",
   scope: "memory",
   input: { id: z.number().int().positive(), action: z.string(), checklist_id: z.number().optional(),
     item_id: z.number().optional(), name: z.string().optional(), done: z.boolean().optional(),
     assignee: z.string().nullable().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/checklists"],
       parse: (req) => {
         const b = body(req);
@@ -166,12 +166,12 @@ const taskChecklistV6: Capability = {
 const taskLinksV6: Capability = {
   name: "task_links_v6",
   title: "태스크 의존성/연결(v6)",
-  description: "태스크 간 blocking/waiting_on/linked 부착·해제(상호적). {to_task, type, remove?}. 웹 전용.",
+  description: "태스크 간 blocking/waiting_on/linked 부착·해제(상호적). {to_task, type, remove?}.",
   scope: "memory",
   input: { id: z.number().int().positive(), to_task: z.number(), type: z.enum(["blocking", "waiting_on", "linked"]),
     remove: z.boolean().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/links"],
       parse: (req) => {
         const b = body(req);
@@ -191,11 +191,11 @@ const taskLinksV6: Capability = {
 const linkTargetsV6: Capability = {
   name: "task_link_targets_v6",
   title: "연결 후보 검색(v6)",
-  description: "프로젝트 내 task/subtask 를 이름으로 검색(의존성 추가 피커). 웹 전용.",
+  description: "프로젝트 내 task/subtask 를 이름으로 검색(의존성 추가 피커).",
   scope: "memory",
   input: { id: z.number().int().positive(), exclude: z.number().optional(), q: z.string().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/link-targets"],
       parse: (req) => ({ id: parseId(req.params?.id),
         exclude: req.query?.exclude ? parseId(req.query.exclude) : 0,
@@ -208,11 +208,11 @@ const linkTargetsV6: Capability = {
 const taskCommentV6: Capability = {
   name: "task_comment_v6",
   title: "태스크 댓글(v6)",
-  description: "태스크에 댓글을 단다(task_comment 테이블). {text}. 작성 후 갱신된 피드 반환. 웹 전용.",
+  description: "태스크에 댓글을 단다(task_comment 테이블). {text}. 작성 후 갱신된 피드 반환.",
   scope: "memory",
   input: { id: z.number().int().positive(), text: z.string().min(1), parent_id: z.number().int().positive().nullable().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/comments"],
       parse: (req) => {
         const b = body(req);
@@ -230,11 +230,11 @@ const taskCommentV6: Capability = {
 const commentReactionV6: Capability = {
   name: "task_comment_reaction_v6",
   title: "댓글 반응(v6)",
-  description: "댓글(task_comment)에 이모지 반응을 토글한다. {emoji}. 웹 전용.",
+  description: "댓글(task_comment)에 이모지 반응을 토글한다. {emoji}.",
   scope: "memory",
   input: { id: z.number().int().positive(), emoji: z.string().min(1) },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/comments/:id/reactions"],
       parse: (req) => {
         const b = body(req);
@@ -250,11 +250,11 @@ const commentReactionV6: Capability = {
 const tagUpdateV6: Capability = {
   name: "task_tag_update_v6",
   title: "태그 수정(v6)",
-  description: "태그 레지스트리의 이름/색을 수정한다(모든 태스크 반영). {name?, color?}. 웹 전용.",
+  description: "태그 레지스트리의 이름/색을 수정한다(모든 태스크 반영). {name?, color?}.",
   scope: "memory",
   input: { id: z.number().int().positive(), name: z.string().optional(), color: z.string().nullable().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tags/:id"],
       parse: (req) => {
         const b = body(req);
@@ -273,10 +273,10 @@ const tagUpdateV6: Capability = {
 const tagDeleteV6: Capability = {
   name: "task_tag_delete_v6",
   title: "태그 삭제(v6)",
-  description: "태그를 레지스트리에서 삭제한다(모든 태스크에서 제거). 웹 전용.",
+  description: "태그를 레지스트리에서 삭제한다(모든 태스크에서 제거).",
   scope: "memory",
   input: { id: z.number().int().positive() },
-  expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/v6/tags/:id/delete"], parse: (req) => ({ id: parseId(req.params?.id) }) }] },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/v6/tags/:id/delete"], parse: (req) => ({ id: parseId(req.params?.id) }) }] },
   handler: async (input: any) => ({ deleted: true, ...(await deleteTag(input.id)) }),
 };
 
@@ -289,7 +289,7 @@ const projectCommentsV6: Capability = {
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/comments"],
       parse: (req) => ({ id: parseId(req.params?.id) }) }],
   },

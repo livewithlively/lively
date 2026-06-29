@@ -20,7 +20,7 @@ function actorOf(user: any, ctx: any): string | null { return ctx?.actor ?? user
 const fieldCreateV6: Capability = {
   name: "task_field_create_v6",
   title: "커스텀 필드 추가(v6)",
-  description: "프로젝트에 클릭업형 커스텀 컬럼(필드)을 형식 지정해 추가한다. {field_type, name, config?}. 웹 전용.",
+  description: "프로젝트에 클릭업형 커스텀 컬럼(필드)을 형식 지정해 추가한다. {field_type, name, config?}.",
   scope: "memory",
   input: {
     projectId: z.number().int().positive(),
@@ -29,7 +29,7 @@ const fieldCreateV6: Capability = {
     config: z.any().optional(),
   },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/fields"],
       parse: (req) => {
         const b = body(req);
@@ -55,11 +55,11 @@ const fieldCreateV6: Capability = {
 const fieldUpdateV6: Capability = {
   name: "task_field_update_v6",
   title: "커스텀 필드 수정(v6)",
-  description: "커스텀 필드의 이름/설정(config)을 수정한다. 타입은 불변. 주어진 키만 변경. 웹 전용.",
+  description: "커스텀 필드의 이름/설정(config)을 수정한다. 타입은 불변. 주어진 키만 변경.",
   scope: "memory",
   input: { id: z.number().int().positive(), name: z.string().max(120).optional(), config: z.any().optional() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/fields/:fieldId"],
       parse: (req) => {
         const b = body(req);
@@ -81,11 +81,11 @@ const fieldUpdateV6: Capability = {
 const fieldDeleteV6: Capability = {
   name: "task_field_delete_v6",
   title: "커스텀 필드 삭제(v6)",
-  description: "커스텀 필드(컬럼)를 삭제한다. 해당 컬럼의 모든 값이 함께 제거된다. 웹 전용.",
+  description: "커스텀 필드(컬럼)를 삭제한다. 해당 컬럼의 모든 값이 함께 제거된다.",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/fields/:fieldId/delete"],
       parse: (req) => ({ id: parseId(req.params?.fieldId) }) }],
   },
@@ -100,11 +100,11 @@ const fieldDeleteV6: Capability = {
 const fieldValueSetV6: Capability = {
   name: "task_field_value_set_v6",
   title: "태스크 필드값 수정(v6)",
-  description: "한 태스크의 커스텀 필드값을 설정/해제한다. {value}(빈값이면 해제). 웹 전용.",
+  description: "한 태스크의 커스텀 필드값을 설정/해제한다. {value}(빈값이면 해제).",
   scope: "memory",
   input: { taskId: z.number().int().positive(), fieldId: z.number().int().positive(), value: z.any() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/fields/:fieldId"],
       parse: (req) => {
         const b = body(req);
@@ -127,11 +127,11 @@ const fieldValueSetV6: Capability = {
 const fieldCatalogV6: Capability = {
   name: "task_field_catalog_v6",
   title: "커스텀 필드 카탈로그(v6)",
-  description: "다른 프로젝트들에 정의된 커스텀 필드 목록(이름·타입·설정). '기존 항목' 추가용. 웹 전용.",
+  description: "다른 프로젝트들에 정의된 커스텀 필드 목록(이름·타입·설정). '기존 항목' 추가용.",
   scope: "memory",
   input: { projectId: z.number().int().positive() },
   expose: {
-    mcp: false,
+    mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/field-catalog"],
       parse: (req) => ({ projectId: parseId(req.params?.id) }) }],
   },
