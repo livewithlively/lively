@@ -19,6 +19,7 @@ import { taskDetailV6Capabilities } from "./task-detail-v6.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { memberTeams, memberCategoryIds } from "../v6/team-store.js";
+import { getMember } from "../org/store.js";
 import { trashCapabilities } from "./trash.js";
 import { cronCapabilities } from "./cron.js";
 import { mappingCapabilities } from "./mapping.js";
@@ -42,11 +43,17 @@ const me: Capability = {
     const memberId = u.userId ?? "";
     // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
     //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
-    const [teams, cats] = memberId
-      ? await Promise.all([memberTeams(memberId).catch(() => []), memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] }))])
-      : [[], { all: [], owner: [] }];
+    const [teams, cats, member] = memberId
+      ? await Promise.all([
+          memberTeams(memberId).catch(() => []),
+          memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] })),
+          getMember(memberId).catch(() => null), // 표시 이름 — 우측 상단 '내 프로필' 라벨(이메일보다 우선)
+        ])
+      : [[], { all: [], owner: [] }, null];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
+      display_name: member?.display_name ?? null,
+      avatar: member?.avatar ?? null, // 우측 상단 '내 프로필' 아바타(없으면 이니셜+색상 폴백)
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
     };
