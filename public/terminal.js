@@ -324,6 +324,13 @@ function setupClipboard() {
       if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' })); } catch (_) { /* noop */ } }
       return false;
     }
+    // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
+    //  못 쓰므로(브라우저 예약 단축키라 preventDefault 불가), 가로채지지 않는 Alt+Backspace 로 동일 기능 제공.
+    //  셸·Claude 입력 모두 backward-kill-word 로 동작(Mac 은 Option+Backspace).
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
+      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: '\x17' })); } catch (_) { /* noop */ } }
+      return false;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
@@ -623,7 +630,7 @@ function openHelp() {
         kb(['Ctrl E'], '줄 맨 끝으로')),
       sec('잘못 친 것 지우기',
         kb(['Ctrl U'], '지금 친 줄을 통째로 지우기'),
-        kb(['Ctrl W'], '커서 앞 단어 하나 지우기'),
+        kb(['Alt ⌫'], '커서 앞 단어 하나 지우기 (Mac은 Option+⌫ · Windows에서 Ctrl+W는 탭이 닫혀요)'),
         kb(['Ctrl K'], '커서 오른쪽을 끝까지 지우기')),
       sec('화면 · 실행',
         kb(['Ctrl L'], '화면 비우기 (위로 스크롤하면 남아 있음)'),
@@ -633,7 +640,7 @@ function openHelp() {
         kb(['드래그'], '글자를 선택하면 놓는 순간 자동 복사'),
         kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그')),
       sec('도구 (오른쪽 위 버튼)',
-        tool('공유 워크스페이스', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
+        tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
       sec('클로드 코드',
@@ -699,7 +706,7 @@ async function boot() {
   titleEl = el('span', { class: 'title', text: SESSION_LABEL || '터미널', title: SESSION_ID });
   if (SESSION_LABEL) document.title = SESSION_LABEL + ' · Lively';
   const toolbar = el('div', { class: 'toolbar' },
-    el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
+    el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
