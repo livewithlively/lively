@@ -1466,9 +1466,7 @@ async function renderProjectV2Detail(view, idStr) {
   // 삭제·팀원 수정은 '프로젝트 세부 설정' 팝업으로 이관 — 헤더 우측 액션은 설정 버튼만(권한 경계는 백엔드 403).
   const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
     onclick: () => openProjectSettings(id, p, reload, meId, V6_BASE) });
-  // '내 컴퓨터에서 작업' — 담당자가 본인 PC에서 이 프로젝트를 시작하는 단계별 가이드를 띄운다(웹은 실행/스트리밍 안 함).
-  const localWorkBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '💻 내 컴퓨터에서 작업',
-    onclick: () => openLocalWorkModal(id, p) });
+  // '내 컴퓨터에서 작업'은 헤더에서 빼고 터미널 세션의 '＋ 새 세션' 드롭다운으로 이관(내 컴퓨터 / 중앙 컴퓨터 선택) — projectTerminalSection.
   // (코멘트는 헤더 버튼이 아니라 본문↔태스크 사이의 '코멘트' 섹션이 진입점 — projectCommentsSection. 클릭=드로어.)
   // 제목줄 — 이름(클릭해 수정)+상태칩(좌), 세부설정(우).
   const titleEl = el('h1', { class: 'proj-detail-title proj-detail-title-edit', title: '클릭해 이름 수정', text: p.name });
@@ -1491,7 +1489,7 @@ async function renderProjectV2Detail(view, idStr) {
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl),
-    el('div', { class: 'proj-detail-actions' }, localWorkBtn, settingsBtn)));
+    el('div', { class: 'proj-detail-actions' }, settingsBtn)));
   // (본문은 헤더에서 빼고 태스크 위 '본문' 섹션으로 분리 — projectBodySection. 다른 섹션과 동일 위계.)
   // 팀원 칩 행(proj-team-row) 제거 — 아래 메타 패널의 '팀원' 필드와 중복이라 한 곳(메타)만 남긴다.
   // 클릭업식 메타데이터 패널 — 이름 바로 아래(태스크 박스 위). 상태·팀원·기간·우선순위·시간추적·태그.
@@ -1506,7 +1504,7 @@ async function renderProjectV2Detail(view, idStr) {
     projectCommentsSection(id, members),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
-    projectTerminalSection(id, members, meId, V6_BASE, p.name),
+    projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
     projectTimelineSection(id, members, V6_BASE));
   applyReveal(Array.from(view.children).slice(1));
 }
@@ -4847,11 +4845,34 @@ function avatarColor(seed) {
 }
 
 // ── 상세 ② 터미널 세션 — 팀원 프로필(아바타) 그리드 → 클릭 시 그 사람 세션 펼침(페이지 내). 본인은 상태메시지 공유. ──
-function projectTerminalSection(id, members, meId, base, projectName) {
+function projectTerminalSection(id, members, meId, base, projectName, project?) {
   const B = base || '/api/ui/projects/';
+  const projectRepos = (project && project.repos) || [];
   const card = el('div', { class: 'card proj-term-card', style: 'margin-bottom:18px' });
   const body = el('div', {});
-  const newBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 세션', onclick: () => openProjectSessionForm(id, load, B, projectName) });
+  // '＋ 새 세션' — 곧장 폼이 아니라 드롭다운으로 '어디서 작업할지' 먼저 고른다.
+  //  · 내 컴퓨터에서 작업 — 내 PC 터미널 실행 명령을 안내(openLocalWorkModal). 웹은 원격 PC를 스트리밍하지 않음.
+  //  · 중앙 컴퓨터에서 작업 — 중앙(박스)에서 공동 세션을 바로 생성(openProjectSessionForm). 관련 레포가 기본값.
+  const newBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 세션' });
+  newBtn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
+    const close = pjvPopover(newBtn, menu);
+    const mkItem = (icon, label, desc, fn) => {
+      const item = el('button', { class: 'pjv-menu-item', type: 'button' },
+        el('span', { class: 'pjv-sess-ico', text: icon }),
+        el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' },
+          el('span', { text: label }),
+          desc ? el('span', { class: 'caption', text: desc }) : null));
+      item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
+      return item;
+    };
+    menu.append(
+      mkItem('💻', '내 컴퓨터에서 작업', '내 PC 터미널에서 실행 (명령 안내)',
+        () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos })),
+      mkItem('🖥', '중앙 컴퓨터에서 작업', '중앙(박스)에서 공동 세션 생성',
+        () => openProjectSessionForm(id, load, B, projectName, projectRepos)));
+  };
   card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
   card.append(body);
   let sessions: any[] = [];
