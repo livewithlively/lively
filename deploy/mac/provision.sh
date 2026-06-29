@@ -4,6 +4,14 @@
 #    기존 박스에서 실행하면 install.sh 의 :8080 감지가 막아준다(FORCE=1 로만 강행).
 
 os_install_deps() {
+  if [ "${OFFLINE:-0}" = "1" ]; then
+    log "OFFLINE — 의존성 설치 생략, 존재 확인만"
+    for cmd in docker node tmux; do command -v "$cmd" >/dev/null 2>&1 || die "OFFLINE: '$cmd' 없음 — 사전 설치 필요."; done
+    docker info >/dev/null 2>&1 || die "OFFLINE: docker 데몬 미동작."
+    command -v claude >/dev/null 2>&1 || warn "OFFLINE: claude 없음(중앙박스 세션용) — 사전 설치 권장."
+    ok "의존성 확인(OFFLINE)"
+    return
+  fi
   command -v brew >/dev/null 2>&1 || die "Homebrew 필요 — https://brew.sh"
   command -v tmux >/dev/null 2>&1 || brew install tmux
   command -v node >/dev/null 2>&1 || brew install node@22

@@ -25,6 +25,9 @@ source "$DIR/$OS/provision.sh"    # os_install_deps() + os_install_service() 제
 
 # 기존 설치 보호(비파괴) — 이미 :PORT 에 게이트웨이가 떠 있으면 중단(개발 박스 등).
 PORT="${PORT:-8080}"
+# OFFLINE=1 (에어갭): 네트워크 의존 단계(node/claude 설치·npm ci)를 생략하고 번들 동봉 자산(node_modules·dist)을 쓴다.
+#  코드 획득은 bootstrap.sh 가 LIVELY_BUNDLE 로 처리 → 여기선 '설치'만 오프라인 모드로 분기. 기본 0(온라인).
+export OFFLINE="${OFFLINE:-0}"
 if [ "${FORCE:-0}" != "1" ] && curl -fsS --max-time 2 "http://localhost:${PORT}/healthz" >/dev/null 2>&1; then
   die "이미 :${PORT} 에 게이트웨이가 떠 있습니다 — 기존 설치 보호. 새 호스트에서 실행하거나 FORCE=1 로 강행하세요."
 fi
@@ -43,8 +46,14 @@ main() {
 
   phase "4/7 앱 빌드 (npm ci && npm run build)"
   cd "$APP_DIR"
-  npm ci
-  npm run build
+  if [ "$OFFLINE" = "1" ]; then
+    [ -d node_modules ] || die "OFFLINE 인데 node_modules 가 없습니다 — 오프라인 번들에 동봉돼야 합니다."
+    ok "OFFLINE — npm ci 생략(번들 node_modules 사용)"
+    [ -d dist ] || npm run build   # dist 가 번들에 있으면 빌드도 생략
+  else
+    npm ci
+    npm run build
+  fi
 
   # ⚠ 순서: 스키마는 게이트웨이가 '기동 시 listen 성공 후' 자가 마이그레이션한다 → 부트스트랩(테이블 필요)은
   #   반드시 서비스 기동·헬스체크 '뒤'에. (먼저 돌리면 org_member 테이블이 아직 없어 실패.)

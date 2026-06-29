@@ -2,6 +2,14 @@
 # Linux(Ubuntu/Debian) provisioning — systemd 네이티브 게이트웨이. install.sh 가 source 한다.
 
 os_install_deps() {
+  if [ "${OFFLINE:-0}" = "1" ]; then
+    log "OFFLINE — 의존성 설치 생략, 존재 확인만(에어갭 호스트에 docker·node·tmux 사전 설치 가정)"
+    for cmd in docker node tmux; do command -v "$cmd" >/dev/null 2>&1 || die "OFFLINE: '$cmd' 가 없습니다 — 에어갭 호스트에 사전 설치 필요."; done
+    command -v claude >/dev/null 2>&1 || warn "OFFLINE: claude 없음(중앙박스 세션용) — 사전 설치 권장."
+    sudo usermod -aG docker "$(id -un)" 2>/dev/null || true
+    ok "의존성 확인(OFFLINE)"
+    return
+  fi
   export DEBIAN_FRONTEND=noninteractive
   log "apt 패키지(git·tmux·build deps·python3)…"
   sudo apt-get update -y

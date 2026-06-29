@@ -27,6 +27,36 @@
 > full-docker(게이트웨이까지 컨테이너 = Option 1)는 `docker compose --profile gateway up` 로 미리보기 가능하지만,
 > 중앙박스를 쓰려면 러너 분리가 선행돼야 한다(추후).
 
+## 한 줄 설치 (bootstrap.sh) — "코드 없이"
+
+`bootstrap.sh` 가 **코드 획득 → install.sh** 를 한 번에 한다. 고객은 소스·git clone·빌드 없이 한 줄:
+
+```bash
+curl -fsSL <bootstrap-url> | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com sh
+```
+
+### 구조 — 코드 획득(교체 가능) ↔ 설치(전달 방식 무관)
+
+```
+ bootstrap.sh ─ 코드 획득 ──────────────────┐       install.sh ─ 설치(코드가 어떻게 왔는지 모름)
+   온라인 : git clone | LIVELY_CODE_URL(tgz) │  →    1 deps  2 .env  3 store  4 build
+   오프라인: LIVELY_BUNDLE(로컬 tgz)          │        5 service  6 bootstrap  7 kit
+   → APP_DIR 에 풀고 install.sh 실행 ─────────┘       (OFFLINE=1 이면 네트워크 단계 스킵)
+```
+
+**설치 로직(install.sh)은 전달 방식과 무관** → 코드 획득만 바꾸면 온라인↔오프라인 전환(install.sh 무수정).
+
+| | 온라인 (기본, 지금) | 오프라인 (에어갭 — 구조만, 번들 CI 는 추후) |
+|---|---|---|
+| 코드 획득 | `git clone` / `LIVELY_CODE_URL` tgz | `LIVELY_BUNDLE` 로컬 tgz |
+| node·deps | install.sh 가 설치 + `npm ci`(node-pty 자동) | 번들에 node_modules 동봉 → `OFFLINE=1` 이 `npm ci` 스킵 |
+| 인터넷 | 필요(npm·nodejs·github) | 불필요 |
+| 아티팩트 | 작음(코드만) | 큼(node_modules·dist·런타임 동봉) |
+
+- **지금 = 온라인.** 오프라인은 **플래그(`LIVELY_BUNDLE` + `OFFLINE=1`)로 이미 분기**돼 있다 — 남은 건 *살찐 번들(node_modules 동봉)을 굽는 CI* 뿐(에어갭 고객 생기면 추가).
+- **private 레포** 다운로드: `LIVELY_CODE_TOKEN`(Bearer) 추가. 공개(OSS) 레포면 토큰 불요(`git clone` 기본).
+- 코드만 받고 검증: `LIVELY_FETCH_ONLY=1`.
+
 ## 최초 설치 (새 박스 — install.sh)
 
 > 전체 흐름(EC2): `lively-infra` 에서 `terraform apply` → 코드 rsync → 아래 `install.sh` → `claude` 로그인.
@@ -99,11 +129,14 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
 
 ```
 deploy/
-  install.sh          # 크로스플랫폼 진입점 (OS 감지 → <os>/provision.sh)
+  bootstrap.sh        # 한 줄 설치 진입점(curl|sh): 코드 획득(온라인/오프라인) → install.sh
+  install.sh          # 설치 엔진 (OS 감지 → <os>/provision.sh, 7단계). 전달 방식 무관.
+  update.sh           # 기존 박스 업데이트(빌드→재시작→healthz, --kit)
   lib/common.sh       # 공유: 로그·OS감지·시크릿·.env 비파괴 생성·store_up·healthz
   env.example         # .env 문서(시크릿 없음)
   initdb/01-init.sh   # pgvector 최초 init: domainmap DB 생성
   bootstrap-admin.mjs # 첫 관리자(세션 로그인) 시드
+  bootstrap-baseline.mjs # 익명 조직 baseline(페르소나·규칙) 시드 — 빈 경우만
   install-kit.sh      # 중앙박스 키트 — 호스트 claude 에 lively(MCP+훅+컨텍스트) 설치
   linux/              # ── Linux 지원 ──
     provision.sh                          # apt·docker·node·claude / systemd 설치
