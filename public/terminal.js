@@ -35,7 +35,7 @@ function prefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 1 }, p);
+  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3 }, p);
 }
 function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 function applyChrome(themeKey) {
@@ -191,6 +191,18 @@ function forceRedraw() {
     if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } } // 깨끗이 재캡처
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
+}
+// '화면 복구' 버튼(소프트 새로고침). forceRedraw(=fit+재캡처)는 '내용만' 다시 그려 깊은 클라 상태
+//  (예: 재접속 시 alt-screen 누락, 렌더러 꼬임)는 못 고쳤다(페이지 새로고침으로만 풀리던 이유). 그래서
+//  버튼은 ws 를 끊고 '재연결'한다 → 새 파서로 onopen 의 fit·크기재전송·백필(alt-screen 보정 포함)·재렌더를
+//  다시 수행해 페이지 새로고침에 준하는 복구를 한다(이미 검증된 자동재연결 경로 재사용, tmux 세션은 영속).
+function softReconnect() {
+  try { if (fit && term) fit.fit(); } catch (_) { /* noop */ }
+  didBackfill = false;           // 재연결 시 현재 화면 백필을 다시 받게
+  reconnectDelay = 250;          // 즉시성 — onclose 자동재연결이 곧바로 붙도록 짧게
+  if (ws && ws.readyState <= 1) { try { ws.close(); } catch (_) { /* noop */ } } // onclose → scheduleReconnect → connectNow
+  else { connectNow(); }         // 이미 끊겨 있으면 바로 연결
+  try { statusEl.textContent = '복구 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
 }
 // 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에
 //  셀 크기를 재 cols/rows 가 어긋날 수 있다. 그래서 '폰트 준비(document.fonts.ready) + 소켓 open'
@@ -527,6 +539,35 @@ async function renderTextPreview(body, p, asMd) {
   } catch (e) { body.replaceChildren(el('div', { class: 'gate-msg', text: '미리보기 실패: ' + e.message })); }
 }
 
+// ── 복사 ──
+// Claude Code 등 앱이 마우스모드를 켜면 드래그가 앱으로 가서 터미널 텍스트 선택→복사가 막힌다(Shift+드래그
+//  우회도 환경 따라 불안정). 그래서 '현재 화면 텍스트'를 DOM textarea 오버레이로 띄운다 — 여기선 일반
+//  브라우저 선택/복사가 그대로 동작(앱 마우스모드 무관, http 비보안 컨텍스트에서도 OK).
+function getTerminalText() {
+  try {
+    const buf = term.buffer.active;
+    const out = [];
+    for (let i = 0; i < buf.length; i++) { const ln = buf.getLine(i); out.push(ln ? ln.translateToString(true) : ''); }
+    return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '');
+  } catch (_) { return ''; }
+}
+function openCopyView() {
+  const ta = el('textarea', { readonly: '', spellcheck: 'false',
+    style: 'width:100%;height:52vh;resize:vertical;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.5;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--fg);white-space:pre;overflow:auto' });
+  ta.value = getTerminalText();
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
+    el('div', { class: 'pop', style: 'width:min(760px,94vw)' },
+      el('h3', { text: '복사' }),
+      el('div', { class: 'caption', style: 'margin:-4px 0 10px', text: '드래그로 원하는 부분을 선택해 Ctrl/Cmd+C, 또는 [전체 복사]. (지금 보이는 화면 기준 — 위 내용이 필요하면 먼저 스크롤해서 펼친 뒤 여세요)' }),
+      ta,
+      el('div', { style: 'margin-top:10px;display:flex;gap:8px' },
+        el('button', { class: 'tbtn', text: '전체 복사', onclick: () => copyText(ta.value) }),
+        el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() }))));
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+  setTimeout(() => { try { ta.focus(); ta.select(); } catch (_) { /* noop */ } }, 30);
+}
+
 // ── 보기 설정 ──
 function openSettings() {
   const p = prefs();
@@ -534,7 +575,7 @@ function openSettings() {
   const sizeI = el('input', { type: 'number', min: '9', max: '30', value: String(p.fontSize) });
   const themeSel = el('select', {}, ...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, selected: k === p.theme ? '' : null }, v.name)));
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
-  const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 1) });
+  const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
   const apply = () => {
     const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)) };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
@@ -591,8 +632,9 @@ function openHelp() {
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
       sec('도구 (오른쪽 위 버튼)',
         tool('공유 워크스페이스', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
-        tool('화면 복구', '글자·줄이 깨질 때 다시 그림'),
-        tool('환경 설정', '글꼴·크기·테마·커서 모양')),
+        tool('복사', '화면 텍스트를 선택해 복사 (Claude 등 마우스 쓰는 앱에서도 됨)'),
+        tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
+        tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
       sec('클로드 코드',
         kb(['Esc'], '에이전트가 하던 작업 멈추기'),
         kb(['/'], '쓸 수 있는 명령 목록'))));
@@ -634,7 +676,7 @@ async function loadSessionLabel() {
 
 async function boot() {
   const p = prefs();
-  scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 1));
+  scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
   applyChrome(p.theme);
   if (!SESSION_ID) { gate('세션이 지정되지 않았습니다. 세션 목록에서 "열기"로 진입하세요.'); return; }
   if (!window.Terminal || !window.FitAddon) { gate('터미널 라이브러리(xterm) 로드 실패.'); return; }
@@ -659,7 +701,8 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 현재 창에 맞춰 복구', onclick: forceRedraw }),
+    el('button', { class: 'tbtn', text: '📋 복사', title: '화면 텍스트를 선택해 복사(앱 마우스모드와 무관)', onclick: openCopyView }),
+    el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
   const host = el('div', { id: 'term-host' });
