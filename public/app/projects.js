@@ -96,9 +96,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 프로젝트 표시' }, pjvCheckCircle(), el('span', { text: 'Closed' }));
     const newListBtn = el('button', { class: 'pjv-newlist-btn', type: 'button', title: '새 리스트 만들기' }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }));
     // 그룹 기준 토글 — 리스트(기본) ⇄ 상태(원래 보드 복구, #280). 상태 모드 = 할 일/진행 중/완료 그룹.
+    const nestedSegBtn = el('button', { class: 'pjv-groupseg-btn', type: 'button', text: '리스트›상태', title: '리스트 안에서 상태(할 일/진행 중/완료)로 다시 묶기' });
     const listSegBtn = el('button', { class: 'pjv-groupseg-btn', type: 'button', text: '리스트' });
     const statusSegBtn = el('button', { class: 'pjv-groupseg-btn', type: 'button', text: '상태' });
-    const groupSeg = el('div', { class: 'pjv-groupseg', 'aria-label': '그룹 기준' }, listSegBtn, statusSegBtn);
+    const groupSeg = el('div', { class: 'pjv-groupseg', 'aria-label': '그룹 기준' }, nestedSegBtn, listSegBtn, statusSegBtn);
     const body = el('div', { class: 'pjv-tasks-body' });
     const syncToggles = () => {
         subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
@@ -107,9 +108,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             lbl.textContent = PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
         closedBtn.classList.toggle('active', pjvProjClosedView.done);
         mineBtn.classList.toggle('active', pjvBoardMineOnly.on);
+        nestedSegBtn.classList.toggle('active', pjvBoardGroupBy.mode === 'nested');
         listSegBtn.classList.toggle('active', pjvBoardGroupBy.mode === 'list');
         statusSegBtn.classList.toggle('active', pjvBoardGroupBy.mode === 'status');
-        newListBtn.style.display = pjvBoardGroupBy.mode === 'list' ? '' : 'none'; // '새 리스트'는 리스트 모드에서만
+        newListBtn.style.display = pjvBoardGroupBy.mode === 'status' ? 'none' : ''; // '새 리스트'는 리스트/2단계 모드에서만
     };
     // 상태 그룹(원래 보드) — 할 일/진행 중/완료. 컬럼 헤더 한 번 + pjvProjGroup 재사용('내 할당만'·Closed 반영).
     const renderStatus = () => {
@@ -134,13 +136,19 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         if (!groups.length) {
             body.append(el('div', { class: 'pjv-proj-empty', text: pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '프로젝트가 없습니다. ‘＋ 새 리스트’로 시작해 보세요.' }));
         }
+        const nested = pjvBoardGroupBy.mode === 'nested';
         for (const g of groups)
-            body.append(pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx));
+            body.append(pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nested));
     };
     subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
     mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
     closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
     newListBtn.onclick = (e) => { e.stopPropagation(); openListForm(reload); };
+    nestedSegBtn.onclick = (e) => { e.stopPropagation(); if (pjvBoardGroupBy.mode !== 'nested') {
+        pjvBoardGroupBy.mode = 'nested';
+        syncToggles();
+        render();
+    } };
     listSegBtn.onclick = (e) => { e.stopPropagation(); if (pjvBoardGroupBy.mode !== 'list') {
         pjvBoardGroupBy.mode = 'list';
         syncToggles();
@@ -202,27 +210,55 @@ function pjvBuildListGroups(projects, lists, mineIds, meId) {
     return groups;
 }
 // 리스트 한 그룹(접이식) — 헤더(캐럿·색점·이름·개수·내리스트칩 | 멤버 페이스파일·⋯) + 프로젝트 행들 + 인라인 추가행.
-function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx) {
+function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nested) {
     const list = g.list; // null = 미분류('기타')
     const isUn = !list;
     const name = isUn ? '기타 (미분류)' : list.name;
     const color = isUn ? 'var(--line, #2a2a33)' : (list.color || avatarColor('list' + list.id));
     const members = isUn ? [] : (list.members || []);
-    // 표시 프로젝트 — 완료는 Closed 토글일 때만. 정렬: 진행 중→할 일→완료, 같은 상태면 최신순.
-    const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
-    const shown = g.projects
-        .filter((p) => p.status !== 'done' || pjvProjClosedView.done)
-        .slice()
-        .sort((a, b) => rank(a) - rank(b) || (Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0)));
+    const listIdForAdd = isUn ? null : list.id;
+    const emptyText = pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.';
+    // 헤더 개수 — 완료는 Closed 일 때만 집계(보이는 것과 일치).
     const visibleCount = pjvProjClosedView.done ? g.projects.length : g.projects.filter((p) => p.status !== 'done').length;
     const bodyEl = el('div', { class: 'pjv-tgroup-body' });
-    for (const p of shown)
-        bodyEl.append(pjvProjRow(p, reload, null, canDelete, fields, anchorId, taskCtx));
-    if (!shown.length)
-        bodyEl.append(el('div', { class: 'pjv-proj-empty', text: pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
-    // 인라인 추가행 — 이 리스트(미분류면 list_id=null)에 바로 생성. '내 할당만' 읽기 모드에선 숨김.
-    if (!pjvBoardMineOnly.on)
-        bodyEl.append(pjvProjAddRow('in_progress', reload, bodyEl, null, fields, null, canDelete, anchorId, meId, taskCtx, isUn ? null : list.id));
+    if (nested) {
+        // 리스트 › 상태 — 이 리스트의 프로젝트를 상태 하위그룹(진행 중/할 일/완료)으로 다시 묶는다. 비어있는 상태 그룹은 생략.
+        //  추가행은 상태 그룹마다 두지 않고(잡해짐) 리스트 하단에 하나만 — 이 리스트에 바로 생성.
+        const inprog = g.projects.filter((p) => p.status !== 'done' && p.status !== 'todo');
+        const todo = g.projects.filter((p) => p.status === 'todo');
+        const done = g.projects.filter((p) => p.status === 'done');
+        let any = false;
+        if (inprog.length) {
+            bodyEl.append(pjvProjGroup('진행 중', 'in_progress', inprog, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, true));
+            any = true;
+        }
+        if (todo.length) {
+            bodyEl.append(pjvProjGroup('할 일', 'todo', todo, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, true));
+            any = true;
+        }
+        if (pjvProjClosedView.done && done.length) {
+            bodyEl.append(pjvProjGroup('완료', 'done', done, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, true));
+            any = true;
+        }
+        if (!any)
+            bodyEl.append(el('div', { class: 'pjv-proj-empty', text: emptyText }));
+        if (!pjvBoardMineOnly.on)
+            bodyEl.append(pjvProjAddRow('in_progress', reload, bodyEl, null, fields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
+    }
+    else {
+        // 평면 — 완료는 Closed 토글일 때만. 정렬: 진행 중→할 일→완료, 같은 상태면 최신순.
+        const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
+        const shown = g.projects
+            .filter((p) => p.status !== 'done' || pjvProjClosedView.done)
+            .slice()
+            .sort((a, b) => rank(a) - rank(b) || (Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0)));
+        for (const p of shown)
+            bodyEl.append(pjvProjRow(p, reload, null, canDelete, fields, anchorId, taskCtx));
+        if (!shown.length)
+            bodyEl.append(el('div', { class: 'pjv-proj-empty', text: emptyText }));
+        if (!pjvBoardMineOnly.on)
+            bodyEl.append(pjvProjAddRow('in_progress', reload, bodyEl, null, fields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
+    }
     let open = !!g.open;
     const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: open ? '▾' : '▸', 'aria-expanded': String(open) });
     bodyEl.hidden = !open;
@@ -1222,7 +1258,7 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     return wrap;
 }
 // 상태 그룹(진행 중/완료) — 헤더(점·라벨·개수·캐럿[, withCols 면 컬럼 라벨]) + 행들. 빈 그룹은 안내.
-function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx, sepTasks) {
+function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx, sepTasks, noAdd) {
     fields = fields || [];
     sepTasks = sepTasks || [];
     const meta = pjvProjStatusMeta(statusKey);
@@ -1238,7 +1274,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
     for (const s of sepTasks)
         body.append(pjvProjTaskRow(s.projId, s.task, s.members, reload, 1, fields));
     // 클릭업식 인라인 추가행 — 각 그룹(완료 제외) 맨 아래. 빈 그룹에선 이 행이 '시작하기' CTA. 선택(일괄삭제) 모드에선 숨김.
-    if (!select && statusKey !== 'done')
+    if (!select && statusKey !== 'done' && !noAdd)
         body.append(pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx));
     let gopen = true;
     const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
@@ -3589,8 +3625,8 @@ const pjvClosedView = { tasks: false, subtasks: false };
 const pjvProjClosedView = { done: false };
 // '내 할당만' 토글(보드) — 내가 만든·팀원인 프로젝트만. 세션 유지(reload 무관). 기본 OFF.
 const pjvBoardMineOnly = { on: false };
-// 보드 그룹 기준 — 'list'(리스트별, 기본) | 'status'(할 일/진행 중/완료, 원래 보드 복구). 세션 유지.
-const pjvBoardGroupBy = { mode: 'list' };
+// 보드 그룹 기준 — 'nested'(리스트›상태 2단계, 기본) | 'list'(리스트별) | 'status'(할 일/진행 중/완료). 세션 유지.
+const pjvBoardGroupBy = { mode: 'nested' };
 // 리스트 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 리스트=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map();
 // 프로젝트 보드의 '하위 태스크' 버튼 모드 — 각 프로젝트를 펼쳐 그 안의 태스크를 보여주는 방식.

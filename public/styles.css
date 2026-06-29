@@ -2713,3 +2713,6 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-groupseg-btn + .pjv-groupseg-btn { border-left: 1px solid var(--line); }
 .pjv-groupseg-btn:hover { background: var(--bg-tint); color: var(--ink-sub); }
 .pjv-groupseg-btn.active { background: var(--blue); color: #fff; }
+/* 2단계(리스트›상태) — 리스트 안의 상태 하위그룹: 헤더만 살짝 들여쓰고 라벨은 작게(행 그리드는 정렬 유지) */
+.pjv-list-group .pjv-tgroup-body .pjv-tgroup > .pjv-tgroup-head { padding-left: 26px; }
+.pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
