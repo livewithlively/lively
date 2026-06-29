@@ -383,6 +383,48 @@ export const deliveryCapabilities: Capability[] = [
       return { token, scopes, userId };
     }),
 
+  // ── 본인 프로필 셀프 편집(우측 상단 '내 프로필') — 인증된 구성원이 자기 표시이름·개인레이어를 직접 수정. admin 불요. ──
+  //  id 는 principal 에서 강제(타인 편집 불가). 표시이름·개인레이어(body_md)만 — 권한·이메일·상태·신원·kind 는 admin 전용(불변).
+  restRead("me_profile_get", "내 프로필 조회",
+    "현재 로그인한 구성원의 본인 프로필(표시이름·이메일·개인레이어)을 반환한다 — 우측 상단 '내 프로필' 모달용.",
+    [{ method: "GET", paths: ["/api/ui/me/profile"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const m = await getMember(userId);
+      // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
+      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null };
+    }),
+
+  restRead("me_profile_update", "내 프로필 수정",
+    "현재 로그인한 구성원이 본인 표시이름·개인레이어(body_md)를 직접 수정한다. id 는 principal 강제, 권한·이메일·상태·신원·kind 는 불변(admin 전용).",
+    [{ method: "POST", paths: ["/api/ui/me/profile"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      // 셀프 편집은 기존 구성원행만 수정 — 없으면 생성하지 않는다(기본권한 멤버 자가생성 차단).
+      const existing = await getMember(userId);
+      if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
+      // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
+      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
+      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
+      // 아바타 — data:image data URL(클라이언트 128px 리사이즈). undefined=보존, null/''=이니셜로 되돌림.
+      let avatar: string | null | undefined;
+      if (input.avatar !== undefined) {
+        const raw = input.avatar === null ? "" : str(input.avatar, "avatar", 300000).trim();
+        if (raw && !/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(raw)) {
+          throw new HttpError(400, "이미지 형식이 올바르지 않습니다 (png·jpg·webp·gif)");
+        }
+        if (raw.length > 256 * 1024) throw new HttpError(400, "이미지가 너무 큽니다 — 더 작게 잘라 올려주세요");
+        avatar = raw || null;
+      }
+      // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
+      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar } };
+    }),
+
   restOnly("org_token_revoke", "토큰 회수",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],

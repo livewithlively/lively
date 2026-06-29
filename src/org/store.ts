@@ -39,6 +39,7 @@ export interface OrgMember {
   email: string | null;
   identities: MemberIdentity[];
   body_md: string;
+  avatar: string | null; // 프로필 이미지 data URL(셀프 업로드). null=이니셜+색상 자동생성.
   state: "active" | "inactive";
   scopes: string[]; // 권한(발급 토큰의 scope)
   sort: number;
@@ -176,6 +177,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     email: (row.email as string) ?? null,
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
+    avatar: (row.avatar as string) ?? null,
     state: row.state as OrgMember["state"],
     scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
     sort: (row.sort as number) ?? 0,
@@ -185,7 +187,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, email, identities, body_md, state, scopes, sort, version, updated_at, updated_by";
+const MEMBER_COLS = "id, kind, display_name, email, identities, body_md, avatar, state, scopes, sort, version, updated_at, updated_by";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -211,6 +213,7 @@ export interface MemberInput {
   email?: string | null;
   identities?: MemberIdentity[];
   body_md?: string;
+  avatar?: string | null; // 프로필 이미지 data URL. undefined=보존, null/''=이니셜로 되돌림.
   state?: "active" | "inactive";
   scopes?: string[];
   sort?: number;
@@ -221,15 +224,17 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   const kind = m.kind ?? before?.kind ?? "human";
   const identities = m.identities ?? before?.identities ?? [];
   const scopes = m.scopes ?? before?.scopes ?? ["items", "context", "memory"];
+  // avatar: undefined=보존, 그 외(null/''/문자열)=그대로 적용(빈값이면 null 로 정규화 → 이니셜 폴백).
+  const avatar = m.avatar === undefined ? (before?.avatar ?? null) : (m.avatar || null);
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, state, scopes, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9,1,now(),$10)
+    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, avatar, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,1,now(),$11)
      ON CONFLICT (id) DO UPDATE SET
        kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, email=EXCLUDED.email,
-       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
+       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.id, kind, m.display_name ?? before?.display_name ?? null, m.email ?? before?.email ?? null,
-     JSON.stringify(identities), m.body_md ?? before?.body_md ?? "",
+     JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );
   const after = await getMember(m.id);

@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -2125,6 +2125,196 @@ function copyButton(getText, label) {
   });
   return b;
 }
+// 우측 상단 '내 프로필' — 인증된 구성원이 자기 표시 이름·개인 레이어를 직접 편집(셀프 서비스, 선택형).
+//  관리자 경로(관리▸구성원) 없이 본인이 채운다. 권한·이메일·상태·계정연결·내부 아이디는 admin 전용(여기 없음).
+//  개인 레이어는 자유 텍스트(body_md)로 저장되지만 편집 UI 는 '고르기' — 항목별 선택지를 제시하고 선택을
+//  canonical markdown 으로 직렬화한다. 다시 열면 그 markdown 을 파싱해 선택을 복원한다(parseMyProfile).
+//  데이터: GET /api/ui/me/profile 1회 → 저장 POST /api/ui/me/profile(id 는 서버가 principal 로 강제 — 타인 편집 불가).
+const PROF_DEV = [
+  { v: '비개발', label: '비개발', hint: '코드는 직접 안 봐요 — 기술용어는 풀어서, 결론·근거 위주로' },
+  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있어요 — 핵심 코드는 보여주되 설명을 곁들여' },
+  { v: '능숙', label: '능숙', hint: '직접 짜고 방향도 제시해요 — 코드 중심으로 적당히 깊게' },
+  { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
+];
+const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '발랄·위트 있게'];
+const PROF_LEN = [
+  { v: '짧게', hint: '핵심만 — 군더더기 없이' },
+  { v: '보통', hint: '적당한 설명과 함께' },
+  { v: '자세히', hint: '배경·근거·대안까지 충분히' },
+];
+
+// 단일 선택 chip 그룹 — selected.v 를 토글(다시 누르면 해제). getVal/getLabel 로 옵션 모양에 무관.
+function profChips(opts, selected, getLabel, getVal, onPick?) {
+  const wrap = el('div', { class: 'prof-chips' });
+  const chips: any[] = [];
+  opts.forEach((o) => {
+    const val = getVal(o);
+    const chip = el('button', { type: 'button', class: 'prof-chip' + (val === selected.v ? ' on' : ''), text: getLabel(o) });
+    chip.addEventListener('click', () => {
+      selected.v = (selected.v === val) ? '' : val;
+      chips.forEach((c) => c.el.classList.toggle('on', c.val === selected.v));
+      if (onPick) onPick(selected.v);
+    });
+    chips.push({ el: chip, val });
+    wrap.append(chip);
+  });
+  return wrap;
+}
+
+// canonical body_md → 선택값 복원. 기본 견본(채워넣기/local.md)은 빈값으로(새로 시작).
+function parseMyProfile(md) {
+  const r = { role: '', dev: '', address: '', tone: '', len: '', area: '', tools: '', memo: '' };
+  if (!md || /채워넣기|members\/local\.md/.test(md)) return r;
+  const parts = md.split(/^##\s*추가 메모\s*$/m);
+  const head = parts[0] || '';
+  if (parts[1]) r.memo = parts[1].trim();
+  const grab = (re) => { const m = head.match(re); return m ? m[1].trim() : ''; };
+  r.role = grab(/^[-*\s]*\**\s*역할\s*\**\s*[:：]\s*(.+)$/m);
+  const dev = grab(/^[-*\s]*\**\s*개발[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  r.dev = (PROF_DEV.find((d) => dev.startsWith(d.label)) || ({} as any)).v || '';
+  r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
+  r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
+  const len = grab(/^[-*\s]*\**\s*응답\s*길이\s*\**\s*[:：]\s*(.+)$/m);
+  r.len = (PROF_LEN.find((l) => len.startsWith(l.v)) || ({} as any)).v || '';
+  r.area = grab(/^[-*\s]*\**\s*담당[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  r.tools = grab(/^[-*\s]*\**\s*자주[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  return r;
+}
+
+// 업로드 이미지 → 128px 정사각(center-crop) JPEG data URL. 작게 만들어 org_member.avatar 에 인라인 저장.
+function fileToAvatarDataUrl(file): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) { reject(new Error('이미지 파일만 올릴 수 있어요')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('파일을 읽지 못했습니다'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('이미지를 처리하지 못했습니다')); return; }
+        const s = Math.min(img.width, img.height); // 짧은 변 기준 정사각 center-crop
+        ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => reject(new Error('이미지를 불러오지 못했습니다'));
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function openMyProfile() {
+  let data;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
+  const p = parseMyProfile(data.body_md || '');
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const roleIn = el('input', { type: 'text', value: p.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
+  const addressIn = el('input', { type: 'text', value: p.address, placeholder: '예: 원준님 / 대표님 / 원준' });
+  const areaIn = el('input', { type: 'text', value: p.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
+  const toolsIn = el('input', { type: 'text', value: p.tools, placeholder: '예: context-ontology, Cursor, Figma' });
+  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+  memoTa.value = p.memo;
+
+  // ── 아바타 — 업로드 이미지(없으면 이니셜+색상 자동). undefined=변경없음, null=기본으로, string=새 이미지. ──
+  let avatarState: string | null | undefined;
+  const avaPreview = el('span', { class: 'prof-ava-preview' });
+  const renderAva = () => {
+    const cur = avatarState === undefined ? (data.avatar || null) : avatarState;
+    const nm = nameIn.value.trim() || data.display_name || data.email || data.id || '';
+    avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg'));
+  };
+  const fileIn = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  const uploadBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '사진 올리기' });
+  const removeBtn = el('button', { type: 'button', class: 'btn-text', text: '기본 이미지로' });
+  uploadBtn.addEventListener('click', () => fileIn.click());
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files && fileIn.files[0]; if (!f) return;
+    try { avatarState = await fileToAvatarDataUrl(f); renderAva(); }
+    catch (e) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
+    fileIn.value = '';
+  });
+  removeBtn.addEventListener('click', () => { avatarState = null; renderAva(); });
+  nameIn.addEventListener('input', renderAva); // 이름 바꾸면 폴백 이니셜도 갱신
+  renderAva();
+  const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview,
+    el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
+      el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 이름 이니셜로 자동 생성됩니다.' })));
+
+  const devSel = { v: p.dev };
+  const devHint = el('p', { class: 'prof-hint' });
+  const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 기술 답변 깊이를 맞춰요.'; };
+  const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
+  renderDevHint();
+
+  const toneSel = { v: p.tone };
+  const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
+
+  const lenSel = { v: p.len };
+  const lenHint = el('p', { class: 'prof-hint' });
+  const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
+  const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
+  renderLenHint();
+
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+
+  const back = overlay('내 프로필',
+    el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
+      text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }),
+    field('프로필 사진', avaRow),
+    field('표시 이름', nameIn),
+    data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    field('역할', roleIn),
+    field('개발 이해도', el('div', {}, devChips, devHint)),
+    field('호칭 (AI가 나를 부르는 말)', addressIn),
+    field('말투', toneChips),
+    field('응답 길이', el('div', {}, lenChips, lenHint)),
+    field('담당 영역', areaIn),
+    field('자주 쓰는 도구·레포', toolsIn),
+    field('추가 메모', memoTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status));
+
+  saveBtn.addEventListener('click', async () => {
+    // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
+    const lines: string[] = [];
+    if (roleIn.value.trim()) lines.push('- 역할: ' + roleIn.value.trim());
+    const d = PROF_DEV.find((x) => x.v === devSel.v);
+    if (d) lines.push('- 개발 이해도: ' + d.label + ' — ' + d.hint);
+    if (addressIn.value.trim()) lines.push('- 호칭: ' + addressIn.value.trim());
+    if (toneSel.v) lines.push('- 말투: ' + toneSel.v);
+    const l = PROF_LEN.find((x) => x.v === lenSel.v);
+    if (l) lines.push('- 응답 길이: ' + l.v + ' — ' + l.hint);
+    if (areaIn.value.trim()) lines.push('- 담당 영역: ' + areaIn.value.trim());
+    if (toolsIn.value.trim()) lines.push('- 자주 쓰는 도구·레포: ' + toolsIn.value.trim());
+    let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
+    const memo = memoTa.value.trim();
+    if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
+
+    const payload: any = { display_name: nameIn.value.trim(), body_md: body };
+    if (avatarState !== undefined) payload.avatar = avatarState; // null=기본으로, string=새 이미지(미변경이면 생략→보존)
+
+    saveBtn.disabled = true;
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
+      const m = (res && res.member) || {};
+      if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; }
+      // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
+      const label = (m.display_name && m.display_name.trim()) || m.email
+        || (state.me && (state.me.email || state.me.userId)) || '';
+      const ue = document.getElementById('user-email');
+      if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava'), el('span', { text: label }));
+      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
+      back.remove();
+    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+  });
+}
+
 function overlay(title, ...content) {
   const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
   const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
@@ -2152,6 +2342,7 @@ export {
   hasScope,
   installCmd,
   loadAdmin,
+  openMyProfile,
   overlay,
   renderSystem,
 };

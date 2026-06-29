@@ -107,19 +107,49 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 }
 .tabs a:hover { color: var(--ink); }
 .tabs a.active { color: var(--blue); border-bottom-color: var(--blue); }
-.topbar-right { display: flex; align-items: center; gap: 16px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
 .sync-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 .dot-static { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
 /* 마지막 갱신(liveness) — 헤더 우측에서 빼 화면 좌하단 구석에 조용히. 우하단 toasts 와 안 겹침, 클릭은 통과(pointer-events:none). */
 .app-foot { position: fixed; left: 16px; bottom: 12px; z-index: 10; pointer-events: none; }
 .app-foot .sync-chip { font-size: 11.5px; color: var(--muted-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 9px; box-shadow: 0 2px 8px rgba(21, 35, 59, .05); }
-.user-email { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
-.logout-btn { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--muted-2); font-size: 12px; font-weight: 600; padding: 4px 10px; cursor: pointer; }
-.logout-btn:hover { color: var(--ink-sub); border-color: var(--ink-sub); }
-/* 사용설명서 — 메인 탭이 아니라 우측 끝의 보조 유틸 링크(작은 무채색 pill, 위계 낮춤). */
-.help-link { font-size: 12.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; text-decoration: none; white-space: nowrap; transition: color .12s ease, border-color .12s ease; }
-.help-link:hover { color: var(--ink-sub); border-color: var(--line-net); }
+/* 우측 상단 보조 컨트롤 3종(사용 가이드 · 내 프로필 · 로그아웃) — 동일한 pill 형태로 통일. */
+.help-link,
+.user-email,
+.logout-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 13px; box-sizing: border-box;
+  font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap;
+  color: var(--muted); background: none;
+  border: 1px solid var(--line); border-radius: 999px;
+  font-family: inherit; text-decoration: none; cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.help-link:hover,
+.user-email:hover,
+.logout-btn:hover { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
 .help-link.active { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
+/* 내 프로필 = 본인 식별 → 글자만 살짝 진하게(형태는 통일 유지). */
+.user-email { color: var(--ink-sub); }
+/* display 를 줬으므로 hidden 속성이 안 먹는다 → 셋 다 명시적으로 숨김 복구. */
+.help-link[hidden], .user-email[hidden], .logout-btn[hidden] { display: none; }
+
+/* 내 프로필 모달 — 선택형(chip) 컨트롤. */
+.prof-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.prof-chip { font-size: 13px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; cursor: pointer; font-family: inherit; transition: color .12s ease, background .12s ease, border-color .12s ease; }
+.prof-chip:hover { border-color: var(--line-net); }
+.prof-chip.on { color: #fff; background: var(--blue); border-color: var(--blue); }
+.prof-hint { margin: 7px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; min-height: 1em; }
+
+/* 아바타(프로필 원형) — 업로드 이미지 또는 이니셜+색상. core.profileAvatar 가 생성. */
+.pava { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; color: #fff; font-weight: 700; font-size: 12px; line-height: 1; user-select: none; }
+.pava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.topbar-ava { width: 20px; height: 20px; font-size: 9px; }
+.prof-ava-lg { width: 72px; height: 72px; font-size: 27px; box-shadow: 0 2px 5px rgba(21, 35, 59, .15); }
+/* 내 프로필 모달 — 아바타 행(미리보기 + 올리기/기본으로). */
+.prof-ava-row { display: flex; align-items: center; gap: 16px; }
+.prof-ava-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.prof-ava-actions .prof-hint { flex-basis: 100%; }
 
 /* ── 본문 셸 ── */
 main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }

@@ -41,6 +41,8 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
     -- scopes = 구성원 권한(발급 토큰의 scope). memory 기본 포함(단일 공유 풀=에이전트 생산·소비, 06-17).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory"]'::jsonb;
+    -- avatar = 셀프 업로드 프로필 이미지(data URL, 클라이언트에서 128px 리사이즈). null/'' = 이니셜+색상 자동생성.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar TEXT;
   `);
   await itemsPool.query(`
     DO $$ BEGIN
