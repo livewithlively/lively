@@ -183,8 +183,8 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
   const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
   const sections = [
+    onboarding,   // ⚠ 헤더보다 위 — 미완이면 AI 가 맨 처음 보게(완료면 ""→사라짐).
     header,
-    onboarding,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",
     defaults?.body_md?.trim() ? strip(defaults.body_md) : "",
     team.block,

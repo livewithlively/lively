@@ -29,7 +29,8 @@ async function count(sql: string): Promise<number> {
 // 조직이 얼마나 셋업됐는지 라이브 계산(items DB 카운트 + org-defaults 섹션). 시크릿 없음.
 export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
   const [identity, knowledge, categories, members, dbSources] = await Promise.all([
-    getSection("org-defaults").then((s) => !!s?.body_md?.trim()).catch(() => false),
+    // baseline 시드(updated_by='bootstrap')만 있으면 '미완' — 관리자가 실제 편집해야 done(자동 시드로 완료 오인 방지).
+    getSection("org-defaults").then((s) => !!s?.body_md?.trim() && s.updated_by !== "bootstrap").catch(() => false),
     // 섹션(injection='always': org-defaults·managed-policy·가이드)은 제외 — '지식' 단계는 recalled 지식(런북·결정·설계)만.
     count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active' AND injection <> 'always'"),
     count("SELECT count(*)::int AS n FROM category"),

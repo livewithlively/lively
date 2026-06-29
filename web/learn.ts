@@ -402,7 +402,7 @@ async function renderOnboarding(view) {
           el('div', { style: 'font-weight:600' }, it.label,
             it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null),
           el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }),
-          (it.href && !it.done) ? el('a', { class: 'accent', href: it.href, text: '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
+          it.href ? el('a', { class: 'accent', href: it.href, text: it.done ? '보기 →' : '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
     });
     slot.replaceChildren(summary, steps);
   } catch (e) {
