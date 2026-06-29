@@ -1683,14 +1683,11 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ps-rules-ta:focus { outline: none; border-color: var(--blue); background: #fff; }
 .ps-rules-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .ps-save-status { font-size: 12px; }
-/* 참고 파일 목록 */
+/* 레포/파일 목록 행 (관련 레포 블록 등에서 재사용 — 참고 파일 아이콘/크기 스타일은 #246 에서 제거) */
 .ps-refs-list { display: flex; flex-direction: column; margin: 2px 0; }
 .ps-refs-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line-row); }
 .ps-refs-row:last-child { border-bottom: none; }
-.ps-refs-ic { flex: none; width: 18px; height: 18px; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
-.ps-refs-ic .fic { width: 18px; height: 18px; }
 .ps-refs-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ps-refs-sz { flex: none; font-size: 12px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .ps-kn-group { margin-top: 6px; }
 .ps-kn-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ps-kn-acts { display: flex; gap: 6px; flex: none; }

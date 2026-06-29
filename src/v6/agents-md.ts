@@ -8,17 +8,13 @@ import { getProject as getProjectV6, setProjectFolder } from "./project-store.js
 import { projectAbsPath, createProjectFolder } from "../project-fs.js";
 
 const RULES_MARK = "<!-- LIVELY:RULES — 아래는 사람이 작성·편집 (digest 는 자동 갱신, 규칙은 보존) -->";
-const REF_DIR = "참고자료";
-const DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
+// 규칙이 비었을 때 '## 규칙' 본문 자리표시 — HTML 주석이라 사람이 파일을 열면 힌트로 보이되 AI 에겐 지시문으로
+//  읽히지 않는다(과거엔 안내 문장을 그대로 써넣어 AI 컨텍스트를 오염시켰다 — #246). 규칙을 저장하면 사라진다.
+const RULES_PLACEHOLDER = "<!-- (아직 작성된 규칙이 없습니다) 이 프로젝트에서 AI가 지켰으면 하는 규칙을 적으세요 — 웹: 프로젝트 ▸ 세부 설정 ▸ 규칙 -->";
+// 구(舊) 기본 템플릿 문장 — 디스크의 기존 AGENTS.md 에 본문으로 박혀 있을 수 있어, 읽을 때 '빈 규칙'으로 이관 처리한다.
+const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
 
-async function listRefFiles(base: string): Promise<string[]> {
-  try {
-    const ents = await fsp.readdir(path.join(base, REF_DIR), { withFileTypes: true });
-    return ents.filter((e) => e.isFile() && !e.name.startsWith(".")).map((e) => e.name).sort();
-  } catch { return []; }
-}
-
-function buildProjectDigest(p: any, refs: string[] = []): string {
+function buildProjectDigest(p: any): string {
   const L: string[] = [];
   L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
   L.push("> 이 파일은 lively 가 자동 생성합니다(아래 '규칙'만 사람이 편집). 상세·최신은 lively MCP 로 조회하세요.", "");
@@ -31,10 +27,6 @@ function buildProjectDigest(p: any, refs: string[] = []): string {
     L.push("## 관련 레포", ...p.repos.map((r: string) => `- ${r}`), "- 이 머신의 로컬 경로(클론/워크트리)는 `.lively/project.json` 참조.", "");
   }
   if (p.description) L.push("## 개요", String(p.description), "");
-  if (refs.length) {
-    L.push("## 참고 파일 (작업 전 반드시 읽기)", "작업을 시작하기 전에 아래 파일들을 **반드시 먼저 읽고** 그 내용을 기준으로 삼으세요.",
-      ...refs.map((f) => `- \`${REF_DIR}/${f}\``), "");
-  }
   if (Array.isArray(p.tasks) && p.tasks.length) {
     L.push("## 태스크 인덱스");
     for (const t of p.tasks) {
@@ -49,7 +41,11 @@ function buildProjectDigest(p: any, refs: string[] = []): string {
 function extractRules(content: string): string | null {
   const i = content.indexOf(RULES_MARK);
   if (i < 0) return null;
-  return content.slice(i + RULES_MARK.length).replace(/^\s*##\s*규칙\s*\n?/, "").trim();
+  const body = content.slice(i + RULES_MARK.length)
+    .replace(/^\s*##\s*규칙\s*\n?/, "")
+    .replace(/<!--[\s\S]*?-->/g, "")  // 자리표시 주석 제거 → 주석만 있으면 빈 규칙
+    .trim();
+  return body === LEGACY_DEFAULT_RULES ? "" : body;  // 구 기본 템플릿 문장도 빈 규칙으로 이관
 }
 // 구 CLAUDE.md 의 사람 규칙(LIVELY:REFS 자동블록 제외) — AGENTS.md 최초 생성 시 1회 이관.
 function stripClaudeManaged(content: string): string {
@@ -101,8 +97,7 @@ export async function ensureAgentsMd(projectId: number, base?: string, manualOve
   if (!p) return;
   const resolvedBase = base ?? (await resolveProjectBase(p));
   const manual = manualOverride !== undefined ? manualOverride : (await readProjectAgentsMd(resolvedBase)).rules;
-  const refs = await listRefFiles(resolvedBase);
-  const content = `${buildProjectDigest(p, refs)}\n\n${RULES_MARK}\n## 규칙\n${(manual && manual.trim()) || DEFAULT_RULES}\n`;
+  const content = `${buildProjectDigest(p)}\n\n${RULES_MARK}\n## 규칙\n${(manual && manual.trim()) || RULES_PLACEHOLDER}\n`;
   await fsp.mkdir(resolvedBase, { recursive: true });
   const file = path.join(resolvedBase, "AGENTS.md");
   let prev = ""; try { prev = await fsp.readFile(file, "utf8"); } catch { /* */ }

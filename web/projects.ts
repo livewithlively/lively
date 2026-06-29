@@ -2169,8 +2169,9 @@ function openProjectComments(id, members) {
   setTimeout(() => ta.focus(), 180);
 }
 
-// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 분류 · 레포 · 터미널 규칙 · 참조 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
+// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 분류 · 레포 · 규칙 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
 //  (필요/산출 지식은 본문 아래 '지식 흐름' 섹션으로 이관 — #245.)
+//  (참고 파일 블록 제거 — 본문 '공유 폴더' 브라우저와 중복이라 거기로 일원화 — #246.)
 //  (삭제·팀원 수정을 헤더에서 여기로 이관 — 헤더는 제목/상태칩/설정 버튼만.)
 function openProjectSettings(id, p, reload, meId, base) {
   const B = base || '/api/ui/v6/projects/';
@@ -2183,8 +2184,8 @@ function openProjectSettings(id, p, reload, meId, base) {
     projectCategoryBlock(id, p),
     projectReposBlock(id, p),
     projectRulesBlock(id),
-    projectRefsBlock(id, B),
     // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
+    // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246.)
     projectDangerBlock(id, p, meId, back));
 }
 
@@ -2567,60 +2568,8 @@ function projectCategoryBlock(id, p) {
     el('div', { class: 'ps-rules-actions' }, saveBtn, status));
 }
 
-// ── 참고 파일 — 프로젝트 폴더 참고자료/ 에 파일 업로드. 서버가 AGENTS.md '참고 파일' 영역에 자동 등록. ──
-const PS_REF_DIR = '참고자료';
-// 참고 파일 블록 — 참고자료/ 에 업로드/삭제 → 서버 regen(POST /rules) 으로 AGENTS.md 의 참고 파일 목록 갱신.
-//  이 프로젝트 터미널 세션 AI 가 매번 작업 전 반드시 읽도록 AGENTS.md digest 에 명시된다.
-function projectRefsBlock(id, base) {
-  const B = base || '/api/ui/v6/projects/';
-  const listsUrl = B + id + '/files?path=' + encodeURIComponent(PS_REF_DIR);
-  const refPath = (name) => B + id + '/file?path=' + encodeURIComponent(PS_REF_DIR + '/' + name);
-  const listEl = el('div', { class: 'ps-refs-list' });
-  const status = el('span', { class: 'ps-save-status admin-hint' });
-  const fileInput = el('input', { type: 'file', multiple: true, style: 'display:none' });
-  const uploadBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 파일 올리기', onclick: () => fileInput.click() });
-
-  async function fetchFiles() {
-    try { const d = await api(listsUrl); return ((d && d.items) || []).filter((x) => x.type === 'file'); }
-    catch (_) { return []; } // 폴더 없음 = 아직 파일 없음
-  }
-  function paint(files) {
-    if (!files.length) { listEl.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '아직 참고 파일이 없어요. 올리면 매 터미널 세션에서 AI가 작업 전 반드시 읽습니다.' })); return; }
-    listEl.replaceChildren(...files.map((f) => el('div', { class: 'ps-refs-row' },
-      el('span', { class: 'ps-refs-ic' }, fileIconSvg(f.name, false)),
-      el('span', { class: 'ps-refs-nm', text: f.name, title: f.name }),
-      el('span', { class: 'ps-refs-sz', text: fmtSize(f.size) }),
-      el('button', { class: 'proj-file-iconbtn danger', type: 'button', title: '삭제', text: '✕', onclick: () => removeRef(f.name) }))));
-  }
-  async function reload() { paint(await fetchFiles()); }
-  // 참고자료/ 변경 후 AGENTS.md 재생성 트리거 — 규칙은 그대로 두고 POST /rules(서버가 참고자료/ 재스캔).
-  async function regen() {
-    try { const d = await api(B + id + '/rules'); await api(B + id + '/rules', { method: 'POST', body: JSON.stringify({ rules: (d && d.rules) || '' }) }); } catch (_) { /* 다음 세션에 반영 */ }
-  }
-  fileInput.onchange = async () => {
-    const files: any[] = Array.from(fileInput.files || []); fileInput.value = '';
-    if (!files.length) return;
-    status.textContent = '올리는 중…';
-    try {
-      for (const f of files) await authUpload(refPath(f.name), f);
-      await regen();
-      status.textContent = '올림 · 다음 세션부터 적용'; toast('참고 파일을 추가했습니다');
-    } catch (e) { status.textContent = ''; toast('업로드 실패 — ' + e.message, true); }
-    reload();
-  };
-  async function removeRef(name) {
-    if (!confirm('참고 파일 ‘' + name + '’을(를) 삭제할까요?')) return;
-    try { await api(refPath(name), { method: 'DELETE' }); await regen(); toast('삭제했습니다'); }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); }
-    reload();
-  }
-  reload();
-  return el('section', { class: 'ps-block' },
-    el('h3', { class: 'ps-block-title', text: '참고 파일' }),
-    el('p', { class: 'ps-block-hint', text: '여기 올린 파일은 이 프로젝트에서 터미널 세션을 열 때마다 AI가 작업 전 반드시 읽도록 강제됩니다. (프로젝트 폴더의 참고자료/ 에 저장 · AGENTS.md 에 자동 등록)' }),
-    listEl, fileInput,
-    el('div', { class: 'ps-rules-actions' }, uploadBtn, status));
-}
+// (참고 파일 블록 제거 — #246. 프로젝트 파일 업로드는 본문 '공유 폴더' 섹션(projectFolderSection)으로 일원화.
+//  '공유 폴더'가 업로드·드래그앤드롭·붙여넣기·폴더 탐색을 모두 제공하므로 모달의 약식 업로더는 중복이었다.)
 
 // 지식 고르기 — 위키 검색 → '연결'로 POST :id/knowledge. 이미 연결된 건 후보에서 제외. relation 으로 필요/산출 모두.
 function openKnowledgePicker(id, relation, linkedNames, onLinked) {
