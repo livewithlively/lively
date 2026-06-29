@@ -25,6 +25,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildStaticContext, deriveOrgName } from "../../generator/build-context.mjs";
+import { WORK_ROOTS_HEADER } from "../../setup/work-roots-header.mjs";
 
 // P-V3-5 Part A: 정적 폴백 context.md 단일소스 — 게이트웨이가 가용하면 DB-materialize 한 정적 컨텍스트(=AGENTS.md/
 //  preview 와 동일 DB Knowledge Index)를 받아 박고, 다운/토큰없음/오프라인이면 파일기반 buildStaticContext 로 폴백.
@@ -138,7 +139,7 @@ function seedWorkRoots(roots) {
     if (!set.has(abs)) { existing.push(abs); set.add(abs); added++; }
   }
   if (added || !existsSync(path)) {
-    const header = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 추가/제거 자유. env LIVELY_WORK_ROOTS 로도 augment 가능.";
+    const header = WORK_ROOTS_HEADER;
     const body = [header, ...existing.filter((l) => l.trim() && !l.startsWith("#"))].join("\n") + "\n";
     writeFileSync(path, body);
     chmodSync(path, 0o600);

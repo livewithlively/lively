@@ -119,7 +119,9 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   await writeFile(join(dir, "hooks-config.json"),
     JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || DEFAULT_WRITEBACK_NOTICE,
       write_tools: cfg.write_tools?.length ? cfg.write_tools : undefined }, null, 2) + "\n");
-  const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 어드민 런타임 설정에서 중앙 관리. env LIVELY_WORK_ROOTS 로도 augment.";
+  // work-roots 헤더 — 단일 출처는 kit/setup/work-roots-header.mjs(WORK_ROOTS_HEADER). 서버는 배포물 경계상 그 .mjs 를
+  //  빌드타임 import 하지 않으므로 동일 텍스트를 유지한다(이 사본은 번들 .lively/work-roots 용 — 멤버 최종본은 user-install seed).
+  const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 추가/제거 자유. env LIVELY_WORK_ROOTS 로도 augment 가능.";
   await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
   const mcps = (await listMcpServers())
     .filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)) // 불완전 서버(http인데 url없음 등) 제외
@@ -176,8 +178,13 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   // 컨텍스트 온톨로지 가이드 템플릿도 DB 섹션에서 로드 — materialize(발행물)와 동일 소스(편집값 우선·비면 기본값).
   const guide = await loadGuideTemplate();
   const memIndex = (knowledge.length || categoryMap.length) ? buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()).trim() : "";
+  // 온보딩 baseline(#269) — 조직이 미완이면 "남은 단계 + AI 지침"을 주입(완료면 ""). 웹 '온보딩' 페이지와 동일 SoT.
+  //  이게 SessionStart 훅(fetchOrgContext)으로 흘러 신규 박스의 세션이 맥락 블라인드가 되지 않게 한다.
+  const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
+  const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
   const sections = [
     header,
+    onboarding,
     policy?.body_md?.trim() ? strip(policy.body_md) : "",
     defaults?.body_md?.trim() ? strip(defaults.body_md) : "",
     team.block,

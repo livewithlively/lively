@@ -297,6 +297,14 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
     orgLabel,
   );
   copied.push("setup/user-install.mjs");
+  // user-install 이 import 하는 공유 상수(work-roots 헤더 단일 출처, #270) — 번들 동봉 필수(누락 시 import 크래시).
+  copyMjsWithHeader(
+    kitAbs("setup/work-roots-header.mjs"),
+    join(target, "setup", "work-roots-header.mjs"),
+    "workflow-std/setup/work-roots-header.mjs",
+    orgLabel,
+  );
+  copied.push("setup/work-roots-header.mjs");
   // user-level 제거기 vendoring (install/uninstall 대칭) — self-contained, kit 미의존. uninstall-mac.sh 가 이걸 부른다.
   copyMjsWithHeader(
     kitAbs("setup/user-uninstall.mjs"),
