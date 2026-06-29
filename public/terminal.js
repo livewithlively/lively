@@ -246,11 +246,39 @@ function execCopy(text) {
   } catch (_) { /* noop */ }
   try { term.focus(); } catch (_) { /* noop */ }
 }
-function copyText(text) {
+function copyText(text, silent) {
   if (!text) return;
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(() => execCopy(text));
   else execCopy(text);
-  toast('복사됨');
+  if (!silent) toast('복사됨');
+}
+// 드래그 선택 → 마우스 놓는 즉시 클립보드 복사(#252). Claude Code(마우스모드 1003)는 motion 리드로우로 선택을
+//  곧 지우므로, mouseup 캡처 단계에서 '아직 살아있는' 선택을 집어 바로 복사한다(Shift+드래그로 선택 시).
+//  셸 등 마우스 안 쓰는 화면에선 일반 드래그 선택도 그대로 복사(copy-on-select). http 비보안에선 execCommand 폴백.
+function setupSelectionCopy() {
+  const host = panesEl || document.body;
+  host.addEventListener('mouseup', () => {
+    try { const sel = term.getSelection && term.getSelection(); if (sel && sel.trim()) copyText(sel); } catch (_) { /* noop */ }
+  }, true);
+}
+// OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호. 웹터미널+tmux+ssh
+//  너머에선 이게 사용자 브라우저 클립보드까지 안 닿아 'copied N chars' 떠도 실제론 비어있었다(#252). tmux
+//  set-clipboard on 으로 전달받아, 여기서 디코드해 브라우저 클립보드에 직접 쓴다 → Claude 네이티브 복사가 실동작.
+function setupOscClipboard() {
+  try {
+    term.parser.registerOscHandler(52, (data) => {
+      try {
+        const i = data.indexOf(';');
+        const b64 = i >= 0 ? data.slice(i + 1) : data;
+        if (b64 && b64 !== '?') {
+          let text = '';
+          try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
+          if (text) copyText(text, true); // 앱이 이미 'copied' 안내하므로 토스트는 생략
+        }
+      } catch (_) { /* noop */ }
+      return true; // 처리함(앱으로 다시 안 흘림)
+    });
+  } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
 function sendInput(d) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
@@ -539,35 +567,6 @@ async function renderTextPreview(body, p, asMd) {
   } catch (e) { body.replaceChildren(el('div', { class: 'gate-msg', text: '미리보기 실패: ' + e.message })); }
 }
 
-// ── 복사 ──
-// Claude Code 등 앱이 마우스모드를 켜면 드래그가 앱으로 가서 터미널 텍스트 선택→복사가 막힌다(Shift+드래그
-//  우회도 환경 따라 불안정). 그래서 '현재 화면 텍스트'를 DOM textarea 오버레이로 띄운다 — 여기선 일반
-//  브라우저 선택/복사가 그대로 동작(앱 마우스모드 무관, http 비보안 컨텍스트에서도 OK).
-function getTerminalText() {
-  try {
-    const buf = term.buffer.active;
-    const out = [];
-    for (let i = 0; i < buf.length; i++) { const ln = buf.getLine(i); out.push(ln ? ln.translateToString(true) : ''); }
-    return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '');
-  } catch (_) { return ''; }
-}
-function openCopyView() {
-  const ta = el('textarea', { readonly: '', spellcheck: 'false',
-    style: 'width:100%;height:52vh;resize:vertical;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.5;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--fg);white-space:pre;overflow:auto' });
-  ta.value = getTerminalText();
-  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
-    el('div', { class: 'pop', style: 'width:min(760px,94vw)' },
-      el('h3', { text: '복사' }),
-      el('div', { class: 'caption', style: 'margin:-4px 0 10px', text: '드래그로 원하는 부분을 선택해 Ctrl/Cmd+C, 또는 [전체 복사]. (지금 보이는 화면 기준 — 위 내용이 필요하면 먼저 스크롤해서 펼친 뒤 여세요)' }),
-      ta,
-      el('div', { style: 'margin-top:10px;display:flex;gap:8px' },
-        el('button', { class: 'tbtn', text: '전체 복사', onclick: () => copyText(ta.value) }),
-        el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() }))));
-  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
-  document.body.append(back);
-  setTimeout(() => { try { ta.focus(); ta.select(); } catch (_) { /* noop */ } }, 30);
-}
-
 // ── 보기 설정 ──
 function openSettings() {
   const p = prefs();
@@ -630,9 +629,11 @@ function openHelp() {
         kb(['Ctrl L'], '화면 비우기 (위로 스크롤하면 남아 있음)'),
         kb(['Ctrl C'], '멈춘·실행 중인 명령 강제 중단'),
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
+      sec('복사',
+        kb(['드래그'], '글자를 선택하면 놓는 순간 자동 복사'),
+        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그')),
       sec('도구 (오른쪽 위 버튼)',
         tool('공유 워크스페이스', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
-        tool('복사', '화면 텍스트를 선택해 복사 (Claude 등 마우스 쓰는 앱에서도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
       sec('클로드 코드',
@@ -701,7 +702,6 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    el('button', { class: 'tbtn', text: '📋 복사', title: '화면 텍스트를 선택해 복사(앱 마우스모드와 무관)', onclick: openCopyView }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
@@ -747,6 +747,8 @@ async function boot() {
   setupClipboard();
   setupPaste();
   setupWheel();
+  setupSelectionCopy();   // 드래그 선택 → 놓는 즉시 복사(#252)
+  setupOscClipboard();    // 앱 OSC52 클립보드 → 브라우저 클립보드(#252)
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
