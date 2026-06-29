@@ -57,6 +57,20 @@ curl -fsSL <bootstrap-url> | PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL
 - **private 레포** 다운로드: `LIVELY_CODE_TOKEN`(Bearer) 추가. 공개(OSS) 레포면 토큰 불요(`git clone` 기본).
 - 코드만 받고 검증: `LIVELY_FETCH_ONLY=1`.
 
+### 릴리스 발행 (메인테이너 — 태그 푸쉬)
+
+`.github/workflows/release.yml` 가 **`vX.Y.Z` 태그 푸쉬 시 자동**으로: 빌드 → `context-ontology.tgz`(dist+public+kit+deploy+package*, node_modules 미포함 = arch 무관) → GitHub Release 발행.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0     # → Actions 가 Release v0.1.0 + 에셋(context-ontology.tgz) 발행
+```
+
+그러면 고객은 버전만 주면 됨 — bootstrap 이 에셋 URL 을 자동 구성:
+```bash
+curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+```
+(private 레포 동안은 다운로드에 `LIVELY_CODE_TOKEN`(Bearer) 필요 — OSS 공개 시 tokenless.)
+
 ## 최초 설치 (새 박스 — install.sh)
 
 > 전체 흐름(EC2): `lively-infra` 에서 `terraform apply` → 코드 rsync → 아래 `install.sh` → `claude` 로그인.

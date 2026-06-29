@@ -44,13 +44,19 @@ main() {
   phase "3/7 store(pgvector) 기동"
   store_up
 
-  phase "4/7 앱 빌드 (npm ci && npm run build)"
+  phase "4/7 의존성 + 빌드"
   cd "$APP_DIR"
   if [ "$OFFLINE" = "1" ]; then
-    [ -d node_modules ] || die "OFFLINE 인데 node_modules 가 없습니다 — 오프라인 번들에 동봉돼야 합니다."
-    ok "OFFLINE — npm ci 생략(번들 node_modules 사용)"
-    [ -d dist ] || npm run build   # dist 가 번들에 있으면 빌드도 생략
+    # 오프라인 번들 — node_modules·dist 동봉 전제(네트워크 0).
+    [ -d node_modules ] || die "OFFLINE: node_modules 가 없습니다 — 오프라인 번들에 동봉돼야 합니다."
+    [ -d dist ] || die "OFFLINE: dist 가 없습니다 — 오프라인 번들에 동봉돼야 합니다."
+    ok "OFFLINE — npm/빌드 생략(번들 자산 사용)"
+  elif [ -d dist ] && [ ! -d src ]; then
+    # prebuilt 릴리스 번들(dist 동봉·소스 없음) → tsc 불요, 런타임 deps(node-pty 포함)만.
+    ok "prebuilt 릴리스 — 빌드 생략, npm ci --omit=dev"
+    npm ci --omit=dev
   else
+    # 소스 배포(git clone/rsync) → 전체 deps + 빌드.
     npm ci
     npm run build
   fi
