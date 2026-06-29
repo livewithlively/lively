@@ -1744,6 +1744,11 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
   .pjk-arrow { transform: rotate(90deg); align-self: center; }
   .pjk-node { max-width: none; align-self: stretch; }
 }
+/* 길면 접기 — 본문 섹션과 동일한 클립+페이드(.proj-detail-body-expand 알약 재사용). */
+.pjk-collapse { position: relative; }
+.pjk-collapse.collapsed { max-height: 300px; overflow: hidden; }
+.pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
+.pjk-expand-row { margin-top: 10px; }
 /* 직접 작성 모달 입력 */
 .pjk-create-in { width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit; border: 1px solid var(--line-net); border-radius: 8px; }
 .pjk-create-cat { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
