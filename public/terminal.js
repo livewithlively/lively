@@ -35,7 +35,7 @@ function prefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar' }, p);
+  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 1 }, p);
 }
 function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 function applyChrome(themeKey) {
@@ -71,6 +71,7 @@ const tabs = []; // { id, label, pane, closable }
 let activeId = 'term';
 
 let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
+let scrollSpeed = 1; // 휠 스크롤 속도 배수(환경설정에서 조절, prefs.scrollSpeed)
 
 // ── tmux control-mode 파서 ──
 // 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
@@ -325,19 +326,44 @@ function setupPaste() {
   }, true);
 }
 
-// 마우스 휠 = 스크롤바처럼 로컬 스크롤백을 직접 오르내림(하드 요구사항). control mode 에선 xterm 이
-//  스크롤백을 소유하므로 normal buffer 에선 휠을 항상 로컬 스크롤로 처리하고 앱으로 흘리지 않는다(false 반환).
-//  단 pane 안의 alt-screen 앱(vim/less 등)은 그쪽이 휠을 쓰도록 그대로 전달(true).
+// 마우스 휠 처리(속도 배수 scrollSpeed 적용, 환경설정에서 조절):
+//  - normal buffer(셸 등): 로컬 스크롤백 직접 스크롤(하드 요구사항). 줄 수 × scrollSpeed.
+//  - alt-screen + 앱 마우스모드(Claude Code 등): 휠을 앱으로 전달해 앱이 자기 스크롤백을 스크롤.
+//     · scrollSpeed<=1(기본) → xterm 의 검증된 전달(return true) 그대로.
+//     · scrollSpeed>1 → 휠 1틱당 SGR 마우스휠 이벤트를 그 개수만큼 보내(우리가 직접) 배수만큼 빠르게.
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
+  const cellFromEvent = (e) => {
+    try {
+      const scr = (term.element && term.element.querySelector('.xterm-screen')) || term.element;
+      const r = scr.getBoundingClientRect();
+      return {
+        col: Math.min(term.cols, Math.max(1, Math.floor((e.clientX - r.left) / (r.width / term.cols)) + 1)),
+        row: Math.min(term.rows, Math.max(1, Math.floor((e.clientY - r.top) / (r.height / term.rows)) + 1)),
+      };
+    } catch (_) { return { col: 1, row: 1 }; }
+  };
   term.attachCustomWheelEventHandler((e) => {
-    try { if (term.buffer.active.type === 'alternate') return true; } catch (_) { /* noop */ }
+    let alt = false, mouseOn = false;
+    try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
+    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+    if (alt && mouseOn) {
+      if (scrollSpeed <= 1) return true;                 // 기본 = xterm 검증 전달(회귀 없음)
+      const c = cellFromEvent(e);
+      const btn = e.deltaY < 0 ? 64 : 65;                // 64=휠↑ 65=휠↓ (SGR 1006)
+      const reps = Math.min(Math.round(scrollSpeed), 12);
+      let seq = '';
+      for (let i = 0; i < reps; i++) seq += '\x1b[<' + btn + ';' + c.col + ';' + c.row + 'M';
+      sendInput(seq);
+      return false;
+    }
+    if (alt) return true;                                // 마우스모드 아닌 alt 앱(옛 pager 등) → xterm 기본
     let lines;
     if (e.deltaMode === 1) lines = e.deltaY;                 // line 단위
     else if (e.deltaMode === 2) lines = e.deltaY * term.rows; // page 단위
     else lines = e.deltaY / 18;                               // pixel → 대략 셀높이로 환산
-    const n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
-    if (n) term.scrollLines(n);
+    let n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
+    if (n) { n = n * Math.max(1, Math.round(scrollSpeed)); term.scrollLines(n); }
     return false;
   });
 }
@@ -508,20 +534,24 @@ function openSettings() {
   const sizeI = el('input', { type: 'number', min: '9', max: '30', value: String(p.fontSize) });
   const themeSel = el('select', {}, ...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, selected: k === p.theme ? '' : null }, v.name)));
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
+  const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 1) });
   const apply = () => {
-    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value };
+    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)) };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
+    scrollSpeed = np.scrollSpeed;
     savePrefs(np); applyChrome(np.theme); doResize();
   };
   for (const c of [fontSel, themeSel, cursorSel]) c.addEventListener('change', apply);
   sizeI.addEventListener('input', apply);
+  speedI.addEventListener('input', apply);
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
       el('div', { class: 'field' }, el('label', { text: '크기(px)' }), sizeI),
       el('div', { class: 'field' }, el('label', { text: '테마' }), themeSel),
       el('div', { class: 'field' }, el('label', { text: '커서' }), cursorSel),
+      el('div', { class: 'field' }, el('label', { text: '스크롤 속도 (1~12, 클수록 빠름)' }), speedI),
       el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() })));
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -604,6 +634,7 @@ async function loadSessionLabel() {
 
 async function boot() {
   const p = prefs();
+  scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 1));
   applyChrome(p.theme);
   if (!SESSION_ID) { gate('세션이 지정되지 않았습니다. 세션 목록에서 "열기"로 진입하세요.'); return; }
   if (!window.Terminal || !window.FitAddon) { gate('터미널 라이브러리(xterm) 로드 실패.'); return; }
