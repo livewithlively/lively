@@ -52,12 +52,18 @@ main() {
   os_install_service
   wait_healthz
 
-  phase "6/7 첫 관리자 부트스트랩(웹 세션 로그인 계정)"
+  phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙)"
   local admin_out=""
   if admin_out="$(node --env-file="$APP_DIR/.env" "$DIR/bootstrap-admin.mjs" 2>&1)"; then
     ok "관리자 시드 완료"
   else
     warn "관리자 부트스트랩 경고(나중에 재시도): $admin_out"
+  fi
+  # 익명 조직 baseline(org-defaults 페르소나·규칙) — 빈 경우에만(편집 보존). 신규 조직이 맥락 블라인드를 안 넘게.
+  if node --env-file="$APP_DIR/.env" "$DIR/bootstrap-baseline.mjs" 2>&1; then
+    ok "baseline 시드 처리(빈 org-defaults 만)"
+  else
+    warn "baseline 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-baseline.mjs)"
   fi
 
   # 중앙박스 키트 — 이 호스트의 claude 에 lively(MCP+훅+컨텍스트) 설치 → 웹터미널 세션이 맥락 CRUD 가능.

@@ -30,7 +30,8 @@ async function count(sql: string): Promise<number> {
 export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
   const [identity, knowledge, categories, members, dbSources] = await Promise.all([
     getSection("org-defaults").then((s) => !!s?.body_md?.trim()).catch(() => false),
-    count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active'"),
+    // 섹션(injection='always': org-defaults·managed-policy·가이드)은 제외 — '지식' 단계는 recalled 지식(런북·결정·설계)만.
+    count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active' AND injection <> 'always'"),
     count("SELECT count(*)::int AS n FROM category"),
     count("SELECT count(*)::int AS n FROM org_member WHERE state='active'"),
     count("SELECT count(*)::int AS n FROM org_db_source"),
