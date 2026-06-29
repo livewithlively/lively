@@ -35,7 +35,7 @@ function prefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar' }, p);
+  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3 }, p);
 }
 function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 function applyChrome(themeKey) {
@@ -71,6 +71,7 @@ const tabs = []; // { id, label, pane, closable }
 let activeId = 'term';
 
 let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
+let scrollSpeed = 1; // 휠 스크롤 속도 배수(환경설정에서 조절, prefs.scrollSpeed)
 
 // ── tmux control-mode 파서 ──
 // 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
@@ -191,6 +192,18 @@ function forceRedraw() {
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
+// '화면 복구' 버튼(소프트 새로고침). forceRedraw(=fit+재캡처)는 '내용만' 다시 그려 깊은 클라 상태
+//  (예: 재접속 시 alt-screen 누락, 렌더러 꼬임)는 못 고쳤다(페이지 새로고침으로만 풀리던 이유). 그래서
+//  버튼은 ws 를 끊고 '재연결'한다 → 새 파서로 onopen 의 fit·크기재전송·백필(alt-screen 보정 포함)·재렌더를
+//  다시 수행해 페이지 새로고침에 준하는 복구를 한다(이미 검증된 자동재연결 경로 재사용, tmux 세션은 영속).
+function softReconnect() {
+  try { if (fit && term) fit.fit(); } catch (_) { /* noop */ }
+  didBackfill = false;           // 재연결 시 현재 화면 백필을 다시 받게
+  reconnectDelay = 250;          // 즉시성 — onclose 자동재연결이 곧바로 붙도록 짧게
+  if (ws && ws.readyState <= 1) { try { ws.close(); } catch (_) { /* noop */ } } // onclose → scheduleReconnect → connectNow
+  else { connectNow(); }         // 이미 끊겨 있으면 바로 연결
+  try { statusEl.textContent = '복구 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+}
 // 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에
 //  셀 크기를 재 cols/rows 가 어긋날 수 있다. 그래서 '폰트 준비(document.fonts.ready) + 소켓 open'
 //  이후 forceRedraw('화면 복구')를 한 번 자동 실행해 현재 창에 정확히 맞춘다. 가드로 진입당 1회만.
@@ -233,11 +246,39 @@ function execCopy(text) {
   } catch (_) { /* noop */ }
   try { term.focus(); } catch (_) { /* noop */ }
 }
-function copyText(text) {
+function copyText(text, silent) {
   if (!text) return;
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(() => execCopy(text));
   else execCopy(text);
-  toast('복사됨');
+  if (!silent) toast('복사됨');
+}
+// 드래그 선택 → 마우스 놓는 즉시 클립보드 복사(#252). Claude Code(마우스모드 1003)는 motion 리드로우로 선택을
+//  곧 지우므로, mouseup 캡처 단계에서 '아직 살아있는' 선택을 집어 바로 복사한다(Shift+드래그로 선택 시).
+//  셸 등 마우스 안 쓰는 화면에선 일반 드래그 선택도 그대로 복사(copy-on-select). http 비보안에선 execCommand 폴백.
+function setupSelectionCopy() {
+  const host = panesEl || document.body;
+  host.addEventListener('mouseup', () => {
+    try { const sel = term.getSelection && term.getSelection(); if (sel && sel.trim()) copyText(sel); } catch (_) { /* noop */ }
+  }, true);
+}
+// OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호. 웹터미널+tmux+ssh
+//  너머에선 이게 사용자 브라우저 클립보드까지 안 닿아 'copied N chars' 떠도 실제론 비어있었다(#252). tmux
+//  set-clipboard on 으로 전달받아, 여기서 디코드해 브라우저 클립보드에 직접 쓴다 → Claude 네이티브 복사가 실동작.
+function setupOscClipboard() {
+  try {
+    term.parser.registerOscHandler(52, (data) => {
+      try {
+        const i = data.indexOf(';');
+        const b64 = i >= 0 ? data.slice(i + 1) : data;
+        if (b64 && b64 !== '?') {
+          let text = '';
+          try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
+          if (text) copyText(text, true); // 앱이 이미 'copied' 안내하므로 토스트는 생략
+        }
+      } catch (_) { /* noop */ }
+      return true; // 처리함(앱으로 다시 안 흘림)
+    });
+  } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
 function sendInput(d) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
@@ -283,6 +324,13 @@ function setupClipboard() {
       if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' })); } catch (_) { /* noop */ } }
       return false;
     }
+    // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
+    //  못 쓰므로(브라우저 예약 단축키라 preventDefault 불가), 가로채지지 않는 Alt+Backspace 로 동일 기능 제공.
+    //  셸·Claude 입력 모두 backward-kill-word 로 동작(Mac 은 Option+Backspace).
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
+      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: '\x17' })); } catch (_) { /* noop */ } }
+      return false;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
@@ -325,19 +373,44 @@ function setupPaste() {
   }, true);
 }
 
-// 마우스 휠 = 스크롤바처럼 로컬 스크롤백을 직접 오르내림(하드 요구사항). control mode 에선 xterm 이
-//  스크롤백을 소유하므로 normal buffer 에선 휠을 항상 로컬 스크롤로 처리하고 앱으로 흘리지 않는다(false 반환).
-//  단 pane 안의 alt-screen 앱(vim/less 등)은 그쪽이 휠을 쓰도록 그대로 전달(true).
+// 마우스 휠 처리(속도 배수 scrollSpeed 적용, 환경설정에서 조절):
+//  - normal buffer(셸 등): 로컬 스크롤백 직접 스크롤(하드 요구사항). 줄 수 × scrollSpeed.
+//  - alt-screen + 앱 마우스모드(Claude Code 등): 휠을 앱으로 전달해 앱이 자기 스크롤백을 스크롤.
+//     · scrollSpeed<=1(기본) → xterm 의 검증된 전달(return true) 그대로.
+//     · scrollSpeed>1 → 휠 1틱당 SGR 마우스휠 이벤트를 그 개수만큼 보내(우리가 직접) 배수만큼 빠르게.
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
+  const cellFromEvent = (e) => {
+    try {
+      const scr = (term.element && term.element.querySelector('.xterm-screen')) || term.element;
+      const r = scr.getBoundingClientRect();
+      return {
+        col: Math.min(term.cols, Math.max(1, Math.floor((e.clientX - r.left) / (r.width / term.cols)) + 1)),
+        row: Math.min(term.rows, Math.max(1, Math.floor((e.clientY - r.top) / (r.height / term.rows)) + 1)),
+      };
+    } catch (_) { return { col: 1, row: 1 }; }
+  };
   term.attachCustomWheelEventHandler((e) => {
-    try { if (term.buffer.active.type === 'alternate') return true; } catch (_) { /* noop */ }
+    let alt = false, mouseOn = false;
+    try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
+    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+    if (alt && mouseOn) {
+      if (scrollSpeed <= 1) return true;                 // 기본 = xterm 검증 전달(회귀 없음)
+      const c = cellFromEvent(e);
+      const btn = e.deltaY < 0 ? 64 : 65;                // 64=휠↑ 65=휠↓ (SGR 1006)
+      const reps = Math.min(Math.round(scrollSpeed), 12);
+      let seq = '';
+      for (let i = 0; i < reps; i++) seq += '\x1b[<' + btn + ';' + c.col + ';' + c.row + 'M';
+      sendInput(seq);
+      return false;
+    }
+    if (alt) return true;                                // 마우스모드 아닌 alt 앱(옛 pager 등) → xterm 기본
     let lines;
     if (e.deltaMode === 1) lines = e.deltaY;                 // line 단위
     else if (e.deltaMode === 2) lines = e.deltaY * term.rows; // page 단위
     else lines = e.deltaY / 18;                               // pixel → 대략 셀높이로 환산
-    const n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
-    if (n) term.scrollLines(n);
+    let n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
+    if (n) { n = n * Math.max(1, Math.round(scrollSpeed)); term.scrollLines(n); }
     return false;
   });
 }
@@ -508,20 +581,24 @@ function openSettings() {
   const sizeI = el('input', { type: 'number', min: '9', max: '30', value: String(p.fontSize) });
   const themeSel = el('select', {}, ...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, selected: k === p.theme ? '' : null }, v.name)));
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
+  const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
   const apply = () => {
-    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value };
+    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)) };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
+    scrollSpeed = np.scrollSpeed;
     savePrefs(np); applyChrome(np.theme); doResize();
   };
   for (const c of [fontSel, themeSel, cursorSel]) c.addEventListener('change', apply);
   sizeI.addEventListener('input', apply);
+  speedI.addEventListener('input', apply);
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
       el('div', { class: 'field' }, el('label', { text: '크기(px)' }), sizeI),
       el('div', { class: 'field' }, el('label', { text: '테마' }), themeSel),
       el('div', { class: 'field' }, el('label', { text: '커서' }), cursorSel),
+      el('div', { class: 'field' }, el('label', { text: '스크롤 속도 (1~12, 클수록 빠름)' }), speedI),
       el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() })));
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -553,16 +630,19 @@ function openHelp() {
         kb(['Ctrl E'], '줄 맨 끝으로')),
       sec('잘못 친 것 지우기',
         kb(['Ctrl U'], '지금 친 줄을 통째로 지우기'),
-        kb(['Ctrl W'], '커서 앞 단어 하나 지우기'),
+        kb(['Alt ⌫'], '커서 앞 단어 하나 지우기 (Mac은 Option+⌫ · Windows에서 Ctrl+W는 탭이 닫혀요)'),
         kb(['Ctrl K'], '커서 오른쪽을 끝까지 지우기')),
       sec('화면 · 실행',
         kb(['Ctrl L'], '화면 비우기 (위로 스크롤하면 남아 있음)'),
         kb(['Ctrl C'], '멈춘·실행 중인 명령 강제 중단'),
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
+      sec('복사',
+        kb(['드래그'], '글자를 선택하면 놓는 순간 자동 복사'),
+        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그')),
       sec('도구 (오른쪽 위 버튼)',
-        tool('공유 워크스페이스', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
-        tool('화면 복구', '글자·줄이 깨질 때 다시 그림'),
-        tool('환경 설정', '글꼴·크기·테마·커서 모양')),
+        tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
+        tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
+        tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
       sec('클로드 코드',
         kb(['Esc'], '에이전트가 하던 작업 멈추기'),
         kb(['/'], '쓸 수 있는 명령 목록'))));
@@ -604,6 +684,7 @@ async function loadSessionLabel() {
 
 async function boot() {
   const p = prefs();
+  scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
   applyChrome(p.theme);
   if (!SESSION_ID) { gate('세션이 지정되지 않았습니다. 세션 목록에서 "열기"로 진입하세요.'); return; }
   if (!window.Terminal || !window.FitAddon) { gate('터미널 라이브러리(xterm) 로드 실패.'); return; }
@@ -625,10 +706,10 @@ async function boot() {
   titleEl = el('span', { class: 'title', text: SESSION_LABEL || '터미널', title: SESSION_ID });
   if (SESSION_LABEL) document.title = SESSION_LABEL + ' · Lively';
   const toolbar = el('div', { class: 'toolbar' },
-    el('button', { class: 'tbtn', text: '📁 공유 워크스페이스 열기', title: '파일 탐색기 열기/닫기', onclick: toggleExplorer }),
+    el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 현재 창에 맞춰 복구', onclick: forceRedraw }),
+    el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
   const host = el('div', { id: 'term-host' });
@@ -673,6 +754,8 @@ async function boot() {
   setupClipboard();
   setupPaste();
   setupWheel();
+  setupSelectionCopy();   // 드래그 선택 → 놓는 즉시 복사(#252)
+  setupOscClipboard();    // 앱 OSC52 클립보드 → 브라우저 클립보드(#252)
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
@@ -721,7 +804,20 @@ async function connectNow() {
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
-    backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text); } catch (_) { /* noop */ } },
+    backfill: (text) => {
+      try {
+        // [#252] 재접속 alt-screen 보정. Claude Code 등 풀스크린 TUI 는 alt-screen + 마우스모드(1003/1006)인데,
+        //  '이미 실행 중인' 세션에 나중에 붙은 클라는 최초의 alt-screen 진입(\e[?1049h)을 스트림에서 못 받아
+        //  normal buffer 로 남는다(마우스모드는 재렌더로 받아 mouseTrackingMode 는 켜짐). 그러면 휠이 앱으로
+        //  전달되지 않고 빈 로컬 스크롤백만 긁어 '스크롤이 안 되는' #252 증상. 앱이 마우스모드인데 클라가 normal
+        //  이면 alt-screen 으로 맞춰준다(이미 alt 인 신선한 클라·마우스 안 쓰는 셸엔 영향 없음 — 조건 가드).
+        if (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'
+            && term.buffer && term.buffer.active && term.buffer.active.type !== 'alternate') {
+          term.write('\x1b[?1049h');
+        }
+        term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text);
+      } catch (_) { /* noop */ }
+    },
     onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
