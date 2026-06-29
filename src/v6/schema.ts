@@ -369,6 +369,31 @@ export async function initV6Schema(): Promise<string> {
     END $$;
   `);
 
+  // ── 6c) project_list — 프로젝트 묶음(클릭업 List▸Task 의 List). level='project' 행을 0~1개 리스트로 그룹핑. ──
+  //  네이티브 전용(외부 PM 미러 없음 — 우리 ClickUp 매핑은 단일 컨테이너 List 유지, db-clickup-시드-매핑 결정 정합).
+  //  list_id 는 project 에 nullable FK(ON DELETE SET NULL) — 리스트 삭제 시 프로젝트는 보존되고 '미분류'로 떨어진다.
+  //  멤버(project_list_member)=리스트 참여자 → 웹 보드의 기본 펼침/접힘을 가른다(내 리스트=펼침). 프로젝트 팀원(project_member)과 직교.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_list(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      color TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS project_list_member(
+      list_id INT NOT NULL REFERENCES project_list(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      sort INT NOT NULL DEFAULT 0,
+      added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (list_id, member_id));
+    CREATE INDEX IF NOT EXISTS project_list_member_member_idx ON project_list_member(member_id);
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS list_id INT REFERENCES project_list(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS project_list_id_idx ON project(list_id) WHERE list_id IS NOT NULL;
+  `);
+
   // ── 7) project_category — 프로젝트↔카테고리 n:n(프로젝트 탭 사업/제품/시스템 탐색). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_category(
