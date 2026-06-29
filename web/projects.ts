@@ -1591,8 +1591,8 @@ function projectBodySection(id, p, reload) {
 
 // ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245). ──
 //  기존 '프로젝트 세부 설정' 모달의 '연결된 지식' 블록을 페이지 본문 섹션으로 승격. 필요/산출 각 칼럼에서
-//  ① 위키에서 매핑(openKnowledgePicker) ② 직접 작성(openProjectKnowledgeCreate → 링크) 가능,
-//  필요는 추가로 ③ ✨ 자동 추천(openKnowledgeRecommendPicker). 변경 후 v6 상세 GET 으로 재조회해 재페인트.
+//  ① 위키에서 매핑(openKnowledgePicker) ② 직접 작성(새 작성 페이지 #/knowledge/new?project=&relation= 로 이동, 연결 기본 채움) 가능,
+//  필요는 ③ ✨ 자동 추천(openKnowledgeRecommendPicker)이 가장 왼쪽. 변경 후 v6 상세 GET 으로 재조회해 재페인트.
 function projectKnowledgeSection(id, p, reload) {
   const knName = (k) => k.name || k.knowledge_name;
   let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
@@ -1642,16 +1642,18 @@ function projectKnowledgeSection(id, p, reload) {
     repaint();
   }
 
-  // 액션 — 각 박스 헤더 우상단(#258). 위키에서 검색 연결 · 직접 작성 · (필요만)자동 추천.
+  // 액션 — 각 박스 헤더 우상단(#258). (필요만)자동 추천 · 위키에서 검색 연결 · 직접 작성.
+  //  자동 추천은 가장 왼쪽. '직접 작성'은 모달이 아니라 새 작성 페이지로 이동하며 이 프로젝트의 필요/산출 연결을 기본 채움.
   const mkActs = (relation, withRecommend) => {
-    const acts = el('div', { class: 'pjk-acts' },
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 위키에서', title: '기존 위키 지식을 검색해 연결',
-        onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }),
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✎ 직접 작성', title: '새 지식을 작성해 이 프로젝트에 연결',
-        onclick: () => openProjectKnowledgeCreate(id, relation, p, refresh) }));
+    const acts = el('div', { class: 'pjk-acts' });
     if (withRecommend) acts.append(
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동 추천', title: '프로젝트 이름·설명으로 관련 지식 추천(의미검색)',
         onclick: () => openKnowledgeRecommendPicker(id, relation, cur[relation].map(knName), refresh) }));
+    acts.append(
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 위키에서', title: '기존 위키 지식을 검색해 연결',
+        onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✎ 직접 작성', title: '새 작성 페이지에서 지식을 쓰고 이 프로젝트에 연결',
+        onclick: () => { location.hash = '#/knowledge/new?project=' + id + '&relation=' + relation; } }));
     return acts;
   };
 
@@ -1699,66 +1701,7 @@ function projectKnowledgeSection(id, p, reload) {
   return card;
 }
 
-// 직접 작성 — 이 프로젝트 맥락에서 새 지식을 만든다. 분류는 프로젝트 분류로 자동(신규 지식은 분류 1개+ 필수),
-//  프로젝트에 분류가 없으면 전 분류 셀렉터로 고른다. 저장(POST /api/ui/knowledge) 후 relation 으로 프로젝트에 연결.
-function openProjectKnowledgeCreate(id, relation, p, onLinked) {
-  const relLabel = relation === 'produced' ? '산출' : '필요';
-  const titleIn = el('input', { type: 'text', class: 'pjk-create-in', placeholder: '제목', maxlength: '200' });
-  const bodyTa = el('textarea', { class: 'mem-edit-ta', rows: '12', placeholder: '본문 (markdown)' });
-  const projCats = (Array.isArray(p.categories) ? p.categories : []).filter((c) => c.key);
-  // 분류 — 프로젝트 분류가 있으면 고정 표시, 없으면 전 분류 셀렉터(value=key).
-  let catSel: any = null;
-  let catField: any;
-  if (projCats.length) {
-    catField = field('분류', el('div', { class: 'pjk-create-cat' },
-      ...projCats.map((c) => el('span', { class: 'kn-chip', text: '📁 ' + (c.name || c.key) })),
-      el('span', { class: 'admin-hint', text: '프로젝트 분류로 저장됩니다' })));
-  } else {
-    catSel = el('select', { class: 'pjk-create-in' }, el('option', { value: '', text: '— 분류 선택 —' }));
-    loadCategoryKeysForSelect(catSel);
-    catField = field('분류 (필수)', catSel);
-  }
-  const status = el('span', { class: 'admin-status' });
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '작성 후 연결' });
-  const root = el('div', { class: 'mem-modal' },
-    field('제목', titleIn), catField, field('본문', bodyTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status));
-  const back = overlayBox(relLabel + ' 지식 직접 작성', root);
-  setTimeout(() => titleIn.focus(), 0);
-  saveBtn.onclick = async () => {
-    const body = bodyTa.value.trim();
-    if (!body) { toast('본문을 입력하세요', true); return; }
-    const cats = projCats.length ? projCats.map((c) => c.key) : (catSel && catSel.value ? [catSel.value] : []);
-    if (!cats.length) { toast('분류를 선택하세요', true); return; }
-    saveBtn.disabled = true;
-    try {
-      const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({
-        title: titleIn.value.trim() || undefined, body_md: body,
-        injection: 'recalled', provenance: 'authored', category: cats }) });
-      const savedName = r && r.knowledge && r.knowledge.name;
-      if (!savedName) throw new Error('저장 응답에 이름이 없습니다');
-      await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: savedName, relation }) });
-      toast('작성한 지식을 ' + relLabel + ' 지식으로 연결했습니다');
-      back.remove();
-      if (onLinked) onLinked();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
-  };
-}
-
-// 전 space 카테고리를 셀렉터에 채운다(value=key — knowledge_save 의 category 파라미터가 key 배열). 실패해도 graceful.
-async function loadCategoryKeysForSelect(sel) {
-  const spaces = [['business', '사업'], ['product', '제품'], ['system', '시스템']];
-  await Promise.all(spaces.map(async ([sp, label]) => {
-    try {
-      const d = await api('/api/ui/categories?' + new URLSearchParams({ space: sp }));
-      const cats = (d && d.categories) || [];
-      if (!cats.length) return;
-      const og = el('optgroup', { label });
-      for (const c of cats) og.append(el('option', { value: c.key, text: c.name || c.key }));
-      sel.append(og);
-    } catch (_) { /* graceful */ }
-  }));
-}
+// (직접 작성은 모달이 아니라 새 작성 페이지(#/knowledge/new?project=&relation=)로 이관 — renderKnowledgeCreate 가 프로젝트 연결을 기본 채움.)
 
 // ── 본문 에디터 서식 툴바 — 텍스트 선택 시 그 위로 떠서 선택 영역에 마크다운 서식 적용(클릭업식, 박스 없는 인라인 편집용). ──
 //  렌더러가 지원하는 서식만 노출: 제목·굵게·기울임·코드·목록·인용·링크. 버튼은 mousedown preventDefault 로 textarea 포커스(=선택·편집모드)를 유지한다.

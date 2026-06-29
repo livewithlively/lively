@@ -173,7 +173,7 @@ function knRelatedItem(e) {
 
 // 지식 탭 진입 — sub ∈ {business, product, system, stats, review, pinned}. space 셋이면 2분할 뷰, 그 외 통계/검토/핀.
 async function renderKnowledge(view, sub, params) {
-  if (sub === 'new') return renderKnowledgeCreate(view);   // 위키 생성 — 모달이 아닌 별도 페이지(#255)
+  if (sub === 'new') return renderKnowledgeCreate(view, params);   // 위키 생성 — 모달이 아닌 별도 페이지(#255). params: project·relation 프리스테이징(플젝 '직접 작성')
   if (sub === 'stats') return renderKnowledgeStats(view);
   if (sub === 'review') return renderKnowledgeReview(view);
   if (sub === 'pinned') return renderKnowledgePinned(view);
@@ -806,7 +806,7 @@ function knProjectLinks(knowledgeName) {
 }
 
 // ── 위키 생성 페이지(#255) — 모달이 아닌 별도 페이지. 폼 + 프로젝트 연결(복수, 필요/산출) 스테이징 후 저장 시 일괄 연결. ──
-async function renderKnowledgeCreate(view) {
+async function renderKnowledgeCreate(view, params?) {
   if (!hasScope('memory')) { location.hash = '#/knowledge'; return; }   // 읽기전용 사용자는 목록으로
   const nameIn = el('input', { type: 'text', placeholder: '파일명 (소문자 영문·숫자·-, 비우면 제목에서 자동)' });
   const titleIn = el('input', { type: 'text', placeholder: '제목' });
@@ -843,6 +843,18 @@ async function renderKnowledgeCreate(view) {
         staged.push({ id: proj.id, name: proj.name, relation }); paintStaged(); return true;
       } }) });
   paintStaged();
+
+  // 플젝 페이지 '직접 작성'에서 넘어온 경우(?project=&relation=) — 그 프로젝트의 필요/산출 연결을 기본 채움.
+  const preProj = params && params.get && params.get('project');
+  const preRel = params && params.get && params.get('relation');
+  if (preProj && (preRel === 'required' || preRel === 'produced')) {
+    (async () => {
+      try {
+        const d = await api('/api/ui/v6/projects/' + encodeURIComponent(preProj)).then((r) => r && (r.project || r));
+        if (d && d.id) { staged.push({ id: d.id, name: d.name, relation: preRel }); paintStaged(); }
+      } catch (_) { /* graceful — 프로젝트를 못 찾으면 프리스테이징 생략 */ }
+    })();
+  }
 
   const status = el('span', { class: 'admin-status' });
   const saveBtn = el('button', { class: 'btn btn-primary', text: '추가' });
