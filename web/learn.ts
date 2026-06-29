@@ -77,7 +77,7 @@ async function renderInstall(view) {
   slot.append(skeleton('설치 안내를 준비하는 중'));
   view.replaceChildren(head, slot);
   document.getElementById('view')!.focus?.();
-  onboardingBanner().then((b) => { if (b) head.after(b); }); // 온보딩 진행 배너(미완 시) → #/onboarding
+  onboardingBanner().then((b) => { if (b) head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
     .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
 }
