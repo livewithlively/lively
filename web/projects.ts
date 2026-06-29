@@ -1597,6 +1597,8 @@ function projectKnowledgeSection(id, p, reload) {
   const knName = (k) => k.name || k.knowledge_name;
   let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
 
+  let remeasure: any = null;  // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
+
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   card.append(el('div', { class: 'card-head' },
     el('h3', { text: '지식 흐름' }),
@@ -1632,6 +1634,7 @@ function projectKnowledgeSection(id, p, reload) {
     prodCount.textContent = String(cur.produced.length);
     paint(reqList, cur.required, 'required', '아직 없습니다 — 아래에서 골라 연결하세요.');
     paint(prodList, cur.produced, 'produced', '아직 없습니다 — 이 프로젝트가 만든 지식을 연결하세요.');
+    if (remeasure) requestAnimationFrame(remeasure);  // 내용이 바뀌면 접기 필요 여부 재판정.
   }
   async function refresh() {
     try { const d = await api('/api/ui/v6/projects/' + id).then((r) => r && (r.project || r));
@@ -1667,12 +1670,35 @@ function projectKnowledgeSection(id, p, reload) {
     el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount),
     prodList, mkActs('produced', false));
 
-  card.append(el('div', { class: 'pjk-flow' },
+  const flow = el('div', { class: 'pjk-flow' },
     reqCol,
     el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }),
     node,
     el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }),
-    prodCol));
+    prodCol);
+
+  // 길면(특정 높이 초과) 접기 — 본문 섹션과 동일한 펼침 알약(.proj-detail-body-expand). 짧으면 컨트롤 숨기고 펼쳐 둔다.
+  const collapseBox = el('div', { class: 'pjk-collapse collapsed' }, flow);
+  const exLbl = el('span', { class: 'lbl', text: '더 보기' });
+  const exCaret = el('span', { class: 'caret', text: '⌄' });
+  const exBtn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, exLbl, exCaret);
+  const exRow = el('div', { class: 'proj-detail-body-expand-row pjk-expand-row' }, exBtn);
+  let userExpanded = false;  // 사용자가 펼쳤는지 기억 — 재측정 후에도 상태 보존.
+  const applyExpanded = (expanded) => {
+    collapseBox.classList.toggle('collapsed', !expanded);
+    exCaret.textContent = expanded ? '⌃' : '⌄';
+    exLbl.textContent = expanded ? '접기' : '더 보기';
+  };
+  exBtn.onclick = () => { userExpanded = collapseBox.classList.contains('collapsed'); applyExpanded(userExpanded); };
+  // 캡 높이로 강제해 넘치는지 측정 → 짧으면 컨트롤 숨기고 펼침, 길면 컨트롤 노출(사용자 펼침 상태 유지).
+  remeasure = () => {
+    collapseBox.classList.add('collapsed');
+    const tall = flow.scrollHeight > collapseBox.clientHeight + 2;
+    if (!tall) { collapseBox.classList.remove('collapsed'); exRow.style.display = 'none'; return; }
+    exRow.style.display = '';
+    applyExpanded(userExpanded);
+  };
+  card.append(collapseBox, exRow);
   repaint();
   return card;
 }
