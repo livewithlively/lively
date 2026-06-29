@@ -2679,3 +2679,31 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .inj-subpieces { margin: 2px 0 2px 18px; padding-left: 12px; border-left: 2px dashed var(--line-net); }
 .inj-subpiece { padding: 5px 8px; }
 .inj-token { flex: none; min-width: 92px; font-size: 12px; font-weight: 700; color: var(--ink-note); background: var(--line-row); padding: 1px 6px; border-radius: 5px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   프로젝트 보드 리스트 그룹(#280) — 리스트 1차 그룹핑(클릭업 List▸Task)
+   ───────────────────────────────────────────────────────────────────────── */
+.pjv-list-colhead { margin-bottom: 2px; }
+.pjv-list-colhead-name { font-size: 11.5px; font-weight: 600; color: var(--muted-2); letter-spacing: .2px; }
+.pjv-list-group { margin-top: 2px; }
+/* 리스트 헤더 — 좌(캐럿·색점·이름·개수·내리스트칩) / 우(멤버 페이스파일·⋯). 헤더 빈 곳 클릭 = 접기/펼치기. */
+.pjv-tgroup-head.pjv-list-head { justify-content: space-between; cursor: pointer; padding: 9px 12px; margin-top: 6px; gap: 10px; }
+.pjv-tgroup-head.pjv-list-head:hover { background: var(--bg-tint); }
+.pjv-list-head-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pjv-list-head-main .pjv-tgroup-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-list-head-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.pjv-list-head-actions .pjv-cell-btn { width: auto; height: auto; padding: 3px 6px; border-radius: 7px; }
+.pjv-list-head-un .pjv-tgroup-label { color: var(--muted); font-weight: 600; }
+.pjv-list-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(21,35,59,.10); }
+.pjv-list-dot.sm { width: 9px; height: 9px; }
+.pjv-list-mine-chip { font-size: 11px; font-weight: 700; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; letter-spacing: .2px; flex: none; }
+/* 헤더 버튼 — 내 할당만(토글, .pjv-closed-btn 재사용) · 새 리스트 */
+.pjv-mine-btn svg { width: 14px; height: 14px; flex: none; }
+.pjv-newlist-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line-net); background: var(--bg); cursor: pointer; padding: 4px 11px 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--blue); font-family: inherit; }
+.pjv-newlist-btn:hover { background: var(--bg-tint); border-color: var(--blue); }
+.pjv-newlist-plus { font-size: 14px; line-height: 1; }
+/* 리스트 색 팔레트(생성/수정 폼) — 'A'=자동(이름 해시색) */
+.pjv-color-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.pjv-sw { width: 26px; height: 26px; border-radius: 7px; border: 2px solid transparent; cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(21,35,59,.10); }
+.pjv-sw.on { border-color: var(--ink); }
+.pjv-sw-none { background: var(--bg-tint); color: var(--muted); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }

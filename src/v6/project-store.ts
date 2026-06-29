@@ -14,6 +14,7 @@ import { enqueueExternalPush } from "./external-outbox.js";
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
   `id, level, parent_id, name, description, status, status_raw, status_category, folder, created_by,
+   list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
    sort, created_at, updated_at, completed_at`;
@@ -24,6 +25,8 @@ export interface ProjectRow {
   // status_raw = 소스 원문 상태명(개방 어휘, 네이티브는 NULL). status_category = 정규 카테고리(backlog|unstarted|started|done|canceled).
   status_raw: string | null; status_category: string | null;
   folder: string | null; created_by: string | null;
+  // 리스트 묶음(level='project' 행만 의미; task/subtask 는 NULL). 0~1개 리스트에 소속. project_list.id 또는 NULL(미분류).
+  list_id: number | null;
   // 태스크 필드(task/subtask 행만 채워짐; project 행은 NULL). 기간은 'YYYY-MM-DD' 문자열(schema.ts 참조).
   priority: string | null; assignee: string | null;
   start_date: string | null; due_date: string | null;
@@ -109,6 +112,7 @@ export interface ProjectDetail extends ProjectRow {
   tags: unknown[]; // 프로젝트 자체 태그(클릭업식 메타) — task_tag_link 를 project.id 로 사용.
   time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
   repos: string[]; // 관련 레포 이름(project_repo) — AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
+  list: { id: number; name: string; color: string | null } | null; // 소속 리스트(미분류면 null) — 상세 '리스트' 필드 표시용.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -183,7 +187,12 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
   const repoRows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [id]);
   const repos = repoRows.map((r) => r.repo);
 
-  return { ...project, members, tasks, categories, knowledge, fields, tags, time, repos };
+  // 소속 리스트(있으면 표시명·색) — 상세 페이지 '리스트' 필드용. 미분류면 null.
+  const list = project.list_id != null
+    ? ((await one(itemsPool, `SELECT id, name, color FROM project_list WHERE id=$1`, [project.list_id])) ?? null)
+    : null;
+
+  return { ...project, list, members, tasks, categories, knowledge, fields, tags, time, repos };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
