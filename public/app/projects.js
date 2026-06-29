@@ -2523,9 +2523,11 @@ function openProjectComments(id, members) {
     })();
     setTimeout(() => ta.focus(), 180);
 }
-// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 분류 · 레포 · 규칙 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
+// ── 프로젝트 세부 설정 팝업 — 팀원 · 분류 · 레포 · 규칙 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
 //  (필요/산출 지식은 본문 아래 '지식 흐름' 섹션으로 이관 — #245.)
 //  (참고 파일 블록 제거 — 본문 '공유 폴더' 브라우저와 중복이라 거기로 일원화 — #246.)
+//  (상태 블록 제거 — 상세 메타 패널의 상태 필드(pjvProjStatusPill, 클릭해 3단계 변경) + 대시보드·목록·일괄바와
+//   중복이고 모달 토글은 2단계뿐이라 더 약했다 — #246.)
 //  (삭제·팀원 수정을 헤더에서 여기로 이관 — 헤더는 제목/상태칩/설정 버튼만.)
 function openProjectSettings(id, p, reload, meId, base) {
     const B = base || '/api/ui/v6/projects/';
@@ -2534,9 +2536,9 @@ function openProjectSettings(id, p, reload, meId, base) {
     if (box)
         box.classList.add('ov-box-wide');
     const closeAndReload = () => { back.remove(); reload(); }; // 변경하면 팝업 닫고 상세 재렌더
-    back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), 
+    back.querySelector('.proj-settings').append(projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), 
     // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
-    // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246.)
+    // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246. 상태 블록은 메타 패널 상태 필드로 일원화 — #246.)
     projectDangerBlock(id, p, meId, back));
 }
 // ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 시작 명령을 만들어 준다. ──
@@ -2771,24 +2773,8 @@ function projectDangerBlock(id, p, meId, back) {
     };
     return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 삭제' }), el('p', { class: 'ps-block-hint', text: '프로젝트와 그 안의 모든 태스크가 영구 삭제됩니다(되돌릴 수 없음). 연결된 지식은 보존돼요.' }), el('div', { class: 'ps-rules-actions' }, delBtn));
 }
-// 상태 블록 — 진행 중 ↔ 완료 토글. (구 헤더 '완료로 표시' 버튼을 여기로 이관, 라벨 '완료된 프로젝트로'.)
-function projectStatusBlock(id, p, afterStatus) {
-    const isDone = p.status === 'done';
-    const btn = el('button', { class: 'btn btn-sm btn-ghost', text: isDone ? '진행 중으로' : '완료된 프로젝트로' });
-    btn.onclick = async () => {
-        btn.disabled = true;
-        try {
-            await api('/api/ui/v6/projects/' + id + '/status', { method: 'POST', body: JSON.stringify({ status: isDone ? 'active' : 'done' }) });
-            toast(isDone ? '진행 중으로 옮겼습니다' : '완료된 프로젝트로 옮겼습니다');
-            afterStatus();
-        }
-        catch (e) {
-            toast('실패 — ' + e.message, true);
-            btn.disabled = false;
-        }
-    };
-    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 상태' }), el('p', { class: 'ps-block-hint', text: isDone ? '지금 완료된 프로젝트입니다. 다시 진행 중으로 되돌릴 수 있어요.' : '지금 진행 중입니다. 끝났으면 완료된 프로젝트로 옮기세요.' }), btn);
-}
+// (상태 블록 제거 — #246. 상태 변경은 상세 메타 패널의 상태 필드(pjvProjStatusPill, 클릭→할 일/진행 중/완료 3단계)
+//  + 대시보드 보드·목록 뷰·행 ⋯ 메뉴·일괄작업 바 어디서든 가능. 모달 토글은 2단계뿐이라 더 약했고 중복이었다.)
 // 규칙 블록 — 프로젝트 AGENTS.md 의 '규칙' 영역만 편집(나머지 digest 는 서버가 자동 생성). /rules 엔드포인트로 로드/저장.
 //  AGENTS.md 는 Codex 가 네이티브 로드, CLAUDE.md 는 `@AGENTS.md` 한 줄로 Claude Code 가 끌어옴(서버가 함께 관리).
 function projectRulesBlock(id) {
