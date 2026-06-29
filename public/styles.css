@@ -2707,3 +2707,9 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-sw { width: 26px; height: 26px; border-radius: 7px; border: 2px solid transparent; cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(21,35,59,.10); }
 .pjv-sw.on { border-color: var(--ink); }
 .pjv-sw-none { background: var(--bg-tint); color: var(--muted); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+/* 그룹 기준 토글(리스트 ⇄ 상태) — 보드 헤더 (#280) */
+.pjv-groupseg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+.pjv-groupseg-btn { border: none; background: var(--bg); padding: 4px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; font-family: inherit; }
+.pjv-groupseg-btn + .pjv-groupseg-btn { border-left: 1px solid var(--line); }
+.pjv-groupseg-btn:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.pjv-groupseg-btn.active { background: var(--blue); color: #fff; }

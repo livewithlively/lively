@@ -134,10 +134,7 @@ const projectGetV6: Capability = {
   handler: async (input: any, user: any, ctx: any) => {
     const project = await getProject(input.id);
     if (!project) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
-    // 웹(상세 페이지)은 org #/projects 와 동일하게 팀원만 — 비초대자는 403. MCP(에이전트 조직 조회)는 무게이트.
-    if (ctx?.source === "web" && !(await isProjectMember(input.id, ctx?.actor ?? user?.userId ?? null))) {
-      throw new HttpError(403, "초대받은 팀원만 볼 수 있습니다");
-    }
+    // 프로젝트 열람 전원 개방(#280) — 보드가 전사 프로젝트를 리스트로 보여주므로 비참여 프로젝트도 클릭해 열 수 있어야 한다(구 팀원-only 403 제거).
     return { project };
   },
 };
@@ -304,11 +301,8 @@ const projectDeleteV6: Capability = {
     const actor = ctx?.actor ?? user?.userId ?? null;
     const before = await getProjectRow(input.id);
     if (!before) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
-    // 소유자 본인만 삭제 — created_by(생성 시 actor=userId||email)와 요청자 일치를 강제한다.
-    //  프론트의 버튼 숨김에 의존하지 않는 서버측 게이트(채널·토큰 무관 동일 적용 — fail-closed).
-    if (!actor || before.created_by !== actor) {
-      throw new HttpError(403, "본인이 만든 프로젝트만 삭제할 수 있습니다");
-    }
+    // 삭제 전원 개방(#280) — 인증만 요구(작성자 제한 해제, 채널·토큰 무관). 삭제는 감사로그 기반으로 #/trash 에서 복원 가능.
+    if (!actor) throw new HttpError(401, "로그인이 필요합니다");
     await deleteProject(input.id, { actor, source: ctx?.source ?? "web" });
     return { deleted: true, id: input.id };
   },
@@ -449,10 +443,7 @@ const projectRecommendKnowledgeV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
-    // 웹은 상세와 동형 게이트(팀원만), MCP(에이전트 조직 조회)는 무게이트.
-    if (ctx?.source === "web" && !(await isProjectMember(input.id, ctx?.actor ?? user?.userId ?? null))) {
-      throw new HttpError(403, "초대받은 팀원만 볼 수 있습니다");
-    }
+    // 열람 전원 개방(#280) — 상세 페이지와 동일(구 팀원-only 403 제거).
     return { entries: await recommendKnowledgeForProject(input.id, { limit: input.limit, minScore: input.min_score }) };
   },
 };

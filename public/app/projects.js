@@ -70,8 +70,8 @@ async function renderProjectV2Board(view) {
         p.field_values = (board.valuesByProject && board.valuesByProject[p.id]) || {};
     const reload = () => renderProjectV2Board(view);
     const meId = (state.me && (state.me.userId || state.me.email)) || '';
-    // 삭제 가능 = 내가 만든 것(서버 actor=userId||email 파생과 동일 규칙). 서버도 403 으로 재검증.
-    const canDelete = (p) => !!meId && p.created_by != null && String(p.created_by) === String(meId);
+    // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
+    const canDelete = (_p) => !!meId;
     view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '프로젝트' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '리스트로 묶어서 봅니다 — 내가 참여한 리스트는 펼쳐지고, 나머지는 접혀 있어요.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId), el('div', { class: 'card-head', style: 'margin: 24px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '회사 전체' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))), companyTimelineSection());
 }
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
@@ -95,6 +95,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const mineBtn = el('button', { class: 'pjv-closed-btn pjv-mine-btn', type: 'button', title: '내가 만든·참여한 프로젝트만 보기' }, pjvIcon('assignee'), el('span', { text: '내 할당만' }));
     const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 프로젝트 표시' }, pjvCheckCircle(), el('span', { text: 'Closed' }));
     const newListBtn = el('button', { class: 'pjv-newlist-btn', type: 'button', title: '새 리스트 만들기' }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }));
+    // 그룹 기준 토글 — 리스트(기본) ⇄ 상태(원래 보드 복구, #280). 상태 모드 = 할 일/진행 중/완료 그룹.
+    const listSegBtn = el('button', { class: 'pjv-groupseg-btn', type: 'button', text: '리스트' });
+    const statusSegBtn = el('button', { class: 'pjv-groupseg-btn', type: 'button', text: '상태' });
+    const groupSeg = el('div', { class: 'pjv-groupseg', 'aria-label': '그룹 기준' }, listSegBtn, statusSegBtn);
     const body = el('div', { class: 'pjv-tasks-body' });
     const syncToggles = () => {
         subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
@@ -103,9 +107,28 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             lbl.textContent = PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
         closedBtn.classList.toggle('active', pjvProjClosedView.done);
         mineBtn.classList.toggle('active', pjvBoardMineOnly.on);
+        listSegBtn.classList.toggle('active', pjvBoardGroupBy.mode === 'list');
+        statusSegBtn.classList.toggle('active', pjvBoardGroupBy.mode === 'status');
+        newListBtn.style.display = pjvBoardGroupBy.mode === 'list' ? '' : 'none'; // '새 리스트'는 리스트 모드에서만
+    };
+    // 상태 그룹(원래 보드) — 할 일/진행 중/완료. 컬럼 헤더 한 번 + pjvProjGroup 재사용('내 할당만'·Closed 반영).
+    const renderStatus = () => {
+        const shown = pjvBoardMineOnly.on ? projects.filter((p) => mineIds.has(p.id)) : projects;
+        const todo = shown.filter((p) => p.status === 'todo');
+        const inprog = shown.filter((p) => p.status !== 'done' && p.status !== 'todo');
+        const done = shown.filter((p) => p.status === 'done');
+        body.replaceChildren(pjvListColHead(fields, anchorId, reload));
+        body.append(pjvProjGroup('진행 중', 'in_progress', inprog, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
+        body.append(pjvProjGroup('할 일', 'todo', todo, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
+        if (pjvProjClosedView.done)
+            body.append(pjvProjGroup('완료', 'done', done, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
     };
     const render = () => {
         taskCtx.mode = pjvProjTaskMode.mode;
+        if (pjvBoardGroupBy.mode === 'status') {
+            renderStatus();
+            return;
+        }
         const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
         body.replaceChildren(pjvListColHead(fields, anchorId, reload)); // 컬럼 헤더 한 번(상단)
         if (!groups.length) {
@@ -118,8 +141,18 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
     closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
     newListBtn.onclick = (e) => { e.stopPropagation(); openListForm(reload); };
+    listSegBtn.onclick = (e) => { e.stopPropagation(); if (pjvBoardGroupBy.mode !== 'list') {
+        pjvBoardGroupBy.mode = 'list';
+        syncToggles();
+        render();
+    } };
+    statusSegBtn.onclick = (e) => { e.stopPropagation(); if (pjvBoardGroupBy.mode !== 'status') {
+        pjvBoardGroupBy.mode = 'status';
+        syncToggles();
+        render();
+    } };
     syncToggles();
-    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), subtaskBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn, newListBtn)));
+    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), groupSeg, subtaskBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn, newListBtn)));
     card.append(body);
     render();
     return card;
@@ -3001,10 +3034,7 @@ function projectMembersBlock(id, p, closeAndReload, base) {
 }
 // 삭제 블록 — 작성자 본인만 노출(서버도 403 재검증). 확인 후 삭제 → 팝업 닫고 목록으로.
 function projectDangerBlock(id, p, meId, back) {
-    const isMine = !!meId && p.created_by != null && String(p.created_by) === String(meId);
-    if (!isMine) {
-        return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '프로젝트 삭제' }), el('p', { class: 'ps-block-hint', text: '프로젝트는 작성자만 삭제할 수 있어요.' }));
-    }
+    // 삭제 전원 개방(#280) — 인증된 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
     const delBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '프로젝트 삭제' });
     delBtn.onclick = async () => {
         if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음). 연결된 지식은 보존됩니다.'))
@@ -3559,6 +3589,8 @@ const pjvClosedView = { tasks: false, subtasks: false };
 const pjvProjClosedView = { done: false };
 // '내 할당만' 토글(보드) — 내가 만든·팀원인 프로젝트만. 세션 유지(reload 무관). 기본 OFF.
 const pjvBoardMineOnly = { on: false };
+// 보드 그룹 기준 — 'list'(리스트별, 기본) | 'status'(할 일/진행 중/완료, 원래 보드 복구). 세션 유지.
+const pjvBoardGroupBy = { mode: 'list' };
 // 리스트 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 리스트=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map();
 // 프로젝트 보드의 '하위 태스크' 버튼 모드 — 각 프로젝트를 펼쳐 그 안의 태스크를 보여주는 방식.
