@@ -325,55 +325,19 @@ function setupPaste() {
   }, true);
 }
 
-// 마우스 휠을 '우리가 직접' 처리한다(#252 스크롤 안 됨 — 특히 Windows). 배경:
-//  Claude Code 등 TUI 는 alt-screen + 마우스모드(1003/1006)라 휠로 자기 대화이력을 스크롤한다. 그런데
-//  브라우저/네이티브 뷰포트(.xterm-viewport overflow:scroll)의 '기본 휠 스크롤'이 이벤트를 먼저 먹어,
-//  앱까지 휠이 안 닿던 문제(화살표키로만 스크롤되던 증상). 또 xterm 기본 휠→앱 전달은 OS/브라우저별로
-//  들쭉날쭉하다. → ① 비-passive 리스너로 터미널 위 휠의 브라우저 기본 동작을 막고, ② alt-screen+마우스모드면
-//  휠을 SGR 마우스 이벤트(현재 셀 위치 + 휠↑/↓)로 인코딩해 입력채널(send-keys)로 앱에 직접 보낸다(키 입력과
-//  같은 검증된 경로 → OS 무관). ③ normal buffer 는 로컬 스크롤백 직접 스크롤.
-let lastMouseCell = { col: 1, row: 1 }; // 마지막 mousemove 셀(SGR 좌표용) — 앱이 위치 기준으로 스크롤 영역 판정
+// 마우스 휠 = 스크롤바처럼 로컬 스크롤백을 직접 오르내림(하드 요구사항). control mode 에선 xterm 이
+//  스크롤백을 소유하므로 normal buffer 에선 휠을 항상 로컬 스크롤로 처리하고 앱으로 흘리지 않는다(false 반환).
+//  단 pane 안의 alt-screen 앱(vim/less 등)은 그쪽이 휠을 쓰도록 그대로 전달(true).
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
-  const cellFromEvent = (e) => {
-    try {
-      const scr = (term.element && term.element.querySelector('.xterm-screen')) || term.element;
-      const r = scr.getBoundingClientRect();
-      return {
-        col: Math.min(term.cols, Math.max(1, Math.floor((e.clientX - r.left) / (r.width / term.cols)) + 1)),
-        row: Math.min(term.rows, Math.max(1, Math.floor((e.clientY - r.top) / (r.height / term.rows)) + 1)),
-      };
-    } catch (_) { return lastMouseCell; }
-  };
-  try {
-    const host = term.element || document.getElementById('term-host');
-    if (host) {
-      // 브라우저 기본 휠(페이지/뷰포트 네이티브 스크롤)이 이벤트를 '먹는' 것을 막는다(비-passive 필수).
-      host.addEventListener('wheel', (e) => { try { e.preventDefault(); } catch (_) { /* noop */ } }, { passive: false, capture: true });
-      host.addEventListener('mousemove', (e) => { lastMouseCell = cellFromEvent(e); }, { passive: true });
-    }
-  } catch (_) { /* noop */ }
   term.attachCustomWheelEventHandler((e) => {
+    try { if (term.buffer.active.type === 'alternate') return true; } catch (_) { /* noop */ }
     let lines;
     if (e.deltaMode === 1) lines = e.deltaY;                 // line 단위
     else if (e.deltaMode === 2) lines = e.deltaY * term.rows; // page 단위
     else lines = e.deltaY / 18;                               // pixel → 대략 셀높이로 환산
     const n = Math.trunc(lines) || (e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0);
-    if (!n) return false;
-    let alt = false, mouseOn = false;
-    try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
-    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
-    if (alt && mouseOn) {                                     // alt-screen 앱(Claude Code 등)에 휠을 직접 전달
-      const c = cellFromEvent(e) || lastMouseCell;
-      const btn = n < 0 ? 64 : 65;                            // 64=휠↑, 65=휠↓ (SGR 1006)
-      const count = Math.min(Math.abs(n), 6);                 // 과도 스크롤 클램프
-      let seq = '\x1b[<35;' + c.col + ';' + c.row + 'M';      // 위치 motion(앱이 커서 위치 파악 후 그 영역 스크롤)
-      for (let i = 0; i < count; i++) seq += '\x1b[<' + btn + ';' + c.col + ';' + c.row + 'M';
-      sendInput(seq);
-      return false;
-    }
-    if (alt) return true;                                     // 마우스모드 아닌 alt 앱 → xterm 기본
-    term.scrollLines(n);                                      // normal buffer → 로컬 스크롤백
+    if (n) term.scrollLines(n);
     return false;
   });
 }
