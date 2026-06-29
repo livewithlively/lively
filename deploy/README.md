@@ -146,6 +146,7 @@ deploy/
   bootstrap.sh        # 한 줄 설치 진입점(curl|sh): 코드 획득(온라인/오프라인) → install.sh
   install.sh          # 설치 엔진 (OS 감지 → <os>/provision.sh, 7단계). 전달 방식 무관.
   update.sh           # 기존 박스 업데이트(빌드→재시작→healthz, --kit)
+  uninstall.sh        # 제거(install 역연산): 서비스·컨테이너·키트 제거 / --purge=볼륨·.env·디렉토리까지
   lib/common.sh       # 공유: 로그·OS감지·시크릿·.env 비파괴 생성·store_up·healthz
   env.example         # .env 문서(시크릿 없음)
   initdb/01-init.sh   # pgvector 최초 init: domainmap DB 생성
