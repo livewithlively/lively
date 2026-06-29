@@ -682,8 +682,17 @@ async function boot() {
 
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 현재 ws 를 참조해 전송.
   term.onData((d) => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
-  // 탭이 백그라운드→포그라운드로 돌아오면, 끊겨 있을 때 즉시 재연결.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && (!ws || ws.readyState >= 2)) { reconnectDelay = 1000; connectNow(); } });
+  // 탭이 백그라운드→포그라운드로 돌아올 때: 끊겨 있으면 재연결, 연결돼 있으면 '이 탭'으로 창 크기를 다시 요구한다.
+  //  서버는 window-size latest 라, 지금 보는 탭이 refresh-client 를 보내 '최근 활동'이 되면 pane 이 이 탭 크기로
+  //  맞춰져 깨짐이 풀린다(다른 탭·잔존 연결이 더 큰 pane 을 잡고 있던 경우의 #252 증상 회복). forceRedraw =
+  //  fit + refresh-client 재전송 + (control) 재캡처 → 크기 재요구와 깨끗한 재그림을 한 번에.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (!ws || ws.readyState >= 2) { reconnectDelay = 1000; connectNow(); }
+    else if (ws.readyState === 1) forceRedraw();
+  });
+  // 다른 브라우저 창에서 이 창으로 전환(같은 창 탭전환은 visibilitychange, 창 전환은 focus)될 때도 동일하게 크기 재요구.
+  window.addEventListener('focus', () => { if (ws && ws.readyState === 1) forceRedraw(); });
 
   connectNow();
 }
