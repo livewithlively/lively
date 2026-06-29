@@ -1743,7 +1743,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 }
 /* 길면 접기 — 본문 섹션과 동일한 클립+페이드(.proj-detail-body-expand 알약 재사용). */
 .pjk-collapse { position: relative; }
-.pjk-collapse.collapsed { max-height: 300px; overflow: hidden; }
+.pjk-collapse.collapsed { max-height: 240px; overflow: hidden; }
 .pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
 .pjk-expand-row { margin-top: 10px; }
 /* 직접 작성 모달 입력 */
