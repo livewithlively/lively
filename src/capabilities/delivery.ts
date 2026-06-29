@@ -465,7 +465,12 @@ export const deliveryCapabilities: Capability[] = [
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
       const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice, write_tools: c.write_tools, auto_approve: autoApprove };
+      // 너지 '유효값' 서빙(#270): 어드민 오버라이드가 없으면 서버 단일소스 DEFAULT_WRITEBACK_NOTICE 를 fold 해 준다.
+      //  → session-preload 가 이 값을 매 세션 ~/.lively/hooks-config.json 에 기록 → 게이트가 라이브로 사용
+      //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
+      //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
+      //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts)를 저장한다.",

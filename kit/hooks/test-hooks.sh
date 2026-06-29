@@ -95,8 +95,8 @@ run '{"session_id":"testsess1","tool_name":"Write"}' work-flag.mjs
 run '{"session_id":"testsess1b","tool_name":"apply_patch"}' work-flag.mjs
 [ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess1b.worked" ] && ok "flag①b apply_patch(Codex 편집) → .worked" || bad "flag①b apply_patch" "code=$CODE flag=$([ -f $FLAG_DIR/testsess1b.worked ] && echo y || echo n)"
 
-run '{"session_id":"testsess2","tool_name":"mcp__lively__pm_task_comment"}' work-flag.mjs
-[ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess2.writeback" ] && [ -f "$FLAG_DIR/testsess2.lively" ] && ok "flag② mcp pm_task_comment → .writeback + .lively" || bad "flag② mcp write" "code=$CODE"
+run '{"session_id":"testsess2","tool_name":"mcp__lively__activity_log"}' work-flag.mjs
+[ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess2.writeback" ] && [ -f "$FLAG_DIR/testsess2.lively" ] && ok "flag② mcp activity_log → .writeback + .lively" || bad "flag② mcp write" "code=$CODE"
 
 run '{"session_id":"testsess3","tool_name":"mcp__lively__search_items"}' work-flag.mjs
 [ $CODE -eq 0 ] && [ ! -e "$FLAG_DIR/testsess3.writeback" ] && [ ! -e "$FLAG_DIR/testsess3.worked" ] && [ -f "$FLAG_DIR/testsess3.lively" ] && ok "flag③ 읽기툴 → .lively만(writeback/worked 없음)" || bad "flag③ 읽기툴" "writeback/worked 누수 또는 .lively 부재"
@@ -113,11 +113,11 @@ run '{"session_id":"testsess5b","tool_name":"Write"}' work-flag.mjs LIVELY_OFF=1
 run 'garbage!!!' work-flag.mjs
 [ $CODE -eq 0 ] && ok "flag⑥ 쓰레기 stdin → exit0" || bad "flag⑥ 쓰레기 stdin" "code=$CODE"
 
-run '{"session_id":"testsess7","tool_name":"mcp__lively__propose_domain"}' work-flag.mjs
-[ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess7.writeback" ] && ok "flag⑦ mcp propose_domain → .writeback" || bad "flag⑦ propose_domain" "code=$CODE"
+run '{"session_id":"testsess7","tool_name":"mcp__lively__knowledge_save"}' work-flag.mjs
+[ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess7.writeback" ] && ok "flag⑦ mcp knowledge_save → .writeback" || bad "flag⑦ knowledge_save" "code=$CODE"
 
 # 비-lively MCP 쓰기 툴 suffix → writeback(서버 무관) 이지만 .lively 는 안 붙음
-run '{"session_id":"testsess8","tool_name":"mcp__other__pm_task_comment"}' work-flag.mjs
+run '{"session_id":"testsess8","tool_name":"mcp__other__activity_log"}' work-flag.mjs
 [ $CODE -eq 0 ] && [ -f "$FLAG_DIR/testsess8.writeback" ] && [ ! -e "$FLAG_DIR/testsess8.lively" ] && ok "flag⑧ 비-lively MCP 쓰기 → .writeback, .lively 없음" || bad "flag⑧ 비-lively" "code=$CODE"
 
 # ───────────────────────── stop-writeback-gate ─────────────────────────
@@ -180,6 +180,24 @@ rmdir "$GATE_OUT_DIR3" 2>/dev/null
 touch "$FLAG_DIR/testsessJ.worked"
 run_in "$HERE" "{\"session_id\":\"testsessJ\",\"stop_hook_active\":false,\"cwd\":\"/tmp\"}" stop-writeback-gate.mjs "LIVELY_WORK_ROOTS=$HERE"
 [ $CODE -eq 0 ] && [ -z "$OUT" ] && [ ! -e "$FLAG_DIR/testsessJ.blocked" ] && ok "stop⑪ stdin cwd(밖) → 침묵(process.cwd=work-root 무시)" || bad "stop⑪ stdin cwd 밖" "code=$CODE out=${OUT:0:80}"
+
+# 병렬 중복 등록 가드(#270 회귀) — 같은 Stop 이벤트에 훅이 유저+프로젝트 settings 양쪽에서 등록되면
+#   클코가 병렬 실행한다. .blocked 원자 점유(O_EXCL)가 없으면 둘 다 block → 너지 N회('여러번 뜨는' 버그).
+#   같은 session_id 로 2개를 동시에 띄워 여러 라운드 돌려, 라운드당 block 출력이 정확히 1회인지 검증.
+RACE_FAIL=0
+for r in 1 2 3 4 5 6 7 8; do
+  rm -f "$FLAG_DIR/testsessK".*
+  touch "$FLAG_DIR/testsessK.worked" "$FLAG_DIR/testsessK.lively"
+  RIN="{\"session_id\":\"testsessK\",\"stop_hook_active\":false}"
+  R1="$FLAG_DIR/testsessK.o1"; R2="$FLAG_DIR/testsessK.o2"
+  ( cd "$HERE" && printf '%s' "$RIN" | env "LIVELY_WORK_ROOTS=$HERE" node "$HERE/stop-writeback-gate.mjs" >"$R1" 2>/dev/null ) &
+  ( cd "$HERE" && printf '%s' "$RIN" | env "LIVELY_WORK_ROOTS=$HERE" node "$HERE/stop-writeback-gate.mjs" >"$R2" 2>/dev/null ) &
+  wait
+  n=0; [ -s "$R1" ] && n=$((n+1)); [ -s "$R2" ] && n=$((n+1))
+  [ "$n" -ne 1 ] && RACE_FAIL=$((RACE_FAIL+1))
+done
+rm -f "$FLAG_DIR/testsessK".*
+[ "$RACE_FAIL" -eq 0 ] && ok "stop⑫ 병렬 2회 동시실행 → block 정확히 1회(원자 .blocked, 8라운드)" || bad "stop⑫ 병렬 중복 너지" "$RACE_FAIL/8 라운드에서 block≠1"
 
 cleanup
 echo
