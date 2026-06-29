@@ -688,6 +688,7 @@ function pjvSelRenderBar() {
       mk('마감일', 'due', pjvBulkDue),
       mk('우선순위', 'priority', pjvBulkPriority),
       isTask ? mk('태그', 'tag', pjvBulkTags) : null,
+      !isTask ? mk('리스트', 'list', pjvBulkList) : null,
       mk('복제', 'dup', () => pjvBulkDuplicate()),
       mk('삭제', 'trash', () => pjvBulkDelete(), true)));
 }
@@ -700,6 +701,7 @@ function pjvBulkIcon(kind) {
   if (kind === 'tag') return svg(sv('path', { d: 'M4 4h7l9 9-7 7-9-9z' }), sv('circle', { cx: '8.2', cy: '8.2', r: '1.3' }));
   if (kind === 'dup') return svg(sv('rect', { x: '8', y: '8', width: '12', height: '12', rx: '2' }), sv('path', { d: 'M4 16V5a1 1 0 0 1 1-1h11' }));
   if (kind === 'trash') return svg(sv('path', { d: 'M5 7h14M10 7V5.5h4V7M6.5 7l1 12.5h9l1-12.5' }));
+  if (kind === 'list') return svg(sv('path', { d: 'M8 6h12M8 12h12M8 18h12' }), sv('circle', { cx: '4', cy: '6', r: '1.2' }), sv('circle', { cx: '4', cy: '12', r: '1.2' }), sv('circle', { cx: '4', cy: '18', r: '1.2' }));
   return svg();
 }
 // ── 일괄 액션들 ──
@@ -822,6 +824,27 @@ function pjvBulkDelete() {
   if (!confirm(n + '개 ' + what + '를 삭제할까요?\n\n#/trash 에서 복원할 수 있습니다.')) return;
   if (pjvSel.kind === 'task') pjvBulkApply((id) => api('/api/ui/v6/tasks/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) }), '삭제됨');
   else pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST', body: JSON.stringify({}) }), '삭제됨');
+}
+// 일괄 '리스트로 이동'(프로젝트 전용) — 선택한 프로젝트들을 한 리스트(또는 미분류)로. 기존 49개 정리·대량 분류용.
+async function pjvBulkList(anchor) {
+  if (pjvSel.kind === 'task') return; // 태스크는 리스트 개념 없음(프로젝트 전용)
+  const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
+  const close = pjvPopover(anchor, menu);
+  const headEl = el('div', { class: 'pjv-menu-head', text: '선택 프로젝트를 리스트로 이동' });
+  menu.append(headEl, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+  let lists: any[] = [];
+  try { lists = ((await api('/api/ui/v6/project-lists')) || {}).lists || []; } catch (_) { /* graceful */ }
+  menu.replaceChildren(headEl);
+  const mkItem = (label, listId, color) => {
+    const item = el('button', { class: 'pjv-menu-item', type: 'button' },
+      el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }),
+      el('span', { class: 'pjv-asg-mname', text: label }));
+    item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '리스트로 이동됨'); };
+    return item;
+  };
+  menu.append(mkItem('기타 (미분류)', null, null));
+  for (const l of lists) menu.append(mkItem(l.name, l.id, l.color || avatarColor('list' + l.id)));
+  if (!lists.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '리스트가 없습니다 — 보드 헤더 ‘＋ 새 리스트’로 먼저 만드세요' }));
 }
 
 // ── 행 호버 컨트롤 — 좌측 체크박스 + 우측 아이콘 그룹(추가·태그·이름변경) ──
@@ -1661,6 +1684,51 @@ function pjvProjTagsField(p, reload) {
   return wrap;
 }
 // 패널 — 좌(상태·기간·시간추적) 우(담당자·우선순위·태그) 2열, 태스크 모달과 동일 결.
+// 상세 '리스트' 필드 — 소속 리스트(색점+이름, 미분류면 안내) 표시 + 클릭해 변경(리스트 선택/미분류). getProject 가 p.list 부여.
+function pjvProjListField(p, reload) {
+  const cur = p.list || null; // { id, name, color } | null
+  const btn = el('button', { class: 'pjv-cell-btn' + (cur ? '' : ' empty'), type: 'button', title: '소속 리스트' });
+  const paint = () => {
+    if (cur) btn.replaceChildren(
+      el('span', { class: 'pjv-list-dot sm', style: 'background:' + (cur.color || avatarColor('list' + cur.id)) }),
+      el('span', { class: 'pjv-asg-mname', text: cur.name }));
+    else btn.replaceChildren(el('span', { class: 'pjv-cell-ph', text: '미분류 — 리스트 지정' }));
+  };
+  paint();
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
+    const close = pjvPopover(btn, menu);
+    const headEl = el('div', { class: 'pjv-menu-head', text: '리스트' });
+    menu.append(headEl, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+    api('/api/ui/v6/project-lists').then((d) => {
+      const lists = (d && d.lists) || [];
+      menu.replaceChildren(headEl);
+      const mkItem = (label, listId, color) => {
+        const isCur = (p.list_id == null ? listId == null : String(p.list_id) === String(listId));
+        const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' },
+          el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }),
+          el('span', { class: 'pjv-asg-mname', text: label }),
+          el('span', { class: 'pjv-asg-check', text: isCur ? '✓' : '' }));
+        item.onclick = async (ev) => {
+          ev.stopPropagation(); close();
+          if (isCur) return;
+          try { await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }); toast(listId == null ? '미분류로 옮겼습니다' : '리스트로 옮겼습니다'); if (reload) reload(); }
+          catch (err) { toast('이동 실패 — ' + err.message, true); }
+        };
+        return item;
+      };
+      menu.append(mkItem('기타 (미분류)', null, null));
+      for (const l of lists) menu.append(mkItem(l.name, l.id, l.color || avatarColor('list' + l.id)));
+      const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' },
+        el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 리스트…' }));
+      addNew.onclick = (ev) => { ev.stopPropagation(); close(); openListForm(reload); };
+      menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
+    }).catch((err) => menu.replaceChildren(headEl, el('div', { class: 'pjv-menu-empty', text: '리스트를 불러오지 못했어요 — ' + err.message })));
+  };
+  return btn;
+}
+
 function pjvProjMetaPanel(p, members, reload) {
   const row = (glyph, label, control) => el('div', { class: 'pjv-tm-field' },
     el('span', { class: 'pjv-tm-field-ico', 'aria-hidden': 'true', text: glyph }),
@@ -1668,6 +1736,8 @@ function pjvProjMetaPanel(p, members, reload) {
     el('div', { class: 'pjv-tm-field-val' }, control));
   return el('div', { class: 'pjv-tm-fields pjv-proj-meta' },
     row('◎', '상태', pjvProjStatusPill(p, reload)),
+    // 소속 리스트(클릭업 List) — 클릭해 변경. 미분류면 '리스트 지정' 안내.
+    row('🗂', '리스트', pjvProjListField(p, reload)),
     // 팀원 = 담당자 — 클릭하면 팀원 목록만 보여주는 보기전용 팝오버(토글 없음). 변경은 '프로젝트 세부 설정'에서만.
     row('👤', '팀원', pjvProjTeamView(members)),
     row('🗓', '기간', pjvProjDatesField(p, reload)),

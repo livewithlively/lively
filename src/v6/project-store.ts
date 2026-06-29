@@ -112,6 +112,7 @@ export interface ProjectDetail extends ProjectRow {
   tags: unknown[]; // 프로젝트 자체 태그(클릭업식 메타) — task_tag_link 를 project.id 로 사용.
   time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
   repos: string[]; // 관련 레포 이름(project_repo) — AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
+  list: { id: number; name: string; color: string | null } | null; // 소속 리스트(미분류면 null) — 상세 '리스트' 필드 표시용.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -186,7 +187,12 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
   const repoRows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [id]);
   const repos = repoRows.map((r) => r.repo);
 
-  return { ...project, members, tasks, categories, knowledge, fields, tags, time, repos };
+  // 소속 리스트(있으면 표시명·색) — 상세 페이지 '리스트' 필드용. 미분류면 null.
+  const list = project.list_id != null
+    ? ((await one(itemsPool, `SELECT id, name, color FROM project_list WHERE id=$1`, [project.list_id])) ?? null)
+    : null;
+
+  return { ...project, list, members, tasks, categories, knowledge, fields, tags, time, repos };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
