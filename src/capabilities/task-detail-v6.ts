@@ -201,7 +201,7 @@ const linkTargetsV6: Capability = {
         exclude: req.query?.exclude ? parseId(req.query.exclude) : 0,
         q: req.query?.q ? String(req.query.q) : "" }) }],
   },
-  handler: async (input: any) => ({ targets: await searchLinkTargets(input.id, input.exclude, input.q) }),
+  handler: async (input: any) => ({ targets: await searchLinkTargets(input.id, input.exclude ?? 0, input.q ?? "") }),
 };
 
 // ── POST 댓글 작성 ──
