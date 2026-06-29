@@ -3,6 +3,7 @@ import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, rend
 import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, myCatIdSet } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
+import { field } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
 // ════════════════════════════════════════════
 // 프로젝트(v2) #/projects2 — 맥락 = 카테고리 + 지식 + 프로젝트 중 '프로젝트'(= 맥락의 *변화*).
@@ -1677,8 +1678,8 @@ async function renderProjectV2Detail(view, idStr) {
     head.append(pjvProjMetaPanel(p, members, reload));
     // 상세 본문 — 태스크(작업 위계)를 헤더 바로 아래 맨 위에 둔다(프로젝트의 핵심). 이어 공유 폴더 ·
     //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
-    //  '연결된 지식'은 헤더의 '프로젝트 세부 설정' 팝업으로 이동(규칙과 함께). 페이지 본문에선 제외.
-    view.replaceChildren(head, projectBodySection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectTerminalSection(id, members, meId, V6_BASE, p.name), projectTimelineSection(id, members, V6_BASE));
+    //  '필요/산출 지식'은 본문 바로 아래 '지식 흐름' 섹션으로 분리(#245) — 세부 설정 팝업에서 이관.
+    view.replaceChildren(head, projectBodySection(id, p, reload), projectKnowledgeSection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectTerminalSection(id, members, meId, V6_BASE, p.name), projectTimelineSection(id, members, V6_BASE));
     applyReveal(Array.from(view.children).slice(1));
 }
 // ── 본문 섹션 — 태스크 위, 다른 섹션(공유 폴더·터미널 세션·작업 타임라인)과 동일 위계·디자인(.card + .card-head). ──
@@ -1791,6 +1792,149 @@ function projectBodySection(id, p, reload) {
     };
     render();
     return card;
+}
+// ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245). ──
+//  기존 '프로젝트 세부 설정' 모달의 '연결된 지식' 블록을 페이지 본문 섹션으로 승격. 필요/산출 각 칼럼에서
+//  ① 위키에서 매핑(openKnowledgePicker) ② 직접 작성(openProjectKnowledgeCreate → 링크) 가능,
+//  필요는 추가로 ③ ✨ 자동 추천(openKnowledgeRecommendPicker). 변경 후 v6 상세 GET 으로 재조회해 재페인트.
+function projectKnowledgeSection(id, p, reload) {
+    const knName = (k) => k.name || k.knowledge_name;
+    let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
+    const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '지식 흐름' }), el('span', { class: 'pjk-head-hint', text: '이 프로젝트가 참고하는 지식(필요) → 만들어 내는 지식(산출)' })));
+    const reqList = el('div', { class: 'pjk-list' });
+    const prodList = el('div', { class: 'pjk-list' });
+    const reqCount = el('span', { class: 'pjk-count' });
+    const prodCount = el('span', { class: 'pjk-count' });
+    // 지식 한 줄 — 제목(상세 링크) + 메타칩 + 연결 해제(✕). relation 별로 unlink 한다.
+    function knRow(k, relation) {
+        const name = knName(k);
+        const r = el('div', { class: 'pjk-row' }, el('a', { class: 'pjk-row-title', href: '#/k/' + encodeURIComponent(name), text: k.title || name }), el('div', { class: 'pjk-row-meta' }, k.injection ? knInjectChip(k.injection) : null, k.provenance ? el('span', {}, ' ', knProvChip(k.provenance)) : null, k.lifecycle ? el('span', {}, '  ', lifecycleDot(k.lifecycle)) : null));
+        const x = el('button', { class: 'pjk-row-x', type: 'button', title: '연결 해제', text: '✕' });
+        x.onclick = async (ev) => {
+            ev.preventDefault();
+            try {
+                await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation, unlink: true }) });
+                toast('연결을 해제했습니다');
+                refresh();
+            }
+            catch (e) {
+                toast('해제 실패 — ' + e.message, true);
+            }
+        };
+        r.append(x);
+        return r;
+    }
+    function paint(boxEl, list, relation, emptyText) {
+        if (!list.length) {
+            boxEl.replaceChildren(el('div', { class: 'pjk-empty', text: emptyText }));
+            return;
+        }
+        boxEl.replaceChildren(...list.map((k) => knRow(k, relation)));
+    }
+    function repaint() {
+        reqCount.textContent = String(cur.required.length);
+        prodCount.textContent = String(cur.produced.length);
+        paint(reqList, cur.required, 'required', '아직 없습니다 — 아래에서 골라 연결하세요.');
+        paint(prodList, cur.produced, 'produced', '아직 없습니다 — 이 프로젝트가 만든 지식을 연결하세요.');
+    }
+    async function refresh() {
+        try {
+            const d = await api('/api/ui/v6/projects/' + id).then((r) => r && (r.project || r));
+            cur = { required: (d.knowledge || {}).required || [], produced: (d.knowledge || {}).produced || [] };
+        }
+        catch (_) { /* keep */ }
+        repaint();
+    }
+    const mkActs = (relation, withRecommend) => {
+        const acts = el('div', { class: 'pjk-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 위키에서', title: '기존 위키 지식을 검색해 연결',
+            onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✎ 직접 작성', title: '새 지식을 작성해 이 프로젝트에 연결',
+            onclick: () => openProjectKnowledgeCreate(id, relation, p, refresh) }));
+        if (withRecommend)
+            acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동 추천', title: '프로젝트 이름·설명으로 관련 지식 추천(의미검색)',
+                onclick: () => openKnowledgeRecommendPicker(id, relation, cur[relation].map(knName), refresh) }));
+        return acts;
+    };
+    // 가운데 노드 — '이 프로젝트'(이름 + 상태). 좌우 화살표로 필요→프로젝트→산출 흐름을 표현.
+    const stMeta = pjvProjStatusMeta(p.status);
+    const node = el('div', { class: 'pjk-node' }, el('div', { class: 'pjk-node-label', text: '이 프로젝트' }), el('div', { class: 'pjk-node-name', title: p.name, text: p.name }), el('div', { class: 'pjk-node-status ' + stMeta.cls }, stMeta.glyph ? el('span', { class: 'pjk-node-glyph', text: stMeta.glyph }) : null, el('span', { text: stMeta.label })));
+    const reqCol = el('div', { class: 'pjk-col pjk-col-req' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount), reqList, mkActs('required', true));
+    const prodCol = el('div', { class: 'pjk-col pjk-col-prod' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount), prodList, mkActs('produced', false));
+    card.append(el('div', { class: 'pjk-flow' }, reqCol, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), node, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), prodCol));
+    repaint();
+    return card;
+}
+// 직접 작성 — 이 프로젝트 맥락에서 새 지식을 만든다. 분류는 프로젝트 분류로 자동(신규 지식은 분류 1개+ 필수),
+//  프로젝트에 분류가 없으면 전 분류 셀렉터로 고른다. 저장(POST /api/ui/knowledge) 후 relation 으로 프로젝트에 연결.
+function openProjectKnowledgeCreate(id, relation, p, onLinked) {
+    const relLabel = relation === 'produced' ? '산출' : '필요';
+    const titleIn = el('input', { type: 'text', class: 'pjk-create-in', placeholder: '제목', maxlength: '200' });
+    const bodyTa = el('textarea', { class: 'mem-edit-ta', rows: '12', placeholder: '본문 (markdown)' });
+    const projCats = (Array.isArray(p.categories) ? p.categories : []).filter((c) => c.key);
+    // 분류 — 프로젝트 분류가 있으면 고정 표시, 없으면 전 분류 셀렉터(value=key).
+    let catSel = null;
+    let catField;
+    if (projCats.length) {
+        catField = field('분류', el('div', { class: 'pjk-create-cat' }, ...projCats.map((c) => el('span', { class: 'kn-chip', text: '📁 ' + (c.name || c.key) })), el('span', { class: 'admin-hint', text: '프로젝트 분류로 저장됩니다' })));
+    }
+    else {
+        catSel = el('select', { class: 'pjk-create-in' }, el('option', { value: '', text: '— 분류 선택 —' }));
+        loadCategoryKeysForSelect(catSel);
+        catField = field('분류 (필수)', catSel);
+    }
+    const status = el('span', { class: 'admin-status' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '작성 후 연결' });
+    const root = el('div', { class: 'mem-modal' }, field('제목', titleIn), catField, field('본문', bodyTa), el('div', { class: 'admin-actions' }, saveBtn, status));
+    const back = overlayBox(relLabel + ' 지식 직접 작성', root);
+    setTimeout(() => titleIn.focus(), 0);
+    saveBtn.onclick = async () => {
+        const body = bodyTa.value.trim();
+        if (!body) {
+            toast('본문을 입력하세요', true);
+            return;
+        }
+        const cats = projCats.length ? projCats.map((c) => c.key) : (catSel && catSel.value ? [catSel.value] : []);
+        if (!cats.length) {
+            toast('분류를 선택하세요', true);
+            return;
+        }
+        saveBtn.disabled = true;
+        try {
+            const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({
+                    title: titleIn.value.trim() || undefined, body_md: body,
+                    injection: 'recalled', provenance: 'authored', category: cats
+                }) });
+            const savedName = r && r.knowledge && r.knowledge.name;
+            if (!savedName)
+                throw new Error('저장 응답에 이름이 없습니다');
+            await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: savedName, relation }) });
+            toast('작성한 지식을 ' + relLabel + ' 지식으로 연결했습니다');
+            back.remove();
+            if (onLinked)
+                onLinked();
+        }
+        catch (e) {
+            toast('실패 — ' + e.message, true);
+            saveBtn.disabled = false;
+        }
+    };
+}
+// 전 space 카테고리를 셀렉터에 채운다(value=key — knowledge_save 의 category 파라미터가 key 배열). 실패해도 graceful.
+async function loadCategoryKeysForSelect(sel) {
+    const spaces = [['business', '사업'], ['product', '제품'], ['system', '시스템']];
+    await Promise.all(spaces.map(async ([sp, label]) => {
+        try {
+            const d = await api('/api/ui/categories?' + new URLSearchParams({ space: sp }));
+            const cats = (d && d.categories) || [];
+            if (!cats.length)
+                return;
+            const og = el('optgroup', { label });
+            for (const c of cats)
+                og.append(el('option', { value: c.key, text: c.name || c.key }));
+            sel.append(og);
+        }
+        catch (_) { /* graceful */ }
+    }));
 }
 // ── 본문 에디터 서식 툴바 — 텍스트 선택 시 그 위로 떠서 선택 영역에 마크다운 서식 적용(클릭업식, 박스 없는 인라인 편집용). ──
 //  렌더러가 지원하는 서식만 노출: 제목·굵게·기울임·코드·목록·인용·링크. 버튼은 mousedown preventDefault 로 textarea 포커스(=선택·편집모드)를 유지한다.
@@ -2352,7 +2496,8 @@ function openProjectComments(id, members) {
     })();
     setTimeout(() => ta.focus(), 180);
 }
-// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 터미널 규칙 · 연결 지식 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
+// ── 프로젝트 세부 설정 팝업 — 상태 · 팀원 · 분류 · 레포 · 터미널 규칙 · 참조 · 삭제. 헤더 '⚙ 프로젝트 세부 설정'에서 연다. ──
+//  (필요/산출 지식은 본문 아래 '지식 흐름' 섹션으로 이관 — #245.)
 //  (삭제·팀원 수정을 헤더에서 여기로 이관 — 헤더는 제목/상태칩/설정 버튼만.)
 function openProjectSettings(id, p, reload, meId, base) {
     const B = base || '/api/ui/v6/projects/';
@@ -2361,7 +2506,9 @@ function openProjectSettings(id, p, reload, meId, base) {
     if (box)
         box.classList.add('ov-box-wide');
     const closeAndReload = () => { back.remove(); reload(); }; // 변경하면 팝업 닫고 상세 재렌더
-    back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), projectRefsBlock(id, B), projectKnowledgeBlock(id, p.knowledge || { required: [], produced: [] }), projectDangerBlock(id, p, meId, back));
+    back.querySelector('.proj-settings').append(projectStatusBlock(id, p, closeAndReload), projectMembersBlock(id, p, closeAndReload, B), projectCategoryBlock(id, p), projectReposBlock(id, p), projectRulesBlock(id), projectRefsBlock(id, B), 
+    // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
+    projectDangerBlock(id, p, meId, back));
 }
 // ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 시작 명령을 만들어 준다. ──
 //  웹은 원격 PC 터미널을 보지 않는다(스트리밍 X). 각자 자기 PC에서 터미널을 열어 쓰고, 웹은 '어떻게 시작하는지'만
@@ -2865,58 +3012,13 @@ function projectRefsBlock(id, base) {
     reload();
     return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '참고 파일' }), el('p', { class: 'ps-block-hint', text: '여기 올린 파일은 이 프로젝트에서 터미널 세션을 열 때마다 AI가 작업 전 반드시 읽도록 강제됩니다. (프로젝트 폴더의 참고자료/ 에 저장 · AGENTS.md 에 자동 등록)' }), listEl, fileInput, el('div', { class: 'ps-rules-actions' }, uploadBtn, status));
 }
-// 지식 블록 — 필요 지식(고르기/자동/해제 가능) + 산출 지식(표시). 변경 후 v6 상세 GET 으로 재조회해 재페인트.
-function projectKnowledgeBlock(id, knowledge) {
-    const knName = (k) => k.name || k.knowledge_name;
-    let cur = { required: knowledge.required || [], produced: knowledge.produced || [] };
-    const reqBox = el('div', { class: 'ps-kn-list' });
-    const prodBox = el('div', { class: 'ps-kn-list' });
-    function paintList(boxEl, list, emptyText, removable) {
-        if (!list.length) {
-            boxEl.replaceChildren(el('div', { class: 'pjv-kn-empty', text: emptyText }));
-            return;
-        }
-        boxEl.replaceChildren(...list.map((k) => {
-            const name = knName(k);
-            const row = el('div', { class: 'row pjv-kn-row ps-kn-row' }, el('a', { class: 'row-title', href: '#/k/' + encodeURIComponent(name), text: k.title || name }), el('div', { class: 'row-meta' }, k.injection ? knInjectChip(k.injection) : null, k.provenance ? el('span', {}, ' ', knProvChip(k.provenance)) : null, k.lifecycle ? el('span', {}, '  ', lifecycleDot(k.lifecycle)) : null));
-            if (removable)
-                row.append(el('button', { class: 'proj-file-iconbtn danger', type: 'button', title: '연결 해제', text: '✕',
-                    onclick: async (ev) => {
-                        ev.preventDefault();
-                        try {
-                            await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation: 'required', unlink: true }) });
-                            toast('연결을 해제했습니다');
-                            refresh();
-                        }
-                        catch (e) {
-                            toast('해제 실패 — ' + e.message, true);
-                        }
-                    } }));
-            return row;
-        }));
-    }
-    async function refresh() {
-        try {
-            const d = await api('/api/ui/v6/projects/' + id).then((r) => r && (r.project || r));
-            cur = { required: (d.knowledge || {}).required || [], produced: (d.knowledge || {}).produced || [] };
-        }
-        catch (_) { /* keep */ }
-        paintList(reqBox, cur.required, '이 프로젝트가 참고할 지식을 골라 연결하세요.', true);
-        paintList(prodBox, cur.produced, '이 프로젝트가 만들어 낸 지식이 아직 없습니다.', false);
-    }
-    const reqHead = el('div', { class: 'ps-kn-head' }, el('div', { class: 'sec-label', text: '필요 지식' }), el('div', { class: 'ps-kn-acts' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 필요 지식 고르기',
-        onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동으로 고르기', title: '프로젝트 이름·설명으로 관련 지식 추천(의미검색)',
-        onclick: () => openKnowledgeRecommendPicker(id, 'required', cur.required.map(knName), refresh) })));
-    paintList(reqBox, cur.required, '이 프로젝트가 참고할 지식을 골라 연결하세요.', true);
-    paintList(prodBox, cur.produced, '이 프로젝트가 만들어 낸 지식이 아직 없습니다.', false);
-    return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '연결된 지식' }), el('div', { class: 'ps-kn-group' }, reqHead, reqBox), el('div', { class: 'ps-kn-group' }, el('div', { class: 'sec-label', text: '산출 지식' }), prodBox));
-}
-// 필요 지식 고르기 — ctx_grep 검색 → '연결'로 POST :id/knowledge. 이미 연결된 건 후보에서 제외.
+// 지식 고르기 — 위키 검색 → '연결'로 POST :id/knowledge. 이미 연결된 건 후보에서 제외. relation 으로 필요/산출 모두.
 function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     const linked = new Set(linkedNames || []);
     const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '지식 제목·내용으로 검색…' });
     const results = el('div', { class: 'ps-kn-pick-results' }, el('span', { class: 'admin-hint', text: '검색어를 입력하세요.' }));
-    overlayBox('필요 지식 고르기', el('div', { class: 'ps-kn-pick' }, searchIn, results));
+    const pickTitle = (relation === 'produced' ? '산출' : '필요') + ' 지식 — 위키에서 고르기';
+    overlayBox(pickTitle, el('div', { class: 'ps-kn-pick' }, searchIn, results));
     setTimeout(() => searchIn.focus(), 0);
     const run = debounce(async () => {
         const q = searchIn.value.trim();
