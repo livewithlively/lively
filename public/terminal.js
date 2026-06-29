@@ -10,17 +10,19 @@ const SESSION_ID = new URLSearchParams(location.search).get('session') || '';
 // 세션 라벨 — 입장 링크가 ?label= 로 실어 보낸다(프로젝트/팀 세션은 개인 /sessions 목록에 없어 API 폴백이 못 찾음).
 const SESSION_LABEL = new URLSearchParams(location.search).get('label') || '';
 
+// 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
+// 어떤 글꼴을 골라도 한글은 D2Coding 으로 또렷하게 렌더된다(#279 한글 가독성). @font-face=terminal.html.
 const FONTS = [
-  { v: "'JetBrains Mono', monospace", label: 'JetBrains Mono' },
-  { v: "'Fira Code', monospace", label: 'Fira Code' },
-  { v: "'Source Code Pro', monospace", label: 'Source Code Pro' },
-  { v: "'IBM Plex Mono', monospace", label: 'IBM Plex Mono' },
-  { v: "'Roboto Mono', monospace", label: 'Roboto Mono' },
-  { v: "'D2Coding', monospace", label: 'D2Coding (한글)' },
-  { v: "Menlo, monospace", label: 'Menlo' },
-  { v: "'SF Mono', SFMono-Regular, monospace", label: 'SF Mono' },
-  { v: "Monaco, monospace", label: 'Monaco' },
-  { v: "Consolas, monospace", label: 'Consolas' },
+  { v: "'JetBrains Mono', 'D2Coding', monospace", label: 'JetBrains Mono' },
+  { v: "'D2Coding', monospace", label: 'D2Coding · 한글 코딩' },
+  { v: "'Fira Code', 'D2Coding', monospace", label: 'Fira Code' },
+  { v: "'Source Code Pro', 'D2Coding', monospace", label: 'Source Code Pro' },
+  { v: "'IBM Plex Mono', 'D2Coding', monospace", label: 'IBM Plex Mono' },
+  { v: "'Roboto Mono', 'D2Coding', monospace", label: 'Roboto Mono' },
+  { v: "Menlo, 'D2Coding', monospace", label: 'Menlo' },
+  { v: "'SF Mono', SFMono-Regular, 'D2Coding', monospace", label: 'SF Mono' },
+  { v: "Monaco, 'D2Coding', monospace", label: 'Monaco' },
+  { v: "Consolas, 'D2Coding', monospace", label: 'Consolas' },
 ];
 const THEMES = {
   dark:      { name: '다크', dark: true,  theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#585b70' } },
@@ -31,11 +33,20 @@ const THEMES = {
   github:    { name: 'GitHub Light', dark: false, theme: { background: '#ffffff', foreground: '#24292f', cursor: '#0969da', selectionBackground: '#b6e3ff' } },
 };
 
+// 저장된 글꼴에 한글 폴백(D2Coding)이 없으면 끼워 넣는다 — 옛 prefs 사용자도 새로고침만으로 한글 가독성 확보(#279).
+function withKR(ff) {
+  ff = String(ff || FONTS[0].v);
+  if (/D2Coding/i.test(ff)) return ff;
+  if (/,?\s*monospace\s*$/i.test(ff)) return ff.replace(/,?\s*monospace\s*$/i, ", 'D2Coding', monospace");
+  return ff + ", 'D2Coding', monospace";
+}
 function prefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  return Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3 }, p);
+  const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3 }, p);
+  merged.fontFamily = withKR(merged.fontFamily);
+  return merged;
 }
 function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 function applyChrome(themeKey) {
