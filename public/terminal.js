@@ -721,7 +721,20 @@ async function connectNow() {
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
-    backfill: (text) => { try { term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text); } catch (_) { /* noop */ } },
+    backfill: (text) => {
+      try {
+        // [#252] 재접속 alt-screen 보정. Claude Code 등 풀스크린 TUI 는 alt-screen + 마우스모드(1003/1006)인데,
+        //  '이미 실행 중인' 세션에 나중에 붙은 클라는 최초의 alt-screen 진입(\e[?1049h)을 스트림에서 못 받아
+        //  normal buffer 로 남는다(마우스모드는 재렌더로 받아 mouseTrackingMode 는 켜짐). 그러면 휠이 앱으로
+        //  전달되지 않고 빈 로컬 스크롤백만 긁어 '스크롤이 안 되는' #252 증상. 앱이 마우스모드인데 클라가 normal
+        //  이면 alt-screen 으로 맞춰준다(이미 alt 인 신선한 클라·마우스 안 쓰는 셸엔 영향 없음 — 조건 가드).
+        if (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'
+            && term.buffer && term.buffer.active && term.buffer.active.type !== 'alternate') {
+          term.write('\x1b[?1049h');
+        }
+        term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text);
+      } catch (_) { /* noop */ }
+    },
     onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
