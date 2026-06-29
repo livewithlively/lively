@@ -27,10 +27,13 @@
 > full-docker(게이트웨이까지 컨테이너 = Option 1)는 `docker compose --profile gateway up` 로 미리보기 가능하지만,
 > 중앙박스를 쓰려면 러너 분리가 선행돼야 한다(추후).
 
-## 설치 (한 줄)
+## 최초 설치 (새 박스 — install.sh)
+
+> 전체 흐름(EC2): `lively-infra` 에서 `terraform apply` → 코드 rsync → 아래 `install.sh` → `claude` 로그인.
+> (인프라·rsync 명령은 `lively-infra/projects/honest-ai-pilot/README.md` 참조.)
 
 ```bash
-# 호스트에서 (레포가 이미 있는 상태)
+# 호스트에서 (코드가 이미 와 있는 상태)
 PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com \
   bash deploy/install.sh
 ```
@@ -49,6 +52,35 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 
 환경변수: `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL` · `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN`
 · `WITH_EMBEDDINGS=1`(t4g.large+) · `FORCE=1`(기존 :8080 감지 무시).
+
+## 업데이트 (기존 박스 — update.sh)
+
+최초 설치와 다르다: **의존성·서비스 유닛·`.env`·데이터(볼륨)·claude 인증·부트스트랩은 그대로 두고 코드만 갱신**한다.
+부트스트랩(관리자·baseline)은 멱등이라 재실행 불요. 스키마는 게이트웨이 부팅(재시작) 시 자가 마이그레이션.
+
+```bash
+# 1) 새 코드 전달 — operator 머신의 '깨끗한 main' 에서 rsync (WIP 섞지 말 것: git clone 또는 worktree at origin/main).
+rsync -az --delete \
+  --exclude node_modules --exclude .git --exclude dist --exclude logs \
+  --exclude backups --exclude '.env*' --exclude '*.bak*' --exclude var/repos \
+  -e "ssh -i ~/.ssh/<key>" <clean-main>/  ubuntu@<host>:~/context-ontology/
+
+# 2) 박스에서 반영 — 빌드 → store 멱등 → 재시작 → healthz. kit/ 가 바뀌었으면 --kit.
+ssh -i ~/.ssh/<key> ubuntu@<host> 'cd ~/context-ontology && bash deploy/update.sh --kit'
+```
+
+| | 최초 설치 (`install.sh`) | 업데이트 (`update.sh`) |
+|---|---|---|
+| 의존성(docker·node·tmux·claude) | 설치 | 건드리지 않음 |
+| `.env`·시크릿 | 없으면 생성 | 보존 |
+| store(pgvector) | 생성 | 멱등 반영(이미지/compose 변경만) |
+| 빌드·서비스 | 등록·기동 | 빌드 후 **재시작** |
+| 첫 관리자·baseline | 시드 | 건너뜀(멱등·이미 존재) |
+| 중앙박스 키트 | 설치 | `--kit` 일 때만 갱신 |
+
+- **빌드 실패 시**: `update.sh` 가 재시작 전에 중단 → 기존 게이트웨이 계속 가동(다운 없음).
+- **롤백**: 이전 main 커밋을 rsync 후 다시 `update.sh`.
+- **git clone 박스**라면 1) 대신 `git pull` 후 `update.sh`.
 
 ## 중앙박스 키트 (왜 호스트에도 까나)
 
