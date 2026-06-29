@@ -1642,6 +1642,7 @@ function projectKnowledgeSection(id, p, reload) {
     repaint();
   }
 
+  // 액션 — 각 박스 헤더 우상단(#258). 위키에서 검색 연결 · 직접 작성 · (필요만)자동 추천.
   const mkActs = (relation, withRecommend) => {
     const acts = el('div', { class: 'pjk-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 위키에서', title: '기존 위키 지식을 검색해 연결',
@@ -1654,21 +1655,16 @@ function projectKnowledgeSection(id, p, reload) {
     return acts;
   };
 
-  // 가운데 노드 — '이 프로젝트'(이름 + 상태). 좌우 화살표로 필요→프로젝트→산출 흐름을 표현.
-  const stMeta = pjvProjStatusMeta(p.status);
+  // 가운데 노드 — '이 프로젝트' 문구만(이름·상태 제거·박스 축소 #258). 좌우 화살표로 필요→프로젝트→산출 흐름을 표현.
   const node = el('div', { class: 'pjk-node' },
-    el('div', { class: 'pjk-node-label', text: '이 프로젝트' }),
-    el('div', { class: 'pjk-node-name', title: p.name, text: p.name }),
-    el('div', { class: 'pjk-node-status ' + stMeta.cls },
-      stMeta.glyph ? el('span', { class: 'pjk-node-glyph', text: stMeta.glyph }) : null,
-      el('span', { text: stMeta.label })));
+    el('div', { class: 'pjk-node-label', text: '이 프로젝트' }));
 
   const reqCol = el('div', { class: 'pjk-col pjk-col-req' },
-    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount),
-    reqList, mkActs('required', true));
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount, mkActs('required', true)),
+    reqList);
   const prodCol = el('div', { class: 'pjk-col pjk-col-prod' },
-    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount),
-    prodList, mkActs('produced', false));
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount, mkActs('produced', false)),
+    prodList);
 
   const flow = el('div', { class: 'pjk-flow' },
     reqCol,
