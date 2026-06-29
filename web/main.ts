@@ -3,7 +3,7 @@ import { $view, TOKEN_KEY, api, el, errorNote, hideGate, profileAvatar, showGate
 import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderTrash } from './knowledge.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn } from './learn.js';
+import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, teardownTerminal } from './terminal.js';
 import { openMyProfile, renderSystem } from './admin.js';
 
@@ -64,6 +64,9 @@ async function route() {
     } else if (page === 'terminal') {
       setActiveTab('terminal');
       await renderTerminal(view);
+    } else if (page === 'onboarding') {
+      setActiveTab('start'); // 온보딩 진행상황 — 시작하기 계열
+      await renderOnboarding(view);
     } else {
       setActiveTab('start');
       await renderInstall(view);

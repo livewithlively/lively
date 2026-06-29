@@ -176,6 +176,15 @@ export const deliveryCapabilities: Capability[] = [
       return { context: await previewMemberContext(name, memberId) };
     }),
 
+  // ── 온보딩 진행상황(SoT) — 웹 '온보딩' 페이지와 하네스 주입(previewMemberContext)이 같은 소스를 소비. ──
+  restRead("org_onboarding", "온보딩 진행상황",
+    "조직 셋업 단계별 완료 여부(회사·페르소나/카테고리/지식/구성원/데이터소스)를 라이브 계산해 반환한다(공유 — 비-admin 도 열람).",
+    [{ method: "GET", paths: ["/api/ui/org/onboarding"], parse: () => ({}) }],
+    async () => {
+      const { computeOnboardingStatus } = await import("../org/onboarding.js");
+      return await computeOnboardingStatus();
+    }),
+
   // ── 컨텍스트 온톨로지 가이드 미리보기 — '이 편집 부분만'(Knowledge Index) 을 렌더한다. ──
   //  body_md(미저장 편집값)를 받아 ${rules}/${area} 를 라이브 데이터로 채워 실제 주입 모습을 보여준다(WYSIWYG, 편집 즉시).
   //  body_md 생략/공백이면 buildKnowledgeIndex 가 코드 기본 템플릿으로 폴백. 공유 맥락 미리보기라 scope null(인증만).

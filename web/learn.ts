@@ -77,6 +77,7 @@ async function renderInstall(view) {
   slot.append(skeleton('설치 안내를 준비하는 중'));
   view.replaceChildren(head, slot);
   document.getElementById('view')!.focus?.();
+  onboardingBanner().then((b) => { if (b) head.after(b); }); // 온보딩 진행 배너(미완 시) → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
     .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
 }
@@ -358,11 +359,63 @@ function overlayBox(title, ...content) {
   return back;
 }
 
+// ── 온보딩 진행상황(#/onboarding) — SoT = GET /api/ui/org/onboarding (하네스 주입과 동일 소스, 드리프트 0). ──
+function obProgress(pct) {
+  return el('div', { style: 'height:8px;background:#ececec;border-radius:4px;overflow:hidden;margin:10px 0' },
+    el('div', { style: `height:100%;width:${pct}%;background:#3a9d6e;transition:width .3s` }));
+}
+// 시작하기(랜딩) 상단 배너 — 미완일 때만(완료면 null → 안 보임). 클릭 시 #/onboarding.
+async function onboardingBanner() {
+  try {
+    const s = await api('/api/ui/org/onboarding');
+    if (!s || s.complete) return null;
+    return el('a', { class: 'card', href: '#/onboarding', style: 'display:block;text-decoration:none;color:inherit' },
+      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:12px' },
+        el('strong', { text: `온보딩 진행 ${s.done}/${s.total} (${s.pct}%)` }),
+        el('span', { class: 'accent', text: '진행상황 보기 →' })),
+      obProgress(s.pct),
+      el('p', { class: 'admin-hint', style: 'margin:0', text: '남은 단계를 채우면 AI 세션이 그만큼 더 풍부한 회사 맥락으로 시작합니다(재설치 불필요).' }));
+  } catch { return null; }
+}
+// 전용 페이지 — 단계별 완료 여부 + 진행률. AI(세션 시작)도 같은 SoT 를 받는다는 점을 명시.
+async function renderOnboarding(view) {
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '온보딩 ', el('span', { class: 'accent', text: '진행상황' })),
+    el('p', { class: 'sub', text: '이 인스턴스 셋업이 어디까지 됐는지 한눈에 봅니다. AI도 세션 시작 시 같은 진행상황(SoT)을 받아, 덜 된 단계를 사용자에게 안내합니다.' }));
+  const slot = el('div', {});
+  slot.append(skeleton('진행상황을 불러오는 중'));
+  view.replaceChildren(head, slot);
+  document.getElementById('view')!.focus?.();
+  try {
+    const s = await api('/api/ui/org/onboarding');
+    const summary = el('div', { class: 'card' },
+      el('div', { class: 'card-head' }, el('h2', { text: `진행률 ${s.done}/${s.total} (${s.pct}%)` })),
+      obProgress(s.pct),
+      el('p', { class: 'admin-hint', style: 'margin:0', text: s.complete
+        ? '✓ 기본 셋업 완료 — 세션에 실제 조직 맥락이 주입됩니다.'
+        : '미완 단계를 채우면 다음 세션부터 AI가 그 맥락을 갖고 시작합니다(재설치 불필요 — 라이브 반영).' }));
+    const steps = el('div', {});
+    s.items.forEach((it, i) => {
+      steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done ? '0.65' : '1') },
+        el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:${it.done ? '#3a9d6e' : '#bbb'}`, text: it.done ? '✓' : String(i + 1) }),
+        el('div', { style: 'flex:1;min-width:0' },
+          el('div', { style: 'font-weight:600' }, it.label,
+            it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null),
+          el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }),
+          (it.href && !it.done) ? el('a', { class: 'accent', href: it.href, text: '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
+    });
+    slot.replaceChildren(summary, steps);
+  } catch (e) {
+    slot.replaceChildren(errorNote(e, '온보딩 진행상황을 불러오지 못했습니다'));
+  }
+}
+
 export {
   checklist,
   overlayBox,
   renderInstall,
   renderLearn,
+  renderOnboarding,
   skeleton,
   skeletonRows,
 };
