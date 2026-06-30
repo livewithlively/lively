@@ -606,11 +606,13 @@ export async function unlinkKnowledgeSource(name: string, sourceId: number, rela
 export async function knowledgeGraphData(limit = 500): Promise<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }> {
   const nodes = await q(itemsPool,
     `SELECT k.name, k.title, k.type, k.injection, k.provenance,
-            (SELECT c.key FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
-             WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1) AS category,
-            (SELECT c.space FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
-             WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1) AS space
-     FROM knowledge k WHERE k.lifecycle='active' ORDER BY k.updated_at DESC LIMIT $1`, [Math.min(limit, 2000)]);
+            cat.key AS category, cat.name AS category_name, cat.space AS space
+     FROM knowledge k
+     LEFT JOIN LATERAL (
+       SELECT c.key, c.name, c.space FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
+       WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1
+     ) cat ON true
+     WHERE k.lifecycle='active' ORDER BY k.updated_at DESC LIMIT $1`, [Math.min(limit, 2000)]);
   const edges = await q(itemsPool, `SELECT from_name, to_name, relation FROM knowledge_link`);
   return { nodes, edges };
 }

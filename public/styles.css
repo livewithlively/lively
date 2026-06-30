@@ -735,6 +735,18 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .sub-cat.active { color: var(--blue); border-bottom-color: var(--blue); }
 @media (max-width: 560px) { .sub-cat { padding: 8px 11px; font-size: 13px; } }
 
+/* WIKI 하위바 우측 '지식 그래프' 버튼 — 탭이 아닌 액션(도메인 지도를 풀스크린 새 창으로). #290 */
+.sub-graph-btn {
+  display: inline-flex; align-items: center; gap: 7px; margin-left: auto; margin-bottom: 3px;
+  padding: 7px 13px; border-radius: 9px;
+  font: inherit; font-size: 13.5px; font-weight: 700; color: var(--ink-sub);
+  background: var(--bg-tint); border: 1px solid var(--line); cursor: pointer;
+  transition: color .14s, border-color .14s, background .14s, box-shadow .14s;
+}
+.sub-graph-btn:hover { color: var(--ink); border-color: #16C79A; background: #fff; box-shadow: 0 2px 12px rgba(22,199,154,.16); }
+.sub-graph-btn .sub-graph-ic { color: #16C79A; flex: none; }
+@media (max-width: 560px) { .sub-graph-btn { margin-left: 0; padding: 7px 11px; font-size: 12.5px; } }
+
 /* 가이드(#/learn) — 목적 카드 + '지식 하나' 예시 + 쉬운 용어집 */
 /* 카드 스택 간격 — .card 자체엔 마진이 없어 카드끼리 붙는다(이전엔 eyebrow가 사이를 벌렸음). 설치 페이지 .install-guide 와 동일 패턴. */
 .guide-cards { display: flex; flex-direction: column; gap: 18px; }

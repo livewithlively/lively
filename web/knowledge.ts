@@ -88,17 +88,34 @@ function openCategoryForm(space, existing, reload) {
 // 도메인 의존 관계(category-edges) — should(사람 작성·편집/삭제 가능) + is(스캔 소유·읽기전용)를 한 섹션에.
 //  domains = 제품 카테고리 목록(셀렉터 옵션). 자체 fetch → 행 렌더 + should-edge 추가 폼.
 function knowledgeSubBar(active) {
-  // WIKI 탭 하위 = 지식 / 자료 / 그래프 / 📌 인덱스 (#290). 지식(정제 저작)과 자료(raw 입력)를 분리.
+  // WIKI 탭 하위 = 지식 / 자료 / 📌 인덱스 (#290). 지식(정제 저작)과 자료(raw 입력)를 분리.
   //  카테고리(사업·제품·시스템)는 좌측 사이드바로 통합(2026-06-26).
+  //  그래프는 별도 탭 대신 '지식 그래프' 버튼 → 풀스크린 새 창(graph.html, #290 아틀라스).
   const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
-  const onBrowse = active !== 'pinned' && active !== 'stats' && active !== 'review' && active !== 'sources' && active !== 'graph';
+  const onBrowse = active !== 'pinned' && active !== 'stats' && active !== 'review' && active !== 'sources';
   const tab = (on, href, label, title?) => bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
     role: 'tab', 'aria-selected': on ? 'true' : 'false', ...(title ? { title } : {}), text: label }));
   tab(onBrowse, '#/knowledge', '지식', '정제된 저작 지식 — 결정·설계·개념·런북');
   tab(active === 'sources', '#/knowledge/sources', '자료', '회의 전사록·이메일·슬랙·외부 미러 — 정제 전 raw 입력(지식과 분리, 검색에 안 섞임)');
-  tab(active === 'graph', '#/knowledge/graph', '그래프', '지식↔지식 링크 그래프(백링크·카테고리)');
   tab(active === 'pinned', '#/knowledge/pinned', '📌 인덱스', '핀된 지식만 — 매 대화 첫머리에 깔리는 WIKI 인덱스');
+  bar.append(el('button', { class: 'sub-graph-btn', type: 'button', role: 'link',
+    title: '도메인으로 묶은 지식 지도 — 풀스크린 새 창에서 팬·줌으로 탐색', onclick: openKnowledgeAtlas },
+    sv('svg', { class: 'sub-graph-ic', viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true' },
+      sv('circle', { cx: '6', cy: '7', r: '2.4', fill: 'currentColor' }),
+      sv('circle', { cx: '17', cy: '6', r: '2', fill: 'currentColor', opacity: '0.7' }),
+      sv('circle', { cx: '13', cy: '17', r: '2.2', fill: 'currentColor', opacity: '0.85' }),
+      sv('path', { d: 'M7.8 8.2 11.4 15.4M15.2 7.3 13.7 14.9', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', opacity: '0.5' })),
+    '지식 그래프'));
   return bar;
+}
+
+// 지식 아틀라스 — 풀스크린 그래프를 별도 창(graph.html)으로. opener 유지(노드 클릭 시 이 창의 상세로 이동).
+//  안정적 창 이름으로 재클릭 시 같은 창을 포커스(여러 개 안 뜸).
+function openKnowledgeAtlas() {
+  let url = 'graph.html';
+  try { url = new URL('graph.html', location.href).href; } catch (_) { /* 상대경로 폴백 */ }
+  const w = window.open(url, 'lively-knowledge-atlas');
+  if (w) try { w.focus(); } catch (_) { /* noop */ }
 }
 
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
@@ -208,7 +225,7 @@ async function renderKnowledge(view, sub, params) {
   if (sub === 'review') return renderKnowledgeReview(view);
   if (sub === 'pinned') return renderKnowledgePinned(view);
   if (sub === 'sources') return renderSources(view, params);   // #290 자료층(raw 입력)
-  if (sub === 'graph') return renderKnowledgeGraph(view);       // #290 지식 그래프
+  // (그래프는 #/knowledge/graph 라우트 폐기 — '지식 그래프' 버튼 → 풀스크린 새 창 graph.html, #290)
   // 그 외(browse·구 business/product/system URL) → 카테고리 통합 둘러보기(사이드바가 3 space 노출). space 인자 무시.
   return renderKnowledgeSpace(view, sub, params);
 }
@@ -1198,62 +1215,6 @@ async function openSourceDetail(id) {
         style: 'text-decoration:none; display:block', text: (KN_SOURCE_REL_LABEL[d.relation] || d.relation) + ' · ' + (d.title || d.name) })))) : null,
     el('div', { class: 'sec-label', text: '본문' }),
     el('div', { class: 'unit-body md-rendered', style: 'max-height:50vh; overflow:auto' }, renderMarkdown(s.body_md || '(본문 없음)')));
-}
-
-// 지식 그래프뷰 — 카테고리 클러스터 레이아웃 + 지식↔지식 엣지. 라이브러리 0(core.sv 로 SVG 직접). 노드 클릭=상세.
-async function renderKnowledgeGraph(view) {
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '지식 ', el('span', { class: 'accent', text: '그래프' })),
-    el('p', { class: 'sub', text: '지식↔지식 링크 그래프 — 노드를 카테고리로 묶고 링크(관련·구체화·모순·의존)를 선으로 잇습니다. 노드를 누르면 상세로. 링크가 쌓일수록 풍부해집니다.' }));
-  const holder = el('div', { class: 'kn-graph-holder', style: 'position:relative; width:100%; height:640px; border:1px solid var(--border,#2a2a2a); border-radius:12px; overflow:hidden; background:var(--surface,#0f0f12)' });
-  const foot = el('div', { class: 'list-foot' });
-  view.replaceChildren(head, knowledgeSubBar('graph'), holder, foot);
-  holder.replaceChildren(skeleton('그래프를 그리는 중'));
-  let data: any;
-  try { data = await api('/api/ui/knowledge-graph?' + new URLSearchParams({ limit: '500' })); }
-  catch (e) { holder.replaceChildren(errorNote(e, '그래프를 불러오지 못했습니다')); return; }
-  const nodes = (data && data.nodes) || [], edges = (data && data.edges) || [];
-  if (!nodes.length) { holder.replaceChildren(el('div', { class: 'empty', text: '표시할 지식이 없습니다.' })); return; }
-  // 카테고리별 클러스터를 큰 원 둘레에 배치, 클러스터 내부는 작은 원에.
-  const byCat = new Map<string, any[]>();
-  for (const n of nodes) { const c = n.category || '(미분류)'; if (!byCat.has(c)) byCat.set(c, []); byCat.get(c)!.push(n); }
-  const cats = [...byCat.keys()];
-  const W = 1280, H = 820, cx = W / 2, cy = H / 2, R = 290;
-  const SPACE_COLOR: any = { product: '#5b9cff', business: '#f0a84d', system: '#9b8cff' };
-  const pos = new Map<string, any>();
-  cats.forEach((c, ci) => {
-    const ang = (ci / cats.length) * Math.PI * 2 - Math.PI / 2;
-    const ccx = cx + Math.cos(ang) * R, ccy = cy + Math.sin(ang) * R;
-    const arr = byCat.get(c)!;
-    const rr = Math.min(130, 18 + arr.length * 7);
-    arr.forEach((n, ni) => {
-      const a2 = (ni / Math.max(1, arr.length)) * Math.PI * 2;
-      const x = ccx + (arr.length > 1 ? Math.cos(a2) * rr : 0);
-      const y = ccy + (arr.length > 1 ? Math.sin(a2) * rr : 0);
-      pos.set(n.name, { x, y, color: SPACE_COLOR[n.space] || '#8a8f99', node: n });
-    });
-  });
-  const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: '100%', preserveAspectRatio: 'xMidYMid meet' });
-  for (const e of edges) {
-    const a = pos.get(e.from_name), b = pos.get(e.to_name);
-    if (!a || !b) continue;
-    svg.append(sv('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: 'rgba(130,130,150,0.45)', 'stroke-width': '1.2' }));
-  }
-  cats.forEach((c, ci) => {
-    const ang = (ci / cats.length) * Math.PI * 2 - Math.PI / 2;
-    const lx = cx + Math.cos(ang) * (R + 78), ly = cy + Math.sin(ang) * (R + 78);
-    svg.append(sv('text', { x: lx, y: ly, fill: '#9aa', 'font-size': '15', 'font-weight': '600', 'text-anchor': 'middle' }, c));
-  });
-  for (const [name, p] of pos) {
-    const g = sv('g', { style: 'cursor:pointer' });
-    g.append(sv('circle', { cx: p.x, cy: p.y, r: '6.5', fill: p.color, stroke: 'rgba(0,0,0,0.35)', 'stroke-width': '0.6' }));
-    g.append(sv('text', { x: p.x + 10, y: p.y + 4, fill: '#888', 'font-size': '11.5' }, (p.node.title || name).slice(0, 26)));
-    g.append(sv('title', {}, p.node.title || name));
-    g.addEventListener('click', () => { location.hash = '#/k/' + encodeURIComponent(name); });
-    svg.append(g);
-  }
-  holder.replaceChildren(svg);
-  foot.replaceChildren(el('span', { class: 'caption', text: nodes.length + ' 지식 · ' + edges.length + ' 링크 · 색=space(제품 파랑 / 사업 주황 / 시스템 보라)' }));
 }
 
 export {
