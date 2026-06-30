@@ -27,6 +27,13 @@ function buildProjectDigest(p: any): string {
     L.push("## 관련 레포", ...p.repos.map((r: string) => `- ${r}`), "- 이 머신의 로컬 경로(클론/워크트리)는 `.lively/project.json` 참조.", "");
   }
   if (p.description) L.push("## 개요", String(p.description), "");
+  // 필요지식(required) — 이 프로젝트를 진행하기 전에 알아야 할 배경. AI 가 처음부터 무엇을 알아야 하는지 보고 시작한다(전문 X·드리프트 최소 → knowledge_get 포인터). 산출(produced)은 결과물이라 넣지 않는다.
+  const reqK = ((p.knowledge && p.knowledge.required) || []) as any[];
+  if (reqK.length) {
+    L.push("## 필요지식 (이 프로젝트를 진행하기 전에 알아야 할 것 — 전문은 knowledge_get)");
+    for (const k of reqK) L.push(`- ${k.title || k.name} \`knowledge_get('${k.name}')\``);
+    L.push("");
+  }
   if (Array.isArray(p.tasks) && p.tasks.length) {
     L.push("## 태스크 인덱스");
     for (const t of p.tasks) {
