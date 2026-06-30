@@ -947,6 +947,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .tree-glyph.all { color: var(--muted-2); }
 .tree-label { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-count { font-size: 12px; font-weight: 600; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.tree-item-sub { padding-left: 24px; }   /* '전체' 하위 한 단 들여쓰기 — 인덱스(핀) 필터(#336) */
+.tree-item-sub .tree-glyph { font-size: 11px; }   /* 📌 이모지 글리프를 박스에 맞게 살짝 축소 */
 
 .browse-filter { margin-bottom: 4px; }
 .browse-filter .flt-domain { flex: 0 0 200px; min-width: 0; }

@@ -17,9 +17,9 @@ const DEDUP_WARN_SIMILARITY = 0.6;
 const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록).",
+  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만.",
   scope: "memory",
-  // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy 도 선택.
+  // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
   input: {
     space: z.string().optional(),
     categoryId: z.number().int().positive().optional(),
@@ -29,6 +29,7 @@ const knowledgeList: Capability = {
     lifecycle: z.enum(["active", "superseded"]).optional(),
     q: z.string().optional(),
     orderBy: z.enum(["name", "updated_at"]).optional(),
+    is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
   },
   expose: {
     mcp: true,
@@ -44,6 +45,7 @@ const knowledgeList: Capability = {
           lifecycle: query.lifecycle ? String(query.lifecycle) : undefined,
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
+          is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
         };
       } }],
   },

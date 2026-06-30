@@ -92,17 +92,20 @@ function openCategoryForm(space, existing, reload) {
 }
 // 도메인 의존 관계(category-edges) — should(사람 작성·편집/삭제 가능) + is(스캔 소유·읽기전용)를 한 섹션에.
 //  domains = 제품 카테고리 목록(셀렉터 옵션). 자체 fetch → 행 렌더 + should-edge 추가 폼.
+// WIKI 인덱스(#336) — 지식 사이드바 '전체' 하위의 '인덱스(핀)' 필터를 나타내는 가짜 카테고리 센티넬.
+//  data-cat-val 위임에 실려 f.indexed 토글로 변환된다. 선택 시 is_wiki=true 만(전체 카테고리에서) 보여준다.
+const KN_INDEXED = '__indexed__';
 function knowledgeSubBar(active) {
-    // WIKI 탭 하위 = 지식 / 자료 / 그래프 / 📌 인덱스 (#290). 지식(정제 저작)과 자료(raw 입력)를 분리.
+    // WIKI 탭 하위 = 지식 / 자료 / 그래프 (#290·#336). 지식(정제 저작)과 자료(raw 입력)를 분리.
+    //  인덱스(핀)는 별도 탭이 아니라 '지식' 좌측 사이드바의 '전체' 하위 필터로 통합(#336).
     //  카테고리(사업·제품·시스템)는 좌측 사이드바로 통합(2026-06-26).
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
-    const onBrowse = active !== 'pinned' && active !== 'stats' && active !== 'review' && active !== 'sources' && active !== 'graph';
+    const onBrowse = active !== 'stats' && active !== 'review' && active !== 'sources' && active !== 'graph';
     const tab = (on, href, label, title) => bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
         role: 'tab', 'aria-selected': on ? 'true' : 'false', ...(title ? { title } : {}), text: label }));
     tab(onBrowse, '#/knowledge', '지식', '정제된 저작 지식 — 결정·설계·개념·런북');
     tab(active === 'sources', '#/knowledge/sources', '자료', '회의 전사록·이메일·슬랙·외부 미러 — 정제 전 raw 입력(지식과 분리, 검색에 안 섞임)');
     tab(active === 'graph', '#/knowledge/graph', '그래프', '지식↔지식 링크 그래프(백링크·카테고리)');
-    tab(active === 'pinned', '#/knowledge/pinned', '📌 인덱스', '핀된 지식만 — 매 대화 첫머리에 깔리는 WIKI 인덱스');
     return bar;
 }
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
@@ -206,7 +209,7 @@ function knSimilarItem(e) {
     const pct = Math.round((Number(e.similarity) || 0) * 100);
     return el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name), title: '의미 유사도(코사인) ' + pct + '%' }, el('span', { class: 'kn-link-rel kn-link-sim', text: pct + '%' }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
 }
-// 지식 탭 진입 — sub ∈ {business, product, system, stats, review, pinned}. space 셋이면 2분할 뷰, 그 외 통계/검토/핀.
+// 지식 탭 진입 — sub ∈ {business, product, system, stats, review, sources, graph, new}. space 셋이면 2분할 뷰, 그 외 통계/검토.
 async function renderKnowledge(view, sub, params) {
     if (sub === 'new')
         return renderKnowledgeCreate(view, params); // 위키 생성 — 모달이 아닌 별도 페이지(#255). params: project·relation 프리스테이징(플젝 '직접 작성')
@@ -214,8 +217,11 @@ async function renderKnowledge(view, sub, params) {
         return renderKnowledgeStats(view);
     if (sub === 'review')
         return renderKnowledgeReview(view);
-    if (sub === 'pinned')
-        return renderKnowledgePinned(view);
+    // 인덱스(핀)는 별도 탭에서 '지식' 사이드바의 '전체' 하위 필터로 통합(#336) — 옛 #/knowledge/pinned 링크·북마크는 리다이렉트.
+    if (sub === 'pinned') {
+        location.replace('#/knowledge?indexed=1');
+        return;
+    }
     if (sub === 'sources')
         return renderSources(view, params); // #290 자료층(raw 입력)
     if (sub === 'graph')
@@ -223,39 +229,22 @@ async function renderKnowledge(view, sub, params) {
     // 그 외(browse·구 business/product/system URL) → 카테고리 통합 둘러보기(사이드바가 3 space 노출). space 인자 무시.
     return renderKnowledgeSpace(view, sub, params);
 }
-// 📌 인덱스(핀 전용 뷰) — is_wiki=true 지식만. 핀된 지식의 제목·분류가 매 세션 첫머리(가이드 ${wiki})에 항상 주입된다(본문 제외).
-//  핀/해제는 각 지식 상세(#/k/<name>)에서. 여기는 '무엇이 깔리는지' 한눈에 보는 읽기 뷰.
-async function renderKnowledgePinned(view) {
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '📌 ', el('span', { class: 'accent', text: '인덱스' })), el('p', { class: 'sub', text: '핀한 지식 — 제목·분류가 매 대화 첫머리(가이드의 WIKI 인덱스)에 항상 깔립니다. 본문은 제외(필요할 때 AI가 찾아봄). 핀/해제는 각 지식 상세에서 합니다.' }));
-    const listBox = el('div', { class: 'list-box' });
-    const foot = el('div', { class: 'list-foot' });
-    view.replaceChildren(head, knowledgeSubBar('pinned'), listBox, foot);
-    listBox.replaceChildren(skeletonRows(4));
-    try {
-        const r = await api('/api/ui/knowledge?' + new URLSearchParams({ limit: '500', orderBy: 'updated_at' }));
-        const pinned = ((r && r.entries) || []).filter((e) => e.is_wiki);
-        if (!pinned.length) {
-            listBox.replaceChildren(el('div', { class: 'empty', text: '핀된 지식이 없습니다. 지식 상세에서 ‘📌 핀’을 눌러 매 대화에 깔 항목을 고르세요.' }));
-            return;
-        }
-        listBox.replaceChildren(...pinned.map((e) => knRow(e)));
-        foot.replaceChildren(el('span', { class: 'caption', text: pinned.length + '건 핀됨' }));
-    }
-    catch (e) {
-        listBox.replaceChildren(errorNote(e, '핀된 지식을 불러오지 못했습니다'));
-    }
-}
 // space 뷰(사업·제품·시스템) — 좌측 카테고리 사이드바(필터) + 우측 지식 목록(검색·injection·provenance 필터).
 async function renderKnowledgeSpace(view, _space, params) {
     // 공간 병합(2026-06-26) — space 인자 무시(사이드바가 3 space 통합). 카테고리/필터만 상태로.
-    const f = (state.knowledge = state.knowledge || { space: '', category: '', injection: '', provenance: '', type: '', q: '', semantic: true });
+    const f = (state.knowledge = state.knowledge || { space: '', category: '', injection: '', provenance: '', type: '', q: '', semantic: true, indexed: false });
     if (f.type === undefined)
         f.type = '';
     if (f.semantic === undefined)
         f.semantic = true; // 의미검색 기본 on(off=grep). 임베딩 off면 서버가 grep 폴백.
+    if (f.indexed === undefined)
+        f.indexed = false; // 인덱스(핀) 필터(#336) — is_wiki=true 만(전체 카테고리에서). category 와 상호배타.
     if (params) {
-        if (params.has('category'))
+        // category 와 indexed 는 상호배타(인덱스 = '전체 카테고리에서 핀만'). 외부 category 링크는 indexed 를 끈다.
+        if (params.has('category')) {
             f.category = params.get('category') || '';
+            f.indexed = false;
+        }
         if (params.has('mode'))
             f.semantic = params.get('mode') !== 'grep';
         if (params.has('injection'))
@@ -266,6 +255,11 @@ async function renderKnowledgeSpace(view, _space, params) {
             f.type = params.get('type') || '';
         if (params.has('q'))
             f.q = params.get('q') || '';
+        if (params.has('indexed')) {
+            f.indexed = params.get('indexed') === '1';
+            if (f.indexed)
+                f.category = '';
+        }
     }
     view.replaceChildren(knowledgeSubBar('browse'), skeleton('지식을 불러오는 중'));
     // 선택(일괄삭제) 상태 — 리페치 없이 로컬 재페인트. names = 선택된 지식 name 집합.
@@ -287,7 +281,9 @@ async function renderKnowledgeSpace(view, _space, params) {
     }
     catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
     function buildSide() {
-        buildSpacesNav(nav, bySpace, f.category, myIds);
+        // 사이드바 선택값 = 인덱스면 센티넬, 아니면 카테고리 id. opts.indexed 로 '전체' 하위에 인덱스(핀) 항목 노출(지식 탭 전용, #336).
+        const selKey = f.indexed ? KN_INDEXED : f.category;
+        buildSpacesNav(nav, bySpace, selKey, myIds, { indexed: true });
         side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), nav);
     }
     buildSide();
@@ -307,7 +303,9 @@ async function renderKnowledgeSpace(view, _space, params) {
     const foot = el('div', { class: 'list-foot' });
     function syncHash() {
         const p = new URLSearchParams();
-        if (f.category)
+        if (f.indexed)
+            p.set('indexed', '1'); // 인덱스(핀)는 '전체 카테고리에서 핀만' — category 와 상호배타(#336)
+        else if (f.category)
             p.set('category', f.category);
         if (f.injection)
             p.set('injection', f.injection);
@@ -325,7 +323,9 @@ async function renderKnowledgeSpace(view, _space, params) {
     // 목록 페인트(서버 페치 분리) — 선택 모드면 행을 체크 가능하게 렌더.
     function paintList() {
         if (!lastEntries.length) {
-            listBox.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 지식이 없습니다. 필터를 넓혀 보세요.' }));
+            listBox.replaceChildren(el('div', { class: 'empty', text: f.indexed
+                    ? '핀된 지식이 없습니다. 지식 상세에서 ‘📌 핀’을 눌러 매 대화에 깔 항목을 고르세요.'
+                    : '조건에 맞는 지식이 없습니다. 필터를 넓혀 보세요.' }));
             return;
         }
         const select = sel.mode ? { names: sel.names, onToggle: repaintBulk } : null;
@@ -403,7 +403,9 @@ async function renderKnowledgeSpace(view, _space, params) {
             else {
                 // 목록(빈 검색=브라우즈 / 정확검색) — 카테고리·grep 필터 적용, 최신순.
                 const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at' });
-                if (f.category)
+                if (f.indexed)
+                    p.set('is_wiki', 'true'); // 인덱스(핀)만 — 서버 필터(category 없음 = 전체 카테고리에서)(#336)
+                else if (f.category)
                     p.set('category', f.category);
                 if (f.injection)
                     p.set('injection', f.injection);
@@ -415,7 +417,10 @@ async function renderKnowledgeSpace(view, _space, params) {
                     p.set('q', f.q.trim());
                 r = await api('/api/ui/knowledge?' + p.toString());
             }
-            const entries = (r && r.entries) || [];
+            let entries = (r && r.entries) || [];
+            // 인덱스(핀) 한정 — 의미검색 경로는 서버에 is_wiki 필터가 없으니 여기서 거른다(목록 경로는 서버가 이미 거름)(#336).
+            if (f.indexed)
+                entries = entries.filter((e) => e.is_wiki);
             lastEntries = entries;
             // 필터로 사라진 선택 정리(이후 화면에 없는 name 은 선택 해제).
             const present = new Set(entries.map((e) => e.name));
@@ -423,7 +428,7 @@ async function renderKnowledgeSpace(view, _space, params) {
                 sel.names.delete(nm); });
             paintList();
             repaintBulk();
-            foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.q.trim() && f.semantic ? ' · 의미검색(관련도순)' : '') }));
+            foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.indexed ? ' · 인덱스(핀)' : '') + (f.q.trim() && f.semantic ? ' · 의미검색(관련도순)' : '') }));
         }
         catch (e) {
             listBox.replaceChildren(errorNote(e, '지식을 불러오지 못했습니다'));
@@ -441,7 +446,10 @@ async function renderKnowledgeSpace(view, _space, params) {
         if (!item)
             return;
         ev.preventDefault();
-        f.category = item.dataset.catVal || '';
+        // 인덱스 센티넬이면 f.indexed 토글(category 비움), 아니면 일반 카테고리(#336).
+        const v = item.dataset.catVal || '';
+        f.indexed = v === KN_INDEXED;
+        f.category = f.indexed ? '' : v;
         buildSide();
         syncHash();
         refetch();
@@ -453,8 +461,12 @@ async function renderKnowledgeSpace(view, _space, params) {
     refetch();
 }
 // 카테고리 사이드바 행 — tree-item 패턴. data-cat-val 로 클릭 위임(빈 문자열=전체).
-function knSideItem(label, catVal, on) {
-    return el('a', { class: 'tree-item' + (on ? ' on' : ''), href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0' }, el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: catVal ? '·' : '∗' }), el('span', { class: 'tree-label', text: label }));
+//  opts(선택): { glyph } 글리프 교체(기본 ·/∗) · { cls } 추가 클래스(예: 들여쓰기) · { title } 호버 힌트.
+function knSideItem(label, catVal, on, opts) {
+    const glyph = (opts && opts.glyph) || (catVal ? '·' : '∗');
+    return el('a', { class: 'tree-item' + (on ? ' on' : '') + (opts && opts.cls ? ' ' + opts.cls : ''),
+        href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0',
+        ...(opts && opts.title ? { title: opts.title } : {}) }, el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: glyph }), el('span', { class: 'tree-label', text: label }));
 }
 // ── 공유 사이드바(프로젝트·위키 탭 공용, 2026-06-26) — 3 space 카테고리를 한 사이드바에 통합. ──
 //  공간 서브탭을 없애고, 보는 멤버의 '우리 팀' 카테고리(state.me.team_category_ids = 팀 소유/이해관계)를 상단에
@@ -474,9 +486,14 @@ function myCatIdSet() {
 }
 // 공유 사이드바 nav 채우기 — 우리 팀(상단 펼침 ★) + space별 접이식(나머지). nav 내부만 교체(클릭 위임은 호출부 side 에).
 //  myIds 비면(미소속) 우리 팀 그룹 생략하고 3 space 를 모두 펼쳐 노출(기존 동작에 근접). selected = 현재 선택 catVal(문자열).
-function buildSpacesNav(nav, bySpace, selected, myIds) {
+//  opts.indexed(지식 탭 전용, #336): '전체' 바로 아래에 '인덱스(핀)' 필터 항목(센티넬 KN_INDEXED)을 끼운다. 프로젝트 탭은 미전달 → 미노출.
+function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
     nav.replaceChildren();
     nav.append(knSideItem('전체', '', !selected || selected === ''));
+    // WIKI 인덱스(#336) — '전체' 하위 한 단 들여쓴 '인덱스' 항목. 클릭 시 전체 카테고리에서 is_wiki(핀)만 필터.
+    if (opts && opts.indexed) {
+        nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED, { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
+    }
     // 우리 팀 — 전 space 에서 내 카테고리(제품→사업→시스템 순). 항상 펼침.
     const mine = [];
     for (const sk of ['product', 'business', 'system'])

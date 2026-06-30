@@ -1656,7 +1656,7 @@ function injectionMap(detail, data) {
         el('div', { class: 'admin-hint inj-sub', text: '└ 가이드 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐:' }),
         subPieceRow('${rules}', '항상-주입 지식', 'injection=always 로 표시한 지식 전문(규칙·페르소나) · 가이드 맨 위', jump('WIKI(always) →', '#/knowledge?injection=always')),
         subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동 생성(편집 불가)', null),
-        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) · 가이드 맨 끝', jump('WIKI 인덱스 →', '#/knowledge/pinned')))),
+        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) · 가이드 맨 끝', jump('WIKI 인덱스 →', '#/knowledge?indexed=1')))),
     previewExpander(),
     customList('SessionStart'));
 
