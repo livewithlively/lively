@@ -16,15 +16,11 @@ const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으�
 
 // 프로젝트 마무리(close-out) 루틴 — 모든 프로젝트 공통이라 digest(자동 섹션)에 박는다. 프로젝트 폴더에서만 노출돼
 //  '플젝 세션일 때만' 보이고(플젝 밖 0비용), 전역 always 주입의 과주입·미작동(라이브 템플릿 ${rules} 부재)을 피한다.
-//  간결판(5단계)만 인라인하고 상세·근거는 WIKI 권위문서로 둔다(knowledge_get 포인터) — 드리프트 최소.
+//  단일출처: 절차·인자는 WIKI 권위문서(project-closeout-routine)에만 두고, 여기엔 흐름 한 줄 + 포인터만 — 드리프트 표면 제거(#334 후속).
 const CLOSEOUT_SECTION = [
   "## 마무리 (이 프로젝트를 끝낼 때 — done 처리 전후)",
-  "1. 본문 보강: `project_update_v6` 로 결과·근본원인·해법·반영(커밋/머지) 요약을 개요에 덧붙인다(원문 유지·append).",
-  "2. 산출지식: 아직 안 쓴 산출물을 `knowledge_save`(전문) 후 `project_link_knowledge_v6(produced)` 로 연결, 배경지식은 `required`.",
-  "3. 태스크 상태: 끝난 task/subtask 를 `task_set_status_v6(done)`.",
-  "4. 프로젝트 상태: `project_set_status_v6(done)`.",
-  "5. 후속 과업: 이번 범위 밖 후속은 **사용자에게 물어** 과업화 → 새 `project_create_v6`(이 프로젝트 하위태스크 아님).",
-  "상세·근거: `knowledge_get('project-closeout-routine')`.",
+  "본문 보강(원문유지·append) → 산출/필요지식 연결 → 태스크·프로젝트 `done` → 범위 밖 후속은 **사용자에게 물어** 새 프로젝트로.",
+  "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 `knowledge_get('project-closeout-routine')` 를 따른다.",
 ].join("\n");
 
 function buildProjectDigest(p: any): string {
