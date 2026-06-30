@@ -3,6 +3,7 @@ import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, rend
 import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, knSideItem, myCatIdSet, spaceSubBar } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
+import { loadAdmin } from './admin.js';
 import { field, overlay } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
 
@@ -1860,6 +1861,72 @@ async function renderProjectV2Detail(view, idStr) {
 
 // ── 본문 섹션 — 태스크 위, 다른 섹션(공유 폴더·터미널 세션·작업 타임라인)과 동일 위계·디자인(.card + .card-head). ──
 //  마크다운 렌더 + 본문 클릭/✎ 편집 버튼으로 그 자리 편집(Enter 저장·Shift+Enter 줄바꿈·Esc 취소). 길면 접힘+Expand.
+// ── 본문 속 지식 링크 언펄(#317 범위 A — 감지+표시만; 필요지식 자동등록은 하지 않음) ──
+//  본문에 붙여넣은 위키 링크(`#/k/<name>` 또는 게이트웨이 풀 URL `…/ui/#/k/<name>`)를 표시 렌더에서 '제목 + 링크'로 보여준다.
+//  게이트웨이 주소는 하드코딩하지 않는다(고객사마다 다름) — 현재 origin + org 프로필 gateway_url(loadAdmin) 호스트만 '우리 것'으로 인정.
+//  renderInline 은 생 URL 을 오토링크하지 않으므로, 렌더 전에 `[<name>](#/k/<name>)` 마크다운 링크로 치환하고 제목은 비동기로 채운다.
+let _gwHostsP: any = null;
+function gatewayHosts() {
+  if (_gwHostsP) return _gwHostsP;
+  _gwHostsP = (async () => {
+    const hosts = new Set([location.host]);
+    try {
+      const d = await loadAdmin();
+      const gw = d && d.profile && d.profile.gateway_url;
+      if (gw) hosts.add(new URL(String(gw).replace(/\/mcp$/, '').replace(/\/$/, '')).host);
+    } catch (_) { /* 프로필 못 받으면 현재 origin 만 */ }
+    return hosts;
+  })();
+  return _gwHostsP;
+}
+const _knTitleCache = new Map();  // name → title|null (null=없음/실패, 재요청 안 함)
+async function knTitle(name) {
+  if (_knTitleCache.has(name)) return _knTitleCache.get(name);
+  let title: any = null;
+  try { const d = await api('/api/ui/knowledge/' + encodeURIComponent(name)); title = (d && d.knowledge && d.knowledge.title) || null; }
+  catch (_) { title = null; }
+  _knTitleCache.set(name, title);
+  return title;
+}
+// md 안의 지식 링크를 `[<name>](#/k/<name>)` 로 치환. 풀 URL 은 host 가 우리 게이트웨이(hosts)일 때만. 이미 마크다운 링크 타깃인 건 건너뛴다.
+function linkifyKnowledgeRefs(md, hosts) {
+  const names = new Set();
+  const out = String(md == null ? '' : md).replace(/(?:https?:\/\/[^\s)\]]+?)?#\/k\/([\w-]+)/g, (m, name, offset, str) => {
+    const before = offset > 0 ? str.charAt(offset - 1) : '';
+    if (before === '(' || before === ']') return m;  // 기존 [..](..) 링크 타깃 → 안 건드림
+    if (m.charAt(0) === 'h') {  // 풀 URL → host 검증(우리 게이트웨이만)
+      try { if (!hosts.has(new URL(m.split('#')[0]).host)) return m; } catch (_) { return m; }
+    }
+    names.add(name);
+    return '[' + name + '](#/k/' + name + ')';
+  });
+  return { md: out, names };
+}
+// 렌더된 본문에서 지식 링크: 클릭(본문 편집 진입) 차단 + 제목으로 텍스트 교체. 게이트웨이 host 가 현재 origin 과 다르면 한 번 재치환.
+async function unfurlKnowledgeLinks(body, desc, first, onBodyClick, measure) {
+  let names = first.names;
+  try {
+    const hosts = await gatewayHosts();
+    if (!(hosts.size === 1 && hosts.has(location.host))) {
+      const re = linkifyKnowledgeRefs(desc, hosts);
+      if (re.md !== first.md) { body.replaceChildren(renderMarkdown(re.md)); body.onclick = onBodyClick; names = re.names; }
+    }
+  } catch (_) { /* noop */ }
+  body.querySelectorAll('a.md-link').forEach((a: any) => {
+    if (!(a.getAttribute('href') || '').startsWith('#/k/')) return;
+    a.classList.add('kn-unfurl');
+    a.addEventListener('click', (e) => e.stopPropagation());  // 링크 클릭 시 본문 편집 진입 방지
+  });
+  for (const name of names) {
+    const title = await knTitle(name);
+    if (!title) continue;
+    body.querySelectorAll('a.md-link').forEach((a: any) => {
+      if (a.getAttribute('href') === '#/k/' + name) { a.textContent = title; a.title = name; }
+    });
+  }
+  if (measure) requestAnimationFrame(measure);
+}
+
 function projectBodySection(id, p, reload) {
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   const bodyWrap = el('div', { class: 'proj-body-sec' });
@@ -1906,7 +1973,9 @@ function projectBodySection(id, p, reload) {
   const render = () => {
     bodyWrap.replaceChildren();
     if (p.description) {
-      const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(p.description));
+      // 지식 링크 언펄(#317) — 현재 origin 으로 즉시 치환(흔한 경우), 게이트웨이 host·제목은 비동기 보강.
+      const first = linkifyKnowledgeRefs(p.description, new Set([location.host]));
+      const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(first.md));
       body.onclick = editBody;
       // 펼침 컨트롤(클릭업/노션식) — 접힘 땐 페이드 위에 작은 알약으로 가운데 떠 있고, 펼치면 본문 아래 가운데로.
       const wrap = el('div', { class: 'proj-detail-body-wrap is-collapsed' });
@@ -1925,9 +1994,11 @@ function projectBodySection(id, p, reload) {
       wrap.append(box, exRow);
       bodyWrap.append(wrap);
       // 짧은 본문(접어도 다 보이는)이면 펼침 불필요 → 펼친 채로 두고 컨트롤 숨김. (레이아웃 후 측정)
-      requestAnimationFrame(() => {
+      const measure = () => {
         if (body.scrollHeight <= box.clientHeight + 2) { box.classList.remove('collapsed'); wrap.classList.remove('is-collapsed'); exRow.style.display = 'none'; }
-      });
+      };
+      requestAnimationFrame(measure);
+      unfurlKnowledgeLinks(body, p.description, first, editBody, measure);  // 비동기: 게이트웨이 host + 제목 보강(#317)
     } else {
       const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 본문 추가' });
       add.onclick = editBody;

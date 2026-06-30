@@ -338,6 +338,9 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .md-hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
 .md-link { color: var(--blue); text-decoration: underline; word-break: break-all; }
 .md-link:hover { color: var(--blue-deep); }
+/* 본문 속 지식 링크 언펄(#317) — 위키 지식임을 작은 문서 글리프로 표시. URL 대신 제목이라 단어 단위 줄바꿈. */
+.md-link.kn-unfurl { word-break: normal; }
+.md-link.kn-unfurl::before { content: '📄'; margin-right: 3px; font-size: .9em; opacity: .75; }
 .md-table { border-collapse: collapse; margin: 0 0 12px; font-size: 13.5px; display: block; overflow-x: auto; }
 .md-table th, .md-table td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; vertical-align: top; }
 .md-table th { background: var(--bg-tint); font-weight: 700; color: var(--ink); }
