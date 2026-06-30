@@ -460,7 +460,7 @@ async function toolUsagePanel(detail) {
   for (const c of recent) {
     calls.append(el('details', { class: 'tu-call' },
       el('summary', {},
-        el('span', { class: 'tu-ctime', text: relTime(c.at) }),
+        el('span', { class: 'tu-ctime', text: relTime(c.called_at) }),
         el('span', { class: 'tu-ctool mono', text: c.tool }),
         el('span', { class: 'dm-tag', text: c.harness || '미상' }),
         c.ok ? null : el('span', { class: 'tu-cbad', text: '✗ 오류' }),
