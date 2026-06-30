@@ -625,12 +625,14 @@ async function renderKnowledgeDetail(view, name) {
   const metaBar = el('div', { class: 'unit-metabar' });
   for (const [kk, vv] of metaRows) metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: kk }), el('span', { class: 'umeta-v', text: vv })));
 
-  // 연결 카테고리(n:n) — rejected 매핑 제외. space·이름 칩으로.
+  // 연결 카테고리(단일, #290) — rejected 제외. 단독 섹션 폐지 → 메타데이터 첫 항목으로 편입(pill 유지).
   const cats = (Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected');
-  const catSection = cats.length
-    ? el('div', { class: 'kn-cat-list' }, ...cats.map((c) => el('span', { class: 'kn-chip kn-cat-chip',
-        title: (SPACE_LABEL[c.space] || c.space || '') + ' · ' + (c.key || ''), text: c.name || c.key })))
-    : el('div', { class: 'kn-cat-empty', text: '연결된 카테고리가 없습니다.' });
+  metaBar.prepend(el('div', { class: 'umeta umeta-cat' },
+    el('span', { class: 'umeta-k', text: '카테고리' }),
+    cats.length
+      ? el('div', { class: 'umeta-v kn-cat-list kn-cat-inmeta' }, ...cats.map((c) => el('span', { class: 'kn-chip kn-cat-chip',
+          title: (SPACE_LABEL[c.space] || c.space || '') + ' · ' + (c.key || ''), text: c.name || c.key })))
+      : el('span', { class: 'umeta-v umeta-empty', text: '연결 없음' })));
 
   // 상태 액션 — 편집·핀(memory 권한자)·삭제(휴지통), 우측 정렬. 편집/핀은 지식 자신에서 직접(관리탭 WIKI 인덱스 흡수, 2026-06-24).
   //  핀: is_wiki 토글 → 제목·분류가 매 대화 첫머리(가이드 ${wiki})에 항상 주입(본문 제외). 삭제는 사람 전용(서버 403 재검증).
@@ -669,9 +671,9 @@ async function renderKnowledgeDetail(view, name) {
       knInjectChip(k.injection), knProvChip(k.provenance), knTypeChip(k.type),
       k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null),
     actions.childNodes.length ? actions : null,
-    metaWrap,
-    el('div', { class: 'sec-label', text: '카테고리' }), catSection,
-    knLinksPanel(k, view),   // #290 연결된 지식 — 카테고리·연결된 프로젝트와 같은 관계 섹션으로 묶음(같은 패턴)
+    metaWrap,   // 카테고리는 메타데이터 첫 항목으로 편입됨(단독 섹션 폐지)
+    knLinksPanel(k, view),   // #290 연결된 지식 — 연결된 프로젝트와 같은 관계 섹션으로 묶음(같은 패턴)
+
     knProjectLinks(k.name),
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
     el('div', { class: 'unit-body-wrap' }, rendered, rawView),
