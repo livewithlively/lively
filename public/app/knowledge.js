@@ -649,7 +649,8 @@ async function renderKnowledgeDetail(view, name) {
     const metaWrap = el('details', { class: 'unit-meta-details', open: '' }, el('summary', { class: 'unit-meta-summary' }, '메타데이터'), metaBar);
     // 관련 지식(벡터 #172) — 이 지식과 의미적으로 가까운 다른 지식(코사인 유사도). 비동기 채움(임베딩 off/유사 없음=숨김).
     const relatedBox = el('div', { class: 'kn-related', hidden: true, style: 'margin-top:18px' });
-    const main = el('div', { class: 'detail-card unit-card' }, el('div', { class: 'unit-title-row' }, el('h1', { class: 'detail-title', text: k.title || k.name }), lifecycleDot(k.lifecycle)), el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }), knInjectChip(k.injection), knProvChip(k.provenance), knTypeChip(k.type), k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null), actions.childNodes.length ? actions : null, metaWrap, el('div', { class: 'sec-label', text: '카테고리' }), catSection, knLinksPanel(k, view), knProjectLinks(k.name), el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle), el('div', { class: 'unit-body-wrap' }, rendered, rawView), relatedBox);
+    const main = el('div', { class: 'detail-card unit-card' }, el('div', { class: 'unit-title-row' }, el('h1', { class: 'detail-title', text: k.title || k.name }), lifecycleDot(k.lifecycle)), el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }), knInjectChip(k.injection), knProvChip(k.provenance), knTypeChip(k.type), k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null), actions.childNodes.length ? actions : null, metaWrap, el('div', { class: 'sec-label', text: '카테고리' }), catSection, knProjectLinks(k.name), el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle), el('div', { class: 'unit-body-wrap' }, rendered, rawView), knLinksPanel(k, view), // #290 연결된 지식 — 본문 아래(읽기 우선), 틴트 카드로 구분
+    relatedBox);
     view.replaceChildren(el('div', { class: 'page-head unit-head' }, backRow), main);
     applyReveal([main]);
     // 관련 지식 비동기 로드(주 렌더를 막지 않음). graceful — 임베딩 off/유사 없음/실패면 섹션 숨김 유지.
@@ -1114,15 +1115,15 @@ function knLinksPanel(k, view) {
         title: '교차주제는 카테고리 복수태깅 대신 링크로 잇습니다', onclick: () => openKnowledgeLinkPicker(k, view) }) : null);
     const body = el('div', { class: 'list-box kn-links-list' });
     if (!out.length && !inc.length) {
-        body.append(el('div', { class: 'kn-cat-empty', text: '연결된 지식이 없습니다. ＋링크로 관련·구체화·모순·의존을 잇습니다(단일 카테고리의 짝).' }));
+        body.append(el('div', { class: 'kn-cat-empty', text: '아직 연결된 지식이 없어요. ＋링크로 관련된 지식을 이어보세요.' }));
     }
     else {
         if (out.length) {
-            body.append(el('div', { class: 'caption kn-links-sub', text: '→ 이 지식이 가리키는' }));
+            body.append(el('div', { class: 'kn-links-sub', text: '이 지식에서 연결한 글' }));
             out.forEach((e) => body.append(knLinkRow(e, k, view, false)));
         }
         if (inc.length) {
-            body.append(el('div', { class: 'caption kn-links-sub', text: '← 이 지식을 가리키는 (백링크)' }));
+            body.append(el('div', { class: 'kn-links-sub', text: '이 지식을 연결한 다른 글' }));
             inc.forEach((e) => body.append(knLinkRow(e, k, view, true)));
         }
     }
