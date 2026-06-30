@@ -2,8 +2,9 @@
    다크 "도메인 지도": 카테고리=영역(territory), 지식=점. 팬·줌은 지도처럼. */
 
 :root {
-  --atlas-bg: #0b0e14;          /* 심해 네이비(순흑 아님) — 야간 해도(海圖) */
-  --atlas-bg-2: #121826;        /* 중앙 비네트 밝은 톤 */
+  --atlas-bg: #080c14;          /* 야간 해도(海圖) 잉크 — 깊은 블루블랙 */
+  --atlas-bg-2: #0e1a2c;        /* 중앙 비네트 — 더 푸른 톤 */
+  --atlas-grid: 125, 185, 220;  /* 그래티큘(좌표 격자) 시안 — rgba() 로 사용 */
   --atlas-ink: #c8d2e2;         /* 본문 잉크 — 차가운 라이트 슬레이트 */
   --atlas-ink-dim: #8591a8;     /* 보조 텍스트 */
   --atlas-ink-faint: #5b6781;   /* 더 흐린 텍스트/좌표 */
@@ -35,6 +36,11 @@ body {
 .atlas-stage { position: absolute; inset: 0; touch-action: none; cursor: grab; }
 .atlas-stage.dragging { cursor: grabbing; }
 .atlas-stage svg { display: block; width: 100%; height: 100%; }
+
+/* 그래티큘 — 좌표 격자(해도 느낌). 줌과 무관하게 가는 선, 너무 촘촘하면 JS가 페이드. */
+.grid { transition: opacity .2s ease; }
+.grid-l { stroke: rgba(var(--atlas-grid), 0.045); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.grid-major { stroke: rgba(var(--atlas-grid), 0.085); }
 
 /* 영역(territory) — 카테고리 경계 블롭 */
 .terr { transition: opacity .2s ease; }
@@ -80,15 +86,20 @@ body {
   pointer-events: none;
 }
 .atlas-top > * { pointer-events: auto; }
-.atlas-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.atlas-title h1 {
-  margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: #eef2f8;
+/* 카르투슈(cartouche) — 지도 명패: 발행 임프린트 · 제목 · 판본(라이브 통계) */
+.atlas-cartouche {
+  display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  padding-left: 12px; border-left: 2px solid rgba(var(--atlas-grid), 0.5);
+}
+.cart-eyebrow {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.22em;
+  color: var(--atlas-ink-faint);
+}
+.atlas-cartouche h1 {
+  margin: 1px 0; font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: #eef2f8;
   white-space: nowrap;
 }
-.atlas-title .sub {
-  font-size: 12.5px; color: var(--atlas-ink-dim); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
-}
+.cart-stat { font-family: var(--mono); font-size: 11px; color: var(--atlas-ink-dim); letter-spacing: 0.01em; }
 .atlas-spacer { flex: 1; }
 
 .atlas-search { position: relative; display: flex; align-items: center; }
