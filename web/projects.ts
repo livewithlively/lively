@@ -2024,28 +2024,20 @@ function projectKnowledgeSection(id, p, reload) {
   const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
     title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
     onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
-  card.append(el('div', { class: 'card-head' }, el('h3', { text: '연결된 지식' }), knAddBtn));
+  card.append(el('div', { class: 'card-head' },
+    el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' },
+      el('h3', { text: '연결된 지식' }),
+      el('span', { class: 'pjk-head-hint' },
+        '연결해 두면 AI가 처음부터 이 맥락을 쥐고 시작해요 — ',
+        el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
+    knAddBtn));
 
   const reqList = el('div', { class: 'pjk-list' });
   const prodList = el('div', { class: 'pjk-list' });
   const reqCount = el('span', { class: 'pjk-count' });
   const prodCount = el('span', { class: 'pjk-count' });
 
-  // '왜 필요지식을 다나' 배너(#317) — 필요지식이 비어 있고 사용자가 닫지 않았을 때만. 한 번 닫으면 기억(naggy 방지).
-  const WHY_KEY = 'pjk_why_dismissed';
-  const whyBanner = el('div', { class: 'pjk-why' },
-    el('span', { class: 'pjk-why-ico', 'aria-hidden': 'true', text: 'ⓘ' }),
-    el('span', { class: 'pjk-why-text' },
-      '필요지식을 연결하면, 이 프로젝트를 맡는 AI가 검색 없이 처음부터 이 맥락을 쥐고 시작합니다 — 결정·규칙을 다시 묻거나 어기지 않게. ',
-      el('a', { href: '#/learn', text: '자세히' })));
-  const whyX = el('button', { class: 'pjk-why-x', type: 'button', title: '닫기', text: '✕' });
-  whyX.onclick = () => { try { localStorage.setItem(WHY_KEY, '1'); } catch (_) { /* noop */ } updateWhy(); };
-  whyBanner.append(whyX);
-  function updateWhy() {
-    let dismissed = false;
-    try { dismissed = localStorage.getItem(WHY_KEY) === '1'; } catch (_) { /* noop */ }
-    whyBanner.style.display = (!dismissed && !cur.required.length) ? '' : 'none';
-  }
+  // '왜 필요지식을 다나'는 닫는 배너 대신 섹션 제목 옆 부제로 이동(#317) — 위 card-head 의 pjk-head-hint + [자세히](→ learn 해당 섹션).
 
   // 필요지식 빈칸 — 죽은 끝('아직 없습니다') 대신 추천을 인라인으로 먼저(#317). 추천은 한 번만 불러 캐시(재페인트마다 호출 방지).
   let recsCache: any = null;
@@ -2109,7 +2101,6 @@ function projectKnowledgeSection(id, p, reload) {
     if (cur.required.length) paint(reqList, cur.required, 'required', '');
     else paintRequiredEmpty(reqList);  // 빈칸이면 추천 인라인(#317).
     paint(prodList, cur.produced, 'produced', '작업이 진행되면 여기에 쌓입니다 — 지금 비워둬도 괜찮아요.');
-    updateWhy();
     if (remeasure) requestAnimationFrame(remeasure);  // 내용이 바뀌면 접기 필요 여부 재판정.
   }
   async function refresh() {
@@ -2159,7 +2150,7 @@ function projectKnowledgeSection(id, p, reload) {
     exRow.style.display = '';
     applyExpanded(userExpanded);
   };
-  card.append(whyBanner, collapseBox, exRow);
+  card.append(collapseBox, exRow);
   repaint();
   return card;
 }
