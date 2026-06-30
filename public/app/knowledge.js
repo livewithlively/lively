@@ -124,6 +124,15 @@ function knTypeChip(type) {
         return null;
     return el('span', { class: 'kn-chip kn-type kn-type-' + type, title: 'page-type · ' + type, text: KN_TYPE_LABEL[type] || type });
 }
+// 유형(page-type) 셀렉터 — 생성·편집 폼 공용. 6종. value=선택값. (#290 신규 필수)
+function knTypeSelect(value) {
+    const sel = el('select', {}, el('option', { value: '', text: '— 유형 선택 —' }));
+    for (const [v, label] of Object.entries(KN_TYPE_LABEL))
+        sel.append(el('option', { value: v, text: label }));
+    if (value)
+        sel.value = value;
+    return sel;
+}
 // injection/provenance 칩 — 종류 뱃지(kindBadge)와 같은 작은 인라인 표식. title 로 한 줄 설명 노출.
 function knInjectChip(injection) {
     return el('span', { class: 'kn-chip kn-inject kn-inject-' + (injection || 'na'),
@@ -828,6 +837,7 @@ async function renderKnowledgeCreate(view, params) {
     // 분류 — 신규 지식은 분류 1개 이상 필수(미분류 저장 금지). value=key(저장 payload 의 category 파라미터).
     const catSel = el('select', {}, el('option', { value: '', text: '— 분류 선택 —' }));
     loadCategoryKeysForSelect(catSel);
+    const typeSel = knTypeSelect(''); // #290 신규 type 필수
     const bodyTa = el('textarea', { class: 'mem-edit-ta', rows: '16', placeholder: 'markdown 본문' });
     // 프로젝트 연결 스테이징 — 저장 전엔 지식이 없으니 즉시 연결하지 않고 모은다(복수, 필요/산출). 저장 후 일괄 link.
     const staged = [];
@@ -880,13 +890,17 @@ async function renderKnowledgeCreate(view, params) {
             return;
         }
         if (!catSel.value) {
-            toast('분류를 선택하세요 (신규 지식은 분류 1개 이상 필수)', true);
+            toast('분류를 선택하세요 (신규 지식은 분류 1개 필수)', true);
+            return;
+        }
+        if (!typeSel.value) {
+            toast('유형(type)을 선택하세요 (신규 지식은 type 필수)', true);
             return;
         }
         saveBtn.disabled = true;
         status.textContent = '저장 중…';
         try {
-            const payload = { title: titleIn.value.trim() || undefined, body_md: body, injection: injSel.value, provenance: provSel.value, category: [catSel.value] };
+            const payload = { title: titleIn.value.trim() || undefined, body_md: body, injection: injSel.value, provenance: provSel.value, category: catSel.value, type: typeSel.value };
             if (nameIn.value.trim())
                 payload.name = nameIn.value.trim();
             const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
@@ -910,7 +924,7 @@ async function renderKnowledgeCreate(view, params) {
         }
     };
     const head = el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '지식 ', el('span', { class: 'accent', text: '작성' })), el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge', text: '← 목록으로' })), el('p', { class: 'sub', text: '새 지식을 작성하고, 원하면 프로젝트의 필요/산출 지식으로 연결합니다(복수 프로젝트 가능).' }));
-    const card = el('div', { class: 'card kn-create-card' }, field('파일명', nameIn), field('제목', titleIn), field('주입(injection)', injSel), field('출처(provenance)', provSel), field('카테고리 (필수)', catSel), field('본문', bodyTa), el('div', { class: 'field' }, el('div', { class: 'field-label-row kn-create-projhead' }, el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn), stagedList), el('div', { class: 'admin-actions' }, saveBtn, status));
+    const card = el('div', { class: 'card kn-create-card' }, field('파일명', nameIn), field('제목', titleIn), field('주입(injection)', injSel), field('출처(provenance)', provSel), field('카테고리 (필수)', catSel), field('유형/type (필수)', typeSel), field('본문', bodyTa), el('div', { class: 'field' }, el('div', { class: 'field-label-row kn-create-projhead' }, el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn), stagedList), el('div', { class: 'admin-actions' }, saveBtn, status));
     view.replaceChildren(head, knowledgeSubBar('browse'), card);
     applyReveal([card]);
     setTimeout(() => titleIn.focus(), 0);
@@ -934,9 +948,10 @@ async function openKnowledgeEditor(seed, opts) {
         .map((c) => c.category_id).filter(Boolean)[0] || '';
     const catSel = el('select', {}, el('option', { value: '', text: '— 카테고리 없음 —' }));
     loadCategoriesForSelect(catSel, origCatId); // 비동기 채움(모달은 즉시 열림)
+    const typeSel = knTypeSelect(k.type || ''); // #290 type — 신규 필수, 편집 시 변경 가능
     const status = el('span', { class: 'admin-status' });
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
-    const root = el('div', { class: 'mem-modal' }, isNew ? field('파일명', nameIn) : null, field('제목', titleIn), field('주입(injection)', injSel), field('출처(provenance)', provSel), field('카테고리 (선택)', catSel), field('본문', bodyTa), el('div', { class: 'admin-actions' }, saveBtn, status));
+    const root = el('div', { class: 'mem-modal' }, isNew ? field('파일명', nameIn) : null, field('제목', titleIn), field('주입(injection)', injSel), field('출처(provenance)', provSel), field('카테고리 (선택)', catSel), field('유형/type', typeSel), field('본문', bodyTa), el('div', { class: 'admin-actions' }, saveBtn, status));
     const back = overlay(isNew ? '지식 추가' : ('지식 편집 · ' + (k.title || k.name)), root);
     saveBtn.addEventListener('click', async () => {
         const body = bodyTa.value.trim();
@@ -944,10 +959,14 @@ async function openKnowledgeEditor(seed, opts) {
             toast('본문을 입력하세요', true);
             return;
         }
+        if (isNew && !typeSel.value) {
+            toast('유형(type)을 선택하세요 (신규 지식은 type 필수)', true);
+            return;
+        }
         saveBtn.disabled = true;
         try {
             const payload = { title: titleIn.value.trim() || undefined, body_md: body,
-                injection: injSel.value, provenance: provSel.value };
+                injection: injSel.value, provenance: provSel.value, type: typeSel.value || undefined };
             if (isNew) {
                 if (nameIn.value.trim())
                     payload.name = nameIn.value.trim();

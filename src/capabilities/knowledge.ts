@@ -91,7 +91,7 @@ const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
   description:
-    "지식 전문 저장. **신규는 category(분류) 1개 필수(단일 분류 — #290)**(category_list 의 key 1개. 복수 전달 시 첫 1개만 적용 — 교차주제는 knowledge_link 로). type(page-type) 선택. injection/provenance 포함. name 없으면 자동 슬러그. " +
+    "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. injection/provenance 포함. name 없으면 자동 슬러그. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
   scope: "memory",
@@ -103,8 +103,8 @@ const knowledgeSave: Capability = {
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
-      .describe("page-type(#290): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
-    category: z.array(z.string()).optional(),
+      .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
+    category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
   },
   expose: {
     mcp: true,
@@ -117,8 +117,8 @@ const knowledgeSave: Capability = {
         if (injection && !["always", "recalled"].includes(injection)) throw new HttpError(400, "injection 은 always|recalled");
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
-        const category = Array.isArray(b.category) ? b.category.map(String)
-          : (b.category ? [String(b.category)] : undefined);
+        const category = b.category != null
+          ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,

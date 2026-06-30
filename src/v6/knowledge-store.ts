@@ -187,7 +187,7 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string[] },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[] },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow> {
   let name: string;
@@ -202,15 +202,20 @@ export async function upsertKnowledge(
     }
   }
   const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
-  // 미분류 금지(2026-06-24): category(분류) key→id 해소. 신규는 1개 이상 필수, 미존재 key 는 INSERT 전 차단(미분류·오타 생성 방지).
+  // 단일 카테고리(#290): 단일 키 문자열 또는 배열(커넥터 호환) 정규화. 미존재 key 는 INSERT 전 차단(미분류·오타 방지).
+  const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
-  for (const key of (input.category ?? [])) {
+  for (const key of catKeys) {
     const cat = await one(itemsPool, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
     if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
     catIds.push((cat as { id: number }).id);
   }
+  // 신규 지식: category(단일) + type(page-type) 둘 다 필수(#290). 기존 편집은 보존(생략 허용).
   if (!before && !catIds.length) {
-    throw new Error("신규 지식은 category(분류) 1개 이상 필수 — category_list 의 key 를 지정하세요(미분류 저장 금지).");
+    throw new Error("신규 지식은 category(분류) 1개 필수 — category_list 의 key 를 지정하세요(단일 분류).");
+  }
+  if (!before && !input.type) {
+    throw new Error("신규 지식은 type(page-type) 필수 — decision|concept|how-to|reference|research|entity 중 하나를 지정하세요.");
   }
   // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값. injection/provenance 는 명시 우선·기존 보존.
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
