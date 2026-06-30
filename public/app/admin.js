@@ -352,6 +352,7 @@ function tuEnsureStyles() {
 .tu-cbad{color:var(--coral);font-size:11px;font-weight:700}
 .tu-args{background:var(--bg-tint);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;color:var(--ink);overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:7px 0 2px}
 .tu-empty{color:var(--muted);font-size:13px;padding:18px 4px}
+.tu-more{margin-top:12px;display:flex;justify-content:center}
 ` }));
 }
 function tuPretty(v) {
@@ -401,14 +402,18 @@ async function toolUsagePanel(detail) {
         harnessSel.append(el('option', { value: h, text: h }));
     harnessSel.value = TOOL_USAGE_STATE.harness;
     harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; reload(); };
-    const toolInp = el('input', { class: 'tu-inp', type: 'text', value: TOOL_USAGE_STATE.tool, placeholder: '툴 이름(정확히)' });
-    const applyTool = () => { const v = toolInp.value.trim(); if (v !== TOOL_USAGE_STATE.tool) {
-        TOOL_USAGE_STATE.tool = v;
-        reload();
-    } };
-    toolInp.onkeydown = (e) => { if (e.key === 'Enter')
-        applyTool(); };
-    const controls = el('div', { class: 'tu-controls' }, el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel), el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel), el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolInp), el('button', { class: 'btn btn-ghost btn-sm', text: '적용', onclick: applyTool }), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool)
+    // 툴 필터 = 드롭다운(현재 기간+하네스 내 실제 툴 목록 + 호출수). 이름 타이핑 대신 선택.
+    const toolSel = el('select', { class: 'tu-sel' });
+    toolSel.append(el('option', { value: '', text: '모든 툴' }));
+    const toolOpts = r.toolOptions || [];
+    for (const t of toolOpts)
+        toolSel.append(el('option', { value: t.tool, text: t.tool + ' (' + (t.calls || 0).toLocaleString() + ')' }));
+    // 선택된 툴이 현재 옵션에 없으면(다른 필터로 0건 등) 보존용 추가
+    if (TOOL_USAGE_STATE.tool && !toolOpts.some((t) => t.tool === TOOL_USAGE_STATE.tool))
+        toolSel.append(el('option', { value: TOOL_USAGE_STATE.tool, text: TOOL_USAGE_STATE.tool }));
+    toolSel.value = TOOL_USAGE_STATE.tool;
+    toolSel.onchange = () => { TOOL_USAGE_STATE.tool = toolSel.value; reload(); };
+    const controls = el('div', { class: 'tu-controls' }, el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel), el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel), el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolSel), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool)
         ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; reload(); } })
         : null);
     // ── 요약 스탯 ──
@@ -442,14 +447,45 @@ async function toolUsagePanel(detail) {
     const harnessChips = el('div', { class: 'tu-harness' });
     for (const h of byHarness)
         harnessChips.append(el('span', { class: 'tu-chip' }, el('span', { text: h.harness }), el('b', { text: (h.calls || 0).toLocaleString() }), h.errors ? el('em', { text: '오류 ' + h.errors }) : null));
-    // ── 최근 호출(인자 펼침) ──
+    // ── 최근 호출(인자 펼침 + 더보기 페이지네이션) ──
+    const total = sum.total || 0;
     const calls = el('div', { class: 'tu-calls' });
+    const renderCall = (c) => el('details', { class: 'tu-call' }, el('summary', {}, el('span', { class: 'tu-ctime', text: relTime(c.called_at) }), el('span', { class: 'tu-ctool mono', text: c.tool }), el('span', { class: 'dm-tag', text: c.harness || '미상' }), c.ok ? null : el('span', { class: 'tu-cbad', text: '✗ 오류' }), el('span', { class: 'tu-cdur', text: c.duration_ms != null ? c.duration_ms + 'ms' : '' }), el('span', { class: 'tu-cactor', text: c.actor || '' })), el('pre', { class: 'tu-args mono', text: tuPretty(c.args) }), c.error ? el('pre', { class: 'tu-args mono', text: '⚠ ' + c.error }) : null);
     if (!recent.length)
         calls.append(el('div', { class: 'tu-empty', text: '최근 호출이 없습니다.' }));
-    for (const c of recent) {
-        calls.append(el('details', { class: 'tu-call' }, el('summary', {}, el('span', { class: 'tu-ctime', text: relTime(c.called_at) }), el('span', { class: 'tu-ctool mono', text: c.tool }), el('span', { class: 'dm-tag', text: c.harness || '미상' }), c.ok ? null : el('span', { class: 'tu-cbad', text: '✗ 오류' }), el('span', { class: 'tu-cdur', text: c.duration_ms != null ? c.duration_ms + 'ms' : '' }), el('span', { class: 'tu-cactor', text: c.actor || '' })), el('pre', { class: 'tu-args mono', text: tuPretty(c.args) }), c.error ? el('pre', { class: 'tu-args mono', text: '⚠ ' + c.error }) : null));
-    }
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })), el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (recent.length ? ' (' + recent.length + ')' : '') }), calls);
+    for (const c of recent)
+        calls.append(renderCall(c));
+    // 더 보기 — offset 기반 추가 로드(현재 필터 유지, 재조회 없이 append). loaded < total 이면 버튼 노출.
+    let loaded = recent.length;
+    const moreWrap = el('div', { class: 'tu-more' });
+    const recentQs = (off) => {
+        const q = new URLSearchParams({ window: TOOL_USAGE_STATE.window, offset: String(off) });
+        if (TOOL_USAGE_STATE.harness)
+            q.set('harness', TOOL_USAGE_STATE.harness);
+        if (TOOL_USAGE_STATE.tool)
+            q.set('tool', TOOL_USAGE_STATE.tool);
+        return q.toString();
+    };
+    const updateMore = () => {
+        moreWrap.replaceChildren();
+        if (loaded < total)
+            moreWrap.append(el('button', { class: 'btn btn-ghost btn-sm',
+                text: '더 보기 (' + loaded.toLocaleString() + '/' + total.toLocaleString() + ')', onclick: loadMore }));
+    };
+    const loadMore = async () => {
+        moreWrap.replaceChildren(el('span', { class: 'tu-empty', text: '불러오는 중…' }));
+        try {
+            const r2 = await api('/api/ui/tool-usage?' + recentQs(loaded));
+            const more = (r2 && r2.recent) || [];
+            for (const c of more)
+                calls.append(renderCall(c));
+            loaded += more.length;
+        }
+        catch (e) { /* 추가 로드 실패는 기존 목록 유지하고 무시 */ }
+        updateMore();
+    };
+    updateMore();
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })), el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, moreWrap);
     detail.replaceChildren(card);
 }
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
