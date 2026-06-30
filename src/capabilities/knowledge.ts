@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
-  findSimilarKnowledge,
+  findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData,
 } from "../v6/knowledge-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
@@ -89,7 +89,7 @@ const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
   description:
-    "지식 전문 저장. **신규는 category(분류) 1개 이상 필수**(category_list 의 key 배열 — 미분류 저장 금지). injection/provenance 포함. name 없으면 자동 슬러그. " +
+    "지식 전문 저장. **신규는 category(분류) 1개 필수(단일 분류 — #290)**(category_list 의 key 1개. 복수 전달 시 첫 1개만 적용 — 교차주제는 knowledge_link 로). type(page-type) 선택. injection/provenance 포함. name 없으면 자동 슬러그. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
   scope: "memory",
@@ -100,6 +100,8 @@ const knowledgeSave: Capability = {
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
+    type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
+      .describe("page-type(#290): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
     category: z.array(z.string()).optional(),
   },
   expose: {
@@ -120,6 +122,7 @@ const knowledgeSave: Capability = {
           title: b.title ? String(b.title) : undefined,
           body_md, injection, provenance,
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
+          type: b.type ? String(b.type) : undefined,
           category,
         };
       } }],
@@ -393,10 +396,62 @@ const knowledgeSimilar: Capability = {
   },
 };
 
+// #290 지식↔지식 링크 — 빠진 1급 프리미티브. create 또는 unlink=true. 교차주제는 카테고리 복수태깅 대신 이 링크로.
+const knowledgeLink: Capability = {
+  name: "knowledge_link",
+  title: "지식↔지식 링크",
+  description:
+    "지식을 다른 지식과 연결한다(또는 unlink=true 로 해제). relation=related(대칭 관련)|refines(이 지식이 to 를 구체화)|contradicts(모순)|depends_on(의존). " +
+    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·회수 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64).describe("출발 지식(from)"),
+    to: z.string().min(1).max(64).describe("도착 지식(to)"),
+    relation: z.enum(["related", "refines", "contradicts", "depends_on"]).default("related"),
+    unlink: z.boolean().optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/link"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const to = String(b.to ?? "").trim();
+        if (!to) throw new HttpError(400, "to(도착 지식 이름)가 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), to,
+          relation: b.relation ? String(b.relation) : "related",
+          unlink: b.unlink === true,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    if (input.unlink) { await unlinkKnowledge(input.name, input.to, input.relation, writeCtx); return { unlinked: true }; }
+    await linkKnowledge(input.name, input.to, input.relation, writeCtx);
+    return { linked: true };
+  },
+};
+
+// #290 그래프뷰 데이터(UI 전용, REST) — 활성 지식 노드(+단일 카테고리) + 지식↔지식 엣지. 전역/로컬 그래프를 클라가 그린다.
+const knowledgeGraph: Capability = {
+  name: "knowledge_graph",
+  title: "지식 그래프",
+  description: "활성 지식 노드(+단일 카테고리·type)와 지식↔지식 링크 엣지를 반환한다(그래프뷰 전용).",
+  scope: "memory",
+  input: { limit: z.number().int().min(1).max(2000).optional() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-graph"],
+      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+  },
+  handler: async (input: any) => await knowledgeGraphData(input.limit),
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
+//  knowledge_graph(/knowledge-graph)·knowledge_link(/knowledge/:name/link)는 :name 단일세그먼트와 안 겹친다(경로 깊이 상이).
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGet,
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeGet,
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
 ];
