@@ -39,7 +39,7 @@ async function route() {
       setActiveTab('start');
       await renderInstall(view);
     } else if (page === 'domainmap') {
-      setActiveTab('domainmap'); // 코드구조 — 독립 탭(index.html data-tab="domainmap")
+      setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // 지식(맥락의 기록) — 사업·제품·시스템 + 통계·검토. injection/provenance 직교축.

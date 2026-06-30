@@ -43,7 +43,7 @@ async function route() {
             await renderInstall(view);
         }
         else if (page === 'domainmap') {
-            setActiveTab('domainmap'); // 코드구조 — 독립 탭(index.html data-tab="domainmap")
+            setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
             await renderDomainmap(view, params);
         }
         else if (page === 'knowledge') {

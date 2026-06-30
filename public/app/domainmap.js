@@ -33,6 +33,9 @@ async function renderDomainmap(view, params) {
         repo = repos[0];
     state.dmRepo = repo;
     const head = el('div', { class: 'page-head' }, el('h1', {}, '도메인-코드 ', el('span', { class: 'accent', text: '의존성' })), el('p', { class: 'sub', text: '도메인마다 의도(should)와 코드 구조(is)를 나란히 두고, 둘의 괴리(debt)를 드러냅니다. 아래에서 의도가 어떻게 바뀌어 왔는지, 어떤 커밋이 구조를 바꿨는지도 볼 수 있습니다.' }));
+    // 준비중 안내 — 탭 최상단 경고(프로젝트 #342). 아직 불완전한 기능임을 알린다.
+    //  이 탭(#/domainmap=renderDomainmap) 전용 — 카테고리 제품 화면과 공유하는 domainmapBody 엔 넣지 않는다.
+    const wip = el('div', { class: 'dm-wip', role: 'note' }, el('div', { class: 'dm-wip-title', text: '⚠ 아직 준비 중인 기능입니다' }), el('div', { class: 'dm-wip-sub', text: '이 화면은 개발 중이라 내용이 불완전하거나 실제와 다를 수 있습니다. 참고용으로만 봐 주세요.' }));
     // repo 셀렉터 — 복수일 때만(단일이면 라벨 생략, 작업현황/어휘관리와 동일 패턴).
     let repoBar = null;
     if (repos.length > 1) {
@@ -48,10 +51,10 @@ async function renderDomainmap(view, params) {
         data = await api('/api/ui/domainmap/map?' + new URLSearchParams({ repo, limit: '150' }));
     }
     catch (e) {
-        view.replaceChildren(...[head, repoBar, errorNote(e, '도메인 맵을 불러오지 못했습니다')].filter(Boolean));
+        view.replaceChildren(...[wip, head, repoBar, errorNote(e, '도메인 맵을 불러오지 못했습니다')].filter(Boolean));
         return;
     }
-    const nodes = [head, repoBar,
+    const nodes = [wip, head, repoBar,
         ...domainmapBody(data, repos.length > 1 ? repo : null)].filter(Boolean);
     view.replaceChildren(...nodes);
 }
