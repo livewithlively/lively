@@ -3760,8 +3760,9 @@ function pjvCheckMini(on) {
 
 // 그리드 템플릿 — 기본(이름·담당자·마감·우선순위) + 커스텀 필드 폭들 + 더보기. thead/행/추가행에 인라인 적용.
 function pjvGridTemplate(fields) {
-  const extra = (fields || []).map((f) => ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px').join(' ');
-  return 'minmax(0, 1fr) 96px 92px 112px' + (extra ? ' ' + extra : '') + ' 34px';
+  // 제목 floor(180px) + 메타 minmax(0,W) — 창이 좁아지면 제목 대신 메타가 먼저 줄어든다(#339 와 같은 패턴, 태스크 리스트).
+  const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
+  return 'minmax(180px, 1fr) minmax(0, 96px) minmax(0, 92px) minmax(0, 112px)' + (extra ? ' ' + extra : '') + ' 34px';
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
 function pjvProjGridTemplate(fields) {

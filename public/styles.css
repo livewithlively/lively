@@ -1541,7 +1541,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-tasks-card .pjv-addrow.editing,
 .pjv-trow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 104px 100px 124px 34px;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 104px) minmax(0, 100px) minmax(0, 124px) 34px;
   align-items: center;
   gap: 0; /* 표처럼 셀이 붙게(여백 0) — 헤더·행·추가행 동일 격자라 같이 0 으로 둬야 컬럼이 안 어긋남. */
 }
@@ -2791,6 +2791,16 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
   pointer-events: none;
 }
 .pjv-proj-row:hover .pjv-row-actions .pjv-row-act { pointer-events: auto; }
+/* 태스크 리스트(.pjv-tasks-card — 프로젝트 보드와 달리 .pjv-proj-card 없음)도 같은 패턴(#339) —
+   제목 우측 호버 액션을 절대배치로 빼 제목 폭을 상시 점유하지 않게 + 메타 셀 클립. 좁은 창에서 태스크 제목 보호. */
+.pjv-tasks-card:not(.pjv-proj-card) .pjv-tcell { overflow: hidden; }
+.pjv-tasks-card:not(.pjv-proj-card) .pjv-trow-title-cell { position: relative; }
+.pjv-tasks-card:not(.pjv-proj-card) .pjv-row-actions {
+  position: absolute; right: 0; top: 0; bottom: 0; margin: 0; padding-left: 28px;
+  background: linear-gradient(to right, transparent, var(--bg-tint) 22px);
+  pointer-events: none;
+}
+.pjv-tasks-card:not(.pjv-proj-card) .pjv-trow:hover .pjv-row-actions .pjv-row-act { pointer-events: auto; }
 /* 개수 칩 — 숫자 왼쪽에 하위태스크 아이콘(프로젝트 행·태스크 행·펼침 태스크 행 공통). */
 .pjv-subcount-ico { display: inline-flex; align-items: center; gap: 3px; }
 .pjv-subcount-ico .pjv-subtask-ic { width: 12px; height: 12px; flex: none; }
