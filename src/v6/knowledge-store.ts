@@ -542,6 +542,8 @@ export async function findRecommendedKnowledge(
 }
 
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
+  // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
+  await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
   await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, state, created_at)
      VALUES($1,$2,'manual',$3,now())
