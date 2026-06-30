@@ -1,7 +1,7 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
-import { renderKnowledge, renderKnowledgeDetail, renderTrash } from './knowledge.js';
+import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, teardownTerminal } from './terminal.js';
@@ -57,6 +57,10 @@ async function route() {
         else if (page === 'k') {
             setActiveTab('knowledge'); // 지식 상세는 지식 탭의 하위 뷰 — 상위 탭 활성 유지
             await renderKnowledgeDetail(view, decodeURIComponent(segs.slice(1).join('/')));
+        }
+        else if (page === 'k-edit') {
+            setActiveTab('knowledge'); // 지식 편집(별도 페이지, 모달 아님 #290) — #/k-edit/<name>
+            await renderKnowledgeForm(view, undefined, decodeURIComponent(segs.slice(1).join('/')));
         }
         else if (page === 'projects') {
             // v1 프로젝트 탭 폐기(2026-06-23) — projects2 로 통합. 옛 링크/북마크는 리다이렉트.

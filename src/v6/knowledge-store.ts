@@ -13,7 +13,7 @@ import {
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
-   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, version, updated_at, updated_by`;
+   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
 
 export interface KnowledgeRow {
