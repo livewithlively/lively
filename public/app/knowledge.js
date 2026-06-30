@@ -142,6 +142,26 @@ function knProvChip(provenance) {
     return el('span', { class: 'kn-chip kn-prov kn-prov-' + (provenance || 'na'),
         title: KN_PROVENANCE_HINT[provenance] || '', text: KN_PROVENANCE_LABEL[provenance] || provenance || '—' });
 }
+// ⓘ 설명 점 — 라벨/값 옆 작은 정보 버튼. 긴 설명을 인라인에서 빼 호버(CSS)·포커스·클릭(고정 토글, 터치/유지용)으로 팝.
+//  바깥 클릭 시 닫힘. hint 없으면 null.
+function infoDot(hint) {
+    if (!hint)
+        return null;
+    const dot = el('button', { type: 'button', class: 'info-dot', 'aria-label': hint }, 'ⓘ', el('span', { class: 'info-pop', role: 'tooltip', text: hint }));
+    dot.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const open = dot.classList.toggle('open');
+        if (open) {
+            const onDoc = (ev) => { if (!dot.contains(ev.target)) {
+                dot.classList.remove('open');
+                document.removeEventListener('click', onDoc, true);
+            } };
+            setTimeout(() => document.addEventListener('click', onDoc, true), 0);
+        }
+    };
+    return dot;
+}
 // 지식 한 행 — 제목(상세 링크) + injection 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
 //  select={names:Set, onToggle} 가 오면 선택(체크) 모드 — 클릭=상세이동 대신 선택 토글, .row.sel 로 표시.
 function knRow(e, select) {
@@ -596,8 +616,8 @@ async function renderKnowledgeDetail(view, name) {
     //  recalled = '검색 소환'(AI가 관련될 때 키워드 검색으로 직접 찾는 것 — 자동·시맨틱 아님, query 가 아니라 recall).
     const isMirror = k.provenance === 'observed' || k.external_system || k.external_id || k.external_url;
     const metaRows = [
-        ['주입(injection)', (KN_INJECTION_LABEL[k.injection] || k.injection || '—') + (k.injection ? ' · ' + (KN_INJECTION_HINT[k.injection] || '') : '')],
-        ['출처(provenance)', (KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—') + (k.provenance ? ' · ' + (KN_PROVENANCE_HINT[k.provenance] || '') : '')],
+        ['주입(injection)', KN_INJECTION_LABEL[k.injection] || k.injection || '—', k.injection ? KN_INJECTION_HINT[k.injection] : ''],
+        ['출처(provenance)', KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—', k.provenance ? KN_PROVENANCE_HINT[k.provenance] : ''],
         ['상태(lifecycle)', LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle || '—'],
         k.type ? ['유형(type)', KN_TYPE_LABEL[k.type] || k.type] : null,
         k.confidence === 'ai' ? ['작성 주체', 'AI 생성'] : null,
@@ -613,8 +633,12 @@ async function renderKnowledgeDetail(view, name) {
         ['마지막 갱신', (k.updated_at ? absTime(k.updated_at) : '—') + (k.updated_by ? ' · ' + k.updated_by : '')],
     ].filter(Boolean);
     const metaBar = el('div', { class: 'unit-metabar' });
-    for (const [kk, vv] of metaRows)
-        metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: kk }), el('span', { class: 'umeta-v', text: vv })));
+    for (const [kk, vv, hint] of metaRows) {
+        const vEl = hint
+            ? el('span', { class: 'umeta-v umeta-v-info' }, el('span', { text: vv }), infoDot(hint))
+            : el('span', { class: 'umeta-v', text: vv });
+        metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: kk }), vEl));
+    }
     // 연결 카테고리(단일, #290) — rejected 제외. 단독 섹션 폐지 → 메타데이터 첫 항목으로 편입(pill 유지).
     const cats = (Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected');
     metaBar.prepend(el('div', { class: 'umeta umeta-cat' }, el('span', { class: 'umeta-k', text: '카테고리' }), cats.length
