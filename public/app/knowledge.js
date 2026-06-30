@@ -1084,19 +1084,17 @@ function trashRow(e, view) {
 const KN_LINK_REL_LABEL = { related: '관련', refines: '구체화', contradicts: '모순', depends_on: '의존' };
 const KN_SOURCE_REL_LABEL = { derived_from: '증류', cites: '참조' };
 const SOURCE_KIND_LABEL = { transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', notion_doc: '노션', clickup_doc: '클릭업', other: '기타' };
-// 연결된 지식 칩 — '연결된 프로젝트' 칩(.kn-projchip)과 동일 패턴. 제목 링크 + (권한자) 해제.
-//  e._incoming=true 면 백링크(해제 방향 반전: from=상대, to=이 지식).
-function knLinkChip(e, k, view) {
-    const link = el('a', { class: 'kn-projchip-link', href: '#/k/' + encodeURIComponent(e.name), text: e.title || e.name });
-    const chip = el('span', { class: 'kn-chip kn-projchip' }, link);
+// 연결된 지식 칩 — [관계 pill][제목 링크][✕]. incoming=true 면 백링크(해제 방향 반전: from=상대, to=이 지식).
+function knLinkChip(e, k, view, incoming) {
+    const chip = el('span', { class: 'kn-chip kn-projchip kn-linkchip' }, el('span', { class: 'kn-link-rel kn-link-' + e.relation, text: KN_LINK_REL_LABEL[e.relation] || e.relation }), el('a', { class: 'kn-projchip-link', href: '#/k/' + encodeURIComponent(e.name), text: e.title || e.name }));
     if (hasScope('memory')) {
-        const x = el('button', { class: 'kn-projchip-x', type: 'button', title: '링크 해제', text: '✕' });
+        const x = el('button', { class: 'kn-projchip-x', type: 'button', title: '연결 해제', text: '✕' });
         x.onclick = async (ev) => {
             ev.preventDefault();
-            const from = e._incoming ? e.name : k.name, to = e._incoming ? k.name : e.name;
+            const from = incoming ? e.name : k.name, to = incoming ? k.name : e.name;
             try {
                 await api('/api/ui/knowledge/' + encodeURIComponent(from) + '/link', { method: 'POST', body: JSON.stringify({ to, relation: e.relation, unlink: true }) });
-                toast('링크를 해제했습니다');
+                toast('연결을 해제했습니다');
                 renderKnowledgeDetail(view, k.name);
             }
             catch (err) {
@@ -1107,32 +1105,28 @@ function knLinkChip(e, k, view) {
     }
     return chip;
 }
-// 상세 '연결된 지식' — '연결된 프로젝트'와 같은 패턴(관계 pill + 칩, 카드 없음). 양방향 합쳐 관계별 그룹.
+// 상세 '연결된 지식' — 방향(→ 포워드 / ← 백링크)을 화살표로 한눈에 보이는 두 그룹. 각 칩에 관계 pill.
+//  방향 헤더가 주어를 정한다: "이 지식에서 연결 →"=이 지식이 주어, "← …연결(백링크)"=상대가 주어. 관계 키워드는 그대로(반대로 바꾸면 오히려 틀림).
 function knLinksPanel(k, view) {
     const links = k.links || { outgoing: [], incoming: [] };
-    const all = [...(links.outgoing || []).map((e) => ({ ...e })), ...(links.incoming || []).map((e) => ({ ...e, _incoming: true }))];
-    const seen = new Set(); // (name, relation) 중복 제거(A↔B 양방향 동일 링크)
-    const items = all.filter((e) => { const key = e.name + '|' + e.relation; if (seen.has(key))
-        return false; seen.add(key); return true; });
-    const sources = k.sources || [];
-    const head = el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '연결된 지식' }), hasScope('memory') ? el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 링크',
-        title: '교차주제는 카테고리 복수태깅 대신 링크로 잇습니다', onclick: () => openKnowledgeLinkPicker(k, view) }) : null);
-    const list = el('div', { class: 'kn-projlink-list' });
-    if (!items.length) {
-        list.append(el('div', { class: 'kn-cat-empty', text: '아직 연결된 지식이 없어요. ＋링크로 관련된 지식을 이어보세요.' }));
+    const out = links.outgoing || [], inc = links.incoming || [], sources = k.sources || [];
+    const head = el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '연결된 지식' }), hasScope('memory') ? el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 지식 연결',
+        title: '교차주제는 카테고리 복수태깅 대신 지식끼리 연결로 잇습니다', onclick: () => openKnowledgeLinkPicker(k, view) }) : null);
+    const body = el('div', { class: 'kn-links-body' });
+    const dirGroup = (label, arr, incoming) => el('div', { class: 'kn-linkdir' }, el('span', { class: 'kn-linkdir-head', text: label }), el('div', { class: 'kn-linkchips' }, ...arr.map((e) => knLinkChip(e, k, view, incoming))));
+    if (!out.length && !inc.length) {
+        body.append(el('div', { class: 'kn-cat-empty', text: '아직 연결된 지식이 없어요. ＋지식 연결로 관련된 지식을 이어보세요.' }));
     }
     else {
-        for (const rel of ['related', 'refines', 'depends_on', 'contradicts']) {
-            const g = items.filter((e) => e.relation === rel);
-            if (!g.length)
-                continue;
-            list.append(el('div', { class: 'kn-projlink-group' }, el('span', { class: 'kn-projlink-rel kn-link-rel kn-link-' + rel, text: KN_LINK_REL_LABEL[rel] || rel }), ...g.map((e) => knLinkChip(e, k, view))));
-        }
+        if (out.length)
+            body.append(dirGroup('이 지식에서 연결한 글  →', out, false));
+        if (inc.length)
+            body.append(dirGroup('←  이 지식을 연결한 글 (백링크)', inc, true));
     }
-    const box = el('div', { class: 'kn-links' }, head, list);
+    const box = el('div', { class: 'kn-links' }, head, body);
     if (sources.length) {
-        box.append(el('div', { class: 'sec-label', text: '출처 자료' }), el('div', { class: 'kn-projlink-list' }, el('div', { class: 'kn-projlink-group' }, ...sources.map((s) => el('span', { class: 'kn-chip kn-source-chip',
-            title: SOURCE_KIND_LABEL[s.kind] || s.kind, text: (KN_SOURCE_REL_LABEL[s.relation] || s.relation) + ' · ' + (s.title || ('자료 #' + s.source_id)) })))));
+        box.append(el('div', { class: 'sec-label', text: '출처 자료' }), el('div', { class: 'kn-linkchips' }, ...sources.map((s) => el('span', { class: 'kn-chip kn-source-chip',
+            title: SOURCE_KIND_LABEL[s.kind] || s.kind, text: (KN_SOURCE_REL_LABEL[s.relation] || s.relation) + ' · ' + (s.title || ('자료 #' + s.source_id)) }))));
     }
     return box;
 }
