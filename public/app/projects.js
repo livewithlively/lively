@@ -2173,20 +2173,81 @@ function projectBodySection(id, p, reload) {
     render();
     return card;
 }
-// ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245). ──
-//  기존 '프로젝트 세부 설정' 모달의 '연결된 지식' 블록을 페이지 본문 섹션으로 승격. 필요/산출 각 칼럼에서
-//  ① 위키에서 매핑(openKnowledgePicker) ② 직접 작성(새 작성 페이지 #/knowledge/new?project=&relation= 로 이동, 연결 기본 채움) 가능,
-//  필요는 ③ ✨ 자동 추천(openKnowledgeRecommendPicker)이 가장 왼쪽. 변경 후 v6 상세 GET 으로 재조회해 재페인트.
+// ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245·#317). ──
+//  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker 도 추천-우선 단일 픽커)
+//  ② '왜 다나' 배너(→ #/learn) ③ 액션은 [지식 찾기]+[직접 작성] 2개로 정리(선택 마비 완화) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
+//  직접 작성은 새 작성 페이지(#/knowledge/new?project=&relation=)로 이동, 연결 기본 채움. 변경 후 v6 상세 GET 으로 재조회해 재페인트.
 function projectKnowledgeSection(id, p, reload) {
     const knName = (k) => k.name || k.knowledge_name;
     let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
     let remeasure = null; // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
     const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '지식 흐름' }), el('span', { class: 'pjk-head-hint', text: '이 프로젝트가 참고하는 지식(필요) → 만들어 내는 지식(산출)' })));
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '지식 흐름' }), el('span', { class: 'pjk-head-hint', text: '이 프로젝트가 참고할 지식(필요) → 만들어 낼 지식(산출)' })));
     const reqList = el('div', { class: 'pjk-list' });
     const prodList = el('div', { class: 'pjk-list' });
     const reqCount = el('span', { class: 'pjk-count' });
     const prodCount = el('span', { class: 'pjk-count' });
+    // '왜 필요지식을 다나' 배너(#317) — 필요지식이 비어 있고 사용자가 닫지 않았을 때만. 한 번 닫으면 기억(naggy 방지).
+    const WHY_KEY = 'pjk_why_dismissed';
+    const whyBanner = el('div', { class: 'pjk-why' }, el('span', { class: 'pjk-why-ico', 'aria-hidden': 'true', text: 'ⓘ' }), el('span', { class: 'pjk-why-text' }, '필요지식을 연결하면, 이 프로젝트를 맡는 AI가 검색 없이 처음부터 이 맥락을 쥐고 시작합니다 — 결정·규칙을 다시 묻거나 어기지 않게. ', el('a', { href: '#/learn', text: '자세히' })));
+    const whyX = el('button', { class: 'pjk-why-x', type: 'button', title: '닫기', text: '✕' });
+    whyX.onclick = () => { try {
+        localStorage.setItem(WHY_KEY, '1');
+    }
+    catch (_) { /* noop */ } updateWhy(); };
+    whyBanner.append(whyX);
+    function updateWhy() {
+        let dismissed = false;
+        try {
+            dismissed = localStorage.getItem(WHY_KEY) === '1';
+        }
+        catch (_) { /* noop */ }
+        whyBanner.style.display = (!dismissed && !cur.required.length) ? '' : 'none';
+    }
+    // 필요지식 빈칸 — 죽은 끝('아직 없습니다') 대신 추천을 인라인으로 먼저(#317). 추천은 한 번만 불러 캐시(재페인트마다 호출 방지).
+    let recsCache = null;
+    async function fetchRecs() {
+        if (recsCache)
+            return recsCache;
+        try {
+            recsCache = await api('/api/ui/v6/projects/' + id + '/recommend-knowledge?limit=3').then((d) => (d && d.entries) || []);
+        }
+        catch (_) {
+            recsCache = [];
+        }
+        return recsCache;
+    }
+    function recRow(m) {
+        const name = knName(m);
+        const pct = Math.round((Number(m.similarity) || 0) * 100);
+        const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결' });
+        addBtn.onclick = async () => {
+            addBtn.disabled = true;
+            try {
+                await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name, relation: 'required' }) });
+                toast('연결했습니다');
+                refresh();
+            }
+            catch (e) {
+                addBtn.disabled = false;
+                toast('연결 실패 — ' + e.message, true);
+            }
+        };
+        return el('div', { class: 'pjk-rec-row' }, el('a', { class: 'pjk-rec-title', href: '#/k/' + encodeURIComponent(name), text: m.title || name }), m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁' }) : null, pct > 0 ? el('span', { class: 'admin-hint pjk-rec-pct', title: '의미 유사도', text: pct + '%' }) : null, addBtn);
+    }
+    async function paintRequiredEmpty(boxEl) {
+        boxEl.replaceChildren(el('div', { class: 'pjk-empty', text: '관련 지식을 찾는 중…' }));
+        const recs = await fetchRecs();
+        if (cur.required.length)
+            return; // 그 사이 연결됐으면 중단(레이스).
+        if (!recs.length) {
+            boxEl.replaceChildren(el('div', { class: 'pjk-empty' }, '아직 연결된 필요지식이 없어요. ', el('b', { text: '[✨ 지식 찾기]' }), ' 로 시작하거나 ', el('b', { text: '[✎ 직접 작성]' }), ' 으로 새로 쓰세요.'));
+            return;
+        }
+        boxEl.replaceChildren(el('div', { class: 'pjk-rec' }, el('div', { class: 'pjk-rec-head', text: '이런 지식이 필요해 보여요' }), ...recs.map(recRow)));
+        if (remeasure)
+            requestAnimationFrame(remeasure); // 내용이 늘었으니 접기 재측정.
+    }
     // 지식 한 줄 — 제목(상세 링크) + 메타칩 + 연결 해제(✕). relation 별로 unlink 한다.
     function knRow(k, relation) {
         const name = knName(k);
@@ -2216,8 +2277,12 @@ function projectKnowledgeSection(id, p, reload) {
     function repaint() {
         reqCount.textContent = String(cur.required.length);
         prodCount.textContent = String(cur.produced.length);
-        paint(reqList, cur.required, 'required', '아직 없습니다 — 아래에서 골라 연결하세요.');
-        paint(prodList, cur.produced, 'produced', '아직 없습니다 — 이 프로젝트가 만든 지식을 연결하세요.');
+        if (cur.required.length)
+            paint(reqList, cur.required, 'required', '');
+        else
+            paintRequiredEmpty(reqList); // 빈칸이면 추천 인라인(#317).
+        paint(prodList, cur.produced, 'produced', '작업이 진행되면 여기에 쌓입니다 — 지금 비워둬도 괜찮아요.');
+        updateWhy();
         if (remeasure)
             requestAnimationFrame(remeasure); // 내용이 바뀌면 접기 필요 여부 재판정.
     }
@@ -2229,22 +2294,20 @@ function projectKnowledgeSection(id, p, reload) {
         catch (_) { /* keep */ }
         repaint();
     }
-    // 액션 — 각 박스 헤더 우상단(#258). (필요만)자동 추천 · 위키에서 검색 연결 · 직접 작성.
-    //  자동 추천은 가장 왼쪽. '직접 작성'은 모달이 아니라 새 작성 페이지로 이동하며 이 프로젝트의 필요/산출 연결을 기본 채움.
-    const mkActs = (relation, withRecommend) => {
+    // 액션 — 각 박스 헤더 우상단. 동급 버튼 3개(선택 마비)를 2개로 정리(#317): [지식 찾기](추천-우선 단일 픽커) + [직접 작성].
+    //  '직접 작성'은 모달이 아니라 새 작성 페이지로 이동하며 이 프로젝트의 필요/산출 연결을 기본 채운다.
+    const mkActs = (relation) => {
         const acts = el('div', { class: 'pjk-acts' });
-        if (withRecommend)
-            acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✨ 자동 추천', title: '프로젝트 이름·설명으로 관련 지식 추천(의미검색)',
-                onclick: () => openKnowledgeRecommendPicker(id, relation, cur[relation].map(knName), refresh) }));
-        acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 위키에서', title: '기존 위키 지식을 검색해 연결',
+        acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
+            text: relation === 'required' ? '✨ 지식 찾기' : '＋ 지식 찾기', title: '관련 지식을 추천받고 검색해 연결',
             onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✎ 직접 작성', title: '새 작성 페이지에서 지식을 쓰고 이 프로젝트에 연결',
             onclick: () => { location.hash = '#/knowledge/new?project=' + id + '&relation=' + relation; } }));
         return acts;
     };
     // 가운데 노드 — '이 프로젝트' 문구만(이름·상태 제거·박스 축소 #258). 좌우 화살표로 필요→프로젝트→산출 흐름을 표현.
     const node = el('div', { class: 'pjk-node' }, el('div', { class: 'pjk-node-label', text: '이 프로젝트' }));
-    const reqCol = el('div', { class: 'pjk-col pjk-col-req' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount, mkActs('required', true)), reqList);
-    const prodCol = el('div', { class: 'pjk-col pjk-col-prod' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount, mkActs('produced', false)), prodList);
+    const reqCol = el('div', { class: 'pjk-col pjk-col-req' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount, mkActs('required')), reqList);
+    const prodCol = el('div', { class: 'pjk-col pjk-col-prod' }, el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount, mkActs('produced')), prodList);
     const flow = el('div', { class: 'pjk-flow' }, reqCol, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), node, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), prodCol);
     // 길면(특정 높이 초과) 접기 — 본문 섹션과 동일한 펼침 알약(.proj-detail-body-expand). 짧으면 컨트롤 숨기고 펼쳐 둔다.
     const collapseBox = el('div', { class: 'pjk-collapse collapsed' }, flow);
@@ -2271,7 +2334,7 @@ function projectKnowledgeSection(id, p, reload) {
         exRow.style.display = '';
         applyExpanded(userExpanded);
     };
-    card.append(collapseBox, exRow);
+    card.append(whyBanner, collapseBox, exRow);
     repaint();
     return card;
 }
@@ -3267,20 +3330,79 @@ function projectCategoryBlock(id, p) {
 }
 // (참고 파일 블록 제거 — #246. 프로젝트 파일 업로드는 본문 '공유 폴더' 섹션(projectFolderSection)으로 일원화.
 //  '공유 폴더'가 업로드·드래그앤드롭·붙여넣기·폴더 탐색을 모두 제공하므로 모달의 약식 업로더는 중복이었다.)
-// 지식 고르기 — 위키 검색 → '연결'로 POST :id/knowledge. 이미 연결된 건 후보에서 제외. relation 으로 필요/산출 모두.
+// 지식 연결(#317) — 위키검색·자동추천 두 모달을 하나로. 열면 추천(관련도순)이 먼저 뜨고, 검색하면 그 너머로 좁힌다.
+//  연결 관계(필요/산출)는 칼럼에서 연 기본값을 따르되 라디오로 그 자리서 바꿀 수 있다(멘션 ≠ 항상 필요).
+//  추천=project_recommend_knowledge_v6(벡터 #172), 검색=knowledge/search. 이미 연결된 건 클라이언트에서 제외.
 function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     const linked = new Set(linkedNames || []);
-    const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '지식 제목·내용으로 검색…' });
-    const results = el('div', { class: 'ps-kn-pick-results' }, el('span', { class: 'admin-hint', text: '검색어를 입력하세요.' }));
-    const pickTitle = (relation === 'produced' ? '산출' : '필요') + ' 지식 — 위키에서 고르기';
-    overlayBox(pickTitle, el('div', { class: 'ps-kn-pick' }, searchIn, results));
+    let curRel = relation === 'produced' ? 'produced' : 'required'; // 라디오로 변경 가능.
+    const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '제목·내용으로 검색해 더 찾기…' });
+    const recHead = el('div', { class: 'ps-kn-sec', text: '추천 · 이 프로젝트와 관련도순' });
+    const results = el('div', { class: 'ps-kn-pick-results' });
+    // 연결 관계 토글 — 기본은 연 칼럼. 바꾸면 이후 [연결]이 그 관계로 들어간다.
+    const relName = 'pjk-rel-' + id;
+    const mkRadio = (val, label) => {
+        const inp = el('input', { type: 'radio', name: relName, value: val });
+        if (val === curRel)
+            inp.checked = true;
+        inp.onchange = () => { if (inp.checked)
+            curRel = val; };
+        return el('label', { class: 'pjk-rel-opt' }, inp, el('span', { text: label }));
+    };
+    const relRow = el('div', { class: 'pjk-rel-row' }, el('span', { class: 'admin-hint', text: '연결 관계' }), mkRadio('required', '필요'), mkRadio('produced', '산출'));
+    overlayBox('지식 연결', el('div', { class: 'ps-kn-pick' }, searchIn, recHead, results, relRow));
     setTimeout(() => searchIn.focus(), 0);
-    const run = debounce(async () => {
-        const q = searchIn.value.trim();
-        if (!q) {
-            results.replaceChildren(el('span', { class: 'admin-hint', text: '검색어를 입력하세요.' }));
+    // 한 줄(추천·검색 공용). isRec 면 유사도/분류 뱃지를 제목 옆에.
+    function pickRow(m, isRec) {
+        const pct = Math.round((Number(m.similarity) || 0) * 100);
+        const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 연결' });
+        addBtn.onclick = async () => {
+            addBtn.disabled = true;
+            try {
+                await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: m.name, relation: curRel }) });
+                linked.add(m.name);
+                addBtn.textContent = '연결됨';
+                toast('연결했습니다');
+                if (onLinked)
+                    onLinked();
+            }
+            catch (e) {
+                addBtn.disabled = false;
+                toast('연결 실패 — ' + e.message, true);
+            }
+        };
+        const tags = isRec ? el('span', { style: 'flex:none; display:inline-flex; gap:6px; align-items:baseline;' }, m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁 같은 분류' }) : null, pct > 0 ? el('span', { class: 'admin-hint', title: '의미 유사도(코사인)', text: pct + '%' }) : null) : null;
+        const titleEl = isRec
+            ? el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' }, el('span', { text: m.title || m.name }), tags)
+            : el('div', { class: 'row-title', text: m.title || m.name });
+        return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, titleEl, el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
+    }
+    async function loadRecs() {
+        recHead.style.display = '';
+        results.replaceChildren(el('span', { class: 'admin-hint', text: '추천을 불러오는 중…' }));
+        let recs;
+        try {
+            recs = await api('/api/ui/v6/projects/' + id + '/recommend-knowledge?limit=10').then((d) => (d && d.entries) || []);
+        }
+        catch (e) {
+            results.replaceChildren(errorNote(e, '추천을 불러오지 못했습니다'));
             return;
         }
+        const cand = recs.filter((m) => !linked.has(m.name));
+        if (!cand.length) {
+            recHead.style.display = 'none';
+            results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '아직 추천할 지식이 없어요 — 위에서 제목·내용으로 검색하거나, 직접 작성해 보세요.' }));
+            return;
+        }
+        results.replaceChildren(...cand.map((m) => pickRow(m, true)));
+    }
+    const runSearch = debounce(async () => {
+        const q = searchIn.value.trim();
+        if (!q) {
+            loadRecs();
+            return;
+        } // 검색어 지우면 추천으로 복귀.
+        recHead.style.display = 'none';
         results.replaceChildren(el('span', { class: 'admin-hint', text: '검색 중…' }));
         let matches;
         try {
@@ -3295,71 +3417,10 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
             results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '결과가 없거나 모두 이미 연결됨.' }));
             return;
         }
-        results.replaceChildren(...cand.map((m) => {
-            const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 연결' });
-            addBtn.onclick = async () => {
-                addBtn.disabled = true;
-                try {
-                    await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: m.name, relation }) });
-                    linked.add(m.name);
-                    addBtn.textContent = '연결됨';
-                    toast('연결했습니다');
-                    if (onLinked)
-                        onLinked();
-                }
-                catch (e) {
-                    addBtn.disabled = false;
-                    toast('연결 실패 — ' + e.message, true);
-                }
-            };
-            return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, el('div', { class: 'row-title', text: m.title || m.name }), el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
-        }));
+        results.replaceChildren(...cand.map((m) => pickRow(m, false)));
     }, 300);
-    searchIn.addEventListener('input', run);
-}
-// ✨ 자동으로 고르기 — 프로젝트 이름·설명과 의미적으로 가까운 지식을 추천(벡터 #172, project_recommend_knowledge_v6).
-//  검색 입력 없이 즉시 추천(관련도순). 이미 연결된 건 서버가 제외. 임베딩 off/유사 없음이면 안내 + 직접 검색 유도.
-function openKnowledgeRecommendPicker(id, relation, linkedNames, onLinked) {
-    const linked = new Set(linkedNames || []);
-    const results = el('div', { class: 'ps-kn-pick-results' }, el('span', { class: 'admin-hint', text: '추천을 불러오는 중…' }));
-    overlayBox('✨ 자동 추천 · 관련 지식', el('div', { class: 'ps-kn-pick' }, el('div', { class: 'admin-hint', style: 'margin-bottom:8px', text: '의미가 비슷하거나(%), 같은 분류(📁)에 속한 지식입니다(관련도순). 필요한 것을 연결하세요.' }), results));
-    (async () => {
-        let recs;
-        try {
-            recs = await api('/api/ui/v6/projects/' + id + '/recommend-knowledge?limit=10').then((d) => (d && d.entries) || []);
-        }
-        catch (e) {
-            results.replaceChildren(errorNote(e, '추천을 불러오지 못했습니다'));
-            return;
-        }
-        const cand = recs.filter((m) => !linked.has(m.name));
-        if (!cand.length) {
-            results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '추천할 지식이 없습니다(임베딩이 꺼져 있거나 관련 지식이 없음). 직접 검색으로 골라 보세요.' }));
-            return;
-        }
-        results.replaceChildren(...cand.map((m) => {
-            const pct = Math.round((Number(m.similarity) || 0) * 100);
-            const addBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 연결' });
-            addBtn.onclick = async () => {
-                addBtn.disabled = true;
-                try {
-                    await api('/api/ui/v6/projects/' + id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: m.name, relation }) });
-                    linked.add(m.name);
-                    addBtn.textContent = '연결됨';
-                    toast('연결했습니다');
-                    if (onLinked)
-                        onLinked();
-                }
-                catch (e) {
-                    addBtn.disabled = false;
-                    toast('연결 실패 — ' + e.message, true);
-                }
-            };
-            // 추천 이유 뱃지 — 의미 유사도(% , 점수 있을 때만) + 같은 분류(📁). 임베딩 off 면 분류만 뜬다.
-            const tags = el('span', { style: 'flex:none; display:inline-flex; gap:6px; align-items:baseline;' }, m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁 같은 분류' }) : null, pct > 0 ? el('span', { class: 'admin-hint', title: '의미 유사도(코사인)', text: pct + '%' }) : null);
-            return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' }, el('span', { text: m.title || m.name }), tags), el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
-        }));
-    })();
+    searchIn.addEventListener('input', runSearch);
+    loadRecs(); // 열면 추천 먼저.
 }
 // ════════════════════════════════════════════
 // 태스크(클릭업형 리스트뷰) — 상태 그룹(할 일/진행 중/완료) + 컬럼(담당자·마감일·우선순위) + 인라인 편집.

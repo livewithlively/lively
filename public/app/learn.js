@@ -34,7 +34,12 @@ async function renderLearn(view) {
         glossList.append(el('div', { class: 'kind-ex' }, el('div', { class: 'kind-ex-head' }, el('span', { class: 'gloss-glyph', 'aria-hidden': 'true', text: g }), el('div', { class: 'gloss-main' }, el('div', {}, el('span', { class: 'gloss-ko', text: ko }), el('span', { class: 'gloss-code', text: ' (' + g + ')' })), el('div', { class: 'gloss-desc', text: desc }))), el('div', { class: 'gloss-example' }, el('span', { class: 'gloss-example-tag', text: '예시' }), el('div', { class: 'gloss-example-title', text: exTitle }), el('div', { class: 'gloss-example-body', text: exBody }))));
     }
     unitCard.append(glossList, el('p', { class: 'admin-hint', style: 'margin-top:16px' }, '실제 지식들은 ', el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), ' 에서 볼 수 있어요.'));
-    view.replaceChildren(head, el('div', { class: 'guide-cards' }, whatCard, unitCard));
+    // ── C. 프로젝트에 '필요지식'을 연결하면 뭐가 좋나(#317) — 비개발자 눈높이. 섹션 '왜' 배너의 [자세히]가 여기로. ──
+    const whyReqCard = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '프로젝트에 ‘필요지식’을 연결하면 뭐가 좋나요' })), el('p', { class: 'guide-lead', text: '프로젝트마다 “이 일을 하려면 먼저 알아야 할 것들”을 골라 연결해 둘 수 있어요. 그러면 그 프로젝트를 맡는 AI가, 그 내용을 일일이 찾아낼 필요 없이 처음부터 손에 쥔 채로 일을 시작합니다.' }));
+    const whyRows = el('div', { class: 'learn-rows' });
+    whyRows.append(learnRow('무엇을 연결하나', '이 프로젝트와 관련된 결정·규칙·자료·절차 — AI가 일을 시작하기 전에 알고 있어야 헷갈리지 않을 것들. 예: “요금제 정책 결정”, “디자인 가이드”, “이 기능의 지난 논의”.'), learnRow('연결하면 뭐가 달라지나', '연결을 안 해두면 AI는 매번 같은 배경을 다시 묻거나, 모른 채로 추측해 엉뚱한 방향으로 가기 쉽습니다. 연결해 두면 팀의 결정과 규칙을 “이미 아는 채로” 정확하게 시작해요.'), learnRow('어떻게 연결하나', '프로젝트 화면의 ‘지식 흐름’에서 [✨ 지식 찾기]를 누르면 관련 지식을 추천해 줘요. 마음에 드는 걸 [연결]만 누르면 끝. 없으면 [✎ 직접 작성]으로 새로 쓸 수도 있어요.'), learnRow('필요 지식 vs 산출 지식', '‘필요’는 이 프로젝트가 시작 전에 참고할 지식, ‘산출’은 이 프로젝트가 일하며 새로 만들어 낸 지식이에요. 산출은 처음엔 비어 있는 게 정상 — 일이 진행되며 쌓입니다.'));
+    whyReqCard.append(whyRows);
+    view.replaceChildren(head, el('div', { class: 'guide-cards' }, whatCard, unitCard, whyReqCard));
     document.getElementById('view').focus?.();
 }
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
@@ -47,6 +52,8 @@ async function renderInstall(view) {
     slot.append(skeleton('설치 안내를 준비하는 중'));
     view.replaceChildren(head, slot);
     document.getElementById('view').focus?.();
+    onboardingBanner().then((b) => { if (b)
+        head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
     loadAdmin().then((data) => drawInstallGuide(slot, data))
         .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
 }
@@ -230,4 +237,42 @@ function overlayBox(title, ...content) {
     document.body.append(back);
     return back;
 }
-export { checklist, overlayBox, renderInstall, renderLearn, skeleton, skeletonRows, };
+// ── 온보딩 진행상황(#/onboarding) — SoT = GET /api/ui/org/onboarding (하네스 주입과 동일 소스, 드리프트 0). ──
+function obProgress(pct) {
+    return el('div', { style: 'height:8px;background:#ececec;border-radius:4px;overflow:hidden;margin:10px 0' }, el('div', { style: `height:100%;width:${pct}%;background:#3a9d6e;transition:width .3s` }));
+}
+// 시작하기(랜딩) 상단 배너 — 미완일 때만(완료면 null → 안 보임). 클릭 시 #/onboarding.
+async function onboardingBanner() {
+    try {
+        const s = await api('/api/ui/org/onboarding');
+        if (!s || s.complete)
+            return null;
+        return el('a', { class: 'card', href: '#/onboarding', style: 'display:block;text-decoration:none;color:inherit' }, el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:12px' }, el('strong', { text: `온보딩 진행 ${s.done}/${s.total} (${s.pct}%)` }), el('span', { class: 'accent', text: '진행상황 보기 →' })), obProgress(s.pct), el('p', { class: 'admin-hint', style: 'margin:0', text: '남은 단계를 채우면 AI 세션이 그만큼 더 풍부한 회사 맥락으로 시작합니다(재설치 불필요).' }));
+    }
+    catch {
+        return null;
+    }
+}
+// 전용 페이지 — 단계별 완료 여부 + 진행률. AI(세션 시작)도 같은 SoT 를 받는다는 점을 명시.
+async function renderOnboarding(view) {
+    const head = el('div', { class: 'page-head' }, el('h1', {}, '온보딩 ', el('span', { class: 'accent', text: '진행상황' })), el('p', { class: 'sub', text: '이 인스턴스 셋업이 어디까지 됐는지 한눈에 봅니다. AI도 세션 시작 시 같은 진행상황(SoT)을 받아, 덜 된 단계를 사용자에게 안내합니다.' }));
+    const slot = el('div', {});
+    slot.append(skeleton('진행상황을 불러오는 중'));
+    view.replaceChildren(head, slot);
+    document.getElementById('view').focus?.();
+    try {
+        const s = await api('/api/ui/org/onboarding');
+        const summary = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: `진행률 ${s.done}/${s.total} (${s.pct}%)` })), obProgress(s.pct), el('p', { class: 'admin-hint', style: 'margin:0', text: s.complete
+                ? '✓ 기본 셋업 완료 — 세션에 실제 조직 맥락이 주입됩니다.'
+                : '미완 단계를 채우면 다음 세션부터 AI가 그 맥락을 갖고 시작합니다(재설치 불필요 — 라이브 반영).' }));
+        const steps = el('div', {});
+        s.items.forEach((it, i) => {
+            steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done ? '0.65' : '1') }, el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:${it.done ? '#3a9d6e' : '#bbb'}`, text: it.done ? '✓' : String(i + 1) }), el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'font-weight:600' }, it.label, it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null), el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }), it.href ? el('a', { class: 'accent', href: it.href, text: it.done ? '보기 →' : '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
+        });
+        slot.replaceChildren(summary, steps);
+    }
+    catch (e) {
+        slot.replaceChildren(errorNote(e, '온보딩 진행상황을 불러오지 못했습니다'));
+    }
+}
+export { checklist, overlayBox, renderInstall, renderLearn, renderOnboarding, skeleton, skeletonRows, };

@@ -1800,6 +1800,27 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjk-create-in { width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit; border: 1px solid var(--line-net); border-radius: 8px; }
 .pjk-create-cat { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
+/* 지식 흐름(#317) — '왜' 배너 + 필요 빈칸 추천 인라인 + 픽커 관계토글. §0.5 절제: 무채색·작은 글자. */
+.pjk-why { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 9px 12px; border: 1px solid var(--line-net); border-radius: 10px; background: var(--bg-tint); }
+.pjk-why-ico { flex: none; color: var(--ink-sub); font-size: 13px; line-height: 1.55; }
+.pjk-why-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; }
+.pjk-why-text a { color: var(--blue); text-decoration: none; }
+.pjk-why-text a:hover { text-decoration: underline; }
+.pjk-why-x { flex: none; width: 20px; height: 20px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 6px; font-size: 11px; line-height: 1; }
+.pjk-why-x:hover { background: var(--bg); color: var(--ink); }
+.pjk-rec { display: flex; flex-direction: column; }
+.pjk-rec-head { font-size: 12px; font-weight: 700; color: var(--ink-sub); padding: 4px 2px 6px; }
+.pjk-rec-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line-row); }
+.pjk-rec-row:last-child { border-bottom: none; }
+.pjk-rec-title { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjk-rec-title:hover { color: var(--blue); }
+.pjk-rec-pct { flex: none; font-size: 11px; }
+.pjk-rec-row .btn { flex: none; padding: 3px 8px; font-size: 12px; }
+.ps-kn-sec { font-size: 12px; font-weight: 700; color: var(--ink-sub); padding: 2px 2px 0; }
+.pjk-rel-row { display: flex; align-items: center; gap: 14px; margin-top: 2px; padding-top: 9px; border-top: 1px solid var(--line-row); }
+.pjk-rel-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink); cursor: pointer; }
+.pjk-rel-opt input { margin: 0; }
+
 /* 일괄 선택(대시보드) — 액션바 + 선택 가능한 타일 체크 + 솔리드 삭제 버튼. */
 .bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; padding: 11px 16px; background: var(--bg-sel); border: 1px solid var(--line-net); border-radius: 12px; }
 .bulk-bar-count { font-size: 14px; font-weight: 700; color: var(--ink); }
