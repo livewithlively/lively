@@ -2874,6 +2874,15 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .tree-group-mine > summary { color: var(--blue); }
 .tree-group-mine { margin-bottom: 6px; }
 .tree-group .tree-item { padding-left: 20px; } /* 그룹 내 들여쓰기 */
+/* 우리 팀 하위 — 사업/제품/시스템 대분류(#338). 항상 보이는 가벼운 하위 헤더 + 한 단계 더 들여쓴 항목 */
+.tree-group-mine .tree-subhead {
+  display: flex; align-items: center; gap: 6px; margin-top: 3px;
+  padding: 4px 10px 4px 22px;
+  font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--muted-2);
+}
+.tree-subtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-subcount { font-weight: 600; color: var(--muted-2); letter-spacing: 0; }
+.tree-group-mine .tree-item { padding-left: 30px; } /* 하위그룹 항목 — 우리 팀 일반 항목(20px)보다 한 단계 더 */
 
 /* 분류체계 관리 — 카테고리별 오너 팀(드롭다운/표시) */
 .wikicat-owner { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }

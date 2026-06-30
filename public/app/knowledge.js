@@ -504,17 +504,25 @@ function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
     if (opts && opts.indexed) {
         nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED, { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
     }
-    // 우리 팀 — 전 space 에서 내 카테고리(제품→사업→시스템 순). 항상 펼침.
-    const mine = [];
-    for (const sk of ['product', 'business', 'system'])
+    // 우리 팀 — 내 카테고리를 사업/제품/시스템 대분류로 하위 그룹핑(#338). 항상 펼침. 나머지 그룹과 같은 space 순서.
+    const mineBySpace = { business: [], product: [], system: [] };
+    for (const sk of ['business', 'product', 'system'])
         for (const c of (bySpace[sk] || []))
             if (myIds.has(String(c.id)))
-                mine.push(c);
-    const hasMine = mine.length > 0;
+                mineBySpace[sk].push(c);
+    const mineTotal = mineBySpace.business.length + mineBySpace.product.length + mineBySpace.system.length;
+    const hasMine = mineTotal > 0;
     if (hasMine) {
-        const grp = el('details', { class: 'tree-group tree-group-mine', open: '' }, el('summary', { class: 'tree-grouphead' }, el('span', { class: 'tree-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { class: 'tree-grouptitle', text: '우리 팀' }), el('span', { class: 'tree-groupcount', text: String(mine.length) })));
-        for (const c of mine)
-            grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
+        const grp = el('details', { class: 'tree-group tree-group-mine', open: '' }, el('summary', { class: 'tree-grouphead' }, el('span', { class: 'tree-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { class: 'tree-grouptitle', text: '우리 팀' }), el('span', { class: 'tree-groupcount', text: String(mineTotal) })));
+        // 사업·제품·시스템 순으로 가벼운 하위 헤더 + 항목(빈 space 는 생략).
+        for (const sk of ['business', 'product', 'system']) {
+            const inSpace = mineBySpace[sk];
+            if (!inSpace.length)
+                continue;
+            grp.append(el('div', { class: 'tree-subhead' }, el('span', { class: 'tree-subtitle', text: SPACE_LABEL[sk] }), el('span', { class: 'tree-subcount', text: String(inSpace.length) })));
+            for (const c of inSpace)
+                grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
+        }
         nav.append(grp);
     }
     // 나머지 — space별(사업·제품·시스템). 우리 팀이 있으면 접힘 기본(무관=하위), 없으면 펼침. 선택된 카테고리가 든 그룹은 펼침.
