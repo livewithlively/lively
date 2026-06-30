@@ -461,7 +461,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .gate-token-toggle:hover { color: var(--ink-sub); }
 
 /* ── 토스트 — 헤어라인 보더 + 선두 6px 점(성공=민트·에러=코랄) ── */
-#toasts { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+/* z-index 는 모든 모달/오버레이/드로어 위여야 한다(현 최대 .cmt-backdrop=1300). 토스트는 전역 피드백이라
+   모달이 떠 있어도 항상 보여야 함 — 이 값을 1300 이하로 낮추면 우하단 카드가 모달 뒤로 숨는다(#343). */
+#toasts { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; }
 .toast {
   display: flex; align-items: center; gap: 9px;
   background: var(--bg); border: 1px solid var(--line);
