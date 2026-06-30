@@ -2020,9 +2020,7 @@ function projectKnowledgeSection(id, p, reload) {
   let remeasure: any = null;  // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
 
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
-  card.append(el('div', { class: 'card-head' },
-    el('h3', { text: '지식 흐름' }),
-    el('span', { class: 'pjk-head-hint', text: '이 프로젝트가 참고할 지식(필요) → 만들어 낼 지식(산출)' })));
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '지식 흐름' })));
 
   const reqList = el('div', { class: 'pjk-list' });
   const prodList = el('div', { class: 'pjk-list' });
@@ -2073,8 +2071,7 @@ function projectKnowledgeSection(id, p, reload) {
     if (cur.required.length) return;  // 그 사이 연결됐으면 중단(레이스).
     if (!recs.length) {
       boxEl.replaceChildren(el('div', { class: 'pjk-empty' },
-        '아직 연결된 필요지식이 없어요. ', el('b', { text: '[✨ 지식 찾기]' }), ' 로 시작하거나 ',
-        el('b', { text: '[✎ 직접 작성]' }), ' 으로 새로 쓰세요.'));
+        '아직 연결된 필요지식이 없어요. ', el('b', { text: '[✨ 지식 찾기]' }), ' 로 시작하세요 — 찾는 게 없으면 거기서 직접 작성도 됩니다.'));
       return;
     }
     boxEl.replaceChildren(el('div', { class: 'pjk-rec' },
@@ -2123,10 +2120,8 @@ function projectKnowledgeSection(id, p, reload) {
     const acts = el('div', { class: 'pjk-acts' });
     acts.append(
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
-        text: relation === 'required' ? '✨ 지식 찾기' : '＋ 지식 찾기', title: '관련 지식을 추천받고 검색해 연결',
-        onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }),
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✎ 직접 작성', title: '새 작성 페이지에서 지식을 쓰고 이 프로젝트에 연결',
-        onclick: () => { location.hash = '#/knowledge/new?project=' + id + '&relation=' + relation; } }));
+        text: relation === 'required' ? '✨ 지식 찾기' : '＋ 지식 찾기', title: '관련 지식을 추천받고 검색해 연결 (찾는 게 없으면 픽커에서 직접 작성)',
+        onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }));
     return acts;
   };
 
@@ -2983,8 +2978,11 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     inp.onchange = () => { if (inp.checked) curRel = val; };
     return el('label', { class: 'pjk-rel-opt' }, inp, el('span', { text: label }));
   };
+  // '직접 작성'은 칼럼 버튼에서 빼 픽커 안으로 옮김(#317 정리) — 찾는 지식이 없을 때 그 관계 그대로 새 작성 페이지로.
+  const createLink = el('a', { href: '#', style: 'margin-left:auto; font-size:12.5px; color:var(--blue); text-decoration:none; white-space:nowrap;', text: '＋ 직접 작성' });
+  createLink.onclick = (e) => { e.preventDefault(); location.hash = '#/knowledge/new?project=' + id + '&relation=' + curRel; };
   const relRow = el('div', { class: 'pjk-rel-row' },
-    el('span', { class: 'admin-hint', text: '연결 관계' }), mkRadio('required', '필요'), mkRadio('produced', '산출'));
+    el('span', { class: 'admin-hint', text: '연결 관계' }), mkRadio('required', '필요'), mkRadio('produced', '산출'), createLink);
 
   overlayBox('지식 연결', el('div', { class: 'ps-kn-pick' }, searchIn, recHead, results, relRow));
   setTimeout(() => searchIn.focus(), 0);
