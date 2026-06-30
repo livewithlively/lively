@@ -30,6 +30,17 @@ command -v curl >/dev/null 2>&1 || die "curl 필요"
 command -v tar  >/dev/null 2>&1 || die "tar 필요"
 mkdir -p "$APP_DIR"
 
+# 릴리스 버전 편의 — LIVELY_VERSION(latest|vX.Y.Z)만 주면 GitHub 릴리스 에셋 URL 자동 구성(URL/번들 미지정 시).
+REPO_SLUG="${LIVELY_REPO:-livewithlively/context-ontology}"
+if [ -z "${LIVELY_CODE_URL:-}" ] && [ -z "${LIVELY_BUNDLE:-}" ] && [ -n "${LIVELY_VERSION:-}" ]; then
+  if [ "$LIVELY_VERSION" = "latest" ]; then
+    LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/latest/download/context-ontology.tgz"
+  else
+    LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/download/${LIVELY_VERSION}/context-ontology.tgz"
+  fi
+  log "LIVELY_VERSION=$LIVELY_VERSION → $LIVELY_CODE_URL"
+fi
+
 # ── 코드 획득 (교체 가능한 단계) ──
 if [ -n "${LIVELY_BUNDLE:-}" ]; then
   log "코드 = 로컬 번들(오프라인): $LIVELY_BUNDLE"

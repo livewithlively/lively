@@ -329,6 +329,31 @@ function pasteText(t) {
   if (/[\r\n]/.test(t)) sendInput('\x1b[200~' + t.replace(/\r\n/g, '\n') + '\x1b[201~');
   else sendInput(t);
 }
+// 자동 전송 — 프로젝트 '클로드로 실행'이 만든 세션이면, 부팅이 끝나(출력이 ~1.6s 잠잠) 클로드가 입력을 받을 때 프롬프트를 1회 주입.
+//  ?autosend=1 + localStorage 핸드오프(같은 브라우저). 출력이 계속이면 계속 대기, 12s 하드캡으로 늦어도 보냄. 재연결엔 재전송 안 함(autosendDone).
+const AUTOSEND = (() => {
+  try {
+    if (!new URLSearchParams(location.search).get('autosend')) return '';
+    const k = 'lively:autosend:' + SESSION_ID;
+    const v = localStorage.getItem(k) || '';
+    if (v) localStorage.removeItem(k);
+    return v;
+  } catch (_) { return ''; }
+})();
+let autosendDone = false, autosendLastOut = 0, autosendDeadline = 0, autosendTimer = null;
+function scheduleAutosend() {
+  if (!AUTOSEND || autosendDone) return;
+  clearTimeout(autosendTimer);
+  autosendTimer = setTimeout(() => {
+    if (autosendDone) return;
+    const quiet = Date.now() - autosendLastOut;
+    if ((autosendLastOut && quiet >= 1600) || (autosendDeadline && Date.now() >= autosendDeadline)) {
+      autosendDone = true;
+      try { if (term) term.focus(); pasteText(AUTOSEND); setTimeout(() => sendInput('\r'), 180); } catch (_) { /* noop */ }
+      try { toast('선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
+    } else { scheduleAutosend(); }
+  }, 500);
+}
 // 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 상대경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
 //  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
 //  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
@@ -870,11 +895,13 @@ async function connectNow() {
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
     term.focus();
+    if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {
     const bytes = (e.data instanceof ArrayBuffer) ? new Uint8Array(e.data) : (typeof e.data === 'string' ? new TextEncoder().encode(e.data) : null);
     if (!bytes) return;
     ctrl.feed(bytes);
+    if (AUTOSEND && !autosendDone) autosendLastOut = Date.now();
     // control mode 로 확인되면 페이지 로드 후 첫 연결에 한 번만 현재 화면+스크롤백 백필(재연결 시엔 생략 — 중복 방지).
     if (!didBackfill && ctrl.isControl()) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } }
   };

@@ -18,7 +18,7 @@ import { assertHookId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
-  getOrgProfile, updateOrgProfile, listSections, updateSection,
+  getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse,
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
@@ -126,12 +126,12 @@ export const deliveryCapabilities: Capability[] = [
       const [profile, sections, members, memory] = await Promise.all([
         getOrgProfile(), listSections(), listMembers(), listMemory(),
       ]);
-      const sectionMap: Record<string, { body_md: string; version: number; updated_at: string | null; updated_by: string | null }> = {};
-      for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by };
+      const sectionMap: Record<string, { body_md: string; version: number; sort: number; updated_at: string | null; updated_by: string | null }> = {};
+      for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, sort: s.sort, updated_at: s.updated_at, updated_by: s.updated_by };
       // 컨텍스트 온톨로지 가이드 섹션 — DB 행이 없으면(편집 전) 코드 기본 템플릿을 채워 편집기가 '현재 유효 텍스트'를 보여준다(version:0=미저장).
       //  buildKnowledgeIndex 도 같은 기본값으로 폴백하므로 화면=실주입 일치. sectionDefaults 는 '기본값 되돌리기' 버튼용.
       for (const [k, def] of Object.entries(GUIDE_SECTION_DEFAULTS)) {
-        if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, updated_at: null, updated_by: null };
+        if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, sort: 99, updated_at: null, updated_by: null };
       }
       // 비-admin: 구성원은 이름/종류/상태만(이메일·신원·개인레이어 redact), 토큰 목록은 비노출.
       const credSet = isAdmin ? await membersWithCredentials() : new Set<string>();
@@ -221,28 +221,48 @@ export const deliveryCapabilities: Capability[] = [
       return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
     }),
 
-  // ── 섹션 markdown 편집 — 강제규칙·회사맥락 + 컨텍스트 온톨로지 가이드(Knowledge Index 전체 템플릿). ──
-  restOnly("org_update_section", "조직 섹션 수정",
-    "강제규칙(managed-policy)·회사맥락(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide) markdown 을 저장한다.",
+  // ── 항상-주입 섹션(injection='always' 문서) 관리 — N개 생성/편집/삭제/재정렬 (#335). ──
+  //  매 세션 컨텍스트에 sort 순으로 조립된다. 죽은 ${rules}(지식-always)·고정 3섹션 화이트리스트 폐기.
+  restOnly("org_update_section", "조직 섹션 저장",
+    "항상-주입 섹션(injection='always' markdown 문서)을 생성/편집한다. 신규는 sort 말미. 본문에 ${team}/${categories}/${wiki} 치환됨.",
     [{ method: "POST", paths: ["/api/ui/org/section"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const section = str(input.section, "section", 50);
-      // 허용 섹션 = 코어 2개 + 가이드 1개(GUIDE_SECTION_DEFAULTS 키). 그 외는 거부(임의 R ku 우회 차단).
-      const isGuide = Object.prototype.hasOwnProperty.call(GUIDE_SECTION_DEFAULTS, section);
-      if (section !== "managed-policy" && section !== "org-defaults" && !isGuide) {
-        throw new HttpError(400, "허용되지 않은 섹션입니다(managed-policy|org-defaults|context-ontology-guide)");
+      const section = str(input.section, "section", 64).trim().toLowerCase();
+      // 섹션 키 = knowledge.name(PK) — 슬러그(소문자·숫자·하이픈, 2–64자)만 허용.
+      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(section)) {
+        throw new HttpError(400, "섹션 키는 소문자·숫자·하이픈만(2–64자) 허용됩니다");
+      }
+      // 이름 충돌 차단 — 같은 name 의 '일반 지식'(injection!=always)을 섹션화(덮어쓰기) 금지. 기존 섹션 편집은 OK.
+      if (await sectionNameInUse(section) === "knowledge") {
+        throw new HttpError(409, `'${section}' 은 이미 일반 지식 이름입니다 — 다른 섹션 키를 쓰세요`);
       }
       const body = str(input.body_md ?? "", "body_md", 60000);
-      // managed-policy 는 32KiB 한도(Codex) — 합성 문서 머리에 항상 실리므로 길면 경고가 아니라 차단.
-      if (section === "managed-policy" && Buffer.byteLength(body, "utf8") > 16 * 1024) {
-        throw new HttpError(400, "강제 규칙이 너무 깁니다(16KiB 초과) — 짧고 절대적인 규칙만 두세요");
+      // 항상-주입 비용 가드 — 섹션은 매 세션 전문이 실린다. 32KiB 초과 차단(과편집·본문 오입력 방지).
+      if (Buffer.byteLength(body, "utf8") > 32 * 1024) {
+        throw new HttpError(400, "섹션이 너무 깁니다(32KiB 초과) — 항상-주입 문서는 짧게 유지하세요");
       }
-      // 가이드 템플릿은 인덱스 골격이라 길지 않아야 한다 — 16KiB 초과 차단(과편집·본문 오입력 방지).
-      if (isGuide && Buffer.byteLength(body, "utf8") > 16 * 1024) {
-        throw new HttpError(400, "가이드가 너무 깁니다(16KiB 초과) — 인덱스 골격 안내만 두세요");
-      }
-      assertNoHardSecrets(body, "body_md"); // P8: 가이드/규칙/맥락은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
+      assertNoHardSecrets(body, "body_md"); // P8: 섹션은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
       return { section: await updateSection(section, body, actorOf(user), "web") };
+    }),
+
+  // ── 섹션 삭제 — 감사 스냅샷 보존(복원가능). 기본 문서(context-ontology-guide 등)도 삭제 가능 — UI 가 경고/확인. ──
+  restOnly("org_delete_section", "조직 섹션 삭제",
+    "항상-주입 섹션을 삭제한다(감사 스냅샷으로 보존 — content_restore 복원가능).",
+    [{ method: "POST", paths: ["/api/ui/org/section/delete"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const section = str(input.section, "section", 64);
+      return { deleted: await deleteSection(section, actorOf(user), "web") };
+    }),
+
+  // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──
+  restOnly("org_reorder_sections", "조직 섹션 순서",
+    "항상-주입 섹션의 주입 순서(sort)를 일괄 설정한다(order 배열 순서대로).",
+    [{ method: "POST", paths: ["/api/ui/org/sections/order"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const order = Array.isArray(input.order) ? input.order.map((x) => String(x)) : [];
+      if (!order.length) throw new HttpError(400, "order 배열이 필요합니다");
+      await setSectionsOrder(order, actorOf(user), "web");
+      return { ok: true };
     }),
 
   // ── 구성원 upsert/remove ──

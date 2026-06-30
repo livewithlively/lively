@@ -182,12 +182,34 @@ export async function initV6Schema(): Promise<string> {
       END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS knowledge_type_idx ON knowledge(type) WHERE type IS NOT NULL;
+    -- created_at(2026-06-30 #290): 최초 작성 시점. 비파괴 ADD COLUMN(NULL) → 기존 행은 updated_at 으로 1회 백필(WHERE NULL, 멱등) → 이후 DEFAULT now().
+    --  주의: 백필값은 '마지막 갱신' 기준 근사(편집된 지식은 실제 생성보다 늦을 수 있음 — 더 정확한 출처가 없음). 신규 INSERT 는 DEFAULT now(), ON CONFLICT 갱신은 created_at 미변경(보존).
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+    UPDATE knowledge SET created_at = updated_at WHERE created_at IS NULL;
+    ALTER TABLE knowledge ALTER COLUMN created_at SET DEFAULT now();
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_external_uidx ON knowledge(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS knowledge_injection_idx ON knowledge(injection);
     CREATE INDEX IF NOT EXISTS knowledge_wiki_idx ON knowledge(is_wiki) WHERE is_wiki;
     CREATE INDEX IF NOT EXISTS knowledge_provenance_idx ON knowledge(provenance);
     CREATE INDEX IF NOT EXISTS knowledge_lifecycle_idx ON knowledge(lifecycle);
     CREATE INDEX IF NOT EXISTS knowledge_parent_idx ON knowledge(parent_name);
+  `);
+
+  // (#335) 항상-주입 섹션 N개화 — 정렬 시드 + 팀블록 위치 보존. 1회성: 두 기본 섹션이 모두 pristine(sort=0)일 때만 실행
+  //  → 한 번 정렬(0,1)되면 조건 거짓이라 재실행 안 됨(관리자 재정렬·${team} 제거를 덮어쓰지 않음).
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF (SELECT COUNT(*) FROM knowledge
+            WHERE injection='always' AND lifecycle='active'
+              AND name IN ('org-defaults','context-ontology-guide') AND sort=0) = 2 THEN
+        UPDATE knowledge SET sort=0 WHERE name='org-defaults' AND injection='always';
+        UPDATE knowledge SET sort=1 WHERE name='context-ontology-guide' AND injection='always';
+        -- 팀블록 위치 보존 — 이전 조립은 org-defaults 직후 team 블록. org-defaults 말미에 \${team} 플레이스홀더로 시드(1회).
+        UPDATE knowledge SET body_md = body_md || E'\n\n\${team}'
+          WHERE name='org-defaults' AND injection='always' AND lifecycle='active' AND body_md NOT LIKE '%\${team}%';
+      END IF;
+    END $$;
   `);
 
   // ── 4) knowledge_category — 지식↔카테고리 n:n(구 knowledge_unit_domain). 진짜 FK(같은 DB). ──

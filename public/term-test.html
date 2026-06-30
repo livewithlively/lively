@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xterm Safari 한글 입력 테스트</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  body { font-family: ui-sans-serif, -apple-system, sans-serif; margin: 16px; color: #15233b; }
+  h1 { font-size: 17px; } h2 { font-size: 14px; margin: 16px 0 6px; }
+  .unit { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 6px; }
+  .host { flex: 1 1 380px; min-width: 280px; height: 150px; background: #1e1e2e; border-radius: 10px; padding: 8px; overflow: hidden; }
+  .log { flex: 1 1 280px; min-width: 240px; height: 150px; overflow: auto; background: #0b1020; color: #b7c7ef; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; padding: 8px; border-radius: 8px; white-space: pre-wrap; box-sizing: border-box; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #eef3ff; color: #2d6bf0; margin-left: 6px; }
+  button { font-size: 13px; padding: 4px 10px; margin-right: 6px; }
+</style>
+</head>
+<body>
+<h1>xterm.js 한글 입력 테스트 <span class="tag" id="ua">UA</span></h1>
+<p>세 터미널 모두 로컬 에코(서버 없음). 각 박스에 <b>"한글 잘 됨"</b>처럼 쳐보고, <b>②·③ 중 제대로 되는 번호</b>를 알려주세요.</p>
+
+<h2>① 원본 — 현재 앱과 동일(버그 재현)</h2>
+<div class="unit"><div class="host" id="host1"></div><div class="log" id="log1"></div></div>
+
+<h2>② 수정 A — 조합 중 키를 xterm이 무시(attachCustomKeyEventHandler)</h2>
+<div class="unit"><div class="host" id="host2"></div><div class="log" id="log2"></div></div>
+
+<h2>③ 수정 B — A + 조합 중 onData 차단 & compositionend 최종글자만 송신</h2>
+<div class="unit"><div class="host" id="host3"></div><div class="log" id="log3"></div></div>
+
+<div style="margin-top:8px;">
+  <button id="copyBtn">로그 전체 복사</button>
+  <button id="clearBtn">로그 지우기</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+  document.getElementById('ua').textContent = navigator.userAgent.slice(0, 64);
+  function mkLog(id) { var el = document.getElementById(id); return function (s) { el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; }; }
+  // mode: 0=원본, 1=수정A(키핸들러), 2=수정B(키핸들러 + 조합 onData 차단 + compositionend 송신)
+  function makeTerm(hostId, logId, mode) {
+    var log = mkLog(logId);
+    var term = new Terminal({ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 14, cursorBlink: true, allowProposedApi: true,
+      theme: { background: '#1e1e2e', foreground: '#e6e6f0' } });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit); term.open(document.getElementById(hostId));
+    try { fit.fit(); } catch (e) {}
+    term.write('$ 한글 입력 테스트\r\n');
+    function emit(d) {
+      var codes = Array.prototype.map.call(d, function (ch) { return ch.charCodeAt(0); });
+      log('SEND ' + JSON.stringify(d) + ' [' + codes.join(',') + ']');
+      if (d === '\r') term.write('\r\n'); else if (d === '' || d === '\b') term.write('\b \b'); else term.write(d);
+    }
+    var imeKey = function (e) { return e.type === 'keydown' && (e.isComposing || e.keyCode === 229 || e.key === 'Process' || e.key === 'Unidentified'); };
+    if (mode >= 1) {
+      // 조합 중인(IME) 키다운은 xterm이 처리하지 않게 — 초성 누출/textarea 비움 방지
+      term.attachCustomKeyEventHandler(function (e) { if (imeKey(e)) { log('skip xterm key: ' + e.key + ' kc=' + e.keyCode); return false; } return true; });
+    }
+    var composing = false, endTick = false;
+    if (mode === 2) {
+      var ta = document.querySelector('#' + hostId + ' textarea.xterm-helper-textarea');
+      if (ta) {
+        ta.addEventListener('compositionstart', function () { composing = true; });
+        ta.addEventListener('compositionend', function (e) { composing = false; endTick = true; if (e.data) emit(e.data); setTimeout(function () { endTick = false; }, 0); });
+      } else { log('(helper textarea 못 찾음)'); }
+    }
+    term.onData(function (d) { if (mode === 2 && (composing || endTick)) { log('drop ' + JSON.stringify(d)); return; } emit(d); });
+    term.focus();
+  }
+  makeTerm('host1', 'log1', 0);
+  makeTerm('host2', 'log2', 1);
+  makeTerm('host3', 'log3', 2);
+  document.getElementById('clearBtn').onclick = function () { ['log1', 'log2', 'log3'].forEach(function (i) { document.getElementById(i).textContent = ''; }); };
+  document.getElementById('copyBtn').onclick = function () {
+    var t = '== UA ==\n' + navigator.userAgent + '\n\n① ' + document.getElementById('log1').textContent + '\n② ' + document.getElementById('log2').textContent + '\n③ ' + document.getElementById('log3').textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t); alert('로그 복사됨');
+  };
+</script>
+</body>
+</html>

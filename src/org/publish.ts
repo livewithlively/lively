@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
-import { getSection } from "./store.js";
+// (#335) getSection 직접호출 폐기 — 섹션은 listSections 로 동적 조립(buildSectionBlocks).
 import { DEFAULT_WRITEBACK_NOTICE } from "./hook-defaults.js";
 import { redactString } from "./redact.js";
 import { logger } from "../log.js";
@@ -161,38 +161,51 @@ async function buildTeamBlock(memberId: string): Promise<{ block: string; mineId
   }
 }
 
+// 항상-주입 섹션(injection='always' 행)을 sort 순으로 전부 조립한다(#335 — 섹션이 곧 항상-주입의 전부, 죽은 ${rules}/지식-always 경로 폐기).
+//  각 본문에 ${team}/${categories}/${wiki} 치환. 본문 비면 코드 기본값(가이드) 폴백. 어떤 섹션도 ${team} 를 안 쓰면 팀블록을 말미에 폴백 부착.
+//  managed-policy(데이터 없음·구 'AI 필수 규칙')는 listSections 에 안 나오므로 자연히 빠진다 — 별도 특수처리 불요.
+async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wikiUnits: any[]; wikiCats: Map<string, string> }): Promise<string> {
+  const { listSections } = await import("./store.js");
+  const { substituteBlocks, GUIDE_SECTION_DEFAULTS } = await import("./materialize.js");
+  const sections = await listSections(); // ORDER BY sort, name
+  const consumedTeam = { v: false };
+  const out: string[] = [];
+  for (const s of sections) {
+    const raw = strip(s.body_md) || (GUIDE_SECTION_DEFAULTS[s.section] ? strip(GUIDE_SECTION_DEFAULTS[s.section]) : "");
+    if (!raw.trim()) continue;
+    const filled = substituteBlocks(raw, { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam });
+    if (filled.trim()) out.push(filled);
+  }
+  // context-ontology-guide(시스템 사용법 골격)는 행이 없어도 항상 렌더 — 신규 조직의 ${categories}/${wiki}/가이드 보존(기존 loadGuideTemplate
+  //  폴백과 동일). org_overview 도 같은 DEFAULT 로 에디터에 패딩하므로 화면=주입 일치. '삭제'는 커스터마이즈 리셋(=DEFAULT 복귀) 의미.
+  const GUIDE_KEY = "context-ontology-guide";
+  if (!sections.some((s) => s.section === GUIDE_KEY)) {
+    const def = GUIDE_SECTION_DEFAULTS[GUIDE_KEY];
+    if (def) {
+      const filled = substituteBlocks(strip(def), { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam });
+      if (filled.trim()) out.push(filled);
+    }
+  }
+  if (opts.team.trim() && !consumedTeam.v) out.push(opts.team.trim()); // ${team} 미사용 시 폴백(마이그레이션으로 org-defaults 에 ${team} 시드 시 in-position)
+  return out.join("\n\n");
+}
+
 export async function previewMemberContext(orgName: string, memberId?: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
-  const policy = await getSection("managed-policy");
-  const defaults = await getSection("org-defaults");
   // 팀 층 — memberId(=org_member.id, bearer 토큰 principal) 있을 때만. 훅이 멤버 토큰으로 fetch 하므로 게이트웨이가 신원을 안다.
   const team = memberId ? await buildTeamBlock(memberId) : { block: "", mineIds: new Set<number>() };
   const { listKnowledge } = await import("../v6/knowledge-store.js");
-  // 실제 발행물(MEMORY.md)과 **동일** 인덱스여야 WYSIWYG 가 안 깨진다 — materialize 의 buildKnowledgeIndex 를 그대로
-  //  재사용(v6: injection=always 전문 + 카테고리 지도 + 쓰기 가이드 단일 소스). 따로 만들면 미리보기↔발행물 불일치.
-  const { buildKnowledgeIndex, categoryMapForIndex, loadGuideTemplate, wikiCategoryMap } = await import("./materialize.js");
+  const { categoryMapForIndex, wikiCategoryMap } = await import("./materialize.js");
   const knowledge = await listKnowledge({ lifecycle: "active", limit: 500 });
-  // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale) — materialize 와 동일 소스라 미리보기↔발행물 일치 유지.
-  //  team.mineIds 주면 우리 팀 카테고리를 공간 내 상단 정렬+★(없으면 출력 불변).
+  // 카테고리 지도는 라이브 조회(domainmap+items 조인, non-stale). team.mineIds 주면 우리 팀 카테고리 상단 정렬+★(없으면 출력 불변).
   const categoryMap = await categoryMapForIndex(team.mineIds.size ? team.mineIds : undefined);
-  // 컨텍스트 온톨로지 가이드 템플릿도 DB 섹션에서 로드 — materialize(발행물)와 동일 소스(편집값 우선·비면 기본값).
-  const guide = await loadGuideTemplate();
-  const memIndex = (knowledge.length || categoryMap.length) ? buildKnowledgeIndex(knowledge, categoryMap, guide, await wikiCategoryMap()).trim() : "";
-  // 온보딩 baseline(#269) — 조직이 미완이면 "남은 단계 + AI 지침"을 주입(완료면 ""). 웹 '온보딩' 페이지와 동일 SoT.
-  //  이게 SessionStart 훅(fetchOrgContext)으로 흘러 신규 박스의 세션이 맥락 블라인드가 되지 않게 한다.
+  // 항상-주입 섹션 전부를 sort 순으로 조립(injection='always' 행 = 섹션). 각 본문에 ${team}/${categories}/${wiki} 치환.
+  const sectionsText = await buildSectionBlocks({ team: team.block, categoryMap, wikiUnits: knowledge, wikiCats: await wikiCategoryMap() });
+  // 온보딩 baseline(#269) — 조직 미완이면 "남은 단계 + AI 지침"을 헤더보다 위에 주입(완료면 ""). SessionStart 훅의 live 소스.
   const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
   const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
-  const sections = [
-    onboarding,   // ⚠ 헤더보다 위 — 미완이면 AI 가 맨 처음 보게(완료면 ""→사라짐).
-    header,
-    policy?.body_md?.trim() ? strip(policy.body_md) : "",
-    defaults?.body_md?.trim() ? strip(defaults.body_md) : "",
-    team.block,
-    memIndex,
-  ];
-  // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 실제로 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext
-  //  의 live 소스)다. memIndex 는 buildKnowledgeIndex 가 이미 마스킹하나, policy/defaults 는 06-16 write-gate 이전
-  //  레거시 본문이 평문 시크릿을 품을 수 있으므로 조립 후 한 번 더 redactString 으로 마스킹한다(서빙 경로 = throw 금지,
-  //  fail-open 보존 — 마스킹만). 쓰기경로 hard-block(assertNoHardSecrets)과 이중 안전망.
-  return redactString(sections.filter(Boolean).join("\n\n")) + "\n";
+  const parts = [onboarding, header, sectionsText];
+  // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext live 소스).
+  //  substituteBlocks 가 섹션마다 이미 마스킹하나, 레거시 섹션 본문의 평문 시크릿 대비 조립 후 한 번 더 redactString(fail-open).
+  return redactString(parts.filter(Boolean).join("\n\n")) + "\n";
 }

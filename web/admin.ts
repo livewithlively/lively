@@ -32,8 +32,7 @@ const ADMIN_SECTIONS = [
   //  카테고리 탭(#/categories)과 같은 category-store(/api/ui/categories) — 여기 수정이 지식·프로젝트 탭 좌측에 반영.
   { key: 'wiki-categories', label: '카테고리 설정', meaning: null, group: 'wiki' },
   // ③ 맥락·세션 주입 — AI가 매 세션 무엇을 언제 주입받나(단일 지도). nav 엔 '세션 주입 지도'(injection-map) 한 화면만.
-  //  회사 소개·규칙·성격(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide)는 별도 탭 폐기(2026-06-26) — 지도의 [편집]이 WIKI 지식 페이지(#/k/<name>)로 보낸다(이 섹션=injection=always knowledge).
-  //  두 키는 sectionEditor 라우팅엔 살아있고 URL 은 SECTION_REMAP 로 지도 흡수. managed-policy(구 'AI 필수 규칙')는 빈 채 서버 plumbing 만 유지(주입 시 ""→무해).
+  //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335). 구 #/system/<section> 라우트·SECTION_REMAP 흡수는 호환용 잔존.
   //  WIKI 인덱스는 WIKI 탭, 주제 분류는 '카테고리 설정'으로 일원화(2026-06-24).
   { key: 'injection-map', label: '세션 주입 지도', meaning: null, group: 'knowledge' },
   // ④ 연결·데이터 (고급) — AI가 무엇에 닿나(도구·MCP·DB·레포) + 외부 호출/DB 안전범위 + 커스텀 훅(코드).
@@ -55,7 +54,7 @@ const ADMIN_SECTIONS = [
 ];
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
-const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
+const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
 const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
@@ -93,14 +92,6 @@ function meaningRow(k, v) {
 // 비개발자용 카드 카피 — 서버 MEANING(기술적·장황) 위에 클라에서 덮어쓴다(즉시 반복, 서버 재시작 불요).
 //  키 = 섹션 meaning 키. 없는 키(고급 훅·MCP·DB·툴 등)는 서버 카피로 폴백.
 const MEANING_KO = {
-  'managed-policy': {
-    label: 'AI 필수 규칙',
-    what: '회사의 모든 AI가 무조건 지켜야 하는 규칙이에요. 개인이 끄거나 바꿀 수 없어요.',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '대화를 시작할 때 가장 먼저 적용돼요',
-    where: 'AI가 답을 만들 때 무엇보다 우선해서 지켜요',
-    example: "'고객 개인정보는 절대 보여주지 않기'를 넣으면, 그때부터 모두의 AI가 무조건 그렇게 해요.",
-  },
   'org-defaults': {
     label: '회사 소개·규칙·AI 성격',
     what: '회사가 어떤 곳인지, AI가 무조건 지킬 규칙, 어떤 성격·말투로 일하는지, 우리 팀이 일하는 방식이에요. (구 ‘AI 필수 규칙’이 여기로 합쳐졌어요.)',
@@ -273,7 +264,7 @@ async function renderAdmin(view, sub) {
 
 function renderAdminDetail(detail, sel, data) {
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
-  if (sel === 'managed-policy' || sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
+  if (sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
   if (sel === 'member-add') return memberAddPanel(detail, data);
@@ -1638,25 +1629,103 @@ function injectionMap(detail, data) {
   }
 
   // ── 블록 조립 ──
-  // 세션 시작 조각 — 최상위 2개(편집 가능한 섹션) + 가이드 템플릿 본문 안에 ${} 로 채워지는 자식 3개.
-  //  실제 순서(publish.ts): 조직 헤더(자동) → 회사 소개·규칙·성격(org-defaults) → 가이드(템플릿). 가이드 안 ${rules}(맨 위)·${categories}·${wiki}(맨 끝)는 위치를 템플릿이 정함.
-  const editBtn = (key) => jump('WIKI에서 편집 →', '#/k/' + encodeURIComponent(key));
+  // 세션 시작 조각(#335) — 항상-주입 '섹션 문서'(injection='always' 행)를 N개 관리(추가/편집/삭제/재정렬). sort 순으로 조립.
+  //  실제 순서(publish.ts): 조직 헤더(자동) → [섹션들 sort 순]. 각 섹션 본문의 ${team}/${categories}/${wiki} 는 매 세션 실데이터로 치환.
+  const guideKey = 'context-ontology-guide';
+  const SECTION_HINT = {
+    'org-defaults': '회사 배경 + 항상 지킬 규칙 + AI 말투 (회사 소개·규칙·성격)',
+    'context-ontology-guide': '⚠ LLM 이 라이블리 시스템(맥락·카테고리·프로젝트·지식) 사용법을 이해하는 핵심 문서 — 삭제·대폭수정 주의. ${categories}/${wiki} 자리표시자 골격.',
+  };
   const subPieceRow = (token, label, sub, btn) => el('div', { class: 'inj-piece inj-subpiece' },
     el('code', { class: 'inj-token', text: token }),
     el('div', { class: 'inj-piece-body' },
       el('div', { class: 'inj-piece-label', text: label }),
       sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null),
     btn || el('span', {}));
-  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 순서로 조립.',
-    momentToggle('session_preload'),
-    el('div', { class: 'inj-pieces' },
-      pieceRow('1', '회사 소개·규칙·AI 성격', '회사 배경 + 항상 지킬 규칙 + AI 말투 (섹션)', editBtn('org-defaults')),
-      pieceRow('2', '컨텍스트 온톨로지 가이드', '아래 ${ } 자리표시자를 담는 전체 골격 — 주입 위치·순서는 이 템플릿이 정함 (고급)', editBtn('context-ontology-guide')),
+
+  // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
+  function openSectionEditor(name, opts) {
+    opts = opts || {};
+    const isNew = !!opts.isNew;
+    const cur = (data.sections && data.sections[name]) || { body_md: '' };
+    const nameIn = el('input', { type: 'text', value: name || '', placeholder: '섹션 키 (소문자·숫자·하이픈, 예: company-policy)' });
+    if (!isNew) nameIn.disabled = true;
+    const ta = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문 — ${team}/${categories}/${wiki} 치환 가능' });
+    ta.value = cur.body_md || '';
+    const st = el('span', { class: 'admin-status' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+    const root = el('div', { class: 'mem-modal' },
+      isNew ? field('섹션 키', nameIn) : null,
+      name === guideKey ? el('p', { class: 'admin-hint', text: '⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.' }) : null,
+      field('본문 (markdown)', ta),
+      el('div', { class: 'admin-actions' }, saveBtn, st));
+    const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
+    saveBtn.onclick = async () => {
+      const section = (isNew ? nameIn.value : name).trim().toLowerCase();
+      if (!section) { toast('섹션 키를 입력하세요', true); return; }
+      saveBtn.disabled = true; st.textContent = '저장 중…';
+      try {
+        await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
+        toast('저장됨 — 구성원 다음 세션부터 반영'); back.remove(); await reloadSections();
+      } catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; st.textContent = ''; }
+    };
+  }
+  async function reloadSections() {
+    try { const r = await api('/api/ui/org'); if (r && r.sections) data.sections = r.sections; } catch (_) { /* 유지 */ }
+    paintSections();
+  }
+  function orderedSections() {
+    return Object.entries(data.sections || {}).map(([name, s]) => ({ name, ...(s as any) }))
+      .sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name));
+  }
+  async function moveSection(i, dir) {
+    const entries = orderedSections(); const j = i + dir;
+    if (j < 0 || j >= entries.length) return;
+    const order = entries.map((e) => e.name);
+    [order[i], order[j]] = [order[j], order[i]];
+    try { await api('/api/ui/org/sections/order', { method: 'POST', body: JSON.stringify({ order }) }); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  async function deleteSectionUi(s) {
+    const warn = s.name === guideKey ? '⚠ 시스템 가이드입니다 — 삭제하면 AI 가 라이블리 사용법(맥락·카테고리·지식 기록)을 잃습니다.\n\n' : '';
+    if (!confirm(warn + "'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다(휴지통에서 복원 가능).")) return;
+    try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제됨'); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  const sectionsWrap = el('div', { class: 'inj-pieces' });
+  function paintSections() {
+    const entries = orderedSections();
+    const rows = entries.map((s, i) => {
+      const isGuide = s.name === guideKey;
+      const acts: any[] = [];
+      if (canEdit) {
+        const up = el('button', { class: 'btn btn-ghost btn-sm', text: '▲', title: '위로' }); up.disabled = i === 0; up.onclick = () => moveSection(i, -1);
+        const down = el('button', { class: 'btn btn-ghost btn-sm', text: '▼', title: '아래로' }); down.disabled = i === entries.length - 1; down.onclick = () => moveSection(i, +1);
+        const ed = el('button', { class: 'btn btn-ghost btn-sm', text: '편집' }); ed.onclick = () => openSectionEditor(s.name, {});
+        const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제' }); del.onclick = () => deleteSectionUi(s);
+        acts.push(up, down, ed, del);
+      }
+      return el('div', { class: 'inj-piece' },
+        el('span', { class: 'inj-n', text: String(i + 1) }),
+        el('div', { class: 'inj-piece-body' },
+          el('div', { class: 'inj-piece-label' }, s.name, isGuide ? el('span', { class: 'pill', title: '시스템 가이드 — 수정·삭제 주의', text: ' ⚠ 시스템 가이드' }) : null),
+          el('div', { class: 'admin-hint inj-sub', text: SECTION_HINT[s.name] || ('v' + (s.version || 1) + ' · 갱신 ' + (s.updated_by || '—')) })),
+        el('div', { class: 'admin-actions' }, ...acts));
+    });
+    sectionsWrap.replaceChildren(
+      ...rows,
+      canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
       el('div', { class: 'inj-subpieces' },
-        el('div', { class: 'admin-hint inj-sub', text: '└ 가이드 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐:' }),
-        subPieceRow('${rules}', '항상-주입 지식', 'injection=always 로 표시한 지식 전문(규칙·페르소나) · 가이드 맨 위', jump('WIKI(always) →', '#/knowledge?injection=always')),
-        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동 생성(편집 불가)', null),
-        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) · 가이드 맨 끝', jump('WIKI 인덱스 →', '#/knowledge?indexed=1')))),
+        el('div', { class: 'admin-hint inj-sub', text: '└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):' }),
+        subPieceRow('${team}', '우리 팀', '보는 구성원의 팀·소유 카테고리 프리앰블 — 자동', null),
+        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
+        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge?indexed=1'))));
+  }
+  paintSections();
+
+  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 섹션 문서들을 sort 순으로 조립. 추가/편집/삭제/재정렬 가능.',
+    momentToggle('session_preload'),
+    sectionsWrap,
     previewExpander(),
     customList('SessionStart'));
 
@@ -1686,7 +1755,7 @@ function injectionMap(detail, data) {
 
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('세션 주입 지도', null),
-    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 각 맥락 조각의 “편집”은 그 조각의 정식 위치(규칙·소개 섹션 또는 WIKI 탭)로 이동합니다 — 여기서 새로 만드는 게 아니라 한 지도에서 전부 도달합니다.' }),
+    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
     el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
 }

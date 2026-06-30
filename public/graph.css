@@ -1,0 +1,206 @@
+/* graph.css — 지식 아틀라스(standalone 풀스크린 그래프, #290). 앱 셸·styles.css 비의존.
+   다크 "도메인 지도": 카테고리=영역(territory), 지식=점. 팬·줌은 지도처럼. */
+
+:root {
+  --atlas-bg: #0b0e14;          /* 심해 네이비(순흑 아님) — 야간 해도(海圖) */
+  --atlas-bg-2: #121826;        /* 중앙 비네트 밝은 톤 */
+  --atlas-ink: #c8d2e2;         /* 본문 잉크 — 차가운 라이트 슬레이트 */
+  --atlas-ink-dim: #8591a8;     /* 보조 텍스트 */
+  --atlas-ink-faint: #5b6781;   /* 더 흐린 텍스트/좌표 */
+  --atlas-line: rgba(148, 163, 184, 0.14);
+  --atlas-line-2: rgba(148, 163, 184, 0.26);
+  --atlas-panel: rgba(14, 19, 30, 0.66);
+  --atlas-panel-solid: #0e131e;
+  --atlas-panel-brd: rgba(148, 163, 184, 0.16);
+  --atlas-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+html { background: var(--atlas-bg); }
+body {
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--atlas-ink);
+  background:
+    radial-gradient(120% 90% at 50% 42%, var(--atlas-bg-2) 0%, var(--atlas-bg) 62%);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#atlas-root { position: fixed; inset: 0; }
+
+/* ── 스테이지(SVG 호스트) ── */
+.atlas-stage { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.atlas-stage.dragging { cursor: grabbing; }
+.atlas-stage svg { display: block; width: 100%; height: 100%; }
+
+/* 영역(territory) — 카테고리 경계 블롭 */
+.terr { transition: opacity .2s ease; }
+.terr-fill { stroke-linejoin: round; }
+.terr-halo { fill: none; stroke-linejoin: round; }
+
+/* 링크 */
+.lk { stroke: rgba(148, 163, 184, 0.32); stroke-width: 1.1; transition: stroke .15s, stroke-width .15s; }
+.lk.hot { stroke: var(--lk-hot, #cdd6e6); stroke-width: 2; }
+
+/* 노드 */
+.nd { cursor: pointer; }
+.nd-dot { stroke: var(--atlas-bg); stroke-width: 1.6; transition: r .12s ease; }
+.nd.dim { opacity: .18; }
+.nd.hot .nd-dot { stroke: #fff; stroke-width: 2; }
+
+/* 노드 라벨 */
+.nlab {
+  font-size: 12px; font-weight: 500; fill: var(--atlas-ink);
+  paint-order: stroke; stroke: var(--atlas-bg); stroke-width: 3px; stroke-linejoin: round;
+  pointer-events: none; opacity: 0; transition: opacity .12s ease;
+}
+.nlab.show { opacity: .92; }
+.nlab.strong { opacity: 1; font-weight: 600; }
+.nlab.dim { opacity: 0 !important; }
+
+/* 영역 이름(카테고리 — 큰 글씨, 카테고리 색) */
+.rlab { pointer-events: none; }
+.rlab-name {
+  font-weight: 800; letter-spacing: -0.01em;
+  paint-order: stroke; stroke: var(--atlas-bg); stroke-width: 5px; stroke-linejoin: round;
+  transition: opacity .2s ease;
+}
+.rlab-count { font-family: var(--mono); font-weight: 600; fill: var(--atlas-ink-dim); }
+.terr.muted, .rlab.muted { opacity: .14; }
+
+/* ── 상단 글라스 바 ── */
+.atlas-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(11, 14, 20, 0.82) 0%, rgba(11, 14, 20, 0) 100%);
+  pointer-events: none;
+}
+.atlas-top > * { pointer-events: auto; }
+.atlas-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.atlas-title h1 {
+  margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: #eef2f8;
+  white-space: nowrap;
+}
+.atlas-title .sub {
+  font-size: 12.5px; color: var(--atlas-ink-dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.atlas-spacer { flex: 1; }
+
+.atlas-search { position: relative; display: flex; align-items: center; }
+.atlas-search .mag {
+  position: absolute; left: 11px; font-size: 13px; color: var(--atlas-ink-faint); pointer-events: none;
+}
+.atlas-search input {
+  width: 230px; max-width: 42vw;
+  padding: 8px 12px 8px 30px;
+  background: var(--atlas-panel); color: var(--atlas-ink);
+  border: 1px solid var(--atlas-panel-brd); border-radius: 10px;
+  font: inherit; font-size: 13px;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: border-color .15s, width .2s;
+}
+.atlas-search input::placeholder { color: var(--atlas-ink-faint); }
+.atlas-search input:focus { outline: none; border-color: var(--atlas-line-2); width: 280px; }
+.atlas-search .clr {
+  position: absolute; right: 7px; border: none; background: none; cursor: pointer;
+  color: var(--atlas-ink-faint); font-size: 14px; padding: 4px; line-height: 1; border-radius: 6px;
+}
+.atlas-search .clr:hover { color: var(--atlas-ink); }
+
+.atlas-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border-radius: 10px;
+  background: var(--atlas-panel); color: var(--atlas-ink);
+  border: 1px solid var(--atlas-panel-brd); font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.atlas-btn:hover { border-color: var(--atlas-line-2); color: #fff; }
+.atlas-btn .ic { font-size: 13px; }
+
+/* ── 범례(좌하단) ── */
+.atlas-legend {
+  position: absolute; left: 18px; bottom: 18px; z-index: 5;
+  max-width: 268px; max-height: 56vh; overflow: auto;
+  padding: 13px 14px 11px;
+  background: var(--atlas-panel); border: 1px solid var(--atlas-panel-brd); border-radius: 14px;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  box-shadow: var(--atlas-shadow);
+}
+.atlas-legend h2 {
+  margin: 0 0 9px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+  color: var(--atlas-ink-faint); text-transform: uppercase;
+}
+.leg-space { margin-top: 9px; }
+.leg-space:first-of-type { margin-top: 0; }
+.leg-space-h {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; color: var(--atlas-ink-faint);
+  margin: 0 0 4px; padding-left: 2px;
+}
+.leg-row {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 5px 7px; border-radius: 8px; border: none; background: none;
+  color: var(--atlas-ink); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left;
+  transition: background .12s;
+}
+.leg-row:hover { background: rgba(148, 163, 184, 0.1); }
+.leg-row.off { opacity: .42; }
+.leg-row.solo { background: rgba(148, 163, 184, 0.14); }
+.leg-swatch { flex: none; width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 10px -1px currentColor; }
+.leg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leg-count { flex: none; font-family: var(--mono); font-size: 11px; color: var(--atlas-ink-faint); }
+
+/* ── 줌 컨트롤(우하단) ── */
+.atlas-zoom {
+  position: absolute; right: 18px; bottom: 18px; z-index: 5;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+}
+.zoom-cluster {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--atlas-panel); border: 1px solid var(--atlas-panel-brd); border-radius: 11px;
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--atlas-shadow);
+}
+.zoom-cluster button {
+  width: 40px; height: 38px; border: none; background: none; color: var(--atlas-ink);
+  font-size: 18px; line-height: 1; cursor: pointer; transition: background .12s, color .12s;
+}
+.zoom-cluster button + button { border-top: 1px solid var(--atlas-line); }
+.zoom-cluster button:hover { background: rgba(148, 163, 184, 0.12); color: #fff; }
+.zoom-fit { font-size: 11px !important; height: 34px !important; font-weight: 600; letter-spacing: .02em; }
+.zoom-pct {
+  text-align: center; font-family: var(--mono); font-size: 11px; color: var(--atlas-ink-faint);
+  padding: 2px 0;
+}
+
+/* ── 상태(인증/빈) ── */
+.atlas-state {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+}
+.atlas-state-card {
+  max-width: 420px; text-align: center; padding: 34px 32px;
+  background: var(--atlas-panel); border: 1px solid var(--atlas-panel-brd); border-radius: 16px;
+  box-shadow: var(--atlas-shadow);
+}
+.atlas-state-card .ic { font-size: 30px; }
+.atlas-state-card h2 { margin: 12px 0 6px; font-size: 16px; color: #eef2f8; }
+.atlas-state-card p { margin: 0 0 16px; font-size: 13.5px; line-height: 1.6; color: var(--atlas-ink-dim); }
+.atlas-state-card .row { display: flex; gap: 8px; justify-content: center; }
+
+/* 진입 페이드 */
+@keyframes atlasFade { from { opacity: 0; } to { opacity: 1; } }
+.atlas-top, .atlas-legend, .atlas-zoom { animation: atlasFade .5s ease both; animation-delay: .25s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-top, .atlas-legend, .atlas-zoom { animation: none; }
+  .nlab, .nd-dot, .terr, .rlab-name { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .atlas-legend { max-width: 60vw; bottom: 14px; left: 14px; }
+  .atlas-search input { width: 150px; }
+}
