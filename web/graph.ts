@@ -242,9 +242,9 @@ function paint() {
   for (const c of CATS) {
     const [sx, sy] = toScreen(c.cx, c.topY);
     const f = regionFont(c.nodes.length);
-    // 이름은 영역 위로, 개수는 그 아래(둘 다 경계선 위 — 상단 노드 줄을 침범하지 않게).
-    c.elName.setAttribute('x', sx.toFixed(1)); c.elName.setAttribute('y', (sy - 11 - f * 0.5).toFixed(1)); c.elName.setAttribute('font-size', f.toFixed(1));
-    c.elCount.setAttribute('x', sx.toFixed(1)); c.elCount.setAttribute('y', (sy - 12).toFixed(1));
+    // 개수는 경계선 바로 위 고정, 이름은 그 위로(글자 클수록 더 위) — 작은 영역에서도 겹치지 않게.
+    c.elName.setAttribute('x', sx.toFixed(1)); c.elName.setAttribute('y', (sy - 15 - f * 0.55).toFixed(1)); c.elName.setAttribute('font-size', f.toFixed(1));
+    c.elCount.setAttribute('x', sx.toFixed(1)); c.elCount.setAttribute('y', (sy - 10).toFixed(1));
     const muted = (soloCat && c.key !== soloCat) ? true : false;
     c.elTerr.classList.toggle('muted', muted);
     c.elName.parentNode.classList.toggle('muted', muted);
