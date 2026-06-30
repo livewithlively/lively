@@ -674,10 +674,10 @@ async function renderKnowledgeDetail(view, name) {
     actions.childNodes.length ? actions : null,
     metaWrap,
     el('div', { class: 'sec-label', text: '카테고리' }), catSection,
-    knLinksPanel(k, view),
     knProjectLinks(k.name),
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle),
     el('div', { class: 'unit-body-wrap' }, rendered, rawView),
+    knLinksPanel(k, view),   // #290 연결된 지식 — 본문 아래(읽기 우선), 틴트 카드로 구분
     relatedBox,
   );
   view.replaceChildren(el('div', { class: 'page-head unit-head' }, backRow), main);
@@ -1121,10 +1121,10 @@ function knLinksPanel(k, view) {
       title: '교차주제는 카테고리 복수태깅 대신 링크로 잇습니다', onclick: () => openKnowledgeLinkPicker(k, view) }) : null);
   const body = el('div', { class: 'list-box kn-links-list' });
   if (!out.length && !inc.length) {
-    body.append(el('div', { class: 'kn-cat-empty', text: '연결된 지식이 없습니다. ＋링크로 관련·구체화·모순·의존을 잇습니다(단일 카테고리의 짝).' }));
+    body.append(el('div', { class: 'kn-cat-empty', text: '아직 연결된 지식이 없어요. ＋링크로 관련된 지식을 이어보세요.' }));
   } else {
-    if (out.length) { body.append(el('div', { class: 'caption kn-links-sub', text: '→ 이 지식이 가리키는' })); out.forEach((e) => body.append(knLinkRow(e, k, view, false))); }
-    if (inc.length) { body.append(el('div', { class: 'caption kn-links-sub', text: '← 이 지식을 가리키는 (백링크)' })); inc.forEach((e) => body.append(knLinkRow(e, k, view, true))); }
+    if (out.length) { body.append(el('div', { class: 'kn-links-sub', text: '이 지식에서 연결한 글' })); out.forEach((e) => body.append(knLinkRow(e, k, view, false))); }
+    if (inc.length) { body.append(el('div', { class: 'kn-links-sub', text: '이 지식을 연결한 다른 글' })); inc.forEach((e) => body.append(knLinkRow(e, k, view, true))); }
   }
   const box = el('div', { class: 'kn-links' }, head, body);
   if (sources.length) {
