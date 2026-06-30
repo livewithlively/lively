@@ -658,7 +658,10 @@ const projectLinkProjectV6: Capability = {
     const relation = input.relation || "follow_up";
     if (input.id === input.to) throw new HttpError(400, "같은 프로젝트끼리는 연결할 수 없습니다");
     if (input.unlink) { await unlinkProjectEdge(input.id, input.to, relation, writeCtx); return { unlinked: true }; }
-    if (!(await getProjectRow(input.to))) throw new HttpError(400, `대상 프로젝트 #${input.to} 가 없습니다`);
+    // 양쪽 다 존재해야 — 없는 프로젝트면 FK 500 대신 깨끗한 400.
+    const [fromOk, toOk] = await Promise.all([getProjectRow(input.id), getProjectRow(input.to)]);
+    if (!fromOk) throw new HttpError(400, `프로젝트 #${input.id} 가 없습니다`);
+    if (!toOk) throw new HttpError(400, `대상 프로젝트 #${input.to} 가 없습니다`);
     await linkProjectEdge(input.id, input.to, relation, writeCtx);
     return { linked: true };
   },
