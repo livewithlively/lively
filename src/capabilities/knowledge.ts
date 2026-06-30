@@ -91,7 +91,7 @@ const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
   description:
-    "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. injection/provenance 포함. name 없으면 자동 슬러그. " +
+    "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. provenance 포함(지식은 항상 recalled — '항상 주입'은 관리탭 '세션 주입' 섹션 문서로만, knowledge_set_wiki 로 인덱스 핀). name 없으면 자동 슬러그. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
   scope: "memory",
@@ -99,7 +99,6 @@ const knowledgeSave: Capability = {
     name: z.string().max(64).optional(),
     title: z.string().max(200).optional(),
     body_md: z.string().min(1).max(40000),
-    injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
@@ -113,8 +112,7 @@ const knowledgeSave: Capability = {
         const b = (req.body ?? {}) as Record<string, unknown>;
         const body_md = String(b.body_md ?? b.note ?? "").trim();
         if (!body_md) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
-        const injection = b.injection ? String(b.injection) : undefined;
-        if (injection && !["always", "recalled"].includes(injection)) throw new HttpError(400, "injection 은 always|recalled");
+        // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
         const category = b.category != null
@@ -122,7 +120,7 @@ const knowledgeSave: Capability = {
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
-          body_md, injection, provenance,
+          body_md, provenance,
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
           type: b.type ? String(b.type) : undefined,
           category,

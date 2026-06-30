@@ -64,6 +64,7 @@ export interface OrgSection {
   section: string;
   body_md: string;
   version: number;
+  sort: number;
   updated_at: string | null;
   updated_by: string | null;
 }
@@ -128,11 +129,12 @@ export async function updateOrgProfile(
 //  매핑: section ↔ name(=section), injection='always'. 섹션은 분류대상이 아니라 category 없이 존재(주입 설정 — managed-policy/org-defaults/가이드).
 //  v6 컷오버(2026-06-24): 구 knowledge_unit kind='R' → knowledge injection='always'. 반환 shape(OrgSection) 불변(소비자 무수정).
 //  v6 upsertKnowledge 는 신규에 category 필수라 섹션엔 부적합 → 직접 SQL(injection='always', 분류 없음).
-const SECTION_COLS = "name, body_md, version, updated_at, updated_by";
+const SECTION_COLS = "name, body_md, version, sort, updated_at, updated_by";
 function rowToSection(r: Record<string, unknown>): OrgSection {
   return {
     section: r.name as string, body_md: (r.body_md as string) ?? "",
-    version: (r.version as number) ?? 1, updated_at: (r.updated_at as string) ?? null, updated_by: (r.updated_by as string) ?? null,
+    version: (r.version as number) ?? 1, sort: (r.sort as number) ?? 0,
+    updated_at: (r.updated_at as string) ?? null, updated_by: (r.updated_by as string) ?? null,
   };
 }
 
@@ -142,12 +144,14 @@ export async function getSection(section: string): Promise<OrgSection | null> {
   return r.rows[0] ? rowToSection(r.rows[0]) : null;
 }
 
+// 항상-주입 섹션 전체(=injection='always' 행) — sort 우선, 동률이면 name. #335: 섹션이 곧 항상-주입의 전부(N개 관리형).
 export async function listSections(): Promise<OrgSection[]> {
   const r = await itemsPool.query(
-    `SELECT ${SECTION_COLS} FROM knowledge WHERE injection='always' AND lifecycle='active' ORDER BY name`);
+    `SELECT ${SECTION_COLS} FROM knowledge WHERE injection='always' AND lifecycle='active' ORDER BY sort, name`);
   return r.rows.map(rowToSection);
 }
 
+// 섹션 upsert(생성/편집) — injection='always' 고정, 분류 없음. 신규는 sort=말미(max+1), 기존은 sort 보존. version 증가·감사.
 export async function updateSection(
   section: string,
   body_md: string,
@@ -155,10 +159,11 @@ export async function updateSection(
   source?: string,
 ): Promise<OrgSection> {
   const before = await getSection(section);
-  // 섹션 upsert — injection='always' 고정, 분류 없음. version 증가·감사(org_content_audit, channel 미설정).
   await itemsPool.query(
-    `INSERT INTO knowledge(name, body_md, injection, provenance, lifecycle, confidence, source, version, updated_at, updated_by)
-     VALUES($1,$2,'always','authored','active',$3,$4,1,now(),$5)
+    `INSERT INTO knowledge(name, body_md, injection, provenance, lifecycle, confidence, source, sort, version, updated_at, updated_by)
+     VALUES($1,$2,'always','authored','active',$3,$4,
+       COALESCE((SELECT MAX(sort) FROM knowledge WHERE injection='always' AND lifecycle='active'),-1)+1,
+       1,now(),$5)
      ON CONFLICT (name) DO UPDATE SET
        body_md=EXCLUDED.body_md, injection='always', lifecycle='active',
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
@@ -166,6 +171,33 @@ export async function updateSection(
   const after = await getSection(section);
   await audit("org_section", section, before ? "update" : "insert", before, after, actor, source);
   return after!;
+}
+
+// 섹션 삭제 — 행 제거(감사 스냅샷 before 보존, content_restore 복원가능). 섹션은 카테고리·프로젝트 링크가 없어 CASCADE 영향 없음.
+export async function deleteSection(section: string, actor?: string, source?: string): Promise<boolean> {
+  const before = await getSection(section);
+  if (!before) return false;
+  await itemsPool.query(`DELETE FROM knowledge WHERE name=$1 AND injection='always'`, [section]);
+  await audit("org_section", section, "delete", before, null, actor, source);
+  return true;
+}
+
+// 섹션 이름 충돌 검사 — 같은 name 이 이미 '일반 지식'(injection!='always')이면 섹션화 시 그 지식을 덮어쓸 위험 → 차단용.
+//  반환: 'section'(이미 섹션)·'knowledge'(일반 지식 충돌)·null(미사용).
+export async function sectionNameInUse(name: string): Promise<"section" | "knowledge" | null> {
+  const r = await itemsPool.query(`SELECT injection FROM knowledge WHERE name=$1`, [name]);
+  if (!r.rows[0]) return null;
+  return r.rows[0].injection === "always" ? "section" : "knowledge";
+}
+
+// 섹션 주입 순서 일괄 설정 — orderedNames 순서대로 sort=0,1,2…(=조립 순서). 목록에 없는 섹션은 그대로(뒤로 밀림).
+export async function setSectionsOrder(orderedNames: string[], actor?: string, source?: string): Promise<void> {
+  for (let i = 0; i < orderedNames.length; i++) {
+    await itemsPool.query(
+      `UPDATE knowledge SET sort=$2, updated_at=now() WHERE name=$1 AND injection='always' AND lifecycle='active'`,
+      [orderedNames[i], i]);
+  }
+  await audit("org_section", null, "reorder", null, { order: orderedNames }, actor, source);
 }
 
 // ── org_member ──
