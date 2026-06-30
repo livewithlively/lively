@@ -23,7 +23,7 @@ function el(tag: string, attrs?: any, ...kids: any[]): any {
 }
 function sv(name: string, attrs?: any, ...kids: any[]): any {
   const n: any = document.createElementNS(SVG_NS, name);
-  if (attrs) for (const [k, v] of Object.entries<any>(attrs)) { if (v != null) n.setAttribute(k, v); }
+  if (attrs) for (const [k, v] of Object.entries<any>(attrs)) { if (v == null) continue; if (k === 'text') n.textContent = v; else n.setAttribute(k, v); }
   for (const c of kids.flat(Infinity)) { if (c != null) n.append((c as any).nodeType ? c : document.createTextNode(String(c))); }
   return n;
 }
