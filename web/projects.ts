@@ -2009,10 +2009,10 @@ function projectBodySection(id, p, reload) {
   return card;
 }
 
-// ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245·#317). ──
-//  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker 도 추천-우선 단일 픽커)
-//  ② '왜 다나' 배너(→ #/learn) ③ 액션은 [지식 찾기]+[직접 작성] 2개로 정리(선택 마비 완화) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
-//  직접 작성은 새 작성 페이지(#/knowledge/new?project=&relation=)로 이동, 연결 기본 채움. 변경 후 v6 상세 GET 으로 재조회해 재페인트.
+// ── '연결된 지식' 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」 구조를 한 화면에(#245·#317). ──
+//  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker = 추천-우선 단일 픽커)
+//  ② '왜 다나' 배너(→ #/learn) ③ 액션은 섹션 헤더 우상단 단일 버튼 [＋ 지식 연결](관계는 픽커 라디오, 직접 작성도 픽커 안) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
+//  변경 후 v6 상세 GET 으로 재조회해 재페인트.
 function projectKnowledgeSection(id, p, reload) {
   const knName = (k) => k.name || k.knowledge_name;
   let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
@@ -2020,7 +2020,11 @@ function projectKnowledgeSection(id, p, reload) {
   let remeasure: any = null;  // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
 
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
-  card.append(el('div', { class: 'card-head' }, el('h3', { text: '지식 흐름' })));
+  // 섹션 액션 — 칼럼별 버튼 대신 우상단 단일 버튼 하나(#317). 관계(필요/산출)는 픽커 라디오에서 고른다.
+  const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
+    title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
+    onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '연결된 지식' }), knAddBtn));
 
   const reqList = el('div', { class: 'pjk-list' });
   const prodList = el('div', { class: 'pjk-list' });
@@ -2071,7 +2075,7 @@ function projectKnowledgeSection(id, p, reload) {
     if (cur.required.length) return;  // 그 사이 연결됐으면 중단(레이스).
     if (!recs.length) {
       boxEl.replaceChildren(el('div', { class: 'pjk-empty' },
-        '아직 연결된 필요지식이 없어요. ', el('b', { text: '[✨ 지식 찾기]' }), ' 로 시작하세요 — 찾는 게 없으면 거기서 직접 작성도 됩니다.'));
+        '아직 연결된 필요지식이 없어요. ', el('b', { text: '[＋ 지식 연결]' }), ' 로 시작하세요 — 찾는 게 없으면 거기서 직접 작성도 됩니다.'));
       return;
     }
     boxEl.replaceChildren(el('div', { class: 'pjk-rec' },
@@ -2114,26 +2118,17 @@ function projectKnowledgeSection(id, p, reload) {
     repaint();
   }
 
-  // 액션 — 각 박스 헤더 우상단. 동급 버튼 3개(선택 마비)를 2개로 정리(#317): [지식 찾기](추천-우선 단일 픽커) + [직접 작성].
-  //  '직접 작성'은 모달이 아니라 새 작성 페이지로 이동하며 이 프로젝트의 필요/산출 연결을 기본 채운다.
-  const mkActs = (relation) => {
-    const acts = el('div', { class: 'pjk-acts' });
-    acts.append(
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
-        text: relation === 'required' ? '✨ 지식 찾기' : '＋ 지식 찾기', title: '관련 지식을 추천받고 검색해 연결 (찾는 게 없으면 픽커에서 직접 작성)',
-        onclick: () => openKnowledgePicker(id, relation, cur[relation].map(knName), refresh) }));
-    return acts;
-  };
+  // (지식 연결 액션은 칼럼별이 아니라 섹션 헤더 우상단 단일 버튼 — 위 knAddBtn. #317)
 
   // 가운데 노드 — '이 프로젝트' 문구만(이름·상태 제거·박스 축소 #258). 좌우 화살표로 필요→프로젝트→산출 흐름을 표현.
   const node = el('div', { class: 'pjk-node' },
     el('div', { class: 'pjk-node-label', text: '이 프로젝트' }));
 
   const reqCol = el('div', { class: 'pjk-col pjk-col-req' },
-    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount, mkActs('required')),
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '필요 지식' }), reqCount),
     reqList);
   const prodCol = el('div', { class: 'pjk-col pjk-col-prod' },
-    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount, mkActs('produced')),
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '산출 지식' }), prodCount),
     prodList);
 
   const flow = el('div', { class: 'pjk-flow' },
