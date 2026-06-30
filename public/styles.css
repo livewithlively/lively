@@ -1022,16 +1022,22 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kn-cat-chip { color: var(--ink-sub); background: var(--bg-tint); }
 .kn-cat-empty { font-size: 13px; color: var(--muted-2); margin: 4px 0 2px; }
 
-/* ── #290 연결된 지식 — 방향(포워드 →/백링크 ←) 그룹 + 관계 pill 칩. 카드 없음. ── */
+/* ── #290 연결된 지식 — 방향(포워드 →/백링크 ←) 그룹 + 컴팩트 리스트(제목 한 줄 전체폭, 옵시디언식). 카드 없음. ── */
 .kn-links { margin: 4px 0 2px; }
-.kn-links-body { display: flex; flex-direction: column; gap: 11px; margin: 4px 0 2px; }
-.kn-linkdir { display: flex; flex-direction: column; gap: 6px; }
+.kn-links-body { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 2px; }
+.kn-linkdir { display: flex; flex-direction: column; gap: 3px; }
 .kn-linkdir-head { font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
-.kn-linkchips { display: flex; flex-wrap: wrap; gap: 7px; }
-.kn-linkchip { gap: 5px; padding-left: 5px; }
+.kn-linkrows { display: flex; flex-direction: column; }
+.kn-linkrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 6px; border-radius: 6px; text-decoration: none; color: var(--ink); }
+.kn-linkrow:hover { background: var(--bg-tint); }
+.kn-linkrow-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 1.5; }
+.kn-linkrow:hover .kn-linkrow-title { color: var(--blue); }
 .kn-link-rel { flex: none; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 5px; color: var(--blue-deep); background: var(--bg-punch); letter-spacing: -.2px; }
 .kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: #FCF1EF; }
-.kn-source-chip { color: var(--ink-sub); background: var(--bg-tint-2); }
+.kn-link-rel.kn-link-source { color: var(--ink-sub); background: var(--bg-tint-2); }
+.kn-linkrow-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s; }
+.kn-linkrow:hover .kn-linkrow-x { opacity: 1; }
+.kn-linkrow-x:hover { background: #FDECEC; color: #D6453C; }
 
 /* ── 위키 ↔ 프로젝트 연결(#255·#256·#257) — 연결된 프로젝트 칩(필요/산출) + 선택 피커. ── */
 .kn-projlinks { margin: 4px 0 2px; }
