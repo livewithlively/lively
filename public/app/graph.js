@@ -728,20 +728,18 @@ function wire() {
     window.addEventListener('resize', () => { clearTimeout(rT); rT = window.setTimeout(paint, 80); });
 }
 function openDetail(name) {
-    const hash = '#/k/' + encodeURIComponent(name);
+    // 새 탭에서 지식 상세를 연다 — 아틀라스 창은 그대로 유지. 안정적 탭 이름으로 재클릭 시 같은 탭을 갱신(탭이 쌓이지 않음).
+    let url = '#/k/' + encodeURIComponent(name);
     try {
-        if (window.opener && !window.opener.closed) {
-            window.opener.location.hash = hash;
-            window.opener.focus();
-            return;
+        url = new URL('.', location.href).href + url;
+    }
+    catch (_) { /* 상대경로 폴백 */ }
+    const w = window.open(url, 'lively-knowledge');
+    if (w)
+        try {
+            w.focus();
         }
-    }
-    catch (_) { /* cross-origin/closed */ }
-    try {
-        const dir = new URL('.', location.href).href;
-        window.open(dir + hash, '_blank');
-    }
-    catch (_) { /* noop */ }
+        catch (_) { /* noop */ }
 }
 // ── 기하 유틸 ──
 function convexHull(nodes) {

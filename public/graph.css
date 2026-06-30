@@ -39,8 +39,8 @@ body {
 
 /* 그래티큘 — 좌표 격자(해도 느낌). 줌과 무관하게 가는 선, 너무 촘촘하면 JS가 페이드. */
 .grid { transition: opacity .2s ease; }
-.grid-l { stroke: rgba(var(--atlas-grid), 0.045); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.grid-major { stroke: rgba(var(--atlas-grid), 0.085); }
+.grid-l { stroke: rgba(var(--atlas-grid), 0.08); stroke-width: 1.3; vector-effect: non-scaling-stroke; }
+.grid-major { stroke: rgba(var(--atlas-grid), 0.16); stroke-width: 1.6; }
 
 /* 영역(territory) — 카테고리 경계 블롭 */
 .terr { transition: opacity .2s ease; }
@@ -48,7 +48,7 @@ body {
 .terr-halo { fill: none; stroke-linejoin: round; }
 
 /* 링크 — 줌과 무관하게 가는 선 유지(non-scaling-stroke) */
-.lk { stroke: rgba(148, 163, 184, 0.32); stroke-width: 1.1; vector-effect: non-scaling-stroke; transition: stroke .15s, stroke-width .15s; }
+.lk { stroke: rgba(165, 180, 200, 0.45); stroke-width: 1.3; vector-effect: non-scaling-stroke; transition: stroke .15s, stroke-width .15s; }
 .lk.hot { stroke: var(--lk-hot, #cdd6e6); stroke-width: 2; }
 
 /* 노드 — 점은 화면 기준 크기(JS), 외곽 헤일로는 줌과 무관하게 일정(non-scaling-stroke) */
@@ -104,19 +104,25 @@ body {
 
 .atlas-search { position: relative; display: flex; align-items: center; }
 .atlas-search .mag {
-  position: absolute; left: 11px; font-size: 13px; color: var(--atlas-ink-faint); pointer-events: none;
+  position: absolute; left: 11px; font-size: 13px; color: var(--atlas-ink-dim); pointer-events: none;
 }
 .atlas-search input {
   width: 230px; max-width: 42vw;
   padding: 8px 12px 8px 30px;
-  background: var(--atlas-panel); color: var(--atlas-ink);
-  border: 1px solid var(--atlas-panel-brd); border-radius: 10px;
+  background: rgba(26, 36, 53, 0.92); color: var(--atlas-ink);
+  border: 1px solid rgba(148, 163, 184, 0.34); border-radius: 10px;
   font: inherit; font-size: 13px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.4);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  transition: border-color .15s, width .2s;
+  transition: border-color .15s, box-shadow .15s, background .15s, width .2s;
 }
-.atlas-search input::placeholder { color: var(--atlas-ink-faint); }
-.atlas-search input:focus { outline: none; border-color: var(--atlas-line-2); width: 280px; }
+.atlas-search input::placeholder { color: var(--atlas-ink-dim); }
+.atlas-search input:focus {
+  outline: none; width: 280px;
+  background: rgba(30, 41, 60, 0.96);
+  border-color: rgba(var(--atlas-grid), 0.6);
+  box-shadow: 0 0 0 3px rgba(var(--atlas-grid), 0.12), 0 2px 14px rgba(0, 0, 0, 0.4);
+}
 .atlas-search .clr {
   position: absolute; right: 7px; border: none; background: none; cursor: pointer;
   color: var(--atlas-ink-faint); font-size: 14px; padding: 4px; line-height: 1; border-radius: 6px;
