@@ -41,13 +41,13 @@ body {
 .terr-fill { stroke-linejoin: round; }
 .terr-halo { fill: none; stroke-linejoin: round; }
 
-/* 링크 */
-.lk { stroke: rgba(148, 163, 184, 0.32); stroke-width: 1.1; transition: stroke .15s, stroke-width .15s; }
+/* 링크 — 줌과 무관하게 가는 선 유지(non-scaling-stroke) */
+.lk { stroke: rgba(148, 163, 184, 0.32); stroke-width: 1.1; vector-effect: non-scaling-stroke; transition: stroke .15s, stroke-width .15s; }
 .lk.hot { stroke: var(--lk-hot, #cdd6e6); stroke-width: 2; }
 
-/* 노드 */
+/* 노드 — 점은 화면 기준 크기(JS), 외곽 헤일로는 줌과 무관하게 일정(non-scaling-stroke) */
 .nd { cursor: pointer; }
-.nd-dot { stroke: var(--atlas-bg); stroke-width: 1.6; transition: r .12s ease; }
+.nd-dot { stroke: var(--atlas-bg); stroke-width: 1.6; vector-effect: non-scaling-stroke; transition: r .12s ease; }
 .nd.dim { opacity: .18; }
 .nd.hot .nd-dot { stroke: #fff; stroke-width: 2; }
 
