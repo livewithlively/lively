@@ -143,7 +143,7 @@ async function embedKnowledgeBestEffort(name: string, fields: { title?: string |
 
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
-  lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean;
+  lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean; type?: string;
 }
 
 export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeRow[]> {
@@ -161,6 +161,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   const wh: string[] = [];
   if (f.injection) { params.push(f.injection); wh.push(`k.injection=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
+  if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
   if (f.lifecycle) { params.push(f.lifecycle); wh.push(`k.lifecycle=$${params.length}`); }
   else wh.push(`k.lifecycle='active'`);
