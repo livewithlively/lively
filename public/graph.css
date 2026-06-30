@@ -33,8 +33,14 @@ body {
 #atlas-root { position: fixed; inset: 0; }
 
 /* ── 스테이지(SVG 호스트) ── */
-.atlas-stage { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+/*  드래그 팬 중 네이티브 텍스트 선택·요소 드래그(크롬/윈도우에서 ✕ no-drop 커서로 팬이 멈추던 버그) 차단. */
+.atlas-stage {
+  position: absolute; inset: 0; touch-action: none; cursor: grab;
+  user-select: none; -webkit-user-select: none; -ms-user-select: none;
+  -webkit-user-drag: none; -webkit-touch-callout: none;
+}
 .atlas-stage.dragging { cursor: grabbing; }
+.atlas-stage svg, .atlas-stage svg * { -webkit-user-drag: none; user-select: none; }
 .atlas-stage svg { display: block; width: 100%; height: 100%; }
 
 /* 그래티큘 — 좌표 격자(해도 느낌). 줌과 무관하게 가는 선, 너무 촘촘하면 JS가 페이드. */
