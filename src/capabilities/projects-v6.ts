@@ -409,8 +409,9 @@ const projectLinkKnowledgeV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    if (input.unlink) { await unlinkProjectKnowledge(input.id, input.name, input.relation, writeCtx); return { unlinked: true }; }
+    if (input.unlink) { await unlinkProjectKnowledge(input.id, input.name, input.relation, writeCtx); await regenAgents(input.id); return { unlinked: true }; }
     await linkProjectKnowledge(input.id, input.name, input.relation, writeCtx);
+    await regenAgents(input.id);  // 필요지식 섹션이 AGENTS.md 에 반영되도록 재생성(#317).
     return { linked: true };
   },
 };
