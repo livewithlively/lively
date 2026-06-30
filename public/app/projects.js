@@ -2270,10 +2270,10 @@ function projectBodySection(id, p, reload) {
     render();
     return card;
 }
-// ── 지식 흐름 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」의 구조를 한 화면에 보여준다(#245·#317). ──
-//  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker 도 추천-우선 단일 픽커)
-//  ② '왜 다나' 배너(→ #/learn) ③ 액션은 [지식 찾기]+[직접 작성] 2개로 정리(선택 마비 완화) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
-//  직접 작성은 새 작성 페이지(#/knowledge/new?project=&relation=)로 이동, 연결 기본 채움. 변경 후 v6 상세 GET 으로 재조회해 재페인트.
+// ── '연결된 지식' 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」 구조를 한 화면에(#245·#317). ──
+//  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker = 추천-우선 단일 픽커)
+//  ② '왜 다나' 배너(→ #/learn) ③ 액션은 섹션 헤더 우상단 단일 버튼 [＋ 지식 연결](관계는 픽커 라디오, 직접 작성도 픽커 안) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
+//  변경 후 v6 상세 GET 으로 재조회해 재페인트.
 function projectKnowledgeSection(id, p, reload) {
     const knName = (k) => k.name || k.knowledge_name;
     let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
@@ -3470,7 +3470,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
         const titleEl = isRec
             ? el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' }, el('span', { text: m.title || m.name }), tags)
             : el('div', { class: 'row-title', text: m.title || m.name });
-        return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, titleEl, el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
+        return el('div', { class: 'ps-kn-pick-row' }, el('a', { class: 'ps-kn-pick-main', href: '#/k/' + encodeURIComponent(m.name), target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' }, titleEl, el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })), addBtn);
     }
     async function loadRecs() {
         recHead.style.display = '';

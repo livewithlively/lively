@@ -2999,7 +2999,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
       ? el('div', { class: 'row-title', style: 'display:flex; justify-content:space-between; gap:8px; align-items:baseline;' }, el('span', { text: m.title || m.name }), tags)
       : el('div', { class: 'row-title', text: m.title || m.name });
     return el('div', { class: 'ps-kn-pick-row' },
-      el('div', { class: 'ps-kn-pick-main' }, titleEl,
+      el('a', { class: 'ps-kn-pick-main', href: '#/k/' + encodeURIComponent(m.name), target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' }, titleEl,
         el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })),
       addBtn);
   }
