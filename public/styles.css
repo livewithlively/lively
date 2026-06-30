@@ -1021,6 +1021,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kn-cat-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 2px; }
 .kn-cat-chip { color: var(--ink-sub); background: var(--bg-tint); }
 .kn-cat-empty { font-size: 13px; color: var(--muted-2); margin: 4px 0 2px; }
+/* 카테고리를 메타데이터 셀로 편입(#290) — 단독 섹션 마진 제거, pill만 2px 위로 정렬. */
+.kn-cat-inmeta { margin: 2px 0 0; gap: 6px; }
+.umeta-empty { color: var(--muted-2); }
 
 /* ── #290 연결된 지식 — 방향(포워드 →/백링크 ←) 그룹 + 컴팩트 리스트(제목 한 줄 전체폭, 옵시디언식). 카드 없음. ── */
 .kn-links { margin: 4px 0 2px; }
