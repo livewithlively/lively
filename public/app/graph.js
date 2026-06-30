@@ -635,9 +635,12 @@ function wire() {
     let mode = '', sx = 0, sy = 0, moved = 0, panTx = 0, panTy = 0, downNode = null;
     const findNode = (t) => { const g = t.closest && t.closest('.nd'); if (!g)
         return null; return NODES.find((n) => n.elNd === g) || null; };
+    // 네이티브 드래그앤드롭(✕ no-drop 커서로 팬이 멈추던 버그) 차단.
+    stage.addEventListener('dragstart', (e) => e.preventDefault());
     stage.addEventListener('pointerdown', (e) => {
         if (e.button !== 0)
             return;
+        e.preventDefault(); // 네이티브 텍스트 선택·드래그 시작 억제 → 항상 팬으로
         const r = stage.getBoundingClientRect();
         sx = e.clientX - r.left;
         sy = e.clientY - r.top;
