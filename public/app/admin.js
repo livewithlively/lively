@@ -37,6 +37,8 @@ const ADMIN_SECTIONS = [
     // ④ 연결·데이터 (고급) — AI가 무엇에 닿나(도구·MCP·DB·레포) + 외부 호출/DB 안전범위 + 커스텀 훅(코드).
     //  훅 개요·런타임 토글·주입 미리보기는 '세션 주입 지도'로 흡수(2026-06-26). 여기엔 연결/데이터/안전범위와 코드 훅만 남는다.
     { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
+    // MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지(mcp_call_log 집계). 읽기 전용 대시보드(admin).
+    { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
     { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
     { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
     // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
@@ -52,7 +54,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions']; // admin 권한 전용(쓰기/인프라)
+const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -200,6 +202,8 @@ function adminRowMeta(key, data) {
         const t = (data.tools || []).filter((x) => x.kind !== 'builtin');
         return t.length ? t.length + '개 툴' : '기본';
     }
+    if (key === 'tool-usage')
+        return '하네스 MCP 호출 빈도·인자';
     return '';
 }
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -283,6 +287,8 @@ function renderAdminDetail(detail, sel, data) {
         return customHookEditor(detail, data);
     if (sel === 'tools')
         return toolsEditor(detail, data);
+    if (sel === 'tool-usage')
+        return toolUsagePanel(detail);
     if (sel === 'mcp')
         return mcpEditor(detail, data);
     if (sel === 'db-sources')
@@ -295,6 +301,156 @@ function renderAdminDetail(detail, sel, data) {
         return managedSessionsPanel(detail, data);
     if (sel === 'deploy')
         return deployPanel(detail, data);
+}
+// ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
+//  읽기 전용 대시보드(admin). 백엔드=/api/ui/tool-usage(src/capabilities/tool-usage.ts → mcp_call_log 집계).
+//  "직접/LLM 쿼리"는 db_query 로 mcp_call_log 를 SELECT(이 화면=사람용 집계 편의 표면). 새 서브탭일 뿐 기존 도구 화면 불변.
+const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '' };
+const TU_WINDOW_LABELS = { '1h': '최근 1시간', '24h': '최근 24시간', '7d': '최근 7일', '30d': '최근 30일', '90d': '최근 90일', 'all': '전체 기간' };
+// 스타일 1회 주입(테마 토큰 사용 → 라이트/다크 자동 적응). innerHTML 없음 — textContent 로만 CSS 삽입(보안 불변식 준수).
+function tuEnsureStyles() {
+    if (document.getElementById('tu-styles'))
+        return;
+    document.head.appendChild(el('style', { id: 'tu-styles', text: `
+.tu-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 18px}
+.tu-field{display:flex;flex-direction:column;gap:4px}
+.tu-field>label{font-size:11px;font-weight:700;color:var(--muted)}
+.tu-sel,.tu-inp{padding:6px 9px;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+.tu-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.tu-stat{flex:1 1 120px;min-width:104px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--bg-tint)}
+.tu-stat b{display:block;font-size:23px;font-weight:800;line-height:1.15;color:var(--ink);font-variant-numeric:tabular-nums}
+.tu-stat span{font-size:11.5px;color:var(--ink-sub)}
+.tu-stat.tu-bad b{color:var(--coral)}
+.tu-sub{font-weight:800;font-size:13px;color:var(--ink);margin:22px 0 9px}
+.tu-days{display:flex;align-items:flex-end;gap:4px;height:72px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
+.tu-day{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:6px}
+.tu-day i{width:100%;max-width:28px;background:var(--blue);border-radius:3px 3px 0 0;min-height:2px;display:block}
+.tu-day i.tu-allerr{background:var(--coral)}
+.tu-daylabels{display:flex;gap:4px;margin-top:5px}
+.tu-daylabels span{flex:1 1 0;text-align:center;font-size:9.5px;color:var(--muted);min-width:6px;overflow:hidden}
+.tu-table{width:100%;border-collapse:collapse;font-size:13px}
+.tu-table th{text-align:left;padding:6px 9px;font-size:11px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line)}
+.tu-table th.tu-num{text-align:right}
+.tu-table td{padding:6px 9px;border-bottom:1px solid var(--line);color:var(--ink)}
+.tu-table td.tu-num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-sub);white-space:nowrap}
+.tu-table tr:hover td{background:var(--bg-tint)}
+.tu-namecell{position:relative;min-width:170px}
+.tu-bar{position:absolute;left:0;top:4px;bottom:4px;background:var(--bg-tint-2);border-radius:4px;z-index:0}
+.tu-namecell .tu-name{position:relative;z-index:1}
+.tu-harness{display:flex;gap:8px;flex-wrap:wrap}
+.tu-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--ink);background:var(--bg-tint)}
+.tu-chip b{font-variant-numeric:tabular-nums}
+.tu-chip em{color:var(--coral);font-style:normal;font-size:11px}
+.tu-calls{margin-top:4px}
+.tu-call{border-bottom:1px solid var(--line);padding:7px 4px}
+.tu-call>summary{display:flex;gap:11px;align-items:center;cursor:pointer;list-style:none}
+.tu-call>summary::-webkit-details-marker{display:none}
+.tu-call>summary:hover{background:var(--bg-tint)}
+.tu-ctime{color:var(--muted);font-size:11.5px;min-width:64px}
+.tu-cactor{color:var(--ink-sub);font-size:12px;margin-left:auto}
+.tu-cdur{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.tu-cbad{color:var(--coral);font-size:11px;font-weight:700}
+.tu-args{background:var(--bg-tint);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;color:var(--ink);overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:7px 0 2px}
+.tu-empty{color:var(--muted);font-size:13px;padding:18px 4px}
+` }));
+}
+function tuPretty(v) {
+    if (v == null)
+        return '{}';
+    try {
+        return JSON.stringify(v, null, 2);
+    }
+    catch {
+        return String(v);
+    }
+}
+async function toolUsagePanel(detail) {
+    tuEnsureStyles();
+    const reload = () => toolUsagePanel(detail);
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('호출 통계를 불러오는 중')));
+    const qs = new URLSearchParams({ window: TOOL_USAGE_STATE.window });
+    if (TOOL_USAGE_STATE.harness)
+        qs.set('harness', TOOL_USAGE_STATE.harness);
+    if (TOOL_USAGE_STATE.tool)
+        qs.set('tool', TOOL_USAGE_STATE.tool);
+    let r;
+    try {
+        r = await api('/api/ui/tool-usage?' + qs.toString());
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '호출 통계를 불러오지 못했습니다')));
+        return;
+    }
+    const sum = r.summary || {};
+    const byTool = r.byTool || [];
+    const byHarness = r.byHarness || [];
+    const byDay = (r.byDay || []).slice().reverse(); // 서버는 최신→과거 정렬 → 그래프는 과거→최신으로
+    const recent = r.recent || [];
+    // ── 컨트롤(기간·하네스·툴 필터) ──
+    const winSel = el('select', { class: 'tu-sel' });
+    for (const w of (r.windows || Object.keys(TU_WINDOW_LABELS)))
+        winSel.append(el('option', { value: w, text: TU_WINDOW_LABELS[w] || w }));
+    winSel.value = r.window || TOOL_USAGE_STATE.window;
+    winSel.onchange = () => { TOOL_USAGE_STATE.window = winSel.value; reload(); };
+    const harnessSel = el('select', { class: 'tu-sel' });
+    harnessSel.append(el('option', { value: '', text: '모든 하네스' }));
+    const harnessVals = byHarness.map((h) => h.harness).filter((h) => h && h !== '(미상)');
+    if (TOOL_USAGE_STATE.harness && !harnessVals.includes(TOOL_USAGE_STATE.harness))
+        harnessVals.push(TOOL_USAGE_STATE.harness);
+    for (const h of harnessVals)
+        harnessSel.append(el('option', { value: h, text: h }));
+    harnessSel.value = TOOL_USAGE_STATE.harness;
+    harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; reload(); };
+    const toolInp = el('input', { class: 'tu-inp', type: 'text', value: TOOL_USAGE_STATE.tool, placeholder: '툴 이름(정확히)' });
+    const applyTool = () => { const v = toolInp.value.trim(); if (v !== TOOL_USAGE_STATE.tool) {
+        TOOL_USAGE_STATE.tool = v;
+        reload();
+    } };
+    toolInp.onkeydown = (e) => { if (e.key === 'Enter')
+        applyTool(); };
+    const controls = el('div', { class: 'tu-controls' }, el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel), el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel), el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolInp), el('button', { class: 'btn btn-ghost btn-sm', text: '적용', onclick: applyTool }), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool)
+        ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; reload(); } })
+        : null);
+    // ── 요약 스탯 ──
+    const stat = (label, value, bad) => el('div', { class: 'tu-stat' + (bad ? ' tu-bad' : '') }, el('b', { text: String(value) }), el('span', { text: label }));
+    const stats = el('div', { class: 'tu-stats' }, stat('총 호출', (sum.total || 0).toLocaleString()), stat('툴 종류', sum.tools || 0), stat('하네스', sum.harnesses || 0), stat('오류', (sum.errors || 0).toLocaleString(), (sum.errors || 0) > 0), stat('마지막 호출', sum.last_at ? relTime(sum.last_at) : '—'));
+    // ── 일별 막대(KST) ──
+    let daysEl = null;
+    if (byDay.length) {
+        const maxCalls = Math.max(...byDay.map((d) => d.calls), 1);
+        const bars = el('div', { class: 'tu-days' });
+        const labels = el('div', { class: 'tu-daylabels' });
+        for (const d of byDay) {
+            const h = Math.max(2, Math.round((d.calls / maxCalls) * 100));
+            const allErr = d.calls > 0 && d.errors >= d.calls;
+            bars.append(el('div', { class: 'tu-day' }, el('i', { class: allErr ? 'tu-allerr' : '', style: 'height:' + h + '%', title: d.day + ' · ' + d.calls + '회' + (d.errors ? ' (오류 ' + d.errors + ')' : '') })));
+            labels.append(el('span', { text: String(d.day).slice(5) }));
+        }
+        daysEl = el('div', {}, el('div', { class: 'tu-sub', text: '일별 호출 (KST)' }), bars, labels);
+    }
+    // ── 툴별 표 ──
+    const maxToolCalls = Math.max(...byTool.map((t) => t.calls), 1);
+    const toolBody = el('tbody');
+    for (const t of byTool) {
+        const frac = Math.round((t.calls / maxToolCalls) * 100);
+        toolBody.append(el('tr', {}, el('td', { class: 'tu-namecell' }, el('span', { class: 'tu-bar', style: 'width:' + frac + '%' }), el('span', { class: 'tu-name mono', text: t.tool })), el('td', { class: 'tu-num', text: (t.calls || 0).toLocaleString() }), el('td', { class: 'tu-num', text: t.errors ? String(t.errors) : '–' }), el('td', { class: 'tu-num', text: t.avg_ms != null ? t.avg_ms + 'ms' : '–' }), el('td', { class: 'tu-num', text: t.max_ms != null ? t.max_ms + 'ms' : '–' }), el('td', { class: 'tu-num', text: t.last_at ? relTime(t.last_at) : '–' })));
+    }
+    const toolTable = byTool.length
+        ? el('table', { class: 'tu-table' }, el('thead', {}, el('tr', {}, el('th', { text: '툴' }), el('th', { class: 'tu-num', text: '호출' }), el('th', { class: 'tu-num', text: '오류' }), el('th', { class: 'tu-num', text: '평균' }), el('th', { class: 'tu-num', text: '최대' }), el('th', { class: 'tu-num', text: '마지막' }))), toolBody)
+        : el('div', { class: 'tu-empty', text: '이 조건에 기록된 호출이 없습니다.' });
+    // ── 하네스별 칩 ──
+    const harnessChips = el('div', { class: 'tu-harness' });
+    for (const h of byHarness)
+        harnessChips.append(el('span', { class: 'tu-chip' }, el('span', { text: h.harness }), el('b', { text: (h.calls || 0).toLocaleString() }), h.errors ? el('em', { text: '오류 ' + h.errors }) : null));
+    // ── 최근 호출(인자 펼침) ──
+    const calls = el('div', { class: 'tu-calls' });
+    if (!recent.length)
+        calls.append(el('div', { class: 'tu-empty', text: '최근 호출이 없습니다.' }));
+    for (const c of recent) {
+        calls.append(el('details', { class: 'tu-call' }, el('summary', {}, el('span', { class: 'tu-ctime', text: relTime(c.at) }), el('span', { class: 'tu-ctool mono', text: c.tool }), el('span', { class: 'dm-tag', text: c.harness || '미상' }), c.ok ? null : el('span', { class: 'tu-cbad', text: '✗ 오류' }), el('span', { class: 'tu-cdur', text: c.duration_ms != null ? c.duration_ms + 'ms' : '' }), el('span', { class: 'tu-cactor', text: c.actor || '' })), el('pre', { class: 'tu-args mono', text: tuPretty(c.args) }), c.error ? el('pre', { class: 'tu-args mono', text: '⚠ ' + c.error }) : null));
+    }
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })), el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (recent.length ? ' (' + recent.length + ')' : '') }), calls);
+    detail.replaceChildren(card);
 }
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).

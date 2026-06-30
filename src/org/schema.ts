@@ -76,6 +76,31 @@ export async function initOrgSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS org_content_audit_entity_idx ON org_content_audit(entity, entity_key);
   `);
 
+  // ── mcp_call_log — 하네스 MCP 툴 호출 전수 로그(프로젝트 #318). append-only, FK 없음(행 삭제 후에도 이력 보존). ──
+  //  적재 경로: registerTool 단일 wrap(src/server.ts instrument)이 capability·db·dynamic 3경로의 모든 tools/call 을 포착한다.
+  //   tools/list(목록 조회)는 적재 안 됨 — 실제 호출(핸들러 실행)만 1행. fire-and-forget INSERT(요청 지연 0, 실패는 무시 — fail-open).
+  //  args = redactDeep(시크릿 마스킹) + 큰 문자열 절단 + 총량 캡(src/org/tool-log.ts). 본문 같은 대형 페이로드는 잘려 들어간다.
+  //  읽는 쪽: 직접/LLM 쿼리(db_query 가 이 테이블을 SELECT) + 대시보드 집계(/api/ui/tool-usage → 관리탭 'MCP 호출 통계').
+  //  harness = 접속 신원(x-lively-harness 헤더 우선, 없으면 UA — claude-code/codex/openclaw/null). actor = 토큰 principal(userId).
+  //  ⚠ 보존정책: v1 은 무제한(소팀 볼륨 가정 — 일 수천~수만 행, 90일<1M 행은 postgres 무리 없음). 성장 시
+  //   주기 prune(예: DELETE WHERE at < now()-INTERVAL '90 days')를 별도 cron 액션으로 추가한다(현재 미구현).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_call_log(
+      id BIGSERIAL PRIMARY KEY,
+      at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      tool TEXT NOT NULL,
+      harness TEXT,
+      actor TEXT,
+      args JSONB,
+      ok BOOLEAN NOT NULL DEFAULT true,
+      error TEXT,
+      duration_ms INT,
+      source TEXT NOT NULL DEFAULT 'mcp');
+    CREATE INDEX IF NOT EXISTS mcp_call_log_at_idx ON mcp_call_log(at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_tool_at_idx ON mcp_call_log(tool, at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_harness_at_idx ON mcp_call_log(harness, at DESC);
+  `);
+
   // ── auth_token — DB 기반 bearer 토큰(정적 AUTH_TOKENS_JSON 의 핫리로드 가능 대체). ──
   // 평문 토큰은 저장하지 않는다(sha256 해시만). 발급 시 1회만 평문 노출. revoke = revoked_at 세팅
   //  → 게이트웨이 재시작 없이 즉시 무효(verifyDbToken 이 revoked_at IS NULL 만 통과).
