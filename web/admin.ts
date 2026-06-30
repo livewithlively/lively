@@ -1638,25 +1638,103 @@ function injectionMap(detail, data) {
   }
 
   // ── 블록 조립 ──
-  // 세션 시작 조각 — 최상위 2개(편집 가능한 섹션) + 가이드 템플릿 본문 안에 ${} 로 채워지는 자식 3개.
-  //  실제 순서(publish.ts): 조직 헤더(자동) → 회사 소개·규칙·성격(org-defaults) → 가이드(템플릿). 가이드 안 ${rules}(맨 위)·${categories}·${wiki}(맨 끝)는 위치를 템플릿이 정함.
-  const editBtn = (key) => jump('WIKI에서 편집 →', '#/k/' + encodeURIComponent(key));
+  // 세션 시작 조각(#335) — 항상-주입 '섹션 문서'(injection='always' 행)를 N개 관리(추가/편집/삭제/재정렬). sort 순으로 조립.
+  //  실제 순서(publish.ts): 조직 헤더(자동) → [섹션들 sort 순]. 각 섹션 본문의 ${team}/${categories}/${wiki} 는 매 세션 실데이터로 치환.
+  const guideKey = 'context-ontology-guide';
+  const SECTION_HINT = {
+    'org-defaults': '회사 배경 + 항상 지킬 규칙 + AI 말투 (회사 소개·규칙·성격)',
+    'context-ontology-guide': '⚠ LLM 이 라이블리 시스템(맥락·카테고리·프로젝트·지식) 사용법을 이해하는 핵심 문서 — 삭제·대폭수정 주의. ${categories}/${wiki} 자리표시자 골격.',
+  };
   const subPieceRow = (token, label, sub, btn) => el('div', { class: 'inj-piece inj-subpiece' },
     el('code', { class: 'inj-token', text: token }),
     el('div', { class: 'inj-piece-body' },
       el('div', { class: 'inj-piece-label', text: label }),
       sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null),
     btn || el('span', {}));
-  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 순서로 조립.',
-    momentToggle('session_preload'),
-    el('div', { class: 'inj-pieces' },
-      pieceRow('1', '회사 소개·규칙·AI 성격', '회사 배경 + 항상 지킬 규칙 + AI 말투 (섹션)', editBtn('org-defaults')),
-      pieceRow('2', '컨텍스트 온톨로지 가이드', '아래 ${ } 자리표시자를 담는 전체 골격 — 주입 위치·순서는 이 템플릿이 정함 (고급)', editBtn('context-ontology-guide')),
+
+  // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
+  function openSectionEditor(name, opts) {
+    opts = opts || {};
+    const isNew = !!opts.isNew;
+    const cur = (data.sections && data.sections[name]) || { body_md: '' };
+    const nameIn = el('input', { type: 'text', value: name || '', placeholder: '섹션 키 (소문자·숫자·하이픈, 예: company-policy)' });
+    if (!isNew) nameIn.disabled = true;
+    const ta = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문 — ${team}/${categories}/${wiki} 치환 가능' });
+    ta.value = cur.body_md || '';
+    const st = el('span', { class: 'admin-status' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+    const root = el('div', { class: 'mem-modal' },
+      isNew ? field('섹션 키', nameIn) : null,
+      name === guideKey ? el('p', { class: 'admin-hint', text: '⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.' }) : null,
+      field('본문 (markdown)', ta),
+      el('div', { class: 'admin-actions' }, saveBtn, st));
+    const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
+    saveBtn.onclick = async () => {
+      const section = (isNew ? nameIn.value : name).trim().toLowerCase();
+      if (!section) { toast('섹션 키를 입력하세요', true); return; }
+      saveBtn.disabled = true; st.textContent = '저장 중…';
+      try {
+        await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
+        toast('저장됨 — 구성원 다음 세션부터 반영'); back.remove(); await reloadSections();
+      } catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; st.textContent = ''; }
+    };
+  }
+  async function reloadSections() {
+    try { const r = await api('/api/ui/org'); if (r && r.sections) data.sections = r.sections; } catch (_) { /* 유지 */ }
+    paintSections();
+  }
+  function orderedSections() {
+    return Object.entries(data.sections || {}).map(([name, s]) => ({ name, ...(s as any) }))
+      .sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name));
+  }
+  async function moveSection(i, dir) {
+    const entries = orderedSections(); const j = i + dir;
+    if (j < 0 || j >= entries.length) return;
+    const order = entries.map((e) => e.name);
+    [order[i], order[j]] = [order[j], order[i]];
+    try { await api('/api/ui/org/sections/order', { method: 'POST', body: JSON.stringify({ order }) }); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  async function deleteSectionUi(s) {
+    const warn = s.name === guideKey ? '⚠ 시스템 가이드입니다 — 삭제하면 AI 가 라이블리 사용법(맥락·카테고리·지식 기록)을 잃습니다.\n\n' : '';
+    if (!confirm(warn + "'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다(휴지통에서 복원 가능).")) return;
+    try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제됨'); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  const sectionsWrap = el('div', { class: 'inj-pieces' });
+  function paintSections() {
+    const entries = orderedSections();
+    const rows = entries.map((s, i) => {
+      const isGuide = s.name === guideKey;
+      const acts: any[] = [];
+      if (canEdit) {
+        const up = el('button', { class: 'btn btn-ghost btn-sm', text: '▲', title: '위로' }); up.disabled = i === 0; up.onclick = () => moveSection(i, -1);
+        const down = el('button', { class: 'btn btn-ghost btn-sm', text: '▼', title: '아래로' }); down.disabled = i === entries.length - 1; down.onclick = () => moveSection(i, +1);
+        const ed = el('button', { class: 'btn btn-ghost btn-sm', text: '편집' }); ed.onclick = () => openSectionEditor(s.name, {});
+        const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제' }); del.onclick = () => deleteSectionUi(s);
+        acts.push(up, down, ed, del);
+      }
+      return el('div', { class: 'inj-piece' },
+        el('span', { class: 'inj-n', text: String(i + 1) }),
+        el('div', { class: 'inj-piece-body' },
+          el('div', { class: 'inj-piece-label' }, s.name, isGuide ? el('span', { class: 'pill', title: '시스템 가이드 — 수정·삭제 주의', text: ' ⚠ 시스템 가이드' }) : null),
+          el('div', { class: 'admin-hint inj-sub', text: SECTION_HINT[s.name] || ('v' + (s.version || 1) + ' · 갱신 ' + (s.updated_by || '—')) })),
+        el('div', { class: 'admin-actions' }, ...acts));
+    });
+    sectionsWrap.replaceChildren(
+      ...rows,
+      canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
       el('div', { class: 'inj-subpieces' },
-        el('div', { class: 'admin-hint inj-sub', text: '└ 가이드 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐:' }),
-        subPieceRow('${rules}', '항상-주입 지식', 'injection=always 로 표시한 지식 전문(규칙·페르소나) · 가이드 맨 위', jump('WIKI(always) →', '#/knowledge?injection=always')),
-        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동 생성(편집 불가)', null),
-        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) · 가이드 맨 끝', jump('WIKI 인덱스 →', '#/knowledge/pinned')))),
+        el('div', { class: 'admin-hint inj-sub', text: '└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):' }),
+        subPieceRow('${team}', '우리 팀', '보는 구성원의 팀·소유 카테고리 프리앰블 — 자동', null),
+        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
+        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge/pinned'))));
+  }
+  paintSections();
+
+  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 섹션 문서들을 sort 순으로 조립. 추가/편집/삭제/재정렬 가능.',
+    momentToggle('session_preload'),
+    sectionsWrap,
     previewExpander(),
     customList('SessionStart'));
 
@@ -1686,7 +1764,7 @@ function injectionMap(detail, data) {
 
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('세션 주입 지도', null),
-    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 각 맥락 조각의 “편집”은 그 조각의 정식 위치(규칙·소개 섹션 또는 WIKI 탭)로 이동합니다 — 여기서 새로 만드는 게 아니라 한 지도에서 전부 도달합니다.' }),
+    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
     el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
 }

@@ -873,10 +873,7 @@ export async function renderKnowledgeForm(view, params?, editName?) {
   const nameIn = el('input', { type: 'text', value: k.name || '', placeholder: '파일명 (소문자 영문·숫자·-, 비우면 제목에서 자동)' });
   if (isEdit) nameIn.disabled = true;   // 이름=식별자, 생성 후 불변
   const titleIn = el('input', { type: 'text', value: k.title || '', placeholder: '제목' });
-  const injSel = el('select', {},
-    el('option', { value: 'recalled', text: '검색 소환 (기본)' }),
-    el('option', { value: 'always', text: '항상 주입 (규칙·페르소나)' }));
-  injSel.value = k.injection || 'recalled';
+  // (#335) injection 선택 폐기 — 지식은 항상 recalled. 항상-주입은 관리탭 '세션 주입' 섹션 문서로만(편집 시 미전송 → 서버 보존).
   const provSel = el('select', {},
     el('option', { value: 'authored', text: '저작 (기본)' }),
     el('option', { value: 'observed', text: '외부 미러' }));
@@ -934,7 +931,7 @@ export async function renderKnowledgeForm(view, params?, editName?) {
     if (!typeSel.value) { toast('유형(type)을 선택하세요 (type 필수)', true); return; }
     saveBtn.disabled = true; status.textContent = '저장 중…';
     try {
-      const payload: any = { title: titleIn.value.trim() || undefined, body_md: body, injection: injSel.value, provenance: provSel.value, category: catSel.value, type: typeSel.value };
+      const payload: any = { title: titleIn.value.trim() || undefined, body_md: body, provenance: provSel.value, category: catSel.value, type: typeSel.value };
       if (isEdit) payload.name = k.name;
       else if (nameIn.value.trim()) payload.name = nameIn.value.trim();
       const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
@@ -960,7 +957,6 @@ export async function renderKnowledgeForm(view, params?, editName?) {
   const card = el('div', { class: 'card kn-create-card' },
     field('파일명', nameIn),
     field('제목', titleIn),
-    field('주입(injection)', injSel),
     field('출처(provenance)', provSel),
     field('카테고리 (필수)', catSel),
     field('유형/type (필수)', typeSel),
