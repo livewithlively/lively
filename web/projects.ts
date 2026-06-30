@@ -173,6 +173,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   //  byStatus 면 각 영역을 상태로 다시 나눔. 접어도 영역 묶음은 유지(레일의 ▶ 로 언제든 다시 펼침) — 영역 자체를 끄려면 보기→영역으로.
   const renderArea = (byStatus) => {
     const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
+    // 좌측 사이드바 카운트/표시는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만(본문 필터·그룹 헤더 visibleCount 동형).
+    const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
+    // '기타(미분류)'는 보일 게 없으면 좌측에서 숨긴다(빈 항목 노출 방지). 실제 영역은 빈 add 타깃이라 유지.
+    const sideGroups = groups.filter((g) => g.list || visCount(g.projects) > 0);
+    // 숨겨진 미분류가 선택돼 있었으면 '전체'로 되돌린다(본문이 빈 영역을 렌더하지 않게).
+    if (pjvSidebarSel.key === '__none__' && !sideGroups.some((g) => g.key === '__none__')) pjvSidebarSel.key = '__all__';
     const sel = pjvSidebarSel.key;
     const selectArea = (key) => { pjvSidebarSel.key = key; render(); };
 
@@ -216,7 +222,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         return b;
       };
       railInner.append(railDot('__all__', el('span', { class: 'pjv-side-dot all' }), '전체', sel === '__all__'));
-      for (const g of groups) {
+      for (const g of sideGroups) {
         const dot = g.list ? el('span', { class: 'pjv-side-dot', style: 'background:' + (g.list.color || 'var(--muted-2)') }) : el('span', { class: 'pjv-side-dot none' });
         railInner.append(railDot(g.key, dot, g.list ? g.list.name : '기타 (미분류)', sel === g.key));
       }
@@ -237,14 +243,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '영역 목록 접기', 'aria-label': '영역 목록 접기', text: '◀' });
     collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '영역' }), collapseBtn));
-    // 카운트는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만 집계(본문 렌더 필터·그룹 헤더 visibleCount 와 동형).
-    //  안 그러면 완료된 미분류 프로젝트가 Closed 꺼져도 사이드바에 잡혀 '유령 개수'처럼 보인다(#337 후속).
-    const navCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
-    const totalProjs = groups.reduce((n, g) => n + navCount(g.projects), 0);
+    //  완료된 미분류 프로젝트가 Closed 꺼져도 사이드바에 '유령 개수'로 잡히던 것·빈 미분류 항목 노출은 visCount/sideGroups 로 처리(위).
+    const totalProjs = groups.reduce((n, g) => n + visCount(g.projects), 0);
     navInner.append(navItem('__all__', el('span', { class: 'pjv-side-dot all' }), '전체', totalProjs, sel === '__all__'));
-    for (const g of groups) {
+    for (const g of sideGroups) {
       const dot = g.list ? el('span', { class: 'pjv-side-dot', style: 'background:' + (g.list.color || 'var(--muted-2)') }) : el('span', { class: 'pjv-side-dot none' });
-      navInner.append(navItem(g.key, dot, g.list ? g.list.name : '기타 (미분류)', navCount(g.projects), sel === g.key));
+      navInner.append(navItem(g.key, dot, g.list ? g.list.name : '기타 (미분류)', visCount(g.projects), sel === g.key));
     }
     navInner.append(el('button', { class: 'pjv-side-newlist', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload); } },
       el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 영역' })));
@@ -3761,8 +3765,10 @@ function pjvGridTemplate(fields) {
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
 function pjvProjGridTemplate(fields) {
-  const extra = (fields || []).map((f) => ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px').join(' ');
-  return 'minmax(0, 1fr) 96px 92px 112px 80px' + (extra ? ' ' + extra : '') + ' 34px';
+  // 제목 컬럼은 floor(200px) 로 보호 + 1fr 로 남은 폭 차지 — 창이 좁아져도 200px 밑으론 안 줄어든다(제목이 가장 잘 보이게).
+  // 메타 컬럼(팀원·마감·우선·세션·커스텀)은 minmax(0, Wpx) 라, 좁아지면 '제목 대신' 이쪽이 먼저 줄어든다(#339).
+  const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
+  return 'minmax(200px, 1fr) minmax(0, 96px) minmax(0, 92px) minmax(0, 112px) minmax(0, 80px)' + (extra ? ' ' + extra : '') + ' 34px';
 }
 function pjvHasFieldValue(v) {
   return !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));

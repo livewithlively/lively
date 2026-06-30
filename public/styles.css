@@ -2716,26 +2716,30 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* === 프로젝트 목록(클릭업식 리스트) === */
 /* 카드 대신 태스크 리스트 톤 재사용 + 프로젝트 전용 보강 */
 .pjv-proj-card .pjv-tgroup:first-child { margin-top: 4px; }
+/* 너비 마진 축소(#339) — 리스트보드 카드 좌우 패딩을 24→16 으로 줄여 제목에 폭을 더 준다(세로 24 유지). */
+.pjv-proj-card { padding-left: 16px; padding-right: 16px; }
+/* 창이 좁아 메타 컬럼이 minmax(0,W) 로 줄 때 셀 내용이 밖으로 새지 않게 클립 — 제목셀(.pjv-trow-title-cell)은 .pjv-tcell 이 아니라 제외됨. */
+.pjv-proj-card .pjv-tcell { overflow: hidden; }
 /* 프로젝트 행 — '박스'가 아니라 평평한 클릭업 리스트로 존재감을 살림:
    큰·굵은 제목 + 넉넉한 행 높이 + 행 사이 옅은 하이라인 + hover 틴트/좌측 액센트.
    (테두리·그림자로 행마다 박스 두르던 방식은 컬럼 정렬과 충돌·과해서 폐기.) */
-/* 세로 패딩 0(높이는 min-height 46px 로 유지) → 호버 셀 박스가 키운 행 높이를 꽉 채움. 가로 12px 는 헤더 정렬 유지. */
-.pjv-proj-card .pjv-proj-wrap > .pjv-proj-row { min-height: 46px; padding: 0 12px; border-radius: 8px; transition: background .14s ease, box-shadow .14s ease; }
+/* 세로 패딩 0(높이는 min-height 46px 로 유지) → 호버 셀 박스가 키운 행 높이를 꽉 채움. 가로 8px(#339) 는 헤더 정렬 유지. */
+.pjv-proj-card .pjv-proj-wrap > .pjv-proj-row { min-height: 46px; padding: 0 8px; border-radius: 8px; transition: background .14s ease, box-shadow .14s ease; }
 /* 행 사이 옅은 구분선(박스 아님) — 그룹 본문 안에서만, 마지막 행 제외 */
 .pjv-proj-card .pjv-tgroup-body .pjv-proj-wrap:not(:last-child) { border-bottom: 1px solid var(--line-row); }
 .pjv-proj-card .pjv-proj-row:hover { background: var(--bg-tint); box-shadow: inset 3px 0 0 var(--blue); }
 .pjv-proj-card .pjv-proj-row .pjv-trow-title.clickable { font-size: 15px; font-weight: 600; letter-spacing: -.1px; }
 /* 인라인 추가행(편집 상태)을 위 프로젝트 행과 픽셀·타이포 정확히 일치 — 좌우 패딩·행높이·글자크기·볼드·자간을 행과 동일하게,
    입력칸 내부 패딩 0 으로 제목 텍스트 시작점(캐럿+점+gap)을 행과 픽셀 단위로 맞춤. */
-.pjv-proj-card .pjv-addrow.editing { padding: 0 12px; min-height: 46px; }
+.pjv-proj-card .pjv-addrow.editing { padding: 0 8px; min-height: 46px; }
 .pjv-proj-card .pjv-addrow.editing .pjv-addrow-input { font-size: 15px; font-weight: 600; letter-spacing: -.1px; padding: 0; line-height: 1.3; }
-/* 병합 컬럼헤더 좌우 패딩을 행 콘텐츠 시작점(12px)과 맞춰 컬럼 정렬 보존 */
-.pjv-proj-card .pjv-tgroup-head-cols { padding-left: 12px; padding-right: 12px; }
-/* 프로젝트 펼침 — 그 안의 태스크 행. 프로젝트 행과 같은 좌우 패딩(12px)·그리드(pjvProjGridTemplate)라 컬럼 정렬 일치.
+/* 병합 컬럼헤더 좌우 패딩을 행 콘텐츠 시작점(8px·#339)과 맞춰 컬럼 정렬 보존 */
+.pjv-proj-card .pjv-tgroup-head-cols { padding-left: 8px; padding-right: 8px; }
+/* 프로젝트 펼침 — 그 안의 태스크 행. 프로젝트 행과 같은 좌우 패딩(8px·#339)·그리드(pjvProjGridTemplate)라 컬럼 정렬 일치.
    titleCell 의 depth*22px 들여쓰기로 중첩 표현. 펼친 영역은 아주 옅은 틴트로 묶어 보이게. */
 /* 고정 높이로 핀 — 담당자(아바타 26px) 있고 없고(아이콘 20px)에 따라 행 높이가 달라지지 않게.
    grid align-items:center 라 내용은 가운데 정렬, 행은 항상 44px. (프로젝트 행 46px 보다 살짝 작아 위계도 생김) */
-.pjv-proj-card .pjv-proj-taskrow { padding: 0 12px; height: 44px; min-height: 44px; }
+.pjv-proj-card .pjv-proj-taskrow { padding: 0 8px; height: 44px; min-height: 44px; }
 .pjv-proj-card .pjv-proj-subs { background: color-mix(in srgb, var(--bg-tint) 50%, var(--bg)); }
 .pjv-proj-card .pjv-proj-subnote { padding: 8px 12px 9px 50px; color: var(--muted-2); font-size: 12.5px; }
 .pjv-proj-when { color: var(--muted-2); font-size: 13px; }
@@ -2777,6 +2781,16 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* 태스크는 조금, 프로젝트 목록은 좀 많이 크게 — 프로젝트 행은 더 큰 버튼·아이콘. */
 .pjv-proj-row .pjv-row-act { width: 30px; height: 28px; border-radius: 7px; }
 .pjv-proj-row .pjv-act-ic { width: 19px; height: 19px; }
+/* 제목 우측 호버 액션을 '절대배치'로 빼 제목 폭을 상시 점유하지 않게(#339) — 숨김(opacity 0) 상태에서도 ~112px 를 먹어 제목을 짓누르던 문제 제거.
+   평소: 클릭 통과(pointer-events:none)라 제목 어디를 눌러도 상세로 이동. 행 호버 시에만 우측에 살짝 겹쳐 뜨고 버튼만 클릭 가능.
+   배경 그라데이션(투명→호버틴트)으로 제목 글자 위에서도 아이콘이 또렷하게 보인다(클릭업식). */
+.pjv-proj-row .pjv-trow-title-cell { position: relative; }
+.pjv-proj-row .pjv-row-actions {
+  position: absolute; right: 0; top: 0; bottom: 0; margin: 0; padding-left: 30px;
+  background: linear-gradient(to right, transparent, var(--bg-tint) 24px);
+  pointer-events: none;
+}
+.pjv-proj-row:hover .pjv-row-actions .pjv-row-act { pointer-events: auto; }
 /* 개수 칩 — 숫자 왼쪽에 하위태스크 아이콘(프로젝트 행·태스크 행·펼침 태스크 행 공통). */
 .pjv-subcount-ico { display: inline-flex; align-items: center; gap: 3px; }
 .pjv-subcount-ico .pjv-subtask-ic { width: 12px; height: 12px; flex: none; }
