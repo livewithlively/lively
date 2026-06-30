@@ -1022,15 +1022,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kn-cat-chip { color: var(--ink-sub); background: var(--bg-tint); }
 .kn-cat-empty { font-size: 13px; color: var(--muted-2); margin: 4px 0 2px; }
 
-/* ── #290 연결된 지식 패널 — 본문 아래, 다른 섹션과 구분되는 틴트 카드 + 비개발자 라벨 ── */
-.kn-links { margin: 22px 0 6px; padding: 12px 14px 14px; background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 12px; }
-.kn-links > .sec-label { margin: 2px 0 6px; }
-.kn-links-list { display: flex; flex-direction: column; gap: 2px; }
-.kn-links-sub { font-size: 11px; font-weight: 700; color: var(--muted-head); letter-spacing: .03em; margin: 12px 0 3px; }
-.kn-links-sub:first-child { margin-top: 2px; }
-.kn-link-row { padding: 5px 8px; border-radius: 8px; }
-.kn-link-row:hover { background: var(--bg); }
-.kn-link-rel { flex: none; color: var(--blue-deep); background: var(--bg-punch); border-color: var(--line-net-2); }
+/* ── #290 연결된 지식 — '연결된 프로젝트'와 같은 패턴(카드 없음, 관계 pill + 칩) ── */
+.kn-links { margin: 4px 0 2px; }
+.kn-link-rel { color: var(--blue-deep); background: var(--bg-punch); border: 1px solid var(--line-net-2); }
+.kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: #FCF1EF; border-color: #F3D6D1; }
 .kn-source-chip { color: var(--ink-sub); background: var(--bg-tint-2); }
 
 /* ── 위키 ↔ 프로젝트 연결(#255·#256·#257) — 연결된 프로젝트 칩(필요/산출) + 선택 피커. ── */
