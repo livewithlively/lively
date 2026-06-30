@@ -294,7 +294,7 @@ function renderAdminDetail(detail, sel, data) {
 // ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
 //  읽기 전용 대시보드(admin). 백엔드=/api/ui/tool-usage(src/capabilities/tool-usage.ts → mcp_call_log 집계).
 //  "직접/LLM 쿼리"는 db_query 로 mcp_call_log 를 SELECT(이 화면=사람용 집계 편의 표면). 새 서브탭일 뿐 기존 도구 화면 불변.
-const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '' };
+const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '', errorsOnly: false, page: 1 };
 const TU_WINDOW_LABELS = { '1h': '최근 1시간', '24h': '최근 24시간', '7d': '최근 7일', '30d': '최근 30일', '90d': '최근 90일', 'all': '전체 기간' };
 
 // 스타일 1회 주입(테마 토큰 사용 → 라이트/다크 자동 적응). innerHTML 없음 — textContent 로만 CSS 삽입(보안 불변식 준수).
@@ -341,7 +341,13 @@ function tuEnsureStyles() {
 .tu-cbad{color:var(--coral);font-size:11px;font-weight:700}
 .tu-args{background:var(--bg-tint);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;color:var(--ink);overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:7px 0 2px}
 .tu-empty{color:var(--muted);font-size:13px;padding:18px 4px}
-.tu-more{margin-top:12px;display:flex;justify-content:center}
+.tu-pager{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.tu-pg{min-width:30px;height:30px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
+.tu-pg:hover{background:var(--bg-tint)}
+.tu-pg-on{background:var(--blue);border-color:var(--blue);color:#fff;cursor:default}
+.tu-pg-off{opacity:.38;cursor:default}
+.tu-pg-gap{color:var(--muted);padding:0 2px}
+.tu-pg-info{color:var(--muted);font-size:11.5px;margin-left:8px}
 ` }));
 }
 
@@ -350,16 +356,36 @@ function tuPretty(v) {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
+// 번호 페이지네이션용 페이지 목록(생략 …). 적으면 전부, 많으면 1 … cur-1 cur cur+1 … total.
+function tuPageNumbers(cur, total) {
+  if (total <= 7) { const a: any[] = []; for (let i = 1; i <= total; i++) a.push(i); return a; }
+  const out: any[] = [1];
+  const lo = Math.max(2, cur - 1); const hi = Math.min(total - 1, cur + 1);
+  if (lo > 2) out.push('…');
+  for (let i = lo; i <= hi; i++) out.push(i);
+  if (hi < total - 1) out.push('…');
+  out.push(total);
+  return out;
+}
+
 async function toolUsagePanel(detail) {
   tuEnsureStyles();
   const reload = () => toolUsagePanel(detail);
+  const PAGE_SIZE = 50;
+  // 현재 필터 → 쿼리스트링(+추가 파라미터). 페이지 이동·CSV·재조회가 공유.
+  const filterQs = (extra?) => {
+    const q = new URLSearchParams({ window: TOOL_USAGE_STATE.window });
+    if (TOOL_USAGE_STATE.harness) q.set('harness', TOOL_USAGE_STATE.harness);
+    if (TOOL_USAGE_STATE.tool) q.set('tool', TOOL_USAGE_STATE.tool);
+    if (TOOL_USAGE_STATE.errorsOnly) q.set('errors', '1');
+    for (const k in (extra || {})) q.set(k, String(extra[k]));
+    return q.toString();
+  };
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('호출 통계를 불러오는 중')));
 
-  const qs = new URLSearchParams({ window: TOOL_USAGE_STATE.window });
-  if (TOOL_USAGE_STATE.harness) qs.set('harness', TOOL_USAGE_STATE.harness);
-  if (TOOL_USAGE_STATE.tool) qs.set('tool', TOOL_USAGE_STATE.tool);
+  const page = Math.max(1, TOOL_USAGE_STATE.page || 1);
   let r;
-  try { r = await api('/api/ui/tool-usage?' + qs.toString()); }
+  try { r = await api('/api/ui/tool-usage?' + filterQs({ offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE })); }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '호출 통계를 불러오지 못했습니다'))); return; }
 
   const sum = r.summary || {};
@@ -367,12 +393,14 @@ async function toolUsagePanel(detail) {
   const byHarness = r.byHarness || [];
   const byDay = (r.byDay || []).slice().reverse(); // 서버는 최신→과거 정렬 → 그래프는 과거→최신으로
   const recent = r.recent || [];
+  const total = sum.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // ── 컨트롤(기간·하네스·툴 필터) ──
+  // ── 컨트롤(기간·하네스·툴·결과 필터) — 필터 변경 시 page=1 리셋 ──
   const winSel = el('select', { class: 'tu-sel' });
   for (const w of (r.windows || Object.keys(TU_WINDOW_LABELS))) winSel.append(el('option', { value: w, text: TU_WINDOW_LABELS[w] || w }));
   winSel.value = r.window || TOOL_USAGE_STATE.window;
-  winSel.onchange = () => { TOOL_USAGE_STATE.window = winSel.value; reload(); };
+  winSel.onchange = () => { TOOL_USAGE_STATE.window = winSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
 
   const harnessSel = el('select', { class: 'tu-sel' });
   harnessSel.append(el('option', { value: '', text: '모든 하네스' }));
@@ -380,25 +408,58 @@ async function toolUsagePanel(detail) {
   if (TOOL_USAGE_STATE.harness && !harnessVals.includes(TOOL_USAGE_STATE.harness)) harnessVals.push(TOOL_USAGE_STATE.harness);
   for (const h of harnessVals) harnessSel.append(el('option', { value: h, text: h }));
   harnessSel.value = TOOL_USAGE_STATE.harness;
-  harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; reload(); };
+  harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
 
   // 툴 필터 = 드롭다운(현재 기간+하네스 내 실제 툴 목록 + 호출수). 이름 타이핑 대신 선택.
   const toolSel = el('select', { class: 'tu-sel' });
   toolSel.append(el('option', { value: '', text: '모든 툴' }));
   const toolOpts = r.toolOptions || [];
   for (const t of toolOpts) toolSel.append(el('option', { value: t.tool, text: t.tool + ' (' + (t.calls || 0).toLocaleString() + ')' }));
-  // 선택된 툴이 현재 옵션에 없으면(다른 필터로 0건 등) 보존용 추가
   if (TOOL_USAGE_STATE.tool && !toolOpts.some((t) => t.tool === TOOL_USAGE_STATE.tool)) toolSel.append(el('option', { value: TOOL_USAGE_STATE.tool, text: TOOL_USAGE_STATE.tool }));
   toolSel.value = TOOL_USAGE_STATE.tool;
-  toolSel.onchange = () => { TOOL_USAGE_STATE.tool = toolSel.value; reload(); };
+  toolSel.onchange = () => { TOOL_USAGE_STATE.tool = toolSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  // 결과 필터(전체/오류만)
+  const errSel = el('select', { class: 'tu-sel' });
+  errSel.append(el('option', { value: '', text: '전체' }));
+  errSel.append(el('option', { value: '1', text: '오류만' }));
+  errSel.value = TOOL_USAGE_STATE.errorsOnly ? '1' : '';
+  errSel.onchange = () => { TOOL_USAGE_STATE.errorsOnly = errSel.value === '1'; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  // CSV(엑셀) 다운로드 — 현재 필터 전체를 페이지 루프로 모아 CSV(Excel 한글 BOM). 상한 5000행.
+  const exportCsv = async () => {
+    toast('CSV 준비 중…');
+    const rows: any[] = []; let off = 0; const CAP = 5000;
+    try {
+      while (off < total && rows.length < CAP) {
+        const r2 = await api('/api/ui/tool-usage?' + filterQs({ offset: off, limit: 500 }));
+        const batch = (r2 && r2.recent) || [];
+        if (!batch.length) break;
+        rows.push(...batch); off += batch.length;
+        if (batch.length < 500) break;
+      }
+    } catch (e) { toast('CSV 조회 실패'); return; }
+    const cols = ['called_at', 'tool', 'harness', 'actor', 'ok', 'duration_ms', 'error', 'args'];
+    const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [cols.join(',')];
+    for (const c of rows) lines.push([c.called_at, c.tool, c.harness, c.actor, c.ok, c.duration_ms, c.error, (c.args == null ? '' : JSON.stringify(c.args))].map(esc).join(','));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: 'mcp-calls-' + TOOL_USAGE_STATE.window + (TOOL_USAGE_STATE.errorsOnly ? '-errors' : '') + '.csv' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(rows.length.toLocaleString() + '행 내려받음' + (rows.length >= CAP ? ' (상한 ' + CAP + ')' : ''));
+  };
 
   const controls = el('div', { class: 'tu-controls' },
     el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel),
     el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel),
     el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolSel),
+    el('div', { class: 'tu-field' }, el('label', { text: '결과' }), errSel),
     el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }),
-    (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool)
-      ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; reload(); } })
+    el('button', { class: 'btn btn-ghost btn-sm', text: 'CSV 다운로드', onclick: exportCsv }),
+    (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool || TOOL_USAGE_STATE.errorsOnly)
+      ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; TOOL_USAGE_STATE.errorsOnly = false; TOOL_USAGE_STATE.page = 1; reload(); } })
       : null);
 
   // ── 요약 스탯 ──
@@ -460,8 +521,7 @@ async function toolUsagePanel(detail) {
     el('b', { text: (h.calls || 0).toLocaleString() }),
     h.errors ? el('em', { text: '오류 ' + h.errors }) : null));
 
-  // ── 최근 호출(인자 펼침 + 더보기 페이지네이션) ──
-  const total = sum.total || 0;
+  // ── 최근 호출(인자 펼침) + 번호 페이지네이션 ──
   const calls = el('div', { class: 'tu-calls' });
   const renderCall = (c) => el('details', { class: 'tu-call' },
     el('summary', {},
@@ -473,34 +533,24 @@ async function toolUsagePanel(detail) {
       el('span', { class: 'tu-cactor', text: c.actor || '' })),
     el('pre', { class: 'tu-args mono', text: tuPretty(c.args) }),
     c.error ? el('pre', { class: 'tu-args mono', text: '⚠ ' + c.error }) : null);
-  if (!recent.length) calls.append(el('div', { class: 'tu-empty', text: '최근 호출이 없습니다.' }));
+  if (!recent.length) calls.append(el('div', { class: 'tu-empty', text: TOOL_USAGE_STATE.errorsOnly ? '이 조건의 오류 호출이 없습니다.' : '최근 호출이 없습니다.' }));
   for (const c of recent) calls.append(renderCall(c));
 
-  // 더 보기 — offset 기반 추가 로드(현재 필터 유지, 재조회 없이 append). loaded < total 이면 버튼 노출.
-  let loaded = recent.length;
-  const moreWrap = el('div', { class: 'tu-more' });
-  const recentQs = (off) => {
-    const q = new URLSearchParams({ window: TOOL_USAGE_STATE.window, offset: String(off) });
-    if (TOOL_USAGE_STATE.harness) q.set('harness', TOOL_USAGE_STATE.harness);
-    if (TOOL_USAGE_STATE.tool) q.set('tool', TOOL_USAGE_STATE.tool);
-    return q.toString();
-  };
-  const updateMore = () => {
-    moreWrap.replaceChildren();
-    if (loaded < total) moreWrap.append(el('button', { class: 'btn btn-ghost btn-sm',
-      text: '더 보기 (' + loaded.toLocaleString() + '/' + total.toLocaleString() + ')', onclick: loadMore }));
-  };
-  const loadMore = async () => {
-    moreWrap.replaceChildren(el('span', { class: 'tu-empty', text: '불러오는 중…' }));
-    try {
-      const r2 = await api('/api/ui/tool-usage?' + recentQs(loaded));
-      const more = (r2 && r2.recent) || [];
-      for (const c of more) calls.append(renderCall(c));
-      loaded += more.length;
-    } catch (e) { /* 추가 로드 실패는 기존 목록 유지하고 무시 */ }
-    updateMore();
-  };
-  updateMore();
+  // 번호 페이지네이션 — 페이지 클릭 시 page 갱신 후 reload(필터·집계 유지). ‹ 1 … 4 5 6 … 20 ›
+  const pagerBox = el('div', { class: 'tu-pager' });
+  if (totalPages > 1) {
+    const cur = Math.min(page, totalPages);
+    const pgBtn = (label, n, kind?) => el('button', {
+      class: 'tu-pg' + (kind === 'on' ? ' tu-pg-on' : '') + (kind === 'off' ? ' tu-pg-off' : ''),
+      text: String(label), ...(kind ? {} : { onclick: () => { TOOL_USAGE_STATE.page = n; reload(); } }) });
+    pagerBox.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
+    for (const pn of tuPageNumbers(cur, totalPages)) {
+      if (pn === '…') pagerBox.append(el('span', { class: 'tu-pg-gap', text: '…' }));
+      else pagerBox.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
+    }
+    pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
+    pagerBox.append(el('span', { class: 'tu-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
+  }
 
   const card = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })),
@@ -511,7 +561,7 @@ async function toolUsagePanel(detail) {
     el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable,
     byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null,
     byHarness.length ? harnessChips : null,
-    el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, moreWrap);
+    el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox);
   detail.replaceChildren(card);
 }
 
