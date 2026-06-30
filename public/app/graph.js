@@ -30,7 +30,11 @@ function sv(name, attrs, ...kids) {
     const n = document.createElementNS(SVG_NS, name);
     if (attrs)
         for (const [k, v] of Object.entries(attrs)) {
-            if (v != null)
+            if (v == null)
+                continue;
+            if (k === 'text')
+                n.textContent = v;
+            else
                 n.setAttribute(k, v);
         }
     for (const c of kids.flat(Infinity)) {
