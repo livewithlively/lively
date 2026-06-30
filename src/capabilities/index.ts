@@ -14,6 +14,7 @@ import { domainmapCrudCapabilities } from "./domainmap-crud.js";
 import { activityCapabilities } from "./activity.js";
 import { categoryCapabilities } from "./categories.js";
 import { knowledgeCapabilities } from "./knowledge.js";
+import { sourceCapabilities } from "./source.js";
 import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
@@ -69,7 +70,8 @@ const all: Capability[] = [
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory). expose.mcp:true → 자동 등록.
   ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).
   ...teamCapabilities, // v6: 팀(스쿼드/사일로) CRUD + 멤버 + 카테고리 오너십 — scope=context. 표면화·주입의 '소프트 렌즈'(오너십≠권한). team_* expose.mcp:true(자동등록)+REST(어드민 팀 패널).
-  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_set_wiki 만 mcp:false(REST 전용).
+  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_graph 만 mcp:false(REST 전용, 그래프뷰).
+  ...sourceCapabilities, // #290: 자료(source) CRUD + 지식 인용(knowledge_source) — scope=memory. raw 입력층(전사록·이메일·슬랙·미러), knowledge 와 분리(recall 미포함). expose.mcp:true(자동등록)+REST(웹 자료 탭 /api/ui/sources).
   ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 전부 expose.mcp:true(자동등록)+REST. project_delete_v6·task_delete_v6 는 org_tool 기본 OFF(위험삭제, 운영자 토글).
   ...listV6Capabilities, // v6: 프로젝트 묶음(리스트=클릭업 List층) CRUD·멤버·프로젝트 소속 — scope=memory(/api/ui/v6/project-lists + /projects/:id/list). 네이티브 전용(외부 미러 없음). 전부 expose.mcp:true+REST.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).

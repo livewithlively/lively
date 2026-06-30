@@ -272,7 +272,13 @@ export async function initOrgSchema(): Promise<void> {
       ('task_create_v6','builtin',true,true),
       ('task_set_status_v6','builtin',true,true),
       ('task_delete_v6','builtin',false,false),
-      ('task_field_delete_v6','builtin',false,false)
+      ('task_field_delete_v6','builtin',false,false),
+      ('knowledge_link','builtin',true,true),
+      ('source_list','builtin',true,true),
+      ('source_get','builtin',true,true),
+      ('source_save','builtin',true,true),
+      ('source_link_knowledge','builtin',true,true),
+      ('source_delete','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;
   `);
 

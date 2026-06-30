@@ -173,6 +173,15 @@ export async function initV6Schema(): Promise<string> {
     -- WIKI 핀(2026-06-23): is_wiki=true 인 지식의 제목+메타만 가이드 위키섹션으로 항상-주입(본문 제외, 인덱스).
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;
+    -- type(2026-06-30 #290): page-type facet — 엔터프라이즈 표준 합성(DITA Concept/Reference + Diátaxis How-to/Explanation + ADR Decision + LLM위키 Entity).
+    --  6종: decision|concept|how-to|reference|research|entity. NULL 허용(미분류). 옛 kind(R/K/H/W)는 폐기 — 무관. 비파괴 ADD COLUMN.
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS type TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge'::regclass AND conname='knowledge_type_chk') THEN
+        ALTER TABLE knowledge ADD CONSTRAINT knowledge_type_chk CHECK (type IS NULL OR type IN ('decision','concept','how-to','reference','research','entity'));
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS knowledge_type_idx ON knowledge(type) WHERE type IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_external_uidx ON knowledge(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS knowledge_injection_idx ON knowledge(injection);
     CREATE INDEX IF NOT EXISTS knowledge_wiki_idx ON knowledge(is_wiki) WHERE is_wiki;
@@ -589,6 +598,93 @@ export async function initV6Schema(): Promise<string> {
       created_at TIMESTAMPTZ DEFAULT now(),
       PRIMARY KEY(comment_id, emoji, member));
     CREATE INDEX IF NOT EXISTS task_comment_reaction_cmt_idx ON task_comment_reaction(comment_id);
+  `);
+
+  // ════════ #290(2026-06-30) 분류·링크·자료 재설계 — 모든 base 테이블 뒤(knowledge/project/*_category 의존). ════════
+
+  // ── ⑭-a) knowledge_category·project_category 단일화 — 카테고리는 엔티티당 1개(또는 0=general). ──
+  //  근거(#290): 단일=디시전 포싱 + 깨끗한 사이드바 트리(복수면 DAG) + 도메인 should/is 귀속 명확. 교차연결은 knowledge_link 가 흡수.
+  //  전체 UNIQUE(name|project_id) — 0/1 만 허용. ⚠ 기존 복수매핑 잔존 시 생성 실패 → org_member_email idiom 처럼 **비치명적 보류**
+  //  (scripts/290-single-and-source 가 단일화한 뒤 확정 생성, 이후 부팅은 IF NOT EXISTS no-op). 앱 쓰기경로도 single-mode(replace)로 강제.
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS knowledge_category_single_uq ON knowledge_category(name)`,
+  ).catch((e) => { console.warn("[v6 schema] knowledge_category 단일 유니크 보류(기존 복수매핑 정리 후 적용):", (e as Error)?.message); });
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS project_category_single_uq ON project_category(project_id)`,
+  ).catch((e) => { console.warn("[v6 schema] project_category 단일 유니크 보류(기존 복수매핑 정리 후 적용):", (e as Error)?.message); });
+
+  // ── ⑭-b) knowledge_link — 지식↔지식 그래프(빠진 1급 프리미티브). category_edge idiom. ──
+  //  relation=related(대칭)|refines|contradicts|depends_on(통제 어휘). 정션이 그래프뷰·백링크·recall 그래프의 쿼리 SoT
+  //  (MediaWiki pagelinks·Notion relation 패턴). 지식 PK 가 name TEXT 라 from/to TEXT FK(CASCADE). no-self + (from,to,relation) 유니크.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_link(
+      id SERIAL PRIMARY KEY,
+      from_name TEXT NOT NULL REFERENCES knowledge(name) ON DELETE CASCADE,
+      to_name TEXT NOT NULL REFERENCES knowledge(name) ON DELETE CASCADE,
+      relation TEXT NOT NULL DEFAULT 'related',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now());
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_link'::regclass AND conname='knowledge_link_relation_chk') THEN
+        ALTER TABLE knowledge_link ADD CONSTRAINT knowledge_link_relation_chk CHECK (relation IN ('related','refines','contradicts','depends_on'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_link'::regclass AND conname='knowledge_link_noself_chk') THEN
+        ALTER TABLE knowledge_link ADD CONSTRAINT knowledge_link_noself_chk CHECK (from_name <> to_name);
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS knowledge_link_uq ON knowledge_link(from_name, to_name, relation);
+    CREATE INDEX IF NOT EXISTS knowledge_link_from_idx ON knowledge_link(from_name);
+    CREATE INDEX IF NOT EXISTS knowledge_link_to_idx ON knowledge_link(to_name);
+  `);
+
+  // ── ⑭-c) source — 자료층. raw 입력(이메일·슬랙·회의 전사록/minutes·외부 미러). knowledge 와 별도 테이블. ──
+  //  ★별도 테이블 = recall(knowledge_search)이 자료를 **자동 미포함**(읽기경로 무수정). knowledge 의 미러/raw 컬럼이 귀속될 자리.
+  //  kind=transcript|minutes|email|slack|notion_doc|clickup_doc|other. provenance=authored(우리 캡처)|observed(외부 미러).
+  //  증류물(지식)은 knowledge_source 로 인용(카파시 source→wiki citation). name=선택적 슬러그(전사록 등 안정 키).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS source(
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      kind TEXT NOT NULL DEFAULT 'other',
+      title TEXT,
+      body_md TEXT NOT NULL DEFAULT '',
+      raw JSONB,
+      provenance TEXT NOT NULL DEFAULT 'observed',
+      external_system TEXT, external_instance TEXT, external_id TEXT, external_url TEXT,
+      sync_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+      occurred_at TIMESTAMPTZ, last_synced_at TIMESTAMPTZ,
+      author TEXT,
+      lifecycle TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='source'::regclass AND conname='source_provenance_chk') THEN
+        ALTER TABLE source ADD CONSTRAINT source_provenance_chk CHECK (provenance IN ('authored','observed'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='source'::regclass AND conname='source_lifecycle_chk') THEN
+        ALTER TABLE source ADD CONSTRAINT source_lifecycle_chk CHECK (lifecycle IN ('active','superseded'));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS source_name_uq ON source(name) WHERE name IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS source_external_uidx ON source(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS source_kind_idx ON source(kind);
+    CREATE INDEX IF NOT EXISTS source_occurred_idx ON source(occurred_at DESC NULLS LAST);
+  `);
+
+  // ── ⑭-d) knowledge_source — 지식→자료 인용. relation=derived_from(증류)|cites(참조). recall 그래프가 tier 가로지르는 다리. ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_source(
+      name TEXT NOT NULL REFERENCES knowledge(name) ON DELETE CASCADE,
+      source_id INT NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL DEFAULT 'derived_from',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(name, source_id, relation));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_source'::regclass AND conname='knowledge_source_relation_chk') THEN
+        ALTER TABLE knowledge_source ADD CONSTRAINT knowledge_source_relation_chk CHECK (relation IN ('derived_from','cites'));
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS knowledge_source_source_idx ON knowledge_source(source_id);
   `);
 
   // ── ⑬ 임베딩(pgvector) — 벡터검색(#172) opt-in. provider≠off 일 때만 확장/컬럼(embedding_vector)/HNSW 인덱스 생성. ──
