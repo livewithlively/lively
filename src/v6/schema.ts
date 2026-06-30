@@ -659,6 +659,30 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS knowledge_link_to_idx ON knowledge_link(to_name);
   `);
 
+  // ── ⑭-b2) project_edge — 프로젝트↔프로젝트 그래프(후속 관계 등, knowledge_link idiom). ──
+  //  relation=follow_up(from 이 to 의 후속 = from 은 후속, to 는 선행)|supersedes|depends_on|related. 1차 UI 노출=follow_up.
+  //  project PK 가 INT id 라 from/to INT FK(CASCADE). no-self + (from,to,relation) 유니크. parent_id(=task 위계)와 직교.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_edge(
+      id SERIAL PRIMARY KEY,
+      from_project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      to_project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL DEFAULT 'follow_up',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      created_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='project_edge'::regclass AND conname='project_edge_relation_chk') THEN
+        ALTER TABLE project_edge ADD CONSTRAINT project_edge_relation_chk CHECK (relation IN ('follow_up','supersedes','depends_on','related'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='project_edge'::regclass AND conname='project_edge_noself_chk') THEN
+        ALTER TABLE project_edge ADD CONSTRAINT project_edge_noself_chk CHECK (from_project_id <> to_project_id);
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS project_edge_uq ON project_edge(from_project_id, to_project_id, relation);
+    CREATE INDEX IF NOT EXISTS project_edge_from_idx ON project_edge(from_project_id);
+    CREATE INDEX IF NOT EXISTS project_edge_to_idx ON project_edge(to_project_id);
+  `);
+
   // ── ⑭-c) source — 자료층. raw 입력(이메일·슬랙·회의 전사록/minutes·외부 미러). knowledge 와 별도 테이블. ──
   //  ★별도 테이블 = recall(knowledge_search)이 자료를 **자동 미포함**(읽기경로 무수정). knowledge 의 미러/raw 컬럼이 귀속될 자리.
   //  kind=transcript|minutes|email|slack|notion_doc|clickup_doc|other. provenance=authored(우리 캡처)|observed(외부 미러).

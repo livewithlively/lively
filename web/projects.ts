@@ -2071,6 +2071,7 @@ async function renderProjectV2Detail(view, idStr) {
   view.replaceChildren(head,
     projectBodySection(id, p, reload),
     projectKnowledgeSection(id, p, reload),
+    projectEdgesSection(id, p, reload),
     projectCommentsSection(id, members),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
@@ -2233,6 +2234,90 @@ function projectBodySection(id, p, reload) {
 //  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker = 추천-우선 단일 픽커)
 //  ② '왜 다나' 배너(→ #/learn) ③ 액션은 섹션 헤더 우상단 단일 버튼 [＋ 지식 연결](관계는 픽커 라디오, 직접 작성도 픽커 안) ④ 산출 빈칸은 '아직 비어도 정상' 안내.
 //  변경 후 v6 상세 GET 으로 재조회해 재페인트.
+// 후속/선행 프로젝트(project_edge) — 지식 '연결된 지식'의 프로젝트판(#340). outgoing=선행(이 프로젝트가 후속하는), incoming=후속(이 프로젝트를 후속하는).
+function projectEdgesSection(id, p, reload) {
+  let edges: any = p.edges || { outgoing: [], incoming: [] };
+  const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+  const statusLabel = (s) => (s === 'done' ? '완료' : s === 'todo' ? '할 일' : '진행');
+
+  // 엣지 한 줄 — 대상 프로젝트(상세 링크) + 상태칩 + ✕ 해제. dir='out'(선행: this→other) | 'in'(후속: other→this).
+  function edgeRow(e, dir) {
+    const r = el('div', { class: 'pjk-row' },
+      el('a', { class: 'pjk-row-title', href: '#/projects2/p/' + e.project_id, text: '#' + e.project_id + ' ' + (e.project_name || '') }),
+      el('div', { class: 'pjk-row-meta' }, el('span', { class: 'kn-chip', text: statusLabel(e.status) })));
+    const x = el('button', { class: 'pjk-row-x', type: 'button', title: '관계 해제', text: '✕' });
+    x.onclick = async (ev) => { ev.preventDefault();
+      const fromId = dir === 'out' ? id : e.project_id;
+      const toId = dir === 'out' ? e.project_id : id;
+      try { await api('/api/ui/v6/projects/' + fromId + '/link', { method: 'POST', body: JSON.stringify({ to: toId, relation: e.relation || 'follow_up', unlink: true }) }); toast('관계를 해제했습니다'); refresh(); }
+      catch (err) { toast('해제 실패 — ' + err.message, true); } };
+    r.append(x);
+    return r;
+  }
+
+  const outList = el('div', { class: 'pjk-list' });
+  const inList = el('div', { class: 'pjk-list' });
+  const outCount = el('span', { class: 'pjk-count' });
+  const inCount = el('span', { class: 'pjk-count' });
+  function repaint() {
+    const out = (edges && edges.outgoing) || [], inc = (edges && edges.incoming) || [];
+    outCount.textContent = String(out.length); inCount.textContent = String(inc.length);
+    outList.replaceChildren(...(out.length ? out.map((e) => edgeRow(e, 'out')) : [el('div', { class: 'pjk-empty', text: '이 프로젝트가 후속하는 선행 프로젝트가 없어요.' })]));
+    inList.replaceChildren(...(inc.length ? inc.map((e) => edgeRow(e, 'in')) : [el('div', { class: 'pjk-empty', text: '이 프로젝트를 후속하는 프로젝트가 없어요.' })]));
+  }
+  async function refresh() {
+    try { const d = await api('/api/ui/v6/projects/' + id).then((r) => r && (r.project || r)); edges = d.edges || { outgoing: [], incoming: [] }; } catch (_) { /* keep */ }
+    repaint();
+  }
+
+  // 인라인 프로젝트 픽커(검색) — dir='out'(선행 추가: this→pick) | 'in'(후속 추가: pick→this).
+  function openPicker(dir) {
+    const existing = new Set([...(edges.outgoing || []).map((e) => e.project_id), ...(edges.incoming || []).map((e) => e.project_id), id]);
+    const search = el('input', { type: 'search', placeholder: '프로젝트 검색(이름/번호)', style: 'width:100%; margin-bottom:6px;' });
+    const results = el('div', { class: 'pjk-list' });
+    const box = el('div', { class: 'card', style: 'margin-top:8px; padding:10px;' },
+      el('div', { class: 'admin-hint', text: dir === 'out' ? '이 프로젝트가 후속하는 선행 프로젝트를 고르세요' : '이 프로젝트를 후속하는 프로젝트를 고르세요' }),
+      search, results);
+    let all: any[] = [];
+    function paintResults() {
+      const q = search.value.trim().toLowerCase();
+      const items = all.filter((pr) => !existing.has(pr.id) && (!q || (pr.name || '').toLowerCase().includes(q) || String(pr.id).includes(q))).slice(0, 30);
+      results.replaceChildren(...(items.length ? items.map((pr) => {
+        const b = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: 'display:block; width:100%; text-align:left;', text: '#' + pr.id + ' ' + (pr.name || '') });
+        b.onclick = async () => { b.disabled = true;
+          const fromId = dir === 'out' ? id : pr.id;
+          const toId = dir === 'out' ? pr.id : id;
+          try { await api('/api/ui/v6/projects/' + fromId + '/link', { method: 'POST', body: JSON.stringify({ to: toId, relation: 'follow_up' }) }); toast('연결했습니다'); closePicker(); refresh(); }
+          catch (e) { b.disabled = false; toast('연결 실패 — ' + e.message, true); } };
+        return b;
+      }) : [el('div', { class: 'pjk-empty', text: '결과 없음' })]));
+    }
+    search.addEventListener('input', paintResults);
+    (async () => { try { all = await api('/api/ui/v6/projects').then((d) => (d && d.projects) || []); } catch (_) { all = []; } paintResults(); })();
+    return box;
+  }
+  let openBox: any = null, openDir: any = null;
+  function closePicker() { if (openBox) { openBox.remove(); openBox = null; openDir = null; } }
+  function toggle(dir) { const was = openDir; closePicker(); if (was === dir) return; openBox = openPicker(dir); openDir = dir; card.append(openBox); }
+
+  card.append(el('div', { class: 'card-head' },
+    el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' },
+      el('h3', { text: '후속 / 선행 프로젝트' }),
+      el('span', { class: 'pjk-head-hint', text: '이 프로젝트의 앞뒤(선행 → 이 프로젝트 → 후속) 관계.' }))));
+  const outAdd = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 선행', title: '이 프로젝트가 후속하는 선행 프로젝트 추가' });
+  const inAdd = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 후속', title: '이 프로젝트를 후속하는 프로젝트 추가' });
+  outAdd.onclick = () => toggle('out'); inAdd.onclick = () => toggle('in');
+  const outCol = el('div', { class: 'pjk-col' },
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '선행 프로젝트' }), outCount, outAdd), outList);
+  const inCol = el('div', { class: 'pjk-col' },
+    el('div', { class: 'pjk-col-head' }, el('span', { class: 'pjk-col-title', text: '후속 프로젝트' }), inCount, inAdd), inList);
+  const node = el('div', { class: 'pjk-node' }, el('div', { class: 'pjk-node-label', text: '이 프로젝트' }));
+  card.append(el('div', { class: 'pjk-flow' },
+    outCol, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), node, el('div', { class: 'pjk-arrow', 'aria-hidden': 'true', text: '→' }), inCol));
+  repaint();
+  return card;
+}
+
 function projectKnowledgeSection(id, p, reload) {
   const knName = (k) => k.name || k.knowledge_name;
   let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
