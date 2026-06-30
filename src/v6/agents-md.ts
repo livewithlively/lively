@@ -14,6 +14,19 @@ const RULES_PLACEHOLDER = "<!-- (아직 작성된 규칙이 없습니다) 이 �
 // 구(舊) 기본 템플릿 문장 — 디스크의 기존 AGENTS.md 에 본문으로 박혀 있을 수 있어, 읽을 때 '빈 규칙'으로 이관 처리한다.
 const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
 
+// 프로젝트 마무리(close-out) 루틴 — 모든 프로젝트 공통이라 digest(자동 섹션)에 박는다. 프로젝트 폴더에서만 노출돼
+//  '플젝 세션일 때만' 보이고(플젝 밖 0비용), 전역 always 주입의 과주입·미작동(라이브 템플릿 ${rules} 부재)을 피한다.
+//  간결판(5단계)만 인라인하고 상세·근거는 WIKI 권위문서로 둔다(knowledge_get 포인터) — 드리프트 최소.
+const CLOSEOUT_SECTION = [
+  "## 마무리 (이 프로젝트를 끝낼 때 — done 처리 전후)",
+  "1. 본문 보강: `project_update_v6` 로 결과·근본원인·해법·반영(커밋/머지) 요약을 개요에 덧붙인다(원문 유지·append).",
+  "2. 산출지식: 아직 안 쓴 산출물을 `knowledge_save`(전문) 후 `project_link_knowledge_v6(produced)` 로 연결, 배경지식은 `required`.",
+  "3. 태스크 상태: 끝난 task/subtask 를 `task_set_status_v6(done)`.",
+  "4. 프로젝트 상태: `project_set_status_v6(done)`.",
+  "5. 후속 과업: 이번 범위 밖 후속은 **사용자에게 물어** 과업화 → 새 `project_create_v6`(이 프로젝트 하위태스크 아님).",
+  "상세·근거: `knowledge_get('project-closeout-routine')`.",
+].join("\n");
+
 function buildProjectDigest(p: any): string {
   const L: string[] = [];
   L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
@@ -35,6 +48,7 @@ function buildProjectDigest(p: any): string {
     }
     L.push("- 각 항목 상세: `project_get_v6` 의 tasks 로 id 조회.", "");
   }
+  L.push(CLOSEOUT_SECTION, "");
   return L.join("\n").trim();
 }
 
