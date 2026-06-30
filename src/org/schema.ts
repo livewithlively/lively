@@ -614,7 +614,7 @@ export async function initOrgSchema(): Promise<void> {
       ('R','Rule/Policy/Persona','enforced',false,'context','many',10,
         '조직이 모든 AI 세션에 강제하는 규칙·정책·페르소나. "반드시/금지" 같은 행동 규범과 AI 의 말투·역할. 4 본질 종류 중 하나(R·K·H·W).',
         '"항상/반드시/절대" 지켜야 하는 강제 규범이면 R. 한 번 일어난 사실·방법 절차(H)·배경 지식(K)과 구분: R 은 위반하면 안 되는 명령형이다. 페르소나(AI 역할·말투)도 R.',
-        '강제규칙(managed-policy)·회사맥락(org-defaults) 섹션으로 저장. 본문 전체가 보존된다.',
+        '항상-주입 섹션 문서(injection=always)로 저장. 본문 전체가 보존된다.',
         '강제 주입(enforced): 맥락과 무관하게 모든 세션 컨텍스트 최상단에 전문이 그대로 들어간다(R 만 항상 주입).'),
       ('K','Knowledge note','recalled',false,'memory','many',20,
         '지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각, 사실, 도메인 지식, 메모·링크까지 아우르는 일반 지식. 4 본질 종류 중 가장 큰 기본값(R·K·H·W). (구 A/D/F/M/L/Z 흡수.)',

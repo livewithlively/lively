@@ -32,8 +32,7 @@ const ADMIN_SECTIONS = [
   //  카테고리 탭(#/categories)과 같은 category-store(/api/ui/categories) — 여기 수정이 지식·프로젝트 탭 좌측에 반영.
   { key: 'wiki-categories', label: '카테고리 설정', meaning: null, group: 'wiki' },
   // ③ 맥락·세션 주입 — AI가 매 세션 무엇을 언제 주입받나(단일 지도). nav 엔 '세션 주입 지도'(injection-map) 한 화면만.
-  //  회사 소개·규칙·성격(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide)는 별도 탭 폐기(2026-06-26) — 지도의 [편집]이 WIKI 지식 페이지(#/k/<name>)로 보낸다(이 섹션=injection=always knowledge).
-  //  두 키는 sectionEditor 라우팅엔 살아있고 URL 은 SECTION_REMAP 로 지도 흡수. managed-policy(구 'AI 필수 규칙')는 빈 채 서버 plumbing 만 유지(주입 시 ""→무해).
+  //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335). 구 #/system/<section> 라우트·SECTION_REMAP 흡수는 호환용 잔존.
   //  WIKI 인덱스는 WIKI 탭, 주제 분류는 '카테고리 설정'으로 일원화(2026-06-24).
   { key: 'injection-map', label: '세션 주입 지도', meaning: null, group: 'knowledge' },
   // ④ 연결·데이터 (고급) — AI가 무엇에 닿나(도구·MCP·DB·레포) + 외부 호출/DB 안전범위 + 커스텀 훅(코드).
@@ -55,7 +54,7 @@ const ADMIN_SECTIONS = [
 ];
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
-const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
+const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
 const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
@@ -93,14 +92,6 @@ function meaningRow(k, v) {
 // 비개발자용 카드 카피 — 서버 MEANING(기술적·장황) 위에 클라에서 덮어쓴다(즉시 반복, 서버 재시작 불요).
 //  키 = 섹션 meaning 키. 없는 키(고급 훅·MCP·DB·툴 등)는 서버 카피로 폴백.
 const MEANING_KO = {
-  'managed-policy': {
-    label: 'AI 필수 규칙',
-    what: '회사의 모든 AI가 무조건 지켜야 하는 규칙이에요. 개인이 끄거나 바꿀 수 없어요.',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '대화를 시작할 때 가장 먼저 적용돼요',
-    where: 'AI가 답을 만들 때 무엇보다 우선해서 지켜요',
-    example: "'고객 개인정보는 절대 보여주지 않기'를 넣으면, 그때부터 모두의 AI가 무조건 그렇게 해요.",
-  },
   'org-defaults': {
     label: '회사 소개·규칙·AI 성격',
     what: '회사가 어떤 곳인지, AI가 무조건 지킬 규칙, 어떤 성격·말투로 일하는지, 우리 팀이 일하는 방식이에요. (구 ‘AI 필수 규칙’이 여기로 합쳐졌어요.)',
@@ -273,7 +264,7 @@ async function renderAdmin(view, sub) {
 
 function renderAdminDetail(detail, sel, data) {
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
-  if (sel === 'managed-policy' || sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
+  if (sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
   if (sel === 'member-add') return memberAddPanel(detail, data);
