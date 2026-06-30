@@ -1038,6 +1038,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .kn-linkrow-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s; }
 .kn-linkrow:hover .kn-linkrow-x { opacity: 1; }
 .kn-linkrow-x:hover { background: #FDECEC; color: #D6453C; }
+/* 비슷한 지식(벡터 #172, 자동) — 같은 컴팩트 리스트 행 재사용. % pill은 '관계'가 아니라 유사도라 색을 구분. */
+.kn-link-rel.kn-link-sim { color: var(--muted-head); background: var(--bg-tint-2); font-variant-numeric: tabular-nums; min-width: 30px; text-align: center; }
+.kn-sim-hint { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2); }
 
 /* ── 위키 ↔ 프로젝트 연결(#255·#256·#257) — 연결된 프로젝트 칩(필요/산출) + 선택 피커. ── */
 .kn-projlinks { margin: 4px 0 2px; }
