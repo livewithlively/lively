@@ -2028,7 +2028,7 @@ function projectKnowledgeSection(id, p, reload) {
     el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' },
       el('h3', { text: '연결된 지식' }),
       el('span', { class: 'pjk-head-hint' },
-        '연결해 두면 AI가 처음부터 이 맥락을 쥐고 시작해요 — ',
+        '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ',
         el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
     knAddBtn));
 
