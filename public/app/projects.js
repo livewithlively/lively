@@ -27,6 +27,10 @@ function projectSubBar(active) {
     }
     return bar;
 }
+// 프로젝트 탭 공통 페이지 헤더 — 제목 + 🗑 휴지통 진입점(지식 탭 헤더와 동형). 삭제 프로젝트 복원은 #/trash 공용 페이지.
+function projectPageHead() {
+    return el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })), el('div', { style: 'display:flex; gap:8px; align-items:center;' }, el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }))));
+}
 // 프로젝트(v2) 진입 — browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
 async function renderProjectsV2(view, sub, params) {
     if (sub === 'browse' || SPACE_LABEL[sub])
@@ -41,7 +45,7 @@ async function renderProjectsV2(view, sub, params) {
 async function renderProjectV2Board(view) {
     pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
     view.replaceChildren(projectSubBar('dashboard'), skeleton('프로젝트를 불러오는 중'));
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })));
+    const head = projectPageHead();
     let allProjects, mineProjects, lists;
     try {
         // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 목록을 병렬로.
@@ -211,11 +215,14 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '영역 목록 접기', 'aria-label': '영역 목록 접기', text: '◀' });
         collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
         navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '영역' }), collapseBtn));
-        const totalProjs = groups.reduce((n, g) => n + g.projects.length, 0);
+        // 카운트는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만 집계(본문 렌더 필터·그룹 헤더 visibleCount 와 동형).
+        //  안 그러면 완료된 미분류 프로젝트가 Closed 꺼져도 사이드바에 잡혀 '유령 개수'처럼 보인다(#337 후속).
+        const navCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
+        const totalProjs = groups.reduce((n, g) => n + navCount(g.projects), 0);
         navInner.append(navItem('__all__', el('span', { class: 'pjv-side-dot all' }), '전체', totalProjs, sel === '__all__'));
         for (const g of groups) {
             const dot = g.list ? el('span', { class: 'pjv-side-dot', style: 'background:' + (g.list.color || 'var(--muted-2)') }) : el('span', { class: 'pjv-side-dot none' });
-            navInner.append(navItem(g.key, dot, g.list ? g.list.name : '기타 (미분류)', g.projects.length, sel === g.key));
+            navInner.append(navItem(g.key, dot, g.list ? g.list.name : '기타 (미분류)', navCount(g.projects), sel === g.key));
         }
         navInner.append(el('button', { class: 'pjv-side-newlist', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 영역' })));
         nav.append(navInner);
@@ -406,7 +413,9 @@ function pjvSaveListMembers(id, ids) {
 // 리스트 색 팔레트(생성/수정 폼). 빈값='자동'(id 해시색).
 const PJV_LIST_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b'];
 // 새 리스트 / 리스트 수정 폼 — 이름·색 (+ 생성 시 참여 멤버). 저장 후 reload.
-function openListForm(reload, list) {
+//  opts.onCreated(list) — 생성(수정 아님) 성공 시 새로 만든 영역(서버 응답 { list })을 넘긴다.
+//  새 프로젝트 모달의 분류(영역) 피커가 인라인으로 영역을 만들고 곧장 선택하는 데 쓴다(#337).
+function openListForm(reload, list, opts) {
     const editing = !!list;
     const nameIn = el('input', { type: 'text', value: editing ? list.name : '', placeholder: '영역 이름 (예: 컨텍스트 저장소)', maxlength: '120' });
     let color = editing ? (list.color || '') : '';
@@ -445,7 +454,9 @@ function openListForm(reload, list) {
                 await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
             }
             else {
-                await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker ? picker.getSelected() : [] }) });
+                const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker ? picker.getSelected() : [] }) });
+                if (opts && opts.onCreated)
+                    opts.onCreated((res && res.list) || null);
             }
             back.remove();
             toast(editing ? '영역을 수정했습니다' : '영역을 만들었습니다');
@@ -1678,7 +1689,7 @@ async function renderProjectV2Space(view, _space, params) {
     if (params && params.has('status'))
         f.status = params.get('status') || '';
     view.replaceChildren(projectSubBar('browse'), skeleton('프로젝트를 불러오는 중'));
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })));
+    const head = projectPageHead();
     // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 지식 탭과 공유 빌더(buildSpacesNav).
     const side = el('aside', { class: 'browse-side' });
     const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
@@ -1765,15 +1776,23 @@ function openProjectV2Form(reload, prefill) {
     const picker = memberPicker(prefill.memberIds || [], { includeMe: true });
     const catPicker = categoryPicker(prefill.categoryIds || []);
     const repoPick = repoPicker(prefill.repos || []);
+    const listPick = listPicker(prefill.listId); // 분류(영역) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337)
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '분류 (영역)' }), listPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0); // 프리필된 이름 전체 선택 → 바로 수정/확정 가능
     const go = async () => {
         const name = nameIn.value.trim();
         if (!name) {
             nameIn.focus();
             toast('이름을 입력하세요', true);
+            return;
+        }
+        // 분류(영역) — 영역이 있는데 미선택이면 막는다(미분류는 '기타(미분류)'를 명시적으로 골라야 함, #337).
+        await listPick.ready;
+        const listChoice = listPick.getSelected();
+        if (!listChoice.ok) {
+            toast('영역을 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true);
             return;
         }
         saveBtn.disabled = true;
@@ -1803,9 +1822,9 @@ function openProjectV2Form(reload, prefill) {
             const repoNames = repoPick.getSelected();
             if (np && np.id && repoNames.length)
                 await api('/api/ui/v6/projects/' + np.id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoNames }) }).catch(() => { });
-            // 인라인 리스트 추가행에서 연 경우 — 생성 직후 그 리스트로 소속(미분류면 prefill.listId 없음).
-            if (np && np.id && prefill.listId != null)
-                await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: prefill.listId }) }).catch(() => { });
+            // 모달의 분류(영역) 선택대로 소속 지정 — '기타(미분류)'면 listId=null 이라 호출 생략(기본이 미분류).
+            if (np && np.id && listChoice.listId != null)
+                await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listChoice.listId }) }).catch(() => { });
             back.remove();
             toast('프로젝트를 만들었습니다');
             if (np && np.id)
@@ -3613,6 +3632,62 @@ function repoPicker(selectedNames) {
         }));
     })();
     return { box, getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.name) };
+}
+// ── 분류(영역) 단일선택 피커 — 새 프로젝트 모달용. 영역(=project-list) 목록을 그 자리에서 fetch. ──
+//  '한 목록'·'상태' 뷰처럼 영역 맥락이 없는 곳에서 만들 때도 모달에서 영역을 정하게 해 미분류 프로젝트가 무심코 생기지 않게 한다(#337).
+//  반환 { box, ready, getSelected() }. getSelected → { ok, listId }:
+//   ok=false → 영역이 있는데 아직 미선택(검증에서 막음) · listId=null → 명시적 '기타(미분류)' · 그 외 → 선택한 영역 id.
+//  selectedListId 가 주어지면(특정 영역 추가행에서 연 경우) 그 영역을 미리 선택 — 기존 동작 유지.
+function listPicker(selectedListId) {
+    const sel = el('select', { class: 'pjv-listpick-sel', 'aria-label': '분류(영역)' });
+    sel.append(el('option', { value: '', text: '불러오는 중…' }));
+    sel.disabled = true;
+    const box = el('div', { class: 'pjv-listpick' }, sel);
+    let loaded = []; // 로드된 영역(없으면 미분류 강제 불가 — 첫 프로젝트 부트스트랩)
+    let prevValue = ''; // '＋ 새 영역' 선택 시 되돌릴 직전 값
+    const sortLists = (a, b) => (a.sort - b.sort) || String(a.name).localeCompare(String(b.name));
+    const rebuild = (lists, preferId) => {
+        loaded = [...lists].sort(sortLists);
+        const has = preferId != null && loaded.some((l) => String(l.id) === String(preferId));
+        const opts = [];
+        // 미리 선택할 영역이 없으면 placeholder — 영역이 있으면 '선택하세요'(검증에서 막힘), 없으면 '미분류로 생성'(허용).
+        if (!has)
+            opts.push(el('option', { value: '', text: loaded.length ? '영역을 선택하세요…' : '영역 없음 — 미분류로 생성' }));
+        for (const l of loaded)
+            opts.push(el('option', { value: 'L' + l.id, text: l.name }));
+        opts.push(el('option', { value: '__none__', text: '기타 (미분류)' }));
+        opts.push(el('option', { value: '__new__', text: '＋ 새 영역 만들기…' }));
+        sel.replaceChildren(...opts);
+        sel.value = has ? ('L' + preferId) : '';
+        prevValue = sel.value;
+        sel.disabled = false;
+    };
+    const ready = api('/api/ui/v6/project-lists')
+        .then((d) => (d && d.lists) || [])
+        .catch(() => [])
+        .then((lists) => rebuild(lists, selectedListId));
+    sel.addEventListener('change', () => {
+        if (sel.value === '__new__') {
+            sel.value = prevValue; // 선택값 아님 — 즉시 되돌리고 영역 생성 폼을 띄운다.
+            openListForm(null, undefined, { onCreated: (list) => { if (list && list.id != null)
+                    rebuild([...loaded, list], list.id); } });
+            return;
+        }
+        prevValue = sel.value;
+    });
+    return {
+        box,
+        ready,
+        getSelected: () => {
+            const v = sel.value;
+            if (v === '__none__')
+                return { ok: true, listId: null };
+            if (v.charAt(0) === 'L')
+                return { ok: true, listId: Number(v.slice(1)) };
+            // placeholder('') — 영역이 있으면 미선택(차단), 하나도 없으면 미분류 허용(부트스트랩).
+            return loaded.length ? { ok: false, listId: undefined } : { ok: true, listId: null };
+        },
+    };
 }
 // 카테고리 블록 — 이 프로젝트가 속한 카테고리(사업·제품·시스템) 멀티선택. 사업/제품/시스템 탭의 카테고리별 탐색에 쓰임.
 function projectCategoryBlock(id, p) {
