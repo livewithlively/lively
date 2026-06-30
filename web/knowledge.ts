@@ -292,8 +292,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   // 검색 방식 — 의미검색(하이브리드 벡터+grep, 자연어/유사) 기본 vs 정확(grep). 검색어가 있을 때만 영향.
   const modeSel = selectFilter([['semantic', '의미검색'], ['grep', '정확(grep)']], f.semantic ? 'semantic' : 'grep');
   modeSel.setAttribute('aria-label', '검색 방식');
-  const injSel = selectFilter([['', '전체 주입'], ['always', '항상 주입'], ['recalled', '검색']], f.injection);
-  injSel.setAttribute('aria-label', '주입');
+  // (#335 ①) 주입 필터 폐기 — 지식 탭은 recalled 전용. 항상-주입 섹션(org-defaults·가이드)은 관리탭 '세션 주입'에서 관리.
   const provSel = selectFilter([['', '전체 출처'], ['authored', '저작'], ['observed', '외부 미러']], f.provenance);
   provSel.setAttribute('aria-label', '출처');
   // page-type(#290) 필터 — 의미검색이 아닌 목록(브라우즈/grep) 경로에만 적용.
@@ -307,7 +306,6 @@ async function renderKnowledgeSpace(view, _space, params) {
     const p = new URLSearchParams();
     if (f.indexed) p.set('indexed', '1');           // 인덱스(핀)는 '전체 카테고리에서 핀만' — category 와 상호배타(#336)
     else if (f.category) p.set('category', f.category);
-    if (f.injection) p.set('injection', f.injection);
     if (f.provenance) p.set('provenance', f.provenance);
     if (f.type) p.set('type', f.type);
     if (f.q) p.set('q', f.q);
@@ -385,7 +383,7 @@ async function renderKnowledgeSpace(view, _space, params) {
       if (f.q.trim() && f.semantic) {
         // 의미검색 — 하이브리드(벡터+grep RRF). 전역 랭킹이라 카테고리 필터는 미적용(주입/출처는 적용). 임베딩 off면 서버가 grep 폴백.
         const p = new URLSearchParams({ q: f.q.trim(), limit: '200' });
-        if (f.injection) p.set('injection', f.injection);
+        p.set('injection', 'recalled'); // (#335 ①) always 섹션 제외 — 지식 탭 = recalled 전용
         if (f.provenance) p.set('provenance', f.provenance);
         r = await api('/api/ui/knowledge/semantic?' + p.toString());
       } else {
@@ -393,7 +391,7 @@ async function renderKnowledgeSpace(view, _space, params) {
         const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at' });
         if (f.indexed) p.set('is_wiki', 'true');   // 인덱스(핀)만 — 서버 필터(category 없음 = 전체 카테고리에서)(#336)
         else if (f.category) p.set('category', f.category);
-        if (f.injection) p.set('injection', f.injection);
+        p.set('injection', 'recalled'); // (#335 ①) always 섹션 제외 — 지식 탭 = recalled 전용
         if (f.provenance) p.set('provenance', f.provenance);
         if (f.type) p.set('type', f.type);
         if (f.q.trim()) p.set('q', f.q.trim());
@@ -416,7 +414,6 @@ async function renderKnowledgeSpace(view, _space, params) {
 
   let qTimer: any = null;
   qInput.addEventListener('input', () => { f.q = qInput.value; clearTimeout(qTimer); qTimer = setTimeout(() => { syncHash(); refetch(); }, 280); });
-  injSel.addEventListener('change', () => { f.injection = injSel.value; syncHash(); refetch(); });
   provSel.addEventListener('change', () => { f.provenance = provSel.value; syncHash(); refetch(); });
   typeSel.addEventListener('change', () => { f.type = typeSel.value; syncHash(); refetch(); });
   modeSel.addEventListener('change', () => { f.semantic = modeSel.value === 'semantic'; syncHash(); refetch(); });
@@ -432,7 +429,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     buildSide(); syncHash(); refetch();
   });
 
-  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, injSel, provSel, typeSel);
+  const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, provSel, typeSel);
   const layout = el('div', { class: 'browse-layout' },
     side,
     el('section', { class: 'browse-main' }, filterBar, bulkBar, listBox, foot),
@@ -521,7 +518,7 @@ async function renderKnowledgeStats(view) {
   );
   let entries: any;
   try {
-    entries = await api('/api/ui/knowledge?' + new URLSearchParams({ limit: '500', orderBy: 'updated_at' })).then((d) => (d && d.entries) || []);
+    entries = await api('/api/ui/knowledge?' + new URLSearchParams({ limit: '500', orderBy: 'updated_at', injection: 'recalled' })).then((d) => (d && d.entries) || []);  // (#335 ①) recalled 전용 — always 섹션 제외
   } catch (e) {
     view.replaceChildren(head, knowledgeSubBar('stats'), errorNote(e, '통계를 불러오지 못했습니다'));
     return;
@@ -682,8 +679,13 @@ async function renderKnowledgeDetail(view, name) {
   //  핀: is_wiki 토글 → 제목·분류가 매 대화 첫머리(가이드 ${wiki})에 항상 주입(본문 제외). 삭제는 사람 전용(서버 403 재검증).
   const actions = el('div', { class: 'unit-actions unit-actions-end' });
   if (hasScope('memory')) {
-    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '편집',
-      onclick: () => { location.hash = '#/k-edit/' + encodeURIComponent(k.name); } }));   // 모달 아닌 별도 편집 페이지(#290)
+    // (#335 ①) 항상-주입 섹션은 관리탭 '세션 주입'에서만 편집/순서/삭제 — 지식 편집페이지로 보내지 않는다.
+    actions.append(k.injection === 'always'
+      ? el('button', { class: 'btn btn-ghost btn-sm', text: '관리 ▸ 세션 주입에서 편집',
+          title: '이 문서는 항상-주입 섹션입니다 — 관리 탭에서 편집·순서·삭제합니다.',
+          onclick: () => { location.hash = '#/system/injection-map'; } })
+      : el('button', { class: 'btn btn-ghost btn-sm', text: '편집',
+          onclick: () => { location.hash = '#/k-edit/' + encodeURIComponent(k.name); } }));   // 모달 아닌 별도 편집 페이지(#290)
     const pinBtn = el('button', { class: 'btn btn-ghost btn-sm',
       text: k.is_wiki ? '📌 핀 해제' : '📍 인덱스에 핀',
       title: '핀하면 제목·분류가 매 대화 첫머리(WIKI 인덱스)에 항상 깔립니다(본문 제외, 필요할 때 AI가 찾아봄).',
@@ -889,6 +891,8 @@ export async function renderKnowledgeForm(view, params?, editName?) {
     try { k = await api('/api/ui/knowledge/' + encodeURIComponent(editName)).then((r) => r && (r.knowledge || r)); }
     catch (e) { toast('지식을 불러오지 못했습니다 — ' + e.message, true); location.hash = '#/k/' + encodeURIComponent(editName); return; }
     if (!k || !k.name) { toast('지식을 찾을 수 없습니다', true); location.hash = '#/knowledge'; return; }
+    // (#335 ①) 항상-주입 섹션은 지식 편집페이지에서 못 고친다 — 관리탭 '세션 주입'이 단일 편집 홈.
+    if (k.injection === 'always') { toast('항상-주입 섹션은 관리 ▸ 세션 주입에서 편집합니다'); location.hash = '#/system/injection-map'; return; }
   }
 
   const nameIn = el('input', { type: 'text', value: k.name || '', placeholder: '파일명 (소문자 영문·숫자·-, 비우면 제목에서 자동)' });

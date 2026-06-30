@@ -242,19 +242,22 @@ function paint() {
   for (const c of CATS) {
     const [sx, sy] = toScreen(c.cx, c.topY);
     const f = regionFont(c.nodes.length);
-    c.elName.setAttribute('x', sx.toFixed(1)); c.elName.setAttribute('y', (sy - 8).toFixed(1)); c.elName.setAttribute('font-size', f.toFixed(1));
-    c.elCount.setAttribute('x', sx.toFixed(1)); c.elCount.setAttribute('y', (sy - 8 + f * 0.92).toFixed(1));
+    // 개수는 경계선 바로 위 고정, 이름은 그 위로(글자 클수록 더 위) — 작은 영역에서도 겹치지 않게.
+    c.elName.setAttribute('x', sx.toFixed(1)); c.elName.setAttribute('y', (sy - 15 - f * 0.55).toFixed(1)); c.elName.setAttribute('font-size', f.toFixed(1));
+    c.elCount.setAttribute('x', sx.toFixed(1)); c.elCount.setAttribute('y', (sy - 10).toFixed(1));
     const muted = (soloCat && c.key !== soloCat) ? true : false;
-    c.elTerr.classList.toggle('muted', !!(soloCat && c.key !== soloCat));
+    c.elTerr.classList.toggle('muted', muted);
     c.elName.parentNode.classList.toggle('muted', muted);
   }
 
-  // 노드 dim(검색/solo) + 호버 강조.
+  // 노드 dim(검색/solo) + 호버 강조. 점 크기는 화면 기준 안정(과확대 시 비대화 방지) — Obsidian 류.
+  const sizeK = clamp(view.k, 0.7, 2.2) / view.k;
   for (const n of NODES) {
     const dim = (query && !n._match) || (soloCat && n.cat !== soloCat);
     n.elNd.classList.toggle('dim', !!dim);
     n.elNd.classList.toggle('hot', hoverName === n.name || !!(hoverSet && hoverSet.has(n.name) && hoverName !== n.name));
-    if (hoverName === n.name) n.elDot.setAttribute('r', (n.r + 2.4).toFixed(1)); else n.elDot.setAttribute('r', n.r.toFixed(1));
+    const bump = hoverName === n.name ? 3 / view.k : 0;
+    n.elDot.setAttribute('r', (n.r * sizeK + bump).toFixed(2));
   }
   for (const l of LINKS) l.elLine.classList.toggle('hot', !!(hoverSet && (l.a.name === hoverName || l.b.name === hoverName)));
 
@@ -343,10 +346,12 @@ function topBar() {
     query = v.trim().toLowerCase();
     clr.style.display = query ? '' : 'none';
     for (const n of NODES) n._match = query ? (n.title.toLowerCase().includes(query) || n.name.toLowerCase().includes(query)) : false;
-    if (query) { const hit = NODES.find((n) => n._match); if (hit) centerOn(hit, Math.max(view.k, 1.4)); }
-    paint();
+    paint();   // 제자리 강조(매 타자마다 화면 이동 안 함 — 산만함 방지). Enter 로 매치에 맞춤.
   };
   input.addEventListener('input', () => run(input.value));
+  input.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { const m = NODES.filter((n) => n._match); if (m.length) { const b = bbox(m.map((n) => ({ x: n.x, y: n.y, pad: 60 }))); fitToBox(b.x0, b.y0, b.x1, b.y1, true); } }
+  });
   clr.addEventListener('click', () => { input.value = ''; run(''); input.focus(); });
   (window as any).__atlasSearch = input;
   return el('div', { class: 'atlas-top' },
@@ -413,7 +418,7 @@ function bbox(pts: { x: number; y: number; pad?: number }[]) {
   return { x0, y0, x1, y1 };
 }
 function fitToBox(x0: number, y0: number, x1: number, y1: number, animate?: boolean) {
-  const W = root.clientWidth, H = root.clientHeight, m = 90;
+  const W = root.clientWidth, H = root.clientHeight, m = 72;
   const k = clamp(Math.min((W - m * 2) / Math.max(1, x1 - x0), (H - m * 2) / Math.max(1, y1 - y0)), K_MIN, K_MAX);
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
   const target = { k, tx: W / 2 - cx * k, ty: H / 2 - cy * k };
@@ -449,7 +454,8 @@ function wire() {
     downNode = findNode(e.target);
     if (downNode) { mode = 'node'; dragNode = null; }
     else { mode = 'pan'; panTx = view.tx; panTy = view.ty; }
-    stage.setPointerCapture(e.pointerId); stage.classList.add('dragging');
+    try { stage.setPointerCapture(e.pointerId); } catch (_) { /* 합성 이벤트 등 — 무시 */ }
+    stage.classList.add('dragging');
   });
   stage.addEventListener('pointermove', (e: PointerEvent) => {
     if (!mode) return;
