@@ -107,7 +107,7 @@ const view = { k: 1, tx: 0, ty: 0 };
 let NODES = [], LINKS = [], CATS = [];
 const byName = new Map();
 const adj = new Map();
-let svg, gViewport, gHulls, gLinks, gNodes, gRegion, gNlab, stage;
+let svg, gViewport, gGrid, gHulls, gLinks, gNodes, gRegion, gNlab, stage;
 let hoverName = null, soloCat = null, query = '';
 let alpha = 0, raf = 0, running = false, dragNode = null;
 main();
@@ -346,6 +346,7 @@ function updateGeometry() {
 // ── 페인트(스크린 좌표) — 뷰 변환 + 라벨 적응 표시(겹침 컬링) + dim 상태. ──
 function paint() {
     gViewport.setAttribute('transform', `translate(${view.tx.toFixed(2)} ${view.ty.toFixed(2)}) scale(${view.k.toFixed(4)})`);
+    gGrid.style.opacity = String(clamp((160 * view.k - 26) / 46, 0, 1)); // 격자 화면간격이 좁아지면 페이드
     const W = root.clientWidth, H = root.clientHeight;
     const toScreen = (x, y) => [x * view.k + view.tx, y * view.k + view.ty];
     const hoverSet = hoverName ? new Set([hoverName, ...(adj.get(hoverName) || [])]) : null;
@@ -446,27 +447,38 @@ function loop() { force(); updateGeometry(); paint(); if (alpha > ALPHA_MIN)
 else
     running = false; }
 function reheat(a = 0.45) { alpha = Math.max(alpha, a); ensureRunning(); }
+// ── 그래티큘(좌표 격자) — 월드 공간 고정 격자. 5칸마다 굵은 선(major). 뷰 변환으로 팬·줌. ──
+function buildGrid() {
+    const E = 5200, S = 160;
+    for (let i = -Math.round(E / S); i <= Math.round(E / S); i++) {
+        const v = i * S, major = i % 5 === 0, cls = 'grid-l' + (major ? ' grid-major' : '');
+        gGrid.append(sv('line', { class: cls, x1: v, y1: -E, x2: v, y2: E }));
+        gGrid.append(sv('line', { class: cls, x1: -E, y1: v, x2: E, y2: v }));
+    }
+}
 // ── 장면 구성(요소 1회 생성, 이후 속성만 갱신) ──
 function buildScene() {
     svg = sv('svg', { xmlns: SVG_NS });
     gViewport = sv('g', { class: 'viewport' });
+    gGrid = sv('g', { class: 'grid' });
     gHulls = sv('g', { class: 'hulls' });
     gLinks = sv('g', { class: 'links' });
     gNodes = sv('g', { class: 'nodes' });
-    gViewport.append(gHulls, gLinks, gNodes);
+    gViewport.append(gGrid, gHulls, gLinks, gNodes);
+    buildGrid();
     const gOverlay = sv('g', { class: 'overlay' });
     gRegion = sv('g', { class: 'regions' });
     gNlab = sv('g', { class: 'nlabels' });
     gOverlay.append(gRegion, gNlab);
     svg.append(gViewport, gOverlay);
     for (const c of CATS) {
-        c.elHalo = sv('path', { class: 'terr-halo', stroke: c.color, 'stroke-width': '13', opacity: '0.16' });
+        c.elHalo = sv('path', { class: 'terr-halo', stroke: c.color, 'stroke-width': '13', opacity: '0.13' });
         c.elFill = sv('path', { class: 'terr-fill', fill: c.color, 'fill-opacity': '0.07', stroke: c.color, 'stroke-opacity': '0.5', 'stroke-width': '1.5' });
         c.elTerr = sv('g', { class: 'terr' });
         c.elTerr.append(c.elHalo, c.elFill);
         gHulls.append(c.elTerr);
         c.elName = sv('text', { class: 'rlab-name', 'text-anchor': 'middle', fill: c.color, text: c.name });
-        c.elCount = sv('text', { class: 'rlab-count', 'text-anchor': 'middle', 'font-size': '11', text: c.nodes.length + '개' });
+        c.elCount = sv('text', { class: 'rlab-count', 'text-anchor': 'middle', 'font-size': '11', text: String(c.nodes.length) });
         const rg = sv('g', { class: 'rlab' });
         rg.append(c.elName, c.elCount);
         gRegion.append(rg);
@@ -517,7 +529,7 @@ function topBar() {
     });
     clr.addEventListener('click', () => { input.value = ''; run(''); input.focus(); });
     window.__atlasSearch = input;
-    return el('div', { class: 'atlas-top' }, el('div', { class: 'atlas-title' }, el('h1', { text: '지식 아틀라스' }), el('span', { class: 'sub', text: '도메인으로 묶은 지식 지도' })), el('div', { class: 'atlas-spacer' }), el('div', { class: 'atlas-search' }, el('span', { class: 'mag', text: '🔎' }), input, clr), el('button', { class: 'atlas-btn', type: 'button', title: '이 창 닫기', onclick: () => window.close() }, el('span', { class: 'ic', text: '✕' }), '닫기'));
+    return el('div', { class: 'atlas-top' }, el('div', { class: 'atlas-cartouche' }, el('div', { class: 'cart-eyebrow', text: 'LIVELY · CONTEXT' }), el('h1', { text: '지식 아틀라스' }), el('div', { class: 'cart-stat', text: NODES.length + ' 지식 · ' + CATS.length + ' 도메인' })), el('div', { class: 'atlas-spacer' }), el('div', { class: 'atlas-search' }, el('span', { class: 'mag', text: '🔎' }), input, clr), el('button', { class: 'atlas-btn', type: 'button', title: '이 창 닫기', onclick: () => window.close() }, el('span', { class: 'ic', text: '✕' }), '닫기'));
 }
 // ── 범례(좌하단, space 그룹) — 클릭=영역 단독 강조 토글. ──
 function legend() {
