@@ -3761,8 +3761,10 @@ function pjvGridTemplate(fields) {
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
 function pjvProjGridTemplate(fields) {
-  const extra = (fields || []).map((f) => ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px').join(' ');
-  return 'minmax(0, 1fr) 96px 92px 112px 80px' + (extra ? ' ' + extra : '') + ' 34px';
+  // 제목 컬럼은 floor(200px) 로 보호 + 1fr 로 남은 폭 차지 — 창이 좁아져도 200px 밑으론 안 줄어든다(제목이 가장 잘 보이게).
+  // 메타 컬럼(팀원·마감·우선·세션·커스텀)은 minmax(0, Wpx) 라, 좁아지면 '제목 대신' 이쪽이 먼저 줄어든다(#339).
+  const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
+  return 'minmax(200px, 1fr) minmax(0, 96px) minmax(0, 92px) minmax(0, 112px) minmax(0, 80px)' + (extra ? ' ' + extra : '') + ' 34px';
 }
 function pjvHasFieldValue(v) {
   return !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));
