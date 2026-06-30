@@ -132,16 +132,39 @@ async function main() {
   const meetings = await pool.query(`SELECT name, title FROM knowledge WHERE name LIKE 'meeting-%'`);
   if (MOVE_MEETINGS && !DRY) {
     await pool.query(`CREATE TABLE IF NOT EXISTS knowledge_backup_290 AS SELECT * FROM knowledge WHERE 1=0`);
-    await pool.query(`INSERT INTO knowledge_backup_290 SELECT * FROM knowledge WHERE name LIKE 'meeting-%'`);
+    // 백업(멱등 — 이미 백업된 회의는 재삽입 안 함). knowledge 엔 created_at 없음 → updated_at 만 보존.
+    await pool.query(`INSERT INTO knowledge_backup_290 SELECT * FROM knowledge k WHERE k.name LIKE 'meeting-%' AND NOT EXISTS (SELECT 1 FROM knowledge_backup_290 b WHERE b.name=k.name)`);
     const ins = await pool.query(
-      `INSERT INTO source(name, kind, title, body_md, provenance, occurred_at, created_at)
+      `INSERT INTO source(name, kind, title, body_md, provenance, occurred_at)
        SELECT k.name, CASE WHEN k.name LIKE '%-transcript' THEN 'transcript' WHEN k.name LIKE '%-minutes' THEN 'minutes' ELSE 'other' END,
-              k.title, k.body_md, 'authored', k.occurred_at, k.created_at
+              k.title, k.body_md, 'authored', k.occurred_at
        FROM knowledge k WHERE k.name LIKE 'meeting-%' AND NOT EXISTS (SELECT 1 FROM source s WHERE s.name=k.name)`);
     const del = await pool.query(`DELETE FROM knowledge WHERE name LIKE 'meeting-%'`);
     log(`5) 회의 이동: source 적재 ${ins.rowCount}, knowledge 삭제 ${del.rowCount} (백업 knowledge_backup_290) ✓`);
   } else {
     log(`5) 회의 ${meetings.rows.length}행 = ${DRY ? "[DRY] " : ""}이동 보류(MOVE_MEETINGS=1 + deploy 시). 현재 knowledge 에 잔류(observed).`);
+  }
+
+  // 6) 잔여 multi 일반 수렴(KEEP 밖 — 동시작업 중 구 코드로 생긴 것) → 최소 category_id 로 단일화. 그 후 단일 UNIQUE 인덱스 생성(데이터 클린 시).
+  if (!DRY) {
+    const stragglers = await pool.query(`SELECT name FROM knowledge_category WHERE state<>'rejected' GROUP BY name HAVING count(*)>1`);
+    for (const r of stragglers.rows) {
+      await pool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id <> (SELECT min(category_id) FROM knowledge_category WHERE name=$1 AND state<>'rejected')`, [r.name]);
+      log(`   잔여 단일화: ${r.name}`);
+    }
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS knowledge_category_single_uq ON knowledge_category(name)`)
+      .then(() => log(`6) knowledge_category_single_uq 생성 ✓ (잔여 ${stragglers.rows.length}건 수렴 후)`))
+      .catch((e) => log(`6) 단일 인덱스 보류: ${e.message}`));
+    // project_category 도 단일화(결정 문서: 프로젝트도 단일). 백업 후 최소 category_id 로 수렴.
+    await pool.query(`CREATE TABLE IF NOT EXISTS project_category_backup_290 AS SELECT *, now() AS backed_up_at FROM project_category`);
+    const pstr = await pool.query(`SELECT project_id FROM project_category GROUP BY project_id HAVING count(*)>1`);
+    for (const r of pstr.rows) {
+      await pool.query(`DELETE FROM project_category WHERE project_id=$1 AND category_id <> (SELECT min(category_id) FROM project_category WHERE project_id=$1)`, [r.project_id]);
+      log(`   프로젝트 단일화: #${r.project_id}`);
+    }
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS project_category_single_uq ON project_category(project_id)`)
+      .then(() => log(`   project_category_single_uq 생성 ✓ (잔여 ${pstr.rows.length}건 수렴 후)`))
+      .catch((e) => log(`   project_category 단일 인덱스 보류: ${e.message}`));
   }
 
   // 검증 요약.
