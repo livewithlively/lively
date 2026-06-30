@@ -1769,9 +1769,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ps-kn-pick-results { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; }
 .ps-kn-pick-row { display: flex; align-items: center; gap: 12px; padding: 9px 6px; border-bottom: 1px solid var(--line-row); }
 .ps-kn-pick-row:last-child { border-bottom: none; }
-.ps-kn-pick-main { flex: 1; min-width: 0; }
+.ps-kn-pick-main { flex: 1; min-width: 0; display: block; text-decoration: none; color: inherit; cursor: pointer; }
 .ps-kn-pick-main .row-title { font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ps-kn-pick-snip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ps-kn-pick-main:hover .row-title { color: var(--blue); }
+.ps-kn-pick-snip { margin: 1px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 지식 흐름 섹션(#245) — 필요 지식 → [이 프로젝트] → 산출 지식 을 한 화면에. */
 .pjk-head-hint { font-size: 12.5px; color: var(--ink-sub); font-weight: 500; }
@@ -1785,7 +1786,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjk-col-prod .pjk-count { border-color: #CFEBDF; }
 .pjk-list { flex: 1; display: flex; flex-direction: column; }
 .pjk-empty { font-size: 12.5px; color: var(--muted-2); padding: 10px 2px; line-height: 1.5; }
-.pjk-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--line-row); }
+.pjk-row { display: flex; align-items: center; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--line-row); }
 .pjk-row:last-child { border-bottom: none; }
 .pjk-row-title { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjk-row-title:hover { color: var(--blue); }
@@ -1824,7 +1825,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .pjk-why-x:hover { background: var(--bg); color: var(--ink); }
 .pjk-rec { display: flex; flex-direction: column; }
 .pjk-rec-head { font-size: 12px; font-weight: 700; color: var(--ink-sub); padding: 4px 2px 6px; }
-.pjk-rec-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line-row); }
+.pjk-rec-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; border-bottom: 1px solid var(--line-row); }
 .pjk-rec-row:last-child { border-bottom: none; }
 .pjk-rec-title { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjk-rec-title:hover { color: var(--blue); }
