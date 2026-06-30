@@ -61,7 +61,7 @@ const toolUsage: Capability = {
     const limit = parseLimit(i.limit);
 
     // 공통 필터 — $1=interval(null=전체), $2=harness(''=전체), $3=tool(''=전체). 파라미터화(SQL 인젝션 차단).
-    const where = `WHERE ($1::text IS NULL OR at >= now() - $1::interval)
+    const where = `WHERE ($1::text IS NULL OR called_at >= now() - $1::interval)
                      AND ($2 = '' OR harness = $2)
                      AND ($3 = '' OR tool = $3)`;
     const p: unknown[] = [interval, harness, tool];
@@ -72,7 +72,7 @@ const toolUsage: Capability = {
                 count(DISTINCT tool)::int AS tools,
                 count(DISTINCT harness)::int AS harnesses,
                 count(*) FILTER (WHERE NOT ok)::int AS errors,
-                min(at) AS first_at, max(at) AS last_at
+                min(called_at) AS first_at, max(called_at) AS last_at
            FROM mcp_call_log ${where}`,
         p,
       ),
@@ -82,7 +82,7 @@ const toolUsage: Capability = {
                 count(*) FILTER (WHERE NOT ok)::int AS errors,
                 round(avg(duration_ms))::int AS avg_ms,
                 max(duration_ms)::int AS max_ms,
-                max(at) AS last_at
+                max(called_at) AS last_at
            FROM mcp_call_log ${where}
           GROUP BY tool
           ORDER BY calls DESC, tool
@@ -99,7 +99,7 @@ const toolUsage: Capability = {
         p,
       ),
       itemsPool.query(
-        `SELECT to_char((at AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD') AS day,
+        `SELECT to_char((called_at AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD') AS day,
                 count(*)::int AS calls,
                 count(*) FILTER (WHERE NOT ok)::int AS errors
            FROM mcp_call_log ${where}
@@ -109,9 +109,9 @@ const toolUsage: Capability = {
         p,
       ),
       itemsPool.query(
-        `SELECT id, at, tool, harness, actor, ok, error, duration_ms, args
+        `SELECT id, called_at, tool, harness, actor, ok, error, duration_ms, args
            FROM mcp_call_log ${where}
-          ORDER BY at DESC
+          ORDER BY called_at DESC
           LIMIT $4`,
         [...p, limit],
       ),

@@ -83,11 +83,11 @@ export async function initOrgSchema(): Promise<void> {
   //  읽는 쪽: 직접/LLM 쿼리(db_query 가 이 테이블을 SELECT) + 대시보드 집계(/api/ui/tool-usage → 관리탭 'MCP 호출 통계').
   //  harness = 접속 신원(x-lively-harness 헤더 우선, 없으면 UA — claude-code/codex/openclaw/null). actor = 토큰 principal(userId).
   //  ⚠ 보존정책: v1 은 무제한(소팀 볼륨 가정 — 일 수천~수만 행, 90일<1M 행은 postgres 무리 없음). 성장 시
-  //   주기 prune(예: DELETE WHERE at < now()-INTERVAL '90 days')를 별도 cron 액션으로 추가한다(현재 미구현).
+  //   주기 prune(예: DELETE WHERE called_at < now()-INTERVAL '90 days')를 별도 cron 액션으로 추가한다(현재 미구현).
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS mcp_call_log(
       id BIGSERIAL PRIMARY KEY,
-      at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      called_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       tool TEXT NOT NULL,
       harness TEXT,
       actor TEXT,
@@ -96,9 +96,18 @@ export async function initOrgSchema(): Promise<void> {
       error TEXT,
       duration_ms INT,
       source TEXT NOT NULL DEFAULT 'mcp');
-    CREATE INDEX IF NOT EXISTS mcp_call_log_at_idx ON mcp_call_log(at DESC);
-    CREATE INDEX IF NOT EXISTS mcp_call_log_tool_at_idx ON mcp_call_log(tool, at DESC);
-    CREATE INDEX IF NOT EXISTS mcp_call_log_harness_at_idx ON mcp_call_log(harness, at DESC);
+    -- 구 컬럼 'at' → 'called_at' 비파괴 개명(#318): db_query 읽기 방화벽 파서(node-sql-parser)가 'at' 를
+    --  AT TIME ZONE 키워드로 오인 → 'SELECT ... at ... FROM mcp_call_log' 가 파싱 실패. 하네스/LLM 가
+    --  직접 조회하는 게 이 테이블의 핵심 용도이므로, 외우게 할 함정을 만들지 않고 컬럼명에서 제거한다.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mcp_call_log' AND column_name='at')
+         AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mcp_call_log' AND column_name='called_at') THEN
+        ALTER TABLE mcp_call_log RENAME COLUMN at TO called_at;
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS mcp_call_log_at_idx ON mcp_call_log(called_at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_tool_at_idx ON mcp_call_log(tool, called_at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_harness_at_idx ON mcp_call_log(harness, called_at DESC);
   `);
 
   // ── auth_token — DB 기반 bearer 토큰(정적 AUTH_TOKENS_JSON 의 핫리로드 가능 대체). ──
