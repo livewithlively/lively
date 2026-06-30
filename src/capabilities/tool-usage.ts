@@ -36,6 +36,10 @@ function parseOffset(v: unknown): number {
   return Math.min(Math.floor(n), 1_000_000);
 }
 
+function parseBool(v: unknown): boolean {
+  return v === "1" || v === "true" || v === true;
+}
+
 const toolUsage: Capability = {
   name: "tool_usage_stats",
   title: "MCP 호출 통계",
@@ -55,6 +59,7 @@ const toolUsage: Capability = {
           tool: req.query?.tool,
           limit: req.query?.limit,
           offset: req.query?.offset,
+          errors: req.query?.errors,
         }),
       },
     ],
@@ -67,15 +72,17 @@ const toolUsage: Capability = {
     const tool = parseStr(i.tool);
     const limit = parseLimit(i.limit);
     const offset = parseOffset(i.offset);
+    const errorsOnly = parseBool(i.errors);
 
-    // 공통 필터 — $1=interval(null=전체), $2=harness(''=전체), $3=tool(''=전체). 파라미터화(SQL 인젝션 차단).
-    //  whereBase = 기간+하네스만(툴 필터 제외) — 툴 드롭다운 옵션(toolOptions)이 선택된 툴 1개로 좁혀지지 않게.
+    // 공통 필터 — $1=interval(null=전체), $2=harness(''=전체), $3=errorsOnly(오류만), $4=tool(''=전체). 파라미터화.
+    //  whereBase = 기간+하네스+결과(툴 필터 제외) — 툴 드롭다운 옵션(toolOptions)이 선택된 툴 1개로 좁혀지지 않게.
     const whereBase = `WHERE ($1::text IS NULL OR called_at >= now() - $1::interval)
-                     AND ($2 = '' OR harness = $2)`;
+                     AND ($2 = '' OR harness = $2)
+                     AND ($3::bool IS NOT TRUE OR NOT ok)`;
     const where = `${whereBase}
-                     AND ($3 = '' OR tool = $3)`;
-    const pBase: unknown[] = [interval, harness];
-    const p: unknown[] = [interval, harness, tool];
+                     AND ($4 = '' OR tool = $4)`;
+    const pBase: unknown[] = [interval, harness, errorsOnly];
+    const p: unknown[] = [interval, harness, errorsOnly, tool];
 
     const [summary, byTool, byHarness, byDay, recent, toolOptions] = await Promise.all([
       itemsPool.query(
@@ -123,7 +130,7 @@ const toolUsage: Capability = {
         `SELECT id, called_at, tool, harness, actor, ok, error, duration_ms, args
            FROM mcp_call_log ${where}
           ORDER BY called_at DESC
-          LIMIT $4 OFFSET $5`,
+          LIMIT $5 OFFSET $6`,
         [...p, limit, offset],
       ),
       itemsPool.query(
@@ -139,7 +146,7 @@ const toolUsage: Capability = {
     return {
       window,
       windows: Object.keys(WINDOWS),
-      filters: { harness: harness || null, tool: tool || null },
+      filters: { harness: harness || null, tool: tool || null, errorsOnly },
       limit,
       offset,
       summary: summary.rows[0] ?? { total: 0, tools: 0, harnesses: 0, errors: 0, first_at: null, last_at: null },
