@@ -1415,6 +1415,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
 
 /* ════ 도메인 맵 (#/domainmap) — 회사맥락 하위. should(의도)·is(구조) 2열 + 괴리/변경이력. ════ */
+/* 준비중 안내 배너 — 탭 최상단(프로젝트 #342). 아직 불완전한 기능임을 알린다(warn 앰버 톤: warn-badge·dm-debt 팔레트 재사용). */
+.dm-wip { border: 1px solid #F0DBB0; border-left: 3px solid #C9742E; border-radius: 12px; padding: 12px 14px; background: #FFF6E9; }
+.dm-wip-title { font-size: 13.5px; font-weight: 800; color: #9A5B2E; }
+.dm-wip-sub { font-size: 12.5px; line-height: 1.55; color: #8A6A3A; margin-top: 4px; }
 .dm-section { margin-top: 16px; }
 .dm-section-hint { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .dm-list { display: flex; flex-direction: column; gap: 10px; }
