@@ -215,23 +215,51 @@ function softReconnect() {
   else { connectNow(); }         // 이미 끊겨 있으면 바로 연결
   try { statusEl.textContent = '복구 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
 }
-// 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에
-//  셀 크기를 재 cols/rows 가 어긋날 수 있다. 그래서 '폰트 준비(document.fonts.ready) + 소켓 open'
-//  이후 forceRedraw('화면 복구')를 한 번 자동 실행해 현재 창에 정확히 맞춘다. 가드로 진입당 1회만.
+// 웹폰트(자체호스팅 D2Coding ~1.5MB·Google 라틴 글꼴)를 '명시적으로' 즉시 로드한다 — 새로고침 폰트
+//  미적용의 근본 원인 차단. @font-face 는 '글리프가 실제로 그려질 때' lazy 로드되므로, 첫 진입처럼
+//  한글이 아직 출력되기 전엔 D2Coding 다운로드가 시작조차 안 된다 → 이때 document.fonts.ready 는
+//  '로드 중인 폰트 없음'으로 즉시 resolve 해버려(조기 resolve 함정) 폴백 글꼴 측정값이 굳는다. 그래서
+//  document.fonts.load 로 한글 샘플과 함께 다운로드를 직접 트리거하고, 그 promise 가 '실제로' 끝난
+//  시점을 잡아 재측정한다. (memo: 인자 없을 때 1회만 — 부팅 시 호출로 다운로드를 WS 와 병렬 시작.)
+let fontReadyPromise = null;
+function loadTermFonts(family) {
+  if (!(document.fonts && document.fonts.load)) return Promise.resolve();
+  if (!family && fontReadyPromise) return fontReadyPromise;
+  const sz = (term && term.options.fontSize) || 14;
+  const fam = String(family || (term && term.options.fontFamily) || '');
+  // 한글은 항상 D2Coding(폴백)에 의존 → 정자/볼드 둘 다 한글 샘플로 로드.
+  const want = [['가힣글꼴', "'D2Coding'"], ['가힣글꼴', "bold 'D2Coding'"]];
+  // 선택된 패밀리의 첫 라틴 글꼴도 같은 race 를 탄다 — 라틴 샘플로 함께 로드(monospace 등 시스템 키워드 제외).
+  try {
+    const first = fam.split(',')[0].trim();
+    if (first && !/D2Coding/i.test(first) && !/^(ui-)?monospace$/i.test(first)) {
+      want.push(['AaWgMm0', first], ['AaWgMm0', 'bold ' + first]);
+    }
+  } catch (_) { /* noop */ }
+  const pr = Promise.all(want.map(([t, f]) => document.fonts.load(f.replace(/^(bold )?/, '$1' + sz + 'px '), t).catch(() => null)));
+  if (!family) fontReadyPromise = pr;
+  return pr;
+}
+// 폰트가 '실제로' 준비된 시점에 글자 셀 폭을 재측정한다 — fontSize 를 +1 했다 즉시 되돌려, xterm 의
+//  CharSizeService 재측정 + 렌더러 글리프 아틀라스 재생성을 유발한다(환경설정에서 크기 바꿨다 되돌리면
+//  정상화되는 것과 동일 원리). fit/refresh 만으로는 자간(특히 한글 더블폭 셀)이 폰트 로드 전 측정값으로
+//  굳는 게 안 풀린다. 같은 값 재설정은 xterm 이 무변동으로 건너뛰므로 반드시 다른 값(+1)을 한 번 거친다.
+function remeasureAfterFonts(family) {
+  const run = () => {
+    try { const fs = term.options.fontSize; term.options.fontSize = fs + 1; term.options.fontSize = fs; } catch (_) { /* noop */ }
+    try { requestAnimationFrame(forceRedraw); } catch (_) { forceRedraw(); } // 셀 px 변동 → grid 재맞춤·pty 재전송·재렌더
+  };
+  loadTermFonts(family)
+    .then(() => (document.fonts && document.fonts.ready) || null) // 추가 안전망(레이아웃 settle)
+    .then(() => setTimeout(run, 30))
+    .catch(() => setTimeout(run, 120));
+}
+// 첫 진입 시 화면이 창에 안 맞게 그려지는 문제 해소 — 마운트 직후 applyFit 은 웹폰트 로드 전에 셀 크기를
+//  재 cols/rows 가 어긋날 수 있다. 그래서 '폰트 실제 준비 + 소켓 open' 이후 자동 1회 재측정·재그림. 가드로 1회만.
 function initialSettleRedraw() {
   if (didInitialFit) return;
   didInitialFit = true;
-  const run = () => {
-    // 폰트 로드 후 글자 셀 폭 '재측정'을 강제 — fontSize 를 +1 했다 즉시 되돌려, xterm 의 CharSizeService
-    //  재측정 + 렌더러 글리프 아틀라스 재생성을 유발한다(환경설정에서 크기 바꿨다 되돌리면 정상화되는 것과
-    //  동일 원리). fit/refresh 만으로는 자간(특히 한글 더블폭 셀)이 폰트 로드 전 측정값으로 굳는 게 안 풀린다.
-    //  같은 값으로 다시 세팅하면 xterm 이 무변동으로 건너뛰므로, 반드시 다른 값(+1)을 한 번 거친다.
-    try { const fs = term.options.fontSize; term.options.fontSize = fs + 1; term.options.fontSize = fs; } catch (_) { /* noop */ }
-    // 셀 px 가 바뀌었으니 그 위에서 grid 재맞춤(cols/rows)·pty 재전송·재렌더.
-    try { requestAnimationFrame(forceRedraw); } catch (_) { forceRedraw(); }
-  };
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => setTimeout(run, 60)).catch(() => setTimeout(run, 120));
-  else setTimeout(run, 120);
+  remeasureAfterFonts();
 }
 
 function loadRenderer() {
@@ -593,12 +621,15 @@ function openSettings() {
   const themeSel = el('select', {}, ...Object.entries(THEMES).map(([k, v]) => el('option', { value: k, selected: k === p.theme ? '' : null }, v.name)));
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
   const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
+  let curFamily = p.fontFamily;
   const apply = () => {
     const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)) };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
     scrollSpeed = np.scrollSpeed;
     savePrefs(np); applyChrome(np.theme); doResize();
+    // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
+    if (np.fontFamily !== curFamily) { curFamily = np.fontFamily; remeasureAfterFonts(np.fontFamily); }
   };
   for (const c of [fontSel, themeSel, cursorSel]) c.addEventListener('change', apply);
   sizeI.addEventListener('input', apply);
@@ -762,6 +793,7 @@ async function boot() {
   term.loadAddon(fit);
   term.open(host);
   loadRenderer();
+  loadTermFonts();        // 웹폰트 다운로드를 즉시 시작(WS 핸드셰이크와 병렬) — onopen 의 재측정이 빨리 확정되도록
   setupClipboard();
   setupPaste();
   setupWheel();
