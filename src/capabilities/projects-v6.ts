@@ -16,6 +16,7 @@ import {
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
+  linkProjectEdge, unlinkProjectEdge, getProjectListRow,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -45,6 +46,13 @@ function parseProjectStatus(v: unknown): string {
 function parseRelation(v: unknown): string {
   const r = String(v ?? "").trim();
   if (!(RELATIONS as readonly string[]).includes(r)) throw new HttpError(400, "relation 은 required|produced 중 하나여야 합니다");
+  return r;
+}
+// 프로젝트↔프로젝트 엣지 relation(project_edge) — 1차 노출 follow_up. 생략 시 follow_up 기본.
+const EDGE_RELATIONS = ["follow_up", "supersedes", "depends_on", "related"] as const;
+function parseEdgeRelation(v: unknown): string {
+  const r = (String(v ?? "").trim() || "follow_up");
+  if (!(EDGE_RELATIONS as readonly string[]).includes(r)) throw new HttpError(400, "relation 은 follow_up|supersedes|depends_on|related 중 하나여야 합니다");
   return r;
 }
 // 태스크 필드 파서 — 패치 시맨틱: 키 부재=변경 없음(undefined), 키 존재+빈값/null=해제(null). 따라서 null 반환 가능.
@@ -123,7 +131,7 @@ const projectListV6: Capability = {
 const projectGetV6: Capability = {
   name: "project_get_v6",
   title: "프로젝트 상세(v6)",
-  description: "프로젝트 1건 + 팀원·작업위계(task▸subtask)·카테고리·필요/산출지식. 상세 페이지 전용.",
+  description: "프로젝트 1건 + 팀원·작업위계(task▸subtask)·카테고리·필요/산출지식 + 프로젝트↔프로젝트 엣지(edges.outgoing=이 프로젝트가 후속하는 선행, edges.incoming=이 프로젝트를 후속하는 것). 상세 페이지 전용.",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {
@@ -142,13 +150,15 @@ const projectGetV6: Capability = {
 const projectCreateV6: Capability = {
   name: "project_create_v6",
   title: "프로젝트 생성(v6)",
-  description: "새 프로젝트를 만든다(진행중으로 시작) + 팀원 초기 등록. 웹 전용.",
+  description: "새 프로젝트 생성 + 팀원 초기 등록. **list_id(소속 리스트/영역)는 MCP 생성 시 필수**(project_list_index_v6 로 id 조회). follow_up=선행 프로젝트 id(선택) 주면 생성 직후 follow_up 엣지(이 프로젝트가 그 선행의 후속)도 연결.",
   scope: "memory",
   input: {
     name: z.string().min(1).max(200),
     description: z.string().max(4000).optional(),
     folder: z.string().max(256).optional(),
     members: z.array(z.string()).optional(),
+    list_id: z.number().int().positive().describe("소속 리스트(영역) id — project_list_index_v6 로 조회. MCP 생성 시 필수."),
+    follow_up: z.number().int().positive().optional().describe("이 프로젝트가 '후속'하는 선행 프로젝트 id(선택) — 생성 직후 follow_up 엣지 연결."),
   },
   expose: {
     mcp: true,
@@ -162,12 +172,23 @@ const projectCreateV6: Capability = {
           description: b.description ? String(b.description) : undefined,
           folder: b.folder ? String(b.folder) : undefined,
           members: Array.isArray(b.members) ? b.members.map((x: unknown) => String(x)) : undefined,
+          // 웹은 list_id 선택(미지정 허용 — 보드에서 나중에 분류). MCP 는 위 zod 로 필수.
+          list_id: b.list_id != null ? parseId(b.list_id) : undefined,
+          follow_up: b.follow_up != null ? parseId(b.follow_up) : undefined,
         };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    // 유효성 먼저(생성 전) — 잘못된 list_id/follow_up 으로 고아 프로젝트가 안 생기게.
+    if (input.list_id != null && !(await getProjectListRow(input.list_id))) {
+      throw new HttpError(400, `리스트(영역) #${input.list_id} 가 없습니다 — project_list_index_v6 로 확인하세요`);
+    }
+    if (input.follow_up != null && !(await getProjectRow(input.follow_up))) {
+      throw new HttpError(400, `선행 프로젝트 #${input.follow_up} 가 없습니다`);
+    }
     const project = await createProject(input, writeCtx);
+    if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
     return { project };
   },
@@ -612,8 +633,39 @@ const boardFieldsV6: Capability = {
   handler: async () => await getBoardFields(),
 };
 
+// ── 프로젝트↔프로젝트 엣지 — from(:id) --relation--> to. follow_up: from 이 to 의 후속(from=후속, to=선행). 단건 link/unlink 토글. ──
+const projectLinkProjectV6: Capability = {
+  name: "project_link_project_v6",
+  title: "프로젝트↔프로젝트(v6)",
+  description: "프로젝트끼리 연결(또는 unlink=true 로 해제) — from(:id) --relation--> to. relation=follow_up(기본; from 이 to 의 후속)|supersedes|depends_on|related. project_get_v6 의 edges(outgoing=선행/incoming=후속)로 양방향 조회. 예) 새 후속 프로젝트 #B 가 #A 를 잇는다 → project_link_project_v6(id=B, to=A).",
+  scope: "memory",
+  input: {
+    id: z.number().int().positive(),
+    to: z.number().int().positive(),
+    relation: z.enum(EDGE_RELATIONS).optional(),
+    unlink: z.boolean().optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/link"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), to: parseId(b.to), relation: parseEdgeRelation(b.relation), unlink: b.unlink === true };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const relation = input.relation || "follow_up";
+    if (input.id === input.to) throw new HttpError(400, "같은 프로젝트끼리는 연결할 수 없습니다");
+    if (input.unlink) { await unlinkProjectEdge(input.id, input.to, relation, writeCtx); return { unlinked: true }; }
+    if (!(await getProjectRow(input.to))) throw new HttpError(400, `대상 프로젝트 #${input.to} 가 없습니다`);
+    await linkProjectEdge(input.id, input.to, relation, writeCtx);
+    return { linked: true };
+  },
+};
+
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskDeleteV6, boardFieldsV6,
 ];
