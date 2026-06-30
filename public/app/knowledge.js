@@ -896,8 +896,7 @@ export async function renderKnowledgeForm(view, params, editName) {
     if (isEdit)
         nameIn.disabled = true; // 이름=식별자, 생성 후 불변
     const titleIn = el('input', { type: 'text', value: k.title || '', placeholder: '제목' });
-    const injSel = el('select', {}, el('option', { value: 'recalled', text: '검색 소환 (기본)' }), el('option', { value: 'always', text: '항상 주입 (규칙·페르소나)' }));
-    injSel.value = k.injection || 'recalled';
+    // (#335) injection 선택 폐기 — 지식은 항상 recalled. 항상-주입은 관리탭 '세션 주입' 섹션 문서로만(편집 시 미전송 → 서버 보존).
     const provSel = el('select', {}, el('option', { value: 'authored', text: '저작 (기본)' }), el('option', { value: 'observed', text: '외부 미러' }));
     provSel.value = k.provenance || 'authored';
     // 분류(단일 필수) — value=key. 편집 시 현재 분류 key 프리셀렉트.
@@ -970,7 +969,7 @@ export async function renderKnowledgeForm(view, params, editName) {
         saveBtn.disabled = true;
         status.textContent = '저장 중…';
         try {
-            const payload = { title: titleIn.value.trim() || undefined, body_md: body, injection: injSel.value, provenance: provSel.value, category: catSel.value, type: typeSel.value };
+            const payload = { title: titleIn.value.trim() || undefined, body_md: body, provenance: provSel.value, category: catSel.value, type: typeSel.value };
             if (isEdit)
                 payload.name = k.name;
             else if (nameIn.value.trim())
@@ -996,7 +995,7 @@ export async function renderKnowledgeForm(view, params, editName) {
         }
     };
     const head = el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '지식 ', el('span', { class: 'accent', text: isEdit ? '편집' : '작성' })), el('a', { class: 'btn btn-ghost btn-sm', href: isEdit ? ('#/k/' + encodeURIComponent(k.name)) : '#/knowledge', text: isEdit ? '← 상세로' : '← 목록으로' })), el('p', { class: 'sub', text: isEdit ? '이 지식의 내용을 수정합니다. 프로젝트 연결은 상세 페이지에서 관리합니다.' : '새 지식을 작성하고, 원하면 프로젝트의 필요/산출 지식으로 연결합니다(복수 프로젝트 가능).' }));
-    const card = el('div', { class: 'card kn-create-card' }, field('파일명', nameIn), field('제목', titleIn), field('주입(injection)', injSel), field('출처(provenance)', provSel), field('카테고리 (필수)', catSel), field('유형/type (필수)', typeSel), field('본문', bodyTa), isEdit ? null : el('div', { class: 'field' }, el('div', { class: 'field-label-row kn-create-projhead' }, el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn), stagedList), el('div', { class: 'admin-actions' }, saveBtn, status));
+    const card = el('div', { class: 'card kn-create-card' }, field('파일명', nameIn), field('제목', titleIn), field('출처(provenance)', provSel), field('카테고리 (필수)', catSel), field('유형/type (필수)', typeSel), field('본문', bodyTa), isEdit ? null : el('div', { class: 'field' }, el('div', { class: 'field-label-row kn-create-projhead' }, el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn), stagedList), el('div', { class: 'admin-actions' }, saveBtn, status));
     view.replaceChildren(head, knowledgeSubBar('browse'), card);
     applyReveal([card]);
     setTimeout(() => (isEdit ? bodyTa : titleIn).focus(), 0);

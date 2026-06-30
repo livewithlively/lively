@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, debounce, fileIconSvg, fmtSize, initials, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusMeta } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, initials, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
 const PJV_LINK_TYPE = {
     blocking: { label: '막고 있음', short: 'blocking' },
     waiting_on: { label: '기다리는 중', short: 'waiting on' },
@@ -194,23 +194,82 @@ function pjvtmBackIcon() {
 function pjvOpenTaskModal(taskId, pageReload) {
     let dirty = false;
     let tickTimer = null;
+    let pasteCtx = null; // 클립보드 붙여넣기 대상 — render 에서 {pid, taskId, refresh} 로 갱신
+    // 본문(설명) 편집 중 상태 — 바깥클릭/Esc 로 모달이 닫혀 작성 중인 글이 날아가는 것을 막는다(#139-6).
+    let descEditing = false;
+    let descCommit = null;
     const back = el('div', { class: 'pjv-tm-back' });
     const box = el('div', { class: 'pjv-tm' });
     back.append(box);
-    back.addEventListener('mousedown', (e) => { if (e.target === back)
-        closeModal(); });
-    const onKey = (e) => { if (e.key === 'Escape') {
-        const pop = document.querySelector('.pjv-pop');
-        if (!pop)
+    // 바깥(배경) 클릭 — 본문 편집 중이면 먼저 저장하고 모달은 유지(한 번 더 눌러야 닫힘). 아니면 닫기.
+    back.addEventListener('mousedown', (e) => {
+        if (e.target !== back)
+            return;
+        if (descEditing && descCommit) {
+            descCommit(true);
+            return;
+        }
+        closeModal();
+    });
+    const onKey = (e) => {
+        if (e.key !== 'Escape')
+            return;
+        const pb = document.querySelector('.pjv-tm-paste-back');
+        if (pb) {
+            pb._cancel && pb._cancel();
+            return;
+        } // 붙여넣기 다이얼로그가 떠 있으면 그것부터 닫기
+        if (descEditing)
+            return; // 본문 편집 중이면 에디터 자체의 Esc(취소)가 처리 — 모달은 닫지 않음
+        if (!document.querySelector('.pjv-pop'))
             closeModal();
-    } };
+    };
+    // 클립보드 이미지 붙여넣기(Ctrl/⌘+V) — 이 태스크 첨부폴더로 업로드(터미널 붙여넣기와 같은 결).
+    //  이미지가 있을 때만 가로채고, 텍스트 등 비-이미지 붙여넣기는 기본 동작 그대로 통과시킨다.
+    const onPaste = (e) => {
+        if (!pasteCtx || pasteCtx.pid == null)
+            return;
+        if (document.querySelector('.pjv-tm-paste-back'))
+            return; // 이미 다이얼로그 열림
+        const dt = e.clipboardData;
+        if (!dt)
+            return;
+        let blob = null;
+        for (const it of (dt.items || [])) {
+            if (it.kind === 'file' && /^image\//.test(it.type || '')) {
+                blob = it.getAsFile();
+                break;
+            }
+        }
+        if (!blob)
+            for (const f of (dt.files || [])) {
+                if (/^image\//.test(f.type || '')) {
+                    blob = f;
+                    break;
+                }
+            }
+        if (!blob)
+            return; // 이미지 없음 → 기본 붙여넣기 유지
+        e.preventDefault();
+        e.stopImmediatePropagation(); // 모달이 우선 — 프로젝트 상세의 전역 paste 핸들러(공유폴더 업로드)가 같은 이벤트를 또 잡지 않게 차단(capture 단계라 bubble 전역 핸들러보다 먼저 실행됨)
+        pjvtmPasteImage(blob, { pid: pasteCtx.pid, dir: '_attachments/task-' + pasteCtx.taskId, base: '/api/ui/v6/projects/', refresh: pasteCtx.refresh }, back);
+    };
     document.addEventListener('keydown', onKey, true);
+    document.addEventListener('paste', onPaste, true);
     document.body.append(back);
     document.body.classList.add('pjv-tm-open');
     function closeModal() {
+        // 어떤 경로로 닫더라도(✕·Esc·바깥클릭) 편집 중인 본문은 먼저 저장(flush)해 유실 방지(#139-6).
+        if (descEditing && descCommit) {
+            try {
+                descCommit(true);
+            }
+            catch (_) { /* noop */ }
+        }
         if (tickTimer)
             clearInterval(tickTimer);
         document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('paste', onPaste, true);
         document.body.classList.remove('pjv-tm-open');
         back.remove();
         if (dirty && pageReload)
@@ -237,6 +296,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             tickTimer = null;
         }
         const t = d.task;
+        pasteCtx = { pid: d.project && d.project.id, taskId: t.id, refresh }; // 클립보드 붙여넣기 대상 갱신
         const members = d.members || [];
         const _prevMain = box.querySelector('.pjv-tm-main');
         const _prevScroll = _prevMain ? _prevMain.scrollTop : 0;
@@ -259,8 +319,10 @@ function pjvOpenTaskModal(taskId, pageReload) {
     // ── 좌측(상세) ──
     function pjvtmMain(d, t, members, refresh, closeModal, pageReload) {
         const main = el('div', { class: 'pjv-tm-main' });
-        // 상단바: 브레드크럼(프로젝트명) + 닫기
-        main.append(el('div', { class: 'pjv-tm-top' }, el('div', { class: 'pjv-tm-crumb' }, d.project ? el('a', { class: 'pjv-tm-crumb-link', href: '#/projects2/p/' + d.project.id, text: d.project.name, onclick: () => closeModal() }) : null, el('span', { class: 'pjv-tm-crumb-sep', text: d.project ? ' /' : '' })), el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
+        // 상단바: 브레드크럼(프로젝트 / 상위태스크 / …) + 닫기. 하위태스크면 직전 층위(상위 태스크)까지 하이퍼링크(#139-5).
+        main.append(el('div', { class: 'pjv-tm-top' }, el('div', { class: 'pjv-tm-crumb' }, d.project ? el('a', { class: 'pjv-tm-crumb-link', href: '#/projects2/p/' + d.project.id, text: d.project.name, onclick: () => closeModal() }) : null, d.project ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null, d.parent ? el('a', { class: 'pjv-tm-crumb-link', href: '#', title: '상위 태스크로 돌아가기',
+            text: d.parent.name,
+            onclick: (e) => { e.preventDefault(); dirty = true; closeModal(); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null, d.parent ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null), el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
         // 타입 pill + 하위수
         const subs = t.subtasks || [];
         main.append(el('div', { class: 'pjv-tm-typebar' }, el('span', { class: 'pjv-tm-typepill' }, el('span', { class: 'pjv-tm-typedot' }), el('span', { text: t.level === 'subtask' ? 'Subtask' : 'Task' })), subs.length ? el('span', { class: 'pjv-tm-subcount', title: subs.length + '개 하위', text: '⌥ ' + subs.length }) : null));
@@ -270,16 +332,24 @@ function pjvOpenTaskModal(taskId, pageReload) {
         const autoGrow = () => { titleIn.style.height = 'auto'; titleIn.style.height = titleIn.scrollHeight + 'px'; };
         setTimeout(autoGrow, 0);
         titleIn.addEventListener('input', autoGrow);
+        // 마지막 저장값을 추적해 같은 값이 두 번 저장(=activity 중복 기록)되는 것을 막는다(#293).
+        let lastSavedName = t.name;
         const saveTitle = () => {
             const v = titleIn.value.trim();
-            if (v && v !== t.name)
+            if (v && v !== lastSavedName) {
+                lastSavedName = v;
                 pjvPatchTask(t.id, { name: v }, refresh);
+            }
         };
         titleIn.addEventListener('blur', saveTitle);
-        titleIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
-            e.preventDefault();
-            titleIn.blur();
-        } });
+        // 한글(IME) 조합 중의 Enter 는 마지막 글자 '확정'용이다. 그때 blur→저장하면 조합 중 값이 저장돼
+        // 마지막 글자가 중복되고(생각해보기→생각해보기기) 저장이 두 번 일어난다(#293). 조합이 끝난 Enter 에서만 저장.
+        titleIn.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+                e.preventDefault();
+                titleIn.blur();
+            }
+        });
         main.append(titleIn);
         // 필드 그리드(2열): 좌(상태·기간·시간추적) 우(담당자·우선순위·태그)
         main.append(el('div', { class: 'pjv-tm-fields' }, pjvtmFieldRow('◎', '상태', pjvtmStatusField(t, refresh)), pjvtmFieldRow('👤', '담당자', pjvtmAssigneeField(t, members, refresh)), pjvtmFieldRow('🗓', '기간', pjvtmDatesField(t, refresh)), pjvtmFieldRow('⚑', '우선순위', pjvtmPriorityField(t, refresh)), pjvtmFieldRow('⏱', '시간 추적', pjvtmTimeField(d, t, refresh)), pjvtmFieldRow('🏷', '태그', pjvtmTagsField(d, t, refresh))));
@@ -724,56 +794,157 @@ function pjvOpenTaskModal(taskId, pageReload) {
         }
         showList('');
     }
-    // 설명 — 렌더(MD) ↔ 편집 토글.
+    // 설명(본문) — 프로젝트 탭 '본문' 섹션(projectBodySection)과 동일한 위지위그(WYSIWYG)로 통일(#139-2,3,6).
+    //  평상시: 렌더된 마크다운만 보임(클릭→그 자리 편집). 편집: contentEditable + 서식바, ⌘/Ctrl+Enter·바깥클릭(blur) 저장 · Esc 취소.
+    //  저장 버튼 없음(blur 자동저장) → 클립보드 붙여넣기·바깥클릭으로 작성 내용이 날아가지 않는다.
     function pjvtmDescription(t, refresh) {
         const sec = el('div', { class: 'pjv-tm-desc' });
-        const hasDesc = !!(t.description && t.description.trim());
-        let editing = false;
-        const paint = () => {
-            sec.replaceChildren();
-            if (editing) {
-                const ta = el('textarea', { class: 'pjv-tm-desc-ta', rows: '6', placeholder: '설명을 입력하세요 (마크다운 지원)' });
-                ta.value = t.description || '';
-                const save = el('button', { class: 'btn btn-sm btn-primary', text: '저장' });
-                const cancel = el('button', { class: 'btn btn-sm btn-ghost', text: '취소' });
-                save.onclick = () => { editing = false; const v = ta.value; if (v !== (t.description || ''))
-                    pjvPatchTask(t.id, { description: v || null }, refresh);
-                else
-                    paint(); };
-                cancel.onclick = () => { editing = false; paint(); };
-                sec.append(ta, el('div', { class: 'pjv-tm-desc-acts' }, save, cancel));
-                setTimeout(() => ta.focus(), 0);
-            }
-            else if (hasDesc) {
-                const body = el('div', { class: 'pjv-tm-desc-body md-rendered' }, renderMarkdown(t.description));
-                body.onclick = () => { editing = true; paint(); };
-                sec.append(body);
+        const bodyWrap = el('div', { class: 'proj-body-sec' });
+        sec.append(bodyWrap);
+        const editBody = () => {
+            const ce = el('div', { class: 'proj-body-wysiwyg md-rendered', contenteditable: 'true', spellcheck: 'false' });
+            if (t.description && t.description.trim()) {
+                const rendered = renderMarkdown(t.description);
+                while (rendered.firstChild)
+                    ce.append(rendered.firstChild);
             }
             else {
-                const add = el('button', { class: 'pjv-tm-desc-add', type: 'button', text: '＋ 설명 추가' });
-                add.onclick = () => { editing = true; paint(); };
-                sec.append(add);
+                ce.append(el('p', {}, el('br', {})));
+            }
+            bodyWrap.replaceChildren(ce);
+            ce.focus();
+            try {
+                const r = document.createRange();
+                r.selectNodeContents(ce);
+                r.collapse(false);
+                const s = window.getSelection();
+                if (s) {
+                    s.removeAllRanges();
+                    s.addRange(r);
+                }
+            }
+            catch (_) { /* noop */ }
+            const toolbar = buildWysiwygToolbar(ce);
+            let fin = false;
+            const done = (save) => {
+                if (fin)
+                    return;
+                fin = true;
+                descEditing = false;
+                descCommit = null;
+                toolbar.destroy();
+                const nv = save ? mdFromDom(ce) : (t.description || '');
+                if (save && nv !== (t.description || '')) {
+                    t.description = nv;
+                    dirty = true;
+                    api('/api/ui/v6/tasks/' + t.id, { method: 'POST', body: JSON.stringify({ description: nv || null }) })
+                        .catch((e) => toast('본문 수정 실패 — ' + e.message, true));
+                }
+                render();
+            };
+            // 편집 중 표식 + 바깥클릭/Esc-닫기 가드용 커밋 핸들(#139-6).
+            descEditing = true;
+            descCommit = (save) => done(save);
+            // 저장=⌘/Ctrl+Enter 또는 바깥클릭(blur), 취소=Esc. (Enter 는 줄바꿈/문단)
+            ce.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    done(true);
+                }
+                else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    done(false);
+                }
+            });
+            // 지연 체크 — 서식 바 클릭으로 잠깐 포커스가 떠도(다시 에디터로 돌아오면) 저장/종료하지 않음.
+            ce.addEventListener('blur', () => setTimeout(() => {
+                if (fin)
+                    return;
+                if (document.activeElement === ce)
+                    return;
+                if (document.querySelector('.fmt-toolbar:hover'))
+                    return;
+                done(true);
+            }, 150));
+        };
+        const render = () => {
+            bodyWrap.replaceChildren();
+            if (t.description && t.description.trim()) {
+                const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(t.description));
+                body.onclick = editBody; // 본문(커서) 클릭 → 그 자리 편집(전체 펼친 상태로)
+                // 펼침 컨트롤(프로젝트 탭과 동일) — 길면 접힘+페이드+'더 보기' 알약, 짧으면 컨트롤 숨기고 펼침.
+                const wrap = el('div', { class: 'proj-detail-body-wrap is-collapsed' });
+                const box = el('div', { class: 'proj-detail-body-box collapsed' }, body);
+                const lbl = el('span', { class: 'lbl', text: '더 보기' });
+                const caret = el('span', { class: 'caret', text: '⌄' });
+                const exBtn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, lbl, caret);
+                const exRow = el('div', { class: 'proj-detail-body-expand-row' }, exBtn);
+                exBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    const collapsed = box.classList.toggle('collapsed');
+                    wrap.classList.toggle('is-collapsed', collapsed);
+                    caret.textContent = collapsed ? '⌄' : '⌃';
+                    lbl.textContent = collapsed ? '더 보기' : '접기';
+                };
+                wrap.append(box, exRow);
+                bodyWrap.append(wrap);
+                // 짧은 본문(접어도 다 보이는)이면 펼침 불필요 → 펼친 채 두고 컨트롤 숨김(레이아웃 후 측정).
+                requestAnimationFrame(() => {
+                    if (body.scrollHeight <= box.clientHeight + 2) {
+                        box.classList.remove('collapsed');
+                        wrap.classList.remove('is-collapsed');
+                        exRow.style.display = 'none';
+                    }
+                });
+            }
+            else {
+                const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 본문 추가' });
+                add.onclick = editBody;
+                bodyWrap.append(add);
             }
         };
-        paint();
+        render();
         return sec;
     }
-    // 하위 태스크 — 헤더(N open) + 행(상태점·이름클릭→그 하위 모달·담당·우선) + 인라인 추가.
+    // 하위 태스크 — 프로젝트 탭 태스크 리스트(pjvTaskRow)를 그대로 재사용해 '이전 페이지와 정확히 똑같게'(#139-1,4).
+    //  → 호버 시 [하위추가(상위만)·태그·이름변경] 버튼, ⋯메뉴(이름변경·삭제), 담당자/마감일/우선순위 컬럼·아이콘 위치가 리스트와 동일.
+    //  제목 클릭 = 그 하위 모달로 '교체'(드릴인) — 리스트 기본 동작(스택 오픈)을 캡처 단계에서 가로채 현재 모달을 닫고 연다.
     function pjvtmSubtasks(d, t, members, refresh, pageReload) {
-        const subs = (t.subtasks || []);
-        const openCount = subs.filter((s) => s.status !== 'done').length;
-        const sec = el('div', { class: 'pjv-tm-block' });
         if (t.level === 'subtask')
             return el('div'); // 하위태스크는 더 하위 없음(백엔드 제약)
+        const subs = (t.subtasks || []);
+        const openCount = subs.filter((s) => s.status !== 'done').length;
+        const sec = el('div', { class: 'pjv-tm-block pjv-tm-subtasks pjv-tasks-card' });
         sec.append(el('div', { class: 'pjv-tm-block-head' }, el('span', { class: 'pjv-tm-block-title', text: '하위 태스크' }), el('span', { class: 'pjv-tm-block-count', text: openCount + ' open' })));
-        const tableHead = el('div', { class: 'pjv-tm-sub-head' }, el('span', { text: '이름' }), el('span', { text: '담당자' }), el('span', { text: '마감일' }), el('span', { text: '우선순위' }));
-        sec.append(tableHead);
-        for (const s of subs) {
-            const smeta = pjvStatusMeta(s.status);
-            const nameBtn = el('button', { class: 'pjv-tm-sub-name', type: 'button' }, el('span', { class: 'pjv-status-dot sm ' + smeta.cls }, smeta.glyph ? el('span', { class: 'pjv-status-glyph', text: smeta.glyph }) : null), el('span', { class: (s.status === 'done' ? 'done' : ''), text: s.name }));
-            nameBtn.onclick = () => { dirty = true; pjvOpenTaskModal(s.id, pageReload); closeModal(); };
-            sec.append(el('div', { class: 'pjv-tm-sub-row' }, nameBtn, el('div', { class: 'pjv-tm-sub-cell' }, pjvAssigneeControl(s, members, (p) => pjvSaveTask(s.id, p))), el('div', { class: 'pjv-tm-sub-cell' }, pjvDueControl(s, (p) => pjvPatchTask(s.id, p, refresh))), el('div', { class: 'pjv-tm-sub-cell' }, pjvPriorityControl(s, (p) => pjvPatchTask(s.id, p, refresh)))));
-        }
+        // 컬럼 헤더 — 행 그리드와 동일 컬럼(이름/담당자/마감일/우선순위)으로 정렬(프로젝트 탭 thead 와 동형).
+        const head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-colhead', text: '이름' })), el('div', { class: 'pjv-tcell pjv-colhead', text: '담당자' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-tcell-add' }));
+        head.style.gridTemplateColumns = pjvGridTemplate([]);
+        sec.append(head);
+        // 행 — pjvTaskRow 재사용(reload=모달 refresh). 커스텀 필드 컬럼은 모달에선 생략([]).
+        const list = el('div', { class: 'pjv-tgroup-body' });
+        for (const s of subs)
+            list.append(pjvTaskRow(d.project.id, s, members, refresh, 0, []));
+        // 제목(셀) 클릭 → 드릴인(현재 닫고 그 하위 모달 열기). 캐럿·상태점·체크·호버액션은 각자 동작하도록 통과.
+        list.addEventListener('click', (e) => {
+            const cell = e.target.closest && e.target.closest('.pjv-trow-title-cell');
+            if (!cell || !list.contains(cell))
+                return;
+            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot'))
+                return;
+            if (e.target.closest('.pjv-row-check') || e.target.closest('.pjv-row-actions'))
+                return;
+            const wrap = cell.closest('.pjv-trow-wrap');
+            const sid = wrap && wrap.getAttribute('data-task-id');
+            if (!sid)
+                return;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            dirty = true;
+            closeModal();
+            pjvOpenTaskModal(Number(sid), pageReload);
+        }, true);
+        sec.append(list);
         // 인라인 추가
         const addInput = el('input', { type: 'text', class: 'pjv-tm-sub-add', placeholder: '＋ 하위 태스크 추가 후 Enter', maxlength: '200' });
         let subBusy = false;
@@ -1131,7 +1302,57 @@ function pjvOpenTaskModal(taskId, pageReload) {
             menu.append(mk('공유 프로젝트 폴더에서 선택', attachFromFolder));
         };
         sec.append(fileInput, addBtn);
+        sec.append(el('div', { class: 'pjv-tm-att-hint' }, el('span', { class: 'pjv-tm-att-hint-ic', 'aria-hidden': 'true', text: '📋' }), el('span', {}, '이미지를 복사한 뒤 이 창에서 ', el('b', { text: 'Ctrl/⌘ + V' }), ' 로 바로 붙여넣을 수도 있어요.')));
         return sec;
+    }
+    // 클립보드 이미지 붙여넣기 다이얼로그 — 미리보기 + 이름·주석 입력 후 첨부폴더로 업로드. mount=모달 루트(닫힐 때 함께 제거).
+    function pjvtmPasteImage(blob, ctx, mount) {
+        const url = URL.createObjectURL(blob);
+        const ext = ((blob.type || 'image/png').split('/')[1] || 'png').toLowerCase().replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png';
+        const nameIn = el('input', { type: 'text', class: 'pjv-tm-paste-name', placeholder: '이름·주석 (선택) — 예: 디자인 시안 v2', maxlength: '80' });
+        const err = el('div', { class: 'pjv-tm-paste-err', hidden: true });
+        const cancelBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소' });
+        const okBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '첨부' });
+        const back2 = el('div', { class: 'pjv-tm-paste-back' }, el('div', { class: 'pjv-tm-paste-card' }, el('div', { class: 'pjv-tm-paste-title', text: '이미지 붙여넣기' }), el('img', { class: 'pjv-tm-paste-preview', src: url, alt: '붙여넣은 이미지 미리보기' }), el('label', { class: 'pjv-tm-paste-label' }, '이름 · 주석', nameIn), err, el('div', { class: 'pjv-tm-paste-actions' }, cancelBtn, okBtn)));
+        const cleanup = () => { URL.revokeObjectURL(url); back2.remove(); };
+        back2._cancel = cleanup;
+        cancelBtn.onclick = cleanup;
+        back2.addEventListener('mousedown', (e) => { if (e.target === back2)
+            cleanup(); });
+        const doUpload = async () => {
+            const cap = (nameIn.value || '').trim();
+            const safe = cap.replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').replace(/\s+/g, '_').slice(0, 80);
+            const fname = (safe || '붙여넣은-이미지') + '-' + pjvtmStamp() + '.' + ext;
+            okBtn.disabled = true;
+            cancelBtn.disabled = true;
+            okBtn.textContent = '첨부 중…';
+            try {
+                await authUpload(ctx.base + ctx.pid + '/file?path=' + encodeURIComponent(ctx.dir + '/' + fname), new File([blob], fname, { type: blob.type }));
+                cleanup();
+                ctx.refresh();
+                toast('이미지를 첨부했어요');
+            }
+            catch (e2) {
+                err.textContent = '첨부 실패 — ' + e2.message;
+                err.hidden = false;
+                okBtn.disabled = false;
+                cancelBtn.disabled = false;
+                okBtn.textContent = '첨부';
+            }
+        };
+        okBtn.onclick = doUpload;
+        nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+            e.preventDefault();
+            doUpload();
+        } });
+        (mount || document.body).append(back2);
+        setTimeout(() => nameIn.focus(), 0);
+    }
+    // 파일명용 타임스탬프 YYYYMMDD-HHMMSS (브라우저 — Date 사용 가능).
+    function pjvtmStamp() {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
     }
     // ── 우측(Activity) — 클릭업식: 댓글 카드(반응·Reply) + 시스템 이벤트(불릿·우측 시간) + 작성기(툴바). ──
     function pjvtmSide(d, t, refresh) {
@@ -1196,7 +1417,18 @@ function pjvOpenTaskModal(taskId, pageReload) {
         const cctx = { taskId: t.id, projectId: d.project && d.project.id, members: d.members || [], replyTo: (name) => insertAtCursor('@' + name + ' ') };
         if (!feed.length)
             feedBox.append(el('div', { class: 'pjv-tm-feed-empty', text: '아직 활동이 없습니다. 첫 댓글을 남겨보세요.' }));
-        for (const f of feed)
+        // 산만함 줄이기 — 노이즈 필드(담당자·설명·이름·시작일)의 '연속' 변경은 최신 1건으로 합쳐 도배 방지.
+        //  상태·마감일·우선순위·생성·댓글은 각각 그대로 둔다(의미 있는 마일스톤이라 합치지 않음).
+        const NOISY_FIELDS = new Set(['description', 'assignee', 'name', 'title', 'start_date']);
+        const feedShown = [];
+        for (const f of feed) {
+            const prev = feedShown[feedShown.length - 1];
+            if (f.kind === 'event' && prev && prev.kind === 'event' && prev.field === f.field && NOISY_FIELDS.has(f.field))
+                feedShown[feedShown.length - 1] = f;
+            else
+                feedShown.push(f);
+        }
+        for (const f of feedShown)
             feedBox.append(f.kind === 'comment' ? pjvtmComment(f, cctx) : pjvtmEvent(f));
         side.append(feedBox);
         setTimeout(() => { feedBox.scrollTop = feedBox.scrollHeight; }, 0);
