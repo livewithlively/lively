@@ -79,6 +79,7 @@ const MAP = {
     "incognito-blank-mode",
     "local-file-viewing-workflow",
     "work-approach-ultracode",
+    "harness-facing-trap-remove-not-document",
   ],
   research: [
     "vector-search-172-use-cases-roadmap",
@@ -104,6 +105,7 @@ const MAP = {
   ],
   "how-to": [
     "install-onboarding-prereqs",
+    "project-closeout-routine",
   ],
   entity: [
     "2026-06-17-port-corestory-프로파일",
