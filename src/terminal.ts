@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
@@ -58,7 +58,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   });
 
   // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 초대 후보(구성원 디렉터리).
-  app.get("/api/ui/terminal/config", auth, wrap(async (_req, res) => {
+  app.get("/api/ui/terminal/config", auth, wrap(async (req, res) => {
     // 초대 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
     const members = (await listMembers().catch(() => []))
       .filter((m) => m.state !== "inactive" && m.kind !== "system")
@@ -68,6 +68,8 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
       harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
       members,
+      // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.
+      profile: await profileStatus(userOf(req)),
     });
   }));
 

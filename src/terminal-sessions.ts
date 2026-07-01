@@ -121,6 +121,19 @@ async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null>
   catch { return null; }
 }
 
+// 프로필 상태(멀티프로필 #346) — UI 표시용. 이 사용자의 세션이 '내 계정'을 쓸지 '공유 계정'으로 폴백할지.
+//  active = 멀티프로필 켜짐 && 로그인됨(=seam 이 실제로 CLAUDE_CONFIG_DIR 을 주입하는 조건).
+export async function profileStatus(user: LivelyUser): Promise<{
+  multiprofile: boolean; dir: string; provisioned: boolean; loggedIn: boolean; active: boolean;
+}> {
+  const multiprofile = process.env.LIVELY_MULTIPROFILE !== "0";
+  const dir = profileConfigDir(user);
+  let provisioned = false; let loggedIn = false;
+  try { await fsp.access(dir); provisioned = true; } catch { /* 미프로비저닝 */ }
+  try { await fsp.access(path.join(dir, ".credentials.json")); loggedIn = true; } catch { /* 미로그인 */ }
+  return { multiprofile, dir, provisioned, loggedIn, active: multiprofile && loggedIn };
+}
+
 async function tmux(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000, env: TMUX_ENV });
   return stdout;
