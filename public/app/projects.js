@@ -1361,6 +1361,117 @@ function pjvRowCheck(kind, item, ctx) {
     };
     return cb;
 }
+// ── 드래그 재정렬(#366) — 호버 시 체크박스 왼쪽 핸들(⠿)을 잡고 위/아래로 끌어 태스크 순서를 바꾼다.
+//  · 여러 개 선택(pjvSel, kind='task')한 상태에서 핸들을 잡으면 선택분 전체가 'N개' 한 덩어리로 이동(클릭업 동형).
+//  · 드래그 중: 커서를 따라다니는 고스트 + 놓일 자리에 가로 삽입선(marker). 같은 컨테이너의 형제 태스크 행끼리만.
+//  · 끝나면 DOM 을 재배치하고 새 순서(sort)를 서버에 저장. 저장 API 미배포 환경에선 화면 순서만 바뀐다(새로고침 시 원복).
+const pjvReorder = { active: false, wraps: [], container: null, ghost: null, marker: null, reload: null, _init: false };
+// 컨테이너의 직계 태스크 행(형제)만 — 서브태스크(.pjv-trow-subs 안)는 각자의 컨테이너에서 다룬다.
+function pjvReorderSibs(container) {
+    return [...container.children].filter((c) => c.classList && c.classList.contains('pjv-trow-wrap') && c.hasAttribute('data-task-id'));
+}
+function pjvReorderStart(e, wrap, reload) {
+    const container = wrap.parentElement;
+    if (!container)
+        return;
+    const sibs = pjvReorderSibs(container);
+    // 이 행이 다중선택(task)에 포함돼 있으면 선택분 전체(같은 컨테이너 것만), 아니면 이 행만 이동.
+    const selIds = pjvSel.kind === 'task' ? pjvSel.ids : new Set();
+    let moving = sibs.filter((w) => selIds.has(Number(w.getAttribute('data-task-id'))));
+    if (!moving.length || moving.indexOf(wrap) < 0)
+        moving = [wrap];
+    pjvReorder.active = true;
+    pjvReorder.container = container;
+    pjvReorder.wraps = moving;
+    pjvReorder.reload = reload;
+    const label = moving.length > 1 ? (moving.length + '개 태스크') : (wrap.getAttribute('data-task-name') || '태스크');
+    pjvReorder.ghost = el('div', { class: 'pjv-reorder-ghost', text: label });
+    pjvReorder.marker = el('div', { class: 'pjv-reorder-marker', 'aria-hidden': 'true' });
+    document.body.append(pjvReorder.ghost);
+    moving.forEach((w) => w.classList.add('pjv-reorder-src'));
+    document.body.classList.add('pjv-dragging');
+    pjvReorderMove(e);
+    e.preventDefault();
+}
+function pjvReorderMove(e) {
+    if (!pjvReorder.active)
+        return;
+    if (e.buttons === 0) {
+        pjvReorderEnd();
+        return;
+    } // 창 밖에서 손을 뗀 경우 등 — 끊김 방지
+    const g = pjvReorder.ghost;
+    if (g) {
+        g.style.left = (e.clientX + 14) + 'px';
+        g.style.top = (e.clientY + 12) + 'px';
+    }
+    const rest = pjvReorderSibs(pjvReorder.container).filter((w) => pjvReorder.wraps.indexOf(w) < 0);
+    let before = null;
+    for (const w of rest) {
+        const r = w.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) {
+            before = w;
+            break;
+        }
+    }
+    const m = pjvReorder.marker;
+    if (before)
+        pjvReorder.container.insertBefore(m, before);
+    else
+        pjvReorder.container.append(m);
+}
+function pjvReorderEnd() {
+    if (!pjvReorder.active)
+        return;
+    pjvReorder.active = false;
+    const { container, wraps, marker, ghost } = pjvReorder;
+    document.body.classList.remove('pjv-dragging');
+    if (ghost)
+        ghost.remove();
+    wraps.forEach((w) => w.classList.remove('pjv-reorder-src'));
+    if (marker && marker.parentElement === container) {
+        for (const w of wraps)
+            container.insertBefore(w, marker);
+    }
+    if (marker)
+        marker.remove();
+    const ids = pjvReorderSibs(container).map((w) => Number(w.getAttribute('data-task-id')));
+    const reload = pjvReorder.reload;
+    pjvReorder.wraps = [];
+    pjvReorder.container = null;
+    pjvReorder.ghost = null;
+    pjvReorder.marker = null;
+    pjvReorder.reload = null;
+    if (pjvSel.kind === 'task')
+        pjvSelReset(); // 이동 후 선택 해제(자리 이동이 끝났으니)
+    if (ids.length > 1) {
+        api('/api/ui/v6/tasks-reorder', { method: 'POST', body: JSON.stringify({ ids }) })
+            .then(() => toast('순서를 저장했습니다'))
+            .catch(() => toast('순서를 화면에만 반영했어요 (저장 미지원 — 새로고침 시 원복)', true));
+    }
+}
+function pjvReorderInit() {
+    if (pjvReorder._init)
+        return;
+    pjvReorder._init = true;
+    document.addEventListener('pointermove', pjvReorderMove);
+    document.addEventListener('pointerup', pjvReorderEnd);
+}
+// 좌측 드래그 핸들(⠿) — 태스크 행 전용. ctx.reload 로 실패 시 원복 렌더.
+function pjvRowGrip(_kind, _item, ctx) {
+    pjvReorderInit();
+    const g = el('button', { class: 'pjv-row-grip', type: 'button', tabindex: '-1', 'aria-label': '드래그해서 순서 바꾸기', title: '드래그해서 순서 바꾸기' }, '⠿');
+    g.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0)
+            return;
+        e.stopPropagation();
+        const wrap = g.closest('.pjv-trow-wrap');
+        if (wrap)
+            pjvReorderStart(e, wrap, ctx && ctx.reload);
+    });
+    g.onclick = (e) => { e.stopPropagation(); e.preventDefault(); }; // 핸들 클릭이 행 이동/네비로 새지 않게
+    return g;
+}
 function pjvActIcon(kind) {
     const svg = (...k) => sv('svg', { class: 'pjv-act-ic', viewBox: '0 0 24 24', width: '15', height: '15', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, ...k);
     if (kind === 'add')
@@ -1615,7 +1726,8 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
         : el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' });
     const tagsEl = pjvRowTagsEl(t, reload);
     const subcountEl = subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: subs.length + '개 하위 — 클릭하여 펼치기' }, pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null;
-    const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowCheck('task', t, { reload, projectId, members }), // 프로젝트 행과 동일한 선택 체크박스(16px) — 정렬·다중선택 모두 동일하게
+    const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowGrip('task', t, { reload }), // 좌측 드래그 핸들(#366) — 잡고 끌어 순서 변경
+    pjvRowCheck('task', t, { reload, projectId, members }), // 프로젝트 행과 동일한 선택 체크박스(16px) — 정렬·다중선택 모두 동일하게
     caret, pjvStatusControl(t, reload), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
     titleCell.style.paddingLeft = (depth * 22) + 'px';
     const subBox = el('div', { class: 'pjv-trow-subs' });
@@ -5563,7 +5675,8 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
     // 태그 칩(클릭업식) — 이름 옆에 최대 2개 + 나머지는 "+N". 색은 태그 색.
     const tagsEl = pjvRowTagsEl(t, reload);
     const subcountEl = subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: subs.length + '개 하위 — 클릭하여 펼치기' }, pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null;
-    const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowCheck('task', t, { reload, projectId, members }), caret, pjvStatusControl(t, reload), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
+    const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowGrip('task', t, { reload }), // 좌측 드래그 핸들(#366) — 잡고 끌어 순서 변경
+    pjvRowCheck('task', t, { reload, projectId, members }), caret, pjvStatusControl(t, reload), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
     if (depth)
         titleCell.style.paddingLeft = (depth * 22) + 'px';
     // 하위 영역 — 하위 행도 pjvTaskRow 재귀라 담당자·마감일·우선순위·커스텀필드까지 상위와 완전 동일하게 동작.
