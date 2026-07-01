@@ -2989,28 +2989,29 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 /* ＋ 글리프(새 영역 버튼 안) */
 .pjv-newlist-plus { font-size: 13px; font-weight: 700; line-height: 1; }
 
-/* 묶음 사이드바 — 좌측 묶음 네비 + 본문(선택 묶음의 프로젝트). */
-.pjv-side-wrap { display: grid; grid-template-columns: 196px minmax(0, 1fr); }
+/* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
+/*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
+.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-.pjv-side-nav { padding: 0 12px 8px 0; border-right: 1px solid var(--line); }
-.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
-.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 4px 2px 8px; }
-.pjv-side-nav-head-label { font-size: 13px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
-/* 사이드바를 열었을 때만 보이는 안내 — 프로젝트를 상위 묶음으로 직접 정리한다는 느낌(#356). */
-.pjv-side-nav-hint { padding: 0 8px 9px; margin-top: 1px; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
+.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
+.pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+/* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
+.pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
-.pjv-side-navitem { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--ink-sub); }
+.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
 .pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-side-navcount { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
+.pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
 .pjv-side-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 .pjv-side-dot.all { background: linear-gradient(135deg, var(--blue), #8b5cf6); }
 .pjv-side-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3, #aab1bd); }
 /* 묶음 폴더 아이콘 — 동그란 점 대신 '색을 채운 폴더'로 상위 분류 느낌(#356). */
-.pjv-bundle-ic { flex: none; width: 17px; height: 17px; display: block; }
+.pjv-bundle-ic { flex: none; width: 18px; height: 18px; display: block; }
 .pjv-side-navitem.active .pjv-bundle-ic.none path { stroke: var(--blue); }
 .pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
 .pjv-side-newlist:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
@@ -3028,6 +3029,36 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 .pjv-side-raildot.active { background: var(--bg-sel); box-shadow: inset 0 0 0 1.5px var(--blue); }
 .pjv-side-raildot .pjv-side-dot { width: 11px; height: 11px; }
 .pjv-side-raildot .pjv-bundle-ic { width: 20px; height: 20px; }
+
+/* ── 폴더 설정 ⋯ (사이드바 항목 호버, #453/#454) — 카운트 자리에 겹쳐 뜬다(레이아웃 안 밀림) ── */
+.pjv-side-navitem { position: relative; }
+.pjv-side-navmore { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; opacity: 0; transition: opacity .12s ease; }
+.pjv-side-navitem:hover .pjv-side-navmore, .pjv-side-navmore:focus-visible { opacity: 1; background: var(--bg); }
+.pjv-side-navitem:hover .pjv-side-navcount { opacity: 0; }   /* 호버 시 개수 숨기고 ⋯ 노출 */
+.pjv-side-navmore:hover { background: var(--bg-tint); color: var(--ink); }
+
+/* ── 프로젝트 → 폴더 드래그(#454) ── */
+body.pjv-folder-dragging { cursor: grabbing; }
+body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
+.pjv-proj-drag-src { opacity: .45; }
+/* 드롭 타깃 하이라이트 — 사이드바 항목/레일 점/인라인 폴더 구역 공통. */
+.pjv-side-navitem.pjv-folder-drop-over { background: var(--bg-tint); box-shadow: inset 0 0 0 2px var(--blue); }
+.pjv-side-raildot.pjv-folder-drop-over { background: var(--bg-tint); box-shadow: inset 0 0 0 2px var(--blue); }
+.pjv-list-group.pjv-folder-drop-over { outline: 2px dashed var(--blue); outline-offset: -2px; border-radius: 8px; background: var(--bg-tint); }
+
+/* ── 폴더 프로젝트 관리 모달(#454) ── */
+.pjv-foldman { min-width: 420px; max-width: 520px; }
+.pjv-foldman-sec-h { font-size: 12.5px; font-weight: 700; color: var(--muted-2); letter-spacing: .2px; margin-bottom: 6px; }
+.pjv-foldman-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; }
+.pjv-foldman-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; }
+.pjv-foldman-row:hover { background: var(--bg-tint-2); }
+.pjv-foldman-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13.5px; color: var(--ink); }
+.pjv-foldman-name.done { color: var(--muted-2); text-decoration: line-through; }
+.pjv-foldman-cur { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2); background: var(--bg-tint); border: 1px solid var(--line-net, #d9dee6); border-radius: 999px; padding: 1px 8px; }
+.pjv-foldman-btn { flex: none; border: 1px solid var(--line-net, #d9dee6); background: var(--bg); cursor: pointer; padding: 3px 10px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
+.pjv-foldman-btn:hover { border-color: var(--muted-2); color: var(--ink); }
+.pjv-foldman-btn.add { color: var(--blue); border-color: var(--line-net, #d9dee6); }
+.pjv-foldman-btn.add:hover { border-color: var(--blue); background: var(--bg-tint); }
 
 /* ════════════ WIP styles.css 에서 유실됐던 HEAD 코어 규칙 복원 (2026-06-30 #317 재발방지) ════════════
    원인: learn-redesign WIP styles.css 가 옛 base 기준이라, 그 뒤 추가된 코어 규칙들(프로필 아바타·헤더 hidden·

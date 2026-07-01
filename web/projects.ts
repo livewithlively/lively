@@ -161,7 +161,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '필터' }), el('span', { class: 'pjv-view-btn-caret', 'aria-hidden': 'true', text: '▾' }));
   // '폴더' 사이드바 토글 — 프로젝트를 상위 폴더(사람이 만든 상위 분류)으로 모아 정리하는 좌측 목록을 여닫는다(#356).
   //  이게 사이드바 여닫기의 유일한 스위치(예전엔 '보기/상태' 버튼이 겸했음). byArea 를 켜고, 열 땐 펼친 상태로 연다.
-  const sideBtn = el('button', { class: 'pjv-view-btn pjv-bundle-btn', type: 'button', title: '폴더 — 프로젝트를 상위 폴더으로 정리', 'aria-label': '폴더 사이드바 열기/닫기' },
+  const sideBtn = el('button', { class: 'pjv-view-btn pjv-bundle-btn', type: 'button', title: '폴더 — 프로젝트를 상위 폴더로 정리', 'aria-label': '폴더 사이드바 열기/닫기' },
     pjvSideToggleIcon(), el('span', { class: 'pjv-view-btn-label', text: '폴더' }));
 
   const body = el('div', { class: 'pjv-tasks-body' });
@@ -171,8 +171,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const lbl = subtaskBtn.querySelector('.pjv-subtask-btn-label'); if (lbl) lbl.textContent = PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
     closedBtn.classList.toggle('active', pjvProjClosedView.done);
     mineBtn.classList.toggle('active', pjvBoardMineOnly.on);
-    // '필터' 버튼 — 상태로 나누기가 꺼져 있으면(기본과 다름) 강조. 라벨은 '필터' 고정.
-    viewBtn.classList.toggle('active', !pjvBoardView.byStatus);
+    // '필터' 버튼 — 기본과 다른 필터가 걸리면(상태 나누기 끔 OR 폴더로 나누기 켬) 강조. 라벨은 '필터' 고정.
+    viewBtn.classList.toggle('active', !pjvBoardView.byStatus || pjvBoardView.byFolder);
     // '폴더' 사이드바 토글 — 열려 있으면(byArea) 강조.
     sideBtn.classList.toggle('active', pjvBoardView.byArea);
     sideBtn.setAttribute('aria-pressed', String(pjvBoardView.byArea));
@@ -251,15 +251,17 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const expandBtn = el('button', { class: 'pjv-side-expand', type: 'button', title: '폴더 목록 펼치기', 'aria-label': '폴더 목록 펼치기', text: '▶' });
       expandBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = true; render(); };
       railInner.append(expandBtn);
-      const railDot = (key, dot, title, active) => {
+      const railDot = (key, dot, title, active, listId?) => {
         const b = el('button', { class: 'pjv-side-raildot' + (active ? ' active' : ''), type: 'button', title }, dot);
         b.onclick = (e) => { e.stopPropagation(); selectArea(key); };
+        // 접힌 레일에서도 프로젝트를 끌어다 놓아 그 폴더로 이동(#454). 전체(__all__)는 제외, 미분류(__none__)는 null.
+        if (key !== '__all__') pjvFolderDropTarget(b, key === '__none__' ? null : listId, reload);
         return b;
       };
       railInner.append(railDot('__all__', pjvBundleIcon('#6c8cff', 'all'), '전체', sel === '__all__'));
       for (const g of sideGroups) {
         const ic = g.list ? pjvBundleIcon(g.list.color || 'var(--muted-2)') : pjvBundleIcon(null, 'none');
-        railInner.append(railDot(g.key, ic, g.list ? g.list.name : '기타 (미분류)', sel === g.key));
+        railInner.append(railDot(g.key, ic, g.list ? g.list.name : '기타 (미분류)', sel === g.key, g.list ? g.list.id : null));
       }
       rail.append(railInner);
       body.replaceChildren(el('div', { class: 'pjv-side-wrap pjv-side-collapsed' }, rail, main));
@@ -269,23 +271,32 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 펼침 — 전체 네비. nav = 본문 높이만큼 늘어나는 레일(구분선), navInner = sticky 항목.
     const nav = el('div', { class: 'pjv-side-nav' });
     const navInner = el('div', { class: 'pjv-side-nav-inner' });
-    const navItem = (key, dot, label, count, active) => {
-      const it = el('button', { class: 'pjv-side-navitem' + (active ? ' active' : ''), type: 'button' },
+    // 사이드바 폴더 항목 — 클릭=선택. 실제 폴더(list 있음)엔 호버 ⋯(설정·프로젝트관리·삭제, #453/#454) + 프로젝트 드롭 타깃(#454).
+    const navItem = (key, dot, label, count, active, list?) => {
+      const it = el('div', { class: 'pjv-side-navitem' + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active) },
         dot, el('span', { class: 'pjv-side-navlabel', text: label }), el('span', { class: 'pjv-side-navcount', text: count == null ? '' : String(count) }));
-      it.onclick = (e) => { e.stopPropagation(); selectArea(key); };
+      const go = (e) => { e.stopPropagation(); selectArea(key); };
+      it.addEventListener('click', go);
+      it.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } });
+      if (list) {
+        const more = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
+        more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu' }); const close = pjvPopover(more, menu); pjvFolderMenuItems(menu, close, list, reload); });
+        it.append(more);
+      }
+      if (key !== '__all__') pjvFolderDropTarget(it, key === '__none__' ? null : list.id, reload);
       return it;
     };
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '폴더 목록 접기', 'aria-label': '폴더 목록 접기', text: '◀' });
     collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더' }), collapseBtn));
-    // 사이드바를 열었을 때만 보이는 안내 — 프로젝트를 상위 폴더으로 직접 정리한다는 느낌을 준다(#356).
-    navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '프로젝트를 상위 폴더으로 모아 정리해요.' }));
+    // 사이드바를 열었을 때만 보이는 안내 — 폴더가 무엇을 하는지·어떻게 쓰는지 구체적으로(#456: 기존 문구가 모호하다는 지적).
+    navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '관련된 프로젝트끼리 폴더로 묶어 정리해요. 폴더를 누르면 그 안의 프로젝트만 보이고, 프로젝트를 폴더로 끌어다 넣을 수 있어요.' }));
     //  완료된 미분류 프로젝트가 Closed 꺼져도 사이드바에 '유령 개수'로 잡히던 것·빈 미분류 항목 노출은 visCount/sideGroups 로 처리(위).
     const totalProjs = groups.reduce((n, g) => n + visCount(g.projects), 0);
     navInner.append(navItem('__all__', pjvBundleIcon('#6c8cff', 'all'), '전체', totalProjs, sel === '__all__'));
     for (const g of sideGroups) {
       const ic = g.list ? pjvBundleIcon(g.list.color || 'var(--muted-2)') : pjvBundleIcon(null, 'none');
-      navInner.append(navItem(g.key, ic, g.list ? g.list.name : '기타 (미분류)', visCount(g.projects), sel === g.key));
+      navInner.append(navItem(g.key, ic, g.list ? g.list.name : '기타 (미분류)', visCount(g.projects), sel === g.key, g.list));
     }
     navInner.append(el('button', { class: 'pjv-side-newlist', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload); } },
       el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })));
@@ -293,19 +304,32 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     body.replaceChildren(el('div', { class: 'pjv-side-wrap' }, nav, main));
   };
 
+  // 본문에 폴더별 접이식 구역을 인라인으로 쌓기(#455) — '상태로 나누기'의 폴더판. 사이드바(byArea)와 달리 모든 폴더를 한 화면에.
+  //  byStatus 면 각 폴더를 상태로 다시 나눔(폴더 › 상태 중첩). 빈 폴더도 노출(추가·드롭 타깃). 각 폴더 헤더의 ⋯ 로 설정/삭제(#453).
+  const renderByFolder = (byStatus) => {
+    const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
+    const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
+    // 실제 폴더는 비어도 노출(추가·드롭 타깃), '기타(미분류)'는 보일 게 있을 때만.
+    const shown = groups.filter((g) => g.list || visCount(g.projects) > 0);
+    body.replaceChildren(pjvListColHead(fields, anchorId, reload));
+    if (!shown.length) { body.append(el('div', { class: 'pjv-proj-empty', text: pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' })); return; }
+    for (const g of shown) body.append(pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, byStatus));
+  };
+
   const render = () => {
     taskCtx.mode = pjvProjTaskMode.mode;
-    const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus;
+    const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
     card.classList.toggle('pjv-has-side', byArea);
     if (byArea) { renderArea(byStatus); return; }
+    if (byFolder) { renderByFolder(byStatus); return; }
     const shown = pjvBoardMineOnly.on ? projects.filter((p) => mineIds.has(p.id)) : projects;
     if (byStatus) { renderStatus(shown); return; }
     renderFlat(shown);
   };
 
   viewBtn.onclick = (e) => { e.stopPropagation(); pjvViewMenu(viewBtn, () => { syncToggles(); render(); }); };
-  // 사이드바 토글 — byArea 를 뒤집고, 열 땐 접힌 레일이 아니라 펼친 상태로 연다.
-  sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) pjvSidePanel.open = true; syncToggles(); render(); };
+  // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).
+  sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; pjvSidePanel.open = true; } syncToggles(); render(); };
   subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
   mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
   closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
@@ -419,7 +443,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
   if (!isUn) {
     const memberCell = pjvProjTeamControl(members, (ids) => pjvSaveListMembers(list.id, ids));
     memberCell.classList.add('pjv-list-members');
-    memberCell.title = '폴더 참여 멤버 (참여하면 이 폴더이 기본으로 펼쳐집니다)';
+    memberCell.title = '폴더 참여 멤버 (참여하면 이 폴더가 기본으로 펼쳐집니다)';
     actions.append(memberCell, pjvListMore(list, reload));
   }
 
@@ -428,7 +452,10 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
     if ((e.target as Element).closest('button, .pjv-cell-btn, .pjv-menu, input')) return;
     setOpen(!open);
   });
-  return el('div', { class: 'pjv-tgroup pjv-list-group', 'data-list-id': isUn ? '' : String(list.id), style: '--list-color:' + color }, headEl, bodyEl);
+  const groupEl = el('div', { class: 'pjv-tgroup pjv-list-group', 'data-list-id': isUn ? '' : String(list.id), style: '--list-color:' + color }, headEl, bodyEl);
+  // 이 폴더 구역 어디에 프로젝트를 놓아도 그 폴더로(미분류 그룹이면 null=미분류)(#454).
+  pjvFolderDropTarget(groupEl, isUn ? null : list.id, reload);
+  return groupEl;
 }
 
 // 컬럼 헤더 한 줄(카드 상단) — pjvProjRow 와 같은 그리드. 첫 칸은 '프로젝트' 라벨, 나머지는 팀원/마감/우선/세션 + 커스텀 + (＋컬럼).
@@ -445,24 +472,92 @@ function pjvListColHead(fields, anchorId, reload) {
   return headEl;
 }
 
-// 리스트 ⋯ 메뉴 — 이름·색 변경 / 삭제(프로젝트는 보존, 미분류로 이동).
+// 폴더 ⋯ 메뉴 항목(공용) — 인라인 폴더 그룹 헤더·좌측 사이드바 항목 양쪽에서 재사용(#453 설정 · #454 프로젝트 관리 · 삭제).
+function pjvFolderMenuItems(menu, close, list, reload) {
+  const mk = (label, fn, danger?) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = (e) => { e.stopPropagation(); close(); fn(); }; return b; };
+  menu.append(mk('폴더 설정 (이름·색·멤버)', () => openListForm(reload, list)));   // #453 — 만든 뒤에도 속성 수정
+  menu.append(mk('이 폴더의 프로젝트 관리', () => pjvManageFolderProjects(list, reload))); // #454 — 넣고 빼기
+  menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
+  menu.append(mk('폴더 삭제', () => pjvDeleteList(list, reload), true));
+}
+
+// 리스트 ⋯ 메뉴(인라인 폴더 그룹 헤더) — 공용 항목 사용.
 function pjvListMore(list, reload) {
   const btn = el('button', { class: 'pjv-trow-more', type: 'button', title: '폴더 작업', 'aria-label': '폴더 작업', text: '⋯' });
   btn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu' });
     const close = pjvPopover(btn, menu);
-    const mk = (label, fn, danger?) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
-    menu.append(mk('이름·색 변경', () => openListForm(reload, list)));
-    menu.append(mk('삭제', () => pjvDeleteList(list, reload), true));
+    pjvFolderMenuItems(menu, close, list, reload);
   };
   return btn;
+}
+
+// 폴더에 프로젝트 넣고 빼기 모달(#454) — 이 폴더의 프로젝트(빼기) + 다른 프로젝트 검색해 추가. 이동은 즉시 반영 + 보드 리로드.
+//  검색 입력은 고정하고 목록 컨테이너만 다시 그린다(타이핑 중 포커스 유지).
+function pjvManageFolderProjects(list, reload) {
+  let all: any[] = [];
+  const inHead = el('div', { class: 'pjv-foldman-sec-h' });
+  const inList = el('div', { class: 'pjv-foldman-list' });
+  const otherList = el('div', { class: 'pjv-foldman-list' });
+  const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '프로젝트 이름으로 검색해 추가…' });
+  const move = async (p, listId) => {
+    try {
+      await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) });
+      p.list_id = listId; toast(listId == null ? '폴더에서 뺐습니다' : '이 폴더에 넣었습니다'); paint(); if (reload) reload();
+    } catch (e) { toast('이동 실패 — ' + e.message, true); }
+  };
+  const paint = () => {
+    const inFolder = all.filter((p) => String(p.list_id) === String(list.id));
+    inHead.textContent = '이 폴더의 프로젝트 (' + inFolder.length + ')';
+    inList.replaceChildren(...(inFolder.length
+      ? inFolder.map((p) => el('div', { class: 'pjv-foldman-row' },
+          el('span', { class: 'pjv-foldman-name' + (p.status === 'done' ? ' done' : ''), text: p.name }),
+          el('button', { class: 'pjv-foldman-btn', type: 'button', text: '빼기', onclick: () => move(p, null) })))
+      : [el('div', { class: 'pjv-menu-empty', text: '이 폴더에 든 프로젝트가 없어요. 아래에서 추가하세요.' })]));
+    const q = searchIn.value.trim().toLowerCase();
+    const others = all.filter((p) => String(p.list_id) !== String(list.id) && (!q || (p.name || '').toLowerCase().includes(q)));
+    otherList.replaceChildren(...(others.length
+      ? others.slice(0, 50).map((p) => el('div', { class: 'pjv-foldman-row' },
+          el('span', { class: 'pjv-foldman-name' + (p.status === 'done' ? ' done' : ''), text: p.name }),
+          p.list_id != null ? el('span', { class: 'pjv-foldman-cur', text: '다른 폴더' }) : null,
+          el('button', { class: 'pjv-foldman-btn add', type: 'button', text: '＋ 추가', onclick: () => move(p, list.id) })))
+      : [el('div', { class: 'pjv-menu-empty', text: q ? '일치하는 프로젝트가 없어요.' : '추가할 프로젝트가 없어요.' })]));
+  };
+  searchIn.addEventListener('input', paint);
+  const box = el('div', { class: 'pjv-foldman' },
+    inHead, inList,
+    el('div', { class: 'pjv-foldman-sec-h', style: 'margin-top:16px', text: '폴더에 추가' }), searchIn, otherList);
+  const back = overlayBox('‘' + list.name + '’ 폴더 — 프로젝트 넣고 빼기', box,
+    el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));
+  inList.append(el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+  api('/api/ui/v6/projects').then((d) => { all = (d && d.projects) || []; paint(); setTimeout(() => searchIn.focus(), 0); })
+    .catch((e) => inList.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '프로젝트를 불러오지 못했어요 — ' + e.message })));
+  return back;
+}
+
+// 폴더 드롭 타깃 배선(#454) — elm 에 프로젝트 행 드래그를 받아 targetListId(폴더 id | null=미분류)로 이동한다.
+//  진행 중인 폴더-드래그(pjvFolderDrag.id)가 있을 때만 반응 — 첨부파일 등 다른 드롭과 안 섞이게.
+function pjvFolderDropTarget(elm, targetListId, reload) {
+  const over = (ev) => { if (pjvFolderDrag.id == null) return; ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } elm.classList.add('pjv-folder-drop-over'); };
+  elm.addEventListener('dragover', over);
+  elm.addEventListener('dragenter', over);
+  elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget)) elm.classList.remove('pjv-folder-drop-over'); });
+  elm.addEventListener('drop', (ev) => {
+    elm.classList.remove('pjv-folder-drop-over');
+    if (pjvFolderDrag.id == null) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const pid = pjvFolderDrag.id; pjvFolderDrag.id = null;
+    api('/api/ui/v6/projects/' + pid + '/list', { method: 'POST', body: JSON.stringify({ list_id: targetListId }) })
+      .then(() => { toast(targetListId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다'); if (reload) reload(); })
+      .catch((e) => toast('이동 실패 — ' + e.message, true));
+  });
 }
 
 function pjvDeleteList(list, reload) {
   if (!confirm('폴더 ‘' + list.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).')) return;
   (async () => {
-    try { await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST' }); toast('폴더을 삭제했습니다'); reload(); }
+    try { await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST' }); toast('폴더를 삭제했습니다'); reload(); }
     catch (e) { toast('삭제 실패 — ' + e.message, true); }
   })();
 }
@@ -494,15 +589,16 @@ function openListForm(reload, list?, opts?) {
     }));
   };
   paintSw();
-  const picker = editing ? null : memberPicker([], { includeMe: true });
+  // 멤버 — 생성뿐 아니라 수정 때도 편집 가능(#453: 폴더 만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
+  const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
   const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
   const rows: any[] = [
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
+    el('div', { class: 'field', style: 'margin-top:12px' },
+      el('label', { class: 'field-label', text: '참여 멤버 (이 폴더를 펼쳐 보는 사람)' }), picker.box),
   ];
-  if (picker) rows.push(el('div', { class: 'field', style: 'margin-top:12px' },
-    el('label', { class: 'field-label', text: '참여 멤버 (이 폴더을 펼쳐 보는 사람)' }), picker.box));
   const back = overlayBox(editing ? '폴더 수정' : '새 폴더', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
   const go = async () => {
@@ -512,11 +608,12 @@ function openListForm(reload, list?, opts?) {
     try {
       if (editing) {
         await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+        await pjvSaveListMembers(list.id, picker.getSelected());
       } else {
-        const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker ? picker.getSelected() : [] }) });
+        const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker.getSelected() }) });
         if (opts && opts.onCreated) opts.onCreated((res && res.list) || null);
       }
-      back.remove(); toast(editing ? '폴더을 수정했습니다' : '폴더을 만들었습니다'); if (reload) reload();
+      back.remove(); toast(editing ? '폴더를 수정했습니다' : '폴더를 만들었습니다'); if (reload) reload();
     } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
@@ -528,7 +625,7 @@ function openListForm(reload, list?, opts?) {
 function pjvMoveProjectList(anchor, p, reload) {
   const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
   const close = pjvPopover(anchor, menu);
-  const head = el('div', { class: 'pjv-menu-head', text: '폴더으로 이동' });
+  const head = el('div', { class: 'pjv-menu-head', text: '폴더로 이동' });
   menu.append(head, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
   api('/api/ui/v6/project-lists').then((d) => {
     const lists = (d && d.lists) || [];
@@ -542,7 +639,7 @@ function pjvMoveProjectList(anchor, p, reload) {
       item.onclick = async (e) => {
         e.stopPropagation(); close();
         if (cur) return;
-        try { await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }); toast(listId == null ? '미분류로 옮겼습니다' : '폴더으로 옮겼습니다'); if (reload) reload(); }
+        try { await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }); toast(listId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다'); if (reload) reload(); }
         catch (err) { toast('이동 실패 — ' + err.message, true); }
       };
       return item;
@@ -553,7 +650,7 @@ function pjvMoveProjectList(anchor, p, reload) {
       el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
     addNew.onclick = (e) => { e.stopPropagation(); close(); openListForm(reload); };
     menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
-  }).catch((err) => menu.replaceChildren(head, el('div', { class: 'pjv-menu-empty', text: '폴더을 불러오지 못했어요 — ' + err.message })));
+  }).catch((err) => menu.replaceChildren(head, el('div', { class: 'pjv-menu-empty', text: '폴더를 불러오지 못했어요 — ' + err.message })));
 }
 
 // 보드 한 섹션(진행 중 / 완료) — 카드 + 개수 배지 + 타일 그리드. renderProjects 의 projectSection 짜임 재사용.
@@ -1117,7 +1214,7 @@ async function pjvBulkList(anchor) {
   if (pjvSel.kind === 'task') return; // 태스크는 리스트 개념 없음(프로젝트 전용)
   const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
   const close = pjvPopover(anchor, menu);
-  const headEl = el('div', { class: 'pjv-menu-head', text: '선택 프로젝트를 폴더으로 이동' });
+  const headEl = el('div', { class: 'pjv-menu-head', text: '선택 프로젝트를 폴더로 이동' });
   menu.append(headEl, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
   let lists: any[] = [];
   try { lists = ((await api('/api/ui/v6/project-lists')) || {}).lists || []; } catch (_) { /* graceful */ }
@@ -1126,12 +1223,12 @@ async function pjvBulkList(anchor) {
     const item = el('button', { class: 'pjv-menu-item', type: 'button' },
       el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }),
       el('span', { class: 'pjv-asg-mname', text: label }));
-    item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '폴더으로 이동됨'); };
+    item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '폴더로 이동됨'); };
     return item;
   };
   menu.append(mkItem('기타 (미분류)', null, null));
   for (const l of lists) menu.append(mkItem(l.name, l.id, l.color || avatarColor('list' + l.id)));
-  if (!lists.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '폴더이 없습니다 — 상단 ‘폴더’ 버튼을 켜면 왼쪽에서 ‘＋ 새 폴더’으로 만들 수 있어요' }));
+  if (!lists.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '폴더가 없습니다 — 상단 ‘폴더’ 버튼을 켜면 왼쪽에서 ‘＋ 새 폴더’로 만들 수 있어요' }));
 }
 
 // ── 다중선택 드래그/범위 (#366) — 좌측 체크박스를 눌러 아래로 쭉 끌면 지나온 행이 한 번에 선택된다.
@@ -1401,6 +1498,22 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const isDone = p.status === 'done';
   const selectable = !!select && canDelete(p);
   const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id });
+
+  // 폴더로 드래그(#454) — 선택(일괄) 모드가 아닐 때만. 체크박스·캐럿·버튼·제목링크 등 상호작용 요소에서 시작한
+  //  드래그는 취소(칠하기-선택·클릭 유지). 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃(pjvFolderDrag).
+  if (!select) {
+    wrap.draggable = true;
+    wrap.addEventListener('dragstart', (ev: any) => {
+      const t = ev.target as Element;
+      // 상호작용 요소 + 펼친 하위(태스크) 영역에서 시작한 드래그는 취소 — 칠하기-선택·클릭·하위 재정렬을 살린다.
+      if (t && t.closest && t.closest('.pjv-row-check, .pjv-trow-caret, .pjv-row-actions, .pjv-subcount-ico, .pjv-cell-btn, .pjv-trow-subs, button, input, a')) { ev.preventDefault(); return; }
+      pjvFolderDrag.id = p.id;
+      try { ev.dataTransfer.setData('text/plain', String(p.id)); ev.dataTransfer.effectAllowed = 'move'; } catch (_) { /* */ }
+      document.body.classList.add('pjv-folder-dragging');
+      wrap.classList.add('pjv-proj-drag-src');
+    });
+    wrap.addEventListener('dragend', () => { pjvFolderDrag.id = null; document.body.classList.remove('pjv-folder-dragging'); wrap.classList.remove('pjv-proj-drag-src'); document.querySelectorAll('.pjv-folder-drop-over').forEach((n) => n.classList.remove('pjv-folder-drop-over')); });
+  }
 
   let lead;
   if (select) {
@@ -1863,7 +1976,7 @@ function openProjectV2Form(reload, prefill?: any) {
     // 분류(영역) — 영역이 있는데 미선택이면 막는다(미분류는 '기타(미분류)'를 명시적으로 골라야 함, #337).
     await listPick.ready;
     const listChoice = listPick.getSelected();
-    if (!listChoice.ok) { toast('폴더을 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true); return; }
+    if (!listChoice.ok) { toast('폴더를 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true); return; }
     saveBtn.disabled = true;
     try {
       const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
@@ -2182,7 +2295,7 @@ function pjvProjListField(p, reload) {
         item.onclick = async (ev) => {
           ev.stopPropagation(); close();
           if (isCur) return;
-          try { await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }); toast(listId == null ? '미분류로 옮겼습니다' : '폴더으로 옮겼습니다'); if (reload) reload(); }
+          try { await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }); toast(listId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다'); if (reload) reload(); }
           catch (err) { toast('이동 실패 — ' + err.message, true); }
         };
         return item;
@@ -2193,7 +2306,7 @@ function pjvProjListField(p, reload) {
         el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
       addNew.onclick = (ev) => { ev.stopPropagation(); close(); openListForm(reload); };
       menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
-    }).catch((err) => menu.replaceChildren(headEl, el('div', { class: 'pjv-menu-empty', text: '폴더을 불러오지 못했어요 — ' + err.message })));
+    }).catch((err) => menu.replaceChildren(headEl, el('div', { class: 'pjv-menu-empty', text: '폴더를 불러오지 못했어요 — ' + err.message })));
   };
   return btn;
 }
@@ -3473,7 +3586,7 @@ function listPicker(selectedListId) {
     const has = preferId != null && loaded.some((l) => String(l.id) === String(preferId));
     const opts: any[] = [];
     // 미리 선택할 영역이 없으면 placeholder — 영역이 있으면 '선택하세요'(검증에서 막힘), 없으면 '미분류로 생성'(허용).
-    if (!has) opts.push(el('option', { value: '', text: loaded.length ? '폴더을 선택하세요…' : '폴더 없음 — 미분류로 생성' }));
+    if (!has) opts.push(el('option', { value: '', text: loaded.length ? '폴더를 선택하세요…' : '폴더 없음 — 미분류로 생성' }));
     for (const l of loaded) opts.push(el('option', { value: 'L' + l.id, text: l.name }));
     opts.push(el('option', { value: '__none__', text: '기타 (미분류)' }));
     opts.push(el('option', { value: '__new__', text: '＋ 새 폴더 만들기…' }));
@@ -3865,10 +3978,13 @@ const pjvClosedView = { tasks: false, subtasks: false };
 const pjvProjClosedView = { done: false };
 // '내 할당만' 토글(보드) — 내가 만든·팀원인 프로젝트만. 세션 유지(reload 무관). 기본 OFF.
 const pjvBoardMineOnly = { on: false };
-// 보드 보기 — 묶는 기준 두 개를 독립 토글. byArea=영역(상위 분류)으로 묶기(켜면 좌측 영역 사이드바가 보임, **기본 꺼짐**
-//  — 처음 진입 시 사이드바 닫힘, 헤더의 영역 토글 또는 보기→영역으로 연다; ◀/▶ 로 접었다 펼침) /
-//  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐). 둘 다 끄면 한 목록. 세션 유지.
-const pjvBoardView = { byArea: false, byStatus: true };
+// 보드 보기 — 묶는 기준을 독립 토글. byArea=폴더 사이드바(좌측 폴더 목록에서 하나 골라 그 안만, 기본 꺼짐, 헤더 '폴더' 버튼 전담) /
+//  byFolder=폴더로 나누기(본문에 폴더별 접이식 구역들을 인라인으로 쌓아 한눈에, 필터 팝오버 토글, #455) /
+//  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐; byFolder 와 겹치면 폴더 › 상태 중첩). 세션 유지.
+//  byArea(사이드바)와 byFolder(인라인)는 같은 '폴더로 보기'의 두 방식이라 상호배타 — 한쪽을 켜면 다른쪽을 끈다.
+const pjvBoardView = { byArea: false, byStatus: true, byFolder: false };
+// 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id 를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃.
+const pjvFolderDrag: any = { id: null };
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map<string, boolean>();
 // 영역 목록에서 선택된 영역 key('L'+id | '__none__' | '__all__'). 세션 유지.
@@ -3926,7 +4042,7 @@ function pjvProjTaskMenu(anchor, onChange) {
   }
 }
 
-// '폴더' 버튼 아이콘 — 라인 스타일 폴더(상위 폴더으로 정리한다는 표식, #356).
+// '폴더' 버튼 아이콘 — 라인 스타일 폴더(상위 폴더로 정리한다는 표식, #356).
 function pjvSideToggleIcon() {
   const n = sv('svg', { class: 'pjv-view-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   n.append(sv('path', { d: 'M4 7.6C4 6.8 4.7 6.1 5.5 6.1h3.1c.4 0 .8.2 1.05.5l.9 1.15h7c.85 0 1.55.7 1.55 1.55v7.55c0 .85-.7 1.55-1.55 1.55H5.5C4.7 18.9 4 18.2 4 17.35V7.6z' }));
@@ -3948,13 +4064,15 @@ function pjvViewIcon() {
     sv('path', { d: 'M4 16h5M13 16h7' }), sv('circle', { cx: 11, cy: 16, r: 2.1 }));
   return n;
 }
-// '필터' 팝오버 — '상태로 나누기'(할 일·진행 중·완료) 스위치. 사이드바(폴더)는 헤더 '폴더' 버튼 전담이라 여기서 안 다룬다(#356).
-//  토글해도 닫지 않고 매 토글마다 onChange()로 보드 재렌더.
+// '필터' 팝오버 — '상태로 나누기' + '폴더로 나누기'(#455) 스위치. 사이드바(폴더 하나만) 여닫기는 헤더 '폴더' 버튼 전담.
+//  토글해도 닫지 않고 매 토글마다 onChange()로 보드 재렌더. '폴더로 나누기'는 좌측 사이드바(byArea)와 상호배타 — 켜면 사이드바를 끈다.
 function pjvViewMenu(anchor, onChange) {
   const pop = el('div', { class: 'pjv-menu pjv-view-pop' });
   const close = pjvPopover(anchor, pop);
   pop.append(el('div', { class: 'pjv-view-pop-head', text: '필터' }));
-  const mkSwitch = (key, label, hint) => {
+  const items: any[] = [];
+  const syncAll = () => items.forEach((s) => s());
+  const mkSwitch = (key, label, hint, onToggle?) => {
     const sw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
     const item = el('button', { class: 'pjv-menu-item pjv-view-item', type: 'button', role: 'switch' },
       el('span', { class: 'pjv-view-item-main' },
@@ -3962,11 +4080,14 @@ function pjvViewMenu(anchor, onChange) {
         el('span', { class: 'pjv-view-item-hint', text: hint })),
       sw);
     const sync = () => { const on = !!pjvBoardView[key]; item.classList.toggle('on', on); item.setAttribute('aria-checked', String(on)); };
-    item.onclick = (e) => { e.stopPropagation(); pjvBoardView[key] = !pjvBoardView[key]; sync(); onChange(); };
-    sync();
+    item.onclick = (e) => { e.stopPropagation(); pjvBoardView[key] = !pjvBoardView[key]; if (onToggle) onToggle(pjvBoardView[key]); syncAll(); onChange(); };
+    items.push(sync);
     pop.append(item);
   };
   mkSwitch('byStatus', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서 보여줘요');
+  // 폴더로 나누기 — 본문을 폴더별 접이식 구역으로. 켜면 좌측 사이드바(byArea)는 끈다(같은 '폴더로 보기'라 둘 다 켜면 혼란).
+  mkSwitch('byFolder', '폴더로 나누기', '폴더별로 묶어서 한눈에 보여줘요', (on) => { if (on) pjvBoardView.byArea = false; });
+  syncAll();
 }
 
 // 체크-원 아이콘(Closed 버튼용).
