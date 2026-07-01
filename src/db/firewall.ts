@@ -78,6 +78,11 @@ const DENIED_TABLES = new Set([
   "auth_token", "org_content_audit", "org_hook", "org_tool", "org_mcp_server", "org_db_source",
 ]);
 
+// 게이트웨이 내부 테이블 절대 deny(B18) 여부 — 웹 정책과 무관하게 항상 차단(웹 UI·db_schema 가 정직하게 '시스템 차단'으로 표시하는 데 쓴다).
+export function isSystemDeniedTable(name: string): boolean {
+  return DENIED_TABLES.has(name.toLowerCase());
+}
+
 // ── 소스별 정책(#186) — 웹 관리 테이블 allow/deny + 컬럼 마스킹. src/db/policy.ts 가 조립해 넘긴다. ──
 export interface SourcePolicy {
   tableDefault: "allow" | "deny"; // 정책행 없는 테이블의 기본자세

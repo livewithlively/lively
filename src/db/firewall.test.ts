@@ -1,7 +1,7 @@
 // firewall 단위 체크 — RLS GUC 덮어쓰기/위험함수 차단 회귀(보안 핵심).
 // 실행: npm run build && node dist/db/firewall.test.js
 import assert from "node:assert/strict";
-import { assertSafeSelect, type SourcePolicy } from "./firewall.js";
+import { assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
 
 let pass = 0;
 const ok = (name: string, fn: () => void): void => {
@@ -55,6 +55,14 @@ const okP = (name: string, sql: string, pol: SourcePolicy, check?: (p: ReturnTyp
 const rejectsP = (name: string, sql: string, pol: SourcePolicy, re?: RegExp): void => {
   assert.throws(() => assertSafeSelect(sql, pol), re ?? /./, name); pass++; console.log(`ok  ${name}`);
 };
+
+// ── 시스템 내부 테이블 절대 deny(B18) — 정책·소스 무관, 항상 차단 ──
+ok("isSystemDeniedTable: 내부 테이블 true / 일반 false", () => {
+  assert.equal(isSystemDeniedTable("Auth_Token"), true);
+  assert.equal(isSystemDeniedTable("org_hook"), true);
+  assert.equal(isSystemDeniedTable("activity"), false);
+});
+rejects("시스템 테이블은 정책 없어도 차단", "SELECT * FROM auth_token", /Blocked table/);
 
 // ── 테이블 게이트 ──
 okP("정책 없음(hasMasks=false)=무변경 통과", "SELECT id FROM users", policy());

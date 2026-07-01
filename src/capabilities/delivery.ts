@@ -35,6 +35,7 @@ import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from 
 import { invalidatePool, getPool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
+import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
@@ -843,9 +844,11 @@ export const deliveryCapabilities: Capability[] = [
         const tRes = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
         const tables = tRes.rows.map((r) => {
           const name = String(r.table_name);
+          // 게이트웨이 내부 테이블(B18 절대 deny) — 웹 정책 무관하게 항상 차단. 편집 불가로 정직하게 표시.
+          if (isSystemDeniedTable(name)) return { name, mode: "deny", explicit: true, system: true, maskedCount: 0 };
           const explicit = policy.tableMode.get(name.toLowerCase());
           const maskedCount = [...masks.keys()].filter((k) => k.startsWith(name.toLowerCase() + ".")).length;
-          return { name, mode: explicit ?? policy.tableDefault, explicit: explicit !== undefined, maskedCount };
+          return { name, mode: explicit ?? policy.tableDefault, explicit: explicit !== undefined, system: false, maskedCount };
         });
         let columns: Array<Record<string, unknown>> | undefined;
         if (input.table !== undefined && input.table !== "") {
@@ -869,6 +872,7 @@ export const deliveryCapabilities: Capability[] = [
       const source = slug(input.source, "source");
       const table = str(input.table, "table", 200).trim();
       if (!table) throw new HttpError(400, "table 필수");
+      if (isSystemDeniedTable(table)) throw new HttpError(400, "게이트웨이 내부 테이블은 항상 차단(시스템)이라 정책 대상이 아닙니다");
       if (input.remove) {
         await removeTablePolicy(source, table, actorOf(user));
       } else {
@@ -887,6 +891,7 @@ export const deliveryCapabilities: Capability[] = [
       const table = str(input.table, "table", 200).trim();
       const column = str(input.column, "column", 200).trim();
       if (!table || !column) throw new HttpError(400, "table·column 필수");
+      if (isSystemDeniedTable(table)) throw new HttpError(400, "게이트웨이 내부 테이블은 항상 차단(시스템)이라 마스킹 대상이 아닙니다");
       if (input.remove) {
         await removeColumnMask(source, table, column, actorOf(user));
       } else {

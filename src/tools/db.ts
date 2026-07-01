@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type pg from "pg";
 import { getPool } from "../db/pool.js";
-import { assertSafeSelect } from "../db/firewall.js";
+import { assertSafeSelect, isSystemDeniedTable } from "../db/firewall.js";
 import { auditQuery } from "../db/audit.js";
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap } from "../db/policy.js";
@@ -111,6 +111,7 @@ export function registerDbTools(server: McpServer): void {
       try {
         if (table) {
           const tl = table.toLowerCase();
+          if (isSystemDeniedTable(tl)) throw new Error(`Blocked table: ${tl} — 게이트웨이 내부 테이블은 조회할 수 없습니다(시스템 차단)`);
           const mode = policy.tableMode.get(tl) ?? policy.tableDefault;
           if (mode === "deny") throw new Error(`Blocked table: ${tl} — 이 소스에서 조회가 허용되지 않은 테이블입니다(웹 관리)`);
           const result = await client.query(
@@ -129,10 +130,12 @@ export function registerDbTools(server: McpServer): void {
              FROM information_schema.tables
             WHERE table_schema = 'public'
             ORDER BY table_name`);
-        // effective-allow 테이블만 노출 — allow-list(table_default='deny') 모드면 허용된 것만 보인다.
-        const rows = result.rows.filter(
-          (r) => (policy.tableMode.get(String((r as { table_name: unknown }).table_name).toLowerCase()) ?? policy.tableDefault) === "allow",
-        );
+        // effective-allow 테이블만 노출(시스템 내부 테이블 제외) — allow-list(table_default='deny') 모드면 허용된 것만 보인다.
+        const rows = result.rows.filter((r) => {
+          const tn = String((r as { table_name: unknown }).table_name).toLowerCase();
+          if (isSystemDeniedTable(tn)) return false;
+          return (policy.tableMode.get(tn) ?? policy.tableDefault) === "allow";
+        });
         return { content: [{ type: "text", text: JSON.stringify({ source: src, rows }, null, 2) }] };
       } finally {
         client.release();

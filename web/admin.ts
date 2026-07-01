@@ -2123,6 +2123,14 @@ async function renderDbPolicyPanel(panel, source) {
   const tbl = el('table', { class: 'fields-table' });
   tbl.append(el('tr', {}, el('th', { text: '테이블' }), el('th', { text: '조회' }), el('th', { text: '마스킹' }), el('th', { text: '컬럼' })));
   for (const t of (ov.tables || [])) {
+    if (t.system) { // 게이트웨이 내부 테이블 — 항상 차단(웹 편집 불가), 정직하게 표시
+      tbl.append(el('tr', { class: 'mini-ro' },
+        el('td', { text: t.name }),
+        el('td', {}, el('span', { class: 'pill', text: '시스템 차단' })),
+        el('td', { class: 'mini-meta', text: '잠금' }),
+        el('td', {})));
+      continue;
+    }
     const allowed = t.mode === 'allow';
     const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: allowed ? '허용' : '차단',
       onclick: async () => { await setTablePolicy(source, t.name, allowed ? 'deny' : 'allow'); void renderDbPolicyPanel(panel, source); } });
