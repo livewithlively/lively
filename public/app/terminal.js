@@ -208,6 +208,16 @@ function termRow(s, cfg, view, sel) {
     }
     return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
 }
+// 멀티프로필(#346) — 이 세션의 claude 가 '내 계정'(프로필 로그인됨)으로 뜰지 '공유 계정'으로 폴백할지 안내.
+//  멀티프로필 꺼져 있으면(cfg.profile.multiprofile=false) 아무것도 안 보여줌(공유가 유일 모드).
+function profileNoteEl(cfg) {
+    const p = (cfg && cfg.profile) || {};
+    if (!p.multiprofile)
+        return null;
+    return el('div', { class: 'caption', text: p.active
+            ? '🔐 이 AI 세션은 내 Claude 계정(프로필 로그인됨)으로 실행됩니다.'
+            : '⚠ 내 프로필이 아직 로그인되지 않아 AI 세션은 공유 계정으로 실행됩니다 (관리자에게 내 계정 프로비저닝·로그인 요청).' });
+}
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 function openTermCreateForm(cfg, view) {
     const roots = cfg.roots || [];
@@ -295,7 +305,7 @@ function openTermCreateForm(cfg, view) {
     }
     rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
     loadPicker();
-    const back = overlay('새 세션', field('이름', labelI), field('작업자', authorI), field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel), field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box), flagsBox, autoWrap, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
+    const back = overlay('새 세션', field('이름', labelI), field('작업자', authorI), field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel), profileNoteEl(cfg), field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box), flagsBox, autoWrap, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const flags = {};
