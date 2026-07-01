@@ -134,6 +134,15 @@ const KN_PROVENANCE_HINT = {
   authored: '이 시스템에 직접 저작한 지식입니다.',
   observed: '외부 시스템에서 가져온 살아있는 미러입니다(진실·편집은 외부에).',
 };
+// 작성 주체(#449) — 이 지식을 AI 가 썼는지 사람이 썼는지(confidence 파생: mcp→ai, web→human).
+//  지식 탭 행에서 injection(주입) 칩을 대체한다 — 지식 탭은 recalled 전용이라 주입 칩이 매 행 '검색'으로 반복돼 무의미했다.
+const KN_AUTHOR_LABEL = { ai: 'AI', human: '사람', rule: '규칙', observed: '외부 미러' };
+const KN_AUTHOR_HINT = {
+  ai: 'AI 에이전트가 작성했습니다 — 사후 검토 대상입니다.',
+  human: '사람이 직접 작성했습니다.',
+  rule: '시스템 규칙으로 정의됐습니다.',
+  observed: '외부 시스템에서 미러됐습니다.',
+};
 
 // page-type(#290) 한글 라벨 + 칩 — 엔터프라이즈 표준(DITA/Diátaxis/ADR/LLM위키) 6종. NULL=미분류(칩 생략).
 const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
@@ -158,6 +167,12 @@ function knProvChip(provenance) {
   return el('span', { class: 'kn-chip kn-prov kn-prov-' + (provenance || 'na'),
     title: KN_PROVENANCE_HINT[provenance] || '', text: KN_PROVENANCE_LABEL[provenance] || provenance || '—' });
 }
+// 작성 주체 칩 — AI/사람 구분(#449). confidence 없으면 칩 생략(빈 '—' 노이즈 방지).
+function knAuthorChip(confidence) {
+  if (!confidence) return null;
+  return el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
+    title: KN_AUTHOR_HINT[confidence] || '', text: KN_AUTHOR_LABEL[confidence] || confidence });
+}
 
 // ⓘ 설명 점 — 라벨/값 옆 작은 정보 버튼. 긴 설명을 인라인에서 빼 호버(CSS)·포커스·클릭(고정 토글, 터치/유지용)으로 팝.
 //  바깥 클릭 시 닫힘. hint 없으면 null.
@@ -176,14 +191,15 @@ function infoDot(hint) {
   return dot;
 }
 
-// 지식 한 행 — 제목(상세 링크) + injection 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
+// 지식 한 행 — 제목(상세 링크) + 작성 주체(AI/사람) 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
+//  (#449) 주입(injection) 칩 제거 — 지식 탭은 recalled 전용이라 매 행 '검색'으로 반복돼 무의미. 대신 작성 주체 칩 노출.
 //  select={names:Set, onToggle} 가 오면 선택(체크) 모드 — 클릭=상세이동 대신 선택 토글, .row.sel 로 표시.
 function knRow(e, select?) {
   const titleEl = el('div', { class: 'row-title', text: e.title || e.name });
   const metaEl = el('div', { class: 'row-meta' },
     e.is_wiki ? el('span', { class: 'row-pin-wrap' },
       el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '📌 인덱스' }), '  ') : null,
-    knInjectChip(e.injection), ' ', knProvChip(e.provenance),
+    knAuthorChip(e.confidence), ' ', knProvChip(e.provenance),
     e.type ? el('span', {}, ' ', knTypeChip(e.type)) : null,
     e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null,
     '  ', relTime(e.updated_at));

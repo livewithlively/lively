@@ -1126,6 +1126,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 출처 = 저작(중립 푸른 계열) / 외부 미러(흐린 회색 — 큐레이션 아님, 외부 진실) */
 .kn-prov-authored { color: var(--blue); background: var(--bg-tint-2); border-color: var(--line-net-2); }
 .kn-prov-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
+/* 작성 주체(#449) = 사람(민트 — 직접 저작·큐레이션, 드물어 눈에 띔) / AI(중립 — 사후 검토 대상). 지식 탭에서 주입 칩을 대체. */
+.kn-author-human { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
+.kn-author-ai { color: var(--ink-sub); background: var(--bg-tint); border-color: var(--line); }
+.kn-author-rule, .kn-author-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
 /* 핀(WIKI 인덱스) 뱃지 — 항상-주입이라 inject-always 와 같은 민트 계열로 묶는다('늘 곁에' 의미 일관). */
 .kn-pin { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
 .kn-cat-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 2px; }
