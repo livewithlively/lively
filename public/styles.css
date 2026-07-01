@@ -2784,6 +2784,20 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* 드래그 다중선택(#366) — 끄는 동안 텍스트 선택 방지 + 지나온 행 체크박스는 계속 보이게. */
 body.pjv-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
 body.pjv-dragging .pjv-row-check { opacity: 1; }
+/* 드래그 재정렬 핸들(#366) — 체크박스 왼쪽 여백에 절대배치(레이아웃 불변). 행 호버 시 표시, 잡으면 grabbing. */
+.pjv-trow-title-cell { position: relative; }
+.pjv-row-grip { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 13px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border: none; background: none; padding: 0; margin: 0;
+  color: var(--muted-3); font-size: 12px; line-height: 1; cursor: grab; opacity: 0; transition: opacity .12s ease; touch-action: none; }
+.pjv-trow:hover .pjv-row-grip, body.pjv-dragging .pjv-row-grip { opacity: .6; }
+.pjv-row-grip:hover { opacity: 1; color: var(--blue); }
+.pjv-row-grip:active { cursor: grabbing; }
+.pjv-reorder-src { opacity: .4; }
+/* 놓일 자리 가로 삽입선 + 커서 따라다니는 고스트('N개 태스크'). */
+.pjv-reorder-marker { height: 2px; margin: -1px 0; background: var(--blue); border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; }
+.pjv-reorder-ghost { position: fixed; z-index: 10000; pointer-events: none; background: var(--blue); color: #fff;
+  padding: 3px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
 /* 제목 우측 호버 아이콘 — ⋯ 버튼과 동일 언어(테두리 없음·작게·muted). 담당자 컬럼과 겹치지 않게 우측 여백. */
 .pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; margin-right: 12px; opacity: 0; transition: opacity .12s ease; }
