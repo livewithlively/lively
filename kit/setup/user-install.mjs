@@ -32,6 +32,10 @@ const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1]
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CODEX = join(HOME, ".codex");
+// settings.json 위치: CLAUDE_CONFIG_DIR 있으면 그 dir(프로필별 계정 격리 — 멀티프로필 #346), 없으면 <HOME>/.claude(기본, 무변경).
+//  ~/.lively(컨텍스트·훅·토큰)는 HOME 기준 유지 = 프로필 간 공유(훅 command 는 런타임 $HOME/.lively 참조).
+//  계정별로 달라지는 건 settings(훅·권한)·MCP(.claude.json)·자격증명(.credentials.json)뿐 — 전부 CLAUDE_CONFIG_DIR 안.
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
@@ -98,7 +102,7 @@ function mergeAutoApprove() {
     const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
     want = Array.isArray(d.allow) ? d.allow.filter((s) => typeof s === "string") : [];
   } catch { return; } // 번들에 없으면(구버전) 스킵
-  const sp = join(HOME, ".claude", "settings.json");
+  const sp = join(CLAUDE_DIR, "settings.json");
   let cur = {};
   try { if (existsSync(sp)) cur = JSON.parse(readFileSync(sp, "utf8")); } catch { return; }
   if (!cur || typeof cur !== "object" || Array.isArray(cur)) return;
@@ -115,11 +119,11 @@ function mergeAutoApprove() {
     writeFileSync(sp, JSON.stringify(cur, null, 2) + "\n");
     writeFileSync(prevPath, JSON.stringify(want, null, 2)); chmodSync(prevPath, 0o600);
   } catch (e) { console.warn(`  ⚠️ auto-approve 반영 실패: ${e.message}`); return; }
-  console.log(`  ✓ ~/.claude/settings.json (auto-approve ${want.length}건 반영)`);
+  console.log(`  ✓ ${sp} (auto-approve ${want.length}건 반영)`);
 }
 
 function safeMergeUserSettings(blockHooks) {
-  const settingsPath = join(HOME, ".claude", "settings.json");
+  const settingsPath = join(CLAUDE_DIR, "settings.json");
   mkdirSync(dirname(settingsPath), { recursive: true });
   let cur = {};
   if (existsSync(settingsPath)) {
@@ -147,7 +151,7 @@ function safeMergeUserSettings(blockHooks) {
     cur.hooks[event] = arr;
   }
   writeFileSync(settingsPath, JSON.stringify(cur, null, 2) + "\n");
-  console.log("  ✓ ~/.claude/settings.json (user-level hooks 비파괴 머지, 절대경로)");
+  console.log(`  ✓ ${settingsPath} (user-level hooks 비파괴 머지, 절대경로)`);
 }
 
 function seedWorkRoots(roots) {
