@@ -90,12 +90,12 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 | 2 .env | 없으면 시크릿(`openssl rand`) 자동 생성 — **있으면 보존** |
 | 3 store | `docker compose up -d --wait items-db` (pgvector, 127.0.0.1 바인딩) |
 | 4 빌드 | `npm ci && npm run build` |
-| 5 서비스 | systemd(Linux) / launchd(Mac) 등록·기동 + `/healthz` 확인 (스키마 자가 마이그레이션) |
+| 5 서비스+TLS | systemd(Linux) / launchd(Mac) 등록·기동 + `/healthz` 확인 (스키마 자가 마이그레이션) + `LIVELY_DOMAIN` 있으면 Caddy 자동 HTTPS |
 | 6 부트스트랩 | 첫 관리자(웹 세션 로그인 계정) 시드 — `deploy/bootstrap-admin.mjs` (⚠ 서비스 기동 뒤에) |
 | 7 중앙박스 키트 | 호스트 claude 에 lively 설치(MCP+훅+컨텍스트) — `deploy/install-kit.sh`. **웹터미널 세션이 맥락 CRUD 가능해짐.** |
 
-환경변수: `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL` · `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN`
-· `WITH_EMBEDDINGS=1`(t4g.large+) · `FORCE=1`(기존 :8080 감지 무시).
+환경변수: `LIVELY_DOMAIN`(설정 시 자동 HTTPS — 아래 [TLS](#tls-자동-https--caddy)) · `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL`
+· `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN` · `WITH_EMBEDDINGS=1`(t4g.large+) · `FORCE=1`(기존 :8080 감지 무시).
 
 ## 업데이트 (기존 박스 — update.sh)
 
@@ -126,6 +126,25 @@ ssh -i ~/.ssh/<key> ubuntu@<host> 'cd ~/context-ontology && bash deploy/update.s
 - **롤백**: 이전 main 커밋을 rsync 후 다시 `update.sh`.
 - **git clone 박스**라면 1) 대신 `git pull` 후 `update.sh`.
 
+## TLS (자동 HTTPS — Caddy)
+
+**`LIVELY_DOMAIN` 하나면 끝.** 설정하면 `install.sh`(5단계)가 Caddy 리버스 프록시(profile=proxy)를 띄워
+**Let's Encrypt 인증서를 자동 발급·갱신**하고 `:443` 을 종단해 네이티브 게이트웨이(`localhost:8080`)로 프록시한다.
+`PUBLIC_URL` 은 자동으로 `https://도메인` 이 되고(→ 세션 쿠키 `Secure`), HTTP→HTTPS 리다이렉트·WebSocket(웹터미널)은 Caddy 가 투명 처리한다.
+
+```bash
+# 최초 설치부터 HTTPS로 (도메인 A레코드가 이 호스트를 향해야 발급됨)
+LIVELY_DOMAIN=gw.org.com BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com \
+  bash deploy/install.sh
+```
+
+**기존 박스에 TLS 추가:** `.env` 에 `LIVELY_DOMAIN=gw.org.com` 한 줄 추가(필요 시 `PUBLIC_URL=https://gw.org.com` 도) → `bash deploy/update.sh`. `proxy_up` 이 Caddy 를 기동한다.
+
+- **전제:** 도메인의 A(또는 AAAA) 레코드가 이 호스트 공인 IP 를 향해야 한다(ACME HTTP-01). 방화벽/SG 는 `80`·`443` 개방. `8080` 직접 공개는 불필요(SG 로 차단, 디버그는 `ssh -L 8080:localhost:8080`).
+- **인증서 영속:** `caddy-data` 볼륨(ACME 계정·인증서). 삭제 시 재발급(Let's Encrypt rate-limit 주의).
+- **도메인 없이(IP만):** `LIVELY_DOMAIN` 을 비우면 프록시 없음 — `:8080` 직접(신뢰 IP 로 SG 제한) 또는 SSH 터널. Let's Encrypt 는 IP 인증서를 발급하지 않으므로 공개 서비스엔 도메인 필요.
+- **커스텀 프록시/사내 CA:** `deploy/Caddyfile` 을 수정하거나, 별도 프록시(nginx 등)를 `localhost:8080` 앞단에 두면 된다.
+
 ## 중앙박스 키트 (왜 호스트에도 까나)
 
 게이트웨이의 **중앙박스(웹터미널) 세션은 이 호스트에서 claude 를 돌린다.** 그 세션이 lively MCP 로 조직 맥락을
@@ -147,7 +166,8 @@ deploy/
   install.sh          # 설치 엔진 (OS 감지 → <os>/provision.sh, 7단계). 전달 방식 무관.
   update.sh           # 기존 박스 업데이트(빌드→재시작→healthz, --kit)
   uninstall.sh        # 제거(install 역연산): 서비스·컨테이너·키트 제거 / --purge=볼륨·.env·디렉토리까지
-  lib/common.sh       # 공유: 로그·OS감지·시크릿·.env 비파괴 생성·store_up·healthz
+  lib/common.sh       # 공유: 로그·OS감지·시크릿·.env 비파괴 생성·store_up·healthz·proxy_up(TLS)
+  Caddyfile           # Caddy 리버스 프록시 설정(자동 HTTPS — LIVELY_DOMAIN)
   env.example         # .env 문서(시크릿 없음)
   initdb/01-init.sh   # pgvector 최초 init: domainmap DB 생성
   bootstrap-admin.mjs # 첫 관리자(세션 로그인) 시드
@@ -159,7 +179,7 @@ deploy/
   mac/                # ── macOS 지원 ──
     provision.sh                          # brew·docker·node·claude / launchd 설치
     io.lvly.context-ontology.plist        # launchd plist 템플릿
-../docker-compose.yml # store(items-db) + embeddings(profile) + gateway(profile)
+../docker-compose.yml # store(items-db) + embeddings(profile) + gateway(profile) + caddy(profile=proxy, TLS)
 ../Dockerfile         # 게이트웨이 이미지(full-docker/Option 1 용)
 ```
 
@@ -179,11 +199,10 @@ deploy/
 ## 보안 메모
 
 - store(pgvector)는 `127.0.0.1` 바인딩 — 외부 노출 안 함.
-- 게이트웨이 :8080 은 TLS 미적용(P2) — 공개 전엔 SG/방화벽으로 신뢰 IP 제한, 또는 리버스 프록시(Caddy) 추가.
+- **TLS:** `LIVELY_DOMAIN` 설정 시 Caddy 자동 HTTPS(위 [TLS](#tls-자동-https--caddy)) — 공개 서비스는 이걸 권장. 미설정(IP 직결)이면 :8080 을 SG/방화벽으로 신뢰 IP 제한.
 - `.env`(시크릿)는 0600, `.gitignore` 등재. 정적 토큰은 admin/runtime 불가(kill-switch) — 사람관리는 세션 로그인.
 
 ## 추후 (TODO)
 
 - **멀티 프로필 / 프로필별 다른 Claude Code 계정** — 중앙박스 세션이 사용자·프로필별로 다른 클코 계정/인증을 쓰도록.
-- 리버스 프록시 + 자동 TLS(Caddy) 프로파일.
 - Option 1(러너 분리 → 게이트웨이 컨테이너화), 에어갭 오프라인 번들.

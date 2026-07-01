@@ -8,7 +8,8 @@ set -euo pipefail
 #
 # 사용:  bash deploy/install.sh
 #   환경변수(선택):
-#     PUBLIC_URL=http://<host>:8080         외부 접속 URL
+#     LIVELY_DOMAIN=gw.org.com               설정 시 Caddy 자동 HTTPS(Let's Encrypt) + PUBLIC_URL 기본 https
+#     PUBLIC_URL=http://<host>:8080         외부 접속 URL(LIVELY_DOMAIN 설정 시 https://도메인 자동)
 #     BOOTSTRAP_ADMIN_EMAIL=you@org.com      첫 관리자(웹 로그인) 이메일
 #     ORG_DOMAIN=org.com                     에이전트 토큰 이메일 도메인
 #     WITH_EMBEDDINGS=1                      임베딩 사이드카 동반(t4g.large+ 권장)
@@ -63,9 +64,10 @@ main() {
 
   # ⚠ 순서: 스키마는 게이트웨이가 '기동 시 listen 성공 후' 자가 마이그레이션한다 → 부트스트랩(테이블 필요)은
   #   반드시 서비스 기동·헬스체크 '뒤'에. (먼저 돌리면 org_member 테이블이 아직 없어 실패.)
-  phase "5/7 게이트웨이 서비스 설치·기동 + 헬스체크(스키마 자가 마이그레이션)"
+  phase "5/7 게이트웨이 서비스 설치·기동 + 헬스체크(스키마 자가 마이그레이션) + TLS 프록시"
   os_install_service
   wait_healthz
+  proxy_up   # LIVELY_DOMAIN 설정 시 Caddy 자동 HTTPS(미설정 시 no-op)
 
   phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙)"
   local admin_out=""

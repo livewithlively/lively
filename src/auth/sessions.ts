@@ -64,13 +64,16 @@ export function parseSessionCookie(cookieHeader?: string): string | null {
   return null;
 }
 
-// Set-Cookie 값 — HttpOnly + SameSite=Lax(크로스사이트 POST 차단 = CSRF 완화). 파일럿 http 허용 위해 Secure 생략
-//  (https 배포 시 Secure 추가 권장). Path=/ 로 전 UI 표면 커버.
+// Set-Cookie 값 — HttpOnly + SameSite=Lax(크로스사이트 POST 차단 = CSRF 완화) + Secure(PUBLIC_URL 이 https 일 때).
+//  Caddy 가 TLS 를 종단해 게이트웨이는 http 로 받지만, PUBLIC_URL 로 '공개 스킴'을 판정해 Secure 를 붙인다. Path=/ 로 전 UI 커버.
+function cookieSecure(): string {
+  return (process.env.PUBLIC_URL || "").startsWith("https") ? "; Secure" : "";
+}
 export function sessionCookie(sessionId: string, expiresAt: Date): string {
   const maxAge = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
-  return `${COOKIE}=${sessionId}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}`;
+  return `${COOKIE}=${sessionId}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${cookieSecure()}`;
 }
 
 export function clearSessionCookie(): string {
-  return `${COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+  return `${COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${cookieSecure()}`;
 }

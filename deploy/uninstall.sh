@@ -51,13 +51,14 @@ else
 fi
 ok "키트 제거(claude 로그인은 보존)"
 
-# 3) store 컨테이너 제거 (--purge 면 볼륨까지)
-phase "store(pgvector) 컨테이너 제거"
+# 3) store + 프록시 컨테이너 제거 (--purge 면 볼륨까지 — items-db-data·caddy-data 포함)
+#    ⚠ 모든 프로필(embeddings·gateway·proxy)을 명시해야 해당 컨테이너가 down 대상에 든다(대칭).
+phase "store(pgvector) + Caddy 프록시 컨테이너 제거"
 if [ -f "$APP_DIR/docker-compose.yml" ]; then
-  ( cd "$APP_DIR" && dc compose --profile embeddings --profile gateway down --remove-orphans \
+  ( cd "$APP_DIR" && dc compose --profile embeddings --profile gateway --profile proxy down --remove-orphans \
       $([ "$PURGE" = "1" ] && echo --volumes) 2>/dev/null ) || warn "compose down 경고"
 fi
-ok "컨테이너 제거$([ "$PURGE" = "1" ] && echo ' + 데이터 볼륨 삭제')"
+ok "컨테이너 제거$([ "$PURGE" = "1" ] && echo ' + 데이터 볼륨 삭제(TLS 인증서 포함)')"
 
 # 4) --purge: .env + 앱 디렉토리 완전 삭제
 if [ "$PURGE" = "1" ]; then

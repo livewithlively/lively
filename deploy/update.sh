@@ -19,9 +19,15 @@ cd "$APP_DIR"
 
 [ -f "$APP_DIR/.env" ] || die ".env 없음 — 최초 설치가 안 된 호스트입니다. install.sh 를 쓰세요."
 
-phase "1/3 빌드 (npm ci && npm run build)"
-npm ci
-npm run build   # 실패하면 set -e 로 여기서 중단 → 기존 게이트웨이 그대로 가동
+phase "1/3 의존성 + 빌드"
+if [ -d dist ] && [ ! -d src ]; then
+  # prebuilt 릴리스 번들(dist 동봉·소스 없음) → tsc 불요. 새 번들이 이미 dist 를 담아 옴. 런타임 deps 만 멱등 반영.
+  ok "prebuilt 릴리스 번들 — 빌드 생략, npm ci --omit=dev"
+  npm ci --omit=dev
+else
+  npm ci
+  npm run build   # 실패하면 set -e 로 여기서 중단 → 기존 게이트웨이 그대로 가동(다운 없음)
+fi
 
 phase "2/3 store 반영(멱등) + 게이트웨이 재시작"
 dc compose up -d --wait items-db    # compose/이미지 변경 멱등 반영(없으면 no-op)
@@ -31,6 +37,7 @@ else
   launchctl kickstart -k "gui/$(id -u)/io.lvly.context-ontology"
 fi
 wait_healthz
+proxy_up   # LIVELY_DOMAIN(.env) 설정 시 Caddy 재적용/기동(미설정 시 no-op) — 도메인 추가/변경도 여기서 반영
 
 if [ "${1:-}" = "--kit" ]; then
   phase "3/3 중앙박스 키트 갱신(호스트 claude 훅/MCP/컨텍스트)"

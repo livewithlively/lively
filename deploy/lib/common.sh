@@ -45,7 +45,9 @@ ensure_env() {
   local pgpw token webhook
   pgpw="$(gen_hex 16)"; token="$(gen_hex 32)"; webhook="$(gen_hex 32)"
   local port="${PORT:-8080}" idbport="${ITEMS_DB_PORT:-5432}"
-  local pub="${PUBLIC_URL:-http://localhost:$port}"
+  local domain="${LIVELY_DOMAIN:-}"
+  # LIVELY_DOMAIN 설정 시 front door = Caddy TLS → PUBLIC_URL 기본을 https://도메인 으로(쿠키 Secure 판정 근거).
+  local pub="${PUBLIC_URL:-$([ -n "$domain" ] && echo "https://$domain" || echo "http://localhost:$port")}"
   local tmux_bin="${TMUX_BIN:-$(command -v tmux || echo /usr/bin/tmux)}"
   local rshared="${TERMINAL_ROOT_SHARED:-$HOME/workspace}"
   local rpersonal="${TERMINAL_ROOT_PERSONAL:-$HOME/box}"
@@ -58,6 +60,12 @@ ensure_env() {
 PORT=$port
 LOG_LEVEL=info
 PUBLIC_URL=$pub
+
+# ── TLS 프론트도어(Caddy, profile=proxy) — LIVELY_DOMAIN 설정 시 자동 HTTPS(Let's Encrypt). ──
+#  비우면 프록시 없음(8080 직접/SSH 터널). 설정 시 A레코드가 이 호스트를 향해야 인증서 발급됨.
+#  값 바꾼 뒤 재적용: deploy/update.sh (proxy_up 재기동). PUBLIC_URL=https://도메인 이라야 쿠키 Secure.
+LIVELY_DOMAIN=$domain
+LIVELY_UPSTREAM=localhost:$port
 
 # ── store(pgvector, docker compose) ──
 PGUSER=lively
@@ -121,4 +129,19 @@ wait_healthz() {
   else
     die "게이트웨이가 $url 에 응답 없음 — 로그: $APP_DIR/logs/gateway.log"
   fi
+}
+
+# TLS 리버스 프록시(Caddy) 기동 — .env 의 LIVELY_DOMAIN 이 있을 때만(자동 HTTPS). 멱등.
+#  판정은 .env 기준(caller env 아님) — install/update 어느 경로로도 일관. 도메인 없으면 no-op.
+proxy_up() {
+  cd "$APP_DIR"
+  local domain
+  domain="$(grep -E '^LIVELY_DOMAIN=' .env 2>/dev/null | head -n1 | cut -d= -f2-)"
+  if [ -z "$domain" ]; then
+    log "LIVELY_DOMAIN 미설정 — TLS 프록시 건너뜀(8080 직접/SSH 터널). 활성화: .env 에 LIVELY_DOMAIN=도메인 후 update.sh"
+    return 0
+  fi
+  log "Caddy 리버스 프록시 기동(자동 HTTPS: $domain)"
+  dc compose --profile proxy up -d caddy || die "Caddy 기동 실패 (docker compose 로그: dc compose logs caddy)"
+  ok "Caddy 프록시 up — https://$domain (Let's Encrypt 자동 발급·갱신, 최초 발급 수십초)"
 }

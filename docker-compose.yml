@@ -79,6 +79,24 @@ services:
       - "${PORT:-8080}:8080"
     restart: unless-stopped
 
+  # ── caddy(선택, profile=proxy) — 자동 HTTPS 리버스 프록시(Let's Encrypt). TLS 종단 → localhost:8080. ──
+  #  network_mode: host → 호스트 80/443 바인딩 + 네이티브 게이트웨이(localhost:8080)로 프록시. WS Upgrade 자동 통과.
+  #  도메인 필요(LIVELY_DOMAIN — A레코드가 이 호스트를 향해야 인증서 발급). 인증서는 caddy-data 볼륨에 영속.
+  caddy:
+    image: caddy:2
+    profiles: ["proxy"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LIVELY_DOMAIN: ${LIVELY_DOMAIN:?LIVELY_DOMAIN 필요 — TLS 대상 도메인(A레코드→이 호스트)}
+      LIVELY_UPSTREAM: ${LIVELY_UPSTREAM:-localhost:8080}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   items-db-data:   # ⚠ 조직 지식 전체. 백업 대상(pg_dump / 볼륨 스냅샷). -v 로 날리지 말 것.
   ollama-models:
+  caddy-data:      # ⚠ TLS 인증서·ACME 계정. 삭제 시 재발급(LE rate-limit 주의).
+  caddy-config:

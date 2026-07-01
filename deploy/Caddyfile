@@ -1,0 +1,8 @@
+# Caddy — 자동 HTTPS 리버스 프록시.
+#  {$LIVELY_DOMAIN} 로 Let's Encrypt 인증서 자동 발급·갱신, {$LIVELY_UPSTREAM}(네이티브 게이트웨이)로 프록시.
+#  · HTTP→HTTPS 리다이렉트: Caddy 기본(자동).
+#  · WebSocket(웹터미널 xterm): reverse_proxy 가 Upgrade/Connection 헤더를 투명 통과(추가 설정 불요).
+#  · X-Forwarded-Proto/For 자동 주입(게이트웨이가 https 인지 알 수 있음).
+{$LIVELY_DOMAIN} {
+	reverse_proxy {$LIVELY_UPSTREAM:localhost:8080}
+}
