@@ -186,6 +186,31 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
   return { ...k, categories, links, sources };
 }
 
+/** resolveUpsertFacets 입력 — upsertKnowledge input 의 facet 부분집합(명시 시 우선). 상위 input 을 통째로 넘겨도 무방(구조적). */
+export interface UpsertFacetInput {
+  injection?: string; provenance?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
+}
+/** 병합 결과 — INSERT VALUES / ON CONFLICT DO UPDATE(is_wiki=EXCLUDED.is_wiki 등) 파라미터로 그대로 사용. */
+export interface ResolvedFacets {
+  injection: string; provenance: string; summary: string | null; sort: number; isWiki: boolean; type: string | null;
+}
+/**
+ * upsert facet 병합 규칙 — "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
+ * 편집 저장(본문만 갱신, facet 미전송)이 WIKI 핀(is_wiki)·주입(injection)·요약·정렬·page-type 을 조용히 유실하지
+ * 않게 하는 불변식(프로젝트 #345). 규칙이 upsertKnowledge 인라인에 흩어지면 리팩터 중 한 facet(특히 is_wiki 핀)이
+ * 누락돼도 티가 안 나므로, 단일 순수 함수로 모아 knowledge-store.test.ts 가 회귀를 잡는다.
+ */
+export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<string, unknown> | null | undefined): ResolvedFacets {
+  return {
+    injection: input.injection ?? (before?.injection as string) ?? "recalled",
+    provenance: input.provenance ?? (before?.provenance as string) ?? "authored",
+    summary: input.summary !== undefined ? input.summary : ((before?.summary as string | null) ?? null),
+    sort: input.sort !== undefined ? input.sort : (Number(before?.sort) || 0),
+    isWiki: input.is_wiki !== undefined ? input.is_wiki : ((before?.is_wiki as boolean) ?? false),
+    type: input.type !== undefined ? input.type : ((before?.type as string | null) ?? null),
+  };
+}
+
 export async function upsertKnowledge(
   input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[] },
   ctx?: WriteCtx,
@@ -217,15 +242,11 @@ export async function upsertKnowledge(
   if (!before && !input.type) {
     throw new Error("신규 지식은 type(page-type) 필수 — decision|concept|how-to|reference|research|entity 중 하나를 지정하세요.");
   }
-  // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값. injection/provenance 는 명시 우선·기존 보존.
+  // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값(기존 보존 대상 아님 — ctx 파생).
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
-  const injection = input.injection ?? (before?.injection as string) ?? "recalled";
-  const provenance = input.provenance ?? (before?.provenance as string) ?? "authored";
-  // summary/sort/is_wiki: 명시(undefined 아님) 우선, 없으면 기존 보존(편집 저장이 핀·요약·정렬 유실 안 하게). 신규면 기본값.
-  const summary = input.summary !== undefined ? input.summary : ((before?.summary as string | null) ?? null);
-  const sort = input.sort !== undefined ? input.sort : (Number(before?.sort) || 0);
-  const isWiki = input.is_wiki !== undefined ? input.is_wiki : ((before?.is_wiki as boolean) ?? false);
-  const type = input.type !== undefined ? input.type : ((before?.type as string | null) ?? null);  // #290 page-type facet(편집이 유실 안 하게 기존 보존)
+  // injection/provenance/summary/sort/is_wiki/type: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
+  //  편집 저장(본문만)이 WIKI 핀 is_wiki 등 미전송 facet 을 조용히 유실하지 않게 하는 불변식 — 단일 진실 resolveUpsertFacets(#345 회귀 방지, knowledge-store.test.ts).
+  const { injection, provenance, summary, sort, isWiki, type } = resolveUpsertFacets(input, before);
   await itemsPool.query(
     `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, version, updated_at, updated_by)
      VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12,1,now(),$13)
