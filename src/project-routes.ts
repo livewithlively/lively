@@ -245,9 +245,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     }));
   }
 
-  // ── ② 터미널 세션(공동 — 프로젝트 팀원 전용) — 목록 / 생성. 비팀원은 게이트 403. ──
+  // ── ② 터미널 세션(공동) — 목록은 누구나(어사이니 무관, #452), 생성은 팀원만. ──
+  //  목록: projBase 에 viewerId 를 안 넘겨 멤버십 403 을 우회한다(프로젝트 상세 페이지는 #280 이후 전원 공개이고,
+  //   입장 게이트 canAttach 도 프로젝트 세션은 전원 개방 — 비멤버가 '권한 없음'으로 세션을 못 보던 문제 해결).
   app.get(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     res.setHeader("Cache-Control", "no-store");
     const all = await listSessions(userOf(req));
     const sessions = all.filter((s) => s.dir && (s.dir === base || s.dir.startsWith(base + path.sep)));
