@@ -150,7 +150,7 @@ async function renderTerminal(view) {
         reRender();
     }
     const head = el('div', { class: 'page-head' }, el('h1', { text: '터미널 세션' }), headActions);
-    view.replaceChildren(head, bulkBar, body);
+    view.replaceChildren(...[loginBannerEl(cfg, view), head, bulkBar, body].filter(Boolean));
     repaint();
 }
 // 섹션 제목 + 한 줄 설명(desc 없으면 제목만).
@@ -214,9 +214,33 @@ function profileNoteEl(cfg) {
     const p = (cfg && cfg.profile) || {};
     if (!p.multiprofile)
         return null;
-    return el('div', { class: 'caption', text: p.active
-            ? '🔐 이 AI 세션은 내 Claude 계정(프로필 로그인됨)으로 실행됩니다.'
-            : '⚠ 내 프로필이 아직 로그인되지 않아 AI 세션은 공유 계정으로 실행됩니다 (관리자에게 내 계정 프로비저닝·로그인 요청).' });
+    if (p.active)
+        return el('div', { class: 'caption', text: '🔐 이 AI 세션은 내 Claude 계정(프로필 로그인됨)으로 실행됩니다.' });
+    if (p.provisioned)
+        return el('div', { class: 'caption', text: '⚠ 내 프로필이 아직 로그인 안 돼 공유 계정으로 실행됩니다 — 터미널 상단 [내 계정 로그인] 버튼으로 한 번 로그인하세요.' });
+    return el('div', { class: 'caption', text: '⚠ 내 프로필이 없어 공유 계정으로 실행됩니다 (관리자에게 프로비저닝 요청).' });
+}
+// 최초 로그인 세션 — loginProfile 로 게이트를 우회해 내 프로필 dir 로 claude 를 띄운다(닭-달걀 해소). 새 탭으로 열어 로그인.
+async function openLoginSession(view) {
+    try {
+        const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+                label: '내 계정 로그인', rootKey: 'personal', subpath: '', harness: 'claude', flags: {}, autoApprove: false, loginProfile: true,
+            }) });
+        toast('로그인 터미널을 열었습니다 — 뜨는 claude 에서 로그인을 진행하세요');
+        if (out && out.session)
+            window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+        renderTerminal(view);
+    }
+    catch (e) {
+        toast('로그인 터미널 열기 실패 — ' + e.message, true);
+    }
+}
+// 내 프로필이 프로비저닝됐지만 미로그인일 때 — 페이지 상단 배너로 '내 계정 로그인'(자기 계정 최초 로그인 유도). CLAUDE_CONFIG_DIR 수동설정 불요.
+function loginBannerEl(cfg, view) {
+    const p = (cfg && cfg.profile) || {};
+    if (!p.multiprofile || !p.provisioned || p.loggedIn)
+        return null;
+    return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 지금 만드는 AI 세션은 공유 계정으로 뜹니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 function openTermCreateForm(cfg, view) {
