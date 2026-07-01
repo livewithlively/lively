@@ -8,6 +8,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder, folderVariants } from "./project-fs.js";
@@ -132,6 +133,23 @@ export async function profileStatus(user: LivelyUser): Promise<{
   try { await fsp.access(dir); provisioned = true; } catch { /* 미프로비저닝 */ }
   try { await fsp.access(path.join(dir, ".credentials.json")); loggedIn = true; } catch { /* 미로그인 */ }
   return { multiprofile, dir, provisioned, loggedIn, active: multiprofile && loggedIn };
+}
+
+// 특정 멤버 id 기준 프로필 상태(관리탭 목록용 — owner 파생과 동일 slug 규칙).
+export function profileStatusFor(memberId: string): ReturnType<typeof profileStatus> {
+  return profileStatus({ userId: memberId } as LivelyUser);
+}
+
+// 프로필 프로비저닝(#442) — 프로필 dir + 키트(settings·MCP)를 설치한다. **로그인(OAuth)은 별도**(사람이 웹터미널에서
+//  claude /login). 기존 deploy/provision-profile.sh(테스트된 로직) 재활용 — admin 라우트에서만 호출(게이트는 라우트가).
+//  ⚠ member 는 실재 org_member.id 여야(라우트가 검증). execFile(셸 미경유)라 인젝션 없음. 스크립트가 slug→dir 계산.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");   // dist/ → 리포 루트
+export async function provisionProfile(memberId: string): Promise<{ slug: string; dir: string }> {
+  const u = { userId: memberId } as LivelyUser;
+  const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
+  // 게이트웨이 env 상속(PATH 에 claude, .env 토큰은 스크립트가 읽음). 최대 3분(키트 다운로드+등록).
+  await execFileAsync("bash", [script, memberId], { timeout: 180_000, env: process.env, cwd: REPO_ROOT, maxBuffer: 4 * 1024 * 1024 });
+  return { slug: userSlug(u), dir: profileConfigDir(u) };
 }
 
 async function tmux(args: string[]): Promise<string> {
