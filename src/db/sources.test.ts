@@ -21,7 +21,7 @@ const throws = (name: string, fn: () => void, re: RegExp): void => {
 // 테스트용 DbSource 빌더(웹 등록 소스 형상 — origin='db').
 const src = (name: string, over: Partial<DbSource> = {}): DbSource => ({
   name, url: `postgres://u@h/${name}`, driver: "postgres", rls: null,
-  maxRows: 1000, timeoutMs: 5000, authMode: "password", secretSource: null, origin: "db", ...over,
+  maxRows: 1000, timeoutMs: 5000, authMode: "password", secretSource: null, origin: "db", tableDefault: "allow", ...over,
 });
 const mapOf = (...ss: DbSource[]): Map<string, DbSource> => new Map(ss.map((s) => [s.name, s]));
 

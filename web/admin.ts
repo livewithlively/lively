@@ -1688,6 +1688,12 @@ function dbSourceEditor(detail, data) {
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }));
+  // 테이블 정책 · 컬럼 마스킹 — 기존(등록된) 소스 선택 시에만(라이브 스키마 오버레이, 무재시작).
+  if (editing && sel !== '__new__') {
+    const panel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(panel);
+    void renderDbPolicyPanel(panel, sel);
+  }
   const rcDb = data.runtimeConfig || { allowed_db_hosts: [] };
   const dbSafety = allowlistCard(data, 'DB 접속 안전범위 (allowlist)',
     'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단(SSRF 방어). 외부 공인 DB 는 등록 불요.',
@@ -1716,6 +1722,10 @@ function dbSourceForm(root, s, data, detail, isNew) {
   const toIn = el('input', { type: 'number', value: (s.timeout_ms == null ? '' : s.timeout_ms), placeholder: '기본 5000' });
   const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
   const enChk = el('input', { type: 'checkbox' }); enChk.checked = s.enabled !== false;
+  const tdSel = el('select', {},
+    el('option', { value: 'allow', text: 'deny-list — 기본 허용(명시 차단만 제외)' }),
+    el('option', { value: 'deny', text: 'allow-list — 기본 차단(명시 허용만 조회 · 컴플라이언스 권장)' }));
+  tdSel.value = s.table_default || 'allow';
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
@@ -1730,7 +1740,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
         rls: rlsIn.value.trim() || null,
         max_rows: maxIn.value ? Number(maxIn.value) : null,
         timeout_ms: toIn.value ? Number(toIn.value) : null,
-        note: noteIn.value.trim() || null, enabled: enChk.checked,
+        note: noteIn.value.trim() || null, enabled: enChk.checked, table_default: tdSel.value,
       };
       if (urlV) payload.url = urlV; // 빈칸 = url 미변경(수정 시)
       await api('/api/ui/org/db-source', { method: 'POST', body: JSON.stringify(payload) });
@@ -1747,8 +1757,73 @@ function dbSourceForm(root, s, data, detail, isNew) {
     field('이름', nameIn), field('접속 URL (비번 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel),
     field('비번 환경변수 이름 (auth_ref)', refIn), refHint,
     field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn),
+    field('테이블 기본자세 (table_default)', tdSel),
     field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'),
     actions);
+}
+
+// ── 테이블 정책 · 컬럼 마스킹 패널(#186) — 라이브 스키마 오버레이. 고객 DB 무수정, 게이트웨이 집행. ──
+async function renderDbPolicyPanel(panel, source) {
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 불러오는 중…' }));
+  let ov;
+  try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source)); }
+  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 로드 실패: ' + e.message })); return; }
+  const openT = state.admin.dbPolTable || null;
+  panel.replaceChildren(
+    sectionTitle('테이블 정책 · 컬럼 마스킹', '이 소스에서 조회 가능한 테이블과 개인정보 컬럼 마스킹을 관리합니다 — 고객 DB 무수정, 게이트웨이가 결정론적으로 집행.'),
+    el('p', { class: 'admin-hint', text: '기본자세: ' + (ov.table_default === 'deny'
+      ? 'allow-list(기본 차단 — 명시 허용만 조회)' : 'deny-list(기본 허용 — 명시 차단만 제외)') + ' · 위 폼의 table_default 로 변경' }));
+  const tbl = el('table', { class: 'fields-table' });
+  tbl.append(el('tr', {}, el('th', { text: '테이블' }), el('th', { text: '조회' }), el('th', { text: '마스킹' }), el('th', { text: '컬럼' })));
+  for (const t of (ov.tables || [])) {
+    const allowed = t.mode === 'allow';
+    const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: allowed ? '허용' : '차단',
+      onclick: async () => { await setTablePolicy(source, t.name, allowed ? 'deny' : 'allow'); void renderDbPolicyPanel(panel, source); } });
+    const isOpen = t.name === openT;
+    const colsBtn = el('button', { class: 'btn-text', text: (isOpen ? '▾ 컬럼' : '▸ 컬럼') + (t.maskedCount ? ` (${t.maskedCount})` : '') });
+    colsBtn.addEventListener('click', () => { state.admin.dbPolTable = isOpen ? null : t.name; void renderDbPolicyPanel(panel, source); });
+    tbl.append(el('tr', { class: allowed ? '' : 'mini-ro' },
+      el('td', { text: t.name }), el('td', {}, toggle),
+      el('td', { class: 'mini-meta', text: t.maskedCount ? (t.maskedCount + ' 컬럼') : '–' }),
+      el('td', {}, colsBtn)));
+    if (isOpen) {
+      const cell = el('td', { colspan: '4' });
+      tbl.append(el('tr', {}, cell));
+      void renderColumnMasks(cell, panel, source, t.name);
+    }
+  }
+  panel.append(tbl);
+}
+
+async function renderColumnMasks(cell, panel, source, table) {
+  cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 불러오는 중…' }));
+  let ov;
+  try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(table)); }
+  catch (e) { cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 로드 실패: ' + e.message })); return; }
+  const STYLES = [['', '(마스킹 없음)'], ['full', 'full — 전체 ***'], ['partial', 'partial — 앞1·뒤1'], ['email', 'email — 로컬부 가림'], ['hash', 'hash — sha256'], ['null', 'null — 널']];
+  const ct = el('table', { class: 'fields-table', style: 'margin:6px 0 0 12px' });
+  for (const c of (ov.columns || [])) {
+    const box = el('select', {});
+    for (const [v, label] of STYLES) box.append(el('option', { value: v, text: label }));
+    box.value = c.masked || '';
+    box.addEventListener('change', async () => {
+      await setColumnMask(source, table, c.column_name, box.value);
+      void renderDbPolicyPanel(panel, source); // 마스킹 수 즉시 반영
+    });
+    ct.append(el('tr', {}, el('td', { text: c.column_name }), el('td', { class: 'mini-meta', text: c.data_type }), el('td', {}, box)));
+  }
+  cell.replaceChildren(ct);
+}
+
+async function setTablePolicy(source, table, mode) {
+  try { await api('/api/ui/org/db-source/table-policy', { method: 'POST', body: JSON.stringify({ source, table, mode }) }); toast(mode === 'allow' ? '허용됨' : '차단됨'); }
+  catch (e) { toast(e.message, true); }
+}
+async function setColumnMask(source, table, column, style) {
+  try {
+    await api('/api/ui/org/db-source/column-mask', { method: 'POST', body: JSON.stringify(style ? { source, table, column, style } : { source, table, column, remove: true }) });
+    toast(style ? ('마스킹: ' + style) : '마스킹 해제');
+  } catch (e) { toast(e.message, true); }
 }
 
 // ── 커스텀 훅 — runtime 권한 ──

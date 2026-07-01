@@ -25,14 +25,16 @@ import {
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
+  upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
-import { invalidatePool } from "../db/pool.js";
+import { invalidatePool, getPool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
+import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
@@ -112,7 +114,7 @@ async function uniqueMemberId(base: string): Promise<string> {
 const maskDbSource = (s: DbSourceRow): Record<string, unknown> => ({
   name: s.name, driver: s.driver, host: s.url ? (hostOfUrl(s.url) ?? null) : null,
   auth_mode: s.auth_mode, auth_ref: s.auth_ref, rls: s.rls, max_rows: s.max_rows, timeout_ms: s.timeout_ms,
-  note: s.note, enabled: s.enabled, sort: s.sort, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by,
+  note: s.note, enabled: s.enabled, table_default: s.table_default, sort: s.sort, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by,
 });
 
 export const deliveryCapabilities: Capability[] = [
@@ -716,12 +718,19 @@ export const deliveryCapabilities: Capability[] = [
         if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, `${label} 는 양의 정수여야 합니다`);
         return n;
       };
+      let tableDefault: "allow" | "deny" | undefined;
+      if (input.table_default !== undefined) {
+        const td = str(input.table_default, "table_default", 8);
+        if (td !== "allow" && td !== "deny") throw new HttpError(400, "table_default 는 allow|deny");
+        tableDefault = td;
+      }
       const payload: DbSourceInput = {
         name, driver, auth_mode: authMode as DbSourceInput["auth_mode"], url, auth_ref: authRef, rls,
         max_rows: posIntOpt(input.max_rows, "max_rows"),
         timeout_ms: posIntOpt(input.timeout_ms, "timeout_ms"),
         note: input.note === undefined ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        table_default: tableDefault,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       };
       const src = await upsertDbSource(payload, actorOf(user), "web");
@@ -737,6 +746,79 @@ export const deliveryCapabilities: Capability[] = [
       await removeDbSource(name, actorOf(user), "web");
       invalidatePool(name);
       await refreshSources(true);
+      return { ok: true };
+    }),
+
+  // ── db_query 테이블 정책 · 컬럼 마스킹 (admin, #186) — 라이브 스키마 위 오버레이 편집 ──
+  restOnly("org_db_source_schema", "DB 소스 스키마 오버레이(테이블 정책·컬럼 마스킹)",
+    "라이브 스키마(information_schema) 위에 저장 정책을 얹어 돌려준다 — 테이블별 effective allow/deny·마스킹 컬럼 수, table 지정 시 컬럼별 마스킹 스타일. 웹 편집 UI 용.",
+    [{ method: "GET", paths: ["/api/ui/org/db-source/schema"],
+       parse: (req) => ({ source: req.query?.source ? String(req.query.source) : undefined, table: req.query?.table ? String(req.query.table) : undefined }) }],
+    async (input: Record<string, unknown>, _user: LivelyUser) => {
+      const src = slug(input.source, "source");
+      await refreshSources();
+      await refreshPolicy();
+      if (!listSourceConfigs().some((s) => s.name === src)) throw new HttpError(404, `db source '${src}' 없음(먼저 등록·활성화)`);
+      const policy = getSourcePolicy(src);
+      const masks = getMaskStyleMap(src);
+      const pool = await getPool(src);
+      const client = await pool.connect();
+      try {
+        const tRes = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
+        const tables = tRes.rows.map((r) => {
+          const name = String(r.table_name);
+          const explicit = policy.tableMode.get(name.toLowerCase());
+          const maskedCount = [...masks.keys()].filter((k) => k.startsWith(name.toLowerCase() + ".")).length;
+          return { name, mode: explicit ?? policy.tableDefault, explicit: explicit !== undefined, maskedCount };
+        });
+        let columns: Array<Record<string, unknown>> | undefined;
+        if (input.table !== undefined && input.table !== "") {
+          const table = str(input.table, "table", 200);
+          const cRes = await client.query(
+            `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, [table]);
+          columns = cRes.rows.map((r) => ({
+            column_name: r.column_name, data_type: r.data_type,
+            masked: masks.get(`${table.toLowerCase()}.${String(r.column_name).toLowerCase()}`) ?? null,
+          }));
+        }
+        return { source: src, table_default: policy.tableDefault, tables, columns, meaning: MEANING["db-source"] };
+      } finally {
+        client.release();
+      }
+    }),
+  restOnly("org_db_table_policy_set", "테이블 조회 정책 저장/삭제",
+    "db_query 소스의 테이블별 조회 허용/차단(allow|deny)을 저장한다. remove=true 면 정책행 삭제(기본자세로 복귀). 즉시 반영.",
+    [{ method: "POST", paths: ["/api/ui/org/db-source/table-policy"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const source = slug(input.source, "source");
+      const table = str(input.table, "table", 200).trim();
+      if (!table) throw new HttpError(400, "table 필수");
+      if (input.remove) {
+        await removeTablePolicy(source, table, actorOf(user));
+      } else {
+        const mode = str(input.mode, "mode", 8);
+        if (mode !== "allow" && mode !== "deny") throw new HttpError(400, "mode 는 allow|deny");
+        await upsertTablePolicy({ source, table_name: table, mode, note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+      }
+      await refreshPolicy(true);
+      return { ok: true };
+    }),
+  restOnly("org_db_column_mask_set", "컬럼 마스킹 정책 저장/삭제",
+    "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null)을 저장한다. remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
+    [{ method: "POST", paths: ["/api/ui/org/db-source/column-mask"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const source = slug(input.source, "source");
+      const table = str(input.table, "table", 200).trim();
+      const column = str(input.column, "column", 200).trim();
+      if (!table || !column) throw new HttpError(400, "table·column 필수");
+      if (input.remove) {
+        await removeColumnMask(source, table, column, actorOf(user));
+      } else {
+        const style = str(input.style, "style", 12);
+        if (!["full", "partial", "email", "hash", "null"].includes(style)) throw new HttpError(400, "style 는 full|partial|email|hash|null");
+        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+      }
+      await refreshPolicy(true);
       return { ok: true };
     }),
 ];
