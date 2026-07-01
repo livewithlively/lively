@@ -1,5 +1,5 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { LIFECYCLE_LABEL, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, lifecycleDot, pageHead, reducedMotion, relTime, renderMarkdown, selectFilter, stat, state, sv, toast } from './core.js';
+import { LIFECYCLE_LABEL, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, lifecycleDot, pageHead, reducedMotion, relTime, renderMarkdown, selectFilter, stat, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope, overlay } from './admin.js';
 
@@ -168,10 +168,12 @@ function knProvChip(provenance) {
     title: KN_PROVENANCE_HINT[provenance] || '', text: KN_PROVENANCE_LABEL[provenance] || provenance || '—' });
 }
 // 작성 주체 칩 — AI/사람 구분(#449). confidence 없으면 칩 생략(빈 '—' 노이즈 방지).
+//  호버 설명은 withTip(즉시 표시 말풍선) — native title 은 안 뜨고 카드 overflow 에 잘려서(#449 피드백).
 function knAuthorChip(confidence) {
   if (!confidence) return null;
-  return el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
-    title: KN_AUTHOR_HINT[confidence] || '', text: KN_AUTHOR_LABEL[confidence] || confidence });
+  const chip = el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
+    text: KN_AUTHOR_LABEL[confidence] || confidence });
+  return withTip(chip, KN_AUTHOR_HINT[confidence] || '');
 }
 
 // ⓘ 설명 점 — 라벨/값 옆 작은 정보 버튼. 긴 설명을 인라인에서 빼 호버(CSS)·포커스·클릭(고정 토글, 터치/유지용)으로 팝.
@@ -658,7 +660,7 @@ async function renderKnowledgeDetail(view, name) {
 
   // 메타 — v6 핵심 축(주입·출처)·상태·버전·갱신만 항상 노출. 외부 미러(provenance=observed)일 때만 외부 출처 상세를 펼친다.
   //  정리(2026-06-24): 구 '출처 채널(source)' 행 제거(쓰기 채널이라 provenance 와 중복) · '신뢰(confidence)'는 v6 축이 아닌
-  //  파생 신호(AI/사람 작성)라 'AI 생성'일 때만 '작성 주체'로 압축 · source_ref 라벨을 '참조'로(출처 3중복 해소).
+  //  파생 신호(AI/사람 작성)라 '작성 주체' 한 줄로 압축(라벨은 지식 탭 배지와 통일 — KN_AUTHOR_LABEL, #449) · source_ref 라벨을 '참조'로(출처 3중복 해소).
   //  recalled = '검색 소환'(AI가 관련될 때 키워드 검색으로 직접 찾는 것 — 자동·시맨틱 아님, query 가 아니라 recall).
   const isMirror = k.provenance === 'observed' || k.external_system || k.external_id || k.external_url;
   const metaRows: any[] = [
@@ -666,7 +668,7 @@ async function renderKnowledgeDetail(view, name) {
     ['출처(provenance)', KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—', k.provenance ? KN_PROVENANCE_HINT[k.provenance] : ''],
     ['상태(lifecycle)', LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle || '—'],
     k.type ? ['유형(type)', KN_TYPE_LABEL[k.type] || k.type] : null,
-    k.confidence === 'ai' ? ['작성 주체', 'AI 생성'] : null,
+    (k.confidence === 'ai' || k.confidence === 'human') ? ['작성 주체', KN_AUTHOR_LABEL[k.confidence]] : null,
     k.author ? ['작성자', k.author] : null,
     k.supersedes ? ['대체함(supersedes)', k.supersedes] : null,
     isMirror && k.external_system ? ['외부 출처', k.external_system + (k.external_instance ? ' · ' + k.external_instance : '')] : null,

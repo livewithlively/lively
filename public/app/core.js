@@ -454,6 +454,34 @@ function confidenceDot(confidence) {
         : (confidence === 'rule' || confidence === 'observed') ? 'st dim' : 'st';
     return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
 }
+// ── 공용: 즉시 표시 호버 툴팁 ──
+//  native title 은 지연(~1s)·발견성이 나쁘고, overflow:hidden 카드(.list-box)에선 CSS 말풍선이 잘린다.
+//  → fixed 포지션 말풍선을 body 에 붙여 클립·지연 없이 즉시 보여준다(마우스 hover + 키보드 focus). 접근성은 aria-label.
+function withTip(node, text) {
+    if (!text)
+        return node;
+    node.setAttribute('aria-label', text);
+    let tip = null;
+    const hide = () => { if (tip) {
+        tip.remove();
+        tip = null;
+    } };
+    const show = () => {
+        if (tip)
+            return;
+        tip = el('div', { class: 'hover-tip', role: 'tooltip', text });
+        document.body.append(tip);
+        const r = node.getBoundingClientRect();
+        tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+        tip.style.top = (r.bottom + 6) + 'px';
+        window.addEventListener('scroll', hide, { once: true, capture: true });
+    };
+    node.addEventListener('mouseenter', show);
+    node.addEventListener('mouseleave', hide);
+    node.addEventListener('focus', show);
+    node.addEventListener('blur', hide);
+    return node;
+}
 // '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
 const START_SUBS = [
     { key: 'install', label: '설치', href: '#/install' },
@@ -551,4 +579,4 @@ function profileAvatar(avatar, name, seed, cls) {
     }
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
