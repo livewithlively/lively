@@ -126,8 +126,9 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 .user-email { padding: 0 12px 0 4px; gap: 7px; } /* 왼쪽은 아바타 들어갈 자리라 좁게 */
 .help-link:hover, .user-email:hover, .logout-btn:hover { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
 .help-link.active { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
-/* 상단바 아바타 — 작은 원형 이니셜(배경색은 profileAvatar 가 인라인으로 칠함). */
-.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
+/* 상단바 아바타 — 작은 원형 이니셜(#361). .pava(28px) 를 이기도록 .pava.topbar-ava 로 특이도 확보 —
+   30px 알약 안에 22px 원이 위아래 4px 여백으로 정확히 들어간다(이전엔 .pava 28px 가 이겨 알약을 꽉 채움). */
+.pava.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
   align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; overflow: hidden; }
 .topbar-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -155,6 +156,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 /* 제목 + 우측 액션(예: 🗑 휴지통)을 한 줄에 — 제목은 좌, 액션은 우 끝. */
 .page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
 .page-head-row h1 { margin: 0; }
+/* 제목 오른쪽 액션 묶음(#367 공용 헤더) — + 추가·선택·🗑 휴지통 등. */
+.page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
 .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 10px; }
 .accent { color: var(--blue); }
 .stat-row { display: flex; gap: 32px; flex-wrap: wrap; }
@@ -224,7 +227,10 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 
 /* ── 버튼 ── */
 .btn {
-  border: 1px solid transparent; cursor: pointer; font-weight: 700; border-radius: 11px;
+  /* a·button·label 어디에 붙든 같은 높이·정렬로 렌더(#363) — inline-flex + line-height 고정으로
+     '<a class=btn>' 와 '<button class=btn>' 의 높이 불일치(선택 27px vs 추가/휴지통 32px)를 제거. */
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; line-height: 1.15;
+  border: 1px solid transparent; cursor: pointer; font-weight: 700; border-radius: 11px; text-decoration: none;
   padding: 9px 18px; font-size: 14px; white-space: nowrap; transition: background-color 150ms ease, border-color 150ms ease;
 }
 /* §0.5 예산: 채운 블루 primary 는 화면당 1개만 — 나머지는 전부 btn-ghost(화이트+헤어라인+잉크) */
@@ -1665,7 +1671,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-empty-hint { font-size: 14px; color: var(--ink-sub); padding: 12px 6px 2px; line-height: 1.5; }
 
 /* Closed 토글 버튼(클릭업식 툴바 필) + popover + 스위치 — 닫힌(완료) 항목 노출 제어. */
-.pjv-closed-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 10px 4px 8px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-closed-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .pjv-closed-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-closed-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
 .pjv-closed-ic { width: 15px; height: 15px; flex: none; }
@@ -2696,7 +2702,7 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* ── 좌상단 하위 태스크(Subtasks) 버튼 — 접힘/펼침/분리 (Closed 와 대칭, 좌측) ── */
 .pjv-tasks-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pjv-tasks-head-left h2 { margin: 0; }
-.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 11px 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .pjv-subtask-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-subtask-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
 .pjv-subtask-ic { width: 15px; height: 15px; }
@@ -2770,13 +2776,32 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 
 /* ════ 클릭업식 행 호버 컨트롤 + 다중선택 하단 바 ════ */
 /* 좌측 체크박스 — 평소 숨김(자리 유지, 헤더엔 동폭 spacer 로 정렬), 행 호버/선택 시 표시. */
-.pjv-row-check { flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
+.pjv-row-check { position: relative; flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
+/* 클릭 판정 확대(#366) — 16px 박스는 너무 예민하니 주변 셀까지 히트영역을 넓힌다(보이는 크기는 그대로). */
+.pjv-row-check::before { content: ''; position: absolute; top: -9px; bottom: -9px; left: -8px; right: -6px; }
 .pjv-row-check-spacer { flex: none; width: 16px; }
 .pjv-trow:hover .pjv-row-check, .pjv-row-check.on { opacity: 1; }
 .pjv-row-check:hover { border-color: var(--blue); }
 .pjv-row-check.on { background: var(--blue); border-color: var(--blue); }
 .pjv-row-check.on::after { content: '✓'; }
 .pjv-trow-wrap.pjv-row-selected > .pjv-trow { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+/* 드래그 다중선택(#366) — 끄는 동안 텍스트 선택 방지 + 지나온 행 체크박스는 계속 보이게. */
+body.pjv-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+body.pjv-dragging .pjv-row-check { opacity: 1; }
+/* 드래그 재정렬 핸들(#366) — 체크박스 왼쪽 여백에 절대배치(레이아웃 불변). 행 호버 시 표시, 잡으면 grabbing. */
+.pjv-trow-title-cell { position: relative; }
+.pjv-row-grip { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 13px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border: none; background: none; padding: 0; margin: 0;
+  color: var(--muted-3); font-size: 12px; line-height: 1; cursor: grab; opacity: 0; transition: opacity .12s ease; touch-action: none; }
+.pjv-trow:hover .pjv-row-grip, body.pjv-dragging .pjv-row-grip { opacity: .6; }
+.pjv-row-grip:hover { opacity: 1; color: var(--blue); }
+.pjv-row-grip:active { cursor: grabbing; }
+.pjv-reorder-src { opacity: .4; }
+/* 놓일 자리 가로 삽입선 + 커서 따라다니는 고스트('N개 태스크'). */
+.pjv-reorder-marker { height: 2px; margin: -1px 0; background: var(--blue); border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; }
+.pjv-reorder-ghost { position: fixed; z-index: 10000; pointer-events: none; background: var(--blue); color: #fff;
+  padding: 3px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
 /* 제목 우측 호버 아이콘 — ⋯ 버튼과 동일 언어(테두리 없음·작게·muted). 담당자 컬럼과 겹치지 않게 우측 여백. */
 .pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; margin-right: 12px; opacity: 0; transition: opacity .12s ease; }
@@ -2926,7 +2951,7 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
    ============================================================ */
 
 /* '보기' 버튼 — 헤더 좌측. .pjv-subtask-btn 톤 + caret. */
-.pjv-view-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-view-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .pjv-view-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-view-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
 .pjv-view-ic { width: 16px; height: 16px; flex: none; }

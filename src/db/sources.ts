@@ -25,6 +25,7 @@ export interface DbSource {
   authMode: AuthMode;
   secretSource: string | null; // password: 비번 env 이름(DB 소스) | null(env 소스 — url 에 비번 포함)
   origin: "env" | "db";
+  tableDefault: "allow" | "deny"; // 테이블 기본자세 — allow=deny-list(후방호환) / deny=allow-list(컴플라이언스) (#186)
 }
 
 export const DEFAULT_SOURCE = "default";
@@ -83,6 +84,7 @@ async function loadDbSources(): Promise<Map<string, DbSource>> {
       authMode: r.auth_mode,
       secretSource: r.auth_ref,
       origin: "db",
+      tableDefault: r.table_default === "deny" ? "deny" : "allow",
     });
   }
   return m;

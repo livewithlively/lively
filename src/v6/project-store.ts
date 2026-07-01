@@ -487,6 +487,20 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
   return after;
 }
 
+// 작업 재정렬(#366) — 주어진 순서(ids)대로 sort 를 0,1,2… 로 다시 매긴다. 형제 작업 목록의 순서 저장 전용.
+//  프론트가 항상 '실제 형제 전체'를 화면 순서대로 넘기므로 parent 검증 없이 sort 만 재부여한다(태스크 SELECT 는 ORDER BY sort,id).
+//  level 가드로 프로젝트(level='project') 행은 절대 건드리지 않는다. id 는 파라미터 바인딩, sort 는 배열 인덱스(정수 리터럴, 안전).
+export async function reorderTasks(ids: number[], _ctx?: WriteCtx): Promise<{ updated: number }> {
+  const clean = (ids || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+  if (clean.length < 2) return { updated: 0 };
+  const tuples = clean.map((_id, i) => `($${i + 1}::int, ${i}::int)`).join(", ");
+  const res = await itemsPool.query(
+    `UPDATE project AS p SET sort = v.sort, updated_at = now()
+       FROM (VALUES ${tuples}) AS v(id, sort)
+      WHERE p.id = v.id AND p.level IN ('task','subtask')`, clean);
+  return { updated: res.rowCount || 0 };
+}
+
 // 작업 필드 패치 — name/description/status/priority/assignee/start_date/due_date 중 **주어진 키만** 갱신.
 //  undefined=변경 없음, null=값 비우기(예: 담당자/마감일 해제). status 갱신 시 completed_at 동기(done→now, 그 외→NULL).
 //  리스트뷰 인라인 편집의 단일 진입점(상태칩·담당자·마감일·우선순위). status 전용 updateTaskStatus 와 병존(토글은 그쪽).

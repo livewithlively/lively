@@ -1,5 +1,5 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { LIFECYCLE_LABEL, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, lifecycleDot, reducedMotion, relTime, renderMarkdown, selectFilter, stat, state, sv, toast } from './core.js';
+import { LIFECYCLE_LABEL, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, lifecycleDot, pageHead, reducedMotion, relTime, renderMarkdown, selectFilter, stat, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope, overlay } from './admin.js';
 
@@ -262,16 +262,12 @@ async function renderKnowledgeSpace(view, _space, params) {
   const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 지식을 골라 한 번에 삭제',
     onclick: () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); paintList(); repaintBulk(); } });
 
-  const head = el('div', { class: 'page-head' },
-    el('div', { class: 'page-head-row' },
-      el('h1', {}, '지', el('span', { class: 'accent', text: '식' })),
-      el('div', { style: 'display:flex; gap:8px; align-items:center;' },
-        hasScope('memory') ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new',
-          title: '새 지식을 작성합니다(별도 페이지)', text: '+ 추가' }) : null,
-        selectBtn,
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }))),
-    el('p', { class: 'sub', text: '맥락의 기록 — 왼쪽 사이드바에서 카테고리(우리 팀 먼저)로 좁히고, 위에서 검색·주입·출처로 거릅니다. 주입(항상/검색)과 출처(저작/외부 미러)는 직교 두 축입니다.' }),
-  );
+  const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
+    hasScope('memory') ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new',
+      title: '새 지식을 작성합니다(별도 페이지)', text: '+ 추가' }) : null,
+    selectBtn,
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
+  ], '식');
 
   // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
   const side = el('aside', { class: 'browse-side' });
@@ -1169,9 +1165,7 @@ function openKnowledgeLinkPicker(k, view) {
 
 // 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이.
 async function renderSources(view, _params?) {
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '자', el('span', { class: 'accent', text: '료' })),
-    el('p', { class: 'sub', text: '맥락의 raw 입력 — 회의 전사록·이메일·슬랙·외부 미러. 정제하면 지식이 됩니다(지식과 분리 — 검색·인덱스에 안 섞임).' }));
+  const head = pageHead('자료', '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 여기서 다듬으면 지식이 됩니다.', [], '료');
   const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
   kindSel.setAttribute('aria-label', '종류');
   const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
