@@ -5874,7 +5874,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
     const close = pjvPopover(newBtn, menu);
     const mkItem = (icon, label, desc, fn) => {
       const item = el('button', { class: 'pjv-menu-item', type: 'button' },
-        el('span', { class: 'pjv-sess-ico', text: icon }),
+        icon ? el('span', { class: 'pjv-sess-ico', text: icon }) : null,
         el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' },
           el('span', { text: label }),
           desc ? el('span', { class: 'caption', text: desc }) : null));
@@ -5882,9 +5882,9 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       return item;
     };
     menu.append(
-      mkItem('💻', '내 컴퓨터에서 작업', '내 PC에서 직접 — 시작하는 방법을 안내해 드려요',
+      mkItem('', '내 컴퓨터에서 (for Developers)', '',
         () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos })),
-      mkItem('🖥', '중앙 컴퓨터에서 작업', '설치 없이 브라우저에서 바로 — 팀원과 함께 볼 수 있어요',
+      mkItem('', '중앙 컴퓨터에서', '',
         () => openProjectSessionForm(id, load, B, projectName, projectRepos)));
   };
   card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
@@ -6043,8 +6043,10 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     pathInp.value = savedBoxPath(sel.value);
     const branchWrap = el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '작업 공간 이름 (자동 · 보통 그대로 두세요)' }), branchInp);
     const pathField = el('div', { class: 'field' }, el('label', { class: 'field-label', text: '코드 저장 위치 (선택)' }), pathInp);
-    // 고급 설정 — 경로·작업공간 이름은 보통 안 건드려도 되므로 접어둔다(기본 닫힘). 기본 화면엔 저장소 선택 + 격리 체크만.
-    const advBox = el('div', { style: 'display:none;margin-top:8px' }, pathField, branchWrap);
+    // 워크트리(격리) 체크 — 기본 화면에선 숨기고 '고급 설정' 안으로 넣는다. 기본값은 체크(권장)라 안 열어도 워크트리로 준비됨.
+    const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk, el('span', { text: ' 워크트리 — 다른 작업과 안 섞임 (권장)' }));
+    // 고급 설정 — 워크트리·경로·작업공간 이름을 하나의 토글로 접어둔다(기본 닫힘, 중첩 없음). 기본 화면엔 저장소 선택만.
+    const advBox = el('div', { style: 'display:none;margin-top:8px' }, wtRow, pathField, branchWrap);
     const advToggle = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '▸ 고급 설정' });
     let advOpen = false;
     advToggle.onclick = () => { advOpen = !advOpen; advBox.style.display = advOpen ? '' : 'none'; advToggle.textContent = (advOpen ? '▾' : '▸') + ' 고급 설정'; };
@@ -6056,7 +6058,6 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     wtChk.addEventListener('change', branchVis);
     const rowEl = el('section', { class: 'ps-block', style: 'border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:10px;margin-top:8px' },
       el('div', { style: 'display:flex;gap:8px;align-items:center' }, sel, rmBtn),
-      el('label', { class: 'proj-sess-auto', style: 'margin-top:6px' }, wtChk, el('span', { text: ' 이 작업만의 격리된 공간에서 작업 (다른 작업과 안 섞임 · 권장)' })),
       el('div', { style: 'margin-top:8px' }, advToggle),
       advBox);
     ro.el = rowEl;

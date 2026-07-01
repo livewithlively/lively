@@ -1675,10 +1675,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-empty-hint { font-size: 14px; color: var(--ink-sub); padding: 12px 6px 2px; line-height: 1.5; }
 
 /* Closed 토글 버튼(클릭업식 툴바 필) + popover + 스위치 — 닫힌(완료) 항목 노출 제어. */
-.pjv-closed-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-closed-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-closed-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-closed-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-closed-ic { width: 15px; height: 15px; flex: none; }
+.pjv-closed-ic { width: 13px; height: 13px; flex: none; }
 .pjv-closed-pop { min-width: 172px; padding: 4px; }
 .pjv-closed-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; font-size: 13px; color: var(--ink); }
 .pjv-switch { position: relative; flex: none; width: 34px; height: 20px; border: none; border-radius: 999px; background: var(--muted-3); cursor: pointer; padding: 0; transition: background .15s ease; }
@@ -1957,8 +1957,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 }
 /* 길면 접기 — 본문 섹션과 동일한 클립+페이드(.proj-detail-body-expand 알약 재사용). */
 .pjk-collapse { position: relative; }
-.pjk-collapse.collapsed { max-height: 300px; overflow: hidden; }
-.pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
+.pjk-collapse.collapsed { max-height: 150px; overflow: hidden; }
+.pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
 .pjk-expand-row { margin-top: 10px; }
 /* 직접 작성 모달 입력 */
 .pjk-create-in { width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit; border: 1px solid var(--line-net); border-radius: 8px; }
@@ -2709,10 +2709,10 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* ── 좌상단 하위 태스크(Subtasks) 버튼 — 접힘/펼침/분리 (Closed 와 대칭, 좌측) ── */
 .pjv-tasks-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pjv-tasks-head-left h2 { margin: 0; }
-.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-subtask-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-subtask-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-subtask-ic { width: 15px; height: 15px; }
+.pjv-subtask-ic { width: 13px; height: 13px; }
 .pjv-subtask-pop { min-width: 210px; padding: 4px; }
 .pjv-subtask-pop-head { font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 6px 9px 4px; letter-spacing: .2px; }
 .pjv-subtask-item { justify-content: space-between; gap: 10px; }
@@ -2958,10 +2958,10 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
    ============================================================ */
 
 /* '보기' 버튼 — 헤더 좌측. .pjv-subtask-btn 톤 + caret. */
-.pjv-view-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 11px 0 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-view-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-view-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-view-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-view-ic { width: 16px; height: 16px; flex: none; }
+.pjv-view-ic { width: 13px; height: 13px; flex: none; }
 .pjv-view-btn-label { letter-spacing: -.1px; }
 .pjv-view-btn-caret { font-size: 9px; line-height: 1; color: var(--muted-2); margin-left: 1px; }
 .pjv-view-btn.active .pjv-view-btn-caret { color: var(--blue); }
@@ -3062,7 +3062,7 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 .pjv-list-dot.sm { width: 9px; height: 9px; }
 .pjv-list-mine-chip { font-size: 11px; font-weight: 700; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; letter-spacing: .2px; flex: none; }
 /* 헤더 버튼 — 내 할당만(토글, .pjv-closed-btn 재사용) · 새 리스트 */
-.pjv-mine-btn svg { width: 14px; height: 14px; flex: none; }
+.pjv-mine-btn svg { width: 12px; height: 12px; flex: none; }
 .pjv-newlist-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line-net); background: var(--bg); cursor: pointer; padding: 4px 11px 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--blue); font-family: inherit; }
 .pjv-newlist-btn:hover { background: var(--bg-tint); border-color: var(--blue); }
 /* 리스트 색 팔레트(생성/수정 폼) — 'A'=자동(이름 해시색) */
