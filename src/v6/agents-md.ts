@@ -14,6 +14,15 @@ const RULES_PLACEHOLDER = "<!-- (아직 작성된 규칙이 없습니다) 이 �
 // 구(舊) 기본 템플릿 문장 — 디스크의 기존 AGENTS.md 에 본문으로 박혀 있을 수 있어, 읽을 때 '빈 규칙'으로 이관 처리한다.
 const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으면 하는 걸 적으세요. (예: 새로 만들기 전에 비슷한 게 있는지 먼저 찾는다 / 큰 변경·삭제는 먼저 물어본다)";
 
+// 프로젝트 마무리(close-out) 루틴 — 모든 프로젝트 공통이라 digest(자동 섹션)에 박는다. 프로젝트 폴더에서만 노출돼
+//  '플젝 세션일 때만' 보이고(플젝 밖 0비용), 전역 always 주입의 과주입·미작동(라이브 템플릿 ${rules} 부재)을 피한다.
+//  단일출처: 절차·인자는 WIKI 권위문서(project-closeout-routine)에만 두고, 여기엔 흐름 한 줄 + 포인터만 — 드리프트 표면 제거(#334 후속).
+const CLOSEOUT_SECTION = [
+  "## 마무리 (이 프로젝트를 끝낼 때 — done 처리 전후)",
+  "본문 보강(원문유지·append) → 산출/필요지식 연결 → 태스크·프로젝트 `done` → 범위 밖 후속은 **사용자에게 물어** 새 프로젝트로.",
+  "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 `knowledge_get('project-closeout-routine')` 를 따른다.",
+].join("\n");
+
 function buildProjectDigest(p: any): string {
   const L: string[] = [];
   L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
@@ -27,6 +36,13 @@ function buildProjectDigest(p: any): string {
     L.push("## 관련 레포", ...p.repos.map((r: string) => `- ${r}`), "- 이 머신의 로컬 경로(클론/워크트리)는 `.lively/project.json` 참조.", "");
   }
   if (p.description) L.push("## 개요", String(p.description), "");
+  // 필요지식(required) — 이 프로젝트를 진행하기 전에 알아야 할 배경. AI 가 처음부터 무엇을 알아야 하는지 보고 시작한다(전문 X·드리프트 최소 → knowledge_get 포인터). 산출(produced)은 결과물이라 넣지 않는다.
+  const reqK = ((p.knowledge && p.knowledge.required) || []) as any[];
+  if (reqK.length) {
+    L.push("## 필요지식 (이 프로젝트를 진행하기 전에 알아야 할 것 — 전문은 knowledge_get)");
+    for (const k of reqK) L.push(`- ${k.title || k.name} \`knowledge_get('${k.name}')\``);
+    L.push("");
+  }
   if (Array.isArray(p.tasks) && p.tasks.length) {
     L.push("## 태스크 인덱스");
     for (const t of p.tasks) {
@@ -35,6 +51,7 @@ function buildProjectDigest(p: any): string {
     }
     L.push("- 각 항목 상세: `project_get_v6` 의 tasks 로 id 조회.", "");
   }
+  L.push(CLOSEOUT_SECTION, "");
   return L.join("\n").trim();
 }
 

@@ -7,7 +7,7 @@
 //  으로 분류해 비개발자가 조회·편집·핀. 주요 화면:
 //   · 지식(#/knowledge/<space>) — 사업·제품·시스템 + 📌 인덱스(핀 전용 뷰) + 통계·검토. 좌 카테고리 사이드바 + 검색/필터 목록.
 //   · 지식 상세(#/k/<name>)      — 전문(markdown) + 메타 + 연결 카테고리 + 편집·핀·삭제. (생성=목록 '+ 추가')
-//   · 프로젝트(#/projects2) · 코드구조(#/domainmap) · 관리(#/system) · 가이드(#/learn) · 휴지통(#/trash) · 터미널(#/terminal).
+//   · 프로젝트(#/projects2) · 도메인 맵(#/domainmap) · 관리(#/system) · 가이드(#/learn) · 휴지통(#/trash) · 터미널(#/terminal).
 'use strict';
 const TOKEN_KEY = 'lively_ui_token';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -482,4 +482,37 @@ function interleave(arr, sep) {
         out.push(sep); out.push(n); });
     return out;
 }
-export { $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+// ── 아바타(프로필 원형) — 셀프 업로드 이미지가 있으면 그걸, 없으면 이름 이니셜+결정적 색상. ──
+//  projects.ts 의 동명 헬퍼와 알고리즘 동일(드리프트 방지 위해 동일 구현 — 같은 seed→같은 색/이니셜).
+//  projects.ts 가 admin.js 를 import 하므로 여기(core, 무순환)에 둬 main/admin 이 순환 없이 공유.
+function initials(name) {
+    const s = String(name || '').trim();
+    if (!s)
+        return '?';
+    if (/[가-힣]/.test(s[0]))
+        return s.slice(0, 1);
+    const parts = s.split(/\s+/);
+    if (parts.length >= 2 && parts[1][0])
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+    return s.slice(0, 2).toUpperCase();
+}
+function avatarColor(seed) {
+    const s = String(seed || '');
+    let h = 0;
+    for (let i = 0; i < s.length; i++)
+        h = (h * 31 + s.charCodeAt(i)) % 360;
+    return 'hsl(' + h + ', 50%, 60%)';
+}
+// 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+이니셜. cls 로 크기 변형(topbar-ava 등).
+function profileAvatar(avatar, name, seed, cls) {
+    const wrap = el('span', { class: 'pava' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' });
+    if (avatar) {
+        wrap.append(el('img', { src: avatar, alt: '' }));
+    }
+    else {
+        wrap.style.background = avatarColor(seed || name);
+        wrap.textContent = initials(name);
+    }
+    return wrap;
+}
+export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

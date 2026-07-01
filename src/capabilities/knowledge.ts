@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
-  findSimilarKnowledge,
+  findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData,
 } from "../v6/knowledge-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
@@ -17,17 +17,19 @@ const DEDUP_WARN_SIMILARITY = 0.6;
 const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록).",
+  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만.",
   scope: "memory",
-  // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy 도 선택.
+  // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
   input: {
     space: z.string().optional(),
     categoryId: z.number().int().positive().optional(),
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
+    type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional(),
     lifecycle: z.enum(["active", "superseded"]).optional(),
     q: z.string().optional(),
     orderBy: z.enum(["name", "updated_at"]).optional(),
+    is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
   },
   expose: {
     mcp: true,
@@ -39,9 +41,11 @@ const knowledgeList: Capability = {
           categoryId: query.category ? Number(query.category) : undefined,
           injection: query.injection ? String(query.injection) : undefined,
           provenance: query.provenance ? String(query.provenance) : undefined,
+          type: query.type ? String(query.type) : undefined,
           lifecycle: query.lifecycle ? String(query.lifecycle) : undefined,
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
+          is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
         };
       } }],
   },
@@ -89,7 +93,7 @@ const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
   description:
-    "지식 전문 저장. **신규는 category(분류) 1개 이상 필수**(category_list 의 key 배열 — 미분류 저장 금지). injection/provenance 포함. name 없으면 자동 슬러그. " +
+    "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. provenance 포함(지식은 항상 recalled — '항상 주입'은 관리탭 '세션 주입' 섹션 문서로만, knowledge_set_wiki 로 인덱스 핀). name 없으면 자동 슬러그. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
   scope: "memory",
@@ -97,10 +101,11 @@ const knowledgeSave: Capability = {
     name: z.string().max(64).optional(),
     title: z.string().max(200).optional(),
     body_md: z.string().min(1).max(40000),
-    injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
-    category: z.array(z.string()).optional(),
+    type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
+      .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
+    category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
   },
   expose: {
     mcp: true,
@@ -109,17 +114,17 @@ const knowledgeSave: Capability = {
         const b = (req.body ?? {}) as Record<string, unknown>;
         const body_md = String(b.body_md ?? b.note ?? "").trim();
         if (!body_md) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
-        const injection = b.injection ? String(b.injection) : undefined;
-        if (injection && !["always", "recalled"].includes(injection)) throw new HttpError(400, "injection 은 always|recalled");
+        // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
-        const category = Array.isArray(b.category) ? b.category.map(String)
-          : (b.category ? [String(b.category)] : undefined);
+        const category = b.category != null
+          ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
-          body_md, injection, provenance,
+          body_md, provenance,
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
+          type: b.type ? String(b.type) : undefined,
           category,
         };
       } }],
@@ -393,10 +398,62 @@ const knowledgeSimilar: Capability = {
   },
 };
 
+// #290 지식↔지식 링크 — 빠진 1급 프리미티브. create 또는 unlink=true. 교차주제는 카테고리 복수태깅 대신 이 링크로.
+const knowledgeLink: Capability = {
+  name: "knowledge_link",
+  title: "지식↔지식 링크",
+  description:
+    "지식을 다른 지식과 연결한다(또는 unlink=true 로 해제). relation=related(대칭 관련)|refines(이 지식이 to 를 구체화)|contradicts(모순)|depends_on(의존). " +
+    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·회수 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64).describe("출발 지식(from)"),
+    to: z.string().min(1).max(64).describe("도착 지식(to)"),
+    relation: z.enum(["related", "refines", "contradicts", "depends_on"]).default("related"),
+    unlink: z.boolean().optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/link"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const to = String(b.to ?? "").trim();
+        if (!to) throw new HttpError(400, "to(도착 지식 이름)가 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), to,
+          relation: b.relation ? String(b.relation) : "related",
+          unlink: b.unlink === true,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    if (input.unlink) { await unlinkKnowledge(input.name, input.to, input.relation, writeCtx); return { unlinked: true }; }
+    await linkKnowledge(input.name, input.to, input.relation, writeCtx);
+    return { linked: true };
+  },
+};
+
+// #290 그래프뷰 데이터(UI 전용, REST) — 활성 지식 노드(+단일 카테고리) + 지식↔지식 엣지. 전역/로컬 그래프를 클라가 그린다.
+const knowledgeGraph: Capability = {
+  name: "knowledge_graph",
+  title: "지식 그래프",
+  description: "활성 지식 노드(+단일 카테고리·type)와 지식↔지식 링크 엣지를 반환한다(그래프뷰 전용).",
+  scope: "memory",
+  input: { limit: z.number().int().min(1).max(2000).optional() },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-graph"],
+      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+  },
+  handler: async (input: any) => await knowledgeGraphData(input.limit),
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
+//  knowledge_graph(/knowledge-graph)·knowledge_link(/knowledge/:name/link)는 :name 단일세그먼트와 안 겹친다(경로 깊이 상이).
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGet,
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeGet,
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
 ];

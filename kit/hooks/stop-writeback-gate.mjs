@@ -12,7 +12,7 @@
 //   <sid>.writeback 존재         → exit 0 (이미 기록함)
 //   <sid>.worked 부재            → exit 0 (의미있는 작업 없음)
 //   <sid>.blocked 존재           → exit 0 (이미 1회 너지함 — 세션당 1회)
-//   그 외                        → .blocked touch + {"decision":"block","reason":…} 출력, exit 0
+//   그 외                        → .blocked 를 O_EXCL 원자 생성(병렬 중복 등록 대비) + {"decision":"block",…} 출력, exit 0
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
@@ -64,21 +64,14 @@ function readHooksConfig() {
   catch { return null; }
 }
 
+// REASON = 게이트웨이가 영영 불가(최초 설치 전·완전 오프라인)일 때만 쓰는 짧은 last-resort 스텁(#270).
+//  정상 경로의 너지 '전문'은 게이트웨이가 매 세션 서빙해 ~/.lively/hooks-config.json 에 기록되는 writeback_notice
+//  (= 어드민 오버라이드 || 서버 DEFAULT_WRITEBACK_NOTICE, src/org/hook-defaults.ts)에서 온다 — readHooksConfig()?.writeback_notice
+//  가 그것이고 거의 항상 존재한다. 그래서 여기 전문을 박지 않는다(DEFAULT_WRITEBACK_NOTICE 가 라이브 단일소스 — 동기화 불요).
 const REASON =
-  "이 세션에서 파일 작업을 했지만 컨텍스트 스토어 기록이 없습니다. 마무리 전에 확인: " +
-  "① 한 일을 작업(activity)으로 기록 — type 은 그 작업의 성격(feature·fix·decision·docs·research·review·chore·other). " +
-  "이번 세션에 커밋했으면 그 일의 성격을 type 으로 두고(예 type='feature'|'fix') commit_sha·repo·touches(건드린 code_unit/data_entity)를 함께 넘긴다 " +
-  "— 커밋은 유형이 아니라 commit_sha 로 표현된다. author_agent 는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. " +
-  "② should/is 재조정 — 커밋한 작업이면 그 코드가 제품 카테고리(도메인)의 구조(is)를 바꿨는지 보고, 도메인 의도(should)가 " +
-  "이번에 주입된 기획·대화 맥락으로 바뀌었으면 category_update(should=…)로 갱신(도메인間 새 의도 의존이 생겼으면 " +
-  "category_edge_set). 바뀐 게 없으면 activity_log 의 should_review/is_review='checked_no_change' 로 '점검함·변화없음'을 " +
-  "명시 기록(안 한 것과 구분). " +
-  "③ 지속될 지식·결정·설계·런북은 knowledge_save 로 전문 기록 — injection(always=세션마다 항상 주입되는 규칙·페르소나 / " +
-  "recalled=검색으로 소환) + provenance(authored=직접 저작 / observed=외부 관찰), 카테고리 연결은 knowledge_link_category, " +
-  "대체된 옛 지식은 knowledge_set_lifecycle(superseded). 작업과는 activity_log 의 ku_refs(produced/references/decided)로 연결. " +
-  "외부 원본은 복제 말고 미러+파생만. " +
-  "진행한 태스크는 task_set_status_v6, 새 카테고리(도메인) 후보는 category_create(근거 포함). " +
-  "④ 기록할 것이 없으면 그대로 다시 종료하면 됩니다(이 알림은 세션당 1회).";
+  "이 세션에서 파일 작업을 했지만 컨텍스트 스토어 기록이 없습니다. 마무리 전에 한 일을 " +
+  "activity_log·knowledge_save 등으로 컨텍스트 스토어에 기록하세요(세부 항목은 조직 너지 설정 참조). " +
+  "기록할 것이 없으면 그대로 다시 종료하면 됩니다(이 알림은 세션당 1회).";
 
 try {
   if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);
@@ -102,10 +95,15 @@ try {
 
   if (existsSync(flag("writeback"))) process.exit(0); // 이미 기록함
   if (!existsSync(flag("worked"))) process.exit(0);   // 의미있는 작업 없음
-  if (existsSync(flag("blocked"))) process.exit(0);   // 이미 1회 너지함
+  if (existsSync(flag("blocked"))) process.exit(0);   // 이미 1회 너지함(순차 fast-path)
 
   mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(flag("blocked"), "");
+  // 세션당 1회 '원자적' 점유 — 같은 Stop 이벤트에 이 훅이 여러 settings(유저 ~/.claude + 프로젝트
+  //   $CLAUDE_PROJECT_DIR/.claude)에서 병합·중복 등록되면 클코가 이를 '병렬' 실행한다. 위 existsSync
+  //   사전체크는 TOCTOU 라 병렬 중복을 못 막는다(둘 다 부재로 보고 둘 다 block → 너지 N회). O_EXCL("wx")
+  //   로 .blocked 생성을 원자화하면 동시 N개 중 정확히 1개만 성공, 나머지는 EEXIST → 침묵(세션당 1회 보장).
+  try { writeFileSync(flag("blocked"), "", { flag: "wx" }); }
+  catch { process.exit(0); } // 이미 누군가 점유(EEXIST) — 중복 너지 금지
   const reason = readHooksConfig()?.writeback_notice || REASON; // 어드민 커스텀 너지 우선
   process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
 } catch { /* fail-open */ }

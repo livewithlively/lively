@@ -22,16 +22,6 @@ export interface FieldMeaning {
 }
 
 export const MEANING: Record<string, FieldMeaning> = {
-  "managed-policy": {
-    key: "managed-policy",
-    label: "강제 규칙",
-    what: "어떤 개인·프로젝트 설정으로도 덮을 수 없는 조직의 절대 규칙입니다.",
-    reach: "모든 구성원 + 그들이 쓰는 모든 AI",
-    when: "매 대화(세션)가 시작될 때 자동으로, 맨 먼저 주입됩니다.",
-    where: "구성원이 AI를 켜면 대화 첫머리 최상단에 — AI가 그 무엇보다 우선해 지킵니다.",
-    example: "여기에 '고객 개인정보는 절대 출력하지 않는다'를 추가하면, 다음 대화부터 모든 구성원의 AI가 이를 강제로 지킵니다.",
-    tone: "critical",
-  },
   "org-defaults": {
     key: "org-defaults",
     label: "회사 맥락 · 페르소나 · 업무방식",

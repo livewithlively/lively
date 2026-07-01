@@ -1,50 +1,102 @@
+# context-ontology 배포 스택.
+#
+# 기본 토폴로지 = Option 2 (배포 설계 결정):
+#   · store(pgvector) = 도커(이 compose)
+#   · gateway(게이트웨이 = 컨트롤플레인 + 중앙박스 러너) = 호스트 네이티브(systemd/launchd, deploy/ 참조)
+#   네이티브 게이트웨이가 호스트 docker 를 그대로 쓰므로 중앙박스(웹터미널) 세션의 DinD 함정을 피한다.
+#   (근거: knowledge_get central-box-design)
+#
+# 사용:
+#   docker compose up -d                        # items-db(pgvector) 만 = Option 2 의 도커 파트
+#   docker compose --profile embeddings up -d   # + Ollama 임베딩 사이드카(#172, 4GB 박스엔 비권장 — t4g.large+)
+#   docker compose --profile gateway up -d      # + 게이트웨이까지 컨테이너로(full-docker / Option 1 미리보기)
+#
+# 시크릿은 .env(PGPASSWORD 등)에서 읽는다. deploy/install.sh 가 .env 를 생성한다(deploy/lib/common.sh).
+
+name: context-ontology
+
 services:
-  store:
-    build: .
-    ports:
-      - "8080:8080"
+  # ── store: 조직 지식(knowledge)·v6·도메인맵·임베딩이 사는 쓰기 DB. ──
+  #  ⚠ 불변식: 이미지는 반드시 pgvector/pgvector — plain postgres 로 재생성 금지(#172 벡터검색).
+  #     (knowledge_get items-db-pgvector-image-invariant)
+  items-db:
+    image: pgvector/pgvector:pg18
     environment:
-      - PORT=8080
-      - LOG_LEVEL=info
-      - AUTH_TOKENS_JSON=${AUTH_TOKENS_JSON}
-      - DATABASE_URL=${DATABASE_URL}
-      # 조직 지식(knowledge)·v6·임베딩이 사는 쓰기 DB. 벡터검색은 이 DB 에 pgvector 확장이 있어야 한다.
-      - ITEMS_DATABASE_URL=${ITEMS_DATABASE_URL}
-      - DB_STATEMENT_TIMEOUT_MS=5000
-      - DB_MAX_ROWS=1000
-      # ── 벡터/하이브리드 검색(#172) — 기본 off(knowledge_search 는 grep 폴백, 무중단). ──
-      #  켜기: .env 에 EMBEDDINGS_PROVIDER=http + `docker compose --profile embeddings up`(아래 사이드카 기동) → 백필.
-      #  config 는 웹/DB(org_runtime_config.embedding_config)로도 무재시작 설정 가능(여기 env 는 부트스트랩 시드).
-      - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-off}
-      - EMBEDDINGS_BASE_URL=${EMBEDDINGS_BASE_URL:-http://embeddings:11434}
-      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-bge-m3}
-      - EMBEDDINGS_DIMENSIONS=${EMBEDDINGS_DIMENSIONS:-1024}
-      - EMBEDDINGS_AUTH_ENV=${EMBEDDINGS_AUTH_ENV:-}
+      POSTGRES_USER: ${PGUSER:-lively}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?PGPASSWORD 를 .env 에 설정하세요 (deploy/install.sh 가 생성)}
+      POSTGRES_DB: ${PGDATABASE:-items}
+    ports:
+      # ⚠ 127.0.0.1 바인딩 — DB 를 외부에 노출하지 않는다(네이티브 게이트웨이가 localhost 로 접근).
+      - "127.0.0.1:${ITEMS_DB_PORT:-5432}:5432"
+    volumes:
+      # ⚠ pg18+ 이미지는 단일 마운트 /var/lib/postgresql (데이터는 그 아래 버전 서브디렉). /data 마운트는 거부됨.
+      - items-db-data:/var/lib/postgresql
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro   # 최초 init 1회: domainmap DB 생성
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-lively} -d ${PGDATABASE:-items}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     restart: unless-stopped
 
   # ── 임베딩 사이드카(선택, profile=embeddings) — OpenAI-compatible /v1/embeddings(Ollama, CPU). ──
-  #  스왑 가능: 다른 모델 = EMBEDDINGS_MODEL 변경 + `ollama pull <model>`; 다른 런타임/외부 API = EMBEDDINGS_BASE_URL 만 교체.
-  #  plain `docker compose up`(프로필 미지정) 시엔 기동 안 함 → store 는 off 로 떠서 grep 폴백(안전).
+  #  스왑: 다른 모델=EMBEDDINGS_MODEL + ollama pull; 다른 런타임/외부 API=EMBEDDINGS_BASE_URL 교체.
   embeddings:
     image: ollama/ollama:latest
     profiles: ["embeddings"]
+    ports:
+      - "127.0.0.1:${EMBEDDINGS_PORT:-11434}:11434"   # 네이티브 게이트웨이가 localhost 로 접근
     volumes:
       - ollama-models:/root/.ollama
     restart: unless-stopped
 
-  # 최초 1회 모델 pull(멱등 — 이미 있으면 즉시 종료). store 의 임베딩 호출 전에 모델 준비.
-  embeddings-init:
+  embeddings-init:   # 최초 1회 모델 pull(멱등). store 의 임베딩 호출 전에 모델 준비.
     image: ollama/ollama:latest
     profiles: ["embeddings"]
-    depends_on:
-      - embeddings
+    depends_on: [embeddings]
     environment:
-      - OLLAMA_HOST=embeddings:11434
-    entrypoint:
-      - /bin/sh
-      - -c
-      - 'until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${EMBEDDINGS_MODEL:-bge-m3}'
+      OLLAMA_HOST: embeddings:11434
+    entrypoint: ["/bin/sh","-c","until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${EMBEDDINGS_MODEL:-bge-m3}"]
     restart: "no"
 
+  # ── gateway(선택, profile=gateway) — full-docker(Option 1) 미리보기. 파일럿(Option 2)은 미사용. ──
+  #  ⚠ 컨테이너 안에서 중앙박스 세션을 띄우면 DinD 함정. 중앙박스(웹터미널)를 쓸 거면 네이티브로(deploy/).
+  gateway:
+    build: .
+    profiles: ["gateway"]
+    env_file: [.env]
+    environment:
+      # 컨테이너 네트워크 안에서는 호스트가 'items-db'. (네이티브 경로의 localhost 와 분리)
+      ITEMS_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/${PGDATABASE:-items}
+      DOMAINMAP_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/domainmap
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL_COMPOSE:-http://embeddings:11434}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    depends_on:
+      items-db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+    restart: unless-stopped
+
+  # ── caddy(선택, profile=proxy) — 자동 HTTPS 리버스 프록시(Let's Encrypt). TLS 종단 → localhost:8080. ──
+  #  network_mode: host → 호스트 80/443 바인딩 + 네이티브 게이트웨이(localhost:8080)로 프록시. WS Upgrade 자동 통과.
+  #  도메인 필요(LIVELY_DOMAIN — A레코드가 이 호스트를 향해야 인증서 발급). 인증서는 caddy-data 볼륨에 영속.
+  caddy:
+    image: caddy:2
+    profiles: ["proxy"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      LIVELY_DOMAIN: ${LIVELY_DOMAIN:?LIVELY_DOMAIN 필요 — TLS 대상 도메인(A레코드→이 호스트)}
+      LIVELY_UPSTREAM: ${LIVELY_UPSTREAM:-localhost:8080}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
+  items-db-data:   # ⚠ 조직 지식 전체. 백업 대상(pg_dump / 볼륨 스냅샷). -v 로 날리지 말 것.
   ollama-models:
+  caddy-data:      # ⚠ TLS 인증서·ACME 계정. 삭제 시 재발급(LE rate-limit 주의).
+  caddy-config:

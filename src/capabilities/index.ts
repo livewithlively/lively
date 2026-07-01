@@ -14,15 +14,19 @@ import { domainmapCrudCapabilities } from "./domainmap-crud.js";
 import { activityCapabilities } from "./activity.js";
 import { categoryCapabilities } from "./categories.js";
 import { knowledgeCapabilities } from "./knowledge.js";
+import { sourceCapabilities } from "./source.js";
 import { projectV6Capabilities } from "./projects-v6.js";
+import { listV6Capabilities } from "./lists-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { memberTeams, memberCategoryIds } from "../v6/team-store.js";
+import { getMember } from "../org/store.js";
 import { trashCapabilities } from "./trash.js";
 import { cronCapabilities } from "./cron.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
+import { toolUsageCapabilities } from "./tool-usage.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "./mcp-surface.js";
@@ -42,11 +46,17 @@ const me: Capability = {
     const memberId = u.userId ?? "";
     // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
     //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
-    const [teams, cats] = memberId
-      ? await Promise.all([memberTeams(memberId).catch(() => []), memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] }))])
-      : [[], { all: [], owner: [] }];
+    const [teams, cats, member] = memberId
+      ? await Promise.all([
+          memberTeams(memberId).catch(() => []),
+          memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] })),
+          getMember(memberId).catch(() => null), // 표시 이름 — 우측 상단 '내 프로필' 라벨(이메일보다 우선)
+        ])
+      : [[], { all: [], owner: [] }, null];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
+      display_name: member?.display_name ?? null,
+      avatar: member?.avatar ?? null, // 우측 상단 '내 프로필' 아바타(없으면 이니셜+색상 폴백)
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
     };
@@ -61,14 +71,17 @@ const all: Capability[] = [
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory). expose.mcp:true → 자동 등록.
   ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).
   ...teamCapabilities, // v6: 팀(스쿼드/사일로) CRUD + 멤버 + 카테고리 오너십 — scope=context. 표면화·주입의 '소프트 렌즈'(오너십≠권한). team_* expose.mcp:true(자동등록)+REST(어드민 팀 패널).
-  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_set_wiki 만 mcp:false(REST 전용).
+  ...knowledgeCapabilities, // v6: 지식 CRUD + lifecycle + 카테고리 연결(injection/provenance) — scope=memory. 대부분 expose.mcp:true(자동등록)+REST(웹 지식 탭). knowledge_graph 만 mcp:false(REST 전용, 그래프뷰).
+  ...sourceCapabilities, // #290: 자료(source) CRUD + 지식 인용(knowledge_source) — scope=memory. raw 입력층(전사록·이메일·슬랙·미러), knowledge 와 분리(recall 미포함). expose.mcp:true(자동등록)+REST(웹 자료 탭 /api/ui/sources).
   ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 전부 expose.mcp:true(자동등록)+REST. project_delete_v6·task_delete_v6 는 org_tool 기본 OFF(위험삭제, 운영자 토글).
+  ...listV6Capabilities, // v6: 프로젝트 묶음(리스트=클릭업 List층) CRUD·멤버·프로젝트 소속 — scope=memory(/api/ui/v6/project-lists + /projects/:id/list). 네이티브 전용(외부 미러 없음). 전부 expose.mcp:true+REST.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
+  ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)

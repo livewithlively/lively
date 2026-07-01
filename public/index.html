@@ -10,6 +10,9 @@
 <!-- 터미널(중앙 박스 경로 D) — xterm.js -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <style>
+  /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
+  @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
+  @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding-Bold.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
   /* 터미널 세션 매니저 — 도그푸드 스코프 스타일 */
   .term-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
   .term-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -76,13 +79,13 @@
       <a href="#/install" data-tab="start">시작하기</a>
       <a href="#/terminal" data-tab="terminal" id="terminal-tab">터미널</a>
       <a href="#/projects2" data-tab="projects2">프로젝트</a>
-      <a href="#/domainmap" data-tab="domainmap">코드구조</a>
       <a href="#/knowledge" data-tab="knowledge">WIKI</a>
+      <a href="#/domainmap" data-tab="domainmap">도메인 맵</a>
       <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
     </nav>
     <div class="topbar-right">
       <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
-      <span class="user-email" id="user-email"></span>
+      <button type="button" class="user-email" id="user-email" hidden aria-haspopup="dialog" title="내 프로필 — 표시 이름·개인 레이어 편집"></button>
       <button type="button" id="logout-btn" class="logout-btn" hidden>로그아웃</button>
     </div>
   </header>

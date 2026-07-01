@@ -1,11 +1,11 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { $view, TOKEN_KEY, api, errorNote, hideGate, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, el, errorNote, hideGate, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
-import { renderKnowledge, renderKnowledgeDetail, renderTrash } from './knowledge.js';
+import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn } from './learn.js';
+import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, teardownTerminal } from './terminal.js';
-import { renderSystem } from './admin.js';
+import { openMyProfile, renderSystem } from './admin.js';
 
 // ── 라우터 ──
 function parseHash() {
@@ -39,7 +39,7 @@ async function route() {
       setActiveTab('start');
       await renderInstall(view);
     } else if (page === 'domainmap') {
-      setActiveTab('domainmap'); // 코드구조 — 독립 탭(index.html data-tab="domainmap")
+      setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // 지식(맥락의 기록) — 사업·제품·시스템 + 통계·검토. injection/provenance 직교축.
@@ -50,6 +50,9 @@ async function route() {
     } else if (page === 'k') {
       setActiveTab('knowledge'); // 지식 상세는 지식 탭의 하위 뷰 — 상위 탭 활성 유지
       await renderKnowledgeDetail(view, decodeURIComponent(segs.slice(1).join('/')));
+    } else if (page === 'k-edit') {
+      setActiveTab('knowledge'); // 지식 편집(별도 페이지, 모달 아님 #290) — #/k-edit/<name>
+      await renderKnowledgeForm(view, undefined, decodeURIComponent(segs.slice(1).join('/')));
     } else if (page === 'projects') {
       // v1 프로젝트 탭 폐기(2026-06-23) — projects2 로 통합. 옛 링크/북마크는 리다이렉트.
       location.replace('#/projects2');
@@ -64,6 +67,9 @@ async function route() {
     } else if (page === 'terminal') {
       setActiveTab('terminal');
       await renderTerminal(view);
+    } else if (page === 'onboarding') {
+      setActiveTab('start'); // 온보딩 진행상황 — 시작하기 계열
+      await renderOnboarding(view);
     } else {
       setActiveTab('start');
       await renderInstall(view);
@@ -87,7 +93,13 @@ async function boot() {
   }
   if (!state.me || !state.me.userId) { showGate(); return; }
   hideGate();
-  document.getElementById('user-email')!.textContent = state.me.email || state.me.userId || '';
+  // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→셀프 편집(openMyProfile).
+  const userBtn = document.getElementById('user-email');
+  if (userBtn) {
+    const nm = state.me.display_name || state.me.email || state.me.userId || '';
+    userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava'), el('span', { text: nm }));
+    userBtn.hidden = false;
+  }
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
   const sysTab = document.getElementById('system-tab');
   if (sysTab) sysTab.hidden = false;
@@ -107,6 +119,12 @@ async function boot() {
     btn.hidden = true;
     showGate('로그아웃되었습니다.');
   });
+})();
+// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 셀프 편집 모달(표시 이름·개인 레이어). 한 번만 배선.
+(() => {
+  const btn = document.getElementById('user-email');
+  if (!btn) return;
+  btn.addEventListener('click', () => { if (state.me) openMyProfile(); });
 })();
 // ── 부팅 이전에 등록되던 DOM 리스너(원래 파일 상단 로드 시 등록 — 모듈 진입점으로 이동, 동작 동일) ──
 // ── 스킵 링크 — href 를 따라가면 해시 라우터가 오작동하므로 JS 로 포커스만 이동(§8) ──

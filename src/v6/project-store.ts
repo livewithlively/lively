@@ -14,6 +14,7 @@ import { enqueueExternalPush } from "./external-outbox.js";
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
   `id, level, parent_id, name, description, status, status_raw, status_category, folder, created_by,
+   list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
    sort, created_at, updated_at, completed_at`;
@@ -24,6 +25,8 @@ export interface ProjectRow {
   // status_raw = 소스 원문 상태명(개방 어휘, 네이티브는 NULL). status_category = 정규 카테고리(backlog|unstarted|started|done|canceled).
   status_raw: string | null; status_category: string | null;
   folder: string | null; created_by: string | null;
+  // 리스트 묶음(level='project' 행만 의미; task/subtask 는 NULL). 0~1개 리스트에 소속. project_list.id 또는 NULL(미분류).
+  list_id: number | null;
   // 태스크 필드(task/subtask 행만 채워짐; project 행은 NULL). 기간은 'YYYY-MM-DD' 문자열(schema.ts 참조).
   priority: string | null; assignee: string | null;
   start_date: string | null; due_date: string | null;
@@ -105,10 +108,12 @@ export interface ProjectDetail extends ProjectRow {
   tasks: unknown[];
   categories: unknown[];
   knowledge: { required: unknown[]; produced: unknown[] };
+  edges: { outgoing: unknown[]; incoming: unknown[] }; // 프로젝트↔프로젝트(project_edge) — outgoing=선행(이 프로젝트가 follow_up 하는 대상), incoming=후속(이 프로젝트를 follow_up 하는 것).
   fields: unknown[]; // 커스텀 필드(클릭업형 컬럼) 정의 — 루트 프로젝트 단위. 값은 각 task 의 field_values 에.
   tags: unknown[]; // 프로젝트 자체 태그(클릭업식 메타) — task_tag_link 를 project.id 로 사용.
   time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
   repos: string[]; // 관련 레포 이름(project_repo) — AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
+  list: { id: number; name: string; color: string | null } | null; // 소속 리스트(미분류면 null) — 상세 '리스트' 필드 표시용.
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -176,6 +181,22 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     produced: kRows.filter((r) => r.relation === "produced"),
   };
 
+  // 프로젝트↔프로젝트 엣지(project_edge) — 양방향. outgoing: 이 프로젝트(from) → 대상(to=선행). incoming: 다른(from) → 이 프로젝트(to=후속).
+  const [outRows, inRows] = await Promise.all([
+    q(itemsPool,
+      `SELECT pe.relation, pe.to_project_id AS project_id, p.name AS project_name, p.status
+       FROM project_edge pe JOIN project p ON p.id=pe.to_project_id
+       WHERE pe.from_project_id=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
+       ORDER BY pe.relation, lower(p.name)`, [id]),
+    q(itemsPool,
+      `SELECT pe.relation, pe.from_project_id AS project_id, p.name AS project_name, p.status
+       FROM project_edge pe JOIN project p ON p.id=pe.from_project_id
+       WHERE pe.to_project_id=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
+       ORDER BY pe.relation, lower(p.name)`, [id]),
+  ]);
+  const edgeMap = (r: Record<string, unknown>) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation });
+  const edges = { outgoing: outRows.map(edgeMap), incoming: inRows.map(edgeMap) };
+
   // 프로젝트 자체의 태그·시간추적(클릭업식 메타) — 태스크와 동일 테이블을 project.id 로 사용.
   const [tags, time] = await Promise.all([getTaskTags(id), getTaskTime(id)]);
 
@@ -183,20 +204,26 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
   const repoRows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [id]);
   const repos = repoRows.map((r) => r.repo);
 
-  return { ...project, members, tasks, categories, knowledge, fields, tags, time, repos };
+  // 소속 리스트(있으면 표시명·색) — 상세 페이지 '리스트' 필드용. 미분류면 null.
+  const list = project.list_id != null
+    ? ((await one(itemsPool, `SELECT id, name, color FROM project_list WHERE id=$1`, [project.list_id])) ?? null)
+    : null;
+
+  return { ...project, list, members, tasks, categories, knowledge, edges, fields, tags, time, repos };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
 export async function createProject(
-  input: { name: string; description?: string; folder?: string; members?: string[] },
+  input: { name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // folder = 평범한 선택 컬럼값(물리 폴더 생성 없음). TODO: 필요 시 capability 계층에서 createProjectFolder 선행.
+  //  list_id = 소속 리스트(영역). nullable(웹은 미지정 허용, MCP 는 capability 에서 필수). FK 는 project_list(ON DELETE SET NULL).
   const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, name, description, folder, created_by, status, status_category, created_at, updated_at)
-     VALUES('project',$1,$2,$3,$4,'active','started',now(),now())
+    `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
+     VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
      RETURNING ${PROJECT_COLS}`,
-    [input.name, input.description ?? null, input.folder ?? null, ctx?.actor ?? null]);
+    [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
   // 팀원 초기 등록(project_member).
   for (const memberId of input.members ?? []) {
     await itemsPool.query(
@@ -212,6 +239,11 @@ export async function createProject(
 // 프로젝트 본문 1행(자식·정션 조인 없이) — 소유권 확인 등 가벼운 조회용. 없으면 undefined.
 export async function getProjectRow(id: number): Promise<ProjectRow | undefined> {
   return one(itemsPool, `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+}
+
+// 리스트(영역) 1행 — 생성 시 list_id 유효성 확인용(없으면 undefined → capability 가 400).
+export async function getProjectListRow(id: number): Promise<{ id: number; name: string } | undefined> {
+  return one(itemsPool, `SELECT id, name FROM project_list WHERE id=$1`, [id]);
 }
 
 // 팀원 게이트(상세/파일/세션/타임라인 접근) — 생성자이거나 project_member 인 사람만.
@@ -562,6 +594,31 @@ export async function unlinkProjectKnowledge(projectId: number, name: string, re
   await itemsPool.query(
     `DELETE FROM project_knowledge WHERE project_id=$1 AND name=$2 AND relation=$3`, [projectId, name, relation]);
   await auditProject(String(projectId), "unlink_knowledge", { name, relation }, null, ctx);
+}
+
+// ── 프로젝트↔프로젝트 엣지(project_edge) — from --relation--> to. follow_up: from 이 to 의 후속(from=후속, to=선행). ──
+export async function linkProjectEdge(fromId: number, toId: number, relation: string, ctx?: WriteCtx): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO project_edge(from_project_id, to_project_id, relation, created_by)
+     VALUES($1,$2,$3,$4) ON CONFLICT (from_project_id, to_project_id, relation) DO NOTHING`,
+    [fromId, toId, relation, ctx?.actor ?? null]);
+  await auditProject(String(fromId), "link_project", null, { to: toId, relation }, ctx);
+}
+export async function unlinkProjectEdge(fromId: number, toId: number, relation: string, ctx?: WriteCtx): Promise<void> {
+  await itemsPool.query(
+    `DELETE FROM project_edge WHERE from_project_id=$1 AND to_project_id=$2 AND relation=$3`, [fromId, toId, relation]);
+  await auditProject(String(fromId), "unlink_project", { to: toId, relation }, null, ctx);
+}
+
+// 역방향 조회 — 이 지식을 필요(required)/산출(produced)로 연결한 프로젝트 목록(위키 상세 '연결된 프로젝트').
+//  보드 앵커(__board_anchor__) 숨김 프로젝트는 제외. relation·이름 순.
+export async function projectsForKnowledge(name: string): Promise<{ project_id: number; project_name: string; status: string; relation: string }[]> {
+  const rows = await q(itemsPool,
+    `SELECT pk.project_id, pk.relation, p.name AS project_name, p.status
+     FROM project_knowledge pk JOIN project p ON p.id=pk.project_id
+     WHERE pk.name=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
+     ORDER BY pk.relation, lower(p.name)`, [name]);
+  return rows.map((r) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation }));
 }
 
 // 필요지식 추천(벡터검색 #172) — 프로젝트 이름+설명(의미) + **프로젝트 카테고리 공유(가산점·구제)** 로 지식 추천.

@@ -26,6 +26,12 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
      SELECT id, name FROM up WHERE level='project' LIMIT 1`, [id]);
   const projectId: number | null = root?.id ?? null;
 
+  // 직속 상위(브레드크럼용) — subtask 면 부모(task)를, top-level task 면 부모가 프로젝트라 null.
+  //  프론트 모달 좌상단 크럼이 '프로젝트 / 상위태스크 / (현재)' 로 직전 층위까지 하이퍼링크되게 한다(#139-5).
+  const parentRow: any = (task.level === "subtask" && task.parent_id)
+    ? await one(itemsPool, `SELECT id, name, level FROM project WHERE id=$1 AND level IN ('task','subtask')`, [task.parent_id])
+    : null;
+
   // 하위 태스크(task 행만 의미 — subtask 는 하위 없음).
   const subtasks = task.level === "task"
     ? await q(itemsPool, `SELECT ${TASK_COLS} FROM project WHERE parent_id=$1 AND level='subtask' ORDER BY sort, id`, [id])
@@ -44,6 +50,7 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
   ]);
 
   return { task: { ...task, subtasks }, project: root ? { id: root.id, name: root.name } : null,
+    parent: parentRow ? { id: parentRow.id, name: parentRow.name, level: parentRow.level } : null,
     members, tags, time, checklists, links, feed };
 }
 

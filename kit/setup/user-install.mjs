@@ -23,6 +23,7 @@ import {
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
 
 const args = process.argv.slice(2);
 const getOpt = (n) => { const i = args.indexOf(n); return i !== -1 ? args[i + 1] : null; };
@@ -158,7 +159,7 @@ function seedWorkRoots(roots) {
   let added = 0;
   for (const r of roots) { const abs = resolve(r); if (!set.has(abs)) { existing.push(abs); set.add(abs); added++; } }
   if (added || !existsSync(path)) {
-    const header = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 추가/제거 자유. env LIVELY_WORK_ROOTS 로도 augment 가능.";
+    const header = WORK_ROOTS_HEADER;
     writeFileSync(path, [header, ...existing.filter((l) => l.trim() && !l.startsWith("#"))].join("\n") + "\n");
     chmodSync(path, 0o600);
     console.log(`  ✓ ~/.lively/work-roots (시드 ${added}건 추가)`);

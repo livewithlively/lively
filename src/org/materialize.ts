@@ -89,7 +89,7 @@ export async function categoryMapForIndex(mineIds?: Set<number>): Promise<Catego
 export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "# Knowledge Index",
   "",
-  "${rules}## 컨텍스트 온톨로지 개념 (맥락, 카테고리, 프로젝트, 지식)",
+  "## 컨텍스트 온톨로지 개념 (맥락, 카테고리, 프로젝트, 지식)",
   "",
   "**맥락(Context)** 은 일할 때 알아야 할 조직의 모든 것이다. 세 축으로 본다.",
   "",
@@ -155,28 +155,8 @@ export async function loadGuideTemplate(): Promise<string | undefined> {
 // categoryMap 인자는 호출자가 categoryMapForIndex() 로 라이브 조회해 넘긴다(non-stale·두 DB 조인). 생략 시 빈 지도.
 // guideTemplate(편집값) 생략/공백이면 DEFAULT_CONTEXT_ONTOLOGY_GUIDE 폴백(순수함수·결정적 단위테스트 유지).
 //
-// 중복 주입 방지: org_content 섹션 R(managed-policy·org-defaults)·가이드 섹션은 ${rules} 전문 주입에서 제외 —
-//  앞 둘은 전용 경로(머리말 prepend·생성기 org/*.md)로 세션당 1회 전달되고, 가이드 섹션은 그 자체가 이 템플릿이다.
-const SECTION_R_NAMES = new Set<string>([
-  "managed-policy", "org-defaults", CONTEXT_ONTOLOGY_GUIDE_SECTION,
-]);
-
-// ${rules} 치환 블록 — 사용자-저작 항상-주입 지식(섹션 제외) 전문. 없으면 "". 있으면 헤더+전문, 뒤따르는 ## 와 분리되게 \n\n 종결.
-//  V6: kind='R' → injection='always'(규칙·페르소나 항상 주입). 섹션 제외/정렬/전문 emit 동일.
-function buildRulesBlock(units: KnowledgeRow[]): string {
-  const rules = units
-    .filter((u) => u.injection === "always" && u.lifecycle === "active" && !SECTION_R_NAMES.has(u.name))
-    .sort((a, b) => (Number(a.sort) - Number(b.sort)) || a.name.localeCompare(b.name));
-  if (!rules.length) return "";
-  const out: string[] = ["## 강제 규칙 (R · 항상 적용)", ""];
-  for (const u of rules) {
-    out.push(`### ${u.title?.trim() || u.name}`);
-    const body = (u.body_md ?? "").trim();
-    if (body) out.push(body);
-    out.push("");
-  }
-  return out.join("\n").trimEnd() + "\n\n";
-}
+// (#335) ${rules}/buildRulesBlock·SECTION_R_NAMES 폐기 — 항상-주입은 '섹션 문서'(injection='always' 행, publish.buildSectionBlocks)뿐이다.
+//  비-섹션 지식의 injection=always 경로는 제거됨(사용자 노출 X). 섹션 본문은 substituteBlocks 로 ${team}/${categories}/${wiki} 만 치환.
 
 // ${categories} 치환 블록 — 전 카테고리를 space(product→business)별 'key — name (N)'. 없으면 "". 뒤따르는 ## 와 분리되게 \n\n 종결.
 function buildCategoryBlock(categoryMap: CategoryMapEntry[]): string {
@@ -220,7 +200,7 @@ export async function wikiCategoryMap(): Promise<Map<string, string>> {
 }
 
 // ${wiki} 치환 블록 — is_wiki 핀 지식의 '소환키 — 제목 · category' 한 줄씩(본문 제외, 인덱스). 없으면 "". 뒤 ## 와 \n\n 분리.
-//  wikiCats = name→대표 category.key(wikiCategoryMap 라이브 조회). buildRulesBlock 과 동일 정렬(sort,name). 본문 follow 차단 위해 비-링크.
+//  wikiCats = name→대표 category.key(wikiCategoryMap 라이브 조회). 정렬은 sort,name. 본문 follow 차단 위해 비-링크.
 function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): string {
   const wiki = units
     .filter((u) => u.is_wiki && u.lifecycle === "active")
@@ -234,24 +214,34 @@ function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): s
   return out.join("\n").trimEnd() + "\n\n";
 }
 
+// 동적 블록 치환 — ${team}/${categories}/${wiki}. (#335 ${rules} 폐기: 항상-주입은 섹션 문서뿐.)
+//  단일 소스: 섹션 조립(publish.buildSectionBlocks)·가이드 미리보기(org_guide_preview) 공용. 함수형 replacement($ 특수해석 회피).
+//  consumedTeam.v 는 ${team} 가 실제 치환됐는지 호출자에 알린다(어느 섹션도 안 쓰면 팀블록 말미 폴백 부착용).
+export function substituteBlocks(
+  template: string,
+  opts: {
+    team?: string; categoryMap?: CategoryMapEntry[]; wikiUnits?: KnowledgeRow[];
+    wikiCats?: Map<string, string>; consumedTeam?: { v: boolean };
+  } = {},
+): string {
+  const assembled = (typeof template === "string" ? template : "")
+    .replace(/\$\{team\}/g, () => { if (opts.consumedTeam) opts.consumedTeam.v = true; return (opts.team ?? "").trim(); })
+    .replace(/\$\{categories\}/g, () => buildCategoryBlock(opts.categoryMap ?? []))
+    .replace(/\$\{wiki\}/g, () => buildWikiBlock(opts.wikiUnits ?? [], opts.wikiCats ?? new Map()))
+    .replace(/\$\{rules\}/g, ""); // (#335) 폐기된 ${rules} — 편집본에 잔존 시 리터럴 노출 방지(빈 문자열로 정리).
+  // 빈 플레이스홀더로 생긴 과잉 공백/트레일링 정리 + 마스킹(편집 가능 템플릿·동적 블록 모두 단일 choke-point).
+  return redactString(assembled).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+// 하위호환 — 가이드 단일 템플릿 렌더(org_guide_preview·offline materializeOrgContent·테스트). 시그니처 유지(소비자 무수정).
 export function buildKnowledgeIndex(
   units: KnowledgeRow[],
   categoryMap: CategoryMapEntry[] = [],
   guideTemplate?: string,
   wikiCats: Map<string, string> = new Map(),
 ): string {
-  // 편집값(섹션) 우선, 비면 코드 기본 템플릿(계약 폴백).
   const tpl = (typeof guideTemplate === "string" && guideTemplate.trim()) ? guideTemplate : DEFAULT_CONTEXT_ONTOLOGY_GUIDE;
-  // 동적 블록 치환 — 함수형 replacement(치환문자열의 $ 특수해석 회피). ${rules}=R 전문, ${categories}=카테고리 지도, ${wiki}=핀 인덱스.
-  const assembled = tpl
-    .replace(/\$\{rules\}/g, () => buildRulesBlock(units))
-    .replace(/\$\{categories\}/g, () => buildCategoryBlock(categoryMap))
-    .replace(/\$\{wiki\}/g, () => buildWikiBlock(units, wikiCats));
-  // 조립 결과 전체 마스킹(편집 가능 템플릿·동적 블록 모두) + 빈 플레이스홀더로 생긴 과잉 공백/트레일링 정리 → 단일 개행 종결.
-  return redactString(assembled)
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd() + "\n";
+  return substituteBlocks(tpl, { categoryMap, wikiUnits: units, wikiCats }) + "\n";
 }
 
 // YAML 스칼라 안전화 — load-bindings 미니 파서는 "..."/'...' 인용 스칼라를 받지만 \" 언이스케이프는 안 한다.
@@ -297,11 +287,7 @@ export async function materializeOrgContent(): Promise<Materialized> {
     : `# ${orgName} 공통 컨텍스트\n\n(아직 작성되지 않음 — 관리 UI에서 회사 맥락·페르소나·업무방식을 채우세요.)\n`;
   await writeFile(join(dir, "org", "org-defaults.md"), defaultsBody);
 
-  // org/managed-policy.md — 선택.
-  const policy = await getSection("managed-policy");
-  if (policy?.body_md?.trim()) {
-    await writeFile(join(dir, "org", "managed-policy.md"), policy.body_md);
-  }
+  // (#335) managed-policy 폐기 — 데이터 없는 死섹션이라 발행 제외. 항상-주입 섹션은 buildKnowledgeIndex 가 가이드로 단일 발행.
 
   // memory/knowledge-index.md — v4 인덱스(R 전문 + 카테고리 지도 + 쓰기 가이드)만 발행. **본문 파일은 디스크에 안 쓴다** —
   //  K/H/W 본문은 ctx_cat(게이트웨이 pull)로 가져온다. 인덱스가 비-링크라 generator 의 본문 follow 도 안 걸림.

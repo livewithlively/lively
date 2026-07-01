@@ -192,10 +192,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       try { await recordSessionProject(id, input.projectId); } catch { /* 비치명 */ }
     }
   }
-  // 스크롤 줄중복·리사이즈 개선: 휠→tmux copy-mode + window-size largest(작은 피커가 창 못 줄임).
+  // 마우스 휠 스크롤 + window-size latest(상세 근거는 아래 ensureSessionOpts 주석 — #252 깨짐 수정).
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
-  await tmuxQuiet(["set-window-option", "-t", id, "window-size", "largest"]);
+  await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
 }
 
@@ -277,13 +277,19 @@ export async function getSessionLabel(id: string): Promise<string> {
   return (await getOpt(id, "@box_label")) || "";
 }
 
-// attach 시점에 스크롤·리사이즈 옵션 보장(생성 전 세션이나 옵션 누락 케이스 방어). 비치명.
-// window-size largest: 여러 클라이언트가 같은 세션을 봐도 '가장 큰' 클라 기준 유지 → 작은 피커가
-//  창을 쪼그라뜨려(=리사이즈 churn → 프롬프트 중복이 히스토리에 쌓임) 다른 사람 화면을 깨는 것 방지.
-//  (aggressive-resize 는 정반대로 '가장 작은' 클라에 맞춰서 이 버그의 원인 — 사용 안 함.)
+// attach 시점에 스크롤·리사이즈 옵션 보장(생성 전 세션·옵션 누락 방어 + 옛 세션을 latest 로 마이그레이트). 비치명.
+// window-size latest: 창 크기를 '가장 최근 활동(refresh-client -C 포함) 클라이언트'에 맞춘다.
+//  웹 터미널은 한 tmux pane 을 여러 클라(여러 탭·기기·잔존 연결)가 공유하는데 pane 크기는 하나뿐이라,
+//  자기보다 큰 pane 을 받는 좁은 클라는 출력이 깨진다(254폭 내용이 83폭 xterm 에 들어가 줄이 어긋남).
+//  - largest(옛 설정): 가장 큰 클라에 고정 → 좁은 탭이 영구히 깨지고 '화면 복구'(refresh-client 재전송)도
+//    창을 못 줄여 무효였다(#252). 잔존하던 큰 연결 하나가 현재 탭을 계속 깨뜨림 → 새 세션만 정상이던 증상.
+//  - latest: 지금 보는 탭이 connect/포커스/'화면 복구' 때 refresh-client 를 보내면 그 순간 '최근 활동'이
+//    되어 pane 이 그 탭 크기로 맞춰진다 → 곧바로 정상 렌더(잔존·백그라운드 클라는 활동이 없어 크기를 못 끈다).
+//    실측(tmux 3.6a, 격리소켓): largest 는 작은 클라 refresh 후에도 창 유지, latest 는 마지막 refresh 한
+//    클라 크기로 전환됨을 확인. aggressive-resize 는 다중 '세션' 공유용이라 무관(끔 유지).
 export async function ensureSessionOpts(id: string): Promise<void> {
   if (!ID_RE.test(id)) return;
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
-  await tmuxQuiet(["set-window-option", "-t", id, "window-size", "largest"]);
+  await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
 }

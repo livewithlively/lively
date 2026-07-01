@@ -54,11 +54,7 @@ export async function migrateOrgContent(orgDir: string, dry: boolean): Promise<s
   const has = (p: string): boolean => existsSync(join(orgDir, p));
   if (!has("org")) throw new Error(`org-content 디렉토리가 아님(org/ 없음): ${orgDir}`);
 
-  // ── 섹션 ──
-  if (has("org/managed-policy.md")) {
-    if (!dry) await updateSection("managed-policy", read("org/managed-policy.md"), "migrate", "migration");
-    log.push("section: managed-policy");
-  }
+  // ── 섹션 ── (#335: managed-policy 폐기 — 이관 대상에서 제외)
   if (has("org/org-defaults.md")) {
     if (!dry) await updateSection("org-defaults", read("org/org-defaults.md"), "migrate", "migration");
     log.push("section: org-defaults");

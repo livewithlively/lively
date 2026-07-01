@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -32,13 +32,14 @@ const ADMIN_SECTIONS = [
   //  카테고리 탭(#/categories)과 같은 category-store(/api/ui/categories) — 여기 수정이 지식·프로젝트 탭 좌측에 반영.
   { key: 'wiki-categories', label: '카테고리 설정', meaning: null, group: 'wiki' },
   // ③ 맥락·세션 주입 — AI가 매 세션 무엇을 언제 주입받나(단일 지도). nav 엔 '세션 주입 지도'(injection-map) 한 화면만.
-  //  회사 소개·규칙·성격(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide)는 별도 탭 폐기(2026-06-26) — 지도의 [편집]이 WIKI 지식 페이지(#/k/<name>)로 보낸다(이 섹션=injection=always knowledge).
-  //  두 키는 sectionEditor 라우팅엔 살아있고 URL 은 SECTION_REMAP 로 지도 흡수. managed-policy(구 'AI 필수 규칙')는 빈 채 서버 plumbing 만 유지(주입 시 ""→무해).
+  //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335). 구 #/system/<section> 라우트·SECTION_REMAP 흡수는 호환용 잔존.
   //  WIKI 인덱스는 WIKI 탭, 주제 분류는 '카테고리 설정'으로 일원화(2026-06-24).
   { key: 'injection-map', label: '세션 주입 지도', meaning: null, group: 'knowledge' },
   // ④ 연결·데이터 (고급) — AI가 무엇에 닿나(도구·MCP·DB·레포) + 외부 호출/DB 안전범위 + 커스텀 훅(코드).
   //  훅 개요·런타임 토글·주입 미리보기는 '세션 주입 지도'로 흡수(2026-06-26). 여기엔 연결/데이터/안전범위와 코드 훅만 남는다.
   { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
+  // MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지(mcp_call_log 집계). 읽기 전용 대시보드(admin).
+  { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
   // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
@@ -53,8 +54,8 @@ const ADMIN_SECTIONS = [
 ];
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
-const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'managed-policy': 'injection-map', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions']; // admin 권한 전용(쓰기/인프라)
+const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
+const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -91,14 +92,6 @@ function meaningRow(k, v) {
 // 비개발자용 카드 카피 — 서버 MEANING(기술적·장황) 위에 클라에서 덮어쓴다(즉시 반복, 서버 재시작 불요).
 //  키 = 섹션 meaning 키. 없는 키(고급 훅·MCP·DB·툴 등)는 서버 카피로 폴백.
 const MEANING_KO = {
-  'managed-policy': {
-    label: 'AI 필수 규칙',
-    what: '회사의 모든 AI가 무조건 지켜야 하는 규칙이에요. 개인이 끄거나 바꿀 수 없어요.',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '대화를 시작할 때 가장 먼저 적용돼요',
-    where: 'AI가 답을 만들 때 무엇보다 우선해서 지켜요',
-    example: "'고객 개인정보는 절대 보여주지 않기'를 넣으면, 그때부터 모두의 AI가 무조건 그렇게 해요.",
-  },
   'org-defaults': {
     label: '회사 소개·규칙·AI 성격',
     what: '회사가 어떤 곳인지, AI가 무조건 지킬 규칙, 어떤 성격·말투로 일하는지, 우리 팀이 일하는 방식이에요. (구 ‘AI 필수 규칙’이 여기로 합쳐졌어요.)',
@@ -200,6 +193,7 @@ function adminRowMeta(key, data) {
   if (key === 'db-sources') return ((data.dbSources || []).length + (data.envSources || []).length) + '개 소스';
   if (key === 'custom-hooks') return (data.orgHooks || []).length + '개 훅';
   if (key === 'tools') { const t = (data.tools || []).filter((x) => x.kind !== 'builtin'); return t.length ? t.length + '개 툴' : '기본'; }
+  if (key === 'tool-usage') return '하네스 MCP 호출 빈도·인자';
   return '';
 }
 
@@ -270,7 +264,7 @@ async function renderAdmin(view, sub) {
 
 function renderAdminDetail(detail, sel, data) {
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
-  if (sel === 'managed-policy' || sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
+  if (sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
   if (sel === 'members') return membersEditor(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
   if (sel === 'member-add') return memberAddPanel(detail, data);
@@ -279,12 +273,287 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'injection-map') return injectionMap(detail, data);
   if (sel === 'custom-hooks') return customHookEditor(detail, data);
   if (sel === 'tools') return toolsEditor(detail, data);
+  if (sel === 'tool-usage') return toolUsagePanel(detail);
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'cron') return cronPanel(detail, data);
   if (sel === 'managed-sessions') return managedSessionsPanel(detail, data);
   if (sel === 'deploy') return deployPanel(detail, data);
+}
+
+// ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
+//  읽기 전용 대시보드(admin). 백엔드=/api/ui/tool-usage(src/capabilities/tool-usage.ts → mcp_call_log 집계).
+//  "직접/LLM 쿼리"는 db_query 로 mcp_call_log 를 SELECT(이 화면=사람용 집계 편의 표면). 새 서브탭일 뿐 기존 도구 화면 불변.
+const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '', errorsOnly: false, page: 1 };
+const TU_WINDOW_LABELS = { '1h': '최근 1시간', '24h': '최근 24시간', '7d': '최근 7일', '30d': '최근 30일', '90d': '최근 90일', 'all': '전체 기간' };
+
+// 스타일 1회 주입(테마 토큰 사용 → 라이트/다크 자동 적응). innerHTML 없음 — textContent 로만 CSS 삽입(보안 불변식 준수).
+function tuEnsureStyles() {
+  if (document.getElementById('tu-styles')) return;
+  document.head.appendChild(el('style', { id: 'tu-styles', text: `
+.tu-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 18px}
+.tu-field{display:flex;flex-direction:column;gap:4px}
+.tu-field>label{font-size:11px;font-weight:700;color:var(--muted)}
+.tu-sel,.tu-inp{padding:6px 9px;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+.tu-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.tu-stat{flex:1 1 120px;min-width:104px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--bg-tint)}
+.tu-stat b{display:block;font-size:23px;font-weight:800;line-height:1.15;color:var(--ink);font-variant-numeric:tabular-nums}
+.tu-stat span{font-size:11.5px;color:var(--ink-sub)}
+.tu-stat.tu-bad b{color:var(--coral)}
+.tu-sub{font-weight:800;font-size:13px;color:var(--ink);margin:22px 0 9px}
+.tu-days{display:flex;align-items:flex-end;gap:4px;height:72px;padding:6px 2px 0;border-bottom:1px solid var(--line)}
+.tu-day{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:6px}
+.tu-day i{width:100%;max-width:28px;background:var(--blue);border-radius:3px 3px 0 0;min-height:2px;display:block}
+.tu-day i.tu-allerr{background:var(--coral)}
+.tu-daylabels{display:flex;gap:4px;margin-top:5px}
+.tu-daylabels span{flex:1 1 0;text-align:center;font-size:9.5px;color:var(--muted);min-width:6px;overflow:hidden}
+.tu-table{width:100%;border-collapse:collapse;font-size:13px}
+.tu-table th{text-align:left;padding:6px 9px;font-size:11px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line)}
+.tu-table th.tu-num{text-align:right}
+.tu-table td{padding:6px 9px;border-bottom:1px solid var(--line);color:var(--ink)}
+.tu-table td.tu-num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-sub);white-space:nowrap}
+.tu-table tr:hover td{background:var(--bg-tint)}
+.tu-namecell{position:relative;min-width:170px}
+.tu-bar{position:absolute;left:0;top:4px;bottom:4px;background:var(--bg-tint-2);border-radius:4px;z-index:0}
+.tu-namecell .tu-name{position:relative;z-index:1}
+.tu-harness{display:flex;gap:8px;flex-wrap:wrap}
+.tu-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--ink);background:var(--bg-tint)}
+.tu-chip b{font-variant-numeric:tabular-nums}
+.tu-chip em{color:var(--coral);font-style:normal;font-size:11px}
+.tu-calls{margin-top:4px}
+.tu-call{border-bottom:1px solid var(--line);padding:7px 4px}
+.tu-call>summary{display:flex;gap:11px;align-items:center;cursor:pointer;list-style:none}
+.tu-call>summary::-webkit-details-marker{display:none}
+.tu-call>summary:hover{background:var(--bg-tint)}
+.tu-ctime{color:var(--muted);font-size:11.5px;min-width:64px}
+.tu-cactor{color:var(--ink-sub);font-size:12px;margin-left:auto}
+.tu-cdur{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.tu-cbad{color:var(--coral);font-size:11px;font-weight:700}
+.tu-args{background:var(--bg-tint);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;color:var(--ink);overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:7px 0 2px}
+.tu-empty{color:var(--muted);font-size:13px;padding:18px 4px}
+.tu-pager{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.tu-pg{min-width:30px;height:30px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
+.tu-pg:hover{background:var(--bg-tint)}
+.tu-pg-on{background:var(--blue);border-color:var(--blue);color:#fff;cursor:default}
+.tu-pg-off{opacity:.38;cursor:default}
+.tu-pg-gap{color:var(--muted);padding:0 2px}
+.tu-pg-info{color:var(--muted);font-size:11.5px;margin-left:8px}
+` }));
+}
+
+function tuPretty(v) {
+  if (v == null) return '{}';
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+// 번호 페이지네이션용 페이지 목록(생략 …). 적으면 전부, 많으면 1 … cur-1 cur cur+1 … total.
+function tuPageNumbers(cur, total) {
+  if (total <= 7) { const a: any[] = []; for (let i = 1; i <= total; i++) a.push(i); return a; }
+  const out: any[] = [1];
+  const lo = Math.max(2, cur - 1); const hi = Math.min(total - 1, cur + 1);
+  if (lo > 2) out.push('…');
+  for (let i = lo; i <= hi; i++) out.push(i);
+  if (hi < total - 1) out.push('…');
+  out.push(total);
+  return out;
+}
+
+async function toolUsagePanel(detail) {
+  tuEnsureStyles();
+  const reload = () => toolUsagePanel(detail);
+  const PAGE_SIZE = 50;
+  // 현재 필터 → 쿼리스트링(+추가 파라미터). 페이지 이동·CSV·재조회가 공유.
+  const filterQs = (extra?) => {
+    const q = new URLSearchParams({ window: TOOL_USAGE_STATE.window });
+    if (TOOL_USAGE_STATE.harness) q.set('harness', TOOL_USAGE_STATE.harness);
+    if (TOOL_USAGE_STATE.tool) q.set('tool', TOOL_USAGE_STATE.tool);
+    if (TOOL_USAGE_STATE.errorsOnly) q.set('errors', '1');
+    for (const k in (extra || {})) q.set(k, String(extra[k]));
+    return q.toString();
+  };
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('호출 통계를 불러오는 중')));
+
+  const page = Math.max(1, TOOL_USAGE_STATE.page || 1);
+  let r;
+  try { r = await api('/api/ui/tool-usage?' + filterQs({ offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE })); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '호출 통계를 불러오지 못했습니다'))); return; }
+
+  const sum = r.summary || {};
+  const byTool = r.byTool || [];
+  const byHarness = r.byHarness || [];
+  const byDay = (r.byDay || []).slice().reverse(); // 서버는 최신→과거 정렬 → 그래프는 과거→최신으로
+  const recent = r.recent || [];
+  const total = sum.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // ── 컨트롤(기간·하네스·툴·결과 필터) — 필터 변경 시 page=1 리셋 ──
+  const winSel = el('select', { class: 'tu-sel' });
+  for (const w of (r.windows || Object.keys(TU_WINDOW_LABELS))) winSel.append(el('option', { value: w, text: TU_WINDOW_LABELS[w] || w }));
+  winSel.value = r.window || TOOL_USAGE_STATE.window;
+  winSel.onchange = () => { TOOL_USAGE_STATE.window = winSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  const harnessSel = el('select', { class: 'tu-sel' });
+  harnessSel.append(el('option', { value: '', text: '모든 하네스' }));
+  const harnessVals = byHarness.map((h) => h.harness).filter((h) => h && h !== '(미상)');
+  if (TOOL_USAGE_STATE.harness && !harnessVals.includes(TOOL_USAGE_STATE.harness)) harnessVals.push(TOOL_USAGE_STATE.harness);
+  for (const h of harnessVals) harnessSel.append(el('option', { value: h, text: h }));
+  harnessSel.value = TOOL_USAGE_STATE.harness;
+  harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  // 툴 필터 = 드롭다운(현재 기간+하네스 내 실제 툴 목록 + 호출수). 이름 타이핑 대신 선택.
+  const toolSel = el('select', { class: 'tu-sel' });
+  toolSel.append(el('option', { value: '', text: '모든 툴' }));
+  const toolOpts = r.toolOptions || [];
+  for (const t of toolOpts) toolSel.append(el('option', { value: t.tool, text: t.tool + ' (' + (t.calls || 0).toLocaleString() + ')' }));
+  if (TOOL_USAGE_STATE.tool && !toolOpts.some((t) => t.tool === TOOL_USAGE_STATE.tool)) toolSel.append(el('option', { value: TOOL_USAGE_STATE.tool, text: TOOL_USAGE_STATE.tool }));
+  toolSel.value = TOOL_USAGE_STATE.tool;
+  toolSel.onchange = () => { TOOL_USAGE_STATE.tool = toolSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  // 결과 필터(전체/오류만)
+  const errSel = el('select', { class: 'tu-sel' });
+  errSel.append(el('option', { value: '', text: '전체' }));
+  errSel.append(el('option', { value: '1', text: '오류만' }));
+  errSel.value = TOOL_USAGE_STATE.errorsOnly ? '1' : '';
+  errSel.onchange = () => { TOOL_USAGE_STATE.errorsOnly = errSel.value === '1'; TOOL_USAGE_STATE.page = 1; reload(); };
+
+  // CSV(엑셀) 다운로드 — 현재 필터 전체를 페이지 루프로 모아 CSV(Excel 한글 BOM). 상한 5000행.
+  const exportCsv = async () => {
+    toast('CSV 준비 중…');
+    const rows: any[] = []; let off = 0; const CAP = 5000;
+    try {
+      while (off < total && rows.length < CAP) {
+        const r2 = await api('/api/ui/tool-usage?' + filterQs({ offset: off, limit: 500 }));
+        const batch = (r2 && r2.recent) || [];
+        if (!batch.length) break;
+        rows.push(...batch); off += batch.length;
+        if (batch.length < 500) break;
+      }
+    } catch (e) { toast('CSV 조회 실패'); return; }
+    const cols = ['called_at', 'tool', 'harness', 'actor', 'ok', 'duration_ms', 'error', 'args'];
+    const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [cols.join(',')];
+    for (const c of rows) lines.push([c.called_at, c.tool, c.harness, c.actor, c.ok, c.duration_ms, c.error, (c.args == null ? '' : JSON.stringify(c.args))].map(esc).join(','));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: 'mcp-calls-' + TOOL_USAGE_STATE.window + (TOOL_USAGE_STATE.errorsOnly ? '-errors' : '') + '.csv' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(rows.length.toLocaleString() + '행 내려받음' + (rows.length >= CAP ? ' (상한 ' + CAP + ')' : ''));
+  };
+
+  const controls = el('div', { class: 'tu-controls' },
+    el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel),
+    el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel),
+    el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolSel),
+    el('div', { class: 'tu-field' }, el('label', { text: '결과' }), errSel),
+    el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }),
+    el('button', { class: 'btn btn-ghost btn-sm', text: 'CSV 다운로드', onclick: exportCsv }),
+    (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool || TOOL_USAGE_STATE.errorsOnly)
+      ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; TOOL_USAGE_STATE.errorsOnly = false; TOOL_USAGE_STATE.page = 1; reload(); } })
+      : null);
+
+  // ── 요약 스탯 ──
+  const stat = (label, value, bad?) => el('div', { class: 'tu-stat' + (bad ? ' tu-bad' : '') }, el('b', { text: String(value) }), el('span', { text: label }));
+  const stats = el('div', { class: 'tu-stats' },
+    stat('총 호출', (sum.total || 0).toLocaleString()),
+    stat('툴 종류', sum.tools || 0),
+    stat('하네스', sum.harnesses || 0),
+    stat('오류', (sum.errors || 0).toLocaleString(), (sum.errors || 0) > 0),
+    stat('마지막 호출', sum.last_at ? relTime(sum.last_at) : '—'));
+
+  // ── 일별 막대(KST) ──
+  let daysEl: any = null;
+  if (byDay.length) {
+    const maxCalls = Math.max(...byDay.map((d) => d.calls), 1);
+    const bars = el('div', { class: 'tu-days' });
+    const labels = el('div', { class: 'tu-daylabels' });
+    for (const d of byDay) {
+      const h = Math.max(2, Math.round((d.calls / maxCalls) * 100));
+      const allErr = d.calls > 0 && d.errors >= d.calls;
+      bars.append(el('div', { class: 'tu-day' },
+        el('i', { class: allErr ? 'tu-allerr' : '', style: 'height:' + h + '%', title: d.day + ' · ' + d.calls + '회' + (d.errors ? ' (오류 ' + d.errors + ')' : '') })));
+      labels.append(el('span', { text: String(d.day).slice(5) }));
+    }
+    daysEl = el('div', {}, el('div', { class: 'tu-sub', text: '일별 호출 (KST)' }), bars, labels);
+  }
+
+  // ── 툴별 표 ──
+  const maxToolCalls = Math.max(...byTool.map((t) => t.calls), 1);
+  const toolBody = el('tbody');
+  for (const t of byTool) {
+    const frac = Math.round((t.calls / maxToolCalls) * 100);
+    toolBody.append(el('tr', {},
+      el('td', { class: 'tu-namecell' },
+        el('span', { class: 'tu-bar', style: 'width:' + frac + '%' }),
+        el('span', { class: 'tu-name mono', text: t.tool })),
+      el('td', { class: 'tu-num', text: (t.calls || 0).toLocaleString() }),
+      el('td', { class: 'tu-num', text: t.errors ? String(t.errors) : '–' }),
+      el('td', { class: 'tu-num', text: t.avg_ms != null ? t.avg_ms + 'ms' : '–' }),
+      el('td', { class: 'tu-num', text: t.max_ms != null ? t.max_ms + 'ms' : '–' }),
+      el('td', { class: 'tu-num', text: t.last_at ? relTime(t.last_at) : '–' })));
+  }
+  const toolTable = byTool.length
+    ? el('table', { class: 'tu-table' },
+        el('thead', {}, el('tr', {},
+          el('th', { text: '툴' }),
+          el('th', { class: 'tu-num', text: '호출' }),
+          el('th', { class: 'tu-num', text: '오류' }),
+          el('th', { class: 'tu-num', text: '평균' }),
+          el('th', { class: 'tu-num', text: '최대' }),
+          el('th', { class: 'tu-num', text: '마지막' }))),
+        toolBody)
+    : el('div', { class: 'tu-empty', text: '이 조건에 기록된 호출이 없습니다.' });
+
+  // ── 하네스별 칩 ──
+  const harnessChips = el('div', { class: 'tu-harness' });
+  for (const h of byHarness) harnessChips.append(el('span', { class: 'tu-chip' },
+    el('span', { text: h.harness }),
+    el('b', { text: (h.calls || 0).toLocaleString() }),
+    h.errors ? el('em', { text: '오류 ' + h.errors }) : null));
+
+  // ── 최근 호출(인자 펼침) + 번호 페이지네이션 ──
+  const calls = el('div', { class: 'tu-calls' });
+  const renderCall = (c) => el('details', { class: 'tu-call' },
+    el('summary', {},
+      el('span', { class: 'tu-ctime', text: relTime(c.called_at) }),
+      el('span', { class: 'tu-ctool mono', text: c.tool }),
+      el('span', { class: 'dm-tag', text: c.harness || '미상' }),
+      c.ok ? null : el('span', { class: 'tu-cbad', text: '✗ 오류' }),
+      el('span', { class: 'tu-cdur', text: c.duration_ms != null ? c.duration_ms + 'ms' : '' }),
+      el('span', { class: 'tu-cactor', text: c.actor || '' })),
+    el('pre', { class: 'tu-args mono', text: tuPretty(c.args) }),
+    c.error ? el('pre', { class: 'tu-args mono', text: '⚠ ' + c.error }) : null);
+  if (!recent.length) calls.append(el('div', { class: 'tu-empty', text: TOOL_USAGE_STATE.errorsOnly ? '이 조건의 오류 호출이 없습니다.' : '최근 호출이 없습니다.' }));
+  for (const c of recent) calls.append(renderCall(c));
+
+  // 번호 페이지네이션 — 페이지 클릭 시 page 갱신 후 reload(필터·집계 유지). ‹ 1 … 4 5 6 … 20 ›
+  const pagerBox = el('div', { class: 'tu-pager' });
+  if (totalPages > 1) {
+    const cur = Math.min(page, totalPages);
+    const pgBtn = (label, n, kind?) => el('button', {
+      class: 'tu-pg' + (kind === 'on' ? ' tu-pg-on' : '') + (kind === 'off' ? ' tu-pg-off' : ''),
+      text: String(label), ...(kind ? {} : { onclick: () => { TOOL_USAGE_STATE.page = n; reload(); } }) });
+    pagerBox.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
+    for (const pn of tuPageNumbers(cur, totalPages)) {
+      if (pn === '…') pagerBox.append(el('span', { class: 'tu-pg-gap', text: '…' }));
+      else pagerBox.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
+    }
+    pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
+    pagerBox.append(el('span', { class: 'tu-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
+  }
+
+  const card = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })),
+    el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }),
+    controls,
+    stats,
+    daysEl,
+    el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable,
+    byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null,
+    byHarness.length ? harnessChips : null,
+    el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox);
+  detail.replaceChildren(card);
 }
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
@@ -1360,25 +1629,103 @@ function injectionMap(detail, data) {
   }
 
   // ── 블록 조립 ──
-  // 세션 시작 조각 — 최상위 2개(편집 가능한 섹션) + 가이드 템플릿 본문 안에 ${} 로 채워지는 자식 3개.
-  //  실제 순서(publish.ts): 조직 헤더(자동) → 회사 소개·규칙·성격(org-defaults) → 가이드(템플릿). 가이드 안 ${rules}(맨 위)·${categories}·${wiki}(맨 끝)는 위치를 템플릿이 정함.
-  const editBtn = (key) => jump('WIKI에서 편집 →', '#/k/' + encodeURIComponent(key));
+  // 세션 시작 조각(#335) — 항상-주입 '섹션 문서'(injection='always' 행)를 N개 관리(추가/편집/삭제/재정렬). sort 순으로 조립.
+  //  실제 순서(publish.ts): 조직 헤더(자동) → [섹션들 sort 순]. 각 섹션 본문의 ${team}/${categories}/${wiki} 는 매 세션 실데이터로 치환.
+  const guideKey = 'context-ontology-guide';
+  const SECTION_HINT = {
+    'org-defaults': '회사 배경 + 항상 지킬 규칙 + AI 말투 (회사 소개·규칙·성격)',
+    'context-ontology-guide': '⚠ LLM 이 라이블리 시스템(맥락·카테고리·프로젝트·지식) 사용법을 이해하는 핵심 문서 — 삭제·대폭수정 주의. ${categories}/${wiki} 자리표시자 골격.',
+  };
   const subPieceRow = (token, label, sub, btn) => el('div', { class: 'inj-piece inj-subpiece' },
     el('code', { class: 'inj-token', text: token }),
     el('div', { class: 'inj-piece-body' },
       el('div', { class: 'inj-piece-label', text: label }),
       sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null),
     btn || el('span', {}));
-  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 순서로 조립.',
-    momentToggle('session_preload'),
-    el('div', { class: 'inj-pieces' },
-      pieceRow('1', '회사 소개·규칙·AI 성격', '회사 배경 + 항상 지킬 규칙 + AI 말투 (섹션)', editBtn('org-defaults')),
-      pieceRow('2', '컨텍스트 온톨로지 가이드', '아래 ${ } 자리표시자를 담는 전체 골격 — 주입 위치·순서는 이 템플릿이 정함 (고급)', editBtn('context-ontology-guide')),
+
+  // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
+  function openSectionEditor(name, opts) {
+    opts = opts || {};
+    const isNew = !!opts.isNew;
+    const cur = (data.sections && data.sections[name]) || { body_md: '' };
+    const nameIn = el('input', { type: 'text', value: name || '', placeholder: '섹션 키 (소문자·숫자·하이픈, 예: company-policy)' });
+    if (!isNew) nameIn.disabled = true;
+    const ta = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문 — ${team}/${categories}/${wiki} 치환 가능' });
+    ta.value = cur.body_md || '';
+    const st = el('span', { class: 'admin-status' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+    const root = el('div', { class: 'mem-modal' },
+      isNew ? field('섹션 키', nameIn) : null,
+      name === guideKey ? el('p', { class: 'admin-hint', text: '⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.' }) : null,
+      field('본문 (markdown)', ta),
+      el('div', { class: 'admin-actions' }, saveBtn, st));
+    const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
+    saveBtn.onclick = async () => {
+      const section = (isNew ? nameIn.value : name).trim().toLowerCase();
+      if (!section) { toast('섹션 키를 입력하세요', true); return; }
+      saveBtn.disabled = true; st.textContent = '저장 중…';
+      try {
+        await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
+        toast('저장됨 — 구성원 다음 세션부터 반영'); back.remove(); await reloadSections();
+      } catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; st.textContent = ''; }
+    };
+  }
+  async function reloadSections() {
+    try { const r = await api('/api/ui/org'); if (r && r.sections) data.sections = r.sections; } catch (_) { /* 유지 */ }
+    paintSections();
+  }
+  function orderedSections() {
+    return Object.entries(data.sections || {}).map(([name, s]) => ({ name, ...(s as any) }))
+      .sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name));
+  }
+  async function moveSection(i, dir) {
+    const entries = orderedSections(); const j = i + dir;
+    if (j < 0 || j >= entries.length) return;
+    const order = entries.map((e) => e.name);
+    [order[i], order[j]] = [order[j], order[i]];
+    try { await api('/api/ui/org/sections/order', { method: 'POST', body: JSON.stringify({ order }) }); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  async function deleteSectionUi(s) {
+    const warn = s.name === guideKey ? '⚠ 시스템 가이드입니다 — 삭제하면 AI 가 라이블리 사용법(맥락·카테고리·지식 기록)을 잃습니다.\n\n' : '';
+    if (!confirm(warn + "'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다(휴지통에서 복원 가능).")) return;
+    try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제됨'); await reloadSections(); }
+    catch (e) { toast(e.message, true); }
+  }
+  const sectionsWrap = el('div', { class: 'inj-pieces' });
+  function paintSections() {
+    const entries = orderedSections();
+    const rows = entries.map((s, i) => {
+      const isGuide = s.name === guideKey;
+      const acts: any[] = [];
+      if (canEdit) {
+        const up = el('button', { class: 'btn btn-ghost btn-sm', text: '▲', title: '위로' }); up.disabled = i === 0; up.onclick = () => moveSection(i, -1);
+        const down = el('button', { class: 'btn btn-ghost btn-sm', text: '▼', title: '아래로' }); down.disabled = i === entries.length - 1; down.onclick = () => moveSection(i, +1);
+        const ed = el('button', { class: 'btn btn-ghost btn-sm', text: '편집' }); ed.onclick = () => openSectionEditor(s.name, {});
+        const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제' }); del.onclick = () => deleteSectionUi(s);
+        acts.push(up, down, ed, del);
+      }
+      return el('div', { class: 'inj-piece' },
+        el('span', { class: 'inj-n', text: String(i + 1) }),
+        el('div', { class: 'inj-piece-body' },
+          el('div', { class: 'inj-piece-label' }, s.name, isGuide ? el('span', { class: 'pill', title: '시스템 가이드 — 수정·삭제 주의', text: ' ⚠ 시스템 가이드' }) : null),
+          el('div', { class: 'admin-hint inj-sub', text: SECTION_HINT[s.name] || ('v' + (s.version || 1) + ' · 갱신 ' + (s.updated_by || '—')) })),
+        el('div', { class: 'admin-actions' }, ...acts));
+    });
+    sectionsWrap.replaceChildren(
+      ...rows,
+      canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
       el('div', { class: 'inj-subpieces' },
-        el('div', { class: 'admin-hint inj-sub', text: '└ 가이드 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐:' }),
-        subPieceRow('${rules}', '항상-주입 지식', 'injection=always 로 표시한 지식 전문(규칙·페르소나) · 가이드 맨 위', jump('WIKI(always) →', '#/knowledge?injection=always')),
-        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동 생성(편집 불가)', null),
-        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) · 가이드 맨 끝', jump('WIKI 인덱스 →', '#/knowledge/pinned')))),
+        el('div', { class: 'admin-hint inj-sub', text: '└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):' }),
+        subPieceRow('${team}', '우리 팀', '보는 구성원의 팀·소유 카테고리 프리앰블 — 자동', null),
+        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
+        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge?indexed=1'))));
+  }
+  paintSections();
+
+  const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 섹션 문서들을 sort 순으로 조립. 추가/편집/삭제/재정렬 가능.',
+    momentToggle('session_preload'),
+    sectionsWrap,
     previewExpander(),
     customList('SessionStart'));
 
@@ -1408,7 +1755,7 @@ function injectionMap(detail, data) {
 
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('세션 주입 지도', null),
-    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 각 맥락 조각의 “편집”은 그 조각의 정식 위치(규칙·소개 섹션 또는 WIKI 탭)로 이동합니다 — 여기서 새로 만드는 게 아니라 한 지도에서 전부 도달합니다.' }),
+    el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
     el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
 }
@@ -2200,6 +2547,196 @@ function copyButton(getText, label) {
   });
   return b;
 }
+// 우측 상단 '내 프로필' — 인증된 구성원이 자기 표시 이름·개인 레이어를 직접 편집(셀프 서비스, 선택형).
+//  관리자 경로(관리▸구성원) 없이 본인이 채운다. 권한·이메일·상태·계정연결·내부 아이디는 admin 전용(여기 없음).
+//  개인 레이어는 자유 텍스트(body_md)로 저장되지만 편집 UI 는 '고르기' — 항목별 선택지를 제시하고 선택을
+//  canonical markdown 으로 직렬화한다. 다시 열면 그 markdown 을 파싱해 선택을 복원한다(parseMyProfile).
+//  데이터: GET /api/ui/me/profile 1회 → 저장 POST /api/ui/me/profile(id 는 서버가 principal 로 강제 — 타인 편집 불가).
+const PROF_DEV = [
+  { v: '비개발', label: '비개발', hint: '코드는 직접 안 봐요 — 기술용어는 풀어서, 결론·근거 위주로' },
+  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있어요 — 핵심 코드는 보여주되 설명을 곁들여' },
+  { v: '능숙', label: '능숙', hint: '직접 짜고 방향도 제시해요 — 코드 중심으로 적당히 깊게' },
+  { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
+];
+const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '발랄·위트 있게'];
+const PROF_LEN = [
+  { v: '짧게', hint: '핵심만 — 군더더기 없이' },
+  { v: '보통', hint: '적당한 설명과 함께' },
+  { v: '자세히', hint: '배경·근거·대안까지 충분히' },
+];
+
+// 단일 선택 chip 그룹 — selected.v 를 토글(다시 누르면 해제). getVal/getLabel 로 옵션 모양에 무관.
+function profChips(opts, selected, getLabel, getVal, onPick?) {
+  const wrap = el('div', { class: 'prof-chips' });
+  const chips: any[] = [];
+  opts.forEach((o) => {
+    const val = getVal(o);
+    const chip = el('button', { type: 'button', class: 'prof-chip' + (val === selected.v ? ' on' : ''), text: getLabel(o) });
+    chip.addEventListener('click', () => {
+      selected.v = (selected.v === val) ? '' : val;
+      chips.forEach((c) => c.el.classList.toggle('on', c.val === selected.v));
+      if (onPick) onPick(selected.v);
+    });
+    chips.push({ el: chip, val });
+    wrap.append(chip);
+  });
+  return wrap;
+}
+
+// canonical body_md → 선택값 복원. 기본 견본(채워넣기/local.md)은 빈값으로(새로 시작).
+function parseMyProfile(md) {
+  const r = { role: '', dev: '', address: '', tone: '', len: '', area: '', tools: '', memo: '' };
+  if (!md || /채워넣기|members\/local\.md/.test(md)) return r;
+  const parts = md.split(/^##\s*추가 메모\s*$/m);
+  const head = parts[0] || '';
+  if (parts[1]) r.memo = parts[1].trim();
+  const grab = (re) => { const m = head.match(re); return m ? m[1].trim() : ''; };
+  r.role = grab(/^[-*\s]*\**\s*역할\s*\**\s*[:：]\s*(.+)$/m);
+  const dev = grab(/^[-*\s]*\**\s*개발[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  r.dev = (PROF_DEV.find((d) => dev.startsWith(d.label)) || ({} as any)).v || '';
+  r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
+  r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
+  const len = grab(/^[-*\s]*\**\s*응답\s*길이\s*\**\s*[:：]\s*(.+)$/m);
+  r.len = (PROF_LEN.find((l) => len.startsWith(l.v)) || ({} as any)).v || '';
+  r.area = grab(/^[-*\s]*\**\s*담당[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  r.tools = grab(/^[-*\s]*\**\s*자주[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  return r;
+}
+
+// 업로드 이미지 → 128px 정사각(center-crop) JPEG data URL. 작게 만들어 org_member.avatar 에 인라인 저장.
+function fileToAvatarDataUrl(file): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) { reject(new Error('이미지 파일만 올릴 수 있어요')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('파일을 읽지 못했습니다'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const size = 128;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('이미지를 처리하지 못했습니다')); return; }
+        const s = Math.min(img.width, img.height); // 짧은 변 기준 정사각 center-crop
+        ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => reject(new Error('이미지를 불러오지 못했습니다'));
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function openMyProfile() {
+  let data;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
+  const p = parseMyProfile(data.body_md || '');
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const roleIn = el('input', { type: 'text', value: p.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
+  const addressIn = el('input', { type: 'text', value: p.address, placeholder: '예: 원준님 / 대표님 / 원준' });
+  const areaIn = el('input', { type: 'text', value: p.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
+  const toolsIn = el('input', { type: 'text', value: p.tools, placeholder: '예: context-ontology, Cursor, Figma' });
+  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+  memoTa.value = p.memo;
+
+  // ── 아바타 — 업로드 이미지(없으면 이니셜+색상 자동). undefined=변경없음, null=기본으로, string=새 이미지. ──
+  let avatarState: string | null | undefined;
+  const avaPreview = el('span', { class: 'prof-ava-preview' });
+  const renderAva = () => {
+    const cur = avatarState === undefined ? (data.avatar || null) : avatarState;
+    const nm = nameIn.value.trim() || data.display_name || data.email || data.id || '';
+    avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg'));
+  };
+  const fileIn = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  const uploadBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '사진 올리기' });
+  const removeBtn = el('button', { type: 'button', class: 'btn-text', text: '기본 이미지로' });
+  uploadBtn.addEventListener('click', () => fileIn.click());
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files && fileIn.files[0]; if (!f) return;
+    try { avatarState = await fileToAvatarDataUrl(f); renderAva(); }
+    catch (e) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
+    fileIn.value = '';
+  });
+  removeBtn.addEventListener('click', () => { avatarState = null; renderAva(); });
+  nameIn.addEventListener('input', renderAva); // 이름 바꾸면 폴백 이니셜도 갱신
+  renderAva();
+  const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview,
+    el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
+      el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 이름 이니셜로 자동 생성됩니다.' })));
+
+  const devSel = { v: p.dev };
+  const devHint = el('p', { class: 'prof-hint' });
+  const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 기술 답변 깊이를 맞춰요.'; };
+  const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
+  renderDevHint();
+
+  const toneSel = { v: p.tone };
+  const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
+
+  const lenSel = { v: p.len };
+  const lenHint = el('p', { class: 'prof-hint' });
+  const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
+  const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
+  renderLenHint();
+
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+
+  const back = overlay('내 프로필',
+    el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
+      text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }),
+    field('프로필 사진', avaRow),
+    field('표시 이름', nameIn),
+    data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    field('역할', roleIn),
+    field('개발 이해도', el('div', {}, devChips, devHint)),
+    field('호칭 (AI가 나를 부르는 말)', addressIn),
+    field('말투', toneChips),
+    field('응답 길이', el('div', {}, lenChips, lenHint)),
+    field('담당 영역', areaIn),
+    field('자주 쓰는 도구·레포', toolsIn),
+    field('추가 메모', memoTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status));
+
+  saveBtn.addEventListener('click', async () => {
+    // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
+    const lines: string[] = [];
+    if (roleIn.value.trim()) lines.push('- 역할: ' + roleIn.value.trim());
+    const d = PROF_DEV.find((x) => x.v === devSel.v);
+    if (d) lines.push('- 개발 이해도: ' + d.label + ' — ' + d.hint);
+    if (addressIn.value.trim()) lines.push('- 호칭: ' + addressIn.value.trim());
+    if (toneSel.v) lines.push('- 말투: ' + toneSel.v);
+    const l = PROF_LEN.find((x) => x.v === lenSel.v);
+    if (l) lines.push('- 응답 길이: ' + l.v + ' — ' + l.hint);
+    if (areaIn.value.trim()) lines.push('- 담당 영역: ' + areaIn.value.trim());
+    if (toolsIn.value.trim()) lines.push('- 자주 쓰는 도구·레포: ' + toolsIn.value.trim());
+    let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
+    const memo = memoTa.value.trim();
+    if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
+
+    const payload: any = { display_name: nameIn.value.trim(), body_md: body };
+    if (avatarState !== undefined) payload.avatar = avatarState; // null=기본으로, string=새 이미지(미변경이면 생략→보존)
+
+    saveBtn.disabled = true;
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
+      const m = (res && res.member) || {};
+      if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; }
+      // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
+      const label = (m.display_name && m.display_name.trim()) || m.email
+        || (state.me && (state.me.email || state.me.userId)) || '';
+      const ue = document.getElementById('user-email');
+      if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava'), el('span', { text: label }));
+      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
+      back.remove();
+    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+  });
+}
+
 function overlay(title, ...content) {
   const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
   const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
@@ -2227,6 +2764,7 @@ export {
   hasScope,
   installCmd,
   loadAdmin,
+  openMyProfile,
   overlay,
   renderSystem,
 };

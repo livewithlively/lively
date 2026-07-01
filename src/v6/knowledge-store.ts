@@ -13,7 +13,7 @@ import {
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
-   as_of, parent_name, summary, author, source_ref, sort, is_wiki, version, updated_at, updated_by`;
+   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
 
 export interface KnowledgeRow {
@@ -143,7 +143,7 @@ async function embedKnowledgeBestEffort(name: string, fields: { title?: string |
 
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
-  lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean;
+  lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean; type?: string;
 }
 
 export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeRow[]> {
@@ -161,6 +161,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   const wh: string[] = [];
   if (f.injection) { params.push(f.injection); wh.push(`k.injection=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
+  if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
   if (f.lifecycle) { params.push(f.lifecycle); wh.push(`k.lifecycle=$${params.length}`); }
   else wh.push(`k.lifecycle='active'`);
@@ -172,17 +173,21 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
     `SELECT DISTINCT ${K_SEL} FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT $${params.length}`, params);
 }
 
-export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[] }) | undefined> {
+export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
   const k = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   if (!k) return undefined;
   const categories = await q(itemsPool,
     `SELECT kc.category_id, kc.state, c.space, c.key, c.name
      FROM knowledge_category kc JOIN category c ON c.id=kc.category_id WHERE kc.name=$1`, [name]);
-  return { ...k, categories };
+  const links = await listKnowledgeLinks(name);              // #290 지식↔지식(outgoing + 백링크)
+  const sources = await q(itemsPool,                          // #290 인용한 자료(derived_from/cites)
+    `SELECT ks.source_id, ks.relation, s.title, s.kind FROM knowledge_source ks JOIN source s ON s.id=ks.source_id
+     WHERE ks.name=$1 ORDER BY ks.relation`, [name]);
+  return { ...k, categories, links, sources };
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; category?: string[] },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[] },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow> {
   let name: string;
@@ -197,15 +202,20 @@ export async function upsertKnowledge(
     }
   }
   const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
-  // 미분류 금지(2026-06-24): category(분류) key→id 해소. 신규는 1개 이상 필수, 미존재 key 는 INSERT 전 차단(미분류·오타 생성 방지).
+  // 단일 카테고리(#290): 단일 키 문자열 또는 배열(커넥터 호환) 정규화. 미존재 key 는 INSERT 전 차단(미분류·오타 방지).
+  const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
-  for (const key of (input.category ?? [])) {
+  for (const key of catKeys) {
     const cat = await one(itemsPool, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
     if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
     catIds.push((cat as { id: number }).id);
   }
+  // 신규 지식: category(단일) + type(page-type) 둘 다 필수(#290). 기존 편집은 보존(생략 허용).
   if (!before && !catIds.length) {
-    throw new Error("신규 지식은 category(분류) 1개 이상 필수 — category_list 의 key 를 지정하세요(미분류 저장 금지).");
+    throw new Error("신규 지식은 category(분류) 1개 필수 — category_list 의 key 를 지정하세요(단일 분류).");
+  }
+  if (!before && !input.type) {
+    throw new Error("신규 지식은 type(page-type) 필수 — decision|concept|how-to|reference|research|entity 중 하나를 지정하세요.");
   }
   // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값. injection/provenance 는 명시 우선·기존 보존.
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
@@ -215,19 +225,22 @@ export async function upsertKnowledge(
   const summary = input.summary !== undefined ? input.summary : ((before?.summary as string | null) ?? null);
   const sort = input.sort !== undefined ? input.sort : (Number(before?.sort) || 0);
   const isWiki = input.is_wiki !== undefined ? input.is_wiki : ((before?.is_wiki as boolean) ?? false);
+  const type = input.type !== undefined ? input.type : ((before?.type as string | null) ?? null);  // #290 page-type facet(편집이 유실 안 하게 기존 보존)
   await itemsPool.query(
-    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, version, updated_at, updated_by)
-     VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,1,now(),$12)
+    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, version, updated_at, updated_by)
+     VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12,1,now(),$13)
      ON CONFLICT (name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
-       summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki,
+       summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, ctx?.actor ?? null]);
+    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, ctx?.actor ?? null]);
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
-  for (const id of catIds) await linkKnowledgeCategory(name, id, "confirmed", ctx);
+  // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
+  if (catIds.length > 1) console.warn(`[knowledge] '${name}' 단일 카테고리 정책 — 첫 카테고리만 적용(${catIds.length}개 전달).`);
+  if (catIds.length) await linkKnowledgeCategory(name, catIds[0], "confirmed", ctx);
   // 벡터검색(#172) — 임베딩 on 이면 본문 임베딩 갱신(best-effort, off=no-op, 실패해도 저장 성공 보존).
   await embedKnowledgeBestEffort(name, { title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
   return after;
@@ -534,6 +547,8 @@ export async function findRecommendedKnowledge(
 }
 
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
+  // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
+  await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
   await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, state, created_at)
      VALUES($1,$2,'manual',$3,now())
@@ -545,4 +560,59 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
 export async function unlinkKnowledgeCategory(name: string, categoryId: number, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id=$2`, [name, categoryId]);
   await auditKnowledge(name, "unlink_category", { category_id: categoryId }, null, ctx);
+}
+
+// ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
+//  relation=related(대칭)|refines|contradicts|depends_on. FK 가 양 끝 지식 존재를 보장(없으면 INSERT 거부 → capability 에서 클린 에러).
+export interface KnowledgeLinkRow { name: string; relation: string; title: string | null }
+export async function linkKnowledge(fromName: string, toName: string, relation = "related", ctx?: WriteCtx): Promise<void> {
+  if (fromName === toName) throw new Error("자기 자신과 링크할 수 없습니다");
+  await itemsPool.query(
+    `INSERT INTO knowledge_link(from_name, to_name, relation, created_at, updated_at)
+     VALUES($1,$2,$3,now(),now())
+     ON CONFLICT (from_name, to_name, relation) DO UPDATE SET updated_at=now()`,
+    [fromName, toName, relation]);
+  await auditKnowledge(fromName, "link_knowledge", null, { to_name: toName, relation }, ctx);
+}
+export async function unlinkKnowledge(fromName: string, toName: string, relation: string, ctx?: WriteCtx): Promise<void> {
+  await itemsPool.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
+  await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx);
+}
+// 양방향 — outgoing(이 지식이 가리키는) + incoming(이 지식을 가리키는 = 백링크). 비활성 지식은 제외.
+export async function listKnowledgeLinks(name: string): Promise<{ outgoing: KnowledgeLinkRow[]; incoming: KnowledgeLinkRow[] }> {
+  const outgoing = await q(itemsPool,
+    `SELECT l.to_name AS name, l.relation, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.to_name
+     WHERE l.from_name=$1 AND k.lifecycle='active' ORDER BY l.relation, k.updated_at DESC`, [name]);
+  const incoming = await q(itemsPool,
+    `SELECT l.from_name AS name, l.relation, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.from_name
+     WHERE l.to_name=$1 AND k.lifecycle='active' ORDER BY l.relation, k.updated_at DESC`, [name]);
+  return { outgoing, incoming };
+}
+// 지식→자료 인용(knowledge_source). relation=derived_from(증류)|cites(참조).
+export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO knowledge_source(name, source_id, relation, created_at)
+     VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,
+    [name, sourceId, relation]);
+  await auditKnowledge(name, "link_source", null, { source_id: sourceId, relation }, ctx);
+}
+export async function unlinkKnowledgeSource(name: string, sourceId: number, relation: string, ctx?: WriteCtx): Promise<void> {
+  await itemsPool.query(`DELETE FROM knowledge_source WHERE name=$1 AND source_id=$2 AND relation=$3`, [name, sourceId, relation]);
+  await auditKnowledge(name, "unlink_source", { source_id: sourceId, relation }, null, ctx);
+}
+
+// #290 그래프뷰 데이터 — 활성 지식 노드(+단일 카테고리·type) + 모든 지식↔지식 엣지. UI 전용(REST). cap 으로 과대그래프 방지.
+//  단일 카테고리 정책이라 노드당 카테고리 1개(LIMIT 1 은 이행기 다중 잔존 대비 안전장치).
+export async function knowledgeGraphData(limit = 500): Promise<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }> {
+  const nodes = await q(itemsPool,
+    `SELECT k.name, k.title, k.type, k.injection, k.provenance,
+            cat.key AS category, cat.name AS category_name, cat.space AS space
+     FROM knowledge k
+     LEFT JOIN LATERAL (
+       SELECT c.key, c.name, c.space FROM knowledge_category kc JOIN category c ON c.id=kc.category_id
+       WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1
+     ) cat ON true
+     WHERE k.lifecycle='active' ORDER BY k.updated_at DESC LIMIT $1`, [Math.min(limit, 2000)]);
+  const edges = await q(itemsPool, `SELECT from_name, to_name, relation FROM knowledge_link`);
+  return { nodes, edges };
 }

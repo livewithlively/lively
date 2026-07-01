@@ -10,8 +10,7 @@ STORE_URL="${STORE_URL:-http://localhost:8080/mcp}"
 echo "▶ Claude Code"
 claude mcp remove "$MCP_LABEL" 2>/dev/null || true
 claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
-  --header "Authorization: Bearer ${LIVELY_TOKEN}" \
-  --header "x-lively-harness: claude-code"
+  --header "Authorization: Bearer ${LIVELY_TOKEN}"
 
 # ── 추가 MCP 서버(org_mcp_server) — mcp-servers.json 순회 등록(claude). lively 는 위에서 등록됨. ──
 #  소스 우선순위: MCP_SERVERS_FILE env > 번들 ../.lively/mcp-servers.json > ~/.lively/mcp-servers.json.
@@ -47,9 +46,6 @@ cat <<EOF
 [mcp_servers.${MCP_LABEL}]
 url = "${STORE_URL}"
 bearer_token_env_var = "LIVELY_TOKEN"
-
-[mcp_servers.${MCP_LABEL}.http_headers]
-x-lively-harness = "codex"
 EOF
 
 echo
@@ -60,7 +56,7 @@ cat <<EOF
     "${MCP_LABEL}": {
       "type": "http",
       "url": "${STORE_URL}",
-      "headers": { "Authorization": "Bearer \${LIVELY_TOKEN}", "x-lively-harness": "openclaw" }
+      "headers": { "Authorization": "Bearer \${LIVELY_TOKEN}" }
     }
   }
 }

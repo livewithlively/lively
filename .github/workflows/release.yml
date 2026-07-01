@@ -1,0 +1,32 @@
+name: release
+# 태그 푸쉬(vX.Y.Z) → 빌드 → GitHub Release + 설치 번들(context-ontology.tgz) 발행.
+#  번들 = dist + public + kit + deploy + package*.json (node_modules 미포함 = arch 무관).
+#  박스에선 bootstrap.sh 가 이 에셋을 받아 install.sh 실행 → npm ci --omit=dev 로 deps(node-pty) 설치.
+#  설치: curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # 릴리스 생성·에셋 업로드
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build          # dist/ + public/app/ (arch 무관 JS)
+      - name: 설치 번들 패키징 (node_modules 미포함 — 박스에서 npm ci 로 받음)
+        run: |
+          tar -czf context-ontology.tgz \
+            dist public kit deploy docker-compose.yml package.json package-lock.json README.md
+          ls -la context-ontology.tgz
+      - name: GitHub Release 발행 + 에셋 업로드
+        uses: softprops/action-gh-release@v2
+        with:
+          files: context-ontology.tgz
+          generate_release_notes: true

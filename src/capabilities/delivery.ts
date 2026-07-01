@@ -18,7 +18,7 @@ import { assertHookId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
-  getOrgProfile, updateOrgProfile, listSections, updateSection,
+  getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse,
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
@@ -128,12 +128,12 @@ export const deliveryCapabilities: Capability[] = [
       const [profile, sections, members, memory] = await Promise.all([
         getOrgProfile(), listSections(), listMembers(), listMemory(),
       ]);
-      const sectionMap: Record<string, { body_md: string; version: number; updated_at: string | null; updated_by: string | null }> = {};
-      for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by };
+      const sectionMap: Record<string, { body_md: string; version: number; sort: number; updated_at: string | null; updated_by: string | null }> = {};
+      for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, sort: s.sort, updated_at: s.updated_at, updated_by: s.updated_by };
       // 컨텍스트 온톨로지 가이드 섹션 — DB 행이 없으면(편집 전) 코드 기본 템플릿을 채워 편집기가 '현재 유효 텍스트'를 보여준다(version:0=미저장).
       //  buildKnowledgeIndex 도 같은 기본값으로 폴백하므로 화면=실주입 일치. sectionDefaults 는 '기본값 되돌리기' 버튼용.
       for (const [k, def] of Object.entries(GUIDE_SECTION_DEFAULTS)) {
-        if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, updated_at: null, updated_by: null };
+        if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, sort: 99, updated_at: null, updated_by: null };
       }
       // 비-admin: 구성원은 이름/종류/상태만(이메일·신원·개인레이어 redact), 토큰 목록은 비노출.
       const credSet = isAdmin ? await membersWithCredentials() : new Set<string>();
@@ -178,6 +178,15 @@ export const deliveryCapabilities: Capability[] = [
       return { context: await previewMemberContext(name, memberId) };
     }),
 
+  // ── 온보딩 진행상황(SoT) — 웹 '온보딩' 페이지와 하네스 주입(previewMemberContext)이 같은 소스를 소비. ──
+  restRead("org_onboarding", "온보딩 진행상황",
+    "조직 셋업 단계별 완료 여부(회사·페르소나/카테고리/지식/구성원/데이터소스)를 라이브 계산해 반환한다(공유 — 비-admin 도 열람).",
+    [{ method: "GET", paths: ["/api/ui/org/onboarding"], parse: () => ({}) }],
+    async () => {
+      const { computeOnboardingStatus } = await import("../org/onboarding.js");
+      return await computeOnboardingStatus();
+    }),
+
   // ── 컨텍스트 온톨로지 가이드 미리보기 — '이 편집 부분만'(Knowledge Index) 을 렌더한다. ──
   //  body_md(미저장 편집값)를 받아 ${rules}/${area} 를 라이브 데이터로 채워 실제 주입 모습을 보여준다(WYSIWYG, 편집 즉시).
   //  body_md 생략/공백이면 buildKnowledgeIndex 가 코드 기본 템플릿으로 폴백. 공유 맥락 미리보기라 scope null(인증만).
@@ -214,28 +223,48 @@ export const deliveryCapabilities: Capability[] = [
       return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
     }),
 
-  // ── 섹션 markdown 편집 — 강제규칙·회사맥락 + 컨텍스트 온톨로지 가이드(Knowledge Index 전체 템플릿). ──
-  restOnly("org_update_section", "조직 섹션 수정",
-    "강제규칙(managed-policy)·회사맥락(org-defaults)·컨텍스트 온톨로지 가이드(context-ontology-guide) markdown 을 저장한다.",
+  // ── 항상-주입 섹션(injection='always' 문서) 관리 — N개 생성/편집/삭제/재정렬 (#335). ──
+  //  매 세션 컨텍스트에 sort 순으로 조립된다. 죽은 ${rules}(지식-always)·고정 3섹션 화이트리스트 폐기.
+  restOnly("org_update_section", "조직 섹션 저장",
+    "항상-주입 섹션(injection='always' markdown 문서)을 생성/편집한다. 신규는 sort 말미. 본문에 ${team}/${categories}/${wiki} 치환됨.",
     [{ method: "POST", paths: ["/api/ui/org/section"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const section = str(input.section, "section", 50);
-      // 허용 섹션 = 코어 2개 + 가이드 1개(GUIDE_SECTION_DEFAULTS 키). 그 외는 거부(임의 R ku 우회 차단).
-      const isGuide = Object.prototype.hasOwnProperty.call(GUIDE_SECTION_DEFAULTS, section);
-      if (section !== "managed-policy" && section !== "org-defaults" && !isGuide) {
-        throw new HttpError(400, "허용되지 않은 섹션입니다(managed-policy|org-defaults|context-ontology-guide)");
+      const section = str(input.section, "section", 64).trim().toLowerCase();
+      // 섹션 키 = knowledge.name(PK) — 슬러그(소문자·숫자·하이픈, 2–64자)만 허용.
+      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(section)) {
+        throw new HttpError(400, "섹션 키는 소문자·숫자·하이픈만(2–64자) 허용됩니다");
+      }
+      // 이름 충돌 차단 — 같은 name 의 '일반 지식'(injection!=always)을 섹션화(덮어쓰기) 금지. 기존 섹션 편집은 OK.
+      if (await sectionNameInUse(section) === "knowledge") {
+        throw new HttpError(409, `'${section}' 은 이미 일반 지식 이름입니다 — 다른 섹션 키를 쓰세요`);
       }
       const body = str(input.body_md ?? "", "body_md", 60000);
-      // managed-policy 는 32KiB 한도(Codex) — 합성 문서 머리에 항상 실리므로 길면 경고가 아니라 차단.
-      if (section === "managed-policy" && Buffer.byteLength(body, "utf8") > 16 * 1024) {
-        throw new HttpError(400, "강제 규칙이 너무 깁니다(16KiB 초과) — 짧고 절대적인 규칙만 두세요");
+      // 항상-주입 비용 가드 — 섹션은 매 세션 전문이 실린다. 32KiB 초과 차단(과편집·본문 오입력 방지).
+      if (Buffer.byteLength(body, "utf8") > 32 * 1024) {
+        throw new HttpError(400, "섹션이 너무 깁니다(32KiB 초과) — 항상-주입 문서는 짧게 유지하세요");
       }
-      // 가이드 템플릿은 인덱스 골격이라 길지 않아야 한다 — 16KiB 초과 차단(과편집·본문 오입력 방지).
-      if (isGuide && Buffer.byteLength(body, "utf8") > 16 * 1024) {
-        throw new HttpError(400, "가이드가 너무 깁니다(16KiB 초과) — 인덱스 골격 안내만 두세요");
-      }
-      assertNoHardSecrets(body, "body_md"); // P8: 가이드/규칙/맥락은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
+      assertNoHardSecrets(body, "body_md"); // P8: 섹션은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
       return { section: await updateSection(section, body, actorOf(user), "web") };
+    }),
+
+  // ── 섹션 삭제 — 감사 스냅샷 보존(복원가능). 기본 문서(context-ontology-guide 등)도 삭제 가능 — UI 가 경고/확인. ──
+  restOnly("org_delete_section", "조직 섹션 삭제",
+    "항상-주입 섹션을 삭제한다(감사 스냅샷으로 보존 — content_restore 복원가능).",
+    [{ method: "POST", paths: ["/api/ui/org/section/delete"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const section = str(input.section, "section", 64);
+      return { deleted: await deleteSection(section, actorOf(user), "web") };
+    }),
+
+  // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──
+  restOnly("org_reorder_sections", "조직 섹션 순서",
+    "항상-주입 섹션의 주입 순서(sort)를 일괄 설정한다(order 배열 순서대로).",
+    [{ method: "POST", paths: ["/api/ui/org/sections/order"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const order = Array.isArray(input.order) ? input.order.map((x) => String(x)) : [];
+      if (!order.length) throw new HttpError(400, "order 배열이 필요합니다");
+      await setSectionsOrder(order, actorOf(user), "web");
+      return { ok: true };
     }),
 
   // ── 구성원 upsert/remove ──
@@ -385,6 +414,48 @@ export const deliveryCapabilities: Capability[] = [
       return { token, scopes, userId };
     }),
 
+  // ── 본인 프로필 셀프 편집(우측 상단 '내 프로필') — 인증된 구성원이 자기 표시이름·개인레이어를 직접 수정. admin 불요. ──
+  //  id 는 principal 에서 강제(타인 편집 불가). 표시이름·개인레이어(body_md)만 — 권한·이메일·상태·신원·kind 는 admin 전용(불변).
+  restRead("me_profile_get", "내 프로필 조회",
+    "현재 로그인한 구성원의 본인 프로필(표시이름·이메일·개인레이어)을 반환한다 — 우측 상단 '내 프로필' 모달용.",
+    [{ method: "GET", paths: ["/api/ui/me/profile"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const m = await getMember(userId);
+      // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
+      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null };
+    }),
+
+  restRead("me_profile_update", "내 프로필 수정",
+    "현재 로그인한 구성원이 본인 표시이름·개인레이어(body_md)를 직접 수정한다. id 는 principal 강제, 권한·이메일·상태·신원·kind 는 불변(admin 전용).",
+    [{ method: "POST", paths: ["/api/ui/me/profile"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      // 셀프 편집은 기존 구성원행만 수정 — 없으면 생성하지 않는다(기본권한 멤버 자가생성 차단).
+      const existing = await getMember(userId);
+      if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
+      // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
+      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
+      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
+      // 아바타 — data:image data URL(클라이언트 128px 리사이즈). undefined=보존, null/''=이니셜로 되돌림.
+      let avatar: string | null | undefined;
+      if (input.avatar !== undefined) {
+        const raw = input.avatar === null ? "" : str(input.avatar, "avatar", 300000).trim();
+        if (raw && !/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(raw)) {
+          throw new HttpError(400, "이미지 형식이 올바르지 않습니다 (png·jpg·webp·gif)");
+        }
+        if (raw.length > 256 * 1024) throw new HttpError(400, "이미지가 너무 큽니다 — 더 작게 잘라 올려주세요");
+        avatar = raw || null;
+      }
+      // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
+      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar } };
+    }),
+
   restOnly("org_token_revoke", "토큰 회수",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
@@ -425,7 +496,12 @@ export const deliveryCapabilities: Capability[] = [
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
       const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice, write_tools: c.write_tools, auto_approve: autoApprove };
+      // 너지 '유효값' 서빙(#270): 어드민 오버라이드가 없으면 서버 단일소스 DEFAULT_WRITEBACK_NOTICE 를 fold 해 준다.
+      //  → session-preload 가 이 값을 매 세션 ~/.lively/hooks-config.json 에 기록 → 게이트가 라이브로 사용
+      //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
+      //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
+      //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts)를 저장한다.",

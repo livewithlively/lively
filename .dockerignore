@@ -1,0 +1,16 @@
+# 빌드 컨텍스트 최소화 + 시크릿 유출 방지. (이미지엔 src·web·public·kit·package*.json·tsconfig 만 필요)
+node_modules
+dist
+.git
+.env
+.env.*
+*.bak*
+*.log
+logs/
+backups/
+var/repos/
+.playwright-mcp/
+ui-preview/
+research/
+runbooks/
+.DS_Store

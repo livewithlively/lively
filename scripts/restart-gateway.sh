@@ -37,6 +37,10 @@ if [[ "$DO_BUILD" == 1 ]]; then
   echo "✓ 빌드 성공"
 fi
 
+# 1.5) styles.css 회귀 가드(#317) — working 이 HEAD 코어 규칙(셀렉터)을 떨궜는지 검사. 비차단(경고만, 배포는 막지 않음).
+#      learn-redesign 류 '옛 base' WIP 가 코어 규칙을 통째로 떨궈 라이브 스타일이 조용히 깨지던 사고(2026-06-30) 재발 방지.
+node scripts/check-css-drops.mjs || echo "  ⚠ 위 styles.css 드랍 — 배포는 계속하되 styles.css 를 HEAD 기준으로 확인하세요." >&2
+
 # 2) plist 재적재(bootout→bootstrap) — EnvironmentVariables(LANG 등) 변경까지 반영. KeepAlive 가
 #    이후 살아있게 유지한다. 이미 로드돼 있으면 bootout 으로 먼저 내린다(없으면 무시).
 echo "▸ 게이트웨이 재적재(plist 반영)…"

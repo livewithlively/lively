@@ -41,6 +41,8 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
     -- scopes = 구성원 권한(발급 토큰의 scope). memory 기본 포함(단일 공유 풀=에이전트 생산·소비, 06-17).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory"]'::jsonb;
+    -- avatar = 셀프 업로드 프로필 이미지(data URL, 클라이언트에서 128px 리사이즈). null/'' = 이니셜+색상 자동생성.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar TEXT;
   `);
   await itemsPool.query(`
     DO $$ BEGIN
@@ -72,6 +74,40 @@ export async function initOrgSchema(): Promise<void> {
       source TEXT);
     CREATE INDEX IF NOT EXISTS org_content_audit_at_idx ON org_content_audit(at DESC);
     CREATE INDEX IF NOT EXISTS org_content_audit_entity_idx ON org_content_audit(entity, entity_key);
+  `);
+
+  // ── mcp_call_log — 하네스 MCP 툴 호출 전수 로그(프로젝트 #318). append-only, FK 없음(행 삭제 후에도 이력 보존). ──
+  //  적재 경로: registerTool 단일 wrap(src/server.ts instrument)이 capability·db·dynamic 3경로의 모든 tools/call 을 포착한다.
+  //   tools/list(목록 조회)는 적재 안 됨 — 실제 호출(핸들러 실행)만 1행. fire-and-forget INSERT(요청 지연 0, 실패는 무시 — fail-open).
+  //  args = redactDeep(시크릿 마스킹) + 큰 문자열 절단 + 총량 캡(src/org/tool-log.ts). 본문 같은 대형 페이로드는 잘려 들어간다.
+  //  읽는 쪽: 직접/LLM 쿼리(db_query 가 이 테이블을 SELECT) + 대시보드 집계(/api/ui/tool-usage → 관리탭 'MCP 호출 통계').
+  //  harness = 접속 신원(x-lively-harness 헤더 우선, 없으면 UA — claude-code/codex/openclaw/null). actor = 토큰 principal(userId).
+  //  ⚠ 보존정책: v1 은 무제한(소팀 볼륨 가정 — 일 수천~수만 행, 90일<1M 행은 postgres 무리 없음). 성장 시
+  //   주기 prune(예: DELETE WHERE called_at < now()-INTERVAL '90 days')를 별도 cron 액션으로 추가한다(현재 미구현).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS mcp_call_log(
+      id BIGSERIAL PRIMARY KEY,
+      called_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      tool TEXT NOT NULL,
+      harness TEXT,
+      actor TEXT,
+      args JSONB,
+      ok BOOLEAN NOT NULL DEFAULT true,
+      error TEXT,
+      duration_ms INT,
+      source TEXT NOT NULL DEFAULT 'mcp');
+    -- 구 컬럼 'at' → 'called_at' 비파괴 개명(#318): db_query 읽기 방화벽 파서(node-sql-parser)가 'at' 를
+    --  AT TIME ZONE 키워드로 오인 → 'SELECT ... at ... FROM mcp_call_log' 가 파싱 실패. 하네스/LLM 가
+    --  직접 조회하는 게 이 테이블의 핵심 용도이므로, 외우게 할 함정을 만들지 않고 컬럼명에서 제거한다.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mcp_call_log' AND column_name='at')
+         AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='mcp_call_log' AND column_name='called_at') THEN
+        ALTER TABLE mcp_call_log RENAME COLUMN at TO called_at;
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS mcp_call_log_at_idx ON mcp_call_log(called_at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_tool_at_idx ON mcp_call_log(tool, called_at DESC);
+    CREATE INDEX IF NOT EXISTS mcp_call_log_harness_at_idx ON mcp_call_log(harness, called_at DESC);
   `);
 
   // ── auth_token — DB 기반 bearer 토큰(정적 AUTH_TOKENS_JSON 의 핫리로드 가능 대체). ──
@@ -255,6 +291,12 @@ export async function initOrgSchema(): Promise<void> {
       ('project_list_v6','builtin',true,true),
       ('project_set_members_v6','builtin',true,true),
       ('project_set_status_v6','builtin',true,true),
+      ('project_list_index_v6','builtin',true,true),
+      ('project_list_create_v6','builtin',true,true),
+      ('project_list_update_v6','builtin',true,true),
+      ('project_list_delete_v6','builtin',true,true),
+      ('project_list_set_members_v6','builtin',true,true),
+      ('project_set_list_v6','builtin',true,true),
       ('repo_create','builtin',true,true),
       ('repo_delete','builtin',true,true),
       ('repo_deprecate','builtin',true,true),
@@ -264,7 +306,13 @@ export async function initOrgSchema(): Promise<void> {
       ('task_create_v6','builtin',true,true),
       ('task_set_status_v6','builtin',true,true),
       ('task_delete_v6','builtin',false,false),
-      ('task_field_delete_v6','builtin',false,false)
+      ('task_field_delete_v6','builtin',false,false),
+      ('knowledge_link','builtin',true,true),
+      ('source_list','builtin',true,true),
+      ('source_get','builtin',true,true),
+      ('source_save','builtin',true,true),
+      ('source_link_knowledge','builtin',true,true),
+      ('source_delete','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;
   `);
 
@@ -621,7 +669,7 @@ export async function initOrgSchema(): Promise<void> {
       ('R','Rule/Policy/Persona','enforced',false,'context','many',10,
         '조직이 모든 AI 세션에 강제하는 규칙·정책·페르소나. "반드시/금지" 같은 행동 규범과 AI 의 말투·역할. 4 본질 종류 중 하나(R·K·H·W).',
         '"항상/반드시/절대" 지켜야 하는 강제 규범이면 R. 한 번 일어난 사실·방법 절차(H)·배경 지식(K)과 구분: R 은 위반하면 안 되는 명령형이다. 페르소나(AI 역할·말투)도 R.',
-        '강제규칙(managed-policy)·회사맥락(org-defaults) 섹션으로 저장. 본문 전체가 보존된다.',
+        '항상-주입 섹션 문서(injection=always)로 저장. 본문 전체가 보존된다.',
         '강제 주입(enforced): 맥락과 무관하게 모든 세션 컨텍스트 최상단에 전문이 그대로 들어간다(R 만 항상 주입).'),
       ('K','Knowledge note','recalled',false,'memory','many',20,
         '지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각, 사실, 도메인 지식, 메모·링크까지 아우르는 일반 지식. 4 본질 종류 중 가장 큰 기본값(R·K·H·W). (구 A/D/F/M/L/Z 흡수.)',
