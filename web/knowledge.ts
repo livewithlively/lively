@@ -1165,9 +1165,7 @@ function openKnowledgeLinkPicker(k, view) {
 
 // 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이.
 async function renderSources(view, _params?) {
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '자', el('span', { class: 'accent', text: '료' })),
-    el('p', { class: 'sub', text: '맥락의 raw 입력 — 회의 전사록·이메일·슬랙·외부 미러. 정제하면 지식이 됩니다(지식과 분리 — 검색·인덱스에 안 섞임).' }));
+  const head = pageHead('자료', '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 여기서 다듬으면 지식이 됩니다.', [], '료');
   const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
   kindSel.setAttribute('aria-label', '종류');
   const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
