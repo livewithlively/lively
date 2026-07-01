@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, logout, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, logout, pageHead, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -253,12 +253,12 @@ async function renderAdmin(view, sub) {
   // 섹션 1개 그룹은 좌측 nav 없이 본문만, 여러 개면 좌 nav + 본문 split.
   const body = soloSection ? detail : el('div', { class: 'split admin-split' }, list, detail);
 
+  // 상태 배지(조직명 / 읽기 전용) — 통일 헤더의 우측 액션 자리로. (#367)
+  const statusEl = canEdit
+    ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
+    : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)');
   view.replaceChildren(el('div', {},
-    el('div', { class: 'card-head admin-head' },
-      el('div', { class: 'admin-head-l' }, el('h2', { text: '관리' })),
-      canEdit
-        ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
-        : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
+    pageHead('관리', '조직·권한, 분류 체계, 연결·데이터 등 시스템 전반을 설정합니다.', [statusEl], '리'),
     groupBar,
     body));
   applyReveal(soloSection ? [detail] : [list, detail]);

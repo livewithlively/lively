@@ -1,5 +1,5 @@
 // domainmap.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { VOCAB_CRUD_DEFAULT_REPO, api, el, errorNote, fmtNum, loadRepos, relTime, stat, state } from './core.js';
+import { VOCAB_CRUD_DEFAULT_REPO, api, el, errorNote, fmtNum, loadRepos, pageHead, relTime, stat, state } from './core.js';
 import { actTypeTag } from './dashboard.js';
 import { skeleton } from './learn.js';
 import { field } from './admin.js';
@@ -32,10 +32,7 @@ async function renderDomainmap(view, params) {
   if (!repos.includes(repo)) repo = repos[0];
   state.dmRepo = repo;
 
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '도메인-코드 ', el('span', { class: 'accent', text: '의존성' })),
-    el('p', { class: 'sub', text: '도메인마다 의도(should)와 코드 구조(is)를 나란히 두고, 둘의 괴리(debt)를 드러냅니다. 아래에서 의도가 어떻게 바뀌어 왔는지, 어떤 커밋이 구조를 바꿨는지도 볼 수 있습니다.' }),
-  );
+  const head = pageHead('도메인 맵', '각 도메인에서 설계 의도와 실제 코드를 나란히 놓고, 둘 사이의 차이를 확인합니다. 의도가 어떻게 바뀌어 왔는지, 어떤 커밋이 코드를 바꿨는지도 볼 수 있습니다.', [], '맵');
 
   // 준비중 안내 — 탭 최상단 경고(프로젝트 #342). 아직 불완전한 기능임을 알린다.
   //  이 탭(#/domainmap=renderDomainmap) 전용 — 카테고리 제품 화면과 공유하는 domainmapBody 엔 넣지 않는다.

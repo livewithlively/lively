@@ -2363,6 +2363,9 @@ body.pjv-tm-open { overflow: hidden; }
 /* 전역 `.empty svg { margin:0 auto 14px }` 의 14px 하단 여백 누수 차단 — 빈 우선순위 깃발 등 메타 아이콘이 위로 떠 보이던 문제. */
 .pjv-proj-meta .pjv-cell-ico { margin: 0; }
 .pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
+/* 폴더 '미분류 — 폴더 지정' 플레이스홀더가 전역 .pjv-cell-ph{font-size:19px}(보드 표의 아이콘 글리프용)를
+   물려받아 텍스트가 과하게 커 보이던 문제 — 메타 안에선 값 텍스트(폴더명, 15px)와 같게 맞춰 크기 튐 제거. */
+.pjv-proj-meta .pjv-cell-ph { font-size: 15px; line-height: 1.4; }
 .pjv-proj-tagpicker { min-width: 244px; padding: 8px; }
 .pjv-proj-tagpicker-list { margin-top: 6px; max-height: 280px; overflow: auto; }
 .pjv-tm-time { display: inline-flex; align-items: center; gap: 8px; }
@@ -3055,9 +3058,7 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 
 /* === 선행/후속 프로젝트 필드(프로퍼티) — #359. 별도 박스(projectEdgesSection) 없애고 상단 프로퍼티로 이관 === */
 /* 프로퍼티 그리드(2열) 맨 아래 한 줄을 풀폭으로 잡고, 그 안에서 다시 좌(선행)/우(후속)로 나눈다. */
-.pjv-proj-meta-edges { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 28px; }
-.pjv-proj-meta-edges .pjv-tm-field { align-items: start; }
-.pjv-proj-meta-edges .pjv-tm-field-ico { align-self: center; }
+/* (선행/후속은 이제 일반 .pjv-tm-field 로 첫 줄에 배치 — 예전 .pjv-proj-meta-edges 풀폭 래퍼 제거, #359 후속) */
 .pjv-proj-edges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; }
 .pjv-edge-chip { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 2px 3px 2px 9px; background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; }
 .pjv-edge-chip-link { color: var(--ink); text-decoration: none; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

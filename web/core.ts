@@ -466,6 +466,27 @@ function interleave(arr, sep) {
   return out;
 }
 
+// ── 공용 페이지 헤더(#367) — 모든 탭 상단 제목을 하나의 형식으로 통일 ──
+// 구조: .page-head > .page-head-row( h1.page-title  [+ .page-head-actions] ) [+ p.sub].
+//  · title  = 탭 이름과 같은 짧은 제목(28px h1) — 페이지마다 손으로 다르게 짜던 것을 여기 한 곳으로.
+//  · sub    = 한 줄 설명(plain, 없으면 생략). 전문용어 대신 쉬운 말로.
+//  · actions= 제목 오른쪽에 붙는 버튼/요소들(+ 추가·🗑 휴지통 등, 없으면 제목만).
+//  · accent = 제목의 뒤쪽 일부를 브랜드 블루로(앱 전반의 관례: 프로'젝트'·지'식'처럼 끝부분 강조). 생략 시 강조 없음.
+function pageHead(title: string, sub?: string | null, actions?: any[], accent?: string): any {
+  const h1 = el('h1', { class: 'page-title' });
+  if (accent && title.endsWith(accent)) {
+    const lead = title.slice(0, title.length - accent.length);
+    if (lead) h1.append(document.createTextNode(lead));
+    h1.append(el('span', { class: 'accent', text: accent }));
+  } else {
+    h1.textContent = title;
+  }
+  const acts = (actions || []).filter(Boolean);
+  const row = el('div', { class: 'page-head-row' }, h1);
+  if (acts.length) row.append(el('div', { class: 'page-head-actions' }, ...acts));
+  return el('div', { class: 'page-head' }, row, sub ? el('p', { class: 'sub', text: sub }) : null);
+}
+
 // ── 아바타(프로필 원형) — 셀프 업로드 이미지가 있으면 그걸, 없으면 이름 이니셜+결정적 색상. ──
 //  projects.ts 의 동명 헬퍼와 알고리즘 동일(드리프트 방지 위해 동일 구현 — 같은 seed→같은 색/이니셜).
 //  projects.ts 가 admin.js 를 import 하므로 여기(core, 무순환)에 둬 main/admin 이 순환 없이 공유.
@@ -514,6 +535,7 @@ export {
   lifecycleDot,
   loadRepos,
   logout,
+  pageHead,
   reducedMotion,
   relTime,
   renderMarkdown,
