@@ -31,6 +31,127 @@ if [ -z "$ORG_DEFAULT_URL" ] && [ -r "$HOME/.lively/gateway-url" ]; then
   if [ -n "$_gw" ]; then case "$_gw" in */mcp) ORG_DEFAULT_URL="$_gw";; *) ORG_DEFAULT_URL="$_gw/mcp";; esac; fi
 fi
 
+# ── Node 부트스트랩 + PATH 영속화 (#355) ────────────────────────
+# 새 맥의 두 함정을 자동으로 없앤다:
+#   (1) claude 설치기는 ~/.local/bin 에 설치만 하고 PATH 영속화는 사용자 몫으로 남긴다(경고만 출력)
+#       → 새 터미널에서 `claude` 가 안 잡힘.  (2) node 가 없어 user-level 설치([3])와 세션 훅
+#       (전부 `node …`)이 통째로 죽고, 그 폴백으로 "번들 폴더에서 실행"만 안내돼 경로 혼란이 생김.
+# 여기서 node 를 무sudo(~/.lively/runtime)로 설치하고, claude·node bin 을 셸 rc 에 비파괴로 영속화한다.
+PATH_ORIG="$PATH"                       # PATH 변경 전 스냅샷(새-셸 PATH 프록시 — rc 중복 방지 판정용)
+NODE_FALLBACK_VERSION="v22.14.0"        # index.json 해석 실패 시 폴백(공식 LTS · 실재 확인됨)
+LIVELY_NODE_DIR="$HOME/.lively/runtime" # 번들 Node 런타임 위치(~/.lively 하위 → 제거 시 함께 삭제)
+PATH_A_BEGIN="# >>> lively-managed (PATH: local-bin) >>>"   # claude 등 ~/.local/bin — 제거해도 보존(claude 소유)
+PATH_A_END="# <<< lively-managed (PATH: local-bin) <<<"
+PATH_B_BEGIN="# >>> lively-managed (PATH: node) >>>"        # 번들 node — uninstall 시 제거
+PATH_B_END="# <<< lively-managed (PATH: node) <<<"
+
+# 설치된(번들) node bin 경로를 echo. 없으면 비어있음 + 비0.
+lively_node_bin() { [ -x "$LIVELY_NODE_DIR/current/bin/node" ] && { echo "$LIVELY_NODE_DIR/current/bin"; return 0; }; return 1; }
+
+# 최신 LTS 버전 해석(node 불필요 — curl/tr/grep/sed). 실패 시 폴백.
+resolve_node_version() {
+  local v
+  v="$(curl -fsSL --max-time 15 https://nodejs.org/dist/index.json 2>/dev/null \
+      | tr '}' '\n' | grep -m1 '"lts":"' | sed -E 's/.*"version":"(v[0-9][0-9.]*)".*/\1/')" || true
+  case "$v" in v[0-9]*) printf '%s' "$v" ;; *) printf '%s' "$NODE_FALLBACK_VERSION" ;; esac
+}
+
+# node 확보: 시스템 node 있으면 사용; 없으면 공식 tarball 을 ~/.lively/runtime 에 설치(무sudo·체크섬 검증). 성공 시 0.
+#   opt-out: LIVELY_NO_NODE=1 · 무프롬프트 강제: LIVELY_AUTO_NODE=1(비대화형은 자동).
+ensure_node() {
+  command -v node >/dev/null 2>&1 && return 0
+  local bin; bin="$(lively_node_bin || true)"
+  if [ -n "$bin" ]; then export PATH="$bin:$PATH"; hash -r; command -v node >/dev/null 2>&1 && { echo "[1.5] Node: 번들 런타임 재사용($(node -v))"; return 0; }; fi
+  if [ "${LIVELY_NO_NODE:-0}" = "1" ]; then echo "[1.5] Node: LIVELY_NO_NODE=1 — 자동설치 건너뜀."; return 1; fi
+  if [ -t 0 ] && [ "${LIVELY_AUTO_NODE:-0}" != "1" ]; then
+    echo "[1.5] Node.js 가 없습니다(user-level 설치·세션 훅에 필요)."
+    local yn; read -rp "      ~/.lively 에 자동 설치할까요(무sudo, lively 제거 시 함께 삭제)? [Y/n] " yn || true
+    case "${yn:-y}" in [Nn]*) echo "      건너뜁니다(정적 병행 경로로 폴백)."; return 1 ;; esac
+  else
+    echo "[1.5] Node.js 미발견 — 자동 설치합니다(무sudo · ~/.lively/runtime)."
+  fi
+  local uarch tararch; uarch="$(uname -m)"
+  case "$uarch" in
+    arm64|aarch64) tararch="arm64" ;;
+    x86_64|amd64)  tararch="x64" ;;
+    *) echo "      ⚠ 미지원 CPU 아키텍처($uarch) — Node 자동설치 건너뜀. 수동 설치 후 재실행하세요."; return 1 ;;
+  esac
+  local ver base url sumurl tmp; ver="$(resolve_node_version)"
+  base="node-${ver}-darwin-${tararch}"
+  url="https://nodejs.org/dist/${ver}/${base}.tar.gz"
+  sumurl="https://nodejs.org/dist/${ver}/SHASUMS256.txt"
+  tmp="$(mktemp -d)"
+  echo "      Node ${ver} (${tararch}) 다운로드 중… (~30MB, 관리자권한 불필요)"
+  if ! curl -fsSL --max-time 180 "$url" -o "$tmp/node.tgz"; then
+    echo "      ✗ Node 다운로드 실패(네트워크?) — 건너뜁니다. 나중에 setup 을 다시 실행하면 재시도합니다."; rm -rf "$tmp"; return 1
+  fi
+  # 무결성 검증(공급망 위생): SHASUMS256 확보되면 강제(불일치 중단), 못 받으면 경고 후 진행(TLS 다운로드).
+  if curl -fsSL --max-time 30 "$sumurl" -o "$tmp/SHASUMS256.txt" 2>/dev/null; then
+    local want got
+    want="$(awk -v f="${base}.tar.gz" '$2==f{print $1}' "$tmp/SHASUMS256.txt")"
+    got="$(shasum -a 256 "$tmp/node.tgz" | awk '{print $1}')"
+    if [ -n "$want" ] && [ "$want" != "$got" ]; then
+      echo "      ✗ Node 체크섬 불일치 — 설치 중단(무결성 실패)."; rm -rf "$tmp"; return 1
+    fi
+    [ -n "$want" ] && echo "      ✓ 체크섬 검증 통과"
+  else
+    echo "      · SHASUMS256 확보 실패 — 체크섬 생략(TLS 다운로드로 진행)."
+  fi
+  mkdir -p "$LIVELY_NODE_DIR"
+  rm -rf "${LIVELY_NODE_DIR:?}/$base"
+  if ! tar -xzf "$tmp/node.tgz" -C "$LIVELY_NODE_DIR"; then echo "      ✗ Node 압축 해제 실패."; rm -rf "$tmp"; return 1; fi
+  rm -rf "$tmp"
+  ln -sfn "$LIVELY_NODE_DIR/$base" "$LIVELY_NODE_DIR/current"   # 버전 무관 안정 경로(rc·uninstall 이 참조)
+  local nbin="$LIVELY_NODE_DIR/current/bin"
+  [ -x "$nbin/node" ] || { echo "      ✗ Node 설치 확인 실패."; return 1; }
+  export PATH="$nbin:$PATH"; hash -r
+  echo "      ✓ Node 설치 완료: ~/.lively/runtime/$base ($("$nbin/node" -v))"
+  return 0
+}
+
+# rc 한 개에 센티넬 블록을 비파괴로 머지(백업·멱등). $1=BEGIN $2=END $3=블록전문 $4=라벨
+_wire_rc_block() {
+  local BEGIN="$1" END="$2" block="$3" label="$4"
+  local targets=() f
+  for f in .zshrc .bashrc .bash_profile .profile; do [ -f "$HOME/$f" ] && targets+=("$HOME/$f"); done
+  [ ${#targets[@]} -eq 0 ] && targets=("$HOME/.zshrc")
+  mkdir -p "$HOME/.lively/backups" 2>/dev/null || true
+  local rc short
+  for rc in "${targets[@]}"; do
+    short="${rc/#$HOME/~}"
+    if [ -f "$rc" ] && grep -qF "$BEGIN" "$rc" 2>/dev/null; then echo "      · $short ($label 블록 기존 유지)"; continue; fi
+    local bak="$HOME/.lively/backups/$(basename "$rc").path.bak"   # 최초(pristine) 스냅샷만 유지 — 덮어쓰지 않음
+    [ -f "$rc" ] && [ ! -f "$bak" ] && cp "$rc" "$bak" 2>/dev/null || true
+    { [ -s "$rc" ] && printf '\n'; printf '%s\n' "$block"; } >> "$rc"
+    echo "      ✓ $short 에 $label 블록 추가"
+  done
+}
+
+# claude(~/.local/bin)·번들 node bin 을 셸 rc 에 영속화 → 새 터미널·클로드 훅에서도 잡힘.
+wire_path_rc() {
+  local wired=0
+  if [ -d "$HOME/.local/bin" ]; then
+    case ":$PATH_ORIG:" in
+      *":$HOME/.local/bin:"*) : ;;   # 이미 새-셸 PATH 에 있음 — 스킵(중복 방지)
+      *) _wire_rc_block "$PATH_A_BEGIN" "$PATH_A_END" \
+"$PATH_A_BEGIN
+# claude 등 ~/.local/bin 의 사용자 바이너리를 PATH 에 추가(claude 설치기가 안내하던 그 줄 — lively 가 자동 적용).
+# lively 제거 후에도 남깁니다 — claude 는 사용자 소유라 계속 필요할 수 있습니다.
+if [ -d \"\$HOME/.local/bin\" ]; then case \":\$PATH:\" in *\":\$HOME/.local/bin:\"*) ;; *) export PATH=\"\$HOME/.local/bin:\$PATH\" ;; esac; fi
+$PATH_A_END" "PATH(local-bin)"; wired=1 ;;
+    esac
+  fi
+  if [ -x "$LIVELY_NODE_DIR/current/bin/node" ]; then
+    _wire_rc_block "$PATH_B_BEGIN" "$PATH_B_END" \
+"$PATH_B_BEGIN
+# lively 번들 Node 런타임을 PATH 에 — 세션 훅(node)·설치기 실행에 필요(lively 제거 시 함께 정리됨).
+if [ -x \"\$HOME/.lively/runtime/current/bin/node\" ]; then case \":\$PATH:\" in *\":\$HOME/.lively/runtime/current/bin:\"*) ;; *) export PATH=\"\$HOME/.lively/runtime/current/bin:\$PATH\" ;; esac; fi
+$PATH_B_END" "PATH(node)"; wired=1
+  fi
+  [ "$wired" = 1 ] && echo "      (현재 셸엔 이미 반영됨 — 새 터미널부터 위 rc 가 자동 적용)"
+  return 0
+}
+
 echo
 echo "=== Lively 컨텍스트 셋업 (Mac) ==="
 echo
@@ -62,6 +183,11 @@ else
     exit 1
   fi
 fi
+
+# ── [1.5] Node.js 확인/부트스트랩 (#355) ────────────────────────
+# node 는 user-level 설치([3])와 세션 훅(전부 `node …`)의 런타임이다. 없으면 여기서 무sudo 설치한다.
+# (실패/거절해도 아래 단계는 계속 — 정적 병행 경로로 폴백.)
+ensure_node || true
 
 # ── [2] 토큰 + MCP 게이트웨이 등록 ──────────────────────────────
 # 토큰 값은 화면/로그에 절대 출력하지 않는다.
@@ -147,11 +273,18 @@ elif command -v node >/dev/null 2>&1 && [ -f "$VENDORED" ]; then
   fi
 elif [ -d "$ROOT_DIR/org" ] || [ -f "$ROOT_DIR/AGENTS.md" ]; then
   echo "[3] node 미발견 — user-level 설치 불가."
-  echo "    이 폴더에서 직접 \`claude\` 를 켜면 정적 CLAUDE.md/AGENTS.md 가 자동 로드됩니다(병행 경로)."
+  echo "    아래 폴더에서 직접 \`claude\` 를 켜면 정적 CLAUDE.md/AGENTS.md 가 자동 로드됩니다(병행 경로):"
+  echo "        cd \"$ROOT_DIR\" && claude"
   echo "    Node.js 설치 후 setup 을 다시 실행하면 어디서든 켜는 user-level 설치가 됩니다."
 else
   echo "[3] node 또는 설치기 미발견 — user-level 설치 건너뜀."
 fi
+
+# ── [3.5] PATH 영속화 (#355) ────────────────────────────────────
+# claude(~/.local/bin)·번들 node bin 을 셸 rc 에 비파괴로 심어, 새 터미널과 클로드 세션 훅(bare `node`)
+# 에서도 잡히게 한다. (claude 설치기는 이 영속화를 안 해줘 `claude` not found 를 유발하던 버그를 없앰.)
+echo "[3.5] PATH 영속화(claude·node — 새 터미널/훅용)"
+wire_path_rc
 
 # ── [4] 마무리 ──────────────────────────────────────────────────
 echo
@@ -161,7 +294,10 @@ if [ "$USER_LEVEL_DONE" = "1" ]; then
   echo "  2) **아무 폴더**(자기 코드 레포 포함)에서 \`claude\` 를 켜면 회사 맥락+리플렉스가 따라옵니다."
   echo "     (user-level 설치 — 실행 디렉토리 무의미. 훅은 설정 스냅샷 특성상 **다음 세션부터** 적용.)"
 else
-  echo "  2) 이 폴더(/install 번들 루트)에서 \`claude\` 를 켜세요(정적 컨텍스트 자동 로드)."
+  echo "  2) 아래 폴더에서 \`claude\` 를 켜세요(정적 컨텍스트 자동 로드):"
+  echo "         cd \"$ROOT_DIR\" && claude"
+  echo "     · 이 경로가 /tmp 아래면 재부팅 시 사라질 수 있습니다 — Node.js 설치 후 setup 을 다시 실행하면"
+  echo "       어느 폴더에서 켜든 따라오는 user-level 설치가 됩니다(위 [1.5] 에서 Node 자동설치 시도)."
 fi
 echo "  · incognito(전부 off): 환경변수 LIVELY_OFF=1"
 if [ "$HAVE_CODEX" = "1" ]; then
