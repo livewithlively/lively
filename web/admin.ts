@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, logout, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -1155,7 +1155,7 @@ function showInitialAccount(id, name, email, password, data) {
     field('이메일 (로그인 아이디)', el('div', { class: 'admin-ro', text: email || '⚠ 이메일 미설정 — 멤버에 이메일을 넣어야 로그인됩니다' })),
     el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '임시 비밀번호' }), copyButton(() => password, '비밀번호 복사')),
     el('pre', { class: 'admin-preview', text: password }),
-    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → [시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다. (비밀번호는 첫 로그인 후 변경 권장.)' }));
+    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.' }));
 }
 
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
@@ -2672,6 +2672,72 @@ function fileToAvatarDataUrl(file): Promise<string> {
   });
 }
 
+// ── 비밀번호 변경 모달 (#444) ──
+// 두 진입: (a) 임시 비번(must_change) 로그인 직후 강제 변경(forced=닫기 불가, 현재 비번은 방금 임시 비번 자동),
+//  (b) '내 프로필' 모달의 [비밀번호 변경](상시, 취소 가능). 백엔드 POST /api/ui/password(현재→새, 8자+).
+//  보안: el()/textContent 만(innerHTML 금지). 모달 셸은 .ov-* 재사용.
+const PW_INPUT_STYLE = 'width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid var(--line); border-radius:9px; font-size:14px; background:var(--bg); color:var(--ink);';
+function pwFieldRow(label, input) {
+  return el('label', { style: 'display:flex; flex-direction:column; gap:5px; margin-bottom:12px;' },
+    el('span', { style: 'font-size:12.5px; font-weight:600; color:var(--ink-sub);', text: label }), input);
+}
+function changePasswordModal(o?: { forced?: boolean; currentPrefill?: string | null }): void {
+  const forced = !!(o && o.forced);
+  const presetCurrent = (o && o.currentPrefill) || '';
+
+  const head = el('div', { class: 'ov-head' }, el('h3', { text: forced ? '새 비밀번호 설정' : '비밀번호 변경' }));
+  const box = el('div', { class: 'ov-box', style: 'max-width:440px' }, head);
+  const back = el('div', { class: 'ov-back' }, box);
+  const close = () => back.remove();
+  if (!forced) { // 강제(forced) 모드는 닫기 불가 — 새 비번을 설정해야만 진행.
+    head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: close }));
+    back.addEventListener('click', (e: any) => { if (e.target === back) close(); });
+    document.addEventListener('keydown', function esc(ev: any) { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+  }
+
+  const pwInput = (ph, ac) => el('input', { type: 'password', placeholder: ph, autocomplete: ac, style: PW_INPUT_STYLE });
+  const curIn = pwInput('현재 비밀번호', 'current-password');
+  const nextIn = pwInput('새 비밀번호 (8자 이상)', 'new-password');
+  const confIn = pwInput('새 비밀번호 확인', 'new-password');
+  const err = el('p', { class: 'gate-error', hidden: true, style: 'margin:2px 0 10px;' });
+  const showErr = (m) => { err.textContent = m; (err as any).hidden = false; };
+
+  const rows: any[] = [];
+  if (forced) rows.push(el('p', { class: 'admin-hint', text: '임시 비밀번호로 로그인했습니다. 계속하려면 새 비밀번호를 설정하세요.' }));
+  else rows.push(pwFieldRow('현재 비밀번호', curIn));
+  rows.push(pwFieldRow('새 비밀번호', nextIn), pwFieldRow('새 비밀번호 확인', confIn));
+
+  const submit = el('button', { class: 'btn btn-primary', type: 'submit', text: forced ? '설정하고 계속' : '변경' });
+  const secondary = forced
+    ? el('button', { type: 'button', class: 'btn btn-ghost', text: '로그아웃', onclick: () => { close(); logout(); } })
+    : el('button', { type: 'button', class: 'btn btn-ghost', text: '취소', onclick: close });
+  const actions = el('div', { style: 'display:flex; gap:8px; justify-content:flex-end; margin-top:16px;' }, secondary, submit);
+
+  const form = el('form', { style: 'margin:0;' }, ...rows, err, actions);
+  form.addEventListener('submit', async (ev: any) => {
+    ev.preventDefault();
+    const current = forced ? presetCurrent : curIn.value;
+    const next = nextIn.value;
+    const conf = confIn.value;
+    if (!forced && !current) { showErr('현재 비밀번호를 입력하세요.'); return; }
+    if (next.length < 8) { showErr('새 비밀번호는 8자 이상이어야 합니다.'); return; }
+    if (next !== conf) { showErr('새 비밀번호가 일치하지 않습니다.'); return; }
+    if (next === current) { showErr('현재 비밀번호와 다른 비밀번호를 설정하세요.'); return; }
+    (submit as any).disabled = true;
+    try {
+      await api('/api/ui/password', { method: 'POST', body: JSON.stringify({ current, next }) });
+      close();
+      toast('비밀번호가 변경되었습니다.');
+    } catch (e: any) {
+      (submit as any).disabled = false;
+      showErr((e && e.message) || '비밀번호 변경에 실패했습니다.');
+    }
+  });
+  box.append(form);
+  document.body.append(back);
+  setTimeout(() => (forced ? nextIn : curIn).focus(), 0);
+}
+
 async function openMyProfile() {
   let data;
   try { data = await api('/api/ui/me/profile'); }
@@ -2735,6 +2801,9 @@ async function openMyProfile() {
     field('프로필 사진', avaRow),
     field('표시 이름', nameIn),
     data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
     field('역할', roleIn),
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI가 나를 부르는 말)', addressIn),
@@ -2801,6 +2870,7 @@ function overlay(title, ...content) {
 // ════════════════════════════════════════════
 
 export {
+  changePasswordModal,
   copyButton,
   deployCommands,
   field,
