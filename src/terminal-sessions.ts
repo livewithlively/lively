@@ -36,7 +36,7 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
 // ── 큐레이트 허용 루트 ──
 export interface Root { key: string; label: string; base: string; perUser?: boolean; }
 export const ROOTS: Root[] = [
-  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || "/Users/lively/.openclaw/workspace" },
+  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), ".openclaw", "workspace") },
   { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
 ];
 
