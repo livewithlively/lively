@@ -103,6 +103,24 @@ export function resolveRootPath(user: LivelyUser, rootKey: string, subpath: stri
   return { base, abs };
 }
 
+// ── 멀티프로필 / 프로필별 Claude 계정(#346) ──
+//  M1: 프로필 = 세션 owner(멤버). 프로필별 격리된 CLAUDE_CONFIG_DIR(=config·자격증명·MCP)로 claude 를 띄운다.
+//  각 프로필 dir 은 1회 로그인(CLAUDE_CONFIG_DIR=<dir> claude)으로 프로비저닝된다(+키트로 lively MCP·훅 주입).
+//  ⚠ 폴백 불변식: 프로필이 아직 로그인 안 됐으면(.credentials.json 없음) CLAUDE_CONFIG_DIR 을 주입하지 않아
+//    호스트 공유 ~/.claude 를 그대로 쓴다(=오늘 동작, 무회귀). 멀티프로필은 프로필이 준비된 멤버만 opt-in.
+//    LIVELY_MULTIPROFILE=0 이면 전면 비활성(항상 공유) — 롤아웃 kill-switch.
+const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+export function profileConfigDir(user: LivelyUser): string {
+  return path.join(PROFILES_ROOT, userSlug(user), "claude");
+}
+// 프로필이 프로비저닝됐으면(로그인된 자격증명 존재) 그 CLAUDE_CONFIG_DIR 을 반환, 아니면 null(→공유 폴백).
+async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
+  if (process.env.LIVELY_MULTIPROFILE === "0") return null;
+  const dir = profileConfigDir(user);
+  try { await fsp.access(path.join(dir, ".credentials.json")); return dir; }
+  catch { return null; }
+}
+
 async function tmux(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000, env: TMUX_ENV });
   return stdout;
@@ -171,6 +189,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   const args = ["new-session", "-d", "-s", id, "-c", target];
+  // 멀티프로필(#346): 프로필이 프로비저닝된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
+  //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝=주입 안 함→공유 폴백.
+  const profileDir = await resolveProfileConfigDir(user);
+  if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
   if (cmd.length) args.push(...cmd);
   await tmux(args);
   const label = cleanLabel(input.label) || id;
