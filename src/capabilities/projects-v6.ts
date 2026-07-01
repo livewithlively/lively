@@ -566,12 +566,16 @@ const taskSetStatusV6: Capability = {
 const taskUpdateV6: Capability = {
   name: "task_update_v6",
   title: "작업 필드 수정(v6)",
-  description: "작업(task/subtask)의 상태·우선순위·담당자·기간·이름·설명을 패치. 주어진 키만 변경.",
+  description: "작업(task/subtask)의 상태·우선순위·담당자·기간·이름·설명을 패치. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로.",
   scope: "memory",
   input: {
     id: z.number().int().positive(),
     name: z.string().min(1).max(200).optional(),
     description: z.string().max(4000).nullable().optional(),
+    // append 모드 — 본문 끝에 이어붙일 텍스트(원문 보존, 빈 줄로 문단 구분). description(전체 교체)과 동시 지정 불가.
+    append_description: z.string().min(1).max(4000)
+      .describe("본문(description) 끝에 이어붙일 텍스트. 원문을 보존한 채 빈 줄로 구분해 append 한다(전체 교체 없이 보강). description 과 동시 지정 불가.")
+      .optional(),
     status: z.enum(TASK_STATUSES).optional(),
     priority: z.enum(PRIORITIES).nullable().optional(),
     assignee: z.string().nullable().optional(),
@@ -590,6 +594,7 @@ const taskUpdateV6: Capability = {
           patch.name = name;
         }
         if ("description" in b) patch.description = b.description == null ? null : String(b.description);
+        if ("append_description" in b) patch.append_description = String(b.append_description ?? "");
         if ("status" in b) patch.status = parseTaskStatus(b.status);
         if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
         if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
@@ -600,6 +605,11 @@ const taskUpdateV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const { id, ...patch } = input;
+    // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
+    if (patch.description !== undefined && patch.append_description !== undefined)
+      throw new HttpError(400, "description(전체 교체)과 append_description(이어쓰기)은 함께 쓸 수 없습니다");
+    if (patch.append_description !== undefined && !String(patch.append_description).trim())
+      throw new HttpError(400, "append_description 는 비울 수 없습니다");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     const task = await updateTask(id, patch, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task);
