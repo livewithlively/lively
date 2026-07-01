@@ -44,6 +44,21 @@ const log = (s) => console.log(s);
 // ~/.zshrc 등 rc 의 LIVELY_TOKEN 센티넬 블록(install.wireCodexTokenEnv 가 심은 것)을 제거.
 const RC_BEGIN = "# >>> lively-managed (codex LIVELY_TOKEN) >>>";
 const RC_END = "# <<< lively-managed (codex LIVELY_TOKEN) <<<";
+// #355: setup 이 심는 번들 Node PATH 블록(~/.lively/runtime)도 함께 제거 — ~/.lively 삭제와 대칭.
+//  local-bin 블록(# >>> lively-managed (PATH: local-bin) >>>)은 claude 소유라 의도적으로 보존한다.
+const PATH_NODE_BEGIN = "# >>> lively-managed (PATH: node) >>>";
+const PATH_NODE_END = "# <<< lively-managed (PATH: node) <<<";
+
+// text 에서 [begin,end] 센티넬 블록 1개 제거(END 손상 시 begin 한 줄만 제거·아래 보존 — 클로버 금지).
+function stripSentinel(text, begin, end) {
+  const bi = text.indexOf(begin);
+  if (bi === -1) return { text, had: false };
+  const ei = text.indexOf(end, bi);
+  let next;
+  if (ei === -1) { const eol = text.indexOf("\n", bi); const after = eol === -1 ? "" : text.slice(eol + 1); next = (text.slice(0, bi) + after).replace(/\n{3,}/g, "\n\n"); }
+  else next = (text.slice(0, bi) + text.slice(ei + end.length)).replace(/\n{3,}/g, "\n\n");
+  return { text: next, had: true };
+}
 
 export function uninstallRcBlock({ dry = DRY } = {}) {
   // install 은 존재하는 rc 모두(.zshrc/.bashrc/.bash_profile/.profile)에 심을 수 있으므로 동일 후보를 훑는다.
@@ -53,31 +68,24 @@ export function uninstallRcBlock({ dry = DRY } = {}) {
     if (!existsSync(rc)) continue;
     let cur;
     try { cur = readFileSync(rc, "utf8"); } catch { continue; }
-    const bi = cur.indexOf(RC_BEGIN);
-    if (bi === -1) continue;
-    const ei = cur.indexOf(RC_END, bi);
-    let next;
-    if (ei === -1) {
-      // 손상(END 없음) — BEGIN 한 줄만 제거하고 아래 보존(클로버 금지).
-      const eol = cur.indexOf("\n", bi);
-      const after = eol === -1 ? "" : cur.slice(eol + 1);
-      next = (cur.slice(0, bi) + after).replace(/\n{3,}/g, "\n\n");
-    } else {
-      next = (cur.slice(0, bi) + cur.slice(ei + RC_END.length)).replace(/\n{3,}/g, "\n\n");
+    let next = cur; const hits = [];
+    for (const [b, e, label] of [[RC_BEGIN, RC_END, "LIVELY_TOKEN"], [PATH_NODE_BEGIN, PATH_NODE_END, "PATH(node)"]]) {
+      const r = stripSentinel(next, b, e); if (r.had) { next = r.text; hits.push(label); }
     }
+    if (!hits.length) continue;
     next = next.replace(/\s+$/, "") + "\n";
     const short = rc.replace(HOME, "~");
-    if (dry) { log(`  [dry-run] ${short} — LIVELY_TOKEN 센티넬 블록 제거 예정(나머지 보존)`); total++; continue; }
+    if (dry) { log(`  [dry-run] ${short} — ${hits.join("+")} 센티넬 블록 제거 예정(나머지 보존)`); total++; continue; }
     // 백업 먼저(클로버 금지).
     try {
       mkdirSync(join(LIVELY, "backups"), { recursive: true });
       copyFileSync(rc, join(LIVELY, "backups", "zshrc.uninstall.bak"));
     } catch { try { copyFileSync(rc, rc + ".uninstall.bak"); } catch { /* 백업 실패 시에도 진행 — 블록만 제거 */ } }
     writeFileSync(rc, next);
-    log(`  ✓ ${short} — LIVELY_TOKEN 센티넬 블록 제거(나머지 보존)`);
+    log(`  ✓ ${short} — ${hits.join("+")} 센티넬 블록 제거(나머지 보존)`);
     total++;
   }
-  if (total === 0) log("  · ~/.zshrc(및 형제 rc) — lively LIVELY_TOKEN 블록 없음(이미 제거됨/미설치)");
+  if (total === 0) log("  · ~/.zshrc(및 형제 rc) — lively 관리 블록 없음(이미 제거됨/미설치)");
   return total;
 }
 

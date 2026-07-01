@@ -113,6 +113,58 @@ New-Item -ItemType Directory -Force -Path $LivelyDir | Out-Null
 [IO.File]::WriteAllText((Join-Path $LivelyDir "gateway-url"), $GwBase)
 Say "    세션 훅 토큰 기록: ~/.lively/token" DarkGray
 
+# ── [4.7] Node.js 부트스트랩 (없으면 userspace 설치 — #355) ──────
+# user-level 설치([5])와 세션 훅(전부 `node …`)에 Node 가 필요하다. 새 PC엔 없어 [5]가 통째로
+#  스킵되던 것을 없앤다. 공식 zip 을 ~/.lively\runtime 에 풀고 User PATH + 현재 세션에 추가(관리자권한 불필요·
+#  ~/.lively 제거 시 함께 정리). opt-out: 환경변수 LIVELY_NO_NODE=1 · 무프롬프트: LIVELY_AUTO_NODE=1
+if ((-not (Have node)) -and ($env:LIVELY_NO_NODE -ne "1")) {
+  $doNode = $true
+  if ([Environment]::UserInteractive -and ($env:LIVELY_AUTO_NODE -ne "1")) {
+    $ans = Read-Host "[4.7] Node.js 가 없습니다(설치기/훅에 필요). ~/.lively 에 자동 설치할까요? [Y/n]"
+    if ($ans -match '^[Nn]') { $doNode = $false; Say "      건너뜁니다(정적 병행 경로로 폴백)." DarkGray }
+  } else { Say "[4.7] Node.js 미발견 — 자동 설치합니다(관리자권한 불필요 · ~/.lively\runtime)." Yellow }
+  if ($doNode) {
+    try {
+      $arch = if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { "arm64" } else { "x64" }
+      $nver = "v22.14.0"   # index.json 조회 실패 시 폴백(공식 LTS · 실재 확인됨)
+      try {
+        $idx = Invoke-RestMethod -UseBasicParsing -TimeoutSec 15 "https://nodejs.org/dist/index.json"
+        $lts = $idx | Where-Object { $_.lts } | Select-Object -First 1
+        if ($lts -and $lts.version) { $nver = $lts.version }
+      } catch { Say "      · 최신 LTS 조회 실패 — 폴백 $nver 사용" DarkGray }
+      $rt = Join-Path $env:USERPROFILE ".lively\runtime"
+      New-Item -ItemType Directory -Force $rt | Out-Null
+      $bname  = "node-$nver-win-$arch"
+      $zip    = Join-Path $rt "${bname}.zip"
+      $target = Join-Path $rt $bname   # win zip 은 node.exe 가 이 폴더 루트에 있음 → 이 폴더가 bin
+      Say "[4.7] Node $nver ($arch) 다운로드 중… (~30MB, 관리자권한 불필요)" Yellow
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 "https://nodejs.org/dist/$nver/${bname}.zip" -OutFile $zip
+      # 무결성 검증(공급망 위생): SHASUMS256 확보되면 불일치 시 중단, 못 받으면 경고 후 진행.
+      try {
+        $sumtxt = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 "https://nodejs.org/dist/$nver/SHASUMS256.txt").Content
+        $line = ($sumtxt -split "`n" | Where-Object { $_ -match ([regex]::Escape("${bname}.zip") + '\s*$') } | Select-Object -First 1)
+        $want = ($line -replace '\s.*$','').Trim()
+        $got  = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+        if ($want -and ($want.ToLower() -ne $got)) { throw "체크섬 불일치(무결성 실패)" }
+        if ($want) { Say "      체크섬 검증 통과" DarkGray }
+      } catch { Say "      · 체크섬 검증 생략/실패: $($_.Exception.Message)" DarkGray }
+      if (Test-Path $target) { Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue }
+      Expand-Archive -Path $zip -DestinationPath $rt -Force
+      Remove-Item -Force $zip -ErrorAction SilentlyContinue
+      # 현재 세션 + User PATH 에 추가(기존 lively node 경로는 정리 후 앞에 삽입 — 중복/구버전 방지).
+      $env:Path = "$target;$env:Path"
+      $uPath = [Environment]::GetEnvironmentVariable("Path","User")
+      $parts = @($uPath -split ';' | Where-Object { $_ -and ($_ -notlike "*\.lively\runtime\node-*") })
+      [Environment]::SetEnvironmentVariable("Path", ((@($target) + $parts) -join ';'), "User")
+      $nodeBootstrapped = $true   # 갓 설치 — 마무리에서 재시작 안내(#355)
+      if (Have node) { Say "      완료: $target ($(node -v))" Green }
+      else { Say "      설치는 됐지만 이 창에서 인식 안 됨 — 새 PowerShell 에서 이 스크립트를 다시 실행하세요." Yellow }
+    } catch {
+      Say "[4.7] Node 자동설치 실패: $($_.Exception.Message) — 수동 설치(https://nodejs.org) 후 재실행하세요." Yellow
+    }
+  }
+}
+
 # ── [5] user-level 설치 (컨텍스트 + 훅) ─────────────────────────
 # 번들 동봉 설치기(setup/user-install.mjs)로 ~/.lively + ~/.claude(비파괴 머지) 설치 →
 #   이후 어느 폴더에서 claude 를 켜든 컨텍스트+리플렉스가 따라온다(D2/D3). Node 필요.
@@ -160,5 +212,10 @@ if ($UserLevelDone) {
 }
 Say "  · incognito(전부 off): 환경변수 LIVELY_OFF=1" DarkGray
 Say "  · 업데이트/제거: setup/update-windows.ps1 / setup/uninstall-windows.ps1 (설치된 토큰 자동 사용)" DarkGray
+if ($nodeBootstrapped) {
+  Say "`n  ⚠ 방금 Node.js 를 새로 설치했습니다(~/.lively\runtime)." Yellow
+  Say "    지금 열려있던 터미널/claude 세션은 아직 이 경로를 몰라 훅이 'node: command not found' 로 실패할 수 있습니다." Yellow
+  Say "    → **새 PowerShell/터미널을 열고 claude 를 다시 켜세요.**(방금 추가한 Node User PATH 가 반영됩니다.)" Yellow
+}
 Say "`n처음 실행이면 브라우저 로그인 창이 뜹니다(회사 계정으로 로그인)." DarkGray
 Read-Host "엔터를 누르면 이 창이 닫힙니다"

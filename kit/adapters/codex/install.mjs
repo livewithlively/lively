@@ -101,9 +101,13 @@ const LEGACY_BEGINS = [
 
 // user-level 훅 command — Windows: `env` 프리픽스 불가 → 하네스 argv + forward-slash 절대경로.
 //  Mac/Linux: 기존 env 형 유지(idempotency 키 안정). 둘 다 출력 봉투 분기는 session-preload 가 argv/env 로 인식.
+// #355: 번들 node(~/.lively/runtime/current/bin/node — 안정 심링크)가 있으면 그 절대경로로 실행해 실행 셸 PATH 무관.
+//  없으면(시스템 node) 기존대로 `node`(PATH 탐색). Windows 는 User PATH 로 처리 — bare 유지.
+const bundledNode = join(LIVELY, "runtime", "current", "bin", "node");
+const NODEBIN = (process.platform !== "win32" && existsSync(bundledNode)) ? bundledNode : "node";
 const hookCmd = (script) => process.platform === "win32"
   ? `node "${join(LIVELY, "hooks", script).replace(/\\/g, "/")}" --harness codex`
-  : `env LIVELY_HARNESS=codex node "${join(LIVELY, "hooks", script)}"`;
+  : `env LIVELY_HARNESS=codex "${NODEBIN}" "${join(LIVELY, "hooks", script)}"`;
 
 // lively-managed config.toml 블록 본문 생성(센티넬 사이에 들어갈 내용).
 //  gatewayUrl 은 /mcp 가 붙은 Streamable HTTP 엔드포인트. 토큰 리터럴 없음.

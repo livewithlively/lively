@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus, profileStatusFor, provisionProfile } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
@@ -71,6 +71,32 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.
       profile: await profileStatus(userOf(req)),
     });
+  }));
+
+  // ── 멀티프로필 프로비저닝(#442) — 관리탭 전용(admin scope). 로그인(OAuth)은 멤버가 웹터미널에서 셀프서비스. ──
+  const requireAdmin = (req: express.Request): void => {
+    if (!userOf(req).scopes?.includes("admin")) throw new HttpError(403, "admin 권한이 필요합니다");
+  };
+  // 멤버별 프로필 상태 목록 — 관리탭이 '누가 프로비저닝/로그인됐나' 표로 보여준다.
+  app.get("/api/ui/terminal/profiles", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const members = (await listMembers().catch(() => []))
+      .filter((m) => m.state !== "inactive" && m.kind !== "system");
+    const profiles = [];
+    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, status: await profileStatusFor(m.id) });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ profiles });
+  }));
+  // 프로필 프로비저닝 — dir + 키트(settings·MCP). 실재 구성원만. 로그인은 별도(응답의 loginHint 로 안내).
+  app.post("/api/ui/terminal/profiles/provision", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
+    if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+    if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
+    const { slug, dir } = await provisionProfile(member);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, member, slug, dir, status: await profileStatusFor(member),
+      loginHint: `로그인(그 멤버 계정): 웹터미널에서 'CLAUDE_CONFIG_DIR=${dir} claude' 실행 후 /login` });
   }));
 
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
