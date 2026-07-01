@@ -136,10 +136,10 @@ const KN_PROVENANCE_HINT = {
 };
 // 작성 주체(#449) — 이 지식을 AI 가 썼는지 사람이 썼는지(confidence 파생: mcp→ai, web→human).
 //  지식 탭 행에서 injection(주입) 칩을 대체한다 — 지식 탭은 recalled 전용이라 주입 칩이 매 행 '검색'으로 반복돼 무의미했다.
-const KN_AUTHOR_LABEL = { ai: 'AI', human: '사람', rule: '규칙', observed: '외부 미러' };
+const KN_AUTHOR_LABEL = { ai: 'AI 작성', human: '사람 작성', rule: '규칙', observed: '외부 미러' };
 const KN_AUTHOR_HINT = {
-  ai: 'AI 에이전트가 작성했습니다 — 사후 검토 대상입니다.',
-  human: '사람이 직접 작성했습니다.',
+  ai: 'AI 에이전트가 작성한 지식입니다.',
+  human: '사람이 직접 작성한 지식입니다.',
   rule: '시스템 규칙으로 정의됐습니다.',
   observed: '외부 시스템에서 미러됐습니다.',
 };
