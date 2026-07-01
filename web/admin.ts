@@ -28,6 +28,8 @@ const ADMIN_SECTIONS = [
   { key: 'teams', label: '팀 관리', meaning: 'team', group: 'access' },
   { key: 'member-add', label: '구성원 추가', meaning: 'member', group: 'access' },
   { key: 'tokens', label: '접속 권한 변경', meaning: null, group: 'access' },
+  // 중앙박스 계정(프로필) — 멤버별 다른 Claude Code 계정(멀티프로필 #346/#442). config·MCP·훅은 여기서 설치, 로그인은 멤버가 웹터미널에서.
+  { key: 'profiles', label: '중앙박스 계정(프로필)', meaning: null, group: 'access' },
   // ②-B WIKI 카테고리 관리 — 지식(위키)의 분류축(사업·제품·시스템 카테고리) CRUD. 제품 카테고리=도메인.
   //  카테고리 탭(#/categories)과 같은 category-store(/api/ui/categories) — 여기 수정이 지식·프로젝트 탭 좌측에 반영.
   { key: 'wiki-categories', label: '카테고리 설정', meaning: null, group: 'wiki' },
@@ -55,7 +57,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -269,6 +271,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'teams') return teamsPanel(detail, data);
   if (sel === 'member-add') return memberAddPanel(detail, data);
   if (sel === 'tokens') return tokensPanel(detail, data);
+  if (sel === 'profiles') return profilesEditor(detail);
   if (sel === 'profile') return profileEditor(detail, data);
   if (sel === 'injection-map') return injectionMap(detail, data);
   if (sel === 'custom-hooks') return customHookEditor(detail, data);
@@ -1071,6 +1074,38 @@ async function showGuidePreview(bodyMd) {
 }
 
 // ── 구성원 ──
+// 중앙박스 계정(프로필) — 멤버별 다른 Claude Code 계정(멀티프로필 #346/#442). 자체 fetch(admin 전용 엔드포인트).
+//  [프로필 만들기]=dir+키트(config·MCP) 설치. 로그인(OAuth)은 인터랙티브라 멤버가 웹터미널에서 셀프서비스.
+async function profilesEditor(detail) {
+  const reload = () => profilesEditor(detail);
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('프로필 상태를 불러오는 중')));
+  let r;
+  try { r = await api('/api/ui/terminal/profiles'); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '프로필을 불러오지 못했습니다'))); return; }
+  const profiles = r.profiles || [];
+  const items = profiles.length ? profiles.map((p) => {
+    const st = p.status || {};
+    const stateText = st.active ? '🔐 로그인됨 (내 계정)' : st.provisioned ? '⏳ 프로비저닝됨 · 로그인 대기' : '— 미설정 (공유 계정 폴백)';
+    const kids: any[] = [el('div', {}, el('strong', { text: p.name }), el('span', { class: 'caption', text: '  ' + p.id + ' · ' + stateText }))];
+    if (!st.provisioned) {
+      kids.push(el('button', { class: 'btn btn-primary', text: '프로필 만들기', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '설치 중… (수십초)';
+        try { await api('/api/ui/terminal/profiles/provision', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('프로필 생성됨 — 이제 이 멤버가 웹터미널에서 로그인하세요'); reload(); }
+        catch (e) { btn.disabled = false; btn.textContent = '프로필 만들기'; toast('실패 — ' + e.message, true); }
+      } }));
+    }
+    if (st.provisioned && !st.loggedIn) {
+      kids.push(el('div', { class: 'caption', text: '로그인: 이 멤버가 웹터미널에서  CLAUDE_CONFIG_DIR=' + (st.dir || '') + ' claude  실행 후 /login' }));
+    }
+    return el('div', { class: 'card' }, ...kids);
+  }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
+  detail.replaceChildren(
+    el('div', { class: 'card' },
+      el('h3', { text: '중앙박스 계정(프로필)' }),
+      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀).' })),
+    ...items);
+}
+
 function membersEditor(detail, data) {
   const canEdit = state.admin.canEdit;
   const meaning = data.meaning['member'];
