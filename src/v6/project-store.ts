@@ -493,7 +493,7 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
 export async function updateTask(
   id: number,
   patch: Partial<{
-    name: string; description: string | null; status: string;
+    name: string; description: string | null; append_description: string; status: string;
     priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null;
   }>,
   ctx?: WriteCtx,
@@ -507,6 +507,13 @@ export async function updateTask(
   const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
   if (patch.name !== undefined) set("name", patch.name);
   if (patch.description !== undefined) set("description", patch.description);
+  // append 모드 — 기존 본문 보존 후 끝에 이어붙인다(전체 교체 아님). SQL 원자적 concat: 빈/NULL 본문이면 구분자 없이,
+  //  아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트). project 본문과 동형(#357).
+  else if (patch.append_description !== undefined) {
+    vals.push(patch.append_description);
+    const p = `$${vals.length}`;
+    sets.push(`description = CASE WHEN description IS NULL OR description = '' THEN ${p} ELSE description || chr(10) || chr(10) || ${p} END`);
+  }
   if (patch.priority !== undefined) set("priority", patch.priority);
   if (patch.assignee !== undefined) set("assignee", patch.assignee);
   if (patch.start_date !== undefined) set("start_date", patch.start_date);
