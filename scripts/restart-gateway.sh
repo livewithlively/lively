@@ -19,7 +19,10 @@ set -euo pipefail
 
 LABEL="io.lvly.context-ontology"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-APP_DIR="/Users/lively/.openclaw/workspace/productivity/context-ontology"
+# APP_DIR = launchd 가 실제 게이트웨이를 띄우는 위치 = plist 의 WorkingDirectory(단일 출처 — 하드코딩 금지).
+#   LIVELY_APP_DIR 로 오버라이드 가능(deploy/bootstrap.sh 관례와 동형).
+APP_DIR="${LIVELY_APP_DIR:-$(plutil -extract WorkingDirectory raw -o - "$PLIST" 2>/dev/null || true)}"
+[[ -n "$APP_DIR" && -d "$APP_DIR" ]] || { echo "✗ APP_DIR 를 plist($PLIST) 의 WorkingDirectory 에서 읽지 못했습니다 — LIVELY_APP_DIR 로 지정하거나 plist 를 확인하세요." >&2; exit 1; }
 HEALTH_URL="http://localhost:8080/ui/"
 DOMAIN="gui/$(id -u)"
 DO_BUILD=1
