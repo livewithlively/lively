@@ -352,9 +352,10 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
 }
 
 // 프로젝트 이름/설명 수정(level='project'). 주어진 키만 변경(부재=무변경, description null=해제).
+//  append_description: 전체 교체 대신 기존 본문 끝에 이어쓰기(원문 보존·보강). description 과 상호배타(capability 가 게이트).
 export async function updateProject(
   id: number,
-  patch: Partial<{ name: string; description: string | null;
+  patch: Partial<{ name: string; description: string | null; append_description: string;
     priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null }>,
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
@@ -366,6 +367,13 @@ export async function updateProject(
   const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
   if (patch.name !== undefined) set("name", patch.name);
   if (patch.description !== undefined) set("description", patch.description);
+  // append 모드 — 기존 본문 보존 후 끝에 이어붙인다. 읽고-쓰기 경합을 피하려 SQL 에서 원자적 concat:
+  //  빈/NULL 본문이면 구분자 없이 그대로, 아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트).
+  else if (patch.append_description !== undefined) {
+    vals.push(patch.append_description);
+    const p = `$${vals.length}`;
+    sets.push(`description = CASE WHEN description IS NULL OR description = '' THEN ${p} ELSE description || chr(10) || chr(10) || ${p} END`);
+  }
   if (patch.priority !== undefined) set("priority", patch.priority);
   if (patch.assignee !== undefined) set("assignee", patch.assignee);
   if (patch.start_date !== undefined) set("start_date", patch.start_date);

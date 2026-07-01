@@ -217,15 +217,20 @@ const projectSetStatusV6: Capability = {
 };
 
 // 프로젝트 이름/설명 수정 — 주어진 키만 패치(name 비우기 불가, description 빈값=해제).
+//  본문(description)은 전체 교체 외에 append_description 으로 원문 보존 후 끝에 이어쓰기(보강)도 가능 — 둘은 상호배타.
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명을 수정한다. 주어진 키만 변경.",
+  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로.",
   scope: "memory",
   input: {
     id: z.number().int().positive(),
     name: z.string().min(1).max(200).optional(),
     description: z.string().max(4000).nullable().optional(),
+    // append 모드 — 본문 끝에 이어붙일 텍스트(원문 보존, 빈 줄로 문단 구분). description(전체 교체)과 동시 지정 불가.
+    append_description: z.string().min(1).max(4000)
+      .describe("본문(description) 끝에 이어붙일 텍스트. 원문을 보존한 채 빈 줄로 구분해 append 한다(전체 교체 없이 보강). description 과 동시 지정 불가.")
+      .optional(),
     priority: z.enum(PRIORITIES).nullable().optional(),
     assignee: z.string().nullable().optional(),
     start_date: z.string().nullable().optional(),
@@ -243,6 +248,7 @@ const projectUpdateV6: Capability = {
           patch.name = name;
         }
         if ("description" in b) patch.description = b.description == null ? null : String(b.description);
+        if ("append_description" in b) patch.append_description = String(b.append_description ?? "");
         if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
         if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
@@ -252,6 +258,11 @@ const projectUpdateV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const { id, ...patch } = input;
+    // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
+    if (patch.description !== undefined && patch.append_description !== undefined)
+      throw new HttpError(400, "description(전체 교체)과 append_description(이어쓰기)은 함께 쓸 수 없습니다");
+    if (patch.append_description !== undefined && !String(patch.append_description).trim())
+      throw new HttpError(400, "append_description 는 비울 수 없습니다");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     const project = await updateProject(id, patch, writeCtx);
     await regenAgents(id);
