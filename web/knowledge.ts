@@ -737,7 +737,7 @@ async function renderKnowledgeDetail(view, name) {
       el('h1', { class: 'detail-title', text: k.title || k.name }),
       lifecycleDot(k.lifecycle)),
     el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }),
-      knInjectChip(k.injection), knProvChip(k.provenance), knTypeChip(k.type),
+      knAuthorChip(k.confidence), knProvChip(k.provenance), knTypeChip(k.type),
       k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null),
     actions.childNodes.length ? actions : null,
     metaWrap,   // 카테고리는 메타데이터 첫 항목으로 편입됨(단독 섹션 폐지)
