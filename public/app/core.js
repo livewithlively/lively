@@ -423,6 +423,19 @@ function hideGate() {
     document.getElementById('gate').hidden = true;
     document.getElementById('app').hidden = false;
 }
+// ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
+async function logout(message) {
+    try {
+        await fetch('/api/ui/logout', { method: 'POST' });
+    }
+    catch (_) { /* noop */ }
+    localStorage.removeItem(TOKEN_KEY);
+    state.me = null;
+    const lb = document.getElementById('logout-btn');
+    if (lb)
+        lb.hidden = true;
+    showGate(message || '로그아웃되었습니다.');
+}
 // ── 에러 표시 헬퍼 ──
 function errorNote(e, prefix) {
     if (e && e.status === 403) {
@@ -515,4 +528,4 @@ function profileAvatar(avatar, name, seed, cls) {
     }
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

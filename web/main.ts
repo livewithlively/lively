@@ -5,7 +5,7 @@ import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTras
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, teardownTerminal } from './terminal.js';
-import { openMyProfile, renderSystem } from './admin.js';
+import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
 
 // ── 라우터 ──
 function parseHash() {
@@ -144,6 +144,7 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
   const err = document.getElementById('gate-error')!;
   const tokenIn = document.getElementById('gate-input') as any;
   const tokenVal = (tokenIn && !tokenIn.hidden) ? tokenIn.value.trim() : '';
+  let forcePw: string | null = null; // 임시 비번(must_change) 로그인 시 강제 변경할 현재(임시) 비번
   try {
     if (tokenVal) {
       // 고급: 토큰 로그인 — /api/ui/me 로 검증 후 localStorage 저장(bearer, 에이전트/서비스용).
@@ -159,12 +160,15 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
       const data = await res.json().catch(() => null);
       if (!res.ok) { err.textContent = (data && data.error) || '로그인에 실패했습니다.'; err.hidden = false; return; }
       localStorage.removeItem(TOKEN_KEY); // 세션 쿠키 사용 — 토큰 불필요
+      // 임시 비번(관리자 발급) 로그인 → 첫 진입 시 새 비번 강제 설정. 방금 입력한 임시 비번을 '현재 비번'으로 넘긴다.
+      if (data && data.mustChange) forcePw = password;
     }
     (document.getElementById('gate-password') as any).value = '';
     if (tokenIn) tokenIn.value = '';
     err.hidden = true;
     hideGate();
     boot();
+    if (forcePw) changePasswordModal({ forced: true, currentPrefill: forcePw }); // 임시 비번이면 강제 변경 모달
   } catch (_) {
     err.textContent = '서버에 연결하지 못했습니다.';
     err.hidden = false;

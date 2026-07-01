@@ -397,6 +397,15 @@ function hideGate() {
   document.getElementById('app')!.hidden = false;
 }
 
+// ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
+async function logout(message?: any) {
+  try { await fetch('/api/ui/logout', { method: 'POST' }); } catch (_) { /* noop */ }
+  localStorage.removeItem(TOKEN_KEY);
+  state.me = null;
+  const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
+  showGate(message || '로그아웃되었습니다.');
+}
+
 
 // ── 에러 표시 헬퍼 ──
 function errorNote(e, prefix) {
@@ -504,6 +513,7 @@ export {
   hideGate,
   lifecycleDot,
   loadRepos,
+  logout,
   reducedMotion,
   relTime,
   renderMarkdown,
