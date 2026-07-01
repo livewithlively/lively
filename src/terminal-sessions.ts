@@ -64,7 +64,7 @@ export interface SessionInfo {
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -220,9 +220,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   const args = ["new-session", "-d", "-s", id, "-c", target];
-  // 멀티프로필(#346): 프로필이 프로비저닝된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
-  //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝=주입 안 함→공유 폴백.
-  const profileDir = await resolveProfileConfigDir(user);
+  // 멀티프로필(#346): 프로필이 프로비저닝·로그인된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
+  //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝/미로그인=주입 안 함→공유 폴백.
+  //  loginProfile(최초 로그인 세션): 로그인 게이트를 우회해 owner 프로필 dir 을 **강제** 주입 — 아직 .credentials.json 이
+  //   없어도(닭-달걀) 그 dir 을 가리켜 거기로 claude 로그인하게 한다. dir 이 없으면 만든다(프로비저닝 전이어도 로그인만은 가능).
+  let profileDir: string | null;
+  if (input.loginProfile) {
+    profileDir = profileConfigDir(user);
+    await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  } else {
+    profileDir = await resolveProfileConfigDir(user);
+  }
   if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
   if (cmd.length) args.push(...cmd);
   await tmux(args);
