@@ -155,6 +155,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 /* 제목 + 우측 액션(예: 🗑 휴지통)을 한 줄에 — 제목은 좌, 액션은 우 끝. */
 .page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
 .page-head-row h1 { margin: 0; }
+/* 제목 오른쪽 액션 묶음(#367 공용 헤더) — + 추가·선택·🗑 휴지통 등. */
+.page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
 .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 10px; }
 .accent { color: var(--blue); }
 .stat-row { display: flex; gap: 32px; flex-wrap: wrap; }
@@ -2777,6 +2779,9 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-row-check.on { background: var(--blue); border-color: var(--blue); }
 .pjv-row-check.on::after { content: '✓'; }
 .pjv-trow-wrap.pjv-row-selected > .pjv-trow { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+/* 드래그 다중선택(#366) — 끄는 동안 텍스트 선택 방지 + 지나온 행 체크박스는 계속 보이게. */
+body.pjv-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+body.pjv-dragging .pjv-row-check { opacity: 1; }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
 /* 제목 우측 호버 아이콘 — ⋯ 버튼과 동일 언어(테두리 없음·작게·muted). 담당자 컬럼과 겹치지 않게 우측 여백. */
 .pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; margin-right: 12px; opacity: 0; transition: opacity .12s ease; }

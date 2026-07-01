@@ -1,5 +1,5 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
+import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
 import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, myCatIdSet } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
@@ -29,7 +29,9 @@ function projectSubBar(active) {
 }
 // 프로젝트 탭 공통 페이지 헤더 — 제목 + 🗑 휴지통 진입점(지식 탭 헤더와 동형). 삭제 프로젝트 복원은 #/trash 공용 페이지.
 function projectPageHead() {
-    return el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '프로', el('span', { class: 'accent', text: '젝트' })), el('div', { style: 'display:flex; gap:8px; align-items:center;' }, el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }))));
+    return pageHead('프로젝트', '우리 팀이 진행 중인 일을 한눈에 보고 관리합니다.', [
+        el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }),
+    ], '젝트');
 }
 // 프로젝트(v2) 진입 — browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
 async function renderProjectsV2(view, sub, params) {
@@ -805,6 +807,8 @@ function pjvProjSessionCell(p, reload) {
 //  선택은 종류(project|task)별로 분리(혼합 금지). 한 화면 안에서만 유효 — 재렌더/이동 시 비운다.
 // ════════════════════════════════════════════════════════════════════════════
 const pjvSel = { kind: null, ids: new Set(), items: new Map(), ctx: null };
+let pjvSelLastEl = null; // 마지막으로 클릭한 체크박스 — Shift+클릭 범위선택의 앵커(#366)
+let pjvSelSilent = false; // 드래그/범위 페인트 중엔 하단 바 재렌더를 억제하고 끝에서 1회만(#366)
 function pjvSelDomClear() {
     document.querySelectorAll('.pjv-row-check.on').forEach((c) => c.classList.remove('on'));
     document.querySelectorAll('.pjv-trow-wrap.pjv-row-selected').forEach((w) => w.classList.remove('pjv-row-selected'));
@@ -815,6 +819,7 @@ function pjvSelReset() {
     pjvSel.ids.clear();
     pjvSel.items.clear();
     pjvSel.ctx = null;
+    pjvSelLastEl = null;
     pjvSelRenderBar();
 }
 function pjvSelToggle(kind, item, ctx) {
@@ -835,7 +840,8 @@ function pjvSelToggle(kind, item, ctx) {
     }
     if (!pjvSel.ids.size)
         pjvSel.kind = null;
-    pjvSelRenderBar();
+    if (!pjvSelSilent)
+        pjvSelRenderBar();
 }
 function pjvSelReloadAfter() { const r = pjvSel.ctx && pjvSel.ctx.reload; pjvSelReset(); if (r)
     r(); }
@@ -1185,19 +1191,127 @@ async function pjvBulkList(anchor) {
     if (!lists.length)
         menu.append(el('div', { class: 'pjv-menu-empty', text: '영역이 없습니다 — ‘보기 › 영역으로’를 켜면 왼쪽에서 ‘＋ 새 영역’으로 만들 수 있어요' }));
 }
+// ── 다중선택 드래그/범위 (#366) — 좌측 체크박스를 눌러 아래로 쭉 끌면 지나온 행이 한 번에 선택된다.
+//  · 드래그: 앵커(누른 체크박스)~현재 포인터 아래 행까지를 '칠한다'. 되돌아오면 범위가 줄어(칠하기 전 상태로 복원).
+//  · Shift+클릭: 직전 클릭 앵커~현재까지를 선택.
+//  체크박스는 같은 kind(프로젝트 XOR 태스크)끼리만 이어진다 — pjvSelToggle 이 kind 혼합을 막기 때문.
+const pjvDrag = { active: false, kind: null, ctx: null, mode: false, anchorEl: null, moved: false, base: null, lastOver: null, suppressClick: false, _init: false };
+// 현재 화면의 같은 kind 체크박스들을 DOM(=시각) 순서로. (자식 서브태스크 체크박스도 문서 순서에 자연히 포함)
+function pjvDragChecks(kind) {
+    return [...document.querySelectorAll('.pjv-row-check')].filter((c) => c._pjvKind === kind);
+}
+// 체크박스 하나를 특정 상태로 세팅(멱등) — pjvSel 상태 + .on + 행 하이라이트를 함께 맞춘다.
+function pjvSetChecked(cb, on) {
+    const kind = cb._pjvKind, item = cb._pjvItem, ctx = cb._pjvCtx;
+    const cur = pjvSel.kind === kind && pjvSel.ids.has(item.id);
+    if (cur !== on)
+        pjvSelToggle(kind, item, ctx);
+    cb.classList.toggle('on', on);
+    const w = cb.closest('.pjv-trow-wrap');
+    if (w)
+        w.classList.toggle('pjv-row-selected', on);
+}
+// 앵커~overCb 범위를 mode 로 칠하고, 범위 밖은 드래그 시작 시점 상태(base)로 복원. 바 재렌더는 1회만.
+function pjvDragPaint(overCb) {
+    const list = pjvDragChecks(pjvDrag.kind);
+    const ai = list.indexOf(pjvDrag.anchorEl);
+    const ci = list.indexOf(overCb);
+    if (ai < 0 || ci < 0)
+        return;
+    const lo = Math.min(ai, ci), hi = Math.max(ai, ci);
+    pjvSelSilent = true;
+    list.forEach((c, i) => {
+        const inRange = i >= lo && i <= hi;
+        pjvSetChecked(c, inRange ? pjvDrag.mode : !!(pjvDrag.base && pjvDrag.base.get(c)));
+    });
+    pjvSelSilent = false;
+    pjvSelRenderBar();
+}
+function pjvDragInit() {
+    if (pjvDrag._init)
+        return;
+    pjvDrag._init = true;
+    document.addEventListener('pointerover', (e) => {
+        if (!pjvDrag.active)
+            return;
+        if (e.buttons === 0) {
+            pjvDragEnd(null);
+            return;
+        } // 창 밖에서 손을 뗀 경우 등 — 끊김 방지
+        const wrap = e.target && e.target.closest && e.target.closest('.pjv-trow-wrap');
+        if (!wrap)
+            return;
+        const cb = wrap.querySelector('.pjv-row-check'); // wrap 자신의 행 체크박스(문서상 첫 .pjv-row-check)
+        if (!cb || cb._pjvKind !== pjvDrag.kind || cb === pjvDrag.lastOver)
+            return;
+        pjvDrag.lastOver = cb;
+        if (cb !== pjvDrag.anchorEl)
+            pjvDrag.moved = true;
+        pjvDragPaint(cb);
+    });
+    document.addEventListener('pointerup', (e) => { if (pjvDrag.active)
+        pjvDragEnd(e); });
+}
+function pjvDragEnd(e) {
+    // 앵커 위에서 손을 뗐고 실제로 끌었다면, 뒤이어 오는 click 이 앵커를 되돌리지 않게 삼킨다.
+    const endOnAnchor = !!(e && e.target && e.target.closest && e.target.closest('.pjv-row-check') === pjvDrag.anchorEl);
+    pjvDrag.suppressClick = pjvDrag.moved && endOnAnchor;
+    pjvDrag.active = false;
+    pjvDrag.base = null;
+    pjvDrag.lastOver = null;
+    document.body.classList.remove('pjv-dragging');
+}
 // ── 행 호버 컨트롤 — 좌측 체크박스 + 우측 아이콘 그룹(추가·태그·이름변경) ──
 function pjvRowCheck(kind, item, ctx) {
+    pjvDragInit();
     const cb = el('button', { class: 'pjv-row-check', type: 'button', 'aria-label': '선택' });
+    cb._pjvKind = kind;
+    cb._pjvItem = item;
+    cb._pjvCtx = ctx;
     if (pjvSel.kind === kind && pjvSel.ids.has(item.id))
         cb.classList.add('on');
+    cb.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0)
+            return; // 좌클릭만
+        pjvDrag.active = true;
+        pjvDrag.kind = kind;
+        pjvDrag.ctx = ctx;
+        pjvDrag.anchorEl = cb;
+        pjvDrag.moved = false;
+        pjvDrag.lastOver = null;
+        pjvDrag.suppressClick = false;
+        const anchorOn = pjvSel.kind === kind && pjvSel.ids.has(item.id);
+        pjvDrag.mode = !anchorOn; // 앵커가 꺼져있었으면 드래그는 '선택', 켜져있었으면 '해제'
+        pjvDrag.base = new Map();
+        for (const c of pjvDragChecks(kind))
+            pjvDrag.base.set(c, c.classList.contains('on'));
+        document.body.classList.add('pjv-dragging'); // 드래그 중 텍스트 선택 방지
+        e.preventDefault(); // 포커스/드래그 선택 억제(click 은 그대로 발생 → 단순 클릭 유지)
+    });
     cb.onclick = (e) => {
         e.stopPropagation();
-        pjvSelToggle(kind, item, ctx);
-        const on = pjvSel.kind === kind && pjvSel.ids.has(item.id);
-        cb.classList.toggle('on', on);
-        const w = cb.closest('.pjv-trow-wrap');
-        if (w)
-            w.classList.toggle('pjv-row-selected', on);
+        if (pjvDrag.suppressClick) {
+            pjvDrag.suppressClick = false;
+            return;
+        } // 드래그 뒤 따라온 click 무시
+        // Shift+클릭 — 직전 앵커~현재까지 같은 kind 를 이어 선택.
+        if (e.shiftKey && pjvSel.kind === kind && pjvSelLastEl && pjvSelLastEl._pjvKind === kind) {
+            const list = pjvDragChecks(kind);
+            const ai = list.indexOf(pjvSelLastEl), ci = list.indexOf(cb);
+            if (ai >= 0 && ci >= 0) {
+                const lo = Math.min(ai, ci), hi = Math.max(ai, ci);
+                pjvSelSilent = true;
+                for (let i = lo; i <= hi; i++)
+                    pjvSetChecked(list[i], true);
+                pjvSelSilent = false;
+                pjvSelRenderBar();
+                pjvSelLastEl = cb;
+                return;
+            }
+        }
+        const on = !(pjvSel.kind === kind && pjvSel.ids.has(item.id));
+        pjvSetChecked(cb, on);
+        pjvSelLastEl = cb;
     };
     return cb;
 }

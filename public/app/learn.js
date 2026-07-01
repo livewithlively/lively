@@ -1,5 +1,5 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, state, sv } from './core.js';
+import { TOKEN_KEY, api, el, errorNote, pageHead, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
@@ -158,7 +158,7 @@ function tabIcon(name) {
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-    const head = el('div', { class: 'page-head' }, el('h1', {}, 'Lively ', el('span', { class: 'accent', text: '시작하기' })), el('p', { class: 'sub', text: '라이블리에서 AI(Claude Code·Codex)를 쓰는 방법은 두 가지입니다. 아래에서 본인 상황을 고르면, 그에 맞춰 차근차근 안내합니다.' }));
+    const head = pageHead('시작하기', '라이블리에서 AI(Claude Code·Codex)로 일하는 방법은 두 가지입니다. 아래에서 지금 상황을 고르면 그에 맞춰 안내합니다.', [], '하기');
     const slot = el('div', { class: 'install-guide' });
     slot.append(skeleton('설치 안내를 준비하는 중'));
     view.replaceChildren(head, slot);
