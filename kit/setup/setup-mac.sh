@@ -38,6 +38,7 @@ fi
 #       (전부 `node …`)이 통째로 죽고, 그 폴백으로 "번들 폴더에서 실행"만 안내돼 경로 혼란이 생김.
 # 여기서 node 를 무sudo(~/.lively/runtime)로 설치하고, claude·node bin 을 셸 rc 에 비파괴로 영속화한다.
 PATH_ORIG="$PATH"                       # PATH 변경 전 스냅샷(새-셸 PATH 프록시 — rc 중복 방지 판정용)
+NODE_BOOTSTRAPPED=0                      # 이번 실행에서 node 를 새로 설치했는지(마무리 재시작 안내 분기 — #355)
 NODE_FALLBACK_VERSION="v22.14.0"        # index.json 해석 실패 시 폴백(공식 LTS · 실재 확인됨)
 LIVELY_NODE_DIR="$HOME/.lively/runtime" # 번들 Node 런타임 위치(~/.lively 하위 → 제거 시 함께 삭제)
 PATH_A_BEGIN="# >>> lively-managed (PATH: local-bin) >>>"   # claude 등 ~/.local/bin — 제거해도 보존(claude 소유)
@@ -105,6 +106,7 @@ ensure_node() {
   local nbin="$LIVELY_NODE_DIR/current/bin"
   [ -x "$nbin/node" ] || { echo "      ✗ Node 설치 확인 실패."; return 1; }
   export PATH="$nbin:$PATH"; hash -r
+  NODE_BOOTSTRAPPED=1
   echo "      ✓ Node 설치 완료: ~/.lively/runtime/$base ($("$nbin/node" -v))"
   return 0
 }
@@ -300,6 +302,14 @@ else
   echo "       어느 폴더에서 켜든 따라오는 user-level 설치가 됩니다(위 [1.5] 에서 Node 자동설치 시도)."
 fi
 echo "  · incognito(전부 off): 환경변수 LIVELY_OFF=1"
+if [ "$NODE_BOOTSTRAPPED" = "1" ]; then
+  echo
+  echo "  ⚠ 방금 Node.js 를 새로 설치했습니다(무sudo · ~/.lively/runtime)."
+  echo "    **지금 열려있던 터미널/claude 세션**은 아직 이 경로를 몰라, 그 세션의 훅이"
+  echo "    'node: command not found' 로 실패할 수 있습니다(페르소나 미주입 · Stop 게이트 무작동)."
+  echo "    → **새 터미널을 열거나  source ~/.zshrc  한 뒤, claude 를 완전히 종료하고 다시 켜세요.**"
+  echo "    (이 설치로 다음 세션부터는 훅이 node 절대경로로 실행돼 이 문제가 재발하지 않습니다.)"
+fi
 if [ "$HAVE_CODEX" = "1" ]; then
   echo
   echo "  [Codex 멤버 추가 안내]"

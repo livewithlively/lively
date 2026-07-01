@@ -60,7 +60,11 @@ const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-ga
 //  Windows: $HOME 셸확장 불가 → forward-slash 절대경로. 제거 매칭은 '.lively/hooks/' 부분문자열(양쪽 포함).
 const fwd = (p) => p.replace(/\\/g, "/");
 const WIN = process.platform === "win32";
-const hookCmd = (script) => WIN ? `node "${fwd(join(LIVELY, "hooks", script))}"` : `node "$HOME/.lively/hooks/${script}"`;
+// #355: 훅이 부트스트랩한 번들 node(~/.lively/runtime/current/bin/node — 안정 심링크)의 절대경로로 실행돼
+//  실행 셸 PATH 와 무관하게 동작하도록. 없으면(시스템 node) 기존대로 PATH 의 `node`. Windows 는 User PATH 로 처리(bare).
+const bundledNode = join(LIVELY, "runtime", "current", "bin", "node");
+const NODEBIN = (!WIN && existsSync(bundledNode)) ? bundledNode : "node";
+const hookCmd = (script) => WIN ? `node "${fwd(join(LIVELY, "hooks", script))}"` : `"${NODEBIN}" "$HOME/.lively/hooks/${script}"`;
 
 // settings-hooks.json 의 matcher/timeout 을 그대로 쓰되 command 만 절대경로로 치환.
 function userLevelHooksBlock() {

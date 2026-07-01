@@ -48,9 +48,15 @@ const cloneAbs = (p) => join(CLONE_ROOT, p);
 const fwd = (p) => p.replace(/\\/g, "/");
 const hookAbs = (script) => fwd(join(LIVELY, "hooks", script));
 const WIN = process.platform === "win32";
-const hookCmd = (script) => WIN ? `node "${hookAbs(script)}"` : `node "$HOME/.lively/hooks/${script}"`;
+// #355: 훅은 하네스가 실행하는 셸의 PATH 로 `node` 를 찾는다 → node 를 갓 설치했거나 rc 를 아직 source 안 한
+//  셸에서 claude/codex 를 켜면 'node: command not found' 로 훅이 죽는다(페르소나 미주입·Stop 게이트 무작동).
+//  부트스트랩한 번들 node(~/.lively/runtime/current/bin/node — 안정 심링크)가 있으면 그 절대경로로 호출해
+//  실행 셸 PATH 와 무관하게 만든다. 없으면(시스템 node) 기존대로 PATH 의 `node`. (Windows 는 User PATH 로 처리 — bare 유지.)
+const bundledNode = join(LIVELY, "runtime", "current", "bin", "node");
+const NODEBIN = (!WIN && existsSync(bundledNode)) ? bundledNode : "node";
+const hookCmd = (script) => WIN ? `node "${hookAbs(script)}"` : `"${NODEBIN}" "$HOME/.lively/hooks/${script}"`;
 // 커스텀 훅 런너 — 이벤트당 고정 엔트리 1개(커스텀 훅 자체는 런너가 런타임에 fetch). 이벤트는 argv 로 전달.
-const hookCmdRunner = (event) => WIN ? `node "${hookAbs("run-custom.mjs")}" ${event}` : `node "$HOME/.lively/hooks/run-custom.mjs" ${event}`;
+const hookCmdRunner = (event) => WIN ? `node "${hookAbs("run-custom.mjs")}" ${event}` : `"${NODEBIN}" "$HOME/.lively/hooks/run-custom.mjs" ${event}`;
 
 // settings-hooks.json 이 발행물에 없을 수 있으니, user-level 훅 블록을 코드로 구성(어댑터와 동일 형태).
 function userLevelHooksBlock() {
@@ -196,11 +202,11 @@ function agentsMerge(existing, ctx) {
 // Windows: `env` 프리픽스 불가 → 하네스는 argv 로. Mac/Linux: 기존 env 형 유지(idempotency 키 안정).
 const codexHookCmd = (script) => WIN
   ? `node "${hookAbs(script)}" --harness codex`
-  : `env LIVELY_HARNESS=codex node "${join(LIVELY, "hooks", script)}"`;
+  : `env LIVELY_HARNESS=codex "${NODEBIN}" "${join(LIVELY, "hooks", script)}"`;   // #355: 번들 node 절대경로(PATH 무관)
 // 커스텀 훅 런너(codex) — codex 가 지원하는 이벤트(SessionStart/PostToolUse/Stop)만 등록. 이벤트는 argv.
 const codexRunnerCmd = (event) => WIN
   ? `node "${hookAbs("run-custom.mjs")}" ${event} --harness codex`
-  : `env LIVELY_HARNESS=codex node "${join(LIVELY, "hooks", "run-custom.mjs")}" ${event}`;
+  : `env LIVELY_HARNESS=codex "${NODEBIN}" "${join(LIVELY, "hooks", "run-custom.mjs")}" ${event}`;
 
 // 추가 MCP 서버(org_mcp_server) TOML 라인 — 발행 묶음 .lively/mcp-servers.json 에서 읽음(lively 제외, enabled 만).
 //  센티넬(CDX_BEGIN..CDX_END) 안에 들어가므로 stripManaged 가 통째 교체 → idempotent·안전. 없으면 lively 만.

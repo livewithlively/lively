@@ -156,6 +156,7 @@ if ((-not (Have node)) -and ($env:LIVELY_NO_NODE -ne "1")) {
       $uPath = [Environment]::GetEnvironmentVariable("Path","User")
       $parts = @($uPath -split ';' | Where-Object { $_ -and ($_ -notlike "*\.lively\runtime\node-*") })
       [Environment]::SetEnvironmentVariable("Path", ((@($target) + $parts) -join ';'), "User")
+      $nodeBootstrapped = $true   # 갓 설치 — 마무리에서 재시작 안내(#355)
       if (Have node) { Say "      완료: $target ($(node -v))" Green }
       else { Say "      설치는 됐지만 이 창에서 인식 안 됨 — 새 PowerShell 에서 이 스크립트를 다시 실행하세요." Yellow }
     } catch {
@@ -211,5 +212,10 @@ if ($UserLevelDone) {
 }
 Say "  · incognito(전부 off): 환경변수 LIVELY_OFF=1" DarkGray
 Say "  · 업데이트/제거: setup/update-windows.ps1 / setup/uninstall-windows.ps1 (설치된 토큰 자동 사용)" DarkGray
+if ($nodeBootstrapped) {
+  Say "`n  ⚠ 방금 Node.js 를 새로 설치했습니다(~/.lively\runtime)." Yellow
+  Say "    지금 열려있던 터미널/claude 세션은 아직 이 경로를 몰라 훅이 'node: command not found' 로 실패할 수 있습니다." Yellow
+  Say "    → **새 PowerShell/터미널을 열고 claude 를 다시 켜세요.**(방금 추가한 Node User PATH 가 반영됩니다.)" Yellow
+}
 Say "`n처음 실행이면 브라우저 로그인 창이 뜹니다(회사 계정으로 로그인)." DarkGray
 Read-Host "엔터를 누르면 이 창이 닫힙니다"
