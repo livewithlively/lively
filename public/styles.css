@@ -3037,9 +3037,10 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* ＋ 글리프(새 영역 버튼 안) */
 .pjv-newlist-plus { font-size: 13px; font-weight: 700; line-height: 1; }
 
+/* 툴바(프로젝트·폴더·필터·… / 내 할당만·Closed)와 아래 본문 사이 여백 — 붙어 보이던 문제 해소, 모든 뷰 일관(#473 후속). */
+.pjv-listboard .card-head { margin-bottom: 20px; }
 /* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
-/*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
-.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
+.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 0; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
 .pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
 .pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
