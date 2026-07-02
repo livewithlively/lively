@@ -97,6 +97,15 @@ function git(args, cwd) {
   return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
 }
 function isRepo(p) { return !!p && git(["rev-parse", "--git-dir"], p).ok; }
+// 재사용 레포를 현재 브랜치 upstream 으로 fast-forward(best-effort·비파괴): dirty·무upstream·갈라짐·오프라인이면 skip.
+//  무인이라 자동 머지·리베이스·충돌 금지 → ff-only 만. @{u} → 기본 클론(main)·직접입력 피처브랜치 모두 브랜치 존중.
+function refreshRepo(p) {
+  const st = git(["status", "--porcelain"], p);
+  if (!st.ok || st.out) return;                     // dirty/확인실패 → skip
+  git(["fetch"], p);                                 // 실패 무시
+  const w = git(["merge", "--ff-only", "@{u}"], p);  // ff 불가 → skip
+  if (w.ok) log(`레포 최신화(ff): ${p}`);
+}
 const expand = (p) => p && p.startsWith("~/") ? path.join(HOME, p.slice(2)) : p;
 
 // repos: --repos base64(JSON [{name?,path?,worktree,branch?,gitUrl?}]) 우선, 없으면 레거시 단일 플래그.
@@ -113,11 +122,14 @@ const usedRepos = [];      // 마커에 기록
 for (const spec of repoSpecs) {
   let rpath = expand(spec.path);
   if (!rpath) rpath = path.join(HOME, "lively", "repos", spec.name || `proj-${projectId}`);
-  if (!isRepo(rpath)) {
+  const existed = isRepo(rpath);
+  if (!existed) {
     if (!spec.gitUrl) die(`레포가 '${rpath}' 에 없습니다. 경로를 지정하거나 레포 레지스트리에서 git 주소를 연결하세요.`);
     log(`레포 clone: ${spec.gitUrl} → ${rpath}`);
     const c = git(["clone", spec.gitUrl, rpath]);
     if (!c.ok) die("git clone 실패 — " + c.err);
+  } else {
+    refreshRepo(rpath);  // 재사용 클론은 새 워크트리 자르기 전 upstream 으로 최신화(best-effort)
   }
   const br = (spec.branch && String(spec.branch).trim()) || branch;
   if (spec.worktree) {

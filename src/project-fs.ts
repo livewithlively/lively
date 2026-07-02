@@ -4,9 +4,11 @@
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { HttpError } from "./capabilities/rest-util.js";
 
-export const PROJECT_SHARED_BASE = path.resolve(process.env.TERMINAL_ROOT_SHARED || "/Users/lively/.openclaw/workspace");
+// 실배포는 deploy/install.sh(common.sh)가 .env 에 TERMINAL_ROOT_SHARED 를 세팅(디폴트 $HOME/workspace) → 폴백은 그 관례와 일치시킴(수기 셋업 대비 안전망).
+export const PROJECT_SHARED_BASE = path.resolve(process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace"));
 export const PROJECT_SUBDIR = "project"; // 사용자 지정 — workspace/project/ 아래에 프로젝트 폴더(진행 중)
 export const LEGACY_SUBDIR = "legacy-project"; // 완료 시 보관 — workspace/legacy-project/ 로 폴더 이동
 

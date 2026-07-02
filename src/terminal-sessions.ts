@@ -11,8 +11,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
-import { dirToProjectFolder, folderVariants } from "./project-fs.js";
-import { projectAccessByFolder as projectAccessByFolderV6, isProjectMember as isProjectMemberV6, recordSessionProject } from "./v6/project-store.js";
+import { dirToProjectFolder } from "./project-fs.js";
+import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers } from "./org/store.js";
 
 const execFileAsync = promisify(execFile);
@@ -36,7 +36,7 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
 // ── 큐레이트 허용 루트 ──
 export interface Root { key: string; label: string; base: string; perUser?: boolean; }
 export const ROOTS: Root[] = [
-  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || "/Users/lively/.openclaw/workspace" },
+  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
   { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
 ];
 
@@ -242,8 +242,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
-  // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — 입장 게이트(canAttach)가 폴더 문자열이 아니라 이 id 로 멤버십을
-  //  판정하게 해, 폴더 이름변경·접미사(-N)·아카이브(legacy-project/)·이동에도 입장이 끊기지 않게 한다.
+  // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
+  //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
     await tmux(["set-option", "-t", id, "@box_project", String(input.projectId)]);
     await tmux(["set-option", "-t", id, "@box_project_src", input.projectSrc === "org" ? "org" : "v6"]);
@@ -267,26 +267,14 @@ async function ownerMeta(id: string): Promise<OwnerMeta | null> {
   if (!owner) return null; // box 세션이지만 메타 없음(우리 것 아님) → 거부
   return { owner, invites: parseInvites(await getOpt(id, "@box_invites")) };
 }
-// attach·파일접근 = 소유자 OR 초대된 멤버. 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트. kill/edit = 소유자만.
+// attach·파일접근 = 소유자 OR 초대된 멤버. 프로젝트 폴더 세션은 로그인한 누구나(어사이니 무관, #452). kill/edit = 소유자만.
 export async function canAttach(id: string, userId: string): Promise<boolean> {
   const m = await ownerMeta(id);
   if (!m) return false;
-  // 프로젝트 폴더 세션은 '공동 세션' — 그 프로젝트 팀원(생성자 포함)만 입장(초대 목록과 무관, 멤버십이 게이트).
-  const dir = await sessionDir(id);
-  const folder = dirToProjectFolder(dir);
-  if (folder) {
-    // 1순위: 세션에 박힌 프로젝트 id 로 멤버십 판정 — 폴더 이름변경·접미사·아카이브·이동에 면역. src 로 v6/org 스토어 선택.
-    const pid = Number(await getOpt(id, "@box_project")) || 0;
-    if (pid) {
-      // org_project 폐기(2026-06) — 모든 프로젝트 세션은 v6 project. src 구분 제거(org 분기는 DROP된 테이블 참조였음).
-      if (await isProjectMemberV6(pid, userId)) return true;
-    }
-    // 폴백(구 세션·id 없음): 폴더 기준 — project/ ↔ legacy-project/ 양형 × v6·org 양쪽. 여전히 멤버십을 요구(과허용 없음).
-    for (const f of folderVariants(folder)) {
-      if (await projectAccessByFolderV6(f, userId)) return true;
-    }
-    return false;
-  }
+  // 프로젝트 폴더 세션은 '공동 세션' — 어사이니/멤버십과 무관하게 로그인한 누구나 입장·조작·파일접근 가능(#452).
+  //  (이전엔 프로젝트 멤버십으로 게이트했으나, 비멤버가 프로젝트 세션을 못 봐 '권한 없음'으로 안 보이는 문제가 있어 전면 개방.)
+  if (dirToProjectFolder(await sessionDir(id))) return true;
+  // 개인(비프로젝트) 세션: 소유자 또는 초대된 멤버만.
   return m.owner === userId || m.invites.includes(userId);
 }
 async function assertManage(user: LivelyUser, id: string): Promise<void> {

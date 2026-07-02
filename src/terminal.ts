@@ -106,7 +106,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.json({ sessions: all.filter((s) => !isProjectSessionDir(s.dir)) });
   }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
-  //  접근통제: canAttach(소유자·초대된 멤버·프로젝트 멤버) — 입장 가능한 사람만 이름을 읽는다.
+  //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");

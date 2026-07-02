@@ -381,6 +381,61 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // ── org_db_source 확장: 소스별 테이블 '기본자세'(#186). 'allow'=deny-list(후방호환 — 명시 deny만 차단) /
+  //  'deny'=allow-list(개인정보 컴플라이언스 — 명시 allow만 허용, 신규 테이블 자동노출 방지). 기존 소스 무변경 위해 기본 allow. ──
+  await itemsPool.query(`
+    ALTER TABLE org_db_source ADD COLUMN IF NOT EXISTS table_default TEXT NOT NULL DEFAULT 'allow';
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_table_default_chk') THEN
+        ALTER TABLE org_db_source ADD CONSTRAINT org_db_source_table_default_chk CHECK (table_default IN ('allow','deny'));
+      END IF;
+    END $$;
+  `);
+
+  // ── org_db_table_policy — db_query 대상 소스의 '테이블별 조회 허용/차단'(웹 관리, #186). ──
+  //  라이브 스키마(information_schema) 위 오버레이 — 스키마 사본은 저장 안 함(쉬프트 드리프트 원천 없음), 여기엔 정책(on/off)만.
+  //  effective(t) = 정책행 있으면 그 mode, 없으면 org_db_source.table_default. 쉬프트로 사라진 테이블 행 = 무해한 고아(무시).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_table_policy(
+      source TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'deny',
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT,
+      PRIMARY KEY (source, table_name));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_db_table_policy'::regclass AND conname='org_db_table_policy_mode_chk') THEN
+        ALTER TABLE org_db_table_policy ADD CONSTRAINT org_db_table_policy_mode_chk CHECK (mode IN ('allow','deny'));
+      END IF;
+    END $$;
+  `);
+
+  // ── org_db_column_mask — 개인정보 컬럼 마스킹 정책(웹 관리, 컴플라이언스, #186). 라이브 스키마 위 오버레이. ──
+  //  집행은 게이트웨이가 결정론적으로(고객 DB 무수정): 게이트1(AST 파생차단)+게이트2(출처기반 결과 마스킹, src/db/firewall.ts·tools/db.ts).
+  //  style: full(전체) | partial(부분) | email(로컬부) | hash(sha256) | null(널).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_column_mask(
+      source TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      column_name TEXT NOT NULL,
+      style TEXT NOT NULL DEFAULT 'full',
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT,
+      PRIMARY KEY (source, table_name, column_name));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_db_column_mask'::regclass AND conname='org_db_column_mask_style_chk') THEN
+        ALTER TABLE org_db_column_mask ADD CONSTRAINT org_db_column_mask_style_chk CHECK (style IN ('full','partial','email','hash','null'));
+      END IF;
+    END $$;
+  `);
+
   // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
   //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
   //  보안: action 은 allowlist enum(임의 셸 금지 — org_hook 은 멤버 머신, 이건 게이트웨이 권한이라 블래스트 반경↑).

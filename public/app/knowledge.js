@@ -1,5 +1,5 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { LIFECYCLE_LABEL, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, lifecycleDot, reducedMotion, relTime, renderMarkdown, selectFilter, stat, state, sv, toast } from './core.js';
+import { LIFECYCLE_LABEL, absTime, api, applyReveal, withTip, el, errorNote, lifecycleDot, pageHead, relTime, renderMarkdown, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope } from './admin.js';
 // ════════════════════════════════════════════
@@ -101,7 +101,7 @@ function knowledgeSubBar(active) {
     //  카테고리(사업·제품·시스템)는 좌측 사이드바로 통합(2026-06-26).
     //  그래프는 별도 탭 대신 '지식 그래프' 버튼 → 풀스크린 새 창(graph.html, #290 아틀라스).
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
-    const onBrowse = active !== 'stats' && active !== 'review' && active !== 'sources';
+    const onBrowse = active !== 'sources';
     const tab = (on, href, label, title) => bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
         role: 'tab', 'aria-selected': on ? 'true' : 'false', ...(title ? { title } : {}), text: label }));
     tab(onBrowse, '#/knowledge', '지식', '정제된 저작 지식 — 결정·설계·개념·런북');
@@ -137,6 +137,15 @@ const KN_PROVENANCE_HINT = {
     authored: '이 시스템에 직접 저작한 지식입니다.',
     observed: '외부 시스템에서 가져온 살아있는 미러입니다(진실·편집은 외부에).',
 };
+// 작성 주체(#449) — 이 지식을 AI 가 썼는지 사람이 썼는지(confidence 파생: mcp→ai, web→human).
+//  지식 탭 행에서 injection(주입) 칩을 대체한다 — 지식 탭은 recalled 전용이라 주입 칩이 매 행 '검색'으로 반복돼 무의미했다.
+const KN_AUTHOR_LABEL = { ai: 'AI 작성', human: '사람 작성', rule: '규칙', observed: '외부 미러' };
+const KN_AUTHOR_HINT = {
+    ai: 'AI 에이전트가 작성한 지식입니다.',
+    human: '사람이 직접 작성한 지식입니다.',
+    rule: '시스템 규칙으로 정의됐습니다.',
+    observed: '외부 시스템에서 미러됐습니다.',
+};
 // page-type(#290) 한글 라벨 + 칩 — 엔터프라이즈 표준(DITA/Diátaxis/ADR/LLM위키) 6종. NULL=미분류(칩 생략).
 const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
 function knTypeChip(type) {
@@ -162,6 +171,15 @@ function knProvChip(provenance) {
     return el('span', { class: 'kn-chip kn-prov kn-prov-' + (provenance || 'na'),
         title: KN_PROVENANCE_HINT[provenance] || '', text: KN_PROVENANCE_LABEL[provenance] || provenance || '—' });
 }
+// 작성 주체 칩 — AI/사람 구분(#449). confidence 없으면 칩 생략(빈 '—' 노이즈 방지).
+//  호버 설명은 withTip(즉시 표시 말풍선) — native title 은 안 뜨고 카드 overflow 에 잘려서(#449 피드백).
+function knAuthorChip(confidence) {
+    if (!confidence)
+        return null;
+    const chip = el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
+        text: KN_AUTHOR_LABEL[confidence] || confidence });
+    return withTip(chip, KN_AUTHOR_HINT[confidence] || '');
+}
 // ⓘ 설명 점 — 라벨/값 옆 작은 정보 버튼. 긴 설명을 인라인에서 빼 호버(CSS)·포커스·클릭(고정 토글, 터치/유지용)으로 팝.
 //  바깥 클릭 시 닫힘. hint 없으면 null.
 function infoDot(hint) {
@@ -182,11 +200,12 @@ function infoDot(hint) {
     };
     return dot;
 }
-// 지식 한 행 — 제목(상세 링크) + injection 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
+// 지식 한 행 — 제목(상세 링크) + 작성 주체(AI/사람) 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
+//  (#449) 주입(injection) 칩 제거 — 지식 탭은 recalled 전용이라 매 행 '검색'으로 반복돼 무의미. 대신 작성 주체 칩 노출.
 //  select={names:Set, onToggle} 가 오면 선택(체크) 모드 — 클릭=상세이동 대신 선택 토글, .row.sel 로 표시.
 function knRow(e, select) {
     const titleEl = el('div', { class: 'row-title', text: e.title || e.name });
-    const metaEl = el('div', { class: 'row-meta' }, e.is_wiki ? el('span', { class: 'row-pin-wrap' }, el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '📌 인덱스' }), '  ') : null, knInjectChip(e.injection), ' ', knProvChip(e.provenance), e.type ? el('span', {}, ' ', knTypeChip(e.type)) : null, e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null, '  ', relTime(e.updated_at));
+    const metaEl = el('div', { class: 'row-meta' }, e.is_wiki ? el('span', { class: 'row-pin-wrap' }, el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '📌 인덱스' }), '  ') : null, knAuthorChip(e.confidence), ' ', knProvChip(e.provenance), e.type ? el('span', {}, ' ', knTypeChip(e.type)) : null, e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null, '  ', relTime(e.updated_at));
     // 의미검색/grep 결과의 매치 스니펫(있을 때만 — 목록 페치엔 없음). 한 줄로 정리.
     const snipEl = e.snippet ? el('div', { class: 'caption', style: 'margin-top:3px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 200) }) : null;
     if (!select) {
@@ -226,14 +245,11 @@ function knSimilarItem(e) {
     const pct = Math.round((Number(e.similarity) || 0) * 100);
     return el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name), title: '의미 유사도(코사인) ' + pct + '%' }, el('span', { class: 'kn-link-rel kn-link-sim', text: pct + '%' }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
 }
-// 지식 탭 진입 — sub ∈ {business, product, system, stats, review, sources, graph, new}. space 셋이면 2분할 뷰, 그 외 통계/검토.
+// 지식 탭 진입 — sub ∈ {business, product, system, sources, graph, new}. space 셋이면 2분할 뷰, 그 외 통합 둘러보기.
+//  (#449) 고아 라우트 stats·review 제거 — 링크 없는 죽은 화면(review 의 목적 '반려'는 v6에서 폐기, [[content-deletion-recovery-model]]).
 async function renderKnowledge(view, sub, params) {
     if (sub === 'new')
         return renderKnowledgeForm(view, params); // 위키 생성 — 별도 페이지(#255). params: project·relation 프리스테이징(플젝 '직접 작성')
-    if (sub === 'stats')
-        return renderKnowledgeStats(view);
-    if (sub === 'review')
-        return renderKnowledgeReview(view);
     // 인덱스(핀)는 별도 탭에서 '지식' 사이드바의 '전체' 하위 필터로 통합(#336) — 옛 #/knowledge/pinned 링크·북마크는 리다이렉트.
     if (sub === 'pinned') {
         location.replace('#/knowledge?indexed=1');
@@ -285,8 +301,12 @@ async function renderKnowledgeSpace(view, _space, params) {
     const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 지식을 골라 한 번에 삭제',
         onclick: () => { sel.mode = !sel.mode; if (!sel.mode)
             sel.names.clear(); paintList(); repaintBulk(); } });
-    const head = el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '지', el('span', { class: 'accent', text: '식' })), el('div', { style: 'display:flex; gap:8px; align-items:center;' }, hasScope('memory') ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new',
-        title: '새 지식을 작성합니다(별도 페이지)', text: '+ 추가' }) : null, selectBtn, el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }))), el('p', { class: 'sub', text: '맥락의 기록 — 왼쪽 사이드바에서 카테고리(우리 팀 먼저)로 좁히고, 위에서 검색·주입·출처로 거릅니다. 주입(항상/검색)과 출처(저작/외부 미러)는 직교 두 축입니다.' }));
+    const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
+        hasScope('memory') ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new',
+            title: '새 지식을 작성합니다(별도 페이지)', text: '+ 추가' }) : null,
+        selectBtn,
+        el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
+    ], '식');
     // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
     const side = el('aside', { class: 'browse-side' });
     const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
@@ -538,76 +558,6 @@ function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
         nav.append(grp);
     }
 }
-// 통계 뷰 — 전 지식을 한 번 가져와 injection/provenance/space 별 집계 카드로.
-async function renderKnowledgeStats(view) {
-    view.replaceChildren(knowledgeSubBar('stats'), skeleton('통계를 집계하는 중'));
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '지식 ', el('span', { class: 'accent', text: '통계' })), el('p', { class: 'sub', text: '맥락 기록의 두 직교축(주입·출처)과 영역(space)별 분포. 전체 활성 지식 기준.' }));
-    let entries;
-    try {
-        entries = await api('/api/ui/knowledge?' + new URLSearchParams({ limit: '500', orderBy: 'updated_at', injection: 'recalled' })).then((d) => (d && d.entries) || []); // (#335 ①) recalled 전용 — always 섹션 제외
-    }
-    catch (e) {
-        view.replaceChildren(head, knowledgeSubBar('stats'), errorNote(e, '통계를 불러오지 못했습니다'));
-        return;
-    }
-    const byInj = { always: 0, recalled: 0 };
-    const byProv = { authored: 0, observed: 0 };
-    for (const e of entries) {
-        if (e.injection in byInj)
-            byInj[e.injection]++;
-        if (e.provenance in byProv)
-            byProv[e.provenance]++;
-    }
-    const injCard = el('div', { class: 'card' }, el('h2', { text: '주입축 (injection)' }), el('div', { class: 'stat-row' }, stat(fmtNum(byInj.always), '항상 주입', '건'), stat(fmtNum(byInj.recalled), '검색 소환', '건')));
-    const provCard = el('div', { class: 'card' }, el('h2', { text: '출처축 (provenance)' }), el('div', { class: 'stat-row' }, stat(fmtNum(byProv.authored), '저작', '건'), stat(fmtNum(byProv.observed), '외부 미러', '건')));
-    const totalCard = el('div', { class: 'card' }, el('h2', { text: '전체' }), el('div', { class: 'stat-row' }, stat(fmtNum(entries.length), '활성 지식', '건')));
-    view.replaceChildren(head, knowledgeSubBar('stats'), totalCard, injCard, provCard);
-    applyReveal([totalCard, injCard, provCard]);
-}
-// 검토 뷰 — 외부 미러(provenance=observed) 또는 AI 산출(confidence=ai) 지식을 사후 검토. 반려(lifecycle=rejected).
-async function renderKnowledgeReview(view) {
-    view.replaceChildren(knowledgeSubBar('review'), skeleton('검토 대상을 불러오는 중'));
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '지식 ', el('span', { class: 'accent', text: '검토' })), el('p', { class: 'sub', text: 'AI 가 생성했거나(출처=AI) 외부에서 미러된(출처=외부 미러) 지식을 사후 검토합니다. 보고 내려둘지(반려) 결정하세요.' }));
-    const listBox = el('div', { class: 'list-box' });
-    view.replaceChildren(head, knowledgeSubBar('review'), listBox);
-    async function load() {
-        listBox.replaceChildren(skeletonRows(4));
-        let entries;
-        try {
-            entries = await api('/api/ui/knowledge?' + new URLSearchParams({ lifecycle: 'active', limit: '500', orderBy: 'updated_at' })).then((d) => (d && d.entries) || []);
-        }
-        catch (e) {
-            listBox.replaceChildren(errorNote(e, '검토 목록을 불러오지 못했습니다'));
-            return;
-        }
-        // 검토 대상 = 외부 미러(observed) 또는 AI 산출(confidence=ai). 사람 저작은 무게이트 신뢰.
-        const targets = entries.filter((e) => e.provenance === 'observed' || e.confidence === 'ai');
-        if (!targets.length) {
-            listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 지식이 없습니다. 모두 확인되었습니다.' }));
-            return;
-        }
-        listBox.replaceChildren();
-        for (const e of targets) {
-            const row = el('div', { class: 'review-row' }, el('div', { class: 'review-main' }, el('a', { class: 'review-title', href: '#/k/' + encodeURIComponent(e.name), text: e.title || e.name }), el('div', { class: 'row-meta' }, knInjectChip(e.injection), ' ', knProvChip(e.provenance), e.confidence === 'ai' ? el('span', {}, '  ', confidenceDot(e.confidence)) : null, '  ', relTime(e.updated_at))), el('div', { class: 'review-acts' }, el('a', { class: 'btn btn-ghost btn-sm', href: '#/k/' + encodeURIComponent(e.name), text: '보기' }), el('button', { class: 'btn btn-ghost btn-sm btn-danger', text: '삭제', onclick: async (ev) => {
-                    ev.preventDefault();
-                    if (!confirm("'" + (e.title || e.name) + "' 지식을 삭제할까요? 휴지통(#/trash)에서 복원할 수 있습니다."))
-                        return;
-                    try {
-                        await api('/api/ui/knowledge/' + encodeURIComponent(e.name) + '/delete', { method: 'POST' });
-                        row.classList.add('flash');
-                        setTimeout(() => { row.remove(); if (!listBox.querySelector('.review-row'))
-                            listBox.replaceChildren(el('div', { class: 'empty', text: '검토 대기 중인 지식이 없습니다.' })); }, reducedMotion() ? 0 : 350);
-                        toast('삭제했습니다 — 휴지통에서 복원 가능');
-                    }
-                    catch (err) {
-                        toast('삭제 실패 — ' + err.message, true);
-                    }
-                } })));
-            listBox.append(row);
-        }
-    }
-    load();
-}
 // 지식 상세 #/k/<name> — 전문(body_md, 마크다운) + 메타(injection/provenance/lifecycle/source) + 연결 카테고리.
 async function renderKnowledgeDetail(view, name) {
     view.replaceChildren(skeleton('지식을 불러오는 중'));
@@ -647,7 +597,7 @@ async function renderKnowledgeDetail(view, name) {
         : null;
     // 메타 — v6 핵심 축(주입·출처)·상태·버전·갱신만 항상 노출. 외부 미러(provenance=observed)일 때만 외부 출처 상세를 펼친다.
     //  정리(2026-06-24): 구 '출처 채널(source)' 행 제거(쓰기 채널이라 provenance 와 중복) · '신뢰(confidence)'는 v6 축이 아닌
-    //  파생 신호(AI/사람 작성)라 'AI 생성'일 때만 '작성 주체'로 압축 · source_ref 라벨을 '참조'로(출처 3중복 해소).
+    //  파생 신호(AI/사람 작성)라 '작성 주체' 한 줄로 압축(라벨은 지식 탭 배지와 통일 — KN_AUTHOR_LABEL, #449) · source_ref 라벨을 '참조'로(출처 3중복 해소).
     //  recalled = '검색 소환'(AI가 관련될 때 키워드 검색으로 직접 찾는 것 — 자동·시맨틱 아님, query 가 아니라 recall).
     const isMirror = k.provenance === 'observed' || k.external_system || k.external_id || k.external_url;
     const metaRows = [
@@ -655,7 +605,7 @@ async function renderKnowledgeDetail(view, name) {
         ['출처(provenance)', KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—', k.provenance ? KN_PROVENANCE_HINT[k.provenance] : ''],
         ['상태(lifecycle)', LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle || '—'],
         k.type ? ['유형(type)', KN_TYPE_LABEL[k.type] || k.type] : null,
-        k.confidence === 'ai' ? ['작성 주체', 'AI 생성'] : null,
+        (k.confidence === 'ai' || k.confidence === 'human') ? ['작성 주체', KN_AUTHOR_LABEL[k.confidence]] : null,
         k.author ? ['작성자', k.author] : null,
         k.supersedes ? ['대체함(supersedes)', k.supersedes] : null,
         isMirror && k.external_system ? ['외부 출처', k.external_system + (k.external_instance ? ' · ' + k.external_instance : '')] : null,
@@ -714,7 +664,7 @@ async function renderKnowledgeDetail(view, name) {
     const metaWrap = el('details', { class: 'unit-meta-details', open: '' }, el('summary', { class: 'unit-meta-summary' }, '메타데이터'), metaBar);
     // 비슷한 지식(벡터 #172) — 이 지식과 의미적으로 가까운 다른 지식(코사인 유사도, 자동). 비동기 채움(임베딩 off/유사 없음=숨김).
     const relatedBox = el('div', { class: 'kn-related', hidden: true, style: 'margin-top:16px' });
-    const main = el('div', { class: 'detail-card unit-card' }, el('div', { class: 'unit-title-row' }, el('h1', { class: 'detail-title', text: k.title || k.name }), lifecycleDot(k.lifecycle)), el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }), knInjectChip(k.injection), knProvChip(k.provenance), knTypeChip(k.type), k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null), actions.childNodes.length ? actions : null, metaWrap, // 카테고리는 메타데이터 첫 항목으로 편입됨(단독 섹션 폐지)
+    const main = el('div', { class: 'detail-card unit-card' }, el('div', { class: 'unit-title-row' }, el('h1', { class: 'detail-title', text: k.title || k.name }), lifecycleDot(k.lifecycle)), el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }), knAuthorChip(k.confidence), knProvChip(k.provenance), knTypeChip(k.type), k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null), actions.childNodes.length ? actions : null, metaWrap, // 카테고리는 메타데이터 첫 항목으로 편입됨(단독 섹션 폐지)
     knLinksPanel(k, view), // #290 연결된 지식 — 연결된 프로젝트와 같은 관계 섹션으로 묶음(같은 패턴)
     knProjectLinks(k.name), el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle), el('div', { class: 'unit-body-wrap' }, rendered, rawView), relatedBox);
     view.replaceChildren(el('div', { class: 'page-head unit-head' }, backRow), main);
@@ -1194,7 +1144,7 @@ function openKnowledgeLinkPicker(k, view) {
 }
 // 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이.
 async function renderSources(view, _params) {
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '자', el('span', { class: 'accent', text: '료' })), el('p', { class: 'sub', text: '맥락의 raw 입력 — 회의 전사록·이메일·슬랙·외부 미러. 정제하면 지식이 됩니다(지식과 분리 — 검색·인덱스에 안 섞임).' }));
+    const head = pageHead('자료', '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 여기서 다듬으면 지식이 됩니다.', [], '료');
     const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
     kindSel.setAttribute('aria-label', '종류');
     const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');

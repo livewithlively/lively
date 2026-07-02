@@ -423,6 +423,19 @@ function hideGate() {
     document.getElementById('gate').hidden = true;
     document.getElementById('app').hidden = false;
 }
+// ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
+async function logout(message) {
+    try {
+        await fetch('/api/ui/logout', { method: 'POST' });
+    }
+    catch (_) { /* noop */ }
+    localStorage.removeItem(TOKEN_KEY);
+    state.me = null;
+    const lb = document.getElementById('logout-btn');
+    if (lb)
+        lb.hidden = true;
+    showGate(message || '로그아웃되었습니다.');
+}
 // ── 에러 표시 헬퍼 ──
 function errorNote(e, prefix) {
     if (e && e.status === 403) {
@@ -440,6 +453,34 @@ function confidenceDot(confidence) {
     const cls = confidence === 'human' ? 'st ok'
         : (confidence === 'rule' || confidence === 'observed') ? 'st dim' : 'st';
     return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
+}
+// ── 공용: 즉시 표시 호버 툴팁 ──
+//  native title 은 지연(~1s)·발견성이 나쁘고, overflow:hidden 카드(.list-box)에선 CSS 말풍선이 잘린다.
+//  → fixed 포지션 말풍선을 body 에 붙여 클립·지연 없이 즉시 보여준다(마우스 hover + 키보드 focus). 접근성은 aria-label.
+function withTip(node, text) {
+    if (!text)
+        return node;
+    node.setAttribute('aria-label', text);
+    let tip = null;
+    const hide = () => { if (tip) {
+        tip.remove();
+        tip = null;
+    } };
+    const show = () => {
+        if (tip)
+            return;
+        tip = el('div', { class: 'hover-tip', role: 'tooltip', text });
+        document.body.append(tip);
+        const r = node.getBoundingClientRect();
+        tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+        tip.style.top = (r.bottom + 6) + 'px';
+        window.addEventListener('scroll', hide, { once: true, capture: true });
+    };
+    node.addEventListener('mouseenter', show);
+    node.addEventListener('mouseleave', hide);
+    node.addEventListener('focus', show);
+    node.addEventListener('blur', hide);
+    return node;
 }
 // '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
 const START_SUBS = [
@@ -482,6 +523,29 @@ function interleave(arr, sep) {
         out.push(sep); out.push(n); });
     return out;
 }
+// ── 공용 페이지 헤더(#367) — 모든 탭 상단 제목을 하나의 형식으로 통일 ──
+// 구조: .page-head > .page-head-row( h1.page-title  [+ .page-head-actions] ) [+ p.sub].
+//  · title  = 탭 이름과 같은 짧은 제목(28px h1) — 페이지마다 손으로 다르게 짜던 것을 여기 한 곳으로.
+//  · sub    = 한 줄 설명(plain, 없으면 생략). 전문용어 대신 쉬운 말로.
+//  · actions= 제목 오른쪽에 붙는 버튼/요소들(+ 추가·🗑 휴지통 등, 없으면 제목만).
+//  · accent = 제목의 뒤쪽 일부를 브랜드 블루로(앱 전반의 관례: 프로'젝트'·지'식'처럼 끝부분 강조). 생략 시 강조 없음.
+function pageHead(title, sub, actions, accent) {
+    const h1 = el('h1', { class: 'page-title' });
+    if (accent && title.endsWith(accent)) {
+        const lead = title.slice(0, title.length - accent.length);
+        if (lead)
+            h1.append(document.createTextNode(lead));
+        h1.append(el('span', { class: 'accent', text: accent }));
+    }
+    else {
+        h1.textContent = title;
+    }
+    const acts = (actions || []).filter(Boolean);
+    const row = el('div', { class: 'page-head-row' }, h1);
+    if (acts.length)
+        row.append(el('div', { class: 'page-head-actions' }, ...acts));
+    return el('div', { class: 'page-head' }, row, sub ? el('p', { class: 'sub', text: sub }) : null);
+}
 // ── 아바타(프로필 원형) — 셀프 업로드 이미지가 있으면 그걸, 없으면 이름 이니셜+결정적 색상. ──
 //  projects.ts 의 동명 헬퍼와 알고리즘 동일(드리프트 방지 위해 동일 구현 — 같은 seed→같은 색/이니셜).
 //  projects.ts 가 admin.js 를 import 하므로 여기(core, 무순환)에 둬 main/admin 이 순환 없이 공유.
@@ -515,4 +579,4 @@ function profileAvatar(avatar, name, seed, cls) {
     }
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

@@ -126,8 +126,9 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 .user-email { padding: 0 12px 0 4px; gap: 7px; } /* 왼쪽은 아바타 들어갈 자리라 좁게 */
 .help-link:hover, .user-email:hover, .logout-btn:hover { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
 .help-link.active { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
-/* 상단바 아바타 — 작은 원형 이니셜(배경색은 profileAvatar 가 인라인으로 칠함). */
-.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
+/* 상단바 아바타 — 작은 원형 이니셜(#361). .pava(28px) 를 이기도록 .pava.topbar-ava 로 특이도 확보 —
+   30px 알약 안에 22px 원이 위아래 4px 여백으로 정확히 들어간다(이전엔 .pava 28px 가 이겨 알약을 꽉 채움). */
+.pava.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
   align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; overflow: hidden; }
 .topbar-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -155,6 +156,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 /* 제목 + 우측 액션(예: 🗑 휴지통)을 한 줄에 — 제목은 좌, 액션은 우 끝. */
 .page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
 .page-head-row h1 { margin: 0; }
+/* 제목 오른쪽 액션 묶음(#367 공용 헤더) — + 추가·선택·🗑 휴지통 등. */
+.page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
 .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 10px; }
 .accent { color: var(--blue); }
 .stat-row { display: flex; gap: 32px; flex-wrap: wrap; }
@@ -224,7 +227,10 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 
 /* ── 버튼 ── */
 .btn {
-  border: 1px solid transparent; cursor: pointer; font-weight: 700; border-radius: 11px;
+  /* a·button·label 어디에 붙든 같은 높이·정렬로 렌더(#363) — inline-flex + line-height 고정으로
+     '<a class=btn>' 와 '<button class=btn>' 의 높이 불일치(선택 27px vs 추가/휴지통 32px)를 제거. */
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; line-height: 1.15;
+  border: 1px solid transparent; cursor: pointer; font-weight: 700; border-radius: 11px; text-decoration: none;
   padding: 9px 18px; font-size: 14px; white-space: nowrap; transition: background-color 150ms ease, border-color 150ms ease;
 }
 /* §0.5 예산: 채운 블루 primary 는 화면당 1개만 — 나머지는 전부 btn-ghost(화이트+헤어라인+잉크) */
@@ -1120,6 +1126,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 출처 = 저작(중립 푸른 계열) / 외부 미러(흐린 회색 — 큐레이션 아님, 외부 진실) */
 .kn-prov-authored { color: var(--blue); background: var(--bg-tint-2); border-color: var(--line-net-2); }
 .kn-prov-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
+/* 작성 주체(#449) = 사람(민트 — 직접 저작·큐레이션, 드물어 눈에 띔) / AI(중립 — 사후 검토 대상). 지식 탭에서 주입 칩을 대체. */
+.kn-author-human { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
+.kn-author-ai { color: var(--ink-sub); background: var(--bg-tint); border-color: var(--line); }
+.kn-author-rule, .kn-author-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
 /* 핀(WIKI 인덱스) 뱃지 — 항상-주입이라 inject-always 와 같은 민트 계열로 묶는다('늘 곁에' 의미 일관). */
 .kn-pin { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
 .kn-cat-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 2px; }
@@ -1348,6 +1358,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .info-dot:hover, .info-dot.open { color: var(--blue); }
 .info-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; display: none; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
 .info-dot:hover .info-pop, .info-dot:focus-visible .info-pop, .info-dot.open .info-pop { display: block; }
+/* withTip — fixed 포지션 즉시 호버 툴팁(overflow:hidden 카드에도 안 잘림). .info-pop 과 같은 톤. body 에 직접 붙는다. */
+.hover-tip { position: fixed; z-index: 200; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
 .unit-meta-details, .unit-history-details { width: 100%; margin: 8px 0; border-top: 1px solid var(--line); padding-top: 8px; }
 .unit-meta-summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
 .unit-meta-summary::-webkit-details-marker { display: none; }
@@ -1665,10 +1677,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-empty-hint { font-size: 14px; color: var(--ink-sub); padding: 12px 6px 2px; line-height: 1.5; }
 
 /* Closed 토글 버튼(클릭업식 툴바 필) + popover + 스위치 — 닫힌(완료) 항목 노출 제어. */
-.pjv-closed-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 10px 4px 8px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-closed-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-closed-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-closed-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-closed-ic { width: 15px; height: 15px; flex: none; }
+.pjv-closed-ic { width: 13px; height: 13px; flex: none; }
 .pjv-closed-pop { min-width: 172px; padding: 4px; }
 .pjv-closed-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 9px; font-size: 13px; color: var(--ink); }
 .pjv-switch { position: relative; flex: none; width: 34px; height: 20px; border: none; border-radius: 999px; background: var(--muted-3); cursor: pointer; padding: 0; transition: background .15s ease; }
@@ -1947,8 +1959,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 }
 /* 길면 접기 — 본문 섹션과 동일한 클립+페이드(.proj-detail-body-expand 알약 재사용). */
 .pjk-collapse { position: relative; }
-.pjk-collapse.collapsed { max-height: 300px; overflow: hidden; }
-.pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
+.pjk-collapse.collapsed { max-height: 150px; overflow: hidden; }
+.pjk-collapse.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); pointer-events: none; }
 .pjk-expand-row { margin-top: 10px; }
 /* 직접 작성 모달 입력 */
 .pjk-create-in { width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit; border: 1px solid var(--line-net); border-radius: 8px; }
@@ -2361,6 +2373,9 @@ body.pjv-tm-open { overflow: hidden; }
 /* 전역 `.empty svg { margin:0 auto 14px }` 의 14px 하단 여백 누수 차단 — 빈 우선순위 깃발 등 메타 아이콘이 위로 떠 보이던 문제. */
 .pjv-proj-meta .pjv-cell-ico { margin: 0; }
 .pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
+/* 폴더 '미분류 — 폴더 지정' 플레이스홀더가 전역 .pjv-cell-ph{font-size:19px}(보드 표의 아이콘 글리프용)를
+   물려받아 텍스트가 과하게 커 보이던 문제 — 메타 안에선 값 텍스트(폴더명, 15px)와 같게 맞춰 크기 튐 제거. */
+.pjv-proj-meta .pjv-cell-ph { font-size: 15px; line-height: 1.4; }
 .pjv-proj-tagpicker { min-width: 244px; padding: 8px; }
 .pjv-proj-tagpicker-list { margin-top: 6px; max-height: 280px; overflow: auto; }
 .pjv-tm-time { display: inline-flex; align-items: center; gap: 8px; }
@@ -2696,10 +2711,10 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* ── 좌상단 하위 태스크(Subtasks) 버튼 — 접힘/펼침/분리 (Closed 와 대칭, 좌측) ── */
 .pjv-tasks-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pjv-tasks-head-left h2 { margin: 0; }
-.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 11px 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-subtask-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-subtask-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-subtask-ic { width: 15px; height: 15px; }
+.pjv-subtask-ic { width: 13px; height: 13px; }
 .pjv-subtask-pop { min-width: 210px; padding: 4px; }
 .pjv-subtask-pop-head { font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 6px 9px 4px; letter-spacing: .2px; }
 .pjv-subtask-item { justify-content: space-between; gap: 10px; }
@@ -2770,13 +2785,32 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 
 /* ════ 클릭업식 행 호버 컨트롤 + 다중선택 하단 바 ════ */
 /* 좌측 체크박스 — 평소 숨김(자리 유지, 헤더엔 동폭 spacer 로 정렬), 행 호버/선택 시 표시. */
-.pjv-row-check { flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
+.pjv-row-check { position: relative; flex: none; width: 16px; height: 16px; border-radius: 4px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s ease, background-color .12s ease, border-color .12s ease; }
+/* 클릭 판정 확대(#366) — 16px 박스는 너무 예민하니 주변 셀까지 히트영역을 넓힌다(보이는 크기는 그대로). */
+.pjv-row-check::before { content: ''; position: absolute; top: -9px; bottom: -9px; left: -8px; right: -6px; }
 .pjv-row-check-spacer { flex: none; width: 16px; }
 .pjv-trow:hover .pjv-row-check, .pjv-row-check.on { opacity: 1; }
 .pjv-row-check:hover { border-color: var(--blue); }
 .pjv-row-check.on { background: var(--blue); border-color: var(--blue); }
 .pjv-row-check.on::after { content: '✓'; }
 .pjv-trow-wrap.pjv-row-selected > .pjv-trow { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
+/* 드래그 다중선택(#366) — 끄는 동안 텍스트 선택 방지 + 지나온 행 체크박스는 계속 보이게. */
+body.pjv-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+body.pjv-dragging .pjv-row-check { opacity: 1; }
+/* 드래그 재정렬 핸들(#366) — 체크박스 왼쪽 여백에 절대배치(레이아웃 불변). 행 호버 시 표시, 잡으면 grabbing. */
+.pjv-trow-title-cell { position: relative; }
+.pjv-row-grip { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 13px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border: none; background: none; padding: 0; margin: 0;
+  color: var(--muted-3); font-size: 12px; line-height: 1; cursor: grab; opacity: 0; transition: opacity .12s ease; touch-action: none; }
+.pjv-trow:hover .pjv-row-grip, body.pjv-dragging .pjv-row-grip { opacity: .6; }
+.pjv-row-grip:hover { opacity: 1; color: var(--blue); }
+.pjv-row-grip:active { cursor: grabbing; }
+.pjv-reorder-src { opacity: .4; }
+/* 놓일 자리 가로 삽입선 + 커서 따라다니는 고스트('N개 태스크'). */
+.pjv-reorder-marker { height: 2px; margin: -1px 0; background: var(--blue); border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; }
+.pjv-reorder-ghost { position: fixed; z-index: 10000; pointer-events: none; background: var(--blue); color: #fff;
+  padding: 3px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
 /* 제목 우측 호버 아이콘 — ⋯ 버튼과 동일 언어(테두리 없음·작게·muted). 담당자 컬럼과 겹치지 않게 우측 여백. */
 .pjv-row-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding-left: 8px; margin-right: 12px; opacity: 0; transition: opacity .12s ease; }
@@ -2926,13 +2960,15 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
    ============================================================ */
 
 /* '보기' 버튼 — 헤더 좌측. .pjv-subtask-btn 톤 + caret. */
-.pjv-view-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-view-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
 .pjv-view-btn:hover { background: var(--bg-tint); color: var(--ink); }
 .pjv-view-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
-.pjv-view-ic { width: 16px; height: 16px; flex: none; }
+.pjv-view-ic { width: 13px; height: 13px; flex: none; }
 .pjv-view-btn-label { letter-spacing: -.1px; }
 .pjv-view-btn-caret { font-size: 9px; line-height: 1; color: var(--muted-2); margin-left: 1px; }
 .pjv-view-btn.active .pjv-view-btn-caret { color: var(--blue); }
+/* 영역 사이드바 토글 — 아이콘 전용 정사각 버튼('보기' 톤 공유). */
+.pjv-side-toggle { padding: 5px 8px; }
 
 /* '보기' 팝오버 — 스위치 행 2개(영역으로 / 상태로). */
 .pjv-view-pop { min-width: 272px; padding: 5px; }
@@ -2953,24 +2989,30 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* ＋ 글리프(새 영역 버튼 안) */
 .pjv-newlist-plus { font-size: 13px; font-weight: 700; line-height: 1; }
 
-/* 영역 사이드바 — 좌측 영역 네비 + 본문(선택 영역의 프로젝트). */
-.pjv-side-wrap { display: grid; grid-template-columns: 196px minmax(0, 1fr); }
+/* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
+/*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
+.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-.pjv-side-nav { padding: 0 12px 8px 0; border-right: 1px solid var(--line); }
-.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
-.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 4px 6px 8px; }
-.pjv-side-nav-head-label { font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--muted-2); }
+.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
+.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
+.pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+/* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
+.pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
-.pjv-side-navitem { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--ink-sub); }
+.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
 .pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-side-navcount { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
+.pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
 .pjv-side-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 .pjv-side-dot.all { background: linear-gradient(135deg, var(--blue), #8b5cf6); }
 .pjv-side-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3, #aab1bd); }
+/* 묶음 폴더 아이콘 — 동그란 점 대신 '색을 채운 폴더'로 상위 분류 느낌(#356). */
+.pjv-bundle-ic { flex: none; width: 18px; height: 18px; display: block; }
+.pjv-side-navitem.active .pjv-bundle-ic.none path { stroke: var(--blue); }
 .pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
 .pjv-side-newlist:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
 .pjv-side-main { padding-left: 16px; min-width: 0; }
@@ -2986,6 +3028,37 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-side-raildot:hover { background: var(--bg-tint-2); }
 .pjv-side-raildot.active { background: var(--bg-sel); box-shadow: inset 0 0 0 1.5px var(--blue); }
 .pjv-side-raildot .pjv-side-dot { width: 11px; height: 11px; }
+.pjv-side-raildot .pjv-bundle-ic { width: 20px; height: 20px; }
+
+/* ── 폴더 설정 ⋯ (사이드바 항목 호버, #453/#454) — 카운트 자리에 겹쳐 뜬다(레이아웃 안 밀림) ── */
+.pjv-side-navitem { position: relative; }
+.pjv-side-navmore { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; opacity: 0; transition: opacity .12s ease; }
+.pjv-side-navitem:hover .pjv-side-navmore, .pjv-side-navmore:focus-visible { opacity: 1; background: var(--bg); }
+.pjv-side-navitem:hover .pjv-side-navcount { opacity: 0; }   /* 호버 시 개수 숨기고 ⋯ 노출 */
+.pjv-side-navmore:hover { background: var(--bg-tint); color: var(--ink); }
+
+/* ── 프로젝트 → 폴더 드래그(#454) ── */
+body.pjv-folder-dragging { cursor: grabbing; }
+body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
+.pjv-proj-drag-src { opacity: .45; }
+/* 드롭 타깃 하이라이트 — 사이드바 항목/레일 점/인라인 폴더 구역 공통. */
+.pjv-side-navitem.pjv-folder-drop-over { background: var(--bg-tint); box-shadow: inset 0 0 0 2px var(--blue); }
+.pjv-side-raildot.pjv-folder-drop-over { background: var(--bg-tint); box-shadow: inset 0 0 0 2px var(--blue); }
+.pjv-list-group.pjv-folder-drop-over { outline: 2px dashed var(--blue); outline-offset: -2px; border-radius: 8px; background: var(--bg-tint); }
+
+/* ── 폴더 프로젝트 관리 모달(#454) ── */
+.pjv-foldman { min-width: 420px; max-width: 520px; }
+.pjv-foldman-sec-h { font-size: 12.5px; font-weight: 700; color: var(--muted-2); letter-spacing: .2px; margin-bottom: 6px; }
+.pjv-foldman-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; }
+.pjv-foldman-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; }
+.pjv-foldman-row:hover { background: var(--bg-tint-2); }
+.pjv-foldman-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13.5px; color: var(--ink); }
+.pjv-foldman-name.done { color: var(--muted-2); text-decoration: line-through; }
+.pjv-foldman-cur { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2); background: var(--bg-tint); border: 1px solid var(--line-net, #d9dee6); border-radius: 999px; padding: 1px 8px; }
+.pjv-foldman-btn { flex: none; border: 1px solid var(--line-net, #d9dee6); background: var(--bg); cursor: pointer; padding: 3px 10px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
+.pjv-foldman-btn:hover { border-color: var(--muted-2); color: var(--ink); }
+.pjv-foldman-btn.add { color: var(--blue); border-color: var(--line-net, #d9dee6); }
+.pjv-foldman-btn.add:hover { border-color: var(--blue); background: var(--bg-tint); }
 
 /* ════════════ WIP styles.css 에서 유실됐던 HEAD 코어 규칙 복원 (2026-06-30 #317 재발방지) ════════════
    원인: learn-redesign WIP styles.css 가 옛 base 기준이라, 그 뒤 추가된 코어 규칙들(프로필 아바타·헤더 hidden·
@@ -3022,7 +3095,7 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-list-dot.sm { width: 9px; height: 9px; }
 .pjv-list-mine-chip { font-size: 11px; font-weight: 700; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; letter-spacing: .2px; flex: none; }
 /* 헤더 버튼 — 내 할당만(토글, .pjv-closed-btn 재사용) · 새 리스트 */
-.pjv-mine-btn svg { width: 14px; height: 14px; flex: none; }
+.pjv-mine-btn svg { width: 12px; height: 12px; flex: none; }
 .pjv-newlist-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line-net); background: var(--bg); cursor: pointer; padding: 4px 11px 4px 9px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--blue); font-family: inherit; }
 .pjv-newlist-btn:hover { background: var(--bg-tint); border-color: var(--blue); }
 /* 리스트 색 팔레트(생성/수정 폼) — 'A'=자동(이름 해시색) */
@@ -3039,3 +3112,24 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 /* 2단계(리스트›상태) — 리스트 안의 상태 하위그룹: 헤더만 살짝 들여쓰고 라벨은 작게(행 그리드는 정렬 유지) */
 .pjv-list-group .pjv-tgroup-body .pjv-tgroup > .pjv-tgroup-head { padding-left: 26px; }
 .pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+
+/* === 선행/후속 프로젝트 필드(프로퍼티) — #359. 별도 박스(projectEdgesSection) 없애고 상단 프로퍼티로 이관 === */
+/* 프로퍼티 그리드(2열) 맨 아래 한 줄을 풀폭으로 잡고, 그 안에서 다시 좌(선행)/우(후속)로 나눈다. */
+/* (선행/후속은 이제 일반 .pjv-tm-field 로 첫 줄에 배치 — 예전 .pjv-proj-meta-edges 풀폭 래퍼 제거, #359 후속) */
+.pjv-proj-edges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; }
+.pjv-edge-chip { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 2px 3px 2px 9px; background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; }
+.pjv-edge-chip-link { color: var(--ink); text-decoration: none; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-edge-chip-link:hover { color: var(--blue); text-decoration: underline; }
+.pjv-edge-chip-x { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; line-height: 1; padding: 3px; border-radius: 5px; }
+.pjv-edge-chip-x:hover { color: var(--ink); background: var(--bg-sel); }
+.pjv-edge-add { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--line); background: none; cursor: pointer; color: var(--muted-2); font-size: 12.5px; line-height: 1; padding: 5px 9px; border-radius: 8px; }
+.pjv-edge-add:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
+/* 추가 팝오버 — 검색 + 결과 목록 */
+.pjv-edge-pick { min-width: 260px; max-width: 320px; padding: 8px; gap: 0; }
+.pjv-edge-pick-hint { font-size: 11.5px; color: var(--muted-2); padding: 2px 4px 6px; line-height: 1.4; }
+.pjv-edge-pick-search { width: 100%; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; background: var(--bg); color: var(--ink); }
+.pjv-edge-pick-search:focus { outline: none; border-color: var(--blue); }
+.pjv-edge-pick-results { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; margin-top: 6px; }
+.pjv-edge-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
+.pjv-edge-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-edge-pick-id { flex: none; color: var(--muted-2); font-size: 11.5px; }

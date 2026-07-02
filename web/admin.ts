@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, logout, pageHead, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -253,12 +253,12 @@ async function renderAdmin(view, sub) {
   // 섹션 1개 그룹은 좌측 nav 없이 본문만, 여러 개면 좌 nav + 본문 split.
   const body = soloSection ? detail : el('div', { class: 'split admin-split' }, list, detail);
 
+  // 상태 배지(조직명 / 읽기 전용) — 통일 헤더의 우측 액션 자리로. (#367)
+  const statusEl = canEdit
+    ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
+    : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)');
   view.replaceChildren(el('div', {},
-    el('div', { class: 'card-head admin-head' },
-      el('div', { class: 'admin-head-l' }, el('h2', { text: '관리' })),
-      canEdit
-        ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
-        : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)')),
+    pageHead('관리', '조직·권한, 분류 체계, 연결·데이터 등 시스템 전반을 설정합니다.', [statusEl], '리'),
     groupBar,
     body));
   applyReveal(soloSection ? [detail] : [list, detail]);
@@ -1155,7 +1155,7 @@ function showInitialAccount(id, name, email, password, data) {
     field('이메일 (로그인 아이디)', el('div', { class: 'admin-ro', text: email || '⚠ 이메일 미설정 — 멤버에 이메일을 넣어야 로그인됩니다' })),
     el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '임시 비밀번호' }), copyButton(() => password, '비밀번호 복사')),
     el('pre', { class: 'admin-preview', text: password }),
-    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → [시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다. (비밀번호는 첫 로그인 후 변경 권장.)' }));
+    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.' }));
 }
 
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
@@ -2070,6 +2070,12 @@ function dbSourceEditor(detail, data) {
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }));
+  // 테이블 정책 · 컬럼 마스킹 — 기존(등록된) 소스 선택 시에만(라이브 스키마 오버레이, 무재시작).
+  if (editing && sel !== '__new__') {
+    const panel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(panel);
+    void renderDbPolicyPanel(panel, sel);
+  }
   const rcDb = data.runtimeConfig || { allowed_db_hosts: [] };
   const dbSafety = allowlistCard(data, 'DB 접속 안전범위 (allowlist)',
     'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단(SSRF 방어). 외부 공인 DB 는 등록 불요.',
@@ -2098,6 +2104,10 @@ function dbSourceForm(root, s, data, detail, isNew) {
   const toIn = el('input', { type: 'number', value: (s.timeout_ms == null ? '' : s.timeout_ms), placeholder: '기본 5000' });
   const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
   const enChk = el('input', { type: 'checkbox' }); enChk.checked = s.enabled !== false;
+  const tdSel = el('select', {},
+    el('option', { value: 'allow', text: 'deny-list — 기본 허용(명시 차단만 제외)' }),
+    el('option', { value: 'deny', text: 'allow-list — 기본 차단(명시 허용만 조회 · 컴플라이언스 권장)' }));
+  tdSel.value = s.table_default || 'allow';
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
@@ -2112,7 +2122,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
         rls: rlsIn.value.trim() || null,
         max_rows: maxIn.value ? Number(maxIn.value) : null,
         timeout_ms: toIn.value ? Number(toIn.value) : null,
-        note: noteIn.value.trim() || null, enabled: enChk.checked,
+        note: noteIn.value.trim() || null, enabled: enChk.checked, table_default: tdSel.value,
       };
       if (urlV) payload.url = urlV; // 빈칸 = url 미변경(수정 시)
       await api('/api/ui/org/db-source', { method: 'POST', body: JSON.stringify(payload) });
@@ -2129,8 +2139,81 @@ function dbSourceForm(root, s, data, detail, isNew) {
     field('이름', nameIn), field('접속 URL (비번 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel),
     field('비번 환경변수 이름 (auth_ref)', refIn), refHint,
     field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn),
+    field('테이블 기본자세 (table_default)', tdSel),
     field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'),
     actions);
+}
+
+// ── 테이블 정책 · 컬럼 마스킹 패널(#186) — 라이브 스키마 오버레이. 고객 DB 무수정, 게이트웨이 집행. ──
+async function renderDbPolicyPanel(panel, source) {
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 불러오는 중…' }));
+  let ov;
+  try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source)); }
+  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 로드 실패: ' + e.message })); return; }
+  const openT = state.admin.dbPolTable || null;
+  panel.replaceChildren(
+    sectionTitle('테이블 정책 · 컬럼 마스킹', '이 소스에서 조회 가능한 테이블과 개인정보 컬럼 마스킹을 관리합니다 — 고객 DB 무수정, 게이트웨이가 결정론적으로 집행.'),
+    el('p', { class: 'admin-hint', text: '기본자세: ' + (ov.table_default === 'deny'
+      ? 'allow-list(기본 차단 — 명시 허용만 조회)' : 'deny-list(기본 허용 — 명시 차단만 제외)') + ' · 위 폼의 table_default 로 변경' }));
+  const tbl = el('table', { class: 'fields-table' });
+  tbl.append(el('tr', {}, el('th', { text: '테이블' }), el('th', { text: '조회' }), el('th', { text: '마스킹' }), el('th', { text: '컬럼' })));
+  for (const t of (ov.tables || [])) {
+    if (t.system) { // 게이트웨이 내부 테이블 — 항상 차단(웹 편집 불가), 정직하게 표시
+      tbl.append(el('tr', { class: 'mini-ro' },
+        el('td', { text: t.name }),
+        el('td', {}, el('span', { class: 'pill', text: '시스템 차단' })),
+        el('td', { class: 'mini-meta', text: '잠금' }),
+        el('td', {})));
+      continue;
+    }
+    const allowed = t.mode === 'allow';
+    const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: allowed ? '허용' : '차단',
+      onclick: async () => { await setTablePolicy(source, t.name, allowed ? 'deny' : 'allow'); void renderDbPolicyPanel(panel, source); } });
+    const isOpen = t.name === openT;
+    const colsBtn = el('button', { class: 'btn-text', text: (isOpen ? '▾ 컬럼' : '▸ 컬럼') + (t.maskedCount ? ` (${t.maskedCount})` : '') });
+    colsBtn.addEventListener('click', () => { state.admin.dbPolTable = isOpen ? null : t.name; void renderDbPolicyPanel(panel, source); });
+    tbl.append(el('tr', { class: allowed ? '' : 'mini-ro' },
+      el('td', { text: t.name }), el('td', {}, toggle),
+      el('td', { class: 'mini-meta', text: t.maskedCount ? (t.maskedCount + ' 컬럼') : '–' }),
+      el('td', {}, colsBtn)));
+    if (isOpen) {
+      const cell = el('td', { colspan: '4' });
+      tbl.append(el('tr', {}, cell));
+      void renderColumnMasks(cell, panel, source, t.name);
+    }
+  }
+  panel.append(tbl);
+}
+
+async function renderColumnMasks(cell, panel, source, table) {
+  cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 불러오는 중…' }));
+  let ov;
+  try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(table)); }
+  catch (e) { cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 로드 실패: ' + e.message })); return; }
+  const STYLES = [['', '(마스킹 없음)'], ['full', 'full — 전체 ***'], ['partial', 'partial — 앞1·뒤1'], ['email', 'email — 로컬부 가림'], ['hash', 'hash — sha256'], ['null', 'null — 널']];
+  const ct = el('table', { class: 'fields-table', style: 'margin:6px 0 0 12px' });
+  for (const c of (ov.columns || [])) {
+    const box = el('select', {});
+    for (const [v, label] of STYLES) box.append(el('option', { value: v, text: label }));
+    box.value = c.masked || '';
+    box.addEventListener('change', async () => {
+      await setColumnMask(source, table, c.column_name, box.value);
+      void renderDbPolicyPanel(panel, source); // 마스킹 수 즉시 반영
+    });
+    ct.append(el('tr', {}, el('td', { text: c.column_name }), el('td', { class: 'mini-meta', text: c.data_type }), el('td', {}, box)));
+  }
+  cell.replaceChildren(ct);
+}
+
+async function setTablePolicy(source, table, mode) {
+  try { await api('/api/ui/org/db-source/table-policy', { method: 'POST', body: JSON.stringify({ source, table, mode }) }); toast(mode === 'allow' ? '허용됨' : '차단됨'); }
+  catch (e) { toast(e.message, true); }
+}
+async function setColumnMask(source, table, column, style) {
+  try {
+    await api('/api/ui/org/db-source/column-mask', { method: 'POST', body: JSON.stringify(style ? { source, table, column, style } : { source, table, column, remove: true }) });
+    toast(style ? ('마스킹: ' + style) : '마스킹 해제');
+  } catch (e) { toast(e.message, true); }
 }
 
 // ── 커스텀 훅 — runtime 권한 ──
@@ -2589,6 +2672,72 @@ function fileToAvatarDataUrl(file): Promise<string> {
   });
 }
 
+// ── 비밀번호 변경 모달 (#444) ──
+// 두 진입: (a) 임시 비번(must_change) 로그인 직후 강제 변경(forced=닫기 불가, 현재 비번은 방금 임시 비번 자동),
+//  (b) '내 프로필' 모달의 [비밀번호 변경](상시, 취소 가능). 백엔드 POST /api/ui/password(현재→새, 8자+).
+//  보안: el()/textContent 만(innerHTML 금지). 모달 셸은 .ov-* 재사용.
+const PW_INPUT_STYLE = 'width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid var(--line); border-radius:9px; font-size:14px; background:var(--bg); color:var(--ink);';
+function pwFieldRow(label, input) {
+  return el('label', { style: 'display:flex; flex-direction:column; gap:5px; margin-bottom:12px;' },
+    el('span', { style: 'font-size:12.5px; font-weight:600; color:var(--ink-sub);', text: label }), input);
+}
+function changePasswordModal(o?: { forced?: boolean; currentPrefill?: string | null }): void {
+  const forced = !!(o && o.forced);
+  const presetCurrent = (o && o.currentPrefill) || '';
+
+  const head = el('div', { class: 'ov-head' }, el('h3', { text: forced ? '새 비밀번호 설정' : '비밀번호 변경' }));
+  const box = el('div', { class: 'ov-box', style: 'max-width:440px' }, head);
+  const back = el('div', { class: 'ov-back' }, box);
+  const close = () => back.remove();
+  if (!forced) { // 강제(forced) 모드는 닫기 불가 — 새 비번을 설정해야만 진행.
+    head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: close }));
+    back.addEventListener('click', (e: any) => { if (e.target === back) close(); });
+    document.addEventListener('keydown', function esc(ev: any) { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+  }
+
+  const pwInput = (ph, ac) => el('input', { type: 'password', placeholder: ph, autocomplete: ac, style: PW_INPUT_STYLE });
+  const curIn = pwInput('현재 비밀번호', 'current-password');
+  const nextIn = pwInput('새 비밀번호 (8자 이상)', 'new-password');
+  const confIn = pwInput('새 비밀번호 확인', 'new-password');
+  const err = el('p', { class: 'gate-error', hidden: true, style: 'margin:2px 0 10px;' });
+  const showErr = (m) => { err.textContent = m; (err as any).hidden = false; };
+
+  const rows: any[] = [];
+  if (forced) rows.push(el('p', { class: 'admin-hint', text: '임시 비밀번호로 로그인했습니다. 계속하려면 새 비밀번호를 설정하세요.' }));
+  else rows.push(pwFieldRow('현재 비밀번호', curIn));
+  rows.push(pwFieldRow('새 비밀번호', nextIn), pwFieldRow('새 비밀번호 확인', confIn));
+
+  const submit = el('button', { class: 'btn btn-primary', type: 'submit', text: forced ? '설정하고 계속' : '변경' });
+  const secondary = forced
+    ? el('button', { type: 'button', class: 'btn btn-ghost', text: '로그아웃', onclick: () => { close(); logout(); } })
+    : el('button', { type: 'button', class: 'btn btn-ghost', text: '취소', onclick: close });
+  const actions = el('div', { style: 'display:flex; gap:8px; justify-content:flex-end; margin-top:16px;' }, secondary, submit);
+
+  const form = el('form', { style: 'margin:0;' }, ...rows, err, actions);
+  form.addEventListener('submit', async (ev: any) => {
+    ev.preventDefault();
+    const current = forced ? presetCurrent : curIn.value;
+    const next = nextIn.value;
+    const conf = confIn.value;
+    if (!forced && !current) { showErr('현재 비밀번호를 입력하세요.'); return; }
+    if (next.length < 8) { showErr('새 비밀번호는 8자 이상이어야 합니다.'); return; }
+    if (next !== conf) { showErr('새 비밀번호가 일치하지 않습니다.'); return; }
+    if (next === current) { showErr('현재 비밀번호와 다른 비밀번호를 설정하세요.'); return; }
+    (submit as any).disabled = true;
+    try {
+      await api('/api/ui/password', { method: 'POST', body: JSON.stringify({ current, next }) });
+      close();
+      toast('비밀번호가 변경되었습니다.');
+    } catch (e: any) {
+      (submit as any).disabled = false;
+      showErr((e && e.message) || '비밀번호 변경에 실패했습니다.');
+    }
+  });
+  box.append(form);
+  document.body.append(back);
+  setTimeout(() => (forced ? nextIn : curIn).focus(), 0);
+}
+
 async function openMyProfile() {
   let data;
   try { data = await api('/api/ui/me/profile'); }
@@ -2652,6 +2801,9 @@ async function openMyProfile() {
     field('프로필 사진', avaRow),
     field('표시 이름', nameIn),
     data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
     field('역할', roleIn),
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI가 나를 부르는 말)', addressIn),
@@ -2718,6 +2870,7 @@ function overlay(title, ...content) {
 // ════════════════════════════════════════════
 
 export {
+  changePasswordModal,
   copyButton,
   deployCommands,
   field,

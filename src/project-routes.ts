@@ -19,7 +19,6 @@ import { provisionProjectRepos } from "./project-provision.js";
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
-const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 // 확장자→Content-Type. **PDF/이미지 인라인 미리보기의 핵심** — 이 헤더가 없으면 브라우저가 blob 을 text 로
 //  취급해 iframe 에 PDF 원시바이트(%PDF-1.3…)가 그대로 노출된다. 미지정 확장자는 octet-stream(다운로드 유도).
@@ -112,11 +111,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   const { prefix } = deps;
   const isV6 = prefix.includes("/v6/");  // AGENTS.md 생성·규칙 엔드포인트는 v6 전용(getProject 가 v6).
 
-  // 프로젝트 + 폴더 절대경로(검증됨). 팀원 게이트. v6 는 folder 비면 ensureFolder 로 생성.
-  const projBase = async (id: number, viewerId?: string): Promise<{ project: { id: number; name: string; folder: string }; base: string }> => {
+  // 프로젝트 + 폴더 절대경로(검증됨). v6 는 folder 비면 ensureFolder 로 생성.
+  //  #452: 프로젝트 리소스(파일·세션·규칙·provision·타임라인)는 어사이니/멤버십 무관 로그인 전원 접근 — 멤버십 게이트 없음.
+  const projBase = async (id: number): Promise<{ project: { id: number; name: string; folder: string }; base: string }> => {
     const project = await deps.getProject(id);
     if (!project) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
-    if (viewerId !== undefined && !(await deps.isProjectMember(id, viewerId))) throw new HttpError(403, "초대받은 팀원만 접근할 수 있습니다");
     let folder = project.folder;
     if (!folder && deps.ensureFolder) folder = await deps.ensureFolder({ id: project.id, name: project.name });
     if (!folder) throw new HttpError(400, "프로젝트 폴더가 없습니다");
@@ -125,7 +124,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // ── ① 공유 폴더 — 목록 / 검색(q) ──
   app.get(`${prefix}/:id/files`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     res.setHeader("Cache-Control", "no-store");
     const q = String(req.query.q ?? "").trim();
     if (q) { res.json({ search: q, items: await searchFiles(base, q) }); return; }
@@ -147,7 +146,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 다운로드 / 미리보기
   app.get(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
     let st: fs.Stats;
     try { st = await fsp.stat(abs); } catch { throw new HttpError(404, "파일 없음"); }
@@ -168,7 +167,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 업로드(raw 스트림)
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
     await fsp.mkdir(path.dirname(abs), { recursive: true });
     await new Promise<void>((resolve, reject) => {
@@ -188,7 +187,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 새 폴더 생성
   app.post(`${prefix}/:id/folder`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
     await fsp.mkdir(abs, { recursive: true });
     res.json({ ok: true });
@@ -196,7 +195,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 이름 변경 — 같은 폴더 안에서 이름만(파일·폴더 공통). body: { path, name }.
   app.post(`${prefix}/:id/rename`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);
     const newName = String(b.name ?? "").trim();
@@ -213,16 +212,16 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 삭제 — 파일/폴더(폴더는 내용까지 재귀). 루트 자신은 거부(requireFile). path 필수.
   app.delete(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
     await fsp.rm(abs, { recursive: true, force: true });
     res.json({ ok: true });
   }));
 
-  // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 팀원 게이트. ──
+  // ── ①-b 공유 폴더 매니페스트 — 로컬 작업 PC 의 pull 동기화 기준(재귀 [{path,mtime,size}] + newest). 전원 접근(#452). ──
   //  v6: 매니페스트 전 AGENTS.md 를 현재 프로젝트 상태로 재생성(write-if-changed) → pull 마다 최신 digest 가 따라감.
   app.get(`${prefix}/:id/shared/manifest`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     if (isV6) await ensureAgentsMd(Number(req.params.id), base).catch(() => { /* 비치명 */ });
     res.setHeader("Cache-Control", "no-store");
     const files = await manifestFiles(base);
@@ -233,28 +232,29 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   // ── ①-c 프로젝트 규칙(AGENTS.md 의 '규칙' 영역) — 로드/저장. digest 는 자동, 규칙만 사람이 편집. v6 전용. ──
   if (isV6) {
     app.get(`${prefix}/:id/rules`, auth, wrap(async (req, res) => {
-      const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+      const { base } = await projBase(Number(req.params.id));
       res.setHeader("Cache-Control", "no-store");
       res.json(await readProjectAgentsMd(base));
     }));
     app.post(`${prefix}/:id/rules`, auth, wrap(async (req, res) => {
-      const { project, base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+      const { project, base } = await projBase(Number(req.params.id));
       const rules = String(((req.body ?? {}) as Record<string, unknown>).rules ?? "");
       await ensureAgentsMd(project.id, base, rules);
       res.json({ ok: true });
     }));
   }
 
-  // ── ② 터미널 세션(공동 — 프로젝트 팀원 전용) — 목록 / 생성. 비팀원은 게이트 403. ──
+  // ── ② 터미널 세션(공동) — 목록·생성 모두 어사이니/멤버십 무관 전원(#452). projBase 가 게이트 안 함. ──
+  //  (프로젝트 상세 페이지는 #280 이후 전원 공개, 입장 게이트 canAttach 도 프로젝트 세션 전원 개방.)
   app.get(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
-    const { base } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { base } = await projBase(Number(req.params.id));
     res.setHeader("Cache-Control", "no-store");
     const all = await listSessions(userOf(req));
     const sessions = all.filter((s) => s.dir && (s.dir === base || s.dir.startsWith(base + path.sep)));
     res.json({ sessions });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
-    const { project } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { project } = await projBase(Number(req.params.id));
     const b = (req.body ?? {}) as Record<string, unknown>;
     // cwd(subpath) 는 기본 프로젝트 폴더 — provision 된 레포 워크트리에서 열려면 그 하위경로를 받되 프로젝트 폴더 안으로 봉쇄
     //  (타 프로젝트 폴더로 열어 이 프로젝트 멤버십을 도용하는 걸 차단). resolveRootPath 가 .. 탈출은 별도 차단.
@@ -276,9 +276,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // ── ②-b 박스 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).
-  //  서버가 박스에서 직접 실행(work.mjs 의 서버측 대응). 결과 경로는 .lively/project.json(provisioned)에 기록. 팀원 게이트. ──
+  //  서버가 박스에서 직접 실행(work.mjs 의 서버측 대응). 결과 경로는 .lively/project.json(provisioned)에 기록. 전원 접근(#452). ──
   app.post(`${prefix}/:id/provision`, auth, wrap(async (req, res) => {
-    const { project } = await projBase(Number(req.params.id), idOf(userOf(req)));
+    const { project } = await projBase(Number(req.params.id));
     const b = (req.body ?? {}) as Record<string, unknown>;
     const specs = Array.isArray(b.repos) ? b.repos as { name: string; path?: string; worktree?: boolean; branch?: string }[] : [];
     if (!specs.length) throw new HttpError(400, "provision 할 레포가 없습니다");
@@ -292,7 +292,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   // ── ③ 작업 타임라인 — 팀원 activity(author_person 지정 시 그 사람만) ──
   app.get(`${prefix}/:id/activity`, auth, wrap(async (req, res) => {
     const id = Number(req.params.id);
-    await projBase(id, idOf(userOf(req))); // 존재·폴더·팀원 게이트
+    await projBase(id); // 존재·폴더 확인(멤버십 게이트 없음 — #452)
     const authorPerson = req.query.author_person ? String(req.query.author_person) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : 100;
     res.setHeader("Cache-Control", "no-store");

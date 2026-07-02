@@ -675,6 +675,7 @@ export interface DbSourceRow {
   timeout_ms: number | null;
   note: string | null;
   enabled: boolean;
+  table_default: "allow" | "deny"; // 소스별 테이블 기본자세 — allow=deny-list(후방호환) / deny=allow-list(컴플라이언스) (#186)
   sort: number;
   version: number;
   updated_at: string | null;
@@ -693,6 +694,7 @@ function mapDbSource(row: Record<string, unknown>): DbSourceRow {
     timeout_ms: typeof row.timeout_ms === "number" ? row.timeout_ms : null,
     note: (row.note as string) ?? null,
     enabled: row.enabled !== false,
+    table_default: row.table_default === "deny" ? "deny" : "allow",
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
@@ -700,7 +702,7 @@ function mapDbSource(row: Record<string, unknown>): DbSourceRow {
   };
 }
 
-const DBSRC_COLS = "name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, sort, version, updated_at, updated_by";
+const DBSRC_COLS = "name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, table_default, sort, version, updated_at, updated_by";
 
 export async function listDbSources(): Promise<DbSourceRow[]> {
   const r = await itemsPool.query(`SELECT ${DBSRC_COLS} FROM org_db_source ORDER BY sort, name`);
@@ -723,6 +725,7 @@ export interface DbSourceInput {
   timeout_ms?: number | null;
   note?: string | null;
   enabled?: boolean;
+  table_default?: "allow" | "deny";
   sort?: number;
 }
 
@@ -734,18 +737,19 @@ export async function upsertDbSource(s: DbSourceInput, actor?: string, source?: 
   const driver = s.driver ?? before?.driver ?? "postgres";
   const authMode = s.auth_mode ?? before?.auth_mode ?? "password";
   const enabled = s.enabled ?? before?.enabled ?? true;
+  const tableDefault = s.table_default ?? before?.table_default ?? "allow";
   const sort = s.sort ?? before?.sort ?? 0;
   await itemsPool.query(
-    `INSERT INTO org_db_source(name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,now(),$12)
+    `INSERT INTO org_db_source(name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, table_default, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,now(),$13)
      ON CONFLICT (name) DO UPDATE SET
        driver=EXCLUDED.driver, url=EXCLUDED.url, auth_mode=EXCLUDED.auth_mode, auth_ref=EXCLUDED.auth_ref,
        rls=EXCLUDED.rls, max_rows=EXCLUDED.max_rows, timeout_ms=EXCLUDED.timeout_ms, note=EXCLUDED.note,
-       enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
+       enabled=EXCLUDED.enabled, table_default=EXCLUDED.table_default, sort=EXCLUDED.sort,
        version=org_db_source.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [s.name, driver, keep(s.url, before?.url), authMode, keep(s.auth_ref, before?.auth_ref),
      keep(s.rls, before?.rls), keep(s.max_rows, before?.max_rows), keep(s.timeout_ms, before?.timeout_ms),
-     keep(s.note, before?.note), enabled, sort, actor ?? null],
+     keep(s.note, before?.note), enabled, tableDefault, sort, actor ?? null],
   );
   const after = await getDbSource(s.name);
   await audit("org_db_source", s.name, before ? "update" : "insert", before, after, actor, source);
@@ -757,6 +761,78 @@ export async function removeDbSource(name: string, actor?: string, source?: stri
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_db_source WHERE name=$1`, [name]);
   await audit("org_db_source", name, "delete", before, null, actor, source);
+}
+
+// ════════ db_query 테이블 정책 · 컬럼 마스킹 (org_db_table_policy · org_db_column_mask) — 웹 관리 (#186) ════════
+//  라이브 스키마 위 오버레이(스키마 사본 미저장). db_query 가 매 호출 병합 로드(src/db/policy.ts, TTL 스냅샷) → 무재시작 반영.
+export interface DbTablePolicyRow {
+  source: string;
+  table_name: string;
+  mode: "allow" | "deny";
+  note: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+export interface DbColumnMaskRow {
+  source: string;
+  table_name: string;
+  column_name: string;
+  style: "full" | "partial" | "email" | "hash" | "null";
+  note: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export async function listTablePolicies(source?: string): Promise<DbTablePolicyRow[]> {
+  const r = source
+    ? await itemsPool.query(`SELECT source, table_name, mode, note, updated_at, updated_by FROM org_db_table_policy WHERE source=$1 ORDER BY table_name`, [source])
+    : await itemsPool.query(`SELECT source, table_name, mode, note, updated_at, updated_by FROM org_db_table_policy ORDER BY source, table_name`);
+  return r.rows as DbTablePolicyRow[];
+}
+
+export async function upsertTablePolicy(p: { source: string; table_name: string; mode: "allow" | "deny"; note?: string | null }, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_table_policy WHERE source=$1 AND table_name=$2`, [p.source, p.table_name]);
+  await itemsPool.query(
+    `INSERT INTO org_db_table_policy(source, table_name, mode, note, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,1,now(),$5)
+     ON CONFLICT (source, table_name) DO UPDATE SET
+       mode=EXCLUDED.mode, note=EXCLUDED.note, version=org_db_table_policy.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [p.source, p.table_name, p.mode, p.note ?? null, actor ?? null],
+  );
+  await audit("org_db_table_policy", `${p.source}.${p.table_name}`, before.rows[0] ? "update" : "insert", before.rows[0] ?? null, p, actor, "web");
+}
+
+export async function removeTablePolicy(source: string, table_name: string, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_table_policy WHERE source=$1 AND table_name=$2`, [source, table_name]);
+  if (!before.rows[0]) return;
+  await itemsPool.query(`DELETE FROM org_db_table_policy WHERE source=$1 AND table_name=$2`, [source, table_name]);
+  await audit("org_db_table_policy", `${source}.${table_name}`, "delete", before.rows[0], null, actor, "web");
+}
+
+export async function listColumnMasks(source?: string): Promise<DbColumnMaskRow[]> {
+  const r = source
+    ? await itemsPool.query(`SELECT source, table_name, column_name, style, note, updated_at, updated_by FROM org_db_column_mask WHERE source=$1 ORDER BY table_name, column_name`, [source])
+    : await itemsPool.query(`SELECT source, table_name, column_name, style, note, updated_at, updated_by FROM org_db_column_mask ORDER BY source, table_name, column_name`);
+  return r.rows as DbColumnMaskRow[];
+}
+
+export async function upsertColumnMask(m: { source: string; table_name: string; column_name: string; style: DbColumnMaskRow["style"]; note?: string | null }, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_column_mask WHERE source=$1 AND table_name=$2 AND column_name=$3`, [m.source, m.table_name, m.column_name]);
+  await itemsPool.query(
+    `INSERT INTO org_db_column_mask(source, table_name, column_name, style, note, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,1,now(),$6)
+     ON CONFLICT (source, table_name, column_name) DO UPDATE SET
+       style=EXCLUDED.style, note=EXCLUDED.note, version=org_db_column_mask.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [m.source, m.table_name, m.column_name, m.style, m.note ?? null, actor ?? null],
+  );
+  await audit("org_db_column_mask", `${m.source}.${m.table_name}.${m.column_name}`, before.rows[0] ? "update" : "insert", before.rows[0] ?? null, m, actor, "web");
+}
+
+export async function removeColumnMask(source: string, table_name: string, column_name: string, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_column_mask WHERE source=$1 AND table_name=$2 AND column_name=$3`, [source, table_name, column_name]);
+  if (!before.rows[0]) return;
+  await itemsPool.query(`DELETE FROM org_db_column_mask WHERE source=$1 AND table_name=$2 AND column_name=$3`, [source, table_name, column_name]);
+  await audit("org_db_column_mask", `${source}.${table_name}.${column_name}`, "delete", before.rows[0], null, actor, "web");
 }
 
 // ════════ 커스텀 훅 — org_hook ════════

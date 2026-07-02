@@ -1,5 +1,5 @@
 // terminal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, el, errorNote, state, toast } from './core.js';
+import { api, el, errorNote, pageHead, state, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
 // ════════════════════════════════════════════════════════════════════
@@ -149,7 +149,7 @@ async function renderTerminal(view) {
         sel.ids.clear();
         reRender();
     }
-    const head = el('div', { class: 'page-head' }, el('h1', { text: '터미널 세션' }), headActions);
+    const head = pageHead('터미널', '브라우저에서 바로 AI 세션을 열고, 진행 중인 세션들을 이어서 관리합니다.', [headActions], '널');
     view.replaceChildren(...[loginBannerEl(cfg, view), head, bulkBar, body].filter(Boolean));
     repaint();
 }

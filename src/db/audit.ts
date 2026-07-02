@@ -10,6 +10,7 @@ export function auditQuery(params: {
   ms: number;
   ok: boolean;
   error?: string;
+  masked?: number; // 마스킹된 출력 컬럼 수(#186) — 컴플라이언스 사후추적
 }): void {
   logger.info({ audit: "db_query", ...params });
 }

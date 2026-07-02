@@ -38,6 +38,17 @@ function git(args: string[], cwd?: string): Promise<{ ok: boolean; out: string; 
 }
 async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync(p) && (await git(["rev-parse", "--git-dir"], p)).ok; }
 
+// 재사용 레포를 현재 브랜치의 upstream 으로 fast-forward — 새 워크트리가 최신 base HEAD 에서 잘리도록.
+//  best-effort·비파괴: 무인 provision 이라 자동 머지커밋·리베이스·충돌 금지 → ff-only 만.
+//   dirty·무upstream·갈라짐·오프라인이면 손대지 않고 낡은 채 진행(터미널 생성을 막지 않음).
+//   @{u} 사용 → repos 기본 클론(main→origin/main)이든 직접입력 경로(피처브랜치→그 upstream)든 브랜치 선택 존중.
+async function refreshRepo(repoPath: string): Promise<void> {
+  const st = await git(["status", "--porcelain"], repoPath);
+  if (!st.ok || st.out) return;                        // dirty 또는 상태확인 실패 → skip
+  await git(["fetch"], repoPath);                       // 실패(오프라인 등) 무시 — 아래 ff 가 no-op 될 뿐
+  await git(["merge", "--ff-only", "@{u}"], repoPath);  // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+}
+
 // 경로 봉쇄 — 절대경로 정규화 후 workspace 루트 안에 있어야 함(.. 탈출 거부). 신뢰 위협모델이라 string-prefix 검사로 충분.
 function confineToWorkspace(abs: string, label: string): string {
   const resolved = path.resolve(abs);
@@ -82,6 +93,9 @@ export async function provisionProjectRepos(
       if (!c.ok) throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
       cloned = true;
     }
+
+    // ②-b 재사용 base(갓 clone 아님)는 새 워크트리를 자르기 전에 upstream 으로 fast-forward(best-effort).
+    if (!cloned) await refreshRepo(repoPath);
 
     // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
     let cwd = repoPath;
