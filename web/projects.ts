@@ -4549,7 +4549,7 @@ function pjvFieldDropdownEditor(anchor, t, field, value, persist, reload) {
   menu.append(pjvAddOptionRow(field, async (opt) => {
     close();
     try { await api('/api/ui/v6/tasks/' + t.id + '/fields/' + field.id, { method: 'POST', body: JSON.stringify({ value: opt.id }) }); } catch (_) { /* noop */ }
-    reload();
+    pjvReloadKeepScroll(reload);  // 옵션 추가·선택 후 스크롤 보존(#459)
   }));
 }
 
@@ -4572,7 +4572,7 @@ function pjvFieldLabelsEditor(anchor, t, field, value, persist, reload) {
   menu.append(pjvAddOptionRow(field, async (opt) => {
     close();
     try { await api('/api/ui/v6/tasks/' + t.id + '/fields/' + field.id, { method: 'POST', body: JSON.stringify({ value: [...selected, opt.id] }) }); } catch (_) { /* noop */ }
-    reload();
+    pjvReloadKeepScroll(reload);  // 라벨 옵션 추가 후 스크롤 보존(#459)
   }));
 }
 
@@ -4625,7 +4625,7 @@ function pjvRenameColumn(anchor, field, reload) {
     if (e.key !== 'Enter') return;
     e.preventDefault(); const v = input.value.trim(); close();
     if (v && v !== field.name) {
-      try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ name: v }) }); reload(); }
+      try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ name: v }) }); pjvReloadKeepScroll(reload); /* 컬럼 이름변경 후 스크롤 보존(#459) */ }
       catch (err) { toast('수정 실패 — ' + err.message, true); }
     }
   };
@@ -4642,14 +4642,14 @@ function pjvEditColumnOptions(field, reload) {
     if (!options.length) { toast('옵션을 1개 이상 두세요', true); return; }
     saveBtn.disabled = true;
     const config = Object.assign({}, field.config, { options });
-    try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ config }) }); back.remove(); reload(); }
+    try { await api('/api/ui/v6/fields/' + field.id, { method: 'POST', body: JSON.stringify({ config }) }); back.remove(); pjvReloadKeepScroll(reload); /* 옵션 편집 후 스크롤 보존(#459) */ }
     catch (e) { toast('저장 실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
 }
 function pjvDeleteColumn(field, reload) {
   if (!confirm("'" + field.name + "' 컬럼을 삭제할까요?\n\n이 컬럼의 모든 값이 함께 사라집니다.")) return;
   (async () => {
-    try { await api('/api/ui/v6/fields/' + field.id + '/delete', { method: 'POST', body: JSON.stringify({}) }); toast('컬럼을 삭제했어요'); reload(); }
+    try { await api('/api/ui/v6/fields/' + field.id + '/delete', { method: 'POST', body: JSON.stringify({}) }); toast('컬럼을 삭제했어요'); pjvReloadKeepScroll(reload); /* 컬럼 삭제 후 스크롤 보존(#459) */ }
     catch (e) { toast('삭제 실패 — ' + e.message, true); }
   })();
 }
@@ -4777,7 +4777,7 @@ function pjvFieldConfigForm(projectId, f, reload, close, back) {
   return wrap;
 }
 async function pjvCreateField(projectId, payload, reload, close) {
-  try { await api('/api/ui/v6/projects/' + projectId + '/fields', { method: 'POST', body: JSON.stringify(payload) }); if (close) close(); toast('컬럼을 추가했어요'); reload(); }
+  try { await api('/api/ui/v6/projects/' + projectId + '/fields', { method: 'POST', body: JSON.stringify(payload) }); if (close) close(); toast('컬럼을 추가했어요'); pjvReloadKeepScroll(reload); /* 컬럼 추가 후 스크롤 보존(#459) */ }
   catch (e) { toast('컬럼 추가 실패 — ' + e.message, true); }
 }
 
@@ -4796,7 +4796,7 @@ function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
     if (e.key !== 'Enter') return;
     const name = input.value.trim(); if (!name || busy) return;
     busy = true; input.disabled = true;
-    try { await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: parentTask.id }) }); reload(); }
+    try { await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: parentTask.id }) }); pjvReloadKeepScroll(reload); /* 하위 추가 후 스크롤 보존(#459) */ }
     catch (err) { toast('추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
   });
 }
@@ -4980,7 +4980,7 @@ function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
     busy = true; input.disabled = true;
     if (indentParent) {
       // Tab 들여쓰기 — 위 상위태스크의 하위로 생성. 생성 후 reload 로 중첩 반영(부모 caret·하위수 갱신).
-      try { await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: indentParent.id }) }); reload(); }
+      try { await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: indentParent.id }) }); pjvReloadKeepScroll(reload); /* 들여쓰기 하위 추가 후 스크롤 보존(#459) */ }
       catch (err) { toast('하위 추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
       return;
     }
@@ -5074,7 +5074,7 @@ function pjvDeleteTask(t, reload) {
     try {
       await api('/api/ui/v6/tasks/' + t.id + '/delete', { method: 'POST', body: JSON.stringify({}) });
       toast('삭제했습니다 — #/trash 에서 복원 가능');
-      reload();
+      pjvReloadKeepScroll(reload);  // 태스크 삭제 후 위로 튀지 않게 스크롤 보존(#459)
     } catch (e) { toast('삭제 실패 — ' + e.message, true); }
   })();
 }
@@ -5149,7 +5149,7 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
         busy = true; input.disabled = true;
         try {
           await api('/api/ui/v6/projects/' + projectId + '/tasks', { method: 'POST', body: JSON.stringify({ name, parent_task_id: t.id }) });
-          reload();
+          pjvReloadKeepScroll(reload);  // 하위 태스크 추가 후 스크롤 보존(#459)
         } catch (err) { toast('하위 추가 실패 — ' + err.message, true); input.disabled = false; busy = false; }
       };
       input.addEventListener('blur', commit);
@@ -5205,7 +5205,7 @@ function pjvAddTask(projectId, parentTaskId, reload) {
       }) });
       back.remove();
       toast(parentTaskId ? '하위 태스크를 추가했습니다' : '태스크를 추가했습니다');
-      reload();
+      pjvReloadKeepScroll(reload);  // 태스크 추가 후 스크롤 보존(#459)
     } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
