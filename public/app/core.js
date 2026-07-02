@@ -567,16 +567,61 @@ function avatarColor(seed) {
         h = (h * 31 + s.charCodeAt(i)) % 360;
     return 'hsl(' + h + ', 50%, 60%)';
 }
-// 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+이니셜. cls 로 크기 변형(topbar-ava 등).
-function profileAvatar(avatar, name, seed, cls) {
+// 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+글자. cls 로 크기 변형(topbar-ava 등).
+//  opts.char/opts.color — 프로필 설정의 커스텀 글자·배경색(이미지 없을 때만). 없으면 이름 이니셜 + id 해시색 폴백.
+function profileAvatar(avatar, name, seed, cls, opts) {
     const wrap = el('span', { class: 'pava' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' });
     if (avatar) {
         wrap.append(el('img', { src: avatar, alt: '' }));
     }
     else {
-        wrap.style.background = avatarColor(seed || name);
-        wrap.textContent = initials(name);
+        const o = opts || {};
+        const ch = o.char != null ? String(o.char).trim() : '';
+        wrap.style.background = (o.color && /^#[0-9a-fA-F]{6}$/.test(o.color)) ? o.color : avatarColor(seed || name);
+        wrap.textContent = ch || initials(name);
     }
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+// ── 사람 아바타 단일 소스(#473 후속) — id→멤버(글자·색·이미지) 맵. 칩·얼굴·작성자 등 모든 '사람' 아바타가 여기서 커스텀 반영. ──
+//  기존엔 곳곳이 avatarColor(id)+initials(name) 를 인라인 복제해 커스텀이 안 먹었다 → personFace 한 경로로 통일.
+const _peopleAvatars = {};
+let _peopleLoadP = null;
+function loadPeopleAvatars() {
+    if (_peopleLoadP)
+        return _peopleLoadP;
+    _peopleLoadP = api('/api/ui/dash/members')
+        .then((d) => { for (const m of (d && d.members) || [])
+        if (m && m.id)
+            _peopleAvatars[String(m.id)] = m; return _peopleAvatars; })
+        .catch(() => _peopleAvatars);
+    return _peopleLoadP;
+}
+// 프로필 저장 등으로 한 사람 아바타가 바뀌면 즉시 맵 갱신(다음 렌더부터 반영).
+function setPersonAvatar(id, m) { if (id)
+    _peopleAvatars[String(id)] = Object.assign({}, _peopleAvatars[String(id)], m || {}); }
+function paintFace(wrap, id, name) {
+    const m = _peopleAvatars[String(id)] || {};
+    const nm = m.display_name || name || id || '';
+    wrap.title = nm;
+    // 얼굴 내용(텍스트·이미지)만 교체하고 뱃지 등 다른 자식(요소)은 보존 — self-heal 재칠 시 뱃지 안 지워지게.
+    Array.from(wrap.childNodes).forEach((n) => { if (n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'IMG'))
+        wrap.removeChild(n); });
+    if (m.avatar) {
+        wrap.style.background = '';
+        wrap.insertBefore(el('img', { src: m.avatar, alt: '' }), wrap.firstChild);
+    }
+    else {
+        const ch = m.avatar_char != null ? String(m.avatar_char).trim() : '';
+        wrap.style.background = (m.avatar_color && /^#[0-9a-fA-F]{6}$/.test(m.avatar_color)) ? m.avatar_color : avatarColor(id || nm);
+        wrap.insertBefore(document.createTextNode(ch || initials(nm)), wrap.firstChild);
+    }
+}
+// 사람 아바타 얼굴 — 호출부의 기존 클래스(pjv-ava·project-face·cmt-ava 등)를 유지하되 글자·색·이미지는 맵에서. 맵 미로드면 로드 후 self-heal.
+function personFace(id, cls, name) {
+    const wrap = el('span', { class: (cls || 'pava') + ' pv-face' });
+    paintFace(wrap, id, name);
+    if (!_peopleAvatars[String(id)])
+        loadPeopleAvatars().then(() => paintFace(wrap, id, name));
+    return wrap;
+}
+export { avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

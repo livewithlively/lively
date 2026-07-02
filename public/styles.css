@@ -2368,10 +2368,12 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-valbtn:hover { background: var(--bg-tint-2); }
 .pjv-tm-valbtn.empty { color: var(--muted-3); }
 .pjv-tm-valtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: #fff; background: var(--muted-2); padding: 5px 12px; border-radius: 7px; }
-.pjv-tm-statuspill.todo { background: var(--muted-2); }
-.pjv-tm-statuspill.inprog { background: var(--blue); }
-.pjv-tm-statuspill.done { background: var(--mint); }
+/* 상태 배지 — 통일 아이콘 칩(#499 후속): 라이트 배경 + 상태색 라벨 + SVG 아이콘 */
+.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net, #d9dee6); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
+.pjv-tm-statuspill:hover { border-color: var(--blue); }
+.pjv-tm-statuspill.todo { color: var(--muted); }
+.pjv-tm-statuspill.inprog { color: var(--blue); }
+.pjv-tm-statuspill.done { color: #1F9D6B; }
 .pjv-tm-dates { display: inline-flex; align-items: center; gap: 4px; }
 .pjv-tm-datebtn { border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); padding: 4px 8px; border-radius: 7px; }
 .pjv-tm-datebtn:hover { background: var(--bg-tint-2); }
@@ -2386,9 +2388,28 @@ body.pjv-tm-open { overflow: hidden; }
 /* 전역 `.empty svg { margin:0 auto 14px }` 의 14px 하단 여백 누수 차단 — 빈 우선순위 깃발 등 메타 아이콘이 위로 떠 보이던 문제. */
 .pjv-proj-meta .pjv-cell-ico { margin: 0; }
 .pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
-/* 폴더 '미분류 — 폴더 지정' 플레이스홀더가 전역 .pjv-cell-ph{font-size:19px}(보드 표의 아이콘 글리프용)를
-   물려받아 텍스트가 과하게 커 보이던 문제 — 메타 안에선 값 텍스트(폴더명, 15px)와 같게 맞춰 크기 튐 제거. */
-.pjv-proj-meta .pjv-cell-ph { font-size: 15px; line-height: 1.4; }
+
+/* ── 메타 값 통일(#473 후속) — 값마다 폰트(12~15px)·높이(24~34px)·크롬(상태만 테두리 pill)이 제각각이라 산란해 보이던 것 정리.
+   값 '표시 방식'은 유지하고, 크기·정렬·크롬만 한 결로: 13.5px · 좌측정렬 · 동일 높이 · 단일값은 테두리 없는 투명 셀 + hover 배경. ── */
+.pjv-proj-meta .pjv-tm-field-val { font-size: 13.5px; }
+/* 단일값 클릭 컨트롤(상태 pill·리스트·우선순위·날짜)을 같은 결로 통일 — 상태 pill 의 흰 배경+테두리 제거해 리스트/우선순위와 동일하게. */
+.pjv-proj-meta .pjv-tm-statuspill,
+.pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn,
+.pjv-proj-meta .pjv-tm-datebtn,
+.pjv-proj-meta .pjv-tm-valbtn {
+  font-size: 13.5px; font-weight: 600; letter-spacing: 0; min-height: 28px; padding: 4px 8px;
+  border: none; border-radius: 7px; background: transparent; box-shadow: none; justify-content: flex-start; gap: 6px;
+}
+.pjv-proj-meta .pjv-tm-statuspill:hover,
+.pjv-proj-meta .pjv-tm-datebtn:hover,
+.pjv-proj-meta .pjv-tm-valbtn:hover { background: var(--bg-tint-2); border: none; }
+/* placeholder(미분류·Empty·Start/Due) 동일 크기·색으로. */
+.pjv-proj-meta .pjv-cell-ph { font-size: 13.5px; line-height: 1.4; }
+/* 팀원 아바타 값 — 다른 값 높이에 맞춰 축소(행 높이 튐 제거). */
+.pjv-proj-meta .pjv-tm-field-val .pjv-ava { width: 20px; height: 20px; font-size: 10px; }
+/* 멀티값 칩(선행/후속 링크·태그)은 칩 유지하되 폰트·행높이만 통일. */
+.pjv-proj-meta .pjv-edge-chip, .pjv-proj-meta .pjv-edge-add { font-size: 13px; }
+.pjv-proj-meta .pjv-proj-edges, .pjv-proj-meta .pjv-tm-tags { min-height: 28px; }
 .pjv-proj-tagpicker { min-width: 244px; padding: 8px; }
 .pjv-proj-tagpicker-list { margin-top: 6px; max-height: 280px; overflow: auto; }
 .pjv-tm-time { display: inline-flex; align-items: center; gap: 8px; }
@@ -2921,6 +2942,10 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-bulk-run:disabled { opacity: .6; cursor: default; animation: none; transform: none; }
 .pjv-bulk-run svg { width: 18px; height: 18px; flex: none; }
 @keyframes pjvBulkRunPulse { 0%, 100% { box-shadow: 0 4px 18px rgba(110,99,255,.45); } 50% { box-shadow: 0 6px 26px rgba(110,99,255,.85); } }
+/* 보조 액션 — '클로드로 실행' 기본값 설정. 실행 버튼보다 덜 강조(펄스·그라데이션 없음, 은은한 고스트로 살짝 빠지게). */
+.pjv-bulk-cfg { display: inline-flex; align-items: center; gap: 7px; height: 40px; margin-left: 8px; padding: 0 13px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.05); color: #C7D2E6; border-radius: 11px; cursor: pointer; font-size: 13.5px; font-weight: 600; white-space: nowrap; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.pjv-bulk-cfg:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.3); }
+.pjv-bulk-cfg svg { width: 18px; height: 18px; flex: none; color: currentColor; }
 .pjv-menu-head { padding: 6px 12px 4px; font-size: 11.5px; font-weight: 700; color: var(--muted-2); letter-spacing: .2px; }
 .pjv-bulk-sep-h { height: 1px; background: var(--line); margin: 4px 0; }
 .pjv-bulk-apply { color: var(--blue); font-weight: 600; }
@@ -3037,24 +3062,22 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* ＋ 글리프(새 영역 버튼 안) */
 .pjv-newlist-plus { font-size: 13px; font-weight: 700; line-height: 1; }
 
+/* 툴바(프로젝트·폴더·필터·… / 내 할당만·Closed)와 아래 본문 사이 여백 — 붙어 보이던 문제 해소, 모든 뷰 일관(#473 후속). */
+.pjv-listboard .card-head { margin-bottom: 20px; }
 /* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
-/*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
-.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
+.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 0; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-/* 사이드바 = 담긴 네비게이터 패널(옅은 틴트+테두리+라운드). 긴 빈 열 대신 내용만큼만, 스크롤 시 따라오게 sticky. */
-.pjv-side-nav { position: sticky; top: 12px; align-self: start; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; padding: 10px 10px 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; }
-.pjv-side-nav-inner { display: flex; flex-direction: column; gap: 1px; }
-/* 헤더 — 조용한 섹션 라벨(제목처럼 크게 X). 아래 항목과 간격 확보(안내문 제거 후 #473). */
-.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 10px 10px; }
-.pjv-side-nav-head-label { font-size: 11.5px; font-weight: 700; letter-spacing: .5px; color: var(--muted-2); }
+.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
+.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
+.pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
 .pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
-.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
-.pjv-side-navitem:hover { background: rgba(255,255,255,.65); color: var(--ink); }
-/* 틴트 패널 위 선택 항목 = 흰 칩 + 파란 좌측 액센트(또렷하게 뜬다). */
-.pjv-side-navitem.active { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 2px 0 0 var(--blue), 0 1px 2px rgba(21,35,59,.06); }
+.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
+.pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
@@ -3064,8 +3087,8 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* 묶음 폴더 아이콘 — 동그란 점 대신 '색을 채운 폴더'로 상위 분류 느낌(#356). */
 .pjv-bundle-ic { flex: none; width: 18px; height: 18px; display: block; }
 .pjv-side-navitem.active .pjv-bundle-ic.none path { stroke: var(--blue); }
-.pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
-.pjv-side-newlist:hover { color: var(--blue); background: var(--bg-tint-2); }
+.pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
+.pjv-side-newlist:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
 .pjv-side-main { padding-left: 16px; min-width: 0; }
 .pjv-side-main > .pjv-tgroup:first-child { margin-top: 0; }
 
@@ -3121,6 +3144,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 아바타(프로필 원형) — 업로드 이미지 또는 이니셜+색상. core.profileAvatar 가 생성. */
 .pava { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; color: #fff; font-weight: 700; font-size: 12px; line-height: 1; user-select: none; }
 .pava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 사람 아바타 단일 경로(personFace) — 호출부 클래스(pjv-ava 등)에 얹혀 이미지 클립 + 채움(#473 후속). */
+.pv-face { overflow: hidden; }
+.pv-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .prof-ava-lg { width: 72px; height: 72px; font-size: 27px; box-shadow: 0 2px 5px rgba(21, 35, 59, .15); }
 /* 내 프로필 모달 — 아바타 행(미리보기 + 올리기/기본으로). */
 .prof-ava-row { display: flex; align-items: center; gap: 16px; }
@@ -3184,6 +3210,18 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-edge-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
 .pjv-edge-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-edge-pick-id { flex: none; color: var(--muted-2); font-size: 11.5px; }
+/* '＋ 새 프로젝트 만들기'(#519) — 결과 아래 고정 액션(footer). 파란 강조 + 위 구분선. */
+.pjv-edge-pick-new { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; color: var(--blue); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; }
+.pjv-edge-pick-new:hover { background: color-mix(in srgb, var(--blue) 9%, transparent); }
+.pjv-edge-pick-new .pjv-edge-pick-id { color: var(--muted-2); font-weight: 500; }
+/* 새 프로젝트 폼 — 선행에서 이어받는 연결 지식 칩(#519/C). */
+.np-inherit-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.np-inherit-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 8px; padding: 2px 4px 2px 9px; }
+.np-inherit-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-inherit-chip-x { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 2px 3px; border-radius: 50%; }
+.np-inherit-chip-x:hover { color: var(--coral-text); background: color-mix(in srgb, var(--coral-text) 14%, transparent); }
+.np-inherit-row { align-items: flex-start; }
+.np-inherit-row .cf-label { margin-top: 4px; }
 
 /* ══ 새 프로젝트 폼(#473) — 이름·설명 히어로 + 컴팩트 메타(폴더·카테고리·레포·팀원) ══ */
 .np-form { display: flex; flex-direction: column; gap: 16px; }
@@ -3262,11 +3300,7 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-folder-caret { flex: none; width: 15px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 0; }
 .pjv-side-folder-caret:hover { color: var(--ink); }
 .pjv-side-navfolder { font-weight: 700; color: var(--ink); gap: 5px; }
-/* 폴더 하위 리스트(=파일) — 파일탐색기식 들여쓰기 + 세로 가이드선(폴더 안이라는 위계를 눈에 보이게, #473 후속). */
-.pjv-side-navlist.sub { padding-left: 34px; }
-.pjv-side-navlist.sub::before { content: ''; position: absolute; left: 20px; top: -1px; bottom: -1px; width: 1.5px; background: var(--line-net, #d9dee6); border-radius: 2px; }
-.pjv-side-navlist.sub:hover::before { background: var(--muted-2); }
-.pjv-side-navlist.sub.active::before { background: var(--blue); }
+.pjv-side-navlist.sub { padding-left: 30px; }
 /* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더, 폴더 재정렬) + 드래그 중 커서. */
 .pjv-side-drop-over { background: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
 body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabbing; }
@@ -3279,7 +3313,7 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
 .pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .pjv-side-folder-empty:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
-.pjv-side-newrow { display: flex; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.pjv-side-newrow { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .pjv-side-newrow .pjv-side-newlist { margin-top: 0; }
 .pjv-side-raildot .pjv-side-listglyph { width: 18px; height: 18px; }
 .pjv-side-raildot .pjv-side-listemoji { width: 20px; font-size: 15px; }
@@ -3365,6 +3399,11 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
 .proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
 .proj-mp-row.on .proj-mp-check { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* 아바타 이니셜 세로 중앙정렬 교정 — body line-height(1.55) 상속으로 글자가 살짝 위로 뜨는 것 바로잡음.
+   (.pava.topbar-ava 는 이미 line-height:1 로 올바름 — 나머지 이니셜 아바타도 동일 기준으로 통일) */
+.project-face, .pjv-ava, .proj-mp-ava, .pjv-cmt-mini-ava, .cmt-ava, .cmt-thread-pill-ava,
+.proj-team-ava, .proj-avatar, .proj-avatar-badge, .cf-ava, .pava { line-height: 1; }
 
 /* ── 온보딩 스포트라이트 투어(#517) — 4-패널 딤 + 코치마크. 스포트라이트 '구멍'(패널 사이 빈틈)은
       실제 요소로 클릭이 그대로 통과한다. z-index 2100 = 모달(.ov-back 300)·토스트(2000) 위. ── */

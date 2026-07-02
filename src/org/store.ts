@@ -40,6 +40,8 @@ export interface OrgMember {
   identities: MemberIdentity[];
   body_md: string;
   avatar: string | null; // 프로필 이미지 data URL(셀프 업로드). null=이니셜+색상 자동생성.
+  avatar_char: string | null; // 이미지 없을 때 쓸 커스텀 글자(1~3자). null=이름 이니셜 자동.
+  avatar_color: string | null; // 이미지 없을 때 쓸 커스텀 배경색(#rrggbb). null=id 해시색 자동.
   state: "active" | "inactive";
   scopes: string[]; // 권한(발급 토큰의 scope)
   sort: number;
@@ -210,6 +212,8 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     identities: (row.identities as MemberIdentity[]) ?? [],
     body_md: (row.body_md as string) ?? "",
     avatar: (row.avatar as string) ?? null,
+    avatar_char: (row.avatar_char as string) ?? null,
+    avatar_color: (row.avatar_color as string) ?? null,
     state: row.state as OrgMember["state"],
     scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
     sort: (row.sort as number) ?? 0,
@@ -219,7 +223,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, email, identities, body_md, avatar, state, scopes, sort, version, updated_at, updated_by";
+const MEMBER_COLS = "id, kind, display_name, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -246,6 +250,8 @@ export interface MemberInput {
   identities?: MemberIdentity[];
   body_md?: string;
   avatar?: string | null; // 프로필 이미지 data URL. undefined=보존, null/''=이니셜로 되돌림.
+  avatar_char?: string | null; // 커스텀 글자. undefined=보존, null/''=이니셜 자동으로 되돌림.
+  avatar_color?: string | null; // 커스텀 배경색(#rrggbb). undefined=보존, null/''=해시색 자동으로 되돌림.
   state?: "active" | "inactive";
   scopes?: string[];
   sort?: number;
@@ -258,15 +264,20 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   const scopes = m.scopes ?? before?.scopes ?? ["items", "context", "memory"];
   // avatar: undefined=보존, 그 외(null/''/문자열)=그대로 적용(빈값이면 null 로 정규화 → 이니셜 폴백).
   const avatar = m.avatar === undefined ? (before?.avatar ?? null) : (m.avatar || null);
+  // 커스텀 글자(최대 3자)·배경색 — undefined=보존, 그 외=정규화. 색은 클라이언트 style 에 주입되므로 #rrggbb 형식만 허용(그 외 무시=null).
+  const avatarChar = m.avatar_char === undefined ? (before?.avatar_char ?? null) : ((m.avatar_char || "").trim().slice(0, 3) || null);
+  const avatarColor = m.avatar_color === undefined ? (before?.avatar_color ?? null)
+    : (/^#[0-9a-fA-F]{6}$/.test((m.avatar_color || "").trim()) ? (m.avatar_color as string).trim() : null);
   await itemsPool.query(
-    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, avatar, state, scopes, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,1,now(),$11)
+    `INSERT INTO org_member(id, kind, display_name, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11::jsonb,$12,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET
        kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, email=EXCLUDED.email,
-       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
+       identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
+       avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
        version=org_member.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.id, kind, m.display_name ?? before?.display_name ?? null, m.email ?? before?.email ?? null,
-     JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar,
+     JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar, avatarChar, avatarColor,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );
   const after = await getMember(m.id);

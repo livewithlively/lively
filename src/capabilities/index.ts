@@ -58,6 +58,8 @@ const me: Capability = {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
       avatar: member?.avatar ?? null, // 우측 상단 '내 프로필' 아바타(없으면 이니셜+색상 폴백)
+      avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null, // 이미지 없을 때 커스텀 글자/배경색
+
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
     };
