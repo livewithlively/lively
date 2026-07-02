@@ -211,9 +211,10 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
 
 // '내 목록'(dash_watch) — 작업현황 구성원 섹션을 뷰어별로 추리는 개인 워치리스트. owner=뷰어 토큰 신원(ctx.actor).
 //  피커(편집 팝업)용 활성 '사람' 구성원 전체. 검색·체크는 프론트에서.
-export async function listDashMembers(): Promise<{ id: string; display_name: string | null }[]> {
-  const rows = await q(itemsPool, "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
-  return rows.map((m: any) => ({ id: String(m.id), display_name: m.display_name ?? null }));
+export async function listDashMembers(): Promise<{ id: string; display_name: string | null; avatar: string | null; avatar_char: string | null; avatar_color: string | null }[]> {
+  // avatar/avatar_char/avatar_color 포함 — 웹의 단일 '사람 아바타' 맵 소스(칩·얼굴·작성자 등 모든 아바타가 여기서 커스텀 글자/색/이미지 반영).
+  const rows = await q(itemsPool, "SELECT id, display_name, avatar, avatar_char, avatar_color FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  return rows.map((m: any) => ({ id: String(m.id), display_name: m.display_name ?? null, avatar: m.avatar ?? null, avatar_char: m.avatar_char ?? null, avatar_color: m.avatar_color ?? null }));
 }
 export async function getWatch(owner: string | null): Promise<string[]> {
   if (!owner) return [];

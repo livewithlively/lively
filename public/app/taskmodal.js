@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, initials, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
+import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
 const PJV_LINK_TYPE = {
     blocking: { label: '막고 있음', short: 'blocking' },
     waiting_on: { label: '기다리는 중', short: 'waiting on' },
@@ -61,7 +61,7 @@ function pjvtmMentionMenu(anchor, members, insert) {
     }
     for (const m of members) {
         const nm = m.display_name || m.member_id;
-        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(nm) }), el('span', { text: nm }));
+        const item = el('button', { class: 'pjv-menu-item', type: 'button' }, personFace(m.member_id, 'pjv-ava', nm), el('span', { text: nm }));
         item.onclick = () => { close(); insert('@' + nm + ' '); };
         menu.append(item);
     }
@@ -395,7 +395,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             if (ids.length) {
                 const faces = el('span', { class: 'pjv-asg-faces' });
                 for (const id of ids.slice(0, 4))
-                    faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(id), title: nameOf(id), text: initials(nameOf(id)) }));
+                    faces.append(personFace(id, 'pjv-ava', nameOf(id)));
                 btn.replaceChildren(faces, el('span', { class: 'pjv-tm-valtext', text: ids.length === 1 ? nameOf(ids[0]) : ids.length + '명' }));
             }
             else {
@@ -416,7 +416,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
                 none.className = 'pjv-menu-item' + (!ids.length ? ' sel' : '');
                 itemsBox.replaceChildren(...members.map((m) => {
                     const on = ids.includes(m.member_id);
-                    const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
+                    const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
                     item.onclick = (ev) => { ev.stopPropagation(); const c = pjvAssignees(t); setIds(c.includes(m.member_id) ? c.filter((x) => x !== m.member_id) : [...c, m.member_id]); };
                     return item;
                 }));
@@ -1501,7 +1501,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
         drawFoot();
         const textDiv = el('div', { class: 'pjv-tm-c-text md-rendered' }, renderMarkdown(f.body || ''));
         pjvtmWireFileLinks(textDiv, cctx);
-        return el('div', { class: 'pjv-tm-c' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(f.actor || name), text: initials(name) }), el('div', { class: 'pjv-tm-c-body' }, el('div', { class: 'pjv-tm-c-meta' }, el('span', { class: 'pjv-tm-c-who', text: name }), el('span', { class: 'pjv-tm-c-time', text: ' · ' + (typeof relTime === 'function' ? relTime(f.ts) : f.ts) })), textDiv, footer));
+        return el('div', { class: 'pjv-tm-c' }, personFace(f.actor || name, 'pjv-ava', name), el('div', { class: 'pjv-tm-c-body' }, el('div', { class: 'pjv-tm-c-meta' }, el('span', { class: 'pjv-tm-c-who', text: name }), el('span', { class: 'pjv-tm-c-time', text: ' · ' + (typeof relTime === 'function' ? relTime(f.ts) : f.ts) })), textDiv, footer));
     }
     function pjvtmEvent(f) {
         const name = f.display_name || f.actor || '시스템';

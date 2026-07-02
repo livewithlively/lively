@@ -3071,6 +3071,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 아바타(프로필 원형) — 업로드 이미지 또는 이니셜+색상. core.profileAvatar 가 생성. */
 .pava { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; color: #fff; font-weight: 700; font-size: 12px; line-height: 1; user-select: none; }
 .pava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 사람 아바타 단일 경로(personFace) — 호출부 클래스(pjv-ava 등)에 얹혀 이미지 클립 + 채움(#473 후속). */
+.pv-face { overflow: hidden; }
+.pv-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .prof-ava-lg { width: 72px; height: 72px; font-size: 27px; box-shadow: 0 2px 5px rgba(21, 35, 59, .15); }
 /* 내 프로필 모달 — 아바타 행(미리보기 + 올리기/기본으로). */
 .prof-ava-row { display: flex; align-items: center; gap: 16px; }

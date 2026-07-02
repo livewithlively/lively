@@ -1,5 +1,5 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { $view, TOKEN_KEY, api, el, errorNote, hideGate, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
@@ -122,6 +122,7 @@ async function boot() {
         userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava', { char: state.me.avatar_char, color: state.me.avatar_color }), el('span', { text: nm }));
         userBtn.hidden = false;
     }
+    loadPeopleAvatars(); // 사람 아바타 맵 선로드(칩·얼굴·작성자 아바타가 커스텀 글자·색·이미지로 뜨게 — #473 후속)
     // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
     const sysTab = document.getElementById('system-tab');
     if (sysTab)

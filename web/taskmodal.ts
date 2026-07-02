@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, initials, mdFromDom, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
+import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
 import { field } from './admin.js';
 
 const PJV_LINK_TYPE = {
@@ -60,7 +60,7 @@ function pjvtmMentionMenu(anchor, members, insert) {
   for (const m of members) {
     const nm = m.display_name || m.member_id;
     const item = el('button', { class: 'pjv-menu-item', type: 'button' },
-      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(nm) }), el('span', { text: nm }));
+      personFace(m.member_id, 'pjv-ava', nm), el('span', { text: nm }));
     item.onclick = () => { close(); insert('@' + nm + ' '); };
     menu.append(item);
   }
@@ -373,7 +373,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
       btn.className = 'pjv-tm-valbtn' + (ids.length ? '' : ' empty');
       if (ids.length) {
         const faces = el('span', { class: 'pjv-asg-faces' });
-        for (const id of ids.slice(0, 4)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(id), title: nameOf(id), text: initials(nameOf(id)) }));
+        for (const id of ids.slice(0, 4)) faces.append(personFace(id, 'pjv-ava', nameOf(id)));
         btn.replaceChildren(faces, el('span', { class: 'pjv-tm-valtext', text: ids.length === 1 ? nameOf(ids[0]) : ids.length + '명' }));
       } else { btn.replaceChildren(el('span', { text: 'Empty' })); }
     }
@@ -393,7 +393,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
         itemsBox.replaceChildren(...members.map((m) => {
           const on = ids.includes(m.member_id);
           const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
-            el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+            personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id),
             el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }),
             el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
           item.onclick = (ev) => { ev.stopPropagation(); const c = pjvAssignees(t); setIds(c.includes(m.member_id) ? c.filter((x) => x !== m.member_id) : [...c, m.member_id]); };
@@ -1222,7 +1222,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
     const textDiv = el('div', { class: 'pjv-tm-c-text md-rendered' }, renderMarkdown(f.body || ''));
     pjvtmWireFileLinks(textDiv, cctx);
     return el('div', { class: 'pjv-tm-c' },
-      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(f.actor || name), text: initials(name) }),
+      personFace(f.actor || name, 'pjv-ava', name),
       el('div', { class: 'pjv-tm-c-body' },
         el('div', { class: 'pjv-tm-c-meta' },
           el('span', { class: 'pjv-tm-c-who', text: name }),

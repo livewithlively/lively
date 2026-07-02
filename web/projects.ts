@@ -1,5 +1,5 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
+import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, pageHead, personFace, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
 import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, knSideItem, myCatIdSet, spaceSubBar } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
@@ -1220,8 +1220,7 @@ function pjvProjFacepile(members) {
   const arr = members || [];
   if (!arr.length) return el('span', { class: 'pjv-proj-noface', text: '—' });
   const faces = el('div', { class: 'project-tile-faces pjv-proj-faces' });
-  for (const m of arr.slice(0, 4)) faces.append(el('span', { class: 'project-face',
-    style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+  for (const m of arr.slice(0, 4)) faces.append(personFace(m.member_id, 'project-face', m.display_name || m.member_id));
   if (arr.length > 4) faces.append(el('span', { class: 'project-face more', text: '+' + (arr.length - 4) }));
   return faces;
 }
@@ -1233,7 +1232,7 @@ function pjvProjTeamView(members) {
   const btn = el('button', { class: 'pjv-cell-btn' + (arr.length ? '' : ' empty'), type: 'button', title: '팀원 (보기 전용 — 변경은 프로젝트 세부 설정)' });
   if (arr.length) {
     const faces = el('span', { class: 'pjv-asg-faces' });
-    for (const m of arr.slice(0, 3)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+    for (const m of arr.slice(0, 3)) faces.append(personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id));
     if (arr.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (arr.length - 3) }));
     btn.append(faces);
   } else {
@@ -1246,7 +1245,7 @@ function pjvProjTeamView(members) {
     menu.append(el('div', { class: 'pjv-menu-head', text: '팀원' }));
     if (!arr.length) menu.append(el('div', { class: 'pjv-menu-empty', text: '아직 팀원이 없어요.' }));
     else for (const m of arr) menu.append(el('div', { class: 'pjv-team-view-row' },
-      el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+      personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id),
       el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id })));
     menu.append(el('div', { class: 'pjv-team-view-hint', text: '변경은 ‘프로젝트 세부 설정’에서' }));
   };
@@ -1278,7 +1277,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
     btn.className = 'pjv-cell-btn' + (members.length ? '' : ' empty');
     if (members.length) {
       const faces = el('span', { class: 'pjv-asg-faces' });
-      for (const m of members.slice(0, 3)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), title: m.name, text: initials(m.name) }));
+      for (const m of members.slice(0, 3)) faces.append(personFace(m.id, 'pjv-ava', m.name));
       if (members.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (members.length - 3) }));
       btn.replaceChildren(faces);
     } else {
@@ -1306,7 +1305,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
       listBox.replaceChildren(...cand.map((m) => {
         const on = selIds.has(m.id);
         const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
-          el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }),
+          personFace(m.id, 'pjv-ava', m.display_name || m.id),
           el('span', { class: 'pjv-asg-mname', text: m.display_name || m.id }),
           el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
         item.onclick = (ev) => { ev.stopPropagation(); const cur = members.map((x) => x.id); setIds(on ? cur.filter((x) => x !== m.id) : [...cur, m.id]); };
@@ -1661,7 +1660,7 @@ async function pjvBulkAssignee(anchor) {
     for (const m of members) {
       const on = picked.has(m.id);
       const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), text: initials(m.name) }),
+        personFace(m.id, 'pjv-ava', m.name),
         el('span', { class: 'pjv-asg-mname', text: m.name }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
       item.onclick = (e) => { e.stopPropagation(); if (on) picked.delete(m.id); else picked.add(m.id); render(); };
       menu.append(item);
@@ -3665,7 +3664,7 @@ function projectCommentsSection(id, members) {
       const preview = (c.body || '').replace(/\s+/g, ' ').trim();
       strip.append(el('div', { class: 'pjv-cmt-mini' + (isUnread(c) ? ' pjv-cmt-mini-unread' : '') },
         el('div', { class: 'pjv-cmt-mini-top' },
-          el('span', { class: 'pjv-cmt-mini-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }),
+          personFace(c.actor || who, 'pjv-cmt-mini-ava', who),
           el('span', { class: 'pjv-cmt-mini-name', text: who }),
           el('span', { class: 'pjv-cmt-mini-time', text: c.ts ? relTime(c.ts) : '' })),
         el('div', { class: 'pjv-cmt-mini-text', text: preview })));
@@ -3749,7 +3748,7 @@ function openProjectComments(id, members) {
         const seen: any = {}; const avas: any[] = [];
         for (const r of reps) { const k = r.actor || r.display_name; if (seen[k] || avas.length >= 3) continue; seen[k] = 1;
           const rw = r.display_name || nameOf(r.actor);
-          avas.push(el('span', { class: 'cmt-thread-pill-ava', style: 'background:' + avatarColor(r.actor || rw), text: initials(rw) })); }
+          avas.push(personFace(r.actor || rw, 'cmt-thread-pill-ava', rw)); }
         const last = reps[reps.length - 1];
         const pill = el('button', { class: 'cmt-thread-pill', type: 'button' },
           el('span', { class: 'cmt-thread-pill-avas' }, ...avas),
@@ -3770,7 +3769,7 @@ function openProjectComments(id, members) {
       act('링크 복사', linkIco, () => { const url = location.origin + location.pathname + location.search + '#cmt-' + c.id; try { if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('링크를 복사했어요')).catch(() => toast('복사 실패', true)); else toast('복사 실패', true); } catch (_) { toast('복사 실패', true); } }),
       act('답글', replyIco, () => replyBtn.onclick()));
     return el('div', { class: 'cmt-card' + (isReply ? ' cmt-reply-card' : '') },
-      el('span', { class: 'cmt-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }),
+      personFace(c.actor || who, 'cmt-ava', who),
       el('div', { class: 'cmt-body' }, ...bodyKids),
       actions);
   }
@@ -4557,7 +4556,7 @@ function pjvAssigneeControl(t, members, apply) {
     btn.className = 'pjv-cell-btn' + (ids.length ? '' : ' empty');
     if (ids.length) {
       const faces = el('span', { class: 'pjv-asg-faces' });
-      for (const id of ids.slice(0, 3)) faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(id), title: nameOf(id), text: initials(nameOf(id)) }));
+      for (const id of ids.slice(0, 3)) faces.append(personFace(id, 'pjv-ava', nameOf(id)));
       if (ids.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (ids.length - 3) }));
       btn.replaceChildren(faces);
     } else {
@@ -4580,7 +4579,7 @@ function pjvAssigneeControl(t, members, apply) {
       itemsBox.replaceChildren(...members.map((m) => {
         const on = ids.includes(m.member_id);
         const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
-          el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
+          personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id),
           el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }),
           el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
         item.onclick = (ev) => { ev.stopPropagation(); const c = pjvAssignees(t); setIds(c.includes(m.member_id) ? c.filter((x) => x !== m.member_id) : [...c, m.member_id]); };
@@ -5955,7 +5954,7 @@ function projectTile(p, reload, opts) {
   if (members.length) {
     const faces = el('div', { class: 'project-tile-faces' });
     for (const m of members.slice(0, 5)) {
-      faces.append(el('span', { class: 'project-face', style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+      faces.append(personFace(m.member_id, 'project-face', m.display_name || m.member_id));
     }
     if (members.length > 5) faces.append(el('span', { class: 'project-face more', text: '+' + (members.length - 5) }));
     tile.append(faces);
@@ -6016,7 +6015,7 @@ function memberPicker(preselected, opts?) {
     results.replaceChildren(...cand.map((m) => {
       const on = selected.has(m.id);
       return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), onclick: () => { if (on) selected.delete(m.id); else selected.add(m.id); paintResults(); searchIn.focus(); fire(); } },
-        el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }),
+        personFace(m.id, 'proj-mp-ava', m.display_name || m.id),
         el('span', { class: 'proj-mp-name', text: m.display_name || m.id }),
         el('span', { class: 'proj-mp-add', text: on ? '✓ 선택됨' : '＋ 추가' }));
     }));
@@ -6035,7 +6034,7 @@ function memberPicker(preselected, opts?) {
   return {
     box,
     getSelected: () => [...selected],
-    getSelectedLabels: () => all.filter((m) => selected.has(m.id)).map((m) => ({ key: m.id, label: m.display_name || m.id, color: avatarColor(m.id), initials: initials(m.display_name || m.id) })),
+    getSelectedLabels: () => all.filter((m) => selected.has(m.id)).map((m) => ({ key: m.id, label: m.display_name || m.id, color: (m.avatar_color && /^#[0-9a-fA-F]{6}$/.test(m.avatar_color)) ? m.avatar_color : avatarColor(m.id), initials: (m.avatar_char && String(m.avatar_char).trim()) || initials(m.display_name || m.id) })),
   };
 }
 
@@ -6712,8 +6711,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   function personCircle(m) {
     const isMe = m.member_id === meId;
     const cnt = sessions.filter((s) => s.owner === m.member_id).length;
-    const avatar = el('div', { class: 'proj-avatar', style: 'background:' + avatarColor(m.member_id) },
-      el('span', { text: initials(m.display_name || m.member_id) }));
+    const avatar = personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id);
     if (cnt) avatar.append(el('span', { class: 'proj-avatar-badge', text: String(cnt) }));
     const hasStatus = !!m.status_message;
     const status = el('div', { class: 'proj-person-status' + (isMe ? ' me' : '') + (hasStatus ? ' filled' : ' empty'),

@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, logout, pageHead, profileAvatar, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, applyReveal, el, errorNote, logout, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 // ════════════════════════════════════════════════════════════════════
@@ -2970,6 +2970,7 @@ async function openMyProfile() {
                 state.me.avatar_char = m.avatar_char || null;
                 state.me.avatar_color = m.avatar_color || null;
             }
+            setPersonAvatar((state.me && state.me.userId) || data.id, m); // 사람 아바타 맵 즉시 갱신 → 다른 곳 칩/얼굴도 다음 렌더부터 반영
             // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
             const label = (m.display_name && m.display_name.trim()) || m.email
                 || (state.me && (state.me.email || state.me.userId)) || '';

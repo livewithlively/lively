@@ -1,5 +1,5 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
+import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, pageHead, personFace, relTime, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
 import { SPACE_LABEL, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, myCatIdSet } from './knowledge.js';
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
@@ -1358,8 +1358,7 @@ function pjvProjFacepile(members) {
         return el('span', { class: 'pjv-proj-noface', text: '—' });
     const faces = el('div', { class: 'project-tile-faces pjv-proj-faces' });
     for (const m of arr.slice(0, 4))
-        faces.append(el('span', { class: 'project-face',
-            style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+        faces.append(personFace(m.member_id, 'project-face', m.display_name || m.member_id));
     if (arr.length > 4)
         faces.append(el('span', { class: 'project-face more', text: '+' + (arr.length - 4) }));
     return faces;
@@ -1372,7 +1371,7 @@ function pjvProjTeamView(members) {
     if (arr.length) {
         const faces = el('span', { class: 'pjv-asg-faces' });
         for (const m of arr.slice(0, 3))
-            faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+            faces.append(personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id));
         if (arr.length > 3)
             faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (arr.length - 3) }));
         btn.append(faces);
@@ -1389,7 +1388,7 @@ function pjvProjTeamView(members) {
             menu.append(el('div', { class: 'pjv-menu-empty', text: '아직 팀원이 없어요.' }));
         else
             for (const m of arr)
-                menu.append(el('div', { class: 'pjv-team-view-row' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id })));
+                menu.append(el('div', { class: 'pjv-team-view-row' }, personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id })));
         menu.append(el('div', { class: 'pjv-team-view-hint', text: '변경은 ‘프로젝트 세부 설정’에서' }));
     };
     return btn;
@@ -1420,7 +1419,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
         if (members.length) {
             const faces = el('span', { class: 'pjv-asg-faces' });
             for (const m of members.slice(0, 3))
-                faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), title: m.name, text: initials(m.name) }));
+                faces.append(personFace(m.id, 'pjv-ava', m.name));
             if (members.length > 3)
                 faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (members.length - 3) }));
             btn.replaceChildren(faces);
@@ -1457,7 +1456,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
             }
             listBox.replaceChildren(...cand.map((m) => {
                 const on = selIds.has(m.id);
-                const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
+                const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, personFace(m.id, 'pjv-ava', m.display_name || m.id), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
                 item.onclick = (ev) => { ev.stopPropagation(); const cur = members.map((x) => x.id); setIds(on ? cur.filter((x) => x !== m.id) : [...cur, m.id]); };
                 return item;
             }));
@@ -1867,7 +1866,7 @@ async function pjvBulkAssignee(anchor) {
         menu.replaceChildren(el('div', { class: 'pjv-menu-head', text: pjvSel.kind === 'task' ? '담당자 지정' : '팀원 지정' }));
         for (const m of members) {
             const on = picked.has(m.id);
-            const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.id), text: initials(m.name) }), el('span', { class: 'pjv-asg-mname', text: m.name }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
+            const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, personFace(m.id, 'pjv-ava', m.name), el('span', { class: 'pjv-asg-mname', text: m.name }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
             item.onclick = (e) => { e.stopPropagation(); if (on)
                 picked.delete(m.id);
             else
@@ -4293,7 +4292,7 @@ function projectCommentsSection(id, members) {
         for (const c of recent) {
             const who = c.display_name || nameOf(c.actor);
             const preview = (c.body || '').replace(/\s+/g, ' ').trim();
-            strip.append(el('div', { class: 'pjv-cmt-mini' + (isUnread(c) ? ' pjv-cmt-mini-unread' : '') }, el('div', { class: 'pjv-cmt-mini-top' }, el('span', { class: 'pjv-cmt-mini-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }), el('span', { class: 'pjv-cmt-mini-name', text: who }), el('span', { class: 'pjv-cmt-mini-time', text: c.ts ? relTime(c.ts) : '' })), el('div', { class: 'pjv-cmt-mini-text', text: preview })));
+            strip.append(el('div', { class: 'pjv-cmt-mini' + (isUnread(c) ? ' pjv-cmt-mini-unread' : '') }, el('div', { class: 'pjv-cmt-mini-top' }, personFace(c.actor || who, 'pjv-cmt-mini-ava', who), el('span', { class: 'pjv-cmt-mini-name', text: who }), el('span', { class: 'pjv-cmt-mini-time', text: c.ts ? relTime(c.ts) : '' })), el('div', { class: 'pjv-cmt-mini-text', text: preview })));
         }
     })();
     return card;
@@ -4391,7 +4390,7 @@ function openProjectComments(id, members) {
                         continue;
                     seen[k] = 1;
                     const rw = r.display_name || nameOf(r.actor);
-                    avas.push(el('span', { class: 'cmt-thread-pill-ava', style: 'background:' + avatarColor(r.actor || rw), text: initials(rw) }));
+                    avas.push(personFace(r.actor || rw, 'cmt-thread-pill-ava', rw));
                 }
                 const last = reps[reps.length - 1];
                 const pill = el('button', { class: 'cmt-thread-pill', type: 'button' }, el('span', { class: 'cmt-thread-pill-avas' }, ...avas), el('span', { class: 'cmt-thread-pill-n', text: reps.length + '개의 답글' }), el('span', { class: 'cmt-thread-pill-time', text: last && last.ts ? '· 마지막 ' + relTime(last.ts) : '' }));
@@ -4414,7 +4413,7 @@ function openProjectComments(id, members) {
         catch (_) {
             toast('복사 실패', true);
         } }), act('답글', replyIco, () => replyBtn.onclick()));
-        return el('div', { class: 'cmt-card' + (isReply ? ' cmt-reply-card' : '') }, el('span', { class: 'cmt-ava', style: 'background:' + avatarColor(c.actor || who), text: initials(who) }), el('div', { class: 'cmt-body' }, ...bodyKids), actions);
+        return el('div', { class: 'cmt-card' + (isReply ? ' cmt-reply-card' : '') }, personFace(c.actor || who, 'cmt-ava', who), el('div', { class: 'cmt-body' }, ...bodyKids), actions);
     }
     function openThread(pid) { threadParent = pid; query = ''; if (searchBar) {
         searchBar.hidden = true;
@@ -5329,7 +5328,7 @@ function pjvAssigneeControl(t, members, apply) {
         if (ids.length) {
             const faces = el('span', { class: 'pjv-asg-faces' });
             for (const id of ids.slice(0, 3))
-                faces.append(el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(id), title: nameOf(id), text: initials(nameOf(id)) }));
+                faces.append(personFace(id, 'pjv-ava', nameOf(id)));
             if (ids.length > 3)
                 faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (ids.length - 3) }));
             btn.replaceChildren(faces);
@@ -5352,7 +5351,7 @@ function pjvAssigneeControl(t, members, apply) {
             none.className = 'pjv-menu-item' + (!ids.length ? ' sel' : '');
             itemsBox.replaceChildren(...members.map((m) => {
                 const on = ids.includes(m.member_id);
-                const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
+                const item = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' }, personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id }), el('span', { class: 'pjv-asg-check', text: on ? '✓' : '' }));
                 item.onclick = (ev) => { ev.stopPropagation(); const c = pjvAssignees(t); setIds(c.includes(m.member_id) ? c.filter((x) => x !== m.member_id) : [...c, m.member_id]); };
                 return item;
             }));
@@ -6893,7 +6892,7 @@ function projectTile(p, reload, opts) {
     if (members.length) {
         const faces = el('div', { class: 'project-tile-faces' });
         for (const m of members.slice(0, 5)) {
-            faces.append(el('span', { class: 'project-face', style: 'background:' + avatarColor(m.member_id), title: m.display_name || m.member_id, text: initials(m.display_name || m.member_id) }));
+            faces.append(personFace(m.member_id, 'project-face', m.display_name || m.member_id));
         }
         if (members.length > 5)
             faces.append(el('span', { class: 'project-face more', text: '+' + (members.length - 5) }));
@@ -6971,7 +6970,7 @@ function memberPicker(preselected, opts) {
             return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), onclick: () => { if (on)
                     selected.delete(m.id);
                 else
-                    selected.add(m.id); paintResults(); searchIn.focus(); fire(); } }, el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: on ? '✓ 선택됨' : '＋ 추가' }));
+                    selected.add(m.id); paintResults(); searchIn.focus(); fire(); } }, personFace(m.id, 'proj-mp-ava', m.display_name || m.id), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: on ? '✓ 선택됨' : '＋ 추가' }));
         }));
     }
     searchIn.addEventListener('input', paintResults);
@@ -6990,7 +6989,7 @@ function memberPicker(preselected, opts) {
     return {
         box,
         getSelected: () => [...selected],
-        getSelectedLabels: () => all.filter((m) => selected.has(m.id)).map((m) => ({ key: m.id, label: m.display_name || m.id, color: avatarColor(m.id), initials: initials(m.display_name || m.id) })),
+        getSelectedLabels: () => all.filter((m) => selected.has(m.id)).map((m) => ({ key: m.id, label: m.display_name || m.id, color: (m.avatar_color && /^#[0-9a-fA-F]{6}$/.test(m.avatar_color)) ? m.avatar_color : avatarColor(m.id), initials: (m.avatar_char && String(m.avatar_char).trim()) || initials(m.display_name || m.id) })),
     };
 }
 // 새 프로젝트 오버레이 폼 — 이름(필수)·설명(선택)·팀원. 생성 시 폴더 자동 생성 + 새 전용 페이지로 이동.
@@ -7845,7 +7844,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     function personCircle(m) {
         const isMe = m.member_id === meId;
         const cnt = sessions.filter((s) => s.owner === m.member_id).length;
-        const avatar = el('div', { class: 'proj-avatar', style: 'background:' + avatarColor(m.member_id) }, el('span', { text: initials(m.display_name || m.member_id) }));
+        const avatar = personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id);
         if (cnt)
             avatar.append(el('span', { class: 'proj-avatar-badge', text: String(cnt) }));
         const hasStatus = !!m.status_message;
