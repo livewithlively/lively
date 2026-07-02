@@ -4,8 +4,9 @@ import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
-import { renderTerminal, teardownTerminal } from './terminal.js';
+import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
+import { endTour } from './tour.js';
 
 // ── 라우터 ──
 function parseHash() {
@@ -27,6 +28,7 @@ function setActiveTab(name) {
 
 async function route() {
   teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
+  endTour();          // 진행 중이던 온보딩 투어(#517) 오버레이도 함께 정리
   if (!state.me) { showGate(); return; } // 인증 상태는 boot()/로그인이 state.me 로 표시(세션 쿠키 또는 토큰)
   const { segs, params } = parseHash();
   const view = $view();
@@ -67,6 +69,12 @@ async function route() {
     } else if (page === 'terminal') {
       setActiveTab('terminal');
       await renderTerminal(view);
+      // 시작하기(#/install)의 '따라하기 시작 →'(#/terminal?tour=1) 로 들어오면 스포트라이트 온보딩을 켠다.
+      //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
+      if (params.get('tour') === '1') {
+        history.replaceState(null, '', '#/terminal');
+        startTerminalTour();
+      }
     } else if (page === 'onboarding') {
       setActiveTab('start'); // 온보딩 진행상황 — 시작하기 계열
       await renderOnboarding(view);

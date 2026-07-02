@@ -340,31 +340,34 @@ function webGuideNodes() {
     el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 안 깔아도 됩니다.' }),
     el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 설치돼 있어요. 웹 브라우저만 있으면 바로 시작할 수 있습니다.' }));
 
-  // 1단계를 '메뉴 누르기'(=이 안내가 닫힘)에서 '새 창으로 열기' 버튼으로 바꿔, 안내를 띄운 채
-  //  새 창에서 2·3·4단계를 보며 따라 하게 한다. target=_blank 새 탭은 #/terminal 로 SPA 를 새로 부팅
-  //  (토큰은 localStorage 공유라 그대로 로그인 상태). §0.5 예산: 채운 blue primary 는 이 화면 1개뿐.
-  const openBtn = el('a', {
-    class: 'btn btn-primary', href: '#/terminal', target: '_blank', rel: 'noopener',
-    text: '터미널 새 창으로 열기 ↗',
+  // #517: 예전엔 '터미널 새 창으로 열기'였다 — 새 창이 원래 창을 가려(동시에 안 보임) 헷갈렸다.
+  //  이제 같은 화면에서 터미널로 이동하며 '따라하기' 투어를 켠다: 눌러야 할 버튼만 밝게 남기고 나머지를
+  //  어둡게 덮은 뒤, 사용자가 실제 버튼을 직접 누르며 한 단계씩 진행한다(web/tour.ts + startTerminalTour).
+  //  href 의 ?tour=1 → 라우터가 renderTerminal 후 투어를 시작(main.ts). 새 창(target=_blank)으로 열어도
+  //  같은 파라미터라 새 탭에서도 투어가 뜬다. §0.5 예산: 채운 blue primary 는 이 화면 1개뿐(따라하기 시작).
+  const tourBtn = el('a', {
+    class: 'btn btn-primary', href: '#/terminal?tour=1',
+    text: '터미널 열고 따라하기 시작 →',
+  });
+  const newWinBtn = el('a', {
+    class: 'btn btn-ghost btn-sm', href: '#/terminal?tour=1', target: '_blank', rel: 'noopener',
+    text: '새 창으로 열기 ↗',
   });
 
   const steps = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '쓰는 순서' })),
-    el('p', { class: 'admin-hint', text: '1번 버튼을 누르면 [터미널]이 새 창으로 열려요. 이 안내 창은 그대로 남으니, 새 창에서 2·3·4번을 보면서 따라 하면 됩니다.' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })),
+    el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }),
+    el('div', { class: 'step-cta' }, tourBtn, newWinBtn),
+    // 미리보기 — 따라하기가 짚어줄 순서. JS 안내가 안 떠도 흐름을 알 수 있게 남겨 둔다(폴백).
     el('div', { class: 'step-list' },
-      installStep(1, '[터미널] 새 창으로 열기',
-        el('p', { class: 'step-p' }, '아래 버튼을 누르면 ', el('b', { text: '[터미널]이 새 창(탭)' }), '으로 열립니다. ',
-          el('b', { text: '이 안내는 그대로 남아 있어요' }), ' — 새 창에서 아래 2·3·4번을 따라 하세요.'),
-        el('div', { class: 'step-cta' }, openBtn),
-        el('p', { class: 'step-note', text: '위쪽 메뉴의 [터미널] 을 직접 눌러도 되지만, 그러면 이 안내 화면이 닫혀요. 새 창으로 여는 걸 추천합니다.' })),
-      installStep(2, '[+ 새 세션] 누르기',
-        el('p', { class: 'step-p' }, '새로 열린 창에서 ', el('b', { text: '오른쪽 위 파란 [+ 새 세션]' }), ' 버튼을 누르면 만들기 창이 떠요.')),
-      installStep(3, '작업 폴더와 AI를 고르고 [만들기]',
+      installStep(1, '[+ 새 세션] 누르기',
+        el('p', { class: 'step-p' }, '터미널 화면 ', el('b', { text: '오른쪽 위 파란 [+ 새 세션]' }), ' 버튼을 누르면 만들기 창이 떠요.')),
+      installStep(2, '작업 폴더와 AI를 고르고 이름 정하기',
         el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }),
-          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하고 [만들기]를 누르세요.'),
+          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
         el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })),
-      installStep(4, '열린 창에서 바로 대화하기',
-        el('p', { class: 'step-p', text: '까만 창(터미널)이 열리면 거기에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
+      installStep(3, '[생성하기] → 바로 대화하기',
+        el('p', { class: 'step-p', text: '[생성하기]를 누르면 까만 창(터미널)이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
         el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어, 다음에 [터미널] 탭에서 다시 이어서 쓸 수 있어요.' }))));
 
   return [callout, steps];

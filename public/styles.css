@@ -930,9 +930,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .step-title { font-size: 15.5px; font-weight: 800; color: var(--ink); margin-bottom: 6px; }
 .step-p { font-size: 14px; line-height: 1.6; color: var(--ink); margin: 0 0 6px; }
 .step-note { font-size: 13.5px; line-height: 1.55; color: var(--ink-sub); margin: 4px 0 0; }
-/* 단계 안의 CTA 버튼(예: '터미널 새 창으로 열기') — 앵커를 버튼처럼 렌더(설치 가이드 한정) */
+/* 단계 안의 CTA 버튼(예: '따라하기 시작 →') — 앵커를 버튼처럼 렌더(설치 가이드 한정) */
 .install-guide a.btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
-.step-cta { margin: 10px 0 8px; }
+.step-cta { margin: 10px 0 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .step-ul { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .step-ul li { font-size: 13.5px; line-height: 1.55; color: var(--ink-sub); }
 .step-ul li b, .step-p b, .step-note b { color: var(--ink); }
@@ -3365,3 +3365,28 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
 .proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
 .proj-mp-row.on .proj-mp-check { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* ── 온보딩 스포트라이트 투어(#517) — 4-패널 딤 + 코치마크. 스포트라이트 '구멍'(패널 사이 빈틈)은
+      실제 요소로 클릭이 그대로 통과한다. z-index 2100 = 모달(.ov-back 300)·토스트(2000) 위. ── */
+.tour-root { position: fixed; inset: 0; z-index: 2100; pointer-events: none; }
+.tour-dim { position: fixed; background: rgba(13, 22, 40, .60); pointer-events: auto; }
+.tour-ring { position: fixed; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--blue), 0 0 0 6px rgba(45, 107, 240, .30), 0 8px 30px rgba(13, 22, 40, .30); }
+.tour-pop { position: fixed; width: min(340px, calc(100vw - 28px)); background: var(--bg);
+  border: 1px solid var(--line-net); border-radius: 14px; box-shadow: 0 18px 48px rgba(13, 22, 40, .28);
+  padding: 15px 16px 14px; pointer-events: auto; }
+.tour-pop-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.tour-count { font-size: 12px; font-weight: 800; color: var(--blue); letter-spacing: .02em; }
+.tour-skip { padding: 2px 4px; }
+.tour-title { font-size: 15.5px; font-weight: 800; color: var(--ink); margin-bottom: 5px; }
+.tour-body { font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; }
+.tour-body .tour-p { margin: 0 0 6px; }
+.tour-body .tour-p:last-child { margin-bottom: 0; }
+.tour-body b { color: var(--ink); }
+.tour-hint { margin: 8px 0 0; font-size: 12.5px; font-weight: 600; color: var(--blue-deep); }
+.tour-pop-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; }
+@media (prefers-reduced-motion: no-preference) {
+  .tour-root { animation: tourFade .18s ease both; }
+  .tour-ring { transition: box-shadow .2s ease; }
+}
+@keyframes tourFade { from { opacity: 0; } to { opacity: 1; } }
