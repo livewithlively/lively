@@ -2868,13 +2868,15 @@ async function openMyProfile() {
     const toolsIn = el('input', { type: 'text', value: p.tools, placeholder: '예: context-ontology, Cursor, Figma' });
     const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
     memoTa.value = p.memo;
-    // ── 아바타 — 업로드 이미지(없으면 이니셜+색상 자동). undefined=변경없음, null=기본으로, string=새 이미지. ──
+    // ── 아바타 — 업로드 이미지(없으면 커스텀 글자·색 또는 이니셜+해시색). undefined=변경없음, null=기본으로, string=새 이미지. ──
     let avatarState;
+    let charState = (data.avatar_char || ''); // 커스텀 글자(빈=이니셜)
+    let colorState = (data.avatar_color || ''); // 커스텀 배경색 #rrggbb(빈=해시색)
     const avaPreview = el('span', { class: 'prof-ava-preview' });
     const renderAva = () => {
         const cur = avatarState === undefined ? (data.avatar || null) : avatarState;
         const nm = nameIn.value.trim() || data.display_name || data.email || data.id || '';
-        avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg'));
+        avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg', { char: charState, color: colorState }));
     };
     const fileIn = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
     const uploadBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '사진 올리기' });
@@ -2895,8 +2897,25 @@ async function openMyProfile() {
     });
     removeBtn.addEventListener('click', () => { avatarState = null; renderAva(); });
     nameIn.addEventListener('input', renderAva); // 이름 바꾸면 폴백 이니셜도 갱신
+    // 커스텀 글자 — 최대 3자(비우면 이름 이니셜). 이미지가 있으면 이미지가 우선.
+    const charIn = el('input', { type: 'text', maxlength: '3', value: charState, placeholder: '글자', style: 'width:70px; text-align:center; font-weight:700;' });
+    charIn.addEventListener('input', () => { charState = charIn.value; renderAva(); });
+    // 커스텀 배경색 — 팔레트(‘A’=자동 해시색). 리스트/폴더 색 스와치(.pjv-sw) 재사용.
+    const AVA_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b', '#0ea5e9', '#14b8a6', '#f97316', '#8b5cf6'];
+    const colorRow = el('div', { class: 'pjv-color-swatches' });
+    const paintColors = () => {
+        const auto = el('button', { type: 'button', class: 'pjv-sw pjv-sw-none' + (colorState ? '' : ' on'), title: '자동(이름 해시색)', text: 'A' });
+        auto.onclick = () => { colorState = ''; paintColors(); renderAva(); };
+        colorRow.replaceChildren(auto, ...AVA_COLORS.map((c) => {
+            const s = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
+            s.onclick = () => { colorState = c; paintColors(); renderAva(); };
+            return s;
+        }));
+    };
+    paintColors();
     renderAva();
-    const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview, el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn, el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 이름 이니셜로 자동 생성됩니다.' })));
+    const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview, el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn, el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' })));
+    const avaCharColor = el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' }, el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow), el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' }));
     const devSel = { v: p.dev };
     const devHint = el('p', { class: 'prof-hint' });
     const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 기술 답변 깊이를 맞춰요.'; };
@@ -2912,7 +2931,7 @@ async function openMyProfile() {
     const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
     const status = el('span', { class: 'admin-status' });
     const back = overlay('내 프로필', el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
-        text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }), field('프로필 사진', avaRow), field('표시 이름', nameIn), data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('응답 길이', el('div', {}, lenChips, lenHint)), field('담당 영역', areaIn), field('자주 쓰는 도구·레포', toolsIn), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status));
+        text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }), field('프로필 사진', el('div', {}, avaRow, avaCharColor)), field('표시 이름', nameIn), data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('응답 길이', el('div', {}, lenChips, lenHint)), field('담당 영역', areaIn), field('자주 쓰는 도구·레포', toolsIn), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status));
     saveBtn.addEventListener('click', async () => {
         // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
         const lines = [];
@@ -2939,6 +2958,8 @@ async function openMyProfile() {
         const payload = { display_name: nameIn.value.trim(), body_md: body };
         if (avatarState !== undefined)
             payload.avatar = avatarState; // null=기본으로, string=새 이미지(미변경이면 생략→보존)
+        payload.avatar_char = charState.trim() || null; // 커스텀 글자(빈=이니셜 자동)
+        payload.avatar_color = colorState || null; // 커스텀 배경색(빈=해시색 자동)
         saveBtn.disabled = true;
         try {
             const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
@@ -2946,13 +2967,15 @@ async function openMyProfile() {
             if (state.me) {
                 state.me.display_name = m.display_name || null;
                 state.me.avatar = m.avatar || null;
+                state.me.avatar_char = m.avatar_char || null;
+                state.me.avatar_color = m.avatar_color || null;
             }
             // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
             const label = (m.display_name && m.display_name.trim()) || m.email
                 || (state.me && (state.me.email || state.me.userId)) || '';
             const ue = document.getElementById('user-email');
             if (ue)
-                ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava'), el('span', { text: label }));
+                ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
             toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
             back.remove();
         }

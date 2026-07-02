@@ -97,7 +97,7 @@ async function boot() {
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
     const nm = state.me.display_name || state.me.email || state.me.userId || '';
-    userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava'), el('span', { text: nm }));
+    userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava', { char: state.me.avatar_char, color: state.me.avatar_color }), el('span', { text: nm }));
     userBtn.hidden = false;
   }
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).

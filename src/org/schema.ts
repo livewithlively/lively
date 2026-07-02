@@ -43,6 +43,9 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory"]'::jsonb;
     -- avatar = 셀프 업로드 프로필 이미지(data URL, 클라이언트에서 128px 리사이즈). null/'' = 이니셜+색상 자동생성.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar TEXT;
+    -- avatar_char/color = 이미지 없을 때 쓰는 커스텀 글자/배경색(프로필 설정). null = 이니셜/해시색 자동.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_char TEXT;
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_color TEXT;
   `);
   await itemsPool.query(`
     DO $$ BEGIN

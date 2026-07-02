@@ -425,7 +425,7 @@ export const deliveryCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const m = await getMember(userId);
       // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
-      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null };
+      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
     }),
 
   restRead("me_profile_update", "내 프로필 수정",
@@ -452,9 +452,12 @@ export const deliveryCapabilities: Capability[] = [
         if (raw.length > 256 * 1024) throw new HttpError(400, "이미지가 너무 큽니다 — 더 작게 잘라 올려주세요");
         avatar = raw || null;
       }
+      // 커스텀 글자·배경색(이미지 없을 때 폴백). undefined=보존, null/''=자동으로 되돌림. 값 정규화(글자 3자·색 #rrggbb만)는 upsertMember 가 담당.
+      const avatarChar = input.avatar_char === undefined ? undefined : (input.avatar_char === null ? null : str(input.avatar_char, "avatar_char", 8).trim());
+      const avatarColor = input.avatar_color === undefined ? undefined : (input.avatar_color === null ? null : str(input.avatar_color, "avatar_color", 32).trim());
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
-      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar }, actorOf(user), "web-self");
-      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar } };
+      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
 
   restOnly("org_token_revoke", "토큰 회수",
