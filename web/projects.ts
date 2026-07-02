@@ -1074,9 +1074,28 @@ async function pjvBulkRunClaude(btn?) {
   const first = pjvSel.items.get(ids[0]);
   const firstName = (first && (first.name || first.title)) || ('태스크 ' + ids[0]);
   const label = meName + ' · ' + firstName + (ids.length > 1 ? (' 외 ' + (ids.length - 1) + '건') : '');
+  // 코드가 체크아웃되지 않은 프로젝트 폴더에서 시작하지 않도록: 세션 전에 프로젝트 관련 레포를 워크트리(브랜치 project/<id>)로
+  //  provision 하고, 단일 레포면 그 워크트리에서 세션을 연다(subpath). 원클릭은 '누르면 알아서' 가 핵심이라 선택 퍼널 없이 자동 —
+  //  레지스트리에 없거나 provision 이 실패해도 막지 않고(best-effort) 기존처럼 프로젝트 폴더에서 연다(에이전트가 직접 찾아갈 수 있게).
+  let subpath = '';
+  try {
+    const proj = await api(B).then((d) => d && (d.project || d)).catch(() => null);
+    const repos = ((proj && proj.repos) || []).filter(Boolean);
+    if (repos.length) {
+      if (labelSpan) labelSpan.textContent = '환경 준비 중…';
+      const specs = repos.map((name) => ({ name, worktree: true, branch: 'project/' + pid }));
+      const pr = await api(B + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs }) }).catch(() => null);
+      const wts = ((pr && pr.provisioned) || []).filter((w) => w && w.worktree && w.subpath);
+      // 레포 1개면 그 워크트리에서 바로 시작. 여러 개면 프로젝트 폴더 루트에서 열어(모든 워크트리가 하위폴더로 접근) 모호성 회피.
+      if (wts.length === 1) subpath = wts[0].subpath;
+    }
+  } catch (_) { /* provision 은 best-effort — 실패해도 세션은 연다 */ }
+
   if (labelSpan) labelSpan.textContent = '세션 여는 중…';
   try {
-    const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify({ label, harness: 'claude', autoApprove: true }) });
+    const sbody: any = { label, harness: 'claude', autoApprove: true };
+    if (subpath) sbody.subpath = subpath;
+    const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
     const sid = r && r.session && r.session.id;
     if (!sid) throw new Error('세션 생성 실패');
     try { localStorage.setItem('lively:autosend:' + sid, prompt); } catch (_) { /* */ }
