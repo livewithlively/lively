@@ -527,11 +527,17 @@ function avatarColor(seed) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return 'hsl(' + h + ', 50%, 60%)';
 }
-// 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+이니셜. cls 로 크기 변형(topbar-ava 등).
-function profileAvatar(avatar, name, seed, cls?) {
+// 원형 아바타 element. avatar(data URL)면 <img>, 없으면 색상+글자. cls 로 크기 변형(topbar-ava 등).
+//  opts.char/opts.color — 프로필 설정의 커스텀 글자·배경색(이미지 없을 때만). 없으면 이름 이니셜 + id 해시색 폴백.
+function profileAvatar(avatar, name, seed, cls?, opts?) {
   const wrap = el('span', { class: 'pava' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' });
   if (avatar) { wrap.append(el('img', { src: avatar, alt: '' })); }
-  else { wrap.style.background = avatarColor(seed || name); wrap.textContent = initials(name); }
+  else {
+    const o = opts || {};
+    const ch = o.char != null ? String(o.char).trim() : '';
+    wrap.style.background = (o.color && /^#[0-9a-fA-F]{6}$/.test(o.color)) ? o.color : avatarColor(seed || name);
+    wrap.textContent = ch || initials(name);
+  }
   return wrap;
 }
 
