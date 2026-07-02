@@ -3134,11 +3134,6 @@ function openProjectV2Form(reload, prefill) {
 // ── 프로젝트 클릭업식 메타데이터 패널 (상세 헤더, 이름 아래) — 태스크 모달의 pjv-tm-fields 동형 ──
 //  상태·담당자·기간·우선순위는 /api/ui/v6/projects/:id(updateProject) 로, 태그·시간추적은 /tasks/:id/(tags|time) 를
 //  프로젝트 id 로 호출(같은 task_tag_link/task_time_entry 테이블, 레벨 제약 없음). getProject 가 p.tags·p.time 부여.
-function pjvFmtClock2(sec) {
-    sec = Math.max(0, Math.floor(sec || 0));
-    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return h ? (h + 'h ' + m + 'm') : (m ? (m + 'm ' + s + 's') : (s + 's'));
-}
 function pjvProjStatusPill(p, reload) {
     const meta = pjvProjStatusMeta(p.status);
     const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, pjvStatusIconStd(p.status, 'sm'), el('span', { text: meta.label }));
@@ -3180,28 +3175,6 @@ function pjvProjDatesField(p, reload) {
         return b;
     };
     wrap.append(mk('start_date', 'Start'), el('span', { class: 'pjv-tm-datearrow', text: '→' }), mk('due_date', 'Due'));
-    return wrap;
-}
-function pjvProjTimeField(p, reload) {
-    const time = p.time || { entries: [], total_seconds: 0, running: null };
-    const wrap = el('div', { class: 'pjv-tm-time' });
-    const running = time.running;
-    const playBtn = el('button', { class: 'pjv-tm-timebtn' + (running ? ' on' : ''), type: 'button',
-        title: running ? '타이머 정지' : '타이머 시작' }, el('span', { text: running ? '⏸' : '▶' }), el('span', { text: running ? '정지' : 'Start' }));
-    playBtn.onclick = async () => {
-        playBtn.disabled = true;
-        try {
-            await api('/api/ui/v6/tasks/' + p.id + '/time', { method: 'POST', body: JSON.stringify({ action: running ? 'stop' : 'start' }) });
-            pjvReloadKeepScroll(reload);
-        }
-        catch (e) {
-            toast('실패 — ' + e.message, true);
-            playBtn.disabled = false;
-        }
-    };
-    wrap.append(playBtn);
-    if (time.total_seconds > 0 || running)
-        wrap.append(el('span', { class: 'pjv-tm-timer-live', text: pjvFmtClock2(time.total_seconds || 0) }));
     return wrap;
 }
 // 태그 팝오버 헬퍼 — 태스크 모달과 동일한 아이콘/색 팔레트(프로젝트도 같은 /tags 엔드포인트·CSS 공유).
@@ -3448,7 +3421,7 @@ function pjvProjTagsField(p, reload) {
     render();
     return wrap;
 }
-// 패널 — 좌(상태·기간·시간추적) 우(담당자·우선순위·태그) 2열, 태스크 모달과 동일 결.
+// 패널 — 좌(상태·기간) 우(담당자·우선순위·태그) 2열, 태스크 모달과 동일 결.
 // 상세 '리스트' 필드 — 소속 리스트(색점+이름, 미분류면 안내) 표시 + 클릭해 변경(리스트 선택/미분류). getProject 가 p.list 부여.
 function pjvProjListField(p, reload) {
     const cur = p.list || null; // { id, name, color } | null
@@ -3509,7 +3482,9 @@ function pjvProjMetaPanel(p, members, reload) {
     // 소속 리스트(클릭업 List) — 클릭해 변경. 미분류면 '리스트 지정' 안내.
     row('🗂', '리스트', pjvProjListField(p, reload)), 
     // 팀원 = 담당자 — 클릭하면 팀원 목록만 보여주는 보기전용 팝오버(토글 없음). 변경은 '프로젝트 세부 설정'에서만.
-    row('👤', '팀원', pjvProjTeamView(members)), row('🗓', '기간', pjvProjDatesField(p, reload)), row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), row('⏱', '시간 추적', pjvProjTimeField(p, reload)), row('🏷', '태그', pjvProjTagsField(p, reload)));
+    row('👤', '팀원', pjvProjTeamView(members)), row('🗓', '기간', pjvProjDatesField(p, reload)), row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), 
+    // (⏱ 시간 추적 필드 제거 — #473 후속, 프로젝트엔 불필요한 속성.)
+    row('🏷', '태그', pjvProjTagsField(p, reload)));
 }
 // 선행/후속 프로젝트 필드(프로퍼티) — dir='out'=선행(이 프로젝트가 뒤따르는 앞 프로젝트, edges.outgoing),
 //  dir='in'=후속(이 프로젝트를 뒤따르는 뒤 프로젝트, edges.incoming). 칩(상세 링크 + ✕ 해제) + ＋로 검색·추가.
@@ -3678,7 +3653,7 @@ async function renderProjectV2Detail(view, idStr) {
     el('div', { class: 'proj-detail-titlebox' }, titleEl), el('div', { class: 'proj-detail-actions' }, settingsBtn)));
     // (본문은 헤더에서 빼고 태스크 위 '본문' 섹션으로 분리 — projectBodySection. 다른 섹션과 동일 위계.)
     // 팀원 칩 행(proj-team-row) 제거 — 아래 메타 패널의 '팀원' 필드와 중복이라 한 곳(메타)만 남긴다.
-    // 클릭업식 메타데이터 패널 — 이름 바로 아래(태스크 박스 위). 상태·팀원·기간·우선순위·시간추적·태그.
+    // 클릭업식 메타데이터 패널 — 이름 바로 아래(태스크 박스 위). 상태·팀원·기간·우선순위·태그.
     head.append(pjvProjMetaPanel(p, members, reload));
     // 상세 본문 — 태스크(작업 위계)를 헤더 바로 아래 맨 위에 둔다(프로젝트의 핵심). 이어 공유 폴더 ·
     //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
