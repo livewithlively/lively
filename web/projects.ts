@@ -50,11 +50,12 @@ function pjvRestoreScroll(y) {
   for (const ms of [40, 120, 260, 500, 800, 1200]) setTimeout(apply, ms);
 }
 
-// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][카테고리]만.
-//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, browse}.
+// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][작업 로그][탐색].
+//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, worklog, browse}.
+//  작업 로그 = '회사 전체'(회사에서 진행 중인 모든 작업) 활동 피드 — 대시보드에서 분리해 별도 탭으로.
 function projectSubBar(active) {
   const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '프로젝트 보기' });
-  const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '탐색', '#/projects2/browse']];
+  const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['worklog', '작업 로그', '#/projects2/worklog'], ['browse', '탐색', '#/projects2/browse']];
   for (const [key, label, href] of tabs) {
     const on = key === active;
     bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
@@ -70,8 +71,9 @@ function projectPageHead() {
   ], '젝트');
 }
 
-// 프로젝트(v2) 진입 — browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
+// 프로젝트(v2) 진입 — worklog(작업 로그=회사 전체 활동) | browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
 async function renderProjectsV2(view, sub, params) {
+  if (sub === 'worklog') return renderProjectV2WorkLog(view);
   if (sub === 'browse' || SPACE_LABEL[sub]) return renderProjectV2Space(view, sub, params);
   return renderProjectV2Board(view);
 }
@@ -124,13 +126,22 @@ async function renderProjectV2Board(view) {
         el('span', { class: 'eyebrow', text: '프로젝트 보드' }),
         el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '폴더·리스트로 정리한 프로젝트.' }))),
     pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders),
-    el('div', { class: 'card-head', style: 'margin: 24px 0 14px' },
+    // '회사 전체'(회사 활동 피드)는 별도 '작업 로그' 탭으로 분리(renderProjectV2WorkLog).
+  );
+  pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
+}
+
+// 작업 로그 탭 — '회사 전체'(회사에서 지금 진행 중인 모든 작업) 활동 피드. 대시보드에서 분리(유형 필터 칩 + 더보기).
+async function renderProjectV2WorkLog(view) {
+  view.replaceChildren(
+    projectPageHead(),
+    projectSubBar('worklog'),
+    el('div', { class: 'card-head', style: 'margin: 6px 0 14px' },
       el('div', {},
         el('span', { class: 'eyebrow', text: '회사 전체' }),
         el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))),
     companyTimelineSection(),
   );
-  pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
 }
 
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
@@ -1525,7 +1536,8 @@ function pjvSelRenderBar() {
     b.onclick = (e) => { e.stopPropagation(); fn(b); };
     return b;
   };
-  pjvBulkBarEl.replaceChildren(
+  // native replaceChildren 는 null 을 'null' 텍스트로 넣으므로 falsy 를 걸러서 넘긴다(태스크 전용 버튼들).
+  pjvBulkBarEl.replaceChildren(...[
     el('div', { class: 'pjv-bulk-count' },
       el('span', { class: 'pjv-bulk-n', text: String(n) }),
       el('span', { class: 'pjv-bulk-lbl', text: (isTask ? '태스크' : '프로젝트') + ' 선택됨' }),
@@ -1541,7 +1553,12 @@ function pjvSelRenderBar() {
       mk('삭제', 'trash', () => pjvBulkDelete(), true)),
     isTask ? el('button', { class: 'pjv-bulk-run', type: 'button', title: '선택한 태스크로 내 새 클로드 세션을 만들고 바로 실행을 맡깁니다',
       onclick: (e) => { e.stopPropagation(); pjvBulkRunClaude(e.currentTarget); } },
-      pjvBulkIcon('run'), el('span', { text: '클로드로 실행' })) : null);
+      pjvBulkIcon('run'), el('span', { text: '클로드로 실행' })) : null,
+    // '클로드로 실행' 오른쪽의 보조 버튼 — 원클릭 실행이 쓰는 기본값(레포·워크트리·실행기·모델·실행 위치)을 보고 수정. 실행 버튼보다 덜 강조.
+    isTask ? el('button', { class: 'pjv-bulk-cfg', type: 'button', title: '클로드로 실행 기본값 — 레포·워크트리·실행기·모델·실행 위치를 설정',
+      onclick: (e) => { e.stopPropagation(); pjvBulkRunDefaultsModal(pjvSel.ctx); } },
+      pjvBulkIcon('settings'), el('span', { text: '기본값' })) : null,
+  ].filter(Boolean));
 }
 function pjvBulkIcon(kind) {
   if (kind === 'assignee') return pjvIcon('assignee');
@@ -1554,6 +1571,7 @@ function pjvBulkIcon(kind) {
   if (kind === 'trash') return svg(sv('path', { d: 'M5 7h14M10 7V5.5h4V7M6.5 7l1 12.5h9l1-12.5' }));
   if (kind === 'list') return svg(sv('path', { d: 'M8 6h12M8 12h12M8 18h12' }), sv('circle', { cx: '4', cy: '6', r: '1.2' }), sv('circle', { cx: '4', cy: '12', r: '1.2' }), sv('circle', { cx: '4', cy: '18', r: '1.2' }));
   if (kind === 'run') return svg(sv('path', { d: 'M8 5.4v13.2l11-6.6z', fill: 'currentColor', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linejoin': 'round' }));
+  if (kind === 'settings') return svg(sv('path', { d: 'M4 8h9M17 8h3M4 16h3M11 16h9' }), sv('circle', { cx: '15', cy: '8', r: '2.2' }), sv('circle', { cx: '9', cy: '16', r: '2.2' }));
   return svg();
 }
 
@@ -1628,6 +1646,22 @@ async function pjvBulkRunClaude(btn?) {
     toast('태스크 내용을 불러오지 못했어요 — ' + e.message, true); return;
   }
 
+  // 이 프로젝트의 '클로드로 실행' 기본값(실행 위치·실행기·모델·자동승인·워크트리·레포). 설정 팝업(pjvBulkRunDefaultsModal)에서 바꾼다.
+  const proj0 = await api(B).then((dd) => dd && (dd.project || dd)).catch(() => null);
+  const projRepos = ((proj0 && proj0.repos) || []).filter(Boolean);
+  const rd = pjvRunDefaults(pid, projRepos);
+  const chosenRepos = (rd.repos === null) ? projRepos : projRepos.filter((n) => rd.repos.includes(n));
+  // 실행 위치 = 내 PC(로컬): 박스 세션을 만들지 않고, 태스크 내용을 클립보드에 복사한 뒤 '내 PC에서 작업' 안내 모달을 기본값으로 선주입해 연다.
+  if (rd.where === 'local') {
+    try { copyText(prompt); } catch (_) { /* */ }
+    if (btn) btn.disabled = false; if (labelSpan) labelSpan.textContent = origLabel || '클로드로 실행';
+    openLocalWorkModal(pid, { id: pid, name: projName || (proj0 && proj0.name) || '', repos: chosenRepos },
+      { harness: rd.harness, model: rd.model, autoApprove: rd.autoApprove, worktree: rd.worktree, branch: rd.branch, repos: chosenRepos });
+    toast('태스크 내용을 클립보드에 복사했어요 — 안내대로 내 PC에서 세션을 열고 붙여넣어 실행하세요');
+    pjvSelReset();
+    return;
+  }
+
   const first = pjvSel.items.get(ids[0]);
   const firstName = (first && (first.name || first.title)) || ('태스크 ' + ids[0]);
   const label = meName + ' · ' + firstName + (ids.length > 1 ? (' 외 ' + (ids.length - 1) + '건') : '');
@@ -1636,11 +1670,9 @@ async function pjvBulkRunClaude(btn?) {
   //  레지스트리에 없거나 provision 이 실패해도 막지 않고(best-effort) 기존처럼 프로젝트 폴더에서 연다(에이전트가 직접 찾아갈 수 있게).
   let subpath = '';
   try {
-    const proj = await api(B).then((d) => d && (d.project || d)).catch(() => null);
-    const repos = ((proj && proj.repos) || []).filter(Boolean);
-    if (repos.length) {
+    if (chosenRepos.length) {
       if (labelSpan) labelSpan.textContent = '환경 준비 중…';
-      const specs = repos.map((name) => ({ name, worktree: true, branch: 'project/' + pid }));
+      const specs = chosenRepos.map((name) => ({ name, worktree: rd.worktree, branch: rd.worktree ? rd.branch : '' }));
       const pr = await api(B + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs }) }).catch(() => null);
       const wts = ((pr && pr.provisioned) || []).filter((w) => w && w.worktree && w.subpath);
       // 레포 1개면 그 워크트리에서 바로 시작. 여러 개면 프로젝트 폴더 루트에서 열어(모든 워크트리가 하위폴더로 접근) 모호성 회피.
@@ -1650,7 +1682,8 @@ async function pjvBulkRunClaude(btn?) {
 
   if (labelSpan) labelSpan.textContent = '세션 여는 중…';
   try {
-    const sbody: any = { label, harness: 'claude', autoApprove: true };
+    const sbody: any = { label, harness: rd.harness || 'claude', autoApprove: rd.autoApprove !== false };
+    if (rd.model) sbody.flags = { '--model': rd.model };
     if (subpath) sbody.subpath = subpath;
     const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
     const sid = r && r.session && r.session.id;
@@ -1663,6 +1696,120 @@ async function pjvBulkRunClaude(btn?) {
     if (btn) btn.disabled = false; if (labelSpan) labelSpan.textContent = origLabel || '클로드로 실행';
     toast('실패 — ' + e.message, true);
   }
+}
+// ── '클로드로 실행' 기본값(실행 위치·실행기·모델·자동승인·워크트리·레포) — 프로젝트별 localStorage. 플로팅바 원클릭(pjvBulkRunClaude)이 읽는다. ──
+const pjvRunDefaultsKey = (pid) => 'lively:runclaude:defaults:' + pid;
+function pjvRunDefaults(pid, projectRepos) {
+  const base: any = { where: 'web', harness: 'claude', model: '', autoApprove: true, worktree: true, branch: 'project/' + pid, repos: null };
+  let saved: any = {};
+  try { saved = JSON.parse(localStorage.getItem(pjvRunDefaultsKey(pid)) || '{}') || {}; } catch (_) { saved = {}; }
+  const d = { ...base, ...saved };
+  if (!d.branch) d.branch = 'project/' + pid;
+  // repos: null=관련 레포 전부(미래에 추가되는 레포도 자동 포함). 배열이면 현재 프로젝트 레포와 교집합(빠진 레포 정리).
+  if (Array.isArray(d.repos)) d.repos = d.repos.filter((n) => (projectRepos || []).includes(n));
+  return d;
+}
+function pjvSaveRunDefaults(pid, d) {
+  try { localStorage.setItem(pjvRunDefaultsKey(pid), JSON.stringify(d)); } catch (_) { /* localStorage 불가 시 무시 */ }
+}
+
+// 기본값 설정 팝업 — '지금 어떻게 설정돼 있는지'를 보여주고 수정. 저장은 프로젝트별 localStorage(다음 '클로드로 실행'부터 적용).
+async function pjvBulkRunDefaultsModal(ctx) {
+  ctx = ctx || pjvSel.ctx || {};
+  const pid = ctx.projectId;
+  if (!pid) { toast('프로젝트를 찾을 수 없어요', true); return; }
+  // 프로젝트 관련 레포 + 하네스 카탈로그(모델 목록·자동승인 여부). 실패해도 아래 기본 카탈로그로 진행.
+  let projectRepos: string[] = [];
+  try { const pr = await api('/api/ui/v6/projects/' + pid).then((dd) => dd && (dd.project || dd)); projectRepos = ((pr && pr.repos) || []).filter(Boolean); } catch (_) { /* 레포 조회 실패 — 레포 선택 없이 */ }
+  const harnessCat: any = {
+    claude: { label: 'Claude Code', models: ['', 'opus', 'sonnet', 'haiku'], hasAuto: true },
+    codex: { label: 'Codex', models: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], hasAuto: true },
+  };
+  try {
+    const cfg = await api('/api/ui/terminal/config');
+    ((cfg && cfg.harnesses) || []).forEach((h) => {
+      const mf = (h.flags || []).find((f) => f.name === '--model');
+      harnessCat[h.key] = { label: h.label || h.key, models: (mf && mf.choices) || [''], hasAuto: !!h.hasAutoApprove };
+    });
+  } catch (_) { /* 카탈로그 실패 → 위 기본 카탈로그 유지 */ }
+
+  const d = pjvRunDefaults(pid, projectRepos);
+
+  // 실행 위치(웹 중앙 컴퓨터 / 내 PC 로컬)
+  const whereWeb = el('input', { type: 'radio', name: 'rcd-where', value: 'web' });
+  const whereLocal = el('input', { type: 'radio', name: 'rcd-where', value: 'local' });
+  (d.where === 'local' ? whereLocal : whereWeb).checked = true;
+  const whereRow = el('div', { class: 'field', style: 'margin-top:2px' },
+    el('label', { class: 'field-label', text: '실행 위치' }),
+    el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereWeb, el('span', { text: ' 웹(중앙 컴퓨터) — 누르면 곧장 세션을 만들어 실행 (설치 불필요·권장)' })),
+    el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereLocal, el('span', { text: ' 내 PC(로컬) — 누르면 태스크 내용을 복사하고 내 PC 실행 안내를 띄움' })));
+
+  // 실행기 + 모델 + 자동승인
+  const HKEYS = ['claude', 'codex'].filter((k) => harnessCat[k]);
+  const harnessSel = el('select', {}, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
+  const modelSel = el('select', {});
+  const autoCb = el('input', { type: 'checkbox' });
+  const autoRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:10px' }, autoCb, el('span', { text: ' 자동 승인 — 권한 확인 없이 바로 실행 (신뢰하는 작업에만)' }));
+  const renderModels = () => {
+    const cat = harnessCat[harnessSel.value] || { models: [''] };
+    const cur = modelSel.value;
+    modelSel.replaceChildren(...(cat.models || ['']).map((m) => el('option', { value: m, text: m || '기본 모델' })));
+    if ((cat.models || []).includes(cur)) modelSel.value = cur;
+    autoRow.style.display = (cat.hasAuto === false) ? 'none' : '';
+  };
+  if (HKEYS.includes(d.harness)) harnessSel.value = d.harness;
+  harnessSel.addEventListener('change', renderModels);
+  renderModels();
+  if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model)) modelSel.value = d.model;
+  autoCb.checked = d.autoApprove !== false;
+
+  // 워크트리 + 브랜치
+  const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = d.worktree !== false;
+  const branchInp = el('input', { type: 'text', value: d.branch || ('project/' + pid) });
+  const branchWrap = el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '작업 공간 이름 (브랜치 · 보통 그대로 두세요)' }), branchInp);
+  const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk, el('span', { text: ' 워크트리 — 다른 작업과 안 섞이게 전용 브랜치로 격리 (권장)' }));
+  const branchVis = () => { branchWrap.style.display = wtChk.checked ? '' : 'none'; };
+  wtChk.addEventListener('change', branchVis); branchVis();
+
+  // 레포 선택 — 실행 전에 자동으로 가져올(provision) 레포. 기본은 관련 레포 전부.
+  const repoChecks = projectRepos.map((n) => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = (d.repos === null) ? true : d.repos.includes(n);
+    return { n, cb, row: el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, cb, el('span', { text: ' ' + n })) };
+  });
+  const repoBox = projectRepos.length
+    ? el('div', {}, ...repoChecks.map((r) => r.row))
+    : el('div', { class: 'caption', text: '이 프로젝트에 연결된 레포가 없어요 — 레포 없이 실행됩니다.' });
+
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '기본값 저장' });
+  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+  const back = overlayBox('클로드로 실행 — 기본값',
+    el('p', { class: 'admin-hint', text: '‘클로드로 실행’(플로팅 바)을 누를 때 쓰는 기본값이에요. 여기서 바꾸면 다음 실행부터 이 값으로 준비됩니다. (이 프로젝트에만 적용)' }),
+    whereRow,
+    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행기' }), harnessSel),
+    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '모델' }), modelSel),
+    autoRow,
+    el('div', { class: 'field', style: 'margin-top:14px' },
+      el('label', { class: 'field-label', text: '코드 저장소 준비' }),
+      el('div', { class: 'caption', text: '실행 전에 아래 레포를 자동으로 가져옵니다(워크트리로 격리). 코드 작업이 아니면 모두 꺼도 돼요.' }),
+      wtRow, branchWrap,
+      el('div', { style: 'margin-top:8px' }, repoBox)),
+    el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+  saveBtn.onclick = () => {
+    const chosen = repoChecks.filter((r) => r.cb.checked).map((r) => r.n);
+    const allChosen = projectRepos.length > 0 && chosen.length === projectRepos.length;
+    pjvSaveRunDefaults(pid, {
+      where: whereLocal.checked ? 'local' : 'web',
+      harness: harnessSel.value,
+      model: modelSel.value || '',
+      autoApprove: autoCb.checked,
+      worktree: wtChk.checked,
+      branch: branchInp.value.trim() || ('project/' + pid),
+      repos: (projectRepos.length && !allChosen) ? chosen : null,   // null=전부(미래 레포 자동 포함)
+    });
+    back.remove();
+    toast('클로드로 실행 기본값을 저장했어요');
+  };
 }
 // ── 일괄 액션들 ──
 function pjvBulkStatus(anchor) {
@@ -2652,8 +2799,8 @@ function npTaskEditor() {
   };
 
   // 상위 ＋할 일 추가행 — 트리거(＋ 할 일 추가) ↔ 입력 토글. Enter=추가·계속, Esc/빈 blur=닫기. (pjvProjAddRow 의 인메모리·이름전용판)
-  const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '할 일 추가' }));
-  const addInput = mkGrowInput('할 일 이름 후 Enter (여러 개면 계속, Esc 닫기)');
+  const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크 추가' }));
+  const addInput = mkGrowInput('태스크 이름 후 Enter (여러 개면 계속, Esc 닫기)');
   const addRow = el('div', { class: 'np-addrow' }, trigger);
   const collapse = () => { addRow.classList.remove('editing'); addRow.replaceChildren(trigger); };
   const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => { addInput.focus(); growTa(addInput); }, 0); };
@@ -2686,7 +2833,25 @@ function openProjectV2Form(reload, prefill?: any) {
   const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
   const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
   const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
-  // 할 일(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
+  // 선행 프로젝트에서 이어받는 '연결된 지식'(#519/C) — 후속 프로젝트를 인라인 생성할 때 선행의 연결 지식을 프리필로 보여주고
+  //  만들 때 새 프로젝트에 required 로 연결한다. 칩 ×로 뺄 수 있음(원치 않으면 제외). 이름(name) 기준 중복 제거.
+  const inheritKn: any[] = [];
+  { const seen = new Set(); for (const k of (prefill.knowledge || [])) { const nm = k && (k.name || k.knowledge_name); if (nm && !seen.has(nm)) { seen.add(nm); inheritKn.push({ name: nm, title: k.title || nm }); } } }
+  let knRow: any = null;
+  if (inheritKn.length) {
+    const chips = el('div', { class: 'np-inherit-chips' });
+    const paintKn = () => {
+      chips.replaceChildren(...inheritKn.map((k) => {
+        const chip = el('span', { class: 'np-inherit-chip' }, el('span', { class: 'np-inherit-chip-name', text: k.title }));
+        const x = el('button', { class: 'np-inherit-chip-x', type: 'button', title: '이어받지 않기', text: '✕' });
+        x.onclick = () => { const i = inheritKn.indexOf(k); if (i >= 0) inheritKn.splice(i, 1); paintKn(); if (!inheritKn.length && knRow) knRow.remove(); };
+        chip.append(x); return chip;
+      }));
+    };
+    paintKn();
+    knRow = el('div', { class: 'cf-row np-inherit-row' }, el('span', { class: 'cf-label', text: '이어받는 지식' }), chips);
+  }
+  // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
   const taskEd = npTaskEditor();
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
@@ -2695,14 +2860,14 @@ function openProjectV2Form(reload, prefill?: any) {
       el('div', { class: 'np-hero' },
         el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn,
         el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn,
-        // 할 일 — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 하위 태스크까지 넣을 수 있음.
-        el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '할 일' }), el('span', { class: 'np-opt', text: '선택' })),
-        el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 할 일이 있으면 여기에 — 하위 태스크까지 넣어도 돼요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }),
+        // 태스크(선택) — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 각 태스크 아래로 하위 태스크까지 넣을 수 있음.
+        el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })),
+        el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }),
         taskEd.box),
       el('div', { class: 'np-meta' },
         el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box),
         el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }),
-        catField.row, repoField.row, memberField.row)),
+        catField.row, repoField.row, memberField.row, knRow)),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
   const go = async () => {
@@ -2747,6 +2912,17 @@ function openProjectV2Form(reload, prefill?: any) {
             for (const sn of dt.subs) await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: sn, parent_task_id: parentId }) }).catch(() => {});
           }
         }
+      }
+      // 선행/후속 엣지(#519) — 후속 피커에서 인라인 생성한 경우 현재 프로젝트와 연결. edgeDir='in'=새 프로젝트가 edgeWith 의 후속(new→follow_up→edgeWith),
+      //  'out'=새 프로젝트가 edgeWith 의 선행(edgeWith→follow_up→new). (from --follow_up--> to = from 이 to 의 후속, #340.)
+      if (np && np.id && prefill.edgeWith) {
+        const fromId = prefill.edgeDir === 'out' ? prefill.edgeWith : np.id;
+        const toId = prefill.edgeDir === 'out' ? np.id : prefill.edgeWith;
+        await api('/api/ui/v6/projects/' + fromId + '/link', { method: 'POST', body: JSON.stringify({ to: toId, relation: 'follow_up' }) }).catch(() => {});
+      }
+      // 선행에서 이어받는 연결 지식(#519/C) — 남긴 것만 required 로 연결.
+      if (np && np.id && inheritKn.length) {
+        for (const k of inheritKn) await api('/api/ui/v6/projects/' + np.id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: k.name, relation: 'required' }) }).catch(() => {});
       }
       // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
       try { localStorage.setItem('lively.newproj.recentCats', JSON.stringify(catField.getSelectedLabels().map((c) => ({ id: c.key, name: c.label })))); } catch (_) { /* */ }
@@ -3106,6 +3282,17 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
   menu.append(
     el('div', { class: 'pjv-edge-pick-hint', text: dir === 'out' ? '이 프로젝트가 뒤따르는 선행 프로젝트를 고르세요' : '이 프로젝트를 뒤따르는 후속 프로젝트를 고르세요' }),
     search, results);
+  // 기존 프로젝트를 고르는 것 외에, '새 프로젝트 만들기'(#519) — 새 프로젝트 폼을 열되 현재 프로젝트를 선행/후속으로 프리필하고,
+  //  현재 프로젝트의 본문(설명)·연결된 지식도 새 폼에 이어받게(#519/C). dir='in'=현재가 새 프로젝트의 선행이 됨.
+  const createNew = el('button', { class: 'pjv-menu-item pjv-edge-pick-new', type: 'button' },
+    el('span', { class: 'pjv-edge-pick-name', text: '＋ 새 프로젝트 만들기' }),
+    el('span', { class: 'pjv-edge-pick-id', text: dir === 'out' ? '이 프로젝트의 선행으로' : '이 프로젝트의 후속으로' }));
+  createNew.onclick = () => {
+    close();
+    const kdefs = [...(((p.knowledge || {}).required) || []), ...(((p.knowledge || {}).produced) || [])];
+    openProjectV2Form(reload, { edgeWith: p.id, edgeDir: dir, listId: p.list_id, description: p.description || '', knowledge: kdefs });
+  };
+  menu.append(createNew);
   const close = pjvPopover(anchor, menu);
   let all: any[] = [];
   const paint = () => {
@@ -4015,7 +4202,7 @@ function openProjectSettings(id, p, reload, meId, base) {
 //  웹은 원격 PC 터미널을 보지 않는다(스트리밍 X). 각자 자기 PC에서 터미널을 열어 쓰고, 웹은 '어떻게 시작하는지'만
 //  쉽고 상세히 안내한다. 모달에서 레포·경로·워크트리·하네스를 고르면 `node ~/.lively/work.mjs <id> …` 한 줄을
 //  로컬에서 만들어 준다(renderLocalWorkCommand) — work.mjs 가 공유폴더 pull·레포·.lively 마커·실행까지 자동.
-function openLocalWorkModal(id, p) {
+function openLocalWorkModal(id, p, opts?) {
   const form = el('div', { class: 'proj-settings lw' });
   const back = overlayBox('💻 내 컴퓨터에서 작업 — ' + p.name, form);
   const box = back.querySelector('.ov-box'); if (box) box.classList.add('ov-box-wide');
@@ -4028,10 +4215,12 @@ function openLocalWorkModal(id, p) {
   // 하네스
   const harnessSel = el('select', { style: inputStyle });
   harnessSel.append(el('option', { value: 'claude', text: 'Claude Code' }), el('option', { value: 'codex', text: 'Codex' }));
+  if (opts && opts.harness && ['claude', 'codex'].includes(opts.harness)) harnessSel.value = opts.harness;   // '클로드로 실행' 기본값 선주입
   // 모델 · 자동승인 — 웹 터미널 카탈로그(/api/ui/terminal/config) 재사용(하네스별 모델·autoApprove 동일 규칙).
   const modelSel = el('select', { style: inputStyle });
   const modelBlock = block('모델', '비우면 하네스 기본 모델.', modelSel);
   const autoChk = el('input', { type: 'checkbox' });
+  if (opts) autoChk.checked = !!opts.autoApprove;   // '클로드로 실행' 기본값 선주입
   const autoBlock = el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: '자동 승인' }),
     el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer' },
@@ -4067,8 +4256,8 @@ function openLocalWorkModal(id, p) {
   const addRow = (initRepo = '') => {
     const sel = el('select', { style: inputStyle });
     const pathInp = el('input', { type: 'text', style: inputStyle, placeholder: '예) ~/dev/<레포> · Windows: C:\\Users\\..\\<레포> (비우면 기본 경로에 clone)' });
-    const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = true;
-    const branchInp = el('input', { type: 'text', style: inputStyle, value: 'project/' + id });
+    const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = !(opts && opts.worktree === false);   // '클로드로 실행' 기본값 선주입
+    const branchInp = el('input', { type: 'text', style: inputStyle, value: (opts && opts.branch) || ('project/' + id) });
     const rmBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕ 제거' });
     fillSel(sel); if (initRepo) sel.value = initRepo;
     pathInp.value = savedPath(sel.value);
@@ -4099,6 +4288,7 @@ function openLocalWorkModal(id, p) {
       ((cfg && cfg.harnesses) || []).forEach((h) => { const mf = (h.flags || []).find((f) => f.name === '--model'); harnessCat[h.key] = { models: (mf && mf.choices) || [], hasAuto: !!h.hasAutoApprove }; });
     } catch (_) { /* graceful */ }
     updateModels();
+    if (opts && opts.model && (harnessCat[harnessSel.value] || { models: [] }).models.includes(opts.model)) { modelSel.value = opts.model; regen(); }   // '클로드로 실행' 기본값 선주입
   })();
   // 레포 목록(git 주소 포함) 로드 → 행 셀렉트 채움 + 기본 1행.
   (async () => {
@@ -4108,8 +4298,8 @@ function openLocalWorkModal(id, p) {
     } catch (_) { /* graceful: 레포 없음 */ }
     rows.forEach((ro) => fillSel(ro.sel));
     if (!rows.length) {
-      // 이 프로젝트에 매핑된 레포(관련 레포)를 기본 행으로 — 없으면 레포가 하나뿐일 때만 자동 선택.
-      const pre = ((p && p.repos) || []).filter((n) => repoNames().includes(n));
+      // 이 프로젝트에 매핑된 레포(관련 레포)를 기본 행으로 — 없으면 레포가 하나뿐일 때만 자동 선택. (opts.repos = '클로드로 실행' 기본값 선주입)
+      const pre = ((opts && opts.repos) || (p && p.repos) || []).filter((n) => repoNames().includes(n));
       if (pre.length) pre.forEach((n) => addRow(n));
       else addRow(repoNames().length === 1 ? repoNames()[0] : '');
     }

@@ -2395,12 +2395,14 @@ body.pjv-tm-open { overflow: hidden; }
 /* 단일값 클릭 컨트롤(상태 pill·리스트·우선순위·날짜)을 같은 결로 통일 — 상태 pill 의 흰 배경+테두리 제거해 리스트/우선순위와 동일하게. */
 .pjv-proj-meta .pjv-tm-statuspill,
 .pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn,
-.pjv-proj-meta .pjv-tm-datebtn {
+.pjv-proj-meta .pjv-tm-datebtn,
+.pjv-proj-meta .pjv-tm-valbtn {
   font-size: 13.5px; font-weight: 600; letter-spacing: 0; min-height: 28px; padding: 4px 8px;
   border: none; border-radius: 7px; background: transparent; box-shadow: none; justify-content: flex-start; gap: 6px;
 }
 .pjv-proj-meta .pjv-tm-statuspill:hover,
-.pjv-proj-meta .pjv-tm-datebtn:hover { background: var(--bg-tint-2); border: none; }
+.pjv-proj-meta .pjv-tm-datebtn:hover,
+.pjv-proj-meta .pjv-tm-valbtn:hover { background: var(--bg-tint-2); border: none; }
 /* placeholder(미분류·Empty·Start/Due) 동일 크기·색으로. */
 .pjv-proj-meta .pjv-cell-ph { font-size: 13.5px; line-height: 1.4; }
 /* 팀원 아바타 값 — 다른 값 높이에 맞춰 축소(행 높이 튐 제거). */
@@ -2940,6 +2942,10 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-bulk-run:disabled { opacity: .6; cursor: default; animation: none; transform: none; }
 .pjv-bulk-run svg { width: 18px; height: 18px; flex: none; }
 @keyframes pjvBulkRunPulse { 0%, 100% { box-shadow: 0 4px 18px rgba(110,99,255,.45); } 50% { box-shadow: 0 6px 26px rgba(110,99,255,.85); } }
+/* 보조 액션 — '클로드로 실행' 기본값 설정. 실행 버튼보다 덜 강조(펄스·그라데이션 없음, 은은한 고스트로 살짝 빠지게). */
+.pjv-bulk-cfg { display: inline-flex; align-items: center; gap: 7px; height: 40px; margin-left: 8px; padding: 0 13px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.05); color: #C7D2E6; border-radius: 11px; cursor: pointer; font-size: 13.5px; font-weight: 600; white-space: nowrap; transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.pjv-bulk-cfg:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.3); }
+.pjv-bulk-cfg svg { width: 18px; height: 18px; flex: none; color: currentColor; }
 .pjv-menu-head { padding: 6px 12px 4px; font-size: 11.5px; font-weight: 700; color: var(--muted-2); letter-spacing: .2px; }
 .pjv-bulk-sep-h { height: 1px; background: var(--line); margin: 4px 0; }
 .pjv-bulk-apply { color: var(--blue); font-weight: 600; }
@@ -3206,6 +3212,18 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-edge-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
 .pjv-edge-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-edge-pick-id { flex: none; color: var(--muted-2); font-size: 11.5px; }
+/* '＋ 새 프로젝트 만들기'(#519) — 결과 아래 고정 액션(footer). 파란 강조 + 위 구분선. */
+.pjv-edge-pick-new { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; color: var(--blue); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; }
+.pjv-edge-pick-new:hover { background: color-mix(in srgb, var(--blue) 9%, transparent); }
+.pjv-edge-pick-new .pjv-edge-pick-id { color: var(--muted-2); font-weight: 500; }
+/* 새 프로젝트 폼 — 선행에서 이어받는 연결 지식 칩(#519/C). */
+.np-inherit-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.np-inherit-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 8px; padding: 2px 4px 2px 9px; }
+.np-inherit-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-inherit-chip-x { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 2px 3px; border-radius: 50%; }
+.np-inherit-chip-x:hover { color: var(--coral-text); background: color-mix(in srgb, var(--coral-text) 14%, transparent); }
+.np-inherit-row { align-items: flex-start; }
+.np-inherit-row .cf-label { margin-top: 4px; }
 
 /* ══ 새 프로젝트 폼(#473) — 이름·설명 히어로 + 컴팩트 메타(폴더·카테고리·레포·팀원) ══ */
 .np-form { display: flex; flex-direction: column; gap: 16px; }
