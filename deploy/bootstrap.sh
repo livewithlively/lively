@@ -32,13 +32,27 @@ mkdir -p "$APP_DIR"
 
 # 릴리스 버전 편의 — LIVELY_VERSION(latest|vX.Y.Z)만 주면 GitHub 릴리스 에셋 URL 자동 구성(URL/번들 미지정 시).
 REPO_SLUG="${LIVELY_REPO:-livewithlively/context-ontology}"
+ASSET_NAME="${LIVELY_ASSET:-context-ontology.tgz}"
 if [ -z "${LIVELY_CODE_URL:-}" ] && [ -z "${LIVELY_BUNDLE:-}" ] && [ -n "${LIVELY_VERSION:-}" ]; then
-  if [ "$LIVELY_VERSION" = "latest" ]; then
-    LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/latest/download/context-ontology.tgz"
+  if [ -n "${LIVELY_CODE_TOKEN:-}" ]; then
+    # ⚠ private 레포: 브라우저 releases/download URL 은 토큰이 있어도 404 (GitHub 이 S3 로 리다이렉트하며 Authorization 유실).
+    #   → GitHub API 에셋 엔드포인트(/releases/assets/<id>, Accept: octet-stream)로 받아야 한다. asset id 는 릴리스 조회로.
+    if [ "$LIVELY_VERSION" = "latest" ]; then rel_api="https://api.github.com/repos/${REPO_SLUG}/releases/latest"
+    else rel_api="https://api.github.com/repos/${REPO_SLUG}/releases/tags/${LIVELY_VERSION}"; fi
+    command -v python3 >/dev/null 2>&1 || die "python3 필요(릴리스 에셋 조회) — 없으면 LIVELY_CODE_URL 을 직접 지정하세요."
+    log "private 릴리스 조회(API): $rel_api"
+    asset_id="$(curl -fsSL -H "Authorization: Bearer ${LIVELY_CODE_TOKEN}" -H "Accept: application/vnd.github+json" "$rel_api" \
+      | python3 -c "import sys,json;print(next((a['id'] for a in json.load(sys.stdin).get('assets',[]) if a['name']=='${ASSET_NAME}'),''))" 2>/dev/null)"
+    [ -n "$asset_id" ] || die "릴리스 에셋 '${ASSET_NAME}' 조회 실패 — LIVELY_VERSION/토큰/권한 확인."
+    LIVELY_CODE_URL="https://api.github.com/repos/${REPO_SLUG}/releases/assets/${asset_id}"
+    LIVELY_ASSET_API=1   # 다운로드 시 Accept: application/octet-stream 필요
+    log "LIVELY_VERSION=$LIVELY_VERSION → 에셋 API $LIVELY_CODE_URL"
   else
-    LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/download/${LIVELY_VERSION}/context-ontology.tgz"
+    # public(OSS): 브라우저 download URL — 토큰 불요.
+    if [ "$LIVELY_VERSION" = "latest" ]; then LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/latest/download/${ASSET_NAME}"
+    else LIVELY_CODE_URL="https://github.com/${REPO_SLUG}/releases/download/${LIVELY_VERSION}/${ASSET_NAME}"; fi
+    log "LIVELY_VERSION=$LIVELY_VERSION → $LIVELY_CODE_URL"
   fi
-  log "LIVELY_VERSION=$LIVELY_VERSION → $LIVELY_CODE_URL"
 fi
 
 # ── 코드 획득 (교체 가능한 단계) ──
@@ -50,7 +64,9 @@ elif [ -n "${LIVELY_CODE_URL:-}" ]; then
   log "코드 = 다운로드: $LIVELY_CODE_URL"
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
   if [ -n "${LIVELY_CODE_TOKEN:-}" ]; then
-    curl -fsSL -H "Authorization: Bearer ${LIVELY_CODE_TOKEN}" "$LIVELY_CODE_URL" -o "$tmp" || die "다운로드 실패"
+    # API 에셋 엔드포인트는 Accept: application/octet-stream 이어야 바이너리(리다이렉트)를 준다. 일반 URL 은 */*.
+    accept="*/*"; [ "${LIVELY_ASSET_API:-0}" = "1" ] && accept="application/octet-stream"
+    curl -fsSL -H "Authorization: Bearer ${LIVELY_CODE_TOKEN}" -H "Accept: ${accept}" "$LIVELY_CODE_URL" -o "$tmp" || die "다운로드 실패"
   else
     curl -fsSL "$LIVELY_CODE_URL" -o "$tmp" || die "다운로드 실패(private 면 LIVELY_CODE_TOKEN 필요)"
   fi
