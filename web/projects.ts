@@ -1151,9 +1151,10 @@ function pjvCatMeta(category) {
   if (category === 'done') return { cls: 'done', glyph: '✓' };
   return { cls: 'inprog', glyph: '' };
 }
-// 상태 아이콘(SVG) — 클릭업 스타일(#499):
+// 상태 아이콘(SVG) — 클릭업 스타일(#499). 사이트 전역 진행도 아이콘의 단일 출처:
 //  · Active: 진행도 파이(frac=0 → 점선 빈 링='할일', 커질수록 시계방향으로 채워짐).
 //  · Done:  색 링 + 체크.   · Closed: 색으로 꽉 채운 원 + 흰 체크.
+//  색은 inline style 로 넣어 CSS 변수(var(--blue) 등)도 해석되게 한다(setAttribute fill 은 var 미해석).
 function pjvStatusIcon(category, color, frac, size?) {
   const px = size === 'sm' ? 15 : 18;
   const c = color || 'var(--muted-3)';
@@ -1161,22 +1162,33 @@ function pjvStatusIcon(category, color, frac, size?) {
   const svg = sv('svg', { class: 'pjv-status-ic' + (size ? ' ' + size : ''), viewBox: '0 0 24 24', width: px, height: px, 'aria-hidden': 'true' });
   if (category === 'done' || category === 'closed') {
     const filled = category === 'closed';
-    svg.append(sv('circle', { cx, cy, r: R, fill: filled ? c : 'none', stroke: c, 'stroke-width': 2 }));
-    svg.append(sv('path', { d: 'M7.7 12.3l2.7 2.7 5.9-6.2', fill: 'none', stroke: filled ? '#fff' : c, 'stroke-width': 2.1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    svg.append(sv('circle', { cx, cy, r: R, 'stroke-width': 2, style: 'fill:' + (filled ? c : 'none') + ';stroke:' + c }));
+    svg.append(sv('path', { d: 'M7.7 12.3l2.7 2.7 5.9-6.2', 'stroke-width': 2.1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', style: 'fill:none;stroke:' + (filled ? '#fff' : c) }));
     return svg;
   }
   // Active — 진행도 파이.
   const f = Math.max(0, Math.min(0.995, frac || 0));
   if (f < 0.001) {
-    svg.append(sv('circle', { cx, cy, r: R, fill: 'none', stroke: c, 'stroke-width': 2, 'stroke-dasharray': '2.2 2.4' }));
+    svg.append(sv('circle', { cx, cy, r: R, 'stroke-width': 2, 'stroke-dasharray': '2.2 2.4', style: 'fill:none;stroke:' + c }));
   } else {
-    svg.append(sv('circle', { cx, cy, r: R, fill: 'none', stroke: c, 'stroke-width': 2, opacity: 0.3 }));
+    svg.append(sv('circle', { cx, cy, r: R, 'stroke-width': 2, opacity: 0.3, style: 'fill:none;stroke:' + c }));
     const th = f * 2 * Math.PI;
     const ex = (cx + R * Math.sin(th)).toFixed(2), ey = (cy - R * Math.cos(th)).toFixed(2);
     const large = f > 0.5 ? 1 : 0;
-    svg.append(sv('path', { d: 'M' + cx + ' ' + cy + 'L' + cx + ' ' + (cy - R) + 'A' + R + ' ' + R + ' 0 ' + large + ' 1 ' + ex + ' ' + ey + 'Z', fill: c }));
+    svg.append(sv('path', { d: 'M' + cx + ' ' + cy + 'L' + cx + ' ' + (cy - R) + 'A' + R + ' ' + R + ' 0 ' + large + ' 1 ' + ex + ' ' + ey + 'Z', style: 'fill:' + c }));
   }
   return svg;
+}
+// 표준 3상태(todo|in_progress|done) → 통일 상태 아이콘. 사이트 전역(프로젝트·태스크·하위태스크) 공통 진행도 아이콘.
+//  todo=점선 빈 링, in_progress=반쯤 채운 파이, done=색 링+체크. 색은 테마 변수(가독·다크모드 대응).
+function pjvStatusIconStd(status, size?) {
+  if (status === 'done') return pjvStatusIcon('done', 'var(--mint)', undefined, size);
+  if (status === 'todo') return pjvStatusIcon('active', 'var(--muted-3)', 0, size);
+  return pjvStatusIcon('active', 'var(--blue)', 0.5, size); // in_progress — 반 파이
+}
+// 클릭 가능한 상태 아이콘 버튼 래퍼 — SVG 아이콘 + 투명 버튼(경계·배경 없음).
+function pjvStatusIconBtn(icon, attrs?) {
+  return el('button', { class: 'pjv-status-btn', type: 'button', ...(attrs || {}) }, icon);
 }
 // 커스텀 상태 아이콘 — 파이/체크(pjvStatusIcon). size='sm' 작게.
 function pjvCustomStatusDot(def, size?) {
@@ -1266,9 +1278,7 @@ function pjvProjStatusDot(p, reload) {
     return btn;
   }
   const meta = pjvProjStatusMeta(p.status);
-  const btn = el('button', { class: 'pjv-status-dot ' + meta.cls, type: 'button',
-    title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label },
-    meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+  const btn = pjvStatusIconBtn(pjvStatusIconStd(p.status), { title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label });
   btn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu' });
@@ -1277,7 +1287,7 @@ function pjvProjStatusDot(p, reload) {
       const m = pjvProjStatusMeta(st);
       const cur = pjvProjStatusMeta(p.status).key === st;
       const item = el('button', { class: 'pjv-menu-item' + (cur ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+        pjvStatusIconStd(st, 'sm'),
         el('span', { text: m.label }));
       item.onclick = () => { close(); if (!cur) pjvSetProjStatus(p.id, st, reload); };
       menu.append(item);
@@ -1679,9 +1689,8 @@ function pjvBulkStatus(anchor) {
   const menu = el('div', { class: 'pjv-menu' });
   const close = pjvPopover(anchor, menu);
   for (const [key, label] of [['todo', '할 일'], ['in_progress', '진행 중'], ['done', '완료']]) {
-    const m = pjvSel.kind === 'task' ? PJV_TASK_STATUS[key] : pjvProjStatusMeta(key);
     const item = el('button', { class: 'pjv-menu-item', type: 'button' },
-      el('span', { class: 'pjv-status-dot sm ' + (m && m.cls || '') }, (m && m.glyph) ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+      pjvStatusIconStd(key, 'sm'),
       el('span', { text: label }));
     item.onclick = () => {
       close();
@@ -2277,7 +2286,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
   };
   const dot = statusDef ? pjvCustomStatusDot(statusDef, 'sm')
-    : el('span', { class: 'pjv-status-dot sm ' + meta.cls }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+    : pjvStatusIconStd(meta.key, 'sm');
   const labelEl = statusDef
     ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + statusDef.color, text: label })
     : el('span', { class: 'pjv-tgroup-label', text: label });
@@ -2323,10 +2332,8 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
   // 제목 칸 — 실제 프로젝트 행과 동일 구조(체크박스 자리 spacer + 캐럿 자리 + 그룹 상태 동그라미 + 입력)로 그려 픽셀 정렬 일치.
   //  프로젝트 행엔 호버 체크박스(16px)가 자리를 차지하므로, 추가행에도 동일 폭 spacer 를 둬 말머리(상태점) 가로 위치를 맞춘다.
   const buildTitleCell = () => {
-    const meta = pjvProjStatusMeta(statusKey);
     const dotEl = statusDef ? pjvCustomStatusDot(statusDef)
-      : el('span', { class: 'pjv-status-dot ' + meta.cls, 'aria-hidden': 'true' },
-          meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+      : pjvStatusIconStd(pjvProjStatusMeta(statusKey).key);
     return el('div', { class: 'pjv-trow-title-cell' },
       el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
       el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }),
@@ -2576,7 +2583,7 @@ function compactPicker(label, makePicker, opts?) {
 function npTaskEditor() {
   const model: any[] = [];                                   // [{ name, subs: [{name}], subBox }]
   const listEl = el('div', { class: 'np-tasklist' });
-  const dot = () => el('span', { class: 'pjv-status-dot todo', 'aria-hidden': 'true' }); // 할 일 점선 링 — 프로젝트 행과 동일 톤
+  const dot = () => pjvStatusIconStd('todo'); // 할 일 점선 링 — 프로젝트 행과 동일 톤
 
   const buildSubRow = (task, sub) => {
     const del = el('button', { class: 'np-trow-del', type: 'button', title: '삭제', 'aria-label': '삭제', text: '×' });
@@ -2743,7 +2750,7 @@ function pjvFmtClock2(sec) {
 function pjvProjStatusPill(p, reload) {
   const meta = pjvProjStatusMeta(p.status);
   const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' },
-    meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null,
+    pjvStatusIconStd(p.status, 'sm'),
     el('span', { text: meta.label }));
   btn.onclick = (e) => {
     e.stopPropagation();
@@ -2753,7 +2760,7 @@ function pjvProjStatusPill(p, reload) {
       const m = pjvProjStatusMeta(st);
       const cur = pjvProjStatusMeta(p.status).key === st;
       const item = el('button', { class: 'pjv-menu-item' + (cur ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+        pjvStatusIconStd(st, 'sm'),
         el('span', { text: m.label }));
       item.onclick = () => { close(); if (!cur) pjvSetProjStatus(p.id, st, reload); };
       menu.append(item);
@@ -4565,9 +4572,7 @@ async function pjvPatchTask(taskId, patch, reload) {
 // 상태 점(클릭→메뉴: 할 일/진행 중/완료).
 function pjvStatusControl(t, reload) {
   const meta = pjvStatusMeta(t.status);
-  const btn = el('button', { class: 'pjv-status-dot ' + meta.cls, type: 'button',
-    title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label },
-    meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+  const btn = pjvStatusIconBtn(pjvStatusIconStd(meta.bucket), { title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label });
   btn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu' });
@@ -4576,7 +4581,7 @@ function pjvStatusControl(t, reload) {
       const m = PJV_TASK_STATUS[key];
       const sel = meta.bucket === key;
       const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null),
+        pjvStatusIconStd(key, 'sm'),
         el('span', { text: m.label }));
       item.onclick = () => { close(); if (!sel) pjvPatchTask(t.id, { status: key }, reload); };
       menu.append(item);
@@ -5738,7 +5743,7 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
     gopen = !gopen; gcaret.textContent = gopen ? '▾' : '▸';
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
   };
-  const dot = el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+  const dot = pjvStatusIconStd(key, 'sm');
   const labelEl = el('span', { class: 'pjv-tgroup-label', text: m.label });
 
   let head: any;
@@ -5784,11 +5789,7 @@ function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
   const collapse = () => { row.classList.remove('editing'); draft.assignee = draft.due_date = draft.priority = null; indentParent = null; row.replaceChildren(trigger); };
   // 추가행 제목 칸 — 실제 태스크 행과 동일 구조(캐럿 자리 + 상태 동그라미 + 입력)로 그린다. 들여쓰면 paddingLeft 22px(하위 위치)
   //  + 상태 동그라미는 todo(점선). 안 들여쓰면 그룹 상태 동그라미. → 입력 텍스트·동그라미가 행과 픽셀 단위로 정확히 일치.
-  const statusDotPlaceholder = (st) => {
-    const meta = pjvStatusMeta(st);
-    return el('span', { class: 'pjv-status-dot ' + meta.cls, 'aria-hidden': 'true' },
-      meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
-  };
+  const statusDotPlaceholder = (st) => pjvStatusIconStd(pjvStatusMeta(st).bucket);
   const buildTitleCell = () => {
     // 실제 태스크 행 제목칸 맨 앞에는 선택 체크박스(.pjv-row-check, 16px)가 있다. 추가행에도 같은 폭의
     // 스페이서를 둬서 입력 글자가 시작되는 들여쓰기 위치를 행 제목과 정확히 같게 한다(#292).
@@ -7281,7 +7282,7 @@ function projectTimelineSection(id, members, base) {
           rowEl.addEventListener('click', function (e) {
             // 제목 셀 전체(여백 포함)를 클릭 타깃으로 — 단, 캐럿·상태점은 각자 동작하도록 통과시킨다. 다른 컬럼 셀도 통과.
             if (!e.target.closest('.pjv-trow-title-cell')) return;
-            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot') || e.target.closest('.pjv-subcount-ico')) return; // 하위 태스크 아이콘 클릭은 펼침(모달/더블클릭 가로채기 제외)
+            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot') || e.target.closest('.pjv-status-btn') || e.target.closest('.pjv-subcount-ico')) return; // 하위 태스크 아이콘 클릭은 펼침(모달/더블클릭 가로채기 제외)
             if (e.target.closest('.pjv-row-check') || e.target.closest('.pjv-row-actions')) return; // 다중선택 체크박스·호버 액션은 각자 동작(모달 가로채지 않음)
             e.stopImmediatePropagation(); e.preventDefault();
             clicks++;
@@ -7331,6 +7332,7 @@ export {
   pjvPopover,
   pjvPriorityControl,
   pjvSaveTask,
+  pjvStatusIconStd,
   pjvStatusMeta,
   pjvTaskRow,
   renderProjectV2Detail,

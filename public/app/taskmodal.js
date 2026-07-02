@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, initials, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, initials, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow } from './projects.js';
 const PJV_LINK_TYPE = {
     blocking: { label: '막고 있음', short: 'blocking' },
     waiting_on: { label: '기다리는 중', short: 'waiting on' },
@@ -401,7 +401,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
     // 상태 — 색 pill(라벨). 클릭 → 메뉴.
     function pjvtmStatusField(t, refresh) {
         const meta = pjvStatusMeta(t.status);
-        const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null, el('span', { text: meta.label.toUpperCase() }));
+        const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
         btn.onclick = (e) => {
             e.stopPropagation();
             const menu = el('div', { class: 'pjv-menu' });
@@ -409,7 +409,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             for (const key of PJV_STATUS_ORDER) {
                 const m = PJV_TASK_STATUS[key];
                 const sel = meta.bucket === key;
-                const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null), el('span', { text: m.label }));
+                const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
                 item.onclick = () => { close(); if (!sel)
                     pjvPatchTask(t.id, { status: key }, refresh); };
                 menu.append(item);
@@ -961,7 +961,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             const cell = e.target.closest && e.target.closest('.pjv-trow-title-cell');
             if (!cell || !list.contains(cell))
                 return;
-            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot'))
+            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot') || e.target.closest('.pjv-status-btn'))
                 return;
             if (e.target.closest('.pjv-row-check') || e.target.closest('.pjv-row-actions'))
                 return;
@@ -1018,7 +1018,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
                 const lt = PJV_LINK_TYPE[type];
                 for (const l of byType[type]) {
                     const lmeta = pjvStatusMeta(l.status);
-                    sec.append(el('div', { class: 'pjv-tm-link-row' }, el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }), el('span', { class: 'pjv-status-dot sm ' + lmeta.cls }, lmeta.glyph ? el('span', { class: 'pjv-status-glyph', text: lmeta.glyph }) : null), el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }), el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
+                    sec.append(el('div', { class: 'pjv-tm-link-row' }, el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }), pjvStatusIconStd(lmeta.bucket, 'sm'), el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }), el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
                         onclick: async () => {
                             try {
                                 await api('/api/ui/v6/tasks/' + t.id + '/links', { method: 'POST', body: JSON.stringify({ to_task: l.id, type, remove: true }) });
@@ -1065,7 +1065,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
                         catch (e) {
                             toast('실패 — ' + e.message, true);
                         }
-                    } }, el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null), el('span', { text: x.name }));
+                    } }, pjvStatusIconStd(m.bucket, 'sm'), el('span', { text: x.name }));
             }));
             if (!cand.length)
                 results.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '결과 없음' }));
