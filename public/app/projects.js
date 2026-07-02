@@ -7127,7 +7127,8 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     const harnessSel = el('select', {}, ...harnesses.map((h) => el('option', { value: h.key, text: h.label })));
     const flagsBox = el('div', {});
     const autoCb = el('input', { type: 'checkbox' });
-    const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 매번 권한 확인 없이 실행' }));
+    autoCb.checked = true; // #480: '웹에서 바로 열기'는 멈춤 없이 바로 실행되도록 자동승인 기본 켬(사용자 지정).
+    const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 파일 수정·명령 실행을 매번 묻지 않고 바로 진행 (신뢰하는 작업에만)' }));
     function renderFlags() {
         const h = harnesses.find((x) => x.key === harnessSel.value) || {};
         flagsBox.replaceChildren();
@@ -7213,7 +7214,14 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들고 입장' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 터미널 세션', el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행' }), harnessSel), flagsBox, el('div', { style: 'margin-top:10px' }, autoRow), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '코드 저장소에서 작업 (선택)' }), el('div', { class: 'caption', text: '코드를 다루는 작업이면 작업할 저장소를 고르세요 — 그 코드를 자동으로 가져와, 에이전트가 바로 작업할 수 있게 준비해 둡니다. 코드 작업이 아니라면 그냥 비워두고 넘어가도 돼요.' }), reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    // #480 요청1-③: 실행기·모델·자동승인은 대부분 기본값(Claude Code·기본 모델·자동승인 켬)이면 되므로 '고급 설정'으로 접는다(기본 닫힘).
+    //  기본 화면엔 '이름 + 코드 저장소'만 — 비개발자는 안 열어도 바로 만들 수 있고, 개발자는 한 번 펼쳐 하네스/모델을 바꾼다.
+    const ADV_LABEL = '고급 설정 (실행기·모델·자동 승인)';
+    const advOptBox = el('div', { style: 'display:none;margin-top:8px' }, el('div', { class: 'field' }, el('label', { class: 'field-label', text: '실행' }), harnessSel), flagsBox, el('div', { style: 'margin-top:10px' }, autoRow));
+    const advOptToggle = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '▸ ' + ADV_LABEL });
+    let advOptOpen = false;
+    advOptToggle.onclick = () => { advOptOpen = !advOptOpen; advOptBox.style.display = advOptOpen ? '' : 'none'; advOptToggle.textContent = (advOptOpen ? '▾ ' : '▸ ') + ADV_LABEL; };
+    const back = overlayBox('새 터미널 세션', el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '코드 저장소에서 작업 (선택)' }), el('div', { class: 'caption', text: '코드를 다루는 작업이면 작업할 저장소를 고르세요 — 그 코드를 자동으로 가져와, 에이전트가 바로 작업할 수 있게 준비해 둡니다. 코드 작업이 아니라면 그냥 비워두고 넘어가도 돼요.' }), reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)), el('div', { style: 'margin-top:12px' }, advOptToggle), advOptBox, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => nameIn.focus(), 0);
     saveBtn.onclick = async () => {
         saveBtn.disabled = true;
