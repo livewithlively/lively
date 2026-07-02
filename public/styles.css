@@ -2368,10 +2368,12 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-valbtn:hover { background: var(--bg-tint-2); }
 .pjv-tm-valbtn.empty { color: var(--muted-3); }
 .pjv-tm-valtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: #fff; background: var(--muted-2); padding: 5px 12px; border-radius: 7px; }
-.pjv-tm-statuspill.todo { background: var(--muted-2); }
-.pjv-tm-statuspill.inprog { background: var(--blue); }
-.pjv-tm-statuspill.done { background: var(--mint); }
+/* 상태 배지 — 통일 아이콘 칩(#499 후속): 라이트 배경 + 상태색 라벨 + SVG 아이콘 */
+.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net, #d9dee6); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
+.pjv-tm-statuspill:hover { border-color: var(--blue); }
+.pjv-tm-statuspill.todo { color: var(--muted); }
+.pjv-tm-statuspill.inprog { color: var(--blue); }
+.pjv-tm-statuspill.done { color: #1F9D6B; }
 .pjv-tm-dates { display: inline-flex; align-items: center; gap: 4px; }
 .pjv-tm-datebtn { border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); padding: 4px 8px; border-radius: 7px; }
 .pjv-tm-datebtn:hover { background: var(--bg-tint-2); }
