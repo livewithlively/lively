@@ -3762,12 +3762,14 @@ function pjvTodayStr() {
 function pjvIsOverdue(t) { return t.due_date && t.status !== 'done' && t.due_date < pjvTodayStr(); }
 
 // 인라인 편집용 경량 팝오버 — 앵커 아래 위치, 바깥클릭/ESC 로 닫힘. body 에 1개만(기존 것 제거). 닫기함수 반환.
-function pjvPopover(anchor, content) {
+function pjvPopover(anchor, content, opts?) {
   document.querySelectorAll('.pjv-pop').forEach((n) => n.remove());
   const pop = el('div', { class: 'pjv-pop' }, content);
   document.body.append(pop);
   // 위치 — 기본 앵커 아래, 아래 공간 부족하고 위가 더 넓으면 위로 뒤집음(하단 일괄 바 등). 콘텐츠가 나중에
   //  (동기 append·비동기 fetch) 채워져 높이가 바뀌면 ResizeObserver 로 재배치 → 항상 화면 안.
+  //  opts.align='right': 앵커의 '오른쪽 끝'에 팝오버 오른쪽을 맞춘다(우상단 버튼 등 오른쪽 정렬 트리거용 — 기본은 왼쪽정렬 #481).
+  const alignRight = !!(opts && opts.align === 'right');
   const place = () => {
     const r = anchor.getBoundingClientRect();
     // 앵커가 DOM 에서 떨어졌거나(재렌더로 교체) 0크기면 재배치하지 않는다 — 그대로 두지 않으면 rect=0,0 으로 좌상단에 튄다.
@@ -3777,7 +3779,8 @@ function pjvPopover(anchor, content) {
     const ph = pop.offsetHeight;
     const flipUp = (r.bottom + 4 + ph > vh) && (r.top > vh - r.bottom);
     pop.style.top = ((flipUp ? r.top - ph - 4 : r.bottom + 4) + window.scrollY) + 'px';
-    const left = Math.min(r.left + window.scrollX, window.scrollX + vw - pop.offsetWidth - 10);
+    const wantLeft = alignRight ? (r.right - pop.offsetWidth) : r.left;   // 우측정렬이면 앵커 오른쪽 끝에 맞춤
+    const left = Math.min(wantLeft + window.scrollX, window.scrollX + vw - pop.offsetWidth - 10);
     pop.style.left = Math.max(8, left) + 'px';
   };
   place();
@@ -5992,7 +5995,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   newBtn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
-    const close = pjvPopover(newBtn, menu);
+    const close = pjvPopover(newBtn, menu, { align: 'right' });  // 우상단 '＋ 새 세션' 버튼 아래 우측정렬(#481 위치 어색 수정)
     const mkItem = (icon, label, desc, fn) => {
       const item = el('button', { class: 'pjv-menu-item', type: 'button' },
         icon ? el('span', { class: 'pjv-sess-ico', text: icon }) : null,
@@ -6003,9 +6006,9 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       return item;
     };
     menu.append(
-      mkItem('', '내 컴퓨터에서 (for Developers)', '',
+      mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행',
         () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos })),
-      mkItem('', '중앙 컴퓨터에서', '',
+      mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용',
         () => openProjectSessionForm(id, load, B, projectName, projectRepos)));
   };
   card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
@@ -6082,6 +6085,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
     if (s.owned) acts.push(
       el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: () => openSessionRename(s, load) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => removeSession(s, load) }));
+    acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: 'ℹ 정보', onclick: () => openSessionInfo(s) }));  // 세션 메타 팝업(#480 요청2)
     acts.push(el('button', { class: 'btn btn-primary btn-sm', text: '입장', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') }));
     return el('div', { class: 'proj-sess-row' },
       el('div', { class: 'proj-sess-main' },
@@ -6089,6 +6093,32 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
           s.attached ? el('span', { class: 'proj-sess-live', text: '● 사용 중' }) : null),
         el('div', { class: 'proj-sess-meta', text: (s.harness || 'shell') + ' · 만든이 ' + ownerName(s.owner) })),
       el('div', { class: 'proj-sess-acts' }, ...acts));
+  }
+  // 세션 메타 팝업(#480 요청2) — 목록이 이미 담아 보내는 값만으로 구성(추가 백엔드 없음). 실시간 상태는 미포함(요청).
+  function openSessionInfo(s) {
+    const HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex', shell: '셸 (에이전트 없음)' };
+    const model = (s.flags && (s.flags['--model'] || s.flags['-m'])) || '';
+    const harnessTxt = (HARNESS_LABEL[s.harness] || s.harness || 'shell') + (model ? ' · ' + model : '');
+    const inviteNames = (s.invites || []).map(ownerName);
+    const rows: any[] = [
+      ['이름', s.label || s.id],
+      ['종류', harnessTxt],
+      ['자동 승인', s.autoApprove ? '켜짐 — 권한 확인 없이 실행' : '꺼짐'],
+      ['사용 중', s.attached ? '예 — 지금 열려 있음' : '아니오'],
+      ['만든이', ownerName(s.owner)],
+      ['만든 시각', s.created ? (new Date(s.created * 1000).toLocaleString('ko-KR') + ' · ' + relTime(s.created * 1000)) : '—'],
+      ['작업 폴더', s.dir || '—'],
+      ['공개 범위', inviteNames.length ? ('초대: ' + inviteNames.join(', ')) : '비공개 — 프로젝트 세션은 팀원 공용'],
+      ['세션 ID', s.id],
+    ];
+    const rowEl = (kv) => el('div', { style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,127,127,.12)' },
+      el('div', { style: 'flex:0 0 92px;color:var(--muted,#888);font-size:13px', text: kv[0] }),
+      el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
+    const enterBtn = el('button', { class: 'btn btn-primary', text: '입장',
+      onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') });
+    const back = overlayBox('세션 정보 — ' + (s.label || s.id),
+      el('div', {}, ...rows.map(rowEl)),
+      el('div', { class: 'ov-actions' }, enterBtn, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));
   }
   function editStatus(m) {
     const input = el('input', { type: 'text', value: m.status_message || '', placeholder: '현재 상태 (예: 결제 모듈 작업 중)', maxlength: '200' });
