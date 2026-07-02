@@ -2407,8 +2407,11 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-proj-meta .pjv-cell-ph { font-size: 13.5px; line-height: 1.4; }
 /* 팀원 아바타 값 — 다른 값 높이에 맞춰 축소(행 높이 튐 제거). */
 .pjv-proj-meta .pjv-tm-field-val .pjv-ava { width: 20px; height: 20px; font-size: 10px; }
-/* 멀티값 칩(선행/후속 링크·태그)은 칩 유지하되 폰트·행높이만 통일. */
-.pjv-proj-meta .pjv-edge-chip, .pjv-proj-meta .pjv-edge-add { font-size: 13px; }
+/* 선행/후속 링크·'+' — 파란 카드/대시 테두리를 제거해 다른 값처럼 투명·borderless 로(리스트 값과 동일 폰트·굵기·색). 태그칩은 색이 태그 정체성이라 유지. */
+.pjv-proj-meta .pjv-edge-chip { background: transparent; border: none; padding: 0 2px 0 0; }
+.pjv-proj-meta .pjv-edge-chip-link { font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-proj-meta .pjv-edge-add { border: none; background: transparent; font-size: 13.5px; font-weight: 600; color: var(--muted-2); padding: 4px 6px; }
+.pjv-proj-meta .pjv-edge-add:hover { background: var(--bg-tint-2); border: none; color: var(--blue); }
 .pjv-proj-meta .pjv-proj-edges, .pjv-proj-meta .pjv-tm-tags { min-height: 28px; }
 .pjv-proj-tagpicker { min-width: 244px; padding: 8px; }
 .pjv-proj-tagpicker-list { margin-top: 6px; max-height: 280px; overflow: auto; }
