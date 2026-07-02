@@ -228,13 +228,15 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     }
     const showUn = !!unGroup && visCount(unGroup.projects) > 0; // 미분류는 보일 게 있을 때만
 
-    // 선택 해소 — 사라졌거나 숨겨진 대상이면 '전체'로. sel: __all__ | F<id> | L<id> | __none__.
+    // 선택 해소(#473 후속: '전체' 제거) — 기본/사라진 대상이면 '맨 위 폴더'(없으면 최상위 리스트 → 미분류). sel: F<id> | L<id> | __none__.
+    const defaultSel = () => folderList.length ? 'F' + folderList[0].id : (topLists.length ? 'L' + topLists[0].id : (showUn ? '__none__' : (lists[0] ? 'L' + lists[0].id : '__none__')));
     let sel = pjvSidebarSel.key;
     const listExists = (id) => lists.some((l) => String(l.id) === String(id));
     const folderExists = (id) => folderList.some((f) => String(f.id) === String(id));
-    if (sel === '__none__' && !showUn) sel = '__all__';
-    else if (typeof sel === 'string' && sel[0] === 'L' && !listExists(sel.slice(1))) sel = '__all__';
-    else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1))) sel = '__all__';
+    if (sel === '__all__') sel = defaultSel();
+    else if (sel === '__none__' && !showUn) sel = defaultSel();
+    else if (typeof sel === 'string' && sel[0] === 'L' && !listExists(sel.slice(1))) sel = defaultSel();
+    else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1))) sel = defaultSel();
     pjvSidebarSel.key = sel;
     const selectArea = (key) => { pjvSidebarSel.key = key; render(); };
     const isFolderOpen = (fid) => pjvFolderOpen.has(fid) ? pjvFolderOpen.get(fid) : true;
@@ -270,7 +272,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const key = 'L' + list.id;
       const grp = groupByList.get(list.id);
       const active = sel === key;
-      const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active) },
+      const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), draggable: 'true' },
         pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }),
         el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
       const go = (e) => { e.stopPropagation(); selectArea(key); };
@@ -279,7 +281,11 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const more = el('button', { class: 'pjv-side-navmore', type: 'button', title: '리스트 설정', 'aria-label': '리스트 설정', text: '⋯' });
       more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu pjv-listset-menu' }); const close = pjvPopover(more, menu); pjvListSettingsMenu(menu, close, list, reload); });
       it.append(more);
-      pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭
+      // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
+      it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; document.body.classList.add('pjv-side-dragging'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'L' + list.id); } catch (_) { /* */ } });
+      it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
+      pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag)
+      pjvSideNavDrop(it, { onList: (lid) => { if (String(lid) !== String(list.id)) pjvMoveListToFolder(lid, list.folder_id ?? null, reload); } }); // 리스트→리스트: 그 리스트와 같은 폴더로
       return it;
     };
 
@@ -296,7 +302,6 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         if (dropListId !== undefined) pjvFolderDropTarget(b, dropListId, reload);
         return b;
       };
-      railInner.append(railDot('__all__', pjvBundleIcon('#6c8cff', 'all'), '전체', sel === '__all__'));
       for (const f of folderList) railInner.append(railDot('F' + f.id, pjvBundleIcon(f.color || 'var(--muted-2)'), f.name, sel === 'F' + f.id));
       for (const l of topLists) railInner.append(railDot('L' + l.id, pjvListGlyph(l), l.name, sel === 'L' + l.id, l.id));
       if (showUn) railInner.append(railDot('__none__', pjvBundleIcon(null, 'none'), '기타 (미분류)', sel === '__none__', null));
@@ -311,25 +316,29 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '목록 접기', 'aria-label': '목록 접기', text: '◀' });
     collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
-    navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '폴더로 관련 리스트를 정리하고, 리스트에 프로젝트를 담아요. 멤버·공개범위·상태는 리스트에서 설정해요.' }));
-    // 전체
-    const totalProjs = groups.reduce((n, g) => n + visCount(g.projects), 0);
-    const allItem = el('div', { class: 'pjv-side-navitem' + (sel === '__all__' ? ' active' : ''), role: 'button', tabindex: '0' },
-      pjvBundleIcon('#6c8cff', 'all'), el('span', { class: 'pjv-side-navlabel', text: '전체' }), el('span', { class: 'pjv-side-navcount', text: String(totalProjs) }));
-    allItem.addEventListener('click', (e) => { e.stopPropagation(); selectArea('__all__'); });
-    navInner.append(allItem);
-    // 폴더들(캐럿+폴더아이콘) › 리스트들
+    navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '리스트에 프로젝트를 담고, 폴더로 리스트를 정리해요. 리스트·폴더를 드래그해 옮길 수 있어요.' }));
+    // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
+    navInner.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
+    navInner.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list') return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
+    // 폴더들(캐럿+폴더아이콘) › 리스트(파일). '전체' 제거(#473 후속) — 기본은 맨 위 폴더 진입. 폴더는 드래그로 재정렬·리스트 드롭 타깃.
     for (const f of folderList) {
       const open = isFolderOpen(f.id);
       const fkey = 'F' + f.id;
       const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), text: open ? '▾' : '▸' });
       caret.addEventListener('click', (e) => { e.stopPropagation(); toggleFolder(f.id); });
-      const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0' },
+      const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' },
         caret, pjvBundleIcon(f.color || 'var(--muted-2)'), el('span', { class: 'pjv-side-navlabel', text: f.name }));
       fit.addEventListener('click', (e) => { e.stopPropagation(); if (!isFolderOpen(f.id)) pjvFolderOpen.set(f.id, true); selectArea(fkey); });
       const fmore = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
       fmore.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu' }); const close = pjvPopover(fmore, menu); pjvFolderTreeMenu(menu, close, f, reload); });
       fit.append(fmore);
+      // 드래그: 폴더를 잡아 순서 재정렬(kind='folder'). 리스트를 이 폴더로 드롭 = 그 폴더로 이동.
+      fit.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'folder'; pjvSideDrag.id = f.id; document.body.classList.add('pjv-side-dragging'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'F' + f.id); } catch (_) { /* */ } });
+      fit.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
+      pjvSideNavDrop(fit, {
+        onList: (lid) => pjvMoveListToFolder(lid, f.id, reload),
+        onFolder: (fid) => { if (String(fid) !== String(f.id)) pjvReorderFolders(pjvMoveBefore(folderList.map((x) => x.id), fid, f.id), reload); },
+      });
       navInner.append(fit);
       if (open) {
         const fLists = listsByFolder.get(f.id) || [];
@@ -650,6 +659,43 @@ function pjvFolderDropTarget(elm, targetListId, reload) {
   });
 }
 
+// ── 사이드바 파일탐색기 DnD(#473 후속) — 리스트(=파일)를 폴더로 넣기/빼기, 폴더 순서 재정렬. ──
+//  리스트 이동: POST project-lists/:id/folder {folder_id} · 폴더 재정렬: POST project-folders/:id {sort} 일괄.
+function pjvMoveListToFolder(listId, folderId, reload) {
+  api('/api/ui/v6/project-lists/' + listId + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: folderId }) })
+    .then(() => { toast(folderId == null ? '폴더에서 뺐어요' : '폴더로 옮겼어요'); if (reload) reload(); })
+    .catch((e) => toast('이동 실패 — ' + e.message, true));
+}
+// 주어진 순서(id 배열)대로 폴더 sort=index 를 일괄 저장 후 재렌더. 드래그 재정렬·새 폴더 맨 위 공용.
+function pjvReorderFolders(orderedIds, reload) {
+  Promise.all(orderedIds.map((id, i) => api('/api/ui/v6/project-folders/' + id, { method: 'POST', body: JSON.stringify({ sort: i }) })))
+    .then(() => { if (reload) reload(); })
+    .catch((e) => toast('폴더 순서 저장 실패 — ' + e.message, true));
+}
+// movingId 를 targetId 바로 앞에 옮긴 새 순서 배열(둘 다 같은 배열 안에 있어야 함).
+function pjvMoveBefore(ids, movingId, targetId) {
+  const rest = ids.filter((x) => String(x) !== String(movingId));
+  const idx = rest.findIndex((x) => String(x) === String(targetId));
+  if (idx < 0) return ids;
+  rest.splice(idx, 0, movingId);
+  return rest;
+}
+// 사이드바 항목 드롭 타깃 — 진행 중인 사이드바 드래그(pjvSideDrag)에만 반응. handlers.onList(listId)/onFolder(folderId).
+function pjvSideNavDrop(elm, handlers) {
+  const over = (ev) => { if (!pjvSideDrag.kind) return; ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } elm.classList.add('pjv-side-drop-over'); };
+  elm.addEventListener('dragover', over);
+  elm.addEventListener('dragenter', over);
+  elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget)) elm.classList.remove('pjv-side-drop-over'); });
+  elm.addEventListener('drop', (ev) => {
+    elm.classList.remove('pjv-side-drop-over');
+    if (!pjvSideDrag.kind) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const kind = pjvSideDrag.kind; const id = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null;
+    if (kind === 'list' && handlers.onList) handlers.onList(id);
+    else if (kind === 'folder' && handlers.onFolder) handlers.onFolder(id);
+  });
+}
+
 function pjvDeleteList(list, reload) {
   if (!confirm('리스트 ‘' + list.name + '’을(를) 삭제할까요?\n\n리스트만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).')) return;
   (async () => {
@@ -706,18 +752,31 @@ function openFolderForm(reload, folder?) {
     el('div', { class: 'pjv-side-nav-hint', style: 'margin-top:10px', text: '폴더는 정리용이에요 — 멤버·공개범위·상태는 리스트에서 설정해요.' }),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+  let busy = false; // 재진입 가드 — Enter 키반복/Enter+클릭 이중 제출로 2개 생성되던 버그 방지.
   const go = async () => {
+    if (busy) return;
     const nm = nameIn.value.trim();
     if (!nm) { nameIn.focus(); toast('이름을 입력하세요', true); return; }
-    saveBtn.disabled = true;
+    busy = true; saveBtn.disabled = true;
     try {
-      if (editing) await api('/api/ui/v6/project-folders/' + folder.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
-      else await api('/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+      if (editing) { await api('/api/ui/v6/project-folders/' + folder.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) }); }
+      else {
+        // 새 폴더는 맨 위로(#473 후속) — 생성 후 기존 폴더들 앞으로 재정렬(sort=0,1,2…).
+        const r = await api('/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+        const newId = r && (r.folder ? r.folder.id : r.id);
+        if (newId != null) {
+          try {
+            const d = await api('/api/ui/v6/project-folders');
+            const others = ((d && d.folders) || []).map((x) => x.id).filter((x) => x !== newId);
+            await Promise.all([newId, ...others].map((id, i) => api('/api/ui/v6/project-folders/' + id, { method: 'POST', body: JSON.stringify({ sort: i }) })));
+          } catch (_) { /* 재정렬 실패해도 폴더는 생성됨 */ }
+        }
+      }
       back.remove(); toast(editing ? '폴더를 수정했습니다' : '폴더를 만들었습니다'); if (reload) reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+    } catch (e) { toast('실패 — ' + e.message, true); busy = false; saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
-  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
   return back;
 }
 
@@ -776,10 +835,12 @@ function openListForm(reload, list?, opts?) {
   ];
   const back = overlayBox(editing ? '리스트 설정' : '새 리스트', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+  let busy = false; // 재진입 가드 — Enter 키반복/Enter+클릭 이중 제출로 2개 생성되던 버그 방지(버튼 disabled 는 keydown 경로를 못 막음).
   const go = async () => {
+    if (busy) return;
     const nm = nameIn.value.trim();
     if (!nm) { nameIn.focus(); toast('이름을 입력하세요', true); return; }
-    saveBtn.disabled = true;
+    busy = true; saveBtn.disabled = true;
     try {
       if (editing) {
         await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, visibility }) });
@@ -796,10 +857,10 @@ function openListForm(reload, list?, opts?) {
         if (opts.onCreated) opts.onCreated(created);
       }
       back.remove(); toast(editing ? '리스트를 수정했습니다' : '리스트를 만들었습니다'); if (reload) reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+    } catch (e) { toast('실패 — ' + e.message, true); busy = false; saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
-  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
   return back;
 }
 
@@ -4539,6 +4600,8 @@ const pjvBoardMineOnly = { on: false };
 const pjvBoardView = { byArea: false, byStatus: true, byFolder: false };
 // 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id 를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃.
 const pjvFolderDrag: any = { id: null };
+// 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
+const pjvSideDrag: any = { kind: null, id: null };
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map<string, boolean>();
 // 사이드바 폴더(project_folder) 펼침 상태 — key: folder id. 없으면 기본 펼침(#475 폴더›리스트 트리). 세션 유지.

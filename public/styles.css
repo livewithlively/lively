@@ -2994,7 +2994,7 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 .pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
 .pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
-.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-inner { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 2px; }
 .pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
 .pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
@@ -3190,7 +3190,15 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-folder-caret { flex: none; width: 15px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 0; }
 .pjv-side-folder-caret:hover { color: var(--ink); }
 .pjv-side-navfolder { font-weight: 700; color: var(--ink); gap: 5px; }
-.pjv-side-navlist.sub { padding-left: 30px; }
+/* 폴더 하위 리스트(=파일) — 파일탐색기식 들여쓰기 + 세로 가이드선(폴더 안이라는 위계를 눈에 보이게, #473 후속). */
+.pjv-side-navlist.sub { padding-left: 34px; }
+.pjv-side-navlist.sub::before { content: ''; position: absolute; left: 20px; top: -1px; bottom: -1px; width: 1.5px; background: var(--line-net, #d9dee6); border-radius: 2px; }
+.pjv-side-navlist.sub:hover::before { background: var(--muted-2); }
+.pjv-side-navlist.sub.active::before { background: var(--blue); }
+/* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더, 폴더 재정렬) + 드래그 중 커서. */
+.pjv-side-drop-over { background: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
+body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabbing; }
+.pjv-side-navfolder[draggable="true"], .pjv-side-navlist[draggable="true"] { user-select: none; }
 .pjv-side-listglyph { flex: none; width: 16px; height: 16px; display: block; }
 .pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
 .pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
