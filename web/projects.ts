@@ -325,7 +325,6 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '목록 접기', 'aria-label': '목록 접기', text: '◀' });
     collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
-    navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '리스트에 프로젝트를 담고, 폴더로 리스트를 정리해요. 리스트·폴더를 드래그해 옮길 수 있어요.' }));
     // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
     navInner.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
     navInner.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list') return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
