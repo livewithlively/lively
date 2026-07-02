@@ -50,11 +50,12 @@ function pjvRestoreScroll(y) {
     for (const ms of [40, 120, 260, 500, 800, 1200])
         setTimeout(apply, ms);
 }
-// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][카테고리]만.
-//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, browse}.
+// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][작업 로그][탐색].
+//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, worklog, browse}.
+//  작업 로그 = '회사 전체'(회사에서 진행 중인 모든 작업) 활동 피드 — 대시보드에서 분리해 별도 탭으로.
 function projectSubBar(active) {
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '프로젝트 보기' });
-    const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '탐색', '#/projects2/browse']];
+    const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['worklog', '작업 로그', '#/projects2/worklog'], ['browse', '탐색', '#/projects2/browse']];
     for (const [key, label, href] of tabs) {
         const on = key === active;
         bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
@@ -68,8 +69,10 @@ function projectPageHead() {
         el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }),
     ], '젝트');
 }
-// 프로젝트(v2) 진입 — browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
+// 프로젝트(v2) 진입 — worklog(작업 로그=회사 전체 활동) | browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
 async function renderProjectsV2(view, sub, params) {
+    if (sub === 'worklog')
+        return renderProjectV2WorkLog(view);
     if (sub === 'browse' || SPACE_LABEL[sub])
         return renderProjectV2Space(view, sub, params);
     return renderProjectV2Board(view);
@@ -118,8 +121,12 @@ async function renderProjectV2Board(view) {
     const meId = (state.me && (state.me.userId || state.me.email)) || '';
     // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
     const canDelete = (_p) => !!meId;
-    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '우리 팀' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 참여하거나 우리 팀이 맡은 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders), el('div', { class: 'card-head', style: 'margin: 24px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '회사 전체' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))), companyTimelineSection());
+    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '우리 팀' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 참여하거나 우리 팀이 맡은 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders));
     pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
+}
+// 작업 로그 탭 — '회사 전체'(회사에서 지금 진행 중인 모든 작업) 활동 피드. 대시보드에서 분리(유형 필터 칩 + 더보기).
+async function renderProjectV2WorkLog(view) {
+    view.replaceChildren(projectPageHead(), projectSubBar('worklog'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '회사 전체' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))), companyTimelineSection());
 }
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
 //  컬럼 헤더는 카드 상단에 한 번. 그 아래 리스트 그룹(접이식) 들이 쌓인다. 펼침 상태는 pjvListOpen 으로 세션 유지.
