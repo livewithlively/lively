@@ -2395,12 +2395,14 @@ body.pjv-tm-open { overflow: hidden; }
 /* 단일값 클릭 컨트롤(상태 pill·리스트·우선순위·날짜)을 같은 결로 통일 — 상태 pill 의 흰 배경+테두리 제거해 리스트/우선순위와 동일하게. */
 .pjv-proj-meta .pjv-tm-statuspill,
 .pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn,
-.pjv-proj-meta .pjv-tm-datebtn {
+.pjv-proj-meta .pjv-tm-datebtn,
+.pjv-proj-meta .pjv-tm-valbtn {
   font-size: 13.5px; font-weight: 600; letter-spacing: 0; min-height: 28px; padding: 4px 8px;
   border: none; border-radius: 7px; background: transparent; box-shadow: none; justify-content: flex-start; gap: 6px;
 }
 .pjv-proj-meta .pjv-tm-statuspill:hover,
-.pjv-proj-meta .pjv-tm-datebtn:hover { background: var(--bg-tint-2); border: none; }
+.pjv-proj-meta .pjv-tm-datebtn:hover,
+.pjv-proj-meta .pjv-tm-valbtn:hover { background: var(--bg-tint-2); border: none; }
 /* placeholder(미분류·Empty·Start/Due) 동일 크기·색으로. */
 .pjv-proj-meta .pjv-cell-ph { font-size: 13.5px; line-height: 1.4; }
 /* 팀원 아바타 값 — 다른 값 높이에 맞춰 축소(행 높이 튐 제거). */
