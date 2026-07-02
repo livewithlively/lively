@@ -3151,7 +3151,13 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 
 /* 컴팩트 메타 행 — [라벨][트리거(요약 칩 + ▾)]. 폴더 select 도 같은 행에 얹어 위계 통일. */
 .cf-row { display: flex; align-items: center; gap: 12px; min-height: 36px; }
+.cf-row-top { align-items: flex-start; }
+.cf-row-top .cf-label { padding-top: 9px; }
 .cf-label { flex: 0 0 60px; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+/* 할 일(선택) — 한 줄에 하나씩. 가볍게: 작게 시작해 내용만큼만 자동확장. */
+.np-tasks { flex: 1; min-width: 0; box-sizing: border-box; font-size: 13.5px; line-height: 1.55; color: var(--ink); padding: 8px 11px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); resize: none; overflow-y: auto; min-height: 40px; font-family: inherit; }
+.np-tasks::placeholder { color: var(--muted-2); }
+.np-tasks:focus { outline: none; border-color: var(--blue); }
 .cf-row .pjv-listpick { flex: 1; min-width: 0; }
 .cf-row .pjv-listpick-sel { width: 100%; }
 .cf-trigger { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 10px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); cursor: pointer; text-align: left; font: inherit; }

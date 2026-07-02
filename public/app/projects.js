@@ -2245,10 +2245,14 @@ function openProjectV2Form(reload, prefill) {
     const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
     const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
     const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
+    // 할 일(선택) — 한 줄에 하나씩. 생성 직후 이 프로젝트의 태스크로 만든다(POST projects/:id/tasks). 가볍게: 이름만.
+    const tasksIn = el('textarea', { class: 'np-tasks', rows: '2', placeholder: '한 줄에 하나씩 (선택) — 예: 리서치 정리 / 초안 쓰기', maxlength: '4000' });
+    const growTasks = () => { tasksIn.style.height = 'auto'; tasksIn.style.height = Math.min(Math.max(tasksIn.scrollHeight, 40), 160) + 'px'; };
+    tasksIn.addEventListener('input', growTasks);
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '폴더' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 바꿀 수 있어요.' }), catField.row, repoField.row, memberField.row)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-    setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
+    const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '폴더' }), listPick.box), el('div', { class: 'np-meta-cap', text: '할 일·카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }), catField.row, repoField.row, memberField.row, el('div', { class: 'cf-row cf-row-top' }, el('span', { class: 'cf-label', text: '할 일' }), tasksIn))), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); growTasks(); }, 0); // 프리필된 이름 전체 선택 + 설명·할 일 높이 초기화
     const go = async () => {
         const name = nameIn.value.trim();
         if (!name) {
@@ -2293,6 +2297,13 @@ function openProjectV2Form(reload, prefill) {
             // 모달의 분류(영역) 선택대로 소속 지정 — '기타(미분류)'면 listId=null 이라 호출 생략(기본이 미분류).
             if (np && np.id && listChoice.listId != null)
                 await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listChoice.listId }) }).catch(() => { });
+            // 할 일(선택) — 한 줄에 하나씩 이 프로젝트의 태스크로 생성(입력 순서 보존 위해 순차). 실패는 조용히 건너뜀(프로젝트는 이미 생성됨).
+            const taskNames = tasksIn.value.split('\n').map((s) => s.trim()).filter(Boolean);
+            if (np && np.id && taskNames.length) {
+                for (const tn of taskNames) {
+                    await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: tn }) }).catch(() => { });
+                }
+            }
             // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
             try {
                 localStorage.setItem('lively.newproj.recentCats', JSON.stringify(catField.getSelectedLabels().map((c) => ({ id: c.key, name: c.label }))));
