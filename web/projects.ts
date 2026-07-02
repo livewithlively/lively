@@ -541,7 +541,7 @@ function pjvListColHead(fields, anchorId, reload) {
 }
 
 // 리스트 설정 팝아웃(클릭업 List settings 의 필요 부분집합, #475) — 사이드바 리스트 ⋯ · 인라인 리스트 헤더 ⋯ 공용.
-//  이름·색·아이콘·멤버·공개범위(리스트 설정) / 상태(Task statuses) / 폴더로 이동 / 프로젝트 관리 / 삭제.
+//  리스트 설정(이름·색·아이콘·멤버·공개범위) / 상태 체계 관리 / 폴더로 이동 / 프로젝트 관리 / 삭제. 라벨 간결화(#500).
 function pjvListSettingsMenu(menu, close, list, reload) {
   const mk = (label, fn, danger?, sub?) => {
     const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label }), sub ? el('span', { class: 'pjv-menu-caret', text: '›' }) : null);
@@ -549,10 +549,10 @@ function pjvListSettingsMenu(menu, close, list, reload) {
     return b;
   };
   menu.append(el('div', { class: 'pjv-menu-head', text: list.name }));
-  menu.append(mk('리스트 설정 (이름·색·아이콘·멤버·공개범위)', () => openListForm(reload, list)));
-  menu.append(mk('상태 (Task statuses)', () => pjvListStatusEditor(list, reload)));
+  menu.append(mk('리스트 설정', () => openListForm(reload, list)));
+  menu.append(mk('상태 체계 관리', () => pjvListStatusEditor(list, reload)));
   menu.append(mk('폴더로 이동', () => pjvListFolderSubmenu(menu, close, list, reload), false, true));
-  menu.append(mk('이 리스트의 프로젝트 관리', () => pjvManageFolderProjects(list, reload)));
+  menu.append(mk('프로젝트 관리', () => pjvManageFolderProjects(list, reload)));
   menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
   menu.append(mk('리스트 삭제', () => pjvDeleteList(list, reload), true));
 }
@@ -829,10 +829,25 @@ function openListForm(reload, list?, opts?) {
     }));
   };
   paintIcon();
-  // 공개범위 — open(전원) / members(리스트 멤버만). 기본 open.
+  // 공개범위 — open(전원) / members(리스트 멤버만). 기본 open. 폼 톤에 맞춘 카드형 토글(#500).
+  //  카드 전체가 스위치(role=switch) — 안의 스위치는 시각 표시만(중첩 button 회피).
   let visibility = editing ? (list.visibility || 'open') : 'open';
-  const visRow = pjvSwitchRow('공개범위를 멤버로 제한 (멤버가 아니면 이 리스트·프로젝트가 안 보여요)',
-    () => visibility === 'members', (on) => { visibility = on ? 'members' : 'open'; }, () => {});
+  const visSw = el('span', { class: 'pjv-switch' + (visibility === 'members' ? ' on' : '') }, el('span', { class: 'pjv-switch-knob' }));
+  const visRow = el('div', { class: 'pjv-visrow' + (visibility === 'members' ? ' on' : ''), role: 'switch', tabindex: '0',
+    'aria-checked': visibility === 'members' ? 'true' : 'false' },
+    el('span', { class: 'pjv-visrow-txt' },
+      el('span', { class: 'pjv-visrow-title', text: '공개범위를 멤버로 제한' }),
+      el('span', { class: 'pjv-visrow-hint', text: '켜면 멤버가 아닌 사람에겐 이 리스트와 프로젝트가 보이지 않아요.' })),
+    visSw);
+  const toggleVis = () => {
+    visibility = visibility === 'members' ? 'open' : 'members';
+    const on = visibility === 'members';
+    visRow.classList.toggle('on', on);
+    visSw.classList.toggle('on', on);
+    visRow.setAttribute('aria-checked', on ? 'true' : 'false');
+  };
+  visRow.onclick = (e) => { e.stopPropagation(); toggleVis(); };
+  visRow.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleVis(); } });
   // 멤버 — 생성뿐 아니라 수정 때도 편집(만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
   const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
   const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
@@ -842,7 +857,7 @@ function openListForm(reload, list?, opts?) {
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
     el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '아이콘' }), iconRow),
     el('div', { class: 'field', style: 'margin-top:12px' },
-      el('label', { class: 'field-label', text: '참여 멤버 (이 리스트를 기본으로 펼쳐 보는 사람)' }), picker.box),
+      el('label', { class: 'field-label', text: '참여 멤버' }), picker.box),
     el('div', { class: 'field', style: 'margin-top:12px' }, visRow),
   ];
   const back = overlayBox(editing ? '리스트 설정' : '새 리스트', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
@@ -903,7 +918,8 @@ function pjvListStatusEditor(list, reload) {
   };
   const delDef = (d) => {
     const sameCat = defs.filter((x) => x.category === d.category);
-    if (sameCat.length <= 1) { toast('각 버킷에 최소 1개 상태는 있어야 해요', true); return; }
+    // Closed 는 비워도 됨(선택), Active·Done 은 최소 1개.
+    if (d.category !== 'closed' && sameCat.length <= 1) { toast('Active·Done 버킷엔 최소 1개 상태가 필요해요', true); return; }
     defs = defs.filter((x) => x !== d); paint();
   };
   const addDef = (category) => {
@@ -926,11 +942,12 @@ function pjvListStatusEditor(list, reload) {
   const paint = () => {
     groupsBox.classList.toggle('inherit', mode !== 'custom');
     groupsBox.replaceChildren();
+    pjvAssignFracs(defs);  // Active 진행 파이 갱신 — 순서·개수(1/n) 반영(#499)
     for (const cat of PJV_STATUS_CATS) {
       const rows = el('div', { class: 'pjv-statused-rows' });
       for (const d of defs.filter((x) => x.category === cat.key)) {
-        const dot = el('button', { class: 'pjv-status-dot pjv-status-custom ' + pjvCatMeta(cat.key).cls, type: 'button', style: '--sc:' + d.color, title: '색 변경' },
-          pjvCatMeta(cat.key).glyph ? el('span', { class: 'pjv-status-glyph', text: pjvCatMeta(cat.key).glyph }) : null);
+        const dot = el('button', { class: 'pjv-status-btn', type: 'button', title: mode === 'custom' ? '색 변경' : undefined,
+          disabled: mode !== 'custom' ? 'disabled' : undefined }, pjvStatusIcon(d.category, d.color, d.frac));
         dot.onclick = (e) => { e.stopPropagation(); if (mode === 'custom') pickColor(dot, d); };
         const nameIn = el('input', { class: 'pjv-statused-name', type: 'text', value: d.label, maxlength: '40', disabled: mode !== 'custom' ? 'disabled' : undefined });
         nameIn.addEventListener('input', () => { d.label = nameIn.value; });
@@ -947,8 +964,12 @@ function pjvListStatusEditor(list, reload) {
       }
       const addBtn = el('button', { class: 'pjv-statused-add', type: 'button', onclick: () => addDef(cat.key) },
         el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '상태 추가' }));
+      // 버킷 헤더 — 라벨 + 우측 ＋(클릭업처럼 헤더에서 바로 추가).
+      const catAdd = mode === 'custom'
+        ? el('button', { class: 'pjv-statused-cat-add', type: 'button', title: cat.label + ' 상태 추가', 'aria-label': cat.label + ' 상태 추가', text: '＋', onclick: () => addDef(cat.key) })
+        : null;
       groupsBox.append(el('div', { class: 'pjv-statused-cat' },
-        el('div', { class: 'pjv-statused-cat-h', text: cat.label }), rows, mode === 'custom' ? addBtn : null));
+        el('div', { class: 'pjv-statused-cat-h' }, el('span', { text: cat.label }), catAdd), rows, mode === 'custom' ? addBtn : null));
     }
   };
 
@@ -978,7 +999,8 @@ function pjvListStatusEditor(list, reload) {
     let statuses: any[] = [];
     if (mode === 'custom') {
       for (const d of defs) { if (!String(d.label).trim()) { toast('상태 이름을 모두 입력하세요', true); return; } }
-      for (const cat of PJV_STATUS_CATS) if (!defs.some((d) => d.category === cat.key)) { toast('‘' + cat.label + '’에 상태가 최소 1개 필요해요', true); return; }
+      // Active·Done 은 최소 1개, Closed 는 선택(비워도 됨).
+      for (const cat of PJV_STATUS_CATS) if (cat.key !== 'closed' && !defs.some((d) => d.category === cat.key)) { toast('‘' + cat.label + '’에 상태가 최소 1개 필요해요', true); return; }
       statuses = defs.map((d) => ({ key: d.key, label: String(d.label).trim(), color: d.color, category: d.category }));
     }
     saveBtn.disabled = true;
@@ -1060,32 +1082,47 @@ function pjvProjStatusMeta(status) {
 //  저장: project_list.settings.statusMode('inherit'|'custom') + settings.statuses[{key,label,color,category}].
 //  프로젝트엔 status(CHECK 유효 네이티브 투영: todo|in_progress|done) + status_raw(커스텀 상태 키, 개방 어휘)로 저장.
 // ══════════════════════════════════════════════════════════════════════════
+// 기본(inherit) 상태 — 클릭업 3버킷(Active/Done/Closed) 표현: 할 일(점선)·진행 중 은 Active,
+//  완료 는 Done, Closed 는 기본 비어있음. 커스텀 전환 시 이 세트가 출발점.
 const PJV_DEFAULT_STATUS_DEFS = [
+  { key: 'todo', label: '할 일', color: '#94a3b8', category: 'active' },
   { key: 'active', label: '진행 중', color: '#f59e0b', category: 'active' },
-  { key: 'todo', label: '할 일', color: '#94a3b8', category: 'todo' },
   { key: 'done', label: '완료', color: '#22c55e', category: 'done' },
 ];
-// 카테고리(버킷) — 보드 표시 순서: 진행 중 → 할 일 → 완료(기존 보드 관례 유지).
+// 카테고리(버킷) — 클릭업 상태 유형과 동일: Active(진행 파이) → Done(체크) → Closed(채운 체크). #499
 const PJV_STATUS_CATS = [
-  { key: 'active', label: '진행 중' },
-  { key: 'todo', label: '할 일' },
-  { key: 'done', label: '완료' },
+  { key: 'active', label: 'Active' },
+  { key: 'done', label: 'Done' },
+  { key: 'closed', label: 'Closed' },
 ];
-// 커스텀 상태 category → 저장할 네이티브 status(CHECK 유효). 완료=done, 할 일=todo, 그 외=in_progress.
-function pjvNativeStatusOf(category) { return category === 'done' ? 'done' : (category === 'todo' ? 'todo' : 'in_progress'); }
+// 커스텀 상태 category → 저장할 네이티브 status(CHECK 유효 todo|in_progress|done).
+//  Done·Closed 는 둘 다 네이티브 done(완료됨), 그 외(Active)는 in_progress. (todo 버킷은 Active 로 흡수 — #499)
+function pjvNativeStatusOf(category) { return (category === 'done' || category === 'closed') ? 'done' : 'in_progress'; }
 function pjvListIsCustomStatus(list) {
   const s = list && list.settings;
   return !!(s && s.statusMode === 'custom' && Array.isArray(s.statuses) && s.statuses.length);
 }
-// 리스트의 상태 정의(커스텀이면 그것, 아니면 기본 3단계). 항상 {key,label,color,category} 정규화.
+// 리스트의 상태 정의(커스텀이면 그것, 아니면 기본 3단계). 항상 {key,label,color,category,frac} 정규화.
+//  frac = Active 버킷 안 진행도(0=첫 상태=점선 할일 → (n-1)/n=거의 가득). Done/Closed 는 체크라 무관. #499
 function pjvListStatusDefs(list) {
+  let defs;
   if (pjvListIsCustomStatus(list)) {
-    return list.settings.statuses.filter((x) => x && x.key).map((x) => ({
+    defs = list.settings.statuses.filter((x) => x && x.key).map((x) => ({
       key: String(x.key), label: String(x.label || x.key), color: x.color || '#94a3b8',
-      category: (x.category === 'todo' || x.category === 'done') ? x.category : 'active',
+      // 레거시 'todo' 카테고리는 Active 로 흡수, 'closed' 신규 허용, 그 외는 Active.
+      category: (x.category === 'done' || x.category === 'closed') ? x.category : 'active',
     }));
+  } else {
+    defs = PJV_DEFAULT_STATUS_DEFS.map((d) => ({ ...d }));
   }
-  return PJV_DEFAULT_STATUS_DEFS.slice();
+  return pjvAssignFracs(defs);
+}
+// Active 버킷 정의들에 진행도 frac(순서 i / 개수 n) 부여 — 파이차트 채움용. 첫 상태=0(점선). #499
+function pjvAssignFracs(defs) {
+  const act = defs.filter((d) => d.category === 'active');
+  const n = act.length;
+  act.forEach((d, i) => { d.frac = n > 0 ? i / n : 0; });
+  return defs;
 }
 // 보드 렌더 동안 리스트별 커스텀 상태 레지스트리 — 프로젝트 행의 상태 동그라미/메뉴가 소속 리스트 상태를 참조(어느 뷰든).
 let pjvStatusReg = new Map<number, any[]>();
@@ -1100,20 +1137,49 @@ function pjvResolveProjStatus(p) {
   if (!defs || !defs.length) return null;
   const rawKey = p.status_raw || p.status;
   let d = defs.find((x) => x.key === rawKey);
-  if (!d) { const cat = p.status === 'done' ? 'done' : (p.status === 'todo' ? 'todo' : 'active'); d = defs.find((x) => x.category === cat) || null; }
+  if (!d) {
+    // 미스매치는 네이티브 status 로 흡수 — done 은 Done(없으면 Closed), 그 외는 Active 첫 상태.
+    if (p.status === 'done') d = defs.find((x) => x.category === 'done') || defs.find((x) => x.category === 'closed') || null;
+    else d = defs.find((x) => x.category === 'active') || null;
+  }
   return d;
 }
-// 카테고리 → 기본 클래스/글리프(색은 커스텀이면 inline --sc).
+// 카테고리 → 기본 클래스(버킷별 CSS 훅). 아이콘 자체는 pjvStatusIcon 이 그린다(#499).
 function pjvCatMeta(category) {
+  if (category === 'closed') return { cls: 'closed', glyph: '✓' };
   if (category === 'done') return { cls: 'done', glyph: '✓' };
-  if (category === 'todo') return { cls: 'todo', glyph: '' };
-  return { cls: 'inprog', glyph: '◐' };
+  return { cls: 'inprog', glyph: '' };
 }
-// 커스텀 상태 동그라미 — inline 색(--sc) + 카테고리 글리프. size='sm' 작게.
+// 상태 아이콘(SVG) — 클릭업 스타일(#499):
+//  · Active: 진행도 파이(frac=0 → 점선 빈 링='할일', 커질수록 시계방향으로 채워짐).
+//  · Done:  색 링 + 체크.   · Closed: 색으로 꽉 채운 원 + 흰 체크.
+function pjvStatusIcon(category, color, frac, size?) {
+  const px = size === 'sm' ? 15 : 18;
+  const c = color || 'var(--muted-3)';
+  const R = 9, cx = 12, cy = 12;
+  const svg = sv('svg', { class: 'pjv-status-ic' + (size ? ' ' + size : ''), viewBox: '0 0 24 24', width: px, height: px, 'aria-hidden': 'true' });
+  if (category === 'done' || category === 'closed') {
+    const filled = category === 'closed';
+    svg.append(sv('circle', { cx, cy, r: R, fill: filled ? c : 'none', stroke: c, 'stroke-width': 2 }));
+    svg.append(sv('path', { d: 'M7.7 12.3l2.7 2.7 5.9-6.2', fill: 'none', stroke: filled ? '#fff' : c, 'stroke-width': 2.1, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    return svg;
+  }
+  // Active — 진행도 파이.
+  const f = Math.max(0, Math.min(0.995, frac || 0));
+  if (f < 0.001) {
+    svg.append(sv('circle', { cx, cy, r: R, fill: 'none', stroke: c, 'stroke-width': 2, 'stroke-dasharray': '2.2 2.4' }));
+  } else {
+    svg.append(sv('circle', { cx, cy, r: R, fill: 'none', stroke: c, 'stroke-width': 2, opacity: 0.3 }));
+    const th = f * 2 * Math.PI;
+    const ex = (cx + R * Math.sin(th)).toFixed(2), ey = (cy - R * Math.cos(th)).toFixed(2);
+    const large = f > 0.5 ? 1 : 0;
+    svg.append(sv('path', { d: 'M' + cx + ' ' + cy + 'L' + cx + ' ' + (cy - R) + 'A' + R + ' ' + R + ' 0 ' + large + ' 1 ' + ex + ' ' + ey + 'Z', fill: c }));
+  }
+  return svg;
+}
+// 커스텀 상태 아이콘 — 파이/체크(pjvStatusIcon). size='sm' 작게.
 function pjvCustomStatusDot(def, size?) {
-  const m = pjvCatMeta(def.category);
-  return el('span', { class: 'pjv-status-dot pjv-status-custom ' + m.cls + (size ? ' ' + size : ''), style: '--sc:' + def.color, title: '상태: ' + def.label, 'aria-hidden': 'true' },
-    m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+  return pjvStatusIcon(def.category, def.color, def.frac, size);
 }
 // 프로젝트를 커스텀 상태로 변경 — 네이티브 status 투영 + status_raw(커스텀 키) 저장.
 async function pjvSetProjStatusCustom(id, def, reload) {
@@ -1139,13 +1205,14 @@ function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
     const firstOfCat = (cat) => defs.find((d) => d.category === cat);
     for (const p of shownProjects) {
       let d = defs.find((x) => x.key === (p.status_raw || p.status));
-      if (!d) { const cat = p.status === 'done' ? 'done' : (p.status === 'todo' ? 'todo' : 'active'); d = firstOfCat(cat) || defs[0]; }
+      // 미스매치는 네이티브 status 로 흡수 — done 은 Done(없으면 Closed), 그 외는 Active 첫 상태.
+      if (!d) d = (p.status === 'done' ? (firstOfCat('done') || firstOfCat('closed')) : firstOfCat('active')) || defs[0];
       const arr = d ? byKey.get(d.key) : null; if (arr) arr.push(p);
     }
     // 카테고리 순서로, 각 카테고리 안에서는 정의 순서. 완료(done) 상태는 Closed 토글일 때만.
     for (const cat of PJV_STATUS_CATS) {
       for (const d of defs.filter((x) => x.category === cat.key)) {
-        if (cat.key === 'done' && !pjvProjClosedView.done) continue;
+        if ((cat.key === 'done' || cat.key === 'closed') && !pjvProjClosedView.done) continue;
         const arr = byKey.get(d.key) || [];
         if (mineOnly && !arr.length) continue;
         main.append(pjvProjGroup(d.label, pjvNativeStatusOf(d.category), arr, reload, null, canDelete, takeCols(), fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd, d));
@@ -1178,10 +1245,9 @@ function pjvProjStatusDot(p, reload) {
   const defs = (p.list_id != null && pjvStatusReg.get(Number(p.list_id))) || null;
   if (defs && defs.length) {
     const cur = pjvResolveProjStatus(p) || defs[0];
-    const m = pjvCatMeta(cur.category);
-    const btn = el('button', { class: 'pjv-status-dot pjv-status-custom ' + m.cls, type: 'button', style: '--sc:' + cur.color,
+    const btn = el('button', { class: 'pjv-status-btn', type: 'button',
       title: '상태: ' + cur.label, 'aria-label': '상태 ' + cur.label },
-      m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+      pjvStatusIcon(cur.category, cur.color, cur.frac));
     btn.onclick = (e) => {
       e.stopPropagation();
       const menu = el('div', { class: 'pjv-menu' });
@@ -2201,7 +2267,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   // 분리(separate) 모드 — 각 프로젝트의 태스크를 상태 버킷에 평면 행으로(프로젝트 행과 같은 그리드). 프로젝트 행 아래, 추가행 위.
   for (const s of sepTasks) body.append(pjvProjTaskRow(s.projId, s.task, s.members, reload, 1, fields));
   // 클릭업식 인라인 추가행 — 각 그룹(완료 제외) 맨 아래. 빈 그룹에선 이 행이 '시작하기' CTA. 선택(일괄삭제) 모드에선 숨김.
-  if (!select && cat !== 'done' && !noAdd) body.append(pjvProjAddRow(meta.key, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef));
+  if (!select && cat !== 'done' && cat !== 'closed' && !noAdd) body.append(pjvProjAddRow(meta.key, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef));
 
   let gopen = true;
   const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
@@ -6066,13 +6132,17 @@ function memberPicker(preselected, opts?) {
   const selected = new Set(preselected || []);
   const fire = () => { try { opts.onChange && opts.onChange(); } catch (_) { /* */ } };
   let all: any[] = [];
-  // 단일 목록 — 선택된 사람도 위쪽 별도 chips 없이 이 목록에서 ✓ 로 표시하고 클릭으로 토글(해제)한다(#475: 중복 표시 제거).
-  const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가/해제…' });
+  // 단일 목록 — 선택된 사람도 위쪽 별도 chips 없이 이 목록에서 체크로 표시하고 클릭으로 토글(해제)한다(#475: 중복 표시 제거).
+  const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색…' });
+  const count = el('div', { class: 'proj-mp-count' });
   const results = el('div', { class: 'proj-mp-results' }, el('span', { class: 'admin-hint', text: '불러오는 중…' }));
-  const box = el('div', { class: 'proj-mp' }, searchIn, results);
+  const box = el('div', { class: 'proj-mp' }, searchIn, count, results);
 
-  // 단일 목록(#475 중복 chips 제거) — 선택된 사람도 ✓ 로 표시·클릭 토글. 선택 변경 시 fire()(onChange 콜백, #473).
+  // 단일 목록(#475 중복 chips 제거) — 선택된 사람은 우측 체크·행 강조로 표시, 클릭 토글. 상단에 참여 인원 요약(#500).
+  //  선택 변경 시 fire()(onChange 콜백, #473).
   function paintResults() {
+    const n = selected.size;
+    count.textContent = n ? n + '명 참여 중' : '참여 멤버를 골라 추가하세요';
     if (!all.length) { results.replaceChildren(el('span', { class: 'admin-hint', text: '등록된 사람 구성원이 없습니다.' })); return; }
     const q = searchIn.value.trim().toLowerCase();
     const cand = all.filter((m) => !q || (m.display_name || m.id).toLowerCase().includes(q));
@@ -6081,10 +6151,11 @@ function memberPicker(preselected, opts?) {
     if (!cand.length) { results.replaceChildren(el('div', { class: 'proj-mp-empty', text: q ? '일치하는 사람이 없어요.' : '구성원이 없습니다.' })); return; }
     results.replaceChildren(...cand.map((m) => {
       const on = selected.has(m.id);
-      return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), onclick: () => { if (on) selected.delete(m.id); else selected.add(m.id); paintResults(); searchIn.focus(); fire(); } },
+      return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), role: 'button', 'aria-pressed': on ? 'true' : 'false',
+        onclick: () => { if (on) selected.delete(m.id); else selected.add(m.id); paintResults(); searchIn.focus(); fire(); } },
         el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }),
         el('span', { class: 'proj-mp-name', text: m.display_name || m.id }),
-        el('span', { class: 'proj-mp-add', text: on ? '✓ 선택됨' : '＋ 추가' }));
+        el('span', { class: 'proj-mp-check' + (on ? ' on' : ''), 'aria-hidden': 'true', text: on ? '✓' : '' }));
     }));
   }
   searchIn.addEventListener('input', paintResults);

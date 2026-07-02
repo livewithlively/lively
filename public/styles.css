@@ -3320,3 +3320,35 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .pjv-statused-add:hover { border-color: var(--blue); color: var(--blue); }
 .pjv-color-pop .pjv-color-swatches { padding: 4px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   #499 · #500 — 상태 아이콘(Active/Done/Closed 파이·체크) · 리스트 설정 폼 톤
+   (EOF 자기완결 블록 — cascade 순서로 이전 규칙 override)
+   ════════════════════════════════════════════════════════════════════════ */
+/* 상태 아이콘(SVG 파이/체크) — 클릭업 스타일(#499). 색은 각 path 에 inline. */
+.pjv-status-ic { display: block; flex: none; }
+.pjv-status-btn { border: none; background: none; padding: 0; margin: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 0; border-radius: 50%; transition: filter .13s ease; }
+.pjv-status-btn:hover { filter: brightness(1.12); }
+.pjv-status-btn:disabled { cursor: default; }
+.pjv-status-btn:disabled:hover { filter: none; }
+
+/* 상태 편집기 버킷 헤더 — 라벨 + 우측 ＋(클릭업처럼 헤더에서 바로 추가) */
+.pjv-statused-cat-h { display: flex; align-items: center; justify-content: space-between; }
+.pjv-statused-cat-add { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 15px; line-height: 1; border-radius: 6px; }
+.pjv-statused-cat-add:hover { background: var(--bg-tint); color: var(--blue); }
+
+/* 공개범위 카드형 토글(#500) — 폼 필드 톤에 맞춘 바른 경계·강조 */
+.pjv-visrow { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 1px solid var(--line-net, #d9dee6); background: var(--bg); border-radius: 8px; padding: 11px 13px; cursor: pointer; box-sizing: border-box; transition: border-color .13s ease, background-color .13s ease; }
+.pjv-visrow:hover { border-color: var(--blue); }
+.pjv-visrow.on { border-color: var(--blue); background: var(--bg-tint); }
+.pjv-visrow:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pjv-visrow-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pjv-visrow-title { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pjv-visrow-hint { font-size: 12px; color: var(--ink-sub); line-height: 1.4; }
+.pjv-visrow .pjv-switch { pointer-events: none; }  /* 카드 전체가 토글 — 스위치는 표시만 */
+
+/* 멤버 선택(#500) — 참여 인원 요약 + 체크 표시(＋추가/✓선택됨 텍스트 대체) */
+.proj-mp-count { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+.proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
+.proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
+.proj-mp-row.on .proj-mp-check { background: var(--blue); border-color: var(--blue); color: #fff; }
