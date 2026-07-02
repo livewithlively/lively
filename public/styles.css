@@ -2993,20 +2993,17 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 /*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
 .pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-/* 사이드바 = 담긴 네비게이터 패널(옅은 틴트+테두리+라운드). 긴 빈 열 대신 내용만큼만, 스크롤 시 따라오게 sticky. */
-.pjv-side-nav { position: sticky; top: 12px; align-self: start; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; padding: 10px 10px 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; }
-.pjv-side-nav-inner { display: flex; flex-direction: column; gap: 1px; }
-/* 헤더 — 조용한 섹션 라벨(제목처럼 크게 X). 아래 항목과 간격 확보(안내문 제거 후 #473). */
-.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 10px 10px; }
-.pjv-side-nav-head-label { font-size: 11.5px; font-weight: 700; letter-spacing: .5px; color: var(--muted-2); }
+.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
+.pjv-side-nav-inner { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
+.pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
 .pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
-.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
-.pjv-side-navitem:hover { background: rgba(255,255,255,.65); color: var(--ink); }
-/* 틴트 패널 위 선택 항목 = 흰 칩 + 파란 좌측 액센트(또렷하게 뜬다). */
-.pjv-side-navitem.active { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 2px 0 0 var(--blue), 0 1px 2px rgba(21,35,59,.06); }
+.pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
+.pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
@@ -3016,8 +3013,8 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 /* 묶음 폴더 아이콘 — 동그란 점 대신 '색을 채운 폴더'로 상위 분류 느낌(#356). */
 .pjv-bundle-ic { flex: none; width: 18px; height: 18px; display: block; }
 .pjv-side-navitem.active .pjv-bundle-ic.none path { stroke: var(--blue); }
-.pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
-.pjv-side-newlist:hover { color: var(--blue); background: var(--bg-tint-2); }
+.pjv-side-newlist { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); align-self: flex-start; }
+.pjv-side-newlist:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
 .pjv-side-main { padding-left: 16px; min-width: 0; }
 .pjv-side-main > .pjv-tgroup:first-child { margin-top: 0; }
 
@@ -3214,11 +3211,7 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-folder-caret { flex: none; width: 15px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 0; }
 .pjv-side-folder-caret:hover { color: var(--ink); }
 .pjv-side-navfolder { font-weight: 700; color: var(--ink); gap: 5px; }
-/* 폴더 하위 리스트(=파일) — 파일탐색기식 들여쓰기 + 세로 가이드선(폴더 안이라는 위계를 눈에 보이게, #473 후속). */
-.pjv-side-navlist.sub { padding-left: 34px; }
-.pjv-side-navlist.sub::before { content: ''; position: absolute; left: 20px; top: -1px; bottom: -1px; width: 1.5px; background: var(--line-net, #d9dee6); border-radius: 2px; }
-.pjv-side-navlist.sub:hover::before { background: var(--muted-2); }
-.pjv-side-navlist.sub.active::before { background: var(--blue); }
+.pjv-side-navlist.sub { padding-left: 30px; }
 /* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더, 폴더 재정렬) + 드래그 중 커서. */
 .pjv-side-drop-over { background: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
 body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabbing; }
@@ -3231,7 +3224,7 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
 .pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .pjv-side-folder-empty:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
-.pjv-side-newrow { display: flex; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.pjv-side-newrow { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .pjv-side-newrow .pjv-side-newlist { margin-top: 0; }
 .pjv-side-raildot .pjv-side-listglyph { width: 18px; height: 18px; }
 .pjv-side-raildot .pjv-side-listemoji { width: 20px; font-size: 15px; }
