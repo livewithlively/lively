@@ -219,8 +219,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 topLists.push(l);
         }
         const showUn = !!unGroup && visCount(unGroup.projects) > 0; // 미분류는 보일 게 있을 때만
-        // 선택 해소(#473 후속: '전체' 제거) — 기본/사라진 대상이면 '맨 위 폴더'(없으면 최상위 리스트 → 미분류). sel: F<id> | L<id> | __none__.
-        const defaultSel = () => folderList.length ? 'F' + folderList[0].id : (topLists.length ? 'L' + topLists[0].id : (showUn ? '__none__' : (lists[0] ? 'L' + lists[0].id : '__none__')));
+        // 선택 해소(#473 후속: '전체' 제거) — 기본/사라진 대상이면 '트리 순서상 맨 위의 내용(보이는 프로젝트) 있는 폴더/리스트'.
+        //  내용 있는 게 없으면 맨 위 후보(빈 폴더라도)로. sel: F<id> | L<id> | __none__.
+        const listHasVis = (lid) => visCount((groupByList.get(lid)?.projects) || []) > 0;
+        const folderHasVis = (f) => (listsByFolder.get(f.id) || []).some((l) => listHasVis(l.id));
+        const selCandidates = [
+            ...folderList.map((f) => ({ key: 'F' + f.id, has: folderHasVis(f) })),
+            ...topLists.map((l) => ({ key: 'L' + l.id, has: listHasVis(l.id) })),
+            ...(showUn ? [{ key: '__none__', has: visCount(unGroup.projects) > 0 }] : []),
+        ];
+        const defaultSel = () => (selCandidates.find((c) => c.has) || selCandidates[0] || { key: '__none__' }).key;
         let sel = pjvSidebarSel.key;
         const listExists = (id) => lists.some((l) => String(l.id) === String(id));
         const folderExists = (id) => folderList.some((f) => String(f.id) === String(id));
@@ -288,12 +296,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu pjv-listset-menu' }); const close = pjvPopover(more, menu); pjvListSettingsMenu(menu, close, list, reload); });
             it.append(more);
             // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
-            it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; document.body.classList.add('pjv-side-dragging'); try {
+            it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); try {
                 ev.dataTransfer.effectAllowed = 'move';
                 ev.dataTransfer.setData('text/plain', 'L' + list.id);
             }
             catch (_) { /* */ } });
-            it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
+            it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
             pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag)
             pjvSideNavDrop(it, { onList: (lid) => { if (String(lid) !== String(list.id))
                     pjvMoveListToFolder(lid, list.folder_id ?? null, reload); } }); // 리스트→리스트: 그 리스트와 같은 폴더로
@@ -385,6 +393,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             pjvFolderDropTarget(uit, null, reload);
             navInner.append(uit);
         }
+        // 폴더에서 빼기 — 리스트 드래그 중에만 보이는 드롭존(여기 놓으면 최상위=folder_id null). 빈 곳 드롭이 잘 안 맞던 문제 해소.
+        const rootZone = el('div', { class: 'pjv-side-rootzone' }, el('span', { class: 'pjv-side-rootzone-ico', 'aria-hidden': 'true', text: '⤴' }), el('span', { text: '여기로 끌어 폴더 밖으로 빼기' }));
+        pjvSideNavDrop(rootZone, { onList: (lid) => pjvMoveListToFolder(lid, null, reload) });
+        navInner.append(rootZone);
         // 새 폴더 / 새 리스트
         navInner.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
         nav.append(navInner);
