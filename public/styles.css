@@ -3360,3 +3360,8 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
 .proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
 .proj-mp-row.on .proj-mp-check { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* 아바타 이니셜 세로 중앙정렬 교정 — body line-height(1.55) 상속으로 글자가 살짝 위로 뜨는 것 바로잡음.
+   (.pava.topbar-ava 는 이미 line-height:1 로 올바름 — 나머지 이니셜 아바타도 동일 기준으로 통일) */
+.project-face, .pjv-ava, .proj-mp-ava, .pjv-cmt-mini-ava, .cmt-ava, .cmt-thread-pill-ava,
+.proj-team-ava, .proj-avatar, .proj-avatar-badge, .cf-ava, .pava { line-height: 1; }
