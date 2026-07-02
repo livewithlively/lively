@@ -3028,8 +3028,9 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /*  세로 구분선(nav border-right)이 상단 툴바(필터 버튼)에 붙어 보이지 않게, 본문 그리드를 툴바에서 살짝 띄운다(#456). */
 .pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 10px; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-.pjv-side-nav { padding: 2px 16px 8px 0; border-right: 1px solid var(--line); }
-.pjv-side-nav-inner { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 1px; }
+/* 사이드바 = 담긴 네비게이터 패널(옅은 틴트+테두리+라운드). 긴 빈 열 대신 내용만큼만, 스크롤 시 따라오게 sticky. */
+.pjv-side-nav { position: sticky; top: 12px; align-self: start; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; padding: 10px 10px 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; }
+.pjv-side-nav-inner { display: flex; flex-direction: column; gap: 1px; }
 /* 헤더 — 조용한 섹션 라벨(제목처럼 크게 X). 아래 항목과 간격 확보(안내문 제거 후 #473). */
 .pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 10px 10px; }
 .pjv-side-nav-head-label { font-size: 11.5px; font-weight: 700; letter-spacing: .5px; color: var(--muted-2); }
@@ -3038,8 +3039,9 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
-.pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
-.pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; box-shadow: inset 2px 0 0 var(--blue); }
+.pjv-side-navitem:hover { background: rgba(255,255,255,.65); color: var(--ink); }
+/* 틴트 패널 위 선택 항목 = 흰 칩 + 파란 좌측 액센트(또렷하게 뜬다). */
+.pjv-side-navitem.active { background: var(--bg); color: var(--ink); font-weight: 700; box-shadow: inset 2px 0 0 var(--blue), 0 1px 2px rgba(21,35,59,.06); }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
