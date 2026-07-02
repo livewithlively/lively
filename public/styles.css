@@ -2287,6 +2287,16 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-fields-list { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding-right: 2px; }
 .pjv-fields-sec { font-size: 11px; font-weight: 700; color: var(--muted-2); letter-spacing: .3px; padding: 6px 8px 3px; }
 .pjv-fields-empty { font-size: 12.5px; color: var(--muted-2); padding: 14px 8px; text-align: center; }
+/* Fields 패널 '기본 컬럼' 섹션 — 각 기본 컬럼 보임/숨김 토글(#req). */
+.pjv-fields-defcols { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 4px; }
+.pjv-defcol-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 8px; }
+.pjv-defcol-row:hover { background: var(--bg-tint-2); }
+.pjv-defcol-name { font-size: 13.5px; color: var(--ink); }
+.pjv-defcol-toggle { flex: none; position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--muted-3); transition: background-color .14s ease; }
+.pjv-defcol-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .14s ease; }
+.pjv-defcol-toggle.on { background: var(--blue); }
+.pjv-defcol-toggle.on::after { transform: translateX(12px); }
+.pjv-menu-hint { font-size: 11.5px; color: var(--muted-3); padding: 5px 10px 3px; line-height: 1.4; }
 .pjv-field-opt { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 8px 9px; border-radius: 8px; }
 .pjv-field-opt:hover { background: var(--bg-tint-2); }
 .pjv-field-opt-ic { flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--bg-tint); display: inline-flex; align-items: center; justify-content: center; color: var(--ink-sub); }
@@ -2645,10 +2655,13 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-trow > .pjv-sess-cell,
 .pjv-addrow.editing > .pjv-fcell { justify-content: center; }
 .pjv-fcell-wrap { justify-content: center; }
-/* 커스텀 필드 헤더도 가운데 — 이름은 중앙, ⋯메뉴는 우측에 겹쳐 띄워 중앙정렬이 밀리지 않게. */
-.pjv-thcol { position: relative; justify-content: center; text-align: center; }
-.pjv-thcol .pjv-thcol-name { text-align: center; }
-.pjv-thcol .pjv-thcol-menu { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+/* 커스텀 필드 헤더(.pjv-thcol) + 기본 컬럼 헤더(.pjv-colhead.pjv-stdcol) — 이름은 정확히 가운데.
+   ⋯(옵션) 버튼은 평소 폭 0 으로 접어(제목이 정중앙) 헤더에 호버하면 '제목 바로 옆'에 펼쳐진다.
+   (예전엔 셀 우측 끝에 절대배치라 제목과 너무 멀었음 — 위치 보정.) */
+.pjv-thcol, .pjv-colhead.pjv-stdcol { position: relative; justify-content: center; text-align: center; gap: 3px; }
+.pjv-thcol .pjv-thcol-name, .pjv-colhead.pjv-stdcol .pjv-thcol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.pjv-thcol-menu { flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; transition: opacity .12s ease, width .1s ease; }
+.pjv-thcol:hover .pjv-thcol-menu, .pjv-colhead.pjv-stdcol:hover .pjv-thcol-menu { width: 15px; padding: 0 1px; opacity: 1; }
 /* 값 폰트·아이콘 확대 */
 .pjv-cell-btn { font-size: 15px; }
 .pjv-ava { width: 26px; height: 26px; font-size: 12px; }
