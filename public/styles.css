@@ -3204,6 +3204,18 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-edge-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
 .pjv-edge-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-edge-pick-id { flex: none; color: var(--muted-2); font-size: 11.5px; }
+/* '＋ 새 프로젝트 만들기'(#519) — 결과 아래 고정 액션(footer). 파란 강조 + 위 구분선. */
+.pjv-edge-pick-new { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; color: var(--blue); font-weight: 600; margin-top: 6px; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; }
+.pjv-edge-pick-new:hover { background: color-mix(in srgb, var(--blue) 9%, transparent); }
+.pjv-edge-pick-new .pjv-edge-pick-id { color: var(--muted-2); font-weight: 500; }
+/* 새 프로젝트 폼 — 선행에서 이어받는 연결 지식 칩(#519/C). */
+.np-inherit-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.np-inherit-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 8px; padding: 2px 4px 2px 9px; }
+.np-inherit-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-inherit-chip-x { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 2px 3px; border-radius: 50%; }
+.np-inherit-chip-x:hover { color: var(--coral-text); background: color-mix(in srgb, var(--coral-text) 14%, transparent); }
+.np-inherit-row { align-items: flex-start; }
+.np-inherit-row .cf-label { margin-top: 4px; }
 
 /* ══ 새 프로젝트 폼(#473) — 이름·설명 히어로 + 컴팩트 메타(폴더·카테고리·레포·팀원) ══ */
 .np-form { display: flex; flex-direction: column; gap: 16px; }

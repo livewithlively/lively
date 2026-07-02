@@ -2993,8 +2993,8 @@ function npTaskEditor() {
         return wrap;
     };
     // 상위 ＋할 일 추가행 — 트리거(＋ 할 일 추가) ↔ 입력 토글. Enter=추가·계속, Esc/빈 blur=닫기. (pjvProjAddRow 의 인메모리·이름전용판)
-    const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '할 일 추가' }));
-    const addInput = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '할 일 이름 후 Enter (여러 개면 계속, Esc 닫기)', maxlength: '200' });
+    const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크 추가' }));
+    const addInput = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 후 Enter (여러 개면 계속, Esc 닫기)', maxlength: '200' });
     const addRow = el('div', { class: 'np-addrow' }, trigger);
     const collapse = () => { addRow.classList.remove('editing'); addRow.replaceChildren(trigger); };
     const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => addInput.focus(), 0); };
@@ -3035,13 +3035,43 @@ function openProjectV2Form(reload, prefill) {
     const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
     const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
     const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
-    // 할 일(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
+    // 선행 프로젝트에서 이어받는 '연결된 지식'(#519/C) — 후속 프로젝트를 인라인 생성할 때 선행의 연결 지식을 프리필로 보여주고
+    //  만들 때 새 프로젝트에 required 로 연결한다. 칩 ×로 뺄 수 있음(원치 않으면 제외). 이름(name) 기준 중복 제거.
+    const inheritKn = [];
+    {
+        const seen = new Set();
+        for (const k of (prefill.knowledge || [])) {
+            const nm = k && (k.name || k.knowledge_name);
+            if (nm && !seen.has(nm)) {
+                seen.add(nm);
+                inheritKn.push({ name: nm, title: k.title || nm });
+            }
+        }
+    }
+    let knRow = null;
+    if (inheritKn.length) {
+        const chips = el('div', { class: 'np-inherit-chips' });
+        const paintKn = () => {
+            chips.replaceChildren(...inheritKn.map((k) => {
+                const chip = el('span', { class: 'np-inherit-chip' }, el('span', { class: 'np-inherit-chip-name', text: k.title }));
+                const x = el('button', { class: 'np-inherit-chip-x', type: 'button', title: '이어받지 않기', text: '✕' });
+                x.onclick = () => { const i = inheritKn.indexOf(k); if (i >= 0)
+                    inheritKn.splice(i, 1); paintKn(); if (!inheritKn.length && knRow)
+                    knRow.remove(); };
+                chip.append(x);
+                return chip;
+            }));
+        };
+        paintKn();
+        knRow = el('div', { class: 'cf-row np-inherit-row' }, el('span', { class: 'cf-label', text: '이어받는 지식' }), chips);
+    }
+    // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
     const taskEd = npTaskEditor();
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
     const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn, 
-    // 할 일 — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 하위 태스크까지 넣을 수 있음.
-    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '할 일' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 할 일이 있으면 여기에 — 하위 태스크까지 넣어도 돼요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }), catField.row, repoField.row, memberField.row)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    // 태스크(선택) — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 각 태스크 아래로 하위 태스크까지 넣을 수 있음.
+    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }), catField.row, repoField.row, memberField.row, knRow)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
     const go = async () => {
         const name = nameIn.value.trim();
@@ -3102,6 +3132,18 @@ function openProjectV2Form(reload, prefill) {
                             await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: sn, parent_task_id: parentId }) }).catch(() => { });
                     }
                 }
+            }
+            // 선행/후속 엣지(#519) — 후속 피커에서 인라인 생성한 경우 현재 프로젝트와 연결. edgeDir='in'=새 프로젝트가 edgeWith 의 후속(new→follow_up→edgeWith),
+            //  'out'=새 프로젝트가 edgeWith 의 선행(edgeWith→follow_up→new). (from --follow_up--> to = from 이 to 의 후속, #340.)
+            if (np && np.id && prefill.edgeWith) {
+                const fromId = prefill.edgeDir === 'out' ? prefill.edgeWith : np.id;
+                const toId = prefill.edgeDir === 'out' ? np.id : prefill.edgeWith;
+                await api('/api/ui/v6/projects/' + fromId + '/link', { method: 'POST', body: JSON.stringify({ to: toId, relation: 'follow_up' }) }).catch(() => { });
+            }
+            // 선행에서 이어받는 연결 지식(#519/C) — 남긴 것만 required 로 연결.
+            if (np && np.id && inheritKn.length) {
+                for (const k of inheritKn)
+                    await api('/api/ui/v6/projects/' + np.id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: k.name, relation: 'required' }) }).catch(() => { });
             }
             // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
             try {
@@ -3529,6 +3571,15 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
     const search = el('input', { type: 'search', class: 'pjv-edge-pick-search', placeholder: '프로젝트 검색(이름/번호)' });
     const results = el('div', { class: 'pjv-edge-pick-results' });
     menu.append(el('div', { class: 'pjv-edge-pick-hint', text: dir === 'out' ? '이 프로젝트가 뒤따르는 선행 프로젝트를 고르세요' : '이 프로젝트를 뒤따르는 후속 프로젝트를 고르세요' }), search, results);
+    // 기존 프로젝트를 고르는 것 외에, '새 프로젝트 만들기'(#519) — 새 프로젝트 폼을 열되 현재 프로젝트를 선행/후속으로 프리필하고,
+    //  현재 프로젝트의 본문(설명)·연결된 지식도 새 폼에 이어받게(#519/C). dir='in'=현재가 새 프로젝트의 선행이 됨.
+    const createNew = el('button', { class: 'pjv-menu-item pjv-edge-pick-new', type: 'button' }, el('span', { class: 'pjv-edge-pick-name', text: '＋ 새 프로젝트 만들기' }), el('span', { class: 'pjv-edge-pick-id', text: dir === 'out' ? '이 프로젝트의 선행으로' : '이 프로젝트의 후속으로' }));
+    createNew.onclick = () => {
+        close();
+        const kdefs = [...(((p.knowledge || {}).required) || []), ...(((p.knowledge || {}).produced) || [])];
+        openProjectV2Form(reload, { edgeWith: p.id, edgeDir: dir, listId: p.list_id, description: p.description || '', knowledge: kdefs });
+    };
+    menu.append(createNew);
     const close = pjvPopover(anchor, menu);
     let all = [];
     const paint = () => {
