@@ -2475,7 +2475,7 @@ function compactPicker(label, makePicker, opts?) {
     if (items.length > shown.length) chips.push(el('span', { class: 'cf-more', text: '+' + (items.length - shown.length) }));
     chipsWrap.replaceChildren(...chips);
   };
-  const picker = makePicker(repaint);  // onChange = repaint (로드 완료·선택 변경마다 요약 갱신)
+  const picker = makePicker(() => { repaint(); if (opts.onChange) opts.onChange(); });  // onChange = 요약 리페인트(+ 호출측 훅: 세부설정의 자동저장 등)
   trigger.onclick = () => {
     const panel = el('div', { class: 'cf-panel' }, picker.box);
     pjvPopover(trigger, panel);
@@ -2486,7 +2486,79 @@ function compactPicker(label, makePicker, opts?) {
   return { row, getSelected: () => picker.getSelected(), getSelectedLabels: () => (picker.getSelectedLabels ? picker.getSelectedLabels() : []) };
 }
 
-// 새 프로젝트(v2) 폼 — 이름·설명(히어로) + 컴팩트 메타(폴더·카테고리·레포·팀원). 생성 후 상세로 이동.
+// 할 일(선택) — 프로젝트 안의 하위태스크 리스트 UI를 가볍게 옮긴 인메모리 트리 에디터(생성 전이라 API 없이 메모리에만 담고, '만들기' 때 한 번에 생성).
+//  클릭업식 결: 상태점(할 일 점선 링) + 이름, [＋하위]로 한 단계 중첩, ×로 삭제. ＋할 일 추가행은 Enter=추가·계속, Esc/빈칸=닫기.
+//  가볍게 — 이름만(담당·마감·우선순위는 만든 뒤 프로젝트 안에서). getTasks() → [{ name, subs: [name…] }] (입력 순서 보존).
+function npTaskEditor() {
+  const model: any[] = [];                                   // [{ name, subs: [{name}], subBox }]
+  const listEl = el('div', { class: 'np-tasklist' });
+  const dot = () => el('span', { class: 'pjv-status-dot todo', 'aria-hidden': 'true' }); // 할 일 점선 링 — 프로젝트 행과 동일 톤
+
+  const buildSubRow = (task, sub) => {
+    const del = el('button', { class: 'np-trow-del', type: 'button', title: '삭제', 'aria-label': '삭제', text: '×' });
+    const row = el('div', { class: 'np-trow np-trow-sub' }, dot(), el('span', { class: 'np-trow-title', text: sub.name }), del);
+    del.onclick = () => { const i = task.subs.indexOf(sub); if (i >= 0) task.subs.splice(i, 1); row.remove(); };
+    return row;
+  };
+
+  // 하위 인라인 추가 입력 — Enter=추가(입력 유지→연속), Esc/빈 blur=제거. (pjvShowInlineSubtask 의 인메모리판)
+  const showSubInput = (task) => {
+    const existing = task.subBox.querySelector('.np-subadd');
+    if (existing) { existing.querySelector('input').focus(); return; }
+    const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '하위 태스크 이름 후 Enter (Esc 취소)', maxlength: '200' });
+    const addRow = el('div', { class: 'np-trow np-trow-sub np-subadd' }, dot(), input);
+    task.subBox.append(addRow);
+    setTimeout(() => input.focus(), 0);
+    input.addEventListener('blur', () => setTimeout(() => { if (!input.value.trim()) addRow.remove(); }, 130));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { input.value = ''; addRow.remove(); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const name = input.value.trim(); if (!name) return;
+      const sub = { name }; task.subs.push(sub);
+      task.subBox.insertBefore(buildSubRow(task, sub), addRow);  // 입력행 위에 쌓아 입력 유지(연속 입력)
+      input.value = ''; input.focus();
+    });
+  };
+
+  const buildTaskRow = (task) => {
+    const addSub = el('button', { class: 'np-trow-act', type: 'button', title: '하위 태스크 추가' }, pjvSubtaskIcon(), el('span', { text: '하위' }));
+    const del = el('button', { class: 'np-trow-del', type: 'button', title: '삭제', 'aria-label': '삭제', text: '×' });
+    const subBox = el('div', { class: 'np-trow-subs' });
+    task.subBox = subBox;
+    const wrap = el('div', { class: 'np-trow-wrap' },
+      el('div', { class: 'np-trow np-trow-top' },
+        el('div', { class: 'np-trow-title-cell' }, dot(), el('span', { class: 'np-trow-title', text: task.name })),
+        el('div', { class: 'np-trow-acts' }, addSub, del)),
+      subBox);
+    addSub.onclick = () => showSubInput(task);
+    del.onclick = () => { const i = model.indexOf(task); if (i >= 0) model.splice(i, 1); wrap.remove(); };
+    return wrap;
+  };
+
+  // 상위 ＋할 일 추가행 — 트리거(＋ 할 일 추가) ↔ 입력 토글. Enter=추가·계속, Esc/빈 blur=닫기. (pjvProjAddRow 의 인메모리·이름전용판)
+  const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '할 일 추가' }));
+  const addInput = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '할 일 이름 후 Enter (여러 개면 계속, Esc 닫기)', maxlength: '200' });
+  const addRow = el('div', { class: 'np-addrow' }, trigger);
+  const collapse = () => { addRow.classList.remove('editing'); addRow.replaceChildren(trigger); };
+  const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => addInput.focus(), 0); };
+  trigger.onclick = expand;
+  addInput.addEventListener('blur', () => setTimeout(() => { if (!addInput.value.trim() && !addRow.contains(document.activeElement)) collapse(); }, 130));
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { addInput.value = ''; collapse(); return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const name = addInput.value.trim(); if (!name) return;
+    const task = { name, subs: [] }; model.push(task);
+    listEl.append(buildTaskRow(task));
+    addInput.value = ''; addInput.focus();
+  });
+
+  const box = el('div', { class: 'np-tasks-tree' }, listEl, addRow);
+  return { box, getTasks: () => model.map((t) => ({ name: t.name, subs: t.subs.map((s) => s.name) })) };
+}
+
+// 새 프로젝트(v2) 폼 — 이름·설명·할 일(히어로) + 컴팩트 메타(폴더·카테고리·레포·팀원). 생성 후 상세로 이동.
 function openProjectV2Form(reload, prefill?: any) {
   prefill = prefill || {};
   const nameIn = el('input', { type: 'text', class: 'np-name', value: prefill.name || '', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
@@ -2498,24 +2570,25 @@ function openProjectV2Form(reload, prefill?: any) {
   const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
   const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
   const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
-  // 할 일(선택) — 한 줄에 하나씩. 생성 직후 이 프로젝트의 태스크로 만든다(POST projects/:id/tasks). 가볍게: 이름만.
-  const tasksIn = el('textarea', { class: 'np-tasks', rows: '2', placeholder: '한 줄에 하나씩 (선택) — 예: 리서치 정리 / 초안 쓰기', maxlength: '4000' });
-  const growTasks = () => { tasksIn.style.height = 'auto'; tasksIn.style.height = Math.min(Math.max(tasksIn.scrollHeight, 40), 160) + 'px'; };
-  tasksIn.addEventListener('input', growTasks);
+  // 할 일(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
+  const taskEd = npTaskEditor();
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
   const back = overlayBox('새 프로젝트',
     el('div', { class: 'np-form' },
       el('div', { class: 'np-hero' },
         el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn,
-        el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn),
+        el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn,
+        // 할 일 — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 하위 태스크까지 넣을 수 있음.
+        el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '할 일' }), el('span', { class: 'np-opt', text: '선택' })),
+        el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 할 일이 있으면 여기에 — 하위 태스크까지 넣어도 돼요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }),
+        taskEd.box),
       el('div', { class: 'np-meta' },
         el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box),
-        el('div', { class: 'np-meta-cap', text: '할 일·카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }),
-        catField.row, repoField.row, memberField.row,
-        el('div', { class: 'cf-row cf-row-top' }, el('span', { class: 'cf-label', text: '할 일' }), tasksIn))),
+        el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }),
+        catField.row, repoField.row, memberField.row)),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-  setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); growTasks(); }, 0); // 프리필된 이름 전체 선택 + 설명·할 일 높이 초기화
+  setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
   const go = async () => {
     const name = nameIn.value.trim();
     if (!name) { nameIn.focus(); toast('이름을 입력하세요', true); return; }
@@ -2547,11 +2620,16 @@ function openProjectV2Form(reload, prefill?: any) {
       if (np && np.id && repoNames.length) await api('/api/ui/v6/projects/' + np.id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoNames }) }).catch(() => {});
       // 모달의 분류(영역) 선택대로 소속 지정 — '기타(미분류)'면 listId=null 이라 호출 생략(기본이 미분류).
       if (np && np.id && listChoice.listId != null) await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listChoice.listId }) }).catch(() => {});
-      // 할 일(선택) — 한 줄에 하나씩 이 프로젝트의 태스크로 생성(입력 순서 보존 위해 순차). 실패는 조용히 건너뜀(프로젝트는 이미 생성됨).
-      const taskNames = tasksIn.value.split('\n').map((s) => s.trim()).filter(Boolean);
-      if (np && np.id && taskNames.length) {
-        for (const tn of taskNames) {
-          await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: tn }) }).catch(() => {});
+      // 할 일(선택) — 드래프트 트리를 순서대로 태스크로 생성: 상위 먼저(순차·순서 보존) → 그 하위를 parent_task_id 로. 실패는 조용히 건너뜀(프로젝트는 이미 생성됨).
+      const draftTasks = taskEd.getTasks();
+      if (np && np.id && draftTasks.length) {
+        for (const dt of draftTasks) {
+          let parentId = null;
+          try { const tr = await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: dt.name }) }); parentId = tr && tr.task && tr.task.id; }
+          catch (_) { /* 상위 생성 실패 시 그 하위도 건너뜀 */ }
+          if (parentId && dt.subs.length) {
+            for (const sn of dt.subs) await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: sn, parent_task_id: parentId }) }).catch(() => {});
+          }
         }
       }
       // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
@@ -3770,15 +3848,57 @@ function openProjectComments(id, members) {
 //  (상태 블록 제거 — 상세 메타 패널의 상태 필드(pjvProjStatusPill, 클릭해 3단계 변경) + 대시보드·목록·일괄바와
 //   중복이고 모달 토글은 2단계뿐이라 더 약했다 — #246.)
 //  (삭제·팀원 수정을 헤더에서 여기로 이관 — 헤더는 제목/상태칩/설정 버튼만.)
+// 세부 설정 = 새 프로젝트 폼과 같은 결로 통일(#473 후속) — 카테고리·레포·팀원을 컴팩트 피커(요약 칩 + ▾) 한 줄씩으로.
+//  블록마다 저장 버튼을 두지 않고, 상세 메타 패널처럼 '바꾸면 그 자리서 자동 저장'(피커 onChange, 로드시 첫 fire 는 건너뜀 + 디바운스).
+//  이름·설명은 프로젝트 화면에서 바로 편집(제목 클릭·본문 섹션)하므로 여기서 뺀다. 규칙·삭제는 유지.
 function openProjectSettings(id, p, reload, meId, base) {
   const B = base || '/api/ui/v6/projects/';
   const back = overlayBox('프로젝트 세부 설정', el('div', { class: 'proj-settings' }));
   const box = back.querySelector('.ov-box'); if (box) box.classList.add('ov-box-wide');
-  const closeAndReload = () => { back.remove(); reload(); };  // 변경하면 팝업 닫고 상세 재렌더
+
+  // 컴팩트 필드 + 자동저장 — 사용자가 값을 바꿀 때만(로드 완료의 첫 onChange 는 저장 아님) 짧게 디바운스해 현재 선택 전체를 POST.
+  let dirty = false;  // 무언가 저장됐으면 팝업 닫힐 때 상세를 한 번 재렌더(헤더·메타 반영).
+  const autoField = (label, makePicker, opts, postFn, savedMsg) => {
+    let ready = false; let timer: any = null; let field: any;
+    const doSave = async () => {
+      try { await postFn(); dirty = true; toast(savedMsg); }
+      catch (e) { toast(savedMsg.replace('저장됨', '저장 실패') + ' — ' + e.message, true); }
+    };
+    field = compactPicker(label, makePicker, Object.assign({}, opts, { onChange: () => {
+      if (!ready) { ready = true; return; }          // 로드 완료 시 첫 onChange = 현재값 반영일 뿐, 저장 아님
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(doSave, 500);
+    } }));
+    return field;
+  };
+
+  const catField = autoField('카테고리',
+    (onChange) => categoryPicker(((p.categories) || []).map((c) => c.category_id), { onChange }),
+    { emptyText: '선택 안 함' },
+    () => api(B + id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: catField.getSelected() }) }),
+    '카테고리 저장됨');
+  const repoField = autoField('관련 레포',
+    (onChange) => repoPicker((p.repos) || [], { onChange }),
+    { emptyText: '선택 안 함' },
+    () => api(B + id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoField.getSelected() }) }),
+    '관련 레포 저장됨');
+  const memberField = autoField('팀원',
+    (onChange) => memberPicker(((p.members) || []).map((m) => m.member_id), { onChange }),
+    { emptyText: '나만 참여', avatars: true, maxChips: 6 },
+    () => api(B + id + '/members', { method: 'POST', body: JSON.stringify({ members: memberField.getSelected() }) }),
+    '팀원 저장됨');
+
+  // 어떤 경로로 닫히든(닫기·배경·Esc) dirty 면 상세 재렌더 — overlayBox 는 콜백이 없어 back 분리를 감지.
+  if (typeof MutationObserver !== 'undefined') {
+    const obs = new MutationObserver(() => { if (!back.isConnected) { obs.disconnect(); if (dirty) reload(); } });
+    obs.observe(document.body, { childList: true });
+  }
+
   back.querySelector('.proj-settings').append(
-    projectMembersBlock(id, p, closeAndReload, B),
-    projectCategoryBlock(id, p),
-    projectReposBlock(id, p),
+    el('section', { class: 'ps-block' },
+      el('h3', { class: 'ps-block-title', text: '분류 · 연결' }),
+      el('p', { class: 'ps-block-hint', text: '바꾸면 바로 저장돼요. (이름·설명은 프로젝트 화면에서 제목/본문을 눌러 바로 고칠 수 있어요.)' }),
+      el('div', { class: 'ps-meta' }, catField.row, repoField.row, memberField.row)),
     projectRulesBlock(id),
     // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
     // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246. 상태 블록은 메타 패널 상태 필드로 일원화 — #246.)
@@ -3961,24 +4081,7 @@ function renderLocalWorkCommand(wrap, argStr, info) {
 }
 
 // 팀원 블록 — 현재 팀원 칩 + '팀원 수정'(멀티선택 오버레이). 저장 시 설정 팝업 닫고 상세 재렌더.
-function projectMembersBlock(id, p, closeAndReload, base) {
-  const members = p.members || [];
-  const chips = el('div', { class: 'proj-team-row' });
-  if (members.length) {
-    for (const m of members) chips.append(el('span', { class: 'proj-team-chip' },
-      el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.member_id), text: initials(m.display_name || m.member_id) }),
-      el('span', { text: m.display_name || (m.member_id + (m.role ? ' · ' + m.role : '')) })));
-  } else {
-    chips.append(el('span', { class: 'admin-hint', text: '아직 팀원이 없어요' }));
-  }
-  return el('section', { class: 'ps-block' },
-    el('h3', { class: 'ps-block-title', text: '팀원' }),
-    el('p', { class: 'ps-block-hint', text: '이 프로젝트를 함께 보고 작업할 팀원이에요.' }),
-    chips,
-    el('div', { class: 'ps-rules-actions' },
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '팀원 수정',
-        onclick: () => openMembersEdit(id, members.map((m) => m.member_id), closeAndReload, base) })));
-}
+// (팀원·카테고리·관련레포 블록 제거 — #473 후속. 세부 설정은 새 프로젝트 폼과 같은 컴팩트 피커 + 자동저장으로 openProjectSettings 에 인라인.)
 
 // 삭제 블록 — 작성자 본인만 노출(서버도 403 재검증). 확인 후 삭제 → 팝업 닫고 목록으로.
 function projectDangerBlock(id, p, meId, back) {
@@ -4029,47 +4132,6 @@ function projectRulesBlock(id) {
     el('h3', { class: 'ps-block-title', text: '프로젝트 규칙' }),
     el('p', { class: 'ps-block-hint', text: '이 프로젝트에서 터미널 세션을 열면, 여기 적은 규칙이 그 AI에게 자동으로 주입됩니다. (프로젝트 폴더의 AGENTS.md 규칙 영역으로 저장)' }),
     ta,
-    el('div', { class: 'ps-rules-actions' }, saveBtn, status));
-}
-
-// 관련 레포 블록 — 이 프로젝트에 매핑할 git 레포(여러 개). AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값에 쓰임.
-//  경로는 저장하지 않는다(머신마다 달라 — 로컬 경로는 .lively/project.json). 여기선 레포 '이름'만 매핑.
-function projectReposBlock(id, p) {
-  const saved = new Set((p && p.repos) || []);
-  const listEl = el('div', { class: 'ps-refs-list' });
-  const status = el('span', { class: 'ps-save-status admin-hint' });
-  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '관련 레포 저장', disabled: '' });
-  const checks: any[] = [];  // [{name, input}]
-  function paint(names) {
-    if (!names.length) { listEl.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 레포가 없어요. 관리탭 ▸ 레포(git) 관리에서 먼저 추가하세요.' })); return; }
-    checks.length = 0;
-    listEl.replaceChildren(...names.map((n) => {
-      const cb = el('input', { type: 'checkbox' }); if (saved.has(n)) cb.checked = true;
-      checks.push({ name: n, input: cb });
-      return el('label', { class: 'ps-refs-row', style: 'cursor:pointer' }, cb, el('span', { class: 'ps-refs-nm', text: n, title: n }));
-    }));
-  }
-  (async () => {
-    let names: any[] = [];
-    try { const r = await api('/api/ui/repos'); names = ((r && r.domainmapRepos) || []).filter((it) => it && it.name && !it.deprecated).map((it) => it.name); } catch (_) { /* */ }
-    // 저장됐지만 목록에 없는(폐기된) 레포도 노출 — 체크 해제로 정리 가능.
-    for (const n of saved) if (!names.includes(n)) names.push(n);
-    paint(names.sort());
-    saveBtn.disabled = false;
-  })();
-  saveBtn.onclick = async () => {
-    saveBtn.disabled = true; status.textContent = '저장 중…';
-    try {
-      const repos = checks.filter((c) => c.input.checked).map((c) => c.name);
-      await api('/api/ui/v6/projects/' + id + '/repos', { method: 'POST', body: JSON.stringify({ repos }) });
-      status.textContent = '저장됨'; toast('관련 레포를 저장했습니다');
-    } catch (e) { status.textContent = ''; toast('저장 실패 — ' + e.message, true); }
-    saveBtn.disabled = false;
-  };
-  return el('section', { class: 'ps-block' },
-    el('h3', { class: 'ps-block-title', text: '관련 레포' }),
-    el('p', { class: 'ps-block-hint', text: '이 프로젝트가 쓰는 git 레포를 고르세요. ‘내 컴퓨터에서 작업’ 모달의 기본값이 되고, AGENTS.md 에 함께 적힙니다. (로컬 경로는 각 PC 의 .lively/project.json 에만 저장)' }),
-    listEl,
     el('div', { class: 'ps-rules-actions' }, saveBtn, status));
 }
 
@@ -4235,25 +4297,7 @@ function listPicker(selectedListId) {
   };
 }
 
-// 카테고리 블록 — 이 프로젝트가 속한 카테고리(사업·제품·시스템) 멀티선택. 사업/제품/시스템 탭의 카테고리별 탐색에 쓰임.
-function projectCategoryBlock(id, p) {
-  const picker = categoryPicker(((p && p.categories) || []).map((c) => c.category_id));
-  const status = el('span', { class: 'ps-save-status admin-hint' });
-  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '카테고리 저장' });
-  saveBtn.onclick = async () => {
-    saveBtn.disabled = true; status.textContent = '저장 중…';
-    try {
-      await api('/api/ui/v6/projects/' + id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: picker.getSelected() }) });
-      status.textContent = '저장됨'; toast('카테고리를 저장했습니다');
-    } catch (e) { status.textContent = ''; toast('저장 실패 — ' + e.message, true); }
-    saveBtn.disabled = false;
-  };
-  return el('section', { class: 'ps-block' },
-    el('h3', { class: 'ps-block-title', text: '카테고리 (사업·제품·시스템)' }),
-    el('p', { class: 'ps-block-hint', text: '이 프로젝트가 속한 카테고리를 고르세요. 사업·제품·시스템 탭에서 카테고리별로 프로젝트를 훑을 때 쓰이고, AGENTS.md 메타데이터에도 함께 적힙니다.' }),
-    picker.box,
-    el('div', { class: 'ps-rules-actions' }, saveBtn, status));
-}
+// (카테고리 블록 제거 — #473 후속. openProjectSettings 의 컴팩트 피커 + 자동저장으로 대체.)
 
 // (참고 파일 블록 제거 — #246. 프로젝트 파일 업로드는 본문 '공유 폴더' 섹션(projectFolderSection)으로 일원화.
 //  '공유 폴더'가 업로드·드래그앤드롭·붙여넣기·폴더 탐색을 모두 제공하므로 모달의 약식 업로더는 중복이었다.)
@@ -6940,24 +6984,7 @@ function projectTimelineSection(id, members, base) {
 }
 
 // 팀원 수정 오버레이 — 현재 팀원 미리 체크된 멀티선택 → 통째 교체 저장.
-function openMembersEdit(projectId, current, reload, base) {
-  const B = base || '/api/ui/projects/';
-  const picker = memberPicker(current || []);
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  const back = overlayBox('팀원 수정',
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box),
-    el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-  saveBtn.onclick = async () => {
-    saveBtn.disabled = true;
-    try {
-      await api(B + projectId + '/members', { method: 'POST', body: JSON.stringify({ members: picker.getSelected() }) });
-      back.remove();
-      toast('팀원을 저장했습니다');
-      reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
-  };
-}
+// (openMembersEdit 제거 — #473 후속. 팀원 편집은 세부 설정의 '팀원' 컴팩트 피커에서 인라인 자동저장.)
 
 // ── 태스크 행 제목 클릭 → 상세 모달 배선(몽키패치) ──
 //  동시 리팩터되는 pjvTaskRow 를 인플레이스 편집하지 않고 감싼다(append-only, 그쪽 작업 무손상).
