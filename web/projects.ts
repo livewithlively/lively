@@ -1704,7 +1704,7 @@ function pjvRunDefaults(pid, projectRepos) {
   let saved: any = {};
   try { saved = JSON.parse(localStorage.getItem(pjvRunDefaultsKey(pid)) || '{}') || {}; } catch (_) { saved = {}; }
   const d = { ...base, ...saved };
-  if (!d.branch) d.branch = 'project/' + pid;
+  d.branch = 'project/' + pid;   // 워크트리 브랜치는 프로젝트 id 로 자동 고정 — 팝업에서 편집하지 않는다(#514 후속 피드백: 자동 파생값을 '기본값'으로 노출하면 오해)
   // repos: null=관련 레포 전부(미래에 추가되는 레포도 자동 포함). 배열이면 현재 프로젝트 레포와 교집합(빠진 레포 정리).
   if (Array.isArray(d.repos)) d.repos = d.repos.filter((n) => (projectRepos || []).includes(n));
   return d;
@@ -1763,13 +1763,12 @@ async function pjvBulkRunDefaultsModal(ctx) {
   if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model)) modelSel.value = d.model;
   autoCb.checked = d.autoApprove !== false;
 
-  // 워크트리 + 브랜치
+  // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 프로젝트에서 자동 파생되므로 사용자에게 안 물어본다(#514 후속 피드백).
   const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = d.worktree !== false;
-  const branchInp = el('input', { type: 'text', value: d.branch || ('project/' + pid) });
-  const branchWrap = el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '작업 공간 이름 (브랜치 · 보통 그대로 두세요)' }), branchInp);
-  const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk, el('span', { text: ' 워크트리 — 다른 작업과 안 섞이게 전용 브랜치로 격리 (권장)' }));
-  const branchVis = () => { branchWrap.style.display = wtChk.checked ? '' : 'none'; };
-  wtChk.addEventListener('change', branchVis); branchVis();
+  const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk,
+    el('span', { text: ' 이 프로젝트 전용 작업 공간에서 격리 실행 — 매번 자동으로 준비되고(있으면 재사용) 다른 작업과 안 섞여요 (권장)' }));
+  const wtHint = el('div', { class: 'caption', style: 'margin-top:2px' },
+    '작업 공간은 프로젝트에 맞춰 자동으로 준비돼요 — 이름을 따로 정할 필요 없어요. (개발자용: git worktree · 브랜치 project/' + pid + ')');
 
   // 레포 선택 — 실행 전에 자동으로 가져올(provision) 레포. 기본은 관련 레포 전부.
   const repoChecks = projectRepos.map((n) => {
@@ -1791,8 +1790,8 @@ async function pjvBulkRunDefaultsModal(ctx) {
     autoRow,
     el('div', { class: 'field', style: 'margin-top:14px' },
       el('label', { class: 'field-label', text: '코드 저장소 준비' }),
-      el('div', { class: 'caption', text: '실행 전에 아래 레포를 자동으로 가져옵니다(워크트리로 격리). 코드 작업이 아니면 모두 꺼도 돼요.' }),
-      wtRow, branchWrap,
+      el('div', { class: 'caption', text: '실행 전에 아래 레포를 이 프로젝트 전용 작업 공간으로 자동 준비합니다(있으면 재사용). 코드 작업이 아니면 모두 꺼도 돼요.' }),
+      wtRow, wtHint,
       el('div', { style: 'margin-top:8px' }, repoBox)),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   saveBtn.onclick = () => {
@@ -1804,8 +1803,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
       model: modelSel.value || '',
       autoApprove: autoCb.checked,
       worktree: wtChk.checked,
-      branch: branchInp.value.trim() || ('project/' + pid),
-      repos: (projectRepos.length && !allChosen) ? chosen : null,   // null=전부(미래 레포 자동 포함)
+      repos: (projectRepos.length && !allChosen) ? chosen : null,   // null=전부(미래 레포 자동 포함). 브랜치는 저장 안 함 — pjvRunDefaults 가 project/<id> 로 자동 고정.
     });
     back.remove();
     toast('클로드로 실행 기본값을 저장했어요');
