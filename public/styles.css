@@ -3255,6 +3255,10 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-drop-over { background: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
 body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabbing; }
 .pjv-side-navfolder[draggable="true"], .pjv-side-navlist[draggable="true"] { user-select: none; }
+/* '폴더 밖으로 빼기' 드롭존 — 리스트 드래그 중에만 노출(끄집어내기 발견성↑). */
+.pjv-side-rootzone { display: none; align-items: center; justify-content: center; gap: 7px; margin-top: 8px; padding: 11px 10px; border: 1.5px dashed var(--line-net, #d9dee6); border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pjv-side-rootzone-ico { font-size: 14px; }
+body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-side-listglyph { flex: none; width: 16px; height: 16px; display: block; }
 .pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
 .pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
