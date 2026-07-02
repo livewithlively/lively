@@ -125,6 +125,7 @@ async function renderProjectV2Board(view) {
 //  컬럼 헤더는 카드 상단에 한 번. 그 아래 리스트 그룹(접이식) 들이 쌓인다. 펼침 상태는 pjvListOpen 으로 세션 유지.
 function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId, folders) {
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard', style: 'margin-bottom:18px' });
+    pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
     folders = folders || [];
     pjvSetStatusRegistry(lists); // 리스트별 커스텀 상태 레지스트리 — 모든 뷰의 프로젝트 행 상태 동그라미가 참조(#475).
     // 프로젝트별 태스크 캐시(행 펼침용) — 같은 렌더 동안 재사용(프로미스 캐싱으로 동시요청 합침).
@@ -167,8 +168,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const todo = shown.filter((p) => p.status === 'todo');
         const inprog = shown.filter((p) => p.status !== 'done' && p.status !== 'todo');
         const done = shown.filter((p) => p.status === 'done');
-        body.replaceChildren(pjvListColHead(fields, anchorId, reload));
-        body.append(pjvProjGroup('진행 중', 'in_progress', inprog, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
+        // 컬럼 라벨은 별도 헤더 행이 아니라 첫(맨 위) 그룹 '진행 중' 헤더에 합친다(withCols=true) — 별도 컬럼헤더 행이 어색(#470).
+        body.replaceChildren(pjvProjGroup('진행 중', 'in_progress', inprog, reload, null, canDelete, true, fields, anchorId, meId, taskCtx));
         body.append(pjvProjGroup('할 일', 'todo', todo, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
         if (pjvProjClosedView.done)
             body.append(pjvProjGroup('완료', 'done', done, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
@@ -251,12 +252,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const listIdForAdd = selList ? selList.id : null; // 특정 리스트 선택 시 새 프로젝트는 그 리스트로
         const mineOnly = pjvBoardMineOnly.on;
         const main = el('div', { class: 'pjv-side-main' });
-        main.append(pjvListColHead(fields, anchorId, reload));
         if (byStatus) {
-            // 단일 리스트 선택 시 그 리스트의 커스텀 상태로 그룹핑(#475 Task statuses). 다중 범위(전체/폴더/미분류)는 표준 3버킷.
+            // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
             pjvRenderStatusGroups(main, shownProjects, selList, { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd });
         }
         else {
+            main.append(pjvListColHead(fields, anchorId, reload));
             const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
             const rows = shownProjects.filter((p) => p.status !== 'done' || pjvProjClosedView.done).slice()
                 .sort((a, b) => rank(a) - rank(b) || (Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0)));
@@ -527,7 +528,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
 }
 // 컬럼 헤더 한 줄(카드 상단) — pjvProjRow 와 같은 그리드. 첫 칸은 '프로젝트' 라벨, 나머지는 팀원/마감/우선/세션 + 커스텀 + (＋컬럼).
 function pjvListColHead(fields, anchorId, reload) {
-    const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' })), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+    const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
     headEl.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     return headEl;
 }
@@ -1139,6 +1140,9 @@ async function pjvSetProjStatusCustom(id, def, reload) {
 //  아니면(전체/폴더/미분류/기본 리스트) 표준 3버킷. #475.
 function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
     const { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd } = opts;
+    // 첫(맨 위) 그룹 헤더에 컬럼 라벨을 합친다(별도 컬럼헤더 행 없음, #470). 실제로 그려지는 첫 그룹에만 withCols.
+    let firstShown = true;
+    const takeCols = () => { const w = firstShown; firstShown = false; return w; };
     if (selList && pjvListIsCustomStatus(selList)) {
         const defs = pjvListStatusDefs(selList);
         // 프로젝트를 상태 def 로 분배 — status_raw/status 매칭, 미스매치는 카테고리 첫 def 로 흡수.
@@ -1164,7 +1168,7 @@ function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
                 const arr = byKey.get(d.key) || [];
                 if (mineOnly && !arr.length)
                     continue;
-                main.append(pjvProjGroup(d.label, pjvNativeStatusOf(d.category), arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd, d));
+                main.append(pjvProjGroup(d.label, pjvNativeStatusOf(d.category), arr, reload, null, canDelete, takeCols(), fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd, d));
             }
         }
         return;
@@ -1173,7 +1177,7 @@ function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
     const inprog = shownProjects.filter((p) => p.status !== 'done' && p.status !== 'todo');
     const todo = shownProjects.filter((p) => p.status === 'todo');
     const done = shownProjects.filter((p) => p.status === 'done');
-    const sub = (label, key, arr) => main.append(pjvProjGroup(label, key, arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd));
+    const sub = (label, key, arr) => main.append(pjvProjGroup(label, key, arr, reload, null, canDelete, takeCols(), fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd));
     if (!mineOnly || inprog.length)
         sub('진행 중', 'in_progress', inprog);
     if (!mineOnly || todo.length)
@@ -2445,7 +2449,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
         : el('span', { class: 'pjv-tgroup-label', text: label });
     let head;
     if (withCols) {
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
         head.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     }
     else {
@@ -2554,6 +2558,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
 //  진행 중·할 일은 항상 표시, 완료(Closed)는 헤더의 Closed 토글(pjvProjClosedView.done) 시에만 노출 — 태스크 리스트 동형.
 function pjvProjectListCard(todo, inprog, done, reload, select, canDelete, fields, anchorId, meId) {
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card', style: 'margin-bottom:18px' });
+    pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
     // 프로젝트별 태스크 캐시(펼침용) — 같은 보드 렌더 동안 재사용(모드 전환·재펼침 시 재요청 없음). 프로미스 캐싱으로 동시 요청 합침.
     const taskCache = new Map();
     const fetchProjTasks = (projId) => {
@@ -3333,16 +3338,23 @@ async function renderProjectV2Detail(view, idStr) {
     // 제목줄 — 이름(클릭해 수정)+상태칩(좌), 세부설정(우).
     const titleEl = el('h1', { class: 'proj-detail-title proj-detail-title-edit', title: '클릭해 이름 수정', text: p.name });
     const editTitle = () => {
-        const inp = el('input', { class: 'proj-detail-title-input', value: p.name, maxlength: '200' });
+        // 인라인 편집 = 제목(h1)과 같은 폰트·위치의 '테두리 없는' 자동확장 textarea(#493). 이름이 길면 잘리지 않고
+        //  가로 전체를 쓰고 여러 줄로 늘어난다(입력창 UI 가 어색하던 문제 해소 — 태스크 모달 제목과 동일 결).
+        const inp = el('textarea', { class: 'proj-detail-title-input', rows: '1', maxlength: '200', spellcheck: 'false' });
+        inp.value = p.name;
+        const autoGrow = () => { inp.style.height = 'auto'; inp.style.height = inp.scrollHeight + 'px'; };
         titleEl.replaceWith(inp);
+        autoGrow();
         inp.focus();
-        inp.select();
+        if (inp.select)
+            inp.select();
+        inp.addEventListener('input', autoGrow);
         let fin = false;
         const done = async (save) => {
             if (fin)
                 return;
             fin = true;
-            const nv = inp.value.trim();
+            const nv = inp.value.trim().replace(/\s+/g, ' ');
             inp.replaceWith(titleEl);
             if (save && nv && nv !== p.name) {
                 try {
@@ -3355,12 +3367,17 @@ async function renderProjectV2Detail(view, idStr) {
                 }
             }
         };
-        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
-            e.preventDefault();
-            done(true);
-        }
-        else if (e.key === 'Escape')
-            done(false); });
+        // 한글(IME) 조합 중 Enter 는 조합 확정용 — 조합이 끝난 진짜 Enter 에서만 저장(#293 패턴). Enter=저장(줄바꿈 X), Esc=취소.
+        inp.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+                e.preventDefault();
+                done(true);
+            }
+            else if (e.key === 'Escape') {
+                e.preventDefault();
+                done(false);
+            }
+        });
         inp.addEventListener('blur', () => done(true));
     };
     titleEl.onclick = editTitle;
@@ -5389,8 +5406,8 @@ const PJV_FIELD_TYPES = [
     { key: 'number', label: '숫자', desc: '정수·소수', w: 104 },
     { key: 'money', label: '금액', desc: '통화 단위 숫자', w: 120, config: 'money' },
     { key: 'date', label: '날짜', desc: '날짜 선택', w: 108 },
-    { key: 'dropdown', label: '드롭다운', desc: '옵션 1개 선택', w: 148, config: 'options' },
-    { key: 'labels', label: '라벨', desc: '옵션 여러 개 선택', w: 184, config: 'options' },
+    { key: 'dropdown', label: '드롭다운', desc: '옵션 1개 선택', w: 130, config: 'options' },
+    { key: 'labels', label: '라벨', desc: '옵션 여러 개 선택', w: 130, config: 'options' },
     { key: 'checkbox', label: '체크박스', desc: '예 / 아니오', w: 86 },
     { key: 'website', label: '웹사이트', desc: 'URL 링크', w: 156 },
     { key: 'email', label: '이메일', desc: '메일 주소', w: 168 },
@@ -5400,7 +5417,7 @@ const PJV_FIELD_TYPES = [
     { key: 'tshirt', label: '티셔츠 사이즈', desc: 'XS–XXL', w: 104 },
     { key: 'location', label: '위치', desc: '장소·주소', w: 156 },
     { key: 'files', label: '파일', desc: '공유 폴더에서 선택', w: 150 },
-    { key: 'relationship', label: '관계', desc: '태스크 연결', w: 184 },
+    { key: 'relationship', label: '관계', desc: '태스크 연결', w: 150 },
     { key: 'progress_auto', label: '진행률(자동)', desc: '하위 완료율 자동', w: 136 },
 ];
 const PJV_FIELD_BY_KEY = Object.fromEntries(PJV_FIELD_TYPES.map((f) => [f.key, f]));
@@ -5462,16 +5479,81 @@ function pjvCheckMini(on) {
 }
 // 그리드 템플릿 — 기본(이름·담당자·마감·우선순위) + 커스텀 필드 폭들 + 더보기. thead/행/추가행에 인라인 적용.
 function pjvGridTemplate(fields) {
-    // 제목 floor(180px) + 메타 minmax(0,W) — 창이 좁아지면 제목 대신 메타가 먼저 줄어든다(#339 와 같은 패턴, 태스크 리스트).
+    // 제목 floor(--pjv-name-min, 180px) + 메타 minmax(0,W). 제목칸 폭은 CSS 변수 — 열 경계 드래그(#483)로 키우거나,
+    //  좁은 태스크 모달의 하위태스크 표(#497)에서 컨테이너가 값을 덮어써 이름칸을 넓힌다. 메타는 좁아지면 제목 대신 먼저 준다(#339).
     const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
-    return 'minmax(180px, 1fr) minmax(0, 96px) minmax(0, 92px) minmax(0, 112px)' + (extra ? ' ' + extra : '') + ' 34px';
+    return 'minmax(var(--pjv-name-min, 180px), 1fr) minmax(0, var(--pjv-w-assignee, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-priority, 112px))' + (extra ? ' ' + extra : '') + ' 34px';
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
 function pjvProjGridTemplate(fields) {
-    // 제목 컬럼은 floor(200px) 로 보호 + 1fr 로 남은 폭 차지 — 창이 좁아져도 200px 밑으론 안 줄어든다(제목이 가장 잘 보이게).
-    // 메타 컬럼(팀원·마감·우선·세션·커스텀)은 minmax(0, Wpx) 라, 좁아지면 '제목 대신' 이쪽이 먼저 줄어든다(#339).
+    // 제목 컬럼은 floor(--pjv-name-min, 200px) + 1fr 로 남은 폭 차지. 제목칸 폭은 CSS 변수라 열 경계 드래그(#483)로
+    //  키우면(값↑) 메타 컬럼이 그만큼 줄어든다. 메타(팀원·마감·우선·세션·커스텀)는 minmax(0, Wpx) 라 좁아지면 제목 대신 먼저 준다(#339).
     const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
-    return 'minmax(200px, 1fr) minmax(0, 96px) minmax(0, 92px) minmax(0, 112px) minmax(0, 80px)' + (extra ? ' ' + extra : '') + ' 34px';
+    return 'minmax(var(--pjv-name-min, 200px), 1fr) minmax(0, var(--pjv-w-team, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-priority, 112px)) minmax(0, var(--pjv-w-sess, 80px))' + (extra ? ' ' + extra : '') + ' 34px';
+}
+// 이름(제목) 컬럼 폭 조절(#483) — 헤더 제목칸 오른쪽 경계에 얹는 드래그 핸들. 끌면 --pjv-name-min 을 키우고(메타 컬럼이
+//  그만큼 자동으로 줄어듦), 값은 가장 가까운 .pjv-tasks-card 의 dataset.nameKey 로 localStorage 에 저장돼 새로고침 후에도 유지.
+//  더블클릭 = 기본값으로 리셋. 프로젝트 목록·프로젝트 상세의 태스크 리스트(=하위 태스크 포함) 헤더에 공용으로 붙인다.
+function pjvNameResizeHandle() {
+    const h = el('div', { class: 'pjv-col-resize', title: '드래그하여 이름 칸 너비 조절 (더블클릭: 기본값)', 'aria-hidden': 'true' });
+    h.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = h.closest('.pjv-tasks-card');
+        const titleCell = h.closest('.pjv-trow-title-cell');
+        if (!card || !titleCell)
+            return;
+        const startX = e.clientX;
+        const startW = titleCell.getBoundingClientRect().width;
+        const cardW = card.getBoundingClientRect().width;
+        const maxW = Math.max(200, cardW - 200); // 메타 컬럼용 최소 여백 확보(음수/과대 방지)
+        document.body.classList.add('pjv-col-resizing');
+        const onMove = (ev) => {
+            let w = startW + (ev.clientX - startX);
+            w = Math.max(140, Math.min(maxW, w));
+            card.style.setProperty('--pjv-name-min', Math.round(w) + 'px');
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.classList.remove('pjv-col-resizing');
+            const key = card.dataset.nameKey;
+            const cur = card.style.getPropertyValue('--pjv-name-min');
+            if (key && cur) {
+                try {
+                    localStorage.setItem(key, cur.trim());
+                }
+                catch (_) { /* noop */ }
+            }
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+    h.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = h.closest('.pjv-tasks-card');
+        if (!card)
+            return;
+        card.style.removeProperty('--pjv-name-min');
+        if (card.dataset.nameKey) {
+            try {
+                localStorage.removeItem(card.dataset.nameKey);
+            }
+            catch (_) { /* noop */ }
+        }
+    });
+    return h;
+}
+// 카드 생성 시 1회 — 저장 키 지정 + 저장된 이름칸 폭 복원(#483).
+function pjvInitNameResize(card, key) {
+    card.dataset.nameKey = key;
+    try {
+        const w = localStorage.getItem(key);
+        if (w)
+            card.style.setProperty('--pjv-name-min', w.indexOf('px') >= 0 ? w : (w + 'px'));
+    }
+    catch (_) { /* noop */ }
 }
 function pjvHasFieldValue(v) {
     return !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));
@@ -6162,6 +6244,7 @@ function pjvShowInlineSubtask(projectId, parentTask, subBox, reload) {
 function pjvTasksSection(projectId, tasks, members, reload, fields) {
     fields = fields || [];
     const card = el('div', { class: 'card pjv-tasks-card', style: 'margin-bottom:18px' });
+    pjvInitNameResize(card, 'pjv:nameMin:task:' + projectId); // 이름칸 폭 드래그 저장/복원 — 프로젝트별(#483)
     // Closed 토글 버튼 — 누르면 태스크/하위태스크 popover. 활성(노출 중) 시 파란 강조.
     const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 항목 표시' }, pjvCheckCircle(), el('span', { text: 'Closed' }));
     const syncBtn = () => closedBtn.classList.toggle('active', pjvClosedView.tasks || pjvClosedView.subtasks);
@@ -6241,7 +6324,7 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
     let head;
     if (withCols) {
         // 컬럼 라벨을 행 그리드에 맞춰 헤더에 합침(별도 thead 없음). 좌측 첫 칸 = 그룹 라벨.
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret), el('div', { class: 'pjv-tcell pjv-colhead', text: '담당자' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '담당자' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
         head.style.gridTemplateColumns = pjvGridTemplate(fields);
     }
     else {
