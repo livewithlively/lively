@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write   # 릴리스 생성·에셋 업로드
+  id-token: write   # OIDC — AWS 롤 assume(S3 tokenless 업로드). 장기키 없음.
 
 jobs:
   release:
@@ -30,3 +31,17 @@ jobs:
         with:
           files: context-ontology.tgz
           generate_release_notes: true
+
+      # ── tokenless 상용 배포: 같은 tgz 를 private S3 에도 올린다(OIDC — GitHub 에 장기 AWS 키 없음). ──
+      #  고객 설치용 presigned URL 은 온보딩 때 별도 발급(lively-infra/projects/lively-releases/presign.sh).
+      #  롤/버킷: lively-infra/projects/lively-releases. 근거: 배포 런북(context-ontology-셀프호스트-배포-…).
+      - name: AWS 자격증명 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::425515538094:role/lively-releases-ci-upload
+          aws-region: ap-northeast-2
+      - name: 릴리스 번들 S3 업로드 (tokenless 전달)
+        run: |
+          aws s3 cp context-ontology.tgz \
+            "s3://lively-releases-425515538094/context-ontology/${GITHUB_REF_NAME}/context-ontology.tgz"
+          echo "→ s3://lively-releases-425515538094/context-ontology/${GITHUB_REF_NAME}/context-ontology.tgz"
