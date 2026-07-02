@@ -329,8 +329,11 @@ function pasteText(t) {
   if (/[\r\n]/.test(t)) sendInput('\x1b[200~' + t.replace(/\r\n/g, '\n') + '\x1b[201~');
   else sendInput(t);
 }
-// 자동 전송 — 프로젝트 '클로드로 실행'이 만든 세션이면, 부팅이 끝나(출력이 ~1.6s 잠잠) 클로드가 입력을 받을 때 프롬프트를 1회 주입.
-//  ?autosend=1 + localStorage 핸드오프(같은 브라우저). 출력이 계속이면 계속 대기, 12s 하드캡으로 늦어도 보냄. 재연결엔 재전송 안 함(autosendDone).
+// 자동 전송 — 프로젝트 '클로드로 실행'이 만든 세션이면, 부팅이 끝나 클로드가 입력을 받을 때 프롬프트를 1회 주입.
+//  ?autosend=1 + localStorage 핸드오프(같은 브라우저). 재연결엔 재전송 안 함(autosendDone).
+//  ⚠ 트리거는 '출력 1.6s 침묵/12s 하드캡'으로 '시작'하되, 그것만 믿고 blind Enter 하지 않는다 — 인증 MCP·SessionStart 훅이
+//   부팅 중 '침묵 갭'을 만들거나 시작 다이얼로그(신뢰폴더 등)가 떠 있으면 붙여넣기+Enter 가 씹혀 태스크가 유실됐다.
+//   그래서 붙여넣은 뒤 xterm 버퍼를 readback 해 '실제로 입력창에 들어갔는지' 확인될 때만 Enter 하고, 안 됐으면 재시도한다.
 const AUTOSEND = (() => {
   try {
     if (!new URLSearchParams(location.search).get('autosend')) return '';
@@ -341,6 +344,49 @@ const AUTOSEND = (() => {
   } catch (_) { return ''; }
 })();
 let autosendDone = false, autosendLastOut = 0, autosendDeadline = 0, autosendTimer = null;
+const AUTOSEND_MAX_TRIES = 8; // 붙여넣기 재시도 상한(부팅 침묵 갭·다이얼로그가 걷힐 때까지 ~수 초 커버).
+// 현재 뷰포트(입력박스가 있는 화면)를 문자열로 읽는다 — 붙여넣기가 실제로 입력창에 들어갔는지 확인(readback)용.
+function autosendReadScreen() {
+  try {
+    const b = term.buffer.active;
+    const rows = term.rows || 24;
+    const out = [];
+    for (let i = 0; i < rows; i++) { const ln = b.getLine(b.baseY + i); if (ln) out.push(ln.translateToString(true)); }
+    return out.join('\n');
+  } catch (_) { return ''; }
+}
+// 붙여넣은 프롬프트가 입력창에 안착했는지: 멀티라인은 '[Pasted text +N lines]'/'paste again to expand' placeholder 로 접히고,
+//  짧으면 본문 앞부분이 그대로 보인다(둘 중 하나면 안착으로 본다).
+function autosendLanded(screen) {
+  if (/\[Pasted text|paste again to expand|\+\s*\d+\s*lines?/i.test(screen)) return true;
+  const probe = AUTOSEND.replace(/\s+/g, ' ').trim().slice(0, 24);
+  return probe.length >= 6 && screen.replace(/\s+/g, ' ').indexOf(probe) !== -1;
+}
+// 부팅 중 뜰 수 있는 '입력창이 아닌' 시작 다이얼로그(신뢰 폴더/권한 확인). 이 위에서 Enter 치면 다이얼로그가 그 Enter 를
+//  먹고(예: '신뢰함' 확정) 붙여넣은 태스크가 날아간다 → 다이얼로그가 보이면 붙여넣기·Enter 를 미룬다.
+//  ⚠ 정상 입력박스의 하단 표시 '⏵⏵ bypass permissions on' 은 다이얼로그가 아니다 — 'Bypass Permissions mode' 경고창(대문자·mode)
+//   과 구분해 오판(정상 박스를 다이얼로그로 보고 영영 대기)을 막는다. 차단 다이얼로그는 'Enter to confirm'·번호선택 메뉴가 특징.
+function autosendBlockingDialog(screen) {
+  return /trust (this|the) folder|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i.test(screen);
+}
+// 붙여넣기 → readback 확인 → (확인 시)Enter, (미확인 시)재시도. 다이얼로그면 대기. 최후엔 다이얼로그 아닐 때만 1회 폴백 Enter.
+function autosendPasteTry(n) {
+  if (autosendDone !== 'firing') return;
+  if (autosendBlockingDialog(autosendReadScreen()) && n < AUTOSEND_MAX_TRIES) { setTimeout(() => autosendPasteTry(n + 1), 900); return; }
+  try { pasteText(AUTOSEND); } catch (_) { /* noop */ }
+  setTimeout(() => {
+    if (autosendLanded(autosendReadScreen())) {
+      autosendDone = true;
+      try { sendInput('\r'); } catch (_) { /* noop */ }               // 안착 확인 후에만 제출.
+      try { toast('선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
+    } else if (n < AUTOSEND_MAX_TRIES) {
+      setTimeout(() => autosendPasteTry(n + 1), 800);                 // 아직 준비 전/씹힘 → 잠시 후 재시도.
+    } else {
+      autosendDone = true;
+      if (!autosendBlockingDialog(autosendReadScreen())) { try { sendInput('\r'); } catch (_) { /* noop */ } } // 폴백(다이얼로그 아닐 때만).
+    }
+  }, 400); // 붙여넣기 바이트가 서버 send-keys→tmux→렌더→WS→xterm 버퍼로 왕복해 보일 여유(원격 RTT 포함) — 너무 짧으면 조기 오탐→중복붙여넣기.
+}
 function scheduleAutosend() {
   if (!AUTOSEND || autosendDone) return;
   clearTimeout(autosendTimer);
@@ -348,9 +394,9 @@ function scheduleAutosend() {
     if (autosendDone) return;
     const quiet = Date.now() - autosendLastOut;
     if ((autosendLastOut && quiet >= 1600) || (autosendDeadline && Date.now() >= autosendDeadline)) {
-      autosendDone = true;
-      try { if (term) term.focus(); pasteText(AUTOSEND); setTimeout(() => sendInput('\r'), 180); } catch (_) { /* noop */ }
-      try { toast('선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
+      autosendDone = 'firing';                                        // 재진입 방지(문자열 sentinel), 안착 확인/폴백 시 true 로 확정.
+      try { if (term) term.focus(); } catch (_) { /* noop */ }
+      autosendPasteTry(0);
     } else { scheduleAutosend(); }
   }, 500);
 }
