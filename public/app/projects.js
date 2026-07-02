@@ -121,7 +121,7 @@ async function renderProjectV2Board(view) {
     const meId = (state.me && (state.me.userId || state.me.email)) || '';
     // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
     const canDelete = (_p) => !!meId;
-    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '우리 팀' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 참여하거나 우리 팀이 맡은 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders));
+    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '프로젝트 보드' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '폴더·리스트로 정리한 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders));
     pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
 }
 // 작업 로그 탭 — '회사 전체'(회사에서 지금 진행 중인 모든 작업) 활동 피드. 대시보드에서 분리(유형 필터 칩 + 더보기).
@@ -316,35 +316,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                     pjvMoveListToFolder(lid, list.folder_id ?? null, reload); } }); // 리스트→리스트: 그 리스트와 같은 폴더로
             return it;
         };
-        // 접힘 — 얇은 레일. ▶ 펼치기 + 전체/폴더/최상위 리스트/미분류 아이콘(클릭=선택). 본문은 그대로.
-        if (!pjvSidePanel.open) {
-            const rail = el('div', { class: 'pjv-side-rail' });
-            const railInner = el('div', { class: 'pjv-side-rail-inner' });
-            const expandBtn = el('button', { class: 'pjv-side-expand', type: 'button', title: '목록 펼치기', 'aria-label': '목록 펼치기', text: '▶' });
-            expandBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = true; render(); };
-            railInner.append(expandBtn);
-            const railDot = (key, dot, title, active, dropListId) => {
-                const b = el('button', { class: 'pjv-side-raildot' + (active ? ' active' : ''), type: 'button', title }, dot);
-                b.onclick = (e) => { e.stopPropagation(); selectArea(key); };
-                if (dropListId !== undefined)
-                    pjvFolderDropTarget(b, dropListId, reload);
-                return b;
-            };
-            for (const f of folderList)
-                railInner.append(railDot('F' + f.id, pjvBundleIcon(f.color || 'var(--muted-2)'), f.name, sel === 'F' + f.id));
-            for (const l of topLists)
-                railInner.append(railDot('L' + l.id, pjvListGlyph(l), l.name, sel === 'L' + l.id, l.id));
-            if (showUn)
-                railInner.append(railDot('__none__', pjvBundleIcon(null, 'none'), '기타 (미분류)', sel === '__none__', null));
-            rail.append(railInner);
-            body.replaceChildren(el('div', { class: 'pjv-side-wrap pjv-side-collapsed' }, rail, main));
-            return;
-        }
-        // 펼침 — 전체 네비. nav = 본문 높이만큼 늘어나는 레일(구분선), navInner = sticky 항목.
+        // 전체 네비. nav = 본문 높이만큼 늘어나는 레일(구분선), navInner = sticky 항목.
+        //  세모(◀)는 사이드바(byArea) 자체를 닫는다 — 예전 '작은 레일'로 접던 동작 폐기(#510). 다시 열려면 상단 '폴더' 버튼.
         const nav = el('div', { class: 'pjv-side-nav' });
         const navInner = el('div', { class: 'pjv-side-nav-inner' });
-        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '목록 접기', 'aria-label': '목록 접기', text: '◀' });
-        collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
+        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '◀' });
+        collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; syncToggles(); render(); };
         navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
         // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
         navInner.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') {
@@ -360,9 +337,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         for (const f of folderList) {
             const open = isFolderOpen(f.id);
             const fkey = 'F' + f.id;
-            const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), text: open ? '▾' : '▸' });
+            // 접힘/펼침 세모는 오른쪽 끝으로(#508) — 왼쪽에 두면 폴더 아이콘이 밀려 최상위 리스트와 어긋나 위계가 안 느껴진다.
+            const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), title: open ? '접기' : '펼치기', 'aria-label': open ? '접기' : '펼치기', text: open ? '▾' : '▸' });
             caret.addEventListener('click', (e) => { e.stopPropagation(); toggleFolder(f.id); });
-            const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' }, caret, pjvBundleIcon(f.color || 'var(--muted-2)'), el('span', { class: 'pjv-side-navlabel', text: f.name }));
+            const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' }, pjvBundleIcon(f.color || 'var(--muted-2)'), el('span', { class: 'pjv-side-navlabel', text: f.name }), caret);
             fit.addEventListener('click', (e) => { e.stopPropagation(); if (!isFolderOpen(f.id))
                 pjvFolderOpen.set(f.id, true); selectArea(fkey); });
             const fmore = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
@@ -448,7 +426,6 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).
     sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) {
         pjvBoardView.byFolder = false;
-        pjvSidePanel.open = true;
     } syncToggles(); render(); };
     subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
     mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
@@ -3095,9 +3072,65 @@ function npTaskEditor() {
     const model = []; // [{ name, subs: [{name}], subBox }]
     const listEl = el('div', { class: 'np-tasklist' });
     const dot = () => pjvStatusIconStd('todo'); // 할 일 점선 링 — 프로젝트 행과 동일 톤
+    // 자동 성장 입력 — 한 줄 넘으면 세로로 늘어난다(#req: 하위태스크가 여러 줄이면 할일 목록 세로 확장). 이름 전용이라 Enter=확정(줄바꿈 X).
+    const growTa = (ta) => { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight || 0) + 'px'; };
+    const mkGrowInput = (ph) => {
+        const ta = el('textarea', { class: 'pjv-addrow-input np-grow-input', rows: '1', placeholder: ph || '', maxlength: '200', spellcheck: 'false' });
+        ta.addEventListener('input', () => growTa(ta));
+        return ta;
+    };
+    // 제목 인라인 편집(#507) — 제목을 클릭·더블클릭하면 자동성장 textarea 로 교체해 수정. Enter/blur=저장, Esc=취소.
+    //  한글(IME) 조합 중 Enter 는 조합 확정용이라 무시(#293 패턴). Esc/Enter 는 오버레이(문서 Esc=팝업 닫기)로 새지 않게 stopPropagation. 인메모리라 값만 갱신.
+    const editTitle = (titleEl, get, set) => {
+        if (titleEl.dataset.npEditing)
+            return;
+        titleEl.dataset.npEditing = '1';
+        const ta = mkGrowInput('');
+        ta.value = get();
+        titleEl.replaceWith(ta);
+        growTa(ta);
+        ta.focus();
+        if (ta.select)
+            ta.select();
+        let fin = false;
+        const finish = (save) => {
+            if (fin)
+                return;
+            fin = true;
+            const nv = ta.value.trim().replace(/\s+/g, ' ');
+            if (save && nv) {
+                set(nv);
+                titleEl.textContent = nv;
+            }
+            ta.replaceWith(titleEl);
+            delete titleEl.dataset.npEditing;
+        };
+        ta.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+                e.preventDefault();
+                e.stopPropagation();
+                finish(true);
+            }
+            else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                finish(false);
+            }
+        });
+        ta.addEventListener('blur', () => finish(true));
+    };
+    const bindEditable = (titleEl, get, set) => {
+        titleEl.classList.add('np-title-editable');
+        titleEl.title = '클릭·더블클릭해 수정';
+        const go = (e) => { e.stopPropagation(); editTitle(titleEl, get, set); };
+        titleEl.addEventListener('click', go);
+        titleEl.addEventListener('dblclick', go);
+    };
     const buildSubRow = (task, sub) => {
         const del = el('button', { class: 'np-trow-del', type: 'button', title: '삭제', 'aria-label': '삭제', text: '×' });
-        const row = el('div', { class: 'np-trow np-trow-sub' }, dot(), el('span', { class: 'np-trow-title', text: sub.name }), del);
+        const titleEl = el('span', { class: 'np-trow-title', text: sub.name });
+        bindEditable(titleEl, () => sub.name, (v) => { sub.name = v; });
+        const row = el('div', { class: 'np-trow np-trow-sub' }, dot(), titleEl, del);
         del.onclick = () => { const i = task.subs.indexOf(sub); if (i >= 0)
             task.subs.splice(i, 1); row.remove(); };
         return row;
@@ -3106,24 +3139,28 @@ function npTaskEditor() {
     const showSubInput = (task) => {
         const existing = task.subBox.querySelector('.np-subadd');
         if (existing) {
-            existing.querySelector('input').focus();
+            existing.querySelector('textarea, input').focus();
             return;
         }
-        const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '하위 태스크 이름 후 Enter (Esc 취소)', maxlength: '200' });
+        const input = mkGrowInput('하위 태스크 이름 후 Enter (Esc 취소)');
         const addRow = el('div', { class: 'np-trow np-trow-sub np-subadd' }, dot(), input);
         task.subBox.append(addRow);
-        setTimeout(() => input.focus(), 0);
+        setTimeout(() => { input.focus(); growTa(input); }, 0);
         input.addEventListener('blur', () => setTimeout(() => { if (!input.value.trim())
             addRow.remove(); }, 130));
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                e.stopPropagation();
                 input.value = '';
                 addRow.remove();
                 return;
-            }
+            } // 팝업까지 닫히지 않게(문서 Esc 차단)
             if (e.key !== 'Enter')
                 return;
+            if (e.isComposing || e.keyCode === 229)
+                return; // 한글 IME 조합 확정용 Enter — 중복 생성 방지(#505)
             e.preventDefault();
+            e.stopPropagation();
             const name = input.value.trim();
             if (!name)
                 return;
@@ -3131,6 +3168,7 @@ function npTaskEditor() {
             task.subs.push(sub);
             task.subBox.insertBefore(buildSubRow(task, sub), addRow); // 입력행 위에 쌓아 입력 유지(연속 입력)
             input.value = '';
+            growTa(input);
             input.focus();
         });
     };
@@ -3139,7 +3177,9 @@ function npTaskEditor() {
         const del = el('button', { class: 'np-trow-del', type: 'button', title: '삭제', 'aria-label': '삭제', text: '×' });
         const subBox = el('div', { class: 'np-trow-subs' });
         task.subBox = subBox;
-        const wrap = el('div', { class: 'np-trow-wrap' }, el('div', { class: 'np-trow np-trow-top' }, el('div', { class: 'np-trow-title-cell' }, dot(), el('span', { class: 'np-trow-title', text: task.name })), el('div', { class: 'np-trow-acts' }, addSub, del)), subBox);
+        const titleEl = el('span', { class: 'np-trow-title', text: task.name });
+        bindEditable(titleEl, () => task.name, (v) => { task.name = v; });
+        const wrap = el('div', { class: 'np-trow-wrap' }, el('div', { class: 'np-trow np-trow-top' }, el('div', { class: 'np-trow-title-cell' }, dot(), titleEl), el('div', { class: 'np-trow-acts' }, addSub, del)), subBox);
         addSub.onclick = () => showSubInput(task);
         del.onclick = () => { const i = model.indexOf(task); if (i >= 0)
             model.splice(i, 1); wrap.remove(); };
@@ -3147,22 +3187,26 @@ function npTaskEditor() {
     };
     // 상위 ＋할 일 추가행 — 트리거(＋ 할 일 추가) ↔ 입력 토글. Enter=추가·계속, Esc/빈 blur=닫기. (pjvProjAddRow 의 인메모리·이름전용판)
     const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크 추가' }));
-    const addInput = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 후 Enter (여러 개면 계속, Esc 닫기)', maxlength: '200' });
+    const addInput = mkGrowInput('태스크 이름 후 Enter (여러 개면 계속, Esc 닫기)');
     const addRow = el('div', { class: 'np-addrow' }, trigger);
     const collapse = () => { addRow.classList.remove('editing'); addRow.replaceChildren(trigger); };
-    const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => addInput.focus(), 0); };
+    const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => { addInput.focus(); growTa(addInput); }, 0); };
     trigger.onclick = expand;
     addInput.addEventListener('blur', () => setTimeout(() => { if (!addInput.value.trim() && !addRow.contains(document.activeElement))
         collapse(); }, 130));
     addInput.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            e.stopPropagation();
             addInput.value = '';
             collapse();
             return;
-        }
+        } // 팝업까지 닫히지 않게(문서 Esc 차단)
         if (e.key !== 'Enter')
             return;
+        if (e.isComposing || e.keyCode === 229)
+            return; // 한글 IME 조합 확정용 Enter — 중복 생성 방지(#505)
         e.preventDefault();
+        e.stopPropagation();
         const name = addInput.value.trim();
         if (!name)
             return;
@@ -3170,6 +3214,7 @@ function npTaskEditor() {
         model.push(task);
         listEl.append(buildTaskRow(task));
         addInput.value = '';
+        growTa(addInput);
         addInput.focus();
     });
     const box = el('div', { class: 'np-tasks-tree' }, listEl, addRow);
@@ -3320,7 +3365,8 @@ function openProjectV2Form(reload, prefill) {
         }
     };
     saveBtn.onclick = go;
-    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter')
+    // 한글(IME) 조합 중 Enter 는 조합 확정용 — 조합 끝난 진짜 Enter 에서만 생성(#505 중복 방지).
+    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229)
         go(); });
     return back; // 호출측(인라인 추가행)이 팝업 닫힘을 감지해 인라인 행을 정리할 수 있게 오버레이 엘리먼트 반환
 }
@@ -5719,8 +5765,6 @@ const pjvListOpen = new Map();
 const pjvFolderOpen = new Map();
 // 영역 목록에서 선택된 영역 key('L'+id | '__none__' | '__all__'). 세션 유지.
 const pjvSidebarSel = { key: '__all__' };
-// 영역 목록 펼침/접힘(byArea 켜진 상태에서). 접으면 얇은 레일(▶)만, 영역 그룹은 유지. 기본 펼침. 세션 유지.
-const pjvSidePanel = { open: true };
 // 프로젝트 보드의 '하위 태스크' 버튼 모드 — 각 프로젝트를 펼쳐 그 안의 태스크를 보여주는 방식.
 //  collapsed(접힘·기본, 캐럿으로 펼침) / expanded(펼침·전부 열림) / separate(분리·태스크를 상태 그룹에 평면 표시). 태스크 박스의 pjvSubtaskMode 와 독립.
 const pjvProjTaskMode = { mode: 'collapsed' };
