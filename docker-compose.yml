@@ -88,7 +88,9 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      LIVELY_DOMAIN: ${LIVELY_DOMAIN:?LIVELY_DOMAIN 필요 — TLS 대상 도메인(A레코드→이 호스트)}
+      # 기본 빈 값(:-) — 프로필 미지정(items-db/gateway) up 시에도 파싱되게. compose 는 프로필 필터 전에
+      # 파일 전체를 interpolate 하므로 :? 면 TLS 안 쓰는 설치도 막힌다. 도메인 검증은 proxy_up(common.sh).
+      LIVELY_DOMAIN: ${LIVELY_DOMAIN:-}
       LIVELY_UPSTREAM: ${LIVELY_UPSTREAM:-localhost:8080}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
