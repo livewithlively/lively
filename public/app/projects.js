@@ -126,6 +126,7 @@ async function renderProjectV2Board(view) {
 function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId, folders) {
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
+    pjvApplyHiddenCols(card, 'proj'); // 숨긴 기본 컬럼 복원(#req)
     folders = folders || [];
     pjvSetStatusRegistry(lists); // 리스트별 커스텀 상태 레지스트리 — 모든 뷰의 프로젝트 행 상태 동그라미가 참조(#475).
     // 프로젝트별 태스크 캐시(행 펼침용) — 같은 렌더 동안 재사용(프로미스 캐싱으로 동시요청 합침).
@@ -567,7 +568,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
 }
 // 컬럼 헤더 한 줄(카드 상단) — pjvProjRow 와 같은 그리드. 첫 칸은 '프로젝트' 라벨, 나머지는 팀원/마감/우선/세션 + 커스텀 + (＋컬럼).
 function pjvListColHead(fields, anchorId, reload) {
-    const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+    const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()), pjvStdColHead('proj', 'team', '팀원'), pjvStdColHead('proj', 'due', '마감일'), pjvStdColHead('proj', 'priority', '우선순위'), pjvStdColHead('proj', 'sess', '내 세션'), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
     headEl.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     return headEl;
 }
@@ -2632,7 +2633,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
         : el('span', { class: 'pjv-tgroup-label', text: label });
     let head;
     if (withCols) {
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('proj', 'team', '팀원'), pjvStdColHead('proj', 'due', '마감일'), pjvStdColHead('proj', 'priority', '우선순위'), pjvStdColHead('proj', 'sess', '내 세션'), ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
         head.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     }
     else {
@@ -2742,6 +2743,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
 function pjvProjectListCard(todo, inprog, done, reload, select, canDelete, fields, anchorId, meId) {
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
+    pjvApplyHiddenCols(card, 'proj'); // 숨긴 기본 컬럼 복원(#req)
     // 프로젝트별 태스크 캐시(펼침용) — 같은 보드 렌더 동안 재사용(모드 전환·재펼침 시 재요청 없음). 프로미스 캐싱으로 동시 요청 합침.
     const taskCache = new Map();
     const fetchProjTasks = (projId) => {
@@ -5796,6 +5798,79 @@ function pjvInitNameResize(card, key) {
     }
     catch (_) { /* noop */ }
 }
+// ── 기본(내장) 컬럼 숨기기/보이기 — 팀원·마감일·우선순위·(내 세션)도 커스텀 필드처럼 호버 ⋯로 숨길 수 있게(#req). ──
+//  숨김은 폭 CSS 변수를 0 으로 만들어 컬럼을 접는다(행 그리드는 gap:0 이라 흔적 없이 사라짐 — 셀/그리드 구조는 안 건드림).
+//  surface: 'proj'(팀원·마감·우선·세션) | 'task'(담당자·마감·우선). 값은 localStorage 에 저장돼 유지, Fields 패널에서 되살린다.
+const PJV_STD_COLS = {
+    proj: [{ key: 'team', label: '팀원' }, { key: 'due', label: '마감일' }, { key: 'priority', label: '우선순위' }, { key: 'sess', label: '내 세션' }],
+    task: [{ key: 'assignee', label: '담당자' }, { key: 'due', label: '마감일' }, { key: 'priority', label: '우선순위' }],
+};
+const PJV_STD_COL_VAR = { team: '--pjv-w-team', assignee: '--pjv-w-assignee', due: '--pjv-w-due', priority: '--pjv-w-priority', sess: '--pjv-w-sess' };
+function pjvHiddenColsKey(surface) { return 'pjv:hiddenCols:' + surface; }
+function pjvGetHiddenCols(surface) { try {
+    return new Set(JSON.parse(localStorage.getItem(pjvHiddenColsKey(surface)) || '[]'));
+}
+catch (_) {
+    return new Set();
+} }
+function pjvSetHiddenCols(surface, set) { try {
+    localStorage.setItem(pjvHiddenColsKey(surface), JSON.stringify([...set]));
+}
+catch (_) { /* noop */ } }
+// 카드 생성 시 1회 — 저장된 숨김 컬럼을 폭 0 으로 적용(surface 별). 모달 하위태스크 표에는 적용하지 않는다(되살릴 UI가 없어서).
+function pjvApplyHiddenCols(card, surface) {
+    card.dataset.colSurface = surface;
+    const hidden = pjvGetHiddenCols(surface);
+    for (const c of PJV_STD_COLS[surface])
+        if (hidden.has(c.key))
+            card.style.setProperty(PJV_STD_COL_VAR[c.key], '0px');
+}
+// 컬럼 보이기/숨기기 토글 — 저장 + 해당 카드의 폭 변수 즉시 반영(리로드 없이 접힘/펼침).
+function pjvSetStdColVisible(surface, key, visible, card) {
+    const s = pjvGetHiddenCols(surface);
+    if (visible)
+        s.delete(key);
+    else
+        s.add(key);
+    pjvSetHiddenCols(surface, s);
+    if (card) {
+        if (visible)
+            card.style.removeProperty(PJV_STD_COL_VAR[key]);
+        else
+            card.style.setProperty(PJV_STD_COL_VAR[key], '0px');
+    }
+}
+// 기본 컬럼 헤더 — 라벨 + 호버 ⋯(숨기기). 커스텀 필드 헤더(pjvColumnHead)와 같은 클래스/결.
+function pjvStdColHead(surface, key, label) {
+    const cell = el('div', { class: 'pjv-tcell pjv-colhead pjv-stdcol' }, el('span', { class: 'pjv-thcol-name', text: label, title: label }));
+    const menuBtn = el('button', { class: 'pjv-thcol-menu', type: 'button', text: '⋯', 'aria-label': label + ' 컬럼 옵션' });
+    menuBtn.onclick = (e) => {
+        e.stopPropagation();
+        const menu = el('div', { class: 'pjv-menu' });
+        const close = pjvPopover(menuBtn, menu);
+        const hide = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { text: '이 컬럼 숨기기' }));
+        hide.onclick = () => { close(); const card = cell.closest('.pjv-tasks-card'); pjvSetStdColVisible(surface, key, false, card); };
+        menu.append(hide, el('div', { class: 'pjv-menu-hint', text: '되살리기: 컬럼 추가(＋) → 기본 컬럼' }));
+    };
+    cell.append(menuBtn);
+    return cell;
+}
+// Fields(컬럼 추가) 패널의 '기본 컬럼' 섹션 — 각 기본 컬럼의 보임/숨김 토글(되살리기 진입점).
+function pjvDefaultColsSection(surface, card) {
+    const sec = el('div', { class: 'pjv-fields-defcols' });
+    sec.append(el('div', { class: 'pjv-fields-sec', text: '기본 컬럼' }));
+    const hidden = pjvGetHiddenCols(surface);
+    for (const c of PJV_STD_COLS[surface]) {
+        const row = el('button', { class: 'pjv-defcol-row', type: 'button' });
+        const toggle = el('span', { class: 'pjv-defcol-toggle', 'aria-hidden': 'true' });
+        const paint = (on) => { toggle.classList.toggle('on', on); row.setAttribute('aria-pressed', String(on)); };
+        paint(!hidden.has(c.key));
+        row.append(el('span', { class: 'pjv-defcol-name', text: c.label }), toggle);
+        row.onclick = () => { const on = !toggle.classList.contains('on'); pjvSetStdColVisible(surface, c.key, on, card); paint(on); };
+        sec.append(row);
+    }
+    return sec;
+}
 function pjvHasFieldValue(v) {
     return !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));
 }
@@ -6332,6 +6407,9 @@ function pjvAddColumnButton(projectId, reload) {
 function pjvOpenFieldsPanel(anchor, projectId, reload) {
     const panel = el('div', { class: 'pjv-fields-panel' });
     const close = pjvPopover(anchor, panel);
+    // 이 +버튼이 속한 표(카드)로 surface 판별 — 기본 컬럼 보임/숨김 토글(되살리기)용(#req).
+    const card = anchor.closest('.pjv-tasks-card');
+    const surface = (card && card.classList.contains('pjv-proj-card')) ? 'proj' : 'task';
     let catalog = null;
     const showPicker = (tab) => {
         tab = tab || 'new';
@@ -6339,7 +6417,7 @@ function pjvOpenFieldsPanel(anchor, projectId, reload) {
         const tNew = el('button', { class: 'pjv-fields-tab' + (tab === 'new' ? ' on' : ''), type: 'button', text: '새로 만들기', onclick: () => showPicker('new') });
         const tExist = el('button', { class: 'pjv-fields-tab' + (tab === 'existing' ? ' on' : ''), type: 'button', text: '기존 항목', onclick: () => showPicker('existing') });
         const list = el('div', { class: 'pjv-fields-list' });
-        panel.replaceChildren(el('div', { class: 'pjv-fields-head' }, el('span', { class: 'pjv-fields-title', text: '필드' })), search, el('div', { class: 'pjv-fields-tabs' }, tNew, tExist), list);
+        panel.replaceChildren(el('div', { class: 'pjv-fields-head' }, el('span', { class: 'pjv-fields-title', text: '필드' })), pjvDefaultColsSection(surface, card), search, el('div', { class: 'pjv-fields-tabs' }, tNew, tExist), list);
         const renderNew = () => {
             const qs = search.value.trim().toLowerCase();
             const matches = PJV_FIELD_TYPES.filter((f) => !qs || f.label.toLowerCase().includes(qs) || f.desc.toLowerCase().includes(qs) || f.key.includes(qs));
@@ -6486,6 +6564,7 @@ function pjvTasksSection(projectId, tasks, members, reload, fields) {
     fields = fields || [];
     const card = el('div', { class: 'card pjv-tasks-card', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:task:' + projectId); // 이름칸 폭 드래그 저장/복원 — 프로젝트별(#483)
+    pjvApplyHiddenCols(card, 'task'); // 숨긴 기본 컬럼 복원(#req)
     // Closed 토글 버튼 — 누르면 태스크/하위태스크 popover. 활성(노출 중) 시 파란 강조.
     const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 항목 표시' }, pjvCheckCircle(), el('span', { text: 'Closed' }));
     const syncBtn = () => closedBtn.classList.toggle('active', pjvClosedView.tasks || pjvClosedView.subtasks);
@@ -6565,7 +6644,7 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
     let head;
     if (withCols) {
         // 컬럼 라벨을 행 그리드에 맞춰 헤더에 합침(별도 thead 없음). 좌측 첫 칸 = 그룹 라벨.
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), el('div', { class: 'pjv-tcell pjv-colhead', text: '담당자' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('task', 'assignee', '담당자'), pjvStdColHead('task', 'due', '마감일'), pjvStdColHead('task', 'priority', '우선순위'), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
         head.style.gridTemplateColumns = pjvGridTemplate(fields);
     }
     else {
