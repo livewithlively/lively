@@ -86,13 +86,14 @@ async function renderProjectV2Board(view) {
     if (keepY == null)
         view.replaceChildren(projectSubBar('dashboard'), skeleton('프로젝트를 불러오는 중'));
     const head = projectPageHead();
-    let allProjects, mineProjects, lists;
+    let allProjects, mineProjects, lists, folders;
     try {
-        // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 목록을 병렬로.
-        [allProjects, mineProjects, lists] = await Promise.all([
+        // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 + 폴더(#475) 를 병렬로.
+        [allProjects, mineProjects, lists, folders] = await Promise.all([
             api('/api/ui/v6/projects').then((d) => (d && d.projects) || []),
             api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => []),
             api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
+            api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
         ]);
     }
     catch (e) {
@@ -117,13 +118,15 @@ async function renderProjectV2Board(view) {
     const meId = (state.me && (state.me.userId || state.me.email)) || '';
     // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
     const canDelete = (_p) => !!meId;
-    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '우리 팀' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 참여하거나 우리 팀이 맡은 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId), el('div', { class: 'card-head', style: 'margin: 24px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '회사 전체' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))), companyTimelineSection());
+    view.replaceChildren(head, projectSubBar('dashboard'), el('div', { class: 'card-head', style: 'margin: 6px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '우리 팀' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '내가 참여하거나 우리 팀이 맡은 프로젝트.' }))), pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders), el('div', { class: 'card-head', style: 'margin: 24px 0 14px' }, el('div', {}, el('span', { class: 'eyebrow', text: '회사 전체' }), el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '회사에서 지금 진행 중인 모든 작업.' }))), companyTimelineSection());
     pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
 }
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
 //  컬럼 헤더는 카드 상단에 한 번. 그 아래 리스트 그룹(접이식) 들이 쌓인다. 펼침 상태는 pjvListOpen 으로 세션 유지.
-function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId) {
+function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId, folders) {
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard', style: 'margin-bottom:18px' });
+    folders = folders || [];
+    pjvSetStatusRegistry(lists); // 리스트별 커스텀 상태 레지스트리 — 모든 뷰의 프로젝트 행 상태 동그라미가 참조(#475).
     // 프로젝트별 태스크 캐시(행 펼침용) — 같은 렌더 동안 재사용(프로미스 캐싱으로 동시요청 합침).
     const taskCache = new Map();
     const fetchProjTasks = (projId) => {
@@ -193,32 +196,65 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
         // 좌측 사이드바 카운트/표시는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만(본문 필터·그룹 헤더 visibleCount 동형).
         const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
-        // '기타(미분류)'는 보일 게 없으면 좌측에서 숨긴다(빈 항목 노출 방지). 실제 영역은 빈 add 타깃이라 유지.
-        const sideGroups = groups.filter((g) => g.list || visCount(g.projects) > 0);
-        // 숨겨진 미분류가 선택돼 있었으면 '전체'로 되돌린다(본문이 빈 영역을 렌더하지 않게).
-        if (pjvSidebarSel.key === '__none__' && !sideGroups.some((g) => g.key === '__none__'))
-            pjvSidebarSel.key = '__all__';
-        const sel = pjvSidebarSel.key;
+        const groupByList = new Map();
+        let unGroup = null;
+        for (const g of groups) {
+            if (g.list)
+                groupByList.set(g.list.id, g);
+            else
+                unGroup = g;
+        }
+        // 폴더 트리 — 폴더(정렬) › 그 폴더의 리스트 / 최상위(폴더 없는) 리스트 / 미분류('기타')(#475).
+        const bySortName = (a, b) => ((a.sort || 0) - (b.sort || 0)) || String(a.name).localeCompare(String(b.name));
+        const folderList = [...(folders || [])].sort(bySortName);
+        const listsByFolder = new Map();
+        const topLists = [];
+        for (const l of [...lists].sort(bySortName)) {
+            if (l.folder_id != null) {
+                if (!listsByFolder.has(l.folder_id))
+                    listsByFolder.set(l.folder_id, []);
+                listsByFolder.get(l.folder_id).push(l);
+            }
+            else
+                topLists.push(l);
+        }
+        const showUn = !!unGroup && visCount(unGroup.projects) > 0; // 미분류는 보일 게 있을 때만
+        // 선택 해소 — 사라졌거나 숨겨진 대상이면 '전체'로. sel: __all__ | F<id> | L<id> | __none__.
+        let sel = pjvSidebarSel.key;
+        const listExists = (id) => lists.some((l) => String(l.id) === String(id));
+        const folderExists = (id) => folderList.some((f) => String(f.id) === String(id));
+        if (sel === '__none__' && !showUn)
+            sel = '__all__';
+        else if (typeof sel === 'string' && sel[0] === 'L' && !listExists(sel.slice(1)))
+            sel = '__all__';
+        else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1)))
+            sel = '__all__';
+        pjvSidebarSel.key = sel;
         const selectArea = (key) => { pjvSidebarSel.key = key; render(); };
-        // 본문 — 선택 영역(전체=모두)의 프로젝트를 '원래 보드 그대로' 렌더. 영역 구분은 좌측 목록이 담당하므로 본문엔
-        //  영역 헤더를 넣지 않는다 → 원래의 여백·정렬·통일성 유지. byStatus 면 상태 그룹(진행 중/할 일/완료), 아니면 한 목록.
-        const sg = sel === '__all__' ? null : groups.find((g) => g.key === sel);
-        const shownProjects = sel === '__all__' ? groups.flatMap((g) => g.projects) : (sg ? sg.projects : []);
-        const listIdForAdd = (sg && sg.list) ? sg.list.id : null; // 특정 영역 선택 시 새 프로젝트는 그 영역으로
+        const isFolderOpen = (fid) => pjvFolderOpen.has(fid) ? pjvFolderOpen.get(fid) : true;
+        const toggleFolder = (fid) => { pjvFolderOpen.set(fid, !isFolderOpen(fid)); render(); };
+        // 본문 — 선택 범위의 프로젝트. 폴더 선택=그 폴더의 모든 리스트, 리스트 선택=그 리스트, 미분류=미분류.
+        let shownProjects = [];
+        let selList = null;
+        if (sel === '__all__')
+            shownProjects = groups.flatMap((g) => g.projects);
+        else if (sel[0] === 'F') {
+            const fid = sel.slice(1);
+            shownProjects = (listsByFolder.get(Number(fid)) || []).flatMap((l) => (groupByList.get(l.id)?.projects) || []);
+        }
+        else if (sel[0] === 'L') {
+            selList = lists.find((l) => String(l.id) === sel.slice(1));
+            shownProjects = (groupByList.get(Number(sel.slice(1)))?.projects) || [];
+        }
+        else if (sel === '__none__')
+            shownProjects = unGroup ? unGroup.projects : [];
+        const listIdForAdd = selList ? selList.id : null; // 특정 리스트 선택 시 새 프로젝트는 그 리스트로
         const mineOnly = pjvBoardMineOnly.on;
         const main = el('div', { class: 'pjv-side-main' });
         main.append(pjvListColHead(fields, anchorId, reload));
         if (byStatus) {
-            const inprog = shownProjects.filter((p) => p.status !== 'done' && p.status !== 'todo');
-            const todo = shownProjects.filter((p) => p.status === 'todo');
-            const done = shownProjects.filter((p) => p.status === 'done');
-            const sub = (label, key, arr) => main.append(pjvProjGroup(label, key, arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd));
-            if (!mineOnly || inprog.length)
-                sub('진행 중', 'in_progress', inprog);
-            if (!mineOnly || todo.length)
-                sub('할 일', 'todo', todo);
-            if (pjvProjClosedView.done && (!mineOnly || done.length))
-                sub('완료', 'done', done);
+            // 단일 리스트 선택 시 그 리스트의 커스텀 상태로 그룹핑(#475 Task statuses). 다중 범위(전체/폴더/미분류)는 표준 3버킷.
+            pjvRenderStatusGroups(main, shownProjects, selList, { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd });
         }
         else {
             const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
@@ -233,26 +269,45 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 flatBody.append(pjvProjAddRow('in_progress', reload, flatBody, null, fields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
             main.append(flatBody);
         }
-        // 접힘 — 얇은 레일. ▶ 펼치기(항상 보임) + 전체/영역 색점(클릭=선택). 본문은 그대로.
+        // ── 리스트 항목(트리 잎) — 체크 글리프(색/이모지) + 이름 + 개수 + ⋯(리스트 설정) + 프로젝트 드롭 타깃. sub=폴더 안이면 들여쓰기.
+        const listNavItem = (list, sub) => {
+            const key = 'L' + list.id;
+            const grp = groupByList.get(list.id);
+            const active = sel === key;
+            const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active) }, pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }), el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
+            const go = (e) => { e.stopPropagation(); selectArea(key); };
+            it.addEventListener('click', go);
+            it.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                go(e);
+            } });
+            const more = el('button', { class: 'pjv-side-navmore', type: 'button', title: '리스트 설정', 'aria-label': '리스트 설정', text: '⋯' });
+            more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu pjv-listset-menu' }); const close = pjvPopover(more, menu); pjvListSettingsMenu(menu, close, list, reload); });
+            it.append(more);
+            pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭
+            return it;
+        };
+        // 접힘 — 얇은 레일. ▶ 펼치기 + 전체/폴더/최상위 리스트/미분류 아이콘(클릭=선택). 본문은 그대로.
         if (!pjvSidePanel.open) {
             const rail = el('div', { class: 'pjv-side-rail' });
             const railInner = el('div', { class: 'pjv-side-rail-inner' });
-            const expandBtn = el('button', { class: 'pjv-side-expand', type: 'button', title: '폴더 목록 펼치기', 'aria-label': '폴더 목록 펼치기', text: '▶' });
+            const expandBtn = el('button', { class: 'pjv-side-expand', type: 'button', title: '목록 펼치기', 'aria-label': '목록 펼치기', text: '▶' });
             expandBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = true; render(); };
             railInner.append(expandBtn);
-            const railDot = (key, dot, title, active, listId) => {
+            const railDot = (key, dot, title, active, dropListId) => {
                 const b = el('button', { class: 'pjv-side-raildot' + (active ? ' active' : ''), type: 'button', title }, dot);
                 b.onclick = (e) => { e.stopPropagation(); selectArea(key); };
-                // 접힌 레일에서도 프로젝트를 끌어다 놓아 그 폴더로 이동(#454). 전체(__all__)는 제외, 미분류(__none__)는 null.
-                if (key !== '__all__')
-                    pjvFolderDropTarget(b, key === '__none__' ? null : listId, reload);
+                if (dropListId !== undefined)
+                    pjvFolderDropTarget(b, dropListId, reload);
                 return b;
             };
             railInner.append(railDot('__all__', pjvBundleIcon('#6c8cff', 'all'), '전체', sel === '__all__'));
-            for (const g of sideGroups) {
-                const ic = g.list ? pjvBundleIcon(g.list.color || 'var(--muted-2)') : pjvBundleIcon(null, 'none');
-                railInner.append(railDot(g.key, ic, g.list ? g.list.name : '기타 (미분류)', sel === g.key, g.list ? g.list.id : null));
-            }
+            for (const f of folderList)
+                railInner.append(railDot('F' + f.id, pjvBundleIcon(f.color || 'var(--muted-2)'), f.name, sel === 'F' + f.id));
+            for (const l of topLists)
+                railInner.append(railDot('L' + l.id, pjvListGlyph(l), l.name, sel === 'L' + l.id, l.id));
+            if (showUn)
+                railInner.append(railDot('__none__', pjvBundleIcon(null, 'none'), '기타 (미분류)', sel === '__none__', null));
             rail.append(railInner);
             body.replaceChildren(el('div', { class: 'pjv-side-wrap pjv-side-collapsed' }, rail, main));
             return;
@@ -260,37 +315,50 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         // 펼침 — 전체 네비. nav = 본문 높이만큼 늘어나는 레일(구분선), navInner = sticky 항목.
         const nav = el('div', { class: 'pjv-side-nav' });
         const navInner = el('div', { class: 'pjv-side-nav-inner' });
-        // 사이드바 폴더 항목 — 클릭=선택. 실제 폴더(list 있음)엔 호버 ⋯(설정·프로젝트관리·삭제, #453/#454) + 프로젝트 드롭 타깃(#454).
-        const navItem = (key, dot, label, count, active, list) => {
-            const it = el('div', { class: 'pjv-side-navitem' + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active) }, dot, el('span', { class: 'pjv-side-navlabel', text: label }), el('span', { class: 'pjv-side-navcount', text: count == null ? '' : String(count) }));
-            const go = (e) => { e.stopPropagation(); selectArea(key); };
-            it.addEventListener('click', go);
-            it.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                go(e);
-            } });
-            if (list) {
-                const more = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
-                more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu' }); const close = pjvPopover(more, menu); pjvFolderMenuItems(menu, close, list, reload); });
-                it.append(more);
-            }
-            if (key !== '__all__')
-                pjvFolderDropTarget(it, key === '__none__' ? null : list.id, reload);
-            return it;
-        };
-        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '폴더 목록 접기', 'aria-label': '폴더 목록 접기', text: '◀' });
+        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '목록 접기', 'aria-label': '목록 접기', text: '◀' });
         collapseBtn.onclick = (e) => { e.stopPropagation(); pjvSidePanel.open = false; render(); };
-        navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더' }), collapseBtn));
-        // 사이드바를 열었을 때만 보이는 안내 — 폴더가 무엇을 하는지·어떻게 쓰는지 구체적으로(#456: 기존 문구가 모호하다는 지적).
-        navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '관련된 프로젝트끼리 폴더로 묶어 정리해요. 폴더를 누르면 그 안의 프로젝트만 보이고, 프로젝트를 폴더로 끌어다 넣을 수 있어요.' }));
-        //  완료된 미분류 프로젝트가 Closed 꺼져도 사이드바에 '유령 개수'로 잡히던 것·빈 미분류 항목 노출은 visCount/sideGroups 로 처리(위).
+        navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
+        navInner.append(el('div', { class: 'pjv-side-nav-hint', text: '폴더로 관련 리스트를 정리하고, 리스트에 프로젝트를 담아요. 멤버·공개범위·상태는 리스트에서 설정해요.' }));
+        // 전체
         const totalProjs = groups.reduce((n, g) => n + visCount(g.projects), 0);
-        navInner.append(navItem('__all__', pjvBundleIcon('#6c8cff', 'all'), '전체', totalProjs, sel === '__all__'));
-        for (const g of sideGroups) {
-            const ic = g.list ? pjvBundleIcon(g.list.color || 'var(--muted-2)') : pjvBundleIcon(null, 'none');
-            navInner.append(navItem(g.key, ic, g.list ? g.list.name : '기타 (미분류)', visCount(g.projects), sel === g.key, g.list));
+        const allItem = el('div', { class: 'pjv-side-navitem' + (sel === '__all__' ? ' active' : ''), role: 'button', tabindex: '0' }, pjvBundleIcon('#6c8cff', 'all'), el('span', { class: 'pjv-side-navlabel', text: '전체' }), el('span', { class: 'pjv-side-navcount', text: String(totalProjs) }));
+        allItem.addEventListener('click', (e) => { e.stopPropagation(); selectArea('__all__'); });
+        navInner.append(allItem);
+        // 폴더들(캐럿+폴더아이콘) › 리스트들
+        for (const f of folderList) {
+            const open = isFolderOpen(f.id);
+            const fkey = 'F' + f.id;
+            const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), text: open ? '▾' : '▸' });
+            caret.addEventListener('click', (e) => { e.stopPropagation(); toggleFolder(f.id); });
+            const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0' }, caret, pjvBundleIcon(f.color || 'var(--muted-2)'), el('span', { class: 'pjv-side-navlabel', text: f.name }));
+            fit.addEventListener('click', (e) => { e.stopPropagation(); if (!isFolderOpen(f.id))
+                pjvFolderOpen.set(f.id, true); selectArea(fkey); });
+            const fmore = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
+            fmore.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu' }); const close = pjvPopover(fmore, menu); pjvFolderTreeMenu(menu, close, f, reload); });
+            fit.append(fmore);
+            navInner.append(fit);
+            if (open) {
+                const fLists = listsByFolder.get(f.id) || [];
+                if (fLists.length)
+                    for (const l of fLists)
+                        navInner.append(listNavItem(l, true));
+                else
+                    navInner.append(el('button', { class: 'pjv-side-folder-empty', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload, undefined, { folderId: f.id }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '리스트 추가' })));
+            }
         }
-        navInner.append(el('button', { class: 'pjv-side-newlist', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })));
+        // 최상위(폴더 없는) 리스트
+        for (const l of topLists)
+            navInner.append(listNavItem(l, false));
+        // 미분류
+        if (showUn) {
+            const unKey = '__none__';
+            const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' }, pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unGroup.projects)) }));
+            uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
+            pjvFolderDropTarget(uit, null, reload);
+            navInner.append(uit);
+        }
+        // 새 폴더 / 새 리스트
+        navInner.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
         nav.append(navInner);
         body.replaceChildren(el('div', { class: 'pjv-side-wrap' }, nav, main));
     };
@@ -400,21 +468,11 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
     const visibleCount = pjvProjClosedView.done ? g.projects.length : g.projects.filter((p) => p.status !== 'done').length;
     const bodyEl = el('div', { class: 'pjv-tgroup-body' });
     if (nested) {
-        // 리스트 › 상태 — 상태 하위그룹으로 다시 묶되, 추가행은 **상태 그룹마다**(원래 상태 보드처럼). 각 ＋ 가 '이 리스트 + 그 상태'로 생성
-        //  (할 일 그룹 ＋ → 그 리스트의 todo / 진행 중 그룹 ＋ → active). 진행 중·할 일은 비어도 항상 표시(추가 진입점). 완료는 Closed 일 때만.
-        //  '내 할당만' 읽기 모드에선 추가행 숨김(noAdd) + 빈 상태 그룹 생략.
+        // 리스트 › 상태 — 상태 하위그룹. 리스트가 커스텀 상태면 그 상태들로, 아니면 표준 3버킷(#475). 각 그룹에 추가행.
         const mineOnly = pjvBoardMineOnly.on;
-        const inprog = g.projects.filter((p) => p.status !== 'done' && p.status !== 'todo');
-        const todo = g.projects.filter((p) => p.status === 'todo');
-        const done = g.projects.filter((p) => p.status === 'done');
-        const sub = (label, key, arr) => bodyEl.append(pjvProjGroup(label, key, arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd));
-        if (!mineOnly || inprog.length)
-            sub('진행 중', 'in_progress', inprog);
-        if (!mineOnly || todo.length)
-            sub('할 일', 'todo', todo);
-        if (pjvProjClosedView.done && (!mineOnly || done.length))
-            sub('완료', 'done', done);
-        if (mineOnly && !inprog.length && !todo.length && !(pjvProjClosedView.done && done.length))
+        const before = bodyEl.childElementCount;
+        pjvRenderStatusGroups(bodyEl, g.projects, list, { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd });
+        if (mineOnly && bodyEl.childElementCount === before)
             bodyEl.append(el('div', { class: 'pjv-proj-empty', text: emptyText }));
     }
     else {
@@ -441,17 +499,19 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
     bodyEl.hidden = !open;
     const setOpen = (o) => { open = o; pjvListOpen.set(g.key, o); gcaret.textContent = o ? '▾' : '▸'; gcaret.setAttribute('aria-expanded', String(o)); bodyEl.hidden = !o; };
     gcaret.onclick = (e) => { e.stopPropagation(); setOpen(!open); };
-    const dot = el('span', { class: 'pjv-list-dot', style: 'background:' + color, 'aria-hidden': 'true' });
+    const dot = isUn
+        ? el('span', { class: 'pjv-list-dot', style: 'background:' + color, 'aria-hidden': 'true' })
+        : el('span', { class: 'pjv-list-headglyph', 'aria-hidden': 'true' }, pjvListGlyph(list));
     const labelEl = el('span', { class: 'pjv-tgroup-label', text: name });
     const countEl = el('span', { class: 'pjv-tgroup-count', text: String(visibleCount) });
-    const mineChip = g.isMine ? el('span', { class: 'pjv-list-mine-chip', title: '내가 참여한 폴더', text: '내 폴더' }) : null;
+    const mineChip = g.isMine ? el('span', { class: 'pjv-list-mine-chip', title: '내가 참여한 리스트', text: '내 리스트' }) : null;
     const main = el('div', { class: 'pjv-list-head-main' }, gcaret, dot, labelEl, countEl, mineChip);
-    // 실제 리스트만 멤버 페이스파일(클릭→멤버 관리, 조용히 저장) + ⋯(이름·색·삭제). 미분류는 액션 없음.
+    // 실제 리스트만 멤버 페이스파일(클릭→멤버 관리, 조용히 저장) + ⋯(리스트 설정). 미분류는 액션 없음.
     const actions = el('div', { class: 'pjv-list-head-actions' });
     if (!isUn) {
         const memberCell = pjvProjTeamControl(members, (ids) => pjvSaveListMembers(list.id, ids));
         memberCell.classList.add('pjv-list-members');
-        memberCell.title = '폴더 참여 멤버 (참여하면 이 폴더가 기본으로 펼쳐집니다)';
+        memberCell.title = '리스트 참여 멤버 (참여하면 이 리스트가 기본으로 펼쳐집니다)';
         actions.append(memberCell, pjvListMore(list, reload));
     }
     const headEl = el('div', { class: 'pjv-tgroup-head pjv-list-head' + (isUn ? ' pjv-list-head-un' : '') }, main, actions);
@@ -471,24 +531,84 @@ function pjvListColHead(fields, anchorId, reload) {
     headEl.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     return headEl;
 }
-// 폴더 ⋯ 메뉴 항목(공용) — 인라인 폴더 그룹 헤더·좌측 사이드바 항목 양쪽에서 재사용(#453 설정 · #454 프로젝트 관리 · 삭제).
-function pjvFolderMenuItems(menu, close, list, reload) {
-    const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = (e) => { e.stopPropagation(); close(); fn(); }; return b; };
-    menu.append(mk('폴더 설정 (이름·색·멤버)', () => openListForm(reload, list))); // #453 — 만든 뒤에도 속성 수정
-    menu.append(mk('이 폴더의 프로젝트 관리', () => pjvManageFolderProjects(list, reload))); // #454 — 넣고 빼기
+// 리스트 설정 팝아웃(클릭업 List settings 의 필요 부분집합, #475) — 사이드바 리스트 ⋯ · 인라인 리스트 헤더 ⋯ 공용.
+//  이름·색·아이콘·멤버·공개범위(리스트 설정) / 상태(Task statuses) / 폴더로 이동 / 프로젝트 관리 / 삭제.
+function pjvListSettingsMenu(menu, close, list, reload) {
+    const mk = (label, fn, danger, sub) => {
+        const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label }), sub ? el('span', { class: 'pjv-menu-caret', text: '›' }) : null);
+        b.onclick = (e) => { e.stopPropagation(); if (sub) {
+            fn();
+        }
+        else {
+            close();
+            fn();
+        } };
+        return b;
+    };
+    menu.append(el('div', { class: 'pjv-menu-head', text: list.name }));
+    menu.append(mk('리스트 설정 (이름·색·아이콘·멤버·공개범위)', () => openListForm(reload, list)));
+    menu.append(mk('상태 (Task statuses)', () => pjvListStatusEditor(list, reload)));
+    menu.append(mk('폴더로 이동', () => pjvListFolderSubmenu(menu, close, list, reload), false, true));
+    menu.append(mk('이 리스트의 프로젝트 관리', () => pjvManageFolderProjects(list, reload)));
     menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
-    menu.append(mk('폴더 삭제', () => pjvDeleteList(list, reload), true));
+    menu.append(mk('리스트 삭제', () => pjvDeleteList(list, reload), true));
 }
-// 리스트 ⋯ 메뉴(인라인 폴더 그룹 헤더) — 공용 항목 사용.
+// '폴더로 이동' 하위 — 같은 팝오버 안에서 폴더 목록으로 교체(뒤로가기 포함). 폴더를 그 자리에서 fetch.
+function pjvListFolderSubmenu(menu, close, list, reload) {
+    const back = el('button', { class: 'pjv-menu-item pjv-menu-back', type: 'button' }, el('span', { class: 'pjv-menu-caret', text: '‹' }), el('span', { text: '뒤로' }));
+    back.onclick = (e) => { e.stopPropagation(); menu.replaceChildren(); pjvListSettingsMenu(menu, close, list, reload); };
+    menu.replaceChildren(back, el('div', { class: 'pjv-menu-head', text: '폴더로 이동' }), el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+    api('/api/ui/v6/project-folders').then((d) => {
+        const folders = (d && d.folders) || [];
+        menu.replaceChildren(back, el('div', { class: 'pjv-menu-head', text: '폴더로 이동' }));
+        const mkItem = (label, folderId, color) => {
+            const cur = (list.folder_id == null ? folderId == null : String(list.folder_id) === String(folderId));
+            const item = el('button', { class: 'pjv-menu-item' + (cur ? ' sel' : ''), type: 'button' }, color !== undefined ? pjvBundleIcon(color, folderId == null ? 'none' : undefined) : null, el('span', { class: 'pjv-asg-mname', text: label }), el('span', { class: 'pjv-asg-check', text: cur ? '✓' : '' }));
+            item.onclick = async (e) => {
+                e.stopPropagation();
+                close();
+                if (cur)
+                    return;
+                try {
+                    await api('/api/ui/v6/project-lists/' + list.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: folderId }) });
+                    toast(folderId == null ? '폴더에서 뺐습니다' : '폴더로 옮겼습니다');
+                    if (reload)
+                        reload();
+                }
+                catch (err) {
+                    toast('이동 실패 — ' + err.message, true);
+                }
+            };
+            return item;
+        };
+        menu.append(mkItem('폴더 없음 (최상위)', null, null));
+        for (const f of folders)
+            menu.append(mkItem(f.name, f.id, f.color || 'var(--muted-2)'));
+        const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
+        addNew.onclick = (e) => { e.stopPropagation(); close(); openFolderForm(reload); };
+        menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
+    }).catch((err) => menu.replaceChildren(back, el('div', { class: 'pjv-menu-empty', text: '폴더를 불러오지 못했어요 — ' + err.message })));
+}
+// 인라인 리스트 그룹 헤더의 ⋯ — 리스트 설정 팝아웃.
 function pjvListMore(list, reload) {
-    const btn = el('button', { class: 'pjv-trow-more', type: 'button', title: '폴더 작업', 'aria-label': '폴더 작업', text: '⋯' });
+    const btn = el('button', { class: 'pjv-trow-more', type: 'button', title: '리스트 설정', 'aria-label': '리스트 설정', text: '⋯' });
     btn.onclick = (e) => {
         e.stopPropagation();
-        const menu = el('div', { class: 'pjv-menu' });
+        const menu = el('div', { class: 'pjv-menu pjv-listset-menu' });
         const close = pjvPopover(btn, menu);
-        pjvFolderMenuItems(menu, close, list, reload);
+        pjvListSettingsMenu(menu, close, list, reload);
     };
     return btn;
+}
+// 리스트 글리프(사이드바) — settings.icon 이모지가 있으면 그것, 없으면 리스트 색의 체크리스트 글리프(클릭업 List 아이콘).
+function pjvListGlyph(list) {
+    const emoji = list && list.settings && list.settings.icon;
+    if (emoji)
+        return el('span', { class: 'pjv-side-listemoji', text: String(emoji) });
+    const color = (list && list.color) || avatarColor('list' + (list ? list.id : ''));
+    const n = sv('svg', { class: 'pjv-side-listglyph', viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M4 7l1.6 1.6L8.4 5.6' }), sv('path', { d: 'M11 7h9' }), sv('path', { d: 'M4 15l1.6 1.6L8.4 13.6' }), sv('path', { d: 'M11 15h9' }));
+    return n;
 }
 // 폴더에 프로젝트 넣고 빼기 모달(#454) — 이 폴더의 프로젝트(빼기) + 다른 프로젝트 검색해 추가. 이동은 즉시 반영 + 보드 리로드.
 //  검색 입력은 고정하고 목록 컨테이너만 다시 그린다(타이핑 중 포커스 유지).
@@ -502,7 +622,7 @@ function pjvManageFolderProjects(list, reload) {
         try {
             await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) });
             p.list_id = listId;
-            toast(listId == null ? '폴더에서 뺐습니다' : '이 폴더에 넣었습니다');
+            toast(listId == null ? '리스트에서 뺐습니다' : '이 리스트에 넣었습니다');
             paint();
             if (reload)
                 reload();
@@ -513,19 +633,19 @@ function pjvManageFolderProjects(list, reload) {
     };
     const paint = () => {
         const inFolder = all.filter((p) => String(p.list_id) === String(list.id));
-        inHead.textContent = '이 폴더의 프로젝트 (' + inFolder.length + ')';
+        inHead.textContent = '이 리스트의 프로젝트 (' + inFolder.length + ')';
         inList.replaceChildren(...(inFolder.length
             ? inFolder.map((p) => el('div', { class: 'pjv-foldman-row' }, el('span', { class: 'pjv-foldman-name' + (p.status === 'done' ? ' done' : ''), text: p.name }), el('button', { class: 'pjv-foldman-btn', type: 'button', text: '빼기', onclick: () => move(p, null) })))
-            : [el('div', { class: 'pjv-menu-empty', text: '이 폴더에 든 프로젝트가 없어요. 아래에서 추가하세요.' })]));
+            : [el('div', { class: 'pjv-menu-empty', text: '이 리스트에 든 프로젝트가 없어요. 아래에서 추가하세요.' })]));
         const q = searchIn.value.trim().toLowerCase();
         const others = all.filter((p) => String(p.list_id) !== String(list.id) && (!q || (p.name || '').toLowerCase().includes(q)));
         otherList.replaceChildren(...(others.length
-            ? others.slice(0, 50).map((p) => el('div', { class: 'pjv-foldman-row' }, el('span', { class: 'pjv-foldman-name' + (p.status === 'done' ? ' done' : ''), text: p.name }), p.list_id != null ? el('span', { class: 'pjv-foldman-cur', text: '다른 폴더' }) : null, el('button', { class: 'pjv-foldman-btn add', type: 'button', text: '＋ 추가', onclick: () => move(p, list.id) })))
+            ? others.slice(0, 50).map((p) => el('div', { class: 'pjv-foldman-row' }, el('span', { class: 'pjv-foldman-name' + (p.status === 'done' ? ' done' : ''), text: p.name }), p.list_id != null ? el('span', { class: 'pjv-foldman-cur', text: '다른 리스트' }) : null, el('button', { class: 'pjv-foldman-btn add', type: 'button', text: '＋ 추가', onclick: () => move(p, list.id) })))
             : [el('div', { class: 'pjv-menu-empty', text: q ? '일치하는 프로젝트가 없어요.' : '추가할 프로젝트가 없어요.' })]));
     };
     searchIn.addEventListener('input', paint);
-    const box = el('div', { class: 'pjv-foldman' }, inHead, inList, el('div', { class: 'pjv-foldman-sec-h', style: 'margin-top:16px', text: '폴더에 추가' }), searchIn, otherList);
-    const back = overlayBox('‘' + list.name + '’ 폴더 — 프로젝트 넣고 빼기', box, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));
+    const box = el('div', { class: 'pjv-foldman' }, inHead, inList, el('div', { class: 'pjv-foldman-sec-h', style: 'margin-top:16px', text: '리스트에 추가' }), searchIn, otherList);
+    const back = overlayBox('‘' + list.name + '’ 리스트 — 프로젝트 넣고 빼기', box, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));
     inList.append(el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
     api('/api/ui/v6/projects').then((d) => { all = (d && d.projects) || []; paint(); setTimeout(() => searchIn.focus(), 0); })
         .catch((e) => inList.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '프로젝트를 불러오지 못했어요 — ' + e.message })));
@@ -552,18 +672,18 @@ function pjvFolderDropTarget(elm, targetListId, reload) {
         const pid = pjvFolderDrag.id;
         pjvFolderDrag.id = null;
         api('/api/ui/v6/projects/' + pid + '/list', { method: 'POST', body: JSON.stringify({ list_id: targetListId }) })
-            .then(() => { toast(targetListId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다'); if (reload)
+            .then(() => { toast(targetListId == null ? '미분류로 옮겼습니다' : '리스트로 옮겼습니다'); if (reload)
             reload(); })
             .catch((e) => toast('이동 실패 — ' + e.message, true));
     });
 }
 function pjvDeleteList(list, reload) {
-    if (!confirm('폴더 ‘' + list.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).'))
+    if (!confirm('리스트 ‘' + list.name + '’을(를) 삭제할까요?\n\n리스트만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).'))
         return;
     (async () => {
         try {
             await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST' });
-            toast('폴더를 삭제했습니다');
+            toast('리스트를 삭제했습니다');
             reload();
         }
         catch (e) {
@@ -574,17 +694,36 @@ function pjvDeleteList(list, reload) {
 // 리스트 멤버 저장(조용히 — 팝오버 안에서 연속 토글, reload 없음). 멤버십 변화는 다음 렌더에 펼침/접힘으로 반영.
 function pjvSaveListMembers(id, ids) {
     return api('/api/ui/v6/project-lists/' + id + '/members', { method: 'POST', body: JSON.stringify({ members: ids }) })
-        .catch((e) => toast('폴더 멤버 저장 실패 — ' + e.message, true));
+        .catch((e) => toast('리스트 멤버 저장 실패 — ' + e.message, true));
 }
-// 리스트 색 팔레트(생성/수정 폼). 빈값='자동'(id 해시색).
-const PJV_LIST_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b'];
-// 새 리스트 / 리스트 수정 폼 — 이름·색 (+ 생성 시 참여 멤버). 저장 후 reload.
-//  opts.onCreated(list) — 생성(수정 아님) 성공 시 새로 만든 영역(서버 응답 { list })을 넘긴다.
-//  새 프로젝트 모달의 분류(영역) 피커가 인라인으로 영역을 만들고 곧장 선택하는 데 쓴다(#337).
-function openListForm(reload, list, opts) {
-    const editing = !!list;
-    const nameIn = el('input', { type: 'text', value: editing ? list.name : '', placeholder: '폴더 이름 (예: 컨텍스트 저장소)', maxlength: '120' });
-    let color = editing ? (list.color || '') : '';
+// ── 폴더(project_folder) CRUD·메뉴(#475) — 폴더는 정리용(멤버·권한 없음). 리스트를 담아 사이드바에서 폴더›리스트로. ──
+function pjvFolderTreeMenu(menu, close, folder, reload) {
+    const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = (e) => { e.stopPropagation(); close(); fn(); }; return b; };
+    menu.append(el('div', { class: 'pjv-menu-head', text: folder.name }));
+    menu.append(mk('폴더 설정 (이름·색)', () => openFolderForm(reload, folder)));
+    menu.append(mk('이 폴더에 새 리스트', () => openListForm(reload, undefined, { folderId: folder.id })));
+    menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
+    menu.append(mk('폴더 삭제', () => pjvDeleteFolder(folder, reload), true));
+}
+function pjvDeleteFolder(folder, reload) {
+    if (!confirm('폴더 ‘' + folder.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 리스트는 ‘최상위(폴더 없음)’로 이동합니다(리스트·프로젝트는 보존).'))
+        return;
+    (async () => {
+        try {
+            await api('/api/ui/v6/project-folders/' + folder.id + '/delete', { method: 'POST' });
+            toast('폴더를 삭제했습니다');
+            reload();
+        }
+        catch (e) {
+            toast('삭제 실패 — ' + e.message, true);
+        }
+    })();
+}
+// 새 폴더 / 폴더 수정 폼 — 이름·색(정리용, 멤버 없음).
+function openFolderForm(reload, folder) {
+    const editing = !!folder;
+    const nameIn = el('input', { type: 'text', value: editing ? folder.name : '', placeholder: '폴더 이름 (예: 개인신용대출)', maxlength: '120' });
+    let color = editing ? (folder.color || '') : '';
     const swatches = el('div', { class: 'pjv-color-swatches' });
     const paintSw = () => {
         const none = el('button', { class: 'pjv-sw pjv-sw-none' + (color ? '' : ' on'), type: 'button', title: '자동(이름 해시색)', text: 'A' });
@@ -596,16 +735,9 @@ function openListForm(reload, list, opts) {
         }));
     };
     paintSw();
-    // 멤버 — 생성뿐 아니라 수정 때도 편집 가능(#453: 폴더 만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
-    const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
     const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const rows = [
-        el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
-        el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
-        el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '참여 멤버 (이 폴더를 펼쳐 보는 사람)' }), picker.box),
-    ];
-    const back = overlayBox(editing ? '폴더 수정' : '새 폴더', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox(editing ? '폴더 수정' : '새 폴더', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches), el('div', { class: 'pjv-side-nav-hint', style: 'margin-top:10px', text: '폴더는 정리용이에요 — 멤버·공개범위·상태는 리스트에서 설정해요.' }), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
     const go = async () => {
         const nm = nameIn.value.trim();
@@ -616,15 +748,10 @@ function openListForm(reload, list, opts) {
         }
         saveBtn.disabled = true;
         try {
-            if (editing) {
-                await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
-                await pjvSaveListMembers(list.id, picker.getSelected());
-            }
-            else {
-                const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker.getSelected() }) });
-                if (opts && opts.onCreated)
-                    opts.onCreated((res && res.list) || null);
-            }
+            if (editing)
+                await api('/api/ui/v6/project-folders/' + folder.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+            else
+                await api('/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
             back.remove();
             toast(editing ? '폴더를 수정했습니다' : '폴더를 만들었습니다');
             if (reload)
@@ -640,11 +767,233 @@ function openListForm(reload, list, opts) {
         go(); });
     return back;
 }
+// 리스트 색 팔레트(생성/수정 폼). 빈값='자동'(id 해시색).
+const PJV_LIST_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b'];
+// 새 리스트 / 리스트 수정 폼 — 이름·색 (+ 생성 시 참여 멤버). 저장 후 reload.
+//  opts.onCreated(list) — 생성(수정 아님) 성공 시 새로 만든 영역(서버 응답 { list })을 넘긴다.
+//  새 프로젝트 모달의 분류(영역) 피커가 인라인으로 영역을 만들고 곧장 선택하는 데 쓴다(#337).
+// 리스트 설정 아이콘 후보(이모지) — 색 체크글리프 대신 리스트마다 이모지 지정(#475 Color & Icon).
+const PJV_LIST_ICONS = ['📁', '📗', '📘', '📙', '💎', '⚙️', '🚀', '🧭', '🧱', '🗂️', '📊', '🔒', '💡', '🎯', '🧪'];
+function openListForm(reload, list, opts) {
+    opts = opts || {};
+    const editing = !!list;
+    const nameIn = el('input', { type: 'text', value: editing ? list.name : '', placeholder: '리스트 이름 (예: 컨텍스트 저장소)', maxlength: '120' });
+    let color = editing ? (list.color || '') : '';
+    const swatches = el('div', { class: 'pjv-color-swatches' });
+    const paintSw = () => {
+        const none = el('button', { class: 'pjv-sw pjv-sw-none' + (color ? '' : ' on'), type: 'button', title: '자동(이름 해시색)', text: 'A' });
+        none.onclick = () => { color = ''; paintSw(); };
+        swatches.replaceChildren(none, ...PJV_LIST_COLORS.map((c) => {
+            const s = el('button', { class: 'pjv-sw' + (color === c ? ' on' : ''), type: 'button', style: 'background:' + c, title: c });
+            s.onclick = () => { color = c; paintSw(); };
+            return s;
+        }));
+    };
+    paintSw();
+    // 아이콘(이모지) — settings.icon. 빈값=색 체크글리프(기본).
+    let icon = editing ? ((list.settings && list.settings.icon) || '') : '';
+    const iconRow = el('div', { class: 'pjv-icon-swatches' });
+    const paintIcon = () => {
+        const none = el('button', { class: 'pjv-sw pjv-sw-none' + (icon ? '' : ' on'), type: 'button', title: '기본(색 체크)', text: '∅' });
+        none.onclick = () => { icon = ''; paintIcon(); };
+        iconRow.replaceChildren(none, ...PJV_LIST_ICONS.map((em) => {
+            const s = el('button', { class: 'pjv-sw pjv-sw-emoji' + (icon === em ? ' on' : ''), type: 'button', text: em, title: em });
+            s.onclick = () => { icon = em; paintIcon(); };
+            return s;
+        }));
+    };
+    paintIcon();
+    // 공개범위 — open(전원) / members(리스트 멤버만). 기본 open.
+    let visibility = editing ? (list.visibility || 'open') : 'open';
+    const visRow = pjvSwitchRow('공개범위를 멤버로 제한 (멤버가 아니면 이 리스트·프로젝트가 안 보여요)', () => visibility === 'members', (on) => { visibility = on ? 'members' : 'open'; }, () => { });
+    // 멤버 — 생성뿐 아니라 수정 때도 편집(만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
+    const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
+    const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+    const rows = [
+        el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
+        el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
+        el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '아이콘' }), iconRow),
+        el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '참여 멤버 (이 리스트를 기본으로 펼쳐 보는 사람)' }), picker.box),
+        el('div', { class: 'field', style: 'margin-top:12px' }, visRow),
+    ];
+    const back = overlayBox(editing ? '리스트 설정' : '새 리스트', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
+    const go = async () => {
+        const nm = nameIn.value.trim();
+        if (!nm) {
+            nameIn.focus();
+            toast('이름을 입력하세요', true);
+            return;
+        }
+        saveBtn.disabled = true;
+        try {
+            if (editing) {
+                await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, visibility }) });
+                await api('/api/ui/v6/project-lists/' + list.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { icon: icon || null } }) }).catch(() => { });
+                await pjvSaveListMembers(list.id, picker.getSelected());
+            }
+            else {
+                const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker.getSelected() }) });
+                const created = (res && res.list) || null;
+                if (created && created.id) {
+                    if (visibility !== 'open')
+                        await api('/api/ui/v6/project-lists/' + created.id, { method: 'POST', body: JSON.stringify({ visibility }) }).catch(() => { });
+                    if (icon)
+                        await api('/api/ui/v6/project-lists/' + created.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { icon } }) }).catch(() => { });
+                    if (opts.folderId != null)
+                        await api('/api/ui/v6/project-lists/' + created.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: opts.folderId }) }).catch(() => { });
+                }
+                if (opts.onCreated)
+                    opts.onCreated(created);
+            }
+            back.remove();
+            toast(editing ? '리스트를 수정했습니다' : '리스트를 만들었습니다');
+            if (reload)
+                reload();
+        }
+        catch (e) {
+            toast('실패 — ' + e.message, true);
+            saveBtn.disabled = false;
+        }
+    };
+    saveBtn.onclick = go;
+    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter')
+        go(); });
+    return back;
+}
+// ══════════════════════════════════════════════════════════════════════════
+// 리스트별 상태 편집기(#475 Task statuses) — 클릭업 'Edit statuses' 화면 대응.
+//  할 일/진행 중/완료 3버킷 안에 커스텀 단계(기획중·개발중·QA중·보류 등)를 추가/이름·색/정렬/삭제.
+//  저장: settings.statusMode('inherit'|'custom') + settings.statuses[{key,label,color,category}] (/project-lists/:id/settings).
+// ══════════════════════════════════════════════════════════════════════════
+function pjvListStatusEditor(list, reload) {
+    let mode = pjvListIsCustomStatus(list) ? 'custom' : 'inherit';
+    // 작업용 복사본 — 커스텀이면 현재 정의, 아니면 기본 3단계 복사(커스텀 전환 시 출발점).
+    let defs = pjvListStatusDefs(list).map((d) => ({ key: d.key, label: d.label, color: d.color, category: d.category }));
+    let keySeq = 1;
+    const genKey = (label) => {
+        const base = String(label || 'status').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'status';
+        let k = base;
+        while (defs.some((d) => d.key === k))
+            k = base + '-' + (keySeq++);
+        return k;
+    };
+    const groupsBox = el('div', { class: 'pjv-statused-groups' });
+    const moveDef = (d, dir) => {
+        const sameCat = defs.filter((x) => x.category === d.category);
+        const i = sameCat.indexOf(d);
+        const j = i + dir;
+        if (j < 0 || j >= sameCat.length)
+            return;
+        // 전체 defs 배열에서 두 항목 위치 교환.
+        const gi = defs.indexOf(sameCat[i]);
+        const gj = defs.indexOf(sameCat[j]);
+        [defs[gi], defs[gj]] = [defs[gj], defs[gi]];
+        paint();
+    };
+    const delDef = (d) => {
+        const sameCat = defs.filter((x) => x.category === d.category);
+        if (sameCat.length <= 1) {
+            toast('각 버킷에 최소 1개 상태는 있어야 해요', true);
+            return;
+        }
+        defs = defs.filter((x) => x !== d);
+        paint();
+    };
+    const addDef = (category) => {
+        const label = '새 상태';
+        defs.push({ key: genKey(label), label, color: PJV_LIST_COLORS[defs.length % PJV_LIST_COLORS.length], category });
+        paint();
+    };
+    const pickColor = (anchor, d) => {
+        const menu = el('div', { class: 'pjv-menu pjv-color-pop' });
+        const close = pjvPopover(anchor, menu);
+        const wrap = el('div', { class: 'pjv-color-swatches' });
+        for (const c of PJV_LIST_COLORS) {
+            const s = el('button', { class: 'pjv-sw' + (d.color === c ? ' on' : ''), type: 'button', style: 'background:' + c, title: c });
+            s.onclick = () => { d.color = c; close(); paint(); };
+            wrap.append(s);
+        }
+        menu.append(wrap);
+    };
+    const paint = () => {
+        groupsBox.classList.toggle('inherit', mode !== 'custom');
+        groupsBox.replaceChildren();
+        for (const cat of PJV_STATUS_CATS) {
+            const rows = el('div', { class: 'pjv-statused-rows' });
+            for (const d of defs.filter((x) => x.category === cat.key)) {
+                const dot = el('button', { class: 'pjv-status-dot pjv-status-custom ' + pjvCatMeta(cat.key).cls, type: 'button', style: '--sc:' + d.color, title: '색 변경' }, pjvCatMeta(cat.key).glyph ? el('span', { class: 'pjv-status-glyph', text: pjvCatMeta(cat.key).glyph }) : null);
+                dot.onclick = (e) => { e.stopPropagation(); if (mode === 'custom')
+                    pickColor(dot, d); };
+                const nameIn = el('input', { class: 'pjv-statused-name', type: 'text', value: d.label, maxlength: '40', disabled: mode !== 'custom' ? 'disabled' : undefined });
+                nameIn.addEventListener('input', () => { d.label = nameIn.value; });
+                const more = el('button', { class: 'pjv-trow-more', type: 'button', title: '상태 작업', text: '⋯' });
+                more.onclick = (e) => {
+                    e.stopPropagation();
+                    const m = el('div', { class: 'pjv-menu' });
+                    const close = pjvPopover(more, m);
+                    const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
+                    m.append(mk('위로', () => moveDef(d, -1)), mk('아래로', () => moveDef(d, 1)), el('div', { class: 'pjv-bulk-sep-h' }), mk('삭제', () => delDef(d), true));
+                };
+                rows.append(el('div', { class: 'pjv-statused-row' }, el('span', { class: 'pjv-statused-grip', 'aria-hidden': 'true', text: '⠿' }), dot, nameIn, mode === 'custom' ? more : null));
+            }
+            const addBtn = el('button', { class: 'pjv-statused-add', type: 'button', onclick: () => addDef(cat.key) }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '상태 추가' }));
+            groupsBox.append(el('div', { class: 'pjv-statused-cat' }, el('div', { class: 'pjv-statused-cat-h', text: cat.label }), rows, mode === 'custom' ? addBtn : null));
+        }
+    };
+    // 좌측 — 상태 타입 라디오.
+    const radio = (val, label, hint) => {
+        const on = mode === val;
+        const r = el('button', { class: 'pjv-statused-radio' + (on ? ' on' : ''), type: 'button' }, el('span', { class: 'pjv-statused-radio-mark' }), el('span', {}, el('div', { class: 'pjv-statused-radio-label', text: label }), el('div', { class: 'pjv-statused-radio-hint', text: hint })));
+        r.onclick = () => { mode = val; paintRadios(); paint(); };
+        return r;
+    };
+    const radios = el('div', { class: 'pjv-statused-radios' });
+    const paintRadios = () => radios.replaceChildren(radio('inherit', '기본 상태 사용', '할 일 · 진행 중 · 완료 (표준 3단계)'), radio('custom', '커스텀 상태 사용', '버킷 안에 중간 단계를 자유롭게'));
+    paintRadios();
+    paint();
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+    const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+    const layout = el('div', { class: 'pjv-statused' }, el('div', { class: 'pjv-statused-left' }, el('div', { class: 'field-label', text: '상태 유형' }), radios), el('div', { class: 'pjv-statused-right' }, groupsBox));
+    const back = overlayBox('‘' + list.name + '’ 상태 편집', layout, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    saveBtn.onclick = async () => {
+        // 검증 — 커스텀이면 각 상태 라벨 채우고, 각 버킷 최소 1개.
+        let statuses = [];
+        if (mode === 'custom') {
+            for (const d of defs) {
+                if (!String(d.label).trim()) {
+                    toast('상태 이름을 모두 입력하세요', true);
+                    return;
+                }
+            }
+            for (const cat of PJV_STATUS_CATS)
+                if (!defs.some((d) => d.category === cat.key)) {
+                    toast('‘' + cat.label + '’에 상태가 최소 1개 필요해요', true);
+                    return;
+                }
+            statuses = defs.map((d) => ({ key: d.key, label: String(d.label).trim(), color: d.color, category: d.category }));
+        }
+        saveBtn.disabled = true;
+        try {
+            await api('/api/ui/v6/project-lists/' + list.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { statusMode: mode, statuses } }) });
+            back.remove();
+            toast('상태를 저장했습니다');
+            if (reload)
+                reload();
+        }
+        catch (e) {
+            toast('저장 실패 — ' + e.message, true);
+            saveBtn.disabled = false;
+        }
+    };
+    return back;
+}
 // 프로젝트를 다른 리스트로 이동(또는 미분류로) — 행 ⋯ 메뉴에서 호출. 리스트 목록을 그 자리에서 fetch.
 function pjvMoveProjectList(anchor, p, reload) {
     const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
     const close = pjvPopover(anchor, menu);
-    const head = el('div', { class: 'pjv-menu-head', text: '폴더로 이동' });
+    const head = el('div', { class: 'pjv-menu-head', text: '리스트로 이동' });
     menu.append(head, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
     api('/api/ui/v6/project-lists').then((d) => {
         const lists = (d && d.lists) || [];
@@ -659,7 +1008,7 @@ function pjvMoveProjectList(anchor, p, reload) {
                     return;
                 try {
                     await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) });
-                    toast(listId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다');
+                    toast(listId == null ? '미분류로 옮겼습니다' : '리스트로 옮겼습니다');
                     if (reload)
                         reload();
                 }
@@ -672,10 +1021,10 @@ function pjvMoveProjectList(anchor, p, reload) {
         menu.append(mkItem('기타 (미분류)', null, null));
         for (const l of lists)
             menu.append(mkItem(l.name, l.id, l.color || avatarColor('list' + l.id)));
-        const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
+        const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 리스트…' }));
         addNew.onclick = (e) => { e.stopPropagation(); close(); openListForm(reload); };
         menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
-    }).catch((err) => menu.replaceChildren(head, el('div', { class: 'pjv-menu-empty', text: '폴더를 불러오지 못했어요 — ' + err.message })));
+    }).catch((err) => menu.replaceChildren(head, el('div', { class: 'pjv-menu-empty', text: '리스트를 불러오지 못했어요 — ' + err.message })));
 }
 // 보드 한 섹션(진행 중 / 완료) — 카드 + 개수 배지 + 타일 그리드. renderProjects 의 projectSection 짜임 재사용.
 function pjvBoardTile(p) {
@@ -707,6 +1056,131 @@ function pjvProjStatusMeta(status) {
         return { key: 'todo', label: '할 일', cls: 'todo', glyph: '' };
     return { key: 'in_progress', label: '진행 중', cls: 'inprog', glyph: '◐' };
 }
+// ══════════════════════════════════════════════════════════════════════════
+// 리스트별 커스텀 상태(#475 Task statuses) — 고정 3버킷(할 일/진행 중/완료) 안에 사용자 정의 단계.
+//  저장: project_list.settings.statusMode('inherit'|'custom') + settings.statuses[{key,label,color,category}].
+//  프로젝트엔 status(CHECK 유효 네이티브 투영: todo|in_progress|done) + status_raw(커스텀 상태 키, 개방 어휘)로 저장.
+// ══════════════════════════════════════════════════════════════════════════
+const PJV_DEFAULT_STATUS_DEFS = [
+    { key: 'active', label: '진행 중', color: '#f59e0b', category: 'active' },
+    { key: 'todo', label: '할 일', color: '#94a3b8', category: 'todo' },
+    { key: 'done', label: '완료', color: '#22c55e', category: 'done' },
+];
+// 카테고리(버킷) — 보드 표시 순서: 진행 중 → 할 일 → 완료(기존 보드 관례 유지).
+const PJV_STATUS_CATS = [
+    { key: 'active', label: '진행 중' },
+    { key: 'todo', label: '할 일' },
+    { key: 'done', label: '완료' },
+];
+// 커스텀 상태 category → 저장할 네이티브 status(CHECK 유효). 완료=done, 할 일=todo, 그 외=in_progress.
+function pjvNativeStatusOf(category) { return category === 'done' ? 'done' : (category === 'todo' ? 'todo' : 'in_progress'); }
+function pjvListIsCustomStatus(list) {
+    const s = list && list.settings;
+    return !!(s && s.statusMode === 'custom' && Array.isArray(s.statuses) && s.statuses.length);
+}
+// 리스트의 상태 정의(커스텀이면 그것, 아니면 기본 3단계). 항상 {key,label,color,category} 정규화.
+function pjvListStatusDefs(list) {
+    if (pjvListIsCustomStatus(list)) {
+        return list.settings.statuses.filter((x) => x && x.key).map((x) => ({
+            key: String(x.key), label: String(x.label || x.key), color: x.color || '#94a3b8',
+            category: (x.category === 'todo' || x.category === 'done') ? x.category : 'active',
+        }));
+    }
+    return PJV_DEFAULT_STATUS_DEFS.slice();
+}
+// 보드 렌더 동안 리스트별 커스텀 상태 레지스트리 — 프로젝트 행의 상태 동그라미/메뉴가 소속 리스트 상태를 참조(어느 뷰든).
+let pjvStatusReg = new Map();
+function pjvSetStatusRegistry(lists) {
+    pjvStatusReg = new Map();
+    for (const l of lists || [])
+        if (pjvListIsCustomStatus(l))
+            pjvStatusReg.set(Number(l.id), pjvListStatusDefs(l));
+}
+// 프로젝트의 실제 상태 정의(커스텀 리스트면 커스텀 def, 아니면 null=기본 meta). status_raw 우선, 없으면 카테고리로 흡수.
+function pjvResolveProjStatus(p) {
+    if (p == null || p.list_id == null)
+        return null;
+    const defs = pjvStatusReg.get(Number(p.list_id));
+    if (!defs || !defs.length)
+        return null;
+    const rawKey = p.status_raw || p.status;
+    let d = defs.find((x) => x.key === rawKey);
+    if (!d) {
+        const cat = p.status === 'done' ? 'done' : (p.status === 'todo' ? 'todo' : 'active');
+        d = defs.find((x) => x.category === cat) || null;
+    }
+    return d;
+}
+// 카테고리 → 기본 클래스/글리프(색은 커스텀이면 inline --sc).
+function pjvCatMeta(category) {
+    if (category === 'done')
+        return { cls: 'done', glyph: '✓' };
+    if (category === 'todo')
+        return { cls: 'todo', glyph: '' };
+    return { cls: 'inprog', glyph: '◐' };
+}
+// 커스텀 상태 동그라미 — inline 색(--sc) + 카테고리 글리프. size='sm' 작게.
+function pjvCustomStatusDot(def, size) {
+    const m = pjvCatMeta(def.category);
+    return el('span', { class: 'pjv-status-dot pjv-status-custom ' + m.cls + (size ? ' ' + size : ''), style: '--sc:' + def.color, title: '상태: ' + def.label, 'aria-hidden': 'true' }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+}
+// 프로젝트를 커스텀 상태로 변경 — 네이티브 status 투영 + status_raw(커스텀 키) 저장.
+async function pjvSetProjStatusCustom(id, def, reload) {
+    try {
+        await api('/api/ui/v6/projects/' + id + '/status', { method: 'POST', body: JSON.stringify({ status: pjvNativeStatusOf(def.category), status_raw: def.key }) });
+        toast('‘' + def.label + '’(으)로 옮겼습니다');
+        pjvReloadKeepScroll(reload);
+    }
+    catch (e) {
+        toast('실패 — ' + e.message, true);
+    }
+}
+// 상태 그룹 렌더(사이드바 본문) — 단일 리스트 선택이고 커스텀 상태면 각 상태를 그룹으로(스크린샷),
+//  아니면(전체/폴더/미분류/기본 리스트) 표준 3버킷. #475.
+function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
+    const { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd } = opts;
+    if (selList && pjvListIsCustomStatus(selList)) {
+        const defs = pjvListStatusDefs(selList);
+        // 프로젝트를 상태 def 로 분배 — status_raw/status 매칭, 미스매치는 카테고리 첫 def 로 흡수.
+        const byKey = new Map();
+        for (const d of defs)
+            byKey.set(d.key, []);
+        const firstOfCat = (cat) => defs.find((d) => d.category === cat);
+        for (const p of shownProjects) {
+            let d = defs.find((x) => x.key === (p.status_raw || p.status));
+            if (!d) {
+                const cat = p.status === 'done' ? 'done' : (p.status === 'todo' ? 'todo' : 'active');
+                d = firstOfCat(cat) || defs[0];
+            }
+            const arr = d ? byKey.get(d.key) : null;
+            if (arr)
+                arr.push(p);
+        }
+        // 카테고리 순서로, 각 카테고리 안에서는 정의 순서. 완료(done) 상태는 Closed 토글일 때만.
+        for (const cat of PJV_STATUS_CATS) {
+            for (const d of defs.filter((x) => x.category === cat.key)) {
+                if (cat.key === 'done' && !pjvProjClosedView.done)
+                    continue;
+                const arr = byKey.get(d.key) || [];
+                if (mineOnly && !arr.length)
+                    continue;
+                main.append(pjvProjGroup(d.label, pjvNativeStatusOf(d.category), arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd, d));
+            }
+        }
+        return;
+    }
+    // 표준 3버킷(기존 동작 그대로 — 회귀 없음).
+    const inprog = shownProjects.filter((p) => p.status !== 'done' && p.status !== 'todo');
+    const todo = shownProjects.filter((p) => p.status === 'todo');
+    const done = shownProjects.filter((p) => p.status === 'done');
+    const sub = (label, key, arr) => main.append(pjvProjGroup(label, key, arr, reload, null, canDelete, false, fields, anchorId, meId, taskCtx, undefined, mineOnly, listIdForAdd));
+    if (!mineOnly || inprog.length)
+        sub('진행 중', 'in_progress', inprog);
+    if (!mineOnly || todo.length)
+        sub('할 일', 'todo', todo);
+    if (pjvProjClosedView.done && (!mineOnly || done.length))
+        sub('완료', 'done', done);
+}
 async function pjvSetProjStatus(id, status, reload) {
     try {
         await api('/api/ui/v6/projects/' + id + '/status', { method: 'POST', body: JSON.stringify({ status }) });
@@ -719,8 +1193,30 @@ async function pjvSetProjStatus(id, status, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-// 상태 동그라미(클릭→진행 중/완료 메뉴) — 태스크 pjvStatusControl 과 같은 결.
+// 상태 동그라미(클릭→상태 메뉴) — 태스크 pjvStatusControl 과 같은 결. 소속 리스트가 커스텀 상태면 그 상태들을 제시(#475).
 function pjvProjStatusDot(p, reload) {
+    const defs = (p.list_id != null && pjvStatusReg.get(Number(p.list_id))) || null;
+    if (defs && defs.length) {
+        const cur = pjvResolveProjStatus(p) || defs[0];
+        const m = pjvCatMeta(cur.category);
+        const btn = el('button', { class: 'pjv-status-dot pjv-status-custom ' + m.cls, type: 'button', style: '--sc:' + cur.color,
+            title: '상태: ' + cur.label, 'aria-label': '상태 ' + cur.label }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null);
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = el('div', { class: 'pjv-menu' });
+            const close = pjvPopover(btn, menu);
+            for (const cat of PJV_STATUS_CATS) {
+                for (const d of defs.filter((x) => x.category === cat.key)) {
+                    const isCur = d.key === cur.key;
+                    const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, pjvCustomStatusDot(d, 'sm'), el('span', { text: d.label }));
+                    item.onclick = () => { close(); if (!isCur)
+                        pjvSetProjStatusCustom(p.id, d, reload); };
+                    menu.append(item);
+                }
+            }
+        };
+        return btn;
+    }
     const meta = pjvProjStatusMeta(p.status);
     const btn = el('button', { class: 'pjv-status-dot ' + meta.cls, type: 'button',
         title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
@@ -876,7 +1372,7 @@ function pjvProjMore(p, reload, canDelete) {
         const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
         menu.append(mk('이름 변경', () => pjvProjRename(btn, p, reload), false));
         menu.append(mk(p.status === 'done' ? '진행 중으로' : '완료된 프로젝트로', () => pjvSetProjStatus(p.id, p.status === 'done' ? 'in_progress' : 'done', reload), false));
-        menu.append(mk('폴더 이동', () => pjvMoveProjectList(btn, p, reload), false));
+        menu.append(mk('리스트 이동', () => pjvMoveProjectList(btn, p, reload), false));
         if (canDelete(p))
             menu.append(mk('삭제', () => pjvProjDelete(p, reload), true));
     };
@@ -1037,7 +1533,7 @@ function pjvSelRenderBar() {
         b.onclick = (e) => { e.stopPropagation(); fn(b); };
         return b;
     };
-    pjvBulkBarEl.replaceChildren(el('div', { class: 'pjv-bulk-count' }, el('span', { class: 'pjv-bulk-n', text: String(n) }), el('span', { class: 'pjv-bulk-lbl', text: (isTask ? '태스크' : '프로젝트') + ' 선택됨' }), el('button', { class: 'pjv-bulk-x', type: 'button', title: '선택 해제 (Esc)', text: '✕', onclick: () => pjvSelReset() })), el('div', { class: 'pjv-bulk-actions' }, mk('상태', 'status', pjvBulkStatus), mk('담당자', 'assignee', pjvBulkAssignee), mk('마감일', 'due', pjvBulkDue), mk('우선순위', 'priority', pjvBulkPriority), isTask ? mk('태그', 'tag', pjvBulkTags) : null, !isTask ? mk('폴더', 'list', pjvBulkList) : null, mk('복제', 'dup', () => pjvBulkDuplicate()), mk('삭제', 'trash', () => pjvBulkDelete(), true)), isTask ? el('button', { class: 'pjv-bulk-run', type: 'button', title: '선택한 태스크로 내 새 클로드 세션을 만들고 바로 실행을 맡깁니다',
+    pjvBulkBarEl.replaceChildren(el('div', { class: 'pjv-bulk-count' }, el('span', { class: 'pjv-bulk-n', text: String(n) }), el('span', { class: 'pjv-bulk-lbl', text: (isTask ? '태스크' : '프로젝트') + ' 선택됨' }), el('button', { class: 'pjv-bulk-x', type: 'button', title: '선택 해제 (Esc)', text: '✕', onclick: () => pjvSelReset() })), el('div', { class: 'pjv-bulk-actions' }, mk('상태', 'status', pjvBulkStatus), mk('담당자', 'assignee', pjvBulkAssignee), mk('마감일', 'due', pjvBulkDue), mk('우선순위', 'priority', pjvBulkPriority), isTask ? mk('태그', 'tag', pjvBulkTags) : null, !isTask ? mk('리스트', 'list', pjvBulkList) : null, mk('복제', 'dup', () => pjvBulkDuplicate()), mk('삭제', 'trash', () => pjvBulkDelete(), true)), isTask ? el('button', { class: 'pjv-bulk-run', type: 'button', title: '선택한 태스크로 내 새 클로드 세션을 만들고 바로 실행을 맡깁니다',
         onclick: (e) => { e.stopPropagation(); pjvBulkRunClaude(e.currentTarget); } }, pjvBulkIcon('run'), el('span', { text: '클로드로 실행' })) : null);
 }
 function pjvBulkIcon(kind) {
@@ -1332,7 +1828,7 @@ async function pjvBulkList(anchor) {
         return; // 태스크는 리스트 개념 없음(프로젝트 전용)
     const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
     const close = pjvPopover(anchor, menu);
-    const headEl = el('div', { class: 'pjv-menu-head', text: '선택 프로젝트를 폴더로 이동' });
+    const headEl = el('div', { class: 'pjv-menu-head', text: '선택 프로젝트를 리스트로 이동' });
     menu.append(headEl, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
     let lists = [];
     try {
@@ -1342,7 +1838,7 @@ async function pjvBulkList(anchor) {
     menu.replaceChildren(headEl);
     const mkItem = (label, listId, color) => {
         const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }), el('span', { class: 'pjv-asg-mname', text: label }));
-        item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '폴더로 이동됨'); };
+        item.onclick = () => { close(); pjvBulkApply((id) => api('/api/ui/v6/projects/' + id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) }), '리스트로 이동됨'); };
         return item;
     };
     menu.append(mkItem('기타 (미분류)', null, null));
@@ -1893,24 +2389,25 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     return wrap;
 }
 // 상태 그룹(진행 중/완료) — 헤더(점·라벨·개수·캐럿[, withCols 면 컬럼 라벨]) + 행들. 빈 그룹은 안내.
-function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx, sepTasks, noAdd, listId) {
+function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx, sepTasks, noAdd, listId, statusDef) {
     fields = fields || [];
     sepTasks = sepTasks || [];
-    const meta = pjvProjStatusMeta(statusKey);
+    const meta = statusDef ? { key: pjvNativeStatusOf(statusDef.category), label: statusDef.label, ...pjvCatMeta(statusDef.category) } : pjvProjStatusMeta(statusKey);
+    const cat = statusDef ? statusDef.category : (statusKey === 'done' ? 'done' : (statusKey === 'todo' ? 'todo' : 'active')); // 완료 여부 판정용
     const body = el('div', { class: 'pjv-tgroup-body' });
     const countEl = el('span', { class: 'pjv-tgroup-count', text: String(list.length + sepTasks.length) });
     if (list.length) {
         for (const p of list)
             body.append(pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx));
     }
-    else if (statusKey === 'done' && !sepTasks.length)
+    else if (cat === 'done' && !sepTasks.length)
         body.append(el('div', { class: 'pjv-proj-empty', text: '완료한 프로젝트가 아직 없습니다.' }));
     // 분리(separate) 모드 — 각 프로젝트의 태스크를 상태 버킷에 평면 행으로(프로젝트 행과 같은 그리드). 프로젝트 행 아래, 추가행 위.
     for (const s of sepTasks)
         body.append(pjvProjTaskRow(s.projId, s.task, s.members, reload, 1, fields));
     // 클릭업식 인라인 추가행 — 각 그룹(완료 제외) 맨 아래. 빈 그룹에선 이 행이 '시작하기' CTA. 선택(일괄삭제) 모드에선 숨김.
-    if (!select && statusKey !== 'done' && !noAdd)
-        body.append(pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId));
+    if (!select && cat !== 'done' && !noAdd)
+        body.append(pjvProjAddRow(meta.key, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef));
     let gopen = true;
     const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
     gcaret.onclick = () => {
@@ -1919,8 +2416,11 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
         gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false');
         body.hidden = !gopen;
     };
-    const dot = el('span', { class: 'pjv-status-dot sm ' + meta.cls }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
-    const labelEl = el('span', { class: 'pjv-tgroup-label', text: label });
+    const dot = statusDef ? pjvCustomStatusDot(statusDef, 'sm')
+        : el('span', { class: 'pjv-status-dot sm ' + meta.cls }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+    const labelEl = statusDef
+        ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + statusDef.color, text: label })
+        : el('span', { class: 'pjv-tgroup-label', text: label });
     let head;
     if (withCols) {
         head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret), el('div', { class: 'pjv-tcell pjv-colhead', text: '팀원' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '마감일' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '우선순위' }), el('div', { class: 'pjv-tcell pjv-colhead', text: '내 세션' }), ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
@@ -1934,7 +2434,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
 // 프로젝트 인라인 추가행(클릭업식) — 태스크 add row 와 동형. 클릭→입력칸, Enter=생성(연속 추가 위해 입력 유지·낙관적 삽입), Esc/빈 blur=접기.
 //  생성: POST /v6/projects {name} → 작성자=나(actor) 자동 → 내 보드 노출·삭제권한. '할 일' 그룹이면 생성 후 status=todo 패치(기본 생성은 active=진행 중).
 //  담당자/마감/우선순위는 팀원이 아직 없어 행 생성 후 각 셀에서 지정(여기선 빈 칸으로 컬럼만 정렬). 모달 없이 그 자리에서.
-function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId) {
+function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef) {
     fields = fields || [];
     const row = el('div', { class: 'pjv-addrow' });
     const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
@@ -1956,7 +2456,9 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
     //  프로젝트 행엔 호버 체크박스(16px)가 자리를 차지하므로, 추가행에도 동일 폭 spacer 를 둬 말머리(상태점) 가로 위치를 맞춘다.
     const buildTitleCell = () => {
         const meta = pjvProjStatusMeta(statusKey);
-        return el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }), el('span', { class: 'pjv-status-dot ' + meta.cls, 'aria-hidden': 'true' }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null), input);
+        const dotEl = statusDef ? pjvCustomStatusDot(statusDef)
+            : el('span', { class: 'pjv-status-dot ' + meta.cls, 'aria-hidden': 'true' }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null);
+        return el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }), dotEl, input);
     };
     const collapse = () => { row.classList.remove('editing'); draft.memberIds = []; draft.due_date = draft.priority = null; row.replaceChildren(trigger); };
     const expand = () => {
@@ -1982,7 +2484,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
         }
         modalOpen = true; // blur 가 떠도(팝업으로 포커스 이동) 인라인 행 유지
         const back = openProjectV2Form(reload, {
-            name, status: statusKey, listId,
+            name, status: statusKey, status_raw: statusDef ? statusDef.key : null, listId,
             memberIds: draft.memberIds, due_date: draft.due_date, priority: draft.priority,
         });
         if (back && typeof MutationObserver !== 'undefined') {
@@ -2192,7 +2694,7 @@ function openProjectV2Form(reload, prefill) {
     const listPick = listPicker(prefill.listId); // 분류(영역) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337)
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '분류 (폴더)' }), listPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '분류 (리스트)' }), listPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0); // 프리필된 이름 전체 선택 → 바로 수정/확정 가능
     const go = async () => {
         const name = nameIn.value.trim();
@@ -2205,7 +2707,7 @@ function openProjectV2Form(reload, prefill) {
         await listPick.ready;
         const listChoice = listPick.getSelected();
         if (!listChoice.ok) {
-            toast('폴더를 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true);
+            toast('리스트를 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true);
             return;
         }
         saveBtn.disabled = true;
@@ -2214,9 +2716,9 @@ function openProjectV2Form(reload, prefill) {
                     name, description: descIn.value.trim() || undefined, members: picker.getSelected(),
                 }) });
             const np = r && (r.project || r);
-            // 인라인 '할 일' 그룹에서 연 경우 그 상태로 생성(기본 생성은 active=진행 중) — prefill.status 로 전달.
-            if (np && np.id && prefill.status === 'todo') {
-                await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'todo' }) }).catch(() => { });
+            // 인라인 그룹에서 연 경우 그 상태로 생성(기본 생성은 active=진행 중). 커스텀 상태면 status_raw 도 함께(#475).
+            if (np && np.id && (prefill.status_raw || (prefill.status && prefill.status !== 'active'))) {
+                await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: prefill.status || 'in_progress', status_raw: prefill.status_raw ?? null }) }).catch(() => { });
             }
             // 인라인 추가행에서 지정해 둔 마감·우선순위 드래프트가 있으면 생성 직후 반영.
             if (np && np.id) {
@@ -2578,19 +3080,19 @@ function pjvProjTagsField(p, reload) {
 // 상세 '리스트' 필드 — 소속 리스트(색점+이름, 미분류면 안내) 표시 + 클릭해 변경(리스트 선택/미분류). getProject 가 p.list 부여.
 function pjvProjListField(p, reload) {
     const cur = p.list || null; // { id, name, color } | null
-    const btn = el('button', { class: 'pjv-cell-btn' + (cur ? '' : ' empty'), type: 'button', title: '소속 폴더' });
+    const btn = el('button', { class: 'pjv-cell-btn' + (cur ? '' : ' empty'), type: 'button', title: '소속 리스트' });
     const paint = () => {
         if (cur)
             btn.replaceChildren(el('span', { class: 'pjv-list-dot sm', style: 'background:' + (cur.color || avatarColor('list' + cur.id)) }), el('span', { class: 'pjv-asg-mname', text: cur.name }));
         else
-            btn.replaceChildren(el('span', { class: 'pjv-cell-ph', text: '미분류 — 폴더 지정' }));
+            btn.replaceChildren(el('span', { class: 'pjv-cell-ph', text: '미분류 — 리스트 지정' }));
     };
     paint();
     btn.onclick = (e) => {
         e.stopPropagation();
         const menu = el('div', { class: 'pjv-menu pjv-listmove-pop' });
         const close = pjvPopover(btn, menu);
-        const headEl = el('div', { class: 'pjv-menu-head', text: '폴더' });
+        const headEl = el('div', { class: 'pjv-menu-head', text: '리스트' });
         menu.append(headEl, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
         api('/api/ui/v6/project-lists').then((d) => {
             const lists = (d && d.lists) || [];
@@ -2605,7 +3107,7 @@ function pjvProjListField(p, reload) {
                         return;
                     try {
                         await api('/api/ui/v6/projects/' + p.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listId }) });
-                        toast(listId == null ? '미분류로 옮겼습니다' : '폴더로 옮겼습니다');
+                        toast(listId == null ? '미분류로 옮겼습니다' : '리스트로 옮겼습니다');
                         if (reload)
                             reload();
                     }
@@ -2618,10 +3120,10 @@ function pjvProjListField(p, reload) {
             menu.append(mkItem('기타 (미분류)', null, null));
             for (const l of lists)
                 menu.append(mkItem(l.name, l.id, l.color || avatarColor('list' + l.id)));
-            const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
+            const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 리스트…' }));
             addNew.onclick = (ev) => { ev.stopPropagation(); close(); openListForm(reload); };
             menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
-        }).catch((err) => menu.replaceChildren(headEl, el('div', { class: 'pjv-menu-empty', text: '폴더를 불러오지 못했어요 — ' + err.message })));
+        }).catch((err) => menu.replaceChildren(headEl, el('div', { class: 'pjv-menu-empty', text: '리스트를 불러오지 못했어요 — ' + err.message })));
     };
     return btn;
 }
@@ -2633,7 +3135,7 @@ function pjvProjMetaPanel(p, members, reload) {
     //  흘러 상태·폴더 등과 아이콘/라벨/값 세로선이 정확히 정렬됨).
     return el('div', { class: 'pjv-tm-fields pjv-proj-meta' }, row('←', '선행 프로젝트', pjvProjEdgesField(p, reload, 'out')), row('→', '후속 프로젝트', pjvProjEdgesField(p, reload, 'in')), row('◎', '상태', pjvProjStatusPill(p, reload)), 
     // 소속 리스트(클릭업 List) — 클릭해 변경. 미분류면 '리스트 지정' 안내.
-    row('🗂', '폴더', pjvProjListField(p, reload)), 
+    row('🗂', '리스트', pjvProjListField(p, reload)), 
     // 팀원 = 담당자 — 클릭하면 팀원 목록만 보여주는 보기전용 팝오버(토글 없음). 변경은 '프로젝트 세부 설정'에서만.
     row('👤', '팀원', pjvProjTeamView(members)), row('🗓', '기간', pjvProjDatesField(p, reload)), row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), row('⏱', '시간 추적', pjvProjTimeField(p, reload)), row('🏷', '태그', pjvProjTagsField(p, reload)));
 }
@@ -4160,7 +4662,7 @@ function repoPicker(selectedNames) {
 //   ok=false → 영역이 있는데 아직 미선택(검증에서 막음) · listId=null → 명시적 '기타(미분류)' · 그 외 → 선택한 영역 id.
 //  selectedListId 가 주어지면(특정 영역 추가행에서 연 경우) 그 영역을 미리 선택 — 기존 동작 유지.
 function listPicker(selectedListId) {
-    const sel = el('select', { class: 'pjv-listpick-sel', 'aria-label': '분류(폴더)' });
+    const sel = el('select', { class: 'pjv-listpick-sel', 'aria-label': '분류(리스트)' });
     sel.append(el('option', { value: '', text: '불러오는 중…' }));
     sel.disabled = true;
     const box = el('div', { class: 'pjv-listpick' }, sel);
@@ -4173,11 +4675,11 @@ function listPicker(selectedListId) {
         const opts = [];
         // 미리 선택할 영역이 없으면 placeholder — 영역이 있으면 '선택하세요'(검증에서 막힘), 없으면 '미분류로 생성'(허용).
         if (!has)
-            opts.push(el('option', { value: '', text: loaded.length ? '폴더를 선택하세요…' : '폴더 없음 — 미분류로 생성' }));
+            opts.push(el('option', { value: '', text: loaded.length ? '리스트를 선택하세요…' : '리스트 없음 — 미분류로 생성' }));
         for (const l of loaded)
             opts.push(el('option', { value: 'L' + l.id, text: l.name }));
         opts.push(el('option', { value: '__none__', text: '기타 (미분류)' }));
-        opts.push(el('option', { value: '__new__', text: '＋ 새 폴더 만들기…' }));
+        opts.push(el('option', { value: '__new__', text: '＋ 새 리스트 만들기…' }));
         sel.replaceChildren(...opts);
         sel.value = has ? ('L' + preferId) : '';
         prevValue = sel.value;
@@ -4595,6 +5097,8 @@ const pjvBoardView = { byArea: false, byStatus: true, byFolder: false };
 const pjvFolderDrag = { id: null };
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map();
+// 사이드바 폴더(project_folder) 펼침 상태 — key: folder id. 없으면 기본 펼침(#475 폴더›리스트 트리). 세션 유지.
+const pjvFolderOpen = new Map();
 // 영역 목록에서 선택된 영역 key('L'+id | '__none__' | '__all__'). 세션 유지.
 const pjvSidebarSel = { key: '__all__' };
 // 영역 목록 펼침/접힘(byArea 켜진 상태에서). 접으면 얇은 레일(▶)만, 영역 그룹은 유지. 기본 펼침. 세션 유지.
@@ -4687,7 +5191,7 @@ function pjvViewMenu(anchor, onChange) {
     };
     mkSwitch('byStatus', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서 보여줘요');
     // 폴더로 나누기 — 본문을 폴더별 접이식 구역으로. 켜면 좌측 사이드바(byArea)는 끈다(같은 '폴더로 보기'라 둘 다 켜면 혼란).
-    mkSwitch('byFolder', '폴더로 나누기', '폴더별로 묶어서 한눈에 보여줘요', (on) => { if (on)
+    mkSwitch('byFolder', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요', (on) => { if (on)
         pjvBoardView.byArea = false; });
     syncAll();
 }
@@ -6106,41 +6610,40 @@ function projectTile(p, reload, opts) {
 function memberPicker(preselected, opts) {
     const selected = new Set(preselected || []);
     let all = [];
-    const chips = el('div', { class: 'proj-mp-chips' });
-    const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가…' });
+    // 단일 목록 — 선택된 사람도 위쪽 별도 chips 없이 이 목록에서 ✓ 로 표시하고 클릭으로 토글(해제)한다(#475: 중복 표시 제거).
+    const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가/해제…' });
     const results = el('div', { class: 'proj-mp-results' }, el('span', { class: 'admin-hint', text: '불러오는 중…' }));
-    const box = el('div', { class: 'proj-mp' }, chips, searchIn, results);
-    function paintChips() {
-        const sel = all.filter((m) => selected.has(m.id));
-        if (!sel.length) {
-            chips.replaceChildren(el('span', { class: 'admin-hint', text: '아직 선택된 팀원이 없어요.' }));
-            return;
-        }
-        chips.replaceChildren(...sel.map((m) => el('span', { class: 'proj-mp-chip' }, el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { text: m.display_name || m.id }), el('button', { class: 'proj-mp-chip-x', type: 'button', text: '×', onclick: () => { selected.delete(m.id); paintChips(); paintResults(); } }))));
-    }
+    const box = el('div', { class: 'proj-mp' }, searchIn, results);
     function paintResults() {
         if (!all.length) {
             results.replaceChildren(el('span', { class: 'admin-hint', text: '등록된 사람 구성원이 없습니다.' }));
             return;
         }
         const q = searchIn.value.trim().toLowerCase();
-        const cand = all.filter((m) => !selected.has(m.id) && (!q || (m.display_name || m.id).toLowerCase().includes(q)));
+        const cand = all.filter((m) => !q || (m.display_name || m.id).toLowerCase().includes(q));
+        // 선택된 사람을 위로(선택 상태 한눈에), 그 안/밖은 이름순 유지.
+        cand.sort((a, b) => (selected.has(b.id) ? 1 : 0) - (selected.has(a.id) ? 1 : 0));
         if (!cand.length) {
-            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: q ? '일치하는 사람이 없어요.' : '추가할 수 있는 사람을 모두 골랐어요.' }));
+            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: q ? '일치하는 사람이 없어요.' : '구성원이 없습니다.' }));
             return;
         }
-        results.replaceChildren(...cand.map((m) => el('div', { class: 'proj-mp-row', onclick: () => { selected.add(m.id); searchIn.value = ''; paintChips(); paintResults(); searchIn.focus(); } }, el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: '＋ 추가' }))));
+        results.replaceChildren(...cand.map((m) => {
+            const on = selected.has(m.id);
+            return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), onclick: () => { if (on)
+                    selected.delete(m.id);
+                else
+                    selected.add(m.id); paintResults(); searchIn.focus(); } }, el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: on ? '✓ 선택됨' : '＋ 추가' }));
+        }));
     }
     searchIn.addEventListener('input', paintResults);
     api('/api/ui/dash/members').then((d) => {
         all = (d && d.members) || [];
-        // 생성 폼 기본값: 나(생성자)를 디폴트 선택 — 활성 구성원 목록에 실제 있을 때만(유령 id 방지). ×로 해제 가능.
+        // 생성 폼 기본값: 나(생성자)를 디폴트 선택 — 활성 구성원 목록에 실제 있을 때만(유령 id 방지). 다시 눌러 해제 가능.
         if (opts && opts.includeMe) {
             const meId = state.me && state.me.userId;
             if (meId && all.some((m) => m.id === meId))
                 selected.add(meId);
         }
-        paintChips();
         paintResults();
     })
         .catch(() => results.replaceChildren(el('span', { class: 'admin-hint', text: '팀원 목록을 불러오지 못했습니다.' })));

@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listProjectLists, createProjectList, updateProjectList, deleteProjectList,
-  setProjectListMembers, setProjectListForProject, getProjectListRow,
+  setProjectListMembers, setProjectListForProject, getProjectListRow, setProjectListSettings,
 } from "../v6/list-store.js";
 
 function parseId(v: unknown): number {
@@ -42,7 +42,11 @@ const projectListIndexV6: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/project-lists"], parse: () => ({}) }],
   },
-  handler: async () => ({ lists: await listProjectLists() }),
+  // 공개범위 시행(#475): REST(웹)는 viewer 신원으로 members-only 리스트를 비멤버에게서 숨긴다. MCP 는 전체.
+  handler: async (_input: any, user: any, ctx: any) => {
+    const viewerVis = (ctx?.source === "web" || user?.userId) ? (ctx?.actor ?? user?.userId ?? "") : undefined;
+    return { lists: await listProjectLists(viewerVis) };
+  },
 };
 
 // ── 리스트 생성 ──
@@ -88,6 +92,7 @@ const projectListUpdateV6: Capability = {
     name: z.string().min(1).max(120).optional(),
     color: z.string().max(32).nullable().optional(),
     sort: z.number().int().optional(),
+    visibility: z.enum(["open", "members"]).optional(),
   },
   expose: {
     mcp: true,
@@ -103,6 +108,8 @@ const projectListUpdateV6: Capability = {
         }
         if ("color" in b) patch.color = parseColorOrNull(b.color);
         if ("sort" in b) patch.sort = Number(b.sort) || 0;
+        // 공개범위(#475): 'members'=리스트 멤버만 열람, 그 외 값은 'open'(전원).
+        if ("visibility" in b) patch.visibility = String(b.visibility) === "members" ? "members" : "open";
         return patch;
       } }],
   },
@@ -184,7 +191,31 @@ const projectSetListV6: Capability = {
   },
 };
 
+// ── 리스트 목록 UI 커스텀(settings JSONB 얕은 병합) — 기본 보기·표시필드 등 프리퍼런스(#475). ──
+const projectListSetSettingsV6: Capability = {
+  name: "project_list_set_settings_v6",
+  title: "리스트 목록 UI 설정(v6)",
+  description: "리스트의 목록 UI 커스텀 설정(settings)을 얕은 병합으로 갱신한다. 준 키만 덮어쓰고 나머지는 보존, null 값은 키 삭제.",
+  scope: "memory",
+  input: { id: z.number().int().positive(), settings: z.record(z.unknown()) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/project-lists/:id/settings"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const settings = (b.settings && typeof b.settings === "object" && !Array.isArray(b.settings))
+          ? b.settings as Record<string, unknown> : {};
+        return { id: parseId(req.params?.id), settings };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    if (!(await getProjectListRow(input.id))) throw new HttpError(404, `리스트 #${input.id} 없음`);
+    const list = await setProjectListSettings(input.id, input.settings, writeCtxOf(user, ctx));
+    return { list };
+  },
+};
+
 export const listV6Capabilities: Capability[] = [
   projectListIndexV6, projectListCreateV6, projectListUpdateV6, projectListDeleteV6,
-  projectListSetMembersV6, projectSetListV6,
+  projectListSetMembersV6, projectSetListV6, projectListSetSettingsV6,
 ];

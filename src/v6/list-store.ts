@@ -15,6 +15,9 @@ export interface ProjectListRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  folder_id: number | null;  // 소속 폴더(project_folder). null=미분류 폴더. #475 3단계(폴더›리스트›프로젝트).
+  visibility: string;        // 'open'=전원 열람(#280 정합) / 'members'=리스트 멤버만 목록·프로젝트 열람. #475.
+  settings: Record<string, unknown>;  // 리스트 단위 목록 UI 커스텀 백(기본 보기·표시필드 등). #475.
   members: ListMember[];     // 리스트 참여자(표시명 조인) — 보드 페이스파일·내 리스트 판정.
   project_count: number;     // 이 리스트에 속한 프로젝트(level='project') 수.
 }
@@ -24,14 +27,23 @@ const auditList = (key: string, op: string, before: unknown, after: unknown, ctx
 
 // ── 조회 ──────────────────────────────────────────────────────────────────
 // 모든 리스트 + 멤버(표시명) + 프로젝트 수. 보드/사이드바가 소비. 정렬: sort, 이름.
-export async function listProjectLists(): Promise<ProjectListRow[]> {
+//  viewerVis 지정 시(#475) — members-only 리스트는 그 신원이 멤버가 아니면 목록에서 제외(비멤버에게 숨김). 미지정=전체(MCP).
+export async function listProjectLists(viewerVis?: string): Promise<ProjectListRow[]> {
+  const params: unknown[] = [];
+  let visWhere = "";
+  if (viewerVis != null) {
+    params.push(viewerVis);
+    visWhere = `WHERE pl.visibility IS DISTINCT FROM 'members'
+      OR EXISTS(SELECT 1 FROM project_list_member plmv WHERE plmv.list_id=pl.id AND plmv.member_id=$${params.length})`;
+  }
   return q(itemsPool,
     `SELECT pl.id, pl.name, pl.color, pl.sort, pl.created_by, pl.created_at, pl.updated_at,
+       pl.folder_id, COALESCE(pl.visibility, 'open') AS visibility, COALESCE(pl.settings, '{}'::jsonb) AS settings,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', plm.member_id, 'display_name', om.display_name) ORDER BY plm.sort, plm.member_id)
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
           AND p.folder IS DISTINCT FROM '__board_anchor__') AS project_count
-     FROM project_list pl ORDER BY pl.sort, lower(pl.name)`, []);
+     FROM project_list pl ${visWhere} ORDER BY pl.sort, lower(pl.name)`, params);
 }
 
 // 리스트 1건(멤버 조인 없이) — 존재 확인·소유권 조회용. 없으면 undefined.
@@ -69,7 +81,7 @@ export async function createProjectList(
 // 이름·색·정렬 수정 — 주어진 키만 변경(부재=무변경).
 export async function updateProjectList(
   id: number,
-  patch: Partial<{ name: string; color: string | null; sort: number }>,
+  patch: Partial<{ name: string; color: string | null; sort: number; visibility: string }>,
   ctx?: WriteCtx,
 ): Promise<ProjectListRow> {
   const before = await getProjectListRow(id);
@@ -80,6 +92,7 @@ export async function updateProjectList(
   if (patch.name !== undefined) set("name", patch.name);
   if (patch.color !== undefined) set("color", patch.color);
   if (patch.sort !== undefined) set("sort", patch.sort);
+  if (patch.visibility !== undefined) set("visibility", patch.visibility === "members" ? "members" : "open");
   if (sets.length) {
     sets.push("updated_at=now()");
     vals.push(id);
@@ -138,10 +151,26 @@ export async function setProjectListForProject(projectId: number, listId: number
   return after.list_id;
 }
 
+// 리스트 목록 UI 커스텀(settings JSONB) 얕은 병합 — 주어진 키만 덮어쓰고 나머지 보존(#475). null 값은 키 삭제.
+export async function setProjectListSettings(id: number, patch: Record<string, unknown>, ctx?: WriteCtx): Promise<ProjectListRow> {
+  const before = await getListWithMembers(id);
+  if (!before) throw new Error(`리스트 #${id} 없음`);
+  const merged: Record<string, unknown> = { ...(before.settings || {}) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null || v === undefined) delete merged[k];
+    else merged[k] = v;
+  }
+  await itemsPool.query(`UPDATE project_list SET settings=$2::jsonb, updated_at=now() WHERE id=$1`, [id, JSON.stringify(merged)]);
+  const after = await getListWithMembers(id);
+  await auditList(String(id), "set_settings", before.settings, after!.settings, ctx);
+  return after!;
+}
+
 // 리스트 1건 + 멤버(표시명) — 생성/수정 응답용(listProjectLists 와 동일 형상의 단건).
 async function getListWithMembers(id: number): Promise<ProjectListRow | undefined> {
   return one(itemsPool,
     `SELECT pl.id, pl.name, pl.color, pl.sort, pl.created_by, pl.created_at, pl.updated_at,
+       pl.folder_id, COALESCE(pl.visibility, 'open') AS visibility, COALESCE(pl.settings, '{}'::jsonb) AS settings,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', plm.member_id, 'display_name', om.display_name) ORDER BY plm.sort, plm.member_id)
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
