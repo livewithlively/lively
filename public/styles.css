@@ -3133,3 +3133,46 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-edge-pick-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
 .pjv-edge-pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-edge-pick-id { flex: none; color: var(--muted-2); font-size: 11.5px; }
+
+/* ══ 새 프로젝트 폼(#473) — 이름·설명 히어로 + 컴팩트 메타(폴더·카테고리·레포·팀원) ══ */
+.np-form { display: flex; flex-direction: column; gap: 16px; }
+.np-hero { display: flex; flex-direction: column; }
+.np-hero-lbl { font-size: 12.5px; font-weight: 700; color: var(--muted-head); margin-bottom: 6px; }
+.np-name { width: 100%; box-sizing: border-box; font-size: 17px; font-weight: 700; color: var(--ink); padding: 10px 13px; border: 1px solid var(--line-net); border-radius: 10px; background: var(--bg); }
+.np-name::placeholder { color: var(--muted-2); font-weight: 600; }
+.np-name:focus { outline: none; border-color: var(--blue); }
+/* 설명 = 히어로. 큰 글씨·자동확장·왼쪽 액센트 바로 '가장 중요한 칸'임을 시각적으로 강조. */
+.np-desc { width: 100%; box-sizing: border-box; font-size: 15px; line-height: 1.65; color: var(--ink); padding: 14px 16px; border: 1.5px solid var(--line-net-2); border-radius: 12px; background: var(--bg-tint); resize: none; overflow-y: auto; min-height: 132px; box-shadow: inset 3px 0 0 var(--blue); }
+.np-desc::placeholder { color: var(--muted-2); }
+.np-desc:focus { outline: none; border-color: var(--blue); background: var(--bg); }
+
+.np-meta { display: flex; flex-direction: column; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line); }
+.np-meta-cap { font-size: 12px; color: var(--muted); margin: 1px 0 2px; }
+
+/* 컴팩트 메타 행 — [라벨][트리거(요약 칩 + ▾)]. 폴더 select 도 같은 행에 얹어 위계 통일. */
+.cf-row { display: flex; align-items: center; gap: 12px; min-height: 36px; }
+.cf-label { flex: 0 0 60px; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.cf-row .pjv-listpick { flex: 1; min-width: 0; }
+.cf-row .pjv-listpick-sel { width: 100%; }
+.cf-trigger { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 10px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); cursor: pointer; text-align: left; font: inherit; }
+.cf-trigger:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.cf-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.cf-empty { font-size: 13px; color: var(--muted-2); }
+.cf-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink); background: var(--bg-tint-2); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; max-width: 100%; }
+.cf-chip .cf-ava { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 9.5px; font-weight: 700; margin-left: -3px; }
+.cf-chip-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-more { font-size: 12px; font-weight: 700; color: var(--muted); }
+.cf-caret { flex: none; color: var(--muted-2); font-size: 11px; margin-left: auto; }
+
+/* 컴팩트 피커 팝오버 내부 — 검색 + (최근 칩) + 스크롤 목록 */
+.cf-panel { min-width: 300px; max-width: 380px; }
+.cp-box { display: flex; flex-direction: column; gap: 8px; }
+.cp-search { width: 100%; box-sizing: border-box; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.cp-search:focus { outline: none; border-color: var(--blue); }
+.cp-recents { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cp-recents-lbl { font-size: 11px; font-weight: 700; color: var(--muted); }
+.cp-recent { font-size: 12px; font-weight: 600; color: var(--blue); background: var(--bg-punch); border: 1px solid var(--line-note); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.cp-recent.on { color: #fff; background: var(--blue); border-color: var(--blue); }
+.cp-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
+.cp-item { display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 5px 3px; font-size: 13.5px; border-radius: 6px; }
+.cp-item:hover { background: var(--bg-sel); }

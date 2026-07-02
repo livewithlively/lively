@@ -2203,19 +2203,52 @@ function pjvProjectRow(p) {
         go(); });
     return row;
 }
-// 새 프로젝트(v2) 폼 — 이름(필수)·설명(선택)·팀원. 생성 후 상세로 이동. memberPicker 재사용.
+// ── 컴팩트 피커 — 멀티선택 피커({box,getSelected,getSelectedLabels})를 '요약 칩 + ▾' 트리거로 감싸 팝오버로 편집. ──
+//  카테고리·레포·팀원을 같은 위계(한 줄 트리거)로 통일 + 세로를 크게 절약. makePicker(onChange) 로 피커 생성(onChange=요약 리페인트).
+function compactPicker(label, makePicker, opts) {
+    opts = opts || {};
+    const chipsWrap = el('div', { class: 'cf-chips' });
+    const trigger = el('button', { class: 'cf-trigger', type: 'button', 'aria-haspopup': 'dialog' }, chipsWrap, el('span', { class: 'cf-caret', text: '▾' }));
+    const repaint = () => {
+        const items = (picker.getSelectedLabels && picker.getSelectedLabels()) || [];
+        if (!items.length) {
+            chipsWrap.replaceChildren(el('span', { class: 'cf-empty', text: opts.emptyText || '선택 안 함' }));
+            return;
+        }
+        const shown = items.slice(0, opts.maxChips || 5);
+        const chips = shown.map((it) => el('span', { class: 'cf-chip' }, (opts.avatars && it.color) ? el('span', { class: 'cf-ava', style: 'background:' + it.color, text: it.initials }) : null, el('span', { class: 'cf-chip-t', text: it.label })));
+        if (items.length > shown.length)
+            chips.push(el('span', { class: 'cf-more', text: '+' + (items.length - shown.length) }));
+        chipsWrap.replaceChildren(...chips);
+    };
+    const picker = makePicker(repaint); // onChange = repaint (로드 완료·선택 변경마다 요약 갱신)
+    trigger.onclick = () => {
+        const panel = el('div', { class: 'cf-panel' }, picker.box);
+        pjvPopover(trigger, panel);
+        setTimeout(() => { const inp = panel.querySelector('input[type="text"]'); if (inp)
+            inp.focus(); }, 0);
+    };
+    repaint();
+    const row = el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: label }), trigger);
+    return { row, getSelected: () => picker.getSelected(), getSelectedLabels: () => (picker.getSelectedLabels ? picker.getSelectedLabels() : []) };
+}
+// 새 프로젝트(v2) 폼 — 이름·설명(히어로) + 컴팩트 메타(폴더·카테고리·레포·팀원). 생성 후 상세로 이동.
 function openProjectV2Form(reload, prefill) {
     prefill = prefill || {};
-    const nameIn = el('input', { type: 'text', value: prefill.name || '', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
-    const descIn = el('textarea', { rows: '3', placeholder: '간단한 설명 (선택)', maxlength: '5000' });
-    const picker = memberPicker(prefill.memberIds || [], { includeMe: true });
-    const catPicker = categoryPicker(prefill.categoryIds || []);
-    const repoPick = repoPicker(prefill.repos || []);
-    const listPick = listPicker(prefill.listId); // 분류(영역) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337)
+    const nameIn = el('input', { type: 'text', class: 'np-name', value: prefill.name || '', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
+    const descIn = el('textarea', { class: 'np-desc', placeholder: '이 프로젝트로 무엇을, 왜 하려는지 적어주세요.\n여기 적은 설명은 나중에 AI 세션이 맥락으로 씁니다 — 길게 써도 좋아요.', maxlength: '5000' });
+    if (prefill.description)
+        descIn.value = prefill.description;
+    const growDesc = () => { descIn.style.height = 'auto'; descIn.style.height = Math.min(Math.max(descIn.scrollHeight, 132), Math.round((window.innerHeight || 800) * 0.5)) + 'px'; };
+    descIn.addEventListener('input', growDesc);
+    const listPick = listPicker(prefill.listId); // 분류(폴더) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337)
+    const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
+    const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
+    const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('새 프로젝트', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '분류 (폴더)' }), listPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '설명 (선택)' }), descIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (선택)' }), catPicker.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '관련 레포 (선택)' }), repoPick.box), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '함께하는 팀원' }), picker.box), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-    setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0); // 프리필된 이름 전체 선택 → 바로 수정/확정 가능
+    const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '폴더' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 바꿀 수 있어요.' }), catField.row, repoField.row, memberField.row)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
     const go = async () => {
         const name = nameIn.value.trim();
         if (!name) {
@@ -2233,7 +2266,7 @@ function openProjectV2Form(reload, prefill) {
         saveBtn.disabled = true;
         try {
             const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
-                    name, description: descIn.value.trim() || undefined, members: picker.getSelected(),
+                    name, description: descIn.value.trim() || undefined, members: memberField.getSelected(),
                 }) });
             const np = r && (r.project || r);
             // 인라인 '할 일' 그룹에서 연 경우 그 상태로 생성(기본 생성은 active=진행 중) — prefill.status 로 전달.
@@ -2251,15 +2284,24 @@ function openProjectV2Form(reload, prefill) {
                     await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => { });
             }
             // 선택한 카테고리(사업/제품/시스템)·관련 레포를 생성 직후 연결.
-            const catIds = catPicker.getSelected();
+            const catIds = catField.getSelected();
             if (np && np.id && catIds.length)
                 await api('/api/ui/v6/projects/' + np.id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: catIds }) }).catch(() => { });
-            const repoNames = repoPick.getSelected();
+            const repoNames = repoField.getSelected();
             if (np && np.id && repoNames.length)
                 await api('/api/ui/v6/projects/' + np.id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoNames }) }).catch(() => { });
             // 모달의 분류(영역) 선택대로 소속 지정 — '기타(미분류)'면 listId=null 이라 호출 생략(기본이 미분류).
             if (np && np.id && listChoice.listId != null)
                 await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listChoice.listId }) }).catch(() => { });
+            // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
+            try {
+                localStorage.setItem('lively.newproj.recentCats', JSON.stringify(catField.getSelectedLabels().map((c) => ({ id: c.key, name: c.label }))));
+            }
+            catch (_) { /* */ }
+            try {
+                localStorage.setItem('lively.newproj.recentRepos', JSON.stringify(repoNames));
+            }
+            catch (_) { /* */ }
             back.remove();
             toast('프로젝트를 만들었습니다');
             if (np && np.id)
@@ -4106,13 +4148,30 @@ function projectReposBlock(id, p) {
     };
     return el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '관련 레포' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트가 쓰는 git 레포를 고르세요. ‘내 컴퓨터에서 작업’ 모달의 기본값이 되고, AGENTS.md 에 함께 적힙니다. (로컬 경로는 각 PC 의 .lively/project.json 에만 저장)' }), listEl, el('div', { class: 'ps-rules-actions' }, saveBtn, status));
 }
-// ── 카테고리 멀티선택 피커 — 사업/제품/시스템(space)별 그룹 + 체크박스. 비동기 로드. { box, getSelected() } 반환. ──
+// ── 카테고리 멀티선택 피커 — 사업/제품/시스템(space)별 그룹 + 체크박스. 비동기 로드. ──
 //  생성 모달·세부설정 양쪽에서 재사용. selectedIds 는 미리 체크할 카테고리 id 배열.
-function categoryPicker(selectedIds) {
+//  opts.onChange: 선택 변할 때(로드 완료 포함) 호출 · opts.showRecents: 이전 생성에서 고른 카테고리를 '최근' 원탭 칩으로.
+//  반환 { box, getSelected(), getSelectedLabels() } — getSelectedLabels 는 [{key:id, label:name}].
+function categoryPicker(selectedIds, opts) {
+    opts = opts || {};
     const sel = new Set((selectedIds || []).map(Number));
-    const box = el('div', { style: 'max-height:220px;overflow:auto;border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:8px' });
-    box.append(el('div', { class: 'admin-hint', text: '불러오는 중…' }));
-    const checks = []; // [{id, input}]
+    const fire = () => { try {
+        opts.onChange && opts.onChange();
+    }
+    catch (_) { /* */ } };
+    const search = el('input', { type: 'text', class: 'cp-search', placeholder: '카테고리 검색…', spellcheck: 'false', autocomplete: 'off' });
+    const listWrap = el('div', { class: 'cp-list' }, el('div', { class: 'admin-hint', text: '불러오는 중…' }));
+    const box = el('div', { class: 'cp-box' }, listWrap); // 로드 후 search·recents 를 앞에 붙인다
+    const checks = []; // [{id, name, input, row}]
+    const groups = []; // [{head, rows}] — 필터 시 매칭 없는 space 헤더는 숨김
+    const applyFilter = () => {
+        const q = search.value.trim().toLowerCase();
+        for (const c of checks)
+            c.row.style.display = (!q || c.name.toLowerCase().includes(q)) ? '' : 'none';
+        for (const g of groups)
+            g.head.style.display = g.rows.some((r) => r.style.display !== 'none') ? '' : 'none';
+    };
+    search.addEventListener('input', applyFilter);
     (async () => {
         let cats = [];
         try {
@@ -4121,6 +4180,7 @@ function categoryPicker(selectedIds) {
         catch (_) { /* */ }
         if (!cats.length) {
             box.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 카테고리가 없어요. 관리탭 ▸ 분류 체계 관리에서 먼저 만드세요.' }));
+            fire();
             return;
         }
         const bySpace = {};
@@ -4131,25 +4191,73 @@ function categoryPicker(selectedIds) {
             const list = bySpace[sp];
             if (!list || !list.length)
                 continue;
-            kids.push(el('div', { class: 'eyebrow', style: 'margin:6px 0 2px', text: SPACE_LABEL[sp] || sp }));
+            const head = el('div', { class: 'eyebrow', style: 'margin:6px 0 2px', text: SPACE_LABEL[sp] || sp });
+            const rows = [];
+            kids.push(head);
             for (const c of list) {
+                const id = Number(c.id);
                 const cb = el('input', { type: 'checkbox' });
-                if (sel.has(Number(c.id)))
+                if (sel.has(id))
                     cb.checked = true;
-                checks.push({ id: Number(c.id), input: cb });
-                kids.push(el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer;padding:2px 2px' }, cb, el('span', { text: c.name || c.key, title: (SPACE_LABEL[c.space] || c.space) + ' · ' + (c.key || '') })));
+                const row = el('label', { class: 'cp-item' }, cb, el('span', { text: c.name || c.key, title: (SPACE_LABEL[c.space] || c.space) + ' · ' + (c.key || '') }));
+                cb.addEventListener('change', () => { if (cb.checked)
+                    sel.add(id);
+                else
+                    sel.delete(id); fire(); });
+                checks.push({ id, name: String(c.name || c.key || ''), input: cb, row });
+                rows.push(row);
+                kids.push(row);
+            }
+            groups.push({ head, rows });
+        }
+        listWrap.replaceChildren(...kids);
+        const head = [search];
+        // 최근 사용(선택) — 이전 생성 때 고른 카테고리를 원탭 칩으로 노출. 자동선택은 안 함(무관한 프로젝트 오선택 방지).
+        if (opts.showRecents) {
+            let recents = [];
+            try {
+                recents = JSON.parse(localStorage.getItem('lively.newproj.recentCats') || '[]');
+            }
+            catch (_) { /* */ }
+            const valid = (recents || []).filter((r) => r && checks.some((c) => c.id === Number(r.id))).slice(0, 6);
+            if (valid.length) {
+                const row = el('div', { class: 'cp-recents' }, el('span', { class: 'cp-recents-lbl', text: '최근' }));
+                for (const r of valid) {
+                    const c = checks.find((x) => x.id === Number(r.id));
+                    const chip = el('button', { class: 'cp-recent' + (c.input.checked ? ' on' : ''), type: 'button', text: c.name });
+                    chip.onclick = () => { if (!c.input.checked) {
+                        c.input.checked = true;
+                        sel.add(c.id);
+                        chip.classList.add('on');
+                        fire();
+                    } };
+                    row.append(chip);
+                }
+                head.push(row);
             }
         }
-        box.replaceChildren(...kids);
+        box.replaceChildren(...head, listWrap);
+        applyFilter();
+        fire();
     })();
-    return { box, getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.id) };
+    return {
+        box,
+        getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.id),
+        getSelectedLabels: () => checks.filter((c) => c.input.checked).map((c) => ({ key: c.id, label: c.name })),
+    };
 }
-// ── 레포 멀티선택 피커 — 레포 레지스트리(관리탭 ▸ 레포 관리)의 비폐기 레포 체크박스. 비동기 로드. { box, getSelected() } 반환. ──
+// ── 레포 멀티선택 피커 — 레포 레지스트리(관리탭 ▸ 레포 관리)의 비폐기 레포 체크박스. 비동기 로드. ──
 //  생성 모달에서 사용(이름만 매핑 — 경로는 각 PC 의 .lively/project.json). selectedNames 는 미리 체크할 레포 이름.
-function repoPicker(selectedNames) {
+//  opts.onChange: 선택 변할 때(로드 완료 포함) 호출 · opts.defaultOne: 미리 선택된 게 없으면 하나 자동 선택(최근 사용 → 없으면 첫 레포).
+//  반환 { box, getSelected(), getSelectedLabels() }.
+function repoPicker(selectedNames, opts) {
+    opts = opts || {};
     const sel = new Set(selectedNames || []);
-    const box = el('div', { style: 'max-height:160px;overflow:auto;border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:8px' });
-    box.append(el('div', { class: 'admin-hint', text: '불러오는 중…' }));
+    const fire = () => { try {
+        opts.onChange && opts.onChange();
+    }
+    catch (_) { /* */ } };
+    const box = el('div', { class: 'cp-box' }, el('div', { class: 'cp-list' }, el('div', { class: 'admin-hint', text: '불러오는 중…' })));
     const checks = []; // [{name, input}]
     (async () => {
         let names = [];
@@ -4164,17 +4272,38 @@ function repoPicker(selectedNames) {
         names.sort();
         if (!names.length) {
             box.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '등록된 레포가 없어요. 관리탭 ▸ 레포(git) 관리에서 먼저 추가하세요.' }));
+            fire();
             return;
         }
-        box.replaceChildren(...names.map((n) => {
+        // 디폴트 하나 선택 — 미리 선택된 게 없을 때만. 최근 사용 레포(있으면) → 없으면 첫 레포.
+        if (opts.defaultOne && !sel.size) {
+            let recents = [];
+            try {
+                recents = JSON.parse(localStorage.getItem('lively.newproj.recentRepos') || '[]');
+            }
+            catch (_) { /* */ }
+            const pick = (recents || []).find((n) => names.includes(n)) || names[0];
+            if (pick)
+                sel.add(pick);
+        }
+        box.replaceChildren(el('div', { class: 'cp-list' }, ...names.map((n) => {
             const cb = el('input', { type: 'checkbox' });
             if (sel.has(n))
                 cb.checked = true;
+            cb.addEventListener('change', () => { if (cb.checked)
+                sel.add(n);
+            else
+                sel.delete(n); fire(); });
             checks.push({ name: n, input: cb });
-            return el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer;padding:2px 2px' }, cb, el('span', { text: n, title: n }));
-        }));
+            return el('label', { class: 'cp-item' }, cb, el('span', { text: n, title: n }));
+        })));
+        fire();
     })();
-    return { box, getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.name) };
+    return {
+        box,
+        getSelected: () => checks.filter((c) => c.input.checked).map((c) => c.name),
+        getSelectedLabels: () => checks.filter((c) => c.input.checked).map((c) => ({ key: c.name, label: c.name })),
+    };
 }
 // ── 분류(영역) 단일선택 피커 — 새 프로젝트 모달용. 영역(=project-list) 목록을 그 자리에서 fetch. ──
 //  '한 목록'·'상태' 뷰처럼 영역 맥락이 없는 곳에서 만들 때도 모달에서 영역을 정하게 해 미분류 프로젝트가 무심코 생기지 않게 한다(#337).
@@ -6126,7 +6255,12 @@ function projectTile(p, reload, opts) {
 // 팀원 선택 위젯 — 이름 검색으로 하나씩 추가(클릭), 선택된 사람은 칩으로(× 제거). 생성·수정 공용.
 //  동기 반환(즉시 로딩표시) + 비동기 채움. getSelected() 가 현재 선택 id 배열.
 function memberPicker(preselected, opts) {
+    opts = opts || {};
     const selected = new Set(preselected || []);
+    const fire = () => { try {
+        opts.onChange && opts.onChange();
+    }
+    catch (_) { /* */ } };
     let all = [];
     const chips = el('div', { class: 'proj-mp-chips' });
     const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가…' });
@@ -6138,7 +6272,7 @@ function memberPicker(preselected, opts) {
             chips.replaceChildren(el('span', { class: 'admin-hint', text: '아직 선택된 팀원이 없어요.' }));
             return;
         }
-        chips.replaceChildren(...sel.map((m) => el('span', { class: 'proj-mp-chip' }, el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { text: m.display_name || m.id }), el('button', { class: 'proj-mp-chip-x', type: 'button', text: '×', onclick: () => { selected.delete(m.id); paintChips(); paintResults(); } }))));
+        chips.replaceChildren(...sel.map((m) => el('span', { class: 'proj-mp-chip' }, el('span', { class: 'proj-team-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { text: m.display_name || m.id }), el('button', { class: 'proj-mp-chip-x', type: 'button', text: '×', onclick: () => { selected.delete(m.id); paintChips(); paintResults(); fire(); } }))));
     }
     function paintResults() {
         if (!all.length) {
@@ -6151,7 +6285,7 @@ function memberPicker(preselected, opts) {
             results.replaceChildren(el('div', { class: 'proj-mp-empty', text: q ? '일치하는 사람이 없어요.' : '추가할 수 있는 사람을 모두 골랐어요.' }));
             return;
         }
-        results.replaceChildren(...cand.map((m) => el('div', { class: 'proj-mp-row', onclick: () => { selected.add(m.id); searchIn.value = ''; paintChips(); paintResults(); searchIn.focus(); } }, el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: '＋ 추가' }))));
+        results.replaceChildren(...cand.map((m) => el('div', { class: 'proj-mp-row', onclick: () => { selected.add(m.id); searchIn.value = ''; paintChips(); paintResults(); searchIn.focus(); fire(); } }, el('span', { class: 'proj-mp-ava', style: 'background:' + avatarColor(m.id), text: initials(m.display_name || m.id) }), el('span', { class: 'proj-mp-name', text: m.display_name || m.id }), el('span', { class: 'proj-mp-add', text: '＋ 추가' }))));
     }
     searchIn.addEventListener('input', paintResults);
     api('/api/ui/dash/members').then((d) => {
@@ -6164,9 +6298,14 @@ function memberPicker(preselected, opts) {
         }
         paintChips();
         paintResults();
+        fire();
     })
         .catch(() => results.replaceChildren(el('span', { class: 'admin-hint', text: '팀원 목록을 불러오지 못했습니다.' })));
-    return { box, getSelected: () => [...selected] };
+    return {
+        box,
+        getSelected: () => [...selected],
+        getSelectedLabels: () => all.filter((m) => selected.has(m.id)).map((m) => ({ key: m.id, label: m.display_name || m.id, color: avatarColor(m.id), initials: initials(m.display_name || m.id) })),
+    };
 }
 // 새 프로젝트 오버레이 폼 — 이름(필수)·설명(선택)·팀원. 생성 시 폴더 자동 생성 + 새 전용 페이지로 이동.
 async function authDownload(url, filename) {
