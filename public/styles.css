@@ -1739,14 +1739,17 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 프로젝트 상세 헤더 — 제목(이름+상태칩) 좌 / 액션(완료·삭제) 우 한 줄. 박스 높이·세로정렬 통일. */
 .proj-detail-back { margin-bottom: 16px; }
 .proj-detail-titlebar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
-.proj-detail-titlebox { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.proj-detail-titlebox { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; flex-wrap: wrap; }
 .proj-detail-titlebox h1 { margin: 0; }
 .proj-detail-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .proj-detail-desc { margin: 0 0 18px; }
 /* 프로젝트 이름·설명 인라인 편집 */
 .proj-detail-title-edit { cursor: text; border-radius: 6px; padding: 0 6px; margin-left: -6px; transition: background-color .12s ease; }
 .proj-detail-title-edit:hover { background: var(--bg-tint-2); }
-.proj-detail-title-input { font-size: 28px; font-weight: 800; line-height: 1.3; letter-spacing: -0.8px; color: var(--ink); font-family: inherit; border: 1px solid var(--blue); border-radius: 8px; padding: 1px 8px; outline: none; background: var(--bg); max-width: 100%; }
+/* 제목 인라인 편집(#493) — 테두리 없는 자동확장 textarea. h1(.page-head h1: 28px/800, padding 0 6px, margin-left -6px)과
+   폰트·글자 시작 위치를 픽셀로 맞춰 편집 진입 시 글자가 튀지 않게 + 가로 전체를 써서 긴 이름도 안 잘리게. */
+.proj-detail-title-input { display: block; width: 100%; box-sizing: border-box; font-size: 28px; font-weight: 800; line-height: 1.3; letter-spacing: -0.8px; color: var(--ink); font-family: inherit; border: none; border-radius: 8px; padding: 0 6px; margin-left: -6px; outline: none; background: var(--bg-tint); resize: none; overflow: hidden; }
+.proj-detail-title-input:focus { outline: none; background: var(--bg-tint); }
 .proj-detail-desc-wrap { margin: 0 0 18px; }
 .proj-detail-desc-wrap .proj-detail-desc { margin: 0; }
 .proj-detail-desc-edit { cursor: text; border-radius: 6px; padding: 2px 6px; margin-left: -6px; transition: background-color .12s ease; }
@@ -2284,6 +2287,16 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-fields-list { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding-right: 2px; }
 .pjv-fields-sec { font-size: 11px; font-weight: 700; color: var(--muted-2); letter-spacing: .3px; padding: 6px 8px 3px; }
 .pjv-fields-empty { font-size: 12.5px; color: var(--muted-2); padding: 14px 8px; text-align: center; }
+/* Fields 패널 '기본 컬럼' 섹션 — 각 기본 컬럼 보임/숨김 토글(#req). */
+.pjv-fields-defcols { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 4px; }
+.pjv-defcol-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 8px; }
+.pjv-defcol-row:hover { background: var(--bg-tint-2); }
+.pjv-defcol-name { font-size: 13.5px; color: var(--ink); }
+.pjv-defcol-toggle { flex: none; position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--muted-3); transition: background-color .14s ease; }
+.pjv-defcol-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .14s ease; }
+.pjv-defcol-toggle.on { background: var(--blue); }
+.pjv-defcol-toggle.on::after { transform: translateX(12px); }
+.pjv-menu-hint { font-size: 11.5px; color: var(--muted-3); padding: 5px 10px 3px; line-height: 1.4; }
 .pjv-field-opt { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 8px 9px; border-radius: 8px; }
 .pjv-field-opt:hover { background: var(--bg-tint-2); }
 .pjv-field-opt-ic { flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--bg-tint); display: inline-flex; align-items: center; justify-content: center; color: var(--ink-sub); }
@@ -2331,7 +2344,7 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-loading { padding: 40px; color: var(--muted-2); font-size: 14px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 
 /* 좌측(상세) */
-.pjv-tm-main { flex: 1.55; min-width: 0; overflow-y: auto; padding: 18px 28px 40px; }
+.pjv-tm-main { flex: 1 1 auto; min-width: 320px; overflow-y: auto; padding: 18px 28px 40px; }
 .pjv-tm-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .pjv-tm-crumb { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted-2); min-width: 0; }
 .pjv-tm-crumb-link { color: var(--ink-sub); font-weight: 600; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2355,10 +2368,12 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-valbtn:hover { background: var(--bg-tint-2); }
 .pjv-tm-valbtn.empty { color: var(--muted-3); }
 .pjv-tm-valtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: #fff; background: var(--muted-2); padding: 5px 12px; border-radius: 7px; }
-.pjv-tm-statuspill.todo { background: var(--muted-2); }
-.pjv-tm-statuspill.inprog { background: var(--blue); }
-.pjv-tm-statuspill.done { background: var(--mint); }
+/* 상태 배지 — 통일 아이콘 칩(#499 후속): 라이트 배경 + 상태색 라벨 + SVG 아이콘 */
+.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net, #d9dee6); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
+.pjv-tm-statuspill:hover { border-color: var(--blue); }
+.pjv-tm-statuspill.todo { color: var(--muted); }
+.pjv-tm-statuspill.inprog { color: var(--blue); }
+.pjv-tm-statuspill.done { color: #1F9D6B; }
 .pjv-tm-dates { display: inline-flex; align-items: center; gap: 4px; }
 .pjv-tm-datebtn { border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); padding: 4px 8px; border-radius: 7px; }
 .pjv-tm-datebtn:hover { background: var(--bg-tint-2); }
@@ -2424,6 +2439,10 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-block-count { font-size: 12px; color: var(--muted-2); }
 .pjv-tm-block-add { border: none; background: none; cursor: pointer; color: var(--ink-sub); font-size: 13px; padding: 7px 0; display: block; }
 .pjv-tm-block-add:hover { color: var(--blue); }
+/* 태스크 모달 안 하위태스크 표(#497) — 모달은 우측 Activity 패널 탓에 폭이 좁다. 담당자·마감일·우선순위 칸을
+   기본(96/92/112)보다 좁히고 이름칸 floor 를 키워(220px) 하위태스크 이름이 잘리지 않게 한다.
+   (pjvGridTemplate 이 이 CSS 변수를 읽어 grid-template-columns 를 만든다.) */
+.pjv-tm-subtasks { --pjv-name-min: 220px; --pjv-w-assignee: 68px; --pjv-w-due: 82px; --pjv-w-priority: 84px; }
 .pjv-tm-sub-head { display: grid; grid-template-columns: minmax(0,1fr) 88px 92px 92px; gap: 8px; font-size: 11.5px; color: var(--muted-3); padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .pjv-tm-sub-row { display: grid; grid-template-columns: minmax(0,1fr) 88px 92px 92px; gap: 8px; align-items: center; padding: 3px 6px; border-bottom: 1px solid var(--line); }
 .pjv-tm-sub-name { display: flex; align-items: center; gap: 8px; border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); text-align: left; padding: 4px 0; }
@@ -2455,7 +2474,14 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-cl-itemname.done { text-decoration: line-through; color: var(--muted-3); }
 
 /* 우측(Activity) */
-.pjv-tm-side { flex: 1; min-width: 340px; max-width: 440px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-tint); }
+/* Activity 패널 폭은 CSS 변수 — 본문↔Activity 경계(.pjv-tm-resizer) 드래그로 조절(#496). 기본 400px. */
+.pjv-tm-side { flex: 0 0 var(--pjv-side-w, 400px); min-width: 300px; max-width: 720px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-tint); }
+/* 본문↔Activity 경계 드래그 핸들(#496) — 두 패널 사이 얇은 세로 바. 호버/드래그 시 파란 강조. */
+.pjv-tm-resizer { flex: none; width: 7px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 6; }
+.pjv-tm-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background-color .12s ease; }
+.pjv-tm:hover .pjv-tm-resizer::after { background: var(--line); }
+.pjv-tm-resizer:hover::after, body.pjv-tm-resizing .pjv-tm-resizer::after { background: var(--blue); }
+body.pjv-tm-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 .pjv-tm-side-head { padding: 16px 20px; font-size: 15px; font-weight: 800; color: var(--ink); border-bottom: 1px solid var(--line); }
 .pjv-tm-feed { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
 .pjv-tm-feed-empty { color: var(--muted-3); font-size: 13px; text-align: center; margin-top: 30px; }
@@ -2481,7 +2507,9 @@ body.pjv-tm-open { overflow: hidden; }
 
 @media (max-width: 860px) {
   .pjv-tm { flex-direction: column; height: 94vh; }
-  .pjv-tm-side { max-width: none; border-left: none; border-top: 1px solid var(--line); min-height: 240px; }
+  /* 세로 스택에선 폭 조절 불가 — flex-basis(가로폭 조절용) 해제하고 경계 핸들 숨김. */
+  .pjv-tm-side { flex: none; max-width: none; border-left: none; border-top: 1px solid var(--line); min-height: 240px; }
+  .pjv-tm-resizer { display: none; }
 }
 
 /* 태스크 모달 — 첨부 파일 블록(의존성/체크리스트와 동일 레벨) */
@@ -2622,6 +2650,20 @@ input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background
 .pjv-addrow.editing > .pjv-tcell:nth-child(2),
 .pjv-addrow.editing > .pjv-tcell:nth-child(3),
 .pjv-addrow.editing > .pjv-tcell:nth-child(4) { justify-content: center; }
+/* 커스텀 필드 값 셀(라벨·체크박스·긴텍스트 등)·'내 세션' 셀도 표준 메타 컬럼처럼 가운데 정렬 —
+   필드 종류마다 좌/우 정렬이 달라 여백이 들쭉날쭉하던 어색함 제거(#487). 헤더(.pjv-colhead/.pjv-thcol)와 축 일치.
+   실제 내용 정렬은 셀을 꽉 채우는 .pjv-fcell-wrap 에서 결정(안의 .pjv-cell-btn 이 justify-content:inherit). */
+.pjv-trow > .pjv-fcell,
+.pjv-trow > .pjv-sess-cell,
+.pjv-addrow.editing > .pjv-fcell { justify-content: center; }
+.pjv-fcell-wrap { justify-content: center; }
+/* 커스텀 필드 헤더(.pjv-thcol) + 기본 컬럼 헤더(.pjv-colhead.pjv-stdcol) — 이름은 정확히 가운데.
+   ⋯(옵션) 버튼은 평소 폭 0 으로 접어(제목이 정중앙) 헤더에 호버하면 '제목 바로 옆'에 펼쳐진다.
+   (예전엔 셀 우측 끝에 절대배치라 제목과 너무 멀었음 — 위치 보정.) */
+.pjv-thcol, .pjv-colhead.pjv-stdcol { position: relative; justify-content: center; text-align: center; gap: 3px; }
+.pjv-thcol .pjv-thcol-name, .pjv-colhead.pjv-stdcol .pjv-thcol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.pjv-thcol-menu { flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; transition: opacity .12s ease, width .1s ease; }
+.pjv-thcol:hover .pjv-thcol-menu, .pjv-colhead.pjv-stdcol:hover .pjv-thcol-menu { width: 15px; padding: 0 1px; opacity: 1; }
 /* 값 폰트·아이콘 확대 */
 .pjv-cell-btn { font-size: 15px; }
 .pjv-ava { width: 26px; height: 26px; font-size: 12px; }
@@ -2799,6 +2841,14 @@ body.pjv-dragging { user-select: none; -webkit-user-select: none; cursor: grabbi
 body.pjv-dragging .pjv-row-check { opacity: 1; }
 /* 드래그 재정렬 핸들(#366) — 체크박스 왼쪽 여백에 절대배치(레이아웃 불변). 행 호버 시 표시, 잡으면 grabbing. */
 .pjv-trow-title-cell { position: relative; }
+/* 이름 컬럼 폭 조절 핸들(#483) — 컬럼 헤더 제목칸 오른쪽 경계에 얹어 col-resize 로 잡아 끈다. 레이아웃 불변(절대배치).
+   행이 아니라 '컬럼 헤더'(.pjv-tgroup-head-cols / .pjv-list-colhead)의 제목칸에만 붙는다. */
+.pjv-col-resize { position: absolute; top: 0; right: -4px; width: 10px; height: 100%; cursor: col-resize; z-index: 4; }
+.pjv-col-resize::after { content: ''; position: absolute; top: 3px; bottom: 3px; right: 4px; width: 2px; border-radius: 2px; background: transparent; transition: background-color .12s ease; }
+.pjv-tgroup-head-cols:hover .pjv-col-resize::after, .pjv-list-colhead:hover .pjv-col-resize::after, .pjv-col-resize:hover::after,
+body.pjv-col-resizing .pjv-col-resize::after { background: var(--line-net); }
+.pjv-col-resize:hover::after, body.pjv-col-resizing .pjv-col-resize::after { background: var(--blue); }
+body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 .pjv-row-grip { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 13px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center; border: none; background: none; padding: 0; margin: 0;
   color: var(--muted-3); font-size: 12px; line-height: 1; cursor: grab; opacity: 0; transition: opacity .12s ease; touch-action: none; }
@@ -3282,3 +3332,40 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .pjv-statused-add:hover { border-color: var(--blue); color: var(--blue); }
 .pjv-color-pop .pjv-color-swatches { padding: 4px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   #499 · #500 — 상태 아이콘(Active/Done/Closed 파이·체크) · 리스트 설정 폼 톤
+   (EOF 자기완결 블록 — cascade 순서로 이전 규칙 override)
+   ════════════════════════════════════════════════════════════════════════ */
+/* 상태 아이콘(SVG 파이/체크) — 클릭업 스타일(#499). 색은 각 path 에 inline. */
+.pjv-status-ic { display: block; flex: none; }
+.pjv-status-btn { border: none; background: none; padding: 0; margin: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 0; border-radius: 50%; transition: filter .13s ease; }
+.pjv-status-btn:hover { filter: brightness(1.12); }
+.pjv-status-btn:disabled { cursor: default; }
+.pjv-status-btn:disabled:hover { filter: none; }
+
+/* 상태 편집기 버킷 헤더 — 라벨 + 우측 ＋(클릭업처럼 헤더에서 바로 추가) */
+.pjv-statused-cat-h { display: flex; align-items: center; justify-content: space-between; }
+.pjv-statused-cat-add { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 15px; line-height: 1; border-radius: 6px; }
+.pjv-statused-cat-add:hover { background: var(--bg-tint); color: var(--blue); }
+
+/* 공개범위 카드형 토글(#500) — 폼 필드 톤에 맞춘 바른 경계·강조 */
+.pjv-visrow { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 1px solid var(--line-net, #d9dee6); background: var(--bg); border-radius: 8px; padding: 11px 13px; cursor: pointer; box-sizing: border-box; transition: border-color .13s ease, background-color .13s ease; }
+.pjv-visrow:hover { border-color: var(--blue); }
+.pjv-visrow.on { border-color: var(--blue); background: var(--bg-tint); }
+.pjv-visrow:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pjv-visrow-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pjv-visrow-title { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pjv-visrow-hint { font-size: 12px; color: var(--ink-sub); line-height: 1.4; }
+.pjv-visrow .pjv-switch { pointer-events: none; }  /* 카드 전체가 토글 — 스위치는 표시만 */
+
+/* 멤버 선택(#500) — 참여 인원 요약 + 체크 표시(＋추가/✓선택됨 텍스트 대체) */
+.proj-mp-count { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+.proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
+.proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
+.proj-mp-row.on .proj-mp-check { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* 아바타 이니셜 세로 중앙정렬 교정 — body line-height(1.55) 상속으로 글자가 살짝 위로 뜨는 것 바로잡음.
+   (.pava.topbar-ava 는 이미 line-height:1 로 올바름 — 나머지 이니셜 아바타도 동일 기준으로 통일) */
+.project-face, .pjv-ava, .proj-mp-ava, .pjv-cmt-mini-ava, .cmt-ava, .cmt-thread-pill-ava,
+.proj-team-ava, .proj-avatar, .proj-avatar-badge, .cf-ava, .pava { line-height: 1; }

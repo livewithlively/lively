@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskRow } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow } from './projects.js';
 const PJV_LINK_TYPE = {
     blocking: { label: '막고 있음', short: 'blocking' },
     waiting_on: { label: '기다리는 중', short: 'waiting on' },
@@ -66,13 +66,6 @@ function pjvtmMentionMenu(anchor, members, insert) {
         menu.append(item);
     }
 }
-function pjvtmTypeMenu(anchor) {
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(anchor, menu);
-    const b = el('button', { class: 'pjv-menu-item sel', type: 'button' }, el('span', { text: 'Comment' }));
-    b.onclick = () => close();
-    menu.append(b, el('div', { class: 'pjv-menu-empty', text: '다른 유형은 준비 중' }));
-}
 // 공유 폴더 첨부 — 파일 클릭 시 작성기에 [📎 이름](#file:상대경로) 마크다운 삽입(렌더 후 authDownload 로 다운로드).
 function pjvtmAttachPicker(anchor, o) {
     const pid = o.d.project && o.d.project.id;
@@ -135,34 +128,20 @@ function pjvtmWireFileLinks(node, cctx) {
         });
     });
 }
-function pjvtmInsertMenu(anchor, o) {
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(anchor, menu);
-    const item = (icon, label, fn) => { const b = el('button', { class: 'pjv-menu-item', type: 'button' }, pjvtmIcon(icon), el('span', { text: label })); b.onclick = () => { close(); fn(); }; return b; };
-    menu.append(item('paperclip', '공유 폴더 파일 첨부', () => pjvtmAttachPicker(anchor, o)));
-    menu.append(item('at', '멘션', () => pjvtmMentionMenu(anchor, o.members, o.insertAtCursor)));
-    menu.append(item('smile', '이모지', () => pjvtmEmojiPicker(anchor, (e) => o.insertAtCursor(e))));
-    menu.append(item('check', '체크리스트 항목', () => o.insertAtCursor('\n- [ ] ')));
-}
-// 작성기 하단 툴바(클릭업식) — ＋·Comment▼ · 📎·@·😊·✓·🎥·🎤·⋯ · ➤(전송). 구현가능은 배선, 미지원은 정직 안내.
+// 작성기 하단 툴바 — 📎(파일첨부)·@(멘션)·😊(이모지)·✓(체크리스트) · ➤(전송).
+//  아이콘은 전부 그 자리서 실제로 동작하는 것만 둔다(예전의 ＋삽입 중복 메뉴·Comment▾·화면녹화·음성입력·더보기 placeholder 제거).
+//  화면녹화(영통)·음성입력(음성인식)처럼 지원 예정이 없는 건 아이콘 자체를 노출하지 않는다.
 function pjvtmComposerToolbar(o) {
     const bar = el('div', { class: 'pjv-tm-toolbar' });
-    const tool = (icon, title, fn, soon) => {
-        const b = el('button', { class: 'pjv-tm-tool' + (soon ? ' soon' : ''), type: 'button', title }, pjvtmIcon(icon));
+    const tool = (icon, title, fn) => {
+        const b = el('button', { class: 'pjv-tm-tool', type: 'button', title }, pjvtmIcon(icon));
         b.onclick = (e) => fn(e);
         return b;
     };
-    bar.append(tool('plus', '삽입', (e) => pjvtmInsertMenu(e.currentTarget, o)));
-    const typePill = el('button', { class: 'pjv-tm-ctypepill', type: 'button', title: '댓글 유형' }, el('span', { text: 'Comment' }), el('span', { class: 'pjv-tm-type-caret', text: '▾' }));
-    typePill.onclick = () => pjvtmTypeMenu(typePill);
-    bar.append(typePill, el('span', { class: 'pjv-tm-tool-sep' }));
     bar.append(tool('paperclip', '공유 폴더 파일 첨부', (e) => pjvtmAttachPicker(e.currentTarget, o)));
     bar.append(tool('at', '멘션', (e) => pjvtmMentionMenu(e.currentTarget, o.members, o.insertAtCursor)));
     bar.append(tool('smile', '이모지', (e) => pjvtmEmojiPicker(e.currentTarget, (em) => o.insertAtCursor(em))));
     bar.append(tool('check', '체크리스트 항목', () => o.insertAtCursor('\n- [ ] ')));
-    bar.append(tool('video', '화면 녹화 (준비 중)', () => toast('화면 녹화는 준비 중이에요'), true));
-    bar.append(tool('mic', '음성 입력 (준비 중)', () => toast('음성 입력은 준비 중이에요'), true));
-    bar.append(tool('more', '더보기 (준비 중)', () => toast('추가 도구는 준비 중이에요'), true));
     bar.append(el('span', { class: 'pjv-tm-tool-spacer' }));
     bar.append(o.sendBtn);
     return bar;
@@ -191,6 +170,50 @@ function pjvtmBackIcon() {
     n.append(sv('polyline', { points: '14 6 8 12 14 18' }));
     return n;
 }
+// 본문(좌) ↔ Activity(우) 경계 드래그로 폭 조절(#496) — box(.pjv-tm)의 --pjv-side-w(우측 폭)를 조절하고 localStorage 저장.
+//  더블클릭 = 기본값 리셋. box 는 재렌더(refresh)해도 유지되므로 변수/복원을 box 에 건다.
+function pjvtmSideResizer(box) {
+    const r = el('div', { class: 'pjv-tm-resizer', title: '드래그하여 Activity 폭 조절 (더블클릭: 기본값)', 'aria-hidden': 'true' });
+    r.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const side = box.querySelector('.pjv-tm-side');
+        if (!side)
+            return;
+        const startX = e.clientX;
+        const startW = side.getBoundingClientRect().width;
+        const boxW = box.getBoundingClientRect().width;
+        const maxW = Math.max(320, Math.min(720, boxW - 360)); // 본문 최소폭 확보
+        document.body.classList.add('pjv-tm-resizing');
+        const onMove = (ev) => {
+            let w = startW + (startX - ev.clientX); // 경계를 왼쪽으로 끌면 Activity(우측)가 넓어짐
+            w = Math.max(300, Math.min(maxW, w));
+            box.style.setProperty('--pjv-side-w', Math.round(w) + 'px');
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.classList.remove('pjv-tm-resizing');
+            const cur = box.style.getPropertyValue('--pjv-side-w');
+            if (cur) {
+                try {
+                    localStorage.setItem('pjv:tmSideW', cur.trim());
+                }
+                catch (_) { /* noop */ }
+            }
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+    r.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        box.style.removeProperty('--pjv-side-w');
+        try {
+            localStorage.removeItem('pjv:tmSideW');
+        }
+        catch (_) { /* noop */ }
+    });
+    return r;
+}
 function pjvOpenTaskModal(taskId, pageReload) {
     let dirty = false;
     let tickTimer = null;
@@ -200,6 +223,13 @@ function pjvOpenTaskModal(taskId, pageReload) {
     let descCommit = null;
     const back = el('div', { class: 'pjv-tm-back' });
     const box = el('div', { class: 'pjv-tm' });
+    // Activity 패널 폭 복원(#496) — 저장돼 있으면 기본값 대신 그 폭으로. box 는 재렌더에도 유지.
+    try {
+        const _sw = localStorage.getItem('pjv:tmSideW');
+        if (_sw)
+            box.style.setProperty('--pjv-side-w', _sw.indexOf('px') >= 0 ? _sw : (_sw + 'px'));
+    }
+    catch (_) { /* noop */ }
     back.append(box);
     // 바깥(배경) 클릭 — 본문 편집 중이면 먼저 저장하고 모달은 유지(한 번 더 눌러야 닫힘). 아니면 닫기.
     back.addEventListener('mousedown', (e) => {
@@ -300,7 +330,8 @@ function pjvOpenTaskModal(taskId, pageReload) {
         const members = d.members || [];
         const _prevMain = box.querySelector('.pjv-tm-main');
         const _prevScroll = _prevMain ? _prevMain.scrollTop : 0;
-        box.replaceChildren(pjvtmMain(d, t, members, refresh, closeModal, pageReload), pjvtmSide(d, t, refresh));
+        box.replaceChildren(pjvtmMain(d, t, members, refresh, closeModal, pageReload), pjvtmSideResizer(box), // 본문↔Activity 경계 드래그 핸들(#496)
+        pjvtmSide(d, t, refresh));
         const _newMain = box.querySelector('.pjv-tm-main');
         if (_newMain && _prevScroll)
             _newMain.scrollTop = _prevScroll;
@@ -370,7 +401,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
     // 상태 — 색 pill(라벨). 클릭 → 메뉴.
     function pjvtmStatusField(t, refresh) {
         const meta = pjvStatusMeta(t.status);
-        const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, meta.glyph ? el('span', { class: 'pjv-status-glyph', text: meta.glyph }) : null, el('span', { text: meta.label.toUpperCase() }));
+        const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
         btn.onclick = (e) => {
             e.stopPropagation();
             const menu = el('div', { class: 'pjv-menu' });
@@ -378,7 +409,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             for (const key of PJV_STATUS_ORDER) {
                 const m = PJV_TASK_STATUS[key];
                 const sel = meta.bucket === key;
-                const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null), el('span', { text: m.label }));
+                const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
                 item.onclick = () => { close(); if (!sel)
                     pjvPatchTask(t.id, { status: key }, refresh); };
                 menu.append(item);
@@ -930,7 +961,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
             const cell = e.target.closest && e.target.closest('.pjv-trow-title-cell');
             if (!cell || !list.contains(cell))
                 return;
-            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot'))
+            if (e.target.closest('.pjv-trow-caret') || e.target.closest('.pjv-status-dot') || e.target.closest('.pjv-status-btn'))
                 return;
             if (e.target.closest('.pjv-row-check') || e.target.closest('.pjv-row-actions'))
                 return;
@@ -987,7 +1018,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
                 const lt = PJV_LINK_TYPE[type];
                 for (const l of byType[type]) {
                     const lmeta = pjvStatusMeta(l.status);
-                    sec.append(el('div', { class: 'pjv-tm-link-row' }, el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }), el('span', { class: 'pjv-status-dot sm ' + lmeta.cls }, lmeta.glyph ? el('span', { class: 'pjv-status-glyph', text: lmeta.glyph }) : null), el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }), el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
+                    sec.append(el('div', { class: 'pjv-tm-link-row' }, el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }), pjvStatusIconStd(lmeta.bucket, 'sm'), el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }), el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
                         onclick: async () => {
                             try {
                                 await api('/api/ui/v6/tasks/' + t.id + '/links', { method: 'POST', body: JSON.stringify({ to_task: l.id, type, remove: true }) });
@@ -1034,7 +1065,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
                         catch (e) {
                             toast('실패 — ' + e.message, true);
                         }
-                    } }, el('span', { class: 'pjv-status-dot sm ' + m.cls }, m.glyph ? el('span', { class: 'pjv-status-glyph', text: m.glyph }) : null), el('span', { text: x.name }));
+                    } }, pjvStatusIconStd(m.bucket, 'sm'), el('span', { text: x.name }));
             }));
             if (!cand.length)
                 results.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '결과 없음' }));
