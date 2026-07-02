@@ -108,9 +108,12 @@ const projectListV6: Capability = {
   },
   // mine=1 이면 viewer(토큰 신원) 기준 '내 프로젝트'만(생성자·팀원). MCP 호출은 mine 미지정 → 전체.
   handler: async (input: any, user: any, ctx: any) => {
+    // viewerVis = 공개범위 시행 신원(#475) — REST(웹)만 넘긴다. MCP 는 신원 없이도 전체 열람(신뢰 접근).
+    const viewerVis = (ctx?.source === "web" || user?.userId) ? (ctx?.actor ?? user?.userId ?? "") : undefined;
     const projects = await listProjects({
       space: input.space, categoryId: input.categoryId, status: input.status,
       viewer: input.mine ? (ctx?.actor ?? user?.userId ?? null) : undefined,
+      viewerVis,
     });
     // 내 세션 수(프로젝트별) — 보드의 '내 세션' 칼럼을 '있으면 활성, 없으면 비활성'으로 칠하기 위한 신호.
     //  tmux 세션 목록 한 번 호출 → owned(@box_owner=나) 세션을 projectId(@box_project) 로 집계. 실패해도 목록은 그대로.
@@ -197,20 +200,23 @@ const projectCreateV6: Capability = {
 const projectSetStatusV6: Capability = {
   name: "project_set_status_v6",
   title: "프로젝트 상태 변경(v6)",
-  description: "프로젝트 상태를 할 일(todo)·진행 중(in_progress)·완료(done) 로 변경(레거시 active 도 허용). 완료 시 완료시각 기록. 웹 전용.",
+  description: "프로젝트 상태를 할 일(todo)·진행 중(in_progress)·완료(done) 로 변경(레거시 active 도 허용). 완료 시 완료시각 기록. status_raw 로 리스트별 커스텀 상태명(개방 어휘)도 함께 저장(#475). 웹 전용.",
   scope: "memory",
-  input: { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES) },
+  // status = CHECK 유효 네이티브 투영(todo|in_progress|done|active). status_raw = 리스트 커스텀 상태 키(개방 어휘, null=해제).
+  input: { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES), status_raw: z.string().max(120).nullable().optional() },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/status"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status) };
+        const rawIn = b.status_raw;
+        const status_raw = (rawIn == null || rawIn === "") ? null : String(rawIn).trim().slice(0, 120);
+        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status), status_raw };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const project = await updateProjectStatus(input.id, input.status, writeCtx);
+    const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null);
     await regenAgents(input.id);
     return { project };
   },

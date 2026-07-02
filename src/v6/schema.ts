@@ -425,6 +425,28 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS project_list_id_idx ON project(list_id) WHERE list_id IS NOT NULL;
   `);
 
+  // ── 6d) project_folder — 폴더(클릭업 Folder). '리스트'(project_list) 위의 순수 정리용 상위 층(#475). ──
+  //  3단계 = 폴더 › 리스트 › 프로젝트. 폴더는 멤버·권한 없이 '정리용'만 담당(멤버·visibility·목록 UI 는 리스트가 담당).
+  //  folder_id 는 project_list 에 nullable FK(ON DELETE SET NULL) — 폴더 삭제 시 리스트는 보존되고 '미분류 폴더'로 떨어진다.
+  //  ⚠명칭 전환(#475): #356 에서 'project_list = 폴더'였으나, 이제 project_list = '리스트'(중간), 신규 project_folder = '폴더'(상위).
+  //  코드 심볼(project_list·list_id 등)은 그대로 두고 UI 라벨만 '리스트'로 전환 — API/스키마 하위호환.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_folder(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      color TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS folder_id INT REFERENCES project_folder(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS project_list_folder_id_idx ON project_list(folder_id) WHERE folder_id IS NOT NULL;
+    -- 리스트 단위 공개범위(#475): 'open'=전원(기존 #280 정합) / 'members'=리스트 멤버만 목록·프로젝트 열람.
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'open';
+    -- 리스트 단위 목록 UI 커스텀(#475) — 기본 보기(그룹/정렬)·표시필드 등 프리퍼런스 백. 스키마 고정 없이 확장.
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── 7) project_category — 프로젝트↔카테고리 n:n(프로젝트 탭 사업/제품/시스템 탐색). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_category(

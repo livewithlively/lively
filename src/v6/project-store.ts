@@ -66,7 +66,9 @@ export async function syncTaskAssignees(taskId: number, assignees: string[]): Pr
 }
 
 // ── 조회 ──────────────────────────────────────────────────────────────────
-export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string }
+// viewerVis = 공개범위 시행 기준 신원(#475). 지정 시 members-only 리스트의 프로젝트를 그 신원이 멤버가 아니면 숨긴다.
+//  viewer('내 프로젝트' 필터)와 직교 — viewerVis 는 mine 여부와 무관하게 항상 적용(웹 보드 REST 가 넘긴다). MCP(미지정)는 전체 열람.
+export interface ProjectFilter { space?: string; categoryId?: number; status?: string; viewer?: string; viewerVis?: string }
 
 export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectRow[]> {
   const params: unknown[] = [];
@@ -88,6 +90,13 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
     wh.push(`(p.created_by=$${params.length} OR EXISTS(SELECT 1 FROM project_member pmv WHERE pmv.project_id=p.id AND pmv.member_id=$${params.length}))`);
   }
   wh.push("p.folder IS DISTINCT FROM '__board_anchor__'"); // 보드 커스텀 컬럼 앵커(숨김 프로젝트) 제외
+  // 공개범위 시행(#475) — members-only 리스트의 프로젝트는 그 리스트 멤버가 아닌 viewerVis 에게 숨긴다.
+  //  (list_id NULL·open 리스트는 전원 열람. viewerVis 미지정=MCP 신뢰 접근=전체 열람.)
+  if (filter.viewerVis != null) {
+    params.push(filter.viewerVis);
+    wh.push(`NOT EXISTS(SELECT 1 FROM project_list plv WHERE plv.id=p.list_id AND plv.visibility='members'
+       AND NOT EXISTS(SELECT 1 FROM project_list_member plmv WHERE plmv.list_id=plv.id AND plmv.member_id=$${params.length}))`);
+  }
   const where = `WHERE ${wh.join(" AND ")}`;
   // DISTINCT — 다중 카테고리 매핑 시 조인 중복 제거. ORDER BY 컬럼은 SELECT DISTINCT 대상에 포함.
   //  members = facepile 용 스칼라 서브쿼리(org_member 표시명 조인, 정렬 보존).
@@ -338,14 +347,18 @@ export async function restoreProject(before: Record<string, unknown>, ctx?: Writ
   return after;
 }
 
-export async function updateProjectStatus(id: number, status: string, ctx?: WriteCtx): Promise<ProjectRow> {
+export async function updateProjectStatus(id: number, status: string, ctx?: WriteCtx, statusRaw?: string | null): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   // done → 완료시각 기록, active 복귀 → 완료시각 해제.
+  // status_raw = 리스트 커스텀 상태명(개방 어휘, #475). undefined=무변경(기존 보존), null=해제, 그 외=설정.
+  const rawGiven = statusRaw !== undefined;
   const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
+    `UPDATE project SET status=$2, status_category=$3,
+       status_raw = CASE WHEN $5::bool THEN $4 ELSE status_raw END,
+       completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
+     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
   return after;

@@ -3182,3 +3182,70 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .cp-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
 .cp-item { display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 5px 3px; font-size: 13.5px; border-radius: 6px; }
 .cp-item:hover { background: var(--bg-sel); }
+/* ════════════════════════════════════════════════════════════════════════
+   #475 — 폴더›리스트 3단계 · 리스트 설정 팝아웃 · 커스텀 상태(Task statuses)
+   (EOF 자기완결 블록 — 동시편집 클로버 대비, cascade 순서로 이전 규칙 override)
+   ════════════════════════════════════════════════════════════════════════ */
+/* 사이드바 폴더 트리 */
+.pjv-side-folder-caret { flex: none; width: 15px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 10px; padding: 0; }
+.pjv-side-folder-caret:hover { color: var(--ink); }
+.pjv-side-navfolder { font-weight: 700; color: var(--ink); gap: 5px; }
+.pjv-side-navlist.sub { padding-left: 30px; }
+.pjv-side-listglyph { flex: none; width: 16px; height: 16px; display: block; }
+.pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
+.pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pjv-side-folder-empty:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
+.pjv-side-newrow { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.pjv-side-newrow .pjv-side-newlist { margin-top: 0; }
+.pjv-side-raildot .pjv-side-listglyph { width: 18px; height: 18px; }
+.pjv-side-raildot .pjv-side-listemoji { width: 20px; font-size: 15px; }
+
+/* 커스텀 상태 동그라미 — inline 색(--sc) */
+.pjv-status-dot.pjv-status-custom { border-color: var(--sc, var(--muted-3)); color: var(--sc, var(--muted-3)); }
+.pjv-status-dot.pjv-status-custom.todo { border-style: dashed; background: var(--bg); }
+.pjv-status-dot.pjv-status-custom.inprog { border-style: solid; }
+.pjv-status-dot.pjv-status-custom.done { background: var(--sc); border-color: var(--sc); color: #fff; }
+.pjv-status-dot.pjv-status-custom:hover { filter: brightness(1.08); }
+
+/* 상태 그룹 헤더 — 커스텀 상태는 색 pill 로(스크린샷) */
+.pjv-tgroup-label.pjv-status-pill { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 700; color: #fff; background: var(--sc, var(--muted-2)); padding: 2px 11px; border-radius: 999px; letter-spacing: -.1px; }
+
+/* 리스트/폴더 설정 메뉴 */
+.pjv-listset-menu { min-width: 236px; }
+.pjv-menu-caret { margin-left: auto; padding-left: 8px; color: var(--muted-2); font-weight: 700; }
+.pjv-menu-back { color: var(--muted); font-weight: 600; }
+.pjv-list-headglyph { flex: none; display: inline-flex; align-items: center; }
+
+/* 아이콘 스와치(리스트 설정 Color & Icon) */
+.pjv-icon-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.pjv-sw-emoji { font-size: 15px; line-height: 1; }
+
+/* memberPicker — 단일 목록, 선택 표시(중복 chips 제거) */
+.proj-mp-row.on { background: var(--bg-sel); }
+.proj-mp-row.on .proj-mp-add { color: var(--blue); font-weight: 700; }
+
+/* Task statuses 편집기 */
+.pjv-statused { display: flex; gap: 24px; align-items: flex-start; min-width: 560px; max-width: 660px; }
+.pjv-statused-left { flex: 0 0 188px; }
+.pjv-statused-right { flex: 1 1 auto; min-width: 0; }
+.pjv-statused-radios { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.pjv-statused-radio { display: flex; gap: 9px; align-items: flex-start; text-align: left; border: 1px solid var(--line-net, #d9dee6); background: none; border-radius: 8px; padding: 9px 11px; cursor: pointer; }
+.pjv-statused-radio:hover { border-color: var(--blue); }
+.pjv-statused-radio.on { border-color: var(--blue); background: var(--bg-tint); }
+.pjv-statused-radio-mark { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--muted-3); margin-top: 2px; box-sizing: border-box; }
+.pjv-statused-radio.on .pjv-statused-radio-mark { border-color: var(--blue); background: radial-gradient(circle, var(--blue) 0 4px, transparent 5px); }
+.pjv-statused-radio-label { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pjv-statused-radio-hint { font-size: 12px; color: var(--ink-sub); margin-top: 2px; line-height: 1.4; }
+.pjv-statused-groups.inherit { opacity: .5; pointer-events: none; }
+.pjv-statused-cat { margin-bottom: 16px; }
+.pjv-statused-cat-h { font-size: 12px; font-weight: 800; letter-spacing: .3px; color: var(--muted); margin-bottom: 7px; }
+.pjv-statused-rows { display: flex; flex-direction: column; gap: 6px; }
+.pjv-statused-row { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line-net, #d9dee6); border-radius: 8px; padding: 7px 9px; background: var(--bg); }
+.pjv-statused-grip { flex: none; color: var(--muted-3); font-size: 12px; cursor: grab; }
+.pjv-statused-name { flex: 1 1 auto; min-width: 0; border: none; background: none; font-size: 13.5px; font-weight: 600; color: var(--ink); padding: 2px 0; }
+.pjv-statused-name:focus { outline: none; }
+.pjv-statused-name:disabled { color: var(--ink-sub); }
+.pjv-statused-row .pjv-trow-more { position: static; opacity: 1; transform: none; }
+.pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.pjv-statused-add:hover { border-color: var(--blue); color: var(--blue); }
+.pjv-color-pop .pjv-color-swatches { padding: 4px; }
