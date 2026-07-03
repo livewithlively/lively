@@ -90,7 +90,7 @@ const all: Capability[] = [
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
 //  Phase 2(2026-06-24): names 배열 이중게이트 폐기 → expose.mcp 단일 SoT. domain_*·propose_domain 은 v6 category_* 로 이관(mcp:false, REST 보존),
-//  knowledge_set_wiki 만 mcp:false(REST 전용). project_delete_v6·task_delete_v6·task_field_delete_v6 는 expose.mcp:true + org_tool 기본 OFF. item(search_items·get_item)·mapping 은 폐기됨.
+//  knowledge_graph 만 mcp:false(REST 전용, 그래프뷰) — knowledge_set_wiki 는 mcp:true+REST 로 전환됨(구 REST 전용, #533 확인). project_delete_v6·task_delete_v6·task_field_delete_v6 는 expose.mcp:true + org_tool 기본 OFF. item(search_items·get_item)·mapping 은 폐기됨.
 //  ku/knowledge 가 단일 캐노니컬 표면 — 지식 grep/단건 knowledge_grep·knowledge_get, 활동 activity_list·activity_log. REST 전용: GET /api/ui/learn(kind_registry+data_source ground-truth).
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
