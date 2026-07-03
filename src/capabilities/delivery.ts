@@ -37,6 +37,9 @@ import { refreshSources, listSourceConfigs } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
 import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
+// 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
+import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, type BackfillMode } from "../v6/embedding-backfill.js";
+import type { EmbeddingConfig } from "../v6/embedding-provider.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -485,6 +488,7 @@ export const deliveryCapabilities: Capability[] = [
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[]; write_tools?: string[];
+        embedding_config?: EmbeddingConfig;
       } = {};
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -526,8 +530,57 @@ export const deliveryCapabilities: Capability[] = [
         }
         if (patch.write_tools.length > 100) throw new HttpError(400, "write_tools 가 너무 많습니다(100개 이하)");
       }
+      // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
+      if (input.embedding_config !== undefined) {
+        const raw = input.embedding_config;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "embedding_config 는 객체여야 합니다");
+        const e = raw as Record<string, unknown>;
+        const provider = String(e.provider ?? "off").toLowerCase();
+        if (provider !== "off" && provider !== "http") throw new HttpError(400, "embedding_config.provider 는 off|http 만 허용됩니다");
+        let authRef: string | null = null;
+        if (e.auth_env_ref !== undefined && e.auth_env_ref !== null && e.auth_env_ref !== "") {
+          authRef = str(e.auth_env_ref, "embedding_config.auth_env_ref", 100).trim();
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef)) throw new HttpError(400, "auth_env_ref 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
+        }
+        let dimensions = 1024;
+        if (e.dimensions !== undefined && e.dimensions !== null && e.dimensions !== "") {
+          dimensions = Number(e.dimensions);
+          if (!Number.isFinite(dimensions) || dimensions < 1 || dimensions > 16000) throw new HttpError(400, "embedding_config.dimensions 는 1~16000 정수여야 합니다");
+          dimensions = Math.floor(dimensions);
+        }
+        patch.embedding_config = {
+          provider: provider as "off" | "http",
+          base_url: (e.base_url === undefined || e.base_url === null || e.base_url === "") ? null : str(e.base_url, "embedding_config.base_url", 500).trim(),
+          model: (e.model === undefined || e.model === null || e.model === "") ? null : str(e.model, "embedding_config.model", 200).trim(),
+          dimensions,
+          auth_env_ref: authRef,
+        };
+      }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
+    }),
+
+  // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
+  restOnly("org_embeddings_status", "임베딩(벡터검색) 상태",
+    "임베딩 설정(embedding_config) + 기존 지식 백로그(미임베딩 수) + 진행 중 백필 잡 상태. admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/embeddings"], parse: () => ({}) }],
+    async () => {
+      const cfg = await getRuntimeConfig();
+      const backlog = await countEmbeddingBacklog();
+      return { config: cfg.embedding_config, backlog, job: getBackfillJob() };
+    }),
+  restOnly("org_embeddings_backfill", "기존 지식 임베딩(백필) 실행",
+    "이미 저장된 지식을 배치로 임베딩(뒤늦게 켠 경우). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/embeddings 폴링. 이미 실행 중이면 409.",
+    [{ method: "POST", paths: ["/api/ui/org/embeddings/backfill"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>) => {
+      const mode = String(input.mode ?? "pending");
+      if (mode !== "pending" && mode !== "model-changed" && mode !== "all") throw new HttpError(400, "mode 는 pending|model-changed|all 만 허용됩니다");
+      // provider off 면 백필 무의미 — 조기 400(코어도 off 면 no-op 이지만 잡을 만들지 않아 UX 명확).
+      const cfg = await getRuntimeConfig();
+      if (cfg.embedding_config.provider === "off") throw new HttpError(400, "임베딩이 꺼져 있습니다 — 먼저 provider 를 http 로 저장한 뒤 백필하세요.");
+      const { started, job } = startBackfillJob(mode as BackfillMode);
+      if (!started) throw new HttpError(409, "이미 백필이 실행 중입니다.");
+      return { started, job };
     }),
 
   // ── MCP 서버 레지스트리 ──

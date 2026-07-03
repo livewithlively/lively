@@ -152,6 +152,15 @@ ensure_env() {
   local rpersonal="${TERMINAL_ROOT_PERSONAL:-$HOME/box}"
   local orgdom="${ORG_DOMAIN:-example.com}"
   mkdir -p "$rshared" "$rpersonal" 2>/dev/null || true   # 중앙박스 세션 루트(없으면 세션 생성 실패)
+  # 임베딩(#172) — WITH_EMBEDDINGS=1(또는 EMBEDDINGS_PROVIDER=http)면 provider 를 켜서 기록(사이드카는 store_up 이 기동,
+  #  기존 지식 백필은 install.sh 말미). 아니면 off(grep 폴백). base_url/model/dim/auth 는 caller env 로 오버라이드 가능.
+  local emb_provider="off"
+  if [ "${WITH_EMBEDDINGS:-0}" = "1" ] || [ "${EMBEDDINGS_PROVIDER:-}" = "http" ]; then emb_provider="http"; fi
+  local emb_base="${EMBEDDINGS_BASE_URL:-http://localhost:11434}"
+  local emb_model="${EMBEDDINGS_MODEL:-bge-m3}"
+  local emb_dim="${EMBEDDINGS_DIMENSIONS:-1024}"
+  local emb_auth_line="# EMBEDDINGS_AUTH_ENV=OPENAI_API_KEY   # 외부 API 인증 시: 키를 담은 환경변수 '이름'(값 아님)"
+  [ -n "${EMBEDDINGS_AUTH_ENV:-}" ] && emb_auth_line="EMBEDDINGS_AUTH_ENV=${EMBEDDINGS_AUTH_ENV}"
 
   umask 077   # .env 600
   cat > "$envf" <<EOF
@@ -191,11 +200,14 @@ TMUX_BIN=$tmux_bin
 TERMINAL_ROOT_SHARED=$rshared
 TERMINAL_ROOT_PERSONAL=$rpersonal
 
-# ── 임베딩 / 벡터검색(#172) — 기본 off(knowledge_search=grep 폴백). 4GB 박스는 off 유지 권장. ──
-EMBEDDINGS_PROVIDER=off
-EMBEDDINGS_BASE_URL=http://localhost:11434
-EMBEDDINGS_MODEL=bge-m3
-EMBEDDINGS_DIMENSIONS=1024
+# ── 임베딩 / 벡터검색(#172) — off=knowledge_search grep 폴백. http=OpenAI-compatible /v1/embeddings. ──
+#  뒤늦게 켜기: deploy/enable-embeddings.sh (사이드카→provider=http→재시작→기존 지식 백필). 또는 관리탭 '임베딩(벡터검색)'.
+#  4GB 박스는 로컬 사이드카(bge-m3) 비권장(t4g.large+) — 외부 엔드포인트로 base_url 지정 가능.
+EMBEDDINGS_PROVIDER=$emb_provider
+EMBEDDINGS_BASE_URL=$emb_base
+EMBEDDINGS_MODEL=$emb_model
+EMBEDDINGS_DIMENSIONS=$emb_dim
+$emb_auth_line
 
 # ── db_query 안전장치 ──
 DB_STATEMENT_TIMEOUT_MS=5000
@@ -243,4 +255,16 @@ proxy_up() {
   log "Caddy 리버스 프록시 기동(자동 HTTPS: $domain)"
   dc compose --profile proxy up -d caddy || die "Caddy 기동 실패 (docker compose 로그: dc compose logs caddy)"
   ok "Caddy 프록시 up — https://$domain (Let's Encrypt 자동 발급·갱신, 최초 발급 수십초)"
+}
+
+# 게이트웨이 재시작 — .env 변경(예: EMBEDDINGS_*) 반영. 유닛은 --env-file-if-exists=.env 라 재시작만으로 픽업.
+#  KillMode=process(systemd)라 중앙박스 tmux 세션은 생존(재부착). mac 은 plist 변경까지 반영하려 bootout+bootstrap.
+#  update.sh 는 유저 마이그레이션까지 하지만, 여기선 '단순 재시작'만 필요(유닛/유저 불변).
+restart_gateway() {
+  case "$(detect_os)" in
+    linux) sudo systemctl restart context-ontology-gateway ;;
+    mac)
+      launchctl bootout "gui/$(id -u)/io.lvly.context-ontology" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist" ;;
+  esac
 }
