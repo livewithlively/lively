@@ -35,11 +35,13 @@ export function isolationEnabled(): boolean {
 export const BOX_SPAWN = process.env.LIVELY_BOX_SPAWN || "/opt/lively/libexec/box-spawn";
 
 // 하네스/셸 argv 를 그 멤버 OS 계정으로 내리는 drop-priv 래핑(**순수** — 테스트 대상).
-//  결과: ["sudo","-n","-u",osUser,"--",BOX_SPAWN, ...argv]  (argv 빈 배열=셸 세션이면 wrapper 가 로그인 셸 실행).
+//  결과: ["sudo","-n","-u",osUser,"--",BOX_SPAWN, ("--cwd",cwd)?, ...argv]  (argv 빈 배열=셸 세션이면 wrapper 가 로그인 셸 실행).
+//  cwd 를 주면 box-spawn 이 **멤버 uid 로 거기 cd** 한다(#524: tmux -c 는 게이트웨이 권한이라 멤버 700 홈 chdir 실패 → cwd 는 여기로).
 //  -n: 비대화(NOPASSWD 라 프롬프트 없음 — 행 방지). '--': sudo 옵션 종료(뒤 토큰이 옵션으로 안 새게).
 //  argv(하네스명·플래그)는 호출부에서 이미 화이트리스트(HARNESSES·SAFE_VALUE_RE)라 셸 인젝션 표면 없음.
-export function wrapAsMember(osUser: string, argv: string[]): string[] {
-  return ["sudo", "-n", "-u", osUser, "--", BOX_SPAWN, ...argv];
+export function wrapAsMember(osUser: string, argv: string[], cwd?: string): string[] {
+  const pre = cwd ? ["--cwd", cwd] : [];
+  return ["sudo", "-n", "-u", osUser, "--", BOX_SPAWN, ...pre, ...argv];
 }
 
 // OS 유저 존재 확인(= 프로비저닝됨). Linux: `id -u <user>` 성공. 실패/미존재/비Linux(맥 등) → false(공유 폴백).

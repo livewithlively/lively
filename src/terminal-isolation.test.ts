@@ -26,6 +26,15 @@ t("wrapAsMember(빈 argv=셸 세션) → wrapper 만 (로그인 셸은 wrapper �
   );
 });
 
+t("wrapAsMember(cwd 지정) → box-spawn 앞에 --cwd <dir> (멤버 uid 로 cd — tmux -c 우회)", () => {
+  assert.deepEqual(
+    wrapAsMember("box_yoon", ["claude"], "/home/box_yoon/box"),
+    ["sudo", "-n", "-u", "box_yoon", "--", BOX_SPAWN, "--cwd", "/home/box_yoon/box", "claude"],
+  );
+  // cwd 없으면 --cwd 안 붙음(파일 브리지 호출)
+  assert.deepEqual(wrapAsMember("box_x", ["node"]), ["sudo", "-n", "-u", "box_x", "--", BOX_SPAWN, "node"]);
+});
+
 t("wrapAsMember: '--' 로 sudo 옵션 종료 — wrapper 는 항상 '--' 바로 다음(옵션 오인 방어)", () => {
   const argv = wrapAsMember("box_x", ["-l", "whatever"]); // 하네스 토큰이 '-' 로 시작해도
   const dd = argv.indexOf("--");

@@ -102,13 +102,14 @@ const SHARED_ISOLATED_BASE = process.env.LIVELY_SHARED_DIR || "/srv/lively/share
 // 허용 루트 기준 경로 해소(+봉쇄). subpath 의 .. 탈출은 거부.
 //  격리+프로비저닝된 멤버면 멤버-접근가능 베이스로(세션 spawn 과 동일 게이트 = resolveMemberOsUser),
 //  아니면 게이트웨이 홈 기준(종전, perUser=base/<userSlug>). 세션 생성·생성폼 폴더 탐색이 공유한다.
-export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath: string): Promise<{ base: string; abs: string }> {
+export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath: string, osUser?: string | null): Promise<{ base: string; abs: string }> {
   const root = ROOTS.find((r) => r.key === rootKey);
   if (!root) throw new HttpError(400, "허용되지 않은 루트입니다");
-  const osUser = await resolveMemberOsUser(userSlug(user));
+  // osUser: 호출자가 격리 여부를 강제한다(프로젝트 공동 세션은 null 로 격리 제외 — cwd 가 게이트웨이 소유라). undefined 면 여기서 파생.
+  const iso = osUser === undefined ? await resolveMemberOsUser(userSlug(user)) : osUser;
   let base: string;
-  if (osUser) {
-    base = root.perUser ? path.join(MEMBER_HOME_BASE, osUser, PERSONAL_SUBDIR) : SHARED_ISOLATED_BASE;
+  if (iso) {
+    base = root.perUser ? path.join(MEMBER_HOME_BASE, iso, PERSONAL_SUBDIR) : SHARED_ISOLATED_BASE;
   } else {
     base = root.base;
     if (root.perUser) base = path.join(base, userSlug(user));
@@ -275,10 +276,11 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
 }
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
-  const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath);
-  // 격리 게이트(#524) — 세션 spawn·작업디렉터리 확보 둘 다 이 값으로 분기(한 번만 구한다).
-  const osUser = await resolveMemberOsUser(userSlug(user));
-  // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 internal error 버그).
+  // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 공동 세션(#452)은 격리 제외:
+  //  cwd 가 게이트웨이 소유 프로젝트 폴더이고 여러 멤버가 공동 입장하므로 공유 신원으로 띄운다(안 그러면 멤버가 폴더 접근 불가 → 500).
+  const osUser = input.projectId ? null : await resolveMemberOsUser(userSlug(user));
+  const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath, osUser);
+  // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
 
@@ -303,14 +305,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
 
   const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
-  const args = ["new-session", "-d", "-s", id, "-c", target];
+  const args = ["new-session", "-d", "-s", id];
   // 구성원 격리(#524): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv, osUser 는 위에서 구함).
   //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
   //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).
   if (osUser) {
-    // cmd 빈 배열(셸 세션)이어도 wrapper 가 멤버 로그인 셸을 띄운다. tmux -c 의 작업 디렉터리는 wrapper 가 보존.
-    args.push(...wrapAsMember(osUser, cmd));
+    // ⚠ tmux -c 를 안 쓴다: -c 는 게이트웨이 권한으로 chdir 해 멤버 700 홈에 못 들어간다('chdir(2) failed: Permission denied' 반복).
+    //  대신 box-spawn 이 --cwd 로 멤버 uid 에서 cd 한다. cmd 빈 배열(셸)이어도 wrapper 가 로그인 셸을 띄운다.
+    args.push(...wrapAsMember(osUser, cmd, target));
   } else {
+    args.push("-c", target);
     // 멀티프로필(#346): 프로필이 프로비저닝·로그인된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
     //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝/미로그인=주입 안 함→공유 폴백.
     //  loginProfile(최초 로그인 세션): 로그인 게이트를 우회해 owner 프로필 dir 을 **강제** 주입 — 아직 .credentials.json 이

@@ -42,8 +42,12 @@ if [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$HOME/.lively/token" ]; then
   export LIVELY_TOKEN
 fi
 
-# tmux 가 -c 로 넘긴 작업 디렉터리(cwd)는 **보존**한다(여기서 cd 하지 않음). 접근 불가하면 홈으로 폴백.
-cd "$PWD" 2>/dev/null || cd "$HOME" || true
+# 작업 디렉터리 — 세션 spawn 은 '--cwd <dir>' 로 넘어온다(#524: 게이트웨이가 tmux -c 로 멤버 700 홈에
+#  chdir 못 해 'chdir(2) failed: Permission denied' 반복 → 여기서 **멤버 uid** 로 cd). 파일 브리지 호출
+#  (--cwd 없음)은 홈에서 실행(절대경로 op 라 cwd 무관). 접근 불가하면 홈 → / 폴백.
+_cwd="$HOME"
+if [ "${1:-}" = "--cwd" ]; then _cwd="${2:-$HOME}"; shift 2; fi
+cd "$_cwd" 2>/dev/null || cd "$HOME" 2>/dev/null || cd / || true
 
 # 하네스가 오면 그걸, 없으면(셸 세션) 인터랙티브 로그인 셸을 exec.
 if [ "$#" -gt 0 ]; then
