@@ -12,6 +12,7 @@
 //     격리 시 CLAUDE_CONFIG_DIR 주입 불요: 멤버가 자기 $HOME/.claude 를 uid 로 네이티브 격리(#346 을 흡수).
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,10 +22,12 @@ export const OS_USER_PREFIX = "box_";
 const SAFE_OS_USER = /^box_[a-z0-9-]+$/;
 export function osUsername(slug: string): string { return `${OS_USER_PREFIX}${slug}`; }
 
-// 격리 모드: 'os'(구성원별 OS 유저) | 'off'(기존 단일 유저). **기본 off** — opt-in·무회귀.
-//  엄격 비교(=== 'os')라 오타·레거시 값은 안전하게 off 로 떨어진다.
-export function isolationMode(): "os" | "off" {
-  return process.env.LIVELY_MEMBER_ISOLATION === "os" ? "os" : "off";
+// 격리 활성 여부 — **secure-by-default**: 기본 활성. 실제 격리는 "인프라(box-spawn) 설치됨 AND 그 멤버 provision됨"
+//  일 때만 일어나므로(resolveMemberOsUser), 미설치 박스·코드만 업데이트한 박스는 아무 변화 없이 공유 폴백(폴백-세이프).
+//  ⚠ 그래서 "업데이트=코드"는 동작을 안 바꾸고, "install-isolation + provision=셋업"이 곧 활성 신호가 된다.
+//  LIVELY_MEMBER_ISOLATION=off 면 하드 비활성(킬스위치 — 긴급 롤백). 그 외 값(unset 포함)은 활성.
+export function isolationEnabled(): boolean {
+  return process.env.LIVELY_MEMBER_ISOLATION !== "off";
 }
 
 // 게이트웨이가 sudoers 로 그 멤버 계정에서 실행하도록 허용된 **고정 wrapper**(root 소유·멤버 비쓰기).
@@ -47,10 +50,18 @@ export async function osUserExists(osUser: string): Promise<boolean> {
   catch { return false; }
 }
 
-// 세션 격리 게이트 — 켜졌고(os) 그 멤버 OS 유저가 존재하면 osUser 를 반환, 아니면 null(→ 기존 동작 폴백).
+// 세션 격리 게이트 — 활성 && 인프라 설치됨(box-spawn) && 그 멤버 OS 유저 존재 → osUser 반환, 아니면 null(→ 공유 폴백).
 //  createSession 이 이 값으로 분기: non-null 이면 wrapAsMember, null 이면 종전(#346 CLAUDE_CONFIG_DIR) 경로.
+//  3중 게이트라 secure-by-default 여도 미설치/미프로비저닝 박스는 폴백-세이프(무회귀). Linux 전용.
 export async function resolveMemberOsUser(slug: string): Promise<string | null> {
-  if (isolationMode() !== "os") return null;
+  if (!isolationEnabled()) return null;               // 하드 킬스위치(=off)
+  if (process.platform !== "linux") return null;      // 격리는 Linux 전용(맥 개발환경 등 폴백)
+  if (!existsSync(BOX_SPAWN)) return null;             // 인프라 미설치(install-isolation 안 함) → 공유 폴백
   const osUser = osUsername(slug);
-  return (await osUserExists(osUser)) ? osUser : null;
+  return (await osUserExists(osUser)) ? osUser : null; // 멤버 미프로비저닝 → 공유 폴백
+}
+
+// 격리 인프라 준비됨? (활성 + Linux + box-spawn 설치). UI 상태 표시용 — 이게 true 여야 provision 이 의미있다.
+export function isolationInfraReady(): boolean {
+  return isolationEnabled() && process.platform === "linux" && existsSync(BOX_SPAWN);
 }

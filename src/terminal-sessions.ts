@@ -15,7 +15,7 @@ import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
 import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
-import { resolveMemberOsUser, wrapAsMember } from "./terminal-isolation.js";
+import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -192,6 +192,43 @@ export async function provisionProfile(memberId: string): Promise<{ slug: string
     cwd: REPO_ROOT, maxBuffer: 4 * 1024 * 1024,
   });
   return { slug, dir: profileConfigDir(u) };
+}
+
+// 웹 OS-유저 프로비저닝(#524) — 관리자 버튼이 이 함수로 멤버의 OS 유저(box_<slug>)를 프로비저닝한다.
+//  root 가 필요한 useradd 등은 **root 소유 고정 스크립트**(PROVISION_BIN, install-isolation.sh 가 설치)만
+//  잠긴 sudoers 로 실행(게이트웨이 비-root). 게이트웨이가 쓰기 가능한 레포 경로를 sudo 대상으로 두면 위험하므로
+//  반드시 /opt/lively/libexec 의 root 소유본을 쓴다. 멤버 토큰은 provisionProfile 과 동일하게 민팅해 넘긴다
+//  (sudoers env_keep=LIVELY_TOKEN/MEMBER_NAME/MEMBER_EMAIL 로 통과 — PATH 는 미보존이라 secure_path). admin 게이트는 라우트가.
+const PROVISION_BIN = process.env.LIVELY_PROVISION_BIN || "/opt/lively/libexec/provision-member";
+export async function provisionMemberOs(memberId: string): Promise<{ slug: string; osUser: string }> {
+  const u = { userId: memberId } as LivelyUser;
+  const member = await getMember(memberId);
+  if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
+  const slug = userSlug(u);
+  // 재프로비저닝 누적 방지 — 기존 central-box 토큰 회수(평문 못 되찾으니 매번 새로 굽는다).
+  for (const t of await listTokens()) {
+    if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
+      await revokeToken(t.token_hash, "provisionMemberOs", "terminal-sessions");
+    }
+  }
+  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
+  const scopes = (member.scopes || []).filter((s) => !dangerous.has(s));
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `central-box:${slug}` },
+    "provisionMemberOs", "terminal-sessions",
+  );
+  await execFileAsync("sudo", ["-n", PROVISION_BIN, memberId], {
+    timeout: 180_000,
+    env: { ...process.env, LIVELY_TOKEN: token, MEMBER_NAME: member.display_name || slug, MEMBER_EMAIL: member.email || "" },
+    cwd: REPO_ROOT, maxBuffer: 4 * 1024 * 1024,
+  });
+  return { slug, osUser: osUsername(slug) };
+}
+
+// OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재.
+export async function memberOsStatus(memberId: string): Promise<{ ready: boolean; provisioned: boolean; osUser: string }> {
+  const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
+  return { ready: isolationInfraReady(), provisioned: await osUserExists(osUser), osUser };
 }
 
 async function tmux(args: string[]): Promise<string> {

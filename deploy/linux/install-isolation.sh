@@ -39,6 +39,10 @@ echo "공유 워크스페이스 → $SHARED_DIR (root:lively-shared 2775 setgid)
 install -d -m 0755 /opt/lively/libexec
 install -m 0755 -o root -g root "$DIR/box-spawn" /opt/lively/libexec/box-spawn
 echo "box-spawn → /opt/lively/libexec/box-spawn (root:root 0755)"
+# ②-b provision-member(웹 프로비저닝용 root 스크립트) — deploy/provision-member.sh 의 root 소유본(게이트웨이 비쓰기).
+#     웹 관리탭 [OS 격리 유저 만들기] 가 게이트웨이→잠긴 sudo→이 스크립트로 useradd. 코드(PROVISION_BIN)와 경로 일치.
+install -m 0755 -o root -g root "$DIR/../provision-member.sh" /opt/lively/libexec/provision-member
+echo "provision-member → /opt/lively/libexec/provision-member (root:root 0755)"
 
 # ③ 잠긴 sudoers — 템플릿의 'lively' 주체를 실제 게이트웨이 유저로 치환, visudo 검증 후 설치
 TMPS="$(mktemp)"
@@ -51,5 +55,6 @@ else
 fi
 rm -f "$TMPS"
 
-echo "✓ 격리 인프라 설치 완료. 다음: 멤버별  sudo LIVELY_TOKEN=<t> bash deploy/provision-member.sh <member-id>"
-echo "  격리 켜기(모든 준비 후): 게이트웨이 env  LIVELY_MEMBER_ISOLATION=os  + 재시작"
+echo "✓ 격리 인프라 설치 완료."
+echo "  멤버 provision: 웹 관리탭 ▸ 중앙박스 계정 ▸ [🔒 OS 격리 유저 만들기]  또는  sudo LIVELY_TOKEN=<t> bash deploy/provision-member.sh <member-id>"
+echo "  격리는 secure-by-default — provision 되면 그 멤버 '새 세션'부터 자동 격리(별도 켜기 불요). 끄려면 게이트웨이 env LIVELY_MEMBER_ISOLATION=off."

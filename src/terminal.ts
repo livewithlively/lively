@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus, profileStatusFor, provisionProfile } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus } from "./terminal-sessions.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
@@ -83,7 +83,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const members = (await listMembers().catch(() => []))
       .filter((m) => m.state !== "inactive" && m.kind !== "system");
     const profiles = [];
-    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, status: await profileStatusFor(m.id) });
+    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, status: await profileStatusFor(m.id), os: await memberOsStatus(m.id) });
     res.setHeader("Cache-Control", "no-store");
     res.json({ profiles });
   }));
@@ -97,6 +97,20 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, member, slug, dir, status: await profileStatusFor(member),
       loginHint: `로그인(그 멤버 계정): 웹터미널에서 'CLAUDE_CONFIG_DIR=${dir} claude' 실행 후 /login` });
+  }));
+  // OS-유저 프로비저닝(#524) — 구성원별 OS 계정(box_<slug>) 생성(홈700·격리). root 스크립트를 잠긴 sudo 로.
+  //  격리는 secure-by-default: 인프라 설치됨 + 이 멤버 provision 되면 자동 적용(별도 켜기 불요, =off 만 하드 비활성).
+  app.post("/api/ui/terminal/members/provision-os", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
+    if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+    if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
+    const os = await memberOsStatus(member);
+    if (!os.ready) throw new HttpError(409, "격리 인프라 미설치 — 박스에서 install-isolation.sh 를 먼저 실행하세요(box-spawn·sudoers·그룹).");
+    const { slug, osUser } = await provisionMemberOs(member);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, member, slug, osUser, os: await memberOsStatus(member),
+      loginHint: `이제 이 멤버가 자기 새 세션에서 'claude' → /login 하면 자격증명이 /home/${osUser}/.claude(700)에 격리 저장됩니다.` });
   }));
 
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {

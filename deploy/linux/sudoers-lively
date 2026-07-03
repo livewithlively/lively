@@ -1,27 +1,25 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# 중앙 박스 구성원 격리(#524) — 게이트웨이 서비스 유저(lively)의 **최소** 권한.
+# 중앙 박스 구성원 격리(#524) — 게이트웨이 서비스 유저의 **최소** 권한 (2가지, 각각 root 소유 고정 스크립트만).
 #
-#  게이트웨이(비-root)가 세션 셸/하네스를 **그 멤버 OS 계정으로만** 내릴 수 있게 한다.
-#  허용 = 단일 고정 wrapper(box-spawn) 를, runas 는 box_members 그룹(모든 box_<slug>)으로 제한.
-#  → 멤버 추가는 그 유저를 box_members 그룹에 넣기만 하면 되고 **이 파일은 무수정**.
+#  ① 세션 spawn: 세션 셸/하네스를 box_members 그룹의 그 멤버로 내림(자격증명 uid 격리의 핵심).
+#  ② 웹 프로비저닝(#524): 관리자 버튼이 게이트웨이를 통해 멤버 OS 유저를 만든다(useradd 등 root 필요).
 #
-#  이게 주는 것: 게이트웨이가 sudo 로 할 수 있는 유일한 일은 "box_* 멤버로 box-spawn 실행". root 셸·임의
-#  명령·다른 유저 실행 전부 불가. (setuid 커스텀 바이너리 없이 이 한 줄로 privsep — 표준·감사 용이.)
+#  둘 다 **root 소유·게이트웨이 비쓰기 고정 스크립트**(/opt/lively/libexec/*)만 허용 — 게이트웨이가 스크립트를
+#  못 고치므로 "그 스크립트가 하는 일" 외 임의 root 실행 불가. 토큰 등 비밀은 env_keep 으로만 전달(PATH 미보존
+#  → secure_path 라 PATH 인젝션 없음). 멤버 추가는 box_members 그룹 가입만으로 되고 이 파일은 무수정.
 #
-#  ⚠ 설치(install 이 수행):
-#     - 이 파일 → /etc/sudoers.d/lively , 소유 root:root , 권한 0440
-#     - 반드시 `visudo -cf /etc/sudoers.d/lively` 로 검증 후 활성(문법오류 시 sudo 전체 잠김 방지)
-#     - /opt/lively/libexec/box-spawn 는 root:root 0755 (멤버 비쓰기) — box-spawn 헤더의 불변식 참조
-#     - box_members 그룹 존재(provision 이 groupadd), 게이트웨이는 lively 유저로 기동(systemd User=lively)
-#
-#  ⚠ 이 파일은 **구성원 격리(uid drop)** 만 담당한다. ssm-user 의 NOPASSWD 회수·게이트웨이 docker 그룹 제거·
-#     전용 lively 서비스 유저 전환은 **박스 하드닝 런북**(별도 운영 절차)에서 다룬다 — 코드가 아니라 호스트 설정.
+#  ⚠ 설치(install-isolation.sh 가 수행): /etc/sudoers.d/lively (root:root 0440), `visudo -cf` 검증 후 활성.
+#     'lively' 주체는 install-isolation.sh 가 실제 게이트웨이 유저로 치환(sed). box-spawn·provision-member 는
+#     root:root 0755. box-spawn 헤더의 불변식 참조.
+#  ⚠ ①=uid 격리, ②=웹 프로비저닝 편의. ssm-user NOPASSWD 회수·게이트웨이 docker 그룹 제거·전용 서비스 유저는
+#     별도 하드닝 런북(P4).
 # ─────────────────────────────────────────────────────────────────────────────
 
-# box_<slug> 멤버 계정 전체를 한 그룹으로 묶어 runas 대상으로 제한.
 Runas_Alias LIVELY_BOX_MEMBERS = %box_members
 
-# lively 는 box_members 중 누구로든, 비밀번호 없이, **오직 이 wrapper 하나** 실행 가능.
-#  (Cmnd 에 인자를 안 붙임 = box-spawn 을 임의 하네스 인자로 호출 허용. 그 인자는 게이트웨이가
-#   세션 owner 의 계정으로만 구성하고 이미 화이트리스트라 안전 — box-spawn 은 그걸 그 멤버로 exec 할 뿐.)
+# ① 세션 spawn — box_members 로 wrapper 하나만, 비밀번호 없이.
 lively ALL=(LIVELY_BOX_MEMBERS) NOPASSWD: /opt/lively/libexec/box-spawn
+
+# ② 웹 프로비저닝 — root 로 provision 스크립트 하나만. 토큰·이름·이메일만 env 보존(PATH 등은 미보존).
+Defaults!/opt/lively/libexec/provision-member env_keep += "LIVELY_TOKEN MEMBER_NAME MEMBER_EMAIL LIVELY_SHARED_DIR"
+lively ALL=(root) NOPASSWD: /opt/lively/libexec/provision-member

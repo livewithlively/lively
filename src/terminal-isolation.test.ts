@@ -1,7 +1,7 @@
 // 순수 단위 체크(node:assert) — 구성원 격리(#524) drop-priv 래핑·모드 게이트.
 // 실행: npm run build && node dist/terminal-isolation.test.js
 import assert from "node:assert/strict";
-import { osUsername, wrapAsMember, isolationMode, BOX_SPAWN, OS_USER_PREFIX } from "./terminal-isolation.js";
+import { osUsername, wrapAsMember, isolationEnabled, BOX_SPAWN, OS_USER_PREFIX } from "./terminal-isolation.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -35,16 +35,14 @@ t("wrapAsMember: '--' 로 sudo 옵션 종료 — wrapper 는 항상 '--' 바로 
   assert.equal(argv[3], "box_x"); // -u 다음이 runas 유저
 });
 
-t("isolationMode: 기본 off, 오직 =os 만 os (opt-in·무회귀, 엄격 비교)", () => {
+t("isolationEnabled: 기본 활성(secure-by-default), 오직 =off 만 하드 비활성", () => {
   const prev = process.env.LIVELY_MEMBER_ISOLATION;
   delete process.env.LIVELY_MEMBER_ISOLATION;
-  assert.equal(isolationMode(), "off");
-  process.env.LIVELY_MEMBER_ISOLATION = "1";   // 레거시/오타 값 → off (안전)
-  assert.equal(isolationMode(), "off");
-  process.env.LIVELY_MEMBER_ISOLATION = "OS";  // 대문자도 아님 → off (엄격)
-  assert.equal(isolationMode(), "off");
+  assert.equal(isolationEnabled(), true);       // 기본 활성(실제 격리는 box-spawn+provision 게이트)
   process.env.LIVELY_MEMBER_ISOLATION = "os";
-  assert.equal(isolationMode(), "os");
+  assert.equal(isolationEnabled(), true);        // 명시 값도 활성
+  process.env.LIVELY_MEMBER_ISOLATION = "off";
+  assert.equal(isolationEnabled(), false);       // 하드 킬스위치
   if (prev === undefined) delete process.env.LIVELY_MEMBER_ISOLATION;
   else process.env.LIVELY_MEMBER_ISOLATION = prev;
 });

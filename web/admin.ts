@@ -1105,12 +1105,32 @@ async function profilesEditor(detail) {
     if (st.provisioned && !st.loggedIn) {
       kids.push(el('div', { class: 'caption', text: '로그인: 이 멤버가 웹터미널에서  CLAUDE_CONFIG_DIR=' + (st.dir || '') + ' claude  실행 후 /login' }));
     }
+    // OS-유저 격리(#524) — 구성원별 OS 계정(box_<slug>, 홈700). 격리는 secure-by-default: 인프라 설치됨 + 이 멤버
+    //  provision 되면 그 멤버의 '새 세션'이 자동 격리(별도 켜기 불요). 자격증명(.credentials.json)이 uid 로 상호열람 차단.
+    const os = p.os || {};
+    if (!os.ready) {
+      kids.push(el('div', { class: 'caption', text: '🔒 OS 격리: 인프라 미설치 — 박스에서 deploy/linux/install-isolation.sh 실행 필요' }));
+    } else if (!os.provisioned) {
+      kids.push(el('button', { class: 'btn btn-primary btn-sm', text: '🔒 OS 격리 유저 만들기', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '생성 중… (수십초)';
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('OS 격리 유저 생성됨 — 이 멤버의 새 세션부터 자기 계정으로 격리됩니다'); reload(); }
+        catch (e) { btn.disabled = false; btn.textContent = '🔒 OS 격리 유저 만들기'; toast('실패 — ' + e.message, true); }
+      } }));
+    } else {
+      kids.push(el('div', {}, el('span', { class: 'caption', text: '🔒 OS 격리: ' + (os.osUser || '') + ' ✓ · 새 세션 격리 활성' })));
+      kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(격리·토큰 갱신)', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중…';
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('격리 유저 재프로비저닝됨 — 새 세션부터 새 토큰'); reload(); }
+        catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(격리·토큰 갱신)'; toast('실패 — ' + e.message, true); }
+      } }));
+    }
     return el('div', { class: 'card' }, ...kids);
   }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
   detail.replaceChildren(
     el('div', { class: 'card' },
       el('h3', { text: '중앙박스 계정(프로필)' }),
-      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀). 이미 만든 프로필은 [재프로비저닝(인증 갱신)]으로 무중단 재발급됩니다(로그인·세션 유지).' })),
+      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀). 이미 만든 프로필은 [재프로비저닝(인증 갱신)]으로 무중단 재발급됩니다(로그인·세션 유지).' }),
+      el('p', { class: 'caption', text: '🔒 [OS 격리 유저 만들기]는 그 멤버를 별도 OS 계정(box_<slug>, 홈 700)으로 완전 격리합니다 — 구성원 간 자격증명 상호열람 차단(외부상주·금융권). 인프라(deploy/linux/install-isolation.sh)가 깔린 박스에서만 버튼이 뜨고, provision 되면 그 멤버의 새 세션부터 자동 격리(별도 켜기 불요, 끄려면 LIVELY_MEMBER_ISOLATION=off).' })),
     ...items);
 }
 
