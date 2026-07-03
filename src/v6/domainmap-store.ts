@@ -10,6 +10,7 @@ import { q } from "../domainmap/db.js";
 import { httpErr } from "../domainmap/core/types.js";
 // queries.ts 의 순수 헬퍼(domain 테이블 무관 — clone_url 시크릿 제거·freshness 계산)만 재사용(골든리드 무변형).
 import { sanitizeCloneUrl, computeFreshness } from "../domainmap/core/queries.js";
+import { listCategoryEdges, type CategoryEdgeRow } from "./category-store.js";
 
 // 레거시 DomainListItem(types.ts:123) 과 키 집합 동형 + repos(v6 멀티레포 신호) 가산.
 //  units/entities/debts/proposed 는 ::int 캐스트(미캐스트 시 pg int8 → string, 프론트 fmtNum 깨짐).
@@ -111,15 +112,22 @@ export async function listCommitIsChanges(_limit = 100): Promise<any[]> {
 export async function productDomainmapView(limit = 100): Promise<{
   repo: string; domains: V6DomainItem[]; debts: V6DebtItem[];
   should_changes: any[]; is_commit_changes: any[];
+  edges: { should: CategoryEdgeRow[]; is: CategoryEdgeRow[] };
 }> {
-  const [domains, debts, should_changes, is_commit_changes] = await Promise.all([
+  const [domains, debts, should_changes, is_commit_changes, shouldEdges, isEdges] = await Promise.all([
     listProductDomains(),
     listProductDebts(),
     listShouldChanges(limit),
     listCommitIsChanges(limit),
+    listCategoryEdges({ axis: "should" }),
+    listCategoryEdges({ axis: "is" }),
   ]);
   // repo 키: category 는 repo-free 라 라벨로 'product' 고정(레거시는 입력 repo 명). 프론트는 repo 키를 안 읽음.
-  return { repo: "product", domains, debts, should_changes, is_commit_changes };
+  // edges: 도메인 간 의존 — should(수동 저작 의도) / is(스캔 도출 코드 import). 프론트가 노드 id 로 매칭해
+  //  should∖is=선언만(괴리) · is∖should=코드만(괴리) · 교집합=일치 로 3레이어(의도/실제/대조) 렌더.
+  //  is 는 refresh 가 imports 를 공급하기 전엔 빈 배열(정직 — '아직 측정 안 됨'으로 표기, 거짓 괴리 방지).
+  return { repo: "product", domains, debts, should_changes, is_commit_changes,
+    edges: { should: shouldEdges, is: isEdges } };
 }
 
 // ── repo-free 개요(구 overview(repo) 대체) — 제품 전체(category) 기준 집계. ──
