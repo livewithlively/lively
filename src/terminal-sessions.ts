@@ -275,14 +275,43 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   return sessions;
 }
 
+// 구성원 OS 유저 lazy 프로비저닝(#524) — 격리 인프라가 준비됐는데 이 멤버 box_ 가 아직 없으면 '첫 세션'에서 자동 생성.
+//  → 멤버추가 시 일괄 자동(터미널 안 쓰는 멤버·에이전트까지 생성)이 아니라, 실제 세션 열 때만(과프로비저닝 방지·수동버튼 불요).
+//  실패·비멤버(에이전트=getMember null)·인프라미설치 = 비격리 폴백(무회귀·secure-by-default 3중 게이트 그대로).
+//  동시 세션 레이스는 in-flight 프로미스로 dedupe(한 멤버 provision 1회). #346 멀티프로필(CLAUDE_CONFIG_DIR)을 흡수 — UI 프로필 버튼 은퇴.
+const inflightProvision = new Map<string, Promise<string | null>>();
+export async function ensureMemberOsUser(user: LivelyUser): Promise<string | null> {
+  const existing = await resolveMemberOsUser(userSlug(user));
+  if (existing) return existing;                          // 이미 프로비저닝됨 → 빠른 경로(대부분)
+  if (!isolationInfraReady()) return null;                // 인프라 미설치/off/비-Linux → 비격리 폴백
+  const memberId = ownerId(user);
+  if (!memberId) return null;
+  let p = inflightProvision.get(memberId);
+  if (!p) {
+    p = (async (): Promise<string | null> => {
+      try {
+        if (!(await getMember(memberId))) return null;    // 에이전트/비-멤버 → 프로비저닝 안 함(비격리)
+        await provisionMemberOs(memberId);                // useradd·홈700·그룹·키트(첫 세션만; 수 초)
+        return await resolveMemberOsUser(userSlug(user)); // 이제 box_ 존재 → 격리
+      } catch (e) {
+        console.warn(`[terminal] 구성원 OS 유저 lazy 프로비저닝 실패(${memberId}) — 비격리 폴백:`, (e as Error)?.message ?? e);
+        return null;
+      } finally { inflightProvision.delete(memberId); }
+    })();
+    inflightProvision.set(memberId, p);
+  }
+  return p;
+}
+
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 세션도 개인 세션과 '동일하게'
   //  생성자 box_<멤버> 로 격리 실행한다(#524 인증 프로필 단위화): claude 자격증명이 각 box_ 홈(700)에 커널 격리
   //  → 공유 lively 로 띄우면 멤버 간 인증이 안 갈리고 재로그인을 요구했다. 공유 프로젝트 폴더는 lively-shared 그룹으로
   //  box_ 가 접근(project 폴더 2770 group rwx). 입장(초대·프로젝트멤버십)은 터미널탭 초대와 '완전히 동일' —
   //  게이트웨이 중계 attach 라 pane uid 와 무관(그래서 공동 입장은 그대로 됨). 과거 '폴더 접근 불가→500' 이유는
-  //  폴더를 그룹접근가능으로 만들며 해소. (비격리 폴백은 미프로비저닝/off 멤버 = resolveMemberOsUser 가 null 반환.)
-  const osUser = await resolveMemberOsUser(userSlug(user));
+  //  폴더를 그룹접근가능으로 만들며 해소. 미프로비저닝 멤버는 여기서 '첫 세션 lazy provision'(ensureMemberOsUser) →
+  //  자동 격리(수동 버튼 불요). 인프라미설치/off/비멤버 = null 반환 = 비격리 폴백(무회귀).
+  const osUser = await ensureMemberOsUser(user);
   const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath, osUser);
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);

@@ -1074,8 +1074,9 @@ async function showGuidePreview(bodyMd) {
 }
 
 // ── 구성원 ──
-// 중앙박스 계정(프로필) — 멤버별 다른 Claude Code 계정(멀티프로필 #346/#442). 자체 fetch(admin 전용 엔드포인트).
-//  [프로필 만들기]=dir+키트(config·MCP) 설치. 로그인(OAuth)은 인터랙티브라 멤버가 웹터미널에서 셀프서비스.
+// 중앙박스 계정 격리(#524) — 구성원별 OS 유저(box_<slug>, 홈700)로 완전 격리. #346 멀티프로필(CLAUDE_CONFIG_DIR)은
+//  흡수됨(격리 시 멤버 네이티브 ~/.claude 사용) → '프로필 만들기' 버튼 은퇴. 프로비저닝은 '첫 세션에 자동'(lazy) —
+//  여긴 격리 상태 표시 + (선택) 미리 생성·재프로비저닝. provision 엔드포인트(#346)는 비격리 폴백용으로 코드에만 잔존.
 async function profilesEditor(detail) {
   const reload = () => profilesEditor(detail);
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('프로필 상태를 불러오는 중')));
@@ -1084,43 +1085,28 @@ async function profilesEditor(detail) {
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '프로필을 불러오지 못했습니다'))); return; }
   const profiles = r.profiles || [];
   const items = profiles.length ? profiles.map((p) => {
-    const st = p.status || {};
-    const stateText = st.active ? '🔐 로그인됨 (내 계정)' : st.provisioned ? '⏳ 프로비저닝됨 · 로그인 대기' : '— 미설정 (공유 계정 폴백)';
-    const kids: any[] = [el('div', {}, el('strong', { text: p.name }), el('span', { class: 'caption', text: '  ' + p.id + ' · ' + stateText }))];
-    if (!st.provisioned) {
-      kids.push(el('button', { class: 'btn btn-primary', text: '프로필 만들기', onclick: async (ev) => {
-        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '설치 중… (수십초)';
-        try { await api('/api/ui/terminal/profiles/provision', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('프로필 생성됨 — 이제 이 멤버가 웹터미널에서 로그인하세요'); reload(); }
-        catch (e) { btn.disabled = false; btn.textContent = '프로필 만들기'; toast('실패 — ' + e.message, true); }
-      } }));
-    } else {
-      // 이미 프로비저닝됨 — 재프로비저닝(멤버 lively MCP 토큰 재발급 → 프로필 .claude.json 갱신).
-      //  무중단: 로그인(.credentials.json)·실행중 세션은 안 건드리고 .claude.json 만 갱신 → 새 세션(또는 /mcp 재연결)부터 새 토큰.
-      kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(인증 갱신)', onclick: async (ev) => {
-        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중… (수십초)';
-        try { await api('/api/ui/terminal/profiles/provision', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('인증 갱신됨 — 로그인·실행중 세션 유지, 새 세션부터 이 멤버 토큰 적용'); reload(); }
-        catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(인증 갱신)'; toast('실패 — ' + e.message, true); }
-      } }));
-    }
-    if (st.provisioned && !st.loggedIn) {
-      kids.push(el('div', { class: 'caption', text: '로그인: 이 멤버가 웹터미널에서  CLAUDE_CONFIG_DIR=' + (st.dir || '') + ' claude  실행 후 /login' }));
-    }
-    // OS-유저 격리(#524) — 구성원별 OS 계정(box_<slug>, 홈700). 격리는 secure-by-default: 인프라 설치됨 + 이 멤버
-    //  provision 되면 그 멤버의 '새 세션'이 자동 격리(별도 켜기 불요). 자격증명(.credentials.json)이 uid 로 상호열람 차단.
+    // OS-유저 격리(#524) — 구성원별 OS 계정(box_<slug>, 홈700). secure-by-default: 인프라 설치된 박스에서 그 멤버가
+    //  웹터미널 '첫 세션'을 열면 box_ 가 자동 생성(lazy)되고 그 세션부터 자기 계정으로 격리. 자격증명이 uid 로 상호열람 차단.
+    //  #346 멀티프로필은 흡수됨(격리 시 네이티브 ~/.claude) → 프로필 버튼 없음. 아래는 상태 + (선택)미리생성/재프로비저닝.
     const os = p.os || {};
+    const kids: any[] = [];
+    const stateText = !os.ready ? '🔒 인프라 미설치 — 비격리(공유 계정) 폴백'
+      : os.provisioned ? '🔒 격리됨: ' + (os.osUser || '') + ' ✓ · 세션 자동 격리'
+        : '⏳ 첫 세션에 자동 격리 (' + (os.osUser || 'box_…') + ')';
+    kids.push(el('div', {}, el('strong', { text: p.name }), el('span', { class: 'caption', text: '  ' + p.id + ' · ' + stateText })));
     if (!os.ready) {
-      kids.push(el('div', { class: 'caption', text: '🔒 OS 격리: 인프라 미설치 — 박스에서 deploy/linux/install-isolation.sh 실행 필요' }));
+      kids.push(el('div', { class: 'caption', text: '박스에서 deploy/linux/install-isolation.sh 실행 시 자동 격리가 켜집니다.' }));
     } else if (!os.provisioned) {
-      kids.push(el('button', { class: 'btn btn-primary btn-sm', text: '🔒 OS 격리 유저 만들기', onclick: async (ev) => {
+      // 자동이지만, 첫 세션 지연(수십초) 없이 미리 깔고 싶으면.
+      kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '지금 미리 만들기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '생성 중… (수십초)';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('OS 격리 유저 생성됨 — 이 멤버의 새 세션부터 자기 계정으로 격리됩니다'); reload(); }
-        catch (e) { btn.disabled = false; btn.textContent = '🔒 OS 격리 유저 만들기'; toast('실패 — ' + e.message, true); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('OS 격리 유저 생성됨 — 이 멤버 세션이 본인 계정으로 격리됩니다'); reload(); }
+        catch (e) { btn.disabled = false; btn.textContent = '지금 미리 만들기'; toast('실패 — ' + e.message, true); }
       } }));
     } else {
-      kids.push(el('div', {}, el('span', { class: 'caption', text: '🔒 OS 격리: ' + (os.osUser || '') + ' ✓ · 새 세션 격리 활성' })));
       kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(격리·토큰 갱신)', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중…';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('격리 유저 재프로비저닝됨 — 새 세션부터 새 토큰'); reload(); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('재프로비저닝됨 — 로그인·실행중 세션 유지, 새 세션부터 새 토큰'); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(격리·토큰 갱신)'; toast('실패 — ' + e.message, true); }
       } }));
     }
@@ -1128,9 +1114,8 @@ async function profilesEditor(detail) {
   }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
   detail.replaceChildren(
     el('div', { class: 'card' },
-      el('h3', { text: '중앙박스 계정(프로필)' }),
-      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀). 이미 만든 프로필은 [재프로비저닝(인증 갱신)]으로 무중단 재발급됩니다(로그인·세션 유지).' }),
-      el('p', { class: 'caption', text: '🔒 [OS 격리 유저 만들기]는 그 멤버를 별도 OS 계정(box_<slug>, 홈 700)으로 완전 격리합니다 — 구성원 간 자격증명 상호열람 차단(외부상주·금융권). 인프라(deploy/linux/install-isolation.sh)가 깔린 박스에서만 버튼이 뜨고, provision 되면 그 멤버의 새 세션부터 자동 격리(별도 켜기 불요, 끄려면 LIVELY_MEMBER_ISOLATION=off).' })),
+      el('h3', { text: '중앙박스 계정 격리' }),
+      el('p', { class: 'caption', text: '각 구성원은 자기 OS 계정(box_<slug>, 홈 700)으로 완전 격리됩니다 — 구성원 간 Claude 자격증명(.credentials.json) 상호열람 차단(외부상주·금융권). 격리 인프라(deploy/linux/install-isolation.sh)가 깔린 박스에서 구성원이 웹터미널을 처음 열면 격리 유저가 자동 생성되고(별도 버튼 불요), 그 세션부터 본인 Claude 로그인으로 뜹니다. 미프로비저닝 멤버는 공유 계정으로 폴백(무회귀). 첫 세션 지연 없이 미리 깔려면 [지금 미리 만들기], 끄려면 게이트웨이 env LIVELY_MEMBER_ISOLATION=off.' })),
     ...items);
 }
 
