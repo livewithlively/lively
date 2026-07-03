@@ -82,6 +82,22 @@ export function memberReadTo(osUser: string, absPath: string, dest: Writable): P
   });
 }
 
+// 멤버 uid 로 `sh -c <script>` 실행(선택 stdin) — 스크립트는 **우리 코드의 고정 리터럴**만(사용자입력 X → 인젝션 없음).
+//  시크릿(git 개인키·토큰 등)은 argv 아닌 **stdin** 으로만 전달한다(ps/argv 노출 회피). git 자격 materialize(#540)에 쓰인다.
+export function memberSh(osUser: string, script: string, stdin?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", script], [stdin != null ? "pipe" : "ignore", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    if (stdin != null) {
+      if (!c.stdin) return reject(new Error("member sh: no stdin"));
+      c.stdin.on("error", reject);
+      c.stdin.end(stdin);
+    }
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member sh exit ${code}`))));
+  });
+}
+
 // src(req) → 멤버 파일. `sh -c 'cat > "$0"' <abs>` 로 멤버 소유 파일 생성. maxBytes 초과 시 중단('too large').
 export function memberWriteFrom(osUser: string, absPath: string, src: Readable, maxBytes: number): Promise<void> {
   return new Promise((resolve, reject) => {

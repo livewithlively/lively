@@ -848,7 +848,7 @@ async function reposPanel(detail, data) {
     const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '레포' }), el('span', { class: 'dm-tag', text: 'git' }), el('span', { class: 'wikicat-groupcount', text: String(repos.length) }));
     if (canEdit)
         head.append(el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }));
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }), canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')), el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }), state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정', onclick: () => openGitCredentialManager('gateway') }) : null, canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')), el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요. private 레포 클론 인증은 [게이트웨이 git 계정] 또는 각 구성원의 [내 프로필 ▸ git 인증]에서 설정합니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
 }
 // 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
@@ -2876,6 +2876,114 @@ function changePasswordModal(o) {
     document.body.append(back);
     setTimeout(() => (forced ? nextIn : curIn).focus(), 0);
 }
+// git 자격 관리 오버레이(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. scope='me'(본인 자가등록) | 'gateway'(조직 머신계정·admin).
+//  SSH 는 박스가 키페어를 만들고 **공개키만** 보여준다(사용자가 GitHub 에 등록 — 개인키는 박스 밖으로 안 나감). HTTPS 는 토큰 저장.
+//  provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize(Slice 2).
+function openGitCredentialManager(scope) {
+    const isGw = scope === 'gateway';
+    const base = isGw ? '/api/ui/org/git-credential' : '/api/ui/me/git-credential';
+    const body = el('div', { style: 'min-width:520px; max-width:640px;' });
+    const back = overlay(isGw ? '게이트웨이 git 계정' : 'git 인증 (레포 접근)', body);
+    document.body.append(back);
+    const reload = async () => {
+        body.replaceChildren(skeleton('불러오는 중'));
+        try {
+            render(await api(base));
+        }
+        catch (e) {
+            body.replaceChildren(el('p', { class: 'gate-error', text: (e && e.message) || '불러오기 실패' }));
+        }
+    };
+    const credRow = (c) => {
+        const head = el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' }, el('span', { class: 'pill pill-ok', text: String(c.kind || '').toUpperCase() }), el('span', { class: 'mini-meta', text: c.host }), c.kind === 'ssh' && c.ssh_public_key ? copyButton(() => c.ssh_public_key, '공개키 복사') : null, el('button', {
+            class: 'btn btn-ghost btn-sm', text: '삭제',
+            onclick: async () => {
+                if (!confirm(`${c.host} (${c.kind}) 자격을 삭제할까요?`))
+                    return;
+                try {
+                    await api(base + '/delete', { method: 'POST', body: JSON.stringify({ host: c.host }) });
+                    toast('삭제됨');
+                    reload();
+                }
+                catch (e) {
+                    toast((e && e.message) || '삭제 실패', true);
+                }
+            },
+        }));
+        const box = el('div', { class: 'card', style: 'padding:10px 12px; margin:6px 0;' }, head);
+        if (c.kind === 'ssh' && c.ssh_public_key) {
+            box.append(el('pre', { class: 'admin-preview', style: 'white-space:pre-wrap; word-break:break-all; margin:8px 0 0; font-size:11.5px;', text: c.ssh_public_key }));
+            box.append(el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '이 공개키를 GitHub 레포 ▸ Settings ▸ Deploy keys (또는 계정 ▸ SSH keys) 에 등록하세요.' }));
+        }
+        return box;
+    };
+    const render = (data) => {
+        const rows = [];
+        rows.push(el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: isGw
+                ? '조직 머신 git 계정입니다. 프로젝트 provision 클론에서 요청한 구성원 자격이 없을 때 이 자격으로 클론합니다 — private 레포면 여기(또는 각 구성원)에 자격이 있어야 클론됩니다.'
+                : '내 git 자격입니다. private 레포 클론과 세션(shell·Claude) 안 git 에 이 자격이 쓰입니다. SSH 는 박스가 키를 만들고 공개키만 GitHub 에 등록하면 됩니다(개인키는 박스 밖으로 안 나갑니다).' }));
+        if (!data.encryption_ready)
+            rows.push(el('p', { class: 'gate-error', style: 'margin:0 0 10px', text: '⚠ 서버에 ENCRYPTION_KEY 가 설정되지 않아 자격을 저장할 수 없습니다 — 관리자에게 게이트웨이 env(ENCRYPTION_KEY) 설정을 요청하세요.' }));
+        const creds = (data.credentials || []);
+        if (creds.length)
+            rows.push(...creds.map(credRow));
+        else
+            rows.push(el('p', { class: 'admin-hint', text: '등록된 자격이 없습니다.' }));
+        // ── 새 자격 추가 ──
+        rows.push(el('div', { style: 'border-top:1px solid var(--line); margin:14px 0 10px;' }));
+        const hostIn = el('input', { type: 'text', value: 'github.com', placeholder: 'github.com' });
+        const kindSel = { v: 'ssh' };
+        const sshBox = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0', text: '박스가 ed25519 키페어를 생성합니다. 생성 후 공개키를 GitHub 에 등록하세요.' }));
+        const userIn = el('input', { type: 'text', placeholder: '사용자명(선택 — GitHub PAT 면 비워도 됨)' });
+        const tokenIn = el('input', { type: 'password', placeholder: 'HTTPS 토큰 / PAT', autocomplete: 'off' });
+        const httpsBox = el('div', { style: 'display:none' }, field('사용자명(선택)', userIn), field('토큰', tokenIn));
+        const kindChips = el('div', { class: 'chips' }, ...['ssh', 'https'].map((k) => {
+            const chip = el('button', { type: 'button', class: 'chip' + (kindSel.v === k ? ' on' : ''), text: k === 'ssh' ? 'SSH 키 (박스 생성)' : 'HTTPS 토큰' });
+            chip.onclick = () => {
+                kindSel.v = k;
+                Array.from(kindChips.children).forEach((c, i) => c.classList.toggle('on', ['ssh', 'https'][i] === k));
+                sshBox.style.display = k === 'ssh' ? '' : 'none';
+                httpsBox.style.display = k === 'https' ? '' : 'none';
+                submit.textContent = k === 'ssh' ? 'SSH 키 생성' : '토큰 저장';
+            };
+            return chip;
+        }));
+        const submit = el('button', { class: 'btn btn-primary', text: 'SSH 키 생성' });
+        const status = el('span', { class: 'admin-status' });
+        submit.addEventListener('click', async () => {
+            if (!data.encryption_ready) {
+                toast('ENCRYPTION_KEY 미설정 — 저장할 수 없습니다', true);
+                return;
+            }
+            const host = hostIn.value.trim() || 'github.com';
+            const payload = { kind: kindSel.v, host };
+            if (kindSel.v === 'https') {
+                if (!tokenIn.value.trim()) {
+                    toast('토큰을 입력하세요', true);
+                    return;
+                }
+                payload.token = tokenIn.value;
+                if (userIn.value.trim())
+                    payload.username = userIn.value.trim();
+            }
+            submit.disabled = true;
+            status.textContent = kindSel.v === 'ssh' ? '키 생성 중…' : '저장 중…';
+            try {
+                await api(base, { method: 'POST', body: JSON.stringify(payload) });
+                toast(kindSel.v === 'ssh' ? 'SSH 키 생성됨 — 아래 공개키를 GitHub 에 등록하세요' : '토큰 저장됨');
+                reload();
+            }
+            catch (e) {
+                status.textContent = '';
+                submit.disabled = false;
+                toast((e && e.message) || '실패', true);
+            }
+        });
+        rows.push(el('div', { class: 'card', style: 'padding:12px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '새 자격 추가' }), kindChips, field('호스트', hostIn), sshBox, httpsBox, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
+        body.replaceChildren(...rows);
+    };
+    reload();
+}
 async function openMyProfile() {
     let data;
     try {
@@ -2956,7 +3064,7 @@ async function openMyProfile() {
     const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
     const status = el('span', { class: 'admin-status' });
     const back = overlay('내 프로필', el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
-        text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }), field('프로필 사진', el('div', {}, avaRow, avaCharColor)), field('표시 이름', nameIn), data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('응답 길이', el('div', {}, lenChips, lenHint)), field('담당 영역', areaIn), field('자주 쓰는 도구·레포', toolsIn), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status));
+        text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }), field('프로필 사진', el('div', {}, avaRow, avaCharColor)), field('표시 이름', nameIn), data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }), el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('응답 길이', el('div', {}, lenChips, lenHint)), field('담당 영역', areaIn), field('자주 쓰는 도구·레포', toolsIn), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status));
     saveBtn.addEventListener('click', async () => {
         // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
         const lines = [];

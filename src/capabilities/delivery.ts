@@ -37,6 +37,11 @@ import { refreshSources, listSourceConfigs } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
 import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
+import {
+  GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
+  deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
+} from "../org/git-credential-store.js";
+import { secretBoxReady } from "../org/secret-box.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -117,6 +122,35 @@ const maskDbSource = (s: DbSourceRow): Record<string, unknown> => ({
   auth_mode: s.auth_mode, auth_ref: s.auth_ref, rls: s.rls, max_rows: s.max_rows, timeout_ms: s.timeout_ms,
   note: s.note, enabled: s.enabled, table_default: s.table_default, sort: s.sort, version: s.version, updated_at: s.updated_at, updated_by: s.updated_by,
 });
+
+// git 자격 등록(#540) 입력 파싱·적용 — self(me/*)·gateway(org/*) 공용. SSH 는 박스가 키페어 생성(개인키 박스밖 유출 없음),
+//  HTTPS 는 토큰. 시크릿은 secret-box 봉투 암호화로 DB 저장(secretBoxReady 아니면 503 — 평문 저장 금지).
+const GIT_HOST_RE = /^[a-z0-9.-]{1,253}$/;
+function parseGitHost(input: Record<string, unknown>): string {
+  const raw = (input.host === undefined || input.host === null || String(input.host).trim() === "") ? "github.com" : String(input.host).trim().toLowerCase();
+  if (!GIT_HOST_RE.test(raw)) throw new HttpError(400, "git 호스트명 형식이 올바르지 않습니다 (예: github.com)");
+  return raw;
+}
+async function applyGitCredential(owner: string, input: Record<string, unknown>, actor: string): Promise<{ credential: GitCredentialPublic; public_key?: string }> {
+  if (!secretBoxReady()) throw new HttpError(503, "ENCRYPTION_KEY 가 설정되지 않아 자격을 저장할 수 없습니다 — 관리자에게 게이트웨이 env(ENCRYPTION_KEY) 설정을 요청하세요.");
+  const host = parseGitHost(input);
+  const kind = str(input.kind, "kind", 10).trim();
+  const label = input.label === undefined || input.label === null ? null : str(input.label, "label", 200).trim();
+  if (kind === "ssh") {
+    // SSH: 박스가 ed25519 키페어 생성 — 개인키는 DB(암호화)에만, 공개키만 반환·저장(사용자가 GitHub 에 등록).
+    const kp = await generateSshKeypair(`${owner}@lively-box`);
+    const credential = await setSshCredential(owner, host, { publicKey: kp.publicKey, privateKey: kp.privateKey, label }, actor);
+    return { credential, public_key: kp.publicKey };
+  }
+  if (kind === "https") {
+    const token = str(input.token, "token", 4000);
+    if (!token.trim()) throw new HttpError(400, "HTTPS 토큰이 필요합니다");
+    const username = input.username === undefined || input.username === null ? null : str(input.username, "username", 200).trim();
+    const credential = await setHttpsCredential(owner, host, { username, token, label }, actor);
+    return { credential };
+  }
+  throw new HttpError(400, "kind 는 ssh|https 여야 합니다");
+}
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
@@ -430,6 +464,45 @@ export const deliveryCapabilities: Capability[] = [
       const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
       return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
+
+  // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
+  //  provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize(Slice 2).
+  restRead("me_git_credential_get", "내 git 인증 조회",
+    "현재 로그인한 구성원의 등록된 git 자격(호스트·종류·SSH 공개키·존재 플래그)을 반환한다 — 시크릿(개인키·토큰)은 절대 반환하지 않는다.",
+    [{ method: "GET", paths: ["/api/ui/me/git-credential"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      return { credentials: await listGitCredentialsPublic(memberOwner(userId)), encryption_ready: secretBoxReady() };
+    }),
+  restRead("me_git_credential_set", "내 git 인증 등록",
+    "본인 git 자격을 등록한다. kind=ssh 면 박스가 키페어를 생성해 공개키를 반환(개인키는 박스밖 유출 없음), kind=https 면 토큰을 저장. host 기본 github.com.",
+    [{ method: "POST", paths: ["/api/ui/me/git-credential"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      return applyGitCredential(memberOwner(userId), input, actorOf(user));
+    }),
+  restRead("me_git_credential_delete", "내 git 인증 삭제",
+    "본인 git 자격을 삭제한다(host 지정, 기본 github.com).",
+    [{ method: "POST", paths: ["/api/ui/me/git-credential/delete"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      return { deleted: await deleteGitCredential(memberOwner(userId), parseGitHost(input)) };
+    }),
+  restOnly("org_git_credential_get", "게이트웨이 git 계정 조회",
+    "게이트웨이(조직 머신 계정) git 자격을 조회한다 — provision 클론에서 멤버 자격이 없을 때 폴백으로 쓰인다. 시크릿은 반환하지 않는다.",
+    [{ method: "GET", paths: ["/api/ui/org/git-credential"], parse: () => ({}) }],
+    async (_input: unknown, _user: LivelyUser) => ({ credentials: await listGitCredentialsPublic(GATEWAY_OWNER), encryption_ready: secretBoxReady() })),
+  restOnly("org_git_credential_set", "게이트웨이 git 계정 등록",
+    "게이트웨이(조직 머신 계정) git 자격을 등록한다. kind=ssh 면 박스가 키페어 생성·공개키 반환, kind=https 면 토큰 저장.",
+    [{ method: "POST", paths: ["/api/ui/org/git-credential"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => applyGitCredential(GATEWAY_OWNER, input, actorOf(user))),
+  restOnly("org_git_credential_delete", "게이트웨이 git 계정 삭제",
+    "게이트웨이 git 자격을 삭제한다(host 지정, 기본 github.com).",
+    [{ method: "POST", paths: ["/api/ui/org/git-credential/delete"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, _user: LivelyUser) => ({ deleted: await deleteGitCredential(GATEWAY_OWNER, parseGitHost(input)) })),
 
   restOnly("org_token_revoke", "토큰 회수",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",

@@ -12,6 +12,7 @@ import { PROJECT_SHARED_BASE, projectAbsPath } from "./project-fs.js";
 import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
+import { resolveGitSecret, type GitCredentialSecret } from "./org/git-credential-store.js";
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
 const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;        // 경로 컴포넌트로 쓰이므로 슬래시·.. 금지
@@ -24,9 +25,11 @@ export interface RepoSpec { name: string; path?: string; worktree?: boolean; bra
 export interface ProvisionedRepo { name: string; path: string; worktree: boolean; branch: string | null; cwd: string; subpath: string; cloned: boolean; }
 
 // git 실행 — async spawn(이벤트루프 비블로킹). 셸 미사용(arg-array) → 인젝션 불가. 타임아웃 시 kill.
-function git(args: string[], cwd?: string): Promise<{ ok: boolean; out: string; err: string }> {
+//  extraEnv: 자격 주입(#540) — GIT_SSH_COMMAND(키파일)/GIT_ASKPASS(토큰). process.env 위에 병합.
+function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((resolve) => {
-    const p = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const env = extraEnv ? { ...process.env, ...extraEnv } : process.env;
+    const p = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let out = "", err = "", done = false;
     const finish = (r: { ok: boolean; out: string; err: string }) => { if (!done) { done = true; resolve(r); } };
     const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* */ } finish({ ok: false, out: out.trim(), err: `git 타임아웃(${GIT_TIMEOUT_MS}ms)` }); }, GIT_TIMEOUT_MS);
@@ -42,11 +45,70 @@ async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync
 //  best-effort·비파괴: 무인 provision 이라 자동 머지커밋·리베이스·충돌 금지 → ff-only 만.
 //   dirty·무upstream·갈라짐·오프라인이면 손대지 않고 낡은 채 진행(터미널 생성을 막지 않음).
 //   @{u} 사용 → repos 기본 클론(main→origin/main)이든 직접입력 경로(피처브랜치→그 upstream)든 브랜치 선택 존중.
-async function refreshRepo(repoPath: string): Promise<void> {
+async function refreshRepo(repoPath: string, extraEnv?: Record<string, string>): Promise<void> {
   const st = await git(["status", "--porcelain"], repoPath);
-  if (!st.ok || st.out) return;                        // dirty 또는 상태확인 실패 → skip
-  await git(["fetch"], repoPath);                       // 실패(오프라인 등) 무시 — 아래 ff 가 no-op 될 뿐
-  await git(["merge", "--ff-only", "@{u}"], repoPath);  // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+  if (!st.ok || st.out) return;                             // dirty 또는 상태확인 실패 → skip
+  await git(["fetch"], repoPath, extraEnv);                  // private 면 자격 필요 → extraEnv 주입. 실패(오프라인 등) 무시
+  await git(["merge", "--ff-only", "@{u}"], repoPath);       // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+}
+
+// git 호스트 추출 — 자격을 어느 호스트에 매칭할지(github.com 등). scp-식(user@host:path)·URL 둘 다. (export=테스트용)
+export function hostOf(gitUrl: unknown): string | null {
+  const s = String(gitUrl ?? "").trim();
+  if (!s) return null;
+  const scp = s.match(/^[\w.-]+@([\w.-]+):/); // user@host:path (임베드 시크릿 없음)
+  if (scp) return scp[1].toLowerCase();
+  try { return new URL(s).hostname.toLowerCase(); } catch { return null; }
+}
+
+// 기존 클론의 origin remote URL(호스트 매칭 폴백용) — 레지스트리에 git_url 이 없을 때.
+async function originUrl(repoPath: string): Promise<string | null> {
+  const r = await git(["config", "--get", "remote.origin.url"], repoPath);
+  return r.ok ? (r.out.trim() || null) : null;
+}
+
+// 자격 주입 준비(#540) — 게이트웨이가 클론/fetch 할 때 요청 멤버(없으면 gateway) 자격을 그 git 호출에만 주입.
+//  SSH: 개인키를 게이트웨이 임시 700 디렉에 600 으로 쓰고 GIT_SSH_COMMAND -i. HTTPS: GIT_ASKPASS 스크립트 + 토큰.
+//  둘 다 호출 뒤 cleanup 으로 즉시 삭제(디스크에 시크릿 잔존 최소화). 자격 없으면 no-op(앰비언트 폴백).
+export interface GitAuth { env?: Record<string, string>; cleanup: () => Promise<void>; }
+export async function prepareGitAuth(secret: GitCredentialSecret | null): Promise<GitAuth> {
+  const noop: GitAuth = { cleanup: async () => { /* */ } };
+  if (!secret) return noop;
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-gitauth-"));
+  await fsp.chmod(dir, 0o700).catch(() => { /* */ });
+  const cleanup = async () => { await fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* */ }); };
+  try {
+    if (secret.kind === "ssh" && secret.ssh_private_key) {
+      const keyFile = path.join(dir, "id");
+      const key = secret.ssh_private_key.endsWith("\n") ? secret.ssh_private_key : secret.ssh_private_key + "\n";
+      await fsp.writeFile(keyFile, key, { mode: 0o600 });
+      await fsp.chmod(keyFile, 0o600).catch(() => { /* */ });
+      const known = path.join(dir, "known_hosts");
+      // IdentitiesOnly=yes → 주입 키만(에이전트/기본키 무시). accept-new → 첫 접속 호스트키 자동수락(무인).
+      const sshCmd = `ssh -i ${keyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known} -o BatchMode=yes`;
+      return { env: { GIT_SSH_COMMAND: sshCmd, GIT_TERMINAL_PROMPT: "0" }, cleanup };
+    }
+    if (secret.kind === "https" && secret.https_token) {
+      const askpass = path.join(dir, "askpass.sh");
+      // git 이 Username/Password 를 물으면 $1 프롬프트로 분기(대소문자 무관). 시크릿은 env 로만 전달(argv·로그 노출 없음).
+      const script = "#!/bin/sh\ncase \"$1\" in\n*[Uu]sername*) printf '%s' \"$GIT_CRED_USER\" ;;\n*) printf '%s' \"$GIT_CRED_PASS\" ;;\nesac\n";
+      await fsp.writeFile(askpass, script, { mode: 0o700 });
+      await fsp.chmod(askpass, 0o700).catch(() => { /* */ });
+      return {
+        env: {
+          GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: "0",
+          GIT_CRED_USER: secret.https_username || "x-access-token",
+          GIT_CRED_PASS: secret.https_token,
+        },
+        cleanup,
+      };
+    }
+    await cleanup();
+    return noop;
+  } catch (e) {
+    await cleanup();
+    throw e;
+  }
 }
 
 // 경로 봉쇄 — 절대경로 정규화 후 workspace 루트 안에 있어야 함(.. 탈출 거부). 신뢰 위협모델이라 string-prefix 검사로 충분.
@@ -63,7 +125,7 @@ const expandHome = (p: string): string => (p.startsWith("~/") ? path.join(proces
 //  worktree 옵션 시 project/<id>/<name> 워크트리(브랜치 project/<id>) 생성. 결과 경로를 .lively/project.json(provisioned)에 기록.
 //  멱등: 이미 있는 클론/워크트리는 재사용(덮어쓰기 없음). 비치명 호출 아님 — 실패 시 HttpError throw(엔드포인트가 4xx/5xx).
 export async function provisionProjectRepos(
-  projectId: number, folder: string, specs: RepoSpec[], opts?: { clone?: boolean },
+  projectId: number, folder: string, specs: RepoSpec[], opts?: { clone?: boolean; memberId?: string | null },
 ): Promise<ProvisionedRepo[]> {
   if (!folder) throw new HttpError(400, "프로젝트 폴더가 없습니다");
   const projDir = projectAbsPath(folder);                       // workspace/project/<id>
@@ -81,38 +143,49 @@ export async function provisionProjectRepos(
     const inputPath = spec.path && String(spec.path).trim() ? expandHome(String(spec.path).trim()) : path.join(reposBase, name);
     const repoPath = confineToWorkspace(inputPath, "레포");
 
-    // ② 없으면 clone (레지스트리 clone_url 필요)
+    // ①-b 자격 주입(#540) — 이 레포 호스트에 매칭되는 요청 멤버(없으면 gateway) 자격을 이 iteration 의 git 호출에만 주입.
+    //  host 우선순위: 레지스트리 git_url → (재사용 base면) origin remote → 기본 github.com. 자격 없으면 앰비언트 폴백(무주입).
+    const existed = await isRepo(repoPath);
+    const row = await getRepo(name).catch(() => null);
+    const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
+    const secret = await resolveGitSecret(opts?.memberId ?? null, host).catch(() => null);
+    const auth = await prepareGitAuth(secret);
+
     let cloned = false;
-    if (!(await isRepo(repoPath))) {
-      if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
-      const row = await getRepo(name).catch(() => null);
-      const url = sanitizeCloneUrl(row?.git_url ?? null);
-      if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
-      await fsp.mkdir(path.dirname(repoPath), { recursive: true });
-      const c = await git(["clone", url, repoPath]);
-      if (!c.ok) throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
-      cloned = true;
-    }
-
-    // ②-b 재사용 base(갓 clone 아님)는 새 워크트리를 자르기 전에 upstream 으로 fast-forward(best-effort).
-    if (!cloned) await refreshRepo(repoPath);
-
-    // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
-    let cwd = repoPath;
-    const worktree = !!spec.worktree;
-    if (worktree) {
-      const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
-      if (!fs.existsSync(wtPath)) {
-        await fsp.mkdir(projDir, { recursive: true });
-        // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
-        let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
-        if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
-        if (!w.ok) throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`);
+    try {
+      // ② 없으면 clone (레지스트리 clone_url 필요)
+      if (!existed) {
+        if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
+        const url = sanitizeCloneUrl(row?.git_url ?? null);
+        if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
+        await fsp.mkdir(path.dirname(repoPath), { recursive: true });
+        const c = await git(["clone", url, repoPath], undefined, auth.env);
+        if (!c.ok) throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
+        cloned = true;
       }
-      cwd = wtPath;
+
+      // ②-b 재사용 base(갓 clone 아님)는 새 워크트리를 자르기 전에 upstream 으로 fast-forward(best-effort).
+      if (!cloned) await refreshRepo(repoPath, auth.env);
+
+      // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
+      let cwd = repoPath;
+      const worktree = !!spec.worktree;
+      if (worktree) {
+        const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
+        if (!fs.existsSync(wtPath)) {
+          await fsp.mkdir(projDir, { recursive: true });
+          // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
+          let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
+          if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
+          if (!w.ok) throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`);
+        }
+        cwd = wtPath;
+      }
+      const subpath = path.relative(PROJECT_SHARED_BASE, cwd);
+      out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
+    } finally {
+      await auth.cleanup(); // 시크릿 임시파일 즉시 삭제(성공/실패 무관)
     }
-    const subpath = path.relative(PROJECT_SHARED_BASE, cwd);
-    out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
   }
 
   // 세션 cwd = 프로젝트 폴더(work.mjs 동형) — 워크트리는 그 폴더 하위라 그냥 접근된다. 비워크트리 클론(폴더 밖)만 add-dir.

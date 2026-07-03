@@ -756,6 +756,27 @@ export async function initOrgSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS web_session_member_idx ON web_session(member_id);
   `);
 
+  // ── git_credential — 레포 클론·세션 git 용 자격(#540). 웹UI로 관리(→DB 저장)하되 시크릿(개인키·토큰)은
+  //  봉투 암호화(secret-box, ENCRYPTION_KEY)만 저장 — 공개키는 평문(웹 노출 OK). owner='gateway'(조직 머신
+  //  계정) | 'member:<id>'(개별 사용자). (owner,host) 1행. kind 가 어느 필드가 채워졌는지 결정.
+  //   게이트웨이 provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS git_credential(
+      owner TEXT NOT NULL,                     -- 'gateway' | 'member:<id>'
+      host  TEXT NOT NULL DEFAULT 'github.com',
+      kind  TEXT NOT NULL,                     -- 'ssh' | 'https'
+      ssh_public_key      TEXT,                -- 공개키(평문 — 웹 노출·GitHub 등록용)
+      ssh_private_key_enc TEXT,                -- SSH 개인키(봉투 암호화)
+      https_username      TEXT,                -- HTTPS 사용자명(GitHub 토큰이면 임의값 무관)
+      https_token_enc     TEXT,                -- HTTPS 토큰/PAT(봉투 암호화)
+      label TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by   TEXT,
+      last_used_at TIMESTAMPTZ,
+      PRIMARY KEY (owner, host));
+  `);
+
   // ── 멤버 이메일 유일성(로그인 아이디) — 부분 유니크(비어있지 않은 이메일만, 대소문자 무시). ──
   //  앱 레벨(org_member_upsert)이 1차 방어, 이 인덱스가 DB 보증. 기존 중복 데이터가 있으면 생성 실패 →
   //  **비치명적**으로 보류(중복 정리 후 다음 부팅에 자동 적용). 앱 검증은 그 사이에도 신규 중복을 막는다.

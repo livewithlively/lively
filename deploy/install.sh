@@ -41,6 +41,7 @@ main() {
 
   phase "2/7 .env 생성(비파괴) + 시크릿"
   ensure_env
+  ensure_env_secret ENCRYPTION_KEY   # 기존 .env 보존 설치도 git 자격 암호화키 백필(#540) — 신규는 ensure_env 가 이미 넣음
 
   phase "3/7 store(pgvector) 기동"
   store_up
