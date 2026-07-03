@@ -25,7 +25,7 @@ function sv(tag, attrs, ...kids) {
             e.appendChild(c);
     return e;
 }
-const NODE_W = 150, NODE_H = 46, COL_GAP = 178, ROW_GAP = 92, PAD = 34, BAND_GAP = 74;
+const NODE_W = 178, NODE_H = 60, COL_GAP = 224, ROW_GAP = 116, PAD = 42, BAND_GAP = 88;
 // ── 방향성 레이어 배치 ──
 //  union(should∪is) 엣지의 방향으로 각 노드의 열(depth)을 계산(longest-path, 사이클 안전 relaxation).
 //  횡단(cross_cutting)은 레이어링에서 제외해 하단 밴드에 따로 둔다(모두와 연결돼 흐름을 왜곡하므로).
@@ -257,7 +257,8 @@ async function renderDomainmap(view, params) {
             wrap.append(el('div', { class: 'dmx-note' }, el('strong', { text: '실제(is) 의존은 아직 측정 전입니다.' }), document.createTextNode(' 코드 스캔(refresh)이 import 를 수집하면 실선과 괴리가 채워집니다. 지금은 의도(should)만 신뢰할 수 있습니다.')));
         }
         const scroll = el('div', { class: 'dmx-svg-scroll' });
-        const svg = sv('svg', { class: 'dmx-graph', viewBox: `0 0 ${Math.round(LO.width)} ${Math.round(LO.height)}`, role: 'img', 'aria-label': '도메인 의존 흐름 그래프' });
+        // width/height 를 실제 px 로 고정 — 넓은 그래프가 좁은 컨테이너에 축소되지 않고 넘치면 가로 스크롤.
+        const svg = sv('svg', { class: 'dmx-graph', width: Math.round(LO.width), height: Math.round(LO.height), viewBox: `0 0 ${Math.round(LO.width)} ${Math.round(LO.height)}`, role: 'img', 'aria-label': '도메인 의존 흐름 그래프' });
         // 화살표 마커(색상별)
         const defs = sv('defs', {});
         for (const [id, col] of [['ok', 'var(--dmx-ok)'], ['warn', 'var(--dmx-warn)'], ['viol', 'var(--dmx-viol)'], ['pending', 'var(--dmx-pending)']]) {
@@ -280,10 +281,10 @@ async function renderDomainmap(view, params) {
             if (hot) {
                 const lbl = mode === 'dev' && e.is ? ('×' + fmtNum(e.weight || 0)) : (e.rel || '');
                 if (lbl) {
-                    const w = lbl.length * 6.4 + 10;
+                    const w = lbl.length * 10.5 + 16;
                     const g = sv('g', {});
-                    g.appendChild(sv('rect', { x: p.mx - w / 2, y: p.my - 8, width: w, height: 15, rx: 4, fill: 'var(--dmx-surface)', stroke: 'var(--dmx-line2)', 'stroke-width': 1 }));
-                    g.appendChild(sv('text', { class: 'dmx-elabel', x: p.mx, y: p.my + 2.5, 'text-anchor': 'middle', text: lbl }));
+                    g.appendChild(sv('rect', { x: p.mx - w / 2, y: p.my - 11, width: w, height: 21, rx: 6, fill: 'var(--dmx-surface)', stroke: 'var(--dmx-line2)', 'stroke-width': 1 }));
+                    g.appendChild(sv('text', { class: 'dmx-elabel', x: p.mx, y: p.my + 4, 'text-anchor': 'middle', text: lbl }));
                     gLabel.appendChild(g);
                 }
             }
@@ -294,13 +295,13 @@ async function renderDomainmap(view, params) {
                 continue;
             const dim = sel != null && sel !== d.id && !neighbor(d.id);
             const g = sv('g', { class: 'dmx-node' + (d.cross_cutting ? ' cross' : '') + (sel === d.id ? ' active' : '') + (dim ? ' dim' : ''), tabindex: 0, role: 'button', 'data-id': d.id, 'aria-label': d.name || d.key });
-            g.appendChild(sv('rect', { class: 'dmx-box', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: NODE_W, height: NODE_H, rx: 9 }));
-            g.appendChild(sv('rect', { class: 'dmx-stripe', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: 4, height: NODE_H, rx: 2 }));
-            g.appendChild(sv('text', { class: 'dmx-nm', x: p.x - NODE_W / 2 + 14, y: p.y - 2, text: d.name || d.key }));
-            g.appendChild(sv('text', { class: 'dmx-ky', x: p.x - NODE_W / 2 + 14, y: p.y + 13, text: d.key }));
+            g.appendChild(sv('rect', { class: 'dmx-box', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: NODE_W, height: NODE_H, rx: 11 }));
+            g.appendChild(sv('rect', { class: 'dmx-stripe', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: 5, height: NODE_H, rx: 2 }));
+            g.appendChild(sv('text', { class: 'dmx-nm', x: p.x - NODE_W / 2 + 17, y: p.y - 5, text: d.name || d.key }));
+            g.appendChild(sv('text', { class: 'dmx-ky', x: p.x - NODE_W / 2 + 17, y: p.y + 15, text: d.key }));
             const gap = nodeGap(d.id);
             if (gap)
-                g.appendChild(sv('circle', { class: 'dmx-gapdot dmx-g-' + gap, cx: p.x + NODE_W / 2 - 11, cy: p.y - NODE_H / 2 + 11, r: 4 }));
+                g.appendChild(sv('circle', { class: 'dmx-gapdot dmx-g-' + gap, cx: p.x + NODE_W / 2 - 13, cy: p.y - NODE_H / 2 + 13, r: 5 }));
             g.addEventListener('click', () => { select(d.id); });
             g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') {
                 ev.preventDefault();
@@ -309,8 +310,8 @@ async function renderDomainmap(view, params) {
             gNode.appendChild(g);
         }
         svg.appendChild(gEdge);
-        svg.appendChild(gLabel);
         svg.appendChild(gNode);
+        svg.appendChild(gLabel); // 라벨을 노드 위로(가림 방지)
         scroll.append(svg);
         wrap.append(scroll);
         return wrap;
