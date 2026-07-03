@@ -23,6 +23,36 @@ detect_os() {
   esac
 }
 
+# ── 서비스 유닛(systemd/launchd) 렌더·설치 — install(provision.os_install_service)·update 공유(단일 소스). ──
+#  유닛 템플릿(deploy/<os>/…) 변경(예: KillMode=process)이 update.sh 로도 기존 박스에 전파되게 한다. 멱등.
+#  '파일 렌더'만(+linux daemon-reload) — enable/start/restart 는 호출자가(provision=enable·start, update=restart).
+render_service_unit() {
+  local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
+  mkdir -p "$APP_DIR/logs"
+  case "$(detect_os)" in
+    linux)
+      local unit="/etc/systemd/system/context-ontology-gateway.service"
+      sed -e "s#@APP_DIR@#$APP_DIR#g" \
+          -e "s#@APP_USER@#$(id -un)#g" \
+          -e "s#@NODE_BIN@#$node_bin#g" \
+          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.npm-global/bin#g" \
+          "$DEPLOY_DIR/linux/context-ontology-gateway.service" | sudo tee "$unit" >/dev/null
+      sudo systemctl daemon-reload
+      ok "systemd 유닛 렌더: $unit"
+      ;;
+    mac)
+      local plist="$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
+      mkdir -p "$(dirname "$plist")"
+      if [ -f "$plist" ]; then cp "$plist" "$plist.bak-$(date +%Y%m%d-%H%M%S)"; warn "기존 plist 백업 후 갱신"; fi
+      sed -e "s#@APP_DIR@#$APP_DIR#g" \
+          -e "s#@NODE_BIN@#$node_bin#g" \
+          -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.npm-global/bin#g" \
+          "$DEPLOY_DIR/mac/io.lvly.context-ontology.plist" > "$plist"
+      ok "launchd plist 렌더: $plist"
+      ;;
+  esac
+}
+
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "필요한 명령 없음: $1"; }
 
 # 시크릿 생성(hex — URL/compose/.env 어디서도 이스케이프 불필요).

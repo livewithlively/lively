@@ -38,17 +38,7 @@ os_install_deps() {
 }
 
 os_install_service() {
-  local unit="/etc/systemd/system/context-ontology-gateway.service"
-  local node_bin node_dir user
-  node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"; user="$(id -un)"
-  mkdir -p "$APP_DIR/logs"
-  log "systemd 유닛 작성: $unit"
-  sed -e "s#@APP_DIR@#$APP_DIR#g" \
-      -e "s#@APP_USER@#$user#g" \
-      -e "s#@NODE_BIN@#$node_bin#g" \
-      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.npm-global/bin#g" \
-      "$DEPLOY_DIR/linux/context-ontology-gateway.service" | sudo tee "$unit" >/dev/null
-  sudo systemctl daemon-reload
+  render_service_unit                                        # 렌더+daemon-reload(공유 — common.sh, update.sh 와 동일 소스)
   sudo systemctl enable --now context-ontology-gateway.service
   ok "systemd 서비스 enable+start (context-ontology-gateway)"
 }
