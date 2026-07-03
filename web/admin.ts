@@ -1093,6 +1093,14 @@ async function profilesEditor(detail) {
         try { await api('/api/ui/terminal/profiles/provision', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('프로필 생성됨 — 이제 이 멤버가 웹터미널에서 로그인하세요'); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '프로필 만들기'; toast('실패 — ' + e.message, true); }
       } }));
+    } else {
+      // 이미 프로비저닝됨 — 재프로비저닝(멤버 lively MCP 토큰 재발급 → 프로필 .claude.json 갱신).
+      //  무중단: 로그인(.credentials.json)·실행중 세션은 안 건드리고 .claude.json 만 갱신 → 새 세션(또는 /mcp 재연결)부터 새 토큰.
+      kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(인증 갱신)', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중… (수십초)';
+        try { await api('/api/ui/terminal/profiles/provision', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('인증 갱신됨 — 로그인·실행중 세션 유지, 새 세션부터 이 멤버 토큰 적용'); reload(); }
+        catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(인증 갱신)'; toast('실패 — ' + e.message, true); }
+      } }));
     }
     if (st.provisioned && !st.loggedIn) {
       kids.push(el('div', { class: 'caption', text: '로그인: 이 멤버가 웹터미널에서  CLAUDE_CONFIG_DIR=' + (st.dir || '') + ' claude  실행 후 /login' }));
@@ -1102,7 +1110,7 @@ async function profilesEditor(detail) {
   detail.replaceChildren(
     el('div', { class: 'card' },
       el('h3', { text: '중앙박스 계정(프로필)' }),
-      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀).' })),
+      el('p', { class: 'caption', text: '멤버별로 다른 Claude Code 계정을 쓰게 합니다. [프로필 만들기]로 그 멤버의 config·MCP·훅을 깔고, 그 멤버가 웹터미널에서 한 번 로그인(claude → /login)하면 그 멤버가 띄우는 중앙박스 세션이 자기 계정으로 뜹니다. 로그인 안 된 멤버는 공유 계정으로 폴백돼요(무회귀). 이미 만든 프로필은 [재프로비저닝(인증 갱신)]으로 무중단 재발급됩니다(로그인·세션 유지).' })),
     ...items);
 }
 

@@ -13,7 +13,8 @@ import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
-import { listMembers } from "./org/store.js";
+import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
+import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -143,13 +144,40 @@ export function profileStatusFor(memberId: string): ReturnType<typeof profileSta
 // 프로필 프로비저닝(#442) — 프로필 dir + 키트(settings·MCP)를 설치한다. **로그인(OAuth)은 별도**(사람이 웹터미널에서
 //  claude /login). 기존 deploy/provision-profile.sh(테스트된 로직) 재활용 — admin 라우트에서만 호출(게이트는 라우트가).
 //  ⚠ member 는 실재 org_member.id 여야(라우트가 검증). execFile(셸 미경유)라 인젝션 없음. 스크립트가 slug→dir 계산.
+//
+//  ⭐ per-member lively 신원: 프로필 .claude.json 의 lively MCP 를 '공용 agent' 가 아니라 '이 멤버' 토큰으로 굽는다.
+//   → 그 프로필로 뜬 세션의 MCP 쓰기(knowledge_save 등)가 멤버로 귀속(updated_by=멤버)·토큰탭 표시·회수가능.
+//   멤버 DB 토큰(lvk_)을 발급 → LIVELY_TOKEN 으로 넘김(register-clients 가 프로필 .claude.json 에 구움).
+//   유효권한 = verifyDbToken 이 '라이브 멤버 스코프'와 매 호출 교집합(퇴사·강등 즉시 무효). admin/runtime 은 제외(세션에 fleet제어 금지).
+//   ⚠ KIT_PROFILE_ONLY=1 — install-kit 이 공유 ~/.lively/token(훅 fetch·전 세션 공유)을 멤버 토큰으로 덮지 않게(프로필 .claude.json 만).
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");   // dist/ → 리포 루트
 export async function provisionProfile(memberId: string): Promise<{ slug: string; dir: string }> {
   const u = { userId: memberId } as LivelyUser;
+  const member = await getMember(memberId);
+  if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
+  const slug = userSlug(u);
+
+  // 재프로비저닝 누적 방지 — 이 멤버의 기존 central-box 토큰 회수(평문은 못 되찾으니 매번 새로 굽는다).
+  for (const t of await listTokens()) {
+    if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
+      await revokeToken(t.token_hash, "provisionProfile", "terminal-sessions");
+    }
+  }
+  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
+  const scopes = (member.scopes || []).filter((s) => !dangerous.has(s));
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `central-box:${slug}` },
+    "provisionProfile", "terminal-sessions",
+  );
+
   const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
-  // 게이트웨이 env 상속(PATH 에 claude, .env 토큰은 스크립트가 읽음). 최대 3분(키트 다운로드+등록).
-  await execFileAsync("bash", [script, memberId], { timeout: 180_000, env: process.env, cwd: REPO_ROOT, maxBuffer: 4 * 1024 * 1024 });
-  return { slug: userSlug(u), dir: profileConfigDir(u) };
+  // 게이트웨이 env 상속 + 멤버 토큰(프로필 .claude.json 에 구움) + KIT_PROFILE_ONLY(공유 ~/.lively 보존). 최대 3분(키트 다운로드+등록).
+  await execFileAsync("bash", [script, memberId], {
+    timeout: 180_000,
+    env: { ...process.env, LIVELY_TOKEN: token, KIT_PROFILE_ONLY: "1" },
+    cwd: REPO_ROOT, maxBuffer: 4 * 1024 * 1024,
+  });
+  return { slug, dir: profileConfigDir(u) };
 }
 
 async function tmux(args: string[]): Promise<string> {

@@ -22,17 +22,8 @@ os_install_deps() {
 }
 
 os_install_service() {
+  render_service_unit                                        # 렌더(plist)·백업(공유 — common.sh, update.sh 와 동일 소스)
   local plist="$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
-  local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
-  mkdir -p "$APP_DIR/logs" "$(dirname "$plist")"
-  if [ -f "$plist" ]; then
-    cp "$plist" "$plist.bak-$(date +%Y%m%d-%H%M%S)"   # 비파괴: 기존 plist 백업
-    warn "기존 plist 백업 후 갱신"
-  fi
-  sed -e "s#@APP_DIR@#$APP_DIR#g" \
-      -e "s#@NODE_BIN@#$node_bin#g" \
-      -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.npm-global/bin#g" \
-      "$DEPLOY_DIR/mac/io.lvly.context-ontology.plist" > "$plist"
   launchctl bootout "gui/$(id -u)/io.lvly.context-ontology" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$plist"
   ok "launchd 서비스 로드 (io.lvly.context-ontology)"

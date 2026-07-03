@@ -2,6 +2,7 @@
 import { api, el, errorNote, pageHead, state, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
+import { startTour } from './tour.js';
 // ════════════════════════════════════════════════════════════════════
 // 터미널 세션 매니저 (#/terminal) — 중앙 박스 경로 D: xterm.js + 서버 node-pty(tmux).
 //  목록/생성폼/CRUD → REST(/api/ui/terminal/*), PTY 스트림 → WS(/terminal/ws, ticket 쿠키).
@@ -115,8 +116,13 @@ async function renderTerminal(view) {
         bulkBar.replaceChildren(el('span', { class: 'bulk-bar-count', text: n ? n + '개 선택됨' : '삭제할 세션을 고르세요' }), el('div', { class: 'bulk-bar-actions' }, allBtn, delBtn));
     }
     function repaint() {
-        // 헤더 우측 — '새 세션' 하나. 기본 비공개로 만들고, 생성 폼에서 멤버를 초대한다.
-        headActions.replaceChildren(el('button', { class: 'btn btn-primary', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) }));
+        // 헤더 우측 — '새 세션'. data-tour 앵커로 온보딩 투어(#517)가 이 버튼을 스포트라이트한다.
+        //  처음이신 분(내 세션 0개)께는 '따라하기'(스포트라이트 온보딩)를 함께 — 언제든 재실행 가능한 진입점.
+        const newBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'new-session', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) });
+        const tourBtn = mine.length === 0
+            ? el('button', { class: 'btn btn-ghost', text: '🧭 따라하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() })
+            : null;
+        headActions.replaceChildren(...[tourBtn, newBtn].filter(Boolean));
         // '내 세션' 헤더 우측 토글 — 선택모드면 [취소], 평소엔 (삭제 가능한 세션이 있을 때만) [선택].
         const selToggle = sel.mode
             ? el('button', { class: 'btn btn-ghost btn-sm term-sel-toggle', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); repaint(); } })
@@ -329,7 +335,8 @@ function openTermCreateForm(cfg, view) {
     }
     rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
     loadPicker();
-    const back = overlay('새 세션', field('이름', labelI), field('작업자', authorI), field('작업 위치', rootSel), field('폴더', pickerBox), field('하네스', harnessSel), profileNoteEl(cfg), field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box), flagsBox, autoWrap, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', text: '생성하기', onclick: async (ev) => {
+    // data-tour 래퍼 — 온보딩 투어(#517)가 폴더·AI·이름·생성 버튼을 순서대로 스포트라이트한다.
+    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), field('작업자', authorI), el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)), el('div', { 'data-tour': 'harness' }, field('하네스', harnessSel)), profileNoteEl(cfg), field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box), flagsBox, autoWrap, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const flags = {};
@@ -480,4 +487,50 @@ function openTermSettings() {
     sizeI.addEventListener('input', apply);
     overlay('터미널 보기 설정', field('폰트', fontSel), field('크기(px)', sizeI), field('테마', themeSel), field('커서', cursorSel), el('div', { class: 'caption', text: '설정은 이 브라우저에 저장되어 다음에도 적용됩니다.' }));
 }
-export { renderTerminal, teardownTerminal, };
+// 터미널 온보딩 투어(#517) — 세션 만드는 5단계를 실제 UI 위에서 스포트라이트로 짚어 준다.
+//  '새 창으로 열기'(원래 창을 가림)를 대체: 같은 화면에서 필요한 버튼만 밝게, 나머지는 어둡게 하고
+//  사용자가 실제 버튼을 직접 누르며 진행한다. renderTerminal 이 그린 DOM(data-tour 앵커)에 붙는다.
+//  1) [+ 새 세션] 클릭 → 만들기 창이 열리면 2·3·4(폴더·AI·이름)로 이동, 5) [생성하기] → 완료 안내.
+function startTerminalTour() {
+    startTour([
+        {
+            target: '[data-tour="new-session"]',
+            title: '① 새 세션 만들기',
+            body: [el('p', { class: 'tour-p' }, '오른쪽 위 파란 ', el('b', { text: '[+ 새 세션]' }), ' 버튼을 눌러 주세요. 세션 만들기 창이 열립니다.')],
+            placement: 'bottom', advanceOn: 'click',
+        },
+        {
+            target: '[data-tour="folder"]',
+            title: '② 작업 폴더 고르기',
+            body: [el('p', { class: 'tour-p' }, '어디서 일할지 골라요 — ', el('b', { text: '작업 위치' }), '(공유 워크스페이스 · 개인 폴더)와 ', el('b', { text: '폴더' }), '.'),
+                el('p', { class: 'tour-p', text: '잘 모르겠으면 [개인 폴더] 그대로 두어도 괜찮아요.' })],
+            placement: 'right', scrollIntoView: true,
+        },
+        {
+            target: '[data-tour="harness"]',
+            title: '③ 함께 일할 AI 고르기',
+            body: [el('p', { class: 'tour-p' }, el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), ' 중에 골라요. 잘 모르겠으면 Claude Code 를 추천해요.')],
+            placement: 'right', scrollIntoView: true,
+        },
+        {
+            target: '[data-tour="label"]',
+            title: '④ 세션 이름 정하기',
+            body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '.')],
+            placement: 'right', scrollIntoView: true,
+        },
+        {
+            target: '[data-tour="create"]',
+            title: '⑤ 만들기',
+            body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 까만 터미널 창이 열려요.')],
+            placement: 'top', scrollIntoView: true, advanceOn: 'click',
+        },
+        {
+            target: () => null,
+            title: '🎉 다 됐어요!',
+            body: [el('p', { class: 'tour-p', text: '새로 열린 터미널 창에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
+                el('p', { class: 'tour-p', text: '세션은 창을 닫아도 서버에 남아, 다음에 [터미널] 탭에서 이어서 쓸 수 있어요.' })],
+            placement: 'center', ctaNext: '마치기',
+        },
+    ]);
+}
+export { renderTerminal, startTerminalTour, teardownTerminal, };

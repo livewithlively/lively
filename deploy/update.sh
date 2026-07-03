@@ -29,12 +29,15 @@ else
   npm run build   # 실패하면 set -e 로 여기서 중단 → 기존 게이트웨이 그대로 가동(다운 없음)
 fi
 
-phase "2/3 store 반영(멱등) + 게이트웨이 재시작"
+phase "2/3 store 반영(멱등) + 유닛 갱신 + 게이트웨이 재시작"
 dc compose up -d --wait items-db    # compose/이미지 변경 멱등 반영(없으면 no-op)
+render_service_unit                 # 유닛 템플릿 변경(예: KillMode=process)을 이 박스에도 반영(단일 소스 — common.sh). 기존엔 코드만 갱신돼 유닛 픽스가 전파 안 되던 갭 해소.
 if [ "$OS" = linux ]; then
   sudo systemctl restart context-ontology-gateway
 else
-  launchctl kickstart -k "gui/$(id -u)/io.lvly.context-ontology"
+  # plist 변경 반영엔 재부트스트랩 필요(kickstart 는 로드된 정의만 재시작 → plist 변경 미반영).
+  launchctl bootout "gui/$(id -u)/io.lvly.context-ontology" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
 fi
 wait_healthz
 proxy_up   # LIVELY_DOMAIN(.env) 설정 시 Caddy 재적용/기동(미설정 시 no-op) — 도메인 추가/변경도 여기서 반영
