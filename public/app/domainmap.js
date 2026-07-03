@@ -101,7 +101,9 @@ function clipEnds(a, b) {
     const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
     const cl = (c, sx, sy) => { const tx = sx !== 0 ? hw / Math.abs(sx) : 1e9, ty = sy !== 0 ? hh / Math.abs(sy) : 1e9; const t = Math.min(tx, ty); return { x: c.x + sx * t, y: c.y + sy * t }; };
     const s = cl(a, ux, uy), e = cl(b, -ux, -uy);
-    return { x1: s.x, y1: s.y, x2: e.x, y2: e.y, mx: (s.x + e.x) / 2, my: (s.y + e.y) / 2 };
+    const gap = 8; // 화살표가 노드에 파묻히지 않게 to 끝을 살짝 앞에서 끊음(방향 강조)
+    const ex = e.x - ux * gap, ey = e.y - uy * gap;
+    return { x1: s.x, y1: s.y, x2: ex, y2: ey, mx: (s.x + ex) / 2, my: (s.y + ey) / 2 };
 }
 async function renderDomainmap(view, params) {
     view.replaceChildren(skeleton('도메인 맵을 불러오는 중'));
@@ -280,7 +282,7 @@ async function renderDomainmap(view, params) {
     function buildGraphInto(g) {
         const defs = sv('defs', {});
         for (const [id, col] of [['ok', 'var(--dmx-ok)'], ['warn', 'var(--dmx-warn)'], ['viol', 'var(--dmx-viol)'], ['pending', 'var(--dmx-pending)']])
-            defs.appendChild(sv('marker', { id: 'dmx-ah-' + id, markerWidth: 9, markerHeight: 9, refX: 7, refY: 3.2, orient: 'auto', markerUnits: 'userSpaceOnUse' }, sv('path', { d: 'M0,0 L7.5,3.2 L0,6.4 Z', fill: col })));
+            defs.appendChild(sv('marker', { id: 'dmx-ah-' + id, markerWidth: 14, markerHeight: 12, refX: 11.5, refY: 5.5, orient: 'auto', markerUnits: 'userSpaceOnUse' }, sv('path', { d: 'M0,0.5 L12,5.5 L0,10.5 L3,5.5 Z', fill: col })));
         g.appendChild(defs);
         const gEdge = sv('g', {}), gNode = sv('g', {}), gLabel = sv('g', {});
         const act = activeEdges();
