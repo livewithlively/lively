@@ -217,7 +217,7 @@ function webGuideNodes() {
         class: 'btn btn-ghost btn-sm', href: '#/terminal?tour=1', target: '_blank', rel: 'noopener',
         text: '새 창으로 열기 ↗',
     });
-    const steps = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })), el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }), el('div', { class: 'step-cta' }, tourBtn, newWinBtn),
+    const steps = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })), el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }), el('div', { class: 'step-cta' }, tourBtn, newWinBtn), 
     // 미리보기 — 따라하기가 짚어줄 순서. JS 안내가 안 떠도 흐름을 알 수 있게 남겨 둔다(폴백).
     el('div', { class: 'step-list' }, installStep(1, '[+ 새 세션] 누르기', el('p', { class: 'step-p' }, '터미널 화면 ', el('b', { text: '오른쪽 위 파란 [+ 새 세션]' }), ' 버튼을 누르면 만들기 창이 떠요.')), installStep(2, '작업 폴더와 AI를 고르고 이름 정하기', el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }), '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'), el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })), installStep(3, '[생성하기] → 바로 대화하기', el('p', { class: 'step-p', text: '[생성하기]를 누르면 까만 창(터미널)이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }), el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어, 다음에 [터미널] 탭에서 다시 이어서 쓸 수 있어요.' }))));
     return [callout, steps];
