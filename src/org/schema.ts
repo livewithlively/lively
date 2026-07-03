@@ -171,6 +171,24 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // ── org_connector — 커넥터별 설정/토큰 레지스트리 (프로젝트 #541). system PK = 1행/커넥터(단일테넌트). ──
+  //  config  = 비밀 아닌 설정(평문 JSONB: clickup list ids·notion instance·slack channels 등, CONNECTOR_SPECS secret:false).
+  //  secrets = 암호화 시크릿(JSONB {key: "gcm$…"}, secret-box AES-256-GCM, CONNECTOR_SPECS secret:true).
+  //  종전 org_mcp_server.auth_env(env 이름만) 컨벤션을, SSM 전용 배포(어니스트 실박스=파일편집 불가)를 위해 '암호문 저장'
+  //  으로 확장 — 평문 시크릿은 여전히 DB 에 두지 않는다(암호문만). 커넥터 해소(connectors/config.ts)가 DB→복호화→env 폴백.
+  //  data_source(카탈로그: system/status/label)와 별개 축 — 그건 커넥터 존재·활성 메타, 여긴 자격/설정.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_connector(
+      system TEXT PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      secrets JSONB NOT NULL DEFAULT '{}'::jsonb,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+  `);
+
   // ── org_hook — 커스텀 훅(관리자 정의, 구성원 머신에서 실행). 본문(source_code)은 멤버 디스크에 굳히지 ──
   // 않고 불변 런너가 매 세션 게이트웨이에서 fetch 해 실행한다(회수=다음 세션 무효, kill-switch). 내장 훅 3종은
   // org_runtime_config.hooks 토글로 별도 관리(여기는 커스텀 전용). content_hash=sha256(source_code)는 런너 무결성 게이트용.
@@ -466,7 +484,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','connector_push','eval_domain_debt','map_unmapped','agent_inject','ensure_managed_sessions'));
+        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','connector_push','eval_domain_debt','map_unmapped','distill_sources','agent_inject','ensure_managed_sessions'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -713,13 +731,21 @@ export async function initOrgSchema(): Promise<void> {
         '동기화(run-sync/backfill)', '["K"]'::jsonb, 20,
         '문서 본문은 지식(K)으로 수집(V4: 산출물 A 흡수). 외부수집은 provenance=observed. 시크릿은 적재 전 redact.'),
       ('slack','Slack','dropped',
-        '(미적재) Slack 커넥터 코드는 있으나 message:slack 이 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip).',
-        NULL, '[]'::jsonb, 30,
-        '적재하려면 KIND_MAP 에 message:slack 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 slack 0건.'),
+        'Slack 커넥터가 메시지를 자료(source)로 적재한다(#541). distill 이 자료를 지식(K)으로 증류.',
+        '주기 동기화(run-sync)', '[]'::jsonb, 30,
+        'message → source(raw, provenance=observed). 관리탭 커넥터 설정에서 bot token 넣고 활성화. distill 이 source→knowledge.'),
       ('discord','Discord','dropped',
-        '(미적재) Discord 커넥터 코드는 있으나 message:discord 가 KIND_MAP 에 미정의라 v6 knowledge 로 적재되지 않는다(미러 skip).',
-        NULL, '[]'::jsonb, 40,
-        '적재하려면 KIND_MAP 에 message:discord 매핑을 추가해야 한다(현재 미정의 → 미러 skip). 라이브 ku 에 discord 0건.')
+        'Discord 커넥터가 메시지를 자료(source)로 적재한다(#541). distill 이 자료를 지식(K)으로 증류.',
+        '주기 동기화(run-sync)', '[]'::jsonb, 40,
+        'message → source(raw). 관리탭 커넥터 설정에서 bot token 넣고 활성화.'),
+      ('gmail','Gmail','dropped',
+        'Gmail 커넥터가 메일을 자료(source)로 적재한다(#541, OAuth2 refresh-token). distill 이 지식으로 증류.',
+        '주기 동기화(run-sync)', '[]'::jsonb, 50,
+        'message → source(raw). 관리탭에서 Google OAuth(client_id/secret/refresh_token) 설정 후 활성화. scope gmail.readonly.'),
+      ('gdrive','Google Drive','dropped',
+        'Google Drive 커넥터가 문서를 지식(K)으로 적재한다(#541, OAuth2 refresh-token).',
+        '주기 동기화(run-sync)', '["K"]'::jsonb, 60,
+        'doc(정제 문서) → knowledge(observed). native 문서는 text/plain·csv export. 관리탭에서 Google OAuth 설정 후 활성화. scope drive.readonly.')
     ON CONFLICT (system) DO UPDATE SET
       label=EXCLUDED.label, status=EXCLUDED.status, collection_method=EXCLUDED.collection_method,
       cadence=EXCLUDED.cadence, into_kinds=EXCLUDED.into_kinds, sort=EXCLUDED.sort, note=EXCLUDED.note,
@@ -757,7 +783,7 @@ export async function initOrgSchema(): Promise<void> {
   `);
 
   // ── git_credential — 레포 클론·세션 git 용 자격(#540). 웹UI로 관리(→DB 저장)하되 시크릿(개인키·토큰)은
-  //  봉투 암호화(secret-box, ENCRYPTION_KEY)만 저장 — 공개키는 평문(웹 노출 OK). owner='gateway'(조직 머신
+  //  봉투 암호화(secret-box, CONNECTOR_SECRET_KEY)만 저장 — 공개키는 평문(웹 노출 OK). owner='gateway'(조직 머신
   //  계정) | 'member:<id>'(개별 사용자). (owner,host) 1행. kind 가 어느 필드가 채워졌는지 결정.
   //   게이트웨이 provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize.
   await itemsPool.query(`

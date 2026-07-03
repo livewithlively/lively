@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
-process.env.ENCRYPTION_KEY = "unit-test-key-do-not-use-in-prod-0123456789";
-const { encryptSecret, decryptSecret, secretBoxReady } = await import("./secret-box.js");
+process.env.CONNECTOR_SECRET_KEY = "unit-test-key-do-not-use-in-prod-0123456789"; // #541 secret-box 공용 마스터키
+const { encryptSecret, decryptSecret, secretsEnabled } = await import("./secret-box.js");
 const { generateSshKeypair } = await import("./git-credential-store.js");
 const { hostOf, prepareGitAuth } = await import("../project-provision.js");
 const { safeHost, buildSshConfigBlock, buildGitCredLines } = await import("./git-credential-materialize.js");
@@ -16,16 +16,16 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
 // ── secret-box: 왕복·변조탐지·포맷 ──
 {
   const secret = "-----BEGIN OPENSSH PRIVATE KEY-----\nabcDEF123\n한글도\n-----END OPENSSH PRIVATE KEY-----\n";
-  assert.equal(secretBoxReady(), true);
+  assert.equal(secretsEnabled(), true);
   const blob = encryptSecret(secret);
   assert.notEqual(blob, secret);                         // 평문 노출 안 됨
-  assert.ok(blob.startsWith("gcm1."));                   // 버전 프리픽스
+  assert.ok(blob.startsWith("gcm$"));                    // #541 포맷 gcm$iv$tag$ct
   assert.equal(decryptSecret(blob), secret);             // 왕복 일치
   ok("secret-box 왕복(한글·개행 포함)");
 
-  const parts = blob.split(".");
-  parts[3] = Buffer.from("tampered").toString("base64url"); // 암호문 변조
-  assert.throws(() => decryptSecret(parts.join(".")));      // GCM 태그 불일치 → throw
+  const parts = blob.split("$");
+  parts[3] = Buffer.from("tampered").toString("base64");    // 암호문 변조
+  assert.throws(() => decryptSecret(parts.join("$")));      // GCM 태그 불일치 → throw
   ok("secret-box 변조 탐지");
 
   assert.throws(() => decryptSecret("not-a-valid-blob"));
@@ -38,13 +38,13 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
 
 // ── fail-closed: 키 없으면 암·복호 throw ──
 {
-  const saved = process.env.ENCRYPTION_KEY;
-  delete process.env.ENCRYPTION_KEY;
-  assert.equal(secretBoxReady(), false);
+  const saved = process.env.CONNECTOR_SECRET_KEY;
+  delete process.env.CONNECTOR_SECRET_KEY;
+  assert.equal(secretsEnabled(), false);
   assert.throws(() => encryptSecret("x"));
-  ok("ENCRYPTION_KEY 미설정 → fail-closed");
-  process.env.ENCRYPTION_KEY = saved;
-  assert.equal(secretBoxReady(), true);
+  ok("CONNECTOR_SECRET_KEY 미설정 → fail-closed");
+  process.env.CONNECTOR_SECRET_KEY = saved;
+  assert.equal(secretsEnabled(), true);
 }
 
 // ── SSH 키페어 생성: 유효한 ed25519 ──

@@ -25,6 +25,7 @@ import {
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
+  listConnectors, upsertConnector, removeConnector,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
   type DbSourceInput, type DbSourceRow,
@@ -41,7 +42,7 @@ import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
   deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
 } from "../org/git-credential-store.js";
-import { secretBoxReady } from "../org/secret-box.js";
+import { secretsEnabled } from "../org/secret-box.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -124,7 +125,7 @@ const maskDbSource = (s: DbSourceRow): Record<string, unknown> => ({
 });
 
 // git 자격 등록(#540) 입력 파싱·적용 — self(me/*)·gateway(org/*) 공용. SSH 는 박스가 키페어 생성(개인키 박스밖 유출 없음),
-//  HTTPS 는 토큰. 시크릿은 secret-box 봉투 암호화로 DB 저장(secretBoxReady 아니면 503 — 평문 저장 금지).
+//  HTTPS 는 토큰. 시크릿은 secret-box 봉투 암호화로 DB 저장(secretsEnabled 아니면 503 — 평문 저장 금지).
 const GIT_HOST_RE = /^[a-z0-9.-]{1,253}$/;
 function parseGitHost(input: Record<string, unknown>): string {
   const raw = (input.host === undefined || input.host === null || String(input.host).trim() === "") ? "github.com" : String(input.host).trim().toLowerCase();
@@ -132,7 +133,7 @@ function parseGitHost(input: Record<string, unknown>): string {
   return raw;
 }
 async function applyGitCredential(owner: string, input: Record<string, unknown>, actor: string): Promise<{ credential: GitCredentialPublic; public_key?: string }> {
-  if (!secretBoxReady()) throw new HttpError(503, "ENCRYPTION_KEY 가 설정되지 않아 자격을 저장할 수 없습니다 — 관리자에게 게이트웨이 env(ENCRYPTION_KEY) 설정을 요청하세요.");
+  if (!secretsEnabled()) throw new HttpError(503, "CONNECTOR_SECRET_KEY 가 설정되지 않아 자격을 저장할 수 없습니다 — 관리자에게 게이트웨이 env(CONNECTOR_SECRET_KEY) 설정을 요청하세요.");
   const host = parseGitHost(input);
   const kind = str(input.kind, "kind", 10).trim();
   const label = input.label === undefined || input.label === null ? null : str(input.label, "label", 200).trim();
@@ -179,6 +180,7 @@ export const deliveryCapabilities: Capability[] = [
       const tokens = isAdmin ? await listTokens() : [];
       const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
       const mcpServers = isAdmin ? await listMcpServers() : [];
+      const connectors = isAdmin ? await listConnectors() : [];
       const dbSources = isAdmin ? await listDbSources() : [];
       if (isAdmin) await refreshSources();
       const dbNames = new Set(dbSources.map((s) => s.name));
@@ -194,7 +196,7 @@ export const deliveryCapabilities: Capability[] = [
       return {
         profile, sections: sectionMap, sectionDefaults: GUIDE_SECTION_DEFAULTS,
         writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, // 세션종료 너지 기본값 — 웹 편집기가 표시·되돌리기에 사용
-        members: memberRows, memory, tokens, runtimeConfig, mcpServers,
+        members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
@@ -473,7 +475,7 @@ export const deliveryCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      return { credentials: await listGitCredentialsPublic(memberOwner(userId)), encryption_ready: secretBoxReady() };
+      return { credentials: await listGitCredentialsPublic(memberOwner(userId)), encryption_ready: secretsEnabled() };
     }),
   restRead("me_git_credential_set", "내 git 인증 등록",
     "본인 git 자격을 등록한다. kind=ssh 면 박스가 키페어를 생성해 공개키를 반환(개인키는 박스밖 유출 없음), kind=https 면 토큰을 저장. host 기본 github.com.",
@@ -494,7 +496,7 @@ export const deliveryCapabilities: Capability[] = [
   restOnly("org_git_credential_get", "게이트웨이 git 계정 조회",
     "게이트웨이(조직 머신 계정) git 자격을 조회한다 — provision 클론에서 멤버 자격이 없을 때 폴백으로 쓰인다. 시크릿은 반환하지 않는다.",
     [{ method: "GET", paths: ["/api/ui/org/git-credential"], parse: () => ({}) }],
-    async (_input: unknown, _user: LivelyUser) => ({ credentials: await listGitCredentialsPublic(GATEWAY_OWNER), encryption_ready: secretBoxReady() })),
+    async (_input: unknown, _user: LivelyUser) => ({ credentials: await listGitCredentialsPublic(GATEWAY_OWNER), encryption_ready: secretsEnabled() })),
   restOnly("org_git_credential_set", "게이트웨이 git 계정 등록",
     "게이트웨이(조직 머신 계정) git 자격을 등록한다. kind=ssh 면 박스가 키페어 생성·공개키 반환, kind=https 면 토큰 저장.",
     [{ method: "POST", paths: ["/api/ui/org/git-credential"], parse: (req) => req.body ?? {} }],
@@ -648,6 +650,35 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeMcpServer(slug(input.name, "name"), actorOf(user), "web");
+      return { ok: true };
+    }),
+
+  // ── 커넥터 설정/토큰 (프로젝트 #541) — config=평문, secrets=암호화(secret-box) ──
+  restOnly("org_connector_upsert", "커넥터 설정·토큰 저장",
+    "커넥터(slack/notion/clickup/…)의 설정(config, 평문)과 토큰(secrets, 암호화 저장)을 저장한다. secrets 는 값이 오면 갱신·빈값/미전송이면 유지. 시크릿 저장엔 게이트웨이 CONNECTOR_SECRET_KEY 필요.",
+    [{ method: "POST", paths: ["/api/ui/org/connector"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const system = str(input.system, "system", 40).trim();
+      const asStrMap = (v: unknown): Record<string, string> | undefined => {
+        if (v == null || typeof v !== "object") return undefined;
+        const out: Record<string, string> = {};
+        for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = val == null ? "" : String(val);
+        return out;
+      };
+      const connector = await upsertConnector({
+        system,
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        config: asStrMap(input.config),
+        secrets: asStrMap(input.secrets),
+        note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : str(input.note, "note", 500)),
+      }, actorOf(user), "web");
+      return { connector };
+    }),
+  restOnly("org_connector_remove", "커넥터 설정 제거",
+    "커넥터 설정/토큰 행을 제거한다(env 폴백으로 복귀).",
+    [{ method: "POST", paths: ["/api/ui/org/connector/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      await removeConnector(str(input.system, "system", 40).trim(), actorOf(user), "web");
       return { ok: true };
     }),
 

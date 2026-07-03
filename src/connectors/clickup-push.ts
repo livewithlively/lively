@@ -6,6 +6,7 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { clickupFetch, createTask, updateTask, getTeam } from "./clickup.js";
+import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
 
 const PRIORITY_MAP: Record<string, number> = { urgent: 1, high: 2, normal: 3, low: 4 };
@@ -54,7 +55,7 @@ async function updateSafe(taskId: string, body: Record<string, unknown>) {
 export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: number; deferred: number; failed: number; deleted: number; scanned: number }> {
   const team = await getTeam();
   const teamId = team.id;
-  const containerId = process.env.CLICKUP_CONTAINER_LIST_ID?.trim() || "";
+  const containerId = ((await resolveConnectorConfig("clickup")).container_list_id ?? "").trim() || "";
   if (!containerId) logger.warn("CLICKUP_CONTAINER_LIST_ID 미설정 — 아웃바운드 create 불가(컨테이너 리스트 id 필요)");
 
   // 상태셋 — 컨테이너 리스트의 스페이스에서 1회 로드(없어도 진행 — status 매핑만 생략).

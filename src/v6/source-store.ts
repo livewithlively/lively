@@ -36,6 +36,18 @@ export async function listSources(f: SourceFilter = {}): Promise<Record<string, 
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $${params.length}`, params);
 }
 
+// distill 대상 — 아직 지식으로 증류되지 않은 자료(knowledge_source 링크가 하나도 없는 active source). 최근 발생순.
+//  distill 세션(스케줄러 distill_sources)이 이걸로 지식화 대상을 가져온다. 지식화하면 source_link_knowledge 가 생겨
+//  다음 조회에서 빠진다(멱등 수렴). 본문 미포함(source_get 으로 전문). #541.
+export async function listUndistilledSources(limit = 50): Promise<Record<string, unknown>[]> {
+  return q(itemsPool,
+    `SELECT ${S_LIST_SEL} FROM source s
+     WHERE s.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
+     ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $1`,
+    [Math.min(limit, 500)]);
+}
+
 // 단건 + 이 자료에서 파생된 지식(knowledge_source 역방향) — 자료 상세에서 "여기서 나온 지식" 표시.
 export async function getSource(id: number): Promise<(SourceRow & { knowledge: unknown[] }) | undefined> {
   const s = await one(itemsPool, `SELECT ${S_SEL} FROM source s WHERE s.id=$1`, [id]);

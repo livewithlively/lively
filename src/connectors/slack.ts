@@ -13,6 +13,7 @@
 //   - 딥링크 = https://<team>.slack.com/archives/<channel>/p<ts에서 점 제거> (스레드면 ?thread_ts=&cid= 부가).
 
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import { resolveConnectorConfig } from "./config.js";
 
 const API_BASE = "https://slack.com/api";
 
@@ -176,8 +177,8 @@ function deriveTitle(text: string | undefined): string | undefined {
 
 // ── 네트워크 계층 ────────────────────────────────────────────────────────────
 
-function getToken(): string {
-  const token = process.env.SLACK_BOT_TOKEN;
+async function getToken(): Promise<string> {
+  const token = (await resolveConnectorConfig("slack")).bot_token;
   if (!token) {
     throw new Error("SLACK_BOT_TOKEN 환경변수가 없습니다 — Slack 봇 토큰(xoxb-...)을 설정하세요.");
   }
@@ -324,7 +325,7 @@ export const slackConnector: Connector = {
   name: "slack",
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
-    const token = getToken();
+    const token = await getToken();
 
     // since(ISO8601) → epoch seconds 문자열(oldest 파라미터). 부동소수 손실 없이 정수+소수 유지.
     const oldest =

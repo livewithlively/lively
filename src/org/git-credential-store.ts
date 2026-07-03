@@ -1,5 +1,5 @@
 // git 자격 스토어(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격을 DB에 저장·조회.
-//  시크릿(개인키·토큰)은 secret-box(ENCRYPTION_KEY) 봉투 암호화로만 저장, 공개키는 평문.
+//  시크릿(개인키·토큰)은 secret-box(CONNECTOR_SECRET_KEY, #541 공용) 봉투 암호화로만 저장, 공개키는 평문.
 //  owner = 'gateway'(조직 머신 계정) | 'member:<id>'(개별 사용자).
 //  - 게이트웨이 provision 클론: resolveGitSecret(memberId, host) = 멤버 자격 우선, 없으면 gateway 폴백.
 //  - 세션 안 git: 멤버 자격을 멤버 홈에 materialize(별도 모듈, Slice 2).

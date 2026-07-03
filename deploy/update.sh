@@ -19,7 +19,7 @@ cd "$APP_DIR"
 
 [ -f "$APP_DIR/.env" ] || die ".env 없음 — 최초 설치가 안 된 호스트입니다. install.sh 를 쓰세요."
 
-ensure_env_secret ENCRYPTION_KEY    # 신규 도입 시크릿 백필(#540 git 자격 at-rest 암호화) — 기존값 있으면 보존, 재시작이 반영
+ensure_env_secret CONNECTOR_SECRET_KEY    # secret-box 마스터키 백필(#540 git 자격·#541 커넥터 토큰) — 기존값 보존, 재시작이 반영
 
 phase "1/3 의존성 + 빌드"
 if [ -d dist ] && [ ! -d src ]; then
