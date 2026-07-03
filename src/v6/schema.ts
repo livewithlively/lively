@@ -40,6 +40,8 @@ export async function initV6Schema(): Promise<string> {
     END $$;
     CREATE UNIQUE INDEX IF NOT EXISTS category_space_key_uq ON category(space, key) WHERE state <> 'merged';
     CREATE INDEX IF NOT EXISTS category_space_idx ON category(space);
+    ALTER TABLE category ADD COLUMN IF NOT EXISTS layout_x REAL;
+    ALTER TABLE category ADD COLUMN IF NOT EXISTS layout_y REAL;
   `);
 
   // ── 2) category_edge — 도메인間 관계. axis='should'(의도, 수동 저작) | 'is'(코드 import 의존, 스캔 도출). ──

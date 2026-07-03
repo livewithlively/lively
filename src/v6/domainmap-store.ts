@@ -20,6 +20,7 @@ export interface V6DomainItem {
   origin: string | null; status: string; space: string;
   units: number; entities: number; debts: number; proposed: number;
   repos: number; // v6 가산: 매핑으로 도달하는 distinct code_unit.repo_id 수(멀티레포 신호). 프론트 무시.
+  layout_x: number | null; layout_y: number | null; // 저장된 노드 좌표(조직 공유). null=자동 배치.
 }
 
 // 도메인 목록 — category WHERE space='product' AND state<>'merged'.
@@ -33,7 +34,7 @@ export async function listProductDomains(): Promise<V6DomainItem[]> {
   const rows = await q(itemsPool, `
     SELECT
       c.id, c.key, c.name, c.description, c.should, c.state, c.cross_cutting,
-      c.origin, c.status,
+      c.origin, c.status, c.layout_x, c.layout_y,
       COALESCE(c.space,'product') AS space,
       (SELECT COUNT(*)::int FROM mapping m
          JOIN code_unit cu ON cu.id=m.target_id
@@ -56,7 +57,22 @@ export async function listProductDomains(): Promise<V6DomainItem[]> {
     should: d.should ?? null, state: d.state ?? null, cross_cutting: !!d.cross_cutting,
     origin: d.origin ?? null, status: d.status, space: d.space ?? "product",
     units: d.units, entities: d.entities, debts: d.debts, proposed: d.proposed, repos: d.repos,
+    layout_x: d.layout_x ?? null, layout_y: d.layout_y ?? null,
   }));
+}
+
+// ── 노드 위치 저장(조직 공유 레이아웃) — category.layout_x/y 에 persist. product 만. ──
+export async function saveDomainLayout(positions: { id: number; x: number; y: number }[]): Promise<{ saved: number }> {
+  if (!Array.isArray(positions)) return { saved: 0 };
+  let saved = 0;
+  for (const p of positions) {
+    if (!p || typeof p.id !== "number" || typeof p.x !== "number" || typeof p.y !== "number") continue;
+    const r = await itemsPool.query(
+      `UPDATE category SET layout_x=$1, layout_y=$2, updated_at=now() WHERE id=$3 AND space='product' AND state<>'merged'`,
+      [p.x, p.y, p.id]);
+    saved += r.rowCount || 0;
+  }
+  return { saved };
 }
 
 // 레거시 DebtListItem(types.ts:142) 동형 — 프론트 debtRow 는 title/detail/status 만 읽지만

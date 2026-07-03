@@ -1,7 +1,8 @@
-// domainmap.ts — 도메인 맵 재설계 (#185). 의존 흐름 그래프(pan/zoom) + 드릴다운 드로어.
-//  두 직교 축: 레이어(의도 should / 실제 is / 대조) × 관점(PO / 개발자) + 횡단 토글.
-//  아틀라스식 조작(#290 패턴): 배경 드래그=이동, 휠=확대축소, '맞춤' 버튼=전체 프레이밍, 노드 클릭=상세 드로어.
-//  데이터: GET /api/ui/domainmap/map → { domains, debts, edges:{should,is}, ... } · 드릴다운 GET .../domain/:id.
+// domainmap.ts — 도메인 맵 재설계 (#185). 의존 흐름 그래프(pan/zoom·노드 드래그) + 드릴다운 드로어 + should 엣지 CRUD.
+//  레이어(의도 should / 실제 is / 대조) × 관점(PO / 개발자) + 횡단 토글.
+//  조작: 배경 드래그=이동, 휠=확대축소, 노드 드래그=위치 이동('위치 저장'=조직 공유), 노드 클릭=상세 드로어.
+//  should 엣지·relation 은 드로어에서 CRUD(category-edges API). 도메인(노드) CRUD 는 관리탭('카테고리 설정')으로 링크 — 중복 X.
+//  데이터: GET /api/ui/domainmap/map → { domains(layout_x/y 포함), edges:{should(id 포함),is}, ... }.
 import { api, el, errorNote, fmtNum, loadRepos, pageHead, state } from './core.js';
 import { skeleton } from './learn.js';
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -23,8 +24,13 @@ function sv(tag, attrs, ...kids) {
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 const NODE_W = 178, NODE_H = 60, COL_GAP = 224, ROW_GAP = 116, PAD = 42, BAND_GAP = 88;
 const K_MIN = 0.25, K_MAX = 3;
-// ── 방향성 레이어 배치 (union should∪is, DFS back-edge 제거 후 longest-path) ──
+// ── 배치: 저장 좌표(layout_x/y) 전부 있으면 그대로, 아니면 방향성 자동 레이어(DFS back-edge 제거 후 longest-path) ──
 function layout(domains, edges) {
+    const pos = new Map();
+    if (domains.length && domains.every((d) => d.layout_x != null && d.layout_y != null)) {
+        domains.forEach((d) => pos.set(d.id, { x: d.layout_x, y: d.layout_y }));
+        return { pos };
+    }
     const core = domains.filter((d) => !d.cross_cutting);
     const cross = domains.filter((d) => d.cross_cutting);
     const coreIds = new Set(core.map((d) => d.id));
@@ -76,28 +82,19 @@ function layout(domains, edges) {
             break;
     }
     const cols = new Map();
-    let maxL = 0;
     for (const d of core) {
         const L = layer.get(d.id) || 0;
-        maxL = Math.max(maxL, L);
         if (!cols.has(L))
             cols.set(L, []);
         cols.get(L).push(d);
     }
     let maxRows = 0;
     cols.forEach((arr) => { maxRows = Math.max(maxRows, arr.length); });
-    const pos = new Map();
     const coreH = Math.max(1, maxRows) * ROW_GAP;
-    cols.forEach((arr, L) => {
-        const colH = arr.length * ROW_GAP;
-        const y0 = PAD + (coreH - colH) / 2;
-        arr.forEach((d, i) => { pos.set(d.id, { x: PAD + L * COL_GAP + NODE_W / 2, y: y0 + i * ROW_GAP + NODE_H / 2 }); });
-    });
+    cols.forEach((arr, L) => { const y0 = PAD + (coreH - arr.length * ROW_GAP) / 2; arr.forEach((d, i) => pos.set(d.id, { x: PAD + L * COL_GAP + NODE_W / 2, y: y0 + i * ROW_GAP + NODE_H / 2 })); });
     const bandY = PAD + coreH + BAND_GAP;
-    cross.forEach((d, i) => { pos.set(d.id, { x: PAD + i * (NODE_W + 30) + NODE_W / 2, y: bandY + NODE_H / 2 }); });
-    const width = Math.max((maxL + 1) * COL_GAP, cross.length * (NODE_W + 30)) + PAD * 2;
-    const height = bandY + (cross.length ? NODE_H + PAD : PAD - BAND_GAP + PAD);
-    return { pos, width, height };
+    cross.forEach((d, i) => pos.set(d.id, { x: PAD + i * (NODE_W + 30) + NODE_W / 2, y: bandY + NODE_H / 2 }));
+    return { pos };
 }
 function clipEnds(a, b) {
     const hw = NODE_W / 2, hh = NODE_H / 2;
@@ -106,8 +103,6 @@ function clipEnds(a, b) {
     const s = cl(a, ux, uy), e = cl(b, -ux, -uy);
     return { x1: s.x, y1: s.y, x2: e.x, y2: e.y, mx: (s.x + e.x) / 2, my: (s.y + e.y) / 2 };
 }
-function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-// ════════════════════════════════════════════
 async function renderDomainmap(view, params) {
     view.replaceChildren(skeleton('도메인 맵을 불러오는 중'));
     const repos = await loadRepos();
@@ -115,9 +110,10 @@ async function renderDomainmap(view, params) {
     if (repos.length && !repos.includes(repo))
         repo = repos[0];
     state.dmRepo = repo;
+    const mapUrl = '/api/ui/domainmap/map?' + new URLSearchParams({ repo: repo || 'product', limit: '200' });
     let data;
     try {
-        data = await api('/api/ui/domainmap/map?' + new URLSearchParams({ repo: repo || 'product', limit: '200' }));
+        data = await api(mapUrl);
     }
     catch (e) {
         view.replaceChildren(pageHead('도메인 맵', '도메인 간 의존과 should·is·debt.', [], '맵'), errorNote(e, '도메인 맵을 불러오지 못했습니다'));
@@ -125,29 +121,33 @@ async function renderDomainmap(view, params) {
     }
     const domains = data.domains || [];
     const byId = new Map(domains.map((d) => [d.id, d]));
-    const sE = (data.edges && data.edges.should) || [];
-    const iE = (data.edges && data.edges.is) || [];
-    const relOf = new Map();
-    const weightOf = new Map();
-    const sK = new Set(sE.map((e) => { relOf.set(e.from_category_id + '>' + e.to_category_id, e.relation); return e.from_category_id + '>' + e.to_category_id; }));
-    const iK = new Set(iE.map((e) => { weightOf.set(e.from_category_id + '>' + e.to_category_id, e.weight); return e.from_category_id + '>' + e.to_category_id; }));
-    const edges = [...new Set([...sK, ...iK])].map((k) => {
-        const [f, t] = k.split('>').map(Number);
-        const should = sK.has(k), is = iK.has(k);
-        return { key: k, from: f, to: t, should, is, sev: should && is ? 'ok' : (should ? 'should_no_is' : 'is_no_should'), rel: relOf.get(k), weight: weightOf.get(k) };
-    }).filter((e) => byId.has(e.from) && byId.has(e.to));
-    const hasIs = iE.length > 0;
+    let edges = [], hasIs = false;
+    function normalize(d) {
+        const sE = (d.edges && d.edges.should) || [];
+        const iE = (d.edges && d.edges.is) || [];
+        const relOf = new Map(), wOf = new Map(), idOf = new Map();
+        const sK = new Set(sE.map((e) => { const k = e.from_category_id + '>' + e.to_category_id; relOf.set(k, e.relation); idOf.set(k, e.id); return k; }));
+        const iK = new Set(iE.map((e) => { const k = e.from_category_id + '>' + e.to_category_id; wOf.set(k, e.weight); return k; }));
+        edges = [...new Set([...sK, ...iK])].map((k) => {
+            const [f, t] = k.split('>').map(Number);
+            const should = sK.has(k), is = iK.has(k);
+            return { key: k, from: f, to: t, should, is, sev: should && is ? 'ok' : (should ? 'should_no_is' : 'is_no_should'), rel: relOf.get(k), weight: wOf.get(k), edgeId: idOf.get(k) };
+        }).filter((e) => byId.has(e.from) && byId.has(e.to));
+        hasIs = iE.length > 0;
+    }
+    normalize(data);
     const LO = layout(domains, edges);
     // 뷰 상태
     let layer = 'both';
     let mode = 'po';
     let showCross = false;
     let sel = null;
+    let dirty = false;
     const detailCache = {};
     const vw = { k: 1, tx: 0, ty: 0 };
     let fitted = false;
     let gViewport = null, stageInner = null;
-    const head = pageHead('도메인 맵', '도메인이 어떤 순서로 의존을 흘려보내는지, 설계 의도(should)와 실제 코드(is)가 어디서 어긋나는지를 봅니다. 배경을 끌어 이동, 휠로 확대·축소.', [], '맵');
+    const head = pageHead('도메인 맵', '도메인이 어떤 순서로 의존을 흘려보내는지, 의도(should)와 실제 코드(is)의 어긋남을 봅니다. 배경 드래그=이동·휠=확대축소·노드 드래그=위치 이동.', [], '맵');
     function activeEdges() {
         return edges.filter((e) => {
             if (!showCross && (byId.get(e.from)?.cross_cutting || byId.get(e.to)?.cross_cutting))
@@ -179,17 +179,39 @@ async function renderDomainmap(view, params) {
     function applyTransform() { if (gViewport)
         gViewport.setAttribute('transform', `translate(${vw.tx.toFixed(1)} ${vw.ty.toFixed(1)}) scale(${vw.k.toFixed(4)})`); }
     function zoomAt(sx, sy, f) { const k2 = clamp(vw.k * f, K_MIN, K_MAX); vw.tx = sx - (sx - vw.tx) * (k2 / vw.k); vw.ty = sy - (sy - vw.ty) * (k2 / vw.k); vw.k = k2; applyTransform(); }
+    function nodeBounds() {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const d of visibleNodes()) {
+            const p = LO.pos.get(d.id);
+            if (!p)
+                continue;
+            x0 = Math.min(x0, p.x - NODE_W / 2);
+            y0 = Math.min(y0, p.y - NODE_H / 2);
+            x1 = Math.max(x1, p.x + NODE_W / 2);
+            y1 = Math.max(y1, p.y + NODE_H / 2);
+        }
+        if (x0 === Infinity)
+            return { x0: 0, y0: 0, x1: 800, y1: 500 };
+        return { x0, y0, x1, y1 };
+    }
     function fitAll() {
         if (!stageInner)
             return;
-        const W = stageInner.clientWidth || 900, H = stageInner.clientHeight || 560, m = 52;
-        const k = clamp(Math.min((W - m * 2) / Math.max(1, LO.width), (H - m * 2) / Math.max(1, LO.height)), K_MIN, 1.15);
+        const W = stageInner.clientWidth || 900, H = stageInner.clientHeight || 560, m = 54;
+        const b = nodeBounds();
+        const bw = b.x1 - b.x0, bh = b.y1 - b.y0;
+        const k = clamp(Math.min((W - m * 2) / Math.max(1, bw), (H - m * 2) / Math.max(1, bh)), K_MIN, 1.15);
         vw.k = k;
-        vw.tx = W / 2 - (LO.width / 2) * k;
-        vw.ty = H / 2 - (LO.height / 2) * k;
+        vw.tx = W / 2 - (b.x0 + b.x1) / 2 * k;
+        vw.ty = H / 2 - (b.y0 + b.y1) / 2 * k;
         applyTransform();
     }
     function draw() { view.replaceChildren(head, buildControls(), buildCanvas()); }
+    async function reload() { try {
+        data = await api(mapUrl);
+        normalize(data);
+    }
+    catch (_) { /* keep */ } draw(); }
     // ── 컨트롤 ──
     function seg(label, opts, cur, on) {
         const box = el('div', { class: 'dmx-seg', role: 'group', 'aria-label': label });
@@ -201,13 +223,18 @@ async function renderDomainmap(view, params) {
         return box;
     }
     function buildControls() {
-        const layerSeg = seg('레이어', [['both', '대조'], ['should', '의도 · should'], ['is', '실제 · is']], layer, (v) => { layer = v; draw(); });
-        const modeSeg = seg('관점', [['po', 'PO 관점'], ['dev', '개발자 관점']], mode, (v) => { mode = v; draw(); });
+        const bar = el('div', { class: 'dmx-controls' }, seg('레이어', [['both', '대조'], ['should', '의도 · should'], ['is', '실제 · is']], layer, (v) => { layer = v; draw(); }), seg('관점', [['po', 'PO 관점'], ['dev', '개발자 관점']], mode, (v) => { mode = v; draw(); }));
         const crossWrap = el('label', { class: 'dmx-toggle' });
         const cb = el('input', { type: 'checkbox' });
         cb.checked = showCross;
         cb.addEventListener('change', () => { showCross = cb.checked; draw(); });
         crossWrap.append(cb, el('span', { class: 'dmx-switch', 'aria-hidden': 'true' }), document.createTextNode('횡단 도메인'));
+        bar.append(crossWrap);
+        if (dirty) {
+            const sb = el('button', { class: 'dmx-save-btn', type: 'button', text: '⤓ 위치 저장' });
+            sb.addEventListener('click', saveLayout);
+            bar.append(sb);
+        }
         const legend = el('div', { class: 'dmx-legend' });
         if (layer !== 'should')
             legend.append(lg('ok', '일치'));
@@ -215,19 +242,12 @@ async function renderDomainmap(view, params) {
             legend.append(lg(hasIs ? 'warn' : 'pending', hasIs ? '선언만 (should)' : 'is 측정 전'));
         if (layer !== 'should' && hasIs)
             legend.append(lg('viol', '코드만 (is)'));
-        const bar = el('div', { class: 'dmx-controls' }, layerSeg, modeSeg, crossWrap, legend);
-        if (repos.length > 1) {
-            const s = el('select', { class: 'dmx-repo' });
-            for (const r of repos)
-                s.append(el('option', { value: r, text: r }));
-            s.value = repo;
-            s.addEventListener('change', () => { state.dmRepo = s.value; location.hash = '#/domainmap?repo=' + encodeURIComponent(s.value); });
-            bar.append(el('div', { class: 'dmx-repo-wrap' }, el('span', { class: 'dmx-repo-lbl', text: '레포' }), s));
-        }
+        bar.append(legend);
+        bar.append(el('a', { class: 'dmx-mng-btn', href: '#/system/wiki-categories', title: '도메인(카테고리) 추가·이름·범위는 관리탭에서', text: '도메인 관리 ↗' }));
         return bar;
     }
     function lg(cls, txt) { return el('span', { class: 'dmx-lg dmx-lg-' + cls }, el('i', {}), document.createTextNode(txt)); }
-    // ── 캔버스(뷰포트 + pan/zoom + 드로어) ──
+    // ── 캔버스(뷰포트 pan/zoom·노드드래그 + 드로어) ──
     function buildCanvas() {
         const canvas = el('div', { class: 'dmx-canvas' });
         canvas.append(el('div', { class: 'dmx-canvas-head' }, el('span', { class: 'dmx-ch-t', text: layer === 'should' ? '의도한 의존 (should)' : layer === 'is' ? '실제 코드 의존 (is)' : '의도 · 실제 대조' }), el('span', { class: 'dmx-ch-s', text: fmtNum(visibleNodes().length) + ' 도메인 · ' + fmtNum(activeEdges().length) + ' 의존' })));
@@ -254,6 +274,9 @@ async function renderDomainmap(view, params) {
         return canvas;
     }
     function zbtn(t, title, on) { const b = el('button', { class: 'dmx-zbtn', type: 'button', title, text: t }); b.addEventListener('click', on); return b; }
+    function redrawGraph() { if (!gViewport)
+        return; while (gViewport.firstChild)
+        gViewport.removeChild(gViewport.firstChild); buildGraphInto(gViewport); }
     function buildGraphInto(g) {
         const defs = sv('defs', {});
         for (const [id, col] of [['ok', 'var(--dmx-ok)'], ['warn', 'var(--dmx-warn)'], ['viol', 'var(--dmx-viol)'], ['pending', 'var(--dmx-pending)']])
@@ -305,22 +328,23 @@ async function renderDomainmap(view, params) {
         g.appendChild(gNode);
         g.appendChild(gLabel);
     }
-    // ── 입력: 휠 줌 · 배경 팬 · 노드 클릭 ──
+    // ── 입력: 휠 줌 · 배경 팬 · 노드 드래그/클릭 ──
     function wire(stg) {
         stg.addEventListener('wheel', (e) => { e.preventDefault(); const r = stg.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, Math.pow(1.0015, -e.deltaY)); }, { passive: false });
-        let m = '', sx = 0, sy = 0, moved = 0, ptx = 0, pty = 0, downId = null;
+        let m = '', sx = 0, sy = 0, moved = 0, ptx = 0, pty = 0, downId = null, dragging = false;
         const findId = (t) => { const g = t.closest && t.closest('.dmx-node'); return g ? Number(g.getAttribute('data-id')) : null; };
         stg.addEventListener('dragstart', (e) => e.preventDefault());
         stg.addEventListener('pointerdown', (e) => {
             if (e.button !== 0)
                 return;
             if (e.target.closest('.dmx-zoom-ctrl') || e.target.closest('.dmx-panel'))
-                return; // 컨트롤/드로어는 팬 아님
+                return;
             e.preventDefault();
             const r = stg.getBoundingClientRect();
             sx = e.clientX - r.left;
             sy = e.clientY - r.top;
             moved = 0;
+            dragging = false;
             downId = findId(e.target);
             if (downId != null)
                 m = 'node';
@@ -345,12 +369,23 @@ async function renderDomainmap(view, params) {
                 vw.ty = pty + (cy - sy);
                 applyTransform();
             }
+            else if (m === 'node' && downId != null && moved > 5) {
+                LO.pos.set(downId, { x: (cx - vw.tx) / vw.k, y: (cy - vw.ty) / vw.k });
+                dragging = true;
+                dirty = true;
+                redrawGraph();
+            }
         });
         const end = (e) => {
-            if (m === 'node' && downId != null && moved <= 4)
-                select(downId);
+            if (m === 'node' && downId != null) {
+                if (dragging)
+                    draw();
+                else if (moved <= 5)
+                    select(downId);
+            }
             m = '';
             downId = null;
+            dragging = false;
             stg.classList.remove('dragging');
             try {
                 stg.releasePointerCapture(e.pointerId);
@@ -360,7 +395,30 @@ async function renderDomainmap(view, params) {
         stg.addEventListener('pointerup', end);
         stg.addEventListener('pointercancel', end);
     }
-    // ── 드릴다운 드로어 ──
+    // ── 위치 저장(조직 공유) ──
+    async function saveLayout() {
+        const positions = domains.map((d) => { const p = LO.pos.get(d.id); return p ? { id: d.id, x: Math.round(p.x), y: Math.round(p.y) } : null; }).filter(Boolean);
+        try {
+            await api('/api/ui/domainmap/layout', { method: 'POST', body: JSON.stringify({ positions }) });
+            dirty = false;
+            draw();
+        }
+        catch (e) {
+            alert('위치 저장 실패: ' + (e.message || e));
+        }
+    }
+    // ── should 엣지 CRUD (relation 포함) ──
+    async function upsertEdge(fromId, toId, relation) {
+        await api('/api/ui/category-edges', { method: 'POST', body: JSON.stringify({ from_category_id: fromId, to_category_id: toId, relation: relation || undefined }) });
+        await reload();
+    }
+    async function deleteEdge(edgeId) {
+        if (edgeId == null)
+            return;
+        await api('/api/ui/category-edges/' + edgeId + '/delete', { method: 'POST' });
+        await reload();
+    }
+    // ── 드릴다운 드로어 (상세 + should 의존 CRUD) ──
     function buildPanel() {
         const panel = el('div', { class: 'dmx-panel' + (sel != null ? ' open' : '') });
         if (sel == null)
@@ -369,6 +427,7 @@ async function renderDomainmap(view, params) {
         const det = detailCache[sel];
         const outs = edges.filter((e) => e.from === sel);
         const ins = edges.filter((e) => e.to === sel);
+        const outShould = edges.filter((e) => e.from === sel && e.should);
         const gaps = [...outs, ...ins].filter((e) => sevClass(e) !== 'ok');
         const close = el('button', { class: 'dmx-panel-close', type: 'button', 'aria-label': '닫기', text: '✕' });
         close.addEventListener('click', () => { sel = null; draw(); });
@@ -378,6 +437,51 @@ async function renderDomainmap(view, params) {
         if (mode === 'po' && d.description && d.description !== d.should)
             should.append(el('div', { class: 'dmx-bd', text: d.description }));
         panel.append(should);
+        // ── 나가는 의존(should) CRUD ──
+        const dep = el('div', { class: 'dmx-axis deps' }, el('h4', {}, document.createTextNode('나가는 의존 · should'), el('span', { class: 'dmx-h4-hint', text: '의도한 결합' })));
+        if (outShould.length)
+            for (const e of outShould) {
+                const row = el('div', { class: 'dmx-dep-row' }, el('span', { class: 'dmx-dep-to', text: '→ ' + (byId.get(e.to)?.name || byId.get(e.to)?.key || e.to) }), el('button', { class: 'dmx-dep-rel', type: 'button', title: '관계 문구 편집', text: e.rel || '관계 미정' }), el('button', { class: 'dmx-dep-del', type: 'button', 'aria-label': '삭제', title: '의존 삭제', text: '✕' }));
+                row.children[1].addEventListener('click', () => {
+                    const nv = prompt('관계 문구 (예: 심사 호출)', e.rel || '');
+                    if (nv == null)
+                        return;
+                    upsertEdge(e.from, e.to, nv.trim()).catch((err) => alert('저장 실패: ' + (err.message || err)));
+                });
+                row.children[2].addEventListener('click', () => {
+                    if (e.edgeId == null) {
+                        alert('스캔(is) 엣지는 여기서 지울 수 없습니다.');
+                        return;
+                    }
+                    if (!confirm((byId.get(e.to)?.name || e.to) + ' 로의 의존을 삭제할까요?'))
+                        return;
+                    deleteEdge(e.edgeId).catch((err) => alert('삭제 실패: ' + (err.message || err)));
+                });
+                dep.append(row);
+            }
+        else
+            dep.append(el('div', { class: 'dmx-muted', text: '나가는 의존이 없습니다.' }));
+        // 추가 폼
+        const others = domains.filter((x) => x.id !== sel && !outShould.some((e) => e.to === x.id));
+        if (others.length) {
+            const selEl = el('select', { class: 'dmx-add-to' });
+            selEl.append(el('option', { value: '', text: '대상 도메인…' }));
+            for (const o of others)
+                selEl.append(el('option', { value: String(o.id), text: o.name || o.key }));
+            const relEl = el('input', { class: 'dmx-add-rel', type: 'text', placeholder: '관계 문구 (예: 정산)', maxlength: '64' });
+            const addBtn = el('button', { class: 'dmx-add-btn', type: 'button', text: '+ 의존 추가' });
+            addBtn.addEventListener('click', () => {
+                const to = Number(selEl.value);
+                if (!to) {
+                    selEl.focus();
+                    return;
+                }
+                upsertEdge(sel, to, relEl.value.trim()).catch((err) => alert('추가 실패: ' + (err.message || err)));
+            });
+            dep.append(el('div', { class: 'dmx-add-form' }, selEl, relEl, addBtn));
+        }
+        panel.append(dep);
+        // is 구조
         const is = el('div', { class: 'dmx-axis is' }, el('h4', { text: '구조 · is' }));
         if (mode === 'dev') {
             if (!det)

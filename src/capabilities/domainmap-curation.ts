@@ -14,7 +14,7 @@ import { z } from "zod";
 import { dmRead, dmWrite, webActor } from "./domainmap-compat.js";
 import { history, restore } from "../domainmap/core/changelog.js";
 // v6: 도메인 상세·부채 읽기도 repo-free category 리더로(레거시 queries.ts 무변형·골든리드 핀 보존).
-import { productDomainmapView, productDomainDetail, listProductDebts } from "../v6/domainmap-store.js";
+import { productDomainmapView, productDomainDetail, listProductDebts, saveDomainLayout } from "../v6/domainmap-store.js";
 // v6: 도메인 authoring(confirm/edit/merge/propose/deprecate/set_should)을 category(space='product')로 cutover — 구 domains.ts 폐기.
 //  매핑 confirm/reject 는 mapping.status 만 다뤄 domain 무관(그대로 유지). reassign 만 category_id 로 이동.
 import { getCategory } from "../v6/category-store.js";
@@ -292,8 +292,28 @@ const dmRestore: Capability = {
 //  domain_set_should) 정의·등록 제거 — '주제 분류' 패널 폐기 + v6 category_*(category_create/update/edge_set)가
 //  단일 표면. 유지: 도메인맵 뷰·부채·이력·복원·매핑 큐레이션(코드↔category) — 웹/큐레이션이 사용.
 
+// 노드 위치 저장(조직 공유 레이아웃) — category.layout_x/y persist. 도메인맵 뷰 편집이라 context write.
+const dmLayoutSave: Capability = {
+  name: "dm_layout_save",
+  title: "domainmap 노드 위치 저장",
+  description: "도메인맵 노드 좌표를 조직 공유 레이아웃으로 저장. body {positions:[{id,x,y}]}. 반환 {saved}.",
+  scope: "context",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/domainmap/layout"],
+      parse: (req: any) => ({ positions: Array.isArray(req.body?.positions) ? req.body.positions : [] }),
+    }],
+  },
+  handler: async (input: any, user: any, ctx: any) =>
+    audited("layout_save", user, ctx, { n: (input.positions || []).length },
+      () => dmWrite(() => saveDomainLayout(input.positions || []))),
+};
+
 export const domainmapCurationCapabilities: Capability[] = [
   dmDomainDetail, dmDebtList, dmHistory, dmDomainmapView,
   dmMappingConfirm, dmMappingReject, dmMappingMove,
-  dmDebtStatus, dmRestore,
+  dmDebtStatus, dmRestore, dmLayoutSave,
 ];
