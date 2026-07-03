@@ -214,17 +214,25 @@ function termRow(s, cfg, view, sel) {
     }
     return el('div', { class: 'term-row' }, meta, el('div', { class: 'term-row-actions' }, ...actions));
 }
-// 멀티프로필(#346) — 이 세션의 claude 가 '내 계정'(프로필 로그인됨)으로 뜰지 '공유 계정'으로 폴백할지 안내.
-//  멀티프로필 꺼져 있으면(cfg.profile.multiprofile=false) 아무것도 안 보여줌(공유가 유일 모드).
+// 구성원 격리(#524) — 이 세션의 claude 가 '내 격리 계정(box_)'으로 뜨는지 안내. box_ 격리가 #346 멀티프로필을 대체.
+//  게이트웨이는 box_ 700 홈을 못 읽어 '로그인됨' 여부를 알 수 없으므로(격리의 본질), 로그인 안내를 상시 노출.
 function profileNoteEl(cfg) {
+    const os = (cfg && cfg.os) || {};
+    if (os.ready) {
+        const who = os.osUser || 'box_…';
+        return el('div', { class: 'caption', text: os.provisioned
+                ? '🔐 내 AI 세션은 내 격리 계정(' + who + ')으로 실행됩니다 — 자격증명이 구성원 간 격리됩니다. 로그인이 안 돼 있으면 세션에서  claude  실행 후 /login (한 번만).'
+                : '🔐 첫 세션을 열면 내 격리 계정(' + who + ')이 자동 생성돼 격리 실행됩니다. 세션에서  claude  실행 후 /login 하세요.' });
+    }
+    // 격리 인프라 미설치 = 비격리(공유) — 레거시 #346 멀티프로필 안내(폴백).
     const p = (cfg && cfg.profile) || {};
     if (!p.multiprofile)
         return null;
     if (p.active)
         return el('div', { class: 'caption', text: '🔐 이 AI 세션은 내 Claude 계정(프로필 로그인됨)으로 실행됩니다.' });
     if (p.provisioned)
-        return el('div', { class: 'caption', text: '⚠ 내 프로필이 아직 로그인 안 돼 공유 계정으로 실행됩니다 — 터미널 상단 [내 계정 로그인] 버튼으로 한 번 로그인하세요.' });
-    return el('div', { class: 'caption', text: '⚠ 내 프로필이 없어 공유 계정으로 실행됩니다 (관리자에게 프로비저닝 요청).' });
+        return el('div', { class: 'caption', text: '⚠ 내 프로필이 아직 로그인 안 돼 공유 계정으로 실행됩니다 — 상단 [내 계정 로그인] 버튼으로 한 번 로그인하세요.' });
+    return el('div', { class: 'caption', text: '⚠ 공유 계정으로 실행됩니다(구성원 격리 미설치). 박스에서 deploy/linux/install-isolation.sh 실행 시 구성원별 격리가 켜집니다.' });
 }
 // 최초 로그인 세션 — loginProfile 로 게이트를 우회해 내 프로필 dir 로 claude 를 띄운다(닭-달걀 해소). 새 탭으로 열어 로그인.
 async function openLoginSession(view) {
@@ -241,12 +249,18 @@ async function openLoginSession(view) {
         toast('로그인 터미널 열기 실패 — ' + e.message, true);
     }
 }
-// 내 프로필이 프로비저닝됐지만 미로그인일 때 — 페이지 상단 배너로 '내 계정 로그인'(자기 계정 최초 로그인 유도). CLAUDE_CONFIG_DIR 수동설정 불요.
+// 상단 '내 계정 로그인' 버튼 — 개인 claude 세션을 열어 거기서 로그인. box_ 격리면 그 세션이 내 격리 계정(box_)으로
+//  떠서 로그인이 box_ 홈에 저장돼 이후 내 세션에 재사용된다. 게이트웨이가 box_ 로그인 여부를 못 봐서(격리) 상시 노출.
 function loginBannerEl(cfg, view) {
+    const os = (cfg && cfg.os) || {};
+    if (os.ready) {
+        return el('div', { class: 'card' }, el('button', { class: 'btn btn-primary btn-sm', text: '🔑 내 계정 로그인', onclick: () => openLoginSession(view) }), el('span', { class: 'caption', text: '  처음 한 번 — 개인 세션을 열어 claude 에서 /login (이후 내가 만드는 세션은 내 격리 계정으로 뜹니다).' }));
+    }
+    // 레거시 비격리(#346): 프로필 프로비저닝됐지만 미로그인일 때만.
     const p = (cfg && cfg.profile) || {};
     if (!p.multiprofile || !p.provisioned || p.loggedIn)
         return null;
-    return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 지금 만드는 AI 세션은 공유 계정으로 뜹니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
+    return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 function openTermCreateForm(cfg, view) {
