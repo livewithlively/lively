@@ -214,15 +214,22 @@ EOF
 
 # 기존 .env 에 필수 시크릿이 없으면 자동 생성해 추가(멱등·비파괴 — 비어있지 않은 값은 보존).
 #  신규 도입 변수를 기존 박스에 백필하는 용도(예: CONNECTOR_SECRET_KEY — ensure_env 로 새로 깐 박스는 이미 있고,
-#  그 전에 설치된 박스는 update.sh 가 이걸로 채워 넣는다). sed -i.bak = GNU/BSD 공통.
+#  그 전에 설치된 박스는 update.sh 가 이걸로 채워 넣는다).
+#  ⚠ .env 의 owner:group:mode 를 절대 안 바꾼다 — 불변식 '.env = 운영자:lively 640'(게이트웨이 lively 가 group-read).
+#   sed -i 는 새 inode 로 rename 하며 **group 을 실행유저 기본그룹으로 리셋** → lively 가 .env 못 읽어 SASL 다운
+#   (2026-07-03 어니스트 실박스 실장애). 그래서 append(>>) + 빈 라인 제거는 inode-보존 되쓰기(>)만 쓴다(둘 다 perms 무변).
 ensure_env_secret() {
   local name="$1" bytes="${2:-32}" envf="$APP_DIR/.env"
   [ -f "$envf" ] || return 0
   if grep -qE "^${name}=.+" "$envf"; then return 0; fi        # 비어있지 않은 값 존재 → 보존
-  sed -i.bak "/^${name}=/d" "$envf" 2>/dev/null && rm -f "$envf.bak" 2>/dev/null || true  # 빈 라인 있으면 제거
-  printf '\n# %s — deploy 자동생성(#540 git 자격 at-rest 암호화). 분실 시 저장 자격 복호 불가 → 재등록 필요.\n%s=%s\n' \
-    "$name" "$name" "$(gen_hex "$bytes")" >> "$envf"
-  ok ".env 에 $name 자동 생성(백필)"
+  if grep -qE "^${name}=" "$envf"; then                       # 빈 "${name}=" 라인만 제거(inode 보존 → group 유지)
+    local tmp="$envf.tmp.$$"
+    grep -vE "^${name}=" "$envf" > "$tmp" && cat "$tmp" > "$envf"   # > 되쓰기 = 같은 inode(owner/group/mode 무변)
+    rm -f "$tmp"
+  fi
+  printf '\n# %s — deploy 자동생성(#540 git 자격·#541 커넥터 토큰 at-rest 암호화). 분실 시 복호 불가 → 재등록.\n%s=%s\n' \
+    "$name" "$name" "$(gen_hex "$bytes")" >> "$envf"          # append = owner/group/mode 무변
+  ok ".env 에 $name 자동 생성(백필·소유/모드 보존)"
 }
 
 # store(pgvector) 기동 + healthy 대기.
