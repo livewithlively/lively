@@ -6,6 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# ⚠ KillMode=process — 중앙박스 세션은 게이트웨이(node)가 spawn 한 tmux 서버가 붙든다. 기본값(control-group)이면
+#   systemctl restart/stop 이 서비스 cgroup 전체(=tmux 서버까지) SIGTERM → 모든 웹터미널 세션이 죽는다.
+#   process 로 main PID(게이트웨이)만 재시작하고 tmux 는 살려, 재시작 뒤 tmux 에서 세션을 그대로 re-attach 한다.
+#   (설계 불변식: persistent tmux · 재기동 생존 — src/terminal-sessions.ts 메타를 tmux user-option 에 저장.)
+KillMode=process
 User=@APP_USER@
 WorkingDirectory=@APP_DIR@
 ExecStart=@NODE_BIN@ --env-file-if-exists=.env dist/index.js
