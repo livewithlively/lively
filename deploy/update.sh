@@ -32,6 +32,13 @@ fi
 phase "2/3 store 반영(멱등) + 유닛 갱신 + 게이트웨이 재시작"
 dc compose up -d --wait items-db    # compose/이미지 변경 멱등 반영(없으면 no-op)
 render_service_unit                 # 유닛 템플릿 변경(예: KillMode=process)을 이 박스에도 반영(단일 소스 — common.sh). 기존엔 코드만 갱신돼 유닛 픽스가 전파 안 되던 갭 해소.
+# 격리 인프라(#524) 리프레시 — 이 박스가 '격리 박스'면(box-spawn 존재) box-spawn/sudoers/provision-member 를
+#  코드와 동기화(멱등). render_service_unit 과 같은 이유: 코드만 갱신되고 인프라(wrapper·sudoers)가 스테일해지는
+#  갭 방지 → 격리 관련 버전업마다 install-isolation 을 손으로 다시 돌릴 필요 없음. 미설치 박스는 no-op(opt-in 유지).
+if [ "$OS" = linux ] && [ -x /opt/lively/libexec/box-spawn ]; then
+  log "격리 인프라 리프레시(install-isolation.sh — 멱등)"
+  sudo bash "$DIR/linux/install-isolation.sh" || warn "격리 인프라 리프레시 경고 — 수동: sudo bash deploy/linux/install-isolation.sh"
+fi
 if [ "$OS" = linux ]; then
   sudo systemctl restart context-ontology-gateway
 else
