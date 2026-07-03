@@ -7,8 +7,7 @@ import { isScope } from "../capabilities/scopes.js";
 import { redactDeep } from "./redact.js";
 // WIKI 인덱스(팀 메모리)·섹션 모두 v6 knowledge 사용(knowledge_unit 컷오버 완료 2026-06-24).
 import {
-  getKnowledge as getK6, listKnowledge as listK6,
-  upsertKnowledge as upsertK6, deleteKnowledge as deleteK6,
+  listKnowledge as listK6, upsertKnowledge as upsertK6,
   type KnowledgeRow,
 } from "../v6/knowledge-store.js";
 // 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
@@ -375,11 +374,8 @@ export async function upsertMemory(mem: MemoryInput, actor?: string, source?: st
   return knowledgeToMemory(k, mem.domain_key ?? null);
 }
 
-export async function removeMemory(name: string, actor?: string, source?: string): Promise<void> {
-  const k = await getK6(name);
-  if (!k || k.injection === "always") return; // 규칙(R)은 메모리로 삭제 안 함
-  await deleteK6(name, { actor: actor ?? null, source });
-}
+// (removeMemory 는 #536 에서 제거 — 유일 소비자였던 org_memory_remove 엔드포인트가 사라짐.
+//  메모리 삭제는 knowledge_delete 로 일원화. 읽기 listMemory·쓰기 upsertMemory(migrate)는 유지.)
 
 // ── auth_token (DB 기반 bearer) ──
 // 발급 — 평문 토큰을 1회 반환(저장은 해시만). prefix 'lvk_' 로 verifyDbToken 의 빠른 게이팅 가능.

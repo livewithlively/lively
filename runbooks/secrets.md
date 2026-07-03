@@ -30,7 +30,6 @@ KEY`). `redactDeep` 는 여기에 JWT·`Bearer <literal>` 까지 더 넓게 마�
 |---|---|---|---|
 | `ctx_save` (MCP·REST) | `note` | ✓ | `src/capabilities/ctx.ts` |
 | `org_update_section` (REST/admin) | `body_md` | ✓ (P8) | `src/capabilities/delivery.ts` |
-| `org_memory_upsert` (REST/admin) | `body_md` | ✓ (P8) | `src/capabilities/delivery.ts` |
 | `org_member_upsert` (REST/admin) | `body_md`(개인레이어) | ✓ (P8) | `src/capabilities/delivery.ts` |
 | `propose_domain` (MCP·REST) | `description`·`evidence` | ✓ (P8) | `src/capabilities/domainmap-curation.ts` |
 | `dm_domain_edit` (REST) | `description` | ✓ (P8) | `src/capabilities/domainmap-curation.ts` |

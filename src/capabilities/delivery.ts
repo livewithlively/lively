@@ -19,7 +19,7 @@ import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
   getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse,
-  listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory, upsertMemory, removeMemory,
+  listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
@@ -339,37 +339,8 @@ export const deliveryCapabilities: Capability[] = [
       return { ok: true };
     }),
 
-  // ── 메모리 upsert/remove ──
-  restOnly("org_memory_upsert", "메모리 추가·수정",
-    "조직 공유 메모리를 저장한다(제목·요약은 인덱스로 공유, 본문은 memory_search). domain 으로 귀속.",
-    [{ method: "POST", paths: ["/api/ui/org/memory"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
-      // domain_key: 빈 문자열/null → 귀속 해제(null). 미전송(undefined) → 기존 보존.
-      // V5 탈-repo: 도메인 귀속은 key 만(repo-비의존) — domain_repo 는 항상 null(귀속 변경 시) / 보존(미전송 시).
-      const domainKey = input.domain_key === undefined ? undefined : (String(input.domain_key).trim() || null);
-      const domainRepo = domainKey === undefined ? undefined : null;
-      // 공유 메모리 본문(body_md)은 에이전트/사람이 읽는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
-      const memoryBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 40000);
-      if (memoryBody !== undefined) assertNoHardSecrets(memoryBody, "body_md"); // P8
-      const memory = await upsertMemory({
-        name: slug(input.name, "name"),
-        title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
-        // 카드 표시용 '쉬운 한 줄' — 빈 문자열은 클리어(null → title 폴백), 미전송은 보존(undefined).
-        summary: input.summary === undefined ? undefined : (str(input.summary, "summary", 200).trim() || null),
-        body_md: memoryBody,
-        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
-        domain_key: domainKey,
-        domain_repo: domainRepo,
-      }, actorOf(user), "web");
-      return { memory };
-    }),
-  restOnly("org_memory_remove", "메모리 제거",
-    "정설 메모리 문서를 제거한다.",
-    [{ method: "POST", paths: ["/api/ui/org/memory/remove"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
-      await removeMemory(slug(input.name, "name"), actorOf(user), "web");
-      return { ok: true };
-    }),
+  // (레거시 org_memory 쓰기 엔드포인트 org_memory_upsert/org_memory_remove 는 #536 에서 제거 —
+  //  knowledge_* 로 대체된 죽은 표면. 읽기(listMemory→org_overview)와 store.upsertMemory(migrate 임포트)는 유지.)
 
   // ── 토큰 발급/회수 ──
   restOnly("org_token_mint", "구성원 토큰 발급",
