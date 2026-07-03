@@ -9,6 +9,7 @@
 // 액터 컨벤션(load-bearing): clickup 신원의 external_id 는 **소문자 이메일**(없으면 숫자 id 문자열) —
 // daon 의 manual 신원(clickup / 'lively@lvly.io')이 정확히 매치되어야 한다(resolveActor 정확 일치 룩업).
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import { resolveConnectorConfig } from "./config.js";
 
 export type { Connector, RawItem, BackfillOpts };
 
@@ -167,8 +168,8 @@ export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
 
 // ── HTTP 계층 ──
 
-function requireToken(): string {
-  const token = process.env.CLICKUP_API_TOKEN;
+async function requireToken(): Promise<string> {
+  const token = (await resolveConnectorConfig("clickup")).api_token;
   if (!token) {
     throw new Error(
       "CLICKUP_API_TOKEN 미설정 — ClickUp personal token 을 환경변수로 주입하세요 (Authorization: <token>).",
@@ -183,7 +184,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // 남은 토큰(X-RateLimit-Remaining)이 0 이면 reset 까지 선제 대기해 429 를 줄인다.
 // 에러 메시지에 토큰을 절대 싣지 않는다(헤더 미포함 + 본문 슬라이스만).
 export async function clickupFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = requireToken();
+  const token = await requireToken();
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const maxRetries = 5;
 
@@ -281,8 +282,8 @@ export async function listFolderLists(folderId: string): Promise<ClickUpList[]> 
 }
 
 // 제외 리스트(env CLICKUP_EXCLUDE_LIST_IDS=쉼표구분) — ClickUp 샘플 리스트 등 노이즈 차단.
-export function getExcludedListIds(): Set<string> {
-  const raw = process.env.CLICKUP_EXCLUDE_LIST_IDS?.trim();
+export async function getExcludedListIds(): Promise<Set<string>> {
+  const raw = (await resolveConnectorConfig("clickup")).exclude_list_ids?.trim();
   if (!raw) return new Set();
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
@@ -290,8 +291,8 @@ export function getExcludedListIds(): Set<string> {
 // 허용(allow) 리스트(env CLICKUP_INCLUDE_LIST_IDS=쉼표구분). 설정 시 **이 리스트만** 싱크(나머지 전부 무시).
 //  우리 모델에선 컨테이너 List 의 top-level Task = project 라, 무관한 리스트의 태스크가 project 로 유입되는 걸 막는다.
 //  미설정이면 null(=종전 동작: 전체 - 제외목록). 툴 #2 의 per-connector 리스트 스코핑 config 의 ClickUp 구현.
-export function getIncludedListIds(): Set<string> | null {
-  const raw = process.env.CLICKUP_INCLUDE_LIST_IDS?.trim();
+export async function getIncludedListIds(): Promise<Set<string> | null> {
+  const raw = (await resolveConnectorConfig("clickup")).include_list_ids?.trim();
   if (!raw) return null;
   const s = new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
   return s.size ? s : null;
@@ -374,8 +375,8 @@ export async function linkTasks(taskId: string, linksTo: string): Promise<unknow
 // 허용(=싱크 대상) 리스트 나열: 스페이스 → (폴더 리스트, 전방호환) + folderless(active/archived 패스)
 // → 제외 denylist 적용. archived 패스가 있어 툴에서 보관한 리스트도 state='archived' 로 수렴한다.
 export async function enumerateLists(teamId: string): Promise<ClickUpList[]> {
-  const excluded = getExcludedListIds();
-  const included = getIncludedListIds(); // 설정 시 이 리스트만(컨테이너 스코핑)
+  const excluded = await getExcludedListIds();
+  const included = await getIncludedListIds(); // 설정 시 이 리스트만(컨테이너 스코핑)
   const byId = new Map<string, ClickUpList>();
   for (const space of await listSpaces(teamId)) {
     try {

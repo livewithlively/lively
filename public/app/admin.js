@@ -42,6 +42,8 @@ const ADMIN_SECTIONS = [
     { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
     { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
     { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
+    // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
+    { key: 'connectors', label: '커넥터(외부 소스)', meaning: null, group: 'ai' },
     // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
     { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
     // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
@@ -55,7 +57,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'connectors', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -288,6 +290,8 @@ function renderAdminDetail(detail, sel, data) {
         return toolUsagePanel(detail);
     if (sel === 'mcp')
         return mcpEditor(detail, data);
+    if (sel === 'connectors')
+        return connectorEditor(detail, data);
     if (sel === 'db-sources')
         return dbSourceEditor(detail, data);
     if (sel === 'repos')
@@ -2141,6 +2145,91 @@ function mcpForm(root, s, data, detail, isNew) {
             } }));
     root.replaceChildren(field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField, field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
     syncTransport();
+}
+// ── 커넥터(외부 소스) 설정·토큰 — admin 전용 (프로젝트 #541). CONNECTOR_SPECS 기반 동적 폼. ──
+//  커넥터 목록은 고정(코드가 지원하는 소스). 각 커넥터: enabled 토글 + 필드별 입력(secret=password, 값 있을 때만 갱신).
+function connectorEditor(detail, data) {
+    const connectors = data.connectors || [];
+    const sel = state.admin.connectorSel || (connectors[0] && connectors[0].system);
+    const listCol = el('div', { class: 'admin-sublist' });
+    for (const c of connectors) {
+        const setCount = Object.values(c.secretsSet || {}).filter(Boolean).length;
+        const secTotal = (c.fields || []).filter((f) => f.secret).length;
+        listCol.append(el('div', { class: 'mini-row' + (c.system === sel ? ' sel' : ''),
+            onclick: () => { state.admin.connectorSel = c.system; renderAdminDetail(detail, 'connectors', data); } }, el('div', { class: 'mini-title', text: c.label }, c.enabled ? el('span', { class: 'pill', text: '싱크 켬' }) : null), el('div', { class: 'mini-meta', text: secTotal ? `토큰 ${setCount}/${secTotal} 설정` : '설정' })));
+    }
+    const right = el('div', {});
+    const editing = connectors.find((c) => c.system === sel);
+    if (editing)
+        connectorForm(right, editing, data, detail);
+    else
+        right.append(el('p', { class: 'admin-hint', text: '커넥터를 선택하세요.' }));
+    const banner = (editing && editing.secrets_enabled === false)
+        ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
+        : null;
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커넥터(외부 소스) 설정·토큰', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two' }, listCol, right)));
+}
+function connectorForm(root, c, data, detail) {
+    const inputs = {}; // key → { el, secret }
+    const fieldEls = [];
+    for (const f of (c.fields || [])) {
+        let inp;
+        if (f.secret) {
+            const isSet = c.secretsSet && c.secretsSet[f.key];
+            inp = el('input', { type: 'password', value: '', placeholder: isSet ? '● 설정됨 — 변경할 때만 입력' : (f.hint || '미설정') });
+        }
+        else {
+            inp = el('input', { type: 'text', value: (c.config && c.config[f.key]) || '', placeholder: f.hint || '' });
+        }
+        inputs[f.key] = { el: inp, secret: !!f.secret };
+        const lbl = (f.label || f.key) + (f.required ? ' *' : '') + (f.secret ? ' 🔒' : '');
+        fieldEls.push(field(lbl, inp));
+    }
+    const enChk = el('input', { type: 'checkbox' });
+    enChk.checked = !!c.enabled;
+    const noteIn = el('input', { type: 'text', value: c.note || '', placeholder: '메모(선택)' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+    saveBtn.addEventListener('click', async () => {
+        saveBtn.disabled = true;
+        try {
+            const config = {}, secrets = {};
+            for (const k of Object.keys(inputs)) {
+                const { el: inp, secret } = inputs[k];
+                const v = inp.value;
+                if (secret) {
+                    if (v)
+                        secrets[k] = v;
+                } // 빈=미변경(기존 암호문 유지)
+                else
+                    config[k] = (v || '').trim();
+            }
+            const payload = { system: c.system, enabled: enChk.checked, config, secrets, note: noteIn.value.trim() || null };
+            await api('/api/ui/org/connector', { method: 'POST', body: JSON.stringify(payload) });
+            await loadAdmin(true);
+            state.admin.connectorSel = c.system;
+            toast('저장됨 — 다음 싱크부터 반영');
+            renderAdminDetail(detail, 'connectors', state.admin.data);
+        }
+        catch (e) {
+            toast(e.message, true);
+            saveBtn.disabled = false;
+        }
+    });
+    const actions = el('div', { class: 'admin-actions' }, saveBtn);
+    actions.append(el('button', { class: 'btn-text', text: '초기화(.env 폴백)', onclick: async () => {
+            if (!confirm(`${c.label} 설정·토큰을 제거하고 .env 폴백으로 되돌릴까요?`))
+                return;
+            try {
+                await api('/api/ui/org/connector/remove', { method: 'POST', body: JSON.stringify({ system: c.system }) });
+                await loadAdmin(true);
+                toast('초기화됨');
+                renderAdminDetail(detail, 'connectors', state.admin.data);
+            }
+            catch (e) {
+                toast(e.message, true);
+            }
+        } }));
+    root.replaceChildren(el('label', { class: 'admin-check' }, enChk, ' 싱크 활성 (이 커넥터를 주기 싱크 대상으로)'), ...fieldEls, field('메모', noteIn), el('p', { class: 'admin-hint', text: '🔒 토큰은 게이트웨이 키로 암호화되어 저장됩니다. 값을 비워두면 기존 토큰이 유지됩니다.' }), actions);
 }
 // ── DB 데이터소스 — admin 전용. db_query/db_schema 가 읽는 외부 운영 DB(읽기전용). ──
 function dbSourceEditor(detail, data) {

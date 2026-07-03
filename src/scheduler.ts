@@ -45,10 +45,15 @@ interface CronJob {
   last_run_at?: string | null;
 }
 
-// active 커넥터(data_source.status='active')만 sync 대상.
+// sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
+//  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
 async function activeConnectorSystems(): Promise<string[]> {
-  try { const rows = await q(itemsPool, `SELECT system FROM data_source WHERE status='active'`); return rows.map((r) => r.system); }
-  catch { return []; }
+  try {
+    const on = await q(itemsPool, `SELECT system FROM org_connector WHERE enabled=true`);
+    if (on.length) return on.map((r) => r.system);
+    const rows = await q(itemsPool, `SELECT system FROM data_source WHERE status='active'`);
+    return rows.map((r) => r.system);
+  } catch { return []; }
 }
 
 // 한 잡 실행 — action allowlist 디스패치. 반환 summary 는 org_cron.last_summary 에 기록(관측성).

@@ -25,6 +25,7 @@ import {
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
+  listConnectors, upsertConnector, removeConnector,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
   type DbSourceInput, type DbSourceRow,
@@ -145,6 +146,7 @@ export const deliveryCapabilities: Capability[] = [
       const tokens = isAdmin ? await listTokens() : [];
       const runtimeConfig = isAdmin ? await getRuntimeConfig() : null;
       const mcpServers = isAdmin ? await listMcpServers() : [];
+      const connectors = isAdmin ? await listConnectors() : [];
       const dbSources = isAdmin ? await listDbSources() : [];
       if (isAdmin) await refreshSources();
       const dbNames = new Set(dbSources.map((s) => s.name));
@@ -160,7 +162,7 @@ export const deliveryCapabilities: Capability[] = [
       return {
         profile, sections: sectionMap, sectionDefaults: GUIDE_SECTION_DEFAULTS,
         writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, // 세션종료 너지 기본값 — 웹 편집기가 표시·되돌리기에 사용
-        members: memberRows, memory, tokens, runtimeConfig, mcpServers,
+        members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
@@ -575,6 +577,35 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeMcpServer(slug(input.name, "name"), actorOf(user), "web");
+      return { ok: true };
+    }),
+
+  // ── 커넥터 설정/토큰 (프로젝트 #541) — config=평문, secrets=암호화(secret-box) ──
+  restOnly("org_connector_upsert", "커넥터 설정·토큰 저장",
+    "커넥터(slack/notion/clickup/…)의 설정(config, 평문)과 토큰(secrets, 암호화 저장)을 저장한다. secrets 는 값이 오면 갱신·빈값/미전송이면 유지. 시크릿 저장엔 게이트웨이 CONNECTOR_SECRET_KEY 필요.",
+    [{ method: "POST", paths: ["/api/ui/org/connector"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const system = str(input.system, "system", 40).trim();
+      const asStrMap = (v: unknown): Record<string, string> | undefined => {
+        if (v == null || typeof v !== "object") return undefined;
+        const out: Record<string, string> = {};
+        for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = val == null ? "" : String(val);
+        return out;
+      };
+      const connector = await upsertConnector({
+        system,
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        config: asStrMap(input.config),
+        secrets: asStrMap(input.secrets),
+        note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : str(input.note, "note", 500)),
+      }, actorOf(user), "web");
+      return { connector };
+    }),
+  restOnly("org_connector_remove", "커넥터 설정 제거",
+    "커넥터 설정/토큰 행을 제거한다(env 폴백으로 복귀).",
+    [{ method: "POST", paths: ["/api/ui/org/connector/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      await removeConnector(str(input.system, "system", 40).trim(), actorOf(user), "web");
       return { ok: true };
     }),
 

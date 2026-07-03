@@ -54,7 +54,7 @@ function merge3<T>(base: T | null | undefined, ours: T | null | undefined, their
 //  같은 트랜잭션 client(미러 쓰기와 원자적). FK 없는 append-only 라 대상 행 삭제 후에도 이력 보존.
 async function auditConnector(
   client: pg.PoolClient,
-  entity: "knowledge" | "project",
+  entity: "knowledge" | "project" | "source",
   entityKey: string,
   op: "insert" | "update",
   before: unknown,
@@ -246,6 +246,67 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
   return true;
 }
 
+// system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
+function sourceKindOf(system: string): string {
+  switch (system) {
+    case "slack": return "slack";
+    case "gmail": return "email";
+    case "notion": return "notion_doc";
+    case "clickup": return "clickup_doc";
+    default: return "other"; // discord, gdrive 미정제 등
+  }
+}
+
+// slack/gmail/discord message(및 미정제 raw) → source(자료) 멱등 upsert (#541). distill 이 여기서 지식을 증류(source→knowledge).
+//  external 좌표(source_external_uidx) ON CONFLICT. 본문 실변경 시에만 audit(노이즈 게이트 — knowledge 미러와 동일).
+//  🔴H1 redact — title/body/raw 평문 시크릿 마스킹. provenance=observed(외부 수집물). knowledge_search 에 자동 미포함(별 테이블).
+async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
+  const instance = normalizeExternalInstance(it.provenance.instance);
+  const kind = sourceKindOf(system);
+  const title = it.title == null ? null : redactString(String(it.title));
+  const body = redactString(String(it.body ?? ""));
+  const raw = it.raw == null ? null : redactDeep(it.raw);
+  const author = `connector:${system}`;
+
+  // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. no-op 재싱크(last_synced_at-only)는 audit 생략. ──
+  const prev = await client.query(
+    `SELECT id, title, body_md FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
+    [system, instance, externalId],
+  );
+  const prevRow = prev.rows[0] as { id: number; title: string | null; body_md: string } | undefined;
+  const isInsert = !prevRow;
+  const contentChanged = isInsert
+    || (prevRow.title ?? null) !== (title ?? null)
+    || (prevRow.body_md ?? "") !== (body ?? "");
+
+  const r = await client.query(
+    `INSERT INTO source(
+        kind, title, body_md, raw, provenance,
+        external_system, external_instance, external_id, external_url,
+        occurred_at, last_synced_at, author, updated_at, updated_by)
+      VALUES($1,$2,$3,$4::jsonb,'observed',
+             $5,$6,$7,$8,
+             $9, now(), $10, now(), $10)
+     ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+     DO UPDATE SET
+        kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
+        external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
+        last_synced_at=now(), updated_at=now(), updated_by=EXCLUDED.updated_by
+     RETURNING id`,
+    [kind, title, body, raw == null ? null : JSON.stringify(raw),
+     system, instance, externalId, it.provenance.external_url ?? null,
+     it.occurred_at ?? null, author],
+  );
+  const id = (r.rows[0] as { id: number }).id;
+
+  if (contentChanged) {
+    const beforeSnap = isInsert ? null : { id, title: prevRow!.title, body_md: prevRow!.body_md };
+    const afterSnap = { id, kind, title, body_md: body, provenance: "observed", source: system, author };
+    await auditConnector(client, "source", String(id), isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
+  }
+  return true;
+}
+
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 트랜잭션 client 공유. ──
 //  라우팅: routeIngestV6(system, type) → 'project'(clickup task) | 'knowledge'(notion 등 K류) | null(미정의=skip).
 //  external_id 부재(이론상 불가)면 멱등키가 없어 skip. 적재 시 true, skip 시 false.
@@ -256,5 +317,6 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
   const target = routeIngestV6(it.type, system);
   if (target === "project") return mirrorProjectV6(client, it, system, externalId);
   if (target === "knowledge") return mirrorKnowledgeV6(client, it, system, externalId);
-  return false; // 미정의 조합(구 KIND_MAP 미정의 = slack 등) — 미러 skip(보수적, 임의 분류 금지).
+  if (target === "source") return mirrorSourceV6(client, it, system, externalId); // slack/gmail message 등 → 자료(distill 대상)
+  return false; // 라우팅 정의 밖 — 미러 skip(보수적, 임의 분류 금지).
 }
