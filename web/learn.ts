@@ -301,12 +301,10 @@ function drawInstallGuide(slot, data) {
       el('b', { text: '“어디서 켜느냐”' }), ' 입니다.'),
     el('p', { class: 'admin-hint', text: '아래에서 본인에게 편한 쪽을 고르세요. 잘 모르겠으면 왼쪽(설치 없이 바로)을 추천해요 — 나중에 둘 다 써도 됩니다.' }),
     el('div', { class: 'mode-choice' },
-      modeCard('web', '라이블리 웹에서 바로', '설치 필요 없음 · 브라우저만', '비개발자 친화',
-        '코딩·터미널이 익숙하지 않아도 괜찮아요. 설치가 처음이라 부담되거나, 지금 바로 써보고 싶은 분.',
-        '브라우저만 열면 끝. 내 컴퓨터엔 아무것도 안 깔아요.', mode, slot, data),
+      modeCard('web', '라이블리 웹에서 바로', '설치 없이 · 브라우저만', '비개발자 친화',
+        '터미널·코딩이 낯설거나, 지금 바로 써보고 싶은 분', mode, slot, data),
       modeCard('local', '내 컴퓨터 터미널에서', '한 번 설치 · 약 5분', '개발자 친화',
-        '평소 터미널·CLI가 손에 익은 분. 내 노트북에서 claude·codex 를 직접 켜서 쓰던 분.',
-        '한 번 설치하면, 어느 폴더에서 켜도 회사 맥락이 따라와요.', mode, slot, data)));
+        '평소 터미널·CLI가 손에 익은 분', mode, slot, data)));
 
   const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data);
   slot.replaceChildren(intro, chooser, ...guide);
@@ -315,7 +313,8 @@ function drawInstallGuide(slot, data) {
 // 모드 선택 카드(웹 터미널 탭 vs 내 컴퓨터). 선택 시 재렌더.
 //  audience = 카드별 대상 핀(비개발자 친화 / 개발자 친화) — 각 카드가 누구를 위한지 바로 읽히게.
 //  who = 그 대상의 '상황' 한 줄. 위의 '기능은 양쪽 똑같다' 평등문구가 있어 라벨이 열등감으로 읽히지 않는다.
-function modeCard(key, title, tag, audience, who, hint, active, slot, data) {
+//  (예전 별도 hint 줄은 tag/who 와 내용이 겹쳐 벽처럼 읽혀 제거 — 카드는 tag·title·audience+who 3줄로.)
+function modeCard(key, title, tag, audience, who, active, slot, data) {
   const on = key === active;
   const pick = () => { if (state.start.mode !== key) { state.start.mode = key; drawInstallGuide(slot, data); } };
   return el('div', {
@@ -330,8 +329,7 @@ function modeCard(key, title, tag, audience, who, hint, active, slot, data) {
     el('div', { class: 'mode-card-title', text: title }),
     el('div', { class: 'mode-card-who' },
       el('span', { class: 'mode-card-who-label', text: audience }),
-      el('span', { class: 'mode-card-who-text', text: who })),
-    el('div', { class: 'mode-card-hint', text: hint }));
+      el('span', { class: 'mode-card-who-text', text: who })));
 }
 
 // (web) 라이블리 [터미널] 탭에서 쓰는 사람 — 내 컴퓨터엔 설치 0. 서버에서 claude/codex 가 회사맥락 가진 채 돈다.

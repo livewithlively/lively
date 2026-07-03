@@ -177,14 +177,15 @@ function drawInstallGuide(slot, data) {
     // ── 1. 어디서 쓰나 — 두 갈래 선택(카드 클릭 시 아래 가이드가 바뀜) ──
     //  평등 문구를 먼저 — '한쪽이 더 제한적'이라는 오해를 차단. 카드는 사람(개발/비개발)을 라벨하지 않고
     //  '상황'으로 자가선택하게 한다(처음·부담 vs 평소 터미널 사용).
-    const chooser = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '어디서 AI를 쓰실 건가요?' })), el('p', { class: 'guide-lead', style: 'margin-bottom:4px' }, el('b', { text: '할 수 있는 일은 양쪽이 똑같아요.' }), ' 같은 AI(Claude Code·Codex)가 회사 맥락을 그대로 가진 채 돕니다 — 한쪽이 더 제한적이거나 기능이 적지 않아요. 차이는 딱 하나, ', el('b', { text: '“어디서 켜느냐”' }), ' 입니다.'), el('p', { class: 'admin-hint', text: '아래에서 본인에게 편한 쪽을 고르세요. 잘 모르겠으면 왼쪽(설치 없이 바로)을 추천해요 — 나중에 둘 다 써도 됩니다.' }), el('div', { class: 'mode-choice' }, modeCard('web', '라이블리 웹에서 바로', '설치 필요 없음 · 브라우저만', '비개발자 친화', '코딩·터미널이 익숙하지 않아도 괜찮아요. 설치가 처음이라 부담되거나, 지금 바로 써보고 싶은 분.', '브라우저만 열면 끝. 내 컴퓨터엔 아무것도 안 깔아요.', mode, slot, data), modeCard('local', '내 컴퓨터 터미널에서', '한 번 설치 · 약 5분', '개발자 친화', '평소 터미널·CLI가 손에 익은 분. 내 노트북에서 claude·codex 를 직접 켜서 쓰던 분.', '한 번 설치하면, 어느 폴더에서 켜도 회사 맥락이 따라와요.', mode, slot, data)));
+    const chooser = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '어디서 AI를 쓰실 건가요?' })), el('p', { class: 'guide-lead', style: 'margin-bottom:4px' }, el('b', { text: '할 수 있는 일은 양쪽이 똑같아요.' }), ' 같은 AI(Claude Code·Codex)가 회사 맥락을 그대로 가진 채 돕니다 — 한쪽이 더 제한적이거나 기능이 적지 않아요. 차이는 딱 하나, ', el('b', { text: '“어디서 켜느냐”' }), ' 입니다.'), el('p', { class: 'admin-hint', text: '아래에서 본인에게 편한 쪽을 고르세요. 잘 모르겠으면 왼쪽(설치 없이 바로)을 추천해요 — 나중에 둘 다 써도 됩니다.' }), el('div', { class: 'mode-choice' }, modeCard('web', '라이블리 웹에서 바로', '설치 없이 · 브라우저만', '비개발자 친화', '터미널·코딩이 낯설거나, 지금 바로 써보고 싶은 분', mode, slot, data), modeCard('local', '내 컴퓨터 터미널에서', '한 번 설치 · 약 5분', '개발자 친화', '평소 터미널·CLI가 손에 익은 분', mode, slot, data)));
     const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data);
     slot.replaceChildren(intro, chooser, ...guide);
 }
 // 모드 선택 카드(웹 터미널 탭 vs 내 컴퓨터). 선택 시 재렌더.
 //  audience = 카드별 대상 핀(비개발자 친화 / 개발자 친화) — 각 카드가 누구를 위한지 바로 읽히게.
 //  who = 그 대상의 '상황' 한 줄. 위의 '기능은 양쪽 똑같다' 평등문구가 있어 라벨이 열등감으로 읽히지 않는다.
-function modeCard(key, title, tag, audience, who, hint, active, slot, data) {
+//  (예전 별도 hint 줄은 tag/who 와 내용이 겹쳐 벽처럼 읽혀 제거 — 카드는 tag·title·audience+who 3줄로.)
+function modeCard(key, title, tag, audience, who, active, slot, data) {
     const on = key === active;
     const pick = () => { if (state.start.mode !== key) {
         state.start.mode = key;
@@ -198,7 +199,7 @@ function modeCard(key, title, tag, audience, who, hint, active, slot, data) {
             e.preventDefault();
             pick();
         } },
-    }, el('div', { class: 'mode-card-top' }, el('span', { class: 'mode-card-radio', 'aria-hidden': 'true' }), el('span', { class: 'mode-card-tag', text: tag })), el('div', { class: 'mode-card-title', text: title }), el('div', { class: 'mode-card-who' }, el('span', { class: 'mode-card-who-label', text: audience }), el('span', { class: 'mode-card-who-text', text: who })), el('div', { class: 'mode-card-hint', text: hint }));
+    }, el('div', { class: 'mode-card-top' }, el('span', { class: 'mode-card-radio', 'aria-hidden': 'true' }), el('span', { class: 'mode-card-tag', text: tag })), el('div', { class: 'mode-card-title', text: title }), el('div', { class: 'mode-card-who' }, el('span', { class: 'mode-card-who-label', text: audience }), el('span', { class: 'mode-card-who-text', text: who })));
 }
 // (web) 라이블리 [터미널] 탭에서 쓰는 사람 — 내 컴퓨터엔 설치 0. 서버에서 claude/codex 가 회사맥락 가진 채 돈다.
 function webGuideNodes() {
@@ -216,7 +217,7 @@ function webGuideNodes() {
         class: 'btn btn-ghost btn-sm', href: '#/terminal?tour=1', target: '_blank', rel: 'noopener',
         text: '새 창으로 열기 ↗',
     });
-    const steps = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })), el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }), el('div', { class: 'step-cta' }, tourBtn, newWinBtn),
+    const steps = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })), el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }), el('div', { class: 'step-cta' }, tourBtn, newWinBtn), 
     // 미리보기 — 따라하기가 짚어줄 순서. JS 안내가 안 떠도 흐름을 알 수 있게 남겨 둔다(폴백).
     el('div', { class: 'step-list' }, installStep(1, '[+ 새 세션] 누르기', el('p', { class: 'step-p' }, '터미널 화면 ', el('b', { text: '오른쪽 위 파란 [+ 새 세션]' }), ' 버튼을 누르면 만들기 창이 떠요.')), installStep(2, '작업 폴더와 AI를 고르고 이름 정하기', el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }), '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'), el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })), installStep(3, '[생성하기] → 바로 대화하기', el('p', { class: 'step-p', text: '[생성하기]를 누르면 까만 창(터미널)이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }), el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어, 다음에 [터미널] 탭에서 다시 이어서 쓸 수 있어요.' }))));
     return [callout, steps];

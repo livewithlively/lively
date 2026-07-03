@@ -760,10 +760,13 @@ export async function initV6Schema(): Promise<string> {
   //  설계: 지식 [[vector-search-172-design-pluggable-seam-oss]]. config SoT=org_runtime_config.embedding_config(getRuntimeConfig).
   try {
     const ec = await getRuntimeConfig();
-    if (ec.embedding_config.provider !== "off") {
-      const ok = await ensureEmbeddingSchema(pool, ec.embedding_config.dimensions);
-      console.log(`[v6 schema] 임베딩 스키마 ${ok ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.embedding_config.dimensions})`);
-    }
+    // ⚠ 컬럼/확장은 provider 와 무관하게 '항상' 보장한다. 쓰기·유사도 SQL 이 `embedding_vector IS NOT NULL` 로
+    //  컬럼 존재를 가정하므로(off=NULL 이라 렉시컬 폴백 의도), 컬럼 자체가 없으면 폴백이 아니라
+    //  'column "embedding_vector" does not exist' 크래시가 난다 — 임베딩 off(기본) 신규 박스에서 knowledge_save 가
+    //  통째로 실패(어니스트 실박스 재현). items-db 는 pgvector 이미지(불변식)라 확장 상시 가용 → 항상 만들어도 안전
+    //  (빈 컬럼/HNSW 도 저렴·멱등). 실제 벡터 채우기(백필)만 provider on 일 때(embedKnowledgeBestEffort).
+    const ok = await ensureEmbeddingSchema(pool, ec.embedding_config.dimensions);
+    console.log(`[v6 schema] 임베딩 스키마 ${ok ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.embedding_config.dimensions}, provider=${ec.embedding_config.provider})`);
   } catch (e) {
     console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
   }

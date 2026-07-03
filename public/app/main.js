@@ -5,8 +5,8 @@ import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTras
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
-import { endTour } from './tour.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
+import { endTour } from './tour.js';
 // ── 라우터 ──
 function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');
