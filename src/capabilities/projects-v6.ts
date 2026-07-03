@@ -300,11 +300,11 @@ const projectSetReposV6: Capability = {
   },
 };
 
-// 카테고리 설정(전체 교체) — 카테고리 id 배열. 생성 모달·세부설정 멀티선택. 단건 project_link_category_v6 와 공존.
+// 카테고리 설정(단일-home 전체 교체) — 카테고리 id 배열이지만 프로젝트당 1개(0/1)만 유효(#290, project_category_single_uq). 생성 모달·세부설정. 단건 project_link_category_v6 와 공존.
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 속한 카테고리(사업/제품/시스템) 목록을 설정한다(전체 교체). category_list 의 id 참조. 웹 전용.",
+  description: "프로젝트가 속한 카테고리(사업/제품/시스템)를 설정한다 — 단일-home(프로젝트당 1개, 빈 배열=없음/general). 배열을 받되 첫 유효 1개만 적용. category_list 의 id 참조. 웹 전용.",
   scope: "memory",
   input: { id: z.number().int().positive(), categoryIds: z.array(z.number().int().positive()).max(50) },
   expose: {

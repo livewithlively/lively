@@ -581,6 +581,8 @@ export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: 
 
 // ── 정션: 카테고리/지식 연결 ──────────────────────────────────────────────
 export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<void> {
+  // #290 단일-home(project_category_single_uq): 기존 다른 카테고리 매핑을 먼저 제거(replace) — linkKnowledgeCategory 와 동형(앱이 단일 강제, 인덱스 위반 대신 교체).
+  await itemsPool.query(`DELETE FROM project_category WHERE project_id=$1 AND category_id<>$2`, [projectId, categoryId]);
   await itemsPool.query(
     `INSERT INTO project_category(project_id, category_id, added_at)
      VALUES($1,$2,now()) ON CONFLICT (project_id, category_id) DO NOTHING`,
@@ -617,9 +619,10 @@ export async function setProjectRepos(projectId: number, repos: string[], ctx?: 
   return clean;
 }
 
-// ── 카테고리(project_category, n:n) — 전체 교체 셋(웹 생성 모달·세부설정 멀티선택). 단건 link/unlink 와 공존. ──
+// ── 카테고리(project_category) — 단일-home(0/1) 전체 교체. #290 project_category_single_uq 로 프로젝트당 1개. 단건 link/unlink 와 공존. ──
 export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<number[]> {
-  const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 50);
+  // 단일-home: 유효 id 를 정리하되 최대 1개만 유지(그 이상은 project_category_single_uq 위반 → 앱에서 선제 컷). 빈 배열 = 카테고리 없음(general).
+  const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 1);
   const beforeRows = await q(itemsPool, `SELECT category_id FROM project_category WHERE project_id=$1`, [projectId]);
   const before = beforeRows.map((r) => Number(r.category_id));
   await itemsPool.query(`DELETE FROM project_category WHERE project_id=$1`, [projectId]);
