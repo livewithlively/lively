@@ -227,10 +227,21 @@ export async function provisionMemberOs(memberId: string): Promise<{ slug: strin
   return { slug, osUser: osUsername(slug) };
 }
 
-// OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재.
-export async function memberOsStatus(memberId: string): Promise<{ ready: boolean; provisioned: boolean; osUser: string }> {
+// box_ claude 로그인 여부 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
+//  creds 파일 '존재'만 확인(내용은 안 봄). exit0=있음=로그인됨. 미프로비저닝/에러=false. UI 로그인 배너 숨김 판정용.
+async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
+  try {
+    const w = wrapAsMember(osUser, ["sh", "-c", 'test -f "$HOME/.claude/.credentials.json"']);
+    await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
+    return true;
+  } catch { return false; }
+}
+// OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재,
+//  loggedIn=box_ 홈에 claude 자격증명 있음(drop-priv 확인). loggedIn 이면 UI 로그인 버튼 숨김.
+export async function memberOsStatus(memberId: string): Promise<{ ready: boolean; provisioned: boolean; osUser: string; loggedIn: boolean }> {
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
-  return { ready: isolationInfraReady(), provisioned: await osUserExists(osUser), osUser };
+  const provisioned = await osUserExists(osUser);
+  return { ready: isolationInfraReady(), provisioned, osUser, loggedIn: provisioned ? await memberClaudeLoggedIn(osUser) : false };
 }
 
 async function tmux(args: string[]): Promise<string> {
