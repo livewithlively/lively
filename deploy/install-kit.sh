@@ -36,10 +36,17 @@ HARNESS="${KIT_HARNESS:-claude}"
 log "중앙박스 키트 설치 — gateway=$GW · harness=$HARNESS"
 
 # 1) ~/.lively/{token,gateway-url} — 세션 훅의 라이브 컨텍스트 fetch + 추후 update 가 읽는다.
-mkdir -p "$HOME/.lively"
-umask 077; printf '%s' "$TOKEN" > "$HOME/.lively/token"; umask 022
-printf '%s' "$GW" > "$HOME/.lively/gateway-url"
-ok "~/.lively/{token,gateway-url} 기록"
+#  ⚠ 프로필 모드(KIT_PROFILE_ONLY=1 — provisionProfile 이 '멤버 토큰'으로 호출): 공유 ~/.lively/token 은
+#    전 세션의 훅 fetch 가 공유하는 파일이라 멤버 토큰으로 덮으면 안 된다. HOME 공유분은 호스트 설치가 이미
+#    세팅했으니 건너뛰고, 멤버 토큰은 프로필 .claude.json(4단계 register-clients)에만 굽는다.
+if [ "${KIT_PROFILE_ONLY:-0}" = 1 ]; then
+  log "프로필 모드(KIT_PROFILE_ONLY) — 공유 ~/.lively/token 보존(멤버 토큰은 프로필 .claude.json 에만)"
+else
+  mkdir -p "$HOME/.lively"
+  umask 077; printf '%s' "$TOKEN" > "$HOME/.lively/token"; umask 022
+  printf '%s' "$GW" > "$HOME/.lively/gateway-url"
+  ok "~/.lively/{token,gateway-url} 기록"
+fi
 
 # 2) /install 번들(게이트웨이가 DB→materialize 로 동적 생성) 다운로드·전개.
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
