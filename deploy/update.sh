@@ -39,6 +39,11 @@ if [ "$OS" = linux ]; then
   if [ "$SERVICE_USER" != "$CUR_USER" ]; then
     log "게이트웨이 유저 마이그레이션: $CUR_USER → $SERVICE_USER (#524 P4)"
     sudo systemctl stop context-ontology-gateway 2>/dev/null || true   # chown·유닛 교체 중 정지
+  fi
+  # 전용 서비스 유저(운영자와 다름 = lively 등)면 '이미 그 유저여도' 매 update 마다 불변식 멱등 재적용
+  #  (셸=bash·그룹·.env 소유·세션 루트 repoint). 안 그러면 최초 마이그레이션(=유저 전환) 때만 적용돼, 그 뒤
+  #  버전업으로 추가된 불변식(예: v0.1.21 셸·루트 픽스)이 이미-lively 박스엔 영영 안 붙는다. 비전용(=운영자)면 no-op.
+  if [ "$SERVICE_USER" != "$(id -un)" ]; then
     SERVICE_USER="$(ensure_service_user "$SERVICE_USER")"
   fi
   export SERVICE_USER

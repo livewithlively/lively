@@ -30,14 +30,22 @@ detect_os() {
 #  멱등. echo 로 실제 서비스 유저명 반환. mac(launchd)·미Linux 는 현 유저(대상 아님).
 #  ⚠ 격리 spawn 은 별도 잠긴 sudoers(install-isolation, GATEWAY_USER=이 유저)로만 부여 — 여기선 유저·소유권만.
 LIVELY_SERVICE_HOME="${LIVELY_SERVICE_HOME:-/var/lib/lively}"
+# .env(KEY=VAL 파일) 키 멱등 설정 — 있으면 교체, 없으면 추가. 값은 경로(특수문자 없음)라 sed # 구분자 안전.
+set_env() { local f="$1" k="$2" v="$3"
+  if sudo grep -qE "^$k=" "$f" 2>/dev/null; then sudo sed -i "s#^$k=.*#$k=$v#" "$f"; else echo "$k=$v" | sudo tee -a "$f" >/dev/null; fi
+}
 ensure_service_user() {
   local user="${1:-lively}"
   if [ "$(detect_os)" != linux ]; then echo "$(id -un)"; return 0; fi
   if ! id "$user" >/dev/null 2>&1; then
-    sudo useradd --system --create-home --home-dir "$LIVELY_SERVICE_HOME" --shell /usr/sbin/nologin "$user" \
+    sudo useradd --system --create-home --home-dir "$LIVELY_SERVICE_HOME" --shell /bin/bash "$user" \
       || die "게이트웨이 서비스 유저 생성 실패: $user"
-    log "게이트웨이 서비스 유저 생성: $user (system·nologin·무sudo·무docker)"
+    log "게이트웨이 서비스 유저 생성: $user (system·shell=bash·무암호·무SSH키·무sudo·무docker)"
   fi
+  # ⚠ 셸 = /bin/bash (nologin 아님). 게이트웨이가 '비격리' 세션(프로젝트 공동세션·managed)을 이 유저로 spawn 하는데
+  #   tmux new-session 이 '명령 없이'면 유저의 로그인 셸을 띄운다 → nologin 이면 즉시 죽어 세션 생성이 500.
+  #   로그인은 무암호·무authorized_keys 로 이미 차단(셸 있어도 로그인 불가) → bash 부여가 보안 저하 아님. 기존 유저도 멱등 교정.
+  case "$(getent passwd "$user" | cut -d: -f7)" in */bash) : ;; *) sudo usermod -s /bin/bash "$user"; log "서비스 유저 셸 → /bin/bash (비격리 세션 spawn 용)" ;; esac
   getent group lively-shared >/dev/null || sudo groupadd lively-shared
   id -nG "$user" | tr ' ' '\n' | grep -qx lively-shared || sudo usermod -aG lively-shared "$user"
   # ⚠ APP_DIR 소유는 '운영자(배포 실행 유저)' 그대로 둔다 — update 가 npm ci/build 로 여기에 '쓰기' 때문(lively 소유면
@@ -50,6 +58,20 @@ ensure_service_user() {
     /opt/*|/srv/*) : ;;
     *) warn "앱 경로 $APP_DIR — lively 접근엔 /opt 권장(홈 아래면 상위 traverse 권한 필요)"; sudo chmod o+x "$(dirname "$APP_DIR")" 2>/dev/null || true ;;
   esac
+  # ── 세션 루트(비격리 shared·personal)를 게이트웨이 유저 접근가능 경로로 ──
+  #  프로젝트 공동세션(비격리)은 이 유저로 mkdir/spawn 한다. .env 의 TERMINAL_ROOT_* 가 옛 게이트웨이 유저 홈
+  #  ($HOME/workspace)을 가리키면 lively 가 못 써서 세션 생성이 500. 현재 값을 이 유저가 쓸 수 있으면 보존(관리자
+  #  커스텀 존중), 아니면 shared=격리공유dir(/srv/lively/shared, lively-shared 그룹 rw)·personal=서비스홈/box 로 repoint.
+  local shared_dir="${LIVELY_SHARED_DIR:-/srv/lively/shared}"
+  getent group lively-shared >/dev/null 2>&1 && sudo install -d -g lively-shared -m 2775 "$shared_dir" 2>/dev/null || sudo mkdir -p "$shared_dir"
+  sudo install -d -o "$user" -g "$user" -m 700 "$LIVELY_SERVICE_HOME/box" 2>/dev/null || true
+  if [ -f "$APP_DIR/.env" ]; then
+    local cur
+    cur="$(sudo grep -E '^TERMINAL_ROOT_SHARED=' "$APP_DIR/.env" | cut -d= -f2-)"
+    sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_SHARED "$shared_dir"; log "세션 shared 루트 → $shared_dir ($user 접근가능)"; }
+    cur="$(sudo grep -E '^TERMINAL_ROOT_PERSONAL=' "$APP_DIR/.env" | cut -d= -f2-)"
+    sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_PERSONAL "$LIVELY_SERVICE_HOME/box"; log "세션 personal 루트 → $LIVELY_SERVICE_HOME/box"; }
+  fi
   echo "$user"
 }
 
