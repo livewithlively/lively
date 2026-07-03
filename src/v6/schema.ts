@@ -214,7 +214,7 @@ export async function initV6Schema(): Promise<string> {
     END $$;
   `);
 
-  // ── 4) knowledge_category — 지식↔카테고리 n:n(구 knowledge_unit_domain). 진짜 FK(같은 DB). ──
+  // ── 4) knowledge_category — 지식↔카테고리 정션(구 knowledge_unit_domain). #290 knowledge_category_single_uq 로 지식당 단일-home(0/1). 진짜 FK(같은 DB). ──
   //  빈 정션 = '카테고리 없음(general)' 허용(센티넬 행 회피). state/mapped_by enum 은 구 조인과 동일.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS knowledge_category(
@@ -449,7 +449,7 @@ export async function initV6Schema(): Promise<string> {
     ALTER TABLE project_list ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
-  // ── 7) project_category — 프로젝트↔카테고리 n:n(프로젝트 탭 사업/제품/시스템 탐색). ──
+  // ── 7) project_category — 프로젝트↔카테고리 정션(프로젝트 탭 사업/제품/시스템 탐색). #290 project_category_single_uq 로 프로젝트당 단일-home(0/1). ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS project_category(
       project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,

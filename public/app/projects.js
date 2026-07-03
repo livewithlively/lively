@@ -5189,6 +5189,16 @@ function categoryPicker(selectedIds, opts) {
     const box = el('div', { class: 'cp-box' }, listWrap); // 로드 후 search·recents 를 앞에 붙인다
     const checks = []; // [{id, name, input, row}]
     const groups = []; // [{head, rows}] — 필터 시 매칭 없는 space 헤더는 숨김
+    const recentChips = []; // [{input, chip}] — 단일선택 동기화용
+    // 프로젝트는 카테고리 단일-home(#290) — 라디오처럼 하나만 선택(다른 체크 해제 + 최근칩 on 동기화).
+    const setSingle = (id) => {
+        sel.clear();
+        for (const c of checks)
+            c.input.checked = (c.id === id);
+        sel.add(id);
+        for (const rc of recentChips)
+            rc.chip.classList.toggle('on', rc.input.checked);
+    };
     const applyFilter = () => {
         const q = search.value.trim().toLowerCase();
         for (const c of checks)
@@ -5225,10 +5235,16 @@ function categoryPicker(selectedIds, opts) {
                 if (sel.has(id))
                     cb.checked = true;
                 const row = el('label', { class: 'cp-item' }, cb, el('span', { text: c.name || c.key, title: (SPACE_LABEL[c.space] || c.space) + ' · ' + (c.key || '') }));
-                cb.addEventListener('change', () => { if (cb.checked)
-                    sel.add(id);
-                else
-                    sel.delete(id); fire(); });
+                cb.addEventListener('change', () => {
+                    if (cb.checked)
+                        setSingle(id);
+                    else {
+                        sel.delete(id);
+                        for (const rc of recentChips)
+                            rc.chip.classList.toggle('on', rc.input.checked);
+                    }
+                    fire();
+                });
                 checks.push({ id, name: String(c.name || c.key || ''), input: cb, row });
                 rows.push(row);
                 kids.push(row);
@@ -5250,10 +5266,9 @@ function categoryPicker(selectedIds, opts) {
                 for (const r of valid) {
                     const c = checks.find((x) => x.id === Number(r.id));
                     const chip = el('button', { class: 'cp-recent' + (c.input.checked ? ' on' : ''), type: 'button', text: c.name });
+                    recentChips.push({ input: c.input, chip });
                     chip.onclick = () => { if (!c.input.checked) {
-                        c.input.checked = true;
-                        sel.add(c.id);
-                        chip.classList.add('on');
+                        setSingle(c.id);
                         fire();
                     } };
                     row.append(chip);
