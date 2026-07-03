@@ -31,6 +31,18 @@ fi
 
 phase "2/3 store 반영(멱등) + 유닛 갱신 + 게이트웨이 재시작"
 dc compose up -d --wait items-db    # compose/이미지 변경 멱등 반영(없으면 no-op)
+# 게이트웨이 유저 보존(#524 P4): update 는 기존 유저를 **안 바꾼다**(비격리 박스 강제 마이그레이션 방지). 현재 유닛의
+#  User 를 읽어 유지. LIVELY_SERVICE_USER 로 명시했을 때만 그 유저(예: lively)로 마이그레이션(생성·chown·재소유).
+if [ "$OS" = linux ]; then
+  CUR_USER="$(systemctl show -p User --value context-ontology-gateway 2>/dev/null || echo "$(id -un)")"
+  SERVICE_USER="${LIVELY_SERVICE_USER:-$CUR_USER}"
+  if [ "$SERVICE_USER" != "$CUR_USER" ]; then
+    log "게이트웨이 유저 마이그레이션: $CUR_USER → $SERVICE_USER (#524 P4)"
+    sudo systemctl stop context-ontology-gateway 2>/dev/null || true   # chown·유닛 교체 중 정지
+    SERVICE_USER="$(ensure_service_user "$SERVICE_USER")"
+  fi
+  export SERVICE_USER
+fi
 render_service_unit                 # 유닛 템플릿 변경(예: KillMode=process)을 이 박스에도 반영(단일 소스 — common.sh). 기존엔 코드만 갱신돼 유닛 픽스가 전파 안 되던 갭 해소.
 # 격리 인프라(#524) 리프레시 — 이 박스가 '격리 박스'면(box-spawn 존재) box-spawn/sudoers/provision-member 를
 #  코드와 동기화(멱등). render_service_unit 과 같은 이유: 코드만 갱신되고 인프라(wrapper·sudoers)가 스테일해지는
@@ -50,8 +62,8 @@ wait_healthz
 proxy_up   # LIVELY_DOMAIN(.env) 설정 시 Caddy 재적용/기동(미설정 시 no-op) — 도메인 추가/변경도 여기서 반영
 
 if [ "${1:-}" = "--kit" ]; then
-  phase "3/3 중앙박스 키트 갱신(호스트 claude 훅/MCP/컨텍스트)"
-  bash "$DIR/install-kit.sh" || warn "키트 갱신 경고 — 나중에: bash deploy/install-kit.sh"
+  phase "3/3 중앙박스 키트 갱신(게이트웨이 유저 claude 훅/MCP/컨텍스트)"
+  run_as_service bash "$DIR/install-kit.sh" || warn "키트 갱신 경고 — 나중에: bash deploy/install-kit.sh"
 else
   log "3/3 키트 갱신 건너뜀 — kit/ 가 바뀌었으면 --kit 로 실행"
 fi

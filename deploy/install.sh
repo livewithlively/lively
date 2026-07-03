@@ -70,22 +70,24 @@ main() {
   proxy_up   # LIVELY_DOMAIN 설정 시 Caddy 자동 HTTPS(미설정 시 no-op)
 
   phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙)"
+  # P4(#524): 게이트웨이 유저(lively)로 실행 — 키트가 그 유저 홈(~/.claude)에 써야 하고, 부트스트랩도 같은 유저로 통일.
+  #  (.env 는 운영자 소유·그룹 lively·640 이라 lively/운영자 둘 다 읽음. SERVICE_USER=설치유저면 run_as_service 는 그냥 실행.)
   local admin_out=""
-  if admin_out="$(node --env-file="$APP_DIR/.env" "$DIR/bootstrap-admin.mjs" 2>&1)"; then
+  if admin_out="$(run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-admin.mjs" 2>&1)"; then
     ok "관리자 시드 완료"
   else
     warn "관리자 부트스트랩 경고(나중에 재시도): $admin_out"
   fi
   # 익명 조직 baseline(org-defaults 페르소나·규칙) — 빈 경우에만(편집 보존). 신규 조직이 맥락 블라인드를 안 넘게.
-  if node --env-file="$APP_DIR/.env" "$DIR/bootstrap-baseline.mjs" 2>&1; then
+  if run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-baseline.mjs" 2>&1; then
     ok "baseline 시드 처리(빈 org-defaults 만)"
   else
     warn "baseline 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-baseline.mjs)"
   fi
 
   # 중앙박스 키트 — 이 호스트의 claude 에 lively(MCP+훅+컨텍스트) 설치 → 웹터미널 세션이 맥락 CRUD 가능.
-  phase "7/7 중앙박스 키트 설치(호스트 claude 를 lively-aware 로)"
-  if bash "$DIR/install-kit.sh"; then
+  phase "7/7 중앙박스 키트 설치(게이트웨이 유저의 claude 를 lively-aware 로)"
+  if run_as_service bash "$DIR/install-kit.sh"; then
     ok "중앙박스 키트 설치 완료"
   else
     warn "키트 설치 경고(나중에 재시도: bash deploy/install-kit.sh)"

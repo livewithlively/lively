@@ -38,7 +38,12 @@ os_install_deps() {
 }
 
 os_install_service() {
-  render_service_unit                                        # 렌더+daemon-reload(공유 — common.sh, update.sh 와 동일 소스)
+  # 게이트웨이 유저(#524 P4): LIVELY_SERVICE_USER=lively 로 **opt-in** 시 전용 비관리자 lively(무sudo·무docker)로,
+  #  아니면 현재(설치) 유저(기존 동작·무회귀). fresh-install-as-lively 전체 E2E 검증 후 default 전환 예정.
+  if [ -n "${LIVELY_SERVICE_USER:-}" ]; then
+    SERVICE_USER="$(ensure_service_user "$LIVELY_SERVICE_USER")"; export SERVICE_USER
+  fi
+  render_service_unit                                        # 렌더+daemon-reload(공유 — common.sh, update.sh 와 동일 소스). SERVICE_USER 없으면 현재 유저.
   sudo systemctl enable --now context-ontology-gateway.service
-  ok "systemd 서비스 enable+start (context-ontology-gateway)"
+  ok "systemd 서비스 enable+start (context-ontology-gateway, User=${SERVICE_USER:-$(id -un)})"
 }

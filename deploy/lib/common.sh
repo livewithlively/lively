@@ -8,9 +8,11 @@ export LIB_DIR DEPLOY_DIR APP_DIR
 
 # ── 로그 ──
 _c() { printf '\033[%sm' "$1"; }
-log()    { printf '%s▸%s %s\n'  "$(_c '1;36')" "$(_c 0)" "$*"; }
-phase()  { printf '\n%s══ %s ══%s\n' "$(_c '1;35')" "$*" "$(_c 0)"; }
-ok()     { printf '%s✓%s %s\n'  "$(_c '1;32')" "$(_c 0)" "$*"; }
+# ⚠ 진단/진행 로그는 전부 stderr 로(warn·die 와 동일). stdout 은 '데이터 반환' 전용 — ensure_service_user 처럼
+#   VAR="$(func)" 로 캡처되는 함수가 log 를 stdout 에 흘리면 반환값이 오염돼(→ getet passwd 실패, set -e exit 2) 배포가 깨진다.
+log()    { printf '%s▸%s %s\n'  "$(_c '1;36')" "$(_c 0)" "$*" >&2; }
+phase()  { printf '\n%s══ %s ══%s\n' "$(_c '1;35')" "$*" "$(_c 0)" >&2; }
+ok()     { printf '%s✓%s %s\n'  "$(_c '1;32')" "$(_c 0)" "$*" >&2; }
 warn()   { printf '%s⚠%s %s\n'  "$(_c '1;33')" "$(_c 0)" "$*" >&2; }
 die()    { printf '%s✗%s %s\n'  "$(_c '1;31')" "$(_c 0)" "$*" >&2; exit 1; }
 
@@ -23,22 +25,67 @@ detect_os() {
   esac
 }
 
+# ── P4(#524): 전용 비-root 게이트웨이 서비스 유저 ──
+#  게이트웨이·프로젝트 공동세션이 admin(ssm-user)로 안 뜨게 — non-root·무sudo·무docker 의 lively 로.
+#  멱등. echo 로 실제 서비스 유저명 반환. mac(launchd)·미Linux 는 현 유저(대상 아님).
+#  ⚠ 격리 spawn 은 별도 잠긴 sudoers(install-isolation, GATEWAY_USER=이 유저)로만 부여 — 여기선 유저·소유권만.
+LIVELY_SERVICE_HOME="${LIVELY_SERVICE_HOME:-/var/lib/lively}"
+ensure_service_user() {
+  local user="${1:-lively}"
+  if [ "$(detect_os)" != linux ]; then echo "$(id -un)"; return 0; fi
+  if ! id "$user" >/dev/null 2>&1; then
+    sudo useradd --system --create-home --home-dir "$LIVELY_SERVICE_HOME" --shell /usr/sbin/nologin "$user" \
+      || die "게이트웨이 서비스 유저 생성 실패: $user"
+    log "게이트웨이 서비스 유저 생성: $user (system·nologin·무sudo·무docker)"
+  fi
+  getent group lively-shared >/dev/null || sudo groupadd lively-shared
+  id -nG "$user" | tr ' ' '\n' | grep -qx lively-shared || sudo usermod -aG lively-shared "$user"
+  # ⚠ APP_DIR 소유는 '운영자(배포 실행 유저)' 그대로 둔다 — update 가 npm ci/build 로 여기에 '쓰기' 때문(lively 소유면
+  #   다음 update 의 npm ci 가 EACCES). 게이트웨이(lively)는 dist/node_modules 를 '읽기'만 하면 되고, 그건 /opt 아래
+  #   (world traverse) + npm/git 기본 umask(022 → world/group read)로 충족 → chown -R 안 한다. logs 만 lively 가 append
+  #   (systemd StandardOutput=append) → render_service_unit 이 chown -R 로 넘긴다.
+  # .env 은 게이트웨이(lively 그룹)도·배포 스크립트(운영자: proxy_up grep·store_up docker)도 읽어야 → 소유=운영자·그룹=lively·640.
+  if [ -f "$APP_DIR/.env" ]; then sudo chown "$(id -un)":"$user" "$APP_DIR/.env"; sudo chmod 640 "$APP_DIR/.env"; fi
+  case "$APP_DIR" in
+    /opt/*|/srv/*) : ;;
+    *) warn "앱 경로 $APP_DIR — lively 접근엔 /opt 권장(홈 아래면 상위 traverse 권한 필요)"; sudo chmod o+x "$(dirname "$APP_DIR")" 2>/dev/null || true ;;
+  esac
+  echo "$user"
+}
+
+# 명령을 게이트웨이 서비스 유저(SERVICE_USER)로 실행 — P4 에서 .env·홈이 lively 소유라 부트스트랩·키트를 그 유저로.
+#  SERVICE_USER 가 현재 유저(비-P4)면 그냥 실행. 설치에 필요한 env 만 화이트리스트로 전달(secure_path·홈 세팅).
+run_as_service() {
+  local svc="${SERVICE_USER:-$(id -un)}"
+  if [ "$svc" = "$(id -un)" ] || [ "$(detect_os)" != linux ]; then "$@"; return; fi
+  local h; h="$(getent passwd "$svc" | cut -d: -f6)"
+  sudo -u "$svc" env HOME="$h" PATH="$PATH" \
+    BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-}" ORG_DOMAIN="${ORG_DOMAIN:-}" \
+    PUBLIC_URL="${PUBLIC_URL:-}" PORT="${PORT:-}" \
+    LIVELY_GATEWAY="${LIVELY_GATEWAY:-}" LIVELY_TOKEN="${LIVELY_TOKEN:-}" KIT_HARNESS="${KIT_HARNESS:-}" \
+    "$@"
+}
+
 # ── 서비스 유닛(systemd/launchd) 렌더·설치 — install(provision.os_install_service)·update 공유(단일 소스). ──
 #  유닛 템플릿(deploy/<os>/…) 변경(예: KillMode=process)이 update.sh 로도 기존 박스에 전파되게 한다. 멱등.
 #  '파일 렌더'만(+linux daemon-reload) — enable/start/restart 는 호출자가(provision=enable·start, update=restart).
+#  게이트웨이 유저 = ${SERVICE_USER:-현재유저}. 호출자(provision=lively, update=현재보존)가 SERVICE_USER 로 지정.
 render_service_unit() {
+  local svc_user="${SERVICE_USER:-$(id -un)}"
+  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
   mkdir -p "$APP_DIR/logs"
+  [ "$(detect_os)" = linux ] && sudo chown -R "$svc_user" "$APP_DIR/logs" 2>/dev/null || true   # 게이트웨이가 append(기존 gateway.log 도 이관)
   case "$(detect_os)" in
     linux)
       local unit="/etc/systemd/system/context-ontology-gateway.service"
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
-          -e "s#@APP_USER@#$(id -un)#g" \
+          -e "s#@APP_USER@#$svc_user#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
-          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.npm-global/bin#g" \
+          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
           "$DEPLOY_DIR/linux/context-ontology-gateway.service" | sudo tee "$unit" >/dev/null
       sudo systemctl daemon-reload
-      ok "systemd 유닛 렌더: $unit"
+      ok "systemd 유닛 렌더: $unit (User=$svc_user)"
       ;;
     mac)
       local plist="$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
