@@ -129,6 +129,9 @@ t("guide: 맥락 로드/기록 가이드가 항상 주입된다(빈 입력에도
   const idx = buildKnowledgeIndex([], []);
   assert.ok(idx.includes("## 맥락 로드/기록 가이드"), "로드/기록 가이드 헤더");
   assert.ok(idx.includes("knowledge_save"), "기록=knowledge_save 안내");
+  // #533: MCP 도구는 대부분 REST로도 열려 있고, 코드/기계적 호출 상황에서 REST 사용 가능 — 이 안내가 항상 주입되어야 한다.
+  assert.ok(idx.includes("MCP 도구는 대부분 REST로도 열려 있다"), "기록: MCP 대부분 REST 지원 안내");
+  assert.ok(idx.includes("/api/ui/knowledge"), "기록: REST 엔드포인트 예시");
 });
 
 // ── (mask) H1-b 시크릿 출력게이트: 동적 블록(카테고리 표시명)·템플릿 본문의 시크릿이 [REDACTED] 로 마스킹(서빙=throw 금지). ──

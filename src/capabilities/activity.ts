@@ -4,6 +4,12 @@
 import { z } from "zod";
 import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../domainmap/core/activity.js";
 import type { Capability } from "./types.js";
+import { HttpError } from "./rest-util.js";
+
+// activity_log REST(#533) parse 가 검증하는 type 화이트리스트 — zod input enum 과 동일(MCP/REST 파리티).
+//  REST 는 zod 를 안 타므로 parse 에서 필수·enum 을 직접 게이트한다(knowledge_save 파스와 동형).
+const ACTIVITY_TYPES = ["feature", "fix", "decision", "docs", "research", "review", "chore", "other"];
+const REVIEW_STATES = ["na", "checked_no_change", "changed"];
 
 const activityLog: Capability = {
   name: "activity_log",
@@ -45,7 +51,45 @@ const activityLog: Capability = {
     should_review: z.enum(["na", "checked_no_change", "changed"]).optional(),
     is_review: z.enum(["na", "checked_no_change", "changed"]).optional(),
   },
-  expose: { mcp: true, rest: false },
+  expose: {
+    mcp: true,
+    // #533: 기계적/대량 마이그레이션을 스크립트가 HTTP 로 처리할 때 작업로그도 HTTP 로 남기게 — 유일하던 쓰기 파리티 갭 해소.
+    //  같은 bearer 토큰·같은 scope(memory). REST 는 zod 미적용이라 parse 에서 필수·enum 을 게이트(handler 는 파싱값 신뢰).
+    //  ctx.agent 는 MCP 경로만 채우므로 REST 는 body.author_agent(있으면)로 폴백 — 스크립트가 명시 가능.
+    rest: [{ method: "POST", paths: ["/api/ui/activity"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, any>;
+        const type = b.type != null ? String(b.type) : "";
+        if (!ACTIVITY_TYPES.includes(type)) throw new HttpError(400, `type 은(는) ${ACTIVITY_TYPES.join("|")} 중 하나여야 합니다`);
+        const title = String(b.title ?? "").trim();
+        if (!title) throw new HttpError(400, "title 이(가) 필요합니다");
+        const review = (v: unknown, name: string): string | undefined => {
+          if (v == null) return undefined;
+          const s = String(v);
+          if (!REVIEW_STATES.includes(s)) throw new HttpError(400, `${name} 은(는) ${REVIEW_STATES.join("|")} 중 하나여야 합니다`);
+          return s;
+        };
+        return {
+          type, title,
+          summary: b.summary != null ? String(b.summary) : undefined,
+          body: b.body != null ? String(b.body) : undefined,
+          project_id: b.project_id != null ? Number(b.project_id) : undefined,
+          ku_refs: Array.isArray(b.ku_refs) ? b.ku_refs : undefined,
+          touches: Array.isArray(b.touches) ? b.touches : undefined,
+          commit_sha: b.commit_sha != null ? String(b.commit_sha) : undefined,
+          repo: b.repo != null ? String(b.repo) : undefined,
+          committed_at: b.committed_at != null ? String(b.committed_at) : undefined,
+          author_agent: b.author_agent != null ? String(b.author_agent) : undefined,
+          session_id: b.session_id != null ? String(b.session_id) : undefined,
+          external_system: b.external_system != null ? String(b.external_system) : undefined,
+          external_id: b.external_id != null ? String(b.external_id) : undefined,
+          external_url: b.external_url != null ? String(b.external_url) : undefined,
+          external_instance: b.external_instance != null ? String(b.external_instance) : undefined,
+          should_review: review(b.should_review, "should_review"),
+          is_review: review(b.is_review, "is_review"),
+        };
+      } }],
+  },
   handler: async (input: any, user, ctx) => {
     const authorPerson = ctx?.actor ?? user?.userId ?? null;
     // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 값이 권위(프로젝트 #182). 자기보고(input.author_agent)는

@@ -100,7 +100,10 @@ const knowledgeSave: Capability = {
   input: {
     name: z.string().max(64).optional(),
     title: z.string().max(200).optional(),
-    body_md: z.string().min(1).max(40000),
+    // body_md 는 DB 상 TEXT(무제한) — 이 max 는 폭주/실수 입력(붙여넣은 바이너리·base64·무한생성) 차단용 방어 상한일 뿐이다.
+    //  구 40,000 은 정상 장문 설계문서(#534: 45k자 doc 이 쪼개짐)를 튕겨 무손실 저장을 막았다 → 200,000(≈50k토큰)으로 상향.
+    //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
+    body_md: z.string().min(1).max(200000),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
