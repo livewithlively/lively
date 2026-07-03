@@ -1,15 +1,10 @@
-// domainmap.ts — 도메인 맵 재설계 (프로젝트 #185).
-//  기존 리스트 뷰를 폐기하고 **의존 흐름 그래프 + 드릴다운**으로 전면 교체.
-//  두 직교 축:
-//   · 레이어축(엣지) = 의도(should) / 실제(is) / 대조(겹침·괴리색)  — 무엇을 보는가
-//   · 관점축(패널)   = PO / 개발자                                   — 누구를 위한 밀도인가
-//  데이터: GET /api/ui/domainmap/map → { domains, debts, edges:{should,is}, ... }  (domainmap-store.productDomainmapView)
-//   드릴다운: GET /api/ui/domainmap/product/domain/:id → { domain, code_units[], data_entities[], debts[] }
-//  괴리는 프론트에서 should∖is(선언만)·is∖should(코드만) 차집합으로 유도. is 가 비면 '아직 측정 안 됨'으로 정직 표기(거짓 괴리 방지).
+// domainmap.ts — 도메인 맵 재설계 (#185). 의존 흐름 그래프(pan/zoom) + 드릴다운 드로어.
+//  두 직교 축: 레이어(의도 should / 실제 is / 대조) × 관점(PO / 개발자) + 횡단 토글.
+//  아틀라스식 조작(#290 패턴): 배경 드래그=이동, 휠=확대축소, '맞춤' 버튼=전체 프레이밍, 노드 클릭=상세 드로어.
+//  데이터: GET /api/ui/domainmap/map → { domains, debts, edges:{should,is}, ... } · 드릴다운 GET .../domain/:id.
 import { api, el, errorNote, fmtNum, loadRepos, pageHead, state } from './core.js';
 import { skeleton } from './learn.js';
 const SVGNS = 'http://www.w3.org/2000/svg';
-// SVG 노드 생성 헬퍼 — el() 은 HTML 전용이라 SVG 는 createElementNS 로. text 속성은 textContent 로 특수처리(빈 라벨 버그 방지).
 function sv(tag, attrs, ...kids) {
     const e = document.createElementNS(SVGNS, tag);
     for (const k in attrs) {
@@ -25,22 +20,20 @@ function sv(tag, attrs, ...kids) {
             e.appendChild(c);
     return e;
 }
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 const NODE_W = 178, NODE_H = 60, COL_GAP = 224, ROW_GAP = 116, PAD = 42, BAND_GAP = 88;
-// ── 방향성 레이어 배치 ──
-//  union(should∪is) 엣지의 방향으로 각 노드의 열(depth)을 계산(longest-path, 사이클 안전 relaxation).
-//  횡단(cross_cutting)은 레이어링에서 제외해 하단 밴드에 따로 둔다(모두와 연결돼 흐름을 왜곡하므로).
-//  배치는 union 고정 — 레이어 토글로 엣지만 숨겨도 노드가 흔들리지 않는다.
+const K_MIN = 0.25, K_MAX = 3;
+// ── 방향성 레이어 배치 (union should∪is, DFS back-edge 제거 후 longest-path) ──
 function layout(domains, edges) {
     const core = domains.filter((d) => !d.cross_cutting);
     const cross = domains.filter((d) => d.cross_cutting);
     const coreIds = new Set(core.map((d) => d.id));
     const E = edges.filter((e) => coreIds.has(e.from) && coreIds.has(e.to) && e.from !== e.to);
-    // 사이클이 레이어를 무한정 늘리지 않도록 DFS back-edge 를 떨궈 DAG 로 레이어링(흐름 방향 우선).
     const adj = new Map();
     core.forEach((d) => adj.set(d.id, []));
     for (const e of E)
         adj.get(e.from).push(e.to);
-    const st = new Map(); // 0 방문전 · 1 스택 · 2 완료
+    const st = new Map();
     const back = new Set();
     const visit = (root) => {
         const path = [{ n: root, i: 0 }];
@@ -52,7 +45,7 @@ function layout(domains, edges) {
                 const v = kids[top.i++];
                 const s = st.get(v) || 0;
                 if (s === 1)
-                    back.add(top.n + '>' + v); // 스택 안 → back-edge(사이클 폐합)
+                    back.add(top.n + '>' + v);
                 else if (s === 0) {
                     st.set(v, 1);
                     path.push({ n: v, i: 0 });
@@ -70,7 +63,6 @@ function layout(domains, edges) {
     const DAG = E.filter((e) => !back.has(e.from + '>' + e.to));
     const layer = new Map();
     core.forEach((d) => layer.set(d.id, 0));
-    // longest-path 레이어링 — DAG 라 사이클 없이 수렴.
     for (let i = 0; i < core.length; i++) {
         let changed = false;
         for (const e of DAG) {
@@ -83,7 +75,6 @@ function layout(domains, edges) {
         if (!changed)
             break;
     }
-    // 열별 그룹핑 → 좌표. 같은 열 노드는 세로 분산(가운데 정렬).
     const cols = new Map();
     let maxL = 0;
     for (const d of core) {
@@ -100,34 +91,22 @@ function layout(domains, edges) {
     cols.forEach((arr, L) => {
         const colH = arr.length * ROW_GAP;
         const y0 = PAD + (coreH - colH) / 2;
-        arr.forEach((d, i) => {
-            pos.set(d.id, { x: PAD + L * COL_GAP + NODE_W / 2, y: y0 + i * ROW_GAP + NODE_H / 2, cross: false });
-        });
+        arr.forEach((d, i) => { pos.set(d.id, { x: PAD + L * COL_GAP + NODE_W / 2, y: y0 + i * ROW_GAP + NODE_H / 2 }); });
     });
-    // 횡단 밴드 — core 아래 한 줄로 나열.
     const bandY = PAD + coreH + BAND_GAP;
-    cross.forEach((d, i) => {
-        pos.set(d.id, { x: PAD + i * (NODE_W + 28) + NODE_W / 2, y: bandY + NODE_H / 2, cross: true });
-    });
-    const width = Math.max((maxL + 1) * COL_GAP, cross.length * (NODE_W + 28)) + PAD * 2;
+    cross.forEach((d, i) => { pos.set(d.id, { x: PAD + i * (NODE_W + 30) + NODE_W / 2, y: bandY + NODE_H / 2 }); });
+    const width = Math.max((maxL + 1) * COL_GAP, cross.length * (NODE_W + 30)) + PAD * 2;
     const height = bandY + (cross.length ? NODE_H + PAD : PAD - BAND_GAP + PAD);
-    return { pos, width, height, hasCross: cross.length > 0, bandY };
+    return { pos, width, height };
 }
-// 노드 박스 경계로 선분 끝점 클리핑(중심→중심 선을 박스 가장자리에서 자름) — 화살표가 박스에 안 파묻히게.
 function clipEnds(a, b) {
     const hw = NODE_W / 2, hh = NODE_H / 2;
     const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
-    const cl = (c, sx, sy) => {
-        const tx = sx !== 0 ? hw / Math.abs(sx) : 1e9, ty = sy !== 0 ? hh / Math.abs(sy) : 1e9;
-        const t = Math.min(tx, ty);
-        return { x: c.x + sx * t, y: c.y + sy * t };
-    };
+    const cl = (c, sx, sy) => { const tx = sx !== 0 ? hw / Math.abs(sx) : 1e9, ty = sy !== 0 ? hh / Math.abs(sy) : 1e9; const t = Math.min(tx, ty); return { x: c.x + sx * t, y: c.y + sy * t }; };
     const s = cl(a, ux, uy), e = cl(b, -ux, -uy);
     return { x1: s.x, y1: s.y, x2: e.x, y2: e.y, mx: (s.x + e.x) / 2, my: (s.y + e.y) / 2 };
 }
 function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-// ════════════════════════════════════════════
-// 도메인 맵(#/domainmap) — 의존 흐름 그래프 + 드릴다운.
 // ════════════════════════════════════════════
 async function renderDomainmap(view, params) {
     view.replaceChildren(skeleton('도메인 맵을 불러오는 중'));
@@ -144,7 +123,6 @@ async function renderDomainmap(view, params) {
         view.replaceChildren(pageHead('도메인 맵', '도메인 간 의존과 should·is·debt.', [], '맵'), errorNote(e, '도메인 맵을 불러오지 못했습니다'));
         return;
     }
-    // ── 정규화 ──
     const domains = data.domains || [];
     const byId = new Map(domains.map((d) => [d.id, d]));
     const sE = (data.edges && data.edges.should) || [];
@@ -160,14 +138,16 @@ async function renderDomainmap(view, params) {
     }).filter((e) => byId.has(e.from) && byId.has(e.to));
     const hasIs = iE.length > 0;
     const LO = layout(domains, edges);
-    // ── 뷰 상태 ──
+    // 뷰 상태
     let layer = 'both';
     let mode = 'po';
     let showCross = false;
     let sel = null;
     const detailCache = {};
-    const head = pageHead('도메인 맵', '도메인이 어떤 순서로 의존을 흘려보내는지, 설계 의도(should)와 실제 코드(is)가 어디서 어긋나는지를 한 화면에서 봅니다.', [], '맵');
-    // 활성 엣지(레이어 토글 반영) — 배치는 union 고정, 표시만 필터.
+    const vw = { k: 1, tx: 0, ty: 0 };
+    let fitted = false;
+    let gViewport = null, stageInner = null;
+    const head = pageHead('도메인 맵', '도메인이 어떤 순서로 의존을 흘려보내는지, 설계 의도(should)와 실제 코드(is)가 어디서 어긋나는지를 봅니다. 배경을 끌어 이동, 휠로 확대·축소.', [], '맵');
     function activeEdges() {
         return edges.filter((e) => {
             if (!showCross && (byId.get(e.from)?.cross_cutting || byId.get(e.to)?.cross_cutting))
@@ -180,21 +160,15 @@ async function renderDomainmap(view, params) {
         });
     }
     function visibleNodes() { return domains.filter((d) => showCross || !d.cross_cutting); }
-    // 엣지 심각도를 CSS/마커 토큰(ok·warn·viol·pending)으로 매핑 — should_no_is→warn, is_no_should→viol.
-    //  대조 뷰에서 is 미측정(hasIs=false)이면 should_no_is 를 '괴리(warn)'가 아니라 pending(측정 전)으로 낮춘다.
-    function sevClass(e) {
-        if (e.sev === 'ok')
-            return 'ok';
-        if (e.sev === 'is_no_should')
-            return 'viol';
-        return hasIs ? 'warn' : 'pending'; // should_no_is
-    }
+    function sevClass(e) { if (e.sev === 'ok')
+        return 'ok'; if (e.sev === 'is_no_should')
+        return 'viol'; return hasIs ? 'warn' : 'pending'; }
     function nodeGap(id) {
         let v = null;
         for (const e of activeEdges()) {
             if (e.from !== id && e.to !== id)
                 continue;
-            const s = sevClass(e); // ok·warn·viol·pending
+            const s = sevClass(e);
             if (s === 'viol')
                 v = 'viol';
             else if (s === 'warn' && v !== 'viol')
@@ -202,15 +176,26 @@ async function renderDomainmap(view, params) {
         }
         return v;
     }
-    function draw() {
-        view.replaceChildren(head, buildControls(), buildStage(), buildLower());
+    function applyTransform() { if (gViewport)
+        gViewport.setAttribute('transform', `translate(${vw.tx.toFixed(1)} ${vw.ty.toFixed(1)}) scale(${vw.k.toFixed(4)})`); }
+    function zoomAt(sx, sy, f) { const k2 = clamp(vw.k * f, K_MIN, K_MAX); vw.tx = sx - (sx - vw.tx) * (k2 / vw.k); vw.ty = sy - (sy - vw.ty) * (k2 / vw.k); vw.k = k2; applyTransform(); }
+    function fitAll() {
+        if (!stageInner)
+            return;
+        const W = stageInner.clientWidth || 900, H = stageInner.clientHeight || 560, m = 52;
+        const k = clamp(Math.min((W - m * 2) / Math.max(1, LO.width), (H - m * 2) / Math.max(1, LO.height)), K_MIN, 1.15);
+        vw.k = k;
+        vw.tx = W / 2 - (LO.width / 2) * k;
+        vw.ty = H / 2 - (LO.height / 2) * k;
+        applyTransform();
     }
-    // ── 컨트롤 바 ──
+    function draw() { view.replaceChildren(head, buildControls(), buildCanvas()); }
+    // ── 컨트롤 ──
     function seg(label, opts, cur, on) {
         const box = el('div', { class: 'dmx-seg', role: 'group', 'aria-label': label });
         for (const [v, t] of opts) {
             const b = el('button', { type: 'button', 'aria-pressed': String(cur === v), text: t });
-            b.addEventListener('click', () => { on(v); });
+            b.addEventListener('click', () => on(v));
             box.append(b);
         }
         return box;
@@ -241,31 +226,40 @@ async function renderDomainmap(view, params) {
         }
         return bar;
     }
-    function lg(cls, txt) {
-        return el('span', { class: 'dmx-lg dmx-lg-' + cls }, el('i', {}), document.createTextNode(txt));
-    }
-    // ── 스테이지: 그래프 + 드릴다운 패널 ──
-    function buildStage() {
-        return el('div', { class: 'dmx-stage' }, buildGraph(), buildPanel());
-    }
-    function buildGraph() {
-        const wrap = el('div', { class: 'dmx-canvas' });
-        const hd = el('div', { class: 'dmx-canvas-head' }, el('span', { class: 'dmx-ch-t', text: layer === 'should' ? '의도한 의존 (should)' : layer === 'is' ? '실제 코드 의존 (is)' : '의도 · 실제 대조' }), el('span', { class: 'dmx-ch-s', text: fmtNum(visibleNodes().length) + ' 도메인 · ' + fmtNum(activeEdges().length) + ' 의존' }));
-        wrap.append(hd);
-        // is 미측정 안내(실제/대조 뷰) — 거짓 괴리 방지.
-        if (!hasIs && layer !== 'should') {
-            wrap.append(el('div', { class: 'dmx-note' }, el('strong', { text: '실제(is) 의존은 아직 측정 전입니다.' }), document.createTextNode(' 코드 스캔(refresh)이 import 를 수집하면 실선과 괴리가 채워집니다. 지금은 의도(should)만 신뢰할 수 있습니다.')));
+    function lg(cls, txt) { return el('span', { class: 'dmx-lg dmx-lg-' + cls }, el('i', {}), document.createTextNode(txt)); }
+    // ── 캔버스(뷰포트 + pan/zoom + 드로어) ──
+    function buildCanvas() {
+        const canvas = el('div', { class: 'dmx-canvas' });
+        canvas.append(el('div', { class: 'dmx-canvas-head' }, el('span', { class: 'dmx-ch-t', text: layer === 'should' ? '의도한 의존 (should)' : layer === 'is' ? '실제 코드 의존 (is)' : '의도 · 실제 대조' }), el('span', { class: 'dmx-ch-s', text: fmtNum(visibleNodes().length) + ' 도메인 · ' + fmtNum(activeEdges().length) + ' 의존' })));
+        if (!hasIs && layer !== 'should')
+            canvas.append(el('div', { class: 'dmx-note' }, el('strong', { text: '실제(is) 의존은 아직 측정 전입니다.' }), document.createTextNode(' 코드 스캔(refresh)이 import 를 수집하면 실선과 괴리가 채워집니다.')));
+        stageInner = el('div', { class: 'dmx-stage-inner' });
+        const svg = sv('svg', { class: 'dmx-graph', role: 'img', 'aria-label': '도메인 의존 흐름 그래프' });
+        gViewport = sv('g', { class: 'dmx-viewport' });
+        buildGraphInto(gViewport);
+        svg.appendChild(gViewport);
+        stageInner.append(svg);
+        const zc = el('div', { class: 'dmx-zoom-ctrl' });
+        zc.append(zbtn('+', '확대', () => zoomAt(stageInner.clientWidth / 2, stageInner.clientHeight / 2, 1.3)), zbtn('−', '축소', () => zoomAt(stageInner.clientWidth / 2, stageInner.clientHeight / 2, 1 / 1.3)), zbtn('맞춤', '전체 맞춤', () => fitAll()));
+        stageInner.append(zc);
+        stageInner.append(buildPanel());
+        canvas.append(stageInner);
+        wire(stageInner);
+        requestAnimationFrame(() => { if (!fitted) {
+            fitAll();
+            fitted = true;
         }
-        const scroll = el('div', { class: 'dmx-svg-scroll' });
-        // width/height 를 실제 px 로 고정 — 넓은 그래프가 좁은 컨테이너에 축소되지 않고 넘치면 가로 스크롤.
-        const svg = sv('svg', { class: 'dmx-graph', width: Math.round(LO.width), height: Math.round(LO.height), viewBox: `0 0 ${Math.round(LO.width)} ${Math.round(LO.height)}`, role: 'img', 'aria-label': '도메인 의존 흐름 그래프' });
-        // 화살표 마커(색상별)
+        else
+            applyTransform(); });
+        return canvas;
+    }
+    function zbtn(t, title, on) { const b = el('button', { class: 'dmx-zbtn', type: 'button', title, text: t }); b.addEventListener('click', on); return b; }
+    function buildGraphInto(g) {
         const defs = sv('defs', {});
-        for (const [id, col] of [['ok', 'var(--dmx-ok)'], ['warn', 'var(--dmx-warn)'], ['viol', 'var(--dmx-viol)'], ['pending', 'var(--dmx-pending)']]) {
-            defs.appendChild(sv('marker', { id: 'dmx-ah-' + id, markerWidth: 8, markerHeight: 8, refX: 6.5, refY: 3, orient: 'auto', markerUnits: 'userSpaceOnUse' }, sv('path', { d: 'M0,0 L7,3 L0,6 Z', fill: col })));
-        }
-        svg.appendChild(defs);
-        const gEdge = sv('g', {}), gLabel = sv('g', {}), gNode = sv('g', {});
+        for (const [id, col] of [['ok', 'var(--dmx-ok)'], ['warn', 'var(--dmx-warn)'], ['viol', 'var(--dmx-viol)'], ['pending', 'var(--dmx-pending)']])
+            defs.appendChild(sv('marker', { id: 'dmx-ah-' + id, markerWidth: 9, markerHeight: 9, refX: 7, refY: 3.2, orient: 'auto', markerUnits: 'userSpaceOnUse' }, sv('path', { d: 'M0,0 L7.5,3.2 L0,6.4 Z', fill: col })));
+        g.appendChild(defs);
+        const gEdge = sv('g', {}), gNode = sv('g', {}), gLabel = sv('g', {});
         const act = activeEdges();
         const neighbor = (id) => sel != null && act.some((e) => (e.from === sel && e.to === id) || (e.to === sel && e.from === id));
         for (const e of act) {
@@ -276,16 +270,15 @@ async function renderDomainmap(view, params) {
             const s = sevClass(e);
             const hot = sel != null && (e.from === sel || e.to === sel);
             const dim = sel != null && !hot;
-            const cls = 'dmx-edge dmx-e-' + s + (hot ? ' hot' : '') + (dim ? ' dim' : '');
-            gEdge.appendChild(sv('line', { class: cls, x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2, 'marker-end': `url(#dmx-ah-${s})` }));
+            gEdge.appendChild(sv('line', { class: 'dmx-edge dmx-e-' + s + (hot ? ' hot' : '') + (dim ? ' dim' : ''), x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2, 'marker-end': `url(#dmx-ah-${s})` }));
             if (hot) {
                 const lbl = mode === 'dev' && e.is ? ('×' + fmtNum(e.weight || 0)) : (e.rel || '');
                 if (lbl) {
                     const w = lbl.length * 10.5 + 16;
-                    const g = sv('g', {});
-                    g.appendChild(sv('rect', { x: p.mx - w / 2, y: p.my - 11, width: w, height: 21, rx: 6, fill: 'var(--dmx-surface)', stroke: 'var(--dmx-line2)', 'stroke-width': 1 }));
-                    g.appendChild(sv('text', { class: 'dmx-elabel', x: p.mx, y: p.my + 4, 'text-anchor': 'middle', text: lbl }));
-                    gLabel.appendChild(g);
+                    const gg = sv('g', {});
+                    gg.appendChild(sv('rect', { x: p.mx - w / 2, y: p.my - 11, width: w, height: 21, rx: 6, fill: 'var(--dmx-surface)', stroke: 'var(--dmx-line2)', 'stroke-width': 1 }));
+                    gg.appendChild(sv('text', { class: 'dmx-elabel', x: p.mx, y: p.my + 4, 'text-anchor': 'middle', text: lbl }));
+                    gLabel.appendChild(gg);
                 }
             }
         }
@@ -294,49 +287,97 @@ async function renderDomainmap(view, params) {
             if (!p)
                 continue;
             const dim = sel != null && sel !== d.id && !neighbor(d.id);
-            const g = sv('g', { class: 'dmx-node' + (d.cross_cutting ? ' cross' : '') + (sel === d.id ? ' active' : '') + (dim ? ' dim' : ''), tabindex: 0, role: 'button', 'data-id': d.id, 'aria-label': d.name || d.key });
-            g.appendChild(sv('rect', { class: 'dmx-box', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: NODE_W, height: NODE_H, rx: 11 }));
-            g.appendChild(sv('rect', { class: 'dmx-stripe', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: 5, height: NODE_H, rx: 2 }));
-            g.appendChild(sv('text', { class: 'dmx-nm', x: p.x - NODE_W / 2 + 17, y: p.y - 5, text: d.name || d.key }));
-            g.appendChild(sv('text', { class: 'dmx-ky', x: p.x - NODE_W / 2 + 17, y: p.y + 15, text: d.key }));
+            const nd = sv('g', { class: 'dmx-node' + (d.cross_cutting ? ' cross' : '') + (sel === d.id ? ' active' : '') + (dim ? ' dim' : ''), tabindex: 0, role: 'button', 'data-id': d.id, 'aria-label': d.name || d.key });
+            nd.appendChild(sv('rect', { class: 'dmx-box', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: NODE_W, height: NODE_H, rx: 11 }));
+            nd.appendChild(sv('rect', { class: 'dmx-stripe', x: p.x - NODE_W / 2, y: p.y - NODE_H / 2, width: 5, height: NODE_H, rx: 2 }));
+            nd.appendChild(sv('text', { class: 'dmx-nm', x: p.x - NODE_W / 2 + 17, y: p.y - 5, text: d.name || d.key }));
+            nd.appendChild(sv('text', { class: 'dmx-ky', x: p.x - NODE_W / 2 + 17, y: p.y + 15, text: d.key }));
             const gap = nodeGap(d.id);
             if (gap)
-                g.appendChild(sv('circle', { class: 'dmx-gapdot dmx-g-' + gap, cx: p.x + NODE_W / 2 - 13, cy: p.y - NODE_H / 2 + 13, r: 5 }));
-            g.addEventListener('click', () => { select(d.id); });
-            g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') {
+                nd.appendChild(sv('circle', { class: 'dmx-gapdot dmx-g-' + gap, cx: p.x + NODE_W / 2 - 13, cy: p.y - NODE_H / 2 + 13, r: 5 }));
+            nd.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') {
                 ev.preventDefault();
                 select(d.id);
             } });
-            gNode.appendChild(g);
+            gNode.appendChild(nd);
         }
-        svg.appendChild(gEdge);
-        svg.appendChild(gNode);
-        svg.appendChild(gLabel); // 라벨을 노드 위로(가림 방지)
-        scroll.append(svg);
-        wrap.append(scroll);
-        return wrap;
+        g.appendChild(gEdge);
+        g.appendChild(gNode);
+        g.appendChild(gLabel);
     }
-    // ── 드릴다운 패널 ──
+    // ── 입력: 휠 줌 · 배경 팬 · 노드 클릭 ──
+    function wire(stg) {
+        stg.addEventListener('wheel', (e) => { e.preventDefault(); const r = stg.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, Math.pow(1.0015, -e.deltaY)); }, { passive: false });
+        let m = '', sx = 0, sy = 0, moved = 0, ptx = 0, pty = 0, downId = null;
+        const findId = (t) => { const g = t.closest && t.closest('.dmx-node'); return g ? Number(g.getAttribute('data-id')) : null; };
+        stg.addEventListener('dragstart', (e) => e.preventDefault());
+        stg.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0)
+                return;
+            if (e.target.closest('.dmx-zoom-ctrl') || e.target.closest('.dmx-panel'))
+                return; // 컨트롤/드로어는 팬 아님
+            e.preventDefault();
+            const r = stg.getBoundingClientRect();
+            sx = e.clientX - r.left;
+            sy = e.clientY - r.top;
+            moved = 0;
+            downId = findId(e.target);
+            if (downId != null)
+                m = 'node';
+            else {
+                m = 'pan';
+                ptx = vw.tx;
+                pty = vw.ty;
+            }
+            try {
+                stg.setPointerCapture(e.pointerId);
+            }
+            catch (_) { /* noop */ }
+            stg.classList.add('dragging');
+        });
+        stg.addEventListener('pointermove', (e) => {
+            if (!m)
+                return;
+            const r = stg.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+            moved += Math.abs(cx - sx) + Math.abs(cy - sy);
+            if (m === 'pan') {
+                vw.tx = ptx + (cx - sx);
+                vw.ty = pty + (cy - sy);
+                applyTransform();
+            }
+        });
+        const end = (e) => {
+            if (m === 'node' && downId != null && moved <= 4)
+                select(downId);
+            m = '';
+            downId = null;
+            stg.classList.remove('dragging');
+            try {
+                stg.releasePointerCapture(e.pointerId);
+            }
+            catch (_) { /* noop */ }
+        };
+        stg.addEventListener('pointerup', end);
+        stg.addEventListener('pointercancel', end);
+    }
+    // ── 드릴다운 드로어 ──
     function buildPanel() {
-        const panel = el('div', { class: 'dmx-panel' });
-        if (sel == null) {
-            panel.append(el('div', { class: 'dmx-empty', text: '도메인을 클릭하면 should · is · debt 상세가 열립니다.' }));
+        const panel = el('div', { class: 'dmx-panel' + (sel != null ? ' open' : '') });
+        if (sel == null)
             return panel;
-        }
         const d = byId.get(sel);
         const det = detailCache[sel];
         const outs = edges.filter((e) => e.from === sel);
         const ins = edges.filter((e) => e.to === sel);
         const gaps = [...outs, ...ins].filter((e) => sevClass(e) !== 'ok');
-        const tags = el('div', { class: 'dmx-ptags' }, d.cross_cutting ? el('span', { class: 'dmx-tag cross', text: '횡단' }) : el('span', { class: 'dmx-tag sp', text: '제품 도메인' }), (gaps.length && hasIs) ? el('span', { class: 'dmx-tag debt', text: '괴리 ' + gaps.length }) : null);
-        panel.append(el('div', { class: 'dmx-ph' }, el('div', { class: 'dmx-pk', text: d.key }), el('div', { class: 'dmx-pn', text: d.name || d.key }), tags));
-        // should
+        const close = el('button', { class: 'dmx-panel-close', type: 'button', 'aria-label': '닫기', text: '✕' });
+        close.addEventListener('click', () => { sel = null; draw(); });
+        panel.append(close, el('div', { class: 'dmx-ph' }, el('div', { class: 'dmx-pk', text: d.key }), el('div', { class: 'dmx-pn', text: d.name || d.key }), el('div', { class: 'dmx-ptags' }, d.cross_cutting ? el('span', { class: 'dmx-tag cross', text: '횡단' }) : el('span', { class: 'dmx-tag sp', text: '제품 도메인' }), (gaps.length && hasIs) ? el('span', { class: 'dmx-tag debt', text: '괴리 ' + gaps.length }) : null)));
         const should = el('div', { class: 'dmx-axis should' }, el('h4', { text: '의도 · should' }));
         should.append(el('p', { text: (d.should && d.should.trim()) ? d.should : '아직 설정되지 않았습니다.' }));
         if (mode === 'po' && d.description && d.description !== d.should)
             should.append(el('div', { class: 'dmx-bd', text: d.description }));
         panel.append(should);
-        // is
         const is = el('div', { class: 'dmx-axis is' }, el('h4', { text: '구조 · is' }));
         if (mode === 'dev') {
             if (!det)
@@ -345,58 +386,32 @@ async function renderDomainmap(view, params) {
                 is.append(errorNote(det.error, '상세를 불러오지 못했습니다'));
             else {
                 const units = (det.code_units || []).filter((u) => u.state !== 'removed');
+                is.append(el('div', { class: 'dmx-metric' }, m2(fmtNum(units.length), '코드유닛'), m2(fmtNum(d.repos || 0), '레포'), m2(fmtNum(outs.filter((e) => e.is).length), 'is 의존')));
                 const ul = el('ul', { class: 'dmx-repos' });
-                for (const u of units.slice(0, 14))
+                for (const u of units.slice(0, 16))
                     ul.append(el('li', { title: u.path, text: u.path || u.label }));
-                is.append(el('div', { class: 'dmx-metric' }, m(fmtNum(units.length), '코드유닛'), m(fmtNum(d.repos || 0), '레포'), m(fmtNum(outs.filter((e) => e.is).length), 'is 의존')));
                 if (units.length)
                     is.append(ul);
-                if (units.length > 14)
-                    is.append(el('div', { class: 'dmx-more', text: '… 외 ' + fmtNum(units.length - 14) + '개' }));
+                if (units.length > 16)
+                    is.append(el('div', { class: 'dmx-more', text: '… 외 ' + fmtNum(units.length - 16) + '개' }));
             }
         }
         else {
             is.append(el('p', { class: 'dmx-muted' }, el('strong', { text: fmtNum(d.units || 0) }), document.createTextNode(' 코드유닛'), d.entities ? document.createTextNode(' · ' + fmtNum(d.entities) + ' 엔티티') : null, document.createTextNode(' · 나가는 의존 ' + fmtNum(outs.length) + ' · 들어오는 ' + fmtNum(ins.length))));
         }
         panel.append(is);
-        // debt (엣지 괴리)
         const debt = el('div', { class: 'dmx-axis debt' }, el('h4', { text: '괴리 · debt' }));
         if (!hasIs)
             debt.append(el('div', { class: 'dmx-muted', text: '실제(is) 측정 전이라 의존 괴리는 아직 판정할 수 없습니다.' }));
         else if (!gaps.length)
             debt.append(el('div', { class: 'dmx-muted', text: '표면화된 의존 괴리가 없습니다.' }));
         else
-            for (const e of gaps) {
-                const s = e.sev;
-                debt.append(el('div', { class: 'dmx-gapline' }, el('span', { class: 'dmx-gd dmx-g-' + (s === 'is_no_should' ? 'viol' : 'warn') }), el('span', {}, el('b', { text: (byId.get(e.from)?.name || e.from) + ' → ' + (byId.get(e.to)?.name || e.to) }), document.createTextNode(s === 'should_no_is' ? ' — 선언됐으나 코드 미확인' : ' — 코드에 있으나 선언 없음'))));
-            }
+            for (const e of gaps)
+                debt.append(el('div', { class: 'dmx-gapline' }, el('span', { class: 'dmx-gd dmx-g-' + (e.sev === 'is_no_should' ? 'viol' : 'warn') }), el('span', {}, el('b', { text: (byId.get(e.from)?.name || e.from) + ' → ' + (byId.get(e.to)?.name || e.to) }), document.createTextNode(e.sev === 'should_no_is' ? ' — 선언됐으나 코드 미확인' : ' — 코드에 있으나 선언 없음'))));
         panel.append(debt);
         return panel;
     }
-    function m(v, label) { return el('div', {}, el('b', { text: v }), el('span', { text: label })); }
-    // ── 하단: 의존 괴리 요약 리스트 ──
-    function buildLower() {
-        const wrap = el('div', { class: 'dmx-lower' });
-        const gaps = edges.filter((e) => e.sev !== 'ok');
-        const showGap = hasIs ? gaps : [];
-        const h = el('div', { class: 'dmx-lower-head' }, el('h3', { text: 'should ↔ is 의존 괴리' }), el('span', { class: 'dmx-c', text: hasIs ? String(showGap.length) + '건' : 'is 측정 전' }));
-        wrap.append(h);
-        if (!hasIs) {
-            wrap.append(el('p', { class: 'dmx-hint', text: '실제(is) 의존이 수집되면 선언(should)과의 차집합으로 괴리가 여기 쌓입니다. 지금은 의도 뷰만 신뢰하세요.' }));
-            return wrap;
-        }
-        if (!showGap.length) {
-            wrap.append(el('p', { class: 'dmx-hint', text: '선언과 코드가 일치합니다 — 표면화된 괴리 없음.' }));
-            return wrap;
-        }
-        const grid = el('div', { class: 'dmx-dgrid' });
-        for (const e of showGap) {
-            const viol = e.sev === 'is_no_should';
-            grid.append(el('div', { class: 'dmx-dcard ' + (viol ? 'viol' : 'warn') }, el('div', { class: 'dmx-dt' }, el('span', { class: 'dmx-sev', text: e.sev }), el('span', { text: (byId.get(e.from)?.name || e.from) + ' → ' + (byId.get(e.to)?.name || e.to) })), el('div', { class: 'dmx-why', text: viol ? '코드엔 이 의존이 있는데 경계 선언이 없음 — 문서 안 된 결합(경계 침범 후보).' : '경계엔 선언됐는데 코드 import 가 확인되지 않음 — 의도된 결합이 누락됐거나 다른 도메인을 경유.' })));
-        }
-        wrap.append(grid);
-        return wrap;
-    }
+    function m2(v, label) { return el('div', {}, el('b', { text: v }), el('span', { text: label })); }
     async function select(id) {
         sel = sel === id ? null : id;
         if (sel != null && mode === 'dev' && !detailCache[sel]) {
