@@ -95,7 +95,18 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 | 7 중앙박스 키트 | 호스트 claude 에 lively 설치(MCP+훅+컨텍스트) — `deploy/install-kit.sh`. **웹터미널 세션이 맥락 CRUD 가능해짐.** |
 
 환경변수: `LIVELY_DOMAIN`(설정 시 자동 HTTPS — 아래 [TLS](#tls-자동-https--caddy)) · `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL`
-· `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN` · `WITH_EMBEDDINGS=1`(t4g.large+) · `FORCE=1`(기존 :8080 감지 무시).
+· `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN` · `WITH_EMBEDDINGS=1`(임베딩 사이드카+provider=http+설치 말미 백필까지 e2e — t4g.large+ 권장) · `FORCE=1`(기존 :8080 감지 무시).
+
+## 임베딩(벡터검색 #172) 켜기
+
+기본 off(검색 = grep 폴백). **기존 지식은 provider 를 켜는 것만으론 임베딩되지 않는다**(쓰기훅은 켠 이후의 신규·수정분만) → 아래 경로는 모두 **기존 지식 백필**을 포함한다.
+
+- **기존 박스 한 방:** `bash deploy/enable-embeddings.sh` — 로컬 Ollama 사이드카(bge-m3) 기동 → `.env` `EMBEDDINGS_PROVIDER=http` → 게이트웨이 재시작 → 기존 지식 백필. 4GB 박스는 RAM 가드로 중단(→ 업사이즈 / 외부 엔드포인트 / `FORCE=1`).
+  - 외부 엔드포인트(사이드카 없이): `EMBEDDINGS_BASE_URL=<host> EMBEDDINGS_MODEL=<m> [EMBEDDINGS_AUTH_ENV=<키담은env이름>] bash deploy/enable-embeddings.sh --external`
+- **관리탭 UI:** ‘임베딩(벡터검색)’ 섹션 — provider/base_url/model/dim 저장(무재시작) + [기존 지식 임베딩(백필)] 버튼(진행 표시).
+- **처음부터:** `WITH_EMBEDDINGS=1 bash deploy/install.sh`.
+
+끄기: `bash deploy/disable-embeddings.sh`(provider off + 사이드카 down — 벡터 데이터는 보존). 모델 스왑: `EMBEDDINGS_MODEL` 변경 후 `node --env-file-if-exists=.env scripts/backfill-embeddings.mjs --model-changed`(차원이 다르면 `--all`).
 
 ## 업데이트 (기존 박스 — update.sh)
 
@@ -173,6 +184,8 @@ deploy/
   bootstrap-admin.mjs # 첫 관리자(세션 로그인) 시드
   bootstrap-baseline.mjs # 익명 조직 baseline(페르소나·규칙) 시드 — 빈 경우만
   install-kit.sh      # 중앙박스 키트 — 호스트 claude 에 lively(MCP+훅+컨텍스트) 설치
+  enable-embeddings.sh  # 임베딩(벡터검색) 켜기 — 사이드카→provider=http→재시작→기존 지식 백필(기존 박스, 멱등)
+  disable-embeddings.sh # 임베딩 끄기 — provider off + 사이드카 down(벡터 데이터 보존)
   linux/              # ── Linux 지원 ──
     provision.sh                          # apt·docker·node·claude / systemd 설치
     context-ontology-gateway.service      # systemd 유닛 템플릿

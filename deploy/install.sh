@@ -94,6 +94,17 @@ main() {
     warn "키트 설치 경고(나중에 재시도: bash deploy/install-kit.sh)"
   fi
 
+  # 임베딩 백필 — WITH_EMBEDDINGS 로 사이드카+provider(http)를 켠 경우, 시드/기존 지식을 벡터화(best-effort).
+  #  사이드카 모델(bge-m3) pull 이 아직이면 백필이 '불가용'으로 건너뛴다 → 경고 + 재시도 안내(설치는 실패 아님).
+  if [ "${WITH_EMBEDDINGS:-0}" = "1" ]; then
+    phase "임베딩 백필(기존 지식 벡터화)"
+    if run_as_service node --env-file="$APP_DIR/.env" "$APP_DIR/scripts/backfill-embeddings.mjs"; then
+      ok "임베딩 백필 완료"
+    else
+      warn "임베딩 백필 건너뜀/미완료 — 사이드카 모델 pull 이 끝난 뒤 재시도: node --env-file=.env scripts/backfill-embeddings.mjs"
+    fi
+  fi
+
   # ── 요약 ──
   phase "완료"
   ok "게이트웨이: ${PUBLIC_URL:-http://localhost:$PORT}"

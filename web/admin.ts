@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, applyReveal, el, errorNote, logout, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
+import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -44,6 +44,8 @@ const ADMIN_SECTIONS = [
   { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
   { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
+  // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
+  { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
   // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
   { key: 'connectors', label: '커넥터(외부 소스)', meaning: null, group: 'ai' },
   // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
@@ -59,7 +61,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'connectors', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -282,6 +284,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'mcp') return mcpEditor(detail, data);
   if (sel === 'connectors') return connectorEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
+  if (sel === 'embeddings') return embeddingsEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'cron') return cronPanel(detail, data);
   if (sel === 'managed-sessions') return managedSessionsPanel(detail, data);
@@ -1919,6 +1922,137 @@ function runtimeEditor(detail, data) {
     el('p', { class: 'admin-hint', text: 'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록 불요.' }),
     field('허용 DB host (allowed_db_hosts)', dbHostTa),
     el('div', { class: 'admin-actions' }, saveBtn, status)));
+}
+
+// ════════ 임베딩(벡터검색 #172) — provider 토글 + 기존 지식 백필 ════════
+//  config SoT = org_runtime_config.embedding_config(DB, 무재시작). 저장 = POST runtime-config{embedding_config}.
+//  "뒤늦게 켜기": provider 를 켠다고 이미 저장된 지식이 자동 임베딩되진 않는다(쓰기훅은 신규·수정분만) →
+//   [백필] 버튼(POST /api/ui/org/embeddings/backfill)으로 기존 지식을 일괄 임베딩(재실행 안전, 진행 폴링).
+function embeddingsEditor(detail, data) {
+  const canEdit = !!data.canEdit;
+  const body = el('div');
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('임베딩 (벡터검색)', null),
+    el('p', { class: 'admin-hint', text: '지식 의미검색·유사도·중복감지가 쓰는 벡터 임베딩을 켜고 끕니다. 기본은 꺼짐(정확 grep 검색으로 폴백). 켜면 OpenAI-compatible /v1/embeddings 엔드포인트(로컬 Ollama 사이드카 또는 외부 API)로 임베딩합니다. 설정은 게이트웨이 재시작 없이 즉시 반영됩니다.' }),
+    body));
+  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+
+  let pollTimer: any = null;
+  const stopPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
+
+  async function load() {
+    let st;
+    try { st = await api('/api/ui/org/embeddings'); }
+    catch (e: any) { body.replaceChildren(el('p', { class: 'admin-hint', text: '상태를 불러오지 못했습니다: ' + e.message })); return; }
+    buildOnce(st);
+  }
+
+  // 폼(설정 입력)은 한 번만 짓는다 — 폴링은 statusRegion 만 갱신해 입력 중 리셋되지 않게.
+  function buildOnce(st) {
+    stopPoll();
+    const cfg = st.config || { provider: 'off', base_url: null, model: null, dimensions: 1024, auth_env_ref: null };
+    const on = cfg.provider === 'http';
+
+    const provSel = el('select', { class: 'input' },
+      el('option', { value: 'off', text: '꺼짐 — grep 검색으로 폴백' }),
+      el('option', { value: 'http', text: '켜짐 — HTTP /v1/embeddings' }));
+    provSel.value = on ? 'http' : 'off'; provSel.disabled = !canEdit;
+    const baseIn = el('input', { class: 'input', type: 'text', placeholder: 'http://localhost:11434  (로컬 Ollama 사이드카)' });
+    baseIn.value = cfg.base_url || ''; baseIn.disabled = !canEdit;
+    const modelIn = el('input', { class: 'input', type: 'text', placeholder: 'bge-m3  (한국어 강화 = KURE-v1, 둘 다 1024차원)' });
+    modelIn.value = cfg.model || ''; modelIn.disabled = !canEdit;
+    const dimIn = el('input', { class: 'input', type: 'number', min: '1', max: '16000', placeholder: '1024' });
+    dimIn.value = String(cfg.dimensions || 1024); dimIn.disabled = !canEdit;
+    const authIn = el('input', { class: 'input', type: 'text', placeholder: '(선택) 키를 담은 환경변수 이름 — 예: OPENAI_API_KEY (키 값 아님)' });
+    authIn.value = cfg.auth_env_ref || ''; authIn.disabled = !canEdit;
+
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' }); saveBtn.disabled = !canEdit;
+    const saveSt = el('span', { class: 'admin-status' });
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true; saveSt.textContent = '';
+      try {
+        const dims = Number(dimIn.value) || 1024;
+        const embedding_config = {
+          provider: provSel.value,
+          base_url: baseIn.value.trim() || null,
+          model: modelIn.value.trim() || null,
+          dimensions: dims,
+          auth_env_ref: authIn.value.trim() || null,
+        };
+        const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ embedding_config }) });
+        if (r && r.runtimeConfig) data.runtimeConfig = r.runtimeConfig;
+        toast(provSel.value === 'http' ? '임베딩 켜짐 — 기존 지식은 아래 [백필]로 채우세요.' : '저장됨 — 임베딩 꺼짐');
+        load(); // 상태 새로고침(백로그·백필 버튼 활성 재계산)
+      } catch (e: any) { toast(e.message, true); saveBtn.disabled = false; }
+    });
+
+    const statusRegion = el('div');
+    body.replaceChildren(
+      field('벡터 임베딩', provSel),
+      field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn),
+      field('모델', modelIn),
+      field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn),
+      field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn),
+      canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }),
+      el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }),
+      el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }),
+      statusRegion);
+    updateStatus(st, statusRegion);
+  }
+
+  // 백로그·잡 진행만 갱신(폼은 그대로). 잡이 돌면 폴링.
+  function updateStatus(st, region) {
+    const cfg = st.config || { provider: 'off' };
+    const on = cfg.provider === 'http';
+    const backlog = st.backlog || { total: 0, pending: 0 };
+    const job = st.job;
+    const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
+    const running = !!(job && job.running);
+
+    const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '백필 진행 중…' : '기존 지식 임베딩(백필)' });
+    bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0;
+    const bfSt = el('span', { class: 'admin-status' });
+    if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
+    else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
+    bfBtn.addEventListener('click', async () => {
+      bfBtn.disabled = true;
+      try {
+        await api('/api/ui/org/embeddings/backfill', { method: 'POST', body: JSON.stringify({ mode: 'pending' }) });
+        toast('백필 시작 — 진행 상황을 표시합니다.');
+        poll();
+      } catch (e: any) { toast(e.message, true); bfBtn.disabled = false; }
+    });
+
+    const jobLine = el('p', { class: 'admin-hint' });
+    if (job) {
+      if (job.running) jobLine.textContent = `백필 진행: ${fmtNum(job.done)}/${fmtNum(job.total)} …`;
+      else if (job.reason) jobLine.textContent = `직전 백필 미완료: ${job.reason}`;
+      else if (job.finishedAt) jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
+    }
+
+    region.replaceChildren(
+      el('p', { class: 'admin-hint', text: `기존 지식 ${fmtNum(backlog.total)}건 중 임베딩 ${fmtNum(embedded)}건 · 미임베딩 ${fmtNum(backlog.pending)}건.` }),
+      jobLine,
+      el('div', { class: 'admin-actions' }, bfBtn, bfSt));
+
+    stopPoll();
+    if (running) poll(region);
+  }
+
+  function poll(region?) {
+    stopPoll();
+    pollTimer = setTimeout(async () => {
+      if (!body.isConnected) { stopPoll(); return; } // 다른 섹션으로 이동 → 폴링 종료(누수 방지)
+      try {
+        const st = await api('/api/ui/org/embeddings');
+        const r = region || (body.lastChild as any);
+        // region 이 사라졌으면 전체 재빌드(안전) — 보통은 statusRegion 재갱신.
+        if (r && r.replaceChildren) updateStatus(st, r); else buildOnce(st);
+      } catch (_) { poll(region); } // 일시 실패 → 재시도
+    }, 1500);
+  }
+
+  load();
 }
 
 // ── 훅 주입 미리보기(V4-P5 J절) — 설치된 3 세션 훅이 각자 세션에 실제로 주입하는 최종 메시지를 보여준다. ──
