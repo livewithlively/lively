@@ -18,7 +18,13 @@ export async function createProjectFolder(id: number): Promise<string> {
   const baseDir = path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR);
   await fsp.mkdir(baseDir, { recursive: true }).catch(() => { /* 이미 존재 */ });
   const folder = String(id);
-  await fsp.mkdir(path.join(baseDir, folder), { recursive: true, mode: 0o700 });
+  const dir = path.join(baseDir, folder);
+  await fsp.mkdir(dir, { recursive: true });
+  // ⚠ 프로젝트 세션은 생성자 box_<멤버> 로 격리 실행(#524 인증 프로필 단위) → 게이트웨이(lively)가 만든 이 폴더를
+  //  box_ 가 cwd·rw 해야 한다. lively-shared 그룹 rwx + setgid(2770)로 — box_ 는 그 그룹 멤버. 자격증명은 여기 없음
+  //  (각 box_ 홈 700 에 커널 격리). 그룹은 부모(/srv/lively/shared) setgid 로 상속. chmod 는 umask 에 안 깎이게 별도.
+  //  (예전 0o700 = 소유자[lively]만 → 격리 세션이 cwd 진입 불가로 죽던 원인. 비격리 폴백 박스에도 무해.)
+  await Promise.all([fsp.chmod(baseDir, 0o2770).catch(() => {}), fsp.chmod(dir, 0o2770).catch(() => {})]);
   return `${PROJECT_SUBDIR}/${folder}`;
 }
 

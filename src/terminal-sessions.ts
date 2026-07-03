@@ -276,9 +276,13 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
 }
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
-  // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 공동 세션(#452)은 격리 제외:
-  //  cwd 가 게이트웨이 소유 프로젝트 폴더이고 여러 멤버가 공동 입장하므로 공유 신원으로 띄운다(안 그러면 멤버가 폴더 접근 불가 → 500).
-  const osUser = input.projectId ? null : await resolveMemberOsUser(userSlug(user));
+  // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 세션도 개인 세션과 '동일하게'
+  //  생성자 box_<멤버> 로 격리 실행한다(#524 인증 프로필 단위화): claude 자격증명이 각 box_ 홈(700)에 커널 격리
+  //  → 공유 lively 로 띄우면 멤버 간 인증이 안 갈리고 재로그인을 요구했다. 공유 프로젝트 폴더는 lively-shared 그룹으로
+  //  box_ 가 접근(project 폴더 2770 group rwx). 입장(초대·프로젝트멤버십)은 터미널탭 초대와 '완전히 동일' —
+  //  게이트웨이 중계 attach 라 pane uid 와 무관(그래서 공동 입장은 그대로 됨). 과거 '폴더 접근 불가→500' 이유는
+  //  폴더를 그룹접근가능으로 만들며 해소. (비격리 폴백은 미프로비저닝/off 멤버 = resolveMemberOsUser 가 null 반환.)
+  const osUser = await resolveMemberOsUser(userSlug(user));
   const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath, osUser);
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
