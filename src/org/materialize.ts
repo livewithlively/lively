@@ -95,7 +95,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 3 space: **사업**(개발 불필요 업무)·**제품**(개발 필요 업무)·**시스템**(조직·업무방식 등 메타). 각 space 아래 하위 카테고리가 있고, **제품의 하위 카테고리 = 도메인**이다. 도메인은 정의·범위·규칙(**should**) + 코드 구현·의존(**is**) + 둘의 갭(**debt**) + 도메인 간 관계(엣지)를 합쳐 **도메인맵**을 이룬다.",
   "- **지식 — 맥락의 *기록*(정적).** 지속되는 사실·결정·설계·런북. 카테고리 1개(단일 home)에 속한다 — 교차주제는 복수 카테고리 태깅이 아니라 `knowledge_link`(지식↔지식)로 잇는다(`knowledge_link_category`는 append 가 아니라 교체 시맨틱). 두 직교 속성 — **injection**(`always`=항상 주입되는 규칙·페르소나 / `recalled`=검색 소환), **provenance**(`authored`=저작 / `observed`=외부 미러).",
-  "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 여러 카테고리에 n:n. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
+  "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 카테고리 1개(단일 home)에 속한다 — 프로젝트 간 관계는 `project_link_project_v6`(선후속 등)로 잇는다. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
   "",
   "## 카테고리 (주제 — 검색으로 소환)",
   "관련 카테고리가 보이면 그걸로 검색(`knowledge_search`/`knowledge_grep`/`knowledge_list` category=)해 지식을 그때 소환한다.",
