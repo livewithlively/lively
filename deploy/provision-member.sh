@@ -79,5 +79,25 @@ install -d -m 700 -o "$OSUSER" -g "$OSUSER" "$HOME_DIR/.claude"
 # 개인 폴더(#524 ROOTS-under-isolation) — resolveRootPath 의 personal 루트 = $HOME/box (멤버 소유)
 install -d -m 700 -o "$OSUSER" -g "$OSUSER" "$HOME_DIR/box"
 
-echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box)"
+# 멤버 claude 키트(훅 + lively MCP) — /install 번들을 멤버 토큰으로 받아 user-install + register-clients 를 **멤버로** 실행.
+#  → ~/.claude/settings.json(훅)·~/.claude.json(lively MCP=멤버 토큰). 이게 없으면 격리 멤버 claude 가 lively 미연동(#524 갭).
+#  best-effort: 실패해도 프로비저닝은 성공(OS 격리 자체는 됨). 게이트웨이가 떠 있어야(웹 provision 은 항상 그렇다) /install 다운로드 됨.
+if [ -n "${LIVELY_TOKEN:-}" ]; then
+  GW_URL="$(cat "$HOME_DIR/.lively/gateway-url" 2>/dev/null || echo "http://localhost:${PORT:-8080}")"; GW_URL="${GW_URL%/}"
+  KTMP="$(mktemp -d)"
+  if curl -fsSL -H "Authorization: Bearer $LIVELY_TOKEN" "$GW_URL/install" -o "$KTMP/b.tgz" 2>/dev/null \
+     && tar -xzf "$KTMP/b.tgz" -C "$KTMP" 2>/dev/null && [ -f "$KTMP/setup/user-install.mjs" ]; then
+    chown -R "$OSUSER:$OSUSER" "$KTMP"
+    runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" \
+      node "$KTMP/setup/user-install.mjs" --harness claude >/dev/null 2>&1 || echo "  ⚠ user-install 경고(훅 머지)"
+    runuser -u "$OSUSER" -- env HOME="$HOME_DIR" LIVELY_TOKEN="$LIVELY_TOKEN" STORE_URL="${GW_URL}/mcp" \
+      bash "$KTMP/setup/register-clients.sh" >/dev/null 2>&1 || echo "  ⚠ MCP 등록 경고"
+    echo "멤버 claude 키트 완료(settings.json 훅 + lively MCP=멤버 토큰)"
+  else
+    echo "  ⚠ kit 번들 다운로드 실패($GW_URL/install) — 훅/MCP 미설정. 세션은 뜨나 lively 미연동(게이트웨이/토큰 확인 후 재프로비저닝)."
+  fi
+  rm -rf "$KTMP"
+fi
+
+echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트)"
 echo "  로그인(멤버 1회, 자기 세션에서): claude → /login   (자격증명은 $HOME_DIR/.claude 에 격리)"

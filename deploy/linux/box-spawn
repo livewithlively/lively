@@ -30,6 +30,12 @@ export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 : "${LANG:=C.UTF-8}"; : "${LC_ALL:=C.UTF-8}"; : "${LC_CTYPE:=C.UTF-8}"
 export LANG LC_ALL LC_CTYPE
 
+# TERM — 웹터미널은 tmux pane → control mode → **xterm.js(브라우저)** 로 렌더된다. 그래서 xterm-256color 로
+#  강제하는 게 옳고(렌더러와 일치) + 가장 견고하다: sudo 가 TERM 을 'unknown' 으로 떨구거나, tmux 가 넘긴
+#  'tmux-256color' terminfo 엔트리가 그 박스에 없으면(ncurses-term 미설치 흔함) claude/Codex 의 Ink TUI 가
+#  REPL 진입 시 죽는다(#524: 트러스트/로그인은 뜨는데 대화창 직전 종료). xterm-256color 는 terminfo 가 어디에나 있다.
+export TERM=xterm-256color
+
 # lively 훅/코덱스 MCP 용 멤버 토큰(있으면). 토큰 리터럴은 코드/로그에 없다 — 파일에서만 읽는다.
 if [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$HOME/.lively/token" ]; then
   LIVELY_TOKEN="$(cat "$HOME/.lively/token")" || true

@@ -16,6 +16,7 @@ import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
 import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { memberMkdir } from "./terminal-member-fs.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -275,7 +276,11 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath);
-  await fsp.mkdir(target, { recursive: true, mode: 0o700 });
+  // 격리 게이트(#524) — 세션 spawn·작업디렉터리 확보 둘 다 이 값으로 분기(한 번만 구한다).
+  const osUser = await resolveMemberOsUser(userSlug(user));
+  // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 internal error 버그).
+  if (osUser) await memberMkdir(osUser, target);
+  else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
 
   const harness = HARNESSES.find((h) => h.key === input.harness);
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");
@@ -299,10 +304,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   const args = ["new-session", "-d", "-s", id, "-c", target];
-  // 구성원 격리(#524, LIVELY_MEMBER_ISOLATION=os): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv).
+  // 구성원 격리(#524): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv, osUser 는 위에서 구함).
   //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
   //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).
-  const osUser = await resolveMemberOsUser(userSlug(user));
   if (osUser) {
     // cmd 빈 배열(셸 세션)이어도 wrapper 가 멤버 로그인 셸을 띄운다. tmux -c 의 작업 디렉터리는 wrapper 가 보존.
     args.push(...wrapAsMember(osUser, cmd));
