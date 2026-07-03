@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# 중앙 박스 구성원 격리(#524) — 세션 spawn 래퍼 (고정 진입점).
+#
+#  게이트웨이(비-root 서비스 유저 lively)가 **잠긴 sudoers 로 이 스크립트만** 그 멤버 계정으로 호출한다:
+#     sudo -n -u box_<slug> -- /opt/lively/libexec/box-spawn [harness args...]
+#  즉 이 스크립트는 **이미 그 멤버 uid** 로 실행된다(sudo 가 강하 완료). 역할 = 멤버 env 를 결정적으로
+#  세팅한 뒤 하네스(또는 로그인 셸)를 exec 하는 것뿐. 여기서 추가 권한 상승은 없다.
+#
+#  ⚠ 설치/소유권 불변식(이게 지켜져야 격리가 성립):
+#     - 경로 = sudoers 의 Cmnd 및 코드(terminal-isolation.ts BOX_SPAWN)와 **문자열 일치**: /opt/lively/libexec/box-spawn
+#     - 소유 root:root, 권한 0755 (**멤버가 못 고치게** — 쓰기 가능하면 멤버가 wrapper 를 바꿔 자기 세션에서
+#       임의 코드를 자기 uid 로 돌릴 수 있다. 그건 이미 자기 권한이라 무해하지만, 원칙상 root 소유·비쓰기 유지.)
+#     - HOME/그룹/스켈레톤은 provision-member.sh 가 미리 만든다(이 래퍼는 만들지 않음).
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+# 멤버 신원은 passwd 를 권위로(=결정적). sudo 의 env 처리(env_reset/always_set_home 등)는 배포판마다 달라
+#  $HOME/$USER 를 신뢰하지 않는다. 우리는 '지금 이 프로세스의 실제 uid' 로부터 되읽는다.
+_u="$(id -un)"
+_home="$(getent passwd "$_u" | cut -d: -f6 || true)"
+[ -n "$_home" ] && [ -d "$_home" ] || _home="/home/$_u"
+export USER="$_u" LOGNAME="$_u" HOME="$_home"
+
+# 툴체인 PATH — 세션이 node/claude/codex/git/tmux 를 찾도록. 게이트웨이 유닛 PATH 를 상속하되(sudo -n 은
+#  기본 env_reset 로 PATH 를 secure_path 로 바꿀 수 있어) 표준 경로 + 멤버 npm-global 을 항상 보강한다.
+export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.npm-global/bin"
+
+# UTF-8 로케일(없으면 tmux/한글 렌더 깨짐 — 게이트웨이 불변식과 동일).
+: "${LANG:=C.UTF-8}"; : "${LC_ALL:=C.UTF-8}"; : "${LC_CTYPE:=C.UTF-8}"
+export LANG LC_ALL LC_CTYPE
+
+# lively 훅/코덱스 MCP 용 멤버 토큰(있으면). 토큰 리터럴은 코드/로그에 없다 — 파일에서만 읽는다.
+if [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$HOME/.lively/token" ]; then
+  LIVELY_TOKEN="$(cat "$HOME/.lively/token")" || true
+  export LIVELY_TOKEN
+fi
+
+# tmux 가 -c 로 넘긴 작업 디렉터리(cwd)는 **보존**한다(여기서 cd 하지 않음). 접근 불가하면 홈으로 폴백.
+cd "$PWD" 2>/dev/null || cd "$HOME" || true
+
+# 하네스가 오면 그걸, 없으면(셸 세션) 인터랙티브 로그인 셸을 exec.
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+else
+  exec "${SHELL:-/bin/bash}" -il
+fi

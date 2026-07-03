@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 중앙 박스 구성원 격리(#524) — 게이트웨이 서비스 유저(lively)의 **최소** 권한.
+#
+#  게이트웨이(비-root)가 세션 셸/하네스를 **그 멤버 OS 계정으로만** 내릴 수 있게 한다.
+#  허용 = 단일 고정 wrapper(box-spawn) 를, runas 는 box_members 그룹(모든 box_<slug>)으로 제한.
+#  → 멤버 추가는 그 유저를 box_members 그룹에 넣기만 하면 되고 **이 파일은 무수정**.
+#
+#  이게 주는 것: 게이트웨이가 sudo 로 할 수 있는 유일한 일은 "box_* 멤버로 box-spawn 실행". root 셸·임의
+#  명령·다른 유저 실행 전부 불가. (setuid 커스텀 바이너리 없이 이 한 줄로 privsep — 표준·감사 용이.)
+#
+#  ⚠ 설치(install 이 수행):
+#     - 이 파일 → /etc/sudoers.d/lively , 소유 root:root , 권한 0440
+#     - 반드시 `visudo -cf /etc/sudoers.d/lively` 로 검증 후 활성(문법오류 시 sudo 전체 잠김 방지)
+#     - /opt/lively/libexec/box-spawn 는 root:root 0755 (멤버 비쓰기) — box-spawn 헤더의 불변식 참조
+#     - box_members 그룹 존재(provision 이 groupadd), 게이트웨이는 lively 유저로 기동(systemd User=lively)
+#
+#  ⚠ 이 파일은 **구성원 격리(uid drop)** 만 담당한다. ssm-user 의 NOPASSWD 회수·게이트웨이 docker 그룹 제거·
+#     전용 lively 서비스 유저 전환은 **박스 하드닝 런북**(별도 운영 절차)에서 다룬다 — 코드가 아니라 호스트 설정.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# box_<slug> 멤버 계정 전체를 한 그룹으로 묶어 runas 대상으로 제한.
+Runas_Alias LIVELY_BOX_MEMBERS = %box_members
+
+# lively 는 box_members 중 누구로든, 비밀번호 없이, **오직 이 wrapper 하나** 실행 가능.
+#  (Cmnd 에 인자를 안 붙임 = box-spawn 을 임의 하네스 인자로 호출 허용. 그 인자는 게이트웨이가
+#   세션 owner 의 계정으로만 구성하고 이미 화이트리스트라 안전 — box-spawn 은 그걸 그 멤버로 exec 할 뿐.)
+lively ALL=(LIVELY_BOX_MEMBERS) NOPASSWD: /opt/lively/libexec/box-spawn

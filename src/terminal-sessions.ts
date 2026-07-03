@@ -15,6 +15,7 @@ import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
 import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
+import { resolveMemberOsUser, wrapAsMember } from "./terminal-isolation.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -91,13 +92,26 @@ async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
   return out;
 }
 
-// 허용 루트 기준 경로 해소(+봉쇄). perUser 루트는 base/<userSlug>. subpath 의 .. 탈출은 거부.
-// 세션 생성·생성폼 폴더 탐색이 공유한다(순수 path 연산 — fs 부작용 없음).
-export function resolveRootPath(user: LivelyUser, rootKey: string, subpath: string): { base: string; abs: string } {
+// 격리(#524) 루트 베이스 — 세션이 멤버 uid 로 돌면 작업 디렉터리도 그 uid 로 접근가능해야 한다.
+//  personal = 멤버 홈 하위(box_<slug> 소유), shared = lively-shared 그룹 공유 dir(게이트웨이·멤버 공동 rw).
+const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";              // useradd -m -d /home/box_<slug>
+const PERSONAL_SUBDIR = "box";                                                        // 멤버 홈/box = '개인 폴더'
+const SHARED_ISOLATED_BASE = process.env.LIVELY_SHARED_DIR || "/srv/lively/shared";   // root:lively-shared 2775(setgid)
+
+// 허용 루트 기준 경로 해소(+봉쇄). subpath 의 .. 탈출은 거부.
+//  격리+프로비저닝된 멤버면 멤버-접근가능 베이스로(세션 spawn 과 동일 게이트 = resolveMemberOsUser),
+//  아니면 게이트웨이 홈 기준(종전, perUser=base/<userSlug>). 세션 생성·생성폼 폴더 탐색이 공유한다.
+export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath: string): Promise<{ base: string; abs: string }> {
   const root = ROOTS.find((r) => r.key === rootKey);
   if (!root) throw new HttpError(400, "허용되지 않은 루트입니다");
-  let base = root.base;
-  if (root.perUser) base = path.join(base, userSlug(user));
+  const osUser = await resolveMemberOsUser(userSlug(user));
+  let base: string;
+  if (osUser) {
+    base = root.perUser ? path.join(MEMBER_HOME_BASE, osUser, PERSONAL_SUBDIR) : SHARED_ISOLATED_BASE;
+  } else {
+    base = root.base;
+    if (root.perUser) base = path.join(base, userSlug(user));
+  }
   base = path.resolve(base);
   const sub = String(subpath || "").replace(/^[/\\]+/, "");
   const abs = path.resolve(base, sub);
@@ -223,7 +237,7 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
 }
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
-  const { abs: target } = resolveRootPath(user, input.rootKey, input.subpath);
+  const { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath);
   await fsp.mkdir(target, { recursive: true, mode: 0o700 });
 
   const harness = HARNESSES.find((h) => h.key === input.harness);
@@ -248,19 +262,28 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const invites = await validInvites(input.invites, ownerId(user));
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   const args = ["new-session", "-d", "-s", id, "-c", target];
-  // 멀티프로필(#346): 프로필이 프로비저닝·로그인된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
-  //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝/미로그인=주입 안 함→공유 폴백.
-  //  loginProfile(최초 로그인 세션): 로그인 게이트를 우회해 owner 프로필 dir 을 **강제** 주입 — 아직 .credentials.json 이
-  //   없어도(닭-달걀) 그 dir 을 가리켜 거기로 claude 로그인하게 한다. dir 이 없으면 만든다(프로비저닝 전이어도 로그인만은 가능).
-  let profileDir: string | null;
-  if (input.loginProfile) {
-    profileDir = profileConfigDir(user);
-    await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  // 구성원 격리(#524, LIVELY_MEMBER_ISOLATION=os): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv).
+  //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
+  //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).
+  const osUser = await resolveMemberOsUser(userSlug(user));
+  if (osUser) {
+    // cmd 빈 배열(셸 세션)이어도 wrapper 가 멤버 로그인 셸을 띄운다. tmux -c 의 작업 디렉터리는 wrapper 가 보존.
+    args.push(...wrapAsMember(osUser, cmd));
   } else {
-    profileDir = await resolveProfileConfigDir(user);
+    // 멀티프로필(#346): 프로필이 프로비저닝·로그인된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
+    //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝/미로그인=주입 안 함→공유 폴백.
+    //  loginProfile(최초 로그인 세션): 로그인 게이트를 우회해 owner 프로필 dir 을 **강제** 주입 — 아직 .credentials.json 이
+    //   없어도(닭-달걀) 그 dir 을 가리켜 거기로 claude 로그인하게 한다. dir 이 없으면 만든다(프로비저닝 전이어도 로그인만은 가능).
+    let profileDir: string | null;
+    if (input.loginProfile) {
+      profileDir = profileConfigDir(user);
+      await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    } else {
+      profileDir = await resolveProfileConfigDir(user);
+    }
+    if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
+    if (cmd.length) args.push(...cmd);
   }
-  if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
-  if (cmd.length) args.push(...cmd);
   await tmux(args);
   const label = cleanLabel(input.label) || id;
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
@@ -344,6 +367,21 @@ export async function tidyHistory(id: string, force: boolean): Promise<boolean> 
 export async function sessionDir(id: string): Promise<string> {
   if (!ID_RE.test(id)) return os.homedir();
   return (await getOpt(id, "@box_dir")) || os.homedir();
+}
+
+// 세션 owner 의 OS 계정(#524) — 파일 API 가 격리 홈(멤버 700)의 op 를 그 uid 로 내릴 때 쓴다.
+//  @box_owner(세션 소유자 id) → slug → resolveMemberOsUser. 파일은 세션 셸과 같은 uid(=owner)로 만들어지므로,
+//  누가 브라우징하든(초대 멤버 포함) op 는 owner osUser 로 수행해야 소유·권한이 맞다. off/미프로비저닝=null(게이트웨이 직접).
+export async function sessionOsUser(id: string): Promise<string | null> {
+  if (!ID_RE.test(id)) return null;
+  const owner = await getOpt(id, "@box_owner");
+  if (!owner) return null;
+  return resolveMemberOsUser(slug(owner));
+}
+
+// 현재 사용자의 OS 계정(#524) — 세션 무관 파일 API(생성폼 폴더 피커 browse)가 그 uid 로 op 를 내릴 때.
+export async function userOsUser(user: LivelyUser): Promise<string | null> {
+  return resolveMemberOsUser(userSlug(user));
 }
 
 // 단일 세션의 현재 라벨(@box_label) — 단독 터미널 페이지가 id 로 '지금 이름'을 조회한다.
