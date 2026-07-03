@@ -329,6 +329,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     if (cmd.length) args.push(...cmd);
   }
+  // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
+  //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
+  await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
   await tmux(args);
   const label = cleanLabel(input.label) || id;
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);

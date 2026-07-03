@@ -13,7 +13,8 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "./log.js";
-import { TMUX_BIN, canAttach, sessionDir, ensureSessionOpts } from "./terminal-sessions.js";
+import os from "node:os";
+import { TMUX_BIN, canAttach, ensureSessionOpts } from "./terminal-sessions.js";
 
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
@@ -90,8 +91,11 @@ function handleLegacyMsg(term: IPty, msg: { t?: string; d?: unknown; c?: unknown
 
 function attach(ws: WebSocket, id: string): void {
   let term: IPty | undefined;
-  sessionDir(id)
-    .then((cwd) => {
+  // attach 는 tmux **클라이언트**일 뿐 — 그 cwd 는 세션 pane 에 영향 없다. 세션 작업디렉터리(격리 시 멤버 700 홈)로
+  //  chdir 하면 게이트웨이가 못 들어가 'chdir(2) failed: Permission denied' 가 반복된다(격리 개인폴더 attach 버그 #524).
+  //  게이트웨이가 늘 접근 가능한 서버 홈을 쓴다.
+  Promise.resolve()
+    .then(() => {
       // 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로 잡혀 한글(멀티바이트)
       //  렌더가 깨진다. UTF-8 로케일을 강제(env) + `tmux -u`(로케일과 무관하게 UTF-8 출력)로 이중 보장.
       const env = { ...process.env } as Record<string, string>;
@@ -104,7 +108,7 @@ function attach(ws: WebSocket, id: string): void {
       // encoding:null → onData 가 Buffer(raw 바이트). 바이너리 프레임으로 그대로 relay하고 서버는 UTF-8 디코드를
       //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
-      term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd, env, encoding: null });
+      term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
       //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
