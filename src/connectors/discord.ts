@@ -7,6 +7,7 @@
 // external_id = `${channelId}:${messageId}` (system+instance 내 안정·고유).
 // instance = guild id (워크스페이스 식별자).
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import { resolveConnectorConfig } from "./config.js";
 
 export type { Connector, RawItem, BackfillOpts };
 
@@ -161,8 +162,8 @@ function toIso(ts: string): string {
 
 // ── HTTP 계층 ──
 
-function getToken(): string {
-  const token = process.env.DISCORD_BOT_TOKEN;
+async function getToken(): Promise<string> {
+  const token = (await resolveConnectorConfig("discord")).bot_token;
   if (!token) {
     throw new Error(
       "DISCORD_BOT_TOKEN 미설정 — Discord 봇 토큰을 환경변수로 주입하세요 (Authorization: Bot <token>).",
@@ -173,8 +174,8 @@ function getToken(): string {
 
 // 채널 allowlist — env DISCORD_CHANNELS=쉼표구분 채널 id. 설정 시 그 채널(+그 채널의 스레드)만 백필.
 // 미설정이면 종전대로 봇이 보는 모든 텍스트/공지 채널을 백필한다.
-function getChannelAllowlist(): Set<string> | null {
-  const raw = process.env.DISCORD_CHANNELS?.trim();
+async function getChannelAllowlist(): Promise<Set<string> | null> {
+  const raw = (await resolveConnectorConfig("discord")).channels?.trim();
   if (!raw) return null;
   const ids = raw
     .split(",")
@@ -356,9 +357,9 @@ export const discordConnector: Connector = {
   name: "discord",
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
-    const token = getToken();
+    const token = await getToken();
     const since = opts?.since;
-    const allow = getChannelAllowlist();
+    const allow = await getChannelAllowlist();
 
     const guilds = await listGuilds(token);
     for (const guild of guilds) {

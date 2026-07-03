@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { listSources, getSource, upsertSource, deleteSource } from "../v6/source-store.js";
+import { listSources, getSource, upsertSource, deleteSource, listUndistilledSources } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 
 const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "notion_doc", "clickup_doc", "other"] as const;
@@ -143,8 +143,28 @@ const sourceDelete: Capability = {
   },
 };
 
-// ⚠ REST 순서: sourceGet(/sources/:id, GET) 은 sourceList(/sources, GET) 와 세그먼트 수가 달라 안 겹친다.
+// distill 대상 — 아직 지식으로 증류 안 된 자료(knowledge_source 링크 없는 것). distill 세션이 지식화 대상 조회(#541).
+const sourceUndistilled: Capability = {
+  name: "source_undistilled",
+  title: "미증류 자료 목록",
+  description:
+    "아직 지식으로 증류되지 않은 자료(knowledge_source 링크가 없는 것)를 최근순으로 조회한다 — distill 세션이 지식화 대상을 가져올 때 쓴다. 본문 미포함(source_get 으로 전문). 지식화(source_link_knowledge)하면 다음 조회에서 빠진다.",
+  scope: "memory",
+  input: { limit: z.number().int().positive().max(500).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/sources/undistilled"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return { limit: query.limit ? Number(query.limit) : undefined };
+      } }],
+  },
+  handler: async (input: any) => ({ entries: await listUndistilledSources(input.limit) }),
+};
+
+// ⚠ REST 순서: sourceUndistilled(/sources/undistilled, GET) 은 sourceGet(/sources/:id) 보다 **먼저** 마운트되어야
+//  'undistilled' 가 :id 로 먹히지 않는다(구체 경로 우선). sourceGet(/sources/:id)·sourceList(/sources) 는 세그먼트 수로 구분.
 //  POST 들(/sources, /sources/:id/knowledge, /sources/:id/delete)도 상호 구분.
 export const sourceCapabilities: Capability[] = [
-  sourceList, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete,
+  sourceList, sourceUndistilled, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete,
 ];

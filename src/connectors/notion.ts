@@ -7,6 +7,7 @@
 // rate limit: 평균 ~3 req/s, 초과 시 429 + Retry-After(초). → 본 커넥터는 429 시 Retry-After 만큼 대기 후 재시도.
 // 단일 페이지 처리 실패는 skip/continue — 전체 백필을 죽이지 않는다.
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import { resolveConnectorConfig } from "./config.js";
 
 // ── 상수 ───────────────────────────────────────────────────────────────────
 const API_BASE = "https://api.notion.com/v1";
@@ -82,16 +83,16 @@ interface NotionUser {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // 토큰 조회 — 없으면 명확히 실패시킨다(부분 백필 방지).
-function requireToken(): string {
-  const tok = process.env.NOTION_TOKEN;
+async function requireToken(): Promise<string> {
+  const tok = (await resolveConnectorConfig("notion")).token;
   if (!tok) throw new Error("NOTION_TOKEN 환경변수가 없습니다 — Notion integration 토큰(secret_…)을 설정하세요");
   return tok;
 }
 
 // instance 식별자: 워크스페이스 식별값. 토큰별로 워크스페이스가 갈리므로
 // 명시 설정(NOTION_INSTANCE)이 없으면 'default' 로 둔다(external_id 유일성은 page uuid 가 보장).
-function getInstance(): string {
-  return process.env.NOTION_INSTANCE || "default";
+async function getInstance(): Promise<string> {
+  return (await resolveConnectorConfig("notion")).instance || "default";
 }
 
 // ── HTTP 호출(인증/버전 헤더 + rate limit 존중 + 자발적 스로틀) ───────────────
@@ -291,8 +292,8 @@ function extractParentPageId(page: NotionPage): string | undefined {
 
 // ── 백필: search 로 페이지를 끝까지 나열 → 각 페이지 본문/작성자 채워 RawItem yield ──
 async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
-  const token = requireToken();
-  const instance = getInstance();
+  const token = await requireToken();
+  const instance = await getInstance();
   const since = opts?.since ? Date.parse(opts.since) : undefined; // 증분 백필 기준(ms)
 
   let cursor: string | undefined;
