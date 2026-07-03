@@ -19,6 +19,8 @@ cd "$APP_DIR"
 
 [ -f "$APP_DIR/.env" ] || die ".env 없음 — 최초 설치가 안 된 호스트입니다. install.sh 를 쓰세요."
 
+ensure_env_secret CONNECTOR_SECRET_KEY    # secret-box 마스터키 백필(#540 git 자격·#541 커넥터 토큰) — 기존값 보존, 재시작이 반영
+
 phase "1/3 의존성 + 빌드"
 if [ -d dist ] && [ ! -d src ]; then
   # prebuilt 릴리스 번들(dist 동봉·소스 없음) → tsc 불요. 새 번들이 이미 dist 를 담아 옴. 런타임 deps 만 멱등 반영.

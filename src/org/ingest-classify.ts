@@ -38,11 +38,16 @@ const VALID_KINDS = new Set(["R", "K", "H", "W"]);
 //  구 KIND_MAP(kindForSource)의 의미를 **그대로 재사용**(재인코딩 없음 — 단일 source 표): kind 'W'(=작업)이면
 //  project, 그 외 정의된 kind(K 등 — 지식/산출물)이면 knowledge, 미정의(undefined = slack 등)이면 null(미러 skip).
 //  v6 에 kind 가 없으므로 'W'/'K' 라벨 자체는 미적재 — 라우팅 분기에만 쓴다(task 의 "drop the kind notion" 충족).
-export type V6IngestTarget = "project" | "knowledge" | null;
+export type V6IngestTarget = "project" | "knowledge" | "source" | null;
 export function routeIngestV6(type: string, system: string): V6IngestTarget {
   const kind = kindForSource(type, system);
-  if (kind === undefined) return null; // 미정의 조합 — 미러 skip(보수적, 임의 분류 금지).
-  return kind === "W" ? "project" : "knowledge"; // W=작업→project, 그 외(K 등)=지식→knowledge(observed).
+  if (kind === "W") return "project";   // clickup task 등 → project
+  if (kind === "K") return "knowledge"; // notion doc 등 정제 문서 → knowledge(observed)
+  // KIND_MAP 미정의라도 type 으로 라우팅(#541): message/note=raw 자료(source, distill 대상), doc=정제 문서(knowledge).
+  //  이전엔 미정의=null(skip)이라 slack/discord message 가 버려졌다 — 이제 source 로 적재해 distill 이 지식화한다.
+  if (type === "message" || type === "note") return "source";
+  if (type === "doc") return "knowledge";
+  return null; // 그 외 미정의(예: 미지원 task) — skip(보수적).
 }
 
 // 무키 기계 폴백 — 현 미러 인입이 kind 를 정하던 방식과 **정확히 동일**(external-identity 중앙 함수).

@@ -141,8 +141,8 @@ ensure_env() {
     ok ".env 이미 존재 — 보존(비파괴). 시크릿 재생성 안 함."
     return 0
   fi
-  local pgpw token webhook
-  pgpw="$(gen_hex 16)"; token="$(gen_hex 32)"; webhook="$(gen_hex 32)"
+  local pgpw token webhook conn_key
+  pgpw="$(gen_hex 16)"; token="$(gen_hex 32)"; webhook="$(gen_hex 32)"; conn_key="$(gen_hex 32)"
   local port="${PORT:-8080}" idbport="${ITEMS_DB_PORT:-5432}"
   local domain="${LIVELY_DOMAIN:-}"
   # LIVELY_DOMAIN 설정 시 front door = Caddy TLS → PUBLIC_URL 기본을 https://도메인 으로(쿠키 Secure 판정 근거).
@@ -190,6 +190,10 @@ DOMAINMAP_DATABASE_URL=postgres://lively:$pgpw@localhost:$idbport/domainmap
 AUTH_TOKENS_JSON='{"$token":{"userId":"agent","email":"agent@$orgdom","scopes":["context","items","db"],"projects":["*"]}}'
 WEBHOOK_SECRET=$webhook
 
+# ── at-rest 암호화 키 — git 자격(#540)·커넥터 토큰(#541)을 DB에 봉투 암호화(secret-box)하는 공용 마스터키. ──
+#  자동 생성(사람 개입 불요). ⚠ 바꾸면 기존 암호문(git 자격·커넥터 토큰) 복호 불가 → update 는 보존한다.
+CONNECTOR_SECRET_KEY=$conn_key
+
 # ── 로케일(불변식: tmux 세션 파싱) ──
 LANG=C.UTF-8
 LC_ALL=C.UTF-8
@@ -218,6 +222,19 @@ EOF
   ok ".env 생성(시크릿 자동) → $envf"
   AGENT_TOKEN="$token"   # summary 출력용
   export AGENT_TOKEN
+}
+
+# 기존 .env 에 필수 시크릿이 없으면 자동 생성해 추가(멱등·비파괴 — 비어있지 않은 값은 보존).
+#  신규 도입 변수를 기존 박스에 백필하는 용도(예: CONNECTOR_SECRET_KEY — ensure_env 로 새로 깐 박스는 이미 있고,
+#  그 전에 설치된 박스는 update.sh 가 이걸로 채워 넣는다). sed -i.bak = GNU/BSD 공통.
+ensure_env_secret() {
+  local name="$1" bytes="${2:-32}" envf="$APP_DIR/.env"
+  [ -f "$envf" ] || return 0
+  if grep -qE "^${name}=.+" "$envf"; then return 0; fi        # 비어있지 않은 값 존재 → 보존
+  sed -i.bak "/^${name}=/d" "$envf" 2>/dev/null && rm -f "$envf.bak" 2>/dev/null || true  # 빈 라인 있으면 제거
+  printf '\n# %s — deploy 자동생성(#540 git 자격 at-rest 암호화). 분실 시 저장 자격 복호 불가 → 재등록 필요.\n%s=%s\n' \
+    "$name" "$name" "$(gen_hex "$bytes")" >> "$envf"
+  ok ".env 에 $name 자동 생성(백필)"
 }
 
 # store(pgvector) 기동 + healthy 대기.

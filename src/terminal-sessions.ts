@@ -17,6 +17,7 @@ import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./or
 import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
+import { materializeMemberGit } from "./org/git-credential-materialize.js";
 
 const execFileAsync = promisify(execFile);
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
@@ -327,6 +328,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
+
+  // git 자격 materialize(#540, Slice 2) — 격리 세션이면 그 멤버의 등록 git 자격을 홈(~/.ssh·~/.lively)에 뿌려
+  //  세션 안 shell/Claude 의 git 이 멤버 자격으로 되게 한다. best-effort·비파괴(실패해도 세션 생성 안 막음). DB 미등록이면 no-op.
+  if (osUser) {
+    const mid = ownerId(user);
+    if (mid) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
+  }
 
   const harness = HARNESSES.find((h) => h.key === input.harness);
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");

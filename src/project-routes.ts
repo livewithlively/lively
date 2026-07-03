@@ -282,7 +282,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const b = (req.body ?? {}) as Record<string, unknown>;
     const specs = Array.isArray(b.repos) ? b.repos as { name: string; path?: string; worktree?: boolean; branch?: string }[] : [];
     if (!specs.length) throw new HttpError(400, "provision 할 레포가 없습니다");
-    const provisioned = await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false });
+    const provisioned = await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false, memberId: userOf(req).userId ?? null });
     res.setHeader("Cache-Control", "no-store");
     res.json({ provisioned });
   }));
