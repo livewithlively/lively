@@ -52,8 +52,8 @@ ensure_service_user() {
   #   다음 update 의 npm ci 가 EACCES). 게이트웨이(lively)는 dist/node_modules 를 '읽기'만 하면 되고, 그건 /opt 아래
   #   (world traverse) + npm/git 기본 umask(022 → world/group read)로 충족 → chown -R 안 한다. logs 만 lively 가 append
   #   (systemd StandardOutput=append) → render_service_unit 이 chown -R 로 넘긴다.
-  # .env 은 게이트웨이(lively 그룹)도·배포 스크립트(운영자: proxy_up grep·store_up docker)도 읽어야 → 소유=운영자·그룹=lively·640.
-  if [ -f "$APP_DIR/.env" ]; then sudo chown "$(id -un)":"$user" "$APP_DIR/.env"; sudo chmod 640 "$APP_DIR/.env"; fi
+  # .env 소유권 불변식(운영자:서비스유저 640 — 게이트웨이가 group-read)은 이 함수 '맨 끝'에서 적용한다 —
+  #  아래 세션루트 repoint 의 set_env(sudo sed -i)가 .env 를 재작성하며 그룹을 도로 깰 수 있어, 모든 .env 편집 뒤가 유일하게 안전.
   case "$APP_DIR" in
     /opt/*|/srv/*) : ;;
     *) warn "앱 경로 $APP_DIR — lively 접근엔 /opt 권장(홈 아래면 상위 traverse 권한 필요)"; sudo chmod o+x "$(dirname "$APP_DIR")" 2>/dev/null || true ;;
@@ -72,6 +72,10 @@ ensure_service_user() {
     cur="$(sudo grep -E '^TERMINAL_ROOT_PERSONAL=' "$APP_DIR/.env" | cut -d= -f2-)"
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_PERSONAL "$LIVELY_SERVICE_HOME/box"; log "세션 personal 루트 → $LIVELY_SERVICE_HOME/box"; }
   fi
+  # ⭐ .env 소유권 불변식 최종 적용 — 위 모든 .env 편집(set_env 세션루트 repoint 등) '뒤' 마지막에 강제.
+  #  게이트웨이(서비스유저 그룹)가 .env 를 group-read 해야 DB 접속정보를 로드한다(못 읽으면 password=undefined→SASL 다운:
+  #  2026-07-03 어니스트 실장애). sed -i 계열이 중간에 그룹을 깨도 여기가 최종적으로 '운영자:서비스유저 640' 을 보장.
+  if [ -f "$APP_DIR/.env" ]; then sudo chown "$(id -un)":"$user" "$APP_DIR/.env" && sudo chmod 640 "$APP_DIR/.env"; fi
   echo "$user"
 }
 
