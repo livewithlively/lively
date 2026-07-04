@@ -1088,6 +1088,31 @@ export async function healPmMirror(
                 WHERE p1.id = c.parent_id))
         AND c.status_raw IS NOT NULL AND st->>'label' = c.status_raw AND st->>'key' <> c.status_raw`,
     [system]);
+  // 어사이니 표면 백필(#541) — 이미 이관된 행(재미러 창 밖)의 assignee(JSON 배열 문자열)를 표시 표면으로 일괄 동기:
+  //  level='project' → project_member(보드/상세 '팀원'), 전 레벨 → task_assignee(섀도). 멱등(ON CONFLICT skip),
+  //  JSON 파싱은 TS 에서(::jsonb 캐스팅 실패가 쿼리 전체를 깨지 않게).
+  const rows = await client.query(
+    `SELECT id, level, assignee FROM project
+      WHERE external_system=$1 AND assignee IS NOT NULL AND assignee LIKE '[%'`,
+    [system]);
+  for (const r of rows.rows as Array<{ id: number; level: string; assignee: string }>) {
+    let members: string[] = [];
+    try { const a = JSON.parse(r.assignee); if (Array.isArray(a)) members = a.filter(Boolean).map(String); } catch { continue; }
+    let sort = 100;
+    for (const m of members) {
+      await client.query(
+        `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
+        [r.id, m, sort]);
+      if (r.level === "project") {
+        await client.query(
+          `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3)
+           ON CONFLICT (project_id, member_id) DO NOTHING`,
+          [r.id, m, sort]);
+      }
+      sort++;
+    }
+  }
+
   // 빈 커넥터 컨테이너 정리 — 잎(하위 폴더·리스트 없음)부터 반복 삭제(≤5회 — 실제 깊이 2). project_view 는 FK CASCADE.
   let pruned = 0;
   if (opts?.pruneEmptyContainers) {

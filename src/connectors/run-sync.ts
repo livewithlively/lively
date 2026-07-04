@@ -148,9 +148,13 @@ async function runClickupSync(): Promise<boolean> {
       `SELECT count(*)::int AS n FROM project WHERE external_system='clickup' AND raw IS NULL`);
     const unmigrated = Number((un.rows[0] as { n: number } | undefined)?.n ?? 0);
     logger.info({ incremental, losslessFullDone, unmigrated, prevMaxMs }, "clickup 싱크 시작(승격 판정)");
-    if (incremental && !losslessFullDone && unmigrated > 0) {
+    // 승격 기준 = lossless_full_done 플래그(#541 어니스트 관찰 반영) — unmigrated(raw NULL)만 보면 "과거 full 이
+    //  raw 는 채웠지만 실패(당시 403 집계)로 플래그를 못 박은" 박스가 영영 재승격되지 않아, 그 뒤 추가된
+    //  컬럼 값·표면(project_member) 백필이 증분 창 밖에 갇힌다. 플래그가 없으면 full 1회 — 이번 run 이
+    //  무결 완주하면 플래그가 박혀(아래) 1회로 끝난다(403 권한경계는 이제 실패 미집계라 완주 가능).
+    if (incremental && !losslessFullDone) {
       incremental = false;
-      logger.info({ unmigrated }, "미이관 행(raw 백스톱 없음) 감지 — 이번 run 을 full 로 승격(최초 무손실 마이그레이션)");
+      logger.info({ unmigrated }, "lossless_full_done 미기록 — 이번 run 을 full 로 승격(최초/재개 무손실 마이그레이션)");
     }
   }
   const sinceMs = incremental ? prevMaxMs - CURSOR_EPSILON_MS : undefined;

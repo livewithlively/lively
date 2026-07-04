@@ -891,10 +891,14 @@ export async function fetchTimeEntries(teamId: string, opts?: { sinceMs?: number
   return out;
 }
 
-// 리스트 커스텀필드 정의(값 없는 필드는 태스크 custom_fields[] 에서 omit 되므로 정의는 여기서만 완전 회수).
-export async function getListFields(listId: string): Promise<ClickUpCustomField[]> {
-  const res = await clickupFetch<{ fields?: ClickUpCustomField[] }>(`/list/${encodeURIComponent(listId)}/field`);
+// 커스텀필드 정의 — ClickUp 은 정의가 **레벨별**(list/folder/space/team)이고 각 엔드포인트는 그 레벨 정의만 반환.
+//  GET /list/field 만 보면 상위 레벨(스페이스·워크스페이스)에 정의된 필드가 통째로 누락된다(#541 어니스트 관찰).
+export async function getFieldsAt(kind: "team" | "space" | "folder" | "list", id: string): Promise<ClickUpCustomField[]> {
+  const res = await clickupFetch<{ fields?: ClickUpCustomField[] }>(`/${kind}/${encodeURIComponent(id)}/field`);
   return res.fields ?? [];
+}
+export async function getListFields(listId: string): Promise<ClickUpCustomField[]> {
+  return getFieldsAt("list", listId);
 }
 
 // 스페이스 태그 팔레트(태스크에 안 달린 태그도 보존 — 색/정의 완전).
@@ -921,8 +925,12 @@ export async function enumerateHierarchy(
   const included = await getIncludedListIds();
   const keep = (l: ClickUpList) => !excluded.has(l.id) && (!included || included.has(l.id));
 
-  // 리스트 1건 → 메타 hydrate(뷰/필드). best-effort(실패해도 리스트 자체는 보존).
-  const hydrate = async (list: ClickUpList): Promise<HierarchyList> => {
+  // 워크스페이스(팀) 레벨 필드 — 1회 수집해 전 리스트에 상속(#541: 정의는 레벨별이라 4레벨 합집합이 완전).
+  let teamFields: ClickUpCustomField[] = [];
+  if (withMeta) { try { teamFields = await getFieldsAt("team", teamId); } catch (err) { console.error(`[clickup] 팀 필드정의 조회 실패(진행):`, err); } }
+
+  // 리스트 1건 → 메타 hydrate(뷰/필드). inherited=상위(팀→스페이스→폴더) 정의 — 리스트 레벨이 우선(dedup by id).
+  const hydrate = async (list: ClickUpList, inherited: ClickUpCustomField[] = []): Promise<HierarchyList> => {
     if (!withMeta) return { list, views: [], fields: [] };
     // 상세 GET 으로 statuses(orderindex)·override_statuses 완전화 — 나열 응답은 orderindex 누락 가능(상태 순서 박제 버그).
     //  실패해도 나열 응답으로 진행(best-effort). 상세엔 space/folder 좌표가 빠질 수 있어 나열 응답 값을 보존 병합.
@@ -931,10 +939,12 @@ export async function enumerateHierarchy(
       list = { ...full, folder: list.folder ?? full.folder, space: list.space ?? full.space, archived: list.archived ?? full.archived };
     } catch (err) { console.error(`[clickup] 리스트 ${list.id} 상세 조회 실패(나열 응답으로 진행):`, err); }
     let views: ClickUpView[] = [];
-    let fields: ClickUpCustomField[] = [];
+    let listFields: ClickUpCustomField[] = [];
     try { views = await getListViews(list.id); } catch (err) { console.error(`[clickup] 리스트 ${list.id} 뷰 조회 실패:`, err); }
-    try { fields = await getListFields(list.id); } catch (err) { console.error(`[clickup] 리스트 ${list.id} 필드정의 조회 실패:`, err); }
-    return { list, views, fields };
+    try { listFields = await getListFields(list.id); } catch (err) { console.error(`[clickup] 리스트 ${list.id} 필드정의 조회 실패:`, err); }
+    const byId = new Map<string, ClickUpCustomField>();
+    for (const f of [...inherited, ...listFields]) if (f?.id) byId.set(f.id, f); // 리스트 레벨이 상위 정의를 덮음
+    return { list, views, fields: [...byId.values()] };
   };
 
   const out: HierarchySpace[] = [];
@@ -942,6 +952,9 @@ export async function enumerateHierarchy(
     // 스페이스 status set/피처 완전화(리스트 override_statuses=false 상속 판정).
     let space: ClickUpSpace = spaceLite;
     try { space = await getSpace(spaceLite.id); } catch (err) { console.error(`[clickup] 스페이스 ${spaceLite.id} 상세 실패:`, err); }
+    let spaceFields: ClickUpCustomField[] = [];
+    if (withMeta) { try { spaceFields = await getFieldsAt("space", space.id); } catch (err) { console.error(`[clickup] 스페이스 ${space.id} 필드정의 조회 실패(진행):`, err); } }
+    const spaceInherited = [...teamFields, ...spaceFields];
 
     const folders: HierarchyFolder[] = [];
     try {
@@ -958,8 +971,10 @@ export async function enumerateHierarchy(
       for (const { f: folder } of folderBatches) {
         // 폴더의 리스트: 폴더 응답에 inline lists 있으면 그것, 없으면 개별 조회.
         const rawLists = (folder.lists && folder.lists.length ? folder.lists : await listFolderLists(folder.id)).filter(keep);
+        let folderFields: ClickUpCustomField[] = [];
+        if (withMeta && rawLists.length) { try { folderFields = await getFieldsAt("folder", folder.id); } catch (err) { console.error(`[clickup] 폴더 ${folder.id} 필드정의 조회 실패(진행):`, err); } }
         const lists: HierarchyList[] = [];
-        for (const l of rawLists) lists.push(await hydrate({ ...l, folder, space: { id: space.id, name: space.name } }));
+        for (const l of rawLists) lists.push(await hydrate({ ...l, folder, space: { id: space.id, name: space.name } }, [...spaceInherited, ...folderFields]));
         // 폴더 스코프 뷰(무손실) — withMeta 시에만(rate 예산).
         let fviews: ClickUpView[] = [];
         if (withMeta) { try { fviews = await getScopeViews("folder", folder.id); } catch (err) { console.error(`[clickup] 폴더 ${folder.id} 뷰 조회 실패:`, err); } }
@@ -975,12 +990,12 @@ export async function enumerateHierarchy(
     for (const l of await listSpaceLists(space.id, { archived: false })) {
       if (!keep(l) || seenListIds.has(l.id)) continue;
       seenListIds.add(l.id);
-      folderlessLists.push(await hydrate({ ...l, space: { id: space.id, name: space.name } }));
+      folderlessLists.push(await hydrate({ ...l, space: { id: space.id, name: space.name } }, spaceInherited));
     }
     for (const l of await listSpaceLists(space.id, { archived: true })) {
       if (!keep(l) || seenListIds.has(l.id)) continue;
       seenListIds.add(l.id);
-      folderlessLists.push(await hydrate({ ...l, archived: true, space: { id: space.id, name: space.name } }));
+      folderlessLists.push(await hydrate({ ...l, archived: true, space: { id: space.id, name: space.name } }, spaceInherited));
     }
     // 폴더 경유로 이미 수집된 리스트는 folderless 중복 제거(위 hydrate 비용은 keep 필터 뒤라 무해).
     const folderListIds = new Set(folders.flatMap((f) => f.lists.map((hl) => hl.list.id)));
