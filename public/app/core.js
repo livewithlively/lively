@@ -336,9 +336,27 @@ function renderMarkdown(md) {
         let t = l.trim();
         if (t.startsWith('|'))
             t = t.slice(1);
-        if (t.endsWith('|'))
+        if (t.endsWith('|') && !t.endsWith('\\|'))
             t = t.slice(0, -1);
-        return t.split('|').map((c) => c.trim());
+        // 이스케이프 파이프(\|) 인지 분리 — 노션 셀의 리터럴 '|' 보존(#551).
+        const cells = [];
+        let cur = '';
+        for (let j = 0; j < t.length; j++) {
+            const ch = t[j];
+            if (ch === '\\' && t[j + 1] === '|') {
+                cur += '|';
+                j++;
+                continue;
+            }
+            if (ch === '|') {
+                cells.push(cur.trim());
+                cur = '';
+                continue;
+            }
+            cur += ch;
+        }
+        cells.push(cur.trim());
+        return cells;
     };
     const contOpen = (l) => /^:::\s*[a-zA-Z_-]/.test(l);
     const contClose = (l) => l.trim() === ':::';
