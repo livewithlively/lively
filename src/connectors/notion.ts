@@ -1070,9 +1070,13 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   };
   lastRunStats = t.stats;
 
-  // 생존 티커 — 어떤 페이즈(발견/수집/방출/자산)든 120초마다 진행 신호를 남긴다. 진행 로그의 구조적 공백
-  //  (거대 라운드·자산 일괄 다운로드)이 run-tracker 정체 감지(15분 무출력=킬)에 오탐되지 않게 하는 최종 방어선.
+  // 생존 티커 — 어떤 페이즈든 120초마다, 단 **요청 카운터가 실제로 늘었을 때만** 신호를 남긴다.
+  //  무조건 찍으면 진짜 행(fetch 정지)에도 살아있는 척이 되어 정체 감지가 무력화된다 — 진행 없으면 침묵을
+  //  유지해 run-tracker(15분 무출력=킬)가 행을 잡게 한다. 오탐(정상인데 침묵)은 이 티커+완료 로그가 제거.
+  let lastTickReq = -1;
   const ticker = setInterval(() => {
+    if (reqCount === lastTickReq) return; // 무진전 — 침묵(정체 감지 존중)
+    lastTickReq = reqCount;
     console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 자산 ${t.stats.assets}/${t.assetJobs.size}`);
   }, 120_000);
   try {
