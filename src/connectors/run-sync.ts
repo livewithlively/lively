@@ -96,8 +96,23 @@ async function runClickupSync(): Promise<boolean> {
   const teamId = team.id;
 
   const cursor = await getConnectorState("clickup", teamId);
-  const prevMaxMs = Number((cursor as { tasks_max_updated_ms?: unknown } | null)?.tasks_max_updated_ms ?? 0) || 0;
-  const incremental = !fullFlag && prevMaxMs > 0;
+  const prevState = (cursor && typeof cursor === "object" ? cursor : {}) as Record<string, unknown>;
+  const prevMaxMs = Number(prevState.tasks_max_updated_ms ?? 0) || 0;
+  let incremental = !fullFlag && prevMaxMs > 0;
+
+  // #541 최초 무손실 마이그레이션 자동화 — 구코드 시절 커서만 있고 미이관 행(raw 백스톱 없음)이 남아 있으면
+  //  이번 run 을 full 로 1회 승격(스케줄러 증분은 옛 태스크를 재수화하지 않아 업그레이드가 영영 안 됨).
+  //  lossless_full_done 플래그로 재승격 방지 — ClickUp 에서 삭제된 고아 행(영원히 raw NULL)이 매 run full 을 유발하지 않게.
+  const losslessFullDone = prevState.lossless_full_done === true;
+  if (incremental && !losslessFullDone) {
+    const un = await itemsPool.query(
+      `SELECT count(*)::int AS n FROM project WHERE external_system='clickup' AND raw IS NULL`);
+    const unmigrated = Number((un.rows[0] as { n: number } | undefined)?.n ?? 0);
+    if (unmigrated > 0) {
+      incremental = false;
+      logger.info({ unmigrated }, "미이관 행(raw 백스톱 없음) 감지 — 이번 run 을 full 로 승격(최초 무손실 마이그레이션)");
+    }
+  }
   const sinceMs = incremental ? prevMaxMs - CURSOR_EPSILON_MS : undefined;
 
   let maxSeenMs = 0;
@@ -145,10 +160,15 @@ async function runClickupSync(): Promise<boolean> {
   // 커서 전진 — 전 단계 성공 후에만: ①스트림 예외 ②수집(fetch) 실패(stats — 팀폴/리스트/hydration/댓글/계층)
   //  ③항목 단위 미러 실패, 셋 다 0 일 때만. 실패 시각을 지나 전진하면 그 윈도가 재폴링 창 밖으로 빠져
   //  '다음 싱크 수렴' 불변식이 성립하지 않는다(구 failedListIds 동결의 일반화).
-  const advanceCursor = !failed && stats.fetchFailures === 0 && mirrorFailures === 0
-    && (maxSeenMs > prevMaxMs || (!incremental && maxSeenMs > 0));
-  if (advanceCursor) {
-    await setConnectorState("clickup", teamId, { tasks_max_updated_ms: Math.max(prevMaxMs, maxSeenMs) });
+  const cleanRun = !failed && stats.fetchFailures === 0 && mirrorFailures === 0;
+  const advanceCursor = cleanRun && (maxSeenMs > prevMaxMs || (!incremental && maxSeenMs > 0));
+  if (advanceCursor || (cleanRun && !incremental && !losslessFullDone)) {
+    // 기존 상태 보존 병합 — full 무결 완주 시 lossless_full_done 마킹(자동 승격 1회성 보장).
+    await setConnectorState("clickup", teamId, {
+      ...prevState,
+      tasks_max_updated_ms: Math.max(prevMaxMs, maxSeenMs),
+      ...(cleanRun && !incremental ? { lossless_full_done: true } : {}),
+    });
   }
 
   logger.info({
