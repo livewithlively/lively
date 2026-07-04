@@ -69,6 +69,26 @@ function mergeSet(base: string[] | null | undefined, ours: string[], theirs: str
   return [...out];
 }
 
+
+// 프로젝트 행(level='project') 팀원 동기(#541) — 보드/상세의 '팀원'(project_member)이 ClickUp 어사이니를 보여주게.
+//  가산+커넥터-소유분 회수: merged 에 없는 것 중 **이전 커넥터 집합(base)에 있던 것만** 제거 — 사람이 직접 추가한
+//  팀원은 불가침. task_assignee/assignee 컬럼과 별개(그건 task 행 표면, 이건 project 행 표면).
+async function syncProjectMembers(
+  client: pg.PoolClient, projectId: number, prevConnectorSet: string[], merged: string[],
+): Promise<void> {
+  let sort = 100; // 사람 추가분(보통 0~) 뒤에 붙임 — 정렬 충돌 회피
+  for (const m of merged) {
+    await client.query(
+      `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3)
+       ON CONFLICT (project_id, member_id) DO NOTHING`,
+      [projectId, m, sort++]);
+  }
+  const removed = prevConnectorSet.filter((m) => !merged.includes(m));
+  for (const m of removed) {
+    await client.query(`DELETE FROM project_member WHERE project_id=$1 AND member_id=$2`, [projectId, m]);
+  }
+}
+
 // 감사 append — entity 별 actor_kind='connector'/channel='connector' 고정. before/after 스냅샷은 JSON 직렬화.
 //  같은 트랜잭션 client(미러 쓰기와 원자적). FK 없는 append-only 라 대상 행 삭제 후에도 이력 보존.
 async function auditConnector(
@@ -816,6 +836,7 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
         `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
         [id, m, asort++]);
     }
+    if (level === "project") await syncProjectMembers(client, id, [], theirsAssignees); // 팀원 표면(#541)
     changed = true;
   } else {
     // 기존 행 — 필드별 3-way 머지(base/ours/theirs). 충돌=ours(우리 DB master). 인바운드는 단일프로세스(스케줄러 락+배치 순차)라 SELECT→UPDATE TOCTOU 무시가능.
@@ -825,7 +846,8 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     //  pending 동안은 base 를 **theirs 로 가장** → merge3 전 필드가 t==b → ours 유지(theirs 채택 봉인). 푸시
     //  드레인 후 다음 싱크부터 정상 3-way 재개. (푸시는 merged 를 PUT 하므로 pending 중 ClickUp 편집도 어차피 덮인다 — 일관.)
     const pendingPush = await client.query(
-      `SELECT 1 FROM external_outbox WHERE system=$1 AND entity_id=$2 AND done_at IS NULL LIMIT 1`,
+      `SELECT 1 FROM external_outbox WHERE system=$1 AND entity_id=$2 AND done_at IS NULL
+        AND updated_at > now() - interval '24 hours' LIMIT 1`,
       [system, prevRow!.id]);
     const hasPendingPush = (pendingPush.rowCount ?? 0) > 0;
     const base = hasPendingPush
@@ -908,6 +930,15 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
       await client.query(
         `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
         [id, m, asort++]);
+    }
+    // 팀원 표면 동기(#541) — 이전 커넥터 집합 = base.assignee(JSON 배열 문자열).
+    if (level === "project") {
+      const prevSet: string[] = (() => {
+        const b = base?.assignee;
+        if (typeof b !== "string" || !b) return [];
+        try { const a = JSON.parse(b); return Array.isArray(a) ? a.filter(Boolean).map(String) : []; } catch { return []; }
+      })();
+      await syncProjectMembers(client, id, prevSet, mergedAssignees);
     }
 
     // 수렴 — 머지결과가 theirs 와 다르면(우리값 우세) ClickUp 도 merged 로 끌어와야 다음 싱크 진동 안 함 → 아웃박스(같은 client, 원자적).
@@ -1020,7 +1051,11 @@ async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string
 
 // ── 힐 패스(#541) — 스트림 순서 밖(부모 미변경 증분 등)으로 미해소된 parent_id/list_id 를 raw/fields 백스톱으로 일괄 수렴. ──
 //  run-sync 가 인제스트 후 1회 호출. 멱등 · 커넥터 행(external_system=$1)만.
-export async function healPmMirror(client: pg.PoolClient, system: string): Promise<{ parents: number; lists: number; statusKeys: number }> {
+//  opts.pruneEmptyContainers(허용목록 스코프에서만 true): 리스트가 하나도 없는 **커넥터 소유** 폴더/스페이스를
+//  잎부터 제거 — 과거 무필터 이관이 남긴 빈 컨테이너 정리(네이티브 폴더·리스트 보유 컨테이너는 불가침).
+export async function healPmMirror(
+  client: pg.PoolClient, system: string, opts?: { pruneEmptyContainers?: boolean },
+): Promise<{ parents: number; lists: number; statusKeys: number; prunedContainers: number }> {
   const p = await client.query(
     `UPDATE project c SET parent_id = par.id
        FROM project par
@@ -1048,7 +1083,21 @@ export async function healPmMirror(client: pg.PoolClient, system: string): Promi
                 WHERE p1.id = c.parent_id))
         AND c.status_raw IS NOT NULL AND st->>'label' = c.status_raw AND st->>'key' <> c.status_raw`,
     [system]);
-  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0 };
+  // 빈 커넥터 컨테이너 정리 — 잎(하위 폴더·리스트 없음)부터 반복 삭제(≤5회 — 실제 깊이 2). project_view 는 FK CASCADE.
+  let pruned = 0;
+  if (opts?.pruneEmptyContainers) {
+    for (let i = 0; i < 5; i++) {
+      const d = await client.query(
+        `DELETE FROM project_folder f
+          WHERE f.external_system=$1 AND f.external_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM project_list pl WHERE pl.folder_id = f.id)
+            AND NOT EXISTS (SELECT 1 FROM project_folder c WHERE c.parent_id = f.id)`,
+        [system]);
+      pruned += d.rowCount ?? 0;
+      if (!d.rowCount) break;
+    }
+  }
+  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0, prunedContainers: pruned };
 }
 
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 client 공유 — item 단위 BEGIN/COMMIT(다중 테이블 원자성). ──
