@@ -124,7 +124,7 @@ function safeHref(raw) {
   return url;
 }
 
-// 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·링크([..](..)) 지원.
+// 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·취소선(~~)·링크([..](..))·이미지(![..](..)) 지원.
 // 모든 미매칭 문자는 텍스트 노드로 누적되어 createTextNode 로만 들어간다.
 function renderInline(text) {
   const out: any[] = [];
@@ -162,6 +162,36 @@ function renderInline(text) {
         out.push(el('em', {}, ...renderInline(s.slice(i + 1, end))));
         i = end + 1;
         continue;
+      }
+    }
+    // 취소선 ~~...~~ (빈 내용은 평문 폴백)
+    if (ch === '~' && s[i + 1] === '~') {
+      const end = s.indexOf('~~', i + 2);
+      if (end > i + 2) {
+        flush();
+        out.push(el('del', {}, ...renderInline(s.slice(i + 2, end))));
+        i = end + 2;
+        continue;
+      }
+    }
+    // 이미지 ![alt](url) — safeHref 통과 + http/https 만 <img>. 그 외(스킴 주입·상대경로)는 alt 평문 폴백.
+    if (ch === '!' && s[i + 1] === '[') {
+      const close = s.indexOf(']', i + 2);
+      if (close > i && s[close + 1] === '(') {
+        const paren = s.indexOf(')', close + 2);
+        if (paren > close) {
+          const alt = s.slice(i + 2, close);
+          // "url \"title\"" 형태의 제목 꼬리는 버리고 URL 토큰만.
+          const href = safeHref(s.slice(close + 2, paren).trim().split(/\s+/)[0] || '');
+          flush();
+          if (href && /^https?:\/\//i.test(href)) {
+            out.push(el('img', { class: 'md-img', src: href, alt, loading: 'lazy', referrerpolicy: 'no-referrer' }));
+          } else if (alt) {
+            out.push(document.createTextNode(alt));
+          }
+          i = paren + 1;
+          continue;
+        }
       }
     }
     // 링크 [텍스트](url)
@@ -280,30 +310,64 @@ function renderMarkdown(md) {
       continue;
     }
 
-    // 리스트 — 순서/비순서 연속 블록. 들여쓰기 중첩은 한 단계만 단순 지원.
+    // 리스트 — 순서/비순서 연속 블록. 들여쓰기 폭 스택으로 중첩 ul/ol 렌더.
+    //  ClickUp 마크다운은 레벨당 공백 2~4개·탭이 혼재 — 고정폭 가정 없이 적응형:
+    //  직전 레벨보다 깊으면 push(하위 리스트), 얕으면 pop(상위 복귀). 탭은 4칸 환산(비교용 폭일 뿐 고정 레벨 아님).
     const bullet = /^(\s*)([-*+])\s+(.*)$/.exec(line);
     const ordered = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
     if (bullet || ordered) {
-      const isOrdered = !!ordered;
-      const listTag = isOrdered ? 'ol' : 'ul';
-      const list = el(listTag, { class: 'md-list' });
-      const itemRe = isOrdered ? /^(\s*)(\d+)[.)]\s+(.*)$/ : /^(\s*)([-*+])\s+(.*)$/;
+      const bulletRe = /^(\s*)([-*+])\s+(.*)$/;
+      const orderedRe = /^(\s*)(\d+)[.)]\s+(.*)$/;
+      const indentW = (ws: string) => { let w = 0; for (const c of ws) w += c === '\t' ? 4 : 1; return w; };
+      const first: any = bullet || ordered;
+      const rootList = el(bullet ? 'ul' : 'ol', { class: 'md-list' });
+      // 스택 프레임 = 중첩 레벨 하나 { width: 들여쓰기 폭, list: 그 레벨의 ul/ol, ordered: 종류 }.
+      const stack: { width: number; list: any; ordered: boolean }[] =
+        [{ width: indentW(first[1]), list: rootList, ordered: !!ordered }];
       while (i < lines.length) {
-        const m = itemRe.exec(lines[i]);
+        let m = bulletRe.exec(lines[i]);
+        let isOrdered = false;
+        if (!m) { m = orderedRe.exec(lines[i]); if (m) isOrdered = true; }
         if (!m) {
-          // 같은 리스트의 이어지는(들여쓴, 마커 없는) 줄은 직전 항목에 합친다.
-          if (lines[i].trim() !== '' && /^\s+/.test(lines[i]) && list.lastChild) {
-            list.lastChild.append(document.createTextNode(' '));
-            for (const n of renderInline(lines[i].trim())) list.lastChild.append(n);
+          // 같은 리스트의 이어지는(들여쓴, 마커 없는) 줄은 현재 레벨 마지막 항목에 합친다.
+          const cur = stack[stack.length - 1].list;
+          if (lines[i].trim() !== '' && /^\s+/.test(lines[i]) && cur.lastChild) {
+            cur.lastChild.append(document.createTextNode(' '));
+            for (const n of renderInline(lines[i].trim())) cur.lastChild.append(n);
             i++;
             continue;
           }
           break;
         }
-        list.append(el('li', {}, ...renderInline(m[3])));
+        const w = indentW(m[1]);
+        while (stack.length > 1 && w < stack[stack.length - 1].width) stack.pop(); // 얕아짐 → 상위 레벨 복귀
+        let top = stack[stack.length - 1];
+        if (w > top.width) {
+          // 깊어짐 → 직전 항목(li) 아래에 하위 리스트 push.
+          const sub = el(isOrdered ? 'ol' : 'ul', { class: 'md-list' });
+          (top.list.lastChild || top.list).append(sub);
+          top = { width: w, list: sub, ordered: isOrdered };
+          stack.push(top);
+        } else if (top.ordered !== isOrdered) {
+          if (stack.length === 1) break; // 최상위 종류 전환(ul↔ol) → 별도 리스트 블록(기존 동작 보존)
+          // 중첩 레벨의 종류 전환 → 같은 부모(li) 아래 형제 리스트로 교체.
+          const sib = el(isOrdered ? 'ol' : 'ul', { class: 'md-list' });
+          (top.list.parentNode || rootList).append(sib);
+          top = { width: top.width, list: sib, ordered: isOrdered };
+          stack[stack.length - 1] = top;
+        }
+        // 체크박스 "- [ ] x"/"- [x] x" → disabled checkbox + 텍스트(li.md-task). 비순서 마커에서만.
+        const task = !isOrdered && /^\[([ xX])\](?:\s+(.*))?$/.exec(m[3]);
+        if (task) {
+          top.list.append(el('li', { class: 'md-task' },
+            el('input', { type: 'checkbox', disabled: true, checked: task[1] !== ' ' }),
+            ' ', ...renderInline(task[2] || '')));
+        } else {
+          top.list.append(el('li', {}, ...renderInline(m[3])));
+        }
         i++;
       }
-      root.append(list);
+      root.append(rootList);
       continue;
     }
 

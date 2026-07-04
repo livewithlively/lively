@@ -3,6 +3,8 @@
 //   필요 env: ITEMS_DATABASE_URL + 해당 커넥터 토큰(SLACK_BOT_TOKEN/DISCORD_BOT_TOKEN/NOTION_TOKEN)
 import { initItemSchema, ingestItems, type RawItem } from "../items/store.js";
 import { initOrgSchema } from "../org/schema.js";
+import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
+import { initV6Schema } from "../v6/schema.js";
 import { connectors } from "./index.js";
 import { logger } from "../log.js";
 
@@ -18,6 +20,8 @@ if (!conn) {
 
 await initItemSchema();   // person/connector_state 등 보조 스키마
 await initOrgSchema();    // v6 컷오버: 미러는 v6 knowledge(ingestItems→connector-mirror)에 적재 — initOrgSchema 는 org_*/kind_registry/data_source 시드
+await initDomainmapSchema(); // activity 등 — initV6Schema 의 ALTER/FK 선행 의존(서버 부팅 직렬 체인과 동일 순서)
+await initV6Schema();     // 미러 수용 테이블(project/knowledge/source + PM 계층 #541) — 서버 부팅 없이 단독 CLI 실행(신규 DB)도 성립(멱등)
 
 let batch: RawItem[] = [];
 let total = 0;

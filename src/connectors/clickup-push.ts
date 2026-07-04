@@ -33,7 +33,9 @@ function buildStatusMap(statuses: Array<{ status?: string; type?: string }>): Re
 
 function mkBody(p: ProjRow, statusMap: Record<string, string | undefined>): Record<string, unknown> {
   const b: Record<string, unknown> = { name: p.name || "(제목없음)" };
-  if (p.description != null) b.description = p.description;
+  // #541: 본문은 markdown_description 으로 — 인바운드가 markdown_description(서식 원문)을 저장하므로
+  //  평문 description 으로 PUT 하면 ClickUp 리치텍스트가 리터럴 마크다운 소스로 덮여 왕복마다 열화된다.
+  if (p.description != null) b.markdown_description = p.description;
   const st = p.status_category ? statusMap[p.status_category] : undefined;
   if (st) b.status = st;
   if (p.priority && PRIORITY_MAP[p.priority]) b.priority = PRIORITY_MAP[p.priority];
@@ -97,11 +99,18 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
       if (!p || p.folder === "__board_anchor__") { await markDone(ob.id); continue; } // 삭제됨/보드앵커 → skip
       const body = mkBody(p, statusMap);
       // 푸시하는 ours 값 → external_base 갱신(#6d 3-way 의 공통조상). 인바운드가 이 base 로 외부편집 변화를 판정.
-      const baseJson = JSON.stringify({ name: p.name, description: p.description, status_category: p.status_category });
+      //  #541: **병합**(|| 연산) — 통째 교체하면 인바운드 미러가 관리하는 확장 키(status_raw/assignee/list_ext/tags)가
+      //  푸시 때마다 소거되어 다음 3-way 가 base=NULL 로 동작한다. 푸시에 실리는 필드만 전진(name/desc/category/priority/dates).
+      const baseJson = JSON.stringify({
+        name: p.name, description: p.description, status_category: p.status_category,
+        priority: p.priority, start_date: p.start_date, due_date: p.due_date,
+      });
 
       if (p.external_system === "clickup" && p.external_id) {
         await updateSafe(p.external_id, body);
-        await itemsPool.query(`UPDATE project SET external_base=$2::jsonb WHERE id=$1`, [p.id, baseJson]);
+        await itemsPool.query(
+          `UPDATE project SET external_base = COALESCE(external_base, '{}'::jsonb) || $2::jsonb WHERE id=$1`,
+          [p.id, baseJson]);
         await markDone(ob.id); pushed++;
       } else {
         // CREATE — 부모(project-Task / task-Subtask) external_id 해소. 미푸시면 defer.
@@ -117,7 +126,8 @@ export async function pushOutbox(opts?: { limit?: number }): Promise<{ pushed: n
         const ct = await createSafe(containerId, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
-          `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4, external_base=$5::jsonb, updated_at=now() WHERE id=$1`,
+          `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
+                  external_base = COALESCE(external_base, '{}'::jsonb) || $5::jsonb, updated_at=now() WHERE id=$1`,
           [p.id, teamId, ct.id, url, baseJson]);
         await markDone(ob.id); pushed++;
       }

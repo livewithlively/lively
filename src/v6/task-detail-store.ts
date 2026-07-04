@@ -5,10 +5,13 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { type WriteCtx } from "../db/write.js";
+import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
 
+// status_raw/status_category·external_* = 커넥터 이관 무손실 컬럼(#541) — 네이티브 행은 NULL(프론트가 있을 때만 노출).
 const TASK_COLS =
-  `id, level, parent_id, name, description, status, folder, created_by,
-   priority, assignee, start_date, due_date, sort, created_at, updated_at, completed_at`;
+  `id, level, parent_id, name, description, status, status_raw, status_category, folder, created_by,
+   priority, assignee, start_date, due_date, sort, created_at, updated_at, completed_at,
+   external_url, external_system`;
 
 const RECIP: Record<string, string> = { blocking: "waiting_on", waiting_on: "blocking", linked: "linked" };
 
@@ -45,13 +48,43 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
          WHERE pm.project_id=$1 ORDER BY pm.sort, pm.member_id`, [projectId])
     : [];
 
-  const [tags, time, checklists, links, feed] = await Promise.all([
+  const [tags, time, checklists, links, feed, attachments] = await Promise.all([
     getTaskTags(id), getTaskTime(id), getTaskChecklists(id), getTaskLinks(id), getTaskFeed(id, viewer),
+    getTaskAttachments(id),
   ]);
 
-  return { task: { ...task, subtasks }, project: root ? { id: root.id, name: root.name } : null,
+  // 커스텀 필드(#541 무손실) — 정의는 루트 프로젝트 단위(listProjectFields), 값은 이 태스크+하위를
+  //  한 번에 페치해 매핑(N+1 회피, project-store.getProject 와 동형). 키는 String(field_id).
+  const fields = projectId != null ? await listProjectFields(projectId) : [];
+  const valueRows = fields.length
+    ? await getFieldValuesForTasks([id, ...subtasks.map((s: any) => s.id)])
+    : [];
+  const valuesByTask = new Map<number, Record<string, unknown>>();
+  for (const r of valueRows) {
+    let m = valuesByTask.get(r.task_id);
+    if (!m) { m = {}; valuesByTask.set(r.task_id, m); }
+    m[String(r.field_id)] = r.value;
+  }
+  const fieldValues = valuesByTask.get(id) ?? {};
+
+  return {
+    task: {
+      ...task, field_values: fieldValues,
+      subtasks: subtasks.map((s: any) => ({ ...s, field_values: valuesByTask.get(s.id) ?? {} })),
+    },
+    project: root ? { id: root.id, name: root.name } : null,
     parent: parentRow ? { id: parentRow.id, name: parentRow.name, level: parentRow.level } : null,
-    members, tags, time, checklists, links, feed };
+    members, tags, time, checklists, links, feed,
+    // #541 가산: attachments=DB 첨부(ClickUp 이관), fields=루트 정의, field_values=이 태스크 값 맵.
+    attachments, fields, field_values: fieldValues };
+}
+
+// ── 첨부(DB) ──────────────────────────────────────────────────────────────────
+// task_attachment(#541) — ClickUp attachments[]/인라인 이미지 미러. raw(원본 JSON 백스톱)는 응답에서 제외(슬림).
+export async function getTaskAttachments(taskId: number): Promise<any[]> {
+  return q(itemsPool,
+    `SELECT id, title, url, mimetype, extension, size, thumbnail, source, parent_type, created_at
+     FROM task_attachment WHERE task_id=$1 ORDER BY created_at, id`, [taskId]);
 }
 
 // ── 태그 ─────────────────────────────────────────────────────────────────────
