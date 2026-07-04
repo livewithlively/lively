@@ -205,9 +205,10 @@ while (moved) {
         n.propNames.push(pname);
         const needs = prop?.has_more === true || (prop?.type === "relation" && (prop.relation ?? []).length >= 25);
         if (needs && prop.id) {
+          const propId = /^[A-Za-z0-9%~_.\-]+$/.test(String(prop.id)) ? String(prop.id) : encodeURIComponent(String(prop.id)); // 이미 인코딩된 id — 이중 인코딩 금지
           const items = [];
-          try { for await (const it of pages((c) => ({ path: `/pages/${n.page.id}/properties/${encodeURIComponent(prop.id)}?page_size=100${c ? `&start_cursor=${encodeURIComponent(c)}` : ""}` }))) items.push(it); } catch {}
-          if (prop.type === "relation") prop.relation = items.map((i) => i.relation).filter(Boolean);
+          try { for await (const it of pages((c) => ({ path: `/pages/${n.page.id}/properties/${propId}?page_size=100${c ? `&start_cursor=${encodeURIComponent(c)}` : ""}` }))) items.push(it); } catch {}
+          if (prop.type === "relation" && items.length) prop.relation = items.map((i) => i.relation).filter(Boolean);
         }
         if (prop?.type === "relation") for (const r of prop.relation ?? []) if (r?.id) n.links.add(norm(r.id));
         // 속성 텍스트 런(제목·rich_text)도 본문 아님 → fields 검증으로 커버(텍스트런에 안 넣음)

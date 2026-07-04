@@ -303,10 +303,14 @@ async function hydrateProperties(t: Traversal, node: PageNode): Promise<void> {
       || asRec(p[type]).has_more === true;
     if (!needsMore || !p.id) continue;
     try {
+      // ⚠ 노션 속성 id 는 이미 퍼센트 인코딩된 형태(예: %60Tv%3D)로 온다 — encodeURIComponent 로 이중 인코딩하면
+      //  엉뚱한 속성 조회가 되고 API 가 404 가 아니라 **200 + 빈 결과** 를 줘 실패 감지까지 우회한다(#551 실검증에서 발견).
+      const propId = /^[A-Za-z0-9%~_.\-]+$/.test(String(p.id)) ? String(p.id) : encodeURIComponent(String(p.id));
       const items: unknown[] = [];
       for await (const item of paginate(t.cfg, (cursor) => ({
-        path: `/pages/${page.id}/properties/${encodeURIComponent(String(p.id))}?page_size=${PAGE_SIZE}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`,
+        path: `/pages/${page.id}/properties/${propId}?page_size=${PAGE_SIZE}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`,
       }))) items.push(item);
+      if (!items.length) throw new Error("property items 0건(절단 상태 유지 위험) — 속성 id 인코딩/권한 확인 필요");
       node.propertyItems[pname] = items;
       mergePropertyItems(p, type, items);
     } catch (err) {
