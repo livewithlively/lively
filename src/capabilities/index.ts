@@ -18,6 +18,7 @@ import { sourceCapabilities } from "./source.js";
 import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
 import { folderV6Capabilities } from "./folders-v6.js";
+import { viewV6Capabilities } from "./views-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
 import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
@@ -79,6 +80,7 @@ const all: Capability[] = [
   ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 전부 expose.mcp:true(자동등록)+REST. project_delete_v6·task_delete_v6 는 org_tool 기본 OFF(위험삭제, 운영자 토글).
   ...listV6Capabilities, // v6: 프로젝트 묶음(리스트=클릭업 List층) CRUD·멤버·프로젝트 소속 — scope=memory(/api/ui/v6/project-lists + /projects/:id/list). 네이티브 전용(외부 미러 없음). 전부 expose.mcp:true+REST.
   ...folderV6Capabilities, // v6(#475): 폴더(=클릭업 Folder층) CRUD + 리스트 소속 — scope=memory(/api/ui/v6/project-folders + /project-lists/:id/folder). 폴더는 정리용(멤버·권한 없음). 전부 expose.mcp:true+REST.
+  ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).

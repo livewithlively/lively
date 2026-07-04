@@ -6,6 +6,7 @@
 // 정적 자산은 비인증(사내망 전제) — 데이터는 전부 /api/ui 토큰/세션 뒤. domainmap 은 무인증 서비스라
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
@@ -71,6 +72,45 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     await setMemberPassword(user.userId, nextPw, { mustChange: false, actor: user.userId });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
+  }));
+
+  // ── #551 노션 자산(이미지/파일) 서빙 — 커넥터가 다운로드한 만료-URL 파일의 영구 사본. ──
+  //  본문 데이터라 인증 필수(public 정적 서빙은 비인증이므로 그쪽에 두지 않는다). <img> 는 same-origin
+  //  세션 쿠키가 실려 통과. 파일명은 커넥터 해시(경로문자 없음)지만 화이트리스트+정규화로 이중 방어.
+  //  보안(#551 리뷰): 확장자는 노션 파일명에서 오는 공격자 제어 값 — 콘텐츠 스니핑 저장형 XSS 를 막기 위해
+  //  ① X-Content-Type-Options: nosniff 상시 ② inline 은 미디어 화이트리스트만(svg/html 포함 그 외 전부
+  //  octet-stream + attachment 강제 다운로드) ③ 타입은 확장자 맵으로 명시(sendFile 추론 비의존).
+  //  경로는 관리탭(org_connector.asset_dir) 우선 — 커넥터 저장 경로와 서빙 경로의 분열 방지.
+  const ASSET_INLINE_TYPES: Record<string, string> = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+    avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon",
+    mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+    mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
+    pdf: "application/pdf",
+  };
+  app.get("/api/ui/notion-assets/:file", ...mw(null), wrap(async (req, res) => {
+    const file = String(req.params.file ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
+      res.status(400).json({ error: "잘못된 자산 이름" }); return;
+    }
+    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
+    let dir = process.env.NOTION_ASSET_DIR || "";
+    try {
+      const { resolveConnectorConfig } = await import("./connectors/config.js");
+      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
+    } catch { /* config 계층 실패 → env/기본 폴백 */ }
+    const assetDir = dir || path.resolve(process.cwd(), "data", "notion-assets");
+    const full = path.resolve(assetDir, file);
+    if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
+    const fsMod = await import("node:fs");
+    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "자산 없음" }); return; }
+    const ext = (file.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
+    const inlineType = ASSET_INLINE_TYPES[ext];
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=86400"); // 파일명이 내용 좌표(해시)라 하루 캐시 무해
+    res.setHeader("Content-Type", inlineType ?? "application/octet-stream");
+    res.setHeader("Content-Disposition", inlineType ? "inline" : `attachment; filename="${file}"`);
+    fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "자산 없음" }); }).pipe(res);
   }));
 
   for (const { cap, mount } of restMounts()) {

@@ -38,6 +38,10 @@ import {
 } from "../org/store.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
+// ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
+import { getTeam as getClickUpTeam, type ClickUpTeam } from "../connectors/clickup.js";
+import { resetConnectorConfigCache } from "../connectors/config.js";
+import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
 import { invalidatePool, getPool } from "../db/pool.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
@@ -52,6 +56,9 @@ import {
   deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
 } from "../org/git-credential-store.js";
 import { secretsEnabled } from "../org/secret-box.js";
+// #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
+import { startConnectorRun, listConnectorRuns, getConnectorRun } from "../connectors/run-tracker.js";
+import { discoverConnectorScope } from "../connectors/discover.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -355,6 +362,25 @@ export const deliveryCapabilities: Capability[] = [
         scopes,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, actorOf(user), "web");
+      // 신원 '해제' 동기(#541) — identities 에서 뺀 행은 person_identity 에서도 지워야 커넥터 액터/어사이니
+      //  해소(person_identity JOIN org_member)에 실제 반영된다(syncMemberToPerson 은 upsert-only 라 잔존).
+      //  가드: 이 멤버 소유(person_id=id) + origin IN (manual, email-join) — 수동 매핑과 그로부터 파생된 이메일
+      //  자동조인 행까지 함께 제거(email-join 잔존 시 해제가 무효 — 다음 싱크가 재매핑). observed 신원은 보존.
+      if (existed && input.identities !== undefined) {
+        const keep = new Set(member.identities.map((i) => `${i.system}\u0000${i.external_id}`));
+        for (const prev of existed.identities) {
+          if (keep.has(`${prev.system}\u0000${prev.external_id}`)) continue;
+          const del = await itemsPool.query(
+            `DELETE FROM person_identity WHERE system=$1 AND external_id=$2 AND person_id=$3 AND origin IN ('manual','email-join')`,
+            [prev.system, prev.external_id, id]);
+          if ((del.rowCount ?? 0) > 0) {
+            await itemsPool.query(
+              `INSERT INTO person_identity_audit(action, person_id, system, external_id, detail, source)
+               VALUES('identity-unbound',$1,$2,$3,$4::jsonb,'web')`,
+              [id, prev.system, prev.external_id, JSON.stringify({ email: prev.email ?? null, actor: actorOf(user) })]);
+          }
+        }
+      }
       // 신규 human 멤버 → 로컬 로그인 계정 자동 발급(초기 비번 1회 반환 — 관리자가 멤버에게 전달).
       //  로그인이 이메일 기준이라 **유효 이메일이 있을 때만** 발급(없으면 못 쓰는 계정 → 발급 안 함).
       //  agent/system·기존 멤버·이미 계정 있음도 제외.
@@ -734,14 +760,114 @@ export const deliveryCapabilities: Capability[] = [
         secrets: asStrMap(input.secrets),
         note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : str(input.note, "note", 500)),
       }, actorOf(user), "web");
+      // 게이트웨이 인프로세스 해소 캐시 무효화(#541) — 아래 clickup 멤버 조회 등이 새 토큰을 즉시 쓰게
+      //  (캐시는 원래 짧게 사는 싱크 서브프로세스 전제 — 장수 게이트웨이에선 쓰기 시점에 리셋).
+      resetConnectorConfigCache();
       return { connector };
     }),
+  // ── #586 커넥터 실행(run) — 비동기 "지금 싱크" + 실행 이력/로그(폴링). ──
+  restOnly("org_connector_sync_run", "커넥터 지금 싱크(비동기)",
+    "커넥터 싱크를 백그라운드로 시작하고 run_id 를 즉시 반환한다(긴 full 백필도 HTTP 타임아웃 없음). 로그·상태는 runs API 로 폴링.",
+    [{ method: "POST", paths: ["/api/ui/org/connector/sync"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const system = str(input.system, "system", 40).trim();
+      const run = await startConnectorRun(system, { full: Boolean(input.full), trigger: "manual", startedBy: actorOf(user) });
+      return { run_id: run.runId, already_running: run.alreadyRunning }; // done 은 await 하지 않는다(비동기)
+    }),
+  restOnly("org_connector_runs", "커넥터 실행 이력",
+    "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/runs"], parse: (req) => ({
+      system: req.query?.system ? String(req.query.system) : undefined,
+      limit: req.query?.limit ? Number(req.query.limit) : undefined,
+    }) }],
+    async (input: Record<string, unknown>) => {
+      const limit = Number.isFinite(Number(input.limit)) && Number(input.limit) > 0 ? Number(input.limit) : 20;
+      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit) };
+    }),
+  restOnly("org_connector_run_log", "커넥터 실행 로그",
+    "실행 1건의 메타 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙여 진행상황을 본다.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/runs/:id"], parse: (req) => ({
+      id: Number(req.params?.id), offset: req.query?.offset ? Number(req.query.offset) : 0,
+    }) }],
+    async (input: Record<string, unknown>) => {
+      const id = Number(input.id);
+      if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "run id 필요");
+      const off = Number.isFinite(Number(input.offset)) && Number(input.offset) > 0 ? Number(input.offset) : 0;
+      const run = await getConnectorRun(id, off);
+      if (!run) throw new HttpError(404, "run 없음");
+      return run;
+    }),
+  restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
+    "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",
+    [{ method: "POST", paths: ["/api/ui/org/connector/discover"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>) => {
+      const system = str(input.system, "system", 40).trim();
+      const { resetConnectorConfigCache } = await import("../connectors/config.js");
+      resetConnectorConfigCache(); // 방금 저장한 토큰 즉시 반영
+      return await discoverConnectorScope(system);
+    }),
+
   restOnly("org_connector_remove", "커넥터 설정 제거",
     "커넥터 설정/토큰 행을 제거한다(env 폴백으로 복귀).",
     [{ method: "POST", paths: ["/api/ui/org/connector/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeConnector(str(input.system, "system", 40).trim(), actorOf(user), "web");
+      resetConnectorConfigCache(); // env 폴백 복귀도 즉시 반영
       return { ok: true };
+    }),
+  // ── ClickUp 멤버 매핑 조회(#541) — 관리탭 커넥터 패널용. 팀 멤버 나열 + 매핑 상태 계산.
+  //  '효과적 매핑'은 미러(connector-mirror resolveMemberId)와 동일 순서로 판정:
+  //   ① person_identity(system='clickup', external_id∈{이메일 소문자, 숫자 id}) JOIN org_member(실재 확인)
+  //   ② org_member.email 소문자 직접 매치.
+  //  응답 users[]: { clickup, mapped_member_id(①??②), mapped_via('identity'|'email'|null), suggested_member_id }
+  //   — mapped_via='identity' 만 UI 에서 '해제' 가능(②는 이메일에서 오는 암묵 매핑 — 드롭다운 미리선택으로 확정 유도).
+  //  ClickUp 토큰 미설정/호출 실패는 { error } 폴백(500 금지 — 패널이 우아하게 안내).
+  restOnly("org_connector_clickup_members", "ClickUp 멤버 매핑 목록",
+    "ClickUp 팀 멤버(user id/username/email/color)와 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 'ClickUp 멤버 매핑' 패널 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/clickup/members"], parse: () => ({}) }],
+    async () => {
+      let team: ClickUpTeam;
+      try { team = await getClickUpTeam(); }
+      catch (e) { return { error: `ClickUp 팀 조회 실패: ${e instanceof Error ? e.message : String(e)}` }; }
+      const users = (team.members ?? []).map((m) => m.user)
+        .filter((u): u is NonNullable<typeof u> => !!u && u.id != null);
+      const members = await listMembers();
+      // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.
+      const emailToMember = new Map<string, string>();
+      for (const m of members) {
+        const k = (m.email ?? "").trim().toLowerCase();
+        if (k && !emailToMember.has(k)) emailToMember.set(k, m.id);
+      }
+      // ① person_identity 배치 조회 — 유저별 후보 external_id(이메일 소문자·숫자 id)를 한 번에.
+      const extIds: string[] = [];
+      for (const u of users) {
+        extIds.push(String(u.id));
+        const em = (u.email ?? "").trim().toLowerCase();
+        if (em) extIds.push(em);
+      }
+      const identityMap = new Map<string, string>(); // external_id → org_member.id
+      if (extIds.length) {
+        const r = await itemsPool.query(
+          `SELECT pi.external_id, pi.person_id FROM person_identity pi
+             JOIN org_member om ON om.id = pi.person_id
+            WHERE pi.system='clickup' AND pi.external_id = ANY($1::text[])`, [extIds]);
+        for (const row of r.rows as Array<{ external_id: string; person_id: string }>) {
+          identityMap.set(row.external_id, row.person_id);
+        }
+      }
+      const rows = users.map((u) => {
+        const em = (u.email ?? "").trim().toLowerCase();
+        const viaIdentity = identityMap.get(String(u.id)) ?? (em ? identityMap.get(em) : undefined) ?? null;
+        const viaEmail = em ? (emailToMember.get(em) ?? null) : null;
+        return {
+          clickup: { id: u.id, username: u.username ?? null, email: u.email ?? null,
+            color: u.color ?? null, initials: u.initials ?? null, profilePicture: u.profilePicture ?? null },
+          mapped_member_id: viaIdentity ?? viaEmail,
+          mapped_via: viaIdentity ? "identity" : (viaEmail ? "email" : null),
+          suggested_member_id: viaIdentity ? null : viaEmail,
+        };
+      });
+      return { teamId: team.id, teamName: team.name ?? null, users: rows };
     }),
 
   // ════════ 커스텀 훅 CRUD (runtime 권한) ════════

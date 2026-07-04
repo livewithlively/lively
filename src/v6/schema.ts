@@ -169,9 +169,10 @@ export async function initV6Schema(): Promise<string> {
     END $$;
     -- lifecycle 단순화(2026-06-23): rejected 폐기 — 제거는 삭제(휴지통, 복원가능)로 통일. 가역 숨김(반려) 개념 삭제.
     --  기존 rejected 행은 active 복귀(비파괴). 제약은 redefine 이라 DROP+ADD(멱등). superseded 는 버전 교체 축이라 유지.
+    -- archived 추가(2026-07-04 #551): 외부 미러의 원본 아카이브/휴지통/삭제 전파 자리 — 하드삭제 대신 보존(기본 목록에선 lifecycle='active' 필터로 숨음).
     UPDATE knowledge SET lifecycle='active' WHERE lifecycle='rejected';
     ALTER TABLE knowledge DROP CONSTRAINT IF EXISTS knowledge_lifecycle_chk;
-    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','superseded'));
+    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','superseded','archived'));
     -- WIKI 핀(2026-06-23): is_wiki=true 인 지식의 제목+메타만 가이드 위키섹션으로 항상-주입(본문 제외, 인덱스).
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;
@@ -326,9 +327,14 @@ export async function initV6Schema(): Promise<string> {
       PRIMARY KEY(task_id, member_id));
     CREATE INDEX IF NOT EXISTS task_assignee_member_idx ON task_assignee(member_id);
     -- 백필: 기존 단일 assignee 컬럼 → n:n(멱등, ON CONFLICT skip). 매 부팅 안전(이미 시드면 no-op).
+    --  ⚠ JSON 배열 문자열('["a","b"]' — UI 다중담당 규약)은 제외(#541) — 통째 복사 시 member_id 오염.
+    --   배열 값의 섀도 동기는 쓰기경로(syncTaskAssignees·connector-mirror)가 담당.
     INSERT INTO task_assignee(task_id, member_id, sort)
-      SELECT id, assignee, 0 FROM project WHERE assignee IS NOT NULL AND assignee <> ''
+      SELECT id, assignee, 0 FROM project
+      WHERE assignee IS NOT NULL AND assignee <> '' AND assignee NOT LIKE '[%'
       ON CONFLICT (task_id, member_id) DO NOTHING;
+    -- 과거 부팅이 복사해 둔 JSON 배열 오염 행 정리(멱등 — 정상 member_id 는 '[' 로 시작하지 않음).
+    DELETE FROM task_assignee WHERE member_id LIKE '[%';
   `);
 
   // ── 5e) external_outbox(2026-06-26, #177 아웃바운드 write-through) — 로컬 편집(web/MCP)→외부 PM(ClickUp) 푸시 큐. ──
@@ -356,6 +362,15 @@ export async function initV6Schema(): Promise<string> {
   //  {name, description, status_category}. 인바운드 머지의 base: INSERT=theirs, 아웃바운드 푸시 후=ours, 인바운드 머지 후=merged.
   //  merge3(base, ours, theirs): theirs==base→ours유지(외부불변), ours==base→theirs채택(우리불변), 양쪽변경→ours(우리 DB master 타이브레이크).
   await pool.query(`ALTER TABLE project ADD COLUMN IF NOT EXISTS external_base JSONB;`);
+
+  // ── 5g) 무손실 백스톱(#541) — 커넥터가 typed 컬럼으로 못 옮기는 소스 고유 데이터 전체 보존. ──
+  //  knowledge(schema.ts §14 fields+raw)·source(§14-c raw) 미러처럼 project 도 fields(구조화 소스필드)+raw(원본 전체 JSON)
+  //  백스톱을 갖는다 — 이게 없어서 ClickUp attachment/custom_field/watchers/points/orderindex/time 등 미모델 데이터가
+  //  쓰기 시점에 영구 소실됐다(#541 무손실 이관 감사). 커넥터 미러가 typed 컬럼 + 이 백스톱을 함께 채운다(무손실 fallback).
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS fields JSONB;
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS raw JSONB;
+  `);
 
   // ── 6) project_member — 프로젝트 팀원(n:n, level=project). 구 project_member 동형(org/schema.ts:304). ──
   await pool.query(`
@@ -447,6 +462,44 @@ export async function initV6Schema(): Promise<string> {
     ALTER TABLE project_list ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'open';
     -- 리스트 단위 목록 UI 커스텀(#475) — 기본 보기(그룹/정렬)·표시필드 등 프리퍼런스 백. 스키마 고정 없이 확장.
     ALTER TABLE project_list ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── 6e) 커넥터 무손실 계층 이관(#541) — 폴더 nestable(ClickUp Space›Folder 2층 흡수) + folder/list external 멱등 좌표. ──
+  //  ClickUp Space›Folder›List›Task 4층을 우리 폴더(nestable)›리스트›프로젝트로: Space=최상위 project_folder(parent_id=NULL),
+  //  ClickUp Folder=하위 project_folder(parent_id=Space행). external_* 로 커넥터가 멱등 upsert(재싱크 중복 0). settings=원본 메타 백스톱.
+  await pool.query(`
+    ALTER TABLE project_folder ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES project_folder(id) ON DELETE SET NULL;
+    ALTER TABLE project_folder ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE project_folder ADD COLUMN IF NOT EXISTS external_system TEXT;
+    ALTER TABLE project_folder ADD COLUMN IF NOT EXISTS external_instance TEXT;
+    ALTER TABLE project_folder ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS project_folder_external_uidx ON project_folder(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS project_folder_parent_idx ON project_folder(parent_id) WHERE parent_id IS NOT NULL;
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS external_system TEXT;
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS external_instance TEXT;
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS project_list_external_uidx ON project_list(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
+  `);
+
+  // ── 6f) project_view — 리스트/폴더 뷰(#541: ClickUp View 이관 + 우리 커스텀 뷰·컬럼 저장). ──
+  //  config JSONB = { columns:[{field,idx,width,hidden,name}], grouping, sorting, filters, settings } — 클릭업 View shape 보존 + 우리 커스텀 컬럼.
+  //  external_* 있으면 ClickUp 이관 뷰(멱등), NULL 이면 우리가 만든 로컬 뷰. 사용자 "뷰 저장 안됨/커스텀 컬럼" 해소의 저장층.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_view(
+      id SERIAL PRIMARY KEY,
+      list_id INT REFERENCES project_list(id) ON DELETE CASCADE,
+      folder_id INT REFERENCES project_folder(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'list',
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sort INT NOT NULL DEFAULT 0,
+      created_by TEXT,
+      external_system TEXT, external_instance TEXT, external_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS project_view_list_idx ON project_view(list_id) WHERE list_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS project_view_folder_idx ON project_view(folder_id) WHERE folder_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS project_view_external_uidx ON project_view(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
   `);
 
   // ── 7) project_category — 프로젝트↔카테고리 정션(프로젝트 탭 사업/제품/시스템 탐색). #290 project_category_single_uq 로 프로젝트당 단일-home(0/1). ──
@@ -615,6 +668,43 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS task_field_value_task_idx ON task_field_value(task_id);
   `);
 
+  // ── ⑫-b task_attachment(#541) — 태스크 첨부/이미지. ClickUp attachments[] + 인라인 이미지 이관. external 멱등. ──
+  //  raw=원본 attachment JSON 백스톱. parent_type=tasks|comments(첨부 출처). 우리 네이티브 첨부에도 재사용 가능.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_attachment(
+      id SERIAL PRIMARY KEY,
+      task_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      external_id TEXT,
+      title TEXT,
+      url TEXT,
+      mimetype TEXT,
+      extension TEXT,
+      size BIGINT,
+      source TEXT,
+      thumbnail TEXT,
+      parent_type TEXT,
+      raw JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS task_attachment_task_idx ON task_attachment(task_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS task_attachment_external_uidx ON task_attachment(external_id) WHERE external_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_attachment_inline_uidx ON task_attachment(task_id, url) WHERE external_id IS NULL AND url IS NOT NULL;
+  `);
+
+  // ── ⑫-c 커넥터 멱등 좌표 가산(#541 무손실) — 기존 상세 테이블(체크리스트·댓글·커스텀필드·타임엔트리)에
+  //  external_id 를 더해 재싱크가 중복 없이 수렴하게 한다. 네이티브 행은 NULL(부분유니크 밖 — 영향 0).
+  //  task_comment.raw = ClickUp 댓글 원본(구조화 blocks·반응·assignee 등) 백스톱. created_at 은 미러가 원시각으로 직접 INSERT.
+  //  task_field 는 (project_id, external_id) 유니크 — ClickUp 필드정의(UUID)가 리스트 단위라 여러 루트 프로젝트에 복제되기 때문.
+  await pool.query(`
+    ALTER TABLE task_checklist ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_checklist_external_uidx ON task_checklist(external_id) WHERE external_id IS NOT NULL;
+    ALTER TABLE task_checklist_item ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_checklist_item_external_uidx ON task_checklist_item(external_id) WHERE external_id IS NOT NULL;
+    ALTER TABLE task_field ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_field_external_uidx ON task_field(project_id, external_id) WHERE external_id IS NOT NULL;
+    ALTER TABLE task_time_entry ADD COLUMN IF NOT EXISTS external_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_time_entry_external_uidx ON task_time_entry(external_id) WHERE external_id IS NOT NULL;
+  `);
+
   // ── ⑧ 태스크 댓글 + 이모지 반응 — 전용 테이블(프로젝트 #183: 구 activity(type='comment') 재활용에서 분리). ──
   //  댓글=task_comment(task_id→project, reply_to 자기FK 1단계 스레드), 반응=task_comment_reaction(comment_id→task_comment).
   //  activity 와 분리 → activity 차원 운영(타입 리맵·project_id ON DELETE SET NULL)이 더는 댓글 정체성에 새지 않는다. 댓글 삭제 시 반응 CASCADE.
@@ -644,6 +734,12 @@ export async function initV6Schema(): Promise<string> {
       created_at TIMESTAMPTZ DEFAULT now(),
       PRIMARY KEY(comment_id, emoji, member));
     CREATE INDEX IF NOT EXISTS task_comment_reaction_cmt_idx ON task_comment_reaction(comment_id);
+
+    -- ⑧-b 커넥터 멱등 좌표(#541 무손실) — ClickUp 댓글 이관: external_id 재싱크 중복 방지 + raw 원본 백스톱.
+    --  created_at 은 미러가 원시각으로 직접 INSERT(네이티브 행은 DEFAULT now() 그대로).
+    ALTER TABLE task_comment ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE task_comment ADD COLUMN IF NOT EXISTS raw JSONB;
+    CREATE UNIQUE INDEX IF NOT EXISTS task_comment_external_uidx ON task_comment(external_id) WHERE external_id IS NOT NULL;
   `);
 
   // ════════ #290(2026-06-30) 분류·링크·자료 재설계 — 모든 base 테이블 뒤(knowledge/project/*_category 의존). ════════
@@ -681,6 +777,10 @@ export async function initV6Schema(): Promise<string> {
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_link_uq ON knowledge_link(from_name, to_name, relation);
     CREATE INDEX IF NOT EXISTS knowledge_link_from_idx ON knowledge_link(from_name);
     CREATE INDEX IF NOT EXISTS knowledge_link_to_idx ON knowledge_link(to_name);
+    -- origin(2026-07-04 #551): 링크 생성 주체 — 'user'(사람/MCP) | 'connector:<system>'(커넥터가 노션 멘션/링크를 자동 물질화).
+    --  커넥터는 자기 origin 링크만 삭제·재작성한다(사람이 만든 링크 불가침). 비파괴 ADD COLUMN(기존 행=user).
+    ALTER TABLE knowledge_link ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user';
+    CREATE INDEX IF NOT EXISTS knowledge_link_origin_idx ON knowledge_link(origin) WHERE origin <> 'user';
   `);
 
   // ── ⑭-b2) project_edge — 프로젝트↔프로젝트 그래프(후속 관계 등, knowledge_link idiom). ──

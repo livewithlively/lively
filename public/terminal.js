@@ -525,6 +525,99 @@ function setupWheel() {
   });
 }
 
+// 터치 스크롤(모바일, #585) — xterm.js 는 터치 스와이프를 자체 처리하지 않아 모바일에서 스크롤 무동작.
+//  스와이프 이동량을 줄 수로 환산해 휠 핸들러(setupWheel)와 같은 분기를 태운다:
+//   - normal buffer(셸 등): 로컬 스크롤백 직접 스크롤(term.scrollLines).
+//   - alt-screen + 앱 마우스모드(Claude Code 등): SGR 휠 시퀀스로 앱에 전달(앱이 자기 스크롤백 스크롤).
+//   - alt-screen + 마우스모드 아님(옛 pager 등): 방향키로 전달(xterm 의 alt 휠 기본과 동일한 관례).
+//  손을 놓으면 속도에 따라 관성(플링) 스크롤을 이어간다. 멀티터치(핀치)는 건드리지 않는다.
+function setupTouch() {
+  const hostEl = term.element;
+  if (!hostEl) return;
+  const cellH = () => {
+    try {
+      const scr = hostEl.querySelector('.xterm-screen') || hostEl;
+      return Math.max(4, scr.getBoundingClientRect().height / term.rows);
+    } catch (_) { return 17; }
+  };
+  const cellFromXY = (x, y) => {
+    try {
+      const scr = hostEl.querySelector('.xterm-screen') || hostEl;
+      const r = scr.getBoundingClientRect();
+      return {
+        col: Math.min(term.cols, Math.max(1, Math.floor((x - r.left) / (r.width / term.cols)) + 1)),
+        row: Math.min(term.rows, Math.max(1, Math.floor((y - r.top) / (r.height / term.rows)) + 1)),
+      };
+    } catch (_) { return { col: 1, row: 1 }; }
+  };
+  // lines>0 = 아래로 스크롤. 한 번에 보내는 시퀀스는 상한을 둬 앱 플러딩을 막는다.
+  const emit = (lines, x, y) => {
+    const n = Math.trunc(lines);
+    if (!n) return 0;
+    let alt = false, mouseOn = false;
+    try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
+    try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+    const reps = Math.min(Math.abs(n), 8);
+    if (alt && mouseOn) {
+      const c = cellFromXY(x, y);
+      const btn = n < 0 ? 64 : 65; // 64=휠↑ 65=휠↓ (SGR 1006)
+      let seq = '';
+      for (let i = 0; i < reps; i++) seq += '\x1b[<' + btn + ';' + c.col + ';' + c.row + 'M';
+      sendInput(seq);
+    } else if (alt) {
+      let seq = '';
+      for (let i = 0; i < reps; i++) seq += n < 0 ? '\x1b[A' : '\x1b[B';
+      sendInput(seq);
+    } else {
+      term.scrollLines(n);
+    }
+    return n; // 소비한 줄 수(부호 포함) — 나머지 픽셀은 누적 유지
+  };
+  let lastY = 0, lastX = 0, accPx = 0, vel = 0, lastT = 0, raf = 0, active = false;
+  const stopFling = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
+  hostEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { active = false; return; }
+    stopFling();
+    active = true; accPx = 0; vel = 0;
+    lastY = e.touches[0].clientY; lastX = e.touches[0].clientX; lastT = e.timeStamp;
+  }, { passive: true });
+  hostEl.addEventListener('touchmove', (e) => {
+    if (!active || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dy = lastY - t.clientY; // 손가락 위로 = 아래로 스크롤(네이티브 스크롤 방향)
+    const dt = Math.max(1, e.timeStamp - lastT);
+    vel = 0.8 * vel + 0.2 * (dy / dt); // px/ms, 살짝 평활
+    lastY = t.clientY; lastX = t.clientX; lastT = e.timeStamp;
+    accPx += dy;
+    const h = cellH();
+    const used = emit(accPx / h, t.clientX, t.clientY);
+    accPx -= used * h;
+    e.preventDefault(); // 페이지 바운스/스크롤 방지 — 스와이프는 터미널이 소비
+  }, { passive: false });
+  const endTouch = (e) => {
+    if (!active) return;
+    active = false;
+    // 관성(플링): 속도가 충분하면 감쇠하며 이어서 스크롤.
+    if (Math.abs(vel) < 0.15) return;
+    const x = lastX, y = lastY;
+    let v = Math.max(-4, Math.min(4, vel)), prev = 0, acc = 0;
+    const step = (ts) => {
+      raf = 0;
+      if (!prev) prev = ts;
+      const dt = Math.min(64, ts - prev); prev = ts;
+      acc += v * dt;
+      v *= Math.pow(0.994, dt); // 지수 감쇠
+      const h = cellH();
+      const used = emit(acc / h, x, y);
+      acc -= used * h;
+      if (Math.abs(v) > 0.03) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+  };
+  hostEl.addEventListener('touchend', endTouch, { passive: true });
+  hostEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
+}
+
 function setActive(id) {
   activeId = id;
   for (const t of tabs) t.pane.classList.toggle('active', t.id === id);
@@ -868,6 +961,7 @@ async function boot() {
   setupClipboard();
   setupPaste();
   setupWheel();
+  setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
   setupSelectionCopy();   // 드래그 선택 → 놓는 즉시 복사(#252)
   setupOscClipboard();    // 앱 OSC52 클립보드 → 브라우저 클립보드(#252)
   applyFit();

@@ -3574,3 +3574,194 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .dmx-sev{font-size:9.5px;font-family:ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:4px;background:#f8efe2;color:var(--dmx-warn);}
 .dmx-dcard.viol .dmx-sev{background:#fbeae7;color:var(--dmx-viol);}
 .dmx-why{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.5;}
+
+/* ═══════════ #551 노션 무손실 미러 — 리치 본문(md 확장) + 페이지 트리 ═══════════ */
+/* 인라인 확장 — 이미지·취소선·밑줄·하이라이트. 이미지는 본문 폭 안에서만(넘침 금지). */
+.md-img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; display: block; }
+p.md-p > .md-img:only-child { margin: 10px 0; }
+.md-del { color: var(--muted, #6b7a90); }
+.md-u { text-decoration: underline; text-underline-offset: 2px; }
+.md-mark { background: #FFF3C4; color: inherit; border-radius: 3px; padding: 0 2px; }
+
+/* 체크박스(할 일) — 노션 to_do. 불릿 대신 체크박스만(이중 마커 방지). */
+.md-list li.md-task { list-style: none; margin-left: -18px; }
+.md-check { width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; accent-color: var(--blue); pointer-events: none; }
+.md-list li.md-task-done { color: var(--muted, #6b7a90); }
+.md-list li.md-task-done > .md-check + * { text-decoration: none; }
+
+/* 토글(details) — 노션 toggle/토글헤딩. 헤어라인 카드 + 삼각 마커. */
+.md-toggle { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 10px 0; background: var(--bg); }
+.md-toggle-sum { cursor: pointer; font-weight: 600; color: var(--ink); }
+.md-toggle-sum:hover { color: var(--blue); }
+.md-toggle[open] > .md-toggle-sum { margin-bottom: 8px; }
+.md-toggle > .md > :last-child { margin-bottom: 0; }
+
+/* 콜아웃 — 아이콘 + 틴트 카드. 색은 노션 color 를 라이블리 톤으로 순화(원색 배경 금지). */
+.md-callout { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 14px; margin: 12px 0; background: var(--bg-note); }
+.md-callout-ic { flex: none; font-size: 16px; line-height: 1.5; }
+.md-callout-body { min-width: 0; flex: 1; }
+.md-callout-body > :last-child, .md-callout-body .md > :last-child { margin-bottom: 0; }
+.md-callout-gray, .md-callout-brown { background: #F7F8FA; }
+.md-callout-orange, .md-callout-yellow { background: #FFF9EC; border-color: #F3E8CE; }
+.md-callout-green { background: var(--bg-success); border-color: #DCF0E8; }
+.md-callout-blue, .md-callout-default { background: var(--bg-note); }
+.md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
+.md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
+
+/* 컬럼 레이아웃 — flex(비율은 인라인 flex 값), 좁은 화면은 세로 강등. */
+.md-columns { display: flex; gap: 22px; margin: 8px 0; align-items: flex-start; }
+.md-columns > .md-column { flex: 1 1 0; min-width: 0; }
+@media (max-width: 760px) { .md-columns { flex-direction: column; gap: 4px; } }
+
+/* 동기화 블록 — 대시 보더(참조 콘텐츠임을 표시). */
+.md-synced { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.md-synced-body > :last-child { margin-bottom: 0; }
+.md-synced-missing { color: var(--muted, #6b7a90); font-size: 13px; margin-top: 6px; }
+
+/* 블록 칩 — toc/unsupported/synced 라벨(채운 필 금지 관례 → 옅은 보더 칩). */
+.md-block-chip { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--muted, #6b7a90);
+  border: 1px solid var(--line); border-radius: 7px; padding: 2px 8px; margin: 4px 0; background: var(--bg); }
+.md-unsup { border-style: dashed; }
+
+/* 수식 블록 — 코드 프리 변형(LaTeX 원문 표시). */
+.md-eq { background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 14px; margin: 10px 0; overflow-x: auto; }
+.md-eq code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--ink); }
+
+/* 상세 — 보관됨 배지 · 하위 페이지 행 · 브레드크럼 현재 페이지. */
+.kn-chip.kn-archived { color: var(--muted, #6b7a90); border: 1px solid var(--line); background: var(--bg); }
+.kn-linkrow.kn-row-archived { opacity: .55; }
+.kn-link-child { background: var(--bg-tint); color: var(--ink); }
+.crumb-cur { font-weight: 600; color: var(--ink); }
+
+/* 사이드바 페이지 트리 — 카테고리 트리와 같은 언어(들여쓰기 + 헤어라인 가이드). */
+.kn-mirror-tree { margin-top: 20px; }
+.kn-mirror-eyebrow { margin-bottom: 6px; }
+.kn-mirror-nodes { font-size: 13px; }
+.kn-tree-branch { margin: 0; }
+.kn-tree-branch > .kn-tree-sum { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.kn-tree-branch > .kn-tree-sum::-webkit-details-marker { display: none; }
+.kn-tree-sum::before { content: '▸'; font-size: 10px; color: var(--muted, #6b7a90); flex: none; transition: transform .12s ease; }
+.kn-tree-branch[open] > .kn-tree-sum::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .kn-tree-sum::before { transition: none; } }
+.kn-tree-leaf { display: flex; align-items: center; gap: 6px; padding-left: 14px; }
+.kn-tree-kids { margin-left: 13px; border-left: 1px solid var(--line); padding-left: 7px; }
+.kn-tree-link { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.kn-tree-link:hover { color: var(--blue); }
+.kn-tree-archived { opacity: .5; }
+/* ════ #541 ClickUp 무손실 이관 — 프론트 확장(뷰 피커·마크다운·모달·첨부) ════ */
+/* ── 마크다운 렌더 확장(#541 ClickUp 무손실 이관) — 체크박스 태스크 + 이미지 ── */
+.md-list li.md-task { list-style: none; }
+.md-list li.md-task > input[type="checkbox"] { margin: 0 5px 0 -19px; vertical-align: -2px; accent-color: var(--blue); pointer-events: none; }
+.md .md-img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); vertical-align: middle; }
+.md-p > .md-img:only-child { display: block; margin: 4px 0; }
+.md del { color: var(--muted); }
+
+/* ── 태스크 모달 #541 무손실 확장 — 원본 링크·원문 상태 칩·커스텀 필드·ClickUp 첨부(DB) ── */
+/* typebar 원본 링크(ClickUp에서 열기) — 우측 정렬 */
+.pjv-tm-extlink { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--muted-2); text-decoration: none; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; white-space: nowrap; }
+.pjv-tm-extlink:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
+
+/* 상태 원문 칩(status_raw, 읽기전용) — 상태 pill 옆 병기 */
+.pjv-tm-statuswrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pjv-tm-statusraw { font-size: 11px; font-weight: 700; color: var(--muted-2); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 커스텀 필드 섹션 — 필드 그리드와 동형(2열). 셀 컨트롤(pjv-cell-btn)은 모달 결로 좌측정렬·오토폭(.pjv-proj-meta 관례). */
+.pjv-tm-cfblock { border-top: none; padding-top: 0; }
+.pjv-tm-cfields { padding: 0; border-bottom: none; margin-bottom: 0; }
+.pjv-tm-cfields .pjv-tm-field-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-tm-cfields .pjv-cell-btn { width: auto; height: auto; justify-content: flex-start; padding: 4px 8px; border-radius: 7px; box-shadow: none; gap: 6px; }
+.pjv-tm-cfields .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
+.pjv-tm-cfield-ro { font-size: 13.5px; color: var(--ink); }
+.pjv-tm-cfield-ro.empty { color: var(--muted-3); }
+
+/* ClickUp 첨부(DB) — 썸네일 카드 그리드 + 파일 행. 원본 URL 만료(서명) 시 아이콘 폴백으로 레이아웃 유지. */
+.pjv-tm-attdb { margin-bottom: 8px; }
+.pjv-tm-attdb-head { font-size: 12px; font-weight: 700; color: var(--muted-2); margin: 2px 0 6px; }
+.pjv-tm-attdb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-bottom: 6px; }
+.pjv-tm-attdb-card { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 6px; min-width: 0; background: var(--bg); }
+a.pjv-tm-attdb-card:hover { border-color: var(--blue); }
+.pjv-tm-attdb-thumb { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; background: var(--bg-tint-2); display: block; }
+.pjv-tm-attdb-fallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 72px; border-radius: 6px; background: var(--bg-tint-2); color: var(--muted); }
+.pjv-tm-attdb-fallback .fic { width: 22px; height: 22px; }
+.pjv-tm-attdb-cap { font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-tm-att .fic { width: 16px; height: 16px; flex: none; color: var(--muted); }
+a.pjv-tm-att-link { text-decoration: none; }
+a.pjv-tm-att-link:hover { color: var(--blue); text-decoration: underline; }
+
+/* ── ClickUp 멤버 매핑(#541) — 관리탭 커넥터 패널(web/admin.ts renderClickupMemberPanel) ── */
+.cu-map-table { width: 100%; }
+.cu-map-table td { padding: 6px 14px 6px 0; vertical-align: middle; }
+.cu-map-table td:first-child { white-space: normal; }
+.cu-user { display: flex; align-items: center; gap: 8px; }
+.cu-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-tint-2); color: var(--muted-head); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; flex: 0 0 auto; }
+.cu-map-sel { max-width: 260px; }
+/* ── #541 저장 뷰 피커 ── */
+.pjv-savedview-pop { min-width: 250px; }
+.pjv-savedview-item { display: flex; align-items: center; gap: 8px; }
+.pjv-savedview-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-savedview-type { font-size: 10.5px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .04em; }
+.pjv-savedview-src { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted-2); }
+.pjv-savedview-empty { color: var(--muted-2); }
+
+/* ── #541 프로젝트 상세 — 이관 첨부 칩 그리드 + 원본 링크 ── */
+.proj-att-sec { margin-top: 12px; }
+.proj-att-head { font-size: 12px; font-weight: 700; color: var(--muted-2); margin-bottom: 6px; }
+.proj-att-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.proj-att-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; text-decoration: none; color: var(--ink); background: var(--bg); font-size: 12.5px; }
+a.proj-att-chip:hover { border-color: var(--blue); }
+.proj-att-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; display: block; }
+.proj-att-fallback { font-size: 15px; }
+.proj-att-cap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-proj-extlink { font-size: 12.5px; font-weight: 700; color: var(--muted-2); text-decoration: none; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.pjv-proj-extlink:hover { color: var(--blue); border-color: var(--blue); }
+
+/* ── #541 칸반 보드 + ClickUp 컬럼 배지 ── */
+.pjv-kanban { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding: 4px 2px 14px; }
+.pjv-kb-col { flex: 0 0 264px; max-width: 264px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.pjv-kb-col.drop-over { border-color: var(--blue); background: var(--bg-tint-2); }
+.pjv-kb-head { display: flex; align-items: center; gap: 7px; padding: 4px 6px 8px; font-weight: 700; font-size: 13px; }
+.pjv-kb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-kb-count { font-size: 11.5px; color: var(--muted-2); font-weight: 600; }
+.pjv-kb-body { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.pjv-kb-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; cursor: pointer; }
+.pjv-kb-card:hover { border-color: var(--blue); }
+.pjv-kb-card.dragging { opacity: .45; }
+.pjv-kb-card.done .pjv-kb-name { color: var(--muted-2); text-decoration: line-through; }
+.pjv-kb-name { font-size: 13.5px; font-weight: 650; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pjv-kb-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pjv-kb-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--bg-tint); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-kb-meta { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-height: 20px; }
+.pjv-kb-due { font-size: 11.5px; color: var(--muted-2); }
+.pjv-kb-due.overdue { color: var(--red, #e11d48); font-weight: 700; }
+.pjv-kb-prio { font-size: 11px; font-weight: 700; }
+.pjv-kb-prio.urgent { color: #e11d48; } .pjv-kb-prio.high { color: #f59e0b; } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
+.pjv-kb-faces { margin-left: auto; display: inline-flex; }
+.pjv-kb-faces .pjv-kb-face { width: 20px; height: 20px; border-radius: 50%; font-size: 9px; margin-left: -5px; border: 1.5px solid var(--bg); }
+.pjv-kb-empty { font-size: 12px; color: var(--muted-3); text-align: center; padding: 14px 0; }
+.pjv-thcol-src { font-size: 9px; font-weight: 800; letter-spacing: .04em; color: var(--muted-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; margin-left: 4px; }
+
+/* ── #541 스페이스(ClickUp Space 이관) 사이드바 구분 스타일 ── */
+.pjv-side-space-avatar { width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff; flex: none; }
+.pjv-side-navspace .pjv-side-navlabel { font-weight: 750; }
+.pjv-side-navspace { margin-top: 4px; }
+/* ═══════════ #586 커넥터 UX — 상태 카드·가이드·픽커·run 로그 ═══════════ */
+.conn-status { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg-tint); }
+.conn-status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.conn-status-actions { margin-top: 10px; }
+.conn-guide { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 14px; background: var(--bg); }
+.conn-guide > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.conn-guide-steps { margin: 8px 0 4px; padding-left: 20px; font-size: 13px; line-height: 1.7; color: var(--ink); }
+.conn-guide-steps li { margin-bottom: 4px; }
+.conn-guide-link { margin: 4px 0 2px; font-size: 13px; }
+.conn-pick-row { display: flex; gap: 8px; align-items: center; }
+.conn-pick-row input { flex: 1; min-width: 0; }
+.conn-pick-row .btn { flex: none; white-space: nowrap; }
+.conn-pick-list { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; margin: 8px 0; }
+.conn-pick-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+.conn-pick-item:hover { background: var(--bg-tint); }
+.conn-pick-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-list { max-height: 60vh; overflow: auto; }
+.run-log { background: #0F1B2D; color: #D7E3F4; border-radius: 10px; padding: 12px 14px; margin-top: 8px;
+  max-height: 56vh; min-height: 200px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }

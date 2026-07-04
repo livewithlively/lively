@@ -38,8 +38,17 @@ const VALID_KINDS = new Set(["R", "K", "H", "W"]);
 //  구 KIND_MAP(kindForSource)의 의미를 **그대로 재사용**(재인코딩 없음 — 단일 source 표): kind 'W'(=작업)이면
 //  project, 그 외 정의된 kind(K 등 — 지식/산출물)이면 knowledge, 미정의(undefined = slack 등)이면 null(미러 skip).
 //  v6 에 kind 가 없으므로 'W'/'K' 라벨 자체는 미적재 — 라우팅 분기에만 쓴다(task 의 "drop the kind notion" 충족).
-export type V6IngestTarget = "project" | "knowledge" | "source" | null;
+export type V6IngestTarget =
+  | "project" | "knowledge" | "source"
+  | "pm_folder" | "pm_list" | "pm_view" | "pm_comment" | "pm_time"
+  | null;
 export function routeIngestV6(type: string, system: string): V6IngestTarget {
+  // #541 무손실 — PM 계층/부속 엔티티(현재 clickup 만 방출; 타 PM 커넥터도 같은 타입을 쓰면 그대로 라우팅).
+  if (type === "space" || type === "folder") return "pm_folder"; // Space=최상위, Folder=하위 — 둘 다 project_folder
+  if (type === "list") return "pm_list";
+  if (type === "view") return "pm_view";
+  if (type === "comment") return "pm_comment";
+  if (type === "time") return "pm_time";
   const kind = kindForSource(type, system);
   if (kind === "W") return "project";   // clickup task 등 → project
   if (kind === "K") return "knowledge"; // notion doc 등 정제 문서 → knowledge(observed)

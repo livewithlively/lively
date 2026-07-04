@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import {
   listProjectLists, createProjectList, updateProjectList, deleteProjectList,
   setProjectListMembers, setProjectListForProject, getProjectListRow, setProjectListSettings,
+  getListClickupFields,
 } from "../v6/list-store.js";
 
 function parseId(v: unknown): number {
@@ -215,7 +216,25 @@ const projectListSetSettingsV6: Capability = {
   },
 };
 
+// ── 리스트 스코프 ClickUp 커스텀필드 컬럼(#541) — 이관 정의를 리스트 뷰 컬럼으로(값·프로젝트별 내부 id 맵 동봉). ──
+const projectListClickupFieldsV6: Capability = {
+  name: "project_list_clickup_fields_v6",
+  title: "리스트 ClickUp 필드 컬럼(v6)",
+  description: "리스트에 이관된 ClickUp 커스텀필드 정의(external dedup)·프로젝트별 값·편집용 내부 field id 맵을 돌려준다. 보드 리스트 뷰 컬럼 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/project-lists/:id/clickup-fields"],
+      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+  },
+  handler: async (input: any) => {
+    if (!(await getProjectListRow(input.id))) throw new HttpError(404, `리스트 #${input.id} 없음`);
+    return await getListClickupFields(input.id);
+  },
+};
+
 export const listV6Capabilities: Capability[] = [
   projectListIndexV6, projectListCreateV6, projectListUpdateV6, projectListDeleteV6,
-  projectListSetMembersV6, projectSetListV6, projectListSetSettingsV6,
+  projectListSetMembersV6, projectSetListV6, projectListSetSettingsV6, projectListClickupFieldsV6,
 ];

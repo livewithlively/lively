@@ -14,6 +14,9 @@ export interface ProjectFolderRow {
   created_at: string;
   updated_at: string;
   list_count: number;   // 이 폴더에 속한 리스트(project_list) 수.
+  parent_id: number | null; // 중첩(#541) — ClickUp Space=최상위(NULL)›Folder=하위. 네이티브 폴더는 NULL(평탄 하위호환).
+  settings: Record<string, unknown> | null; // 원본 메타 백스톱(#541 — clickup 스페이스/폴더 메타).
+  external_id: string | null; // 커넥터 좌표(#541) — 'space:<id>'|'folder:<id>'. 프론트가 Space 를 구분 스타일로 렌더.
 }
 
 const auditFolder = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
@@ -24,6 +27,7 @@ const auditFolder = (key: string, op: string, before: unknown, after: unknown, c
 export async function listProjectFolders(): Promise<ProjectFolderRow[]> {
   return q(itemsPool,
     `SELECT pf.id, pf.name, pf.color, pf.sort, pf.created_by, pf.created_at, pf.updated_at,
+       pf.parent_id, pf.settings, pf.external_id,
        (SELECT count(*)::int FROM project_list pl WHERE pl.folder_id=pf.id) AS list_count
      FROM project_folder pf ORDER BY pf.sort, lower(pf.name)`, []);
 }
@@ -32,6 +36,7 @@ export async function listProjectFolders(): Promise<ProjectFolderRow[]> {
 export async function getProjectFolderRow(id: number): Promise<ProjectFolderRow | undefined> {
   return one(itemsPool,
     `SELECT pf.id, pf.name, pf.color, pf.sort, pf.created_by, pf.created_at, pf.updated_at,
+       pf.parent_id, pf.settings, pf.external_id,
        (SELECT count(*)::int FROM project_list pl WHERE pl.folder_id=pf.id) AS list_count
      FROM project_folder pf WHERE pf.id=$1`, [id]);
 }

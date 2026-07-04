@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
-  findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData,
+  findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
 } from "../v6/knowledge-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
@@ -26,7 +26,7 @@ const knowledgeList: Capability = {
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional(),
-    lifecycle: z.enum(["active", "superseded"]).optional(),
+    lifecycle: z.enum(["active", "superseded", "archived"]).optional(),   // archived(#551): 외부 미러 원본 삭제/아카이브 전파
     q: z.string().optional(),
     orderBy: z.enum(["name", "updated_at"]).optional(),
     is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
@@ -150,18 +150,18 @@ const knowledgeSave: Capability = {
 const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
-  description: "active/superseded 전환(대체 표시 등). 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능).",
+  description: "active/superseded/archived 전환(대체·아카이브 표시). 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551).",
   scope: "memory",
   input: {
     name: z.string().min(1).max(64),
-    lifecycle: z.enum(["active", "superseded"]),
+    lifecycle: z.enum(["active", "superseded", "archived"]),
   },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/lifecycle"],
       parse: (req) => {
         const lifecycle = String(((req.body ?? {}) as Record<string, unknown>).lifecycle ?? "");
-        if (!["active", "superseded"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|superseded");
+        if (!["active", "superseded", "archived"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|superseded|archived");
         return { name: String(req.params?.name ?? ""), lifecycle };
       } }],
   },
@@ -452,11 +452,37 @@ const knowledgeGraph: Capability = {
   handler: async (input: any) => await knowledgeGraphData(input.limit),
 };
 
+
+// #551 페이지 트리(외부 미러) — 얕은 스켈레톤(name/title/parent/sort/lifecycle/kind) 전량. UI 전용(REST).
+//  목록 cap(500) 우회: 본문 미포함이라 수천 행도 가볍다. 클라이언트(WIKI 탭 트리)가 조립.
+const knowledgeTree: Capability = {
+  name: "knowledge_tree",
+  title: "지식 페이지 트리",
+  description: "외부 미러(system)의 페이지 트리 스켈레톤(parent_name/sort 기반)을 반환한다(트리 뷰 전용).",
+  scope: "memory",
+  input: {
+    system: z.string().min(1).max(40).optional(),
+    limit: z.number().int().min(1).max(50000).optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-tree"],
+      parse: (req) => {
+        const n = req.query?.limit ? Number(req.query.limit) : NaN;
+        return {
+          system: req.query?.system ? String(req.query.system) : undefined,
+          limit: Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined, // NaN/음수 → 기본값(SQL LIMIT 오류 방지)
+        };
+      } }],
+  },
+  handler: async (input: any) => ({ entries: await knowledgeTreeData(input.system ?? "notion", input.limit) }),
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 //  knowledge_graph(/knowledge-graph)·knowledge_link(/knowledge/:name/link)는 :name 단일세그먼트와 안 겹친다(경로 깊이 상이).
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeGet,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree, knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
 ];
