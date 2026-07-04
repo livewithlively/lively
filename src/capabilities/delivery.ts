@@ -800,10 +800,10 @@ export const deliveryCapabilities: Capability[] = [
   restOnly("org_connector_run_cancel", "커넥터 실행 중지",
     "진행 중인 실행을 중지한다(자식 프로세스 kill + canceled 기록). 커서 미전진이라 데이터 손실 없음 — 다음 run 이 재수집.",
     [{ method: "POST", paths: ["/api/ui/org/connector/runs/:id/cancel"], parse: (req) => ({ id: Number(req.params?.id) }) }],
-    async (input: Record<string, unknown>) => {
+    async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = Number(input.id);
       if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "run id 필요");
-      return await cancelConnectorRun(id);
+      return await cancelConnectorRun(id, actorOf(user));
     }),
   restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
     "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",
