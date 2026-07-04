@@ -730,10 +730,9 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     if (led.kind === "database") { dbNode(t, pid); return; }
     const pn = pageNode(t, pid);
     pn.forceChanged = true;
-    if (led.kind === "db_row") { // DB 행을 일반 페이지로 재방출하면 속성 테이블·kind 가 소실된다(리뷰)
-      pn.isDbRow = true;
-      if (!pn.parentOverride) pn.parentOverride = led.parentExt;
-    }
+    // DB 행을 일반 페이지로 재방출하면 속성 테이블·kind 가 소실된다(리뷰). parentOverride 는 두지 않는다 —
+    //  원장 부모는 스테일할 수 있고(그 사이 행 이동), live page.parent(processPage 재fetch)가 진실.
+    if (led.kind === "db_row") pn.isDbRow = true;
   };
 
   // ① data_source 스윕 — dsToDb 최신화 + 스키마 변경/신규 DB 감지. linked 뷰는 ds 가 없어 자연히 0비용.
