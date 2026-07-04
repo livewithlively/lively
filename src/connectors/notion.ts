@@ -433,11 +433,16 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
           t.stats.failedIds.push(`${node.id}:ds:${ref.id}`);
           console.error(`[notion] data_source 스키마 실패 ${ref.id}:`, (err as Error)?.message ?? err);
         }
-        // 행 나열 — 전 행(page 객체). 행 자체의 changed 판정은 processPage 에서.
+        // 행 나열 — 전 행(page 객체), 생성순 정렬을 노션에 위임(created_time 은 분 단위 절사라 로컬 재정렬 시
+        //  같은 분에 만든 행들이 쿼리 반환순으로 뒤집힘 — API sorts 가 내부 정밀도로 동률을 해소한다).
         const rows: Array<{ id: string; created: string }> = [];
         for await (const row of paginate(t.cfg, (cursor) => ({
           path: `/data_sources/${ref.id}/query`, method: "POST",
-          body: { page_size: PAGE_SIZE, ...(cursor ? { start_cursor: cursor } : {}) },
+          body: {
+            page_size: PAGE_SIZE,
+            sorts: [{ timestamp: "created_time", direction: "ascending" }],
+            ...(cursor ? { start_cursor: cursor } : {}),
+          },
         }))) {
           if (row.object !== "page") continue; // wiki DB 는 data_source 객체가 섞여 나올 수 있음
           const rp = row as unknown as NotionPage;
@@ -448,7 +453,7 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
           child.isDbRow = true;
           rows.push({ id: rid, created: rp.created_time ?? "" });
         }
-        rows.sort((a, b) => a.created.localeCompare(b.created)); // 노션 뷰 순서는 API 미제공 — created_time asc(설계 고지)
+        // 노션 뷰 순서는 API 미제공(설계 고지) — 생성순은 위 query sorts 가 보장(API 반환 순서 신뢰).
         rows.forEach((r, i) => {
           const child = pageNode(t, r.id);
           if (child.sort == null) child.sort = i;
@@ -459,7 +464,11 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
       // 구버전 API(2022-06-28) 폴백 — database 직접 query. 스키마는 db.properties.
       for await (const row of paginate(t.cfg, (cursor) => ({
         path: `/databases/${node.id}/query`, method: "POST",
-        body: { page_size: PAGE_SIZE, ...(cursor ? { start_cursor: cursor } : {}) },
+        body: {
+          page_size: PAGE_SIZE,
+          sorts: [{ timestamp: "created_time", direction: "ascending" }],
+          ...(cursor ? { start_cursor: cursor } : {}),
+        },
       }))) {
         if (row.object !== "page") continue;
         const rp = row as unknown as NotionPage;

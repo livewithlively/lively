@@ -183,7 +183,7 @@ while (moved) {
       for (const ref of refs) {
         try { n.dsList.push(await nfetch(`/data_sources/${ref.id}`)); dsToDb.set(norm(ref.id), id); } catch {}
         const rows = [];
-        for await (const row of pages((c) => ({ path: `/data_sources/${ref.id}/query`, method: "POST", body: { page_size: 100, ...(c ? { start_cursor: c } : {}) } }))) {
+        for await (const row of pages((c) => ({ path: `/data_sources/${ref.id}/query`, method: "POST", body: { page_size: 100, sorts: [{ timestamp: "created_time", direction: "ascending" }], ...(c ? { start_cursor: c } : {}) } }))) {
           if (row.object !== "page") continue;
           const rid = norm(row.id);
           const rn = ensureP(rid);
@@ -191,8 +191,7 @@ while (moved) {
           rn.parentOverride = id;
           rows.push({ id: rid, created: row.created_time ?? "" });
         }
-        rows.sort((a, b) => a.created.localeCompare(b.created));
-        for (const r of rows) n.rowIds.push(r.id);
+        for (const r of rows) n.rowIds.push(r.id); // 생성순은 query sorts 가 보장(created_time 분 절사 동률 회피)
       }
     } catch (e) { console.error("[verify] DB 실패:", id, e.message); }
   }
