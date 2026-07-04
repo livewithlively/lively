@@ -1003,10 +1003,15 @@ export async function healPmMirror(client: pg.PoolClient, system: string): Promi
     [system]);
   // 레거시 status_raw 라벨→키 일괄 정규화(#541 업그레이드) — 구버전 미러가 심은 원문 라벨("to do")을 소속 리스트
   //  settings.statuses 의 label 매치로 key("to-do")로 수렴. 재미러(증분 창) 밖의 옛 행도 UI 커스텀 상태 그룹에 즉시 합류.
+  //  task/subtask 행은 list_id 가 없으므로 부모 체인(≤2단: subtask→task→project)으로 루트의 리스트를 해소.
   const s = await client.query(
     `UPDATE project c SET status_raw = st->>'key'
        FROM project_list pl, jsonb_array_elements(COALESCE(pl.settings->'statuses','[]'::jsonb)) st
-      WHERE c.external_system=$1 AND c.list_id = pl.id
+      WHERE c.external_system=$1
+        AND pl.id = COALESCE(c.list_id,
+              (SELECT COALESCE(p1.list_id, p2.list_id)
+                 FROM project p1 LEFT JOIN project p2 ON p2.id = p1.parent_id
+                WHERE p1.id = c.parent_id))
         AND c.status_raw IS NOT NULL AND st->>'label' = c.status_raw AND st->>'key' <> c.status_raw`,
     [system]);
   return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0 };
