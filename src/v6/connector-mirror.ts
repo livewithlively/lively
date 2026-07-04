@@ -751,6 +751,11 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
   const startDate = msToKstDate(f.start_date_ms);
   const dueDate = msToKstDate(f.due_date_ms);
   const listExt = f.list_id != null ? String(f.list_id) : null;
+  // 원본 생성/갱신 시각(#541) — ClickUp date_created/date_updated(ISO). 미러 행의 created_at/updated_at 은
+  //  적재 시각이 아니라 소스 시각이어야 생성일·갱신일 컬럼이 ClickUp 과 동형(로컬 편집은 아웃박스 푸시가
+  //  ClickUp date_updated 를 끌어올려 다음 싱크에 수렴).
+  const theirsCreatedAt = it.occurred_at ?? null;
+  const theirsUpdatedAt = it.updated_at ?? null;
 
   // 소속 리스트 행(1쿼리) — list_id 해소 + status key 매핑(settings.statuses) 겸용. 스트림이 리스트를 먼저 흘리므로 보통 존재.
   const listRow = listExt
@@ -822,12 +827,13 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
           priority, start_date, due_date, assignee, list_id,
           external_system, external_instance, external_id, external_url, external_base,
           fields, raw, created_at, updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20::jsonb,now(),now())
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20::jsonb,COALESCE($21::timestamptz,now()),COALESCE($22::timestamptz,now()))
        RETURNING id`,
       [level, parentId, name, description, nativeStatusOf(statusCategory), statusRaw, statusCategory, author,
        priority, startDate, dueDate, theirsAssigneeCol, listId,
        system, instance, externalId, it.provenance.external_url ?? null, baseJson,
-       JSON.stringify(fieldsJson), rawJson == null ? null : JSON.stringify(rawJson)],
+       JSON.stringify(fieldsJson), rawJson == null ? null : JSON.stringify(rawJson),
+       theirsCreatedAt, theirsUpdatedAt],
     );
     id = (ins.rows[0] as { id: number }).id;
     let asort = 0;
@@ -910,12 +916,14 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
           name=$4, description=$5, status=$6, status_raw=$7, status_category=$8,
           priority=$9, start_date=$10, due_date=$11, assignee=$12, list_id=$13,
           external_url=$14, external_base=$15::jsonb,
-          fields=$16::jsonb, raw=$17::jsonb, updated_at=now()
+          fields=$16::jsonb, raw=$17::jsonb,
+          created_at=COALESCE($18::timestamptz, created_at), updated_at=COALESCE($19::timestamptz, now())
         WHERE id=$1`,
       [id, level, parentId, mName, mDesc, mStatus, mRaw, mCat,
        mPriority, mStart, mDue, mAssignee, mListId,
        it.provenance.external_url ?? null, newBase,
-       JSON.stringify(fieldsJson), rawJson == null ? null : JSON.stringify(rawJson)]);
+       JSON.stringify(fieldsJson), rawJson == null ? null : JSON.stringify(rawJson),
+       theirsCreatedAt, theirsUpdatedAt]);
     appliedName = mName; appliedDesc = mDesc;
 
     // task_assignee 섀도 동기(머지 결과 기준 통째 교체 — project-store.syncTaskAssignees 시맨틱).
