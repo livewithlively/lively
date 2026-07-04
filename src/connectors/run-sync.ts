@@ -10,7 +10,7 @@
 //  멱등: 아이템은 (system,instance,external_id) upsert — 두 번 돌려도 중복 없음(라우팅에 따라 project/knowledge/source).
 //  커서는 **모든 단계 성공 후에만** 전진 — 중도 실패 run 은 같은 윈도를 다음 run 이 재폴링한다(유실 없음 불변식, CTO wiki-sync 동일).
 import {
-  initItemSchema, ingestItems,
+  initItemSchema, ingestItems, itemsPool,
   getConnectorState, setConnectorState,
   type RawItem,
 } from "../items/store.js";
@@ -20,6 +20,10 @@ import {
   getTeam, enumerateLists, fetchListTasks, fetchTeamTasks,
   toRawItem, type ClickUpTask,
 } from "./clickup.js";
+import { getNotionRunStats } from "./notion.js";
+import {
+  materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived,
+} from "../v6/connector-mirror.js";
 import { logger } from "../log.js";
 
 const CURSOR_EPSILON_MS = 1000; // strict greater-than 커서의 동일 ms 경계 유실 방지 재폴링(멱등이라 무비용).
@@ -57,6 +61,7 @@ async function runGenericSync(system: string): Promise<boolean> {
   let batch: RawItem[] = [];
   let ingested = 0;
   const flush = async () => { if (batch.length) { ingested += await ingestItems(batch); batch = []; } };
+  const runStartIso = new Date().toISOString(); // #551 full 스윕 기준(이 시각 이전 last_synced_at = 이번 run 미관측)
 
   try {
     for await (const item of conn.backfill(sinceOpt)) {
@@ -70,6 +75,29 @@ async function runGenericSync(system: string): Promise<boolean> {
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
     return true;
+  }
+
+  // ── #551 notion 후처리 — 링크 물질화(연결구조) + 자식 순서 수렴(페이지 트리) + full 스윕(삭제 전파). ──
+  //  커넥터 내부 부분 실패(페이지/자산)는 예외로 안 오고 stats 로 온다 → 커서 동결로 다음 run 재수집(조용한 손실 금지).
+  if (system === "notion") {
+    const stats = getNotionRunStats();
+    try {
+      const links = await materializeNotionLinks(itemsPool);
+      const reordered = await applyNotionChildrenOrder(itemsPool);
+      let archived = 0;
+      if (!incremental && stats && stats.failures === 0) {
+        archived = await sweepNotionArchived(itemsPool, runStartIso); // full + 무실패에서만(오탐 아카이브 방지)
+      }
+      logger.info({ system, links, reordered, archived, stats }, "notion 후처리 완료(링크·순서·스윕)");
+    } catch (err) {
+      logger.error({ err: (err as Error)?.message ?? String(err) }, "notion 후처리 실패 — 커서 동결(다음 run 재수집)");
+      return true;
+    }
+    if (stats && stats.failures > 0) {
+      logger.error({ failures: stats.failures, failedIds: stats.failedIds.slice(0, 20) },
+        "notion 부분 실패 — 커서 동결(방출분은 멱등 적재됨, 다음 run 이 실패분 재수집)");
+      return true;
+    }
   }
 
   // 커서 전진 — 성공 후 max 관측시각이 이전보다 클 때만(시계 추측 금지: 0건/무진전이면 유지).

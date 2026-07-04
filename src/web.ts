@@ -6,6 +6,7 @@
 // 정적 자산은 비인증(사내망 전제) — 데이터는 전부 /api/ui 토큰/세션 뒤. domainmap 은 무인증 서비스라
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
@@ -72,6 +73,21 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true });
   }));
+
+  // ── #551 노션 자산(이미지/파일) 서빙 — 커넥터가 다운로드한 만료-URL 파일의 영구 사본. ──
+  //  본문 데이터라 인증 필수(public 정적 서빙은 비인증이므로 그쪽에 두지 않는다). <img> 는 same-origin
+  //  세션 쿠키가 실려 통과. 파일명은 커넥터 해시(경로문자 없음)지만 화이트리스트+정규화로 이중 방어.
+  const notionAssetDir = process.env.NOTION_ASSET_DIR || path.resolve(process.cwd(), "data", "notion-assets");
+  app.get("/api/ui/notion-assets/:file", ...mw(null), (req, res) => {
+    const file = String(req.params.file ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
+      res.status(400).json({ error: "잘못된 자산 이름" }); return;
+    }
+    const full = path.resolve(notionAssetDir, file);
+    if (full !== path.join(notionAssetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
+    res.setHeader("Cache-Control", "private, max-age=86400"); // 파일명이 내용 좌표(해시)라 하루 캐시 무해
+    res.sendFile(full, (err) => { if (err && !res.headersSent) res.status(404).json({ error: "자산 없음" }); });
+  });
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {

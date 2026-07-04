@@ -23,7 +23,7 @@ const REV_OP_LABEL = { insert: '생성', update: '수정', set_lifecycle: '상�
 // 정렬 옵션(탐색·검토 공용) — 백엔드 orderBy 화이트리스트(updated_at|name|sort)와 1:1.
 const SORT_OPTS = [['updated_at', '최신순'], ['name', '이름순'], ['sort', '수동 정렬순']];
 // lifecycle(상태) 라벨 — active=유효, rejected=반려, superseded=대체됨.
-const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨' };
+const LIFECYCLE_LABEL = { active: '유효', rejected: '반려', superseded: '대체됨', archived: '보관됨' }; // archived(#551): 외부 미러 원본 삭제/보관 전파
 // 작업(activity) 유형 라벨 — 백엔드 activity.type(성격, 프로젝트 #182)과 1:1. 작업 현황 대시보드 유형분포 표시용.
 //  type = "이 작업이 무엇인가". 커밋은 유형이 아니라 commit_sha 존재로 표현(어떤 유형이든 커밋 동반 가능).
 const ACTIVITY_TYPE_LABEL = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
@@ -128,8 +128,8 @@ function safeHref(raw) {
     // 스킴 없는 일반 토큰(예: example.com) — 상대 취급(절대 스크립트 실행 불가).
     return url;
 }
-// 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·링크([..](..)) 지원.
-// 모든 미매칭 문자는 텍스트 노드로 누적되어 createTextNode 로만 들어간다.
+// 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·링크·이미지·취소선(~~)·밑줄(++)·하이라이트(==) 지원.
+//  이미지/밑줄/하이라이트는 #551 노션 무손실 미러 본문(notion-md.ts 방언) 대응 — 일반 저작 지식에도 동일 적용.
 function renderInline(text) {
     const out = [];
     let buf = '';
@@ -139,6 +139,17 @@ function renderInline(text) {
     } };
     const s = text;
     let i = 0;
+    // 쌍 구분자(~~, ++, ==) 공통 처리 — 내용이 비거나 공백으로 시작하면 평문 폴백(오탐 방지: "a == b").
+    const paired = (mark, make) => {
+        const end = s.indexOf(mark, i + 2);
+        if (end > i + 1 && s[i + 2] !== ' ' && s[i + 2] !== undefined) {
+            flush();
+            out.push(make(s.slice(i + 2, end)));
+            i = end + 2;
+            return true;
+        }
+        return false;
+    };
     while (i < s.length) {
         const ch = s[i];
         // 인라인 코드 `...`
@@ -151,6 +162,24 @@ function renderInline(text) {
                 continue;
             }
         }
+        // 이미지 ![alt](url) — 링크보다 먼저(문법이 링크의 상위집합).
+        if (ch === '!' && s[i + 1] === '[') {
+            const close = s.indexOf(']', i + 2);
+            if (close > i && s[close + 1] === '(') {
+                const paren = s.indexOf(')', close + 2);
+                if (paren > close) {
+                    const alt = s.slice(i + 2, close);
+                    const src = safeHref(s.slice(close + 2, paren));
+                    flush();
+                    if (src)
+                        out.push(el('img', { class: 'md-img', src, alt, loading: 'lazy' }));
+                    else if (alt)
+                        out.push(document.createTextNode(alt));
+                    i = paren + 1;
+                    continue;
+                }
+            }
+        }
         // 굵게 **...**
         if (ch === '*' && s[i + 1] === '*') {
             const end = s.indexOf('**', i + 2);
@@ -161,6 +190,13 @@ function renderInline(text) {
                 continue;
             }
         }
+        // 취소선 ~~...~~ · 밑줄 ++...++ · 하이라이트 ==...==
+        if (ch === '~' && s[i + 1] === '~' && paired('~~', (t) => el('del', { class: 'md-del' }, ...renderInline(t))))
+            continue;
+        if (ch === '+' && s[i + 1] === '+' && paired('++', (t) => el('u', { class: 'md-u' }, ...renderInline(t))))
+            continue;
+        if (ch === '=' && s[i + 1] === '=' && paired('==', (t) => el('mark', { class: 'md-mark' }, ...renderInline(t))))
+            continue;
         // 기울임 *...*(공백으로 시작/끝나지 않는 단일 별표)
         if (ch === '*' && s[i + 1] !== '*' && s[i + 1] !== ' ' && s[i + 1] !== undefined) {
             const end = s.indexOf('*', i + 1);
@@ -181,6 +217,7 @@ function renderInline(text) {
                     const href = safeHref(s.slice(close + 2, paren));
                     flush();
                     if (href) {
+                        // 내부 앵커(#/k/…)는 같은 SPA 이동이라 새 탭 힌트 불필요, 외부는 noopener.
                         out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, ...renderInline(label)));
                     }
                     else {
@@ -198,6 +235,75 @@ function renderInline(text) {
     flush();
     return out;
 }
+// ── :::컨테이너(#551 notion-md 방언) — :::타입 [속성|요약] … ::: (중첩 가능). ──
+//  toggle(details)·callout(틴트 카드)·columns/column(flex)·synced(동기화 블록)·toc·unsupported.
+//  미지 타입은 마커 없이 내용만 렌더(우아한 강등 — 다른 MD 소비자와 같은 자세).
+function parseContainerAttrs(rest) {
+    const attrs = {};
+    let summary = '';
+    for (const tok of String(rest || '').split(/\s+/)) {
+        const m = /^([a-zA-Z_-]+)=(.*)$/.exec(tok);
+        if (m && summary === '')
+            attrs[m[1]] = m[2];
+        else
+            summary += (summary ? ' ' : '') + tok;
+    }
+    return { attrs, summary: summary.trim() };
+}
+function renderContainer(type, rest, bodyLines) {
+    const { attrs, summary } = parseContainerAttrs(rest);
+    const inner = () => renderMarkdown(bodyLines.join('\n'));
+    const moveChildren = (from, to) => { while (from.firstChild)
+        to.append(from.firstChild); return to; };
+    switch (type) {
+        case 'toggle':
+        case 'template': {
+            const det = el('details', { class: 'md-toggle' }, el('summary', { class: 'md-toggle-sum' }, ...renderInline(summary || rest || '펼치기')));
+            return moveChildren(inner(), det);
+        }
+        case 'callout': {
+            const color = String(attrs.color || '').replace(/_background$/, '') || 'default';
+            const box = el('div', { class: 'md-callout md-callout-' + color.replace(/[^a-z]/g, '') });
+            if (attrs.icon)
+                box.append(el('span', { class: 'md-callout-ic', 'aria-hidden': 'true', text: attrs.icon }));
+            box.append(moveChildren(inner(), el('div', { class: 'md-callout-body' })));
+            return box;
+        }
+        case 'columns': {
+            const row = el('div', { class: 'md-columns' });
+            const rendered = inner();
+            // 자식 중 md-column 만 수평 배치 — 그 외 노드는 그대로(방어).
+            while (rendered.firstChild)
+                row.append(rendered.firstChild);
+            return row;
+        }
+        case 'column': {
+            const col = el('div', { class: 'md-column' });
+            const ratio = Number(attrs.ratio);
+            if (Number.isFinite(ratio) && ratio > 0 && ratio <= 1)
+                col.style.flex = String(ratio) + ' 1 0';
+            return moveChildren(inner(), col);
+        }
+        case 'synced': {
+            const box = el('div', { class: 'md-synced' });
+            box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));
+            if (attrs.missing === 'true') {
+                box.append(el('div', { class: 'md-synced-missing', text: '원본 블록이 공유 범위 밖이라 내용을 가져올 수 없습니다.' }));
+            }
+            else {
+                box.append(moveChildren(inner(), el('div', { class: 'md-synced-body' })));
+            }
+            return box;
+        }
+        case 'toc':
+            return el('div', { class: 'md-block-chip md-toc', text: '목차 (원본 문서의 목차 블록)' });
+        case 'unsupported':
+            return el('div', { class: 'md-block-chip md-unsup', title: attrs.id ? 'block ' + attrs.id : '',
+                text: '지원되지 않는 블록' + (attrs.type ? ': ' + attrs.type : '') });
+        default:
+            return inner(); // 미지 컨테이너 — 내용만(마커 무시)
+    }
+}
 // 블록 파서 — 줄 단위로 블록을 구성한다. 모든 텍스트는 renderInline 경유(textContent).
 function renderMarkdown(md) {
     const root = el('div', { class: 'md' });
@@ -213,11 +319,53 @@ function renderMarkdown(md) {
             t = t.slice(0, -1);
         return t.split('|').map((c) => c.trim());
     };
+    const contOpen = (l) => /^:::\s*[a-zA-Z_-]/.test(l);
+    const contClose = (l) => l.trim() === ':::';
     while (i < lines.length) {
         let line = lines[i];
         // 빈 줄 — 스킵.
         if (line.trim() === '') {
             i++;
+            continue;
+        }
+        // ::: 컨테이너(#551) — 중첩 깊이 추적으로 매칭 닫힘까지 수집.
+        const cont = /^:::\s*([a-zA-Z_-]+)\s*(.*)$/.exec(line);
+        if (cont) {
+            const body = [];
+            let depth = 1;
+            i++;
+            while (i < lines.length && depth > 0) {
+                const l = lines[i];
+                if (contOpen(l))
+                    depth++;
+                else if (contClose(l)) {
+                    depth--;
+                    if (depth === 0) {
+                        i++;
+                        break;
+                    }
+                }
+                body.push(l);
+                i++;
+            }
+            root.append(renderContainer(cont[1], cont[2], body));
+            continue;
+        }
+        if (contClose(line)) {
+            i++;
+            continue;
+        } // 고아 닫힘 마커 — 무시(안전)
+        // 수식 블록 $$ … $$ (#551) — LaTeX 원문을 수식 스타일 프리로.
+        if (line.trim() === '$$') {
+            const eq = [];
+            i++;
+            while (i < lines.length && lines[i].trim() !== '$$') {
+                eq.push(lines[i]);
+                i++;
+            }
+            if (i < lines.length)
+                i++;
+            root.append(el('pre', { class: 'md-eq', title: 'LaTeX' }, el('code', { text: eq.join('\n') })));
             continue;
         }
         // 코드블록 ``` ... ```
@@ -273,13 +421,16 @@ function renderMarkdown(md) {
                 rows.push(splitRow(lines[i]));
                 i++;
             }
+            const headerEmpty = header.every((c) => !c);
             const table = el('table', { class: 'md-table' });
-            const thead = el('thead');
-            const htr = el('tr');
-            for (const c of header)
-                htr.append(el('th', {}, ...renderInline(c)));
-            thead.append(htr);
-            table.append(thead);
+            if (!headerEmpty) { // 노션 '열 헤더 없는 표'는 빈 헤더행으로 옴 — thead 생략(#551)
+                const thead = el('thead');
+                const htr = el('tr');
+                for (const c of header)
+                    htr.append(el('th', {}, ...renderInline(c)));
+                thead.append(htr);
+                table.append(thead);
+            }
             const tbody = el('tbody');
             for (const r of rows) {
                 const tr = el('tr');
@@ -291,31 +442,79 @@ function renderMarkdown(md) {
             root.append(table);
             continue;
         }
-        // 리스트 — 순서/비순서 연속 블록. 들여쓰기 중첩은 한 단계만 단순 지원.
-        const bullet = /^(\s*)([-*+])\s+(.*)$/.exec(line);
-        const ordered = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
-        if (bullet || ordered) {
-            const isOrdered = !!ordered;
-            const listTag = isOrdered ? 'ol' : 'ul';
-            const list = el(listTag, { class: 'md-list' });
-            const itemRe = isOrdered ? /^(\s*)(\d+)[.)]\s+(.*)$/ : /^(\s*)([-*+])\s+(.*)$/;
+        // 리스트 — 순서/비순서 + 체크박스(- [ ]) + 들여쓰기(2칸/단) 중첩(#551). 연속 리스트 줄을 모아 트리로 조립.
+        const bulletRe = /^(\s*)([-*+])\s+(.*)$/;
+        const orderedRe = /^(\s*)(\d+)[.)]\s+(.*)$/;
+        if (bulletRe.test(line) || orderedRe.test(line)) {
+            const items = [];
             while (i < lines.length) {
-                const m = itemRe.exec(lines[i]);
-                if (!m) {
-                    // 같은 리스트의 이어지는(들여쓴, 마커 없는) 줄은 직전 항목에 합친다.
-                    if (lines[i].trim() !== '' && /^\s+/.test(lines[i]) && list.lastChild) {
-                        list.lastChild.append(document.createTextNode(' '));
-                        for (const n of renderInline(lines[i].trim()))
-                            list.lastChild.append(n);
-                        i++;
+                const l = lines[i];
+                const bm = bulletRe.exec(l);
+                const om = bm ? null : orderedRe.exec(l);
+                if (bm || om) {
+                    const m = bm || om;
+                    const level = Math.floor(m[1].replace(/\t/g, '  ').length / 2);
+                    let text = m[3];
+                    let checked = null;
+                    if (bm) {
+                        const cb = /^\[( |x|X)\]\s+(.*)$/.exec(text);
+                        if (cb) {
+                            checked = cb[1] !== ' ';
+                            text = cb[2];
+                        }
+                    }
+                    items.push({ level, ordered: !!om, num: om ? Number(om[2]) : 0, checked, text });
+                    i++;
+                    continue;
+                }
+                // 이어지는(들여쓴, 마커 없는) 줄은 직전 항목 텍스트에 합류.
+                if (l.trim() !== '' && /^\s+/.test(l) && items.length) {
+                    items[items.length - 1].text += ' ' + l.trim();
+                    i++;
+                    continue;
+                }
+                break;
+            }
+            // 레벨 트리 조립 — 같은 레벨·같은 종류(ol/ul) 연속을 한 리스트로, 더 깊은 항목은 직전 li 아래로.
+            const build = (idx, level) => {
+                const first = items[idx];
+                const listTag = first.ordered ? 'ol' : 'ul';
+                const list = el(listTag, { class: 'md-list' });
+                if (first.ordered && first.num > 1)
+                    list.setAttribute('start', String(first.num));
+                let j = idx;
+                while (j < items.length && items[j].level >= level) {
+                    if (items[j].level > level) {
+                        const sub = build(j, items[j].level);
+                        (list.lastChild || list).append(sub.node);
+                        j = sub.next;
                         continue;
                     }
-                    break;
+                    if (items[j].ordered !== first.ordered)
+                        break; // 같은 레벨에서 종류 전환 → 새 리스트
+                    const it = items[j];
+                    const li = el('li', {});
+                    if (it.checked != null) {
+                        const cb = el('input', { type: 'checkbox', class: 'md-check', disabled: '', tabindex: '-1', 'aria-hidden': 'true' });
+                        cb.checked = it.checked;
+                        li.classList.add('md-task');
+                        if (it.checked)
+                            li.classList.add('md-task-done');
+                        li.append(cb);
+                    }
+                    for (const n of renderInline(it.text))
+                        li.append(n);
+                    list.append(li);
+                    j++;
                 }
-                list.append(el('li', {}, ...renderInline(m[3])));
-                i++;
+                return { node: list, next: j };
+            };
+            let idx = 0;
+            while (idx < items.length) {
+                const r = build(idx, items[idx].level);
+                root.append(r.node);
+                idx = r.next;
             }
-            root.append(list);
             continue;
         }
         // 단락 — 빈 줄/블록 경계 전까지 모은다. 줄바꿈은 <br> 로 보존.
@@ -327,7 +526,8 @@ function renderMarkdown(md) {
             // 다음 블록 시작이면 단락 종료.
             if (/^(#{1,6})\s+/.test(l) || /^(```|~~~)/.test(l) || /^\s*>\s?/.test(l) ||
                 /^(-{3,}|\*{3,}|_{3,})\s*$/.test(l) || /^(\s*)([-*+])\s+/.test(l) ||
-                /^(\s*)(\d+)[.)]\s+/.test(l) || (l.indexOf('|') >= 0 && lines[i + 1] != null && isTableSep(lines[i + 1])))
+                /^(\s*)(\d+)[.)]\s+/.test(l) || contOpen(l) || contClose(l) || l.trim() === '$$' ||
+                (l.indexOf('|') >= 0 && lines[i + 1] != null && isTableSep(lines[i + 1])))
                 break;
             para.push(l);
             i++;
@@ -445,7 +645,7 @@ function errorNote(e, prefix) {
 }
 // ── 공용: 상태 점 + 라벨(§0.5 — 채운 필 금지, 6px 점 + 무채 텍스트) ──
 function lifecycleDot(lifecycle) {
-    const cls = lifecycle === 'active' ? 'st ok' : (lifecycle === 'rejected' ? 'st dim' : 'st');
+    const cls = lifecycle === 'active' ? 'st ok' : (lifecycle === 'rejected' || lifecycle === 'archived' ? 'st dim' : 'st');
     return el('span', { class: cls, text: LIFECYCLE_LABEL[lifecycle] || lifecycle });
 }
 function confidenceDot(confidence) {
@@ -624,4 +824,4 @@ function personFace(id, cls, name) {
         loadPeopleAvatars().then(() => paintFace(wrap, id, name));
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderInline, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

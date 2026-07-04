@@ -174,7 +174,8 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
 }
 
 export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
-  const k = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  // fields 는 목록(K_COLS)엔 무겁고 상세엔 필수(#551 노션 속성 패널) — 상세 조회에서만 포함.
+  const k = await one(itemsPool, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1`, [name]);
   if (!k) return undefined;
   const categories = await q(itemsPool,
     `SELECT kc.category_id, kc.state, c.space, c.key, c.name
@@ -183,7 +184,32 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
   const sources = await q(itemsPool,                          // #290 인용한 자료(derived_from/cites)
     `SELECT ks.source_id, ks.relation, s.title, s.kind FROM knowledge_source ks JOIN source s ON s.id=ks.source_id
      WHERE ks.name=$1 ORDER BY ks.relation`, [name]);
-  return { ...k, categories, links, sources };
+  // #551 페이지 트리 — 자식(sort 순, archived 는 UI 가 배지로 구분)과 조상 체인(브레드크럼). parent_name 소프트참조.
+  const children = await q(itemsPool,
+    `SELECT name, title, sort, lifecycle, external_system, type,
+            fields->'notion'->>'kind' AS notion_kind
+     FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'
+     ORDER BY sort, title NULLS LAST, name`, [name]);
+  const ancestors = await q(itemsPool,
+    `WITH RECURSIVE up AS (
+       SELECT k2.name, k2.title, k2.parent_name, 1 AS depth
+       FROM knowledge k2 WHERE k2.name = (SELECT parent_name FROM knowledge WHERE name=$1)
+       UNION ALL
+       SELECT k3.name, k3.title, k3.parent_name, up.depth + 1
+       FROM knowledge k3 JOIN up ON k3.name = up.parent_name WHERE up.depth < 20
+     ) SELECT name, title FROM up ORDER BY depth DESC`, [name]);
+  return { ...k, categories, links, sources, children, ancestors };
+}
+
+// #551 페이지 트리 뷰 데이터 — 외부 미러(예: notion) 전체의 얕은 트리 스켈레톤(name/title/parent/sort/lifecycle/kind).
+//  목록 cap(500) 우회 전용 표면: 본문·fields 미포함이라 수천 행도 가볍다. 클라이언트가 트리를 조립한다.
+export async function knowledgeTreeData(system: string, limit = 20000): Promise<Record<string, unknown>[]> {
+  return q(itemsPool,
+    `SELECT name, title, parent_name, sort, lifecycle, external_id, external_url, updated_at,
+            fields->'notion'->>'kind' AS kind
+     FROM knowledge WHERE external_system=$1 AND lifecycle <> 'superseded'
+     ORDER BY parent_name NULLS FIRST, sort, title NULLS LAST, name
+     LIMIT $2`, [system, Math.min(limit, 50000)]);
 }
 
 /** resolveUpsertFacets 입력 — upsertKnowledge input 의 facet 부분집합(명시 시 우선). 상위 input 을 통째로 넘겨도 무방(구조적). */
@@ -635,5 +661,10 @@ export async function knowledgeGraphData(limit = 500): Promise<{ nodes: Record<s
      ) cat ON true
      WHERE k.lifecycle='active' ORDER BY k.updated_at DESC LIMIT $1`, [Math.min(limit, 2000)]);
   const edges = await q(itemsPool, `SELECT from_name, to_name, relation FROM knowledge_link`);
-  return { nodes, edges };
+  // #551 페이지 트리 위계 엣지(parent_name) — relation='child'(자식→부모). 아틀라스가 트리+링크를 함께 표현.
+  const hierarchy = await q(itemsPool,
+    `SELECT k.name AS from_name, k.parent_name AS to_name, 'child' AS relation
+     FROM knowledge k JOIN knowledge p ON p.name = k.parent_name
+     WHERE k.lifecycle='active' AND p.lifecycle='active'`);
+  return { nodes, edges: [...edges, ...hierarchy] };
 }

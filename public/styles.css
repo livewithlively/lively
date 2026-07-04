@@ -3574,3 +3574,79 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .dmx-sev{font-size:9.5px;font-family:ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:4px;background:#f8efe2;color:var(--dmx-warn);}
 .dmx-dcard.viol .dmx-sev{background:#fbeae7;color:var(--dmx-viol);}
 .dmx-why{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.5;}
+
+/* ═══════════ #551 노션 무손실 미러 — 리치 본문(md 확장) + 페이지 트리 ═══════════ */
+/* 인라인 확장 — 이미지·취소선·밑줄·하이라이트. 이미지는 본문 폭 안에서만(넘침 금지). */
+.md-img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; display: block; }
+p.md-p > .md-img:only-child { margin: 10px 0; }
+.md-del { color: var(--muted, #6b7a90); }
+.md-u { text-decoration: underline; text-underline-offset: 2px; }
+.md-mark { background: #FFF3C4; color: inherit; border-radius: 3px; padding: 0 2px; }
+
+/* 체크박스(할 일) — 노션 to_do. 불릿 대신 체크박스만(이중 마커 방지). */
+.md-list li.md-task { list-style: none; margin-left: -18px; }
+.md-check { width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; accent-color: var(--blue); pointer-events: none; }
+.md-list li.md-task-done { color: var(--muted, #6b7a90); }
+.md-list li.md-task-done > .md-check + * { text-decoration: none; }
+
+/* 토글(details) — 노션 toggle/토글헤딩. 헤어라인 카드 + 삼각 마커. */
+.md-toggle { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 10px 0; background: var(--bg); }
+.md-toggle-sum { cursor: pointer; font-weight: 600; color: var(--ink); }
+.md-toggle-sum:hover { color: var(--blue); }
+.md-toggle[open] > .md-toggle-sum { margin-bottom: 8px; }
+.md-toggle > .md > :last-child { margin-bottom: 0; }
+
+/* 콜아웃 — 아이콘 + 틴트 카드. 색은 노션 color 를 라이블리 톤으로 순화(원색 배경 금지). */
+.md-callout { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 14px; margin: 12px 0; background: var(--bg-note); }
+.md-callout-ic { flex: none; font-size: 16px; line-height: 1.5; }
+.md-callout-body { min-width: 0; flex: 1; }
+.md-callout-body > :last-child, .md-callout-body .md > :last-child { margin-bottom: 0; }
+.md-callout-gray, .md-callout-brown { background: #F7F8FA; }
+.md-callout-orange, .md-callout-yellow { background: #FFF9EC; border-color: #F3E8CE; }
+.md-callout-green { background: var(--bg-success); border-color: #DCF0E8; }
+.md-callout-blue, .md-callout-default { background: var(--bg-note); }
+.md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
+.md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
+
+/* 컬럼 레이아웃 — flex(비율은 인라인 flex 값), 좁은 화면은 세로 강등. */
+.md-columns { display: flex; gap: 22px; margin: 8px 0; align-items: flex-start; }
+.md-columns > .md-column { flex: 1 1 0; min-width: 0; }
+@media (max-width: 760px) { .md-columns { flex-direction: column; gap: 4px; } }
+
+/* 동기화 블록 — 대시 보더(참조 콘텐츠임을 표시). */
+.md-synced { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.md-synced-body > :last-child { margin-bottom: 0; }
+.md-synced-missing { color: var(--muted, #6b7a90); font-size: 13px; margin-top: 6px; }
+
+/* 블록 칩 — toc/unsupported/synced 라벨(채운 필 금지 관례 → 옅은 보더 칩). */
+.md-block-chip { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--muted, #6b7a90);
+  border: 1px solid var(--line); border-radius: 7px; padding: 2px 8px; margin: 4px 0; background: var(--bg); }
+.md-unsup { border-style: dashed; }
+
+/* 수식 블록 — 코드 프리 변형(LaTeX 원문 표시). */
+.md-eq { background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 14px; margin: 10px 0; overflow-x: auto; }
+.md-eq code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--ink); }
+
+/* 상세 — 보관됨 배지 · 하위 페이지 행 · 브레드크럼 현재 페이지. */
+.kn-chip.kn-archived { color: var(--muted, #6b7a90); border: 1px solid var(--line); background: var(--bg); }
+.kn-linkrow.kn-row-archived { opacity: .55; }
+.kn-link-child { background: var(--bg-tint); color: var(--ink); }
+.crumb-cur { font-weight: 600; color: var(--ink); }
+
+/* 사이드바 페이지 트리 — 카테고리 트리와 같은 언어(들여쓰기 + 헤어라인 가이드). */
+.kn-mirror-tree { margin-top: 20px; }
+.kn-mirror-eyebrow { margin-bottom: 6px; }
+.kn-mirror-nodes { font-size: 13px; }
+.kn-tree-branch { margin: 0; }
+.kn-tree-branch > .kn-tree-sum { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.kn-tree-branch > .kn-tree-sum::-webkit-details-marker { display: none; }
+.kn-tree-sum::before { content: '▸'; font-size: 10px; color: var(--muted, #6b7a90); flex: none; transition: transform .12s ease; }
+.kn-tree-branch[open] > .kn-tree-sum::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .kn-tree-sum::before { transition: none; } }
+.kn-tree-leaf { display: flex; align-items: center; gap: 6px; padding-left: 14px; }
+.kn-tree-kids { margin-left: 13px; border-left: 1px solid var(--line); padding-left: 7px; }
+.kn-tree-link { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.kn-tree-link:hover { color: var(--blue); }
+.kn-tree-archived { opacity: .5; }

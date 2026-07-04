@@ -169,9 +169,10 @@ export async function initV6Schema(): Promise<string> {
     END $$;
     -- lifecycle 단순화(2026-06-23): rejected 폐기 — 제거는 삭제(휴지통, 복원가능)로 통일. 가역 숨김(반려) 개념 삭제.
     --  기존 rejected 행은 active 복귀(비파괴). 제약은 redefine 이라 DROP+ADD(멱등). superseded 는 버전 교체 축이라 유지.
+    -- archived 추가(2026-07-04 #551): 외부 미러의 원본 아카이브/휴지통/삭제 전파 자리 — 하드삭제 대신 보존(기본 목록에선 lifecycle='active' 필터로 숨음).
     UPDATE knowledge SET lifecycle='active' WHERE lifecycle='rejected';
     ALTER TABLE knowledge DROP CONSTRAINT IF EXISTS knowledge_lifecycle_chk;
-    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','superseded'));
+    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','superseded','archived'));
     -- WIKI 핀(2026-06-23): is_wiki=true 인 지식의 제목+메타만 가이드 위키섹션으로 항상-주입(본문 제외, 인덱스).
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;
@@ -681,6 +682,10 @@ export async function initV6Schema(): Promise<string> {
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_link_uq ON knowledge_link(from_name, to_name, relation);
     CREATE INDEX IF NOT EXISTS knowledge_link_from_idx ON knowledge_link(from_name);
     CREATE INDEX IF NOT EXISTS knowledge_link_to_idx ON knowledge_link(to_name);
+    -- origin(2026-07-04 #551): 링크 생성 주체 — 'user'(사람/MCP) | 'connector:<system>'(커넥터가 노션 멘션/링크를 자동 물질화).
+    --  커넥터는 자기 origin 링크만 삭제·재작성한다(사람이 만든 링크 불가침). 비파괴 ADD COLUMN(기존 행=user).
+    ALTER TABLE knowledge_link ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user';
+    CREATE INDEX IF NOT EXISTS knowledge_link_origin_idx ON knowledge_link(origin) WHERE origin <> 'user';
   `);
 
   // ── ⑭-b2) project_edge — 프로젝트↔프로젝트 그래프(후속 관계 등, knowledge_link idiom). ──

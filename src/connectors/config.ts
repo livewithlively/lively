@@ -61,6 +61,11 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       { key: "token", env: "NOTION_TOKEN", secret: true, required: true, label: "Integration Token", hint: "secret_..." },
       { key: "instance", env: "NOTION_INSTANCE", secret: false, label: "Instance", hint: "워크스페이스 식별자 (기본 default)" },
+      // #551 무손실 싱크 옵션
+      { key: "root_pages", env: "NOTION_ROOT_PAGES", secret: false, label: "루트 페이지", hint: "page/DB id 쉼표구분 — 지정 시 그 서브트리만 싱크(비우면 통합에 공유된 전체)" },
+      { key: "comments", env: "NOTION_COMMENTS", secret: false, label: "댓글 수집", hint: "page(기본: 페이지 단위) | all(블록 단위, 고비용) | off" },
+      { key: "asset_dir", env: "NOTION_ASSET_DIR", secret: false, label: "자산 저장 경로", hint: "이미지/파일 다운로드 디렉터리 (기본 ./data/notion-assets)" },
+      { key: "api_version", env: "NOTION_API_VERSION", secret: false, label: "API 버전", hint: "기본 2025-09-03 (data_source 분리)" },
     ],
   },
   clickup: {

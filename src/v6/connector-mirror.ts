@@ -82,6 +82,10 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   const fields = { ...baseFields, _item_type: it.type };
   const raw = it.raw == null ? null : redactDeep(it.raw);
   const author = `connector:${system}`;
+  // #551 아카이브 전파 — 원본이 아카이브/휴지통이면 lifecycle='archived'(기본 목록에서 숨고 보존). 아니면 active.
+  const lifecycle = baseFields.archived === true || baseFields.in_trash === true ? "archived" : "active";
+  // #551 형제 순서 — 커넥터가 sort 를 주면 반영, 없으면(타 커넥터) 기존값 유지(COALESCE).
+  const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. insert=항상 1건, no-op 재싱크=audit 생략. ──
   const prev = await client.query(
@@ -105,24 +109,25 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
         name, title, body_md, injection, provenance, lifecycle, confidence, source,
         external_system, external_instance, external_id, external_url,
         occurred_at, last_synced_at, parent_external_id, parent_name,
-        fields, raw, author, updated_at, updated_by)
-      VALUES($1,$2,$3,'recalled','observed','active','observed',$4,
+        fields, raw, author, sort, updated_at, updated_by)
+      VALUES($1,$2,$3,'recalled','observed',$14,'observed',$4,
              $4,$5,$6,$7,
              $8, now(), $9, $10,
-             $11::jsonb, $12::jsonb, $13, now(), $13)
+             $11::jsonb, $12::jsonb, $13, COALESCE($15, 0), now(), $13)
      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         title=EXCLUDED.title, body_md=EXCLUDED.body_md,
-        injection='recalled', provenance='observed', lifecycle='active', confidence='observed', source=EXCLUDED.source,
+        injection='recalled', provenance='observed', lifecycle=EXCLUDED.lifecycle, confidence='observed', source=EXCLUDED.source,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
         last_synced_at=now(), parent_external_id=EXCLUDED.parent_external_id, parent_name=EXCLUDED.parent_name,
-        fields=EXCLUDED.fields, raw=EXCLUDED.raw,
+        fields=EXCLUDED.fields, raw=EXCLUDED.raw, sort=COALESCE($15, knowledge.sort),
         version=knowledge.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by
      RETURNING name`,
     [name, title, body, system,
      instance, externalId, it.provenance.external_url ?? null,
      it.occurred_at ?? null, it.parent_external_id ?? null, parentName,
-     JSON.stringify(fields), raw == null ? null : JSON.stringify(raw), author],
+     JSON.stringify(fields), raw == null ? null : JSON.stringify(raw), author,
+     lifecycle, sort],
   );
   const finalName = (r.rows[0] as { name: string }).name;
 
@@ -319,4 +324,60 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
   if (target === "knowledge") return mirrorKnowledgeV6(client, it, system, externalId);
   if (target === "source") return mirrorSourceV6(client, it, system, externalId); // slack/gmail message 등 → 자료(distill 대상)
   return false; // 라우팅 정의 밖 — 미러 skip(보수적, 임의 분류 금지).
+}
+
+// ════════ #551 노션 무손실 싱크 — run-sync 후처리(set 기반, 멱등) ════════
+//  적재(ingestItems) 뒤에 run-sync 가 호출한다. 전부 SQL set 연산이라 재실행·부분실행 안전(수렴형).
+type PgRunner = pg.Pool | pg.PoolClient;
+
+/** fields.notion.links → knowledge_link 물질화. 커넥터 origin 링크만 재작성(사람 링크 불가침).
+ *  타깃이 아직 미적재면 그 엣지는 이번엔 생략 — 매 싱크 전체 재계산이라 다음 run 에 자동 수렴. */
+export async function materializeNotionLinks(db: PgRunner): Promise<number> {
+  await db.query(`DELETE FROM knowledge_link WHERE origin='connector:notion'`);
+  const r = await db.query(
+    `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
+     SELECT DISTINCT k.name, t.name, 'related', 'connector:notion', now(), now()
+     FROM knowledge k
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(k.fields->'notion'->'links', '[]'::jsonb)) AS l(link)
+     JOIN knowledge t
+       ON t.external_system='notion'
+      AND t.external_instance = k.external_instance
+      AND t.external_id = l.link->>'target_external_id'
+      AND t.name <> k.name
+     WHERE k.external_system='notion'
+     ON CONFLICT (from_name, to_name, relation) DO NOTHING`, // 같은 쌍의 사람(user) 링크가 이미 있으면 그대로 존중
+  );
+  return r.rowCount ?? 0;
+}
+
+/** 부모의 fields.notion.children_order → 자식 knowledge.sort 수렴.
+ *  증분에서 부모만 변경돼도(자식 재정렬) 자식 행 재적재 없이 순서가 맞는다. updated_at 은 건드리지 않는다(노이즈 방지). */
+export async function applyNotionChildrenOrder(db: PgRunner): Promise<number> {
+  const r = await db.query(
+    `UPDATE knowledge c SET sort = ord.idx
+     FROM (
+       SELECT p.external_instance AS inst, elem.value AS child_ext, (elem.ordinality - 1)::int AS idx
+       FROM knowledge p,
+            jsonb_array_elements_text(COALESCE(p.fields->'notion'->'children_order', '[]'::jsonb))
+              WITH ORDINALITY AS elem(value, ordinality)
+       WHERE p.external_system='notion'
+     ) ord
+     WHERE c.external_system='notion'
+       AND c.external_instance = ord.inst
+       AND c.external_id = ord.child_ext
+       AND c.sort IS DISTINCT FROM ord.idx`,
+  );
+  return r.rowCount ?? 0;
+}
+
+/** full 싱크 스윕 — 이번 run(runStartIso 이후)에 관측되지 않은 notion 미러를 archived 로(원본 삭제/공유해제 전파).
+ *  ⚠ 호출 조건: full 모드 + 커넥터 실패 0(부분 실패 run 에서 스윕하면 살아있는 페이지가 오탐 아카이브됨). */
+export async function sweepNotionArchived(db: PgRunner, runStartIso: string): Promise<number> {
+  const r = await db.query(
+    `UPDATE knowledge SET lifecycle='archived', updated_at=now(), updated_by='connector:notion'
+     WHERE external_system='notion' AND lifecycle='active'
+       AND (last_synced_at IS NULL OR last_synced_at < $1::timestamptz)`,
+    [runStartIso],
+  );
+  return r.rowCount ?? 0;
 }
