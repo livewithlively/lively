@@ -206,6 +206,8 @@ interface DbNode {
   parentOverride: string | null;
   sort: number | null;
   failed: boolean;
+  /** API 미지원 DB(linked 뷰 등) — 노드는 적재하되(트리 링크 보존) 행/스키마 없음. 실패로 집계하지 않는다. */
+  unsupported: boolean;
 }
 
 interface Traversal {
@@ -230,7 +232,7 @@ function pageNode(t: Traversal, id: string): PageNode {
 function dbNode(t: Traversal, id: string): DbNode {
   let n = t.dbs.get(id);
   if (!n) {
-    n = { id, db: null, dataSources: [], rowIds: [], parentOverride: null, sort: null, failed: false };
+    n = { id, db: null, dataSources: [], rowIds: [], parentOverride: null, sort: null, failed: false, unsupported: false };
     t.dbs.set(id, n);
   }
   return n;
@@ -475,23 +477,38 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
         });
       }
     } else {
-      // 구버전 API(2022-06-28) 폴백 — database 직접 query. 스키마는 db.properties.
-      for await (const row of paginate(t.cfg, (cursor) => ({
-        path: `/databases/${node.id}/query`, method: "POST",
-        body: {
-          page_size: PAGE_SIZE,
-          sorts: [{ timestamp: "created_time", direction: "ascending" }],
-          ...(cursor ? { start_cursor: cursor } : {}),
-        },
-      }))) {
-        if (row.object !== "page") continue;
-        const rp = row as unknown as NotionPage;
-        const rid = normalizeNotionId(rp.id);
-        const child = pageNode(t, rid);
-        if (!child.page) child.page = rp;
-        child.parentOverride = node.id;
-        child.isDbRow = true;
-        node.rowIds.push(rid);
+      // data_sources 가 빈 DB — ① 구버전 API(2022-06-28) 강제 시 database 직접 query ② **linked database 뷰**
+      //  (연결된 DB 보기)는 2025-09-03 에서 이 폴백이 400 invalid_request_url 로 거절된다(원본 query 는 원본
+      //  DB 가 공유 범위에 있으면 그쪽에서 수집됨). 후자는 노션 API 원천 한계 — 실패(커서 동결)가 아니라
+      //  미지원으로 분류하고 노드 자체는 적재해 트리/링크가 깨지지 않게 한다(#586 실배포에서 발견).
+      try {
+        for await (const row of paginate(t.cfg, (cursor) => ({
+          path: `/databases/${node.id}/query`, method: "POST",
+          body: {
+            page_size: PAGE_SIZE,
+            sorts: [{ timestamp: "created_time", direction: "ascending" }],
+            ...(cursor ? { start_cursor: cursor } : {}),
+          },
+        }))) {
+          if (row.object !== "page") continue;
+          const rp = row as unknown as NotionPage;
+          const rid = normalizeNotionId(rp.id);
+          const child = pageNode(t, rid);
+          if (!child.page) child.page = rp;
+          child.parentOverride = node.id;
+          child.isDbRow = true;
+          node.rowIds.push(rid);
+        }
+      } catch (err) {
+        const status = (err as { status?: number })?.status;
+        if (status === 400 || status === 404) {
+          node.unsupported = true;
+          t.stats.inaccessible++;
+          t.stats.inaccessibleIds.push(`${node.id}:linked-db`);
+          console.error(`[notion] DB 미지원(linked 뷰 등) ${node.id} — 행 수집 생략(원본 DB 가 공유 범위에 있으면 그쪽으로 수집됨)`);
+        } else {
+          throw err; // 5xx/429 소진 등 — 실제 실패(재시도 대상, 커서 동결)
+        }
       }
     }
   } catch (err) {
@@ -787,6 +804,11 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
   if (schemaSrc.length) {
     parts.push("## 스키마", dataSourceSchemaMd(schemaSrc));
   }
+  if (node.unsupported) {
+    parts.push(":::callout icon=ℹ️
+연결된 데이터베이스 보기(linked view)라 노션 API 가 행 조회를 지원하지 않습니다 — 원본 데이터베이스가 공유 범위에 있으면 내용은 그쪽 노드로 수집됩니다.
+:::");
+  }
   if (node.rowIds.length) {
     const listed = node.rowIds.slice(0, 100).map((rid) => {
       const rn = t.pages.get(rid);
@@ -822,6 +844,7 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
         url: db.url ?? null,
         icon: iconValue(db.icon as Rec | null, ctx),
         is_inline: db.is_inline ?? false,
+        unsupported: node.unsupported || undefined, // linked 뷰 — 행 조회 API 미지원(한계 고지)
         archived,
         links: linksArray(t, links),
         children_order: node.rowIds,
