@@ -110,6 +110,17 @@ export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, b
   return overrides?.has(cap.name) ? overrides.get(cap.name)! : true;
 }
 
+// MCP 툴 description 에 붙일 REST 등가 힌트(#550) — 이 capability 가 REST 로도 열려 있으면 경로를 노출한다.
+//  co-exposed(같은 handler)라 REST body 필드 = 이 툴의 inputSchema 와 동일 → 에이전트가 소스를 뒤지지 않고
+//  대량·기계적 작업 때 REST 반복호출 스크립트를 짤 수 있다(#533 '코드/대량은 REST', #550 실박스 계정 60+개 계기).
+function restEquivHint(cap: Capability): string {
+  const rest = cap.expose.rest;
+  const paths = Array.isArray(rest) ? rest.flatMap((r) => r.paths.map((p) => `${r.method} ${p}`)) : [];
+  return paths.length
+    ? `\n\nREST 등가: ${paths.join(" · ")} — body 는 이 입력 스키마와 동일 필드(같은 handler). 대량·기계적 작업(예: 계정 수십 개 일괄)은 MCP 건별 대신 이 경로로 REST 반복호출 스크립트가 낫다.`
+    : "";
+}
+
 // MCP 어댑터 — registry capability 를 isToolExposed 단일 판정으로 등록(후보 + 코드기본 + 운영자 override 한 경로).
 // (과거엔 tools/*.ts 가 이름목록을 넘기는 이중 게이트라 expose.mcp:true 인데 목록 누락 시 "고스트"가 생겼다.)
 export function registerMcpCapabilities(
@@ -123,7 +134,7 @@ export function registerMcpCapabilities(
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,
-      { title: cap.title, description: cap.description, inputSchema: cap.input, ...(meta ? { _meta: meta } : {}) },
+      { title: cap.title, description: cap.description + restEquivHint(cap), inputSchema: cap.input, ...(meta ? { _meta: meta } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
