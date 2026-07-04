@@ -528,9 +528,30 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             }
         }
         const main = el('div', { class: 'pjv-side-main' });
+        const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
         if (pjvBoardView.kanban) {
             // 칸반 보드(#541) — 선택 리스트의 커스텀 상태 컬럼(없으면 표준 3버킷)에 카드.
             main.append(pjvKanbanBoard(shownProjects, selList, { reload, canDelete }));
+        }
+        else if (selFolder) {
+            // 폴더/스페이스 뷰(#541) — 합집합 평탄 목록 대신 ClickUp 폴더 뷰처럼 **리스트별 접이식 그룹**.
+            //  트리 순서(직속 리스트 → 하위 폴더 리스트) 유지, 각 그룹은 리스트 자체 커스텀 상태로 하위그룹(byStatus 시).
+            main.append(pjvListColHead(effFields, anchorId, reload));
+            const scoped = folderListsDeep(selFolder.id);
+            let any = false;
+            for (const l of scoped) {
+                const g = groupByList.get(l.id);
+                if (!g)
+                    continue;
+                if (mineOnly && !visCount(g.projects))
+                    continue;
+                any = true;
+                // 폴더를 명시 선택한 문맥 — 접힘 저장값이 없으면 기본 펼침(보드 기본값은 '내 리스트만 펼침'이라 여기선 부적합).
+                const og = pjvListOpen.has(g.key) ? g : { ...g, open: true };
+                main.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+            }
+            if (!any)
+                main.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
         }
         else if (byStatus) {
             // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
@@ -602,10 +623,15 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const renderFolderNode = (f, depth) => {
             const open = isFolderOpen(f.id);
             const fkey = 'F' + f.id;
+            // Space(#541 — ClickUp 이관 최상위) 는 폴더와 구분되는 스페이스 스타일: 색 사각 아바타(첫 글자) + 볼드 라벨.
+            const isSpace = typeof f.external_id === 'string' && f.external_id.startsWith('space:');
             // 접힘/펼침 세모는 오른쪽 끝으로(#508) — 왼쪽에 두면 폴더 아이콘이 밀려 최상위 리스트와 어긋나 위계가 안 느껴진다.
             const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), title: open ? '접기' : '펼치기', 'aria-label': open ? '접기' : '펼치기', text: open ? '▾' : '▸' });
             caret.addEventListener('click', (e) => { e.stopPropagation(); toggleFolder(f.id); });
-            const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' }, pjvBundleIcon(f.color || 'var(--muted-2)'), el('span', { class: 'pjv-side-navlabel', text: f.name }), caret);
+            const glyph = isSpace
+                ? el('span', { class: 'pjv-side-space-avatar', text: (String(f.name).trim()[0] || 'S').toUpperCase(), style: 'background:' + (f.color || avatarColor('space' + f.id)) })
+                : pjvBundleIcon(f.color || 'var(--muted-2)');
+            const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (isSpace ? ' pjv-side-navspace' : '') + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' }, glyph, el('span', { class: 'pjv-side-navlabel', text: f.name }), caret);
             if (depth > 0)
                 fit.style.paddingLeft = `${8 + depth * 14}px`;
             fit.addEventListener('click', (e) => { e.stopPropagation(); if (!isFolderOpen(f.id))
