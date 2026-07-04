@@ -318,13 +318,13 @@ async function mirrorPmListV6(client: pg.PoolClient, it: RawItem, system: string
     const prevSettings = (row.settings ?? {}) as Record<string, unknown>;
     const merged: Record<string, unknown> = { ...prevSettings, clickup: clickupMeta };
     if (statusDefs.length) {
+      // 상태세트는 **순서 포함 전부 ClickUp 권위**(#541 어니스트 라운드2). 이전엔 순서만 로컬 커스텀을 3-way 보존했는데,
+      //  ①상태 정의는 아웃바운드 미푸시라 로컬 순서 편집이 ClickUp 과 발산만 낳고 ②커넥터 밖 경로(구버전 UI 수동 구성 등)로
+      //  로컬≠base 가 된 리스트는 그 오순서가 '커스텀'으로 오인돼 영구 고착됐다(어니스트 실사례 — 싱크로 안 낫는 상태 순서).
+      //  theirs 전면 채택이 고착도 다음 싱크에 자동 치유한다. (로컬 순서 커스텀이 필요해지면 ClickUp 에서 바꾸는 게 정본.)
       merged.statusMode = "custom";
-      merged.statuses = mergeStatusDefs(
-        (prevSettings.clickup as Record<string, unknown> | undefined)?.status_defs_base as unknown[] | undefined,
-        prevSettings.statuses as unknown[] | undefined,
-        statusDefs,
-      );
-      (merged.clickup as Record<string, unknown>).status_defs_base = statusDefs; // 다음 싱크의 로컬-무변경 판정 기준
+      merged.statuses = statusDefs;
+      (merged.clickup as Record<string, unknown>).status_defs_base = statusDefs; // 진단용(마지막 커넥터 기록 순서)
     }
     await client.query(
       `UPDATE project_list SET name=$2, folder_id=$3, settings=$4::jsonb,
@@ -343,33 +343,6 @@ async function mirrorPmListV6(client: pg.PoolClient, it: RawItem, system: string
       [name, folderId, JSON.stringify(settings), `connector:${system}`, system, instance, externalId]);
   }
   return true;
-}
-
-// 상태세트 병합(#541 상태순서) — **내용(라벨·색·카테고리·멤버십)은 ClickUp 권위, 순서는 로컬 커스텀 보존**.
-//  base = 커넥터가 마지막으로 쓴 defs(status_defs_base). 로컬이 base 와 동일(무변경)이면 incoming 채택(외부
-//  순서변경 포함 그대로 수렴). 로컬이 다르면(사용자가 편집기에서 순서 조정) 로컬 순서를 유지하되 각 항목
-//  내용은 incoming 으로 갱신, 사라진 키 제거, 신규 키는 뒤에 추가. base 미상(레거시)면 로컬 존중(보수적).
-function mergeStatusDefs(base: unknown[] | undefined, local: unknown[] | undefined, incoming: unknown[]): unknown[] {
-  const localArr = Array.isArray(local) ? local as Array<{ key?: unknown }> : null;
-  if (!localArr || !localArr.length) return incoming;
-  // 레거시(base 미기록) — 지금까진 싱크가 매번 통째 덮어썼으므로 '살아남은 로컬 커스텀'이 실존하지 않는다.
-  //  incoming(orderindex 교정 순서) 채택 — 구버전이 잘못 박아둔 순서를 이번 싱크가 바로잡는 경로.
-  if (!Array.isArray(base)) return incoming;
-  const localUnchanged = JSON.stringify(base) === JSON.stringify(localArr);
-  if (localUnchanged) return incoming;
-  const byKey = new Map((incoming as Array<{ key?: unknown }>).map((d) => [String(d?.key ?? ""), d]));
-  const out: unknown[] = [];
-  const used = new Set<string>();
-  for (const d of localArr) {
-    const k = String(d?.key ?? "");
-    const inc = byKey.get(k);
-    if (inc) { out.push(inc); used.add(k); } // 로컬 순서 위치 + ClickUp 내용
-  }
-  for (const d of incoming as Array<{ key?: unknown }>) {
-    const k = String(d?.key ?? "");
-    if (!used.has(k)) out.push(d); // 신규 상태는 뒤에
-  }
-  return out;
 }
 
 // ── view → project_view 멱등 upsert. 스코프(list|space|folder)별 FK 해소. config 는 원형 보존. ──
