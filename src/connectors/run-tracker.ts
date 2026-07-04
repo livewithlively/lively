@@ -8,13 +8,31 @@
 //     프로세스 내부용 — REST 와 크론이 섞여도 이 DB 가드가 겹침을 막는다).
 //   · 로그는 tail 400KB 로 캡(right) — 대형 백필도 행이 비대해지지 않게. 전체 관측이 필요하면 stats·검증기.
 //   · 게이트웨이 재시작으로 고아가 된 running 행은 다음 시작 시 error 로 정리(2시간 기준).
-import { spawn } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { itemsPool } from "../items/store.js";
 import { logger } from "../log.js";
 
 const LOG_CAP = 400_000;          // connector_run.log tail 캡(문자)
-const FLUSH_MS = 1500;            // 로그 flush 주기
+const FLUSH_MS = 1500;            // 로그 flush 주기(하트비트 겸용)
 const FLUSH_BYTES = 16_384;       // 즉시 flush 임계
+// 하트비트 liveness(#586 실배포 교훈): 게이트웨이(부모)가 재시작되면 로그 스트리밍·종료 기록을 하던 추적이
+//  통째로 사라져 run 행이 'running'으로 박제되고, 중복 가드가 그 유령 행을 근거로 새 싱크를 계속 막았다.
+//  status(의도)와 별개로 **부모가 1.5초마다 갱신하는 heartbeat_at(생존 증거)** 를 두고, 끊긴 지 STALE 이상이면
+//  죽은 실행으로 판정해 정리한다 — 상태 행과 실제 프로세스가 어긋나도 자가 치유되는 구조.
+const HEARTBEAT_STALE_MS = 120_000;
+
+// 이 게이트웨이가 띄운 살아있는 run — 취소(사용자 중지)와 종료 기록이 같은 행을 두고 경합하지 않게 한다.
+const liveRuns = new Map<number, { child: ChildProcess; canceled: boolean }>();
+
+/** pid 가 우리 run-sync 프로세스일 때만 kill — pid 재사용으로 무고한 프로세스를 죽이지 않게 명령줄 검증. */
+async function killIfRunSync(pid: number | null | undefined): Promise<boolean> {
+  if (!pid || !Number.isFinite(pid)) return false;
+  const cmd = await new Promise<string>((resolve) => {
+    execFile("ps", ["-p", String(pid), "-o", "command="], (err, stdout) => resolve(err ? "" : String(stdout)));
+  });
+  if (!cmd.includes("run-sync")) return false;
+  try { process.kill(pid, "SIGKILL"); return true; } catch { return false; }
+}
 // 타임아웃 정책(#586 실배포 교훈): 고정 상한은 대형 워크스페이스의 정당한 장기 full 백필을 죽여
 //  "매번 30분 낭비 후 처음부터" 라이브락을 만든다(어니스트 1,010페이지+DB 848 실측). 커넥터는 수 초마다
 //  진행 로그를 찍으므로 **정체(stall) 감지**가 올바른 liveness 가드다 — 출력이 STALL_MS 동안 0이면 행 걸림으로
@@ -39,6 +57,8 @@ function ensureRunSchema(): Promise<void> {
         log TEXT NOT NULL DEFAULT '',
         started_by TEXT);
       CREATE INDEX IF NOT EXISTS connector_run_system_idx ON connector_run(system, started_at DESC);
+      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS pid INT;
+      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now();
     `).then(() => undefined);
   }
   return schemaReady;
@@ -57,11 +77,16 @@ export async function startConnectorRun(
 ): Promise<StartRunResult> {
   await ensureRunSchema();
 
-  // 고아 정리 — 게이트웨이 재시작으로 close 콜백을 못 받은 running 행(2h 초과)은 error 로 닫는다.
-  await itemsPool.query(
+  // 유령 정리 — 하트비트가 STALE 이상 끊긴 running 행은 추적(부모)이 죽은 것(게이트웨이 재시작 등).
+  //  error 로 닫고, 자식이 살아 남아있으면 kill(명령줄 검증) — 커서 미전진이라 데이터는 다음 run 이 재수집.
+  const ghosts = await itemsPool.query(
     `UPDATE connector_run SET status='error', finished_at=now(),
-            log = right(log || E'\\n[tracker] 게이트웨이 재시작 등으로 중단된 실행 — 정리됨', ${LOG_CAP})
-     WHERE system=$1 AND status='running' AND started_at < now() - interval '2 hours'`, [system]);
+            log = right(log || E'\\n[tracker] 추적 끊김(게이트웨이 재시작 등, 하트비트 ${Math.round(HEARTBEAT_STALE_MS / 1000)}s 무응답) — 정리됨. 커서 미전진이라 다음 run 이 재수집합니다.', ${LOG_CAP})
+     WHERE system=$1 AND status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds'
+     RETURNING id, pid`, [system]);
+  for (const g of ghosts.rows as Array<{ id: number; pid: number | null }>) {
+    if (await killIfRunSync(g.pid)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
+  }
 
   // 중복 가드 — 이미 도는 run 이 있으면 그걸 돌려준다(멱등 UX: 버튼 연타·크론 겹침 안전).
   const running = await itemsPool.query(
@@ -79,15 +104,26 @@ export async function startConnectorRun(
   const args = ["--env-file-if-exists=.env", "dist/connectors/run-sync.js", system];
   if (opts.full) args.push("--full");
   const child = spawn("node", args, { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  liveRuns.set(runId, { child, canceled: false });
+  if (child.pid) {
+    await itemsPool.query(`UPDATE connector_run SET pid=$2 WHERE id=$1`, [runId, child.pid])
+      .catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run pid 기록 실패(무시)"));
+  }
 
-  // ── 로그 스트리밍 — 버퍼 + 주기/임계 flush. append 는 tail 캡(right). ──
+  // ── 로그 스트리밍 — 버퍼 + 주기/임계 flush. append 는 tail 캡(right). flush = 하트비트 겸용. ──
   let buf = "";
   let flushing = Promise.resolve();
   const flush = () => {
-    if (!buf) return flushing;
+    if (!buf) {
+      // 새 로그가 없어도 생존 신호는 남긴다 — 유령 판정(heartbeat stale)의 기준선.
+      flushing = flushing.then(() =>
+        itemsPool.query(`UPDATE connector_run SET heartbeat_at=now() WHERE id=$1 AND status='running'`, [runId])
+          .then(() => undefined).catch(() => undefined));
+      return flushing;
+    }
     const chunk = buf; buf = "";
     flushing = flushing.then(() =>
-      itemsPool.query(`UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}) WHERE id=$1`, [runId, chunk])
+      itemsPool.query(`UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}), heartbeat_at=now() WHERE id=$1`, [runId, chunk])
         .then(() => undefined)
         .catch((e) => { logger.warn({ e: (e as Error)?.message, runId }, "connector_run 로그 flush 실패(무시)"); }));
     return flushing;
@@ -116,6 +152,8 @@ export async function startConnectorRun(
     child.on("close", (code) => {
       clearInterval(timer);
       clearInterval(killer);
+      const canceled = liveRuns.get(runId)?.canceled === true;
+      liveRuns.delete(runId);
       void (async () => {
         await flush();
         // 마지막 pino JSON 라인에서 요약(stats) 추출 — 실패해도 무해(로그가 원본).
@@ -135,7 +173,7 @@ export async function startConnectorRun(
         const ok = code === 0;
         await itemsPool.query(
           `UPDATE connector_run SET status=$2, exit_code=$3, finished_at=now(), stats=$4::jsonb WHERE id=$1`,
-          [runId, ok ? "ok" : "error", code, stats == null ? null : JSON.stringify(stats)])
+          [runId, canceled ? "canceled" : ok ? "ok" : "error", code, stats == null ? null : JSON.stringify(stats)])
           .catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run 종료 기록 실패"));
         resolve({ ok, exitCode: code });
       })();
@@ -145,7 +183,44 @@ export async function startConnectorRun(
   return { runId, alreadyRunning: false, done };
 }
 
-/** 실행 목록(로그 제외 — 목록은 가볍게). */
+/**
+ * 부팅 스윕 — 게이트웨이 기동 시 running 잔재를 전부 error 로 닫는다. 이 프로세스가 방금 떴다는 것 자체가
+ * 어떤 running 행도 추적 부모가 없다는 증거(단일 게이트웨이). 자식이 잔존하면 kill(명령줄 검증) — 재시작이
+ * 유령 상태를 만들지 않게 하고, 다음 크론/수동 싱크가 즉시 새로 뜰 수 있게 한다.
+ */
+export async function recoverOrphanConnectorRuns(): Promise<void> {
+  await ensureRunSchema();
+  const r = await itemsPool.query(
+    `UPDATE connector_run SET status='error', finished_at=now(),
+            log = right(log || E'\\n[tracker] 게이트웨이 재시작으로 추적 중단 — 부팅 시 정리. 커서 미전진이라 다음 run 이 재수집합니다.', ${LOG_CAP})
+     WHERE status='running' RETURNING id, system, pid`);
+  for (const g of r.rows as Array<{ id: number; system: string; pid: number | null }>) {
+    const killed = await killIfRunSync(g.pid);
+    logger.warn({ runId: g.id, system: g.system, pid: g.pid, killed }, "부팅 스윕 — 고아 connector_run 정리");
+  }
+}
+
+/** 사용자 중지 — 이 게이트웨이의 자식이면 canceled 마킹 후 kill(종료 기록은 close 핸들러가), 유령이면 즉시 닫는다. */
+export async function cancelConnectorRun(id: number): Promise<{ ok: boolean; message: string }> {
+  await ensureRunSchema();
+  const r = await itemsPool.query(`SELECT id, status, pid FROM connector_run WHERE id=$1`, [id]);
+  const row = r.rows[0] as { status: string; pid: number | null } | undefined;
+  if (!row) return { ok: false, message: "run 없음" };
+  if (row.status !== "running") return { ok: false, message: `이미 종료된 실행(${row.status})` };
+  const live = liveRuns.get(id);
+  if (live) {
+    live.canceled = true;
+    try { live.child.kill("SIGKILL"); } catch { /* 이미 종료 */ }
+    return { ok: true, message: "중지 요청됨 — 곧 canceled 로 기록됩니다. 커서 미전진이라 다음 run 이 재수집합니다." };
+  }
+  await killIfRunSync(row.pid);
+  await itemsPool.query(
+    `UPDATE connector_run SET status='canceled', finished_at=now(),
+            log = right(log || E'\\n[tracker] 사용자 중지(추적 부모 부재 — 직접 정리)', ${LOG_CAP}) WHERE id=$1`, [id]);
+  return { ok: true, message: "중지됨" };
+}
+
+/** 실행 목록(로그 제외 — 목록은 가볍게). stale = running 인데 하트비트 끊김(추적 사망 추정). */
 export async function listConnectorRuns(system?: string, limit = 20): Promise<Record<string, unknown>[]> {
   await ensureRunSchema();
   const params: unknown[] = [];
@@ -153,7 +228,8 @@ export async function listConnectorRuns(system?: string, limit = 20): Promise<Re
   if (system) { params.push(system); where = `WHERE system=$${params.length}`; }
   params.push(Math.min(Math.max(1, limit), 100));
   const r = await itemsPool.query(
-    `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, length(log) AS log_size, started_by
+    `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, length(log) AS log_size, started_by, heartbeat_at,
+            (status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds') AS stale
      FROM connector_run ${where} ORDER BY started_at DESC LIMIT $${params.length}`, params);
   return r.rows as Record<string, unknown>[];
 }
@@ -163,7 +239,8 @@ export async function getConnectorRun(id: number, offset = 0, maxChunk = 65_536)
   await ensureRunSchema();
   const off = Math.max(0, Math.trunc(offset));
   const r = await itemsPool.query(
-    `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, started_by,
+    `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, started_by, heartbeat_at,
+            (status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds') AS stale,
             length(log) AS log_size, substr(log, $2 + 1, $3) AS log_chunk
      FROM connector_run WHERE id=$1`, [id, off, Math.min(Math.max(1024, maxChunk), 262_144)]);
   const row = r.rows[0] as Record<string, unknown> | undefined;

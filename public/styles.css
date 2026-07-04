@@ -3763,5 +3763,7 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .conn-pick-item:hover { background: var(--bg-tint); }
 .conn-pick-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-list { max-height: 60vh; overflow: auto; }
+.run-log-head { display: flex; align-items: center; gap: 10px; }
+.run-log-head .admin-hint { flex: 1; min-width: 0; }
 .run-log { background: #0F1B2D; color: #D7E3F4; border-radius: 10px; padding: 12px 14px; margin-top: 8px;
   max-height: 56vh; min-height: 200px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
