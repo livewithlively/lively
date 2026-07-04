@@ -295,8 +295,17 @@ async function mirrorPmListV6(client: pg.PoolClient, it: RawItem, system: string
   });
 
   if (row) {
-    const merged: Record<string, unknown> = { ...(row.settings ?? {}), clickup: clickupMeta };
-    if (statusDefs.length) { merged.statusMode = "custom"; merged.statuses = statusDefs; }
+    const prevSettings = (row.settings ?? {}) as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...prevSettings, clickup: clickupMeta };
+    if (statusDefs.length) {
+      merged.statusMode = "custom";
+      merged.statuses = mergeStatusDefs(
+        (prevSettings.clickup as Record<string, unknown> | undefined)?.status_defs_base as unknown[] | undefined,
+        prevSettings.statuses as unknown[] | undefined,
+        statusDefs,
+      );
+      (merged.clickup as Record<string, unknown>).status_defs_base = statusDefs; // 다음 싱크의 로컬-무변경 판정 기준
+    }
     await client.query(
       `UPDATE project_list SET name=$2, folder_id=$3, settings=$4::jsonb,
           external_system=$5, external_instance=$6, external_id=$7, updated_at=now()
@@ -304,13 +313,43 @@ async function mirrorPmListV6(client: pg.PoolClient, it: RawItem, system: string
       [row.id, name, folderId, JSON.stringify(merged), system, instance, externalId]);
   } else {
     const settings: Record<string, unknown> = { clickup: clickupMeta };
-    if (statusDefs.length) { settings.statusMode = "custom"; settings.statuses = statusDefs; }
+    if (statusDefs.length) {
+      settings.statusMode = "custom"; settings.statuses = statusDefs;
+      (settings.clickup as Record<string, unknown>).status_defs_base = statusDefs;
+    }
     await client.query(
       `INSERT INTO project_list(name, folder_id, settings, created_by, external_system, external_instance, external_id)
         VALUES($1,$2,$3::jsonb,$4,$5,$6,$7)`,
       [name, folderId, JSON.stringify(settings), `connector:${system}`, system, instance, externalId]);
   }
   return true;
+}
+
+// 상태세트 병합(#541 상태순서) — **내용(라벨·색·카테고리·멤버십)은 ClickUp 권위, 순서는 로컬 커스텀 보존**.
+//  base = 커넥터가 마지막으로 쓴 defs(status_defs_base). 로컬이 base 와 동일(무변경)이면 incoming 채택(외부
+//  순서변경 포함 그대로 수렴). 로컬이 다르면(사용자가 편집기에서 순서 조정) 로컬 순서를 유지하되 각 항목
+//  내용은 incoming 으로 갱신, 사라진 키 제거, 신규 키는 뒤에 추가. base 미상(레거시)면 로컬 존중(보수적).
+function mergeStatusDefs(base: unknown[] | undefined, local: unknown[] | undefined, incoming: unknown[]): unknown[] {
+  const localArr = Array.isArray(local) ? local as Array<{ key?: unknown }> : null;
+  if (!localArr || !localArr.length) return incoming;
+  // 레거시(base 미기록) — 지금까진 싱크가 매번 통째 덮어썼으므로 '살아남은 로컬 커스텀'이 실존하지 않는다.
+  //  incoming(orderindex 교정 순서) 채택 — 구버전이 잘못 박아둔 순서를 이번 싱크가 바로잡는 경로.
+  if (!Array.isArray(base)) return incoming;
+  const localUnchanged = JSON.stringify(base) === JSON.stringify(localArr);
+  if (localUnchanged) return incoming;
+  const byKey = new Map((incoming as Array<{ key?: unknown }>).map((d) => [String(d?.key ?? ""), d]));
+  const out: unknown[] = [];
+  const used = new Set<string>();
+  for (const d of localArr) {
+    const k = String(d?.key ?? "");
+    const inc = byKey.get(k);
+    if (inc) { out.push(inc); used.add(k); } // 로컬 순서 위치 + ClickUp 내용
+  }
+  for (const d of incoming as Array<{ key?: unknown }>) {
+    const k = String(d?.key ?? "");
+    if (!used.has(k)) out.push(d); // 신규 상태는 뒤에
+  }
+  return out;
 }
 
 // ── view → project_view 멱등 upsert. 스코프(list|space|folder)별 FK 해소. config 는 원형 보존. ──
@@ -496,7 +535,7 @@ async function syncMirrorChecklists(
 }
 
 // ClickUp 커스텀필드 타입 → 우리 task_field 타입(task-field-store FIELD_TYPES). 미지 타입은 text(+원본 config 보존).
-function mapClickUpFieldType(t?: string | null): string {
+export function mapClickUpFieldType(t?: string | null): string {
   switch (t) {
     case "text": case "short_text": return "text";
     case "textarea": return "textarea";
@@ -519,7 +558,7 @@ function mapClickUpFieldType(t?: string | null): string {
 }
 
 // ClickUp type_config → 우리 config(dropdown/labels options=[{id,label,color}], money currency, rating max).
-function mapClickUpFieldConfig(t: string | null | undefined, tc: Record<string, unknown> | null | undefined): Record<string, unknown> {
+export function mapClickUpFieldConfig(t: string | null | undefined, tc: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const cfg: Record<string, unknown> = {};
   const options = Array.isArray(tc?.options) ? tc!.options as Array<Record<string, unknown>> : [];
   if (t === "drop_down" || t === "labels") {

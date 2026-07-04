@@ -276,7 +276,9 @@ export function clickUpUiCategory(type?: string | null): "active" | "done" | "cl
 //  #475 UI 계약 shape [{key,label,color,category}] 로 정규화(orderindex 순). key 충돌은 -2 접미(라벨 유일 전제 방어).
 export function effectiveStatusDefs(list: ClickUpList, space?: ClickUpSpace | null): Array<{ key: string; label: string; color: string | null; category: string }> {
   const src = (list.override_statuses || !(space?.statuses?.length) ? list.statuses : space?.statuses) ?? list.statuses ?? space?.statuses ?? [];
-  const sorted = [...src].sort((a, b) => Number(a.orderindex ?? 0) - Number(b.orderindex ?? 0));
+  // orderindex 정렬 — 비유한(누락·이상 문자열)은 배열 인덱스 폴백(응답 배열 순서 = ClickUp 표시 순서의 최선 근사).
+  const oi = (s: ClickUpStatus, idx: number) => { const n = Number(s.orderindex); return Number.isFinite(n) ? n : idx; };
+  const sorted = src.map((s, idx) => ({ s, k: oi(s, idx) })).sort((a, b) => a.k - b.k).map((x) => x.s);
   const seen = new Set<string>();
   return sorted.filter((s) => s.status).map((s) => {
     let key = clickUpStatusKey(s.status);
@@ -783,6 +785,12 @@ export async function getSpace(spaceId: string): Promise<ClickUpSpace> {
   return clickupFetch<ClickUpSpace>(`/space/${encodeURIComponent(spaceId)}`);
 }
 
+// 리스트 상세(#541 상태순서) — 나열 API(listFolderLists/listSpaceLists)의 statuses 는 orderindex 가 빠질 수 있어
+//  정렬이 무의미해진다(내부 저장순 박제). 상세 GET 은 statuses(orderindex 포함)·override_statuses 가 완전하다.
+export async function getList(listId: string): Promise<ClickUpList> {
+  return clickupFetch<ClickUpList>(`/list/${encodeURIComponent(listId)}`);
+}
+
 // 리스트 뷰(사용자 "뷰 저장 안됨/커스텀 컬럼" — ClickUp View 를 project_view 로 이관). best-effort(권한/피처에 따라 빈 배열).
 export async function getListViews(listId: string): Promise<ClickUpView[]> {
   const res = await clickupFetch<{ views?: ClickUpView[]; required_views?: Record<string, ClickUpView> }>(
@@ -901,6 +909,12 @@ export async function enumerateHierarchy(
   // 리스트 1건 → 메타 hydrate(뷰/필드). best-effort(실패해도 리스트 자체는 보존).
   const hydrate = async (list: ClickUpList): Promise<HierarchyList> => {
     if (!withMeta) return { list, views: [], fields: [] };
+    // 상세 GET 으로 statuses(orderindex)·override_statuses 완전화 — 나열 응답은 orderindex 누락 가능(상태 순서 박제 버그).
+    //  실패해도 나열 응답으로 진행(best-effort). 상세엔 space/folder 좌표가 빠질 수 있어 나열 응답 값을 보존 병합.
+    try {
+      const full = await getList(list.id);
+      list = { ...full, folder: list.folder ?? full.folder, space: list.space ?? full.space, archived: list.archived ?? full.archived };
+    } catch (err) { console.error(`[clickup] 리스트 ${list.id} 상세 조회 실패(나열 응답으로 진행):`, err); }
     let views: ClickUpView[] = [];
     let fields: ClickUpCustomField[] = [];
     try { views = await getListViews(list.id); } catch (err) { console.error(`[clickup] 리스트 ${list.id} 뷰 조회 실패:`, err); }
