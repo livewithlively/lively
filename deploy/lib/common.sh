@@ -52,8 +52,8 @@ ensure_service_user() {
   #   다음 update 의 npm ci 가 EACCES). 게이트웨이(lively)는 dist/node_modules 를 '읽기'만 하면 되고, 그건 /opt 아래
   #   (world traverse) + npm/git 기본 umask(022 → world/group read)로 충족 → chown -R 안 한다. logs 만 lively 가 append
   #   (systemd StandardOutput=append) → render_service_unit 이 chown -R 로 넘긴다.
-  # .env 은 게이트웨이(lively 그룹)도·배포 스크립트(운영자: proxy_up grep·store_up docker)도 읽어야 → 소유=운영자·그룹=lively·640.
-  if [ -f "$APP_DIR/.env" ]; then sudo chown "$(id -un)":"$user" "$APP_DIR/.env"; sudo chmod 640 "$APP_DIR/.env"; fi
+  # .env 소유권 불변식(운영자:서비스유저 640 — 게이트웨이가 group-read)은 이 함수 '맨 끝'에서 적용한다 —
+  #  아래 세션루트 repoint 의 set_env(sudo sed -i)가 .env 를 재작성하며 그룹을 도로 깰 수 있어, 모든 .env 편집 뒤가 유일하게 안전.
   case "$APP_DIR" in
     /opt/*|/srv/*) : ;;
     *) warn "앱 경로 $APP_DIR — lively 접근엔 /opt 권장(홈 아래면 상위 traverse 권한 필요)"; sudo chmod o+x "$(dirname "$APP_DIR")" 2>/dev/null || true ;;
@@ -72,6 +72,10 @@ ensure_service_user() {
     cur="$(sudo grep -E '^TERMINAL_ROOT_PERSONAL=' "$APP_DIR/.env" | cut -d= -f2-)"
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_PERSONAL "$LIVELY_SERVICE_HOME/box"; log "세션 personal 루트 → $LIVELY_SERVICE_HOME/box"; }
   fi
+  # ⭐ .env 소유권 불변식 최종 적용 — 위 모든 .env 편집(set_env 세션루트 repoint 등) '뒤' 마지막에 강제.
+  #  게이트웨이(서비스유저 그룹)가 .env 를 group-read 해야 DB 접속정보를 로드한다(못 읽으면 password=undefined→SASL 다운:
+  #  2026-07-03 어니스트 실장애). sed -i 계열이 중간에 그룹을 깨도 여기가 최종적으로 '운영자:서비스유저 640' 을 보장.
+  if [ -f "$APP_DIR/.env" ]; then sudo chown "$(id -un)":"$user" "$APP_DIR/.env" && sudo chmod 640 "$APP_DIR/.env"; fi
   echo "$user"
 }
 
@@ -152,6 +156,15 @@ ensure_env() {
   local rpersonal="${TERMINAL_ROOT_PERSONAL:-$HOME/box}"
   local orgdom="${ORG_DOMAIN:-example.com}"
   mkdir -p "$rshared" "$rpersonal" 2>/dev/null || true   # 중앙박스 세션 루트(없으면 세션 생성 실패)
+  # 임베딩(#172) — WITH_EMBEDDINGS=1(또는 EMBEDDINGS_PROVIDER=http)면 provider 를 켜서 기록(사이드카는 store_up 이 기동,
+  #  기존 지식 백필은 install.sh 말미). 아니면 off(grep 폴백). base_url/model/dim/auth 는 caller env 로 오버라이드 가능.
+  local emb_provider="off"
+  if [ "${WITH_EMBEDDINGS:-0}" = "1" ] || [ "${EMBEDDINGS_PROVIDER:-}" = "http" ]; then emb_provider="http"; fi
+  local emb_base="${EMBEDDINGS_BASE_URL:-http://localhost:11434}"
+  local emb_model="${EMBEDDINGS_MODEL:-bge-m3}"
+  local emb_dim="${EMBEDDINGS_DIMENSIONS:-1024}"
+  local emb_auth_line="# EMBEDDINGS_AUTH_ENV=OPENAI_API_KEY   # 외부 API 인증 시: 키를 담은 환경변수 '이름'(값 아님)"
+  [ -n "${EMBEDDINGS_AUTH_ENV:-}" ] && emb_auth_line="EMBEDDINGS_AUTH_ENV=${EMBEDDINGS_AUTH_ENV}"
 
   umask 077   # .env 600
   cat > "$envf" <<EOF
@@ -195,11 +208,14 @@ TMUX_BIN=$tmux_bin
 TERMINAL_ROOT_SHARED=$rshared
 TERMINAL_ROOT_PERSONAL=$rpersonal
 
-# ── 임베딩 / 벡터검색(#172) — 기본 off(knowledge_search=grep 폴백). 4GB 박스는 off 유지 권장. ──
-EMBEDDINGS_PROVIDER=off
-EMBEDDINGS_BASE_URL=http://localhost:11434
-EMBEDDINGS_MODEL=bge-m3
-EMBEDDINGS_DIMENSIONS=1024
+# ── 임베딩 / 벡터검색(#172) — off=knowledge_search grep 폴백. http=OpenAI-compatible /v1/embeddings. ──
+#  뒤늦게 켜기: deploy/enable-embeddings.sh (사이드카→provider=http→재시작→기존 지식 백필). 또는 관리탭 '임베딩(벡터검색)'.
+#  4GB 박스는 로컬 사이드카(bge-m3) 비권장(t4g.large+) — 외부 엔드포인트로 base_url 지정 가능.
+EMBEDDINGS_PROVIDER=$emb_provider
+EMBEDDINGS_BASE_URL=$emb_base
+EMBEDDINGS_MODEL=$emb_model
+EMBEDDINGS_DIMENSIONS=$emb_dim
+$emb_auth_line
 
 # ── db_query 안전장치 ──
 DB_STATEMENT_TIMEOUT_MS=5000
@@ -214,15 +230,22 @@ EOF
 
 # 기존 .env 에 필수 시크릿이 없으면 자동 생성해 추가(멱등·비파괴 — 비어있지 않은 값은 보존).
 #  신규 도입 변수를 기존 박스에 백필하는 용도(예: CONNECTOR_SECRET_KEY — ensure_env 로 새로 깐 박스는 이미 있고,
-#  그 전에 설치된 박스는 update.sh 가 이걸로 채워 넣는다). sed -i.bak = GNU/BSD 공통.
+#  그 전에 설치된 박스는 update.sh 가 이걸로 채워 넣는다).
+#  ⚠ .env 의 owner:group:mode 를 절대 안 바꾼다 — 불변식 '.env = 운영자:lively 640'(게이트웨이 lively 가 group-read).
+#   sed -i 는 새 inode 로 rename 하며 **group 을 실행유저 기본그룹으로 리셋** → lively 가 .env 못 읽어 SASL 다운
+#   (2026-07-03 어니스트 실박스 실장애). 그래서 append(>>) + 빈 라인 제거는 inode-보존 되쓰기(>)만 쓴다(둘 다 perms 무변).
 ensure_env_secret() {
   local name="$1" bytes="${2:-32}" envf="$APP_DIR/.env"
   [ -f "$envf" ] || return 0
   if grep -qE "^${name}=.+" "$envf"; then return 0; fi        # 비어있지 않은 값 존재 → 보존
-  sed -i.bak "/^${name}=/d" "$envf" 2>/dev/null && rm -f "$envf.bak" 2>/dev/null || true  # 빈 라인 있으면 제거
-  printf '\n# %s — deploy 자동생성(#540 git 자격 at-rest 암호화). 분실 시 저장 자격 복호 불가 → 재등록 필요.\n%s=%s\n' \
-    "$name" "$name" "$(gen_hex "$bytes")" >> "$envf"
-  ok ".env 에 $name 자동 생성(백필)"
+  if grep -qE "^${name}=" "$envf"; then                       # 빈 "${name}=" 라인만 제거(inode 보존 → group 유지)
+    local tmp="$envf.tmp.$$"
+    grep -vE "^${name}=" "$envf" > "$tmp" && cat "$tmp" > "$envf"   # > 되쓰기 = 같은 inode(owner/group/mode 무변)
+    rm -f "$tmp"
+  fi
+  printf '\n# %s — deploy 자동생성(#540 git 자격·#541 커넥터 토큰 at-rest 암호화). 분실 시 복호 불가 → 재등록.\n%s=%s\n' \
+    "$name" "$name" "$(gen_hex "$bytes")" >> "$envf"          # append = owner/group/mode 무변
+  ok ".env 에 $name 자동 생성(백필·소유/모드 보존)"
 }
 
 # store(pgvector) 기동 + healthy 대기.
@@ -260,4 +283,16 @@ proxy_up() {
   log "Caddy 리버스 프록시 기동(자동 HTTPS: $domain)"
   dc compose --profile proxy up -d caddy || die "Caddy 기동 실패 (docker compose 로그: dc compose logs caddy)"
   ok "Caddy 프록시 up — https://$domain (Let's Encrypt 자동 발급·갱신, 최초 발급 수십초)"
+}
+
+# 게이트웨이 재시작 — .env 변경(예: EMBEDDINGS_*) 반영. 유닛은 --env-file-if-exists=.env 라 재시작만으로 픽업.
+#  KillMode=process(systemd)라 중앙박스 tmux 세션은 생존(재부착). mac 은 plist 변경까지 반영하려 bootout+bootstrap.
+#  update.sh 는 유저 마이그레이션까지 하지만, 여기선 '단순 재시작'만 필요(유닛/유저 불변).
+restart_gateway() {
+  case "$(detect_os)" in
+    linux) sudo systemctl restart context-ontology-gateway ;;
+    mac)
+      launchctl bootout "gui/$(id -u)/io.lvly.context-ontology" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist" ;;
+  esac
 }
