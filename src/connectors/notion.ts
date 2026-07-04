@@ -115,16 +115,25 @@ async function notionFetch(cfg: NotionConfig, pathname: string, init?: { method?
     await rateSlot();
     reqCount++;
 
-    const res = await fetch(url, {
-      method: init?.method ?? "GET",
-      headers: {
-        Authorization: `Bearer ${cfg.token}`,
-        "Notion-Version": cfg.version,
-        "Content-Type": "application/json",
-        accept: "application/json",
-      },
-      body: init?.body != null ? JSON.stringify(init.body) : undefined,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: init?.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${cfg.token}`,
+          "Notion-Version": cfg.version,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        body: init?.body != null ? JSON.stringify(init.body) : undefined,
+        // 요청당 하드 타임아웃 — 응답이 안 오는 fetch 가 무한 대기하면 워커가 침묵 정지(행)해 정체 감지 킬로
+        //  귀결된다(어니스트 실배포 의혹). 60s 에 끊고 재시도 → 소진 시 실패 집계(커서 동결)로 전환.
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      if (attempt < MAX_RETRY) { await sleep(REQ_INTERVAL_MS * (attempt + 2)); continue; } // 타임아웃/네트워크 — 재시도
+      throw new Error(`Notion 네트워크 실패(재시도 소진) ${pathname}: ${(err as Error)?.message ?? err}`);
+    }
 
     if (res.status === 429 || res.status === 529) { // rate limit/과부하 — Retry-After 존중
       const ra = Number(res.headers.get("retry-after"));
@@ -182,7 +191,8 @@ async function downloadAsset(job: AssetJob, dir: string): Promise<void> {
   const dest = path.join(dir, job.file);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(job.url);
+      // 자산은 파일 크기가 커 API 보다 넉넉한 타임아웃(5분) — 무한 대기(행)만 차단.
+      const res = await fetch(job.url, { signal: AbortSignal.timeout(300_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (!buf.length) throw new Error("빈 응답");
@@ -659,7 +669,16 @@ async function discoverSeeds(t: Traversal): Promise<void> {
 /** 루트 모드 스코프 판정 — 조상 체인을 원장/루트에 닿을 때까지 워크(결과는 memo). search 모드는 전 범위. */
 async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> {
   if (!t.cfg.rootIds.length) return true;
-  if (t.cfg.rootIds.includes(id) || t.ledger?.byId.has(id)) return true; // 원장 = 루트 서브트리 기수집분
+  if (t.cfg.rootIds.includes(id)) return true;
+  // 원장 숏컷은 **부모 불변 + 활성**일 때만 — 원장 존재만으로 판정하면 서브트리 밖으로 이동한 페이지가
+  //  full 스윕(archived)과 델타(재활성) 사이에서 플래핑한다(리뷰). 부모가 그대로면 기존 스코프를 신뢰.
+  const selfLed = t.ledger?.byId.get(id);
+  const ptype0 = String(parent.type ?? "");
+  const curExt = ptype0 === "page_id" ? normalizeNotionId(String(parent.page_id ?? ""))
+    : ptype0 === "database_id" ? normalizeNotionId(String(parent.database_id ?? ""))
+    : ptype0 === "data_source_id" ? (dsOwnerDb(t, normalizeNotionId(String(parent.data_source_id ?? ""))) ?? null)
+    : null;
+  if (selfLed?.lifecycle === "active" && curExt != null && curExt === selfLed.parentExt) return true;
   const cached = t.membership.get(id);
   if (cached !== undefined) return cached;
   const walked: string[] = [id];
@@ -674,7 +693,7 @@ async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> 
     else if (ptype === "block_id") nextId = await resolveBlockOwnerPage(t, String(curParent.block_id ?? ""));
     else break; // workspace 등 — 루트 체인에 닿지 못함 → 범위 밖
     if (!nextId || nextId.length !== 36) break;
-    if (t.cfg.rootIds.includes(nextId) || t.ledger?.byId.has(nextId)) { verdict = true; break; }
+    if (t.cfg.rootIds.includes(nextId) || t.ledger?.byId.get(nextId)?.lifecycle === "active") { verdict = true; break; }
     const memoed = t.membership.get(nextId);
     if (memoed !== undefined) { verdict = memoed; break; }
     walked.push(nextId);
@@ -682,7 +701,15 @@ async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> 
       curParent = asRec(((await notionFetch(t.cfg, `/pages/${nextId}`)) as NotionPage).parent);
     } catch {
       try { curParent = asRec(((await notionFetch(t.cfg, `/databases/${nextId}`)) as NotionDatabase).parent); }
-      catch { break; } // 접근 불가 조상 — 범위 밖 취급(다음 full 이 진실 수렴)
+      catch (err2) {
+        const s = (err2 as { status?: number })?.status;
+        if (s === 400 || s === 403 || s === 404) break; // 접근 불가/비객체 조상 — 진짜 경계, 범위 밖 취급
+        // 일시 실패(5xx 소진 등) — '범위 밖' 오판을 memo 로 체인 전체에 굳히면 커서 전진과 함께 유실된다(리뷰)
+        //  → memo 없이 실패 집계(커서 동결), 다음 run 이 재판정.
+        t.stats.failures++;
+        t.stats.failedIds.push(`${id}:scope`);
+        return false;
+      }
     }
   }
   for (const w of walked) t.membership.set(w, verdict);
@@ -703,6 +730,10 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     if (led.kind === "database") { dbNode(t, pid); return; }
     const pn = pageNode(t, pid);
     pn.forceChanged = true;
+    if (led.kind === "db_row") { // DB 행을 일반 페이지로 재방출하면 속성 테이블·kind 가 소실된다(리뷰)
+      pn.isDbRow = true;
+      if (!pn.parentOverride) pn.parentOverride = led.parentExt;
+    }
   };
 
   // ① data_source 스윕 — dsToDb 최신화 + 스키마 변경/신규 DB 감지. linked 뷰는 ds 가 없어 자연히 0비용.
@@ -720,7 +751,9 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     const led = ledger.byId.get(dbId);
     const live = String((ds as Rec).last_edited_time ?? "");
     // 기수집 + 스키마 미변경(ds last_edited ≤ 저장 최대) → 스킵. 멀티소스 DB 의 교차 동률 엣지는 full 이 수렴.
-    if (led && led.kind === "database" && led.lifecycle === "active" && led.dsEdited && live && live <= led.dsEdited) continue;
+    //  live 부재(응답 형태 드리프트)는 미변경 취급 — fail-open 이면 매 run 전 DB 재수집으로 비용이 붕괴한다(리뷰);
+    //  놓친 스키마 변경은 일일 full 이 수렴.
+    if (led && led.kind === "database" && led.lifecycle === "active" && led.dsEdited && (!live || live <= led.dsEdited)) continue;
     if (!(await inScope(t, dbId, asRec(ds.parent)))) { c.outOfScope++; continue; }
     dbNode(t, dbId);
     c.dbs++;
@@ -742,14 +775,22 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     const ms = Date.parse(p.last_edited_time ?? "");
     if (Number.isFinite(ms) && ms < floorMs) break outer;
     const id = normalizeNotionId(p.id);
-    if (t.pages.has(id)) continue;
+    const preSeeded = t.pages.has(id); // reRender 로 선큐잉된 페이지 — 스킵 판정은 건너뛰되 북키핑은 수행(리뷰)
     const led = ledger.byId.get(id);
     const live = String(p.last_edited_time ?? "");
-    if (led && led.lifecycle === "active" && led.lastEdited === live) { c.skipped++; continue; } // 원장 일치 — 기수집
-    if (!(await inScope(t, id, asRec(p.parent)))) { c.outOfScope++; continue; }
+    if (!preSeeded) {
+      // 원장 일치 스킵 — 단, 노션 last_edited 는 분 절사라 '적재가 그 분 안에서 일어난' 행은 같은 분의
+      //  재편집이 문자열 동등 뒤에 숨는다(리뷰) → 적재 시각이 편집 분의 끝(+60s)을 지난 행만 스킵.
+      const settled = led?.syncedAt && led.lastEdited
+        ? Date.parse(led.syncedAt) - Date.parse(led.lastEdited) >= 60_000 : false;
+      if (led && led.lifecycle === "active" && led.lastEdited === live && settled) { c.skipped++; continue; }
+      if (!(await inScope(t, id, asRec(p.parent)))) { c.outOfScope++; continue; }
+    }
     const node = pageNode(t, id);
-    node.page = p;
+    if (!node.page) node.page = p;
     node.forceChanged = true;
+    // 무제 문서는 저장 제목이 플레이스홀더('(제목 없음)') — 원문 '' 와 그대로 비교하면 매 편집이 개명 오탐(리뷰).
+    const renamed = led != null && led.title !== (titleOfPage(p) || "(제목 없음)");
     const ptype = String(asRec(p.parent).type ?? "");
     if (ptype === "data_source_id" || ptype === "database_id") {
       const rawPid = normalizeNotionId(String(asRec(p.parent).data_source_id ?? asRec(p.parent).database_id ?? ""));
@@ -757,15 +798,18 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
       if (dbId) {
         node.parentOverride = dbId;
         node.isDbRow = true;
-        // 신규 행·개명 행 — DB 본문(항목 목록)·행 순서가 스테일 → 소유 DB 재수집.
-        if (!led || led.title !== titleOfPage(p)) reRender(dbId);
+        // 신규/개명/타 DB 에서 이동/복원 행 — 소유 DB 본문(항목 목록)·행 순서가 스테일 → DB 재수집.
+        if (!led || renamed || led.parentExt !== dbId || led.lifecycle !== "active") reRender(dbId);
       }
       c.rows++;
     } else {
-      // 개명 — 이전·현재 부모의 본문(child_page 제목 캐시) 재렌더.
-      if (led && led.title !== titleOfPage(p)) { reRender(led.parentExt); }
+      // 개명 — 부모 본문의 child_page 제목 캐시 재렌더.
+      if (renamed) reRender(led!.parentExt);
       c.pages++;
     }
+    // 개명 — 이 페이지를 본문에서 참조(멘션·링크)하는 페이지들의 제목 캐시도 스테일 → 역링크 재렌더.
+    //  (독립 검증기가 잡은 유일 실패 축 — full 대기 없이 델타에서 즉시 수렴)
+    if (renamed) for (const src of ledger.backlinks.get(id) ?? []) reRender(src);
     if (led && led.parentExt) {
       // 이동 — 이전 부모의 children_order/본문에서 이 페이지가 빠졌어야 함(이전 부모도 보통 델타에 잡히지만 벨트+멜빵).
       const curParent = node.parentOverride
@@ -848,12 +892,15 @@ function makeCtx(t: Traversal, ownerId: string, links: Map<string, string>): Not
       const viaDs = dsOwnerDb(t, id);
       const target = viaDs ?? id;
       const pn = t.pages.get(target);
-      if (pn) return { name: unitName("notion", target), title: titleOfPage(pn.page) || null };
+      if (pn?.page) return { name: unitName("notion", target), title: titleOfPage(pn.page) || null };
       const dn = t.dbs.get(target);
-      if (dn) return { name: unitName("notion", target), title: titleOfDb(dn.db) || null };
+      if (dn?.db) return { name: unitName("notion", target), title: titleOfDb(dn.db) || null };
       // 델타(#586) — 이번 run 이 안 건드린 미변경 대상은 원장으로 해소(링크·제목이 델타에서도 끊기지 않게).
+      //  활성만: archived 를 해소하면 full 렌더(트래버스 미포함=null)와 어긋나 본문이 모드 따라 왕복(리뷰).
+      //  이번 run 실패 노드(page/db null)는 원장 제목이 있으면 그걸 우선(실패가 제목을 가리지 않게).
       const led = t.ledger?.byId.get(target);
-      if (led) return { name: unitName("notion", target), title: led.title || null };
+      if (led?.lifecycle === "active") return { name: unitName("notion", target), title: led.title || null };
+      if (pn || dn) return { name: unitName("notion", target), title: null };
       return null;
     },
     resolveUser: (uid) => t.users.get(uid)?.name ?? null,
@@ -900,8 +947,12 @@ function iconValue(icon: Rec | null | undefined, ctx?: NotionMdCtx): unknown {
 function linksArray(t: Traversal, links: Map<string, string>): Array<{ target_external_id: string; target_name: string; kind: string }> {
   return [...links.entries()]
     .filter(([, kind]) => kind !== "child") // 자식 엣지는 트리(parent_name)가 진실 — 링크 그래프에 중복 물질화하지 않음
-    .filter(([id]) => t.pages.has(id) || t.dbs.has(id) || t.dsToDb.has(id)
-      || t.ledger?.byId.has(id) === true || t.ledger?.dsToDb.has(id) === true) // 델타 — 미변경 대상도 원장으로 유지(링크 유실 방지)
+    .filter(([id]) => {
+      if (t.pages.has(id) || t.dbs.has(id) || t.dsToDb.has(id)) return true;
+      // 델타 — 미변경 대상은 원장으로 유지(링크 유실 방지). 활성만: archived 는 full 렌더와의 결정성(리뷰).
+      const tgt = t.ledger?.dsToDb.get(id) ?? id;
+      return t.ledger?.byId.get(tgt)?.lifecycle === "active";
+    })
     .map(([id, kind]) => {
       const target = dsOwnerDb(t, id) ?? id;
       return { target_external_id: target, target_name: unitName("notion", target), kind };
@@ -1070,9 +1121,13 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   };
   lastRunStats = t.stats;
 
-  // 생존 티커 — 어떤 페이즈(발견/수집/방출/자산)든 120초마다 진행 신호를 남긴다. 진행 로그의 구조적 공백
-  //  (거대 라운드·자산 일괄 다운로드)이 run-tracker 정체 감지(15분 무출력=킬)에 오탐되지 않게 하는 최종 방어선.
+  // 생존 티커 — 어떤 페이즈든 120초마다, 단 **요청 카운터가 실제로 늘었을 때만** 신호를 남긴다.
+  //  무조건 찍으면 진짜 행(fetch 정지)에도 살아있는 척이 되어 정체 감지가 무력화된다 — 진행 없으면 침묵을
+  //  유지해 run-tracker(15분 무출력=킬)가 행을 잡게 한다. 오탐(정상인데 침묵)은 이 티커+완료 로그가 제거.
+  let lastTickReq = -1;
   const ticker = setInterval(() => {
+    if (reqCount === lastTickReq) return; // 무진전 — 침묵(정체 감지 존중)
+    lastTickReq = reqCount;
     console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 자산 ${t.stats.assets}/${t.assetJobs.size}`);
   }, 120_000);
   try {

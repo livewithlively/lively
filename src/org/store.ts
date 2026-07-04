@@ -863,7 +863,7 @@ export async function upsertConnector(input: ConnectorUpsertInput, actor?: strin
         await itemsPool.query(
           `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
              VALUES($1,$2,'connector_sync',$3::jsonb,86400,true,$4)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET enabled=true`, // off→on 사이클에서 되살아나야(리뷰: DO NOTHING 은 영구 비활성)
           [`sync-${input.system}-full`, `${spec.label} 일일 전체 스윕(아카이브·완결성)`, JSON.stringify({ system: input.system, full: true }), actor ?? null]);
       }
     } else {

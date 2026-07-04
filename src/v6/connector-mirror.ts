@@ -1230,6 +1230,8 @@ export async function sweepNotionArchived(db: PgRunner, runStartIso: string): Pr
 //  원장 = knowledge.raw 의 last_edited_time 이 진실(노션 분 단위 절사 그대로 저장됨 — search 결과와 문자열 동등 비교 가능).
 export interface NotionLedgerEntry {
   lastEdited: string | null;   // page/database 의 last_edited_time(ISO, 분 절사)
+  /** 이 행을 마지막으로 적재한 시각 — 분 절사 동률 판정(같은 분 재편집 가시성)에 필요 */
+  syncedAt: string | null;
   parentExt: string | null;    // 트리 부모 external id
   kind: string;                // page | db_row | database
   title: string;
@@ -1241,11 +1243,13 @@ export interface NotionLedger {
   byId: Map<string, NotionLedgerEntry>;
   /** data_source id → 소유 database id (저장된 fields.notion.data_source_ids 역매핑) */
   dsToDb: Map<string, string>;
+  /** 역링크: target ext id → 그걸 본문에서 참조하는 페이지들의 ext id — 개명 시 멘션 제목 캐시 재렌더용 */
+  backlinks: Map<string, string[]>;
 }
 
 export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
   const r = await db.query(
-    `SELECT external_id, title, lifecycle, parent_external_id,
+    `SELECT external_id, title, lifecycle, parent_external_id, last_synced_at,
             fields->'notion'->>'kind' AS kind,
             COALESCE(raw->'page'->>'last_edited_time', raw->'database'->>'last_edited_time') AS last_edited,
             (SELECT max(ds->>'last_edited_time') FROM jsonb_array_elements(COALESCE(raw->'data_sources','[]'::jsonb)) AS ds) AS ds_edited,
@@ -1257,6 +1261,7 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
     const id = String(row.external_id);
     byId.set(id, {
       lastEdited: row.last_edited == null ? null : String(row.last_edited),
+      syncedAt: row.last_synced_at == null ? null : new Date(row.last_synced_at as string | Date).toISOString(),
       parentExt: row.parent_external_id == null ? null : String(row.parent_external_id),
       kind: String(row.kind ?? "page"),
       title: String(row.title ?? ""),
@@ -1267,5 +1272,17 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
       for (const ds of row.ds_ids as unknown[]) if (typeof ds === "string" && ds) dsToDb.set(ds, id);
     }
   }
-  return { byId, dsToDb };
+  // 역링크 — 커넥터가 물질화한 링크만(본문에 실제 등장하는 참조 = 개명 시 재렌더 대상).
+  const backlinks = new Map<string, string[]>();
+  const bl = await db.query(
+    `SELECT tk.external_id AS target_ext, fk.external_id AS from_ext
+     FROM knowledge_link l
+     JOIN knowledge fk ON fk.name = l.from_name AND fk.external_system='notion' AND fk.external_id IS NOT NULL
+     JOIN knowledge tk ON tk.name = l.to_name AND tk.external_system='notion' AND tk.external_id IS NOT NULL
+     WHERE l.origin = 'connector:notion'`);
+  for (const row of bl.rows as Array<{ target_ext: string; from_ext: string }>) {
+    const arr = backlinks.get(row.target_ext);
+    if (arr) arr.push(row.from_ext); else backlinks.set(row.target_ext, [row.from_ext]);
+  }
+  return { byId, dsToDb, backlinks };
 }
