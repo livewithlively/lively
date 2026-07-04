@@ -2546,7 +2546,7 @@ function connectorStatusCard(root, c) {
                 lastLine.textContent = '아직 실행 이력이 없습니다 — 토큰 저장 후 [지금 싱크]로 시작하세요.';
                 return;
             }
-            lastLine.replaceChildren(el('span', { text: `최근 실행: ${runStatusLabel(run.status)} · ${run.mode === 'full' ? '전체' : '증분'} · ${relTime(run.started_at)}` +
+            lastLine.replaceChildren(el('span', { text: `최근 실행: ${runStatusLabel(run.status)}${run.stale ? ' ⚠ 추적 끊김' : ''} · ${run.mode === 'full' ? '전체' : '증분'} · ${relTime(run.started_at)}` +
                     (run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : '') }), ' ', el('a', { href: '#', text: '로그 보기', onclick: (e) => { e.preventDefault(); openRunLog(c.system, run.id); } }));
         }
         catch (_) {
@@ -2576,7 +2576,7 @@ async function openConnectorRuns(c) {
             listBox.replaceChildren(el('p', { class: 'admin-hint', text: '실행 이력이 없습니다.' }));
             return;
         }
-        listBox.replaceChildren(...runs.map((run) => el('div', { class: 'mini-row', onclick: () => openRunLog(c.system, run.id) }, el('div', { class: 'mini-title', text: `${runStatusLabel(run.status)}  ${run.mode === 'full' ? '전체' : '증분'} · ${run.trigger === 'manual' ? '수동' : '자동'}` }), el('div', { class: 'mini-meta', text: `${relTime(run.started_at)}${run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : ' · 진행 중'} · run #${run.id}` }))));
+        listBox.replaceChildren(...runs.map((run) => el('div', { class: 'mini-row', onclick: () => openRunLog(c.system, run.id) }, el('div', { class: 'mini-title', text: `${runStatusLabel(run.status)}${run.stale ? ' ⚠ 추적 끊김' : ''}  ${run.mode === 'full' ? '전체' : '증분'} · ${run.trigger === 'manual' ? '수동' : '자동'}` }), el('div', { class: 'mini-meta', text: `${relTime(run.started_at)}${run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : ' · 진행 중'} · run #${run.id}` }))));
     }
     catch (e) {
         listBox.replaceChildren(el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }));
@@ -2590,7 +2590,7 @@ async function openRunLog(system, runId) {
                 return;
             try {
                 const r = await api(`/api/ui/org/connector/runs/${runId}/cancel`, { method: 'POST', body: '{}' });
-                toast(r.message || '중지 요청됨');
+                toast(r.message || (r.ok === false ? '중지 실패' : '중지 요청됨'), r.ok === false);
             }
             catch (e) {
                 toast('중지 실패 — ' + e.message, true);
@@ -2611,13 +2611,21 @@ async function openRunLog(system, runId) {
             return;
         } // 창 닫힘 → 폴링 중단
         try {
-            const r = await api(`/api/ui/org/connector/runs/${runId}?offset=${offset}`);
-            if (r.log_chunk) {
+            let r;
+            // 드레인 루프 — 완료된 긴 로그(청크 64KB 초과)도 한 tick 에 끝까지 이어붙인다(가드 100청크 ≈ 6.5MB).
+            for (let i = 0; i < 100; i++) {
+                r = await api(`/api/ui/org/connector/runs/${runId}?offset=${offset}`);
                 const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
-                pre.append(document.createTextNode(r.log_chunk));
-                offset = r.next_offset || (offset + r.log_chunk.length);
+                if (r.skipped > 0)
+                    pre.append(document.createTextNode(`\n[…앞부분 ${r.skipped.toLocaleString()}자 잘림(로그 캡)…]\n`));
+                if (r.log_chunk)
+                    pre.append(document.createTextNode(r.log_chunk));
+                if (r.next_offset != null)
+                    offset = r.next_offset;
                 if (atBottom)
                     pre.scrollTop = pre.scrollHeight;
+                if (offset >= (r.log_size ?? 0))
+                    break;
             }
             status.textContent = `${runStatusLabel(r.status)} · ${r.mode === 'full' ? '전체' : '증분'} · 시작 ${relTime(r.started_at)}`
                 + (r.finished_at ? ` · 소요 ${runDurLabel(r.started_at, r.finished_at)}` : r.stale

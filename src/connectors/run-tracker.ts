@@ -24,13 +24,14 @@ const HEARTBEAT_STALE_MS = 120_000;
 // 이 게이트웨이가 띄운 살아있는 run — 취소(사용자 중지)와 종료 기록이 같은 행을 두고 경합하지 않게 한다.
 const liveRuns = new Map<number, { child: ChildProcess; canceled: boolean }>();
 
-/** pid 가 우리 run-sync 프로세스일 때만 kill — pid 재사용으로 무고한 프로세스를 죽이지 않게 명령줄 검증. */
-async function killIfRunSync(pid: number | null | undefined): Promise<boolean> {
+/** pid 가 **해당 system 의** run-sync 프로세스일 때만 kill — pid 재사용으로 무관한 프로세스(다른 커넥터의
+ *  정상 run 포함)를 죽이지 않게 명령줄에 run-sync + system 명이 모두 있어야 한다. */
+async function killIfRunSync(pid: number | null | undefined, system: string): Promise<boolean> {
   if (!pid || !Number.isFinite(pid)) return false;
   const cmd = await new Promise<string>((resolve) => {
     execFile("ps", ["-p", String(pid), "-o", "command="], (err, stdout) => resolve(err ? "" : String(stdout)));
   });
-  if (!cmd.includes("run-sync")) return false;
+  if (!cmd.includes("run-sync") || !cmd.includes(system)) return false;
   try { process.kill(pid, "SIGKILL"); return true; } catch { return false; }
 }
 // 타임아웃 정책(#586 실배포 교훈): 고정 상한은 대형 워크스페이스의 정당한 장기 full 백필을 죽여
@@ -59,6 +60,8 @@ function ensureRunSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS connector_run_system_idx ON connector_run(system, started_at DESC);
       ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS pid INT;
       ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now();
+      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS log_total BIGINT NOT NULL DEFAULT 0;
+      UPDATE connector_run SET log_total = char_length(log) WHERE log_total = 0 AND log <> '';
     `).then(() => undefined);
   }
   return schemaReady;
@@ -79,13 +82,15 @@ export async function startConnectorRun(
 
   // 유령 정리 — 하트비트가 STALE 이상 끊긴 running 행은 추적(부모)이 죽은 것(게이트웨이 재시작 등).
   //  error 로 닫고, 자식이 살아 남아있으면 kill(명령줄 검증) — 커서 미전진이라 데이터는 다음 run 이 재수집.
+  const ghostMarker = `\n[tracker] 추적 끊김(게이트웨이 재시작 등, 하트비트 ${Math.round(HEARTBEAT_STALE_MS / 1000)}s 무응답) — 정리됨. 커서 미전진이라 다음 run 이 재수집합니다.`;
   const ghosts = await itemsPool.query(
     `UPDATE connector_run SET status='error', finished_at=now(),
-            log = right(log || E'\\n[tracker] 추적 끊김(게이트웨이 재시작 등, 하트비트 ${Math.round(HEARTBEAT_STALE_MS / 1000)}s 무응답) — 정리됨. 커서 미전진이라 다음 run 이 재수집합니다.', ${LOG_CAP})
+            log = right(log || $3, ${LOG_CAP}), log_total = log_total + char_length($3::text)
      WHERE system=$1 AND status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds'
-     RETURNING id, pid`, [system]);
+       AND NOT (id = ANY($2::bigint[]))
+     RETURNING id, pid`, [system, [...liveRuns.keys()], ghostMarker]);
   for (const g of ghosts.rows as Array<{ id: number; pid: number | null }>) {
-    if (await killIfRunSync(g.pid)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
+    if (await killIfRunSync(g.pid, system)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
   }
 
   // 중복 가드 — 이미 도는 run 이 있으면 그걸 돌려준다(멱등 UX: 버튼 연타·크론 겹침 안전).
@@ -123,7 +128,9 @@ export async function startConnectorRun(
     }
     const chunk = buf; buf = "";
     flushing = flushing.then(() =>
-      itemsPool.query(`UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}), heartbeat_at=now() WHERE id=$1`, [runId, chunk])
+      itemsPool.query(
+        `UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text), heartbeat_at=now() WHERE id=$1`,
+        [runId, chunk])
         .then(() => undefined)
         .catch((e) => { logger.warn({ e: (e as Error)?.message, runId }, "connector_run 로그 flush 실패(무시)"); }));
     return flushing;
@@ -171,9 +178,10 @@ export async function startConnectorRun(
           }
         } catch { /* 조회 실패 무시 */ }
         const ok = code === 0;
+        // 정상 완주(exit 0)는 취소 플래그보다 우선 — kill 직전에 이미 끝난 run 을 canceled 로 오기록하지 않게(리뷰 지적).
         await itemsPool.query(
           `UPDATE connector_run SET status=$2, exit_code=$3, finished_at=now(), stats=$4::jsonb WHERE id=$1`,
-          [runId, canceled ? "canceled" : ok ? "ok" : "error", code, stats == null ? null : JSON.stringify(stats)])
+          [runId, ok ? "ok" : canceled ? "canceled" : "error", code, stats == null ? null : JSON.stringify(stats)])
           .catch((e) => logger.warn({ e: (e as Error)?.message, runId }, "connector_run 종료 기록 실패"));
         resolve({ ok, exitCode: code });
       })();
@@ -190,33 +198,48 @@ export async function startConnectorRun(
  */
 export async function recoverOrphanConnectorRuns(): Promise<void> {
   await ensureRunSchema();
+  // 이 프로세스가 이미 띄운 run 은 제외 — REST 는 listen 직후(스키마 체인 완료 전)부터 열려 있어,
+  //  스윕 전에 시작된 **정상** run 을 '재시작 잔재'로 오인해 죽일 수 있다(리뷰 지적). liveRuns = 내 자식 전부.
+  const own = [...liveRuns.keys()];
+  const marker = "\n[tracker] 게이트웨이 재시작으로 추적 중단 — 부팅 시 정리. 커서 미전진이라 다음 run 이 재수집합니다.";
   const r = await itemsPool.query(
     `UPDATE connector_run SET status='error', finished_at=now(),
-            log = right(log || E'\\n[tracker] 게이트웨이 재시작으로 추적 중단 — 부팅 시 정리. 커서 미전진이라 다음 run 이 재수집합니다.', ${LOG_CAP})
-     WHERE status='running' RETURNING id, system, pid`);
+            log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
+     WHERE status='running' AND NOT (id = ANY($1::bigint[])) RETURNING id, system, pid`, [own, marker]);
   for (const g of r.rows as Array<{ id: number; system: string; pid: number | null }>) {
-    const killed = await killIfRunSync(g.pid);
+    const killed = await killIfRunSync(g.pid, g.system);
     logger.warn({ runId: g.id, system: g.system, pid: g.pid, killed }, "부팅 스윕 — 고아 connector_run 정리");
   }
 }
 
 /** 사용자 중지 — 이 게이트웨이의 자식이면 canceled 마킹 후 kill(종료 기록은 close 핸들러가), 유령이면 즉시 닫는다. */
-export async function cancelConnectorRun(id: number): Promise<{ ok: boolean; message: string }> {
+export async function cancelConnectorRun(id: number, actor?: string | null): Promise<{ ok: boolean; message: string }> {
   await ensureRunSchema();
-  const r = await itemsPool.query(`SELECT id, status, pid FROM connector_run WHERE id=$1`, [id]);
-  const row = r.rows[0] as { status: string; pid: number | null } | undefined;
+  const r = await itemsPool.query(`SELECT id, system, status, pid FROM connector_run WHERE id=$1`, [id]);
+  const row = r.rows[0] as { system: string; status: string; pid: number | null } | undefined;
   if (!row) return { ok: false, message: "run 없음" };
   if (row.status !== "running") return { ok: false, message: `이미 종료된 실행(${row.status})` };
+  const who = actor ? `사용자 중지(${actor})` : "사용자 중지";
   const live = liveRuns.get(id);
   if (live) {
     live.canceled = true;
+    await itemsPool.query(
+      `UPDATE connector_run SET log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text) WHERE id=$1`,
+      [id, `\n[tracker] ${who} 요청 — 프로세스 종료`]).catch(() => undefined);
     try { live.child.kill("SIGKILL"); } catch { /* 이미 종료 */ }
     return { ok: true, message: "중지 요청됨 — 곧 canceled 로 기록됩니다. 커서 미전진이라 다음 run 이 재수집합니다." };
   }
-  await killIfRunSync(row.pid);
-  await itemsPool.query(
+  await killIfRunSync(row.pid, row.system);
+  // status='running' 가드 — 자연 종료(close 기록)와 경합해도 완주 결과를 canceled 로 덮지 않는다(리뷰 지적).
+  const marker = `\n[tracker] ${who}(추적 부모 부재 — 직접 정리)`;
+  const upd = await itemsPool.query(
     `UPDATE connector_run SET status='canceled', finished_at=now(),
-            log = right(log || E'\\n[tracker] 사용자 중지(추적 부모 부재 — 직접 정리)', ${LOG_CAP}) WHERE id=$1`, [id]);
+            log = right(log || $2, ${LOG_CAP}), log_total = log_total + char_length($2::text)
+     WHERE id=$1 AND status='running'`, [id, marker]);
+  if (!upd.rowCount) {
+    const cur = (await itemsPool.query(`SELECT status FROM connector_run WHERE id=$1`, [id])).rows[0] as { status: string } | undefined;
+    return { ok: false, message: `이미 종료된 실행(${cur?.status ?? "?"})` };
+  }
   return { ok: true, message: "중지됨" };
 }
 
@@ -234,17 +257,27 @@ export async function listConnectorRuns(system?: string, limit = 20): Promise<Re
   return r.rows as Record<string, unknown>[];
 }
 
-/** 실행 1건 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙인다. */
+/**
+ * 실행 1건 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙인다.
+ * offset 좌표계 = **누적 스트림**(log_total, PG char 단위): log 는 tail 캡(right)으로 앞이 잘릴 수 있어
+ * 저장 문자열 인덱스로는 캡 도달 순간 좌표가 밀린다(리뷰 지적 — 뷰 동결/구간 스킵). 보관 구간은
+ * [log_total-char_length(log), log_total) — 요청 offset 이 그보다 이전이면 skipped 로 알리고 보관 시작부터 준다.
+ */
 export async function getConnectorRun(id: number, offset = 0, maxChunk = 65_536): Promise<Record<string, unknown> | null> {
   await ensureRunSchema();
   const off = Math.max(0, Math.trunc(offset));
   const r = await itemsPool.query(
     `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, started_by, heartbeat_at,
             (status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds') AS stale,
-            length(log) AS log_size, substr(log, $2 + 1, $3) AS log_chunk
+            log_total, char_length(log) AS log_len,
+            substr(log, GREATEST(1, $2 + 1 - (log_total - char_length(log)))::int, $3) AS log_chunk
      FROM connector_run WHERE id=$1`, [id, off, Math.min(Math.max(1024, maxChunk), 262_144)]);
   const row = r.rows[0] as Record<string, unknown> | undefined;
   if (!row) return null;
+  const total = Number(row.log_total ?? 0);
+  const retainedStart = total - Number(row.log_len ?? 0);
+  const start = Math.max(off, retainedStart);
   const chunk = String(row.log_chunk ?? "");
-  return { ...row, log_chunk: chunk, next_offset: off + chunk.length };
+  const chunkChars = [...chunk].length; // PG substr 는 코드포인트 단위 — JS UTF-16 length 와 다름(이모지)
+  return { ...row, log_chunk: chunk, log_size: total, skipped: start - off, next_offset: start + chunkChars };
 }
