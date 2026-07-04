@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import {
   blocksToMd, commentsToMd, dataSourceSchemaMd, normalizeNotionId, notionIdFromUrl,
-  normalizeProperties, propertiesTableMd, richTextToMd, type NotionMdCtx,
+  normalizeProperties, parseNotionRootId, propertiesTableMd, richTextToMd, type NotionMdCtx,
 } from "./notion-md.js";
 
 // ── 테스트 컨텍스트 — 알려진 페이지 2개 + 사용자 1명 + 자산은 로컬 라우트로. ──
@@ -44,6 +44,16 @@ assert.equal(normalizeNotionId("11111111111111111111111111111111"), PAGE_A.repla
 assert.equal(normalizeNotionId("11111111-1111-1111-1111-111111111111"), PAGE_A);
 assert.equal(notionIdFromUrl("https://www.notion.so/team/페이지A-11111111111111111111111111111111?pvs=4"), PAGE_A);
 assert.equal(notionIdFromUrl("https://example.com/x-11111111111111111111111111111111"), null);
+
+// ── 루트 페이지 관용 파싱(#551 실사용 함정: 제목 슬러그의 hex 글자가 id 앞에 붙음) ──
+assert.equal(parseNotionRootId("Product-26b746a5e57380f4aec5c7bc8556d164"), "26b746a5-e573-80f4-aec5-c7bc8556d164");
+assert.equal(parseNotionRootId("Engineering-325746a5e57380cd9eb2e5e338b19872"), "325746a5-e573-80cd-9eb2-e5e338b19872");
+assert.equal(parseNotionRootId("26b746a5e57380f4aec5c7bc8556d164"), "26b746a5-e573-80f4-aec5-c7bc8556d164");
+assert.equal(parseNotionRootId("26b746a5-e573-80f4-aec5-c7bc8556d164"), "26b746a5-e573-80f4-aec5-c7bc8556d164");
+assert.equal(parseNotionRootId("https://www.notion.so/team/Product-26b746a5e57380f4aec5c7bc8556d164?pvs=4"), "26b746a5-e573-80f4-aec5-c7bc8556d164");
+assert.equal(parseNotionRootId("https://app.notion.com/p/Product-26b746a5e57380f4aec5c7bc8556d164#26b7"), "26b746a5-e573-80f4-aec5-c7bc8556d164");
+assert.equal(parseNotionRootId("그냥제목"), null);
+assert.equal(parseNotionRootId(""), null);
 
 // ── rich text — 서식 조합 · 인라인 링크 · 노션 링크 재작성 ──
 {

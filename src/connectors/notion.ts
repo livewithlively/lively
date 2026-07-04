@@ -26,7 +26,7 @@ import { resolveConnectorConfig } from "./config.js";
 import { unitName } from "../org/external-identity.js";
 import {
   blocksToMd, commentsToMd, dataSourceSchemaMd, normalizeNotionId, normalizeProperties,
-  propertiesTableMd, type NotionMdCtx, type NormalizedProp,
+  parseNotionRootId, propertiesTableMd, type NotionMdCtx, type NormalizedProp,
 } from "./notion-md.js";
 import type {
   NotionBlock, NotionComment, NotionDatabase, NotionDataSource, NotionListResponse,
@@ -67,7 +67,17 @@ interface NotionConfig {
 async function loadConfig(): Promise<NotionConfig> {
   const c = await resolveConnectorConfig("notion");
   if (!c.token) throw new Error("NOTION_TOKEN 이 없습니다 — Notion integration 토큰(secret_…)을 설정하세요(관리탭 또는 .env)");
-  const rootIds = (c.root_pages ?? "").split(",").map((s) => normalizeNotionId(s)).filter((s) => s.length === 36);
+  // 루트 페이지 — URL/슬러그/uuid 어떤 형태든 관용 파싱. 파싱 불가 항목은 **조용히 버리지 않고 즉시 실패**
+  //  (버리면 search 폴백으로 넘어가 '왜 0건이지' 미스터리가 됨 — 실사용에서 발생한 함정 #551).
+  const rootEntries = (c.root_pages ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const rootIds: string[] = [];
+  for (const entry of rootEntries) {
+    const id = parseNotionRootId(entry);
+    if (!id || id.length !== 36) {
+      throw new Error(`NOTION_ROOT_PAGES 항목을 페이지 id 로 해석할 수 없습니다: "${entry}" — 페이지 URL 전체, 슬러그(제목-32hex), 또는 32자리 id 를 넣으세요`);
+    }
+    rootIds.push(id);
+  }
   const cm = (c.comments ?? "page").toLowerCase();
   return {
     token: c.token,

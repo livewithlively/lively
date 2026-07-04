@@ -42,6 +42,17 @@ export function normalizeNotionId(id: string): string {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
+/** 루트 페이지 설정(NOTION_ROOT_PAGES) 1개 항목 → uuid. 사람이 붙여넣는 모든 형태 관용:
+ *  bare 32-hex · 하이픈드 uuid · 노션 슬러그("Product-26b746…") · 페이지 URL(쿼리/앵커 포함).
+ *  방법: 쿼리·앵커 절단 → hex 만 남김 → **마지막 32자**(슬러그 제목의 hex 글자(d,c,e…)가 앞에 붙어도 id 는 항상 끝). 실패 시 null. */
+export function parseNotionRootId(entry: string): string | null {
+  const cleaned = String(entry ?? "").trim().split(/[?#]/)[0];
+  if (!cleaned) return null;
+  const hex = cleaned.toLowerCase().replace(/[^0-9a-f]/g, "");
+  if (hex.length < 32) return null;
+  return normalizeNotionId(hex.slice(-32));
+}
+
 // notion URL → page/database uuid (없으면 null). 딥링크 재작성·링크 엣지용.
 //  형태: https://www.notion.so/<slug>-<32hex> | https://app.notion.com/p/<slug>-<32hex> | notion.site — 도메인 이관 관용.
 export function notionIdFromUrl(url: string): string | null {

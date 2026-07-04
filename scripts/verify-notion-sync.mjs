@@ -148,7 +148,11 @@ function ensureP(id) {
 }
 
 console.error(`[verify] 노션 재트래버스 시작 (버전 ${VER}, 댓글 모드 ${COMMENTS_MODE})`);
-const roots = (process.env.NOTION_ROOT_PAGES || "").split(",").map((s) => norm(s)).filter((s) => s.length === 36);
+const roots = (process.env.NOTION_ROOT_PAGES || "").split(",").map((s) => {
+  const cleaned = s.trim().split(/[?#]/)[0];
+  const hex = cleaned.toLowerCase().replace(/[^0-9a-f]/g, "");
+  return hex.length >= 32 ? norm(hex.slice(-32)) : "";
+}).filter((s) => s.length === 36);
 if (roots.length) {
   for (const id of roots) {
     try { ensureP(id).page = await nfetch(`/pages/${id}`); }
