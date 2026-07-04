@@ -45,8 +45,10 @@ function renderInline(text) {
   const s = text;
   let i = 0;
   const paired = (mark, make) => {
+    const prev = i > 0 ? s[i - 1] : '';
+    if (prev && /[A-Za-z0-9]/.test(prev)) return false; // 코드성 a==b, i++ 오탐 방지
     const end = s.indexOf(mark, i + 2);
-    if (end > i + 1 && s[i + 2] !== ' ' && s[i + 2] !== undefined) {
+    if (end > i + 2 && s[i + 2] !== ' ' && s[end - 1] !== ' ') {
       flush(); out.push(make(s.slice(i + 2, end))); i = end + 2; return true;
     }
     return false;
@@ -172,11 +174,12 @@ function renderMarkdown(md) {
     if (line.trim() === '') { i++; continue; }
     const cont = /^:::\s*([a-zA-Z_-]+)\s*(.*)$/.exec(line);
     if (cont) {
-      const body = []; let depth = 1; i++;
+      const body = []; let depth = 1; let inFence = false; i++;
       while (i < lines.length && depth > 0) {
         const l = lines[i];
-        if (contOpen(l)) depth++;
-        else if (contClose(l)) { depth--; if (depth === 0) { i++; break; } }
+        if (/^(```|~~~)/.test(l)) inFence = !inFence;
+        else if (!inFence && contOpen(l)) depth++;
+        else if (!inFence && contClose(l)) { depth--; if (depth === 0) { i++; break; } }
         body.push(l); i++;
       }
       root.append(mdRenderContainer(cont[1], cont[2], body));
@@ -184,11 +187,14 @@ function renderMarkdown(md) {
     }
     if (contClose(line)) { i++; continue; }
     if (line.trim() === '$$') {
-      const eq = []; i++;
-      while (i < lines.length && lines[i].trim() !== '$$') { eq.push(lines[i]); i++; }
-      if (i < lines.length) i++;
-      root.append(el('pre', { class: 'md-eq', title: 'LaTeX' }, el('code', { text: eq.join('\n') })));
-      continue;
+      let close = -1;
+      for (let j = i + 1; j < lines.length; j++) { if (lines[j].trim() === '$$') { close = j; break; } }
+      if (close >= 0) {
+        root.append(el('pre', { class: 'md-eq', title: 'LaTeX' }, el('code', { text: lines.slice(i + 1, close).join('\n') })));
+        i = close + 1; continue;
+      }
+      root.append(el('p', { class: 'md-p', text: '$$' }));
+      i++; continue;
     }
     const fence = /^(```|~~~)(.*)$/.exec(line);
     if (fence) {

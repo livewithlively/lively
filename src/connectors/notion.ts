@@ -46,6 +46,8 @@ const PAGE_FETCH_RETRY = 2; // 페이지 단위 재시도(블록 트리 등) —
 export interface NotionRunStats {
   pages: number; databases: number; emitted: number;
   failures: number; failedIds: string[];
+  /** 권한 경계(403/404) — 통합이 볼 수 없는 객체. 실패와 달리 커서를 동결하지 않는다(재시도 무의미·liveness 보호). */
+  inaccessible: number; inaccessibleIds: string[];
   assets: number; assetFailures: number; requests: number;
 }
 let lastRunStats: NotionRunStats | null = null;
@@ -142,8 +144,12 @@ function assetFileName(hint: { blockId?: string; pageId?: string; kind: string; 
   try { base = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? ""); } catch { /* 무시 */ }
   const name = (hint.name || base || "asset").slice(-80);
   const ext = (name.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
+  let urlPath = "";
+  try { urlPath = new URL(url).pathname; } catch { /* 무시 */ }
+  // URL 경로를 키에 포함 — 같은 페이지에서 동명 파일 2개(files 속성·댓글 첨부 등)가 서로를 덮어쓰는 충돌 방지.
+  //  S3 키 경로는 파일 버전당 안정(서명 쿼리만 변동)이라 재싱크에도 파일명이 결정적.
   const key = crypto.createHash("sha1")
-    .update(`${hint.pageId ?? ""}|${hint.blockId ?? ""}|${hint.kind}|${name}`)
+    .update(`${hint.pageId ?? ""}|${hint.blockId ?? ""}|${hint.kind}|${name}|${urlPath}`)
     .digest("hex").slice(0, 24);
   return ext ? `${key}.${ext}` : key;
 }
@@ -228,6 +234,8 @@ function isChanged(t: Traversal, lastEdited: string | undefined): boolean {
 
 // ── 블록 트리 재귀 fetch — _children 부착. child_page/child_database 는 별도 노드(내용 재귀 금지, 발견만). ──
 async function fetchBlockTree(t: Traversal, blockId: string, depth: number, seen: Set<string>): Promise<NotionBlock[]> {
+  // seen = 현재 **경로**(조상 체인) — 순환(synced A↔B)만 차단한다. 전역 방문셋로 하면 같은 원본을 참조하는
+  //  두 번째 synced 복제의 자식이 절단된다(#551 리뷰). 경로 시맨틱은 재귀 뒤 delete 로 유지.
   if (depth > MAX_BLOCK_DEPTH || seen.has(blockId)) return [];
   seen.add(blockId);
   const out: NotionBlock[] = [];
@@ -253,6 +261,7 @@ async function fetchBlockTree(t: Traversal, blockId: string, depth: number, seen
       b._children = await fetchBlockTree(t, b.id, depth + 1, seen);
     }
   }
+  seen.delete(blockId); // 경로 이탈 — 형제 브랜치에서 같은 블록(synced 원본) 재fetch 허용
   return out;
 }
 
@@ -300,7 +309,12 @@ async function hydrateProperties(t: Traversal, node: PageNode): Promise<void> {
       }))) items.push(item);
       node.propertyItems[pname] = items;
       mergePropertyItems(p, type, items);
-    } catch { /* 속성 하이드레이션 실패 — 원본 25개 유지(원장에 실패 흔적 없음은 no — propertyItems 부재로 판별) */ }
+    } catch (err) {
+      // 속성 하이드레이션 실패 = 25개 절단 상태 — 조용히 넘어가면 손실이므로 실패로 집계(커서 동결 → 다음 run 재시도).
+      t.stats.failures++;
+      t.stats.failedIds.push(`${page.id}:prop:${pname}`);
+      console.error(`[notion] 속성 하이드레이션 실패 ${page.id} '${pname}':`, (err as Error)?.message ?? err);
+    }
   }
 }
 
@@ -358,7 +372,14 @@ async function fetchComments(t: Traversal, node: PageNode): Promise<void> {
         const cc = c as unknown as NotionComment;
         if (!seen.has(cc.id)) { seen.add(cc.id); node.comments.push(cc); }
       }
-    } catch { break; } // 코멘트 capability 없음(403) 등 — 페이지 손실로 치지 않음(원장에 comments 없음으로 판별)
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      if (status === 403) break; // 통합에 댓글 read capability 없음 — 권한 경계(손실 아님, 고지 대상)
+      t.stats.failures++;
+      t.stats.failedIds.push(`${node.id}:comments`);
+      console.error(`[notion] 댓글 수집 실패 ${node.id}:`, (err as Error)?.message ?? err);
+      break;
+    }
   }
 }
 
@@ -384,9 +405,16 @@ async function processPage(t: Traversal, node: PageNode): Promise<void> {
     await fetchComments(t, node);
   } catch (err) {
     node.failed = true;
-    t.stats.failures++;
-    t.stats.failedIds.push(node.id);
-    console.error(`[notion] 페이지 수집 실패 ${node.id}:`, (err as Error)?.message ?? err);
+    const status = (err as { status?: number })?.status;
+    if (status === 403 || status === 404) {
+      // 권한 경계 — 통합이 볼 수 없는 하위 페이지(공유 해제 등). 재시도 무의미: 실패로 치면 커서가 영구 동결된다.
+      t.stats.inaccessible++;
+      t.stats.inaccessibleIds.push(node.id);
+    } else {
+      t.stats.failures++;
+      t.stats.failedIds.push(node.id);
+    }
+    console.error(`[notion] 페이지 수집 실패 ${node.id} (${status ?? "?"}):`, (err as Error)?.message ?? err);
   }
 }
 
@@ -401,6 +429,8 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
           node.dataSources.push(ds);
           t.dsToDb.set(normalizeNotionId(ref.id), node.id);
         } catch (err) {
+          t.stats.failures++; // 스키마 없이 적재하면 DB 노드가 절단 — 실패로 집계(커서 동결)
+          t.stats.failedIds.push(`${node.id}:ds:${ref.id}`);
           console.error(`[notion] data_source 스키마 실패 ${ref.id}:`, (err as Error)?.message ?? err);
         }
         // 행 나열 — 전 행(page 객체). 행 자체의 changed 판정은 processPage 에서.
@@ -443,9 +473,15 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
     }
   } catch (err) {
     node.failed = true;
-    t.stats.failures++;
-    t.stats.failedIds.push(node.id);
-    console.error(`[notion] DB 수집 실패 ${node.id}:`, (err as Error)?.message ?? err);
+    const status = (err as { status?: number })?.status;
+    if (status === 403 || status === 404) {
+      t.stats.inaccessible++;
+      t.stats.inaccessibleIds.push(node.id);
+    } else {
+      t.stats.failures++;
+      t.stats.failedIds.push(node.id);
+    }
+    console.error(`[notion] DB 수집 실패 ${node.id} (${status ?? "?"}):`, (err as Error)?.message ?? err);
   }
 }
 
@@ -507,7 +543,12 @@ async function discoverSeeds(t: Traversal): Promise<void> {
       }))) {
         if (r.object === "database") dbNode(t, normalizeNotionId(String(r.id ?? "")));
       }
-    } catch { console.error("[notion] database 발견 search 실패:", (err as Error)?.message ?? err); }
+    } catch {
+      // DB 발견 자체가 실패 — 이대로 full 스윕하면 살아있는 DB·행 전부가 미관측→archived 오탐. 실패로 집계.
+      t.stats.failures++;
+      t.stats.failedIds.push("search:data_source");
+      console.error("[notion] database 발견 search 실패:", (err as Error)?.message ?? err);
+    }
   }
 }
 
@@ -548,6 +589,18 @@ async function parentExternalIdOf(t: Traversal, node: PageNode): Promise<string 
   return undefined; // workspace 루트
 }
 
+// DB 의 트리 부모 — 증분에서 parentOverride(블록트리 발견)가 없어도 page/block/data_source 부모를 해소해
+//  기존 parent_name 을 NULL 로 클로버하지 않게 한다(인라인 DB 가 컬럼/토글 안에 있으면 parent.type='block_id').
+async function dbParentExternalId(t: Traversal, db: NotionDatabase): Promise<string | undefined> {
+  const p = db.parent;
+  if (!p) return undefined;
+  if (p.type === "page_id" && p.page_id) return normalizeNotionId(p.page_id);
+  if (p.type === "database_id" && p.database_id) return normalizeNotionId(p.database_id);
+  if (p.type === "data_source_id" && p.data_source_id) return t.dsToDb.get(normalizeNotionId(p.data_source_id)) ?? undefined;
+  if (p.type === "block_id" && p.block_id) return (await resolveBlockOwnerPage(t, p.block_id)) ?? undefined;
+  return undefined; // workspace
+}
+
 // ── 방출 단계 헬퍼 ───────────────────────────────────────────────────────────
 function titleOfPage(page: NotionPage | null): string {
   if (!page?.properties) return "";
@@ -584,6 +637,8 @@ function makeCtx(t: Traversal, ownerId: string, links: Map<string, string>): Not
       if (type === "external") url = String(asRec(f.external).url ?? "");
       else if (type === "file") { url = String(asRec(f.file).url ?? ""); expiring = true; }
       else if (type === "custom_emoji") url = String(asRec(f.custom_emoji).url ?? "");
+      else if (asRec(f.file).url) { url = String(asRec(f.file).url); expiring = true; } // 댓글 첨부 {category, file:{url}} — type 필드 없음
+      else if (asRec(f.external).url) url = String(asRec(f.external).url);
       else if (typeof f.url === "string") url = f.url;
       if (!url) return null;
       if (!expiring) return url; // external — 만료 없음, 원본 유지
@@ -606,10 +661,12 @@ function coverMd(ctx: NotionMdCtx, obj: { cover?: Rec | null } | null): string {
   return url ? `![cover](${url})` : "";
 }
 
-function iconValue(icon: Rec | null | undefined): unknown {
+function iconValue(icon: Rec | null | undefined, ctx?: NotionMdCtx): unknown {
   if (!icon) return null;
   if (icon.type === "emoji") return icon.emoji ?? null;
-  return icon; // 파일형 아이콘 — 원본 객체 보존(자산은 assetUrl 경유 시 등록)
+  // 파일형/커스텀 이모지 아이콘 — 업로드형은 1시간 만료 URL 이라 자산으로 다운로드해 영구 참조로 치환.
+  const url = ctx ? ctx.assetUrl(icon, { kind: "icon" }) : null;
+  return url ? { type: icon.type ?? "file", url } : icon;
 }
 
 function linksArray(t: Traversal, links: Map<string, string>): Array<{ target_external_id: string; target_name: string; kind: string }> {
@@ -675,7 +732,7 @@ function emitPage(t: Traversal, node: PageNode, parentExtId: string | undefined)
       notion: {
         kind: node.isDbRow ? "db_row" : "page",
         url: page.url ?? null,
-        icon: iconValue(page.icon as Rec | null),
+        icon: iconValue(page.icon as Rec | null, ctx),
         archived,
         properties: propsForFields,
         links: linksArray(t, links),
@@ -739,7 +796,7 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
       notion: {
         kind: "database",
         url: db.url ?? null,
-        icon: iconValue(db.icon as Rec | null),
+        icon: iconValue(db.icon as Rec | null, ctx),
         is_inline: db.is_inline ?? false,
         archived,
         links: linksArray(t, links),
@@ -755,12 +812,16 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
 async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const cfg = await loadConfig();
   reqCount = 0;
+  // NOTION_ROOT_PAGES(루트 모드)는 발견이 트래버스뿐이라 since 스킵 시 미변경 조상 아래 변경을 영영 못 본다
+  //  → 루트 모드에선 매 run 전체 트래버스(방출은 멱등·감사 게이트라 무해). search 모드만 증분.
+  const sinceMs = cfg.rootIds.length ? undefined : (opts?.since ? Date.parse(opts.since) : undefined);
+  if (cfg.rootIds.length && opts?.since) console.error("[notion] 루트 모드 — 증분(since) 무시, 전체 트래버스로 수행");
   const t: Traversal = {
     cfg,
-    sinceMs: opts?.since ? Date.parse(opts.since) : undefined,
+    sinceMs,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
-    stats: { pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], assets: 0, assetFailures: 0, requests: 0 },
+    stats: { pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], assets: 0, assetFailures: 0, requests: 0 },
   };
   lastRunStats = t.stats;
 
@@ -797,8 +858,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   // 방출 — DB 노드 먼저(부모 dangling 최소화; 미러는 소프트참조라 순서 무해하지만 로그 가독성), 그 다음 변경 페이지.
   for (const node of t.dbs.values()) {
     if (node.failed || !node.db) continue;
-    const parentExtId = node.parentOverride
-      ?? (node.db.parent?.type === "page_id" && node.db.parent.page_id ? normalizeNotionId(node.db.parent.page_id) : undefined);
+    const parentExtId = node.parentOverride ?? (await dbParentExternalId(t, node.db));
     try { yield emitDb(t, node, parentExtId); }
     catch (err) {
       node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id);
@@ -829,7 +889,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   }
 
   t.stats.requests = reqCount;
-  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 자산 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
+  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 자산 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
 }
 
 export const notionConnector: Connector = {

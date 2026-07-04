@@ -251,6 +251,16 @@ const linkSet = new Set(linkRows.map((l) => l.from_name + "→" + l.to_name));
 const fails = [];
 const F = (cat, id, msg) => fails.push({ cat, id, msg });
 const normText = (t) => String(t).replace(/`/g, "'").replace(/\s+/g, " ").trim();
+// H1 redact 패리티(src/org/redact.ts SECRET_RES 복제) — 미러는 시크릿 패턴을 [REDACTED] 로 마스킹하므로
+// 노션 원문 런도 같은 규칙으로 마스킹해 대조(마스킹은 의도된 변형이지 손실이 아님).
+const SECRET_RES = [
+  /sk-[A-Za-z0-9]{16,}/g, /ghp_[A-Za-z0-9]{20,}/g, /github_pat_[A-Za-z0-9_]{20,}/g,
+  /xox[abprs]-[A-Za-z0-9-]{10,}/g, /AKIA[0-9A-Z]{16}/g, /lvk_[A-Za-z0-9_-]{20,}/g,
+  /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g,
+  /[Bb]earer\s+[A-Za-z0-9._~+\/-]{12,}=*/g,
+];
+const redactParity = (t) => { let o = String(t); for (const re of SECRET_RES) o = o.replace(re, "[REDACTED]"); return o; };
 const expectedParent = (n, page) => {
   if (n.parentOverride) return unit(n.parentOverride);
   const p = page?.parent ?? {};
@@ -282,12 +292,15 @@ for (const [id, n] of P) {
   const collectIds = (bs) => { for (const b of bs ?? []) { rawBlocks.add(norm(b.id)); collectIds(b._children); } };
   collectIds(row.raw?.blocks);
   for (const bid of n.blockIds) if (!rawBlocks.has(bid)) F("원장", id, `raw.blocks 에 블록 누락 ${bid}`);
-  // 본문 텍스트 전수
-  const body = normText(String(row.body_md ?? "").replace(/\\\|/g, "|"));
+  // 본문 텍스트 전수 — 표 셀 이스케이프(\|)는 언이스케이프본과 원본 양쪽 대조(리터럴 '\|' 오탐 방지),
+  //  시크릿 패턴은 redact 패리티 적용(마스킹된 본문과 마스킹한 기대런 대조).
+  const bodyRaw = normText(String(row.body_md ?? ""));
+  const bodyUnesc = normText(String(row.body_md ?? "").replace(/\\\|/g, "|"));
   for (const run of n.textRuns) {
-    const r = normText(run);
-    if (!r) continue;
-    if (!body.includes(r) && !body.includes(normText(run.replace(/\n/g, " ")))) F("본문", id, `텍스트 런 누락: "${r.slice(0, 60)}"`);
+    const cands = [normText(run), normText(run.replace(/\n/g, " ")), normText(redactParity(run))].filter(Boolean);
+    if (!cands.length) continue;
+    const found = cands.some((c) => bodyRaw.includes(c) || bodyUnesc.includes(c));
+    if (!found) F("본문", id, `텍스트 런 누락: "${cands[0].slice(0, 60)}"`);
   }
   // 속성 전수(비-title)
   const propBag = row.fields?.notion?.properties ?? {};

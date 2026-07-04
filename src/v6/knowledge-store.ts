@@ -189,7 +189,11 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
     `SELECT name, title, sort, lifecycle, external_system, type,
             fields->'notion'->>'kind' AS notion_kind
      FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'
-     ORDER BY sort, title NULLS LAST, name`, [name]);
+     ORDER BY sort, title NULLS LAST, name LIMIT 500`, [name]);
+  // 캡 도달 시 총계 동봉 — 대형 DB(수천 행)에서 knowledge_get 응답이 행 수에 비례 폭주하지 않게(#551 리뷰).
+  const childrenTotal = children.length === 500
+    ? Number((await one(itemsPool, `SELECT count(*)::int AS n FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'`, [name]))?.n ?? 500)
+    : children.length;
   const ancestors = await q(itemsPool,
     `WITH RECURSIVE up AS (
        SELECT k2.name, k2.title, k2.parent_name, 1 AS depth
@@ -198,7 +202,7 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
        SELECT k3.name, k3.title, k3.parent_name, up.depth + 1
        FROM knowledge k3 JOIN up ON k3.name = up.parent_name WHERE up.depth < 20
      ) SELECT name, title FROM up ORDER BY depth DESC`, [name]);
-  return { ...k, categories, links, sources, children, ancestors };
+  return { ...k, categories, links, sources, children, children_total: childrenTotal, ancestors };
 }
 
 // #551 페이지 트리 뷰 데이터 — 외부 미러(예: notion) 전체의 얕은 트리 스켈레톤(name/title/parent/sort/lifecycle/kind).
@@ -615,10 +619,10 @@ export interface KnowledgeLinkRow { name: string; relation: string; title: strin
 export async function linkKnowledge(fromName: string, toName: string, relation = "related", ctx?: WriteCtx): Promise<void> {
   if (fromName === toName) throw new Error("자기 자신과 링크할 수 없습니다");
   await itemsPool.query(
-    `INSERT INTO knowledge_link(from_name, to_name, relation, created_at, updated_at)
-     VALUES($1,$2,$3,now(),now())
-     ON CONFLICT (from_name, to_name, relation) DO UPDATE SET updated_at=now()`,
-    [fromName, toName, relation]);
+    `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
+     VALUES($1,$2,$3,'user',now(),now())
+     ON CONFLICT (from_name, to_name, relation) DO UPDATE SET updated_at=now(), origin='user'`,
+    [fromName, toName, relation]); // 커넥터 물질화 행과 충돌 시 origin 을 user 로 승격 — 다음 싱크의 재작성 DELETE 에서 보호(#551)
   await auditKnowledge(fromName, "link_knowledge", null, { to_name: toName, relation }, ctx);
 }
 export async function unlinkKnowledge(fromName: string, toName: string, relation: string, ctx?: WriteCtx): Promise<void> {
@@ -666,5 +670,9 @@ export async function knowledgeGraphData(limit = 500): Promise<{ nodes: Record<s
     `SELECT k.name AS from_name, k.parent_name AS to_name, 'child' AS relation
      FROM knowledge k JOIN knowledge p ON p.name = k.parent_name
      WHERE k.lifecycle='active' AND p.lifecycle='active'`);
-  return { nodes, edges: [...edges, ...hierarchy] };
+  // 엣지를 노드 캡과 조인 — 캡 밖 노드로의 유령 엣지 제거 + 대량 미러에서 응답 비대 방지(#551 리뷰).
+  const inGraph = new Set(nodes.map((n) => String((n as { name?: unknown }).name)));
+  const scoped = [...edges, ...hierarchy].filter(
+    (e) => inGraph.has(String((e as { from_name?: unknown }).from_name)) && inGraph.has(String((e as { to_name?: unknown }).to_name)));
+  return { nodes, edges: scoped };
 }

@@ -139,10 +139,15 @@ function renderInline(text) {
     } };
     const s = text;
     let i = 0;
-    // 쌍 구분자(~~, ++, ==) 공통 처리 — 내용이 비거나 공백으로 시작하면 평문 폴백(오탐 방지: "a == b").
+    // 쌍 구분자(~~, ++, ==) 공통 처리 — 오탐 가드 3중(#551 리뷰):
+    //  ① 여는 구분자 앞이 ASCII 영숫자면 스킵(코드성 a==b, i++, C++ — 노션 변환 출력은 경계가 공백/한글/행머리)
+    //  ② 내용이 비거나(====) 공백으로 시작/끝나면 스킵("a == b == c")
     const paired = (mark, make) => {
+        const prev = i > 0 ? s[i - 1] : '';
+        if (prev && /[A-Za-z0-9]/.test(prev))
+            return false;
         const end = s.indexOf(mark, i + 2);
-        if (end > i + 1 && s[i + 2] !== ' ' && s[i + 2] !== undefined) {
+        if (end > i + 2 && s[i + 2] !== ' ' && s[end - 1] !== ' ') {
             flush();
             out.push(make(s.slice(i + 2, end)));
             i = end + 2;
@@ -333,12 +338,15 @@ function renderMarkdown(md) {
         if (cont) {
             const body = [];
             let depth = 1;
+            let inFence = false; // 코드펜스 안의 ':::' 줄은 컨테이너 문법이 아님(depth 오염 방지)
             i++;
             while (i < lines.length && depth > 0) {
                 const l = lines[i];
-                if (contOpen(l))
+                if (/^(```|~~~)/.test(l))
+                    inFence = !inFence;
+                else if (!inFence && contOpen(l))
                     depth++;
-                else if (contClose(l)) {
+                else if (!inFence && contClose(l)) {
                     depth--;
                     if (depth === 0) {
                         i++;
@@ -355,17 +363,22 @@ function renderMarkdown(md) {
             i++;
             continue;
         } // 고아 닫힘 마커 — 무시(안전)
-        // 수식 블록 $$ … $$ (#551) — LaTeX 원문을 수식 스타일 프리로.
+        // 수식 블록 $$ … $$ (#551) — LaTeX 원문을 수식 스타일 프리로. 닫힘이 없으면 평문 단락(문서 통째 삼킴 방지).
         if (line.trim() === '$$') {
-            const eq = [];
-            i++;
-            while (i < lines.length && lines[i].trim() !== '$$') {
-                eq.push(lines[i]);
-                i++;
+            let close = -1;
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim() === '$$') {
+                    close = j;
+                    break;
+                }
             }
-            if (i < lines.length)
-                i++;
-            root.append(el('pre', { class: 'md-eq', title: 'LaTeX' }, el('code', { text: eq.join('\n') })));
+            if (close >= 0) {
+                root.append(el('pre', { class: 'md-eq', title: 'LaTeX' }, el('code', { text: lines.slice(i + 1, close).join('\n') })));
+                i = close + 1;
+                continue;
+            }
+            root.append(el('p', { class: 'md-p', text: '$$' }));
+            i++;
             continue;
         }
         // 코드블록 ``` ... ```

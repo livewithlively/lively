@@ -61,7 +61,9 @@ async function runGenericSync(system: string): Promise<boolean> {
   let batch: RawItem[] = [];
   let ingested = 0;
   const flush = async () => { if (batch.length) { ingested += await ingestItems(batch); batch = []; } };
-  const runStartIso = new Date().toISOString(); // #551 full 스윕 기준(이 시각 이전 last_synced_at = 이번 run 미관측)
+  // #551 full 스윕 기준(이 시각 이전 last_synced_at = 이번 run 미관측). last_synced_at 은 DB now() 로 찍히므로
+  //  기준 시각도 DB 시계로(노드↔DB 시계 스큐로 인한 오탐 아카이브 방지).
+  const runStartIso = String((await itemsPool.query(`SELECT now() AS t`)).rows[0]?.t?.toISOString?.() ?? new Date().toISOString());
 
   try {
     for await (const item of conn.backfill(sinceOpt)) {
@@ -78,24 +80,35 @@ async function runGenericSync(system: string): Promise<boolean> {
   }
 
   // ── #551 notion 후처리 — 링크 물질화(연결구조) + 자식 순서 수렴(페이지 트리) + full 스윕(삭제 전파). ──
-  //  커넥터 내부 부분 실패(페이지/자산)는 예외로 안 오고 stats 로 온다 → 커서 동결로 다음 run 재수집(조용한 손실 금지).
+  //  두 겹의 실패 감지(조용한 손실 금지):
+  //   ① 커넥터 내부 부분 실패(페이지/자산) — 예외로 안 오고 stats 로 온다.
+  //   ② 미러 부분 실패 — ingestItems 가 best-effort 로 삼키므로(store.ts), DB 실측으로 대사:
+  //      이번 run 에 적재된 행 수(last_synced_at ≥ runStart) < 방출 수 면 미러가 일부 실패한 것.
+  //  어느 쪽이든 커서 동결(다음 run 재수집) + full 스윕 생략(살아있는 페이지 오탐 아카이브 방지).
   if (system === "notion") {
     const stats = getNotionRunStats();
+    let mirrorShortfall = 0;
     try {
+      if (stats) {
+        const m = await itemsPool.query(
+          `SELECT count(*)::int AS n FROM knowledge WHERE external_system='notion' AND last_synced_at >= $1::timestamptz`,
+          [runStartIso]);
+        mirrorShortfall = Math.max(0, stats.emitted - Number((m.rows[0] as { n: number } | undefined)?.n ?? 0));
+      }
       const links = await materializeNotionLinks(itemsPool);
       const reordered = await applyNotionChildrenOrder(itemsPool);
       let archived = 0;
-      if (!incremental && stats && stats.failures === 0) {
-        archived = await sweepNotionArchived(itemsPool, runStartIso); // full + 무실패에서만(오탐 아카이브 방지)
+      if (!incremental && stats && stats.failures === 0 && mirrorShortfall === 0) {
+        archived = await sweepNotionArchived(itemsPool, runStartIso); // full + 완전 무실패에서만(오탐 아카이브 방지)
       }
-      logger.info({ system, links, reordered, archived, stats }, "notion 후처리 완료(링크·순서·스윕)");
+      logger.info({ system, links, reordered, archived, mirrorShortfall, stats }, "notion 후처리 완료(링크·순서·스윕)");
     } catch (err) {
       logger.error({ err: (err as Error)?.message ?? String(err) }, "notion 후처리 실패 — 커서 동결(다음 run 재수집)");
       return true;
     }
-    if (stats && stats.failures > 0) {
-      logger.error({ failures: stats.failures, failedIds: stats.failedIds.slice(0, 20) },
-        "notion 부분 실패 — 커서 동결(방출분은 멱등 적재됨, 다음 run 이 실패분 재수집)");
+    if ((stats && stats.failures > 0) || mirrorShortfall > 0) {
+      logger.error({ failures: stats?.failures ?? -1, mirrorShortfall, failedIds: (stats?.failedIds ?? []).slice(0, 20) },
+        "notion 부분 실패 — 커서 동결(적재분은 멱등 보존, 다음 run 이 실패분 재수집)");
       return true;
     }
   }

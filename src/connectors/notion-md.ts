@@ -154,7 +154,8 @@ function mentionToMd(m: Rec, plain: string, ctx: NotionMdCtx): string {
       return `📅 ${s}${e}` || plain;
     }
     case "link_preview": case "link_mention": {
-      const url = String(asRec(m[type]).url ?? m.url ?? "");
+      const inner = asRec(m[type]);
+      const url = String(inner.url ?? inner.href ?? m.url ?? ""); // link_mention 은 href 필드(문서화 빈틈 — 둘 다 관용)
       return url ? wrapLink(plain || url, url, ctx, "mention") : plain;
     }
     case "template_mention": return plain || "(템플릿)";
@@ -210,7 +211,8 @@ function mediaToMd(b: Rec, type: string, ctx: NotionMdCtx): string[] {
   if (!url) return cap ? [`*(${type}: ${cap})*`] : [`*(${type})*`];
   if (type === "image") return [`![${cap || name}](${url})`];
   const icon = type === "video" ? "🎬" : type === "audio" ? "🎵" : "📎";
-  const label = cap || name || type;
+  // 캡션·파일명 둘 다 있으면 둘 다 보존(캡션만 쓰면 원본 파일명이 뷰에서 유실).
+  const label = cap && name && cap !== name ? `${cap} (${name})` : (cap || name || type);
   const lines = [`${icon} [${label}](${url})`];
   return lines;
 }
@@ -341,7 +343,7 @@ function emitBlock(b: Rec, type: string, lines: string[], ctx: NotionMdCtx, num:
     }
     case "bookmark": case "embed": case "link_preview": {
       const url = String(inner.url ?? "");
-      const cap = type === "bookmark" ? captionOf(b, type, ctx) : "";
+      const cap = captionOf(b, type, ctx); // bookmark·embed 는 caption 지원(link_preview 는 없음 → "")
       pushBlank(lines);
       if (url) lines.push(`🔖 ${wrapLink(cap || url, url, ctx, "inline")}`);
       else if (cap) lines.push(`🔖 ${cap}`);

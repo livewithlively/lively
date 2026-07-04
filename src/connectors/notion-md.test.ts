@@ -147,15 +147,19 @@ const b = (type: string, inner: Record<string, unknown>, extra: Record<string, u
     b("image", { type: "file", file: { url: "https://s3.example/x.png?sig=1", expiry_time: "2026-01-01" }, caption: [rt("스크린샷")] }),
     b("image", { type: "external", external: { url: "https://img.example/y.png" }, caption: [] }),
     b("file", { type: "file", file: { url: "https://s3.example/f.pdf" }, name: "문서.pdf", caption: [] }),
+    b("file", { type: "file", file: { url: "https://s3.example/g.pdf" }, name: "계약.pdf", caption: [rt("최종본")] }),
     b("bookmark", { url: "https://example.com", caption: [rt("북마크 설명")] }),
+    b("embed", { url: "https://embed.example/x", caption: [rt("임베드 캡션")] }),
   ], ctx);
   assert.equal(md, [
     "![스크린샷](/api/ui/notion-assets/testasset.png)",
     "", "![](https://img.example/y.png)",
     "", "📎 [문서.pdf](/api/ui/notion-assets/testasset.png)",
+    "", "📎 [최종본 (계약.pdf)](/api/ui/notion-assets/testasset.png)",  // 캡션+파일명 둘 다 보존(#551 리뷰)
     "", "🔖 [북마크 설명](https://example.com)",
+    "", "🔖 [임베드 캡션](https://embed.example/x)",  // embed 캡션 유실 회귀(#551 리뷰)
   ].join("\n"));
-  assert.deepEqual(assets, ["image", "file"]);
+  assert.deepEqual(assets, ["image", "file", "file"]);
 }
 // 표 — 열 헤더 + 행 헤더(굵게) + 파이프 이스케이프
 {

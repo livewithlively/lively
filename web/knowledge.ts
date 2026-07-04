@@ -1,5 +1,5 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { LIFECYCLE_LABEL, absTime, api, applyReveal, withTip, el, errorNote, lifecycleDot, pageHead, reducedMotion, relTime, renderInline, renderMarkdown, selectFilter, state, sv, toast } from './core.js';
+import { LIFECYCLE_LABEL, absTime, api, applyReveal, withTip, el, errorNote, lifecycleDot, pageHead, reducedMotion, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope, overlay } from './admin.js';
 
@@ -604,8 +604,13 @@ async function renderKnowledgeDetail(view, name) {
     k.supersedes ? ['대체함(supersedes)', k.supersedes] : null,
     isMirror && k.external_system ? ['외부 출처', k.external_system + (k.external_instance ? ' · ' + k.external_instance : '')] : null,
     isMirror && k.external_id ? ['외부 ID', k.external_id] : null,
-    isMirror && k.external_url ? ['외부 링크', el('a', { class: 'md-link', href: k.external_url, target: '_blank',
-      rel: 'noopener noreferrer', text: (k.external_system === 'notion' ? 'Notion에서 열기' : '원본에서 열기') + ' ↗' })] : null,
+    isMirror && k.external_url ? ['외부 링크', (() => {   // P4b: 데이터 href 는 safeHref 경유(위험 스킴 → 평문 폴백)
+      const safe = safeHref(k.external_url);
+      return safe
+        ? el('a', { class: 'md-link', href: safe, target: '_blank', rel: 'noopener noreferrer',
+            text: (k.external_system === 'notion' ? 'Notion에서 열기' : '원본에서 열기') + ' ↗' })
+        : el('span', { text: k.external_url });
+    })()] : null,
     isMirror && k.occurred_at ? ['발생 시각', absTime(k.occurred_at)] : null,
     isMirror && k.last_synced_at ? ['마지막 동기화', absTime(k.last_synced_at)] : null,
     k.source_ref ? ['참조(source_ref)', k.source_ref] : null,

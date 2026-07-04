@@ -467,10 +467,13 @@ const knowledgeTree: Capability = {
   expose: {
     mcp: false,
     rest: [{ method: "GET", paths: ["/api/ui/knowledge-tree"],
-      parse: (req) => ({
-        system: req.query?.system ? String(req.query.system) : undefined,
-        limit: req.query?.limit ? Number(req.query.limit) : undefined,
-      }) }],
+      parse: (req) => {
+        const n = req.query?.limit ? Number(req.query.limit) : NaN;
+        return {
+          system: req.query?.system ? String(req.query.system) : undefined,
+          limit: Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined, // NaN/음수 → 기본값(SQL LIMIT 오류 방지)
+        };
+      } }],
   },
   handler: async (input: any) => ({ entries: await knowledgeTreeData(input.system ?? "notion", input.limit) }),
 };

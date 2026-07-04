@@ -332,9 +332,12 @@ type PgRunner = pg.Pool | pg.PoolClient;
 
 /** fields.notion.links → knowledge_link 물질화. 커넥터 origin 링크만 재작성(사람 링크 불가침).
  *  타깃이 아직 미적재면 그 엣지는 이번엔 생략 — 매 싱크 전체 재계산이라 다음 run 에 자동 수렴. */
-export async function materializeNotionLinks(db: PgRunner): Promise<number> {
-  await db.query(`DELETE FROM knowledge_link WHERE origin='connector:notion'`);
-  const r = await db.query(
+export async function materializeNotionLinks(db: pg.Pool): Promise<number> {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM knowledge_link WHERE origin='connector:notion'`);
+    const r = await client.query(
     `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
      SELECT DISTINCT k.name, t.name, 'related', 'connector:notion', now(), now()
      FROM knowledge k
@@ -346,8 +349,15 @@ export async function materializeNotionLinks(db: PgRunner): Promise<number> {
       AND t.name <> k.name
      WHERE k.external_system='notion'
      ON CONFLICT (from_name, to_name, relation) DO NOTHING`, // 같은 쌍의 사람(user) 링크가 이미 있으면 그대로 존중
-  );
-  return r.rowCount ?? 0;
+    );
+    await client.query("COMMIT");
+    return r.rowCount ?? 0;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** 부모의 fields.notion.children_order → 자식 knowledge.sort 수렴.
@@ -356,15 +366,16 @@ export async function applyNotionChildrenOrder(db: PgRunner): Promise<number> {
   const r = await db.query(
     `UPDATE knowledge c SET sort = ord.idx
      FROM (
-       SELECT p.external_instance AS inst, elem.value AS child_ext, (elem.ordinality - 1)::int AS idx
+       SELECT p.name AS pname, p.external_instance AS inst, elem.value AS child_ext, (elem.ordinality - 1)::int AS idx
        FROM knowledge p,
             jsonb_array_elements_text(COALESCE(p.fields->'notion'->'children_order', '[]'::jsonb))
               WITH ORDINALITY AS elem(value, ordinality)
-       WHERE p.external_system='notion'
+       WHERE p.external_system='notion' AND p.lifecycle='active'
      ) ord
      WHERE c.external_system='notion'
        AND c.external_instance = ord.inst
        AND c.external_id = ord.child_ext
+       AND c.parent_name = ord.pname   -- 현재 부모의 순서만 — 이동 전 부모(스테일/아카이브)의 children_order 이중 매치 차단
        AND c.sort IS DISTINCT FROM ord.idx`,
   );
   return r.rowCount ?? 0;
