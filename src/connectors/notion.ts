@@ -37,7 +37,8 @@ import type {
 const API_BASE = "https://api.notion.com/v1";
 const DEFAULT_NOTION_VERSION = "2025-09-03"; // data_source 분리 버전(멀티소스 DB 대응) — NOTION_API_VERSION 로 오버라이드
 const PAGE_SIZE = 100; // search/children/query/comments 공통 최대 페이지 크기
-const REQ_INTERVAL_MS = 350; // 자발적 스로틀(~3 req/s) — rate limit 선제 회피
+const REQ_INTERVAL_MS = 340; // 자발적 스로틀(~2.9 req/s 슬롯) — rate limit 선제 회피
+const PAGE_CONCURRENCY = 4;  // 페이지 수집 병렬도 — 슬롯이 전역이라 총 rps 는 불변, 응답 지연만 숨긴다(#586)
 const MAX_RETRY = 5; // 429/529/5xx 재시도 횟수
 const MAX_BLOCK_DEPTH = 64; // 순환 방지 가드(정상 문서는 도달 불가 — 구버전의 '깊이 5 절단'과 달리 손실 아님)
 const PAGE_FETCH_RETRY = 2; // 페이지 단위 재시도(블록 트리 등) — 그 후 실패는 failures 로 집계(미방출)
@@ -90,15 +91,23 @@ async function loadConfig(): Promise<NotionConfig> {
 }
 
 // ── HTTP 호출(인증/버전 헤더 + rate limit 존중 + 자발적 스로틀) ───────────────
-let lastReqAt = 0;
+//  전역 슬롯 방식(#586 속도개선): 요청 '시작 시각'을 REQ_INTERVAL_MS 간격의 슬롯으로 직렬화하되,
+//  응답 대기는 겹친다(동시 in-flight) — 직렬 구현은 응답 지연만큼 실효 속도가 3rps 아래로 떨어졌다(~2rps).
+//  병렬 워커(PAGE_CONCURRENCY)와 결합하면 노션 공식 한도(평균 3req/s)에 실효로 붙는다.
+let nextSlotAt = 0;
 let reqCount = 0;
+
+async function rateSlot(): Promise<void> {
+  const now = Date.now();
+  const at = Math.max(now, nextSlotAt);
+  nextSlotAt = at + REQ_INTERVAL_MS;
+  if (at > now) await sleep(at - now);
+}
 
 async function notionFetch(cfg: NotionConfig, pathname: string, init?: { method?: string; body?: unknown }): Promise<unknown> {
   const url = pathname.startsWith("http") ? pathname : `${API_BASE}${pathname}`;
   for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
-    const wait = lastReqAt + REQ_INTERVAL_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    lastReqAt = Date.now();
+    await rateSlot();
     reqCount++;
 
     const res = await fetch(url, {
@@ -213,6 +222,8 @@ interface DbNode {
 interface Traversal {
   cfg: NotionConfig;
   sinceMs: number | undefined;
+  /** 댓글 read capability 부재(403) 관측 — 이후 페이지는 댓글 호출 자체를 스킵(페이지당 1회 403 낭비 제거, #586). */
+  commentsDenied: boolean;
   pages: Map<string, PageNode>;
   dbs: Map<string, DbNode>;
   dsToDb: Map<string, string>;
@@ -371,7 +382,7 @@ async function hydrateUsers(t: Traversal, roots: unknown[]): Promise<void> {
 
 // ── 댓글 수집 — page(기본): 페이지 1콜 · all: 모든 블록 id 콜(고비용, 옵트인) · off. ──
 async function fetchComments(t: Traversal, node: PageNode): Promise<void> {
-  if (t.cfg.comments === "off") return;
+  if (t.cfg.comments === "off" || t.commentsDenied) return;
   const ids = [node.id];
   if (t.cfg.comments === "all" && node.blocks) {
     const walk = (bs: NotionBlock[]): void => {
@@ -390,7 +401,11 @@ async function fetchComments(t: Traversal, node: PageNode): Promise<void> {
       }
     } catch (err) {
       const status = (err as { status?: number })?.status;
-      if (status === 403) break; // 통합에 댓글 read capability 없음 — 권한 경계(손실 아님, 고지 대상)
+      if (status === 403) {
+        if (!t.commentsDenied) console.error("[notion] 댓글 read capability 없음(403) — 이후 페이지의 댓글 호출을 전부 생략(통합 설정에서 'Read comments' 를 켜면 다음 싱크부터 수집)");
+        t.commentsDenied = true; // 권한 경계 — 손실 아님, 이후 전부 스킵(요청 낭비 제거)
+        break;
+      }
       t.stats.failures++;
       t.stats.failedIds.push(`${node.id}:comments`);
       console.error(`[notion] 댓글 수집 실패 ${node.id}:`, (err as Error)?.message ?? err);
@@ -868,6 +883,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const t: Traversal = {
     cfg,
     sinceMs,
+    commentsDenied: false,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
     stats: { pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], assets: 0, assetFailures: 0, requests: 0 },
@@ -880,6 +896,22 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const donePages = new Set<string>();
   const doneDbs = new Set<string>();
   console.error(`[notion] 발견 — 페이지 ${t.pages.size} · DB ${t.dbs.size} (트래버스로 추가 발견될 수 있음)`);
+  // 페이지는 서로 독립이라 라운드별 워커 풀로 병렬 수집(전역 rate 슬롯이 총 rps 를 지배 — 응답 지연만 숨김).
+  //  DB 는 행 순서 결정성(생성순 나열)을 위해 직렬 유지. 맵 확장(BFS 발견)은 라운드 재스캔으로 수렴.
+  const pagePool = async (nodes: PageNode[]): Promise<void> => {
+    const iter = nodes[Symbol.iterator]();
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const nx = iter.next();
+        if (nx.done) return;
+        await processPage(t, nx.value);
+        if (donePages.size % 20 === 0) {
+          console.error(`[notion] 진행 — 페이지 ${donePages.size}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, nodes.length) }, worker));
+  };
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -888,16 +920,19 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       doneDbs.add(id);
       progressed = true;
       await processDb(t, node);
-      console.error(`[notion] 진행 — DB ${doneDbs.size}/${t.dbs.size} 수집`);
+      if (doneDbs.size % 10 === 0 || doneDbs.size === t.dbs.size) {
+        console.error(`[notion] 진행 — DB ${doneDbs.size}/${t.dbs.size} 수집`);
+      }
     }
+    const pending: PageNode[] = [];
     for (const [id, node] of [...t.pages]) {
       if (donePages.has(id)) continue;
       donePages.add(id);
+      pending.push(node);
+    }
+    if (pending.length) {
       progressed = true;
-      await processPage(t, node);
-      if (donePages.size % 20 === 0) {
-        console.error(`[notion] 진행 — 페이지 ${donePages.size}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
-      }
+      await pagePool(pending);
     }
   }
   t.stats.pages = t.pages.size;
