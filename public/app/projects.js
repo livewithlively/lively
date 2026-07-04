@@ -511,7 +511,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             if (cu === undefined) {
                 pjvCuFieldsCache.set(selList.id, null); // 조회중 마커(중복 fetch 방지)
                 api('/api/ui/v6/project-lists/' + selList.id + '/clickup-fields')
-                    .then((d) => { pjvCuFieldsCache.set(selList.id, d || { fields: [] }); if (((d || {}).fields || []).length)
+                    .then((d) => { pjvCuFieldsCache.set(selList.id, d || { fields: [] }); if (((d || {}).fields || []).length || ((d || {}).view_columns || []).length)
                     render(); })
                     .catch(() => pjvCuFieldsCache.set(selList.id, { fields: [] }));
             }
@@ -5915,7 +5915,7 @@ const PJV_PRIORITY_ORDER = ['urgent', 'high', 'normal', 'low'];
 function pjvFmtDate(d) {
     if (!d)
         return '';
-    const p = String(d).split('-');
+    const p = String(d).split(/[T ]/)[0].split('-');
     return p.length === 3 ? (Number(p[1]) + '/' + Number(p[2])) : String(d);
 }
 function pjvTodayStr() {
