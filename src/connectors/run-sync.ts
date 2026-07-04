@@ -19,7 +19,7 @@ import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initV6Schema } from "../v6/schema.js";
 import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived } from "../v6/connector-mirror.js";
 import { connectors } from "./index.js";
-import { getTeam, losslessStream } from "./clickup.js";
+import { getTeam, losslessStream, getIncludedListIds } from "./clickup.js";
 import { getNotionRunStats } from "./notion.js";
 import { logger } from "../log.js";
 
@@ -142,11 +142,13 @@ async function runClickupSync(): Promise<boolean> {
   //  이번 run 을 full 로 1회 승격(스케줄러 증분은 옛 태스크를 재수화하지 않아 업그레이드가 영영 안 됨).
   //  lossless_full_done 플래그로 재승격 방지 — ClickUp 에서 삭제된 고아 행(영원히 raw NULL)이 매 run full 을 유발하지 않게.
   const losslessFullDone = prevState.lossless_full_done === true;
-  if (incremental && !losslessFullDone) {
+  {
+    // 진단 상시 로그(#541) — 박스에서 "왜 full 승격이 (안) 됐나"를 로그만으로 판정 가능하게.
     const un = await itemsPool.query(
       `SELECT count(*)::int AS n FROM project WHERE external_system='clickup' AND raw IS NULL`);
     const unmigrated = Number((un.rows[0] as { n: number } | undefined)?.n ?? 0);
-    if (unmigrated > 0) {
+    logger.info({ incremental, losslessFullDone, unmigrated, prevMaxMs }, "clickup 싱크 시작(승격 판정)");
+    if (incremental && !losslessFullDone && unmigrated > 0) {
       incremental = false;
       logger.info({ unmigrated }, "미이관 행(raw 백스톱 없음) 감지 — 이번 run 을 full 로 승격(최초 무손실 마이그레이션)");
     }
@@ -186,8 +188,9 @@ async function runClickupSync(): Promise<boolean> {
   if (!failed) {
     const client = await itemsPool.connect();
     try {
-      const healed = await healPmMirror(client, "clickup");
-      if (healed.parents || healed.lists) logger.info(healed, "clickup 미러 힐(부모/리스트 좌표 수렴)");
+      const included = await getIncludedListIds();
+      const healed = await healPmMirror(client, "clickup", { pruneEmptyContainers: !!included });
+      if (healed.parents || healed.lists || healed.statusKeys || healed.prunedContainers) logger.info(healed, "clickup 미러 힐(부모/리스트/상태키/빈컨테이너 수렴)");
     } catch (err) {
       logger.warn({ err: (err as Error)?.message ?? String(err) }, "clickup 미러 힐 실패(무시 — 다음 run 재시도)");
     } finally {

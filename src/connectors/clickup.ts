@@ -861,17 +861,32 @@ export async function fetchTimeEntries(teamId: string, opts?: { sinceMs?: number
   const team = await getTeam();
   const memberIds = (team.members ?? []).map((m) => m.user?.id).filter((x): x is number => typeof x === "number");
   const out: ClickUpTimeEntry[] = [];
-  const q = new URLSearchParams({
+  const baseQ = () => new URLSearchParams({
     start_date: String(opts?.sinceMs ?? 0),
     end_date: String(Date.now() + 24 * 3600 * 1000),
   });
+  const is403 = (err: unknown) => String((err as Error)?.message ?? "").includes("ClickUp 403");
+  const q = baseQ();
   if (memberIds.length) q.set("assignee", memberIds.join(","));
   try {
     const res = await clickupFetch<{ data?: ClickUpTimeEntry[] }>(`/team/${teamId}/time_entries?${q.toString()}`);
     out.push(...(res.data ?? []));
   } catch (err) {
-    opts?.onError?.();
-    console.error(`[clickup] 타임엔트리 스윕 실패(best-effort, skip):`, err);
+    if (is403(err)) {
+      // 권한 경계(TIMEENTRY_059 — 토큰 유저가 타 멤버 엔트리 열람 불가). 일시 장애가 아니라 **커서 동결 사유가 아님**
+      //  (onError 미호출) — 본인 엔트리만 폴백 수집(assignee 생략 = 기본 자기 자신).
+      console.warn(`[clickup] 타임엔트리 전체조회 권한 없음(403) — 토큰 유저 본인 엔트리만 수집(폴백)`);
+      try {
+        const res = await clickupFetch<{ data?: ClickUpTimeEntry[] }>(`/team/${teamId}/time_entries?${baseQ().toString()}`);
+        out.push(...(res.data ?? []));
+      } catch (err2) {
+        if (is403(err2)) console.warn(`[clickup] 타임엔트리 기능 접근 불가(403) — skip(권한/ClickApp 경계, 커서 무관)`);
+        else { opts?.onError?.(); console.error(`[clickup] 타임엔트리 폴백 실패(best-effort, skip):`, err2); }
+      }
+    } else {
+      opts?.onError?.();
+      console.error(`[clickup] 타임엔트리 스윕 실패(best-effort, skip):`, err);
+    }
   }
   return out;
 }
@@ -1057,16 +1072,23 @@ export async function* losslessStream(opts?: LosslessOpts): AsyncIterable<RawIte
     !listId || (!excluded.has(listId) && (!included || included.has(listId)));
 
   // ① 계층 — Space → Folder → List → View 순서(미러 부모 해소 순서 의존). 부분 실패는 stats 로(커서 동결).
+  //  허용목록(include) 스코프면 **허용 리스트가 있는 컨테이너만** 이관 — 고객 박스가 리스트 1개만 스코핑했는데
+  //  워크스페이스의 빈 스페이스/폴더 전부가 사이드바에 유입되는 것 방지(denylist-only/무필터는 전체 계층 보존).
+  const pruneContainers = !!included;
   const tree = await enumerateHierarchy(teamId, { withMeta: true, onError: bumpFail });
   const allLists: ClickUpList[] = [];
   for (const s of tree) {
-    yield spaceToRawItem(s.space, ctx);
-    for (const f of s.folders) yield folderToRawItem(f.folder, s.space.id, ctx);
-    for (const f of s.folders) for (const hl of f.lists) { allLists.push(hl.list); yield listToRawItem(hl, s.space, ctx); }
+    const keptFolders = s.folders.filter((f) => !pruneContainers || f.lists.length > 0);
+    const spaceHasLists = keptFolders.some((f) => f.lists.length > 0) || s.folderlessLists.length > 0;
+    const keepSpace = !pruneContainers || spaceHasLists;
+    if (keepSpace) yield spaceToRawItem(s.space, ctx);
+    if (!keepSpace) continue; // 스페이스가 빠지면 하위 전부 스코프 밖
+    for (const f of keptFolders) yield folderToRawItem(f.folder, s.space.id, ctx);
+    for (const f of keptFolders) for (const hl of f.lists) { allLists.push(hl.list); yield listToRawItem(hl, s.space, ctx); }
     for (const hl of s.folderlessLists) { allLists.push(hl.list); yield listToRawItem(hl, s.space, ctx); }
     for (const v of s.views) yield viewToRawItem(v, { kind: "space", id: s.space.id }, ctx);
-    for (const f of s.folders) for (const v of f.views) yield viewToRawItem(v, { kind: "folder", id: f.folder.id }, ctx);
-    for (const f of s.folders) for (const hl of f.lists) for (const v of hl.views) yield viewToRawItem(v, { kind: "list", id: hl.list.id }, ctx);
+    for (const f of keptFolders) for (const v of f.views) yield viewToRawItem(v, { kind: "folder", id: f.folder.id }, ctx);
+    for (const f of keptFolders) for (const hl of f.lists) for (const v of hl.views) yield viewToRawItem(v, { kind: "list", id: hl.list.id }, ctx);
     for (const hl of s.folderlessLists) for (const v of hl.views) yield viewToRawItem(v, { kind: "list", id: hl.list.id }, ctx);
   }
 
