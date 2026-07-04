@@ -189,6 +189,7 @@ export interface ListClickupFields {
   fields: Array<{ key: string; name: string; field_type: string; config: Record<string, unknown> }>;
   values: Record<string, Record<string, unknown>>;   // projectId → { externalId → value }
   fieldIds: Record<string, Record<string, number>>;  // projectId → { externalId → task_field.id }
+  view_columns: Array<{ idx?: number; field?: string; hidden?: boolean; width?: number | null }>; // ClickUp 리스트 뷰 컬럼 구성(빌트인+cf — 프론트가 컬럼 자동 표시/정렬에 사용)
 }
 export async function getListClickupFields(listId: number): Promise<ListClickupFields> {
   // 지연 import 회피 — 커넥터 원본 정의(type/type_config)→우리 필드 타입/config 매핑은 미러와 단일 원천 공유.
@@ -233,5 +234,24 @@ export async function getListClickupFields(listId: number): Promise<ListClickupF
     (fieldIds[pid] ??= {})[r.external_id] = r.field_id;
     if (r.value !== null && r.value !== undefined) (values[pid] ??= {})[r.external_id] = r.value;
   }
-  return { fields, values, fieldIds };
+  // ClickUp 리스트 뷰의 컬럼 구성(#541) — 그 리스트의 external 'list' 뷰 config.columns.fields.
+  //  빌트인('assignee'|'dueDate'|'dateCreated'…)과 커스텀필드 id 가 섞여 옴 — 프론트가 표시/정렬에 사용.
+  //  스코프 상속 폴백: 리스트 뷰 → 직속 폴더 뷰 → 스페이스(부모 폴더) 뷰 — ClickUp required 뷰는 상위 스코프로
+  //  이관되는 경우가 많다(예: 스페이스 List 뷰). 컬럼 구성이 있는 뷰만 후보.
+  const view: { config: Record<string, unknown> | null } | undefined = await one(itemsPool,
+    `SELECT pv.config FROM project_view pv
+      WHERE pv.type='list' AND pv.external_id IS NOT NULL
+        AND jsonb_array_length(COALESCE(pv.config->'columns'->'fields','[]'::jsonb)) > 0
+        AND (pv.list_id = $1
+          OR pv.folder_id = (SELECT folder_id FROM project_list WHERE id=$1)
+          OR pv.folder_id = (SELECT pf.parent_id FROM project_list pl JOIN project_folder pf ON pf.id = pl.folder_id WHERE pl.id=$1))
+      ORDER BY (pv.list_id IS NOT NULL) DESC,
+               (pv.folder_id = (SELECT folder_id FROM project_list WHERE id=$1)) DESC,
+               pv.sort, pv.id
+      LIMIT 1`,
+    [listId]);
+  const colsRaw = ((view?.config as Record<string, unknown> | null)?.columns as Record<string, unknown> | undefined)?.fields;
+  const view_columns = Array.isArray(colsRaw) ? colsRaw as ListClickupFields["view_columns"] : [];
+
+  return { fields, values, fieldIds, view_columns };
 }

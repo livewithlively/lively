@@ -462,6 +462,11 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // ClickUp 리스트 컬럼(#541) — 선택 리스트에 이관 커스텀필드가 있으면 컬럼으로 병합(lazy fetch + 캐시).
     //  컬럼 id='cu:<external_id>'(공유 정의), 편집은 행별 내부 field id(cuIds)로 해소. 행 값은 field_values 에 프리필.
     let effFields = fields;
+    // 뷰 유래(view-driven) 기본숨김 컬럼 변수 리셋 — 다른 리스트/스코프로 이동 시 이전 리스트 뷰가 켠 폭 잔존 방지
+    //  (사용자가 (+)패널로 명시로 켠 것(shown-set)은 유지).
+    for (const c of PJV_STD_COLS.proj) {
+      if (c.defaultHidden && !pjvGetShownCols('proj').has(c.key)) card.style.removeProperty(PJV_STD_COL_VAR[c.key]);
+    }
     if (selList && selList.external_id) {
       const cu = pjvCuFieldsCache.get(selList.id);
       if (cu === undefined) {
@@ -469,17 +474,37 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         api('/api/ui/v6/project-lists/' + selList.id + '/clickup-fields')
           .then((d) => { pjvCuFieldsCache.set(selList.id, d || { fields: [] }); if (((d || {}).fields || []).length) render(); })
           .catch(() => pjvCuFieldsCache.set(selList.id, { fields: [] }));
-      } else if (cu && (cu.fields || []).length) {
-        const cuCols = cu.fields.map((f) => ({
+      } else if (cu && ((cu.fields || []).length || (cu.view_columns || []).length)) {
+        let cuCols = (cu.fields || []).map((f) => ({
           id: 'cu:' + f.key, name: f.name, field_type: f.field_type, config: f.config || {},
           readonlyDef: true,
           cuIds: Object.fromEntries(Object.entries(cu.fieldIds || {}).map(([pid, m]: [string, any]) => [pid, m[f.key]])),
         }));
+        // ClickUp 리스트 뷰 컬럼 구성 적용(#541 빌트인 패리티) — hidden=false 항목만, idx 순.
+        const vcols = Array.isArray(cu.view_columns) ? cu.view_columns.filter((c) => c && c.field && !c.hidden) : [];
+        if (vcols.length) {
+          // ① 빌트인 → 우리 기본 컬럼 자동 켬(가산 — 사용자가 (+)패널에서 켠/끈 명시 설정은 그대로).
+          const BUILTIN = { assignee: 'team', dueDate: 'due', startDate: 'start', dateCreated: 'created', dateUpdated: 'updated', priority: 'priority' };
+          for (const c of vcols) {
+            const std = BUILTIN[String(c.field)];
+            if (std) {
+              const def = PJV_STD_COLS.proj.find((x) => x.key === std);
+              // 기본숨김 컬럼만 뷰가 켠다(기본표시 컬럼은 이미 보임). 카드 변수로 이 렌더에 즉시 반영(저장 안 함 — 뷰 유래).
+              if (def && def.defaultHidden && !pjvGetShownCols('proj').has(std)) card.style.setProperty(PJV_STD_COL_VAR[std], PJV_STD_COL_W[std] || '92px');
+            }
+          }
+          // ② 커스텀필드 → 뷰의 순서/노출로 정렬·필터(뷰에 없는 필드는 뒤에 유지 — 데이터 발견성 우선).
+          const order = new Map(vcols.map((c, i) => [String(c.field), i]));
+          const inView = cuCols.filter((f) => order.has(f.id.slice(3)));
+          const rest = cuCols.filter((f) => !order.has(f.id.slice(3)));
+          inView.sort((a, b) => Number(order.get(a.id.slice(3)) ?? 0) - Number(order.get(b.id.slice(3)) ?? 0));
+          cuCols = [...inView, ...rest];
+        }
         for (const p of shownProjects) {
           const vals = (cu.values || {})[String(p.id)];
           if (!vals) continue;
           p.field_values = p.field_values || {};
-          for (const f of cu.fields) if (vals[f.key] !== undefined && p.field_values['cu:' + f.key] === undefined) p.field_values['cu:' + f.key] = vals[f.key];
+          for (const f of cu.fields || []) if (vals[f.key] !== undefined && p.field_values['cu:' + f.key] === undefined) p.field_values['cu:' + f.key] = vals[f.key];
         }
         effFields = [...fields, ...cuCols];
       }
@@ -772,6 +797,9 @@ function pjvListColHead(fields, anchorId, reload) {
     el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()),
     pjvStdColHead('proj', 'team', '팀원'),
     pjvStdColHead('proj', 'due', '마감일'),
+    pjvStdColHead('proj', 'start', '시작일'),
+    pjvStdColHead('proj', 'created', '생성일'),
+    pjvStdColHead('proj', 'updated', '갱신일'),
     pjvStdColHead('proj', 'priority', '우선순위'),
     pjvStdColHead('proj', 'sess', '내 세션'),
     ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)),
@@ -2538,6 +2566,9 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
     titleCell,
     el('div', { class: 'pjv-tcell' }, pjvProjTeamControl(p.members || [], (ids) => pjvSaveProjMembers(p.id, ids))),
     el('div', { class: 'pjv-tcell' }, pjvDueControl(p, (patch) => projPatch(p.id, patch, reload))),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: p.start_date ? pjvFmtDate(p.start_date) : '' })),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: p.created_at ? pjvFmtDate(p.created_at) : '' })),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: p.updated_at ? pjvFmtDate(p.updated_at) : '' })),
     el('div', { class: 'pjv-tcell' }, pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))),
     el('div', { class: 'pjv-tcell pjv-sess-cell' }, pjvProjSessionCell(p, reload)),
     ...(fields).map((f) => el('div', { class: 'pjv-tcell pjv-fcell' }, pjvFieldControl(p, f, reload))),
@@ -2626,6 +2657,9 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     titleCell,
     el('div', { class: 'pjv-tcell' }, pjvAssigneeControl(t, members, (pa) => pjvSaveTask(t.id, pa))),
     el('div', { class: 'pjv-tcell' }, pjvDueControl(t, (pa) => pjvPatchTask(t.id, pa, reload))),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: t.start_date ? pjvFmtDate(t.start_date) : '' })),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: t.created_at ? pjvFmtDate(t.created_at) : '' })),
+    el('div', { class: 'pjv-tcell pjv-datecell' }, el('span', { class: 'pjv-fval', text: t.updated_at ? pjvFmtDate(t.updated_at) : '' })),
     el('div', { class: 'pjv-tcell' }, pjvPriorityControl(t, (pa) => pjvPatchTask(t.id, pa, reload))),
     el('div', { class: 'pjv-tcell pjv-sess-cell' }),
     ...(boardFields).map(() => el('div', { class: 'pjv-tcell' })),
@@ -2669,6 +2703,9 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
       el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()),
       pjvStdColHead('proj', 'team', '팀원'),
       pjvStdColHead('proj', 'due', '마감일'),
+      pjvStdColHead('proj', 'start', '시작일'),
+      pjvStdColHead('proj', 'created', '생성일'),
+      pjvStdColHead('proj', 'updated', '갱신일'),
       pjvStdColHead('proj', 'priority', '우선순위'),
       pjvStdColHead('proj', 'sess', '내 세션'),
       ...(fields).map((f) => pjvColumnHead(f, anchorId, reload)),
@@ -2720,7 +2757,9 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
     paintDateCells();
     row.replaceChildren(
       buildTitleCell(),
-      cTeam, cDue, cPriority, el('div', { class: 'pjv-tcell pjv-sess-cell' }),
+      cTeam, cDue,
+      el('div', { class: 'pjv-tcell' }), el('div', { class: 'pjv-tcell' }), el('div', { class: 'pjv-tcell' }),
+      cPriority, el('div', { class: 'pjv-tcell pjv-sess-cell' }),
       ...(fields).map(() => el('div', { class: 'pjv-tcell' })),
       el('div', { class: 'pjv-tcell pjv-tcell-add' }));
     input.focus();
@@ -5463,7 +5502,8 @@ function pjvProjGridTemplate(fields) {
   // 제목 컬럼은 floor(--pjv-name-min, 200px) + 1fr 로 남은 폭 차지. 제목칸 폭은 CSS 변수라 열 경계 드래그(#483)로
   //  키우면(값↑) 메타 컬럼이 그만큼 줄어든다. 메타(팀원·마감·우선·세션·커스텀)는 minmax(0, Wpx) 라 좁아지면 제목 대신 먼저 준다(#339).
   const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
-  return 'minmax(var(--pjv-name-min, 200px), 1fr) minmax(0, var(--pjv-w-team, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-priority, 112px)) minmax(0, var(--pjv-w-sess, 80px))' + (extra ? ' ' + extra : '') + ' 34px';
+  // 시작일·생성일·갱신일(#541 빌트인 컬럼)은 기본 폭 0(숨김) — 켜면 카드 CSS 변수로 폭 부여(기존 화면 불변).
+  return 'minmax(var(--pjv-name-min, 200px), 1fr) minmax(0, var(--pjv-w-team, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-start, 0px)) minmax(0, var(--pjv-w-created, 0px)) minmax(0, var(--pjv-w-updated, 0px)) minmax(0, var(--pjv-w-priority, 112px)) minmax(0, var(--pjv-w-sess, 80px))' + (extra ? ' ' + extra : '') + ' 34px';
 }
 
 // 이름(제목) 컬럼 폭 조절(#483) — 헤더 제목칸 오른쪽 경계에 얹는 드래그 핸들. 끌면 --pjv-name-min 을 키우고(메타 컬럼이
@@ -5516,21 +5556,46 @@ function pjvInitNameResize(card, key) {
 //  숨김은 폭 CSS 변수를 0 으로 만들어 컬럼을 접는다(행 그리드는 gap:0 이라 흔적 없이 사라짐 — 셀/그리드 구조는 안 건드림).
 //  surface: 'proj'(팀원·마감·우선·세션) | 'task'(담당자·마감·우선). 값은 localStorage 에 저장돼 유지, Fields 패널에서 되살린다.
 const PJV_STD_COLS = {
-  proj: [{ key: 'team', label: '팀원' }, { key: 'due', label: '마감일' }, { key: 'priority', label: '우선순위' }, { key: 'sess', label: '내 세션' }],
+  proj: [
+    { key: 'team', label: '팀원' }, { key: 'due', label: '마감일' },
+    // #541 빌트인 컬럼(ClickUp 뷰 패리티) — 기본 숨김(defaultHidden): 켠 사람/뷰에만 보임.
+    { key: 'start', label: '시작일', defaultHidden: true }, { key: 'created', label: '생성일', defaultHidden: true }, { key: 'updated', label: '갱신일', defaultHidden: true },
+    { key: 'priority', label: '우선순위' }, { key: 'sess', label: '내 세션' }],
   task: [{ key: 'assignee', label: '담당자' }, { key: 'due', label: '마감일' }, { key: 'priority', label: '우선순위' }],
 };
-const PJV_STD_COL_VAR = { team: '--pjv-w-team', assignee: '--pjv-w-assignee', due: '--pjv-w-due', priority: '--pjv-w-priority', sess: '--pjv-w-sess' };
+const PJV_STD_COL_VAR = { team: '--pjv-w-team', assignee: '--pjv-w-assignee', due: '--pjv-w-due', start: '--pjv-w-start', created: '--pjv-w-created', updated: '--pjv-w-updated', priority: '--pjv-w-priority', sess: '--pjv-w-sess' };
+const PJV_STD_COL_W = { start: '92px', created: '92px', updated: '92px' }; // defaultHidden 컬럼을 켤 때 부여할 폭
 function pjvHiddenColsKey(surface) { return 'pjv:hiddenCols:' + surface; }
 function pjvGetHiddenCols(surface) { try { return new Set(JSON.parse(localStorage.getItem(pjvHiddenColsKey(surface)) || '[]')); } catch (_) { return new Set(); } }
 function pjvSetHiddenCols(surface, set) { try { localStorage.setItem(pjvHiddenColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ } }
+// 기본숨김(defaultHidden) 컬럼의 '명시 켬' 저장 — hidden-set 과 별도(#541).
+function pjvShownColsKey(surface) { return 'pjv:shownCols:' + surface; }
+function pjvGetShownCols(surface) { try { return new Set(JSON.parse(localStorage.getItem(pjvShownColsKey(surface)) || '[]')); } catch (_) { return new Set(); } }
+function pjvSetShownCols(surface, set) { try { localStorage.setItem(pjvShownColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ } }
+function pjvStdColVisible(surface, key) {
+  const def = (PJV_STD_COLS[surface] || []).find((c) => c.key === key);
+  return def && def.defaultHidden ? pjvGetShownCols(surface).has(key) : !pjvGetHiddenCols(surface).has(key);
+}
 // 카드 생성 시 1회 — 저장된 숨김 컬럼을 폭 0 으로 적용(surface 별). 모달 하위태스크 표에는 적용하지 않는다(되살릴 UI가 없어서).
 function pjvApplyHiddenCols(card, surface) {
   card.dataset.colSurface = surface;
   const hidden = pjvGetHiddenCols(surface);
-  for (const c of PJV_STD_COLS[surface]) if (hidden.has(c.key)) card.style.setProperty(PJV_STD_COL_VAR[c.key], '0px');
+  const shown = pjvGetShownCols(surface);
+  for (const c of PJV_STD_COLS[surface]) {
+    if (c.defaultHidden) { if (shown.has(c.key)) card.style.setProperty(PJV_STD_COL_VAR[c.key], PJV_STD_COL_W[c.key] || '92px'); }
+    else if (hidden.has(c.key)) card.style.setProperty(PJV_STD_COL_VAR[c.key], '0px');
+  }
 }
 // 컬럼 보이기/숨기기 토글 — 저장 + 해당 카드의 폭 변수 즉시 반영(리로드 없이 접힘/펼침).
 function pjvSetStdColVisible(surface, key, visible, card) {
+  const def = (PJV_STD_COLS[surface] || []).find((c) => c.key === key);
+  if (def && def.defaultHidden) {
+    const sh = pjvGetShownCols(surface);
+    if (visible) sh.add(key); else sh.delete(key);
+    pjvSetShownCols(surface, sh);
+    if (card) { if (visible) card.style.setProperty(PJV_STD_COL_VAR[key], PJV_STD_COL_W[key] || '92px'); else card.style.removeProperty(PJV_STD_COL_VAR[key]); }
+    return;
+  }
   const s = pjvGetHiddenCols(surface);
   if (visible) s.delete(key); else s.add(key);
   pjvSetHiddenCols(surface, s);
@@ -5556,12 +5621,11 @@ function pjvStdColHead(surface, key, label) {
 function pjvDefaultColsSection(surface, card) {
   const sec = el('div', { class: 'pjv-fields-defcols' });
   sec.append(el('div', { class: 'pjv-fields-sec', text: '기본 컬럼' }));
-  const hidden = pjvGetHiddenCols(surface);
   for (const c of PJV_STD_COLS[surface]) {
     const row = el('button', { class: 'pjv-defcol-row', type: 'button' });
     const toggle = el('span', { class: 'pjv-defcol-toggle', 'aria-hidden': 'true' });
     const paint = (on) => { toggle.classList.toggle('on', on); row.setAttribute('aria-pressed', String(on)); };
-    paint(!hidden.has(c.key));
+    paint(pjvStdColVisible(surface, c.key)); // 기본숨김(defaultHidden) 컬럼은 shown-set 기준(#541)
     row.append(el('span', { class: 'pjv-defcol-name', text: c.label }), toggle);
     row.onclick = () => { const on = !toggle.classList.contains('on'); pjvSetStdColVisible(surface, c.key, on, card); paint(on); };
     sec.append(row);
