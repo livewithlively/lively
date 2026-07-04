@@ -115,16 +115,25 @@ async function notionFetch(cfg: NotionConfig, pathname: string, init?: { method?
     await rateSlot();
     reqCount++;
 
-    const res = await fetch(url, {
-      method: init?.method ?? "GET",
-      headers: {
-        Authorization: `Bearer ${cfg.token}`,
-        "Notion-Version": cfg.version,
-        "Content-Type": "application/json",
-        accept: "application/json",
-      },
-      body: init?.body != null ? JSON.stringify(init.body) : undefined,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: init?.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${cfg.token}`,
+          "Notion-Version": cfg.version,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        body: init?.body != null ? JSON.stringify(init.body) : undefined,
+        // 요청당 하드 타임아웃 — 응답이 안 오는 fetch 가 무한 대기하면 워커가 침묵 정지(행)해 정체 감지 킬로
+        //  귀결된다(어니스트 실배포 의혹). 60s 에 끊고 재시도 → 소진 시 실패 집계(커서 동결)로 전환.
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      if (attempt < MAX_RETRY) { await sleep(REQ_INTERVAL_MS * (attempt + 2)); continue; } // 타임아웃/네트워크 — 재시도
+      throw new Error(`Notion 네트워크 실패(재시도 소진) ${pathname}: ${(err as Error)?.message ?? err}`);
+    }
 
     if (res.status === 429 || res.status === 529) { // rate limit/과부하 — Retry-After 존중
       const ra = Number(res.headers.get("retry-after"));
@@ -182,7 +191,8 @@ async function downloadAsset(job: AssetJob, dir: string): Promise<void> {
   const dest = path.join(dir, job.file);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(job.url);
+      // 자산은 파일 크기가 커 API 보다 넉넉한 타임아웃(5분) — 무한 대기(행)만 차단.
+      const res = await fetch(job.url, { signal: AbortSignal.timeout(300_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (!buf.length) throw new Error("빈 응답");
