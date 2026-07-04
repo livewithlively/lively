@@ -14,7 +14,7 @@ import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
-import { DANGEROUS_SCOPES } from "./capabilities/scopes.js";
+import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit } from "./org/git-credential-materialize.js";
@@ -165,27 +165,38 @@ export function profileStatusFor(memberId: string): ReturnType<typeof profileSta
 //  ⭐ per-member lively 신원: 프로필 .claude.json 의 lively MCP 를 '공용 agent' 가 아니라 '이 멤버' 토큰으로 굽는다.
 //   → 그 프로필로 뜬 세션의 MCP 쓰기(knowledge_save 등)가 멤버로 귀속(updated_by=멤버)·토큰탭 표시·회수가능.
 //   멤버 DB 토큰(lvk_)을 발급 → LIVELY_TOKEN 으로 넘김(register-clients 가 프로필 .claude.json 에 구움).
-//   유효권한 = verifyDbToken 이 '라이브 멤버 스코프'와 매 호출 교집합(퇴사·강등 즉시 무효). admin/runtime 은 제외(세션에 fleet제어 금지).
+//   유효권한 = verifyDbToken 이 '라이브 멤버 스코프'와 매 호출 교집합(퇴사·강등 즉시 무효). admin/runtime 은 기본 제외(세션 최소권한) — 관리탭에서 admin 이 명시 opt-in(includeControlPlane) 시에만 포함(#549 후속).
 //   ⚠ KIT_PROFILE_ONLY=1 — install-kit 이 공유 ~/.lively/token(훅 fetch·전 세션 공유)을 멤버 토큰으로 덮지 않게(프로필 .claude.json 만).
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");   // dist/ → 리포 루트
-export async function provisionProfile(memberId: string): Promise<{ slug: string; dir: string }> {
+
+// 중앙박스 프로필/OS 유저 토큰 발급 — 기존 central-box 토큰 회수 후 새로 굽는다(평문은 못 되찾으니 매번 새로).
+//  기본은 admin/runtime 제외(세션 최소권한). includeControlPlane=true(관리탭에서 admin 이 '관리 권한 포함'을 명시
+//  opt-in)면 멤버 scope 의 admin/runtime 도 싣는다 — 에이전트가 관리 기능(MCP org_*)을 세션에서 쓰게(#549 후속).
+//  멤버 scope 가 상한이라 멤버에 admin 없으면 자연히 안 실리고, 멤버 scope 하향 시 매 호출 intersection 으로 즉시
+//  무효(회수의 진짜 지점 = 멤버 scope지 발급 경로가 아니다). 발급은 org_content_audit 에 남는다(누가 어느 에이전트에 관리권한 실었나).
+async function mintCentralBoxToken(memberId: string, memberScopes: string[], slug: string, includeControlPlane: boolean): Promise<string> {
+  // 재프로비저닝 누적 방지 — 이 멤버의 기존 central-box 토큰 회수(평문은 못 되찾으니 매번 새로 굽는다).
+  for (const t of await listTokens()) {
+    if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
+      await revokeToken(t.token_hash, "provisionCentralBox", "terminal-sessions");
+    }
+  }
+  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
+  // 기본: admin/runtime 제외. opt-in: 멤버 scope 그대로(admin/runtime 포함 — 멤버가 그 권한을 가질 때만 실제로 실림).
+  const scopes = (memberScopes || []).filter((s) => isScope(s) && (includeControlPlane || !dangerous.has(s)));
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `central-box:${slug}${includeControlPlane ? " +admin" : ""}` },
+    "provisionCentralBox", "terminal-sessions",
+  );
+  return token;
+}
+
+export async function provisionProfile(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; dir: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-
-  // 재프로비저닝 누적 방지 — 이 멤버의 기존 central-box 토큰 회수(평문은 못 되찾으니 매번 새로 굽는다).
-  for (const t of await listTokens()) {
-    if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
-      await revokeToken(t.token_hash, "provisionProfile", "terminal-sessions");
-    }
-  }
-  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
-  const scopes = (member.scopes || []).filter((s) => !dangerous.has(s));
-  const { token } = await mintToken(
-    { userId: memberId, memberId, scopes, label: `central-box:${slug}` },
-    "provisionProfile", "terminal-sessions",
-  );
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
 
   const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
   // 게이트웨이 env 상속 + 멤버 토큰(프로필 .claude.json 에 구움) + KIT_PROFILE_ONLY(공유 ~/.lively 보존). 최대 3분(키트 다운로드+등록).
@@ -203,23 +214,12 @@ export async function provisionProfile(memberId: string): Promise<{ slug: string
 //  반드시 /opt/lively/libexec 의 root 소유본을 쓴다. 멤버 토큰은 provisionProfile 과 동일하게 민팅해 넘긴다
 //  (sudoers env_keep=LIVELY_TOKEN/MEMBER_NAME/MEMBER_EMAIL 로 통과 — PATH 는 미보존이라 secure_path). admin 게이트는 라우트가.
 const PROVISION_BIN = process.env.LIVELY_PROVISION_BIN || "/opt/lively/libexec/provision-member";
-export async function provisionMemberOs(memberId: string): Promise<{ slug: string; osUser: string }> {
+export async function provisionMemberOs(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; osUser: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  // 재프로비저닝 누적 방지 — 기존 central-box 토큰 회수(평문 못 되찾으니 매번 새로 굽는다).
-  for (const t of await listTokens()) {
-    if (t.member_id === memberId && !t.revoked_at && (t.label || "").startsWith("central-box:")) {
-      await revokeToken(t.token_hash, "provisionMemberOs", "terminal-sessions");
-    }
-  }
-  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
-  const scopes = (member.scopes || []).filter((s) => !dangerous.has(s));
-  const { token } = await mintToken(
-    { userId: memberId, memberId, scopes, label: `central-box:${slug}` },
-    "provisionMemberOs", "terminal-sessions",
-  );
+  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug, !!opts?.includeControlPlane);
   await execFileAsync("sudo", ["-n", PROVISION_BIN, memberId], {
     timeout: 180_000,
     env: { ...process.env, LIVELY_TOKEN: token, MEMBER_NAME: member.display_name || slug, MEMBER_EMAIL: member.email || "" },
