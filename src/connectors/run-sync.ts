@@ -17,7 +17,7 @@ import {
 import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initV6Schema } from "../v6/schema.js";
-import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived } from "../v6/connector-mirror.js";
+import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived, loadNotionLedger } from "../v6/connector-mirror.js";
 import { connectors } from "./index.js";
 import { getTeam, losslessStream, getIncludedListIds } from "./clickup.js";
 import { getNotionRunStats } from "./notion.js";
@@ -54,7 +54,18 @@ async function runGenericSync(system: string): Promise<boolean> {
   const incremental = !fullFlag && Number.isFinite(prevMs) && prevMs > 0;
   // since 는 epsilon 만큼 당겨 경계 아이템을 재수집(멱등 upsert 라 중복 무해, 유실만 방지).
   const sinceMs = incremental ? prevMs - CURSOR_EPSILON_MS : undefined;
-  const sinceOpt = sinceMs !== undefined ? { since: new Date(sinceMs).toISOString() } : undefined;
+  let sinceOpt = sinceMs !== undefined ? { since: new Date(sinceMs).toISOString() } as { since: string; ledger?: unknown } : undefined;
+  // #586 notion 델타 증분 — 미러 원장(last_edited·부모·제목)을 커넥터에 넘겨 '진짜 변경분'만 수집하게 한다.
+  //  로드 실패는 비치명(원장 없이도 전체 트래버스로 안전 동작 — 손실 방향 아님).
+  if (system === "notion" && sinceOpt) {
+    try {
+      const ledger = await loadNotionLedger(itemsPool);
+      if (ledger.byId.size) sinceOpt = { ...sinceOpt, ledger };
+      logger.info({ entries: ledger.byId.size, dataSources: ledger.dsToDb.size }, "notion 원장 로드(델타 증분 기준)");
+    } catch (err) {
+      logger.warn({ err: (err as Error)?.message ?? String(err) }, "notion 원장 로드 실패 — 전체 트래버스로 진행(안전 폴백)");
+    }
+  }
 
   let maxMs = Number.isFinite(prevMs) ? prevMs : 0;
   let batch: RawItem[] = [];

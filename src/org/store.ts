@@ -857,8 +857,17 @@ export async function upsertConnector(input: ConnectorUpsertInput, actor?: strin
            VALUES($1,$2,'connector_sync',$3::jsonb,600,true,$4)
          ON CONFLICT (id) DO UPDATE SET enabled=true`,
         [`sync-${input.system}`, `${spec.label} 자동 싱크`, JSON.stringify({ system: input.system }), actor ?? null]);
+      // 일일 full 스윕(#586, notion) — 증분 델타가 구조적으로 못 보는 것들(댓글 단독 변경·멘션 제목 캐시·
+      //  아카이브 전파·search 인덱싱 장기 지연)의 수렴 경로. 주기·활성은 관리자가 조정 가능(DO NOTHING).
+      if (input.system === "notion") {
+        await itemsPool.query(
+          `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
+             VALUES($1,$2,'connector_sync',$3::jsonb,86400,true,$4)
+           ON CONFLICT (id) DO NOTHING`,
+          [`sync-${input.system}-full`, `${spec.label} 일일 전체 스윕(아카이브·완결성)`, JSON.stringify({ system: input.system, full: true }), actor ?? null]);
+      }
     } else {
-      await itemsPool.query(`UPDATE org_cron SET enabled=false WHERE id=$1`, [`sync-${input.system}`]);
+      await itemsPool.query(`UPDATE org_cron SET enabled=false WHERE id = ANY($1::text[])`, [[`sync-${input.system}`, `sync-${input.system}-full`]]);
     }
   } catch (e) {
     console.warn(`[connector] 자동 싱크 잡 등록 실패(비치명) ${input.system}:`, (e as Error)?.message);

@@ -99,7 +99,8 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     const out: unknown[] = [];
     for (const sys of systems) {
       try {
-        const run = await startConnectorRun(sys, { trigger: "cron" });
+        // params.full=true → 전체 재수집(일일 full 스윕 잡 — 증분 델타가 못 보는 것들의 수렴 경로 #586).
+        const run = await startConnectorRun(sys, { trigger: "cron", full: params.full === true });
         if (run.alreadyRunning) { out.push({ system: sys, ok: true, skipped: "already_running", run_id: run.runId }); continue; }
         const r = await run.done;
         out.push({ system: sys, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
@@ -336,4 +337,16 @@ export function startScheduler(): void {
   logger.info("scheduler started (in-process, org_cron)");
   timer = setInterval(() => { tick().catch((e) => logger.warn({ err: e }, "scheduler tick failed")); }, TICK_MS);
   if (timer.unref) timer.unref(); // 스케줄러 타이머가 프로세스 정상 종료를 막지 않게.
+  // 기존 설치 이행(#586) — notion 활성 커넥터의 일일 full 스윕 잡이 없으면 생성(커넥터 재저장 없이도 적용).
+  //  증분이 델타(변경 비례)로 바뀌면서 아카이브·멘션 제목·댓글 단독 변경의 수렴은 이 잡이 담보한다.
+  void (async () => {
+    try {
+      const on = await q(itemsPool, `SELECT 1 FROM org_connector WHERE system='notion' AND enabled=true`);
+      if (!on.length) return;
+      await q(itemsPool,
+        `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled)
+           VALUES('sync-notion-full','Notion 일일 전체 스윕(아카이브·완결성)','connector_sync','{"system":"notion","full":true}'::jsonb,86400,true)
+         ON CONFLICT (id) DO NOTHING`);
+    } catch (e) { logger.warn({ err: (e as Error)?.message }, "notion full 스윕 잡 보장 실패(비치명)"); }
+  })();
 }
