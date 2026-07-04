@@ -181,21 +181,45 @@ async function getListWithMembers(id: number): Promise<ProjectListRow | undefine
      FROM project_list pl WHERE pl.id=$1`, [id]);
 }
 
-// ── 리스트 스코프 ClickUp 커스텀필드 컬럼(#541) — 이관된 정의(external_id 보유)를 리스트 뷰 컬럼으로 노출. ──
-//  정의는 태스크 미러가 루트 프로젝트마다 복제(task_field.(project_id, external_id) 유니크)하므로,
-//  리스트 소속 프로젝트들에서 external_id 로 dedup 해 컬럼 카탈로그를 만들고, 값·프로젝트별 내부 field id 맵을 함께 준다
-//  (편집 POST 는 프로젝트별 내부 id 가 필요 — 프론트가 cuIds 로 해소).
+// ── 리스트 스코프 ClickUp 커스텀필드 컬럼(#541) — 리스트 뷰 컬럼 카탈로그 + 값 + 편집용 내부 id 맵. ──
+//  컬럼 카탈로그의 1차 원천 = **settings.clickup.field_defs**(계층 싱크가 매 run 완전 수집 — 방금 ClickUp 에서
+//  추가한 컬럼도 다음 싱크에 즉시 포함, 값 유무 무관). 태스크별 복제 정의(task_field)는 값·편집 id 용이며,
+//  field_defs 에 없는 잔여(레거시)만 카탈로그에 union. 순서 = ClickUp field_defs 순서.
 export interface ListClickupFields {
   fields: Array<{ key: string; name: string; field_type: string; config: Record<string, unknown> }>;
   values: Record<string, Record<string, unknown>>;   // projectId → { externalId → value }
   fieldIds: Record<string, Record<string, number>>;  // projectId → { externalId → task_field.id }
 }
 export async function getListClickupFields(listId: number): Promise<ListClickupFields> {
-  const defs = await q(itemsPool,
+  // 지연 import 회피 — 커넥터 원본 정의(type/type_config)→우리 필드 타입/config 매핑은 미러와 단일 원천 공유.
+  const { mapClickUpFieldType, mapClickUpFieldConfig } = await import("./connector-mirror.js");
+
+  const listRow: { settings: Record<string, unknown> | null } | undefined = await one(itemsPool,
+    `SELECT settings FROM project_list WHERE id=$1`, [listId]);
+  const rawDefs = ((listRow?.settings ?? null)?.clickup as Record<string, unknown> | undefined)
+    ?.field_defs as Array<{ id?: unknown; name?: unknown; type?: unknown; type_config?: unknown }> | undefined;
+
+  const fields: ListClickupFields["fields"] = [];
+  const seen = new Set<string>();
+  for (const d of Array.isArray(rawDefs) ? rawDefs : []) {
+    const key = d?.id != null ? String(d.id) : "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    fields.push({
+      key,
+      name: String(d?.name ?? key),
+      field_type: mapClickUpFieldType(d?.type as string | null | undefined),
+      config: mapClickUpFieldConfig(d?.type as string | null | undefined, (d?.type_config ?? null) as Record<string, unknown> | null),
+    });
+  }
+  // 레거시 union — field_defs 에 없는 태스크별 복제 정의(구 이관분·field_defs 미수집 리스트).
+  const replicas = await q(itemsPool,
     `SELECT DISTINCT ON (tf.external_id) tf.external_id AS key, tf.name, tf.field_type, tf.config
        FROM task_field tf JOIN project p ON p.id = tf.project_id
       WHERE p.list_id = $1 AND tf.external_id IS NOT NULL
       ORDER BY tf.external_id, tf.id`, [listId]);
+  for (const r of replicas as ListClickupFields["fields"]) if (!seen.has(r.key)) { seen.add(r.key); fields.push(r); }
+
   const rows = await q(itemsPool,
     `SELECT p.id AS project_id, tf.external_id, tf.id AS field_id, tfv.value
        FROM project p
@@ -209,5 +233,5 @@ export async function getListClickupFields(listId: number): Promise<ListClickupF
     (fieldIds[pid] ??= {})[r.external_id] = r.field_id;
     if (r.value !== null && r.value !== undefined) (values[pid] ??= {})[r.external_id] = r.value;
   }
-  return { fields: defs as ListClickupFields["fields"], values, fieldIds };
+  return { fields, values, fieldIds };
 }
