@@ -20,6 +20,8 @@ export interface ProjectListRow {
   settings: Record<string, unknown>;  // 리스트 단위 목록 UI 커스텀 백(기본 보기·표시필드 등). #475.
   members: ListMember[];     // 리스트 참여자(표시명 조인) — 보드 페이스파일·내 리스트 판정.
   project_count: number;     // 이 리스트에 속한 프로젝트(level='project') 수.
+  external_system: string | null; // 커넥터 이관 좌표(#541 — clickup 등). NULL=네이티브. 프론트 CU 컬럼 게이트.
+  external_id: string | null;
 }
 
 const auditList = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
@@ -39,6 +41,7 @@ export async function listProjectLists(viewerVis?: string): Promise<ProjectListR
   return q(itemsPool,
     `SELECT pl.id, pl.name, pl.color, pl.sort, pl.created_by, pl.created_at, pl.updated_at,
        pl.folder_id, COALESCE(pl.visibility, 'open') AS visibility, COALESCE(pl.settings, '{}'::jsonb) AS settings,
+       pl.external_system, pl.external_id,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', plm.member_id, 'display_name', om.display_name) ORDER BY plm.sort, plm.member_id)
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
@@ -176,4 +179,35 @@ async function getListWithMembers(id: number): Promise<ProjectListRow | undefine
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
           AND p.folder IS DISTINCT FROM '__board_anchor__') AS project_count
      FROM project_list pl WHERE pl.id=$1`, [id]);
+}
+
+// ── 리스트 스코프 ClickUp 커스텀필드 컬럼(#541) — 이관된 정의(external_id 보유)를 리스트 뷰 컬럼으로 노출. ──
+//  정의는 태스크 미러가 루트 프로젝트마다 복제(task_field.(project_id, external_id) 유니크)하므로,
+//  리스트 소속 프로젝트들에서 external_id 로 dedup 해 컬럼 카탈로그를 만들고, 값·프로젝트별 내부 field id 맵을 함께 준다
+//  (편집 POST 는 프로젝트별 내부 id 가 필요 — 프론트가 cuIds 로 해소).
+export interface ListClickupFields {
+  fields: Array<{ key: string; name: string; field_type: string; config: Record<string, unknown> }>;
+  values: Record<string, Record<string, unknown>>;   // projectId → { externalId → value }
+  fieldIds: Record<string, Record<string, number>>;  // projectId → { externalId → task_field.id }
+}
+export async function getListClickupFields(listId: number): Promise<ListClickupFields> {
+  const defs = await q(itemsPool,
+    `SELECT DISTINCT ON (tf.external_id) tf.external_id AS key, tf.name, tf.field_type, tf.config
+       FROM task_field tf JOIN project p ON p.id = tf.project_id
+      WHERE p.list_id = $1 AND tf.external_id IS NOT NULL
+      ORDER BY tf.external_id, tf.id`, [listId]);
+  const rows = await q(itemsPool,
+    `SELECT p.id AS project_id, tf.external_id, tf.id AS field_id, tfv.value
+       FROM project p
+       JOIN task_field tf ON tf.project_id = p.id AND tf.external_id IS NOT NULL
+       LEFT JOIN task_field_value tfv ON tfv.field_id = tf.id AND tfv.task_id = p.id
+      WHERE p.list_id = $1`, [listId]);
+  const values: Record<string, Record<string, unknown>> = {};
+  const fieldIds: Record<string, Record<string, number>> = {};
+  for (const r of rows as Array<{ project_id: number; external_id: string; field_id: number; value: unknown }>) {
+    const pid = String(r.project_id);
+    (fieldIds[pid] ??= {})[r.external_id] = r.field_id;
+    if (r.value !== null && r.value !== undefined) (values[pid] ??= {})[r.external_id] = r.value;
+  }
+  return { fields: defs as ListClickupFields["fields"], values, fieldIds };
 }

@@ -3641,3 +3641,28 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .proj-att-cap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-proj-extlink { font-size: 12.5px; font-weight: 700; color: var(--muted-2); text-decoration: none; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; }
 .pjv-proj-extlink:hover { color: var(--blue); border-color: var(--blue); }
+
+/* ── #541 칸반 보드 + ClickUp 컬럼 배지 ── */
+.pjv-kanban { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding: 4px 2px 14px; }
+.pjv-kb-col { flex: 0 0 264px; max-width: 264px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.pjv-kb-col.drop-over { border-color: var(--blue); background: var(--bg-tint-2); }
+.pjv-kb-head { display: flex; align-items: center; gap: 7px; padding: 4px 6px 8px; font-weight: 700; font-size: 13px; }
+.pjv-kb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-kb-count { font-size: 11.5px; color: var(--muted-2); font-weight: 600; }
+.pjv-kb-body { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.pjv-kb-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; cursor: pointer; }
+.pjv-kb-card:hover { border-color: var(--blue); }
+.pjv-kb-card.dragging { opacity: .45; }
+.pjv-kb-card.done .pjv-kb-name { color: var(--muted-2); text-decoration: line-through; }
+.pjv-kb-name { font-size: 13.5px; font-weight: 650; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pjv-kb-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pjv-kb-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--bg-tint); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-kb-meta { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-height: 20px; }
+.pjv-kb-due { font-size: 11.5px; color: var(--muted-2); }
+.pjv-kb-due.overdue { color: var(--red, #e11d48); font-weight: 700; }
+.pjv-kb-prio { font-size: 11px; font-weight: 700; }
+.pjv-kb-prio.urgent { color: #e11d48; } .pjv-kb-prio.high { color: #f59e0b; } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
+.pjv-kb-faces { margin-left: auto; display: inline-flex; }
+.pjv-kb-faces .pjv-kb-face { width: 20px; height: 20px; border-radius: 50%; font-size: 9px; margin-left: -5px; border: 1.5px solid var(--bg); }
+.pjv-kb-empty { font-size: 12px; color: var(--muted-3); text-align: center; padding: 14px 0; }
+.pjv-thcol-src { font-size: 9px; font-weight: 800; letter-spacing: .04em; color: var(--muted-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; margin-left: 4px; }
