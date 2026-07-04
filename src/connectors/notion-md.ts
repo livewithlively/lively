@@ -42,12 +42,12 @@ export function normalizeNotionId(id: string): string {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
-// notion.so URL → page/database uuid (없으면 null). 딥링크 재작성·링크 엣지용.
-//  형태: https://www.notion.so/<slug>-<32hex>[?…] | https://www.notion.so/<32hex> | #<32hex>(블록 앵커는 페이지 id 아님 → 경로만).
+// notion URL → page/database uuid (없으면 null). 딥링크 재작성·링크 엣지용.
+//  형태: https://www.notion.so/<slug>-<32hex> | https://app.notion.com/p/<slug>-<32hex> | notion.site — 도메인 이관 관용.
 export function notionIdFromUrl(url: string): string | null {
   try {
     const u = new URL(url);
-    if (!/(^|\.)notion\.(so|site)$/.test(u.hostname)) return null;
+    if (!/(^|\.)notion\.(so|site|com)$/.test(u.hostname)) return null;
     const path = u.pathname.split("/").filter(Boolean).pop() ?? "";
     const m = path.match(/([0-9a-fA-F]{32})$/);
     if (m) return normalizeNotionId(m[1]);

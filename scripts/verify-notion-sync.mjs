@@ -136,7 +136,7 @@ function harvest(blocks, acc) {
 function idFromUrl(url) {
   try {
     const u = new URL(url);
-    if (!/(^|\.)notion\.(so|site)$/.test(u.hostname)) return null;
+    if (!/(^|\.)notion\.(so|site|com)$/.test(u.hostname)) return null;
     const m = (u.pathname.split("/").filter(Boolean).pop() ?? "").match(/([0-9a-fA-F]{32})$/);
     return m ? norm(m[1]) : null;
   } catch { return null; }

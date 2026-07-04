@@ -684,6 +684,7 @@ function iconValue(icon: Rec | null | undefined, ctx?: NotionMdCtx): unknown {
 
 function linksArray(t: Traversal, links: Map<string, string>): Array<{ target_external_id: string; target_name: string; kind: string }> {
   return [...links.entries()]
+    .filter(([, kind]) => kind !== "child") // 자식 엣지는 트리(parent_name)가 진실 — 링크 그래프에 중복 물질화하지 않음
     .filter(([id]) => t.pages.has(id) || t.dbs.has(id) || t.dsToDb.has(id))
     .map(([id, kind]) => {
       const target = t.dsToDb.get(id) ?? id;
