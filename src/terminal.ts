@@ -86,7 +86,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const members = (await listMembers().catch(() => []))
       .filter((m) => m.state !== "inactive" && m.kind !== "system");
     const profiles = [];
-    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, status: await profileStatusFor(m.id), os: await memberOsStatus(m.id) });
+    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, kind: m.kind, scopes: m.scopes || [], status: await profileStatusFor(m.id), os: await memberOsStatus(m.id) });
     res.setHeader("Cache-Control", "no-store");
     res.json({ profiles });
   }));
@@ -96,7 +96,9 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
     if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
     if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
-    const { slug, dir } = await provisionProfile(member);
+    // #549 후속: admin 이 명시 opt-in(includeControlPlane) 하면 관리 권한(admin/runtime)도 프로필 토큰에 싣는다(멤버 scope 가 상한).
+    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
+    const { slug, dir } = await provisionProfile(member, { includeControlPlane });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, member, slug, dir, status: await profileStatusFor(member),
       loginHint: `로그인(그 멤버 계정): 웹터미널에서 'CLAUDE_CONFIG_DIR=${dir} claude' 실행 후 /login` });
@@ -110,7 +112,8 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
     const os = await memberOsStatus(member);
     if (!os.ready) throw new HttpError(409, "격리 인프라 미설치 — 박스에서 install-isolation.sh 를 먼저 실행하세요(box-spawn·sudoers·그룹).");
-    const { slug, osUser } = await provisionMemberOs(member);
+    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
+    const { slug, osUser } = await provisionMemberOs(member, { includeControlPlane });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, member, slug, osUser, os: await memberOsStatus(member),
       loginHint: `이제 이 멤버가 자기 새 세션에서 'claude' → /login 하면 자격증명이 /home/${osUser}/.claude(700)에 격리 저장됩니다.` });

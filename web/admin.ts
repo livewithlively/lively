@@ -1290,19 +1290,29 @@ async function profilesEditor(detail) {
       : os.provisioned ? '🔒 격리됨: ' + (os.osUser || '') + ' ✓ · 세션 자동 격리'
         : '⏳ 첫 세션에 자동 격리 (' + (os.osUser || 'box_…') + ')';
     kids.push(el('div', {}, el('strong', { text: p.name }), el('span', { class: 'caption', text: '  ' + p.id + ' · ' + stateText })));
+    // #549: 이 멤버가 admin/runtime scope 를 가지면, 프로비저닝 토큰에 그 관리 권한을 실을지 admin 이 선택(기본 off).
+    //  멤버 scope 가 상한이라 이 체크박스는 admin/runtime 보유 멤버에만 뜬다. 체크 시 이 계정 세션이 관리 MCP(org_*)를 직접 쓴다.
+    const hasCtrl = (p.scopes || []).some((s) => s === 'admin' || s === 'runtime');
+    let cpChk: any = null;
+    if (hasCtrl) {
+      cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
+      kids.push(el('label', { class: 'caption', style: 'display:block;margin:3px 0 7px;cursor:pointer' },
+        cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 계정으로 뜬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다(#549).' })));
+    }
+    const cp = () => !!(cpChk && cpChk.checked);
     if (!os.ready) {
       kids.push(el('div', { class: 'caption', text: '박스에서 deploy/linux/install-isolation.sh 실행 시 자동 격리가 켜집니다.' }));
     } else if (!os.provisioned) {
       // 자동이지만, 첫 세션 지연(수십초) 없이 미리 깔고 싶으면.
       kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '지금 미리 만들기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '생성 중… (수십초)';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('OS 격리 유저 생성됨 — 이 멤버 세션이 본인 계정으로 격리됩니다'); reload(); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id, includeControlPlane: cp() }) }); toast('OS 격리 유저 생성됨 — 이 멤버 세션이 본인 계정으로 격리됩니다' + (cp() ? ' (관리 권한 포함)' : '')); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '지금 미리 만들기'; toast('실패 — ' + e.message, true); }
       } }));
     } else {
       kids.push(el('button', { class: 'btn btn-ghost btn-sm', text: '재프로비저닝(격리·토큰 갱신)', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = '갱신 중…';
-        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id }) }); toast('재프로비저닝됨 — 로그인·실행중 세션 유지, 새 세션부터 새 토큰'); reload(); }
+        try { await api('/api/ui/terminal/members/provision-os', { method: 'POST', body: JSON.stringify({ member: p.id, includeControlPlane: cp() }) }); toast('재프로비저닝됨 — 로그인·실행중 세션 유지, 새 세션부터 새 토큰' + (cp() ? ' (관리 권한 포함)' : '')); reload(); }
         catch (e) { btn.disabled = false; btn.textContent = '재프로비저닝(격리·토큰 갱신)'; toast('실패 — ' + e.message, true); }
       } }));
     }
