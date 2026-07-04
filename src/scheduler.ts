@@ -92,20 +92,17 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
   }
 
   if (job.action === "connector_sync") {
-    // 서브프로세스로 격리(검증된 run-sync CLI). params.system 없으면 active 전체. cwd=게이트웨이 루트(launchd 기동 위치).
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileP = promisify(execFile);
+    // #586 run-tracker 경유 — 실행이 connector_run 엔티티로 기록되고(상태·로그·통계) 웹에서 관찰 가능.
+    //  크론은 완주를 기다려 잡 상태에 결과를 남긴다(타임아웃·중복 가드는 tracker 내부).
+    const { startConnectorRun } = await import("./connectors/run-tracker.js");
     const systems = params.system ? [String(params.system)] : await activeConnectorSystems();
     const out: unknown[] = [];
     for (const sys of systems) {
       try {
-        // notion(#551)은 재귀 트래버스+3rps 스로틀이라 페이지 수에 비례해 오래 걸림 — 타임아웃 상향(중간 kill 은 커서 동결이라
-        //  유실은 없지만 영원히 완주 못 하는 상태가 됨). 그 외 커넥터는 기존 300s 유지.
-        const timeout = sys === "notion" ? 1_800_000 : 300_000;
-        const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-sync.js", sys],
-          { timeout, maxBuffer: 16 * 1024 * 1024 });
-        out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
+        const run = await startConnectorRun(sys, { trigger: "cron" });
+        if (run.alreadyRunning) { out.push({ system: sys, ok: true, skipped: "already_running", run_id: run.runId }); continue; }
+        const r = await run.done;
+        out.push({ system: sys, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
       } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
     }
     return { status: "ok", summary: { systems: out } };

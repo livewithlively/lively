@@ -3746,3 +3746,22 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .pjv-side-space-avatar { width: 18px; height: 18px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff; flex: none; }
 .pjv-side-navspace .pjv-side-navlabel { font-weight: 750; }
 .pjv-side-navspace { margin-top: 4px; }
+/* ═══════════ #586 커넥터 UX — 상태 카드·가이드·픽커·run 로그 ═══════════ */
+.conn-status { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg-tint); }
+.conn-status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.conn-status-actions { margin-top: 10px; }
+.conn-guide { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 14px; background: var(--bg); }
+.conn-guide > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.conn-guide-steps { margin: 8px 0 4px; padding-left: 20px; font-size: 13px; line-height: 1.7; color: var(--ink); }
+.conn-guide-steps li { margin-bottom: 4px; }
+.conn-guide-link { margin: 4px 0 2px; font-size: 13px; }
+.conn-pick-row { display: flex; gap: 8px; align-items: center; }
+.conn-pick-row input { flex: 1; min-width: 0; }
+.conn-pick-row .btn { flex: none; white-space: nowrap; }
+.conn-pick-list { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; margin: 8px 0; }
+.conn-pick-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+.conn-pick-item:hover { background: var(--bg-tint); }
+.conn-pick-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-list { max-height: 60vh; overflow: auto; }
+.run-log { background: #0F1B2D; color: #D7E3F4; border-radius: 10px; padding: 12px 14px; margin-top: 8px;
+  max-height: 56vh; min-height: 200px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }

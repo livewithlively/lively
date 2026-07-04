@@ -772,11 +772,21 @@ export interface ConnectorView {
   note: string | null;
   updated_at: string | null;
   secrets_enabled: boolean;             // 마스터키(CONNECTOR_SECRET_KEY) 설정 여부 — 관리탭 안내용
+  guide?: { intro?: string; steps: string[]; url?: string }; // 토큰 발급 가이드(#586 — 폼 상단 안내)
+  sync_job?: { enabled: boolean; interval_sec: number } | null; // 자동 싱크 잡 상태(#586)
 }
 
 export async function listConnectors(): Promise<ConnectorView[]> {
   const r = await itemsPool.query(`SELECT system, enabled, config, secrets, note, updated_at FROM org_connector`);
   const byId = new Map<string, Record<string, unknown>>(r.rows.map((x) => [x.system as string, x]));
+  // 자동 싱크 잡 상태(#586) — sync-<system> 잡을 함께 보여줘 '커넥터 켬=싱크 돎'이 화면에서 검증되게.
+  const jobs = new Map<string, { enabled: boolean; interval_sec: number }>();
+  try {
+    const jr = await itemsPool.query(`SELECT id, enabled, interval_sec FROM org_cron WHERE id LIKE 'sync-%'`);
+    for (const row of jr.rows as Array<{ id: string; enabled: boolean; interval_sec: number }>) {
+      jobs.set(row.id.replace(/^sync-/, ""), { enabled: row.enabled, interval_sec: row.interval_sec });
+    }
+  } catch { /* org_cron 미생성 — 무시 */ }
   const secEnabled = secretsEnabled();
   return Object.values(CONNECTOR_SPECS).map((spec) => {
     const row = byId.get(spec.system);
@@ -789,10 +799,11 @@ export async function listConnectors(): Promise<ConnectorView[]> {
       else config[f.key] = String(rowConfig[f.key] ?? "");
     }
     return {
-      system: spec.system, label: spec.label, fields: spec.fields,
+      system: spec.system, label: spec.label, fields: spec.fields, guide: spec.guide,
       enabled: Boolean(row?.enabled), config, secretsSet,
       note: (row?.note as string) ?? null, updated_at: (row?.updated_at as string) ?? null,
       secrets_enabled: secEnabled,
+      sync_job: jobs.get(spec.system) ?? null,
     };
   });
 }
@@ -836,6 +847,22 @@ export async function upsertConnector(input: ConnectorUpsertInput, actor?: strin
        version=org_connector.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [input.system, enabled, JSON.stringify(config), JSON.stringify(secrets), note, actor ?? null],
   );
+
+  // ── #586 커넥터 활성화 = 싱크 자동 — sync-<system> 크론 잡을 자동 등록/해제(스케줄러 별도 등록 불필요). ──
+  //  이미 있으면 enabled 만 토글(관리자가 조정한 주기·파라미터 보존). org_cron 부재 등은 비치명(커넥터 저장은 성공).
+  try {
+    if (enabled) {
+      await itemsPool.query(
+        `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
+           VALUES($1,$2,'connector_sync',$3::jsonb,600,true,$4)
+         ON CONFLICT (id) DO UPDATE SET enabled=true`,
+        [`sync-${input.system}`, `${spec.label} 자동 싱크`, JSON.stringify({ system: input.system }), actor ?? null]);
+    } else {
+      await itemsPool.query(`UPDATE org_cron SET enabled=false WHERE id=$1`, [`sync-${input.system}`]);
+    }
+  } catch (e) {
+    console.warn(`[connector] 자동 싱크 잡 등록 실패(비치명) ${input.system}:`, (e as Error)?.message);
+  }
   // 감사 — 시크릿 '값'은 스냅샷에 넣지 않는다(설정된 키 목록만).
   const auditBefore = before ? { enabled: before.enabled, config: before.config, secretKeys: Object.keys(before.secrets ?? {}), note: before.note } : null;
   const auditAfter = { enabled, config, secretKeys: Object.keys(secrets), note };
