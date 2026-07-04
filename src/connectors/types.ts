@@ -6,6 +6,8 @@ export type { RawItem };
 
 export interface BackfillOpts {
   since?: string; // ISO8601 — 증분 백필 (생략 시 전체)
+  /** 미러 원장 스냅샷(커넥터별 형태) — 증분 델타가 '이미 아는 것'과 대조해 변경분만 수집하게 한다(notion #586). */
+  ledger?: unknown;
 }
 
 export interface Connector {

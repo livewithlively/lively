@@ -32,6 +32,7 @@ import type {
   NotionBlock, NotionComment, NotionDatabase, NotionDataSource, NotionListResponse,
   NotionPage, NotionRichText, NotionUser,
 } from "./notion-types.js";
+import type { NotionLedger } from "../v6/connector-mirror.js"; // type-only — 런타임 의존 없음(원장은 run-sync 가 주입)
 
 // ── 상수 ───────────────────────────────────────────────────────────────────
 const API_BASE = "https://api.notion.com/v1";
@@ -42,6 +43,10 @@ const PAGE_CONCURRENCY = 4;  // 페이지 수집 병렬도 — 슬롯이 전역�
 const MAX_RETRY = 5; // 429/529/5xx 재시도 횟수
 const MAX_BLOCK_DEPTH = 64; // 순환 방지 가드(정상 문서는 도달 불가 — 구버전의 '깊이 5 절단'과 달리 손실 아님)
 const PAGE_FETCH_RETRY = 2; // 페이지 단위 재시도(블록 트리 등) — 그 후 실패는 failures 로 집계(미방출)
+// 델타 증분(#586) 인덱싱 지연 안전창 — 노션 search 는 eventually-consistent 라 방금 편집분이 늦게 인덱싱될 수 있다.
+//  커서보다 이만큼 과거까지 스캔하되, 원장(last_edited 동등) 대조로 기수집분은 0비용 스킵 → 지연이 이 창 안이면 유실 없음.
+//  창을 넘는 지연·댓글 단독 변경·멘션 제목 캐시는 일일 full 스윕이 수렴(완결성의 최종 담보는 언제나 full).
+const DELTA_LOOKBACK_MS = 72 * 3_600_000;
 
 // ── 실행 통계 — run-sync 가 커서 동결/스윕 판단에 사용 ─────────────────────────
 export interface NotionRunStats {
@@ -204,6 +209,8 @@ interface PageNode {
   sort: number | null;
   childrenOrder: string[];
   changed: boolean;   // since 증분 — true 면 전체 추출·방출
+  /** 델타 증분 — since 판정과 무관하게 강제 수집(원장 불일치·개명 부모 재렌더 등) */
+  forceChanged?: boolean;
   isDbRow: boolean;
   failed: boolean;
 }
@@ -222,6 +229,10 @@ interface DbNode {
 interface Traversal {
   cfg: NotionConfig;
   sinceMs: number | undefined;
+  /** 델타 증분(#586) — 미러 원장 스냅샷. 있으면 discoverSeeds 대신 search 델타로 변경분만 수집. */
+  ledger: NotionLedger | null;
+  /** 루트 모드 델타의 스코프 판정 메모(조상 체인 워크 결과 캐시 — 형제 후보 반복 워크 방지) */
+  membership: Map<string, boolean>;
   /** 댓글 read capability 부재(403) 관측 — 이후 페이지는 댓글 호출 자체를 스킵(페이지당 1회 403 낭비 제거, #586). */
   commentsDenied: boolean;
   pages: Map<string, PageNode>;
@@ -230,6 +241,11 @@ interface Traversal {
   users: Map<string, NotionUser | null>;
   assetJobs: Map<string, AssetJob>; // file → job (중복 다운로드 방지)
   stats: NotionRunStats;
+}
+
+/** data_source id → 소유 DB — 이번 run 관측 우선, 없으면 원장 역매핑(델타에서 미변경 DB 의 행/링크 해소). */
+function dsOwnerDb(t: Traversal, dsId: string): string | undefined {
+  return t.dsToDb.get(dsId) ?? t.ledger?.dsToDb.get(dsId);
 }
 
 function pageNode(t: Traversal, id: string): PageNode {
@@ -296,11 +312,22 @@ function discoverChildren(t: Traversal, node: PageNode): void {
       const type = String(b.type ?? "");
       const id = normalizeNotionId(String(b.id ?? ""));
       if (type === "child_page") {
+        // 델타(#586): 원장이 같은 부모의 활성 자식으로 이미 아는 페이지는 노드 생성 자체를 생략(요청 0) —
+        //  그 자식이 실제로 변경됐다면 search 델타가 별도 후보로 이미 큐잉했다(t.pages 에 존재 → 이 분기 미진입).
+        if (t.ledger && !t.pages.has(id)) {
+          const led = t.ledger.byId.get(id);
+          if (led && led.kind !== "database" && led.lifecycle === "active" && led.parentExt === node.id) { order.push(id); continue; }
+        }
         const child = pageNode(t, id);
         child.parentOverride = node.id;
         child.sort = order.length;
+        if (t.ledger) child.forceChanged = true; // 신규/이동/복원 자식 — 원장 불일치로만 이 분기에 온다
         order.push(id);
       } else if (type === "child_database") {
+        if (t.ledger && !t.dbs.has(id)) {
+          const led = t.ledger.byId.get(id);
+          if (led && led.kind === "database" && led.lifecycle === "active" && led.parentExt === node.id) { order.push(id); continue; }
+        }
         const child = dbNode(t, id);
         child.parentOverride = node.id;
         child.sort = order.length;
@@ -420,7 +447,21 @@ async function processPage(t: Traversal, node: PageNode): Promise<void> {
     if (!node.page) {
       node.page = (await notionFetch(t.cfg, `/pages/${node.id}`)) as NotionPage;
     }
-    node.changed = isChanged(t, node.page.last_edited_time);
+    node.changed = node.forceChanged === true || isChanged(t, node.page.last_edited_time);
+    if (!node.changed && t.ledger) {
+      // 델타 — last_edited 로는 안 잡히는 변경: 원장에 없음(신규/편입), 아카이브→복원, 부모 이동.
+      //  (block_id 부모의 이동은 여기서 동기 판정 불가 — full 이 수렴. 나머지는 즉시 재방출.)
+      const led = t.ledger.byId.get(node.id);
+      const p = node.page.parent;
+      const curParent = node.parentOverride
+        ?? (p?.type === "page_id" && p.page_id ? normalizeNotionId(p.page_id)
+          : p?.type === "database_id" && p.database_id ? normalizeNotionId(p.database_id)
+          : p?.type === "data_source_id" && p.data_source_id ? dsOwnerDb(t, normalizeNotionId(p.data_source_id)) ?? null
+          : null);
+      if (!led || led.lifecycle === "archived" || (curParent != null && led.parentExt != null && curParent !== led.parentExt)) {
+        node.changed = true;
+      }
+    }
     if (!node.changed) return; // 미변경 — 제목/부모 맵만 유지(방출 안 함), 블록/댓글 fetch 생략
     for (let attempt = 0; ; attempt++) {
       try {
@@ -607,6 +648,135 @@ async function discoverSeeds(t: Traversal): Promise<void> {
   }
 }
 
+// ── 델타 증분(#586) — search(last_edited desc) + 원장 대조로 변경분만 수집. ─────
+//  비용이 워크스페이스 크기가 아니라 **변경량에 비례**한다:
+//   · 페이지/행: 정렬 search 를 since-LOOKBACK 까지만 스캔, 원장 last_edited 동등이면 0비용 스킵.
+//   · DB: data_source 나열(~N/100 req)로 스키마 변경·신규만 재수집 — linked 뷰(ds 없음)는 비용 0.
+//   · 신규/이동/복원은 원장 불일치로, 자식 추가·재정렬은 부모 last_edited 갱신으로 잡힌다(노션 시맨틱).
+//  안 잡히는 것(댓글 단독 변경·타 페이지 멘션의 제목 캐시·아카이브 전파·LOOKBACK 초과 인덱싱 지연)은
+//  일일 full 스윕이 수렴 — 증분은 빠른 수렴 경로, 완결성의 담보는 full 이라는 기존 불변식 유지.
+
+/** 루트 모드 스코프 판정 — 조상 체인을 원장/루트에 닿을 때까지 워크(결과는 memo). search 모드는 전 범위. */
+async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> {
+  if (!t.cfg.rootIds.length) return true;
+  if (t.cfg.rootIds.includes(id) || t.ledger?.byId.has(id)) return true; // 원장 = 루트 서브트리 기수집분
+  const cached = t.membership.get(id);
+  if (cached !== undefined) return cached;
+  const walked: string[] = [id];
+  let curParent = parent;
+  let verdict = false;
+  for (let hops = 0; hops < 24; hops++) {
+    const ptype = String(curParent.type ?? "");
+    let nextId: string | null = null;
+    if (ptype === "page_id") nextId = normalizeNotionId(String(curParent.page_id ?? ""));
+    else if (ptype === "database_id") nextId = normalizeNotionId(String(curParent.database_id ?? ""));
+    else if (ptype === "data_source_id") nextId = dsOwnerDb(t, normalizeNotionId(String(curParent.data_source_id ?? ""))) ?? null;
+    else if (ptype === "block_id") nextId = await resolveBlockOwnerPage(t, String(curParent.block_id ?? ""));
+    else break; // workspace 등 — 루트 체인에 닿지 못함 → 범위 밖
+    if (!nextId || nextId.length !== 36) break;
+    if (t.cfg.rootIds.includes(nextId) || t.ledger?.byId.has(nextId)) { verdict = true; break; }
+    const memoed = t.membership.get(nextId);
+    if (memoed !== undefined) { verdict = memoed; break; }
+    walked.push(nextId);
+    try {
+      curParent = asRec(((await notionFetch(t.cfg, `/pages/${nextId}`)) as NotionPage).parent);
+    } catch {
+      try { curParent = asRec(((await notionFetch(t.cfg, `/databases/${nextId}`)) as NotionDatabase).parent); }
+      catch { break; } // 접근 불가 조상 — 범위 밖 취급(다음 full 이 진실 수렴)
+    }
+  }
+  for (const w of walked) t.membership.set(w, verdict);
+  return verdict;
+}
+
+/** 델타 발견 — 후보를 t.pages/t.dbs 에 시딩. 이후 BFS·방출은 full 과 동일 경로(코드 분기 최소화). */
+async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
+  const ledger = t.ledger!;
+  const floorMs = sinceMs - DELTA_LOOKBACK_MS;
+  const c = { pages: 0, rows: 0, dbs: 0, skipped: 0, outOfScope: 0, scanned: 0 };
+
+  // 개명 감지 시 이전/현재 부모 재렌더 큐잉 — 부모 본문의 child_page 제목 캐시·DB 항목 목록이 스테일해지지 않게.
+  const reRender = (pid: string | null | undefined): void => {
+    if (!pid || pid.length !== 36) return;
+    const led = ledger.byId.get(pid);
+    if (!led || led.lifecycle !== "active") return;
+    if (led.kind === "database") { dbNode(t, pid); return; }
+    const pn = pageNode(t, pid);
+    pn.forceChanged = true;
+  };
+
+  // ① data_source 스윕 — dsToDb 최신화 + 스키마 변경/신규 DB 감지. linked 뷰는 ds 가 없어 자연히 0비용.
+  for await (const r of paginate(t.cfg, (cursor) => ({
+    path: "/search", method: "POST",
+    body: { filter: { property: "object", value: "data_source" }, page_size: PAGE_SIZE, ...(cursor ? { start_cursor: cursor } : {}) },
+  }))) {
+    if (r.object !== "data_source") continue;
+    const ds = r as unknown as NotionDataSource & { last_edited_time?: string };
+    const dsId = normalizeNotionId(String(ds.id ?? ""));
+    const dbId = normalizeNotionId(String(ds.database_parent?.database_id ?? asRec(ds.parent).database_id ?? ""));
+    if (dbId.length !== 36) continue;
+    t.dsToDb.set(dsId, dbId);
+    if (t.dbs.has(dbId)) continue;
+    const led = ledger.byId.get(dbId);
+    const live = String((ds as Rec).last_edited_time ?? "");
+    // 기수집 + 스키마 미변경(ds last_edited ≤ 저장 최대) → 스킵. 멀티소스 DB 의 교차 동률 엣지는 full 이 수렴.
+    if (led && led.kind === "database" && led.lifecycle === "active" && led.dsEdited && live && live <= led.dsEdited) continue;
+    if (!(await inScope(t, dbId, asRec(ds.parent)))) { c.outOfScope++; continue; }
+    dbNode(t, dbId);
+    c.dbs++;
+  }
+
+  // ② 페이지 델타 — last_edited desc 정렬 스캔, floor 아래에서 중단(그 이전은 전부 원장이 안다).
+  outer:
+  for await (const r of paginate(t.cfg, (cursor) => ({
+    path: "/search", method: "POST",
+    body: {
+      filter: { property: "object", value: "page" },
+      sort: { timestamp: "last_edited_time", direction: "descending" },
+      page_size: PAGE_SIZE, ...(cursor ? { start_cursor: cursor } : {}),
+    },
+  }))) {
+    if (r.object !== "page") continue;
+    const p = r as unknown as NotionPage;
+    c.scanned++;
+    const ms = Date.parse(p.last_edited_time ?? "");
+    if (Number.isFinite(ms) && ms < floorMs) break outer;
+    const id = normalizeNotionId(p.id);
+    if (t.pages.has(id)) continue;
+    const led = ledger.byId.get(id);
+    const live = String(p.last_edited_time ?? "");
+    if (led && led.lifecycle === "active" && led.lastEdited === live) { c.skipped++; continue; } // 원장 일치 — 기수집
+    if (!(await inScope(t, id, asRec(p.parent)))) { c.outOfScope++; continue; }
+    const node = pageNode(t, id);
+    node.page = p;
+    node.forceChanged = true;
+    const ptype = String(asRec(p.parent).type ?? "");
+    if (ptype === "data_source_id" || ptype === "database_id") {
+      const rawPid = normalizeNotionId(String(asRec(p.parent).data_source_id ?? asRec(p.parent).database_id ?? ""));
+      const dbId = ptype === "database_id" ? rawPid : dsOwnerDb(t, rawPid);
+      if (dbId) {
+        node.parentOverride = dbId;
+        node.isDbRow = true;
+        // 신규 행·개명 행 — DB 본문(항목 목록)·행 순서가 스테일 → 소유 DB 재수집.
+        if (!led || led.title !== titleOfPage(p)) reRender(dbId);
+      }
+      c.rows++;
+    } else {
+      // 개명 — 이전·현재 부모의 본문(child_page 제목 캐시) 재렌더.
+      if (led && led.title !== titleOfPage(p)) { reRender(led.parentExt); }
+      c.pages++;
+    }
+    if (led && led.parentExt) {
+      // 이동 — 이전 부모의 children_order/본문에서 이 페이지가 빠졌어야 함(이전 부모도 보통 델타에 잡히지만 벨트+멜빵).
+      const curParent = node.parentOverride
+        ?? (ptype === "page_id" ? normalizeNotionId(String(asRec(p.parent).page_id ?? "")) : null);
+      if (curParent && curParent !== led.parentExt) reRender(led.parentExt);
+    }
+  }
+
+  console.error(`[notion] 델타 — 후보 페이지 ${c.pages}·행 ${c.rows}·DB ${c.dbs} · 원장일치 스킵 ${c.skipped} · 범위밖 ${c.outOfScope} · 스캔 ${c.scanned} (원장 ${ledger.byId.size})`);
+}
+
 // block_id 부모 → 소유 페이지 해소(페이지가 컬럼/토글 안에 생성된 경우). 부모 체인을 따라 페이지까지.
 async function resolveBlockOwnerPage(t: Traversal, blockId: string, hops = 8): Promise<string | null> {
   let cur = blockId;
@@ -636,7 +806,7 @@ async function parentExternalIdOf(t: Traversal, node: PageNode): Promise<string 
   if (p.type === "page_id" && p.page_id) return normalizeNotionId(p.page_id);
   if (p.type === "database_id" && p.database_id) return normalizeNotionId(p.database_id);
   if (p.type === "data_source_id" && p.data_source_id) {
-    return t.dsToDb.get(normalizeNotionId(p.data_source_id)) ?? undefined;
+    return dsOwnerDb(t, normalizeNotionId(p.data_source_id));
   }
   if (p.type === "block_id" && p.block_id) {
     return (await resolveBlockOwnerPage(t, p.block_id)) ?? undefined;
@@ -651,7 +821,7 @@ async function dbParentExternalId(t: Traversal, db: NotionDatabase): Promise<str
   if (!p) return undefined;
   if (p.type === "page_id" && p.page_id) return normalizeNotionId(p.page_id);
   if (p.type === "database_id" && p.database_id) return normalizeNotionId(p.database_id);
-  if (p.type === "data_source_id" && p.data_source_id) return t.dsToDb.get(normalizeNotionId(p.data_source_id)) ?? undefined;
+  if (p.type === "data_source_id" && p.data_source_id) return dsOwnerDb(t, normalizeNotionId(p.data_source_id));
   if (p.type === "block_id" && p.block_id) return (await resolveBlockOwnerPage(t, p.block_id)) ?? undefined;
   return undefined; // workspace
 }
@@ -675,12 +845,15 @@ function makeCtx(t: Traversal, ownerId: string, links: Map<string, string>): Not
   return {
     resolveRef: (nid) => {
       const id = normalizeNotionId(nid);
-      const viaDs = t.dsToDb.get(id);
+      const viaDs = dsOwnerDb(t, id);
       const target = viaDs ?? id;
       const pn = t.pages.get(target);
       if (pn) return { name: unitName("notion", target), title: titleOfPage(pn.page) || null };
       const dn = t.dbs.get(target);
       if (dn) return { name: unitName("notion", target), title: titleOfDb(dn.db) || null };
+      // 델타(#586) — 이번 run 이 안 건드린 미변경 대상은 원장으로 해소(링크·제목이 델타에서도 끊기지 않게).
+      const led = t.ledger?.byId.get(target);
+      if (led) return { name: unitName("notion", target), title: led.title || null };
       return null;
     },
     resolveUser: (uid) => t.users.get(uid)?.name ?? null,
@@ -727,9 +900,10 @@ function iconValue(icon: Rec | null | undefined, ctx?: NotionMdCtx): unknown {
 function linksArray(t: Traversal, links: Map<string, string>): Array<{ target_external_id: string; target_name: string; kind: string }> {
   return [...links.entries()]
     .filter(([, kind]) => kind !== "child") // 자식 엣지는 트리(parent_name)가 진실 — 링크 그래프에 중복 물질화하지 않음
-    .filter(([id]) => t.pages.has(id) || t.dbs.has(id) || t.dsToDb.has(id))
+    .filter(([id]) => t.pages.has(id) || t.dbs.has(id) || t.dsToDb.has(id)
+      || t.ledger?.byId.has(id) === true || t.ledger?.dsToDb.has(id) === true) // 델타 — 미변경 대상도 원장으로 유지(링크 유실 방지)
     .map(([id, kind]) => {
-      const target = t.dsToDb.get(id) ?? id;
+      const target = dsOwnerDb(t, id) ?? id;
       return { target_external_id: target, target_name: unitName("notion", target), kind };
     });
 }
@@ -876,13 +1050,19 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
 async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const cfg = await loadConfig();
   reqCount = 0;
-  // NOTION_ROOT_PAGES(루트 모드)는 발견이 트래버스뿐이라 since 스킵 시 미변경 조상 아래 변경을 영영 못 본다
-  //  → 루트 모드에선 매 run 전체 트래버스(방출은 멱등·감사 게이트라 무해). search 모드만 증분.
-  const sinceMs = cfg.rootIds.length ? undefined : (opts?.since ? Date.parse(opts.since) : undefined);
-  if (cfg.rootIds.length && opts?.since) console.error("[notion] 루트 모드 — 증분(since) 무시, 전체 트래버스로 수행");
+  const sinceRaw = opts?.since ? Date.parse(opts.since) : undefined;
+  const ledger = (opts?.ledger ?? null) as NotionLedger | null;
+  // 델타 증분(#586) — since + 미러 원장이 있으면 search 델타로 변경분만 수집(루트/서치 모드 공통).
+  //  원장이 없으면(첫 run·미러 유실) 전체 트래버스로 안전 폴백. 루트 모드에서 원장 없는 증분도 전체
+  //  트래버스(발견이 트래버스뿐이라 since 스킵 시 미변경 조상 아래 변경을 영영 못 봄 — 기존 시맨틱).
+  const delta = Boolean(sinceRaw !== undefined && Number.isFinite(sinceRaw) && ledger?.byId.size);
+  const sinceMs = delta ? sinceRaw : (cfg.rootIds.length ? undefined : sinceRaw);
+  if (cfg.rootIds.length && opts?.since && !delta) console.error("[notion] 루트 모드 — 원장 없음, 증분(since) 무시하고 전체 트래버스");
   const t: Traversal = {
     cfg,
     sinceMs,
+    ledger: delta ? ledger : null,
+    membership: new Map(),
     commentsDenied: false,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
@@ -890,7 +1070,8 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   };
   lastRunStats = t.stats;
 
-  await discoverSeeds(t);
+  if (delta) await discoverDelta(t, sinceRaw!);
+  else await discoverSeeds(t);
 
   // BFS — 맵이 자라는 동안 반복(새 발견 노드 처리). 처리 표식으로 순환 없이 수렴.
   const donePages = new Set<string>();

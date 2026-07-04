@@ -1112,3 +1112,47 @@ export async function sweepNotionArchived(db: PgRunner, runStartIso: string): Pr
   );
   return r.rowCount ?? 0;
 }
+
+// ── notion 원장 스냅샷(#586 델타 증분) — 커넥터가 '이미 아는 것'과 대조해 변경분만 수집하게 한다. ──
+//  원장 = knowledge.raw 의 last_edited_time 이 진실(노션 분 단위 절사 그대로 저장됨 — search 결과와 문자열 동등 비교 가능).
+export interface NotionLedgerEntry {
+  lastEdited: string | null;   // page/database 의 last_edited_time(ISO, 분 절사)
+  parentExt: string | null;    // 트리 부모 external id
+  kind: string;                // page | db_row | database
+  title: string;
+  lifecycle: string;           // active | archived
+  /** database 전용 — 저장된 data_sources 의 last_edited_time 최대값(스키마 변경 감지용) */
+  dsEdited: string | null;
+}
+export interface NotionLedger {
+  byId: Map<string, NotionLedgerEntry>;
+  /** data_source id → 소유 database id (저장된 fields.notion.data_source_ids 역매핑) */
+  dsToDb: Map<string, string>;
+}
+
+export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
+  const r = await db.query(
+    `SELECT external_id, title, lifecycle, parent_external_id,
+            fields->'notion'->>'kind' AS kind,
+            COALESCE(raw->'page'->>'last_edited_time', raw->'database'->>'last_edited_time') AS last_edited,
+            (SELECT max(ds->>'last_edited_time') FROM jsonb_array_elements(COALESCE(raw->'data_sources','[]'::jsonb)) AS ds) AS ds_edited,
+            fields->'notion'->'data_source_ids' AS ds_ids
+     FROM knowledge WHERE external_system='notion' AND external_id IS NOT NULL`);
+  const byId = new Map<string, NotionLedgerEntry>();
+  const dsToDb = new Map<string, string>();
+  for (const row of r.rows as Array<Record<string, unknown>>) {
+    const id = String(row.external_id);
+    byId.set(id, {
+      lastEdited: row.last_edited == null ? null : String(row.last_edited),
+      parentExt: row.parent_external_id == null ? null : String(row.parent_external_id),
+      kind: String(row.kind ?? "page"),
+      title: String(row.title ?? ""),
+      lifecycle: String(row.lifecycle ?? "active"),
+      dsEdited: row.ds_edited == null ? null : String(row.ds_edited),
+    });
+    if (Array.isArray(row.ds_ids)) {
+      for (const ds of row.ds_ids as unknown[]) if (typeof ds === "string" && ds) dsToDb.set(ds, id);
+    }
+  }
+  return { byId, dsToDb };
+}
