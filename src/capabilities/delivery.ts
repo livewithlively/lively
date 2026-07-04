@@ -11,6 +11,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Capability, CapabilityCtx } from "./types.js";
+import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { assertSafeJsonSchema } from "./dynamic-tools.js";
@@ -66,21 +67,21 @@ const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
 // admin capability 공통 팩토리 — REST + MCP 양쪽 노출(#549: mcp=true). scope=admin.
 //  input:{} — 파라미터 스키마는 비어 있고(REST parse/handler 가 검증), 에이전트는 description 으로 인자를 판단한다.
 const restOnly = (name: string, title: string, description: string,
-  rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
-  ({ name, title, description, scope: "admin", input: {}, expose: { mcp: true, rest }, handler });
+  rest: Capability["expose"]["rest"], handler: Capability["handler"], input: Capability["input"] = {}): Capability =>
+  ({ name, title, description, scope: "admin", input, expose: { mcp: true, rest }, handler });
 
 // 읽기 전용(read) — scope null = 인증만. 비-admin 구성원도 공유 컨텍스트를 읽을 수 있게(핸들러가 admin 여부로 민감 필드 redact).
 //  mcp 기본 false(공유 읽기는 웹/REST 표면) — 관리 대시보드 조회(org_overview)만 mcp=true 로 열어 에이전트가 상태를 본다(#549).
 const restRead = (name: string, title: string, description: string,
-  rest: Capability["expose"]["rest"], handler: Capability["handler"], mcp = false): Capability =>
-  ({ name, title, description, scope: null, input: {}, expose: { mcp, rest }, handler });
+  rest: Capability["expose"]["rest"], handler: Capability["handler"], mcp = false, input: Capability["input"] = {}): Capability =>
+  ({ name, title, description, scope: null, input, expose: { mcp, rest }, handler });
 
 // runtime 권한 — 멤버 머신에서 실행되는 것(커스텀 훅·MCP 툴)을 정의. admin 과 분리(admin ⊉ runtime).
 //  #549: REST + MCP 양쪽 노출(과거 mcp=false 로 에이전트가 스스로 훅/툴을 못 만들게 했으나, 이제 에이전트도 다룰 수 있게).
 //  안전판: 회수 가능한 DB 토큰 + runtime scope(멤버 LIVE 교집합) 필요 — 정적 토큰·미보유자는 거부.
 const restRuntime = (name: string, title: string, description: string,
-  rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
-  ({ name, title, description, scope: "runtime", input: {}, expose: { mcp: true, rest }, handler });
+  rest: Capability["expose"]["rest"], handler: Capability["handler"], input: Capability["input"] = {}): Capability =>
+  ({ name, title, description, scope: "runtime", input, expose: { mcp: true, rest }, handler });
 
 // 쓰기 감사 맥락 — actor(userId)·토큰해시·IP 를 store 로 전달(B23).
 const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
@@ -390,6 +391,16 @@ export const deliveryCapabilities: Capability[] = [
         await setMemberPassword(id, initialPassword, { mustChange: true, actor: actorOf(user) });
       }
       return { member, initialPassword };
+    }, {
+      id: z.string().optional().describe("멤버 id(불변 내부키) — 생략 시 이메일 로컬파트에서 자동 생성"),
+      kind: z.enum(["human", "agent", "system"]).optional().describe("멤버 종류(기본 human)"),
+      display_name: z.string().optional().describe("표시 이름"),
+      email: z.string().optional().describe("이메일=로그인 아이디. 신규 human 이면 초기 비번 자동 발급(initialPassword 1회 반환)"),
+      identities: z.array(z.object({ system: z.string(), external_id: z.string(), email: z.string().optional(), instance: z.string().optional(), display_name: z.string().optional() })).optional().describe("외부 계정 연결(slack/clickup 등)"),
+      body_md: z.string().optional().describe("개인 레이어(세션 컨텍스트에 실림)"),
+      state: z.enum(["active", "inactive"]).optional(),
+      scopes: z.array(z.string()).optional().describe("권한 scope: items|context|memory|db|code|admin|runtime"),
+      sort: z.number().optional(),
     }),
   // ── 구성원 비밀번호 재설정 — 임시 비번 1회 반환(관리자가 멤버에게 전달). 첫 로그인 후 변경 권장(must_change). ──
   restOnly("org_member_reset_password", "구성원 비밀번호 재설정",
@@ -436,6 +447,11 @@ export const deliveryCapabilities: Capability[] = [
         memberId,
       }, actorOf(user), "web");
       return { token, tokenHash: tokenHash.slice(0, 12), userId, scopes }; // 평문 token 은 이 응답에서만
+    }, {
+      userId: z.string().optional().describe("토큰 주인 멤버 id(생략 시 memberId)"),
+      memberId: z.string().optional().describe("연결할 멤버 id — 유효권한=intersection(토큰scope, 멤버 LIVE scope)"),
+      scopes: z.array(z.string()).optional().describe("토큰 scope(생략 시 멤버 scope): items|context|memory|db|code|admin|runtime"),
+      label: z.string().optional().describe("토큰 라벨(용도 메모)"),
     }),
 
   // ── 본인 토큰 자가발급(설치 탭) — 인증된 구성원이 자기 토큰을 만든다. admin 불요. ──
@@ -668,6 +684,14 @@ export const deliveryCapabilities: Capability[] = [
       }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
+    }, {
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 훅 on/off"),
+      writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
+      work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
+      allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
+      url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
+      allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
+      write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
     }),
 
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
@@ -732,6 +756,15 @@ export const deliveryCapabilities: Capability[] = [
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, actorOf(user), "web");
       return { server };
+    }, {
+      name: z.string().describe("MCP 서버 이름(slug)"),
+      transport: z.enum(["http", "stdio"]).optional(),
+      url: z.string().nullable().optional().describe("http transport URL"),
+      command: z.string().nullable().optional().describe("stdio transport 실행 커맨드"),
+      auth_env: z.string().nullable().optional().describe("인증 env 변수 이름(시크릿 값 금지)"),
+      note: z.string().optional(),
+      enabled: z.boolean().optional(),
+      sort: z.number().optional(),
     }),
   restOnly("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",
@@ -764,6 +797,12 @@ export const deliveryCapabilities: Capability[] = [
       //  (캐시는 원래 짧게 사는 싱크 서브프로세스 전제 — 장수 게이트웨이에선 쓰기 시점에 리셋).
       resetConnectorConfigCache();
       return { connector };
+    }, {
+      system: z.string().describe("커넥터 시스템: slack|notion|clickup|gmail|drive 등"),
+      enabled: z.boolean().optional(),
+      config: z.record(z.string()).optional().describe("평문 설정값(secret=false 필드)"),
+      secrets: z.record(z.string()).optional().describe("시크릿(암호화 저장 — 값=갱신, 빈값/미전송=유지)"),
+      note: z.string().nullable().optional(),
     }),
   // ── #586 커넥터 실행(run) — 비동기 "지금 싱크" + 실행 이력/로그(폴링). ──
   restOnly("org_connector_sync_run", "커넥터 지금 싱크(비동기)",
@@ -1213,5 +1252,17 @@ export const deliveryCapabilities: Capability[] = [
         actorKindOptions: ["human", "ai", "connector", "system", "unknown"],
         opOptions: ["insert", "update", "delete", "revoke", "mint", "reorder"],
       };
+    }, {
+      entity: z.string().optional().describe("특정 엔티티만(org_member|auth_token|org_runtime_config|org_connector|org_db_source|org_hook|org_tool 등)"),
+      scope: z.enum(["admin", "all"]).optional().describe("admin(기본, 민감 관리 엔티티만)|all(지식·프로젝트 등 전체)"),
+      entity_key: z.string().optional().describe("특정 엔티티 키(예: 멤버 id)"),
+      actor: z.string().optional().describe("변경 주체 멤버 id"),
+      actor_kind: z.enum(["human", "ai", "connector", "system", "unknown"]).optional().describe("누가(사람/AI/시스템)"),
+      channel: z.enum(["mcp", "web", "connector", "cli", "migration", "unknown"]).optional().describe("경로(mcp/web/…)"),
+      op: z.string().optional().describe("작업: insert|update|delete|revoke|mint|reorder"),
+      since: z.string().optional().describe("시작 시각 ISO8601"),
+      until: z.string().optional().describe("끝 시각 ISO8601"),
+      limit: z.number().optional().describe("페이지 크기(≤500, 기본 50)"),
+      offset: z.number().optional().describe("페이지 오프셋"),
     }),
 ];
