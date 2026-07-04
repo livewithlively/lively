@@ -24,7 +24,7 @@ function actorOf(user: any, ctx: any): string | null { return ctx?.actor ?? user
 const taskDetailV6: Capability = {
   name: "task_detail_v6",
   title: "태스크 상세(v6)",
-  description: "태스크 1건 + 하위·태그·시간추적·체크리스트·의존성·활동피드. 프로젝트 탭 모달 전용.",
+  description: "태스크 1건 + 하위·태그·시간추적·체크리스트·의존성·활동피드·첨부(task_attachment)·커스텀필드(fields/field_values). 프로젝트 탭 모달 전용.",
   scope: "memory",
   input: { id: z.number().int().positive() },
   expose: {

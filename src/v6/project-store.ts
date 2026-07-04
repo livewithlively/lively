@@ -4,7 +4,7 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
-import { getTaskTags, getTaskTime } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry 테이블 사용
+import { getTaskTags, getTaskTime, getTaskAttachments } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry/task_attachment 테이블 사용
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
@@ -123,6 +123,8 @@ export interface ProjectDetail extends ProjectRow {
   time: unknown; // 프로젝트 시간추적 { entries, total_seconds, running } — task_time_entry 를 project.id 로 사용.
   repos: string[]; // 관련 레포 이름(project_repo) — AGENTS.md '관련 레포' + '내 컴퓨터에서 작업' 모달 기본값.
   list: { id: number; name: string; color: string | null } | null; // 소속 리스트(미분류면 null) — 상세 '리스트' 필드 표시용.
+  field_values: Record<string, unknown>; // #541: 프로젝트 행 자신의 커스텀필드 값(ClickUp 최상위 태스크 값 — 메타패널 표시).
+  attachments: unknown[]; // #541: 이 프로젝트 행의 task_attachment(ClickUp 첨부/인라인 이미지 이관).
 }
 
 export async function getProject(id: number): Promise<ProjectDetail | undefined> {
@@ -147,8 +149,9 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
       `SELECT ${PROJECT_COLS} FROM project WHERE parent_id=ANY($1) AND level='subtask' ORDER BY sort, id`, [taskIds]);
   }
   // 커스텀 필드(클릭업형 컬럼) — 정의는 루트 프로젝트 단위, 값은 (field,task) 단위. 한 번에 페치해 task 트리에 매핑(N+1 회피).
+  //  #541: 프로젝트 행 자신의 값도 함께(ClickUp 최상위 태스크=우리 project 행 — 표시 표면은 상세 메타패널).
   const fields = await listProjectFields(id);
-  const allTaskIds = [...taskIds, ...subtaskRows.map((s) => s.id)];
+  const allTaskIds = [id, ...taskIds, ...subtaskRows.map((s) => s.id)];
   const valueRows = fields.length && allTaskIds.length ? await getFieldValuesForTasks(allTaskIds) : [];
   const valuesByTask = new Map<number, Record<string, unknown>>();
   for (const r of valueRows) {
@@ -206,8 +209,9 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
   const edgeMap = (r: Record<string, unknown>) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation });
   const edges = { outgoing: outRows.map(edgeMap), incoming: inRows.map(edgeMap) };
 
-  // 프로젝트 자체의 태그·시간추적(클릭업식 메타) — 태스크와 동일 테이블을 project.id 로 사용.
-  const [tags, time] = await Promise.all([getTaskTags(id), getTaskTime(id)]);
+  // 프로젝트 자체의 태그·시간추적·첨부(클릭업식 메타) — 태스크와 동일 테이블을 project.id 로 사용.
+  //  첨부(#541): ClickUp 최상위 태스크의 attachments[] 가 이 project 행의 task_attachment 로 이관됨.
+  const [tags, time, attachments] = await Promise.all([getTaskTags(id), getTaskTime(id), getTaskAttachments(id)]);
 
   // 관련 레포(project_repo) — 레포 레지스트리 이름 배열(AGENTS.md '관련 레포' + 모달 기본값).
   const repoRows = await q(itemsPool, `SELECT repo FROM project_repo WHERE project_id=$1 ORDER BY sort, repo`, [id]);
@@ -218,7 +222,11 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     ? ((await one(itemsPool, `SELECT id, name, color FROM project_list WHERE id=$1`, [project.list_id])) ?? null)
     : null;
 
-  return { ...project, list, members, tasks, categories, knowledge, edges, fields, tags, time, repos };
+  return {
+    ...project, list, members, tasks, categories, knowledge, edges, fields, tags, time, repos,
+    // #541: 프로젝트 행 자신의 커스텀필드 값 + 이관 첨부(상세 메타패널·첨부 섹션 소비).
+    field_values: valuesByTask.get(id) ?? {}, attachments,
+  };
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────

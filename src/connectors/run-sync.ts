@@ -15,15 +15,12 @@ import {
   type RawItem,
 } from "../items/store.js";
 import { initOrgSchema } from "../org/schema.js";
+import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
+import { initV6Schema } from "../v6/schema.js";
+import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived } from "../v6/connector-mirror.js";
 import { connectors } from "./index.js";
-import {
-  getTeam, enumerateLists, fetchListTasks, fetchTeamTasks,
-  toRawItem, type ClickUpTask,
-} from "./clickup.js";
+import { getTeam, losslessStream } from "./clickup.js";
 import { getNotionRunStats } from "./notion.js";
-import {
-  materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived,
-} from "../v6/connector-mirror.js";
 import { logger } from "../log.js";
 
 const CURSOR_EPSILON_MS = 1000; // strict greater-than 커서의 동일 ms 경계 유실 방지 재폴링(멱등이라 무비용).
@@ -39,6 +36,8 @@ if (!name || (name !== "clickup" && !connectors[name])) {
 
 await initItemSchema();   // person/connector_state 등 보조 스키마
 await initOrgSchema();     // v6 미러/매핑은 v6 knowledge/project/source 에 적재(ingestItems→connector-mirror)
+await initDomainmapSchema(); // activity 등 — initV6Schema 의 ALTER/FK 선행 의존(서버 부팅 직렬 체인과 동일 순서)
+await initV6Schema();      // 미러 수용 테이블(project/knowledge/source + PM 계층 #541) — 단독 CLI(신규 DB)도 성립(멱등)
 
 const failed = name === "clickup" ? await runClickupSync() : await runGenericSync(name);
 process.exit(failed ? 1 : 0);
@@ -60,7 +59,8 @@ async function runGenericSync(system: string): Promise<boolean> {
   let maxMs = Number.isFinite(prevMs) ? prevMs : 0;
   let batch: RawItem[] = [];
   let ingested = 0;
-  const flush = async () => { if (batch.length) { ingested += await ingestItems(batch); batch = []; } };
+  let mirrorFailures = 0; // 항목 단위 미러 실패 — 커서 동결(clickup 경로와 동일 불변식 #541)
+  const flush = async () => { if (batch.length) { ingested += await ingestItems(batch, { onError: () => { mirrorFailures++; } }); batch = []; } };
   // #551 full 스윕 기준(이 시각 이전 last_synced_at = 이번 run 미관측). last_synced_at 은 DB now() 로 찍히므로
   //  기준 시각도 DB 시계로(노드↔DB 시계 스큐로 인한 오탐 아카이브 방지).
   const runStartIso = String((await itemsPool.query(`SELECT now() AS t`)).rows[0]?.t?.toISOString?.() ?? new Date().toISOString());
@@ -114,95 +114,86 @@ async function runGenericSync(system: string): Promise<boolean> {
   }
 
   // 커서 전진 — 성공 후 max 관측시각이 이전보다 클 때만(시계 추측 금지: 0건/무진전이면 유지).
-  const advance = maxMs > prevMs;
+  //  항목 단위 미러 실패도 동결(#541) — 실패 항목 시각을 지나 전진하면 재폴링 창 밖 유실.
+  const advance = mirrorFailures === 0 && maxMs > prevMs;
   if (advance) await setConnectorState(system, instance, { max_updated_iso: new Date(maxMs).toISOString() });
   logger.info({
     system, mode: incremental ? "incremental" : "full",
-    ingested, cursorIso: advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
+    ingested, mirrorFailures, cursorIso: advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
     cursorAdvanced: advance,
   }, "generic 싱크 완료");
-  return false;
+  return mirrorFailures > 0;
 }
 
-// ── clickup 특수 싱크 (기존 phase B 로직 보존) — List 나열 + folderless/archived 패스 + team date_updated_gt. ──
+// ── clickup 특수 싱크(#541 무손실 재작성) — losslessStream 단일 경로: 계층(Space→Folder→List→View) →
+//  태스크(hydration·부모우선·미지 서브태스크 수렴) → 댓글 → 타임엔트리. 커서 시맨틱은 기존 보존
+//  (connector_state('clickup', teamId).tasks_max_updated_ms — 태스크 관측 최대 date_updated). 인제스트 후
+//  healPmMirror 가 스트림 순서 밖(부모 미변경 증분 등) 미해소 parent_id/list_id 를 일괄 수렴한다.
 async function runClickupSync(): Promise<boolean> {
-  // 1) 컨테이너 나열 (태스크 작업 전에)
   const team = await getTeam();
   const teamId = team.id;
-  const lists = await enumerateLists(teamId);
-  logger.info({ teamId, lists: lists.map((l) => `${l.id}:${l.name}`) }, "clickup 리스트 나열");
 
-  const failedListIds = new Set<string>();
-
-  // 2) 태스크 수집 — full(per-list) | incremental(team date_updated_gt) + archived 패스
   const cursor = await getConnectorState("clickup", teamId);
   const prevMaxMs = Number((cursor as { tasks_max_updated_ms?: unknown } | null)?.tasks_max_updated_ms ?? 0) || 0;
   const incremental = !fullFlag && prevMaxMs > 0;
-  const dateUpdatedGt = incremental ? prevMaxMs - CURSOR_EPSILON_MS : undefined;
+  const sinceMs = incremental ? prevMaxMs - CURSOR_EPSILON_MS : undefined;
 
-  const allowedListIds = lists.map((l) => l.id);
-  const tasks: ClickUpTask[] = [];
-  if (incremental) {
-    tasks.push(...await fetchTeamTasks(teamId, { dateUpdatedGt, listIds: allowedListIds }));
-    for (const l of lists) {
-      try {
-        tasks.push(...await fetchListTasks(l.id, { archived: true, dateUpdatedGt }));
-      } catch (err) {
-        failedListIds.add(l.id);
-        console.error(`[clickup] 리스트 ${l.id} archived 패스 실패, skip:`, err);
-      }
-    }
-  } else {
-    for (const l of lists) {
-      try {
-        tasks.push(...await fetchListTasks(l.id, {}));
-        tasks.push(...await fetchListTasks(l.id, { archived: true }));
-      } catch (err) {
-        failedListIds.add(l.id);
-        console.error(`[clickup] 리스트 ${l.id} 태스크 백필 실패, skip:`, err);
-      }
-    }
-  }
-
-  // 3) 변환 + 적재 (배치 200, 멱등 upsert)
-  const seen = new Set<string>();
   let maxSeenMs = 0;
+  let counts: Record<string, number> = {};
   let batch: RawItem[] = [];
   let ingested = 0;
+  let failed = false;
+  let mirrorFailures = 0; // 항목 단위 미러 실패 — 커서 동결 근거(성공 후에만 전진 불변식의 항목 단위 강화 #541)
   const flush = async () => {
     if (!batch.length) return;
-    ingested += await ingestItems(batch);
+    ingested += await ingestItems(batch, { onError: () => { mirrorFailures++; } });
     batch = [];
   };
 
-  for (const task of tasks) {
-    if (seen.has(task.id)) continue;
-    try {
-      const raw = toRawItem(task, { teamId });
-      seen.add(task.id);
-      const updMs = Number(task.date_updated ?? 0);
-      if (Number.isFinite(updMs) && updMs > maxSeenMs) maxSeenMs = updMs;
-      batch.push(raw);
+  const stats = { fetchFailures: 0 }; // 수집(fetch) 실패 — 커서 동결 근거(스트림이 부분 수집을 계속해도 성공 위장 금지)
+  try {
+    for await (const item of losslessStream({ sinceMs, stats })) {
+      batch.push(item);
+      counts[item.type] = (counts[item.type] ?? 0) + 1;
+      if (item.type === "task") {
+        const updMs = Date.parse(item.updated_at ?? "");
+        if (Number.isFinite(updMs) && updMs > maxSeenMs) maxSeenMs = updMs;
+      }
       if (batch.length >= 200) await flush();
+    }
+    await flush();
+  } catch (err) {
+    logger.error({ err: (err as Error)?.message ?? String(err) }, "clickup 싱크 실패 — 커서 동결(다음 run 재수집)");
+    failed = true;
+  }
+
+  // 힐 패스 — 부모/리스트 좌표 백스톱(raw/fields) 기반 일괄 수렴(멱등).
+  if (!failed) {
+    const client = await itemsPool.connect();
+    try {
+      const healed = await healPmMirror(client, "clickup");
+      if (healed.parents || healed.lists) logger.info(healed, "clickup 미러 힐(부모/리스트 좌표 수렴)");
     } catch (err) {
-      console.error(`[clickup] 태스크 변환 실패 ${task?.id}, skip:`, err);
+      logger.warn({ err: (err as Error)?.message ?? String(err) }, "clickup 미러 힐 실패(무시 — 다음 run 재시도)");
+    } finally {
+      client.release();
     }
   }
-  await flush();
 
-  // 4) 커서 전진 — 전 단계 성공 후에만. max(이전, 이번 관측 최대).
-  const failed = failedListIds.size > 0;
-  const advanceCursor = !failed && (maxSeenMs > prevMaxMs || (!incremental && maxSeenMs > 0));
+  // 커서 전진 — 전 단계 성공 후에만: ①스트림 예외 ②수집(fetch) 실패(stats — 팀폴/리스트/hydration/댓글/계층)
+  //  ③항목 단위 미러 실패, 셋 다 0 일 때만. 실패 시각을 지나 전진하면 그 윈도가 재폴링 창 밖으로 빠져
+  //  '다음 싱크 수렴' 불변식이 성립하지 않는다(구 failedListIds 동결의 일반화).
+  const advanceCursor = !failed && stats.fetchFailures === 0 && mirrorFailures === 0
+    && (maxSeenMs > prevMaxMs || (!incremental && maxSeenMs > 0));
   if (advanceCursor) {
     await setConnectorState("clickup", teamId, { tasks_max_updated_ms: Math.max(prevMaxMs, maxSeenMs) });
   }
 
   logger.info({
     mode: incremental ? "incremental" : "full",
-    lists: lists.length,
-    tasks: seen.size, ingested,
+    counts, ingested, fetchFailures: stats.fetchFailures, mirrorFailures,
     cursorMs: advanceCursor ? Math.max(prevMaxMs, maxSeenMs) : prevMaxMs,
     cursorAdvanced: advanceCursor,
   }, "clickup 싱크 완료");
-  return failed;
+  return failed || stats.fetchFailures > 0 || mirrorFailures > 0;
 }

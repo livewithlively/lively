@@ -14,8 +14,11 @@ import {
 export const itemsPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20 });
 
 // ── 커넥터가 뱉는 정규화 직전 레코드 (Connector SPI 의 출력 단위) ──
+//  #541 무손실: 계층(space/folder/list/view)·댓글(comment)·타임엔트리(time) 타입 가산 —
+//  ClickUp 커넥터가 컨테이너/부속 엔티티를 1급 스트림으로 흘리고 connector-mirror 가 전용 테이블에 적재.
 export interface RawItem {
-  type: "message" | "task" | "change" | "doc" | "note";
+  type: "message" | "task" | "change" | "doc" | "note"
+    | "space" | "folder" | "list" | "view" | "comment" | "time";
   provenance: {
     category: "messenger" | "collab_tool" | "vcs" | "db" | string;
     system: string; // slack | discord | notion
@@ -303,7 +306,7 @@ async function resolveActor(
 //     person 에 계속 해소·적재한다(드랍 스크립트가 person 을 보존 대상으로 명시). 구 knowledge_unit 미러
 //     (knowledge-mirror.ts)는 dead/parallel 로 보존(삭제 안 함 — 롤백/회귀 테스트 참조용). knowledge 의 parent
 //     링크는 parent_name(자기참조)로 적재시 즉시 도출(구 resolveParents 별도 패스 불필요 — mirror 가 직접 채움). ──
-export async function ingestItems(items: RawItem[]): Promise<number> {
+export async function ingestItems(items: RawItem[], opts?: { onError?: (it: RawItem, err: unknown) => void }): Promise<number> {
   const client = await itemsPool.connect();
   const actorCache = new Map<string, string>();
   let n = 0;
@@ -325,6 +328,9 @@ export async function ingestItems(items: RawItem[]): Promise<number> {
       } catch (err) {
         logger.warn({ err, system: it.provenance.system, externalId: it.provenance.external_id },
           "v6 외부 미러 적재 실패(무시) — 다음 싱크가 수렴");
+        // #541: 호출자(run-sync)가 실패를 집계해 커서를 동결할 수 있게 노출 — '다음 싱크 수렴'은
+        //  커서가 그 아이템의 시각을 지나 전진하면 성립하지 않는다(재폴링 창 밖).
+        opts?.onError?.(it, err);
       }
       n++;
     }

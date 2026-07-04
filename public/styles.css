@@ -3650,3 +3650,69 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .kn-tree-link { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .kn-tree-link:hover { color: var(--blue); }
 .kn-tree-archived { opacity: .5; }
+/* ════ #541 ClickUp 무손실 이관 — 프론트 확장(뷰 피커·마크다운·모달·첨부) ════ */
+/* ── 마크다운 렌더 확장(#541 ClickUp 무손실 이관) — 체크박스 태스크 + 이미지 ── */
+.md-list li.md-task { list-style: none; }
+.md-list li.md-task > input[type="checkbox"] { margin: 0 5px 0 -19px; vertical-align: -2px; accent-color: var(--blue); pointer-events: none; }
+.md .md-img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); vertical-align: middle; }
+.md-p > .md-img:only-child { display: block; margin: 4px 0; }
+.md del { color: var(--muted); }
+
+/* ── 태스크 모달 #541 무손실 확장 — 원본 링크·원문 상태 칩·커스텀 필드·ClickUp 첨부(DB) ── */
+/* typebar 원본 링크(ClickUp에서 열기) — 우측 정렬 */
+.pjv-tm-extlink { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--muted-2); text-decoration: none; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; white-space: nowrap; }
+.pjv-tm-extlink:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
+
+/* 상태 원문 칩(status_raw, 읽기전용) — 상태 pill 옆 병기 */
+.pjv-tm-statuswrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.pjv-tm-statusraw { font-size: 11px; font-weight: 700; color: var(--muted-2); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 커스텀 필드 섹션 — 필드 그리드와 동형(2열). 셀 컨트롤(pjv-cell-btn)은 모달 결로 좌측정렬·오토폭(.pjv-proj-meta 관례). */
+.pjv-tm-cfblock { border-top: none; padding-top: 0; }
+.pjv-tm-cfields { padding: 0; border-bottom: none; margin-bottom: 0; }
+.pjv-tm-cfields .pjv-tm-field-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-tm-cfields .pjv-cell-btn { width: auto; height: auto; justify-content: flex-start; padding: 4px 8px; border-radius: 7px; box-shadow: none; gap: 6px; }
+.pjv-tm-cfields .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
+.pjv-tm-cfield-ro { font-size: 13.5px; color: var(--ink); }
+.pjv-tm-cfield-ro.empty { color: var(--muted-3); }
+
+/* ClickUp 첨부(DB) — 썸네일 카드 그리드 + 파일 행. 원본 URL 만료(서명) 시 아이콘 폴백으로 레이아웃 유지. */
+.pjv-tm-attdb { margin-bottom: 8px; }
+.pjv-tm-attdb-head { font-size: 12px; font-weight: 700; color: var(--muted-2); margin: 2px 0 6px; }
+.pjv-tm-attdb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-bottom: 6px; }
+.pjv-tm-attdb-card { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 6px; min-width: 0; background: var(--bg); }
+a.pjv-tm-attdb-card:hover { border-color: var(--blue); }
+.pjv-tm-attdb-thumb { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; background: var(--bg-tint-2); display: block; }
+.pjv-tm-attdb-fallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 72px; border-radius: 6px; background: var(--bg-tint-2); color: var(--muted); }
+.pjv-tm-attdb-fallback .fic { width: 22px; height: 22px; }
+.pjv-tm-attdb-cap { font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-tm-att .fic { width: 16px; height: 16px; flex: none; color: var(--muted); }
+a.pjv-tm-att-link { text-decoration: none; }
+a.pjv-tm-att-link:hover { color: var(--blue); text-decoration: underline; }
+
+/* ── ClickUp 멤버 매핑(#541) — 관리탭 커넥터 패널(web/admin.ts renderClickupMemberPanel) ── */
+.cu-map-table { width: 100%; }
+.cu-map-table td { padding: 6px 14px 6px 0; vertical-align: middle; }
+.cu-map-table td:first-child { white-space: normal; }
+.cu-user { display: flex; align-items: center; gap: 8px; }
+.cu-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-tint-2); color: var(--muted-head); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; flex: 0 0 auto; }
+.cu-map-sel { max-width: 260px; }
+/* ── #541 저장 뷰 피커 ── */
+.pjv-savedview-pop { min-width: 250px; }
+.pjv-savedview-item { display: flex; align-items: center; gap: 8px; }
+.pjv-savedview-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-savedview-type { font-size: 10.5px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .04em; }
+.pjv-savedview-src { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted-2); }
+.pjv-savedview-empty { color: var(--muted-2); }
+
+/* ── #541 프로젝트 상세 — 이관 첨부 칩 그리드 + 원본 링크 ── */
+.proj-att-sec { margin-top: 12px; }
+.proj-att-head { font-size: 12px; font-weight: 700; color: var(--muted-2); margin-bottom: 6px; }
+.proj-att-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.proj-att-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; text-decoration: none; color: var(--ink); background: var(--bg); font-size: 12.5px; }
+a.proj-att-chip:hover { border-color: var(--blue); }
+.proj-att-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; display: block; }
+.proj-att-fallback { font-size: 15px; }
+.proj-att-cap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-proj-extlink { font-size: 12.5px; font-weight: 700; color: var(--muted-2); text-decoration: none; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.pjv-proj-extlink:hover { color: var(--blue); border-color: var(--blue); }

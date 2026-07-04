@@ -1,6 +1,16 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
 import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow } from './projects.js';
+// 커스텀 필드 셀 컨트롤(pjvFieldControl) 재사용용 네임스페이스(#541) — projects.ts 는 동시 편집 중이라 직접
+//  수정하지 않고, export 목록에 오르는 즉시 자동으로 붙는다(없으면 읽기전용 폴백 — pjvtmFieldReadonly).
+import * as PJ from './projects.js';
+// projects.ts 의 pjvFieldControl — 호출 시점 지연 조회(순환 import 안전 + export 추가를 즉시 반영).
+function pjvtmFieldControlFn() { return PJ.pjvFieldControl || null; }
+// 외부 URL 가드 — http(s) 만 허용(데이터 유래 href 의 javascript: 등 주입 차단).
+function pjvtmSafeUrl(u) {
+    const s = String(u || '').trim();
+    return /^https?:\/\//i.test(s) ? s : null;
+}
 const PJV_LINK_TYPE = {
     blocking: { label: '막고 있음', short: 'blocking' },
     waiting_on: { label: '기다리는 중', short: 'waiting on' },
@@ -354,9 +364,12 @@ function pjvOpenTaskModal(taskId, pageReload) {
         main.append(el('div', { class: 'pjv-tm-top' }, el('div', { class: 'pjv-tm-crumb' }, d.project ? el('a', { class: 'pjv-tm-crumb-link', href: '#/projects2/p/' + d.project.id, text: d.project.name, onclick: () => closeModal() }) : null, d.project ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null, d.parent ? el('a', { class: 'pjv-tm-crumb-link', href: '#', title: '상위 태스크로 돌아가기',
             text: d.parent.name,
             onclick: (e) => { e.preventDefault(); dirty = true; closeModal(); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null, d.parent ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null), el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
-        // 타입 pill + 하위수
+        // 타입 pill + 하위수 + 원본 링크(#541) — 외부 이관 태스크(external_url)면 원 시스템으로 새 탭 점프.
         const subs = t.subtasks || [];
-        main.append(el('div', { class: 'pjv-tm-typebar' }, el('span', { class: 'pjv-tm-typepill' }, el('span', { class: 'pjv-tm-typedot' }), el('span', { text: t.level === 'subtask' ? 'Subtask' : 'Task' })), subs.length ? el('span', { class: 'pjv-tm-subcount', title: subs.length + '개 하위', text: '⌥ ' + subs.length }) : null));
+        const extUrl = pjvtmSafeUrl(t.external_url);
+        main.append(el('div', { class: 'pjv-tm-typebar' }, el('span', { class: 'pjv-tm-typepill' }, el('span', { class: 'pjv-tm-typedot' }), el('span', { text: t.level === 'subtask' ? 'Subtask' : 'Task' })), subs.length ? el('span', { class: 'pjv-tm-subcount', title: subs.length + '개 하위', text: '⌥ ' + subs.length }) : null, extUrl ? el('a', { class: 'pjv-tm-extlink', href: extUrl, target: '_blank', rel: 'noopener',
+            title: '원본 태스크로 이동(새 탭)',
+            text: (t.external_system === 'clickup' ? 'ClickUp' : '원본') + '에서 열기 ↗' }) : null));
         // 제목(편집 가능)
         const titleIn = el('textarea', { class: 'pjv-tm-title', rows: '1', maxlength: '200', spellcheck: 'false' });
         titleIn.value = t.name || '(제목 없음)';
@@ -384,6 +397,8 @@ function pjvOpenTaskModal(taskId, pageReload) {
         main.append(titleIn);
         // 필드 그리드(2열): 좌(상태·기간·시간추적) 우(담당자·우선순위·태그)
         main.append(el('div', { class: 'pjv-tm-fields' }, pjvtmFieldRow('◎', '상태', pjvtmStatusField(t, refresh)), pjvtmFieldRow('👤', '담당자', pjvtmAssigneeField(t, members, refresh)), pjvtmFieldRow('🗓', '기간', pjvtmDatesField(t, refresh)), pjvtmFieldRow('⚑', '우선순위', pjvtmPriorityField(t, refresh)), pjvtmFieldRow('⏱', '시간 추적', pjvtmTimeField(d, t, refresh)), pjvtmFieldRow('🏷', '태그', pjvtmTagsField(d, t, refresh))));
+        // 커스텀 필드(#541) — 루트 프로젝트 정의(detail.fields)를 리스트뷰 셀 컨트롤로 편집(낙관 저장).
+        main.append(pjvtmCustomFields(d, t, refresh));
         // 설명(마크다운)
         main.append(pjvtmDescription(t, refresh));
         // 하위 태스크
@@ -415,7 +430,52 @@ function pjvOpenTaskModal(taskId, pageReload) {
                 menu.append(item);
             }
         };
+        // 원문 상태 칩(#541 무손실) — 이관 태스크의 status_raw(소스 커스텀 상태명)가 3상태 라벨과 다르면
+        //  읽기전용 작은 pill 로 병기(예: 'in review'). 네이티브 행은 status_raw=NULL 이라 표시 없음.
+        const raw = String(t.status_raw || '').trim();
+        if (raw && raw.toLowerCase() !== meta.label.toLowerCase() && raw.toLowerCase() !== String(t.status || '').toLowerCase()) {
+            return el('span', { class: 'pjv-tm-statuswrap' }, btn, el('span', { class: 'pjv-tm-statusraw', title: '원본 상태(읽기전용): ' + raw, text: raw }));
+        }
         return btn;
+    }
+    // 커스텀 필드(#541) — 루트 프로젝트의 task_field 정의별 한 행(라벨+셀 컨트롤). 컨트롤은 리스트뷰의
+    //  pjvFieldControl(낙관 저장 포함)을 재사용, 아직 export 전이면 값만 읽기전용 노출(pjvtmFieldReadonly).
+    function pjvtmCustomFields(d, t, refresh) {
+        const fields = d.fields || [];
+        if (!fields.length)
+            return el('div');
+        if (!t.field_values)
+            t.field_values = d.field_values || {}; // pjvFieldControl 이 t.field_values 를 읽고/갱신
+        const fieldControl = pjvtmFieldControlFn();
+        const grid = el('div', { class: 'pjv-tm-fields pjv-tm-cfields' });
+        for (const f of fields) {
+            grid.append(pjvtmFieldRow('▤', f.name, fieldControl ? fieldControl(t, f, refresh) : pjvtmFieldReadonly(f, (t.field_values || {})[f.id])));
+        }
+        const sec = el('div', { class: 'pjv-tm-block pjv-tm-cfblock' });
+        sec.append(el('div', { class: 'pjv-tm-block-head' }, el('span', { class: 'pjv-tm-block-title', text: '커스텀 필드' })));
+        sec.append(grid);
+        return sec;
+    }
+    // 읽기전용 값 폴백 — dropdown/labels 는 옵션 id→이름 치환, 그 외는 문자열화(textContent 만 — XSS 불변식).
+    function pjvtmFieldReadonly(f, v) {
+        const has = !(v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0));
+        let txt = '';
+        if (has) {
+            const opts = (f.config && f.config.options) || [];
+            // 옵션 shape 은 {id,label,color}(projects.ts pjvOptChip 동형) — name 은 구형/커넥터 원본 폴백.
+            const optName = (idv) => { const o = opts.find((x) => x.id === idv); return o ? (o.label || o.name || String(idv)) : String(idv); };
+            if (f.field_type === 'dropdown')
+                txt = optName(v);
+            else if (f.field_type === 'labels' && Array.isArray(v))
+                txt = v.map(optName).join(', ');
+            else if (Array.isArray(v))
+                txt = v.map((x) => (x && typeof x === 'object' ? (x.name || x.id || '') : String(x))).join(', ');
+            else if (typeof v === 'object')
+                txt = JSON.stringify(v);
+            else
+                txt = String(v);
+        }
+        return el('span', { class: 'pjv-tm-cfield-ro' + (has ? '' : ' empty'), text: has ? txt : 'Empty' });
     }
     function pjvtmAssigneeField(t, members, refresh) {
         const nameOf = (id) => { const m = members.find((x) => x.member_id === id); return m ? (m.display_name || m.member_id) : id; };
@@ -1211,6 +1271,10 @@ function pjvOpenTaskModal(taskId, pageReload) {
     function pjvtmAttachments(d, t, refresh) {
         const sec = el('div', { class: 'pjv-tm-block' });
         sec.append(el('div', { class: 'pjv-tm-block-head' }, el('span', { class: 'pjv-tm-block-title', text: '첨부 파일' })));
+        // DB 첨부(#541) — ClickUp 이관본(task_attachment)을 파일시스템 목록 위에 별도 그룹으로.
+        //  원본 URL 은 ClickUp 서명 URL 이라 만료될 수 있음 → 이미지 로드 실패 시 아이콘 폴백(레이아웃 유지).
+        if ((d.attachments || []).length)
+            sec.append(pjvtmDbAttachments(d.attachments));
         const pid = d.project && d.project.id;
         const dir = '_attachments/task-' + t.id;
         const base = '/api/ui/v6/projects/';
@@ -1335,6 +1399,53 @@ function pjvOpenTaskModal(taskId, pageReload) {
         sec.append(fileInput, addBtn);
         sec.append(el('div', { class: 'pjv-tm-att-hint' }, el('span', { class: 'pjv-tm-att-hint-ic', 'aria-hidden': 'true', text: '📋' }), el('span', {}, '이미지를 복사한 뒤 이 창에서 ', el('b', { text: 'Ctrl/⌘ + V' }), ' 로 바로 붙여넣을 수도 있어요.')));
         return sec;
+    }
+    // ClickUp 첨부(DB, #541) 그룹 — 이미지=썸네일 카드(클릭→원본 새 탭), 그 외=파일 행(아이콘+제목+크기, 새 탭 링크).
+    //  전부 읽기전용(원본은 ClickUp 소유 — 삭제/다운로드 프록시 없음). URL 이 http(s) 아니면 링크 없이 제목만.
+    function pjvtmDbAttachments(atts) {
+        const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'avif']);
+        const isImg = (a) => /^image\//i.test(a.mimetype || '') || IMG_EXT.has(String(a.extension || '').toLowerCase());
+        // 제목에 확장자가 없으면 붙여서(아이콘 판별·가독성) 표시명 구성.
+        const nameOf = (a) => {
+            const base = String(a.title || '').trim() || '첨부';
+            const ext = String(a.extension || '').trim().toLowerCase();
+            return ext && !base.toLowerCase().endsWith('.' + ext) ? base + '.' + ext : base;
+        };
+        const wrap = el('div', { class: 'pjv-tm-attdb' });
+        wrap.append(el('div', { class: 'pjv-tm-attdb-head', text: 'ClickUp 첨부' }));
+        const grid = el('div', { class: 'pjv-tm-attdb-grid' });
+        const rows = el('div', { class: 'pjv-tm-att-list' });
+        for (const a of atts) {
+            const name = nameOf(a);
+            const url = pjvtmSafeUrl(a.url);
+            if (isImg(a)) {
+                // 이미지 카드 — 썸네일(thumbnail 우선, 없으면 원본) + 캡션. 클릭=원본 새 탭.
+                const linkAttrs = url ? { href: url, target: '_blank', rel: 'noopener' } : {};
+                const card = el(url ? 'a' : 'span', { class: 'pjv-tm-attdb-card', title: name + (url ? ' — 원본 열기(새 탭)' : ''), ...linkAttrs });
+                const thumb = pjvtmSafeUrl(a.thumbnail) || url;
+                const fallback = () => el('span', { class: 'pjv-tm-attdb-fallback' }, fileIconSvg(name, false));
+                if (thumb) {
+                    const img = el('img', { class: 'pjv-tm-attdb-thumb', src: thumb, alt: name, loading: 'lazy' });
+                    // 서명 URL 만료 등 로드 실패 → 아이콘 폴백(깨진 이미지로 레이아웃 안 깨지게).
+                    img.addEventListener('error', () => { img.replaceWith(fallback()); });
+                    card.append(img);
+                }
+                else
+                    card.append(fallback());
+                card.append(el('span', { class: 'pjv-tm-attdb-cap', text: name }));
+                grid.append(card);
+            }
+            else {
+                // 일반 파일 행 — 기존 첨부 행(.pjv-tm-att)과 같은 결. 링크는 새 탭(다운로드는 원본 시스템에서).
+                rows.append(el('div', { class: 'pjv-tm-att' }, fileIconSvg(name, false), url ? el('a', { class: 'pjv-tm-att-name pjv-tm-att-link', href: url, target: '_blank', rel: 'noopener', title: '원본 열기(새 탭)', text: name })
+                    : el('span', { class: 'pjv-tm-att-name', text: name }), a.size != null && Number(a.size) > 0 ? el('span', { class: 'pjv-tm-att-size', text: fmtSize(Number(a.size)) }) : null));
+            }
+        }
+        if (grid.children.length)
+            wrap.append(grid);
+        if (rows.children.length)
+            wrap.append(rows);
+        return wrap;
     }
     // 클립보드 이미지 붙여넣기 다이얼로그 — 미리보기 + 이름·주석 입력 후 첨부폴더로 업로드. mount=모달 루트(닫힐 때 함께 제거).
     function pjvtmPasteImage(blob, ctx, mount) {
