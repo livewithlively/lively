@@ -38,6 +38,19 @@ function safeHref(raw) {
   return url;
 }
 
+// 인증 이미지 로더(#551) — /api/ui/* 는 fetch(토큰)→blob(토큰 세션 401 회피), 그 외는 그대로.
+function mdImage(src, alt) {
+  const img = el('img', { class: 'md-img', alt: alt || '', loading: 'lazy' });
+  if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
+  let token = null;
+  try { token = localStorage.getItem('lively_ui_token'); } catch (_) { /* noop */ }
+  fetch(src, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+    .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
+    .then((b) => { img.src = URL.createObjectURL(b); })
+    .catch(() => { img.classList.add('md-img-missing'); img.alt = (alt || '이미지') + ' (불러오기 실패)'; });
+  return img;
+}
+
 function renderInline(text) {
   const out = [];
   let buf = '';
@@ -67,7 +80,7 @@ function renderInline(text) {
           const alt = s.slice(i + 2, close);
           const src = safeHref(s.slice(close + 2, paren));
           flush();
-          if (src) out.push(el('img', { class: 'md-img', src, alt, loading: 'lazy' }));
+          if (src) out.push(mdImage(src, alt));
           else if (alt) out.push(document.createTextNode(alt));
           i = paren + 1; continue;
         }

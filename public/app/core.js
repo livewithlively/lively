@@ -128,6 +128,22 @@ function safeHref(raw) {
     // 스킴 없는 일반 토큰(예: example.com) — 상대 취급(절대 스크립트 실행 불가).
     return url;
 }
+// 이미지 로더(#551) — 인증 라우트(/api/ui/…)의 이미지는 <img> 가 Authorization 헤더를 못 실어 토큰 세션에서
+// 401 이 난다 → fetch(토큰 헤더, 쿠키 동봉) 후 blob URL 로 표시. 그 외(외부/정적) 이미지는 그대로 src.
+function mdImage(src, alt) {
+    const img = el('img', { class: 'md-img', alt: alt || '', loading: 'lazy' });
+    if (!String(src).startsWith('/api/ui/')) {
+        img.setAttribute('src', src);
+        return img;
+    }
+    const token = localStorage.getItem(TOKEN_KEY);
+    fetch(src, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+        .then((r) => { if (!r.ok)
+        throw new Error(String(r.status)); return r.blob(); })
+        .then((b) => { img.src = URL.createObjectURL(b); })
+        .catch(() => { img.classList.add('md-img-missing'); img.alt = (alt || '이미지') + ' (불러오기 실패)'; });
+    return img;
+}
 // 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·링크·이미지·취소선(~~)·밑줄(++)·하이라이트(==) 지원.
 //  이미지/밑줄/하이라이트는 #551 노션 무손실 미러 본문(notion-md.ts 방언) 대응 — 일반 저작 지식에도 동일 적용.
 function renderInline(text) {
@@ -177,7 +193,7 @@ function renderInline(text) {
                     const src = safeHref(s.slice(close + 2, paren));
                     flush();
                     if (src)
-                        out.push(el('img', { class: 'md-img', src, alt, loading: 'lazy' }));
+                        out.push(mdImage(src, alt));
                     else if (alt)
                         out.push(document.createTextNode(alt));
                     i = paren + 1;

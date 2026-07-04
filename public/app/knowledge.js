@@ -176,6 +176,8 @@ function knProvChip(provenance) {
 function knAuthorChip(confidence) {
     if (!confidence)
         return null;
+    if (confidence === 'observed')
+        return null; // 출처 칩(외부 미러)과 라벨 중복 — 미러 행에선 생략(#551)
     const chip = el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
         text: KN_AUTHOR_LABEL[confidence] || confidence });
     return withTip(chip, KN_AUTHOR_HINT[confidence] || '');

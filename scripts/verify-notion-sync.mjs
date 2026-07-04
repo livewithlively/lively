@@ -293,13 +293,19 @@ for (const [id, n] of P) {
   collectIds(row.raw?.blocks);
   for (const bid of n.blockIds) if (!rawBlocks.has(bid)) F("원장", id, `raw.blocks 에 블록 누락 ${bid}`);
   // 본문 텍스트 전수 — 표 셀 이스케이프(\|)는 언이스케이프본과 원본 양쪽 대조(리터럴 '\|' 오탐 방지),
-  //  시크릿 패턴은 redact 패리티 적용(마스킹된 본문과 마스킹한 기대런 대조).
-  const bodyRaw = normText(String(row.body_md ?? ""));
-  const bodyUnesc = normText(String(row.body_md ?? "").replace(/\\\|/g, "|"));
+  //  시크릿 패턴은 redact 패리티 적용, 인용 블록은 줄마다 '> ' 접두사가 붙으므로(마크다운 문법 — 무손실)
+  //  줄바꿈 포함 런 대조용으로 인용 마커 스트립 변형도 함께 본다.
+  const bodyStr = String(row.body_md ?? "");
+  const stripQuote = (t) => t.replace(/(^|\n)[ \t]*(?:>[ \t]?)+/g, "$1");
+  const bodies = [
+    normText(bodyStr),
+    normText(bodyStr.replace(/\\\|/g, "|")),
+    normText(stripQuote(bodyStr).replace(/\\\|/g, "|")),
+  ];
   for (const run of n.textRuns) {
     const cands = [normText(run), normText(run.replace(/\n/g, " ")), normText(redactParity(run))].filter(Boolean);
     if (!cands.length) continue;
-    const found = cands.some((c) => bodyRaw.includes(c) || bodyUnesc.includes(c));
+    const found = cands.some((c) => bodies.some((b) => b.includes(c)));
     if (!found) F("본문", id, `텍스트 런 누락: "${cands[0].slice(0, 60)}"`);
   }
   // 속성 전수(비-title)

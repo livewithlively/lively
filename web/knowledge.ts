@@ -171,6 +171,7 @@ function knProvChip(provenance) {
 //  호버 설명은 withTip(즉시 표시 말풍선) — native title 은 안 뜨고 카드 overflow 에 잘려서(#449 피드백).
 function knAuthorChip(confidence) {
   if (!confidence) return null;
+  if (confidence === 'observed') return null; // 출처 칩(외부 미러)과 라벨 중복 — 미러 행에선 생략(#551)
   const chip = el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
     text: KN_AUTHOR_LABEL[confidence] || confidence });
   return withTip(chip, KN_AUTHOR_HINT[confidence] || '');
