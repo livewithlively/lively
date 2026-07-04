@@ -854,6 +854,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   // BFS — 맵이 자라는 동안 반복(새 발견 노드 처리). 처리 표식으로 순환 없이 수렴.
   const donePages = new Set<string>();
   const doneDbs = new Set<string>();
+  console.error(`[notion] 발견 — 페이지 ${t.pages.size} · DB ${t.dbs.size} (트래버스로 추가 발견될 수 있음)`);
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -862,12 +863,16 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       doneDbs.add(id);
       progressed = true;
       await processDb(t, node);
+      console.error(`[notion] 진행 — DB ${doneDbs.size}/${t.dbs.size} 수집`);
     }
     for (const [id, node] of [...t.pages]) {
       if (donePages.has(id)) continue;
       donePages.add(id);
       progressed = true;
       await processPage(t, node);
+      if (donePages.size % 20 === 0) {
+        console.error(`[notion] 진행 — 페이지 ${donePages.size}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
+      }
     }
   }
   t.stats.pages = t.pages.size;

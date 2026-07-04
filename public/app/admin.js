@@ -2473,8 +2473,10 @@ function mcpForm(root, s, data, detail, isNew) {
     root.replaceChildren(field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField, field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
     syncTransport();
 }
-// ── 커넥터(외부 소스) 설정·토큰 — admin 전용 (프로젝트 #541). CONNECTOR_SPECS 기반 동적 폼. ──
-//  커넥터 목록은 고정(코드가 지원하는 소스). 각 커넥터: enabled 토글 + 필드별 입력(secret=password, 값 있을 때만 갱신).
+// ── 커넥터(외부 소스) — admin 전용 (프로젝트 #541 · #586 UX 개편). ──
+//  #586: 활성화=자동 싱크(sync-<system> 크론 자동 등록/해제 — 스케줄러 별도 등록 불필요),
+//  [지금 싱크]=비동기 run(connector_run 엔티티 — 로그·진행상황 폴링, 프록시 타임아웃 없음),
+//  스코프 픽커([목록에서 선택] — discover API 로 노션 페이지/클릭업 리스트 조회), 토큰 발급 가이드.
 function connectorEditor(detail, data) {
     const connectors = data.connectors || [];
     const sel = state.admin.connectorSel || (connectors[0] && connectors[0].system);
@@ -2483,12 +2485,14 @@ function connectorEditor(detail, data) {
         const setCount = Object.values(c.secretsSet || {}).filter(Boolean).length;
         const secTotal = (c.fields || []).filter((f) => f.secret).length;
         listCol.append(el('div', { class: 'mini-row' + (c.system === sel ? ' sel' : ''),
-            onclick: () => { state.admin.connectorSel = c.system; renderAdminDetail(detail, 'connectors', data); } }, el('div', { class: 'mini-title', text: c.label }, c.enabled ? el('span', { class: 'pill', text: '싱크 켬' }) : null), el('div', { class: 'mini-meta', text: secTotal ? `토큰 ${setCount}/${secTotal} 설정` : '설정' })));
+            onclick: () => { state.admin.connectorSel = c.system; renderAdminDetail(detail, 'connectors', data); } }, el('div', { class: 'mini-title', text: c.label }, c.enabled ? el('span', { class: 'pill', text: '자동 싱크' }) : null), el('div', { class: 'mini-meta', text: secTotal ? `토큰 ${setCount}/${secTotal} 설정` : '설정' })));
     }
     const right = el('div', {});
     const editing = connectors.find((c) => c.system === sel);
-    if (editing)
+    if (editing) {
+        connectorStatusCard(right, editing);
         connectorForm(right, editing, data, detail);
+    }
     else
         right.append(el('p', { class: 'admin-hint', text: '커넥터를 선택하세요.' }));
     // ClickUp 멤버 매핑 패널(#541) — clickup 선택 시에만(db-sources 의 renderDbPolicyPanel 패턴).
@@ -2500,7 +2504,148 @@ function connectorEditor(detail, data) {
     const banner = (editing && editing.secrets_enabled === false)
         ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
         : null;
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커넥터(외부 소스) 설정·토큰', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커넥터(외부 소스)', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two' }, listCol, right)));
+}
+// 실행 상태 라벨/소요 — run 카드·기록·로그 공용.
+function runStatusLabel(st) { return st === 'ok' ? '✅ 성공' : st === 'running' ? '⏳ 진행 중' : '❌ 실패'; }
+function runDurLabel(a, b) {
+    const s = Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 1000));
+    return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
+}
+// 상태 카드(#586) — 자동 싱크 상태 + 최근 실행 + [지금 싱크]/[전체 다시 싱크]/[실행 기록].
+function connectorStatusCard(root, c) {
+    const dot = el('span', { class: c.enabled ? 'st ok' : 'st dim', text: c.enabled ? '자동 싱크 켬' : '자동 싱크 꺼짐' });
+    const jobText = c.enabled
+        ? (c.sync_job && c.sync_job.enabled
+            ? ` · ${Math.max(1, Math.round((c.sync_job.interval_sec || 600) / 60))}분마다 자동 실행`
+            : ' · 저장하면 자동 싱크가 등록됩니다')
+        : ' · 켜고 저장하면 자동 싱크가 시작됩니다';
+    const lastLine = el('div', { class: 'admin-hint', text: '실행 이력 확인 중…' });
+    const syncBtn = el('button', { class: 'btn btn-primary btn-sm', text: '지금 싱크',
+        title: '백그라운드로 즉시 실행 — 로그 창이 열립니다', onclick: () => startSyncRun(c.system, false) });
+    const fullBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '전체 다시 싱크',
+        title: '커서를 무시하고 전체 재수집(삭제/보관 전파 포함) — 페이지 수에 비례해 오래 걸립니다',
+        onclick: () => { if (confirm('전체를 다시 수집할까요? 원본 규모에 따라 몇 분~수십 분 걸립니다(백그라운드 실행).'))
+            startSyncRun(c.system, true); } });
+    const runsBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '실행 기록', onclick: () => openConnectorRuns(c) });
+    root.append(el('div', { class: 'conn-status' }, el('div', { class: 'conn-status-line' }, dot, el('span', { class: 'mini-meta', text: jobText })), lastLine, el('div', { class: 'admin-actions conn-status-actions' }, syncBtn, fullBtn, runsBtn)));
+    (async () => {
+        try {
+            const r = await api('/api/ui/org/connector/runs?' + new URLSearchParams({ system: c.system, limit: '1' }));
+            const run = (r.runs || [])[0];
+            if (!run) {
+                lastLine.textContent = '아직 실행 이력이 없습니다 — 토큰 저장 후 [지금 싱크]로 시작하세요.';
+                return;
+            }
+            lastLine.replaceChildren(el('span', { text: `최근 실행: ${runStatusLabel(run.status)} · ${run.mode === 'full' ? '전체' : '증분'} · ${relTime(run.started_at)}` +
+                    (run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : '') }), ' ', el('a', { href: '#', text: '로그 보기', onclick: (e) => { e.preventDefault(); openRunLog(c.system, run.id); } }));
+        }
+        catch (_) {
+            lastLine.textContent = '';
+        }
+    })();
+}
+// 비동기 싱크 시작(#586) — run_id 즉시 수신 → 로그 창(진행 폴링). 프록시 타임아웃과 무관.
+async function startSyncRun(system, full) {
+    try {
+        const r = await api('/api/ui/org/connector/sync', { method: 'POST', body: JSON.stringify({ system, full: !!full }) });
+        toast(r.already_running ? '이미 실행 중이라 그 실행의 로그를 엽니다' : '싱크를 시작했습니다(백그라운드)');
+        openRunLog(system, r.run_id);
+    }
+    catch (e) {
+        toast('싱크 시작 실패 — ' + e.message, true);
+    }
+}
+// 실행 기록(#586) — 최근 20건. 행 클릭 = 로그.
+async function openConnectorRuns(c) {
+    const listBox = el('div', { class: 'run-list' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    overlay(`실행 기록 · ${c.label}`, listBox);
+    try {
+        const r = await api('/api/ui/org/connector/runs?' + new URLSearchParams({ system: c.system, limit: '20' }));
+        const runs = r.runs || [];
+        if (!runs.length) {
+            listBox.replaceChildren(el('p', { class: 'admin-hint', text: '실행 이력이 없습니다.' }));
+            return;
+        }
+        listBox.replaceChildren(...runs.map((run) => el('div', { class: 'mini-row', onclick: () => openRunLog(c.system, run.id) }, el('div', { class: 'mini-title', text: `${runStatusLabel(run.status)}  ${run.mode === 'full' ? '전체' : '증분'} · ${run.trigger === 'manual' ? '수동' : '자동'}` }), el('div', { class: 'mini-meta', text: `${relTime(run.started_at)}${run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : ' · 진행 중'} · run #${run.id}` }))));
+    }
+    catch (e) {
+        listBox.replaceChildren(el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }));
+    }
+}
+// run 로그 뷰(#586) — 진행 중이면 2초 폴링으로 청크를 이어붙인다(창 닫으면 중단).
+async function openRunLog(system, runId) {
+    const status = el('div', { class: 'admin-hint', text: '불러오는 중…' });
+    const pre = el('pre', { class: 'run-log' });
+    const back = overlay(`싱크 로그 · ${system} · run #${runId}`, status, pre);
+    let offset = 0;
+    let timer = null;
+    const stop = () => { if (timer) {
+        clearInterval(timer);
+        timer = null;
+    } };
+    const tick = async () => {
+        if (!document.body.contains(back)) {
+            stop();
+            return;
+        } // 창 닫힘 → 폴링 중단
+        try {
+            const r = await api(`/api/ui/org/connector/runs/${runId}?offset=${offset}`);
+            if (r.log_chunk) {
+                const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+                pre.append(document.createTextNode(r.log_chunk));
+                offset = r.next_offset || (offset + r.log_chunk.length);
+                if (atBottom)
+                    pre.scrollTop = pre.scrollHeight;
+            }
+            status.textContent = `${runStatusLabel(r.status)} · ${r.mode === 'full' ? '전체' : '증분'} · 시작 ${relTime(r.started_at)}`
+                + (r.finished_at ? ` · 소요 ${runDurLabel(r.started_at, r.finished_at)}` : ' · 진행 중 — 자동 갱신');
+            if (r.status !== 'running')
+                stop();
+        }
+        catch (e) {
+            status.textContent = '로그 로드 실패: ' + e.message;
+            stop();
+        }
+    };
+    await tick();
+    if (!timer)
+        timer = setInterval(tick, 2000);
+}
+// 스코프 픽커(#586) — 저장된 토큰으로 소스의 선택지(discover)를 조회해 체크박스로 고른다. id 복붙 제거.
+async function openScopePicker(c, f, inp) {
+    const box = el('div', {}, el('p', { class: 'admin-hint', text: `${c.label}에서 목록을 조회하는 중…` }));
+    const back = overlay(`${f.label || f.key} — 목록에서 선택`, box);
+    try {
+        const r = await api('/api/ui/org/connector/discover', { method: 'POST', body: JSON.stringify({ system: c.system }) });
+        const opts = (r.fields && r.fields[f.key]) || [];
+        if (!opts.length) {
+            box.replaceChildren(el('p', { class: 'admin-hint', text: r.note || '고를 항목이 없습니다 — 값을 직접 입력하세요.' }));
+            return;
+        }
+        const multi = f.key !== 'container_list_id'; // 컨테이너는 1개(라디오)
+        // 기존 입력값(URL/슬러그/id 혼재 가능)과 옵션 id 매칭 — 끝 32hex 정규화 비교(노션), 그 외 원문 비교.
+        const normId = (v) => { const h = String(v).toLowerCase().replace(/[^0-9a-f]/g, ''); return h.length >= 32 ? h.slice(-32) : String(v).trim(); };
+        const selected = new Set(String(inp.value || '').split(',').map((x) => normId(x)).filter(Boolean));
+        const checks = new Map();
+        const rows = opts.map((o) => {
+            const cb = el('input', { type: multi ? 'checkbox' : 'radio', name: 'conn-scope-pick' });
+            cb.checked = selected.has(normId(o.id));
+            checks.set(o.id, cb);
+            const icon = o.kind === 'database' ? '🗄' : o.kind === 'root_page' ? '📄' : o.kind === 'list' ? '📋' : '·';
+            return el('label', { class: 'conn-pick-item' }, cb, el('span', { class: 'conn-pick-label', text: `${icon} ${o.label}` }), el('span', { class: 'mini-meta mono', text: String(o.id).slice(0, 10) + '…' }));
+        });
+        const apply = el('button', { class: 'btn btn-primary btn-sm', text: '적용', onclick: () => {
+                const ids = [...checks.entries()].filter(([, cb]) => cb.checked).map(([id]) => id);
+                inp.value = ids.join(',');
+                back.remove();
+                toast(ids.length ? `${ids.length}개 선택됨 — [저장]을 눌러야 반영됩니다` : '선택을 비웠습니다 — [저장]을 눌러야 반영됩니다');
+            } });
+        box.replaceChildren(r.note ? el('p', { class: 'admin-hint', text: r.note }) : null, el('div', { class: 'conn-pick-list' }, ...rows), el('div', { class: 'admin-actions' }, apply));
+    }
+    catch (e) {
+        box.replaceChildren(el('p', { class: 'admin-hint', text: '조회 실패: ' + e.message }));
+    }
 }
 function connectorForm(root, c, data, detail) {
     const inputs = {}; // key → { el, secret }
@@ -2516,7 +2661,25 @@ function connectorForm(root, c, data, detail) {
         }
         inputs[f.key] = { el: inp, secret: !!f.secret };
         const lbl = (f.label || f.key) + (f.required ? ' *' : '') + (f.secret ? ' 🔒' : '');
-        fieldEls.push(field(lbl, inp));
+        // 스코프 픽커(#586) — picker 지정 필드는 입력 옆 [목록에서 선택].
+        const ctrl = f.picker
+            ? el('div', { class: 'conn-pick-row' }, inp, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 선택',
+                title: '저장된 토큰으로 소스에서 목록을 조회해 고릅니다', onclick: () => openScopePicker(c, f, inp) }))
+            : inp;
+        fieldEls.push(field(lbl, ctrl));
+    }
+    // 토큰 발급 가이드(#586) — 접이식(처음 설정하는 사람 기준 단계별).
+    let guideEl = null;
+    if (c.guide && (c.guide.steps || []).length) {
+        guideEl = el('details', { class: 'conn-guide', ...(Object.values(c.secretsSet || {}).some(Boolean) ? {} : { open: '' }) }, el('summary', { text: `🔑 ${c.label} 토큰 발급 방법` }));
+        if (c.guide.intro)
+            guideEl.append(el('p', { class: 'admin-hint', text: c.guide.intro }));
+        const ol = el('ol', { class: 'conn-guide-steps' });
+        for (const st of (c.guide.steps || []))
+            ol.append(el('li', { text: st }));
+        guideEl.append(ol);
+        if (c.guide.url)
+            guideEl.append(el('p', { class: 'conn-guide-link' }, el('a', { href: c.guide.url, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' })));
     }
     const enChk = el('input', { type: 'checkbox' });
     enChk.checked = !!c.enabled;
@@ -2540,7 +2703,7 @@ function connectorForm(root, c, data, detail) {
             await api('/api/ui/org/connector', { method: 'POST', body: JSON.stringify(payload) });
             await loadAdmin(true);
             state.admin.connectorSel = c.system;
-            toast('저장됨 — 다음 싱크부터 반영');
+            toast(enChk.checked ? '저장됨 — 자동 싱크 등록(10분 주기). [지금 싱크]로 바로 시작할 수 있어요' : '저장됨 — 자동 싱크 꺼짐');
             renderAdminDetail(detail, 'connectors', state.admin.data);
         }
         catch (e) {
@@ -2562,7 +2725,7 @@ function connectorForm(root, c, data, detail) {
                 toast(e.message, true);
             }
         } }));
-    root.replaceChildren(el('label', { class: 'admin-check' }, enChk, ' 싱크 활성 (이 커넥터를 주기 싱크 대상으로)'), ...fieldEls, field('메모', noteIn), el('p', { class: 'admin-hint', text: '🔒 토큰은 게이트웨이 키로 암호화되어 저장됩니다. 값을 비워두면 기존 토큰이 유지됩니다.' }), actions);
+    root.append(guideEl, el('label', { class: 'admin-check' }, enChk, ' 싱크 활성 — 켜고 저장하면 자동 싱크(10분 주기)가 함께 등록됩니다'), ...fieldEls, field('메모', noteIn), el('p', { class: 'admin-hint', text: '🔒 토큰은 게이트웨이 키로 암호화되어 저장됩니다. 값을 비워두면 기존 토큰이 유지됩니다.' }), actions);
 }
 // ── ClickUp 멤버 매핑(#541) — ClickUp 팀 멤버 ↔ 구성원(org_member) 연결 패널. ──
 //  어사이니 해소는 person_identity(system='clickup') → org_member 로 이뤄지고, 수동 매핑의 SoT 는

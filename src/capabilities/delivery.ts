@@ -56,6 +56,9 @@ import {
   deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
 } from "../org/git-credential-store.js";
 import { secretsEnabled } from "../org/secret-box.js";
+// #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
+import { startConnectorRun, listConnectorRuns, getConnectorRun } from "../connectors/run-tracker.js";
+import { discoverConnectorScope } from "../connectors/discover.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -762,6 +765,48 @@ export const deliveryCapabilities: Capability[] = [
       resetConnectorConfigCache();
       return { connector };
     }),
+  // ── #586 커넥터 실행(run) — 비동기 "지금 싱크" + 실행 이력/로그(폴링). ──
+  restOnly("org_connector_sync_run", "커넥터 지금 싱크(비동기)",
+    "커넥터 싱크를 백그라운드로 시작하고 run_id 를 즉시 반환한다(긴 full 백필도 HTTP 타임아웃 없음). 로그·상태는 runs API 로 폴링.",
+    [{ method: "POST", paths: ["/api/ui/org/connector/sync"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const system = str(input.system, "system", 40).trim();
+      const run = await startConnectorRun(system, { full: Boolean(input.full), trigger: "manual", startedBy: actorOf(user) });
+      return { run_id: run.runId, already_running: run.alreadyRunning }; // done 은 await 하지 않는다(비동기)
+    }),
+  restOnly("org_connector_runs", "커넥터 실행 이력",
+    "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/runs"], parse: (req) => ({
+      system: req.query?.system ? String(req.query.system) : undefined,
+      limit: req.query?.limit ? Number(req.query.limit) : undefined,
+    }) }],
+    async (input: Record<string, unknown>) => {
+      const limit = Number.isFinite(Number(input.limit)) && Number(input.limit) > 0 ? Number(input.limit) : 20;
+      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit) };
+    }),
+  restOnly("org_connector_run_log", "커넥터 실행 로그",
+    "실행 1건의 메타 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙여 진행상황을 본다.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/runs/:id"], parse: (req) => ({
+      id: Number(req.params?.id), offset: req.query?.offset ? Number(req.query.offset) : 0,
+    }) }],
+    async (input: Record<string, unknown>) => {
+      const id = Number(input.id);
+      if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "run id 필요");
+      const off = Number.isFinite(Number(input.offset)) && Number(input.offset) > 0 ? Number(input.offset) : 0;
+      const run = await getConnectorRun(id, off);
+      if (!run) throw new HttpError(404, "run 없음");
+      return run;
+    }),
+  restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
+    "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",
+    [{ method: "POST", paths: ["/api/ui/org/connector/discover"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>) => {
+      const system = str(input.system, "system", 40).trim();
+      const { resetConnectorConfigCache } = await import("../connectors/config.js");
+      resetConnectorConfigCache(); // 방금 저장한 토큰 즉시 반영
+      return await discoverConnectorScope(system);
+    }),
+
   restOnly("org_connector_remove", "커넥터 설정 제거",
     "커넥터 설정/토큰 행을 제거한다(env 폴백으로 복귀).",
     [{ method: "POST", paths: ["/api/ui/org/connector/remove"], parse: (req) => req.body ?? {} }],
