@@ -805,9 +805,11 @@ function emitDb(t: Traversal, node: DbNode, parentExtId: string | undefined): Ra
     parts.push("## 스키마", dataSourceSchemaMd(schemaSrc));
   }
   if (node.unsupported) {
-    parts.push(":::callout icon=ℹ️
-연결된 데이터베이스 보기(linked view)라 노션 API 가 행 조회를 지원하지 않습니다 — 원본 데이터베이스가 공유 범위에 있으면 내용은 그쪽 노드로 수집됩니다.
-:::");
+    parts.push([
+      ":::callout icon=ℹ️",
+      "연결된 데이터베이스 보기(linked view)라 노션 API 가 행 조회를 지원하지 않습니다 — 원본 데이터베이스가 공유 범위에 있으면 내용은 그쪽 노드로 수집됩니다.",
+      ":::",
+    ].join("\n"));
   }
   if (node.rowIds.length) {
     const listed = node.rowIds.slice(0, 100).map((rid) => {
