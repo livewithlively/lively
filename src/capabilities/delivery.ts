@@ -57,7 +57,7 @@ import {
 } from "../org/git-credential-store.js";
 import { secretsEnabled } from "../org/secret-box.js";
 // #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
-import { startConnectorRun, listConnectorRuns, getConnectorRun } from "../connectors/run-tracker.js";
+import { startConnectorRun, listConnectorRuns, getConnectorRun, cancelConnectorRun } from "../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../connectors/discover.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
@@ -796,6 +796,14 @@ export const deliveryCapabilities: Capability[] = [
       const run = await getConnectorRun(id, off);
       if (!run) throw new HttpError(404, "run 없음");
       return run;
+    }),
+  restOnly("org_connector_run_cancel", "커넥터 실행 중지",
+    "진행 중인 실행을 중지한다(자식 프로세스 kill + canceled 기록). 커서 미전진이라 데이터 손실 없음 — 다음 run 이 재수집.",
+    [{ method: "POST", paths: ["/api/ui/org/connector/runs/:id/cancel"], parse: (req) => ({ id: Number(req.params?.id) }) }],
+    async (input: Record<string, unknown>) => {
+      const id = Number(input.id);
+      if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "run id 필요");
+      return await cancelConnectorRun(id);
     }),
   restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
     "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",

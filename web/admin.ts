@@ -2429,7 +2429,7 @@ function connectorEditor(detail, data) {
 }
 
 // 실행 상태 라벨/소요 — run 카드·기록·로그 공용.
-function runStatusLabel(st) { return st === 'ok' ? '✅ 성공' : st === 'running' ? '⏳ 진행 중' : '❌ 실패'; }
+function runStatusLabel(st) { return st === 'ok' ? '✅ 성공' : st === 'running' ? '⏳ 진행 중' : st === 'canceled' ? '⏹ 중지됨' : '❌ 실패'; }
 function runDurLabel(a, b) {
   const s = Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 1000));
   return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
@@ -2494,8 +2494,14 @@ async function openConnectorRuns(c) {
 // run 로그 뷰(#586) — 진행 중이면 2초 폴링으로 청크를 이어붙인다(창 닫으면 중단).
 async function openRunLog(system, runId) {
   const status = el('div', { class: 'admin-hint', text: '불러오는 중…' });
+  const cancelBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '⏹ 중지', style: 'display:none', onclick: async () => {
+    if (!confirm('이 실행을 중지할까요? 커서가 전진하지 않아 데이터 손실은 없고, 다음 실행이 이어서 재수집합니다.')) return;
+    try { const r = await api(`/api/ui/org/connector/runs/${runId}/cancel`, { method: 'POST', body: '{}' }); toast(r.message || '중지 요청됨'); }
+    catch (e) { toast('중지 실패 — ' + e.message, true); }
+  } });
+  const head = el('div', { class: 'run-log-head' }, status, cancelBtn);
   const pre = el('pre', { class: 'run-log' });
-  const back = overlay(`싱크 로그 · ${system} · run #${runId}`, status, pre);
+  const back = overlay(`싱크 로그 · ${system} · run #${runId}`, head, pre);
   let offset = 0;
   let timer: any = null;
   const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
@@ -2510,7 +2516,10 @@ async function openRunLog(system, runId) {
         if (atBottom) pre.scrollTop = pre.scrollHeight;
       }
       status.textContent = `${runStatusLabel(r.status)} · ${r.mode === 'full' ? '전체' : '증분'} · 시작 ${relTime(r.started_at)}`
-        + (r.finished_at ? ` · 소요 ${runDurLabel(r.started_at, r.finished_at)}` : ' · 진행 중 — 자동 갱신');
+        + (r.finished_at ? ` · 소요 ${runDurLabel(r.started_at, r.finished_at)}` : r.stale
+          ? ' · ⚠ 추적 끊김(게이트웨이 재시작 추정) — 곧 자동 정리되며, 재시작 직후라면 새로 싱크를 시작하세요'
+          : ' · 진행 중 — 자동 갱신');
+      cancelBtn.style.display = r.status === 'running' ? '' : 'none';
       if (r.status !== 'running') stop();
     } catch (e) { status.textContent = '로그 로드 실패: ' + e.message; stop(); }
   };

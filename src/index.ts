@@ -21,6 +21,7 @@ import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setPr
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
+import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -132,6 +133,9 @@ const server = app.listen(PORT, () => {
       // v6 그린필드 스키마(category/knowledge/project + 정션) — 레거시 이후 직렬(FK 순서: category→knowledge/project→정션→activity·mapping·debt ALTER).
       .then(() => initV6Schema())
       .then(() => logger.info("v6 schema ready"))
+      // 부팅 스윕(#586) — 재시작으로 추적이 끊긴 connector_run 잔재 정리(유령 running 이 새 싱크를 막지 않게).
+      //  스케줄러 기동 **전**에 — 크론 첫 tick 이 유령 행에 막히지 않도록.
+      .then(() => recoverOrphanConnectorRuns())
       // 스키마 직렬 체인 완료 후 인프로세스 스케줄러 기동(org_cron 테이블 보장됨) — 서버사이드 cron 트리거.
       .then(() => startScheduler())
       // 임베딩(pgvector) 폐기(2026-06-24): v6 knowledge 검색은 ILIKE 비-벡터 — embeddings 모듈 제거됨.
