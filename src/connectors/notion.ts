@@ -1070,6 +1070,13 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   };
   lastRunStats = t.stats;
 
+  // 생존 티커 — 어떤 페이즈(발견/수집/방출/자산)든 120초마다 진행 신호를 남긴다. 진행 로그의 구조적 공백
+  //  (거대 라운드·자산 일괄 다운로드)이 run-tracker 정체 감지(15분 무출력=킬)에 오탐되지 않게 하는 최종 방어선.
+  const ticker = setInterval(() => {
+    console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 자산 ${t.stats.assets}/${t.assetJobs.size}`);
+  }, 120_000);
+  try {
+
   if (delta) await discoverDelta(t, sinceRaw!);
   else await discoverSeeds(t);
 
@@ -1081,13 +1088,19 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   //  DB 는 행 순서 결정성(생성순 나열)을 위해 직렬 유지. 맵 확장(BFS 발견)은 라운드 재스캔으로 수렴.
   const pagePool = async (nodes: PageNode[]): Promise<void> => {
     const iter = nodes[Symbol.iterator]();
+    // 진행 로그는 **완료 수** 기준(#586 박스 실배포 교훈): 라운드 시작에 done 마킹을 일괄로 하므로
+    //  donePages.size 는 라운드 중 불변 — 그걸 기준 삼으면 큰 라운드(수백 페이지·수십 분)가 통째로 침묵해
+    //  정체 감지(15분 무출력=킬)가 멀쩡한 run 을 죽인다.
+    const already = donePages.size - nodes.length;
+    let processed = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         const nx = iter.next();
         if (nx.done) return;
         await processPage(t, nx.value);
-        if (donePages.size % 20 === 0) {
-          console.error(`[notion] 진행 — 페이지 ${donePages.size}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
+        processed++;
+        if (processed % 20 === 0 || processed === nodes.length) {
+          console.error(`[notion] 진행 — 페이지 ${already + processed}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
         }
       }
     };
@@ -1160,6 +1173,10 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
 
   t.stats.requests = reqCount;
   console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 자산 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
+
+  } finally {
+    clearInterval(ticker); // 소비자 조기 종료(return/throw) 포함 — 티커 누수 방지
+  }
 }
 
 export const notionConnector: Connector = {
