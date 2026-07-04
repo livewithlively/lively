@@ -40,6 +40,8 @@ const ADMIN_SECTIONS = [
     { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
     // MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지(mcp_call_log 집계). 읽기 전용 대시보드(admin).
     { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
+    // 조직 변경 감사(#549) — 관리 항목이 누구(사람/AI)에 의해 어떤 경로(웹/MCP)로 언제 바뀌었나. 읽기 전용(admin).
+    { key: 'org-audit', label: '변경 감사 로그', meaning: null, group: 'ai' },
     { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
     { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
     // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
@@ -57,7 +59,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'connectors', 'cron', 'managed-sessions', 'tool-usage']; // admin 권한 전용(쓰기/인프라 · #318 호출통계는 전 구성원 호출·인자 노출이라 admin)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin)
 const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -199,6 +201,8 @@ function adminRowMeta(key, data) {
     }
     if (key === 'tool-usage')
         return '하네스 MCP 호출 빈도·인자';
+    if (key === 'org-audit')
+        return '누가·언제·무엇을 바꿨나';
     return '';
 }
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -288,6 +292,8 @@ function renderAdminDetail(detail, sel, data) {
         return toolsEditor(detail, data);
     if (sel === 'tool-usage')
         return toolUsagePanel(detail);
+    if (sel === 'org-audit')
+        return orgAuditPanel(detail);
     if (sel === 'mcp')
         return mcpEditor(detail, data);
     if (sel === 'connectors')
@@ -553,6 +559,184 @@ async function toolUsagePanel(detail) {
         pagerBox.append(el('span', { class: 'tu-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
     }
     const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })), el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox);
+    detail.replaceChildren(card);
+}
+// ════════ 조직 변경 감사 로그(#549) — 누가(사람/AI)·언제·무엇을·어디서(mcp/web) 바꿨는지 + before→after ════════
+//  읽기 전용(admin). 백엔드=/api/ui/org/audit(src/capabilities/delivery.ts org_audit_list → org_content_audit).
+//  에이전트가 MCP 로 관리기능을 만지게 열린 뒤(#549) 'AI 가 관리탭을 바꿨다'를 사람이 확인하는 표면. 필터·페이징은 tool-usage 와 동형.
+const ORG_AUDIT_STATE = { scope: 'admin', entity: '', actor_kind: '', channel: '', op: '', page: 1 };
+const OA_ENTITY_LABELS = {
+    org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
+    org_runtime_config: '런타임 설정', org_connector: '커넥터', org_mcp_server: 'MCP 서버',
+    org_hook: '커스텀 훅', org_tool: 'AI 도구', org_db_source: 'DB 소스',
+    org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
+};
+const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '회수', mint: '발급', reorder: '순서변경' };
+const OA_CHANNEL_LABELS = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '커넥터', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
+const OA_KIND_LABELS = { human: '사람', ai: 'AI', system: '시스템', connector: '커넥터', unknown: '미상' };
+// 스타일 1회 주입(테마 토큰 — 라이트/다크 자동). textContent 로만 삽입(보안 불변식). tool-usage 의 tu-* 를 oa-* 로 복제.
+function oaEnsureStyles() {
+    if (document.getElementById('oa-styles'))
+        return;
+    document.head.appendChild(el('style', { id: 'oa-styles', text: `
+.oa-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 18px}
+.oa-field{display:flex;flex-direction:column;gap:4px}
+.oa-field>label{font-size:11px;font-weight:700;color:var(--muted)}
+.oa-sel{padding:6px 9px;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+.oa-sub{font-weight:800;font-size:13px;color:var(--ink);margin:22px 0 9px}
+.oa-rows{margin-top:4px}
+.oa-row{border-bottom:1px solid var(--line);padding:9px 4px}
+.oa-row>summary{display:flex;gap:10px;align-items:center;cursor:pointer;list-style:none;flex-wrap:wrap}
+.oa-row>summary::-webkit-details-marker{display:none}
+.oa-row>summary:hover{background:var(--bg-tint)}
+.oa-time{color:var(--muted);font-size:11.5px;min-width:70px}
+.oa-ent{font-weight:700;color:var(--ink)}
+.oa-key{color:var(--ink-sub);font-size:12px;font-family:ui-monospace,monospace}
+.oa-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--line);background:var(--bg-tint);color:var(--ink-sub)}
+.oa-badge.oa-op-delete,.oa-badge.oa-op-revoke{color:var(--coral);border-color:var(--coral)}
+.oa-badge.oa-op-insert,.oa-badge.oa-op-mint{color:var(--blue);border-color:var(--blue)}
+.oa-kind{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+.oa-kind-ai{background:var(--blue);color:#fff}
+.oa-kind-human{background:var(--bg-tint);color:var(--ink);border:1px solid var(--line)}
+.oa-kind-system,.oa-kind-connector,.oa-kind-unknown{background:var(--bg-tint);color:var(--ink-sub);border:1px solid var(--line)}
+.oa-actor{color:var(--ink-sub);font-size:12px}
+.oa-chan{color:var(--muted);font-size:11.5px;margin-left:auto}
+.oa-diff{width:100%;border-collapse:collapse;font-size:12.5px;margin:8px 0 2px}
+.oa-diff th{text-align:left;padding:4px 9px;font-size:10.5px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line)}
+.oa-diff td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink)}
+.oa-diff td.oa-f{font-weight:700;white-space:nowrap;color:var(--ink-sub)}
+.oa-v{font-family:ui-monospace,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-word;max-width:340px;overflow:auto}
+.oa-v-was{color:var(--coral)}
+.oa-v-now{color:var(--ink)}
+.oa-empty{color:var(--muted);font-size:13px;padding:18px 4px}
+.oa-pager{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.oa-pg{min-width:30px;height:30px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
+.oa-pg:hover{background:var(--bg-tint)}
+.oa-pg-on{background:var(--blue);border-color:var(--blue);color:#fff;cursor:default}
+.oa-pg-off{opacity:.38;cursor:default}
+.oa-pg-gap{color:var(--muted);padding:0 2px}
+.oa-pg-info{color:var(--muted);font-size:11.5px;margin-left:8px}
+` }));
+}
+// before/after → 변경된 최상위 필드만(값은 JSON 비교). insert=신규(after만), delete=삭제(before만), update=바뀐 키.
+function oaDiff(before, after) {
+    const b = (before && typeof before === 'object') ? before : {};
+    const a = (after && typeof after === 'object') ? after : {};
+    const keys = [...new Set([...Object.keys(b), ...Object.keys(a)])].sort();
+    const out = [];
+    for (const k of keys) {
+        if (JSON.stringify(b[k]) === JSON.stringify(a[k]))
+            continue;
+        out.push({ key: k, before: b[k], after: a[k], hadBefore: k in b, hasAfter: k in a });
+    }
+    return out;
+}
+function oaVal(v) {
+    if (v === undefined)
+        return '—';
+    if (v === null)
+        return 'null';
+    if (typeof v === 'string')
+        return v.length > 400 ? v.slice(0, 400) + '…' : v;
+    try {
+        const s = JSON.stringify(v, null, 1);
+        return s.length > 600 ? s.slice(0, 600) + '…' : s;
+    }
+    catch {
+        return String(v);
+    }
+}
+async function orgAuditPanel(detail) {
+    oaEnsureStyles();
+    const reload = () => orgAuditPanel(detail);
+    const PAGE_SIZE = 50;
+    const filterQs = (extra) => {
+        const q = new URLSearchParams();
+        if (ORG_AUDIT_STATE.scope)
+            q.set('scope', ORG_AUDIT_STATE.scope);
+        if (ORG_AUDIT_STATE.entity)
+            q.set('entity', ORG_AUDIT_STATE.entity);
+        if (ORG_AUDIT_STATE.actor_kind)
+            q.set('actor_kind', ORG_AUDIT_STATE.actor_kind);
+        if (ORG_AUDIT_STATE.channel)
+            q.set('channel', ORG_AUDIT_STATE.channel);
+        if (ORG_AUDIT_STATE.op)
+            q.set('op', ORG_AUDIT_STATE.op);
+        for (const k in (extra || {}))
+            q.set(k, String(extra[k]));
+        return q.toString();
+    };
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('변경 이력을 불러오는 중')));
+    const page = Math.max(1, ORG_AUDIT_STATE.page || 1);
+    let r;
+    try {
+        r = await api('/api/ui/org/audit?' + filterQs({ offset: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE }));
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '변경 이력을 불러오지 못했습니다')));
+        return;
+    }
+    const rows = r.rows || [];
+    const total = r.total || 0;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    // ── 필터 컨트롤 — 변경 시 page=1 리셋 ──
+    const mkSel = (labelText, stateKey, opts, allLabel) => {
+        const sel = el('select', { class: 'oa-sel' });
+        sel.append(el('option', { value: '', text: allLabel }));
+        for (const o of opts)
+            sel.append(el('option', { value: o.val, text: o.label }));
+        sel.value = ORG_AUDIT_STATE[stateKey] || '';
+        sel.onchange = () => { ORG_AUDIT_STATE[stateKey] = sel.value; ORG_AUDIT_STATE.page = 1; reload(); };
+        return el('div', { class: 'oa-field' }, el('label', { text: labelText }), sel);
+    };
+    const entityOpts = (r.entityOptions || []).map((e) => ({ val: e, label: OA_ENTITY_LABELS[e] || e }));
+    const kindOpts = (r.actorKindOptions || []).map((k) => ({ val: k, label: OA_KIND_LABELS[k] || k }));
+    const chanOpts = (r.channelOptions || []).map((c) => ({ val: c, label: OA_CHANNEL_LABELS[c] || c }));
+    const opOpts = (r.opOptions || []).map((o) => ({ val: o, label: OA_OP_LABELS[o] || o }));
+    const scopeSel = el('select', { class: 'oa-sel' });
+    scopeSel.append(el('option', { value: 'admin', text: '관리 항목만' }));
+    scopeSel.append(el('option', { value: 'all', text: '전체(지식·프로젝트 포함)' }));
+    scopeSel.value = ORG_AUDIT_STATE.scope || 'admin';
+    scopeSel.onchange = () => { ORG_AUDIT_STATE.scope = scopeSel.value; ORG_AUDIT_STATE.page = 1; reload(); };
+    const anyFilter = ORG_AUDIT_STATE.entity || ORG_AUDIT_STATE.actor_kind || ORG_AUDIT_STATE.channel || ORG_AUDIT_STATE.op;
+    const controls = el('div', { class: 'oa-controls' }, el('div', { class: 'oa-field' }, el('label', { text: '범위' }), scopeSel), mkSel('종류', 'entity', entityOpts, '모든 종류'), mkSel('누가', 'actor_kind', kindOpts, '사람·AI 전체'), mkSel('경로', 'channel', chanOpts, '모든 경로'), mkSel('작업', 'op', opOpts, '모든 작업'), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), anyFilter ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제',
+        onclick: () => { ORG_AUDIT_STATE.entity = ''; ORG_AUDIT_STATE.actor_kind = ''; ORG_AUDIT_STATE.channel = ''; ORG_AUDIT_STATE.op = ''; ORG_AUDIT_STATE.page = 1; reload(); } }) : null);
+    // ── 행 리스트(펼치면 필드별 이전→이후) ──
+    const list = el('div', { class: 'oa-rows' });
+    const renderRow = (c) => {
+        const kind = c.actor_kind || 'unknown';
+        const diff = oaDiff(c.before, c.after);
+        const diffBody = el('tbody');
+        for (const d of diff)
+            diffBody.append(el('tr', {}, el('td', { class: 'oa-f', text: d.key }), el('td', {}, el('div', { class: 'oa-v oa-v-was', text: d.hadBefore ? oaVal(d.before) : '—' })), el('td', {}, el('div', { class: 'oa-v oa-v-now', text: d.hasAfter ? oaVal(d.after) : '(삭제됨)' }))));
+        const diffTable = diff.length
+            ? el('table', { class: 'oa-diff' }, el('thead', {}, el('tr', {}, el('th', { text: '필드' }), el('th', { text: '이전' }), el('th', { text: '이후' }))), diffBody)
+            : el('div', { class: 'oa-empty', text: '내용 변화 없음(메타만).' });
+        return el('details', { class: 'oa-row' }, el('summary', {}, el('span', { class: 'oa-time', text: relTime(c.at) }), el('span', { class: 'oa-kind oa-kind-' + kind, text: OA_KIND_LABELS[kind] || kind }), el('span', { class: 'oa-actor', text: c.actor_display || c.actor || '—' }), el('span', { class: 'oa-ent', text: OA_ENTITY_LABELS[c.entity] || c.entity }), c.entity_key ? el('span', { class: 'oa-key', text: c.entity_key }) : null, el('span', { class: 'oa-badge oa-op-' + c.op, text: OA_OP_LABELS[c.op] || c.op }), el('span', { class: 'oa-chan', text: OA_CHANNEL_LABELS[c.channel] || c.channel || '' })), diffTable);
+    };
+    if (!rows.length)
+        list.append(el('div', { class: 'oa-empty', text: '이 조건의 변경 이력이 없습니다.' }));
+    for (const c of rows)
+        list.append(renderRow(c));
+    // ── 페이지네이션(tuPageNumbers 재사용) ──
+    const pagerBox = el('div', { class: 'oa-pager' });
+    if (totalPages > 1) {
+        const cur = Math.min(page, totalPages);
+        const pgBtn = (label, n, kind) => el('button', {
+            class: 'oa-pg' + (kind === 'on' ? ' oa-pg-on' : '') + (kind === 'off' ? ' oa-pg-off' : ''),
+            text: String(label), ...(kind ? {} : { onclick: () => { ORG_AUDIT_STATE.page = n; reload(); } })
+        });
+        pagerBox.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
+        for (const pn of tuPageNumbers(cur, totalPages)) {
+            if (pn === '…')
+                pagerBox.append(el('span', { class: 'oa-pg-gap', text: '…' }));
+            else
+                pagerBox.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
+        }
+        pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
+        pagerBox.append(el('span', { class: 'oa-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
+    }
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '조직 변경 감사 로그' })), el('p', { class: 'admin-hint', text: '구성원·토큰·런타임·커넥터·DB소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록입니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있어요(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.' }), controls, el('div', { class: 'oa-sub', text: '변경 이력' + (total ? ' (' + total.toLocaleString() + ')' : '') }), list, pagerBox);
     detail.replaceChildren(card);
 }
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──

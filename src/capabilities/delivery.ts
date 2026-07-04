@@ -1,6 +1,11 @@
 // delivery(전달/관리) capabilities — workflow-std 흡수의 게이트웨이 표면.
 // 비개발자 관리자가 org-content(강제규칙·회사맥락·메모리·구성원·게이트웨이주소)를 웹에서 편집/발행하고
-// 구성원 토큰을 발급한다. 전부 admin scope + REST 전용(expose.mcp=false — 에이전트가 정책을 못 바꾸게).
+// 구성원 토큰을 발급한다. admin/runtime scope — REST(웹) + MCP(에이전트) 양쪽 노출(#549).
+//  과거엔 expose.mcp=false 로 에이전트를 원천 차단했으나(정책 변경 금지), 에이전트가 관리탭 기능을 직접
+//  다뤄야 하는 상황이 실제로 생겨 MCP 로도 연다(#549). 안전판은 유지된다:
+//   ① 회수 가능한 DB 토큰만(B5: 정적 토큰은 admin/runtime 거부 — web.ts:85, MCP 는 sanitize 로 admin scope 자체 제거),
+//   ② 유효 scope = intersection(토큰, 멤버 LIVE) — 강등·퇴사 즉시 무효(store.ts computeEffectiveScopes),
+//   ③ 모든 쓰기는 org_content_audit 에 누가(actor_kind: 사람/AI)·경로(channel: mcp/web)·before/after 감사(조회: org_audit_list).
 // 모든 응답에 '구성원에게 미치는 효과'(meaning) 가이드를 함께 실어 UI 가 의미를 인지시킨다.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +26,7 @@ import {
   getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse,
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
+  listContentAudit, ADMIN_AUDIT_ENTITIES,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listTools, upsertTool, removeTool, listAutoApproveTools,
@@ -47,21 +53,24 @@ import { secretsEnabled } from "../org/secret-box.js";
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
 
-// REST 전용 capability 의 MCP 필드 기본값(input 미사용).
+// admin capability 공통 팩토리 — REST + MCP 양쪽 노출(#549: mcp=true). scope=admin.
+//  input:{} — 파라미터 스키마는 비어 있고(REST parse/handler 가 검증), 에이전트는 description 으로 인자를 판단한다.
 const restOnly = (name: string, title: string, description: string,
   rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
-  ({ name, title, description, scope: "admin", input: {}, expose: { mcp: false, rest }, handler });
+  ({ name, title, description, scope: "admin", input: {}, expose: { mcp: true, rest }, handler });
 
 // 읽기 전용(read) — scope null = 인증만. 비-admin 구성원도 공유 컨텍스트를 읽을 수 있게(핸들러가 admin 여부로 민감 필드 redact).
+//  mcp 기본 false(공유 읽기는 웹/REST 표면) — 관리 대시보드 조회(org_overview)만 mcp=true 로 열어 에이전트가 상태를 본다(#549).
 const restRead = (name: string, title: string, description: string,
-  rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
-  ({ name, title, description, scope: null, input: {}, expose: { mcp: false, rest }, handler });
+  rest: Capability["expose"]["rest"], handler: Capability["handler"], mcp = false): Capability =>
+  ({ name, title, description, scope: null, input: {}, expose: { mcp, rest }, handler });
 
 // runtime 권한 — 멤버 머신에서 실행되는 것(커스텀 훅·MCP 툴)을 정의. admin 과 분리(admin ⊉ runtime).
-//  expose.mcp=false: 에이전트가 스스로 훅/툴을 만들지 못하게(웹 REST 전용).
+//  #549: REST + MCP 양쪽 노출(과거 mcp=false 로 에이전트가 스스로 훅/툴을 못 만들게 했으나, 이제 에이전트도 다룰 수 있게).
+//  안전판: 회수 가능한 DB 토큰 + runtime scope(멤버 LIVE 교집합) 필요 — 정적 토큰·미보유자는 거부.
 const restRuntime = (name: string, title: string, description: string,
   rest: Capability["expose"]["rest"], handler: Capability["handler"]): Capability =>
-  ({ name, title, description, scope: "runtime", input: {}, expose: { mcp: false, rest }, handler });
+  ({ name, title, description, scope: "runtime", input: {}, expose: { mcp: true, rest }, handler });
 
 // 쓰기 감사 맥락 — actor(userId)·토큰해시·IP 를 store 로 전달(B23).
 const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
@@ -201,7 +210,7 @@ export const deliveryCapabilities: Capability[] = [
         orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
-    }),
+    }, true),
 
   // ── 멤버 컨텍스트 미리보기(WYSIWYG: 구성원 AI 가 실제 읽는 정적 컨텍스트) ──
   restRead("org_preview", "멤버 컨텍스트 미리보기",
@@ -979,5 +988,43 @@ export const deliveryCapabilities: Capability[] = [
       }
       await refreshPolicy(true);
       return { ok: true };
+    }),
+
+  // ── org 관리 변경 감사 조회(#549) — 누가(사람/AI)·언제·무엇을·어디서(mcp/web) 바꿨는지 + before/after. ──
+  //  에이전트가 MCP 로 관리기능을 만지게 열렸으므로(restOnly mcp=true), 그 변경 이력을 admin 이 조회하는 표면.
+  restOnly("org_audit_list", "조직 변경 감사 조회",
+    "org-content 관리 변경(구성원·토큰·런타임·커넥터·DB소스·훅·툴 등)의 감사 로그를 최신순으로 조회한다. " +
+    "필터: entity·actor·actor_kind(human/ai/system)·channel(mcp/web/…)·op·기간(since/until ISO8601)·페이징(limit≤500·offset). " +
+    "기본은 민감 관리 엔티티만 — scope='all' 이면 지식·프로젝트 등 전체 포함. before/after 는 저장 시 시크릿이 마스킹된 스냅샷.",
+    [{ method: "GET", paths: ["/api/ui/org/audit"], parse: (req) => ({
+        entity: req.query?.entity, scope: req.query?.scope, entity_key: req.query?.entity_key,
+        actor: req.query?.actor, actor_kind: req.query?.actor_kind, channel: req.query?.channel,
+        op: req.query?.op, since: req.query?.since, until: req.query?.until,
+        limit: req.query?.limit, offset: req.query?.offset,
+      }) }],
+    async (input: Record<string, unknown>) => {
+      const i = input ?? {};
+      const s = (v: unknown): string => (v == null ? "" : String(v).trim());
+      const entity = s(i.entity);
+      const scopeMode = s(i.scope); // ''|'admin'=민감 기본, 'all'=전체
+      const entities = entity ? [entity] : (scopeMode === "all" ? null : [...ADMIN_AUDIT_ENTITIES]);
+      const offset = Math.min(Math.max(Number(i.offset) || 0, 0), 1_000_000);
+      const limN = Number(i.limit);
+      const limit = Number.isFinite(limN) && limN > 0 ? Math.min(Math.floor(limN), 500) : 50;
+      const opt = (v: unknown): string | null => s(v) || null;
+      const { rows, total } = await listContentAudit({
+        entities, entity_key: opt(i.entity_key), actor: opt(i.actor), actor_kind: opt(i.actor_kind),
+        channel: opt(i.channel), op: opt(i.op), since: opt(i.since), until: opt(i.until), limit, offset,
+      });
+      return {
+        rows, total, limit, offset,
+        filters: { entity: entity || null, scope: scopeMode || "admin", actor: opt(i.actor),
+                   actor_kind: opt(i.actor_kind), channel: opt(i.channel), op: opt(i.op) },
+        // 드롭다운 옵션(고정 어휘) — entity 는 민감 관리 목록, 나머지는 감사 enum.
+        entityOptions: [...ADMIN_AUDIT_ENTITIES],
+        channelOptions: ["mcp", "web", "connector", "cli", "migration", "unknown"],
+        actorKindOptions: ["human", "ai", "connector", "system", "unknown"],
+        opOptions: ["insert", "update", "delete", "revoke", "mint", "reorder"],
+      };
     }),
 ];
