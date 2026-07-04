@@ -805,7 +805,14 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     const mName = merge3(base?.name as string | undefined, prevRow!.name, name) ?? "";
     const mDesc = merge3(base?.description as string | null | undefined, prevRow!.description, description);
     const mCat = merge3(base?.status_category as string | undefined, prevRow!.status_category, statusCategory) ?? "unstarted";
-    const mRaw = merge3(base?.status_raw as string | null | undefined, prevRow!.status_raw, statusRaw);
+    let mRaw = merge3(base?.status_raw as string | null | undefined, prevRow!.status_raw, statusRaw);
+    // 레거시 라벨 정규화(#541 업그레이드 경로) — 구버전 미러는 status_raw 에 **원문 라벨**("to do")을 심었고,
+    //  레거시 base(3키)엔 status_raw 가 없어 merge3 가 충돌→ours 로 라벨을 영구 고착시킨다. 같은 상태의 표기
+    //  차이(라벨 vs 슬러그 키)는 로컬 편집이 아니므로 슬러그가 일치하면 키 표기로 수렴(진짜 상태 변경은 슬러그가 달라 보존).
+    if (mRaw && statusRaw && mRaw !== statusRaw) {
+      const slugOf = (s: string) => s.toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "status";
+      if (slugOf(mRaw) === statusRaw) mRaw = statusRaw;
+    }
     const mPriority = merge3(base?.priority as string | null | undefined, prevRow!.priority, priority);
     const mStart = merge3(base?.start_date as string | null | undefined, prevRow!.start_date, startDate);
     const mDue = merge3(base?.due_date as string | null | undefined, prevRow!.due_date, dueDate);
@@ -979,7 +986,7 @@ async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string
 
 // ── 힐 패스(#541) — 스트림 순서 밖(부모 미변경 증분 등)으로 미해소된 parent_id/list_id 를 raw/fields 백스톱으로 일괄 수렴. ──
 //  run-sync 가 인제스트 후 1회 호출. 멱등 · 커넥터 행(external_system=$1)만.
-export async function healPmMirror(client: pg.PoolClient, system: string): Promise<{ parents: number; lists: number }> {
+export async function healPmMirror(client: pg.PoolClient, system: string): Promise<{ parents: number; lists: number; statusKeys: number }> {
   const p = await client.query(
     `UPDATE project c SET parent_id = par.id
        FROM project par
@@ -994,7 +1001,15 @@ export async function healPmMirror(client: pg.PoolClient, system: string): Promi
         AND pl.external_system=$1 AND pl.external_instance=c.external_instance
         AND pl.external_id = c.fields->>'list_id'`,
     [system]);
-  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0 };
+  // 레거시 status_raw 라벨→키 일괄 정규화(#541 업그레이드) — 구버전 미러가 심은 원문 라벨("to do")을 소속 리스트
+  //  settings.statuses 의 label 매치로 key("to-do")로 수렴. 재미러(증분 창) 밖의 옛 행도 UI 커스텀 상태 그룹에 즉시 합류.
+  const s = await client.query(
+    `UPDATE project c SET status_raw = st->>'key'
+       FROM project_list pl, jsonb_array_elements(COALESCE(pl.settings->'statuses','[]'::jsonb)) st
+      WHERE c.external_system=$1 AND c.list_id = pl.id
+        AND c.status_raw IS NOT NULL AND st->>'label' = c.status_raw AND st->>'key' <> c.status_raw`,
+    [system]);
+  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0 };
 }
 
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 client 공유 — item 단위 BEGIN/COMMIT(다중 테이블 원자성). ──
