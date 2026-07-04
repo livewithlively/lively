@@ -15,8 +15,12 @@ import { logger } from "../log.js";
 const LOG_CAP = 400_000;          // connector_run.log tail 캡(문자)
 const FLUSH_MS = 1500;            // 로그 flush 주기
 const FLUSH_BYTES = 16_384;       // 즉시 flush 임계
-const TIMEOUT_MS_DEFAULT = 300_000;
-const TIMEOUT_MS_NOTION = 1_800_000; // 재귀 트래버스 + 3rps — full 백필 여유(#551)
+// 타임아웃 정책(#586 실배포 교훈): 고정 상한은 대형 워크스페이스의 정당한 장기 full 백필을 죽여
+//  "매번 30분 낭비 후 처음부터" 라이브락을 만든다(어니스트 1,010페이지+DB 848 실측). 커넥터는 수 초마다
+//  진행 로그를 찍으므로 **정체(stall) 감지**가 올바른 liveness 가드다 — 출력이 STALL_MS 동안 0이면 행 걸림으로
+//  판정해 종료, 진행 중이면 몇 시간이든 완주시킨다. HARD_CAP 은 폭주 백스톱(정상 도달 불가).
+const STALL_MS = 15 * 60_000;      // 로그 무출력 15분 = 행 걸림(레이트리밋 대기도 재시도 로그가 남는다)
+const HARD_CAP_MS = 12 * 3_600_000; // 12시간 — 런어웨이 백스톱
 
 let schemaReady: Promise<void> | null = null;
 function ensureRunSchema(): Promise<void> {
@@ -89,21 +93,29 @@ export async function startConnectorRun(
     return flushing;
   };
   const timer = setInterval(() => { void flush(); }, FLUSH_MS);
-  const onChunk = (c: Buffer) => { buf += c.toString("utf8"); if (buf.length >= FLUSH_BYTES) void flush(); };
+  const onChunk = (c: Buffer) => { lastOutputAt = Date.now(); buf += c.toString("utf8"); if (buf.length >= FLUSH_BYTES) void flush(); };
   child.stdout?.on("data", onChunk);
   child.stderr?.on("data", onChunk);
 
-  const timeoutMs = system === "notion" ? TIMEOUT_MS_NOTION : TIMEOUT_MS_DEFAULT;
-  const killer = setTimeout(() => {
-    buf += `\n[tracker] 타임아웃(${Math.round(timeoutMs / 60000)}분) — 프로세스 종료. 커서 미전진이라 다음 run 이 이어서 재수집합니다.`;
-    try { child.kill("SIGKILL"); } catch { /* 이미 종료 */ }
-  }, timeoutMs);
+  // 정체 감지 — 마지막 출력 시각 기준. 진행 로그가 살아 있는 한 죽이지 않는다(장기 full 백필 완주 보장).
+  let lastOutputAt = Date.now();
+  const startedAtMs = Date.now();
+  const killer = setInterval(() => {
+    const now = Date.now();
+    if (now - lastOutputAt > STALL_MS) {
+      buf += `\n[tracker] 정체 감지 — ${Math.round(STALL_MS / 60000)}분간 출력 없음 → 프로세스 종료. 커서 미전진이라 다음 run 이 재수집합니다.`;
+      try { child.kill("SIGKILL"); } catch { /* 이미 종료 */ }
+    } else if (now - startedAtMs > HARD_CAP_MS) {
+      buf += `\n[tracker] 하드캡(${Math.round(HARD_CAP_MS / 3600000)}시간) 초과 — 런어웨이 백스톱으로 종료.`;
+      try { child.kill("SIGKILL"); } catch { /* 이미 종료 */ }
+    }
+  }, 60_000);
 
   const done = new Promise<{ ok: boolean; exitCode: number | null }>((resolve) => {
     child.on("error", (err) => { buf += `\n[tracker] spawn 실패: ${err.message}`; });
     child.on("close", (code) => {
       clearInterval(timer);
-      clearTimeout(killer);
+      clearInterval(killer);
       void (async () => {
         await flush();
         // 마지막 pino JSON 라인에서 요약(stats) 추출 — 실패해도 무해(로그가 원본).
