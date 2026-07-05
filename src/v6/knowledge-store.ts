@@ -320,6 +320,17 @@ export async function upsertKnowledge(
   if (!before && isFolder && !input.title?.trim()) {
     throw new Error("폴더(is_folder) 생성에는 title 이 필수입니다.");
   }
+  // 보안/#592: observed(외부 미러)의 트리 위치·폴더 플래그는 원본(노션 등)이 진실 — moveKnowledge 와 대칭으로
+  //  upsert 경로도 재부모화·폴더 재타입을 거부한다. 안 막으면 knowledge_save 로 미러를 폴더로 뒤집거나
+  //  트리에서 떼어낼 수 있고, 커넥터 재싱크는 is_folder 를 안 건드려 손상이 영구 잔존한다(리뷰 확정).
+  if (before && (before as { provenance?: string }).provenance === "observed") {
+    if (input.parent_name !== undefined && (input.parent_name ?? null) !== ((before.parent_name as string | null) ?? null)) {
+      throw new Error("외부 미러(observed) 지식은 이동이 허용되지 않습니다 — 원본(노션 등)에서 옮기세요.");
+    }
+    if (input.is_folder !== undefined && !!input.is_folder !== !!(before as { is_folder?: boolean }).is_folder) {
+      throw new Error("외부 미러(observed) 지식은 폴더 전환이 허용되지 않습니다 — 원본(노션 등)이 진실입니다.");
+    }
+  }
   // #592 생성/저장 시 트리 위치 — parent_name 이 **명시**됐을 때만 가드(미전송=기존 보존이라 이미 유효).
   if (input.parent_name != null && input.parent_name !== before?.parent_name) {
     await assertTreeParent(name, input.parent_name);
