@@ -1467,3 +1467,5 @@ export const notionConnector: Connector = {
 
 // 테스트 훅 — 자산 재발급(만료 URL 치유) 경로의 결정적 검증용. 프로덕션 코드에서 사용 금지.
 export const __assetTestables = { downloadAsset, refreshAssetUrl, findUrlByPath };
+// 테스트 훅 — 제외 서브트리 판정(원장 조상 워크·직접 id·memo). 프로덕션 코드에서 사용 금지.
+export const __scopeTestables = { underExcluded };
