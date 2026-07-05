@@ -67,4 +67,22 @@ t("before 에 is_wiki 없음 → 기본 false 폴백", () => {
   assert.equal(resolveUpsertFacets({}, { injection: "recalled" }).isWiki, false);
 });
 
+// ── #592: is_folder·parent_name 도 같은 불변식 — 본문만 편집(미전송)해도 폴더 플래그·트리 위치 유실 금지. ──
+const folder = { ...pinned, is_folder: true, parent_name: "parent-doc" };
+t("#592: 본문만 편집(is_folder/parent_name 미전송) → 폴더 플래그·트리 위치 보존", () => {
+  const r = resolveUpsertFacets({}, folder);
+  assert.equal(r.isFolder, true, "폴더가 문서로 리셋되면 안 됨");
+  assert.equal(r.parentName, "parent-doc", "트리에서 떨어져 나가면 안 됨");
+});
+t("#592: is_folder=false·parent_name=null 명시 → 덮어쓰기(의도 존중)", () => {
+  const r = resolveUpsertFacets({ is_folder: false, parent_name: null }, folder);
+  assert.equal(r.isFolder, false);
+  assert.equal(r.parentName, null);
+});
+t("#592: 신규(before=null) → is_folder false·parent_name null 기본값", () => {
+  const r = resolveUpsertFacets({}, null);
+  assert.equal(r.isFolder, false);
+  assert.equal(r.parentName, null);
+});
+
 console.log(`\n${pass} passed`);

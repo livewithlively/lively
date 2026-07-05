@@ -857,6 +857,68 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS knowledge_source_source_idx ON knowledge_source(source_id);
   `);
 
+  // ════════ #592(2026-07-06) 지식/위키 UI 개편 — 속성 노출·폴더 트리·카테고리 뷰·댓글·전역 뷰 설정. ════════
+  //  전부 가산(ADD COLUMN IF NOT EXISTS / CREATE TABLE IF NOT EXISTS) — 기존 행·쓰기경로 비파괴.
+  //  knowledge/category 가 위(§1·§3)에서 이미 존재하는 시점(FK·ALTER 의존)이라 여기(⑮)에 몰아둔다.
+
+  // ── ⑮-a) knowledge UI 확장 — props_ui(항목 단위 속성 노출 오버라이드) · is_folder(트리 그룹핑 폴더 노드). ──
+  //  props_ui 를 fields 에 넣지 않는 이유: 커넥터 미러가 fields 를 통째로 재작성(connector-mirror.ts) —
+  //  별도 컬럼이라야 재싱크에도 생존한다(observed 지식에도 속성 노출 설정 허용의 근거). 형태
+  //  { show:[키], hide:[키], full_width:bool } — 자유형 JSONB, 검증은 쓰기경로(setKnowledgePropsUi/capability zod).
+  //  is_folder = 본문 없이 저작 지식 트리를 그룹핑하는 폴더 노드(#592). 부분 인덱스(폴더는 소수 — 트리 조립용).
+  await pool.query(`
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS props_ui JSONB;
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_folder BOOLEAN NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS knowledge_folder_idx ON knowledge(is_folder) WHERE is_folder;
+  `);
+
+  // ── ⑮-b) category 뷰 설정 — entry_name(엔트리 문서 = knowledge.name 소프트 참조) · view_mode(list|table|entry). ──
+  //  entry 뷰 = 카테고리 본문 영역에 엔트리 문서를 인라인 렌더(노션 위키 홈 패턴). FK 없는 소프트 참조 —
+  //  지식 삭제 시 카테고리가 깨지지 않게(UI 가 부재를 우아하게 처리, 존재 검증은 쓰기경로 setCategoryView).
+  await pool.query(`
+    ALTER TABLE category ADD COLUMN IF NOT EXISTS entry_name TEXT;
+    ALTER TABLE category ADD COLUMN IF NOT EXISTS view_mode TEXT NOT NULL DEFAULT 'list';
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='category'::regclass AND conname='category_view_mode_chk') THEN
+        ALTER TABLE category ADD CONSTRAINT category_view_mode_chk CHECK (view_mode IN ('list','table','entry'));
+      END IF;
+    END $$;
+  `);
+
+  // ── ⑮-c) knowledge_comment(+reaction) — task_comment(⑧) 동형을 knowledge(name TEXT PK)로 이식. ──
+  //  시스템 이벤트 병합 없음(태스크 피드와 달리 댓글+반응만 — knowledge-comment-store). reply_to 자기FK =
+  //  1단계 스레드(쓰기경로가 중첩을 평탄화). 지식 삭제 시 댓글·반응 FK CASCADE 동반 정리.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_comment(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL REFERENCES knowledge(name) ON DELETE CASCADE,
+      author TEXT,
+      body TEXT NOT NULL,
+      reply_to INT REFERENCES knowledge_comment(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT now());
+    CREATE INDEX IF NOT EXISTS knowledge_comment_name_idx ON knowledge_comment(name);
+    CREATE INDEX IF NOT EXISTS knowledge_comment_reply_idx ON knowledge_comment(reply_to);
+    CREATE TABLE IF NOT EXISTS knowledge_comment_reaction(
+      comment_id INT NOT NULL REFERENCES knowledge_comment(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      member TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY(comment_id, emoji, member));
+    CREATE INDEX IF NOT EXISTS knowledge_comment_reaction_cmt_idx ON knowledge_comment_reaction(comment_id);
+  `);
+
+  // ── ⑮-d) knowledge_view_config 싱글턴(org_profile 패턴, org/schema.ts) — 전역 기본 숨김 속성 키 배열. ──
+  //  전역 노출 = 속성 카탈로그 전체 − hidden_props. 항목 오버라이드(knowledge.props_ui show/hide)가 우선.
+  //  시드는 빈 배열('[]') — 공장 기본 숨김 제안은 UI 의 '기본값 제안'으로만(#592 §1: 서버 시드 금지).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_view_config(
+      id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      hidden_props JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    INSERT INTO knowledge_view_config(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+  `);
+
   // ── ⑬ 임베딩(pgvector) — 벡터검색(#172) opt-in. provider≠off 일 때만 확장/컬럼(embedding_vector)/HNSW 인덱스 생성. ──
   //  기본 off=완전 no-op(pgvector 미설치 고객 DB 무손상). fail-open: 확장 없거나 실패해도 부팅·렉시컬 검색 무손상.
   //  설계: 지식 [[vector-search-172-design-pluggable-seam-oss]]. config SoT=org_runtime_config.embedding_config(getRuntimeConfig).

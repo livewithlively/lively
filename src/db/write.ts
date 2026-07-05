@@ -19,7 +19,10 @@ export async function restoreSnapshot<T>(
   if (await one(itemsPool, `SELECT 1 FROM ${table} WHERE ${keyCol}=$1`, [keyVal])) {
     throw new Error(`${table} ${keyCol}=${String(keyVal)} 은(는) 이미 존재합니다(삭제 상태가 아님)`);
   }
-  const colList = cols.split(",").map((c) => c.trim());
+  // 스냅샷에 **있는 키만** INSERT — cols 가 나중에 늘어나면(예: #592 knowledge.is_folder, category.view_mode)
+  //  구 스냅샷엔 그 키가 없다. 이를 NULL 로 밀어넣으면 NOT NULL DEFAULT 컬럼 복원이 깨지므로,
+  //  부재 키는 생략해 DB DEFAULT 가 적용되게 한다(스냅샷에 명시된 null 은 그대로 복원).
+  const colList = cols.split(",").map((c) => c.trim()).filter((c) => c in before);
   const placeholders = colList.map((_, i) => `$${i + 1}`).join(", ");
   const values = colList.map((c) => before[c] ?? null);
   return one(itemsPool,

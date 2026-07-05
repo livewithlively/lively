@@ -5,13 +5,16 @@ import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 
+// entry_name·view_mode(#592) 포함 — 지식탭 카테고리 뷰(list|table|entry)가 목록/상세에서 바로 읽는다.
+//  구 delete 스냅샷(두 컬럼 부재)의 복원은 restoreSnapshot 이 부재 키를 생략해 DB DEFAULT 로 수렴(db/write.ts).
 const CATEGORY_COLS =
-  `id, space, key, name, description, should, cross_cutting, origin, status, state, created_at, updated_at`;
+  `id, space, key, name, description, should, cross_cutting, origin, status, state, entry_name, view_mode, created_at, updated_at`;
 
 export interface CategoryRow {
   id: number; space: string; key: string; name: string | null;
   description: string | null; should: string | null; cross_cutting: boolean;
   origin: string | null; status: string; state: string;
+  entry_name: string | null; view_mode: string;
   created_at: string; updated_at: string;
   // 오너 팀(team_category relation='owner') — listCategories 만 채운다(LEFT JOIN). 쓰기/감사 경로는 base 컬럼만.
   owner_team_id?: number | null; owner_team_key?: string | null; owner_team_name?: string | null;
@@ -85,6 +88,30 @@ export async function updateCategory(
      WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
     [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null]);
   await auditCategory(`${before.space}/${before.key}`, "update", before, row, ctx);
+  return row;
+}
+
+// ── #592 카테고리 뷰 설정 — view_mode(list|table|entry)·entry_name(엔트리 문서, knowledge.name 소프트 참조). ──
+//  entry_name: 문자열=설정(존재 검증 — 오타·유령 참조 방지), null=해제, undefined=미변경(3상 부분 수정).
+//  view_mode enum 은 DB CHECK(category_view_mode_chk)가 최종 방어 — 쓰기경로(capability)가 1차 검증.
+export async function setCategoryView(
+  id: number,
+  patch: { view_mode?: string; entry_name?: string | null },
+  ctx?: WriteCtx,
+): Promise<CategoryRow> {
+  const before = await getCategory(id);
+  if (!before) throw new Error(`카테고리 #${id} 없음`);
+  if (typeof patch.entry_name === "string") {
+    const k = await one(itemsPool, `SELECT 1 AS x FROM knowledge WHERE name=$1`, [patch.entry_name]);
+    if (!k) throw new Error(`지식 '${patch.entry_name}' 없음 — entry_name 은 존재하는 지식 이름이어야 합니다`);
+  }
+  const sets: string[] = []; const params: unknown[] = [id];
+  if (patch.view_mode !== undefined) { params.push(patch.view_mode); sets.push(`view_mode=$${params.length}`); }
+  if (patch.entry_name !== undefined) { params.push(patch.entry_name); sets.push(`entry_name=$${params.length}`); }
+  if (!sets.length) return before;
+  const row: CategoryRow = await one(itemsPool,
+    `UPDATE category SET ${sets.join(", ")}, updated_at=now() WHERE id=$1 RETURNING ${CATEGORY_COLS}`, params);
+  await auditCategory(`${before.space}/${before.key}`, "set_view", before, row, ctx);
   return row;
 }
 

@@ -2,6 +2,7 @@
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
+import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -28,6 +29,11 @@ function setActiveTab(name) {
 async function route() {
     teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
     endTour(); // 진행 중이던 온보딩 투어(#517) 오버레이도 함께 정리
+    // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
+    //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
+    if (consumeKnPeekNavGuard())
+        return;
+    dismissKnowledgePeek();
     if (!state.me) {
         showGate();
         return;
@@ -36,6 +42,11 @@ async function route() {
     const view = $view();
     const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
     document.body.dataset.route = page; // 라우트별 레이아웃 훅(#541 — 프로젝트 보드 풀스크린 등). projects2 는 아래서 세분화.
+    // #592 doc-mode — 지식 계열 라우트(목록·문서·편집·휴지통)는 main 을 전폭 캔버스로(패딩 0).
+    //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
+    const mainEl = document.querySelector('main');
+    if (mainEl)
+        mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
     try {
         if (page === 'learn') {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link)

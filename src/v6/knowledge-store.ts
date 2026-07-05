@@ -10,17 +10,19 @@ import {
   embeddingInputText, toVectorLiteral,
 } from "./embedding-provider.js";
 
+// is_folder(#592) 포함 — 목록·트리가 폴더 행을 구분해야 해서 K_COLS 에 둔다(boolean 1개 = 가볍다).
+//  props_ui(#592)는 fields 와 같은 취급 — 목록엔 무겁고 상세엔 필수라 getKnowledge 에서만 SELECT.
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
-   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, version, created_at, updated_at, updated_by`;
+   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, is_folder, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
 
 export interface KnowledgeRow {
   name: string; title: string | null; body_md: string;
   injection: string; provenance: string; lifecycle: string;
   confidence: string; source: string; summary: string | null;
-  sort: number; is_wiki: boolean; version: number; updated_at: string;
+  sort: number; is_wiki: boolean; is_folder: boolean; version: number; updated_at: string;
   [k: string]: unknown;
 }
 
@@ -175,7 +177,8 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
 
 export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
   // fields 는 목록(K_COLS)엔 무겁고 상세엔 필수(#551 노션 속성 패널) — 상세 조회에서만 포함.
-  const k = await one(itemsPool, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1`, [name]);
+  //  props_ui(#592 항목 단위 속성 노출 오버라이드)도 fields 와 같은 취급(상세 전용).
+  const k = await one(itemsPool, `SELECT ${K_SEL}, k.fields, k.props_ui FROM knowledge k WHERE k.name=$1`, [name]);
   if (!k) return undefined;
   const categories = await q(itemsPool,
     `SELECT kc.category_id, kc.state, c.space, c.key, c.name
@@ -207,22 +210,34 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
 
 // #551 페이지 트리 뷰 데이터 — 외부 미러(예: notion) 전체의 얕은 트리 스켈레톤(name/title/parent/sort/lifecycle/kind).
 //  목록 cap(500) 우회 전용 표면: 본문·fields 미포함이라 수천 행도 가볍다. 클라이언트가 트리를 조립한다.
+//  #592: system='authored' 특수값 — 외부 미러가 아닌 **저작 지식**(external_system IS NULL)의 트리 스켈레톤
+//  (폴더 is_folder 포함, 지식탭 사이드바 트리 전용). 기존 notion 등 미러 경로는 불변.
 export async function knowledgeTreeData(system: string, limit = 20000): Promise<Record<string, unknown>[]> {
+  const cap = Math.min(limit, 50000);
+  if (system === "authored") {
+    return q(itemsPool,
+      `SELECT name, title, parent_name, sort, lifecycle, is_folder, updated_at
+       FROM knowledge WHERE external_system IS NULL AND lifecycle <> 'superseded'
+       ORDER BY parent_name NULLS FIRST, sort, title NULLS LAST, name
+       LIMIT $1`, [cap]);
+  }
   return q(itemsPool,
     `SELECT name, title, parent_name, sort, lifecycle, external_id, external_url, updated_at,
             fields->'notion'->>'kind' AS kind
      FROM knowledge WHERE external_system=$1 AND lifecycle <> 'superseded'
      ORDER BY parent_name NULLS FIRST, sort, title NULLS LAST, name
-     LIMIT $2`, [system, Math.min(limit, 50000)]);
+     LIMIT $2`, [system, cap]);
 }
 
 /** resolveUpsertFacets 입력 — upsertKnowledge input 의 facet 부분집합(명시 시 우선). 상위 input 을 통째로 넘겨도 무방(구조적). */
 export interface UpsertFacetInput {
   injection?: string; provenance?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
+  is_folder?: boolean; parent_name?: string | null;   // #592 폴더·트리 위치 — 본문만 편집해도 유실 금지(같은 불변식)
 }
 /** 병합 결과 — INSERT VALUES / ON CONFLICT DO UPDATE(is_wiki=EXCLUDED.is_wiki 등) 파라미터로 그대로 사용. */
 export interface ResolvedFacets {
   injection: string; provenance: string; summary: string | null; sort: number; isWiki: boolean; type: string | null;
+  isFolder: boolean; parentName: string | null;
 }
 /**
  * upsert facet 병합 규칙 — "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
@@ -238,11 +253,35 @@ export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<stri
     sort: input.sort !== undefined ? input.sort : (Number(before?.sort) || 0),
     isWiki: input.is_wiki !== undefined ? input.is_wiki : ((before?.is_wiki as boolean) ?? false),
     type: input.type !== undefined ? input.type : ((before?.type as string | null) ?? null),
+    // #592: 폴더 플래그·트리 위치도 같은 클래스 — 본문만 편집하는 저장이 폴더를 문서로 리셋하거나 트리에서 떼어내면 안 된다.
+    isFolder: input.is_folder !== undefined ? input.is_folder : ((before?.is_folder as boolean) ?? false),
+    parentName: input.parent_name !== undefined ? input.parent_name : ((before?.parent_name as string | null) ?? null),
   };
 }
 
+// ── #592 트리 부모 가드(공용: upsertKnowledge·moveKnowledge) — 존재 + observed 부모 금지 + 비순환. ──
+//  observed(외부 미러) 아래로의 배치 금지 = 미러 트리는 원본(노션)이 진실(재싱크가 재배치를 되돌린다).
+//  비순환 = parent 의 조상 체인(재귀 CTE, getKnowledge ancestors 동형)에 자신이 있으면 거부.
+//  에러 문구의 '없음'/'허용' 토큰은 rest-util wrap() 의 상태코드 매핑(404/400)에 load-bearing.
+async function assertTreeParent(childName: string, parentName: string): Promise<void> {
+  if (parentName === childName) throw new Error("자기 자신을 부모로 지정하는 것은 허용되지 않습니다");
+  const parent = await one(itemsPool, `SELECT provenance FROM knowledge WHERE name=$1`, [parentName]);
+  if (!parent) throw new Error(`부모 지식 '${parentName}' 없음`);
+  if ((parent as { provenance?: string }).provenance === "observed") {
+    throw new Error("외부 미러(observed) 지식 아래로의 배치는 허용되지 않습니다 — 원본(노션 등)에서 옮기세요");
+  }
+  const cyc = await one(itemsPool,
+    `WITH RECURSIVE up AS (
+       SELECT k2.name, k2.parent_name, 1 AS depth FROM knowledge k2 WHERE k2.name=$1
+       UNION ALL
+       SELECT k3.name, k3.parent_name, up.depth + 1
+       FROM knowledge k3 JOIN up ON k3.name = up.parent_name WHERE up.depth < 50
+     ) SELECT 1 AS x FROM up WHERE up.name=$2 LIMIT 1`, [parentName, childName]);
+  if (cyc) throw new Error("순환 트리는 허용되지 않습니다 — 자신의 하위로는 이동할 수 없습니다");
+}
+
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[] },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow> {
   let name: string;
@@ -274,19 +313,28 @@ export async function upsertKnowledge(
   }
   // confidence 는 source 로 서버강제(mcp→ai, web→human) 또는 명시값(기존 보존 대상 아님 — ctx 파생).
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
-  // injection/provenance/summary/sort/is_wiki/type: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
+  // injection/provenance/summary/sort/is_wiki/type/is_folder/parent_name: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
   //  편집 저장(본문만)이 WIKI 핀 is_wiki 등 미전송 facet 을 조용히 유실하지 않게 하는 불변식 — 단일 진실 resolveUpsertFacets(#345 회귀 방지, knowledge-store.test.ts).
-  const { injection, provenance, summary, sort, isWiki, type } = resolveUpsertFacets(input, before);
+  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName } = resolveUpsertFacets(input, before);
+  // #592 폴더: 본문 없는 트리 노드라 title 이 유일한 표시명 — 신규 폴더는 title 필수(빈 body_md 완화는 capability 쪽).
+  if (!before && isFolder && !input.title?.trim()) {
+    throw new Error("폴더(is_folder) 생성에는 title 이 필수입니다.");
+  }
+  // #592 생성/저장 시 트리 위치 — parent_name 이 **명시**됐을 때만 가드(미전송=기존 보존이라 이미 유효).
+  if (input.parent_name != null && input.parent_name !== before?.parent_name) {
+    await assertTreeParent(name, input.parent_name);
+  }
   await itemsPool.query(
-    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, version, updated_at, updated_by)
-     VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12,1,now(),$13)
+    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
+     VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
      ON CONFLICT (name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
+       is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, ctx?.actor ?? null]);
+    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null]);
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
   // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
@@ -313,6 +361,48 @@ export async function setKnowledgeWiki(name: string, isWiki: boolean, ctx?: Writ
   const after = await one(itemsPool,
     `UPDATE knowledge SET is_wiki=$2, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`, [name, isWiki]);
   await auditKnowledge(name, "set_wiki", before, after, ctx);
+  return after;
+}
+
+// ── #592 항목 단위 속성 노출 오버라이드(props_ui) — { show:[키], hide:[키], full_width:bool } 부분 병합. ──
+//  키에 null 을 명시하면 그 키 제거, undefined(미전송)는 미변경. 전부 비면 컬럼 NULL 로 환원.
+//  뷰 설정은 내용이 아니다 — version 불변(setKnowledgeWiki 참조), updated_at 도 불변(목록 최신순 정렬을
+//  속성 토글이 밀어올리지 않게). observed(미러)에도 허용 — fields 가 아닌 별도 컬럼이라 재싱크에 생존(#592 §0).
+export interface KnowledgePropsUiPatch { show?: string[] | null; hide?: string[] | null; full_width?: boolean | null }
+export async function setKnowledgePropsUi(name: string, patch: KnowledgePropsUiPatch, ctx?: WriteCtx): Promise<Record<string, unknown>> {
+  const row = await one(itemsPool, `SELECT props_ui FROM knowledge WHERE name=$1`, [name]);
+  if (!row) throw new Error(`지식 '${name}' 없음`);
+  const beforeUi = (row as { props_ui?: unknown }).props_ui;
+  const merged: Record<string, unknown> =
+    beforeUi && typeof beforeUi === "object" && !Array.isArray(beforeUi) ? { ...(beforeUi as Record<string, unknown>) } : {};
+  for (const key of ["show", "hide", "full_width"] as const) {
+    const v = patch[key];
+    if (v === undefined) continue;           // 미전송 = 미변경
+    if (v === null) delete merged[key];      // null 명시 = 키 제거
+    else merged[key] = v;
+  }
+  const value = Object.keys(merged).length ? JSON.stringify(merged) : null;
+  await itemsPool.query(`UPDATE knowledge SET props_ui=$2::jsonb WHERE name=$1`, [name, value]);
+  await auditKnowledge(name, "set_props_ui", { props_ui: beforeUi ?? null }, { props_ui: value ? merged : null }, ctx);
+  return merged;
+}
+
+// ── #592 트리 이동 — parent_name(null=루트)·sort 갱신(폴더 포함). 가드: 대상 observed 금지(원본이 진실 —
+//  노션에서 옮겨야 하고, 재싱크가 어차피 되돌린다) + 부모 존재/비observed/비순환(assertTreeParent).
+//  구조 변경이지 내용 변경이 아니므로 version 불변(감사는 op='move'로 남는다).
+export async function moveKnowledge(name: string, parentName: string | null, sort?: number, ctx?: WriteCtx): Promise<KnowledgeRow> {
+  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  if (!before) throw new Error(`지식 '${name}' 없음`);
+  if ((before as { provenance?: string }).provenance === "observed") {
+    throw new Error("외부 미러(observed) 지식은 이동이 허용되지 않습니다 — 원본(노션 등)에서 옮기세요");
+  }
+  if (parentName != null) await assertTreeParent(name, parentName);
+  const after = await one(itemsPool,
+    `UPDATE knowledge SET parent_name=$2, sort=COALESCE($3, sort), updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`,
+    [name, parentName, sort ?? null]);
+  await auditKnowledge(name, "move",
+    { parent_name: (before as { parent_name?: string | null }).parent_name ?? null, sort: (before as { sort?: number }).sort },
+    { parent_name: parentName, sort: (after as { sort?: number }).sort }, ctx);
   return after;
 }
 
