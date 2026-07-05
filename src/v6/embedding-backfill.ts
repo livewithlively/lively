@@ -17,8 +17,6 @@ import {
   toVectorLiteral,
 } from "./embedding-provider.js";
 
-const BATCH = 32;
-
 export type BackfillMode = "pending" | "model-changed" | "all";
 //  pending      = embedding_vector IS NULL 인 active 행만(신규/미임베딩 보강 — 처음 켤 때).
 //  model-changed = 위 + embedding_model 이 현재 모델과 다른 행(모델 스왑 후).
@@ -133,6 +131,11 @@ export async function runEmbeddingBackfill(opts: {
   const total = await countByMode(mode, provider.model, target);
   opts.onProgress?.({ total, done: 0 });
 
+  // 배치 = provider 요청 단위(cfg.batch_size). DB fetch 배치 == 임베딩 요청 == 커밋 단위로 맞춘다(#602):
+  //  배치마다 UPDATE 커밋되므로 죽음/재배포에도 채운 만큼 살아남고(재진입 안전), 요청당 시간이 타임아웃 안에 든다.
+  //  provider 는 같은 cfg 로 생성돼 요청도 batch 크기 → 보통 배치당 1요청(느리면 provider 가 내부에서 반으로 축소 재시도).
+  const batch = cfg.batch_size;
+
   // 대상 필터 — 기본 IS NULL, model-changed 면 모델 불일치도, all 이면 전부.
   const params: unknown[] = [];
   let where: string;
@@ -156,7 +159,7 @@ export async function runEmbeddingBackfill(opts: {
         `SELECT ${target.selectCols} FROM ${target.table}
            WHERE ${where}
            ORDER BY updated_at DESC NULLS LAST
-           LIMIT ${BATCH} OFFSET ${offset}`,
+           LIMIT ${batch} OFFSET ${offset}`,
         params,
       );
       if (rows.length === 0) break;

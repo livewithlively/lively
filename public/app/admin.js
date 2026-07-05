@@ -2442,6 +2442,13 @@ function embeddingsEditor(detail, data) {
         const authIn = el('input', { class: 'input', type: 'text', placeholder: '(선택) 키를 담은 환경변수 이름 — 예: OPENAI_API_KEY (키 값 아님)' });
         authIn.value = cfg.auth_env_ref || '';
         authIn.disabled = !canEdit;
+        // 성능 튜닝(#602) — 느린/CPU 백엔드는 배치를 낮춰 요청당 시간을 타임아웃 안으로.
+        const batchIn = el('input', { class: 'input', type: 'number', min: '1', max: '512', placeholder: '8  (CPU 백엔드 권장 4~8)' });
+        batchIn.value = String(cfg.batch_size || 8);
+        batchIn.disabled = !canEdit;
+        const timeoutIn = el('input', { class: 'input', type: 'number', min: '1000', max: '3600000', placeholder: '300000  (요청당 ms)' });
+        timeoutIn.value = String(cfg.request_timeout_ms || 300000);
+        timeoutIn.disabled = !canEdit;
         const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' });
         saveBtn.disabled = !canEdit;
         const saveSt = el('span', { class: 'admin-status' });
@@ -2456,6 +2463,8 @@ function embeddingsEditor(detail, data) {
                     model: modelIn.value.trim() || null,
                     dimensions: dims,
                     auth_env_ref: authIn.value.trim() || null,
+                    batch_size: Number(batchIn.value) || 8,
+                    request_timeout_ms: Number(timeoutIn.value) || 300000,
                 };
                 const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ embedding_config }) });
                 if (r && r.runtimeConfig)
@@ -2470,7 +2479,7 @@ function embeddingsEditor(detail, data) {
         });
         const statusRegion = el('div');
         const projectRegion = el('div');
-        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
+        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), field('배치 크기 (요청당 텍스트 수 · 느린/CPU 백엔드는 낮춰 타임아웃 회피 · 기본 8)', batchIn), field('요청 타임아웃 ms (초과 시 배치를 반으로 줄여 재시도 · 기본 300000)', timeoutIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
         updateStatus(st, statusRegion);
         loadProjectStatus(projectRegion);
     }

@@ -18,6 +18,9 @@ export interface EmbeddingConfig {
   model: string | null;        // 예: 'bge-m3'(기본 권장), 'text-embedding-3-small', 고객 모델명
   dimensions: number;          // 벡터 차원(knowledge.embedding_vector vector(N)). 기본 1024(bge-m3). ⚠ 변경=전체 재임베딩
   auth_env_ref: string | null; // Authorization: Bearer <process.env[auth_env_ref]>. 환경변수 '이름'만 저장(시크릿 금지). null=무인증(로컬 사이드카)
+  // 성능 튜닝(#602) — 느린/CPU 백엔드 대응. 백엔드마다 처리속도가 크게 달라 config 로 조정(코드 변경 0).
+  batch_size: number;          // 한 fetch 요청당 임베딩 텍스트 수 = 백필 커밋 단위. CPU 백엔드는 낮춰 요청당 시간을 300초 안으로.
+  request_timeout_ms: number;  // 임베딩 요청당 AbortSignal.timeout(ms). undici 무설정 기본(≈300초)을 명시화·설정화. 초과 시 배치를 반으로 줄여 재시도.
 }
 
 // 임베딩 백엔드 1개. resolveEmbeddingProvider(config) 가 config 를 보고 구현을 고른다.
@@ -32,11 +35,23 @@ export interface EmbeddingProvider {
 }
 
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1024; // bge-m3 / KURE-v1 둘 다 1024 → 모델 스왑해도 스키마 불변
+// 기본 배치=8 — 측정치(bge-m3 CPU): 단건 7~29초, 4건 56초 → 8건 ≈ 최악 232초로 300초 안. 요청당 시간이 타임아웃 안에 들도록 보수값.
+//  ⚠ #602: 32건 배치는 CPU 에서 undici 기본 타임아웃(≈300초)을 넘겨 'fetch failed' → 백필이 0건 커밋 후 죽고 무한 재시도. GPU 는 config 로 올려 처리량 확보.
+export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
+export const DEFAULT_EMBEDDING_TIMEOUT_MS = 300000; // 요청당 300초. batch_size 를 이 안에 끝나게 잡는 게 정석 — 타임아웃은 이상치용 안전망(초과 시 배치 축소 재시도).
 export const EMBEDDING_OFF: EmbeddingConfig = {
   provider: "off", base_url: null, model: null, dimensions: DEFAULT_EMBEDDING_DIMENSIONS, auth_env_ref: null,
+  batch_size: DEFAULT_EMBEDDING_BATCH_SIZE, request_timeout_ms: DEFAULT_EMBEDDING_TIMEOUT_MS,
 };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+// 숫자 정규화 — 유효 정수면 [min,max]로 클램프, 아니면 fallback. (batch_size·request_timeout_ms 방어; DB JSONB/env 잡값 안전화)
+const clampInt = (v: unknown, fallback: number, min: number, max: number): number => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+};
+export const EMBEDDING_BATCH_MIN = 1, EMBEDDING_BATCH_MAX = 512;             // 배치 상한(과대 요청 방지)
+export const EMBEDDING_TIMEOUT_MIN_MS = 1000, EMBEDDING_TIMEOUT_MAX_MS = 3600000; // 1초~1시간
 
 // DB row(JSONB) / env → 정규화된 EmbeddingConfig(순수). 알 수 없는 provider·잡값은 안전하게 off.
 export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
@@ -46,7 +61,11 @@ export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
   const dimRaw = Number(o.dimensions);
   // pgvector vector 타입 상한 16000(인덱스는 별도 — ensureEmbeddingSchema 가 HNSW 2000 한계 처리).
   const dimensions = Number.isFinite(dimRaw) && dimRaw >= 1 && dimRaw <= 16000 ? Math.floor(dimRaw) : DEFAULT_EMBEDDING_DIMENSIONS;
-  return { provider: "http", base_url: str(o.base_url), model: str(o.model), dimensions, auth_env_ref: str(o.auth_env_ref) };
+  return {
+    provider: "http", base_url: str(o.base_url), model: str(o.model), dimensions, auth_env_ref: str(o.auth_env_ref),
+    batch_size: clampInt(o.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX),
+    request_timeout_ms: clampInt(o.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS),
+  };
 }
 
 // 고객 .env / docker-compose 부트스트랩 — DB 가 비어있을 때의 시드 기본값. EMBEDDINGS_PROVIDER=http 일 때만 유효.
@@ -59,6 +78,8 @@ export function embeddingConfigFromEnv(): EmbeddingConfig {
     model: process.env.EMBEDDINGS_MODEL ?? null,
     dimensions: process.env.EMBEDDINGS_DIMENSIONS ?? null,
     auth_env_ref: process.env.EMBEDDINGS_AUTH_ENV ?? null,
+    batch_size: process.env.EMBEDDINGS_BATCH_SIZE ?? null,           // 비면 normalize 가 기본값(8)로
+    request_timeout_ms: process.env.EMBEDDINGS_TIMEOUT_MS ?? null,   // 비면 normalize 가 기본값(300000)로
   });
 }
 
@@ -68,17 +89,28 @@ export function resolveEmbeddingConfig(dbRaw: unknown): EmbeddingConfig {
   return db.provider !== "off" ? db : embeddingConfigFromEnv();
 }
 
+// 타임아웃(AbortSignal.timeout)·취소·네트워크 실패('fetch failed')는 배치를 줄이면 통할 수 있어 축소 재시도 대상.
+//  HTTP 4xx/5xx(우리가 만든 Error)는 배치를 줄여도 동일하게 실패 → 즉시 throw(불필요한 재시도로 시간 낭비 방지).
+function isRetriableEmbedError(e: unknown): boolean {
+  const name = (e as { name?: string } | null | undefined)?.name;
+  return name === "TimeoutError" || name === "AbortError" || e instanceof TypeError; // TypeError = undici 'fetch failed'(네트워크/바디 타임아웃)
+}
+
 // ── OpenAI-compatible HTTP provider — 원격/로컬 사이드카 공통(fetch, 새 의존성 0; Node22 global fetch). ──
 class HttpEmbeddingProvider implements EmbeddingProvider {
   readonly kind = "http" as const;
   readonly model: string;
   readonly dimensions: number;
+  readonly batchSize: number;      // 한 요청당 텍스트 수(백필 커밋 단위와 일치)
+  private readonly timeoutMs: number;
   private readonly url: string;
   private readonly authEnvRef: string | null;
 
   constructor(cfg: EmbeddingConfig) {
     this.model = cfg.model ?? "bge-m3";
     this.dimensions = cfg.dimensions;
+    this.batchSize = clampInt(cfg.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX);
+    this.timeoutMs = clampInt(cfg.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS);
     const base = (cfg.base_url ?? "https://api.openai.com").replace(/\/+$/, "");
     // base 가 이미 /v1/embeddings 로 끝나면 그대로(고객이 풀 URL 지정), 아니면 표준 경로 부착.
     this.url = /\/v1\/embeddings$/.test(base) ? base : `${base}/v1/embeddings`;
@@ -92,12 +124,41 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     return key ? { authorization: `Bearer ${key}` } : {};
   }
 
+  // 입력을 batchSize 청크로 쪼개 순차 요청(느린/CPU 백엔드 과부하·타임아웃 방지) 후 순서 보존 concat.
+  //  ⚠ #602: 예전엔 texts 전부를 한 fetch·타임아웃 무설정으로 보내 CPU 백엔드가 undici 기본(≈300초)을 넘겨 실패했다.
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const vecs = await this.embedChunk(texts.slice(i, i + this.batchSize));
+      for (const v of vecs) out.push(v);
+    }
+    return out;
+  }
+
+  // 한 청크를 1회 요청. 타임아웃/네트워크 실패면 청크를 반으로 줄여 재귀 재시도(단건까지) — 느린 백엔드가 조금씩이라도 진행되게.
+  //  단건까지 줄여도 타임아웃이면 throw(엔드포인트가 사실상 불가용 — 호출부가 unavailable/error 로 처리).
+  private async embedChunk(texts: string[]): Promise<number[][]> {
+    try {
+      return await this.embedRequest(texts);
+    } catch (e) {
+      if (texts.length > 1 && isRetriableEmbedError(e)) {
+        const mid = Math.ceil(texts.length / 2);
+        const head = await this.embedChunk(texts.slice(0, mid));
+        const tail = await this.embedChunk(texts.slice(mid));
+        return [...head, ...tail];
+      }
+      throw e;
+    }
+  }
+
+  // 실제 1회 HTTP 호출 — 요청마다 새 AbortSignal.timeout(초과 시 TimeoutError → 상위에서 축소 재시도).
+  private async embedRequest(texts: string[]): Promise<number[][]> {
     const res = await fetch(this.url, {
       method: "POST",
       headers: { "content-type": "application/json", ...this.authHeader() },
       body: JSON.stringify({ model: this.model, input: texts }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

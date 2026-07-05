@@ -55,6 +55,10 @@ import { generateInitialPassword, setMemberPassword, hasCredential, membersWithC
 import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfig } from "../v6/embedding-provider.js";
 import {
+  DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS,
+  EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS,
+} from "../v6/embedding-provider.js";
+import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
   deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
 } from "../org/git-credential-store.js";
@@ -725,12 +729,27 @@ export const deliveryCapabilities: Capability[] = [
           if (!Number.isFinite(dimensions) || dimensions < 1 || dimensions > 16000) throw new HttpError(400, "embedding_config.dimensions 는 1~16000 정수여야 합니다");
           dimensions = Math.floor(dimensions);
         }
+        // 성능 튜닝(#602) — 느린/CPU 백엔드 대응. 비우면 기본값(배치 8·타임아웃 300초). store 가 다시 normalize(클램프).
+        let batchSize = DEFAULT_EMBEDDING_BATCH_SIZE;
+        if (e.batch_size !== undefined && e.batch_size !== null && e.batch_size !== "") {
+          batchSize = Number(e.batch_size);
+          if (!Number.isFinite(batchSize) || batchSize < EMBEDDING_BATCH_MIN || batchSize > EMBEDDING_BATCH_MAX) throw new HttpError(400, `embedding_config.batch_size 는 ${EMBEDDING_BATCH_MIN}~${EMBEDDING_BATCH_MAX} 정수여야 합니다`);
+          batchSize = Math.floor(batchSize);
+        }
+        let timeoutMs = DEFAULT_EMBEDDING_TIMEOUT_MS;
+        if (e.request_timeout_ms !== undefined && e.request_timeout_ms !== null && e.request_timeout_ms !== "") {
+          timeoutMs = Number(e.request_timeout_ms);
+          if (!Number.isFinite(timeoutMs) || timeoutMs < EMBEDDING_TIMEOUT_MIN_MS || timeoutMs > EMBEDDING_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.request_timeout_ms 는 ${EMBEDDING_TIMEOUT_MIN_MS}~${EMBEDDING_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
+          timeoutMs = Math.floor(timeoutMs);
+        }
         patch.embedding_config = {
           provider: provider as "off" | "http",
           base_url: (e.base_url === undefined || e.base_url === null || e.base_url === "") ? null : str(e.base_url, "embedding_config.base_url", 500).trim(),
           model: (e.model === undefined || e.model === null || e.model === "") ? null : str(e.model, "embedding_config.model", 200).trim(),
           dimensions,
           auth_env_ref: authRef,
+          batch_size: batchSize,
+          request_timeout_ms: timeoutMs,
         };
       }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
