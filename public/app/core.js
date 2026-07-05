@@ -173,6 +173,13 @@ function renderInline(text) {
     };
     while (i < s.length) {
         const ch = s[i];
+        // 백슬래시 이스케이프(#541 — ClickUp markdown_description 은 평문 대시/구두점을 \- \* 등으로 이스케이프해 준다.
+        //  CommonMark 이스케이프 문자면 리터럴로 소비 — 안 하면 \- 가 화면에 그대로 보인다.)
+        if (ch === '\\' && s[i + 1] !== undefined && '\\`*_{}[]()#+-.!~|<>"\''.indexOf(s[i + 1]) >= 0) {
+            buf += s[i + 1];
+            i += 2;
+            continue;
+        }
         // 인라인 코드 `...`
         if (ch === '`') {
             const end = s.indexOf('`', i + 1);
@@ -222,6 +229,17 @@ function renderInline(text) {
         if (ch === '*' && s[i + 1] !== '*' && s[i + 1] !== ' ' && s[i + 1] !== undefined) {
             const end = s.indexOf('*', i + 1);
             if (end > i && s[end - 1] !== ' ') {
+                flush();
+                out.push(el('em', {}, ...renderInline(s.slice(i + 1, end))));
+                i = end + 1;
+                continue;
+            }
+        }
+        // 기울임 _..._ (#541 — ClickUp 이탤릭). snake_case 오탐 방지: 여는 _ 앞은 시작/공백/구두점, 닫는 _ 뒤는 단어문자 금지.
+        if (ch === '_' && s[i + 1] !== '_' && s[i + 1] !== ' ' && s[i + 1] !== undefined
+            && (i === 0 || !/[\p{L}\p{N}_]/u.test(s[i - 1]))) {
+            const end = s.indexOf('_', i + 1);
+            if (end > i && s[end - 1] !== ' ' && (end === s.length - 1 || !/[\p{L}\p{N}_]/u.test(s[end + 1]))) {
                 flush();
                 out.push(el('em', {}, ...renderInline(s.slice(i + 1, end))));
                 i = end + 1;
