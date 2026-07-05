@@ -170,7 +170,10 @@ async function* paginate(cfg: NotionConfig, make: (cursor?: string) => { path: s
 }
 
 // ── 자산 다운로드 ─────────────────────────────────────────────────────────────
-interface AssetJob { url: string; file: string }
+//  노션 파일 URL 은 발급 후 1시간 만료 — 대형 워크스페이스는 수집만 2시간+라 다운로드 시점(맨 끝)엔 초반
+//  URL 이 전부 죽는다(어니스트 실배포: 자산 403 48건 → 커서 동결 → 125분 full 무한 반복). 소유 블록/페이지를
+//  재조회하면 같은 S3 경로에 새 서명이 발급되므로(경로는 파일 버전당 안정), 만료·403 시 재조회로 치유한다.
+interface AssetJob { url: string; file: string; blockId?: string; pageId?: string; kind?: string; expiry?: string }
 
 function assetFileName(hint: { blockId?: string; pageId?: string; kind: string; name?: string }, url: string): string {
   let base = "";
@@ -187,13 +190,70 @@ function assetFileName(hint: { blockId?: string; pageId?: string; kind: string; 
   return ext ? `${key}.${ext}` : key;
 }
 
-async function downloadAsset(job: AssetJob, dir: string): Promise<void> {
+/** JSON 을 깊이 걷어 원본과 같은 S3 경로(pathname)를 가진 새 presigned URL 을 찾는다. */
+function findUrlByPath(node: unknown, targetPath: string): string | null {
+  if (typeof node === "string") {
+    if (node.startsWith("http")) {
+      try { if (new URL(node).pathname === targetPath) return node; } catch { /* URL 아님 */ }
+    }
+    return null;
+  }
+  if (Array.isArray(node)) {
+    for (const v of node) { const r = findUrlByPath(v, targetPath); if (r) return r; }
+    return null;
+  }
+  if (node && typeof node === "object") {
+    for (const v of Object.values(node as Rec)) { const r = findUrlByPath(v, targetPath); if (r) return r; }
+  }
+  return null;
+}
+
+/** 만료된 자산 URL 재발급 — 소유 블록 → 페이지 → (댓글 첨부) 순으로 재조회해 같은 경로의 새 서명을 찾는다. */
+async function refreshAssetUrl(t: Traversal, job: AssetJob): Promise<string | null> {
+  let targetPath = "";
+  try { targetPath = new URL(job.url).pathname; } catch { return null; }
+  const sources: Array<() => Promise<unknown>> = [];
+  if (job.blockId) sources.push(() => notionFetch(t.cfg, `/blocks/${job.blockId}`));
+  if (job.pageId) sources.push(() => notionFetch(t.cfg, `/pages/${job.pageId}`));
+  if (job.kind === "comment_attachment" && job.pageId) {
+    sources.push(async () => {
+      const out: unknown[] = [];
+      for await (const cr of paginate(t.cfg, (cursor) => ({
+        path: `/comments?block_id=${encodeURIComponent(job.pageId!)}&page_size=${PAGE_SIZE}${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`,
+      }))) out.push(cr);
+      return out;
+    });
+  }
+  for (const src of sources) {
+    try {
+      const fresh = findUrlByPath(await src(), targetPath);
+      if (fresh) return fresh;
+    } catch { /* 다음 소스 */ }
+  }
+  return null;
+}
+
+async function downloadAsset(t: Traversal, job: AssetJob, dir: string): Promise<void> {
   const dest = path.join(dir, job.file);
+  let url = job.url;
+  // 선제 재발급 — 만료시각(expiry_time)이 지났으면 죽은 요청을 시도조차 하지 않는다(대형 워크스페이스 기본 경로).
+  if (job.expiry && Date.parse(job.expiry) < Date.now() + 30_000) {
+    url = (await refreshAssetUrl(t, job)) ?? url;
+  }
+  let refreshed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       // 자산은 파일 크기가 커 API 보다 넉넉한 타임아웃(5분) — 무한 대기(행)만 차단.
-      const res = await fetch(job.url, { signal: AbortSignal.timeout(300_000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(url, { signal: AbortSignal.timeout(300_000) });
+      if (!res.ok) {
+        // 403/400 = 서명 만료(수집~다운로드 사이 1h 초과) — 소유 객체 재조회로 새 URL 발급 후 재시도.
+        if ((res.status === 403 || res.status === 400) && !refreshed) {
+          refreshed = true;
+          const fresh = await refreshAssetUrl(t, job);
+          if (fresh) { url = fresh; throw new Error(`HTTP ${res.status} — 재발급 후 재시도`); }
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
       const buf = Buffer.from(await res.arrayBuffer());
       if (!buf.length) throw new Error("빈 응답");
       fs.mkdirSync(dir, { recursive: true });
@@ -917,7 +977,10 @@ function makeCtx(t: Traversal, ownerId: string, links: Map<string, string>): Not
       if (!url) return null;
       if (!expiring) return url; // external — 만료 없음, 원본 유지
       const fname = assetFileName({ ...hint, pageId: ownerId }, url);
-      if (!t.assetJobs.has(fname)) t.assetJobs.set(fname, { url, file: fname });
+      if (!t.assetJobs.has(fname)) {
+        const expiry = String(asRec(f.file).expiry_time ?? "") || undefined;
+        t.assetJobs.set(fname, { url, file: fname, blockId: hint.blockId, pageId: ownerId, kind: hint.kind, expiry });
+      }
       return `/api/ui/notion-assets/${fname}`;
     },
     addLink: (target, kind) => {
@@ -1214,9 +1277,21 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   }
 
   // 자산 다운로드 — 방출 후 일괄(중복 제거됨). 실패는 assetFailures + failures(커서 동결 → 다음 run 재시도).
+  //  디렉토리 선검사: 권한 문제(EACCES)는 파일마다 반복 실패시키지 말고 한 번에 명확한 처방으로 알린다.
+  if (t.assetJobs.size) {
+    try {
+      fs.mkdirSync(cfg.assetDir, { recursive: true });
+    } catch (err) {
+      t.stats.assetFailures += t.assetJobs.size;
+      t.stats.failures += t.assetJobs.size;
+      console.error(`[notion] 자산 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
+        + ` — 앱 디렉토리에서 'sudo chown -R $(whoami) data' 로 소유권을 서비스 유저로 바꾸면 다음 run 이 재수집합니다(커서 동결로 유실 없음)`);
+      t.assetJobs.clear();
+    }
+  }
   for (const job of t.assetJobs.values()) {
     try {
-      await downloadAsset(job, cfg.assetDir);
+      await downloadAsset(t, job, cfg.assetDir);
       t.stats.assets++;
     } catch (err) {
       t.stats.assetFailures++;
@@ -1237,3 +1312,6 @@ export const notionConnector: Connector = {
   name: "notion",
   backfill,
 };
+
+// 테스트 훅 — 자산 재발급(만료 URL 치유) 경로의 결정적 검증용. 프로덕션 코드에서 사용 금지.
+export const __assetTestables = { downloadAsset, refreshAssetUrl, findUrlByPath };
