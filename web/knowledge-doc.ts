@@ -284,7 +284,16 @@ function openKnPropsSettings(foot, gear, k, hidden: string[], onChanged) {
   allBtn.onclick = async () => {
     busy(true);
     try {
-      const hidden_props = KN_PROP_CATALOG.filter((p) => !toggles.get(p.key)).map((p) => p.key);
+      // 전역 기본엔 '이 대화에서 사용자가 바꾼 델타'만 반영한다. 토글 초기값(vis)은 이 문서의
+      //  props_ui 오버라이드가 이미 반영된 '효과 노출'이라, 그걸 절대값으로 쓰면 한 문서의 개인화가
+      //  전역 기본으로 조용히 샌다(#592). 안 바꾼 속성은 현재 전역(hidden) 그대로 유지.
+      const nextHidden = new Set(hidden);
+      for (const p of KN_PROP_CATALOG) {
+        const on = !!toggles.get(p.key);
+        if (on === vis.has(p.key)) continue;   // 초기 토글(효과 노출)에서 안 바뀐 속성 = 전역 불변
+        if (on) nextHidden.delete(p.key); else nextHidden.add(p.key);
+      }
+      const hidden_props = KN_PROP_CATALOG.filter((p) => nextHidden.has(p.key)).map((p) => p.key);
       await api('/api/ui/knowledge-view-config', { method: 'POST', body: JSON.stringify({ hidden_props }) });
       knViewConfigCache = Promise.resolve(hidden_props);   // 캐시 즉시 갱신(재fetch 없이 반영)
       toast('전체 기본 속성 표시를 저장했습니다');
@@ -1001,6 +1010,10 @@ function knHashWithPeek(name: string | null) {
   return '#/' + path + (qs ? '?' + qs : '');
 }
 
+// 피크 열린 채 목록 필터가 바뀌면(syncHash 가 replaceState 로 해시 재작성) baseHash 가 stale 해진다 —
+//  기준 해시를 라이브 non-peek 해시로 다시 앵커링해 '뒤로가기=닫힘' 판정(onPop 의 baseHash 비교)이 정확해지게(리뷰 확정).
+function reanchorKnowledgePeek() { if (knPeekCur) knPeekCur.baseHash = knHashWithPeek(null); }
+
 // 히스토리 조작 없이 패널만 제거 — 라우트 전환(전체화면·다른 탭)·패널 교체 정리용. 열려 있지 않으면 no-op.
 function dismissKnowledgePeek() {
   const cur = knPeekCur;
@@ -1089,6 +1102,7 @@ export {
   buildKnowledgeDetail,
   consumeKnPeekNavGuard,
   dismissKnowledgePeek,
+  reanchorKnowledgePeek,
   infoDot,
   knAuthorChip,
   knChildrenPanel,

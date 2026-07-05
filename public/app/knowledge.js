@@ -3,7 +3,7 @@
 import { api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope } from './admin.js';
-import { KN_REL_LABEL, KN_TYPE_LABEL, SOURCE_KIND_LABEL, SPACE_LABEL, buildKnowledgeDetail, knAuthorChip, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knProvChip, knTreeIcon, knTypeChip, openKnowledgePeek, openProjectChooser, openSourceDetail } from './knowledge-doc.js';
+import { KN_REL_LABEL, KN_TYPE_LABEL, SOURCE_KIND_LABEL, SPACE_LABEL, buildKnowledgeDetail, knAuthorChip, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knProvChip, knTreeIcon, knTypeChip, openKnowledgePeek, openProjectChooser, openSourceDetail, reanchorKnowledgePeek } from './knowledge-doc.js';
 // ════════════════════════════════════════════
 // 카테고리 #/categories — 맥락의 분류축(Category). space ∈ {사업·제품·시스템}별 하위 카테고리 CRUD.
 //  맥락 = Category(분류축) + Knowledge(기록) + Project(변화). 이 탭은 Category 트리를 관리한다.
@@ -356,6 +356,7 @@ async function renderKnowledgeSpace(view, _space, params) {
             p.set('peek', curPeek);
         const qs = p.toString();
         history.replaceState(null, '', '#/knowledge' + (qs ? '?' + qs : ''));
+        reanchorKnowledgePeek(); // 필터 변경으로 non-peek 기준 해시가 바뀌었으니 열린 피크의 baseHash 재앵커(뒤로가기 판정 정확화)
     }
     // 목록 페인트(서버 페치 분리) — 선택 모드면 행을 체크 가능하게 렌더.
     //  (#592) 카테고리 뷰 분기: list(기본 knRow) | table(컬럼 테이블) | entry(엔트리 문서 인라인 + 목록 토글 바).
