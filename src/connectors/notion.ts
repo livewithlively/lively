@@ -74,7 +74,7 @@ const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 interface NotionConfig {
   token: string; instance: string; version: string;
-  rootIds: string[]; comments: "page" | "all" | "off"; assetDir: string;
+  rootIds: string[]; excludeIds: string[]; comments: "page" | "all" | "off"; assetDir: string;
 }
 
 async function loadConfig(): Promise<NotionConfig> {
@@ -82,21 +82,27 @@ async function loadConfig(): Promise<NotionConfig> {
   if (!c.token) throw new Error("NOTION_TOKEN 이 없습니다 — Notion integration 토큰(secret_…)을 설정하세요(관리탭 또는 .env)");
   // 루트 페이지 — URL/슬러그/uuid 어떤 형태든 관용 파싱. 파싱 불가 항목은 **조용히 버리지 않고 즉시 실패**
   //  (버리면 search 폴백으로 넘어가 '왜 0건이지' 미스터리가 됨 — 실사용에서 발생한 함정 #551).
-  const rootEntries = (c.root_pages ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const rootIds: string[] = [];
-  for (const entry of rootEntries) {
-    const id = parseNotionRootId(entry);
-    if (!id || id.length !== 36) {
-      throw new Error(`NOTION_ROOT_PAGES 항목을 페이지 id 로 해석할 수 없습니다: "${entry}" — 페이지 URL 전체, 슬러그(제목-32hex), 또는 32자리 id 를 넣으세요`);
+  const parseIds = (raw: string | undefined, envName: string): string[] => {
+    const out: string[] = [];
+    for (const entry of (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      const id = parseNotionRootId(entry);
+      if (!id || id.length !== 36) {
+        throw new Error(`${envName} 항목을 페이지 id 로 해석할 수 없습니다: "${entry}" — 페이지 URL 전체, 슬러그(제목-32hex), 또는 32자리 id 를 넣으세요`);
+      }
+      out.push(id);
     }
-    rootIds.push(id);
-  }
+    return out;
+  };
+  const rootIds = parseIds(c.root_pages, "NOTION_ROOT_PAGES");
+  // 제외 페이지(및 하위 전체) — 파싱 불가 항목은 조용히 버리지 않고 즉시 실패(빠뜨리면 '제외했는데 계속 싱크되네'
+  //  미스터리 + 원치 않은 데이터 유입). 루트와 대칭.
+  const excludeIds = parseIds(c.exclude_pages, "NOTION_EXCLUDE_PAGES");
   const cm = (c.comments ?? "page").toLowerCase();
   return {
     token: c.token,
     instance: c.instance || "default",
     version: c.api_version || DEFAULT_NOTION_VERSION,
-    rootIds,
+    rootIds, excludeIds,
     comments: cm === "all" || cm === "off" ? (cm as "all" | "off") : "page",
     assetDir: c.asset_dir || path.resolve(process.cwd(), "data", "notion-assets"),
   };
@@ -315,6 +321,8 @@ interface Traversal {
   ledgerChildren: Map<string, string[]>;
   /** 루트 모드 델타의 스코프 판정 메모(조상 체인 워크 결과 캐시 — 형제 후보 반복 워크 방지) */
   membership: Map<string, boolean>;
+  /** 제외 서브트리(excludeIds) 판정 메모 — id→(조상 중 제외 루트 존재?). excludeIds 비면 미사용. */
+  excluded: Map<string, boolean>;
   /** 댓글 read capability 부재(403) 관측 — 이후 페이지는 댓글 호출 자체를 스킵(페이지당 1회 403 낭비 제거, #586). */
   commentsDenied: boolean;
   pages: Map<string, PageNode>;
@@ -393,6 +401,9 @@ function discoverChildren(t: Traversal, node: PageNode): void {
     for (const b of blocks) {
       const type = String(b.type ?? "");
       const id = normalizeNotionId(String(b.id ?? ""));
+      // 제외 루트로 지정된 하위 문서/DB 는 부모의 자식목록(트리)에서도 뺀다 — 노드 생성·큐잉 자체를 생략(하위 전체는
+      //  발견되지 않아 자연히 제외; search 로 시딩된 하위는 방출 게이트가 처리). excludeIds 비면 무비용.
+      if ((type === "child_page" || type === "child_database") && t.cfg.excludeIds.length && t.cfg.excludeIds.includes(id)) continue;
       if (type === "child_page") {
         // 델타(#586): 원장이 같은 부모의 활성 자식으로 이미 아는 페이지는 노드 생성 자체를 생략(요청 0) —
         //  그 자식이 실제로 변경됐다면 search 델타가 별도 후보로 이미 큐잉했다(t.pages 에 존재 → 이 분기 미진입).
@@ -529,6 +540,9 @@ async function fetchComments(t: Traversal, node: PageNode): Promise<void> {
 // ── collect 단계 — BFS 로 페이지/DB 전체 수집 ─────────────────────────────────
 async function processPage(t: Traversal, node: PageNode): Promise<void> {
   try {
+    // 제외 서브트리 게이트 — 방출·관측 이전에 막는다(가속 full 의 관측 갱신보다 먼저라야 이미 싱크된 제외 항목이
+    //  last_synced_at 갱신을 피하고 다음 full 스윕에서 보관된다). 미방출·미관측 → 실패/재시도 아님(결정적 제외).
+    if (await underExcluded(t, node.id, node.parentOverride)) { node.changed = false; return; }
     if (!node.page) {
       node.page = (await notionFetch(t.cfg, `/pages/${node.id}`)) as NotionPage;
     }
@@ -607,6 +621,8 @@ async function processPage(t: Traversal, node: PageNode): Promise<void> {
 
 async function processDb(t: Traversal, node: DbNode): Promise<void> {
   try {
+    // 제외 서브트리 게이트 — DB 와 그 행 전체를 방출 이전에 막는다(node.failed 로 안 남겨 방출 루프가 건너뜀).
+    if (await underExcluded(t, node.id, node.parentOverride)) { node.failed = true; return; }
     node.db = (await notionFetch(t.cfg, `/databases/${node.id}`)) as NotionDatabase;
     const dsRefs = node.db.data_sources ?? [];
     if (dsRefs.length) {
@@ -779,6 +795,58 @@ async function discoverSeeds(t: Traversal): Promise<void> {
 //   · 신규/이동/복원은 원장 불일치로, 자식 추가·재정렬은 부모 last_edited 갱신으로 잡힌다(노션 시맨틱).
 //  안 잡히는 것(댓글 단독 변경·타 페이지 멘션의 제목 캐시·아카이브 전파·LOOKBACK 초과 인덱싱 지연)은
 //  일일 full 스윕이 수렴 — 증분은 빠른 수렴 경로, 완결성의 담보는 full 이라는 기존 불변식 유지.
+
+// ── 제외 서브트리(관리탭 '제외 페이지') — excludeIds 로 지정한 페이지/DB 와 그 하위 전체를 싱크에서 뺀다. ──
+//  스코프(inScope)와 대칭: 조상 체인을 워크해 excludeIds 에 닿으면 제외. 원장 parentExt 로 0-fetch 우선(대부분
+//  이미 싱크된 페이지라 부모를 원장이 앎), 미상만 live 조회. 결과 memo. excludeIds 비면 즉시 false(무비용 — 기존 설치 무영향).
+//  방출 직전(processPage/processDb 최상단)에 게이트하므로 모든 발견 경로(루트 BFS·search·DB 행·원장 자식)를 한 곳에서 막는다.
+
+/** parent 레코드 → 상위 페이지/DB 의 external id(최상단이면 null). inScope 의 부모 해소와 동일 규칙. */
+async function parentExtOf(t: Traversal, parent: Rec): Promise<string | null> {
+  const ptype = String(parent.type ?? "");
+  if (ptype === "page_id") return normalizeNotionId(String(parent.page_id ?? "")) || null;
+  if (ptype === "database_id") return normalizeNotionId(String(parent.database_id ?? "")) || null;
+  if (ptype === "data_source_id") return dsOwnerDb(t, normalizeNotionId(String(parent.data_source_id ?? ""))) ?? null;
+  if (ptype === "block_id") return (await resolveBlockOwnerPage(t, String(parent.block_id ?? ""))) ?? null;
+  return null; // workspace 등 — 최상단
+}
+
+/** id(또는 그 조상)가 제외 루트에 속하나. seedParentExt = 알려진 직계 부모(있으면 첫 홉 조회 절약: DB 행·자식). */
+async function underExcluded(t: Traversal, id: string, seedParentExt?: string | null): Promise<boolean> {
+  if (!t.cfg.excludeIds.length) return false;
+  if (t.cfg.excludeIds.includes(id)) return true;
+  const cached = t.excluded.get(id);
+  if (cached !== undefined) return cached;
+  const walked: string[] = [id];
+  let cur = id;
+  let verdict = false;
+  let memoize = true; // 일시 실패(5xx 소진 등)로 조상 미상이면 memo 하지 않는다 — '제외 아님' 오판을 굳혀 원치 않은 유입 방지, 다음 run 재판정.
+  for (let hops = 0; hops < 24; hops++) {
+    let parentExt: string | null = hops === 0 && seedParentExt != null ? seedParentExt : null;
+    if (parentExt == null) parentExt = t.ledger?.byId.get(cur)?.parentExt ?? null;
+    if (parentExt == null) {
+      try {
+        parentExt = await parentExtOf(t, asRec(((await notionFetch(t.cfg, `/pages/${cur}`)) as NotionPage).parent));
+      } catch {
+        try {
+          parentExt = await parentExtOf(t, asRec(((await notionFetch(t.cfg, `/databases/${cur}`)) as NotionDatabase).parent));
+        } catch (err) {
+          const s = (err as { status?: number })?.status;
+          if (s !== 400 && s !== 403 && s !== 404) memoize = false; // 접근 불가/비객체 조상 = 진짜 경계(제외 아님); 그 외는 일시 실패로 판정 보류
+          break;
+        }
+      }
+    }
+    if (!parentExt || parentExt.length !== 36) break; // 워크스페이스 등 최상단 — 제외 루트 못 만남
+    if (t.cfg.excludeIds.includes(parentExt)) { verdict = true; break; }
+    const memoed = t.excluded.get(parentExt);
+    if (memoed !== undefined) { verdict = memoed; break; }
+    walked.push(parentExt);
+    cur = parentExt;
+  }
+  if (memoize) for (const w of walked) t.excluded.set(w, verdict);
+  return verdict;
+}
 
 /** 루트 모드 스코프 판정 — 조상 체인을 원장/루트에 닿을 때까지 워크(결과는 memo). search 모드는 전 범위. */
 async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> {
@@ -1245,6 +1313,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     fastFull,
     ledgerChildren,
     membership: new Map(),
+    excluded: new Map(),
     commentsDenied: false,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
