@@ -72,10 +72,10 @@ function projectPageHead() {
 }
 
 // 프로젝트(v2) 진입 — worklog(작업 로그=회사 전체 활동) | browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
-async function renderProjectsV2(view, sub, params) {
+async function renderProjectsV2(view, sub, params, scopeKey?) {
   if (sub === 'worklog') return renderProjectV2WorkLog(view);
   if (sub === 'browse' || SPACE_LABEL[sub]) return renderProjectV2Space(view, sub, params);
-  return renderProjectV2Board(view);
+  return renderProjectV2Board(view, scopeKey);
 }
 
 // 대시보드 — 프로젝트 보드(level='project'). 진행 중/완료 두 섹션 + [+ 새 프로젝트] + [선택→일괄삭제].
@@ -87,6 +87,53 @@ async function renderProjectsV2(view, sub, params) {
 //  적용 범위(보수적 — UI 불변식 우선): type board→상태로 나누기 / list→평면, 정렬(지원 필드만). 필터·컬럼은
 //  데이터로 보존(project_view.config)하되 아직 미적용 — 툴팁·토스트로 존재를 알린다.
 const pjvSavedView: { id: number | null; name: string; sort: { field: string; dir: number } | null } = { id: null, name: '', sort: null };
+
+// ── 스코프별 뷰 상태(#541) — 리스트/폴더/스페이스마다 마지막 뷰(보기 모드 + 저장 뷰)를 각자 기억. localStorage 영속. ──
+//  전역 globals(pjvBoardView/pjvSavedView)은 '현재 스코프의 live 뷰'를 담고, renderArea 진입 시 스코프 store 에서 로드한다.
+function pjvScopeViewKey(k) { return 'pjv:scopeView:' + k; }
+function pjvLoadScopeView(k) { try { return JSON.parse(localStorage.getItem(pjvScopeViewKey(k)) || 'null'); } catch (_) { return null; } }
+function pjvSaveScopeView(k, v) { try { if (v == null) localStorage.removeItem(pjvScopeViewKey(k)); else localStorage.setItem(pjvScopeViewKey(k), JSON.stringify(v)); } catch (_) { /* noop */ } }
+function pjvScopeIsFolder(k) { return typeof k === 'string' && k[0] === 'F'; }
+// 스코프 기본 뷰 — 폴더/스페이스=개요(Overview), 그 외(리스트/미분류/전체)=상태로 나누기.
+function pjvDefaultView(scopeKey) {
+  return pjvScopeIsFolder(scopeKey)
+    ? { overview: true, byStatus: false, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null }
+    : { overview: false, byStatus: true, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null };
+}
+function pjvSnapshotView() {
+  return { kanban: !!pjvBoardView.kanban, byStatus: pjvBoardView.byStatus !== false, overview: !!pjvBoardView.overview,
+    savedViewId: pjvSavedView.id, savedViewName: pjvSavedView.name, savedViewSort: pjvSavedView.sort };
+}
+function pjvApplyView(v) {
+  pjvBoardView.kanban = !!(v && v.kanban);
+  pjvBoardView.byStatus = !v || v.byStatus !== false;
+  pjvBoardView.overview = !!(v && v.overview);
+  pjvSavedView.id = (v && v.savedViewId) != null ? v.savedViewId : null;
+  pjvSavedView.name = (v && v.savedViewName) || '';
+  pjvSavedView.sort = (v && v.savedViewSort) || null;
+}
+// URL 딥링크(#541) — 현재 스코프를 해시로 반영해 새로고침·뒤로가기·직접이동 가능. pushState 는 hashchange 를
+//  안 쏘므로 사이드바 클릭은 인메모리 render 유지(리페치 없음), 뒤로가기(hashchange)만 route 재실행.
+function pjvScopeHash(key) {
+  if (!key || key === '__all__') return '#/projects2';
+  if (key === '__none__') return '#/projects2/none';
+  if (key[0] === 'L') return '#/projects2/l/' + key.slice(1);
+  if (key[0] === 'F') return '#/projects2/f/' + key.slice(1);
+  return '#/projects2';
+}
+function pjvSyncUrl(key, replace) {
+  const target = pjvScopeHash(key);
+  if (location.hash === target) return;
+  try { if (replace) history.replaceState(null, '', target); else history.pushState(null, '', target); } catch (_) { /* noop */ }
+}
+// 사이드바(스코프) 모드를 떠날 때(#541 리뷰) — 스코프 live 뷰 globals 를 전역 보드 기본으로 리셋 + URL 정리.
+//  안 하면 마지막 스코프의 overview/kanban/저장뷰가 전역 '전체' 보드로 새어 flat/kanban·엉뚱한 정렬로 렌더된다.
+function pjvExitAreaMode() {
+  pjvApplyView(pjvDefaultView('__all__')); // byStatus=true, kanban/overview=false, savedView clear
+  pjvSyncUrl('__all__', true);
+}
+// 사이드바 열림 선호 저장(#541 리뷰) — 기본 ON 이지만 사용자가 닫으면 새로고침 후에도 닫힌 채 유지(URL 은 못 담음).
+function pjvPersistSideOpen() { try { localStorage.setItem('pjv:sideOpen', pjvBoardView.byArea ? '1' : '0'); } catch (_) { /* noop */ } }
 function pjvSavedSortCmp() {
   const s = pjvSavedView.sort;
   if (!s) return null;
@@ -128,8 +175,15 @@ async function pjvSavedViewMenu(anchor, rerender) {
   catch (_) { loading.textContent = '뷰를 불러오지 못했습니다'; return; }
   loading.remove();
   const mkPlain = (label, on, sel) => { const it = el('div', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), role: 'button', tabindex: '0', text: label }); it.onclick = on; return it; };
-  menu.append(mkPlain('기본 보기', () => { pjvSavedView.id = null; pjvSavedView.name = ''; pjvSavedView.sort = null; pjvBoardView.kanban = false; pjvBoardView.byStatus = true; close(); rerender(); }, pjvSavedView.id == null));
-  if (!views.length) { menu.append(el('div', { class: 'pjv-menu-item pjv-savedview-empty', text: qs ? '이 스코프에 저장된 뷰가 없습니다' : '저장된 뷰가 없습니다' })); return; }
+  const isFolder = selKey[0] === 'F';
+  if (isFolder) {
+    // 폴더/스페이스(#541) — 개요/리스트묶음 전환. 개요=폴더 진입 기본(하위 요약 카드).
+    menu.append(mkPlain('개요 (Overview)', () => { pjvApplyView({ overview: true, byStatus: false, kanban: false }); close(); rerender(); }, pjvBoardView.overview));
+    menu.append(mkPlain('리스트 묶음', () => { pjvApplyView({ overview: false, byStatus: false, kanban: false }); close(); rerender(); }, !pjvBoardView.overview && !pjvBoardView.kanban && pjvSavedView.id == null));
+  } else {
+    menu.append(mkPlain('기본 보기', () => { pjvApplyView(pjvDefaultView(selKey)); close(); rerender(); }, pjvSavedView.id == null && !pjvBoardView.kanban && !pjvBoardView.overview));
+  }
+  if (!views.length) { if (!isFolder) menu.append(el('div', { class: 'pjv-menu-item pjv-savedview-empty', text: qs ? '이 스코프에 저장된 뷰가 없습니다' : '저장된 뷰가 없습니다' })); return; }
   for (const v of views) {
     const row = el('div', { class: 'pjv-menu-item pjv-savedview-item' + (pjvSavedView.id === v.id ? ' sel' : ''), role: 'button', tabindex: '0' });
     row.append(el('span', { class: 'pjv-savedview-name', text: v.name }));
@@ -145,8 +199,11 @@ async function pjvSavedViewMenu(anchor, rerender) {
     if (bits.length) row.title = bits.join(' · ');
     row.onclick = () => {
       pjvSavedView.id = v.id; pjvSavedView.name = String(v.name || '');
-      // board 타입 → 칸반(#541 — 상태별 컬럼+카드, ClickUp 보드 뷰 동형). 그 외(list 등)=평면 목록.
-      pjvBoardView.kanban = String(v.type) === 'board';
+      // board 타입 → 칸반, location_overview → 개요(#541), 그 외(list 등)=평면/리스트묶음.
+      const vt = String(v.type);
+      pjvBoardView.kanban = vt === 'board';
+      // 개요(location_overview)는 폴더/스페이스 스코프에서만 유효(렌더 브랜치가 selFolder 필요) — 리스트/미분류에선 평면 폴백(#541 리뷰).
+      pjvBoardView.overview = vt === 'location_overview' && selKey[0] === 'F';
       pjvBoardView.byStatus = false;
       const mapped = sf ? pjvMapClickUpSortField(String(sf.field)) : null;
       pjvSavedView.sort = mapped ? { field: mapped, dir: Number(sf && sf.dir) === -1 ? -1 : 1 } : null;
@@ -242,7 +299,11 @@ function pjvKanbanBoard(projects, selList, ctx) {
   return wrap;
 }
 
-async function renderProjectV2Board(view) {
+async function renderProjectV2Board(view, scopeKey?) {
+  // URL 딥링크로 진입(#/projects2/l|f/<id>) — 스코프 선택 + 사이드바 켬. reload(scopeKey 없음)은 현재 선택 유지.
+  //  스코프 없이 진입(#/projects2)이면 사이드바 열림 선호(localStorage) 반영 — 기본 ON, 사용자가 닫았으면 닫힌 채.
+  if (scopeKey) { pjvSidebarSel.key = scopeKey; pjvBoardView.byArea = true; }
+  else { try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1') pjvBoardView.byArea = true; } catch (_) { /* noop */ } }
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
   const keepY = _pjvKeepScrollY; _pjvKeepScrollY = null; // 인라인 편집 재렌더면 스켈레톤 스킵 + 스크롤 복원(#358)
   if (keepY == null) view.replaceChildren(projectSubBar('dashboard'), skeleton('프로젝트를 불러오는 중'));
@@ -336,8 +397,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '필터' }), el('span', { class: 'pjv-view-btn-caret', 'aria-hidden': 'true', text: '▾' }));
   // '폴더' 사이드바 토글 — 프로젝트를 상위 폴더(사람이 만든 상위 분류)으로 모아 정리하는 좌측 목록을 여닫는다(#356).
   //  이게 사이드바 여닫기의 유일한 스위치(예전엔 '보기/상태' 버튼이 겸했음). byArea 를 켜고, 열 땐 펼친 상태로 연다.
-  const sideBtn = el('button', { class: 'pjv-view-btn pjv-bundle-btn', type: 'button', title: '폴더 — 프로젝트를 상위 폴더로 정리', 'aria-label': '폴더 사이드바 열기/닫기' },
-    pjvSideToggleIcon(), el('span', { class: 'pjv-view-btn-label', text: '폴더' }));
+  const sideBtn = el('button', { class: 'pjv-view-btn pjv-bundle-btn', type: 'button', title: '사이드바 — 스페이스·폴더·리스트 탐색 열기/닫기', 'aria-label': '사이드바 열기/닫기' },
+    pjvSideToggleIcon(), el('span', { class: 'pjv-view-btn-label', text: '사이드바' }));
   // '뷰' — 저장된 뷰(ClickUp 이관 포함) 피커(#541). 현재 스코프(리스트/폴더)의 project_view 를 lazy 조회.
   const savedViewBtn = el('button', { class: 'pjv-view-btn pjv-savedview-btn', type: 'button', title: '뷰 — 저장된 보기(ClickUp 이관 포함)' },
     pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '뷰' }), el('span', { class: 'pjv-view-btn-caret', 'aria-hidden': 'true', text: '▾' }));
@@ -454,7 +515,17 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     else if (typeof sel === 'string' && sel[0] === 'L' && !listExists(sel.slice(1))) sel = defaultSel();
     else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1))) sel = defaultSel();
     pjvSidebarSel.key = sel;
-    const selectArea = (key) => { pjvSidebarSel.key = key; render(); };
+    // 스코프별 뷰 로드(#541) — 이 스코프의 저장 뷰(없으면 기본: 폴더/스페이스=개요, 리스트=상태)를 globals 로.
+    //  byStatus 파라미터도 여기서 재동기(render() 가 넘긴 값은 로드 전 스냅샷이므로).
+    pjvApplyView(pjvLoadScopeView(sel) || pjvDefaultView(sel));
+    byStatus = pjvBoardView.byStatus;
+    pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
+    const selectArea = (key) => {
+      // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
+      pjvSidebarSel.key = key;
+      pjvSyncUrl(key, false);
+      render();
+    };
     const isFolderOpen = (fid) => pjvFolderOpen.has(fid) ? pjvFolderOpen.get(fid) : true;
     const toggleFolder = (fid) => { pjvFolderOpen.set(fid, !isFolderOpen(fid)); render(); };
 
@@ -529,7 +600,52 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
 
     const main = el('div', { class: 'pjv-side-main' });
     const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
-    if (pjvBoardView.kanban) {
+    if (pjvBoardView.overview && selFolder) {
+      // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
+      const isSpace = typeof selFolder.external_id === 'string' && selFolder.external_id.startsWith('space:');
+      // 개요 통계도 Closed 토글을 따른다(#541 리뷰) — 사이드바 navcount·본문과 '보이는 것' 일치. 완료(done)는 Closed 켤 때만 집계.
+      const vis = (arr) => pjvProjClosedView.done ? arr : arr.filter((p) => p.status !== 'done');
+      const brk = (arr0) => { const arr = vis(arr0); return { total: arr.length, done: arr.filter((p) => p.status === 'done').length,
+        prog: arr.filter((p) => p.status !== 'done' && p.status !== 'todo').length, todo: arr.filter((p) => p.status === 'todo').length }; };
+      const childFolders = (foldersByParent.get(selFolder.id) || []);
+      const childLists = (listsByFolder.get(selFolder.id) || []);
+      const top = brk(folderListsDeep(selFolder.id).flatMap((l) => (groupByList.get(l.id)?.projects) || []));
+      const statRow = el('div', { class: 'pjv-ov-stats' },
+        el('span', { class: 'pjv-ov-stat', text: '전체 ' + top.total }),
+        el('span', { class: 'pjv-ov-stat', text: '진행 ' + top.prog }));
+      if (pjvProjClosedView.done) statRow.append(el('span', { class: 'pjv-ov-stat', text: '완료 ' + top.done }));
+      const ov = el('div', { class: 'pjv-overview' });
+      ov.append(el('div', { class: 'pjv-ov-head' },
+        el('div', { class: 'pjv-ov-title' }, el('span', { class: 'pjv-ov-kind', text: isSpace ? '스페이스' : '폴더' }), el('h3', { class: 'pjv-ov-name', text: selFolder.name })),
+        statRow));
+      const grid = el('div', { class: 'pjv-ov-grid' });
+      const ovCard = (key, glyph, name, arr, sub) => {
+        const b = brk(arr);
+        const c = el('div', { class: 'pjv-ov-card', role: 'button', tabindex: '0' });
+        c.append(el('div', { class: 'pjv-ov-card-head' }, glyph, el('span', { class: 'pjv-ov-card-name', text: name }),
+          sub ? el('span', { class: 'pjv-ov-card-sub', text: sub }) : el('span', { class: 'pjv-ov-card-sub' })));
+        c.append(el('div', { class: 'pjv-ov-card-count', text: b.total + '개 프로젝트' }));
+        const bar = el('div', { class: 'pjv-ov-bar' });
+        const seg = (n, cls) => { if (n > 0) { const s = el('span', { class: 'pjv-ov-bar-seg ' + cls }); s.style.flex = String(n); bar.append(s); } };
+        if (b.total) { seg(b.todo, 'todo'); seg(b.prog, 'prog'); seg(b.done, 'done'); } else bar.append(el('span', { class: 'pjv-ov-bar-seg empty' }));
+        c.append(bar);
+        const go = () => selectArea(key);
+        c.addEventListener('click', go);
+        c.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+        return c;
+      };
+      for (const f of childFolders) {
+        const isSp = typeof f.external_id === 'string' && f.external_id.startsWith('space:');
+        const g = isSp
+          ? el('span', { class: 'pjv-side-space-avatar', text: (String(f.name).trim()[0] || 'S').toUpperCase(), style: 'background:' + (f.color || avatarColor('space' + f.id)) })
+          : pjvBundleIcon(f.color || 'var(--muted-2)');
+        grid.append(ovCard('F' + f.id, g, f.name, folderListsDeep(f.id).flatMap((l) => (groupByList.get(l.id)?.projects) || []), isSp ? '스페이스' : '폴더'));
+      }
+      for (const l of childLists) grid.append(ovCard('L' + l.id, pjvListGlyph(l), l.name, (groupByList.get(l.id)?.projects) || [], null));
+      if (!childFolders.length && !childLists.length) grid.append(el('div', { class: 'pjv-proj-empty', text: '이 ' + (isSpace ? '스페이스' : '폴더') + '에 리스트가 없습니다.' }));
+      ov.append(grid);
+      main.append(ov);
+    } else if (pjvBoardView.kanban) {
       // 칸반 보드(#541) — 선택 리스트의 커스텀 상태 컬럼(없으면 표준 3버킷)에 카드. 그룹 방향(dir=-1)이면 컬럼 역순.
       main.append(pjvKanbanBoard(shownProjects, selList, { reload, canDelete, groupDir: groupBy.field === 'status' ? groupBy.dir : 1 }));
     } else if (selFolder) {
@@ -602,9 +718,36 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 전체 네비. nav = 본문 높이만큼 늘어나는 레일(구분선), navInner = sticky 항목.
     //  세모(◀)는 사이드바(byArea) 자체를 닫는다 — 예전 '작은 레일'로 접던 동작 폐기(#510). 다시 열려면 상단 '폴더' 버튼.
     const nav = el('div', { class: 'pjv-side-nav' });
+    // 사이드바 폭 조절(#541) — 오른쪽 경계 드래그 핸들. 끌면 wrap 의 --pjv-side-w 를 바꾸고 localStorage 저장. 더블클릭=기본값.
+    const sideResize = el('div', { class: 'pjv-side-resize', title: '드래그하여 사이드바 너비 조절 (더블클릭: 기본값)', 'aria-hidden': 'true' });
+    sideResize.addEventListener('mousedown', (e: any) => {
+      e.preventDefault(); e.stopPropagation();
+      const wrap = sideResize.closest('.pjv-side-wrap') as HTMLElement | null;
+      const startX = e.clientX;
+      const startW = nav.getBoundingClientRect().width || 208;
+      document.body.classList.add('pjv-side-resizing'); // 사이드바 전용(#541 리뷰) — 이름칸 리사이즈(pjv-col-resizing)와 하이라이트 분리
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); window.removeEventListener('blur', onUp);
+        document.body.classList.remove('pjv-side-resizing');
+        const cur = wrap && wrap.style.getPropertyValue('--pjv-side-w');
+        if (cur) { try { localStorage.setItem('pjv:sideW', cur.trim()); } catch (_) { /* noop */ } }
+      };
+      const onMove = (ev: any) => {
+        if (ev.buttons === 0) { onUp(); return; } // 창 밖에서 손 뗀 경우 등 mouseup 유실 방지(#541 리뷰)
+        let w = startW + (ev.clientX - startX); w = Math.max(150, Math.min(440, w)); if (wrap) wrap.style.setProperty('--pjv-side-w', Math.round(w) + 'px');
+      };
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); window.addEventListener('blur', onUp);
+    });
+    sideResize.addEventListener('dblclick', (e: any) => {
+      e.preventDefault(); e.stopPropagation();
+      const wrap = sideResize.closest('.pjv-side-wrap') as HTMLElement | null;
+      if (wrap) wrap.style.removeProperty('--pjv-side-w');
+      try { localStorage.removeItem('pjv:sideW'); } catch (_) { /* noop */ }
+    });
+    nav.append(sideResize);
     const navInner = el('div', { class: 'pjv-side-nav-inner' });
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '◀' });
-    collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; syncToggles(); render(); };
+    collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; pjvExitAreaMode(); pjvPersistSideOpen(); syncToggles(); render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
     // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
     navInner.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
@@ -674,7 +817,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })),
       el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
     nav.append(navInner);
-    body.replaceChildren(el('div', { class: 'pjv-side-wrap' }, nav, main));
+    const sideWrap = el('div', { class: 'pjv-side-wrap' }, nav, main);
+    try { const sw = localStorage.getItem('pjv:sideW'); if (sw) sideWrap.style.setProperty('--pjv-side-w', sw.indexOf('px') >= 0 ? sw : sw + 'px'); } catch (_) { /* noop */ }
+    body.replaceChildren(sideWrap);
   };
 
   // 본문에 폴더별 접이식 구역을 인라인으로 쌓기(#455) — '상태로 나누기'의 폴더판. 사이드바(byArea)와 달리 모든 폴더를 한 화면에.
@@ -706,10 +851,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     renderFlat(shown);
   };
 
-  viewBtn.onclick = (e) => { e.stopPropagation(); pjvViewMenu(viewBtn, () => { syncToggles(); render(); }); };
-  savedViewBtn.onclick = (e) => { e.stopPropagation(); pjvSavedViewMenu(savedViewBtn, () => { syncToggles(); render(); }); };
+  // 뷰/저장뷰 변경은 현재 스코프에 영속(#541) — 사이드바(byArea) 켜져 있을 때만 스코프별 저장(꺼진 전역 보드는 globals 직접).
+  const rerenderScoped = () => { syncToggles(); if (pjvBoardView.byArea) pjvSaveScopeView(pjvSidebarSel.key, pjvSnapshotView()); render(); };
+  viewBtn.onclick = (e) => { e.stopPropagation(); pjvViewMenu(viewBtn, rerenderScoped); };
+  savedViewBtn.onclick = (e) => { e.stopPropagation(); pjvSavedViewMenu(savedViewBtn, rerenderScoped); };
   // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).
-  sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; } syncToggles(); render(); };
+  sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; } else { pjvExitAreaMode(); } pjvPersistSideOpen(); syncToggles(); render(); };
   subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
   mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
   closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
@@ -5596,7 +5743,7 @@ const pjvBoardMineOnly = { on: false };
 //  byFolder=폴더로 나누기(본문에 폴더별 접이식 구역들을 인라인으로 쌓아 한눈에, 필터 팝오버 토글, #455) /
 //  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐; byFolder 와 겹치면 폴더 › 상태 중첩). 세션 유지.
 //  byArea(사이드바)와 byFolder(인라인)는 같은 '폴더로 보기'의 두 방식이라 상호배타 — 한쪽을 켜면 다른쪽을 끈다.
-const pjvBoardView = { byArea: false, byStatus: true, byFolder: false, kanban: false };
+const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false };
 // 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id 를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃.
 const pjvFolderDrag: any = { id: null };
 // 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
@@ -5702,7 +5849,7 @@ function pjvViewMenu(anchor, onChange) {
   };
   mkSwitch('byStatus', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서 보여줘요');
   // 폴더로 나누기 — 본문을 폴더별 접이식 구역으로. 켜면 좌측 사이드바(byArea)는 끈다(같은 '폴더로 보기'라 둘 다 켜면 혼란).
-  mkSwitch('byFolder', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요', (on) => { if (on) pjvBoardView.byArea = false; });
+  mkSwitch('byFolder', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요', (on) => { if (on) { pjvBoardView.byArea = false; pjvExitAreaMode(); pjvPersistSideOpen(); } });
   // 칸반 보드(#541) — 상태별 컬럼에 카드. 리스트 선택 시 그 리스트의 커스텀 상태 컬럼(ClickUp 보드 뷰 동형).
   mkSwitch('kanban', '칸반 보드', '상태별 컬럼에 카드로 보여줘요 (드래그로 상태 변경)', (on) => { if (on) pjvBoardView.byFolder = false; });
   syncAll();

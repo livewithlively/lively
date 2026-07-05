@@ -73,12 +73,22 @@ async function route() {
         else if (page === 'projects2') {
             setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 대시보드·작업현황·사업·제품·시스템 하위탭.
             // 보드(대시보드) 화면만 풀스크린(#541 — ClickUp 처럼 좌우 마진 없이). 상세·작업로그 등 읽기 페이지는 기존 폭 유지.
+            //  스코프 딥링크(#541): /l/<id>·/f/<id>·/none 은 보드(대시보드)의 리스트/폴더/미분류 선택 — 새로고침·뒤로가기 복원.
             const sub2 = segs[1] || 'dashboard';
-            document.body.dataset.route = sub2 === 'p' ? 'projects2-detail' : (sub2 === 'dashboard' ? 'projects2-board' : 'projects2-' + sub2);
+            const boardSub = sub2 === 'dashboard' || sub2 === 'l' || sub2 === 'f' || sub2 === 'none';
+            document.body.dataset.route = sub2 === 'p' ? 'projects2-detail' : (boardSub ? 'projects2-board' : 'projects2-' + sub2);
             if (segs[1] === 'p' && segs[2])
                 await renderProjectV2Detail(view, segs[2]);
-            else
-                await renderProjectsV2(view, segs[1] || 'dashboard', params);
+            else {
+                let scopeKey = null;
+                if (sub2 === 'l' && segs[2])
+                    scopeKey = 'L' + segs[2];
+                else if (sub2 === 'f' && segs[2])
+                    scopeKey = 'F' + segs[2];
+                else if (sub2 === 'none')
+                    scopeKey = '__none__';
+                await renderProjectsV2(view, boardSub ? 'dashboard' : sub2, params, scopeKey);
+            }
         }
         else if (page === 'system') {
             setActiveTab('system');
