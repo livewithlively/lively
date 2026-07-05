@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listProjectFolders, createProjectFolder, updateProjectFolder, deleteProjectFolder,
-  setFolderForList, getProjectFolderRow,
+  setFolderForList, getProjectFolderRow, reorderProjectFolders,
 } from "../v6/folder-store.js";
 import { getProjectListRow } from "../v6/list-store.js";
 
@@ -157,7 +157,27 @@ const projectListSetFolderV6: Capability = {
   },
 };
 
+// ── 폴더/스페이스 재정렬(#541 사이드바) — 형제(같은 parent) id 배열 순서대로 sort 재부여. 웹 드래그 전용. ──
+const projectFolderReorderV6: Capability = {
+  name: "project_folder_reorder_v6",
+  title: "폴더 순서 변경(v6)",
+  description: "폴더/스페이스의 사이드바 표시 순서를 주어진 id 배열 순서대로 저장한다(sort 를 1,2,… 로 재부여). 사이드바 드래그 재정렬용.",
+  scope: "memory",
+  input: { ids: z.array(z.number().int().positive()).min(2).max(500) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/project-folders-reorder"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const ids = Array.isArray(b.ids) ? b.ids.map((x) => parseId(x)) : [];
+        if (ids.length < 2) throw new HttpError(400, "ids 는 2개 이상이어야 합니다");
+        return { ids };
+      } }],
+  },
+  handler: async (input: any) => await reorderProjectFolders(input.ids),
+};
+
 export const folderV6Capabilities: Capability[] = [
   projectFolderIndexV6, projectFolderCreateV6, projectFolderUpdateV6, projectFolderDeleteV6,
-  projectListSetFolderV6,
+  projectListSetFolderV6, projectFolderReorderV6,
 ];

@@ -35,6 +35,7 @@ async function route() {
     const { segs, params } = parseHash();
     const view = $view();
     const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
+    document.body.dataset.route = page; // 라우트별 레이아웃 훅(#541 — 프로젝트 보드 풀스크린 등). projects2 는 아래서 세분화.
     try {
         if (page === 'learn') {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link)
@@ -71,6 +72,9 @@ async function route() {
         }
         else if (page === 'projects2') {
             setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 대시보드·작업현황·사업·제품·시스템 하위탭.
+            // 보드(대시보드) 화면만 풀스크린(#541 — ClickUp 처럼 좌우 마진 없이). 상세·작업로그 등 읽기 페이지는 기존 폭 유지.
+            const sub2 = segs[1] || 'dashboard';
+            document.body.dataset.route = sub2 === 'p' ? 'projects2-detail' : (sub2 === 'dashboard' ? 'projects2-board' : 'projects2-' + sub2);
             if (segs[1] === 'p' && segs[2])
                 await renderProjectV2Detail(view, segs[2]);
             else

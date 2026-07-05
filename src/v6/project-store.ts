@@ -103,6 +103,7 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
   return q(itemsPool,
     `SELECT DISTINCT ${cols},
+       CASE WHEN p.raw->>'orderindex' ~ '^-?[0-9.]+$' THEN (p.raw->>'orderindex')::float8 END AS ext_orderindex,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', pm.member_id, 'display_name', m.display_name) ORDER BY pm.sort, pm.member_id)
          FROM project_member pm LEFT JOIN org_member m ON m.id=pm.member_id WHERE pm.project_id=p.id), '[]'::jsonb) AS members,
        (SELECT count(*) FROM project c WHERE c.parent_id=p.id AND c.level='task') AS task_count,
@@ -519,6 +520,21 @@ export async function reorderTasks(ids: number[], _ctx?: WriteCtx): Promise<{ up
     `UPDATE project AS p SET sort = v.sort, updated_at = now()
        FROM (VALUES ${tuples}) AS v(id, sort)
       WHERE p.id = v.id AND p.level IN ('task','subtask')`, clean);
+  return { updated: res.rowCount || 0 };
+}
+
+// 프로젝트 행 재정렬(#541 수동 정렬) — reorderTasks 동형, level='project' 전용. 그룹 내 드래그가 화면 순서
+//  전체(그 그룹의 형제 프로젝트 id들)를 넘기면 sort=0,1,2… 재부여. 표시 우선순위는 프론트 비교자(sort → ClickUp
+//  ext_orderindex → 최신순)가 담당 — sort 는 로컬 전용(커넥터 불간섭)이라 재정렬이 싱크에 덮이지 않는다.
+export async function reorderProjects(ids: number[], _ctx?: WriteCtx): Promise<{ updated: number }> {
+  const clean = (ids || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+  if (clean.length < 2) return { updated: 0 };
+  const tuples = clean.map((_id, i) => `($${i + 1}::int, ${i + 1}::int)`).join(", "); // sort 1부터 — 0(미지정 기본값)과 구분
+  // updated_at 은 건드리지 않는다 — 순서는 내용 변경이 아니고, 갱신일 컬럼(#541 원본시각 보존)을 오염시키면 안 된다.
+  const res = await itemsPool.query(
+    `UPDATE project AS p SET sort = v.sort
+       FROM (VALUES ${tuples}) AS v(id, sort)
+      WHERE p.id = v.id AND p.level = 'project'`, clean);
   return { updated: res.rowCount || 0 };
 }
 
