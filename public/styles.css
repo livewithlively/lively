@@ -3767,3 +3767,81 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .run-log-head .admin-hint { flex: 1; min-width: 0; }
 .run-log { background: #0F1B2D; color: #D7E3F4; border-radius: 10px; padding: 12px 14px; margin-top: 8px;
   max-height: 56vh; min-height: 200px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+/* ── #592 지식 문서 UI ── */
+/* doc-mode — 지식 계열 라우트에서 main 을 전폭 캔버스로. 셸(.kn-shell)이 자체 패딩·사이드바 폭을 소유. */
+main.doc-mode { max-width: none; padding: 0; }
+/* 셸 없는 지식 계열 화면(자료·편집 폼·휴지통·로딩) — 기존 중앙 정렬 패딩을 래퍼로 복원. */
+.kn-plain { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
+
+/* 지식 셸 — 좌 사이드바(고정 260px, border-right, 자체 스크롤 sticky) + 우 콘텐츠(flex 1, 자체 패딩). */
+.kn-shell { display: flex; align-items: flex-start; min-height: calc(100vh - 64px); }
+.kn-side { flex: 0 0 260px; min-width: 0; box-sizing: border-box; position: sticky; top: 64px;
+  max-height: calc(100vh - 64px); overflow-y: auto; overscroll-behavior: contain;
+  border-right: 1px solid var(--line); padding: 22px 16px 32px; background: var(--bg); }
+.kn-main { flex: 1; min-width: 0; padding: 28px 40px 64px; }
+.kn-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kn-side-head .eyebrow { margin-bottom: 0; }
+.kn-side-collapse, .kn-side-reopen { border: 1px solid var(--line); background: var(--bg); cursor: pointer;
+  border-radius: 6px; color: var(--muted-2); font-size: 12px; line-height: 1; padding: 4px 7px; }
+.kn-side-collapse:hover, .kn-side-reopen:hover { color: var(--ink-sub); background: var(--bg-tint); }
+.kn-shell.side-off > .kn-side { display: none; }
+.kn-side-reopen { display: none; }
+.kn-shell.side-off > .kn-side-reopen { display: inline-flex; flex: none; align-self: flex-start;
+  position: sticky; top: 76px; margin: 14px 0 0 12px; }
+@media (max-width: 820px) {
+  .kn-shell { flex-direction: column; min-height: 0; }
+  .kn-side { position: static; flex-basis: auto; width: 100%; max-height: none;
+    border-right: none; border-bottom: 1px solid var(--line); padding: 16px; }
+  .kn-main { padding: 20px 16px 48px; width: 100%; box-sizing: border-box; }
+  .kn-doc { padding: 20px 16px 56px; }
+}
+
+/* 문서 캔버스 — 브레드크럼/액션 줄은 전폭, 내용 컬럼(제목·속성·본문·패널)은 기본 820px 중앙(노션). ⤢(.full)로 해제. */
+.kn-doc { flex: 1; min-width: 0; box-sizing: border-box; padding: 24px 40px 72px; }
+.kn-doc-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+.kn-doc-top .crumbs { flex: 1 1 auto; min-width: 0; }
+.kn-doc-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
+.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels {
+  max-width: 820px; margin-left: auto; margin-right: auto; }
+.kn-doc.full .kn-doc-title, .kn-doc.full .kn-doc-badges, .kn-doc.full .kn-props-slot,
+.kn-doc.full .kn-doc-hr, .kn-doc.full .kn-doc-body, .kn-doc.full .kn-doc-panels { max-width: none; }
+.kn-doc-title { font-size: 32px; font-weight: 800; line-height: 1.25; letter-spacing: -0.8px; color: var(--ink); margin-top: 2px; margin-bottom: 10px; }
+.kn-doc-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.kn-doc-hr { border: none; border-top: 1px solid var(--line); margin-top: 16px; margin-bottom: 20px; }
+/* 본문 — 렌더러가 줄바꿈(<br>)·블록을 직접 처리하므로 .unit-body(pre-wrap)를 쓰지 않는다. */
+.kn-doc-md { word-break: break-word; }
+.kn-doc-md-empty { color: var(--muted-2); font-size: 14px; }
+.kn-doc-raw { white-space: pre-wrap; word-break: break-word; font: 12.5px/1.6 ui-monospace, Menlo, monospace;
+  color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 0; }
+.kn-doc-rawrow { display: flex; justify-content: flex-end; margin-top: 10px; }
+.kn-doc-panels { margin-top: 30px; }
+.kn-doc-panels .kn-related { margin-top: 4px; }
+
+/* 속성 블록(노션형) — 라벨 130px muted + 값. 빈 값은 행 자체 생략(TS). */
+.kn-props { font-size: 13px; }
+.kn-prop { display: flex; align-items: baseline; gap: 12px; padding: 3px 0; }
+.kn-prop-k { flex: 0 0 130px; min-width: 0; color: var(--muted); font-weight: 600; }
+.kn-prop-v { flex: 1; min-width: 0; color: var(--ink); word-break: break-word;
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kn-prop-ext { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kn-prop-dim { opacity: .62; }
+.kn-props-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; position: relative; }
+.kn-props-more, .kn-props-gear { border: none; background: none; cursor: pointer; font-size: 12px; font-weight: 600;
+  color: var(--muted-2); padding: 3px 6px; border-radius: 6px; }
+.kn-props-more:hover, .kn-props-gear:hover { background: var(--bg-tint); color: var(--ink-sub); }
+
+/* ⚙ 속성 설정 팝오버 — 카탈로그 전체 👁 토글 + [이 문서에만 저장]/[전체 기본값으로 저장]. */
+.kn-props-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; width: 300px; max-height: 55vh;
+  overflow: auto; background: var(--bg); border: 1px solid var(--line-net); border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(21, 35, 59, .14); padding: 10px; }
+.kn-props-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 700; color: var(--muted-head); margin: 2px 4px 8px; }
+.kn-props-rec { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 600;
+  color: var(--muted-2); padding: 2px 5px; border-radius: 5px; }
+.kn-props-rec:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.kn-propopt { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 13px; }
+.kn-propopt:hover { background: var(--bg-tint); }
+.kn-propopt.off .kn-propopt-label { color: var(--muted-2); }
+.kn-propopt-eye { border: none; background: none; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 5px; color: var(--ink-sub); }
+.kn-propopt-eye:hover { background: var(--bg-tint-2); }
+.kn-props-pop-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }

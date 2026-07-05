@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listCategories, getCategory, createCategory, updateCategory, deleteCategory,
-  listCategoryEdges, setCategoryEdge, removeCategoryEdge,
+  listCategoryEdges, setCategoryEdge, removeCategoryEdge, setCategoryView,
 } from "../v6/category-store.js";
 
 const SPACES = ["business", "product", "system"] as const;
@@ -129,6 +129,45 @@ const categoryUpdate: Capability = {
   },
 };
 
+// ── #592 카테고리 뷰 설정 — category_update 확장 금지(계약): 뷰 설정은 별도 cap(REST 전용). ──
+//  view_mode=list|table|entry(본문 영역 렌더 방식), entry_name=엔트리 문서(knowledge.name, null=해제).
+//  3상 부분 수정: 키 부재=미변경 / null(entry_name)=해제 / 값=설정. 존재 검증·감사는 store(setCategoryView).
+const categoryViewSet: Capability = {
+  name: "category_view_set",
+  title: "카테고리 뷰 설정",
+  description: "카테고리 본문 영역의 뷰(view_mode=list|table|entry)와 엔트리 문서(entry_name, null=해제)를 설정한다. 웹 전용.",
+  scope: "context",
+  input: {
+    id: z.number().int().positive(),
+    view_mode: z.enum(["list", "table", "entry"]).optional(),
+    entry_name: z.string().min(1).max(64).nullable().optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/categories/:id/view"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const out: Record<string, unknown> = { id: parseId(req.params?.id) };
+        if ("view_mode" in b) {
+          const vm = String(b.view_mode ?? "");
+          if (!["list", "table", "entry"].includes(vm)) throw new HttpError(400, "view_mode 는 list|table|entry 중 하나여야 합니다");
+          out.view_mode = vm;
+        }
+        if ("entry_name" in b) {
+          const en = b.entry_name == null ? null : String(b.entry_name).trim();
+          if (en === "") throw new HttpError(400, "entry_name 은 지식 이름 또는 null(해제)이어야 합니다");
+          out.entry_name = en;
+        }
+        return out;
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const { id, ...patch } = input;
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { category: await setCategoryView(id, patch, writeCtx) };
+  },
+};
+
 // ⚠ 사람(웹)만 — 에이전트(MCP)는 403(비가역, 매핑·엣지·정션 cascade). 가역 숨김은 비활성(deprecate). 복원은 content_restore(본체만).
 const categoryDelete: Capability = {
   name: "category_delete",
@@ -211,6 +250,6 @@ const categoryEdgeRemove: Capability = {
 };
 
 export const categoryCapabilities: Capability[] = [
-  categoryList, categoryGet, categoryCreate, categoryUpdate, categoryDelete,
+  categoryList, categoryGet, categoryCreate, categoryUpdate, categoryViewSet, categoryDelete,
   categoryEdgeList, categoryEdgeSet, categoryEdgeRemove,
 ];

@@ -8,7 +8,12 @@ import {
   listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
+  setKnowledgePropsUi, moveKnowledge,
 } from "../v6/knowledge-store.js";
+import { getKnowledgeViewConfig, setKnowledgeViewConfig } from "../v6/view-config-store.js";
+import {
+  postKnowledgeComment, getKnowledgeCommentFeed, toggleKnowledgeCommentReaction,
+} from "../v6/knowledge-comment-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
 //  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
@@ -103,20 +108,27 @@ const knowledgeSave: Capability = {
     // body_md 는 DB 상 TEXT(무제한) — 이 max 는 폭주/실수 입력(붙여넣은 바이너리·base64·무한생성) 차단용 방어 상한일 뿐이다.
     //  구 40,000 은 정상 장문 설계문서(#534: 45k자 doc 이 쪼개짐)를 튕겨 무손실 저장을 막았다 → 200,000(≈50k토큰)으로 상향.
     //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
-    body_md: z.string().min(1).max(200000),
+    //  min(1)은 zod 에선 완화(#592: 폴더는 빈 본문 허용) — is_folder=false 의 min 1 은 handler 가 강제(기존 계약 불변).
+    body_md: z.string().max(200000),
     provenance: z.enum(["authored", "observed"]).optional(),
     supersedes: z.string().max(64).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
       .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
     category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
+    is_folder: z.boolean().optional()
+      .describe("#592 폴더 노드 — true 면 트리 그룹핑용 폴더(title 필수, body_md 빈 문자열 허용). 미전송 시 기존값 보존."),
+    parent_name: z.string().min(1).max(64).optional()
+      .describe("#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존."),
   },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/knowledge"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
+        const is_folder = typeof b.is_folder === "boolean" ? b.is_folder : undefined;
         const body_md = String(b.body_md ?? b.note ?? "").trim();
-        if (!body_md) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
+        // #592: 폴더(is_folder=true)만 빈 본문 허용 — min 1 검증은 is_folder 일 때만 우회(기존 문서 계약 불변).
+        if (!body_md && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
         // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
@@ -129,10 +141,16 @@ const knowledgeSave: Capability = {
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
           type: b.type ? String(b.type) : undefined,
           category,
+          is_folder,
+          parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
         };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
+    if (!String(input.body_md ?? "").trim() && input.is_folder !== true) {
+      throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
+    }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     const knowledge = await upsertKnowledge(input, writeCtx);
     // 저장-시 중복감지(#172) — 신규(version=1)일 때만, 방금 저장된 임베딩으로 최근접 검색(재임베딩 X).
@@ -478,11 +496,205 @@ const knowledgeTree: Capability = {
   handler: async (input: any) => ({ entries: await knowledgeTreeData(input.system ?? "notion", input.limit) }),
 };
 
+// ════════ #592 지식/위키 UI — 전역 뷰 설정·속성 오버라이드·댓글·트리 이동(REST 계약 §2). ════════
+
+// 전역 뷰 설정 조회 — { hidden_props } 만(계약 고정). 프론트가 카탈로그 전체 − hidden_props 로 기본 노출 계산.
+const knowledgeViewGet: Capability = {
+  name: "knowledge_view_get",
+  title: "지식 뷰 설정 조회",
+  description: "지식 속성 패널의 전역 기본 숨김 키(hidden_props)를 반환한다. 항목 단위 오버라이드는 knowledge.props_ui(knowledge_get 응답).",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-view-config"], parse: () => ({}) }],
+  },
+  handler: async () => ({ hidden_props: (await getKnowledgeViewConfig()).hidden_props }),
+};
+
+// 전역 뷰 설정 저장 — 전체 배열 교체(부분 병합 아님 — 팝오버가 전체 상태를 들고 있다). 감사 org_content_audit.
+const knowledgeViewSet: Capability = {
+  name: "knowledge_view_set",
+  title: "지식 뷰 설정 저장",
+  description: "지식 속성 패널의 전역 기본 숨김 키(hidden_props)를 저장한다(전체 교체·감사 기록). 웹 전용.",
+  scope: "memory",
+  input: { hidden_props: z.array(z.string().min(1).max(64)).max(64) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge-view-config"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const v = b.hidden_props;
+        if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+          throw new HttpError(400, "hidden_props 는 문자열 배열이어야 합니다");
+        }
+        if (v.length > 64) throw new HttpError(400, "hidden_props 는 최대 64키까지 허용됩니다");
+        return { hidden_props: v };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { hidden_props: (await setKnowledgeViewConfig(input.hidden_props, writeCtx)).hidden_props };
+  },
+};
+
+// 항목 단위 속성 노출 오버라이드 — props_ui 부분 병합(키 null=제거). version·updated_at 불변(뷰 설정은 내용 아님).
+//  observed(미러) 지식에도 허용 — props_ui 는 fields 밖 별도 컬럼이라 재싱크에 생존(#592 §0).
+const knowledgePropsUi: Capability = {
+  name: "knowledge_props_ui",
+  title: "지식 속성 노출 설정",
+  description: "지식 1건의 속성 노출 오버라이드(props_ui: show/hide/full_width)를 부분 병합 저장한다(키에 null 을 주면 제거). 웹 전용.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    show: z.array(z.string().min(1).max(64)).max(64).nullable().optional(),
+    hide: z.array(z.string().min(1).max(64)).max(64).nullable().optional(),
+    full_width: z.boolean().nullable().optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/props-ui"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const out: Record<string, unknown> = { name: String(req.params?.name ?? "") };
+        // 부재(미전송)≠null(키 제거) 3상 구분 — 'in' 프로브로만 채운다(undefined 로 덮으면 스토어가 미변경 처리).
+        for (const k of ["show", "hide"] as const) {
+          if (!(k in b)) continue;
+          const v = b[k];
+          if (v === null) { out[k] = null; continue; }
+          if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+            throw new HttpError(400, `${k} 는 문자열 배열(또는 null=제거)이어야 합니다`);
+          }
+          out[k] = (v as string[]).map((s) => s.trim()).filter(Boolean).slice(0, 64);
+        }
+        if ("full_width" in b) {
+          if (b.full_width !== null && typeof b.full_width !== "boolean") {
+            throw new HttpError(400, "full_width 는 boolean(또는 null=제거)이어야 합니다");
+          }
+          out.full_width = b.full_width;
+        }
+        return out;
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { props_ui: await setKnowledgePropsUi(input.name, { show: input.show, hide: input.hide, full_width: input.full_width }, writeCtx) };
+  },
+};
+
+// 지식 댓글 피드 조회 — 댓글+반응만(시스템 이벤트 병합 없음, getTaskFeed 와 다른 점). 웹 문서 하단 댓글 섹션 소비.
+const knowledgeComments: Capability = {
+  name: "knowledge_comments",
+  title: "지식 댓글 피드",
+  description: "지식 1건의 댓글 피드(댓글+이모지 반응, display_name 포함)를 반환한다. 웹 전용.",
+  scope: "memory",
+  input: { name: z.string().min(1).max(64) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/:name/comments"],
+      parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
+  },
+  handler: async (input: any, user: any, ctx: any) =>
+    ({ feed: await getKnowledgeCommentFeed(input.name, ctx?.actor ?? user?.userId ?? null) }),
+};
+
+// 지식 댓글 작성 — {text, parent_id?(1단계 스레드)}. 작성 후 갱신된 피드 반환(task_comment_v6 동형).
+const knowledgeCommentPost: Capability = {
+  name: "knowledge_comment_post",
+  title: "지식 댓글 작성",
+  description: "지식에 댓글을 단다(knowledge_comment). {text, parent_id?}. 작성 후 갱신된 피드 반환. 웹 전용.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    text: z.string().min(1),
+    parent_id: z.number().int().positive().nullable().optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/comments"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const text = String(b.text ?? "").trim();
+        if (!text) throw new HttpError(400, "댓글 내용이 필요합니다");
+        const pid = b.parent_id != null ? Number(b.parent_id) : null;
+        if (pid != null && (!Number.isInteger(pid) || pid <= 0)) throw new HttpError(400, "parent_id 형식이 잘못되었습니다");
+        return { name: String(req.params?.name ?? ""), text, parent_id: pid || null };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { feed: await postKnowledgeComment(input.name, input.text, writeCtx, input.parent_id ?? null) };
+  },
+};
+
+// 지식 댓글 반응 토글 — {emoji}. 갱신된 emoji별 집계 반환(task_comment_reaction_v6 동형).
+const knowledgeCommentReaction: Capability = {
+  name: "knowledge_comment_reaction",
+  title: "지식 댓글 반응",
+  description: "지식 댓글(knowledge_comment)에 이모지 반응을 토글한다. {emoji}. 웹 전용.",
+  scope: "memory",
+  input: { id: z.number().int().positive(), emoji: z.string().min(1) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge-comments/:id/reactions"],
+      parse: (req) => {
+        const id = Number(req.params?.id);
+        if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "id 형식이 잘못되었습니다");
+        const e = String(((req.body ?? {}) as Record<string, unknown>).emoji ?? "").trim();
+        if (!e) throw new HttpError(400, "emoji 가 필요합니다");
+        return { id, emoji: e };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) =>
+    ({ reactions: await toggleKnowledgeCommentReaction(input.id, input.emoji, ctx?.actor ?? user?.userId ?? "") }),
+};
+
+// 트리 이동 — parent_name(null=루트)·sort?. 가드(스토어): 대상 observed 400 / 부모 존재 404·observed 400·순환 400.
+const knowledgeMove: Capability = {
+  name: "knowledge_move",
+  title: "지식 트리 이동",
+  description:
+    "지식(폴더 포함)을 저작 지식 트리에서 이동한다 — parent_name(부모 지식/폴더 name, null=루트)과 sort(형제 순서, 선택). " +
+    "외부 미러(observed) 지식은 이동 불가(원본에서 옮겨야 함), observed 아래로의 배치·순환도 거부된다.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    parent_name: z.string().min(1).max(64).nullable().describe("부모 지식/폴더 name — null 이면 루트로"),
+    sort: z.number().int().optional().describe("형제 간 순서(작을수록 앞). 생략 시 기존 유지"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/move"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        if (!("parent_name" in b)) throw new HttpError(400, "parent_name(지식 이름 또는 null=루트)이 필요합니다");
+        const parent_name = b.parent_name == null ? null : String(b.parent_name).trim();
+        if (parent_name === "") throw new HttpError(400, "parent_name 은 지식 이름 또는 null 이어야 합니다");
+        const out: Record<string, unknown> = { name: String(req.params?.name ?? ""), parent_name };
+        if (b.sort != null) {
+          const s = Number(b.sort);
+          if (!Number.isInteger(s)) throw new HttpError(400, "sort 는 정수여야 합니다");
+          out.sort = s;
+        }
+        return out;
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return { knowledge: await moveKnowledge(input.name, input.parent_name ?? null, input.sort, writeCtx) };
+  },
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
 //  knowledge_graph(/knowledge-graph)·knowledge_link(/knowledge/:name/link)는 :name 단일세그먼트와 안 겹친다(경로 깊이 상이).
+//  #592 정적 경로(knowledge-view-config·knowledge-comments)도 같은 규칙으로 :name 계열 **앞**에 둔다
+//  (현 Express 패턴상 세그먼트가 달라 실충돌은 없지만, 순서 규칙을 지켜 미래 경로 추가에도 안전).
 export const knowledgeCapabilities: Capability[] = [
-  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree, knowledgeGet,
+  knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree,
+  knowledgeViewGet, knowledgeViewSet, knowledgeCommentReaction,   // #592 정적 경로 — /:name 계열보다 먼저
+  knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
+  knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)
 ];

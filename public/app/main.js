@@ -35,6 +35,11 @@ async function route() {
     const { segs, params } = parseHash();
     const view = $view();
     const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
+    // #592 doc-mode — 지식 계열 라우트(목록·문서·편집·휴지통)는 main 을 전폭 캔버스로(패딩 0).
+    //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
+    const mainEl = document.querySelector('main');
+    if (mainEl)
+        mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
     try {
         if (page === 'learn') {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link)

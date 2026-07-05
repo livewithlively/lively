@@ -1,7 +1,9 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { LIFECYCLE_LABEL, absTime, api, applyReveal, withTip, el, errorNote, lifecycleDot, pageHead, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, sv, toast } from './core.js';
+//  (#592) 문서 캔버스·속성 시스템·상세 패널·칩 생성기는 knowledge-doc.ts 로 이관 — 여기서 import 해 재사용/재수출.
+import { api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { field, hasScope } from './admin.js';
+import { KN_REL_LABEL, KN_TYPE_LABEL, SOURCE_KIND_LABEL, SPACE_LABEL, buildKnowledgeDetail, knAuthorChip, knInjectChip, knProvChip, knTreeIcon, knTypeChip, openProjectChooser, openSourceDetail } from './knowledge-doc.js';
 // ════════════════════════════════════════════
 // 카테고리 #/categories — 맥락의 분류축(Category). space ∈ {사업·제품·시스템}별 하위 카테고리 CRUD.
 //  맥락 = Category(분류축) + Knowledge(기록) + Project(변화). 이 탭은 Category 트리를 관리한다.
@@ -17,7 +19,6 @@ const SPACE_SUBS = [
     { key: 'product', label: '제품', href: '#/categories/product' },
     { key: 'system', label: '시스템', href: '#/categories/system' },
 ];
-const SPACE_LABEL = { business: '사업', product: '제품', system: '시스템' };
 function spaceSubBar(prefix, active) {
     const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '분류축' });
     for (const s of SPACE_SUBS) {
@@ -125,34 +126,7 @@ function openKnowledgeAtlas() {
         }
         catch (_) { /* noop */ }
 }
-// injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
-const KN_INJECTION_LABEL = { always: '항상 주입', recalled: '검색' };
-const KN_INJECTION_HINT = {
-    always: '규칙·페르소나처럼 모든 세션에 항상 주입됩니다.',
-    recalled: '평소엔 주입 안 됨 — AI가 관련될 때 키워드로 검색해 직접 찾아봅니다(자동·시맨틱 아님).',
-};
-// provenance(출처축) 한글 라벨 — authored=직접 저작, observed=외부 시스템의 살아있는 미러.
-const KN_PROVENANCE_LABEL = { authored: '저작', observed: '외부 미러' };
-const KN_PROVENANCE_HINT = {
-    authored: '이 시스템에 직접 저작한 지식입니다.',
-    observed: '외부 시스템에서 가져온 살아있는 미러입니다(진실·편집은 외부에).',
-};
-// 작성 주체(#449) — 이 지식을 AI 가 썼는지 사람이 썼는지(confidence 파생: mcp→ai, web→human).
-//  지식 탭 행에서 injection(주입) 칩을 대체한다 — 지식 탭은 recalled 전용이라 주입 칩이 매 행 '검색'으로 반복돼 무의미했다.
-const KN_AUTHOR_LABEL = { ai: 'AI 작성', human: '사람 작성', rule: '규칙', observed: '외부 미러' };
-const KN_AUTHOR_HINT = {
-    ai: 'AI 에이전트가 작성한 지식입니다.',
-    human: '사람이 직접 작성한 지식입니다.',
-    rule: '시스템 규칙으로 정의됐습니다.',
-    observed: '외부 시스템에서 미러됐습니다.',
-};
-// page-type(#290) 한글 라벨 + 칩 — 엔터프라이즈 표준(DITA/Diátaxis/ADR/LLM위키) 6종. NULL=미분류(칩 생략).
-const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
-function knTypeChip(type) {
-    if (!type)
-        return null;
-    return el('span', { class: 'kn-chip kn-type kn-type-' + type, title: 'page-type · ' + type, text: KN_TYPE_LABEL[type] || type });
-}
+// 라벨 사전·칩 생성기(주입/출처/작성주체/유형)·infoDot 은 knowledge-doc.ts 로 이관(#592) — 상단 import 참조.
 // 유형(page-type) 셀렉터 — 생성·편집 폼 공용. 6종. value=선택값. (#290 신규 필수)
 function knTypeSelect(value) {
     const sel = el('select', {}, el('option', { value: '', text: '— 유형 선택 —' }));
@@ -161,46 +135,6 @@ function knTypeSelect(value) {
     if (value)
         sel.value = value;
     return sel;
-}
-// injection/provenance 칩 — 종류 뱃지(kindBadge)와 같은 작은 인라인 표식. title 로 한 줄 설명 노출.
-function knInjectChip(injection) {
-    return el('span', { class: 'kn-chip kn-inject kn-inject-' + (injection || 'na'),
-        title: KN_INJECTION_HINT[injection] || '', text: KN_INJECTION_LABEL[injection] || injection || '—' });
-}
-function knProvChip(provenance) {
-    return el('span', { class: 'kn-chip kn-prov kn-prov-' + (provenance || 'na'),
-        title: KN_PROVENANCE_HINT[provenance] || '', text: KN_PROVENANCE_LABEL[provenance] || provenance || '—' });
-}
-// 작성 주체 칩 — AI/사람 구분(#449). confidence 없으면 칩 생략(빈 '—' 노이즈 방지).
-//  호버 설명은 withTip(즉시 표시 말풍선) — native title 은 안 뜨고 카드 overflow 에 잘려서(#449 피드백).
-function knAuthorChip(confidence) {
-    if (!confidence)
-        return null;
-    if (confidence === 'observed')
-        return null; // 출처 칩(외부 미러)과 라벨 중복 — 미러 행에선 생략(#551)
-    const chip = el('span', { class: 'kn-chip kn-author kn-author-' + confidence,
-        text: KN_AUTHOR_LABEL[confidence] || confidence });
-    return withTip(chip, KN_AUTHOR_HINT[confidence] || '');
-}
-// ⓘ 설명 점 — 라벨/값 옆 작은 정보 버튼. 긴 설명을 인라인에서 빼 호버(CSS)·포커스·클릭(고정 토글, 터치/유지용)으로 팝.
-//  바깥 클릭 시 닫힘. hint 없으면 null.
-function infoDot(hint) {
-    if (!hint)
-        return null;
-    const dot = el('button', { type: 'button', class: 'info-dot', 'aria-label': hint }, 'ⓘ', el('span', { class: 'info-pop', role: 'tooltip', text: hint }));
-    dot.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const open = dot.classList.toggle('open');
-        if (open) {
-            const onDoc = (ev) => { if (!dot.contains(ev.target)) {
-                dot.classList.remove('open');
-                document.removeEventListener('click', onDoc, true);
-            } };
-            setTimeout(() => document.addEventListener('click', onDoc, true), 0);
-        }
-    };
-    return dot;
 }
 // 지식 한 행 — 제목(상세 링크) + 작성 주체(AI/사람) 칩 + provenance 칩 + lifecycle 점 + 갱신시각.
 //  (#449) 주입(injection) 칩 제거 — 지식 탭은 recalled 전용이라 매 행 '검색'으로 반복돼 무의미. 대신 작성 주체 칩 노출.
@@ -240,12 +174,6 @@ function knRow(e, select) {
         toggle();
     } });
     return row;
-}
-// 비슷한 지식 한 항목(벡터 #172, 자동) — [유사도 % pill][제목 한 줄 전체폭]. knowledge_similar 결과.
-//  '연결된 지식' 리스트와 동일 컴팩트 행. 좌측 pill은 관계가 아니라 코사인 유사도(자동 판정)라서 색을 따로 둠.
-function knSimilarItem(e) {
-    const pct = Math.round((Number(e.similarity) || 0) * 100);
-    return el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name), title: '의미 유사도(코사인) ' + pct + '%' }, el('span', { class: 'kn-link-rel kn-link-sim', text: pct + '%' }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
 }
 // 지식 탭 진입 — sub ∈ {business, product, system, sources, graph, new}. space 셋이면 2분할 뷰, 그 외 통합 둘러보기.
 //  (#449) 고아 라우트 stats·review 제거 — 링크 없는 죽은 화면(review 의 목적 '반려'는 v6에서 폐기, [[content-deletion-recovery-model]]).
@@ -295,7 +223,8 @@ async function renderKnowledgeSpace(view, _space, params) {
                 f.category = '';
         }
     }
-    view.replaceChildren(knowledgeSubBar('browse'), skeleton('지식을 불러오는 중'));
+    // 로딩 중엔 kn-plain 래퍼(가운데 정렬 패딩) — doc-mode(main 패딩 0)에서 스켈레톤이 가장자리에 붙지 않게(#592).
+    view.replaceChildren(el('div', { class: 'kn-plain' }, knowledgeSubBar('browse'), skeleton('지식을 불러오는 중')));
     // 선택(일괄삭제) 상태 — 리페치 없이 로컬 재페인트. names = 선택된 지식 name 집합.
     const sel = { mode: false, names: new Set() };
     let lastEntries = [];
@@ -310,7 +239,8 @@ async function renderKnowledgeSpace(view, _space, params) {
         el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
     ], '식');
     // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
-    const side = el('aside', { class: 'browse-side' });
+    //  (#592) .kn-shell 의 고정 260px 자체 스크롤 컬럼(.kn-side) — 내용(buildSide)은 기존 그대로.
+    const side = el('aside', { class: 'kn-side' });
     const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
     const myIds = myCatIdSet();
     let bySpace = { business: [], product: [], system: [] };
@@ -327,17 +257,7 @@ async function renderKnowledgeSpace(view, _space, params) {
         side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), nav, mirrorBox);
     }
     buildSide();
-    (async () => {
-        try {
-            const r = await api('/api/ui/knowledge-tree?system=notion');
-            const entries = (r && r.entries) || [];
-            if (!entries.length)
-                return;
-            mirrorBox.replaceChildren(el('div', { class: 'eyebrow kn-mirror-eyebrow', text: 'Notion 페이지 트리' }), buildMirrorTree(entries));
-            mirrorBox.hidden = false;
-        }
-        catch (_) { /* 미러 없음/권한 없음 → 섹션 숨김 유지 */ }
-    })();
+    loadMirrorTreeInto(mirrorBox);
     // 상단 필터 — 검색(q) + injection select + provenance select.
     const qInput = el('input', { type: 'search', placeholder: '제목·본문 검색', value: f.q, 'aria-label': '검색어' });
     // 검색 방식 — 의미검색(하이브리드 벡터+grep, 자연어/유사) 기본 vs 정확(grep). 검색어가 있을 때만 영향.
@@ -500,10 +420,25 @@ async function renderKnowledgeSpace(view, _space, params) {
         refetch();
     });
     const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, provSel, typeSel);
-    const layout = el('div', { class: 'browse-layout' }, side, el('section', { class: 'browse-main' }, filterBar, bulkBar, listBox, foot));
-    view.replaceChildren(head, knowledgeSubBar('browse'), layout);
+    // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
+    const layout = el('div', { class: 'kn-shell' }, side, el('section', { class: 'kn-main' }, head, knowledgeSubBar('browse'), filterBar, bulkBar, listBox, foot));
+    view.replaceChildren(layout);
     applyReveal([layout]);
     refetch();
+}
+// #551 노션 페이지 트리 로더 — 사이드바 공용(목록·문서 페이지). 미러 없음/권한 없음이면 숨김 유지.
+function loadMirrorTreeInto(mirrorBox) {
+    (async () => {
+        try {
+            const r = await api('/api/ui/knowledge-tree?system=notion');
+            const entries = (r && r.entries) || [];
+            if (!entries.length)
+                return;
+            mirrorBox.replaceChildren(el('div', { class: 'eyebrow kn-mirror-eyebrow', text: 'Notion 페이지 트리' }), buildMirrorTree(entries));
+            mirrorBox.hidden = false;
+        }
+        catch (_) { /* 미러 없음/권한 없음 → 섹션 숨김 유지 */ }
+    })();
 }
 // 카테고리 사이드바 행 — tree-item 패턴. data-cat-val 로 클릭 위임(빈 문자열=전체).
 //  opts(선택): { glyph } 글리프 교체(기본 ·/∗) · { cls } 추가 클래스(예: 들여쓰기) · { title } 호버 힌트.
@@ -573,149 +508,52 @@ function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
         nav.append(grp);
     }
 }
-// 지식 상세 #/k/<name> — 전문(body_md, 마크다운) + 메타(injection/provenance/lifecycle/source) + 연결 카테고리.
+// 지식 상세 #/k/<name> — (#592) 문서 페이지 셸: 좌 사이드바(트리 컨텍스트, ⟨ 접기·localStorage 기억) + 문서 캔버스(.kn-doc).
+//  카드 렌더 본체는 knowledge-doc.ts buildKnowledgeDetail 로 이관(단일 소스 — 다음 단계의 피크/인라인도 같은 함수).
+const KN_SIDE_COLLAPSE_KEY = 'kn-doc-side-collapsed';
 async function renderKnowledgeDetail(view, name) {
-    view.replaceChildren(skeleton('지식을 불러오는 중'));
-    let k;
+    const side = el('aside', { class: 'kn-side' });
+    const canvas = el('article', { class: 'kn-doc' });
+    const collapseBtn = el('button', { class: 'kn-side-collapse', type: 'button',
+        title: '사이드바 접기', 'aria-label': '사이드바 접기', text: '⟨' });
+    const reopenBtn = el('button', { class: 'kn-side-reopen', type: 'button',
+        title: '사이드바 펼치기', 'aria-label': '사이드바 펼치기', text: '⟩' });
+    let collapsed = false;
     try {
-        k = await api('/api/ui/knowledge/' + encodeURIComponent(name)).then((d) => (d && d.knowledge) || d);
+        collapsed = localStorage.getItem(KN_SIDE_COLLAPSE_KEY) === '1';
     }
-    catch (e) {
-        if (e.status === 404) {
-            view.replaceChildren(el('div', { class: 'page-head' }, el('h1', { text: '없는 지식' })), el('div', { class: 'note', text: "'" + name + "' 을(를) 찾을 수 없습니다." }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge', text: '← 지식으로' }));
-            return;
+    catch (_) { /* 프라이빗 모드 등 — 기본 펼침 */ }
+    const shell = el('div', { class: 'kn-shell' + (collapsed ? ' side-off' : '') }, side, reopenBtn, canvas);
+    const setSide = (off) => {
+        shell.classList.toggle('side-off', off);
+        try {
+            localStorage.setItem(KN_SIDE_COLLAPSE_KEY, off ? '1' : '0');
         }
-        view.replaceChildren(errorNote(e, '지식을 불러오지 못했습니다'));
-        return;
-    }
-    if (!k) {
-        view.replaceChildren(el('div', { class: 'note', text: '지식을 찾을 수 없습니다.' }));
-        return;
-    }
-    // 브레드크럼 — 페이지 트리 조상 체인(#551, 서버 ancestors: 루트→직계부모 순). 미러 트리가 없으면 기존 2단.
-    const backRow = el('div', { class: 'crumbs' }, el('a', { class: 'crumb-link', href: '#/knowledge', text: '지식' }));
-    const ancestors = Array.isArray(k.ancestors) ? k.ancestors : [];
-    for (const a of ancestors) {
-        backRow.append(el('span', { class: 'crumb-sep', text: ' / ' }), el('a', { class: 'crumb-link', href: '#/k/' + encodeURIComponent(a.name), text: a.title || a.name }));
-    }
-    backRow.append(el('span', { class: 'crumb-sep', text: ' / ' }), ancestors.length
-        ? el('span', { class: 'crumb-cur', text: k.title || k.name })
-        : el('span', { class: 'mono', text: k.name }));
-    // 본문(전문) — body_md 안전 마크다운 렌더(renderMarkdown: createElement+textContent, HTML 주입 불가) + 원문 토글.
-    const rawText = k.body_md || '';
-    const rendered = rawText
-        ? el('div', { class: 'unit-body md-rendered' }, renderMarkdown(rawText))
-        : el('div', { class: 'body-text unit-body', text: '(본문 없음)' });
-    const rawView = el('pre', { class: 'body-text unit-body unit-body-raw', text: rawText });
-    rawView.hidden = true;
-    let showingRaw = false;
-    const rawToggle = rawText
-        ? el('button', { class: 'btn btn-ghost btn-sm md-raw-toggle', text: '원문 보기',
-            onclick: () => {
-                showingRaw = !showingRaw;
-                rendered.hidden = showingRaw;
-                rawView.hidden = !showingRaw;
-                rawToggle.textContent = showingRaw ? '서식 보기' : '원문 보기';
-            } })
-        : null;
-    // 메타 — v6 핵심 축(주입·출처)·상태·버전·갱신만 항상 노출. 외부 미러(provenance=observed)일 때만 외부 출처 상세를 펼친다.
-    //  정리(2026-06-24): 구 '출처 채널(source)' 행 제거(쓰기 채널이라 provenance 와 중복) · '신뢰(confidence)'는 v6 축이 아닌
-    //  파생 신호(AI/사람 작성)라 '작성 주체' 한 줄로 압축(라벨은 지식 탭 배지와 통일 — KN_AUTHOR_LABEL, #449) · source_ref 라벨을 '참조'로(출처 3중복 해소).
-    //  recalled = '검색 소환'(AI가 관련될 때 키워드 검색으로 직접 찾는 것 — 자동·시맨틱 아님, query 가 아니라 recall).
-    const isMirror = k.provenance === 'observed' || k.external_system || k.external_id || k.external_url;
-    const metaRows = [
-        ['주입(injection)', KN_INJECTION_LABEL[k.injection] || k.injection || '—', k.injection ? KN_INJECTION_HINT[k.injection] : ''],
-        ['출처(provenance)', KN_PROVENANCE_LABEL[k.provenance] || k.provenance || '—', k.provenance ? KN_PROVENANCE_HINT[k.provenance] : ''],
-        ['상태(lifecycle)', LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle || '—'],
-        k.type ? ['유형(type)', KN_TYPE_LABEL[k.type] || k.type] : null,
-        (k.confidence === 'ai' || k.confidence === 'human') ? ['작성 주체', KN_AUTHOR_LABEL[k.confidence]] : null,
-        k.author ? ['작성자', k.author] : null,
-        k.supersedes ? ['대체함(supersedes)', k.supersedes] : null,
-        isMirror && k.external_system ? ['외부 출처', k.external_system + (k.external_instance ? ' · ' + k.external_instance : '')] : null,
-        isMirror && k.external_id ? ['외부 ID', k.external_id] : null,
-        isMirror && k.external_url ? ['외부 링크', (() => {
-                const safe = safeHref(k.external_url);
-                return safe
-                    ? el('a', { class: 'md-link', href: safe, target: '_blank', rel: 'noopener noreferrer',
-                        text: (k.external_system === 'notion' ? 'Notion에서 열기' : '원본에서 열기') + ' ↗' })
-                    : el('span', { text: k.external_url });
-            })()] : null,
-        isMirror && k.occurred_at ? ['발생 시각', absTime(k.occurred_at)] : null,
-        isMirror && k.last_synced_at ? ['마지막 동기화', absTime(k.last_synced_at)] : null,
-        k.source_ref ? ['참조(source_ref)', k.source_ref] : null,
-        ['버전', 'v' + (k.version != null ? k.version : '—')],
-        k.created_at ? ['최초 작성', absTime(k.created_at)] : null,
-        ['마지막 갱신', (k.updated_at ? absTime(k.updated_at) : '—') + (k.updated_by ? ' · ' + k.updated_by : '')],
-    ].filter(Boolean);
-    const metaBar = el('div', { class: 'unit-metabar' });
-    for (const [kk, vv, hint] of metaRows) {
-        const isNode = vv && vv.nodeType; // 값이 이미 DOM 노드면 그대로(외부 딥링크 등, #551)
-        const vEl = isNode
-            ? el('span', { class: 'umeta-v' }, vv)
-            : hint
-                ? el('span', { class: 'umeta-v umeta-v-info' }, el('span', { text: vv }), infoDot(hint))
-                : el('span', { class: 'umeta-v', text: vv });
-        metaBar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: kk }), vEl));
-    }
-    // 연결 카테고리(단일, #290) — rejected 제외. 단독 섹션 폐지 → 메타데이터 첫 항목으로 편입(pill 유지).
-    const cats = (Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected');
-    metaBar.prepend(el('div', { class: 'umeta umeta-cat' }, el('span', { class: 'umeta-k', text: '카테고리' }), cats.length
-        ? el('div', { class: 'umeta-v kn-cat-list kn-cat-inmeta' }, ...cats.map((c) => el('span', { class: 'kn-chip kn-cat-chip',
-            title: (SPACE_LABEL[c.space] || c.space || '') + ' · ' + (c.key || ''), text: c.name || c.key })))
-        : el('span', { class: 'umeta-v umeta-empty', text: '연결 없음' })));
-    // 상태 액션 — 편집·핀(memory 권한자)·삭제(휴지통), 우측 정렬. 편집/핀은 지식 자신에서 직접(관리탭 WIKI 인덱스 흡수, 2026-06-24).
-    //  핀: is_wiki 토글 → 제목·분류가 매 대화 첫머리(가이드 ${wiki})에 항상 주입(본문 제외). 삭제는 사람 전용(서버 403 재검증).
-    const actions = el('div', { class: 'unit-actions unit-actions-end' });
-    if (hasScope('memory')) {
-        // (#335 ①) 항상-주입 섹션은 관리탭 '세션 주입'에서만 편집/순서/삭제 — 지식 편집페이지로 보내지 않는다.
-        actions.append(k.injection === 'always'
-            ? el('button', { class: 'btn btn-ghost btn-sm', text: '관리 ▸ 세션 주입에서 편집',
-                title: '이 문서는 항상-주입 섹션입니다 — 관리 탭에서 편집·순서·삭제합니다.',
-                onclick: () => { location.hash = '#/system/injection-map'; } })
-            : el('button', { class: 'btn btn-ghost btn-sm', text: '편집',
-                onclick: () => { location.hash = '#/k-edit/' + encodeURIComponent(k.name); } })); // 모달 아닌 별도 편집 페이지(#290)
-        const pinBtn = el('button', { class: 'btn btn-ghost btn-sm',
-            text: k.is_wiki ? '📌 핀 해제' : '📍 인덱스에 핀',
-            title: '핀하면 제목·분류가 매 대화 첫머리(WIKI 인덱스)에 항상 깔립니다(본문 제외, 필요할 때 AI가 찾아봄).',
-            onclick: async () => {
-                pinBtn.disabled = true;
-                try {
-                    await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/wiki', { method: 'POST', body: JSON.stringify({ is_wiki: !k.is_wiki }) });
-                    toast(k.is_wiki ? '핀을 해제했습니다' : '인덱스에 핀했습니다');
-                    renderKnowledgeDetail(view, k.name);
-                }
-                catch (e) {
-                    toast('핀 변경 실패 — ' + e.message, true);
-                    pinBtn.disabled = false;
-                }
-            } });
-        actions.append(pinBtn);
-    }
-    actions.append(el('button', { class: 'btn btn-ghost btn-sm btn-danger', text: '삭제',
-        onclick: () => knDelete(k.name, view) }));
-    const metaWrap = el('details', { class: 'unit-meta-details', open: '' }, el('summary', { class: 'unit-meta-summary' }, '메타데이터'), metaBar);
-    // 비슷한 지식(벡터 #172) — 이 지식과 의미적으로 가까운 다른 지식(코사인 유사도, 자동). 비동기 채움(임베딩 off/유사 없음=숨김).
-    const relatedBox = el('div', { class: 'kn-related', hidden: true, style: 'margin-top:16px' });
-    const main = el('div', { class: 'detail-card unit-card' }, el('div', { class: 'unit-title-row' }, el('h1', { class: 'detail-title', text: k.title || k.name }), lifecycleDot(k.lifecycle)), el('div', { class: 'detail-meta' }, el('span', { class: 'mono', text: k.name }), knAuthorChip(k.confidence), knProvChip(k.provenance), knTypeChip(k.type), k.lifecycle === 'archived' ? el('span', { class: 'kn-chip kn-archived',
-        title: '원본(외부 시스템)에서 보관/삭제되어 미러만 남았습니다 — 내용은 보존됩니다.', text: '📦 보관됨' }) : null, k.is_wiki ? el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }) : null), actions.childNodes.length ? actions : null, metaWrap, // 카테고리는 메타데이터 첫 항목으로 편입됨(단독 섹션 폐지)
-    knChildrenPanel(k), // #551 페이지 트리 — 하위 페이지(sort 순), 미러·저작 공통(parent_name 기반)
-    knNotionPropsPanel(k), // #551 노션 속성 — fields.notion.properties 를 구조화 표시(DB 행)
-    knLinksPanel(k, view), // #290 연결된 지식 — 연결된 프로젝트와 같은 관계 섹션으로 묶음(같은 패턴)
-    knProjectLinks(k.name), el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '본문' }), rawToggle), el('div', { class: 'unit-body-wrap' }, rendered, rawView), relatedBox);
-    view.replaceChildren(el('div', { class: 'page-head unit-head' }, backRow), main);
-    applyReveal([main]);
-    // 비슷한 지식 비동기 로드(주 렌더를 막지 않음). graceful — 임베딩 off/유사 없음/실패면 섹션 숨김 유지.
+        catch (_) { /* noop */ }
+    };
+    collapseBtn.onclick = () => setSide(true);
+    reopenBtn.onclick = () => setSide(false);
+    // 사이드바 내용 — 목록 뷰와 같은 구성(카테고리 트리 + Notion 페이지 트리). 클릭 = 목록으로 이동(필터).
+    const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
+    const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
+    side.append(el('div', { class: 'kn-side-head' }, el('div', { class: 'eyebrow', text: '카테고리' }), collapseBtn), nav, mirrorBox);
+    side.addEventListener('click', (ev) => {
+        const item = ev.target.closest('[data-cat-val]');
+        if (!item)
+            return;
+        ev.preventDefault();
+        const v = item.dataset.catVal || '';
+        location.hash = v === KN_INDEXED ? '#/knowledge?indexed=1' : (v ? '#/knowledge?category=' + encodeURIComponent(v) : '#/knowledge');
+    });
+    view.replaceChildren(shell);
+    buildKnowledgeDetail(canvas, name, { mode: 'page' });
     (async () => {
         try {
-            const r = await api('/api/ui/knowledge/similar?' + new URLSearchParams({ name: k.name, limit: '6', min_score: '0.45' }));
-            const rel = (r && r.entries) || [];
-            if (!rel.length)
-                return;
-            relatedBox.replaceChildren(el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '비슷한 지식' }), el('span', { class: 'kn-sim-hint', title: '벡터 임베딩 코사인 유사도로 자동 추천 — 직접 맺은 ‘연결된 지식’과는 다릅니다', text: '자동 · 의미 유사도' })), el('div', { class: 'kn-linkrows' }, ...rel.map(knSimilarItem)));
-            relatedBox.hidden = false;
+            buildSpacesNav(nav, await fetchAllSpaceCats(), '', myCatIdSet(), { indexed: true });
         }
-        catch (_) { /* 임베딩 off 등 → 숨김 유지 */ }
+        catch (_) { /* graceful: 사이드바 트리 생략(문서는 계속) */ }
     })();
+    loadMirrorTreeInto(mirrorBox);
 }
 async function knChangeLifecycle(name, lifecycle, view) {
     try {
@@ -727,155 +565,14 @@ async function knChangeLifecycle(name, lifecycle, view) {
         toast('상태 변경 실패 — ' + e.message, true);
     }
 }
-// 지식 삭제(휴지통) — 활성 목록·검색·주입에서 제거하되 감사 스냅샷으로 보존(#/trash 에서 복원). 연결은 cascade 정리.
-async function knDelete(name, view) {
-    if (!confirm("'" + name + "' 지식을 삭제할까요?\n\n활성 목록·검색·주입에서 사라집니다. 연결된 카테고리·프로젝트·활동 링크는 함께 정리됩니다.\n휴지통(#/trash)에서 본체를 복원할 수 있습니다."))
-        return;
-    try {
-        await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
-        toast('삭제했습니다 — 휴지통에서 복원할 수 있습니다');
-        location.hash = '#/knowledge';
-    }
-    catch (e) {
-        toast('삭제 실패 — ' + e.message, true);
-    }
-}
+// (지식 삭제 knDelete 는 knowledge-doc.ts 로 이관 — 문서 캔버스 액션에서 사용, #592)
 // 지식 생성·편집 — WIKI 탭의 단일 편집 표면(관리탭 'WIKI 인덱스' 흡수, 2026-06-24). 비파괴 upsert(POST /api/ui/knowledge):
 //  주입·출처·핀·요약·기존 카테고리는 미전송 시 서버가 보존 → 편집이 다른 축을 망치지 않는다.
 //  (org/memory 는 injection 을 recalled 로 강제 덮어써서 규칙·미러를 손상 → 쓰지 않음.)
 // ════════════════════════════════════════════
-// 위키 ↔ 프로젝트 연결 — 생성 페이지(#255)·상세(#256)·목록 일괄(#257) 공용.
-//  지식을 프로젝트의 필요(required)/산출(produced) 지식으로 연결한다. API: POST /api/ui/v6/projects/:id/knowledge {name, relation, unlink?}.
+// 위키 ↔ 프로젝트 연결 — 피커(openProjectChooser)·상세 섹션(knProjectLinks)은 knowledge-doc.ts 로 이관(#592).
+//  여기(목록 일괄연결·생성 폼 스테이징)서는 import 해 재사용한다.
 // ════════════════════════════════════════════
-const KN_REL_LABEL = { required: '필요', produced: '산출' };
-// 연결 가능한 프로젝트 목록(보드 앵커 제외, 최신순) — 피커 공용. graceful(실패 시 빈 배열).
-async function fetchLinkableProjects() {
-    try {
-        const d = await api('/api/ui/v6/projects');
-        return (d && d.projects) || [];
-    }
-    catch (_) {
-        return [];
-    }
-}
-function knProjStatusText(p) {
-    const done = p.status === 'done' || p.status_category === 'done';
-    const tc = Number(p.task_count) || 0, dc = Number(p.task_done_count) || 0;
-    return (done ? '완료' : '진행 중') + (tc ? ' · 작업 ' + dc + '/' + tc : '');
-}
-// 프로젝트 선택 피커(오버레이) — 관계(필요/산출) 토글 + 프로젝트 검색 목록. 행 버튼 클릭 = onPick(project, relation).
-//  onPick 이 false 를 반환하면 미처리. 이미 처리한 (id:relation) 은 picked 로 '완료' 표시. 오버레이는 열린 채 여러 건 처리 가능.
-//  opts: { title, actionLabel='＋ 연결', doneLabel='연결됨', initialPicked?:Iterable<string>, onPick:(p,relation)=>Promise<boolean|void> }
-function openProjectChooser(opts) {
-    const relSel = el('select', { class: 'kn-projpick-rel' }, el('option', { value: 'required', text: '필요 지식으로' }), el('option', { value: 'produced', text: '산출 지식으로' }));
-    const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '프로젝트 이름으로 검색…' });
-    const results = el('div', { class: 'ps-kn-pick-results' }, el('span', { class: 'admin-hint', text: '프로젝트를 불러오는 중…' }));
-    overlayBox(opts.title || '프로젝트 선택', el('div', { class: 'ps-kn-pick' }, el('div', { class: 'kn-projpick-bar' }, el('span', { class: 'admin-hint', text: '연결 관계' }), relSel), searchIn, results));
-    setTimeout(() => searchIn.focus(), 0);
-    let all = [];
-    const picked = new Set(opts.initialPicked || []);
-    function paint() {
-        if (!all.length) {
-            results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '연결할 프로젝트가 없습니다.' }));
-            return;
-        }
-        const q = searchIn.value.trim().toLowerCase();
-        const cand = all.filter((p) => !q || (p.name || '').toLowerCase().includes(q));
-        if (!cand.length) {
-            results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '검색 결과가 없습니다.' }));
-            return;
-        }
-        const rel = relSel.value;
-        results.replaceChildren(...cand.map((p) => {
-            const done = picked.has(p.id + ':' + rel);
-            const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: done ? (opts.doneLabel || '연결됨') : (opts.actionLabel || '＋ 연결') });
-            btn.disabled = done;
-            btn.onclick = async () => {
-                const relation = relSel.value;
-                btn.disabled = true;
-                try {
-                    const ok = await opts.onPick(p, relation);
-                    if (ok === false) {
-                        btn.disabled = false;
-                        return;
-                    }
-                    picked.add(p.id + ':' + relation);
-                    btn.textContent = opts.doneLabel || '연결됨';
-                }
-                catch (e) {
-                    btn.disabled = false;
-                    toast('실패 — ' + e.message, true);
-                }
-            };
-            return el('div', { class: 'ps-kn-pick-row' }, el('div', { class: 'ps-kn-pick-main' }, el('div', { class: 'row-title', text: p.name }), el('div', { class: 'admin-hint', text: knProjStatusText(p) })), btn);
-        }));
-    }
-    relSel.addEventListener('change', paint);
-    searchIn.addEventListener('input', paint);
-    (async () => { all = await fetchLinkableProjects(); paint(); })();
-}
-// 위키 상세 '연결된 프로젝트' 섹션(#256) — 역방향 조회(GET /api/ui/knowledge/:name/projects) + 필요/산출 칩(해제 ✕) + 연결 버튼.
-function knProjectLinks(knowledgeName) {
-    const canEdit = hasScope('memory');
-    const list = el('div', { class: 'kn-projlink-list' });
-    let cur = [];
-    function linkedKeys() { return cur.map((p) => p.project_id + ':' + p.relation); }
-    function projChip(p) {
-        const link = el('a', { class: 'kn-projchip-link', href: '#/projects2/p/' + p.project_id, text: p.project_name || ('#' + p.project_id) });
-        const x = el('button', { class: 'kn-projchip-x', type: 'button', title: '연결 해제', text: '✕' });
-        x.onclick = async (ev) => {
-            ev.preventDefault();
-            try {
-                await api('/api/ui/v6/projects/' + p.project_id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: knowledgeName, relation: p.relation, unlink: true }) });
-                toast('연결을 해제했습니다');
-                refresh();
-            }
-            catch (e) {
-                toast('해제 실패 — ' + e.message, true);
-            }
-        };
-        return el('span', { class: 'kn-chip kn-projchip' }, link, canEdit ? x : null);
-    }
-    function paint() {
-        if (!cur.length) {
-            list.replaceChildren(el('div', { class: 'kn-cat-empty', text: '연결된 프로젝트가 없습니다.' }));
-            return;
-        }
-        const groups = [];
-        for (const rel of ['required', 'produced']) {
-            const items = cur.filter((p) => p.relation === rel);
-            if (!items.length)
-                continue;
-            groups.push(el('div', { class: 'kn-projlink-group' }, el('span', { class: 'kn-projlink-rel kn-projlink-rel-' + rel, text: KN_REL_LABEL[rel] }), ...items.map(projChip)));
-        }
-        list.replaceChildren(...groups);
-    }
-    async function refresh() {
-        try {
-            const d = await api('/api/ui/knowledge/' + encodeURIComponent(knowledgeName) + '/projects');
-            cur = (d && d.projects) || [];
-        }
-        catch (_) {
-            cur = [];
-        }
-        paint();
-    }
-    const addBtn = canEdit
-        ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 프로젝트 연결',
-            onclick: () => openProjectChooser({
-                title: '프로젝트에 연결', actionLabel: '＋ 연결', doneLabel: '연결됨', initialPicked: linkedKeys(),
-                onPick: async (proj, relation) => {
-                    await api('/api/ui/v6/projects/' + proj.id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: knowledgeName, relation }) });
-                    toast('연결했습니다');
-                    refresh();
-                    return true;
-                }
-            }) })
-        : null;
-    const box = el('div', { class: 'kn-projlinks' }, el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '연결된 프로젝트' }), addBtn), list);
-    refresh();
-    return box;
-}
 // ── 위키 생성 페이지(#255) — 모달이 아닌 별도 페이지. 폼 + 프로젝트 연결(복수, 필요/산출) 스테이징 후 저장 시 일괄 연결. ──
 // 지식 작성/편집 — 별도 페이지(모달 아님, #290). editName 있으면 편집(기존 로드·프리필·파일명 고정·프로젝트 스테이징 생략),
 //  없으면 신규(분류·유형 필수 + 프로젝트 연결 스테이징). 저장 후 상세(#/k/<name>)로 이동. 작성 페이지와 동일 UX.
@@ -1011,7 +708,7 @@ export async function renderKnowledgeForm(view, params, editName) {
     };
     const head = el('div', { class: 'page-head' }, el('div', { class: 'page-head-row' }, el('h1', {}, '지식 ', el('span', { class: 'accent', text: isEdit ? '편집' : '작성' })), el('a', { class: 'btn btn-ghost btn-sm', href: isEdit ? ('#/k/' + encodeURIComponent(k.name)) : '#/knowledge', text: isEdit ? '← 상세로' : '← 목록으로' })), el('p', { class: 'sub', text: isEdit ? '이 지식의 내용을 수정합니다. 프로젝트 연결은 상세 페이지에서 관리합니다.' : '새 지식을 작성하고, 원하면 프로젝트의 필요/산출 지식으로 연결합니다(복수 프로젝트 가능).' }));
     const card = el('div', { class: 'card kn-create-card' }, field('파일명', nameIn), field('제목', titleIn), field('출처(provenance)', provSel), field('카테고리 (필수)', catSel), field('유형/type (필수)', typeSel), field('본문', bodyTa), isEdit ? null : el('div', { class: 'field' }, el('div', { class: 'field-label-row kn-create-projhead' }, el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn), stagedList), el('div', { class: 'admin-actions' }, saveBtn, status));
-    view.replaceChildren(head, knowledgeSubBar('browse'), card);
+    view.replaceChildren(el('div', { class: 'kn-plain' }, head, knowledgeSubBar('browse'), card)); // doc-mode 자체 패딩(#592)
     applyReveal([card]);
     setTimeout(() => (isEdit ? bodyTa : titleIn).focus(), 0);
 }
@@ -1041,13 +738,14 @@ async function loadCategoryKeysForSelect(sel, preselectKey) {
 // ════════════════════════════════════════════
 const TRASH_ENTITY_LABEL = { knowledge: '지식', project: '프로젝트', category: '카테고리' };
 async function renderTrash(view) {
-    view.replaceChildren(skeleton('삭제된 항목을 불러오는 중'));
+    // doc-mode(main 패딩 0) 라우트라 kn-plain 래퍼로 기존 중앙 정렬 유지(#592).
+    view.replaceChildren(el('div', { class: 'kn-plain' }, skeleton('삭제된 항목을 불러오는 중')));
     let entries = [];
     try {
         entries = await api('/api/ui/deleted').then((d) => (d && d.entries) || []);
     }
     catch (e) {
-        view.replaceChildren(errorNote(e, '휴지통을 불러오지 못했습니다'));
+        view.replaceChildren(el('div', { class: 'kn-plain' }, errorNote(e, '휴지통을 불러오지 못했습니다')));
         return;
     }
     const head = el('div', { class: 'page-head' }, el('h1', {}, '휴지', el('span', { class: 'accent', text: '통' })), el('p', { class: 'sub', text: '삭제된 지식·프로젝트·카테고리입니다. 감사 스냅샷으로 보존되어 복원할 수 있습니다(본체만 — 삭제 시 정리된 연결은 복원되지 않습니다).' }));
@@ -1059,7 +757,7 @@ async function renderTrash(view) {
         for (const e of entries)
             list.append(trashRow(e, view));
     }
-    view.replaceChildren(head, list);
+    view.replaceChildren(el('div', { class: 'kn-plain' }, head, list));
     applyReveal([list]);
 }
 function trashRow(e, view) {
@@ -1081,62 +779,9 @@ function trashRow(e, view) {
     return el('div', { class: 'row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px;' }, left, restoreBtn);
 }
 // ════════════════════════════════════════════
-// #290 지식↔지식 링크 패널 + 자료(source)층 + 그래프뷰.
+// #290 지식↔지식 링크 패널·자료 상세·라벨은 knowledge-doc.ts 로 이관(#592) — 여기선 미러 트리(사이드바)만.
 // ════════════════════════════════════════════
-const KN_LINK_REL_LABEL = { related: '관련', refines: '구체화', contradicts: '모순', depends_on: '의존' };
-const KN_SOURCE_REL_LABEL = { derived_from: '증류', cites: '참조' };
-const SOURCE_KIND_LABEL = { transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', notion_doc: '노션', clickup_doc: '클릭업', other: '기타' };
-// 연결된 지식 한 줄(리스트, 옵시디언식) — [관계 pill][제목 전체폭·한 줄][✕ hover]. 행 전체 클릭=상세 이동.
-//  incoming=true 면 백링크(해제 방향 반전: from=상대, to=이 지식).
-function knLinkRow(e, k, view, incoming) {
-    const row = el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name) }, el('span', { class: 'kn-link-rel kn-link-' + e.relation, text: KN_LINK_REL_LABEL[e.relation] || e.relation }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
-    if (hasScope('memory')) {
-        const x = el('button', { class: 'kn-linkrow-x', type: 'button', title: '연결 해제', text: '✕' });
-        x.onclick = async (ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            const from = incoming ? e.name : k.name, to = incoming ? k.name : e.name;
-            try {
-                await api('/api/ui/knowledge/' + encodeURIComponent(from) + '/link', { method: 'POST', body: JSON.stringify({ to, relation: e.relation, unlink: true }) });
-                toast('연결을 해제했습니다');
-                renderKnowledgeDetail(view, k.name);
-            }
-            catch (err) {
-                toast('해제 실패 — ' + err.message, true);
-            }
-        };
-        row.append(x);
-    }
-    return row;
-}
-// ── #551 노션 무손실 미러 — 하위 페이지·속성 패널 + 사이드바 페이지 트리 ──
-// 트리 노드 아이콘 — 노션 kind(page/database/db_row) 기준. 일반 지식(트리 부모가 된 저작 지식)은 문서 글리프.
-function knTreeIcon(kind) {
-    return kind === 'database' ? '🗄' : kind === 'db_row' ? '▪' : '📄';
-}
-// 상세 '하위 페이지' — parent_name 이 이 지식인 자식들(sort 순). 없으면 렌더 생략(null).
-function knChildrenPanel(k) {
-    const children = Array.isArray(k.children) ? k.children : [];
-    if (!children.length)
-        return null;
-    const rows = children.map((c) => el('a', {
-        class: 'kn-linkrow' + (c.lifecycle === 'archived' ? ' kn-row-archived' : ''),
-        href: '#/k/' + encodeURIComponent(c.name)
-    }, el('span', { class: 'kn-link-rel kn-link-child', text: knTreeIcon(c.notion_kind) }), el('span', { class: 'kn-linkrow-title', text: (c.title || c.name) + (c.lifecycle === 'archived' ? ' (보관됨)' : '') })));
-    return el('div', { class: 'kn-links' }, el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '하위 페이지' }), el('span', { class: 'kn-sim-hint', text: children.length + '개' })), el('div', { class: 'kn-linkrows' }, ...rows));
-}
-// 상세 '속성(Notion)' — fields.notion.properties({이름:{type,text}}) 를 메타바 그리드로. 값의 마크다운 링크는 renderInline.
-function knNotionPropsPanel(k) {
-    const props = k.fields && k.fields.notion && k.fields.notion.properties;
-    const entries = props ? Object.entries(props).filter(([, v]) => v && (v.text || v.type)) : [];
-    if (!entries.length)
-        return null;
-    const bar = el('div', { class: 'unit-metabar' });
-    for (const [pname, pv] of entries) {
-        bar.append(el('div', { class: 'umeta' }, el('span', { class: 'umeta-k', text: pname }), el('span', { class: 'umeta-v' }, pv.text ? renderInline(String(pv.text)) : el('span', { class: 'umeta-empty', text: '—' }))));
-    }
-    return el('details', { class: 'unit-meta-details', open: '' }, el('summary', { class: 'unit-meta-summary' }, '속성 (Notion)'), bar);
-}
+// ── #551 노션 무손실 미러 — 사이드바 페이지 트리 ──
 // 사이드바 '페이지 트리' — 외부 미러(knowledge-tree API) 스켈레톤을 재귀 <details> 로. 클릭=상세 이동.
 //  summary 안 앵커: preventDefault 로 토글 억제 후 해시 이동(토글은 ▸ 마커/여백 클릭).
 function knMirrorTreeNode(e, byParent) {
@@ -1180,75 +825,7 @@ function buildMirrorTree(entries) {
         box.append(knMirrorTreeNode(r, byParent));
     return box;
 }
-// 상세 '연결된 지식' — 방향(→ 포워드 / ← 백링크) 두 그룹 + 컴팩트 리스트(제목 한 줄 전체폭, 옵시디언식). 관계 pill.
-//  방향 헤더가 주어를 정한다: "이 지식에서 연결 →"=이 지식이 주어, "← …연결(백링크)"=상대가 주어. 관계 키워드는 그대로.
-function knLinksPanel(k, view) {
-    const links = k.links || { outgoing: [], incoming: [] };
-    const out = links.outgoing || [], inc = links.incoming || [], sources = k.sources || [];
-    const head = el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '연결된 지식' }), hasScope('memory') ? el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 지식 연결',
-        title: '교차주제는 카테고리 복수태깅 대신 지식끼리 연결로 잇습니다', onclick: () => openKnowledgeLinkPicker(k, view) }) : null);
-    const bodyEl = el('div', { class: 'kn-links-body' });
-    const dirGroup = (label, arr, incoming) => el('div', { class: 'kn-linkdir' }, el('span', { class: 'kn-linkdir-head', text: label }), el('div', { class: 'kn-linkrows' }, ...arr.map((e) => knLinkRow(e, k, view, incoming))));
-    if (!out.length && !inc.length) {
-        bodyEl.append(el('div', { class: 'kn-cat-empty', text: '아직 연결된 지식이 없어요. ＋지식 연결로 관련된 지식을 이어보세요.' }));
-    }
-    else {
-        if (out.length)
-            bodyEl.append(dirGroup('이 지식에서 연결한 글  →', out, false));
-        if (inc.length)
-            bodyEl.append(dirGroup('←  이 지식을 연결한 글 (백링크)', inc, true));
-    }
-    const box = el('div', { class: 'kn-links' }, head, bodyEl);
-    if (sources.length) {
-        const srcRows = sources.map((s) => {
-            const row = el('div', { class: 'kn-linkrow', role: 'button', tabindex: '0', style: 'cursor:pointer' }, el('span', { class: 'kn-link-rel kn-link-source', title: SOURCE_KIND_LABEL[s.kind] || s.kind, text: KN_SOURCE_REL_LABEL[s.relation] || s.relation }), el('span', { class: 'kn-linkrow-title', text: s.title || ('자료 #' + s.source_id) }));
-            row.onclick = () => openSourceDetail(s.source_id);
-            return row;
-        });
-        box.append(el('div', { class: 'sec-label', text: '출처 자료' }), el('div', { class: 'kn-linkrows' }, ...srcRows));
-    }
-    return box;
-}
-// 지식 링크 추가 — 관계 선택 + 대상 검색(grep) → 클릭 연결.
-function openKnowledgeLinkPicker(k, view) {
-    const relSel = selectFilter([['related', '관련'], ['refines', '구체화'], ['contradicts', '모순'], ['depends_on', '의존']], 'related');
-    const qIn = el('input', { type: 'search', placeholder: '연결할 지식 검색(제목·본문)' });
-    const results = el('div', { class: 'list-box', style: 'max-height:320px; overflow:auto; margin-top:10px;' });
-    const back = overlayBox('지식 링크 추가 · ' + (k.title || k.name), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '관계' }), relSel), el('div', { class: 'field', style: 'margin-top:10px' }, el('label', { class: 'field-label', text: '대상 지식' }), qIn), results);
-    let t = null;
-    async function search() {
-        const q = qIn.value.trim();
-        results.replaceChildren(skeletonRows(2));
-        try {
-            const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '15' }))
-                : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '15', orderBy: 'updated_at' }));
-            const r = await api(url);
-            const entries = ((r && r.entries) || []).filter((e) => e.name !== k.name);
-            if (!entries.length) {
-                results.replaceChildren(el('div', { class: 'empty', text: '결과 없음' }));
-                return;
-            }
-            results.replaceChildren(...entries.map((e) => el('div', { class: 'row', role: 'button', tabindex: '0', style: 'cursor:pointer',
-                onclick: async () => {
-                    try {
-                        await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/link', { method: 'POST', body: JSON.stringify({ to: e.name, relation: relSel.value }) });
-                        toast('링크를 추가했습니다');
-                        back.remove();
-                        renderKnowledgeDetail(view, k.name);
-                    }
-                    catch (err) {
-                        toast('실패 — ' + err.message, true);
-                    }
-                } }, el('div', { class: 'row-title', text: e.title || e.name }), el('div', { class: 'row-meta' }, el('span', { class: 'mono', text: e.name })))));
-        }
-        catch (err) {
-            results.replaceChildren(errorNote(err, '검색 실패'));
-        }
-    }
-    qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(search, 250); });
-    setTimeout(() => { qIn.focus(); search(); }, 0);
-}
-// 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이.
+// 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이(knowledge-doc.openSourceDetail).
 async function renderSources(view, _params) {
     const head = pageHead('자료', '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 여기서 다듬으면 지식이 됩니다.', [], '료');
     const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
@@ -1258,7 +835,8 @@ async function renderSources(view, _params) {
     const qIn = el('input', { type: 'search', placeholder: '제목·본문 검색', 'aria-label': '검색' });
     const listBox = el('div', { class: 'list-box' });
     const foot = el('div', { class: 'list-foot' });
-    view.replaceChildren(head, knowledgeSubBar('sources'), el('div', { class: 'filter-bar' }, qIn, kindSel, provSel), listBox, foot);
+    view.replaceChildren(el('div', { class: 'kn-plain' }, // doc-mode 자체 패딩(#592)
+    head, knowledgeSubBar('sources'), el('div', { class: 'filter-bar' }, qIn, kindSel, provSel), listBox, foot));
     async function refetch() {
         listBox.replaceChildren(skeletonRows(4));
         foot.replaceChildren();
@@ -1296,19 +874,5 @@ function srcRow(s) {
     row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
         open(); });
     return row;
-}
-async function openSourceDetail(id) {
-    let s;
-    try {
-        const r = await api('/api/ui/sources/' + id);
-        s = (r && r.source) || r;
-    }
-    catch (e) {
-        toast('자료를 불러오지 못했습니다 — ' + e.message, true);
-        return;
-    }
-    const derived = s.knowledge || [];
-    overlayBox(s.title || ('자료 #' + id), el('div', { class: 'detail-meta', style: 'margin-bottom:10px' }, el('span', { class: 'kn-chip kn-source-kind', text: SOURCE_KIND_LABEL[s.kind] || s.kind }), knProvChip(s.provenance), s.occurred_at ? el('span', { class: 'caption', text: '  ' + absTime(s.occurred_at) }) : null), derived.length ? el('div', {}, el('div', { class: 'sec-label', text: '여기서 파생된 지식' }), el('div', { class: 'list-box' }, ...derived.map((d) => el('a', { class: 'row', href: '#/k/' + encodeURIComponent(d.name),
-        style: 'text-decoration:none; display:block', text: (KN_SOURCE_REL_LABEL[d.relation] || d.relation) + ' · ' + (d.title || d.name) })))) : null, el('div', { class: 'sec-label', text: '본문' }), el('div', { class: 'unit-body md-rendered', style: 'max-height:50vh; overflow:auto' }, renderMarkdown(s.body_md || '(본문 없음)')));
 }
 export { SPACE_LABEL, SPACE_SUBS, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, knRow, knSideItem, knowledgeSubBar, myCatIdSet, openCategoryForm, renderKnowledge, renderKnowledgeDetail, renderKnowledgeSpace, renderTrash, spaceSubBar, };
