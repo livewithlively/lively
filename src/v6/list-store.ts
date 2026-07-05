@@ -46,7 +46,21 @@ export async function listProjectLists(viewerVis?: string): Promise<ProjectListR
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
           AND p.folder IS DISTINCT FROM '__board_anchor__') AS project_count
-     FROM project_list pl ${visWhere} ORDER BY pl.sort, lower(pl.name)`, params);
+     FROM project_list pl ${visWhere}
+     ORDER BY pl.sort,
+       CASE WHEN pl.settings->'clickup'->>'orderindex' ~ '^-?[0-9.]+$' THEN (pl.settings->'clickup'->>'orderindex')::float8 END NULLS LAST,
+       lower(pl.name)`, params);
+}
+
+// 리스트 재정렬(#541 사이드바) — 주어진 순서대로 sort=1,2,… 재부여(0=미지정 기본과 구분 → ClickUp orderindex 폴백 유지).
+//  같은 폴더의 형제만 넘기는 게 프론트 규약이나, 전역 sort 라 검증 없이도 안전(그룹핑은 folder_id 가 결정).
+export async function reorderProjectLists(ids: number[]): Promise<{ updated: number }> {
+  const clean = (ids || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+  if (clean.length < 2) return { updated: 0 };
+  const tuples = clean.map((_id, i) => `($${i + 1}::int, ${i + 1}::int)`).join(", ");
+  const res = await itemsPool.query(
+    `UPDATE project_list AS pl SET sort = v.sort FROM (VALUES ${tuples}) AS v(id, sort) WHERE pl.id = v.id`, clean);
+  return { updated: res.rowCount || 0 };
 }
 
 // 리스트 1건(멤버 조인 없이) — 존재 확인·소유권 조회용. 없으면 undefined.
@@ -190,6 +204,8 @@ export interface ListClickupFields {
   values: Record<string, Record<string, unknown>>;   // projectId → { externalId → value }
   fieldIds: Record<string, Record<string, number>>;  // projectId → { externalId → task_field.id }
   view_columns: Array<{ idx?: number; field?: string; hidden?: boolean; width?: number | null }>; // ClickUp 리스트 뷰 컬럼 구성(빌트인+cf — 프론트가 컬럼 자동 표시/정렬에 사용)
+  view_grouping: { field?: string; dir?: number; collapsed?: unknown[] } | null; // ClickUp 뷰 group by(#541 — status/assignee/priority/dueDate/tag + dir 1=asc·-1=desc)
+  view_sorting: Array<{ field?: string; dir?: number }>; // ClickUp 뷰 정렬(그룹 내 태스크 정렬 — 프론트 기본값)
 }
 export async function getListClickupFields(listId: number): Promise<ListClickupFields> {
   // 지연 import 회피 — 커넥터 원본 정의(type/type_config)→우리 필드 타입/config 매핑은 미러와 단일 원천 공유.
@@ -253,5 +269,30 @@ export async function getListClickupFields(listId: number): Promise<ListClickupF
   const colsRaw = ((view?.config as Record<string, unknown> | null)?.columns as Record<string, unknown> | undefined)?.fields;
   const view_columns = Array.isArray(colsRaw) ? colsRaw as ListClickupFields["view_columns"] : [];
 
-  return { fields, values, fieldIds, view_columns };
+  // grouping/sorting(#541 그룹바이 파리티) — 컬럼 있는 뷰가 없어도 grouping 은 가질 수 있어 폴백 조회.
+  let gsView = view;
+  if (!gsView) {
+    gsView = await one(itemsPool,
+      `SELECT pv.config FROM project_view pv
+        WHERE pv.type='list' AND pv.external_id IS NOT NULL
+          AND (pv.list_id = $1
+            OR pv.folder_id = (SELECT folder_id FROM project_list WHERE id=$1)
+            OR pv.folder_id = (SELECT pf.parent_id FROM project_list pl JOIN project_folder pf ON pf.id = pl.folder_id WHERE pl.id=$1))
+        ORDER BY (pv.list_id IS NOT NULL) DESC,
+                 (pv.folder_id = (SELECT folder_id FROM project_list WHERE id=$1)) DESC,
+                 pv.sort, pv.id
+        LIMIT 1`,
+      [listId]);
+  }
+  const gsConfig = (gsView?.config ?? null) as Record<string, unknown> | null;
+  const groupingRaw = gsConfig?.grouping as Record<string, unknown> | undefined;
+  const view_grouping = groupingRaw && typeof groupingRaw === "object"
+    ? { field: typeof groupingRaw.field === "string" ? groupingRaw.field : undefined,
+        dir: typeof groupingRaw.dir === "number" ? groupingRaw.dir : undefined,
+        collapsed: Array.isArray(groupingRaw.collapsed) ? groupingRaw.collapsed : undefined }
+    : null;
+  const sortingRaw = (gsConfig?.sorting as Record<string, unknown> | undefined)?.fields;
+  const view_sorting = Array.isArray(sortingRaw) ? sortingRaw as ListClickupFields["view_sorting"] : [];
+
+  return { fields, values, fieldIds, view_columns, view_grouping, view_sorting };
 }

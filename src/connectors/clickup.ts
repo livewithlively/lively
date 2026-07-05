@@ -292,7 +292,7 @@ export function effectiveStatusDefs(list: ClickUpList, space?: ClickUpSpace | nu
 // ── 계층 → RawItem 변환 (무손실 이관 #541) ──
 //  external_id 프리픽스: project_folder 테이블은 Space 와 Folder 를 함께 담으므로 'space:<id>'/'folder:<id>' 로
 //  좌표를 분리한다(숫자 id 시퀀스 충돌 방어). 리스트/뷰/태스크는 각자 전용 테이블이라 raw id 그대로.
-export function spaceToRawItem(space: ClickUpSpace, ctx: ToRawItemCtx): RawItem {
+export function spaceToRawItem(space: ClickUpSpace, ctx: ToRawItemCtx, orderindex?: number): RawItem {
   return {
     type: "space",
     provenance: {
@@ -305,6 +305,8 @@ export function spaceToRawItem(space: ClickUpSpace, ctx: ToRawItemCtx): RawItem 
       color: space.color ?? null,
       private: !!space.private,
       archived: !!space.archived,
+      // 스페이스 나열 API 는 orderindex 미제공 — 나열 순서(=ClickUp 사이드바 표시 순서)를 위치값으로 보존(#541 사이드바 정렬).
+      orderindex: orderindex ?? null,
       statuses: space.statuses ?? [],
       features: space.features ?? null,
     },
@@ -1092,11 +1094,12 @@ export async function* losslessStream(opts?: LosslessOpts): AsyncIterable<RawIte
   const pruneContainers = !!included;
   const tree = await enumerateHierarchy(teamId, { withMeta: true, onError: bumpFail });
   const allLists: ClickUpList[] = [];
+  let spaceIdx = 0;
   for (const s of tree) {
     const keptFolders = s.folders.filter((f) => !pruneContainers || f.lists.length > 0);
     const spaceHasLists = keptFolders.some((f) => f.lists.length > 0) || s.folderlessLists.length > 0;
     const keepSpace = !pruneContainers || spaceHasLists;
-    if (keepSpace) yield spaceToRawItem(s.space, ctx);
+    if (keepSpace) yield spaceToRawItem(s.space, ctx, spaceIdx++);
     if (!keepSpace) continue; // 스페이스가 빠지면 하위 전부 스코프 밖
     for (const f of keptFolders) yield folderToRawItem(f.folder, s.space.id, ctx);
     for (const f of keptFolders) for (const hl of f.lists) { allLists.push(hl.list); yield listToRawItem(hl, s.space, ctx); }

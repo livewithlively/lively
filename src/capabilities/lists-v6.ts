@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import {
   listProjectLists, createProjectList, updateProjectList, deleteProjectList,
   setProjectListMembers, setProjectListForProject, getProjectListRow, setProjectListSettings,
-  getListClickupFields,
+  getListClickupFields, reorderProjectLists,
 } from "../v6/list-store.js";
 
 function parseId(v: unknown): number {
@@ -234,7 +234,27 @@ const projectListClickupFieldsV6: Capability = {
   },
 };
 
+// ── 리스트 재정렬(#541 사이드바) — 같은 폴더의 형제 리스트 id 배열 순서대로 sort 재부여. 웹 드래그 전용. ──
+const projectListReorderV6: Capability = {
+  name: "project_list_reorder_v6",
+  title: "리스트 순서 변경(v6)",
+  description: "리스트의 사이드바 표시 순서를 주어진 id 배열 순서대로 저장한다(sort 를 1,2,… 로 재부여). 사이드바 드래그 재정렬용.",
+  scope: "memory",
+  input: { ids: z.array(z.number().int().positive()).min(2).max(500) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/project-lists-reorder"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const ids = Array.isArray(b.ids) ? b.ids.map((x) => parseId(x)) : [];
+        if (ids.length < 2) throw new HttpError(400, "ids 는 2개 이상이어야 합니다");
+        return { ids };
+      } }],
+  },
+  handler: async (input: any) => await reorderProjectLists(input.ids),
+};
+
 export const listV6Capabilities: Capability[] = [
   projectListIndexV6, projectListCreateV6, projectListUpdateV6, projectListDeleteV6,
-  projectListSetMembersV6, projectSetListV6, projectListSetSettingsV6, projectListClickupFieldsV6,
+  projectListSetMembersV6, projectSetListV6, projectListSetSettingsV6, projectListClickupFieldsV6, projectListReorderV6,
 ];

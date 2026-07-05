@@ -3767,3 +3767,16 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .run-log-head .admin-hint { flex: 1; min-width: 0; }
 .run-log { background: #0F1B2D; color: #D7E3F4; border-radius: 10px; padding: 12px 14px; margin-top: 8px;
   max-height: 56vh; min-height: 200px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+
+/* ── #541 프로젝트 보드 풀스크린 — ClickUp 처럼 좌우 마진 없이(보드 라우트 한정, 상세는 읽기 폭 유지) ── */
+body[data-route="projects2-board"] main { max-width: none; padding-left: 16px; padding-right: 16px; }
+
+/* ── #541 그룹바이/컬럼 정렬 ── */
+.pjv-groupby-btn .pjv-view-btn-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-thcol-name.pjv-sortable { cursor: pointer; }
+.pjv-thcol-name.pjv-sortable:hover { color: var(--ink); }
+.pjv-sort-ind { font-size: 10px; margin-left: 2px; color: var(--accent, #5b6cff); font-weight: 800; }
+.pjv-menu-check { margin-left: auto; font-weight: 800; color: var(--accent, #5b6cff); }
+
+/* ── #541 그룹 내 수동 재정렬 삽입선 ── */
+.pjv-proj-insert-marker { height: 0; border-top: 2px solid var(--accent, #5b6cff); margin: -1px 0; pointer-events: none; }

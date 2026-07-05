@@ -12,7 +12,7 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 const regenAgents = (id: number) => ensureAgentsMd(id).catch((e) => { console.error("[regenAgents] fail id=" + id + ":", e); });
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
-  createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
+  createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
@@ -648,6 +648,29 @@ const taskReorderV6: Capability = {
   },
 };
 
+// ── 프로젝트 행 재정렬(#541 수동 정렬) — 그룹 내 드래그가 화면 순서(형제 프로젝트 id 배열)를 저장. task_reorder_v6 동형. ──
+const projectReorderV6: Capability = {
+  name: "project_reorder_v6",
+  title: "프로젝트 순서 변경(v6)",
+  description: "프로젝트 행의 표시 순서를 주어진 id 배열 순서대로 저장한다(sort 를 1,2,… 로 재부여). 보드 그룹 내 드래그 재정렬용.",
+  scope: "memory",
+  input: { ids: z.array(z.number().int().positive()).min(2).max(1000) },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects-reorder"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const ids = Array.isArray(b.ids) ? b.ids.map((x) => parseId(x)) : [];
+        if (ids.length < 2) throw new HttpError(400, "ids 는 2개 이상이어야 합니다");
+        return { ids };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return await reorderProjects(input.ids, writeCtx);
+  },
+};
+
 // ── 작업 삭제 — task/subtask 삭제(삭제+감사 스냅샷 → #/trash 복원). 하위·태그·체크리스트·의존성은 FK CASCADE 정리. ──
 //  소유권 게이트는 task_update_v6 와 동형(인증 사용자=가능). REST-only. status 전용 엔드포인트와 경로 충돌 없음(/delete 접미).
 const taskDeleteV6: Capability = {
@@ -721,5 +744,5 @@ const projectLinkProjectV6: Capability = {
 export const projectV6Capabilities: Capability[] = [
   projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
-  projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, taskDeleteV6, boardFieldsV6,
+  projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];
