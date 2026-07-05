@@ -3715,3 +3715,16 @@ body[data-route="projects2-board"] main { max-width: none; padding-left: 16px; p
 .pjv-ov-bar-seg.prog { background: var(--blue, #f59e0b); }
 .pjv-ov-bar-seg.done { background: var(--mint, #22c55e); }
 .pjv-ov-bar-seg.empty { flex: 1; background: transparent; }
+
+/* ── #541 후속 — 리스트 카테고리(도메인) 소유 UI: 사이드바 배지·리스트 폼 셀렉트·상세 상속표시 ── */
+.pjv-side-cat { flex: none; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; margin-left: 4px;
+  background: color-mix(in srgb, var(--accent, #5b6cff) 14%, transparent); color: var(--accent, #5b6cff); }
+.pjv-side-cat.none { background: transparent; color: var(--muted-3); font-weight: 500; border: 1px dashed var(--line); }
+.pjv-side-navitem.active .pjv-side-cat { background: color-mix(in srgb, var(--accent, #5b6cff) 24%, transparent); }
+.pjv-cat-select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 14px; color: var(--ink); }
+.field-hint { font-size: 11.5px; color: var(--muted-2); margin-top: 5px; }
+.ps-cat-inherit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ps-cat-chip { font-size: 12.5px; font-weight: 600; padding: 2px 9px; border-radius: 7px; background: var(--bg-tint); border: 1px solid var(--line); color: var(--ink); }
+.ps-cat-none { font-size: 12.5px; color: var(--muted-3); }
+.ps-cat-inherit-hint { font-size: 11.5px; color: var(--muted-2); }

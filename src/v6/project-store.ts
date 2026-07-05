@@ -73,14 +73,15 @@ export interface ProjectFilter { space?: string; categoryId?: number; status?: s
 export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectRow[]> {
   const params: unknown[] = [];
   let join = "";
-  // 카테고리/스페이스 필터 = project_category 조인. categoryId 우선, 없으면 space 로 카테고리 조인.
+  // 카테고리/스페이스 필터 = 소속 리스트의 카테고리 상속(#541 후속 — project_category 대체). 프로젝트→리스트→카테고리.
+  //  categoryId 우선, 없으면 space 로 카테고리 조인. list_id NULL(미분류) 프로젝트는 카테고리가 없어 자연히 제외.
   if (filter.categoryId != null) {
     params.push(filter.categoryId);
-    join = `JOIN project_category pc ON pc.project_id=p.id AND pc.category_id=$${params.length}`;
+    join = `JOIN project_list plc ON plc.id=p.list_id AND plc.category_id=$${params.length}`;
   } else if (filter.space) {
     params.push(filter.space);
-    join = `JOIN project_category pc ON pc.project_id=p.id
-            JOIN category c ON c.id=pc.category_id AND c.space=$${params.length}`;
+    join = `JOIN project_list plc ON plc.id=p.list_id
+            JOIN category c ON c.id=plc.category_id AND c.space=$${params.length}`;
   }
   const wh: string[] = [`p.level='project'`];
   if (filter.status) { params.push(filter.status); wh.push(`p.status=$${params.length}`); }
@@ -178,11 +179,12 @@ export async function getProject(id: number): Promise<ProjectDetail | undefined>
     subtasks: subtaskRows.filter((s) => s.parent_id === t.id).map(withValues),
   }));
 
-  // 카테고리(project_category JOIN category) — 사업/제품/시스템 탐색.
+  // 카테고리(도메인) — 소속 리스트에서 상속(#541 후속 — 프로젝트 단위 project_category 대체). 리스트 미지정/미분류면 0건.
+  //  AGENTS.md 도메인 줄·지식추천·상세 표시가 이 필드를 소비 → 리스트 카테고리만 바꾸면 자동 반영.
   const categories = await q(itemsPool,
-    `SELECT pc.category_id, c.space, c.key, c.name
-     FROM project_category pc JOIN category c ON c.id=pc.category_id
-     WHERE pc.project_id=$1 ORDER BY c.space, c.key`, [id]);
+    `SELECT pl.category_id, c.space, c.key, c.name
+     FROM project p JOIN project_list pl ON pl.id=p.list_id JOIN category c ON c.id=pl.category_id
+     WHERE p.id=$1`, [id]);
 
   // 필요/산출 지식(project_knowledge JOIN knowledge) — relation 으로 분리.
   const kRows = await q(itemsPool,
@@ -604,17 +606,46 @@ export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: 
 }
 
 // ── 정션: 카테고리/지식 연결 ──────────────────────────────────────────────
-export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<void> {
-  await itemsPool.query(
-    `INSERT INTO project_category(project_id, category_id, added_at)
-     VALUES($1,$2,now()) ON CONFLICT (project_id, category_id) DO NOTHING`,
-    [projectId, categoryId]);
-  await auditProject(String(projectId), "link_category", null, { category_id: categoryId }, ctx);
+//  카테고리(도메인)는 이제 **소속 리스트가 소유**(#541 후속) — 프로젝트 단위 매핑을 리스트 category_id 로 대체.
+//  아래 project 카테고리 툴들은 하위호환을 위해 **프로젝트가 속한 리스트의 카테고리**를 설정한다(형제 프로젝트 공유).
+//  프로젝트가 리스트에 없으면(미분류) no-op — 먼저 리스트에 넣어야 카테고리를 이을 수 있다.
+//  반환: { applied, listId, changed } — applied=리스트가 있어 반영 가능했는지(호출자 응답 정직성),
+//   changed=실제 값이 바뀌었는지(형제 AGENTS.md 재생성 트리거 판단), listId=영향받은 리스트(형제 열거용).
+export async function setListCategoryForProject(projectId: number, categoryId: number | null, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+  const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
+    `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
+  const listId = row?.list_id ?? null;
+  if (listId == null) return { applied: false, listId: null, changed: false }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op
+  const before = row?.category_id ?? null;
+  const next = categoryId != null && Number(categoryId) > 0 ? Number(categoryId) : null;
+  if (before === next) return { applied: true, listId, changed: false }; // 무변경 — 허위 audit 방지
+  await itemsPool.query(`UPDATE project_list SET category_id=$2, updated_at=now() WHERE id=$1`, [listId, next]);
+  await auditOrgContent("project_list", String(listId), "set_category", { category_id: before }, { category_id: next }, ctx);
+  return { applied: true, listId, changed: true };
+}
+export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+  return setListCategoryForProject(projectId, categoryId, ctx);
 }
 
-export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<void> {
-  await itemsPool.query(`DELETE FROM project_category WHERE project_id=$1 AND category_id=$2`, [projectId, categoryId]);
-  await auditProject(String(projectId), "unlink_category", { category_id: categoryId }, null, ctx);
+export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+  // 해제 — 현재 리스트 카테고리가 그 값일 때만 NULL 로(다른 값이면 무시, 오삭제·허위 audit 방지).
+  const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
+    `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
+  const listId = row?.list_id ?? null;
+  if (listId == null || row?.category_id == null || Number(row.category_id) !== Number(categoryId)) return { applied: listId != null, listId, changed: false };
+  return setListCategoryForProject(projectId, null, ctx);
+}
+
+// 리스트에 속한 프로젝트(level='project') id — 리스트 카테고리 변경 시 형제 전부의 AGENTS.md 재생성 대상 열거(#541 후속 F4).
+export async function projectIdsInList(listId: number): Promise<number[]> {
+  if (!Number.isInteger(Number(listId)) || Number(listId) <= 0) return [];
+  const rows = await q(itemsPool, `SELECT id FROM project WHERE list_id=$1 AND level='project'`, [listId]);
+  return rows.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0);
+}
+// 프로젝트의 소속 리스트 id(미분류면 null) — 카테고리 변경 후 형제 AGENTS.md 재생성 스코프 해소용.
+export async function listIdOfProject(projectId: number): Promise<number | null> {
+  const row: { list_id: number | null } | undefined = await one(itemsPool, `SELECT list_id FROM project WHERE id=$1`, [projectId]);
+  return row?.list_id ?? null;
 }
 
 export async function linkProjectKnowledge(projectId: number, name: string, relation: string, ctx?: WriteCtx): Promise<void> {
@@ -641,19 +672,14 @@ export async function setProjectRepos(projectId: number, repos: string[], ctx?: 
   return clean;
 }
 
-// ── 카테고리(project_category, n:n) — 전체 교체 셋(웹 생성 모달·세부설정 멀티선택). 단건 link/unlink 와 공존. ──
+// ── 카테고리 설정 — 이제 **소속 리스트의 카테고리**를 정한다(#541 후속). 카테고리는 리스트 소유·프로젝트 상속(단일). ──
+//  하위호환: categoryIds 배열을 받지만 첫 항목만 사용(리스트는 0~1개 카테고리). 빈 배열=해제. 반환=적용된 카테고리 배열(0~1).
 export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<number[]> {
-  const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 50);
-  const beforeRows = await q(itemsPool, `SELECT category_id FROM project_category WHERE project_id=$1`, [projectId]);
-  const before = beforeRows.map((r) => Number(r.category_id));
-  await itemsPool.query(`DELETE FROM project_category WHERE project_id=$1`, [projectId]);
-  for (const cid of clean) {
-    await itemsPool.query(
-      `INSERT INTO project_category(project_id, category_id, added_at) VALUES($1,$2,now()) ON CONFLICT (project_id, category_id) DO NOTHING`,
-      [projectId, cid]);
-  }
-  await auditProject(String(projectId), "set_categories", { category_ids: before }, { category_ids: clean }, ctx);
-  return clean;
+  const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
+  const catId = clean.length ? clean[0] : null;
+  const res = await setListCategoryForProject(projectId, catId, ctx);
+  // 리스트 없는(미분류) 프로젝트엔 반영 못 함 → 빈 배열로 정직하게 응답(catId 를 되돌려 성공을 가장하지 않음).
+  return res.applied && catId != null ? [catId] : [];
 }
 
 export async function unlinkProjectKnowledge(projectId: number, name: string, relation: string, ctx?: WriteCtx): Promise<void> {
@@ -696,7 +722,10 @@ export async function recommendKnowledgeForProject(
   const project = await getProjectRow(projectId);
   if (!project) throw new Error(`프로젝트 #${projectId} 없음`);
   const text = [project.name, project.description].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
-  const catRows = await q(itemsPool, `SELECT category_id FROM project_category WHERE project_id=$1`, [projectId]);
+  // 카테고리 신호 = 소속 리스트에서 상속(#541 후속 — project_category 대체). 리스트 미지정/미분류면 카테고리 신호 없음.
+  const catRows = await q(itemsPool,
+    `SELECT pl.category_id FROM project p JOIN project_list pl ON pl.id=p.list_id
+      WHERE p.id=$1 AND pl.category_id IS NOT NULL`, [projectId]);
   const categoryIds = catRows.map((r) => Number(r.category_id)).filter((n) => Number.isInteger(n) && n > 0);
   const linkedRows = await q(itemsPool, `SELECT name FROM project_knowledge WHERE project_id=$1`, [projectId]);
   const exclude = linkedRows.map((r) => r.name);

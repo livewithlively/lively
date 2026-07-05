@@ -478,6 +478,12 @@ export async function initV6Schema(): Promise<string> {
     ALTER TABLE project_list ADD COLUMN IF NOT EXISTS external_instance TEXT;
     ALTER TABLE project_list ADD COLUMN IF NOT EXISTS external_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS project_list_external_uidx ON project_list(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
+    -- 리스트↔카테고리(도메인) 소유(N:1) — 카테고리는 분류 SoT, 리스트가 카테고리를 이고 소속 프로젝트가 상속(프로젝트 단위
+    --  project_category 를 대체). NULL=미분류. ON DELETE SET NULL(카테고리 삭제해도 리스트·프로젝트 보존). 상속 조회는
+    --  project→project_list.category_id→category (구 project_category JOIN 을 리포인트). 기존 project_category 데이터 이관은
+    --  별도 백필 스크립트(scripts/…)가 리스트 다수결로 채운다 — 이 컬럼은 그때까지 NULL(신규 리스트는 UI 피커로 지정).
+    ALTER TABLE project_list ADD COLUMN IF NOT EXISTS category_id INT REFERENCES category(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS project_list_category_idx ON project_list(category_id) WHERE category_id IS NOT NULL;
   `);
 
   // ── 6f) project_view — 리스트/폴더 뷰(#541: ClickUp View 이관 + 우리 커스텀 뷰·컬럼 저장). ──

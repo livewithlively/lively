@@ -793,7 +793,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             const key = 'L' + list.id;
             const grp = groupByList.get(list.id);
             const active = sel === key;
-            const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), draggable: 'true' }, pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }), el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
+            // 카테고리(도메인) 배지(#541 후속) — 이 리스트가 어느 카테고리에 배정됐는지, 안 됐으면 '미분류' 를 명시.
+            const cat = list.category;
+            const catBadge = el('span', { class: 'pjv-side-cat' + (cat ? ' pjv-side-cat-' + cat.space : ' none'),
+                title: cat ? ('카테고리(도메인): ' + (cat.name || cat.key)) : '카테고리 미분류 — 리스트 설정에서 지정',
+                text: cat ? (cat.name || cat.key) : '미분류' });
+            const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), draggable: 'true' }, pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }), catBadge, el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
             if (depth > 1)
                 it.style.paddingLeft = `${8 + depth * 14}px`; // 중첩 폴더(#541) — sub 기본 들여쓰기 위에 깊이만큼 추가
             const go = (e) => { e.stopPropagation(); selectArea(key); };
@@ -1484,6 +1489,46 @@ const PJV_LIST_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', 
 //  새 프로젝트 모달의 분류(영역) 피커가 인라인으로 영역을 만들고 곧장 선택하는 데 쓴다(#337).
 // 리스트 설정 아이콘 후보(이모지) — 색 체크글리프 대신 리스트마다 이모지 지정(#475 Color & Icon).
 const PJV_LIST_ICONS = ['📁', '📗', '📘', '📙', '💎', '⚙️', '🚀', '🧭', '🧱', '🗂️', '📊', '🔒', '💡', '🎯', '🧪'];
+// 리스트 카테고리(도메인) 단일 선택 필드(#541 후속) — 카테고리는 리스트 소유, 소속 프로젝트가 상속. space 별 그룹 드롭다운.
+function pjvListCategoryField(currentId) {
+    const cur = currentId != null && Number(currentId) > 0 ? Number(currentId) : null;
+    const selectEl = el('select', { class: 'pjv-cat-select', disabled: 'disabled' }); // 옵션 로드 전 잠금(오클리어 방지)
+    selectEl.append(el('option', { value: '', text: '불러오는 중…' }));
+    let loaded = false;
+    (async () => {
+        let cats = [];
+        try {
+            cats = await api('/api/ui/categories').then((d) => (d && d.categories) || []);
+        }
+        catch (_) { /* 실패 시 loaded=false 유지 → 저장이 현재값 보존 */
+            return;
+        }
+        selectEl.replaceChildren(el('option', { value: '', text: '미분류 (카테고리 없음)' }));
+        const bySpace = {};
+        for (const c of cats)
+            (bySpace[c.space] = bySpace[c.space] || []).push(c);
+        for (const sp of ['business', 'product', 'system']) {
+            const list = bySpace[sp];
+            if (!list || !list.length)
+                continue;
+            const og = el('optgroup', { label: SPACE_LABEL[sp] || sp });
+            for (const c of list) {
+                const o = el('option', { value: String(c.id), text: c.name || c.key });
+                if (cur === Number(c.id))
+                    o.selected = true;
+                og.append(o);
+            }
+            selectEl.append(og);
+        }
+        selectEl.disabled = false;
+        loaded = true;
+    })();
+    const row = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '카테고리 (도메인)' }), selectEl, el('div', { class: 'field-hint', text: '이 리스트의 프로젝트가 이 카테고리(도메인)를 물려받아요. 카테고리는 관리탭 ▸ 분류 체계에서 만들어요.' }));
+    // getSelected: 옵션 로드 전/실패면 undefined → 저장 body 에서 category_id 를 아예 빼 현재값 보존(오클리어 방지 F5).
+    //  로드 후엔 선택값(빈 문자열=미분류=null). 호출부는 undefined 를 '무변경'으로 다뤄야 한다.
+    return { row, getSelected: () => { if (!loaded)
+            return undefined; const v = selectEl.value; return v ? Number(v) : null; } };
+}
 function openListForm(reload, list, opts) {
     opts = opts || {};
     const editing = !!list;
@@ -1531,6 +1576,8 @@ function openListForm(reload, list, opts) {
         e.preventDefault();
         toggleVis();
     } });
+    // 카테고리(도메인) 소유(#541 후속) — 리스트가 카테고리를 이고 소속 프로젝트가 상속(프로젝트 단위 지정 폐지).
+    const catField = pjvListCategoryField(editing ? (list.category_id ?? null) : (opts.categoryId ?? null));
     // 멤버 — 생성뿐 아니라 수정 때도 편집(만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
     const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
     const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
@@ -1539,6 +1586,7 @@ function openListForm(reload, list, opts) {
         el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '아이콘' }), iconRow),
+        catField.row,
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '참여 멤버' }), picker.box),
         el('div', { class: 'field', style: 'margin-top:12px' }, visRow),
     ];
@@ -1558,12 +1606,12 @@ function openListForm(reload, list, opts) {
         saveBtn.disabled = true;
         try {
             if (editing) {
-                await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, visibility }) });
+                await api('/api/ui/v6/project-lists/' + list.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, visibility, category_id: catField.getSelected() }) });
                 await api('/api/ui/v6/project-lists/' + list.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { icon: icon || null } }) }).catch(() => { });
                 await pjvSaveListMembers(list.id, picker.getSelected());
             }
             else {
-                const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker.getSelected() }) });
+                const res = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null, members: picker.getSelected(), category_id: catField.getSelected() }) });
                 const created = (res && res.list) || null;
                 if (created && created.id) {
                     if (visibility !== 'open')
@@ -4206,8 +4254,7 @@ function openProjectV2Form(reload, prefill) {
         descIn.value = prefill.description;
     const growDesc = () => { descIn.style.height = 'auto'; descIn.style.height = Math.min(Math.max(descIn.scrollHeight, 132), Math.round((window.innerHeight || 800) * 0.5)) + 'px'; };
     descIn.addEventListener('input', growDesc);
-    const listPick = listPicker(prefill.listId); // 분류(폴더) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337)
-    const catField = compactPicker('카테고리', (onChange) => categoryPicker(prefill.categoryIds || [], { showRecents: true, onChange }), { emptyText: '선택 안 함' });
+    const listPick = listPicker(prefill.listId); // 분류(리스트) — 한 목록/상태 뷰에서 만들 때도 여기서 정해 미분류 방지(#337). 카테고리는 이 리스트에서 상속(#541 후속).
     const repoField = compactPicker('관련 레포', (onChange) => repoPicker(prefill.repos || [], { defaultOne: true, onChange }), { emptyText: '선택 안 함' });
     const memberField = compactPicker('팀원', (onChange) => memberPicker(prefill.memberIds || [], { includeMe: true, onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 });
     // 선행 프로젝트에서 이어받는 '연결된 지식'(#519/C) — 후속 프로젝트를 인라인 생성할 때 선행의 연결 지식을 프리필로 보여주고
@@ -4246,7 +4293,7 @@ function openProjectV2Form(reload, prefill) {
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
     const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn, 
     // 태스크(선택) — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 각 태스크 아래로 하위 태스크까지 넣을 수 있음.
-    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리·레포·팀원은 비워둬도 돼요 — 나중에 프로젝트 안에서 언제든 추가·변경할 수 있어요.' }), catField.row, repoField.row, memberField.row, knRow)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리(도메인)는 소속 리스트에서 물려받아요. 레포·팀원은 비워둬도 되고 나중에 언제든 바꿀 수 있어요.' }), repoField.row, memberField.row, knRow)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
     const go = async () => {
         const name = nameIn.value.trim();
@@ -4282,10 +4329,7 @@ function openProjectV2Form(reload, prefill) {
                 if (Object.keys(patch).length)
                     await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => { });
             }
-            // 선택한 카테고리(사업/제품/시스템)·관련 레포를 생성 직후 연결.
-            const catIds = catField.getSelected();
-            if (np && np.id && catIds.length)
-                await api('/api/ui/v6/projects/' + np.id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: catIds }) }).catch(() => { });
+            // 관련 레포를 생성 직후 연결. (카테고리는 소속 리스트에서 상속 — 프로젝트 단위 지정 폐지 #541 후속.)
             const repoNames = repoField.getSelected();
             if (np && np.id && repoNames.length)
                 await api('/api/ui/v6/projects/' + np.id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoNames }) }).catch(() => { });
@@ -4320,11 +4364,6 @@ function openProjectV2Form(reload, prefill) {
                 for (const k of inheritKn)
                     await api('/api/ui/v6/projects/' + np.id + '/knowledge', { method: 'POST', body: JSON.stringify({ name: k.name, relation: 'required' }) }).catch(() => { });
             }
-            // 다음 생성 편의 — 이번에 고른 카테고리·레포를 '최근'으로 저장(카테고리는 원탭 칩, 레포는 디폴트 후보).
-            try {
-                localStorage.setItem('lively.newproj.recentCats', JSON.stringify(catField.getSelectedLabels().map((c) => ({ id: c.key, name: c.label }))));
-            }
-            catch (_) { /* */ }
             try {
                 localStorage.setItem('lively.newproj.recentRepos', JSON.stringify(repoNames));
             }
@@ -5935,7 +5974,11 @@ function openProjectSettings(id, p, reload, meId, base) {
             } }));
         return field;
     };
-    const catField = autoField('카테고리', (onChange) => categoryPicker(((p.categories) || []).map((c) => c.category_id), { onChange }), { emptyText: '선택 안 함' }, () => api(B + id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: catField.getSelected() }) }), '카테고리 저장됨');
+    // 카테고리(도메인)는 소속 리스트에서 상속(#541 후속) — 여기선 읽기전용 표시, 변경은 리스트 설정에서.
+    const inheritedCat = ((p.categories) || [])[0];
+    const catRow = el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '카테고리' }), el('div', { class: 'cf-summary ps-cat-inherit' }, inheritedCat
+        ? el('span', { class: 'ps-cat-chip', text: (inheritedCat.name || inheritedCat.key) })
+        : el('span', { class: 'ps-cat-none', text: '미분류' }), el('span', { class: 'ps-cat-inherit-hint', text: '소속 리스트에서 상속 — 리스트 설정에서 변경' })));
     const repoField = autoField('관련 레포', (onChange) => repoPicker((p.repos) || [], { onChange }), { emptyText: '선택 안 함' }, () => api(B + id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoField.getSelected() }) }), '관련 레포 저장됨');
     const memberField = autoField('팀원', (onChange) => memberPicker(((p.members) || []).map((m) => m.member_id), { onChange }), { emptyText: '나만 참여', avatars: true, maxChips: 6 }, () => api(B + id + '/members', { method: 'POST', body: JSON.stringify({ members: memberField.getSelected() }) }), '팀원 저장됨');
     // 어떤 경로로 닫히든(닫기·배경·Esc) dirty 면 상세 재렌더 — overlayBox 는 콜백이 없어 back 분리를 감지.
@@ -5947,7 +5990,7 @@ function openProjectSettings(id, p, reload, meId, base) {
         } });
         obs.observe(document.body, { childList: true });
     }
-    back.querySelector('.proj-settings').append(el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '분류 · 연결' }), el('p', { class: 'ps-block-hint', text: '바꾸면 바로 저장돼요. (이름·설명은 프로젝트 화면에서 제목/본문을 눌러 바로 고칠 수 있어요.)' }), el('div', { class: 'ps-meta' }, catField.row, repoField.row, memberField.row)), projectRulesBlock(id), 
+    back.querySelector('.proj-settings').append(el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '분류 · 연결' }), el('p', { class: 'ps-block-hint', text: '바꾸면 바로 저장돼요. (이름·설명은 프로젝트 화면에서 제목/본문을 눌러 바로 고칠 수 있어요.)' }), el('div', { class: 'ps-meta' }, catRow, repoField.row, memberField.row)), projectRulesBlock(id), 
     // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
     // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246. 상태 블록은 메타 패널 상태 필드로 일원화 — #246.)
     projectDangerBlock(id, p, meId, back));
