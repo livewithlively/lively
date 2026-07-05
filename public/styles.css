@@ -3801,10 +3801,10 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-doc-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
 .kn-doc-top .crumbs { flex: 1 1 auto; min-width: 0; }
 .kn-doc-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; }
-.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels {
+.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels, .kn-comments {
   max-width: 820px; margin-left: auto; margin-right: auto; }
 .kn-doc.full .kn-doc-title, .kn-doc.full .kn-doc-badges, .kn-doc.full .kn-props-slot,
-.kn-doc.full .kn-doc-hr, .kn-doc.full .kn-doc-body, .kn-doc.full .kn-doc-panels { max-width: none; }
+.kn-doc.full .kn-doc-hr, .kn-doc.full .kn-doc-body, .kn-doc.full .kn-doc-panels, .kn-doc.full .kn-comments { max-width: none; }
 .kn-doc-title { font-size: 32px; font-weight: 800; line-height: 1.25; letter-spacing: -0.8px; color: var(--ink); margin-top: 2px; margin-bottom: 10px; }
 .kn-doc-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .kn-doc-hr { border: none; border-top: 1px solid var(--line); margin-top: 16px; margin-bottom: 20px; }
@@ -3845,3 +3845,44 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-propopt-eye { border: none; background: none; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 5px; color: var(--ink-sub); }
 .kn-propopt-eye:hover { background: var(--bg-tint-2); }
 .kn-props-pop-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+
+/* 지식 댓글(#592) — 문서 하단 인라인. 프로젝트 코멘트 드로어와 톤 통일하되 문서 흐름에 담백하게. */
+.kn-comments { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); }
+.kn-comments-head { margin-bottom: 14px; }
+.kn-cmt-feed { display: flex; flex-direction: column; gap: 2px; }
+.kn-cmt-loading, .kn-cmt-empty { color: var(--muted-2); font-size: 13.5px; padding: 6px 2px 14px; }
+.kn-cmt-card { display: flex; gap: 10px; padding: 8px 0; }
+.kn-cmt-ava { flex: none; width: 28px; height: 28px; font-size: 12px; }
+.kn-cmt-body { flex: 1; min-width: 0; }
+.kn-cmt-meta { display: flex; align-items: baseline; gap: 8px; }
+.kn-cmt-name { font-weight: 650; font-size: 13.5px; color: var(--ink); }
+.kn-cmt-time { font-size: 12px; color: var(--muted-2); }
+.kn-cmt-text { font-size: 14px; line-height: 1.6; margin-top: 2px; word-break: break-word; }
+.kn-cmt-foot { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.kn-cmt-reacts { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; position: relative; }
+.kn-cmt-like, .kn-cmt-chip, .kn-cmt-addr, .kn-cmt-replybtn {
+  border: 1px solid var(--line); background: var(--bg); cursor: pointer; border-radius: 999px;
+  font-size: 12px; line-height: 1; padding: 4px 9px; color: var(--ink-sub); }
+.kn-cmt-like:hover, .kn-cmt-chip:hover, .kn-cmt-addr:hover, .kn-cmt-replybtn:hover { background: var(--bg-tint); }
+.kn-cmt-like.on, .kn-cmt-chip.mine { border-color: var(--blue); color: var(--blue); background: color-mix(in srgb, var(--blue) 8%, var(--bg)); }
+.kn-cmt-addr { padding: 4px 8px; }
+.kn-cmt-replybtn { border-color: transparent; color: var(--muted-2); }
+.kn-cmt-emojipop { position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 40; display: flex; gap: 2px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; box-shadow: 0 6px 24px rgba(21,35,59,.14); }
+.kn-cmt-emojiopt { border: none; background: none; cursor: pointer; font-size: 17px; line-height: 1; padding: 4px 5px; border-radius: 7px; }
+.kn-cmt-emojiopt:hover { background: var(--bg-tint); }
+.kn-cmt-thread { margin: 0 0 6px 38px; padding-left: 12px; border-left: 2px solid var(--line); }
+.kn-cmt-reply { padding: 6px 0; }
+.kn-cmt-replybox { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
+.kn-cmt-composer { display: flex; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.kn-cmt-composer-in { flex: 1; min-width: 0; }
+.kn-cmt-composer-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+.kn-cmt-input { width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; font: inherit; font-size: 14px; line-height: 1.5; color: var(--ink); background: var(--bg); }
+.kn-cmt-input:focus { outline: none; border-color: var(--blue); }
+.kn-cmt-input-sm { padding: 6px 10px; font-size: 13px; }
+.kn-cmt-send { flex: none; border: 1px solid var(--blue); background: var(--blue); color: #fff; cursor: pointer;
+  border-radius: 8px; font-size: 13px; font-weight: 600; padding: 7px 16px; }
+.kn-cmt-send:hover { filter: brightness(1.05); }
+.kn-cmt-send:disabled { opacity: .5; cursor: default; }
+@media (max-width: 820px) { .kn-cmt-thread { margin-left: 14px; } }

@@ -2,7 +2,7 @@
 //  지식 칩·라벨·상세 패널 헬퍼(knowledge.ts 에서 이관). 목록(knowledge.ts)·문서 페이지가 공유하고,
 //  다음 단계의 피크 패널/카테고리 엔트리 뷰도 같은 함수를 재사용한다.
 //  순환 import 금지: 이 모듈은 core/learn 만 import 한다(knowledge.ts → knowledge-doc.ts 단방향).
-import { LIFECYCLE_LABEL, absTime, api, el, errorNote, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
+import { LIFECYCLE_LABEL, absTime, api, el, errorNote, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 
 // ── 라벨 사전(지식 공용) — knowledge.ts 에서 이관(#592). ──
@@ -634,9 +634,161 @@ function openKnowledgeMoveTo(k, reload) {
   })();
 }
 
+// ── 지식 댓글(#592) — 문서 하단 인라인 섹션. 서버는 task_comment 동형(knowledge_comment). ──
+//  프로젝트 코멘트(드로어)와 달리 문서 흐름 안에 인라인으로: 1단계 스레드(답글은 카드 아래 펼침),
+//  👍/이모지 반응, Enter 전송(Shift+Enter 줄바꿈, IME 조합 확정 Enter 가드 #505). 미로그인/미지원은 graceful.
+const KN_REACT_EMOJIS = ['👍', '❤️', '😄', '🎉', '👀', '🙏'];
+
+function knCommentsSection(name: string) {
+  const box = el('div', { class: 'kn-comments' });
+  const head = el('div', { class: 'sec-label kn-comments-head', text: '댓글' });
+  const feedBox = el('div', { class: 'kn-cmt-feed' }, el('div', { class: 'kn-cmt-loading', text: '불러오는 중…' }));
+  let feed: any[] = [];
+  const openThreads = new Set<number>();   // 펼쳐진 최상위 댓글 id
+  const meName = (state.me && ((state.me as any).display_name || state.me.userId)) || '나';
+
+  const repliesOf = (pid) => feed.filter((f) => f.reply_to != null && Number(f.reply_to) === Number(pid));
+  const topLevel = () => feed.filter((f) => f.reply_to == null);
+
+  const react = async (c, emoji) => {
+    try {
+      const d = await api('/api/ui/knowledge-comments/' + c.id + '/reactions', { method: 'POST', body: JSON.stringify({ emoji }) });
+      c.reactions = (d && d.reactions) || [];
+      paint();
+    } catch (e) { toast('반응 실패 — ' + e.message, true); }
+  };
+
+  // 반응 줄 — 👍 좋아요 + 그 외 이모지 칩 + [☺] 미니 팝오버.
+  function reactRow(c) {
+    const like = (c.reactions || []).filter((r) => r.emoji === '👍')[0];
+    const likeBtn = el('button', { class: 'kn-cmt-like' + (like && like.mine ? ' on' : ''), type: 'button', title: '좋아요',
+      text: like ? '👍 ' + like.count : '👍' });
+    likeBtn.onclick = () => react(c, '👍');
+    const chips = (c.reactions || []).filter((r) => r.emoji !== '👍').map((r) => {
+      const ch = el('button', { class: 'kn-cmt-chip' + (r.mine ? ' mine' : ''), type: 'button', text: r.emoji + ' ' + r.count });
+      ch.onclick = () => react(c, r.emoji); return ch;
+    });
+    const add = el('button', { class: 'kn-cmt-addr', type: 'button', title: '반응 추가', text: '☺' });
+    add.onclick = () => {
+      const pop = el('div', { class: 'kn-cmt-emojipop' });
+      const closePop = () => { pop.remove(); document.removeEventListener('click', onDoc, true); };
+      const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== add) closePop(); };
+      KN_REACT_EMOJIS.forEach((em) => {
+        const eb = el('button', { class: 'kn-cmt-emojiopt', type: 'button', text: em });
+        eb.onclick = () => { closePop(); react(c, em); }; pop.append(eb);
+      });
+      add.parentElement && add.parentElement.append(pop);
+      setTimeout(() => document.addEventListener('click', onDoc, true), 0);
+    };
+    return el('span', { class: 'kn-cmt-reacts' }, likeBtn, ...chips, add);
+  }
+
+  // 댓글 카드 — isReply 면 들여쓰기. 최상위엔 답글 토글.
+  function card(c, isReply) {
+    const who = c.display_name || c.actor || '?';
+    const foot = el('div', { class: 'kn-cmt-foot' }, reactRow(c));
+    if (!isReply) {
+      const reps = repliesOf(c.id);
+      const replyBtn = el('button', { class: 'kn-cmt-replybtn', type: 'button',
+        text: reps.length ? (openThreads.has(c.id) ? '답글 접기' : reps.length + '개의 답글') : '답글' });
+      replyBtn.onclick = () => {
+        if (reps.length && !openThreads.has(c.id)) openThreads.add(c.id);
+        else if (reps.length && openThreads.has(c.id)) openThreads.delete(c.id);
+        else openThreads.add(c.id);   // 답글 없으면 작성칸만 펼침
+        paint();
+        if (openThreads.has(c.id)) setTimeout(() => { const t = feedBox.querySelector('[data-reply-for="' + c.id + '"] textarea') as HTMLTextAreaElement; if (t) t.focus(); }, 0);
+      };
+      foot.append(replyBtn);
+    }
+    const kids: any[] = [
+      el('div', { class: 'kn-cmt-meta' },
+        el('span', { class: 'kn-cmt-name', text: who }),
+        el('span', { class: 'kn-cmt-time', title: c.ts ? absTime(c.ts) : '', text: c.ts ? relTime(c.ts) : '' })),
+      el('div', { class: 'kn-cmt-text md-rendered' }, renderMarkdown(c.body || '')),
+      foot,
+    ];
+    return el('div', { class: 'kn-cmt-card' + (isReply ? ' kn-cmt-reply' : '') },
+      personFace(c.actor || who, 'kn-cmt-ava', who),
+      el('div', { class: 'kn-cmt-body' }, ...kids));
+  }
+
+  // 답글 작성칸(스레드 펼침 시) — parent_id 로 전송.
+  function replyComposer(pid) {
+    const wrap = el('div', { class: 'kn-cmt-replybox', 'data-reply-for': String(pid) });
+    if (!hasMemoryScope()) return wrap;
+    const ta = el('textarea', { class: 'kn-cmt-input kn-cmt-input-sm', placeholder: '답글…', rows: '1' }) as HTMLTextAreaElement;
+    const send = el('button', { class: 'kn-cmt-send', type: 'button', text: '답글' });
+    const go = async () => {
+      const text = ta.value.trim(); if (!text) return;
+      send.disabled = true; ta.disabled = true;
+      try {
+        const d = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/comments',
+          { method: 'POST', body: JSON.stringify({ text, parent_id: pid }) });
+        feed = (d && d.feed) || []; openThreads.add(pid); paint();
+      } catch (e) { toast('답글 실패 — ' + e.message, true); send.disabled = false; ta.disabled = false; }
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !(e as any).isComposing && (e as any).keyCode !== 229) { e.preventDefault(); go(); }
+    });
+    send.onclick = go;
+    wrap.append(ta, send);
+    return wrap;
+  }
+
+  function paint() {
+    head.textContent = '댓글' + (topLevel().length ? ' ' + topLevel().length : '');
+    feedBox.replaceChildren();
+    const tops = topLevel().slice().sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+    if (!tops.length) { feedBox.append(el('div', { class: 'kn-cmt-empty', text: '아직 댓글이 없어요.' })); return; }
+    for (const c of tops) {
+      feedBox.append(card(c, false));
+      if (openThreads.has(c.id)) {
+        const reps = repliesOf(c.id).slice().sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        feedBox.append(el('div', { class: 'kn-cmt-thread' }, ...reps.map((r) => card(r, true)), replyComposer(c.id)));
+      }
+    }
+  }
+
+  // 최상위 작성칸.
+  const composer = el('div', { class: 'kn-cmt-composer' });
+  if (hasMemoryScope()) {
+    const ta = el('textarea', { class: 'kn-cmt-input', placeholder: '댓글을 입력하세요…  (Enter 전송 · Shift+Enter 줄바꿈)', rows: '1' }) as HTMLTextAreaElement;
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(Math.max(ta.scrollHeight, 38), 200) + 'px'; };
+    ta.addEventListener('input', grow);
+    const send = el('button', { class: 'kn-cmt-send', type: 'button', text: '댓글' });
+    const go = async () => {
+      const text = ta.value.trim(); if (!text) return;
+      send.disabled = true; ta.disabled = true;
+      try {
+        const d = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/comments',
+          { method: 'POST', body: JSON.stringify({ text }) });
+        feed = (d && d.feed) || []; ta.value = ''; grow(); paint();
+      } catch (e) { toast('전송 실패 — ' + e.message, true); }
+      send.disabled = false; ta.disabled = false; ta.focus();
+    };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !(e as any).isComposing && (e as any).keyCode !== 229) { e.preventDefault(); go(); }
+    });
+    send.onclick = go;
+    composer.append(personFace((state.me && state.me.userId) || 'me', 'kn-cmt-ava', meName),
+      el('div', { class: 'kn-cmt-composer-in' }, ta, el('div', { class: 'kn-cmt-composer-foot' }, send)));
+  }
+
+  box.append(head, feedBox, composer);
+  (async () => {
+    try {
+      const d = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/comments');
+      feed = (d && d.feed) || []; paint();
+    } catch (e) {
+      feedBox.replaceChildren(el('div', { class: 'kn-cmt-empty', text: '댓글을 불러오지 못했습니다.' }));
+    }
+  })();
+  return box;
+}
+
 // ════════════════════════════════════════════
 // #592 문서 캔버스 — buildKnowledgeDetail(container, name, opts). 문서 렌더 단일 소스.
-//  opts.mode: 'page'(#/k 전체 페이지) | 'peek'(우측 슬라이드 오버 — 다음 단계) | 'inline'(카테고리 엔트리 — 다음 단계).
+//  opts.mode: 'page'(#/k 전체 페이지) | 'peek'(우측 슬라이드 오버) | 'inline'(카테고리 엔트리).
 //  구조(§3 문서 페이지): 브레드크럼+액션 → h1 제목 → 속성 블록 → hr → 본문(820px 중앙, ⤢ 전폭) → 하위 패널들.
 // ════════════════════════════════════════════
 async function buildKnowledgeDetail(container, name, opts?) {
@@ -782,6 +934,7 @@ async function buildKnowledgeDetail(container, name, opts?) {
     el('hr', { class: 'kn-doc-hr' }),
     body,
     panels,
+    knCommentsSection(k.name),   // #592 문서 하단 댓글(인라인)
   ].filter(Boolean);
   container.replaceChildren(...parts);
 
