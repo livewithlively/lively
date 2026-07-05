@@ -3070,9 +3070,15 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* 툴바(프로젝트·폴더·필터·… / 내 할당만·Closed)와 아래 본문 사이 여백 — 붙어 보이던 문제 해소, 모든 뷰 일관(#473 후속). */
 .pjv-listboard .card-head { margin-bottom: 20px; }
 /* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
-.pjv-side-wrap { display: grid; grid-template-columns: 208px minmax(0, 1fr); margin-top: 0; }
+/* #541 — 사이드바 폭은 CSS 변수(--pjv-side-w). 경계 드래그로 조절·localStorage 저장. */
+.pjv-side-wrap { display: grid; grid-template-columns: var(--pjv-side-w, 208px) minmax(0, 1fr); margin-top: 0; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
-.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
+.pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); position: relative; }
+/* 사이드바 폭 조절 핸들(#541) — 오른쪽 경계 위에 얹는 얇은 col-resize 존. */
+.pjv-side-resize { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 4; }
+.pjv-side-resize::after { content: ''; position: absolute; top: 0; left: 3px; width: 2px; height: 100%; background: transparent; transition: background .12s; }
+.pjv-side-resize:hover::after, body.pjv-side-resizing .pjv-side-resize::after { background: var(--accent, #5b6cff); }
+body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 /* top=72 는 상단 고정 topbar(64px)를 비켜 사이드바가 그 밑에 깔리지 않게(#504). */
 .pjv-side-nav-inner { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 2px;
   /* #541 — 사이드바 독립 스크롤: 항목이 화면보다 길어도 본문 끝까지 안 내려가고 자체 스크롤 */
@@ -3782,3 +3788,26 @@ body[data-route="projects2-board"] main { max-width: none; padding-left: 16px; p
 
 /* ── #541 그룹 내 수동 재정렬 삽입선 ── */
 .pjv-proj-insert-marker { height: 0; border-top: 2px solid var(--accent, #5b6cff); margin: -1px 0; pointer-events: none; }
+
+/* ── #541 개요(Overview) 뷰 — 폴더/스페이스 진입 기본. 하위 폴더·리스트 요약 카드. ── */
+.pjv-overview { padding: 4px 2px 24px; }
+.pjv-ov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 6px 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.pjv-ov-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.pjv-ov-kind { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; flex: none; }
+.pjv-ov-name { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-ov-stats { display: inline-flex; gap: 6px; flex: none; }
+.pjv-ov-stat { font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px; }
+.pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 9px; }
+.pjv-ov-card:hover { border-color: var(--accent, #5b6cff); box-shadow: 0 3px 12px rgba(21,35,59,.08); }
+.pjv-ov-card:active { transform: translateY(1px); }
+.pjv-ov-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pjv-ov-card-name { font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.pjv-ov-card-sub { font-size: 10.5px; font-weight: 700; letter-spacing: .03em; color: var(--muted-2); flex: none; }
+.pjv-ov-card-count { font-size: 12px; color: var(--ink-sub); }
+.pjv-ov-bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--bg-tint); }
+.pjv-ov-bar-seg { display: block; height: 100%; }
+.pjv-ov-bar-seg.todo { background: var(--muted-3, #94a3b8); }
+.pjv-ov-bar-seg.prog { background: var(--blue, #f59e0b); }
+.pjv-ov-bar-seg.done { background: var(--mint, #22c55e); }
+.pjv-ov-bar-seg.empty { flex: 1; background: transparent; }
