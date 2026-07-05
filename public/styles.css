@@ -3074,7 +3074,9 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
 .pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); }
 /* top=72 는 상단 고정 topbar(64px)를 비켜 사이드바가 그 밑에 깔리지 않게(#504). */
-.pjv-side-nav-inner { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-nav-inner { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 2px;
+  /* #541 — 사이드바 독립 스크롤: 항목이 화면보다 길어도 본문 끝까지 안 내려가고 자체 스크롤 */
+  max-height: calc(100vh - 88px); overflow-y: auto; overscroll-behavior: contain; }
 .pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
 .pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
