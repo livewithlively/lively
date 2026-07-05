@@ -8,6 +8,8 @@ export interface BackfillOpts {
   since?: string; // ISO8601 — 증분 백필 (생략 시 전체)
   /** 미러 원장 스냅샷(커넥터별 형태) — 증분 델타가 '이미 아는 것'과 대조해 변경분만 수집하게 한다(notion #586). */
   ledger?: unknown;
+  /** 이전 run 의 귀속 실패(ext id) — 커서는 전진했고 이 항목들만 강제 재수집(부분 성공 시맨틱, notion #586). */
+  retryIds?: string[];
 }
 
 export interface Connector {

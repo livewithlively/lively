@@ -54,15 +54,21 @@ async function runGenericSync(system: string): Promise<boolean> {
   const incremental = !fullFlag && Number.isFinite(prevMs) && prevMs > 0;
   // since 는 epsilon 만큼 당겨 경계 아이템을 재수집(멱등 upsert 라 중복 무해, 유실만 방지).
   const sinceMs = incremental ? prevMs - CURSOR_EPSILON_MS : undefined;
-  let sinceOpt = sinceMs !== undefined ? { since: new Date(sinceMs).toISOString() } as { since: string; ledger?: unknown } : undefined;
-  // #586 notion 델타 증분 — 미러 원장(last_edited·부모·제목)을 커넥터에 넘겨 '진짜 변경분'만 수집하게 한다.
+  let sinceOpt: { since?: string; ledger?: unknown; retryIds?: string[] } | undefined
+    = sinceMs !== undefined ? { since: new Date(sinceMs).toISOString() } : undefined;
+  // #586 notion 원장 — 증분(델타)·full(가속 full: 미변경 스킵+관측) 양쪽에 전달. 이전 run 의 귀속 실패
+  //  목록(retry_ids)도 함께 — 커서가 전진했어도 그 항목들은 강제 재수집(부분 성공 시맨틱).
   //  로드 실패는 비치명(원장 없이도 전체 트래버스로 안전 동작 — 손실 방향 아님).
-  if (system === "notion" && sinceOpt) {
+  const prevRetry: string[] = Array.isArray((cursor as Record<string, unknown> | null)?.retry_ids)
+    ? ((cursor as Record<string, unknown>).retry_ids as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  if (system === "notion") {
     try {
       const ledger = await loadNotionLedger(itemsPool);
-      if (ledger.byId.size) sinceOpt = { ...sinceOpt, ledger };
-      logger.info({ entries: ledger.byId.size, dataSources: ledger.dsToDb.size }, "notion 원장 로드(델타 증분 기준)");
+      sinceOpt = { ...(sinceOpt ?? {}), ...(ledger.byId.size ? { ledger } : {}), ...(prevRetry.length ? { retryIds: prevRetry } : {}) };
+      logger.info({ entries: ledger.byId.size, dataSources: ledger.dsToDb.size, retryCarried: prevRetry.length }, "notion 원장 로드(델타/가속 full 기준)");
     } catch (err) {
+      if (prevRetry.length) sinceOpt = { ...(sinceOpt ?? {}), retryIds: prevRetry };
       logger.warn({ err: (err as Error)?.message ?? String(err) }, "notion 원장 로드 실패 — 전체 트래버스로 진행(안전 폴백)");
     }
   }
@@ -96,6 +102,7 @@ async function runGenericSync(system: string): Promise<boolean> {
   //   ② 미러 부분 실패 — ingestItems 가 best-effort 로 삼키므로(store.ts), DB 실측으로 대사:
   //      이번 run 에 적재된 행 수(last_synced_at ≥ runStart) < 방출 수 면 미러가 일부 실패한 것.
   //  어느 쪽이든 커서 동결(다음 run 재수집) + full 스윕 생략(살아있는 페이지 오탐 아카이브 방지).
+  let notionRetryIds: string[] | null = null; // notion 부분 성공 시맨틱 — null=해당 없음, []=청산, [ids]=재시도 예약
   if (system === "notion") {
     const stats = getNotionRunStats();
     let mirrorShortfall = 0;
@@ -106,32 +113,64 @@ async function runGenericSync(system: string): Promise<boolean> {
           [runStartIso]);
         mirrorShortfall = Math.max(0, stats.emitted - Number((m.rows[0] as { n: number } | undefined)?.n ?? 0));
       }
+      // 가속 full 관측 갱신 — 원장 일치로 스킵(미방출)한 항목의 last_synced_at 을 올린다(스윕 오탐 방지).
+      //  mirrorShortfall 계산 **후**(방출 대사를 부풀리지 않게), 스윕 **전**.
+      if (stats?.observedIds?.length) {
+        for (let i = 0; i < stats.observedIds.length; i += 5000) {
+          await itemsPool.query(
+            `UPDATE knowledge SET last_synced_at = now() WHERE external_system='notion' AND external_id = ANY($1::text[])`,
+            [stats.observedIds.slice(i, i + 5000)]);
+        }
+        logger.info({ observed: stats.observedIds.length }, "가속 full — 미변경 관측 갱신(last_synced_at)");
+      }
       const links = await materializeNotionLinks(itemsPool);
       const reordered = await applyNotionChildrenOrder(itemsPool);
       let archived = 0;
       if (!incremental && stats && stats.failures === 0 && mirrorShortfall === 0) {
         archived = await sweepNotionArchived(itemsPool, runStartIso); // full + 완전 무실패에서만(오탐 아카이브 방지)
       }
-      logger.info({ system, links, reordered, archived, mirrorShortfall, stats }, "notion 후처리 완료(링크·순서·스윕)");
+      logger.info({ system, links, reordered, archived, mirrorShortfall,
+        stats: { ...stats, observedIds: stats?.observedIds?.length, retryIds: stats?.retryIds?.length } }, "notion 후처리 완료(링크·순서·스윕)");
     } catch (err) {
       logger.error({ err: (err as Error)?.message ?? String(err) }, "notion 후처리 실패 — 커서 동결(다음 run 재수집)");
       return true;
     }
     if ((stats && stats.failures > 0) || mirrorShortfall > 0) {
-      logger.error({ failures: stats?.failures ?? -1, mirrorShortfall, failedIds: (stats?.failedIds ?? []).slice(0, 20) },
-        "notion 부분 실패 — 커서 동결(적재분은 멱등 보존, 다음 run 이 실패분 재수집)");
-      return true;
+      // #586 부분 성공 시맨틱 — 실패가 **전부 귀속**(어느 항목인지 안다)이면 커서를 전진시키고 목록만 재시도.
+      //  all-or-nothing 동결은 '뭘 놓쳤는지 모르는' 실패(발견 실패·미러 대사 불일치)에만 남긴다 —
+      //  귀속된 실패는 창을 닫아도 유실이 아니다(다음 run 이 강제 재수집, 스윕은 어차피 무실패에서만).
+      const retryNow = stats ? [...new Set(stats.retryIds)] : [];
+      const attributable = stats != null && mirrorShortfall === 0 && stats.unattributed === 0
+        && retryNow.length > 0 && retryNow.length <= 5000;
+      if (!attributable) {
+        logger.error({ failures: stats?.failures ?? -1, mirrorShortfall, unattributed: stats?.unattributed ?? -1, failedIds: (stats?.failedIds ?? []).slice(0, 20) },
+          "notion 부분 실패(귀속 불가) — 커서 동결(적재분은 멱등 보존, 다음 run 이 실패분 재수집)");
+        return true;
+      }
+      notionRetryIds = retryNow;
+      logger.warn({ failures: stats!.failures, retry: retryNow.length },
+        "notion 부분 실패(전부 귀속) — 커서 전진 + 재시도 목록 기록(다음 run 이 해당 항목만 재수집)");
+    } else {
+      notionRetryIds = []; // 무실패 — 이전 재시도 목록 청산
     }
   }
 
   // 커서 전진 — 성공 후 max 관측시각이 이전보다 클 때만(시계 추측 금지: 0건/무진전이면 유지).
   //  항목 단위 미러 실패도 동결(#541) — 실패 항목 시각을 지나 전진하면 재폴링 창 밖 유실.
   const advance = mirrorFailures === 0 && maxMs > prevMs;
-  if (advance) await setConnectorState(system, instance, { max_updated_iso: new Date(maxMs).toISOString() });
+  const retryChanged = notionRetryIds != null
+    && (notionRetryIds.length !== prevRetry.length || notionRetryIds.some((x) => !prevRetry.includes(x)));
+  if (advance || retryChanged) {
+    await setConnectorState(system, instance, {
+      ...(advance ? { max_updated_iso: new Date(maxMs).toISOString() }
+        : (typeof prevIso === "string" && prevIso ? { max_updated_iso: prevIso } : {})),
+      ...(notionRetryIds != null ? { retry_ids: notionRetryIds } : {}),
+    });
+  }
   logger.info({
     system, mode: incremental ? "incremental" : "full",
     ingested, mirrorFailures, cursorIso: advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
-    cursorAdvanced: advance,
+    cursorAdvanced: advance, retryPending: notionRetryIds?.length ?? 0,
   }, "generic 싱크 완료");
   return mirrorFailures > 0;
 }

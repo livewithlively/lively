@@ -1125,6 +1125,10 @@ export interface NotionLedgerEntry {
   lifecycle: string;           // active | archived
   /** database 전용 — 저장된 data_sources 의 last_edited_time 최대값(스키마 변경 감지용) */
   dsEdited: string | null;
+  /** database 전용 — linked 뷰 등 행 조회 미지원(가속 full 에서 무의미한 query 400 왕복 생략) */
+  unsupported: boolean;
+  /** body 가 참조하는 다운로드 자산 파일명들 — 가속 full 의 스킵 판정 시 디스크 존재 검사(자산 자가치유) */
+  assets?: string[];
 }
 export interface NotionLedger {
   byId: Map<string, NotionLedgerEntry>;
@@ -1138,6 +1142,7 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
   const r = await db.query(
     `SELECT external_id, title, lifecycle, parent_external_id, last_synced_at,
             fields->'notion'->>'kind' AS kind,
+            fields->'notion'->>'unsupported' AS unsupported,
             COALESCE(raw->'page'->>'last_edited_time', raw->'database'->>'last_edited_time') AS last_edited,
             (SELECT max(ds->>'last_edited_time') FROM jsonb_array_elements(COALESCE(raw->'data_sources','[]'::jsonb)) AS ds) AS ds_edited,
             fields->'notion'->'data_source_ids' AS ds_ids
@@ -1154,10 +1159,23 @@ export async function loadNotionLedger(db: PgRunner): Promise<NotionLedger> {
       title: String(row.title ?? ""),
       lifecycle: String(row.lifecycle ?? "active"),
       dsEdited: row.ds_edited == null ? null : String(row.ds_edited),
+      unsupported: row.unsupported === "true",
     });
     if (Array.isArray(row.ds_ids)) {
       for (const ds of row.ds_ids as unknown[]) if (typeof ds === "string" && ds) dsToDb.set(ds, id);
     }
+  }
+  // body 가 참조하는 자산 파일명 — 가속 full 스킵 시 디스크 존재 검사용(없으면 그 페이지만 재수집해 자가치유).
+  const ar = await db.query(
+    `SELECT external_id, array_agg(DISTINCT m.f) AS files
+     FROM knowledge, LATERAL (
+       SELECT (regexp_matches(body_md, '/api/ui/notion-assets/([A-Za-z0-9._-]+)', 'g'))[1] AS f
+     ) m
+     WHERE external_system='notion' AND external_id IS NOT NULL AND body_md LIKE '%/api/ui/notion-assets/%'
+     GROUP BY external_id`);
+  for (const row of ar.rows as Array<{ external_id: string; files: string[] }>) {
+    const led = byId.get(String(row.external_id));
+    if (led && Array.isArray(row.files)) led.assets = row.files.map(String);
   }
   // 역링크 — 커넥터가 물질화한 링크만(본문에 실제 등장하는 참조 = 개명 시 재렌더 대상).
   const backlinks = new Map<string, string[]>();
