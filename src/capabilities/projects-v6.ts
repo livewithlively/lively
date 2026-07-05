@@ -10,6 +10,11 @@ import { ensureAgentsMd } from "../v6/agents-md.js";
 // 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
 //  폴더가 없으면(신규 생성 직후) ensureAgentsMd 내부에서 만든다. 비치명적(실패해도 본 작업은 성공).
 const regenAgents = (id: number) => ensureAgentsMd(id).catch((e) => { console.error("[regenAgents] fail id=" + id + ":", e); });
+// 리스트 카테고리 변경(#541 후속 F4) — 그 리스트의 모든 프로젝트가 카테고리를 상속하므로 형제 전부의 AGENTS.md 재생성. best-effort.
+const regenAgentsForList = async (listId: number | null) => {
+  if (listId == null) return;
+  try { for (const pid of await projectIdsInList(listId)) await regenAgents(pid); } catch (e) { console.error("[regenAgentsForList] fail list=" + listId + ":", e); }
+};
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
@@ -17,6 +22,7 @@ import {
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
   linkProjectEdge, unlinkProjectEdge, getProjectListRow,
+  projectIdsInList, listIdOfProject,
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -300,11 +306,11 @@ const projectSetReposV6: Capability = {
   },
 };
 
-// 카테고리 설정(단일-home 전체 교체) — 카테고리 id 배열이지만 프로젝트당 1개(0/1)만 유효(#290, project_category_single_uq). 생성 모달·세부설정. 단건 project_link_category_v6 와 공존.
+// 카테고리 설정 — 이제 **소속 리스트의 카테고리(도메인)**를 정한다(#541 후속). 카테고리는 리스트 소유·프로젝트 상속(단일).
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 속한 카테고리(사업/제품/시스템)를 설정한다 — 단일-home(프로젝트당 1개, 빈 배열=없음/general). 배열을 받되 첫 유효 1개만 적용. category_list 의 id 참조. 웹 전용.",
+  description: "프로젝트가 **속한 리스트의 카테고리(도메인, 사업/제품/시스템)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
   scope: "memory",
   input: { id: z.number().int().positive(), categoryIds: z.array(z.number().int().positive()).max(50) },
   expose: {
@@ -319,7 +325,7 @@ const projectSetCategoriesV6: Capability = {
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     const categoryIds = await setProjectCategories(input.id, input.categoryIds, writeCtx);
-    await regenAgents(input.id);
+    await regenAgentsForList(await listIdOfProject(input.id)); // 형제 전부 상속 반영(F4)
     return { categoryIds };
   },
 };
@@ -417,9 +423,9 @@ const projectLinkCategoryV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    if (input.unlink) { await unlinkProjectCategory(input.id, input.categoryId, writeCtx); await regenAgents(input.id); return { unlinked: true }; }
-    await linkProjectCategory(input.id, input.categoryId, writeCtx);
-    await regenAgents(input.id);
+    if (input.unlink) { const r = await unlinkProjectCategory(input.id, input.categoryId, writeCtx); await regenAgentsForList(r.listId); return { unlinked: true }; }
+    const r = await linkProjectCategory(input.id, input.categoryId, writeCtx);
+    await regenAgentsForList(r.listId); // 형제 전부 상속 반영(F4)
     return { linked: true };
   },
 };

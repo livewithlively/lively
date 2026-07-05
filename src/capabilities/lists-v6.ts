@@ -9,6 +9,12 @@ import {
   setProjectListMembers, setProjectListForProject, getProjectListRow, setProjectListSettings,
   getListClickupFields, reorderProjectLists,
 } from "../v6/list-store.js";
+import { projectIdsInList } from "../v6/project-store.js";
+import { ensureAgentsMd } from "../v6/agents-md.js";
+// 리스트 카테고리 변경(#541 후속 F4) — 그 리스트 모든 프로젝트가 상속하므로 AGENTS.md 재생성. best-effort·비차단.
+const regenAgentsForList = async (listId: number) => {
+  try { for (const pid of await projectIdsInList(listId)) await ensureAgentsMd(pid).catch(() => {}); } catch (_) { /* */ }
+};
 
 function parseId(v: unknown): number {
   const id = Number(v);
@@ -60,6 +66,7 @@ const projectListCreateV6: Capability = {
     name: z.string().min(1).max(120),
     color: z.string().max(32).nullable().optional(),
     members: z.array(z.string()).optional(),
+    category_id: z.number().int().positive().nullable().optional(),
   },
   expose: {
     mcp: true,
@@ -73,6 +80,7 @@ const projectListCreateV6: Capability = {
           name,
           color: parseColorOrNull(b.color),
           members: Array.isArray(b.members) ? b.members.map((x: unknown) => String(x)) : undefined,
+          category_id: b.category_id == null || b.category_id === "" ? null : Number(b.category_id),
         };
       } }],
   },
@@ -94,6 +102,7 @@ const projectListUpdateV6: Capability = {
     color: z.string().max(32).nullable().optional(),
     sort: z.number().int().optional(),
     visibility: z.enum(["open", "members"]).optional(),
+    category_id: z.number().int().positive().nullable().optional(),
   },
   expose: {
     mcp: true,
@@ -111,12 +120,16 @@ const projectListUpdateV6: Capability = {
         if ("sort" in b) patch.sort = Number(b.sort) || 0;
         // 공개범위(#475): 'members'=리스트 멤버만 열람, 그 외 값은 'open'(전원).
         if ("visibility" in b) patch.visibility = String(b.visibility) === "members" ? "members" : "open";
+        // 카테고리(도메인) 소유(#541 후속): null/빈값=미분류(해제), 양의 정수=설정. 소속 프로젝트가 상속.
+        if ("category_id" in b) patch.category_id = b.category_id == null || b.category_id === "" ? null : Number(b.category_id);
         return patch;
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const { id, ...patch } = input;
     const list = await updateProjectList(id, patch, writeCtxOf(user, ctx));
+    // 카테고리(도메인) 변경 시 이 리스트 모든 프로젝트의 AGENTS.md 재생성(상속 도메인 줄 갱신, F4).
+    if ("category_id" in patch) await regenAgentsForList(id);
     return { list };
   },
 };

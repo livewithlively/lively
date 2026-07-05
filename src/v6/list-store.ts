@@ -22,6 +22,8 @@ export interface ProjectListRow {
   project_count: number;     // 이 리스트에 속한 프로젝트(level='project') 수.
   external_system: string | null; // 커넥터 이관 좌표(#541 — clickup 등). NULL=네이티브. 프론트 CU 컬럼 게이트.
   external_id: string | null;
+  category_id: number | null;     // 소유 카테고리(도메인, N:1). NULL=미분류. 소속 프로젝트가 상속.
+  category: { id: number; space: string; key: string; name: string | null } | null; // 표시용(사이드바 배지·상속 소스).
 }
 
 const auditList = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
@@ -41,7 +43,8 @@ export async function listProjectLists(viewerVis?: string): Promise<ProjectListR
   return q(itemsPool,
     `SELECT pl.id, pl.name, pl.color, pl.sort, pl.created_by, pl.created_at, pl.updated_at,
        pl.folder_id, COALESCE(pl.visibility, 'open') AS visibility, COALESCE(pl.settings, '{}'::jsonb) AS settings,
-       pl.external_system, pl.external_id,
+       pl.external_system, pl.external_id, pl.category_id,
+       (SELECT jsonb_build_object('id', c.id, 'space', c.space, 'key', c.key, 'name', c.name) FROM category c WHERE c.id=pl.category_id) AS category,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', plm.member_id, 'display_name', om.display_name) ORDER BY plm.sort, plm.member_id)
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
@@ -70,14 +73,15 @@ export async function getProjectListRow(id: number): Promise<{ id: number; name:
 
 // ── 쓰기 ──────────────────────────────────────────────────────────────────
 export async function createProjectList(
-  input: { name: string; color?: string | null; members?: string[] },
+  input: { name: string; color?: string | null; members?: string[]; category_id?: number | null },
   ctx?: WriteCtx,
 ): Promise<ProjectListRow> {
-  // 신규 리스트는 맨 뒤로(기존 최대 sort + 1) — 생성 순서 보존, 사용자가 추후 재정렬 가능.
+  // 신규 리스트는 맨 뒤로(기존 최대 sort + 1) — 생성 순서 보존, 사용자가 추후 재정렬 가능. category_id=소유 도메인(상속 소스).
+  const catId = input.category_id != null && Number.isInteger(Number(input.category_id)) && Number(input.category_id) > 0 ? Number(input.category_id) : null;
   const row: { id: number } = await one(itemsPool,
-    `INSERT INTO project_list(name, color, sort, created_by, created_at, updated_at)
-     VALUES($1,$2,(SELECT COALESCE(MAX(sort),0)+1 FROM project_list),$3,now(),now()) RETURNING id`,
-    [input.name, input.color ?? null, ctx?.actor ?? null]);
+    `INSERT INTO project_list(name, color, sort, created_by, category_id, created_at, updated_at)
+     VALUES($1,$2,(SELECT COALESCE(MAX(sort),0)+1 FROM project_list),$3,$4,now(),now()) RETURNING id`,
+    [input.name, input.color ?? null, ctx?.actor ?? null, catId]);
   // 멤버 초기 등록(중복 제거, 정렬 보존).
   const seen = new Set<string>();
   let sort = 0;
@@ -98,7 +102,7 @@ export async function createProjectList(
 // 이름·색·정렬 수정 — 주어진 키만 변경(부재=무변경).
 export async function updateProjectList(
   id: number,
-  patch: Partial<{ name: string; color: string | null; sort: number; visibility: string }>,
+  patch: Partial<{ name: string; color: string | null; sort: number; visibility: string; category_id: number | null }>,
   ctx?: WriteCtx,
 ): Promise<ProjectListRow> {
   const before = await getProjectListRow(id);
@@ -110,6 +114,8 @@ export async function updateProjectList(
   if (patch.color !== undefined) set("color", patch.color);
   if (patch.sort !== undefined) set("sort", patch.sort);
   if (patch.visibility !== undefined) set("visibility", patch.visibility === "members" ? "members" : "open");
+  // category_id: null=미분류(해제), 양의 정수=소유 도메인 설정. (undefined=무변경)
+  if (patch.category_id !== undefined) set("category_id", patch.category_id != null && Number(patch.category_id) > 0 ? Number(patch.category_id) : null);
   if (sets.length) {
     sets.push("updated_at=now()");
     vals.push(id);
@@ -188,6 +194,8 @@ async function getListWithMembers(id: number): Promise<ProjectListRow | undefine
   return one(itemsPool,
     `SELECT pl.id, pl.name, pl.color, pl.sort, pl.created_by, pl.created_at, pl.updated_at,
        pl.folder_id, COALESCE(pl.visibility, 'open') AS visibility, COALESCE(pl.settings, '{}'::jsonb) AS settings,
+       pl.external_system, pl.external_id, pl.category_id,
+       (SELECT jsonb_build_object('id', c.id, 'space', c.space, 'key', c.key, 'name', c.name) FROM category c WHERE c.id=pl.category_id) AS category,
        COALESCE((SELECT jsonb_agg(jsonb_build_object('member_id', plm.member_id, 'display_name', om.display_name) ORDER BY plm.sort, plm.member_id)
          FROM project_list_member plm LEFT JOIN org_member om ON om.id=plm.member_id WHERE plm.list_id=pl.id), '[]'::jsonb) AS members,
        (SELECT count(*)::int FROM project p WHERE p.list_id=pl.id AND p.level='project'
