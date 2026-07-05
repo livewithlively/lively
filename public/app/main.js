@@ -2,6 +2,7 @@
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
+import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -28,6 +29,11 @@ function setActiveTab(name) {
 async function route() {
     teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
     endTour(); // 진행 중이던 온보딩 투어(#517) 오버레이도 함께 정리
+    // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
+    //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
+    if (consumeKnPeekNavGuard())
+        return;
+    dismissKnowledgePeek();
     if (!state.me) {
         showGate();
         return;

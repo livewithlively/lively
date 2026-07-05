@@ -86,6 +86,45 @@ function knTreeIcon(kind) {
     return kind === 'database' ? '🗄' : kind === 'db_row' ? '▪' : '📄';
 }
 // ════════════════════════════════════════════
+// #592 트리 데이터 세션 캐시 — 사이드바 카테고리 트리(knowledge.ts)·이동 피커·폴더 상세가 공유.
+//  authored 트리 스켈레톤(knowledge-tree?system=authored)은 세션 1회, 카테고리별 지식 rows 는 카테고리당 1회.
+//  폴더 생성/이동/삭제 등 트리 변형 후엔 knInvalidateTreeCaches() 로 무효화(다음 펼침에서 재적재).
+// ════════════════════════════════════════════
+let knAuthoredTreePromise = null;
+const knCatRowsCache = new Map();
+// 저작 지식 트리 스켈레톤(name/title/parent_name/sort/lifecycle/is_folder) — 폴더 자식 해소용. 실패 시 캐시 비움(재시도 가능).
+function knFetchAuthoredTree() {
+    if (!knAuthoredTreePromise) {
+        knAuthoredTreePromise = api('/api/ui/knowledge-tree?system=authored')
+            .then((r) => (r && r.entries) || [])
+            .catch((e) => { knAuthoredTreePromise = null; throw e; });
+    }
+    return knAuthoredTreePromise;
+}
+// 카테고리 지식 rows(폴더 포함, recalled 전용 — 지식탭과 동일 축) — 사이드바 펼침·이동 피커 공용.
+function knFetchCategoryRows(catId) {
+    const key = String(catId);
+    let p = knCatRowsCache.get(key);
+    if (!p) {
+        p = api('/api/ui/knowledge?' + new URLSearchParams({ category: key, limit: '200', orderBy: 'updated_at', injection: 'recalled' }))
+            .then((r) => (r && r.entries) || [])
+            .catch((e) => { knCatRowsCache.delete(key); throw e; });
+        knCatRowsCache.set(key, p);
+    }
+    return p;
+}
+function knInvalidateTreeCaches() { knAuthoredTreePromise = null; knCatRowsCache.clear(); }
+// 폴더 우선 → sort → 제목순 — 사이드바 트리·폴더 드릴다운 공용 정렬(§3).
+function knFolderFirstSort(a, b) {
+    const fa = a.is_folder ? 0 : 1, fb = b.is_folder ? 0 : 1;
+    if (fa !== fb)
+        return fa - fb;
+    const sa = Number(a.sort) || 0, sb = Number(b.sort) || 0;
+    if (sa !== sb)
+        return sa - sb;
+    return String(a.title || a.name).localeCompare(String(b.title || b.name));
+}
+// ════════════════════════════════════════════
 // #592 속성(메타데이터) 시스템 — 카탈로그(.design-592.md §1)와 노출 계산.
 //  전역 기본 노출 = 카탈로그 − knowledge_view_config.hidden_props.
 //  항목 최종 노출 = (전역 노출 ∪ props_ui.show) − props_ui.hide. 빈 값은 자동 생략(노션 동일).
@@ -573,17 +612,54 @@ function knSimilarItem(e) {
     return el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name), title: '의미 유사도(코사인) ' + pct + '%' }, el('span', { class: 'kn-link-rel kn-link-sim', text: pct + '%' }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
 }
 // 지식 삭제(휴지통) — 활성 목록·검색·주입에서 제거하되 감사 스냅샷으로 보존(#/trash 에서 복원). 연결은 cascade 정리.
-async function knDelete(name) {
+//  after(#592): 피크/인라인 모드의 후처리(패널 닫기+목록 새로고침) — 없으면 기존처럼 목록으로 이동.
+async function knDelete(name, after) {
     if (!confirm("'" + name + "' 지식을 삭제할까요?\n\n활성 목록·검색·주입에서 사라집니다. 연결된 카테고리·프로젝트·활동 링크는 함께 정리됩니다.\n휴지통(#/trash)에서 본체를 복원할 수 있습니다."))
         return;
     try {
         await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+        knInvalidateTreeCaches(); // 사이드바 트리/폴더 캐시에 죽은 행이 남지 않게(#592)
         toast('삭제했습니다 — 휴지통에서 복원할 수 있습니다');
-        location.hash = '#/knowledge';
+        if (after)
+            after();
+        else
+            location.hash = '#/knowledge';
     }
     catch (e) {
         toast('삭제 실패 — ' + e.message, true);
     }
+}
+// #592 '이동' 피커 — 같은 카테고리의 폴더 목록 + (최상위) → POST /api/ui/knowledge/:name/move.
+//  observed(외부 미러)는 호출부가 미노출(서버도 400 — 원본이 진실). 순환 등은 서버 가드 메시지를 그대로 보여준다.
+function openKnowledgeMoveTo(k, reload) {
+    const cats = (Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected');
+    const catId = cats.length ? cats[0].category_id : null;
+    const list = el('div', { class: 'list-box', style: 'max-height:320px; overflow:auto;' }, skeletonRows(2));
+    const back = overlayBox('이동 · ' + (k.title || k.name), el('p', { class: 'admin-hint', text: '옮길 폴더를 고르세요. (최상위)는 폴더 밖(트리 루트)으로 꺼냅니다.' }), list);
+    const pick = (parentName, label) => el('div', { class: 'row', role: 'button', tabindex: '0', style: 'cursor:pointer',
+        onclick: async () => {
+            try {
+                await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/move', { method: 'POST', body: JSON.stringify({ parent_name: parentName }) });
+                knInvalidateTreeCaches();
+                toast("'" + label + "'(으)로 이동했습니다");
+                back.remove();
+                reload();
+            }
+            catch (e) {
+                toast('이동 실패 — ' + e.message, true);
+            }
+        } }, el('div', { class: 'row-title', text: (parentName ? '📁 ' : '⌂ ') + label }));
+    (async () => {
+        let folders = [];
+        if (catId != null) {
+            try {
+                folders = (await knFetchCategoryRows(catId)).filter((r) => r.is_folder && r.name !== k.name);
+            }
+            catch (_) { /* 폴더 목록 실패 — (최상위)만 제공 */ }
+        }
+        folders.sort(knFolderFirstSort);
+        list.replaceChildren(pick(null, '(최상위)'), ...folders.map((fd) => pick(fd.name, fd.title || fd.name)));
+    })();
 }
 // ════════════════════════════════════════════
 // #592 문서 캔버스 — buildKnowledgeDetail(container, name, opts). 문서 렌더 단일 소스.
@@ -654,9 +730,15 @@ async function buildKnowledgeDetail(container, name, opts) {
                 }
             } });
         actions.append(pinBtn);
+        // #592 '이동' — 저작 지식만(observed 는 원본이 진실 — 서버도 400). 같은 카테고리 폴더/최상위로 트리 이동.
+        if (k.provenance !== 'observed') {
+            actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '이동',
+                title: '이 문서를 같은 카테고리의 폴더(또는 최상위)로 옮깁니다',
+                onclick: () => openKnowledgeMoveTo(k, reload) }));
+        }
     }
     actions.append(el('button', { class: 'btn btn-ghost btn-sm btn-danger', text: '삭제',
-        onclick: () => knDelete(k.name) }));
+        onclick: () => knDelete(k.name, opts && opts.onDeleted) }));
     const fullBtn = el('button', { class: 'btn btn-ghost btn-sm kn-doc-fullbtn', type: 'button',
         title: '전폭 토글 — 본문 폭 제한(820px)을 켜고 끕니다', 'aria-pressed': String(full), text: full ? '⤡' : '⤢' });
     fullBtn.onclick = async () => {
@@ -691,29 +773,37 @@ async function buildKnowledgeDetail(container, name, opts) {
     };
     propsSlot.replaceChildren(buildKnPropsBlock(k, hidden, { canEdit, onChanged: paintProps }));
     // 본문 — 렌더러가 <br>/블록을 직접 처리하므로 pre-wrap(.unit-body) 불필요 — 새 .kn-doc-md 클래스.
-    const rawText = k.body_md || '';
-    const rendered = rawText
-        ? el('div', { class: 'kn-doc-md md-rendered' }, renderMarkdown(rawText))
-        : el('div', { class: 'kn-doc-md kn-doc-md-empty', text: '(본문 없음)' });
-    const rawView = el('pre', { class: 'kn-doc-raw', text: rawText });
-    rawView.hidden = true;
-    let showingRaw = false;
-    const rawToggle = rawText
-        ? el('button', { class: 'btn btn-ghost btn-sm md-raw-toggle', text: '원문 보기',
-            onclick: () => {
-                showingRaw = !showingRaw;
-                rendered.hidden = showingRaw;
-                rawView.hidden = !showingRaw;
-                rawToggle.textContent = showingRaw ? '서식 보기' : '원문 보기';
-            } })
-        : null;
-    const body = el('div', { class: 'kn-doc-body' }, rendered, rawView, rawToggle ? el('div', { class: 'kn-doc-rawrow' }, rawToggle) : null);
+    //  폴더(is_folder, #592)는 본문 대신 자식 목록이 중심 — 원문 토글도 생략.
+    let body;
+    if (k.is_folder) {
+        body = el('div', { class: 'kn-doc-body' }, await knFolderChildrenBlock(k));
+    }
+    else {
+        const rawText = k.body_md || '';
+        const rendered = rawText
+            ? el('div', { class: 'kn-doc-md md-rendered' }, renderMarkdown(rawText))
+            : el('div', { class: 'kn-doc-md kn-doc-md-empty', text: '(본문 없음)' });
+        const rawView = el('pre', { class: 'kn-doc-raw', text: rawText });
+        rawView.hidden = true;
+        let showingRaw = false;
+        const rawToggle = rawText
+            ? el('button', { class: 'btn btn-ghost btn-sm md-raw-toggle', text: '원문 보기',
+                onclick: () => {
+                    showingRaw = !showingRaw;
+                    rendered.hidden = showingRaw;
+                    rawView.hidden = !showingRaw;
+                    rawToggle.textContent = showingRaw ? '서식 보기' : '원문 보기';
+                } })
+            : null;
+        body = el('div', { class: 'kn-doc-body' }, rendered, rawView, rawToggle ? el('div', { class: 'kn-doc-rawrow' }, rawToggle) : null);
+    }
     // 하위 패널들 — 전부 본문 아래(#592 §3): 하위 페이지 → 노션 속성(동적) → 연결 지식 → 연결 프로젝트 → 비슷한 지식.
+    //  폴더는 자식 목록을 본문 영역에 이미 크게 그렸으니 '하위 페이지' 패널은 중복이라 생략.
     const relatedBox = el('div', { class: 'kn-related', hidden: true });
-    const panels = el('div', { class: 'kn-doc-panels' }, knChildrenPanel(k), knNotionPropsPanel(k), knLinksPanel(k, reload), knProjectLinks(k.name), relatedBox);
+    const panels = el('div', { class: 'kn-doc-panels' }, k.is_folder ? null : knChildrenPanel(k), knNotionPropsPanel(k), knLinksPanel(k, reload), knProjectLinks(k.name), relatedBox);
     const parts = [
         el('div', { class: 'kn-doc-top' }, crumbs, actions),
-        el('h1', { class: 'kn-doc-title', text: k.title || k.name }),
+        el('h1', { class: 'kn-doc-title', text: (k.is_folder ? '📁 ' : '') + (k.title || k.name) }),
         badges.length ? el('div', { class: 'kn-doc-badges' }, ...badges) : null,
         propsSlot,
         el('hr', { class: 'kn-doc-hr' }),
@@ -734,4 +824,131 @@ async function buildKnowledgeDetail(container, name, opts) {
         catch (_) { /* 임베딩 off 등 → 숨김 유지 */ }
     })();
 }
-export { SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, SOURCE_KIND_LABEL, buildKnowledgeDetail, infoDot, knAuthorChip, knChildrenPanel, knInjectChip, knLinksPanel, knNotionPropsPanel, knProjectLinks, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openProjectChooser, openSourceDetail, };
+// 폴더 상세의 본문 대체 — 자식 목록(서버 children, sort 순)을 크게. 자식 폴더 아이콘은 authored 트리로 보강
+//  (children 응답엔 is_folder 가 없어서 — 실패 시 문서 아이콘 폴백, graceful).
+async function knFolderChildrenBlock(k) {
+    const children = Array.isArray(k.children) ? k.children : [];
+    if (!children.length) {
+        return el('div', { class: 'kn-doc-md kn-doc-md-empty',
+            text: '폴더가 비어 있습니다 — 문서 상세의 ‘이동’으로 이 폴더에 담을 수 있습니다.' });
+    }
+    let folderSet = new Set();
+    try {
+        folderSet = new Set((await knFetchAuthoredTree()).filter((t) => t.is_folder).map((t) => t.name));
+    }
+    catch (_) { /* 아이콘 보강 실패 — 📄 폴백 */ }
+    const rows = children.map((c) => el('a', {
+        class: 'kn-linkrow' + (c.lifecycle === 'archived' ? ' kn-row-archived' : ''),
+        href: '#/k/' + encodeURIComponent(c.name)
+    }, el('span', { class: 'kn-link-rel kn-link-child', text: folderSet.has(c.name) ? '📁' : knTreeIcon(c.notion_kind) }), el('span', { class: 'kn-linkrow-title', text: (c.title || c.name) + (c.lifecycle === 'archived' ? ' (보관됨)' : '') })));
+    return el('div', { class: 'kn-links kn-folder-children' }, el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '폴더 항목' }), el('span', { class: 'kn-sim-hint', text: (k.children_total || children.length) + '개' })), el('div', { class: 'kn-linkrows' }, ...rows));
+}
+// ════════════════════════════════════════════
+// #592 피크 패널 — 목록/테이블/사이드바 트리 항목 클릭 시 우측 슬라이드 오버(코멘트 드로어 패턴, 폭 min(860px,92vw)).
+//  내용 = buildKnowledgeDetail(mode:'peek') 단일 소스. ESC/배경 클릭/✕ 닫기.
+//  URL 동기화: 열 때 현 해시에 &peek=<name> 을 pushState — 뒤로가기=닫힘, peek 있는 URL 직접 진입=자동 오픈
+//  (renderKnowledgeSpace 진입부). 피크 개폐만의 히스토리 이동은 knPeekNavGuard 로 라우터(main.ts route)의
+//  본문 전체 재렌더를 1회 생략한다(스크롤·목록 상태 보존).
+// ════════════════════════════════════════════
+let knPeekCur = null; // { back, name, pushed, baseHash, onPop, onKey, onRefresh }
+let knPeekNavGuard = false;
+// 라우터가 hashchange 마다 소비 — true 면 이번 이동은 피크 개폐뿐(패널이 이미 동기화됨)이라 재렌더 생략.
+function consumeKnPeekNavGuard() { const v = knPeekNavGuard; knPeekNavGuard = false; return v; }
+// 현 해시에서 peek 파라미터만 추가/제거한 해시 문자열 — 경로·다른 필터 파라미터는 그대로.
+function knHashWithPeek(name) {
+    const h = location.hash.replace(/^#\/?/, '');
+    const qIdx = h.indexOf('?');
+    const path = qIdx >= 0 ? h.slice(0, qIdx) : h;
+    const p = new URLSearchParams(qIdx >= 0 ? h.slice(qIdx + 1) : '');
+    if (name)
+        p.set('peek', name);
+    else
+        p.delete('peek');
+    const qs = p.toString();
+    return '#/' + path + (qs ? '?' + qs : '');
+}
+// 히스토리 조작 없이 패널만 제거 — 라우트 전환(전체화면·다른 탭)·패널 교체 정리용. 열려 있지 않으면 no-op.
+function dismissKnowledgePeek() {
+    const cur = knPeekCur;
+    if (!cur)
+        return;
+    knPeekCur = null;
+    window.removeEventListener('popstate', cur.onPop);
+    document.removeEventListener('keydown', cur.onKey);
+    cur.back.classList.remove('open');
+    setTimeout(() => cur.back.remove(), 220);
+}
+// 피크 열기 — opts: { fromUrl?: true(URL 직접 진입 — pushState 생략), onRefresh?: 삭제 등 변경 후 뒤 목록 새로고침 }.
+function openKnowledgePeek(name, opts) {
+    dismissKnowledgePeek(); // 패널은 항상 1개 — 열려 있으면 교체
+    const fromUrl = !!(opts && opts.fromUrl);
+    const onRefresh = opts && opts.onRefresh;
+    const baseHash = knHashWithPeek(null); // 닫혔을 때로 돌아갈 기준 해시(push 전에 계산)
+    const body = el('div', { class: 'kn-peek-scroll' });
+    const fullBtn = el('button', { class: 'kn-peek-btn', type: 'button',
+        title: '이 문서를 전체 페이지로 엽니다', text: '⤢ 전체화면' });
+    const tabBtn = el('button', { class: 'kn-peek-btn', type: 'button',
+        title: '이 문서를 새 탭에서 엽니다', text: '↗ 새 탭' });
+    const xBtn = el('button', { class: 'kn-peek-btn kn-peek-x', type: 'button',
+        'aria-label': '닫기', title: '닫기 (Esc)', text: '✕' });
+    const panel = el('aside', { class: 'kn-peek', role: 'dialog', 'aria-label': '지식 미리보기' }, el('div', { class: 'kn-peek-head' }, fullBtn, tabBtn, xBtn), body);
+    const back = el('div', { class: 'kn-peek-backdrop' }, panel);
+    // 닫기 요청(✕/ESC/배경) — 우리가 push 한 엔트리면 back(뒤로가기와 같은 경로 — onPop 이 정리),
+    //  URL 직접 진입이면 이전 엔트리가 밖(외부/다른 페이지)일 수 있어 peek 파라미터만 제거(replaceState).
+    const requestClose = () => {
+        const cur = knPeekCur;
+        if (!cur || cur.back !== back)
+            return;
+        if (cur.pushed) {
+            history.back();
+            return;
+        }
+        history.replaceState(null, '', knHashWithPeek(null));
+        dismissKnowledgePeek();
+    };
+    // 뒤/앞으로가기 — peek 파라미터만의 변화면 패널만 개폐(가드로 라우터 재렌더 생략), 그 밖의 이동은 라우터에 맡긴다.
+    const onPop = () => {
+        const cur = knPeekCur;
+        if (!cur || cur.back !== back)
+            return;
+        if (knHashWithPeek(null) !== cur.baseHash) {
+            dismissKnowledgePeek();
+            return;
+        } // 필터/경로까지 변함 — route 가 재렌더
+        const h = location.hash.replace(/^#\/?/, '');
+        const qIdx = h.indexOf('?');
+        const nowPeek = new URLSearchParams(qIdx >= 0 ? h.slice(qIdx + 1) : '').get('peek');
+        if (!nowPeek) {
+            knPeekNavGuard = true;
+            dismissKnowledgePeek();
+            return;
+        } // 뒤로가기 = 닫힘
+        if (nowPeek !== cur.name) { // 다른 피크로 이동 — 내용 교체
+            knPeekNavGuard = true;
+            openKnowledgePeek(nowPeek, { fromUrl: true, onRefresh: cur.onRefresh });
+        }
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape')
+        requestClose(); };
+    back.addEventListener('mousedown', (ev) => { if (ev.target === back)
+        requestClose(); });
+    xBtn.onclick = requestClose;
+    fullBtn.onclick = () => {
+        dismissKnowledgePeek(); // 히스토리는 그대로(피크 URL 유지) — #/k 에서 뒤로가면 피크 상태로 복원
+        location.hash = '#/k/' + encodeURIComponent(name);
+    };
+    tabBtn.onclick = () => { window.open(location.href.split('#')[0] + '#/k/' + encodeURIComponent(name)); };
+    document.body.append(back);
+    requestAnimationFrame(() => back.classList.add('open'));
+    knPeekCur = { back, name, pushed: false, baseHash, onPop, onKey, onRefresh };
+    if (!fromUrl) {
+        history.pushState(null, '', knHashWithPeek(name));
+        knPeekCur.pushed = true;
+    }
+    window.addEventListener('popstate', onPop);
+    document.addEventListener('keydown', onKey);
+    buildKnowledgeDetail(body, name, { mode: 'peek',
+        onDeleted: () => { requestClose(); if (onRefresh)
+            onRefresh(); } });
+}
+export { SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, SOURCE_KIND_LABEL, buildKnowledgeDetail, consumeKnPeekNavGuard, dismissKnowledgePeek, infoDot, knAuthorChip, knChildrenPanel, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knProjectLinks, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnowledgePeek, openProjectChooser, openSourceDetail, };
