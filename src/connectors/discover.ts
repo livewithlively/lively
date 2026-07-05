@@ -65,7 +65,8 @@ async function discoverNotion(): Promise<DiscoverResult> {
 
   options.sort((a, b) => (a.kind === "root_page" ? 0 : 1) - (b.kind === "root_page" ? 0 : 1) || a.label.localeCompare(b.label));
   return {
-    fields: { root_pages: options },
+    // root_pages(포함)·exclude_pages(제외) 둘 다 같은 '통합이 보는 항목' 목록에서 고른다(클릭업 include/exclude 관례와 동일).
+    fields: { root_pages: options, exclude_pages: options },
     note: options.length
       ? "통합에 공유된 항목입니다. 비워두면 공유된 전체가 싱크 범위입니다."
       : "목록이 비어 있습니다 — ① 노션에서 페이지 ⋯ ▸ 연결에 이 통합을 추가했는지 확인 ② 방금 연결했다면 노션 search 인덱싱 지연일 수 있으니 몇 분 뒤 다시 시도(그 사이엔 페이지 URL 을 직접 붙여넣어도 됩니다).",
