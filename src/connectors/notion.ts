@@ -54,6 +54,13 @@ export interface NotionRunStats {
   failures: number; failedIds: string[];
   /** 권한 경계(403/404) — 통합이 볼 수 없는 객체. 실패와 달리 커서를 동결하지 않는다(재시도 무의미·liveness 보호). */
   inaccessible: number; inaccessibleIds: string[];
+  /** 귀속 가능한 실패의 재시도 대상 ext id — 전부 귀속되면 run-sync 가 커서를 전진시키고 이 목록만 다음 run 이 재시도.
+   *  (all-or-nothing 동결의 대체: '뭘 놓쳤는지 아는' 실패는 창을 닫아도 유실이 아니다) */
+  retryIds: string[];
+  /** 귀속 불가 실패(발견 자체 실패 등) — 1건이라도 있으면 기존대로 커서 동결. */
+  unattributed: number;
+  /** 가속 full 에서 원장 일치로 스킵(미방출)했지만 관측한 항목 — run-sync 가 last_synced_at 을 일괄 갱신(스윕 오탐 방지). */
+  observedIds: string[];
   assets: number; assetFailures: number; requests: number;
 }
 let lastRunStats: NotionRunStats | null = null;
@@ -301,6 +308,11 @@ interface Traversal {
   sinceMs: number | undefined;
   /** 델타 증분(#586) — 미러 원장 스냅샷. 있으면 discoverSeeds 대신 search 델타로 변경분만 수집. */
   ledger: NotionLedger | null;
+  /** 가속 full(#586) — full 트래버스에서 원장 일치 페이지의 무거운 수집(블록/댓글/속성)을 생략하되 관측은 기록.
+   *  발견은 여전히 BFS(트래버스가 진실) — search 의존이 아니라 full 의 완전성 보장이 유지된다. */
+  fastFull: boolean;
+  /** 원장 기준 부모→자식(ext id) — 가속 full 에서 미변경 페이지의 자식을 요청 0으로 큐잉(행은 DB 나열이 담당). */
+  ledgerChildren: Map<string, string[]>;
   /** 루트 모드 델타의 스코프 판정 메모(조상 체인 워크 결과 캐시 — 형제 후보 반복 워크 방지) */
   membership: Map<string, boolean>;
   /** 댓글 read capability 부재(403) 관측 — 이후 페이지는 댓글 호출 자체를 스킵(페이지당 1회 403 낭비 제거, #586). */
@@ -384,7 +396,8 @@ function discoverChildren(t: Traversal, node: PageNode): void {
       if (type === "child_page") {
         // 델타(#586): 원장이 같은 부모의 활성 자식으로 이미 아는 페이지는 노드 생성 자체를 생략(요청 0) —
         //  그 자식이 실제로 변경됐다면 search 델타가 별도 후보로 이미 큐잉했다(t.pages 에 존재 → 이 분기 미진입).
-        if (t.ledger && !t.pages.has(id)) {
+        //  가속 full 에선 생략 금지 — 모든 자식이 관측(last_synced_at)돼야 스윕이 오탐하지 않는다(1req 스킵 경로로 흡수).
+        if (t.ledger && !t.fastFull && !t.pages.has(id)) {
           const led = t.ledger.byId.get(id);
           if (led && led.kind !== "database" && led.lifecycle === "active" && led.parentExt === node.id) { order.push(id); continue; }
         }
@@ -394,7 +407,7 @@ function discoverChildren(t: Traversal, node: PageNode): void {
         if (t.ledger) child.forceChanged = true; // 신규/이동/복원 자식 — 원장 불일치로만 이 분기에 온다
         order.push(id);
       } else if (type === "child_database") {
-        if (t.ledger && !t.dbs.has(id)) {
+        if (t.ledger && !t.fastFull && !t.dbs.has(id)) {
           const led = t.ledger.byId.get(id);
           if (led && led.kind === "database" && led.lifecycle === "active" && led.parentExt === node.id) { order.push(id); continue; }
         }
@@ -437,6 +450,7 @@ async function hydrateProperties(t: Traversal, node: PageNode): Promise<void> {
       // 속성 하이드레이션 실패 = 25개 절단 상태 — 조용히 넘어가면 손실이므로 실패로 집계(커서 동결 → 다음 run 재시도).
       t.stats.failures++;
       t.stats.failedIds.push(`${page.id}:prop:${pname}`);
+      t.stats.retryIds.push(normalizeNotionId(String(page.id)));
       console.error(`[notion] 속성 하이드레이션 실패 ${page.id} '${pname}':`, (err as Error)?.message ?? err);
     }
   }
@@ -505,6 +519,7 @@ async function fetchComments(t: Traversal, node: PageNode): Promise<void> {
       }
       t.stats.failures++;
       t.stats.failedIds.push(`${node.id}:comments`);
+      t.stats.retryIds.push(node.id);
       console.error(`[notion] 댓글 수집 실패 ${node.id}:`, (err as Error)?.message ?? err);
       break;
     }
@@ -516,6 +531,35 @@ async function processPage(t: Traversal, node: PageNode): Promise<void> {
   try {
     if (!node.page) {
       node.page = (await notionFetch(t.cfg, `/pages/${node.id}`)) as NotionPage;
+    }
+    // 가속 full(#586) — 원장 일치(편집시각 동등·settled·활성·부모 불변·자산 실재) 페이지는 무거운 수집 생략.
+    //  방출은 안 하지만 '관측'으로 기록(run-sync 가 last_synced_at 일괄 갱신 → 스윕 오탐 방지),
+    //  자식은 원장으로 큐잉(행 제외 — DB 나열이 무료로 담당). 자산 파일이 디스크에 없으면 스킵하지 않고
+    //  전체 재수집 → 재발급 다운로드로 자가치유(과거 run 의 자산 실패 잔재 정리).
+    if (t.fastFull && node.forceChanged !== true && t.ledger) {
+      const led = t.ledger.byId.get(node.id);
+      const live = String(node.page.last_edited_time ?? "");
+      const settled = led?.syncedAt && led.lastEdited
+        ? Date.parse(led.syncedAt) - Date.parse(led.lastEdited) >= 60_000 : false;
+      const p = node.page.parent;
+      const curParent = node.parentOverride
+        ?? (p?.type === "page_id" && p.page_id ? normalizeNotionId(p.page_id)
+          : p?.type === "database_id" && p.database_id ? normalizeNotionId(p.database_id)
+          : p?.type === "data_source_id" && p.data_source_id ? dsOwnerDb(t, normalizeNotionId(p.data_source_id)) ?? null
+          : null);
+      const assetsOk = !led?.assets?.length
+        || led.assets.every((f) => { try { return fs.existsSync(path.join(t.cfg.assetDir, f)); } catch { return false; } });
+      if (led && led.lifecycle === "active" && led.lastEdited === live && settled
+          && (curParent == null || led.parentExt == null || curParent === led.parentExt) && assetsOk) {
+        node.changed = false;
+        t.stats.observedIds.push(node.id);
+        for (const childId of t.ledgerChildren.get(node.id) ?? []) {
+          const cl = t.ledger.byId.get(childId);
+          if (cl?.kind === "database") dbNode(t, childId);
+          else pageNode(t, childId);
+        }
+        return;
+      }
     }
     node.changed = node.forceChanged === true || isChanged(t, node.page.last_edited_time);
     if (!node.changed && t.ledger) {
@@ -555,6 +599,7 @@ async function processPage(t: Traversal, node: PageNode): Promise<void> {
     } else {
       t.stats.failures++;
       t.stats.failedIds.push(node.id);
+      t.stats.retryIds.push(node.id);
     }
     console.error(`[notion] 페이지 수집 실패 ${node.id} (${status ?? "?"}):`, (err as Error)?.message ?? err);
   }
@@ -571,8 +616,9 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
           node.dataSources.push(ds);
           t.dsToDb.set(normalizeNotionId(ref.id), node.id);
         } catch (err) {
-          t.stats.failures++; // 스키마 없이 적재하면 DB 노드가 절단 — 실패로 집계(커서 동결)
+          t.stats.failures++; // 스키마 없이 적재하면 DB 노드가 절단 — 실패로 집계(귀속 재시도)
           t.stats.failedIds.push(`${node.id}:ds:${ref.id}`);
+          t.stats.retryIds.push(node.id);
           console.error(`[notion] data_source 스키마 실패 ${ref.id}:`, (err as Error)?.message ?? err);
         }
         // 행 나열 — 전 행(page 객체), 생성순 정렬을 노션에 위임(created_time 은 분 단위 절사라 로컬 재정렬 시
@@ -602,6 +648,11 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
           node.rowIds.push(r.id);
         });
       }
+    } else if (t.ledger?.byId.get(node.id)?.unsupported) {
+      // 원장이 이미 linked 뷰(미지원)로 아는 DB — 무의미한 query 400 왕복 생략(가속 full/델타 공통).
+      node.unsupported = true;
+      t.stats.inaccessible++;
+      t.stats.inaccessibleIds.push(`${node.id}:linked-db`);
     } else {
       // data_sources 가 빈 DB — ① 구버전 API(2022-06-28) 강제 시 database 직접 query ② **linked database 뷰**
       //  (연결된 DB 보기)는 2025-09-03 에서 이 폴백이 400 invalid_request_url 로 거절된다(원본 query 는 원본
@@ -646,6 +697,7 @@ async function processDb(t: Traversal, node: DbNode): Promise<void> {
     } else {
       t.stats.failures++;
       t.stats.failedIds.push(node.id);
+      t.stats.retryIds.push(node.id);
     }
     console.error(`[notion] DB 수집 실패 ${node.id} (${status ?? "?"}):`, (err as Error)?.message ?? err);
   }
@@ -664,6 +716,7 @@ async function discoverSeeds(t: Traversal): Promise<void> {
           dbNode(t, normalizeNotionId(d.id)).db = d;
         } catch (err) {
           t.stats.failures++;
+          t.stats.unattributed++; // 발견 자체 실패 — 귀속 재시도 불가, 커서 동결 유지
           t.stats.failedIds.push(id);
           console.error(`[notion] 루트 ${id} 접근 실패(page/database 둘 다 아님):`, (err as Error)?.message ?? err);
         }
@@ -712,6 +765,7 @@ async function discoverSeeds(t: Traversal): Promise<void> {
     } catch {
       // DB 발견 자체가 실패 — 이대로 full 스윕하면 살아있는 DB·행 전부가 미관측→archived 오탐. 실패로 집계.
       t.stats.failures++;
+      t.stats.unattributed++; // 발견 자체 실패 — 스윕/증분 창 신뢰 불가, 커서 동결
       t.stats.failedIds.push("search:data_source");
       console.error("[notion] database 발견 search 실패:", (err as Error)?.message ?? err);
     }
@@ -768,6 +822,7 @@ async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> 
         //  → memo 없이 실패 집계(커서 동결), 다음 run 이 재판정.
         t.stats.failures++;
         t.stats.failedIds.push(`${id}:scope`);
+        t.stats.retryIds.push(id);
         return false;
       }
     }
@@ -1169,17 +1224,31 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   //  원장이 없으면(첫 run·미러 유실) 전체 트래버스로 안전 폴백. 루트 모드에서 원장 없는 증분도 전체
   //  트래버스(발견이 트래버스뿐이라 since 스킵 시 미변경 조상 아래 변경을 영영 못 봄 — 기존 시맨틱).
   const delta = Boolean(sinceRaw !== undefined && Number.isFinite(sinceRaw) && ledger?.byId.size);
+  // 가속 full(#586) — full(since 없음)이라도 원장이 있으면 미변경 페이지의 무거운 수집을 생략(관측은 기록).
+  //  발견은 BFS 그대로라 full 의 완전성(스윕 근거)이 유지된다 — 어니스트 스케일 실측 125분 → 수십 분 기대.
+  const fastFull = Boolean(!delta && ledger?.byId.size);
   const sinceMs = delta ? sinceRaw : (cfg.rootIds.length ? undefined : sinceRaw);
   if (cfg.rootIds.length && opts?.since && !delta) console.error("[notion] 루트 모드 — 원장 없음, 증분(since) 무시하고 전체 트래버스");
+  const ledgerChildren = new Map<string, string[]>();
+  if ((delta || fastFull) && ledger) {
+    for (const [cid, led] of ledger.byId) {
+      // 행(db_row)은 소유 DB 나열이 무료로 관측 — 원장 자식 큐잉에서 제외(행별 1req 낭비 방지).
+      if (!led.parentExt || led.lifecycle !== "active" || led.kind === "db_row") continue;
+      const arr = ledgerChildren.get(led.parentExt);
+      if (arr) arr.push(cid); else ledgerChildren.set(led.parentExt, [cid]);
+    }
+  }
   const t: Traversal = {
     cfg,
     sinceMs,
-    ledger: delta ? ledger : null,
+    ledger: delta || fastFull ? ledger : null,
+    fastFull,
+    ledgerChildren,
     membership: new Map(),
     commentsDenied: false,
     pages: new Map(), dbs: new Map(), dsToDb: new Map(), users: new Map(),
     assetJobs: new Map(),
-    stats: { pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], assets: 0, assetFailures: 0, requests: 0 },
+    stats: { pages: 0, databases: 0, emitted: 0, failures: 0, failedIds: [], inaccessible: 0, inaccessibleIds: [], retryIds: [], unattributed: 0, observedIds: [], assets: 0, assetFailures: 0, requests: 0 },
   };
   lastRunStats = t.stats;
 
@@ -1196,6 +1265,18 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
 
   if (delta) await discoverDelta(t, sinceRaw!);
   else await discoverSeeds(t);
+  if (fastFull) console.error(`[notion] 가속 full — 원장 ${ledger!.byId.size}건 대조(미변경은 1req 관측·자산 실재 검사)`);
+
+  // 이전 run 의 귀속 실패 재시도(#586) — 커서는 전진했지만 이 항목들은 미완(자산 등). 강제 재수집으로 자가치유.
+  const retrySeeds = [...new Set((opts?.retryIds ?? []).filter((rid) => typeof rid === "string" && rid.length === 36))];
+  for (const rid of retrySeeds) {
+    const led = ledger?.byId.get(rid);
+    if (led?.kind === "database") { dbNode(t, rid); continue; }
+    const n = pageNode(t, rid);
+    n.forceChanged = true;
+    if (led?.kind === "db_row") n.isDbRow = true;
+  }
+  if (retrySeeds.length) console.error(`[notion] 재시도 시딩 — 이전 run 실패 ${retrySeeds.length}건`);
 
   // BFS — 맵이 자라는 동안 반복(새 발견 노드 처리). 처리 표식으로 순환 없이 수렴.
   const donePages = new Set<string>();
@@ -1261,7 +1342,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     const parentExtId = node.parentOverride ?? (await dbParentExternalId(t, node.db));
     try { yield emitDb(t, node, parentExtId); }
     catch (err) {
-      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id);
+      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
       console.error(`[notion] DB 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
     }
   }
@@ -1271,7 +1352,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       const parentExtId = await parentExternalIdOf(t, node);
       yield emitPage(t, node, parentExtId);
     } catch (err) {
-      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id);
+      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
       console.error(`[notion] 페이지 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
     }
   }
@@ -1284,6 +1365,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     } catch (err) {
       t.stats.assetFailures += t.assetJobs.size;
       t.stats.failures += t.assetJobs.size;
+      for (const j of t.assetJobs.values()) { if (j.pageId) t.stats.retryIds.push(j.pageId); else t.stats.unattributed++; }
       console.error(`[notion] 자산 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
         + ` — 앱 디렉토리에서 'sudo chown -R $(whoami) data' 로 소유권을 서비스 유저로 바꾸면 다음 run 이 재수집합니다(커서 동결로 유실 없음)`);
       t.assetJobs.clear();
@@ -1296,6 +1378,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     } catch (err) {
       t.stats.assetFailures++;
       t.stats.failures++;
+      if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
       console.error(`[notion] 자산 다운로드 실패 ${job.file}:`, (err as Error)?.message ?? err);
     }
   }
