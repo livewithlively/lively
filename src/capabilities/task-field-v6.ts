@@ -27,6 +27,7 @@ const fieldCreateV6: Capability = {
     field_type: z.string().min(1),
     name: z.string().max(120).optional(),
     config: z.any().optional(),
+    list_id: z.number().int().positive().optional(), // #607/D: 이 필드를 특정 리스트 전용으로(없으면 전역)
   },
   expose: {
     mcp: true,
@@ -40,13 +41,14 @@ const fieldCreateV6: Capability = {
           field_type: ft,
           name: b.name != null ? String(b.name) : undefined,
           config: b.config ?? {},
+          list_id: b.list_id != null ? parseId(b.list_id) : undefined, // 리스트별 필드(#607/D)
         };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try {
-      return { field: await createField(input.projectId, { field_type: input.field_type, name: input.name ?? input.field_type, config: input.config }, writeCtx) };
+      return { field: await createField(input.projectId, { field_type: input.field_type, name: input.name ?? input.field_type, config: input.config, list_id: input.list_id ?? null }, writeCtx) };
     } catch (e: any) { throw new HttpError(400, e?.message ?? "필드 추가 실패"); }
   },
 };

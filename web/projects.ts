@@ -531,7 +531,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
 
     // ClickUp 리스트 컬럼(#541) — 선택 리스트에 이관 커스텀필드가 있으면 컬럼으로 병합(lazy fetch + 캐시).
     //  컬럼 id='cu:<external_id>'(공유 정의), 편집은 행별 내부 field id(cuIds)로 해소. 행 값은 field_values 에 프리필.
-    let effFields = fields;
+    // #607/D 리스트별 필드 — 선택 리스트의 전용 필드 + 전역 필드만. 폴더·전체 스코프(selList 없음)면 전역만.
+    let effFields = pjvFieldsForList(fields, selList ? selList.id : null);
     // 뷰 유래(view-driven) 기본숨김 컬럼 변수 리셋 — 다른 리스트/스코프로 이동 시 이전 리스트 뷰가 켠 폭 잔존 방지
     //  (사용자가 (+)패널로 명시로 켠 것(shown-set)은 유지).
     for (const c of PJV_STD_COLS.proj) {
@@ -576,7 +577,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
           p.field_values = p.field_values || {};
           for (const f of cu.fields || []) if (vals[f.key] !== undefined && p.field_values['cu:' + f.key] === undefined) p.field_values['cu:' + f.key] = vals[f.key];
         }
-        effFields = [...fields, ...cuCols];
+        effFields = [...effFields, ...cuCols]; // 리스트별 필터된 필드(#607/D) + ClickUp 이관 컬럼
       }
     }
 
@@ -646,7 +647,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     } else if (selFolder) {
       // 폴더/스페이스 뷰(#541) — 합집합 평탄 목록 대신 ClickUp 폴더 뷰처럼 **리스트별 접이식 그룹**.
       //  트리 순서(직속 리스트 → 하위 폴더 리스트) 유지, 각 그룹은 리스트 자체 커스텀 상태로 하위그룹(byStatus 시).
-      boardBox.append(pjvListColHead(effFields, anchorId, reload));
+      boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null)); // #607/D 리스트별 필드 추가
       const scoped = folderListsDeep(selFolder.id);
       let any = false;
       for (const l of scoped) {
@@ -663,7 +664,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
       pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort });
     } else {
-      boardBox.append(pjvListColHead(effFields, anchorId, reload));
+      boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null)); // #607/D 리스트별 필드 추가
       const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
       const savedCmp = pjvSavedSortCmp(); // 저장 뷰 정렬(#541) 우선
       // 정렬 우선순위: 컬럼 헤더 클릭(로컬) > 저장 뷰 정렬 > 뷰 기본(view_sorting) > 상태 rank + 수동/기본 순서.
@@ -992,7 +993,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
 }
 
 // 컬럼 헤더 한 줄(카드 상단) — pjvProjRow 와 같은 그리드. 첫 칸은 '프로젝트' 라벨, 나머지는 팀원/마감/우선/세션 + 커스텀 + (＋컬럼).
-function pjvListColHead(fields, anchorId, reload) {
+function pjvListColHead(fields, anchorId, reload, listId?) {
   const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' },
     el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()),
     pjvStdColHead('proj', 'team', '팀원'),
@@ -1003,7 +1004,7 @@ function pjvListColHead(fields, anchorId, reload) {
     pjvStdColHead('proj', 'priority', '우선순위'),
     pjvStdColHead('proj', 'sess', '내 세션'),
     ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)),
-    el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+    el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload, listId) : el('span', {})));
   headEl.style.gridTemplateColumns = pjvProjGridTemplate(fields);
   pjvApplyColOrder(headEl, 'proj', fields);                 // 열 순서 적용(#611)
   pjvWireColReorder(headEl, 'proj', fields || [], reload);  // 열 순서 드래그 재정렬(기본+커스텀, #611)
@@ -3230,7 +3231,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
       pjvStdColHead('proj', 'priority', '우선순위'),
       pjvStdColHead('proj', 'sess', '내 세션'),
       ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)),
-      el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload) : el('span', {})));
+      el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload, listId) : el('span', {}))); // #607/D 리스트별 필드 — 이 그룹의 리스트로 컬럼 추가
     head.style.gridTemplateColumns = pjvProjGridTemplate(fields);
     pjvApplyColOrder(head, 'proj', fields);                 // 열 순서 적용(#611)
     pjvWireColReorder(head, 'proj', fields || [], reload);  // 열 순서 드래그 재정렬(기본+커스텀, #611)
@@ -5955,6 +5956,12 @@ function pjvGridTemplate(fields) {
   return 'minmax(var(--pjv-name-min, 180px), 1fr) minmax(0, var(--pjv-w-assignee, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-priority, 112px))' + (extra ? ' ' + extra : '') + ' 34px';
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
+// 리스트별 커스텀 필드(#607/D) — 선택 리스트에서 보일 필드만: 그 리스트 전용(list_id===listId) + 전역(list_id 없음).
+//  listId 없으면(폴더·전체 스코프) 전역 필드만. 필드는 list_id 를 백엔드에서 함께 내려준다(getBoardFields).
+function pjvFieldsForList(fields, listId) {
+  if (!Array.isArray(fields)) return [];
+  return fields.filter((f) => f.list_id == null || String(f.list_id) === String(listId));
+}
 function pjvProjGridTemplate(fields) {
   // 제목 = minmax(제목최소, 1fr) — 그 이하로 안 줄고(#607), 컬럼이 적으면 1fr 로 남은 폭을 채운다. 최소 폭은 --pjv-name-min(기본 넉넉히).
   //  메타(팀원·마감·…·커스텀)는 고정 폭(pjvColTrackFor) — 좁아도 안 찌그러지고, 다 못 담으면 컨테이너가 가로 스크롤(#607).
@@ -6646,12 +6653,12 @@ function pjvOptionsBuilder(initial) {
 }
 
 // ── (+) 컬럼 추가 버튼 + Fields 패널(클릭업형: 검색 · 새로 만들기/기존 항목 탭 · 형식 목록 · 설정 폼) ──
-function pjvAddColumnButton(projectId, reload) {
-  const btn = el('button', { class: 'pjv-addcol-btn', type: 'button', title: '컬럼 추가', 'aria-label': '컬럼 추가' }, pjvPlusIcon());
-  btn.onclick = (e) => { e.stopPropagation(); pjvOpenFieldsPanel(btn, projectId, reload); };
+function pjvAddColumnButton(projectId, reload, listId?) {
+  const btn = el('button', { class: 'pjv-addcol-btn', type: 'button', title: listId ? '이 리스트에 컬럼 추가' : '컬럼 추가', 'aria-label': '컬럼 추가' }, pjvPlusIcon());
+  btn.onclick = (e) => { e.stopPropagation(); pjvOpenFieldsPanel(btn, projectId, reload, listId); };
   return btn;
 }
-function pjvOpenFieldsPanel(anchor, projectId, reload) {
+function pjvOpenFieldsPanel(anchor, projectId, reload, listId?) {
   const panel = el('div', { class: 'pjv-fields-panel' });
   const close = pjvPopover(anchor, panel);
   // 이 +버튼이 속한 표(카드)로 surface 판별 — 기본 컬럼 보임/숨김 토글(되살리기)용(#req).
@@ -6678,7 +6685,7 @@ function pjvOpenFieldsPanel(anchor, projectId, reload) {
         const row = el('button', { class: 'pjv-field-opt', type: 'button' },
           el('span', { class: 'pjv-field-opt-ic' }, pjvFieldIcon(f.key)),
           el('span', { class: 'pjv-field-opt-tx' }, el('span', { class: 'pjv-field-opt-name', text: f.label }), el('span', { class: 'pjv-field-opt-desc', text: f.desc })));
-        row.onclick = () => panel.replaceChildren(pjvFieldConfigForm(projectId, f, reload, close, () => showPicker('new')));
+        row.onclick = () => panel.replaceChildren(pjvFieldConfigForm(projectId, f, reload, close, () => showPicker('new'), listId));
         list.append(row);
       }
     };
@@ -6694,7 +6701,7 @@ function pjvOpenFieldsPanel(anchor, projectId, reload) {
         const row = el('button', { class: 'pjv-field-opt', type: 'button' },
           el('span', { class: 'pjv-field-opt-ic' }, pjvFieldIcon(c.field_type)),
           el('span', { class: 'pjv-field-opt-tx' }, el('span', { class: 'pjv-field-opt-name', text: c.name }), el('span', { class: 'pjv-field-opt-desc', text: meta ? meta.label : c.field_type })));
-        row.onclick = () => pjvCreateField(projectId, { field_type: c.field_type, name: c.name, config: c.config || {} }, reload, close);
+        row.onclick = () => pjvCreateField(projectId, { field_type: c.field_type, name: c.name, config: c.config || {}, list_id: listId || undefined }, reload, close); // #607/D 리스트별 필드
         list.append(row);
       }
     };
@@ -6705,7 +6712,7 @@ function pjvOpenFieldsPanel(anchor, projectId, reload) {
   showPicker('new');
 }
 // 형식 선택 후 설정 폼 — 이름 + (옵션/통화/별점) 설정 → 만들기.
-function pjvFieldConfigForm(projectId, f, reload, close, back) {
+function pjvFieldConfigForm(projectId, f, reload, close, back, listId?) {
   const wrap = el('div', { class: 'pjv-fcfg' });
   wrap.append(el('div', { class: 'pjv-fcfg-head' },
     el('button', { class: 'pjv-fcfg-back', type: 'button', text: '←', title: '뒤로', onclick: back }),
@@ -6736,7 +6743,7 @@ function pjvFieldConfigForm(projectId, f, reload, close, back) {
     const name = nameIn.value.trim() || f.label;
     const config = getConfig();
     if (f.config === 'options' && (!config.options || !config.options.length)) { toast('옵션을 1개 이상 추가하세요', true); return; }
-    pjvCreateField(projectId, { field_type: f.key, name, config }, reload, close);
+    pjvCreateField(projectId, { field_type: f.key, name, config, list_id: listId || undefined }, reload, close); // #607/D 리스트별 필드
   };
   wrap.append(el('div', { class: 'pjv-fcfg-actions' }, createBtn, el('button', { class: 'pjv-fcfg-cancel', type: 'button', text: '취소', onclick: back })));
   setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);

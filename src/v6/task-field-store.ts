@@ -16,7 +16,7 @@ export const FIELD_TYPES = [
 ] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
-const FIELD_COLS = `id, project_id, field_type, name, config, sort, created_by, created_at`;
+const FIELD_COLS = `id, project_id, field_type, name, config, sort, created_by, created_at, list_id`; // list_id(#607/D): 필드가 속한 리스트(NULL=전역)
 
 // ── 조회 ──────────────────────────────────────────────────────────────────────
 // 프로젝트(루트)의 필드 정의 — 정렬 순(추가 순). 값은 task 쪽에서 별도 페치.
@@ -43,7 +43,7 @@ export async function listFieldCatalog(excludeProjectId: number): Promise<any[]>
 // 루트 프로젝트(level='project')에만 필드를 단다. sort = 기존 최대+1(맨 끝에 컬럼 추가).
 export async function createField(
   projectId: number,
-  input: { field_type: string; name: string; config?: unknown },
+  input: { field_type: string; name: string; config?: unknown; list_id?: number | null },
   _ctx?: WriteCtx,
 ): Promise<any> {
   const ft = String(input.field_type);
@@ -51,13 +51,19 @@ export async function createField(
   const proj = await one(itemsPool, `SELECT id FROM project WHERE id=$1 AND level='project'`, [projectId]);
   if (!proj) throw new Error(`프로젝트 #${projectId} 없음`);
   const name = String(input.name ?? "").trim() || ft;
+  // #607/D 리스트별 필드 — list_id 있으면 그 리스트 전용, 없으면 전역(NULL). sort 는 같은 스코프(전역 or 그 리스트) 안에서 최댓값+1.
+  const listId = input.list_id != null ? Number(input.list_id) : null;
+  if (listId != null) {
+    const l = await one(itemsPool, `SELECT id FROM project_list WHERE id=$1`, [listId]);
+    if (!l) throw new Error(`리스트 #${listId} 없음`);
+  }
   const sortRow = await one(itemsPool,
-    `SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM task_field WHERE project_id=$1`, [projectId]);
+    `SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM task_field WHERE project_id=$1 AND list_id IS NOT DISTINCT FROM $2`, [projectId, listId]);
   return one(itemsPool,
-    `INSERT INTO task_field(project_id, field_type, name, config, sort, created_by)
-     VALUES($1, $2, $3, $4::jsonb, $5, $6)
+    `INSERT INTO task_field(project_id, field_type, name, config, sort, created_by, list_id)
+     VALUES($1, $2, $3, $4::jsonb, $5, $6, $7)
      RETURNING ${FIELD_COLS}`,
-    [projectId, ft, name.slice(0, 120), JSON.stringify(input.config ?? {}), sortRow.s, _ctx?.actor ?? null]);
+    [projectId, ft, name.slice(0, 120), JSON.stringify(input.config ?? {}), sortRow.s, _ctx?.actor ?? null, listId]);
 }
 
 // 필드 정의 수정 — 이름/설정만(타입은 불변: 값 형태가 바뀌면 기존 값이 깨지므로). 주어진 키만 변경.

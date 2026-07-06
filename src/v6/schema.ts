@@ -663,6 +663,10 @@ export async function initV6Schema(): Promise<string> {
       created_by TEXT,
       created_at TIMESTAMPTZ DEFAULT now());
     CREATE INDEX IF NOT EXISTS task_field_project_idx ON task_field(project_id);
+    -- #607/D 리스트별 커스텀 필드 — 필드가 어느 리스트(project_list) 전용인지. NULL=전역(모든 리스트에 표시, 기존 필드 하위호환).
+    --  리스트 삭제 시 그 리스트 전용 필드도 함께 제거(FK CASCADE). 멱등 ADD COLUMN(기존 컬럼이면 스킵).
+    ALTER TABLE task_field ADD COLUMN IF NOT EXISTS list_id INT REFERENCES project_list(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS task_field_list_idx ON task_field(list_id);
 
     -- 태스크별 필드값 — (field, task) 1행. 값 해제 시 행 삭제(부재=무값). 필드 삭제 시 FK CASCADE 로 값 동반 제거.
     CREATE TABLE IF NOT EXISTS task_field_value(
