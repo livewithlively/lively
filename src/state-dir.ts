@@ -17,15 +17,27 @@ export function stateDir(...segs: string[]): string {
   return path.join(stateRoot(), ...segs);
 }
 
-// 부팅 1회(멱등) — 루트 + 알려진 하위를 보장. 서비스 유저 소유라 mkdir 가능. 실패는 비치명(경고만; 개별 기능이 각자 처리).
+// 부팅 1회(멱등) — 루트 + 알려진 하위를 보장 + 실제 쓰기 프로브. 서비스 유저 소유라 성공해야 정상.
 //  새 런타임 하위 디렉이 생기면 여기에 등록한다(= '경로 쓰기 가능성'을 보장하는 단일 지점).
+//  ⚠ 정적 가드레일(state-dir.test.ts)이 놓친 오구성(예: STATE_DIR 이 타 uid 소유)을 부팅 때 **시끄럽게** 드러내는 방어선 —
+//   조용한 EACCES(#606 스캐너처럼 매 tick 실패하고 아무도 모름)를 방지. 비치명(부팅은 계속)이되 root 실패는 error 로그.
 const KNOWN_SUBDIRS = ["repos", "notion-assets"];
 export async function ensureStateDirs(): Promise<void> {
-  for (const d of [stateRoot(), ...KNOWN_SUBDIRS.map((s) => stateDir(s))]) {
-    try {
-      await fsp.mkdir(d, { recursive: true });
-    } catch (e) {
-      logger.warn({ err: e, dir: d }, "[state-dir] ensure 실패(비치명) — 서비스 유저 쓰기권한 확인 필요");
-    }
+  const root = stateRoot();
+  try {
+    await fsp.mkdir(root, { recursive: true });
+    // 쓰기 프로브 — mkdir 성공이어도 실제 쓰기권한을 1회 확인(소유/모드 오구성 조기 발견).
+    const probe = stateDir(".write-probe");
+    await fsp.writeFile(probe, "ok");
+    await fsp.rm(probe, { force: true });
+  } catch (e) {
+    logger.error({ err: e, dir: root, user: process.getuid?.() },
+      "[state-dir] STATE_DIR 쓰기 불가 — 런타임 기능(도메인맵 스캐너·커넥터 자산 등)이 실패한다. " +
+      "서비스 유저 소유·쓰기권한 확인(예: chown -R <svc-user> <STATE_DIR>) 또는 LIVELY_STATE_DIR 지정.");
+    return; // 루트가 안 되면 하위도 안 됨 — 조기 반환(로그가 원인을 명시)
+  }
+  for (const s of KNOWN_SUBDIRS) {
+    await fsp.mkdir(stateDir(s), { recursive: true })
+      .catch((e) => logger.warn({ err: e, dir: stateDir(s) }, "[state-dir] 하위 ensure 실패(비치명)"));
   }
 }
