@@ -3235,7 +3235,9 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
     pjvApplyColOrder(head, 'proj', fields);                 // 열 순서 적용(#611)
     pjvWireColReorder(head, 'proj', fields || [], reload);  // 열 순서 드래그 재정렬(기본+커스텀, #611)
   } else {
-    head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, dot, labelEl, countEl, gcaret);
+    // 2번째+ 상태 그룹(non-cols) 헤더도 첫 그룹(withCols)·행과 동일하게 체크박스 자리 spacer 를 둬 상태점 가로 위치를 맞춘다
+    //  (#613 후속 — 첫 그룹만 spacer 가 있어 그룹 간 상태 아이콘 들여쓰기가 어긋나 있었다).
+    head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret);
   }
   return el('div', { class: 'pjv-tgroup' }, head, body);
 }
