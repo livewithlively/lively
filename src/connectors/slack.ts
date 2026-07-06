@@ -36,6 +36,17 @@ const SEARCH_MAXP = 100; // search.messages page 상한 → 쿼리당 최신 SEA
 const BISECT_FLOOR_MS = 2 * DAY_MS; // 이 이하로는 이분해도 after/before(일 granular)가 더 못 좁힘 → 잘림 경고만.
 const DRY_STOP = 12; // 최초 스윕 시 연속 빈 창 이만큼이면 이력 시작으로 보고 종료(하한 미지정일 때만).
 const MAX_WINDOWS = 400; // 무한루프 백스톱(하한 -Infinity 안전장치).
+// 파일 수집(files.list) 파라미터.
+const FILE_INCR_LOOKBACK_MS = 2 * DAY_MS; // 증분 시 파일 ts_from 을 커서보다 넉넉히 당김 — 단일 커서가 메시지에
+//  끌려 앞서갈 때 그 사이 업로드된 파일 스트래글러 유실 방지(멱등 upsert 라 재수집 무해). 일일 full 스윕이 최종 백스톱.
+const FILE_BODY_MAX = 100_000; // 텍스트 파일 본문 상한(byte) — 과대 파일 방어.
+const FILE_PAGE_MAX = 200; // files.list 페이지 백스톱.
+// 텍스트로 간주해 본문을 다운로드할 filetype(그 외 + 바이너리는 메타+링크만).
+const TEXT_FILETYPES = new Set([
+  "text", "markdown", "post", "csv", "tsv", "json", "yaml", "yml", "xml", "html", "log", "diff", "patch",
+  "javascript", "js", "typescript", "ts", "tsx", "jsx", "python", "py", "ruby", "go", "rust", "java",
+  "c", "cpp", "h", "css", "scss", "shell", "bash", "sh", "sql", "toml", "ini", "conf",
+]);
 
 // ── Slack 응답 타입(필요한 필드만) ──────────────────────────────────────────
 interface SlackResponseMeta {
@@ -473,6 +484,134 @@ async function* sweepRange(
   }
 }
 
+// ── files.list 수집 계층 ─────────────────────────────────────────────────────
+// 파일 업로드는 텍스트가 거의 없어 search.messages 로는 안 잡힌다(file_share) → files.list 로 파일 인덱스를 직접
+//  훑는다(CTO wiki-sync files-since 와 동형). 텍스트 파일은 본문을 내려받아 자료(source)로 적재해 distill 이 지식화,
+//  바이너리(PDF/이미지 등)는 본문 추출 불가라 메타+permalink 만 기록(존재·링크 보존 — 사람/후속이 원본 열람).
+//  파일도 메시지처럼 type='note'(→source→distill). 공개채널 공유분만(비공개 groups/DM ims 전용 파일 제외).
+interface SlackFile {
+  id?: string;
+  created?: number; // epoch seconds
+  name?: string;
+  title?: string;
+  filetype?: string;
+  mimetype?: string;
+  size?: number;
+  user?: string;
+  channels?: string[]; // 공개채널 id
+  groups?: string[]; // 비공개채널 id
+  ims?: string[]; // DM id
+  permalink?: string;
+  url_private?: string;
+  url_private_download?: string;
+}
+interface FilesListResp extends SlackEnvelope {
+  files?: SlackFile[];
+  paging?: SearchPaging;
+}
+
+function isTextFile(f: SlackFile): boolean {
+  const mt = (f.mimetype ?? "").toLowerCase();
+  if (mt.startsWith("text/")) return true;
+  if (mt === "application/json" || mt === "application/xml") return true;
+  return TEXT_FILETYPES.has((f.filetype ?? "").toLowerCase());
+}
+
+// 텍스트 파일 본문 다운로드 — url_private 는 Authorization 헤더 필요(JSON 아님). 실패/과대는 undefined(메타 폴백).
+async function fetchFileText(token: string, f: SlackFile): Promise<string | undefined> {
+  const url = f.url_private_download ?? f.url_private;
+  if (!url) return undefined;
+  try {
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) return undefined;
+    const buf = await res.arrayBuffer();
+    const text = new TextDecoder("utf-8").decode(buf.slice(0, FILE_BODY_MAX));
+    return text.trim() || undefined;
+  } catch {
+    return undefined; // 다운로드 실패는 비치명 — 메타 본문으로 폴백.
+  }
+}
+
+// 파일 1건 → RawItem(type='note'→source). 공개채널 공유분만. 텍스트는 본문, 그 외는 메타+링크.
+async function fileToRawItem(f: SlackFile, base: SweepBase, token: string): Promise<RawItem | null> {
+  if (!f.id) return null;
+  // 공개채널 공유분만 — 비공개/DM 전용 파일 제외(메시지 공개필터와 일관, 토큰 소유자 개인 파일 유입 방지).
+  const publicChannels = f.channels ?? [];
+  if (publicChannels.length === 0) return null;
+
+  const created = typeof f.created === "number" ? f.created : Number.parseFloat(String(f.created ?? ""));
+  const occurred_at = Number.isFinite(created) ? new Date(created * 1000).toISOString() : undefined;
+
+  const resolvedUser = f.user && base.userMap ? base.userMap.get(f.user) : undefined;
+  const displayName =
+    resolvedUser?.profile?.display_name?.trim() ||
+    resolvedUser?.real_name?.trim() ||
+    resolvedUser?.profile?.real_name?.trim() ||
+    resolvedUser?.name?.trim() ||
+    undefined;
+  const email = resolvedUser?.profile?.email?.trim() || undefined;
+
+  const isText = isTextFile(f);
+  let body = isText ? await fetchFileText(token, f) : undefined;
+  if (!body) {
+    // 바이너리(또는 다운로드 실패) — 존재·링크만 기록. distill 은 메타로만 판단(원본은 permalink 로 사람 열람).
+    body = `[Slack 파일] ${f.name ?? f.title ?? f.id}${f.mimetype ? ` (${f.mimetype})` : ""}${f.permalink ? `\n${f.permalink}` : ""}`;
+  }
+
+  return {
+    type: "note",
+    provenance: {
+      category: "messenger",
+      system: "slack",
+      instance: base.instance,
+      external_id: `file:${f.id}`, // 메시지(`channel:ts`)와 네임스페이스 분리.
+      external_url: f.permalink,
+    },
+    actor: f.user
+      ? { external_id: f.user, display_name: displayName, email, is_bot: Boolean(resolvedUser?.is_bot) }
+      : undefined,
+    container_ref: publicChannels[0],
+    title: f.title?.trim() || f.name?.trim() || undefined,
+    body,
+    occurred_at,
+    fields: {
+      file_id: f.id,
+      filetype: f.filetype,
+      mimetype: f.mimetype,
+      size: f.size,
+      is_text: isText,
+      channels: publicChannels,
+    },
+    raw: f,
+  };
+}
+
+// files.list 페이지네이션 — ts_from(epoch초, inclusive) 하한부터 끝까지. search 와 달리 일 granular/10k 상한 이슈
+//  없어 창/이분 불필요(파일 수는 메시지보다 훨씬 적음). 페이지는 FILE_PAGE_MAX 백스톱.
+async function* sweepFiles(
+  token: string,
+  base: SweepBase,
+  sinceMs: number,
+): AsyncGenerator<RawItem> {
+  const tsFrom = Number.isFinite(sinceMs) ? Math.max(0, Math.floor(sinceMs / 1000)) : 0;
+  let page = 1;
+  for (;;) {
+    const r = await slackCall<FilesListResp>("files.list", token, {
+      ts_from: tsFrom,
+      count: 100,
+      page,
+      show_files_hidden_by_limit: true,
+    });
+    for (const f of r.files ?? []) {
+      const it = await fileToRawItem(f, base, token);
+      if (it) yield it;
+    }
+    const pages = Math.min(r.paging?.pages ?? 1, FILE_PAGE_MAX);
+    if (page >= pages) break;
+    page++;
+  }
+}
+
 // ── Connector 구현 ───────────────────────────────────────────────────────────
 export const slackConnector: Connector = {
   name: "slack",
@@ -535,6 +674,18 @@ export const slackConnector: Connector = {
       }
       cursorEnd = windowStart;
     }
-    // 파일 첨부 수집(files.list)은 후속 — 이번 릴리스는 메시지 스윕까지.
+
+    // ── 파일 수집(files.list) — 메시지 스윕 후 1회. best-effort: files:read 스코프 부재 등 실패는 경고 후 진행
+    //  (메시지 수집은 이미 완료). ts_from: 증분은 커서보다 넉넉히 당겨(스트래글러 방지), 최초는 backfill_since/0.
+    const fileSinceMs = incremental
+      ? Math.max(0, (sinceMs as number) - FILE_INCR_LOOKBACK_MS)
+      : (backfillSinceMs ?? 0);
+    try {
+      yield* sweepFiles(token, base, fileSinceMs);
+    } catch (err) {
+      console.warn(
+        `slack files.list 수집 skip(files:read 스코프 누락 등 — 메시지는 정상 수집됨): ${(err as Error).message}`,
+      );
+    }
   },
 };
