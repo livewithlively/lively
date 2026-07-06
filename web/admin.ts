@@ -1325,27 +1325,22 @@ async function profilesEditor(detail) {
     ...items);
 }
 
-// ── 구성원 관리(#613) — 3~40명 규모에서도 훑기 쉽게. 선택 전엔 아바타 카드 '그리드'가 전체 폭을 채우고
-//  (세로로 죽 늘어지고 오른쪽이 비던 문제 해소), 구성원을 고르면 좌(목록)·우(상세) 2단으로 전환한다.
-//  상단 검색으로 이름·이메일·아이디·종류를 실시간 필터 — 입력은 리스트 컨테이너만 다시 그려(renderRows)
-//  포커스를 잃지 않는다(전체 재렌더 renderAdminDetail 은 '선택'했을 때만).
+// ── 구성원 관리(#613) — 3~40명 규모에서도 훑기 쉽게. 아바타 카드 '그리드'가 항상 전체 폭을 채우고
+//  (세로로 죽 늘어지고 오른쪽이 비던 문제 해소), 카드를 누르면 상세/편집을 '모달 오버레이'로 띄운다
+//  (#613 후속 — 옛 좌우 2단 collapse 가 어색하다는 피드백. 이 파일의 다른 표면(메모리 그리드·태스크 상세)과 동일한 그리드+팝업 패턴).
+//  상단 검색으로 이름·이메일·아이디·종류를 실시간 필터 — 입력은 리스트 컨테이너만 다시 그려(renderRows) 포커스를 잃지 않는다.
 function membersEditor(detail, data) {
   const canEdit = state.admin.canEdit;
   const meaning = data.meaning['member'];
   const members = data.members || [];
-  const sel = state.admin.memberSel;
-  const member = members.find((m) => m.id === sel);
-  const twoCol = !!member; // 고르면 2단(좌 목록·우 상세), 아무도 안 골랐으면 그리드가 전체 폭
 
-  // 새 구성원 추가는 [구성원 추가] 섹션으로 분리됨 — 여기선 기존 구성원의 보기/수정만.
-  // 한 구성원 카드/행 — 그리드·2단 목록 양쪽에서 공유(아바타 + 이름·설치배지 + 메타).
+  // 한 구성원 카드 — 누르면 모달로 상세/편집을 연다(그리드는 그대로 유지).
   const memberRow = (m) => {
     const meta = canEdit
       ? (m.kind || 'human') + (m.email ? ' · ' + m.email : '')
       : (m.kind || 'human') + (m.state && m.state !== 'active' ? ' · ' + m.state : '');
-    return el('div', { class: 'mini-row member-row' + (m.id === state.admin.memberSel ? ' sel' : ''),
-      // 다른 구성원을 고르면 편집모드 해제 — 항상 보기 모드로 먼저 연다([수정] 눌러야 편집).
-      onclick: () => { state.admin.memberSel = m.id; state.admin.memberEditing = false; renderAdminDetail(detail, 'members', data); } },
+    return el('div', { class: 'mini-row member-row',
+      onclick: () => openMemberModal(m, data, detail) },
       profileAvatar(m.avatar || null, m.display_name || m.id, m.id, 'member-ava', { char: m.avatar_char, color: m.avatar_color }),
       el('div', { class: 'member-row-body' },
         el('div', { class: 'mini-title' },
@@ -1355,7 +1350,7 @@ function membersEditor(detail, data) {
   };
 
   // 리스트 영역 — 검색 시 이 컨테이너만 replaceChildren 해서 입력 포커스를 보존한다.
-  const listCol = el('div', { class: 'admin-sublist' + (twoCol ? '' : ' admin-sublist-row') });
+  const listCol = el('div', { class: 'admin-sublist admin-sublist-row' });
   const renderRows = () => {
     const q = (state.admin.memberSearch || '').trim().toLowerCase();
     const shown = q
@@ -1377,22 +1372,36 @@ function membersEditor(detail, data) {
     oninput: (e) => { state.admin.memberSearch = e.target.value; renderRows(); } });
   const searchBar = el('div', { class: 'admin-member-searchbar' }, searchInp);
 
-  // 기존 구성원은 [수정]을 눌러 편집모드(state.admin.memberEditing)일 때만 편집폼,
-  //  그 전엔 보기 모드(memberRead) — 권한 없는 사람은 [수정] 버튼 자체가 없다(읽기 전용).
-  let body;
-  if (twoCol) {
-    const right = el('div', {});
-    if (state.admin.memberEditing) memberForm(right, member, data, detail, false);
-    else memberRead(right, member, data, detail);
-    body = el('div', { class: 'admin-two admin-two-cols' }, listCol, right); // 이 탭만 좌우 2단 유지
-  } else {
-    body = listCol; // 선택 전 — 그리드가 전체 폭을 채운다(빈 오른쪽 패널 없음)
-  }
-
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('구성원 관리', meaning),
     members.length ? searchBar : null,
-    body));
+    listCol));
+}
+
+// ── 구성원 상세/편집 모달(#613 후속) — 카드 클릭 시 그리드 위에 오버레이로 띄운다.
+//  2단 collapse 대신 모달: 그리드 맥락을 유지한 채 상세를 보고, 닫으면 그리드로 복귀.
+//  보기(memberRead) ↔ 편집(memberForm) 을 모달 안에서 토글하고, 저장/제거 시 모달을 닫고 그리드를 새로고침.
+function openMemberModal(m, data, detail) {
+  const body = el('div', { class: 'member-modal-body' });
+  let back: any = null;
+  let editing = false;
+  const refreshGrid = () => renderAdminDetail(detail, 'members', state.admin.data);
+  const closeModal = () => { if (back) { back.remove(); back = null; } };
+  const rerender = () => {
+    // 저장/리로드 후 최신 멤버 객체를 다시 집는다(이름·권한 변경 반영).
+    const cur = ((state.admin.data && state.admin.data.members) || []).find((x) => x.id === m.id) || m;
+    if (state.admin.canEdit && editing) {
+      memberForm(body, cur, data, detail, false, {
+        onSaved: () => { toast('저장됨 — 신원 매칭에 즉시 반영됩니다'); closeModal(); refreshGrid(); },
+        onCancel: () => { editing = false; rerender(); }, // 편집 취소 → 모달 안에서 보기로 복귀
+        onRemoved: () => { closeModal(); refreshGrid(); },
+      });
+    } else {
+      memberRead(body, cur, data, detail, { onEdit: () => { editing = true; rerender(); } });
+    }
+  };
+  rerender();
+  back = overlay('구성원 · ' + (m.display_name || m.id), body);
 }
 
 // 구성원 권한(scope) 옵션 — 보기/편집 공유. 서버 SCOPES(capabilities/scopes.ts) 전체와 일치시킨다.
@@ -1419,7 +1428,7 @@ function showInitialAccount(id, name, email, password, data) {
 
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
 //  권한 있는 사람(canEdit)만 [수정] 버튼이 보이고, 누르면 편집모드로 전환(memberForm). 비-admin 은 버튼 없음.
-function memberRead(root, m, data, detail) {
+function memberRead(root, m, data, detail, opts: any = {}) {
   const canEdit = state.admin.canEdit;
   const roRow = (label, value) => field(label, el('div', { class: 'admin-ro', text: value || '—' }));
   const kids = [
@@ -1446,7 +1455,8 @@ function memberRead(root, m, data, detail) {
   if (canEdit) {
     const acts = el('div', { class: 'admin-actions' },
       el('button', { class: 'btn btn-primary', text: '수정',
-        onclick: () => { state.admin.memberEditing = true; renderAdminDetail(detail, 'members', data); } }));
+        // 모달에서 열렸으면 opts.onEdit 로 모달 안에서 폼으로 전환(전체 재렌더 대신). 기본은 기존 흐름.
+        onclick: () => { if (opts.onEdit) { opts.onEdit(); return; } state.admin.memberEditing = true; renderAdminDetail(detail, 'members', data); } }));
     if ((m.kind || 'human') === 'human') {
       acts.append(el('button', { class: 'btn btn-ghost', text: '비밀번호 재설정',
         onclick: async () => {
@@ -1556,7 +1566,10 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
       onclick: async () => {
         if (!confirm(`구성원 '${m.display_name || m.id}' 제거?`)) return;
         try { await api('/api/ui/org/member/remove', { method: 'POST', body: JSON.stringify({ id: m.id }) });
-          await loadAdmin(true); state.admin.memberSel = null; toast('제거됨'); renderAdminDetail(detail, 'members', state.admin.data); }
+          await loadAdmin(true); toast('제거됨');
+          // 모달에서 열렸으면 opts.onRemoved 로 모달 닫고 그리드 새로고침. 기본은 기존 흐름.
+          if (opts.onRemoved) { opts.onRemoved(); return; }
+          state.admin.memberSel = null; renderAdminDetail(detail, 'members', state.admin.data); }
         catch (e) { toast(e.message, true); }
       } }));
   }
