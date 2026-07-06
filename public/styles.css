@@ -3376,7 +3376,9 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-statused-radio.on .pjv-statused-radio-mark { border-color: var(--blue); background: radial-gradient(circle, var(--blue) 0 4px, transparent 5px); }
 .pjv-statused-radio-label { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .pjv-statused-radio-hint { font-size: 12px; color: var(--ink-sub); margin-top: 2px; line-height: 1.4; }
-.pjv-statused-groups.inherit { opacity: .5; pointer-events: none; }
+/* 기본(inherit) 상태 미리보기 — 커스텀과 동일한 선명도로(#617): 흐림(opacity) 제거, 읽기전용은 pointer-events 로만 표시.
+   편집 버튼(⋯·＋)이 없고 라디오가 '기본'인 것으로 읽기전용이 이미 드러나므로, 상태 아이콘·라벨은 커스텀과 똑같이 또렷하게. */
+.pjv-statused-groups.inherit { pointer-events: none; }
 .pjv-statused-cat { margin-bottom: 16px; }
 .pjv-statused-cat-h { font-size: 12px; font-weight: 800; letter-spacing: .3px; color: var(--muted); margin-bottom: 7px; }
 .pjv-statused-rows { display: flex; flex-direction: column; gap: 6px; }
@@ -3384,7 +3386,7 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
 .pjv-statused-grip { flex: none; color: var(--muted-3); font-size: 12px; cursor: grab; }
 .pjv-statused-name { flex: 1 1 auto; min-width: 0; border: none; background: none; font-size: 13.5px; font-weight: 600; color: var(--ink); padding: 2px 0; }
 .pjv-statused-name:focus { outline: none; }
-.pjv-statused-name:disabled { color: var(--ink-sub); }
+.pjv-statused-name:disabled { color: var(--ink); } /* 기본 상태 라벨도 커스텀처럼 선명하게(#617) — 흐리게 두지 않음 */
 .pjv-statused-row .pjv-trow-more { position: static; opacity: 1; transform: none; }
 .pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, #d9dee6); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .pjv-statused-add:hover { border-color: var(--blue); color: var(--blue); }
