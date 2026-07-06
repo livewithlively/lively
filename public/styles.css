@@ -3147,6 +3147,31 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-has-side .pjv-side-main { padding: 24px 32px 48px 28px; min-height: calc(100vh - 64px); }
 .pjv-has-side .pjv-board-chrome { margin-bottom: 2px; }
 .pjv-has-side .pjv-board-toolbar { margin-bottom: 14px; }
+
+/* ── #607 필드 많을 때 가로 스크롤 — 컬럼을 찌그러뜨리지 않고(고정 폭) 다 못 담으면 보드만 가로로 스크롤. ── */
+/*  박스 높이는 auto(내용에 맞음)라 세로 스크롤은 안 생기고(페이지가 세로 담당), 가로만 스크롤된다. */
+.pjv-board-scroll { overflow-x: auto; }
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body { overflow-x: auto; }
+/* 그리드 행/헤더는 최소 콘텐츠 폭(제목 최소 + 고정 메타열들) 이상으로 — 컨테이너보다 넓으면 스크롤 박스가 가로 스크롤. */
+.pjv-board-scroll > .pjv-trow, .pjv-board-scroll .pjv-tgroup-head-cols, .pjv-board-scroll .pjv-list-colhead,
+.pjv-board-scroll .pjv-tgroup-body > .pjv-trow-wrap > .pjv-trow, .pjv-board-scroll .pjv-proj-wrap > .pjv-trow,
+.pjv-board-scroll .pjv-addrow, .pjv-board-scroll .pjv-proj-subs > .pjv-trow-wrap > .pjv-trow,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-tgroup-head-cols,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-list-colhead,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-trow { min-width: min-content; }
+/* 스크롤 박스 안의 그룹/본문도 최소 콘텐츠 폭 이상이라야 행이 잘리지 않고 함께 늘어난다. */
+.pjv-board-scroll .pjv-tgroup, .pjv-board-scroll .pjv-tgroup-body, .pjv-board-scroll .pjv-flat-body,
+.pjv-board-scroll .pjv-trow-wrap, .pjv-board-scroll .pjv-proj-wrap { min-width: min-content; }
+
+/* ── #607 열 정렬 통일 토글 — 카드에 .pjv-align-left(좌측)/기본(중앙). 모든 값 셀 + 헤더를 한 방향으로(제목·추가 제외). ── */
+/*  기존에 nth-child·필드별로 좌/중이 뒤섞이던 것(우선순위 좌측 등)을 이 변수 규칙으로 통일. 헤더 행도 동일 방향. */
+.pjv-proj-card { --pjv-cjust: center; --pjv-ctext: center; }
+.pjv-proj-card.pjv-align-left { --pjv-cjust: flex-start; --pjv-ctext: left; }
+.pjv-proj-card .pjv-trow > .pjv-tcell:not(.pjv-trow-title-cell):not(.pjv-tcell-add),
+.pjv-proj-card .pjv-addrow.editing > .pjv-tcell:not(.pjv-trow-title-cell):not(.pjv-tcell-add) { justify-content: var(--pjv-cjust); }
+.pjv-proj-card .pjv-fcell-wrap, .pjv-proj-card .pjv-cell-btn { justify-content: var(--pjv-cjust); }
+.pjv-proj-card .pjv-thcol, .pjv-proj-card .pjv-colhead.pjv-stdcol { justify-content: var(--pjv-cjust); text-align: var(--pjv-ctext); }
+.pjv-proj-card .pjv-thcol .pjv-thcol-name, .pjv-proj-card .pjv-colhead.pjv-stdcol .pjv-thcol-name { text-align: var(--pjv-ctext); }
 /* 셸 우측 컬럼에선 툴바의 'h2 프로젝트'는 페이지 제목과 중복 — 숨겨 군더더기 제거(툴바 버튼은 유지). */
 .pjv-has-side .pjv-board-toolbar .pjv-tasks-head-left > h2 { display: none; }
 

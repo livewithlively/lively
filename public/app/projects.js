@@ -461,6 +461,30 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // '그룹' — 그룹바이 필드+방향(#541 ClickUp group by 파리티). 기본값=ClickUp 뷰 grouping, 리스트별 로컬 오버라이드.
     const groupBtn = el('button', { class: 'pjv-view-btn pjv-groupby-btn', type: 'button', title: '그룹 — 필드와 방향으로 묶어 보기' }, pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '그룹: 상태' }), el('span', { class: 'pjv-view-btn-caret', 'aria-hidden': 'true', text: '▾' }));
     groupBtn.onclick = (e) => { e.stopPropagation(); pjvGroupByMenu(groupBtn); };
+    // '정렬' — 모든 값 셀 + 헤더의 가로 정렬을 좌측/중앙으로 통일(#607). 순수 CSS(카드 클래스)라 재렌더 없이 즉시 반영, per-user localStorage.
+    const alignBtn = el('button', { class: 'pjv-view-btn pjv-align-btn', type: 'button', title: '열 정렬 — 값과 헤더를 좌측/중앙으로 통일' }, el('span', { class: 'pjv-view-btn-label', text: '정렬: 중앙' }));
+    const pjvIsAlignLeft = () => { try {
+        return localStorage.getItem('pjv:colAlign') === 'left';
+    }
+    catch (_) {
+        return false;
+    } };
+    const applyAlign = () => {
+        const left = pjvIsAlignLeft();
+        card.classList.toggle('pjv-align-left', left);
+        const l = alignBtn.querySelector('.pjv-view-btn-label');
+        if (l)
+            l.textContent = left ? '정렬: 좌측' : '정렬: 중앙';
+    };
+    alignBtn.onclick = (e) => {
+        e.stopPropagation();
+        try {
+            localStorage.setItem('pjv:colAlign', pjvIsAlignLeft() ? 'center' : 'left');
+        }
+        catch (_) { /* noop */ }
+        applyAlign();
+    };
+    applyAlign(); // 저장된 정렬 초기 반영
     const body = el('div', { class: 'pjv-tasks-body' });
     const syncToggles = () => {
         subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
@@ -689,6 +713,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         if (pageChrome)
             main.append(pageChrome);
         main.append(toolbar);
+        // 표 뷰(폴더·상태·평면)는 열이 많으면 가로로 넘칠 수 있으니 이 박스가 보드만 가로 스크롤한다(#607) — 개요·칸반은 제외.
+        const boardBox = el('div', { class: 'pjv-board-scroll' });
         const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
         if (pjvBoardView.overview && selFolder) {
             // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
@@ -757,7 +783,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         else if (selFolder) {
             // 폴더/스페이스 뷰(#541) — 합집합 평탄 목록 대신 ClickUp 폴더 뷰처럼 **리스트별 접이식 그룹**.
             //  트리 순서(직속 리스트 → 하위 폴더 리스트) 유지, 각 그룹은 리스트 자체 커스텀 상태로 하위그룹(byStatus 시).
-            main.append(pjvListColHead(effFields, anchorId, reload));
+            boardBox.append(pjvListColHead(effFields, anchorId, reload));
             const scoped = folderListsDeep(selFolder.id);
             let any = false;
             for (const l of scoped) {
@@ -769,17 +795,17 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 any = true;
                 // 폴더를 명시 선택한 문맥 — 접힘 저장값이 없으면 기본 펼침(보드 기본값은 '내 리스트만 펼침'이라 여기선 부적합).
                 const og = pjvListOpen.has(g.key) ? g : { ...g, open: true };
-                main.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+                boardBox.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
             }
             if (!any)
-                main.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
+                boardBox.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
         }
         else if (byStatus) {
             // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
-            pjvRenderStatusGroups(main, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort });
+            pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort });
         }
         else {
-            main.append(pjvListColHead(effFields, anchorId, reload));
+            boardBox.append(pjvListColHead(effFields, anchorId, reload));
             const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
             const savedCmp = pjvSavedSortCmp(); // 저장 뷰 정렬(#541) 우선
             // 정렬 우선순위: 컬럼 헤더 클릭(로컬) > 저장 뷰 정렬 > 뷰 기본(view_sorting) > 상태 rank + 수동/기본 순서.
@@ -794,8 +820,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 flatBody.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
             if (!mineOnly)
                 flatBody.append(pjvProjAddRow('in_progress', reload, flatBody, null, effFields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
-            main.append(flatBody);
+            boardBox.append(flatBody);
         }
+        if (boardBox.childNodes.length)
+            main.append(boardBox); // 표 뷰만 가로 스크롤 박스로(개요·칸반은 main 에 직접)
         // ── 리스트 항목(트리 잎) — 체크 글리프(색/이모지) + 이름 + 개수 + ⋯(리스트 설정) + 프로젝트 드롭 타깃. sub=폴더 안이면 들여쓰기.
         const listNavItem = (list, sub, depth = 0) => {
             const key = 'L' + list.id;
@@ -1060,7 +1088,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
     syncToggles();
     // 툴바(card-head) — 변수로 만들어 render() 가 위치를 옮긴다: 사이드바 꺼짐이면 카드 card-head, 켜짐이면 셸 우측 컬럼 상단(#607).
-    const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), sideBtn, viewBtn, savedViewBtn, groupBtn, subtaskBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn));
+    const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), sideBtn, viewBtn, savedViewBtn, groupBtn, subtaskBtn, alignBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn));
     card.append(body);
     render();
     return wrapper;
@@ -7185,12 +7213,12 @@ function pjvGridTemplate(fields) {
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
 function pjvProjGridTemplate(fields) {
-    // 제목 컬럼은 floor(--pjv-name-min, 200px) + 1fr 로 남은 폭 차지. 메타(팀원·마감·…·커스텀)는 minmax(0, Wpx).
-    //  컬럼 순서(#611) — 저장된 열 순서(기본 키 + 커스텀 'f:id')대로 트랙을 깐다. 저장 없으면 자연 순서(기존 화면 불변).
-    //  제목(1fr)·추가(34px)는 양끝 고정. 시작일·생성일·갱신일은 기본 폭 0(숨김) — 켜면 카드 CSS 변수로 폭 부여.
+    // 제목 = minmax(제목최소, 1fr) — 그 이하로 안 줄고(#607), 컬럼이 적으면 1fr 로 남은 폭을 채운다. 최소 폭은 --pjv-name-min(기본 넉넉히).
+    //  메타(팀원·마감·…·커스텀)는 고정 폭(pjvColTrackFor) — 좁아도 안 찌그러지고, 다 못 담으면 컨테이너가 가로 스크롤(#607).
+    //  컬럼 순서(#611): 저장된 열 순서(기본 키 + 커스텀 'f:id')대로 트랙을 깐다. 시작일·생성일·갱신일은 기본 폭 0(숨김).
     const order = pjvColOrderList('proj', fields);
     const tracks = order.map((k) => pjvColTrackFor(k, fields)).join(' ');
-    return 'minmax(var(--pjv-name-min, 200px), 1fr) ' + (tracks ? tracks + ' ' : '') + '34px';
+    return 'minmax(var(--pjv-name-min, 240px), 1fr) ' + (tracks ? tracks + ' ' : '') + '34px';
 }
 // ── 열 순서 드래그 재정렬(#611) — 컬럼 헤더를 잡아 좌우로 끌어 순서를 바꾼다. 기본 열(팀원·마감·…)·커스텀 필드 모두 대상. ──
 //  키(기본=team/due/…, 커스텀='f:'+id) 리스트를 컬럼 폭·숨김과 같은 결로 사용자별 localStorage 에 저장. 헤더·행·그리드가 이 순서를
@@ -7225,14 +7253,15 @@ function pjvColOrderList(surface, fields) {
             ordered.push(k);
     return ordered;
 }
-// 키 → 그리드 트랙 문자열(기본=CSS 폭 변수, 커스텀=타입별 기본 폭).
+// 키 → 그리드 트랙 문자열 — 고정 폭(안 찌그러짐, #607). 기본=CSS 폭 변수(숨김은 0), 커스텀=타입별 기본 폭.
+//  다 담을 폭이 모자라면 컬럼을 줄이는 대신 컨테이너(.pjv-board-scroll)가 가로 스크롤한다.
 function pjvColTrackFor(key, fields) {
     const STD = { team: '--pjv-w-team, 96px', assignee: '--pjv-w-assignee, 120px', due: '--pjv-w-due, 92px', start: '--pjv-w-start, 0px', created: '--pjv-w-created, 0px', updated: '--pjv-w-updated, 0px', priority: '--pjv-w-priority, 112px', sess: '--pjv-w-sess, 80px' };
     if (STD[key])
-        return 'minmax(0, var(' + STD[key] + '))';
+        return 'var(' + STD[key] + ')';
     const f = (fields || []).find((x) => 'f:' + x.id === key);
     const w = (f && PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130;
-    return 'minmax(0, ' + w + 'px)';
+    return w + 'px';
 }
 // 헤더/행에 열 순서 적용 — [data-col] 셀에 CSS order 부여(제목=0·추가=끝 고정). DOM 순서는 안 건드림(기본 순서면 order 가 DOM 순서와 같아 무영향).
 function pjvApplyColOrder(rowEl, surface, fields) {
