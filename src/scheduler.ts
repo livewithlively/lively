@@ -313,6 +313,9 @@ async function injectToSession(sessionId: string, text: string): Promise<void> {
   if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) { env.LANG = "en_US.UTF-8"; env.LC_CTYPE = "en_US.UTF-8"; }
   await execFileP(TMUX_BIN, ["has-session", "-t", sessionId], { timeout: 5000, env });          // 부재면 throw → error.
   await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "-l", oneLine], { timeout: 5000, env }); // 텍스트(literal, 1라인).
+  // TUI(Claude Code)가 주입 텍스트를 flush 한 뒤 Enter 를 받게 짧은 지연 — 긴 프롬프트에서 Enter 가 텍스트보다 먼저
+  //  도착해 '제출 안 됨'(입력창에 텍스트만 남고 미제출) 레이스 방지(#606 부트스트랩서 실측). 길이 비례 500ms~1.5s.
+  await new Promise((r) => setTimeout(r, Math.min(1500, Math.max(500, Math.round(oneLine.length * 0.6)))));
   await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "Enter"], { timeout: 5000, env });       // 제출.
 }
 

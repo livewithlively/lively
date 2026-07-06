@@ -9,14 +9,16 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { getSource } from "./source-store.js";
 import { connectors } from "../connectors/index.js";
+import { stateDir } from "../state-dir.js";
 
 const TTL_MS = 6 * 60 * 60 * 1000; // 임시 아티팩트 수명(6h) — Read 직후 무의미해지므로 짧게. mtime 기준 GC.
 const MAX_ARTIFACT_BYTES = 50_000_000; // 단일 캡(50MB) — 커넥터는 상한 미적용, 여기서 size 선검사 + 스트리밍 abort.
 
-// 임시경로: process.cwd()/data/artifact-cache. 파일 0644 — 격리 세션 유저(#524)도 크로스유저 Read 가능
-//  (notion-assets/drive-artifacts 검증 패턴; tmpdir 0600 은 크로스유저 불가). #618 stateDir 머지 시 이관.
+// 임시경로: stateDir("artifact-cache") = 게이트웨이 런타임 쓰기 루트(#618, 서비스유저 소유). 파일 0644 — 격리 세션
+//  유저(#524)도 크로스유저 Read 가능(notion-assets/drive-artifacts 패턴; tmpdir 0600 은 크로스유저 불가).
+//  구 process.cwd()/data 는 WorkingDirectory 가 타 uid 소유면 EACCES(#606/#618 클래스) → stateDir 로 이관 완료.
 function cacheDir(): string {
-  return path.resolve(process.cwd(), "data", "artifact-cache");
+  return stateDir("artifact-cache");
 }
 
 const EXT_BY_MIME: Record<string, string> = {
