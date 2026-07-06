@@ -68,11 +68,14 @@ function startTour(steps) {
         if (!t.raf)
             t.raf = requestAnimationFrame(tick);
     }
-    // 코치마크(말풍선) 내용 — 카운터·건너뛰기·제목·본문·[이전]/[다음].
+    // 코치마크(말풍선) 내용 — 카운터·✕닫기·제목·본문·[이전]/[다음].
+    //  ✕(닫기)는 언제든 투어를 끝내는 보편 어포던스(예전 '건너뛰기' 텍스트를 대신). 실제 버튼을 눌러야만
+    //  진행되는 단계(advanceOn:'click', 예: ① 새 세션·생성하기)에는 [이전]/[다음]을 두지 않는다 — 강조된
+    //  버튼을 누르는 것만이 다음이고, 빠져나가려면 ✕뿐(다음으로 건너뛰면 폼이 안 열려 흐름이 깨진다).
     function drawPop(step, idx) {
         const last = idx === steps.length - 1;
         const counter = el('div', { class: 'tour-count', text: (idx + 1) + ' / ' + steps.length });
-        const skip = el('button', { class: 'btn btn-text tour-skip', text: '건너뛰기', onclick: () => endTour() });
+        const close = el('button', { class: 'btn btn-text tour-close', text: '✕', title: '따라하기 닫기', 'aria-label': '따라하기 닫기', onclick: () => endTour() });
         const bodyWrap = el('div', { class: 'tour-body' });
         if (step.body != null) {
             if (Array.isArray(step.body))
@@ -84,9 +87,17 @@ function startTour(steps) {
         }
         if (step.advanceOn === 'click')
             bodyWrap.append(el('p', { class: 'tour-hint', text: '↑ 강조된 버튼을 직접 눌러 보세요.' }));
-        const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '이전', onclick: () => go(idx - 1), disabled: idx === 0 });
-        const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'), onclick: () => go(idx + 1) });
-        pop.replaceChildren(el('div', { class: 'tour-pop-top' }, counter, skip), el('div', { class: 'tour-title', text: step.title }), bodyWrap, el('div', { class: 'tour-pop-foot' }, prev, next));
+        const kids = [
+            el('div', { class: 'tour-pop-top' }, counter, close),
+            el('div', { class: 'tour-title', text: step.title }),
+            bodyWrap,
+        ];
+        if (step.advanceOn !== 'click') {
+            const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '이전', onclick: () => go(idx - 1), disabled: idx === 0 });
+            const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'), onclick: () => go(idx + 1) });
+            kids.push(el('div', { class: 'tour-pop-foot' }, prev, next));
+        }
+        pop.replaceChildren(...kids);
     }
     // 매 프레임: 타깃 위치를 다시 읽어 딤·링·말풍선을 갱신하고, click 자동진행 리스너를 (있으면) 건다.
     function tick() {
