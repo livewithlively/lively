@@ -58,17 +58,22 @@ fi
 chown -R "$OSUSER:$OSUSER" "$HOME_DIR/.lively"
 
 # 홈 스켈레톤 — 프롬프트(멤버 표시)·토큰 로드(비밀 리터럴 없음)
+# 멱등 surgical: 기존 관리 블록(있으면)을 떼고 최신 블록을 다시 심는다 — 재프로비저닝(예: 게이트웨이 변경)에도
+#   자가치유. 과거 `-z LIVELY_TOKEN` 가드는 옛 셸에 남은 stale 토큰이 파일 토큰을 shadow 해 401 을 유발했다.
 BP="$HOME_DIR/.bash_profile"
-if ! grep -q "lively-managed (#524" "$BP" 2>/dev/null; then
-  cat >> "$BP" <<EOF
-# >>> lively-managed (#524 구성원 프로필) >>>
+BP_BEGIN="# >>> lively-managed (#524 구성원 프로필) >>>"
+BP_END="# <<< lively-managed <<<"
+if [ -f "$BP" ] && grep -qxF "$BP_BEGIN" "$BP"; then
+  awk -v b="$BP_BEGIN" -v e="$BP_END" '$0==b{skip=1} skip{if($0==e)skip=0; next} {print}' "$BP" > "$BP.tmp" && mv "$BP.tmp" "$BP"
+fi
+cat >> "$BP" <<EOF
+$BP_BEGIN
 [ -r "\$HOME/.bashrc" ] && . "\$HOME/.bashrc"
 export PS1='[$SLUG] \w \\\$ '
-[ -z "\${LIVELY_TOKEN:-}" ] && [ -r "\$HOME/.lively/token" ] && export LIVELY_TOKEN="\$(cat "\$HOME/.lively/token")"
-# <<< lively-managed <<<
+[ -r "\$HOME/.lively/token" ] && export LIVELY_TOKEN="\$(cat "\$HOME/.lively/token")"
+$BP_END
 EOF
-  chown "$OSUSER:$OSUSER" "$BP"; echo ".bash_profile 스켈레톤(프롬프트·토큰 로드)"
-fi
+chown "$OSUSER:$OSUSER" "$BP"; echo ".bash_profile 스켈레톤(프롬프트·토큰 로드 · 멱등 surgical)"
 
 # git 신원(있으면) — 커밋이 멤버로 귀속
 if [ -n "${MEMBER_NAME:-}" ]; then runuser -u "$OSUSER" -- git config --global user.name  "$MEMBER_NAME"  2>/dev/null || true; fi

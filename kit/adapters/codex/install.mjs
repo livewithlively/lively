@@ -209,7 +209,7 @@ function wireCodexTokenEnv() {
     RC_BEGIN,
     "# codex 의 lively MCP 가 bearer_token_env_var=LIVELY_TOKEN 으로 인증하려면 셸에 토큰이 있어야 함.",
     "# 토큰 리터럴은 적지 않는다 — 런타임에 ~/.lively/token 을 읽는다(없으면 빈 값, 훅은 fail-open).",
-    'if [ -z "${LIVELY_TOKEN:-}" ] && [ -r "$HOME/.lively/token" ]; then export LIVELY_TOKEN="$(cat "$HOME/.lively/token")"; fi',
+    'if [ -r "$HOME/.lively/token" ]; then export LIVELY_TOKEN="$(cat "$HOME/.lively/token")"; fi',
     RC_END,
   ].join("\n");
 
