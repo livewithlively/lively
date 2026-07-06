@@ -5,6 +5,7 @@ import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTras
 import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
+import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -40,7 +41,7 @@ async function route() {
     } // 인증 상태는 boot()/로그인이 state.me 로 표시(세션 쿠키 또는 토큰)
     const { segs, params } = parseHash();
     const view = $view();
-    const page = segs[0] || 'install'; // 홈(빈 해시·로고) = 시작하기
+    const page = segs[0] || 'dashboard'; // 홈(빈 해시·로고) = 대시보드(#617 — 옛 기본값 install 에서 개편)
     document.body.dataset.route = page; // 라우트별 레이아웃 훅(#541 — 프로젝트 보드 풀스크린 등). projects2 는 아래서 세분화.
     // #592 doc-mode — 지식 계열 라우트(목록·문서·편집·휴지통)는 main 을 전폭 캔버스로(패딩 0).
     //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
@@ -48,13 +49,21 @@ async function route() {
     if (mainEl)
         mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
     try {
-        if (page === 'learn') {
-            setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link)
-            await renderLearn(view);
+        if (page === 'dashboard') {
+            setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
+            await renderMyDashboard(view);
+        }
+        else if (page === 'learn') {
+            setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
+            if (segs[1] === 'install')
+                await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
+            else
+                await renderLearn(view);
         }
         else if (page === 'install') {
-            setActiveTab('start');
-            await renderInstall(view);
+            // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
+            location.replace('#/learn/install');
+            return;
         }
         else if (page === 'domainmap') {
             setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
@@ -116,12 +125,12 @@ async function route() {
             }
         }
         else if (page === 'onboarding') {
-            setActiveTab('start'); // 온보딩 진행상황 — 시작하기 계열
+            setActiveTab('learn'); // 온보딩 진행상황 — 설치(시작하기) 계열이 사용 가이드로 이동(#617)했으므로 그 탭 활성
             await renderOnboarding(view);
         }
         else {
-            setActiveTab('start');
-            await renderInstall(view);
+            setActiveTab('dashboard'); // 알 수 없는 경로 → 홈(대시보드)
+            await renderMyDashboard(view);
         }
     }
     catch (e) {

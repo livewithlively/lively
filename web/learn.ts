@@ -11,13 +11,28 @@ import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 // 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
 //  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
 //  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
+// ── 사용 가이드 상위 탭의 서브탭(사용 가이드·시작하기) — 지식 탭과 같은 .sub-cats 패턴(#617). ──
+//  옛 상단 내비 '시작하기'(설치)를 사용 가이드 안으로 옮기며 그 자리를 '대시보드'로 개편. active = 'guide' | 'install'.
+const LEARN_SUBS = [
+  { key: 'guide', label: '사용 가이드', href: '#/learn' },
+  { key: 'install', label: '시작하기', href: '#/learn/install' },
+];
+function learnSubBar(active) {
+  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '사용 가이드 보기' });
+  for (const s of LEARN_SUBS) {
+    const on = s.key === active;
+    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
+      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label }));
+  }
+  return bar;
+}
 async function renderLearn(view) {
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })),
     el('p', { class: 'sub', text: '비개발자도 5분이면 이 도구가 무엇이고 각 메뉴가 무슨 일을 하는지 전부 이해할 수 있어요. 헷갈릴 때 언제든 다시 오세요.' }),
   );
 
-  view.replaceChildren(head, el('div', { class: 'guide-cards' },
+  view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' },
     heroCard(),       // ① 서비스를 관통하는 설명 + 작동 3단계
     tabsGuideCard(),  // ② 각 메뉴(탭)가 무슨 일을 하나
     quickStartCard(), // 처음이라면 이 순서로
@@ -73,7 +88,7 @@ const GUIDE_CHAPTERS = [
     { icon: 'play-circle', name: '시작하기', tag: '맨 처음 한 번', hue: '#2D6BF0', bg: '#EEF4FF',
       summary: 'AI와 회사 맥락을 연결하는 첫 세팅',
       desc: 'AI가 회사 사정을 아는 채로 일하게 만드는 출발점이에요. 설치 없이 웹에서 바로 쓰거나(터미널), 내 컴퓨터에 한 번 설치하는(약 5분) 두 가지 방법을 상황에 맞춰 단계별로 안내합니다.',
-      href: '#/install', link: '시작하기 열기' },
+      href: '#/learn/install', link: '시작하기 열기' },
   ] },
   { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
     { icon: 'terminal', name: '터미널', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
@@ -151,7 +166,7 @@ function quickStartCard() {
     el('div', { class: 'guide-path' },
       pathStep('1', '말 걸어보기', '터미널에서 AI를 띄우고, 까만 창에 하고 싶은 말을 그냥 입력해 보세요. 설치가 필요 없어 가장 쉬운 시작이에요.', '#/terminal', '터미널 열기', true),
       pathStep('2', '둘러보기', 'WIKI에서 우리 회사에 어떤 맥락(규칙·지식)이 쌓여 있는지 구경해 보세요.', '#/knowledge', 'WIKI 열기', false),
-      pathStep('3', '내 컴퓨터에 연결(선택)', '내 노트북에서 직접 AI를 쓰고 싶다면 시작하기에서 한 번 설치하세요. 약 5분이면 끝나요.', '#/install', '시작하기 열기', false)));
+      pathStep('3', '내 컴퓨터에 연결(선택)', '내 노트북에서 직접 AI를 쓰고 싶다면 시작하기에서 한 번 설치하세요. 약 5분이면 끝나요.', '#/learn/install', '시작하기 열기', false)));
 }
 
 function pathStep(num, title, desc, href, link, primary) {
@@ -271,7 +286,8 @@ async function renderInstall(view) {
   const head = pageHead('시작하기', '라이블리에서 AI(Claude Code·Codex)로 일하는 방법은 두 가지입니다. 아래에서 지금 상황을 고르면 그에 맞춰 안내합니다.', [], '하기');
   const slot = el('div', { class: 'install-guide' });
   slot.append(skeleton('설치 안내를 준비하는 중'));
-  view.replaceChildren(head, slot);
+  view.replaceChildren(head, learnSubBar('install'), slot); // 사용 가이드 서브탭 바(#617) — 머리 아래, 본문 위
+
   document.getElementById('view')!.focus?.();
   onboardingBanner().then((b) => { if (b) head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
