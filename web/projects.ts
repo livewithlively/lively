@@ -50,20 +50,8 @@ function pjvRestoreScroll(y) {
   for (const ms of [40, 120, 260, 500, 800, 1200]) setTimeout(apply, ms);
 }
 
-// 프로젝트 하위 탭 바 — 공간(사업·제품·시스템) 칩 제거(2026-06-26), 사이드바로 통합. [대시보드][작업 로그][탐색].
-//  지식 탭의 knowledgeSubBar 와 같은 짜임(.sub-cats/.sub-cat). active ∈ {dashboard, worklog, browse}.
-//  작업 로그 = '회사 전체'(회사에서 진행 중인 모든 작업) 활동 피드 — 대시보드에서 분리해 별도 탭으로.
-function projectSubBar(active) {
-  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '프로젝트 보기' });
-  // '작업 로그'는 터미널 탭(세션 목록 아래 섹션)으로 이관(#609) — 프로젝트 탭 하위탭에서 제거.
-  const tabs = [['dashboard', '대시보드', '#/projects2/dashboard'], ['browse', '탐색', '#/projects2/browse']];
-  for (const [key, label, href] of tabs) {
-    const on = key === active;
-    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: label }));
-  }
-  return bar;
-}
+// 프로젝트 하위 탭 바(대시보드·탐색) 폐지 — 별도 페이지로 존재할 이유가 없어 제거. 프로젝트 탭 = 보드 하나만
+//  (클릭 = 프로젝트 보드로 바로). '탐색'(지식·프로젝트·자료 둘러보기)은 제거, '작업 로그'는 이미 터미널로 이관(#609).
 
 // 프로젝트 탭 공통 페이지 헤더 — 공용 pageHead(#367). 제목 + 🗑 휴지통 진입점. 삭제 프로젝트 복원은 #/trash 공용 페이지.
 function projectPageHead() {
@@ -72,10 +60,9 @@ function projectPageHead() {
   ], '젝트');
 }
 
-// 프로젝트(v2) 진입 — worklog(작업 로그=회사 전체 활동) | browse(카테고리 통합 둘러보기) | 구 business/product/system URL 도 browse 로. 그 외=대시보드(보드).
-async function renderProjectsV2(view, sub, params, scopeKey?) {
+// 프로젝트(v2) 진입 — 하위 탭(탐색) 폐지: 상세(p) 외 모든 진입은 프로젝트 보드로. 옛 worklog→터미널(#609) 유지, 옛 browse URL 도 보드로 흡수.
+async function renderProjectsV2(view, sub, _params, scopeKey?) {
   if (sub === 'worklog') { location.replace('#/terminal'); return; } // 작업 로그 이관(#609) — 옛 링크/북마크는 터미널로
-  if (sub === 'browse' || SPACE_LABEL[sub]) return renderProjectV2Space(view, sub, params);
   return renderProjectV2Board(view, scopeKey);
 }
 
@@ -307,7 +294,7 @@ async function renderProjectV2Board(view, scopeKey?) {
   else { try { const s = localStorage.getItem('pjv:sideOpen'); if (s === '0') pjvBoardView.byArea = false; else if (s === '1') pjvBoardView.byArea = true; } catch (_) { /* noop */ } }
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
   const keepY = _pjvKeepScrollY; _pjvKeepScrollY = null; // 인라인 편집 재렌더면 스켈레톤 스킵 + 스크롤 복원(#358)
-  if (keepY == null) view.replaceChildren(projectSubBar('dashboard'), skeleton('프로젝트를 불러오는 중'));
+  if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
   const head = projectPageHead();
 
   let allProjects: any, mineProjects: any, lists: any, folders: any;
@@ -320,7 +307,7 @@ async function renderProjectV2Board(view, scopeKey?) {
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
     ]);
   } catch (e) {
-    view.replaceChildren(head, projectSubBar('dashboard'), errorNote(e, '프로젝트를 불러오지 못했습니다'));
+    view.replaceChildren(head, errorNote(e, '프로젝트를 불러오지 못했습니다'));
     return;
   }
   // 내 세션 수는 mine=1 응답에만 부여됨 → id 로 머지(전체 목록 행에 '내 세션' 신호 복원).
@@ -339,15 +326,11 @@ async function renderProjectV2Board(view, scopeKey?) {
   // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
   const canDelete = (_p?) => !!meId;
 
-  // 페이지 크롬(제목·하위탭·보드 헤드) — 사이드바(byArea) 켜지면 셸의 우측 컬럼(main) 상단으로, 꺼지면 카드 위 전폭으로.
+  // 페이지 크롬(제목만) — 사이드바(byArea) 켜지면 셸의 우측 컬럼(main) 상단으로, 꺼지면 카드 위 전폭으로.
   //  이 배치를 pjvProjectListBoard 가 byArea 에 따라 옮긴다(#607 — WIKI 형 풀블리드 사이드바).
-  const pageChrome = el('div', { class: 'pjv-board-chrome' },
-    head,
-    projectSubBar('dashboard'),
-    el('div', { class: 'card-head', style: 'margin: 6px 0 14px' },
-      el('div', {},
-        el('span', { class: 'eyebrow', text: '프로젝트 보드' }),
-        el('p', { class: 'sub', style: 'margin: 5px 0 0', text: '폴더·리스트로 정리한 프로젝트.' }))));
+  //  옛 '프로젝트 보드 / 폴더·리스트로 정리한 프로젝트.' 중분류 헤드(eyebrow+설명)는 WIKI 탭과 통일감 위해 제거(#617)
+  //  — 이제 head(제목+설명) 바로 아래 보드. 중분류 탭 폐지(#629)와 같은 방향(보드 하나).
+  const pageChrome = el('div', { class: 'pjv-board-chrome' }, head);
   view.replaceChildren(
     pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders, pageChrome),
     // '회사 전체'(회사 활동 피드)는 터미널 탭의 '작업 로그' 섹션으로 이관(#609 — companyTimelineSection).
@@ -3417,162 +3400,6 @@ function pjvProjectListCard(todo, inprog, done, reload, select, canDelete, field
   card.append(body);
   render();
   return card;
-}
-
-// 탐색 하위탭 바(#610) — 지식 · 프로젝트 · 자료. WIKI 처럼 맥락(지식/변화/원본)을 한 곳에서 훑는다.
-//  전환은 라우팅(#/projects2/browse?tab=...) — 뒤로가기·새로고침·딥링크 복원.
-function browseSubBar(active) {
-  const bar = el('div', { class: 'sub-cats sub-cats-2', role: 'tablist', 'aria-label': '탐색 보기' });
-  const tab = (key, label, title) => {
-    const on = key === active;
-    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''),
-      href: '#/projects2/browse?tab=' + key,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', title, text: label }));
-  };
-  tab('knowledge', '지식', '팀이 쌓아 온 정제 지식 — 결정·설계·개념·런북');
-  tab('projects', '프로젝트', '진행 중·완료 프로젝트(맥락의 변화)');
-  tab('sources', '자료', '회의록·이메일·슬랙 등 정제 전 원본');
-  return bar;
-}
-
-// 탐색(browse) — 지식·프로젝트·자료 세 하위탭(#610). renderKnowledgeSpace 와 같은 좌/우 2분할 패턴.
-//  지식·프로젝트는 좌측 카테고리 사이드바 공유(같은 category_id 로 필터). 자료는 카테고리 분류가 없어 종류/출처/검색 필터 + 목록만.
-async function renderProjectV2Space(view, _space, params) {
-  const f = (state.projects2 = state.projects2 || { space: '', category: '', status: '', browseTab: 'knowledge' });
-  if (f.browseTab === undefined) f.browseTab = 'knowledge'; // 기본 = 지식(최좌측 하위탭, 사용자 지정 순서 지식·프로젝트·자료)
-  if (params) {
-    if (params.has('tab')) f.browseTab = params.get('tab') || 'knowledge';
-    if (params.has('category')) f.category = params.get('category') || '';
-    if (params.has('status')) f.status = params.get('status') || '';
-  }
-  const which = (f.browseTab === 'projects' || f.browseTab === 'sources') ? f.browseTab : 'knowledge';
-  const head = projectPageHead();
-  const chrome = () => [head, projectSubBar('browse'), browseSubBar(which)];
-
-  view.replaceChildren(...chrome(), skeleton('불러오는 중'));
-
-  const listBox = el('div', { class: 'list-box browse-list' });
-  const foot = el('div', { class: 'list-foot' });
-
-  // ── 자료(source) — 카테고리 분류가 없는 raw 입력: 사이드바 없이 종류/출처/검색 필터 + 목록(자료 탭과 동일 데이터·행). ──
-  if (which === 'sources') {
-    const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
-    kindSel.setAttribute('aria-label', '종류');
-    const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
-    provSel.setAttribute('aria-label', '출처');
-    const qIn = el('input', { type: 'search', placeholder: '제목·본문 검색', 'aria-label': '검색' });
-    const refetchS = async () => {
-      listBox.replaceChildren(skeletonRows(4)); foot.replaceChildren();
-      try {
-        const p = new URLSearchParams();
-        if (kindSel.value) p.set('kind', kindSel.value);
-        if (provSel.value) p.set('provenance', provSel.value);
-        if (qIn.value.trim()) p.set('q', qIn.value.trim());
-        const r = await api('/api/ui/sources' + (p.toString() ? '?' + p.toString() : ''));
-        const entries = (r && r.entries) || [];
-        if (!entries.length) { listBox.replaceChildren(el('div', { class: 'empty', text: '자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.' })); return; }
-        listBox.replaceChildren(...entries.map(srcRow));
-        foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' }));
-      } catch (e) { listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다')); }
-    };
-    let t: any = null;
-    qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refetchS, 250); });
-    kindSel.addEventListener('change', refetchS);
-    provSel.addEventListener('change', refetchS);
-    const layout = el('section', { class: 'browse-main browse-plain' }, el('div', { class: 'filter-bar' }, qIn, kindSel, provSel), listBox, foot);
-    view.replaceChildren(...chrome(), layout);
-    applyReveal([layout]);
-    refetchS();
-    return;
-  }
-
-  // ── 지식·프로젝트 — 좌측 카테고리 사이드바 공유(같은 category_id). ──
-  const side = el('aside', { class: 'browse-side' });
-  const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
-  const myIds = myCatIdSet();
-  let bySpace: any = { business: [], product: [], system: [] };
-  try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
-  function buildSide() {
-    buildSpacesNav(nav, bySpace, f.category, myIds);
-    side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), nav);
-  }
-  buildSide();
-
-  // 상단 필터 — 프로젝트만 상태 select(전체/진행 중/완료). 지식은 분류 필터로 충분(별도 상태 없음).
-  const statusSel = selectFilter([['', '전체 상태'], ['active', '진행 중'], ['done', '완료']], f.status);
-  statusSel.setAttribute('aria-label', '상태');
-
-  function syncHash() {
-    const p = new URLSearchParams();
-    p.set('tab', which); // 현재 하위탭을 URL 에 유지(새로고침·딥링크 복원)
-    if (f.category) p.set('category', f.category);
-    if (which === 'projects' && f.status) p.set('status', f.status);
-    history.replaceState(null, '', '#/projects2/browse?' + p.toString());
-  }
-  async function refetch() {
-    listBox.replaceChildren(skeletonRows(4));
-    foot.replaceChildren();
-    try {
-      if (which === 'knowledge') {
-        // 지식 목록 — 카테고리 필터 + 최신순(recalled 전용, 지식 탭과 동형). 행은 knRow(클릭=지식 상세).
-        const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at', injection: 'recalled' });
-        if (f.category) p.set('category', f.category);
-        const r = await api('/api/ui/knowledge?' + p.toString());
-        const entries = (r && r.entries) || [];
-        if (!entries.length) { listBox.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 지식이 없습니다. 분류를 넓혀 보세요.' })); return; }
-        listBox.replaceChildren(...entries.map((e) => knRow(e)));
-        foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' }));
-      } else {
-        const p = new URLSearchParams();
-        if (f.category) p.set('category', f.category);
-        if (f.status) p.set('status', f.status);
-        const projects = await api('/api/ui/v6/projects?' + p.toString()).then((d) => (d && d.projects) || []);
-        if (!projects.length) { listBox.replaceChildren(el('div', { class: 'empty', text: '조건에 맞는 프로젝트가 없습니다. 필터를 넓혀 보세요.' })); return; }
-        listBox.replaceChildren(...projects.map(pjvProjectRow));
-        foot.replaceChildren(el('span', { class: 'caption', text: projects.length + '건' }));
-      }
-    } catch (e) {
-      listBox.replaceChildren(errorNote(e, which === 'knowledge' ? '지식을 불러오지 못했습니다' : '프로젝트를 불러오지 못했습니다'));
-    }
-  }
-
-  statusSel.addEventListener('change', () => { f.status = statusSel.value; syncHash(); refetch(); });
-  side.addEventListener('click', (ev) => {
-    const item = ev.target.closest('[data-cat-val]');
-    if (!item) return;
-    ev.preventDefault();
-    f.category = item.dataset.catVal || '';
-    buildSide(); syncHash(); refetch();
-  });
-
-  const mainChildren: any[] = [];
-  if (which === 'projects') mainChildren.push(el('div', { class: 'filter-bar browse-filter' }, statusSel));
-  mainChildren.push(listBox, foot);
-  const layout = el('div', { class: 'browse-layout' },
-    side,
-    el('section', { class: 'browse-main' }, ...mainChildren),
-  );
-  view.replaceChildren(...chrome(), layout);
-  applyReveal([layout]);
-  refetch();
-}
-
-// 프로젝트 한 행(목록) — 이름(상세 링크) + 상태 칩 + 갱신시각. 지식 탭 knRow 와 같은 .row 짜임.
-function pjvProjectRow(p) {
-  const isDone = p.status === 'done';
-  const when = isDone ? (p.completed_at || p.updated_at) : (p.updated_at || p.created_at);
-  // 상태 라벨 — done=완료 / todo=할 일 / 그 외(in_progress·active 등)=진행 중. 원문 값(in_progress) 노출 방지(#607 가독성).
-  const stateLabel = isDone ? '완료' : (p.status === 'todo' ? '할 일' : '진행 중');
-  const row = el('div', { class: 'row', role: 'link', tabindex: '0' },
-    el('div', { class: 'row-title', text: p.name }),
-    el('div', { class: 'row-meta' },
-      el('span', { class: 'pill-state' + (isDone ? '' : ' confirmed'), text: stateLabel }),
-      '  ', relTime(when)),
-  );
-  const go = () => { location.hash = '#/projects2/p/' + p.id; };
-  row.addEventListener('click', go);
-  row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
-  return row;
 }
 
 // ── 컴팩트 피커 — 멀티선택 피커({box,getSelected,getSelectedLabels})를 '요약 칩 + ▾' 트리거로 감싸 팝오버로 편집. ──
