@@ -1,5 +1,5 @@
 // terminal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { api, el, errorNote, pageHead, state, toast } from './core.js';
+import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
 import { startTour } from './tour.js';
@@ -409,21 +409,43 @@ function openTermEdit(s, cfg, view) {
             }
         } })));
 }
-// 초대 멤버 피커 — 나(state.me) 제외한 구성원 체크리스트. current(Set)로 초기 선택,
-//  selected() 로 체크된 멤버 id 배열을 돌려준다. 생성·수정 폼이 공유한다.
+// 초대 멤버 피커 — 프로젝트 팀원 피커(projects.ts memberPicker, .proj-mp)와 동일한 UI 로 통일(#617):
+//  검색 + 초대 요약 + [아바타·이름·✓] 행(클릭 토글, 선택된 사람은 위로). 나(state.me) 제외한
+//  구성원(사람·AI)이 후보. current(Set)=초기 선택, selected()=고른 멤버 id 배열. 생성·수정 폼이 공유한다.
 function buildInvitePicker(cfg, current) {
     const meId = (state.me && state.me.userId) || '';
     const others = (cfg.members || []).filter((m) => m.id !== meId);
-    const checks = others.map((m) => {
-        const cb = el('input', { type: 'checkbox', 'data-mid': m.id });
-        if (current.has(m.id))
-            cb.checked = true;
-        return { id: m.id, cb, row: el('label', { class: 'term-check' }, cb, el('span', { text: m.name + (m.kind === 'agent' ? ' (AI)' : '') })) };
-    });
-    const box = checks.length
-        ? el('div', { class: 'term-checklist' }, ...checks.map((c) => c.row))
-        : el('div', { class: 'caption', text: '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' });
-    return { box, selected: () => checks.filter((c) => c.cb.checked).map((c) => c.id) };
+    const selected = new Set([...current].filter((id) => others.some((m) => m.id === id))); // 유령 id 방지
+    const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색…' });
+    const count = el('div', { class: 'proj-mp-count' });
+    const results = el('div', { class: 'proj-mp-results' });
+    const box = el('div', { class: 'proj-mp' }, searchIn, count, results);
+    function paint() {
+        const n = selected.size;
+        count.textContent = n ? n + '명 초대됨' : '초대할 사람을 골라 추가하세요';
+        if (!others.length) {
+            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' }));
+            return;
+        }
+        const q = searchIn.value.trim().toLowerCase();
+        const cand = others.filter((m) => !q || (m.name || m.id).toLowerCase().includes(q));
+        cand.sort((a, b) => (selected.has(b.id) ? 1 : 0) - (selected.has(a.id) ? 1 : 0)); // 선택된 사람을 위로
+        if (!cand.length) {
+            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: '일치하는 사람이 없어요.' }));
+            return;
+        }
+        results.replaceChildren(...cand.map((m) => {
+            const on = selected.has(m.id);
+            return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), role: 'button', 'aria-pressed': on ? 'true' : 'false',
+                onclick: () => { if (on)
+                    selected.delete(m.id);
+                else
+                    selected.add(m.id); paint(); searchIn.focus(); } }, personFace(m.id, 'proj-mp-ava', m.name), el('span', { class: 'proj-mp-name', text: m.name + (m.kind === 'agent' ? ' (AI)' : '') }), el('span', { class: 'proj-mp-check' + (on ? ' on' : ''), 'aria-hidden': 'true', text: on ? '✓' : '' }));
+        }));
+    }
+    searchIn.addEventListener('input', paint);
+    paint();
+    return { box, selected: () => [...selected] };
 }
 async function renderTerminalSession(view, id) {
     const prefs = termPrefs();

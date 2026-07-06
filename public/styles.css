@@ -1417,9 +1417,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-section-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 8px; }
 .term-section-row .term-section-title { margin: 0; }
 .term-sel-toggle { flex: none; }
-.term-checklist { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; }
-.term-check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; padding: 3px 2px; }
-.term-check input { margin: 0; flex: 0 0 auto; }
+/* 초대 피커는 프로젝트 팀원 피커(.proj-mp)와 UI 통일(#617) — 옛 .term-checklist/.term-check 제거. */
 .term-input:disabled { background: var(--bg-soft, #f4f4f6); color: var(--ink-sub); cursor: default; }
 /* 배지 — 팀원·세션 메타(공개/비공개·작성자·자동승인 등) 공통 알약형 */
 .term-members { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
