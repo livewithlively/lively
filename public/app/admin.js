@@ -166,47 +166,6 @@ function meaningCard(m0) {
 function sectionTitle(titleText, m) {
     return el('div', { class: 'section-title' }, el('h2', { text: titleText }), meaningCard(m));
 }
-function adminRowMeta(key, data) {
-    // 회색 보조설명 = '이게 무슨 탭인지' 짧은 설명(개수·시각 아님). 비개발자가 한눈에 알게.
-    if (key === 'profile')
-        return '조직 이름과 서버 주소';
-    if (key === 'members')
-        return '함께 쓰는 사람';
-    if (key === 'member-add')
-        return '새 팀원 등록 + 접속 열쇠 발급';
-    if (key === 'tokens')
-        return '발급된 접속 열쇠 현황·정리';
-    if (key === 'org-defaults')
-        return '회사 배경·규칙·AI 말투';
-    if (key === 'context-ontology-guide')
-        return '⚠️ 지식 인덱스 전체 틀 (뼈대)';
-    if (key === 'wiki-categories')
-        return '사업·제품·시스템 분류축 CRUD';
-    if (key === 'injection-map') {
-        const rc = data.runtimeConfig;
-        if (!rc)
-            return '세션에 자동 주입되는 것 한눈에';
-        const off = Object.values(rc.hooks || {}).filter((v) => v === false).length;
-        return off ? off + '개 시점 꺼짐' : '주입 시점 전체 켜짐';
-    }
-    if (key === 'deploy')
-        return 'OS별 명령 복사';
-    if (key === 'mcp')
-        return (data.mcpServers || []).length + '개 서버';
-    if (key === 'db-sources')
-        return ((data.dbSources || []).length + (data.envSources || []).length) + '개 소스';
-    if (key === 'custom-hooks')
-        return (data.orgHooks || []).length + '개 훅';
-    if (key === 'tools') {
-        const t = (data.tools || []).filter((x) => x.kind !== 'builtin');
-        return t.length ? t.length + '개 툴' : '기본';
-    }
-    if (key === 'tool-usage')
-        return '하네스 MCP 호출 빈도·인자';
-    if (key === 'org-audit')
-        return '누가·언제·무엇을 바꿨나';
-    return '';
-}
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
 async function renderSystem(view, sub) {
     return renderAdmin(view, sub);
@@ -256,7 +215,8 @@ async function renderAdmin(view, sub) {
             continue; // 활성 중분류 섹션만 좌측 nav 에.
         if (sectionHidden(s.key, data))
             continue;
-        list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key }, el('div', { class: 'row-title', text: s.label }), el('div', { class: 'row-meta', text: adminRowMeta(s.key, data) })));
+        // 회색 부제(row-meta) 제거 — 라벨만 노출(#613 후속, 장원준 피드백: 모든 탭의 회색 부제가 어색).
+        list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key }, el('div', { class: 'row-title', text: s.label })));
     }
     const detail = el('div', { class: soloSection ? 'admin-solo-detail' : 'split-detail' });
     renderAdminDetail(detail, sel, data);
