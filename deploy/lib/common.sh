@@ -100,8 +100,13 @@ render_service_unit() {
   local svc_user="${SERVICE_USER:-$(id -un)}"
   local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
-  mkdir -p "$APP_DIR/logs"
-  [ "$(detect_os)" = linux ] && sudo chown -R "$svc_user" "$APP_DIR/logs" 2>/dev/null || true   # 게이트웨이가 append(기존 gateway.log 도 이관)
+  # 게이트웨이(비-운영자 lively)가 런타임에 '쓰는' 디렉토리는 서비스유저 소유여야 한다 — logs(systemd append) +
+  #  data(노션 자산 등 fs 쓰기: 게이트웨이 cwd=APP_DIR 이라 asset_dir 기본값 = $APP_DIR/data/notion-assets). APP_DIR 본체를
+  #  운영자 소유로 두는 불변식(update 의 npm ci)과 무충돌 — logs·data 는 빌드 산출이 아니라 '런타임 쓰기'다(/usr vs /var 처럼
+  #  코드=운영자·가변데이터=서비스유저 분리). items-db 는 docker named volume(items-db-data:/var/lib/postgresql)이라
+  #  $APP_DIR/data 아래에 없음 → data 를 chown 해도 DB 볼륨 무영향. 매 update 재적용(멱등)이라 신규/이관 자산도 계속 소유.
+  mkdir -p "$APP_DIR/logs" "$APP_DIR/data"
+  [ "$(detect_os)" = linux ] && sudo chown -R "$svc_user" "$APP_DIR/logs" "$APP_DIR/data" 2>/dev/null || true
   case "$(detect_os)" in
     linux)
       local unit="/etc/systemd/system/context-ontology-gateway.service"
