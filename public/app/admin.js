@@ -1040,7 +1040,7 @@ async function reposPanel(detail, data) {
     const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '레포' }), el('span', { class: 'dm-tag', text: 'git' }), el('span', { class: 'wikicat-groupcount', text: String(repos.length) }));
     if (canEdit)
         head.append(el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }));
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }), state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정', onclick: () => openGitCredentialManager('gateway') }) : null, canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')), el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요. private 레포 클론 인증은 [게이트웨이 git 계정] 또는 각 구성원의 [내 프로필 ▸ git 인증]에서 설정합니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }), state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정', onclick: () => openGitCredentialManager('gateway') }) : null, canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')), el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요. private 레포 클론 인증은 [게이트웨이 git 계정] 또는 각 구성원의 [내 프로필 ▸ git 인증]에서 설정합니다. HTTPS 가 막힌 셀프호스팅(GitLab 등)은 git 주소를 SSH 형(git@호스트:그룹/레포.git)으로 넣으세요.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
 }
 // 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
@@ -3635,7 +3635,7 @@ function openGitCredentialManager(scope) {
         const box = el('div', { class: 'card', style: 'padding:10px 12px; margin:6px 0;' }, head);
         if (c.kind === 'ssh' && c.ssh_public_key) {
             box.append(el('pre', { class: 'admin-preview', style: 'white-space:pre-wrap; word-break:break-all; margin:8px 0 0; font-size:11.5px;', text: c.ssh_public_key }));
-            box.append(el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '이 공개키를 GitHub 레포 ▸ Settings ▸ Deploy keys (또는 계정 ▸ SSH keys) 에 등록하세요.' }));
+            box.append(el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '이 공개키를 호스트에 등록하세요 — GitHub: 레포 Settings ▸ Deploy keys · GitLab: 레포 Settings ▸ Repository ▸ Deploy keys(또는 계정 ▸ SSH keys). 셀프호스팅 GitLab 도 동일.' }));
         }
         return box;
     };
@@ -3643,7 +3643,7 @@ function openGitCredentialManager(scope) {
         const rows = [];
         rows.push(el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: isGw
                 ? '조직 머신 git 계정입니다. 프로젝트 provision 클론에서 요청한 구성원 자격이 없을 때 이 자격으로 클론합니다 — private 레포면 여기(또는 각 구성원)에 자격이 있어야 클론됩니다.'
-                : '내 git 자격입니다. private 레포 클론과 세션(shell·Claude) 안 git 에 이 자격이 쓰입니다. SSH 는 박스가 키를 만들고 공개키만 GitHub 에 등록하면 됩니다(개인키는 박스 밖으로 안 나갑니다).' }));
+                : '내 git 자격입니다. private 레포 클론과 세션(shell·Claude) 안 git 에 이 자격이 쓰입니다. SSH 는 박스가 키를 만들고 공개키만 호스트(GitHub·GitLab·셀프호스팅)에 등록하면 됩니다(개인키는 박스 밖으로 안 나갑니다).' }));
         if (!data.encryption_ready)
             rows.push(el('p', { class: 'gate-error', style: 'margin:0 0 10px', text: '⚠ 서버에 CONNECTOR_SECRET_KEY 가 설정되지 않아 자격을 저장할 수 없습니다 — 관리자에게 게이트웨이 env(CONNECTOR_SECRET_KEY) 설정을 요청하세요.' }));
         const creds = (data.credentials || []);
@@ -3655,8 +3655,8 @@ function openGitCredentialManager(scope) {
         rows.push(el('div', { style: 'border-top:1px solid var(--line); margin:14px 0 10px;' }));
         const hostIn = el('input', { type: 'text', value: 'github.com', placeholder: 'github.com' });
         const kindSel = { v: 'ssh' };
-        const sshBox = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0', text: '박스가 ed25519 키페어를 생성합니다. 생성 후 공개키를 GitHub 에 등록하세요.' }));
-        const userIn = el('input', { type: 'text', placeholder: '사용자명(선택 — GitHub PAT 면 비워도 됨)' });
+        const sshBox = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0', text: '박스가 ed25519 키페어를 생성합니다. 생성 후 공개키를 호스트(GitHub·GitLab 등)에 Deploy key 로 등록하세요.' }));
+        const userIn = el('input', { type: 'text', placeholder: '사용자명(선택 — GitHub PAT 는 비워도 됨, GitLab 은 보통 계정명/oauth2)' });
         const tokenIn = el('input', { type: 'password', placeholder: 'HTTPS 토큰 / PAT', autocomplete: 'off' });
         const httpsBox = el('div', { style: 'display:none' }, field('사용자명(선택)', userIn), field('토큰', tokenIn));
         const kindChips = el('div', { class: 'chips' }, ...['ssh', 'https'].map((k) => {
@@ -3692,7 +3692,7 @@ function openGitCredentialManager(scope) {
             status.textContent = kindSel.v === 'ssh' ? '키 생성 중…' : '저장 중…';
             try {
                 await api(base, { method: 'POST', body: JSON.stringify(payload) });
-                toast(kindSel.v === 'ssh' ? 'SSH 키 생성됨 — 아래 공개키를 GitHub 에 등록하세요' : '토큰 저장됨');
+                toast(kindSel.v === 'ssh' ? 'SSH 키 생성됨 — 아래 공개키를 호스트에 Deploy key 로 등록하세요' : '토큰 저장됨');
                 reload();
             }
             catch (e) {
@@ -3701,7 +3701,7 @@ function openGitCredentialManager(scope) {
                 toast((e && e.message) || '실패', true);
             }
         });
-        rows.push(el('div', { class: 'card', style: 'padding:12px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '새 자격 추가' }), kindChips, field('호스트', hostIn), sshBox, httpsBox, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
+        rows.push(el('div', { class: 'card', style: 'padding:12px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '새 자격 추가' }), kindChips, field('호스트', el('div', {}, hostIn, el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'GitHub·GitLab·셀프호스팅(예: git.honestfund.kr) 모두 지원 — 레포 호스트를 정확히 입력. HTTPS 가 막힌 호스트는 SSH 로 등록하세요.' }))), sshBox, httpsBox, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
         body.replaceChildren(...rows);
     };
     reload();

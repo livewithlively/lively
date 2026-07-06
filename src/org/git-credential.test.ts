@@ -7,8 +7,9 @@ import { spawnSync } from "node:child_process";
 process.env.CONNECTOR_SECRET_KEY = "unit-test-key-do-not-use-in-prod-0123456789"; // #541 secret-box 공용 마스터키
 const { encryptSecret, decryptSecret, secretsEnabled } = await import("./secret-box.js");
 const { generateSshKeypair } = await import("./git-credential-store.js");
-const { hostOf, prepareGitAuth } = await import("../project-provision.js");
+const { hostOf, prepareGitAuth, isAuthError } = await import("../project-provision.js");
 const { safeHost, buildSshConfigBlock, buildGitCredLines } = await import("./git-credential-materialize.js");
+const { sanitizeCloneUrl } = await import("../domainmap/core/queries.js");
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
@@ -65,6 +66,34 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   assert.equal(hostOf(""), null);
   assert.equal(hostOf(null), null);
   ok("hostOf 파싱(url·scp·정크)");
+}
+
+// ── sanitizeCloneUrl: http(s) 자격 제거하되 ssh:// 의 로그인 유저(git@)는 보존(#522 버그수정) ──
+{
+  // http(s): username/password(잠재 시크릿) 제거
+  assert.equal(sanitizeCloneUrl("https://tok@github.com/o/r.git"), "https://github.com/o/r.git");
+  assert.equal(sanitizeCloneUrl("https://user:pass@git.honestfund.kr/g/r.git"), "https://git.honestfund.kr/g/r.git");
+  // scp-식 ssh: 조기통과(임베드 시크릿 없음) — git@ 보존
+  assert.equal(sanitizeCloneUrl("git@git.honestfund.kr:hf-dev/backend/honest-one.git"), "git@git.honestfund.kr:hf-dev/backend/honest-one.git");
+  // ssh:// : 로그인 유저(git)를 벗기면 로컬유저로 접속해 실패 → 반드시 보존(회귀 방지 핵심)
+  assert.equal(sanitizeCloneUrl("ssh://git@git.honestfund.kr/hf-dev/backend/honest-one.git"), "ssh://git@git.honestfund.kr/hf-dev/backend/honest-one.git");
+  // 파싱 불가 → null(fail-closed)
+  assert.equal(sanitizeCloneUrl("not a url"), null);
+  assert.equal(sanitizeCloneUrl(null), null);
+  ok("sanitizeCloneUrl http 자격제거·ssh 유저보존");
+}
+
+// ── isAuthError: 인증 계열 실패만 잡아 '자격 등록' 안내로 분기(#522) ──
+{
+  assert.equal(isAuthError("fatal: could not read Username for 'https://git.honestfund.kr': terminal prompts disabled"), true);
+  assert.equal(isAuthError("remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://git.honestfund.kr/g/r.git/'"), true);
+  assert.equal(isAuthError("git@git.honestfund.kr: Permission denied (publickey).\nfatal: Could not read from remote repository."), true);
+  assert.equal(isAuthError("fatal: repository 'https://x/y.git/' not found"), true);
+  // 비인증(네트워크·경로 등)은 502 로 남겨야 하므로 false
+  assert.equal(isAuthError("fatal: unable to access ... Could not resolve host: nope.invalid"), false);
+  assert.equal(isAuthError("fatal: destination path already exists"), false);
+  assert.equal(isAuthError(""), false);
+  ok("isAuthError 인증실패만 분기");
 }
 
 // ── prepareGitAuth: SSH 주입 env + 키파일 600 + cleanup ──

@@ -12,8 +12,10 @@ export function sanitizeCloneUrl(raw: unknown): string | null {
   if (!s.includes("://") && /^[\w.-]+@[\w.-]+:/.test(s)) return s; // scp-식 ssh — 임베드 시크릿 없음
   try {
     const u = new URL(s);
-    u.username = "";
     u.password = "";
+    // ssh:// 계열의 username(예: git@)은 시크릿이 아니라 SSH 로그인 유저 → 보존한다(벗기면 로컬 유저로 접속해 인증 실패).
+    //  http(s)·기타 스킴의 username 은 자격(PAT username 등)일 수 있어 계속 제거(fail-closed 유지).
+    if (u.protocol !== "ssh:" && u.protocol !== "git+ssh:") u.username = "";
     return u.toString();
   } catch {
     return null; // 파싱 불가 → 노출 금지(잠재 시크릿 보유 문자열일 수 있음)

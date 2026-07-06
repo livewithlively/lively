@@ -28,7 +28,9 @@ export interface ProvisionedRepo { name: string; path: string; worktree: boolean
 //  extraEnv: 자격 주입(#540) — GIT_SSH_COMMAND(키파일)/GIT_ASKPASS(토큰). process.env 위에 병합.
 function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((resolve) => {
-    const env = extraEnv ? { ...process.env, ...extraEnv } : process.env;
+    // GIT_TERMINAL_PROMPT=0 은 항상 — 자격 미주입(앰비언트 폴백)이어도 git 이 Username/Password 프롬프트로 매달리지 않고
+    //  즉시 실패하게 한다(무한대기 → 프록시 504 의 근본원인 제거, #522). 주입 자격(extraEnv)의 동일 키가 있으면 그 값이 뒤에서 우선.
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) };
     const p = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let out = "", err = "", done = false;
     const finish = (r: { ok: boolean; out: string; err: string }) => { if (!done) { done = true; resolve(r); } };
@@ -65,6 +67,13 @@ export function hostOf(gitUrl: unknown): string | null {
 async function originUrl(repoPath: string): Promise<string | null> {
   const r = await git(["config", "--get", "remote.origin.url"], repoPath);
   return r.ok ? (r.out.trim() || null) : null;
+}
+
+// 클론/fetch 실패 메시지가 '인증' 계열인지 — 그렇다면 502 대신 자격 등록을 안내(무한대기 아닌 즉답, #522). (export=테스트용·순수)
+//  git 은 영문 stderr 를 낸다: HTTPS 무자격/오자격·SSH publickey 거부·private 레포 은닉(not found) 등을 폭넓게 포착.
+export function isAuthError(err: unknown): boolean {
+  const s = String(err ?? "");
+  return /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)|HTTP Basic: Access denied|Invalid username or (token|password)|could not read from remote repository|repository (?:'[^']*' )?not found|could not be found|Access denied|403 Forbidden|401 Unauthorized/i.test(s);
 }
 
 // 자격 주입 준비(#540) — 게이트웨이가 클론/fetch 할 때 요청 멤버(없으면 gateway) 자격을 그 git 호출에만 주입.
@@ -160,7 +169,15 @@ export async function provisionProjectRepos(
         if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
         await fsp.mkdir(path.dirname(repoPath), { recursive: true });
         const c = await git(["clone", url, repoPath], undefined, auth.env);
-        if (!c.ok) throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
+        if (!c.ok) {
+          // 인증 계열 실패는 '자격 등록하라'는 행동가능 메시지로(#522) — 무한대기/막연한 502 대신. 그 외(네트워크·경로 등)는 502.
+          if (isAuthError(c.err)) {
+            throw new HttpError(401, `레포 '${name}' 클론 인증 실패 — 호스트 '${host}' 자격이 없거나 프로토콜이 안 맞습니다. `
+              + `내 프로필 ▸ git 인증(또는 관리탭 ▸ 게이트웨이 git 계정)에 '${host}' 자격을 등록하세요. `
+              + `HTTPS 가 막힌 셀프호스팅(GitLab 등)은 레포 주소를 SSH 형(git@${host}:그룹/레포.git)으로 등록하고 SSH 키를 쓰세요. (git: ${c.err})`);
+          }
+          throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
+        }
         cloned = true;
       }
 

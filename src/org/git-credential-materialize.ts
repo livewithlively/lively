@@ -4,6 +4,7 @@
 //  호출: createSession 격리 분기에서 best-effort(실패해도 세션 생성 안 막음). 멱등(매 세션 최신 DB 상태로 재생성).
 import { listGitCredentialsPublic, getGitSecret, memberOwner } from "./git-credential-store.js";
 import { memberSh } from "../terminal-member-fs.js";
+import { PROJECT_SHARED_BASE } from "../project-fs.js";
 
 // 파일명 컴포넌트로 안전화(호스트는 이미 검증되지만 방어적: 영숫자만 남김 → 셸 인젝션·경로 표면 제거). (export=테스트용)
 export const safeHost = (h: string): string => String(h).toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -26,6 +27,23 @@ export function buildSshConfigBlock(hosts: string[]): string {
 // ~/.lively/git-credentials 라인들 — https://<user>:<token>@<host>. user/token URL 인코딩(특수문자로 URL 안 깨지게). (export=테스트용·순수)
 export function buildGitCredLines(https: Array<{ host: string; https_username: string | null; https_token: string }>): string {
   return https.map((s) => `https://${encFor(s.https_username || "x-access-token")}:${encFor(s.https_token)}@${s.host}`).join("\n");
+}
+
+// 격리 세션 dubious-ownership 해소(#522) — 게이트웨이(lively)가 클론한 공유 레포를 멤버(box_<slug>, 다른 uid)의 git 이
+//  거부하지 않도록, 멤버 전역 gitconfig 에 공유 워크스페이스(PROJECT_SHARED_BASE/*)를 safe.directory 로 등록한다.
+//  · git 2.35.2+(CVE-2022-24765)는 소유 uid ≠ 실행 uid 면 레포 파싱을 거부한다. 클론은 게이트웨이 소유(공유 base 협업모델 유지, #540)
+//    → 멤버 세션의 git 이 'dubious ownership' 으로 죽는다. 이게 그 방벽을 딱 공유 워크스페이스 하위로만 연다.
+//  · 스코프 = PROJECT_SHARED_BASE/* (블랭킷 * 아님) — 다른 위치(멤버 홈·/tmp)의 planted 레포는 계속 경고(멤버 간 방어 유지).
+//    git 2.35.3+ 의 '/*' 접미사 = 그 디렉터리 하위 모든 레포 신뢰.
+//  · 자격 유무와 무관하게 매 격리 세션에서 보장(materialize 와 별개 — 자격 없는 멤버도 공유 레포 git 을 쓴다). 멱등.
+//  · 값에 '*' 가 있어 셸 확장을 피하려 stdin 으로 전달하고 git 이 인자로 받게 한다. Linux 격리 전용(memberSh).
+export async function ensureGitSafeDirectory(osUser: string): Promise<void> {
+  const glob = `${PROJECT_SHARED_BASE}/*`;
+  await memberSh(
+    osUser,
+    'v=$(cat); git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$v" || git config --global --add safe.directory "$v"',
+    glob,
+  );
 }
 
 // 멤버의 등록 자격(SSH/HTTPS)을 홈에 반영. 등록 자격이 없으면 no-op(쓰기 안 함).
