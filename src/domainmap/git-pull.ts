@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
-import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError } from "../org/git-credential-store.js";
+import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError, describeGitError } from "../org/git-credential-store.js";
 
 const execFileP = promisify(execFile);
 // clone(대형 레포 초회)은 fetch 보다 오래 걸릴 수 있어 provision(180s)과 맞춘다 — 상한일 뿐(지연 아님).
@@ -89,10 +89,10 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
   catch (e) {
-    // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 일반 메시지로 '분류'만 해 진단가능성을 남긴다(#606).
+    // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 describeGitError 로 안전요약(URL 스크럽)해 진단가능성을 남긴다(#606).
     const detail = isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)
       ? `git 인증 실패 — 호스트 '${hostOf(repo.git_url) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정에 등록)`
-      : "git clone/fetch failed";
+      : `git clone/fetch 실패: ${describeGitError(e, repo.git_url)}`;
     return { repo: repoName, status: "error", detail };
   }
 

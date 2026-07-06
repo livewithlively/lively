@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
-import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError } from "../org/git-credential-store.js";
+import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError, describeGitError } from "../org/git-credential-store.js";
 
 const execFileP = promisify(execFile);
 
@@ -119,7 +119,7 @@ async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
     if (isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)) {
       throw httpErr(401, `git 인증 실패 — 호스트 '${hostOf(gitUrl) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정)`);
     }
-    throw httpErr(502, "git clone/fetch failed");
+    throw httpErr(502, "git clone/fetch 실패: " + describeGitError(e, gitUrl));
   } finally {
     await auth.cleanup();
   }

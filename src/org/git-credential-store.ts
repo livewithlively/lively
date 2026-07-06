@@ -155,6 +155,22 @@ export function isAuthError(err: unknown): boolean {
   return /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)|HTTP Basic: Access denied|Invalid username or (token|password)|could not read from remote repository|repository (?:'[^']*' )?not found|could not be found|Access denied|403 Forbidden|401 Unauthorized/i.test(s);
 }
 
+// git 실패의 '안전한' 한 줄 요약 — 스캔 요약/로그 관측성용(#606). 원격 URL·토큰은 절대 안 싣는다:
+//  fs 오류(mkdir EACCES 등)는 코드·syscall·로컬경로(시크릿 아님)를, git stderr 는 첫 줄에서 URL/scp·자격을 스크럽해 남긴다.
+export function describeGitError(err: unknown, gitUrl?: string | null): string {
+  const e = err as { code?: unknown; stderr?: unknown; message?: unknown; killed?: boolean; signal?: unknown; syscall?: unknown; path?: unknown };
+  if (e?.killed || e?.signal === "SIGKILL" || e?.signal === "SIGTERM") return "timeout";
+  // fs/spawn 레벨(mkdir·spawn 등): code 가 문자열(EACCES/ENOENT…)이고 syscall 있음 — 로컬경로만 노출(원격 URL 아님).
+  if (typeof e?.code === "string" && e?.syscall) {
+    return `${e.code} (${e.syscall}${e.path ? " " + String(e.path) : ""})`.slice(0, 200);
+  }
+  let s = String(e?.stderr || e?.message || err || "").split("\n").map((l) => l.trim()).find(Boolean) || "";
+  if (gitUrl) s = s.split(String(gitUrl)).join("<repo>");            // 등록된 실제 git_url 제거(https 토큰 포함 가능)
+  s = s.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>")               // scheme://… (자격 포함 가능)
+       .replace(/[\w.-]+@[\w.-]+:\S*/g, "<url>");                     // scp 형 user@host:path
+  return s.trim().slice(0, 200) || "unknown";
+}
+
 // 자격 주입 준비(#540) — 게이트웨이/멤버 자격을 그 git 호출에만 주입.
 //  SSH: 개인키를 임시 700 디렉에 600 으로 쓰고 GIT_SSH_COMMAND -i. HTTPS: GIT_ASKPASS 스크립트 + 토큰.
 //  둘 다 호출 뒤 cleanup 으로 즉시 삭제(디스크에 시크릿 잔존 최소화). 자격 없으면 no-op(앰비언트 폴백).
