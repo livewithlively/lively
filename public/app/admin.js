@@ -25,7 +25,7 @@ const ADMIN_SECTIONS = [
     // 팀(스쿼드/사일로) 관리 — 구성원을 팀으로 묶고, 팀이 카테고리를 '소유'(오너십 배정은 분류체계관리에서). 팀 소유 = 표면화·주입의 '우리 팀' 기준.
     { key: 'teams', label: '팀 관리', meaning: 'team', group: 'access' },
     { key: 'member-add', label: '구성원 추가', meaning: 'member', group: 'access' },
-    { key: 'tokens', label: '접속 권한 변경', meaning: null, group: 'access' },
+    { key: 'tokens', label: '구성원 토큰 관리', meaning: null, group: 'access' },
     // 중앙박스 계정(프로필) — 멤버별 다른 Claude Code 계정(멀티프로필 #346/#442). config·MCP·훅은 여기서 설치, 로그인은 멤버가 웹터미널에서.
     { key: 'profiles', label: '중앙박스 계정(프로필)', meaning: null, group: 'access' },
     // ②-B WIKI 카테고리 관리 — 지식(위키)의 분류축(사업·제품·시스템 카테고리) CRUD. 제품 카테고리=도메인.
@@ -1584,10 +1584,9 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
 }
 // ── 구성원 추가 — 새 팀원 등록 + 접속 열쇠(토큰) 발급을 한 곳에서. admin 전용([구성원 관리]에서 분리). ──
 function memberAddPanel(detail, data) {
-    const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
-    const card = el('div', { class: 'card' }, sectionTitle('구성원 추가', data.meaning['member']), el('p', { class: 'admin-hint', text: '새 팀원을 등록하고, 그 사람의 접속 열쇠(토큰)를 발급해 전달하세요. ① 아래에서 구성원을 등록하면 ② 접속 열쇠 발급 목록에 나타납니다.' }));
-    // ① 새 구성원 등록 — memberForm(신규) 재사용. 등록 성공 시 토큰 발급으로 자연스럽게 이어지도록 패널을 재렌더(그 구성원 미리선택).
-    card.append(el('h3', { class: 'member-add-step', text: '① 새 구성원 등록' }));
+    // 토큰 발급(구 ② 접속 열쇠 발급)은 [구성원 토큰 관리] 탭으로 이관(#613 후속) — 여기선 새 구성원 등록만.
+    //  ①/② 넘버링 제거. 등록 성공 시 그 구성원을 미리선택한 채 [구성원 토큰 관리] 탭으로 이동해 발급으로 자연스럽게 이어진다.
+    const card = el('div', { class: 'card' }, sectionTitle('구성원 추가', data.meaning['member']), el('p', { class: 'admin-hint', text: '새 팀원을 등록하세요. 등록하면 [구성원 토큰 관리] 탭으로 넘어가 그 사람의 접속 열쇠(토큰)를 발급·전달할 수 있어요.' }));
     const formHost = el('div', {});
     const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] };
     memberForm(formHost, blank, data, detail, true, {
@@ -1595,15 +1594,12 @@ function memberAddPanel(detail, data) {
         showCancel: false,
         showRemove: false,
         onSaved: (payload) => {
-            state.admin.memberAddPreselect = payload.id;
-            toast('구성원 등록됨 — 아래에서 접속 열쇠를 발급해 전달하세요');
-            renderAdminDetail(detail, 'member-add', state.admin.data);
+            state.admin.memberAddPreselect = payload.id; // [구성원 토큰 관리] 탭에서 이 구성원 미리선택
+            toast('구성원 등록됨 — 접속 열쇠를 발급해 전달하세요');
+            location.hash = '#/system/tokens'; // route() 재실행 → tokensPanel 렌더(발급 블록에서 미리선택)
         },
     });
     card.append(formHost);
-    // ② 접속 열쇠(토큰) 발급 — 등록된 구성원을 골라 발급(기존 발급 블록 재사용). 방금 등록한 사람을 미리 선택.
-    card.append(installMinterBlock(data, gw, { title: '② 접속 열쇠 발급', preselectId: state.admin.memberAddPreselect }));
-    state.admin.memberAddPreselect = null; // 1회성 미리선택 — 다음 렌더에 잔류 방지
     detail.replaceChildren(card);
 }
 // ── 팀 관리 — 구성원을 팀(스쿼드/사일로)으로 묶고, 팀이 카테고리를 '소유'(표면화·주입의 '우리 팀' 기준). ──
@@ -1792,8 +1788,9 @@ function profileEditor(detail, data) {
     }
     detail.replaceChildren(el('div', { class: 'card' }, ...body));
 }
-// ── 접속 권한 (발급 현황 보기 + 접속 해제) — admin 전용. 토큰 발급은 [구성원 추가] 탭으로 이동. ──
+// ── 구성원 토큰 관리 — 접속 열쇠(토큰) 발급 + 발급 현황 보기 + 접속 해제. admin 전용. (발급 블록은 [구성원 추가]에서 이관 #613 후속) ──
 function tokensPanel(detail, data) {
+    const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
     const tokens = data.tokens || [];
     const active = tokens.filter((t) => !t.revoked_at);
     const revoked = tokens.filter((t) => t.revoked_at);
@@ -1821,14 +1818,17 @@ function tokensPanel(detail, data) {
         return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') }, el('div', { class: 'token-main' }, el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }), el('div', { class: 'mini-meta', text: meta })), right);
     };
     const children = [
-        el('h2', { text: '접속 권한 변경' }),
-        el('p', { class: 'admin-hint', text: '지금 누가 회사 게이트웨이에 연결할 수 있는지(발급된 접속 열쇠)를 한눈에 보고, 더 이상 필요 없는 접속을 정리하는 곳입니다. 새 구성원 등록과 열쇠 발급은 [구성원 추가] 탭에서 합니다.' }),
-        el('div', { class: 'meaning-grid', style: 'margin:2px 0 12px' }, meaningRow('여기서 뭘 하나', '발급된 접속 열쇠의 사용 현황을 살펴보고, 필요할 때 특정 구성원의 접속을 해제(차단)합니다.'), meaningRow('언제 정리하나', '퇴사·기기 분실 등 그 사람의 접속을 끊어야 할 때. 해제하면 서버를 다시 켤 필요 없이 그 즉시 막힙니다(되돌릴 수 없음).')),
+        el('h2', { text: '구성원 토큰 관리' }),
+        el('p', { class: 'admin-hint', text: '구성원의 접속 열쇠(토큰)를 발급해 전달하고, 발급된 열쇠의 사용 현황을 보거나 더 이상 필요 없는 접속을 해제하는 곳입니다.' }),
+        // 발급 — 구성원을 골라 토큰 발급([구성원 추가]에서 이관). 등록 직후 넘어오면 그 구성원이 미리선택된다.
+        installMinterBlock(data, gw, { title: '접속 열쇠(토큰) 발급', preselectId: state.admin.memberAddPreselect }),
+        el('div', { class: 'meaning-grid', style: 'margin:16px 0 12px' }, meaningRow('발급된 열쇠는', '지금 누가 회사 게이트웨이에 연결할 수 있는지 보여줘요. 사용 현황을 살펴보고, 필요할 때 특정 구성원의 접속을 해제(차단)합니다.'), meaningRow('언제 정리하나', '퇴사·기기 분실 등 그 사람의 접속을 끊어야 할 때. 해제하면 서버를 다시 켤 필요 없이 그 즉시 막힙니다(되돌릴 수 없음).')),
     ];
+    state.admin.memberAddPreselect = null; // 1회성 미리선택 소진(다음 렌더에 잔류 방지)
     if (active.length)
         children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '사용 중 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
     else
-        children.push(el('p', { class: 'admin-hint', text: '아직 발급된 접속 열쇠가 없습니다 — [구성원 추가] 탭에서 구성원을 골라 발급하세요.' }));
+        children.push(el('p', { class: 'admin-hint', text: '아직 발급된 접속 열쇠가 없습니다 — 위에서 구성원을 골라 발급하세요.' }));
     if (revoked.length)
         children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '해제됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
     detail.replaceChildren(el('div', { class: 'card' }, ...children));
@@ -3387,7 +3387,7 @@ function deployCommands(gw, os) {
             { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
             { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치(설치된 하네스 자동 감지). ⚠ Windows 미검증 — 테스트 후 사용.',
                 cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(Test-Path "$HOME\\.lively\\token"){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
-            { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [접속 권한 변경] 탭에서 접속 해제. ⚠ Windows 미검증.',
+            { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [구성원 토큰 관리] 탭에서 접속 해제. ⚠ Windows 미검증.',
                 cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
         ];
     }
@@ -3396,7 +3396,7 @@ function deployCommands(gw, os) {
             cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh` },
         { kind: 'update', title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
             cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" LIVELY_GATEWAY="$G/mcp" bash /tmp/lv/setup/setup-mac.sh` },
-        { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 [접속 권한 변경] 탭에서 접속을 해제해야 합니다.',
+        { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 [구성원 토큰 관리] 탭에서 접속을 해제해야 합니다.',
             cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
     ];
 }
