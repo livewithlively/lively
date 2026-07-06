@@ -49,13 +49,13 @@ export async function execReadQuery(
 // registerDbTools 본문의 server.registerTool 이름·title 과 동기 유지.
 export const DB_TOOLS = [
   { name: "db_sources", title: "DB 소스 목록",
-    description: "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 확인한다(접속 URL·자격증명 비노출).",
+    description: "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 확인한다(접속 URL·자격증명 비노출). admin 은 내장 'self' 소스(게이트웨이 자기 items DB — 지식·프로젝트·도메인맵)가 항상 보인다.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "db_schema", title: "DB 스키마 조회",
     description: "테이블/컬럼 메타데이터를 반환한다. table 을 주면 그 컬럼만, 없으면 테이블 목록. source 로 데이터소스를 고른다.",
     inputSchema: { type: "object", properties: { table: { type: "string" }, source: { type: "string" } } } },
   { name: "db_query", title: "읽기 전용 SQL 실행",
-    description: "단일 SELECT 문만 실행한다. 결과는 사용자 권한(RLS)에 따라 자동 필터된다. 쓰기/DDL 불가, 행수·실행시간 제한.",
+    description: "단일 SELECT 문만 실행한다. 결과는 사용자 권한(RLS)에 따라 자동 필터된다. 쓰기/DDL 불가, 행수·실행시간 제한. admin 은 내장 'self' 소스로 이 게이트웨이 자기 콘텐츠(지식·프로젝트·태스크·카테고리·도메인맵)를 별도 등록 없이 SQL 조회 가능(콘텐츠 테이블만 — 시크릿·PII 차단).",
     inputSchema: { type: "object", required: ["sql"], properties: { sql: { type: "string", description: "실행할 단일 SELECT 문" }, source: { type: "string", description: "데이터소스 이름(db_sources 로 확인)" } } } },
 ] as const;
 
@@ -66,7 +66,7 @@ export function registerDbTools(server: McpServer): void {
     {
       title: "DB 소스 목록",
       description:
-        "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 여기서 확인한다. 접속 URL·자격증명은 노출하지 않는다. allowed=현재 토큰으로 접근 가능 여부, rls=행수준 격리 적용 여부, origin=env(운영자 직접)|db(웹 관리).",
+        "이 게이트웨이에 등록된 읽기 데이터소스 목록. db_query/db_schema 의 source 인자에 쓸 이름을 여기서 확인한다. 접속 URL·자격증명은 노출하지 않는다. allowed=현재 토큰으로 접근 가능 여부, rls=행수준 격리 적용 여부, origin=env(운영자 직접)|db(웹 관리)|builtin(내장 self — admin 전용, 게이트웨이 자기 items DB: 지식·프로젝트·도메인맵). 등록 소스가 없는 고객 박스에서도 admin 은 self 로 자기 콘텐츠를 조회할 수 있다.",
       inputSchema: {},
     },
     async (_args, extra) => {
@@ -149,7 +149,7 @@ export function registerDbTools(server: McpServer): void {
     {
       title: "읽기 전용 SQL 실행",
       description:
-        "단일 SELECT 문만 실행합니다. 결과는 사용자 권한(RLS)에 따라 자동 필터됩니다. 쓰기/DDL 불가, 결과 행수·실행시간 제한이 적용됩니다. source 로 데이터소스를 고른다(미지정 시 기본 소스 — 다중 등록 시 명시 필요, db_sources 참조).",
+        "단일 SELECT 문만 실행합니다. 결과는 사용자 권한(RLS)에 따라 자동 필터됩니다. 쓰기/DDL 불가, 결과 행수·실행시간 제한이 적용됩니다. source 로 데이터소스를 고른다(미지정 시 기본 소스 — 다중 등록 시 명시 필요, db_sources 참조). admin 은 내장 'self' 소스로 이 게이트웨이 자기 콘텐츠(지식·프로젝트·태스크·카테고리·도메인맵)를 별도 등록 없이 SQL 조회할 수 있습니다(콘텐츠 테이블만 — 시크릿·개인정보 차단). 예: db_query({source:'self', sql:'select count(*) from knowledge'}).",
       inputSchema: {
         sql: z.string().describe("실행할 단일 SELECT 문"),
         source: z.string().optional().describe("데이터소스 이름(db_sources 로 확인)"),
