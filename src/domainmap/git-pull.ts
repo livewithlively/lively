@@ -38,11 +38,16 @@ async function git(args: string[], cwd?: string, extraEnv?: Record<string, strin
 // 로컬 클론 보장: 없으면 git_url 에서 clone, 있으면 fetch. git_url(토큰 포함 가능)은 에러에 절대 안 싣는다.
 //  #606: provision 과 동일하게 게이트웨이 자격을 주입한다 — 스케줄러 무인 실행이라 멤버 없음 → resolveGitSecret(null, host)
 //   = 게이트웨이 머신 자격(SSH 키+accept-new 호스트키). 자격 없으면 앰비언트 폴백. 예전엔 미주입이라 private SSH 레포에서 항상 실패.
-async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
+// 클론 경로(캐시) — reposDir/sanitizeName 단일 조합. 부트스트랩(scheduler) 등 다른 곳도 같은 경로를 재사용(공식 1곳).
+export function repoClonePath(repoName: string): string {
   const safe = sanitizeName(repoName);
   if (!safe) throw new Error("invalid repo name for clone dir");
+  return join(reposDir(), safe);
+}
+
+async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
+  const cloneDir = repoClonePath(repoName);
   const dir = reposDir();
-  const cloneDir = join(dir, safe);
   const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {

@@ -10,6 +10,7 @@ import { contextCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
 import { domainmapCrudCapabilities } from "./domainmap-crud.js";
+import { domainmapIngestCapabilities } from "./domainmap-ingest.js";
 // v6 은퇴(2026-06-24): mappingCapabilities(list_unmapped·mapping_candidates·curate_item_mapping) 폐기 — 레거시 item→domain 매핑(knowledge_unit_domain), v6 knowledge_link_category 대체.
 import { activityCapabilities } from "./activity.js";
 import { categoryCapabilities } from "./categories.js";
@@ -71,6 +72,8 @@ const all: Capability[] = [
   me, ...contextCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...domainmapCrudCapabilities, // P-V3-4a: repo/domain 통제어휘 CRUD 5종 + hard-delete 2종(domain_delete·repo_delete) — 전부 expose.mcp=true(MCP+REST)
+  ...domainmapIngestCapabilities, // 최초 is 부트스트랩 인제스트(POST /api/ui/domainmap/ingest, MCP domainmap_ingest) — payload 배치 write, insert-only·trust-first
+
   ...deliveryCapabilities, // 전달/관리(admin/runtime/read scope, REST 전용) — workflow-std 흡수: org-content 편집·발행·구성원·토큰 + learn(지식유형 ground-truth, P-V3-2)
   ...activityCapabilities, // P3: activity_log/activity_list — 작업(activity) 기록·조회(scope=memory). expose.mcp:true → 자동 등록.
   ...categoryCapabilities, // v6: 카테고리 CRUD + 도메인 의존엣지(should) — scope=context. category_* 8종 expose.mcp:true(자동등록)+REST(웹 3탭).

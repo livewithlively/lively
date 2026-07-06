@@ -2,7 +2,7 @@
 // domainmap 호스트 CLI — 구 domain-map/store.mjs 1:1 대체(docker exec 불필요).
 // 실행: cd context-ontology && node --env-file-if-exists=.env dist/domainmap/cli.js <cmd>
 // 서브커맨드(v6: 스캔 엔진 중심 — domain 조회/편집은 웹·MCP category 로 이전):
-//   init | ingest (<stdin json) | refresh <repo> (<stdin json) | refresh-scan <repo> <rootPath> … |
+//   init | ingest (<stdin json) | refresh <repo> (<stdin json) | scan <repo> <rootPath> (사실추출→stdout) | refresh-scan <repo> <rootPath> … |
 //   eval-domain-debt <repo> | history [--limit=N 기본15, 글로벌·oldest-first] | restore <change_id> --actor=<id>
 // actor 규칙 verbatim: --actor=<id> → {type:'human',id}; 아니면 --actor-type=/--actor-id=(기본 human/human).
 // 에러는 'ERROR: msg' + exit 1. 종료 시 반드시 endPool()(CLI 프로세스 전용 — 게이트웨이와 분리).
@@ -17,6 +17,7 @@ import { refresh } from "./core/refresh.js";
 import { restore, historyGlobal } from "./core/changelog.js";
 import { refreshFromFilesystem, type RenamePrefix } from "./core/refresh-fs.js";
 import { evaluateDomainStructureDebt } from "./core/domain-debt.js";
+import { collectFacts } from "./core/scan-fs.js";
 
 // v6 드랍(2026-06-24): show/list-domains/domain-set 커맨드 제거 — 구 domain 테이블(드랍됨)을 읽던 dev 커맨드.
 //  도메인=category 조회는 웹(#/categories)·MCP(category_list/category_get)로. ingest/refresh/eval-domain-debt 는 유지(스캔 엔진).
@@ -70,6 +71,18 @@ try {
       console.log(JSON.stringify(out, null, 2));
     }
   }
+  else if (cmd === "scan") {
+    // scan <repo> <rootPath> [--fallback-depth=N] — 결정론적 '사실' 추출(파일목록·모듈힌트·스택). DB·판단 무접촉.
+    //   최초 is 부트스트랩 런북의 ground-truth: LLM 이 이 JSON 을 grep 해 '유닛 경계 + 도메인 매핑'을 판단하고
+    //   domainmap_ingest(REST/MCP)로 payload 를 한 번에 쓴다. 유닛 생성/매핑은 여기서 '안' 한다(그건 판단=LLM).
+    //   ↔ 'refresh-scan'(저장 유닛의 rename/delete 재조정)·'ingest'(payload 를 store 에 씀)와 구분.
+    if (!pos[0] || !pos[1]) { console.error("usage: scan <repo> <rootPath> [--fallback-depth=N]  (facts JSON → stdout)"); process.exitCode = 1; }
+    else {
+      const fallbackDepth = typeof flags["fallback-depth"] === "string" ? Number(flags["fallback-depth"]) : undefined;
+      const out = await collectFacts(pos[0], pos[1], { fallbackDepth });
+      console.log(JSON.stringify(out, null, 2));
+    }
+  }
   else if (cmd === "eval-domain-debt") {
     // eval-domain-debt <repo> — 결정론적 도메인-레벨 구조 부채(G-diff 슬라이스) 자동 평가·upsert.
     //   vanished(active=0,removed>0)/eroded(active>0,removed>0)를 kind='domain_debt' 로 멱등 생성.
@@ -78,6 +91,6 @@ try {
   }
   else if (cmd === "history") await historyCmd(flags);
   else if (cmd === "restore") { const r = await restore(Number(pos[0]), actor); console.log("restored change #" + pos[0], JSON.stringify(r)); }
-  else console.log("commands: init | ingest (<stdin json) | refresh <repo> (<stdin json) | refresh-scan <repo> <rootPath> [--rename=from:to] [--head=sha] [--stack=json] [--eval-domain-debt] | eval-domain-debt <repo> | history [--limit=N] | restore <change_id> --actor=<id>");
+  else console.log("commands: init | ingest (<stdin json) | refresh <repo> (<stdin json) | scan <repo> <rootPath> [--fallback-depth=N] | refresh-scan <repo> <rootPath> [--rename=from:to] [--head=sha] [--stack=json] [--eval-domain-debt] | eval-domain-debt <repo> | history [--limit=N] | restore <change_id> --actor=<id>");
 } catch (e) { console.error("ERROR:", (e as Error).message); process.exitCode = 1; }
 await endPool();

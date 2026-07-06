@@ -27,6 +27,11 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
   { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }] },
+  // 최초 is 부트스트랩 — 결정론 사실(dm scan)을 파일로 뽑고 runbook-bootstrap-domains 를 세션에 주입(map_unmapped 동형). 유닛 0 인 신규 레포 콜드스타트용.
+  { key: "bootstrap_is", label: "레포 is 최초 부트스트랩 (세션 주입)", params: [
+    { name: "repo", label: "repo", kind: "repo", hint: "부트스트랩할 레포 — 클론이 있어야 함(먼저 refresh_repo/refresh_all 로 clone)." },
+    { name: "session", label: "타깃 상시 세션", kind: "session", hint: "부트스트랩 수행 관리 세션 — runbook-bootstrap-domains 따라 사실 grep→유닛/매핑 판단→domainmap_ingest 로 기록." },
+  ] },
   // 자료 distill(#541) — 미증류 source(slack/gmail 등 raw)를 상시세션 LLM 이 지식으로 자동증류. 미증류 자료 있을 때만 주입.
   { key: "distill_sources", label: "자료 distill (source→지식 자동증류)", params: [
     { name: "session", label: "타깃 상시 세션", kind: "session", hint: "distill 을 수행할 관리 세션 — 자료(source)를 읽어 지식으로 증류(knowledge_save+source_link)." },
@@ -132,6 +137,11 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return runMapInject(params);
   }
 
+  if (job.action === "bootstrap_is") {
+    // 최초 is 부트스트랩 — 결정론 사실 파일 생성 후 런북대로 판단·기록하도록 상시세션에 주입(map_unmapped 동형).
+    return runBootstrapInject(params);
+  }
+
   if (job.action === "distill_sources") {
     // 자료 distill(#541) — 상시세션 LLM 이 미증류 source 를 지식으로 자동증류. map_unmapped 와 동형(인박스 있을 때만 주입).
     return runDistillInject(params);
@@ -173,6 +183,60 @@ async function runMapInject(params: Record<string, unknown>): Promise<{ status: 
   try { await injectToSession(tmuxSession, prompt); }
   catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + tmuxSession + "): " + ((e as Error)?.message ?? String(e)), session: sessionRef, tmux: tmuxSession } }; }
   return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, unmapped: inbox.length } };
+}
+
+// 최초 is 부트스트랩 주입 — 결정론 사실(collectFacts=dm scan)을 파일로 떨구고, runbook-bootstrap-domains 를 따라
+//  유닛경계+매핑을 '판단'해 domainmap_ingest 로 쓰도록 상시세션에 주입. map_unmapped 와 동형(canned 프롬프트 + 공용 inject).
+//  결정론(사실)/판단(유닛·매핑) 분리 — 엔진(ingest)·런북·주입 헬퍼 전부 재사용(중복 로직 없음). 클론 없으면 error.
+async function runBootstrapInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  const repo = String(params.repo ?? "").trim();
+  const sessionRef = params.session ? String(params.session) : "";
+  if (!repo) return { status: "error", summary: { error: "params.repo 미설정 — 부트스트랩할 레포를 선택하세요." } };
+  if (!sessionRef) return { status: "error", summary: { error: "타깃 상시 세션 미설정 — 관리탭 스케줄러에서 상시 세션을 선택하세요." } };
+
+  const { existsSync } = await import("node:fs");
+  const { writeFile, mkdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { repoClonePath } = await import("./domainmap/git-pull.js");
+  const { collectFacts } = await import("./domainmap/core/scan-fs.js");
+  const { stateDir } = await import("./state-dir.js");
+
+  let clonePath: string;
+  try { clonePath = repoClonePath(repo); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), repo } }; }
+  if (!existsSync(clonePath)) return { status: "error", summary: { error: `클론 없음(${clonePath}) — 먼저 refresh_repo/refresh_all 로 clone 하세요.`, repo } };
+
+  let facts: Awaited<ReturnType<typeof collectFacts>>;
+  try { facts = await collectFacts(repo, clonePath); }
+  catch (e) { return { status: "error", summary: { error: "사실 수집 실패: " + ((e as Error)?.message ?? String(e)), repo } }; }
+
+  let factsPath: string;
+  try {
+    const dir = stateDir("bootstrap");
+    await mkdir(dir, { recursive: true });
+    factsPath = join(dir, repo.replace(/[^A-Za-z0-9._-]/g, "_") + ".facts.json");
+    await writeFile(factsPath, JSON.stringify(facts));
+  } catch (e) { return { status: "error", summary: { error: "사실 파일 기록 실패: " + ((e as Error)?.message ?? String(e)), repo } }; }
+
+  let tmuxSession: string;
+  try { tmuxSession = await resolveSessionTmux(sessionRef); }
+  catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), session: sessionRef } }; }
+
+  const prompt = buildBootstrapPrompt(repo, clonePath, factsPath, facts.files.length, facts.module_hints.length);
+  try { await injectToSession(tmuxSession, prompt); }
+  catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + tmuxSession + "): " + ((e as Error)?.message ?? String(e)), session: sessionRef, tmux: tmuxSession } }; }
+  return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, repo, facts_path: factsPath, files: facts.files.length, module_hints: facts.module_hints.length } };
+}
+
+// 부트스트랩 가이드 프롬프트(단일 라인 주입 — injectToSession 이 개행 평탄화). 런북 참조 + 사실파일 경로 + 판단(유닛경계·매핑) + domainmap_ingest 배치.
+function buildBootstrapPrompt(repo: string, clonePath: string, factsPath: string, files: number, hints: number): string {
+  return `레포 '${repo}'의 도메인맵 is 최초 부트스트랩 작업이야. 먼저 knowledge_get 으로 'runbook-bootstrap-domains'(프로세스)와 'domainmap-is-bootstrap-runbook'(도구 델타)를 읽고 그대로 따라. ` +
+    `① 결정론 사실은 이미 뽑아 뒀어: ${factsPath} (files ${files}개·module_hints ${hints}개·stack 포함). 통째 읽지 말고 grep/슬라이스로 참고(사실 바닥, 파일 환각 금지). ` +
+    `② category_list(space=product)로 도메인 후보 + 각 should(코드 SoT 앵커)를 1회 확보. ` +
+    `③ 유닛 경계는 판단이야(결정론 아님): module_hints 를 출발점으로, 한 모듈이 두 도메인에 걸치면 하위 디렉터리로 쪼개. code_unit.path 는 디렉터리 경로(파일 개별 유닛 지양). ` +
+    `④ 각 유닛→domain_key 매핑 + 신뢰도(should 앵커 + 모듈명/패키지/대표 서비스 신호). 확신 낮으면 매핑을 빼서 unmapped 로 남겨(억지 매핑 금지). ` +
+    `⑤ payload({repo:{name:'${repo}',root_path:'${clonePath}'}, run:{runbook:'bootstrap-domains'}, code_units, mappings, imports?})를 조립해 domainmap_ingest 를 '한 번' 호출(대량이면 서브트리별로 나눠 여러 콜; 건별 map_code_unit 반복 금지). ` +
+    `⑥ 끝나면 code_unit/mapping 카운트 요약. 남은 unmapped 는 이후 map_unmapped 가 이어받아.`;
 }
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
