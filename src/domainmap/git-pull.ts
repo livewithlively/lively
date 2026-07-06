@@ -11,7 +11,8 @@ import { join, resolve } from "node:path";
 import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
-import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError } from "../org/git-credential-store.js";
+import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError, describeGitError } from "../org/git-credential-store.js";
+import { stateDir } from "../state-dir.js";
 
 const execFileP = promisify(execFile);
 // clone(대형 레포 초회)은 fetch 보다 오래 걸릴 수 있어 provision(180s)과 맞춘다 — 상한일 뿐(지연 아님).
@@ -19,7 +20,9 @@ const GIT_TIMEOUT_MS = 180_000;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 
 // 클론 캐시 — webhook.ts 와 동일 컨벤션(DOMAINMAP_REPOS_DIR, 기본 var/repos, .gitignore 등재).
-function reposDir(): string { return resolve(process.env.DOMAINMAP_REPOS_DIR ?? "var/repos"); }
+// 클론 캐시 = 서비스 유저 쓰기가능 런타임 루트(#618 stateDir) 하위. 예전 cwd-상대 'var/repos' 는 WorkingDirectory 가
+//  타 uid 소유일 때 mkdir EACCES(=#606). DOMAINMAP_REPOS_DIR 명시 오버라이드만 절대경로로 존중.
+function reposDir(): string { return process.env.DOMAINMAP_REPOS_DIR ? resolve(process.env.DOMAINMAP_REPOS_DIR) : stateDir("repos"); }
 function sanitizeName(name: string): string { return name.replace(/[^A-Za-z0-9._-]/g, "_"); }
 
 // git 은 execFile(argv 배열 — 셸 문자열 금지, 인젝션 불가). 모든 op 에 하드 타임아웃.
@@ -89,10 +92,10 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
   catch (e) {
-    // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 일반 메시지로 '분류'만 해 진단가능성을 남긴다(#606).
+    // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 describeGitError 로 안전요약(URL 스크럽)해 진단가능성을 남긴다(#606).
     const detail = isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)
       ? `git 인증 실패 — 호스트 '${hostOf(repo.git_url) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정에 등록)`
-      : "git clone/fetch failed";
+      : `git clone/fetch 실패: ${describeGitError(e, repo.git_url)}`;
     return { repo: repoName, status: "error", detail };
   }
 

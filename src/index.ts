@@ -21,6 +21,7 @@ import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setPr
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
+import { ensureStateDirs } from "./state-dir.js";
 import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
@@ -115,6 +116,9 @@ registerProjectV6Routes(app, verifier, {
 
 const server = app.listen(PORT, () => {
   logger.info(`context-ontology listening on :${PORT}/mcp`);
+  // 런타임 쓰기 루트(#618) 보장 — 서비스 유저 소유 <cwd>/data 하위 디렉을 부팅 시 멱등 생성(스캐너 repos·notion-assets 등).
+  //  DB 무관·비치명이라 스키마 체인 밖에서 즉시. 개별 기능도 각자 mkdir 하지만 여기서 '단일 지점' 보장(재발방지).
+  ensureStateDirs().catch((err) => logger.warn({ err }, "state dir ensure 실패(비치명)"));
   // 중앙 박스 도그푸드 — ttyd 터미널을 정문 뒤로 프록시(/terminal). server 핸들(upgrade)이 필요해 listen 후 배선.
   registerTerminal(app, server, verifier);
   // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE

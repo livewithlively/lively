@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 
 process.env.CONNECTOR_SECRET_KEY = "unit-test-key-do-not-use-in-prod-0123456789"; // #541 secret-box 공용 마스터키
 const { encryptSecret, decryptSecret, secretsEnabled } = await import("./secret-box.js");
-const { generateSshKeypair } = await import("./git-credential-store.js");
+const { generateSshKeypair, describeGitError } = await import("./git-credential-store.js");
 const { hostOf, prepareGitAuth, isAuthError } = await import("../project-provision.js");
 const { safeHost, buildSshConfigBlock, buildGitCredLines } = await import("./git-credential-materialize.js");
 const { sanitizeCloneUrl } = await import("../domainmap/core/queries.js");
@@ -94,6 +94,27 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   assert.equal(isAuthError("fatal: destination path already exists"), false);
   assert.equal(isAuthError(""), false);
   ok("isAuthError 인증실패만 분기");
+}
+
+// ── describeGitError: 관측성 안전요약 — 원격 URL·토큰 절대 비노출, fs 코드·timeout 만 남긴다(#606) ──
+{
+  // https 토큰 URL 스크럽 — 등록 git_url 로도, 일반 scheme:// 로도
+  const secretUrl = "https://x-access-token:SECRET123@git.honestfund.kr/g/r.git";
+  const d1 = describeGitError(`fatal: unable to access '${secretUrl}/': Could not resolve host`, secretUrl);
+  assert.equal(d1.includes("SECRET123"), false, "토큰이 새면 안 됨");
+  assert.equal(d1.includes("git.honestfund.kr"), false, "원격 URL 이 새면 안 됨");
+  assert.ok(d1.includes("<repo>") || d1.includes("<url>"));
+  // scp 형도 스크럽
+  assert.equal(describeGitError("git@git.honestfund.kr:g/r.git: Permission denied").includes("honestfund"), false);
+  // fs 오류(mkdir EACCES) — 코드·syscall·로컬경로(시크릿 아님) 요약
+  assert.equal(describeGitError({ code: "EACCES", syscall: "mkdir", path: "/home/ssm-user/x/var/repos" }),
+    "EACCES (mkdir /home/ssm-user/x/var/repos)");
+  // timeout
+  assert.equal(describeGitError({ killed: true, signal: "SIGTERM" }), "timeout");
+  // URL 없는 일반 메시지는 보존
+  assert.ok(describeGitError("fatal: not a git repository").includes("not a git repository"));
+  assert.equal(describeGitError(null), "unknown");
+  ok("describeGitError 안전요약·URL 스크럽");
 }
 
 // ── prepareGitAuth: SSH 주입 env + 키파일 600 + cleanup ──
