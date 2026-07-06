@@ -1,21 +1,41 @@
-// Slack 커넥터 (DESIGN §8) — Slack Web API 의 메시지/스레드를 canonical RawItem 으로 정규화한다.
-// 컨테이너 나열(conversations.list) → 채널별 메시지(conversations.history) → 스레드 답글(conversations.replies).
-// 작성자는 users.list 로 한 번에 끌어와 캐싱(history/replies 의 user id → display_name 해소).
-// 인증: Authorization: Bearer xoxb-... (process.env.SLACK_BOT_TOKEN). GLOBAL fetch 사용, 새 의존성 없음.
+// Slack 커넥터 (DESIGN §8, #541 유저토큰 재작성) — 워크스페이스 **전체 공개채널**의 메시지를 canonical RawItem 으로.
 //
-// 참고(2026-06 확인):
-//   - 엔드포인트: https://slack.com/api/<method>, 응답은 항상 { ok, error?, response_metadata? }.
-//   - 페이지네이션: response_metadata.next_cursor (빈 문자열이면 끝). limit≤999(history)/1000(replies).
-//   - rate limit: 429 + Retry-After(초). 단일 워크스페이스 내부앱은 2025-05 변경 면제이나 그래도 존중한다.
-//   - message ts: epoch seconds 문자열("1700000000.000100") → ISO8601 변환.
-//   - external_id = `${channel}:${ts}` (system+instance 내 안정·고유).
-//   - 스레드 부모 = thread_ts 가 자기 ts 와 다를 때 → parent_external_id = `${channel}:${thread_ts}`.
-//   - 딥링크 = https://<team>.slack.com/archives/<channel>/p<ts에서 점 제거> (스레드면 ?thread_ts=&cid= 부가).
+// 왜 search.messages(유저 토큰) 인가:
+//   봇 토큰(xoxb-)의 conversations.history 는 **봇이 가입한 채널만** 읽힌다(미가입 공개채널은 not_in_channel).
+//   유저 토큰(xoxp-)이어도 conversations.history 는 여전히 멤버십을 요구한다. 반면 워크스페이스 멤버는
+//   **가입하지 않은 공개채널의 메시지도 검색으로 볼 수 있어**, search.messages 는 봇/사람 누구도 채널에 조인하지
+//   않고 전 공개채널을 훑는다(조인 시스템 메시지·권한 재설치 불필요). 이것이 CTO wiki-sync 가 택한 sweep 경로다.
+//   ⚠ search.messages 는 봇 토큰을 거부한다(not_allowed_token_type) — **반드시 유저 토큰(xoxp-)**.
+//
+// 인증/스코프(유저 토큰): search:read(검색) · channels:read(채널 메타) · users:read(+users:read.email 작성자 해소).
+//   (스레드 재구성은 permalink 의 thread_ts 로 하므로 groups:history 등은 불필요.)
+//
+// 수집 범위: 공개채널만 — search match 의 channel 플래그로 유저 DM/비공개/mpim 을 제외(토큰 소유자 개인 대화 유입 방지).
+//
+// 최초 마이그레이션 vs 증분:
+//   · search.messages 의 after:/before: 는 **일 단위·exclusive** → 하루 넉넉히 잡고 ts 로 재필터. count 100/page,
+//     page 는 최대 100 → **쿼리당 최신 10,000건 상한**. 이를 넘기면 창을 이분(bisect)해 완결성 보전(무손실 불변식).
+//   · backfill({since}) — since 있으면 [since, now] 만(증분). 없으면(최초) now 에서 30일 창을 과거로 밀며
+//     활동이 끊길 때까지(DRY_STOP 연속 빈 창) 또는 backfill_since 하한까지 스윕. run-sync 가 max(occurred_at)로 커서 전진.
+//   · 편집(edited)은 게시일 기준 search 라 증분 창 밖이면 못 잡지만, 일일 full 스윕(store.ts 가 자동 등록하는
+//     sync-slack-full)이 전 이력을 재수집(멱등 upsert)해 치유한다 — notion full 스윕과 동일 패턴.
+//
+// 참고: 엔드포인트 https://slack.com/api/<method>, 응답 { ok, error?, ... }. 429 는 Retry-After 존중(slackCall).
+//   external_id = `${channel}:${ts}`(system+instance 내 안정·고유). 스레드 답글 = permalink 의 thread_ts 로 부모 링크.
 
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 
 const API_BASE = "https://slack.com/api";
+
+// ── 스윕 파라미터 ────────────────────────────────────────────────────────────
+const DAY_MS = 86_400_000;
+const WINDOW_MS = 30 * DAY_MS; // 최초 마이그레이션 스윕 기본 창(월 단위) — 대부분 상한 미만이라 이분 없이 통과.
+const SEARCH_COUNT = 100; // search.messages count 상한.
+const SEARCH_MAXP = 100; // search.messages page 상한 → 쿼리당 최신 SEARCH_COUNT*SEARCH_MAXP(=10k)건까지.
+const BISECT_FLOOR_MS = 2 * DAY_MS; // 이 이하로는 이분해도 after/before(일 granular)가 더 못 좁힘 → 잘림 경고만.
+const DRY_STOP = 12; // 최초 스윕 시 연속 빈 창 이만큼이면 이력 시작으로 보고 종료(하한 미지정일 때만).
+const MAX_WINDOWS = 400; // 무한루프 백스톱(하한 -Infinity 안전장치).
 
 // ── Slack 응답 타입(필요한 필드만) ──────────────────────────────────────────
 interface SlackResponseMeta {
@@ -25,17 +45,6 @@ interface SlackEnvelope {
   ok: boolean;
   error?: string;
   response_metadata?: SlackResponseMeta;
-}
-
-export interface SlackChannel {
-  id: string;
-  name?: string;
-  is_channel?: boolean;
-  is_group?: boolean;
-  is_private?: boolean;
-  is_archived?: boolean;
-  is_member?: boolean;
-  is_im?: boolean;
 }
 
 export interface SlackMessage {
@@ -75,11 +84,13 @@ export interface SlackToRawItemCtx {
   teamDomain?: string; // 딥링크용 <team>.slack.com 의 <team>. 없으면 딥링크 생략.
   /** user id → 표시이름/이메일 해소 맵 (네트워크 없이 주입). */
   userMap?: Map<string, SlackUser>;
+  /** 권위 있는 permalink(search match) — 있으면 teamDomain 재구성 대신 이걸 external_url 로 쓴다. */
+  explicitUrl?: string;
 }
 
 // ── 순수 변환: 원본 메시지 1건 → RawItem (네트워크 없음, 단위테스트 대상) ──────
 export function toRawItem(msg: SlackMessage, ctx: SlackToRawItemCtx): RawItem {
-  const { channel, instance, teamDomain, userMap } = ctx;
+  const { channel, instance, teamDomain, userMap, explicitUrl } = ctx;
 
   // external_id: system+instance 내에서 안정·고유. 채널 + ts 조합.
   const external_id = `${channel}:${msg.ts}`;
@@ -100,8 +111,9 @@ export function toRawItem(msg: SlackMessage, ctx: SlackToRawItemCtx): RawItem {
   const parent_external_id =
     msg.thread_ts && msg.thread_ts !== msg.ts ? `${channel}:${msg.thread_ts}` : undefined;
 
-  // 딥링크: teamDomain 이 있을 때만 결정적으로 구성(추가 API 호출 불필요).
-  const external_url = teamDomain ? buildPermalink(teamDomain, channel, msg) : undefined;
+  // 딥링크: 권위 permalink(explicitUrl) 우선, 없으면 teamDomain 으로 결정적 구성.
+  const external_url =
+    explicitUrl ?? (teamDomain ? buildPermalink(teamDomain, channel, msg) : undefined);
 
   const occurred_at = tsToIso(msg.ts);
   // edited.ts 가 있으면 updated_at 으로 반영.
@@ -176,14 +188,6 @@ function deriveTitle(text: string | undefined): string | undefined {
 }
 
 // ── 네트워크 계층 ────────────────────────────────────────────────────────────
-
-async function getToken(): Promise<string> {
-  const token = (await resolveConnectorConfig("slack")).bot_token;
-  if (!token) {
-    throw new Error("SLACK_BOT_TOKEN 환경변수가 없습니다 — Slack 봇 토큰(xoxb-...)을 설정하세요.");
-  }
-  return token;
-}
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -264,17 +268,6 @@ async function* paginate<T extends SlackEnvelope, K extends keyof T>(
   }
 }
 
-interface ChannelsListResp extends SlackEnvelope {
-  channels?: SlackChannel[];
-}
-interface HistoryResp extends SlackEnvelope {
-  messages?: SlackMessage[];
-  has_more?: boolean;
-}
-interface RepliesResp extends SlackEnvelope {
-  messages?: SlackMessage[];
-  has_more?: boolean;
-}
 interface UsersListResp extends SlackEnvelope {
   members?: SlackUser[];
 }
@@ -282,6 +275,41 @@ interface AuthTestResp extends SlackEnvelope {
   team_id?: string;
   team?: string;
   url?: string; // https://<team>.slack.com/
+}
+
+// ── search.messages 응답(필요한 필드만) ────────────────────────────────────
+interface SearchMatchChannel {
+  id?: string;
+  name?: string;
+  is_channel?: boolean;
+  is_group?: boolean;
+  is_private?: boolean;
+  is_mpim?: boolean;
+  is_im?: boolean;
+}
+interface SearchMatch {
+  ts: string;
+  user?: string;
+  username?: string;
+  text?: string;
+  permalink?: string;
+  channel?: SearchMatchChannel;
+  type?: string;
+}
+interface SearchPaging {
+  count?: number;
+  total?: number;
+  page?: number;
+  pages?: number;
+}
+interface SearchMessagesBlock {
+  total?: number;
+  matches?: SearchMatch[];
+  paging?: SearchPaging;
+  pagination?: { total_count?: number; page_count?: number };
+}
+interface SearchResp extends SlackEnvelope {
+  messages?: SearchMessagesBlock;
 }
 
 // 모든 워크스페이스 사용자 끌어와 user id → SlackUser 맵 구성(작성자 해소 캐시).
@@ -320,99 +348,193 @@ async function loadWorkspaceMeta(
   }
 }
 
+// ── search sweep 계층 ────────────────────────────────────────────────────────
+
+// ms → "YYYY-MM-DD"(UTC). search after:/before: 는 일 단위이므로 날짜만 필요.
+function dayStr(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// 노이즈 채널 파싱 — 공백/쉼표 구분 채널명(선행 # 제거). 쿼리에서 -in:<name> 으로 제외.
+function parseNoise(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[\s,]+/)
+    .map((s) => s.trim().replace(/^#/, ""))
+    .filter(Boolean);
+}
+
+// [startMs, endMs) 창의 search 쿼리 — after/before 는 exclusive·일 granular라 하루씩 넉넉히 감싼다.
+function buildSearchQuery(startMs: number, endMs: number, noise: string[]): string {
+  let q = `after:${dayStr(startMs - DAY_MS)} before:${dayStr(endMs + DAY_MS)}`;
+  for (const ch of noise) q += ` -in:${ch}`;
+  return q;
+}
+
+async function searchMessages(token: string, query: string, page: number): Promise<SearchResp> {
+  return slackCall<SearchResp>("search.messages", token, {
+    query,
+    count: SEARCH_COUNT,
+    page,
+    sort: "timestamp",
+    sort_dir: "desc",
+  });
+}
+
+interface SweepBase {
+  instance: string;
+  teamDomain?: string;
+  userMap?: Map<string, SlackUser>;
+}
+
+// search match 1건 → RawItem. 공개채널만 통과(DM/비공개/mpim 제외). 스레드는 permalink 의 thread_ts 로 부모 링크.
+function searchMatchToRawItem(m: SearchMatch, base: SweepBase): RawItem | null {
+  const channel = m.channel?.id;
+  if (!channel || !m.ts) return null;
+  const c = m.channel!;
+  // 전체 공개채널만 — 유저 DM/비공개/mpim/그룹 제외(토큰 소유자 개인 대화 유입 방지).
+  if (c.is_private || c.is_im || c.is_mpim || c.is_group) return null;
+
+  // 스레드 답글이면 permalink 쿼리에 thread_ts 가 있다(search match 엔 thread_ts 필드 부재) → 부모 링크 복원.
+  let thread_ts: string | undefined;
+  if (m.permalink) {
+    try {
+      thread_ts = new URL(m.permalink).searchParams.get("thread_ts") ?? undefined;
+    } catch {
+      /* permalink 파싱 실패는 무시(부모 링크만 생략) */
+    }
+  }
+
+  const msg: SlackMessage = {
+    type: "message",
+    ts: m.ts,
+    user: m.user,
+    username: m.username,
+    text: m.text,
+    thread_ts,
+  };
+  return toRawItem(msg, {
+    channel,
+    instance: base.instance,
+    teamDomain: base.teamDomain,
+    userMap: base.userMap,
+    explicitUrl: m.permalink,
+  });
+}
+
+// 한 페이지의 matches 중 [startMs,endMs) 안의 것만 RawItem 으로. 인접일 스필오버·창 경계 중복 제거.
+function* emitMatches(
+  matches: SearchMatch[] | undefined,
+  base: SweepBase,
+  startMs: number,
+  endMs: number,
+): Generator<RawItem> {
+  for (const m of matches ?? []) {
+    const tsMs = Number.parseFloat(m.ts) * 1000;
+    if (!Number.isFinite(tsMs) || tsMs < startMs || tsMs >= endMs) continue;
+    const it = searchMatchToRawItem(m, base);
+    if (it) yield it;
+  }
+}
+
+// [startMs,endMs) 창을 스윕 — 상한(10k) 초과면 이분해 완결성 보전(무손실 불변식). BISECT_FLOOR 이하는 잘림 경고.
+async function* sweepRange(
+  token: string,
+  base: SweepBase,
+  startMs: number,
+  endMs: number,
+  noise: string[],
+): AsyncGenerator<RawItem> {
+  const query = buildSearchQuery(startMs, endMs, noise);
+  const first = await searchMessages(token, query, 1);
+  const block = first.messages ?? {};
+  const total = block.total ?? block.pagination?.total_count ?? block.matches?.length ?? 0;
+  const capacity = SEARCH_COUNT * SEARCH_MAXP;
+
+  // 상한 초과 + 아직 좁힐 여지(>BISECT_FLOOR) → 이분(최신 절반 먼저). 1페이지는 total 측정용이라 여기선 방출 안 함
+  //  (재귀 최신 절반이 재수집 — 멱등이라 무해).
+  if (total > capacity && endMs - startMs > BISECT_FLOOR_MS) {
+    const mid = startMs + Math.floor((endMs - startMs) / 2);
+    yield* sweepRange(token, base, mid, endMs, noise);
+    yield* sweepRange(token, base, startMs, mid, noise);
+    return;
+  }
+
+  const pages = Math.min(block.paging?.pages ?? block.pagination?.page_count ?? 1, SEARCH_MAXP);
+  yield* emitMatches(block.matches, base, startMs, endMs);
+  for (let p = 2; p <= pages; p++) {
+    const r = await searchMessages(token, query, p);
+    yield* emitMatches(r.messages?.matches, base, startMs, endMs);
+  }
+  if (total > capacity) {
+    console.warn(
+      `slack search 잘림: [${dayStr(startMs)}~${dayStr(endMs)}] total=${total} > ${capacity} — 최신 ${capacity}건만 수집(일 granular 한계)`,
+    );
+  }
+}
+
 // ── Connector 구현 ───────────────────────────────────────────────────────────
 export const slackConnector: Connector = {
   name: "slack",
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
-    const token = await getToken();
+    const cfg = await resolveConnectorConfig("slack");
+    const token = cfg.user_token;
+    if (!token) {
+      throw new Error(
+        "Slack User Token(xoxp-…)이 설정되지 않았습니다 — 관리탭 ▸ 커넥터 ▸ Slack 에 저장하세요. (search.messages 는 봇 토큰 xoxb- 를 거부하므로 유저 토큰 필요)",
+      );
+    }
+    if (!token.startsWith("xoxp-")) {
+      throw new Error(
+        "Slack 토큰이 유저 토큰(xoxp-)이 아닙니다 — search.messages 는 봇 토큰(xoxb-)을 거부합니다(not_allowed_token_type). User Token Scopes(search:read 등)로 재발급하세요.",
+      );
+    }
 
-    // since(ISO8601) → epoch seconds 문자열(oldest 파라미터). 부동소수 손실 없이 정수+소수 유지.
-    const oldest =
-      opts?.since && Number.isFinite(Date.parse(opts.since))
-        ? (Date.parse(opts.since) / 1000).toFixed(6)
-        : undefined;
-
-    // 워크스페이스 메타 + 작성자 맵 선적재(채널 루프 전 1회).
+    // 워크스페이스 메타 + 작성자 맵 선적재(스윕 전 1회).
     const { instance, teamDomain } = await loadWorkspaceMeta(token);
     const userMap = await loadUserMap(token);
+    const base: SweepBase = { instance, teamDomain, userMap };
+    const noise = parseNoise(cfg.noise_exclude);
 
-    // 1) 컨테이너 나열: public + private 채널, 아카이브 제외, 봇이 멤버인 것만 history 가능.
-    for await (const ch of paginate<ChannelsListResp, "channels">(
-      "conversations.list",
-      token,
-      "channels",
-      {
-        types: "public_channel,private_channel",
-        exclude_archived: true,
-        limit: 200,
-      },
-    )) {
-      if (!ch?.id) continue;
-      // 멤버가 아닌 채널은 history 에서 not_in_channel 에러가 나므로 건너뛴다(공개라도 미가입이면 제외).
-      if (ch.is_member === false) continue;
+    // 증분: since 하한. 최초: backfill_since(설정) 하한, 없으면 -Infinity(활동 끊길 때까지 과거 탐색).
+    const sinceMs =
+      opts?.since && Number.isFinite(Date.parse(opts.since)) ? Date.parse(opts.since) : undefined;
+    const incremental = sinceMs !== undefined;
+    const backfillSinceMs =
+      cfg.backfill_since && Number.isFinite(Date.parse(cfg.backfill_since))
+        ? Date.parse(cfg.backfill_since)
+        : undefined;
+    const hardFloorMs = incremental ? (sinceMs as number) : (backfillSinceMs ?? Number.NEGATIVE_INFINITY);
+    const dryStopEnabled = !incremental && backfillSinceMs === undefined;
 
-      const ctxBase: SlackToRawItemCtx = {
-        channel: ch.id,
-        instance,
-        teamDomain,
-        userMap,
-      };
-
-      try {
-        // 2) 채널 메시지: conversations.history 끝까지 페이지네이션.
-        for await (const msg of paginate<HistoryResp, "messages">(
-          "conversations.history",
-          token,
-          "messages",
-          { channel: ch.id, limit: 200, oldest, inclusive: false },
-        )) {
-          if (!msg?.ts) continue;
-          try {
-            yield toRawItem(msg, ctxBase);
-          } catch (err) {
-            // 단일 아이템 변환 에러는 skip — 전체 백필을 죽이지 않는다.
-            console.warn(
-              `slack 메시지 변환 skip (channel=${ch.id} ts=${msg.ts}): ${(err as Error).message}`,
-            );
-            continue;
-          }
-
-          // 3) 스레드: 부모(자기 ts == thread_ts)이고 답글이 있으면 replies 펼침.
-          //    부모 메시지 자체는 위에서 이미 yield 됐으므로 답글에서 부모 ts 는 건너뛴다.
-          const isThreadParent = Boolean(msg.thread_ts) && msg.thread_ts === msg.ts;
-          if (isThreadParent && (msg.reply_count ?? 0) > 0) {
-            try {
-              for await (const reply of paginate<RepliesResp, "messages">(
-                "conversations.replies",
-                token,
-                "messages",
-                { channel: ch.id, ts: msg.ts, limit: 200 },
-              )) {
-                if (!reply?.ts || reply.ts === msg.ts) continue; // 부모 중복 방지.
-                try {
-                  yield toRawItem(reply, ctxBase);
-                } catch (err) {
-                  console.warn(
-                    `slack 답글 변환 skip (channel=${ch.id} ts=${reply.ts}): ${(err as Error).message}`,
-                  );
-                  continue;
-                }
-              }
-            } catch (err) {
-              // 스레드 한 건 실패는 skip — 다음 메시지 계속.
-              console.warn(
-                `slack 스레드 조회 skip (channel=${ch.id} ts=${msg.ts}): ${(err as Error).message}`,
-              );
-              continue;
-            }
-          }
-        }
-      } catch (err) {
-        // 채널 한 곳 실패(예: not_in_channel)는 skip — 다음 채널 계속.
-        console.warn(`slack 채널 history skip (channel=${ch.id}): ${(err as Error).message}`);
-        continue;
+    // now 에서 30일 창을 과거로 밀며 스윕. 창은 반열림 [windowStart, cursorEnd) 로 인접 무중복 타일링.
+    let cursorEnd = Date.now() + DAY_MS; // 오늘 포함(before: 내일).
+    let consecutiveEmpty = 0;
+    let windows = 0;
+    while (cursorEnd > hardFloorMs) {
+      if (++windows > MAX_WINDOWS) {
+        console.warn(`slack backfill: MAX_WINDOWS(${MAX_WINDOWS}) 초과 — 스윕 중단`);
+        break;
       }
+      const windowStart = Number.isFinite(hardFloorMs)
+        ? Math.max(hardFloorMs, cursorEnd - WINDOW_MS)
+        : cursorEnd - WINDOW_MS;
+
+      let n = 0;
+      for await (const it of sweepRange(token, base, windowStart, cursorEnd, noise)) {
+        n++;
+        yield it;
+      }
+
+      if (n === 0) {
+        consecutiveEmpty++;
+        if (dryStopEnabled && consecutiveEmpty >= DRY_STOP) break; // 연속 빈 창 → 이력 시작 도달로 종료.
+      } else {
+        consecutiveEmpty = 0;
+      }
+      cursorEnd = windowStart;
     }
+    // 파일 첨부 수집(files.list)은 후속 — 이번 릴리스는 메시지 스윕까지.
   },
 };
