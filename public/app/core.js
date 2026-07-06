@@ -747,11 +747,6 @@ function withTip(node, text) {
     node.addEventListener('blur', hide);
     return node;
 }
-// '시작하기' 상위 탭의 가로 중분류(설치·사용설명서) — 같은 sub-cats 패턴. 가이드는 top 탭에서 빼 여기로(한 번 읽는 온보딩).
-const START_SUBS = [
-    { key: 'install', label: '설치', href: '#/install' },
-    { key: 'learn', label: '사용설명서', href: '#/learn' },
-];
 function stat(num, label, unit) {
     return el('div', { class: 'stat' }, el('div', { class: 'num' }, num, unit ? el('small', {}, ' ' + unit) : null), el('div', { class: 'lbl', text: label }));
 }
