@@ -3,6 +3,7 @@ import { api, el, errorNote, pageHead, personFace, state, toast } from './core.j
 import { checklist, skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
 import { startTour } from './tour.js';
+import { companyTimelineSection } from './projects.js'; // 작업 로그 섹션(#609) — 회사 전체 활동 피드를 프로젝트 탭에서 터미널로 이관
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -81,6 +82,11 @@ async function renderTerminal(view) {
   const headActions = el('div', { class: 'term-head-actions' });
   const bulkBar = el('div', { class: 'bulk-bar', hidden: true });
   const body = el('div', {});
+  // 작업 로그(#609) — 회사에서 지금 진행 중인 모든 작업. 프로젝트 탭 '작업 로그'를 여기(세션 목록 아래 새 섹션)로 옮겼다.
+  //  repaint 마다 재생성하면 매번 리페치되므로, 헤드+타임라인 카드를 한 번만 만들어 재부착(로드·필터 상태 보존).
+  const worklogHead = termSectionHead('작업 로그', '회사에서 지금 진행 중인 모든 작업입니다.');
+  worklogHead.classList.add('term-section--div'); // 세션 섹션들과 사이에 구분선
+  const worklogCard = companyTimelineSection();
 
   function repaintBulk() {
     if (!sel.mode) { bulkBar.hidden = true; bulkBar.replaceChildren(); return; }
@@ -118,6 +124,7 @@ async function renderTerminal(view) {
     sec2.classList.add('term-section--div'); // 두 번째 섹션 위에 구분선
     body.append(sec1, termSessionList(mine, cfg, view, '아직 만든 세션이 없습니다. "새 세션"으로 만드세요.', selOpt));
     body.append(sec2, termSessionList(invited, cfg, view, '초대받은 세션이 없습니다.'));
+    body.append(worklogHead, worklogCard); // 작업 로그 섹션(#609) — 세션 두 섹션 아래
     repaintBulk();
   }
 

@@ -1243,6 +1243,7 @@ function srcRow(s) {
 }
 
 export {
+  SOURCE_KIND_LABEL,
   SPACE_LABEL,
   SPACE_SUBS,
   buildSpacesNav,
@@ -1259,4 +1260,5 @@ export {
   renderKnowledgeSpace,
   renderTrash,
   spaceSubBar,
+  srcRow,
 };

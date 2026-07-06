@@ -1328,4 +1328,4 @@ function srcRow(s) {
         open(); });
     return row;
 }
-export { SPACE_LABEL, SPACE_SUBS, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, knRow, knSideItem, knowledgeSubBar, myCatIdSet, openCategoryForm, renderKnowledge, renderKnowledgeDetail, renderKnowledgeSpace, renderTrash, spaceSubBar, };
+export { SOURCE_KIND_LABEL, SPACE_LABEL, SPACE_SUBS, buildSpacesNav, fetchAllSpaceCats, knInjectChip, knProvChip, knRow, knSideItem, knowledgeSubBar, myCatIdSet, openCategoryForm, renderKnowledge, renderKnowledgeDetail, renderKnowledgeSpace, renderTrash, spaceSubBar, srcRow, };

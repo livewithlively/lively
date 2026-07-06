@@ -2281,6 +2281,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-thcol-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-thcol-menu { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; transition: opacity .12s ease; }
 .pjv-thcol:hover .pjv-thcol-menu { opacity: 1; }
+/* #611 필드 열 순서 드래그 — 컬럼 헤더를 잡아 좌우로 끌어 재정렬. 드롭 위치는 대상 헤더 좌/우 세로선으로 표시. */
+.pjv-col-draggable { cursor: grab; }
+.pjv-col-draggable:active { cursor: grabbing; }
+.pjv-col-drag-src { opacity: .45; }
+.pjv-col-drop-before::after, .pjv-col-drop-after::after {
+  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue, #2d6bf0);
+  border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; z-index: 2; }
+.pjv-col-drop-before::after { left: -1px; }
+.pjv-col-drop-after::after { right: -1px; }
 .pjv-thcol-menu:hover { color: var(--ink); background: var(--bg-tint-2); }
 
 /* (+) 컬럼 추가 버튼 */
@@ -3120,6 +3129,26 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 /* 본문이 짧아도 뷰포트만큼 채워, sticky 사이드바가 스크롤 내내 상단에 고정될 이동 여지를 준다(#504 — 본문<사이드바면 sticky 가 안 먹어 사이드바(+새 리스트)가 같이 밀려 내려가던 문제). */
 .pjv-side-main { padding-left: 16px; min-width: 0; min-height: calc(100vh - 24px); }
 .pjv-side-main > .pjv-tgroup:first-child { margin-top: 0; }
+
+/* ── #607 사이드바 켜짐 = WIKI(.kn-shell/.kn-side) 형 풀블리드 셸 — 좌측 끝 도킹 사이드바(풀하이트) + 우측 컬럼(제목·하위탭·툴바·보드). ── */
+.pjv-board-wrap { min-width: 0; }
+/* 셸 카드 — 카드 크롬 제거 + 보드 라우트 main 패딩(상 32 / 좌우 16) 상쇄해 뷰포트 좌우 끝·topbar 바로 아래(y=64)까지 붙인다. */
+.pjv-listboard.pjv-has-side {
+  border: none; border-radius: 0; padding: 0; background: none;
+  margin: -32px -16px 0; /* top: main padding-top(32) 상쇄 → 셸 상단이 topbar 바로 아래(y=64) / 좌우: main padding(16) 상쇄 → 뷰포트 끝 */
+}
+.pjv-has-side .pjv-tasks-body { min-width: 0; }
+/* 사이드바 컬럼 — WIKI(.kn-side)처럼 좌측 끝 도킹 · border-right · 자체 배경. 상위 카테고리 레일 느낌. */
+.pjv-has-side .pjv-side-nav { padding: 0; border-right: 1px solid var(--line); background: var(--bg); }
+/* inner 를 y=64(=셸 상단=topbar 바로 아래)부터 풀하이트 sticky 자체 스크롤로. 셸 상단==sticky top 정렬이라
+   언핀 상태에서도 스크롤 박스가 뷰포트(64~100vh)에 딱 맞아 아래로 넘치지 않음 = #608 스크롤 트랩 해소. */
+.pjv-has-side .pjv-side-nav-inner { top: 64px; max-height: calc(100vh - 64px); padding: 20px 12px 28px 24px; }
+/* 우측 컬럼 — 제목·하위탭·툴바·보드가 자체 패딩 안에서(WIKI .kn-main 처럼). */
+.pjv-has-side .pjv-side-main { padding: 24px 32px 48px 28px; min-height: calc(100vh - 64px); }
+.pjv-has-side .pjv-board-chrome { margin-bottom: 2px; }
+.pjv-has-side .pjv-board-toolbar { margin-bottom: 14px; }
+/* 셸 우측 컬럼에선 툴바의 'h2 프로젝트'는 페이지 제목과 중복 — 숨겨 군더더기 제거(툴바 버튼은 유지). */
+.pjv-has-side .pjv-board-toolbar .pjv-tasks-head-left > h2 { display: none; }
 
 /* 영역 목록 접힘 — 얇은 레일(▶ 펼치기 + 영역 색점 아이콘). 영역 묶음은 유지, 본문은 그대로. */
 .pjv-side-wrap.pjv-side-collapsed { grid-template-columns: 44px minmax(0, 1fr); }
