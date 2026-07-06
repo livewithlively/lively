@@ -92,26 +92,24 @@ function openCategoryForm(space, existing, reload) {
 //  data-cat-val 위임에 실려 f.indexed 토글로 변환된다. 선택 시 is_wiki=true 만(전체 카테고리에서) 보여준다.
 const KN_INDEXED = '__indexed__';
 
-function knowledgeSubBar(active) {
-  // WIKI 탭 하위 = 지식 / 자료 (#290·#336). 지식(정제 저작)과 자료(raw 입력)를 분리.
-  //  인덱스(핀)는 별도 탭이 아니라 '지식' 좌측 사이드바의 '전체' 하위 필터로 통합(#336).
-  //  카테고리(사업·제품·시스템)는 좌측 사이드바로 통합(2026-06-26).
-  //  그래프는 별도 탭 대신 '지식 그래프' 버튼 → 풀스크린 새 창(graph.html, #290 아틀라스).
-  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '지식 보기' });
-  const onBrowse = active !== 'sources';
-  const tab = (on, href, label, title?) => bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href,
-    role: 'tab', 'aria-selected': on ? 'true' : 'false', ...(title ? { title } : {}), text: label }));
-  tab(onBrowse, '#/knowledge', '지식', '정제된 저작 지식 — 결정·설계·개념·런북');
-  tab(active === 'sources', '#/knowledge/sources', '자료', '회의 전사록·이메일·슬랙·외부 미러 — 정제 전 raw 입력(지식과 분리, 검색에 안 섞임)');
-  bar.append(el('button', { class: 'sub-graph-btn', type: 'button', role: 'link',
+// 지식 그래프 버튼 — 도메인으로 묶은 지식 지도(풀스크린 새 창 graph.html, #290 아틀라스). 지식 페이지 헤더 액션에서 사용.
+//  (#614) 구 knowledgeSubBar(지식/자료 동급 탭 바)를 폐지 — 지식이 WIKI 화면의 유일한 주(主) 뷰가 되고,
+//  자료는 동급 탭이 아니라 헤더의 보조 버튼(→ #/knowledge/sources)으로 강등. 그래프도 동일하게 헤더 버튼으로 이동.
+function knGraphBtn() {
+  return el('button', { class: 'btn btn-ghost btn-sm kn-graph-btn', type: 'button', role: 'link',
     title: '도메인으로 묶은 지식 지도 — 풀스크린 새 창에서 팬·줌으로 탐색', onclick: openKnowledgeAtlas },
-    sv('svg', { class: 'sub-graph-ic', viewBox: '0 0 24 24', width: '15', height: '15', 'aria-hidden': 'true' },
+    sv('svg', { class: 'sub-graph-ic', viewBox: '0 0 24 24', width: '14', height: '14', 'aria-hidden': 'true' },
       sv('circle', { cx: '6', cy: '7', r: '2.4', fill: 'currentColor' }),
       sv('circle', { cx: '17', cy: '6', r: '2', fill: 'currentColor', opacity: '0.7' }),
       sv('circle', { cx: '13', cy: '17', r: '2.2', fill: 'currentColor', opacity: '0.85' }),
       sv('path', { d: 'M7.8 8.2 11.4 15.4M15.2 7.3 13.7 14.9', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', opacity: '0.5' })),
-    '지식 그래프'));
-  return bar;
+    ' 지식 그래프');
+}
+
+// 자료(보조 입력층) 진입 버튼 — 지식과 동급이 아니라 '덜 중요한 보조'(#614). 헤더에서 작은 고스트 버튼으로.
+function knSourcesBtn() {
+  return el('a', { class: 'btn btn-ghost btn-sm kn-sources-link', href: '#/knowledge/sources',
+    title: '회의록·이메일·슬랙 등 정제 전 원본 자료 — 지식과 분리된 보조 입력', text: '🗂 자료' });
 }
 
 // 지식 아틀라스 — 풀스크린 그래프를 별도 창(graph.html)으로. opener 유지(노드 클릭 시 이 창의 상세로 이동).
@@ -206,7 +204,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   if (!f.category) f.folder = '';   // 폴더는 카테고리 컨텍스트에서만
 
   // 로딩 중엔 kn-plain 래퍼(가운데 정렬 패딩) — doc-mode(main 패딩 0)에서 스켈레톤이 가장자리에 붙지 않게(#592).
-  view.replaceChildren(el('div', { class: 'kn-plain' }, knowledgeSubBar('browse'), skeleton('지식을 불러오는 중')));
+  view.replaceChildren(el('div', { class: 'kn-plain' }, skeleton('지식을 불러오는 중')));
 
   // 선택(일괄삭제) 상태 — 리페치 없이 로컬 재페인트. names = 선택된 지식 name 집합.
   const sel = { mode: false, names: new Set() };
@@ -215,10 +213,13 @@ async function renderKnowledgeSpace(view, _space, params) {
   const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 지식을 골라 한 번에 삭제',
     onclick: () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); paintList(); repaintBulk(); } });
 
+  // (#614) 지식이 WIKI 화면의 주(主) 뷰 — 큰 제목이 정체성. 자료·그래프·휴지통은 헤더의 보조 버튼(동급 탭 아님).
   const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
     hasScope('memory') ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new',
       title: '새 지식을 작성합니다(별도 페이지)', text: '+ 추가' }) : null,
     selectBtn,
+    knGraphBtn(),
+    knSourcesBtn(),
     el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
   ], '식');
 
@@ -523,7 +524,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
   const layout = el('div', { class: 'kn-shell' },
     side,
-    el('section', { class: 'kn-main' }, head, knowledgeSubBar('browse'), catBox, filterBar, bulkBar, listBox, foot),
+    el('section', { class: 'kn-main' }, head, catBox, filterBar, bulkBar, listBox, foot),
   );
   view.replaceChildren(layout);
   applyReveal([layout]);
@@ -1076,7 +1077,7 @@ export async function renderKnowledgeForm(view, params?, editName?) {
         el('label', { class: 'field-label', text: '프로젝트 연결 (선택)' }), addProjBtn),
       stagedList),
     el('div', { class: 'admin-actions' }, saveBtn, status));
-  view.replaceChildren(el('div', { class: 'kn-plain' }, head, knowledgeSubBar('browse'), card));   // doc-mode 자체 패딩(#592)
+  view.replaceChildren(el('div', { class: 'kn-plain' }, head, card));   // doc-mode 자체 패딩(#592)
   applyReveal([card]);
   setTimeout(() => (isEdit ? bodyTa : titleIn).focus(), 0);
 }
@@ -1199,7 +1200,12 @@ function buildMirrorTree(entries) {
 
 // 자료(source) 탭 — raw 입력 인박스. kind/provenance/q 필터. 클릭 = 상세 오버레이(knowledge-doc.openSourceDetail).
 async function renderSources(view, _params?) {
-  const head = pageHead('자료', '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 여기서 다듬으면 지식이 됩니다.', [], '료');
+  // (#614) 자료는 지식과 동급이 아니라 그 아래 보조 입력층 — 동급 탭 대신 '← 지식' 돌아가기가 달린 하위 페이지.
+  const head = el('div', { class: 'page-head' },
+    el('div', { class: 'page-head-row' },
+      el('h1', { class: 'page-title' }, '자', el('span', { class: 'accent', text: '료' })),
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge', text: '← 지식' })),
+    el('p', { class: 'sub', text: '회의록·이메일·슬랙처럼 아직 정리하기 전의 원본입니다. 지식 화면의 보조 입력층이며, 여기서 다듬으면 지식이 됩니다.' }));
   const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
   kindSel.setAttribute('aria-label', '종류');
   const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
@@ -1208,7 +1214,7 @@ async function renderSources(view, _params?) {
   const listBox = el('div', { class: 'list-box' });
   const foot = el('div', { class: 'list-foot' });
   view.replaceChildren(el('div', { class: 'kn-plain' },   // doc-mode 자체 패딩(#592)
-    head, knowledgeSubBar('sources'), el('div', { class: 'filter-bar' }, qIn, kindSel, provSel), listBox, foot));
+    head, el('div', { class: 'filter-bar' }, qIn, kindSel, provSel), listBox, foot));
   async function refetch() {
     listBox.replaceChildren(skeletonRows(4)); foot.replaceChildren();
     try {
@@ -1252,7 +1258,6 @@ export {
   knProvChip,
   knRow,
   knSideItem,
-  knowledgeSubBar,
   myCatIdSet,
   openCategoryForm,
   renderKnowledge,
