@@ -4023,3 +4023,82 @@ main.doc-mode { max-width: none; padding: 0; }
 .ps-cat-chip { font-size: 12.5px; font-weight: 600; padding: 2px 9px; border-radius: 7px; background: var(--bg-tint); border: 1px solid var(--line); color: var(--ink); }
 .ps-cat-none { font-size: 12.5px; color: var(--muted-3); }
 .ps-cat-inherit-hint { font-size: 11.5px; color: var(--muted-2); }
+
+/* ════════════════ 대시보드(#/dashboard) — 나만의 코크핏(#617, 1단계: A안 고정 프리셋) ════════════════ */
+/* 풀블리드 + 페이지 스크롤 금지 계약(데스크톱) — 넘치는 목록은 위젯 내부에서만 스크롤. #541 풀폭 훅과 같은 결.
+   main 은 body 직계가 아니라 #app(앱 셸) 안에 있으므로 flex 체인을 #app 까지 이어야 높이가 찬다. */
+body[data-route="dashboard"] { height: 100vh; overflow: hidden; }
+body[data-route="dashboard"] #app { height: 100%; display: flex; flex-direction: column; }
+body[data-route="dashboard"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우하단 고정칩 숨김(로그 레일과 겹침) */
+
+.dash { height: 100%; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+/* 인사 스트립 — 고정 높이, 화면 유일의 파란 채움 버튼([+ 새 세션])이 여기 산다(§0.5) */
+.dash-strip { flex: none; display: flex; align-items: center; gap: 14px; padding: 2px 6px; }
+.dash-hi { font-size: 19px; font-weight: 800; letter-spacing: -.01em; }
+.dash-date { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.dash-acts { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.dash-ob { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--ink-sub);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; text-decoration: none; }
+.dash-ob:hover { border-color: var(--muted-2); }
+.dash-ob-bar { width: 64px; height: 5px; border-radius: 3px; background: var(--bg-tint-2); overflow: hidden; }
+.dash-ob-fill { display: block; height: 100%; background: var(--mint-deep); }
+
+/* 3열 프리셋(A안): 내 프로젝트 5 / (세션 7 + 폴더 5) 4 / 작업 로그 3 — minmax(0,)로 말줄임 보장 */
+.dash-zones { flex: 1; min-height: 0; display: grid; gap: 12px; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 3fr); }
+.dash-colmid { display: grid; gap: 12px; grid-template-rows: minmax(0, 7fr) minmax(0, 5fr); min-height: 0; }
+
+/* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
+.dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.dash-wh { flex: none; display: flex; align-items: baseline; gap: 8px; padding: 12px 16px 9px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-wh h4 { margin: 0; font-size: 13.5px; font-weight: 800; letter-spacing: -.01em; }
+.dash-wh-n { font-size: 11.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dash-wh-chips { display: flex; gap: 4px; margin-left: 6px; }
+.dash-chip { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--muted); background: none; cursor: pointer; font-family: inherit; }
+.dash-chip:hover { color: var(--ink); }
+.dash-chip.on { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+.dash-wh-go { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.dash-wh-go:hover { color: var(--ink); }
+.dash-wl { flex: 1; overflow-y: auto; padding: 4px 8px 14px; position: relative; scrollbar-width: thin; }
+.dash-empty { padding: 18px 10px; font-size: 12.5px; color: var(--muted-2); text-align: center; }
+
+/* 행 원자 — 32~34px 컴팩트, 시간·숫자 tabular */
+.dash-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; color: inherit; text-decoration: none; min-height: 32px; }
+a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
+.dash-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dash-dot.tn-mint { background: var(--mint-deep); } .dash-dot.tn-coral { background: var(--coral); }
+.dash-dot.tn-blue { background: var(--blue); } .dash-dot.tn-teal { background: var(--teal); }
+.dash-dot.tn-violet { background: #8B7BD8; } .dash-dot.tn-amber { background: #D9A441; }
+.dash-dot.tn-mut { background: var(--muted-3); }
+.dash-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-nm-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-sub { display: block; font-weight: 500; font-size: 10.5px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-meta { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dash-meta.overdue { color: var(--coral-text); font-weight: 700; }
+.dash-badge { flex: none; font-size: 10px; font-weight: 700; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+.dash-badge.live { color: var(--mint-deep); border-color: color-mix(in srgb, var(--mint-deep) 45%, var(--bg)); }
+.dash-badge.live::before { content: "●"; font-size: 7px; margin-right: 4px; vertical-align: 1px; }
+.dash-open { flex: none; font-size: 10.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg));
+  border-radius: 6px; padding: 2px 9px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.dash-open:hover { background: var(--bg-punch); }
+.dash-ghead { display: flex; align-items: center; gap: 7px; padding: 9px 8px 3px; font-size: 11px; font-weight: 800; color: var(--ink-sub); }
+.dash-ghead-dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.dash-ghead-n { color: var(--muted); font-weight: 700; }
+.dash-fold-ic { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.dash-row--log { align-items: flex-start; }
+.dash-row--log .dash-dot { margin-top: 5px; }
+
+/* 반응형 폴백 — 코크핏은 데스크톱 계약: 좁거나 낮으면 세로 스택 + 페이지 스크롤 허용 */
+@media (max-width: 1100px), (max-height: 719px) {
+  body[data-route="dashboard"] { height: auto; overflow: auto; }
+  body[data-route="dashboard"] #app { height: auto; display: block; }
+  body[data-route="dashboard"] main { padding: 14px 16px 40px; }
+  .dash { height: auto; }
+  .dash-zones { display: flex; flex-direction: column; }
+  .dash-colmid { display: flex; flex-direction: column; }
+  .dash-zone { min-height: 0; }
+  .dash-wl { max-height: 320px; }
+  .dash-strip { flex-wrap: wrap; }
+}
