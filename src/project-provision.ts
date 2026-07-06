@@ -31,7 +31,10 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): P
     // GIT_TERMINAL_PROMPT=0 은 항상 — 자격 미주입(앰비언트 폴백)이어도 git 이 Username/Password 프롬프트로 매달리지 않고
     //  즉시 실패하게 한다(무한대기 → 프록시 504 의 근본원인 제거, #522). 주입 자격(extraEnv)의 동일 키가 있으면 그 값이 뒤에서 우선.
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) };
-    const p = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
+    // umask 0002 — git 이 만드는 파일을 group-writable 로(게이트웨이-소유 공유 클론/워크트리를 멤버[lively-shared 그룹]가
+    //  fetch/commit/편집, #522 B). 셸 경유하되 git args 는 "$@" 위치인자로만 전달(스크립트=고정 리터럴) → 인젝션 없음.
+    //  exec 로 git 이 프로세스 대체(PID 유지 → kill·stdio·종료코드 정상).
+    const p = spawn("sh", ["-c", 'umask 0002; exec "$@"', "sh", "git", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let out = "", err = "", done = false;
     const finish = (r: { ok: boolean; out: string; err: string }) => { if (!done) { done = true; resolve(r); } };
     const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* */ } finish({ ok: false, out: out.trim(), err: `git 타임아웃(${GIT_TIMEOUT_MS}ms)` }); }, GIT_TIMEOUT_MS);
@@ -42,6 +45,22 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): P
   });
 }
 async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync(p) && (await git(["rev-parse", "--git-dir"], p)).ok; }
+
+// 재사용 공유 클론 소급 보정(#522 B) — v0.1.70 이전 생성분은 .git 이 group-write 아니라 멤버(lively-shared)가 fetch/commit 못 함
+//  (FETCH_HEAD/objects 쓰기 Permission denied). .git 이 이미 group-write 면 skip(매 provision chmod -R 낭비 방지 → 사실상 1회성).
+//  게이트웨이가 클론 소유자라 chmod 가능. 경로는 "$1" 위치인자(인젝션 없음). best-effort.
+async function ensureRepoGroupWritable(repoPath: string): Promise<void> {
+  const gitDir = path.join(repoPath, ".git");
+  try {
+    const st = await fsp.stat(gitDir);
+    if (!st.isDirectory() || (st.mode & 0o020)) return; // 이미 group-write, 또는 .git 이 파일(워크트리) → skip
+  } catch { return; }                                    // .git 없음 → skip
+  await new Promise<void>((res) => {
+    const p = spawn("sh", ["-c", 'chmod -R g+w "$1" 2>/dev/null; find "$1" -type d -exec chmod g+s {} + 2>/dev/null; exit 0', "sh", gitDir], { stdio: "ignore" });
+    p.on("close", () => res());
+    p.on("error", () => res());
+  });
+}
 
 // 재사용 레포를 현재 브랜치의 upstream 으로 fast-forward — 새 워크트리가 최신 base HEAD 에서 잘리도록.
 //  best-effort·비파괴: 무인 provision 이라 자동 머지커밋·리베이스·충돌 금지 → ff-only 만.
@@ -168,7 +187,8 @@ export async function provisionProjectRepos(
         const url = sanitizeCloneUrl(row?.git_url ?? null);
         if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
         await fsp.mkdir(path.dirname(repoPath), { recursive: true });
-        const c = await git(["clone", url, repoPath], undefined, auth.env);
+        // --config core.sharedRepository=group: .git 을 그룹 공유쓰기로 — 게이트웨이·멤버(lively-shared)가 같은 클론에서 fetch/commit(#522 B).
+        const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
         if (!c.ok) {
           // 인증 계열 실패는 '자격 등록하라'는 행동가능 메시지로(#522) — 무한대기/막연한 502 대신. 그 외(네트워크·경로 등)는 502.
           if (isAuthError(c.err)) {
@@ -181,8 +201,13 @@ export async function provisionProjectRepos(
         cloned = true;
       }
 
-      // ②-b 재사용 base(갓 clone 아님)는 새 워크트리를 자르기 전에 upstream 으로 fast-forward(best-effort).
-      if (!cloned) await refreshRepo(repoPath, auth.env);
+      // ②-b 재사용 base(갓 clone 아님): (i) v0.1.70 이전 생성분은 group-write 아닐 수 있음 → 소급 보정(#522 B),
+      //   (ii) sharedRepository=group 설정(이후 git 이 그룹쓰기 유지), (iii) upstream 으로 fast-forward(best-effort).
+      if (!cloned) {
+        await ensureRepoGroupWritable(repoPath);
+        await git(["config", "core.sharedRepository", "group"], repoPath).catch(() => { /* best-effort */ });
+        await refreshRepo(repoPath, auth.env);
+      }
 
       // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
       let cwd = repoPath;
