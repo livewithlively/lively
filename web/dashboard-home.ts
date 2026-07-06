@@ -12,6 +12,10 @@ const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
 // 작업 유형 → 점 톤/라벨 — 작업 현황(dashboard.ts ACT_TYPE_TONE)과 동일 매핑(성격축 8종).
 const DASH_ACT_TONE = { feature: 'mint', fix: 'coral', decision: 'blue', docs: 'teal', research: 'violet', review: 'amber', chore: 'mut', other: 'mut' };
 const DASH_ACT_LABEL = { feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타' };
+// 프로젝트 네이티브 상태 → 점 색 폴백(리스트 커스텀 상태 defs 없을 때) — 보드 기본 defs 와 동일 색.
+const DASH_STATUS_FALLBACK = { done: '#22c55e', in_progress: '#f59e0b', active: '#f59e0b', todo: '#94a3b8' };
+// 최신 알림(⓪) — 프로젝트 필드 변경 이벤트(getTaskFeed event)의 한국어 라벨.
+const DASH_FIELD_LABEL = { status: '상태', assignee: '담당', priority: '우선순위', due_date: '마감', start_date: '시작일', name: '이름', description: '내용' };
 
 async function renderMyDashboard(view) {
   // ── 셸 즉시 그리기(각 존은 스켈레톤) → 위젯별 병렬 로드 ──
@@ -19,10 +23,15 @@ async function renderMyDashboard(view) {
   const summaryEl = el('span', { text: '불러오는 중…' }); // 인사줄 요약(프로젝트·세션 수) — 로드 후 갱신
   const obSlot = el('span');                              // 온보딩 칩 자리(완료면 빈 채로)
 
+  const zoneNotif = dashZone('notif', '최신 알림', '#/projects2/worklog', '작업 로그 →');
   const zoneProj = dashZone('proj', '내 프로젝트', '#/projects2', '프로젝트 →');
   const zoneSess = dashZone('sess', '내 AI 세션', '#/terminal', '터미널 →');
   const zoneFold = dashZone('fold', '팀 공유 폴더', '#/terminal', '터미널 →');
   const zoneLog = dashZone('log', '팀 작업 로그', '#/projects2/worklog', '작업 로그 →');
+
+  // mine=1(내 프로젝트)·리스트는 '내 프로젝트'와 '최신 알림' 두 위젯이 공유 — 한 번만 호출(각자 독립적으로 await·실패처리).
+  const projectsP = api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []);
+  const listsP = api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []);
 
   const strip = el('div', { class: 'dash-strip' },
     el('div', {},
@@ -36,7 +45,7 @@ async function renderMyDashboard(view) {
   view.replaceChildren(el('div', { class: 'dash' },
     strip,
     el('div', { class: 'dash-zones' },
-      zoneProj.box,
+      el('div', { class: 'dash-colleft' }, zoneNotif.box, zoneProj.box),
       el('div', { class: 'dash-colmid' }, zoneSess.box, zoneFold.box),
       zoneLog.box)));
   document.getElementById('view')!.focus?.();
@@ -50,7 +59,8 @@ async function renderMyDashboard(view) {
     summaryEl.textContent = parts.join(' · ');
     sepEl.hidden = !parts.length; // 요약이 비면(양쪽 다 실패) 구분점도 숨김 — '날짜 · ' 꼬리 방지
   };
-  fillProjects(zoneProj, (n) => { counts.projects = n; drawSummary(); });
+  fillNotifications(zoneNotif, projectsP);
+  fillProjects(zoneProj, (n) => { counts.projects = n; drawSummary(); }, projectsP, listsP);
   fillSessions(zoneSess, (n) => { counts.sessions = n; drawSummary(); });
   fillFolders(zoneFold);
   fillActivity(zoneLog);
@@ -109,14 +119,10 @@ function dashEmpty(text) { return el('div', { class: 'dash-empty', text }); }
 // ── ① 내 프로젝트 — mine=1(생성자 OR 팀원)를 '리스트 블럭(개요 카드)'으로(#622). ──
 //  프로젝트 탭 폴더 개요(pjv-overview)와 동일한 카드 UI: 리스트별 블럭에 글리프·이름 · 'N개 프로젝트' · 상태 미니바.
 //  블럭을 누르면 그 리스트로 진입(#/projects2/l/<id>) — 기존 프로젝트 탭에서 그 안의 프로젝트가 그대로 보인다.
-async function fillProjects(zone, onCount) {
+async function fillProjects(zone, onCount, projectsP, listsP) {
   let projects, lists;
-  try {
-    [projects, lists] = await Promise.all([
-      api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []),
-      api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
-    ]);
-  } catch (e) { onCount(null); zone.body.replaceChildren(errorNote(e, '내 프로젝트를 불러오지 못했습니다')); return; }
+  try { [projects, lists] = await Promise.all([projectsP, listsP]); }
+  catch (e) { onCount(null); zone.body.replaceChildren(errorNote(e, '내 프로젝트를 불러오지 못했습니다')); return; }
 
   const isDone = (p) => p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed';
   onCount(projects.filter((p) => !isDone(p)).length);
@@ -124,6 +130,19 @@ async function fillProjects(zone, onCount) {
   // 상태 묶음(개요 미니바) — 프로젝트 탭 개요의 brk 와 동일 3버킷(할일·진행·완료).
   const brk = (arr) => ({ total: arr.length, done: arr.filter(isDone).length,
     prog: arr.filter((p) => !isDone(p) && p.status !== 'todo').length, todo: arr.filter((p) => p.status === 'todo').length });
+  // 상태점 색 — 리스트 커스텀 상태 defs(#475 settings.statuses)로 해석, 없으면 네이티브 폴백.
+  const dotColor = (p) => {
+    const l = listById.get(p.list_id);
+    const defs = (l && l.settings && Array.isArray(l.settings.statuses)) ? l.settings.statuses : [];
+    const def = p.status_raw ? defs.find((d) => d && d.key === p.status_raw) : null;
+    return (def && def.color) || DASH_STATUS_FALLBACK[p.status] || '#94a3b8';
+  };
+  // 프로젝트 탭 스타일 행 — 상태점 + 이름 + 세션배지 + 갱신시각. 클릭→프로젝트 상세.
+  const projRow = (p) => el('a', { class: 'dash-row dash-projrow', href: '#/projects2/p/' + p.id },
+    el('span', { class: 'dash-dot', style: 'background:' + dotColor(p) }),
+    el('span', { class: 'dash-nm', title: p.name, text: p.name }),
+    p.my_session_count ? el('span', { class: 'dash-badge', text: '세션 ' + p.my_session_count }) : null,
+    el('span', { class: 'dash-meta', text: p.updated_at ? relTime(p.updated_at) : '' }));
 
   // 리스트 블럭 카드 — pjv-overview 의 ovCard 와 동일 마크업(글리프·이름 · 개수 · 상태바). 클릭→그 리스트 열기.
   const projBlock = (listId, l, arr) => {
@@ -155,7 +174,18 @@ async function fillProjects(zone, onCount) {
     const order = [...lists.map((l) => l.id).filter((id) => byList.has(id)), ...(byList.has(0) ? [0] : [])];
     const grid = el('div', { class: 'pjv-ov-grid dash-ov-grid' });
     for (const listId of order) grid.append(projBlock(listId, listById.get(listId), byList.get(listId)));
-    zone.body.replaceChildren(grid);
+    // 개요 블럭 아래: 리스트별 프로젝트 목록(프로젝트 탭 스타일 행) — 오버뷰와 동시에 보이게(대시보드 개인화 · #619 후속).
+    const listEl = el('div', { class: 'dash-projlist' });
+    for (const listId of order) {
+      const l = listById.get(listId);
+      const arr = byList.get(listId).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+      listEl.append(el('div', { class: 'dash-ghead' },
+        el('span', { class: 'dash-ghead-dot', style: 'background:' + ((l && l.color) || 'var(--muted-3)') }),
+        el('span', { text: (l && l.name) || '미분류' }),
+        el('span', { class: 'dash-ghead-n', text: String(arr.length) })));
+      for (const p of arr) listEl.append(projRow(p));
+    }
+    zone.body.replaceChildren(grid, listEl);
   };
   draw();
 }
@@ -283,6 +313,124 @@ async function fillActivity(zone) {
   };
   draw();
 }
+
+// ── ⓪ 최신 알림 — '나에 관한' 개인 인박스(팀 작업 로그와 별개). 전용 알림 백엔드가 없어(감사) 기존 API 합성:
+//  내 프로젝트(mine=1)에서 ▸ 나 아닌 사람의 활동(activity/list, 클라 필터) ▸ 댓글·필드변경(프로젝트별 getTaskFeed, 상위 K)
+//  ▸ 나를 언급(@) ▸ 다가오는/지난 마감. 내 행위는 빼고 '남이 한 것·내가 알아야 할 것'만 최신순.
+//  (한계: 마감·담당은 태스크 레벨이라 대개 비어 있고, 댓글은 상위 K 프로젝트만 — 정확·성능은 후속 백엔드 집계 엔드포인트로.)
+async function fillNotifications(zone, projectsP) {
+  const meId = (state.me && (state.me.userId || state.me.email)) || '';
+  const myName = myDisplayName();
+  let projects;
+  try { projects = await projectsP; }
+  catch (e) { zone.body.replaceChildren(errorNote(e, '알림을 불러오지 못했습니다')); return; }
+  const people = await api('/api/ui/dash/people').then((d) => (d && d.people) || []).catch(() => []);
+  const nameOf = (pid) => { if (!pid) return ''; const m = people.find((x) => x.author_person === pid); return (m && m.display_name) || pid; };
+  const projById = new Map<any, any>(projects.map((p) => [p.id, p]));
+  const myIds = new Set(projects.map((p) => p.id));
+
+  // 댓글·변경 피드는 최근 갱신 상위 K개 프로젝트만(과다 요청 방지 — 활동은 대개 최근 프로젝트에 몰림).
+  const K = 12;
+  const topIds = projects.slice()
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .slice(0, K).map((p) => p.id);
+
+  const [acts, feeds] = await Promise.all([
+    api('/api/ui/activity/list?limit=100').then((d) => (Array.isArray(d) ? d : (d && d.rows) || [])).catch(() => []),
+    Promise.all(topIds.map((id) =>
+      api('/api/ui/v6/projects/' + id + '/comments')
+        .then((d) => ({ id, feed: (d && d.feed) || [] })).catch(() => ({ id, feed: [] })))),
+  ]);
+
+  const items: any[] = [];
+  // (1) 활동 — 내 프로젝트 + 내가 아닌 사람
+  for (const a of acts) {
+    if (!myIds.has(a.project_id) || (a.author_person && a.author_person === meId)) continue;
+    items.push({ ts: a.committed_at || a.created_at, kind: 'act', tone: DASH_ACT_TONE[a.type] || 'mut',
+      head: a.summary || a.title || (DASH_ACT_LABEL[a.type] || '작업'),
+      who: nameOf(a.author_person) || a.author_agent || '',
+      pid: a.project_id, proj: projById.get(a.project_id)?.name || '' });
+  }
+  // (2) 프로젝트 피드 — 댓글 / 필드변경. 내가 한 건 제외. 나 언급은 mention 승격.
+  for (const { id, feed } of feeds) {
+    const pname = projById.get(id)?.name || '';
+    for (const f of feed) {
+      if (f.actor && f.actor === meId) continue;
+      if (f.kind === 'comment') {
+        const body = String(f.body || '').replace(/\s+/g, ' ').trim();
+        const mentioned = !!myName && (body.includes('@' + myName) || (!!meId && body.includes('@' + meId)));
+        items.push({ ts: f.ts, kind: mentioned ? 'mention' : 'comment',
+          head: (mentioned ? '나를 언급 — ' : '') + (body || '(내용 없음)'),
+          who: f.display_name || nameOf(f.actor), pid: id, proj: pname });
+      } else if (f.kind === 'event' && f.field && f.field !== 'created') {
+        items.push({ ts: f.ts, kind: 'update', head: eventLabel(f),
+          who: f.display_name || nameOf(f.actor), pid: id, proj: pname });
+      }
+    }
+  }
+
+  // (3) 다가오는/지난 마감 — 마감일 있는 미완 프로젝트(7일 이내 or 지남). 없으면 섹션 생략.
+  const due = projects
+    .map((p) => ({ p, n: dueInDays(p.due_date) }))
+    .filter((x) => x.n != null && x.p.status !== 'done' && (x.n as number) <= 7)
+    .sort((a, b) => (a.n as number) - (b.n as number));
+
+  items.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+  const feedItems = items.slice(0, 20);
+  zone.countEl.textContent = String(due.length + feedItems.length);
+
+  if (!due.length && !feedItems.length) {
+    zone.body.replaceChildren(dashEmpty('새 알림이 없어요. 내 프로젝트에 활동·댓글·변경이 생기면 여기 모여요.'));
+    return;
+  }
+  const frag: any[] = [];
+  if (due.length) {
+    frag.push(el('div', { class: 'dash-ghead', text: '다가오는 마감' }));
+    for (const { p, n } of due) frag.push(el('a', { class: 'dash-row dash-notif-row', href: '#/projects2/p/' + p.id },
+      el('span', { class: 'dash-notif-ic due', text: '⏰' }),
+      el('span', { class: 'dash-nm' },
+        el('span', { class: 'dash-nm-line', title: p.name, text: p.name }),
+        el('span', { class: 'dash-sub', text: '마감 ' + dueLabel(n as number) })),
+      el('span', { class: 'dash-meta' + ((n as number) < 0 ? ' overdue' : ''), text: (n as number) < 0 ? '지남' : ((n as number) === 0 ? 'D-day' : 'D-' + n) })));
+  }
+  if (feedItems.length) {
+    if (due.length) frag.push(el('div', { class: 'dash-ghead', text: '최근 활동' }));
+    for (const it of feedItems) frag.push(notifRow(it));
+  }
+  zone.body.replaceChildren(...frag);
+}
+function notifRow(it) {
+  const sub = [it.proj, it.who, it.ts ? relTime(it.ts) : ''].filter(Boolean).join(' · ');
+  let ind;
+  if (it.kind === 'mention') ind = el('span', { class: 'dash-notif-ic mention', text: '@' });
+  else if (it.kind === 'comment') ind = el('span', { class: 'dash-notif-ic cmt', text: '💬' });
+  else if (it.kind === 'update') ind = el('span', { class: 'dash-notif-ic upd', text: '✎' });
+  else ind = el('span', { class: 'dash-dot tn-' + (it.tone || 'mut') });
+  return el('a', { class: 'dash-row dash-notif-row' + (it.kind === 'mention' ? ' is-mention' : ''), href: '#/projects2/p/' + it.pid },
+    ind,
+    el('span', { class: 'dash-nm' },
+      el('span', { class: 'dash-nm-line', title: it.head, text: it.head }),
+      el('span', { class: 'dash-sub', title: sub, text: sub })));
+}
+// 필드 변경 이벤트 → 한국어 한 줄.
+function eventLabel(f) {
+  const lbl = DASH_FIELD_LABEL[f.field] || f.label || f.field || '항목';
+  if (f.field === 'status' && f.to) return `상태를 '${f.to}'(으)로 변경`;
+  if (f.field === 'name') return '이름을 바꿨어요';
+  if (f.field === 'description') return '내용을 수정했어요';
+  if (f.field === 'assignee') return '담당자를 바꿨어요';
+  if (f.to) return `${lbl} 변경 → ${f.to}`;
+  return `${lbl} 변경`;
+}
+// 마감까지 일수(자정 기준, 음수=지남). 없으면 null.
+function dueInDays(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00');
+  if (isNaN(+d)) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((+d - +today) / 86400000);
+}
+function dueLabel(n) { return n < 0 ? Math.abs(n) + '일 지남' : (n === 0 ? '오늘' : n + '일 뒤'); }
 
 export {
   renderMyDashboard,

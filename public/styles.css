@@ -4118,6 +4118,7 @@ body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우
 /* 3열 프리셋(A안): 내 프로젝트 5 / (세션 7 + 폴더 5) 4 / 작업 로그 3 — minmax(0,)로 말줄임 보장 */
 .dash-zones { flex: 1; min-height: 0; display: grid; gap: 12px; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 3fr); }
 .dash-colmid { display: grid; gap: 12px; grid-template-rows: minmax(0, 7fr) minmax(0, 5fr); min-height: 0; }
+.dash-colleft { display: grid; gap: 12px; grid-template-rows: minmax(0, 5fr) minmax(0, 8fr); min-height: 0; } /* 좌: 최신 알림(위) + 내 프로젝트(아래)(대시보드 개인화 · #619 후속) */
 
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -4157,7 +4158,22 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-row--log .dash-dot { margin-top: 6px; }
 
 /* ① 내 프로젝트 — 리스트 블럭(개요 카드)(#622). 프로젝트 탭 개요(pjv-ov-*) 카드 재사용, 좁은 존에 맞게 그리드만 조밀하게. */
-.dash-ov-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 4px 4px 10px; }
+.dash-ov-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 4px 4px 8px; }
+
+/* 개요 블럭 아래 프로젝트 목록(대시보드 개인화 · #619 후속) — 리스트별 그룹 헤더 + 프로젝트 탭 스타일 행(상태점+이름+메타). */
+.dash-ghead { display: flex; align-items: center; gap: 7px; padding: 10px 8px 4px; font-size: 12.5px; font-weight: 800; color: var(--ink-sub); }
+.dash-ghead-dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.dash-ghead-n { color: var(--muted); font-weight: 700; margin-left: 2px; }
+.dash-projlist { margin-top: 6px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+
+/* ⓪ 최신 알림(대시보드 개인화 · #619 후속) — 개인 인박스. 유형 표식(멘션 @ · 댓글 💬 · 변경 ✎ · 마감 ⏰ · 활동 점) + 본문(최대 2줄) + (프로젝트·사람·시간). */
+.dash-notif-row { align-items: flex-start; }
+.dash-notif-ic { width: 18px; flex: none; text-align: center; font-size: 13px; line-height: 1.3; margin-top: 2px; }
+.dash-notif-ic.mention { color: var(--blue); font-weight: 800; font-size: 15px; }
+.dash-notif-row .dash-dot { margin-top: 6px; }
+.dash-notif-row .dash-nm { white-space: normal; }
+.dash-notif-row .dash-nm-line { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dash-notif-row.is-mention, .dash-notif-row.is-mention:hover { background: var(--bg-punch); }
 
 /* ③ 팀 공유 폴더 — 아이콘 카드(#621). 프로젝트 상세 공유 폴더(proj-file-*)와 동일한 타일, 존 안에서 가로 스크롤. */
 .dash-fold-grid { padding: 8px 4px 12px; }
@@ -4171,7 +4187,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
   body[data-route="dashboard"] main { padding: 14px 16px 40px; }
   .dash { height: auto; }
   .dash-zones { display: flex; flex-direction: column; }
-  .dash-colmid { display: flex; flex-direction: column; }
+  .dash-colmid, .dash-colleft { display: flex; flex-direction: column; }
   .dash-zone { min-height: 0; }
   .dash-wl { max-height: 320px; }
   .dash-strip { flex-wrap: wrap; }
