@@ -162,9 +162,26 @@ const sourceUndistilled: Capability = {
   handler: async (input: any) => ({ entries: await listUndistilledSources(input.limit) }),
 };
 
+// 바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 on-demand 로 임시경로에 받아 돌려준다(#541). distill 세션이
+//  Read(Claude 네이티브 PDF·이미지 파싱)해 내용 확보. 커넥터가 sync 시 전량 저장(eager)하지 않아 스토리지 절약 —
+//  distill 이 볼 가치 있다고 판단한 것만 이 도구로 페치. 삭제/이동/미지원이면 에러(→ 그 자료 skip).
+const sourceArtifact: Capability = {
+  name: "source_artifact",
+  title: "자료 원본(on-demand)",
+  description:
+    "바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 커넥터에서 on-demand 로 내려받아 짧은 TTL 임시경로에 저장하고 그 경로를 돌려준다({path,mime,bytes,expires_at}). distill 세션이 이 경로를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 실제 내용을 확보한다. 원본이 삭제/이동/권한상실이면 unavailable 에러(→ 그 자료 skip). 저장은 transient(수 시간 GC) — 커넥터 무관 공용(slack/gdrive/…).",
+  scope: "memory",
+  input: { source_id: z.number().int().positive() },
+  expose: { mcp: true, rest: false }, // MCP 전용 — 서버-로컬 경로 반환(같은 호스트의 distill 세션이 Read).
+  handler: async (input: any) => {
+    const { materializeSourceArtifact } = await import("../v6/source-artifact.js");
+    return await materializeSourceArtifact(input.source_id);
+  },
+};
+
 // ⚠ REST 순서: sourceUndistilled(/sources/undistilled, GET) 은 sourceGet(/sources/:id) 보다 **먼저** 마운트되어야
 //  'undistilled' 가 :id 로 먹히지 않는다(구체 경로 우선). sourceGet(/sources/:id)·sourceList(/sources) 는 세그먼트 수로 구분.
 //  POST 들(/sources, /sources/:id/knowledge, /sources/:id/delete)도 상호 구분.
 export const sourceCapabilities: Capability[] = [
-  sourceList, sourceUndistilled, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete,
+  sourceList, sourceUndistilled, sourceGet, sourceSave, sourceLinkKnowledge, sourceDelete, sourceArtifact,
 ];

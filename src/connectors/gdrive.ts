@@ -4,15 +4,20 @@
 //                              ⚠ 공유 드라이브 3종 세트(supportsAllDrives + includeItemsFromAllDrives + corpora=allDrives)
 //                              를 모두 켜야 공유 드라이브 파일이 조용히 누락되지 않는다.
 //   - GET /files/{id}/export : Google 네이티브(Docs/Sheets/Slides) → text/plain·text/csv 로 내보내 본문 추출.
-//   - GET /files/{id}?alt=media : 비네이티브 텍스트(text/*·application/json) 원본 다운로드.
-//   - 바이너리(pdf/이미지/오피스 blob)는 바이트를 받지 않고 메타데이터만 — 텍스트 추출은 후속 단계.
+//   - GET /files/{id}?alt=media : 비네이티브 텍스트(text/*·application/json) 및 Office Open XML(.docx/.pptx/.xlsx) 원본 다운로드.
+//     · OOXML 은 zero-dep(zlib) 로 ZIP 을 풀어 텍스트 노드만 추출(한글 포함 신뢰성 있음, extractOoxml).
+//   - PDF·이미지: 원본을 로컬 아티팩트(GDRIVE_ARTIFACT_DIR, 기본 ./data/drive-artifacts)로 저장하고 body 는 스텁(마커+path+url).
+//     distill 세션이 path 를 Read(Claude 네이티브 PDF/이미지/스캔 파싱, 한글 정확)해 지식화 — 손파서 CID 누락 회피, CTO drive-absorb 동형.
+//   - 그 외 바이너리(zip/video/audio 등)는 메타데이터만.
 // 헤더: Authorization: Bearer <googleAccessToken("gdrive")> (google-auth.ts, OAuth2 refresh-token, access token 만료 자동 갱신).
 // rate limit: 초과 시 429 + Retry-After(초). → 429 시 Retry-After 만큼 대기 후 재시도. 자발적 스로틀로 선제 회피.
 // 단일 파일 처리 실패는 skip/continue — 전체 백필을 죽이지 않는다.
 // ⚠ 증분 since / folders id 는 q 문자열에 보간되므로 STRICT 검증(인젝션 가드) — 형식 불일치면 해당 절을 생략한다.
+import { Readable } from "node:stream";
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { googleAccessToken } from "./google-auth.js";
+import { extractOoxml, printableRatio, ooxmlKindFromMime } from "./ooxml.js";
 
 // ── 상수 ───────────────────────────────────────────────────────────────────
 const API_BASE = "https://www.googleapis.com/drive/v3";
@@ -23,10 +28,19 @@ const MAX_PAGES = 20; // 페이지네이션 상한(무한 루프/폭주 방지) 
 const REQ_INTERVAL_MS = 50; // 자발적 스로틀 — Drive 쿼터는 넉넉하나 100초창(per-user) 버스트 선제 회피
 const MAX_RETRY = 5; // 429/일시 오류 재시도 횟수
 const MAX_BODY_CHARS = 1_000_000; // 본문 저장 상한(~1MB) — 병적으로 큰 텍스트/export 로부터 메모리 보호
+const MAX_BINARY_BYTES = 30_000_000; // OOXML 텍스트 추출용 바이너리 다운로드 상한(~30MB) — 메모리 보호(초과 시 메타만)
+const BINARY_MARKER = "[BINARY]"; // 통합 distill 프롬프트가 이 마커를 감지해 source_artifact(source_id) 로 on-demand 페치(slack 과 공용 계약).
+
+// distill 이 on-demand 로 페치해 볼 가치가 있는 바이너리(Claude Read 네이티브 파싱: PDF·이미지). 그 외(zip/video/audio 등)는
+//  Read 로도 텍스트가 안 나오므로 [BINARY] 스텁조차 남기지 않고 메타만(페치해도 무의미).
+function isVisionBinary(mime: string): boolean {
+  return mime === "application/pdf" || mime.startsWith("image/");
+}
 
 // files.list fields — 우리가 실제로 읽는 필드만 요청(응답 최소화). ⚠ 여기 없는 필드는 응답에 안 온다.
+//  size: [BINARY] 스텁의 판단 근거(distill 이 크기로 노이즈 선별) — Google 네이티브 문서엔 없을 수 있음(문자열, 바이트).
 const LIST_FIELDS =
-  "nextPageToken,files(id,name,mimeType,modifiedTime,trashed,owners(displayName,emailAddress),webViewLink,version)";
+  "nextPageToken,files(id,name,mimeType,modifiedTime,trashed,owners(displayName,emailAddress),webViewLink,version,size)";
 
 // RFC3339(= q 에 안전 보간 가능한 형태). 따옴표·공백 등 인젝션 문자를 원천 배제.
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
@@ -39,6 +53,9 @@ const EXPORT_MIME: Record<string, string> = {
   "application/vnd.google-apps.spreadsheet": "text/csv",
   "application/vnd.google-apps.presentation": "text/plain",
 };
+
+// 업로드된 Office Open XML(.docx/.pptx/.xlsx) 판정·추출은 공용 유틸(./ooxml.js)로 위임 — slack 등과 공유.
+//  결정적 텍스트(본문이 XML 유니코드)라 sync 시점에 뽑아 body_md 로 넣는다(검색가능·distill 이 fetch 없이 판단).
 
 // ── Drive API 타입(부분) — 실제 읽는 필드만 좁게 선언. 나머지는 raw 로 보존. ──
 interface DriveOwner {
@@ -55,6 +72,7 @@ interface DriveFile {
   owners?: DriveOwner[]; // ⚠ 공유 드라이브 파일엔 owners 가 부재할 수 있음
   webViewLink?: string;
   version?: string; // v3 는 int64 를 문자열로 표현
+  size?: string; // 바이트(문자열, v3 int64). Google 네이티브 문서엔 부재.
   [k: string]: unknown;
 }
 
@@ -149,7 +167,38 @@ async function listFilesPage(url: string): Promise<DriveListResponse> {
   return (await res.json()) as DriveListResponse;
 }
 
+// Content-Length 선검사 — 헤더가 있고 cap 초과면 body 를 버퍼링(arrayBuffer)하기 전에 조기 거부(메모리 보호).
+//  헤더 부재(청크 전송 등)면 통과 → 다운로드 후 바이트 캡이 최종 방어선. 초과 시 스트림 취소해 소켓 해제.
+async function exceedsContentLength(res: Response, cap: number): Promise<boolean> {
+  const cl = Number(res.headers.get("content-length"));
+  if (Number.isFinite(cl) && cl > cap) {
+    await res.body?.cancel().catch(() => {});
+    return true;
+  }
+  return false;
+}
+
+// [BINARY] 메타-only 스텁 — 커넥터는 바이너리를 저장하지 않는다(on-demand). distill 이 이 메타로 볼 가치를 판단하고,
+//  가치 있으면 source_artifact(source_id) 로 게이트웨이가 원본을 신선하게 페치해 Read 한다(slack 등과 공용 계약).
+//  ⚠ 마커/필드(filename·mime·size·url) 포맷은 통합 distill 프롬프트·slack 커넥터와의 계약 — 바꾸면 함께 갱신(gdrive.test 잠금).
+export function buildBinaryStub(file: DriveFile): string {
+  const url = file.webViewLink || `https://drive.google.com/file/d/${file.id}`;
+  const parts = [
+    `${BINARY_MARKER} filename=${file.name || file.id}`,
+    `mime=${file.mimeType || "application/octet-stream"}`,
+  ];
+  if (file.size) parts.push(`size=${file.size}`);
+  parts.push(`url=${url}`);
+  const owner = file.owners?.[0]?.emailAddress;
+  if (owner) parts.push(`owner=${owner}`);
+  if (file.modifiedTime) parts.push(`modified=${file.modifiedTime}`);
+  return parts.join(" ") + `\n바이너리 파일(내용 미추출). 볼 가치가 있으면 source_artifact(source_id)로 원본을 받아 판단하고, `
+    + `노이즈(밈·UI캡처 등)면 fetch 없이 skip 하세요.`;
+}
+
 // 본문 추출 — mimeType 분기. 비대상/실패는 undefined 반환(메타데이터는 항상 보존).
+//  결정적 텍스트(네이티브 export·text/*·OOXML)는 sync 시점에 body_md 로 추출. PDF/이미지는 [BINARY] 메타-스텁만
+//  (다운로드·저장 X) → distill 이 source_artifact 로 on-demand 페치. 그 외 바이너리는 메타만(undefined).
 async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
   const mime = file.mimeType ?? "";
   const id = encodeURIComponent(file.id);
@@ -184,9 +233,68 @@ async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
     return text ? text.slice(0, MAX_BODY_CHARS) : undefined;
   }
 
-  // 3) 바이너리(pdf/이미지/오피스 blob 등) — 바이트 미다운로드, 메타만 유지.
-  //    TODO(후속): 바이너리 텍스트 추출 파이프라인(OCR/파서) 도입 시 여기에서 body 채운다.
+  // 3) 업로드된 Office Open XML(.docx/.pptx/.xlsx) — 바이트 다운로드(transient) 후 공용 유틸로 텍스트 추출.
+  //    본문이 XML 유니코드라 결정적·신뢰성 있음(한글 포함). ⚠ Claude Read 는 docx/xlsx 를 못 뽑으므로 이건
+  //    on-demand 대상 아님(sync 추출이 정답). 파싱 실패/빈 결과/깨진 추출은 undefined 로 폴백(메타 보존).
+  const ooxml = ooxmlKindFromMime(mime);
+  if (ooxml) {
+    const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*");
+    if (!res.ok) {
+      await res.text().catch(() => "");
+      console.warn(`gdrive: OOXML 다운로드 실패(본문 생략, 메타 보존) ${file.id} ${mime}: ${res.status}`);
+      return undefined;
+    }
+    if (await exceedsContentLength(res, MAX_BINARY_BYTES)) {
+      console.warn(`gdrive: OOXML 과대(Content-Length > ${MAX_BINARY_BYTES}) — 본문 생략, 메타 보존 ${file.id}`);
+      return undefined;
+    }
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > MAX_BINARY_BYTES) {
+      console.warn(`gdrive: OOXML 과대(${ab.byteLength}B > ${MAX_BINARY_BYTES}) — 본문 생략, 메타 보존 ${file.id}`);
+      return undefined;
+    }
+    try {
+      const text = extractOoxml(ooxml, Buffer.from(ab));
+      // 빈 결과/깨진 추출(인쇄가능 비율 < 0.6)은 저장하지 않는다 — 잡음을 지식화 큐에 넣지 않음.
+      if (!text || printableRatio(text) < 0.6) return undefined;
+      return text.slice(0, MAX_BODY_CHARS);
+    } catch (e) {
+      console.warn(`gdrive: OOXML 추출 실패(본문 생략, 메타 보존) ${file.id} ${mime}: ${(e as Error).message}`);
+      return undefined;
+    }
+  }
+
+  // 4) PDF·이미지 — 다운로드/저장하지 않는다. [BINARY] 메타-스텁만 body 로 → distill 이 볼 가치 판단 후
+  //    source_artifact(source_id) 로 on-demand 페치·Read(한글/스캔 정확). 저장 스파이크·노이즈 다운로드 회피.
+  if (isVisionBinary(mime)) return buildBinaryStub(file);
+
+  // 5) 그 외 바이너리(zip/video/audio/exe 등) — Read 로도 텍스트가 안 나오므로 스텁도 안 남기고 메타만.
   return undefined;
+}
+
+// ── on-demand 아티팩트 페치(SPI Connector.fetchArtifact) — distill 시점에 공용 source_artifact 도구가 호출. ──
+//  원본 바이트를 스트림으로 반환(도구가 짧은 TTL 임시경로에 저장 → 세션 Read → GC). 저장·정책은 도구 책임, 여기선 페치만.
+//  externalId = 소스 external_id 원문(gdrive 는 Drive file id 그대로). 삭제/이동/권한상실 = null(도구가 unavailable→skip).
+//  ⚠ 크기 캡은 도구가 강제(size 힌트 + 스트리밍 abort) — 커넥터는 상한 미적용(대용량도 스트림으로 흘려보냄).
+export async function gdriveFetchArtifact(
+  externalId: string,
+): Promise<{ stream: Readable; mime: string; filename?: string; size?: number } | null> {
+  if (!DRIVE_ID.test(externalId)) return null; // 방어(도구가 임시파일명에 쓸 수 있음 — 심층방어)
+  const id = encodeURIComponent(externalId);
+  const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*");
+  if (res.status === 404) { await res.body?.cancel().catch(() => {}); return null; } // 삭제/이동 → unavailable
+  if (!res.ok || !res.body) {
+    await res.text().catch(() => "");
+    console.warn(`gdrive: fetchArtifact 실패 ${externalId}: ${res.status}`);
+    return null;
+  }
+  const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+  const clen = Number(res.headers.get("content-length"));
+  return {
+    stream: Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+    mime,
+    size: Number.isFinite(clen) && clen > 0 ? clen : undefined,
+  };
 }
 
 // ── 순수 변환(네트워크 X) — 단위 테스트 대상. 원본 file 메타(+미리 받아둔 body) → RawItem. ──
@@ -278,4 +386,5 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
 export const gdriveConnector: Connector = {
   name: "gdrive",
   backfill,
+  fetchArtifact: gdriveFetchArtifact, // on-demand PDF/이미지 원본 페치(공용 source_artifact 도구가 호출)
 };

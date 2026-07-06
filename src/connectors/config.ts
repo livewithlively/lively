@@ -48,12 +48,12 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "Slack 은 워크스페이스 멤버가 가입 안 한 공개채널도 검색으로 읽을 수 있어, 봇을 채널마다 초대하지 않고 전체 공개채널의 메시지·파일을 수집합니다. 이 방식(search.messages/files.list)은 봇 토큰(xoxb-)이 아니라 유저 토큰(xoxp-)이 필요합니다 — 봇 토큰은 search 를 거부(not_allowed_token_type)합니다.",
+      intro: "Slack 은 워크스페이스 멤버가 가입 안 한 공개채널도 검색으로 읽을 수 있어, 봇을 채널마다 초대하지 않고 전체 공개채널을 수집합니다. 이 방식(search.messages)은 봇 토큰(xoxb-)이 아니라 유저 토큰(xoxp-)이 필요합니다 — 봇 토큰은 search 를 거부(not_allowed_token_type)합니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
-        "OAuth & Permissions ▸ 'User Token Scopes'('Bot' 아님!)에 추가: search:read, files:read, channels:read, users:read, users:read.email",
+        "OAuth & Permissions ▸ 'User Token Scopes'('Bot' 아님!)에 추가: search:read, channels:read, users:read, users:read.email",
         "[Install to Workspace] 로 (재)설치·승인 → 'User OAuth Token'(xoxp-…) 복사 → 아래 저장 (봇 토큰 xoxb- 아님 주의)",
-        "가입 안 한 공개채널도 검색으로 읽히므로 /invite 불필요. 메시지+파일(텍스트 파일은 본문, 그 외는 링크) 수집. 모니터링·알람 등 노이즈 채널은 아래 '제외 채널'에 채널명을 넣으세요.",
+        "가입 안 한 공개채널도 검색으로 읽히므로 /invite 불필요. 모니터링·알람 등 노이즈 채널은 아래 '제외 채널'에 채널명을 넣으세요.",
       ],
       url: "https://api.slack.com/apps",
     },
@@ -158,7 +158,6 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "client_secret", env: "GDRIVE_CLIENT_SECRET", secret: true, required: true, label: "OAuth Client Secret" },
       { key: "refresh_token", env: "GDRIVE_REFRESH_TOKEN", secret: true, required: true, label: "Refresh Token", hint: "drive.readonly scope" },
       { key: "folders", env: "GDRIVE_FOLDERS", secret: false, label: "폴더 id", hint: "이 폴더들만 (쉼표구분, 비우면 전체 Drive)" },
-      { key: "artifact_dir", env: "GDRIVE_ARTIFACT_DIR", secret: false, label: "아티팩트 저장 경로", hint: "PDF/이미지 원본 다운로드 디렉터리 — distill 세션이 Read (기본 ./data/drive-artifacts)" },
     ],
   },
 };

@@ -23,8 +23,10 @@
 // 참고: 엔드포인트 https://slack.com/api/<method>, 응답 { ok, error?, ... }. 429 는 Retry-After 존중(slackCall).
 //   external_id = `${channel}:${ts}`(system+instance 내 안정·고유). 스레드 답글 = permalink 의 thread_ts 로 부모 링크.
 
+import { Readable } from "node:stream";
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
+import { ooxmlKindFromMime, extractOoxml, printableRatio, type OoxmlKind } from "./ooxml.js";
 
 const API_BASE = "https://slack.com/api";
 
@@ -509,6 +511,9 @@ interface FilesListResp extends SlackEnvelope {
   files?: SlackFile[];
   paging?: SearchPaging;
 }
+interface FilesInfoResp extends SlackEnvelope {
+  file?: SlackFile;
+}
 
 function isTextFile(f: SlackFile): boolean {
   const mt = (f.mimetype ?? "").toLowerCase();
@@ -532,7 +537,38 @@ async function fetchFileText(token: string, f: SlackFile): Promise<string | unde
   }
 }
 
-// 파일 1건 → RawItem(type='note'→source). 공개채널 공유분만. 텍스트는 본문, 그 외는 메타+링크.
+// OOXML(docx/pptx/xlsx) 업로드 — 바이트를 받아 공용 extractOoxml 로 텍스트만 뽑는다(바이트는 버림 = 저장 0).
+//  Claude Read 는 OOXML(zip)을 못 파싱하므로 sync 시점 결정적 추출이 정답(gdrive 와 동일 버킷). 깨진 추출은 폐기(printableRatio).
+async function fetchOoxmlText(token: string, f: SlackFile, kind: OoxmlKind): Promise<string | undefined> {
+  const url = f.url_private_download ?? f.url_private;
+  if (!url) return undefined;
+  try {
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) return undefined;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const text = extractOoxml(kind, buf);
+    if (!text || printableRatio(text) < 0.6) return undefined; // 깨진 추출 폐기(gdrive 동일 임계)
+    return text.slice(0, FILE_BODY_MAX).trim() || undefined;
+  } catch {
+    return undefined; // 추출 실패는 비치명 — [BINARY] 스텁으로 폴백(on-demand 재시도 가능).
+  }
+}
+
+// 바이너리(PDF·이미지 등) 스텁 — sync 시 다운로드 안 함(저장 0). distill 이 메타로 볼 가치 판단 →
+//  가치 있으면 source_artifact(source_id)로 원본 on-demand 페치 → Read. gdrive 와 동일 [BINARY] 포맷(+slack channel/uploader).
+function buildBinaryStub(f: SlackFile, channel: string | undefined, uploader: string | undefined): string {
+  const p: string[] = ["[BINARY]"];
+  const fn = f.name ?? f.title;
+  if (fn) p.push(`filename=${fn}`);
+  if (f.mimetype) p.push(`mime=${f.mimetype}`);
+  if (f.size != null) p.push(`size=${f.size}`);
+  if (f.permalink) p.push(`url=${f.permalink}`);
+  if (channel) p.push(`channel=${channel}`);
+  if (uploader) p.push(`uploader=${uploader}`);
+  return `${p.join(" ")}\n바이너리 파일(내용 미추출). 볼 가치가 있으면 source_artifact(source_id)로 원본을 받아 판단하고, 노이즈(밈·UI캡처 등)면 fetch 없이 skip 하세요.`;
+}
+
+// 파일 1건 → RawItem(type='note'→source). 공개채널 공유분만. 텍스트·OOXML 은 본문 추출, 그 외 바이너리는 [BINARY] 스텁(on-demand).
 async function fileToRawItem(f: SlackFile, base: SweepBase, token: string): Promise<RawItem | null> {
   if (!f.id) return null;
   // 공개채널 공유분만 — 비공개/DM 전용 파일 제외(메시지 공개필터와 일관, 토큰 소유자 개인 파일 유입 방지).
@@ -551,12 +587,14 @@ async function fileToRawItem(f: SlackFile, base: SweepBase, token: string): Prom
     undefined;
   const email = resolvedUser?.profile?.email?.trim() || undefined;
 
-  const isText = isTextFile(f);
-  let body = isText ? await fetchFileText(token, f) : undefined;
-  if (!body) {
-    // 바이너리(또는 다운로드 실패) — 존재·링크만 기록. distill 은 메타로만 판단(원본은 permalink 로 사람 열람).
-    body = `[Slack 파일] ${f.name ?? f.title ?? f.id}${f.mimetype ? ` (${f.mimetype})` : ""}${f.permalink ? `\n${f.permalink}` : ""}`;
-  }
+  // split(조율 확정): 결정적 텍스트(text/* · json/xml · 코드 filetype, 그리고 OOXML)는 sync 시 본문 추출(검색가능·
+  //  distill 이 fetch 없이 판단). vision 바이너리(PDF·이미지 등)는 다운로드 안 하고 [BINARY] 스텁 → distill 이 on-demand.
+  const ooxmlKind = ooxmlKindFromMime(f.mimetype);
+  let body: string | undefined;
+  if (isTextFile(f)) body = await fetchFileText(token, f);
+  else if (ooxmlKind) body = await fetchOoxmlText(token, f, ooxmlKind);
+  const extracted = !!body;
+  if (!body) body = buildBinaryStub(f, publicChannels[0], displayName);
 
   return {
     type: "note",
@@ -579,7 +617,7 @@ async function fileToRawItem(f: SlackFile, base: SweepBase, token: string): Prom
       filetype: f.filetype,
       mimetype: f.mimetype,
       size: f.size,
-      is_text: isText,
+      extracted, // true=본문 추출됨(텍스트/OOXML), false=[BINARY] 스텁(on-demand 대상)
       channels: publicChannels,
     },
     raw: f,
@@ -613,8 +651,48 @@ async function* sweepFiles(
 }
 
 // ── Connector 구현 ───────────────────────────────────────────────────────────
+// on-demand 아티팩트 페치(SPI Connector.fetchArtifact) — distill 시점에 공용 source_artifact 도구가 호출.
+//  externalId = 소스 external_id 원문(slack 파일은 `file:<id>` → prefix strip). files.info 로 신선한
+//  url_private_download 얻어 Bearer 스트림 반환. 삭제/권한상실 = null(도구가 unavailable→skip). 크기 캡은 도구가 강제.
+export async function slackFetchArtifact(
+  externalId: string,
+): Promise<{ stream: Readable; mime: string; filename?: string; size?: number } | null> {
+  const fileId = externalId.replace(/^file:/, "");
+  if (!fileId) return null;
+  const token = (await resolveConnectorConfig("slack")).user_token;
+  if (!token) return null;
+  let info: FilesInfoResp;
+  try {
+    info = await slackCall<FilesInfoResp>("files.info", token, { file: fileId });
+  } catch {
+    return null; // file_not_found/file_deleted 등 → unavailable
+  }
+  const f = info.file;
+  const url = f?.url_private_download ?? f?.url_private;
+  if (!url) return null;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (res.status === 404) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!res.ok || !res.body) {
+    await res.text().catch(() => "");
+    return null;
+  }
+  const mime =
+    f?.mimetype || res.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+  const clen = Number(res.headers.get("content-length") ?? f?.size ?? "");
+  return {
+    stream: Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+    mime,
+    filename: f?.name,
+    size: Number.isFinite(clen) && clen > 0 ? clen : undefined,
+  };
+}
+
 export const slackConnector: Connector = {
   name: "slack",
+  fetchArtifact: slackFetchArtifact,
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     const cfg = await resolveConnectorConfig("slack");

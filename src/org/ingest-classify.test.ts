@@ -7,7 +7,7 @@
 //     (B) 키 분기 = LLM 분류. fetch 스텁으로 (b1) 정상 tool_use 파싱·(b2) API 오류→기계 폴백·
 //         (b3) kind 통제어휘 위반→기계 폴백·(b4) area 통제어휘 밖→null 을 커버.
 import assert from "node:assert/strict";
-import { classifyIngest } from "./ingest-classify.js";
+import { classifyIngest, routeIngestV6 } from "./ingest-classify.js";
 import { KIND_MAP } from "./external-identity.js";
 
 let pass = 0;
@@ -177,6 +177,22 @@ await (async () => {
       assert.equal(r.area, null);
       assert.equal(r.classifiedBy, "ai");
     });
+  });
+
+  // ── (C) routeIngestV6 — 소스별 v6 엔티티 라우팅. #541: Drive doc → source(distill), notion doc → knowledge 유지. ──
+  await t("route: gdrive doc→source(distill 대상), notion doc→knowledge 불변", () => {
+    // #541 결정 — Drive 파일은 raw 자료로 source 적재(증류 게이트), notion 정제 문서는 knowledge 직행.
+    assert.equal(routeIngestV6("doc", "gdrive"), "source");
+    assert.equal(routeIngestV6("doc", "notion"), "knowledge");
+    // raw 메시지류(slack/gmail/discord)는 source, clickup task 는 project — 기존 계약 불변.
+    assert.equal(routeIngestV6("message", "slack"), "source");
+    assert.equal(routeIngestV6("message", "gmail"), "source");
+    assert.equal(routeIngestV6("task", "clickup"), "project");
+    // PM 계층 부속(clickup)도 불변.
+    assert.equal(routeIngestV6("list", "clickup"), "pm_list");
+    assert.equal(routeIngestV6("space", "clickup"), "pm_folder");
+    // 미정의 조합은 보수적 skip(null).
+    assert.equal(routeIngestV6("bogus", "nowhere"), null);
   });
 })();
 

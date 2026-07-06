@@ -55,6 +55,11 @@ export function routeIngestV6(type: string, system: string): V6IngestTarget {
   // KIND_MAP 미정의라도 type 으로 라우팅(#541): message/note=raw 자료(source, distill 대상), doc=정제 문서(knowledge).
   //  이전엔 미정의=null(skip)이라 slack/discord message 가 버려졌다 — 이제 source 로 적재해 distill 이 지식화한다.
   if (type === "message" || type === "note") return "source";
+  // #541 — Drive 파일은 '정제 지식'이 아니라 raw 외부 자료로 취급: knowledge 직행이 아니라 source 로 적재해
+  //  distill 이 게이트(가치 판단·dedup·노이즈 skip)하여 지식화한다. 수백 개 공유문서가 그대로 observed 지식으로
+  //  쏟아지는 오염을 막고, 원문은 source 에 보존(full fidelity)·knowledge_source 로 출처 연결. notion doc 은 위
+  //  kind 'K' 분기에서 이미 knowledge 로 갈렸으므로 여기 도달하지 않는다(정제 위키 문서는 직행 유지).
+  if (type === "doc" && system === "gdrive") return "source";
   if (type === "doc") return "knowledge";
   return null; // 그 외 미정의(예: 미지원 task) — skip(보수적).
 }

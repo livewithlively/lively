@@ -981,7 +981,8 @@ function sourceKindOf(system: string): string {
     case "gmail": return "email";
     case "notion": return "notion_doc";
     case "clickup": return "clickup_doc";
-    default: return "other"; // discord, gdrive 미정제 등
+    case "gdrive": return "drive_file"; // #541 Drive 파일 = raw 자료(source) → distill 대상
+    default: return "other"; // discord 등
   }
 }
 
