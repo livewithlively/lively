@@ -1325,34 +1325,74 @@ async function profilesEditor(detail) {
     ...items);
 }
 
+// ── 구성원 관리(#613) — 3~40명 규모에서도 훑기 쉽게. 선택 전엔 아바타 카드 '그리드'가 전체 폭을 채우고
+//  (세로로 죽 늘어지고 오른쪽이 비던 문제 해소), 구성원을 고르면 좌(목록)·우(상세) 2단으로 전환한다.
+//  상단 검색으로 이름·이메일·아이디·종류를 실시간 필터 — 입력은 리스트 컨테이너만 다시 그려(renderRows)
+//  포커스를 잃지 않는다(전체 재렌더 renderAdminDetail 은 '선택'했을 때만).
 function membersEditor(detail, data) {
   const canEdit = state.admin.canEdit;
   const meaning = data.meaning['member'];
+  const members = data.members || [];
   const sel = state.admin.memberSel;
-  const listCol = el('div', { class: 'admin-sublist' });
+  const member = members.find((m) => m.id === sel);
+  const twoCol = !!member; // 고르면 2단(좌 목록·우 상세), 아무도 안 골랐으면 그리드가 전체 폭
+
   // 새 구성원 추가는 [구성원 추가] 섹션으로 분리됨 — 여기선 기존 구성원의 보기/수정만.
-  for (const m of data.members) {
+  // 한 구성원 카드/행 — 그리드·2단 목록 양쪽에서 공유(아바타 + 이름·설치배지 + 메타).
+  const memberRow = (m) => {
     const meta = canEdit
       ? (m.kind || 'human') + (m.email ? ' · ' + m.email : '')
       : (m.kind || 'human') + (m.state && m.state !== 'active' ? ' · ' + m.state : '');
-    listCol.append(el('div', { class: 'mini-row' + (m.id === sel ? ' sel' : ''),
+    return el('div', { class: 'mini-row member-row' + (m.id === state.admin.memberSel ? ' sel' : ''),
       // 다른 구성원을 고르면 편집모드 해제 — 항상 보기 모드로 먼저 연다([수정] 눌러야 편집).
       onclick: () => { state.admin.memberSel = m.id; state.admin.memberEditing = false; renderAdminDetail(detail, 'members', data); } },
-      el('div', { class: 'mini-title', text: (m.display_name || m.id) },
-        canEdit ? (m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })) : null),
-      el('div', { class: 'mini-meta', text: meta })));
-  }
-  const right = el('div', {});
-  const member = data.members.find((m) => m.id === sel);
+      profileAvatar(m.avatar || null, m.display_name || m.id, m.id, 'member-ava', { char: m.avatar_char, color: m.avatar_color }),
+      el('div', { class: 'member-row-body' },
+        el('div', { class: 'mini-title' },
+          el('span', { class: 'member-name', text: (m.display_name || m.id) }),
+          canEdit ? (m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })) : null),
+        el('div', { class: 'mini-meta', text: meta })));
+  };
+
+  // 리스트 영역 — 검색 시 이 컨테이너만 replaceChildren 해서 입력 포커스를 보존한다.
+  const listCol = el('div', { class: 'admin-sublist' + (twoCol ? '' : ' admin-sublist-row') });
+  const renderRows = () => {
+    const q = (state.admin.memberSearch || '').trim().toLowerCase();
+    const shown = q
+      ? members.filter((m) => [m.display_name, m.id, m.email, m.kind].filter(Boolean).join(' ').toLowerCase().includes(q))
+      : members;
+    listCol.replaceChildren();
+    if (!shown.length) {
+      listCol.append(el('p', { class: 'admin-member-empty',
+        text: members.length ? '‘' + (state.admin.memberSearch || '') + '’ 검색 결과가 없어요.' : '구성원이 없습니다.' }));
+      return;
+    }
+    for (const m of shown) listCol.append(memberRow(m));
+  };
+  renderRows();
+
+  const searchInp = el('input', { type: 'search', class: 'admin-member-search',
+    value: state.admin.memberSearch || '', autocomplete: 'off', spellcheck: 'false', 'aria-label': '구성원 검색',
+    placeholder: '이름·이메일·아이디로 검색  (총 ' + members.length + '명)',
+    oninput: (e) => { state.admin.memberSearch = e.target.value; renderRows(); } });
+  const searchBar = el('div', { class: 'admin-member-searchbar' }, searchInp);
+
   // 기존 구성원은 [수정]을 눌러 편집모드(state.admin.memberEditing)일 때만 편집폼,
   //  그 전엔 보기 모드(memberRead) — 권한 없는 사람은 [수정] 버튼 자체가 없다(읽기 전용).
-  if (member && state.admin.memberEditing) memberForm(right, member, data, detail, false);
-  else if (member) memberRead(right, member, data, detail);
-  else right.append(el('p', { class: 'admin-hint', text: canEdit ? '왼쪽에서 구성원을 고르세요. 새 구성원은 [구성원 추가] 탭에서.' : '읽기 전용 — 이름·종류만 표시됩니다(이메일·계정·권한은 관리자만).' }));
+  let body;
+  if (twoCol) {
+    const right = el('div', {});
+    if (state.admin.memberEditing) memberForm(right, member, data, detail, false);
+    else memberRead(right, member, data, detail);
+    body = el('div', { class: 'admin-two admin-two-cols' }, listCol, right); // 이 탭만 좌우 2단 유지
+  } else {
+    body = listCol; // 선택 전 — 그리드가 전체 폭을 채운다(빈 오른쪽 패널 없음)
+  }
 
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('구성원 관리', meaning),
-    el('div', { class: 'admin-two admin-two-cols' }, listCol, right))); // 이 탭만 좌우 2단 유지
+    members.length ? searchBar : null,
+    body));
 }
 
 // 구성원 권한(scope) 옵션 — 보기/편집 공유. 서버 SCOPES(capabilities/scopes.ts) 전체와 일치시킨다.
