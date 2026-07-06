@@ -135,6 +135,70 @@ export async function resolveGitSecret(memberId: string | null | undefined, host
   return getGitSecret(GATEWAY_OWNER, h);
 }
 
+// ── git 호스트/자격주입 헬퍼 — provision(project-provision.ts)·도메인맵 스캐너(domainmap/git-pull.ts·webhook.ts)가 공유.
+//  provision 이 갖고 있던 것을 이 leaf 모듈로 올려(#606) 스캐너 clone/fetch 도 동일 자격주입을 쓰게 한다. project-provision 은
+//  하위호환 위해 re-export 한다. ──
+
+// git 호스트 추출 — 자격을 어느 호스트에 매칭할지(github.com 등). scp-식(user@host:path)·URL 둘 다.
+export function hostOf(gitUrl: unknown): string | null {
+  const s = String(gitUrl ?? "").trim();
+  if (!s) return null;
+  const scp = s.match(/^[\w.-]+@([\w.-]+):/); // user@host:path (임베드 시크릿 없음)
+  if (scp) return scp[1].toLowerCase();
+  try { return new URL(s).hostname.toLowerCase(); } catch { return null; }
+}
+
+// 클론/fetch 실패 메시지가 '인증' 계열인지 — 그렇다면 막연한 실패 대신 자격 등록을 안내(#522). (순수)
+//  git 은 영문 stderr 를 낸다: HTTPS 무자격/오자격·SSH publickey 거부·private 레포 은닉(not found) 등을 폭넓게 포착.
+export function isAuthError(err: unknown): boolean {
+  const s = String(err ?? "");
+  return /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)|HTTP Basic: Access denied|Invalid username or (token|password)|could not read from remote repository|repository (?:'[^']*' )?not found|could not be found|Access denied|403 Forbidden|401 Unauthorized/i.test(s);
+}
+
+// 자격 주입 준비(#540) — 게이트웨이/멤버 자격을 그 git 호출에만 주입.
+//  SSH: 개인키를 임시 700 디렉에 600 으로 쓰고 GIT_SSH_COMMAND -i. HTTPS: GIT_ASKPASS 스크립트 + 토큰.
+//  둘 다 호출 뒤 cleanup 으로 즉시 삭제(디스크에 시크릿 잔존 최소화). 자격 없으면 no-op(앰비언트 폴백).
+export interface GitAuth { env?: Record<string, string>; cleanup: () => Promise<void>; }
+export async function prepareGitAuth(secret: GitCredentialSecret | null): Promise<GitAuth> {
+  const noop: GitAuth = { cleanup: async () => { /* */ } };
+  if (!secret) return noop;
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-gitauth-"));
+  await fsp.chmod(dir, 0o700).catch(() => { /* */ });
+  const cleanup = async () => { await fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* */ }); };
+  try {
+    if (secret.kind === "ssh" && secret.ssh_private_key) {
+      const keyFile = path.join(dir, "id");
+      const key = secret.ssh_private_key.endsWith("\n") ? secret.ssh_private_key : secret.ssh_private_key + "\n";
+      await fsp.writeFile(keyFile, key, { mode: 0o600 });
+      await fsp.chmod(keyFile, 0o600).catch(() => { /* */ });
+      const known = path.join(dir, "known_hosts");
+      // IdentitiesOnly=yes → 주입 키만(에이전트/기본키 무시). accept-new → 첫 접속 호스트키 자동수락(무인).
+      const sshCmd = `ssh -i ${keyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known} -o BatchMode=yes`;
+      return { env: { GIT_SSH_COMMAND: sshCmd, GIT_TERMINAL_PROMPT: "0" }, cleanup };
+    }
+    if (secret.kind === "https" && secret.https_token) {
+      const askpass = path.join(dir, "askpass.sh");
+      // git 이 Username/Password 를 물으면 $1 프롬프트로 분기(대소문자 무관). 시크릿은 env 로만 전달(argv·로그 노출 없음).
+      const script = "#!/bin/sh\ncase \"$1\" in\n*[Uu]sername*) printf '%s' \"$GIT_CRED_USER\" ;;\n*) printf '%s' \"$GIT_CRED_PASS\" ;;\nesac\n";
+      await fsp.writeFile(askpass, script, { mode: 0o700 });
+      await fsp.chmod(askpass, 0o700).catch(() => { /* */ });
+      return {
+        env: {
+          GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: "0",
+          GIT_CRED_USER: secret.https_username || "x-access-token",
+          GIT_CRED_PASS: secret.https_token,
+        },
+        cleanup,
+      };
+    }
+    await cleanup();
+    return noop;
+  } catch (e) {
+    await cleanup();
+    throw e;
+  }
+}
+
 // ── SSH 키페어 생성(ed25519) — 박스가 생성하고 개인키는 박스 밖으로 안 나간다(공개키만 반환·저장).
 //  Node crypto 는 OpenSSH 개인키 포맷 export 를 못 하므로 ssh-keygen 바이너리를 쓴다(박스에 존재).
 //  임시 파일은 게이트웨이 홈 밑 700 디렉에 만들고 즉시 삭제.

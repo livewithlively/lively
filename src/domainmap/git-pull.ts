@@ -11,9 +11,11 @@ import { join, resolve } from "node:path";
 import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
+import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError } from "../org/git-credential-store.js";
 
 const execFileP = promisify(execFile);
-const GIT_TIMEOUT_MS = 60_000;
+// clone(대형 레포 초회)은 fetch 보다 오래 걸릴 수 있어 provision(180s)과 맞춘다 — 상한일 뿐(지연 아님).
+const GIT_TIMEOUT_MS = 180_000;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 
 // 클론 캐시 — webhook.ts 와 동일 컨벤션(DOMAINMAP_REPOS_DIR, 기본 var/repos, .gitignore 등재).
@@ -21,18 +23,29 @@ function reposDir(): string { return resolve(process.env.DOMAINMAP_REPOS_DIR ?? 
 function sanitizeName(name: string): string { return name.replace(/[^A-Za-z0-9._-]/g, "_"); }
 
 // git 은 execFile(argv 배열 — 셸 문자열 금지, 인젝션 불가). 모든 op 에 하드 타임아웃.
-async function git(args: string[], cwd?: string) {
-  return execFileP("git", args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+//  extraEnv: 자격 주입(#606) — prepareGitAuth 가 만든 GIT_SSH_COMMAND(키·accept-new)/GIT_ASKPASS. process.env 위에 병합.
+//  GIT_TERMINAL_PROMPT=0 항상 — 무자격(앰비언트) 폴백이어도 프롬프트로 매달리지 않고 즉시 실패.
+async function git(args: string[], cwd?: string, extraEnv?: Record<string, string>) {
+  return execFileP("git", args, {
+    cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) },
+  });
 }
 
 // 로컬 클론 보장: 없으면 git_url 에서 clone, 있으면 fetch. git_url(토큰 포함 가능)은 에러에 절대 안 싣는다.
+//  #606: provision 과 동일하게 게이트웨이 자격을 주입한다 — 스케줄러 무인 실행이라 멤버 없음 → resolveGitSecret(null, host)
+//   = 게이트웨이 머신 자격(SSH 키+accept-new 호스트키). 자격 없으면 앰비언트 폴백. 예전엔 미주입이라 private SSH 레포에서 항상 실패.
 async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
   const safe = sanitizeName(repoName);
   if (!safe) throw new Error("invalid repo name for clone dir");
   const dir = reposDir();
   const cloneDir = join(dir, safe);
-  if (!existsSync(cloneDir)) { mkdirSync(dir, { recursive: true }); await git(["clone", gitUrl, cloneDir]); }
-  else { await git(["-C", cloneDir, "fetch", "--prune", "--quiet"]); }
+  const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
+  const auth = await prepareGitAuth(secret);
+  try {
+    if (!existsSync(cloneDir)) { mkdirSync(dir, { recursive: true }); await git(["clone", gitUrl, cloneDir], undefined, auth.env); }
+    else { await git(["-C", cloneDir, "fetch", "--prune", "--quiet"], undefined, auth.env); }
+  } finally { await auth.cleanup(); }
   return cloneDir;
 }
 
@@ -75,7 +88,13 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
 
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
-  catch { return { repo: repoName, status: "error", detail: "git clone/fetch failed" }; }
+  catch (e) {
+    // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 일반 메시지로 '분류'만 해 진단가능성을 남긴다(#606).
+    const detail = isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)
+      ? `git 인증 실패 — 호스트 '${hostOf(repo.git_url) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정에 등록)`
+      : "git clone/fetch failed";
+    return { repo: repoName, status: "error", detail };
+  }
 
   let head: string;
   try { head = (await git(["-C", cloneDir, "rev-parse", `origin/${branch}`])).stdout.trim(); }

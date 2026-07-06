@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
+import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError } from "../org/git-credential-store.js";
 
 const execFileP = promisify(execFile);
 
@@ -87,27 +88,40 @@ function parsePushEvent(provider: string, body: any): { ref: unknown; before: un
 // Run git with execFile (argv array — NEVER a shell string, no injection). SHAs
 // are validated by the caller; paths in output come from git (trusted). A
 // non-zero exit throws; we add a hard timeout to every git op.
-async function git(args: string[], cwd?: string) {
-  return execFileP("git", args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+//  extraEnv: 자격 주입(#606) — prepareGitAuth 의 GIT_SSH_COMMAND(키·accept-new)/GIT_ASKPASS. GIT_TERMINAL_PROMPT=0 항상(무한대기 방지).
+async function git(args: string[], cwd?: string, extraEnv?: Record<string, string>) {
+  return execFileP("git", args, {
+    cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) },
+  });
 }
 
 // Ensure a local clone exists & is up to date. Clones from git_url if missing,
 // else fetches. Returns the clone dir. NEVER includes git_url in thrown errors.
+//  #606: provision 과 동일하게 게이트웨이 자격을 주입(SSH 키+accept-new). 웹훅도 무인 트리거라 멤버 없음 → resolveGitSecret(null, host)
+//   = 게이트웨이 머신 자격. 자격 없으면 앰비언트 폴백. 예전엔 미주입이라 private SSH 레포에서 항상 실패했다.
 async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
   const safe = sanitizeName(repoName);
   if (!safe) throw httpErr(400, "invalid repo name for clone dir");
   const dir = reposDir();
   const cloneDir = join(dir, safe);
+  const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
+  const auth = await prepareGitAuth(secret);
   try {
     if (!existsSync(cloneDir)) {
       mkdirSync(dir, { recursive: true }); // 호스트 환경: 부모 디렉 보장(클론 자체엔 무영향)
-      await git(["clone", gitUrl, cloneDir]);
+      await git(["clone", gitUrl, cloneDir], undefined, auth.env);
     } else {
-      await git(["-C", cloneDir, "fetch", "--prune", "--quiet"], undefined);
+      await git(["-C", cloneDir, "fetch", "--prune", "--quiet"], undefined, auth.env);
     }
-  } catch {
-    // Scrub: git errors can echo the remote URL (token). Re-throw a generic error.
+  } catch (e) {
+    // Scrub: git errors can echo the remote URL (token) → git_url 절대 비노출. 인증계열은 401 안내로만 분류.
+    if (isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)) {
+      throw httpErr(401, `git 인증 실패 — 호스트 '${hostOf(gitUrl) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정)`);
+    }
     throw httpErr(502, "git clone/fetch failed");
+  } finally {
+    await auth.cleanup();
   }
   return cloneDir;
 }

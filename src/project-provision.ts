@@ -12,7 +12,9 @@ import { PROJECT_SHARED_BASE, projectAbsPath } from "./project-fs.js";
 import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
-import { resolveGitSecret, type GitCredentialSecret } from "./org/git-credential-store.js";
+import { resolveGitSecret, hostOf, isAuthError, prepareGitAuth } from "./org/git-credential-store.js";
+// hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
+export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "./org/git-credential-store.js";
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
 const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;        // 경로 컴포넌트로 쓰이므로 슬래시·.. 금지
@@ -73,70 +75,10 @@ async function refreshRepo(repoPath: string, extraEnv?: Record<string, string>):
   await git(["merge", "--ff-only", "@{u}"], repoPath);       // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
 }
 
-// git 호스트 추출 — 자격을 어느 호스트에 매칭할지(github.com 등). scp-식(user@host:path)·URL 둘 다. (export=테스트용)
-export function hostOf(gitUrl: unknown): string | null {
-  const s = String(gitUrl ?? "").trim();
-  if (!s) return null;
-  const scp = s.match(/^[\w.-]+@([\w.-]+):/); // user@host:path (임베드 시크릿 없음)
-  if (scp) return scp[1].toLowerCase();
-  try { return new URL(s).hostname.toLowerCase(); } catch { return null; }
-}
-
 // 기존 클론의 origin remote URL(호스트 매칭 폴백용) — 레지스트리에 git_url 이 없을 때.
 async function originUrl(repoPath: string): Promise<string | null> {
   const r = await git(["config", "--get", "remote.origin.url"], repoPath);
   return r.ok ? (r.out.trim() || null) : null;
-}
-
-// 클론/fetch 실패 메시지가 '인증' 계열인지 — 그렇다면 502 대신 자격 등록을 안내(무한대기 아닌 즉답, #522). (export=테스트용·순수)
-//  git 은 영문 stderr 를 낸다: HTTPS 무자격/오자격·SSH publickey 거부·private 레포 은닉(not found) 등을 폭넓게 포착.
-export function isAuthError(err: unknown): boolean {
-  const s = String(err ?? "");
-  return /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Permission denied \(publickey\)|HTTP Basic: Access denied|Invalid username or (token|password)|could not read from remote repository|repository (?:'[^']*' )?not found|could not be found|Access denied|403 Forbidden|401 Unauthorized/i.test(s);
-}
-
-// 자격 주입 준비(#540) — 게이트웨이가 클론/fetch 할 때 요청 멤버(없으면 gateway) 자격을 그 git 호출에만 주입.
-//  SSH: 개인키를 게이트웨이 임시 700 디렉에 600 으로 쓰고 GIT_SSH_COMMAND -i. HTTPS: GIT_ASKPASS 스크립트 + 토큰.
-//  둘 다 호출 뒤 cleanup 으로 즉시 삭제(디스크에 시크릿 잔존 최소화). 자격 없으면 no-op(앰비언트 폴백).
-export interface GitAuth { env?: Record<string, string>; cleanup: () => Promise<void>; }
-export async function prepareGitAuth(secret: GitCredentialSecret | null): Promise<GitAuth> {
-  const noop: GitAuth = { cleanup: async () => { /* */ } };
-  if (!secret) return noop;
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-gitauth-"));
-  await fsp.chmod(dir, 0o700).catch(() => { /* */ });
-  const cleanup = async () => { await fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* */ }); };
-  try {
-    if (secret.kind === "ssh" && secret.ssh_private_key) {
-      const keyFile = path.join(dir, "id");
-      const key = secret.ssh_private_key.endsWith("\n") ? secret.ssh_private_key : secret.ssh_private_key + "\n";
-      await fsp.writeFile(keyFile, key, { mode: 0o600 });
-      await fsp.chmod(keyFile, 0o600).catch(() => { /* */ });
-      const known = path.join(dir, "known_hosts");
-      // IdentitiesOnly=yes → 주입 키만(에이전트/기본키 무시). accept-new → 첫 접속 호스트키 자동수락(무인).
-      const sshCmd = `ssh -i ${keyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known} -o BatchMode=yes`;
-      return { env: { GIT_SSH_COMMAND: sshCmd, GIT_TERMINAL_PROMPT: "0" }, cleanup };
-    }
-    if (secret.kind === "https" && secret.https_token) {
-      const askpass = path.join(dir, "askpass.sh");
-      // git 이 Username/Password 를 물으면 $1 프롬프트로 분기(대소문자 무관). 시크릿은 env 로만 전달(argv·로그 노출 없음).
-      const script = "#!/bin/sh\ncase \"$1\" in\n*[Uu]sername*) printf '%s' \"$GIT_CRED_USER\" ;;\n*) printf '%s' \"$GIT_CRED_PASS\" ;;\nesac\n";
-      await fsp.writeFile(askpass, script, { mode: 0o700 });
-      await fsp.chmod(askpass, 0o700).catch(() => { /* */ });
-      return {
-        env: {
-          GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: "0",
-          GIT_CRED_USER: secret.https_username || "x-access-token",
-          GIT_CRED_PASS: secret.https_token,
-        },
-        cleanup,
-      };
-    }
-    await cleanup();
-    return noop;
-  } catch (e) {
-    await cleanup();
-    throw e;
-  }
 }
 
 // 경로 봉쇄 — 절대경로 정규화 후 workspace 루트 안에 있어야 함(.. 탈출 거부). 신뢰 위협모델이라 string-prefix 검사로 충분.
