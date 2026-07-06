@@ -3263,7 +3263,10 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
 function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId?, statusDef?) {
   fields = fields || [];
   const row = el('div', { class: 'pjv-addrow' });
+  // 접힌 트리거 '＋' 를 그룹 헤더 상태점 열에 맞춘다(#613 후속) — 옛 트리거는 체크박스 자리(check-spacer) 가 없어
+  //  '＋ 프로젝트' 가 헤더 파이 아이콘·라벨보다 왼쪽으로 어긋났다. 헤더 title-cell 과 동일한 선두 spacer 로 정렬.
   const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
+    el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '프로젝트 이름 입력 후 Enter (Esc 취소)', maxlength: '200', spellcheck: 'false', autocomplete: 'off' });
   // 생성 전 드래프트 — 팀원·마감·우선순위를 그 자리(인라인 셀)에서 지정해 생성 직후 한 번에 반영(태스크 추가행 pjvAddRow 와 동형).
