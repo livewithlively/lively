@@ -3440,7 +3440,8 @@ body.pjv-side-dragging-list .pjv-side-rootzone { display: flex; }
   padding: 15px 16px 14px; pointer-events: auto; }
 .tour-pop-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .tour-count { font-size: 12px; font-weight: 800; color: var(--blue); letter-spacing: .02em; }
-.tour-skip { padding: 2px 4px; }
+.tour-close { padding: 2px 6px; font-size: 15px; line-height: 1; }
+.tour-close:hover { color: var(--ink); }
 .tour-title { font-size: 15.5px; font-weight: 800; color: var(--ink); margin-bottom: 5px; }
 .tour-body { font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; }
 .tour-body .tour-p { margin: 0 0 6px; }

@@ -257,7 +257,7 @@ function openTermCreateForm(cfg, view) {
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
   const autoCb = el('input', { type: 'checkbox' });
-  const autoWrap = el('label', { class: 'term-auto' }, autoCb,
+  const autoWrap = el('label', { class: 'term-auto', 'data-tour': 'autoapprove' }, autoCb,
     el('span', { text: ' 자동 승인 (위험) — 에이전트가 확인 없이 파일 수정·명령 실행. 공유 폴더에선 특히 주의.' }));
 
   function renderFlags() {
@@ -311,14 +311,15 @@ function openTermCreateForm(cfg, view) {
   rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
   loadPicker();
 
-  // data-tour 래퍼 — 온보딩 투어(#517)가 폴더·AI·이름·생성 버튼을 순서대로 스포트라이트한다.
+  // data-tour 래퍼 — 온보딩 투어(#517)가 폼의 시각적 순서(위→아래)대로 스포트라이트한다:
+  //  이름 → 폴더 → AI → 초대 → 모델 → 자동 승인 → 생성.
   const back = overlay('새 세션',
     el('div', { 'data-tour': 'label' }, field('이름', labelI)), field('작업자', authorI),
     el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)),
     el('div', { 'data-tour': 'harness' }, field('하네스', harnessSel)),
     profileNoteEl(cfg),
-    field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
-    flagsBox, autoWrap,
+    el('div', { 'data-tour': 'invite' }, field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box)),
+    el('div', { 'data-tour': 'model' }, flagsBox), autoWrap,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
@@ -444,10 +445,13 @@ function openTermSettings() {
     el('div', { class: 'caption', text: '설정은 이 브라우저에 저장되어 다음에도 적용됩니다.' }));
 }
 
-// 터미널 온보딩 투어(#517) — 세션 만드는 5단계를 실제 UI 위에서 스포트라이트로 짚어 준다.
+// 터미널 온보딩 투어(#517) — 세션 만드는 과정을 실제 UI 위에서 스포트라이트로 한 단계씩 짚어 준다.
 //  '새 창으로 열기'(원래 창을 가림)를 대체: 같은 화면에서 필요한 버튼만 밝게, 나머지는 어둡게 하고
-//  사용자가 실제 버튼을 직접 누르며 진행한다. renderTerminal 이 그린 DOM(data-tour 앵커)에 붙는다.
-//  1) [+ 새 세션] 클릭 → 만들기 창이 열리면 2·3·4(폴더·AI·이름)로 이동, 5) [생성하기] → 완료 안내.
+//  사용자가 실제 버튼을 직접 누르며 진행한다. renderTerminal/폼이 그린 DOM(data-tour 앵커)에 붙는다.
+//  순서는 만들기 창의 시각적 위→아래를 그대로 따른다: [+ 새 세션] 클릭 → ② 이름 → ③ 폴더 → ④ AI →
+//  ⑤ 초대(선택) → ⑥ 모델(선택) → ⑦ 자동 승인(주의) → ⑧ [생성하기] 클릭 → 🎉 완료.
+//  ① 새 세션·⑧ 생성하기는 advanceOn:'click' — 실제 버튼을 눌러야만 진행되며(코치마크에 [이전]/[다음]
+//  없이 ✕ 닫기만), 나머지 정보 단계는 [다음 →]으로 넘어간다.
 function startTerminalTour() {
   startTour([
     {
@@ -457,27 +461,48 @@ function startTerminalTour() {
       placement: 'bottom', advanceOn: 'click',
     },
     {
+      target: '[data-tour="label"]',
+      title: '② 세션 이름 정하기',
+      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '.')],
+      placement: 'right', scrollIntoView: true,
+    },
+    {
       target: '[data-tour="folder"]',
-      title: '② 작업 폴더 고르기',
+      title: '③ 작업 폴더 고르기',
       body: [el('p', { class: 'tour-p' }, '어디서 일할지 골라요 — ', el('b', { text: '작업 위치' }), '(공유 워크스페이스 · 개인 폴더)와 ', el('b', { text: '폴더' }), '.'),
         el('p', { class: 'tour-p', text: '잘 모르겠으면 [개인 폴더] 그대로 두어도 괜찮아요.' })],
       placement: 'right', scrollIntoView: true,
     },
     {
       target: '[data-tour="harness"]',
-      title: '③ 함께 일할 AI 고르기',
+      title: '④ 함께 일할 AI 고르기',
       body: [el('p', { class: 'tour-p' }, el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), ' 중에 골라요. 잘 모르겠으면 Claude Code 를 추천해요.')],
       placement: 'right', scrollIntoView: true,
     },
     {
-      target: '[data-tour="label"]',
-      title: '④ 세션 이름 정하기',
-      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '.')],
+      target: '[data-tour="invite"]',
+      title: '⑤ 함께 볼 사람 초대하기 (선택)',
+      body: [el('p', { class: 'tour-p' }, '필요하면 이 세션을 함께 볼 사람을 골라요. ', el('b', { text: '비워두면 나만 보는 비공개 세션' }), '이에요.'),
+        el('p', { class: 'tour-p', text: '지금 안 정해도 돼요 — 나중에 세션 [수정]에서 바꿀 수 있어요.' })],
+      placement: 'right', scrollIntoView: true,
+    },
+    {
+      target: '[data-tour="model"]',
+      title: '⑥ 모델 고르기 (선택)',
+      body: [el('p', { class: 'tour-p' }, '함께 일할 AI 의 ', el('b', { text: '모델' }), '을 골라요. ', el('b', { text: '비워두면 기본 모델' }), '로 시작해요.'),
+        el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 두면 돼요 — 더 똑똑한 모델일수록 느리거나 비쌀 수 있어요.' })],
+      placement: 'right', scrollIntoView: true,
+    },
+    {
+      target: '[data-tour="autoapprove"]',
+      title: '⑦ 자동 승인 (주의)',
+      body: [el('p', { class: 'tour-p' }, '체크하면 AI 가 ', el('b', { text: '확인 없이 파일 수정·명령 실행' }), '까지 알아서 해요 — 빠르지만 위험해요.'),
+        el('p', { class: 'tour-p', text: '특히 공유 폴더에선 꺼 두길 권해요. 잘 모르겠으면 그대로(꺼짐) 두세요.' })],
       placement: 'right', scrollIntoView: true,
     },
     {
       target: '[data-tour="create"]',
-      title: '⑤ 만들기',
+      title: '⑧ 만들기',
       body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 까만 터미널 창이 열려요.')],
       placement: 'top', scrollIntoView: true, advanceOn: 'click',
     },
