@@ -457,9 +457,9 @@ export const deliveryCapabilities: Capability[] = [
   // ── 본인 토큰 자가발급(설치 탭) — 인증된 구성원이 자기 토큰을 만든다. admin 불요. ──
   // userId 는 principal 에서 강제(타인 발급 불가), scope 는 본인 member.scopes(없으면 현재 scope) — 상승 불가.
   restRead("org_token_mint_self", "본인 토큰 발급",
-    "현재 로그인한 구성원이 본인 설치 토큰을 발급한다(설치/재설치용). userId·scope 는 principal 로 고정.",
-    [{ method: "POST", paths: ["/api/ui/org/token/self"], parse: () => ({}) }],
-    async (_input: unknown, user: LivelyUser) => {
+    "현재 로그인한 구성원이 본인 설치 토큰을 발급한다(설치/재설치용). userId·scope 는 principal 로 고정. includeControlPlane=true 면 관리 권한(admin/runtime)도 싣는다 — 상한은 멤버 LIVE scope ∩ 제시 토큰(증폭 불가).",
+    [{ method: "POST", paths: ["/api/ui/org/token/self"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       // 자가발급은 회수 가능한 DB 토큰만 만든다 — 회수 불가한 정적 토큰으로는 금지(킬스위치 세탁 방지).
@@ -468,10 +468,16 @@ export const deliveryCapabilities: Capability[] = [
       const mem = await getMember(userId);
       const presented = Array.isArray(user.scopes) ? user.scopes : [];
       const base = mem?.scopes?.length ? mem.scopes : presented;
-      // 설치용 토큰 — fleet 제어(admin/runtime)는 자가발급 불가 + 제시한 토큰의 권한을 초과 불가(scope 증폭 차단).
-      const scopes = base.filter((s) => SCOPES_ALLOWED.has(s) && !DANGEROUS_SCOPES.has(s as Scope) && presented.includes(s));
+      // 설치용 토큰 — 기본은 admin/runtime 제외(최소권한). #632: 로컬 세션 에이전트가 관리 기능(MCP org_*)을 쓰려면
+      //  includeControlPlane opt-in 시 admin/runtime 도 싣는다 — 중앙박스 프로비저닝 opt-in(#549)의 self-mint 대응.
+      //  상한은 언제나 멤버 LIVE scope ∩ 제시 토큰(presented): 둘 다 가진 scope 만 실려 증폭 불가.
+      //  멤버 강등 시 verifyDbToken 이 매 호출 intersection 으로 즉시 무효(회수의 진짜 지점 = 멤버 scope). 발급은 감사에 남는다.
+      const includeControlPlane = input?.includeControlPlane === true;
+      const scopes = base.filter((s) => SCOPES_ALLOWED.has(s) && presented.includes(s)
+        && (includeControlPlane || !DANGEROUS_SCOPES.has(s as Scope)));
+      const withControlPlane = scopes.some((s) => DANGEROUS_SCOPES.has(s as Scope));
       const { token } = await mintToken(
-        { userId, scopes, label: (mem?.display_name || userId) + " (self)", memberId: userId },
+        { userId, scopes, label: (mem?.display_name || userId) + (withControlPlane ? " (self +admin)" : " (self)"), memberId: userId },
         actorOf(user), "web-self");
       return { token, scopes, userId };
     }),

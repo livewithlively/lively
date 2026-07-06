@@ -3145,11 +3145,16 @@ function installCmd(gw, os, token) {
 // 설치(본인) — 자가발급으로 본인 토큰 → 본인 설치 명령. admin/비admin 동일.
 function installSelfBlock(gw, os) {
   const result = el('div', {});
+  // #632: admin/runtime 보유자만 — 이 설치 토큰에 관리 권한을 실을지 opt-in(기본 off). 멤버 scope 가 상한.
+  const canCp = hasScope('admin') || hasScope('runtime');
+  const cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
+  const cpLabel = canCp ? el('label', { class: 'caption', style: 'display:block;margin:3px 0 7px;cursor:pointer' },
+    cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 토큰으로 설치한 로컬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다(#632).' })) : null;
   const go = el('button', { class: 'btn btn-primary btn-sm', text: '내 토큰 발급 → 설치 명령' });
   go.addEventListener('click', async () => {
     go.disabled = true;
     try {
-      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: JSON.stringify({ includeControlPlane: canCp && cpChk.checked }) });
       const cmd = installCmd(gw, os, r.token);
       result.replaceChildren(
         el('p', { class: 'admin-hint', text: '✓ 본인 토큰 발급됨(scope: ' + (r.scopes || []).join('/') + '). 본인 머신에서 아래를 실행하세요 — 토큰은 지금만 보입니다.' }),
@@ -3161,6 +3166,7 @@ function installSelfBlock(gw, os) {
   return el('div', { class: 'deploy-block' },
     el('h3', { text: '설치 (본인 머신)' }),
     el('p', { class: 'admin-hint', text: '본인 토큰을 발급해 본인 머신에 설치합니다(git 불필요). 새 기기/재설치 시 사용.' }),
+    cpLabel,
     el('div', { class: 'install-minter' }, go),
     result);
 }

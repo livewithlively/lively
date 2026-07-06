@@ -527,11 +527,17 @@ function installCmdBox(gw, os) {
 //  토큰을 손으로 만지지 않는다(self-mint = admin/runtime 제외 저권한). 기본 설치 플로우.
 function installSelfCmdBox(gw, os) {
   const result = el('div', { class: 'install-cmd-slot' });
+  // #632: admin/runtime 보유자만 — 관리 권한을 이 설치 토큰에 실을지 opt-in(기본 off). 멤버 scope 가 상한(증폭 불가).
+  //  (state.me.scopes = 현재 세션 유효 scope — admin.ts hasScope 와 동일 판정.)
+  const canCp = !!(state.me && Array.isArray(state.me.scopes) && (state.me.scopes.includes('admin') || state.me.scopes.includes('runtime')));
+  const cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
+  const cpLabel = canCp ? el('label', { class: 'caption', style: 'display:block;margin:6px 0;cursor:pointer' },
+    cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 명령으로 설치한 로컬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다.' })) : null;
   const go = el('button', { class: 'btn btn-primary btn-sm', text: '설치 명령 만들기' });
   go.addEventListener('click', async () => {
     go.disabled = true;
     try {
-      const r = await api('/api/ui/org/token/self', { method: 'POST', body: '{}' });
+      const r = await api('/api/ui/org/token/self', { method: 'POST', body: JSON.stringify({ includeControlPlane: canCp && cpChk.checked }) });
       const cmd = installCmd(gw, os, r.token);
       result.replaceChildren(
         el('p', { class: 'install-ok', text: '✓ 설치 명령이 만들어졌어요 — [명령 복사]를 누른 뒤 3단계로 가세요. (본인 접속 키가 들어 있으니 공유 금지.)' }),
@@ -542,7 +548,7 @@ function installSelfCmdBox(gw, os) {
     }
     go.disabled = false;
   });
-  return el('div', {}, el('div', { class: 'install-minter' }, go), result);
+  return el('div', {}, cpLabel, el('div', { class: 'install-minter' }, go), result);
 }
 
 // 복사 가능한 한 줄 명령(확인용 등 — 토큰 없는 짧은 명령).
