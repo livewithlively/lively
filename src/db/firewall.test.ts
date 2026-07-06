@@ -2,6 +2,7 @@
 // 실행: npm run build && node dist/db/firewall.test.js
 import assert from "node:assert/strict";
 import { assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
+import { selfBaseTableMode, ITEMS_CONTENT_TABLES } from "./self-source.js";
 
 let pass = 0;
 const ok = (name: string, fn: () => void): void => {
@@ -63,6 +64,30 @@ ok("isSystemDeniedTable: 내부 테이블 true / 일반 false", () => {
   assert.equal(isSystemDeniedTable("activity"), false);
 });
 rejects("시스템 테이블은 정책 없어도 차단", "SELECT * FROM auth_token", /Blocked table/);
+// #604 백스톱 확대 — 시크릿/자격증명/세션/콜로그 (items DB self 소스 도입에 따른 노출면 확대 대응)
+ok("isSystemDeniedTable: #604 확장 테이블 true", () => {
+  for (const t of ["member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log"]) {
+    assert.equal(isSystemDeniedTable(t), true, t);
+  }
+});
+rejects("member_credential 정책 없어도 차단", "SELECT * FROM member_credential", /Blocked table/);
+rejects("git_credential 정책 없어도 차단", "SELECT https_token_enc FROM git_credential", /Blocked table/);
+rejects("org_connector 정책 없어도 차단", "SELECT secrets FROM org_connector", /Blocked table/);
+rejects("web_session 정책 없어도 차단", "SELECT session_hash FROM web_session", /Blocked table/);
+
+// ── #604 내장 self 소스 정책(default-deny + 콘텐츠 allow-list) 집행 ──
+const selfPolicy = (): SourcePolicy => policy({ tableDefault: "deny", tableMode: selfBaseTableMode() });
+okP("self: 콘텐츠 테이블(knowledge) 통과", "SELECT name, title FROM knowledge", selfPolicy());
+okP("self: 콘텐츠 조인(project↔task) 통과", "SELECT p.id FROM project p JOIN task t ON t.project_id=p.id", selfPolicy());
+rejectsP("self: PII(person) 차단(allow-list 미포함)", "SELECT * FROM person", selfPolicy(), /Blocked table/);
+rejectsP("self: org_member 차단", "SELECT email FROM org_member", selfPolicy(), /Blocked table/);
+rejectsP("self: 시크릿 auth_token 차단(백스톱)", "SELECT * FROM auth_token", selfPolicy(), /Blocked table/);
+ok("self allow-list: 시크릿/PII 미포함 회귀 가드", () => {
+  const banned = ["auth_token", "member_credential", "git_credential", "org_connector", "web_session",
+    "org_mcp_server", "org_hook", "org_tool", "org_db_source", "person", "person_identity", "org_member",
+    "mcp_call_log", "org_content_audit"];
+  for (const b of banned) assert.equal(ITEMS_CONTENT_TABLES.includes(b), false, `allow-list 에 ${b} 있으면 안 됨`);
+});
 
 // ── 테이블 게이트 ──
 okP("정책 없음(hasMasks=false)=무변경 통과", "SELECT id FROM users", policy());

@@ -1,6 +1,8 @@
 // 요청 컨텍스트 — 모든 툴의 "보안 경계"가 여기서 시작된다.
 // 모든 툴 핸들러는 첫 줄에서 resolveUser() → requireScope() 를 통과해야 한다.
 
+import { SELF_SOURCE } from "./db/self-source.js"; // 값 상수만(런타임 의존 없음 — self-source.ts 는 무-import)
+
 export interface LivelyUser {
   userId: string;
   email: string;
@@ -39,7 +41,10 @@ export function canAccessProject(user: LivelyUser, project: string): boolean {
 //   'db'          → 모든 소스 허용(후방호환 — 기존 db 스코프 토큰 무변경)
 //   'db:<source>' → 특정 소스만 허용(세밀화)
 export function canAccessDbSource(user: LivelyUser, source: string): boolean {
-  return user.scopes.includes("db") || user.scopes.includes(`db:${source}`);
+  if (user.scopes.includes("db") || user.scopes.includes(`db:${source}`)) return true;
+  // #604: 내장 self 소스(게이트웨이 자기 items DB, 콘텐츠 allow-list)는 admin 이면 별도 db 스코프 없이 읽기 허용.
+  if (source === SELF_SOURCE && user.scopes.includes("admin")) return true;
+  return false;
 }
 
 export function requireDbSource(user: LivelyUser, source: string): void {
@@ -49,6 +54,7 @@ export function requireDbSource(user: LivelyUser, source: string): void {
 }
 
 // 디스커버리(db_sources) 진입 게이트 — 어떤 형태든 db 권한이 하나라도 있으면 목록 열람 가능.
+//  #604: admin 은 내장 self 소스를 발견/사용할 수 있어야 하므로 db 스코프가 없어도 목록 열람 허용(내용은 canAccessDbSource 로 재차 게이트).
 export function hasAnyDbAccess(user: LivelyUser): boolean {
-  return user.scopes.some((s) => s === "db" || s.startsWith("db:"));
+  return user.scopes.includes("admin") || user.scopes.some((s) => s === "db" || s.startsWith("db:"));
 }

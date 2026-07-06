@@ -1,5 +1,6 @@
 import pg from "pg";
 import { getSourceConfig, resolveConnectionString, type DbSource } from "./sources.js";
+import { itemsPool } from "../items/store.js";
 
 // 데이터소스별 lazy 풀 레지스트리 — db_query/db_schema 가 source 이름으로 풀을 얻는다.
 // 각 소스는 반드시 읽기 전용 리플리카 + 읽기 전용 role 로 접속할 것(sources.ts / .env / org_db_source).
@@ -18,6 +19,9 @@ export async function getPool(source: string): Promise<pg.Pool> {
   if (cfg.driver !== "postgres") {
     throw new Error(`db source '${source}' driver '${cfg.driver}' 미지원(pg-only)`);
   }
+  // 내장 self 소스(#604) — 게이트웨이 자기 items 풀 재사용(새 풀/시크릿 해소 없이). itemsPool 은 RW 지만
+  //  db_query 의 execReadQuery 가 BEGIN READ ONLY→ROLLBACK 으로 감싸 읽기전용을 보장. invalidatePool 대상 아님(공유 풀).
+  if (cfg.origin === "builtin") return itemsPool;
   const key = `${source}@${fingerprint(cfg)}`;
   const existing = pools.get(key);
   if (existing) return existing;

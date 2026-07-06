@@ -5,6 +5,7 @@ import { listTablePolicies, listColumnMasks } from "../org/store.js";
 import { getSourceConfig } from "./sources.js";
 import type { SourcePolicy } from "./firewall.js";
 import type { MaskStyle } from "./mask.js";
+import { SELF_SOURCE, selfBaseTableMode } from "./self-source.js";
 
 interface PolicySnap {
   tableMode: Map<string, "allow" | "deny">; // lower(table) -> mode
@@ -55,9 +56,16 @@ export function getSourcePolicy(source: string): SourcePolicy {
   const maskedCols = new Set(s.maskStyle.keys());
   const maskedColNames = new Set<string>();
   for (const k of maskedCols) maskedColNames.add(k.slice(k.indexOf(".") + 1));
+  // #604 내장 self 소스 — default-deny 위에 콘텐츠 allow-list 를 베이스로 깔고, 그 위에 web(org_db_table_policy 'self')
+  //  오버레이를 얹는다(운영자가 웹에서 특정 테이블을 추가 허용/차단 가능 — 운영자 지정이 코드 베이스보다 우선).
+  let tableMode = s.tableMode;
+  if (source === SELF_SOURCE) {
+    tableMode = selfBaseTableMode();
+    for (const [k, v] of s.tableMode) tableMode.set(k, v);
+  }
   return {
     tableDefault: getSourceConfig(source)?.tableDefault ?? "allow",
-    tableMode: s.tableMode,
+    tableMode,
     maskedCols,
     maskedColNames,
     hasMasks: s.maskStyle.size > 0,

@@ -74,8 +74,14 @@ function assertNoForbiddenFunctions(ast: unknown): void {
 //  배포에 따라 물리 분리될 수 있으나, 같은 DB/리플리카에 섞이는 배포에선 토큰 해시·감사·훅 소스코드·툴
 //  정의가 자유 SELECT 로 새어나갈 수 있다 → 코드로 deny(배포 토폴로지와 무관한 방어). 운영 권장 보강:
 //  db_query 리플리카에서 이 테이블들을 물리 제외 + 기동 시 자가검증 + RLS.
+//  #604: admin 이 자기 items DB 를 직접 읽는 내장 self 소스(db/self-source.ts) 도입으로 items DB=콘텐츠+시크릿이
+//   한 물리 DB 인 통합배포에서 자유 SELECT 노출면이 커졌다 → 시크릿/자격증명/세션/콜로그 테이블을 백스톱에 확대.
+//   (self 소스는 default-deny allow-list 로도 막지만, 웹 table-policy 오작동에도 새지 않게 코드로 이중 차단.)
+//   PII(person*/org_member)는 여기 넣지 않는다 — 고객이 등록한 제품 DB 에 동명 테이블이 있으면 정당한 조회를
+//   막게 되므로. self 소스에서의 PII 차단은 allow-list(콘텐츠 미포함)로 처리한다.
 const DENIED_TABLES = new Set([
   "auth_token", "org_content_audit", "org_hook", "org_tool", "org_mcp_server", "org_db_source",
+  "member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log",
 ]);
 
 // 게이트웨이 내부 테이블 절대 deny(B18) 여부 — 웹 정책과 무관하게 항상 차단(웹 UI·db_schema 가 정직하게 '시스템 차단'으로 표시하는 데 쓴다).

@@ -12,6 +12,7 @@ import pg from "pg";
 import { parse } from "pg-connection-string";
 import { listDbSources, getRuntimeConfig } from "../org/store.js";
 import { isSecretRefAllowed, pinHost } from "./source-guard.js";
+import { SELF_SOURCE } from "./self-source.js";
 
 export type AuthMode = "password" | "iam" | "mtls" | "vault";
 
@@ -23,8 +24,8 @@ export interface DbSource {
   maxRows: number;
   timeoutMs: number;
   authMode: AuthMode;
-  secretSource: string | null; // password: 비번 env 이름(DB 소스) | null(env 소스 — url 에 비번 포함)
-  origin: "env" | "db";
+  secretSource: string | null; // password: 비번 env 이름(DB 소스) | null(env 소스 — url 에 비번 포함) | null(builtin — itemsPool 직결)
+  origin: "env" | "db" | "builtin"; // builtin = 내장 self 소스(#604) — getPool 이 itemsPool 로 단락, resolveConnectionString 미경유
   tableDefault: "allow" | "deny"; // 테이블 기본자세 — allow=deny-list(후방호환) / deny=allow-list(컴플라이언스) (#186)
 }
 
@@ -35,10 +36,14 @@ function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number 
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-// 순수 — 맵에서 기본 소스 선택: 'default' 우선 → 소스 1개면 그것 → 그 외 null.
+// 순수 — 맵에서 기본 소스 선택: 'default' 우선 → 단일 비-builtin 소스면 그것 → self 단독(다른 소스 없음)이면 self → 그 외 null.
+//  #604: 내장 self(builtin)는 항상 스냅샷에 끼므로, self 때문에 기존 '단일 소스=기본' 동작이 깨지지 않도록
+//   기본 판정은 비-builtin 개수로 한다(등록 소스 1개면 예전처럼 그게 기본). 등록 소스가 0개면 self 가 기본(고객 실박스 UX).
 export function pickDefaultFrom(s: Map<string, DbSource>): string | null {
   if (s.has(DEFAULT_SOURCE)) return DEFAULT_SOURCE;
-  if (s.size === 1) return [...s.keys()][0];
+  const nonBuiltin = [...s.values()].filter((v) => v.origin !== "builtin");
+  if (nonBuiltin.length === 1) return nonBuiltin[0].name;
+  if (nonBuiltin.length === 0 && s.size === 1) return [...s.keys()][0];
   return null;
 }
 
@@ -66,6 +71,21 @@ async function loadDbSources(): Promise<Map<string, DbSource>> {
   if (!process.env.ITEMS_DATABASE_URL) return m;
   const defMaxRows = envInt(process.env, "DB_MAX_ROWS", 1000);
   const defTimeout = envInt(process.env, "DB_STATEMENT_TIMEOUT_MS", 5000);
+  // 내장 self 소스(#604) — admin 전용, 게이트웨이 자기 items DB 읽기 창. org_db_source 등록/시크릿ref 화이트리스트
+  //  불요(getPool 이 itemsPool 로 단락). default-deny allow-list(policy.ts 가 콘텐츠만 열고 나머지 차단).
+  //  DB 로드 실패(아래 catch)에도 살아있게 먼저 주입. 동명 DB 소스가 있으면 아래 루프가 덮어써 운영자가 오버라이드 가능.
+  m.set(SELF_SOURCE, {
+    name: SELF_SOURCE,
+    url: "", // 미사용 — getPool 이 itemsPool 직결로 단락(resolveConnectionString 미경유)
+    driver: "postgres",
+    rls: null, // admin 은 조직 콘텐츠 전체 열람(단일 org/게이트웨이 전제)
+    maxRows: defMaxRows,
+    timeoutMs: defTimeout,
+    authMode: "password",
+    secretSource: null,
+    origin: "builtin",
+    tableDefault: "deny", // allow-list — self-source.ITEMS_CONTENT_TABLES 만 허용(policy.ts 시드)
+  });
   let rows: Awaited<ReturnType<typeof listDbSources>>;
   try {
     rows = await listDbSources();
@@ -126,6 +146,10 @@ export function resolveSourceName(given?: string): string {
 
 // ── auth_mode 별 pg 접속 설정 조립 ── DB 엔 비번 미저장: password 면 secretSource(env)에서 런타임 해소.
 export async function resolveConnectionString(src: DbSource): Promise<pg.PoolConfig> {
+  if (src.origin === "builtin") {
+    // 내장 self 소스는 itemsPool 직결 — getPool 이 단락하므로 여기 도달하면 안 된다(호출 경로 회귀 방어).
+    throw new Error(`db source '${src.name}' 은 내장(builtin) 소스로 접속문자열을 만들지 않습니다 — getPool 이 itemsPool 로 처리`);
+  }
   if (src.authMode !== "password") {
     throw new Error(`db source '${src.name}' auth_mode '${src.authMode}' 미지원 — 1차 password 만(iam/mtls/vault 후속)`);
   }

@@ -35,6 +35,16 @@ t("pickDefaultFrom: 단일 비-default → 그것", () => {
 t("pickDefaultFrom: 다중+default없음 → null", () => {
   assert.equal(pickDefaultFrom(mapOf(src("ops"), src("ana"))), null);
 });
+// #604 내장 self(builtin) — 기본 판정은 비-builtin 개수로. self 는 기존 '단일 소스=기본' 동작을 깨지 않아야 한다.
+t("pickDefaultFrom: self 단독(등록소스 0) → self", () => {
+  assert.equal(pickDefaultFrom(mapOf(src("self", { origin: "builtin" }))), "self");
+});
+t("pickDefaultFrom: self + 단일 등록소스 → 등록소스(self 무시)", () => {
+  assert.equal(pickDefaultFrom(mapOf(src("self", { origin: "builtin" }), src("ops"))), "ops");
+});
+t("pickDefaultFrom: self + 다중 등록소스 → null", () => {
+  assert.equal(pickDefaultFrom(mapOf(src("self", { origin: "builtin" }), src("ops"), src("ana"))), null);
+});
 
 // ── pickSourceFrom (D1 정책) ──
 t("pickSourceFrom: 명시 소스 존재 → 그대로", () => {
@@ -66,6 +76,9 @@ await at("resolveConnectionString: iam 미지원 → throw", async () => {
 });
 await at("resolveConnectionString: url 없음 → throw", async () => {
   await assert.rejects(() => resolveConnectionString(src("x", { url: "" })), /url/);
+});
+await at("resolveConnectionString: builtin(self) → throw(itemsPool 직결 경로)", async () => {
+  await assert.rejects(() => resolveConnectionString(src("self", { origin: "builtin", url: "" })), /builtin/);
 });
 
 console.log(`\n${pass} checks passed`);
