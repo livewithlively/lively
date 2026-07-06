@@ -20,6 +20,7 @@
 //   rate limit: 평균 ~3 req/s 자발 스로틀 + 429/529 Retry-After 재시도.
 import fs from "node:fs";
 import path from "node:path";
+import { stateDir } from "../state-dir.js";
 import crypto from "node:crypto";
 import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
@@ -104,7 +105,7 @@ async function loadConfig(): Promise<NotionConfig> {
     version: c.api_version || DEFAULT_NOTION_VERSION,
     rootIds, excludeIds,
     comments: cm === "all" || cm === "off" ? (cm as "all" | "off") : "page",
-    assetDir: c.asset_dir || path.resolve(process.cwd(), "data", "notion-assets"),
+    assetDir: c.asset_dir || stateDir("notion-assets"),
   };
 }
 

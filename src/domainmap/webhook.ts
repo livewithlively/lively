@@ -14,6 +14,7 @@ import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { resolveGitSecret, hostOf, prepareGitAuth, isAuthError, describeGitError } from "../org/git-credential-store.js";
+import { stateDir } from "../state-dir.js";
 
 const execFileP = promisify(execFile);
 
@@ -22,11 +23,11 @@ const GIT_TIMEOUT_MS = 60_000;
 const ZERO_SHA = /^0{40}$/;                   // git "all zeros" => no parent (new branch / first push)
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 
-// 클론 캐시 디렉 — 구 '/repos'(도커 볼륨) 하드코딩은 macOS 호스트에서 생성 불가라
-// env DOMAINMAP_REPOS_DIR(기본 var/repos, 게이트웨이 작업 디렉 기준)로 대체. .gitignore 등재.
-// 구 repodata 볼륨은 마이그레이션하지 않는다 — git_url 이 repo 테이블에 있어 첫 웹훅 때 재클론.
+// 클론 캐시 디렉 — 서비스 유저 쓰기가능 런타임 루트(#618 stateDir, 기본 <cwd>/data/repos) 하위.
+// 구 cwd-상대 'var/repos' 는 WorkingDirectory 가 타 uid 소유일 때 mkdir EACCES(=#606). git-pull.ts 와 동일 규약.
+// env DOMAINMAP_REPOS_DIR 명시 오버라이드만 절대경로로 존중. 구 repodata 볼륨은 첫 웹훅 때 재클론(git_url 로).
 function reposDir(): string {
-  return resolve(process.env.DOMAINMAP_REPOS_DIR ?? "var/repos");
+  return process.env.DOMAINMAP_REPOS_DIR ? resolve(process.env.DOMAINMAP_REPOS_DIR) : stateDir("repos");
 }
 
 // Constant-time compare of two utf8 strings (length-guarded so timingSafeEqual

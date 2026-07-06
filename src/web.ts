@@ -7,6 +7,7 @@
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
 import path from "node:path";
+import { stateDir } from "./state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
@@ -99,7 +100,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { resolveConnectorConfig } = await import("./connectors/config.js");
       dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
     } catch { /* config 계층 실패 → env/기본 폴백 */ }
-    const assetDir = dir || path.resolve(process.cwd(), "data", "notion-assets");
+    const assetDir = dir || stateDir("notion-assets");
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
