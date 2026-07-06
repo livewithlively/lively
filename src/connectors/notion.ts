@@ -32,7 +32,7 @@ import type {
   NotionBlock, NotionComment, NotionDatabase, NotionDataSource, NotionListResponse,
   NotionPage, NotionRichText, NotionUser,
 } from "./notion-types.js";
-import type { NotionLedger } from "../v6/connector-mirror.js"; // type-only — 런타임 의존 없음(원장은 run-sync 가 주입)
+import type { NotionLedger, NotionLedgerEntry } from "../v6/connector-mirror.js"; // type-only — 런타임 의존 없음(원장은 run-sync 가 주입)
 
 // ── 상수 ───────────────────────────────────────────────────────────────────
 const API_BASE = "https://api.notion.com/v1";
@@ -899,11 +899,21 @@ async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> 
   return verdict;
 }
 
+/** 델타에서 이 DB(data_source 관측)를 재수집할지 — **알려진 활성 DB + 스키마 변경 positive evidence** 일 때만 true.
+ *  전 워크스페이스엔 data_source 가 수백~수천(대부분 linked 뷰·인라인 표)일 수 있고 대부분 미러에 안 남는다 →
+ *  모르는(led 없음)·비활성·비-DB·미변경은 재수집 금지(매 증분 재수집이면 비용 붕괴). 신규 top-level DB·놓친 스키마
+ *  변경은 일일 full 이 수렴하고, 신규 인라인 DB 는 부모 페이지 델타→discoverChildren 로 잡힌다(그 경로 불변). */
+function dbDeltaShouldCollect(led: NotionLedgerEntry | undefined, live: string): boolean {
+  if (!led || led.kind !== "database" || led.lifecycle !== "active") return false; // 모름/비활성/비-DB
+  if (!led.dsEdited || !live || live <= led.dsEdited) return false;                 // 미변경/비교 불가(응답 드리프트) — 스킵
+  return true;
+}
+
 /** 델타 발견 — 후보를 t.pages/t.dbs 에 시딩. 이후 BFS·방출은 full 과 동일 경로(코드 분기 최소화). */
 async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
   const ledger = t.ledger!;
   const floorMs = sinceMs - DELTA_LOOKBACK_MS;
-  const c = { pages: 0, rows: 0, dbs: 0, skipped: 0, outOfScope: 0, scanned: 0 };
+  const c = { pages: 0, rows: 0, dbs: 0, skippedDbs: 0, skipped: 0, outOfScope: 0, scanned: 0 };
 
   // 개명 감지 시 이전/현재 부모 재렌더 큐잉 — 부모 본문의 child_page 제목 캐시·DB 항목 목록이 스테일해지지 않게.
   const reRender = (pid: string | null | undefined): void => {
@@ -918,7 +928,10 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     if (led.kind === "db_row") pn.isDbRow = true;
   };
 
-  // ① data_source 스윕 — dsToDb 최신화 + 스키마 변경/신규 DB 감지. linked 뷰는 ds 가 없어 자연히 0비용.
+  // ① data_source 스윕 — dsToDb 최신화 + **변경 증거 있는 알려진 DB만** 재수집.
+  //  ⚠ 예전엔 여기서 발견한 data_source 를 (모르는 것 포함) 죄다 큐잉해, 전 워크스페이스에 linked 뷰·인라인 표가
+  //  수백~수천이면 매 증분이 그 전부를 inScope 워크+재수집했다(어니스트 실박스: 알려진 8 vs 발견 838 → 증분 30분+,
+  //  방출 0). dbDeltaShouldCollect 로 모르는/비활성/미변경은 스킵 → 발견 비용이 변경량에 비례(dsToDb 매핑만 전량 최신화).
   for await (const r of paginate(t.cfg, (cursor) => ({
     path: "/search", method: "POST",
     body: { filter: { property: "object", value: "data_source" }, page_size: PAGE_SIZE, ...(cursor ? { start_cursor: cursor } : {}) },
@@ -928,14 +941,11 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     const dsId = normalizeNotionId(String(ds.id ?? ""));
     const dbId = normalizeNotionId(String(ds.database_parent?.database_id ?? asRec(ds.parent).database_id ?? ""));
     if (dbId.length !== 36) continue;
-    t.dsToDb.set(dsId, dbId);
+    t.dsToDb.set(dsId, dbId); // 행→소유 DB 해소용 — 스킵과 무관하게 항상 최신화(비용 0)
     if (t.dbs.has(dbId)) continue;
     const led = ledger.byId.get(dbId);
     const live = String((ds as Rec).last_edited_time ?? "");
-    // 기수집 + 스키마 미변경(ds last_edited ≤ 저장 최대) → 스킵. 멀티소스 DB 의 교차 동률 엣지는 full 이 수렴.
-    //  live 부재(응답 형태 드리프트)는 미변경 취급 — fail-open 이면 매 run 전 DB 재수집으로 비용이 붕괴한다(리뷰);
-    //  놓친 스키마 변경은 일일 full 이 수렴.
-    if (led && led.kind === "database" && led.lifecycle === "active" && led.dsEdited && (!live || live <= led.dsEdited)) continue;
+    if (!dbDeltaShouldCollect(led, live)) { c.skippedDbs++; continue; } // 모름/미변경/비활성 → inScope·재수집 전에 컷
     if (!(await inScope(t, dbId, asRec(ds.parent)))) { c.outOfScope++; continue; }
     dbNode(t, dbId);
     c.dbs++;
@@ -1000,7 +1010,7 @@ async function discoverDelta(t: Traversal, sinceMs: number): Promise<void> {
     }
   }
 
-  console.error(`[notion] 델타 — 후보 페이지 ${c.pages}·행 ${c.rows}·DB ${c.dbs} · 원장일치 스킵 ${c.skipped} · 범위밖 ${c.outOfScope} · 스캔 ${c.scanned} (원장 ${ledger.byId.size})`);
+  console.error(`[notion] 델타 — 후보 페이지 ${c.pages}·행 ${c.rows}·DB ${c.dbs} · 원장일치 스킵 ${c.skipped} · DB스킵 ${c.skippedDbs} · 범위밖 ${c.outOfScope} · 스캔 ${c.scanned} (원장 ${ledger.byId.size})`);
 }
 
 // block_id 부모 → 소유 페이지 해소(페이지가 컬럼/토글 안에 생성된 경우). 부모 체인을 따라 페이지까지.
@@ -1467,5 +1477,5 @@ export const notionConnector: Connector = {
 
 // 테스트 훅 — 자산 재발급(만료 URL 치유) 경로의 결정적 검증용. 프로덕션 코드에서 사용 금지.
 export const __assetTestables = { downloadAsset, refreshAssetUrl, findUrlByPath };
-// 테스트 훅 — 제외 서브트리 판정(원장 조상 워크·직접 id·memo). 프로덕션 코드에서 사용 금지.
-export const __scopeTestables = { underExcluded };
+// 테스트 훅 — 제외 서브트리 판정(원장 조상 워크·직접 id·memo)·델타 DB 재수집 판정. 프로덕션 코드에서 사용 금지.
+export const __scopeTestables = { underExcluded, dbDeltaShouldCollect };

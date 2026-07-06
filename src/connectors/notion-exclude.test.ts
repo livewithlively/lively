@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { __scopeTestables } from "./notion.js";
 
-const { underExcluded } = __scopeTestables;
+const { underExcluded, dbDeltaShouldCollect } = __scopeTestables;
 
 // 유효한 36자 대시드 uuid(parseNotionRootId 캐노니컬과 동형).
 const ROOT_EXC = "11111111-1111-4111-8111-111111111111"; // 제외 루트
@@ -60,7 +60,28 @@ async function main() {
     assert.equal(await underExcluded(t, ROWID, TOP_OK), false, "seed 부모가 무관(memo=false) → false");
   }
 
-  console.log("notion-exclude.test ok — 7 checks (직접·원장조상·깊은체인·무관·seed지름길·memo·fast-path)");
+  // ── 델타 DB 재수집 판정(dbDeltaShouldCollect) — 대량 linked 뷰가 매 증분 재수집되던 회귀 잠금 ──
+  const mkLed = (over: Record<string, unknown>): any => ({
+    lastEdited: null, syncedAt: null, parentExt: null, kind: "database",
+    title: "db", lifecycle: "active", dsEdited: "2026-07-01T00:00:00.000Z", unsupported: false, ...over,
+  });
+  // 8) 모르는 data_source(led 없음 — 대다수 linked 뷰/인라인) → 재수집 안 함.
+  assert.equal(dbDeltaShouldCollect(undefined, "2026-07-02T00:00:00.000Z"), false, "모르는 DB → 스킵(full 이 수렴)");
+  // 9) DB 아님(page/db_row) → 스킵.
+  assert.equal(dbDeltaShouldCollect(mkLed({ kind: "page" }), "2026-07-02T00:00:00.000Z"), false, "비-DB → 스킵");
+  // 10) 아카이브된 DB → 스킵.
+  assert.equal(dbDeltaShouldCollect(mkLed({ lifecycle: "archived" }), "2026-07-02T00:00:00.000Z"), false, "비활성 DB → 스킵");
+  // 11) 알려진 활성 DB + 스키마 변경(live > dsEdited) → 재수집.
+  assert.equal(dbDeltaShouldCollect(mkLed({}), "2026-07-02T00:00:00.000Z"), true, "스키마 변경 → 재수집");
+  // 12) 미변경(live ≤ dsEdited) → 스킵.
+  assert.equal(dbDeltaShouldCollect(mkLed({}), "2026-06-30T00:00:00.000Z"), false, "구 편집 → 스킵");
+  assert.equal(dbDeltaShouldCollect(mkLed({}), "2026-07-01T00:00:00.000Z"), false, "동률(미변경) → 스킵");
+  // 13) dsEdited 부재(unsupported/linked 뷰) — 비교 불가라 스킵(fail-open 재수집 금지: 비용 붕괴 원인).
+  assert.equal(dbDeltaShouldCollect(mkLed({ dsEdited: null }), "2026-07-02T00:00:00.000Z"), false, "dsEdited 없음 → 스킵");
+  // 14) live 부재(응답 드리프트) → 스킵.
+  assert.equal(dbDeltaShouldCollect(mkLed({}), ""), false, "live 없음 → 스킵");
+
+  console.log("notion-exclude.test ok — 7 제외 + 7 델타DB (모름·비DB·비활성·스키마변경·미변경·unsupported·드리프트)");
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
