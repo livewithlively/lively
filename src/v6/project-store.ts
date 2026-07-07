@@ -48,7 +48,8 @@ const auditProject = (entityKey: string, op: string, before: unknown, after: unk
 // 쓰기 경로 best-effort 임베딩(#631 프로젝트 검색) — provider on 일 때만. 실패는 삼킨다(행은 이미 저장됨 → 백필로 보강). off=no-op.
 //  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 프로젝트 저장을 깨지 않게). knowledge embedKnowledgeBestEffort 와 동형(키만 id).
 //  name→title, description→body 로 매핑해 knowledge 와 같은 embeddingInputText(8000자 캡) 재사용.
-async function embedProjectBestEffort(id: number, fields: { name?: string | null; description?: string | null }): Promise<void> {
+//  connector-mirror(ClickUp 미러)도 이 함수를 재사용한다(#624 트리거) — 그래서 export.
+export async function embedProjectBestEffort(id: number, fields: { name?: string | null; description?: string | null }): Promise<void> {
   const provider = await activeEmbeddingProvider();
   if (!provider) return;
   try {
@@ -435,8 +436,9 @@ export async function updateProject(
     `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
-  // 이름/설명이 바뀐 경우에만 재임베딩(상태·필드만 바뀌면 검색 텍스트 불변 → 스킵). #631
-  if (patch.name !== undefined || patch.description !== undefined || patch.append_description !== undefined)
+  // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — 필드 존재(patch)가 아니라 before↔after 값 비교. no-op·미변경 저장,
+  //  잦은 웹 인라인편집·MCP·ClickUp writeback 이 텍스트를 그대로 실어보내도 헛임베딩 방지(임베딩 부하 = 실제 텍스트 변경 수). #624/#631
+  if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
     await embedProjectBestEffort(id, { name: after.name, description: after.description });
   return after;
 }
@@ -619,8 +621,9 @@ export async function updateTask(
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
-  // 이름/설명이 바뀐 경우에만 재임베딩(상태·담당자·기간만 바뀌면 검색 텍스트 불변 → 스킵). #631
-  if (patch.name !== undefined || patch.description !== undefined || patch.append_description !== undefined)
+  // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — before↔after 값 비교(필드 존재가 아니라). 상태·담당자·기간 인라인
+  //  편집이 잦아도(웹 blur 저장 등) 텍스트가 안 바뀌면 스킵 → 임베딩 부하 = 실제 텍스트 변경 수로 상한. #624/#631
+  if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
     await embedProjectBestEffort(id, { name: after.name, description: after.description });
   return after;
 }

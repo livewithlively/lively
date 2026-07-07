@@ -14,6 +14,7 @@ import {
   getConnectorState, setConnectorState,
   type RawItem,
 } from "../items/store.js";
+import { flushProjectEmbeds } from "../v6/connector-mirror.js"; // #624 미러 프로젝트 재임베딩(배치 후 flush)
 import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initV6Schema } from "../v6/schema.js";
@@ -91,6 +92,7 @@ async function runGenericSync(system: string): Promise<boolean> {
       if (batch.length >= 200) await flush();
     }
     await flush();
+    await flushProjectEmbeds(itemsPool).catch(() => {}); // #624 이름/설명 바뀐 미러 프로젝트만 재임베딩(배치 후·best-effort)
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
     return true;
@@ -233,6 +235,7 @@ async function runClickupSync(): Promise<boolean> {
       if (batch.length >= 200) await flush();
     }
     await flush();
+    await flushProjectEmbeds(itemsPool).catch(() => {}); // #624 이름/설명 바뀐 미러 프로젝트만 재임베딩(배치 후·best-effort)
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err) }, "clickup 싱크 실패 — 커서 동결(다음 run 재수집)");
     failed = true;

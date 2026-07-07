@@ -34,6 +34,27 @@ import { redactDeep, redactString } from "../org/redact.js";
 import { unitName, normalizeExternalInstance } from "../org/external-identity.js";
 import { routeIngestV6 } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
+import { embedProjectBestEffort } from "./project-store.js";
+
+// ── #624 프로젝트 임베딩 재트리거(검색 #631) — 미러 sync 에서 이름/설명이 '실제로 바뀐' project 행 id 만 모았다가,
+//  배치(아이템별 BEGIN/COMMIT) 종료 후 run-sync 가 flushProjectEmbeds 로 일괄 재임베딩. 동기화 루프는 안 막고
+//  (커밋 후 별도), off/실패는 no-op. 단순 counter/`all` 백필과 달리 '텍스트 변경' 이벤트 게이트라 잦은 ClickUp
+//  싱크(상태·기간·담당자 변경, 무변경 재싱크)엔 재임베딩이 안 튄다 — #624 "뭘 트리거로" 의 답(클릭업 경로).
+const pendingProjectEmbeds = new Set<number>();
+export async function flushProjectEmbeds(pool: pg.Pool): Promise<void> {
+  if (pendingProjectEmbeds.size === 0) return;
+  const ids = [...pendingProjectEmbeds];
+  pendingProjectEmbeds.clear();
+  for (const id of ids) {
+    try {
+      // 커밋 후 DB 의 '현재' 값을 읽어 임베딩(큐잉 시점 텍스트가 아니라 — 롤백/후속 편집과 정합). 삭제됐으면 skip.
+      const r = await pool.query(`SELECT name, description FROM project WHERE id=$1`, [id]);
+      const row = r.rows[0] as { name: string; description: string | null } | undefined;
+      if (!row) continue;
+      await embedProjectBestEffort(id, { name: row.name, description: row.description });
+    } catch { /* best-effort — 개별 실패는 다음 편집/백필이 보강 */ }
+  }
+}
 
 // 정규 카테고리 → CHECK 유효 네이티브 status 투영(UI 호환). 역(네이티브→카테고리)=project-store.categoryOf.
 //  네이티브 status CHECK 엔 canceled 가 없어 done 으로 투영 — 원본은 status_raw/status_category 에 보존(무손실).
@@ -970,6 +991,11 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     const beforeSnap = isInsert ? null : { id, name: prevRow!.name, description: prevRow!.description };
     const afterSnap = { id, level, name: appliedName, description: appliedDesc, external_system: system, external_id: externalId, created_by: author };
     await auditConnector(client, "project", String(id), isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
+  }
+  // #624 재임베딩 트리거 — 이름/설명이 실제로 바뀐 미러 행만 큐잉(신규 포함). 상태·담당자·기간·무변경 재싱크엔 안 걸림.
+  //  실제 임베딩은 커밋 후 run-sync 가 flushProjectEmbeds 로 배치 처리(동기화 루프 비차단·best-effort).
+  if (isInsert || appliedName !== prevRow!.name || (appliedDesc ?? null) !== (prevRow!.description ?? null)) {
+    pendingProjectEmbeds.add(id);
   }
   return true;
 }
