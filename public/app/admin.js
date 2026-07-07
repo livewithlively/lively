@@ -2241,6 +2241,11 @@ function embeddingsEditor(detail, data) {
         clearTimeout(pollTimer);
         pollTimer = null;
     } };
+    let projPollTimer = null;
+    const stopProjPoll = () => { if (projPollTimer) {
+        clearTimeout(projPollTimer);
+        projPollTimer = null;
+    } };
     async function load() {
         let st;
         try {
@@ -2255,6 +2260,7 @@ function embeddingsEditor(detail, data) {
     // 폼(설정 입력)은 한 번만 짓는다 — 폴링은 statusRegion 만 갱신해 입력 중 리셋되지 않게.
     function buildOnce(st) {
         stopPoll();
+        stopProjPoll();
         const cfg = st.config || { provider: 'off', base_url: null, model: null, dimensions: 1024, auth_env_ref: null };
         const on = cfg.provider === 'http';
         const provSel = el('select', { class: 'input' }, el('option', { value: 'off', text: '꺼짐 — grep 검색으로 폴백' }), el('option', { value: 'http', text: '켜짐 — HTTP /v1/embeddings' }));
@@ -2299,8 +2305,10 @@ function embeddingsEditor(detail, data) {
             }
         });
         const statusRegion = el('div');
-        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion);
+        const projectRegion = el('div');
+        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
         updateStatus(st, statusRegion);
+        loadProjectStatus(projectRegion);
     }
     // 백로그·잡 진행만 갱신(폼은 그대로). 잡이 돌면 폴링.
     function updateStatus(st, region) {
@@ -2363,6 +2371,71 @@ function embeddingsEditor(detail, data) {
                 poll(region);
             } // 일시 실패 → 재시도
         }, 1500);
+    }
+    // 프로젝트 임베딩(#631/#624) 백필 — 지식 백필과 동형(대상만 project 엔드포인트). 같은 embedding_config 공유·자체 폴링.
+    function renderProjectStatus(st, region) {
+        const on = (st.config && st.config.provider) === 'http';
+        const backlog = st.backlog || { total: 0, pending: 0 };
+        const job = st.job;
+        const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
+        const running = !!(job && job.running);
+        const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '프로젝트 백필 진행 중…' : '프로젝트 임베딩(백필)' });
+        bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0;
+        const bfSt = el('span', { class: 'admin-status' });
+        if (!on)
+            bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
+        else if ((backlog.pending || 0) === 0 && !running)
+            bfSt.textContent = '모두 임베딩됨 ✓';
+        bfBtn.addEventListener('click', async () => {
+            bfBtn.disabled = true;
+            try {
+                await api('/api/ui/org/project-embeddings/backfill', { method: 'POST', body: JSON.stringify({ mode: 'pending' }) });
+                toast('프로젝트 백필 시작 — 진행 상황을 표시합니다.');
+                pollProj(region);
+            }
+            catch (e) {
+                toast(e.message, true);
+                bfBtn.disabled = false;
+            }
+        });
+        const jobLine = el('p', { class: 'admin-hint' });
+        if (job) {
+            if (job.running)
+                jobLine.textContent = `백필 진행: ${fmtNum(job.done)}/${fmtNum(job.total)} …`;
+            else if (job.reason)
+                jobLine.textContent = `직전 백필 미완료: ${job.reason}`;
+            else if (job.finishedAt)
+                jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
+        }
+        region.replaceChildren(el('p', { class: 'admin-hint', text: `프로젝트 ${fmtNum(backlog.total)}건 중 임베딩 ${fmtNum(embedded)}건 · 미임베딩 ${fmtNum(backlog.pending)}건.` }), jobLine, el('div', { class: 'admin-actions' }, bfBtn, bfSt));
+        stopProjPoll();
+        if (running)
+            pollProj(region);
+    }
+    function pollProj(region) {
+        stopProjPoll();
+        projPollTimer = setTimeout(async () => {
+            if (!body.isConnected) {
+                stopProjPoll();
+                return;
+            } // 다른 섹션으로 이동 → 폴링 종료(누수 방지)
+            try {
+                const st = await api('/api/ui/org/project-embeddings');
+                renderProjectStatus(st, region);
+            }
+            catch (_) {
+                pollProj(region);
+            } // 일시 실패 → 재시도
+        }, 1500);
+    }
+    async function loadProjectStatus(region) {
+        try {
+            const st = await api('/api/ui/org/project-embeddings');
+            renderProjectStatus(st, region);
+        }
+        catch (e) {
+            region.replaceChildren(el('p', { class: 'admin-hint', text: '프로젝트 임베딩 상태를 불러오지 못했습니다: ' + e.message }));
+        }
     }
     load();
 }
