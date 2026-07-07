@@ -51,7 +51,10 @@ export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude",
     autoApproveFlag: "--dangerously-skip-permissions",
-    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델", type: "select", choices: ["", "opus", "sonnet", "haiku"] }],
+    flags: [
+      { name: "--model", label: "모델", desc: "비우면 기본 모델", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
+      { name: "--effort", label: "effort(추론 강도)", desc: "비우면 기본. 판단 무거운 작업(부트스트랩·분류)은 high+ 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
+    ],
   },
   {
     key: "codex", label: "Codex", bin: "codex",

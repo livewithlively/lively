@@ -903,10 +903,18 @@ function openManagedSessionForm(m, reload) {
     const harnessSel = el('select', { style: inputStyle });
     for (const h of ['claude', 'codex', 'shell'])
         harnessSel.append(el('option', { value: h, text: h, ...((m && m.harness === h) ? { selected: true } : {}) }));
+    // 모델·effort = claude 하네스 플래그(--model/--effort) → flags JSONB. 세션 스폰 시 claude argv 로 적용.
+    const mflags = (m && m.flags) || {};
+    const modelSel = el('select', { style: inputStyle });
+    for (const v of ['', 'opus', 'sonnet', 'haiku'])
+        modelSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--model'] === v) ? { selected: true } : {}) }));
+    const effortSel = el('select', { style: inputStyle });
+    for (const v of ['', 'low', 'medium', 'high', 'xhigh', 'max'])
+        effortSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--effort'] === v) ? { selected: true } : {}) }));
     const autoChk = el('input', { type: 'checkbox', ...((m ? m.auto_approve : true) ? { checked: true } : {}) });
     const enabledChk = el('input', { type: 'checkbox', ...((m ? m.enabled : true) ? { checked: true } : {}) });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '상시 세션 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록·세션 탭에 보일 이름.', labelInp), block('라이블리 계정/프로필', '어떤 클로드 로그인(시드)으로 띄울지. 지금은 단일 프로필 — 곧 프로필별 로그인.', accountInp), block('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp), block('하네스', '', harnessSel), block('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))), block('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록·세션 탭에 보일 이름.', labelInp), block('라이블리 계정/프로필', '어떤 클로드 로그인(시드)으로 띄울지. 지금은 단일 프로필 — 곧 프로필별 로그인.', accountInp), block('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp), block('하네스', '', harnessSel), block('모델 (claude)', '이 세션의 claude 모델. 판단 무거운 작업(부트스트랩·분류)은 opus 권장. 비우면 기본.', modelSel), block('effort (claude)', '추론 강도(low~max). 무거운 판단은 high+ 권장. 비우면 기본.', effortSel), block('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))), block('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '상시 세션 추가' : '상시 세션 수정 — ' + m.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -917,9 +925,17 @@ function openManagedSessionForm(m, reload) {
             toast('세션 id 가 필요합니다', true);
             return;
         }
+        const flags = {};
+        if (harnessSel.value === 'claude') { // model/effort 는 claude 플래그 — 다른 하네스엔 flags 미전송(기존 보존)
+            if (modelSel.value)
+                flags['--model'] = modelSel.value;
+            if (effortSel.value)
+                flags['--effort'] = effortSel.value;
+        }
         const body = { id, label: labelInp.value.trim() || null, account: accountInp.value.trim() || null,
             workspace_subpath: wsInp.value.trim() || null, harness: harnessSel.value,
-            auto_approve: autoChk.checked, enabled: enabledChk.checked };
+            auto_approve: autoChk.checked, enabled: enabledChk.checked,
+            ...(harnessSel.value === 'claude' ? { flags } : {}) };
         saveBtn.disabled = true;
         try {
             await api('/api/ui/managed-sessions', { method: 'POST', body: JSON.stringify(body) });

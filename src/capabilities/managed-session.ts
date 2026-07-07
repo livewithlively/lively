@@ -35,6 +35,7 @@ const set: Capability = {
     account: z.string().max(120).optional(),
     workspace_subpath: z.string().max(200).optional(),
     harness: z.string().max(40).optional(),
+    flags: z.record(z.string()).optional(), // 하네스 플래그(예: {"--model":"opus","--effort":"high"}) — createSession 이 화이트리스트 검증 후 argv 적용.
     auto_approve: z.boolean().optional(),
     enabled: z.boolean().optional(),
     note: z.string().max(2000).optional(),
@@ -45,6 +46,7 @@ const set: Capability = {
       const b = (req.body ?? {}) as Record<string, unknown>;
       return {
         id: b.id, label: b.label, account: b.account, workspace_subpath: b.workspace_subpath, harness: b.harness, note: b.note,
+        flags: (b.flags && typeof b.flags === "object" && !Array.isArray(b.flags)) ? b.flags : undefined,
         auto_approve: typeof b.auto_approve === "boolean" ? b.auto_approve : undefined,
         enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
       };
