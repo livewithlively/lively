@@ -23,6 +23,7 @@ import {
   recommendKnowledgeForProject, projectsForKnowledge,
   linkProjectEdge, unlinkProjectEdge, getProjectListRow,
   projectIdsInList, listIdOfProject,
+  searchProjects, countProjectGrep, hybridSearchProjects, // #631 프로젝트 검색(grep/hybrid)
 } from "../v6/project-store.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -134,6 +135,76 @@ const projectListV6: Capability = {
       } catch { /* 세션 조회 실패 → my_session_count 미부여(프론트는 0=비활성으로 처리) */ }
     }
     return { projects };
+  },
+};
+
+// ── 검색(#631) — grep(정확 토큰/정규식) + hybrid(의미·벡터 RRF). UI 미정 → 백엔드 표면만. scope=memory(읽기). ──
+//  ⚠ 라우트 순서: /projects/search·/projects/semantic 는 반드시 project_get_v6(/projects/:id) '앞에' 둔다
+//   (web.ts 는 restMounts 순서대로 app.get 마운트 → Express first-match. 뒤에 두면 :id 가 'search' 를 삼킨다).
+const SEARCH_LEVELS = ["project", "task", "subtask"] as const;
+function parseSearchOpts(query: Record<string, unknown>): Record<string, unknown> {
+  const level = query.level ? String(query.level) : undefined;
+  return {
+    q: String(query.q ?? ""),
+    level: level && (SEARCH_LEVELS as readonly string[]).includes(level) ? level : undefined,
+    list_id: query.list_id != null && query.list_id !== "" ? Number(query.list_id) : undefined,
+    status: query.status ? String(query.status) : undefined,
+    limit: query.limit != null && query.limit !== "" ? Number(query.limit) : undefined,
+    mode: query.mode ? String(query.mode) : undefined,
+    context: query.context != null && query.context !== "" ? Number(query.context) : undefined,
+  };
+}
+// 핸들러 입력(project_grep/project_search 공통) → project-store 검색 opts(list_id→listId 매핑).
+function toSearchOpts(input: any) {
+  return { level: input.level, listId: input.list_id, status: input.status, limit: input.limit, mode: input.mode, context: input.context };
+}
+
+const projectGrepV6: Capability = {
+  name: "project_grep",
+  title: "프로젝트 grep(v6)",
+  description: "프로젝트·태스크·서브태스크의 이름/설명을 grep — 한 토큰, 공백구분 다중토큰(AND), 또는 POSIX 정규식. 의미검색 아님(그건 project_search). 매치 줄 스니펫(L<n>:) 반환, 전문은 project_get_v6. level(project|task|subtask)·list_id·status 로 좁힘. mode=snippets(기본)|names|count.",
+  scope: "memory",
+  input: {
+    q: z.string().min(1),
+    level: z.enum(SEARCH_LEVELS).optional(),
+    list_id: z.number().int().positive().optional(),
+    status: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    mode: z.enum(["snippets", "names", "count"]).optional(),
+    context: z.number().int().min(0).max(3).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/search"],
+      parse: (req) => parseSearchOpts((req.query ?? {}) as Record<string, unknown>) }],
+  },
+  handler: async (input: any) => {
+    if (input.mode === "count") return { mode: "count", total: await countProjectGrep(input.q, toSearchOpts(input)) };
+    return { mode: input.mode ?? "snippets", projects: await searchProjects(input.q, toSearchOpts(input)) };
+  },
+};
+
+const projectSearchV6: Capability = {
+  name: "project_search",
+  title: "프로젝트 검색(v6, 하이브리드)",
+  description: "프로젝트·태스크·서브태스크를 의미 기반 하이브리드 검색(벡터 임베딩 + 렉시컬 grep 을 RRF 로 융합). 자연어 질문·다른 표현도 회수(단어가 본문에 그대로 없어도). 임베딩 off 면 grep 폴백. 정확 토큰/정규식은 project_grep. level·list_id·status 로 좁힘. mode=snippets(기본)|names.",
+  scope: "memory",
+  input: {
+    q: z.string().min(1),
+    level: z.enum(SEARCH_LEVELS).optional(),
+    list_id: z.number().int().positive().optional(),
+    status: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    mode: z.enum(["snippets", "names"]).optional(),
+    context: z.number().int().min(0).max(3).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/semantic"],
+      parse: (req) => parseSearchOpts((req.query ?? {}) as Record<string, unknown>) }],
+  },
+  handler: async (input: any) => {
+    return { projects: await hybridSearchProjects(input.q, toSearchOpts(input)) };
   },
 };
 
@@ -748,7 +819,8 @@ const projectLinkProjectV6: Capability = {
 };
 
 export const projectV6Capabilities: Capability[] = [
-  projectListV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
+  projectListV6, projectGrepV6, projectSearchV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

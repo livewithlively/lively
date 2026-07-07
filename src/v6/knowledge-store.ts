@@ -4,11 +4,12 @@
 import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
-// 임베딩 seam(벡터검색 #172) — config 는 org_runtime_config 에서 직접 읽는다(org/store import 회피 → 무순환).
+import { embeddingInputText, toVectorLiteral } from "./embedding-provider.js";
+// 검색 공용 유틸(#631 분리) — grep 매처·스니펫·RRF 상수·임베딩 provider 접근자를 project 와 공유.
 import {
-  type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider,
-  embeddingInputText, toVectorLiteral,
-} from "./embedding-provider.js";
+  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody,
+  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+} from "./search-util.js";
 
 // is_folder(#592) 포함 — 목록·트리가 폴더 행을 구분해야 해서 K_COLS 에 둔다(boolean 1개 = 가볍다).
 //  props_ui(#592)는 fields 와 같은 취급 — 목록엔 무겁고 상세엔 필수라 getKnowledge 에서만 SELECT.
@@ -31,99 +32,18 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
 
-// ── grep 매처 — Claude Code(ripgrep) 직관에 맞춘 본문/제목 텍스트 매칭. "search"(의미검색)가 아니라 grep이다.
-//  · 정규식 메타문자가 있고 유효한 패턴이면 → POSIX 정규식(`~*`, 대소문자 무시)으로 grep. 예: `벡터|vector`, `task_\w+`.
-//  · 그 외(평문)면 → 공백으로 나눈 모든 토큰이 (제목이든 본문이든) 등장해야 매치(AND, 부분일치). 단일 토큰이면 단순 contains.
-//    → 다중 키워드("벡터 검색")가 통짜 구절이 아니라 토큰 AND 로 동작해 직관적. 구 단일-ILIKE 의 과소회수를 해소.
-//  · LIKE 와일드카드(`%`/`_`)는 평문 토큰에서 리터럴로 이스케이프(grep 패리티 — 구버전은 `knowledge_x` 의 `_` 가 와일드카드로 샜다).
-const REGEX_META = /[.*+?^${}()|[\]\\]/;
-function likeEscape(s: string): string { return s.replace(/[\\%_]/g, "\\$&"); }
-export type GrepPlan = { mode: "regex"; pattern: string; re: RegExp } | { mode: "tokens"; tokens: string[] };
-export function parseGrep(qstr: string): GrepPlan {
-  const t = (qstr ?? "").trim();
-  if (REGEX_META.test(t)) {
-    try { return { mode: "regex", pattern: t, re: new RegExp(t, "i") }; } catch { /* 깨진 정규식 → 토큰으로 폴백 */ }
-  }
-  const tokens = t.split(/\s+/).filter(Boolean);
-  return { mode: "tokens", tokens: tokens.length ? tokens : [t] };
-}
-// cols 중 어느 하나에 매치(OR). regex 는 패턴 1개, tokens 는 토큰마다 (cols OR) 를 AND 로 묶는다. params 에 push 하고 WHERE 절 문자열 반환.
-function grepWhere(cols: string[], plan: GrepPlan, params: unknown[]): string {
-  const colsOr = (placeholder: string) => "(" + cols.map((c) => `${c} ${placeholder}`).join(" OR ") + ")";
-  if (plan.mode === "regex") {
-    params.push(plan.pattern);
-    return colsOr(`~* $${params.length}`);
-  }
-  return plan.tokens.map((tok) => { params.push(`%${likeEscape(tok)}%`); return colsOr(`ILIKE $${params.length} ESCAPE '\\'`); }).join(" AND ");
-}
-// ── grep 스니펫 — 매치 줄만 "L<n>: …" 로(ripgrep 식, 여러 매치 표시). ⚠ 검색 결과는 절대 body_md 전문을 싣지 않는다
-//  (과거 {...r} 스프레드가 전문을 누출 → 토큰 폭주로 응답 잘림). 본문은 snippet 으로만 보이고, 전문은 knowledge_get.
-const SNIP_MAX_LINES = 4;     // 결과당 표시할 매치 줄 상한(초과분은 "(+N matches)")
-const SNIP_LINE_CHARS = 160;  // 줄당 트림 길이(매치 주변)
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
+//  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
 const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at"]
   .map((c) => "k." + c).join(", ");
 // names 모드 — body_md 도 미조회(스니펫 불필요). 발견용 메타만(가장 얕게).
 const K_GREP_NAMES_SEL = ["name", "title", "injection", "provenance", "is_wiki", "summary", "updated_at"]
   .map((c) => "k." + c).join(", ");
 
-// 한 줄의 매치 시작 위치(없으면 -1). regex 는 줄 단위 exec, tokens 는 토큰 중 하나라도(OR) 등장하는 최좌단(트림 기준).
-function grepLineAt(line: string, plan: GrepPlan): number {
-  if (plan.mode === "regex") { const m = plan.re.exec(line); return m ? m.index : -1; }
-  let at = -1;
-  const lower = line.toLowerCase();
-  for (const tok of plan.tokens) { const i = lower.indexOf(tok.toLowerCase()); if (i >= 0 && (at < 0 || i < at)) at = i; }
-  return at;
-}
-// 한 줄을 매치 주변 SNIP_LINE_CHARS 자로 트림(탭→공백, 양끝 …).
-function grepTrimLine(line: string, at: number): string {
-  const s = line.replace(/\t/g, " ").trim();
-  if (s.length <= SNIP_LINE_CHARS) return s;
-  const start = Math.max(0, at - 48);
-  const end = Math.min(s.length, start + SNIP_LINE_CHARS);
-  return (start > 0 ? "…" : "") + s.slice(start, end).trim() + (end < s.length ? "…" : "");
-}
-// 본문에서 매치 줄들을 ripgrep 처럼 "L<n>: …". context>0 면 매치 줄 ±context 줄도 포함(-C 패리티,
-//  비연속 그룹은 ⋯ 로 구분). 본문 매치가 0줄이면(제목만 매치 등) 앞부분 미리보기로 폴백.
-function grepSnippet(body: string, plan: GrepPlan, context = 0): string {
-  if (!body) return "";
-  const lines = body.split("\n");
-  const hits: Array<{ i: number; at: number }> = [];
-  for (let i = 0; i < lines.length; i++) { const at = grepLineAt(lines[i], plan); if (at >= 0) hits.push({ i, at }); }
-  if (hits.length === 0) return body.slice(0, SNIP_LINE_CHARS).replace(/\s+/g, " ").trim();
-  const ctx = Math.max(0, Math.min(context, 3));
-  const atOf = new Map(hits.map(({ i, at }) => [i, at] as const));
-  const shown = hits.slice(0, SNIP_MAX_LINES);
-  const out: string[] = [];
-  const emitted = new Set<number>();
-  let prev = -1;
-  for (const { i } of shown) {
-    const lo = Math.max(0, i - ctx), hi = Math.min(lines.length - 1, i + ctx);
-    if (prev >= 0 && lo > prev + 1) out.push("  ⋯");
-    for (let j = lo; j <= hi; j++) {
-      if (emitted.has(j)) continue;
-      emitted.add(j);
-      out.push(`L${j + 1}: ${grepTrimLine(lines[j], atOf.get(j) ?? 0)}`);
-    }
-    prev = hi;
-  }
-  if (hits.length > shown.length) out.push(`(+${hits.length - shown.length} matches) → knowledge_get`);
-  return out.join("\n");
-}
-
 const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("knowledge", name, op, before, after, ctx);
 
-// ── 임베딩(벡터검색 #172) — config 가 켜졌을 때만. org_runtime_config.embedding_config 를 직접 읽어 provider 해소(무순환). ──
-//  off(기본)면 null → 쓰기·검색 모두 no-op/렉시컬 폴백. 설계 [[vector-search-172-design-pluggable-seam-oss]].
-async function activeEmbeddingProvider(): Promise<EmbeddingProvider | null> {
-  try {
-    const r = await one(itemsPool, `SELECT embedding_config FROM org_runtime_config WHERE id=1`);
-    return resolveEmbeddingProvider(resolveEmbeddingConfig((r as { embedding_config?: unknown } | undefined)?.embedding_config));
-  } catch {
-    return null; // 설정 못 읽으면 안전하게 off
-  }
-}
+// activeEmbeddingProvider 는 search-util.ts 로 이동(#631, project 스토어와 공유).
 
 // 쓰기 경로 best-effort 임베딩 — provider on 일 때만. 실패는 삼킨다(지식은 이미 저장됨 → 백필로 보강). off=no-op.
 //  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 knowledge_save 를 깨지 않게). 차원 불일치 등은 endpoint 가 거부 → 경고만.
@@ -447,16 +367,6 @@ export interface KnowledgeSearchRow {
   score?: number;  // 하이브리드 검색(knowledge_search)의 RRF 점수 — grep(searchKnowledge)은 미설정
 }
 export type KnowledgeGrepMode = "snippets" | "names" | "count";
-// regex→token 폴백 공통화: plan 으로 쿼리하되 POSIX 가 정규식을 거부하면 토큰모드로 1회 재시도.
-async function grepExec<T>(qstr: string, runWithPlan: (plan: GrepPlan) => Promise<T>): Promise<{ result: T; plan: GrepPlan }> {
-  let plan = parseGrep(qstr);
-  try { return { result: await runWithPlan(plan), plan }; }
-  catch (e) {
-    if (plan.mode !== "regex") throw e;          // 토큰 모드 실패는 진짜 에러
-    plan = { mode: "tokens", tokens: qstr.trim().split(/\s+/).filter(Boolean) || [qstr] };
-    return { result: await runWithPlan(plan), plan };  // POSIX 가 거부한 정규식 → 토큰 부분일치 폴백
-  }
-}
 // 공통 WHERE(grep 매처 + lifecycle='active' + injection/provenance). params 에 push 하고 절 문자열 반환.
 function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: string }, params: unknown[]): string {
   const wh: string[] = [grepWhere(["k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
@@ -501,8 +411,7 @@ export async function searchKnowledge(
 //  · 임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchKnowledge(렉시컬)로 폴백(하위호환·safe-by-construction).
 //  · grep 과 다른 점: 단어가 본문에 그대로 없어도 의미 유사로 회수(벡터 채널). 정확 토큰/정규식은 knowledge_grep.
 //  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 벡터-only 매치는 grepSnippet 이 본문 앞부분 미리보기로 폴백.
-const RRF_K = 60;        // RRF 상수(Azure 기본). Σ 1/(k+rank) — 두 채널 모두 상위면 가산.
-const HYBRID_CANDIDATES = 50; // 각 채널(렉시컬·벡터) 후보 수 → 융합 후 limit 로 컷.
+//  RRF_K/HYBRID_CANDIDATES 는 search-util.ts 에서 import(project 검색과 공유).
 
 export async function hybridSearchKnowledge(
   qstr: string,
@@ -573,8 +482,7 @@ async function rrfSearch(
 //    RRF score(랭크 기반, hybridSearch)와 달리 **절대 임계 비교 가능**(중복 판정 등) — 이게 proactive·dedup 의 열쇠.
 //  · 입력: name(기존 지식 → 저장된 임베딩 재사용, 재임베딩 불요) 또는 text(임시 텍스트 → 즉시 임베딩). name 우선.
 //  · 임베딩 off / 대상 임베딩 없음 / 쿼리 임베딩 실패 / SQL 실패 → 빈 배열(graceful — 호출부는 "유사 없음"으로 처리).
-const PREVIEW_CHARS = 160; // 식별용 본문 미리보기 길이(쿼리 grep 아님 — similar 는 매치 토큰이 없다)
-function previewBody(body: string): string { return body.slice(0, PREVIEW_CHARS).replace(/\s+/g, " ").trim(); }
+//  previewBody(식별용 미리보기)는 search-util.ts 에서 import.
 
 export interface KnowledgeSimilarRow {
   name: string; title: string | null;

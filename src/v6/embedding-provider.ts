@@ -141,10 +141,18 @@ export function embeddingInputText(k: { title?: string | null; summary?: string 
 
 const HNSW_MAX_DIMS = 2000; // pgvector HNSW 인덱스 차원 한계(초과 시 컬럼만 — 작은 코퍼스는 seq-scan 으로 충분)
 
-// 가드 마이그레이션 — pgvector 확장 + knowledge 임베딩 컬럼/인덱스. provider≠off 일 때만 호출(기본 off=미호출).
+// 임베딩 컬럼을 얹을 수 있는 테이블 — 내부 상수만 넘긴다(knowledge·project). SQL 인터폴레이션 안전 가드.
+const EMBEDDABLE_TABLES = new Set(["knowledge", "project"]);
+
+// 가드 마이그레이션 — pgvector 확장 + <table> 임베딩 컬럼/인덱스(embedding_vector/model/updated_at + <table>_embedding_hnsw).
+//  기본 table='knowledge'. 프로젝트 등 다른 임베딩 타깃도 같은 컬럼셋을 재사용(#631).
 //  fail-open: 확장 없거나 실패해도 false 반환 + 경고만(부팅·렉시컬 검색 무손상). 멱등(ADD COLUMN/INDEX IF NOT EXISTS).
 //  ⚠ 기존 컬럼의 차원은 IF NOT EXISTS 가 못 바꾼다 — 차원 변경(모델 스왑)은 enable/backfill 경로(P2)가 drop+recreate 처리.
-export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number): Promise<boolean> {
+export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, table = "knowledge"): Promise<boolean> {
+  if (!EMBEDDABLE_TABLES.has(table)) {
+    console.warn(`[embeddings] 알 수 없는 임베딩 테이블(${table}) — 스키마 준비 건너뜀`);
+    return false;
+  }
   const dim = Math.floor(dimensions);
   if (!(dim >= 1 && dim <= 16000)) {
     console.warn(`[embeddings] 잘못된 dimensions(${dimensions}) — 스키마 준비 건너뜀`);
@@ -157,19 +165,19 @@ export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number): 
     return false;
   }
   try {
-    await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS embedding_vector vector(${dim})`);
-    await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
-    await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector vector(${dim})`);
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`);
     if (dim <= HNSW_MAX_DIMS) {
       await pool.query(
-        `CREATE INDEX IF NOT EXISTS knowledge_embedding_hnsw ON knowledge USING hnsw (embedding_vector vector_cosine_ops)`,
+        `CREATE INDEX IF NOT EXISTS ${table}_embedding_hnsw ON ${table} USING hnsw (embedding_vector vector_cosine_ops)`,
       );
     } else {
       console.warn(`[embeddings] dimensions=${dim} > ${HNSW_MAX_DIMS}: HNSW 인덱스 생략(seq-scan). 작은 코퍼스 권장.`);
     }
     return true;
   } catch (e) {
-    console.warn(`[embeddings] 벡터 컬럼/인덱스 생성 실패 — 렉시컬 폴백. ${(e as Error)?.message}`);
+    console.warn(`[embeddings] 벡터 컬럼/인덱스 생성 실패(${table}) — 렉시컬 폴백. ${(e as Error)?.message}`);
     return false;
   }
 }

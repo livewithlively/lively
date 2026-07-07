@@ -10,6 +10,11 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js"
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
 import { enqueueExternalPush } from "./external-outbox.js";
+// 프로젝트 임베딩·검색(#631) — knowledge 와 동일 seam. embeddingInputText 는 name→title, description→body 로 매핑해 재사용.
+import { embeddingInputText, toVectorLiteral } from "./embedding-provider.js";
+import {
+  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+} from "./search-util.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
 const PROJECT_COLS =
@@ -39,6 +44,25 @@ export interface ProjectRow {
 // append-only 감사(org_content_audit, entity='project') — 공유 헬퍼 위임.
 const auditProject = (entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("project", entityKey, op, before, after, ctx);
+
+// 쓰기 경로 best-effort 임베딩(#631 프로젝트 검색) — provider on 일 때만. 실패는 삼킨다(행은 이미 저장됨 → 백필로 보강). off=no-op.
+//  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 프로젝트 저장을 깨지 않게). knowledge embedKnowledgeBestEffort 와 동형(키만 id).
+//  name→title, description→body 로 매핑해 knowledge 와 같은 embeddingInputText(8000자 캡) 재사용.
+async function embedProjectBestEffort(id: number, fields: { name?: string | null; description?: string | null }): Promise<void> {
+  const provider = await activeEmbeddingProvider();
+  if (!provider) return;
+  try {
+    const text = embeddingInputText({ title: fields.name, body_md: fields.description });
+    if (!text) return;
+    const [vec] = await provider.embed([text]);
+    if (!vec || !vec.length) return;
+    await itemsPool.query(
+      `UPDATE project SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1`,
+      [id, toVectorLiteral(vec), provider.model]);
+  } catch (e) {
+    console.warn(`[embeddings] 프로젝트 #${id} 임베딩 실패(best-effort, 백필로 보강): ${(e as Error)?.message}`);
+  }
+}
 
 // 네이티브 status → 정규 카테고리(크로스툴: backlog|unstarted|started|done|canceled).
 //  외부 미러 행의 카테고리는 커넥터가 소스 상태에서 직접 정한다(여기는 네이티브 active/done/todo/in_progress 만).
@@ -253,6 +277,7 @@ export async function createProject(
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
+  await embedProjectBestEffort(row.id, { name: row.name, description: row.description }); // #631 검색 임베딩(best-effort)
   return row;
 }
 
@@ -355,6 +380,7 @@ export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<Projec
 export async function restoreProject(before: Record<string, unknown>, ctx?: WriteCtx): Promise<ProjectRow> {
   const after = await restoreSnapshot<ProjectRow>("project", PROJECT_COLS, "id", before);
   await auditProject(String(after.id), "restore", null, after, ctx);
+  await embedProjectBestEffort(after.id, { name: after.name, description: after.description }); // #631 복원 행 재임베딩(best-effort)
   return after;
 }
 
@@ -409,6 +435,9 @@ export async function updateProject(
     `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project' RETURNING ${PROJECT_COLS}`, vals);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
+  // 이름/설명이 바뀐 경우에만 재임베딩(상태·필드만 바뀌면 검색 텍스트 불변 → 스킵). #631
+  if (patch.name !== undefined || patch.description !== undefined || patch.append_description !== undefined)
+    await embedProjectBestEffort(id, { name: after.name, description: after.description });
   return after;
 }
 
@@ -496,6 +525,7 @@ export async function createTask(
     [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
+  await embedProjectBestEffort(row.id, { name: row.name, description: row.description }); // #631 검색 임베딩(best-effort)
   return row;
 }
 
@@ -589,6 +619,9 @@ export async function updateTask(
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
+  // 이름/설명이 바뀐 경우에만 재임베딩(상태·담당자·기간만 바뀌면 검색 텍스트 불변 → 스킵). #631
+  if (patch.name !== undefined || patch.description !== undefined || patch.append_description !== undefined)
+    await embedProjectBestEffort(id, { name: after.name, description: after.description });
   return after;
 }
 
@@ -732,5 +765,134 @@ export async function recommendKnowledgeForProject(
   if (!text && !categoryIds.length) return [];   // 의미·카테고리 신호 둘 다 없음 → 추천 불가
   return findRecommendedKnowledge({
     text, categoryIds, exclude, limit: opts.limit ?? 10, minScore: opts.minScore,
+  });
+}
+
+// ── 프로젝트 검색(#631) — grep(name/description) + 벡터(임베딩) RRF 하이브리드. knowledge 검색과 동형(search-util 공유). ──
+//  아직 UI 미정 → 백엔드 API 만. project_grep(정확 토큰/정규식) + project_search(의미·하이브리드) 두 표면.
+//  대상 = project·task·subtask 전부(level 필터로 좁힘). 내부 보드 앵커(__board_anchor__)는 항상 제외.
+//  결과는 knowledge 와 동일하게 전문(description) 미포함 — 매치 줄 스니펫만, 전문은 project_get_v6/task_detail_v6.
+export interface ProjectSearchRow {
+  id: number; level: string; parent_id: number | null;
+  name: string; status: string; status_category: string | null;
+  list_id: number | null; updated_at: string;
+  snippet?: string;   // names 모드 생략
+  score?: number;     // 하이브리드(project_search) RRF 점수 — grep(searchProjects)은 미설정
+}
+export type ProjectGrepMode = "snippets" | "names" | "count";
+export interface ProjectSearchOpts { level?: string; listId?: number; status?: string; limit?: number; mode?: ProjectGrepMode; context?: number }
+
+// grep 결과 SELECT — 전문(description)은 스니펫 계산용으로만, 응답에선 뺀다(전문 누출·토큰폭주 방지).
+const P_GREP_SEL = ["id", "level", "parent_id", "name", "description", "status", "status_category", "list_id", "updated_at"]
+  .map((c) => "p." + c).join(", ");
+const P_GREP_NAMES_SEL = ["id", "level", "parent_id", "name", "status", "status_category", "list_id", "updated_at"]
+  .map((c) => "p." + c).join(", ");
+// 내부 보드 앵커(__board__)는 검색 대상 아님(listProjects 도 제외) — task/subtask 는 folder NULL 이라 통과.
+const P_SEARCH_BASE = "p.folder IS DISTINCT FROM '__board_anchor__'";
+
+// 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
+function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[]): string {
+  const wh: string[] = [grepWhere(["p.name", "p.description"], plan, params), P_SEARCH_BASE];
+  if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
+  if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
+  if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
+  return wh.join(" AND ");
+}
+
+function toProjectRow(r: Record<string, unknown>): ProjectSearchRow {
+  return {
+    id: Number(r.id), level: r.level as string, parent_id: r.parent_id == null ? null : Number(r.parent_id),
+    name: r.name as string, status: r.status as string, status_category: (r.status_category as string | null) ?? null,
+    list_id: r.list_id == null ? null : Number(r.list_id), updated_at: r.updated_at as string,
+  };
+}
+
+// mode='count' — 매치 총건수만(페이징·존재확인용).
+export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {}): Promise<number> {
+  const { result } = await grepExec(qstr, async (plan) => {
+    const params: unknown[] = [];
+    const where = projectGrepWhere(plan, opts, params);
+    const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM project p WHERE ${where}`, params);
+    return Number(rows[0]?.n ?? 0);
+  });
+  return result;
+}
+
+// grep — name/description 매칭(정규식 또는 토큰 AND) → 매치 줄 스니펫. 의미검색 아님(그건 hybridSearchProjects). 최신순.
+export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {}): Promise<ProjectSearchRow[]> {
+  const withBody = opts.mode !== "names";
+  const sel = withBody ? P_GREP_SEL : P_GREP_NAMES_SEL;
+  const { result: rows, plan } = await grepExec(qstr, async (p) => {
+    const params: unknown[] = [];
+    const where = projectGrepWhere(p, opts, params);
+    params.push(Math.min(opts.limit ?? 20, 100));
+    return q(itemsPool, `SELECT ${sel} FROM project p WHERE ${where} ORDER BY p.updated_at DESC LIMIT $${params.length}`, params);
+  });
+  return rows.map((r) => {
+    const base = toProjectRow(r);
+    if (withBody) base.snippet = grepSnippet((r.description as string | null) ?? "", plan, opts.context, "project_get_v6");
+    return base;
+  });
+}
+
+// ── 하이브리드 검색(project_search) — 벡터(cosine) ∪ 렉시컬(grep) RRF 융합. knowledge hybridSearchKnowledge 와 동형. ──
+//  임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchProjects(렉시컬)로 폴백(하위호환·safe-by-construction).
+export async function hybridSearchProjects(qstr: string, opts: ProjectSearchOpts = {}): Promise<ProjectSearchRow[]> {
+  const provider = await activeEmbeddingProvider();
+  if (!provider) return searchProjects(qstr, opts);          // off → grep 그대로
+  let qvec: number[] | null = null;
+  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
+  if (!qvec) return searchProjects(qstr, opts);               // 쿼리 임베딩 실패 → 폴백
+  try {
+    return await rrfSearchProjects(qstr, qvec, opts);
+  } catch (e) {
+    console.warn(`[embeddings] 프로젝트 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
+    return searchProjects(qstr, opts);                        // pgvector 컬럼 부재 등 → 폴백
+  }
+}
+
+// RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
+//  knowledge rrfSearch 와 동일 골격(테이블·키·컬럼만 project). lex 채널은 최신순 랭크(knowledge 와 동일 — 렉시컬 상대순위 없음).
+async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSearchOpts): Promise<ProjectSearchRow[]> {
+  const withBody = opts.mode !== "names";
+  const sel = withBody ? P_GREP_SEL : P_GREP_NAMES_SEL;
+  const limit = Math.min(opts.limit ?? 20, 100);
+  const plan = parseGrep(qstr);
+  const params: unknown[] = [];
+  // 렉시컬 채널 WHERE — grep 매처 + 앵커 제외 + level/list/status(searchProjects 와 동일).
+  const lexWhere = projectGrepWhere(plan, opts, params);
+  // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
+  const vecWh: string[] = [P_SEARCH_BASE, `p.embedding_vector IS NOT NULL`];
+  if (opts.level) { params.push(opts.level); vecWh.push(`p.level=$${params.length}`); }
+  if (opts.listId != null) { params.push(opts.listId); vecWh.push(`p.list_id=$${params.length}`); }
+  if (opts.status) { params.push(opts.status); vecWh.push(`p.status=$${params.length}`); }
+  const vecWhere = vecWh.join(" AND ");
+  params.push(toVectorLiteral(qvec)); const qp = `$${params.length}::vector`;
+  params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
+  params.push(RRF_K); const kP = `$${params.length}`;
+  params.push(limit); const limP = `$${params.length}`;
+  const sql = `
+    WITH lex AS (
+      SELECT p.id, row_number() OVER (ORDER BY p.updated_at DESC) AS rank
+      FROM project p WHERE ${lexWhere} ORDER BY p.updated_at DESC LIMIT ${candP}
+    ),
+    vec AS (
+      SELECT p.id, row_number() OVER (ORDER BY p.embedding_vector <=> ${qp}) AS rank
+      FROM project p WHERE ${vecWhere} ORDER BY p.embedding_vector <=> ${qp} LIMIT ${candP}
+    ),
+    fused AS (
+      SELECT id, SUM(1.0/(${kP} + rank)) AS score
+      FROM (SELECT id, rank FROM lex UNION ALL SELECT id, rank FROM vec) u
+      GROUP BY id
+    )
+    SELECT ${sel}, f.score::float8 AS score
+    FROM fused f JOIN project p ON p.id=f.id
+    ORDER BY f.score DESC LIMIT ${limP}`;
+  const rows = await q(itemsPool, sql, params);
+  return rows.map((r) => {
+    const base = toProjectRow(r);
+    base.score = Number(r.score);
+    if (withBody) base.snippet = grepSnippet((r.description as string | null) ?? "", plan, opts.context, "project_get_v6");
+    return base;
   });
 }

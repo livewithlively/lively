@@ -941,6 +941,10 @@ export async function initV6Schema(): Promise<string> {
     //  (빈 컬럼/HNSW 도 저렴·멱등). 실제 벡터 채우기(백필)만 provider on 일 때(embedKnowledgeBestEffort).
     const ok = await ensureEmbeddingSchema(pool, ec.embedding_config.dimensions);
     console.log(`[v6 schema] 임베딩 스키마 ${ok ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.embedding_config.dimensions}, provider=${ec.embedding_config.provider})`);
+    // 프로젝트(project·task·subtask 통합 테이블) 임베딩 컬럼도 같은 config·차원으로 보장(#631 프로젝트 검색).
+    //  knowledge 와 동일 이유로 provider 무관 항상 생성(embed/유사도 SQL 이 컬럼 존재 가정). 벡터 채우기는 백필/쓰기훅이 provider on 일 때.
+    const okP = await ensureEmbeddingSchema(pool, ec.embedding_config.dimensions, "project");
+    console.log(`[v6 schema] 프로젝트 임베딩 스키마 ${okP ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.embedding_config.dimensions})`);
   } catch (e) {
     console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
   }

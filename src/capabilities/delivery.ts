@@ -50,7 +50,7 @@ import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js
 import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 // 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
-import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, type BackfillMode } from "../v6/embedding-backfill.js";
+import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfig } from "../v6/embedding-provider.js";
 import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
@@ -720,6 +720,29 @@ export const deliveryCapabilities: Capability[] = [
       if (cfg.embedding_config.provider === "off") throw new HttpError(400, "임베딩이 꺼져 있습니다 — 먼저 provider 를 http 로 저장한 뒤 백필하세요.");
       const { started, job } = startBackfillJob(mode as BackfillMode);
       if (!started) throw new HttpError(409, "이미 백필이 실행 중입니다.");
+      return { started, job };
+    }),
+
+  // ── 프로젝트 임베딩(검색 #631) 상태 + 백필 — knowledge 엔드포인트와 동형(타깃=project). embedding_config 는 공유. ──
+  restOnly("org_project_embeddings_status", "프로젝트 임베딩 상태",
+    "임베딩 설정(embedding_config, knowledge 와 공유) + 프로젝트(project·task·subtask) 백로그(미임베딩 수) + 진행 중 프로젝트 백필 잡 상태. admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/project-embeddings"], parse: () => ({}) }],
+    async () => {
+      const cfg = await getRuntimeConfig();
+      const backlog = await countEmbeddingBacklog(PROJECT_TARGET);
+      return { config: cfg.embedding_config, backlog, job: getBackfillJob(PROJECT_TARGET) };
+    }),
+  restOnly("org_project_embeddings_backfill", "프로젝트 임베딩(백필) 실행",
+    "프로젝트·태스크·서브태스크를 배치로 임베딩(검색 #631). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/project-embeddings 폴링. 이미 실행 중이면 409. knowledge 백필과 독립(동시 실행 가능).",
+    [{ method: "POST", paths: ["/api/ui/org/project-embeddings/backfill"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>) => {
+      const mode = String(input.mode ?? "pending");
+      if (mode !== "pending" && mode !== "model-changed" && mode !== "all") throw new HttpError(400, "mode 는 pending|model-changed|all 만 허용됩니다");
+      // provider off 면 백필 무의미 — 조기 400(코어도 off 면 no-op 이지만 잡을 만들지 않아 UX 명확).
+      const cfg = await getRuntimeConfig();
+      if (cfg.embedding_config.provider === "off") throw new HttpError(400, "임베딩이 꺼져 있습니다 — 먼저 provider 를 http 로 저장한 뒤 백필하세요.");
+      const { started, job } = startBackfillJob(mode as BackfillMode, PROJECT_TARGET);
+      if (!started) throw new HttpError(409, "이미 프로젝트 백필이 실행 중입니다.");
       return { started, job };
     }),
 
