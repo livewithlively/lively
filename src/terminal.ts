@@ -138,7 +138,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const session = await createSession(userOf(req), {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
-      autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
+      autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile, worktree: !!b.worktree,
     });
     res.setHeader("Cache-Control", "no-store");
     res.json({ session });

@@ -260,6 +260,11 @@ function openTermCreateForm(cfg, view) {
   const autoCb = el('input', { type: 'checkbox' });
   const autoWrap = el('label', { class: 'term-auto', 'data-tour': 'autoapprove' }, autoCb,
     el('span', { text: ' 자동 승인 (위험) — 에이전트가 확인 없이 파일 수정·명령 실행. 공유 폴더에선 특히 주의.' }));
+  // 워크트리(#675) — 선택한 폴더가 git 저장소면 세션을 '새 브랜치의 워크트리'에서 돌려 격리한다(다른 세션·메인 체크아웃과
+  //  워킹트리 충돌 방지). 기본 ON(요청). 저장소 아님·격리(box_)·프로젝트 세션이면 서버가 조용히 무시하고 폴더에서 그대로 돈다(무회귀).
+  const wtCb = el('input', { type: 'checkbox', checked: '' });
+  const wtWrap = el('label', { class: 'term-auto' }, wtCb,
+    el('span', { text: ' git 워크트리에서 작업 — 선택한 폴더가 git 저장소면 새 브랜치의 워크트리를 만들어 격리 작업합니다(다른 세션·메인 체크아웃과 안 충돌). 저장소가 아니면 무시됩니다.' }));
 
   function renderFlags() {
     const h = harnesses.find((x) => x.key === harnessSel.value) || {};
@@ -317,6 +322,7 @@ function openTermCreateForm(cfg, view) {
   const back = overlay('새 세션',
     el('div', { 'data-tour': 'label' }, field('이름', labelI)), field('작업자', authorI),
     el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)),
+    wtWrap,
     el('div', { 'data-tour': 'harness' }, field('하네스', harnessSel)),
     profileNoteEl(cfg),
     el('div', { 'data-tour': 'invite' }, field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box)),
@@ -326,7 +332,7 @@ function openTermCreateForm(cfg, view) {
         const btn = ev.currentTarget; btn.disabled = true;
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
-        const payload = { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected() };
+        const payload = { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           back.remove(); toast('세션 생성됨');
