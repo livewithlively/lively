@@ -57,12 +57,15 @@ const ADMIN_SECTIONS = [
     // (외부 호출·DB 안전범위 = allowlist 별도 탭 폐기(2026-06-26) → 'AI 도구'·'DB 데이터소스' 화면 안 allowlistCard 로 인라인.)
     // 커스텀 훅(코드) — 특정 이벤트에 실행할 임의 코드. 세션 주입 지도에서 목록·요약을 보고 여기서 정의.
     { key: 'custom-hooks', label: '커스텀 훅 (코드)', meaning: 'custom-hook', group: 'ai' },
+    // 하네스 자산(스킬·서브에이전트·슬래시커맨드) — 관리자가 정의해 구성원 하네스에 배포. 훅과 같은 runtime 자산군이나
+    //  멤버 디스크(~/.claude|.codex/{skills,agents,commands})에 materialize(하네스가 스캔해야 발견). 위험 통제=짝훅.
+    { key: 'harness-assets', label: '스킬·에이전트·커맨드', meaning: 'harness-asset', group: 'ai' },
 ];
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
 const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings)
-const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
+const RUNTIME_ONLY = ['custom-hooks', 'harness-assets', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
 const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
@@ -250,6 +253,8 @@ function renderAdminDetail(detail, sel, data) {
         return injectionMap(detail, data);
     if (sel === 'custom-hooks')
         return customHookEditor(detail, data);
+    if (sel === 'harness-assets')
+        return harnessAssetEditor(detail, data);
     if (sel === 'tools')
         return toolsEditor(detail, data);
     if (sel === 'tool-usage')
@@ -532,7 +537,7 @@ const ORG_AUDIT_STATE = { scope: 'admin', entity: '', actor_kind: '', channel: '
 const OA_ENTITY_LABELS = {
     org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
     org_runtime_config: '런타임 설정', org_connector: '커넥터', org_mcp_server: 'MCP 서버',
-    org_hook: '커스텀 훅', org_tool: 'AI 도구', org_db_source: 'DB 소스',
+    org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
     org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };
 const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '회수', mint: '발급', reorder: '순서변경' };
@@ -3152,6 +3157,108 @@ function hookForm(root, h, data, detail, isNew) {
                 }
             } }));
     root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }), field('id', idIn), field('표시 이름', labelIn), field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel), field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn), field('코드 (Node.js)', codeTa), field('타임아웃(초, 1~120)', timeoutIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
+}
+// ── 하네스 자산(스킬·서브에이전트·슬래시커맨드) — runtime 권한 ──
+function harnessAssetEditor(detail, data) {
+    const assets = data.orgHarnessAssets || [];
+    const sel = state.admin.assetSel;
+    const KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
+    const listCol = el('div', { class: 'admin-sublist' });
+    listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 자산 추가',
+        onclick: () => { state.admin.assetSel = '__new__'; renderAdminDetail(detail, 'harness-assets', data); } }));
+    for (const a of assets) {
+        listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
+            onclick: () => { state.admin.assetSel = a.id; renderAdminDetail(detail, 'harness-assets', data); } }, el('div', { class: 'mini-title', text: a.id }, a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null), el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
+                + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
+                + (a.paired_hook_id ? ' · 짝훅:' + a.paired_hook_id : '') })));
+    }
+    const right = el('div', {});
+    const editing = sel === '__new__'
+        ? { id: '', kind: 'skill', label: '', harness: 'all', description: '', body: '', frontmatter: {}, target_members: null, paired_hook_id: '', enabled: true }
+        : assets.find((a) => a.id === sel);
+    if (editing)
+        assetForm(right, editing, data, detail, sel === '__new__');
+    else
+        right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 세션 시작 때 디스크에 동기화되며 스킬/커맨드는 같은 세션 내 즉시 반영됩니다.' }));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('스킬 · 서브에이전트 · 슬래시커맨드', data.meaning['harness-asset']), el('div', { class: 'admin-two' }, listCol, right)));
+}
+function assetForm(root, a, data, detail, isNew) {
+    const idIn = el('input', { type: 'text', value: a.id, placeholder: '자산 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
+    const labelIn = el('input', { type: 'text', value: a.label || '', placeholder: '표시 이름(선택)' });
+    const kindSel = el('select', {}, ...[['skill', '스킬'], ['subagent', '서브에이전트'], ['command', '슬래시커맨드']].map(([v, t]) => el('option', { value: v, text: t })));
+    kindSel.value = a.kind || 'skill';
+    const harnessSel = el('select', {}, ...['all', 'claude', 'codex'].map((x) => el('option', { value: x, text: x })));
+    harnessSel.value = a.harness || 'all';
+    const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이 자산을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
+    const bodyTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '자산 본문(마크다운) — 스킬 방법서 / 에이전트 시스템 프롬프트 / 커맨드 프롬프트' });
+    bodyTa.value = a.body || '';
+    const fmTa = el('textarea', { rows: '4', class: 'admin-ta', placeholder: '추가 frontmatter(JSON, 선택) — 예: {"model":"opus","allowed-tools":["Read","Grep"]}' });
+    fmTa.value = (a.frontmatter && Object.keys(a.frontmatter).length) ? JSON.stringify(a.frontmatter, null, 2) : '';
+    const targetIn = el('input', { type: 'text', value: (a.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
+    const pairedIn = el('input', { type: 'text', value: a.paired_hook_id || '', placeholder: '짝훅 id(선택) — 위험 통제용 커스텀 훅' });
+    const enChk = el('input', { type: 'checkbox' });
+    enChk.checked = a.enabled !== false;
+    const codexNote = el('p', { class: 'admin-hint' });
+    const syncNote = () => {
+        codexNote.textContent = (kindSel.value !== 'skill' && (harnessSel.value === 'codex' || harnessSel.value === 'all'))
+            ? '※ 서브에이전트·슬래시커맨드는 Codex 네이티브 미지원 — Codex 세션엔 배포되지 않습니다(스킬만 양 하네스). Claude 에만 적용됩니다.' : '';
+    };
+    kindSel.addEventListener('change', syncNote);
+    harnessSel.addEventListener('change', syncNote);
+    syncNote();
+    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+    const status = el('span', { class: 'admin-status' });
+    saveBtn.addEventListener('click', async () => {
+        if (!idIn.value.trim()) {
+            toast('id 필수', true);
+            return;
+        }
+        let fm = {};
+        if (fmTa.value.trim()) {
+            try {
+                fm = JSON.parse(fmTa.value);
+            }
+            catch {
+                toast('frontmatter 가 올바른 JSON 이 아닙니다', true);
+                return;
+            }
+        }
+        const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+        if (!confirm('이 자산은 구성원 하네스에 배포되어 그들의 AI가 사용합니다. 스킬은 도구·셸을 실행할 수 있습니다. 저장할까요?'))
+            return;
+        saveBtn.disabled = true;
+        try {
+            const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
+                description: descIn.value, body: bodyTa.value, frontmatter: fm,
+                target_members: targets.length ? targets : null, paired_hook_id: pairedIn.value.trim() || null, enabled: enChk.checked };
+            await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
+            await loadAdmin(true);
+            state.admin.assetSel = payload.id;
+            toast('저장됨 — 구성원 다음 세션부터');
+            renderAdminDetail(detail, 'harness-assets', state.admin.data);
+        }
+        catch (e) {
+            toast(e.message, true);
+            saveBtn.disabled = false;
+        }
+    });
+    const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+    if (!isNew)
+        actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
+                if (!confirm(`자산 '${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`))
+                    return;
+                try {
+                    await api('/api/ui/org/harness-asset/remove', { method: 'POST', body: JSON.stringify({ id: a.id }) });
+                    await loadAdmin(true);
+                    state.admin.assetSel = null;
+                    toast('제거됨');
+                    renderAdminDetail(detail, 'harness-assets', state.admin.data);
+                }
+                catch (e) {
+                    toast(e.message, true);
+                }
+            } }));
+    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 자산은 구성원 하네스에 배포됩니다. 스킬은 도구·셸을 실행할 수 있어 훅과 같은 실행권한입니다 — 위험 통제는 짝훅으로.' }), field('id', idIn), field('표시 이름', labelIn), field('종류', kindSel), field('하네스', harnessSel), codexNote, field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn), field('본문(마크다운)', bodyTa), field('추가 frontmatter (JSON, 선택)', fmTa), field('대상 구성원(비우면 전원)', targetIn), field('짝훅 id(선택 — 위험 통제)', pairedIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
 }
 // ── AI 도구(MCP 툴) — runtime 권한 ──
 function toolsEditor(detail, data) {

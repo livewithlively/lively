@@ -212,7 +212,8 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 // <target>/.claude/settings.json 에 비파괴 머지한다(idempotent).
 //  ※ user-level(~/.claude) 절대경로 변형은 claude 어댑터가 emit — 여기 아님.
 //  run-custom.mjs = 커스텀 훅 런너(발행물에 동봉 → user-install 이 ~/.lively/hooks 로 복사·등록).
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs"];
+//  sync-harness-assets.mjs = 하네스 자산(스킬·서브에이전트·커맨드) materializer(SessionStart → 게이트웨이 fetch → 디스크 동기화).
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");

@@ -259,6 +259,44 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS always_load BOOLEAN;
   `);
 
+  // ── org_harness_asset — 조직 하네스 자산(스킬·서브에이전트·슬래시커맨드, 관리자 정의). org_hook 과 같은 runtime ──
+  // 자산군이지만 훅과 결정적으로 다르다: 하네스가 디스크를 '스캔'해야 발견하므로(name+description 상시광고,
+  // 본문 온디맨드) 본문을 멤버 디스크에 **materialize** 한다(~/.claude|.codex/{skills,agents,commands}). session-preload
+  // 가 매 세션 게이트웨이서 받아 비파괴 reconcile(회수=다음 세션 제거, 단 capability 라 fail-OPEN=last-known-good —
+  // 위험 enforcement 는 paired_hook 이 fail-CLOSED 런너로 담당). content_hash=sha256(정규화 소스)는 클라 변경감지(재작성 skip)용.
+  //  kind: skill|subagent|command. harness: 대상(claude|codex|openclaw|all). skill 은 Agent Skills 오픈표준이라 Claude·Codex
+  //  동일 SKILL.md(파일 1개로 양 하네스). subagent 는 Claude .md=여기, Codex .toml 은 후속. command 는 Claude=여기, Codex=스킬로 통합.
+  //  target_members: NULL/빈=전원, 배열=그 멤버만(per-member 타깃팅). paired_hook_id: 짝훅(org_hook.id, 약결합 — 자산 없이도 훅 독립).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_harness_asset(
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'skill',
+      label TEXT,
+      harness TEXT NOT NULL DEFAULT 'all',
+      description TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      frontmatter JSONB NOT NULL DEFAULT '{}'::jsonb,
+      target_members JSONB,
+      paired_hook_id TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      content_hash TEXT,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_kind_chk') THEN
+        ALTER TABLE org_harness_asset ADD CONSTRAINT org_harness_asset_kind_chk CHECK (kind IN ('skill','subagent','command'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_harness_chk') THEN
+        ALTER TABLE org_harness_asset ADD CONSTRAINT org_harness_asset_harness_chk CHECK (harness IN ('claude','codex','openclaw','all'));
+      END IF;
+    END $$;
+  `);
+
   // 개명 마이그레이션(2026-06-25): 구 knowledge_search(의미검색 미스노머, 실동작 grep) → knowledge_grep.
   //  시드 INSERT **앞**에서 라이브 org_tool 행을 이관해 운영자의 enabled/auto_approve 를 보존한다(뒤에 두면 시드가 기본값으로 새 행을 먼저 박음).
   //  멱등: 새 이름(grep) 행이 없을 때만 개명. ⚠ 2026-06-26(#172): 'knowledge_search' 이름이 **진짜 벡터/하이브리드 검색 도구로 재배정**됨 →

@@ -38,3 +38,13 @@ export function assertToolName(name: unknown, kind: string): string {
   }
   return s;
 }
+
+// 하네스 자산 id(스킬/서브에이전트/커맨드) — 멤버 디스크에 디렉터리/파일명으로 흐른다
+//  (~/.claude/skills/<id>/SKILL.md · ~/.claude/agents/<id>.md · ~/.claude/commands/<id>.md).
+//  STRICT_SLUG 가 `/`·`.`·`..`·절대경로·공백을 원천 차단 → materializer 경로 traversal 방어의 1차선(클라가 2차 재검증).
+export function assertAssetId(id: unknown): string {
+  if (typeof id !== "string") throw new HttpError(400, "id 는 문자열이어야 합니다");
+  const s = id.trim().toLowerCase();
+  if (!STRICT_SLUG.test(s)) throw new HttpError(400, "id 는 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
+  return s;
+}

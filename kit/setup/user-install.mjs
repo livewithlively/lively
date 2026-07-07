@@ -36,7 +36,7 @@ const CODEX = join(HOME, ".codex");
 //  ~/.lively(컨텍스트·훅·토큰)는 HOME 기준 유지 = 프로필 간 공유(훅 command 는 런타임 $HOME/.lively 참조).
 //  계정별로 달라지는 건 settings(훅·권한)·MCP(.claude.json)·자격증명(.credentials.json)뿐 — 전부 CLAUDE_CONFIG_DIR 안.
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -63,6 +63,7 @@ function userLevelHooksBlock() {
   return {
     SessionStart: [
       { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("session-preload.mjs") }] },
+      { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("sync-harness-assets.mjs") }] },
     ],
     PostToolUse: [
       { matcher: "mcp__lively__.*", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
@@ -266,6 +267,8 @@ function codexManagedBlock(mcpUrl) {
     ...codexExtraMcpLines(),
     '[[hooks.SessionStart]]', 'matcher = "startup|resume|clear"',
     '[[hooks.SessionStart.hooks]]', 'type = "command"', cmd(codexHookCmd("session-preload.mjs")), "timeout = 10", "",
+    '[[hooks.SessionStart]]', 'matcher = "startup|resume|clear"',
+    '[[hooks.SessionStart.hooks]]', 'type = "command"', cmd(codexHookCmd("sync-harness-assets.mjs")), "timeout = 10", "",
     '[[hooks.PostToolUse]]', 'matcher = "mcp__lively__.*"',
     '[[hooks.PostToolUse.hooks]]', 'type = "command"', cmd(codexHookCmd("work-flag.mjs")), "timeout = 5", "",
     '[[hooks.PostToolUse]]', 'matcher = "Edit|Write|MultiEdit|NotebookEdit|apply_patch"',

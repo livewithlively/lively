@@ -20,7 +20,7 @@ import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
-import { assertHookId } from "../org/identity.js";
+import { assertHookId, assertAssetId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
@@ -30,11 +30,12 @@ import {
   listContentAudit, ADMIN_AUDIT_ENTITIES,
   getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
+  listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
-  type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput,
+  type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
 import { learnGroundTruth } from "../org/knowledge.js";
@@ -91,6 +92,7 @@ const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
 //  Claude 31개 이벤트 중 저빈도·유용한 라이프사이클만 노출(MessageDisplay 등 상시발화는 perf 위해 제외). Codex 는 SessionStart/PostToolUse/Stop 만 지원.
 const HOOK_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"]);
 const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "all"]);
+const HARNESS_ASSET_KINDS = new Set(["skill", "subagent", "command"]); // 하네스 자산 종류(스킬·서브에이전트·슬래시커맨드)
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
@@ -173,6 +175,47 @@ async function applyGitCredential(owner: string, input: Record<string, unknown>,
   throw new HttpError(400, "kind 는 ssh|https 여야 합니다");
 }
 
+// 하네스 자산 target_members — null/빈=전원, 배열=그 멤버 id 만(per-member 타깃팅). 멤버 id 슬러그 검증.
+function parseTargetMembers(raw: unknown): string[] | null | undefined {
+  if (raw === undefined) return undefined; // 미지정 = 변경 없음(store 가 기존 유지)
+  if (raw === null || raw === "") return null; // 명시 null/빈문자 = 전원
+  if (!Array.isArray(raw)) throw new HttpError(400, "target_members 는 배열(멤버 id) 또는 null(전원)이어야 합니다");
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") throw new HttpError(400, "target_members 항목은 문자열(멤버 id)이어야 합니다");
+    const s = v.trim().toLowerCase();
+    if (s && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(s)) throw new HttpError(400, `target_members 항목 '${v}' 가 멤버 id 형식이 아닙니다`);
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out.length ? out : null; // 빈 배열 = 전원(null)
+}
+
+// 자산 frontmatter — 평탄 키:값 맵만(스킬/에이전트/커맨드 YAML frontmatter 로 materialize). 값=문자열·불리언·숫자·문자열배열.
+//  중첩객체 금지(YAML 주입·복잡도 차단). 키 32개·키길이 64 상한. description 은 별도 컬럼이므로 여기선 부가필드(when_to_use·tools·model·allowed-tools·argument-hint 등)용.
+function parseAssetFrontmatter(raw: unknown): Record<string, unknown> {
+  if (raw === undefined || raw === null || raw === "") return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "frontmatter 는 객체(키:값)여야 합니다");
+  const src = raw as Record<string, unknown>;
+  const keys = Object.keys(src);
+  if (keys.length > 32) throw new HttpError(400, "frontmatter 키는 32개 이하여야 합니다");
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(k)) throw new HttpError(400, `frontmatter 키 '${k}' 형식 오류(영문 시작, 영숫자/_/- 64자)`);
+    const v = src[k];
+    if (typeof v === "string") { if (v.length > 4000) throw new HttpError(400, `frontmatter '${k}' 값이 너무 깁니다`); out[k] = v; }
+    else if (typeof v === "boolean" || typeof v === "number") out[k] = v;
+    else if (Array.isArray(v)) {
+      if (v.length > 64) throw new HttpError(400, `frontmatter '${k}' 배열이 너무 깁니다`);
+      out[k] = v.map((e) => {
+        if (typeof e !== "string") throw new HttpError(400, `frontmatter '${k}' 는 문자열 배열만 허용됩니다`);
+        if (e.length > 500) throw new HttpError(400, `frontmatter '${k}' 항목이 너무 깁니다`);
+        return e;
+      });
+    } else throw new HttpError(400, `frontmatter '${k}' 값 타입 불허(문자열·불리언·숫자·문자열배열만)`);
+  }
+  return out;
+}
+
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
   restRead("org_overview", "조직 전달 개요",
@@ -209,6 +252,7 @@ export const deliveryCapabilities: Capability[] = [
         : [];
       // runtime 권한자: 커스텀 훅·툴 목록 + 빌트인 목록 + 툴 정책(allowlist — 시크릿 아님).
       const orgHooks = isRuntime ? await listOrgHooks() : [];
+      const orgHarnessAssets = isRuntime ? await listOrgHarnessAssets() : [];
       const tools = isRuntime ? await listTools() : [];
       const rc = isRuntime ? (runtimeConfig ?? await getRuntimeConfig()) : null;
       const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
@@ -218,7 +262,7 @@ export const deliveryCapabilities: Capability[] = [
         writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, // 세션종료 너지 기본값 — 웹 편집기가 표시·되돌리기에 사용
         members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
-        orgHooks, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
+        orgHooks, orgHarnessAssets, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }, true),
@@ -1077,6 +1121,66 @@ export const deliveryCapabilities: Capability[] = [
       const name = str(input.name, "name", 64).trim().toLowerCase();
       await removeTool(name, wctx(user, ctx));
       return { ok: true };
+    }),
+
+  // ════════ 하네스 자산 CRUD (스킬·서브에이전트·슬래시커맨드 — runtime 권한) ════════
+  //  훅과 같은 runtime 자산군이나 멤버 디스크에 파일로 materialize(하네스가 스캔해야 발견). 회수=fail-OPEN(capability —
+  //  게이트웨이 블립에 스킬 상실 방지), 위험 enforcement 는 paired_hook(fail-CLOSED 런너)이 담당. 멤버 fetch=org_runner_assets(별도).
+  restRuntime("org_harness_assets", "하네스 자산 목록",
+    "조직 스킬·서브에이전트·슬래시커맨드 전체(본문 포함) — runtime 권한 전용. 멤버 materializer fetch 는 org_runner_assets(별도).",
+    [{ method: "GET", paths: ["/api/ui/org/harness-assets"], parse: () => ({}) }],
+    async () => ({ assets: await listOrgHarnessAssets(), meaning: MEANING["harness-asset"] })),
+  restRuntime("org_harness_asset_upsert", "하네스 자산 추가·수정",
+    "구성원 하네스에 배포되는 스킬/서브에이전트/커맨드를 저장한다(runtime). 본문은 멤버 디스크에 materialize 되며 스킬은 도구·셸 실행권한을 가질 수 있다(위험 통제=짝훅).",
+    [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const id = assertAssetId(input.id);
+      const kind = str(input.kind ?? "skill", "kind", 12);
+      if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
+      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      const description = str(input.description ?? "", "description", 2000);
+      const body = str(input.body ?? "", "body", 262144);
+      const frontmatter = parseAssetFrontmatter(input.frontmatter);
+      assertNoHardSecrets(description, "description");
+      assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
+      assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
+      const targetMembers = parseTargetMembers(input.target_members);
+      const pairedHookId = (input.paired_hook_id === undefined || input.paired_hook_id === null || input.paired_hook_id === "")
+        ? null : assertHookId(input.paired_hook_id);
+      const asset = await upsertOrgHarnessAsset({
+        id, kind: kind as AssetKind,
+        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        harness: harness as HookHarness, description, body, frontmatter,
+        target_members: targetMembers, paired_hook_id: pairedHookId,
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+      }, wctx(user, ctx));
+      return { asset };
+    }),
+  restRuntime("org_harness_asset_remove", "하네스 자산 제거",
+    "하네스 자산을 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
+    [{ method: "POST", paths: ["/api/ui/org/harness-asset/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      await removeOrgHarnessAsset(assertAssetId(input.id), wctx(user, ctx));
+      return { ok: true };
+    }),
+
+  // ── materializer fetch — 멤버 세션훅(session-preload)이 매 세션 호출. 인증된 멤버면 OK(scope null). ──
+  //  멤버 머신이 파일로 materialize 하므로 body/frontmatter 를 받는다(관리 목록과 달리 redact 안 함). user.userId 로 per-member 타깃팅.
+  restRead("org_runner_assets", "하네스 자산 fetch(materializer)",
+    "멤버 materializer 가 현재 활성 하네스 자산(본문+frontmatter+content_hash)을 받아 디스크에 동기화한다. harness/kind 필터, 멤버별 타깃팅.",
+    [{ method: "GET", paths: ["/api/ui/org/runner/assets"],
+      parse: (req) => ({ harness: req.query.harness, kind: req.query.kind }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
+      const kind = typeof input.kind === "string" && input.kind ? input.kind : undefined;
+      const memberId = user?.userId || null;
+      const assets = await listEnabledAssets(harness, kind, memberId);
+      return { assets: assets.map((a) => ({
+        id: a.id, kind: a.kind, harness: a.harness, description: a.description,
+        body: a.body, frontmatter: a.frontmatter, content_hash: a.content_hash, paired_hook_id: a.paired_hook_id,
+      })) };
     }),
 
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════

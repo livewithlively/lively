@@ -18,10 +18,10 @@
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 리다이렉트(라이브 보호). 미지정 시 os.homedir().
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync, lstatSync, readdirSync, rmdirSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -226,6 +226,36 @@ function uninstallRcBlock() {
   return total;
 }
 
+// 하네스 자산(스킬·서브에이전트·커맨드) 제거 — materialize 된 파일은 ~/.lively 밖(~/.claude|.codex/{skills,agents,commands})이라
+//  ~/.lively 삭제만으론 고아가 된다(deregisterClaudeMcp 와 같은 부류 — 트리 밖 상태의 명시적 역연산). 매니페스트에 lively 가
+//  심은 것만 기록돼 있어 그 파일만 surgical 제거(멤버 본인 스킬 보존). 심링크 통과 거부. ~/.lively 트래시 이전에 호출해야 함(매니페스트가 거기 있음).
+function uninstallHarnessAssets(harness) {
+  const mpath = join(LIVELY, "managed-harness-assets.json");
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(mpath, "utf8")); } catch { return; }
+  if (!manifest || typeof manifest !== "object") return;
+  const section = manifest[harness];
+  if (!section || typeof section !== "object") return;
+  const ids = Object.keys(section);
+  if (!ids.length) return;
+  if (DRY) { log(`  [dry-run] ${harness} 하네스 자산 ${ids.length}개 제거 예정(${ids.join(", ")})`); return; }
+  let removed = 0;
+  for (const id of ids) {
+    const entry = section[id];
+    const f = entry && entry.file;
+    if (!f) continue;
+    if (!/[/\\](skills|agents|commands)[/\\]/.test(f)) continue; // 방어 — 자산 경로 패턴 밖(매니페스트 변조)은 삭제 안 함
+    try {
+      let isLink = false; try { isLink = lstatSync(f).isSymbolicLink(); } catch { /* 파일 없음 */ }
+      if (!isLink) rmSync(f, { force: true });
+      if (entry.kind === "skill") { const d = dirname(f); try { if (existsSync(d) && !lstatSync(d).isSymbolicLink() && readdirSync(d).length === 0) rmdirSync(d); } catch { /* 비-빈/경합 시 보존 */ } }
+      removed++;
+    } catch { /* fail-soft */ }
+  }
+  try { delete manifest[harness]; writeFileSync(mpath, JSON.stringify(manifest, null, 2)); } catch { /* */ }
+  log(`  ✓ ${harness} 하네스 자산 ${removed}개 제거`);
+}
+
 // (5) ~/.lively 제거 — 기본 휴지통 이동, --purge 면 하드 삭제.
 function removeLivelyDir() {
   if (!existsSync(LIVELY)) { log("  · ~/.lively 없음 — 건너뜀"); return; }
@@ -261,8 +291,8 @@ function main() {
     log("\n✓ lively 가 이 머신에 설치되어 있지 않습니다 — 제거할 것이 없습니다(no-op)."); return;
   }
   log(`\n[1] 하네스 감지: claude=${d.claude ? "o" : "x"} codex=${d.codex ? "o" : "x"} (대상=${want.join(",")})`);
-  if (want.includes("claude")) { if (d.claude) { uninstallClaudeSettings(); uninstallAutoApprove(); deregisterClaudeMcp(); deregisterExtraMcp(); } else log("  · Claude — lively 미설치, 건너뜀"); }
-  if (want.includes("codex")) { if (d.codex) { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); } else log("  · Codex — lively 미설치, 건너뜀"); }
+  if (want.includes("claude")) { if (d.claude) { uninstallClaudeSettings(); uninstallAutoApprove(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); } else log("  · Claude — lively 미설치, 건너뜀"); }
+  if (want.includes("codex")) { if (d.codex) { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); } else log("  · Codex — lively 미설치, 건너뜀"); }
   // 공유 자산(~/.lively + LIVELY_TOKEN export)은 claude·codex 공용 — codex 블록은 /.lively/hooks/* 참조 + LIVELY_TOKEN 인증.
   //  --harness 로 한쪽만 제거했는데 다른 하네스가 아직 설치됐으면 공유 자산을 지우면 그 하네스가 깨진다 → 보존(설치 하네스가 0 일 때만 제거).
   const othersStillInstalled = (d.claude && !want.includes("claude")) || (d.codex && !want.includes("codex"));

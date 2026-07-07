@@ -122,7 +122,7 @@ async function audit(
 //  before/after 는 저장 시 이미 redactDeep(시크릿 마스킹)된 스냅샷 — 조회는 admin 전용(delivery.ts org_audit_list).
 export const ADMIN_AUDIT_ENTITIES = [
   "org_member", "auth_token", "org_profile", "org_section",
-  "org_runtime_config", "org_connector", "org_mcp_server", "org_hook", "org_tool",
+  "org_runtime_config", "org_connector", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset",
   "org_db_source", "org_db_table_policy", "org_db_column_mask",
 ] as const;
 
@@ -1321,6 +1321,136 @@ export async function removeTool(name: string, ctx: WriteCtx = {}): Promise<void
   await audit("org_tool", name, "delete", before, null, ctx.actor, ctx.source, ctx);
 }
 
+// ════════ 하네스 자산(스킬·서브에이전트·커맨드) — org_harness_asset ════════
+// 훅과 같은 runtime 자산군이나 디스크 materialize 대상(하네스 스캔 발견). materializer(session-preload)가
+//  런너 serve(listEnabledAssets)로 받아 ~/.claude|.codex/{skills,agents,commands} 에 비파괴 reconcile.
+export type AssetKind = "skill" | "subagent" | "command";
+export interface OrgHarnessAsset {
+  id: string;
+  kind: AssetKind;
+  label: string | null;
+  harness: HookHarness;
+  description: string;
+  body: string;
+  frontmatter: Record<string, unknown>;
+  target_members: string[] | null;
+  paired_hook_id: string | null;
+  enabled: boolean;
+  sort: number;
+  version: number;
+  content_hash: string | null;
+  created_by: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
+  const fm = row.frontmatter;
+  const tm = row.target_members;
+  return {
+    id: row.id as string,
+    kind: row.kind as AssetKind,
+    label: (row.label as string) ?? null,
+    harness: row.harness as HookHarness,
+    description: (row.description as string) ?? "",
+    body: (row.body as string) ?? "",
+    frontmatter: fm && typeof fm === "object" && !Array.isArray(fm) ? (fm as Record<string, unknown>) : {},
+    target_members: Array.isArray(tm) ? (tm as string[]) : null,
+    paired_hook_id: (row.paired_hook_id as string) ?? null,
+    enabled: row.enabled !== false,
+    sort: (row.sort as number) ?? 0,
+    version: (row.version as number) ?? 1,
+    content_hash: (row.content_hash as string) ?? null,
+    created_by: (row.created_by as string) ?? null,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+const ASSET_COLS =
+  "id, kind, label, harness, description, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+
+// content_hash — materialize 결과에 영향 주는 필드만 정규화 해시(클라 변경감지=재작성 skip). 관리메타(label·sort·enabled)는 제외.
+function assetContentHash(a: { kind: string; harness: string; description: string; body: string; frontmatter: Record<string, unknown> }): string {
+  const fmSorted: Record<string, unknown> = {};
+  for (const k of Object.keys(a.frontmatter).sort()) fmSorted[k] = a.frontmatter[k];
+  return sha256(JSON.stringify({ kind: a.kind, harness: a.harness, description: a.description, body: a.body, frontmatter: fmSorted }));
+}
+
+export async function listOrgHarnessAssets(): Promise<OrgHarnessAsset[]> {
+  const r = await itemsPool.query(`SELECT ${ASSET_COLS} FROM org_harness_asset ORDER BY kind, sort, id`);
+  return r.rows.map(mapAsset);
+}
+
+// materializer fetch 용 — enabled 자산만. harness(그 하네스 또는 'all'), kind 옵션, memberId 로 per-member 타깃팅.
+//  target_members: NULL/빈=전원. 지정 시 memberId 가 그 목록에 있어야(익명/미지 멤버는 타깃 자산에서 제외 — 안전 기본).
+export async function listEnabledAssets(harness?: string, kind?: string, memberId?: string | null): Promise<OrgHarnessAsset[]> {
+  const r = await itemsPool.query(
+    `SELECT ${ASSET_COLS} FROM org_harness_asset
+      WHERE enabled=true
+        AND ($1::text IS NULL OR harness=$1 OR harness='all')
+        AND ($2::text IS NULL OR kind=$2)
+        AND (target_members IS NULL OR jsonb_array_length(target_members)=0
+             OR ($3::text IS NOT NULL AND target_members @> to_jsonb($3::text)))
+      ORDER BY kind, sort, id`,
+    [harness ?? null, kind ?? null, memberId ?? null],
+  );
+  return r.rows.map(mapAsset);
+}
+
+export async function getOrgHarnessAsset(id: string): Promise<OrgHarnessAsset | null> {
+  const r = await itemsPool.query(`SELECT ${ASSET_COLS} FROM org_harness_asset WHERE id=$1`, [id]);
+  return r.rows[0] ? mapAsset(r.rows[0]) : null;
+}
+
+export interface OrgHarnessAssetInput {
+  id: string;
+  kind?: AssetKind;
+  label?: string | null;
+  harness?: HookHarness;
+  description?: string;
+  body?: string;
+  frontmatter?: Record<string, unknown>;
+  target_members?: string[] | null;
+  paired_hook_id?: string | null;
+  enabled?: boolean;
+  sort?: number;
+}
+
+export async function upsertOrgHarnessAsset(a: OrgHarnessAssetInput, ctx: WriteCtx = {}): Promise<OrgHarnessAsset> {
+  const before = await getOrgHarnessAsset(a.id);
+  const kind = a.kind ?? before?.kind ?? "skill";
+  const harness = a.harness ?? before?.harness ?? "all";
+  const description = a.description ?? before?.description ?? "";
+  const body = a.body ?? before?.body ?? "";
+  const frontmatter = a.frontmatter ?? before?.frontmatter ?? {};
+  const targetMembers = a.target_members === undefined ? (before?.target_members ?? null) : a.target_members;
+  const contentHash = assetContentHash({ kind, harness, description, body, frontmatter });
+  await itemsPool.query(
+    `INSERT INTO org_harness_asset(id,kind,label,harness,description,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
+     ON CONFLICT (id) DO UPDATE SET
+       kind=EXCLUDED.kind, label=EXCLUDED.label, harness=EXCLUDED.harness, description=EXCLUDED.description,
+       body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
+       paired_hook_id=EXCLUDED.paired_hook_id, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
+       content_hash=EXCLUDED.content_hash, version=org_harness_asset.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [a.id, kind, a.label ?? before?.label ?? null, harness, description, body,
+     JSON.stringify(frontmatter), targetMembers === null ? null : JSON.stringify(targetMembers),
+     a.paired_hook_id === undefined ? (before?.paired_hook_id ?? null) : a.paired_hook_id,
+     a.enabled ?? before?.enabled ?? true, a.sort ?? before?.sort ?? 0, contentHash,
+     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null],
+  );
+  const after = await getOrgHarnessAsset(a.id);
+  await audit("org_harness_asset", a.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
+  return after as OrgHarnessAsset;
+}
+
+export async function removeOrgHarnessAsset(id: string, ctx: WriteCtx = {}): Promise<void> {
+  const before = await getOrgHarnessAsset(id);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_harness_asset WHERE id=$1`, [id]);
+  await audit("org_harness_asset", id, "delete", before, null, ctx.actor, ctx.source, ctx);
+}
 
 
 // ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
