@@ -3116,7 +3116,8 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-navitem:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem.active { background: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-side-navcount { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+/* 개수는 고정폭 우측정렬 — 자릿수(1↔2)가 달라도 리스트 이름·카테고리 태그가 좌우로 밀리지 않게(정렬 통일). */
+.pjv-side-navcount { flex: none; min-width: 1.6em; text-align: right; font-size: 12.5px; font-weight: 600; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .pjv-side-navitem.active .pjv-side-navcount { color: var(--ink-sub); }
 .pjv-side-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 .pjv-side-dot.all { background: linear-gradient(135deg, var(--blue), #8b5cf6); }
@@ -4115,10 +4116,10 @@ body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우
 .dash-ob-bar { width: 64px; height: 5px; border-radius: 3px; background: var(--bg-tint-2); overflow: hidden; }
 .dash-ob-fill { display: block; height: 100%; background: var(--mint-deep); }
 
-/* 3열 프리셋(A안): 내 프로젝트 5 / (세션 7 + 폴더 5) 4 / 작업 로그 3 — minmax(0,)로 말줄임 보장 */
+/* 3열 프리셋: (내 프로젝트 8 + 팀 공유 폴더 4) 5 / (최신 알림 7 + 내 AI 세션 5) 4 / 작업 로그 3 — minmax(0,)로 말줄임 보장 */
 .dash-zones { flex: 1; min-height: 0; display: grid; gap: 12px; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 3fr); }
-.dash-colmid { display: grid; gap: 12px; grid-template-rows: minmax(0, 7fr) minmax(0, 5fr); min-height: 0; }
-.dash-colleft { display: grid; gap: 12px; grid-template-rows: minmax(0, 5fr) minmax(0, 8fr); min-height: 0; } /* 좌: 최신 알림(위) + 내 프로젝트(아래)(대시보드 개인화 · #619 후속) */
+.dash-colleft { display: grid; gap: 12px; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; } /* 좌: 내 프로젝트(위, 나머지 전부) + 팀 공유 폴더(아래, 폴더 한 줄 높이만) */
+.dash-colmid { display: grid; gap: 12px; grid-template-rows: minmax(0, 7fr) minmax(0, 5fr); min-height: 0; } /* 중: 최신 알림(위) + 내 AI 세션(아래) */
 
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -4160,20 +4161,112 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* ① 내 프로젝트 — 리스트 블럭(개요 카드)(#622). 프로젝트 탭 개요(pjv-ov-*) 카드 재사용, 좁은 존에 맞게 그리드만 조밀하게. */
 .dash-ov-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 4px 4px 8px; }
 
-/* 개요 블럭 아래 프로젝트 목록(대시보드 개인화 · #619 후속) — 리스트별 그룹 헤더 + 프로젝트 탭 스타일 행(상태점+이름+메타). */
+/* 최신 알림 섹션 헤더(다가오는 마감·최근 활동) — 얇은 소제목. */
 .dash-ghead { display: flex; align-items: center; gap: 7px; padding: 10px 8px 4px; font-size: 12.5px; font-weight: 800; color: var(--ink-sub); }
-.dash-ghead-dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
-.dash-ghead-n { color: var(--muted); font-weight: 700; margin-left: 2px; }
-.dash-projlist { margin-top: 6px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
 
-/* ⓪ 최신 알림(대시보드 개인화 · #619 후속) — 개인 인박스. 유형 표식(멘션 @ · 댓글 💬 · 변경 ✎ · 마감 ⏰ · 활동 점) + 본문(최대 2줄) + (프로젝트·사람·시간). */
-.dash-notif-row { align-items: flex-start; }
-.dash-notif-ic { width: 18px; flex: none; text-align: center; font-size: 13px; line-height: 1.3; margin-top: 2px; }
-.dash-notif-ic.mention { color: var(--blue); font-weight: 800; font-size: 15px; }
-.dash-notif-row .dash-dot { margin-top: 6px; }
-.dash-notif-row .dash-nm { white-space: normal; }
-.dash-notif-row .dash-nm-line { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.dash-notif-row.is-mention, .dash-notif-row.is-mention:hover { background: var(--bg-punch); }
+/* 개요 블럭 아래 프로젝트 목록 — 프로젝트 탭 리스트 그룹(pjv-list-head)·행(pjv-trow-title)을 그대로 차용,
+   좁은 대시보드 폭에 맞춰 표의 나머지 열은 생략하고 제목 셀만 단열로(#619 후속 · 프로젝트 탭 UI 정합). */
+.dash-projlist { margin-top: 6px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-projlist .pjv-list-group { margin-top: 0; }
+.dash-projlist .pjv-tgroup-head.pjv-list-head { padding: 8px 6px; margin-top: 4px; }
+.dash-projrow2 { display: flex; align-items: center; min-height: 34px; padding: 3px 8px 3px 6px; border-radius: 7px; color: inherit; text-decoration: none; overflow: hidden; }
+.dash-projrow2:hover { background: var(--bg-tint); }
+.dash-projrow2 .pjv-trow-title-cell { flex: 1; min-width: 0; }
+.dash-projrow2 .dash-badge { margin-left: 4px; }
+
+/* 개요 카드 — 선택(리스트 필터) 강조 + 드래그 순서 변경 표식 */
+.dash-ov-card2 { position: relative; }
+.dash-ov-card2.selected { border-color: var(--blue); box-shadow: inset 0 0 0 1.5px var(--blue); }
+.dash-ov-card2.drag-src { opacity: .5; }
+.dash-ov-card2.drag-over { border-color: var(--blue); box-shadow: -3px 0 0 var(--blue); }
+
+/* 공유 폴더 팝업(전체 보기) — 박스는 한 줄, 팝업은 감싸는 그리드로 전부. */
+.dash-foldpop-grid { display: flex; flex-wrap: wrap; overflow: visible; gap: 8px; padding: 4px 2px; }
+
+/* 경량 모달 오버레이 */
+.dash-modal-ov { position: fixed; inset: 0; z-index: 70; background: rgba(21,35,59,.34); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.dash-modal { width: min(560px, 92vw); max-height: 80vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 48px rgba(21,35,59,.28); overflow: hidden; }
+.dash-modal-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-modal-head strong { font-size: 15px; }
+.dash-modal-x { border: none; background: none; cursor: pointer; font-size: 15px; color: var(--muted); width: 28px; height: 28px; border-radius: 7px; font-family: inherit; }
+.dash-modal-x:hover { background: var(--bg-tint); color: var(--ink); }
+.dash-modal-body { overflow-y: auto; padding: 12px 14px 16px; scrollbar-width: thin; }
+
+/* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
+.dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
+.dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.dash-sess-box.live { border-color: color-mix(in srgb, var(--mint-deep) 40%, var(--line)); }
+.dash-sess-info { flex: 1; min-width: 0; }
+.dash-sess-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dash-sess-name { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.dash-sess-badges { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.dash-sess-sub { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-badge-proj { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
+.dash-sess-open { flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 12px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.dash-sess-open:hover { background: var(--bg-punch); }
+
+/* 팀 작업 로그 행 — 클릭 시 전체 작업 로그 팝업(별도 페이지 폐지). */
+.dash-row--log { cursor: pointer; }
+.dash-row--log:hover { background: var(--bg-tint); }
+
+/* ⓪ 최신 알림 — 개인 인박스. 피드(작업 로그)와 구분되는 핵심 = 읽음/안읽음.
+   한 줄 = [유형 타일(라운드 스퀘어)] [누가(굵게)+동사 ·시간] / [프로젝트·스니펫] · 안읽음이면 파란 점.
+   헤더 = 'N 안 읽음' 뱃지 + '모두 읽음' + ⚙(설정 아이콘). */
+.dash-wh-gear { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); }
+.dash-wh-gear:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.dash-ntf-unreadn { font-size: 11.5px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; padding: 1.5px 8px; letter-spacing: -.01em; }
+.dash-ntf-alldone { font-size: 12px; font-weight: 600; color: var(--muted-2); }
+.dash-ntf-markall { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 2px 6px; border-radius: 6px; }
+.dash-ntf-markall:hover { background: var(--bg-punch); }
+
+.dash-ntf { display: flex; align-items: center; gap: 11px; padding: 8px 22px 8px 8px; border-radius: 10px; color: inherit; text-decoration: none; position: relative; }
+a.dash-ntf:hover { background: var(--bg-tint); }
+.dash-ntf.unread { background: color-mix(in srgb, var(--blue) 7%, var(--bg)); }
+.dash-ntf.unread:hover { background: color-mix(in srgb, var(--blue) 11%, var(--bg)); }
+/* 유형 타일 — 라운드 스퀘어 + 유형색(연한 배경 + 진한 글리프). 앱 아이콘 톤 = '알림' 신호. */
+.dash-ntf-tile { flex: none; width: 30px; height: 30px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--tc, var(--muted-3)) 15%, var(--bg)); color: var(--tc, var(--muted)); }
+.dash-ntf-tile svg { display: block; width: 16px; height: 16px; }
+.dash-ntf-glyph { font-size: 15px; font-weight: 800; line-height: 1; }
+.dash-ntf-tile.t-blue { --tc: var(--blue); }
+.dash-ntf-tile.t-teal { --tc: var(--teal); }
+.dash-ntf-tile.t-mint { --tc: var(--mint-deep); }
+.dash-ntf-tile.t-indigo { --tc: #6366f1; }
+.dash-ntf-tile.t-violet { --tc: #8B7BD8; }
+.dash-ntf-tile.t-slate { --tc: var(--muted); }
+.dash-ntf-tile.t-amber { --tc: #C68A2E; }
+.dash-ntf-tile.t-coral { --tc: var(--coral); }
+.dash-ntf-tile.tn-mint { --tc: var(--mint-deep); } .dash-ntf-tile.tn-coral { --tc: var(--coral); }
+.dash-ntf-tile.tn-blue { --tc: var(--blue); } .dash-ntf-tile.tn-teal { --tc: var(--teal); }
+.dash-ntf-tile.tn-violet { --tc: #8B7BD8; } .dash-ntf-tile.tn-amber { --tc: #C68A2E; }
+.dash-ntf-tile.tn-mut { --tc: var(--muted-3); }
+/* 본문 — 1행: 누가+동사(왼) · 시간(오). 2행: 프로젝트·스니펫. */
+.dash-ntf-main { flex: 1; min-width: 0; }
+.dash-ntf-line { display: flex; align-items: baseline; gap: 8px; }
+.dash-ntf-head { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.35; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-ntf-who { color: var(--ink); font-weight: 700; }
+.dash-ntf:not(.unread) .dash-ntf-who { font-weight: 600; }
+.dash-ntf-time { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.dash-ntf-sub { display: block; margin-top: 1px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 안읽음 점 — 우측 세로 중앙. */
+.dash-ntf-udot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: none; }
+.dash-ntf-dbadge { flex: none; font-size: 12px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dash-ntf-dbadge.overdue { color: var(--coral-text); }
+
+/* 알림 설정 팝오버 */
+.dash-pop { position: fixed; z-index: 60; }
+.dash-pop-panel { width: 264px; max-height: 70vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(21,35,59,.16); padding: 6px; scrollbar-width: thin; }
+.dash-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 8px 6px; }
+.dash-pop-head strong { font-size: 13.5px; }
+.dash-pop-sub { font-size: 10.5px; color: var(--muted-2); }
+.dash-pop-gh { font-size: 11px; font-weight: 800; color: var(--muted-2); padding: 8px 8px 3px; letter-spacing: .02em; }
+.dash-pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.dash-pop-row:hover { background: var(--bg-tint); }
+.dash-pop-row input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; flex: none; }
+.dash-pop-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dash-pop-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.dash-pop-desc { font-size: 11px; color: var(--muted); }
 
 /* ③ 팀 공유 폴더 — 아이콘 카드(#621). 프로젝트 상세 공유 폴더(proj-file-*)와 동일한 타일, 존 안에서 가로 스크롤. */
 .dash-fold-grid { padding: 8px 4px 12px; }
