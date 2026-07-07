@@ -431,15 +431,26 @@ function setupClipboard() {
     // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      // #633 한글 타이핑 깨짐 핵심: preventDefault 필수. return false 는 xterm '자체' 처리만 막을 뿐 브라우저
-      //  기본동작은 안 막는다(확인: 이 핸들러 뒤 defaultPrevented=false). 그래서 브라우저가 Option+←/→ 의 기본
-      //  동작 = xterm 히든 textarea 안에서 '단어 단위 캐럿 이동'을 수행한다(실측: 캐럿 9→6). 한글 IME 는 조합 중
-      //  그 textarea 에 조합 문자열을 담으므로, 캐럿이 뒤로 밀리면 이후 조합/입력이 어긋나 '커서 직전 글자들이
-      //  눌러붙어 모든 타이핑에 반복'되는 표시 깨짐이 난다(새로고침 전까지 지속 · 서버 라인은 정상 = 순수 클라 표시버그).
-      //  셸·Claude 무관하게 재현되는 이유도 이게 앱이 아니라 브라우저 입력계층 문제라서. → 기본동작만 차단하고
-      //  우리 Meta-b/f(\eb/\ef) 는 그대로 셸로 흘린다(단어이동은 계속 동작).
+      const wordSeq = e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf';
+      // #633 (반복 버그): preventDefault 필수. return false 는 xterm '자체' 처리만 막을 뿐 브라우저 기본동작은
+      //  안 막는다(확인: 이 핸들러 뒤 defaultPrevented=false). 그래서 브라우저가 Option+←/→ 의 기본동작 =
+      //  xterm 히든 textarea 안에서 '단어 단위 캐럿 이동'을 수행(실측 캐럿 9→6)해 IME 상태를 오염시키고,
+      //  이후 모든 타이핑에 '직전 글자가 눌러붙어 반복'된다. → 항상 기본동작을 차단한다.
       e.preventDefault();
-      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' })); } catch (_) { /* noop */ } }
+      // #633 (조합문자 따라감 버그): 한글 IME 조합 중(미완성 음절이 커서에 '박스'로 떠 있음)엔 그 음절이 아직
+      //  셸에 안 들어가 있다(compositionend 전). 이 상태로 단어이동만 보내면 조합 오버레이가 커서를 따라 이동한다
+      //  (야가 커서랑 같이 감). 영문은 즉시 확정돼 이 문제가 없다. → 조합 중이면 먼저 blur 로 조합을 '확정'
+      //  (compositionend→onData 로 음절이 셸에 입력됨)시키고, 포커스 복구 후 '다음 틱'에 단어이동을 보낸다
+      //  (확정 문자가 셸 버퍼에 먼저 반영된 뒤 이동 — 두 입력 모두 같은 WS 로 순서 보존).
+      if (e.isComposing) {
+        try { (term.textarea || e.target).blur(); } catch (_) { /* noop */ }
+        setTimeout(() => {
+          try { term.focus(); } catch (_) { /* noop */ }
+          if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: wordSeq })); } catch (_) { /* noop */ } }
+        }, 0);
+        return false;
+      }
+      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: wordSeq })); } catch (_) { /* noop */ } }
       return false;
     }
     // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
