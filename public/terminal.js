@@ -431,6 +431,14 @@ function setupClipboard() {
     // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // #633 한글 타이핑 깨짐 핵심: preventDefault 필수. return false 는 xterm '자체' 처리만 막을 뿐 브라우저
+      //  기본동작은 안 막는다(확인: 이 핸들러 뒤 defaultPrevented=false). 그래서 브라우저가 Option+←/→ 의 기본
+      //  동작 = xterm 히든 textarea 안에서 '단어 단위 캐럿 이동'을 수행한다(실측: 캐럿 9→6). 한글 IME 는 조합 중
+      //  그 textarea 에 조합 문자열을 담으므로, 캐럿이 뒤로 밀리면 이후 조합/입력이 어긋나 '커서 직전 글자들이
+      //  눌러붙어 모든 타이핑에 반복'되는 표시 깨짐이 난다(새로고침 전까지 지속 · 서버 라인은 정상 = 순수 클라 표시버그).
+      //  셸·Claude 무관하게 재현되는 이유도 이게 앱이 아니라 브라우저 입력계층 문제라서. → 기본동작만 차단하고
+      //  우리 Meta-b/f(\eb/\ef) 는 그대로 셸로 흘린다(단어이동은 계속 동작).
+      e.preventDefault();
       if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf' })); } catch (_) { /* noop */ } }
       return false;
     }
@@ -438,6 +446,7 @@ function setupClipboard() {
     //  못 쓰므로(브라우저 예약 단축키라 preventDefault 불가), 가로채지지 않는 Alt+Backspace 로 동일 기능 제공.
     //  셸·Claude 입력 모두 backward-kill-word 로 동작(Mac 은 Option+Backspace).
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
+      e.preventDefault(); // #633: 같은 이유 — Alt+Backspace 브라우저 기본 'textarea 단어삭제'가 IME 상태를 깨뜨린다(우리 ^W 는 그대로 전송).
       if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: '\x17' })); } catch (_) { /* noop */ } }
       return false;
     }
