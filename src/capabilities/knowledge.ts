@@ -31,7 +31,7 @@ const knowledgeList: Capability = {
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional(),
-    lifecycle: z.enum(["active", "superseded", "archived"]).optional(),   // archived(#551): 외부 미러 원본 삭제/아카이브 전파
+    lifecycle: z.enum(["active", "pending", "superseded", "archived"]).optional(),   // archived(#551): 외부 미러 원본 삭제/아카이브 전파 · pending(#638): 자동 인입 검토 큐
     q: z.string().optional(),
     orderBy: z.enum(["name", "updated_at"]).optional(),
     is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
@@ -111,6 +111,8 @@ const knowledgeSave: Capability = {
     //  min(1)은 zod 에선 완화(#592: 폴더는 빈 본문 허용) — is_folder=false 의 min 1 은 handler 가 강제(기존 계약 불변).
     body_md: z.string().max(200000),
     provenance: z.enum(["authored", "observed"]).optional(),
+    lifecycle: z.enum(["active", "pending"]).optional()
+      .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
     supersedes: z.string().max(64).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
       .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
@@ -132,12 +134,14 @@ const knowledgeSave: Capability = {
         // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
+        const lifecycle = b.lifecycle ? String(b.lifecycle) : undefined;   // #638 자동 인입 pending 저장(사람 web 저작은 미전송=active)
+        if (lifecycle && !["active", "pending"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending (신규 저장)");
         const category = b.category != null
           ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
-          body_md, provenance,
+          body_md, provenance, lifecycle,
           supersedes: b.supersedes ? String(b.supersedes) : undefined,
           type: b.type ? String(b.type) : undefined,
           category,
@@ -168,18 +172,18 @@ const knowledgeSave: Capability = {
 const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
-  description: "active/superseded/archived 전환(대체·아카이브 표시). 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551).",
+  description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(자동 인입 허용선 게이트, #638). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551).",
   scope: "memory",
   input: {
     name: z.string().min(1).max(64),
-    lifecycle: z.enum(["active", "superseded", "archived"]),
+    lifecycle: z.enum(["active", "pending", "superseded", "archived"]),
   },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/lifecycle"],
       parse: (req) => {
         const lifecycle = String(((req.body ?? {}) as Record<string, unknown>).lifecycle ?? "");
-        if (!["active", "superseded", "archived"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|superseded|archived");
+        if (!["active", "pending", "superseded", "archived"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending|superseded|archived");
         return { name: String(req.params?.name ?? ""), lifecycle };
       } }],
   },

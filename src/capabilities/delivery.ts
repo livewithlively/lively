@@ -34,6 +34,7 @@ import {
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
+  listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
@@ -933,6 +934,51 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeConnector(str(input.system, "system", 40).trim(), actorOf(user), "web");
       resetConnectorConfigCache(); // env 폴백 복귀도 즉시 반영
+      return { ok: true };
+    }),
+
+  // ── 자동 인입 허용선 정책 (#638) — distill/mirror 를 auto|confirm|drop 로 오너가 조절(디폴트 auto). ──
+  restOnly("org_ingest_policy_list", "인입 허용선 정책 목록",
+    "자동 인입(distill/mirror) 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변).",
+    [{ method: "GET", paths: ["/api/ui/org/ingest-policy"], parse: () => ({}) }],
+    async () => ({ policies: await listIngestPolicies() })),
+  restOnly("org_ingest_policy_upsert", "인입 허용선 정책 저장",
+    "인입 정책 규칙 저장(id 있으면 수정, 없으면 신규). match_*(카테고리·시스템·채널·provenance·민감라벨)는 빈값=any, action=auto|confirm|drop. 여러 규칙 매치 시 가장 보수적(drop>confirm>auto).",
+    [{ method: "POST", paths: ["/api/ui/org/ingest-policy"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const nStr = (v: unknown): string | null | undefined => v === undefined ? undefined : (v === null || v === "" ? null : String(v));
+      const policy = await upsertIngestPolicy({
+        id: input.id === undefined ? undefined : Number(input.id),
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        match_category: nStr(input.match_category),
+        match_system: nStr(input.match_system),
+        match_channel: nStr(input.match_channel),
+        match_provenance: nStr(input.match_provenance),
+        match_sensitive: nStr(input.match_sensitive),
+        action: input.action === undefined ? undefined : String(input.action),
+        priority: input.priority === undefined ? undefined : Number(input.priority),
+        note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : String(input.note)),
+      }, actorOf(user), "web");
+      return { policy };
+    }, {
+      id: z.number().optional(),
+      enabled: z.boolean().optional(),
+      match_category: z.string().nullable().optional(),
+      match_system: z.string().nullable().optional(),
+      match_channel: z.string().nullable().optional(),
+      match_provenance: z.string().nullable().optional(),
+      match_sensitive: z.string().nullable().optional(),
+      action: z.enum(["auto", "confirm", "drop"]).optional(),
+      priority: z.number().optional(),
+      note: z.string().nullable().optional(),
+    }),
+  restOnly("org_ingest_policy_remove", "인입 허용선 정책 삭제",
+    "인입 정책 규칙 1개 삭제(id).",
+    [{ method: "POST", paths: ["/api/ui/org/ingest-policy/remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = Number(input.id);
+      if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "id 필요");
+      await removeIngestPolicy(id, actorOf(user), "web");
       return { ok: true };
     }),
   // ── ClickUp 멤버 매핑 조회(#541) — 관리탭 커넥터 패널용. 팀 멤버 나열 + 매핑 상태 계산.

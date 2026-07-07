@@ -581,6 +581,40 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── org_ingest_policy — 자동 인입(distill/mirror) 허용선 정책(#638). 오너가 카테고리·출처·경로·민감라벨별로 ──
+  //  auto(즉시 active) | confirm(pending 격리→검토 승인) | drop(미적재) 을 조절. 매치 규칙 0개면 디폴트 auto(현행 무변).
+  //  평가(resolveIngestPolicy, src/org/ingest-policy.ts) = 매치된 규칙 중 가장 보수적 action(drop>confirm>auto). 각 match_* 는 null=any.
+  //  distill(authored)·mirror(observed) 둘 다 이 정책을 태운다. per-record 검토 자격제한 없음(승인=set_lifecycle, memory scope).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_ingest_policy(
+      id BIGSERIAL PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      match_category   TEXT,
+      match_system     TEXT,
+      match_channel    TEXT,
+      match_provenance TEXT,
+      match_sensitive  TEXT,
+      action TEXT NOT NULL DEFAULT 'confirm',
+      priority INT NOT NULL DEFAULT 0,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_ingest_policy'::regclass AND conname='org_ingest_policy_action_chk') THEN
+        ALTER TABLE org_ingest_policy ADD CONSTRAINT org_ingest_policy_action_chk CHECK (action IN ('auto','confirm','drop'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_ingest_policy'::regclass AND conname='org_ingest_policy_provenance_chk') THEN
+        ALTER TABLE org_ingest_policy ADD CONSTRAINT org_ingest_policy_provenance_chk
+          CHECK (match_provenance IS NULL OR match_provenance IN ('authored','observed'));
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS org_ingest_policy_enabled_idx ON org_ingest_policy(enabled);
+  `);
+
   // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).
   await itemsPool.query(`ALTER TABLE org_member ADD COLUMN IF NOT EXISTS status_message TEXT;`);
 

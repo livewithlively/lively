@@ -172,7 +172,10 @@ export async function initV6Schema(): Promise<string> {
     -- archived 추가(2026-07-04 #551): 외부 미러의 원본 아카이브/휴지통/삭제 전파 자리 — 하드삭제 대신 보존(기본 목록에선 lifecycle='active' 필터로 숨음).
     UPDATE knowledge SET lifecycle='active' WHERE lifecycle='rejected';
     ALTER TABLE knowledge DROP CONSTRAINT IF EXISTS knowledge_lifecycle_chk;
-    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','superseded','archived'));
+    -- pending 추가(2026-07-07 #638): 자동 인입(distill/mirror)이 인입정책상 human-confirm 대상일 때의 '검토 대기' 격리 상태.
+    --  목록·검색·grep·벡터·similar·recall·always주입이 이미 lifecycle='active' 필터라 pending 은 자동 격리(라이브 노출 0). 승인=set_lifecycle(active).
+    --  rejected(가역 숨김, 2026-06-23 폐기)와 성격 다름 — 그건 '판정 후 숨김', pending 은 '판정 전 대기'.
+    ALTER TABLE knowledge ADD CONSTRAINT knowledge_lifecycle_chk CHECK (lifecycle IN ('active','pending','superseded','archived'));
     -- WIKI 핀(2026-06-23): is_wiki=true 인 지식의 제목+메타만 가이드 위키섹션으로 항상-주입(본문 제외, 인덱스).
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;

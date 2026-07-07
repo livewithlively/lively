@@ -48,6 +48,9 @@ const ADMIN_SECTIONS = [
     { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
     // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
     { key: 'connectors', label: '커넥터(외부 소스)', meaning: null, group: 'ai' },
+    // 인입 허용선 게이트(#638) — 자동 인입(미러/distill)을 auto/confirm/drop 로 조절 + 검토 큐(pending 승인).
+    { key: 'ingest-policy', label: '인입 허용선 (게이트)', meaning: null, group: 'ai' },
+    { key: 'review-queue', label: '검토 큐 (자동 인입)', meaning: null, group: 'ai' },
     // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
     { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
     // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
@@ -57,15 +60,12 @@ const ADMIN_SECTIONS = [
     // (외부 호출·DB 안전범위 = allowlist 별도 탭 폐기(2026-06-26) → 'AI 도구'·'DB 데이터소스' 화면 안 allowlistCard 로 인라인.)
     // 커스텀 훅(코드) — 특정 이벤트에 실행할 임의 코드. 세션 주입 지도에서 목록·요약을 보고 여기서 정의.
     { key: 'custom-hooks', label: '커스텀 훅 (코드)', meaning: 'custom-hook', group: 'ai' },
-    // 하네스 자산(스킬·서브에이전트·슬래시커맨드) — 관리자가 정의해 구성원 하네스에 배포. 훅과 같은 runtime 자산군이나
-    //  멤버 디스크(~/.claude|.codex/{skills,agents,commands})에 materialize(하네스가 스캔해야 발견). 위험 통제=짝훅.
-    { key: 'harness-assets', label: '스킬·에이전트·커맨드', meaning: 'harness-asset', group: 'ai' },
 ];
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings)
-const RUNTIME_ONLY = ['custom-hooks', 'harness-assets', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy', 'review-queue']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절, 검토 큐 웹 탭은 MVP admin — 승인 백엔드는 memory scope 라 워킹레벨 MCP/REST 검토는 열림)
+const RUNTIME_ONLY = ['custom-hooks', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
 const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
@@ -253,8 +253,6 @@ function renderAdminDetail(detail, sel, data) {
         return injectionMap(detail, data);
     if (sel === 'custom-hooks')
         return customHookEditor(detail, data);
-    if (sel === 'harness-assets')
-        return harnessAssetEditor(detail, data);
     if (sel === 'tools')
         return toolsEditor(detail, data);
     if (sel === 'tool-usage')
@@ -273,6 +271,10 @@ function renderAdminDetail(detail, sel, data) {
         return reposPanel(detail, data);
     if (sel === 'cron')
         return cronPanel(detail, data);
+    if (sel === 'ingest-policy')
+        return ingestPolicyPanel(detail, data);
+    if (sel === 'review-queue')
+        return reviewQueuePanel(detail, data);
     if (sel === 'managed-sessions')
         return managedSessionsPanel(detail, data);
     if (sel === 'deploy')
@@ -537,7 +539,7 @@ const ORG_AUDIT_STATE = { scope: 'admin', entity: '', actor_kind: '', channel: '
 const OA_ENTITY_LABELS = {
     org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
     org_runtime_config: '런타임 설정', org_connector: '커넥터', org_mcp_server: 'MCP 서버',
-    org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
+    org_hook: '커스텀 훅', org_tool: 'AI 도구', org_db_source: 'DB 소스',
     org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };
 const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '회수', mint: '발급', reorder: '순서변경' };
@@ -859,6 +861,154 @@ async function cronDelete(id, reload) {
     try {
         await api('/api/ui/cron/' + encodeURIComponent(id) + '/delete', { method: 'POST' });
         toast('삭제했습니다');
+        reload();
+    }
+    catch (e) {
+        toast('실패 — ' + e.message, true);
+    }
+}
+// ════════ 인입 허용선 정책(#638) — 자동 인입(미러/distill)을 auto/confirm/drop 로 조절. ════════
+async function ingestPolicyPanel(detail, data) {
+    const reload = () => ingestPolicyPanel(detail, data);
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('인입 정책을 불러오는 중')));
+    let policies;
+    try {
+        const r = await api('/api/ui/org/ingest-policy');
+        policies = (r && r.policies) || [];
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '인입 정책을 불러오지 못했습니다')));
+        return;
+    }
+    const rows = el('div', { class: 'wikicat-rows' });
+    if (!policies.length)
+        rows.append(el('div', { class: 'wikicat-empty', text: '정책 규칙이 없습니다 — 규칙이 없으면 모든 자동 인입은 auto(즉시 지식화)입니다(현행). 특정 출처·카테고리를 검토 큐로 보내려면 규칙을 추가하세요.' }));
+    for (const p of policies) {
+        const m = [p.match_category && 'category=' + p.match_category, p.match_system && 'system=' + p.match_system,
+            p.match_channel && 'channel=' + p.match_channel, p.match_provenance && 'provenance=' + p.match_provenance,
+            p.match_sensitive && '민감=' + p.match_sensitive].filter(Boolean).join(' & ') || '전체(모든 자동 인입)';
+        const actLabel = p.action === 'drop' ? '🚫 drop (미적재)' : p.action === 'confirm' ? '🔎 confirm (검토대기)' : '✅ auto (자동)';
+        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: actLabel }), el('span', { class: 'wikicat-key mono', text: m }), el('span', { class: 'dm-tag', text: p.enabled ? ('우선순위 ' + (p.priority || 0)) : '꺼짐' }));
+        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: p.enabled ? '끄기' : '켜기', onclick: () => ingestPolicyToggle(p, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openIngestPolicyForm(p, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => ingestPolicyDelete(p.id, reload) }));
+        rows.append(el('div', { class: 'wikicat-row' }, main, acts));
+    }
+    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '허용선 정책 규칙' }), el('span', { class: 'wikicat-groupcount', text: String(policies.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 규칙 추가', onclick: () => openIngestPolicyForm(null, reload) }));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '인입 허용선 (자동화 게이트)' })), el('p', { class: 'admin-hint', text: '자동 인입(커넥터 미러·자료 distill)이 만든 지식을 auto(즉시 반영)·confirm(검토 큐로 격리)·drop(미적재) 중 어디로 보낼지 규칙으로 정합니다. 규칙이 없으면 모두 auto(현행). 여러 규칙에 걸리면 가장 보수적(drop>confirm>auto)이 적용됩니다. confirm 된 지식은 “검토 큐”에서 승인해야 검색·주입에 반영됩니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    detail.replaceChildren(card);
+}
+async function openIngestPolicyForm(pol, reload) {
+    const isNew = !pol;
+    const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
+    const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    const actSel = el('select', { style: inputStyle });
+    for (const o of [['auto', 'auto — 즉시 지식화(active)'], ['confirm', 'confirm — 검토 큐로 격리(pending)'], ['drop', 'drop — 적재 안 함']])
+        actSel.append(el('option', { value: o[0], text: o[1] }));
+    actSel.value = (pol && pol.action) || 'confirm';
+    const catInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_category) || '', placeholder: '예: fundraising (비우면 모든 카테고리)' });
+    const sysInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_system) || '', placeholder: '예: notion, slack, gdrive (비우면 모든 시스템)' });
+    const chanInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_channel) || '', placeholder: '채널·폴더 출처 (비우면 전체)' });
+    const provSel = el('select', { style: inputStyle });
+    for (const o of [['', '전체'], ['observed', 'observed (커넥터 미러 — 정제문서 직행)'], ['authored', 'authored (자료 distill — LLM 증류)']])
+        provSel.append(el('option', { value: o[0], text: o[1] }));
+    if (pol && pol.match_provenance)
+        provSel.value = pol.match_provenance;
+    const sensInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_sensitive) || '', placeholder: '예: cooking, planning, unfinished (LLM 민감 라벨, 비우면 전체)' });
+    const prioInp = el('input', { type: 'number', style: inputStyle, value: String((pol && pol.priority) || 0) });
+    const enabledChk = el('input', { type: 'checkbox', ...((pol ? pol.enabled : true) ? { checked: true } : {}) });
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 추가' : '저장' });
+    const form = el('div', { class: 'proj-settings' }, block('동작 (action)', 'auto=즉시 반영 · confirm=검토 큐 격리 · drop=미적재. 여러 규칙에 걸리면 가장 보수적이 이깁니다.', actSel), block('카테고리 (선택)', '이 도메인 지식에만. 비우면 모든 카테고리.', catInp), block('시스템 (선택)', 'notion·slack·gdrive 등 출처 커넥터. 비우면 전체.', sysInp), block('출처 채널/폴더 (선택)', '특정 채널·폴더 출처. 비우면 전체.', chanInp), block('경로 (선택)', 'observed=커넥터 미러(정제문서 직행) · authored=자료 distill(LLM 증류).', provSel), block('민감 라벨 (선택)', 'distill LLM 이 내용에서 판정하는 라벨(쿠킹중·기획 등). 비우면 전체.', sensInp), block('우선순위', '표시·정렬용(평가는 가장 보수적 규칙 우선). 큰 값이 위.', prioInp), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const back = overlayBox(isNew ? '허용선 규칙 추가' : '허용선 규칙 수정', form);
+    const boxw = back.querySelector('.ov-box');
+    if (boxw)
+        boxw.classList.add('ov-box-wide');
+    saveBtn.onclick = async () => {
+        const body = { action: actSel.value,
+            match_category: catInp.value.trim() || null, match_system: sysInp.value.trim() || null,
+            match_channel: chanInp.value.trim() || null, match_provenance: provSel.value || null,
+            match_sensitive: sensInp.value.trim() || null, priority: Number(prioInp.value) || 0, enabled: enabledChk.checked };
+        if (pol)
+            body.id = pol.id;
+        saveBtn.disabled = true;
+        try {
+            await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify(body) });
+            toast(isNew ? '규칙을 추가했습니다' : '저장했습니다');
+            back.remove();
+            reload();
+        }
+        catch (e) {
+            toast('실패 — ' + e.message, true);
+            saveBtn.disabled = false;
+        }
+    };
+}
+// 토글은 전체 필드 재전송(upsert 는 미전송 필드를 기본값으로 덮으므로) — enabled 만 반전.
+async function ingestPolicyToggle(pol, reload) {
+    try {
+        await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify({
+                id: pol.id, enabled: !pol.enabled, action: pol.action, priority: pol.priority,
+                match_category: pol.match_category, match_system: pol.match_system, match_channel: pol.match_channel,
+                match_provenance: pol.match_provenance, match_sensitive: pol.match_sensitive
+            }) });
+        reload();
+    }
+    catch (e) {
+        toast('실패 — ' + e.message, true);
+    }
+}
+async function ingestPolicyDelete(id, reload) {
+    if (!confirm('이 규칙을 삭제할까요?'))
+        return;
+    try {
+        await api('/api/ui/org/ingest-policy/remove', { method: 'POST', body: JSON.stringify({ id }) });
+        toast('삭제했습니다');
+        reload();
+    }
+    catch (e) {
+        toast('실패 — ' + e.message, true);
+    }
+}
+// ════════ 검토 큐(#638) — 자동 인입이 정책상 pending 으로 격리한 지식을 승인/반려. ════════
+async function reviewQueuePanel(detail, data) {
+    const reload = () => reviewQueuePanel(detail, data);
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 대기 지식을 불러오는 중')));
+    let items;
+    try {
+        const r = await api('/api/ui/knowledge?lifecycle=pending&orderBy=updated_at');
+        items = (r && r.entries) || [];
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 큐를 불러오지 못했습니다')));
+        return;
+    }
+    const rows = el('div', { class: 'wikicat-rows' });
+    if (!items.length)
+        rows.append(el('div', { class: 'wikicat-empty', text: '검토 대기 중인 지식이 없습니다. (자동 인입이 허용선 정책상 confirm 대상일 때 여기에 쌓입니다.)' }));
+    for (const k of items) {
+        const prov = k.provenance === 'observed' ? '커넥터 미러' : '자료 distill';
+        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: k.title || k.name }), el('span', { class: 'wikicat-key mono', text: (k.type || '지식') + ' · ' + prov + (k.source ? ' · ' + k.source : '') }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '수집' }), relTime(k.updated_at)));
+        const acts = el('div', { class: 'wikicat-row-acts' }, el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/' + encodeURIComponent(k.name), text: '열기' }), el('button', { class: 'btn btn-primary btn-sm', text: '✓ 승인', onclick: () => reviewApprove(k.name, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '✕ 반려', onclick: () => reviewReject(k.name, reload) }));
+        rows.append(el('div', { class: 'wikicat-row' }, main, acts));
+    }
+    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '검토 대기' }), el('span', { class: 'wikicat-groupcount', text: String(items.length) }));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '검토 큐 (자동 인입)' })), el('p', { class: 'admin-hint', text: '자동 인입(커넥터 미러·자료 distill)이 허용선 정책상 “검토 대기(pending)”로 격리한 지식입니다. 승인 전에는 검색·세션 주입·목록에 뜨지 않습니다. 열어서 정확성(할루시네이션·최신성)을 확인하고 승인하면 지식이 되고, 반려하면 삭제(휴지통, 복원 가능)됩니다. 승인/반려는 변경 감사에 기록됩니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    detail.replaceChildren(card);
+}
+async function reviewApprove(name, reload) {
+    try {
+        await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/lifecycle', { method: 'POST', body: JSON.stringify({ lifecycle: 'active' }) });
+        toast('승인 — 지식으로 반영했습니다');
+        reload();
+    }
+    catch (e) {
+        toast('실패 — ' + e.message, true);
+    }
+}
+async function reviewReject(name, reload) {
+    if (!confirm('이 지식을 반려(삭제)할까요? 휴지통으로 이동해 복원할 수 있습니다.'))
+        return;
+    try {
+        await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+        toast('반려했습니다');
         reload();
     }
     catch (e) {
@@ -2241,11 +2391,6 @@ function embeddingsEditor(detail, data) {
         clearTimeout(pollTimer);
         pollTimer = null;
     } };
-    let projPollTimer = null;
-    const stopProjPoll = () => { if (projPollTimer) {
-        clearTimeout(projPollTimer);
-        projPollTimer = null;
-    } };
     async function load() {
         let st;
         try {
@@ -2260,7 +2405,6 @@ function embeddingsEditor(detail, data) {
     // 폼(설정 입력)은 한 번만 짓는다 — 폴링은 statusRegion 만 갱신해 입력 중 리셋되지 않게.
     function buildOnce(st) {
         stopPoll();
-        stopProjPoll();
         const cfg = st.config || { provider: 'off', base_url: null, model: null, dimensions: 1024, auth_env_ref: null };
         const on = cfg.provider === 'http';
         const provSel = el('select', { class: 'input' }, el('option', { value: 'off', text: '꺼짐 — grep 검색으로 폴백' }), el('option', { value: 'http', text: '켜짐 — HTTP /v1/embeddings' }));
@@ -2305,10 +2449,8 @@ function embeddingsEditor(detail, data) {
             }
         });
         const statusRegion = el('div');
-        const projectRegion = el('div');
-        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
+        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion);
         updateStatus(st, statusRegion);
-        loadProjectStatus(projectRegion);
     }
     // 백로그·잡 진행만 갱신(폼은 그대로). 잡이 돌면 폴링.
     function updateStatus(st, region) {
@@ -2371,71 +2513,6 @@ function embeddingsEditor(detail, data) {
                 poll(region);
             } // 일시 실패 → 재시도
         }, 1500);
-    }
-    // 프로젝트 임베딩(#631/#624) 백필 — 지식 백필과 동형(대상만 project 엔드포인트). 같은 embedding_config 공유·자체 폴링.
-    function renderProjectStatus(st, region) {
-        const on = (st.config && st.config.provider) === 'http';
-        const backlog = st.backlog || { total: 0, pending: 0 };
-        const job = st.job;
-        const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
-        const running = !!(job && job.running);
-        const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '프로젝트 백필 진행 중…' : '프로젝트 임베딩(백필)' });
-        bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0;
-        const bfSt = el('span', { class: 'admin-status' });
-        if (!on)
-            bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
-        else if ((backlog.pending || 0) === 0 && !running)
-            bfSt.textContent = '모두 임베딩됨 ✓';
-        bfBtn.addEventListener('click', async () => {
-            bfBtn.disabled = true;
-            try {
-                await api('/api/ui/org/project-embeddings/backfill', { method: 'POST', body: JSON.stringify({ mode: 'pending' }) });
-                toast('프로젝트 백필 시작 — 진행 상황을 표시합니다.');
-                pollProj(region);
-            }
-            catch (e) {
-                toast(e.message, true);
-                bfBtn.disabled = false;
-            }
-        });
-        const jobLine = el('p', { class: 'admin-hint' });
-        if (job) {
-            if (job.running)
-                jobLine.textContent = `백필 진행: ${fmtNum(job.done)}/${fmtNum(job.total)} …`;
-            else if (job.reason)
-                jobLine.textContent = `직전 백필 미완료: ${job.reason}`;
-            else if (job.finishedAt)
-                jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
-        }
-        region.replaceChildren(el('p', { class: 'admin-hint', text: `프로젝트 ${fmtNum(backlog.total)}건 중 임베딩 ${fmtNum(embedded)}건 · 미임베딩 ${fmtNum(backlog.pending)}건.` }), jobLine, el('div', { class: 'admin-actions' }, bfBtn, bfSt));
-        stopProjPoll();
-        if (running)
-            pollProj(region);
-    }
-    function pollProj(region) {
-        stopProjPoll();
-        projPollTimer = setTimeout(async () => {
-            if (!body.isConnected) {
-                stopProjPoll();
-                return;
-            } // 다른 섹션으로 이동 → 폴링 종료(누수 방지)
-            try {
-                const st = await api('/api/ui/org/project-embeddings');
-                renderProjectStatus(st, region);
-            }
-            catch (_) {
-                pollProj(region);
-            } // 일시 실패 → 재시도
-        }, 1500);
-    }
-    async function loadProjectStatus(region) {
-        try {
-            const st = await api('/api/ui/org/project-embeddings');
-            renderProjectStatus(st, region);
-        }
-        catch (e) {
-            region.replaceChildren(el('p', { class: 'admin-hint', text: '프로젝트 임베딩 상태를 불러오지 못했습니다: ' + e.message }));
-        }
     }
     load();
 }
@@ -3230,108 +3307,6 @@ function hookForm(root, h, data, detail, isNew) {
                 }
             } }));
     root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }), field('id', idIn), field('표시 이름', labelIn), field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel), field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn), field('코드 (Node.js)', codeTa), field('타임아웃(초, 1~120)', timeoutIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
-}
-// ── 하네스 자산(스킬·서브에이전트·슬래시커맨드) — runtime 권한 ──
-function harnessAssetEditor(detail, data) {
-    const assets = data.orgHarnessAssets || [];
-    const sel = state.admin.assetSel;
-    const KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
-    const listCol = el('div', { class: 'admin-sublist' });
-    listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 자산 추가',
-        onclick: () => { state.admin.assetSel = '__new__'; renderAdminDetail(detail, 'harness-assets', data); } }));
-    for (const a of assets) {
-        listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
-            onclick: () => { state.admin.assetSel = a.id; renderAdminDetail(detail, 'harness-assets', data); } }, el('div', { class: 'mini-title', text: a.id }, a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null), el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
-                + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
-                + (a.paired_hook_id ? ' · 짝훅:' + a.paired_hook_id : '') })));
-    }
-    const right = el('div', {});
-    const editing = sel === '__new__'
-        ? { id: '', kind: 'skill', label: '', harness: 'all', description: '', body: '', frontmatter: {}, target_members: null, paired_hook_id: '', enabled: true }
-        : assets.find((a) => a.id === sel);
-    if (editing)
-        assetForm(right, editing, data, detail, sel === '__new__');
-    else
-        right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 세션 시작 때 디스크에 동기화되며 스킬/커맨드는 같은 세션 내 즉시 반영됩니다.' }));
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('스킬 · 서브에이전트 · 슬래시커맨드', data.meaning['harness-asset']), el('div', { class: 'admin-two' }, listCol, right)));
-}
-function assetForm(root, a, data, detail, isNew) {
-    const idIn = el('input', { type: 'text', value: a.id, placeholder: '자산 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
-    const labelIn = el('input', { type: 'text', value: a.label || '', placeholder: '표시 이름(선택)' });
-    const kindSel = el('select', {}, ...[['skill', '스킬'], ['subagent', '서브에이전트'], ['command', '슬래시커맨드']].map(([v, t]) => el('option', { value: v, text: t })));
-    kindSel.value = a.kind || 'skill';
-    const harnessSel = el('select', {}, ...['all', 'claude', 'codex'].map((x) => el('option', { value: x, text: x })));
-    harnessSel.value = a.harness || 'all';
-    const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이 자산을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
-    const bodyTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '자산 본문(마크다운) — 스킬 방법서 / 에이전트 시스템 프롬프트 / 커맨드 프롬프트' });
-    bodyTa.value = a.body || '';
-    const fmTa = el('textarea', { rows: '4', class: 'admin-ta', placeholder: '추가 frontmatter(JSON, 선택) — 예: {"model":"opus","allowed-tools":["Read","Grep"]}' });
-    fmTa.value = (a.frontmatter && Object.keys(a.frontmatter).length) ? JSON.stringify(a.frontmatter, null, 2) : '';
-    const targetIn = el('input', { type: 'text', value: (a.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
-    const pairedIn = el('input', { type: 'text', value: a.paired_hook_id || '', placeholder: '짝훅 id(선택) — 위험 통제용 커스텀 훅' });
-    const enChk = el('input', { type: 'checkbox' });
-    enChk.checked = a.enabled !== false;
-    const codexNote = el('p', { class: 'admin-hint' });
-    const syncNote = () => {
-        codexNote.textContent = (kindSel.value !== 'skill' && (harnessSel.value === 'codex' || harnessSel.value === 'all'))
-            ? '※ 서브에이전트·슬래시커맨드는 Codex 네이티브 미지원 — Codex 세션엔 배포되지 않습니다(스킬만 양 하네스). Claude 에만 적용됩니다.' : '';
-    };
-    kindSel.addEventListener('change', syncNote);
-    harnessSel.addEventListener('change', syncNote);
-    syncNote();
-    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
-    const status = el('span', { class: 'admin-status' });
-    saveBtn.addEventListener('click', async () => {
-        if (!idIn.value.trim()) {
-            toast('id 필수', true);
-            return;
-        }
-        let fm = {};
-        if (fmTa.value.trim()) {
-            try {
-                fm = JSON.parse(fmTa.value);
-            }
-            catch {
-                toast('frontmatter 가 올바른 JSON 이 아닙니다', true);
-                return;
-            }
-        }
-        const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-        if (!confirm('이 자산은 구성원 하네스에 배포되어 그들의 AI가 사용합니다. 스킬은 도구·셸을 실행할 수 있습니다. 저장할까요?'))
-            return;
-        saveBtn.disabled = true;
-        try {
-            const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
-                description: descIn.value, body: bodyTa.value, frontmatter: fm,
-                target_members: targets.length ? targets : null, paired_hook_id: pairedIn.value.trim() || null, enabled: enChk.checked };
-            await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
-            await loadAdmin(true);
-            state.admin.assetSel = payload.id;
-            toast('저장됨 — 구성원 다음 세션부터');
-            renderAdminDetail(detail, 'harness-assets', state.admin.data);
-        }
-        catch (e) {
-            toast(e.message, true);
-            saveBtn.disabled = false;
-        }
-    });
-    const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
-    if (!isNew)
-        actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
-                if (!confirm(`자산 '${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`))
-                    return;
-                try {
-                    await api('/api/ui/org/harness-asset/remove', { method: 'POST', body: JSON.stringify({ id: a.id }) });
-                    await loadAdmin(true);
-                    state.admin.assetSel = null;
-                    toast('제거됨');
-                    renderAdminDetail(detail, 'harness-assets', state.admin.data);
-                }
-                catch (e) {
-                    toast(e.message, true);
-                }
-            } }));
-    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 자산은 구성원 하네스에 배포됩니다. 스킬은 도구·셸을 실행할 수 있어 훅과 같은 실행권한입니다 — 위험 통제는 짝훅으로.' }), field('id', idIn), field('표시 이름', labelIn), field('종류', kindSel), field('하네스', harnessSel), codexNote, field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn), field('본문(마크다운)', bodyTa), field('추가 frontmatter (JSON, 선택)', fmTa), field('대상 구성원(비우면 전원)', targetIn), field('짝훅 id(선택 — 위험 통제)', pairedIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
 }
 // ── AI 도구(MCP 툴) — runtime 권한 ──
 function toolsEditor(detail, data) {

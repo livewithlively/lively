@@ -34,6 +34,8 @@ import { redactDeep, redactString } from "../org/redact.js";
 import { unitName, normalizeExternalInstance } from "../org/external-identity.js";
 import { routeIngestV6 } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
+import { itemsPool } from "../items/store.js";
+import { resolveIngestPolicy, type IngestPolicyRule } from "../org/ingest-policy.js";
 import { embedProjectBestEffort } from "./project-store.js";
 
 // ── #624 프로젝트 임베딩 재트리거(검색 #631) — 미러 sync 에서 이름/설명이 '실제로 바뀐' project 행 id 만 모았다가,
@@ -131,7 +133,22 @@ async function auditConnector(
   );
 }
 
+// #638 인입 허용선 정책 규칙 캐시 — mirror 배치 중 반복 DB 조회 회피(짧은 TTL, 정책은 자주 안 바뀜). 실패=빈 규칙(디폴트 auto).
+let _ingestPolicyCache: { at: number; rules: IngestPolicyRule[] } | null = null;
+async function getIngestPolicyRules(): Promise<IngestPolicyRule[]> {
+  const now = Date.now();
+  if (_ingestPolicyCache && now - _ingestPolicyCache.at < 10_000) return _ingestPolicyCache.rules;
+  try {
+    const r = await itemsPool.query(
+      `SELECT match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, enabled
+         FROM org_ingest_policy WHERE enabled=true`);
+    _ingestPolicyCache = { at: now, rules: r.rows as IngestPolicyRule[] };
+    return _ingestPolicyCache.rules;
+  } catch { return []; }  // 테이블 부재 등 → 정책 없음 = 디폴트 auto(현행 무변)
+}
+
 // notion(및 K류) → knowledge(observed) 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
+//  #638 lifecycle: 신규는 인입정책(auto→active | confirm→pending | drop→skip), 재싱크는 사람 검토상태 보존(archived 전파만).
 async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
@@ -142,8 +159,8 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   const fields = { ...baseFields, _item_type: it.type };
   const raw = it.raw == null ? null : redactDeep(it.raw);
   const author = `connector:${system}`;
-  // #551 아카이브 전파 — 원본이 아카이브/휴지통이면 lifecycle='archived'(기본 목록에서 숨고 보존). 아니면 active.
-  const lifecycle = baseFields.archived === true || baseFields.in_trash === true ? "archived" : "active";
+  // #551 아카이브 전파 — 원본이 아카이브/휴지통이면 lifecycle='archived'(기본 목록에서 숨고 보존). 신규 lifecycle 은 아래 정책으로.
+  const isArchived = baseFields.archived === true || baseFields.in_trash === true;
   // #551 형제 순서 — 커넥터가 sort 를 주면 반영, 없으면(타 커넥터) 기존값 유지(COALESCE).
   const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
 
@@ -158,6 +175,19 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   const contentChanged = isInsert
     || (prevRow.title ?? null) !== (title ?? null)
     || (prevRow.body_md ?? "") !== (body ?? "");
+
+  // #638 인입 허용선 정책 — 신규 삽입에만 평가(재싱크는 아래 ON CONFLICT CASE 가 사람 검토상태 보존).
+  //  archived(원본 삭제/보관)는 정책 무관 전파. drop=미적재(return false). mirror 는 observed 고정.
+  //  category/channel/sensitive 는 classifyIngest(area) 통합 시 확장 — 현재는 system·provenance 로 오너가 출처별 조절.
+  let lifecycle: string;
+  if (isArchived) lifecycle = "archived";
+  else if (isInsert) {
+    const action = resolveIngestPolicy(
+      { provenance: "observed", system, category: null, channel: null, sensitive: null },
+      await getIngestPolicyRules());
+    if (action === "drop") return false;   // 오너 정책상 이 출처는 위키화하지 않음(원본은 외부에 잔존)
+    lifecycle = action === "confirm" ? "pending" : "active";
+  } else lifecycle = "active"; // 재싱크: VALUES 미반영(ON CONFLICT CASE 가 기존 lifecycle 보존)
 
   // 멱등 upsert — 외부 좌표(external_*) 부분유니크 ON CONFLICT. provenance='observed'(외부 수집물 사실),
   //  injection='recalled'(검색 소환 — 외부 미러는 always 주입 대상 아님), confidence='observed', source=system.
@@ -177,7 +207,12 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         title=EXCLUDED.title, body_md=EXCLUDED.body_md,
-        injection='recalled', provenance='observed', lifecycle=EXCLUDED.lifecycle, confidence='observed', source=EXCLUDED.source,
+        injection='recalled', provenance='observed',
+        -- #638 재싱크는 사람 검토상태(active/pending) 보존 — archived(원본 삭제/보관)만 전파, unarchive 는 active 복귀.
+        lifecycle=CASE WHEN EXCLUDED.lifecycle='archived' THEN 'archived'
+                       WHEN knowledge.lifecycle='archived' THEN 'active'
+                       ELSE knowledge.lifecycle END,
+        confidence='observed', source=EXCLUDED.source,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
         last_synced_at=now(), parent_external_id=EXCLUDED.parent_external_id, parent_name=EXCLUDED.parent_name,
         fields=EXCLUDED.fields, raw=EXCLUDED.raw, sort=COALESCE($15, knowledge.sort),

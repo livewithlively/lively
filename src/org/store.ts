@@ -888,6 +888,81 @@ export async function removeConnector(system: string, actor?: string, source?: s
   await audit("org_connector", system, "delete", cur.rows[0], null, actor, source);
 }
 
+// ════════ 자동 인입 허용선 정책 — org_ingest_policy (프로젝트 #638) ════════
+//  distill/mirror 가 지식을 auto(즉시 active)|confirm(pending 격리→검토 큐)|drop(미적재) 중 어디로 보낼지 오너가 조절.
+//  평가는 순수함수 resolveIngestPolicy(org/ingest-policy.ts) — 여기선 CRUD 만. 디폴트(규칙 0)=auto(현행 무변).
+
+export interface IngestPolicyRow {
+  id: number; enabled: boolean;
+  match_category: string | null; match_system: string | null; match_channel: string | null;
+  match_provenance: string | null; match_sensitive: string | null;
+  action: string; priority: number; note: string | null; updated_at: string | null;
+}
+const IPOL_SEL = `id, enabled, match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, note, updated_at`;
+
+export async function listIngestPolicies(): Promise<IngestPolicyRow[]> {
+  const r = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy ORDER BY priority DESC, id`);
+  return r.rows;
+}
+
+export interface IngestPolicyUpsertInput {
+  id?: number; enabled?: boolean;
+  match_category?: string | null; match_system?: string | null; match_channel?: string | null;
+  match_provenance?: string | null; match_sensitive?: string | null;
+  action?: string; priority?: number; note?: string | null;
+}
+
+// 매치 축 정규화 — 빈 문자열/undefined/null → null(any). axisMatch(ingest-policy.ts) 와 일관되게 '없음'은 항상 null 로 저장.
+function normMatch(v: string | null | undefined): string | null {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+
+export async function upsertIngestPolicy(input: IngestPolicyUpsertInput, actor?: string, source?: string): Promise<IngestPolicyRow> {
+  const action = input.action ?? "confirm";
+  if (!["auto", "confirm", "drop"].includes(action)) throw new Error("action 은 auto|confirm|drop");
+  const prov = normMatch(input.match_provenance);
+  if (prov !== null && !["authored", "observed"].includes(prov)) throw new Error("match_provenance 는 authored|observed 또는 비움");
+  const vals = {
+    enabled: input.enabled ?? true,
+    match_category: normMatch(input.match_category),
+    match_system: normMatch(input.match_system),
+    match_channel: normMatch(input.match_channel),
+    match_provenance: prov,
+    match_sensitive: normMatch(input.match_sensitive),
+    action,
+    priority: Number.isFinite(input.priority) ? Math.trunc(input.priority as number) : 0,
+    note: input.note === undefined || input.note === "" ? null : input.note,
+  };
+  if (input.id) {
+    const cur = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy WHERE id=$1`, [input.id]);
+    const before = cur.rows[0];
+    if (!before) throw new Error(`org_ingest_policy #${input.id} 없음`);
+    const r = await itemsPool.query(
+      `UPDATE org_ingest_policy SET enabled=$2, match_category=$3, match_system=$4, match_channel=$5,
+         match_provenance=$6, match_sensitive=$7, action=$8, priority=$9, note=$10,
+         version=version+1, updated_at=now(), updated_by=$11
+       WHERE id=$1 RETURNING ${IPOL_SEL}`,
+      [input.id, vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance, vals.match_sensitive, vals.action, vals.priority, vals.note, actor ?? null]);
+    await audit("org_ingest_policy", String(input.id), "update", before, r.rows[0], actor, source);
+    return r.rows[0];
+  }
+  const r = await itemsPool.query(
+    `INSERT INTO org_ingest_policy(enabled, match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, note, created_by, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING ${IPOL_SEL}`,
+    [vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance, vals.match_sensitive, vals.action, vals.priority, vals.note, actor ?? null]);
+  await audit("org_ingest_policy", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
+  return r.rows[0];
+}
+
+export async function removeIngestPolicy(id: number, actor?: string, source?: string): Promise<void> {
+  const cur = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy WHERE id=$1`, [id]);
+  if (!cur.rows[0]) return;
+  await itemsPool.query(`DELETE FROM org_ingest_policy WHERE id=$1`, [id]);
+  await audit("org_ingest_policy", String(id), "delete", cur.rows[0], null, actor, source);
+}
+
 // ════════ DB 데이터소스 레지스트리 — org_db_source ════════
 // 시크릿 미저장: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode + auth_ref(참조)만. db_query 가 매 호출
 //  병합 로드(env∪DB) → upsert/remove 는 무재시작 반영(src/db/sources.ts refreshSources + pool.invalidate).

@@ -201,7 +201,7 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow> {
   let name: string;
@@ -257,7 +257,7 @@ export async function upsertKnowledge(
   }
   await itemsPool.query(
     `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
-     VALUES($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
+     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
      ON CONFLICT (name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
@@ -265,7 +265,9 @@ export async function upsertKnowledge(
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null]);
+    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
+     // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
+     input.lifecycle ?? "active"]);
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
   // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
