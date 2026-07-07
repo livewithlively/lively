@@ -141,7 +141,9 @@ const server = app.listen(PORT, () => {
       //  스케줄러 기동 **전**에 — 크론 첫 tick 이 유령 행에 막히지 않도록.
       .then(() => recoverOrphanConnectorRuns().catch((err) => logger.warn({ err }, "부팅 스윕 실패(비치명) — 유령 run 은 하트비트 정리로 수렴")))
       // 스키마 직렬 체인 완료 후 인프로세스 스케줄러 기동(org_cron 테이블 보장됨) — 서버사이드 cron 트리거.
-      .then(() => startScheduler())
+      //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
+      //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.
+      .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startScheduler(); })
       // 임베딩(pgvector) 폐기(2026-06-24): v6 knowledge 검색은 ILIKE 비-벡터 — embeddings 모듈 제거됨.
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
