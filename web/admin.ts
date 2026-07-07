@@ -969,9 +969,19 @@ async function ingestPolicyDelete(id, reload) {
 async function reviewQueuePanel(detail, data) {
   const reload = () => reviewQueuePanel(detail, data);
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 대기 지식을 불러오는 중')));
-  let items;
+  let items; let obs: any = null;
   try { const r = await api('/api/ui/knowledge?lifecycle=pending&orderBy=updated_at'); items = (r && r.entries) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 큐를 불러오지 못했습니다'))); return; }
+  try { obs = await api('/api/ui/org/ingest-observability?days=30'); } catch { obs = null; }
+  const igStat = (label, val, hint) => el('div', { class: 'ig-stat', title: hint, style: 'flex:1 1 110px;min-width:100px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-tint)' },
+    el('b', { style: 'display:block;font-size:22px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums', text: String(val) }),
+    el('span', { style: 'font-size:11px;color:var(--muted)', text: label }));
+  const statBox = obs ? el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 14px' },
+    igStat('검토 대기', obs.pending_now, '지금 승인을 기다리는 지식'),
+    igStat('최근 승인', obs.approved, obs.days + '일 내 pending→승인'),
+    igStat('최근 반려', obs.rejected, obs.days + '일 내 pending 반려(삭제)'),
+    igStat('게이트 격리', obs.pending_created, obs.days + '일 내 정책이 검토 큐로 보낸 수'),
+    igStat('미러 자동통과', obs.mirror_auto, obs.days + '일 내 커넥터 미러가 즉시 반영')) : null;
 
   const rows = el('div', { class: 'wikicat-rows' });
   if (!items.length) rows.append(el('div', { class: 'wikicat-empty', text: '검토 대기 중인 지식이 없습니다. (자동 인입이 허용선 정책상 confirm 대상일 때 여기에 쌓입니다.)' }));
@@ -993,6 +1003,7 @@ async function reviewQueuePanel(detail, data) {
   const card = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '검토 큐 (자동 인입)' })),
     el('p', { class: 'admin-hint', text: '자동 인입(커넥터 미러·자료 distill)이 허용선 정책상 “검토 대기(pending)”로 격리한 지식입니다. 승인 전에는 검색·세션 주입·목록에 뜨지 않습니다. 열어서 정확성(할루시네이션·최신성)을 확인하고 승인하면 지식이 되고, 반려하면 삭제(휴지통, 복원 가능)됩니다. 승인/반려는 변경 감사에 기록됩니다.' }),
+    statBox,
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }

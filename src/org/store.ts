@@ -963,6 +963,38 @@ export async function removeIngestPolicy(id: number, actor?: string, source?: st
   await audit("org_ingest_policy", String(id), "delete", cur.rows[0], null, actor, source);
 }
 
+// #656 인입 게이트 관측 — org_content_audit(knowledge insert/set_lifecycle/delete) + pending 카운트를 집계.
+//  파일럿 1순위 지표('오너가 어디까지 자동 허용하나')의 데이터화. after/before 스냅샷의 lifecycle 로 auto/pending 판별.
+//  · mirror_auto = 커넥터 미러가 즉시 active 로 적재(자동 통과). channel='connector' AND after.lifecycle='active'.
+//  · pending_created = 게이트가 검토 큐로 보낸 것(정책 confirm). after.lifecycle='pending' AND 자동경로(connector 또는 ai).
+//  · approved/rejected = pending 을 승인(set_lifecycle→active)/반려(delete). before.lifecycle='pending'.
+//  · pending_now = 현재 검토 대기(knowledge.lifecycle='pending').
+export interface IngestObservability {
+  days: number; mirror_auto: number; pending_created: number; approved: number; rejected: number; pending_now: number;
+}
+export async function ingestObservability(days = 30): Promise<IngestObservability> {
+  const d = Math.max(1, Math.min(365, Math.trunc(Number(days) || 30)));
+  const iv = `${d} days`;
+  const one = async (sql: string, params: unknown[] = [iv]): Promise<number> =>
+    Number((await itemsPool.query(sql, params)).rows[0]?.n ?? 0);
+  const [mirror_auto, pending_created, approved, rejected, pending_now] = await Promise.all([
+    one(`SELECT count(*)::int AS n FROM org_content_audit
+         WHERE entity='knowledge' AND op='insert' AND at >= now() - $1::interval
+           AND (after->>'lifecycle')='active' AND channel='connector'`),
+    one(`SELECT count(*)::int AS n FROM org_content_audit
+         WHERE entity='knowledge' AND op='insert' AND at >= now() - $1::interval
+           AND (after->>'lifecycle')='pending' AND (channel='connector' OR actor_kind='ai')`),
+    one(`SELECT count(*)::int AS n FROM org_content_audit
+         WHERE entity='knowledge' AND op='set_lifecycle' AND at >= now() - $1::interval
+           AND (before->>'lifecycle')='pending' AND (after->>'lifecycle')='active'`),
+    one(`SELECT count(*)::int AS n FROM org_content_audit
+         WHERE entity='knowledge' AND op='delete' AND at >= now() - $1::interval
+           AND (before->>'lifecycle')='pending'`),
+    one(`SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='pending'`, []),
+  ]);
+  return { days: d, mirror_auto, pending_created, approved, rejected, pending_now };
+}
+
 // ════════ DB 데이터소스 레지스트리 — org_db_source ════════
 // 시크릿 미저장: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode + auth_ref(참조)만. db_query 가 매 호출
 //  병합 로드(env∪DB) → upsert/remove 는 무재시작 반영(src/db/sources.ts refreshSources + pool.invalidate).

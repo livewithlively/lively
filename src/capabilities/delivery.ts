@@ -34,7 +34,7 @@ import {
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
-  listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,
+  listIngestPolicies, upsertIngestPolicy, removeIngestPolicy, ingestObservability,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
@@ -981,6 +981,10 @@ export const deliveryCapabilities: Capability[] = [
       await removeIngestPolicy(id, actorOf(user), "web");
       return { ok: true };
     }),
+  restOnly("org_ingest_observability", "인입 게이트 관측",
+    "자동 인입 게이트 집계(기간 일수) — mirror auto·pending 생성·승인·반려·현재 대기. 검토 대시(파일럿 1순위 지표: 오너가 어디까지 자동 허용하나).",
+    [{ method: "GET", paths: ["/api/ui/org/ingest-observability"], parse: (req) => ({ days: req.query?.days ? Number(req.query.days) : 30 }) }],
+    async (input: Record<string, unknown>) => await ingestObservability(Number(input.days) || 30)),
   // ── ClickUp 멤버 매핑 조회(#541) — 관리탭 커넥터 패널용. 팀 멤버 나열 + 매핑 상태 계산.
   //  '효과적 매핑'은 미러(connector-mirror resolveMemberId)와 동일 순서로 판정:
   //   ① person_identity(system='clickup', external_id∈{이메일 소문자, 숫자 id}) JOIN org_member(실재 확인)

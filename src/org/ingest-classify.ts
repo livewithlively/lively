@@ -25,6 +25,7 @@ import { redactString } from "./redact.js";
 export interface IngestClassification {
   kind: string | undefined;
   area: string | null;
+  sensitive: string | null;   // #653 민감/미완결 라벨(cooking|planning|unfinished) 또는 null — 인입 정책 match_sensitive 입력
   provenance: "observed";
   classifiedBy: "mechanical" | "ai";
 }
@@ -71,6 +72,7 @@ function mechanicalFallback(source: string): IngestClassification {
     kind: kindForSource(source.includes(":") ? source.split(":")[0] : source,
       source.includes(":") ? source.split(":").slice(1).join(":") : ""),
     area: null,
+    sensitive: null,
     provenance: "observed",
     classifiedBy: "mechanical",
   };
@@ -154,8 +156,12 @@ async function llmClassify(apiKey: string, doFetch: FetchLike, args: ClassifyIng
                   type: ["string", "null"],
                   description: `주제 영역(사람 큐레이션 전 제안). ${areaLine}`,
                 },
+                sensitive: {
+                  type: ["string", "null"],
+                  description: "민감/미완결 신호(인입 검토 게이트용): cooking(쿠킹 중)|planning(기획 단계)|unfinished(미완결·미확정) 중 하나, 완결·확정된 사실이면 null.",
+                },
               },
-              required: ["kind", "area"],
+              required: ["kind", "area", "sensitive"],
             },
           },
         ],
@@ -174,7 +180,7 @@ async function llmClassify(apiKey: string, doFetch: FetchLike, args: ClassifyIng
     const tool = Array.isArray(data.content)
       ? data.content.find((b) => b && b.type === "tool_use" && b.name === "classify")
       : undefined;
-    const input = (tool?.input ?? {}) as { kind?: unknown; area?: unknown };
+    const input = (tool?.input ?? {}) as { kind?: unknown; area?: unknown; sensitive?: unknown };
 
     // 가드: kind 는 통제어휘(R/K/H/W) 만 — 위반 시 기계 폴백(throw → catch).
     const kind = typeof input.kind === "string" && VALID_KINDS.has(input.kind) ? input.kind : undefined;
@@ -189,7 +195,13 @@ async function llmClassify(apiKey: string, doFetch: FetchLike, args: ClassifyIng
       }
     }
 
-    return { kind, area, provenance: "observed", classifiedBy: "ai" };
+    // #653 민감 라벨(통제어휘) — cooking|planning|unfinished 만, 그 외/공백 → null.
+    let sensitive: string | null = null;
+    if (typeof input.sensitive === "string") {
+      const s = input.sensitive.trim().toLowerCase();
+      if (s === "cooking" || s === "planning" || s === "unfinished") sensitive = s;
+    }
+    return { kind, area, sensitive, provenance: "observed", classifiedBy: "ai" };
   } finally {
     if (timer) clearTimeout(timer);
   }

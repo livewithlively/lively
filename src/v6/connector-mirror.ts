@@ -32,7 +32,7 @@ import type pg from "pg";
 import { redactDeep, redactString } from "../org/redact.js";
 // unitName/normalizeExternalInstance 는 external-identity 가 SoT(구 미러와 byte-identical 슬러그·정규화 공유).
 import { unitName, normalizeExternalInstance } from "../org/external-identity.js";
-import { routeIngestV6 } from "../org/ingest-classify.js";
+import { routeIngestV6, classifyIngest } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
 import { itemsPool } from "../items/store.js";
 import { resolveIngestPolicy, type IngestPolicyRule } from "../org/ingest-policy.js";
@@ -182,8 +182,14 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   let lifecycle: string;
   if (isArchived) lifecycle = "archived";
   else if (isInsert) {
+    // #653 유키(ANTHROPIC_API_KEY) 시 classifyIngest 로 category(area)·민감 라벨 판정 → 4축 정책. 무키면 호출 안 함(system·provenance 축만, 오버헤드 0).
+    let clsCategory: string | null = null, clsSensitive: string | null = null;
+    if (process.env.ANTHROPIC_API_KEY) {
+      try { const cls = await classifyIngest({ text: body, source: `${it.type}:${system}`, externalSystem: system }); clsCategory = cls.area; clsSensitive = cls.sensitive; }
+      catch { /* 분류 실패 → null(system·provenance 축만으로 폴백) */ }
+    }
     const action = resolveIngestPolicy(
-      { provenance: "observed", system, category: null, channel: null, sensitive: null },
+      { provenance: "observed", system, category: clsCategory, channel: null, sensitive: clsSensitive },
       await getIngestPolicyRules());
     if (action === "drop") return false;   // 오너 정책상 이 출처는 위키화하지 않음(원본은 외부에 잔존)
     lifecycle = action === "confirm" ? "pending" : "active";
@@ -228,7 +234,7 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
-    const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author };
+    const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle };  // #638/#656 lifecycle 관측(insert 시 정확) — 검토 대시 auto/pending 집계용
     await auditConnector(client, "knowledge", finalName, isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
   return true;
