@@ -335,9 +335,10 @@ function dashProjStatusIcon(p, listById) {
     const def: any = dashResolveStatus(p, dashListStatusDefs(l));
     return dashStatusIconSvg(def.category, def.color, def.frac);
   }
-  if (p.status === 'done') return dashStatusIconSvg('done', 'var(--mint)');
-  if (p.status === 'todo') return dashStatusIconSvg('active', 'var(--muted-3)', 0);
-  return dashStatusIconSvg('active', 'var(--blue)', 0.5);
+  // 기본 3단계 색 — 프로젝트 탭 PJV_DEFAULT_STATUS_DEFS(상태 편집 창)와 동일 가족(#667): 회색 할일·주황 진행·초록 완료.
+  if (p.status === 'done') return dashStatusIconSvg('done', '#22c55e');
+  if (p.status === 'todo') return dashStatusIconSvg('active', '#94a3b8', 0);
+  return dashStatusIconSvg('active', '#f59e0b', 0.5);
 }
 // 하위 태스크 아이콘 — 프로젝트 탭 pjvSubtaskIcon 동형(서브카운트 배지 안).
 function dashSubtaskIcon() {

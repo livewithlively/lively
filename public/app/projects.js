@@ -254,11 +254,10 @@ const pjvCuFieldsCache = new Map();
 function pjvKanbanBoard(projects, selList, ctx) {
     const { reload } = ctx;
     const custom = selList && pjvListIsCustomStatus(selList);
-    let defs = custom ? pjvListStatusDefs(selList) : [
-        { key: 'todo', label: '할 일', color: 'var(--muted-3)', category: 'active', frac: 0 },
-        { key: 'in_progress', label: '진행 중', color: 'var(--blue)', category: 'active', frac: 0.5 },
-        { key: 'done', label: '완료', color: 'var(--mint)', category: 'done' },
-    ];
+    // 기본 3버킷 색은 PJV_DEFAULT_STATUS_DEFS 와 단일 출처(#667) — 상태 편집 창(주황 진행·초록 완료)과 동일 가족.
+    let defs = custom ? pjvListStatusDefs(selList) : PJV_DEFAULT_STATUS_DEFS.map((d, i) => ({
+        ...d, key: d.key === 'active' ? 'in_progress' : d.key, frac: d.category === 'active' ? (i === 0 ? 0 : 0.5) : undefined,
+    }));
     if (ctx.groupDir === -1)
         defs = defs.slice().reverse(); // 그룹 방향(#541) — 상태 그룹바이 내림차순이면 컬럼 역순
     const colOf = (p) => {
@@ -352,21 +351,23 @@ function pjvKanbanBoard(projects, selList, ctx) {
     return wrap;
 }
 async function renderProjectV2Board(view, scopeKey) {
-    // URL 딥링크로 진입(#/projects2/l|f/<id>) — 스코프 선택 + 사이드바 켬. reload(scopeKey 없음)은 현재 선택 유지.
-    //  스코프 없이 진입(#/projects2)이면 사이드바 열림 선호(localStorage) 반영 — 기본 ON, 사용자가 닫았으면 닫힌 채.
+    // URL 딥링크로 진입(#/projects2/l|f/<id>) — 스코프 선택. reload(scopeKey 없음)은 현재 선택 유지.
+    //  사이드바 열림은 스코프 유무와 무관하게 열림 선호(localStorage) 반영 — 기본 ON, 사용자가 닫았으면 닫힌 채(#662:
+    //  사이드바를 닫아도 스코프는 유지되므로, 스코프 딥링크가 사이드바를 강제로 다시 열지 않는다).
     if (scopeKey) {
         pjvSidebarSel.key = scopeKey;
-        pjvBoardView.byArea = true;
+        pjvSidebarSel.explicit = true;
     }
-    else {
-        try {
-            const s = localStorage.getItem('pjv:sideOpen');
-            if (s === '0')
-                pjvBoardView.byArea = false;
-            else if (s === '1')
-                pjvBoardView.byArea = true;
-        }
-        catch (_) { /* noop */ }
+    try {
+        const s = localStorage.getItem('pjv:sideOpen');
+        if (s === '0')
+            pjvBoardView.byArea = false;
+        else if (s === '1' || scopeKey)
+            pjvBoardView.byArea = true;
+    }
+    catch (_) {
+        if (scopeKey)
+            pjvBoardView.byArea = true;
     }
     pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
     const keepY = _pjvKeepScrollY;
@@ -422,6 +423,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
     pjvApplyHiddenCols(card, 'proj'); // 숨긴 기본 컬럼 복원(#req)
+    pjvApplyColWidths(card, 'proj'); // 저장된 컬럼 폭 복원(#666)
     folders = folders || [];
     pjvSetStatusRegistry(lists); // 리스트별 커스텀 상태 레지스트리 — 모든 뷰의 프로젝트 행 상태 동그라미가 참조(#475).
     // 프로젝트별 태스크 캐시(행 펼침용) — 같은 렌더 동안 재사용(프로미스 캐싱으로 동시요청 합침).
@@ -531,7 +533,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     };
     // 영역 목록(좌측) — 펼침: 전체/영역들/미분류 + ＋새 영역. 접힘: 얇은 레일(▶ 펼치기 + 영역 색점). 본문은 선택 영역의 프로젝트.
     //  byStatus 면 각 영역을 상태로 다시 나눔. 접어도 영역 그룹은 유지(레일의 ▶ 로 언제든 다시 펼침) — 영역 자체를 끄려면 보기→영역으로.
-    const renderArea = (byStatus) => {
+    //  noNav(#662) — 사이드바를 닫아도 고른 스코프(리스트/폴더)만 계속 보여줘야 하므로, 같은 본문을 nav 없이 렌더한다.
+    //   이때 페이지크롬·툴바 배치는 사이드바-꺼짐 레이아웃(전폭 크롬 + card-head 툴바)을 따르므로 main 에 넣지 않는다.
+    const renderArea = (byStatus, noNav) => {
         const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
         // 좌측 사이드바 카운트/표시는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만(본문 필터·그룹 헤더 visibleCount 동형).
         const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
@@ -605,6 +609,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             sel = defaultSel();
         else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1)))
             sel = defaultSel();
+        if (sel !== pjvSidebarSel.key)
+            pjvSidebarSel.explicit = false; // 자동 해소된 스코프 — 사용자가 고른 게 아님(#662)
         pjvSidebarSel.key = sel;
         // 스코프별 뷰 로드(#541) — 이 스코프의 저장 뷰(없으면 기본: 폴더/스페이스=개요, 리스트=상태)를 globals 로.
         //  byStatus 파라미터도 여기서 재동기(render() 가 넘긴 값은 로드 전 스냅샷이므로).
@@ -614,6 +620,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const selectArea = (key) => {
             // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
             pjvSidebarSel.key = key;
+            pjvSidebarSel.explicit = true; // 사용자가 직접 고름(#662) — 사이드바를 닫아도 이 스코프 유지
             pjvSyncUrl(key, false);
             render();
         };
@@ -702,11 +709,14 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         pjvGroupCtx = { selList, groupBy, rerender: render, enabled: !!selList };
         if (groupBtn)
             pjvSyncGroupBtn(groupBtn, groupBy, !!selList);
-        const main = el('div', { class: 'pjv-side-main' });
+        const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') });
         // 셸의 우측 컬럼 상단에 페이지 크롬(제목·하위탭·보드헤드) + 툴바를 얹는다 — 사이드바는 좌측에서 y=64 부터 풀하이트(#607).
-        if (pageChrome)
-            main.append(pageChrome);
-        main.append(toolbar);
+        //  noNav(#662)면 크롬·툴바는 render() 가 사이드바-꺼짐 배치(전폭 크롬 + card-head)로 두므로 여기선 본문만.
+        if (!noNav) {
+            if (pageChrome)
+                main.append(pageChrome);
+            main.append(toolbar);
+        }
         // 표 뷰(폴더·상태·평면)는 열이 많으면 가로로 넘칠 수 있으니 이 박스가 보드만 가로 스크롤한다(#607) — 개요·칸반은 제외.
         const boardBox = el('div', { class: 'pjv-board-scroll' });
         // 가로 스크롤 상태 표시(#req) — 고정 제목 열 우측 그림자 토글(엑셀식 고정 경계).
@@ -918,10 +928,14 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         nav.append(sideResize);
         const navInner = el('div', { class: 'pjv-side-nav-inner' });
         const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '◀' });
-        collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; pjvExitAreaMode(); pjvPersistSideOpen(); syncToggles(); render(); };
+        // 세모(◀) 닫기 — 직접 고른 스코프(리스트/폴더)는 유지한 채 nav 만 닫는다(#662). 자동 선택 스코프면 예전처럼
+        //  전체 보드로(뷰 리셋 pjvExitAreaMode — 안 하면 URL·잔존뷰가 스코프에 남는다).
+        collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; if (!pjvScopeKept())
+            pjvExitAreaMode(); pjvPersistSideOpen(); syncToggles(); render(); };
         navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
-        // ── 폴더·리스트 검색(#req) — 트리 위 검색창. 이름으로 폴더/리스트 필터, 매칭 폴더는 자동 펼침. 트리만 다시 그려 포커스 유지. ──
-        const searchInput = el('input', { class: 'pjv-side-search-input', type: 'text', placeholder: '폴더·리스트 검색', 'aria-label': '폴더·리스트 검색' });
+        // ── 폴더·리스트·프로젝트 검색(#req, #665) — 트리 위 검색창. 이름으로 폴더/리스트/프로젝트 필터, 매칭 폴더는 자동 펼침.
+        //  매칭 프로젝트는 소속 리스트 아래 결과 행으로(클릭=상세). 트리만 다시 그려 포커스 유지. ──
+        const searchInput = el('input', { class: 'pjv-side-search-input', type: 'text', placeholder: '폴더·리스트·프로젝트 검색', 'aria-label': '폴더·리스트·프로젝트 검색' });
         searchInput.value = sideSearchQ;
         const searchClear = el('button', { class: 'pjv-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
         const searchBox = el('div', { class: 'pjv-side-search' }, pjvSideSearchIcon(), searchInput, searchClear);
@@ -990,45 +1004,80 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 const childFolders = foldersByParent.get(f.id) || [];
                 for (const c of childFolders)
                     renderFolderNode(c, depth + 1); // 하위 폴더 먼저(트리 위계)
-                // 검색 중: 폴더 이름 자체가 매칭이면 하위 리스트 전부, 아니면 매칭 리스트만.
-                const fLists = (listsByFolder.get(f.id) || []).filter((l) => !sideSearchActive() || folderSelfMatch(f) || listMatchesQ(l));
+                // 검색 중: 폴더 이름 자체가 매칭이면 하위 리스트 전부, 아니면 매칭 리스트(이름 또는 프로젝트 매칭 #665)만.
+                const fLists = (listsByFolder.get(f.id) || []).filter((l) => !sideSearchActive() || folderSelfMatch(f) || listMatchesDeep(l));
                 if (fLists.length)
-                    for (const l of fLists)
+                    for (const l of fLists) {
                         treeWrap.append(listNavItem(l, true, depth + 1));
+                        appendProjMatches((groupByList.get(l.id)?.projects) || [], depth + 2);
+                    }
                 else if (!childFolders.length && !sideSearchActive())
                     treeWrap.append(el('button', { class: 'pjv-side-folder-empty', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload, undefined, { folderId: f.id }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '리스트 추가' })));
             }
         };
         // 검색 매칭 헬퍼(#req) — 리스트는 이름, 폴더는 이름 또는 하위(재귀)에 매칭이 있으면.
+        //  프로젝트도 검색(#665) — 이름/#번호가 매칭되는 프로젝트가 있으면 그 리스트를 노출하고,
+        //  매칭 프로젝트를 리스트 아래 들여쓴 결과 행으로 보여준다(클릭 = 프로젝트 상세로).
         function sideSearchActive() { return !!(sideSearchQ && sideSearchQ.trim()); }
         function sideSearchNorm(s) { return String(s || '').toLowerCase(); }
-        function listMatchesQ(l) { return !sideSearchActive() || sideSearchNorm(l.name).includes(sideSearchQ.trim().toLowerCase()); }
-        function folderSelfMatch(f) { return sideSearchNorm(f.name).includes(sideSearchQ.trim().toLowerCase()); }
+        function sideQ() { return sideSearchQ.trim().toLowerCase(); }
+        function listMatchesQ(l) { return !sideSearchActive() || sideSearchNorm(l.name).includes(sideQ()); }
+        function projMatchesQ(p) { return sideSearchActive() && (sideSearchNorm(p.name).includes(sideQ()) || ('#' + p.id).includes(sideQ())); }
+        function listMatchesDeep(l) { return listMatchesQ(l) || ((groupByList.get(l.id)?.projects) || []).some(projMatchesQ); }
+        function folderSelfMatch(f) { return sideSearchNorm(f.name).includes(sideQ()); }
         function folderMatchesDeep(f) {
             if (!sideSearchActive())
                 return true;
             if (folderSelfMatch(f))
                 return true;
-            if (folderListsDeep(f.id).some(listMatchesQ))
+            if (folderListsDeep(f.id).some(listMatchesDeep))
                 return true;
             return (foldersByParent.get(f.id) || []).some(folderMatchesDeep);
+        }
+        // 검색 결과 프로젝트 행(#665) — 상태 아이콘(커스텀 상태면 그 색) + 이름. 완료는 흐리게.
+        function sideProjRow(p, depth) {
+            const d = pjvResolveProjStatus(p);
+            const ic = d ? pjvStatusIcon(d.category, d.color, d.frac, 'sm') : pjvStatusIconStd(p.status, 'sm');
+            const it = el('div', { class: 'pjv-side-navitem pjv-side-navproj' + (p.status === 'done' ? ' done' : ''), role: 'link', tabindex: '0', title: p.name }, ic, el('span', { class: 'pjv-side-navlabel', text: p.name }));
+            it.style.paddingLeft = `${8 + Math.max(depth, 1) * 14 + 6}px`;
+            const go = (e) => { e.stopPropagation(); location.hash = '#/projects2/p/' + p.id; };
+            it.addEventListener('click', go);
+            it.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+                e.preventDefault();
+                go(e);
+            } });
+            return it;
+        }
+        // 리스트 항목 아래 매칭 프로젝트 행 부착(#665) — 과다 노출 방지 상한 + 'N개 더'는 리스트 클릭 유도.
+        function appendProjMatches(projArr, depth) {
+            if (!sideSearchActive())
+                return;
+            const ms = (projArr || []).filter(projMatchesQ);
+            const MAX = 8;
+            for (const p of ms.slice(0, MAX))
+                treeWrap.append(sideProjRow(p, depth));
+            if (ms.length > MAX)
+                treeWrap.append(el('div', { class: 'pjv-side-navproj-more', text: '＋' + (ms.length - MAX) + '개 더 — 리스트를 눌러 보기', style: `padding-left:${8 + Math.max(depth, 1) * 14 + 6}px` }));
         }
         // 트리(폴더·리스트)만 다시 그린다 — 검색 입력 중 전체 보드 재렌더 없이 트리만 갱신해 입력 포커스 유지.
         const buildTree = () => {
             treeWrap.replaceChildren();
             for (const f of rootFolders)
                 renderFolderNode(f, 0);
-            // 최상위(폴더 없는) 리스트
+            // 최상위(폴더 없는) 리스트 — 이름 매칭 또는 안의 프로젝트 매칭(#665)이면 노출 + 매칭 프로젝트 행.
             for (const l of topLists)
-                if (listMatchesQ(l))
+                if (listMatchesDeep(l)) {
                     treeWrap.append(listNavItem(l, false));
-            // 미분류('기타') — 검색 중엔 '기타/미분류' 문자열 매칭일 때만.
-            if (showUn && (!sideSearchActive() || sideSearchNorm('기타 미분류').includes(sideSearchQ.trim().toLowerCase()))) {
+                    appendProjMatches((groupByList.get(l.id)?.projects) || [], 1);
+                }
+            // 미분류('기타') — 검색 중엔 '기타/미분류' 문자열 매칭 또는 미분류 프로젝트 매칭(#665)일 때.
+            if (showUn && (!sideSearchActive() || sideSearchNorm('기타 미분류').includes(sideQ()) || (unGroup && unGroup.projects.some(projMatchesQ)))) {
                 const unKey = '__none__';
                 const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' }, pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unGroup.projects)) }));
                 uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
                 pjvFolderDropTarget(uit, null, reload);
                 treeWrap.append(uit);
+                appendProjMatches(unGroup ? unGroup.projects : [], 1);
             }
             if (sideSearchActive()) {
                 if (!treeWrap.querySelector('.pjv-side-navitem'))
@@ -1054,6 +1103,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         searchClear.addEventListener('click', (e) => { e.stopPropagation(); searchInput.value = ''; sideSearchQ = ''; searchBox.classList.remove('has-q'); buildTree(); searchInput.focus(); });
         searchBox.classList.toggle('has-q', !!sideSearchQ);
         nav.append(navInner);
+        if (noNav) {
+            body.replaceChildren(main);
+            return;
+        } // #662 — 스코프 유지 + 사이드바 없음: 본문만
         const sideWrap = el('div', { class: 'pjv-side-wrap' }, nav, main);
         try {
             const sw = localStorage.getItem('pjv:sideW');
@@ -1086,6 +1139,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         pjvGroupCtx = null;
         pjvSyncGroupBtn(groupBtn, { field: 'status', dir: 1 }, false);
         const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
+        syncScopeChip();
         card.classList.toggle('pjv-has-side', byArea);
         if (byArea) {
             // 사이드바 켜짐 — WIKI 형 풀블리드 셸(#607). 페이지크롬·툴바는 renderArea 가 우측 컬럼 상단에 넣는다(카드엔 card-head 없음).
@@ -1103,6 +1157,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             renderByFolder(byStatus);
             return;
         }
+        // 스코프 유지(#662) — 사이드바에서 리스트/폴더를 직접 고른 뒤 사이드바를 닫아도 그 스코프만 계속 보여준다.
+        //  같은 renderArea 본문(커스텀 상태 그룹·리스트 컬럼·저장 뷰 포함)을 nav 없이 렌더. 해제는 툴바 스코프 칩 ×.
+        if (pjvScopeKept()) {
+            renderArea(byStatus, true);
+            return;
+        }
         const shown = pjvBoardMineOnly.on ? projects.filter((p) => mineIds.has(p.id)) : projects;
         if (pjvBoardView.kanban) {
             body.replaceChildren(pjvKanbanBoard(shown, null, { reload, canDelete }));
@@ -1114,16 +1174,43 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         }
         renderFlat(shown);
     };
-    // 뷰/저장뷰 변경은 현재 스코프에 영속(#541) — 사이드바(byArea) 켜져 있을 때만 스코프별 저장(꺼진 전역 보드는 globals 직접).
-    const rerenderScoped = () => { syncToggles(); if (pjvBoardView.byArea)
+    // ── 스코프 칩(#662) — 사이드바를 닫고도 스코프(리스트/폴더/기타)만 보는 중임을 툴바에 표시 + × 로 전체 보기 복귀. ──
+    const scopeChip = el('span', { class: 'pjv-scope-chip', title: '사이드바에서 고른 범위만 보는 중 — × 로 전체 보기' });
+    const scopeName = (key) => {
+        if (key === '__none__')
+            return '기타 (미분류)';
+        if (typeof key === 'string' && key[0] === 'L') {
+            const l = lists.find((x) => String(x.id) === key.slice(1));
+            return l ? l.name : null;
+        }
+        if (typeof key === 'string' && key[0] === 'F') {
+            const f = (folders || []).find((x) => String(x.id) === key.slice(1));
+            return f ? f.name : null;
+        }
+        return null;
+    };
+    const syncScopeChip = () => {
+        const nm = (!pjvBoardView.byArea && !pjvBoardView.byFolder && pjvScopeKept()) ? scopeName(pjvSidebarSel.key) : null;
+        scopeChip.replaceChildren();
+        scopeChip.style.display = nm ? '' : 'none';
+        if (!nm)
+            return;
+        scopeChip.append(el('span', { class: 'pjv-scope-chip-name', text: nm }));
+        const x = el('button', { class: 'pjv-scope-chip-x', type: 'button', title: '전체 보기로', 'aria-label': '스코프 해제 — 전체 보기', text: '×' });
+        x.onclick = (e) => { e.stopPropagation(); pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvExitAreaMode(); syncToggles(); render(); };
+        scopeChip.append(x);
+    };
+    // 뷰/저장뷰 변경은 현재 스코프에 영속(#541) — 스코프가 살아있으면(사이드바 켜짐 or #662 스코프 유지 모드) 스코프별 저장.
+    const rerenderScoped = () => { syncToggles(); if (pjvBoardView.byArea || (pjvSidebarSel.key && pjvSidebarSel.key !== '__all__'))
         pjvSaveScopeView(pjvSidebarSel.key, pjvSnapshotView()); render(); };
     viewBtn.onclick = (e) => { e.stopPropagation(); pjvViewMenu(viewBtn, rerenderScoped); };
     savedViewBtn.onclick = (e) => { e.stopPropagation(); pjvSavedViewMenu(savedViewBtn, rerenderScoped); };
     // 사이드바 토글 — byArea 를 뒤집고, 열 땐 펼친 상태로 연다. 사이드바를 켜면 '폴더로 나누기'(인라인)는 끈다(상호배타).
+    //  닫을 때 직접 고른 스코프(리스트/폴더)는 유지(#662) — 아니면 뷰 리셋(pjvExitAreaMode, #541 잔존뷰 누수 방지).
     sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) {
         pjvBoardView.byFolder = false;
     }
-    else {
+    else if (!pjvScopeKept()) {
         pjvExitAreaMode();
     } pjvPersistSideOpen(); syncToggles(); render(); };
     subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
@@ -1131,7 +1218,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     closedBtn.onclick = (e) => { e.stopPropagation(); pjvProjClosedView.done = !pjvProjClosedView.done; syncToggles(); render(); };
     syncToggles();
     // 툴바(card-head) — 변수로 만들어 render() 가 위치를 옮긴다: 사이드바 꺼짐이면 카드 card-head, 켜짐이면 셸 우측 컬럼 상단(#607).
-    const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), sideBtn, viewBtn, savedViewBtn, groupBtn, subtaskBtn, alignBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn));
+    const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, el('div', { class: 'pjv-tasks-head-left' }, el('h2', { text: '프로젝트' }), sideBtn, scopeChip, viewBtn, savedViewBtn, groupBtn, subtaskBtn, alignBtn), el('div', { class: 'card-head-actions' }, mineBtn, closedBtn));
     card.append(body);
     render();
     return wrapper;
@@ -2046,13 +2133,16 @@ function pjvStatusIcon(category, color, frac, size) {
     return svg;
 }
 // 표준 3상태(todo|in_progress|done) → 통일 상태 아이콘. 사이트 전역(프로젝트·태스크·하위태스크) 공통 진행도 아이콘.
-//  todo=점선 빈 링, in_progress=반쯤 채운 파이, done=색 링+체크. 색은 테마 변수(가독·다크모드 대응).
+//  todo=점선 빈 링, in_progress=반쯤 채운 파이, done=색 링+체크.
+//  색은 PJV_DEFAULT_STATUS_DEFS(상태 편집 창의 기본 3단계)와 단일 출처(#667) — 예전 파랑/민트 테마변수는
+//  상태 편집 창(주황 진행·초록 완료)과 어긋나 '기본 상태'가 outdated 파란 아이콘으로 보였다.
 function pjvStatusIconStd(status, size) {
+    const color = (k, fb) => { const d = PJV_DEFAULT_STATUS_DEFS.find((x) => x.key === k); return (d && d.color) || fb; };
     if (status === 'done')
-        return pjvStatusIcon('done', 'var(--mint)', undefined, size);
+        return pjvStatusIcon('done', color('done', '#22c55e'), undefined, size);
     if (status === 'todo')
-        return pjvStatusIcon('active', 'var(--muted-3)', 0, size);
-    return pjvStatusIcon('active', 'var(--blue)', 0.5, size); // in_progress — 반 파이
+        return pjvStatusIcon('active', color('todo', '#94a3b8'), 0, size);
+    return pjvStatusIcon('active', color('active', '#f59e0b'), 0.5, size); // in_progress — 반 파이
 }
 // 클릭 가능한 상태 아이콘 버튼 래퍼 — SVG 아이콘 + 투명 버튼(경계·배경 없음).
 function pjvStatusIconBtn(icon, attrs) {
@@ -3359,6 +3449,31 @@ function pjvRowCheck(kind, item, ctx) {
     };
     return cb;
 }
+// ── 그룹 헤더 전체선택 체크박스(#664) — 상태(할 일/진행 중/…) 그룹 헤더 좌측. 클릭하면 그 그룹 본문의
+//  모든 행(펼쳐진 하위 포함)을 한 번에 선택/해제한다. 행 체크박스(pjvRowCheck)와 같은 스타일·hover 노출.
+//  _pjvKind 를 안 달아 드래그 범위선택(pjvDragChecks)에는 안 섞인다. 선택 리셋 시 .on 은 pjvSelDomClear 가 함께 지운다.
+function pjvGroupCheck(kind, bodyEl) {
+    const cb = el('button', { class: 'pjv-row-check pjv-group-check', type: 'button', title: '이 그룹 전체 선택/해제', 'aria-label': '그룹 전체 선택/해제' });
+    const rowChecks = () => [...bodyEl.querySelectorAll('.pjv-row-check')].filter((c) => c._pjvKind === kind);
+    const allOn = (checks) => checks.length > 0 && checks.every((c) => pjvSel.kind === kind && pjvSel.ids.has(c._pjvItem.id));
+    const sync = () => { cb.classList.toggle('on', allOn(rowChecks())); };
+    cb.addEventListener('pointerenter', sync); // 개별 행 토글로 어긋난 표시를 호버 시점에 재동기
+    cb.onclick = (e) => {
+        e.stopPropagation();
+        const checks = rowChecks();
+        if (!checks.length)
+            return;
+        const on = !allOn(checks);
+        pjvSelSilent = true;
+        for (const c of checks)
+            pjvSetChecked(c, on);
+        pjvSelSilent = false;
+        pjvSelRenderBar();
+        cb.classList.toggle('on', on);
+        pjvSelLastEl = null; // Shift+클릭 앵커는 개별 행 기준 — 그룹 토글 후엔 리셋
+    };
+    return cb;
+}
 // ── 그룹 내 프로젝트 행 수동 재정렬(#541) — 기존 행 HTML5 드래그(pjvFolderDrag)를 재사용: 같은 그룹 본문 위면
 //  삽입선을 띄우고, 드롭 시 DOM 재배치 + 그 그룹의 새 순서(형제 전체 id)를 projects-reorder 로 저장(sort=1..n).
 //  표시 순서는 pjvManualCmp(sort → ClickUp ext_orderindex → 최신순)가 소비. 컬럼 정렬이 켜져 있으면 비활성(ClickUp 동형).
@@ -3666,7 +3781,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
     fields = fields || [];
     const isDone = p.status === 'done';
     const selectable = !!select && canDelete(p);
-    const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id });
+    const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id, 'data-proj-name': p.name || '' });
     // 폴더로 드래그(#454) — 선택(일괄) 모드가 아닐 때만. 체크박스·캐럿·버튼·제목링크 등 상호작용 요소에서 시작한
     //  드래그는 취소(칠하기-선택·클릭 유지). 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃(pjvFolderDrag).
     if (!select) {
@@ -3890,17 +4005,21 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
     const labelEl = statusDef
         ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + statusDef.color, text: label })
         : el('span', { class: 'pjv-tgroup-label', text: label });
+    // 그룹 전체선택 체크박스(#664) — 헤더 좌측(행 체크박스와 같은 16px 자리). 레거시 선택(select) 모드에선 스페이서 유지.
+    const headCheck = () => select
+        ? el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' })
+        : pjvGroupCheck('project', body);
     let head;
     if (withCols) {
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('proj', 'team', '팀원'), pjvStdColHead('proj', 'due', '마감일'), pjvStdColHead('proj', 'start', '시작일'), pjvStdColHead('proj', 'created', '생성일'), pjvStdColHead('proj', 'updated', '갱신일'), pjvStdColHead('proj', 'priority', '우선순위'), pjvStdColHead('proj', 'sess', '내 세션'), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload, listId) : el('span', {}))); // #607/D 리스트별 필드 — 이 그룹의 리스트로 컬럼 추가
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls }, el('div', { class: 'pjv-trow-title-cell' }, headCheck(), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('proj', 'team', '팀원'), pjvStdColHead('proj', 'due', '마감일'), pjvStdColHead('proj', 'start', '시작일'), pjvStdColHead('proj', 'created', '생성일'), pjvStdColHead('proj', 'updated', '갱신일'), pjvStdColHead('proj', 'priority', '우선순위'), pjvStdColHead('proj', 'sess', '내 세션'), ...(fields || []).map((f) => pjvColumnHead(f, anchorId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, anchorId ? pjvAddColumnButton(anchorId, reload, listId) : el('span', {}))); // #607/D 리스트별 필드 — 이 그룹의 리스트로 컬럼 추가
         head.style.gridTemplateColumns = pjvProjGridTemplate(fields);
         pjvApplyColOrder(head, 'proj', fields); // 열 순서 적용(#611)
         pjvWireColReorder(head, 'proj', fields || [], reload); // 열 순서 드래그 재정렬(기본+커스텀, #611)
     }
     else {
-        // 2번째+ 상태 그룹(non-cols) 헤더도 첫 그룹(withCols)·행과 동일하게 체크박스 자리 spacer 를 둬 상태점 가로 위치를 맞춘다
+        // 2번째+ 상태 그룹(non-cols) 헤더도 첫 그룹(withCols)·행과 동일하게 체크박스 자리(#664 전체선택)를 둬 상태점 가로 위치를 맞춘다
         //  (#613 후속 — 첫 그룹만 spacer 가 있어 그룹 간 상태 아이콘 들여쓰기가 어긋나 있었다).
-        head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret);
+        head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, headCheck(), dot, labelEl, countEl, gcaret);
     }
     return el('div', { class: 'pjv-tgroup' }, head, body);
 }
@@ -3910,6 +4029,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
 function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef) {
     fields = fields || [];
     const row = el('div', { class: 'pjv-addrow' });
+    let indentParent = null; // Tab 들여쓰기(#663) — 바로 위 프로젝트의 '태스크'로 만들 때 그 부모 {id,name}. Shift+Tab 해제.
     // 접힌 트리거 '＋' 를 그룹 헤더 상태점 열에 맞춘다(#613 후속) — 옛 트리거는 체크박스 자리(check-spacer) 가 없어
     //  '＋ 프로젝트' 가 헤더 파이 아이콘·라벨보다 왼쪽으로 어긋났다. 헤더 title-cell 과 동일한 선두 spacer 로 정렬.
     const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
@@ -3930,11 +4050,25 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
     // 제목 칸 — 실제 프로젝트 행과 동일 구조(체크박스 자리 spacer + 캐럿 자리 + 그룹 상태 동그라미 + 입력)로 그려 픽셀 정렬 일치.
     //  프로젝트 행엔 호버 체크박스(16px)가 자리를 차지하므로, 추가행에도 동일 폭 spacer 를 둬 말머리(상태점) 가로 위치를 맞춘다.
     const buildTitleCell = () => {
-        const dotEl = statusDef ? pjvCustomStatusDot(statusDef)
-            : pjvStatusIconStd(pjvProjStatusMeta(statusKey).key);
-        return el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }), dotEl, input);
+        const dotEl = indentParent ? pjvStatusIconStd('todo') // 들여쓰기(#663) — 태스크로 생성되므로 할 일 점선 링
+            : statusDef ? pjvCustomStatusDot(statusDef)
+                : pjvStatusIconStd(pjvProjStatusMeta(statusKey).key);
+        const tc = el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }), dotEl, input);
+        if (indentParent)
+            tc.style.paddingLeft = '22px'; // 하위(태스크) 위치 — 태스크 추가행(pjvAddRow)과 동일 톤
+        return tc;
     };
-    const collapse = () => { row.classList.remove('editing'); draft.memberIds = []; draft.due_date = draft.priority = null; row.replaceChildren(trigger); };
+    // Tab 들여쓰기 시각화(#663) — 제목 칸을 한 단 들이고 안내문을 부모 프로젝트 이름으로 바꾼다(pjvAddRow 동형).
+    const applyIndent = () => {
+        const old = row.querySelector('.pjv-trow-title-cell');
+        if (old)
+            old.replaceWith(buildTitleCell());
+        input.placeholder = indentParent
+            ? ('“' + (indentParent.name || '위 프로젝트') + '” 의 태스크 — 이름 입력 후 Enter (Shift+Tab 해제)')
+            : '프로젝트 이름 입력 후 Enter (Esc 취소)';
+        input.focus();
+    };
+    const collapse = () => { row.classList.remove('editing'); draft.memberIds = []; draft.due_date = draft.priority = null; indentParent = null; row.replaceChildren(trigger); };
     const expand = () => {
         row.classList.add('editing');
         row.style.gridTemplateColumns = pjvProjGridTemplate(fields);
@@ -3952,10 +4086,50 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
         input.focus();
     };
     trigger.onclick = expand;
+    // Tab 들여쓰기 커밋(#663) — 위 프로젝트의 '태스크'로 직접 생성(설정 팝업 없이, 태스크 추가행과 동일 경로).
+    //  드래프트(팀원 첫 명→담당자·마감·우선순위)도 태스크 패치로 반영. 생성 후 그 프로젝트 태스크 캐시 무효화 + 리로드.
+    let busyTask = false;
+    const commitAsTask = async () => {
+        if (busyTask || !indentParent)
+            return;
+        const name = input.value.trim();
+        if (!name) {
+            collapse();
+            return;
+        }
+        busyTask = true;
+        input.disabled = true;
+        try {
+            const created = await api('/api/ui/v6/projects/' + indentParent.id + '/tasks', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => d && d.task);
+            const patch = {};
+            if (draft.memberIds && draft.memberIds[0])
+                patch.assignee = draft.memberIds[0];
+            if (draft.due_date)
+                patch.due_date = draft.due_date;
+            if (draft.priority)
+                patch.priority = draft.priority;
+            if (created && Object.keys(patch).length)
+                await api('/api/ui/v6/tasks/' + created.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => { });
+            if (taskCtx && taskCtx.invalidate)
+                taskCtx.invalidate(indentParent.id);
+            toast('“' + (indentParent.name || '위 프로젝트') + '” 에 태스크를 추가했습니다');
+            pjvReloadKeepScroll(reload);
+        }
+        catch (err) {
+            toast('태스크 추가 실패 — ' + err.message, true);
+            input.disabled = false;
+            busyTask = false;
+        }
+    };
     // Enter / 바깥클릭(blur) 모두 → 바로 생성하지 않고 '프로젝트 설정 팝업'을 띄운다(이름 + 그룹 상태 + 인라인 드래프트[팀원·마감·우선순위] 프리필).
     //  팝업 뜰 때 인라인 행은 접지 않고 입력을 유지(목록에서 이름이 사라지지 않게), 팝업이 닫히면(생성 후 이동 or 취소) 정리.
+    //  단, Tab 들여쓰기 상태(#663)면 팝업 대신 위 프로젝트의 태스크로 즉시 생성.
     let modalOpen = false;
     const openSettingsPopup = () => {
+        if (indentParent) {
+            commitAsTask();
+            return;
+        }
         if (modalOpen)
             return;
         const name = input.value.trim();
@@ -4001,7 +4175,29 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
             collapse();
             return;
         }
-        if (e.key === 'Enter') {
+        if (e.key === 'Tab') {
+            // Tab 들여쓰기(#663) — 바로 위 프로젝트 행을 부모로, 이 입력을 그 프로젝트의 '태스크'로(클릭업식 강등).
+            //  Shift+Tab = 해제(다시 프로젝트로). 위에 프로젝트 행이 없으면(분리 태스크 행 등) 무시.
+            e.preventDefault();
+            if (e.shiftKey) {
+                if (indentParent) {
+                    indentParent = null;
+                    applyIndent();
+                }
+                return;
+            }
+            if (indentParent)
+                return; // 3단계 위계상 태스크 아래로 더 못 내림(하위태스크는 태스크 행에서)
+            const prev = row.previousElementSibling;
+            const pid = prev && prev.classList && prev.classList.contains('pjv-proj-wrap') ? prev.getAttribute('data-proj-id') : null;
+            if (pid) {
+                indentParent = { id: Number(pid), name: prev.getAttribute('data-proj-name') || '' };
+                applyIndent();
+            }
+            return;
+        }
+        // 한글(IME) 조합 중 Enter 는 글자 확정용 — 그때 커밋하면 마지막 글자가 중복된 이름이 만들어진다(#293 동형).
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
             e.preventDefault();
             openSettingsPopup();
         }
@@ -4015,6 +4211,7 @@ function pjvProjectListCard(todo, inprog, done, reload, select, canDelete, field
     const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:projlist'); // 이름칸 폭 드래그 저장/복원(#483)
     pjvApplyHiddenCols(card, 'proj'); // 숨긴 기본 컬럼 복원(#req)
+    pjvApplyColWidths(card, 'proj'); // 저장된 컬럼 폭 복원(#666)
     // 프로젝트별 태스크 캐시(펼침용) — 같은 보드 렌더 동안 재사용(모드 전환·재펼침 시 재요청 없음). 프로미스 캐싱으로 동시 요청 합침.
     const taskCache = new Map();
     const fetchProjTasks = (projId) => {
@@ -4230,10 +4427,19 @@ function npTaskEditor() {
         return wrap;
     };
     // 상위 ＋할 일 추가행 — 트리거(＋ 할 일 추가) ↔ 입력 토글. Enter=추가·계속, Esc/빈 blur=닫기. (pjvProjAddRow 의 인메모리·이름전용판)
+    //  Tab(#663) = 바로 위(마지막) 태스크의 '하위'로 들여쓰기(클릭업식), Shift+Tab = 해제. 들여쓴 채 Enter 연타로 하위 연속 추가.
     const trigger = el('button', { class: 'np-add-trigger', type: 'button' }, el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크 추가' }));
-    const addInput = mkGrowInput('태스크 이름 후 Enter (여러 개면 계속, Esc 닫기)');
+    const addInput = mkGrowInput('태스크 이름 후 Enter (여러 개면 계속, Tab 하위로, Esc 닫기)');
     const addRow = el('div', { class: 'np-addrow' }, trigger);
-    const collapse = () => { addRow.classList.remove('editing'); addRow.replaceChildren(trigger); };
+    let indentTask = null; // Tab 들여쓰기 대상(바로 위 태스크). null=상위 태스크로 추가.
+    const applyIndent = () => {
+        addRow.style.paddingLeft = indentTask ? '22px' : '';
+        addInput.placeholder = indentTask
+            ? ('“' + (indentTask.name || '위 태스크') + '” 의 하위 — 이름 입력 후 Enter (Shift+Tab 해제)')
+            : '태스크 이름 후 Enter (여러 개면 계속, Tab 하위로, Esc 닫기)';
+        addInput.focus();
+    };
+    const collapse = () => { addRow.classList.remove('editing'); indentTask = null; addRow.style.paddingLeft = ''; addRow.replaceChildren(trigger); };
     const expand = () => { addRow.classList.add('editing'); addRow.replaceChildren(dot(), addInput); setTimeout(() => { addInput.focus(); growTa(addInput); }, 0); };
     trigger.onclick = expand;
     addInput.addEventListener('blur', () => setTimeout(() => { if (!addInput.value.trim() && !addRow.contains(document.activeElement))
@@ -4245,6 +4451,22 @@ function npTaskEditor() {
             collapse();
             return;
         } // 팝업까지 닫히지 않게(문서 Esc 차단)
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.shiftKey) {
+                if (indentTask) {
+                    indentTask = null;
+                    applyIndent();
+                }
+                return;
+            }
+            if (!indentTask && model.length) {
+                indentTask = model[model.length - 1];
+                applyIndent();
+            } // 위에 태스크가 없으면 무시
+            return;
+        }
         if (e.key !== 'Enter')
             return;
         if (e.isComposing || e.keyCode === 229)
@@ -4254,9 +4476,25 @@ function npTaskEditor() {
         const name = addInput.value.trim();
         if (!name)
             return;
-        const task = { name, subs: [] };
-        model.push(task);
-        listEl.append(buildTaskRow(task));
+        if (indentTask && model.indexOf(indentTask) < 0) {
+            indentTask = null;
+            applyIndent();
+        } // 대상이 삭제됐으면 상위로 복귀
+        if (indentTask) {
+            // 들여쓴 상태 — 위 태스크의 하위로(인메모리). 하위 인라인 입력(np-subadd)이 열려 있으면 그 위에 쌓는다(showSubInput 동형).
+            const sub = { name };
+            indentTask.subs.push(sub);
+            const subAdd = indentTask.subBox && indentTask.subBox.querySelector('.np-subadd');
+            if (subAdd)
+                indentTask.subBox.insertBefore(buildSubRow(indentTask, sub), subAdd);
+            else if (indentTask.subBox)
+                indentTask.subBox.append(buildSubRow(indentTask, sub));
+        }
+        else {
+            const task = { name, subs: [] };
+            model.push(task);
+            listEl.append(buildTaskRow(task));
+        }
         addInput.value = '';
         growTa(addInput);
         addInput.focus();
@@ -6877,7 +7115,11 @@ const pjvListOpen = new Map();
 // 사이드바 폴더(project_folder) 펼침 상태 — key: folder id. 없으면 기본 펼침(#475 폴더›리스트 트리). 세션 유지.
 const pjvFolderOpen = new Map();
 // 영역 목록에서 선택된 영역 key('L'+id | '__none__' | '__all__'). 세션 유지.
-const pjvSidebarSel = { key: '__all__' };
+//  explicit(#662) — 사용자가 직접 고른 스코프인지(사이드바 클릭·딥링크). 자동 해소(defaultSel)면 false —
+//  사이드바를 닫을 때 explicit 스코프만 유지하고, 자동 선택이면 예전처럼 전체 보드로 돌아간다.
+const pjvSidebarSel = { key: '__all__', explicit: false };
+// 스코프 유지 모드(#662) 판정 — 사용자가 고른 스코프가 살아있는가.
+function pjvScopeKept() { return !!(pjvSidebarSel.explicit && pjvSidebarSel.key && pjvSidebarSel.key !== '__all__'); }
 // 프로젝트 보드의 '하위 태스크' 버튼 모드 — 각 프로젝트를 펼쳐 그 안의 태스크를 보여주는 방식.
 //  collapsed(접힘·기본, 캐럿으로 펼침) / expanded(펼침·전부 열림) / separate(분리·태스크를 상태 그룹에 평면 표시). 태스크 박스의 pjvSubtaskMode 와 독립.
 const pjvProjTaskMode = { mode: 'collapsed' };
@@ -6974,9 +7216,11 @@ function pjvViewMenu(anchor, onChange) {
     // 폴더로 나누기 — 본문을 폴더별 접이식 구역으로. 켜면 좌측 사이드바(byArea)는 끈다(같은 '폴더로 보기'라 둘 다 켜면 혼란).
     mkSwitch('byFolder', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요', (on) => { if (on) {
         pjvBoardView.byArea = false;
+        pjvSidebarSel.key = '__all__';
+        pjvSidebarSel.explicit = false;
         pjvExitAreaMode();
         pjvPersistSideOpen();
-    } });
+    } }); // 스코프도 해제(#662) — 남겨두면 스코프 유지 렌더가 우선해 리스트 구역이 안 보인다
     // 칸반 보드(#541) — 상태별 컬럼에 카드. 리스트 선택 시 그 리스트의 커스텀 상태 컬럼(ClickUp 보드 뷰 동형).
     mkSwitch('kanban', '칸반 보드', '상태별 컬럼에 카드로 보여줘요 (드래그로 상태 변경)', (on) => { if (on)
         pjvBoardView.byFolder = false; });
@@ -7089,7 +7333,8 @@ function pjvCheckMini(on) {
 function pjvGridTemplate(fields) {
     // 제목 floor(--pjv-name-min, 180px) + 메타 minmax(0,W). 제목칸 폭은 CSS 변수 — 열 경계 드래그(#483)로 키우거나,
     //  좁은 태스크 모달의 하위태스크 표(#497)에서 컨테이너가 값을 덮어써 이름칸을 넓힌다. 메타는 좁아지면 제목 대신 먼저 준다(#339).
-    const extra = (fields || []).map((f) => 'minmax(0, ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px)').join(' ');
+    //  커스텀 필드 폭도 CSS 변수(#666) — 컬럼 헤더 경계 드래그(pjvColResizeHandle)로 조절 가능.
+    const extra = (fields || []).map((f) => 'minmax(0, var(' + pjvColWVar('f:' + f.id) + ', ' + ((PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130) + 'px))').join(' ');
     return 'minmax(var(--pjv-name-min, 180px), 1fr) minmax(0, var(--pjv-w-assignee, 96px)) minmax(0, var(--pjv-w-due, 92px)) minmax(0, var(--pjv-w-priority, 112px))' + (extra ? ' ' + extra : '') + ' 34px';
 }
 // 프로젝트 목록 전용 — 우선순위 뒤 '내 세션'(80px) 컬럼 추가. 태스크 박스(pjvGridTemplate)엔 없음.
@@ -7149,7 +7394,7 @@ function pjvColTrackFor(key, fields) {
         return 'var(' + STD[key] + ')';
     const f = (fields || []).find((x) => 'f:' + x.id === key);
     const w = (f && PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130;
-    return w + 'px';
+    return 'var(' + pjvColWVar(key) + ', ' + w + 'px)'; // 커스텀 필드도 변수 트랙(#666) — 폭 드래그 조절 대상
 }
 // 헤더/행에 열 순서 적용 — [data-col] 셀에 CSS order 부여(제목=0·추가=끝 고정). DOM 순서는 안 건드림(기본 순서면 order 가 DOM 순서와 같아 무영향).
 function pjvApplyColOrder(rowEl, surface, fields) {
@@ -7303,6 +7548,90 @@ function pjvInitNameResize(card, key) {
     }
     catch (_) { /* noop */ }
 }
+// ── 모든 컬럼 폭 드래그 조절(#666) — 이름칸(#483)의 일반화: 기본/커스텀 컬럼 헤더 우측 경계 드래그. ──
+//  폭은 그리드 트랙의 CSS 변수(기본=PJV_STD_COL_VAR, 커스텀='--pjv-w-f-<id>')를 카드 스코프에서 조절하고,
+//  per-surface localStorage(pjv:colW:proj|task — 숨김/순서와 같은 결)에 {컬럼키: 'NNpx'} 로 저장. 더블클릭=기본 폭.
+function pjvColWVar(colKey) {
+    if (PJV_STD_COL_VAR[colKey])
+        return PJV_STD_COL_VAR[colKey];
+    return '--pjv-w-' + String(colKey).replace(/[^a-zA-Z0-9_-]+/g, '-'); // 'f:12'→--pjv-w-f-12, 'f:cu:x'→--pjv-w-f-cu-x
+}
+function pjvColWKey(surface) { return 'pjv:colW:' + surface; }
+function pjvGetColW(surface) { try {
+    return JSON.parse(localStorage.getItem(pjvColWKey(surface)) || '{}') || {};
+}
+catch (_) {
+    return {};
+} }
+function pjvSetColW(surface, colKey, px) {
+    try {
+        const m = pjvGetColW(surface);
+        if (px == null)
+            delete m[colKey];
+        else
+            m[colKey] = px;
+        localStorage.setItem(pjvColWKey(surface), JSON.stringify(m));
+    }
+    catch (_) { /* noop */ }
+}
+// 카드 생성 시 1회 — 저장된 컬럼 폭 복원. 숨긴 기본 컬럼(폭 0)은 건너뛴다(폭 적용이 숨김을 풀면 안 됨).
+//  pjvApplyHiddenCols 뒤에 불러 defaultHidden 컬럼의 '켬 폭'(92px)을 저장 폭이 덮어쓴다.
+function pjvApplyColWidths(card, surface) {
+    const m = pjvGetColW(surface);
+    for (const colKey of Object.keys(m)) {
+        if (PJV_STD_COL_VAR[colKey] && !pjvStdColVisible(surface, colKey))
+            continue;
+        card.style.setProperty(pjvColWVar(colKey), m[colKey]);
+    }
+}
+// 컬럼 헤더용 폭 핸들 — 이름칸 pjvNameResizeHandle 과 동일 결(class 공유: 열 재정렬 dragstart 가드가 핸들을 무시).
+function pjvColResizeHandle(colKey) {
+    const h = el('div', { class: 'pjv-col-resize pjv-col-resize-col', title: '드래그하여 컬럼 너비 조절 (더블클릭: 기본값)', 'aria-hidden': 'true' });
+    h.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = h.closest('.pjv-tasks-card');
+        const cell = h.closest('.pjv-tcell');
+        if (!card || !cell)
+            return;
+        const surface = card.dataset.colSurface || 'proj';
+        const varName = pjvColWVar(colKey);
+        const startX = e.clientX;
+        const startW = cell.getBoundingClientRect().width;
+        document.body.classList.add('pjv-col-resizing');
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
+            document.body.classList.remove('pjv-col-resizing');
+            const cur = card.style.getPropertyValue(varName);
+            if (cur)
+                pjvSetColW(surface, colKey, cur.trim());
+        };
+        const onMove = (ev) => {
+            if (ev.buttons === 0) {
+                onUp();
+                return;
+            } // 창 밖에서 손 뗀 경우 등 mouseup 유실 방지
+            let w = startW + (ev.clientX - startX);
+            w = Math.max(56, Math.min(560, w));
+            card.style.setProperty(varName, Math.round(w) + 'px');
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
+    });
+    h.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const card = h.closest('.pjv-tasks-card');
+        if (!card)
+            return;
+        card.style.removeProperty(pjvColWVar(colKey));
+        pjvSetColW(card.dataset.colSurface || 'proj', colKey, null);
+    });
+    return h;
+}
 // ── 기본(내장) 컬럼 숨기기/보이기 — 팀원·마감일·우선순위·(내 세션)도 커스텀 필드처럼 호버 ⋯로 숨길 수 있게(#req). ──
 //  숨김은 폭 CSS 변수를 0 으로 만들어 컬럼을 접는다(행 그리드는 gap:0 이라 흔적 없이 사라짐 — 셀/그리드 구조는 안 건드림).
 //  surface: 'proj'(팀원·마감·우선·세션) | 'task'(담당자·마감·우선). 값은 localStorage 에 저장돼 유지, Fields 패널에서 되살린다.
@@ -7405,6 +7734,7 @@ function pjvStdColHead(surface, key, label) {
         menu.append(hide, el('div', { class: 'pjv-menu-hint', text: '되살리기: 컬럼 추가(＋) → 기본 컬럼' }));
     };
     cell.append(menuBtn);
+    cell.append(pjvColResizeHandle(key)); // 컬럼 폭 드래그(#666) — 헤더 우측 경계
     return cell;
 }
 // Fields(컬럼 추가) 패널의 '기본 컬럼' 섹션 — 각 기본 컬럼의 보임/숨김 토글(되살리기 진입점).
@@ -7856,14 +8186,16 @@ function pjvColumnHead(field, projectId, reload) {
     pjvHeadSortable(nameEl, String(field.id)); // 클릭 정렬(#541) — field_values 값 기준
     const cell = el('div', { class: 'pjv-tcell pjv-thcol', 'data-col': 'f:' + field.id }, // data-col: 열 순서 드래그(#611)
     pjvFieldIcon(field.field_type, 'pjv-thcol-ic'), nameEl);
-    // ClickUp 이관 컬럼(#541) — 정의는 커넥터 소유(이름변경·삭제 불가), 배지로 출처 표시.
+    // ClickUp 이관 컬럼(#541) — 정의는 커넥터 소유(이름변경·삭제 불가), 배지로 출처 표시. 폭 조절(#666)은 가능.
     if (field.readonlyDef) {
         cell.append(el('span', { class: 'pjv-thcol-src', text: 'CU', title: 'ClickUp에서 이관된 컬럼' }));
+        cell.append(pjvColResizeHandle('f:' + field.id));
         return cell;
     }
     const menuBtn = el('button', { class: 'pjv-thcol-menu', type: 'button', text: '⋯', 'aria-label': field.name + ' 컬럼 설정' });
     menuBtn.onclick = (e) => { e.stopPropagation(); pjvColumnMenu(menuBtn, field, projectId, reload); };
     cell.append(menuBtn);
+    cell.append(pjvColResizeHandle('f:' + field.id)); // 컬럼 폭 드래그(#666)
     return cell;
 }
 function pjvColumnMenu(anchor, field, projectId, reload) {
@@ -8130,6 +8462,7 @@ function pjvTasksSection(projectId, tasks, members, reload, fields) {
     const card = el('div', { class: 'card pjv-tasks-card', style: 'margin-bottom:18px' });
     pjvInitNameResize(card, 'pjv:nameMin:task:' + projectId); // 이름칸 폭 드래그 저장/복원 — 프로젝트별(#483)
     pjvApplyHiddenCols(card, 'task'); // 숨긴 기본 컬럼 복원(#req)
+    pjvApplyColWidths(card, 'task'); // 저장된 컬럼 폭 복원(#666)
     // Closed 토글 버튼 — 누르면 태스크/하위태스크 popover. 활성(노출 중) 시 파란 강조.
     const closedBtn = el('button', { class: 'pjv-closed-btn', type: 'button', title: '닫힌(완료) 항목 표시' }, pjvCheckCircle(), el('span', { text: 'Closed' }));
     const syncBtn = () => closedBtn.classList.toggle('active', pjvClosedView.tasks || pjvClosedView.subtasks);
@@ -8208,14 +8541,14 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
     const labelEl = el('span', { class: 'pjv-tgroup-label', text: m.label });
     let head;
     if (withCols) {
-        // 컬럼 라벨을 행 그리드에 맞춰 헤더에 합침(별도 thead 없음). 좌측 첫 칸 = 그룹 라벨.
-        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('task', 'assignee', '담당자'), pjvStdColHead('task', 'due', '마감일'), pjvStdColHead('task', 'priority', '우선순위'), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
+        // 컬럼 라벨을 행 그리드에 맞춰 헤더에 합침(별도 thead 없음). 좌측 첫 칸 = 그룹 라벨(+#664 전체선택 체크박스).
+        head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, pjvGroupCheck('task', body), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()), pjvStdColHead('task', 'assignee', '담당자'), pjvStdColHead('task', 'due', '마감일'), pjvStdColHead('task', 'priority', '우선순위'), ...(fields || []).map((f) => pjvColumnHead(f, projectId, reload)), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvAddColumnButton(projectId, reload)));
         head.style.gridTemplateColumns = pjvGridTemplate(fields);
     }
     else {
-        // 컬럼 없는 그룹(할 일/완료)도 첫 그룹(진행 중, withCols)과 같은 제목칸 구조(체크 스페이서+점+라벨)를
+        // 컬럼 없는 그룹(할 일/완료)도 첫 그룹(진행 중, withCols)과 같은 제목칸 구조(체크박스+점+라벨)를
         // 써서 그룹 헤더의 가로 들여쓰기·정렬이 그룹마다 동일하게 보이도록 한다(#295).
-        head = el('div', { class: 'pjv-tgroup-head ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), dot, labelEl, countEl, gcaret));
+        head = el('div', { class: 'pjv-tgroup-head ' + m.cls }, el('div', { class: 'pjv-trow-title-cell' }, pjvGroupCheck('task', body), dot, labelEl, countEl, gcaret));
     }
     return el('div', { class: 'pjv-tgroup' }, head, body);
 }
