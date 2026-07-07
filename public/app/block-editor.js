@@ -204,8 +204,10 @@ function mdToBlocks(md) {
 // §2 블록 → markdown 직렬화 — 왕복 보존이 목표(리스트 마커 '-'·번호 재부여 정도의 정규화만).
 // ════════════════════════════════════════════
 // 평문 텍스트 노드 이스케이프 — 다음 로드에서 인라인 마크로 오파싱될 문자만 최소로(모두 renderInline 이스케이프 목록 내).
+//  ZWSP(U+200B)는 인라인 변환의 캐럿 패딩(마크 지속 차단) 잔재 — 직렬화에서 제거.
 function escInline(s) {
     return String(s)
+        .replace(/\u200B/g, '')
         .replace(/\\/g, '\\\\')
         .replace(/`/g, '\\`')
         .replace(/\*/g, '\\*')
@@ -255,7 +257,7 @@ function inlineDomToMd(node) {
             continue;
         }
         if (tag === 'CODE') {
-            out += '`' + c.textContent.replace(/`/g, '') + '`';
+            out += '`' + c.textContent.replace(/`/g, '').replace(/\u200B/g, '') + '`';
             continue;
         }
         if (!inner)
@@ -479,7 +481,7 @@ export function createBlockEditor(opts = {}) {
                 break;
             }
             default: // p
-                main.append(textDiv('be-p', d.text));
+                main.append(textDiv('be-p', d.text, "내용 입력 · '/' 블록 메뉴"));
         }
         return block;
     }
@@ -574,7 +576,7 @@ export function createBlockEditor(opts = {}) {
                 return { type, icon: block.dataset.icon, color: block.dataset.color, text: t ? inlineDomToMd(t) : '' };
             case 'code': {
                 const codeBox = block.querySelector('.be-code');
-                return { type, lang: block.dataset.lang || '', text: codeBox ? codeBox.innerText.replace(/\n$/, '') : '' };
+                return { type, lang: block.dataset.lang || '', text: codeBox ? codeBox.innerText.replace(/\u200B/g, '').replace(/\n$/, '') : '' };
             }
             case 'divider': return { type };
             case 'raw': {
@@ -615,6 +617,13 @@ export function createBlockEditor(opts = {}) {
         if (!blockEls().length)
             root.append(makeBlock({ type: 'p', text: '' }));
         root.classList.toggle('be-empty', isEmptyNow());
+        // 에디터가 통째로 빈 상태(유일한 빈 문단) — 그 블록에 에디터 수준 안내 플레이스홀더를 얹는다(포커스 없이도 노출).
+        const bs = blockEls();
+        if (bs.length === 1 && bs[0].dataset.type === 'p' && opts.placeholder) {
+            const t = textElOf(bs[0]);
+            if (t)
+                t.dataset.ph = opts.placeholder;
+        }
     }
     function isEmptyNow() {
         const bs = blockEls();
@@ -1317,10 +1326,13 @@ export function createBlockEditor(opts = {}) {
             const after = node.splitText(r.startOffset);
             node.textContent = (node.textContent || '').slice(0, from);
             node.parentNode.insertBefore(wrap, after);
-            // 캐럿을 마크 뒤로 + 제로폭 아님(다음 타이핑이 마크 밖으로) — after 텍스트 시작에 위치.
+            // 캐럿 패딩 — 마크 바로 뒤 빈 경계는 브라우저가 이어지는 타이핑을 마크 '안'으로 넣는다(볼드 지속).
+            //  ZWSP 텍스트 노드를 끼우고 그 뒤에 캐럿 → 다음 타이핑이 마크 밖 평문. 직렬화(escInline)가 ZWSP 제거.
+            const pad = document.createTextNode('\u200B');
+            node.parentNode.insertBefore(pad, after);
             const s = window.getSelection();
             const nr = document.createRange();
-            nr.setStart(after, 0);
+            nr.setStart(pad, 1);
             nr.collapse(true);
             s.removeAllRanges();
             s.addRange(nr);

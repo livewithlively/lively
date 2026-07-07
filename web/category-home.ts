@@ -12,7 +12,7 @@ import { applyCoverBg, defaultCoverFor, openCoverPicker, openEmojiPicker } from 
 
 const HOME_PREFIX = 'category-home-';
 // 빈 대문 본문 자리표시 — knowledge_save 가 빈 body 를 거부해(비폴더), 보이지 않는 ZWSP 1자로 저장한다.
-const HOME_EMPTY = '​';
+const HOME_EMPTY = '\u200B';
 
 function homeDocName(cat: any): string { return HOME_PREFIX + (cat.key || cat.id); }
 // WIKI 목록/트리/검색에서 대문 문서를 숨길 때 쓰는 판별자(knowledge.ts 등에서 import).
