@@ -543,13 +543,16 @@ const knowledgeViewSet: Capability = {
 const knowledgePropsUi: Capability = {
   name: "knowledge_props_ui",
   title: "지식 속성 노출 설정",
-  description: "지식 1건의 속성 노출 오버라이드(props_ui: show/hide/full_width)를 부분 병합 저장한다(키에 null 을 주면 제거). 웹 전용.",
+  description: "지식 1건의 속성 노출 오버라이드(props_ui: show/hide/full_width)와 페이지 꾸미기(icon/cover, #657)를 부분 병합 저장한다(키에 null 을 주면 제거). 웹 전용.",
   scope: "memory",
   input: {
     name: z.string().min(1).max(64),
     show: z.array(z.string().min(1).max(64)).max(64).nullable().optional(),
     hide: z.array(z.string().min(1).max(64)).max(64).nullable().optional(),
     full_width: z.boolean().nullable().optional(),
+    // #657 페이지 꾸미기 — icon=이모지(짧은 문자열), cover=프리셋 키(grad:N|#hex) 또는 이미지 URL.
+    icon: z.string().min(1).max(80).nullable().optional(),
+    cover: z.string().min(1).max(500).nullable().optional(),
   },
   expose: {
     mcp: false,
@@ -573,12 +576,20 @@ const knowledgePropsUi: Capability = {
           }
           out.full_width = b.full_width;
         }
+        // #657 icon/cover — 문자열(설정) 또는 null(제거). 길이 상한은 zod(max 80/500)가 최종 방어.
+        for (const k of ["icon", "cover"] as const) {
+          if (!(k in b)) continue;
+          const v = b[k];
+          if (v === null) { out[k] = null; continue; }
+          if (typeof v !== "string" || !v.trim()) throw new HttpError(400, `${k} 는 문자열(또는 null=제거)이어야 합니다`);
+          out[k] = v.trim();
+        }
         return out;
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { props_ui: await setKnowledgePropsUi(input.name, { show: input.show, hide: input.hide, full_width: input.full_width }, writeCtx) };
+    return { props_ui: await setKnowledgePropsUi(input.name, { show: input.show, hide: input.hide, full_width: input.full_width, icon: input.icon, cover: input.cover }, writeCtx) };
   },
 };
 

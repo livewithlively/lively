@@ -4,6 +4,8 @@
 //  순환 import 금지: 이 모듈은 core/learn 만 import 한다(knowledge.ts → knowledge-doc.ts 단방향).
 import { LIFECYCLE_LABEL, absTime, api, el, errorNote, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
+import { createBlockEditor } from './block-editor.js';                      // #657 본문 in-place 편집
+import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';   // #657 아이콘/커버
 
 // ── 라벨 사전(지식 공용) — knowledge.ts 에서 이관(#592). ──
 const SPACE_LABEL = { business: '사업', product: '제품', system: '시스템' };
@@ -358,7 +360,7 @@ function knChildrenPanel(k) {
   const rows = children.map((c) => el('a', {
     class: 'kn-linkrow' + (c.lifecycle === 'archived' ? ' kn-row-archived' : ''),
     href: '#/k/' + encodeURIComponent(c.name) },
-    el('span', { class: 'kn-link-rel kn-link-child', text: knTreeIcon(c.notion_kind) }),
+    el('span', { class: 'kn-link-rel kn-link-child', text: c.icon || (c.is_folder ? '📁' : knTreeIcon(c.notion_kind)) }),
     el('span', { class: 'kn-linkrow-title', text: (c.title || c.name) + (c.lifecycle === 'archived' ? ' (보관됨)' : '') })));
   return el('div', { class: 'kn-links' },
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '하위 페이지' }),
@@ -903,11 +905,59 @@ async function buildKnowledgeDetail(container, name, opts?) {
   };
   propsSlot.replaceChildren(buildKnPropsBlock(k, hidden, { canEdit, onChanged: paintProps }));
 
-  // 본문 — 렌더러가 <br>/블록을 직접 처리하므로 pre-wrap(.unit-body) 불필요 — 새 .kn-doc-md 클래스.
+  // 본문 — (#657) 저작 문서는 노션처럼 **페이지가 곧 에디터**: 블록 에디터로 바로 타이핑, 자동 저장.
+  //  외부 미러(observed)·항상-주입·읽기전용 사용자는 기존 읽기 렌더(renderMarkdown) 유지.
   //  폴더(is_folder, #592)는 본문 대신 자식 목록이 중심 — 원문 토글도 생략.
+  const editableDoc = canEdit && !k.is_folder && k.provenance !== 'observed' && k.injection !== 'always';
+  const saveChip = el('span', { class: 'kn-save-chip', 'aria-live': 'polite' });
   let body;
   if (k.is_folder) {
     body = el('div', { class: 'kn-doc-body' }, await knFolderChildrenBlock(k));
+  } else if (editableDoc) {
+    // in-place 블록 에디터 + 자동 저장(2초 유휴 디바운스 · 포커스아웃 즉시). 저장은 비파괴 upsert({name, body_md}).
+    let saveTimer: any = null;
+    let saving = false;
+    const setChip = (t: string, busy?: boolean) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
+    const doSave = async () => {
+      if (saving || !editor.isDirty()) return;
+      saving = true;
+      setChip('저장 중…', true);
+      const md = editor.getMarkdown();
+      try {
+        await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({ name: k.name, body_md: md }) });
+        editor.resetDirty();
+        k.body_md = md;
+        setChip('저장됨');
+        setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
+      } catch (e) {
+        setChip('저장 실패 — 다시 시도합니다', true);
+        toast('자동 저장 실패 — ' + e.message, true);
+      }
+      saving = false;
+      if (editor.isDirty()) queueSave();   // 저장 중 추가 편집분 재큐잉
+    };
+    const queueSave = () => { setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 2000); };
+    const editor = createBlockEditor({
+      initial: k.body_md || '',
+      onChange: queueSave,
+      onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
+    });
+    editor.el.addEventListener('focusout', () => { if (editor.isDirty()) { clearTimeout(saveTimer); doSave(); } });
+    // 원문 보기(읽기) — 에디터 현재 상태의 markdown 스냅샷.
+    const rawView = el('pre', { class: 'kn-doc-raw' });
+    rawView.hidden = true;
+    let showingRaw = false;
+    const rawToggle = el('button', { class: 'btn btn-ghost btn-sm md-raw-toggle', text: '원문 보기',
+      onclick: () => {
+        showingRaw = !showingRaw;
+        if (showingRaw) rawView.textContent = editor.getMarkdown();
+        editor.el.hidden = showingRaw;
+        rawView.hidden = !showingRaw;
+        rawToggle.textContent = showingRaw ? '편집으로' : '원문 보기';
+      } });
+    body = el('div', { class: 'kn-doc-body kn-doc-editable' }, editor.el, rawView,
+      el('div', { class: 'kn-doc-rawrow' }, rawToggle));
+    (body as any)._getMd = () => editor.getMarkdown();   // 제목 저장 등 메타 upsert 가 편집 중 본문을 잃지 않게
   } else {
     const rawText = k.body_md || '';
     const rendered = rawText
@@ -935,9 +985,80 @@ async function buildKnowledgeDetail(container, name, opts?) {
     knProjectLinks(k.name),
     relatedBox);
 
+  // ── #657 페이지 꾸미기(커버/아이콘) + 제목 인라인 편집 — 노션형. ──
+  //  아이콘/커버는 props_ui(장식 — 미러에도 허용), 제목은 내용(observed/항상-주입은 불가).
+  const canRename = canEdit && k.provenance !== 'observed' && k.injection !== 'always';
+  const bodyMdNow = () => ((body as any)._getMd ? (body as any)._getMd() : (k.body_md || ''));   // 편집 모드면 에디터 스냅샷이 truth
+  const coverEl = el('div', { class: 'kn-doc-cover', hidden: true });
+  const iconBtn = el('button', { class: 'kn-doc-icon', type: 'button', hidden: true, title: canEdit ? '아이콘 변경' : '' });
+  const decorAdd = el('div', { class: 'kn-doc-decoradd' });
+  const curIcon = () => (k.props_ui && k.props_ui.icon) || (k.is_folder ? '📁' : '');
+  const curCover = () => (k.props_ui && k.props_ui.cover) || '';
+  async function saveDecor(patch) {
+    try { await saveKnPropsUi(k, patch); }
+    catch (e) { toast('저장 실패 — ' + e.message, true); }
+    paintDecor();
+  }
+  function paintDecor() {
+    const ic = curIcon(), cv = curCover();
+    // 커버
+    coverEl.hidden = !cv;
+    if (cv) applyCoverBg(coverEl, cv);
+    coverEl.replaceChildren(canEdit && cv ? el('div', { class: 'kn-cover-btns' },
+      el('button', { class: 'ke-coverbtn', type: 'button', text: '커버 변경',
+        onclick: (e: any) => openCoverPicker(e.target, { current: cv, onPick: (v) => saveDecor({ cover: v }) }) }),
+      el('button', { class: 'ke-coverbtn', type: 'button', text: '제거', onclick: () => saveDecor({ cover: null }) })) : null);
+    // 아이콘
+    iconBtn.hidden = !ic;
+    iconBtn.textContent = ic;
+    iconBtn.classList.toggle('on-cover', !!cv);
+    // 추가 버튼(호버 노출) — 권한자 & 비어있는 축만.
+    decorAdd.replaceChildren(
+      canEdit && !ic ? el('button', { class: 'ke-decor-btn', type: 'button', text: '☺ 아이콘 추가',
+        onclick: (e: any) => openEmojiPicker(e.target, { onPick: (em) => saveDecor({ icon: em }) }) }) : null,
+      canEdit && !cv ? el('button', { class: 'ke-decor-btn', type: 'button', text: '🖼 커버 추가',
+        onclick: (e: any) => openCoverPicker(e.target, { onPick: (v) => saveDecor({ cover: v }) }) }) : null);
+    decorAdd.hidden = !decorAdd.childNodes.length;
+  }
+  if (canEdit) {
+    iconBtn.onclick = () => openEmojiPicker(iconBtn, {
+      onPick: (em) => saveDecor({ icon: em }),
+      onClear: (k.props_ui && k.props_ui.icon) ? () => saveDecor({ icon: null }) : undefined,
+    });
+  }
+  paintDecor();
+
+  const titleEl = el('h1', { class: 'kn-doc-title' + (canRename ? ' kn-doc-title-edit' : ''),
+    ...(canRename ? { contenteditable: 'true', 'data-ph': '제목 없음', spellcheck: 'false' } : {}) });
+  titleEl.textContent = k.title || k.name;
+  if (canRename) {
+    titleEl.addEventListener('keydown', (e: any) => {
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); titleEl.blur(); }
+    });
+    titleEl.addEventListener('paste', (e: any) => {
+      e.preventDefault();
+      const t = (e.clipboardData || (window as any).clipboardData).getData('text/plain').replace(/\n+/g, ' ');
+      document.execCommand('insertText', false, t);
+    });
+    titleEl.addEventListener('blur', async () => {
+      const t = (titleEl.textContent || '').trim();
+      if (!t) { titleEl.textContent = k.title || k.name; return; }
+      if (t === (k.title || k.name)) return;
+      try {
+        const payload: any = { name: k.name, title: t, body_md: bodyMdNow() };
+        if (k.is_folder) payload.is_folder = true;
+        await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+        k.title = t;
+        toast('제목을 저장했습니다');
+      } catch (e) { toast('제목 저장 실패 — ' + e.message, true); titleEl.textContent = k.title || k.name; }
+    });
+  }
+
+  actions.prepend(saveChip);
   const parts = [
+    coverEl,
     el('div', { class: 'kn-doc-top' }, crumbs, actions),
-    el('h1', { class: 'kn-doc-title', text: (k.is_folder ? '📁 ' : '') + (k.title || k.name) }),
+    el('div', { class: 'kn-doc-head' }, iconBtn, decorAdd, titleEl),
     badges.length ? el('div', { class: 'kn-doc-badges' }, ...badges) : null,
     propsSlot,
     el('hr', { class: 'kn-doc-hr' }),
@@ -972,13 +1093,10 @@ async function knFolderChildrenBlock(k) {
     return el('div', { class: 'kn-doc-md kn-doc-md-empty',
       text: '폴더가 비어 있습니다 — 문서 상세의 ‘이동’으로 이 폴더에 담을 수 있습니다.' });
   }
-  let folderSet = new Set();
-  try { folderSet = new Set((await knFetchAuthoredTree()).filter((t) => t.is_folder).map((t) => t.name)); }
-  catch (_) { /* 아이콘 보강 실패 — 📄 폴백 */ }
   const rows = children.map((c) => el('a', {
     class: 'kn-linkrow' + (c.lifecycle === 'archived' ? ' kn-row-archived' : ''),
     href: '#/k/' + encodeURIComponent(c.name) },
-    el('span', { class: 'kn-link-rel kn-link-child', text: folderSet.has(c.name) ? '📁' : knTreeIcon(c.notion_kind) }),
+    el('span', { class: 'kn-link-rel kn-link-child', text: c.icon || (c.is_folder ? '📁' : knTreeIcon(c.notion_kind)) }),
     el('span', { class: 'kn-linkrow-title', text: (c.title || c.name) + (c.lifecycle === 'archived' ? ' (보관됨)' : '') })));
   return el('div', { class: 'kn-links kn-folder-children' },
     el('div', { class: 'sec-label sec-label-row' }, el('span', { text: '폴더 항목' }),
@@ -1086,6 +1204,102 @@ function openKnowledgePeek(name, opts?) {
     onDeleted: () => { requestClose(); if (onRefresh) onRefresh(); } });
 }
 
+// ════════════════════════════════════════════
+// #657 빠른 검색(⌘K) — 노션 퀵파인드. 의미검색(semantic, grep 폴백) 12건 + ↑↓/Enter(피크)/⌘Enter(전체 페이지).
+//  지식 계열 라우트(knowledge·k·k-edit·trash)에서 ⌘K/Ctrl+K 로 열린다(모듈 로드 시 1회 바인딩).
+// ════════════════════════════════════════════
+// 행 글리프 단일 소스 — 페이지 아이콘(props_ui.icon) > 폴더 > 문서.
+function knPageIcon(e) {
+  return (e && e.icon) || (e && e.is_folder ? '📁' : '📄');
+}
+
+let qkOpenFlag = false;
+function openQuickSearch() {
+  if (qkOpenFlag) return;
+  qkOpenFlag = true;
+  let entries: any[] = [];
+  let sel = 0;
+  const input = el('input', { class: 'qk-input', type: 'search',
+    placeholder: '검색어 입력 — 자연어 의미검색', 'aria-label': '빠른 검색' }) as HTMLInputElement;
+  const list = el('div', { class: 'qk-results' },
+    el('div', { class: 'qk-hint', text: '전체 지식에서 의미로 찾습니다. ↑↓ 이동 · Enter 미리보기 · ⌘Enter 페이지로' }));
+  const panel = el('div', { class: 'qk-panel', role: 'dialog', 'aria-label': '빠른 검색' },
+    el('div', { class: 'qk-inrow' }, el('span', { class: 'qk-glass', 'aria-hidden': 'true', text: '🔍' }), input,
+      el('span', { class: 'qk-esc', text: 'esc' })),
+    list);
+  const back = el('div', { class: 'qk-back' }, panel);
+  const close = () => {
+    back.remove();
+    qkOpenFlag = false;
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const openEntry = (e, fullPage) => {
+    if (!e) return;
+    close();
+    if (fullPage) { location.hash = '#/k/' + encodeURIComponent(e.name); return; }
+    const page = location.hash.replace(/^#\//, '').split(/[/?]/)[0] || '';
+    if (page === 'k' || page === 'k-edit') location.hash = '#/k/' + encodeURIComponent(e.name);
+    else openKnowledgePeek(e.name);
+  };
+  function paint() {
+    if (!entries.length) {
+      list.replaceChildren(el('div', { class: 'qk-hint',
+        text: input.value.trim() ? '결과가 없습니다 — 다른 말로 시도해 보세요.' : '전체 지식에서 의미로 찾습니다. ↑↓ 이동 · Enter 미리보기 · ⌘Enter 페이지로' }));
+      return;
+    }
+    list.replaceChildren(...entries.map((e, i) => {
+      const snip = String(e.snippet || '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      const row = el('button', { class: 'qk-row' + (i === sel ? ' on' : ''), type: 'button' },
+        el('span', { class: 'qk-row-ic', text: knPageIcon(e) }),
+        el('div', { class: 'qk-row-main' },
+          el('div', { class: 'qk-row-title', text: e.title || e.name }),
+          snip ? el('div', { class: 'qk-row-snip', text: snip }) : null));
+      row.addEventListener('mousedown', (ev) => ev.preventDefault());
+      row.onclick = (ev: any) => openEntry(e, ev.metaKey || ev.ctrlKey);
+      return row;
+    }));
+    const on = list.querySelector('.qk-row.on');
+    if (on) (on as any).scrollIntoView({ block: 'nearest' });
+  }
+  let t: any = null;
+  input.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q) { entries = []; sel = 0; paint(); return; }
+      try {
+        const r = await api('/api/ui/knowledge/semantic?' + new URLSearchParams({ q, limit: '12', injection: 'recalled' }));
+        // category-home-* = 카테고리 대문 문서(#657, category-home.ts) — 표면은 대문이므로 검색에서 숨김.
+        entries = ((r && r.entries) || []).filter((e) => !String(e.name || '').startsWith('category-home-'));
+        sel = 0;
+        paint();
+      } catch (_) { /* 검색 실패 — 이전 결과 유지 */ }
+    }, 240);
+  });
+  const onKey = (e: any) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (entries.length) { sel = (sel + (e.key === 'ArrowDown' ? 1 : entries.length - 1)) % entries.length; paint(); }
+      return;
+    }
+    if (e.key === 'Enter') { e.preventDefault(); openEntry(entries[sel], e.metaKey || e.ctrlKey); }
+  };
+  back.addEventListener('mousedown', (ev) => { if (ev.target === back) close(); });
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(back);
+  requestAnimationFrame(() => back.classList.add('open'));
+  input.focus();
+}
+document.addEventListener('keydown', (e: any) => {
+  if (!(e.metaKey || e.ctrlKey) || (e.key !== 'k' && e.key !== 'K')) return;
+  const page = location.hash.replace(/^#\//, '').split(/[/?]/)[0] || '';
+  if (!['knowledge', 'k', 'k-edit', 'trash'].includes(page)) return;
+  e.preventDefault();
+  openQuickSearch();
+});
+
 export {
   SPACE_LABEL,
   KN_INJECTION_LABEL,
@@ -1113,6 +1327,7 @@ export {
   knInvalidateTreeCaches,
   knLinksPanel,
   knNotionPropsPanel,
+  knPageIcon,
   knProjectLinks,
   knProvChip,
   knSimilarItem,
@@ -1120,5 +1335,7 @@ export {
   knTypeChip,
   openKnowledgePeek,
   openProjectChooser,
+  openQuickSearch,
   openSourceDetail,
+  saveKnPropsUi,
 };

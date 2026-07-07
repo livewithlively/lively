@@ -34,11 +34,13 @@ function slugify(s: string): string {
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 //  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
+//  icon(#657) = props_ui->>'icon' — 페이지 아이콘(노션형). 목록·검색·트리 행이 문서 글리프 대신 표시.
+const K_ICON_EXPR = `k.props_ui->>'icon' AS icon`;
 const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at"]
-  .map((c) => "k." + c).join(", ");
+  .map((c) => "k." + c).join(", ") + `, ${K_ICON_EXPR}`;
 // names 모드 — body_md 도 미조회(스니펫 불필요). 발견용 메타만(가장 얕게).
 const K_GREP_NAMES_SEL = ["name", "title", "injection", "provenance", "is_wiki", "summary", "updated_at"]
-  .map((c) => "k." + c).join(", ");
+  .map((c) => "k." + c).join(", ") + `, ${K_ICON_EXPR}`;
 
 const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("knowledge", name, op, before, after, ctx);
@@ -91,8 +93,10 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   const order = f.orderBy === "name" ? "k.name" : "k.updated_at DESC";
   params.push(Math.min(f.limit ?? 200, 500));
+  // icon/cover(#657, props_ui) — 목록 행 아이콘·갤러리 카드 커버용 얕은 노출(전체 props_ui 는 상세 전용 유지).
   return q(itemsPool,
-    `SELECT DISTINCT ${K_SEL} FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT $${params.length}`, params);
+    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover
+     FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT $${params.length}`, params);
 }
 
 export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
@@ -109,7 +113,8 @@ export async function getKnowledge(name: string): Promise<(KnowledgeRow & { cate
      WHERE ks.name=$1 ORDER BY ks.relation`, [name]);
   // #551 페이지 트리 — 자식(sort 순, archived 는 UI 가 배지로 구분)과 조상 체인(브레드크럼). parent_name 소프트참조.
   const children = await q(itemsPool,
-    `SELECT name, title, sort, lifecycle, external_system, type,
+    `SELECT name, title, sort, lifecycle, external_system, type, is_folder,
+            props_ui->>'icon' AS icon,
             fields->'notion'->>'kind' AS notion_kind
      FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'
      ORDER BY sort, title NULLS LAST, name LIMIT 500`, [name]);
@@ -136,13 +141,15 @@ export async function knowledgeTreeData(system: string, limit = 20000): Promise<
   const cap = Math.min(limit, 50000);
   if (system === "authored") {
     return q(itemsPool,
-      `SELECT name, title, parent_name, sort, lifecycle, is_folder, updated_at
+      `SELECT name, title, parent_name, sort, lifecycle, is_folder, updated_at,
+              props_ui->>'icon' AS icon
        FROM knowledge WHERE external_system IS NULL AND lifecycle <> 'superseded'
        ORDER BY parent_name NULLS FIRST, sort, title NULLS LAST, name
        LIMIT $1`, [cap]);
   }
   return q(itemsPool,
     `SELECT name, title, parent_name, sort, lifecycle, external_id, external_url, updated_at,
+            props_ui->>'icon' AS icon,
             fields->'notion'->>'kind' AS kind
      FROM knowledge WHERE external_system=$1 AND lifecycle <> 'superseded'
      ORDER BY parent_name NULLS FIRST, sort, title NULLS LAST, name
@@ -299,14 +306,15 @@ export async function setKnowledgeWiki(name: string, isWiki: boolean, ctx?: Writ
 //  키에 null 을 명시하면 그 키 제거, undefined(미전송)는 미변경. 전부 비면 컬럼 NULL 로 환원.
 //  뷰 설정은 내용이 아니다 — version 불변(setKnowledgeWiki 참조), updated_at 도 불변(목록 최신순 정렬을
 //  속성 토글이 밀어올리지 않게). observed(미러)에도 허용 — fields 가 아닌 별도 컬럼이라 재싱크에 생존(#592 §0).
-export interface KnowledgePropsUiPatch { show?: string[] | null; hide?: string[] | null; full_width?: boolean | null }
+//  icon/cover(#657) — 페이지 꾸미기(이모지 아이콘·커버 프리셋/이미지 URL)도 같은 클래스(내용 아님·미러에도 장식 허용).
+export interface KnowledgePropsUiPatch { show?: string[] | null; hide?: string[] | null; full_width?: boolean | null; icon?: string | null; cover?: string | null }
 export async function setKnowledgePropsUi(name: string, patch: KnowledgePropsUiPatch, ctx?: WriteCtx): Promise<Record<string, unknown>> {
   const row = await one(itemsPool, `SELECT props_ui FROM knowledge WHERE name=$1`, [name]);
   if (!row) throw new Error(`지식 '${name}' 없음`);
   const beforeUi = (row as { props_ui?: unknown }).props_ui;
   const merged: Record<string, unknown> =
     beforeUi && typeof beforeUi === "object" && !Array.isArray(beforeUi) ? { ...(beforeUi as Record<string, unknown>) } : {};
-  for (const key of ["show", "hide", "full_width"] as const) {
+  for (const key of ["show", "hide", "full_width", "icon", "cover"] as const) {
     const v = patch[key];
     if (v === undefined) continue;           // 미전송 = 미변경
     if (v === null) delete merged[key];      // null 명시 = 키 제거
@@ -365,6 +373,7 @@ export interface KnowledgeSearchRow {
   injection: string; provenance: string; is_wiki: boolean;
   summary: string | null; updated_at: string; snippet?: string;  // names 모드는 snippet 생략
   score?: number;  // 하이브리드 검색(knowledge_search)의 RRF 점수 — grep(searchKnowledge)은 미설정
+  icon?: string | null;  // 페이지 아이콘(#657, props_ui->>'icon') — 검색 결과 행 표시용
 }
 export type KnowledgeGrepMode = "snippets" | "names" | "count";
 // 공통 WHERE(grep 매처 + lifecycle='active' + injection/provenance). params 에 push 하고 절 문자열 반환.
@@ -401,7 +410,7 @@ export async function searchKnowledge(
   });
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
-      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at };
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, icon: r.icon ?? null };
     if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
@@ -471,7 +480,7 @@ async function rrfSearch(
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
-      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score) };
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null };
     if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });

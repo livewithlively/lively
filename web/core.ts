@@ -146,6 +146,7 @@ function safeHref(raw) {
 // 401 이 난다 → fetch(토큰 헤더, 쿠키 동봉) 후 blob URL 로 표시. 그 외(외부/정적) 이미지는 그대로 src.
 function mdImage(src, alt) {
   const img: any = el('img', { class: 'md-img', alt: alt || '', loading: 'lazy' });
+  img.dataset.mdSrc = String(src);   // #657 블록 에디터 직렬화용 원본 src 보존(blob URL 로 바뀌어도 md 는 원본 유지)
   if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
   const token = localStorage.getItem(TOKEN_KEY);
   fetch(src, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
