@@ -227,6 +227,10 @@ const projectGetV6: Capability = {
   },
 };
 
+// 생성(project/task) 응답에 실리는 prior-art 안내(#639) — 에이전트가 새로 만들기 전 기존 자산을 확인·재사용하도록.
+const PRIOR_ART_NOTE =
+  "⚠ 이것과 의미적으로 겹칠 수 있는 기존 지식입니다(유사도순). 새로 설계·구현하기 전에 knowledge_get(name)으로 본문을 확인하세요 — 이미 있으면 중복해서 만들지 말고 재사용/보강하세요.";
+
 const projectCreateV6: Capability = {
   name: "project_create_v6",
   title: "프로젝트 생성(v6)",
@@ -270,7 +274,10 @@ const projectCreateV6: Capability = {
     const project = await createProject(input, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
-    return { project };
+    // prior-art 앞단 표면화(#639) — 만들자마자 이 프로젝트와 겹칠 수 있는 기존 지식을 응답에 실어, 중복 재구현을
+    //  '종점(knowledge_save 유사경고)'이 아니라 '시작'에서 차단. 추천 실패해도 생성은 성공(비차단·catch).
+    const prior_art = await recommendKnowledgeForProject(project.id, { limit: 5, minScore: 0.55 }).catch(() => []);
+    return prior_art.length ? { project, prior_art, prior_art_note: PRIOR_ART_NOTE } : { project };
   },
 };
 
@@ -616,7 +623,9 @@ const taskCreateV6: Capability = {
     const task = await createTask(input, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task); // 하위태스크면 부모 task→프로젝트로 거슬러 해석.
     if (rootId) await regenAgents(rootId);              // 태스크/하위태스크 추가 → AGENTS.md 태스크 인덱스 갱신.
-    return { task };
+    // prior-art 앞단 표면화(#639) — task 이름+설명(의미) + 부모 프로젝트 카테고리(상속)로 기존 지식을 응답에.
+    const prior_art = await recommendKnowledgeForProject(task.id, { limit: 5, minScore: 0.55 }).catch(() => []);
+    return prior_art.length ? { task, prior_art, prior_art_note: PRIOR_ART_NOTE } : { task };
   },
 };
 

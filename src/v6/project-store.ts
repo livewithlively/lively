@@ -749,21 +749,29 @@ export async function projectsForKnowledge(name: string): Promise<{ project_id: 
   return rows.map((r) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation }));
 }
 
-// 필요지식 추천(벡터검색 #172) — 프로젝트 이름+설명(의미) + **프로젝트 카테고리 공유(가산점·구제)** 로 지식 추천.
+// 필요지식 추천(벡터검색 #172) — 노드(프로젝트·작업) 이름+설명(의미) + **소속 카테고리 공유(가산점·구제)** 로 지식 추천.
 //  이미 연결된(required/produced) 지식은 제외. 임베딩 off 여도 카테고리만으로 추천 가능(graceful). 설명·카테고리 둘 다 없으면 빈 배열.
-//  '✨ 자동으로 고르기'(웹) + project_recommend_knowledge_v6(MCP)의 데이터. 카테고리 인지 랭킹은 findRecommendedKnowledge.
+//  '✨ 자동으로 고르기'(웹) + project_recommend_knowledge_v6(MCP) + 생성 시 prior-art 표면화(#639)의 데이터. 카테고리 인지 랭킹은 findRecommendedKnowledge.
+//  nodeId 는 프로젝트뿐 아니라 task/subtask 도 받는다(같은 project 테이블) — task 는 자기 이름+설명으로 검색하되 카테고리는 부모 프로젝트에서 상속.
 export async function recommendKnowledgeForProject(
-  projectId: number, opts: { limit?: number; minScore?: number } = {},
+  nodeId: number, opts: { limit?: number; minScore?: number } = {},
 ): Promise<KnowledgeRecommendRow[]> {
-  const project = await getProjectRow(projectId);
-  if (!project) throw new Error(`프로젝트 #${projectId} 없음`);
-  const text = [project.name, project.description].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
+  const node = await getProjectRow(nodeId);
+  if (!node) throw new Error(`프로젝트/작업 #${nodeId} 없음`);
+  const text = [node.name, node.description].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
   // 카테고리 신호 = 소속 리스트에서 상속(#541 후속 — project_category 대체). 리스트 미지정/미분류면 카테고리 신호 없음.
+  //  task/subtask 는 createTask 가 list_id 를 넣지 않아 생성 직후엔 비어 있다(나중에 채워짐) → 생성 시 prior-art 호출
+  //  시점엔 자기 list_id 로 카테고리를 못 잡으므로, 부모를 타고 올라가 소속 프로젝트의 리스트 카테고리를 잇는다(#639 — project/task 공용).
   const catRows = await q(itemsPool,
-    `SELECT pl.category_id FROM project p JOIN project_list pl ON pl.id=p.list_id
-      WHERE p.id=$1 AND pl.category_id IS NOT NULL`, [projectId]);
+    `WITH RECURSIVE anc(id, parent_id, list_id) AS (
+       SELECT id, parent_id, list_id FROM project WHERE id=$1
+       UNION ALL
+       SELECT p.id, p.parent_id, p.list_id FROM project p JOIN anc ON p.id=anc.parent_id
+     )
+     SELECT pl.category_id FROM anc JOIN project_list pl ON pl.id=anc.list_id
+      WHERE pl.category_id IS NOT NULL LIMIT 1`, [nodeId]);
   const categoryIds = catRows.map((r) => Number(r.category_id)).filter((n) => Number.isInteger(n) && n > 0);
-  const linkedRows = await q(itemsPool, `SELECT name FROM project_knowledge WHERE project_id=$1`, [projectId]);
+  const linkedRows = await q(itemsPool, `SELECT name FROM project_knowledge WHERE project_id=$1`, [nodeId]);
   const exclude = linkedRows.map((r) => r.name);
   if (!text && !categoryIds.length) return [];   // 의미·카테고리 신호 둘 다 없음 → 추천 불가
   return findRecommendedKnowledge({
