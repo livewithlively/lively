@@ -3108,6 +3108,17 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
   max-height: calc(100vh - 88px); overflow-y: auto; overscroll-behavior: contain; }
 .pjv-side-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 8px; }
 .pjv-side-nav-head-label { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+/* #req: 폴더·리스트 검색창 — 트리 위. 돋보기 + input + ×(입력 시). */
+.pjv-side-search { display: flex; align-items: center; gap: 6px; margin: 8px 2px 6px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); transition: border-color .12s, box-shadow .12s; }
+.pjv-side-search:focus-within { border-color: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 12%, transparent); }
+.pjv-side-search-ic { flex: none; width: 15px; height: 15px; color: var(--muted-2); }
+.pjv-side-search-input { flex: 1 1 auto; min-width: 0; border: none; background: none; outline: none; font-size: 13px; font-family: inherit; color: var(--ink); padding: 0; }
+.pjv-side-search-input::placeholder { color: var(--muted-2); }
+.pjv-side-search-clear { flex: none; display: none; width: 18px; height: 18px; align-items: center; justify-content: center; border: none; background: var(--bg-tint-2); color: var(--muted); cursor: pointer; border-radius: 50%; font-size: 13px; line-height: 1; padding: 0; }
+.pjv-side-search-clear:hover { background: var(--line); color: var(--ink); }
+.pjv-side-search.has-q .pjv-side-search-clear { display: inline-flex; }
+.pjv-side-tree { display: flex; flex-direction: column; gap: 2px; }
+.pjv-side-empty { padding: 14px 8px; font-size: 12.5px; color: var(--muted-2); text-align: center; }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
 .pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
 .pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
@@ -3148,6 +3159,15 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-has-side .pjv-side-main { padding: 24px 32px 48px 28px; min-height: calc(100vh - 64px); }
 .pjv-has-side .pjv-board-chrome { margin-bottom: 2px; }
 .pjv-has-side .pjv-board-toolbar { margin-bottom: 14px; }
+/* #req: 툴바가 좁아지면 버튼 라벨이 글자 단위로 세로로 접히던 문제 — 버튼은 안 찌그러지게(flex:none) +
+   라벨 nowrap, 대신 툴바 전체가 여러 줄로 자연스럽게 줄바꿈(wrap)되게. 좌측 버튼군·우측 토글군 모두. */
+.pjv-board-toolbar { flex-wrap: wrap; align-items: center; row-gap: 8px; }
+.pjv-board-toolbar .pjv-tasks-head-left { flex-wrap: wrap; row-gap: 8px; flex: 1 1 auto; }
+.pjv-board-toolbar .pjv-view-btn,
+.pjv-board-toolbar .pjv-subtask-btn,
+.pjv-board-toolbar .pjv-closed-btn { flex: none; }
+.pjv-board-toolbar .pjv-view-btn-label,
+.pjv-board-toolbar .pjv-subtask-btn-label { white-space: nowrap; }
 
 /* ── #607 필드 많을 때 가로 스크롤 — 컬럼을 찌그러뜨리지 않고(고정 폭) 다 못 담으면 보드만 가로로 스크롤. ── */
 /*  박스 높이는 auto(내용에 맞음)라 세로 스크롤은 안 생기고(페이지가 세로 담당), 가로만 스크롤된다. */
@@ -3163,6 +3183,21 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 /* 스크롤 박스 안의 그룹/본문도 최소 콘텐츠 폭 이상이라야 행이 잘리지 않고 함께 늘어난다. */
 .pjv-board-scroll .pjv-tgroup, .pjv-board-scroll .pjv-tgroup-body, .pjv-board-scroll .pjv-flat-body,
 .pjv-board-scroll .pjv-trow-wrap, .pjv-board-scroll .pjv-proj-wrap { min-width: min-content; }
+
+/* ── #req 제목(첫 열) 고정 — 필드가 많아 가로 스크롤할 때 제목 열을 엑셀 1열 고정처럼 왼쪽에 붙여 둔다. ── */
+/*  가로 스크롤 컨테이너(사이드바 O = .pjv-board-scroll / 사이드바 X = .pjv-tasks-body) 안의 모든 제목칸을 sticky left:0. */
+/*  불투명 배경(--bg)이라 스크롤되는 메타 셀들이 제목칸 뒤로 숨는다. 행 호버/선택 시 배경색도 맞춰 준다. */
+.pjv-board-scroll .pjv-trow-title-cell,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-trow-title-cell {
+  position: sticky; left: 0; z-index: 3; background: var(--bg);
+}
+.pjv-board-scroll .pjv-trow:hover > .pjv-trow-title-cell,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-trow:hover > .pjv-trow-title-cell { background: var(--bg-tint); }
+.pjv-board-scroll .pjv-trow-wrap.pjv-row-selected > .pjv-trow > .pjv-trow-title-cell,
+.pjv-listboard:not(.pjv-has-side) .pjv-tasks-body .pjv-trow-wrap.pjv-row-selected > .pjv-trow > .pjv-trow-title-cell { background: var(--bg-sel); }
+/* 실제로 가로 스크롤된 상태(is-xscroll)일 때만 고정 열 우측에 얕은 그림자 — 고정 경계 표시(엑셀 느낌). */
+.pjv-board-scroll.is-xscroll .pjv-trow-title-cell,
+.pjv-tasks-body.is-xscroll .pjv-trow-title-cell { box-shadow: 8px 0 9px -8px rgba(21, 35, 59, .2); }
 
 /* ── #607 열 정렬 통일 토글 — 카드에 .pjv-align-left(좌측)/기본(중앙). 모든 값 셀 + 헤더를 한 방향으로(제목·추가 제외). ── */
 /*  기존에 nth-child·필드별로 좌/중이 뒤섞이던 것(우선순위 좌측 등)을 이 변수 규칙으로 통일. 헤더 행도 동일 방향. */
@@ -4083,9 +4118,14 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-entry-inline { margin-top: 2px; }
 
 /* ── #541 후속 — 리스트 카테고리(도메인) 소유 UI: 사이드바 배지·리스트 폼 셀렉트·상세 상속표시 ── */
-.pjv-side-cat { flex: none; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* #req: 이름 우선. flex-shrink 를 크게(1000) 줘 폭이 부족하면 태그가 먼저 줄고(이름은 최대한 유지),
+   폭이 넓으면 긴 태그('AI 워크플로우 표준화' 등)도 max 170px 까지 다 보인다(옛 92px 캡이 항상 ... 되던 문제). */
+.pjv-side-cat { flex: 0 1000 auto; min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; margin-left: 4px;
   background: color-mix(in srgb, var(--accent, #5b6cff) 14%, transparent); color: var(--accent, #5b6cff); }
+/* #req: 사이드바가 좁으면(≤ 240px) 카테고리 태그 숨김 — 더 중요한 이름에 폭 전부 양보. 사이드바 폭 컨테이너 쿼리. */
+.pjv-side-nav { container-type: inline-size; container-name: pjvside; }
+@container pjvside (max-width: 240px) { .pjv-side-navlist .pjv-side-cat { display: none; } }
 .pjv-side-cat.none { background: transparent; color: var(--muted-3); font-weight: 500; border: 1px dashed var(--line); }
 .pjv-side-navitem.active .pjv-side-cat { background: color-mix(in srgb, var(--accent, #5b6cff) 24%, transparent); }
 .pjv-cat-select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 14px; color: var(--ink); }

@@ -55,7 +55,8 @@ function pjvRestoreScroll(y) {
 
 // 프로젝트 탭 공통 페이지 헤더 — 공용 pageHead(#367). 제목 + 🗑 휴지통 진입점. 삭제 프로젝트 복원은 #/trash 공용 페이지.
 function projectPageHead() {
-  return pageHead('프로젝트', '우리 팀이 진행 중인 일을 한눈에 보고 관리합니다.', [
+  // 부제목(설명) 제거(#req) — 상단 군더더기 없이 바로 보드. 제목+휴지통만 남긴다.
+  return pageHead('프로젝트', null, [
     el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }),
   ], '젝트');
 }
@@ -398,6 +399,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   applyAlign(); // 저장된 정렬 초기 반영
 
   const body = el('div', { class: 'pjv-tasks-body' });
+  // 사이드바 없는 뷰에선 body 가 가로 스크롤 컨테이너 — 고정 제목 열 그림자 토글(#req).
+  body.addEventListener('scroll', () => { body.classList.toggle('is-xscroll', body.scrollLeft > 0); }, { passive: true });
+  // 사이드바 폴더·리스트 검색어(#req) — render() 재호출 사이에도 유지, 보드 재마운트 시 초기화. 트리만 다시 그려 입력 포커스 유지.
+  let sideSearchQ = '';
 
   const syncToggles = () => {
     subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
@@ -595,6 +600,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     main.append(toolbar);
     // 표 뷰(폴더·상태·평면)는 열이 많으면 가로로 넘칠 수 있으니 이 박스가 보드만 가로 스크롤한다(#607) — 개요·칸반은 제외.
     const boardBox = el('div', { class: 'pjv-board-scroll' });
+    // 가로 스크롤 상태 표시(#req) — 고정 제목 열 우측 그림자 토글(엑셀식 고정 경계).
+    boardBox.addEventListener('scroll', () => { boardBox.classList.toggle('is-xscroll', boardBox.scrollLeft > 0); }, { passive: true });
     const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
     if (pjvBoardView.overview && selFolder) {
       // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
@@ -751,13 +758,23 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '◀' });
     collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; pjvExitAreaMode(); pjvPersistSideOpen(); syncToggles(); render(); };
     navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), collapseBtn));
+    // ── 폴더·리스트 검색(#req) — 트리 위 검색창. 이름으로 폴더/리스트 필터, 매칭 폴더는 자동 펼침. 트리만 다시 그려 포커스 유지. ──
+    const searchInput = el('input', { class: 'pjv-side-search-input', type: 'text', placeholder: '폴더·리스트 검색', 'aria-label': '폴더·리스트 검색' }) as HTMLInputElement;
+    searchInput.value = sideSearchQ;
+    const searchClear = el('button', { class: 'pjv-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
+    const searchBox = el('div', { class: 'pjv-side-search' }, pjvSideSearchIcon(), searchInput, searchClear);
+    navInner.append(searchBox);
+    const treeWrap = el('div', { class: 'pjv-side-tree' });
+    navInner.append(treeWrap);
     // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
-    navInner.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
-    navInner.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list') return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
+    treeWrap.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
+    treeWrap.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list') return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
     // 폴더들(캐럿+폴더아이콘) › (하위 폴더 재귀 #541) › 리스트(파일). '전체' 제거(#473 후속) — 기본은 맨 위 폴더 진입.
     //  폴더는 드래그로 재정렬·리스트 드롭 타깃. depth 는 들여쓰기(중첩 폴더 — ClickUp Space›Folder 이관 시 2층).
     const renderFolderNode = (f, depth) => {
-      const open = isFolderOpen(f.id);
+      // 검색 중이면 매칭 안 되는 폴더 서브트리는 건너뛴다(자기 이름 또는 하위 폴더/리스트 매칭).
+      if (sideSearchActive() && !folderMatchesDeep(f)) return;
+      const open = sideSearchActive() ? true : isFolderOpen(f.id); // 검색 중엔 강제 펼침
       const fkey = 'F' + f.id;
       // Space(#541 — ClickUp 이관 최상위) 는 폴더와 구분되는 스페이스 스타일: 색 사각 아바타(첫 글자) + 볼드 라벨.
       const isSpace = typeof f.external_id === 'string' && f.external_id.startsWith('space:');
@@ -789,35 +806,61 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
           pjvReorderFolders(pjvMoveBefore(sibs, fid, f.id), reload);
         },
       });
-      navInner.append(fit);
+      treeWrap.append(fit);
       if (open) {
         const childFolders = foldersByParent.get(f.id) || [];
         for (const c of childFolders) renderFolderNode(c, depth + 1); // 하위 폴더 먼저(트리 위계)
-        const fLists = listsByFolder.get(f.id) || [];
-        if (fLists.length) for (const l of fLists) navInner.append(listNavItem(l, true, depth + 1));
-        else if (!childFolders.length) navInner.append(el('button', { class: 'pjv-side-folder-empty', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload, undefined, { folderId: f.id }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '리스트 추가' })));
+        // 검색 중: 폴더 이름 자체가 매칭이면 하위 리스트 전부, 아니면 매칭 리스트만.
+        const fLists = (listsByFolder.get(f.id) || []).filter((l) => !sideSearchActive() || folderSelfMatch(f) || listMatchesQ(l));
+        if (fLists.length) for (const l of fLists) treeWrap.append(listNavItem(l, true, depth + 1));
+        else if (!childFolders.length && !sideSearchActive()) treeWrap.append(el('button', { class: 'pjv-side-folder-empty', type: 'button', onclick: (e) => { e.stopPropagation(); openListForm(reload, undefined, { folderId: f.id }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '리스트 추가' })));
       }
     };
-    for (const f of rootFolders) renderFolderNode(f, 0);
-    // 최상위(폴더 없는) 리스트
-    for (const l of topLists) navInner.append(listNavItem(l, false));
-    // 미분류
-    if (showUn) {
-      const unKey = '__none__';
-      const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' },
-        pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unGroup.projects)) }));
-      uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
-      pjvFolderDropTarget(uit, null, reload);
-      navInner.append(uit);
+    // 검색 매칭 헬퍼(#req) — 리스트는 이름, 폴더는 이름 또는 하위(재귀)에 매칭이 있으면.
+    function sideSearchActive() { return !!(sideSearchQ && sideSearchQ.trim()); }
+    function sideSearchNorm(s) { return String(s || '').toLowerCase(); }
+    function listMatchesQ(l) { return !sideSearchActive() || sideSearchNorm(l.name).includes(sideSearchQ.trim().toLowerCase()); }
+    function folderSelfMatch(f) { return sideSearchNorm(f.name).includes(sideSearchQ.trim().toLowerCase()); }
+    function folderMatchesDeep(f) {
+      if (!sideSearchActive()) return true;
+      if (folderSelfMatch(f)) return true;
+      if (folderListsDeep(f.id).some(listMatchesQ)) return true;
+      return (foldersByParent.get(f.id) || []).some(folderMatchesDeep);
     }
-    // 폴더에서 빼기 — 리스트 드래그 중에만 보이는 드롭존(여기 놓으면 최상위=folder_id null). 빈 곳 드롭이 잘 안 맞던 문제 해소.
-    const rootZone = el('div', { class: 'pjv-side-rootzone' }, el('span', { class: 'pjv-side-rootzone-ico', 'aria-hidden': 'true', text: '⤴' }), el('span', { text: '여기로 끌어 폴더 밖으로 빼기' }));
-    pjvSideNavDrop(rootZone, { onList: (lid) => pjvMoveListToFolder(lid, null, reload) });
-    navInner.append(rootZone);
-    // 새 폴더 / 새 리스트
-    navInner.append(el('div', { class: 'pjv-side-newrow' },
-      el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })),
-      el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
+    // 트리(폴더·리스트)만 다시 그린다 — 검색 입력 중 전체 보드 재렌더 없이 트리만 갱신해 입력 포커스 유지.
+    const buildTree = () => {
+      treeWrap.replaceChildren();
+      for (const f of rootFolders) renderFolderNode(f, 0);
+      // 최상위(폴더 없는) 리스트
+      for (const l of topLists) if (listMatchesQ(l)) treeWrap.append(listNavItem(l, false));
+      // 미분류('기타') — 검색 중엔 '기타/미분류' 문자열 매칭일 때만.
+      if (showUn && (!sideSearchActive() || sideSearchNorm('기타 미분류').includes(sideSearchQ.trim().toLowerCase()))) {
+        const unKey = '__none__';
+        const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' },
+          pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unGroup.projects)) }));
+        uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
+        pjvFolderDropTarget(uit, null, reload);
+        treeWrap.append(uit);
+      }
+      if (sideSearchActive()) {
+        if (!treeWrap.querySelector('.pjv-side-navitem')) treeWrap.append(el('div', { class: 'pjv-side-empty', text: '검색 결과가 없습니다' }));
+        return; // 검색 중엔 드롭존·새 폴더/리스트 버튼 숨김
+      }
+      // 폴더에서 빼기 — 리스트 드래그 중에만 보이는 드롭존(여기 놓으면 최상위=folder_id null). 빈 곳 드롭이 잘 안 맞던 문제 해소.
+      const rootZone = el('div', { class: 'pjv-side-rootzone' }, el('span', { class: 'pjv-side-rootzone-ico', 'aria-hidden': 'true', text: '⤴' }), el('span', { text: '여기로 끌어 폴더 밖으로 빼기' }));
+      pjvSideNavDrop(rootZone, { onList: (lid) => pjvMoveListToFolder(lid, null, reload) });
+      treeWrap.append(rootZone);
+      // 새 폴더 / 새 리스트
+      treeWrap.append(el('div', { class: 'pjv-side-newrow' },
+        el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })),
+        el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
+    };
+    buildTree();
+    // 검색 입력 → 트리만 재빌드(포커스 유지). × 로 지움.
+    searchInput.addEventListener('input', () => { sideSearchQ = searchInput.value; searchBox.classList.toggle('has-q', !!searchInput.value); buildTree(); });
+    searchInput.addEventListener('keydown', (e: any) => { if (e.key === 'Escape') { searchInput.value = ''; sideSearchQ = ''; searchBox.classList.remove('has-q'); buildTree(); } });
+    searchClear.addEventListener('click', (e) => { e.stopPropagation(); searchInput.value = ''; sideSearchQ = ''; searchBox.classList.remove('has-q'); buildTree(); searchInput.focus(); });
+    searchBox.classList.toggle('has-q', !!sideSearchQ);
     nav.append(navInner);
     const sideWrap = el('div', { class: 'pjv-side-wrap' }, nav, main);
     try { const sw = localStorage.getItem('pjv:sideW'); if (sw) sideWrap.style.setProperty('--pjv-side-w', sw.indexOf('px') >= 0 ? sw : sw + 'px'); } catch (_) { /* noop */ }
@@ -5797,6 +5840,12 @@ function pjvProjTaskMenu(anchor, onChange) {
 function pjvSideToggleIcon() {
   const n = sv('svg', { class: 'pjv-view-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   n.append(sv('path', { d: 'M4 7.6C4 6.8 4.7 6.1 5.5 6.1h3.1c.4 0 .8.2 1.05.5l.9 1.15h7c.85 0 1.55.7 1.55 1.55v7.55c0 .85-.7 1.55-1.55 1.55H5.5C4.7 18.9 4 18.2 4 17.35V7.6z' }));
+  return n;
+}
+// 사이드바 검색창 돋보기 아이콘(#req).
+function pjvSideSearchIcon() {
+  const n = sv('svg', { class: 'pjv-side-search-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 11, cy: 11, r: 6.5 }), sv('path', { d: 'M20 20l-3.6-3.6' }));
   return n;
 }
 // 폴더(사이드바 항목) 아이콘 — 색을 채운 폴더. kind='all'(전체·파랑) / 'none'(미분류·점선 외곽) / 그 외=해당 폴더 색 채움.
