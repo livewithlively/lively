@@ -52,6 +52,7 @@ interface CronJob {
   params?: Record<string, unknown>;
   interval_sec: number;
   cron_expr?: string | null;
+  run_once?: boolean;
   last_run_at?: string | null;
 }
 
@@ -334,6 +335,7 @@ function buildMapPrompt(repo: string, count: number): string {
 
 // 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분, interval 은 now+interval.
 function computeNextRun(job: CronJob): string | null {
+  if (job.run_once) return null; // 1회성 — 다음 실행 없음
   if (job.cron_expr) {
     try { const n = nextCronTime(parseCron(job.cron_expr), new Date()); return n ? n.toISOString() : null; }
     catch { return null; }
@@ -355,6 +357,7 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
       await itemsPool.query(
         `UPDATE org_cron SET last_run_at=$2, last_status=$3, last_summary=$4, next_run_at=$5, updated_at=now() WHERE id=$1`,
         [job.id, startedIso, res.status, JSON.stringify(res.summary), nextIso]);
+      if (job.run_once) await itemsPool.query(`UPDATE org_cron SET enabled=false, updated_at=now() WHERE id=$1`, [job.id]); // 1회성: 실행 후 자동 비활성(반복 방지)
     } catch (e) { logger.warn({ err: e, job: job.id }, "org_cron 상태 갱신 실패"); }
     logger.info({ job: job.id, action: job.action, status: res.status }, "cron job done");
     return res;
@@ -363,6 +366,7 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
 
 // 잡이 지금 due 인가 — cron_expr(절대) 또는 interval_sec(상대).
 function isDue(job: CronJob, now: number): boolean {
+  if (job.run_once) return !job.last_run_at; // 1회성 — 아직 안 돌았으면 due(다음 틱 실행), 실행되면 executeAndRecord 가 비활성화
   if (job.cron_expr) {
     // 절대(벽시계): cron 매치 + 같은 '분'에 아직 안 돌았으면 due(30s 틱이 분당 2회라 매치 분을 놓치지 않음).
     try {

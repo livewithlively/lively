@@ -44,6 +44,7 @@ const cronSet: Capability = {
     params: z.record(z.unknown()).optional(),
     interval_sec: z.number().int().min(60).optional(),
     cron_expr: z.string().max(120).optional(),
+    run_once: z.boolean().optional(), // true = 1회 실행 후 자동 비활성(반복 안 함). interval/cron 무시.
     enabled: z.boolean().optional(),
     note: z.string().max(2000).optional(),
   },
@@ -55,6 +56,7 @@ const cronSet: Capability = {
         id: b.id, action: b.action, label: b.label, params: b.params,
         interval_sec: b.interval_sec != null ? Number(b.interval_sec) : undefined,
         cron_expr: b.cron_expr != null ? String(b.cron_expr) : undefined,
+        run_once: typeof b.run_once === "boolean" ? b.run_once : undefined,
         enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
         note: b.note,
       };
@@ -77,10 +79,10 @@ const cronSet: Capability = {
     if (!existing) {
       if (!input.action) throw new HttpError(400, "신규 잡은 action 이 필요합니다");
       const r = await itemsPool.query(
-        `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,created_by,updated_by)
-         VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,$9,$9) RETURNING *`,
+        `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,created_by,updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,COALESCE($9,false),$10,$10) RETURNING *`,
         [id, input.label ?? null, input.action, JSON.stringify(input.params ?? {}),
-         input.interval_sec ?? 600, cronVal, input.enabled ?? null, input.note ?? null, actor]);
+         input.interval_sec ?? 600, cronVal, input.enabled ?? null, input.note ?? null, input.run_once ?? null, actor]);
       return { job: r.rows[0] };
     }
     const r = await itemsPool.query(
@@ -88,13 +90,13 @@ const cronSet: Capability = {
          label=COALESCE($2,label), action=COALESCE($3,action),
          params=COALESCE($4,params), interval_sec=COALESCE($5,interval_sec),
          cron_expr = CASE WHEN $6::boolean THEN $7::text ELSE cron_expr END,
-         enabled=COALESCE($8,enabled), note=COALESCE($9,note),
+         enabled=COALESCE($8,enabled), note=COALESCE($9,note), run_once=COALESCE($11,run_once),
          version=version+1, updated_at=now(), updated_by=$10
        WHERE id=$1 RETURNING *`,
       [id, input.label ?? null, input.action ?? null,
        input.params != null ? JSON.stringify(input.params) : null,
        input.interval_sec ?? null, cronProvided, cronVal,
-       input.enabled ?? null, input.note ?? null, actor]);
+       input.enabled ?? null, input.note ?? null, actor, input.run_once ?? null]);
     return { job: r.rows[0] };
   },
 };

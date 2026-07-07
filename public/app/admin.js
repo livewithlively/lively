@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
+import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 // ════════════════════════════════════════════════════════════════════
@@ -723,7 +723,7 @@ async function cronPanel(detail, data) {
     if (!jobs.length)
         rows.append(el('div', { class: 'wikicat-empty', text: '아직 스케줄 잡이 없습니다.' }));
     for (const j of jobs) {
-        const sched = j.cron_expr ? ('cron: ' + j.cron_expr) : ('매 ' + (j.interval_sec || 0) + '초');
+        const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : ('매 ' + (j.interval_sec || 0) + '초'));
         const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
         const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
         const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: j.label || j.id }), el('span', { class: 'wikicat-key mono', text: j.action + sess }), el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
@@ -751,6 +751,7 @@ async function openCronForm(job, actions, reload) {
     const intervalInp = el('input', { type: 'number', style: inputStyle, value: String((job && job.interval_sec) || 1800), min: '60' });
     const cronInp = el('input', { type: 'text', style: inputStyle, value: (job && job.cron_expr) || '', placeholder: '예: 0 9 * * 1-5 (비우면 위 주기초 사용)' });
     const enabledChk = el('input', { type: 'checkbox', ...((job ? job.enabled : false) ? { checked: true } : {}) });
+    const onceChk = el('input', { type: 'checkbox', ...((job && job.run_once) ? { checked: true } : {}) });
     // 액션별 파라미터 — 레지스트리의 params 스펙에서 동적 생성. kind=session → 상시 세션 피커, 그 외 → 텍스트.
     const paramsWrap = el('div');
     const paramInputs = {};
@@ -796,7 +797,7 @@ async function openCronForm(job, actions, reload) {
     actionSel.onchange = renderParams;
     await renderParams();
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '잡 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('액션', '게이트웨이가 실행할 작업(등록된 액션 레지스트리). 액션마다 필요한 인자가 아래에 자동으로 뜹니다.', actionSel), paramsWrap, block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp), block('cron식 (선택)', '벽시계 스케줄. 예: 0 9 * * 1-5 = 평일 09:00. 비우면 주기초.', cronInp), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('액션', '게이트웨이가 실행할 작업(등록된 액션 레지스트리). 액션마다 필요한 인자가 아래에 자동으로 뜹니다.', actionSel), paramsWrap, block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp), block('cron식 (선택)', '벽시계 스케줄. 예: 0 9 * * 1-5 = 평일 09:00. 비우면 주기초.', cronInp), block('한 번만 실행', '체크 시 주기·cron 무시 → 1회 실행 후 자동으로 꺼짐(반복 안 함). 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '스케줄 잡 추가' : '스케줄 잡 수정 — ' + job.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -814,7 +815,7 @@ async function openCronForm(job, actions, reload) {
                 p[k] = v;
         }
         const body = { id, label: labelInp.value.trim() || null, action: actionSel.value, params: p,
-            interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), enabled: enabledChk.checked };
+            interval_sec: Number(intervalInp.value) || 1800, cron_expr: cronInp.value.trim(), run_once: onceChk.checked, enabled: enabledChk.checked };
         saveBtn.disabled = true;
         try {
             await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) });
@@ -898,7 +899,7 @@ function openManagedSessionForm(m, reload) {
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
     const idInp = el('input', { type: 'text', style: inputStyle, value: m ? m.id : '', placeholder: 'box-map-agent', ...(isNew ? {} : { disabled: true }) });
     const labelInp = el('input', { type: 'text', style: inputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
-    const accountInp = el('input', { type: 'text', style: inputStyle, value: (m && m.account) || '', placeholder: 'daon (라이블리 계정/프로필)' });
+    const account = memberCombo({ value: (m && m.account) || '', placeholder: '구성원 id 선택/검색 (예: daon)' });
     const wsInp = el('input', { type: 'text', style: inputStyle, value: (m && m.workspace_subpath) || '', placeholder: '비우면 managed/<id>' });
     const harnessSel = el('select', { style: inputStyle });
     for (const h of ['claude', 'codex', 'shell'])
@@ -914,7 +915,7 @@ function openManagedSessionForm(m, reload) {
     const autoChk = el('input', { type: 'checkbox', ...((m ? m.auto_approve : true) ? { checked: true } : {}) });
     const enabledChk = el('input', { type: 'checkbox', ...((m ? m.enabled : true) ? { checked: true } : {}) });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '상시 세션 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록·세션 탭에 보일 이름.', labelInp), block('라이블리 계정/프로필', '어떤 클로드 로그인(시드)으로 띄울지. 지금은 단일 프로필 — 곧 프로필별 로그인.', accountInp), block('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp), block('하네스', '', harnessSel), block('모델 (claude)', '이 세션의 claude 모델. 판단 무거운 작업(부트스트랩·분류)은 opus 권장. 비우면 기본.', modelSel), block('effort (claude)', '추론 강도(low~max). 무거운 판단은 high+ 권장. 비우면 기본.', effortSel), block('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))), block('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('세션 id', isNew ? '소문자 슬러그(a-z0-9_-). 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록·세션 탭에 보일 이름.', labelInp), block('라이블리 계정/프로필', '이 세션을 띄울 클로드 로그인(프로필=구성원). 목록에서 고르거나 입력. 각 프로필은 provision + 웹터미널 /login 후 사용.', account.el), block('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp), block('하네스', '', harnessSel), block('모델 (claude)', '이 세션의 claude 모델. 판단 무거운 작업(부트스트랩·분류)은 opus 권장. 비우면 기본.', modelSel), block('effort (claude)', '추론 강도(low~max). 무거운 판단은 high+ 권장. 비우면 기본.', effortSel), block('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))), block('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '상시 세션 추가' : '상시 세션 수정 — ' + m.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -932,7 +933,7 @@ function openManagedSessionForm(m, reload) {
             if (effortSel.value)
                 flags['--effort'] = effortSel.value;
         }
-        const body = { id, label: labelInp.value.trim() || null, account: accountInp.value.trim() || null,
+        const body = { id, label: labelInp.value.trim() || null, account: account.value() || null,
             workspace_subpath: wsInp.value.trim() || null, harness: harnessSel.value,
             auto_approve: autoChk.checked, enabled: enabledChk.checked,
             ...(harnessSel.value === 'claude' ? { flags } : {}) };

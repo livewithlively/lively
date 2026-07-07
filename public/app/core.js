@@ -46,6 +46,23 @@ const state = {
 const VOCAB_CRUD_DEFAULT_REPO = 'productivity'; // 어휘관리 화면 repo 셀렉터 폴백 기본(product 도메인 CRUD 전용)
 let revealUsed = false; // 입장 리빌은 첫 부팅 렌더 1회만(§6)
 let uid = 0; // datalist 등 고유 id 카운터
+// ── 공통 구성원(프로필) 단일 선택 콤보 — 드롭다운 + 타이핑 검색(native datalist), 자유입력도 허용. ──
+//  데이터원 = /api/ui/terminal/profiles(구성원 + 로그인상태). 여러 폼 재사용(상시세션 account 등).
+//  ⚠ 다중선택·초대는 별도(terminal.ts buildInvitePicker). 반환 { el, value() }.
+export function memberCombo(opts) {
+    const listId = 'mc-dl-' + (++uid);
+    const input = el('input', { type: 'text', style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box',
+        value: (opts && opts.value) || '', placeholder: (opts && opts.placeholder) || '구성원 선택/검색', list: listId, autocomplete: 'off' });
+    const dl = el('datalist', { id: listId });
+    api('/api/ui/terminal/profiles').then((r) => {
+        for (const p of (r && r.profiles) || []) {
+            const s = p.status || {};
+            const tag = s.loggedIn ? '✓ 로그인' : (s.provisioned ? 'provisioned·미로그인' : '미provision');
+            dl.append(el('option', { value: p.id, label: (p.name || p.id) + ' — ' + tag }));
+        }
+    }).catch(() => { });
+    return { el: el('div', {}, input, dl), value: () => input.value.trim() };
+}
 // ── DOM 헬퍼 ──
 // 불리언 HTML 속성 — 존재만으로 참이라 setAttribute(k, false) 로는 끌 수 없다(값 'false' 여도 켜진 상태).
 //  el 에서 이들만 특수처리: 불리언 false → 미설정(끔), 그 외(true·'' 등) → 빈 속성으로 존재(켬).

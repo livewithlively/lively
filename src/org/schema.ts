@@ -488,6 +488,8 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
+    -- run_once = 1회 실행 후 자동 비활성(반복 안 함). 부트스트랩 등 일회성 잡용. 비파괴 추가.
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS run_once BOOLEAN NOT NULL DEFAULT false;
   `);
   // 기본 잡 시드(최초 1회만 — 운영자 변경 보존).
   //  refresh_all: 커밋→is 자동 반영(결정적, LLM 없음). map_unmapped: 미매핑→도메인 LLM 분류(라이블리 시드 에이전트) — 토큰 설정 전이라 기본 OFF.
