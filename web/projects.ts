@@ -350,6 +350,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   pjvApplyColWidths(card, 'proj'); // 저장된 컬럼 폭 복원(#666)
   folders = folders || [];
   pjvSetStatusRegistry(lists); // 리스트별 커스텀 상태 레지스트리 — 모든 뷰의 프로젝트 행 상태 동그라미가 참조(#475).
+  pjvSetListRegistry(lists);   // #710 리스트별 컬럼 표시/숨김 — 숨김 토글이 리스트 settings 를 id 로 찾아 읽고 쓰게(팀 공유).
+  pjvBoardFieldsCur = fields || []; // #710 확장 — 커스텀 컬럼 숨김 재조정·되살리기 패널이 참조할 현재 보드 필드.
 
   // 프로젝트별 태스크 캐시(행 펼침용) — 같은 렌더 동안 재사용(프로미스 캐싱으로 동시요청 합침).
   const taskCache = new Map();
@@ -553,11 +555,11 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     //  컬럼 id='cu:<external_id>'(공유 정의), 편집은 행별 내부 field id(cuIds)로 해소. 행 값은 field_values 에 프리필.
     // #607/D 리스트별 필드 — 선택 리스트의 전용 필드 + 전역 필드만. 폴더·전체 스코프(selList 없음)면 전역만.
     let effFields = pjvFieldsForList(fields, selList ? selList.id : null);
-    // 뷰 유래(view-driven) 기본숨김 컬럼 변수 리셋 — 다른 리스트/스코프로 이동 시 이전 리스트 뷰가 켠 폭 잔존 방지
-    //  (사용자가 (+)패널로 명시로 켠 것(shown-set)은 유지).
-    for (const c of PJV_STD_COLS.proj) {
-      if (c.defaultHidden && !pjvGetShownCols('proj').has(c.key)) card.style.removeProperty(PJV_STD_COL_VAR[c.key]);
-    }
+    // #710 리스트별 컬럼 표시/숨김 재조정 — 선택 스코프(리스트)마다 그 리스트 settings 로 **완전 재조정**(팀 공유).
+    //  리스트 밖(전체·폴더) 스코프면 listId=null → 보드 전역(per-user localStorage). card.dataset.colList 도 여기서 새겨져
+    //  헤더 ⋯/되살리기 토글이 현재 스코프를 안다. 이 호출이 예전의 '뷰 유래 기본숨김 잔존 폭 리셋'까지 포함한다(완전 재조정).
+    pjvApplyHiddenCols(card, 'proj', selList ? selList.id : null);
+    pjvApplyColWidths(card, 'proj', selList ? selList.id : null);
     if (selList && selList.external_id) {
       const cu = pjvCuFieldsCache.get(selList.id);
       if (cu === undefined) {
@@ -581,7 +583,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             if (std) {
               const def = PJV_STD_COLS.proj.find((x) => x.key === std);
               // 기본숨김 컬럼만 뷰가 켠다(기본표시 컬럼은 이미 보임). 카드 변수로 이 렌더에 즉시 반영(저장 안 함 — 뷰 유래).
-              if (def && def.defaultHidden && !pjvGetShownCols('proj').has(std)) card.style.setProperty(PJV_STD_COL_VAR[std], PJV_STD_COL_W[std] || '92px');
+              if (def && def.defaultHidden && !pjvGetShownCols('proj', selList.id).has(std)) card.style.setProperty(PJV_STD_COL_VAR[std], PJV_STD_COL_W[std] || '92px'); // #710 이 리스트 shown-set 기준
             }
           }
           // ② 커스텀필드 → 뷰의 순서/노출로 정렬·필터(뷰에 없는 필드는 뒤에 유지 — 데이터 발견성 우선).
@@ -6420,10 +6422,11 @@ function pjvSetColW(surface, colKey, px) {
 }
 // 카드 생성 시 1회 — 저장된 컬럼 폭 복원. 숨긴 기본 컬럼(폭 0)은 건너뛴다(폭 적용이 숨김을 풀면 안 됨).
 //  pjvApplyHiddenCols 뒤에 불러 defaultHidden 컬럼의 '켬 폭'(92px)을 저장 폭이 덮어쓴다.
-function pjvApplyColWidths(card, surface) {
+function pjvApplyColWidths(card, surface, listId?) {
+  const lid = listId != null ? listId : (card && card.dataset.colList) || null; // #710 현재 리스트 스코프
   const m = pjvGetColW(surface);
   for (const colKey of Object.keys(m)) {
-    if (PJV_STD_COL_VAR[colKey] && !pjvStdColVisible(surface, colKey)) continue;
+    if (!pjvStdColVisible(surface, colKey, lid)) continue; // 리스트별 숨김(기본·커스텀)이면 저장폭이 되살리지 않게
     card.style.setProperty(pjvColWVar(colKey), m[colKey]);
   }
 }
@@ -6482,40 +6485,96 @@ const PJV_STD_COLS = {
 const PJV_STD_COL_VAR = { team: '--pjv-w-team', assignee: '--pjv-w-assignee', due: '--pjv-w-due', start: '--pjv-w-start', created: '--pjv-w-created', updated: '--pjv-w-updated', priority: '--pjv-w-priority', sess: '--pjv-w-sess' };
 const PJV_STD_COL_W = { start: '92px', created: '92px', updated: '92px' }; // defaultHidden 컬럼을 켤 때 부여할 폭
 function pjvHiddenColsKey(surface) { return 'pjv:hiddenCols:' + surface; }
-function pjvGetHiddenCols(surface) { try { return new Set(JSON.parse(localStorage.getItem(pjvHiddenColsKey(surface)) || '[]')); } catch (_) { return new Set(); } }
-function pjvSetHiddenCols(surface, set) { try { localStorage.setItem(pjvHiddenColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ } }
+// ── #710 리스트별 컬럼 표시/숨김(팀 공유) ─────────────────────────────────────
+//  리스트 스코프(선택 리스트)에선 컬럼 숨김을 그 리스트의 settings(hiddenCols/shownCols)를 단일 출처로 읽고 쓴다
+//  → 서버 저장이라 **전체 구성원이 같은 컬럼 구성을 본다**(리스트마다 다르게). 리스트 밖 스코프(전체·폴더·비사이드바
+//  상태/평면)는 예전대로 per-user localStorage(pjv:hiddenCols|shownCols:<surface>). #607/D 결정(리스트별 커스텀=백엔드
+//  공유)의 시야 확장 — 거기선 필드 '정의'를, 여기선 필드 '표시'를 리스트 단위로. listId 없으면(=null/'') 보드 전역.
+const pjvListById = new Map();
+let pjvBoardFieldsCur: any[] = []; // #710 확장 — 현재 보드의 커스텀 필드(anchor board.fields). 커스텀 컬럼 리스트별 숨김 재조정(pjvApplyHiddenCols)·되살리기 패널이 참조.
+function pjvSetListRegistry(lists) { pjvListById.clear(); for (const l of (lists || [])) if (l && l.id != null) pjvListById.set(Number(l.id), l); }
+function pjvListOf(listId) { return listId == null || listId === '' ? null : (pjvListById.get(Number(listId)) || null); }
+function pjvColSetFromList(list, key) { const a = list && list.settings && list.settings[key]; return new Set((Array.isArray(a) ? a : []).filter((x) => typeof x === 'string')); }
+// 리스트 settings 의 컬럼 집합을 낙관적으로 갱신(같은 렌더의 후속 읽기·다른 뷰가 즉시 반영) + 서버 저장(얕은 병합, 공유).
+function pjvPersistListColSet(list, key, arr) {
+  list.settings = list.settings || {};
+  list.settings[key] = arr;
+  api('/api/ui/v6/project-lists/' + list.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { [key]: arr } }) })
+    .catch((e) => toast('컬럼 표시 설정 저장 실패 — ' + (e && e.message || e), true));
+}
+function pjvGetHiddenCols(surface, listId?) {
+  const l = pjvListOf(listId);
+  if (l) return pjvColSetFromList(l, 'hiddenCols');
+  try { return new Set(JSON.parse(localStorage.getItem(pjvHiddenColsKey(surface)) || '[]')); } catch (_) { return new Set(); }
+}
+function pjvSetHiddenCols(surface, set, listId?) {
+  const l = pjvListOf(listId);
+  if (l) { pjvPersistListColSet(l, 'hiddenCols', [...set]); return; }
+  try { localStorage.setItem(pjvHiddenColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ }
+}
 // 기본숨김(defaultHidden) 컬럼의 '명시 켬' 저장 — hidden-set 과 별도(#541).
 function pjvShownColsKey(surface) { return 'pjv:shownCols:' + surface; }
-function pjvGetShownCols(surface) { try { return new Set(JSON.parse(localStorage.getItem(pjvShownColsKey(surface)) || '[]')); } catch (_) { return new Set(); } }
-function pjvSetShownCols(surface, set) { try { localStorage.setItem(pjvShownColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ } }
-function pjvStdColVisible(surface, key) {
-  const def = (PJV_STD_COLS[surface] || []).find((c) => c.key === key);
-  return def && def.defaultHidden ? pjvGetShownCols(surface).has(key) : !pjvGetHiddenCols(surface).has(key);
+function pjvGetShownCols(surface, listId?) {
+  const l = pjvListOf(listId);
+  if (l) return pjvColSetFromList(l, 'shownCols');
+  try { return new Set(JSON.parse(localStorage.getItem(pjvShownColsKey(surface)) || '[]')); } catch (_) { return new Set(); }
 }
-// 카드 생성 시 1회 — 저장된 숨김 컬럼을 폭 0 으로 적용(surface 별). 모달 하위태스크 표에는 적용하지 않는다(되살릴 UI가 없어서).
-function pjvApplyHiddenCols(card, surface) {
+function pjvSetShownCols(surface, set, listId?) {
+  const l = pjvListOf(listId);
+  if (l) { pjvPersistListColSet(l, 'shownCols', [...set]); return; }
+  try { localStorage.setItem(pjvShownColsKey(surface), JSON.stringify([...set])); } catch (_) { /* noop */ }
+}
+function pjvStdColVisible(surface, key, listId?) {
+  const def = (PJV_STD_COLS[surface] || []).find((c) => c.key === key);
+  return def && def.defaultHidden ? pjvGetShownCols(surface, listId).has(key) : !pjvGetHiddenCols(surface, listId).has(key);
+}
+// 저장된 숨김 컬럼을 폭 0 으로 적용(surface·리스트별, #710). 카드 생성 시 1회 + 리스트 전환마다 renderArea 가 재호출하므로
+//  **완전 재조정**: 보여야 할 컬럼은 var 를 지워 기본폭으로 되돌린다(이전 리스트가 남긴 0/켬폭 잔존 제거). 저장폭 복원은 뒤이어
+//  pjvApplyColWidths. dataset.colList 에 현재 스코프를 새겨 두면 컬럼 ⋯/되살리기 토글이 그 스코프로 읽고 쓴다(카드 파생 스코프).
+//  모달 하위태스크 표에는 적용하지 않는다(되살릴 UI가 없어서). listId 없으면 보드 전역(per-user localStorage).
+function pjvApplyHiddenCols(card, surface, listId?) {
   card.dataset.colSurface = surface;
-  const hidden = pjvGetHiddenCols(surface);
-  const shown = pjvGetShownCols(surface);
+  card.dataset.colList = listId != null && listId !== '' ? String(listId) : '';
+  const hidden = pjvGetHiddenCols(surface, listId);
+  const shown = pjvGetShownCols(surface, listId);
   for (const c of PJV_STD_COLS[surface]) {
-    if (c.defaultHidden) { if (shown.has(c.key)) card.style.setProperty(PJV_STD_COL_VAR[c.key], PJV_STD_COL_W[c.key] || '92px'); }
-    else if (hidden.has(c.key)) card.style.setProperty(PJV_STD_COL_VAR[c.key], '0px');
+    const v = PJV_STD_COL_VAR[c.key];
+    if (!v) continue;
+    if (c.defaultHidden) {
+      if (shown.has(c.key)) card.style.setProperty(v, PJV_STD_COL_W[c.key] || '92px');
+      else card.style.removeProperty(v);   // 기본숨김 & 미켬 → 기본(0폭) 복귀
+    } else if (hidden.has(c.key)) {
+      card.style.setProperty(v, '0px');
+    } else {
+      card.style.removeProperty(v);         // 보임 → 기본폭 복귀(리스트 전환 잔존 제거; 저장폭은 pjvApplyColWidths 가 다시 얹음)
+    }
+  }
+  // #710 확장 — 커스텀 필드 컬럼도 리스트별 숨김(hidden-set 의 'f:<id>' 키). 프로젝트 보드(캐시된 board.fields)만.
+  //  전환마다 재조정: 숨김이면 폭 0, 아니면 var 제거(기본폭 복귀·저장폭은 pjvApplyColWidths 가 다시). 태스크 보드(surface='task')는
+  //  그 보드 필드가 board.fields 와 달라(프로젝트 task_field) 커스텀 숨김 미지원 — 건너뜀(회귀 없음).
+  if (surface === 'proj') for (const f of pjvBoardFieldsCur) {
+    const cv = pjvColWVar('f:' + f.id);
+    if (hidden.has('f:' + f.id)) card.style.setProperty(cv, '0px');
+    else card.style.removeProperty(cv);
   }
 }
-// 컬럼 보이기/숨기기 토글 — 저장 + 해당 카드의 폭 변수 즉시 반영(리로드 없이 접힘/펼침).
-function pjvSetStdColVisible(surface, key, visible, card) {
+// 컬럼 보이기/숨기기 토글 — 저장 + 해당 카드의 폭 변수 즉시 반영(리로드 없이 접힘/펼침). 기본 컬럼·커스텀 필드('f:<id>' 키) 공용(#710).
+//  스코프(#710): 명시 listId > 카드의 현재 리스트(dataset.colList, pjvApplyHiddenCols 가 새김) > 보드 전역.
+//  리스트 스코프면 그 리스트 settings 에 저장돼 전체 구성원에게 공유된다.
+function pjvSetStdColVisible(surface, key, visible, card, listId?) {
+  const lid = listId != null && listId !== '' ? listId : ((card && card.dataset.colList) || null);
   const def = (PJV_STD_COLS[surface] || []).find((c) => c.key === key);
   if (def && def.defaultHidden) {
-    const sh = pjvGetShownCols(surface);
+    const sh = pjvGetShownCols(surface, lid);
     if (visible) sh.add(key); else sh.delete(key);
-    pjvSetShownCols(surface, sh);
+    pjvSetShownCols(surface, sh, lid);
     if (card) { if (visible) card.style.setProperty(PJV_STD_COL_VAR[key], PJV_STD_COL_W[key] || '92px'); else card.style.removeProperty(PJV_STD_COL_VAR[key]); }
     return;
   }
-  const s = pjvGetHiddenCols(surface);
+  const s = pjvGetHiddenCols(surface, lid);
   if (visible) s.delete(key); else s.add(key);
-  pjvSetHiddenCols(surface, s);
-  if (card) { if (visible) card.style.removeProperty(PJV_STD_COL_VAR[key]); else card.style.setProperty(PJV_STD_COL_VAR[key], '0px'); }
+  pjvSetHiddenCols(surface, s, lid);
+  if (card) { const cv = pjvColWVar(key); if (visible) card.style.removeProperty(cv); else card.style.setProperty(cv, '0px'); } // pjvColWVar: 기본 키→고정 var, 'f:<id>'→커스텀 var(#710)
 }
 // 기본 컬럼 헤더 — 라벨 + 호버 ⋯(숨기기). 커스텀 필드 헤더(pjvColumnHead)와 같은 클래스/결.
 function pjvStdColHead(surface, key, label) {
@@ -6536,18 +6595,44 @@ function pjvStdColHead(surface, key, label) {
   return cell;
 }
 // Fields(컬럼 추가) 패널의 '기본 컬럼' 섹션 — 각 기본 컬럼의 보임/숨김 토글(되살리기 진입점).
+//  스코프(#710): 카드의 현재 리스트(dataset.colList)면 그 리스트만·전체 구성원 공유, 없으면 보드 전역(per-user).
 function pjvDefaultColsSection(surface, card) {
+  const lid = (card && card.dataset.colList) || null;
+  const list = pjvListOf(lid);
   const sec = el('div', { class: 'pjv-fields-defcols' });
-  sec.append(el('div', { class: 'pjv-fields-sec', text: '기본 컬럼' }));
+  sec.append(el('div', { class: 'pjv-fields-sec', text: '기본 컬럼' + (list ? ' · 이 리스트' : '') }));
   for (const c of PJV_STD_COLS[surface]) {
     const row = el('button', { class: 'pjv-defcol-row', type: 'button' });
     const toggle = el('span', { class: 'pjv-defcol-toggle', 'aria-hidden': 'true' });
     const paint = (on) => { toggle.classList.toggle('on', on); row.setAttribute('aria-pressed', String(on)); };
-    paint(pjvStdColVisible(surface, c.key)); // 기본숨김(defaultHidden) 컬럼은 shown-set 기준(#541)
+    paint(pjvStdColVisible(surface, c.key, lid)); // 기본숨김(defaultHidden)=shown-set 기준(#541); 리스트 스코프면 그 리스트 기준(#710)
     row.append(el('span', { class: 'pjv-defcol-name', text: c.label }), toggle);
     row.onclick = () => { const on = !toggle.classList.contains('on'); pjvSetStdColVisible(surface, c.key, on, card); paint(on); };
     sec.append(row);
   }
+  if (list) sec.append(el('div', { class: 'pjv-menu-hint', text: '이 리스트에만 적용 · 전체 구성원 공유' }));
+  return sec;
+}
+// Fields 패널 '커스텀 필드' 섹션(#710 확장) — 이 스코프의 커스텀 필드 표시/숨김 토글(헤더 ⋯ '이 컬럼 숨기기'의 되살리기 진입점).
+//  프로젝트 보드 전용(pjvBoardFieldsCur = board.fields). 스코프는 카드의 dataset.colList(기본 컬럼 섹션과 동일 규칙). 필드 없으면 null.
+function pjvCustomColsSection(card, reload) {
+  const lid = (card && card.dataset.colList) || null;
+  const fields = pjvFieldsForList(pjvBoardFieldsCur, lid); // 이 리스트 스코프의 커스텀 필드(#607/D 전역+리스트전용)
+  if (!fields.length) return null;
+  const list = pjvListOf(lid);
+  const sec = el('div', { class: 'pjv-fields-defcols' });
+  sec.append(el('div', { class: 'pjv-fields-sec', text: '커스텀 필드' + (list ? ' · 이 리스트' : '') }));
+  for (const f of fields) {
+    const key = 'f:' + f.id;
+    const row = el('button', { class: 'pjv-defcol-row', type: 'button' });
+    const toggle = el('span', { class: 'pjv-defcol-toggle', 'aria-hidden': 'true' });
+    const paint = (on) => { toggle.classList.toggle('on', on); row.setAttribute('aria-pressed', String(on)); };
+    paint(pjvStdColVisible('proj', key, lid)); // 커스텀 키도 hidden-set 기준(#710)
+    row.append(el('span', { class: 'pjv-defcol-name', text: f.name || key }), toggle);
+    row.onclick = () => { const on = !toggle.classList.contains('on'); pjvSetStdColVisible('proj', key, on, card); paint(on); };
+    sec.append(row);
+  }
+  if (list) sec.append(el('div', { class: 'pjv-menu-hint', text: '이 리스트에만 적용 · 전체 구성원 공유' }));
   return sec;
 }
 function pjvHasFieldValue(v) {
@@ -6950,6 +7035,9 @@ function pjvColumnMenu(anchor, field, projectId, reload) {
   menu.append(mk('이름 변경', () => pjvRenameColumn(anchor, field, reload)));
   const meta = PJV_FIELD_BY_KEY[field.field_type];
   if (meta && meta.config === 'options') menu.append(mk('옵션 편집', () => pjvEditColumnOptions(field, reload)));
+  // #710 이 컬럼 숨기기 — 프로젝트 보드에서만(리스트 스코프면 그 리스트만·팀 공유, 아니면 보드 전역). 되살리기: 컬럼 추가(＋)→커스텀 필드.
+  const _card = anchor.closest('.pjv-tasks-card');
+  if (_card && _card.classList.contains('pjv-proj-card')) menu.append(mk('이 컬럼 숨기기', () => pjvSetStdColVisible('proj', 'f:' + field.id, false, _card)));
   menu.append(mk('컬럼 삭제', () => pjvDeleteColumn(field, reload), true));
 }
 function pjvRenameColumn(anchor, field, reload) {
@@ -7036,9 +7124,11 @@ function pjvOpenFieldsPanel(anchor, projectId, reload, listId?) {
     const tNew = el('button', { class: 'pjv-fields-tab' + (tab === 'new' ? ' on' : ''), type: 'button', text: '새로 만들기', onclick: () => showPicker('new') });
     const tExist = el('button', { class: 'pjv-fields-tab' + (tab === 'existing' ? ' on' : ''), type: 'button', text: '기존 항목', onclick: () => showPicker('existing') });
     const list = el('div', { class: 'pjv-fields-list' });
+    const _customSec = surface === 'proj' ? pjvCustomColsSection(card, reload) : null; // #710 확장 — 커스텀 필드 표시/숨김(프로젝트 보드)
     panel.replaceChildren(
       el('div', { class: 'pjv-fields-head' }, el('span', { class: 'pjv-fields-title', text: '필드' })),
       pjvDefaultColsSection(surface, card),
+      ...(_customSec ? [_customSec] : []),
       search, el('div', { class: 'pjv-fields-tabs' }, tNew, tExist), list);
     const renderNew = () => {
       const qs = search.value.trim().toLowerCase();
