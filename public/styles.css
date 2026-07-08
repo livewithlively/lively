@@ -3970,8 +3970,8 @@ body[data-route="projects2-board"] main { max-width: none; padding-left: 16px; p
 .pjv-ov-name { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-ov-stats { display: inline-flex; gap: 6px; flex: none; }
 .pjv-ov-stat { font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px; }
-.pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 9px; }
+.pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 10px; } /* 최소 폭 220→164(#req) — 열 폭을 줄여 1행당 카드 수 증가 */
+.pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 8px; }
 .pjv-ov-card:hover { border-color: var(--accent, #5b6cff); box-shadow: 0 3px 12px rgba(21,35,59,.08); }
 .pjv-ov-card:active { transform: translateY(1px); }
 .pjv-ov-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
