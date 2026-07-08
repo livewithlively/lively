@@ -234,7 +234,8 @@ async function buildCategoryHome(slot, cat, opts = {}) {
     const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), catIsMine ? el('span', { class: 'cath-meta-team', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
     const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
     // (#req) 0에서 재설계 — 커버는 선택. 기본 레이아웃: 브레드크럼 → (커버) → 아이콘 → 제목+액션 → 설명 → 탭.
-    slot.append(el('div', { class: 'cath' }, metaEl, cover, el('div', { class: 'cath-inner' }, coverAddBtn, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, titleEl, descEl), actionRow), tabs, bodyBox)));
+    void metaEl; // (#req) 상단 브레드크럼(공간·우리 팀) 제거 — 사이드바·제목이 이미 맥락을 줘 군더더기.
+    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, coverAddBtn, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, titleEl, descEl), actionRow), tabs, bodyBox)));
     // 탭 초기 해석 — 'auto'(기본)면 대문 내용이 있을 때 대문, 없으면 문서(빈 대문으로 막지 않기).
     if (opts.onTab)
         opts.onTab(opts.tab === 'docs' ? 'docs' : (opts.tab === 'home' ? 'home' : (hasContent ? 'home' : 'docs')));

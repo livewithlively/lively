@@ -212,9 +212,9 @@ async function buildCategoryHome(slot: HTMLElement, cat: any, opts: any = {}) {
     catIsMine ? el('span', { class: 'cath-meta-team', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
   const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
   // (#req) 0에서 재설계 — 커버는 선택. 기본 레이아웃: 브레드크럼 → (커버) → 아이콘 → 제목+액션 → 설명 → 탭.
+  void metaEl;   // (#req) 상단 브레드크럼(공간·우리 팀) 제거 — 사이드바·제목이 이미 맥락을 줘 군더더기.
   slot.append(
     el('div', { class: 'cath' },
-      metaEl,
       cover,
       el('div', { class: 'cath-inner' },
         coverAddBtn,

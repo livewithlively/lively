@@ -434,21 +434,27 @@ async function renderKnowledgeSpace(view, _space, params) {
             const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
             return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)), { group, onReorder });
         };
+        // (#req) 우리 팀/그 외 구분을 '확실하게' — 작은 별·작은 글씨 폐기. 큰 섹션 헤더 + 팀 카드엔 '우리 팀' 라벨(카드 위).
+        const secHead = (cls, title, sub, count, ctrl) => el('div', { class: 'kn-home-sechead2 ' + cls }, el('div', { class: 'kn-home-sechead2-main' }, el('span', { class: 'kn-home-sechead2-title', text: title }), el('span', { class: 'kn-home-sechead2-count', text: String(count) + '개 분류' }), sub ? el('span', { class: 'kn-home-sechead2-sub', text: sub }) : null), ctrl || null);
         const cardParts = [];
         if (mine.length) {
-            cardParts.push(el('div', { class: 'kn-home-grouplabel', title: '팀이 소유·관리하는 카테고리를 먼저 보여줍니다 — 접근 제한이 아니라 우선순위입니다' }, el('span', { class: 'kn-home-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { text: '우리 팀' }), el('span', { class: 'kn-home-groupcount', text: String(mine.length) }), orderControl()));
+            cardParts.push(secHead('is-mine', '우리 팀 담당', '우리 팀이 소유·관리하는 분류', mine.length, orderControl()));
             const gm = el('div', { class: 'kn-home-cats' });
             mine.forEach((c, i) => gm.append(cardAt(c, i, 'mine')));
             cardParts.push(gm);
             if (rest.length) {
-                cardParts.push(el('div', { class: 'kn-home-grouplabel kn-home-grouplabel-rest' }, el('span', { text: '그 외 카테고리' }), el('span', { class: 'kn-home-groupcount', text: String(rest.length) })));
+                // (#req) 기본은 우리 팀 카드만. '그 외'는 접어두고 '모든 카테고리 다 보기 →'로 펼친다.
                 const gr = el('div', { class: 'kn-home-cats' });
                 rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j, 'rest')));
-                cardParts.push(gr);
+                const restWrap = el('div', { class: 'kn-home-restwrap', hidden: true }, secHead('is-rest', '그 외 카테고리', null, rest.length), gr);
+                const moreBtn = el('button', { class: 'kn-home-morecats', type: 'button', title: '숨긴 그 외 카테고리를 펼칩니다' }, el('span', { text: '모든 카테고리 다 보기 (' + rest.length + ')' }), el('span', { class: 'kn-home-morecats-arrow', 'aria-hidden': 'true', text: '→' }));
+                const moreRow = el('div', { class: 'kn-home-morerow' }, moreBtn);
+                moreBtn.onclick = () => { restWrap.hidden = false; moreRow.hidden = true; };
+                cardParts.push(moreRow, restWrap);
             }
         }
         else {
-            cardParts.push(el('div', { class: 'kn-home-grouplabel' }, el('span', { text: '카테고리' }), el('span', { class: 'kn-home-groupcount', text: String(ordered.length) }), orderControl()));
+            cardParts.push(secHead('is-rest', '카테고리', null, ordered.length, orderControl()));
             const grid = el('div', { class: 'kn-home-cats' });
             ordered.forEach((c, i) => grid.append(cardAt(c, i, 'all')));
             cardParts.push(grid);
@@ -1209,11 +1215,10 @@ function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx) {
     const ic = (home && home.icon) || '';
     cover.append(el('span', { class: 'kn-hcard-ic' + (ic ? '' : ' kn-hcard-ic-letter'),
         text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
-    // 우리 팀 = 글자 칩(#req) — 별 글리프 대신 사이드바와 같은 '우리 팀' 칩(pjv-side-cat)으로 명시.
-    const spaceEl = el('span', { class: 'kn-hcard-space' });
+    // (#req) 우리 팀 = 카드 위 뚜렷한 라벨(흰 글자·파란 필). 작은 별은 감이 안 온다는 피드백.
     if (isMine)
-        spaceEl.append(knTeamChip());
-    spaceEl.append(SPACE_LABEL[c.space] || c.space || '');
+        cover.append(el('span', { class: 'kn-hcard-teambadge', text: '우리 팀' }));
+    const spaceEl = el('span', { class: 'kn-hcard-space', text: SPACE_LABEL[c.space] || c.space || '' });
     const card = el('div', { class: 'kn-hcard' + (isMine ? ' kn-hcard-mine' : ''), role: 'link', tabindex: '0',
         title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 우리 팀 카테고리' : '') }, cover, el('div', { class: 'kn-hcard-body' }, el('div', { class: 'kn-hcard-name', text: c.name || c.key }), c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null, el('div', { class: 'kn-hcard-meta' }, spaceEl, el('span', { class: 'kn-hcard-count', text: String(count) }))));
     card.addEventListener('click', onOpen);
