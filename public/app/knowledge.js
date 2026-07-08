@@ -1,6 +1,6 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 //  (#592) 문서 캔버스·속성 시스템·상세 패널·칩 생성기는 knowledge-doc.ts 로 이관 — 여기서 import 해 재사용/재수출.
-import { api, applyReveal, el, errorNote, lifecycleDot, pageHead, relTime, selectFilter, state, sv, toast } from './core.js';
+import { api, applyReveal, el, errorNote, pageHead, relTime, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { hasScope } from './admin.js';
 import { KN_TYPE_LABEL, SOURCE_KIND_LABEL, SPACE_LABEL, buildKnowledgeDetail, knAuthorChip, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knPageIcon, knProvChip, knTreeIcon, knTypeChip, openKnowledgePeek, openProjectChooser, openQuickSearch, openSourceDetail, reanchorKnowledgePeek } from './knowledge-doc.js';
@@ -133,14 +133,18 @@ function openKnowledgeAtlas() {
 //  select={names:Set, onToggle} 가 오면 선택(체크) 모드 — 클릭=상세이동 대신 선택 토글, .row.sel 로 표시.
 //  open(#592, 선택): 클릭 콜백 — 지식탭은 전체 페이지 이동 대신 피크/드릴다운으로. 미전달 시 기존 상세 이동.
 function knRow(e, select, open) {
-    // #657 페이지 아이콘(props_ui.icon > 폴더 > 문서) — 노션처럼 모든 행이 아이콘을 가진다.
-    const titleEl = el('div', { class: 'row-title' }, el('span', { class: 'row-ic', 'aria-hidden': 'true', text: knPageIcon(e) }), el('span', { text: e.title || e.name }));
-    const metaEl = el('div', { class: 'row-meta' }, e.is_wiki ? el('span', { class: 'row-pin-wrap' }, el('span', { class: 'kn-chip kn-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '📌 인덱스' }), '  ') : null, knAuthorChip(e.confidence), ' ', e.provenance ? knProvChip(e.provenance) : null, // 트리 스켈레톤 행(폴더 드릴다운, #592)엔 provenance 없음 — 빈 칩 생략
-    e.type ? el('span', {}, ' ', knTypeChip(e.type)) : null, e.lifecycle ? el('span', {}, '  ', lifecycleDot(e.lifecycle)) : null, '  ', relTime(e.updated_at));
+    // #657r 카탈로그 엔트리 — 좌측 프로벤넌스 스파인(사람 저작=리빙그린 rail, data-author) + 제목 + 조용한 mono 메타.
+    //  칩 더미(작성주체·출처·유형·상태 반복 pill)를 걷어내 제목이 위계를 갖게 한다. 상세 메타는 문서 페이지에.
+    //  아이콘은 커스텀(props_ui.icon)·폴더만 노출 — 기본 문서 📄 는 생략(잉여 장식).
+    const ic = e.icon || (e.is_folder ? '📁' : '');
+    const titleEl = el('div', { class: 'row-title' }, ic ? el('span', { class: 'row-ic', 'aria-hidden': 'true', text: ic }) : null, el('span', { class: 'row-titletext', text: e.title || e.name }));
+    const metaEl = el('div', { class: 'row-meta' }, e.is_wiki ? el('span', { class: 'row-m row-m-pin', title: 'WIKI 인덱스에 핀됨 — 매 대화 첫머리에 항상 깔립니다.', text: '인덱스' }) : null, e.type ? el('span', { class: 'row-m row-m-type', text: KN_TYPE_LABEL[e.type] || e.type }) : null, e.confidence === 'human' ? el('span', { class: 'row-m row-m-human', title: '사람이 직접 작성', text: '사람' }) : null, e.provenance === 'observed' ? el('span', { class: 'row-m row-m-mirror', title: '외부 시스템 미러', text: '미러' }) : null, el('span', { class: 'row-m row-m-time', text: relTime(e.updated_at) }));
     // 의미검색/grep 결과의 매치 스니펫(있을 때만 — 목록 페치엔 없음). 한 줄로 정리.
-    const snipEl = e.snippet ? el('div', { class: 'caption', style: 'margin-top:3px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 200) }) : null;
+    const snipEl = e.snippet ? el('div', { class: 'row-snip', text: String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 200) }) : null;
+    // data-author = 프로벤넌스 스파인 색(human=리빙그린). data-folder = 폴더 행 표식.
+    const dataset = { 'data-author': e.confidence || '', 'data-prov': e.provenance || '', ...(e.is_folder ? { 'data-folder': '1' } : {}) };
     if (!select) {
-        const row = el('div', { class: 'row', role: 'link', tabindex: '0' }, titleEl, metaEl, snipEl);
+        const row = el('div', { class: 'row', role: 'link', tabindex: '0', ...dataset }, titleEl, metaEl, snipEl);
         const go = () => { if (open)
             open(e);
         else
@@ -154,7 +158,7 @@ function knRow(e, select, open) {
     const on0 = select.names.has(e.name);
     const cb = el('input', { type: 'checkbox', class: 'row-check', tabindex: '-1', 'aria-hidden': 'true' });
     cb.checked = on0;
-    const row = el('div', { class: 'row row-pick' + (on0 ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(on0) }, cb, el('div', { class: 'row-pick-body' }, titleEl, metaEl, snipEl));
+    const row = el('div', { class: 'row row-pick' + (on0 ? ' sel' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(on0), ...dataset }, cb, el('div', { class: 'row-pick-body' }, titleEl, metaEl, snipEl));
     const toggle = () => {
         const on = !select.names.has(e.name);
         if (on)

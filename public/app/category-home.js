@@ -188,8 +188,10 @@ async function buildCategoryHome(slot, cat, opts = {}) {
     else {
         bodyBox.hidden = true;
     }
-    // ── 조립 ──
+    // ── 조립 — mono 카탈로그 라인(공간 · 카테고리)이 대문의 '색인' 정체성을 준다(#657r). ──
+    const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
+    const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), el('span', { class: 'cath-meta-sep', 'aria-hidden': 'true', text: '/' }), el('span', { class: 'cath-meta-key', text: cat.key }));
     const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
-    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, titleEl, descEl), actionRow), bodyBox)));
+    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), bodyBox)));
 }
 export { buildCategoryHome, isCategoryHomeDoc, homeDocName };
