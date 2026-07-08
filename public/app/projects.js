@@ -7259,36 +7259,44 @@ function pjvViewIcon() {
     n.append(sv('path', { d: 'M4 8h7M15 8h5' }), sv('circle', { cx: 13, cy: 8, r: 2.1 }), sv('path', { d: 'M4 16h5M13 16h7' }), sv('circle', { cx: 11, cy: 16, r: 2.1 }));
     return n;
 }
-// '필터' 팝오버 — '상태로 나누기' + '폴더로 나누기'(#455) 스위치. 사이드바(폴더 하나만) 여닫기는 헤더 '폴더' 버튼 전담.
-//  토글해도 닫지 않고 매 토글마다 onChange()로 보드 재렌더. '폴더로 나누기'는 좌측 사이드바(byArea)와 상호배타 — 켜면 사이드바를 끈다.
+// '보기 방식' 팝오버(#670) — 상태로/리스트로/칸반은 서로 배타적인 '뷰 모드'라 **단일 선택(라디오)**.
+//  예전엔 독립 토글 3개라 여러 개 켜지거나(리스트›상태 조합) 다 꺼져(평면) 애매했음 → 셋 중 하나만.
+//  선택해도 팝오버는 닫지 않고(연속 비교) 매번 onChange()로 보드 재렌더.
 function pjvViewMenu(anchor, onChange) {
     const pop = el('div', { class: 'pjv-menu pjv-view-pop' });
-    const close = pjvPopover(anchor, pop);
-    pop.append(el('div', { class: 'pjv-view-pop-head', text: '필터' }));
+    pjvPopover(anchor, pop);
+    pop.append(el('div', { class: 'pjv-view-pop-head', text: '보기 방식' }));
     const items = [];
-    const syncAll = () => items.forEach((s) => s());
-    const mkSwitch = (key, label, hint, onToggle) => {
-        const sw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
-        const item = el('button', { class: 'pjv-menu-item pjv-view-item', type: 'button', role: 'switch' }, el('span', { class: 'pjv-view-item-main' }, el('span', { class: 'pjv-view-item-label', text: label }), el('span', { class: 'pjv-view-item-hint', text: hint })), sw);
-        const sync = () => { const on = !!pjvBoardView[key]; item.classList.toggle('on', on); item.setAttribute('aria-checked', String(on)); };
-        item.onclick = (e) => { e.stopPropagation(); pjvBoardView[key] = !pjvBoardView[key]; if (onToggle)
-            onToggle(pjvBoardView[key]); syncAll(); onChange(); };
+    // 현재 모드 — kanban > list(byFolder) > status(기본). 셋 중 정확히 하나로 정규화.
+    const curMode = () => pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
+    const apply = (m) => {
+        pjvBoardView.kanban = m === 'kanban';
+        pjvBoardView.byFolder = m === 'list';
+        pjvBoardView.byStatus = m === 'status';
+        // 리스트로 나누기 → 좌측 사이드바(byArea)·스코프 해제(#662) — 안 그러면 스코프 유지 렌더가 우선해 리스트 구역이 안 보인다.
+        if (m === 'list') {
+            pjvBoardView.byArea = false;
+            pjvSidebarSel.key = '__all__';
+            pjvSidebarSel.explicit = false;
+            pjvExitAreaMode();
+            pjvPersistSideOpen();
+        }
+        items.forEach((s) => s());
+        onChange();
+    };
+    const mkOpt = (key, label, hint) => {
+        const radio = el('span', { class: 'pjv-view-radio', 'aria-hidden': 'true' });
+        const item = el('button', { class: 'pjv-menu-item pjv-view-item', type: 'button', role: 'menuitemradio' }, el('span', { class: 'pjv-view-item-main' }, el('span', { class: 'pjv-view-item-label', text: label }), el('span', { class: 'pjv-view-item-hint', text: hint })), radio);
+        const sync = () => { const on = curMode() === key; item.classList.toggle('on', on); item.setAttribute('aria-checked', String(on)); };
+        item.onclick = (e) => { e.stopPropagation(); if (curMode() !== key)
+            apply(key); };
         items.push(sync);
         pop.append(item);
     };
-    mkSwitch('byStatus', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서 보여줘요');
-    // 폴더로 나누기 — 본문을 폴더별 접이식 구역으로. 켜면 좌측 사이드바(byArea)는 끈다(같은 '폴더로 보기'라 둘 다 켜면 혼란).
-    mkSwitch('byFolder', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요', (on) => { if (on) {
-        pjvBoardView.byArea = false;
-        pjvSidebarSel.key = '__all__';
-        pjvSidebarSel.explicit = false;
-        pjvExitAreaMode();
-        pjvPersistSideOpen();
-    } }); // 스코프도 해제(#662) — 남겨두면 스코프 유지 렌더가 우선해 리스트 구역이 안 보인다
-    // 칸반 보드(#541) — 상태별 컬럼에 카드. 리스트 선택 시 그 리스트의 커스텀 상태 컬럼(ClickUp 보드 뷰 동형).
-    mkSwitch('kanban', '칸반 보드', '상태별 컬럼에 카드로 보여줘요 (드래그로 상태 변경)', (on) => { if (on)
-        pjvBoardView.byFolder = false; });
-    syncAll();
+    mkOpt('status', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서 보여줘요');
+    mkOpt('list', '리스트로 나누기', '리스트별로 묶어서 한눈에 보여줘요');
+    mkOpt('kanban', '칸반 보드', '상태별 컬럼에 카드로 보여줘요 (드래그로 상태 변경)');
+    items.forEach((s) => s());
 }
 // 체크-원 아이콘(Closed 버튼용).
 function pjvCheckCircle() {
