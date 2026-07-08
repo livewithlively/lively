@@ -4142,44 +4142,40 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-nav-note { font-size: 12px; color: var(--muted-2); padding: 4px 8px 4px 24px; }
 .kn-tree-archived { opacity: .5; }
 
-/* ── WIKI 사이드바 재디자인(#req) — space 단일 위계 + ★우리팀 강조 + 전 계층 개수 뱃지. .kn-tree2 스코프. ── */
-/* space 섹션 헤더 — 위 hairline 으로 섹션 경계를 만들고, 라벨은 아이브로 톤(작고 진하게)·개수는 우측 정렬. */
-.kn-tree2 .kn-space-group { margin: 0; }
-.kn-tree2 .kn-space-group + .kn-space-group { margin-top: 2px; }
-.kn-tree2 .kn-space-group > summary { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0;
-  padding: 9px 8px 5px 6px; font-size: 11.5px; font-weight: 800; letter-spacing: .05em; color: var(--muted); }
-.kn-tree2 .kn-space-group > summary:hover { background: none; color: var(--ink-sub); }
-.kn-tree2 .kn-space-group > summary .tree-groupcount { font-size: 11.5px; font-variant-numeric: tabular-nums; }
-/* 카테고리 행 — 개수는 오른쪽 끝(tabular), 0 은 흐리게. */
-.kn-tree2 .tree-group .tree-item { padding-left: 8px; }
+/* ── WIKI 사이드바(#req) = 프로젝트 탭 사이드바 컴포넌트 재사용(.pjv-side-navitem/.pjv-side-search/.pjv-side-navcount).
+   위계: space 헤더(색 아바타+볼드, 프로젝트 탭 스페이스 행 동형) › 카테고리 행(들여쓰기+칩+개수).
+   '우리 팀'은 별·색칠 대신 글자 칩(.kn-team-chip = .pjv-side-cat)으로 명시. ── */
+.kn-side .pjv-side-nav-head { margin-bottom: 4px; }
+.kn-side .pjv-side-search { margin: 0 2px 8px; }
+.kn-tree2 { display: flex; flex-direction: column; gap: 1px; }
+.kn-side-glyph { flex: none; width: 16px; text-align: center; color: var(--muted-2); font-size: 12px; line-height: 1; }
+.kn-side-item-sub { padding-left: 26px; }
+/* space 섹션 헤더 — details/summary 를 프로젝트 탭 스페이스 행처럼(마커 제거 + 캐럿 우측). */
+.kn-space-group { margin: 0; }
+.kn-space-group + .kn-space-group { margin-top: 4px; }
+.kn-tree2 > .kn-side-item + .kn-space-group, .kn-tree2 > .kn-side-item-sub + .kn-space-group { margin-top: 8px; }
+.kn-space-head { list-style: none; cursor: pointer; }
+.kn-space-head::-webkit-details-marker { display: none; }
+.kn-space-head .pjv-side-navlabel { font-weight: 700; color: var(--ink); }
+.kn-space-caret { cursor: pointer; }
+/* 카테고리 행 — 개수는 오른쪽 끝(.pjv-side-navcount 재사용), 0 은 흐리게. ▸ 펼침 셰브런은 글리프 자리. */
+.kn-nav-cat { gap: 6px; }
+.kn-count-zero { opacity: .45; }
+.kn-nav-tw { width: 18px; height: 22px; font-size: 10.5px; flex: none; }
+/* '우리 팀' 칩 — 프로젝트 탭 카테고리 칩(.pjv-side-cat)과 동일. 칩이 곧 범례(별도 설명 불필요).
+   칩은 절대 안 줄임(줄면 '우...' — 의미 소실): 대신 라벨이 말줄임. (.pjv-side-cat 의 flex:0 1000 auto 를 이긴다.) */
+.pjv-side-cat.kn-team-chip { flex: none; max-width: none; }
+/* 검색창 안 input — 전역 input 기본 스타일(테두리·패딩)이 캡슐 안에서 이중 테두리를 만들던 것 무력화. */
+.pjv-side-search .pjv-side-search-input { border: none; background: none; outline: none; box-shadow: none; padding: 0; border-radius: 0; }
+/* 사이드바 검색 결과 문서 행(#req 파리티 — 프로젝트 탭의 매칭 프로젝트 행과 동형): 카테고리 아래 들여쓴 결과. */
+.kn-side-hits { display: flex; flex-direction: column; gap: 1px; }
+.kn-side-hitdoc { padding: 4px 10px 4px 40px; font-size: 13px; font-weight: 500; gap: 6px; }
+.kn-side-hitdoc .pjv-side-navlabel { font-weight: 500; }
+.kn-side-hitmore { padding: 2px 10px 6px 40px; font-size: 12px; color: var(--muted-2); }
+/* 개수·지식 수 배지(카테고리 펼침 안 폴더용 — 기존 클래스 유지). */
 .kn-nav-count { flex: none; margin-left: 6px; min-width: 1.8em; text-align: right; font-size: 11.5px; font-weight: 600;
   color: var(--muted-2); font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .kn-nav-count.zero { opacity: .45; }
-.tree-item.on .kn-nav-count { color: var(--ink-sub); }
-/* ★ 우리 팀 카테고리 — 파란 별 + 좌측 파란 틱(위아래 여백 둔 둥근 바 — 행 전체 레일은 붙어 보여 답답). */
-.kn-cat-star { flex: none; width: 13px; color: var(--blue); font-size: 10px; line-height: 1; text-align: center; }
-.kn-tree2 .kn-cat-mine { position: relative; }
-.kn-tree2 .kn-cat-mine::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
-  border-radius: 2px; background: var(--blue); opacity: .85; }
-.kn-tree2 .kn-cat-mine .tree-label { font-weight: 700; color: var(--ink); }
-
-/* ── #req2 사이드바 가독성·★ 범례 — 위키/프로젝트 사이드바 공통(.kn-tree2 통일). ── */
-/* 우리 팀 ★ 글리프(프로젝트 사이드바 knSideItem) — 파란 별 + 은은한 파란 박스. 위키 사이드바 ★와 같은 의미. */
-.tree-glyph.tree-glyph-star { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
-  background: color-mix(in srgb, var(--blue) 8%, var(--bg)); }
-/* space 섹션 — 섹션 사이 숨쉴 틈 + 헤더 또렷하게(가독성). 첫 섹션(전체/인덱스 바로 아래)은 위 hairline 생략. */
-.kn-tree2 .kn-space-group > summary { margin-top: 10px; padding-top: 10px; color: var(--muted-head); }
-.kn-tree2 > .tree-item + .kn-space-group > summary,
-.kn-tree2 .tree-item-sub + .kn-space-group > summary { border-top: none; margin-top: 4px; }
-/* 카테고리 행 — 살짝 여유로운 높이(빽빽함 완화) + 라벨 14px(프로젝트 탭 .pjv-side-navitem 와 통일). */
-.kn-tree2 .tree-item { padding-top: 7px; padding-bottom: 7px; }
-.kn-tree2 .tree-label, main.doc-mode .kn-tree2 .tree-label { font-size: 14px; }
-/* ▸ 펼침 셰브런 — 너무 작아 안 보이던 것 키우고 클릭 영역 확보. */
-.kn-nav-tw { width: 20px; height: 22px; font-size: 10.5px; }
-/* ★ 범례 — 사이드바 하단. '별표가 왜 붙는지'(우리 팀 소유) 한 줄 설명 — 별표 의미 불명 해소. */
-.kn-star-legend { display: flex; align-items: center; gap: 7px; margin: 12px 4px 2px; padding-top: 10px;
-  border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 500; color: var(--muted); }
-.kn-star-legend .kn-cat-star { width: auto; flex: none; }
 
 /* 검색 캡슐(#req) — 검색 입력 + 검색방식 셀렉트를 한 컨테이너로(오른쪽 도킹·hairline 구분선). */
 .kn-search-group { flex: 1; min-width: 240px; display: flex; align-items: stretch;

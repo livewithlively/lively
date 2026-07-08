@@ -257,8 +257,10 @@ async function renderKnowledgeSpace(view, _space, params) {
     const selKey = f.indexed ? KN_INDEXED : f.category;
     buildKnowledgeNav(nav, bySpace, selKey, myIds,
       { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }) });
-    // 헤더(카테고리) 맨 위 → 검색창 → 트리(#req, 프로젝트 탭 사이드바와 통일).
-    side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), knMakeSideSearch(nav, knSideState), nav, mirrorBox);
+    // 헤더('지식 카테고리') 맨 위 → 검색창 → 트리 — 프로젝트 탭 사이드바(.pjv-side-nav-head/.pjv-side-search)와 동일 컴포넌트(#req).
+    side.replaceChildren(
+      el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' })),
+      knMakeSideSearch(nav, knSideState), nav, mirrorBox);
     knSideFilterNav(nav, knSideState.q);   // 재빌드 후에도 필터 유지
   }
   buildSide();
@@ -711,53 +713,89 @@ function knSideSearchBtn() {
 // 카테고리 사이드바 행 — tree-item 패턴. data-cat-val 로 클릭 위임(빈 문자열=전체).
 //  opts(선택): { glyph } 글리프 교체(기본 ·/∗) · { cls } 추가 클래스(예: 들여쓰기) · { title } 호버 힌트.
 // (#req) 사이드바 분류 검색 — 목록 뷰·문서 뷰 사이드바 공용. nav(kn-space-group 트리)를 분류 이름으로 즉시 필터.
-//  프로젝트 탭 '폴더·리스트 검색'과 동형(헤더 아래 검색창). 전문 지식검색은 ⌘K/상단 필터.
-function knSideFilterNav(nav: any, q: string) {
+//  프로젝트 탭 '폴더·리스트·프로젝트 검색'과 동형(#req 파리티) — 카테고리 이름 + 그 안의 '지식 문서'까지 매칭.
+//  문서 매칭은 카테고리 rows(knFetchCategoryRows — 세션 캐시)를 검색어 입력 시점에 로드(카테고리 수 수준·가벼움).
+//  매칭 문서는 소속 카테고리 아래 들여쓴 결과 행(상한 8 + 'N개 더'), 클릭 = 열기(onOpen — 목록 뷰 피크/문서 뷰 이동).
+let knSideFilterSeq = 0;
+async function knSideFilterNav(nav: any, q: string) {
   const query = String(q || '').trim().toLowerCase();
-  nav.querySelectorAll('.kn-space-group').forEach((grp: any) => {
-    let vis = 0;
-    grp.querySelectorAll('.kn-nav-catwrap').forEach((w: any) => {
-      const name = (w.querySelector('.tree-label')?.textContent || '').toLowerCase();
-      const m = !query || name.includes(query);
-      w.hidden = !m; if (m) vis++;
+  const seq = ++knSideFilterSeq;
+  const wraps = Array.from(nav.querySelectorAll('.kn-nav-catwrap')) as any[];
+  nav.querySelectorAll('.kn-side-hits').forEach((n: any) => n.remove());  // 이전 검색 결과 행 제거
+  const applyGroups = () => {
+    nav.querySelectorAll('.kn-space-group').forEach((g: any) => {
+      g.hidden = !!query && !Array.from(g.querySelectorAll('.kn-nav-catwrap')).some((w: any) => !w.hidden);
     });
-    grp.hidden = !!query && vis === 0;
+    const anyVis = !query || wraps.some((w) => !w.hidden);
+    const note = nav.querySelector('.kn-side-noresult');
+    if (query && !anyVis) { if (!note) nav.append(el('div', { class: 'kn-side-noresult kn-nav-note', text: '일치하는 카테고리·지식이 없습니다' })); }
+    else if (note) note.remove();
+  };
+  if (!query) { wraps.forEach((w) => { w.hidden = false; }); applyGroups(); return; }
+  // 1차 — 카테고리 이름 매칭 즉시 반영(문서 로드를 기다리지 않는 반응성).
+  wraps.forEach((w) => {
+    const nm = (w.querySelector('.pjv-side-navlabel')?.textContent || '').toLowerCase();
+    w.hidden = !nm.includes(query);
   });
-  const legend = nav.querySelector('.kn-star-legend');
-  if (legend) legend.hidden = !!query;
-  const anyVis = !query || Array.from(nav.querySelectorAll('.kn-nav-catwrap')).some((w: any) => !w.hidden);
-  const note = nav.querySelector('.kn-side-noresult');
-  if (query && !anyVis) { if (!note) nav.append(el('div', { class: 'kn-side-noresult kn-nav-note', text: '일치하는 분류 없음' })); }
-  else if (note) note.remove();
+  applyGroups();
+  // 2차 — 문서(지식) 매칭: 카테고리별 rows 에서 제목/이름 부분일치 → 결과 행 삽입(#665 프로젝트 검색과 동형).
+  const onOpen = (nav as any)._knOnOpen || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
+  await Promise.all(wraps.map(async (w) => {
+    const catId = (w.querySelector('[data-cat-val]') as any)?.dataset?.catVal;
+    if (!catId) return;
+    let rows: any[] = [];
+    try { rows = await knFetchCategoryRows(catId); } catch { return; }
+    if (seq !== knSideFilterSeq) return;   // 그 사이 검색어가 바뀜 — 이 결과는 폐기
+    const hits = rows.filter((r) => !r.is_folder && !isCategoryHomeDoc(r.name)
+      && (String(r.title || '').toLowerCase().includes(query) || String(r.name || '').toLowerCase().includes(query)));
+    if (!hits.length) return;
+    w.hidden = false;
+    const box = el('div', { class: 'kn-side-hits' });
+    const CAP = 8;
+    for (const r of hits.slice(0, CAP)) {
+      const it = el('a', { class: 'pjv-side-navitem kn-side-hitdoc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : ''),
+        href: '#/k/' + encodeURIComponent(r.name), title: r.title || r.name },
+        el('span', { class: 'kn-side-glyph', 'aria-hidden': 'true', text: '📄' }),
+        el('span', { class: 'pjv-side-navlabel', text: r.title || r.name }));
+      it.addEventListener('click', (ev: any) => { ev.preventDefault(); ev.stopPropagation(); onOpen(r.name); });
+      box.append(it);
+    }
+    if (hits.length > CAP) box.append(el('div', { class: 'kn-side-hitmore', text: '＋' + (hits.length - CAP) + '개 더 — 카테고리를 눌러 보기' }));
+    w.append(box);
+    applyGroups();
+  }));
+}
+// 검색창 — 프로젝트 탭 .pjv-side-search(돋보기 svg + input + ×)와 동일 컴포넌트(#req).
+function knSideSearchIcon() {
+  const n = sv('svg', { class: 'pjv-side-search-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('circle', { cx: 11, cy: 11, r: 6.5 }), sv('path', { d: 'M20 20l-3.6-3.6' }));
+  return n;
 }
 function knMakeSideSearch(nav: any, state: any) {
-  const input = el('input', { class: 'kn-side-search-input', type: 'text', placeholder: '분류 검색', 'aria-label': '분류 검색', value: state.q || '' }) as HTMLInputElement;
-  const clear = el('button', { class: 'kn-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
-  const box = el('div', { class: 'kn-side-search-box' + (state.q ? ' has-q' : ''), title: '전체 지식 검색은 ⌘K' },
-    el('span', { class: 'kn-side-search-ic', 'aria-hidden': 'true', text: '🔍' }), input, clear);
+  const input = el('input', { class: 'pjv-side-search-input', type: 'text', placeholder: '카테고리·지식 검색', 'aria-label': '카테고리·지식 검색', value: state.q || '' }) as HTMLInputElement;
+  const clear = el('button', { class: 'pjv-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
+  const box = el('div', { class: 'pjv-side-search' + (state.q ? ' has-q' : '') }, knSideSearchIcon(), input, clear);
   input.addEventListener('input', () => { state.q = input.value; box.classList.toggle('has-q', !!String(state.q).trim()); knSideFilterNav(nav, state.q); });
+  input.addEventListener('keydown', (e: any) => { if (e.key === 'Escape') { state.q = ''; input.value = ''; box.classList.remove('has-q'); knSideFilterNav(nav, ''); } });
   clear.addEventListener('click', () => { state.q = ''; input.value = ''; box.classList.remove('has-q'); knSideFilterNav(nav, ''); input.focus(); });
   return box;
 }
 
-function knSideItem(label, catVal, on, opts?) {
-  // opts.star = 우리 팀 소유 카테고리(★ 강조 + 좌측 파란 틱, kn-cat-mine). 글리프 자리를 ★ 로 대체(중복 아이콘 방지).
-  const star = !!(opts && opts.star);
-  const glyph = (opts && opts.glyph) || (star ? '★' : (catVal ? '·' : '∗'));
-  const title = (opts && opts.title) || (star ? '★ 우리 팀이 담당하는 분류 — ' + label : undefined);
-  return el('a', { class: 'tree-item' + (on ? ' on' : '') + (opts && opts.cls ? ' ' + opts.cls : '') + (star ? ' kn-cat-mine' : ''),
-    href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0',
-    ...(title ? { title } : {}) },
-    el('span', { class: 'tree-glyph' + (star ? ' tree-glyph-star' : ' all'), 'aria-hidden': 'true', text: glyph }),
-    el('span', { class: 'tree-label', text: label }));
+// '우리 팀' 칩(#req) — 별·색칠 대신 글자로 명시. 프로젝트 탭 리스트 행의 카테고리 칩(.pjv-side-cat)과 동일 스타일.
+function knTeamChip() {
+  return el('span', { class: 'pjv-side-cat kn-team-chip', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' });
 }
 
-// ★ 범례(#req) — 사이드바 하단. '별표가 왜 붙는지' 를 명시(우리 팀 소유 카테고리). 팀 소유가 하나라도 있을 때만.
-function knStarLegend(myIds: Set<string>): any {
-  if (!myIds || !myIds.size) return null;
-  return el('div', { class: 'kn-star-legend' },
-    el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }),
-    el('span', { text: '우리 팀이 담당하는 분류' }));
+function knSideItem(label, catVal, on, opts?) {
+  // 프로젝트 탭 사이드바 행(.pjv-side-navitem)과 동일 마크업(#req). opts.star = 우리 팀 → '우리 팀' 칩.
+  const star = !!(opts && opts.star);
+  const glyph = (opts && opts.glyph) || (catVal ? '·' : '∗');
+  return el('a', { class: 'pjv-side-navitem kn-side-item' + (on ? ' active' : '') + (opts && opts.cls ? ' ' + opts.cls : ''),
+    href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0',
+    ...(opts && opts.title ? { title: opts.title } : {}) },
+    el('span', { class: 'kn-side-glyph', 'aria-hidden': 'true', text: glyph }),
+    el('span', { class: 'pjv-side-navlabel', text: label }),
+    star ? knTeamChip() : null);
 }
 
 // ── 공유 사이드바(프로젝트·위키 탭 공용, 2026-06-26) — 3 space 카테고리를 한 사이드바에 통합. ──
@@ -783,15 +821,27 @@ function myCatIdSet(): Set<string> {
 // 공유 사이드바 nav 채우기 — 우리 팀(상단 펼침 ★) + space별 접이식(나머지). nav 내부만 교체(클릭 위임은 호출부 side 에).
 //  myIds 비면(미소속) 우리 팀 그룹 생략하고 3 space 를 모두 펼쳐 노출(기존 동작에 근접). selected = 현재 선택 catVal(문자열).
 //  opts.indexed(지식 탭 전용, #336): '전체' 바로 아래에 '인덱스(핀)' 필터 항목(센티넬 KN_INDEXED)을 끼운다. 프로젝트 탭은 미전달 → 미노출.
+// space 섹션 컨테이너 — 프로젝트 탭 스페이스 행(색 아바타 + 볼드 라벨 + 우측 캐럿)과 동일 마크업(#req).
+const KN_SPACE_AVA_COLOR = { business: '#f59e0b', product: '#2D6BF0', system: '#8b5cf6' };
+function knSpaceGroup(sk: string, countEl?: any) {
+  const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: '▾' });
+  const grp = el('details', { class: 'kn-space-group', open: '' },
+    el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head' },
+      el('span', { class: 'pjv-side-space-avatar', text: String(SPACE_LABEL[sk] || sk).trim()[0], style: 'background:' + (KN_SPACE_AVA_COLOR[sk] || 'var(--muted-2)') }),
+      el('span', { class: 'pjv-side-navlabel', text: SPACE_LABEL[sk] || sk }),
+      countEl || null, caret));
+  grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });
+  return grp;
+}
 function buildSpacesNav(nav, bySpace, selected, myIds: Set<string>, opts?) {
-  // (#req 통일) 위키 사이드바(buildKnowledgeNav)와 같은 단일 space 위계 — 옛 '우리 팀' 이중 그룹 폐기.
-  //  각 space 안에서 우리 팀 소유 카테고리를 맨 위 + ★ 강조. 스타일도 .kn-tree2 공유. ▸ 펼침/개수는 위키 전용(여긴 생략).
+  // (#req 통일) 위키 사이드바(buildKnowledgeNav)와 같은 단일 space 위계 + 프로젝트 탭 컴포넌트.
+  //  각 space 안에서 우리 팀 소유 카테고리를 맨 위 + '우리 팀' 칩. ▸ 펼침/개수는 위키 전용(여긴 생략).
   nav.replaceChildren();
   nav.classList.add('kn-tree2');
   nav.append(knSideItem('전체', '', !selected || selected === ''));
   if (opts && opts.indexed) {
     nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED,
-      { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
+      { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
   }
   for (const sk of ['business', 'product', 'system']) {
     const cats = (bySpace[sk] || []);
@@ -799,14 +849,10 @@ function buildSpacesNav(nav, bySpace, selected, myIds: Set<string>, opts?) {
     const mine = cats.filter((c) => myIds.has(String(c.id)));
     const rest = cats.filter((c) => !myIds.has(String(c.id)));
     const ordered = [...mine, ...rest];
-    const grp = el('details', { class: 'tree-group kn-space-group', open: '' },
-      el('summary', { class: 'tree-grouphead' },
-        el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] })));
-    for (const c of ordered) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id), { star: myIds.has(String(c.id)) }));
+    const grp = knSpaceGroup(sk);
+    for (const c of ordered) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id), { star: myIds.has(String(c.id)), cls: 'kn-side-item-sub' }));
     nav.append(grp);
   }
-  const legend = knStarLegend(myIds);
-  if (legend) nav.append(legend);
 }
 
 // ════════════════════════════════════════════
@@ -820,12 +866,13 @@ function buildSpacesNav(nav, bySpace, selected, myIds: Set<string>, opts?) {
 // ════════════════════════════════════════════
 function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
   const onOpen = (opts && opts.onOpen) || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
+  (nav as any)._knOnOpen = onOpen;   // 사이드바 검색(knSideFilterNav)의 문서 결과 행이 같은 열기 경로를 쓰도록
   nav.replaceChildren();
   nav.classList.add('kn-tree2');
   nav.append(knSideItem('전체', '', !selected || selected === ''));
   if (opts && opts.indexed) {
     nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED,
-      { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
+      { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
   }
   for (const sk of ['business', 'product', 'system']) {
     const cats = (bySpace[sk] || []);
@@ -837,30 +884,26 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     // 합계는 개수 데이터가 실제로 있을 때만(구 백엔드 폴백 — knowledge_count 미지원이면 '0' 거짓 표시 대신 생략).
     const hasCounts = ordered.some((c) => Number.isFinite(Number(c.knowledge_count)));
     const total = ordered.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
-    const grp = el('details', { class: 'tree-group kn-space-group', open: '' },
-      el('summary', { class: 'tree-grouphead' },
-        el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] }),
-        hasCounts ? el('span', { class: 'tree-groupcount', title: '이 스페이스의 지식 수', text: String(total) }) : null));
+    const grp = knSpaceGroup(sk, hasCounts ? el('span', { class: 'pjv-side-navcount', title: '이 스페이스의 지식 수', text: String(total) }) : null);
     for (const c of ordered) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
     nav.append(grp);
   }
-  const legend = knStarLegend(myIds);
-  if (legend) nav.append(legend);
 }
 
-// 카테고리 노드 — 행(▸ 셰브런 + 이름 + [★우리팀] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
+// 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
+//  마크업은 프로젝트 탭 리스트 행(.pjv-side-navitem — 라벨·칩·우측 개수 .pjv-side-navcount)과 동일(#req).
 //  레벨1 = 카테고리 지식 중 트리 최상위(부모가 같은 카테고리 안에 없는 행)만 — 폴더 자식은 폴더 노드에서 펼친다.
 function knNavCatNode(c, on, onOpen, isMine?: boolean) {
   const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false',
     title: '이 카테고리의 지식 펼치기', text: '▸' });
   const cnt = Number(c.knowledge_count);
-  const row = el('a', { class: 'tree-item kn-nav-cat' + (on ? ' on' : '') + (isMine ? ' kn-cat-mine' : ''), href: '#',
+  const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : ''), href: '#',
     'data-cat-val': String(c.id), role: 'button', tabindex: '0',
-    ...(isMine ? { title: '★ 우리 팀 소유 카테고리 — ' + (c.name || c.key) } : {}) },
+    ...(isMine ? { title: '우리 팀이 담당하는 카테고리 — ' + (c.name || c.key) } : {}) },
     tw,
-    isMine ? el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }) : null,
-    el('span', { class: 'tree-label', text: c.name || c.key }),
-    Number.isFinite(cnt) ? el('span', { class: 'kn-nav-count' + (cnt === 0 ? ' zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
+    el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }),
+    isMine ? knTeamChip() : null,
+    Number.isFinite(cnt) ? el('span', { class: 'pjv-side-navcount' + (cnt === 0 ? ' kn-count-zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
   const kids = el('div', { class: 'kn-nav-kids' });
   kids.hidden = true;
   let opened = false, loaded = false;
@@ -1026,9 +1069,9 @@ function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx?) {
   const ic = (home && home.icon) || '';
   cover.append(el('span', { class: 'kn-hcard-ic' + (ic ? '' : ' kn-hcard-ic-letter'),
     text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
-  // ★=우리 팀(사이드바 tree-groupstar 와 같은 어휘) — 별도 span 으로 분리해 액센트 컬러 적용(#657h2).
+  // 우리 팀 = 글자 칩(#req) — 별 글리프 대신 사이드바와 같은 '우리 팀' 칩(pjv-side-cat)으로 명시.
   const spaceEl = el('span', { class: 'kn-hcard-space' });
-  if (isMine) spaceEl.append(el('span', { class: 'kn-hcard-star', 'aria-hidden': 'true', text: '★ ' }));
+  if (isMine) spaceEl.append(knTeamChip());
   spaceEl.append(SPACE_LABEL[c.space] || c.space || '');
   const card = el('div', { class: 'kn-hcard' + (isMine ? ' kn-hcard-mine' : ''), role: 'link', tabindex: '0',
     title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 우리 팀 카테고리' : '') },
@@ -1242,9 +1285,9 @@ async function renderKnowledgeDetail(view, name) {
   // 사이드바 내용 — 목록 뷰와 같은 구성(카테고리 트리 + Notion 페이지 트리). 클릭 = 목록으로 이동(필터).
   const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
   const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
-  // (#req) 목록 뷰와 동일 레이아웃 — 헤더(카테고리)+접기 → 분류 검색창 → 트리.
+  // (#req) 목록 뷰와 동일 레이아웃 — 헤더('지식 카테고리', 프로젝트 탭 head 컴포넌트)+접기 → 검색창 → 트리.
   const knSideState = { q: '' };
-  side.append(el('div', { class: 'kn-side-head' }, el('div', { class: 'eyebrow', text: '카테고리' }), collapseBtn),
+  side.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
     knMakeSideSearch(nav, knSideState), nav, mirrorBox);
   side.addEventListener('click', (ev) => {
     const item = ev.target.closest('[data-cat-val]');
