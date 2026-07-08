@@ -283,7 +283,8 @@ function loginBannerEl(cfg, view) {
     return el('div', { class: 'card' }, el('div', { class: 'caption', text: '⚠ 내 Claude 계정이 아직 로그인되지 않았습니다. 한 번 로그인하면 이후 내가 만드는 세션은 내 계정으로 뜹니다.' }), el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
-function openTermCreateForm(cfg, view) {
+// onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
+function openTermCreateForm(cfg, view, onCreated) {
     const roots = cfg.roots || [];
     const harnesses = cfg.harnesses || [];
     const prefs = termCreatePrefs();
@@ -425,7 +426,10 @@ function openTermCreateForm(cfg, view) {
                     toast('세션 생성됨');
                 if (out && out.session)
                     window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || '') + (fromTour ? '&welcome=1' : ''), '_blank');
-                renderTerminal(view);
+                if (onCreated)
+                    onCreated(out);
+                else
+                    renderTerminal(view);
             }
             catch (e) {
                 btn.disabled = false;
@@ -650,4 +654,4 @@ function startTerminalTour() {
         //  보여준다(openTermCreateForm 이 &welcome=1 로 넘기고 terminal.js 의 maybeShowWelcome 이 띄운다). 흐름이 실제 터미널에서 끝난다.
     ]);
 }
-export { renderTerminal, startTerminalTour, teardownTerminal, };
+export { renderTerminal, startTerminalTour, openTermCreateForm, teardownTerminal, };

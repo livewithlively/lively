@@ -253,7 +253,8 @@ function loginBannerEl(cfg, view) {
 }
 
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
-function openTermCreateForm(cfg, view) {
+// onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
+function openTermCreateForm(cfg, view, onCreated?) {
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const prefs = termCreatePrefs();
@@ -376,7 +377,7 @@ function openTermCreateForm(cfg, view) {
           if (wtCb.checked && out && out.session && !out.session.wtBranch) toast('세션 생성됨 — 폴더가 git 저장소가 아니라 워크트리는 미적용(폴더에서 직접 실행).', true);
           else toast('세션 생성됨');
           if (out && out.session) window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || '') + (fromTour ? '&welcome=1' : ''), '_blank');
-          renderTerminal(view);
+          if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));
 }
@@ -584,5 +585,6 @@ function startTerminalTour() {
 export {
   renderTerminal,
   startTerminalTour,
+  openTermCreateForm,
   teardownTerminal,
 };

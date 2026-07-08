@@ -8,6 +8,7 @@ import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUpload/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 import { authDownload, authUpload, companyTimelineSection, fmtSize } from './projects.js';
+import { openTermCreateForm, startTerminalTour } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req)
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
 // 작업 유형 → 점 톤/라벨 — 작업 현황(dashboard.ts ACT_TYPE_TONE)과 동일 매핑(성격축 8종).
@@ -1042,50 +1043,44 @@ async function fillSessions(zone, onCount, projectsP) {
         if (!shown.length) {
             zone.body.replaceChildren(mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
                 : mode === 'myproj' ? dashEmpty('내 프로젝트에서 만든 세션이 없어요.')
-                    : dashSessionEmpty()); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션 버튼
+                    : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
             return;
         }
         const list = el('div', { class: 'dash-sess-list' });
         for (const s of shown) {
-            // #req R16 후속 — 부제는 만든 시간만('Claude Code' 하네스 라벨은 매 카드 반복되는 노이즈라 제거, 툴팁으로만).
-            const sub = sessTime(s.created);
-            const subTitle = [harnessLabel(s.harness), sub].filter(Boolean).join(' · ');
-            const badges = el('span', { class: 'dash-sess-badges' });
+            // #req 카드 = 1열 제목 / 2열 생성시각·태그. [열기]·[⋮]는 우측에 '항상 보이는' 버튼(호버 반응 폐지).
+            const tags = el('span', { class: 'dash-sess-tags' });
             if (s.attached)
-                badges.append(el('span', { class: 'dash-badge live', text: '접속중' }));
-            // 프로젝트에서 만든 세션(@box_project) — 프로젝트명 뱃지로 식별. 내가 할당된 프로젝트면 강조(#req).
+                tags.append(el('span', { class: 'dash-badge live', text: '접속중' }));
             const pid = Number(s.projectId) || 0;
             if (pid) {
                 const mine = projName.has(pid);
-                badges.append(el('span', { class: 'dash-badge dash-badge-proj' + (mine ? ' dash-badge-proj-mine' : ''), title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('프로젝트 #' + pid) }));
+                tags.append(el('span', { class: 'dash-badge dash-badge-proj' + (mine ? ' dash-badge-proj-mine' : ''), title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('프로젝트 #' + pid) }));
             }
             if (s.owned) {
                 if ((s.invites || []).length)
-                    badges.append(el('span', { class: 'dash-badge', text: '초대 ' + s.invites.length }));
+                    tags.append(el('span', { class: 'dash-badge', text: '초대 ' + s.invites.length }));
             }
             else
-                badges.append(el('span', { class: 'dash-badge', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
-            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' }), badges), el('div', { class: 'dash-sess-sub', title: subTitle, text: sub }));
-            // #req 버튼 재설계 — 카드 높이만큼 늘어난 [열기]·[⋮] 버튼 폐기. 카드 전체 클릭 = 열기(주 행동),
-            //  우측엔 작은 고스트 아이콘 두 개(↗ 열기 힌트 · ⋮ 관리)만 — 호버 시 나타나 평소엔 조용.
-            const open = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
-            const acts = el('div', { class: 'dash-sess-acts' });
-            acts.append(el('span', { class: 'dash-sess-openhint', 'aria-hidden': 'true', title: '새 창에서 열기', text: '↗' }));
-            // ⋮ 메뉴(이름 수정·삭제) — 소유자 세션만(서버도 비소유 403 재검증).
-            if (s.owned) {
+                tags.append(el('span', { class: 'dash-badge', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
+            const harn = harnessLabel(s.harness);
+            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' })), el('div', { class: 'dash-sess-sub' }, el('span', { class: 'dash-sess-when', text: sessTime(s.created) }), harn ? el('span', { class: 'dash-sess-tag', title: '하네스', text: harn }) : null, tags));
+            const openBtn = el('button', { class: 'dash-sess-open', type: 'button', text: '열기' });
+            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+            const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
+            if (s.owned) { // 이름 수정·삭제는 소유자만(서버도 비소유 403 재검증).
                 const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
-                moreBtn.onclick = (e) => { e.stopPropagation(); openSessMenu(moreBtn, s, reloadSessions); };
+                moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
                 acts.append(moreBtn);
             }
-            const box = el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : ''), role: 'button', tabindex: '0',
-                title: '클릭하면 새 창에서 열립니다' }, info, acts);
-            box.addEventListener('click', open);
-            box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                open();
-            } });
-            list.append(box);
+            list.append(el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : '') }, info, acts));
         }
+        // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).
+        list.append(el('div', { class: 'dash-sess-addrow' }, el('button', { class: 'dash-sess-addbtn', type: 'button', 'data-tour': 'new-session', title: '새 세션 만들기',
+            onclick: () => { if (cfg)
+                openTermCreateForm(cfg, null, () => reloadSessions());
+            else
+                location.hash = '#/terminal'; } }, el('span', { class: 'dash-sess-addplus', text: '＋' }), el('span', { text: '새 세션' }))));
         zone.body.replaceChildren(list);
     };
     // 세션 변경(이름 수정·삭제) 후 새로고침 — base 세션 + 프로젝트 세션 재병합 후 재렌더.
@@ -1149,30 +1144,15 @@ function openSessMenu(anchor, s, onChange) {
     });
     close = dashPopover(anchor, panel);
 }
-// #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작 버튼(따라하기/새 세션).
-function dashSessionEmpty() {
-    return el('div', { class: 'dash-sess-empty' }, el('div', { class: 'dash-sess-empty-ic' }, dashSessionIcon()), el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }), el('div', { class: 'dash-sess-empty-desc', text: '터미널에서 Claude·Codex 같은 AI와 함께 코드·문서를 만드는 작업 공간이에요. 폴더를 고르고 세션을 열면 AI가 바로 일을 시작해요.' }), el('div', { class: 'dash-sess-empty-acts' }, el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => dashGoTerminal('tour') }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: () => dashGoTerminal('new') })));
-}
-// 터미널 탭으로 이동 후, 그 페이지의 버튼을 자동 실행(따라하기=온보딩 투어 / new=새 세션 폼). 렌더 완료까지 짧게 폴링.
-//  터미널 뷰 코드(다른 세션 WIP)는 건드리지 않고 이미 있는 버튼을 눌러 재사용한다.
-function dashGoTerminal(action) {
-    location.hash = '#/terminal';
-    let tries = 0;
-    const timer = setInterval(() => {
-        tries++;
-        const btn = action === 'new'
-            ? document.querySelector('[data-tour="new-session"]')
-            : Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').includes('따라하기'));
-        if (btn) {
-            clearInterval(timer);
-            try {
-                btn.click();
-            }
-            catch { /* */ }
-        }
-        else if (tries > 40)
-            clearInterval(timer); // ~4초 후 포기(그냥 터미널 탭에 안착)
-    }, 100);
+// #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작(따라하기/새 세션). 팝업·투어 모두 대시보드에서.
+function dashSessionEmpty(cfg, reloadSessions) {
+    const startNew = () => { if (cfg)
+        openTermCreateForm(cfg, null, () => reloadSessions && reloadSessions());
+    else
+        location.hash = '#/terminal'; };
+    return el('div', { class: 'dash-sess-empty' }, el('div', { class: 'dash-sess-empty-ic' }, dashSessionIcon()), el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }), el('div', { class: 'dash-sess-empty-desc', text: '터미널에서 Claude·Codex 같은 AI와 함께 코드·문서를 만드는 작업 공간이에요. 폴더를 고르고 세션을 열면 AI가 바로 일을 시작해요.' }), el('div', { class: 'dash-sess-empty-acts' }, 
+    // 따라하기 = 온보딩 투어(startTerminalTour). 투어 1단계가 아래 [+ 새 세션]([data-tour])을 스포트라이트 → 클릭 시 폼이 대시보드 위로 뜨고 투어가 이어짐.
+    el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() }), el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'new-session', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: startNew })));
 }
 // ── ③ 팀 공유 폴더 — 공유 워크스페이스 루트의 폴더. 목록형→아이콘형(#621). ──
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
