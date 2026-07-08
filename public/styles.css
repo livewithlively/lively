@@ -4661,6 +4661,17 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-row-sz { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
 .dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; }
 .dash-fb-row:hover .dash-fb-actions, .dash-fb-row:focus-within .dash-fb-actions { opacity: 1; }
+/* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */
+.dash-fb-row-go, .dash-fold-row-go { flex: none; color: var(--muted-2); font-size: 17px; line-height: 1; opacity: 0; transition: opacity .12s, transform .12s; }
+.dash-fb-row:hover .dash-fb-row-go, .dash-fold-row:hover .dash-fold-row-go, .dash-fold-row:focus-within .dash-fold-row-go { opacity: 1; transform: translateX(2px); }
+/* ── 공유 폴더 위젯 목록 뷰(#670) — 아이콘 카드 대신 컴팩트 리스트(전체보기 목록과 톤 일치). ── */
+.dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
+.dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }
+.dash-fold-row:hover, .dash-fold-row:focus-visible { background: var(--bg-sel); outline: none; }
+.dash-fold-row + .dash-fold-row { box-shadow: 0 -1px 0 var(--line-soft, var(--bg-tint-2)); } /* 행 사이 얇은 구분선(hover 배경이 덮음) */
+.dash-fold-row-ic { flex: none; width: 28px; display: inline-flex; align-items: center; justify-content: center; }
+.dash-fold-row-ic .ft-folder { width: 27px; height: auto; }
+.dash-fold-row-nm { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 파일 미리보기(#672 후속) — 브라우저 안 제자리 렌더: 상단 바(뒤로·이름·다운로드) + 스테이지(이미지·PDF·코드). */
 .dash-fp-bar { display: flex; align-items: center; gap: 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }

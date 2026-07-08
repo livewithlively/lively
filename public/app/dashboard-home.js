@@ -851,7 +851,6 @@ function dashSaveLogType(v) { try {
 }
 catch { /* 무시 */ } }
 // 폴더 기본 뷰 설정 팝오버(⚙) — 브라우저 열 때 initial 뷰가 됨.
-function openFoldPrefs(anchor) { dashChoicePopover(anchor, '폴더 기본 뷰', [['icon', '아이콘'], ['list', '목록']], dashFoldView(), dashSaveFoldView); }
 // ── 열 폭 사용자화(#req) — .dash-zones 3열 사이 드래그 핸들 2개(fr 비율 기기별 저장). 반응형 스택 시 CSS 가 인라인 grid 무시. ──
 const DASH_COLS_KEY = 'dash_cols_v1';
 const DASH_COLS_DEFAULT = [5, 4, 3];
@@ -1207,8 +1206,40 @@ function dashSessionEmpty(cfg, reloadSessions) {
 async function fillFolders(zone) {
     // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
     const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true);
-    // 헤더 우상단 통일 컨트롤 — ⚙(폴더 기본 뷰) + ⤢(전체 보기 모달).
-    dashCtl(zone, { gear: { title: '폴더 기본 뷰 설정', open: openFoldPrefs }, action: { onClick: () => openBrowser(''), title: '공유 폴더 전체 보기 · 파일 관리' } });
+    let dirs = [];
+    // 뷰(아이콘|목록)를 ⚙ 설정(dashFoldView, 전체보기와 공유)에 맞춰 렌더 — #670: 목록으로 바꾸면 대시보드 위젯도 목록으로.
+    const paint = () => {
+        if (!dirs.length) {
+            zone.body.replaceChildren(dashEmpty('공유 워크스페이스에 폴더가 없어요.'));
+            return;
+        }
+        if (dashFoldView() === 'list') {
+            const list = el('div', { class: 'dash-fold-list' });
+            for (const name of dirs)
+                list.append(dashFolderRow(name, () => openBrowser(name)));
+            zone.body.replaceChildren(list);
+        }
+        else {
+            const grid = el('div', { class: 'proj-file-grid dash-fold-grid' });
+            for (const name of dirs) {
+                const card = dashFolderCard(name);
+                card.classList.add('dash-fold-open');
+                card.setAttribute('role', 'button');
+                card.setAttribute('tabindex', '0');
+                card.title = name + ' 열기';
+                card.addEventListener('click', () => openBrowser(name));
+                card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openBrowser(name);
+                } });
+                grid.append(card);
+            }
+            zone.body.replaceChildren(grid);
+        }
+    };
+    // 헤더 우상단 통일 컨트롤 — ⚙(폴더 기본 뷰: 저장 후 위젯도 즉시 그 뷰로 재렌더) + ⤢(전체 보기 모달).
+    const openPrefs = (anchor) => dashChoicePopover(anchor, '폴더 기본 뷰', [['icon', '아이콘'], ['list', '목록']], dashFoldView(), (v) => { dashSaveFoldView(v); paint(); });
+    dashCtl(zone, { gear: { title: '폴더 기본 뷰 설정', open: openPrefs }, action: { onClick: () => openBrowser(''), title: '공유 폴더 전체 보기 · 파일 관리' } });
     let data;
     try {
         data = await api('/api/ui/terminal/browse?root=shared&path=');
@@ -1217,28 +1248,19 @@ async function fillFolders(zone) {
         zone.body.replaceChildren(errorNote(e, '공유 폴더를 불러오지 못했습니다'));
         return;
     }
-    const dirs = (data && data.dirs) || [];
+    dirs = (data && data.dirs) || [];
     zone.countEl.textContent = String(dirs.length);
-    if (!dirs.length) {
-        zone.body.replaceChildren(dashEmpty('공유 워크스페이스에 폴더가 없어요.'));
-        return;
-    }
-    // 박스(한 줄 미리보기) — 폴더 카드 클릭 시 그 폴더에서 브라우저 열기(하위 진입).
-    const grid = el('div', { class: 'proj-file-grid dash-fold-grid' });
-    for (const name of dirs) {
-        const card = dashFolderCard(name);
-        card.classList.add('dash-fold-open');
-        card.setAttribute('role', 'button');
-        card.setAttribute('tabindex', '0');
-        card.title = name + ' 열기';
-        card.addEventListener('click', () => openBrowser(name));
-        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openBrowser(name);
-        } });
-        grid.append(card);
-    }
-    zone.body.replaceChildren(grid);
+    paint();
+}
+// 공유 폴더 목록 행(#670) — 아이콘 카드 대신 컴팩트 리스트. 폴더 아이콘 + 굵은 이름 + hover 시 슬라이드 셰브런.
+function dashFolderRow(name, onOpen) {
+    const row = el('div', { class: 'dash-fold-row', role: 'button', tabindex: '0', title: name + ' 열기' }, el('span', { class: 'dash-fold-row-ic', 'aria-hidden': 'true' }, dashFolderThumb()), el('span', { class: 'dash-fold-row-nm', text: name }), el('span', { class: 'dash-fold-row-go', 'aria-hidden': 'true', text: '›' }));
+    row.addEventListener('click', onOpen);
+    row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onOpen();
+    } });
+    return row;
 }
 // 공유 폴더 아이콘 카드 — 박스·브라우저 공용. 프로젝트 상세 공유 폴더(proj-file-*)와 동일.
 function dashFolderCard(name) {
@@ -1419,7 +1441,9 @@ function dashFolderBrowser(root, startPath) {
     // 목록(Finder 리스트) 뷰 항목 — 작은 아이콘 · 이름 · 크기 · hover 액션.
     const fbRow = (it) => {
         const isDir = it.type === 'dir';
-        const row = el('div', { class: 'dash-fb-row' + (isDir ? ' is-dir' : ''), title: it.name, role: 'button', tabindex: '0' }, el('span', { class: 'dash-fb-row-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('span', { class: 'dash-fb-row-nm', text: it.name }), el('span', { class: 'dash-fb-row-sz', text: isDir ? '폴더' : fmtSize(it.size) }), mkActions(it, isDir));
+        const row = el('div', { class: 'dash-fb-row' + (isDir ? ' is-dir' : ''), title: it.name, role: 'button', tabindex: '0' }, el('span', { class: 'dash-fb-row-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('span', { class: 'dash-fb-row-nm', text: it.name }), 
+        // 폴더는 반복되던 '폴더' 텍스트 대신 hover 셰브런(열기), 파일은 크기(#670).
+        isDir ? el('span', { class: 'dash-fb-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'dash-fb-row-sz', text: fmtSize(it.size) }), mkActions(it, isDir));
         row.addEventListener('click', (e) => { if (e.target.closest('.dash-fb-actions'))
             return; openItem(it, isDir); });
         row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
