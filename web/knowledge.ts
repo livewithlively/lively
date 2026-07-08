@@ -230,15 +230,16 @@ async function renderKnowledgeSpace(view, _space, params) {
       refetch();   // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
     } });
 
-  // (#req) 상단 큰 제목·부제 제거 — WIKI 탭 자체가 정체성이라 군더더기. 액션(＋새 페이지·선택·그래프·자료·휴지통)만 남긴다.
-  const head = pageHead('', null, [
-    hasScope('memory') ? el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new',
-      title: '새 페이지를 작성합니다 — 노션처럼 바로 타이핑', text: '＋ 새 페이지' }) : null,
-    selectBtn,
-    knGraphBtn(),
-    knSourcesBtn(),
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
-  ]);
+  // (#req) 상단 툴바 비움 — 액션 재배치: 지식 그래프·자료·휴지통 → 사이드바 '도구' 섹션(Notion 페이지 트리 아래),
+  //  ＋새 페이지·선택 → 홈 '최근 지식' 섹션 헤더. (지식 그래프는 openKnowledgeAtlas=window.open 이라 새 탭에서 열림.)
+  const newPageBtn = hasScope('memory') ? el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new',
+    title: '새 페이지를 작성합니다 — 노션처럼 바로 타이핑', text: '＋ 새 페이지' }) : null;
+  const graphBtn = knGraphBtn(); graphBtn.classList.add('kn-side-toolitem');
+  const sourcesBtn = knSourcesBtn(); sourcesBtn.classList.add('kn-side-toolitem');
+  const trashBtn = el('a', { class: 'kn-side-toolitem', href: '#/trash', title: '삭제한 지식·카테고리 복원', text: '🗑 휴지통' });
+  const sideTools = el('div', { class: 'kn-side-tools' },
+    el('div', { class: 'eyebrow kn-side-tools-eyebrow', text: '도구' }),
+    graphBtn, sourcesBtn, trashBtn);
 
   // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
   //  (#592) .kn-shell 의 고정 260px 자체 스크롤 컬럼(.kn-side) — 내용(buildSide)은 기존 그대로.
@@ -260,7 +261,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     // 헤더('지식 카테고리') 맨 위 → 검색창 → 트리 — 프로젝트 탭 사이드바(.pjv-side-nav-head/.pjv-side-search)와 동일 컴포넌트(#req).
     side.replaceChildren(
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' })),
-      knMakeSideSearch(nav, knSideState), nav, mirrorBox);
+      knMakeSideSearch(nav, knSideState), nav, mirrorBox, sideTools);   // (#req) 도구 섹션 = Notion 페이지 트리 아래
     knSideFilterNav(nav, knSideState.q);   // 재빌드 후에도 필터 유지
   }
   buildSide();
@@ -386,12 +387,12 @@ async function renderKnowledgeSpace(view, _space, params) {
       el('div', { class: 'kn-home-sechead2 ' + cls },
         el('div', { class: 'kn-home-sechead2-main' },
           el('span', { class: 'kn-home-sechead2-title', text: title }),
-          el('span', { class: 'kn-home-sechead2-count', text: String(count) + '개 분류' }),
+          el('span', { class: 'kn-home-sechead2-count', text: String(count) + '개 카테고리' }),
           sub ? el('span', { class: 'kn-home-sechead2-sub', text: sub }) : null),
         ctrl || null);
     const cardParts: any[] = [];
     if (mine.length) {
-      cardParts.push(secHead('is-mine', '우리 팀 담당', '우리 팀이 소유·관리하는 분류', mine.length, orderControl()));
+      cardParts.push(secHead('is-mine', '내 소유 카테고리', '내가 소유·관리하는 카테고리', mine.length, orderControl()));
       const gm = el('div', { class: 'kn-home-cats' });
       mine.forEach((c, i) => gm.append(cardAt(c, i, 'mine')));
       cardParts.push(gm);
@@ -401,11 +402,16 @@ async function renderKnowledgeSpace(view, _space, params) {
         rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j, 'rest')));
         const restWrap = el('div', { class: 'kn-home-restwrap', hidden: true },
           secHead('is-rest', '그 외 카테고리', null, rest.length), gr);
-        const moreBtn = el('button', { class: 'kn-home-morecats', type: 'button', title: '숨긴 그 외 카테고리를 펼칩니다' },
-          el('span', { text: '모든 카테고리 다 보기 (' + rest.length + ')' }),
-          el('span', { class: 'kn-home-morecats-arrow', 'aria-hidden': 'true', text: '→' }));
+        const moreLabel = el('span', { class: 'kn-home-morecats-label', text: '모든 카테고리 다 보기 (' + rest.length + ')' });
+        const moreBtn = el('button', { class: 'kn-home-morecats', type: 'button' },
+          moreLabel, el('span', { class: 'kn-home-morecats-arrow', 'aria-hidden': 'true', text: '→' }));
         const moreRow = el('div', { class: 'kn-home-morerow' }, moreBtn);
-        moreBtn.onclick = () => { restWrap.hidden = false; moreRow.hidden = true; };
+        moreBtn.onclick = () => {   // (#req) 토글 — 펼치기 ⇄ 접기
+          const open = restWrap.hidden;
+          restWrap.hidden = !open;
+          moreBtn.classList.toggle('is-open', open);
+          moreLabel.textContent = open ? '접기' : '모든 카테고리 다 보기 (' + rest.length + ')';
+        };
         cardParts.push(moreRow, restWrap);
       }
     } else {
@@ -422,9 +428,13 @@ async function renderKnowledgeSpace(view, _space, params) {
     const recent = pool.slice(0, HOME_RECENT_CAP);
     lastEntries = recent;
     const sechead = el('div', { class: 'kn-home-sechead' },
-      el('span', { class: 'kn-home-sectitle', text: mine.length ? '우리 팀 최근 지식' : '최근 지식' }),
-      el('button', { class: 'kn-home-all', type: 'button', title: '카테고리 구분 없이 전체 지식을 최신순으로 봅니다',
-        text: '전체 지식 보기 →', onclick: () => { browseAll = true; refetch(); } }));
+      el('span', { class: 'kn-home-sectitle', text: mine.length ? '내 소유 카테고리 최근 지식' : '최근 지식' }),
+      // (#req) ＋새 페이지·선택을 최근 지식 섹션으로 이동(상단 툴바 비움).
+      el('div', { class: 'kn-home-sechead-actions' },
+        newPageBtn,
+        selectBtn,
+        el('button', { class: 'kn-home-all', type: 'button', title: '카테고리 구분 없이 전체 지식을 최신순으로 봅니다',
+          text: '전체 지식 보기 →', onclick: () => { browseAll = true; refetch(); } })));
     const recentBox = el('div', { class: 'list-box browse-list kn-home-list' },
       ...(recent.length ? recent.map((e) => knRow(e, null, openRow))
         : [el('div', { class: 'empty', text: '아직 지식이 없습니다 — 위의 ＋ 새 페이지로 시작해 보세요.' })]));
@@ -680,7 +690,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
   const layout = el('div', { class: 'kn-shell' },
     side,
-    el('section', { class: 'kn-main' }, head, catBox, bulkBar, listBox, foot),   // (#req) 상단 제목·본문 검색 필터바 제거 — 사이드바 검색 + ⌘K 로 대체
+    el('section', { class: 'kn-main' }, catBox, bulkBar, listBox, foot),   // (#req) 상단 툴바 비움 — 액션은 사이드바 '도구'·최근 지식 섹션으로
   );
   knApplySideW(layout); layout.append(knSideResizeHandle(layout)); // (#670) 프로젝트 탭과 동일 폭 조절 핸들(같은 --pjv-side-w / localStorage 'pjv:sideW')
   view.replaceChildren(layout);
@@ -823,7 +833,7 @@ function knMakeSideSearch(nav: any, state: any) {
 // 우리 팀 표시(#req) — 208px(프로젝트 폭) 사이드바에선 '우리 팀' 글자칩이 이름을 잘라먹어 컴팩트 ★(이름 앞)로.
 //  의미는 하단 범례(knStarLegend)가 설명. 프로젝트 탭도 좁을 땐 카테고리 칩을 숨김(container query) — 동일 취지.
 function knTeamChip() {
-  return el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', title: '우리 팀이 담당하는 카테고리', text: '★' });
+  return el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', title: '내 소유 카테고리', text: '★' });
 }
 
 function knSideItem(label, catVal, on, opts?) {
@@ -931,7 +941,7 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
   // ★ 범례(#req) — 별표가 왜 붙는지(우리 팀 소유) 한 줄 설명. 팀 소유가 하나라도 있을 때만.
   if (myIds && myIds.size) nav.append(el('div', { class: 'kn-star-legend' },
     el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }),
-    el('span', { text: '우리 팀이 담당하는 분류' })));
+    el('span', { text: '내 소유 카테고리' })));
 }
 
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
@@ -943,7 +953,7 @@ function knNavCatNode(c, on, onOpen, isMine?: boolean) {
   const cnt = Number(c.knowledge_count);
   const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : ''), href: '#',
     'data-cat-val': String(c.id), role: 'button', tabindex: '0',
-    ...(isMine ? { title: '우리 팀이 담당하는 카테고리 — ' + (c.name || c.key) } : {}) },
+    ...(isMine ? { title: '내 소유 카테고리 — ' + (c.name || c.key) } : {}) },
     tw,
     isMine ? knTeamChip() : null,
     el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }),
@@ -1114,10 +1124,10 @@ function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx?) {
   cover.append(el('span', { class: 'kn-hcard-ic' + (ic ? '' : ' kn-hcard-ic-letter'),
     text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
   // (#req) 우리 팀 = 카드 위 뚜렷한 라벨(흰 글자·파란 필). 작은 별은 감이 안 온다는 피드백.
-  if (isMine) cover.append(el('span', { class: 'kn-hcard-teambadge', text: '우리 팀' }));
+  if (isMine) cover.append(el('span', { class: 'kn-hcard-teambadge', text: '내 소유' }));
   const spaceEl = el('span', { class: 'kn-hcard-space', text: SPACE_LABEL[c.space] || c.space || '' });
   const card = el('div', { class: 'kn-hcard' + (isMine ? ' kn-hcard-mine' : ''), role: 'link', tabindex: '0',
-    title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 우리 팀 카테고리' : '') },
+    title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 내 소유 카테고리' : '') },
     cover,
     el('div', { class: 'kn-hcard-body' },
       el('div', { class: 'kn-hcard-name', text: c.name || c.key }),

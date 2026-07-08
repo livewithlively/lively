@@ -5268,8 +5268,19 @@ main.doc-mode .kn-home-morecats { display: inline-flex; align-items: center; gap
   background: var(--wk-card); cursor: pointer; font-size: 13px; font-weight: 700; color: var(--wk-ink-soft);
   padding: 8px 14px; border-radius: 10px; font-family: inherit; transition: border-color .12s, color .12s, background .12s; }
 main.doc-mode .kn-home-morecats:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
-main.doc-mode .kn-home-morecats-arrow { font-size: 14px; line-height: 1; }
+main.doc-mode .kn-home-morecats-arrow { font-size: 14px; line-height: 1; transition: transform .15s ease; }
+main.doc-mode .kn-home-morecats.is-open .kn-home-morecats-arrow { transform: rotate(90deg); }   /* → ↓ 접기 표시 */
 main.doc-mode .kn-home-restwrap[hidden] { display: none; }
+
+/* (#req) 최근 지식 섹션 헤더 액션(＋새 페이지·선택·전체 지식 보기) — 상단 툴바에서 이동. */
+main.doc-mode .kn-home-sechead-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* (#req) 사이드바 '도구' 섹션 — Notion 페이지 트리 아래. 지식 그래프(새 탭)·자료·휴지통 세 행. */
+main.doc-mode .kn-side-tools { margin-top: 20px; }
+main.doc-mode .kn-side-tools-eyebrow { margin-bottom: 6px; }
+main.doc-mode .kn-side-tools .kn-side-toolitem { display: flex; align-items: center; gap: 8px; justify-content: flex-start;
+  width: 100%; box-sizing: border-box; border: none; background: none; cursor: pointer; text-decoration: none;
+  padding: 7px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--wk-ink-soft); font-family: inherit; }
+main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint); color: var(--wk-ink); }
 
 /* ── #657h3 위키 홈 카드 드래그 정렬 — 슬롯 래퍼로 카드 overflow 밖(그룹 간격)에 세로 디바이더를 띄운다
      (대시보드 개요 카드와 같은 삽입 표시). 슬롯은 flex 로 카드를 늘려 그리드 행 높이를 채운다. ── */
