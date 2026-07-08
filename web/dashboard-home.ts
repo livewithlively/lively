@@ -98,7 +98,7 @@ async function renderMyDashboard(view) {
   const zonesEl = el('div', { class: 'dash-zones' }, colLeft, colMid, colRight);
   dashInitColResize(zonesEl);
   // #req R13 — 각 열 두 박스 사이 세로 높이 핸들(내 프로젝트↔팀 공유 폴더 · 최신 알림↔내 AI 세션).
-  dashInitRowResize(colLeft, 'dash_rows_left_v1', [5, 1.5]);
+  dashInitRowResize(colLeft, 'dash_rows_left_v1', [5, 1.5], true); // #req 팀 공유 폴더는 기본 auto(내용맞춤·스크롤 없음), 드래그하면 fr 전환
   dashInitRowResize(colMid, 'dash_rows_mid_v1', [5, 7]); // #req 기본: 최신 알림↓·내 AI 세션↑ (이미 조절해 저장한 사람은 유지)
   view.replaceChildren(el('div', { class: 'dash' }, strip, zonesEl));
   document.getElementById('view')!.focus?.();
