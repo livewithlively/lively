@@ -944,8 +944,6 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         navInner.append(searchBox);
         const treeWrap = el('div', { class: 'pjv-side-tree' });
         navInner.append(treeWrap);
-        // 휴지통 — 상단 헤더 줄에서 내려 사이드바 '맨 아래' 폴더형 항목으로(#670). 위 구분선으로 트리와 분리, 남는 공간 있으면 바닥에 붙음.
-        navInner.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
         // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
         treeWrap.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') {
             ev.preventDefault();
@@ -1094,6 +1092,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             const rootZone = el('div', { class: 'pjv-side-rootzone' }, el('span', { class: 'pjv-side-rootzone-ico', 'aria-hidden': 'true', text: '⤴' }), el('span', { text: '여기로 끌어 폴더 밖으로 빼기' }));
             pjvSideNavDrop(rootZone, { onList: (lid) => pjvMoveListToFolder(lid, null, reload) });
             treeWrap.append(rootZone);
+            // 휴지통 — 상단 헤더 줄에서 내려 사이드바 폴더형 항목으로(#670). 새 폴더/새 리스트 버튼 '위'에 배치.
+            treeWrap.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
             // 새 폴더 / 새 리스트
             treeWrap.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
         };
