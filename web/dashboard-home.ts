@@ -799,7 +799,9 @@ async function fillSessions(zone, onCount, projectsP?) {
     if (sessions.some(isMyProjectSess)) chips.push(['myproj', '내 프로젝트']);
     dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
     if (!shown.length) {
-      zone.body.replaceChildren(dashEmpty(mode === 'invited' ? '초대받은 세션이 없어요.' : mode === 'myproj' ? '내 프로젝트에서 만든 세션이 없어요.' : '세션이 없어요 — [+ 새 세션]으로 시작해 보세요.'));
+      zone.body.replaceChildren(mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
+        : mode === 'myproj' ? dashEmpty('내 프로젝트에서 만든 세션이 없어요.')
+        : dashSessionEmpty()); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션 버튼
       return;
     }
     const list = el('div', { class: 'dash-sess-list' });
@@ -875,6 +877,30 @@ function openSessMenu(anchor, s, onChange) {
     catch (e: any) { toast('삭제 실패 — ' + (e && e.message || e), true); }
   });
   close = dashPopover(anchor, panel);
+}
+// #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작 버튼(따라하기/새 세션).
+function dashSessionEmpty() {
+  return el('div', { class: 'dash-sess-empty' },
+    el('div', { class: 'dash-sess-empty-ic' }, dashSessionIcon()),
+    el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }),
+    el('div', { class: 'dash-sess-empty-desc', text: 'AI 세션은 터미널에서 Claude·Codex 같은 AI 에이전트와 함께 코드·문서를 만드는 나만의 작업 공간이에요. 폴더를 고르고 세션을 열면, AI가 그 자리에서 바로 일을 시작해요.' }),
+    el('div', { class: 'dash-sess-empty-acts' },
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => dashGoTerminal('tour') }),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: () => dashGoTerminal('new') })));
+}
+// 터미널 탭으로 이동 후, 그 페이지의 버튼을 자동 실행(따라하기=온보딩 투어 / new=새 세션 폼). 렌더 완료까지 짧게 폴링.
+//  터미널 뷰 코드(다른 세션 WIP)는 건드리지 않고 이미 있는 버튼을 눌러 재사용한다.
+function dashGoTerminal(action) {
+  location.hash = '#/terminal';
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    const btn: any = action === 'new'
+      ? document.querySelector('[data-tour="new-session"]')
+      : Array.from(document.querySelectorAll('button')).find((b) => (b.textContent || '').includes('따라하기'));
+    if (btn) { clearInterval(timer); try { btn.click(); } catch { /* */ } }
+    else if (tries > 40) clearInterval(timer); // ~4초 후 포기(그냥 터미널 탭에 안착)
+  }, 100);
 }
 
 // ── ③ 팀 공유 폴더 — 공유 워크스페이스 루트의 폴더. 목록형→아이콘형(#621). ──

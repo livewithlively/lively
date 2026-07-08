@@ -4457,6 +4457,13 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 
 /* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
 .dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
+/* #req 세션 0개 첫 사용자 안내 카드 — 설명 + 따라하기/새 세션 버튼. */
+.dash-sess-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 9px; padding: 20px 18px; max-width: 360px; margin: 6px auto; }
+.dash-sess-empty-ic { width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center; background: var(--bg-punch); color: var(--blue); flex: none; }
+.dash-sess-empty-ic svg { width: 24px; height: 24px; }
+.dash-sess-empty-title { font-size: 15px; font-weight: 800; color: var(--ink); }
+.dash-sess-empty-desc { font-size: 12.5px; line-height: 1.65; color: var(--ink-sub); }
+.dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
 /* #req 재설계 — 카드 전체가 클릭 대상(열기). 호버 시 파란 테두리 + 우측 고스트 아이콘 노출. */
 .dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); cursor: pointer; transition: border-color .12s, box-shadow .12s; }
 .dash-sess-box:hover { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
