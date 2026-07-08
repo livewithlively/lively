@@ -851,12 +851,13 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu pjv-listset-menu' }); const close = pjvPopover(more, menu); pjvListSettingsMenu(menu, close, list, reload); });
             it.append(more);
             // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
-            it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); try {
+            it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; pjvSideDrag.folderId = list.folder_id ?? null; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); if (list.folder_id != null)
+                document.body.classList.add('pjv-side-dragging-infolder'); try {
                 ev.dataTransfer.effectAllowed = 'move';
                 ev.dataTransfer.setData('text/plain', 'L' + list.id);
             }
             catch (_) { /* */ } });
-            it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after')); });
+            it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvSideDrag.folderId = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list', 'pjv-side-dragging-infolder'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after, .pjv-side-drop-outdent').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after', 'pjv-side-drop-outdent')); });
             pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag)
             // 리스트→리스트 드롭(#541): 같은 폴더 형제면 커서 위/아래로 앞/뒤 재정렬(가로 삽입선), 다른 폴더 리스트면 그 폴더로 이동(기존 동작).
             pjvSideNavDrop(it, {
@@ -874,6 +875,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                     else
                         pjvMoveListToFolder(lid, list.folder_id ?? null, reload);
                 },
+                // 인라인 아웃덴트(#670) — 폴더 안 리스트를 왼쪽으로 끌면 최상위(folder_id null)로. 이미 최상위면 no-op(가드).
+                onOutdent: (lid) => { const d = lists.find((x) => String(x.id) === String(lid)); if (d && d.folder_id != null)
+                    pjvMoveListToFolder(lid, null, reload); },
             });
             return it;
         };
@@ -1088,10 +1092,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                     treeWrap.append(el('div', { class: 'pjv-side-empty', text: '검색 결과가 없습니다' }));
                 return; // 검색 중엔 드롭존·새 폴더/리스트 버튼 숨김
             }
-            // 폴더에서 빼기 — 리스트 드래그 중에만 보이는 드롭존(여기 놓으면 최상위=folder_id null). 빈 곳 드롭이 잘 안 맞던 문제 해소.
-            const rootZone = el('div', { class: 'pjv-side-rootzone' }, el('span', { class: 'pjv-side-rootzone-ico', 'aria-hidden': 'true', text: '⤴' }), el('span', { text: '여기로 끌어 폴더 밖으로 빼기' }));
-            pjvSideNavDrop(rootZone, { onList: (lid) => pjvMoveListToFolder(lid, null, reload) });
-            treeWrap.append(rootZone);
+            // (#670) '여기로 끌어 폴더 밖으로 빼기' 드롭존 박스 제거 — 폴더 안 리스트를 왼쪽으로 끌면 인라인 아웃덴트(pjvSideNavDrop onOutdent)로 폴더 밖.
+            //  빈 곳 드롭 → 최상위 는 treeWrap 의 dragover/drop 이 폴백으로 계속 처리.
             // 휴지통 — 상단 헤더 줄에서 내려 사이드바 폴더형 항목으로(#670). 새 폴더/새 리스트 버튼 '위'에 배치.
             treeWrap.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
             // 새 폴더 / 새 리스트
@@ -1541,7 +1543,7 @@ function pjvMoveNear(ids, movingId, targetId, after) {
 //  같은 형제 재정렬(handlers.reorderList/reorderFolder 가 true)이면 커서 위/아래 절반으로 '앞/뒤' 가로 삽입선(#670,
 //  어디 들어갈지 직관적), 아니면(폴더로 넣기 등) 종전 폴더 하이라이트. onList/onFolder(id, after) 로 위치 전달.
 function pjvSideNavDrop(elm, handlers) {
-    const clearMarks = () => elm.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after');
+    const clearMarks = () => elm.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after', 'pjv-side-drop-outdent');
     const over = (ev) => {
         if (!pjvSideDrag.kind)
             return;
@@ -1554,10 +1556,17 @@ function pjvSideNavDrop(elm, handlers) {
         const canReorder = pjvSideDrag.kind === 'list' ? !!(handlers.reorderList && handlers.reorderList(id))
             : pjvSideDrag.kind === 'folder' ? !!(handlers.reorderFolder && handlers.reorderFolder(id)) : false;
         clearMarks();
-        if (canReorder) {
-            const r = elm.getBoundingClientRect();
-            elm.classList.add((ev.clientY - r.top) > r.height / 2 ? 'pjv-side-drop-after' : 'pjv-side-drop-before');
+        const r = elm.getBoundingClientRect();
+        const half = (ev.clientY - r.top) > r.height / 2 ? 'pjv-side-drop-after' : 'pjv-side-drop-before';
+        // 인라인 아웃덴트(#670, VS Code식) — 폴더 '안' 리스트를 드래그하는 중(pjvSideDrag.folderId != null)에 커서 X 를 항목 왼쪽
+        //  들여쓰기 영역(< PJV_OUTDENT_PX)으로 끌면 '폴더 밖 최상위'로 빼기. 삽입선을 최상위 들여쓰기로 당기고 세로 가이드 표시.
+        //  (예전의 '여기로 끌어 폴더 밖으로 빼기' 드롭존 박스를 대체 — 별도 박스 없이 자연스러운 가로 인라인 레벨.)
+        if (pjvSideDrag.kind === 'list' && handlers.onOutdent && pjvSideDrag.folderId != null && (ev.clientX - r.left) < PJV_OUTDENT_PX) {
+            elm.classList.add('pjv-side-drop-outdent', half);
+            return;
         }
+        if (canReorder)
+            elm.classList.add(half);
         else
             elm.classList.add('pjv-side-drop-over');
     };
@@ -1566,6 +1575,7 @@ function pjvSideNavDrop(elm, handlers) {
     elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget))
         clearMarks(); });
     elm.addEventListener('drop', (ev) => {
+        const isOutdent = elm.classList.contains('pjv-side-drop-outdent');
         const after = elm.classList.contains('pjv-side-drop-after');
         clearMarks();
         if (!pjvSideDrag.kind)
@@ -1576,12 +1586,18 @@ function pjvSideNavDrop(elm, handlers) {
         const id = pjvSideDrag.id;
         pjvSideDrag.kind = null;
         pjvSideDrag.id = null;
+        pjvSideDrag.folderId = null;
+        if (kind === 'list' && isOutdent && handlers.onOutdent) {
+            handlers.onOutdent(id);
+            return;
+        }
         if (kind === 'list' && handlers.onList)
             handlers.onList(id, after);
         else if (kind === 'folder' && handlers.onFolder)
             handlers.onFolder(id, after);
     });
 }
+const PJV_OUTDENT_PX = 30; // 아웃덴트 트리거 — 항목 왼쪽 이만큼(px) 안으로 커서가 들어오면 '폴더 밖'으로 해석(#670).
 function pjvDeleteList(list, reload) {
     if (!confirm('리스트 ‘' + list.name + '’을(를) 삭제할까요?\n\n리스트만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).'))
         return;
@@ -7157,7 +7173,7 @@ const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: fa
 // 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id 를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃.
 const pjvFolderDrag = { id: null };
 // 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
-const pjvSideDrag = { kind: null, id: null };
+const pjvSideDrag = { kind: null, id: null, folderId: null };
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.
 const pjvListOpen = new Map();
 // 사이드바 폴더(project_folder) 펼침 상태 — key: folder id. 없으면 기본 펼침(#475 폴더›리스트 트리). 세션 유지.
