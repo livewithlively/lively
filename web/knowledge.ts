@@ -194,6 +194,13 @@ async function renderKnowledgeSpace(view, _space, params) {
   if (f.indexed === undefined) f.indexed = false;     // 인덱스(핀) 필터(#336) — is_wiki=true 만(전체 카테고리에서). category 와 상호배타.
   if (f.folder === undefined) f.folder = '';          // 폴더 드릴다운(#592) — 카테고리 안 폴더 name. category 없으면 무의미.
   if (f.catTab === undefined) f.catTab = 'auto';      // #657w 카테고리 탭 — 대문(home)|문서(docs). auto=대문 내용 있으면 대문
+  // 파라미터 없는 진입(#req) = 상단 WIKI 탭 클릭 등 '맨 진입' — 전체(위키 홈 카드)로 리셋. f 는 세션 전역(state.knowledge)이라
+  //  안 그러면 이전에 고른 카테고리·검색이 그대로 복원돼, WIKI 탭을 눌렀는데 그 카테고리 대문이 나온다(놀람).
+  //  카테고리·검색 딥링크(?category=·?q= 등)만 상태를 이어받는다 — 카테고리 보던 중 새로고침·피크 뒤로가기는
+  //  syncHash(replaceState)가 쿼리를 유지하므로 리셋되지 않고 그대로 복원된다.
+  if (!params || Array.from(params.keys()).length === 0) {
+    f.category = ''; f.folder = ''; f.indexed = false; f.q = ''; f.injection = ''; f.provenance = ''; f.type = ''; f.catTab = 'auto';
+  }
   if (params) {
     // category 와 indexed 는 상호배타(인덱스 = '전체 카테고리에서 핀만'). 외부 category 링크는 indexed 를 끈다.
     if (params.has('category')) { f.category = params.get('category') || ''; f.indexed = false; f.folder = ''; f.catTab = 'auto'; }
