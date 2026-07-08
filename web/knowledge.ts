@@ -230,15 +230,15 @@ async function renderKnowledgeSpace(view, _space, params) {
       refetch();   // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
     } });
 
-  // (#614) 지식이 WIKI 화면의 주(主) 뷰 — 큰 제목이 정체성. 자료·그래프·휴지통은 헤더의 보조 버튼(동급 탭 아님).
-  const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
+  // (#req) 상단 큰 제목·부제 제거 — WIKI 탭 자체가 정체성이라 군더더기. 액션(＋새 페이지·선택·그래프·자료·휴지통)만 남긴다.
+  const head = pageHead('', null, [
     hasScope('memory') ? el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new',
       title: '새 페이지를 작성합니다 — 노션처럼 바로 타이핑', text: '＋ 새 페이지' }) : null,
     selectBtn,
     knGraphBtn(),
     knSourcesBtn(),
     el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
-  ], '식');
+  ]);
 
   // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
   //  (#592) .kn-shell 의 고정 260px 자체 스크롤 컬럼(.kn-side) — 내용(buildSide)은 기존 그대로.
@@ -316,11 +316,6 @@ async function renderKnowledgeSpace(view, _space, params) {
   const HOME_RECENT_CAP = 8;
   function isHome() {
     return !browseAll && !f.category && !f.indexed && !f.folder && !f.q.trim() && !f.provenance && !f.type && !sel.mode;
-  }
-  // 안내 문구(부제)는 위키 첫 화면(홈)에서만 — 카테고리/검색/필터 안에선 잡음이라 숨긴다(사용자 요청).
-  function syncHomeSubtitle() {
-    const s = head.querySelector('.sub') as HTMLElement | null;
-    if (s) s.hidden = !isHome();
   }
   // 사이드바/카드 공용 카테고리 선택 — 카드 클릭 = 대문 진입(paintCatHead 가 대문을 그린다).
   function selectCategory(v) {
@@ -586,7 +581,6 @@ async function renderKnowledgeSpace(view, _space, params) {
   }
 
   async function refetch() {
-    syncHomeSubtitle();   // 부제는 홈에서만 노출
     listBox.replaceChildren(skeletonRows(4));
     foot.replaceChildren();
     try {
@@ -713,12 +707,23 @@ function knSideSearchBtn() {
 // 카테고리 사이드바 행 — tree-item 패턴. data-cat-val 로 클릭 위임(빈 문자열=전체).
 //  opts(선택): { glyph } 글리프 교체(기본 ·/∗) · { cls } 추가 클래스(예: 들여쓰기) · { title } 호버 힌트.
 function knSideItem(label, catVal, on, opts?) {
-  const glyph = (opts && opts.glyph) || (catVal ? '·' : '∗');
-  return el('a', { class: 'tree-item' + (on ? ' on' : '') + (opts && opts.cls ? ' ' + opts.cls : ''),
+  // opts.star = 우리 팀 소유 카테고리(★ 강조 + 좌측 파란 틱, kn-cat-mine). 글리프 자리를 ★ 로 대체(중복 아이콘 방지).
+  const star = !!(opts && opts.star);
+  const glyph = (opts && opts.glyph) || (star ? '★' : (catVal ? '·' : '∗'));
+  const title = (opts && opts.title) || (star ? '★ 우리 팀이 담당하는 분류 — ' + label : undefined);
+  return el('a', { class: 'tree-item' + (on ? ' on' : '') + (opts && opts.cls ? ' ' + opts.cls : '') + (star ? ' kn-cat-mine' : ''),
     href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0',
-    ...(opts && opts.title ? { title: opts.title } : {}) },
-    el('span', { class: 'tree-glyph all', 'aria-hidden': 'true', text: glyph }),
+    ...(title ? { title } : {}) },
+    el('span', { class: 'tree-glyph' + (star ? ' tree-glyph-star' : ' all'), 'aria-hidden': 'true', text: glyph }),
     el('span', { class: 'tree-label', text: label }));
+}
+
+// ★ 범례(#req) — 사이드바 하단. '별표가 왜 붙는지' 를 명시(우리 팀 소유 카테고리). 팀 소유가 하나라도 있을 때만.
+function knStarLegend(myIds: Set<string>): any {
+  if (!myIds || !myIds.size) return null;
+  return el('div', { class: 'kn-star-legend' },
+    el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }),
+    el('span', { text: '우리 팀이 담당하는 분류' }));
 }
 
 // ── 공유 사이드바(프로젝트·위키 탭 공용, 2026-06-26) — 3 space 카테고리를 한 사이드바에 통합. ──
@@ -745,48 +750,29 @@ function myCatIdSet(): Set<string> {
 //  myIds 비면(미소속) 우리 팀 그룹 생략하고 3 space 를 모두 펼쳐 노출(기존 동작에 근접). selected = 현재 선택 catVal(문자열).
 //  opts.indexed(지식 탭 전용, #336): '전체' 바로 아래에 '인덱스(핀)' 필터 항목(센티넬 KN_INDEXED)을 끼운다. 프로젝트 탭은 미전달 → 미노출.
 function buildSpacesNav(nav, bySpace, selected, myIds: Set<string>, opts?) {
+  // (#req 통일) 위키 사이드바(buildKnowledgeNav)와 같은 단일 space 위계 — 옛 '우리 팀' 이중 그룹 폐기.
+  //  각 space 안에서 우리 팀 소유 카테고리를 맨 위 + ★ 강조. 스타일도 .kn-tree2 공유. ▸ 펼침/개수는 위키 전용(여긴 생략).
   nav.replaceChildren();
+  nav.classList.add('kn-tree2');
   nav.append(knSideItem('전체', '', !selected || selected === ''));
-  // WIKI 인덱스(#336) — '전체' 하위 한 단 들여쓴 '인덱스' 항목. 클릭 시 전체 카테고리에서 is_wiki(핀)만 필터.
   if (opts && opts.indexed) {
     nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED,
       { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
   }
-  // 우리 팀 — 내 카테고리를 사업/제품/시스템 대분류로 하위 그룹핑(#338). 항상 펼침. 나머지 그룹과 같은 space 순서.
-  const mineBySpace: any = { business: [], product: [], system: [] };
-  for (const sk of ['business', 'product', 'system']) for (const c of (bySpace[sk] || [])) if (myIds.has(String(c.id))) mineBySpace[sk].push(c);
-  const mineTotal = mineBySpace.business.length + mineBySpace.product.length + mineBySpace.system.length;
-  const hasMine = mineTotal > 0;
-  if (hasMine) {
-    const grp = el('details', { class: 'tree-group tree-group-mine', open: '' },
-      el('summary', { class: 'tree-grouphead' },
-        el('span', { class: 'tree-groupstar', 'aria-hidden': 'true', text: '★' }),
-        el('span', { class: 'tree-grouptitle', text: '우리 팀' }),
-        el('span', { class: 'tree-groupcount', text: String(mineTotal) })));
-    // 사업·제품·시스템 순으로 가벼운 하위 헤더 + 항목(빈 space 는 생략).
-    for (const sk of ['business', 'product', 'system']) {
-      const inSpace = mineBySpace[sk];
-      if (!inSpace.length) continue;
-      grp.append(el('div', { class: 'tree-subhead' },
-        el('span', { class: 'tree-subtitle', text: SPACE_LABEL[sk] }),
-        el('span', { class: 'tree-subcount', text: String(inSpace.length) })));
-      for (const c of inSpace) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
-    }
-    nav.append(grp);
-  }
-  // 나머지 — space별(사업·제품·시스템). 우리 팀이 있으면 접힘 기본(무관=하위), 없으면 펼침. 선택된 카테고리가 든 그룹은 펼침.
   for (const sk of ['business', 'product', 'system']) {
-    const rest = (bySpace[sk] || []).filter((c) => !myIds.has(String(c.id)));
-    if (!rest.length) continue;
-    const selectedHere = rest.some((c) => String(c.id) === String(selected));
-    const open = !hasMine || selectedHere;
-    const grp = el('details', { class: 'tree-group' + (hasMine ? ' tree-group-rest' : ''), ...(open ? { open: '' } : {}) },
+    const cats = (bySpace[sk] || []);
+    if (!cats.length) continue;
+    const mine = cats.filter((c) => myIds.has(String(c.id)));
+    const rest = cats.filter((c) => !myIds.has(String(c.id)));
+    const ordered = [...mine, ...rest];
+    const grp = el('details', { class: 'tree-group kn-space-group', open: '' },
       el('summary', { class: 'tree-grouphead' },
-        el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] }),
-        el('span', { class: 'tree-groupcount', text: String(rest.length) })));
-    for (const c of rest) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id)));
+        el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] })));
+    for (const c of ordered) grp.append(knSideItem(c.name || c.key, String(c.id), String(selected) === String(c.id), { star: myIds.has(String(c.id)) }));
     nav.append(grp);
   }
+  const legend = knStarLegend(myIds);
+  if (legend) nav.append(legend);
 }
 
 // ════════════════════════════════════════════
@@ -824,6 +810,8 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     for (const c of ordered) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
     nav.append(grp);
   }
+  const legend = knStarLegend(myIds);
+  if (legend) nav.append(legend);
 }
 
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + [★우리팀] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).

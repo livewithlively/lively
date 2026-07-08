@@ -795,18 +795,22 @@ function interleave(arr, sep) {
 //  · actions= 제목 오른쪽에 붙는 버튼/요소들(+ 추가·🗑 휴지통 등, 없으면 제목만).
 //  · accent = 제목의 뒤쪽 일부를 브랜드 블루로(앱 전반의 관례: 프로'젝트'·지'식'처럼 끝부분 강조). 생략 시 강조 없음.
 function pageHead(title: string, sub?: string | null, actions?: any[], accent?: string): any {
-  const h1 = el('h1', { class: 'page-title' });
-  if (accent && title.endsWith(accent)) {
-    const lead = title.slice(0, title.length - accent.length);
-    if (lead) h1.append(document.createTextNode(lead));
-    h1.append(el('span', { class: 'accent', text: accent }));
-  } else {
-    h1.textContent = title;
-  }
   const acts = (actions || []).filter(Boolean);
-  const row = el('div', { class: 'page-head-row' }, h1);
+  const row = el('div', { class: 'page-head-row' });
+  // 제목이 비면(빈 문자열) 큰 제목·부제 없이 액션만 — 상단 군더더기 제거용(툴바만 남김).
+  if (title) {
+    const h1 = el('h1', { class: 'page-title' });
+    if (accent && title.endsWith(accent)) {
+      const lead = title.slice(0, title.length - accent.length);
+      if (lead) h1.append(document.createTextNode(lead));
+      h1.append(el('span', { class: 'accent', text: accent }));
+    } else {
+      h1.textContent = title;
+    }
+    row.append(h1);
+  }
   if (acts.length) row.append(el('div', { class: 'page-head-actions' }, ...acts));
-  return el('div', { class: 'page-head' }, row, sub ? el('p', { class: 'sub', text: sub }) : null);
+  return el('div', { class: 'page-head' + (title ? '' : ' page-head-noheading') }, row, (title && sub) ? el('p', { class: 'sub', text: sub }) : null);
 }
 
 // ── 아바타(프로필 원형) — 셀프 업로드 이미지가 있으면 그걸, 없으면 이름 이니셜+결정적 색상. ──

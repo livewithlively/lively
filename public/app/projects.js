@@ -54,10 +54,10 @@ function pjvRestoreScroll(y) {
 //  (클릭 = 프로젝트 보드로 바로). '탐색'(지식·프로젝트·자료 둘러보기)은 제거, '작업 로그'는 이미 터미널로 이관(#609).
 // 프로젝트 탭 공통 페이지 헤더 — 공용 pageHead(#367). 제목 + 🗑 휴지통 진입점. 삭제 프로젝트 복원은 #/trash 공용 페이지.
 function projectPageHead() {
-    // 부제목(설명) 제거(#req) — 상단 군더더기 없이 바로 보드. 제목+휴지통만 남긴다.
-    return pageHead('프로젝트', null, [
+    // 제목·부제 제거(#req) — 상단 군더더기 없이 바로 보드. 휴지통 진입만 남긴다.
+    return pageHead('', null, [
         el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }),
-    ], '젝트');
+    ]);
 }
 // 프로젝트(v2) 진입 — 하위 탭(탐색) 폐지: 상세(p) 외 모든 진입은 프로젝트 보드로. 옛 worklog→터미널(#609) 유지, 옛 browse URL 도 보드로 흡수.
 async function renderProjectsV2(view, sub, _params, scopeKey) {

@@ -4169,8 +4169,9 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-tree2 .kn-space-group > summary { margin-top: 10px; padding-top: 10px; color: var(--muted-head); }
 .kn-tree2 > .tree-item + .kn-space-group > summary,
 .kn-tree2 .tree-item-sub + .kn-space-group > summary { border-top: none; margin-top: 4px; }
-/* 카테고리 행 — 살짝 여유로운 높이(빽빽함 완화). */
+/* 카테고리 행 — 살짝 여유로운 높이(빽빽함 완화) + 라벨 14px(프로젝트 탭 .pjv-side-navitem 와 통일). */
 .kn-tree2 .tree-item { padding-top: 7px; padding-bottom: 7px; }
+.kn-tree2 .tree-label, main.doc-mode .kn-tree2 .tree-label { font-size: 14px; }
 /* ▸ 펼침 셰브런 — 너무 작아 안 보이던 것 키우고 클릭 영역 확보. */
 .kn-nav-tw { width: 20px; height: 22px; font-size: 10.5px; }
 /* ★ 범례 — 사이드바 하단. '별표가 왜 붙는지'(우리 팀 소유) 한 줄 설명 — 별표 의미 불명 해소. */
