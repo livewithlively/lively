@@ -839,7 +839,15 @@ async function fillSessions(zone, onCount, projectsP) {
         const h = ((cfg && cfg.harnesses) || []).find((x) => x.key === key);
         return (h && h.label) || DASH_HARNESS_LABEL[key] || key || '';
     };
-    const sessTime = (c) => { const n = Number(c); return n ? relTime(new Date(n * 1000).toISOString()) : ''; };
+    // #req — 상대시간('3시간 전') 대신 실제 시각을 표기. 오늘이면 시:분만, 다른 날이면 '월 일 시:분'.
+    const sessTime = (c) => {
+        const n = Number(c);
+        if (!n)
+            return '';
+        const d = new Date(n * 1000);
+        const hm = d.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
+        return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' }) + ' ' + hm;
+    };
     // 내가 할당된 프로젝트(=mine=1 응답) 안에서 만들어진 내 세션 판별(#req) — projName(내 프로젝트) 에 있는 projectId.
     const isMyProjectSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && projName.has(pid); };
     let mode = dashSessFilter(); // 전체 | 내 것 | 초대받음 | 내 프로젝트 (저장된 기본 필터)
