@@ -242,6 +242,7 @@ export async function listSections(): Promise<OrgSection[]> {
 }
 
 // 섹션 upsert(생성/편집) — injection='always' 고정, 분류 없음. 신규는 sort=말미(max+1), 기존은 sort 보존. version 증가·감사.
+//  #669: 본문 실변경 시 embedding_* 리셋 — 섹션도 knowledge 행이라 검색 임베딩 대상. 재임베딩은 자동 pending 백필이 줍는다.
 export async function updateSection(
   section: string,
   body_md: string,
@@ -256,6 +257,9 @@ export async function updateSection(
        1,now(),$5)
      ON CONFLICT (name) DO UPDATE SET
        body_md=EXCLUDED.body_md, injection='always', lifecycle='active',
+       embedding_vector=CASE WHEN knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md THEN NULL ELSE knowledge.embedding_vector END,
+       embedding_model=CASE WHEN knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md THEN NULL ELSE knowledge.embedding_model END,
+       embedding_updated_at=CASE WHEN knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md THEN NULL ELSE knowledge.embedding_updated_at END,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [section, body_md, source === "mcp" ? "ai" : "human", source ?? "web", actor ?? null]);
   const after = await getSection(section);

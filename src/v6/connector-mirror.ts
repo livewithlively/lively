@@ -198,6 +198,9 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   // 멱등 upsert — 외부 좌표(external_*) 부분유니크 ON CONFLICT. provenance='observed'(외부 수집물 사실),
   //  injection='recalled'(검색 소환 — 외부 미러는 always 주입 대상 아님), confidence='observed', source=system.
   //  name(PK)은 신규일 때만 슬러그 부여(external-identity.unitName SoT). 재싱크는 ON CONFLICT 가 같은 행을 잡으므로 name 충돌 없음.
+  //  #669 임베딩: 미러는 쓰기훅(embedKnowledgeBestEffort=knowledge_save 경로) 밖이라, 제목/본문 실변경($16) 시
+  //   embedding_* 를 리셋해 pending(IS NULL) 풀로 되돌린다(신규 insert 는 어차피 NULL) → 게이트웨이 자동 pending
+  //   백필(runAutoBackfillSweep)이 재임베딩. 리셋 없인 갱신분이 옛 텍스트의 스테일 벡터로 남아 백필이 영영 못 잡는다.
   const name = prevRow?.name ?? unitName(system, externalId);
   const parentName = it.parent_external_id ? unitName(system, it.parent_external_id) : null;
   const r = await client.query(
@@ -222,13 +225,16 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
         last_synced_at=now(), parent_external_id=EXCLUDED.parent_external_id, parent_name=EXCLUDED.parent_name,
         fields=EXCLUDED.fields, raw=EXCLUDED.raw, sort=COALESCE($15, knowledge.sort),
+        embedding_vector=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_vector END,
+        embedding_model=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_model END,
+        embedding_updated_at=CASE WHEN $16::boolean THEN NULL ELSE knowledge.embedding_updated_at END,
         version=knowledge.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by
      RETURNING name`,
     [name, title, body, system,
      instance, externalId, it.provenance.external_url ?? null,
      it.occurred_at ?? null, it.parent_external_id ?? null, parentName,
      JSON.stringify(fields), raw == null ? null : JSON.stringify(raw), author,
-     lifecycle, sort],
+     lifecycle, sort, contentChanged],
   );
   const finalName = (r.rows[0] as { name: string }).name;
 

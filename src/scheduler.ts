@@ -112,6 +112,9 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
         out.push({ system: sys, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
       } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
     }
+    // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드·중복 자체 거부) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을
+    //  10분 주기 스윕을 기다리지 않고 곧바로 흡수. 실패는 삼킨다(다음 주기/다음 sync 가 또 돈다).
+    void import("./v6/embedding-backfill.js").then((m) => m.runAutoBackfillSweep()).catch(() => {});
     return { status: "ok", summary: { systems: out } };
   }
 

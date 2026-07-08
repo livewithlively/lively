@@ -52,7 +52,7 @@ import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js
 import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 // 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
-import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
+import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfig } from "../v6/embedding-provider.js";
 import {
   DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS,
@@ -904,6 +904,8 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const system = str(input.system, "system", 40).trim();
       const run = await startConnectorRun(system, { full: Boolean(input.full), trigger: "manual", startedBy: actorOf(user) });
+      // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을 곧바로 흡수.
+      if (!run.alreadyRunning) void run.done.then(() => runAutoBackfillSweep()).catch(() => {});
       return { run_id: run.runId, already_running: run.alreadyRunning }; // done 은 await 하지 않는다(비동기)
     }),
   restOnly("org_connector_runs", "커넥터 실행 이력",

@@ -230,3 +230,31 @@ export function startBackfillJob(
     .finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
   return { started: true, job };
 }
+
+// ── 자동 pending 백필 스윕(#669) — 쓰기훅·미러가 남긴 미임베딩 잔량을 게이트웨이가 스스로 줍는 안전망. ──
+//  잔량의 출처: ① 커넥터 미러(신규 insert + 제목/본문 변경 시 embedding_* 리셋 — connector-mirror.ts)
+//  ② 쓰기훅 best-effort 실패(엔드포인트 순단) ③ 임베딩 도입 전 스톡(뒤늦게 켜기·버전업 직후).
+//  호출: 부팅 후·10분 주기(index.ts) + connector_sync 완료 후(scheduler.ts·delivery.ts).
+//  ⚠ 게이트웨이 프로세스 전용 — run-sync 서브프로세스에서 부르면 잡이 관리 UI(getBackfillJob)에 안 보이고,
+//   대량 스톡 드레인이 sync 런을 수십 분 붙들어 커서 전진·run 하트비트를 위협한다(그래서 미러는 리셋만 하고 떠난다).
+//  비용 가드: provider off=설정 1회 조회 후 즉시 반환 · pending 0=카운트 쿼리만 · 스윕/잡 중복=자체 거부.
+//  타깃 순차 — CPU 임베딩 백엔드(bge-m3 등)에서 두 잡이 동시에 돌아 요청당 시간이 늘어나 타임아웃에 가까워지는 것 방지.
+let sweepRunning = false;
+export async function runAutoBackfillSweep(): Promise<void> {
+  if (sweepRunning) return;
+  sweepRunning = true;
+  try {
+    const provider = resolveEmbeddingProvider(await resolveConfigFromDb());
+    if (!provider) return;
+    for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET]) {
+      let pending = 0;
+      try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }
+      if (pending === 0) continue;
+      const { started, job } = startBackfillJob("pending", target);
+      if (!started || !job) continue;
+      while (job.running) await new Promise((r) => setTimeout(r, 2_000));
+    }
+  } finally {
+    sweepRunning = false;
+  }
+}

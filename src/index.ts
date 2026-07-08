@@ -14,6 +14,7 @@ import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
 import { initV6Schema } from "./v6/schema.js";
+import { runAutoBackfillSweep } from "./v6/embedding-backfill.js";
 import { registerWebUi } from "./web.js";
 import { registerTerminal } from "./terminal.js";
 import { registerProjectV6Routes } from "./project-routes.js";
@@ -144,7 +145,15 @@ const server = app.listen(PORT, () => {
       //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
       //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startScheduler(); })
-      // 임베딩(pgvector) 폐기(2026-06-24): v6 knowledge 검색은 ILIKE 비-벡터 — embeddings 모듈 제거됨.
+      // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
+      //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
+      //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,
+      //  같은 DB 공유)가 라이브와 중복 스윕(같은 행 이중 임베딩)하지 않게.
+      .then(() => {
+        if (process.env.LIVELY_NO_SCHEDULER === "1") return;
+        setTimeout(() => { void runAutoBackfillSweep(); }, 30_000).unref();
+        setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
+      })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
 });
