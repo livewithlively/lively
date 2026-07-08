@@ -314,7 +314,45 @@ function openKnPropsSettings(foot, gear, k, hidden: string[], onChanged) {
   setTimeout(() => { document.addEventListener('click', onDoc, true); document.addEventListener('keydown', onKey); }, 0);
 }
 
+// #657t 분류·유형 인라인 피커 — 속성 값 클릭 시 팝오버(노션 속성 편집 동형). save(field, value) 는 호출부 제공.
+function openKnMetaPicker(anchor: HTMLElement, field: string, k: any, save: (f: string, v: string) => Promise<void>) {
+  const old = document.querySelector('.kn-metapop');
+  if (old) { old.remove(); return; }
+  const pop = el('div', { class: 'kn-metapop', role: 'menu' });
+  const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+  const opt = (label: string, value: string, on: boolean) => {
+    const b = el('button', { class: 'kn-metapop-item' + (on ? ' on' : ''), type: 'button' },
+      el('span', { text: label }), on ? el('span', { class: 'kn-metapop-check', 'aria-hidden': 'true', text: '✓' }) : null);
+    b.onclick = async () => { close(); if (!on) { try { await save(field, value); } catch (e) { toast('저장 실패 — ' + e.message, true); } } };
+    return b;
+  };
+  if (field === 'type') {
+    for (const [v, label] of Object.entries(KN_TYPE_LABEL)) pop.append(opt(label as string, v, k.type === v));
+  } else {
+    pop.append(el('div', { class: 'kn-metapop-note', text: '불러오는 중…' }));
+    api('/api/ui/categories').then((d) => {
+      const cats = (d && d.categories) || [];
+      const cur = new Set((Array.isArray(k.categories) ? k.categories : []).filter((c) => c.state !== 'rejected').map((c) => c.key));
+      const parts: any[] = [];
+      for (const sp of ['business', 'product', 'system']) {
+        const inSp = cats.filter((c) => c.space === sp);
+        if (!inSp.length) continue;
+        parts.push(el('div', { class: 'kn-metapop-head', text: SPACE_LABEL[sp] }));
+        for (const c of inSp) parts.push(opt(c.name || c.key, c.key, cur.has(c.key)));
+      }
+      pop.replaceChildren(...parts);
+    }).catch(() => pop.replaceChildren(el('div', { class: 'kn-metapop-note', text: '목록을 불러오지 못했습니다' })));
+  }
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 260)) + 'px';
+  pop.style.top = (r.bottom + 4) + 'px';
+  const onDoc = (ev: any) => { if (!pop.contains(ev.target)) close(); };
+  setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+}
+
 // 속성 블록(노션형) — 보이는 속성 세로 리스트 + '속성 n개 숨김 ▾'(일시 펼침) + ⚙ 속성 설정.
+//  opts.editMeta(#657t): 분류·유형 값 클릭=인라인 피커.
 function buildKnPropsBlock(k, hidden: string[], opts) {
   const vis = knEffectiveVisible(hidden, k.props_ui);
   const rows: any[] = [], hiddenRows: any[] = [];
@@ -329,15 +367,26 @@ function buildKnPropsBlock(k, hidden: string[], opts) {
     ? el('button', { class: 'kn-props-gear', type: 'button', title: '속성 노출을 문서/전체 단위로 설정합니다',
         text: '⚙ 속성 설정', onclick: () => openKnPropsSettings(foot, gear, k, hidden, opts.onChanged) })
     : null;
+  const mkRow = ({ p, v }, dim?: boolean) => {
+    const r = knPropRow(p.label, v.node, v.hint);
+    if (dim) r.classList.add('kn-prop-dim');
+    if (opts.editMeta && (p.key === 'category' || p.key === 'type')) {
+      r.classList.add('kn-prop-editable');
+      const val = r.querySelector('.kn-prop-v') as HTMLElement;
+      val.setAttribute('role', 'button');
+      val.setAttribute('tabindex', '0');
+      val.title = '클릭해서 변경';
+      const openIt = () => openKnMetaPicker(val, p.key, k, opts.editMeta.save);
+      val.addEventListener('click', openIt);
+      val.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') openIt(); });
+    }
+    return r;
+  };
   let revealed = false;   // '숨김 ▾' 일시 펼침(저장 아님 — 화면에서만)
   const paint = () => {
     body.replaceChildren(
-      ...rows.map(({ p, v }) => knPropRow(p.label, v.node, v.hint)),
-      ...(revealed ? hiddenRows.map(({ p, v }) => {
-        const r = knPropRow(p.label, v.node, v.hint);
-        r.classList.add('kn-prop-dim');
-        return r;
-      }) : []));
+      ...rows.map((rv) => mkRow(rv)),
+      ...(revealed ? hiddenRows.map((rv) => mkRow(rv, true)) : []));
     const footKids: any[] = [];
     if (hiddenRows.length) footKids.push(el('button', { class: 'kn-props-more', type: 'button',
       text: revealed ? '숨긴 속성 접기 ▴' : '속성 ' + hiddenRows.length + '개 숨김 ▾',
@@ -844,16 +893,15 @@ async function buildKnowledgeDetail(container, name, opts?) {
       ? el('span', { class: 'crumb-cur', text: k.title || k.name })
       : el('span', { class: 'mono', text: k.name }));
 
-  // 우측 액션 — 편집·핀(memory 권한자)·삭제 + ⤢ 전폭 토글.
+  // 우측 액션(#657t 노션화) — '편집' 버튼 폐지(페이지가 곧 에디터). [📌 핀] + [⋯](이동·MD 원문·전폭·삭제)만.
   const actions = el('div', { class: 'kn-doc-actions' });
+  if (canEdit && k.injection === 'always') {
+    // (#335 ①) 항상-주입 섹션은 관리탭 '세션 주입'이 유일한 편집 홈 — 그 안내만 유지.
+    actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '관리 ▸ 세션 주입에서 편집',
+      title: '이 문서는 항상-주입 섹션입니다 — 관리 탭에서 편집·순서·삭제합니다.',
+      onclick: () => { location.hash = '#/system/injection-map'; } }));
+  }
   if (canEdit) {
-    // (#335 ①) 항상-주입 섹션은 관리탭 '세션 주입'에서만 편집/순서/삭제 — 지식 편집페이지로 보내지 않는다.
-    actions.append(k.injection === 'always'
-      ? el('button', { class: 'btn btn-ghost btn-sm', text: '관리 ▸ 세션 주입에서 편집',
-          title: '이 문서는 항상-주입 섹션입니다 — 관리 탭에서 편집·순서·삭제합니다.',
-          onclick: () => { location.hash = '#/system/injection-map'; } })
-      : el('button', { class: 'btn btn-ghost btn-sm', text: '편집',
-          onclick: () => { location.hash = '#/k-edit/' + encodeURIComponent(k.name); } }));
     const pinBtn = el('button', { class: 'btn btn-ghost btn-sm',
       text: k.is_wiki ? '📌 핀 해제' : '📍 인덱스에 핀',
       title: '핀하면 제목·분류가 매 대화 첫머리(WIKI 인덱스)에 항상 깔립니다(본문 제외, 필요할 때 AI가 찾아봄).',
@@ -867,27 +915,41 @@ async function buildKnowledgeDetail(container, name, opts?) {
         } catch (e) { toast('핀 변경 실패 — ' + e.message, true); pinBtn.disabled = false; }
       } });
     actions.append(pinBtn);
-    // #592 '이동' — 저작 지식만(observed 는 원본이 진실 — 서버도 400). 같은 카테고리 폴더/최상위로 트리 이동.
-    if (k.provenance !== 'observed') {
-      actions.append(el('button', { class: 'btn btn-ghost btn-sm', text: '이동',
-        title: '이 문서를 같은 카테고리의 폴더(또는 최상위)로 옮깁니다',
-        onclick: () => openKnowledgeMoveTo(k, reload) }));
-    }
   }
-  actions.append(el('button', { class: 'btn btn-ghost btn-sm btn-danger', text: '삭제',
-    onclick: () => knDelete(k.name, opts && opts.onDeleted) }));
-  const fullBtn = el('button', { class: 'btn btn-ghost btn-sm kn-doc-fullbtn', type: 'button',
-    title: '전폭 토글 — 본문 폭 제한(820px)을 켜고 끕니다', 'aria-pressed': String(full), text: full ? '⤡' : '⤢' });
-  fullBtn.onclick = async () => {
+  const toggleFull = async () => {
     full = !full;
     container.classList.toggle('full', full);
-    fullBtn.textContent = full ? '⤡' : '⤢';
-    fullBtn.setAttribute('aria-pressed', String(full));
     if (!canEdit) return;   // 읽기전용 — 화면에서만 토글(저장 생략)
     try { await saveKnPropsUi(k, { full_width: full }); }
     catch (e) { toast('전폭 설정 저장 실패 — ' + e.message, true); }
   };
-  actions.append(fullBtn);
+  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm kn-doc-more', type: 'button',
+    title: '이동·MD 원문·전폭·삭제', 'aria-label': '더 보기', text: '⋯' });
+  moreBtn.onclick = () => {
+    const old = document.querySelector('.kn-morepop');
+    if (old) { old.remove(); return; }
+    const pop = el('div', { class: 'kn-morepop', role: 'menu' });
+    const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+    const item = (ic: string, label: string, fn: () => void, danger?: boolean) => {
+      const b = el('button', { class: 'kn-morepop-item' + (danger ? ' danger' : ''), type: 'button' },
+        el('span', { class: 'kn-morepop-ic', 'aria-hidden': 'true', text: ic }), el('span', { text: label }));
+      b.onclick = () => { close(); fn(); };
+      return b;
+    };
+    if (canEdit && k.provenance !== 'observed' && k.injection !== 'always') {
+      pop.append(item('⇥', '폴더로 이동', () => openKnowledgeMoveTo(k, reload)));
+      pop.append(item('MD', '마크다운 원문 편집', () => { location.hash = '#/k-edit/' + encodeURIComponent(k.name); }));
+    }
+    pop.append(item(full ? '⤡' : '⤢', full ? '기본 폭으로' : '전폭으로', toggleFull));
+    pop.append(item('✕', '삭제', () => knDelete(k.name, opts && opts.onDeleted), true));
+    document.body.append(pop);
+    const r = moreBtn.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(r.right - 208, window.innerWidth - 216)) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+    const onDoc = (ev: any) => { if (!pop.contains(ev.target) && ev.target !== moreBtn) close(); };
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+  };
+  actions.append(moreBtn);
 
   // 상태 배지(제목 위 얇은 줄) — 핀/보관은 §1 카탈로그 속성이 아닌 상태 표식이라 배지로 유지.
   const badges: any[] = [];
@@ -897,13 +959,33 @@ async function buildKnowledgeDetail(container, name, opts?) {
     title: 'WIKI 인덱스에 핀됨 — 제목·분류가 매 대화 첫머리에 항상 깔립니다(본문 제외).', text: '📌 인덱스' }));
 
   // 속성 블록 — 저장(props-ui/view-config) 후 블록만 즉시 재렌더(본문 리페치 없음).
+  //  #657t 분류·유형 인라인 편집(노션 속성) — 값 클릭=피커, 저장은 {name, body_md(현재 스냅샷), field} 비파괴 upsert.
+  //  bodyMdNow 는 아래(본문 셋업)에서 정의 — save 는 클릭 시점에만 호출되므로 지연 참조로 안전.
+  const canMeta = canEdit && k.provenance !== 'observed' && k.injection !== 'always';
+  const editMeta = canMeta ? {
+    save: async (field: string, value: string) => {
+      const payload: any = { name: k.name, body_md: bodyMdNow() };
+      if (k.is_folder) payload.is_folder = true;
+      payload[field] = value;
+      await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+      if (field === 'type') k.type = value;
+      else {
+        try {
+          const fresh = await api('/api/ui/knowledge/' + encodeURIComponent(k.name)).then((d) => d && (d.knowledge || d));
+          if (fresh) k.categories = fresh.categories;
+        } catch (_) { /* 표시 갱신 실패해도 저장은 완료 */ }
+      }
+      toast('저장했습니다');
+      paintProps();
+    },
+  } : null;
   const propsSlot = el('div', { class: 'kn-props-slot' });
   const paintProps = () => {
     fetchKnHiddenProps().then((h) => {
-      propsSlot.replaceChildren(buildKnPropsBlock(k, h, { canEdit, onChanged: paintProps }));
+      propsSlot.replaceChildren(buildKnPropsBlock(k, h, { canEdit, onChanged: paintProps, editMeta }));
     });
   };
-  propsSlot.replaceChildren(buildKnPropsBlock(k, hidden, { canEdit, onChanged: paintProps }));
+  propsSlot.replaceChildren(buildKnPropsBlock(k, hidden, { canEdit, onChanged: paintProps, editMeta }));
 
   // 본문 — (#657) 저작 문서는 노션처럼 **페이지가 곧 에디터**: 블록 에디터로 바로 타이핑, 자동 저장.
   //  외부 미러(observed)·항상-주입·읽기전용 사용자는 기존 읽기 렌더(renderMarkdown) 유지.

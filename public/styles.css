@@ -4913,3 +4913,113 @@ main.doc-mode .kn-home-list { margin-top: 6px; }
 .be-bm-item:hover { background: var(--bg-sel); }
 .be-bm-item.danger:hover { background: #FDF3F2; color: var(--coral-text); }
 .be-bm-ic { width: 18px; text-align: center; font-size: 12px; color: var(--ink-sub); flex: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   #657t 읽기·쓰기 경험 재정렬 — 노션/옵시디언 실측 기반
+   본문 16px/1.66 · H1 28/H2 22/H3 18(위계 복원) · 측정폭 760px · 라이트 셀렉션 툴바(전환 ∨·링크 팝오버)
+   · 편집 버튼 폐지([핀]+[⋯]) · 속성(분류·유형) 인라인 피커 · [[ 페이지 멘션
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 측정폭 — 노션 기본(≈720px)에 맞춰 820→760(한글 가독 줄길이) ── */
+.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels, .kn-comments { max-width: 760px; }
+.kn-doc-head { max-width: 760px; }
+
+/* ── 읽기 뷰(.kn-doc-md — 문서 본문 전용) 타이포 ── */
+.kn-doc-md.md-rendered { font-size: 16px; line-height: 1.68; }
+.kn-doc-md .md-p { margin: 0 0 13px; }
+.kn-doc-md .md-h { letter-spacing: -.3px; }
+.kn-doc-md .md-h1 { font-size: 28px; margin: 34px 0 10px; }
+.kn-doc-md .md-h2 { font-size: 22px; margin: 26px 0 8px; }
+.kn-doc-md .md-h3 { font-size: 18px; margin: 20px 0 6px; }
+.kn-doc-md .md > .md-h:first-child { margin-top: 4px; }
+.kn-doc-md .md-list { margin: 0 0 13px; padding-left: 24px; }
+.kn-doc-md .md-list li { margin: 4px 0; }
+.kn-doc-md .md-quote { font-size: 16px; margin: 14px 0; }
+.kn-doc-md .md-callout { padding: 15px 16px; margin: 14px 0; font-size: 15.5px; }
+.kn-doc-md .md-hr { margin: 26px 0; }
+.kn-doc-md .md-table { font-size: 14px; }
+.kn-doc-md .md-pre { font-size: 13px; line-height: 1.55; padding: 14px 16px; margin: 14px 0; }
+/* 대문 읽기 뷰(읽기전용 사용자)도 동일 리듬 */
+.cath-body .md-rendered { font-size: 16px; line-height: 1.68; }
+
+/* ── 에디터(.be) 타이포 — 읽기 뷰와 1:1 패리티(에디터가 곧 화면) ── */
+.be { font-size: 16px; line-height: 1.68; }
+.be-text { padding: 3px 2px; min-height: 1.6em; }
+.be-block { padding: 1.5px 0; }
+.be-block[data-type="p"] { margin-bottom: 7px; }
+.be-h1 { font-size: 28px; letter-spacing: -.3px; }
+.be-h2 { font-size: 22px; letter-spacing: -.3px; }
+.be-h3 { font-size: 18px; letter-spacing: -.2px; }
+.be-block[data-type="h"] { margin: 0; }
+.be-block[data-level="1"] { margin: 26px 0 4px; }
+.be-block[data-level="2"] { margin: 20px 0 3px; }
+.be-block[data-level="3"] { margin: 15px 0 2px; }
+.be-block[data-type="h"]:first-child { margin-top: 2px; }
+.be-li-lead { padding-top: 4px; min-width: 22px; }
+.be-check { margin-top: 8px; }
+.be-quote { font-size: 16px; }
+.be-callout { padding: 15px 16px; margin: 8px 0; }
+.be-ctext { font-size: 15.5px; }
+.be-code { font-size: 13px; }
+.be-togglesum { font-size: 16px; }
+.be-raw-view { font-size: 15px; }
+.be-div { padding: 11px 0; }
+
+/* ── 셀렉션 툴바 — 다크 pill → 노션형 라이트 카드(전환 ∨ · 활성 상태 · 구분선) ── */
+.be-tools { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px;
+  box-shadow: 0 6px 24px rgba(21, 35, 59, .14), 0 1px 3px rgba(21, 35, 59, .08); gap: 1px; align-items: center; }
+.be-tool { color: var(--ink-sub); min-width: 30px; height: 30px; border-radius: 7px; font-size: 13px; }
+.be-tool:hover { background: var(--bg-tint); color: var(--ink); }
+.be-tool.on { color: var(--blue); background: var(--bg-sel); }
+.be-tool-b { font-weight: 800; }
+.be-tool-i { font-style: italic; font-family: Georgia, serif; }
+.be-tool-u { text-decoration: underline; }
+.be-tool-s { text-decoration: line-through; }
+.be-tool-code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.be-tool-mark { font-size: 11.5px; font-weight: 700; }
+.be-tool-link { font-size: 12px; font-weight: 700; padding: 0 8px; }
+.be-tools-sep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; flex: none; }
+.be-tool-turn { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; font-size: 12.5px; font-weight: 700; min-width: 0; white-space: nowrap; }
+.be-turn-caret { font-size: 10px; color: var(--muted-2); }
+
+/* 전환 드롭다운 */
+.be-turnpop { position: fixed; z-index: 1360; width: 200px; max-height: 320px; overflow: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 5px; }
+.be-turnpop-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none;
+  text-align: left; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
+.be-turnpop-item:hover, .be-turnpop-item.on { background: var(--bg-sel); }
+.be-turnpop-item .be-slash-ic { width: 26px; height: 26px; font-size: 11px; }
+.be-turnpop-check { margin-left: auto; color: var(--blue); font-size: 12px; }
+
+/* 링크 팝오버 */
+.be-linkpop { position: fixed; z-index: 1360; display: flex; gap: 6px; align-items: center; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; padding: 7px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); }
+.be-linkpop-in { width: 240px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: inherit; }
+.be-linkpop-in:focus { outline: none; border-color: var(--blue); }
+.be-linkpop-btn { border: none; background: var(--blue); color: #fff; border-radius: 7px; padding: 6px 11px;
+  font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.be-linkpop-btn:hover { background: var(--blue-deep); }
+.be-linkpop-un { background: var(--bg); color: var(--ink-sub); border: 1px solid var(--line); }
+.be-linkpop-un:hover { background: var(--bg-tint); color: var(--ink); }
+
+/* [[ 페이지 멘션 메뉴 — 슬래시 메뉴 스킨 공유 */
+.be-mention .be-slash-label { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 문서 액션 ⋯ 메뉴 ── */
+.kn-doc-more { min-width: 34px; font-weight: 800; letter-spacing: 1px; }
+.kn-morepop, .kn-metapop { position: fixed; z-index: 1300; width: 208px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 11px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 5px; }
+.kn-metapop { width: 232px; max-height: 320px; overflow: auto; }
+.kn-morepop-item, .kn-metapop-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none;
+  text-align: left; padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
+.kn-morepop-item:hover, .kn-metapop-item:hover, .kn-metapop-item.on { background: var(--bg-sel); }
+.kn-morepop-item.danger:hover { background: #FDF3F2; color: var(--coral-text); }
+.kn-morepop-ic { width: 22px; text-align: center; font-size: 11px; color: var(--ink-sub); flex: none; font-family: ui-monospace, Menlo, monospace; }
+.kn-metapop-head { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; color: var(--muted-2); padding: 6px 8px 3px; }
+.kn-metapop-check { margin-left: auto; color: var(--blue); font-size: 12px; }
+.kn-metapop-note { font-size: 12.5px; color: var(--muted-2); padding: 8px; }
+
+/* ── 속성 인라인 편집 어포던스 ── */
+.kn-prop-editable .kn-prop-v { cursor: pointer; border-radius: 6px; padding: 1px 6px; margin-left: -6px; }
+.kn-prop-editable .kn-prop-v:hover { background: var(--bg-tint); }
+.kn-prop-editable .kn-prop-v:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
