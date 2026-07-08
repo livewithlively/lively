@@ -90,7 +90,9 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
 }
 /* 'for Honest AI' — 우아한 세리프 이탤릭 태그라인. 굵은 지오메트릭 산세(Lively)와 대비돼 '같은 글씨'가 아니고,
    손글씨 스크립트 같은 과함도 없다(#673 후속). Mac=Baskerville, 폴백 Hoefler/Garamond/serif. */
-.wordmark-sub { font-family: Baskerville, "Hoefler Text", "Baskerville Old Face", Garamond, "Times New Roman", serif; font-style: italic; font-size: 15px; font-weight: 400; letter-spacing: .2px; color: var(--ink-sub); white-space: nowrap; }
+/* 아주 약간만 더 볼드(#670): Baskerville 은 정적 폰트라 font-weight 500 이 400 으로 스냅되고 600 은 semibold 로 과함 →
+   text-stroke 로 획만 미세하게 두껍게(자간·너비 불변, subtle). */
+.wordmark-sub { font-family: Baskerville, "Hoefler Text", "Baskerville Old Face", Garamond, "Times New Roman", serif; font-style: italic; font-size: 15px; font-weight: 400; letter-spacing: .2px; color: var(--ink-sub); white-space: nowrap; -webkit-text-stroke: 0.3px currentColor; }
 .pulse-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--mint);
   align-self: center;
