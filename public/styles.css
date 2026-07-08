@@ -4597,44 +4597,27 @@ a.dash-ntf:hover { background: var(--bg-tint); }
      → 탭 전역 색조를 한 번에 웜/아카이브로. 그 위에 표면별 구조 오버라이드.
    ══════════════════════════════════════════════════════════════════════ */
 main.doc-mode {
-  /* 아카이브 팔레트 */
-  --wk-paper:      #F8F7F2;
-  --wk-card:       #FFFFFF;
-  --wk-ink:        #1B1E27;
-  --wk-ink-soft:   #585C6B;
-  --wk-ink-dim:    #9A9AA3;
-  --wk-line:       #E7E3D9;
-  --wk-line-soft:  #EEEBE2;
-  --wk-living:     #0FB07E;
-  --wk-living-ink: #0A7A58;
-  --wk-living-wash:#E9F6F0;
-  --wk-navy:       #2B4B7E;
-  --wk-navy-deep:  #1F3A66;
-  --wk-navy-wash:  #EDEFF5;
+  /* #657r 팔레트는 사용자 요청으로 앱 원본(쿨 화이트/블루/민트)으로 원복(2026-07-08).
+     --wk-* 를 원본 토큰에 재바인딩 → 구조/타이포(카탈로그 목록·스파인·mono 색인)는 유지, 색만 이전으로.
+     그린(리빙)은 앱 원본에 없던 신규 강조였으므로 앱 블루로 되돌리고, 민트는 앱이 원래 '사람 저작/성공'에
+     쓰던 --wk-human 에만 남긴다(사람/인덱스/저장됨 텍스트 마크). 웜 페이퍼·잉크·라인·틴트 재매핑 제거. */
+  --wk-paper:      var(--bg);
+  --wk-card:       var(--bg);
+  --wk-ink:        var(--ink);
+  --wk-ink-soft:   var(--ink-sub);
+  --wk-ink-dim:    var(--muted-2);
+  --wk-line:       var(--line);
+  --wk-line-soft:  var(--line-row);
+  --wk-living:     var(--blue);       /* 신규 강조(활성 틱·호버·포커스·액센트) → 앱 블루로 원복 */
+  --wk-living-ink: var(--blue-deep);
+  --wk-living-wash:var(--bg-sel);
+  --wk-navy:       var(--blue);
+  --wk-navy-deep:  var(--blue-deep);
+  --wk-navy-wash:  var(--bg-tint-2);
+  --wk-human:      var(--mint);       /* 사람 저작/성공 = 앱 원본 민트(이전에도 이 색) */
+  --wk-human-ink:  var(--mint-deep);
   --wk-mono:       'D2Coding', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-
-  /* 기존 토큰 재매핑 — 탭 전역 색조 전환(값은 원본과 근접하게 유지, 온도만 웜/아카이브로) */
-  --blue:       var(--wk-navy);
-  --blue-deep:  var(--wk-navy-deep);
-  --mint:       var(--wk-living);
-  --mint-deep:  var(--wk-living-ink);
-  --mint-bright:var(--wk-living);
-  --ink:        var(--wk-ink);
-  --ink-sub:    var(--wk-ink-soft);
-  --muted-2:    var(--wk-ink-dim);
-  --muted-head: #8B8578;
-  --bg-tint:    #F2F0E8;
-  --bg-tint-2:  #ECE9DF;
-  --bg-sel:     var(--wk-living-wash);
-  --bg-note:    #F0F3F7;
-  --line:       var(--wk-line);
-  --line-row:   var(--wk-line-soft);
-  --line-net:   #DAD5C9;
-  --line-net-2: #D4DDD3;
-
-  background: var(--wk-paper);
 }
-.kn-plain { color: var(--wk-ink); }
 
 /* ── 셸 · 사이드바(카탈로그 스파인) ── */
 main.doc-mode .kn-side { background: transparent; border-right: 1px solid var(--wk-line); padding: 24px 14px 40px; }
@@ -4712,7 +4695,7 @@ main.doc-mode .browse-list .row:hover { background: var(--bg-tint); }
 main.doc-mode .browse-list .row::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
   border-radius: 2px; background: transparent; transition: background-color .12s ease; }
 main.doc-mode .browse-list .row:hover::before { background: var(--line-net); }
-main.doc-mode .browse-list .row[data-author="human"]::before { background: var(--wk-living); }
+main.doc-mode .browse-list .row[data-author="human"]::before { background: var(--wk-human); }
 main.doc-mode .browse-list .row[data-folder="1"]::before { background: var(--wk-ink-dim); }
 main.doc-mode .browse-list .row.sel { background: var(--wk-living-wash); box-shadow: none; }
 main.doc-mode .browse-list .row.sel::before { background: var(--wk-living); }
@@ -4727,9 +4710,9 @@ main.doc-mode .browse-list .row-meta { display: flex; align-items: center; gap: 
 main.doc-mode .row-m { font-size: 11.5px; color: var(--wk-ink-dim); letter-spacing: .1px; }
 main.doc-mode .row-m-time { font-family: var(--wk-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 main.doc-mode .row-m-type { color: var(--wk-ink-soft); }
-main.doc-mode .row-m-human { color: var(--wk-living-ink); font-weight: 700; }
+main.doc-mode .row-m-human { color: var(--wk-human-ink); font-weight: 700; }
 main.doc-mode .row-m-human::before { content: '● '; font-size: 7px; vertical-align: 1.5px; }
-main.doc-mode .row-m-pin { color: var(--wk-living-ink); font-weight: 700; }
+main.doc-mode .row-m-pin { color: var(--wk-human-ink); font-weight: 700; }
 main.doc-mode .row-m-mirror { color: var(--wk-ink-dim); }
 main.doc-mode .row-snip { margin-top: 5px; font-size: 12.5px; line-height: 1.5; color: var(--wk-ink-soft);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
@@ -4762,15 +4745,12 @@ main.doc-mode .kn-prop-k { font-family: var(--wk-mono); font-size: 10.5px; lette
 main.doc-mode .kn-prop-v { font-size: 13.5px; color: var(--wk-ink); }
 main.doc-mode .kn-props-gear, main.doc-mode .kn-props-more { font-size: 11.5px; color: var(--wk-ink-dim); }
 main.doc-mode .kn-props-gear:hover, main.doc-mode .kn-props-more:hover { color: var(--wk-living-ink); }
-/* 본문 섹션 헤딩 — h2 에 리빙그린 틱(색인 리듬, 절제) */
+/* 본문 섹션 헤딩 — 색 원복 요청으로 그린 틱 제거(색만 이전으로). 타이포만 유지. */
 main.doc-mode .kn-doc-md .md-h { color: var(--wk-ink); letter-spacing: -.2px; }
-main.doc-mode .kn-doc-md .md-h2 { position: relative; padding-left: 15px; }
-main.doc-mode .kn-doc-md .md-h2::before { content: ''; position: absolute; left: 0; top: .26em; bottom: .26em; width: 3px;
-  border-radius: 2px; background: var(--wk-living); }
 /* 패널 섹션 라벨 — mono 색인 톤 */
 main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 11px; font-weight: 400; letter-spacing: .6px;
   text-transform: uppercase; color: var(--wk-ink-soft); }
-main.doc-mode .kn-save-chip { font-family: var(--wk-mono); font-size: 10.5px; color: var(--wk-living-ink); letter-spacing: .3px; }
+main.doc-mode .kn-save-chip { font-family: var(--wk-mono); font-size: 10.5px; color: var(--wk-human-ink); letter-spacing: .3px; }
 
 /* ── 갤러리 ── */
 main.doc-mode .kn-gallery { gap: 16px; }
@@ -4785,7 +4765,7 @@ main.doc-mode .kn-gcard-ic { border-radius: 9px; border-color: var(--wk-line); }
 .qk-input { font-size: 17px; }
 .qk-esc { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 10px; }
 .qk-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #9A9AA3; letter-spacing: .1px; }
-.qk-row.on, .qk-row:hover { background: #E9F6F0; }
+.qk-row.on, .qk-row:hover { background: #F4F8FF; }
 .qk-row-title { font-weight: 600; }
 /* 스니펫은 사람 산문 미리보기 — mono(색인 목소리) 대신 sans 로 가독(#657r). mono 는 esc/hint 등 기계 데이터에만. */
 .qk-row-snip { font-size: 12px; color: #8B8B93; }
