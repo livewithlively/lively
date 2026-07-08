@@ -442,10 +442,11 @@ function dashProjStatusIcon(p, listById) {
 }
 // ── 상태 변경(#req) — 대시보드 프로젝트 행에서 상태 동그라미 클릭 → 상태 메뉴. 프로젝트 탭 pjvProjStatusDot 동형(projects.ts 무수정, 인라인). ──
 //  커스텀 상태 리스트면 그 상태들을(Active/Done/Closed 그룹), 아니면 표준 3단계(할 일·진행 중·완료). 선택 시 /status POST + 로컬 반영 + 재렌더.
+//  기본 3단계 색은 위 dashProjStatusIcon 과 동일 가족(#667 — 회색 할일·주황 진행·초록 완료).
 const DASH_NATIVE_STATUS = [
-    { key: 'todo', label: '할 일', icon: () => dashStatusIconSvg('active', 'var(--muted-3)', 0) },
-    { key: 'in_progress', label: '진행 중', icon: () => dashStatusIconSvg('active', 'var(--blue)', 0.5) },
-    { key: 'done', label: '완료', icon: () => dashStatusIconSvg('done', 'var(--mint)') },
+    { key: 'todo', label: '할 일', icon: () => dashStatusIconSvg('active', '#94a3b8', 0) },
+    { key: 'in_progress', label: '진행 중', icon: () => dashStatusIconSvg('active', '#f59e0b', 0.5) },
+    { key: 'done', label: '완료', icon: () => dashStatusIconSvg('done', '#22c55e') },
 ];
 async function dashSetProjStatus(p, patch, redraw) {
     try {

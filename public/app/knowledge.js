@@ -383,43 +383,57 @@ async function renderKnowledgeSpace(view, _space, params) {
         applyTabVisibility();
         syncHash();
     }
-    async function paintHome() {
-        listBox.replaceChildren(skeletonRows(3));
+    async function paintHome(quiet = false) {
+        if (!quiet)
+            listBox.replaceChildren(skeletonRows(3)); // 재정렬 등 캐시 재렌더(quiet)는 스켈레톤 깜빡임 생략
         foot.replaceChildren();
-        // 카테고리 나열 — 우리 팀 먼저(space 순서 유지), 나머지 뒤에.
+        // 카테고리 나열 — 우리 팀 먼저, 나머지 뒤. 각 그룹 안 순서는 사용자 드래그(#657h3, 기기별)를 반영, 미지정은 space 순서.
         const all = [];
         for (const sk of ['business', 'product', 'system'])
             for (const c of (bySpace[sk] || []))
                 all.push(c);
-        const mine = all.filter((c) => myIds.has(String(c.id)));
-        const rest = all.filter((c) => !myIds.has(String(c.id)));
+        const savedOrder = knHomeOrderSaved();
+        const mine = knHomeSortByOrder(all.filter((c) => myIds.has(String(c.id))), savedOrder);
+        const rest = knHomeSortByOrder(all.filter((c) => !myIds.has(String(c.id))), savedOrder);
         const ordered = [...mine, ...rest];
         // 카테고리별 rows(세션 캐시 공유 — 사이드바 펼침과 동일 소스). 대문 문서(icon/cover)·문서 수·최근 지식이 전부 여기서 나온다.
         const rowsPer = await Promise.all(ordered.map((c) => knFetchCategoryRows(c.id).catch(() => [])));
+        // #657h3 카드 드래그 정렬 — 대시보드 개요 카드와 같은 UX. 그룹(우리 팀 / 그 외) '안'에서만 재정렬(그룹 경계=오너십).
+        const curOrderIds = ordered.map((c) => String(c.id));
+        const onReorder = (dragId, targetId, after) => {
+            knHomeSaveOrder(knHomeReorder(curOrderIds, dragId, targetId, after));
+            paintHome(true);
+        };
+        // 정렬 컨트롤 — 커스텀 순서가 있으면 '초기화', 없으면 드래그 안내(발견성). 첫 그룹 라벨 우측에만.
+        const orderControl = () => (savedOrder.length
+            ? el('button', { class: 'kn-home-orderreset', type: 'button', title: '카드 순서를 기본값으로 되돌립니다',
+                text: '정렬 초기화', onclick: () => { knHomeClearOrder(); paintHome(true); } })
+            : el('span', { class: 'kn-home-orderhint', 'aria-hidden': 'true', text: '드래그해서 순서 변경' }));
         // #657h2 우리 팀 우선을 '보이게' — 사이드바와 같은 ★ 그룹 어휘로 카드 그리드를 이분(팀 미소속이면 단일 그리드).
         //  ★오너십=우선순위 표시일 뿐 접근제한 아님(사이드바 불변식 동일).
-        const cardAt = (c, i) => {
+        const cardAt = (c, i, group) => {
             const rows = rowsPer[i];
             const home = rows.find((r) => isCategoryHomeDoc(r.name));
             const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
-            return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)));
+            return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)), { group, onReorder });
         };
         const cardParts = [];
         if (mine.length) {
-            cardParts.push(el('div', { class: 'kn-home-grouplabel', title: '팀이 소유·관리하는 카테고리를 먼저 보여줍니다 — 접근 제한이 아니라 우선순위입니다' }, el('span', { class: 'kn-home-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { text: '우리 팀' }), el('span', { class: 'kn-home-groupcount', text: String(mine.length) })));
+            cardParts.push(el('div', { class: 'kn-home-grouplabel', title: '팀이 소유·관리하는 카테고리를 먼저 보여줍니다 — 접근 제한이 아니라 우선순위입니다' }, el('span', { class: 'kn-home-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { text: '우리 팀' }), el('span', { class: 'kn-home-groupcount', text: String(mine.length) }), orderControl()));
             const gm = el('div', { class: 'kn-home-cats' });
-            mine.forEach((c, i) => gm.append(cardAt(c, i)));
+            mine.forEach((c, i) => gm.append(cardAt(c, i, 'mine')));
             cardParts.push(gm);
             if (rest.length) {
                 cardParts.push(el('div', { class: 'kn-home-grouplabel kn-home-grouplabel-rest' }, el('span', { text: '그 외 카테고리' }), el('span', { class: 'kn-home-groupcount', text: String(rest.length) })));
                 const gr = el('div', { class: 'kn-home-cats' });
-                rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j)));
+                rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j, 'rest')));
                 cardParts.push(gr);
             }
         }
         else {
+            cardParts.push(el('div', { class: 'kn-home-grouplabel' }, el('span', { text: '카테고리' }), el('span', { class: 'kn-home-groupcount', text: String(ordered.length) }), orderControl()));
             const grid = el('div', { class: 'kn-home-cats' });
-            ordered.forEach((c, i) => grid.append(cardAt(c, i)));
+            ordered.forEach((c, i) => grid.append(cardAt(c, i, 'all')));
             cardParts.push(grid);
         }
         // 우리 팀 최근 지식(팀 미소속이면 전체) — 최신순 캡. 폴더·대문 제외.
@@ -709,7 +723,10 @@ async function renderKnowledgeSpace(view, _space, params) {
         // 인덱스 센티넬이면 f.indexed 토글(category 비움), 아니면 일반 카테고리(#336). 홈 카드와 동일 경로(selectCategory).
         selectCategory(item.dataset.catVal || '');
     });
-    const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, provSel, typeSel);
+    // 검색 + 검색방식을 한 캡슐로(#req 가독성) — '의미검색' 셀렉트가 검색창 옆에 따로 떠 별개 버튼처럼 보이던 것을
+    //  검색창 오른쪽에 도킹(구분선)해 '검색의 방식'임이 읽히게 한다.
+    const searchGroup = el('div', { class: 'kn-search-group' }, qInput, modeSel);
+    const filterBar = el('div', { class: 'filter-bar browse-filter' }, searchGroup, provSel, typeSel);
     // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
     const layout = el('div', { class: 'kn-shell' }, side, el('section', { class: 'kn-main' }, head, catBox, filterBar, bulkBar, listBox, foot));
     view.replaceChildren(layout);
@@ -809,59 +826,48 @@ function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
     }
 }
 // ════════════════════════════════════════════
-// #592 지식탭 전용 사이드바 트리 — buildSpacesNav(프로젝트 탭 공유·불변)와 같은 골격(전체/인덱스/우리 팀/space 그룹)에
-//  카테고리 노드 ▸ 펼침을 더한다: 펼치면 그 카테고리 지식 인라인(폴더 우선→sort→제목순, 지연 로드+세션 캐시 —
-//  knFetchCategoryRows), 폴더 노드는 다시 ▸ 로 authored 트리(knFetchAuthoredTree, parent_name)를 펼친다.
+// #592 지식탭 전용 사이드바 트리 — 카테고리 노드 ▸ 펼침: 펼치면 그 카테고리 지식 인라인(폴더 우선→sort→제목순,
+//  지연 로드+세션 캐시 — knFetchCategoryRows), 폴더 노드는 다시 ▸ 로 authored 트리(knFetchAuthoredTree)를 펼친다.
 //  카테고리명 클릭=본문 필터(data-cat-val 위임 유지), 문서 클릭=피크(opts.onOpen).
+// (#req 사이드바 재디자인) 위계를 space 단일 축(사업→제품→시스템)으로 통일 — 옛 '우리 팀' 상단 그룹이 그 안에
+//  사업/제품 소그룹을 또 갖고, 같은 레벨에 나머지 space 그룹이 겹쳐 위계가 이중이던 것을 폐기. 우리 팀 소유
+//  카테고리는 각 space 안에서 맨 위 + ★·좌측 파란 레일로 강조(오너십=우선순위, 접근제한 아님). 모든 카테고리
+//  행 오른쪽에 지식 수(knowledge_count — categories API) 뱃지, space 헤더엔 합계.
 // ════════════════════════════════════════════
 function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
     const onOpen = (opts && opts.onOpen) || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
     nav.replaceChildren();
+    nav.classList.add('kn-tree2');
     nav.append(knSideItem('전체', '', !selected || selected === ''));
     if (opts && opts.indexed) {
         nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED, { glyph: '📌', cls: 'tree-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
     }
-    const catNode = (c) => knNavCatNode(c, String(selected) === String(c.id), onOpen);
-    // 우리 팀(★ 상단 펼침) — buildSpacesNav 와 동일 그룹핑(#338), 항목만 펼침형 노드로.
-    const mineBySpace = { business: [], product: [], system: [] };
-    for (const sk of ['business', 'product', 'system'])
-        for (const c of (bySpace[sk] || []))
-            if (myIds.has(String(c.id)))
-                mineBySpace[sk].push(c);
-    const mineTotal = mineBySpace.business.length + mineBySpace.product.length + mineBySpace.system.length;
-    const hasMine = mineTotal > 0;
-    if (hasMine) {
-        const grp = el('details', { class: 'tree-group tree-group-mine', open: '' }, el('summary', { class: 'tree-grouphead' }, el('span', { class: 'tree-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { class: 'tree-grouptitle', text: '우리 팀' }), el('span', { class: 'tree-groupcount', text: String(mineTotal) })));
-        for (const sk of ['business', 'product', 'system']) {
-            const inSpace = mineBySpace[sk];
-            if (!inSpace.length)
-                continue;
-            grp.append(el('div', { class: 'tree-subhead' }, el('span', { class: 'tree-subtitle', text: SPACE_LABEL[sk] }), el('span', { class: 'tree-subcount', text: String(inSpace.length) })));
-            for (const c of inSpace)
-                grp.append(catNode(c));
-        }
-        nav.append(grp);
-    }
-    // 나머지 — space별 접이식(우리 팀 있으면 접힘 기본, 선택 카테고리가 든 그룹은 펼침).
     for (const sk of ['business', 'product', 'system']) {
-        const rest = (bySpace[sk] || []).filter((c) => !myIds.has(String(c.id)));
-        if (!rest.length)
+        const cats = (bySpace[sk] || []);
+        if (!cats.length)
             continue;
-        const selectedHere = rest.some((c) => String(c.id) === String(selected));
-        const open = !hasMine || selectedHere;
-        const grp = el('details', { class: 'tree-group' + (hasMine ? ' tree-group-rest' : ''), ...(open ? { open: '' } : {}) }, el('summary', { class: 'tree-grouphead' }, el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] }), el('span', { class: 'tree-groupcount', text: String(rest.length) })));
-        for (const c of rest)
-            grp.append(catNode(c));
+        // 우리 팀 카테고리 먼저(그 안에선 기존 이름순 유지), 나머지는 뒤에.
+        const mine = cats.filter((c) => myIds.has(String(c.id)));
+        const rest = cats.filter((c) => !myIds.has(String(c.id)));
+        const ordered = [...mine, ...rest];
+        // 합계는 개수 데이터가 실제로 있을 때만(구 백엔드 폴백 — knowledge_count 미지원이면 '0' 거짓 표시 대신 생략).
+        const hasCounts = ordered.some((c) => Number.isFinite(Number(c.knowledge_count)));
+        const total = ordered.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+        const grp = el('details', { class: 'tree-group kn-space-group', open: '' }, el('summary', { class: 'tree-grouphead' }, el('span', { class: 'tree-grouptitle', text: SPACE_LABEL[sk] }), hasCounts ? el('span', { class: 'tree-groupcount', title: '이 스페이스의 지식 수', text: String(total) }) : null));
+        for (const c of ordered)
+            grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
         nav.append(grp);
     }
 }
-// 카테고리 노드 — 행(▸ 셰브런 + 이름, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
+// 카테고리 노드 — 행(▸ 셰브런 + 이름 + [★우리팀] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
 //  레벨1 = 카테고리 지식 중 트리 최상위(부모가 같은 카테고리 안에 없는 행)만 — 폴더 자식은 폴더 노드에서 펼친다.
-function knNavCatNode(c, on, onOpen) {
+function knNavCatNode(c, on, onOpen, isMine) {
     const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false',
         title: '이 카테고리의 지식 펼치기', text: '▸' });
-    const row = el('a', { class: 'tree-item kn-nav-cat' + (on ? ' on' : ''), href: '#',
-        'data-cat-val': String(c.id), role: 'button', tabindex: '0' }, tw, el('span', { class: 'tree-label', text: c.name || c.key }));
+    const cnt = Number(c.knowledge_count);
+    const row = el('a', { class: 'tree-item kn-nav-cat' + (on ? ' on' : '') + (isMine ? ' kn-cat-mine' : ''), href: '#',
+        'data-cat-val': String(c.id), role: 'button', tabindex: '0',
+        ...(isMine ? { title: '★ 우리 팀 소유 카테고리 — ' + (c.name || c.key) } : {}) }, tw, isMine ? el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }) : null, el('span', { class: 'tree-label', text: c.name || c.key }), Number.isFinite(cnt) ? el('span', { class: 'kn-nav-count' + (cnt === 0 ? ' zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
     const kids = el('div', { class: 'kn-nav-kids' });
     kids.hidden = true;
     let opened = false, loaded = false;
@@ -881,12 +887,17 @@ function knNavCatNode(c, on, onOpen) {
             const tops = rows.filter((r) => !(r.parent_name && names.has(r.parent_name)))
                 .filter((r) => !isCategoryHomeDoc(r.name)) // #657 대문 문서 숨김
                 .slice().sort(knFolderFirstSort);
+            // 폴더별 직속 자식 수(#req 개수 뱃지 — 중분류 아래 폴더까지) — 이 카테고리 rows 기준(카테고리 스코프 개수).
+            const childN = new Map();
+            for (const r of rows)
+                if (r.parent_name)
+                    childN.set(r.parent_name, (childN.get(r.parent_name) || 0) + 1);
             loaded = true;
             if (!tops.length) {
                 kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '지식 없음' }));
                 return;
             }
-            kids.replaceChildren(...tops.map((r) => knNavDocNode(r, 1, onOpen)));
+            kids.replaceChildren(...tops.map((r) => knNavDocNode(r, 1, onOpen, childN)));
         }
         catch (_) {
             kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오기 실패' }));
@@ -895,7 +906,8 @@ function knNavCatNode(c, on, onOpen) {
     return el('div', { class: 'kn-nav-catwrap' }, row, kids);
 }
 // 트리 안 지식 노드 — 문서는 클릭=피크(onOpen), 폴더는 ▸/행 클릭=authored 트리 자식 펼침(재귀, 지연 로드).
-function knNavDocNode(r, depth, onOpen) {
+//  childN(#req 개수 뱃지): 카테고리 rows 로 만든 '부모 name → 직속 자식 수' 맵 — 폴더 행 오른쪽에 개수 표시(전 깊이).
+function knNavDocNode(r, depth, onOpen, childN) {
     const pad = 8 + depth * 14;
     if (!r.is_folder) {
         const row = el('a', { class: 'tree-item kn-nav-doc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : ''),
@@ -904,8 +916,9 @@ function knNavDocNode(r, depth, onOpen) {
         return row;
     }
     const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false', title: '폴더 펼치기', text: '▸' });
+    const folderCnt = childN ? (childN.get(r.name) || 0) : null;
     const row = el('div', { class: 'tree-item kn-nav-doc kn-nav-folder', role: 'button', tabindex: '0',
-        style: 'padding-left:' + Math.max(4, pad - 16) + 'px', title: r.title || r.name }, tw, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }));
+        style: 'padding-left:' + Math.max(4, pad - 16) + 'px', title: r.title || r.name }, tw, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }), folderCnt != null ? el('span', { class: 'kn-nav-count' + (folderCnt === 0 ? ' zero' : ''), title: '항목 ' + folderCnt + '개', text: String(folderCnt) }) : null);
     const kids = el('div', { class: 'kn-nav-kids' });
     kids.hidden = true;
     let opened = false, loaded = false;
@@ -926,7 +939,7 @@ function knNavDocNode(r, depth, onOpen) {
                 kids.replaceChildren(el('div', { class: 'kn-nav-note', style: 'padding-left:' + (pad + 14) + 'px', text: '비어 있음' }));
                 return;
             }
-            kids.replaceChildren(...sub.map((t) => knNavDocNode(t, depth + 1, onOpen)));
+            kids.replaceChildren(...sub.map((t) => knNavDocNode(t, depth + 1, onOpen, childN)));
         }
         catch (_) {
             kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오기 실패' }));
@@ -980,9 +993,51 @@ function knGallery(entries, open) {
     return grid;
 }
 // ── #657h 위키 홈 카테고리 카드 — 커버 스트립(대문 커버 미리보기) + 아이콘 타일 + 이름/설명 + space·문서 수. ──
+// ── #657h3 위키 홈 카드 순서(드래그) — 기기별 localStorage. 서버 카테고리 순서와 독립(대시보드 dash_list_order_v1 과 동형). ──
+//  팀 우선 그룹은 유지 — 재정렬은 그룹(우리 팀 / 그 외) '안'에서만(그룹 경계=오너십, 사용자가 넘길 수 없음).
+const KN_HOME_ORDER_KEY = 'kn_home_cat_order_v1';
+function knHomeOrderSaved() {
+    try {
+        const a = JSON.parse(localStorage.getItem(KN_HOME_ORDER_KEY) || '[]');
+        return Array.isArray(a) ? a.map((x) => String(x)) : [];
+    }
+    catch {
+        return [];
+    }
+}
+function knHomeSaveOrder(order) { try {
+    localStorage.setItem(KN_HOME_ORDER_KEY, JSON.stringify(order));
+}
+catch { /* 저장 실패 무시 */ } }
+function knHomeClearOrder() { try {
+    localStorage.removeItem(KN_HOME_ORDER_KEY);
+}
+catch { /* 무시 */ } }
+// 저장 순서로 목록을 안정 정렬 — 저장에 없는 항목은 원래 순서 유지하며 뒤로(카테고리 신설 시 graceful).
+function knHomeSortByOrder(list, order) {
+    const idx = new Map(order.map((id, i) => [String(id), i]));
+    return list
+        .map((c, i) => ({ c, i, o: idx.has(String(c.id)) ? idx.get(String(c.id)) : Number.MAX_SAFE_INTEGER }))
+        .sort((a, b) => (a.o - b.o) || (a.i - b.i))
+        .map((x) => x.c);
+}
+// dragId 를 targetId 앞(after=false)/뒤(after=true)로 옮긴 새 순서(화면 밖 순서도 병합 보존).
+function knHomeReorder(order, dragId, targetId, after) {
+    const arr = order.filter((id) => id !== dragId);
+    let at = arr.indexOf(targetId);
+    if (at < 0)
+        at = arr.length;
+    else if (after)
+        at += 1;
+    arr.splice(at, 0, dragId);
+    return arr;
+}
+// 드래그 진행 상태(모듈 전역 — knHomeCatCard 가 모듈 함수라 클로저 대신). group 으로 그룹 간 드롭을 차단.
+let knHomeDragId = null;
+let knHomeDragGroup = null;
 //  클릭 = 그 카테고리 대문으로(onOpen → selectCategory). 대문 문서(home)의 icon/cover 를 그대로 이어받아
 //  카드가 대문의 축소판이 되게 한다(설정 0이면 결정적 톤 그라디언트 + 첫 글자 타일 — 대문 기본과 동일).
-function knHomeCatCard(c, home, count, isMine, onOpen) {
+function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx) {
     const cover = el('div', { class: 'kn-hcard-cover' });
     if (!applyCoverBg(cover, home && home.cover))
         applyCoverBg(cover, defaultCoverFor(c.key || String(c.id)));
@@ -999,7 +1054,49 @@ function knHomeCatCard(c, home, count, isMine, onOpen) {
     card.addEventListener('click', onOpen);
     card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
         onOpen(); });
-    return card;
+    if (!dragCtx)
+        return card;
+    // 드래그 정렬(#657h3) — 카드를 슬롯으로 감싼다(카드 overflow:hidden 이 그룹 간격의 세로 디바이더를 자르지 않게).
+    //  대시보드 개요 카드와 동일 패턴: 커서 좌/우 절반으로 앞·뒤 삽입, 삽입 지점에 세로 디바이더. 그룹 밖 드롭은 무시.
+    const slot = el('div', { class: 'kn-hcard-slot', draggable: 'true' }, card);
+    const cid = String(c.id);
+    const clearDrop = () => slot.classList.remove('kn-hcard-drop-before', 'kn-hcard-drop-after');
+    const inScope = () => knHomeDragId != null && knHomeDragId !== cid && knHomeDragGroup === dragCtx.group;
+    slot.addEventListener('dragstart', (e) => {
+        knHomeDragId = cid;
+        knHomeDragGroup = dragCtx.group;
+        try {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', cid);
+        }
+        catch { /* */ }
+        slot.classList.add('kn-hcard-drag-src');
+    });
+    slot.addEventListener('dragend', () => {
+        knHomeDragId = null;
+        knHomeDragGroup = null;
+        slot.classList.remove('kn-hcard-drag-src');
+        document.querySelectorAll('.kn-hcard-drop-before, .kn-hcard-drop-after').forEach((n) => n.classList.remove('kn-hcard-drop-before', 'kn-hcard-drop-after'));
+    });
+    slot.addEventListener('dragover', (e) => {
+        if (!inScope())
+            return;
+        e.preventDefault();
+        const r = slot.getBoundingClientRect();
+        const after = (e.clientX - r.left) > r.width / 2; // 오른쪽 절반이면 이 카드 '뒤'로
+        slot.classList.toggle('kn-hcard-drop-after', after);
+        slot.classList.toggle('kn-hcard-drop-before', !after);
+    });
+    slot.addEventListener('dragleave', clearDrop);
+    slot.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const after = slot.classList.contains('kn-hcard-drop-after');
+        clearDrop();
+        if (!inScope())
+            return;
+        dragCtx.onReorder(knHomeDragId, cid, after);
+    });
+    return slot;
 }
 // #657 갤러리 로컬 오버라이드 — 서버 view_mode(list|table|entry 그대로) 위에 얹는 브라우저 보기 설정.
 function knCatGalleryOn(cat) {
@@ -1211,8 +1308,9 @@ async function renderKnowledgeDetail(view, name) {
     view.replaceChildren(shell);
     buildKnowledgeDetail(canvas, name, { mode: 'page' });
     (async () => {
+        // 목록 뷰와 동일한 재디자인 트리(#req) — space 단일 위계 + ★우리팀 강조 + 개수 뱃지. 문서 클릭=이동(기본 onOpen).
         try {
-            buildSpacesNav(nav, await fetchAllSpaceCats(), '', myCatIdSet(), { indexed: true });
+            buildKnowledgeNav(nav, await fetchAllSpaceCats(), '', myCatIdSet(), { indexed: true });
         }
         catch (_) { /* graceful: 사이드바 트리 생략(문서는 계속) */ }
     })();

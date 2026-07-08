@@ -4133,6 +4133,36 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-nav-note { font-size: 12px; color: var(--muted-2); padding: 4px 8px 4px 24px; }
 .kn-tree-archived { opacity: .5; }
 
+/* ── WIKI 사이드바 재디자인(#req) — space 단일 위계 + ★우리팀 강조 + 전 계층 개수 뱃지. .kn-tree2 스코프. ── */
+/* space 섹션 헤더 — 위 hairline 으로 섹션 경계를 만들고, 라벨은 아이브로 톤(작고 진하게)·개수는 우측 정렬. */
+.kn-tree2 .kn-space-group { margin: 0; }
+.kn-tree2 .kn-space-group + .kn-space-group { margin-top: 2px; }
+.kn-tree2 .kn-space-group > summary { margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0;
+  padding: 9px 8px 5px 6px; font-size: 11.5px; font-weight: 800; letter-spacing: .05em; color: var(--muted); }
+.kn-tree2 .kn-space-group > summary:hover { background: none; color: var(--ink-sub); }
+.kn-tree2 .kn-space-group > summary .tree-groupcount { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* 카테고리 행 — 개수는 오른쪽 끝(tabular), 0 은 흐리게. */
+.kn-tree2 .tree-group .tree-item { padding-left: 8px; }
+.kn-nav-count { flex: none; margin-left: 6px; min-width: 1.8em; text-align: right; font-size: 11.5px; font-weight: 600;
+  color: var(--muted-2); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.kn-nav-count.zero { opacity: .45; }
+.tree-item.on .kn-nav-count { color: var(--ink-sub); }
+/* ★ 우리 팀 카테고리 — 파란 별 + 좌측 파란 틱(위아래 여백 둔 둥근 바 — 행 전체 레일은 붙어 보여 답답). */
+.kn-cat-star { flex: none; width: 13px; color: var(--blue); font-size: 10px; line-height: 1; text-align: center; }
+.kn-tree2 .kn-cat-mine { position: relative; }
+.kn-tree2 .kn-cat-mine::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 2px; background: var(--blue); opacity: .85; }
+.kn-tree2 .kn-cat-mine .tree-label { font-weight: 700; color: var(--ink); }
+
+/* 검색 캡슐(#req) — 검색 입력 + 검색방식 셀렉트를 한 컨테이너로(오른쪽 도킹·hairline 구분선). */
+.kn-search-group { flex: 1; min-width: 240px; display: flex; align-items: stretch;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
+.kn-search-group:focus-within { border-color: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 12%, transparent); }
+.kn-search-group input[type="search"] { flex: 1; min-width: 140px; border: none; outline: none; box-shadow: none; background: none; }
+.kn-search-group select { border: none; outline: none; background: var(--bg-tint); border-left: 1px solid var(--line);
+  border-radius: 0; font-size: 12.5px; color: var(--ink-sub); padding: 0 10px; cursor: pointer; }
+.kn-search-group select:hover { color: var(--ink); }
+
 /* 카테고리 헤더(#592) — 본문 영역 상단(이름·설명 + ＋폴더·⚙보기). */
 .kn-cathead { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
   margin: 2px 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }

@@ -18,12 +18,17 @@ export interface CategoryRow {
   created_at: string; updated_at: string;
   // 오너 팀(team_category relation='owner') — listCategories 만 채운다(LEFT JOIN). 쓰기/감사 경로는 base 컬럼만.
   owner_team_id?: number | null; owner_team_key?: string | null; owner_team_name?: string | null;
+  // 이 카테고리에 매핑된 active 지식 수 — listCategories 만 채운다(WIKI 사이드바 개수 뱃지).
+  knowledge_count?: number;
 }
 
-// 읽기 전용 SELECT(목록) — base 컬럼 + 오너 팀 조인. 쓰기 RETURNING/restoreSnapshot 은 CATEGORY_COLS(base)만 사용.
+// 읽기 전용 SELECT(목록) — base 컬럼 + 오너 팀 조인 + 지식 수. 쓰기 RETURNING/restoreSnapshot 은 CATEGORY_COLS(base)만 사용.
+//  knowledge_count(#req WIKI 사이드바 개수 뱃지) — 목록 화면(listKnowledge)과 동일 의미: active 지식 × rejected 아닌 매핑.
 const CATEGORY_SEL =
   `${CATEGORY_COLS.split(",").map((c) => "c." + c.trim()).join(", ")},
-   tco.team_id AS owner_team_id, tot.key AS owner_team_key, tot.name AS owner_team_name`;
+   tco.team_id AS owner_team_id, tot.key AS owner_team_key, tot.name AS owner_team_name,
+   (SELECT COUNT(*)::int FROM knowledge_category kc JOIN knowledge k ON k.name=kc.name AND k.lifecycle='active'
+    WHERE kc.category_id=c.id AND kc.state<>'rejected') AS knowledge_count`;
 const CATEGORY_OWNER_JOIN =
   `LEFT JOIN team_category tco ON tco.category_id=c.id AND tco.relation='owner'
    LEFT JOIN team tot ON tot.id=tco.team_id`;
