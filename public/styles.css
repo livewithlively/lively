@@ -4780,9 +4780,9 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .cath { margin: 2px 0 22px; }
 .cath-cover { height: 158px; border-radius: 14px; border: 1px solid var(--line); position: relative; overflow: hidden; background: var(--bg-tint-2); }
 .cath-cover:hover .kn-cover-btns { opacity: 1; }
-/* (#req) 커버 미설정 — 영역 접기(기본 커버 안 깔음). 아이콘은 커버 겹침(-34) 대신 정상 위치로. */
-.cath-cover-empty { height: 0; min-height: 0; border: none; background: none; border-radius: 0; }
-.cath-cover-empty + .cath-inner .cath-icon { margin-top: 4px; }
+/* (#req) 커버 미설정 — 영역 접기(기본 커버 안 깔음). 아이콘은 커버 겹침(-30) 대신 정상 위치(브레드크럼 아래)로. */
+.cath-cover-empty { height: 0; min-height: 0; border: none; background: none; border-radius: 0; margin: 0; }
+.cath-cover-empty + .cath-inner .cath-icon { margin-top: 0; }
 .cath-addcover { display: inline-flex; align-items: center; border: none; background: none; cursor: pointer;
   font-size: 12.5px; font-weight: 600; color: var(--muted-2); padding: 4px 7px; border-radius: 7px; margin: 0 0 2px -3px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
 .cath:hover .cath-addcover { opacity: 1; }
@@ -5095,10 +5095,10 @@ main.doc-mode .list-foot .caption { font-family: var(--wk-mono); font-size: 11px
 main.doc-mode .cath-cover { border-radius: 16px; border: 1px solid var(--wk-line);
   box-shadow: inset 0 -40px 60px -40px rgba(27,30,39,.14), inset 0 1px 0 rgba(255,255,255,.4); }
 main.doc-mode .cath-icon { border-radius: 15px; border-color: var(--wk-line); box-shadow: 0 8px 22px rgba(27,30,39,.1); }
-main.doc-mode .cath-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+/* (#req) 대문 재설계 — 브레드크럼(공간·우리 팀) 맨 위 eyebrow → 아이콘 → 제목+액션 → 설명 → 탭. 커버는 선택. */
+main.doc-mode .cath-meta { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 main.doc-mode .cath-meta-sp { font-size: 11px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; color: var(--wk-living-ink); }
-main.doc-mode .cath-meta-sep { color: var(--wk-ink-dim); }
-main.doc-mode .cath-meta-key { font-family: var(--wk-mono); font-size: 11px; color: var(--wk-ink-dim); letter-spacing: .2px; }
+main.doc-mode .cath-meta-team { font-size: 10.5px; font-weight: 700; letter-spacing: 0; color: var(--blue); background: var(--bg-sel); padding: 2px 8px; border-radius: 999px; }
 main.doc-mode .cath-title { font-size: 32px; letter-spacing: -0.8px; color: var(--wk-ink); }
 main.doc-mode .cath-desc { font-size: 14.5px; color: var(--wk-ink-soft); }
 main.doc-mode .cath-icon-letter { color: var(--wk-living-ink); }

@@ -230,9 +230,11 @@ async function buildCategoryHome(slot, cat, opts = {}) {
     const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
     // 우리 팀 담당이면 브레드크럼 옆 '우리 팀' 칩(#req) — 사이드바·위키 홈 카드와 같은 어휘(pjv-side-cat).
     const catIsMine = ((state.me?.team_category_ids) || []).map((x) => String(x)).includes(String(cat.id));
-    const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), el('span', { class: 'cath-meta-sep', 'aria-hidden': 'true', text: '/' }), el('span', { class: 'cath-meta-key', text: cat.key }), catIsMine ? el('span', { class: 'pjv-side-cat kn-team-chip', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
+    // 브레드크럼(맨 위) — 공간(사업/제품/시스템) + 우리 팀. 카테고리 슬러그(영문 key)는 사용자용 아니라 제거.
+    const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), catIsMine ? el('span', { class: 'cath-meta-team', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
     const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
-    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, coverAddBtn, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), tabs, bodyBox)));
+    // (#req) 0에서 재설계 — 커버는 선택. 기본 레이아웃: 브레드크럼 → (커버) → 아이콘 → 제목+액션 → 설명 → 탭.
+    slot.append(el('div', { class: 'cath' }, metaEl, cover, el('div', { class: 'cath-inner' }, coverAddBtn, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, titleEl, descEl), actionRow), tabs, bodyBox)));
     // 탭 초기 해석 — 'auto'(기본)면 대문 내용이 있을 때 대문, 없으면 문서(빈 대문으로 막지 않기).
     if (opts.onTab)
         opts.onTab(opts.tab === 'docs' ? 'docs' : (opts.tab === 'home' ? 'home' : (hasContent ? 'home' : 'docs')));
