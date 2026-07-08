@@ -432,22 +432,22 @@ function setupClipboard() {
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       const wordSeq = e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf';
+      try { const _t = term.textarea || {}; console.log('#633 HANDLER ' + e.key + ' isComposing=' + e.isComposing + ' alt=' + e.altKey + ' taVal=' + JSON.stringify(_t.value || '') + ' caret=' + _t.selectionStart); } catch (_) { /* noop */ }
       // #633 (반복 버그): preventDefault 필수. return false 는 xterm '자체' 처리만 막을 뿐 브라우저 기본동작은
       //  안 막는다(확인: 이 핸들러 뒤 defaultPrevented=false). 그래서 브라우저가 Option+←/→ 의 기본동작 =
       //  xterm 히든 textarea 안에서 '단어 단위 캐럿 이동'을 수행(실측 캐럿 9→6)해 IME 상태를 오염시키고,
       //  이후 모든 타이핑에 '직전 글자가 눌러붙어 반복'된다. → 항상 기본동작을 차단한다.
-      e.preventDefault();
-      // #633 (조합문자 따라감 버그): 한글 IME 조합 중(미완성 음절이 커서에 '박스'로 떠 있음)엔 그 음절이 아직
-      //  셸에 안 들어가 있다(compositionend 전). 이 상태로 단어이동만 보내면 조합 오버레이가 커서를 따라 이동한다
-      //  (야가 커서랑 같이 감). 영문은 즉시 확정돼 이 문제가 없다. → 조합 중이면 먼저 blur 로 조합을 '확정'
-      //  (compositionend→onData 로 음절이 셸에 입력됨)시키고, 포커스 복구 후 '다음 틱'에 단어이동을 보낸다
-      //  (확정 문자가 셸 버퍼에 먼저 반영된 뒤 이동 — 두 입력 모두 같은 WS 로 순서 보존).
+      e.preventDefault(); // 커서이동 유발(브라우저 캐럿이동=반복버그 + xterm 기본 Alt+화살표 시퀀스=따라감) 전부 차단
+      // #633 조합 중(미완성 음절 '박스')엔 그 음절이 아직 셸에 없다(compositionend 전). preventDefault 로 IME
+      //  자연확정이 막히므로, xterm 자신의 compositionend 를 '직접 발동'시켜 조합 음절을 제자리(현재 커서)에서
+      //  확정시킨다 — xterm 이 조합 substring 만 정확히 셸로 보낸다(blur=취소로 사라짐, value통째읽기=줄중복, 둘 다 회피).
+      //  그 다음 단어이동 → 음절이 먼저 셸에 들어간 뒤 커서가 이동한다.
       if (e.isComposing) {
-        try { (term.textarea || e.target).blur(); } catch (_) { /* noop */ }
-        setTimeout(() => {
-          try { term.focus(); } catch (_) { /* noop */ }
-          if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: wordSeq })); } catch (_) { /* noop */ } }
-        }, 0);
+        try { const ta = term.textarea || e.target; if (ta) ta.dispatchEvent(new CompositionEvent('compositionend', { data: ta.value, bubbles: true, cancelable: true })); } catch (_) { /* noop */ }
+        // xterm 의 _finalizeComposition 은 '비동기'(propagation 대기)로 음절을 셸에 보낸다 → 단어이동을 동기로
+        //  보내면 음절보다 먼저 나가 커서가 앞서 움직인다(야바보). 그래서 이동은 한 틱 미뤄 음절 뒤로 순서를 맞춘다.
+        const d = wordSeq;
+        setTimeout(() => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }, 0);
         return false;
       }
       if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: wordSeq })); } catch (_) { /* noop */ } }
@@ -483,6 +483,19 @@ function setupClipboard() {
     }
     return true;
   });
+  // #633 임시 진단 로깅 — 실제 브라우저의 한글 IME 이벤트 순서를 콘솔에 찍는다(캡처용, 조사 끝나면 제거).
+  try {
+    const L = (m) => { try { console.log('#633 ' + m); } catch (_) { /* noop */ } };
+    if (!WebSocket.prototype.__d633) {
+      const O = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (dd) { try { const m = JSON.parse(dd); if (m && m.t === 'i') L('WS-send ' + JSON.stringify(String(m.d).replace(/\x1b/g, '<ESC>'))); } catch (_) { /* noop */ } return O.call(this, dd); };
+      WebSocket.prototype.__d633 = true;
+    }
+    const ta = term.textarea;
+    if (ta) {
+      ['compositionstart', 'compositionupdate', 'compositionend'].forEach((ev) => ta.addEventListener(ev, (e) => L(ev + ' data=' + JSON.stringify(e.data || '') + ' taVal=' + JSON.stringify(ta.value) + ' caret=' + ta.selectionStart)));
+    }
+  } catch (_) { /* noop */ }
 }
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
 //  capture 단계에서 xterm 텍스트영역보다 먼저 잡아 기본 붙여넣기를 막고 우리가 처리(중복 방지). 이미지=업로드+경로, 텍스트=bracketed.

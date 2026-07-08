@@ -186,7 +186,9 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     // 프로젝트 행 — 프로젝트 탭 리스트 행(pjv-trow-title-cell)과 동일 UI: 상태 아이콘(진행도 파이/체크) + 이름 + 태스크 수 + 세션 배지 + 태그.
     //  좁은 대시보드 폭이라 프로젝트 탭 표의 나머지 열(담당·마감·날짜·우선순위 등)은 생략하고 제목 셀만 그대로 차용. 클릭→프로젝트 상세.
     const dashProjRow = (p) => {
-        const cell = el('div', { class: 'pjv-trow-title-cell' }, dashProjStatusIcon(p, listById), el('span', { class: 'pjv-trow-title clickable' + (isDone(p) ? ' done' : ''), title: p.name, text: p.name }));
+        const cell = el('div', { class: 'pjv-trow-title-cell' }, 
+        // 상태 동그라미 = 클릭 시 상태 변경 메뉴(프로젝트 탭 pjvProjStatusDot 과 동일 동작, #req). 행 링크로 전파 안 되게 preventDefault.
+        dashProjStatusControl(p, listById, () => draw()), el('span', { class: 'pjv-trow-title clickable' + (isDone(p) ? ' done' : ''), title: p.name, text: p.name }));
         if (Number(p.task_count) > 0)
             cell.append(el('span', { class: 'pjv-trow-subcount pjv-subcount-ico', title: p.task_count + '개 태스크' }, dashSubtaskIcon(), el('span', { text: String(p.task_count) })));
         if (p.my_session_count)
@@ -438,6 +440,62 @@ function dashProjStatusIcon(p, listById) {
         return dashStatusIconSvg('active', '#94a3b8', 0);
     return dashStatusIconSvg('active', '#f59e0b', 0.5);
 }
+// ── 상태 변경(#req) — 대시보드 프로젝트 행에서 상태 동그라미 클릭 → 상태 메뉴. 프로젝트 탭 pjvProjStatusDot 동형(projects.ts 무수정, 인라인). ──
+//  커스텀 상태 리스트면 그 상태들을(Active/Done/Closed 그룹), 아니면 표준 3단계(할 일·진행 중·완료). 선택 시 /status POST + 로컬 반영 + 재렌더.
+const DASH_NATIVE_STATUS = [
+    { key: 'todo', label: '할 일', icon: () => dashStatusIconSvg('active', 'var(--muted-3)', 0) },
+    { key: 'in_progress', label: '진행 중', icon: () => dashStatusIconSvg('active', 'var(--blue)', 0.5) },
+    { key: 'done', label: '완료', icon: () => dashStatusIconSvg('done', 'var(--mint)') },
+];
+async function dashSetProjStatus(p, patch, redraw) {
+    try {
+        await api('/api/ui/v6/projects/' + p.id + '/status', { method: 'POST', body: JSON.stringify(patch) });
+        p.status = patch.status;
+        if ('status_raw' in patch)
+            p.status_raw = patch.status_raw;
+        toast(patch.status === 'done' ? '완료로 옮겼습니다' : '상태를 변경했습니다');
+        redraw();
+    }
+    catch (e) {
+        toast('실패 — ' + (e && e.message || e), true);
+    }
+}
+function dashProjStatusControl(p, listById, redraw) {
+    const l = p.list_id != null ? listById.get(p.list_id) : null;
+    const s = l && l.settings;
+    const custom = !!(s && s.statusMode === 'custom' && Array.isArray(s.statuses) && s.statuses.length);
+    const btn = el('button', { class: 'dash-projstatus-btn', type: 'button', title: '상태 변경', 'aria-label': '상태 변경' }, dashProjStatusIcon(p, listById));
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // 행 앵커(프로젝트 상세)로 전파 막기 — 메뉴만 연다.
+        const menu = el('div', { class: 'pjv-menu dash-statusmenu' }); // dash-statusmenu = 카드 배경(기존 dashPopover 는 .dash-pop=위치만 부여)
+        const close = dashPopover(btn, menu);
+        if (custom) {
+            const defs = dashListStatusDefs(l);
+            const cur = dashResolveStatus(p, defs);
+            for (const catKey of ['active', 'done', 'closed']) {
+                for (const d of defs.filter((x) => x.category === catKey)) {
+                    const isCur = d.key === (cur && cur.key);
+                    const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, dashStatusIconSvg(d.category, d.color, d.frac), el('span', { text: d.label }));
+                    item.onclick = () => { close(); if (!isCur)
+                        dashSetProjStatus(p, { status: (d.category === 'done' || d.category === 'closed') ? 'done' : 'in_progress', status_raw: d.key }, redraw); };
+                    menu.append(item);
+                }
+            }
+        }
+        else {
+            const curKey = p.status || 'todo';
+            for (const st of DASH_NATIVE_STATUS) {
+                const isCur = curKey === st.key;
+                const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, st.icon(), el('span', { text: st.label }));
+                item.onclick = () => { close(); if (!isCur)
+                    dashSetProjStatus(p, { status: st.key }, redraw); };
+                menu.append(item);
+            }
+        }
+    });
+    return btn;
+}
 // 하위 태스크 아이콘 — 프로젝트 탭 pjvSubtaskIcon 동형(서브카운트 배지 안).
 function dashSubtaskIcon() {
     const n = sv('svg', { class: 'pjv-subtask-ic', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
@@ -545,15 +603,21 @@ async function fillSessions(zone, onCount, projectsP) {
         return (h && h.label) || DASH_HARNESS_LABEL[key] || key || '';
     };
     const sessTime = (c) => { const n = Number(c); return n ? relTime(new Date(n * 1000).toISOString()) : ''; };
-    let mode = 'all'; // 전체 | 내 것 | 초대받음
+    // 내가 할당된 프로젝트(=mine=1 응답) 안에서 만들어진 내 세션 판별(#req) — projName(내 프로젝트) 에 있는 projectId.
+    const isMyProjectSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && projName.has(pid); };
+    let mode = 'all'; // 전체 | 내 것 | 초대받음 | 내 프로젝트
     const draw = () => {
         const shown = sessions
-            .filter((s) => mode === 'mine' ? s.owned : (mode === 'invited' ? !s.owned : true))
+            .filter((s) => mode === 'mine' ? s.owned : mode === 'invited' ? !s.owned : mode === 'myproj' ? isMyProjectSess(s) : true)
             .sort((a, b) => (b.attached ? 1 : 0) - (a.attached ? 1 : 0) || (Number(b.created) || 0) - (Number(a.created) || 0));
         zone.countEl.textContent = String(shown.length);
-        dashChips(zone.chipsEl, [['all', '전체'], ['mine', '내 것'], ['invited', '초대받음']], mode, (k) => { mode = k; draw(); });
+        // '내 프로젝트' 칩 — 내가 할당된 프로젝트의 세션만. 그런 세션이 하나도 없으면 칩 자체를 숨겨 군더더기 방지.
+        const chips = [['all', '전체'], ['mine', '내 것'], ['invited', '초대받음']];
+        if (sessions.some(isMyProjectSess))
+            chips.push(['myproj', '내 프로젝트']);
+        dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
         if (!shown.length) {
-            zone.body.replaceChildren(dashEmpty(mode === 'invited' ? '초대받은 세션이 없어요.' : '세션이 없어요 — [+ 새 세션]으로 시작해 보세요.'));
+            zone.body.replaceChildren(dashEmpty(mode === 'invited' ? '초대받은 세션이 없어요.' : mode === 'myproj' ? '내 프로젝트에서 만든 세션이 없어요.' : '세션이 없어요 — [+ 새 세션]으로 시작해 보세요.'));
             return;
         }
         const list = el('div', { class: 'dash-sess-list' });
@@ -562,10 +626,12 @@ async function fillSessions(zone, onCount, projectsP) {
             const badges = el('span', { class: 'dash-sess-badges' });
             if (s.attached)
                 badges.append(el('span', { class: 'dash-badge live', text: '접속중' }));
-            // 프로젝트에서 만든 세션(@box_project) — 프로젝트명 뱃지로 식별.
+            // 프로젝트에서 만든 세션(@box_project) — 프로젝트명 뱃지로 식별. 내가 할당된 프로젝트면 강조(#req).
             const pid = Number(s.projectId) || 0;
-            if (pid)
-                badges.append(el('span', { class: 'dash-badge dash-badge-proj', title: '프로젝트: ' + (projName.get(pid) || pid), text: projName.get(pid) || ('프로젝트 #' + pid) }));
+            if (pid) {
+                const mine = projName.has(pid);
+                badges.append(el('span', { class: 'dash-badge dash-badge-proj' + (mine ? ' dash-badge-proj-mine' : ''), title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('프로젝트 #' + pid) }));
+            }
             if (s.owned) {
                 if ((s.invites || []).length)
                     badges.append(el('span', { class: 'dash-badge', text: '초대 ' + s.invites.length }));

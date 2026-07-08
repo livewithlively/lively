@@ -518,8 +518,16 @@ export function createBlockEditor(opts = {}) {
     const root = el('div', { class: 'be', 'data-ph': opts.placeholder || "내용을 입력하세요. '/' 를 누르면 블록 메뉴가 열립니다." });
     let dirty = false;
     let composing = false;
-    const markDirty = () => { dirty = true; if (opts.onChange)
-        opts.onChange(); };
+    // #657z 실행취소 — 브라우저 네이티브 undo 는 구조 변경(드래그·전환·삭제·컬럼…)을 모른다 →
+    //  에디터가 마크다운 스냅샷 스택을 직접 소유(⌘Z/⌘⇧Z·Ctrl+Y). 타이핑은 유휴 600ms 로 묶고,
+    //  구조 연산은 setTimeout(0) 코얼레싱으로 '한 연산 = 한 스텝'(복합 연산도 동기 프레임 끝 상태 1장).
+    let histLock = false;
+    const markDirty = () => { dirty = true; if (!histLock)
+        snapSoon(); if (opts.onChange)
+        opts.onChange(); }; // 구조 변경 — 즉시 스냅샷(프레임 단위 코얼레싱)
+    const markDirtyType = () => { dirty = true; if (!histLock)
+        snapLater(); if (opts.onChange)
+        opts.onChange(); }; // 타이핑 — 유휴 600ms 버스트 단위
     // ── 블록 DOM 생성 ──
     function textDiv(cls, mdText, ph) {
         const t = el('div', { class: 'be-text ' + cls, contenteditable: 'true', ...(ph ? { 'data-ph': ph } : {}) });
@@ -588,7 +596,7 @@ export function createBlockEditor(opts = {}) {
                 block.dataset.lang = d.lang || '';
                 const langIn = el('input', { class: 'be-code-lang', type: 'text', placeholder: 'lang', value: d.lang || '',
                     spellcheck: 'false' });
-                langIn.addEventListener('input', () => { block.dataset.lang = langIn.value.trim(); markDirty(); });
+                langIn.addEventListener('input', () => { block.dataset.lang = langIn.value.trim(); markDirtyType(); });
                 const codeBox = el('div', { class: 'be-text be-code', contenteditable: 'true', spellcheck: 'false' });
                 codeBox.textContent = d.text || '';
                 main.append(el('div', { class: 'be-codewrap' }, codeBox, langIn));
@@ -1588,6 +1596,27 @@ export function createBlockEditor(opts = {}) {
         const target = e.target;
         if (target.classList && (target.classList.contains('be-raw-ta') || target.classList.contains('be-code-lang')))
             return;
+        // #657z 실행취소 — 에디터가 소유(⌘Z 취소 / ⌘⇧Z·Ctrl+Y 재실행). 네이티브 undo 는 구조 변경을 모른다.
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+            e.preventDefault();
+            if (composing || e.isComposing || e.keyCode === 229)
+                return;
+            if (e.shiftKey)
+                histRedo();
+            else
+                histUndo();
+            return;
+        }
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+            e.preventDefault();
+            if (composing || e.isComposing || e.keyCode === 229)
+                return;
+            histRedo();
+            return;
+        }
+        // 구조 키 직전 — 진행 중 타이핑 버스트를 별도 undo 스텝으로 확정(타이핑↔Enter 분할이 한 스텝으로 뭉치지 않게).
+        if (!e.isComposing && e.keyCode !== 229 && (e.key === 'Enter' || e.key === 'Tab' || e.metaKey || e.ctrlKey))
+            histFlushTyping();
         const block = blockOf(target);
         if (!block)
             return;
@@ -1712,13 +1741,13 @@ export function createBlockEditor(opts = {}) {
             if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
                 e.preventDefault();
                 insertText('\n');
-                markDirty();
+                markDirtyType();
                 return;
             }
             if (e.key === 'Tab') {
                 e.preventDefault();
                 insertText('  ');
-                markDirty();
+                markDirtyType();
                 return;
             }
             if (e.key === 'Backspace' && caretAtStart(t) && !t.textContent) {
@@ -1745,7 +1774,7 @@ export function createBlockEditor(opts = {}) {
             if (e.shiftKey) {
                 e.preventDefault();
                 document.execCommand('insertLineBreak');
-                markDirty();
+                markDirtyType();
                 return;
             }
             e.preventDefault();
@@ -1956,10 +1985,10 @@ export function createBlockEditor(opts = {}) {
     root.addEventListener('input', (e) => {
         const target = e.target;
         if (target.classList && (target.classList.contains('be-raw-ta') || target.classList.contains('be-code-lang'))) {
-            markDirty();
+            markDirtyType();
             return;
         }
-        markDirty();
+        markDirtyType();
         if (slash) {
             syncSlashQuery();
             return;
@@ -2222,6 +2251,7 @@ export function createBlockEditor(opts = {}) {
         dragging = blockOf(h);
         if (!dragging)
             return;
+        histFlushTyping(); // 드래그 직전 타이핑 버스트 확정 — undo 가 드래그만 되돌리도록
         justDragged = true;
         dragging.classList.add('be-dragging');
         e.dataTransfer.effectAllowed = 'move';
@@ -2308,6 +2338,138 @@ export function createBlockEditor(opts = {}) {
         clearDrop();
         setTimeout(() => { justDragged = false; }, 50); // 드래그 직후 handle click 오발 방지
     });
+    // ════════ #657z 실행취소 히스토리 ════════
+    // 마크다운 스냅샷 스택 — 네이티브 undo 가 모르는 구조 변경(드래그·전환·삭제·컬럼·컬렉션 설정…)까지
+    //  ⌘Z/⌘⇧Z(Ctrl+Y) 한 계층으로 되돌린다. 라운드트립이 무손실이라 스냅샷 = 마크다운으로 충분.
+    //  · 구조 변경: markDirty → snapSoon(setTimeout 0) — 복합 연산도 동기 프레임 끝 상태 1장 = 1스텝.
+    //  · 타이핑: markDirtyType → snapLater(600ms) — 버스트 단위 1스텝. 구조 키(Enter/Tab/⌘조합) 직전
+    //    histFlushTyping 으로 버스트를 확정해 "타이핑 → Enter 분할"이 두 스텝으로 남는다(노션 동일 감각).
+    //  raw 블록 textarea 내부는 네이티브 undo(stopPropagation), 커밋 시점만 스택에 잡힌다.
+    const HIST_MAX = 100;
+    const hist = [];
+    let histPos = -1;
+    let histTimerT = null; // 타이핑 디바운스
+    let histTimerS = null; // 구조 코얼레싱
+    const editorMd = () => blocksToMd(blockEls().map(blockData));
+    function captureFocus() {
+        const s = window.getSelection();
+        if (!s || !s.rangeCount)
+            return null;
+        const r = s.getRangeAt(0);
+        const sc = r.startContainer;
+        const eln = sc.nodeType === 3 ? sc.parentElement : sc;
+        const t = eln && eln.closest ? eln.closest('.be-text') : null;
+        if (!t || !root.contains(t))
+            return null;
+        const b = blockOf(t);
+        if (!b)
+            return null;
+        const idx = Array.from(root.querySelectorAll('.be-block')).indexOf(b);
+        if (idx < 0)
+            return null;
+        const pre = document.createRange();
+        pre.selectNodeContents(t);
+        try {
+            pre.setEnd(r.startContainer, r.startOffset);
+        }
+        catch {
+            return { idx, off: 0 };
+        }
+        return { idx, off: pre.toString().length };
+    }
+    function restoreFocus(f) {
+        const bs = Array.from(root.querySelectorAll('.be-block'));
+        if (!bs.length)
+            return;
+        const b = bs[Math.max(0, Math.min(f ? f.idx : bs.length - 1, bs.length - 1))];
+        const t = textElOf(b);
+        if (!t) {
+            focusBlock(b, false);
+            return;
+        }
+        t.focus();
+        let remain = f ? f.off : (t.textContent || '').length;
+        const w = document.createTreeWalker(t, NodeFilter.SHOW_TEXT);
+        let n = w.nextNode();
+        while (n) {
+            const len = (n.textContent || '').length;
+            if (remain <= len) {
+                const nr = document.createRange();
+                nr.setStart(n, remain);
+                nr.collapse(true);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(nr);
+                return;
+            }
+            remain -= len;
+            n = w.nextNode();
+        }
+        placeCaret(t, false);
+    }
+    function snapNow() {
+        if (histLock)
+            return;
+        if (composing) {
+            snapLater();
+            return;
+        } // IME 조합 중 상태는 담지 않는다 — 종료 후로 미룸
+        clearTimeout(histTimerT);
+        histTimerT = null;
+        clearTimeout(histTimerS);
+        histTimerS = null;
+        const md = editorMd();
+        if (histPos >= 0 && hist[histPos].md === md)
+            return;
+        hist.length = histPos + 1; // redo 꼬리 절단
+        hist.push({ md, focus: captureFocus() });
+        if (hist.length > HIST_MAX)
+            hist.shift();
+        histPos = hist.length - 1;
+    }
+    function snapSoon() { if (histLock || histTimerS)
+        return; histTimerS = setTimeout(() => { histTimerS = null; snapNow(); }, 0); }
+    function snapLater() { if (histLock)
+        return; clearTimeout(histTimerT); histTimerT = setTimeout(() => { histTimerT = null; snapNow(); }, 600); }
+    function histFlushTyping() { if (histTimerT && !composing)
+        snapNow(); }
+    function resetHistory() {
+        clearTimeout(histTimerT);
+        histTimerT = null;
+        clearTimeout(histTimerS);
+        histTimerS = null;
+        hist.length = 0;
+        hist.push({ md: editorMd(), focus: null });
+        histPos = 0;
+    }
+    function applyHistory(pos) {
+        if (pos < 0 || pos >= hist.length)
+            return;
+        const h = hist[pos];
+        histLock = true;
+        try {
+            closeSlashMenu();
+            closeMention();
+            root.replaceChildren(...mdToBlocks(h.md).map(makeBlock));
+            ensureOne();
+            renumber();
+        }
+        finally {
+            histLock = false;
+        }
+        histPos = pos;
+        try {
+            restoreFocus(h.focus);
+        }
+        catch { /* 캐럿 복원은 최선노력 */ }
+        dirty = true; // 되돌린 상태도 자동저장 대상
+        if (opts.onChange)
+            opts.onChange();
+    }
+    function histUndo() { histFlushTyping(); if (histPos > 0)
+        applyHistory(histPos - 1); }
+    function histRedo() { if (histPos < hist.length - 1)
+        applyHistory(histPos + 1); }
     // ── 로드/공개 API ──
     function load(md) {
         closeSlashMenu();
@@ -2316,16 +2478,30 @@ export function createBlockEditor(opts = {}) {
         renumber();
     }
     load(opts.initial || '');
+    resetHistory();
     return {
         el: root,
         getMarkdown: () => blocksToMd(blockEls().map(blockData)),
-        setMarkdown: (md) => { load(md); dirty = false; },
+        setMarkdown: (md) => {
+            // 사용자가 이미 만지던 에디터라면(히스토리 2스텝↑ 또는 미저장 편집) 교체를 undo 가능한 1스텝으로 남긴다 — 대문 템플릿 적용 등.
+            const live = hist.length > 1 || dirty;
+            if (live)
+                snapNow();
+            load(md);
+            if (live)
+                snapNow();
+            else
+                resetHistory();
+            dirty = false;
+        },
         isDirty: () => dirty,
         resetDirty: () => { dirty = false; },
         isEmpty: () => isEmptyNow(),
         focusEnd: () => { const bs = blockEls(); if (bs.length)
             focusBlock(bs[bs.length - 1], false); },
         destroy: () => {
+            clearTimeout(histTimerT);
+            clearTimeout(histTimerS);
             document.removeEventListener('selectionchange', onSelChange);
             tools.remove();
             closeSlashMenu();

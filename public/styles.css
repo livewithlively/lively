@@ -88,7 +88,9 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   display: inline-flex; align-items: baseline; gap: 7px;
   font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.4px;
 }
-.wordmark-sub { font-size: 15px; font-weight: 600; color: var(--ink-sub); letter-spacing: 0; }
+/* 'for Honest AI' — 우아한 세리프 이탤릭 태그라인. 굵은 지오메트릭 산세(Lively)와 대비돼 '같은 글씨'가 아니고,
+   손글씨 스크립트 같은 과함도 없다(#673 후속). Mac=Baskerville, 폴백 Hoefler/Garamond/serif. */
+.wordmark-sub { font-family: Baskerville, "Hoefler Text", "Baskerville Old Face", Garamond, "Times New Roman", serif; font-style: italic; font-size: 15px; font-weight: 400; letter-spacing: .2px; color: var(--ink-sub); white-space: nowrap; }
 .pulse-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--mint);
   align-self: center;
@@ -99,14 +101,25 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   0%, 100% { box-shadow: 0 0 0 3px rgba(22, 199, 154, .18); }
   50%      { box-shadow: 0 0 0 7px rgba(22, 199, 154, .06); }
 }
-.tabs { display: flex; gap: 4px; height: 100%; margin: 0 auto; }
+/* #req 좁아지면(반쪽 창) 탭 라벨이 글자 단위로 세로로 접히던 문제 — 탭은 안 찌그러지게(flex:none) + 라벨 nowrap,
+   다 못 담으면 네비 자체가 가로 스크롤(스크롤바 숨김). 워드마크·우측은 안 밀리게 flex:none. */
+.tabs { display: flex; gap: 4px; height: 100%; margin: 0 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tabs a {
+  flex: none; white-space: nowrap;
   display: flex; align-items: center; padding: 0 16px;
   font-size: 15px; font-weight: 700; color: var(--ink-sub);
   border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
 .tabs a:hover { color: var(--ink); }
 .tabs a.active { color: var(--blue); border-bottom-color: var(--blue); }
+.wordmark { flex: none; white-space: nowrap; }
+.topbar-right { flex: none; }
+/* 좁은 창 — 탭 여백·상단바 간격을 줄여 스크롤 없이도 최대한 담는다. */
+@media (max-width: 760px) {
+  .topbar { gap: 14px; padding: 0 14px; }
+  .tabs a { padding: 0 10px; font-size: 14px; }
+}
 .topbar-right { display: flex; align-items: center; gap: 8px; }
 .sync-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 .dot-static { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
@@ -4257,6 +4270,13 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-projrow2:hover { background: var(--bg-tint); }
 .dash-projrow2 .pjv-trow-title-cell { flex: 1; min-width: 0; }
 .dash-projrow2 .dash-badge { margin-left: 4px; }
+/* #req 대시보드 프로젝트 행 상태 동그라미 — 클릭 가능(상태 변경 메뉴 — 프로젝트 탭과 동일 동작). */
+.dash-projstatus-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; padding: 0; margin-right: 2px; border-radius: 6px; cursor: pointer; }
+.dash-projstatus-btn:hover { background: var(--bg-tint-2); }
+/* 상태 메뉴 카드 — 기존 dashPopover 가 .dash-pop(위치만) 을 얹으므로 배경·테두리는 여기서. */
+.dash-statusmenu { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; box-shadow: 0 8px 28px rgba(20,35,59,.16); padding: 5px; min-width: 168px; }
+/* #req 내가 할당된 프로젝트의 세션 뱃지 — 액센트 강조로 '내 프로젝트 세션' 구분. */
+.dash-badge-proj-mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 45%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
 
 /* 개요 카드 — 선택(리스트 필터) 강조 + 드래그 순서 변경 표식 */
 .dash-ov-card2 { position: relative; }
