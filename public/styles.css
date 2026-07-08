@@ -4827,6 +4827,24 @@ main.doc-mode .kn-home-groupcount { font-family: var(--wk-mono); font-size: 10.5
   color: var(--wk-ink-dim); font-variant-numeric: tabular-nums; }
 main.doc-mode .kn-hcard-star { color: var(--wk-living); }
 
+/* ── #657h3 위키 홈 카드 드래그 정렬 — 슬롯 래퍼로 카드 overflow 밖(그룹 간격)에 세로 디바이더를 띄운다
+     (대시보드 개요 카드와 같은 삽입 표시). 슬롯은 flex 로 카드를 늘려 그리드 행 높이를 채운다. ── */
+main.doc-mode .kn-hcard-slot { position: relative; display: flex; }
+main.doc-mode .kn-hcard-slot > .kn-hcard { flex: 1 1 auto; min-width: 0; }
+main.doc-mode .kn-hcard-slot.kn-hcard-drag-src { opacity: .4; }
+main.doc-mode .kn-hcard-slot.kn-hcard-drop-before::before,
+main.doc-mode .kn-hcard-slot.kn-hcard-drop-after::after {
+  content: ""; position: absolute; top: 2px; bottom: 2px; width: 4px; border-radius: 3px;
+  background: var(--wk-living); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wk-living) 20%, transparent);
+  z-index: 4; pointer-events: none; }
+main.doc-mode .kn-hcard-slot.kn-hcard-drop-before::before { left: -8px; }
+main.doc-mode .kn-hcard-slot.kn-hcard-drop-after::after { right: -8px; }
+/* 정렬 안내(발견성) / 초기화 — 그룹 라벨 우측. */
+main.doc-mode .kn-home-orderhint { margin-left: auto; font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--wk-ink-dim); }
+main.doc-mode .kn-home-orderreset { margin-left: auto; border: none; background: none; cursor: pointer;
+  font-size: 11px; font-weight: 600; letter-spacing: 0; color: var(--wk-ink-dim); padding: 3px 7px; border-radius: 6px; font-family: inherit; }
+main.doc-mode .kn-home-orderreset:hover { color: var(--blue); background: var(--bg-tint); }
+
 /* ── #657n 토글·컬럼·블록 메뉴(노션 패리티) ── */
 .be-toggle-row { display: flex; align-items: flex-start; gap: 2px; }
 .be-toggle-caret { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px;

@@ -338,45 +338,62 @@ async function renderKnowledgeSpace(view, _space, params) {
     applyTabVisibility();
     syncHash();
   }
-  async function paintHome() {
-    listBox.replaceChildren(skeletonRows(3));
+  async function paintHome(quiet = false) {
+    if (!quiet) listBox.replaceChildren(skeletonRows(3));   // 재정렬 등 캐시 재렌더(quiet)는 스켈레톤 깜빡임 생략
     foot.replaceChildren();
-    // 카테고리 나열 — 우리 팀 먼저(space 순서 유지), 나머지 뒤에.
+    // 카테고리 나열 — 우리 팀 먼저, 나머지 뒤. 각 그룹 안 순서는 사용자 드래그(#657h3, 기기별)를 반영, 미지정은 space 순서.
     const all: any[] = [];
     for (const sk of ['business', 'product', 'system']) for (const c of (bySpace[sk] || [])) all.push(c);
-    const mine = all.filter((c) => myIds.has(String(c.id)));
-    const rest = all.filter((c) => !myIds.has(String(c.id)));
+    const savedOrder = knHomeOrderSaved();
+    const mine = knHomeSortByOrder(all.filter((c) => myIds.has(String(c.id))), savedOrder);
+    const rest = knHomeSortByOrder(all.filter((c) => !myIds.has(String(c.id))), savedOrder);
     const ordered = [...mine, ...rest];
     // 카테고리별 rows(세션 캐시 공유 — 사이드바 펼침과 동일 소스). 대문 문서(icon/cover)·문서 수·최근 지식이 전부 여기서 나온다.
     const rowsPer = await Promise.all(ordered.map((c) => knFetchCategoryRows(c.id).catch(() => [])));
+    // #657h3 카드 드래그 정렬 — 대시보드 개요 카드와 같은 UX. 그룹(우리 팀 / 그 외) '안'에서만 재정렬(그룹 경계=오너십).
+    const curOrderIds = ordered.map((c) => String(c.id));
+    const onReorder = (dragId: string, targetId: string, after: boolean) => {
+      knHomeSaveOrder(knHomeReorder(curOrderIds, dragId, targetId, after));
+      paintHome(true);
+    };
+    // 정렬 컨트롤 — 커스텀 순서가 있으면 '초기화', 없으면 드래그 안내(발견성). 첫 그룹 라벨 우측에만.
+    const orderControl = () => (savedOrder.length
+      ? el('button', { class: 'kn-home-orderreset', type: 'button', title: '카드 순서를 기본값으로 되돌립니다',
+          text: '정렬 초기화', onclick: () => { knHomeClearOrder(); paintHome(true); } })
+      : el('span', { class: 'kn-home-orderhint', 'aria-hidden': 'true', text: '드래그해서 순서 변경' }));
     // #657h2 우리 팀 우선을 '보이게' — 사이드바와 같은 ★ 그룹 어휘로 카드 그리드를 이분(팀 미소속이면 단일 그리드).
     //  ★오너십=우선순위 표시일 뿐 접근제한 아님(사이드바 불변식 동일).
-    const cardAt = (c: any, i: number) => {
+    const cardAt = (c: any, i: number, group: string) => {
       const rows = rowsPer[i];
       const home = rows.find((r) => isCategoryHomeDoc(r.name));
       const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
-      return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)));
+      return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)), { group, onReorder });
     };
     const cardParts: any[] = [];
     if (mine.length) {
       cardParts.push(el('div', { class: 'kn-home-grouplabel', title: '팀이 소유·관리하는 카테고리를 먼저 보여줍니다 — 접근 제한이 아니라 우선순위입니다' },
         el('span', { class: 'kn-home-groupstar', 'aria-hidden': 'true', text: '★' }),
         el('span', { text: '우리 팀' }),
-        el('span', { class: 'kn-home-groupcount', text: String(mine.length) })));
+        el('span', { class: 'kn-home-groupcount', text: String(mine.length) }),
+        orderControl()));
       const gm = el('div', { class: 'kn-home-cats' });
-      mine.forEach((c, i) => gm.append(cardAt(c, i)));
+      mine.forEach((c, i) => gm.append(cardAt(c, i, 'mine')));
       cardParts.push(gm);
       if (rest.length) {
         cardParts.push(el('div', { class: 'kn-home-grouplabel kn-home-grouplabel-rest' },
           el('span', { text: '그 외 카테고리' }),
           el('span', { class: 'kn-home-groupcount', text: String(rest.length) })));
         const gr = el('div', { class: 'kn-home-cats' });
-        rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j)));
+        rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j, 'rest')));
         cardParts.push(gr);
       }
     } else {
+      cardParts.push(el('div', { class: 'kn-home-grouplabel' },
+        el('span', { text: '카테고리' }),
+        el('span', { class: 'kn-home-groupcount', text: String(ordered.length) }),
+        orderControl()));
       const grid = el('div', { class: 'kn-home-cats' });
-      ordered.forEach((c, i) => grid.append(cardAt(c, i)));
+      ordered.forEach((c, i) => grid.append(cardAt(c, i, 'all')));
       cardParts.push(grid);
     }
     // 우리 팀 최근 지식(팀 미소속이면 전체) — 최신순 캡. 폴더·대문 제외.
@@ -937,9 +954,38 @@ function knGallery(entries, open) {
 }
 
 // ── #657h 위키 홈 카테고리 카드 — 커버 스트립(대문 커버 미리보기) + 아이콘 타일 + 이름/설명 + space·문서 수. ──
+// ── #657h3 위키 홈 카드 순서(드래그) — 기기별 localStorage. 서버 카테고리 순서와 독립(대시보드 dash_list_order_v1 과 동형). ──
+//  팀 우선 그룹은 유지 — 재정렬은 그룹(우리 팀 / 그 외) '안'에서만(그룹 경계=오너십, 사용자가 넘길 수 없음).
+const KN_HOME_ORDER_KEY = 'kn_home_cat_order_v1';
+function knHomeOrderSaved(): string[] {
+  try { const a = JSON.parse(localStorage.getItem(KN_HOME_ORDER_KEY) || '[]'); return Array.isArray(a) ? a.map((x) => String(x)) : []; }
+  catch { return []; }
+}
+function knHomeSaveOrder(order: string[]) { try { localStorage.setItem(KN_HOME_ORDER_KEY, JSON.stringify(order)); } catch { /* 저장 실패 무시 */ } }
+function knHomeClearOrder() { try { localStorage.removeItem(KN_HOME_ORDER_KEY); } catch { /* 무시 */ } }
+// 저장 순서로 목록을 안정 정렬 — 저장에 없는 항목은 원래 순서 유지하며 뒤로(카테고리 신설 시 graceful).
+function knHomeSortByOrder(list: any[], order: string[]): any[] {
+  const idx = new Map(order.map((id, i) => [String(id), i] as [string, number]));
+  return list
+    .map((c, i) => ({ c, i, o: idx.has(String(c.id)) ? (idx.get(String(c.id)) as number) : Number.MAX_SAFE_INTEGER }))
+    .sort((a, b) => (a.o - b.o) || (a.i - b.i))
+    .map((x) => x.c);
+}
+// dragId 를 targetId 앞(after=false)/뒤(after=true)로 옮긴 새 순서(화면 밖 순서도 병합 보존).
+function knHomeReorder(order: string[], dragId: string, targetId: string, after: boolean): string[] {
+  const arr = order.filter((id) => id !== dragId);
+  let at = arr.indexOf(targetId);
+  if (at < 0) at = arr.length; else if (after) at += 1;
+  arr.splice(at, 0, dragId);
+  return arr;
+}
+// 드래그 진행 상태(모듈 전역 — knHomeCatCard 가 모듈 함수라 클로저 대신). group 으로 그룹 간 드롭을 차단.
+let knHomeDragId: string | null = null;
+let knHomeDragGroup: string | null = null;
+
 //  클릭 = 그 카테고리 대문으로(onOpen → selectCategory). 대문 문서(home)의 icon/cover 를 그대로 이어받아
 //  카드가 대문의 축소판이 되게 한다(설정 0이면 결정적 톤 그라디언트 + 첫 글자 타일 — 대문 기본과 동일).
-function knHomeCatCard(c, home, count, isMine, onOpen) {
+function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx?) {
   const cover = el('div', { class: 'kn-hcard-cover' });
   if (!applyCoverBg(cover, home && home.cover)) applyCoverBg(cover, defaultCoverFor(c.key || String(c.id)));
   const ic = (home && home.icon) || '';
@@ -960,7 +1006,40 @@ function knHomeCatCard(c, home, count, isMine, onOpen) {
         el('span', { class: 'kn-hcard-count', text: String(count) }))));
   card.addEventListener('click', onOpen);
   card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') onOpen(); });
-  return card;
+  if (!dragCtx) return card;
+
+  // 드래그 정렬(#657h3) — 카드를 슬롯으로 감싼다(카드 overflow:hidden 이 그룹 간격의 세로 디바이더를 자르지 않게).
+  //  대시보드 개요 카드와 동일 패턴: 커서 좌/우 절반으로 앞·뒤 삽입, 삽입 지점에 세로 디바이더. 그룹 밖 드롭은 무시.
+  const slot = el('div', { class: 'kn-hcard-slot', draggable: 'true' }, card);
+  const cid = String(c.id);
+  const clearDrop = () => slot.classList.remove('kn-hcard-drop-before', 'kn-hcard-drop-after');
+  const inScope = () => knHomeDragId != null && knHomeDragId !== cid && knHomeDragGroup === dragCtx.group;
+  slot.addEventListener('dragstart', (e: any) => {
+    knHomeDragId = cid; knHomeDragGroup = dragCtx.group;
+    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', cid); } catch { /* */ }
+    slot.classList.add('kn-hcard-drag-src');
+  });
+  slot.addEventListener('dragend', () => {
+    knHomeDragId = null; knHomeDragGroup = null; slot.classList.remove('kn-hcard-drag-src');
+    document.querySelectorAll('.kn-hcard-drop-before, .kn-hcard-drop-after').forEach((n) => n.classList.remove('kn-hcard-drop-before', 'kn-hcard-drop-after'));
+  });
+  slot.addEventListener('dragover', (e: any) => {
+    if (!inScope()) return;
+    e.preventDefault();
+    const r = slot.getBoundingClientRect();
+    const after = (e.clientX - r.left) > r.width / 2;   // 오른쪽 절반이면 이 카드 '뒤'로
+    slot.classList.toggle('kn-hcard-drop-after', after);
+    slot.classList.toggle('kn-hcard-drop-before', !after);
+  });
+  slot.addEventListener('dragleave', clearDrop);
+  slot.addEventListener('drop', (e: any) => {
+    e.preventDefault();
+    const after = slot.classList.contains('kn-hcard-drop-after');
+    clearDrop();
+    if (!inScope()) return;
+    dragCtx.onReorder(knHomeDragId, cid, after);
+  });
+  return slot;
 }
 
 // #657 갤러리 로컬 오버라이드 — 서버 view_mode(list|table|entry 그대로) 위에 얹는 브라우저 보기 설정.
