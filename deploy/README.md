@@ -155,6 +155,24 @@ LIVELY_DOMAIN=gw.org.com BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.com \
 - **인증서 영속:** `caddy-data` 볼륨(ACME 계정·인증서). 삭제 시 재발급(Let's Encrypt rate-limit 주의).
 - **도메인 없이(IP만):** `LIVELY_DOMAIN` 을 비우면 프록시 없음 — `:8080` 직접(신뢰 IP 로 SG 제한) 또는 SSH 터널. Let's Encrypt 는 IP 인증서를 발급하지 않으므로 공개 서비스엔 도메인 필요.
 - **커스텀 프록시/사내 CA:** `deploy/Caddyfile` 을 수정하거나, 별도 프록시(nginx 등)를 `localhost:8080` 앞단에 두면 된다.
+  - ⚠ **긴 요청 타임아웃 필수(nginx 등):** 프로젝트 레포 provision(`POST /api/ui/v6/projects/:id/provision`)은
+    박스에서 `git clone`/`fetch`/`worktree`(내부 예산 180s/op)를 **동기로** 수행한다. nginx 기본 `proxy_read_timeout`(60s)
+    으로는 최초 클론·느린 네트워크에서 응답 전에 끊겨 **504 Gateway Time-out** 이 난다(백엔드 git 은 계속 진행 → 재시도 시 성공).
+    앞단 프록시에 넉넉한 타임아웃을 준다. Caddy 는 기본 무제한이라 무관, nginx 라면:
+    ```nginx
+    # provision 등 장시간 git 작업 경로에만 넉넉히(스코프 권장)
+    location /api/ui/v6/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_read_timeout    600s;
+        proxy_send_timeout    600s;
+        proxy_connect_timeout 60s;
+        # 웹터미널 WebSocket(xterm) — Upgrade 통과
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    ```
+    적용: 위 블록을 server{} 안에 추가 → `nginx -t && nginx -s reload`. (근본 수정은 provision 비동기화 — 프로젝트 #600.)
 
 ## 중앙박스 키트 (왜 호스트에도 까나)
 
