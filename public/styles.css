@@ -4435,9 +4435,10 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
 .dash-sess-box.live { border-color: color-mix(in srgb, var(--mint-deep) 40%, var(--line)); }
 .dash-sess-info { flex: 1; min-width: 0; }
-.dash-sess-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.dash-sess-name { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.dash-sess-badges { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+/* #req R16 — 카드 2줄 고정: 제목행(제목 ellipsis + 태그) 1줄 + 하단(태그·시간) 1줄. 배지 줄바꿈 금지. */
+.dash-sess-title { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow: hidden; }
+.dash-sess-name { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-sess-badges { flex: none; display: inline-flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
 .dash-sess-sub { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-badge-proj { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
 .dash-sess-open { flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 12px; background: var(--bg); cursor: pointer; font-family: inherit; }
