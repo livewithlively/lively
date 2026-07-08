@@ -478,6 +478,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
   width: 100%; max-width: 380px; padding: 32px;
 }
 .gate-mark { font-size: 22px; margin-bottom: 14px; }
+/* #req 로그인 창에서만 'for Honest AI' 태그라인을 조금 키움(헤더는 그대로 15px). */
+.gate-mark .wordmark-sub { font-size: 17.5px; }
 .gate-copy { font-size: 14px; color: var(--ink-sub); margin: 0 0 18px; }
 #gate-form { display: flex; flex-direction: column; gap: 10px; }
 #gate-input, #gate-email, #gate-password { width: 100%; }
