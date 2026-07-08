@@ -7,7 +7,7 @@
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUpload/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
-import { authDownload, authUpload, companyTimelineSection, fmtSize } from './projects.js';
+import { authDownload, authUpload, companyTimelineSection, fmtSize, openProjectV2Form } from './projects.js';
 import { openTermCreateForm, startTerminalTour } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req)
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
@@ -244,35 +244,28 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   //  트리거(＋ 프로젝트) → 클릭 시 제목 셀(체크박스 자리·캐럿 자리·상태점 + 입력)로 펼침. Enter=생성 후 상세로, Esc=접기.
   const dashInlineAdd = (listId) => {
     const row = el('div', { class: 'pjv-addrow dash-addrow' });
+    // 대시보드 프로젝트 행(dashProjRow)은 상태아이콘이 셀 맨앞(체크박스·캐럿 자리 없음) — 추가행도 동일하게 spacer/caret 없이 맞춰 ＋가 상태점과 같은 들여쓰기에 오게(#670).
     const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
-      el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
       el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
     const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '프로젝트 이름 입력 후 Enter (Esc 취소)', maxlength: '200', spellcheck: 'false', autocomplete: 'off' });
-    let busy = false;
     const collapse = () => { row.classList.remove('editing'); row.replaceChildren(trigger); };
-    const submit = async () => {
+    // Enter — 프로젝트 탭과 동일한 설정 팝업(openProjectV2Form)로 이어감(#670). 이름 프리필 + 소속 리스트 프리필.
+    //  stay:true → 생성 후 상세페이지로 튀지 않고(예전엔 #/projects2/p/id 로 이동 = '완전 새로운 창') 그 자리 대시보드 목록만 갱신 → 새 프로젝트가 목록 맨 아래에 자연스럽게.
+    const submit = () => {
       const name = (input.value || '').trim();
-      if (busy) return;
       if (!name) { collapse(); return; }
-      busy = true; input.disabled = true;
-      try {
-        const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
-        const id = r && (r.project && r.project.id || r.id);
-        toast('프로젝트를 만들었어요');
-        if (id) location.hash = '#/projects2/p/' + id; // 내용 적는 창 = 프로젝트 상세로 이동
-        else await reloadAll();
-      } catch (e: any) { toast('실패 — ' + (e && e.message || e), true); busy = false; input.disabled = false; input.focus(); }
+      openProjectV2Form(reloadAll, { name, listId: listId || null, stay: true });
+      collapse(); // 팝업이 흐름을 이어받으니 인라인 행은 접어 정리(reloadAll 이 어차피 다시 그림)
     };
     const expand = () => {
       row.classList.add('editing');
       row.replaceChildren(el('div', { class: 'pjv-trow-title-cell' },
-        el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
-        el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }),
         dashStatusIconSvg('active', '#94a3b8', 0), input));
       input.focus();
     };
-    input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); collapse(); } });
-    input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim()) collapse(); });
+    // 한글(IME) 조합 중 Enter 는 글자 확정용 — 그때 커밋하면 마지막 글자가 중복된 이름이 된다(프로젝트 탭 pjvProjAddRow 동형 가드).
+    input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' && !e.isComposing && (e as any).keyCode !== 229) { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); collapse(); } });
+    input.addEventListener('blur', () => { if (!(input.value || '').trim()) collapse(); });
     trigger.onclick = expand;
     collapse();
     return row;
@@ -378,7 +371,8 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         el('button', { class: 'dash-ov-restore', type: 'button', text: '다시 표시', onclick: () => { dashSaveOvHidden(new Set()); draw(); } }));
     }
     // 선택된 리스트의 프로젝트만 — 프로젝트 탭과 동일한 리스트 그룹(헤더+행). 강조된 카드가 곧 선택 표시.
-    const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    //  생성순(id 오름차순) — 새로 만든 프로젝트가 목록 '맨 아래'(추가행 바로 위)에 자연스럽게 붙게(#670). 예전 updated_at 내림차순은 새 프로젝트를 맨 위로 튀게 했음.
+    const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
     // #req R11.1/R19 — '+ 새 프로젝트'는 리스트 그룹 맨 밑 인라인 행(dashInlineAdd)으로 이동(프로젝트 탭과 동일).
     const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), arr));
     zone.body.replaceChildren(gridEl, listEl);

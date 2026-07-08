@@ -4546,7 +4546,7 @@ function npTaskEditor() {
     return { box, getTasks: () => model.map((t) => ({ name: t.name, subs: t.subs.map((s) => s.name) })) };
 }
 // 새 프로젝트(v2) 폼 — 이름·설명·할 일(히어로) + 컴팩트 메타(폴더·카테고리·레포·팀원). 생성 후 상세로 이동.
-function openProjectV2Form(reload, prefill) {
+export function openProjectV2Form(reload, prefill) {
     prefill = prefill || {};
     const nameIn = el('input', { type: 'text', class: 'np-name', value: prefill.name || '', placeholder: '프로젝트 이름 (예: 6월 데모데이 준비)', maxlength: '200' });
     const descIn = el('textarea', { class: 'np-desc', placeholder: '이 프로젝트로 무엇을, 왜 하려는지 적어주세요.\n여기 적은 설명은 나중에 AI 세션이 맥락으로 씁니다 — 길게 써도 좋아요.', maxlength: '5000' });
@@ -4670,7 +4670,12 @@ function openProjectV2Form(reload, prefill) {
             catch (_) { /* */ }
             back.remove();
             toast('프로젝트를 만들었습니다');
-            if (np && np.id)
+            // stay(#670) — 대시보드처럼 '목록 흐름 유지'가 필요한 호출측은 상세로 튀지 않고 그 자리 목록만 갱신(새 프로젝트가 목록 맨 아래에 자연스럽게).
+            if (prefill.stay) {
+                if (reload)
+                    reload();
+            }
+            else if (np && np.id)
                 location.hash = '#/projects2/p/' + np.id;
             else if (reload)
                 reload();
