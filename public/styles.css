@@ -4437,6 +4437,14 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-listpop-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .dash-listpop-nm { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-listpop-live { flex: none; font-size: 10.5px; font-weight: 700; color: var(--mint-deep); }
+/* #req 팝오버 태스크 행 — 상태 아이콘(클릭=상태 변경) + 이름 링크. 행 padding 은 base 유지, 이름은 링크. */
+.dash-listpop-task { padding: 4px 6px; gap: 4px; }
+.dash-listpop-task .dash-listpop-nm { text-decoration: none; }
+.dash-listpop-task .dash-listpop-nm:hover { color: var(--blue); }
+.dash-taskstatus-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; border: none; background: none; padding: 0; border-radius: 6px; cursor: pointer; }
+.dash-taskstatus-btn:hover { background: var(--bg-tint-2); }
+/* 중첩 서브메뉴(팝오버 안 상태 메뉴 등) — 부모 팝오버 위로. */
+.dash-submenu { position: fixed; z-index: 90; }
 /* #req 대시보드 프로젝트 행 상태 동그라미 — 클릭 가능(상태 변경 메뉴 — 프로젝트 탭과 동일 동작). */
 .dash-projstatus-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; padding: 0; margin-right: 2px; border-radius: 6px; cursor: pointer; }
 .dash-projstatus-btn:hover { background: var(--bg-tint-2); }

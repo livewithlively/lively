@@ -220,7 +220,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     if (chip) {
       const tb = el('span', { class: 'pjv-trow-subcount pjv-subcount-ico dash-rowchip', role: 'button', tabindex: '0', title: chip.title + ' — 눌러서 보기' },
         dashSubtaskIcon(), el('span', { text: chip.text }));
-      const openT = (e: any) => { e.preventDefault(); e.stopPropagation(); openProjTasksPopover(tb, p); };
+      const openT = (e: any) => { e.preventDefault(); e.stopPropagation(); openProjTasksPopover(tb, p, reloadAll); };
       tb.addEventListener('click', openT);
       tb.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') openT(e); });
       cell.append(tb);
@@ -1470,6 +1470,21 @@ function dashPopover(anchor, panel) {
   setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
   return close;
 }
+// 중첩 서브메뉴 — dashPopover 와 달리 부모 팝오버(.dash-pop)를 지우지 않는다(팝오버 안 항목의 상태 메뉴 등). 위(z-90)에 뜬다.
+function dashSubMenu(anchor, panel) {
+  document.querySelectorAll('.dash-submenu').forEach((n) => n.remove()); // 다른 서브메뉴만 정리
+  panel.classList.add('dash-submenu');
+  document.body.append(panel);
+  const r = anchor.getBoundingClientRect();
+  const pw = panel.offsetWidth || 180;
+  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pw - 8)) + 'px';
+  panel.style.top = (r.bottom + 4) + 'px';
+  const close = () => { panel.remove(); document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); };
+  const onDoc = (e) => { if (!panel.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
+  return close;
+}
 // 단일 선택 팝오버 — [제목] + 라디오형 옵션 목록. 선택 시 닫고 onPick(key). 위젯 ⚙(기본값 설정) 공용.
 function dashChoicePopover(anchor, title, options, current, onPick) {
   const panel = el('div', { class: 'dash-pop-panel' });
@@ -1505,25 +1520,55 @@ function openProjRowMenu(anchor, p, onChanged) {
   panel.append(del);
   close = dashPopover(anchor, panel);
 }
-async function openProjTasksPopover(anchor, p) {
+// 태스크 native 상태 3단계(할 일·진행 중·완료) — 색은 프로젝트 상태 아이콘과 통일.
+const DASH_TASK_STATUS = [
+  { key: 'todo', label: '할 일', mk: () => dashStatusIconSvg('active', '#94a3b8', 0) },
+  { key: 'in_progress', label: '진행 중', mk: () => dashStatusIconSvg('active', '#f59e0b', 0.5) },
+  { key: 'done', label: '완료', mk: () => dashStatusIconSvg('done', '#22c55e') },
+];
+function dashTaskStatusIcon(t) {
+  if (t.status === 'done' || t.status_category === 'done' || t.status_category === 'closed') return dashStatusIconSvg('done', '#22c55e');
+  if (t.status === 'todo') return dashStatusIconSvg('active', '#94a3b8', 0);
+  return dashStatusIconSvg('active', '#f59e0b', 0.5);
+}
+// 태스크 상태 아이콘 = 클릭 시 상태 변경 메뉴(#req). 태스크는 native(todo|in_progress|done) — POST /tasks/:id {status}(프로젝트 탭과 동일).
+function dashTaskStatusControl(t, onChanged) {
+  const btn = el('button', { class: 'dash-taskstatus-btn', type: 'button', title: '상태 변경', 'aria-label': '상태 변경' }, dashTaskStatusIcon(t));
+  btn.addEventListener('click', (e: any) => {
+    e.preventDefault(); e.stopPropagation();
+    const cur = (t.status === 'done' || t.status_category === 'done' || t.status_category === 'closed') ? 'done' : (t.status || 'todo');
+    const menu = el('div', { class: 'dash-statusmenu' });
+    const close = dashSubMenu(btn, menu); // 부모 팝오버(.dash-pop)를 안 닫는 중첩 메뉴
+    for (const st of DASH_TASK_STATUS) {
+      const isCur = cur === st.key;
+      const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, st.mk(), el('span', { text: st.label }));
+      item.onclick = async () => { close(); if (isCur) return; try { await api('/api/ui/v6/tasks/' + t.id, { method: 'POST', body: JSON.stringify({ status: st.key }) }); toast('상태를 변경했어요'); onChanged && onChanged(); } catch (e2: any) { toast('실패 — ' + (e2 && e2.message || e2), true); } };
+      menu.append(item);
+    }
+  });
+  return btn;
+}
+async function openProjTasksPopover(anchor, p, onWidgetChanged) {
   const panel = el('div', { class: 'dash-pop-panel dash-listpop' });
-  panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { title: p.name, text: p.name }), el('span', { class: 'dash-pop-sub', text: '태스크' })));
   const mode = dashTaskCountMode();
-  panel.querySelector('.dash-pop-sub')!.textContent = mode === 'active' ? '진행 중 태스크' : '태스크';
+  panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { title: p.name, text: p.name }), el('span', { class: 'dash-pop-sub', text: mode === 'active' ? '진행 중 태스크' : '태스크' })));
   const box = el('div', { class: 'dash-listpop-body' }); box.append(skeleton('불러오는 중'));
   panel.append(box);
   dashPopover(anchor, panel);
-  try {
-    const d = await api('/api/ui/v6/projects/' + p.id);
-    // ⚠ GET /projects/:id 는 { project: {...tasks} } 로 감싸 반환 — d.tasks 가 아니라 d.project.tasks (이게 '2개인데 없어요' 버그 원인).
-    const isTaskDone = (t) => t.status === 'done' || t.status_category === 'done' || t.status_category === 'closed';
+  const isTaskDone = (t) => t.status === 'done' || t.status_category === 'done' || t.status_category === 'closed';
+  const load = async () => {
+    let d;
+    try { d = await api('/api/ui/v6/projects/' + p.id); } // ⚠ 응답은 { project: {...tasks} } — d.project.tasks
+    catch (e: any) { box.replaceChildren(errorNote(e, '태스크를 불러오지 못했습니다')); return; }
     let tasks = (d && (d.project ? d.project.tasks : d.tasks)) || [];
-    if (mode === 'active') tasks = tasks.filter((t) => !isTaskDone(t)); // 칩(진행 중만)과 일치 — 할 일도 active 라 포함
+    if (mode === 'active') tasks = tasks.filter((t) => !isTaskDone(t)); // 칩(진행 중만)과 일치 — 할 일도 active 포함
     if (!tasks.length) { box.replaceChildren(el('div', { class: 'dash-pop-desc', text: mode === 'active' ? '진행 중인 태스크가 없어요.' : '태스크가 없어요.' })); return; }
-    box.replaceChildren(...tasks.map((t) => el('a', { class: 'dash-listpop-row', href: '#/projects2/p/' + p.id, title: t.name || '' },
-      el('span', { class: 'dash-listpop-dot', style: 'background:' + dashTaskDot(t) }),
-      el('span', { class: 'dash-listpop-nm', text: t.name || '(제목 없음)' }))));
-  } catch (e: any) { box.replaceChildren(errorNote(e, '태스크를 불러오지 못했습니다')); }
+    const onChanged = () => { load(); onWidgetChanged && onWidgetChanged(); }; // 상태 바꾸면 목록 재로드 + 위젯 새로고침(칩 수)
+    box.replaceChildren(...tasks.map((t) => el('div', { class: 'dash-listpop-row dash-listpop-task', title: t.name || '' },
+      dashTaskStatusControl(t, onChanged),
+      el('a', { class: 'dash-listpop-nm', href: '#/projects2/p/' + p.id, text: t.name || '(제목 없음)' }))));
+  };
+  load();
 }
 // 세션 배지 클릭 → 들어갈 세션 선택(#req). 1개면 바로 열기, 여러 개면 팝아웃 선택.
 async function openProjSessionsPicker(anchor, p) {
