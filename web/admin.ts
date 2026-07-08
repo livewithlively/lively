@@ -914,27 +914,49 @@ async function openIngestPolicyForm(pol, reload) {
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
     hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+  // 카테고리 목록(모든 space) 로드 — 드롭다운용. 실패해도 폼은 뜬다(빈 목록=전체 옵션만).
+  let cats: any[] = [];
+  try {
+    const lists = await Promise.all(SPACE_SUBS.map((s) =>
+      api('/api/ui/categories?' + new URLSearchParams({ space: s.key })).then((d) => (d && d.categories) || []).catch(() => [])));
+    cats = lists.flat();
+  } catch { cats = []; }
+
   const actSel = el('select', { style: inputStyle });
   for (const o of [['auto', 'auto — 즉시 지식화(active)'], ['confirm', 'confirm — 검토 큐로 격리(pending)'], ['drop', 'drop — 적재 안 함']]) actSel.append(el('option', { value: o[0], text: o[1] }));
   actSel.value = (pol && pol.action) || 'confirm';
-  const catInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_category) || '', placeholder: '예: fundraising (비우면 모든 카테고리)' });
-  const sysInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_system) || '', placeholder: '예: notion, slack, gdrive (비우면 모든 시스템)' });
-  const chanInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_channel) || '', placeholder: '채널·폴더 출처 (비우면 전체)' });
+  // 카테고리 = 드롭다운(로드된 목록). 미등록 기존값은 옵션 추가해 보존.
+  const catSel = el('select', { style: inputStyle });
+  catSel.append(el('option', { value: '', text: '전체 (모든 카테고리)' }));
+  for (const c of cats) catSel.append(el('option', { value: c.key, text: (c.name || c.key) + ' (' + c.key + ')' }));
+  if (pol && pol.match_category) {
+    if (!cats.some((c) => c.key === pol.match_category)) catSel.append(el('option', { value: pol.match_category, text: pol.match_category + ' (미등록)' }));
+    catSel.value = pol.match_category;
+  }
+  // 시스템 = 드롭다운(커넥터 고정 목록).
+  const sysSel = el('select', { style: inputStyle });
+  sysSel.append(el('option', { value: '', text: '전체 (모든 시스템)' }));
+  for (const s of ['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord']) sysSel.append(el('option', { value: s, text: s }));
+  if (pol && pol.match_system) { if (!['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].includes(pol.match_system)) sysSel.append(el('option', { value: pol.match_system, text: pol.match_system })); sysSel.value = pol.match_system; }
+  const chanInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_channel) || '', placeholder: '특정 채널·폴더 id (비우면 시스템 전체)' });
   const provSel = el('select', { style: inputStyle });
   for (const o of [['', '전체'], ['observed', 'observed (커넥터 미러 — 정제문서 직행)'], ['authored', 'authored (자료 distill — LLM 증류)']]) provSel.append(el('option', { value: o[0], text: o[1] }));
   if (pol && pol.match_provenance) provSel.value = pol.match_provenance;
-  const sensInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_sensitive) || '', placeholder: '예: cooking, planning, unfinished (LLM 민감 라벨, 비우면 전체)' });
+  // 민감 라벨 = 드롭다운(통제어휘).
+  const sensSel = el('select', { style: inputStyle });
+  for (const o of [['', '전체 (판정 무관)'], ['cooking', 'cooking (쿠킹 중)'], ['planning', 'planning (기획 단계)'], ['unfinished', 'unfinished (미완결·미확정)']]) sensSel.append(el('option', { value: o[0], text: o[1] }));
+  if (pol && pol.match_sensitive) sensSel.value = pol.match_sensitive;
   const prioInp = el('input', { type: 'number', style: inputStyle, value: String((pol && pol.priority) || 0) });
   const enabledChk = el('input', { type: 'checkbox', ...((pol ? pol.enabled : true) ? { checked: true } : {}) });
 
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 추가' : '저장' });
   const form = el('div', { class: 'proj-settings' },
     block('동작 (action)', 'auto=즉시 반영 · confirm=검토 큐 격리 · drop=미적재. 여러 규칙에 걸리면 가장 보수적이 이깁니다.', actSel),
-    block('카테고리 (선택)', '이 도메인 지식에만. 비우면 모든 카테고리.', catInp),
-    block('시스템 (선택)', 'notion·slack·gdrive 등 출처 커넥터. 비우면 전체.', sysInp),
-    block('출처 채널/폴더 (선택)', '특정 채널·폴더 출처. 비우면 전체.', chanInp),
+    block('카테고리 (선택)', '이 도메인 지식에만 적용. 비우면 모든 카테고리.', catSel),
+    block('시스템 (선택)', '출처 커넥터. 비우면 모든 시스템.', sysSel),
+    block('출처 채널/폴더 (선택)', '특정 slack 채널·notion 폴더 등(id). 비우면 시스템 전체. (동적 목록 픽커는 후속.)', chanInp),
     block('경로 (선택)', 'observed=커넥터 미러(정제문서 직행) · authored=자료 distill(LLM 증류).', provSel),
-    block('민감 라벨 (선택)', 'distill LLM 이 내용에서 판정하는 라벨(쿠킹중·기획 등). 비우면 전체.', sensInp),
+    block('민감 라벨 (선택)', 'distill/미러 LLM 이 내용에서 판정. 비우면 판정 무관.', sensSel),
     block('우선순위', '표시·정렬용(평가는 가장 보수적 규칙 우선). 큰 값이 위.', prioInp),
     block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
@@ -942,9 +964,9 @@ async function openIngestPolicyForm(pol, reload) {
   const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
   saveBtn.onclick = async () => {
     const body: any = { action: actSel.value,
-      match_category: catInp.value.trim() || null, match_system: sysInp.value.trim() || null,
+      match_category: catSel.value || null, match_system: sysSel.value || null,
       match_channel: chanInp.value.trim() || null, match_provenance: provSel.value || null,
-      match_sensitive: sensInp.value.trim() || null, priority: Number(prioInp.value) || 0, enabled: enabledChk.checked };
+      match_sensitive: sensSel.value || null, priority: Number(prioInp.value) || 0, enabled: enabledChk.checked };
     if (pol) body.id = pol.id;
     saveBtn.disabled = true;
     try { await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '규칙을 추가했습니다' : '저장했습니다'); back.remove(); reload(); }
