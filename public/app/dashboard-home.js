@@ -1151,7 +1151,7 @@ function openSessMenu(anchor, s, onChange) {
 }
 // #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작 버튼(따라하기/새 세션).
 function dashSessionEmpty() {
-    return el('div', { class: 'dash-sess-empty' }, el('div', { class: 'dash-sess-empty-ic' }, dashSessionIcon()), el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }), el('div', { class: 'dash-sess-empty-desc', text: 'AI 세션은 터미널에서 Claude·Codex 같은 AI 에이전트와 함께 코드·문서를 만드는 나만의 작업 공간이에요. 폴더를 고르고 세션을 열면, AI가 그 자리에서 바로 일을 시작해요.' }), el('div', { class: 'dash-sess-empty-acts' }, el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => dashGoTerminal('tour') }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: () => dashGoTerminal('new') })));
+    return el('div', { class: 'dash-sess-empty' }, el('div', { class: 'dash-sess-empty-ic' }, dashSessionIcon()), el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }), el('div', { class: 'dash-sess-empty-desc', text: '터미널에서 Claude·Codex 같은 AI와 함께 코드·문서를 만드는 작업 공간이에요. 폴더를 고르고 세션을 열면 AI가 바로 일을 시작해요.' }), el('div', { class: 'dash-sess-empty-acts' }, el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => dashGoTerminal('tour') }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: () => dashGoTerminal('new') })));
 }
 // 터미널 탭으로 이동 후, 그 페이지의 버튼을 자동 실행(따라하기=온보딩 투어 / new=새 세션 폼). 렌더 완료까지 짧게 폴링.
 //  터미널 뷰 코드(다른 세션 WIP)는 건드리지 않고 이미 있는 버튼을 눌러 재사용한다.

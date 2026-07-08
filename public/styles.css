@@ -4297,10 +4297,14 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.dash-wh { flex: none; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 8px; padding: 12px 16px 9px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
-.dash-wh h4 { margin: 0; font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
-.dash-wh-n { font-size: 13px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
-.dash-wh-chips { display: flex; gap: 4px; margin-left: 6px; }
+/* #req 헤더는 아무리 좁아도 항상 1행 — 줄바꿈 금지(flex-wrap:nowrap). 좁아지면 필터 칩만 가로로 줄어들며 elide(스크롤+우측 페이드), 제목·카운트·⚙·바로가기는 유지. */
+.dash-wh { flex: none; display: flex; align-items: baseline; flex-wrap: nowrap; gap: 6px 8px; padding: 12px 16px 9px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-wh h4 { margin: 0; font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; flex: none; }
+.dash-wh-n { font-size: 13px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.dash-wh-chips { display: flex; gap: 4px; margin-left: 6px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent); }
+.dash-wh-chips::-webkit-scrollbar { display: none; }
+.dash-wh-chips > * { flex: none; } /* 칩 각각은 안 찌그러지고, 넘치면 컨테이너가 가로 스크롤(1행 유지) */
 .dash-chip { font-size: 12px; font-weight: 700; padding: 2.5px 9px; border-radius: 999px; border: 1px solid var(--line);
   color: var(--muted); background: none; cursor: pointer; font-family: inherit; }
 .dash-chip:hover { color: var(--ink); }
@@ -4457,13 +4461,13 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 
 /* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
 .dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
-/* #req 세션 0개 첫 사용자 안내 카드 — 설명 + 따라하기/새 세션 버튼. */
-.dash-sess-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 9px; padding: 20px 18px; max-width: 360px; margin: 6px auto; }
-.dash-sess-empty-ic { width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center; background: var(--bg-punch); color: var(--blue); flex: none; }
-.dash-sess-empty-ic svg { width: 24px; height: 24px; }
-.dash-sess-empty-title { font-size: 15px; font-weight: 800; color: var(--ink); }
-.dash-sess-empty-desc { font-size: 12.5px; line-height: 1.65; color: var(--ink-sub); }
-.dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
+/* #req 세션 0개 첫 사용자 안내 카드 — 한 화면(스크롤 없이)에 들어가게 콤팩트. */
+.dash-sess-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 10px 16px 12px; max-width: 340px; margin: 0 auto; }
+.dash-sess-empty-ic { width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: var(--bg-punch); color: var(--blue); flex: none; }
+.dash-sess-empty-ic svg { width: 21px; height: 21px; }
+.dash-sess-empty-title { font-size: 14px; font-weight: 800; color: var(--ink); }
+.dash-sess-empty-desc { font-size: 12px; line-height: 1.55; color: var(--ink-sub); }
+.dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 3px; }
 /* #req 재설계 — 카드 전체가 클릭 대상(열기). 호버 시 파란 테두리 + 우측 고스트 아이콘 노출. */
 .dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); cursor: pointer; transition: border-color .12s, box-shadow .12s; }
 .dash-sess-box:hover { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
