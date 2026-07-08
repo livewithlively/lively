@@ -4309,7 +4309,7 @@ body.dash-col-resizing { cursor: col-resize; user-select: none; }
 body.dash-row-resizing { cursor: row-resize; user-select: none; }
 /* gap:0 — 행 사이 간격은 행 핸들(14px 트랙)이 담당. */
 .dash-colleft { display: grid; gap: 0; grid-template-rows: minmax(0, 1fr) 14px auto; min-height: 0; } /* 좌: 내 프로젝트 + (핸들) + 팀 공유 폴더 */
-.dash-colmid { display: grid; gap: 0; grid-template-rows: minmax(0, 7fr) 14px minmax(0, 5fr); min-height: 0; } /* 중: 최신 알림 + (핸들) + 내 AI 세션 */
+.dash-colmid { display: grid; gap: 0; grid-template-rows: minmax(0, 5fr) 14px minmax(0, 7fr); min-height: 0; } /* 중: 최신 알림(작게) + (핸들) + 내 AI 세션(크게) — JS 기본과 일치 */
 
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
