@@ -32,7 +32,10 @@ const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-
 
 function emitContext(text) {
   if (!text) return;
-  if (HARNESS === "codex") {
+  // PostToolUse 는 Claude Code 가 raw stdout 을 컨텍스트로 안 넣는다 → hookSpecificOutput.additionalContext JSON 필수
+  //  (찰스 wiki-action-router 로 검증된 계약, #637 Stage2). SessionStart·UserPromptSubmit 는 claude 가 raw stdout 을
+  //  컨텍스트로 받으므로 raw 유지(codex 만 전 이벤트 JSON 래핑). → 기존 두 이벤트 동작 무변경.
+  if (HARNESS === "codex" || EVENT === "PostToolUse") {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: EVENT, additionalContext: text } }) + "\n");
   } else {
     process.stdout.write(text + "\n");
@@ -124,9 +127,12 @@ async function main() {
     const out = runHook(hk, stdin);
     if (out && out.trim()) outputs.push(out.trim());
   }
-  // SessionStart·UserPromptSubmit 의 stdout 만 컨텍스트로 주입(둘 다 Claude 가 additionalContext 로 받는 추가적·안전 이벤트).
-  //  그 외 이벤트는 부수효과만(stdout 미전파 — 차단 불가). UserPromptSubmit 주입 = #172 관련지식 자동회수(knowledge-recall 훅).
-  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit") && outputs.length) emitContext(outputs.join("\n\n"));
+  // SessionStart·UserPromptSubmit 의 stdout 은 컨텍스트로 주입(둘 다 Claude 가 raw stdout 을 additionalContext 로 받는 안전 이벤트).
+  //  UserPromptSubmit 주입 = #172 관련지식 자동회수(knowledge-recall) + #637 도메인 라우팅(domain-recall).
+  //  PostToolUse 도 주입(#637 Stage2): 코드파일 Read 즉시 leaf 주입(domain-recall-action). emitContext 가 이벤트별 포맷
+  //   (PostToolUse 는 hookSpecificOutput.additionalContext JSON — Claude Code 계약, 찰스 검증). 실행결과 없으면 no-op.
+  //  나머지 이벤트(Stop·PreToolUse 등)는 여전히 부수효과만(stdout 미전파).
+  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.join("\n\n"));
 }
 
 main().then(() => process.exit(0)).catch(() => process.exit(0));
