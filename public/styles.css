@@ -173,6 +173,9 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 .page-head-row h1 { margin: 0; }
 /* 제목 오른쪽 액션 묶음(#367 공용 헤더) — + 추가·선택·🗑 휴지통 등. */
 .page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+/* 제목 없는 헤더(#req) — 큰 제목·부제 제거, 액션만 우측 정렬 툴바로. */
+.page-head-noheading { padding: 4px 0 0; }
+.page-head-noheading .page-head-row { justify-content: flex-end; margin-bottom: 6px; }
 .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 10px; }
 .accent { color: var(--blue); }
 .stat-row { display: flex; gap: 32px; flex-wrap: wrap; }
@@ -4158,6 +4161,23 @@ main.doc-mode { max-width: none; padding: 0; }
   border-radius: 2px; background: var(--blue); opacity: .85; }
 .kn-tree2 .kn-cat-mine .tree-label { font-weight: 700; color: var(--ink); }
 
+/* ── #req2 사이드바 가독성·★ 범례 — 위키/프로젝트 사이드바 공통(.kn-tree2 통일). ── */
+/* 우리 팀 ★ 글리프(프로젝트 사이드바 knSideItem) — 파란 별 + 은은한 파란 박스. 위키 사이드바 ★와 같은 의미. */
+.tree-glyph.tree-glyph-star { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 34%, var(--line));
+  background: color-mix(in srgb, var(--blue) 8%, var(--bg)); }
+/* space 섹션 — 섹션 사이 숨쉴 틈 + 헤더 또렷하게(가독성). 첫 섹션(전체/인덱스 바로 아래)은 위 hairline 생략. */
+.kn-tree2 .kn-space-group > summary { margin-top: 10px; padding-top: 10px; color: var(--muted-head); }
+.kn-tree2 > .tree-item + .kn-space-group > summary,
+.kn-tree2 .tree-item-sub + .kn-space-group > summary { border-top: none; margin-top: 4px; }
+/* 카테고리 행 — 살짝 여유로운 높이(빽빽함 완화). */
+.kn-tree2 .tree-item { padding-top: 7px; padding-bottom: 7px; }
+/* ▸ 펼침 셰브런 — 너무 작아 안 보이던 것 키우고 클릭 영역 확보. */
+.kn-nav-tw { width: 20px; height: 22px; font-size: 10.5px; }
+/* ★ 범례 — 사이드바 하단. '별표가 왜 붙는지'(우리 팀 소유) 한 줄 설명 — 별표 의미 불명 해소. */
+.kn-star-legend { display: flex; align-items: center; gap: 7px; margin: 12px 4px 2px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.kn-star-legend .kn-cat-star { width: auto; flex: none; }
+
 /* 검색 캡슐(#req) — 검색 입력 + 검색방식 셀렉트를 한 컨테이너로(오른쪽 도킹·hairline 구분선). */
 .kn-search-group { flex: 1; min-width: 240px; display: flex; align-items: stretch;
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
@@ -4256,8 +4276,15 @@ body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우
 .dash-col-handle:hover .dash-col-grip, .dash-col-handle:focus-visible .dash-col-grip, body.dash-col-resizing .dash-col-grip { background: var(--muted-2); height: 64px; }
 .dash-col-handle:focus-visible { outline: none; }
 body.dash-col-resizing { cursor: col-resize; user-select: none; }
-.dash-colleft { display: grid; gap: 12px; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; } /* 좌: 내 프로젝트(위, 나머지 전부) + 팀 공유 폴더(아래, 폴더 한 줄 높이만) */
-.dash-colmid { display: grid; gap: 12px; grid-template-rows: minmax(0, 7fr) minmax(0, 5fr); min-height: 0; } /* 중: 최신 알림(위) + 내 AI 세션(아래) */
+/* #req R13 박스 행 높이 핸들 — 열 핸들과 동일 UI(가로 그립·row-resize). gridTemplateRows 는 JS 가 인라인 설정. */
+.dash-row-handle { justify-self: stretch; display: flex; align-items: center; justify-content: center; cursor: row-resize; }
+.dash-row-grip { height: 3px; width: 44px; max-width: 40%; border-radius: 3px; background: var(--line); transition: background .12s, width .12s; }
+.dash-row-handle:hover .dash-row-grip, .dash-row-handle:focus-visible .dash-row-grip, body.dash-row-resizing .dash-row-grip { background: var(--muted-2); width: 72px; }
+.dash-row-handle:focus-visible { outline: none; }
+body.dash-row-resizing { cursor: row-resize; user-select: none; }
+/* gap:0 — 행 사이 간격은 행 핸들(14px 트랙)이 담당. */
+.dash-colleft { display: grid; gap: 0; grid-template-rows: minmax(0, 1fr) 14px auto; min-height: 0; } /* 좌: 내 프로젝트 + (핸들) + 팀 공유 폴더 */
+.dash-colmid { display: grid; gap: 0; grid-template-rows: minmax(0, 7fr) 14px minmax(0, 5fr); min-height: 0; } /* 중: 최신 알림 + (핸들) + 내 AI 세션 */
 
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -4415,6 +4442,12 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-badge-proj { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
 .dash-sess-open { flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 12px; background: var(--bg); cursor: pointer; font-family: inherit; }
 .dash-sess-open:hover { background: var(--bg-punch); }
+/* #req R15 세션 액션 묶음 + '⋯' 관리 메뉴 버튼(수정·삭제). */
+.dash-sess-acts { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.dash-sess-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 15px; line-height: 1; }
+.dash-sess-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.dash-pop-opt.danger .dash-pop-name { color: var(--coral-text, var(--coral)); }
+.dash-pop-opt.danger:hover { background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
 
 /* 팀 작업 로그 행 — 클릭 시 전체 작업 로그 팝업(별도 페이지 폐지). */
 .dash-row--log { cursor: pointer; }
@@ -4571,7 +4604,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
   body[data-route="dashboard"] main { padding: 14px 16px 40px; }
   .dash { height: auto; }
   .dash-zones { display: flex; flex-direction: column; gap: 12px; } /* 스택 — 인라인 grid-template-columns 무시(display:flex), 세로 간격 복원 */
-  .dash-col-handle { display: none; } /* 세로 스택에선 열 핸들 숨김 */
+  .dash-col-handle, .dash-row-handle { display: none; } /* 세로 스택에선 열·행 핸들 숨김 */
   .dash-colmid, .dash-colleft { display: flex; flex-direction: column; gap: 12px; }
   .dash-zone { min-height: 0; }
   .dash-wl { max-height: 320px; }

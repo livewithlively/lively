@@ -103,6 +103,9 @@ async function renderMyDashboard(view) {
     const colRight = zoneLog.box;
     const zonesEl = el('div', { class: 'dash-zones' }, colLeft, colMid, colRight);
     dashInitColResize(zonesEl);
+    // #req R13 — 각 열 두 박스 사이 세로 높이 핸들(내 프로젝트↔팀 공유 폴더 · 최신 알림↔내 AI 세션).
+    dashInitRowResize(colLeft, 'dash_rows_left_v1', [5, 1.5]);
+    dashInitRowResize(colMid, 'dash_rows_mid_v1', [7, 5]);
     view.replaceChildren(el('div', { class: 'dash' }, strip, zonesEl));
     document.getElementById('view').focus?.();
     // ── 위젯별 독립 로드(실패는 그 존 안에만 errorNote) ──
@@ -619,7 +622,7 @@ catch { /* 저장 실패 무시 */ } }
 // ── 위젯별 기본 표시 설정(기기별 localStorage) — 헤더 ⚙ 통일 컨트롤이 읽고/쓴다. ──
 const DASH_FOLD_VIEW_KEY = 'dash_fb_view_v1'; // 공유 폴더 브라우저 기본 뷰(icon|list)
 const DASH_SESS_FILTER_KEY = 'dash_sess_filter_v1'; // 내 AI 세션 기본 필터(all|mine|invited|myproj)
-const DASH_LOG_PERSON_KEY = 'dash_log_person_v1'; // 작업 로그 기본 인물 필터(''=전체 | author_person)
+const DASH_LOG_TYPE_KEY = 'dash_log_type_v1'; // 작업 로그 기본 유형 필터(''=전체 | feature·fix·… #req R14)
 function dashFoldView() { try {
     return localStorage.getItem(DASH_FOLD_VIEW_KEY) === 'list' ? 'list' : 'icon';
 }
@@ -641,17 +644,17 @@ function dashSaveSessFilter(v) { try {
     localStorage.setItem(DASH_SESS_FILTER_KEY, v);
 }
 catch { /* 무시 */ } }
-function dashLogPerson() { try {
-    return localStorage.getItem(DASH_LOG_PERSON_KEY) || '';
+function dashLogType() { try {
+    return localStorage.getItem(DASH_LOG_TYPE_KEY) || '';
 }
 catch {
     return '';
 } }
-function dashSaveLogPerson(v) { try {
+function dashSaveLogType(v) { try {
     if (v)
-        localStorage.setItem(DASH_LOG_PERSON_KEY, v);
+        localStorage.setItem(DASH_LOG_TYPE_KEY, v);
     else
-        localStorage.removeItem(DASH_LOG_PERSON_KEY);
+        localStorage.removeItem(DASH_LOG_TYPE_KEY);
 }
 catch { /* 무시 */ } }
 // 폴더 기본 뷰 설정 팝오버(⚙) — 브라우저 열 때 initial 뷰가 됨.
@@ -721,6 +724,59 @@ function dashInitColResize(zonesEl) {
     };
     zonesEl.insertBefore(mkHandle(0), kids[1]); // col0 | H0 | col1 ...
     zonesEl.insertBefore(mkHandle(1), kids[2]); // ... col1 | H1 | col2
+    apply();
+}
+// ── 박스 행 높이 사용자화(#req R13) — 한 열(2박스) 사이 세로 드래그 핸들 1개. 열 폭 리사이즈와 동일 UI(fr 비율·기기별 저장). ──
+function dashPair(key, def) { try {
+    const a = JSON.parse(localStorage.getItem(key) || 'null');
+    return Array.isArray(a) && a.length === 2 && a.every((n) => typeof n === 'number' && n > 0.15) ? a : def.slice();
+}
+catch {
+    return def.slice();
+} }
+function dashSavePair(key, a) { try {
+    localStorage.setItem(key, JSON.stringify(a));
+}
+catch { /* 무시 */ } }
+function dashInitRowResize(colEl, storeKey, defaults) {
+    const rows = dashPair(storeKey, defaults);
+    const HANDLE = 14, MIN_FR = 0.35;
+    const apply = () => { colEl.style.gridTemplateRows = `minmax(0,${rows[0]}fr) ${HANDLE}px minmax(0,${rows[1]}fr)`; };
+    const kids = Array.from(colEl.children); // [box0, box1]
+    const h = el('div', { class: 'dash-row-handle', role: 'separator', 'aria-orientation': 'horizontal', title: '높이 조절 (더블클릭=기본, ↑/↓ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-row-grip' }));
+    let startY = 0, a0 = 0, b0 = 0, dragging = false;
+    const onMove = (e) => {
+        if (!dragging)
+            return;
+        const rect = colEl.getBoundingClientRect();
+        const content = Math.max(1, rect.height - HANDLE);
+        const totalFr = rows[0] + rows[1];
+        const dFr = ((e.clientY - startY) / content) * totalFr;
+        let a = a0 + dFr, b = b0 - dFr;
+        if (a < MIN_FR) {
+            b -= (MIN_FR - a);
+            a = MIN_FR;
+        }
+        if (b < MIN_FR) {
+            a -= (MIN_FR - b);
+            b = MIN_FR;
+        }
+        rows[0] = a;
+        rows[1] = b;
+        apply();
+    };
+    const onUp = () => { if (!dragging)
+        return; dragging = false; document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); document.body.classList.remove('dash-row-resizing'); dashSavePair(storeKey, rows); };
+    h.addEventListener('pointerdown', (e) => { e.preventDefault(); dragging = true; startY = e.clientY; a0 = rows[0]; b0 = rows[1]; document.body.classList.add('dash-row-resizing'); document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); });
+    h.addEventListener('dblclick', () => { rows[0] = defaults[0]; rows[1] = defaults[1]; apply(); dashSavePair(storeKey, rows); });
+    h.addEventListener('keydown', (e) => { const s = e.key === 'ArrowUp' ? -0.3 : e.key === 'ArrowDown' ? 0.3 : 0; if (!s)
+        return; e.preventDefault(); const a = rows[0] + s, b = rows[1] - s; if (a >= MIN_FR && b >= MIN_FR) {
+        rows[0] = a;
+        rows[1] = b;
+        apply();
+        dashSavePair(storeKey, rows);
+    } });
+    colEl.insertBefore(h, kids[1]);
     apply();
 }
 // ── 경량 모달(중앙 오버레이) — 배경/✕/Esc 로 닫힘. 공유 폴더 전체 보기 등. ──
@@ -803,7 +859,8 @@ async function fillSessions(zone, onCount, projectsP) {
         }
         const list = el('div', { class: 'dash-sess-list' });
         for (const s of shown) {
-            const sub = [harnessLabel(s.harness), s.dir, sessTime(s.created)].filter(Boolean).join(' · ');
+            // #req R16 — 하단 회색 경로(s.dir) 제거: 태그(하네스) · 만든 시간만. 제목(라벨)은 윗줄, 카드는 2줄로 콤팩트.
+            const sub = [harnessLabel(s.harness), sessTime(s.created)].filter(Boolean).join(' · ');
             const badges = el('span', { class: 'dash-sess-badges' });
             if (s.attached)
                 badges.append(el('span', { class: 'dash-badge live', text: '접속중' }));
@@ -822,13 +879,77 @@ async function fillSessions(zone, onCount, projectsP) {
             const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' }), badges), el('div', { class: 'dash-sess-sub', title: sub, text: sub }));
             const openBtn = el('button', { class: 'dash-sess-open', type: 'button', text: '열기' });
             openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
-            list.append(el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : '') }, info, openBtn));
+            const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
+            // #req R15 — 열기 옆 '⋯' 메뉴(수정·삭제). 소유자 세션만(서버도 비소유 403 재검증).
+            if (s.owned) {
+                const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋯' });
+                moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
+                acts.append(moreBtn);
+            }
+            list.append(el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : '') }, info, acts));
         }
         zone.body.replaceChildren(list);
+    };
+    // 세션 변경(이름 수정·삭제) 후 새로고침 — base 세션 + 프로젝트 세션 재병합 후 재렌더.
+    const reloadSessions = async () => {
+        try {
+            const d = await api('/api/ui/terminal/sessions');
+            sessions = (d && d.sessions) || [];
+            const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
+            if (withSess.length) {
+                const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
+                const seen = new Set(sessions.map((x) => x.id));
+                for (const arr of arrs)
+                    for (const x of arr)
+                        if (x.owned && !seen.has(x.id)) {
+                            seen.add(x.id);
+                            sessions.push(x);
+                        }
+            }
+            onCount(sessions.filter((x) => x.attached).length);
+        }
+        catch { /* 유지 */ }
+        draw();
     };
     // 헤더 우상단 통일 컨트롤 — ⚙(기본 세션 필터) + →(터미널 딥링크).
     dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['mine', '내 것'], ['invited', '초대받음'], ['myproj', '내 프로젝트']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널 탭으로' } });
     draw();
+}
+// 세션 '⋯' 메뉴(#req R15) — 이름 수정(POST /sessions/:id {label}) · 삭제(DELETE /sessions/:id). 소유자만 노출.
+function openSessMenu(anchor, s, onChange) {
+    const panel = el('div', { class: 'dash-pop-panel' });
+    let close = () => { };
+    const item = (label, danger, fn) => {
+        const b = el('button', { class: 'dash-pop-opt' + (danger ? ' danger' : ''), type: 'button' }, el('span', { class: 'dash-pop-name', text: label }));
+        b.onclick = () => { close(); fn(); };
+        panel.append(b);
+    };
+    item('이름 수정', false, async () => {
+        const to = (prompt('세션 이름', s.label || '') || '').trim();
+        if (!to || to === s.label)
+            return;
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: to }) });
+            toast('이름을 바꿨어요');
+            onChange && onChange();
+        }
+        catch (e) {
+            toast('이름 변경 실패 — ' + (e && e.message || e), true);
+        }
+    });
+    item('삭제', true, async () => {
+        if (!confirm('세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).'))
+            return;
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
+            toast('세션을 삭제했어요');
+            onChange && onChange();
+        }
+        catch (e) {
+            toast('삭제 실패 — ' + (e && e.message || e), true);
+        }
+    });
+    close = dashPopover(anchor, panel);
 }
 // ── ③ 팀 공유 폴더 — 공유 워크스페이스 루트의 폴더. 목록형→아이콘형(#621). ──
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
@@ -1174,20 +1295,21 @@ async function fillActivity(zone) {
         const m = people.find((x) => x.author_person === pid);
         return (m && m.display_name) || pid;
     };
-    // 칩: 전체 + 활동 있는 팀원(요약 응답 순서, 과밀 방지 위해 최대 3명 — 그 외는 작업 로그 탭에서).
-    const chipPeople = people.filter((p) => p.author_person).slice(0, 3);
-    // 헤더 우상단 통일 컨트롤 — ⚙(기본 인물 필터) + ⤢(전체 작업 로그 모달).
-    const personOpts = [['', '전체'], ...chipPeople.map((p) => [p.author_person, p.display_name || p.author_person])];
-    let person = dashLogPerson(); // 저장된 기본 인물 필터(없거나 무효면 전체)
-    if (person && !personOpts.some(([k]) => k === person))
-        person = '';
-    dashCtl(zone, { gear: { title: '작업 로그 표시 설정', open: (a) => dashChoicePopover(a, '기본 인물 필터', personOpts, person, (k) => { dashSaveLogPerson(k); person = k; draw(); }) }, action: { onClick: openWorklogPopup, title: '전체 작업 로그 보기' } });
+    // #req R14 — 팀원(인물) 필터 제거 → '팀이 한 작업의 성격(유형)'으로 필터. 유형 = feature·fix·decision·docs·research·review·chore·other.
+    const TYPE_ORDER = ['feature', 'fix', 'decision', 'docs', 'research', 'review', 'chore', 'other'];
+    const typesPresent = TYPE_ORDER.filter((t) => rows.some((a) => (a.type || 'other') === t));
+    const typeOpts = [['', '전체'], ...typesPresent.map((t) => [t, DASH_ACT_LABEL[t] || t])];
+    let typeF = dashLogType(); // 저장된 기본 유형 필터(없거나 무효면 전체)
+    if (typeF && !typesPresent.includes(typeF))
+        typeF = '';
+    // 헤더 우상단 통일 컨트롤 — ⚙(기본 유형 필터) + ⤢(전체 작업 로그 모달).
+    dashCtl(zone, { gear: { title: '작업 로그 표시 설정', open: (a) => dashChoicePopover(a, '기본 유형 필터', typeOpts, typeF, (k) => { dashSaveLogType(k); typeF = k; draw(); }) }, action: { onClick: openWorklogPopup, title: '전체 작업 로그 보기' } });
     const draw = () => {
-        const shown = person ? rows.filter((a) => a.author_person === person) : rows;
+        const shown = typeF ? rows.filter((a) => (a.type || 'other') === typeF) : rows;
         zone.countEl.textContent = String(shown.length);
-        dashChips(zone.chipsEl, [['', '전체'], ...chipPeople.map((p) => [p.author_person, (p.display_name || p.author_person).slice(0, 4)])], person, (k) => { person = k; draw(); });
+        dashChips(zone.chipsEl, typeOpts, typeF, (k) => { typeF = k; draw(); });
         if (!shown.length) {
-            zone.body.replaceChildren(dashEmpty('아직 기록된 작업이 없어요.'));
+            zone.body.replaceChildren(dashEmpty(typeF ? '이 유형의 작업이 없어요.' : '아직 기록된 작업이 없어요.'));
             return;
         }
         zone.body.replaceChildren(...shown.map((a) => {
