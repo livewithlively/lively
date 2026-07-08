@@ -160,6 +160,27 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "folders", env: "GDRIVE_FOLDERS", secret: false, label: "폴더 id", hint: "이 폴더들만 (쉼표구분, 비우면 전체 Drive)" },
     ],
   },
+  // 도메인위키(#696) — 로컬 git 마크다운 미러(charles_wiki) → 지식. 자격증명 없음(로컬 경로만). 인입 시 상대 .md·[[..]]·notion URL 링크를 #/k/ 로 정규화.
+  "domain-wiki": {
+    system: "domain-wiki",
+    label: "도메인 위키 (Git Markdown)",
+    guide: {
+      intro: "로컬에 체크아웃된 마크다운 위키 repo(예: git@git.honestfund.kr:hf-dev/domain-wiki.git 의 clone)를 지식으로 인입합니다. 파일 1개=지식 1개(name=파일명 슬러그), 상대경로 .md·[[위키링크]]·노션 URL 링크는 인입 시 내부 #/k/ 링크로 자동 정규화됩니다. 자격증명 불필요 — 게이트웨이가 읽을 수 있는 로컬 경로만 지정하세요.",
+      steps: [
+        "게이트웨이 호스트에 repo 를 clone/pull (예: /srv/lively/shared/repos/domain-wiki) — 게이트웨이 프로세스가 읽을 수 있는 경로",
+        "아래 '체크아웃 경로'에 그 절대경로 저장 (content 하위 폴더가 기본 스캔 대상)",
+        "저장 후 [지금 싱크] — 매 실행 워킹트리 전량 재인입(멱등). 삭제된 파일은 아카이브로 전파",
+        "선택: 'git pull' 을 true 로 하면 싱크 전 ff-only pull 시도(자격증명 필요, 없으면 워킹트리 그대로)",
+      ],
+    },
+    fields: [
+      { key: "repo_path", env: "DOMAIN_WIKI_PATH", secret: false, required: true, label: "체크아웃 경로", hint: "로컬 repo 절대경로 (예: /srv/lively/shared/repos/domain-wiki)" },
+      { key: "content_subdir", env: "DOMAIN_WIKI_CONTENT", secret: false, label: "콘텐츠 하위폴더", hint: "스캔할 하위폴더 (기본 content)" },
+      { key: "git_pull", env: "DOMAIN_WIKI_GIT_PULL", secret: false, label: "싱크 전 git pull", hint: "true 면 ff-only pull 시도 (기본 false — 워킹트리 그대로 읽음)" },
+      { key: "base_url", env: "DOMAIN_WIKI_BASE_URL", secret: false, label: "원본 blob URL 접두", hint: "external_url 구성용 (기본 gitlab blob/main)" },
+      { key: "instance", env: "DOMAIN_WIKI_INSTANCE", secret: false, label: "Instance", hint: "repo 식별자 (기본 domain-wiki)" },
+    ],
+  },
 };
 
 // ── 해소 캐시 — system 별 프로세스당 1회 로드. ──

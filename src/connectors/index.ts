@@ -6,6 +6,7 @@ import { notionConnector } from "./notion.js";
 import { clickupConnector } from "./clickup.js";
 import { gmailConnector } from "./gmail.js";
 import { gdriveConnector } from "./gdrive.js";
+import { domainWikiConnector } from "./domain-wiki.js";
 
 export const connectors: Record<string, Connector> = {
   slack: slackConnector,
@@ -14,4 +15,5 @@ export const connectors: Record<string, Connector> = {
   clickup: clickupConnector, // 캐노니컬 진입은 run-sync.js(프로젝트 싱크+declared) — backfill 은 태스크만
   gmail: gmailConnector,     // message → source (#541, OAuth2 refresh-token)
   gdrive: gdriveConnector,   // doc → knowledge (#541, OAuth2 refresh-token)
+  "domain-wiki": domainWikiConnector, // 로컬 git md 미러 → knowledge, 링크 #/k/ 정규화 (#696)
 };

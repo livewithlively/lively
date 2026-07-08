@@ -247,6 +247,79 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
   return true;
 }
 
+// ── domain-wiki(마크다운 git 미러, #696) 전용 name-키 upsert ──────────────────────────
+//  일반 커넥터는 external 좌표(external_system,instance,id) 로 멱등하지만 domain-wiki 는 **파일 basename
+//  슬러그 = 지식 name** 이 자연 식별자다(파일 1개=주제 1개). 최초 수동이관이 이 규칙으로 name 을 부여했고
+//  external 좌표는 비었다(NULL) — 그래서 external-좌표 upsert(mirrorKnowledgeV6)로는 기존 행을 못 잡고
+//  같은 name 으로 재삽입 시 PK 충돌한다. 따라서 여기선 **ON CONFLICT (name)** 로 재싱크가 기존 행을 그대로
+//  갱신(=채택, external 좌표도 이때 부여)하고 신규만 추가한다. name(PK)=external_id(슬러그).
+//  ⚠ 보존 규칙: type(page-type)·is_wiki(핀)·parent_name·카테고리(knowledge_category)는 UPDATE 에서 건드리지
+//  않는다 — 사람이 부여한 분류/핀을 재싱크가 지우지 않게(카테고리는 이 함수가 애초에 안 씀, notion 미러와 동일).
+//  임베딩은 내용 변경 시 리셋(#669, 백필 재임베딩) — 쓰기루프 밖 유지.
+async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
+  const instance = normalizeExternalInstance(it.provenance.instance);
+  const name = externalId;                                   // 슬러그 = name = external_id
+  const title = it.title == null ? null : redactString(String(it.title));
+  const body = redactString(String(it.body ?? ""));
+  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const fields = { ...baseFields, _item_type: it.type };
+  const raw = it.raw == null ? null : redactDeep(it.raw);
+  const author = `connector:${system}`;
+  const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
+
+  // 감사 노이즈 게이트 — name 으로 기존 행 조회(제목/본문 실변경 시에만 audit).
+  const prev = await client.query(`SELECT name, title, body_md FROM knowledge WHERE name=$1`, [name]);
+  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string } | undefined;
+  const isInsert = !prevRow;
+  const contentChanged = isInsert
+    || (prevRow.title ?? null) !== (title ?? null)
+    || (prevRow.body_md ?? "") !== (body ?? "");
+
+  const r = await client.query(
+    `INSERT INTO knowledge(
+        name, title, body_md, injection, provenance, lifecycle, confidence, source,
+        external_system, external_instance, external_id, external_url,
+        occurred_at, last_synced_at, fields, raw, author, sort, updated_at, updated_by)
+      VALUES($1,$2,$3,'recalled','observed','active','observed',$4,
+             $4,$5,$6,$7,
+             $8, now(), $9::jsonb, $10::jsonb, $11, COALESCE($12,0), now(), $11)
+     ON CONFLICT (name) DO UPDATE SET
+        title=EXCLUDED.title, body_md=EXCLUDED.body_md,
+        injection='recalled', provenance='observed', confidence='observed', source=EXCLUDED.source,
+        external_system=EXCLUDED.external_system, external_instance=EXCLUDED.external_instance,
+        external_id=EXCLUDED.external_id, external_url=EXCLUDED.external_url,
+        -- 재싱크: 사람 검토상태 보존. 아카이브(삭제 전파, sweepDomainWikiArchived)돼 있던 파일이 다시 나타나면 active 복귀.
+        lifecycle=CASE WHEN knowledge.lifecycle='archived' THEN 'active' ELSE knowledge.lifecycle END,
+        occurred_at=EXCLUDED.occurred_at, last_synced_at=now(),
+        fields=EXCLUDED.fields, raw=EXCLUDED.raw, sort=COALESCE($12, knowledge.sort),
+        embedding_vector=CASE WHEN $13::boolean THEN NULL ELSE knowledge.embedding_vector END,
+        embedding_model=CASE WHEN $13::boolean THEN NULL ELSE knowledge.embedding_model END,
+        embedding_updated_at=CASE WHEN $13::boolean THEN NULL ELSE knowledge.embedding_updated_at END,
+        version=knowledge.version + 1, updated_at=now(), updated_by=EXCLUDED.updated_by
+     RETURNING name`,
+    [name, title, body, system, instance, externalId, it.provenance.external_url ?? null,
+     it.occurred_at ?? null, JSON.stringify(fields), raw == null ? null : JSON.stringify(raw),
+     author, sort, contentChanged],
+  );
+  const finalName = (r.rows[0] as { name: string }).name;
+  if (contentChanged) {
+    const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
+    const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle: "active" };
+    await auditConnector(client, "knowledge", finalName, isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
+  }
+  return true;
+}
+
+/** domain-wiki 삭제 전파 — 이번 전량 싱크에서 관측 안 된(last_synced_at<runStart) 활성 domain-wiki 지식을 아카이브.
+ *  repo 는 매 실행 전량 관측하므로 파일이 사라지면 그 행만 last_synced_at 이 안 갱신돼 걸린다. run-sync 가 호출. */
+export async function sweepDomainWikiArchived(db: pg.Pool, runStartIso: string): Promise<number> {
+  const r = await db.query(
+    `UPDATE knowledge SET lifecycle='archived', updated_at=now()
+     WHERE external_system='domain-wiki' AND lifecycle='active'
+       AND (last_synced_at IS NULL OR last_synced_at < $1) RETURNING name`, [runStartIso]);
+  return r.rowCount ?? 0;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ── PM 계층·부속 미러(#541 무손실) — 공용 해소 헬퍼 ──
 // ════════════════════════════════════════════════════════════════════════════
@@ -1311,6 +1384,8 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
   try {
     let ok = false;
     if (target === "project") ok = await mirrorProjectV6(client, it, system, externalId);
+    // domain-wiki(#696): 파일 슬러그=name 자연식별 → name-키 upsert(기존 NULL-external 행 채택). 그 외 K류는 external-좌표.
+    else if (target === "knowledge" && system === "domain-wiki") ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
     else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId);
     else if (target === "source") ok = await mirrorSourceV6(client, it, system, externalId);
     else if (target === "pm_folder") ok = await mirrorPmFolderV6(client, it, system, externalId);

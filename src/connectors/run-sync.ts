@@ -18,7 +18,7 @@ import { flushProjectEmbeds } from "../v6/connector-mirror.js"; // #624 미러 �
 import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initV6Schema } from "../v6/schema.js";
-import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived, loadNotionLedger } from "../v6/connector-mirror.js";
+import { healPmMirror, materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived, loadNotionLedger, sweepDomainWikiArchived } from "../v6/connector-mirror.js";
 import { connectors } from "./index.js";
 import { getTeam, losslessStream, getIncludedListIds } from "./clickup.js";
 import { getNotionRunStats } from "./notion.js";
@@ -154,6 +154,21 @@ async function runGenericSync(system: string): Promise<boolean> {
         "notion 부분 실패(전부 귀속) — 커서 전진 + 재시도 목록 기록(다음 run 이 해당 항목만 재수집)");
     } else {
       notionRetryIds = []; // 무실패 — 이전 재시도 목록 청산
+    }
+  }
+
+  // ── domain-wiki(#696) 후처리 — 삭제 전파 스윕(이번 전량 싱크 미관측 행 아카이브). ──
+  //  안전장치: 미러 실패 0 AND 실인입>0 일 때만 — 경로 오설정/빈 run 이 전량 아카이브하는 오탐 방지.
+  if (system === "domain-wiki") {
+    if (mirrorFailures === 0 && ingested > 0) {
+      try {
+        const archived = await sweepDomainWikiArchived(itemsPool, runStartIso);
+        logger.info({ system, ingested, archived }, "domain-wiki 후처리 완료(삭제 전파 스윕)");
+      } catch (err) {
+        logger.error({ err: (err as Error)?.message ?? String(err) }, "domain-wiki 스윕 실패(비치명 — 다음 run 수렴)");
+      }
+    } else {
+      logger.warn({ system, ingested, mirrorFailures }, "domain-wiki 스윕 생략(인입 0 또는 미러 실패 — 오탐 아카이브 방지)");
     }
   }
 
