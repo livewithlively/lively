@@ -1177,11 +1177,11 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .kn-links { margin: 4px 0 2px; }
 .kn-links-body { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 2px; }
 .kn-linkdir { display: flex; flex-direction: column; gap: 3px; }
-.kn-linkdir-head { font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.kn-linkdir-head { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
 .kn-linkrows { display: flex; flex-direction: column; }
 .kn-linkrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 6px; border-radius: 6px; text-decoration: none; color: var(--ink); }
 .kn-linkrow:hover { background: var(--bg-tint); }
-.kn-linkrow-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 1.5; }
+.kn-linkrow-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; line-height: 1.55; }
 .kn-linkrow:hover .kn-linkrow-title { color: var(--blue); }
 .kn-link-rel { flex: none; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 5px; color: var(--blue-deep); background: var(--bg-punch); letter-spacing: -.2px; }
 .kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: #FCF1EF; }
@@ -4065,14 +4065,14 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-comments { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); }
 .kn-comments-head { margin-bottom: 14px; }
 .kn-cmt-feed { display: flex; flex-direction: column; gap: 2px; }
-.kn-cmt-loading, .kn-cmt-empty { color: var(--muted-2); font-size: 13.5px; padding: 6px 2px 14px; }
+.kn-cmt-loading, .kn-cmt-empty { color: var(--muted-2); font-size: 14px; padding: 6px 2px 14px; }
 .kn-cmt-card { display: flex; gap: 10px; padding: 8px 0; }
 .kn-cmt-ava { flex: none; width: 28px; height: 28px; font-size: 12px; }
 .kn-cmt-body { flex: 1; min-width: 0; }
 .kn-cmt-meta { display: flex; align-items: baseline; gap: 8px; }
-.kn-cmt-name { font-weight: 650; font-size: 13.5px; color: var(--ink); }
-.kn-cmt-time { font-size: 12px; color: var(--muted-2); }
-.kn-cmt-text { font-size: 14px; line-height: 1.6; margin-top: 2px; word-break: break-word; }
+.kn-cmt-name { font-weight: 650; font-size: 14px; color: var(--ink); }
+.kn-cmt-time { font-size: 12.5px; color: var(--muted-2); }
+.kn-cmt-text { font-size: 15px; line-height: 1.6; margin-top: 2px; word-break: break-word; }
 .kn-cmt-foot { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
 .kn-cmt-reacts { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; position: relative; }
 .kn-cmt-like, .kn-cmt-chip, .kn-cmt-addr, .kn-cmt-replybtn {
@@ -4433,7 +4433,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 
 /* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
 .dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
-.dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.dash-sess-box { display: flex; align-items: stretch; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
 .dash-sess-box.live { border-color: color-mix(in srgb, var(--mint-deep) 40%, var(--line)); }
 .dash-sess-info { flex: 1; min-width: 0; }
 /* #req R16 — 카드 2줄 고정: 제목행(제목 ellipsis + 태그) 1줄 + 하단(태그·시간) 1줄. 배지 줄바꿈 금지. */
@@ -5040,16 +5040,17 @@ main.doc-mode .crumb-cur { color: var(--wk-ink-soft); }
 main.doc-mode .kn-doc-hr { border-top-color: var(--wk-line); }
 /* 속성 블록 — DB 덤프 톤 죽이기: 라벨 mono 소형 dim, 값 잉크, 타이트 */
 main.doc-mode .kn-props { border-left: 2px solid var(--wk-line); padding-left: 16px; margin-left: 1px; }
-main.doc-mode .kn-prop { min-height: 26px; align-items: baseline; }
-main.doc-mode .kn-prop-k { font-family: var(--wk-mono); font-size: 10.5px; letter-spacing: .3px; color: var(--wk-ink-dim);
-  text-transform: uppercase; min-width: 116px; }
-main.doc-mode .kn-prop-v { font-size: 13.5px; color: var(--wk-ink); }
-main.doc-mode .kn-props-gear, main.doc-mode .kn-props-more { font-size: 11.5px; color: var(--wk-ink-dim); }
+main.doc-mode .kn-prop { min-height: 30px; align-items: baseline; }
+/* (#req) 속성 — 라벨/값 키웠다(너무 작고 값과 크기차 심해 통일감 없던 것). mono 색인 톤은 유지하되 읽히게. */
+main.doc-mode .kn-prop-k { font-family: var(--wk-mono); font-size: 12px; letter-spacing: .2px; color: var(--wk-ink-soft);
+  text-transform: uppercase; min-width: 132px; flex-basis: 132px; }
+main.doc-mode .kn-prop-v { font-size: 14.5px; color: var(--wk-ink); }
+main.doc-mode .kn-props-gear, main.doc-mode .kn-props-more { font-size: 12.5px; color: var(--wk-ink-dim); }
 main.doc-mode .kn-props-gear:hover, main.doc-mode .kn-props-more:hover { color: var(--wk-living-ink); }
 /* 본문 섹션 헤딩 — 색 원복 요청으로 그린 틱 제거(색만 이전으로). 타이포만 유지. */
 main.doc-mode .kn-doc-md .md-h { color: var(--wk-ink); letter-spacing: -.2px; }
 /* 패널 섹션 라벨 — mono 색인 톤 */
-main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 11px; font-weight: 400; letter-spacing: .6px;
+main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 12px; font-weight: 400; letter-spacing: .5px;
   text-transform: uppercase; color: var(--wk-ink-soft); }
 main.doc-mode .kn-save-chip { font-family: var(--wk-mono); font-size: 10.5px; color: var(--wk-human-ink); letter-spacing: .3px; }
 
@@ -5184,6 +5185,10 @@ main.doc-mode .kn-home-orderreset:hover { color: var(--blue); background: var(--
 /* ── 측정폭 — 노션 기본(≈720px)에 맞춰 820→760(한글 가독 줄길이) ── */
 .kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels, .kn-comments { max-width: 760px; }
 .kn-doc-head { max-width: 760px; }
+/* (#req) 사이드바 접기(전체 화면) 시 본문을 넓혀 여백 낭비 제거 — 760 은 사이드바 있을 때의 가독폭, 접으면 그 공간을 실제로 쓴다. */
+.kn-shell.side-off .kn-doc-title, .kn-shell.side-off .kn-doc-badges, .kn-shell.side-off .kn-props-slot,
+.kn-shell.side-off .kn-doc-hr, .kn-shell.side-off .kn-doc-body, .kn-shell.side-off .kn-doc-panels,
+.kn-shell.side-off .kn-comments, .kn-shell.side-off .kn-doc-head { max-width: 1080px; }
 
 /* ── 읽기 뷰(.kn-doc-md — 문서 본문 전용) 타이포 ── */
 .kn-doc-md.md-rendered { font-size: 16px; line-height: 1.68; }
