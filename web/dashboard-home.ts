@@ -159,7 +159,13 @@ function dashZone(key, title) {
     el('div', { class: 'dash-wh' },
       el('h4', { text: title }), countEl, chipsEl, ctlEl),
     body);
+  // 칩이 실제로 넘칠 때만 우측 페이드(is-clipped) — 열 폭 리사이즈로 너비 바뀔 때도 재판정(#req '안 넘치면 안 흐리게').
+  try { new ResizeObserver(() => dashUpdateChipClip(chipsEl)).observe(chipsEl); } catch { /* 미지원 무시 */ }
   return { box, body, countEl, chipsEl, ctlEl };
+}
+// 칩 컨테이너가 넘치면 .is-clipped(우측 페이드), 아니면 해제.
+function dashUpdateChipClip(chipsEl) {
+  if (chipsEl) chipsEl.classList.toggle('is-clipped', chipsEl.scrollWidth - chipsEl.clientWidth > 1);
 }
 // 위젯 헤더 우상단 통일 컨트롤 — 모든 존 동일: [⚙ 설정](설정 있을 때) + [액션](→ 딥링크 or ⤢ 모달). 둘 다 같은 아이콘버튼(dash-wh-btn).
 //  opts = { gear?: {title, open(anchor)}, action?: {title, href? , onClick?} }  — href 있으면 딥링크(→), 없으면 모달 여는 버튼(⤢).
@@ -184,6 +190,7 @@ function dashChips(chipsEl, items, activeKey, onPick) {
     'aria-pressed': key === activeKey ? 'true' : 'false', text: label,
     onclick: () => { if (key !== activeKey) onPick(key); },
   })));
+  dashUpdateChipClip(chipsEl); // 렌더 직후 넘침 판정(칩 수 변동 반영)
 }
 function dashEmpty(text) { return el('div', { class: 'dash-empty', text }); }
 
