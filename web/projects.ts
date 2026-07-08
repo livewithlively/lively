@@ -1836,6 +1836,13 @@ function pjvStatusIconStd(status, size?) {
   if (status === 'todo') return pjvStatusIcon('active', color('todo', '#94a3b8'), 0, size);
   return pjvStatusIcon('active', color('active', '#f59e0b'), 0.5, size); // in_progress — 반 파이
 }
+// 네이티브 상태(todo|in_progress|done) → 기본 상태색(PJV_DEFAULT_STATUS_DEFS 단일 출처). 상태 그룹 헤더 pill 배경용(#670 통일감).
+//  in_progress 는 기본 def 키 'active' 로 대응. 커스텀 리스트의 pill 과 같은 표현으로 inherit/기본 리스트도 통일.
+function pjvNativeStatusColor(status) {
+  const k = status === 'in_progress' ? 'active' : status;
+  const d = PJV_DEFAULT_STATUS_DEFS.find((x) => x.key === k);
+  return (d && d.color) || '#94a3b8';
+}
 // 클릭 가능한 상태 아이콘 버튼 래퍼 — SVG 아이콘 + 투명 버튼(경계·배경 없음).
 function pjvStatusIconBtn(icon, attrs?) {
   return el('button', { class: 'pjv-status-btn', type: 'button', ...(attrs || {}) }, icon);
@@ -3376,9 +3383,12 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   const dot = statusDef ? pjvCustomStatusDot(statusDef, 'sm')
     : statusKey ? pjvStatusIconStd(meta.key, 'sm')
     : el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }); // 비상태 그룹 — 점 없이 정렬만 유지
+  // 상태 그룹 헤더 라벨 — 커스텀이든 기본(inherit)이든 같은 색 pill 로 통일(#670). 비상태 그룹(statusKey=null: 담당자·우선순위 등)만 밋밋 라벨.
   const labelEl = statusDef
     ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + statusDef.color, text: label })
-    : el('span', { class: 'pjv-tgroup-label', text: label });
+    : statusKey
+      ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + pjvNativeStatusColor(statusKey), text: label })
+      : el('span', { class: 'pjv-tgroup-label', text: label });
 
   // 그룹 전체선택 체크박스(#664) — 헤더 좌측(행 체크박스와 같은 16px 자리). 레거시 선택(select) 모드에선 스페이서 유지.
   const headCheck = () => select
