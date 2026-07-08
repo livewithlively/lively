@@ -57,6 +57,11 @@ render_service_unit                 # 유닛 템플릿 변경(예: KillMode=proc
 if [ "$OS" = linux ] && [ -x /opt/lively/libexec/box-spawn ]; then
   log "격리 인프라 리프레시(install-isolation.sh — 멱등)"
   sudo bash "$DIR/linux/install-isolation.sh" || warn "격리 인프라 리프레시 경고 — 수동: sudo bash deploy/linux/install-isolation.sh"
+  # 이미 프로비저닝된 격리 멤버의 훅 러너(run-custom 등)를 이 번들로 리프레시 — 멤버 kit 은 첫 세션에만
+  #  설치돼(ensureMemberOsUser 빠른경로) 업뎃 후 stale → 러너 변경(예: #637 PostToolUse 전파)이 멤버에 안 가던
+  #  갭 해소. 파일만·소유권유지·멱등·best-effort(토큰·세션·settings 무영향).
+  log "격리 멤버 훅 러너 리프레시(refresh-member-kits.sh — 멱등)"
+  sudo bash "$DIR/refresh-member-kits.sh" || warn "멤버 훅 러너 리프레시 경고 — 수동: sudo bash deploy/refresh-member-kits.sh"
 fi
 if [ "$OS" = linux ]; then
   sudo systemctl restart context-ontology-gateway
