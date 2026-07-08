@@ -355,11 +355,11 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         else
             bar.append(el('span', { class: 'pjv-ov-bar-seg empty' }));
         card.append(bar);
-        // 개요 카드 클릭 = 선택(아래 목록 필터) + 그 리스트 프로젝트 팝업(#req R10 — 프로젝트 탭식 내용).
+        // 개요 카드 클릭 = 선택(아래 목록을 그 리스트만으로 필터). 팝업은 중복이라 제거(#670) — 아래 dash-projlist 가 이미 선택 리스트를 그대로 보여줌.
         const pick = () => { if (selectedListId !== listId) {
             selectedListId = listId;
             draw();
-        } openListProjectsModal(listId, listById, reloadAll); };
+        } };
         card.addEventListener('click', pick);
         card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();

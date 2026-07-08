@@ -309,8 +309,8 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     const seg = (n, cls) => { if (n > 0) { const s = el('span', { class: 'pjv-ov-bar-seg ' + cls }); s.style.flex = String(n); bar.append(s); } };
     if (b.total) { seg(b.todo, 'todo'); seg(b.prog, 'prog'); seg(b.done, 'done'); } else bar.append(el('span', { class: 'pjv-ov-bar-seg empty' }));
     card.append(bar);
-    // 개요 카드 클릭 = 선택(아래 목록 필터) + 그 리스트 프로젝트 팝업(#req R10 — 프로젝트 탭식 내용).
-    const pick = () => { if (selectedListId !== listId) { selectedListId = listId; draw(); } openListProjectsModal(listId, listById, reloadAll); };
+    // 개요 카드 클릭 = 선택(아래 목록을 그 리스트만으로 필터). 팝업은 중복이라 제거(#670) — 아래 dash-projlist 가 이미 선택 리스트를 그대로 보여줌.
+    const pick = () => { if (selectedListId !== listId) { selectedListId = listId; draw(); } };
     card.addEventListener('click', pick);
     card.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
     // 드래그 순서 변경 — 대시보드-로컬(localStorage) 저장, 프로젝트 탭 리스트 순서와는 독립.
@@ -707,11 +707,17 @@ function dashInitColResize(zonesEl) {
 // ── 박스 행 높이 사용자화(#req R13) — 한 열(2박스) 사이 세로 드래그 핸들 1개. 열 폭 리사이즈와 동일 UI(fr 비율·기기별 저장). ──
 function dashPair(key, def): number[] { try { const a = JSON.parse(localStorage.getItem(key) || 'null'); return Array.isArray(a) && a.length === 2 && a.every((n) => typeof n === 'number' && n > 0.15) ? a : def.slice(); } catch { return def.slice(); } }
 function dashSavePair(key, a) { try { localStorage.setItem(key, JSON.stringify(a)); } catch { /* 무시 */ } }
-function dashInitRowResize(colEl, storeKey, defaults) {
+//  autoDefault=true — 저장값이 없으면 CSS 기본(예: 1fr/auto = 아래칸 내용맞춤·스크롤 없음)을 유지하고, 첫 드래그 때 비로소 fr 로 전환.
+//  (팀 공유 폴더처럼 '한 줄 내용'인 칸이 고정 fr 로 잘려 스크롤바가 뜨던 문제 방지 — #req.)
+function dashInitRowResize(colEl, storeKey, defaults, autoDefault?) {
+  let saved: string | null = null; try { saved = localStorage.getItem(storeKey); } catch { /* */ }
   const rows = dashPair(storeKey, defaults);
   const HANDLE = 14, MIN_FR = 0.35;
+  let frMode = !!saved || !autoDefault; // false = CSS 기본(auto) 유지 상태
   const apply = () => { colEl.style.gridTemplateRows = `minmax(0,${rows[0]}fr) ${HANDLE}px minmax(0,${rows[1]}fr)`; };
-  const kids = Array.from(colEl.children); // [box0, box1]
+  const kids = Array.from(colEl.children); // [box0, box1] (핸들 삽입 전 스냅샷)
+  // 현재(auto) 픽셀 높이를 fr 비율로 캡처 → 드래그 시작점(레이아웃 안 튀게).
+  const captureFr = () => { const a = Math.max(1, (kids[0] as any).offsetHeight || 100); const b = Math.max(1, (kids[1] as any).offsetHeight || 60); const s = 12 / (a + b); rows[0] = a * s; rows[1] = b * s; frMode = true; };
   const h = el('div', { class: 'dash-row-handle', role: 'separator', 'aria-orientation': 'horizontal', title: '높이 조절 (더블클릭=기본, ↑/↓ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-row-grip' }));
   let startY = 0, a0 = 0, b0 = 0, dragging = false;
   const onMove = (e) => {
@@ -726,11 +732,11 @@ function dashInitRowResize(colEl, storeKey, defaults) {
     rows[0] = a; rows[1] = b; apply();
   };
   const onUp = () => { if (!dragging) return; dragging = false; document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); document.body.classList.remove('dash-row-resizing'); dashSavePair(storeKey, rows); };
-  h.addEventListener('pointerdown', (e: any) => { e.preventDefault(); dragging = true; startY = e.clientY; a0 = rows[0]; b0 = rows[1]; document.body.classList.add('dash-row-resizing'); document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); });
-  h.addEventListener('dblclick', () => { rows[0] = defaults[0]; rows[1] = defaults[1]; apply(); dashSavePair(storeKey, rows); });
-  h.addEventListener('keydown', (e: any) => { const s = e.key === 'ArrowUp' ? -0.3 : e.key === 'ArrowDown' ? 0.3 : 0; if (!s) return; e.preventDefault(); const a = rows[0] + s, b = rows[1] - s; if (a >= MIN_FR && b >= MIN_FR) { rows[0] = a; rows[1] = b; apply(); dashSavePair(storeKey, rows); } });
+  h.addEventListener('pointerdown', (e: any) => { e.preventDefault(); if (!frMode) captureFr(); dragging = true; startY = e.clientY; a0 = rows[0]; b0 = rows[1]; document.body.classList.add('dash-row-resizing'); document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); apply(); });
+  h.addEventListener('dblclick', () => { try { localStorage.removeItem(storeKey); } catch { /* */ } rows[0] = defaults[0]; rows[1] = defaults[1]; if (autoDefault) { frMode = false; colEl.style.gridTemplateRows = ''; } else apply(); });
+  h.addEventListener('keydown', (e: any) => { const s = e.key === 'ArrowUp' ? -0.3 : e.key === 'ArrowDown' ? 0.3 : 0; if (!s) return; e.preventDefault(); if (!frMode) captureFr(); const a = rows[0] + s, b = rows[1] - s; if (a >= MIN_FR && b >= MIN_FR) { rows[0] = a; rows[1] = b; apply(); dashSavePair(storeKey, rows); } });
   colEl.insertBefore(h, kids[1]);
-  apply();
+  if (frMode) apply(); // 저장값 있거나 non-auto → 즉시 fr. auto 기본이면 CSS(1fr/auto) 그대로.
 }
 // ── 경량 모달(중앙 오버레이) — 배경/✕/Esc 로 닫힘. 공유 폴더 전체 보기 등. ──
 function dashModal(title, content, wide?) {
