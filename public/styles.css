@@ -4816,6 +4816,17 @@ main.doc-mode .kn-home-all { border: none; background: none; cursor: pointer; fo
 main.doc-mode .kn-home-all:hover { color: var(--blue); background: var(--bg-tint); }
 main.doc-mode .kn-home-list { margin-top: 6px; }
 
+/* ── #657h2 위키 홈 — 우리 팀 우선 그룹(사이드바 ★ 그룹과 같은 어휘). 라벨이 그리드를 이분해
+     '팀 카테고리를 먼저 보여주고 있다'는 사실을 명시한다(★=오너십 표시, 접근제한 아님). ── */
+main.doc-mode .kn-home-grouplabel { display: flex; align-items: center; gap: 6px; margin: 16px 2px 0;
+  font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--muted-head); }
+main.doc-mode .kn-home-grouplabel-rest { margin-top: 22px; }
+main.doc-mode .kn-home-grouplabel + .kn-home-cats { margin-top: 8px; }
+main.doc-mode .kn-home-groupstar { color: var(--wk-living); font-size: 11px; line-height: 1; }
+main.doc-mode .kn-home-groupcount { font-family: var(--wk-mono); font-size: 10.5px; font-weight: 400;
+  color: var(--wk-ink-dim); font-variant-numeric: tabular-nums; }
+main.doc-mode .kn-hcard-star { color: var(--wk-living); }
+
 /* ── #657n 토글·컬럼·블록 메뉴(노션 패리티) ── */
 .be-toggle-row { display: flex; align-items: flex-start; gap: 2px; }
 .be-toggle-caret { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px;
