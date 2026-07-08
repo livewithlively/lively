@@ -267,7 +267,8 @@ async function renderKnowledgeSpace(view, _space, params) {
     catBox.hidden = false;
     const actions = el('div', { class: 'kn-cathead-actions' });
     if (hasScope('memory')) {
-      actions.append(el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new?category=' + encodeURIComponent(cat.key),
+      // 대문 액션은 전부 조용한 고스트 — 화면당 하나의 채운 primary 는 상단 헤더의 '＋ 새 페이지'(#657r).
+      actions.append(el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new?category=' + encodeURIComponent(cat.key),
         title: '이 카테고리에 새 페이지를 작성합니다', text: '＋ 새 페이지' }));
       actions.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 폴더',
         title: '이 카테고리에 폴더(문서를 묶는 트리 그룹)를 만듭니다',
