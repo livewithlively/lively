@@ -5,7 +5,7 @@
 //  권한: 대문 본문·아이콘·커버 = memory(지식 편집과 동일 — 팀 전체가 꾸밀 수 있게, 노션과 같은 개방성),
 //        제목/설명 rename = context(카테고리 소유 필드 — category_update).
 //  순환 import 금지: core/admin/block-editor/page-decor 만 import(knowledge.ts 가 이 모듈을 쓴다).
-import { api, el, renderMarkdown, toast } from './core.js';
+import { api, el, renderMarkdown, state, toast } from './core.js';
 import { hasScope } from './admin.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, defaultCoverFor, openCoverPicker, openEmojiPicker } from './page-decor.js';
@@ -199,10 +199,13 @@ async function buildCategoryHome(slot: HTMLElement, cat: any, opts: any = {}) {
 
   // ── 조립 — mono 카탈로그 라인(공간 · 카테고리)이 대문의 '색인' 정체성을 준다(#657r). ──
   const SPACE_KO: Record<string, string> = { business: '사업', product: '제품', system: '시스템' };
+  // 우리 팀 담당이면 브레드크럼 옆 '우리 팀' 칩(#req) — 사이드바·위키 홈 카드와 같은 어휘(pjv-side-cat).
+  const catIsMine = (((state.me as any)?.team_category_ids) || []).map((x: any) => String(x)).includes(String(cat.id));
   const metaEl = el('div', { class: 'cath-meta' },
     el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }),
     el('span', { class: 'cath-meta-sep', 'aria-hidden': 'true', text: '/' }),
-    el('span', { class: 'cath-meta-key', text: cat.key }));
+    el('span', { class: 'cath-meta-key', text: cat.key }),
+    catIsMine ? el('span', { class: 'pjv-side-cat kn-team-chip', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
   const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
   slot.append(
     el('div', { class: 'cath' },
