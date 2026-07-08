@@ -3282,6 +3282,10 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 사람 아바타 단일 경로(personFace) — 호출부 클래스(pjv-ava 등)에 얹혀 이미지 클립 + 채움(#473 후속). */
 .pv-face { overflow: hidden; }
 .pv-face > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 터미널 세션 프로필 아바타(.proj-avatar)는 예외 — 세션수 뱃지(.proj-avatar-badge)가 원 밖 모서리(top/right -2px)에
+   걸치는데 pv-face 의 overflow:hidden 원형 클립이 뱃지를 잘라 안 보였다(#req). 클립을 풀고 사진은 img 자체를 원형으로. */
+.proj-avatar.pv-face { overflow: visible; }
+.proj-avatar.pv-face > img { border-radius: 50%; }
 .prof-ava-lg { width: 72px; height: 72px; font-size: 27px; box-shadow: 0 2px 5px rgba(21, 35, 59, .15); }
 /* 내 프로필 모달 — 아바타 행(미리보기 + 올리기/기본으로). */
 .prof-ava-row { display: flex; align-items: center; gap: 16px; }
