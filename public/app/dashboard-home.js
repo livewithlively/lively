@@ -980,16 +980,20 @@ function dashInitRowResize(colEl, storeKey, defaults, autoDefault) {
         apply(); // 저장값 있거나 non-auto → 즉시 fr. auto 기본이면 CSS(1fr/auto) 그대로.
 }
 // ── 경량 모달(중앙 오버레이) — 배경/✕/Esc 로 닫힘. 공유 폴더 전체 보기 등. ──
-function dashModal(title, content, wide) {
+// opts.persistent: 바깥 클릭으로 안 닫힘(✕·Esc 만) — 파일탐색기처럼 오래 머무는 창의 오조작 방지.
+// opts.resizable: 모달 우하단 드래그로 크기 조절(공유 폴더/미리보기 창을 키워 크게 보기).
+function dashModal(title, content, wide, opts) {
     document.querySelectorAll('.dash-modal-ov').forEach((n) => n.remove());
     const closeBtn = el('button', { class: 'dash-modal-x', type: 'button', 'aria-label': '닫기', text: '✕' });
-    const box = el('div', { class: 'dash-modal' + (wide ? ' dash-modal--wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, el('div', { class: 'dash-modal-head' }, el('strong', { text: title }), closeBtn), el('div', { class: 'dash-modal-body' }, content));
+    const cls = 'dash-modal' + (wide ? ' dash-modal--wide' : '') + (opts && opts.resizable ? ' dash-modal--resizable' : '');
+    const box = el('div', { class: cls, role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, el('div', { class: 'dash-modal-head' }, el('strong', { text: title }), closeBtn), el('div', { class: 'dash-modal-body' }, content));
     const ov = el('div', { class: 'dash-modal-ov' }, box);
     const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape')
         close(); };
-    ov.addEventListener('mousedown', (e) => { if (e.target === ov)
-        close(); });
+    if (!(opts && opts.persistent))
+        ov.addEventListener('mousedown', (e) => { if (e.target === ov)
+            close(); });
     closeBtn.onclick = close;
     document.addEventListener('keydown', onKey, true);
     document.body.append(ov);
@@ -1188,7 +1192,7 @@ function dashSessionEmpty(cfg, reloadSessions) {
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
 async function fillFolders(zone) {
     // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
-    const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true);
+    const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true, { persistent: true, resizable: true });
     let dirs = [];
     // 뷰(아이콘|목록)를 ⚙ 설정(dashFoldView, 전체보기와 공유)에 맞춰 렌더 — #670: 목록으로 바꾸면 대시보드 위젯도 목록으로.
     const paint = () => {
@@ -1339,7 +1343,7 @@ function dashFolderBrowser(root, startPath) {
     const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
     // 파일 미리보기 — 클릭 시 다운로드 대신 타입별 렌더(이미지·PDF·텍스트/코드[json 정렬])를 브라우저 안(제자리)에 표시.
     //  browse/file 은 download 없이 인라인 서빙(2MB 미리보기 상한) → 이미지·PDF 는 blob(타입 재지정), 텍스트는 text.
-    const showPreview = async (rel, name) => {
+    const showPreview = async (rel, name, size) => {
         const ext = dashFileExt(name);
         const viewUrl = '/api/ui/terminal/browse/file?' + qp(rel);
         const dlUrl = '/api/ui/terminal/browse/file?download=1&' + qp(rel);
@@ -1362,8 +1366,25 @@ function dashFolderBrowser(root, startPath) {
                 if (!res.ok)
                     return fail(big(res) ? 'PDF가 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
                 const frame = el('iframe', { class: 'dash-fp-pdf', title: name });
-                frame.src = URL.createObjectURL(new Blob([await res.blob()], { type: 'application/pdf' }));
+                // #req 내장 PDF 뷰어: 썸네일 사이드바(navpanes) 끄고 폭맞춤(FitH)으로 크게. 툴바는 유지(다운로드·인쇄).
+                frame.src = URL.createObjectURL(new Blob([await res.blob()], { type: 'application/pdf' })) + '#navpanes=0&toolbar=1&view=FitH';
                 stage.replaceChildren(frame);
+            }
+            else if (DASH_PREVIEW_TABLE.has(ext)) { // csv·tsv → 표
+                const res = await dashAuthFetch(viewUrl);
+                if (!res.ok)
+                    return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
+                stage.replaceChildren(dashTablePreview(await res.text(), ext === 'tsv' ? '\t' : ','));
+            }
+            else if (DASH_AUDIO_MIME[ext] || DASH_VIDEO_MIME[ext]) { // 음성·영상 — download=1 로 2MB 상한 우회(미디어는 큼), 메모리 보호 상한.
+                if (size && size > DASH_MEDIA_MAX)
+                    return fail('파일이 커서(' + fmtSize(size) + ') 미리보기 대신 다운로드하세요.');
+                const res = await dashAuthFetch(dlUrl);
+                if (!res.ok)
+                    return fail('미리보기를 불러오지 못했어요 (' + res.status + ')');
+                const isVid = !!DASH_VIDEO_MIME[ext];
+                const url = URL.createObjectURL(new Blob([await res.blob()], { type: isVid ? DASH_VIDEO_MIME[ext] : DASH_AUDIO_MIME[ext] }));
+                stage.replaceChildren(el(isVid ? 'video' : 'audio', { class: isVid ? 'dash-fp-video' : 'dash-fp-audio', src: url, controls: 'true', preload: 'metadata', playsinline: 'true' }));
             }
             else if (DASH_PREVIEW_TEXT.includes(ext) || !ext) {
                 const res = await dashAuthFetch(viewUrl);
@@ -1407,7 +1428,7 @@ function dashFolderBrowser(root, startPath) {
         load();
     }
     else
-        showPreview(relOf(it.name), it.name); };
+        showPreview(relOf(it.name), it.name, it.size); };
     // 아이콘(카드) 뷰 항목 — 맥 데스크탑 아이콘 톤.
     const fbCard = (it) => {
         const isDir = it.type === 'dir';
@@ -1483,10 +1504,85 @@ function dashFolderBrowser(root, startPath) {
 const DASH_TOKEN_KEY = 'lively_ui_token';
 function dashAuthFetch(url) { const t = localStorage.getItem(DASH_TOKEN_KEY); return fetch(url, { headers: t ? { Authorization: 'Bearer ' + t } : {} }); }
 function dashFileExt(name) { const i = String(name || '').lastIndexOf('.'); return i >= 0 ? String(name).slice(i + 1).toLowerCase() : ''; }
-const DASH_IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' };
+const DASH_IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif' };
 const DASH_PREVIEW_IMG = Object.keys(DASH_IMG_MIME);
-const DASH_PREVIEW_TEXT = ['txt', 'md', 'markdown', 'json', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash', 'zsh', 'html', 'htm', 'css', 'scss', 'sass', 'yaml', 'yml', 'toml', 'ini', 'conf', 'csv', 'tsv', 'xml', 'sql', 'java', 'go', 'rs', 'c', 'cc', 'cpp', 'h', 'hpp', 'rb', 'php', 'lua', 'r', 'kt', 'swift', 'log', 'env', 'gitignore', 'dockerfile', 'makefile'];
+// #req 음성·영상 미리보기(<audio>/<video>) — download=1 로 2MB 상한 우회, DASH_MEDIA_MAX 로 메모리 보호.
+const DASH_AUDIO_MIME = { mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', flac: 'audio/flac', opus: 'audio/opus' };
+const DASH_VIDEO_MIME = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg', mkv: 'video/x-matroska' };
+const DASH_PREVIEW_TABLE = new Set(['csv', 'tsv']); // #req 표로 렌더
+const DASH_MEDIA_MAX = 80 * 1024 * 1024;
+const DASH_PREVIEW_TEXT = ['txt', 'md', 'markdown', 'json', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash', 'zsh', 'html', 'htm', 'css', 'scss', 'sass', 'yaml', 'yml', 'toml', 'ini', 'conf', 'xml', 'sql', 'java', 'go', 'rs', 'c', 'cc', 'cpp', 'h', 'hpp', 'rb', 'php', 'lua', 'r', 'kt', 'swift', 'log', 'env', 'gitignore', 'dockerfile', 'makefile'];
 const DASH_PREVIEW_CODE = new Set(['json', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash', 'zsh', 'html', 'htm', 'css', 'scss', 'sass', 'yaml', 'yml', 'toml', 'ini', 'conf', 'xml', 'sql', 'java', 'go', 'rs', 'c', 'cc', 'cpp', 'h', 'hpp', 'rb', 'php', 'lua', 'r', 'kt', 'swift', 'dockerfile', 'makefile']);
+// CSV/TSV → 표. 따옴표로 감싼 필드(구분자·개행·"" 이스케이프) 처리. 앞부분만 렌더(행·열 상한)해 대용량 보호.
+function dashParseDelimited(text, delim) {
+    const rows = [];
+    let row = [], field = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inQ) {
+            if (c === '"') {
+                if (text[i + 1] === '"') {
+                    field += '"';
+                    i++;
+                }
+                else
+                    inQ = false;
+            }
+            else
+                field += c;
+        }
+        else if (c === '"')
+            inQ = true;
+        else if (c === delim) {
+            row.push(field);
+            field = '';
+        }
+        else if (c === '\n') {
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = '';
+            if (rows.length > 3000)
+                break;
+        }
+        else if (c !== '\r')
+            field += c;
+    }
+    if (field !== '' || row.length) {
+        row.push(field);
+        rows.push(row);
+    }
+    return rows;
+}
+function dashTablePreview(text, delim) {
+    const wrap = el('div', { class: 'dash-fp-tablewrap' });
+    const rows = dashParseDelimited(text, delim);
+    if (!rows.length) {
+        wrap.append(el('div', { class: 'dash-fp-msg' }, '빈 파일이에요.'));
+        return wrap;
+    }
+    const MAXR = 500, MAXC = 60;
+    const head = rows[0].slice(0, MAXC);
+    const table = el('table', { class: 'dash-fp-table' });
+    const htr = el('tr', {}, el('th', { class: 'dash-fp-cn' }, '#'));
+    for (const cell of head)
+        htr.append(el('th', {}, cell));
+    table.append(el('thead', {}, htr));
+    const tbody = el('tbody');
+    const body = rows.slice(1, 1 + MAXR);
+    body.forEach((r, i) => {
+        const tr = el('tr', {}, el('td', { class: 'dash-fp-cn' }, String(i + 1)));
+        for (let c = 0; c < head.length; c++)
+            tr.append(el('td', { title: r[c] != null ? r[c] : '' }, r[c] != null ? r[c] : ''));
+        tbody.append(tr);
+    });
+    table.append(tbody);
+    wrap.append(table);
+    const extra = (rows.length - 1) - body.length;
+    if (extra > 0)
+        wrap.append(el('div', { class: 'dash-fp-tablemore' }, '… 그리고 ' + extra.toLocaleString() + '개 행 더 — 전체는 다운로드해 확인하세요.'));
+    return wrap;
+}
 // 파일 타입 아이콘 — 프로젝트 상세 공유 폴더 docIcon 동형(#619 인라인 원칙: projects.ts 안 건드림). 흰 페이지+접힘+색 띠+라벨.
 const DASH_FILE_META = {
     pdf: ['PDF', 'ft-pdf'], doc: ['DOC', 'ft-word'], docx: ['DOC', 'ft-word'], hwp: ['HWP', 'ft-word'], hwpx: ['HWP', 'ft-word'],
