@@ -80,7 +80,7 @@ function assertNoForbiddenFunctions(ast: unknown): void {
 //   PII(person*/org_member)는 여기 넣지 않는다 — 고객이 등록한 제품 DB 에 동명 테이블이 있으면 정당한 조회를
 //   막게 되므로. self 소스에서의 PII 차단은 allow-list(콘텐츠 미포함)로 처리한다.
 const DENIED_TABLES = new Set([
-  "auth_token", "org_content_audit", "org_hook", "org_tool", "org_harness_asset", "org_mcp_server", "org_db_source",
+  "auth_token", "org_content_audit", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref", "org_mcp_server", "org_db_source",
   "member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log",
 ]);
 

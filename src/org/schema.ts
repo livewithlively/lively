@@ -220,6 +220,8 @@ export async function initOrgSchema(): Promise<void> {
       ALTER TABLE org_hook ADD CONSTRAINT org_hook_event_chk CHECK (event IN
         ('SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PostToolUse','Stop','SubagentStop','Notification','PreCompact','PostCompact'));
     END $$;
+    -- per-member 타깃(#699): NULL/빈=전원, 배열=그 멤버만. org_harness_asset.target_members 와 대칭. 비파괴 ADD COLUMN.
+    ALTER TABLE org_hook ADD COLUMN IF NOT EXISTS target_members JSONB;
   `);
 
   // ── org_tool — 조직 정의 MCP 툴. kind='http_proxy'(사내 API 래핑, 게이트웨이가 /mcp 에 동적 노출 → 재설치 ──
@@ -293,6 +295,27 @@ export async function initOrgSchema(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_harness_chk') THEN
         ALTER TABLE org_harness_asset ADD CONSTRAINT org_harness_asset_harness_chk CHECK (harness IN ('claude','codex','openclaw','all'));
+      END IF;
+    END $$;
+  `);
+
+  // ── org_asset_pref — per-member 개인 오버라이드(#699). 관리자 정책(enabled+target_members) 위에 멤버가 본인 것만 ──
+  //  on(opt-in)/off(opt-out)/기본복귀(행 삭제)로 조정. harness_asset·org_hook 공통(target_kind 로 구분). 유효 가시성 =
+  //  enabled AND harness매치 AND (pref 있으면 그 state, 없으면 target_members NULL/빈 OR member∈target_members).
+  //  enabled=false 는 마스터킬(pref 무시). 내부 테이블 → firewall DENIED_TABLES 등록(db_query 차단).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_asset_pref(
+      target_kind TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      member_id TEXT NOT NULL,
+      state BOOLEAN NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT,
+      PRIMARY KEY(target_kind, ref_id, member_id));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_asset_pref'::regclass AND conname='org_asset_pref_kind_chk') THEN
+        ALTER TABLE org_asset_pref ADD CONSTRAINT org_asset_pref_kind_chk CHECK (target_kind IN ('harness_asset','org_hook'));
       END IF;
     END $$;
   `);

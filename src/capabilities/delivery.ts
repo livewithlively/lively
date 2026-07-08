@@ -31,6 +31,7 @@ import {
   getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
+  listAssetPrefs, setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
@@ -41,6 +42,7 @@ import {
 } from "../org/store.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
+import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
 import { getTeam as getClickUpTeam, type ClickUpTeam } from "../connectors/clickup.js";
 import { resetConnectorConfigCache } from "../connectors/config.js";
@@ -198,6 +200,13 @@ function parseTargetMembers(raw: unknown): string[] | null | undefined {
   return out.length ? out : null; // 빈 배열 = 전원(null)
 }
 
+// #699: 개인 오버라이드 대상 종류 검증(harness_asset|org_hook).
+function assertPrefKind(raw: unknown): AssetPrefKind {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (s !== "harness_asset" && s !== "org_hook") throw new HttpError(400, "target_kind 는 harness_asset|org_hook 이어야 합니다");
+  return s;
+}
+
 // 자산 frontmatter — 평탄 키:값 맵만(스킬/에이전트/커맨드 YAML frontmatter 로 materialize). 값=문자열·불리언·숫자·문자열배열.
 //  중첩객체 금지(YAML 주입·복잡도 차단). 키 32개·키길이 64 상한. description 은 별도 컬럼이므로 여기선 부가필드(when_to_use·tools·model·allowed-tools·argument-hint 등)용.
 function parseAssetFrontmatter(raw: unknown): Record<string, unknown> {
@@ -261,6 +270,7 @@ export const deliveryCapabilities: Capability[] = [
       // runtime 권한자: 커스텀 훅·툴 목록 + 빌트인 목록 + 툴 정책(allowlist — 시크릿 아님).
       const orgHooks = isRuntime ? await listOrgHooks() : [];
       const orgHarnessAssets = isRuntime ? await listOrgHarnessAssets() : [];
+      const orgAssetPrefs = isRuntime ? await listAssetPrefs() : []; // #699: 멤버 개인 오버라이드(관리탭 '일괄 조회')
       const tools = isRuntime ? await listTools() : [];
       const rc = isRuntime ? (runtimeConfig ?? await getRuntimeConfig()) : null;
       const toolPolicy = isRuntime ? { allowed_auth_envs: rc!.allowed_auth_envs, url_allowlist: rc!.url_allowlist } : null;
@@ -270,7 +280,7 @@ export const deliveryCapabilities: Capability[] = [
         writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, // 세션종료 너지 기본값 — 웹 편집기가 표시·되돌리기에 사용
         members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
-        orgHooks, orgHarnessAssets, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
+        orgHooks, orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }, true),
@@ -594,6 +604,45 @@ export const deliveryCapabilities: Capability[] = [
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
       const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
       return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+    }),
+
+  // ── 내 스킬·훅 셀프 설정 (#699) — 인증된 멤버가 본인에게 배포되는 스킬·훅을 보고 본인 것만 opt-in/out. admin 불요(principal 강제). ──
+  //  관리자 정책(enabled+target_members)이 기본값, 멤버는 본인 오버라이드로 조정. 자산은 시크릿이 아니라 발견/배포 대상 — 본인 opt-in 은 자기 세션에만 영향(안전).
+  restRead("me_assets_get", "내 스킬·훅 조회",
+    "현재 로그인한 구성원에게 배포되는 스킬·훅 목록과, 관리자 기본값 대비 본인 오버라이드 상태(effective/override/byDefault)를 반환한다 — 멤버 셀프 설정 화면용.",
+    [{ method: "GET", paths: ["/api/ui/me/assets"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const [assets, hooks, prefs] = await Promise.all([listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId })]);
+      const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
+      const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
+        const key = `${kind}:${id}`;
+        const override = prefMap.has(key) ? (prefMap.get(key) as boolean) : null; // null=오버라이드 없음(관리자 기본값)
+        const byDefault = targetsMember(targetMembers, userId);
+        // enabled 은 이미 필터됨(아래 .filter) → 유효성 = 오버라이드 우선, 없으면 기본값. store SQL CASE 와 동일 규칙.
+        return { override, byDefault, effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
+      };
+      return {
+        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, paired_hook_id: a.paired_hook_id, ...meta("harness_asset", a.id, a.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, matcher: h.matcher, note: h.note, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+      };
+    }),
+  restRead("me_asset_pref_set", "내 스킬·훅 설정",
+    "현재 로그인한 구성원이 본인의 스킬/훅 개인 오버라이드를 on/off(state) 하거나 해제(clear=true=관리자 기본값 복귀)한다. member_id 는 principal 강제(타인 설정 불가). 없는/비활성 자산엔 불가(고아 방지).",
+    [{ method: "POST", paths: ["/api/ui/me/asset-pref"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 설정할 수 없습니다 — 관리자에게 문의하세요");
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      const exists = targetKind === "org_hook" ? await getOrgHook(refId) : await getOrgHarnessAsset(refId);
+      if (!exists || exists.enabled === false) throw new HttpError(404, "대상 스킬/훅이 없거나 비활성입니다");
+      const wc = { actor: actorOf(user), source: "web-self" };
+      if (input.clear === true) { await clearAssetPref(targetKind, refId, userId, wc); return { ok: true, cleared: true }; }
+      const pref = await setAssetPref(targetKind, refId, userId, Boolean(input.state), wc);
+      return { pref };
     }),
 
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
@@ -1103,11 +1152,13 @@ export const deliveryCapabilities: Capability[] = [
         ? null : str(input.matcher, "matcher", 500);
       const timeout = input.timeout_sec === undefined ? 10 : Number(input.timeout_sec);
       if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
+      const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
       const hook = await upsertOrgHook({
         id,
         label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
         note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, wctx(user, ctx));
@@ -1132,13 +1183,13 @@ export const deliveryCapabilities: Capability[] = [
   // ── 런너 fetch — 멤버 런너(run-custom.mjs)가 매 세션 호출. 인증된 멤버면 OK(scope null). ──
   // 멤버 머신이 그 훅을 '실행'하므로 source 를 받는 게 정상(관리 목록 org_hooks 와 달리 redact 안 함).
   restRead("org_runner_hooks", "런너 훅 fetch",
-    "멤버 런너가 현재 활성 커스텀 훅(소스+content_hash)을 받아 실행한다. harness/event 로 필터.",
+    "멤버 런너가 현재 활성 커스텀 훅(소스+content_hash)을 받아 실행한다. harness/event 로 필터. #699: user.userId 로 per-member 유효성(개인 오버라이드·target_members) 적용.",
     [{ method: "GET", paths: ["/api/ui/org/runner/hooks"],
       parse: (req) => ({ harness: req.query.harness, event: req.query.event }) }],
-    async (input: Record<string, unknown>) => {
+    async (input: Record<string, unknown>, user: LivelyUser) => {
       const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
       const event = typeof input.event === "string" && input.event ? input.event : undefined;
-      let hooks = await listEnabledHooks(harness);
+      let hooks = await listEnabledHooks(harness, user?.userId || null);
       if (event) hooks = hooks.filter((h) => h.event === event);
       return { hooks: hooks.map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
@@ -1274,6 +1325,31 @@ export const deliveryCapabilities: Capability[] = [
         id: a.id, kind: a.kind, harness: a.harness, description: a.description,
         body: a.body, frontmatter: a.frontmatter, content_hash: a.content_hash, paired_hook_id: a.paired_hook_id,
       })) };
+    }),
+
+  // ── per-member 개인 오버라이드 (#699) — 관리자 일괄 조회·변경(runtime). 유효성=정책(enabled+target_members) 위 오버라이드. ──
+  //  관리자는 대량 배포를 target_members(자산/훅 편집)로, 개별 예외/멤버 opt-in-out 은 아래 오버라이드로. 멤버 본인은 me/asset-pref.
+  restRuntime("org_asset_prefs", "자산 개인 오버라이드 목록",
+    "하네스 자산·훅의 멤버별 개인 오버라이드(on/off) 전체 — 관리탭 일괄 조회용. target_kind/ref_id/member_id 로 필터.",
+    [{ method: "GET", paths: ["/api/ui/org/asset-prefs"],
+      parse: (req) => ({ target_kind: req.query.target_kind, ref_id: req.query.ref_id, member_id: req.query.member_id }) }],
+    async (input: Record<string, unknown>) => {
+      const filter: { target_kind?: AssetPrefKind; ref_id?: string; member_id?: string } = {};
+      if (typeof input.target_kind === "string" && input.target_kind) filter.target_kind = assertPrefKind(input.target_kind);
+      if (typeof input.ref_id === "string" && input.ref_id) filter.ref_id = input.ref_id.trim();
+      if (typeof input.member_id === "string" && input.member_id) filter.member_id = input.member_id.trim().toLowerCase();
+      return { prefs: await listAssetPrefs(filter) };
+    }),
+  restRuntime("org_asset_pref_set", "자산 개인 오버라이드 설정",
+    "특정 멤버의 자산/훅 개인 오버라이드를 설정(state=true=강제 on/false=강제 off)하거나 해제(clear=true=관리자 정책 기본값 복귀)한다.",
+    [{ method: "POST", paths: ["/api/ui/org/asset-pref"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      const memberId = slug(input.member_id, "member_id");
+      if (input.clear === true) { await clearAssetPref(targetKind, refId, memberId, wctx(user, ctx)); return { ok: true, cleared: true }; }
+      const pref = await setAssetPref(targetKind, refId, memberId, Boolean(input.state), wctx(user, ctx));
+      return { pref };
     }),
 
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════

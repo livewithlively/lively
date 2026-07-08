@@ -3242,11 +3242,12 @@ function customHookEditor(detail, data) {
     listCol.append(el('div', { class: 'mini-row' + (h.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.hookSel = h.id; renderAdminDetail(detail, 'custom-hooks', data); } },
       el('div', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
-      el('div', { class: 'mini-meta', text: h.event + (h.matcher ? ' · ' + h.matcher : '') + ' · ' + (h.harness || 'all') })));
+      el('div', { class: 'mini-meta', text: h.event + (h.matcher ? ' · ' + h.matcher : '') + ' · ' + (h.harness || 'all')
+        + (h.target_members && h.target_members.length ? ' · 지정 ' + h.target_members.length + '명' : '') })));
   }
   const right = el('div', {});
   const editing = sel === '__new__'
-    ? { id: '', label: '', harness: 'all', event: 'PostToolUse', matcher: '', source_code: '', timeout_sec: 10, note: '', enabled: true }
+    ? { id: '', label: '', harness: 'all', event: 'PostToolUse', matcher: '', source_code: '', timeout_sec: 10, note: '', target_members: null, enabled: true }
     : hooks.find((h) => h.id === sel);
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
@@ -3265,6 +3266,7 @@ function hookForm(root, h, data, detail, isNew) {
   const codeTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '#!/usr/bin/env node\n// 훅 입력은 stdin(JSON), 응답은 stdout / exit code' });
   codeTa.value = h.source_code || '';
   const timeoutIn = el('input', { type: 'number', value: String(h.timeout_sec || 10), min: '1', max: '120' });
+  const targetIn = el('input', { type: 'text', value: (h.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
   const enChk = el('input', { type: 'checkbox' }); enChk.checked = h.enabled !== false;
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
@@ -3273,7 +3275,8 @@ function hookForm(root, h, data, detail, isNew) {
     if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
     saveBtn.disabled = true;
     try {
-      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, enabled: enChk.checked };
+      const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: targets.length ? targets : null, enabled: enChk.checked };
       await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.hookSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'custom-hooks', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
@@ -3291,6 +3294,7 @@ function hookForm(root, h, data, detail, isNew) {
     field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn),
     field('코드 (Node.js)', codeTa),
     field('타임아웃(초, 1~120)', timeoutIn),
+    field('대상 구성원(비우면 전원 · 구성원이 본인 것 opt-in/out 가능)', targetIn),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     actions);
 }
@@ -4025,6 +4029,9 @@ async function openMyProfile() {
     field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
       el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))),
+    field('내 스킬·훅 (#699)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '내 스킬·훅 설정', onclick: () => openMyAssets() }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요.' }))),
     field('역할', roleIn),
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI가 나를 부르는 말)', addressIn),
@@ -4071,6 +4078,59 @@ async function openMyProfile() {
       back.remove();
     } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
   });
+}
+
+// ── 내 스킬·훅 셀프 설정(#699) — 멤버가 본인에게 배포되는 스킬·훅을 기본(관리자)/켜기/끄기로 조정. me/* 엔드포인트, principal 강제. ──
+async function openMyAssets() {
+  const KIND_LABEL: Record<string, string> = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
+  const back = overlay('내 스킬·훅',
+    el('p', { class: 'admin-hint', style: 'margin:0 0 12px',
+      text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요. “기본”은 관리자 설정을 따르고, “켜기/끄기”는 본인 세션에만 강제 적용됩니다(다른 구성원엔 영향 없음). 다음 세션부터 반영돼요.' }));
+  const bodyBox = el('div', {});
+  (back.querySelector('.ov-box') as HTMLElement).append(bodyBox);
+
+  const reload = async () => {
+    bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    let data: any;
+    try { data = await api('/api/ui/me/assets'); }
+    catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
+
+    const mkRow = (targetKind: string, it: any, kindLabel: string) => {
+      const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
+      const effPill = el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' });
+      const seg = el('div', { style: 'display:flex; gap:4px; flex-shrink:0;' });
+      const opt = (v: string, label: string) => {
+        const b = el('button', { type: 'button', class: 'btn btn-sm ' + (stateNow === v ? 'btn-primary' : 'btn-ghost'), text: label });
+        b.addEventListener('click', async () => {
+          try {
+            const b2 = { target_kind: targetKind, ref_id: it.id } as any;
+            if (v === 'default') b2.clear = true; else b2.state = (v === 'on');
+            await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b2) });
+            await reload();
+          } catch (e: any) { toast((e && e.message) || '실패', true); }
+        });
+        return b;
+      };
+      seg.append(opt('default', '기본' + (it.byDefault ? '(켬)' : '(끔)')), opt('on', '켜기'), opt('off', '끄기'));
+      const desc = String(it.description || it.note || '');
+      return el('div', { class: 'mini-row', style: 'display:flex; align-items:center; gap:12px;' },
+        el('div', { style: 'flex:1; min-width:0;' },
+          el('div', { class: 'mini-title' }, el('span', { text: it.label || it.id }), effPill),
+          el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') })),
+        seg);
+    };
+
+    const rows: any[] = [];
+    const skills = (data.skills || []); const hooks = (data.hooks || []);
+    rows.push(el('h4', { style: 'margin:14px 0 6px', text: '스킬 · 에이전트 · 커맨드' }));
+    if (skills.length) skills.forEach((s: any) => rows.push(mkRow('harness_asset', s, KIND_LABEL[s.kind] || s.kind)));
+    else rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
+    rows.push(el('h4', { style: 'margin:16px 0 6px', text: '커스텀 훅' }));
+    if (hooks.length) hooks.forEach((h: any) => rows.push(mkRow('org_hook', h, h.event)));
+    else rows.push(el('p', { class: 'admin-hint', text: '배포된 훅이 없어요.' }));
+    bodyBox.replaceChildren(...rows);
+  };
+  reload();
 }
 
 function overlay(title, ...content) {

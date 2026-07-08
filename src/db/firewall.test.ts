@@ -61,6 +61,8 @@ const rejectsP = (name: string, sql: string, pol: SourcePolicy, re?: RegExp): vo
 ok("isSystemDeniedTable: 내부 테이블 true / 일반 false", () => {
   assert.equal(isSystemDeniedTable("Auth_Token"), true);
   assert.equal(isSystemDeniedTable("org_hook"), true);
+  assert.equal(isSystemDeniedTable("org_harness_asset"), true);
+  assert.equal(isSystemDeniedTable("org_asset_pref"), true); // #699 멤버 오버라이드(내부 테이블)
   assert.equal(isSystemDeniedTable("activity"), false);
 });
 rejects("시스템 테이블은 정책 없어도 차단", "SELECT * FROM auth_token", /Blocked table/);
@@ -84,7 +86,7 @@ rejectsP("self: org_member 차단", "SELECT email FROM org_member", selfPolicy()
 rejectsP("self: 시크릿 auth_token 차단(백스톱)", "SELECT * FROM auth_token", selfPolicy(), /Blocked table/);
 ok("self allow-list: 시크릿/PII 미포함 회귀 가드", () => {
   const banned = ["auth_token", "member_credential", "git_credential", "org_connector", "web_session",
-    "org_mcp_server", "org_hook", "org_tool", "org_db_source", "person", "person_identity", "org_member",
+    "org_mcp_server", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref", "org_db_source", "person", "person_identity", "org_member",
     "mcp_call_log", "org_content_audit"];
   for (const b of banned) assert.equal(ITEMS_CONTENT_TABLES.includes(b), false, `allow-list 에 ${b} 있으면 안 됨`);
 });

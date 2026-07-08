@@ -125,7 +125,7 @@ async function audit(
 //  before/after 는 저장 시 이미 redactDeep(시크릿 마스킹)된 스냅샷 — 조회는 admin 전용(delivery.ts org_audit_list).
 export const ADMIN_AUDIT_ENTITIES = [
   "org_member", "auth_token", "org_profile", "org_section",
-  "org_runtime_config", "org_connector", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset",
+  "org_runtime_config", "org_connector", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref",
   "org_db_source", "org_db_table_policy", "org_db_column_mask",
 ] as const;
 
@@ -1209,6 +1209,7 @@ export interface OrgHook {
   source_code: string;
   timeout_sec: number;
   note: string | null;
+  target_members: string[] | null; // #699: NULL/빈=전원, 배열=그 멤버만(org_harness_asset 와 대칭)
   enabled: boolean;
   sort: number;
   version: number;
@@ -1219,6 +1220,7 @@ export interface OrgHook {
 }
 
 function mapHook(row: Record<string, unknown>): OrgHook {
+  const tm = row.target_members;
   return {
     id: row.id as string,
     label: (row.label as string) ?? null,
@@ -1228,6 +1230,7 @@ function mapHook(row: Record<string, unknown>): OrgHook {
     source_code: (row.source_code as string) ?? "",
     timeout_sec: (row.timeout_sec as number) ?? 10,
     note: (row.note as string) ?? null,
+    target_members: Array.isArray(tm) ? (tm as string[]) : null,
     enabled: row.enabled !== false,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -1238,19 +1241,28 @@ function mapHook(row: Record<string, unknown>): OrgHook {
   };
 }
 
-const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, target_members, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+const HOOK_COLS_Q = HOOK_COLS.split(", ").map((c) => "h." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 export async function listOrgHooks(): Promise<OrgHook[]> {
   const r = await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook ORDER BY sort, id`);
   return r.rows.map(mapHook);
 }
 
-// 런너 fetch 용 — enabled 훅만. harness 지정 시 그 하네스 또는 'all' 만.
-export async function listEnabledHooks(harness?: string): Promise<OrgHook[]> {
-  const r = harness
-    ? await itemsPool.query(
-        `SELECT ${HOOK_COLS} FROM org_hook WHERE enabled=true AND (harness=$1 OR harness='all') ORDER BY sort, id`, [harness])
-    : await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook WHERE enabled=true ORDER BY sort, id`);
+// 런너 fetch 용 — enabled 훅만. harness 지정 시 그 하네스 또는 'all' 만. memberId 지정 시 per-member 유효성
+//  적용(#699): 개인 오버라이드(org_asset_pref) 있으면 그 state, 없으면 target_members(NULL/빈=전원). enabled=false=마스터킬.
+export async function listEnabledHooks(harness?: string, memberId?: string | null): Promise<OrgHook[]> {
+  const r = await itemsPool.query(
+    `SELECT ${HOOK_COLS_Q} FROM org_hook h
+       LEFT JOIN org_asset_pref p ON p.target_kind='org_hook' AND p.ref_id=h.id AND p.member_id=$2
+      WHERE h.enabled=true
+        AND ($1::text IS NULL OR h.harness=$1 OR h.harness='all')
+        AND (CASE WHEN p.member_id IS NOT NULL THEN p.state
+                  ELSE (h.target_members IS NULL OR jsonb_array_length(h.target_members)=0
+                        OR ($2::text IS NOT NULL AND h.target_members @> to_jsonb($2::text))) END)
+      ORDER BY h.sort, h.id`,
+    [harness ?? null, memberId ?? null],
+  );
   return r.rows.map(mapHook);
 }
 
@@ -1268,6 +1280,7 @@ export interface OrgHookInput {
   source_code?: string;
   timeout_sec?: number;
   note?: string | null;
+  target_members?: string[] | null; // #699: undefined=보존, null/빈=전원, 배열=지정
   enabled?: boolean;
   sort?: number;
 }
@@ -1279,18 +1292,20 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
   if (!event) throw new Error("event 필수"); // delivery 가 먼저 검증하지만 store 계층 방어
   const sourceCode = h.source_code ?? before?.source_code ?? "";
   const contentHash = sha256(sourceCode);
+  const targetMembers = h.target_members === undefined ? (before?.target_members ?? null) : h.target_members;
   await itemsPool.query(
-    `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,now(),$13)
+    `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,target_members,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$14,$9,$10,1,$11,$12,now(),$13)
      ON CONFLICT (id) DO UPDATE SET
        label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, matcher=EXCLUDED.matcher,
        source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note,
-       enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,
+       target_members=EXCLUDED.target_members, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,
        version=org_hook.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [h.id, h.label ?? before?.label ?? null, harness, event, h.matcher ?? before?.matcher ?? null,
      sourceCode, h.timeout_sec ?? before?.timeout_sec ?? 10, h.note ?? before?.note ?? null,
      h.enabled ?? before?.enabled ?? true, h.sort ?? before?.sort ?? 0, contentHash,
-     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null],
+     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null,
+     targetMembers === null ? null : JSON.stringify(targetMembers)],
   );
   const after = await getOrgHook(h.id);
   await audit("org_hook", h.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
@@ -1505,6 +1520,7 @@ function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
 
 const ASSET_COLS =
   "id, kind, label, harness, description, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+const ASSET_COLS_Q = ASSET_COLS.split(", ").map((c) => "a." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 // content_hash — materialize 결과에 영향 주는 필드만 정규화 해시(클라 변경감지=재작성 skip). 관리메타(label·sort·enabled)는 제외.
 function assetContentHash(a: { kind: string; harness: string; description: string; body: string; frontmatter: Record<string, unknown> }): string {
@@ -1518,17 +1534,20 @@ export async function listOrgHarnessAssets(): Promise<OrgHarnessAsset[]> {
   return r.rows.map(mapAsset);
 }
 
-// materializer fetch 용 — enabled 자산만. harness(그 하네스 또는 'all'), kind 옵션, memberId 로 per-member 타깃팅.
-//  target_members: NULL/빈=전원. 지정 시 memberId 가 그 목록에 있어야(익명/미지 멤버는 타깃 자산에서 제외 — 안전 기본).
+// materializer fetch 용 — enabled 자산만. harness(그 하네스 또는 'all'), kind 옵션, memberId 로 per-member 유효성.
+//  #699: 개인 오버라이드(org_asset_pref) 있으면 그 state, 없으면 target_members(NULL/빈=전원, 지정 시 memberId 포함 —
+//  익명/미지 멤버는 타깃 자산에서 제외 = 안전 기본). enabled=false 는 마스터킬(오버라이드 무시).
 export async function listEnabledAssets(harness?: string, kind?: string, memberId?: string | null): Promise<OrgHarnessAsset[]> {
   const r = await itemsPool.query(
-    `SELECT ${ASSET_COLS} FROM org_harness_asset
-      WHERE enabled=true
-        AND ($1::text IS NULL OR harness=$1 OR harness='all')
-        AND ($2::text IS NULL OR kind=$2)
-        AND (target_members IS NULL OR jsonb_array_length(target_members)=0
-             OR ($3::text IS NOT NULL AND target_members @> to_jsonb($3::text)))
-      ORDER BY kind, sort, id`,
+    `SELECT ${ASSET_COLS_Q} FROM org_harness_asset a
+       LEFT JOIN org_asset_pref p ON p.target_kind='harness_asset' AND p.ref_id=a.id AND p.member_id=$3
+      WHERE a.enabled=true
+        AND ($1::text IS NULL OR a.harness=$1 OR a.harness='all')
+        AND ($2::text IS NULL OR a.kind=$2)
+        AND (CASE WHEN p.member_id IS NOT NULL THEN p.state
+                  ELSE (a.target_members IS NULL OR jsonb_array_length(a.target_members)=0
+                        OR ($3::text IS NOT NULL AND a.target_members @> to_jsonb($3::text))) END)
+      ORDER BY a.kind, a.sort, a.id`,
     [harness ?? null, kind ?? null, memberId ?? null],
   );
   return r.rows.map(mapAsset);
@@ -1586,6 +1605,70 @@ export async function removeOrgHarnessAsset(id: string, ctx: WriteCtx = {}): Pro
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_harness_asset WHERE id=$1`, [id]);
   await audit("org_harness_asset", id, "delete", before, null, ctx.actor, ctx.source, ctx);
+}
+
+// ════════ per-member 개인 오버라이드 — org_asset_pref (#699) ════════
+//  관리자 정책(enabled+target_members) 위에 얹는 멤버별 on/off. 유효성 병합은 listEnabledHooks/listEnabledAssets 참조.
+//  target_kind='harness_asset'|'org_hook'. 행 없음=관리자 기본값 사용, state=true=강제 on(opt-in), false=강제 off(opt-out).
+export type AssetPrefKind = "harness_asset" | "org_hook";
+export interface OrgAssetPref {
+  target_kind: AssetPrefKind;
+  ref_id: string;
+  member_id: string;
+  state: boolean;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+const PREF_COLS = "target_kind, ref_id, member_id, state, updated_at, updated_by";
+function mapPref(row: Record<string, unknown>): OrgAssetPref {
+  return {
+    target_kind: row.target_kind as AssetPrefKind,
+    ref_id: row.ref_id as string,
+    member_id: row.member_id as string,
+    state: row.state === true,
+    updated_at: (row.updated_at as string) ?? null,
+    updated_by: (row.updated_by as string) ?? null,
+  };
+}
+
+export async function getAssetPref(target_kind: AssetPrefKind, ref_id: string, member_id: string): Promise<OrgAssetPref | null> {
+  const r = await itemsPool.query(`SELECT ${PREF_COLS} FROM org_asset_pref WHERE target_kind=$1 AND ref_id=$2 AND member_id=$3`, [target_kind, ref_id, member_id]);
+  return r.rows[0] ? mapPref(r.rows[0]) : null;
+}
+
+// 오버라이드 목록(관리자 '일괄 조회' / 멤버 본인분). 필터 옵션 전부 AND.
+export async function listAssetPrefs(filter: { target_kind?: AssetPrefKind; ref_id?: string; member_id?: string } = {}): Promise<OrgAssetPref[]> {
+  const r = await itemsPool.query(
+    `SELECT ${PREF_COLS} FROM org_asset_pref
+      WHERE ($1::text IS NULL OR target_kind=$1)
+        AND ($2::text IS NULL OR ref_id=$2)
+        AND ($3::text IS NULL OR member_id=$3)
+      ORDER BY target_kind, ref_id, member_id`,
+    [filter.target_kind ?? null, filter.ref_id ?? null, filter.member_id ?? null],
+  );
+  return r.rows.map(mapPref);
+}
+
+export async function setAssetPref(target_kind: AssetPrefKind, ref_id: string, member_id: string, state: boolean, ctx: WriteCtx = {}): Promise<OrgAssetPref> {
+  const before = await getAssetPref(target_kind, ref_id, member_id);
+  await itemsPool.query(
+    `INSERT INTO org_asset_pref(target_kind, ref_id, member_id, state, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,now(),$5)
+     ON CONFLICT (target_kind, ref_id, member_id) DO UPDATE SET
+       state=EXCLUDED.state, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [target_kind, ref_id, member_id, state, ctx.actor ?? null],
+  );
+  const after = await getAssetPref(target_kind, ref_id, member_id);
+  await audit("org_asset_pref", `${target_kind}:${ref_id}:${member_id}`, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
+  return after as OrgAssetPref;
+}
+
+// 기본값 복귀(오버라이드 제거).
+export async function clearAssetPref(target_kind: AssetPrefKind, ref_id: string, member_id: string, ctx: WriteCtx = {}): Promise<void> {
+  const before = await getAssetPref(target_kind, ref_id, member_id);
+  if (!before) return;
+  await itemsPool.query(`DELETE FROM org_asset_pref WHERE target_kind=$1 AND ref_id=$2 AND member_id=$3`, [target_kind, ref_id, member_id]);
+  await audit("org_asset_pref", `${target_kind}:${ref_id}:${member_id}`, "delete", before, null, ctx.actor, ctx.source, ctx);
 }
 
 
