@@ -4591,10 +4591,14 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 
 /* ③ 팀 공유 폴더 — 한 줄 가로 스트립. #req 세로 압축(아이콘 하단 여백↓·'폴더' 캡션 생략) + 우측 peek 페이드('더 있음' 암시).
    ⚠ 스크롤바는 '항상 숨김'(#670): 호버로 나타나면 세로 공간을 먹어 박스 높이가 출렁였음. 스크롤은 트랙패드·휠, 전체는 '전체 보기' 팝업으로. */
-.dash-fold-grid { padding: 4px 2px; overflow-x: auto; scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
-.dash-fold-grid::-webkit-scrollbar { display: none; }
+/* #req 가로 스크롤바 — 평소 숨김, hover 시 얇게 노출. (mask 는 크롬에서 스크롤바를 가려 제거.) */
+.dash-fold-grid { padding: 4px 2px; overflow-x: auto; scrollbar-width: none; scrollbar-color: transparent transparent; }
+.dash-fold-grid:hover { scrollbar-width: thin; scrollbar-color: var(--muted-3) transparent; }
+.dash-fold-grid::-webkit-scrollbar { height: 8px; }
+.dash-fold-grid::-webkit-scrollbar-track { background: transparent; }
+.dash-fold-grid::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+.dash-fold-grid:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
+.dash-fold-grid:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
 .dash-fold-grid .proj-file-card { padding: 6px 6px 4px; gap: 4px; cursor: default; }
 .dash-fold-grid .proj-file-card:hover { background: transparent; }
 .dash-fold-grid .proj-file-card-ic { height: 54px; }

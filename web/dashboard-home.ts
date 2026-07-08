@@ -1514,13 +1514,18 @@ function openProjRowMenu(anchor, p, onChanged) {
 async function openProjTasksPopover(anchor, p) {
   const panel = el('div', { class: 'dash-pop-panel dash-listpop' });
   panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { title: p.name, text: p.name }), el('span', { class: 'dash-pop-sub', text: '태스크' })));
+  const mode = dashTaskCountMode();
+  panel.querySelector('.dash-pop-sub')!.textContent = mode === 'active' ? '진행 중 태스크' : '태스크';
   const box = el('div', { class: 'dash-listpop-body' }); box.append(skeleton('불러오는 중'));
   panel.append(box);
   dashPopover(anchor, panel);
   try {
     const d = await api('/api/ui/v6/projects/' + p.id);
-    const tasks = (d && d.tasks) || [];
-    if (!tasks.length) { box.replaceChildren(el('div', { class: 'dash-pop-desc', text: '태스크가 없어요.' })); return; }
+    // ⚠ GET /projects/:id 는 { project: {...tasks} } 로 감싸 반환 — d.tasks 가 아니라 d.project.tasks (이게 '2개인데 없어요' 버그 원인).
+    const isTaskDone = (t) => t.status === 'done' || t.status_category === 'done' || t.status_category === 'closed';
+    let tasks = (d && (d.project ? d.project.tasks : d.tasks)) || [];
+    if (mode === 'active') tasks = tasks.filter((t) => !isTaskDone(t)); // 칩(진행 중만)과 일치 — 할 일도 active 라 포함
+    if (!tasks.length) { box.replaceChildren(el('div', { class: 'dash-pop-desc', text: mode === 'active' ? '진행 중인 태스크가 없어요.' : '태스크가 없어요.' })); return; }
     box.replaceChildren(...tasks.map((t) => el('a', { class: 'dash-listpop-row', href: '#/projects2/p/' + p.id, title: t.name || '' },
       el('span', { class: 'dash-listpop-dot', style: 'background:' + dashTaskDot(t) }),
       el('span', { class: 'dash-listpop-nm', text: t.name || '(제목 없음)' }))));
