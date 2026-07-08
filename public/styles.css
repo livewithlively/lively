@@ -4630,6 +4630,20 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .kn-side-kbd { margin-left: auto; font-size: 10.5px; color: var(--muted-2);
   border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: var(--bg); }
 
+/* (#req) 사이드바 분류 검색창 — '카테고리' 헤더 아래. 프로젝트 탭 .pjv-side-search 와 같은 형태(통일). */
+.kn-side > .eyebrow { margin-bottom: 8px; }
+.kn-side-search-box { display: flex; align-items: center; gap: 6px; margin: 0 2px 10px; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); transition: border-color .12s, box-shadow .12s; }
+.kn-side-search-box:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
+.kn-side-search-box .kn-side-search-ic { flex: none; font-size: 12px; color: var(--muted-2); line-height: 1; }
+.kn-side-search-input { flex: 1 1 auto; min-width: 0; border: none; background: none; outline: none;
+  font-size: 13px; font-family: inherit; color: var(--ink); padding: 0; }
+.kn-side-search-input::placeholder { color: var(--muted-2); }
+.kn-side-search-clear { flex: none; display: none; width: 18px; height: 18px; align-items: center; justify-content: center;
+  border: none; background: var(--bg-tint-2); color: var(--muted); cursor: pointer; border-radius: 50%; font-size: 13px; line-height: 1; padding: 0; }
+.kn-side-search-clear:hover { background: var(--line); color: var(--ink); }
+.kn-side-search-box.has-q .kn-side-search-clear { display: inline-flex; }
+
 /* ── 빠른 검색(⌘K) 오버레이 ── */
 .qk-back { position: fixed; inset: 0; background: rgba(13, 22, 40, .32); z-index: 1400;
   display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh;

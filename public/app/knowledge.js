@@ -289,12 +289,49 @@ async function renderKnowledgeSpace(view, _space, params) {
     catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
     // #551 페이지 트리(외부 미러) — 카테고리 아래 별도 섹션. 비동기 로드(없으면 숨김 유지).
     const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
+    // (#req) 사이드바 분류 검색 — 프로젝트 탭(폴더·리스트 검색) 동형. '카테고리' 헤더 맨 위 → 그 아래 검색창 → 트리.
+    //  트리를 즉시 필터(분류 이름 부분일치, 대소문자 무시) — 매칭 없는 space 섹션은 숨김. 전문 지식검색은 ⌘K/상단 필터.
+    let knSideQ = '';
+    function applySideFilter() {
+        const q = knSideQ.trim().toLowerCase();
+        nav.querySelectorAll('.kn-space-group').forEach((grp) => {
+            let vis = 0;
+            grp.querySelectorAll('.kn-nav-catwrap').forEach((w) => {
+                const name = (w.querySelector('.tree-label')?.textContent || '').toLowerCase();
+                const m = !q || name.includes(q);
+                w.hidden = !m;
+                if (m)
+                    vis++;
+            });
+            grp.hidden = !!q && vis === 0;
+        });
+        const legend = nav.querySelector('.kn-star-legend');
+        if (legend)
+            legend.hidden = !!q;
+        const anyVis = !q || Array.from(nav.querySelectorAll('.kn-nav-catwrap')).some((w) => !w.hidden);
+        const note = nav.querySelector('.kn-side-noresult');
+        if (q && !anyVis) {
+            if (!note)
+                nav.append(el('div', { class: 'kn-side-noresult kn-nav-note', text: '일치하는 분류 없음' }));
+        }
+        else if (note)
+            note.remove();
+    }
+    function knSideSearchBox() {
+        const input = el('input', { class: 'kn-side-search-input', type: 'text', placeholder: '분류 검색', 'aria-label': '분류 검색', value: knSideQ });
+        const clear = el('button', { class: 'kn-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
+        const box = el('div', { class: 'kn-side-search-box' + (knSideQ ? ' has-q' : ''), title: '전체 지식 검색은 ⌘K' }, el('span', { class: 'kn-side-search-ic', 'aria-hidden': 'true', text: '🔍' }), input, clear);
+        input.addEventListener('input', () => { knSideQ = input.value; box.classList.toggle('has-q', !!knSideQ.trim()); applySideFilter(); });
+        clear.addEventListener('click', () => { knSideQ = ''; input.value = ''; box.classList.remove('has-q'); applySideFilter(); input.focus(); });
+        return box;
+    }
     function buildSide() {
         // 사이드바 선택값 = 인덱스면 센티넬, 아니면 카테고리 id. opts.indexed 로 '전체' 하위에 인덱스(핀) 항목 노출(지식 탭 전용, #336).
-        //  (#592) 지식탭 전용 트리 빌더 — 카테고리 ▸ 펼침(지식 인라인)·항목 클릭=피크. buildSpacesNav(프로젝트 탭 공유)는 불변.
         const selKey = f.indexed ? KN_INDEXED : f.category;
         buildKnowledgeNav(nav, bySpace, selKey, myIds, { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }) });
-        side.replaceChildren(knSideSearchBtn(), el('div', { class: 'eyebrow', text: '카테고리' }), nav, mirrorBox);
+        // 헤더(카테고리) 맨 위 → 검색창 → 트리(#req, 프로젝트 탭 사이드바와 통일).
+        side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), knSideSearchBox(), nav, mirrorBox);
+        applySideFilter(); // 재빌드 후에도 필터 유지
     }
     buildSide();
     loadMirrorTreeInto(mirrorBox);
