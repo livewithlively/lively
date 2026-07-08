@@ -529,9 +529,10 @@ function openTermSettings() {
 //  ⑤ 실행 설정(선택) → ⑥ 초대(선택) → ⑦ [생성하기] 클릭 → 🎉 완료.
 //  ① 새 세션·⑦ 생성하기는 advanceOn:'click' — 실제 버튼을 눌러야만 진행되며(코치마크에 [이전]/[다음]
 //  없이 ✕ 닫기만), 나머지 정보 단계는 [다음 →]으로 넘어간다.
-function startTerminalTour() {
+// firstStep — 있으면 ① 단계를 이걸로 대체(대시보드 등 다른 진입점의 '새 세션' 버튼 위치·문구에 맞춤). 없으면 터미널 기본.
+function startTerminalTour(firstStep?) {
   startTour([
-    {
+    firstStep || {
       target: '[data-tour="new-session"]',
       title: '① 새 세션 만들기',
       body: [el('p', { class: 'tour-p' }, '오른쪽 위 파란 ', el('b', { text: '[+ 새 세션]' }), ' 버튼을 눌러 주세요. 세션 만들기 창이 열립니다.')],

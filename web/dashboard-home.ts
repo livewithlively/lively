@@ -877,6 +877,16 @@ function openSessMenu(anchor, s, onChange) {
   });
   close = dashPopover(anchor, panel);
 }
+// #req 따라하기 ① 단계 — 대시보드 맥락에 맞춘 문구·앵커. (②~⑦은 openTermCreateForm 폼이 동일해 그대로 재사용.)
+//  이 카드의 [+ 새 세션]([data-tour="new-session"])을 가리키고, 클릭하면 폼이 대시보드 위로 떠 다음 단계로 이어짐.
+function dashTourStep1() {
+  return {
+    target: '[data-tour="new-session"]',
+    title: '① 새 세션 만들기',
+    body: [el('p', { class: 'tour-p' }, '바로 옆 ', el('b', { text: '[+ 새 세션]' }), ' 을 눌러 주세요 — 세션 만들기 창이 이 대시보드 위에 바로 열려요.')],
+    placement: 'bottom', advanceOn: 'click',
+  };
+}
 // #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작(따라하기/새 세션). 팝업·투어 모두 대시보드에서.
 function dashSessionEmpty(cfg, reloadSessions) {
   const startNew = () => { if (cfg) openTermCreateForm(cfg, null, () => reloadSessions && reloadSessions()); else location.hash = '#/terminal'; };
@@ -885,8 +895,8 @@ function dashSessionEmpty(cfg, reloadSessions) {
     el('div', { class: 'dash-sess-empty-title', text: 'AI 세션으로 바로 시작해 보세요' }),
     el('div', { class: 'dash-sess-empty-desc', text: '터미널에서 Claude·Codex 같은 AI와 함께 코드·문서를 만드는 작업 공간이에요. 폴더를 고르고 세션을 열면 AI가 바로 일을 시작해요.' }),
     el('div', { class: 'dash-sess-empty-acts' },
-      // 따라하기 = 온보딩 투어(startTerminalTour). 투어 1단계가 아래 [+ 새 세션]([data-tour])을 스포트라이트 → 클릭 시 폼이 대시보드 위로 뜨고 투어가 이어짐.
-      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() }),
+      // 따라하기 = 온보딩 투어(startTerminalTour). ① 단계를 대시보드용으로 넘겨(버튼 위치·문구), 이후 폼 단계(②~⑦)는 동일 폼이라 그대로 이어짐.
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '🧭 따라하며 시작하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour(dashTourStep1()) }),
       el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'new-session', type: 'button', text: '+ 새 세션', title: '바로 새 세션 만들기', onclick: startNew })));
 }
 
