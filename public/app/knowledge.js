@@ -205,13 +205,18 @@ async function renderKnowledgeSpace(view, _space, params) {
         f.indexed = false; // 인덱스(핀) 필터(#336) — is_wiki=true 만(전체 카테고리에서). category 와 상호배타.
     if (f.folder === undefined)
         f.folder = ''; // 폴더 드릴다운(#592) — 카테고리 안 폴더 name. category 없으면 무의미.
+    if (f.catTab === undefined)
+        f.catTab = 'auto'; // #657w 카테고리 탭 — 대문(home)|문서(docs). auto=대문 내용 있으면 대문
     if (params) {
         // category 와 indexed 는 상호배타(인덱스 = '전체 카테고리에서 핀만'). 외부 category 링크는 indexed 를 끈다.
         if (params.has('category')) {
             f.category = params.get('category') || '';
             f.indexed = false;
             f.folder = '';
+            f.catTab = 'auto';
         }
+        if (params.has('tab'))
+            f.catTab = params.get('tab') === 'docs' ? 'docs' : 'home'; // #657w 딥링크 복원
         if (params.has('mode'))
             f.semantic = params.get('mode') !== 'grep';
         if (params.has('injection'))
@@ -241,8 +246,14 @@ async function renderKnowledgeSpace(view, _space, params) {
     let lastEntries = [];
     const bulkBar = el('div', { class: 'bulk-bar', hidden: true });
     const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 지식을 골라 한 번에 삭제',
-        onclick: () => { sel.mode = !sel.mode; if (!sel.mode)
-            sel.names.clear(); refetch(); } }); // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
+        onclick: () => {
+            sel.mode = !sel.mode;
+            if (!sel.mode)
+                sel.names.clear();
+            if (sel.mode && curCat() && f.catTab !== 'docs')
+                setCatTab('docs'); // #657w 선택은 목록 작업 — 문서 탭으로
+            refetch(); // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
+        } });
     // (#614) 지식이 WIKI 화면의 주(主) 뷰 — 큰 제목이 정체성. 자료·그래프·휴지통은 헤더의 보조 버튼(동급 탭 아님).
     const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
         hasScope('memory') ? el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new',
@@ -293,6 +304,7 @@ async function renderKnowledgeSpace(view, _space, params) {
         if (!cat) {
             catBox.replaceChildren();
             catBox.hidden = true;
+            applyTabVisibility();
             return;
         }
         catBox.hidden = false;
@@ -312,7 +324,13 @@ async function renderKnowledgeSpace(view, _space, params) {
             actions.append(viewBtn);
         }
         catBox.replaceChildren();
-        buildCategoryHome(catBox, cat, { actions: [actions], onCatChanged: () => buildSide() });
+        buildCategoryHome(catBox, cat, {
+            actions: [actions],
+            onCatChanged: () => buildSide(),
+            tab: f.catTab, // 'auto'|'home'|'docs' — 대문이 내용 기준으로 해석 후 onTab 콜백
+            onTab: (t) => setCatTab(t),
+            docsCount: lastEntries.length || null,
+        });
     }
     // 행 열기(#592) — 카테고리 안 폴더는 드릴다운(브레드크럼), 그 외(문서·전체 뷰의 폴더)는 피크(폴더 피크=자식 목록).
     function openRow(e) {
@@ -337,11 +355,33 @@ async function renderKnowledgeSpace(view, _space, params) {
         f.indexed = v === KN_INDEXED;
         f.category = f.indexed ? '' : v;
         f.folder = ''; // 카테고리 전환 = 드릴다운 해제(#592)
+        f.catTab = 'auto'; // #657w 새 진입 = 대문 우선(내용 없으면 문서로 자동)
         entryListMode = false; // entry '목록 보기' 일시 토글도 리셋
         buildSide();
         paintCatHead();
         syncHash();
         refetch();
+    }
+    // ── #657w 카테고리 탭 — 대문(home) ⇄ 문서(docs). 탭 상태·가시성은 여기(단일 소유), 스트립 DOM 은 대문이 렌더. ──
+    function applyTabVisibility() {
+        const inCat = !!curCat();
+        const homeTab = inCat && f.catTab !== 'docs';
+        filterBar.hidden = homeTab;
+        listBox.hidden = homeTab;
+        foot.hidden = homeTab;
+        if (homeTab)
+            bulkBar.hidden = true;
+        else
+            repaintBulk();
+    }
+    function setCatTab(t) {
+        f.catTab = t;
+        const wrap = catBox.querySelector('.cath');
+        if (wrap)
+            wrap.classList.toggle('cath-mode-docs', t === 'docs');
+        catBox.querySelectorAll('.cath-tab-btn').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+        applyTabVisibility();
+        syncHash();
     }
     async function paintHome() {
         listBox.replaceChildren(skeletonRows(3));
@@ -401,6 +441,8 @@ async function renderKnowledgeSpace(view, _space, params) {
             p.set('category', f.category);
             if (f.folder)
                 p.set('folder', f.folder); // 폴더 드릴다운(#592) — 딥링크/새로고침 복원
+            if (f.catTab === 'docs')
+                p.set('tab', 'docs'); // #657w 문서 탭 딥링크(대문=기본이라 생략)
         }
         if (f.provenance)
             p.set('provenance', f.provenance);
@@ -624,6 +666,11 @@ async function renderKnowledgeSpace(view, _space, params) {
             paintList();
             repaintBulk();
             foot.replaceChildren(el('span', { class: 'caption', text: entries.length + '건' + (f.indexed ? ' · 인덱스(핀)' : '') + (f.q.trim() && f.semantic ? ' · 의미검색(관련도순)' : '') }));
+            // #657w 대문 탭 스트립의 문서 수 배지 갱신 + 탭 가시성 재적용.
+            const cnt = catBox.querySelector('.cath-tab-count');
+            if (cnt)
+                cnt.textContent = String(entries.length);
+            applyTabVisibility();
         }
         catch (e) {
             listBox.replaceChildren(errorNote(e, '지식을 불러오지 못했습니다'));

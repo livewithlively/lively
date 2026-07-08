@@ -333,12 +333,68 @@ function renderContainer(type, rest, bodyLines) {
     }
     case 'toc':
       return el('div', { class: 'md-block-chip md-toc', text: '목차 (원본 문서의 목차 블록)' });
+    case 'collection':   // #657w 라이브 컬렉션 — 카테고리/유형 조건의 지식 목록을 렌더 시점에 조회(노션 linked DB view 등가)
+      return renderCollection(attrs);
     case 'unsupported':
       return el('div', { class: 'md-block-chip md-unsup', title: attrs.id ? 'block ' + attrs.id : '',
         text: '지원되지 않는 블록' + (attrs.type ? ': ' + attrs.type : '') });
     default:
       return inner(); // 미지 컨테이너 — 내용만(마커 무시)
   }
+}
+
+// ── #657w 컬렉션 블록 — `:::collection category=<key> type=<t> limit=<n> view=list|cards sort=updated|title` ──
+//  대문/문서 어디서든 살아있는 지식 목록을 임베드(위키의 linked database view). 자가 하이드레이션(api) —
+//  렌더러는 즉시 자리를 만들고 비동기로 채운다. 실패/빈 결과는 조용한 안내문(graceful).
+let mdCatMapP: Promise<Map<string, string>> | null = null;   // category key → id (목록 API 는 id 를 받는다)
+function mdCategoryMap(): Promise<Map<string, string>> {
+  if (!mdCatMapP) {
+    mdCatMapP = api('/api/ui/categories')
+      .then((d) => { const m = new Map<string, string>(); for (const c of (d && d.categories) || []) m.set(String(c.key), String(c.id)); return m; })
+      .catch(() => { mdCatMapP = null; return new Map<string, string>(); });
+  }
+  return mdCatMapP;
+}
+function renderCollection(attrs: any) {
+  const view = attrs.view === 'cards' ? 'cards' : 'list';
+  const box = el('div', { class: 'md-collection md-collection-' + view });
+  box.append(el('div', { class: 'md-coll-note', text: '목록 불러오는 중…' }));
+  (async () => {
+    try {
+      const limit = Math.min(Math.max(Number(attrs.limit) || 5, 1), 12);
+      const p = new URLSearchParams({ limit: String(limit + 4), injection: 'recalled',
+        orderBy: attrs.sort === 'title' ? 'name' : 'updated_at' });
+      if (attrs.category) {
+        const id = (await mdCategoryMap()).get(String(attrs.category));
+        if (id) p.set('category', id);
+      }
+      if (attrs.type) p.set('type', String(attrs.type));
+      const r = await api('/api/ui/knowledge?' + p.toString());
+      const entries = (((r && r.entries) || []) as any[])
+        .filter((e) => !String(e.name || '').startsWith('category-home-') && !e.is_folder)
+        .slice(0, limit);
+      if (!entries.length) { box.replaceChildren(el('div', { class: 'md-coll-note', text: '조건에 맞는 문서가 아직 없습니다.' })); return; }
+      box.replaceChildren(...entries.map((e) => el('a', {
+        class: view === 'cards' ? 'md-coll-card' : 'md-coll-row',
+        href: '#/k/' + encodeURIComponent(e.name) },
+        el('span', { class: 'md-coll-ic', 'aria-hidden': 'true', text: e.icon || '📄' }),
+        el('span', { class: 'md-coll-title', text: e.title || e.name }),
+        el('span', { class: 'md-coll-time', text: relTime(e.updated_at) }))));
+    } catch (_) {
+      box.replaceChildren(el('div', { class: 'md-coll-note', text: '목록을 불러오지 못했습니다.' }));
+    }
+  })();
+  return box;
+}
+
+// #657w 페이지 카드 — '내부 링크(#/k/…) 하나가 전부인 줄' = 문서 카드로 승격(노션 페이지 멘션/스마트 링크).
+//  순수 markdown 링크라 어떤 소비자(에이전트·타 렌더러)에게도 평범한 링크로 안전 강등된다.
+const MD_PAGECARD_RE = /^\s*\[([^\]\n]+)\]\((#\/k\/[^)\s]+)\)\s*$/;
+function mdPageCard(label: string, href: string) {
+  return el('a', { class: 'md-pagecard', href },
+    el('span', { class: 'md-pagecard-ic', 'aria-hidden': 'true', text: '📄' }),
+    el('span', { class: 'md-pagecard-title', text: label }),
+    el('span', { class: 'md-pagecard-arrow', 'aria-hidden': 'true', text: '↗' }));
 }
 
 // 블록 파서 — 줄 단위로 블록을 구성한다. 모든 텍스트는 renderInline 경유(textContent).
@@ -561,12 +617,17 @@ function renderMarkdown(md) {
       para.push(l);
       i++;
     }
-    const p = el('p', { class: 'md-p' });
-    para.forEach((l, idx) => {
-      if (idx > 0) p.append(el('br'));
-      for (const n of renderInline(l)) p.append(n);
-    });
-    root.append(p);
+    // #657w 페이지 카드 승격 — 문단 안에서 '내부 링크뿐인 줄'은 카드로, 나머지 줄은 문단으로(줄 단위 분할).
+    let curP: any = null;
+    const flushP = () => { if (curP) { root.append(curP); curP = null; } };
+    for (const l of para) {
+      const pc = MD_PAGECARD_RE.exec(l);
+      if (pc) { flushP(); root.append(mdPageCard(pc[1], pc[2])); continue; }
+      if (!curP) curP = el('p', { class: 'md-p' });
+      else curP.append(el('br'));
+      for (const n of renderInline(l)) curP.append(n);
+    }
+    flushP();
   }
   return root;
 }
@@ -843,6 +904,7 @@ export {
   pageHead,
   reducedMotion,
   relTime,
+  renderCollection,
   renderInline,
   renderMarkdown,
   safeHref,

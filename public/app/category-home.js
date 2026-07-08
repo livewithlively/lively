@@ -9,6 +9,7 @@ import { api, el, renderMarkdown, toast } from './core.js';
 import { hasScope } from './admin.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, defaultCoverFor, openCoverPicker, openEmojiPicker } from './page-decor.js';
+import { knFetchCategoryRows } from './knowledge-doc.js'; // #657w 템플릿 재료(핀·최근 문서) — 세션 캐시 공유
 const HOME_PREFIX = 'category-home-';
 // 빈 대문 본문 자리표시 — knowledge_save 가 빈 body 를 거부해(비폴더), 보이지 않는 ZWSP 1자로 저장한다.
 const HOME_EMPTY = '\u200B';
@@ -142,9 +143,11 @@ async function buildCategoryHome(slot, cat, opts = {}) {
             }
         });
     }
-    // ── 대문 본문 — 블록 에디터(자동 저장). 읽기 전용 사용자에겐 렌더만(비면 생략). ──
+    // ── 대문 본문 — 블록 에디터(자동 저장). 읽기 전용 사용자에겐 렌더만(비면 안내). ──
     const bodyBox = el('div', { class: 'cath-body' });
     const saveChip = el('span', { class: 'kn-save-chip', 'aria-live': 'polite' });
+    const hasContent = !!homeBody().trim();
+    let templateBar = null;
     if (canDoc) {
         let timer = null;
         let saving = false;
@@ -172,7 +175,7 @@ async function buildCategoryHome(slot, cat, opts = {}) {
         const queue = () => { setChip('수정됨…', true); clearTimeout(timer); timer = setTimeout(doSave, 2000); };
         const editor = createBlockEditor({
             initial: homeBody(),
-            placeholder: "대문을 꾸며보세요 — 공지·소개·핵심 문서 링크… ('/'로 콜아웃·제목·목록 추가)",
+            placeholder: "대문을 꾸며보세요 — '/'로 페이지 카드·컬렉션·콜아웃·컬럼 추가",
             onChange: queue,
             onSaveShortcut: () => { clearTimeout(timer); doSave(); },
         });
@@ -180,18 +183,74 @@ async function buildCategoryHome(slot, cat, opts = {}) {
             clearTimeout(timer);
             doSave();
         } });
+        // #657w 빈 대문 스타터 — 핀·최근 문서로 노션급 대문(콜아웃+핵심 문서 카드+컬럼×컬렉션)을 원클릭 생성.
+        if (!hasContent) {
+            const tplBtn = el('button', { class: 'cath-tpl-btn', type: 'button' }, el('span', { text: '✨ 템플릿으로 대문 만들기' }), el('span', { class: 'cath-tpl-hint', text: '핵심 문서 카드 + 최근/결정 라이브 목록으로 시작' }));
+            tplBtn.onclick = async () => {
+                tplBtn.disabled = true;
+                try {
+                    const md = await buildHomeTemplate(cat);
+                    editor.setMarkdown(md);
+                    await ensureHome(md);
+                    setChip('저장됨');
+                    if (templateBar)
+                        templateBar.remove();
+                    toast('대문 템플릿을 만들었습니다 — 자유롭게 고쳐보세요');
+                }
+                catch (e) {
+                    toast('템플릿 생성 실패 — ' + e.message, true);
+                    tplBtn.disabled = false;
+                }
+            };
+            templateBar = el('div', { class: 'cath-tpl' }, tplBtn);
+            bodyBox.append(templateBar);
+        }
         bodyBox.append(editor.el);
     }
-    else if (homeBody().trim()) {
+    else if (hasContent) {
         bodyBox.append(el('div', { class: 'md-rendered' }, renderMarkdown(homeBody())));
     }
     else {
-        bodyBox.hidden = true;
+        bodyBox.append(el('div', { class: 'cath-body-empty', text: '아직 대문이 비어 있어요.' }));
     }
+    // ── 탭(#657w) — [🏠 대문][📄 문서 N]: 대문이 첫 화면, 자동 목록은 문서 탭으로. 상태는 knowledge.ts(onTab)가 소유. ──
+    const tabBtn = (key, label, extra) => {
+        const b = el('button', { class: 'cath-tab-btn', type: 'button', 'data-tab': key }, el('span', { text: label }), extra || null);
+        b.onclick = () => { if (opts.onTab)
+            opts.onTab(key); };
+        return b;
+    };
+    const tabs = el('div', { class: 'cath-tabs' }, tabBtn('home', '🏠 대문'), tabBtn('docs', '📄 문서', el('span', { class: 'cath-tab-count', text: opts.docsCount != null ? String(opts.docsCount) : '' })));
     // ── 조립 — mono 카탈로그 라인(공간 · 카테고리)이 대문의 '색인' 정체성을 준다(#657r). ──
     const SPACE_KO = { business: '사업', product: '제품', system: '시스템' };
     const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), el('span', { class: 'cath-meta-sep', 'aria-hidden': 'true', text: '/' }), el('span', { class: 'cath-meta-key', text: cat.key }));
     const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
-    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), bodyBox)));
+    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), tabs, bodyBox)));
+    // 탭 초기 해석 — 'auto'(기본)면 대문 내용이 있을 때 대문, 없으면 문서(빈 대문으로 막지 않기).
+    if (opts.onTab)
+        opts.onTab(opts.tab === 'docs' ? 'docs' : (opts.tab === 'home' ? 'home' : (hasContent ? 'home' : 'docs')));
+}
+// #657w 대문 스타터 템플릿 — 콜아웃 안내 + 핵심 문서(핀 우선, 부족하면 최근) 페이지 카드 + 2열(최근 컬렉션 | 결정 컬렉션).
+//  노션 위키 홈 표준 구성(callout×columns 내비 + linked view)을 우리 방언(pagecard·:::collection)으로.
+async function buildHomeTemplate(cat) {
+    let rows = [];
+    try {
+        rows = await knFetchCategoryRows(cat.id);
+    }
+    catch (_) { /* 목록 실패 — 카드 없는 템플릿 */ }
+    const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
+    const pinned = docs.filter((r) => r.is_wiki);
+    const rest = docs.filter((r) => !r.is_wiki);
+    const key = docs.slice(0, 1).length ? [...pinned, ...rest].slice(0, 3) : [];
+    const cards = key.map((r) => '[' + String(r.title || r.name).replace(/[\[\]]/g, ' ').trim() + '](#/k/' + encodeURIComponent(r.name) + ')').join('\n');
+    const name = cat.name || cat.key;
+    return ':::callout icon=👋 color=default\n'
+        + '**' + name + '** 카테고리에 오신 걸 환영해요. 처음이라면 아래 핵심 문서부터 보세요 — 이 대문은 팀 누구나 자유롭게 고칠 수 있어요 (\'/\'로 블록 추가, ⋮⋮로 배치 이동).\n'
+        + ':::\n\n'
+        + (cards ? '# 핵심 문서\n' + cards + '\n\n' : '')
+        + ':::columns\n'
+        + ':::column\n## 최근 업데이트\n:::collection category=' + cat.key + ' limit=5\n:::\n:::\n'
+        + ':::column\n## 결정 기록\n:::collection category=' + cat.key + ' type=decision limit=5\n:::\n:::\n'
+        + ':::';
 }
 export { buildCategoryHome, isCategoryHomeDoc, homeDocName };

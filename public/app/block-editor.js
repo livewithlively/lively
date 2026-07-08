@@ -6,7 +6,7 @@
 //    ⋮⋮ 드래그 재정렬, ＋ 블록 추가, Enter 분할·Backspace 병합, Tab 들여쓰기. 한국어 IME 조합 가드(#505 동형).
 //  · 보안 불변식 유지: innerHTML 금지 — 모든 DOM 은 el/renderInline/renderMarkdown(전부 textContent 기반)로만.
 //  순환 import 금지: core/learn/page-decor 만 import (knowledge-doc/knowledge-edit/category-home 이 이 모듈을 쓴다).
-import { api, el, renderInline, renderMarkdown, safeHref, toast } from './core.js';
+import { api, el, renderCollection, renderInline, renderMarkdown, safeHref, toast } from './core.js';
 import { overlayBox } from './learn.js';
 import { openEmojiPicker } from './page-decor.js';
 // ── 블록 데이터 모델 ──
@@ -104,6 +104,16 @@ function mdToBlocks(md) {
                     out.push({ type: 'columns', cols });
                 else
                     out.push({ type: 'raw', text: rawLines.join('\n') });
+            }
+            else if (cont[1] === 'collection' && closed) {
+                // #657w 라이브 컬렉션 — 본문 없는 설정 컨테이너. attrs 만 블록 데이터로.
+                const attrs = {};
+                for (const tok of String(cont[2] || '').split(/\s+/)) {
+                    const m = /^([a-zA-Z_-]+)=(.*)$/.exec(tok);
+                    if (m)
+                        attrs[m[1]] = m[2];
+                }
+                out.push({ type: 'collection', attrs });
             }
             else {
                 out.push({ type: 'raw', text: rawLines.join('\n') });
@@ -216,7 +226,27 @@ function mdToBlocks(md) {
             i++;
         }
         // 이스케이프 해제는 renderInline 이 렌더 시 처리 — 파서는 원문 유지(직렬화가 재이스케이프).
-        out.push({ type: 'p', text: para.join('\n') });
+        // #657w 페이지 카드 승격 — '내부 링크뿐인 줄'은 pagecard 블록으로 분리(core renderMarkdown 과 동일 규칙).
+        let buf = [];
+        const flushBuf = () => { if (buf.length) {
+            out.push({ type: 'p', text: buf.join('\n') });
+            buf = [];
+        } };
+        for (const l of para) {
+            const pc = /^\s*\[([^\]\n]+)\]\(#\/k\/([^)\s]+)\)\s*$/.exec(l);
+            if (pc) {
+                flushBuf();
+                let nm = pc[2];
+                try {
+                    nm = decodeURIComponent(pc[2]);
+                }
+                catch (_) { /* 인코딩 오류 — 원문 유지 */ }
+                out.push({ type: 'pagecard', name: nm, label: pc[1] });
+            }
+            else
+                buf.push(l);
+        }
+        flushBuf();
     }
     if (!out.length)
         out.push({ type: 'p', text: '' });
@@ -407,6 +437,25 @@ function blocksToMd(blocks) {
                 chunks.push(':::columns\n' + cols.map((c) => ':::column\n' + blocksToMd(c) + '\n:::').join('\n') + '\n:::');
                 break;
             }
+            case 'pagecard':
+                // 순수 md 링크 한 줄 — 어떤 소비자에게도 평범한 링크로 안전 강등(#657w).
+                chunks.push('[' + String(b.label || b.name || '').replace(/[\[\]]/g, ' ').trim() + '](#/k/' + encodeURIComponent(b.name || '') + ')');
+                break;
+            case 'collection': {
+                const a = b.attrs || {};
+                let line = ':::collection';
+                if (a.category)
+                    line += ' category=' + a.category;
+                if (a.type)
+                    line += ' type=' + a.type;
+                line += ' limit=' + Math.min(Math.max(Number(a.limit) || 5, 1), 12);
+                if (a.view === 'cards')
+                    line += ' view=cards';
+                if (a.sort === 'title')
+                    line += ' sort=title';
+                chunks.push(line + '\n:::');
+                break;
+            }
             case 'divider':
                 chunks.push('---');
                 break;
@@ -545,6 +594,29 @@ export function createBlockEditor(opts = {}) {
                 main.append(el('div', { class: 'be-codewrap' }, codeBox, langIn));
                 break;
             }
+            case 'pagecard': {
+                // #657w 페이지 카드 — 문서 스마트 링크(클릭=이동, 드래그·메뉴·삭제는 블록 공통).
+                block.dataset.name = d.name || '';
+                block.dataset.label = d.label || d.name || '';
+                main.append(el('a', { class: 'md-pagecard be-pagecard', contenteditable: 'false', tabindex: '0',
+                    href: '#/k/' + encodeURIComponent(d.name || '') }, el('span', { class: 'md-pagecard-ic', 'aria-hidden': 'true', text: '📄' }), el('span', { class: 'md-pagecard-title', text: d.label || d.name || '' }), el('span', { class: 'md-pagecard-arrow', 'aria-hidden': 'true', text: '↗' })));
+                addRowDelete(block);
+                break;
+            }
+            case 'collection': {
+                // #657w 라이브 컬렉션 — 설정(⚙)형 블록. 미리보기 = core renderCollection(읽기 뷰와 동일 렌더).
+                const a = d.attrs || {};
+                block.dataset.cat = a.category || '';
+                block.dataset.ktype = a.type || '';
+                block.dataset.limit = String(Math.min(Math.max(Number(a.limit) || 5, 1), 12));
+                block.dataset.view = a.view === 'cards' ? 'cards' : 'list';
+                block.dataset.ksort = a.sort === 'title' ? 'title' : 'updated';
+                const wrap = el('div', { class: 'be-collection', contenteditable: 'false', tabindex: '0' });
+                paintCollection(block, wrap);
+                main.append(wrap);
+                addRowDelete(block);
+                break;
+            }
             case 'divider':
                 main.append(el('div', { class: 'be-div', tabindex: '0', role: 'separator' }, el('hr')));
                 addRowDelete(block);
@@ -596,11 +668,120 @@ export function createBlockEditor(opts = {}) {
         }
         return block;
     }
-    // 구분선/raw 블록 hover ✕ 삭제 버튼.
+    // 구분선/raw/카드/컬렉션 블록 hover ✕ 삭제 버튼.
     function addRowDelete(block) {
         const x = el('button', { class: 'be-block-x', type: 'button', title: '블록 삭제', text: '✕' });
         x.onclick = () => deleteBlock(block);
         block.append(x);
+    }
+    // #657w 컬렉션 미리보기 + ⚙ 설정 — 헤더(요약 라벨·설정)와 라이브 목록(renderCollection — 읽기 뷰와 동일).
+    const COLL_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
+    function collAttrsOf(block) {
+        return {
+            category: block.dataset.cat || undefined,
+            type: block.dataset.ktype || undefined,
+            limit: Number(block.dataset.limit) || 5,
+            view: block.dataset.view === 'cards' ? 'cards' : 'list',
+            sort: block.dataset.ksort === 'title' ? 'title' : 'updated',
+        };
+    }
+    function paintCollection(block, wrap) {
+        const a = collAttrsOf(block);
+        const label = (a.category ? '분류 ' + a.category : '전체') + (a.type ? ' · ' + (COLL_TYPE_LABEL[a.type] || a.type) : '')
+            + ' · ' + a.limit + '개' + (a.sort === 'title' ? ' · 제목순' : ' · 최신순');
+        const gear = el('button', { class: 'be-coll-gear', type: 'button', title: '컬렉션 조건 설정', text: '⚙ 설정' });
+        gear.onclick = () => openCollectionConfig(block, wrap, gear);
+        wrap.replaceChildren(el('div', { class: 'be-coll-head' }, el('span', { class: 'be-coll-chip', text: '▤ 컬렉션' }), el('span', { class: 'be-coll-label', text: label }), gear), renderCollection(a));
+    }
+    function openCollectionConfig(block, wrap, anchor) {
+        const old = document.querySelector('.be-collpop');
+        if (old) {
+            old.remove();
+            return;
+        }
+        const catSel = el('select', { class: 'be-collpop-sel' }, el('option', { value: '', text: '전체 카테고리' }));
+        api('/api/ui/categories').then((d) => {
+            for (const c of (d && d.categories) || [])
+                catSel.append(el('option', { value: c.key, text: c.name || c.key }));
+            catSel.value = block.dataset.cat || '';
+        }).catch(() => { });
+        const typeSel = el('select', { class: 'be-collpop-sel' }, el('option', { value: '', text: '전체 유형' }));
+        for (const [v, label] of Object.entries(COLL_TYPE_LABEL))
+            typeSel.append(el('option', { value: v, text: label }));
+        typeSel.value = block.dataset.ktype || '';
+        const limitSel = el('select', { class: 'be-collpop-sel' }, ...[3, 5, 8, 12].map((n) => el('option', { value: String(n), text: n + '개' })));
+        limitSel.value = String(Number(block.dataset.limit) || 5);
+        const viewSel = el('select', { class: 'be-collpop-sel' }, el('option', { value: 'list', text: '목록' }), el('option', { value: 'cards', text: '카드' }));
+        viewSel.value = block.dataset.view === 'cards' ? 'cards' : 'list';
+        const sortSel = el('select', { class: 'be-collpop-sel' }, el('option', { value: 'updated', text: '최신순' }), el('option', { value: 'title', text: '제목순' }));
+        sortSel.value = block.dataset.ksort === 'title' ? 'title' : 'updated';
+        const row = (label, node) => el('div', { class: 'be-collpop-row' }, el('span', { class: 'be-collpop-k', text: label }), node);
+        const pop = el('div', { class: 'be-collpop' }, row('분류', catSel), row('유형', typeSel), row('개수', limitSel), row('보기', viewSel), row('정렬', sortSel));
+        const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+        const applyNow = () => {
+            block.dataset.cat = catSel.value;
+            block.dataset.ktype = typeSel.value;
+            block.dataset.limit = limitSel.value;
+            block.dataset.view = viewSel.value;
+            block.dataset.ksort = sortSel.value;
+            paintCollection(block, wrap);
+            markDirty();
+        };
+        for (const s of [catSel, typeSel, limitSel, viewSel, sortSel])
+            s.addEventListener('change', applyNow);
+        document.body.append(pop);
+        const r = anchor.getBoundingClientRect();
+        pop.style.left = Math.max(8, Math.min(r.left - 120, window.innerWidth - 268)) + 'px';
+        pop.style.top = (r.bottom + 6) + 'px';
+        const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== anchor)
+            close(); };
+        setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+    }
+    // #657w 페이지 카드 삽입 피커 — 문서 검색 오버레이(빈 검색=최근).
+    function promptPageCard(block) {
+        const qIn = el('input', { type: 'search', placeholder: '문서 검색(제목·본문)' });
+        const results = el('div', { class: 'list-box', style: 'max-height:320px; overflow:auto; margin-top:10px;' });
+        const back = overlayBox('페이지 카드 삽입', el('p', { class: 'admin-hint', text: '문서를 카드로 배치합니다 — 처음 보는 사람에게 핵심 문서를 안내할 때 좋아요.' }), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '문서' }), qIn), results);
+        const pick = (e) => {
+            back.remove();
+            const data = { type: 'pagecard', name: e.name, label: e.title || e.name };
+            const cur = blockData(block);
+            const empty = block.dataset.type === 'p' && !String(cur.text || '').trim();
+            let nb;
+            if (empty) {
+                nb = makeBlock(data);
+                block.replaceWith(nb);
+                ensureOne();
+                renumber();
+                markDirty();
+            }
+            else
+                nb = insertBlockAfter(block, data);
+            focusBlock(insertBlockAfter(nb, { type: 'p', text: '' }));
+        };
+        let t = null;
+        async function search() {
+            const q = qIn.value.trim();
+            results.replaceChildren(el('div', { class: 'empty', text: '불러오는 중…' }));
+            try {
+                const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '12', mode: 'names' }))
+                    : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '12', orderBy: 'updated_at', injection: 'recalled' }));
+                const r = await api(url);
+                const entries = ((r && r.entries) || [])
+                    .filter((e) => !String(e.name || '').startsWith('category-home-') && !e.is_folder);
+                if (!entries.length) {
+                    results.replaceChildren(el('div', { class: 'empty', text: '결과 없음' }));
+                    return;
+                }
+                results.replaceChildren(...entries.map((e) => el('div', { class: 'row', role: 'button', tabindex: '0', style: 'cursor:pointer',
+                    onclick: () => pick(e) }, el('div', { class: 'row-title', text: (e.icon || '📄') + ' ' + (e.title || e.name) }))));
+            }
+            catch (_) {
+                results.replaceChildren(el('div', { class: 'empty', text: '검색 실패' }));
+            }
+        }
+        qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(search, 250); });
+        setTimeout(() => { qIn.focus(); search(); }, 0);
     }
     // raw 블록 — 원문 textarea 편집(블러/⌘Enter 커밋).
     function openRawEditor(block, wrap) {
@@ -689,6 +870,8 @@ export function createBlockEditor(opts = {}) {
                 return { type, lang: block.dataset.lang || '', text: codeBox ? codeBox.innerText.replace(/\u200B/g, '').replace(/\n$/, '') : '' };
             }
             case 'divider': return { type };
+            case 'pagecard': return { type, name: block.dataset.name || '', label: block.dataset.label || '' };
+            case 'collection': return { type, attrs: collAttrsOf(block) };
             case 'raw': {
                 const ta = block.querySelector('.be-raw-ta');
                 return { type, text: ta ? ta.value : (block._raw || '') };
@@ -828,7 +1011,7 @@ export function createBlockEditor(opts = {}) {
             placeCaret(t, atStart);
             return;
         }
-        const focusable = block.querySelector('.be-div, .be-raw');
+        const focusable = block.querySelector('.be-div, .be-raw, .be-pagecard, .be-collection');
         if (focusable)
             focusable.focus();
     }
@@ -916,6 +1099,25 @@ export function createBlockEditor(opts = {}) {
                     const p = insertBlockAfter(d, { type: 'p', text: '' });
                     focusBlock(p);
                 }
+            } },
+        { k: 'pagecard', ic: '🔗', label: '페이지 카드', hint: '문서를 카드로 배치', kw: 'page card link 페이지 카드 문서 링크 smart 스마트', apply: (b) => promptPageCard(b) },
+        { k: 'collection', ic: '▤', label: '컬렉션 (라이브 목록)', hint: '조건에 맞는 문서 자동 목록', kw: 'collection database view live 컬렉션 목록 라이브 데이터베이스 자동 최신', apply: (b) => {
+                const cur = blockData(b);
+                const data = { type: 'collection', attrs: { limit: 5, view: 'list', sort: 'updated' } };
+                let nb;
+                const empty = b.dataset.type === 'p' && !String(cur.text || '').trim();
+                if (empty) {
+                    nb = makeBlock(data);
+                    b.replaceWith(nb);
+                    ensureOne();
+                    renumber();
+                    markDirty();
+                }
+                else
+                    nb = insertBlockAfter(b, data);
+                const gear = nb.querySelector('.be-coll-gear');
+                if (gear)
+                    setTimeout(() => gear.click(), 0); // 삽입 즉시 조건 설정 열기
             } },
         { k: 'image', ic: '🖼', label: '이미지', hint: 'URL 로 삽입', kw: 'image picture 이미지 사진 그림', apply: (b) => promptImage(b) },
         { k: 'table', ic: '▦', label: '표', hint: '마크다운 표(원문 편집)', kw: 'table 표 테이블', apply: (b) => {
@@ -1454,20 +1656,20 @@ export function createBlockEditor(opts = {}) {
         }
         const type = block.dataset.type;
         const t = textElOf(block);
-        // 구분선/raw 래퍼에 포커스가 있을 때 — Backspace/Enter.
+        // 구분선/raw/카드/컬렉션 래퍼에 포커스가 있을 때 — Backspace/Enter.
+        const wrapType = type === 'divider' || type === 'raw' || type === 'pagecard' || type === 'collection';
         if (!target.classList.contains('be-text')) {
-            if ((e.key === 'Backspace' || e.key === 'Delete') && (type === 'divider' || type === 'raw')) {
+            if ((e.key === 'Backspace' || e.key === 'Delete') && wrapType) {
                 e.preventDefault();
                 const pb = prevTextBlock(block);
                 block.remove();
-                ensureOne();
-                renumber();
+                normalizeStructure();
                 markDirty();
-                if (pb)
+                if (pb && pb.isConnected)
                     focusBlock(pb, false);
                 return;
             }
-            if (e.key === 'Enter' && (type === 'divider' || type === 'raw')) {
+            if (e.key === 'Enter' && wrapType) {
                 e.preventDefault();
                 focusBlock(insertBlockAfter(block, { type: 'p', text: '' }));
                 return;
