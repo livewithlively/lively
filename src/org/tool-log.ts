@@ -7,6 +7,7 @@
 //   knowledge_save body_md 같은 대형 페이로드는 잘려 들어가(통계용엔 충분), 시크릿 평문은 마스킹된다.
 import { itemsPool } from "../items/store.js";
 import { redactDeep } from "./redact.js";
+import { scrubSqlLiterals } from "../db/sql-scrub.js";
 import { logger } from "../log.js";
 
 export interface ToolCallRecord {
@@ -61,9 +62,15 @@ export function capArgs(raw: unknown): unknown {
 
 // 한 건 적재(비동기, 호출자는 await 하지 않는다). 실패는 warn 로그만 남기고 삼킨다 — 통계 누락 ≠ 호출 실패.
 export function logToolCall(rec: ToolCallRecord): void {
+  // db_query 는 SQL 에 PII 리터럴이 박힐 수 있어 값 스크럽(#705) — redactDeep(시크릿)만으론 PII 미포착.
+  let args = rec.args;
+  if (rec.tool === "db_query" && args && typeof args === "object" && !Array.isArray(args)
+      && typeof (args as Record<string, unknown>).sql === "string") {
+    args = { ...(args as Record<string, unknown>), sql: scrubSqlLiterals((args as Record<string, unknown>).sql as string) };
+  }
   let argsJson: string;
   try {
-    argsJson = JSON.stringify(capArgs(rec.args));
+    argsJson = JSON.stringify(capArgs(args));
   } catch {
     argsJson = "{}";
   }
