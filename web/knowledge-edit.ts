@@ -49,16 +49,16 @@ export async function renderKnowledgeForm(view, params?, editName?) {
   const nameIn = el('input', { class: 'ke-prop-in mono', type: 'text', value: k.name || '',
     placeholder: '비우면 제목에서 자동' }) as HTMLInputElement;
   if (isEdit) nameIn.disabled = true;
-  const provSel = el('select', { class: 'ke-prop-in' },
+  const provSel = el('select', { class: 'ke-prop-in ke-prop-sel' },
     el('option', { value: 'authored', text: '저작 (기본)' }),
     el('option', { value: 'observed', text: '외부 미러' })) as HTMLSelectElement;
   provSel.value = k.provenance || 'authored';
   const curCatKey = (Array.isArray(k.categories) ? k.categories.filter((c) => c.state !== 'rejected') : []).map((c) => c.key).filter(Boolean)[0] || '';
-  const catSel = el('select', { class: 'ke-prop-in' }, el('option', { value: '', text: '분류 선택…' })) as HTMLSelectElement;
+  const catSel = el('select', { class: 'ke-prop-in ke-prop-sel' }, el('option', { value: '', text: '카테고리 선택…' })) as HTMLSelectElement;
   // 대문/사이드바 '＋ 새 페이지'에서 온 경우(?category=key) 프리필(#657).
   const preCat = !isEdit && params && params.get ? (params.get('category') || '') : '';
   fillCategorySelect(catSel, curCatKey || preCat);
-  const typeSel = el('select', { class: 'ke-prop-in' }, el('option', { value: '', text: '유형 선택…' })) as HTMLSelectElement;
+  const typeSel = el('select', { class: 'ke-prop-in ke-prop-sel' }, el('option', { value: '', text: '유형 선택…' })) as HTMLSelectElement;
   for (const [v, label] of Object.entries(KN_TYPE_LABEL)) typeSel.append(el('option', { value: v, text: label as string }));
   if (k.type) typeSel.value = k.type;
 
@@ -208,7 +208,7 @@ export async function renderKnowledgeForm(view, params?, editName?) {
   const propRow = (label: string, node: any, req?: boolean) => el('div', { class: 'ke-prop' },
     el('span', { class: 'ke-prop-k', text: label + (req ? ' *' : '') }), el('div', { class: 'ke-prop-v' }, node));
   const props = el('div', { class: 'ke-props' },
-    propRow('분류', catSel, true),
+    propRow('카테고리', catSel, true),
     propRow('유형', typeSel, true),
     propRow('파일명', nameIn),
     propRow('출처', provSel),

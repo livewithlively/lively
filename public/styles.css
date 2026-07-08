@@ -4886,15 +4886,23 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .ke-canvas:hover .ke-decor-add { opacity: 1; }
 .ke-title { font-size: 34px; font-weight: 800; letter-spacing: -.9px; color: var(--ink); outline: none;
   margin: 4px 0 14px; line-height: 1.25; border-radius: 6px; cursor: text; }
-.ke-props { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
-.ke-prop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
-.ke-prop-k { flex: none; width: 96px; font-size: 12.5px; color: var(--muted); }
+.ke-props { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.ke-prop { display: flex; align-items: center; gap: 14px; min-height: 34px; }
+.ke-prop-k { flex: none; width: 84px; font-size: 13px; font-weight: 500; color: var(--muted); }
 .ke-prop-v { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ke-prop-in { border: 1px solid transparent; background: transparent; font-size: 13.5px; color: var(--ink);
-  padding: 4px 8px; border-radius: 7px; max-width: 360px; font-family: inherit; }
+.ke-prop-in { border: 1px solid transparent; background: transparent; font-size: 14px; color: var(--ink);
+  padding: 5px 9px; border-radius: 8px; max-width: 380px; font-family: inherit; }
 .ke-prop-in:hover { background: var(--bg-tint); }
 .ke-prop-in:focus { outline: none; border-color: var(--line-net-2); background: var(--bg); }
 .ke-prop-in:disabled { color: var(--muted-2); }
+/* (#req) 카테고리·유형·출처 드롭다운 — 네이티브 select 룩 폐기, 노션식 깔끔한 필드(커스텀 셰브런). */
+.ke-prop-sel { appearance: none; -webkit-appearance: none; -moz-appearance: none; cursor: pointer;
+  border: 1px solid var(--line); background-color: var(--bg); padding: 6px 30px 6px 11px; border-radius: 8px; min-width: 160px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888e99' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat; background-position: right 9px center; }
+.ke-prop-sel:hover { border-color: var(--line-net-2); background-color: var(--bg-tint); }
+.ke-prop-sel:focus { outline: none; border-color: var(--blue); background-color: var(--bg);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
 .ke-prop-add { border: none; background: none; color: var(--muted-2); cursor: pointer; font-size: 12.5px;
   border-radius: 6px; padding: 3px 7px; font-family: inherit; }
 .ke-prop-add:hover { background: var(--bg-tint); color: var(--ink-sub); }
@@ -5188,7 +5196,7 @@ main.doc-mode .kn-gcard-ic { border-radius: 9px; border-color: var(--wk-line); }
 
 /* ── 작성/편집 페이지 ── */
 main.doc-mode .ke-topbar { background: color-mix(in srgb, var(--wk-paper) 88%, transparent); border-bottom-color: var(--wk-line); }
-main.doc-mode .ke-prop-k { font-family: var(--wk-mono); font-size: 10.5px; letter-spacing: .3px; text-transform: uppercase; color: var(--wk-ink-dim); }
+main.doc-mode .ke-prop-k { font-size: 13px; font-weight: 500; color: var(--wk-ink-soft); }   /* (#req) 편집창 속성 라벨 — 작은 mono 대신 읽히게 */
 main.doc-mode .ke-title { font-size: 35px; letter-spacing: -0.9px; }
 main.doc-mode .ke-status { font-family: var(--wk-mono); font-size: 11px; }
 

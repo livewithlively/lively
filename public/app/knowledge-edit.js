@@ -67,14 +67,14 @@ export async function renderKnowledgeForm(view, params, editName) {
         placeholder: '비우면 제목에서 자동' });
     if (isEdit)
         nameIn.disabled = true;
-    const provSel = el('select', { class: 'ke-prop-in' }, el('option', { value: 'authored', text: '저작 (기본)' }), el('option', { value: 'observed', text: '외부 미러' }));
+    const provSel = el('select', { class: 'ke-prop-in ke-prop-sel' }, el('option', { value: 'authored', text: '저작 (기본)' }), el('option', { value: 'observed', text: '외부 미러' }));
     provSel.value = k.provenance || 'authored';
     const curCatKey = (Array.isArray(k.categories) ? k.categories.filter((c) => c.state !== 'rejected') : []).map((c) => c.key).filter(Boolean)[0] || '';
-    const catSel = el('select', { class: 'ke-prop-in' }, el('option', { value: '', text: '분류 선택…' }));
+    const catSel = el('select', { class: 'ke-prop-in ke-prop-sel' }, el('option', { value: '', text: '카테고리 선택…' }));
     // 대문/사이드바 '＋ 새 페이지'에서 온 경우(?category=key) 프리필(#657).
     const preCat = !isEdit && params && params.get ? (params.get('category') || '') : '';
     fillCategorySelect(catSel, curCatKey || preCat);
-    const typeSel = el('select', { class: 'ke-prop-in' }, el('option', { value: '', text: '유형 선택…' }));
+    const typeSel = el('select', { class: 'ke-prop-in ke-prop-sel' }, el('option', { value: '', text: '유형 선택…' }));
     for (const [v, label] of Object.entries(KN_TYPE_LABEL))
         typeSel.append(el('option', { value: v, text: label }));
     if (k.type)
@@ -249,7 +249,7 @@ export async function renderKnowledgeForm(view, params, editName) {
     const topBar = el('div', { class: 'ke-topbar' }, el('a', { class: 'btn btn-ghost btn-sm', href: backHref, text: '← 돌아가기' }), el('div', { class: 'ke-topbar-right' }, statusEl, rawToggle, saveBtn));
     // 속성 행(노션형 세로 라벨-값) — 분류/유형은 필수 마크.
     const propRow = (label, node, req) => el('div', { class: 'ke-prop' }, el('span', { class: 'ke-prop-k', text: label + (req ? ' *' : '') }), el('div', { class: 'ke-prop-v' }, node));
-    const props = el('div', { class: 'ke-props' }, propRow('분류', catSel, true), propRow('유형', typeSel, true), propRow('파일명', nameIn), propRow('출처', provSel), isEdit ? null : propRow('프로젝트', stagedList));
+    const props = el('div', { class: 'ke-props' }, propRow('카테고리', catSel, true), propRow('유형', typeSel, true), propRow('파일명', nameIn), propRow('출처', provSel), isEdit ? null : propRow('프로젝트', stagedList));
     const page = el('div', { class: 'ke-page kn-doc' }, coverBox, el('div', { class: 'ke-canvas' }, iconBtn, decorAdd, titleIn, props, el('hr', { class: 'kn-doc-hr' }), rawTa, editor.el));
     view.replaceChildren(el('div', { class: 'ke-shell' }, topBar, page));
     setTimeout(() => { if (!isEdit && !titleIn.textContent)

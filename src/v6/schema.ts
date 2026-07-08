@@ -952,5 +952,18 @@ export async function initV6Schema(): Promise<string> {
     console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
   }
 
+  // ── 멤버 즐겨찾기(#670) — 사용자별 '즐겨찾기' 핀. 리스트(project_list)·카테고리(category)를 사이드바 맨 위에 고정.
+  //  개인 UI 상태(감사 대상 아님). target_kind='project_list'|'category', target_id=해당 id(TEXT 로 통일 저장).
+  //  member_id 는 org_member.id(TEXT). 하드 FK 대신 다른 정션과 동일한 느슨한 참조(멤버 삭제 정리는 별도).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_favorite(
+      member_id TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (member_id, target_kind, target_id));
+    CREATE INDEX IF NOT EXISTS member_favorite_member_idx ON member_favorite(member_id);
+  `);
+
   return "initialized v6 schema";
 }
