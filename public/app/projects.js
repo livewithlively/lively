@@ -2623,36 +2623,7 @@ function pjvProjFacepile(members) {
         faces.append(el('span', { class: 'project-face more', text: '+' + (arr.length - 4) }));
     return faces;
 }
-// 팀원 필드(보기 전용) — 클릭하면 팀원 목록을 쭉 보여주는 팝오버. 넣고 빼는(토글) UI 없음.
-//  팀원=담당자 — 메타에선 보기만 하고, 변경은 '프로젝트 세부 설정'에서만.
-function pjvProjTeamView(members) {
-    const arr = members || [];
-    const btn = el('button', { class: 'pjv-cell-btn' + (arr.length ? '' : ' empty'), type: 'button', title: '팀원 (보기 전용 — 변경은 프로젝트 세부 설정)' });
-    if (arr.length) {
-        const faces = el('span', { class: 'pjv-asg-faces' });
-        for (const m of arr.slice(0, 3))
-            faces.append(personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id));
-        if (arr.length > 3)
-            faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (arr.length - 3) }));
-        btn.append(faces);
-    }
-    else {
-        btn.append(pjvIcon('assignee'));
-    }
-    btn.onclick = (e) => {
-        e.stopPropagation();
-        const menu = el('div', { class: 'pjv-menu pjv-asg-menu pjv-team-view' });
-        pjvPopover(btn, menu);
-        menu.append(el('div', { class: 'pjv-menu-head', text: '팀원' }));
-        if (!arr.length)
-            menu.append(el('div', { class: 'pjv-menu-empty', text: '아직 팀원이 없어요.' }));
-        else
-            for (const m of arr)
-                menu.append(el('div', { class: 'pjv-team-view-row' }, personFace(m.member_id, 'pjv-ava', m.display_name || m.member_id), el('span', { class: 'pjv-asg-mname', text: m.display_name || m.member_id })));
-        menu.append(el('div', { class: 'pjv-team-view-hint', text: '변경은 ‘프로젝트 세부 설정’에서' }));
-    };
-    return btn;
-}
+// (옛 pjvProjTeamView — 보기 전용 팀원 팝오버 — 폐기(#req): 상세 프로퍼티도 pjvProjTeamControl 로 바로 편집.)
 function projSaveQuiet(id, patch) {
     return api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify(patch) }).catch((e) => toast('수정 실패 — ' + e.message, true));
 }
@@ -5061,8 +5032,10 @@ function pjvProjMetaPanel(p, members, reload) {
     return el('div', { class: 'pjv-tm-fields pjv-proj-meta' }, row('←', '선행 프로젝트', pjvProjEdgesField(p, reload, 'out')), row('→', '후속 프로젝트', pjvProjEdgesField(p, reload, 'in')), row('◎', '상태', pjvProjStatusPill(p, reload)), 
     // 소속 리스트(클릭업 List) — 클릭해 변경. 미분류면 '리스트 지정' 안내.
     row('🗂', '리스트', pjvProjListField(p, reload)), 
-    // 팀원 = 담당자 — 클릭하면 팀원 목록만 보여주는 보기전용 팝오버(토글 없음). 변경은 '프로젝트 세부 설정'에서만.
-    row('👤', '팀원', pjvProjTeamView(members)), row('🗓', '기간', pjvProjDatesField(p, reload)), row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), 
+    // 팀원 = 담당자 — 프로퍼티 팝아웃에서 바로 검색·토글로 넣고 뺀다(#req — 옛 보기전용 pjvProjTeamView 폐기).
+    //  보드 행/리스트 헤더의 팀원 셀과 동일 컴포넌트(pjvProjTeamControl) + 조용한 저장(토글마다 즉시 저장,
+    //  리로드 없음 — 리로드하면 팝아웃이 닫혀 다중 토글이 안 됨. 아바타는 컨트롤이 자체 갱신).
+    row('👤', '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids))), row('🗓', '기간', pjvProjDatesField(p, reload)), row('⚑', '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), 
     // (⏱ 시간 추적 필드 제거 — #473 후속, 프로젝트엔 불필요한 속성.)
     row('🏷', '태그', pjvProjTagsField(p, reload)), 
     // #541 무손실 이관 가산 — ①프로젝트 자신의 커스텀필드 값(ClickUp 최상위 태스크 값의 표시 표면 = 여기)
