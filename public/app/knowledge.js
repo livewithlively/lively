@@ -1511,9 +1511,12 @@ async function renderKnowledgeDetail(view, name) {
         title: '사이드바 접기', 'aria-label': '사이드바 접기', text: '⟨' });
     const reopenBtn = el('button', { class: 'kn-side-reopen', type: 'button',
         title: '사이드바 펼치기', 'aria-label': '사이드바 펼치기', text: '⟩' });
+    // 기본값(#701): 저장된 선호가 없으면 좁은 화면(≤820px)은 접힘 — 모바일에서 문서를 열었는데
+    //  카테고리 트리만 한 화면 가득 보이던 문제. 사용자가 토글하면 그 값이 저장되어 우선.
     let collapsed = false;
     try {
-        collapsed = localStorage.getItem(KN_SIDE_COLLAPSE_KEY) === '1';
+        const stored = localStorage.getItem(KN_SIDE_COLLAPSE_KEY);
+        collapsed = stored != null ? stored === '1' : matchMedia('(max-width: 820px)').matches;
     }
     catch (_) { /* 프라이빗 모드 등 — 기본 펼침 */ }
     const shell = el('div', { class: 'kn-shell' + (collapsed ? ' side-off' : '') }, side, reopenBtn, canvas);
@@ -1617,7 +1620,8 @@ function trashRow(e, view) {
         } });
     const who = (e.actor ? '  · ' + e.actor : '') + (e.actor_kind ? ' (' + (e.actor_kind === 'ai' ? 'AI' : '사람') + ')' : '');
     const left = el('div', {}, el('div', { class: 'row-title' }, el('span', { class: 'kn-chip', text: TRASH_ENTITY_LABEL[e.entity] || e.entity }), '  ', el('span', { text: e.label || e.key })), el('div', { class: 'row-meta' }, el('span', { class: 'mono', text: e.key }), '  삭제: ', relTime(e.at), who));
-    return el('div', { class: 'row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px;' }, left, restoreBtn);
+    // trash-row(#701) — 좌측(이름) min-width:0 로 줄어들 수 있게 해 긴 이름이 복원 버튼을 화면 밖으로 밀지 않게.
+    return el('div', { class: 'row trash-row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px;' }, left, restoreBtn);
 }
 // ════════════════════════════════════════════
 // #290 지식↔지식 링크 패널·자료 상세·라벨은 knowledge-doc.ts 로 이관(#592) — 여기선 미러 트리(사이드바)만.
