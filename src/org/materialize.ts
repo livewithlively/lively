@@ -109,7 +109,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "- 지식: `knowledge_search`(의미·자연어 — 벡터+grep RRF 하이브리드; 임베딩 off 면 grep 폴백) · `knowledge_grep`(정확 토큰/정규식 grep) · `knowledge_list`(space·category·injection 필터) · `knowledge_get`(name→전문, 부분읽기).",
   "- 도메인맵: `category_list` / `category_get`(should·is·debt·의존 엣지) · `category_edge_list`.",
   "- 프로젝트: `project_list_v6` / `project_get_v6`(태스크 위계·필요/산출지식).",
-  "- 라이브 데이터(코드·DB): `db_query` · `context_overview`.",
+  "- 라이브 데이터(코드·DB): `db_query`(admin이면 별도 등록 없이 내장 `self` 소스로 이 라이블리 DB=지식·프로젝트·카테고리·도메인맵을 읽기전용 SQL 조회) · `context_overview`.",
   "",
   "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
   "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
