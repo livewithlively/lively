@@ -116,6 +116,16 @@ function isRetriableEmbedError(e: unknown): boolean {
   return name === "TimeoutError" || name === "AbortError" || e instanceof TypeError; // TypeError = undici 'fetch failed'(네트워크/바디 타임아웃)
 }
 
+// 4xx 중 유일한 예외(#669 포이즌 문서) — 모델 컨텍스트(토큰) 초과. 우리 입력 캡은 8000'자'라 한국어/코드 장문은
+//  8192'토큰'을 넘을 수 있다(Ollama: "the input length exceeds the context length" · OpenAI: "maximum context length…"
+//  · TEI: "must have less than N tokens"). 이 오류는 배치 분할(포이즌 격리)·프리픽스 축약으로 해소 가능 → 재시도 대상.
+//  안 잡으면 pending 백필이 같은 문서를 매번 다시 집어 영구 정체(어니스트 박스 86건 실사례).
+function isContextLengthError(e: unknown): boolean {
+  const msg = String((e as Error | null | undefined)?.message ?? "");
+  if (!/embedding endpoint 4\d\d/.test(msg)) return false;
+  return /context length|context_length|maximum context|input length|too many tokens|less than \d+ tokens/i.test(msg);
+}
+
 // ── OpenAI-compatible HTTP provider — 원격/로컬 사이드카 공통(fetch, 새 의존성 0; Node22 global fetch). ──
 class HttpEmbeddingProvider implements EmbeddingProvider {
   readonly kind = "http" as const;
@@ -158,18 +168,39 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
 
   // 한 청크를 1회 요청. 타임아웃/네트워크 실패면 청크를 반으로 줄여 재귀 재시도(단건까지) — 느린 백엔드가 조금씩이라도 진행되게.
   //  단건까지 줄여도 타임아웃이면 throw(엔드포인트가 사실상 불가용 — 호출부가 unavailable/error 로 처리).
+  //  컨텍스트 초과(4xx, isContextLengthError)도 분할 대상 — 포이즌 문서를 단건으로 격리한 뒤 프리픽스 축약(#669).
   private async embedChunk(texts: string[]): Promise<number[][]> {
     try {
       return await this.embedRequest(texts);
     } catch (e) {
-      if (texts.length > 1 && isRetriableEmbedError(e)) {
+      if (texts.length > 1 && (isRetriableEmbedError(e) || isContextLengthError(e))) {
         const mid = Math.ceil(texts.length / 2);
         const head = await this.embedChunk(texts.slice(0, mid));
         const tail = await this.embedChunk(texts.slice(mid));
         return [...head, ...tail];
       }
+      if (texts.length === 1 && isContextLengthError(e)) {
+        return [await this.embedTruncated(texts[0])];
+      }
       throw e;
     }
+  }
+
+  // 단건이 모델 컨텍스트(토큰) 한도를 넘으면 프리픽스를 반씩 줄여 성공까지 재시도(#669 포이즌 문서).
+  //  벡터 없음(백필이 그 문서에서 영구 정체)보다 프리픽스 벡터가 낫다 — 의미검색은 앞부분(제목·요약·서두) 기준으로 동작.
+  //  컨텍스트 오류 외의 실패는 그대로 throw(재시도 폭주 방지). 500자 미만까지 줄여도 안 되면 포기(엔드포인트 이상).
+  private async embedTruncated(text: string): Promise<number[]> {
+    let t = text;
+    while (t.length > 500) {
+      t = t.slice(0, Math.floor(t.length / 2));
+      try {
+        const [v] = await this.embedRequest([t]);
+        if (v && v.length) return v;
+      } catch (e) {
+        if (!isContextLengthError(e)) throw e;
+      }
+    }
+    throw new Error(`embedding: 컨텍스트 한도 축약 재시도 실패(${text.length}자 → 500자 미만까지 축소)`);
   }
 
   // 실제 1회 HTTP 호출 — 요청마다 새 AbortSignal.timeout(초과 시 TimeoutError → 상위에서 축소 재시도).
