@@ -8479,7 +8479,7 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
   autoCb.checked = true;  // #480: '웹에서 바로 열기'는 멈춤 없이 바로 실행되도록 자동승인 기본 켬(사용자 지정).
   const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 파일 수정·명령 실행을 매번 묻지 않고 바로 진행 (신뢰하는 작업에만)' }));
   // '실행 설정' — 터미널 탭 새 세션 팝업의 프리셋 UI 그대로(#req — 같은 term-preset-* 컴포넌트/요약줄).
-  //  여기선 기본 '펼침'(매번 눌러 여는 게 귀찮다는 피드백) — 요약줄 클릭으로 접을 수는 있다.
+  //  요약줄이 프리필 값(하네스·모델·effort)을 그대로 보여주므로 기본 '접힘'(#req 후속 — 터미널 탭과 동일), 클릭으로 펼침.
   const presetSum = el('div', { class: 'term-preset-sum' });
   const presetChev = el('span', { class: 'term-preset-chev' });
   const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button' }, presetSum, presetChev);
@@ -8487,7 +8487,7 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     field('실행 (AI)', harnessSel),
     flagsBox,
     el('div', { style: 'margin-top:10px' }, autoRow));
-  let presetOpen = true;   // 기본 펼침(#req) — 터미널 탭(기본 접힘)과 달리 이 폼은 바로 보이게.
+  let presetOpen = false;   // 기본 접힘(#req 후속) — 프리필 값이 요약줄에 이미 보여 펼칠 필요가 없다.
   const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
   presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
   const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
