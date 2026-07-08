@@ -249,54 +249,58 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         return el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell);
     };
     // 리스트 그룹 — 프로젝트 탭 리스트 헤더(pjv-list-head: 캐럿·글리프·이름·개수, 접기/펼치기) + 행들. 미분류는 색점.
-    // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'(프로젝트 탭과 동일 위치·동작): 클릭→그 자리서 바로 입력, Enter→생성 후 상세(내용 적는 창)로.
+    // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'. 프로젝트 탭 보드 추가행(pjvProjAddRow)과 동일 클래스·톤(테두리 없는 인라인 입력).
+    //  트리거(＋ 프로젝트) → 클릭 시 제목 셀(체크박스 자리·캐럿 자리·상태점 + 입력)로 펼침. Enter=생성 후 상세로, Esc=접기.
     const dashInlineAdd = (listId) => {
-        const wrap = el('div', { class: 'dash-inlineadd' });
-        const showBtn = () => wrap.replaceChildren(el('button', { class: 'dash-inlineadd-btn', type: 'button', title: '새 프로젝트', onclick: showInput }, el('span', { class: 'dash-inlineadd-plus', text: '+' }), el('span', { text: '새 프로젝트' })));
-        const showInput = () => {
-            let busy = false;
-            const input = el('input', { class: 'dash-inlineadd-input', type: 'text', placeholder: '프로젝트 이름 입력 후 Enter', 'aria-label': '새 프로젝트 이름' });
-            const submit = async () => {
-                const name = (input.value || '').trim();
-                if (busy)
-                    return;
-                if (!name) {
-                    showBtn();
-                    return;
-                }
-                busy = true;
-                input.disabled = true;
-                try {
-                    const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
-                    const id = r && (r.project && r.project.id || r.id);
-                    toast('프로젝트를 만들었어요');
-                    if (id)
-                        location.hash = '#/projects2/p/' + id; // 내용 적는 창 = 프로젝트 상세로 이동
-                    else
-                        await reloadAll();
-                }
-                catch (e) {
-                    toast('실패 — ' + (e && e.message || e), true);
-                    busy = false;
-                    input.disabled = false;
-                    input.focus();
-                }
-            };
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
-                e.preventDefault();
-                submit();
+        const row = el('div', { class: 'pjv-addrow dash-addrow' });
+        const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
+        const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '프로젝트 이름 입력 후 Enter (Esc 취소)', maxlength: '200', spellcheck: 'false', autocomplete: 'off' });
+        let busy = false;
+        const collapse = () => { row.classList.remove('editing'); row.replaceChildren(trigger); };
+        const submit = async () => {
+            const name = (input.value || '').trim();
+            if (busy)
+                return;
+            if (!name) {
+                collapse();
+                return;
             }
-            else if (e.key === 'Escape') {
-                e.preventDefault();
-                showBtn();
-            } });
-            input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim())
-                showBtn(); });
-            wrap.replaceChildren(el('span', { class: 'dash-inlineadd-plus', text: '+' }), input);
+            busy = true;
+            input.disabled = true;
+            try {
+                const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
+                const id = r && (r.project && r.project.id || r.id);
+                toast('프로젝트를 만들었어요');
+                if (id)
+                    location.hash = '#/projects2/p/' + id; // 내용 적는 창 = 프로젝트 상세로 이동
+                else
+                    await reloadAll();
+            }
+            catch (e) {
+                toast('실패 — ' + (e && e.message || e), true);
+                busy = false;
+                input.disabled = false;
+                input.focus();
+            }
+        };
+        const expand = () => {
+            row.classList.add('editing');
+            row.replaceChildren(el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }), el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }), dashStatusIconSvg('active', '#94a3b8', 0), input));
             input.focus();
         };
-        showBtn();
-        return wrap;
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+            e.preventDefault();
+            submit();
+        }
+        else if (e.key === 'Escape') {
+            e.preventDefault();
+            collapse();
+        } });
+        input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim())
+            collapse(); });
+        trigger.onclick = expand;
+        collapse();
+        return row;
     };
     const dashProjGroup = (listId, l, arr) => {
         const isUn = !listId;
@@ -403,7 +407,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
                 byList.set(k, []);
             byList.get(k).push(p);
         }
-        const base = [...lists.map((l) => l.id).filter((id) => byList.has(id)), ...(byList.has(0) ? [0] : [])];
+        const base = [...lists.map((l) => l.id), ...(byList.has(0) ? [0] : [])]; // #req 프로젝트 없는(새로 추가한) 리스트도 개요에 노출
         currentOrder = dashApplyListOrder(base);
         // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
         const hiddenOv = dashOvHidden();
@@ -415,7 +419,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         if (visibleOrder.length) {
             gridEl = el('div', { class: 'pjv-ov-grid dash-ov-grid' });
             for (const listId of visibleOrder)
-                gridEl.append(projBlock(listId, listById.get(listId), byList.get(listId)));
+                gridEl.append(projBlock(listId, listById.get(listId), byList.get(listId) || []));
             gridEl.append(dashListAddCard()); // #req R20 — 개요 맨 끝 '+ 새 리스트'
         }
         else {
