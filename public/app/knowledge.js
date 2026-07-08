@@ -396,13 +396,32 @@ async function renderKnowledgeSpace(view, _space, params) {
         const ordered = [...mine, ...rest];
         // 카테고리별 rows(세션 캐시 공유 — 사이드바 펼침과 동일 소스). 대문 문서(icon/cover)·문서 수·최근 지식이 전부 여기서 나온다.
         const rowsPer = await Promise.all(ordered.map((c) => knFetchCategoryRows(c.id).catch(() => [])));
-        const grid = el('div', { class: 'kn-home-cats' });
-        ordered.forEach((c, i) => {
+        // #657h2 우리 팀 우선을 '보이게' — 사이드바와 같은 ★ 그룹 어휘로 카드 그리드를 이분(팀 미소속이면 단일 그리드).
+        //  ★오너십=우선순위 표시일 뿐 접근제한 아님(사이드바 불변식 동일).
+        const cardAt = (c, i) => {
             const rows = rowsPer[i];
             const home = rows.find((r) => isCategoryHomeDoc(r.name));
             const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
-            grid.append(knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id))));
-        });
+            return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)));
+        };
+        const cardParts = [];
+        if (mine.length) {
+            cardParts.push(el('div', { class: 'kn-home-grouplabel', title: '팀이 소유·관리하는 카테고리를 먼저 보여줍니다 — 접근 제한이 아니라 우선순위입니다' }, el('span', { class: 'kn-home-groupstar', 'aria-hidden': 'true', text: '★' }), el('span', { text: '우리 팀' }), el('span', { class: 'kn-home-groupcount', text: String(mine.length) })));
+            const gm = el('div', { class: 'kn-home-cats' });
+            mine.forEach((c, i) => gm.append(cardAt(c, i)));
+            cardParts.push(gm);
+            if (rest.length) {
+                cardParts.push(el('div', { class: 'kn-home-grouplabel kn-home-grouplabel-rest' }, el('span', { text: '그 외 카테고리' }), el('span', { class: 'kn-home-groupcount', text: String(rest.length) })));
+                const gr = el('div', { class: 'kn-home-cats' });
+                rest.forEach((c, j) => gr.append(cardAt(c, mine.length + j)));
+                cardParts.push(gr);
+            }
+        }
+        else {
+            const grid = el('div', { class: 'kn-home-cats' });
+            ordered.forEach((c, i) => grid.append(cardAt(c, i)));
+            cardParts.push(grid);
+        }
         // 우리 팀 최근 지식(팀 미소속이면 전체) — 최신순 캡. 폴더·대문 제외.
         const poolRows = mine.length ? rowsPer.slice(0, mine.length) : rowsPer;
         const pool = [];
@@ -417,7 +436,7 @@ async function renderKnowledgeSpace(view, _space, params) {
             text: '전체 지식 보기 →', onclick: () => { browseAll = true; refetch(); } }));
         const recentBox = el('div', { class: 'list-box browse-list kn-home-list' }, ...(recent.length ? recent.map((e) => knRow(e, null, openRow))
             : [el('div', { class: 'empty', text: '아직 지식이 없습니다 — 위의 ＋ 새 페이지로 시작해 보세요.' })]));
-        listBox.replaceChildren(grid, sechead, recentBox);
+        listBox.replaceChildren(...cardParts, sechead, recentBox);
         repaintBulk();
     }
     // 상단 필터 — 검색(q) + injection select + provenance select.
@@ -970,7 +989,13 @@ function knHomeCatCard(c, home, count, isMine, onOpen) {
     const ic = (home && home.icon) || '';
     cover.append(el('span', { class: 'kn-hcard-ic' + (ic ? '' : ' kn-hcard-ic-letter'),
         text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
-    const card = el('div', { class: 'kn-hcard', role: 'link', tabindex: '0', title: (c.name || c.key) + ' 대문 열기' }, cover, el('div', { class: 'kn-hcard-body' }, el('div', { class: 'kn-hcard-name', text: c.name || c.key }), c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null, el('div', { class: 'kn-hcard-meta' }, el('span', { class: 'kn-hcard-space', text: (isMine ? '★ ' : '') + (SPACE_LABEL[c.space] || c.space || '') }), el('span', { class: 'kn-hcard-count', text: String(count) }))));
+    // ★=우리 팀(사이드바 tree-groupstar 와 같은 어휘) — 별도 span 으로 분리해 액센트 컬러 적용(#657h2).
+    const spaceEl = el('span', { class: 'kn-hcard-space' });
+    if (isMine)
+        spaceEl.append(el('span', { class: 'kn-hcard-star', 'aria-hidden': 'true', text: '★ ' }));
+    spaceEl.append(SPACE_LABEL[c.space] || c.space || '');
+    const card = el('div', { class: 'kn-hcard' + (isMine ? ' kn-hcard-mine' : ''), role: 'link', tabindex: '0',
+        title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 우리 팀 카테고리' : '') }, cover, el('div', { class: 'kn-hcard-body' }, el('div', { class: 'kn-hcard-name', text: c.name || c.key }), c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null, el('div', { class: 'kn-hcard-meta' }, spaceEl, el('span', { class: 'kn-hcard-count', text: String(count) }))));
     card.addEventListener('click', onOpen);
     card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
         onOpen(); });
