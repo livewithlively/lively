@@ -3,18 +3,20 @@
 //  순환 import 금지: core 만 import(이 모듈은 최하층 위젯).
 //  커버 값 포맷: 'grad:1'~'grad:8'(프리셋 그라디언트) | '#RRGGBB'(단색) | 'url:https://…'(이미지).
 import { el, toast } from './core.js';
-// ── 프리셋 그라디언트(노션 갤러리풍 — 브랜드 톤 파스텔) ──
+// ── 프리셋 커버(#657r) — 파스텔 무지개 대신 '아카이브 톤': 단색-계열 깊이 + 소수의 딥 톤. ──
+//  리빙그린·잉크네이비·따뜻한 종이·차분한 슬레이트 — 지식 카탈로그의 절제된 표지. 각 그라디언트는
+//  단일 색상 안에서 명도만 움직여(무지개 아님) 의도적으로 보이게 한다.
 const COVER_GRADS = {
-    '1': 'linear-gradient(120deg, #FDEFE2 0%, #FCE0C8 100%)', // 피치(참고 이미지 톤)
-    '2': 'linear-gradient(120deg, #DDEBFF 0%, #C4DBFF 100%)', // 블루
-    '3': 'linear-gradient(120deg, #DFF6EE 0%, #BFEBDC 100%)', // 민트
-    '4': 'linear-gradient(120deg, #F3EAFD 0%, #E2D3F8 100%)', // 라벤더
-    '5': 'linear-gradient(120deg, #FFF6D8 0%, #FBE8AF 100%)', // 옐로
-    '6': 'linear-gradient(120deg, #FCE7E4 0%, #F6CFC9 100%)', // 코랄
-    '7': 'linear-gradient(135deg, #DDEBFF 0%, #DFF6EE 55%, #FFF6D8 100%)', // 오로라
-    '8': 'linear-gradient(135deg, #1C3962 0%, #2D6BF0 100%)', // 딥블루(다크)
+    '1': 'linear-gradient(135deg, #F0ECE2 0%, #E3DACB 100%)', // 샌드(따뜻한 종이)
+    '2': 'linear-gradient(135deg, #E4E9F0 0%, #C8D2E1 100%)', // 슬레이트
+    '3': 'linear-gradient(135deg, #DCF0E7 0%, #ADDBC6 100%)', // 리빙(그린 톤)
+    '4': 'linear-gradient(135deg, #ECEBE4 0%, #D3D8C6 100%)', // 모스(세이지)
+    '5': 'linear-gradient(135deg, #F1E7DF 0%, #E0C9B9 100%)', // 클레이(웜)
+    '6': 'linear-gradient(135deg, #E8E7EA 0%, #CFCDD6 100%)', // 애쉬
+    '7': 'linear-gradient(150deg, #244A3A 0%, #0FB07E 120%)', // 딥 리빙(다크 그린)
+    '8': 'linear-gradient(150deg, #1B1E27 0%, #2B4B7E 120%)', // 딥 잉크(네이비)
 };
-const COVER_SOLIDS = ['#F6FAFF', '#EEF4FF', '#F3FBF8', '#FFF9EC', '#FDF3F2', '#FAF6FD', '#F7F8FA', '#15233B'];
+const COVER_SOLIDS = ['#F0ECE2', '#E4E9F0', '#DCF0E7', '#ECEBE4', '#F1E7DF', '#E8E7EA', '#2B4B7E', '#1B1E27'];
 // 커버 값 → element 배경 적용. url 커버는 https/http 만(그 외 무시 — CSS url 은 JS 실행이 없지만 형식은 강제).
 //  적용 실패(미지 포맷)면 false — 호출부가 기본 그라디언트 폴백.
 function applyCoverBg(node, cover) {
@@ -44,13 +46,14 @@ function applyCoverBg(node, cover) {
     }
     return false;
 }
-// 결정적 기본 커버 — 키 해시로 프리셋 중 하나(카테고리 대문이 설정 0으로도 그럴싸하게).
+// 결정적 기본 커버 — 키 해시로 톤 프리셋 중 하나(설정 0으로도 품위 있게). 딥 톤(7·8)은 기본에서 제외 —
+//  아이콘/제목이 얹히는 대문은 밝은 톤 6종(1~6)이 안전(대비·가독).
 function defaultCoverFor(seed) {
     let h = 0;
     const s = String(seed || '');
     for (let i = 0; i < s.length; i++)
-        h = (h * 31 + s.charCodeAt(i)) % 7;
-    return 'grad:' + (h + 1); // 1~7(다크 8 은 기본에서 제외)
+        h = (h * 31 + s.charCodeAt(i)) % 6;
+    return 'grad:' + (h + 1); // 1~6(딥 7·8 제외)
 }
 // ── 이모지 피커 — 앵커 근처 팝오버. onPick(emoji) / onClear(있으면 '제거' 노출). ──
 const EMOJI_SET = [
