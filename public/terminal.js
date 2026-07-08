@@ -83,6 +83,7 @@ let activeId = 'term';
 
 let lastCols = 0, lastRows = 0, resizeTimer = null, didInitialFit = false;
 let scrollSpeed = 1; // 휠 스크롤 속도 배수(환경설정에서 조절, prefs.scrollSpeed)
+let shiftEnterPending = false; // Shift+Enter → 이 keydown 이 곧 낼 '\r'(onData)을 '\x1b\r'(줄바꿈)로 승격하는 1회성 플래그
 
 // ── tmux control-mode 파서 ──
 // 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
@@ -428,6 +429,19 @@ async function dropFileToAgent(file) {
 function setupClipboard() {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
+    // Shift+Enter = 줄바꿈(제출 아님). xterm 은 Shift 유무와 무관하게 Enter 를 CR('\r')로만 보내 클로드 코드가 '제출'로 받는다.
+    //  (Option/Alt+Enter 는 xterm 이 Meta+Enter '\x1b\r' 로 보내 클로드가 '줄바꿈'으로 받음 — 이미 동작). Shift 엔 그 경로가
+    //  없으니, xterm 이 낼 그 '\r' 을 아래 onData 에서 '\x1b\r'(= Option+Enter 와 동일 바이트)로 바꿔치기해 같은 줄바꿈으로 만든다.
+    //  ⚠ 왜 여기서 직접 sendInput('\x1b\r')(return false) 하지 않고 통과(return true) + onData 바꿔치기냐 — #633 계열 순서 문제:
+    //   한글 조합 중이면 xterm 의 compositionHelper.keydown 이 '이 keydown 안에서' 음절을 동기 확정(→ onData 로 음절 먼저 전송)한
+    //   뒤 evaluate 가 '\r' 을 낸다. 그 '\r' 만 바꾸면 '음절 → 줄바꿈' 순서가 저절로 맞아(우리가 IME 확정 타이밍을 안 건드림),
+    //   직접 전송 시 비동기 음절보다 줄바꿈이 앞서 나가는 버그(#633 의 '야바보')를 원천 회피한다. 조합이 없으면 evaluate 가 바로 '\r'.
+    if (e.key === 'Enter' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault(); // 브라우저 기본(히든 textarea 개행 삽입)이 IME 상태를 오염시키지 않게 — 실제 줄바꿈은 onData 바꿔치기가 담당
+      shiftEnterPending = true;                                    // 이 keydown 이 곧 낼 '\r' 을 승격 대상으로 표시
+      Promise.resolve().then(() => { shiftEnterPending = false; }); // 이 keydown 의 동기 onData 처리 직후 해제(다른 Enter 로 안 새게)
+      return true; // xterm 통과 → (조합이면 음절 확정 후) '\r' 발생 → onData 가 '\x1b\r' 로 승격
+    }
     // Option/Alt + ←/→ = 단어 단위 이동. xterm 기본(macOptionIsMeta 미설정)으론 Option+방향키가 단어이동이 안 되므로
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -987,7 +1001,11 @@ async function boot() {
   try { if (window.ResizeObserver) { const ro = new ResizeObserver(doResize); ro.observe(host); } } catch (_) { /* noop */ }
 
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 현재 ws 를 참조해 전송.
-  term.onData((d) => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } });
+  term.onData((d) => {
+    // Shift+Enter 승격: 이 keydown 이 낸 '\r' 을 '\x1b\r'(Option+Enter 와 동일 = 줄바꿈)로 바꿔 보낸다. 음절 등 다른 데이터는 그대로.
+    if (shiftEnterPending && d === '\r') { shiftEnterPending = false; d = '\x1b\r'; }
+    if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  });
   // 탭이 백그라운드→포그라운드로 돌아올 때: 끊겨 있으면 재연결, 연결돼 있으면 '이 탭'으로 창 크기를 다시 요구한다.
   //  서버는 window-size latest 라, 지금 보는 탭이 refresh-client 를 보내 '최근 활동'이 되면 pane 이 이 탭 크기로
   //  맞춰져 깨짐이 풀린다(다른 탭·잔존 연결이 더 큰 pane 을 잡고 있던 경우의 #252 증상 회복). forceRedraw =
