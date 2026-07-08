@@ -746,6 +746,8 @@ async function renderKnowledgeSpace(view, _space, params) {
     const filterBar = el('div', { class: 'filter-bar browse-filter' }, searchGroup, provSel, typeSel);
     // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
     const layout = el('div', { class: 'kn-shell' }, side, el('section', { class: 'kn-main' }, head, catBox, bulkBar, listBox, foot));
+    knApplySideW(layout);
+    layout.append(knSideResizeHandle(layout)); // (#670) 프로젝트 탭과 동일 폭 조절 핸들(같은 --pjv-side-w / localStorage 'pjv:sideW')
     view.replaceChildren(layout);
     applyReveal([layout]);
     paintCatHead();
@@ -754,6 +756,63 @@ async function renderKnowledgeSpace(view, _space, params) {
     const peekName = params && params.get && params.get('peek');
     if (peekName)
         openKnowledgePeek(peekName, { fromUrl: true, onRefresh: refetch });
+}
+// (#670) WIKI 사이드바 폭 조절 — 프로젝트 탭(.pjv-side-resize)과 동일 UX·같은 localStorage('pjv:sideW') 공유 → 두 탭이 항상 같은 폭.
+//  .kn-side 는 자체 스크롤(overflow)이라 그 안 절대배치는 클립됨 → 비스크롤 셸(.kn-shell) 자식으로 두고 사이드바 우측 경계에 얹는다.
+function knSideResizeHandle(shell) {
+    const h = el('div', { class: 'kn-side-resize', title: '드래그하여 사이드바 너비 조절 (더블클릭: 기본값)', 'aria-hidden': 'true' });
+    h.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const side = shell.querySelector('.kn-side');
+        const startX = e.clientX;
+        const startW = (side && side.getBoundingClientRect().width) || 240;
+        document.body.classList.add('pjv-side-resizing'); // 프로젝트 탭과 같은 리사이즈 하이라이트 훅
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
+            document.body.classList.remove('pjv-side-resizing');
+            const cur = shell.style.getPropertyValue('--pjv-side-w');
+            if (cur) {
+                try {
+                    localStorage.setItem('pjv:sideW', cur.trim());
+                }
+                catch (_) { /* noop */ }
+            }
+        };
+        const onMove = (ev) => {
+            if (ev.buttons === 0) {
+                onUp();
+                return;
+            } // 창 밖 mouseup 유실 방지
+            let w = startW + (ev.clientX - startX);
+            w = Math.max(150, Math.min(440, w));
+            shell.style.setProperty('--pjv-side-w', Math.round(w) + 'px');
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
+    });
+    h.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        shell.style.removeProperty('--pjv-side-w');
+        try {
+            localStorage.removeItem('pjv:sideW');
+        }
+        catch (_) { /* noop */ }
+    });
+    return h;
+}
+// 저장된 사이드바 폭 적용(프로젝트 탭과 공유). 셸에 --pjv-side-w 를 얹으면 .kn-side flex-basis 와 핸들 위치가 함께 따라감.
+function knApplySideW(shell) {
+    try {
+        const sw = localStorage.getItem('pjv:sideW');
+        if (sw)
+            shell.style.setProperty('--pjv-side-w', sw.indexOf('px') >= 0 ? sw : sw + 'px');
+    }
+    catch (_) { /* noop */ }
 }
 // #551 노션 페이지 트리 로더 — 사이드바 공용(목록·문서 페이지). 미러 없음/권한 없음이면 숨김 유지.
 function loadMirrorTreeInto(mirrorBox) {
@@ -1390,6 +1449,8 @@ async function renderKnowledgeDetail(view, name) {
     }
     catch (_) { /* 프라이빗 모드 등 — 기본 펼침 */ }
     const shell = el('div', { class: 'kn-shell' + (collapsed ? ' side-off' : '') }, side, reopenBtn, canvas);
+    knApplySideW(shell);
+    shell.append(knSideResizeHandle(shell)); // (#670) 프로젝트 탭과 동일 폭 조절 핸들
     const setSide = (off) => {
         shell.classList.toggle('side-off', off);
         try {
