@@ -1744,6 +1744,24 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-mp-name { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); }
 .proj-mp-add { flex: none; font-size: 12px; font-weight: 600; color: var(--blue); }
 .proj-mp-empty { padding: 12px; font-size: 13px; color: var(--muted-2); text-align: center; }
+/* 초대 타입어헤드(#673) — 긴 행 목록 대신 검색→칩. 드롭다운은 absolute 오버레이라 폼 세로높이를 안 늘린다. */
+.proj-mp-ta { position: relative; }
+.proj-mp-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 6; max-height: 236px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line-net); border-radius: 9px; box-shadow: 0 10px 28px rgba(21,35,59,.16); }
+.proj-mp-menu[hidden] { display: none; }
+.proj-mp-hint { font-size: 12.5px; color: var(--muted-2); padding: 2px 0; }
+.proj-mp-ava-sm { width: 20px; height: 20px; font-size: 10px; }
+.proj-mp-chip-name { font-size: 13px; color: var(--ink); }
+/* '실행 설정' 접이식 프리셋(#673) — 하네스·모델·effort 를 요약 한 줄로 접어 세로 절약(이전 설정 기억). */
+.term-preset-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 12px; margin: 14px 0 0; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit; color: var(--ink); text-align: left; }
+.term-preset-toggle:hover { background: var(--bg-tint-2); }
+.term-preset-sum { font-size: 13px; color: var(--ink-sub); }
+.term-preset-sum b { color: var(--ink); font-weight: 700; }
+.term-preset-chev { color: var(--muted); font-size: 12px; flex: none; }
+.term-preset-body { margin-top: 10px; }
+/* 실행 옵션 — 두 체크박스(워크트리·자동 승인)를 한 묶음으로(#673). */
+.term-checks { display: flex; flex-direction: column; gap: 9px; margin: 14px 0 2px; }
+.term-checks .term-auto { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+.term-checks .term-auto input { margin-top: 2.5px; flex: none; }
 .proj-member-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .proj-chip { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
 /* 팀원 한 줄(제목 아래, 박스 없이) — 작은 아바타 + 이름 칩. 액션 버튼과 분리(높이 불일치 제거). */

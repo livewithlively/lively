@@ -34,6 +34,21 @@ function saveTermPrefs(p) { try {
     localStorage.setItem(TERM_PREFS_KEY, JSON.stringify(p));
 }
 catch (_) { /* noop */ } }
+// 새 세션 폼 '실행 설정' 기억(#673) — 마지막으로 쓴 하네스 + 플래그(모델·effort)를 브라우저에 저장해 다음 생성 때 기본값으로 복원.
+const TERM_CREATE_PREFS_KEY = 'lively_term_create_prefs';
+function termCreatePrefs() {
+    try {
+        const p = JSON.parse(localStorage.getItem(TERM_CREATE_PREFS_KEY) || '{}');
+        return (p && typeof p === 'object') ? p : {};
+    }
+    catch (_) {
+        return {};
+    }
+}
+function saveTermCreatePrefs(p) { try {
+    localStorage.setItem(TERM_CREATE_PREFS_KEY, JSON.stringify(p));
+}
+catch (_) { /* noop */ } }
 // 활성 터미널(세션) — 라우트 이탈/재진입 시 정리한다(ws 종료 + xterm dispose + 리스너 제거).
 let termSession = null;
 function teardownTerminal() {
@@ -271,22 +286,41 @@ function loginBannerEl(cfg, view) {
 function openTermCreateForm(cfg, view) {
     const roots = cfg.roots || [];
     const harnesses = cfg.harnesses || [];
+    const prefs = termCreatePrefs();
     const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
-    const authorI = el('input', { class: 'term-input', type: 'text', value: myName(cfg), disabled: '' });
     const rootSel = el('select', { class: 'term-input' }, ...roots.map((r) => el('option', { value: r.key }, r.label)));
     const pickerBox = el('div', { class: 'term-picker' });
     let pickerPath = '';
     const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
     const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
     const flagsBox = el('div', { class: 'term-flags' });
+    // 두 개의 체크박스(워크트리·자동 승인)는 '실행 옵션'으로 묶는다(#673). 워크트리 기본 ON, 자동승인 기본 OFF.
     const autoCb = el('input', { type: 'checkbox' });
-    const autoWrap = el('label', { class: 'term-auto', 'data-tour': 'autoapprove' }, autoCb, el('span', { text: ' 자동 승인 (위험) — 에이전트가 확인 없이 파일 수정·명령 실행. 공유 폴더에선 특히 주의.' }));
-    // 워크트리(#675) — 선택한 폴더가 git 저장소면 세션을 '새 브랜치의 워크트리'에서 돌려 격리한다(다른 세션·메인 체크아웃과
-    //  워킹트리 충돌 방지). 기본 ON(요청). 저장소 아님·격리(box_)·프로젝트 세션이면 서버가 조용히 무시하고 폴더에서 그대로 돈다(무회귀).
+    const autoWrap = el('label', { class: 'term-auto' }, autoCb, el('span', { text: ' 자동 승인 (위험) — AI 가 확인 없이 파일 수정·명령 실행. 공유 폴더 주의.' }));
     const wtCb = el('input', { type: 'checkbox', checked: '' });
-    const wtWrap = el('label', { class: 'term-auto' }, wtCb, el('span', { text: ' git 워크트리에서 작업 — 선택한 폴더가 git 저장소면 새 브랜치의 워크트리를 만들어 격리 작업합니다(다른 세션·메인 체크아웃과 안 충돌). 저장소가 아니면 무시됩니다.' }));
+    const wtWrap = el('label', { class: 'term-auto' }, wtCb, el('span', { text: ' git 워크트리에서 작업 (권장) — 폴더가 git 저장소면 새 브랜치 워크트리에서 격리 작업(다른 세션·메인 체크아웃과 안 충돌).' }));
+    // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
+    const presetSum = el('div', { class: 'term-preset-sum' });
+    const presetChev = el('span', { class: 'term-preset-chev', text: '▾' });
+    const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button', 'data-tour': 'preset' }, presetSum, presetChev);
+    const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model' }, el('div', { 'data-tour': 'harness' }, field('실행 (AI)', harnessSel)), flagsBox, profileNoteEl(cfg));
+    let presetOpen = false;
+    const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
+    presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
+    const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
+    function presetSummary() {
+        const h = harnessOf();
+        const parts = [h.label || harnessSel.value];
+        for (const f of (h.flags || [])) {
+            if (f.name !== '--model' && f.name !== '--effort')
+                continue;
+            const c = flagsBox.querySelector('[data-flag="' + f.name + '"]');
+            parts.push((f.name === '--model' ? '모델 ' : 'effort ') + ((c && c.value) || '기본'));
+        }
+        presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
+    }
     function renderFlags() {
-        const h = harnesses.find((x) => x.key === harnessSel.value) || {};
+        const h = harnessOf();
         flagsBox.replaceChildren();
         for (const f of (h.flags || [])) {
             let ctrl;
@@ -296,12 +330,24 @@ function openTermCreateForm(cfg, view) {
                 ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
             else
                 ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
+            const saved = prefs.flags && prefs.flags[f.name]; // 이전 설정 복원(#673)
+            if (saved != null) {
+                if (ctrl.type === 'checkbox')
+                    ctrl.checked = !!saved;
+                else
+                    ctrl.value = saved;
+            }
+            ctrl.addEventListener('change', presetSummary);
             flagsBox.append(el('div', { class: 'field' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
         }
         autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
+        presetSummary();
     }
     harnessSel.addEventListener('change', renderFlags);
+    if (prefs.harness && harnesses.some((h) => h.key === prefs.harness))
+        harnessSel.value = prefs.harness; // 이전 하네스 복원
     renderFlags();
+    applyPreset();
     // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
     async function loadPicker() {
         pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
@@ -358,9 +404,9 @@ function openTermCreateForm(cfg, view) {
     }
     rootSel.addEventListener('change', () => { pickerPath = ''; loadPicker(); });
     loadPicker();
-    // data-tour 래퍼 — 온보딩 투어(#517)가 폼의 시각적 순서(위→아래)대로 스포트라이트한다:
-    //  이름 → 폴더 → AI → 초대 → 모델 → 자동 승인 → 생성.
-    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), field('작업자', authorI), el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)), wtWrap, el('div', { 'data-tour': 'harness' }, field('하네스', harnessSel)), profileNoteEl(cfg), el('div', { 'data-tour': 'invite' }, field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box)), el('div', { 'data-tour': 'model' }, flagsBox), autoWrap, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+    // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
+    //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → folder → options → preset → invite → create.
+    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)), el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const flags = {};
@@ -369,6 +415,7 @@ function openTermCreateForm(cfg, view) {
             const payload = { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked };
             try {
                 const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
+                saveTermCreatePrefs({ harness: harnessSel.value, flags }); // 이 설정을 다음 생성 때 기본값으로 기억(#673)
                 back.remove();
                 toast('세션 생성됨');
                 if (out && out.session)
@@ -414,42 +461,46 @@ function openTermEdit(s, cfg, view) {
             }
         } })));
 }
-// 초대 멤버 피커 — 프로젝트 팀원 피커(projects.ts memberPicker, .proj-mp)와 동일한 UI 로 통일(#617):
-//  검색 + 초대 요약 + [아바타·이름·✓] 행(클릭 토글, 선택된 사람은 위로). 나(state.me) 제외한
-//  구성원(사람·AI)이 후보. current(Set)=초기 선택, selected()=고른 멤버 id 배열. 생성·수정 폼이 공유한다.
+// 초대 멤버 피커(#673) — 긴 행 목록 대신 '검색해 추가 → 칩' 타입어헤드. 세로로 여러 이름을 항상 보여줄 이유가 없어,
+//  기본은 칩(선택된 사람)만 보이고, 검색창을 누르면 드롭다운(absolute 오버레이라 폼 높이를 안 늘림)이 후보를 보여준다.
+//  나(state.me) 제외한 구성원이 후보. current(Set)=초기 선택, selected()=고른 id 배열. 생성·수정 폼이 공유한다.
 function buildInvitePicker(cfg, current) {
     const meId = (state.me && state.me.userId) || '';
     const others = (cfg.members || []).filter((m) => m.id !== meId);
     const selected = new Set([...current].filter((id) => others.some((m) => m.id === id))); // 유령 id 방지
-    const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색…' });
-    const count = el('div', { class: 'proj-mp-count' });
-    const results = el('div', { class: 'proj-mp-results' });
-    const box = el('div', { class: 'proj-mp' }, searchIn, count, results);
-    function paint() {
-        const n = selected.size;
-        count.textContent = n ? n + '명 초대됨' : '초대할 사람을 골라 추가하세요';
-        if (!others.length) {
-            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' }));
+    const label = (m) => (m.name || m.id) + (m.kind === 'agent' ? ' (AI)' : '');
+    const chips = el('div', { class: 'proj-mp-chips' });
+    const searchIn = el('input', { type: 'text', class: 'proj-mp-search', placeholder: '이름으로 검색해 추가…' });
+    const menu = el('div', { class: 'proj-mp-menu', hidden: '' });
+    const box = el('div', { class: 'proj-mp' }, chips, el('div', { class: 'proj-mp-ta' }, searchIn, menu));
+    function paintChips() {
+        if (!selected.size) {
+            chips.replaceChildren(el('span', { class: 'proj-mp-hint', text: others.length ? '비우면 나만 보는 비공개 세션이에요.' : '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' }));
             return;
         }
-        const q = searchIn.value.trim().toLowerCase();
-        const cand = others.filter((m) => !q || (m.name || m.id).toLowerCase().includes(q));
-        cand.sort((a, b) => (selected.has(b.id) ? 1 : 0) - (selected.has(a.id) ? 1 : 0)); // 선택된 사람을 위로
-        if (!cand.length) {
-            results.replaceChildren(el('div', { class: 'proj-mp-empty', text: '일치하는 사람이 없어요.' }));
-            return;
-        }
-        results.replaceChildren(...cand.map((m) => {
-            const on = selected.has(m.id);
-            return el('div', { class: 'proj-mp-row' + (on ? ' on' : ''), role: 'button', 'aria-pressed': on ? 'true' : 'false',
-                onclick: () => { if (on)
-                    selected.delete(m.id);
-                else
-                    selected.add(m.id); paint(); searchIn.focus(); } }, personFace(m.id, 'proj-mp-ava', m.name), el('span', { class: 'proj-mp-name', text: m.name + (m.kind === 'agent' ? ' (AI)' : '') }), el('span', { class: 'proj-mp-check' + (on ? ' on' : ''), 'aria-hidden': 'true', text: on ? '✓' : '' }));
+        chips.replaceChildren(...[...selected].map((id) => {
+            const m = others.find((x) => x.id === id) || { id, name: id };
+            return el('span', { class: 'proj-mp-chip' }, personFace(m.id, 'proj-mp-ava proj-mp-ava-sm', m.name), el('span', { class: 'proj-mp-chip-name', text: label(m) }), el('button', { class: 'proj-mp-chip-x', type: 'button', 'aria-label': '초대 제거', text: '×', onclick: () => { selected.delete(id); paintChips(); } }));
         }));
     }
-    searchIn.addEventListener('input', paint);
-    paint();
+    function closeMenu() { menu.hidden = true; menu.replaceChildren(); }
+    function openMenu() {
+        const q = searchIn.value.trim().toLowerCase();
+        const cand = others.filter((m) => !selected.has(m.id) && (!q || (m.name || m.id).toLowerCase().includes(q))).slice(0, 8);
+        if (!cand.length) {
+            menu.replaceChildren(el('div', { class: 'proj-mp-empty', text: others.length ? '일치하는 사람이 없어요.' : '초대할 구성원이 없어요.' }));
+            menu.hidden = false;
+            return;
+        }
+        menu.replaceChildren(...cand.map((m) => el('div', { class: 'proj-mp-row', role: 'button',
+            // mousedown+preventDefault: 클릭 전 blur 로 메뉴가 닫혀 클릭이 씹히는 걸 막는다.
+            onmousedown: (e) => { e.preventDefault(); selected.add(m.id); searchIn.value = ''; paintChips(); openMenu(); searchIn.focus(); } }, personFace(m.id, 'proj-mp-ava', m.name), el('span', { class: 'proj-mp-name', text: label(m) }), el('span', { class: 'proj-mp-add', text: '＋ 추가' }))));
+        menu.hidden = false;
+    }
+    searchIn.addEventListener('focus', openMenu);
+    searchIn.addEventListener('input', openMenu);
+    searchIn.addEventListener('blur', () => setTimeout(closeMenu, 120));
+    paintChips();
     return { box, selected: () => [...selected] };
 }
 async function renderTerminalSession(view, id) {
@@ -536,9 +587,9 @@ function openTermSettings() {
 // 터미널 온보딩 투어(#517) — 세션 만드는 과정을 실제 UI 위에서 스포트라이트로 한 단계씩 짚어 준다.
 //  '새 창으로 열기'(원래 창을 가림)를 대체: 같은 화면에서 필요한 버튼만 밝게, 나머지는 어둡게 하고
 //  사용자가 실제 버튼을 직접 누르며 진행한다. renderTerminal/폼이 그린 DOM(data-tour 앵커)에 붙는다.
-//  순서는 만들기 창의 시각적 위→아래를 그대로 따른다: [+ 새 세션] 클릭 → ② 이름 → ③ 폴더 → ④ AI →
-//  ⑤ 초대(선택) → ⑥ 모델(선택) → ⑦ 자동 승인(주의) → ⑧ [생성하기] 클릭 → 🎉 완료.
-//  ① 새 세션·⑧ 생성하기는 advanceOn:'click' — 실제 버튼을 눌러야만 진행되며(코치마크에 [이전]/[다음]
+//  순서는 만들기 창의 시각적 위→아래를 그대로 따른다: [+ 새 세션] 클릭 → ② 이름 → ③ 폴더 → ④ 실행 옵션 →
+//  ⑤ 실행 설정(선택) → ⑥ 초대(선택) → ⑦ [생성하기] 클릭 → 🎉 완료.
+//  ① 새 세션·⑦ 생성하기는 advanceOn:'click' — 실제 버튼을 눌러야만 진행되며(코치마크에 [이전]/[다음]
 //  없이 ✕ 닫기만), 나머지 정보 단계는 [다음 →]으로 넘어간다.
 function startTerminalTour() {
     startTour([
@@ -562,35 +613,29 @@ function startTerminalTour() {
             placement: 'right', scrollIntoView: true,
         },
         {
-            target: '[data-tour="harness"]',
-            title: '④ 함께 일할 AI 고르기',
-            body: [el('p', { class: 'tour-p' }, el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), ' 중에 골라요. 잘 모르겠으면 Claude Code 를 추천해요.')],
+            target: '[data-tour="options"]',
+            title: '④ 실행 옵션',
+            body: [el('p', { class: 'tour-p' }, el('b', { text: 'git 워크트리' }), ' — 저장소면 새 브랜치의 워크트리에서 격리 작업해요(다른 세션·메인과 안 충돌). 기본 켜짐.'),
+                el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — AI 가 확인 없이 파일 수정·명령 실행. 빠르지만 위험하니 공유 폴더에선 꺼 두세요.')],
+            placement: 'right', scrollIntoView: true,
+        },
+        {
+            target: '[data-tour="preset"]',
+            title: '⑤ 실행 설정 (선택)',
+            body: [el('p', { class: 'tour-p' }, '함께 일할 ', el('b', { text: 'AI · 모델 · effort' }), '예요. 기본값으로 접혀 있고 ', el('b', { text: '이전 설정을 기억' }), '해요 — 바꾸려면 눌러 펼치세요.'),
+                el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 — Claude Code · 기본 모델로 시작해요.' })],
             placement: 'right', scrollIntoView: true,
         },
         {
             target: '[data-tour="invite"]',
-            title: '⑤ 함께 볼 사람 초대하기 (선택)',
-            body: [el('p', { class: 'tour-p' }, '필요하면 이 세션을 함께 볼 사람을 골라요. ', el('b', { text: '비워두면 나만 보는 비공개 세션' }), '이에요.'),
+            title: '⑥ 함께 볼 사람 초대하기 (선택)',
+            body: [el('p', { class: 'tour-p' }, '검색해서 추가하면 그 사람도 이 세션을 봐요. ', el('b', { text: '비워두면 나만 보는 비공개 세션' }), '이에요.'),
                 el('p', { class: 'tour-p', text: '지금 안 정해도 돼요 — 나중에 세션 [수정]에서 바꿀 수 있어요.' })],
             placement: 'right', scrollIntoView: true,
         },
         {
-            target: '[data-tour="model"]',
-            title: '⑥ 모델 고르기 (선택)',
-            body: [el('p', { class: 'tour-p' }, '함께 일할 AI 의 ', el('b', { text: '모델' }), '을 골라요. ', el('b', { text: '비워두면 기본 모델' }), '로 시작해요.'),
-                el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 두면 돼요 — 더 똑똑한 모델일수록 느리거나 비쌀 수 있어요.' })],
-            placement: 'right', scrollIntoView: true,
-        },
-        {
-            target: '[data-tour="autoapprove"]',
-            title: '⑦ 자동 승인 (주의)',
-            body: [el('p', { class: 'tour-p' }, '체크하면 AI 가 ', el('b', { text: '확인 없이 파일 수정·명령 실행' }), '까지 알아서 해요 — 빠르지만 위험해요.'),
-                el('p', { class: 'tour-p', text: '특히 공유 폴더에선 꺼 두길 권해요. 잘 모르겠으면 그대로(꺼짐) 두세요.' })],
-            placement: 'right', scrollIntoView: true,
-        },
-        {
             target: '[data-tour="create"]',
-            title: '⑧ 만들기',
+            title: '⑦ 만들기',
             body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 까만 터미널 창이 열려요.')],
             placement: 'top', scrollIntoView: true, advanceOn: 'click',
         },
