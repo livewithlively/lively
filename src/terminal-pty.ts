@@ -190,15 +190,27 @@ async function reapOrphanAttachClients(): Promise<void> {
     const { promisify } = await import("node:util");
     const execFileP = promisify(execFile);
     const { stdout } = await execFileP("ps", ["-eo", "pid=,ppid=,args="], { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
-    let reaped = 0;
+    const victims: number[] = [];
     for (const line of stdout.split("\n")) {
       const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
       if (!m) continue;
       const pid = Number(m[1]), ppid = Number(m[2]), cmd = m[3];
       if (ppid !== 1 || pid === process.pid) continue;                    // 고아만 — 살아있는 부모가 있으면 스킵
       if (!/tmux\b.*\battach\b.*\s-t\s+box-[a-z0-9-]+/.test(cmd)) continue; // 우리 웹터미널 attach 시그니처만
-      try { process.kill(pid, "SIGKILL"); reaped++; } catch { /* 우리 소유 아님(EPERM) 등 — skip */ }
+      victims.push(pid);
     }
-    if (reaped) logger.info({ reaped }, "고아 attach 클라이언트 회수(#687 이전 인스턴스 잔존 PTY 해제)");
+    if (!victims.length) return;
+    // ⚠ 페이싱(#687 후속): 수천 개를 한꺼번에 죽이면 tmux 서버가 동시 클라 해제로 순간 과부하되고, 그 사이 재접속
+    //  클라의 canAttach(tmux show-options)가 5s 타임아웃→가짜 4403(입장거부)로 오인될 수 있다(대량 백로그 청소 시 실측).
+    //  배치로 나눠 짧은 간격을 둬 tmux 부하를 분산한다(정상 운영 시 victims≈0 이라 즉시 끝남). 프론트도 4403 재시도로 이중방어.
+    const BATCH = 50, GAP_MS = 150;
+    let reaped = 0;
+    for (let i = 0; i < victims.length; i += BATCH) {
+      for (const pid of victims.slice(i, i + BATCH)) {
+        try { process.kill(pid, "SIGKILL"); reaped++; } catch { /* 우리 소유 아님(EPERM) 등 — skip */ }
+      }
+      if (i + BATCH < victims.length) await new Promise((r) => setTimeout(r, GAP_MS));
+    }
+    logger.info({ reaped, victims: victims.length }, "고아 attach 클라이언트 회수(#687 페이싱 배치)");
   } catch (e) { logger.warn({ err: (e as Error)?.message ?? String(e) }, "고아 attach 회수 실패(비치명)"); }
 }

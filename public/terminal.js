@@ -1005,6 +1005,11 @@ async function boot() {
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
 let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false;
+// 4403(입장 거부)이 '일시적'일 수 있다(#687): 재배포 직후 tmux 과부하로 서버가 세션 소유자 메타를 못 읽으면
+//  canAttach 가 false→4403 을 내는데, 이건 진짜 권한거부가 아니라 곧 풀리는 일시장애다. 그래서 4403 을 바로
+//  영구 게이트로 띄우지 않고 이 횟수만큼 재시도한다 — 일시장애면 그 사이 복구돼 붙고, 진짜 거부면 계속 4403 이라
+//  MAX 후 게이트로 간다(무한 재연결 방지 취지는 보존). 성공 연결(onopen) 시 0 으로 리셋.
+let denyRetries = 0; const MAX_DENY_RETRIES = 5;
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(connectNow, reconnectDelay);
@@ -1044,7 +1049,7 @@ async function connectNow() {
     onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
-    connecting = false; wasConnected = true; reconnectDelay = 1500;
+    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
@@ -1063,7 +1068,14 @@ async function connectNow() {
   sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     connecting = false;
-    if (e && e.code === 4403) { // 서버가 입장 거부 — 무한 재연결 대신 이유를 명확히 안내하고 멈춘다.
+    if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)
+      //  바로 게이트를 띄우지 않고 MAX_DENY_RETRIES 만큼 재시도 — 일시장애면 곧 복구돼 붙고, 진짜 거부면 계속 4403 이라
+      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 성공 시 onopen 에서 denyRetries 리셋.
+      if (++denyRetries <= MAX_DENY_RETRIES) {
+        statusEl.textContent = '재연결 중…'; statusEl.className = 'status err';
+        scheduleReconnect();
+        return;
+      }
       clearTimeout(reconnectTimer);
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
       return;
