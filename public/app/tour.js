@@ -188,4 +188,6 @@ function startTour(steps) {
         pop.style.top = y + 'px';
     }
 }
-export { startTour, endTour };
+// 투어 진행 중인지 — 새 세션 폼이 '따라하기 흐름'인지 판단해(완료 안내를 새 터미널 탭으로 보낼지) 쓴다(#673).
+function isTourActive() { return !!active; }
+export { startTour, endTour, isTourActive };

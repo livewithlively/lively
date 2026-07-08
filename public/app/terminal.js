@@ -2,7 +2,7 @@
 import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
-import { startTour } from './tour.js';
+import { startTour, isTourActive } from './tour.js';
 // ════════════════════════════════════════════════════════════════════
 // 터미널 세션 매니저 (#/terminal) — 중앙 박스 경로 D: xterm.js + 서버 node-pty(tmux).
 //  목록/생성폼/CRUD → REST(/api/ui/terminal/*), PTY 스트림 → WS(/terminal/ws, ticket 쿠키).
@@ -409,6 +409,7 @@ function openTermCreateForm(cfg, view) {
     const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)), el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
+            const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
             const flags = {};
             for (const c of flagsBox.querySelectorAll('[data-flag]'))
                 flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
@@ -419,7 +420,7 @@ function openTermCreateForm(cfg, view) {
                 back.remove();
                 toast('세션 생성됨');
                 if (out && out.session)
-                    window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+                    window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || '') + (fromTour ? '&welcome=1' : ''), '_blank');
                 renderTerminal(view);
             }
             catch (e) {
@@ -636,16 +637,11 @@ function startTerminalTour() {
         {
             target: '[data-tour="create"]',
             title: '⑦ 만들기',
-            body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 까만 터미널 창이 열려요.')],
+            body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 새 탭에 까만 터미널 창이 열리고, 거기서 완료 안내가 이어집니다.')],
             placement: 'top', scrollIntoView: true, advanceOn: 'click',
         },
-        {
-            target: () => null,
-            title: '🎉 다 됐어요!',
-            body: [el('p', { class: 'tour-p', text: '새로 열린 터미널 창에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
-                el('p', { class: 'tour-p', text: '세션은 창을 닫아도 서버에 남아, 다음에 [터미널] 탭에서 이어서 쓸 수 있어요.' })],
-            placement: 'center', ctaNext: '마치기',
-        },
+        // '🎉 완료' 단계는 여기(원래 탭)에 안 띄운다 — 생성하면 새 탭으로 실제 터미널이 열리므로, 완료 안내는 그 새 탭에서
+        //  보여준다(openTermCreateForm 이 &welcome=1 로 넘기고 terminal.js 의 maybeShowWelcome 이 띄운다). 흐름이 실제 터미널에서 끝난다.
     ]);
 }
 export { renderTerminal, startTerminalTour, teardownTerminal, };
