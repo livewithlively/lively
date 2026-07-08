@@ -13,6 +13,7 @@ import { productOverview, listProductDomains, listProductDebts, listProductEntit
 import { uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
 import { DM_KINDS, HttpError } from "./rest-util.js";
+import { refreshSharedRepo } from "../project-provision.js";
 
 const enc = encodeURIComponent;
 
@@ -47,6 +48,24 @@ const repoList: Capability = {
     }
     return { domainmapRepos, mappingRepos, repos: [...names].sort(), domainmapError };
   },
+};
+
+// 레포 공유 베이스 최신화(#660 RO) — 공유 클론 워킹트리를 upstream 으로 fast-forward.
+//  게이트웨이(클론 소유자)가 실행 → 멤버는 group-write 없이 최신 코드를 '읽게' 되고, 공유 실행코드를 멤버가 못 고쳐 OS uid 격리 유지.
+//  scope=context: repo_list 를 볼 수 있는 멤버라면 누구나 트리거(웹 '코드 최신화' 버튼). fetch 인증은 요청멤버→게이트웨이 자격 폴백.
+const repoRefresh: Capability = {
+  name: "repo_refresh",
+  title: "레포 공유 베이스 최신화(fetch + fast-forward)",
+  description:
+    "공유 베이스 클론(workspace/repos/<name>)의 워킹트리를 upstream 으로 fast-forward 한다(#660 RO 모델). " +
+    "게이트웨이(클론 소유자)가 실행하므로 멤버는 group-write 없이도 최신 코드를 읽게 되고, 공유 실행코드(하네스·플러그인·스킬)를 " +
+    "멤버가 변조할 수 없어 OS uid 격리가 유지된다. fetch 는 요청 멤버(없으면 게이트웨이) git 자격으로 인증한다. " +
+    "비파괴 — dirty/갈라짐이면 건드리지 않고 사유(status: ok|up-to-date|dirty|no-clone|no-upstream|error)를 반환한다. " +
+    "웹 도메인맵 탭 '코드 최신화' 버튼과 공용 진입.",
+  scope: "context",
+  input: { name: z.string() },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/repos/:name/refresh"], parse: (req) => ({ name: String(req.params.name) }) }] },
+  handler: async (input: { name: string }, user) => refreshSharedRepo(input.name, user?.userId ?? null),
 };
 
 // 레포 개요 — domainmap overview 에 items-store 통계를 'items' 필드로 흡수(MCP 단일 진입).
@@ -128,5 +147,5 @@ const domainmapProxy: Capability = {
 };
 
 export const contextCapabilities: Capability[] = [
-  repoList, contextOverview, debtList, domainmapProxy,
+  repoList, repoRefresh, contextOverview, debtList, domainmapProxy,
 ];

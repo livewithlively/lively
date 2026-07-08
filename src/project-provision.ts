@@ -12,7 +12,7 @@ import { PROJECT_SHARED_BASE, projectAbsPath } from "./project-fs.js";
 import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
-import { resolveGitSecret, hostOf, isAuthError, prepareGitAuth } from "./org/git-credential-store.js";
+import { resolveGitSecret, hostOf, isAuthError, prepareGitAuth, describeGitError } from "./org/git-credential-store.js";
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "./org/git-credential-store.js";
 
@@ -73,6 +73,65 @@ async function refreshRepo(repoPath: string, extraEnv?: Record<string, string>):
   if (!st.ok || st.out) return;                             // dirty 또는 상태확인 실패 → skip
   await git(["fetch"], repoPath, extraEnv);                  // private 면 자격 필요 → extraEnv 주입. 실패(오프라인 등) 무시
   await git(["merge", "--ff-only", "@{u}"], repoPath);       // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+}
+
+export interface SharedRepoRefreshResult {
+  repo: string;
+  status: "ok" | "up-to-date" | "dirty" | "no-clone" | "no-upstream" | "error";
+  before?: string;
+  after?: string;
+  advanced: boolean;
+  detail?: string;
+}
+
+// 공유 베이스(workspace/repos/<name>) 워킹트리를 upstream 으로 fast-forward — 웹 '코드 최신화' 버튼·MCP 공용 진입(#660 RO 모델).
+//  게이트웨이(클론 소유자 lively)가 실행하므로 멤버는 워킹트리 group-write 없이도 최신 코드를 '읽게' 된다 — 즉 공유 실행코드(하네스·
+//  플러그인·스킬)를 멤버가 못 고쳐 OS uid 격리(#524)를 유지한다(로컬쓰기 축 P1 우회). fetch 는 요청멤버(없으면 게이트웨이) 자격을
+//  주입한다(원격인증 축 P2, #540). 비파괴: dirty 면 손대지 않고 skip, ff 불가(갈라짐/무upstream)면 base 그대로(reset·머지커밋 없음).
+//  대상은 도메인맵 스캐너 클론(stateDir/repos, git-pull.ts)이 아니라 멤버가 실제로 읽는 provision 클론(PROJECT_SHARED_BASE/repos)이다.
+export async function refreshSharedRepo(name: string, memberId?: string | null): Promise<SharedRepoRefreshResult> {
+  const clean = String(name ?? "").trim();
+  if (!REPO_NAME_RE.test(clean)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
+  const repoPath = confineToWorkspace(path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, clean), "레포");
+  if (!(await isRepo(repoPath))) {
+    return { repo: clean, status: "no-clone", advanced: false, detail: "공유 베이스에 클론이 없습니다 — 이 레포를 쓰는 프로젝트에서 먼저 provision 하세요." };
+  }
+  const headOf = async () => (await git(["rev-parse", "HEAD"], repoPath)).out.trim();
+  const before = await headOf();
+
+  // dirty 면 비파괴로 skip(공유 클론은 게이트웨이 소유라 보통 clean — dirty 면 사람이 봐야 함).
+  const st = await git(["status", "--porcelain"], repoPath);
+  if (!st.ok) return { repo: clean, status: "error", before, advanced: false, detail: "git status 실패" };
+  if (st.out) return { repo: clean, status: "dirty", before, advanced: false, detail: "공유 클론에 로컬 변경이 있어 건드리지 않았습니다(관리자 확인 필요)." };
+
+  // upstream 없으면 ff 대상 자체가 없음.
+  const up = await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], repoPath);
+  if (!up.ok) return { repo: clean, status: "no-upstream", before, advanced: false, detail: "현재 브랜치에 upstream 이 없습니다." };
+
+  // 자격 주입 — 요청멤버 우선, 없으면 게이트웨이. host: 레지스트리 git_url → origin remote → github.com.
+  const row = await getRepo(clean).catch(() => null);
+  const host = hostOf(row?.git_url) ?? hostOf(await originUrl(repoPath)) ?? "github.com";
+  const secret = await resolveGitSecret(memberId ?? null, host).catch(() => null);
+  const auth = await prepareGitAuth(secret);
+  try {
+    const f = await git(["fetch", "--prune"], repoPath, auth.env);
+    if (!f.ok) {
+      if (isAuthError(f.err)) {
+        throw new HttpError(401, `레포 '${clean}' fetch 인증 실패 — 호스트 '${host}' 자격이 없습니다. `
+          + `멤버는 내 프로필 ▸ git 인증에, 관리자는 관리탭 ▸ 게이트웨이 git 계정에 '${host}' 자격을 등록하세요.`);
+      }
+      return { repo: clean, status: "error", before, advanced: false, detail: `fetch 실패: ${describeGitError(f.err, row?.git_url)}` };
+    }
+    const m = await git(["merge", "--ff-only", "@{u}"], repoPath);
+    const after = await headOf();
+    if (!m.ok) {
+      return { repo: clean, status: "error", before, after, advanced: after !== before,
+        detail: "fast-forward 불가 — 공유 클론이 upstream 과 갈라졌습니다(관리자 확인 필요)." };
+    }
+    return { repo: clean, status: before === after ? "up-to-date" : "ok", before, after, advanced: before !== after };
+  } finally {
+    await auth.cleanup();
+  }
 }
 
 // 기존 클론의 origin remote URL(호스트 매칭 폴백용) — 레지스트리에 git_url 이 없을 때.

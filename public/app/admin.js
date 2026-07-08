@@ -1211,7 +1211,7 @@ async function reposPanel(detail, data) {
                 ? el('span', { class: 'wikicat-should', title: r.clone_url }, el('span', { class: 'wikicat-should-label', text: 'git' }), r.clone_url + ' · ' + (r.default_branch || 'main'))
                 : el('span', { class: 'wikicat-should wikicat-should-empty' }, el('span', { class: 'wikicat-should-label', text: 'git' }), canEdit ? 'git 미연결 — 수정에서 연결하세요' : 'git 미연결');
             const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: r.name }), el('span', { class: 'wikicat-key mono', text: (t.code_units || 0) + ' code · ' + (t.domains || 0) + ' dom' }), deprecated ? el('span', { class: 'dm-tag', text: '폐기됨' }) : null, meta);
-            const acts = canEdit ? el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openRepoForm(r, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: deprecated ? '복귀' : '폐기', onclick: () => repoSetDeprecated(r.name, deprecated, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => repoHardDelete(r.name, reload) })) : null;
+            const acts = canEdit ? el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '⟳ 최신화', title: '이 레포의 공유 클론을 upstream 으로 최신화(fetch + fast-forward). 게이트웨이가 당겨오므로 모든 멤버가 최신 코드를 읽게 됩니다.', onclick: (e) => repoRefreshShared(r.name, e) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openRepoForm(r, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: deprecated ? '복귀' : '폐기', onclick: () => repoSetDeprecated(r.name, deprecated, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => repoHardDelete(r.name, reload) })) : null;
             rows.append(el('div', { class: 'wikicat-row' }, main, acts));
         }
     }
@@ -1220,6 +1220,42 @@ async function reposPanel(detail, data) {
         head.append(el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }));
     const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }), state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정', onclick: () => openGitCredentialManager('gateway') }) : null, canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')), el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요. private 레포 클론 인증은 [게이트웨이 git 계정] 또는 각 구성원의 [내 프로필 ▸ git 인증]에서 설정합니다. HTTPS 가 막힌 셀프호스팅(GitLab 등)은 git 주소를 SSH 형(git@호스트:그룹/레포.git)으로 넣으세요.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
+}
+// 레포 공유 클론 최신화(#660 RO) — 선택한 레포의 공유 베이스(workspace/repos/<name>)를 upstream 으로 fast-forward.
+//  게이트웨이(클론 소유자)가 서버에서 fetch+ff 하므로 멤버는 group-write 없이도 최신 코드를 읽게 된다(공유 실행코드 변조 불가 → 격리 유지).
+//  비파괴: dirty/갈라짐이면 건드리지 않고 사유를 알린다. scope=context(레포 편집 권한과 동일).
+async function repoRefreshShared(name, ev) {
+    const btn = ev && ev.currentTarget;
+    const prev = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '최신화 중…';
+    }
+    try {
+        const r = await api('/api/ui/repos/' + encodeURIComponent(name) + '/refresh', { method: 'POST' });
+        const s7 = (x) => (x ? String(x).slice(0, 7) : '');
+        if (r && r.status === 'ok')
+            alert('최신화 완료: ' + name + '\n' + s7(r.before) + ' → ' + s7(r.after));
+        else if (r && r.status === 'up-to-date')
+            alert('이미 최신입니다: ' + name);
+        else if (r && r.status === 'dirty')
+            alert('로컬 변경이 있어 건너뛰었습니다: ' + name + '\n' + (r.detail || ''));
+        else if (r && r.status === 'no-clone')
+            alert('공유 클론이 아직 없습니다(이 레포를 쓰는 프로젝트에서 먼저 provision): ' + name);
+        else if (r && r.status === 'no-upstream')
+            alert('현재 브랜치에 upstream 이 없습니다: ' + name);
+        else
+            alert('최신화 결과(' + (r && r.status) + '): ' + ((r && r.detail) || ''));
+    }
+    catch (e) {
+        alert('최신화 실패: ' + (e && e.message ? e.message : e));
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
+    }
 }
 // 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
 function openRepoForm(repo, reload) {
