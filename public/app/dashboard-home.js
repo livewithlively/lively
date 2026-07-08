@@ -1048,10 +1048,6 @@ async function fillSessions(zone, onCount, projectsP) {
         const m = ((cfg && cfg.members) || []).find((x) => x.id === id);
         return (m && m.name) || id || '';
     };
-    const harnessLabel = (key) => {
-        const h = ((cfg && cfg.harnesses) || []).find((x) => x.key === key);
-        return (h && h.label) || DASH_HARNESS_LABEL[key] || key || '';
-    };
     // #req — 상대시간('3시간 전') 대신 실제 시각을 표기. 오늘이면 시:분만, 다른 날이면 '월 일 시:분'.
     const sessTime = (c) => {
         const n = Number(c);
@@ -1100,8 +1096,8 @@ async function fillSessions(zone, onCount, projectsP) {
             }
             else
                 tags.append(el('span', { class: 'dash-badge', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
-            const harn = harnessLabel(s.harness);
-            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' })), el('div', { class: 'dash-sess-sub' }, el('span', { class: 'dash-sess-when', text: sessTime(s.created) }), harn ? el('span', { class: 'dash-sess-tag', title: '하네스', text: harn }) : null, tags));
+            // #req 하네스 태그 제거 · 순서 태그 → 시간.
+            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' })), el('div', { class: 'dash-sess-sub' }, tags, el('span', { class: 'dash-sess-when', text: sessTime(s.created) })));
             const openBtn = el('button', { class: 'dash-sess-open', type: 'button', text: '열기' });
             openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
             const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
