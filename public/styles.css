@@ -3303,6 +3303,17 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-navitem:hover .pjv-side-navmore, .pjv-side-navmore:focus-visible { opacity: 1; background: var(--bg); }
 .pjv-side-navitem:hover .pjv-side-navcount { opacity: 0; }   /* 호버 시 개수 숨기고 ⋯ 노출 */
 .pjv-side-navmore:hover { background: var(--bg-tint); color: var(--ink); }
+/* ⭐ 즐겨찾기 별 토글(#670) — ⋯(right:5) 왼쪽. 호버 시 노출, 즐겨찾기(.on)면 금색으로 항상 표시. 프로젝트·WIKI 공용. */
+.pjv-side-navfav { position: absolute; right: 30px; top: 50%; transform: translateY(-50%); width: 21px; height: 21px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: none; color: var(--muted-3); cursor: pointer; font-size: 12.5px; line-height: 1; padding: 0; opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease; }
+.pjv-side-navitem:hover .pjv-side-navfav, .pjv-side-navfav:focus-visible { opacity: 1; }
+.pjv-side-navfav:hover { background: var(--bg); color: #f5a623; }
+.pjv-side-navfav.on { opacity: 1; color: #f5a623; }
+.pjv-side-navitem.is-fav:hover .pjv-side-navcount, .pjv-side-navitem.is-fav .pjv-side-navcount { opacity: 0; } /* 즐겨찾기 항목은 개수 대신 금별 상시표시(겹침 방지) */
+.pjv-side-navfolder .pjv-side-navfav { right: 56px; } /* 폴더는 ⋯(right:32)·캐럿 자리 감안 — (폴더엔 별 없지만 방어) */
+/* 즐겨찾기 구역 헤더·구분선 — 사이드바 맨 위 고정 핀 목록. */
+.pjv-side-favhead { display: flex; align-items: center; gap: 6px; padding: 4px 10px 3px; margin-top: 2px; font-size: 11px; font-weight: 800; letter-spacing: .3px; color: var(--muted-2); text-transform: uppercase; }
+.pjv-side-favhead-ic { font-size: 11px; }
+.pjv-side-favsep { height: 1px; margin: 5px 8px 6px; background: var(--line-soft, var(--bg-tint-2)); }
 
 /* ── 프로젝트 → 폴더 드래그(#454) ── */
 body.pjv-folder-dragging { cursor: grabbing; }
@@ -4704,6 +4715,32 @@ a.dash-ntf:hover { background: var(--bg-tint); }
   padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre; scrollbar-width: thin; }
 .dash-fp-code:not(.is-code) { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px; line-height: 1.7; }
 .dash-fp-msg { padding: 34px 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
+/* CSV/TSV 표 미리보기 — 헤더·첫열 고정(sticky), 가로/세로 스크롤. */
+.dash-fp-tablewrap { flex: 1 1 100%; min-width: 0; width: 100%; max-height: 100%; align-self: stretch; overflow: auto; border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; }
+.dash-fp-table { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
+.dash-fp-table th, .dash-fp-table td { border: 1px solid var(--line-soft, var(--bg-tint-2)); padding: 5px 9px; text-align: left; white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.dash-fp-table thead th { position: sticky; top: 0; background: var(--bg-tint); font-weight: 700; color: var(--ink); z-index: 1; }
+.dash-fp-table tbody tr:nth-child(even) { background: var(--bg-tint-2, rgba(21,35,59,.03)); }
+.dash-fp-table .dash-fp-cn { position: sticky; left: 0; background: var(--bg-tint); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; z-index: 1; }
+.dash-fp-table thead .dash-fp-cn { z-index: 2; }
+.dash-fp-tablemore { flex: none; padding: 8px 4px; font-size: 12px; color: var(--muted); text-align: center; }
+/* 음성·영상 미리보기 */
+.dash-fp-video { display: block; max-width: 100%; max-height: 72vh; border-radius: 8px; background: #000; box-shadow: 0 2px 12px rgba(21,35,59,.16); }
+.dash-fp-audio { width: min(460px, 100%); }
+
+/* #req 공유 폴더 모달: 크게 + 우하단 드래그로 크기조절, 바깥클릭엔 안 닫힘(persistent) — 오래 머무는 창의 오조작 방지. */
+.dash-modal--resizable { width: min(1080px, 94vw); height: min(84vh, 900px); max-width: 96vw; max-height: 92vh; min-width: 460px; min-height: 360px; resize: both; }
+.dash-modal--resizable .dash-modal-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.dash-modal--resizable .dash-fb { flex: 1 1 auto; min-height: 0; }
+/* 브라우징 뷰: 파일 그리드/목록이 남는 세로를 채우고 그 안에서 스크롤(모달은 고정 높이). */
+.dash-modal--resizable .dash-fb-grid,
+.dash-modal--resizable .dash-fb-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* 미리보기가 열리면 스테이지가 남는 세로를 채우고 PDF·이미지·표·영상은 그 안을 꽉 채워 크게 보이게. */
+.dash-modal--resizable .dash-fp-stage { flex: 1 1 auto; min-height: 0; max-height: none; }
+.dash-modal--resizable .dash-fp-pdf { height: 100%; }
+.dash-modal--resizable .dash-fp-img,
+.dash-modal--resizable .dash-fp-video,
+.dash-modal--resizable .dash-fp-code { max-height: 100%; }
 
 /* 반응형 폴백 — 코크핏은 데스크톱 계약: 좁거나 낮으면 세로 스택 + 페이지 스크롤 허용 */
 @media (max-width: 1100px), (max-height: 719px) {

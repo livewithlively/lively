@@ -297,14 +297,15 @@ async function renderProjectV2Board(view, scopeKey?) {
   if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
   const head = projectPageHead();
 
-  let allProjects: any, mineProjects: any, lists: any, folders: any;
+  let allProjects: any, mineProjects: any, lists: any, folders: any, favData: any;
   try {
-    // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 + 폴더(#475) 를 병렬로.
-    [allProjects, mineProjects, lists, folders] = await Promise.all([
+    // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 + 폴더(#475) + 즐겨찾기(#670) 를 병렬로.
+    [allProjects, mineProjects, lists, folders, favData] = await Promise.all([
       api('/api/ui/v6/projects').then((d) => (d && d.projects) || []),
       api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => []),
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
+      api('/api/ui/v6/favorites').then((d) => d || {}).catch(() => ({})),
     ]);
   } catch (e) {
     view.replaceChildren(head, errorNote(e, '프로젝트를 불러오지 못했습니다'));
@@ -332,7 +333,7 @@ async function renderProjectV2Board(view, scopeKey?) {
   //  — 이제 head(제목+설명) 바로 아래 보드. 중분류 탭 폐지(#629)와 같은 방향(보드 하나).
   const pageChrome = head ? el('div', { class: 'pjv-board-chrome' }, head) : null; // 헤드 없으면 크롬 줄 자체를 안 그림(#670)
   view.replaceChildren(
-    pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders, pageChrome),
+    pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders, pageChrome, favData),
     // '회사 전체'(회사 활동 피드)는 터미널 탭의 '작업 로그' 섹션으로 이관(#609 — companyTimelineSection).
   );
   pjvRestoreScroll(keepY); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
@@ -340,7 +341,7 @@ async function renderProjectV2Board(view, scopeKey?) {
 
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
 //  컬럼 헤더는 카드 상단에 한 번. 그 아래 리스트 그룹(접이식) 들이 쌓인다. 펼침 상태는 pjvListOpen 으로 세션 유지.
-function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId, folders?, pageChrome?) {
+function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields, anchorId, meId, folders?, pageChrome?, favData?: any) {
   // 래퍼 — 사이드바 켜짐(byArea)이면 [셸 카드], 꺼짐이면 [페이지크롬 전폭 + 카드]. render() 가 배치를 바꾼다(#607).
   const wrapper = el('div', { class: 'pjv-board-wrap' });
   const card = el('div', { class: 'card pjv-tasks-card pjv-proj-card pjv-listboard', style: 'margin-bottom:18px' });
@@ -460,6 +461,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const groupByList = new Map<number, any>();
     let unGroup: any = null;
     for (const g of groups) { if (g.list) groupByList.set(g.list.id, g); else unGroup = g; }
+    // ⭐ 즐겨찾기(#670) — favData(바깥 로드)에서 파생. listNavItem/buildTree 와 같은 스코프.
+    const favListIds = new Set<number>(((favData && favData.project_lists) || []).map((x: any) => Number(x)));
+    // 리스트 즐겨찾기 토글 — 낙관적 갱신(즉시 트리 재렌더) 후 서버 저장, 실패 시 롤백. 바깥 favData 도 갱신해 renderArea 재호출 간 유지.
+    const toggleListFav = async (id: number, next: boolean) => {
+      if (next) favListIds.add(id); else favListIds.delete(id);
+      favData.project_lists = [...favListIds];
+      buildTree();
+      try { await pjvSetFavorite('project_list', id, next); }
+      catch (e: any) { if (next) favListIds.delete(id); else favListIds.add(id); favData.project_lists = [...favListIds]; buildTree(); toast('즐겨찾기 저장 실패 — ' + (e && e.message || e), true); }
+    };
 
     // 폴더 트리 — 폴더(정렬) › 그 폴더의 리스트 / 최상위(폴더 없는) 리스트 / 미분류('기타')(#475).
     //  #541: 폴더 중첩(parent_id — ClickUp Space›Folder 이관) — 루트 폴더 아래 하위 폴더를 재귀 렌더.
@@ -695,31 +706,36 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     if (boardBox.childNodes.length) main.append(boardBox); // 표 뷰만 가로 스크롤 박스로(개요·칸반은 main 에 직접)
 
     // ── 리스트 항목(트리 잎) — 체크 글리프(색/이모지) + 이름 + 개수 + ⋯(리스트 설정) + 프로젝트 드롭 타깃. sub=폴더 안이면 들여쓰기.
-    const listNavItem = (list, sub, depth = 0) => {
+    const listNavItem = (list, sub, depth = 0, opts?: any) => {
       const key = 'L' + list.id;
       const grp = groupByList.get(list.id);
       const active = sel === key;
+      const noDrag = !!(opts && opts.noDrag); // 즐겨찾기 구역 사본 등 — 드래그 소스/재정렬 비활성(드롭 타깃은 유지)
       // 카테고리(도메인) 배지(#541 후속) — 이 리스트가 어느 카테고리에 배정됐는지, 안 됐으면 '미분류' 를 명시.
       const cat = list.category;
       const catBadge = el('span', { class: 'pjv-side-cat' + (cat ? ' pjv-side-cat-' + cat.space : ' none'),
         title: cat ? ('카테고리(도메인): ' + (cat.name || cat.key)) : '카테고리 미분류 — 리스트 설정에서 지정',
         text: cat ? (cat.name || cat.key) : '미분류' });
-      const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), draggable: 'true' },
+      const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : '') + (favListIds.has(list.id) ? ' is-fav' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), ...(noDrag ? {} : { draggable: 'true' }) },
         pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }), catBadge,
         el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
       if (depth > 1) it.style.paddingLeft = `${8 + depth * 14}px`; // 중첩 폴더(#541) — sub 기본 들여쓰기 위에 깊이만큼 추가
       const go = (e) => { e.stopPropagation(); selectArea(key); };
       it.addEventListener('click', go);
       it.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } });
+      // ⭐ 즐겨찾기 별(#670) — 리스트를 사이드바 맨 위 '즐겨찾기' 구역에 고정. 호버 노출, 즐겨찾기면 금색 항상 표시.
+      it.append(pjvFavStar(favListIds.has(list.id), (next) => toggleListFav(list.id, next)));
       const more = el('button', { class: 'pjv-side-navmore', type: 'button', title: '리스트 설정', 'aria-label': '리스트 설정', text: '⋯' });
       more.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu pjv-listset-menu' }); const close = pjvPopover(more, menu); pjvListSettingsMenu(menu, close, list, reload); });
       it.append(more);
-      // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
-      it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; pjvSideDrag.folderId = list.folder_id ?? null; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); if (list.folder_id != null) document.body.classList.add('pjv-side-dragging-infolder'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'L' + list.id); } catch (_) { /* */ } });
-      it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvSideDrag.folderId = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list', 'pjv-side-dragging-infolder'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after, .pjv-side-drop-outdent').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after', 'pjv-side-drop-outdent')); });
-      pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag)
-      // 리스트→리스트 드롭(#541): 같은 폴더 형제면 커서 위/아래로 앞/뒤 재정렬(가로 삽입선), 다른 폴더 리스트면 그 폴더로 이동(기존 동작).
-      pjvSideNavDrop(it, {
+      pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag) — 즐겨찾기 사본에서도 유지
+      if (!noDrag) {
+        // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
+        it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; pjvSideDrag.folderId = list.folder_id ?? null; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); if (list.folder_id != null) document.body.classList.add('pjv-side-dragging-infolder'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'L' + list.id); } catch (_) { /* */ } });
+        it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvSideDrag.folderId = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list', 'pjv-side-dragging-infolder'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after, .pjv-side-drop-outdent').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after', 'pjv-side-drop-outdent')); });
+      }
+      // 리스트→리스트 드롭(#541): 같은 폴더 형제면 커서 위/아래로 앞/뒤 재정렬(가로 삽입선), 다른 폴더 리스트면 그 폴더로 이동(기존 동작). 즐겨찾기 사본은 재정렬 타깃 제외.
+      if (!noDrag) pjvSideNavDrop(it, {
         reorderList: (lid) => { if (String(lid) === String(list.id)) return false; const d = lists.find((x) => String(x.id) === String(lid)); return !!(d && String(d.folder_id ?? '') === String(list.folder_id ?? '')); },
         onList: (lid, after) => {
           if (String(lid) === String(list.id)) return;
@@ -871,6 +887,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 트리(폴더·리스트)만 다시 그린다 — 검색 입력 중 전체 보드 재렌더 없이 트리만 갱신해 입력 포커스 유지.
     const buildTree = () => {
       treeWrap.replaceChildren();
+      // ⭐ 즐겨찾기(#670) — 즐겨찾기한 리스트를 맨 위 고정 구역에(폴더 안이든 밖이든 한자리로). 검색 중엔 생략(검색이 우선).
+      //  본래 위치에도 그대로 남고(별 표시), 여기 사본은 드래그 비활성(noDrag) — 빠른 접근용 핀.
+      if (!sideSearchActive()) {
+        const favLists = lists.filter((l) => favListIds.has(l.id));
+        if (favLists.length) {
+          treeWrap.append(el('div', { class: 'pjv-side-favhead', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '⭐' }), el('span', { text: '즐겨찾기' })));
+          for (const l of favLists) treeWrap.append(listNavItem(l, false, 0, { noDrag: true }));
+          treeWrap.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
+        }
+      }
       for (const f of rootFolders) renderFolderNode(f, 0);
       // 최상위(폴더 없는) 리스트 — 이름 매칭 또는 안의 프로젝트 매칭(#665)이면 노출 + 매칭 프로젝트 행.
       for (const l of topLists) if (listMatchesDeep(l)) { treeWrap.append(listNavItem(l, false)); appendProjMatches((groupByList.get(l.id)?.projects) || [], 1); }
@@ -1287,6 +1313,19 @@ function pjvMoveNear(ids, movingId, targetId, after) {
   if (idx < 0) return ids;
   rest.splice(idx + (after ? 1 : 0), 0, movingId);
   return rest;
+}
+// 즐겨찾기 토글 저장(#670) — 서버 POST(/api/ui/v6/favorites). WIKI 사이드바도 동일 엔드포인트 공유.
+function pjvSetFavorite(kind: string, id: number, on: boolean) {
+  return api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind, id, on }) });
+}
+// ⭐ 즐겨찾기 별 토글 버튼(#670) — 항목 우측(호버 노출, 즐겨찾기면 금색 채움·항상 표시). onToggle(next) 호출.
+//  프로젝트 탭·WIKI 사이드바 공용 마크업(.pjv-side-navfav) — 통일성.
+function pjvFavStar(isFav: boolean, onToggle: (next: boolean) => void) {
+  const btn = el('button', { class: 'pjv-side-navfav' + (isFav ? ' on' : ''), type: 'button',
+    title: isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-label': isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가',
+    'aria-pressed': String(isFav), text: isFav ? '★' : '☆' });
+  btn.addEventListener('click', (e: any) => { e.preventDefault(); e.stopPropagation(); onToggle(!isFav); });
+  return btn;
 }
 // 사이드바 항목 드롭 타깃 — 진행 중인 사이드바 드래그(pjvSideDrag)에만 반응.
 //  같은 형제 재정렬(handlers.reorderList/reorderFolder 가 true)이면 커서 위/아래 절반으로 '앞/뒤' 가로 삽입선(#670,

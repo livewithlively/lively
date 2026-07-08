@@ -288,6 +288,33 @@ async function renderKnowledgeSpace(view, _space, params) {
         bySpace = await fetchAllSpaceCats();
     }
     catch (_) { /* graceful: 사이드바 생략(목록은 계속) */ }
+    // ⭐ 즐겨찾기(#670) — 프로젝트 탭과 동일: 즐겨찾기한 카테고리를 사이드바 맨 위 '⭐ 즐겨찾기' 구역에 고정. 같은 엔드포인트(/api/ui/v6/favorites).
+    const favCatIds = new Set();
+    try {
+        const fd = await api('/api/ui/v6/favorites');
+        for (const id of ((fd && fd.categories) || []))
+            favCatIds.add(String(id));
+    }
+    catch (_) { /* 비로그인/실패 — 빈 즐겨찾기 */ }
+    // 카테고리 즐겨찾기 토글 — 낙관적 갱신(즉시 사이드바 재빌드) 후 서버 저장, 실패 시 롤백.
+    const toggleCatFav = async (id, next) => {
+        if (next)
+            favCatIds.add(String(id));
+        else
+            favCatIds.delete(String(id));
+        buildSide();
+        try {
+            await api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind: 'category', id: Number(id), on: next }) });
+        }
+        catch (e) {
+            if (next)
+                favCatIds.delete(String(id));
+            else
+                favCatIds.add(String(id));
+            buildSide();
+            toast('즐겨찾기 저장 실패 — ' + (e && e.message || e), true);
+        }
+    };
     // #551 페이지 트리(외부 미러) — 카테고리 아래 별도 섹션. 비동기 로드(없으면 숨김 유지).
     const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
     // (#req) 사이드바 분류 검색 — 프로젝트 탭(폴더·리스트 검색) 동형. '카테고리' 헤더 맨 위 → 그 아래 검색창 → 트리.
@@ -296,7 +323,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     function buildSide() {
         // 사이드바 선택값 = 인덱스면 센티넬, 아니면 카테고리 id. opts.indexed 로 '전체' 하위에 인덱스(핀) 항목 노출(지식 탭 전용, #336).
         const selKey = f.indexed ? KN_INDEXED : f.category;
-        buildKnowledgeNav(nav, bySpace, selKey, myIds, { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }) });
+        buildKnowledgeNav(nav, bySpace, selKey, myIds, { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }), favCatIds, onToggleFav: toggleCatFav });
         // 헤더('지식 카테고리') 맨 위 → 검색창 → 트리 — 프로젝트 탭 사이드바(.pjv-side-nav-head/.pjv-side-search)와 동일 컴포넌트(#req).
         side.replaceChildren(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' })), knMakeSideSearch(nav, knSideState), nav, mirrorBox, sideTools); // (#req) 도구 섹션 = Notion 페이지 트리 아래
         knSideFilterNav(nav, knSideState.q); // 재빌드 후에도 필터 유지
@@ -1011,12 +1038,26 @@ function buildSpacesNav(nav, bySpace, selected, myIds, opts) {
 // ════════════════════════════════════════════
 function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
     const onOpen = (opts && opts.onOpen) || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
+    const favCatIds = (opts && opts.favCatIds) || new Set();
+    const onToggleFav = (opts && opts.onToggleFav) || (() => { });
     nav._knOnOpen = onOpen; // 사이드바 검색(knSideFilterNav)의 문서 결과 행이 같은 열기 경로를 쓰도록
     nav.replaceChildren();
     nav.classList.add('kn-tree2');
     nav.append(knSideItem('전체', '', !selected || selected === ''));
     if (opts && opts.indexed) {
         nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED, { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
+    }
+    const favOpts = { favCatIds, onToggleFav };
+    // ⭐ 즐겨찾기(#670) — 즐겨찾기한 카테고리를 맨 위 고정 구역에(프로젝트 탭 사이드바와 동일 UI). 본래 위치에도 그대로 남고 별 표시.
+    {
+        const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
+        const favCats = allCats.filter((c) => favCatIds.has(String(c.id)));
+        if (favCats.length) {
+            nav.append(el('div', { class: 'pjv-side-favhead', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '⭐' }), el('span', { text: '즐겨찾기' })));
+            for (const c of favCats)
+                nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id)), favOpts));
+            nav.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
+        }
     }
     for (const sk of ['business', 'product', 'system']) {
         const cats = (bySpace[sk] || []);
@@ -1031,7 +1072,7 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
         const total = ordered.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
         const grp = knSpaceGroup(sk, hasCounts ? el('span', { class: 'pjv-side-navcount', title: '이 스페이스의 지식 수', text: String(total) }) : null);
         for (const c of ordered)
-            grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
+            grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id)), favOpts));
         nav.append(grp);
     }
     // ★ 범례(#req) — 별표가 왜 붙는지(우리 팀 소유) 한 줄 설명. 팀 소유가 하나라도 있을 때만.
@@ -1041,13 +1082,26 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
 //  마크업은 프로젝트 탭 리스트 행(.pjv-side-navitem — 라벨·칩·우측 개수 .pjv-side-navcount)과 동일(#req).
 //  레벨1 = 카테고리 지식 중 트리 최상위(부모가 같은 카테고리 안에 없는 행)만 — 폴더 자식은 폴더 노드에서 펼친다.
-function knNavCatNode(c, on, onOpen, isMine) {
+// ⭐ 즐겨찾기 별 토글(#670) — 프로젝트 탭(pjvFavStar)과 동일 마크업(.pjv-side-navfav)·톤. 두 사이드바 통일성.
+function knFavStar(isFav, onToggle) {
+    const btn = el('button', { class: 'pjv-side-navfav' + (isFav ? ' on' : ''), type: 'button',
+        title: isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-label': isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가',
+        'aria-pressed': String(isFav), text: isFav ? '★' : '☆' });
+    btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onToggle(!isFav); });
+    return btn;
+}
+function knNavCatNode(c, on, onOpen, isMine, favOpts) {
     const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false',
         title: '이 카테고리의 지식 펼치기', text: '▸' });
     const cnt = Number(c.knowledge_count);
-    const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : ''), href: '#',
+    const favCatIds = (favOpts && favOpts.favCatIds) || new Set();
+    const isFav = favCatIds.has(String(c.id));
+    const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : '') + (isFav ? ' is-fav' : ''), href: '#',
         'data-cat-val': String(c.id), role: 'button', tabindex: '0',
         ...(isMine ? { title: '내 소유 카테고리 — ' + (c.name || c.key) } : {}) }, tw, isMine ? knTeamChip() : null, el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }), Number.isFinite(cnt) ? el('span', { class: 'pjv-side-navcount' + (cnt === 0 ? ' kn-count-zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
+    // ⭐ 즐겨찾기 별(#670) — 프로젝트 탭 사이드바와 동일 컴포넌트(.pjv-side-navfav). 즐겨찾기한 카테고리를 맨 위 구역에 고정.
+    if (favOpts && favOpts.onToggleFav)
+        row.append(knFavStar(isFav, (next) => favOpts.onToggleFav(String(c.id), next)));
     const kids = el('div', { class: 'kn-nav-kids' });
     kids.hidden = true;
     let opened = false, loaded = false;
