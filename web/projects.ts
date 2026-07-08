@@ -717,18 +717,21 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       it.append(more);
       // 드래그: 이 리스트(=파일)를 잡아 폴더로 넣기/빼기(kind='list'). 놓는 곳이 폴더면 그 폴더로, 빈 곳이면 최상위로.
       it.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'list'; pjvSideDrag.id = list.id; document.body.classList.add('pjv-side-dragging', 'pjv-side-dragging-list'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'L' + list.id); } catch (_) { /* */ } });
-      it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
+      it.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging', 'pjv-side-dragging-list'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after')); });
       pjvFolderDropTarget(it, list.id, reload); // 프로젝트를 이 리스트로 드롭(별개 드래그: pjvFolderDrag)
-      // 리스트→리스트 드롭(#541): 같은 폴더 형제면 **그 앞으로 순서 재정렬**, 다른 폴더 리스트면 그 폴더로 이동(기존 동작).
-      pjvSideNavDrop(it, { onList: (lid) => {
-        if (String(lid) === String(list.id)) return;
-        const dragged = lists.find((x) => String(x.id) === String(lid));
-        const sameFolder = dragged && String(dragged.folder_id ?? '') === String(list.folder_id ?? '');
-        if (sameFolder) {
-          const sibs = (list.folder_id != null ? (listsByFolder.get(list.folder_id) || []) : topLists).map((x) => x.id);
-          pjvReorderLists(pjvMoveBefore(sibs, lid, list.id), reload);
-        } else pjvMoveListToFolder(lid, list.folder_id ?? null, reload);
-      } });
+      // 리스트→리스트 드롭(#541): 같은 폴더 형제면 커서 위/아래로 앞/뒤 재정렬(가로 삽입선), 다른 폴더 리스트면 그 폴더로 이동(기존 동작).
+      pjvSideNavDrop(it, {
+        reorderList: (lid) => { if (String(lid) === String(list.id)) return false; const d = lists.find((x) => String(x.id) === String(lid)); return !!(d && String(d.folder_id ?? '') === String(list.folder_id ?? '')); },
+        onList: (lid, after) => {
+          if (String(lid) === String(list.id)) return;
+          const dragged = lists.find((x) => String(x.id) === String(lid));
+          const sameFolder = dragged && String(dragged.folder_id ?? '') === String(list.folder_id ?? '');
+          if (sameFolder) {
+            const sibs = (list.folder_id != null ? (listsByFolder.get(list.folder_id) || []) : topLists).map((x) => x.id);
+            pjvReorderLists(pjvMoveNear(sibs, lid, list.id, after), reload);
+          } else pjvMoveListToFolder(lid, list.folder_id ?? null, reload);
+        },
+      });
       return it;
     };
 
@@ -804,17 +807,18 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       fit.append(fmore);
       // 드래그: 폴더를 잡아 순서 재정렬(kind='folder'). 리스트를 이 폴더로 드롭 = 그 폴더로 이동.
       fit.addEventListener('dragstart', (ev) => { pjvSideDrag.kind = 'folder'; pjvSideDrag.id = f.id; document.body.classList.add('pjv-side-dragging'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', 'F' + f.id); } catch (_) { /* */ } });
-      fit.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging'); document.querySelectorAll('.pjv-side-drop-over').forEach((n) => n.classList.remove('pjv-side-drop-over')); });
+      fit.addEventListener('dragend', () => { pjvSideDrag.kind = null; pjvSideDrag.id = null; document.body.classList.remove('pjv-side-dragging'); document.querySelectorAll('.pjv-side-drop-over, .pjv-side-drop-before, .pjv-side-drop-after').forEach((n) => n.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after')); });
       pjvSideNavDrop(fit, {
         onList: (lid) => pjvMoveListToFolder(lid, f.id, reload),
-        // 폴더→폴더 드롭(#541): 같은 부모(형제) 안에서만 순서 재정렬 — 스페이스↔하위폴더 간 이동 오조작 방지.
-        onFolder: (fid) => {
+        // 폴더→폴더 드롭(#541): 같은 부모(형제) 안에서만 순서 재정렬(커서 위/아래로 앞/뒤, 가로 삽입선) — 스페이스↔하위폴더 간 이동 오조작 방지.
+        reorderFolder: (fid) => { if (String(fid) === String(f.id)) return false; const d = folderList.find((x) => String(x.id) === String(fid)); return !!(d && String(d.parent_id ?? '') === String(f.parent_id ?? '')); },
+        onFolder: (fid, after) => {
           if (String(fid) === String(f.id)) return;
           const dragged = folderList.find((x) => String(x.id) === String(fid));
           const sameParent = dragged && String(dragged.parent_id ?? '') === String(f.parent_id ?? '');
           if (!sameParent) { toast('같은 위치의 폴더끼리만 순서를 바꿀 수 있어요', true); return; }
           const sibs = (foldersByParent.get(f.parent_id != null && folderIds.has(f.parent_id) ? f.parent_id : null) || []).map((x) => x.id);
-          pjvReorderFolders(pjvMoveBefore(sibs, fid, f.id), reload);
+          pjvReorderFolders(pjvMoveNear(sibs, fid, f.id, after), reload);
         },
       });
       treeWrap.append(fit);
@@ -1274,19 +1278,43 @@ function pjvMoveBefore(ids, movingId, targetId) {
   rest.splice(idx, 0, movingId);
   return rest;
 }
-// 사이드바 항목 드롭 타깃 — 진행 중인 사이드바 드래그(pjvSideDrag)에만 반응. handlers.onList(listId)/onFolder(folderId).
+// movingId 를 targetId '앞(after=false)/뒤(after=true)'에 옮긴 새 순서 배열.
+function pjvMoveNear(ids, movingId, targetId, after) {
+  const rest = ids.filter((x) => String(x) !== String(movingId));
+  const idx = rest.findIndex((x) => String(x) === String(targetId));
+  if (idx < 0) return ids;
+  rest.splice(idx + (after ? 1 : 0), 0, movingId);
+  return rest;
+}
+// 사이드바 항목 드롭 타깃 — 진행 중인 사이드바 드래그(pjvSideDrag)에만 반응.
+//  같은 형제 재정렬(handlers.reorderList/reorderFolder 가 true)이면 커서 위/아래 절반으로 '앞/뒤' 가로 삽입선(#670,
+//  어디 들어갈지 직관적), 아니면(폴더로 넣기 등) 종전 폴더 하이라이트. onList/onFolder(id, after) 로 위치 전달.
 function pjvSideNavDrop(elm, handlers) {
-  const over = (ev) => { if (!pjvSideDrag.kind) return; ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } elm.classList.add('pjv-side-drop-over'); };
+  const clearMarks = () => elm.classList.remove('pjv-side-drop-over', 'pjv-side-drop-before', 'pjv-side-drop-after');
+  const over = (ev) => {
+    if (!pjvSideDrag.kind) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ }
+    const id = pjvSideDrag.id;
+    const canReorder = pjvSideDrag.kind === 'list' ? !!(handlers.reorderList && handlers.reorderList(id))
+      : pjvSideDrag.kind === 'folder' ? !!(handlers.reorderFolder && handlers.reorderFolder(id)) : false;
+    clearMarks();
+    if (canReorder) {
+      const r = elm.getBoundingClientRect();
+      elm.classList.add((ev.clientY - r.top) > r.height / 2 ? 'pjv-side-drop-after' : 'pjv-side-drop-before');
+    } else elm.classList.add('pjv-side-drop-over');
+  };
   elm.addEventListener('dragover', over);
   elm.addEventListener('dragenter', over);
-  elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget)) elm.classList.remove('pjv-side-drop-over'); });
+  elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget)) clearMarks(); });
   elm.addEventListener('drop', (ev) => {
-    elm.classList.remove('pjv-side-drop-over');
+    const after = elm.classList.contains('pjv-side-drop-after');
+    clearMarks();
     if (!pjvSideDrag.kind) return;
     ev.preventDefault(); ev.stopPropagation();
     const kind = pjvSideDrag.kind; const id = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null;
-    if (kind === 'list' && handlers.onList) handlers.onList(id);
-    else if (kind === 'folder' && handlers.onFolder) handlers.onFolder(id);
+    if (kind === 'list' && handlers.onList) handlers.onList(id, after);
+    else if (kind === 'folder' && handlers.onFolder) handlers.onFolder(id, after);
   });
 }
 
