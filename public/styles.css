@@ -4409,7 +4409,10 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-desc { font-size: 11px; color: var(--muted); }
 
 /* ③ 팀 공유 폴더 — 아이콘 카드(#621). 프로젝트 상세 공유 폴더(proj-file-*)와 동일한 타일, 존 안에서 가로 스크롤. */
-.dash-fold-grid { padding: 8px 4px 12px; }
+/* 스크롤바 숨김(.tabs 와 동일) — 폴더가 많아 가로 오버플로우 시 스크롤바가 세로 공간을 먹어(특히 macOS 오버레이:
+   호버 때만 나타남) 박스 높이가 출렁이던 것 방지. 스크롤은 트랙패드·휠로, 전체는 '전체 보기' 팝업으로. */
+.dash-fold-grid { padding: 8px 4px 12px; scrollbar-width: none; }
+.dash-fold-grid::-webkit-scrollbar { display: none; }
 .dash-fold-grid .proj-file-card { cursor: default; }
 .dash-fold-grid .proj-file-card:hover { background: transparent; }
 /* 박스 폴더 카드 — 클릭 시 브라우저 열기(#672). */
@@ -4455,6 +4458,18 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-act.danger:hover { color: var(--coral-text, var(--coral)); border-color: color-mix(in srgb, var(--coral) 40%, var(--bg)); background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
 .dash-fb-act svg { display: block; }
 .dash-fb[aria-busy="true"] { opacity: .5; pointer-events: none; }
+
+/* 파일 미리보기(#672 후속) — 브라우저 안 제자리 렌더: 상단 바(뒤로·이름·다운로드) + 스테이지(이미지·PDF·코드). */
+.dash-fp-bar { display: flex; align-items: center; gap: 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-fp-name { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dash-fp-stage { display: flex; align-items: center; justify-content: center; min-height: 200px; max-height: 72vh; overflow: auto; padding: 12px 2px 2px; scrollbar-width: thin; }
+.dash-fp-load { padding: 28px; }
+.dash-fp-img { display: block; max-width: 100%; max-height: 70vh; border-radius: 8px; box-shadow: 0 2px 12px rgba(21,35,59,.12); }
+.dash-fp-pdf { width: 100%; height: 70vh; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.dash-fp-code { margin: 0; width: 100%; box-sizing: border-box; max-height: 70vh; overflow: auto; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre; scrollbar-width: thin; }
+.dash-fp-code:not(.is-code) { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px; line-height: 1.7; }
+.dash-fp-msg { padding: 34px 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
 
 /* 반응형 폴백 — 코크핏은 데스크톱 계약: 좁거나 낮으면 세로 스택 + 페이지 스크롤 허용 */
 @media (max-width: 1100px), (max-height: 719px) {
