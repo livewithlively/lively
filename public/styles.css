@@ -4480,7 +4480,8 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
 .dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
 /* #req 세션 0개 첫 사용자 안내 카드 — 한 화면(스크롤 없이)에 들어가게 콤팩트. */
-.dash-sess-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 14px 18px 16px; max-width: 340px; margin: 0 auto; }
+/* #req 위젯 안에서 세로도 가운데 — min-height:100%(스크롤 컨테이너 높이) + justify-content:center. */
+.dash-sess-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 14px 18px 16px; max-width: 340px; min-height: 100%; box-sizing: border-box; margin: 0 auto; }
 .dash-sess-empty-ic { width: 46px; height: 46px; border-radius: 13px; display: flex; align-items: center; justify-content: center; background: var(--bg-punch); color: var(--blue); flex: none; }
 .dash-sess-empty-ic svg { width: 24px; height: 24px; }
 .dash-sess-empty-title { font-size: 15px; font-weight: 800; color: var(--ink); }

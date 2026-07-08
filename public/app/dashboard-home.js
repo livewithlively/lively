@@ -825,7 +825,7 @@ function dashSaveFoldView(v) { try {
 catch { /* 무시 */ } }
 function dashSessFilter() { try {
     const v = localStorage.getItem(DASH_SESS_FILTER_KEY);
-    return ['all', 'mine', 'invited', 'myproj'].includes(v) ? v : 'all';
+    return ['all', 'private', 'invited', 'myproj'].includes(v) ? v : 'all';
 }
 catch {
     return 'all';
@@ -1061,16 +1061,19 @@ async function fillSessions(zone, onCount, projectsP) {
     };
     // 내가 할당된 프로젝트(=mine=1 응답) 안에서 만들어진 내 세션 판별(#req) — projName(내 프로젝트) 에 있는 projectId.
     const isMyProjectSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && projName.has(pid); };
-    let mode = dashSessFilter(); // 전체 | 내 것 | 초대받음 | 내 프로젝트 (저장된 기본 필터)
+    let mode = dashSessFilter(); // 전체 | 내 프로젝트 | 비공개 | 초대받음 (저장된 기본 필터)
+    // 비공개 = 내 소유인데 초대가 없는(나만 보는) 세션(#req).
+    const isPrivateSess = (s) => s.owned && !((s.invites || []).length);
     const draw = () => {
         const shown = sessions
-            .filter((s) => mode === 'mine' ? s.owned : mode === 'invited' ? !s.owned : mode === 'myproj' ? isMyProjectSess(s) : true)
+            .filter((s) => mode === 'private' ? isPrivateSess(s) : mode === 'invited' ? !s.owned : mode === 'myproj' ? isMyProjectSess(s) : true)
             .sort((a, b) => (b.attached ? 1 : 0) - (a.attached ? 1 : 0) || (Number(b.created) || 0) - (Number(a.created) || 0));
         zone.countEl.textContent = String(shown.length);
-        // '내 프로젝트' 칩 — 내가 할당된 프로젝트의 세션만. 그런 세션이 하나도 없으면 칩 자체를 숨겨 군더더기 방지.
-        const chips = [['all', '전체'], ['mine', '내 것'], ['invited', '초대받음']];
+        // #req 칩 순서: 전체 · 내 프로젝트(그런 세션 있을 때만) · 비공개 · 초대받음.
+        const chips = [['all', '전체']];
         if (sessions.some(isMyProjectSess))
             chips.push(['myproj', '내 프로젝트']);
+        chips.push(['private', '비공개'], ['invited', '초대받음']);
         dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
         if (!shown.length) {
             zone.body.replaceChildren(mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
@@ -1137,7 +1140,7 @@ async function fillSessions(zone, onCount, projectsP) {
         draw();
     };
     // 헤더 우상단 통일 컨트롤 — ⚙(기본 세션 필터) + →(터미널 딥링크).
-    dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['mine', '내 것'], ['invited', '초대받음'], ['myproj', '내 프로젝트']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널 탭으로' } });
+    dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['myproj', '내 프로젝트'], ['private', '비공개'], ['invited', '초대받음']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널 탭으로' } });
     draw();
 }
 // 세션 '⋯' 메뉴(#req R15) — 이름 수정(POST /sessions/:id {label}) · 삭제(DELETE /sessions/:id). 소유자만 노출.
