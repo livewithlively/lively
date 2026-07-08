@@ -3495,8 +3495,16 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 폴더 ⋯ 는 우측 세모와 겹치지 않게 그 왼쪽으로(#508) — 세모(펼침/접힘)와 ⋯ 둘 다 보이고 클릭 가능. */
 .pjv-side-navfolder .pjv-side-navmore { right: 32px; }
 .pjv-side-navlist.sub { padding-left: 30px; }
-/* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더, 폴더 재정렬) + 드래그 중 커서. */
+/* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더 '넣기'). 순서 재정렬은 아래 삽입선으로 구분. */
 .pjv-side-drop-over { background: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
+/* 순서 재정렬 삽입선(#670) — 같은 형제끼리 재정렬 시 커서 위/아래 절반에 따라 항목 위/아래 가로 파란 기준선
+   (프로젝트 행 재정렬 마커와 동일 톤). '넣기'(hover 하이라이트)와 시각적으로 확실히 구분돼 어디 들어갈지 직관적. */
+.pjv-side-navitem.pjv-side-drop-before, .pjv-side-navitem.pjv-side-drop-after { position: relative; }
+.pjv-side-navitem.pjv-side-drop-before::before, .pjv-side-navitem.pjv-side-drop-after::after {
+  content: ""; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--blue); border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; z-index: 3; }
+.pjv-side-navitem.pjv-side-drop-before::before { top: -1px; }
+.pjv-side-navitem.pjv-side-drop-after::after { bottom: -1px; }
 body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabbing; }
 .pjv-side-navfolder[draggable="true"], .pjv-side-navlist[draggable="true"] { user-select: none; }
 /* '폴더 밖으로 빼기' 드롭존 — 리스트 드래그 중에만 노출(끄집어내기 발견성↑). */
@@ -4533,6 +4541,11 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .dash-pop-name { font-size: 13px; font-weight: 600; color: var(--ink); }
 .dash-pop-desc { font-size: 11px; color: var(--muted); }
+/* #req 설정 팝오버 세그먼트(라디오 한 줄) — 태스크 수 표시·기본 필터 등. */
+.dash-pop-seg { display: flex; gap: 4px; padding: 2px 8px 6px; }
+.dash-pop-segbtn { flex: 1; font-size: 12px; font-weight: 700; font-family: inherit; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 6px; cursor: pointer; white-space: nowrap; }
+.dash-pop-segbtn:hover { color: var(--ink); border-color: var(--muted-2); }
+.dash-pop-segbtn.on { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
 
 /* ③ 팀 공유 폴더 — 한 줄 가로 스트립. #req 세로 압축(아이콘 하단 여백↓·'폴더' 캡션 생략) + 우측 peek 페이드('더 있음' 암시).
    ⚠ 스크롤바는 '항상 숨김'(#670): 호버로 나타나면 세로 공간을 먹어 박스 높이가 출렁였음. 스크롤은 트랙패드·휠, 전체는 '전체 보기' 팝업으로. */

@@ -225,9 +225,10 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         const cell = el('div', { class: 'pjv-trow-title-cell' }, 
         // 상태 동그라미 = 클릭 시 상태 변경 메뉴(프로젝트 탭 pjvProjStatusDot 과 동일 동작, #req). 행 링크로 전파 안 되게 preventDefault.
         dashProjStatusControl(p, listById, () => draw()), el('span', { class: 'pjv-trow-title clickable' + (isDone(p) ? ' done' : ''), title: p.name, text: p.name }));
-        // 하위태스크 아이콘 = 클릭 시 그 프로젝트의 태스크 목록 팝오버(#req). 행 링크로 전파 안 되게 격리.
-        if (Number(p.task_count) > 0) {
-            const tb = el('span', { class: 'pjv-trow-subcount pjv-subcount-ico dash-rowchip', role: 'button', tabindex: '0', title: p.task_count + '개 태스크 보기' }, dashSubtaskIcon(), el('span', { text: String(p.task_count) }));
+        // 하위태스크 아이콘 = 클릭 시 그 프로젝트의 태스크 목록 팝오버(#req). 표시 방식(진행중만/전체/완료·전체)은 ⚙ 개인화(#req).
+        const chip = dashTaskChip(p);
+        if (chip) {
+            const tb = el('span', { class: 'pjv-trow-subcount pjv-subcount-ico dash-rowchip', role: 'button', tabindex: '0', title: chip.title + ' — 눌러서 보기' }, dashSubtaskIcon(), el('span', { text: chip.text }));
             const openT = (e) => { e.preventDefault(); e.stopPropagation(); openProjTasksPopover(tb, p); };
             tb.addEventListener('click', openT);
             tb.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ')
@@ -388,7 +389,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         card.append(hideBtn);
         return card;
     };
-    let mode = 'active'; // 진행 중 | 전체 — 완료 프로젝트 포함 여부.
+    let mode = dashProjFilterDefault(); // 진행 중 | 전체 — 완료 프로젝트 포함 여부(기본값 ⚙ 개인화).
     let selectedListId; // 선택된 리스트(아래 목록 필터). 기본=첫 리스트.
     let currentOrder = []; // 현재 표시 중인 리스트 순서(드래그 재정렬 기준).
     const draw = () => {
@@ -411,7 +412,8 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         currentOrder = dashApplyListOrder(base);
         // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
         const hiddenOv = dashOvHidden();
-        const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)));
+        const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션
+        const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id)));
         if (selectedListId === undefined || !byList.has(selectedListId) || hiddenOv.has(Number(selectedListId))) {
             selectedListId = visibleOrder.length ? visibleOrder[0] : currentOrder[0];
         }
@@ -500,11 +502,30 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         showBtn();
         return card;
     };
-    // 헤더 ⚙ — 개요 카드 표시/숨김 사용자화 팝오버(#671). 존이 DOM 에 있으니 한 번만 배치(go-link 앞).
+    // 헤더 ⚙ — 내 프로젝트 위젯 개인화 팝오버(#req): 태스크 수 표시 · 기본 필터 · 빈 리스트 숨김 · 개요 카드 표시/숨김.
     const openOvPrefs = (anchor) => {
-        const hidden = dashOvHidden();
         const panel = el('div', { class: 'dash-pop-panel' });
-        panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '개요 카드' }), el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
+        panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '내 프로젝트 설정' }), el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
+        // 세그먼트(라디오) 한 줄 — 선택 시 저장·재렌더·팝오버 갱신.
+        const seg = (title, options, cur, onPick) => {
+            panel.append(el('div', { class: 'dash-pop-gh', text: title }));
+            const rowEl = el('div', { class: 'dash-pop-seg' });
+            for (const [k, label] of options) {
+                const b = el('button', { class: 'dash-pop-segbtn' + (k === cur ? ' on' : ''), type: 'button', text: label });
+                b.onclick = () => { onPick(k); draw(); openOvPrefs(anchor); };
+                rowEl.append(b);
+            }
+            panel.append(rowEl);
+        };
+        seg('태스크 수 표시', [['active', '진행 중만'], ['all', '전체'], ['progress', '완료·전체']], dashTaskCountMode(), (k) => dashSaveTaskCountMode(k));
+        seg('기본 상태 필터', [['active', '진행 중'], ['all', '전체']], dashProjFilterDefault(), (k) => { dashSaveProjFilterDefault(k); mode = k; });
+        // 빈 리스트 숨김 + 리스트별 개요 표시/숨김.
+        panel.append(el('div', { class: 'dash-pop-gh', text: '개요 카드' }));
+        const heCb = el('input', { type: 'checkbox' });
+        heCb.checked = dashHideEmptyLists();
+        heCb.onchange = () => { dashSaveHideEmptyLists(heCb.checked); draw(); };
+        panel.append(el('label', { class: 'dash-pop-row' }, heCb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '빈 리스트(프로젝트 0개) 숨기기' }))));
+        const hidden = dashOvHidden();
         if (!currentOrder.length)
             panel.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '표시할 리스트가 없어요.' })));
         for (const id of currentOrder) {
@@ -518,13 +539,13 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
             panel.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: (l && l.name) || '미분류' }))));
         }
         if (currentOrder.length) {
-            const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '모두 표시' });
+            const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '개요 모두 표시' });
             resetBtn.onclick = () => { dashSaveOvHidden(new Set()); draw(); openOvPrefs(anchor); };
             panel.append(el('div', { class: 'dash-pop-foot' }, resetBtn));
         }
         dashPopover(anchor, panel);
     };
-    dashCtl(zone, { gear: { title: '개요 카드 설정', open: openOvPrefs }, action: { href: '#/projects2', title: '프로젝트 탭으로' } });
+    dashCtl(zone, { gear: { title: '내 프로젝트 설정', open: openOvPrefs }, action: { href: '#/projects2', title: '프로젝트 탭으로' } });
     draw();
 }
 // 리스트 글리프 — 프로젝트 탭 사이드바(pjvListGlyph)와 동일: 이모지 아이콘 or 체크리스트 라인 아이콘.
@@ -731,6 +752,51 @@ function dashSaveOvHidden(set) { try {
     localStorage.setItem(DASH_OV_HIDDEN_KEY, JSON.stringify([...set]));
 }
 catch { /* 저장 실패 무시 */ } }
+// ── #req 내 프로젝트 위젯 개인화(기기별) — 태스크 수 표시 방식 · 기본 상태 필터 · 빈 리스트 숨김. ⚙ 팝오버에서 선택. ──
+const DASH_TASKCOUNT_KEY = 'dash_taskcount_v1'; // 'active'(진행 중만·기본) | 'all'(전체) | 'progress'(완료/전체)
+const DASH_PROJFILTER_KEY = 'dash_projfilter_v1'; // 'active'(진행 중·기본) | 'all'(전체) — 첫 진입 기본 필터
+const DASH_HIDEEMPTY_KEY = 'dash_hide_empty_lists_v1'; // '1' 이면 프로젝트 0개 리스트 개요 카드 숨김
+function dashTaskCountMode() { try {
+    const v = localStorage.getItem(DASH_TASKCOUNT_KEY);
+    return (v === 'all' || v === 'progress') ? v : 'active';
+}
+catch {
+    return 'active';
+} }
+function dashSaveTaskCountMode(v) { try {
+    localStorage.setItem(DASH_TASKCOUNT_KEY, v);
+}
+catch { /* 무시 */ } }
+function dashProjFilterDefault() { try {
+    return localStorage.getItem(DASH_PROJFILTER_KEY) === 'all' ? 'all' : 'active';
+}
+catch {
+    return 'active';
+} }
+function dashSaveProjFilterDefault(v) { try {
+    localStorage.setItem(DASH_PROJFILTER_KEY, v);
+}
+catch { /* 무시 */ } }
+function dashHideEmptyLists() { try {
+    return localStorage.getItem(DASH_HIDEEMPTY_KEY) === '1';
+}
+catch {
+    return false;
+} }
+function dashSaveHideEmptyLists(on) { try {
+    localStorage.setItem(DASH_HIDEEMPTY_KEY, on ? '1' : '');
+}
+catch { /* 무시 */ } }
+// 프로젝트 행 태스크 칩 텍스트/표시여부 — active=진행 중 태스크(전체−완료; 완료·닫힘은 native done 으로 집계됨).
+function dashTaskChip(p) {
+    const total = Number(p.task_count) || 0, done = Number(p.task_done_count) || 0, active = Math.max(0, total - done);
+    const mode = dashTaskCountMode();
+    if (mode === 'all')
+        return total > 0 ? { text: String(total), title: total + '개 태스크' } : null;
+    if (mode === 'progress')
+        return total > 0 ? { text: done + '/' + total, title: '완료 ' + done + ' / 전체 ' + total } : null;
+    return active > 0 ? { text: String(active), title: '진행 중 태스크 ' + active + '개 (완료·닫힘 제외)' } : null;
+}
 // ── 위젯별 기본 표시 설정(기기별 localStorage) — 헤더 ⚙ 통일 컨트롤이 읽고/쓴다. ──
 const DASH_FOLD_VIEW_KEY = 'dash_fb_view_v1'; // 공유 폴더 브라우저 기본 뷰(icon|list)
 const DASH_SESS_FILTER_KEY = 'dash_sess_filter_v1'; // 내 AI 세션 기본 필터(all|mine|invited|myproj)
@@ -1886,7 +1952,7 @@ async function openListProjectsModal(listId, listById, onChanged) {
                 selected.add(p.id);
             else
                 selected.delete(p.id); row.classList.toggle('sel', cb.checked); renderBar(); };
-            row.append(el('label', { class: 'dash-lpm-check' }, cb), dashProjStatusControl(p, listById, () => { reload(); notify(); }), el('a', { class: 'dash-lpm-nm' + (isDone(p) ? ' done' : ''), href: '#/projects2/p/' + p.id, title: p.name, text: p.name || '(제목 없음)', onclick: () => close() }), Number(p.task_count) > 0 ? el('span', { class: 'dash-lpm-meta', text: '태스크 ' + p.task_count }) : null, p.my_session_count ? el('span', { class: 'dash-badge', text: '세션 ' + p.my_session_count }) : null);
+            row.append(el('label', { class: 'dash-lpm-check' }, cb), dashProjStatusControl(p, listById, () => { reload(); notify(); }), el('a', { class: 'dash-lpm-nm' + (isDone(p) ? ' done' : ''), href: '#/projects2/p/' + p.id, title: p.name, text: p.name || '(제목 없음)', onclick: () => close() }), (() => { const c = dashTaskChip(p); return c ? el('span', { class: 'dash-lpm-meta', title: c.title, text: '태스크 ' + c.text }) : null; })(), p.my_session_count ? el('span', { class: 'dash-badge', text: '세션 ' + p.my_session_count }) : null);
             list.append(row);
         }
         body.replaceChildren(head, list, bar);
