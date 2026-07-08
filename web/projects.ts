@@ -6,6 +6,7 @@ import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { loadAdmin } from './admin.js';
 import { field, overlay } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
+import { saveTermCreatePrefs, termCreatePrefs } from './terminal.js';   // '실행 설정' 기억 공유(#673/#req — 세션 폼 프리필)
 
 
 // ════════════════════════════════════════════
@@ -8493,27 +8494,57 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
   try { cfg = await api('/api/ui/terminal/config'); }
   catch (e) { toast('세션 설정을 불러오지 못했습니다 — ' + e.message, true); return; }
   const harnesses = cfg.harnesses || [];
+  const prefs = termCreatePrefs();   // 이전 '실행 설정'(터미널 탭 새 세션과 같은 기억 — #673/#req) 프리필
   const nameIn = el('input', { type: 'text', value: projectName || '', placeholder: '세션 이름 (예: 개발, 빌드)', maxlength: '80' });
-  const harnessSel = el('select', {}, ...harnesses.map((h) => el('option', { value: h.key, text: h.label })));
-  const flagsBox = el('div', {});
+  const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key, text: h.label })));
+  const flagsBox = el('div', { class: 'term-flags' });
   const autoCb = el('input', { type: 'checkbox' });
   autoCb.checked = true;  // #480: '웹에서 바로 열기'는 멈춤 없이 바로 실행되도록 자동승인 기본 켬(사용자 지정).
   const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 파일 수정·명령 실행을 매번 묻지 않고 바로 진행 (신뢰하는 작업에만)' }));
+  // '실행 설정' — 터미널 탭 새 세션 팝업의 프리셋 UI 그대로(#req — 같은 term-preset-* 컴포넌트/요약줄).
+  //  여기선 기본 '펼침'(매번 눌러 여는 게 귀찮다는 피드백) — 요약줄 클릭으로 접을 수는 있다.
+  const presetSum = el('div', { class: 'term-preset-sum' });
+  const presetChev = el('span', { class: 'term-preset-chev' });
+  const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button' }, presetSum, presetChev);
+  const presetBody = el('div', { class: 'term-preset-body' },
+    field('실행 (AI)', harnessSel),
+    flagsBox,
+    el('div', { style: 'margin-top:10px' }, autoRow));
+  let presetOpen = true;   // 기본 펼침(#req) — 터미널 탭(기본 접힘)과 달리 이 폼은 바로 보이게.
+  const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
+  presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
+  const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
+  function presetSummary() {
+    const h = harnessOf();
+    const parts = [h.label || harnessSel.value];
+    for (const f of (h.flags || [])) {
+      if (f.name !== '--model' && f.name !== '--effort') continue;
+      const c = flagsBox.querySelector('[data-flag="' + f.name + '"]') as any;
+      parts.push((f.name === '--model' ? '모델 ' : 'effort ') + ((c && c.value) || '기본'));
+    }
+    presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
+  }
   function renderFlags() {
-    const h = harnesses.find((x) => x.key === harnessSel.value) || {};
+    const h = harnessOf();
     flagsBox.replaceChildren();
     for (const f of (h.flags || [])) {
       let ctrl: any;
-      if (f.type === 'select') ctrl = el('select', { 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c, text: c || '(기본)' })));
+      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c, text: c || '(기본)' })));
       else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
-      else ctrl = el('input', { type: 'text', 'data-flag': f.name });
+      else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
+      const saved = prefs.flags && prefs.flags[f.name];   // 이전 설정 프리필(#673/#req)
+      if (saved != null) { if (ctrl.type === 'checkbox') ctrl.checked = !!saved; else ctrl.value = saved; }
+      ctrl.addEventListener('change', presetSummary);
       flagsBox.append(el('div', { class: 'field', style: 'margin-top:12px' },
         el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
     }
     autoRow.style.display = h.hasAutoApprove ? '' : 'none';
+    presetSummary();
   }
   harnessSel.addEventListener('change', renderFlags);
+  if (prefs.harness && harnesses.some((h) => h.key === prefs.harness)) harnessSel.value = prefs.harness;   // 이전 하네스 프리필
   renderFlags();
+  applyPreset();
 
   // ── 레포에서 작업 (선택, 여러 개) — '내 컴퓨터에서 작업'(work.mjs)과 동일 수준: 박스가 각 레포를 준비(입력 경로에
   //  없으면 레지스트리 clone_url 로 clone)한다. 워크트리면 project/<id>/<repo> 격리 폴더(브랜치 project/<id>). 세션은
@@ -8570,16 +8601,8 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들고 입장' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-  // #480 요청1-③: 실행기·모델·자동승인은 대부분 기본값(Claude Code·기본 모델·자동승인 켬)이면 되므로 '고급 설정'으로 접는다(기본 닫힘).
-  //  기본 화면엔 '이름 + 코드 저장소'만 — 비개발자는 안 열어도 바로 만들 수 있고, 개발자는 한 번 펼쳐 하네스/모델을 바꾼다.
-  const ADV_LABEL = '고급 설정 (실행기·모델·자동 승인)';
-  const advOptBox = el('div', { style: 'display:none;margin-top:8px' },
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '실행' }), harnessSel),
-    flagsBox,
-    el('div', { style: 'margin-top:10px' }, autoRow));
-  const advOptToggle = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '▸ ' + ADV_LABEL });
-  let advOptOpen = false;
-  advOptToggle.onclick = () => { advOptOpen = !advOptOpen; advOptBox.style.display = advOptOpen ? '' : 'none'; advOptToggle.textContent = (advOptOpen ? '▾ ' : '▸ ') + ADV_LABEL; };
+  // 옛 '▸ 고급 설정 (실행기·모델·자동 승인)' 접이 토글 폐기(#req) — 터미널 탭과 동일한 '실행 설정' 프리셋을
+  //  기본 펼침으로 바로 노출(presetToggle + presetBody 위에서 구성). 이전 설정 프리필이라 대부분 그대로 만들면 된다.
   const back = overlayBox('새 터미널 세션',
     el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
@@ -8587,8 +8610,7 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
       el('label', { class: 'field-label', text: '코드 저장소에서 작업 (선택)' }),
       el('div', { class: 'caption', text: '코드를 다루는 작업이면 작업할 저장소를 고르세요 — 그 코드를 자동으로 가져와, 에이전트가 바로 작업할 수 있게 준비해 둡니다. 코드 작업이 아니라면 그냥 비워두고 넘어가도 돼요.' }),
       reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
-    el('div', { style: 'margin-top:12px' }, advOptToggle),
-    advOptBox,
+    el('div', { class: 'term-preset proj-sess-preset', style: 'margin-top:12px' }, presetToggle, presetBody),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   setTimeout(() => nameIn.focus(), 0);
   saveBtn.onclick = async () => {
@@ -8599,6 +8621,7 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
       const v = ctrl.type === 'checkbox' ? (ctrl.checked ? 'true' : '') : ctrl.value;
       if (v) flags[k] = v;
     }
+    saveTermCreatePrefs({ harness: harnessSel.value, flags });   // 다음 생성 때 기본값(터미널 탭과 공유 — #673/#req)
     try {
       // 선택한 레포(들)를 먼저 박스에 provision(clone/worktree + 비워크트리 add-dir). 세션은 프로젝트 폴더에서 연다.
       const specs = rrows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim() })).filter((s) => s.name);

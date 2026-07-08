@@ -655,4 +655,6 @@ function startTerminalTour(firstStep) {
         //  보여준다(openTermCreateForm 이 &welcome=1 로 넘기고 terminal.js 의 maybeShowWelcome 이 띄운다). 흐름이 실제 터미널에서 끝난다.
     ]);
 }
-export { renderTerminal, startTerminalTour, openTermCreateForm, teardownTerminal, };
+export { renderTerminal, startTerminalTour, openTermCreateForm, teardownTerminal, 
+// '실행 설정' 기억(#673) — 프로젝트 탭 '웹에서 바로 열기' 폼도 같은 키를 읽고 써 두 폼이 기억을 공유한다(#req).
+termCreatePrefs, saveTermCreatePrefs, };
