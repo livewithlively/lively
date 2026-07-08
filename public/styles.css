@@ -3153,7 +3153,7 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-listboard .card-head { margin-bottom: 20px; }
 /* 폴더 사이드바 — 좌측 폴더 네비 + 본문(선택 폴더의 프로젝트). */
 /* #541 — 사이드바 폭은 CSS 변수(--pjv-side-w). 경계 드래그로 조절·localStorage 저장. */
-.pjv-side-wrap { display: grid; grid-template-columns: var(--pjv-side-w, 208px) minmax(0, 1fr); margin-top: 0; }
+.pjv-side-wrap { display: grid; grid-template-columns: var(--pjv-side-w, 240px) minmax(0, 1fr); margin-top: 0; }
 /* nav = 본문 높이만큼 늘어나는 레일(구분선이 끝까지 이어짐). 항목은 inner 가 sticky 로 들고 스크롤 따라온다. */
 .pjv-side-nav { padding: 2px 14px 8px 0; border-right: 1px solid var(--line); position: relative; }
 /* 사이드바 폭 조절 핸들(#541) — 오른쪽 경계 위에 얹는 얇은 col-resize 존. */
@@ -4011,10 +4011,16 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-plain { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 
 /* 지식 셸 — 좌 사이드바(고정 260px, border-right, 자체 스크롤 sticky) + 우 콘텐츠(flex 1, 자체 패딩). */
-.kn-shell { display: flex; align-items: flex-start; min-height: calc(100vh - 64px); }
-.kn-side { flex: 0 0 208px; min-width: 0; box-sizing: border-box; position: sticky; top: 64px;   /* (#req) 프로젝트 탭 --pjv-side-w(208) 와 동일 폭 */
+.kn-shell { display: flex; align-items: flex-start; min-height: calc(100vh - 64px); position: relative; }
+.kn-side { flex: 0 0 var(--pjv-side-w, 240px); min-width: 0; box-sizing: border-box; position: sticky; top: 64px;   /* (#670) 프로젝트 탭과 --pjv-side-w 공유(같은 localStorage 'pjv:sideW') — 항상 동일 폭 */
   max-height: calc(100vh - 64px); overflow-y: auto; overscroll-behavior: contain;
   border-right: 1px solid var(--line); padding: 22px 16px 32px; background: var(--bg); }
+/* 사이드바 폭 조절 핸들(#670) — 프로젝트 탭 .pjv-side-resize 동형. .kn-side 는 자체 스크롤(overflow)이라 그 안에 절대배치하면 클립되므로,
+   비스크롤 셸(.kn-shell)의 자식으로 두고 사이드바 우측 경계(left=--pjv-side-w)에 얹는다. */
+.kn-side-resize { position: absolute; top: 0; left: var(--pjv-side-w, 240px); margin-left: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 6; }
+.kn-side-resize::after { content: ''; position: absolute; top: 0; left: 3px; width: 2px; height: 100%; background: transparent; transition: background .12s; }
+.kn-side-resize:hover::after, body.pjv-side-resizing .kn-side-resize::after { background: var(--accent, #5b6cff); }
+.kn-shell.side-off > .kn-side-resize { display: none; }
 .kn-main { flex: 1; min-width: 0; padding: 28px 40px 64px; }
 .kn-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .kn-side-head .eyebrow { margin-bottom: 0; }
@@ -4165,8 +4171,8 @@ main.doc-mode { max-width: none; padding: 0; }
 /* ── WIKI 사이드바(#req) = 프로젝트 탭 사이드바 컴포넌트 재사용(.pjv-side-navitem/.pjv-side-search/.pjv-side-navcount).
    위계: space 헤더(색 아바타+볼드, 프로젝트 탭 스페이스 행 동형) › 카테고리 행(들여쓰기+칩+개수).
    '우리 팀'은 별·색칠 대신 글자 칩(.kn-team-chip = .pjv-side-cat)으로 명시. ── */
-.kn-side .pjv-side-nav-head { margin-bottom: 4px; }
-.kn-side .pjv-side-search { margin: 0 2px 8px; }
+/* (#670) 헤더·검색창 여백은 프로젝트 탭 기본값(.pjv-side-nav-head margin:0 / .pjv-side-search margin:8px 2px 6px)을 그대로 상속 —
+   예전 오버라이드(head margin-bottom 4 / search margin 0 2 8)가 프로젝트와 검색창 위 간격을 미세하게 어긋나게 했음. 제거해 완전 일치. */
 .kn-tree2 { display: flex; flex-direction: column; gap: 1px; }
 .kn-side-glyph { flex: none; width: 16px; text-align: center; color: var(--muted-2); font-size: 12px; line-height: 1; }
 /* (#req) 우리 팀 ★ — 이름 앞 컴팩트 마커(글자칩이 208px 에서 이름 잘라먹던 것 대체) + 하단 범례. */
@@ -4389,6 +4395,10 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-projrow2:hover { background: var(--bg-tint); }
 .dash-projrow2 .pjv-trow-title-cell { flex: 1; min-width: 0; }
 .dash-projrow2 .dash-badge { margin-left: 4px; }
+/* #req 행 맨 뒤 '⋯' 관리 메뉴 — 호버 시 노출(삭제 등). */
+.dash-projrow-more { flex: none; width: 24px; height: 22px; margin-left: 4px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 6px; color: var(--muted-2); cursor: pointer; font-family: inherit; font-size: 15px; line-height: 1; opacity: 0; transition: opacity .12s, background .12s, color .12s; }
+.dash-projrow2:hover .dash-projrow-more, .dash-projrow-more:focus-visible { opacity: 1; }
+.dash-projrow-more:hover { color: var(--ink); background: var(--bg-tint-2); }
 /* #req 행 안 클릭 칩(하위태스크 수·세션 배지) — 클릭 시 팝오버(태스크 목록/세션 선택). 행 링크와 구분되게 hover 강조. */
 .dash-rowchip { cursor: pointer; }
 .dash-rowchip:hover { background: var(--bg-tint-2); border-radius: 6px; }

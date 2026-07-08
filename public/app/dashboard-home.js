@@ -259,7 +259,10 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         const tags = dashRowTags(p);
         if (tags)
             cell.append(tags);
-        return el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell);
+        // #req 행 맨 뒤 '⋯' — 호버 시 노출, 삭제 등 관리 메뉴. 행 링크로 전파 안 되게 격리.
+        const more = el('button', { class: 'dash-projrow-more', type: 'button', title: '프로젝트 관리', 'aria-label': '프로젝트 관리', text: '⋯' });
+        more.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openProjRowMenu(more, p, reloadAll); });
+        return el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell, more);
     };
     // 리스트 그룹 — 프로젝트 탭 리스트 헤더(pjv-list-head: 캐럿·글리프·이름·개수, 접기/펼치기) + 행들. 미분류는 색점.
     // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'. 프로젝트 탭 보드 추가행(pjvProjAddRow)과 동일 클래스·톤(테두리 없는 인라인 입력).
@@ -1140,7 +1143,7 @@ async function fillSessions(zone, onCount, projectsP) {
         draw();
     };
     // 헤더 우상단 통일 컨트롤 — ⚙(기본 세션 필터) + →(터미널 딥링크).
-    dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['myproj', '내 프로젝트'], ['private', '비공개'], ['invited', '초대받음']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널 탭으로' } });
+    dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['myproj', '내 프로젝트'], ['private', '비공개'], ['invited', '초대받음']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널로' } });
     draw();
 }
 // 세션 '⋯' 메뉴(#req R15) — 이름 수정(POST /sessions/:id {label}) · 삭제(DELETE /sessions/:id). 소유자만 노출.
@@ -1843,6 +1846,27 @@ function dashTaskDot(t) {
     return t.status === 'todo' ? '#94a3b8' : '#f59e0b';
 }
 // 하위태스크 아이콘 클릭 → 그 프로젝트의 태스크 목록 팝오버(#req). 클릭 시 프로젝트 상세로.
+// #req 프로젝트 행 '⋯' 관리 메뉴 — 삭제(POST /projects/:id/delete). onChanged=위젯 새로고침.
+function openProjRowMenu(anchor, p, onChanged) {
+    const panel = el('div', { class: 'dash-pop-panel' });
+    let close = () => { };
+    const del = el('button', { class: 'dash-pop-opt danger', type: 'button' }, el('span', { class: 'dash-pop-name', text: '삭제' }));
+    del.onclick = async () => {
+        close();
+        if (!confirm('프로젝트 ‘' + (p.name || '') + '’을(를) 삭제할까요?\n하위 태스크·세션 연결 포함 되돌릴 수 없어요.'))
+            return;
+        try {
+            await api('/api/ui/v6/projects/' + p.id + '/delete', { method: 'POST', body: '{}' });
+            toast('프로젝트를 삭제했어요');
+            onChanged && onChanged();
+        }
+        catch (e) {
+            toast('삭제 실패 — ' + (e && e.message || e), true);
+        }
+    };
+    panel.append(del);
+    close = dashPopover(anchor, panel);
+}
 async function openProjTasksPopover(anchor, p) {
     const panel = el('div', { class: 'dash-pop-panel dash-listpop' });
     panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { title: p.name, text: p.name }), el('span', { class: 'dash-pop-sub', text: '태스크' })));
