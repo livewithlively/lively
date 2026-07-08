@@ -291,47 +291,14 @@ async function renderKnowledgeSpace(view, _space, params) {
     const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
     // (#req) 사이드바 분류 검색 — 프로젝트 탭(폴더·리스트 검색) 동형. '카테고리' 헤더 맨 위 → 그 아래 검색창 → 트리.
     //  트리를 즉시 필터(분류 이름 부분일치, 대소문자 무시) — 매칭 없는 space 섹션은 숨김. 전문 지식검색은 ⌘K/상단 필터.
-    let knSideQ = '';
-    function applySideFilter() {
-        const q = knSideQ.trim().toLowerCase();
-        nav.querySelectorAll('.kn-space-group').forEach((grp) => {
-            let vis = 0;
-            grp.querySelectorAll('.kn-nav-catwrap').forEach((w) => {
-                const name = (w.querySelector('.tree-label')?.textContent || '').toLowerCase();
-                const m = !q || name.includes(q);
-                w.hidden = !m;
-                if (m)
-                    vis++;
-            });
-            grp.hidden = !!q && vis === 0;
-        });
-        const legend = nav.querySelector('.kn-star-legend');
-        if (legend)
-            legend.hidden = !!q;
-        const anyVis = !q || Array.from(nav.querySelectorAll('.kn-nav-catwrap')).some((w) => !w.hidden);
-        const note = nav.querySelector('.kn-side-noresult');
-        if (q && !anyVis) {
-            if (!note)
-                nav.append(el('div', { class: 'kn-side-noresult kn-nav-note', text: '일치하는 분류 없음' }));
-        }
-        else if (note)
-            note.remove();
-    }
-    function knSideSearchBox() {
-        const input = el('input', { class: 'kn-side-search-input', type: 'text', placeholder: '분류 검색', 'aria-label': '분류 검색', value: knSideQ });
-        const clear = el('button', { class: 'kn-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
-        const box = el('div', { class: 'kn-side-search-box' + (knSideQ ? ' has-q' : ''), title: '전체 지식 검색은 ⌘K' }, el('span', { class: 'kn-side-search-ic', 'aria-hidden': 'true', text: '🔍' }), input, clear);
-        input.addEventListener('input', () => { knSideQ = input.value; box.classList.toggle('has-q', !!knSideQ.trim()); applySideFilter(); });
-        clear.addEventListener('click', () => { knSideQ = ''; input.value = ''; box.classList.remove('has-q'); applySideFilter(); input.focus(); });
-        return box;
-    }
+    const knSideState = { q: '' }; // 사이드바 분류 검색어(재빌드 사이 유지) — 모듈 헬퍼(knMakeSideSearch/knSideFilterNav) 공용.
     function buildSide() {
         // 사이드바 선택값 = 인덱스면 센티넬, 아니면 카테고리 id. opts.indexed 로 '전체' 하위에 인덱스(핀) 항목 노출(지식 탭 전용, #336).
         const selKey = f.indexed ? KN_INDEXED : f.category;
         buildKnowledgeNav(nav, bySpace, selKey, myIds, { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }) });
         // 헤더(카테고리) 맨 위 → 검색창 → 트리(#req, 프로젝트 탭 사이드바와 통일).
-        side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), knSideSearchBox(), nav, mirrorBox);
-        applySideFilter(); // 재빌드 후에도 필터 유지
+        side.replaceChildren(el('div', { class: 'eyebrow', text: '카테고리' }), knMakeSideSearch(nav, knSideState), nav, mirrorBox);
+        knSideFilterNav(nav, knSideState.q); // 재빌드 후에도 필터 유지
     }
     buildSide();
     loadMirrorTreeInto(mirrorBox);
@@ -810,6 +777,41 @@ function knSideSearchBtn() {
 }
 // 카테고리 사이드바 행 — tree-item 패턴. data-cat-val 로 클릭 위임(빈 문자열=전체).
 //  opts(선택): { glyph } 글리프 교체(기본 ·/∗) · { cls } 추가 클래스(예: 들여쓰기) · { title } 호버 힌트.
+// (#req) 사이드바 분류 검색 — 목록 뷰·문서 뷰 사이드바 공용. nav(kn-space-group 트리)를 분류 이름으로 즉시 필터.
+//  프로젝트 탭 '폴더·리스트 검색'과 동형(헤더 아래 검색창). 전문 지식검색은 ⌘K/상단 필터.
+function knSideFilterNav(nav, q) {
+    const query = String(q || '').trim().toLowerCase();
+    nav.querySelectorAll('.kn-space-group').forEach((grp) => {
+        let vis = 0;
+        grp.querySelectorAll('.kn-nav-catwrap').forEach((w) => {
+            const name = (w.querySelector('.tree-label')?.textContent || '').toLowerCase();
+            const m = !query || name.includes(query);
+            w.hidden = !m;
+            if (m)
+                vis++;
+        });
+        grp.hidden = !!query && vis === 0;
+    });
+    const legend = nav.querySelector('.kn-star-legend');
+    if (legend)
+        legend.hidden = !!query;
+    const anyVis = !query || Array.from(nav.querySelectorAll('.kn-nav-catwrap')).some((w) => !w.hidden);
+    const note = nav.querySelector('.kn-side-noresult');
+    if (query && !anyVis) {
+        if (!note)
+            nav.append(el('div', { class: 'kn-side-noresult kn-nav-note', text: '일치하는 분류 없음' }));
+    }
+    else if (note)
+        note.remove();
+}
+function knMakeSideSearch(nav, state) {
+    const input = el('input', { class: 'kn-side-search-input', type: 'text', placeholder: '분류 검색', 'aria-label': '분류 검색', value: state.q || '' });
+    const clear = el('button', { class: 'kn-side-search-clear', type: 'button', title: '지우기', 'aria-label': '검색어 지우기', text: '×' });
+    const box = el('div', { class: 'kn-side-search-box' + (state.q ? ' has-q' : ''), title: '전체 지식 검색은 ⌘K' }, el('span', { class: 'kn-side-search-ic', 'aria-hidden': 'true', text: '🔍' }), input, clear);
+    input.addEventListener('input', () => { state.q = input.value; box.classList.toggle('has-q', !!String(state.q).trim()); knSideFilterNav(nav, state.q); });
+    clear.addEventListener('click', () => { state.q = ''; input.value = ''; box.classList.remove('has-q'); knSideFilterNav(nav, ''); input.focus(); });
+    return box;
+}
 function knSideItem(label, catVal, on, opts) {
     // opts.star = 우리 팀 소유 카테고리(★ 강조 + 좌측 파란 틱, kn-cat-mine). 글리프 자리를 ★ 로 대체(중복 아이콘 방지).
     const star = !!(opts && opts.star);
@@ -1343,7 +1345,9 @@ async function renderKnowledgeDetail(view, name) {
     // 사이드바 내용 — 목록 뷰와 같은 구성(카테고리 트리 + Notion 페이지 트리). 클릭 = 목록으로 이동(필터).
     const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
     const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
-    side.append(el('div', { class: 'kn-side-head' }, el('div', { class: 'eyebrow', text: '카테고리' }), collapseBtn), knSideSearchBtn(), nav, mirrorBox);
+    // (#req) 목록 뷰와 동일 레이아웃 — 헤더(카테고리)+접기 → 분류 검색창 → 트리.
+    const knSideState = { q: '' };
+    side.append(el('div', { class: 'kn-side-head' }, el('div', { class: 'eyebrow', text: '카테고리' }), collapseBtn), knMakeSideSearch(nav, knSideState), nav, mirrorBox);
     side.addEventListener('click', (ev) => {
         const item = ev.target.closest('[data-cat-val]');
         if (!item)
