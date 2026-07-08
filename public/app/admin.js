@@ -2469,7 +2469,7 @@ function embeddingsEditor(detail, data) {
                 const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ embedding_config }) });
                 if (r && r.runtimeConfig)
                     data.runtimeConfig = r.runtimeConfig;
-                toast(provSel.value === 'http' ? '임베딩 켜짐 — 기존 지식은 아래 [백필]로 채우세요.' : '저장됨 — 임베딩 꺼짐');
+                toast(provSel.value === 'http' ? '임베딩 켜짐 — 기존 지식은 아래 [백필]로 채우세요.' : '저장됨 — 임베딩 꺼짐(서버 .env 시드도 무시됩니다)');
                 load(); // 상태 새로고침(백로그·백필 버튼 활성 재계산)
             }
             catch (e) {
@@ -2477,11 +2477,29 @@ function embeddingsEditor(detail, data) {
                 saveBtn.disabled = false;
             }
         });
+        // #688 설정 출처 안내 — env 시드로 도는지 / 명시적 off 인지(관리탭 저장과 .env 의 우선순위 혼동 방지).
+        const srcNote = st.config_source === 'env'
+            ? el('p', { class: 'admin-hint', text: '현재 설정은 서버 환경변수(.env EMBEDDINGS_*) 시드로 동작 중입니다 — 여기서 저장하면 관리탭(DB) 설정이 우선하게 됩니다.' })
+            : st.config_source === 'db-off'
+                ? el('p', { class: 'admin-hint', text: '관리탭에서 명시적으로 꺼둔 상태입니다 — 서버 .env 의 EMBEDDINGS_* 시드는 무시됩니다(다시 켜려면 여기서 켜기 저장).' })
+                : null;
         const statusRegion = el('div');
         const projectRegion = el('div');
-        body.replaceChildren(field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), field('배치 크기 (요청당 텍스트 수 · 느린/CPU 백엔드는 낮춰 타임아웃 회피 · 기본 8)', batchIn), field('요청 타임아웃 ms (초과 시 배치를 반으로 줄여 재시도 · 기본 300000)', timeoutIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
+        body.replaceChildren(...(srcNote ? [srcNote] : []), field('벡터 임베딩', provSel), field('엔드포인트 base_url (로컬 사이드카 또는 외부 API — 경로 /v1/embeddings 자동 부착)', baseIn), field('모델', modelIn), field('차원 (모델과 일치해야 함 · 변경 시 전체 재임베딩)', dimIn), field('인증 환경변수 이름 (선택 · 외부 API 용 · 시크릿 값 아님)', authIn), field('배치 크기 (요청당 텍스트 수 · 느린/CPU 백엔드는 낮춰 타임아웃 회피 · 기본 8)', batchIn), field('요청 타임아웃 ms (초과 시 배치를 반으로 줄여 재시도 · 기본 300000)', timeoutIn), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (뒤늦게 켠 경우)' }), el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 채워지지 않습니다(켠 이후의 신규·수정분만 자동). 아래로 기존 지식을 일괄 임베딩하세요 — 중단/재실행해도 안전합니다.' }), statusRegion, el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용 · #631/#624)' }), el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩 켠 이후의 생성·수정·동기화분은 자동(텍스트가 실제 바뀔 때만), 기존분은 아래로 일괄. 지식과 같은 임베딩 설정을 씁니다.' }), projectRegion);
         updateStatus(st, statusRegion);
         loadProjectStatus(projectRegion);
+    }
+    // #688 백필 실패 사유별 처방 — 한 줄 reason 만으론 원인 파악이 어려웠던 실사례(어니스트 박스)의 판독표를 UI 로.
+    function backfillReasonNotice(reason) {
+        if (reason === 'off')
+            return '임베딩 설정이 꺼져 있습니다 — 위에서 켠 뒤 저장하세요.';
+        if (reason === 'unavailable')
+            return '임베딩 엔드포인트 연결/응답 실패 — base_url 과 사이드카(예: Ollama 컨테이너) 상태를 확인하세요. 엔드포인트가 살아 있는데도 반복되면 과부하일 수 있습니다: 배치 크기를 줄이고(예 2) 요청 타임아웃을 늘려(예 600000) 저장 후 재시도하세요.';
+        if (reason === 'schema')
+            return 'pgvector 스키마가 없습니다 — items-db 컨테이너가 pgvector 이미지인지 확인하세요.';
+        if (/timeout|abort/i.test(reason))
+            return '임베딩 요청이 요청 타임아웃을 초과했습니다(느린 CPU 백엔드에서 흔함) — 배치 크기를 줄이고(예 2) 요청 타임아웃을 늘려(예 600000) 저장한 뒤 재시도하세요.';
+        return '오류가 반복되면 게이트웨이 로그를 확인하세요.';
     }
     // 백로그·잡 진행만 갱신(폼은 그대로). 잡이 돌면 폴링.
     function updateStatus(st, region) {
@@ -2510,12 +2528,15 @@ function embeddingsEditor(detail, data) {
                 bfBtn.disabled = false;
             }
         });
-        const jobLine = el('p', { class: 'admin-hint' });
+        const jobLine = el('div', { class: 'admin-hint' });
         if (job) {
             if (job.running)
                 jobLine.textContent = `백필 진행: ${fmtNum(job.done)}/${fmtNum(job.total)} …`;
-            else if (job.reason)
-                jobLine.textContent = `직전 백필 미완료: ${job.reason}`;
+            else if (job.reason) {
+                // #688 실패 사유 배너 — reason 원문 + 원인별 처방(admin-warn 코랄 박스).
+                jobLine.className = 'admin-warn';
+                jobLine.replaceChildren(el('div', { text: `⚠ 직전 백필 미완료: ${job.reason}` }), el('div', { text: backfillReasonNotice(String(job.reason)) }));
+            }
             else if (job.finishedAt)
                 jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
         }
@@ -2571,12 +2592,15 @@ function embeddingsEditor(detail, data) {
                 bfBtn.disabled = false;
             }
         });
-        const jobLine = el('p', { class: 'admin-hint' });
+        const jobLine = el('div', { class: 'admin-hint' });
         if (job) {
             if (job.running)
                 jobLine.textContent = `백필 진행: ${fmtNum(job.done)}/${fmtNum(job.total)} …`;
-            else if (job.reason)
-                jobLine.textContent = `직전 백필 미완료: ${job.reason}`;
+            else if (job.reason) {
+                // #688 실패 사유 배너 — reason 원문 + 원인별 처방(admin-warn 코랄 박스).
+                jobLine.className = 'admin-warn';
+                jobLine.replaceChildren(el('div', { text: `⚠ 직전 백필 미완료: ${job.reason}` }), el('div', { text: backfillReasonNotice(String(job.reason)) }));
+            }
             else if (job.finishedAt)
                 jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
         }

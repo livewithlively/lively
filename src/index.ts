@@ -17,6 +17,7 @@ import { initV6Schema } from "./v6/schema.js";
 import { runAutoBackfillSweep } from "./v6/embedding-backfill.js";
 import { registerWebUi } from "./web.js";
 import { registerTerminal } from "./terminal.js";
+import { killAttachedPtys } from "./terminal-pty.js";
 import { registerProjectV6Routes } from "./project-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
@@ -32,7 +33,12 @@ const PORT = Number(process.env.PORT ?? 8080);
 //  unhandledRejection: 미처리 promise 거부로 프로세스가 통째로 죽지 않게 — 로그만 남기고 계속(요청 1건 실패 ≠ 전체 다운).
 //  uncaughtException: 상태가 오염됐을 수 있으니 로그 후 종료 → launchd 가 즉시 새 프로세스로 재기동(깨끗한 상태).
 process.on("unhandledRejection", (reason) => logger.error({ reason }, "unhandledRejection — 무시하고 계속"));
-process.on("uncaughtException", (err) => { logger.error({ err }, "uncaughtException — 종료 후 재기동"); process.exit(1); });
+process.on("uncaughtException", (err) => { logger.error({ err }, "uncaughtException — 종료 후 재기동"); try { killAttachedPtys(); } catch { /* noop */ } process.exit(1); });
+// 정상 종료(재배포 SIGTERM·Ctrl+C SIGINT) 시 attach node-pty 를 전부 kill 하고 나간다(#687). 안 하면 자식이 init 로
+//  재부모화돼 PTY 를 영구 점유(고아). 재시작이 잦은 게이트웨이라 이게 없으면 매 배포가 PTY 를 흘린다.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => { logger.info({ sig }, "shutdown — attach PTY 정리 후 종료"); try { killAttachedPtys(); } catch { /* noop */ } process.exit(0); });
+}
 
 // 부팅 시 MCP 툴 후보 주입 — registry(정적) + db 직접등록. 웹 도구탭(org_tools)·검증(org_tool_upsert)·http_proxy 섀도잉 차단이 참조.
 setToolCandidates(buildToolCandidates());

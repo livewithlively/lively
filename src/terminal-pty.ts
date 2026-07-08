@@ -21,7 +21,22 @@ export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 const CONTROL_MODE = process.env.TERMINAL_LEGACY_ATTACH !== "1"; // 기본 control mode, =1 이면 plain attach 폴백
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
+// ── attach PTY 수명 관리(#687 PTY 누수) ──
+// 배경: attach 는 브라우저 WS 하나당 node-pty(`tmux -CC attach`) 1개 = **PTY 1개**를 뜬다. 이건 term.kill() 로만
+//  회수되고, kill 은 ws 의 'close'/'error' 에서만 돈다. 그런데 (1) 노트북 절전·네트워크 끊김·프록시 타임아웃으로
+//  TCP 가 '반쯤 열린' 채 사라지면 서버 ws 는 'close' 를 영영 안 받아 PTY 가 좀비로 남고(프론트는 자동 재연결하며
+//  새 PTY 를 또 뜬다 → 한 세션에 뷰어 수백), (2) 게이트웨이가 재시작되면 node-pty 자식들이 init(PPID 1)로
+//  재부모화돼 살아남아 PTY 를 영구 점유한다. 실측(어니스트 박스): 세션 ~30개에 좀비 attach 3164개 → PTY 고갈.
+// 대응: ⓐ WS ping/pong heartbeat 로 죽은 소켓을 주기적으로 terminate(→ close → kill), ⓑ 종료 시 살아있는 PTY 일괄
+//  kill(고아 방지), ⓒ 시작 시 이전 인스턴스가 남긴 고아 attach 회수.
+const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
+const liveTerms = new Set<IPty>();        // 이 인스턴스가 띄운 살아있는 attach node-pty — 종료 훅이 일괄 kill 한다.
+type LiveWS = WebSocket & { isAlive?: boolean };
+let heartbeat: NodeJS.Timeout | null = null;
+
 export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): void {
+  startHeartbeat();                     // 죽은 attach 소켓 주기 회수(#687)
+  void reapOrphanAttachClients();       // 이전 인스턴스가 남긴 고아 attach 회수(#687) — best-effort·비동기
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     let url: URL;
     try { url = new URL(req.url || "", "http://localhost"); } catch { return; }
@@ -91,6 +106,10 @@ function handleLegacyMsg(term: IPty, msg: { t?: string; d?: unknown; c?: unknown
 
 function attach(ws: WebSocket, id: string): void {
   let term: IPty | undefined;
+  // heartbeat(#687): 새 소켓은 살아있음으로 시작하고, 브라우저가 자동 응답하는 pong 을 받을 때마다 생존 표시.
+  //  ping 은 WS 프로토콜 제어프레임이라 tmux 데이터와 무관 — 프론트 코드 변경 불요(브라우저가 투명하게 pong).
+  (ws as LiveWS).isAlive = true;
+  ws.on("pong", () => { (ws as LiveWS).isAlive = true; });
   // attach 는 tmux **클라이언트**일 뿐 — 그 cwd 는 세션 pane 에 영향 없다. 세션 작업디렉터리(격리 시 멤버 700 홈)로
   //  chdir 하면 게이트웨이가 못 들어가 'chdir(2) failed: Permission denied' 가 반복된다(격리 개인폴더 attach 버그 #524).
   //  게이트웨이가 늘 접근 가능한 서버 홈을 쓴다.
@@ -109,6 +128,7 @@ function attach(ws: WebSocket, id: string): void {
       //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
       term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
+      liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
       //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
@@ -122,7 +142,7 @@ function attach(ws: WebSocket, id: string): void {
         if (!ready) { ready = true; for (const q of cmdQueue) { try { term?.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
         try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ }
       });
-      term.onExit(() => { try { ws.close(); } catch { /* already closed */ } });
+      term.onExit(() => { if (term) liveTerms.delete(term); try { ws.close(); } catch { /* already closed */ } });
       ws.on("message", (raw) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
         try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -130,9 +150,67 @@ function attach(ws: WebSocket, id: string): void {
         if (CONTROL_MODE) handleControlMsg(sendCmd, msg);
         else handleLegacyMsg(term, msg);
       });
-      const cleanup = () => { try { term?.kill(); } catch { /* already gone */ } };
+      const cleanup = () => { if (term) liveTerms.delete(term); try { term?.kill(); } catch { /* already gone */ } };
       ws.on("close", cleanup);
       ws.on("error", cleanup);
     })
     .catch((err) => { logger.warn({ err, id }, "pty attach 실패"); try { ws.close(); } catch { /* noop */ } });
+}
+
+// WS liveness heartbeat(#687) — 반쯤 끊긴 attach 소켓을 주기적으로 걸러 terminate 한다. terminate 는 'close' 를
+//  발생시켜 기존 cleanup(term.kill)이 돌게 하므로 PTY 가 정상 회수된다(=탭 정상 종료와 동일 경로). 게이트웨이가
+//  프로세스 정상 종료하는 걸 막지 않도록 unref. 멱등(중복 호출 무시).
+function startHeartbeat(): void {
+  if (heartbeat) return;
+  heartbeat = setInterval(() => {
+    for (const ws of wss.clients as Set<LiveWS>) {
+      if (ws.isAlive === false) { try { ws.terminate(); } catch { /* noop */ } continue; } // 직전 주기에 pong 없음 = 죽음
+      ws.isAlive = false;
+      try { ws.ping(); } catch { /* noop */ }
+    }
+  }, HEARTBEAT_MS);
+  if (heartbeat.unref) heartbeat.unref();
+}
+
+// 게이트웨이 종료(SIGTERM 재배포·SIGINT·크래시) 시 이 인스턴스의 attach node-pty 를 전부 kill 한다(#687). 안 죽이면
+//  자식이 init(PPID 1)로 재부모화돼 PTY 를 영구 점유(관측된 고아 3천 개의 원인). SIGKILL — 종료 경로라 유예 불요,
+//  tmux '클라이언트'만 죽고 세션/서버는 영속(재접속 시 다시 attach). index.ts 의 시그널 핸들러가 호출한다.
+export function killAttachedPtys(): void {
+  for (const t of liveTerms) { try { t.kill("SIGKILL"); } catch { /* noop */ } }
+  liveTerms.clear();
+}
+
+// 시작 시 1회(#687) — 이전 게이트웨이 인스턴스가 남긴 '고아 attach 클라이언트'를 회수해 누적된 PTY 를 즉시 해제한다.
+//  대상 판정(3중 게이트, 오탐 0 지향): (1) PPID===1(원부모 사망=고아 — 살아있는 부모 있는 건 절대 안 건드림. 현재
+//  인스턴스가 방금 띄운 attach 는 우리 자식이라 PPID≠1 → 매칭 안 됨), (2) 우리 웹터미널 attach 시그니처(tmux …
+//  attach … -t box-…), (3) 우리 uid 소유일 때만 kill 성공(타 uid 는 EPERM 로 skip). ps 는 리눅스·macOS 공통 포맷.
+async function reapOrphanAttachClients(): Promise<void> {
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileP = promisify(execFile);
+    const { stdout } = await execFileP("ps", ["-eo", "pid=,ppid=,args="], { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
+    const victims: number[] = [];
+    for (const line of stdout.split("\n")) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m) continue;
+      const pid = Number(m[1]), ppid = Number(m[2]), cmd = m[3];
+      if (ppid !== 1 || pid === process.pid) continue;                    // 고아만 — 살아있는 부모가 있으면 스킵
+      if (!/tmux\b.*\battach\b.*\s-t\s+box-[a-z0-9-]+/.test(cmd)) continue; // 우리 웹터미널 attach 시그니처만
+      victims.push(pid);
+    }
+    if (!victims.length) return;
+    // ⚠ 페이싱(#687 후속): 수천 개를 한꺼번에 죽이면 tmux 서버가 동시 클라 해제로 순간 과부하되고, 그 사이 재접속
+    //  클라의 canAttach(tmux show-options)가 5s 타임아웃→가짜 4403(입장거부)로 오인될 수 있다(대량 백로그 청소 시 실측).
+    //  배치로 나눠 짧은 간격을 둬 tmux 부하를 분산한다(정상 운영 시 victims≈0 이라 즉시 끝남). 프론트도 4403 재시도로 이중방어.
+    const BATCH = 50, GAP_MS = 150;
+    let reaped = 0;
+    for (let i = 0; i < victims.length; i += BATCH) {
+      for (const pid of victims.slice(i, i + BATCH)) {
+        try { process.kill(pid, "SIGKILL"); reaped++; } catch { /* 우리 소유 아님(EPERM) 등 — skip */ }
+      }
+      if (i + BATCH < victims.length) await new Promise((r) => setTimeout(r, GAP_MS));
+    }
+    logger.info({ reaped, victims: victims.length }, "고아 attach 클라이언트 회수(#687 페이싱 배치)");
+  } catch (e) { logger.warn({ err: (e as Error)?.message ?? String(e) }, "고아 attach 회수 실패(비치명)"); }
 }
