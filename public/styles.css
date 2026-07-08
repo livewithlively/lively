@@ -4007,7 +4007,7 @@ main.doc-mode { max-width: none; padding: 0; }
 
 /* 지식 셸 — 좌 사이드바(고정 260px, border-right, 자체 스크롤 sticky) + 우 콘텐츠(flex 1, 자체 패딩). */
 .kn-shell { display: flex; align-items: flex-start; min-height: calc(100vh - 64px); }
-.kn-side { flex: 0 0 260px; min-width: 0; box-sizing: border-box; position: sticky; top: 64px;
+.kn-side { flex: 0 0 208px; min-width: 0; box-sizing: border-box; position: sticky; top: 64px;   /* (#req) 프로젝트 탭 --pjv-side-w(208) 와 동일 폭 */
   max-height: calc(100vh - 64px); overflow-y: auto; overscroll-behavior: contain;
   border-right: 1px solid var(--line); padding: 22px 16px 32px; background: var(--bg); }
 .kn-main { flex: 1; min-width: 0; padding: 28px 40px 64px; }
@@ -4164,6 +4164,12 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-side .pjv-side-search { margin: 0 2px 8px; }
 .kn-tree2 { display: flex; flex-direction: column; gap: 1px; }
 .kn-side-glyph { flex: none; width: 16px; text-align: center; color: var(--muted-2); font-size: 12px; line-height: 1; }
+/* (#req) 우리 팀 ★ — 이름 앞 컴팩트 마커(글자칩이 208px 에서 이름 잘라먹던 것 대체) + 하단 범례. */
+.kn-cat-star { flex: none; width: 12px; color: var(--blue); font-size: 10px; line-height: 1; text-align: center; }
+.pjv-side-navitem.active .kn-cat-star { color: var(--blue); }
+.kn-star-legend { display: flex; align-items: center; gap: 7px; margin: 12px 2px 2px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.kn-star-legend .kn-cat-star { width: auto; }
 .kn-side-item-sub { padding-left: 26px; }
 /* space 섹션 헤더 — details/summary 를 프로젝트 탭 스페이스 행처럼(마커 제거 + 캐럿 우측). */
 .kn-space-group { margin: 0; }
@@ -4767,6 +4773,14 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .cath { margin: 2px 0 22px; }
 .cath-cover { height: 158px; border-radius: 14px; border: 1px solid var(--line); position: relative; overflow: hidden; background: var(--bg-tint-2); }
 .cath-cover:hover .kn-cover-btns { opacity: 1; }
+/* (#req) 커버 미설정 — 영역 접기(기본 커버 안 깔음). 아이콘은 커버 겹침(-34) 대신 정상 위치로. */
+.cath-cover-empty { height: 0; min-height: 0; border: none; background: none; border-radius: 0; }
+.cath-cover-empty + .cath-inner .cath-icon { margin-top: 4px; }
+.cath-addcover { display: inline-flex; align-items: center; border: none; background: none; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--muted-2); padding: 4px 7px; border-radius: 7px; margin: 0 0 2px -3px; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+.cath:hover .cath-addcover { opacity: 1; }
+.cath-addcover:hover { color: var(--blue); background: var(--bg-tint); }
+.cath-addcover[hidden] { display: none; }
 .cath-inner { padding: 0 10px; }
 .cath-icon { width: 64px; height: 64px; margin-top: -34px; position: relative; z-index: 2; background: var(--bg);
   border: 1px solid var(--line); border-radius: 14px; font-size: 34px; line-height: 1; display: flex; align-items: center;
@@ -4972,7 +4986,7 @@ main.doc-mode {
 }
 
 /* ── 셸 · 사이드바(카탈로그 스파인) ── */
-main.doc-mode .kn-side { background: transparent; border-right: 1px solid var(--wk-line); padding: 24px 14px 40px; }
+main.doc-mode .kn-side { background: transparent; border-right: 1px solid var(--wk-line); padding: 20px 12px 28px 24px; }   /* (#req) 프로젝트 사이드바 .pjv-side-nav-inner 와 동일 여백 */
 main.doc-mode .kn-main { padding: 30px 44px 72px; }
 main.doc-mode .kn-side .eyebrow {
   font-size: 10.5px; font-weight: 700; letter-spacing: 1.6px; color: var(--muted-head);
@@ -4994,7 +5008,7 @@ main.doc-mode .tree-item.on { background: var(--wk-living-wash); color: var(--wk
 main.doc-mode .tree-glyph { width: auto; height: auto; min-width: 13px; background: none; border: none;
   border-radius: 0; color: var(--wk-ink-dim); font-family: var(--wk-mono); font-size: 11px; font-weight: 400; }
 main.doc-mode .tree-item.on .tree-glyph { color: var(--wk-living-ink); }
-main.doc-mode .tree-label { font-size: 13.5px; font-weight: 550; }
+main.doc-mode .tree-label { font-size: 14px; font-weight: 600; }   /* (#req) 프로젝트 .pjv-side-navitem(14/600) 와 동일 */
 main.doc-mode .tree-count, main.doc-mode .tree-groupcount {
   font-family: var(--wk-mono); font-size: 11px; font-weight: 400; color: var(--wk-ink-dim); font-variant-numeric: tabular-nums; }
 main.doc-mode .tree-group > summary { color: var(--wk-ink-soft); padding: 7px 10px; border-radius: 8px; }

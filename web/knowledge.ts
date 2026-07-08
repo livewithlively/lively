@@ -338,7 +338,6 @@ async function renderKnowledgeSpace(view, _space, params) {
   function applyTabVisibility() {
     const inCat = !!curCat();
     const homeTab = inCat && f.catTab !== 'docs';
-    filterBar.hidden = homeTab;
     listBox.hidden = homeTab;
     foot.hidden = homeTab;
     if (homeTab) bulkBar.hidden = true; else repaintBulk();
@@ -675,7 +674,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
   const layout = el('div', { class: 'kn-shell' },
     side,
-    el('section', { class: 'kn-main' }, head, catBox, filterBar, bulkBar, listBox, foot),
+    el('section', { class: 'kn-main' }, head, catBox, bulkBar, listBox, foot),   // (#req) 상단 제목·본문 검색 필터바 제거 — 사이드바 검색 + ⌘K 로 대체
   );
   view.replaceChildren(layout);
   applyReveal([layout]);
@@ -781,9 +780,10 @@ function knMakeSideSearch(nav: any, state: any) {
   return box;
 }
 
-// '우리 팀' 칩(#req) — 별·색칠 대신 글자로 명시. 프로젝트 탭 리스트 행의 카테고리 칩(.pjv-side-cat)과 동일 스타일.
+// 우리 팀 표시(#req) — 208px(프로젝트 폭) 사이드바에선 '우리 팀' 글자칩이 이름을 잘라먹어 컴팩트 ★(이름 앞)로.
+//  의미는 하단 범례(knStarLegend)가 설명. 프로젝트 탭도 좁을 땐 카테고리 칩을 숨김(container query) — 동일 취지.
 function knTeamChip() {
-  return el('span', { class: 'pjv-side-cat kn-team-chip', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' });
+  return el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', title: '우리 팀이 담당하는 카테고리', text: '★' });
 }
 
 function knSideItem(label, catVal, on, opts?) {
@@ -794,8 +794,8 @@ function knSideItem(label, catVal, on, opts?) {
     href: '#', 'data-cat-val': catVal, role: 'button', tabindex: '0',
     ...(opts && opts.title ? { title: opts.title } : {}) },
     el('span', { class: 'kn-side-glyph', 'aria-hidden': 'true', text: glyph }),
-    el('span', { class: 'pjv-side-navlabel', text: label }),
-    star ? knTeamChip() : null);
+    star ? knTeamChip() : null,
+    el('span', { class: 'pjv-side-navlabel', text: label }));
 }
 
 // ── 공유 사이드바(프로젝트·위키 탭 공용, 2026-06-26) — 3 space 카테고리를 한 사이드바에 통합. ──
@@ -888,6 +888,10 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     for (const c of ordered) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
     nav.append(grp);
   }
+  // ★ 범례(#req) — 별표가 왜 붙는지(우리 팀 소유) 한 줄 설명. 팀 소유가 하나라도 있을 때만.
+  if (myIds && myIds.size) nav.append(el('div', { class: 'kn-star-legend' },
+    el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }),
+    el('span', { text: '우리 팀이 담당하는 분류' })));
 }
 
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
@@ -901,8 +905,8 @@ function knNavCatNode(c, on, onOpen, isMine?: boolean) {
     'data-cat-val': String(c.id), role: 'button', tabindex: '0',
     ...(isMine ? { title: '우리 팀이 담당하는 카테고리 — ' + (c.name || c.key) } : {}) },
     tw,
-    el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }),
     isMine ? knTeamChip() : null,
+    el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }),
     Number.isFinite(cnt) ? el('span', { class: 'pjv-side-navcount' + (cnt === 0 ? ' kn-count-zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
   const kids = el('div', { class: 'kn-nav-kids' });
   kids.hidden = true;

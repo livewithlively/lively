@@ -8,7 +8,7 @@
 import { api, el, renderMarkdown, state, toast } from './core.js';
 import { hasScope } from './admin.js';
 import { createBlockEditor } from './block-editor.js';
-import { applyCoverBg, defaultCoverFor, openCoverPicker, openEmojiPicker } from './page-decor.js';
+import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { knFetchCategoryRows } from './knowledge-doc.js'; // #657w 템플릿 재료(핀·최근 문서) — 세션 캐시 공유
 const HOME_PREFIX = 'category-home-';
 // 빈 대문 본문 자리표시 — knowledge_save 가 빈 body 를 거부해(비폴더), 보이지 않는 ZWSP 1자로 저장한다.
@@ -68,12 +68,17 @@ async function buildCategoryHome(slot, cat, opts = {}) {
     // ── 커버 + 아이콘 ──
     const cover = el('div', { class: 'cath-cover' });
     const iconBtn = el('button', { class: 'cath-icon', type: 'button', title: canDoc ? '아이콘 변경' : '' });
+    // (#req) 커버는 선택 — 기본 커버(장식 그라디언트) 자동 표시 폐기. 없으면 커버 영역 접고 hover 시 '＋ 커버 추가'만.
+    const coverAddBtn = canDoc ? el('button', { class: 'cath-addcover', type: 'button', text: '＋ 커버 추가',
+        onclick: (e) => openCoverPicker(e.target, { current: null, onPick: (v) => saveDecor({ cover: v }) }) }) : null;
     function paintDecor() {
         const cv = (home && home.props_ui && home.props_ui.cover) || '';
-        if (!applyCoverBg(cover, cv))
-            applyCoverBg(cover, defaultCoverFor(cat.key || String(cat.id)));
-        cover.replaceChildren(canDoc ? el('div', { class: 'kn-cover-btns cath-cover-btns' }, el('button', { class: 'ke-coverbtn', type: 'button', text: '커버 변경',
+        const hasCover = applyCoverBg(cover, cv); // 커버 미설정이면 배경 없음(기본커버 안 깔음)
+        cover.classList.toggle('cath-cover-empty', !hasCover);
+        cover.replaceChildren(hasCover && canDoc ? el('div', { class: 'kn-cover-btns cath-cover-btns' }, el('button', { class: 'ke-coverbtn', type: 'button', text: '커버 변경',
             onclick: (e) => openCoverPicker(e.target, { current: cv || null, onPick: (v) => saveDecor({ cover: v }) }) })) : null);
+        if (coverAddBtn)
+            coverAddBtn.hidden = hasCover;
         const ic = (home && home.props_ui && home.props_ui.icon) || '';
         iconBtn.classList.toggle('cath-icon-letter', !ic);
         iconBtn.textContent = ic || String(cat.name || cat.key || '?').trim().charAt(0).toUpperCase();
@@ -227,7 +232,7 @@ async function buildCategoryHome(slot, cat, opts = {}) {
     const catIsMine = ((state.me?.team_category_ids) || []).map((x) => String(x)).includes(String(cat.id));
     const metaEl = el('div', { class: 'cath-meta' }, el('span', { class: 'cath-meta-sp', text: SPACE_KO[cat.space] || cat.space || '카테고리' }), el('span', { class: 'cath-meta-sep', 'aria-hidden': 'true', text: '/' }), el('span', { class: 'cath-meta-key', text: cat.key }), catIsMine ? el('span', { class: 'pjv-side-cat kn-team-chip', title: '우리 팀이 담당하는 카테고리', text: '우리 팀' }) : null);
     const actionRow = el('div', { class: 'cath-actions' }, saveChip, ...(opts.actions || []).filter(Boolean));
-    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), tabs, bodyBox)));
+    slot.append(el('div', { class: 'cath' }, cover, el('div', { class: 'cath-inner' }, coverAddBtn, iconBtn, el('div', { class: 'cath-headrow' }, el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl), actionRow), tabs, bodyBox)));
     // 탭 초기 해석 — 'auto'(기본)면 대문 내용이 있을 때 대문, 없으면 문서(빈 대문으로 막지 않기).
     if (opts.onTab)
         opts.onTab(opts.tab === 'docs' ? 'docs' : (opts.tab === 'home' ? 'home' : (hasContent ? 'home' : 'docs')));

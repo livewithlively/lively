@@ -69,12 +69,17 @@ async function buildCategoryHome(slot: HTMLElement, cat: any, opts: any = {}) {
   // ── 커버 + 아이콘 ──
   const cover = el('div', { class: 'cath-cover' });
   const iconBtn = el('button', { class: 'cath-icon', type: 'button', title: canDoc ? '아이콘 변경' : '' });
+  // (#req) 커버는 선택 — 기본 커버(장식 그라디언트) 자동 표시 폐기. 없으면 커버 영역 접고 hover 시 '＋ 커버 추가'만.
+  const coverAddBtn = canDoc ? el('button', { class: 'cath-addcover', type: 'button', text: '＋ 커버 추가',
+    onclick: (e: any) => openCoverPicker(e.target, { current: null, onPick: (v) => saveDecor({ cover: v }) }) }) as HTMLButtonElement : null;
   function paintDecor() {
     const cv = (home && home.props_ui && home.props_ui.cover) || '';
-    if (!applyCoverBg(cover, cv)) applyCoverBg(cover, defaultCoverFor(cat.key || String(cat.id)));
-    cover.replaceChildren(canDoc ? el('div', { class: 'kn-cover-btns cath-cover-btns' },
+    const hasCover = applyCoverBg(cover, cv);   // 커버 미설정이면 배경 없음(기본커버 안 깔음)
+    cover.classList.toggle('cath-cover-empty', !hasCover);
+    cover.replaceChildren(hasCover && canDoc ? el('div', { class: 'kn-cover-btns cath-cover-btns' },
       el('button', { class: 'ke-coverbtn', type: 'button', text: '커버 변경',
         onclick: (e: any) => openCoverPicker(e.target, { current: cv || null, onPick: (v) => saveDecor({ cover: v }) }) })) : null);
+    if (coverAddBtn) coverAddBtn.hidden = hasCover;
     const ic = (home && home.props_ui && home.props_ui.icon) || '';
     iconBtn.classList.toggle('cath-icon-letter', !ic);
     iconBtn.textContent = ic || String(cat.name || cat.key || '?').trim().charAt(0).toUpperCase();
@@ -211,6 +216,7 @@ async function buildCategoryHome(slot: HTMLElement, cat: any, opts: any = {}) {
     el('div', { class: 'cath' },
       cover,
       el('div', { class: 'cath-inner' },
+        coverAddBtn,
         iconBtn,
         el('div', { class: 'cath-headrow' },
           el('div', { class: 'cath-headmain' }, metaEl, titleEl, descEl),
