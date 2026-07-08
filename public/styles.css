@@ -4297,6 +4297,9 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
   color: var(--muted); background: none; cursor: pointer; font-family: inherit; }
 .dash-chip:hover { color: var(--ink); }
 .dash-chip.on { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+/* #req 유형 필터 드롭다운 칩(작업 로그) — 많은 유형을 1행 안에 넣기 위해 칩 대신 단일 드롭다운. */
+.dash-chip-dd { display: inline-flex; align-items: center; gap: 4px; }
+.dash-chip-caret { font-size: 9px; opacity: .65; }
 .dash-wh-go { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--muted); text-decoration: none; white-space: nowrap; }
 .dash-wh-go:hover { color: var(--ink); }
 /* #req 헤더 우상단 통일 컨트롤 — 모든 존 동일: [⚙ 설정] + [→/⤢ 액션], 같은 아이콘버튼(dash-wh-btn). */
@@ -4427,9 +4430,16 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-cp-err { font-size: 12px; color: var(--coral-text, var(--coral)); }
 .dash-cp-err:empty { display: none; }
 .dash-cp-foot { display: flex; justify-content: flex-end; }
-.dash-projadd { padding: 6px 6px 2px; }
-.dash-projadd-btn { width: 100%; font-size: 13px; font-weight: 700; font-family: inherit; color: var(--muted); background: none; border: 1px dashed var(--line-net-2, var(--line)); border-radius: 8px; padding: 8px; cursor: pointer; }
-.dash-projadd-btn:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+/* #req R19 인라인 '+ 새 프로젝트' — 프로젝트 행과 같은 위치·톤. 클릭→그 자리 입력, Enter→생성·상세 이동. */
+.dash-projadd { padding: 6px 6px 2px; } /* (구) — 모달 버튼용, 인라인으로 대체 */
+.dash-inlineadd { padding: 2px 6px 4px; }
+.dash-inlineadd-btn { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 32px; padding: 4px 8px; border: none; background: none; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); text-align: left; }
+.dash-inlineadd-btn:hover { background: var(--bg-tint); color: var(--blue); }
+.dash-inlineadd-plus { flex: none; width: 18px; text-align: center; font-size: 16px; font-weight: 700; color: var(--muted-2); }
+.dash-inlineadd-btn:hover .dash-inlineadd-plus { color: var(--blue); }
+.dash-inlineadd > .dash-inlineadd-plus { display: inline-flex; align-items: center; }
+.dash-inlineadd:has(.dash-inlineadd-input) { display: flex; align-items: center; gap: 7px; padding-left: 8px; }
+.dash-inlineadd-input { flex: 1; min-width: 0; font-family: inherit; font-size: 13.5px; color: var(--ink); background: var(--bg); border: 1px solid var(--blue); border-radius: 7px; padding: 6px 9px; outline: none; }
 
 /* ② 내 AI 세션 — 터미널 탭 세션 박스(term-row)와 통일: 약간 푸른 카드(테두리+bg-tint). 프로젝트 세션은 파란 뱃지. */
 .dash-sess-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 12px; }
@@ -4442,11 +4452,12 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-badges { flex: none; display: inline-flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
 .dash-sess-sub { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-badge-proj { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
-.dash-sess-open { flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 12px; background: var(--bg); cursor: pointer; font-family: inherit; }
+/* #req 액션은 카드(2줄) 높이에 맞춰 꽉 차게 — 열기(가득) + 세로 케밥(⋮). 오른쪽 1행이 붕 뜨던 문제 해결. */
+.dash-sess-open { flex: none; font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 0 14px; background: var(--bg); cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; justify-content: center; }
 .dash-sess-open:hover { background: var(--bg-punch); }
-/* #req R15 세션 액션 묶음 + '⋯' 관리 메뉴 버튼(수정·삭제). */
-.dash-sess-acts { flex: none; display: inline-flex; align-items: center; gap: 4px; }
-.dash-sess-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 15px; line-height: 1; }
+/* #req R15 세션 액션 묶음 + 세로 '⋮' 관리 메뉴(수정·삭제) — 카드 높이만큼 stretch. */
+.dash-sess-acts { flex: none; align-self: stretch; display: flex; align-items: stretch; gap: 6px; }
+.dash-sess-more { width: 30px; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
 .dash-sess-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .dash-pop-opt.danger .dash-pop-name { color: var(--coral-text, var(--coral)); }
 .dash-pop-opt.danger:hover { background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }

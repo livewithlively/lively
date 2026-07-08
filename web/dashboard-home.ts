@@ -228,10 +228,41 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     return el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell);
   };
   // 리스트 그룹 — 프로젝트 탭 리스트 헤더(pjv-list-head: 캐럿·글리프·이름·개수, 접기/펼치기) + 행들. 미분류는 색점.
+  // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'(프로젝트 탭과 동일 위치·동작): 클릭→그 자리서 바로 입력, Enter→생성 후 상세(내용 적는 창)로.
+  const dashInlineAdd = (listId) => {
+    const wrap = el('div', { class: 'dash-inlineadd' });
+    const showBtn = () => wrap.replaceChildren(
+      el('button', { class: 'dash-inlineadd-btn', type: 'button', title: '새 프로젝트', onclick: showInput },
+        el('span', { class: 'dash-inlineadd-plus', text: '+' }), el('span', { text: '새 프로젝트' })));
+    const showInput = () => {
+      let busy = false;
+      const input = el('input', { class: 'dash-inlineadd-input', type: 'text', placeholder: '프로젝트 이름 입력 후 Enter', 'aria-label': '새 프로젝트 이름' });
+      const submit = async () => {
+        const name = (input.value || '').trim();
+        if (busy) return;
+        if (!name) { showBtn(); return; }
+        busy = true; input.disabled = true;
+        try {
+          const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
+          const id = r && (r.project && r.project.id || r.id);
+          toast('프로젝트를 만들었어요');
+          if (id) location.hash = '#/projects2/p/' + id; // 내용 적는 창 = 프로젝트 상세로 이동
+          else await reloadAll();
+        } catch (e: any) { toast('실패 — ' + (e && e.message || e), true); busy = false; input.disabled = false; input.focus(); }
+      };
+      input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); showBtn(); } });
+      input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim()) showBtn(); });
+      wrap.replaceChildren(el('span', { class: 'dash-inlineadd-plus', text: '+' }), input);
+      input.focus();
+    };
+    showBtn();
+    return wrap;
+  };
   const dashProjGroup = (listId, l, arr) => {
     const isUn = !listId;
     const body = el('div', { class: 'pjv-tgroup-body' });
     for (const p of arr) body.append(dashProjRow(p));
+    body.append(dashInlineAdd(listId)); // 맨 밑 인라인 추가행
     let open = true;
     const caret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
     const setOpen = (o) => { open = o; caret.textContent = o ? '▾' : '▸'; caret.setAttribute('aria-expanded', String(o)); body.hidden = !o; };
@@ -327,11 +358,9 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     }
     // 선택된 리스트의 프로젝트만 — 프로젝트 탭과 동일한 리스트 그룹(헤더+행). 강조된 카드가 곧 선택 표시.
     const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    // #req R11.1/R19 — '+ 새 프로젝트'는 리스트 그룹 맨 밑 인라인 행(dashInlineAdd)으로 이동(프로젝트 탭과 동일).
     const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), arr));
-    // #req R11.1 — 하단 '+ 새 프로젝트'(프로젝트 탭과 동일하게 추가; 현재 선택 리스트에 생성).
-    const addRow = el('div', { class: 'dash-projadd' },
-      el('button', { class: 'dash-projadd-btn', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(selectedListId, listById, reloadAll) }));
-    zone.body.replaceChildren(gridEl, listEl, addRow);
+    zone.body.replaceChildren(gridEl, listEl);
   };
   // 프로젝트 변경(생성·삭제·이동·상태) 후 위젯 새로고침 — 최신 mine=1 재요청 후 재렌더.
   const reloadAll = async () => {
@@ -716,7 +745,7 @@ async function fillSessions(zone, onCount, projectsP?) {
       const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
       // #req R15 — 열기 옆 '⋯' 메뉴(수정·삭제). 소유자 세션만(서버도 비소유 403 재검증).
       if (s.owned) {
-        const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋯' });
+        const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
         moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
         acts.append(moreBtn);
       }
@@ -1041,12 +1070,28 @@ async function fillActivity(zone) {
   const typeOpts: any[] = [['', '전체'], ...typesPresent.map((t) => [t, DASH_ACT_LABEL[t] || t])];
   let typeF = dashLogType(); // 저장된 기본 유형 필터(없거나 무효면 전체)
   if (typeF && !typesPresent.includes(typeF)) typeF = '';
-  // 헤더 우상단 통일 컨트롤 — ⚙(기본 유형 필터) + ⤢(전체 작업 로그 모달).
+  // #req 유형이 많아 칩으로 다 늘어놓으면 헤더가 넘침 → 헤더엔 '현재 선택 ▾' 드롭다운 하나만(1행 유지).
+  const openTypeMenu = (anchor) => {
+    const panel = el('div', { class: 'dash-pop-panel' });
+    panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '유형 필터' })));
+    let closeM = () => { /* 대체됨 */ };
+    for (const [k, label] of typeOpts) {
+      const b = el('button', { class: 'dash-pop-opt' + (k === typeF ? ' sel' : ''), type: 'button' }, el('span', { class: 'dash-pop-name', text: label }), k === typeF ? el('span', { class: 'dash-pop-check', text: '✓' }) : null);
+      b.onclick = () => { closeM(); typeF = k; draw(); };
+      panel.append(b);
+    }
+    closeM = dashPopover(anchor, panel);
+  };
+  // 헤더 우상단 통일 컨트롤 — ⚙(기본 유형 필터 저장) + ⤢(전체 작업 로그 모달).
   dashCtl(zone, { gear: { title: '작업 로그 표시 설정', open: (a) => dashChoicePopover(a, '기본 유형 필터', typeOpts, typeF, (k) => { dashSaveLogType(k); typeF = k; draw(); }) }, action: { onClick: openWorklogPopup, title: '전체 작업 로그 보기' } });
   const draw = () => {
     const shown = typeF ? rows.filter((a) => (a.type || 'other') === typeF) : rows;
     zone.countEl.textContent = String(shown.length);
-    dashChips(zone.chipsEl, typeOpts, typeF, (k) => { typeF = k; draw(); });
+    const curLabel = (typeOpts.find(([k]) => k === typeF) || ['', '전체'])[1];
+    const dd = el('button', { class: 'dash-chip dash-chip-dd' + (typeF ? ' on' : ''), type: 'button', 'aria-haspopup': 'true', title: '작업 유형 필터' },
+      el('span', { text: curLabel }), el('span', { class: 'dash-chip-caret', 'aria-hidden': 'true', text: '▾' }));
+    dd.onclick = () => openTypeMenu(dd);
+    zone.chipsEl.replaceChildren(dd);
     if (!shown.length) { zone.body.replaceChildren(dashEmpty(typeF ? '이 유형의 작업이 없어요.' : '아직 기록된 작업이 없어요.')); return; }
     zone.body.replaceChildren(...shown.map((a) => {
       const when = a.committed_at || a.created_at;
@@ -1328,7 +1373,8 @@ async function openProjTasksPopover(anchor, p) {
 // 세션 배지 클릭 → 들어갈 세션 선택(#req). 1개면 바로 열기, 여러 개면 팝아웃 선택.
 async function openProjSessionsPicker(anchor, p) {
   let sess: any[];
-  try { const d = await api('/api/ui/terminal/sessions'); sess = ((d && d.sessions) || []).filter((s) => Number(s.projectId) === p.id); }
+  // #req 버그수정 — /terminal/sessions 는 프로젝트 세션을 숨긴다(터미널 탭 정책). 프로젝트 세션은 /projects/:id/sessions 에서 받고 내 것(owned)만.
+  try { const d = await api('/api/ui/v6/projects/' + p.id + '/sessions'); sess = ((d && d.sessions) || []).filter((s) => s.owned); }
   catch { toast('세션을 불러오지 못했습니다', true); return; }
   const openSess = (s) => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
   if (!sess.length) { toast('이 프로젝트의 내 세션이 없어요.'); return; }
