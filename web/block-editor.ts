@@ -12,7 +12,9 @@ import { openEmojiPicker } from './page-decor.js';
 
 // ── 블록 데이터 모델 ──
 //  { type, text?, level?, indent?, checked?, lang?, icon?, color? } — text 는 inline-markdown(개행 = 소프트 브레이크).
-const TEXTY = new Set(['p', 'h', 'bullet', 'numbered', 'todo', 'quote', 'callout']);
+//  #657n 중첩 블록(노션 패리티): toggle { summary, children:[블록…] } · columns { cols:[[블록…],…] }
+//  — notion-md ::: 방언(:::toggle / :::columns>:::column)으로 무손실 직렬화, 파스 실패는 raw 폴백.
+const TEXTY = new Set(['p', 'h', 'bullet', 'numbered', 'todo', 'quote', 'callout', 'toggle']);
 const LISTY = new Set(['bullet', 'numbered', 'todo']);
 const CALLOUT_COLORS = ['default', 'gray', 'yellow', 'green', 'red', 'purple'];
 
@@ -42,7 +44,8 @@ function mdToBlocks(md: string): any[] {
       continue;
     }
 
-    // ::: 컨테이너 — callout(중첩 없음)만 1급 블록, 그 외(toggle/columns/synced/…)는 raw 로 무손실 보존.
+    // ::: 컨테이너 — callout(중첩 없음)·toggle(내용 재귀)·columns(:::column 재귀)는 1급 블록(#657n),
+    //  그 외(synced/toc/미지)와 파스 실패는 raw 로 무손실 보존.
     const cont = /^:::\s*([a-zA-Z_-]+)\s*(.*)$/.exec(line);
     if (cont) {
       const rawLines = [line];
@@ -65,6 +68,19 @@ function mdToBlocks(md: string): any[] {
         }
         const color = String(attrs.color || '').replace(/_background$/, '').replace(/[^a-z]/g, '') || 'default';
         out.push({ type: 'callout', icon: attrs.icon || '💡', color: CALLOUT_COLORS.includes(color) ? color : 'default', text: body.join('\n') });
+      } else if ((cont[1] === 'toggle' || cont[1] === 'template') && closed) {
+        // 토글 — 요약(선두 attr 토큰 제외한 rest, renderContainer 동일 규칙) + 내용 재귀 파스. template 은 노션 미러 방언.
+        let summary = '';
+        for (const tok of String(cont[2] || '').split(/\s+/)) {
+          if (!tok) continue;
+          if (!summary && /^[a-zA-Z_-]+=/.test(tok)) continue;
+          summary += (summary ? ' ' : '') + tok;
+        }
+        out.push({ type: 'toggle', summary, children: body.join('\n').trim() ? mdToBlocks(body.join('\n')) : [] });
+      } else if (cont[1] === 'columns' && closed) {
+        const cols = parseColumns(body);
+        if (cols && cols.length) out.push({ type: 'columns', cols });
+        else out.push({ type: 'raw', text: rawLines.join('\n') });
       } else {
         out.push({ type: 'raw', text: rawLines.join('\n') });
       }
@@ -153,6 +169,33 @@ function mdToBlocks(md: string): any[] {
   }
   if (!out.length) out.push({ type: 'p', text: '' });
   return out;
+}
+
+// :::columns 본문 → 컬럼별 블록 배열(본문이 :::column 컨테이너로만 구성돼야 성립 — 아니면 null=raw 폴백).
+function parseColumns(lines: string[]): any[][] | null {
+  const cols: any[][] = [];
+  const contOpen = (l) => /^:::\s*[a-zA-Z_-]/.test(l);
+  const contClose = (l) => l.trim() === ':::';
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (l.trim() === '') { i++; continue; }
+    if (!/^:::\s*column(\s|$)/.test(l)) return null;
+    const body: string[] = [];
+    let depth = 1, inFence = false, closed = false;
+    i++;
+    while (i < lines.length && depth > 0) {
+      const s = lines[i];
+      if (/^(```|~~~)/.test(s)) inFence = !inFence;
+      else if (!inFence && contOpen(s)) depth++;
+      else if (!inFence && contClose(s)) { depth--; if (depth === 0) { i++; closed = true; break; } }
+      body.push(s);
+      i++;
+    }
+    if (!closed) return null;
+    cols.push(body.join('\n').trim() ? mdToBlocks(body.join('\n')) : []);
+  }
+  return cols;
 }
 
 // ════════════════════════════════════════════
@@ -252,6 +295,20 @@ function blocksToMd(blocks: any[]): string {
         const body = String(b.text || '');
         const marker = body.includes('```') ? '~~~' : '```';
         chunks.push(marker + (b.lang || '') + '\n' + body + '\n' + marker);
+        break;
+      }
+      case 'toggle': {
+        const inner = blocksToMd(b.children || []);
+        const sum = String(b.summary || '').replace(/\n+/g, ' ').trim();
+        chunks.push(':::toggle' + (sum ? ' ' + sum : '') + '\n' + (inner ? inner + '\n' : '') + ':::');
+        break;
+      }
+      case 'columns': {
+        // 실질 1열 이하로 줄면 컨테이너를 벗겨 평범한 블록 흐름으로(노션의 컬럼 해체와 동일).
+        const cols = (b.cols || []).filter((c) => Array.isArray(c) && blocksToMd(c) !== '');
+        if (!cols.length) break;
+        if (cols.length === 1) { chunks.push(blocksToMd(cols[0])); break; }
+        chunks.push(':::columns\n' + cols.map((c) => ':::column\n' + blocksToMd(c) + '\n:::').join('\n') + '\n:::');
         break;
       }
       case 'divider':
@@ -410,6 +467,37 @@ export function createBlockEditor(opts: {
         addRowDelete(block);
         break;
       }
+      case 'toggle': {
+        // #657n 토글 — 요약(텍스트) + 접히는 자식 블록 스택(중첩 에디터 영역, 재귀 makeBlock).
+        block.dataset.open = '1';
+        const caret = el('button', { class: 'be-toggle-caret', type: 'button', contenteditable: 'false',
+          title: '접기/펼치기', text: '▾' });
+        const kids = el('div', { class: 'be-togglekids' });
+        const children = (d.children && d.children.length) ? d.children : [{ type: 'p', text: '' }];
+        for (const c of children) kids.append(makeBlock(c));
+        caret.onclick = () => {
+          const open = block.dataset.open !== '1';
+          block.dataset.open = open ? '1' : '';
+          caret.textContent = open ? '▾' : '▸';
+        };
+        main.append(el('div', { class: 'be-toggle' },
+          el('div', { class: 'be-toggle-row' }, caret, textDiv('be-togglesum', d.summary || '', '토글 제목')),
+          kids));
+        break;
+      }
+      case 'columns': {
+        // #657n 컬럼 — 블록을 나란히(노션 드래그 레이아웃). __shell=드래그 조립용(빈 컬럼 채움 생략).
+        const colsWrap = el('div', { class: 'be-cols' });
+        const cols = (d.cols && d.cols.length) ? d.cols : [[], []];
+        for (const col of cols) {
+          const colEl = el('div', { class: 'be-col' });
+          const items = (col && col.length) ? col : (d.__shell ? [] : [{ type: 'p', text: '' }]);
+          for (const c of items) colEl.append(makeBlock(c));
+          colsWrap.append(colEl);
+        }
+        main.append(colsWrap);
+        break;
+      }
       default: // p
         main.append(textDiv('be-p', d.text, "내용 입력 · '/' 블록 메뉴"));
     }
@@ -419,7 +507,7 @@ export function createBlockEditor(opts: {
   // 구분선/raw 블록 hover ✕ 삭제 버튼.
   function addRowDelete(block: HTMLElement) {
     const x = el('button', { class: 'be-block-x', type: 'button', title: '블록 삭제', text: '✕' });
-    x.onclick = () => { const nb = nextTextBlock(block) || prevTextBlock(block); block.remove(); ensureOne(); renumber(); markDirty(); if (nb) focusBlock(nb, false); };
+    x.onclick = () => deleteBlock(block);
     block.append(x);
   }
 
@@ -500,14 +588,29 @@ export function createBlockEditor(opts: {
         const ta: any = block.querySelector('.be-raw-ta');
         return { type, text: ta ? ta.value : ((block as any)._raw || '') };
       }
+      case 'toggle': {
+        const sum = block.querySelector(':scope > .be-main > .be-toggle > .be-toggle-row > .be-text');
+        const kids = block.querySelector(':scope > .be-main > .be-toggle > .be-togglekids');
+        return { type, summary: sum ? inlineDomToMd(sum as HTMLElement) : '', children: kids ? childBlocksOf(kids as HTMLElement) : [] };
+      }
+      case 'columns': {
+        const cols = Array.from(block.querySelectorAll(':scope > .be-main > .be-cols > .be-col'));
+        return { type, cols: cols.map((c) => childBlocksOf(c as HTMLElement)) };
+      }
       default: return { type: 'p', text: t ? inlineDomToMd(t) : '' };
     }
   }
+  // 컨테이너(togglekids/col)의 직계 블록 데이터 — toggle/columns 재귀 직렬화용.
+  function childBlocksOf(container: HTMLElement): any[] {
+    return Array.from(container.children)
+      .filter((n: any) => n.classList && n.classList.contains('be-block'))
+      .map((n: any) => blockData(n));
+  }
 
-  // 번호 목록 재부여 + 글머리 글리프(깊이별 • ◦ ▪) + 들여쓰기 패딩.
-  function renumber() {
+  // 번호 목록 재부여 + 글머리 글리프(깊이별 • ◦ ▪) + 들여쓰기 패딩 — 컨테이너(루트/토글/컬럼) 스코프별로.
+  function renumberIn(scope: HTMLElement) {
     const counters: number[] = [];
-    for (const b of blockEls()) {
+    for (const b of Array.from(scope.children).filter((n: any) => n.classList && n.classList.contains('be-block')) as HTMLElement[]) {
       const type = b.dataset.type!;
       if (!LISTY.has(type)) { counters.length = 0; continue; }
       const d = Math.min(Number(b.dataset.indent) || 0, 4);
@@ -518,6 +621,63 @@ export function createBlockEditor(opts: {
       if (type === 'numbered') { counters[d] = (counters[d] || 0) + 1; if (marker) marker.textContent = counters[d] + '.'; }
       else { counters[d] = 0; if (marker) marker.textContent = ['•', '◦', '▪', '▹', '·'][d] || '•'; }
     }
+  }
+  function renumber() {
+    renumberIn(root);
+    root.querySelectorAll('.be-togglekids, .be-col').forEach((c: any) => renumberIn(c));
+  }
+
+  // #657n 구조 정규화 — 빈 컬럼 정리(1열 이하면 해체), 빈 토글엔 빈 문단 채움. 컨테이너 간 이동/삭제 뒤 호출.
+  function normalizeStructure() {
+    root.querySelectorAll('.be-block[data-type="columns"]').forEach((cb: any) => {
+      const colsWrap = cb.querySelector(':scope > .be-main > .be-cols');
+      if (!colsWrap) return;
+      const cols = Array.from(colsWrap.children).filter((c: any) => c.classList.contains('be-col'));
+      const hasBlock = (c: any) => Array.from(c.children).some((n: any) => n.classList && n.classList.contains('be-block'));
+      const nonEmpty = cols.filter(hasBlock);
+      if (nonEmpty.length <= 1) {
+        // 해체 — 남은 블록을 컬럼 자리에 펼치고 컨테이너 제거(노션 동일).
+        let anchor: any = cb;
+        nonEmpty.forEach((c: any) => Array.from(c.children).forEach((n: any) => {
+          if (n.classList && n.classList.contains('be-block')) { anchor.after(n); anchor = n; }
+        }));
+        cb.remove();
+      } else {
+        cols.forEach((c: any) => { if (!hasBlock(c)) c.remove(); });
+      }
+    });
+    root.querySelectorAll('.be-togglekids').forEach((k: any) => {
+      if (!Array.from(k.children).some((n: any) => n.classList && n.classList.contains('be-block'))) {
+        k.append(makeBlock({ type: 'p', text: '' }));
+      }
+    });
+    ensureOne();
+    renumber();
+  }
+
+  // 블록 복제(⌘D)·이동(⌘⇧↑↓)·삭제 — 핸들 메뉴/단축키 공용.
+  function duplicateBlock(block: HTMLElement) {
+    const nb = makeBlock(blockData(block));
+    block.after(nb);
+    renumber();
+    markDirty();
+    focusBlock(nb, false);
+  }
+  function moveBlockDir(block: HTMLElement, dir: number) {
+    const sib = dir < 0 ? block.previousElementSibling : block.nextElementSibling;
+    if (!sib || !sib.classList.contains('be-block')) return;
+    if (dir < 0) sib.before(block); else sib.after(block);
+    renumber();
+    markDirty();
+    const t = textElOf(block);
+    if (t) t.focus();
+  }
+  function deleteBlock(block: HTMLElement) {
+    const nb = nextTextBlock(block) || prevTextBlock(block);
+    block.remove();
+    normalizeStructure();
+    markDirty();
+    if (nb && nb.isConnected) focusBlock(nb, false);
   }
 
   function ensureOne() {
@@ -543,11 +703,17 @@ export function createBlockEditor(opts: {
   }
 
   // 타입 변환 — 인라인 내용 보존(문단↔제목↔목록↔인용↔콜아웃), 코드/구분선/이미지는 내용 규칙에 맞게.
+  //  토글 → 다른 유형은 자식을 밖(아래)으로 펼쳐 데이터 유실 방지(#657n).
   function convertBlock(block: HTMLElement, to: any) {
     const cur = blockData(block);
-    const data = { ...to, text: to.text !== undefined ? to.text : (cur.text || '') };
+    const baseText = cur.text !== undefined ? cur.text : (cur.summary || '');
+    const data = { ...to, text: to.text !== undefined ? to.text : (baseText || '') };
     const nb = makeBlock(data);
     block.replaceWith(nb);
+    if (cur.type === 'toggle' && to.type !== 'toggle' && Array.isArray(cur.children) && cur.children.length) {
+      let anchor: HTMLElement = nb;
+      for (const c of cur.children) { const cb = makeBlock(c); anchor.after(cb); anchor = cb; }
+    }
     ensureOne();
     renumber();
     markDirty();
@@ -572,6 +738,23 @@ export function createBlockEditor(opts: {
     { k: 'bullet', ic: '•', label: '글머리 기호 목록', hint: '- 목록', kw: 'bullet list ul 목록 글머리 리스트', apply: (b) => convertBlock(b, { type: 'bullet', indent: 0 }) },
     { k: 'numbered', ic: '1.', label: '번호 매기기 목록', hint: '1. 2. 3.', kw: 'numbered ordered ol list 번호 목록 리스트', apply: (b) => convertBlock(b, { type: 'numbered', indent: 0 }) },
     { k: 'todo', ic: '☑', label: '할 일 목록', hint: '체크박스', kw: 'todo check task 할일 체크 체크박스', apply: (b) => convertBlock(b, { type: 'todo', indent: 0, checked: false }) },
+    { k: 'toggle', ic: '▸', label: '토글', hint: '접고 펼치는 블록', kw: 'toggle collapse 토글 접기 펼치기 목록', apply: (b) => {
+      const cur = blockData(b);
+      const nb = makeBlock({ type: 'toggle', summary: String(cur.text !== undefined ? cur.text : (cur.summary || '')).replace(/\n+/g, ' '), children: [{ type: 'p', text: '' }] });
+      b.replaceWith(nb);
+      ensureOne(); renumber(); markDirty();
+      const sum = nb.querySelector('.be-togglesum') as HTMLElement;
+      if (sum) { sum.focus(); placeCaret(sum, false); }
+    } },
+    { k: 'columns', ic: '⫴', label: '2열 컬럼', hint: '블록을 나란히 — 드래그로도 생성', kw: 'columns column 컬럼 열 나란히 레이아웃 layout 분할', apply: (b) => {
+      const cur = blockData(b);
+      const hasText = String(cur.text !== undefined ? cur.text : (cur.summary || '')).trim();
+      const nb = makeBlock({ type: 'columns', cols: [[hasText ? cur : { type: 'p', text: '' }], [{ type: 'p', text: '' }]] });
+      b.replaceWith(nb);
+      ensureOne(); renumber(); markDirty();
+      const ft = nb.querySelector('.be-col .be-text') as HTMLElement;
+      if (ft) { ft.focus(); placeCaret(ft, false); }
+    } },
     { k: 'quote', ic: '❝', label: '인용', hint: '인용 블록', kw: 'quote 인용 블록쿼트', apply: (b) => convertBlock(b, { type: 'quote' }) },
     { k: 'callout', ic: '💡', label: '콜아웃', hint: '아이콘 강조 상자', kw: 'callout 콜아웃 강조 배너 안내', apply: (b) => convertBlock(b, { type: 'callout', icon: '💡', color: 'default' }) },
     { k: 'code', ic: '</>', label: '코드', hint: '코드 블록', kw: 'code snippet 코드 소스', apply: (b) => convertBlock(b, { type: 'code', lang: '' }) },
@@ -792,6 +975,18 @@ export function createBlockEditor(opts: {
     const block = blockOf(target);
     if (!block) return;
 
+    // 블록 단축(#657n) — ⌘D 복제 · ⌘⇧↑/↓ 이동(노션 동일).
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+      e.preventDefault();
+      duplicateBlock(block);
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      moveBlockDir(block, e.key === 'ArrowUp' ? -1 : 1);
+      return;
+    }
+
     // 슬래시 메뉴 열림 — 방향키/Enter/Esc 는 메뉴가 소비.
     if (slash) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -872,6 +1067,19 @@ export function createBlockEditor(opts: {
       if (e.shiftKey) { e.preventDefault(); document.execCommand('insertLineBreak'); markDirty(); return; }
       e.preventDefault();
       const plain = t.textContent || '';
+      // 토글 요약에서 Enter — 열려 있으면 첫 자식으로(노션 동일), 접혀 있으면 아래 새 문단.
+      if (type === 'toggle') {
+        const kids = block.querySelector(':scope > .be-main > .be-toggle > .be-togglekids') as HTMLElement;
+        if (block.dataset.open === '1' && kids) {
+          let first = Array.from(kids.children).find((n: any) => n.classList && n.classList.contains('be-block')) as HTMLElement;
+          if (!first) { first = makeBlock({ type: 'p', text: '' }); kids.append(first); }
+          focusBlock(first, true);
+        } else {
+          focusBlock(insertBlockAfter(block, { type: 'p', text: '' }));
+        }
+        markDirty();
+        return;
+      }
       // 빈 리스트 항목 → 문단으로(들여쓰기 있으면 한 단 내어쓰기) — 노션 동일.
       if (LISTY.has(type) && !plain) {
         const ind = Number(block.dataset.indent) || 0;
@@ -921,14 +1129,23 @@ export function createBlockEditor(opts: {
         if (nb) focusBlock(nb, true);
         return;
       }
-      if (type === 'h' || type === 'quote' || type === 'callout') {
+      if (type === 'h' || type === 'quote' || type === 'callout' || type === 'toggle') {
+        // 토글은 convertBlock 이 자식을 밖으로 펼쳐 보존한다(#657n).
         const nb = convertBlock(block, { type: 'p' });
         focusBlock(nb, true);
         return;
       }
-      // 문단 — 이전 블록과 병합.
+      // 문단 — 이전 블록과 병합. 토글 첫 자식이면 요약으로 캐럿 이동(컨테이너 경계).
       const prev = prevTextBlock(block);
-      if (!prev) return;
+      if (!prev) {
+        const kidsWrap = block.parentElement;
+        if (kidsWrap && kidsWrap.classList.contains('be-togglekids')) {
+          const tb = blockOf(kidsWrap);
+          const sum = tb && tb.querySelector('.be-togglesum') as HTMLElement;
+          if (sum) { sum.focus(); placeCaret(sum, false); }
+        }
+        return;
+      }
       const ptype = prev.dataset.type!;
       if (ptype === 'divider') { prev.remove(); ensureOne(); renumber(); markDirty(); return; }
       if (ptype === 'raw' || ptype === 'code') { focusBlock(prev, false); return; }
@@ -1103,6 +1320,14 @@ export function createBlockEditor(opts: {
       openSlashMenu(nb, false);
       return;
     }
+    // ⋮⋮ 클릭 = 블록 메뉴(전환·복제·이동·삭제) — 드래그 직후 클릭은 무시(#657n, 노션 동일).
+    const h = e.target.closest ? e.target.closest('.be-handle') : null;
+    if (h) {
+      if (justDragged) return;
+      const block = blockOf(h)!;
+      openBlockMenu(block, h);
+      return;
+    }
     if (e.target === root) {   // 본문 아래 여백 클릭 → 마지막 블록(비면 그거, 아니면 새 문단)
       const bs = blockEls();
       const last = bs[bs.length - 1];
@@ -1148,45 +1373,121 @@ export function createBlockEditor(opts: {
     if (rest.length) focusBlock(anchor, false);
   });
 
-  // ── 드래그 재정렬 ──
+  // ── 블록 메뉴(⋮⋮ 클릭) — 전환(단순 텍스트 블록) + 복제/이동/삭제. 노션 핸들 메뉴 동형(#657n). ──
+  function openBlockMenu(block: HTMLElement, anchor: HTMLElement) {
+    const old = document.querySelector('.be-blockmenu');
+    if (old) { old.remove(); return; }
+    const type = block.dataset.type!;
+    const menu = el('div', { class: 'be-blockmenu', role: 'menu' });
+    const close = () => { menu.remove(); document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); };
+    if (['p', 'h', 'bullet', 'numbered', 'todo', 'quote', 'callout', 'code'].includes(type)) {
+      menu.append(el('div', { class: 'be-bm-head', text: '전환' }));
+      const grid = el('div', { class: 'be-bm-grid' });
+      for (const it of SLASH_ITEMS) {
+        if (!['text', 'h1', 'h2', 'h3', 'bullet', 'numbered', 'todo', 'toggle', 'columns', 'quote', 'callout', 'code'].includes(it.k)) continue;
+        const b = el('button', { class: 'be-bm-turn', type: 'button', title: it.label, text: it.ic });
+        b.addEventListener('mousedown', (ev) => ev.preventDefault());
+        b.onclick = () => { close(); it.apply(block); };
+        grid.append(b);
+      }
+      menu.append(grid, el('div', { class: 'be-bm-hr' }));
+    }
+    const item = (ic: string, label: string, fn: () => void, danger?: boolean) => {
+      const b = el('button', { class: 'be-bm-item' + (danger ? ' danger' : ''), type: 'button' },
+        el('span', { class: 'be-bm-ic', 'aria-hidden': 'true', text: ic }), el('span', { text: label }));
+      b.onclick = () => { close(); fn(); };
+      return b;
+    };
+    menu.append(
+      item('⧉', '복제 — ⌘D', () => duplicateBlock(block)),
+      item('↑', '위로 이동 — ⌘⇧↑', () => moveBlockDir(block, -1)),
+      item('↓', '아래로 이동 — ⌘⇧↓', () => moveBlockDir(block, 1)),
+      item('✕', '삭제', () => deleteBlock(block), true));
+    document.body.append(menu);
+    const r = anchor.getBoundingClientRect();
+    const mh = menu.offsetHeight || 220;
+    menu.style.left = Math.max(8, Math.min(r.left - 6, window.innerWidth - 246)) + 'px';
+    menu.style.top = (r.bottom + 6 + mh > window.innerHeight ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+    const onDoc = (ev: any) => { if (!menu.contains(ev.target)) close(); };
+    const onKey = (ev: any) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
+    setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
+  }
+
+  // ── 드래그 — 위/아래 재정렬 + 좌/우 엣지 드롭 = 컬럼 생성(노션 시그니처 레이아웃, #657n). ──
+  //  타깃은 elementFromPoint 로(중첩 컨테이너 안 블록도 정타깃). 컬럼 생성은 최상위 블록 간에만(중첩 컬럼 금지).
   let dragging: HTMLElement | null = null;
+  let justDragged = false;
   root.addEventListener('dragstart', (e: any) => {
     const h = e.target.closest ? e.target.closest('.be-handle') : null;
     if (!h) { e.preventDefault(); return; }
     dragging = blockOf(h);
     if (!dragging) return;
+    justDragged = true;
     dragging.classList.add('be-dragging');
     e.dataTransfer.effectAllowed = 'move';
     try { e.dataTransfer.setData('text/plain', ''); e.dataTransfer.setDragImage(dragging, 24, 12); } catch (_) { /* noop */ }
   });
-  const clearDrop = () => root.querySelectorAll('.be-drop-above, .be-drop-below').forEach((n) => n.classList.remove('be-drop-above', 'be-drop-below'));
+  const DROP_CLASSES = ['be-drop-above', 'be-drop-below', 'be-drop-left', 'be-drop-right'];
+  const clearDrop = () => root.querySelectorAll('.' + DROP_CLASSES.join(', .')).forEach((n) => n.classList.remove(...DROP_CLASSES));
+  function dropTargetAt(e: any): HTMLElement | null {
+    const under: any = document.elementFromPoint(e.clientX, e.clientY);
+    let target = under && under.closest ? under.closest('.be-block') : null;
+    if (target && (!root.contains(target) || target === dragging || dragging!.contains(target) || target.contains(dragging!))) target = null;
+    if (target) return target;
+    // 여백 폴백 — 루트 직계 블록을 Y 로 스캔(기존 동작).
+    let fb: HTMLElement | null = null;
+    for (const b of blockEls()) {
+      if (b === dragging || b.contains(dragging!)) continue;
+      const r = b.getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) return b;
+      fb = b;
+    }
+    return fb;
+  }
   root.addEventListener('dragover', (e: any) => {
     if (!dragging) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     clearDrop();
-    const bs = blockEls();
-    let target: HTMLElement | null = null, before = false;
-    for (const b of bs) {
-      const r = b.getBoundingClientRect();
-      if (e.clientY < r.top + r.height / 2) { target = b; before = true; break; }
-      target = b; before = false;
-    }
-    if (!target || target === dragging) return;
-    target.classList.add(before ? 'be-drop-above' : 'be-drop-below');
+    const target = dropTargetAt(e);
+    if (!target) return;
+    const r = target.getBoundingClientRect();
+    // 좌/우 엣지 = 컬럼 생성 힌트 — 루트 직계 + 양쪽 다 컬럼 아님일 때만.
+    const EDGE = Math.min(72, Math.max(28, r.width * 0.16));
+    const canCol = target.parentElement === root && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
+    if (canCol && e.clientX < r.left + EDGE) { target.classList.add('be-drop-left'); return; }
+    if (canCol && e.clientX > r.right - EDGE) { target.classList.add('be-drop-right'); return; }
+    target.classList.add(e.clientY < r.top + r.height / 2 ? 'be-drop-above' : 'be-drop-below');
   });
   root.addEventListener('drop', (e: any) => {
     if (!dragging) return;
     e.preventDefault();
-    const t = root.querySelector('.be-drop-above, .be-drop-below') as HTMLElement;
+    const t = root.querySelector('.' + DROP_CLASSES.join(', .')) as HTMLElement;
     if (t && t !== dragging) {
-      if (t.classList.contains('be-drop-above')) t.before(dragging); else t.after(dragging);
-      renumber();
+      if (t.classList.contains('be-drop-left') || t.classList.contains('be-drop-right')) {
+        // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
+        const left = t.classList.contains('be-drop-left');
+        const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
+        t.before(shell);
+        const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
+        cols[0].append(left ? dragging : t);
+        cols[1].append(left ? t : dragging);
+      } else if (t.classList.contains('be-drop-above')) {
+        t.before(dragging);
+      } else {
+        t.after(dragging);
+      }
+      normalizeStructure();
       markDirty();
     }
     clearDrop();
   });
-  root.addEventListener('dragend', () => { if (dragging) dragging.classList.remove('be-dragging'); dragging = null; clearDrop(); });
+  root.addEventListener('dragend', () => {
+    if (dragging) dragging.classList.remove('be-dragging');
+    dragging = null;
+    clearDrop();
+    setTimeout(() => { justDragged = false; }, 50);   // 드래그 직후 handle click 오발 방지
+  });
 
   // ── 로드/공개 API ──
   function load(md: string) {
@@ -1205,7 +1506,13 @@ export function createBlockEditor(opts: {
     resetDirty: () => { dirty = false; },
     isEmpty: () => isEmptyNow(),
     focusEnd: () => { const bs = blockEls(); if (bs.length) focusBlock(bs[bs.length - 1], false); },
-    destroy: () => { document.removeEventListener('selectionchange', onSelChange); tools.remove(); closeSlashMenu(); },
+    destroy: () => {
+      document.removeEventListener('selectionchange', onSelChange);
+      tools.remove();
+      closeSlashMenu();
+      const bm = document.querySelector('.be-blockmenu');
+      if (bm) bm.remove();
+    },
   };
 }
 
