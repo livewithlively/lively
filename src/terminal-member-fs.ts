@@ -69,6 +69,26 @@ export function memberMkdir(osUser: string, absPath: string): Promise<void> {
   });
 }
 
+// 멤버 uid 로 이름변경/이동(mv). 덮어쓰기 방지(대상 존재 확인)는 호출부에서 memberStat 로.
+export function memberMv(osUser: string, fromAbs: string, toAbs: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["mv", "--", fromAbs, toAbs], ["ignore", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member mv exit ${code}`))));
+  });
+}
+
+// 멤버 uid 로 삭제(rm -rf, 파일/폴더). ⚠ 경로 봉쇄(루트 내부)는 호출부(resolveRootPath)가 이미 건다 — 여긴 uid 만 내린다.
+export function memberRm(osUser: string, absPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["rm", "-rf", "--", absPath], ["ignore", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member rm exit ${code}`))));
+  });
+}
+
 // 멤버 파일 → dest(res). cat 으로 스트리밍, dest 로 pipe(백프레셔 존중).
 export function memberReadTo(osUser: string, absPath: string, dest: Writable): Promise<void> {
   return new Promise((resolve, reject) => {

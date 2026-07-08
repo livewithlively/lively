@@ -4312,6 +4312,49 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fold-grid { padding: 8px 4px 12px; }
 .dash-fold-grid .proj-file-card { cursor: default; }
 .dash-fold-grid .proj-file-card:hover { background: transparent; }
+/* 박스 폴더 카드 — 클릭 시 브라우저 열기(#672). */
+.dash-fold-grid .proj-file-card.dash-fold-open { cursor: pointer; }
+.dash-fold-grid .proj-file-card.dash-fold-open:hover { background: var(--bg-sel); }
+
+/* 개요 카드 표시/숨김 사용자화(#671) — 헤더 ⚙(팝오버 체크) + 카드 hover ✕ + 전부숨김 힌트. */
+.dash-wh-ovset { margin-left: auto; align-self: center; }
+.dash-ov-hide { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px; background: var(--bg-tint); color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; font-family: inherit;
+  opacity: 0; transition: opacity .12s, background .12s, color .12s; }
+.dash-ov-card2:hover .dash-ov-hide, .dash-ov-card2:focus-within .dash-ov-hide { opacity: 1; }
+.dash-ov-hide:hover { background: color-mix(in srgb, var(--coral) 16%, var(--bg)); color: var(--coral-text, var(--coral)); }
+.dash-ov-allhidden { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 10px; font-size: 12.5px; color: var(--muted-2); }
+.dash-ov-restore { font-size: 12.5px; font-weight: 700; color: var(--blue); background: none; border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--bg)); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; }
+.dash-ov-restore:hover { background: var(--bg-punch); }
+.dash-pop-foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-reset { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 4px 8px; border-radius: 6px; }
+.dash-pop-reset:hover { background: var(--bg-punch); }
+
+/* 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 · 도구모음 · 파일 카드 CRUD(hover 액션). */
+.dash-modal--wide { width: min(720px, 94vw); }
+.dash-fb { display: flex; flex-direction: column; gap: 8px; }
+.dash-fb-load { padding: 22px 8px; }
+.dash-fb-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 1px; }
+.dash-fb-seg { background: none; border: none; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); padding: 3px 6px; border-radius: 6px; }
+.dash-fb-seg:last-child { color: var(--ink); }
+.dash-fb-seg:hover { background: var(--bg-tint); color: var(--ink); }
+.dash-fb-sep { color: var(--muted-3); font-size: 12px; }
+.dash-fb-tools { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-fb-spacer { flex: 1; }
+.dash-fb-btn { font-size: 12.5px; font-weight: 700; font-family: inherit; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; cursor: pointer; }
+.dash-fb-btn:hover { background: var(--bg-tint); border-color: var(--muted-2); }
+.dash-fb-btn.primary { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 35%, var(--bg)); }
+.dash-fb-btn.primary:hover { background: var(--bg-punch); }
+.dash-fb-grid { flex-wrap: wrap; overflow: visible; gap: 4px 2px; padding: 8px 2px 4px; min-height: 96px; }
+.dash-fb-card { position: relative; cursor: pointer; }
+.dash-fb-card:hover { background: var(--bg-sel); }
+.dash-fb-actions { position: absolute; top: 5px; right: 5px; display: flex; gap: 3px; opacity: 0; transition: opacity .12s; }
+.dash-fb-card:hover .dash-fb-actions, .dash-fb-card:focus-within .dash-fb-actions { opacity: 1; }
+.dash-fb-act { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; padding: 0; }
+.dash-fb-act:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.dash-fb-act.danger:hover { color: var(--coral-text, var(--coral)); border-color: color-mix(in srgb, var(--coral) 40%, var(--bg)); background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
+.dash-fb-act svg { display: block; }
+.dash-fb[aria-busy="true"] { opacity: .5; pointer-events: none; }
 
 /* 반응형 폴백 — 코크핏은 데스크톱 계약: 좁거나 낮으면 세로 스택 + 페이지 스크롤 허용 */
 @media (max-width: 1100px), (max-height: 719px) {

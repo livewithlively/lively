@@ -4,9 +4,10 @@
 //   위젯별 독립 로드·독립 실패: 한 위젯의 API 오류가 대시보드 전체를 죽이지 않는다.
 //  2단계(예정): 위젯 레지스트리 + 12×12 {x,y,w,h} 편집 모드(추가/제거·드래그·리사이즈·사람별 저장) — 이 프리셋이 기본 배치가 된다.
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
-import { api, el, errorNote, relTime, state, sv } from './core.js';
+import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
-import { companyTimelineSection } from './projects.js'; // 작업 로그 전체 보기 팝업 — 회사 활동 피드(유형·목록·더보기)를 그대로 재사용
+// 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUpload/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
+import { authDownload, authUpload, companyTimelineSection, fmtSize } from './projects.js';
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
 // 작업 유형 → 점 톤/라벨 — 작업 현황(dashboard.ts ACT_TYPE_TONE)과 동일 매핑(성격축 8종).
@@ -262,6 +263,11 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
             dashReorderList(currentOrder, dragListId, listId);
             draw();
         });
+        // 이 개요 카드 숨기기(#671) — hover ✕. 기기별 저장·즉시 재렌더. 카드 선택/드래그로 새지 않게 이벤트 격리.
+        const hideBtn = el('button', { class: 'dash-ov-hide', type: 'button', title: '이 카드 숨기기', 'aria-label': name + ' 개요 카드 숨기기', text: '✕' });
+        hideBtn.addEventListener('mousedown', (e) => e.stopPropagation()); // 드래그 시작 방지
+        hideBtn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); const h = dashOvHidden(); h.add(Number(listId)); dashSaveOvHidden(h); draw(); });
+        card.append(hideBtn);
         return card;
     };
     let mode = 'active'; // 진행 중 | 전체 — 완료 프로젝트 포함 여부.
@@ -285,17 +291,57 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         }
         const base = [...lists.map((l) => l.id).filter((id) => byList.has(id)), ...(byList.has(0) ? [0] : [])];
         currentOrder = dashApplyListOrder(base);
-        // 기본 선택 = 첫 리스트. 선택이 사라졌으면(모드 전환 등) 첫 리스트로 폴백.
-        if (selectedListId === undefined || !byList.has(selectedListId))
-            selectedListId = currentOrder[0];
-        const grid = el('div', { class: 'pjv-ov-grid dash-ov-grid' });
-        for (const listId of currentOrder)
-            grid.append(projBlock(listId, listById.get(listId), byList.get(listId)));
+        // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
+        const hiddenOv = dashOvHidden();
+        const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)));
+        if (selectedListId === undefined || !byList.has(selectedListId) || hiddenOv.has(Number(selectedListId))) {
+            selectedListId = visibleOrder.length ? visibleOrder[0] : currentOrder[0];
+        }
+        let gridEl;
+        if (visibleOrder.length) {
+            gridEl = el('div', { class: 'pjv-ov-grid dash-ov-grid' });
+            for (const listId of visibleOrder)
+                gridEl.append(projBlock(listId, listById.get(listId), byList.get(listId)));
+        }
+        else {
+            // 전부 숨김 — 그리드 대신 복원 힌트(선택된 리스트 목록은 아래에 그대로 유지).
+            gridEl = el('div', { class: 'dash-ov-allhidden' }, el('span', { text: '개요 카드를 모두 숨겼어요.' }), el('button', { class: 'dash-ov-restore', type: 'button', text: '다시 표시', onclick: () => { dashSaveOvHidden(new Set()); draw(); } }));
+        }
         // 선택된 리스트의 프로젝트만 — 프로젝트 탭과 동일한 리스트 그룹(헤더+행). 강조된 카드가 곧 선택 표시.
         const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
         const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), arr));
-        zone.body.replaceChildren(grid, listEl);
+        zone.body.replaceChildren(gridEl, listEl);
     };
+    // 헤더 ⚙ — 개요 카드 표시/숨김 사용자화 팝오버(#671). 존이 DOM 에 있으니 한 번만 배치(go-link 앞).
+    const openOvPrefs = (anchor) => {
+        const hidden = dashOvHidden();
+        const panel = el('div', { class: 'dash-pop-panel' });
+        panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '개요 카드' }), el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
+        if (!currentOrder.length)
+            panel.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '표시할 리스트가 없어요.' })));
+        for (const id of currentOrder) {
+            const l = listById.get(id);
+            const cb = el('input', { type: 'checkbox' });
+            cb.checked = !hidden.has(Number(id));
+            cb.onchange = () => { const h = dashOvHidden(); if (cb.checked)
+                h.delete(Number(id));
+            else
+                h.add(Number(id)); dashSaveOvHidden(h); draw(); };
+            panel.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: (l && l.name) || '미분류' }))));
+        }
+        if (currentOrder.length) {
+            const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '모두 표시' });
+            resetBtn.onclick = () => { dashSaveOvHidden(new Set()); draw(); openOvPrefs(anchor); };
+            panel.append(el('div', { class: 'dash-pop-foot' }, resetBtn));
+        }
+        dashPopover(anchor, panel);
+    };
+    const ovGoEl = zone.box.querySelector('.dash-wh-go');
+    if (ovGoEl) {
+        const gear = el('button', { class: 'dash-wh-gear dash-wh-ovset', type: 'button', title: '개요 카드 설정', 'aria-label': '개요 카드 표시 설정' }, dashGearIcon());
+        gear.onclick = () => openOvPrefs(gear);
+        ovGoEl.before(gear);
+    }
     draw();
 }
 // 리스트 글리프 — 프로젝트 탭 사이드바(pjvListGlyph)와 동일: 이모지 아이콘 or 체크리스트 라인 아이콘.
@@ -426,11 +472,27 @@ function dashReorderList(order, dragId, targetId) {
     const saved = dashListOrderSaved();
     dashSaveListOrder([...arr, ...saved.filter((id) => !arr.includes(id))]);
 }
+// ── 개요 카드 표시/숨김(사용자화, #671) — 숨긴 리스트 id 집합을 대시보드-로컬(localStorage, 기기별)에 저장. ──
+//  미분류(id 0)까지 개별 토글. 헤더 ⚙ 팝오버 체크박스 + 카드 hover ✕ 두 경로로 조작한다(리스트 순서와는 독립).
+const DASH_OV_HIDDEN_KEY = 'dash_ov_hidden_v1';
+function dashOvHidden() {
+    try {
+        const a = JSON.parse(localStorage.getItem(DASH_OV_HIDDEN_KEY) || '[]');
+        return new Set(Array.isArray(a) ? a.map(Number) : []);
+    }
+    catch {
+        return new Set();
+    }
+}
+function dashSaveOvHidden(set) { try {
+    localStorage.setItem(DASH_OV_HIDDEN_KEY, JSON.stringify([...set]));
+}
+catch { /* 저장 실패 무시 */ } }
 // ── 경량 모달(중앙 오버레이) — 배경/✕/Esc 로 닫힘. 공유 폴더 전체 보기 등. ──
-function dashModal(title, content) {
+function dashModal(title, content, wide) {
     document.querySelectorAll('.dash-modal-ov').forEach((n) => n.remove());
     const closeBtn = el('button', { class: 'dash-modal-x', type: 'button', 'aria-label': '닫기', text: '✕' });
-    const box = el('div', { class: 'dash-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, el('div', { class: 'dash-modal-head' }, el('strong', { text: title }), closeBtn), el('div', { class: 'dash-modal-body' }, content));
+    const box = el('div', { class: 'dash-modal' + (wide ? ' dash-modal--wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, el('div', { class: 'dash-modal-head' }, el('strong', { text: title }), closeBtn), el('div', { class: 'dash-modal-body' }, content));
     const ov = el('div', { class: 'dash-modal-ov' }, box);
     const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape')
@@ -510,6 +572,13 @@ async function fillSessions(zone, onCount, projectsP) {
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
 async function fillFolders(zone) {
     const goEl = zone.box.querySelector('.dash-wh-go');
+    // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
+    const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true);
+    if (goEl) {
+        const btn = el('button', { class: 'dash-wh-go dash-wh-set', type: 'button', title: '공유 폴더 전체 보기 · 파일 관리' }, el('span', { text: '전체 보기' }));
+        btn.onclick = () => openBrowser('');
+        goEl.replaceWith(btn);
+    }
     let data;
     try {
         data = await api('/api/ui/terminal/browse?root=shared&path=');
@@ -520,24 +589,206 @@ async function fillFolders(zone) {
     }
     const dirs = (data && data.dirs) || [];
     zone.countEl.textContent = String(dirs.length);
-    // 헤더 '터미널 →' → '전체 보기'(공유 폴더 팝업) — 박스는 한 줄만 보이므로 전체는 팝업으로.
-    if (goEl) {
-        const btn = el('button', { class: 'dash-wh-go dash-wh-set', type: 'button', title: '공유 폴더 전체 보기' }, el('span', { text: '전체 보기' }));
-        btn.onclick = () => dashModal('팀 공유 폴더', dirs.length ? el('div', { class: 'proj-file-grid dash-foldpop-grid' }, ...dirs.map(dashFolderCard)) : dashEmpty('공유 워크스페이스에 폴더가 없어요.'));
-        goEl.replaceWith(btn);
-    }
     if (!dirs.length) {
         zone.body.replaceChildren(dashEmpty('공유 워크스페이스에 폴더가 없어요.'));
         return;
     }
+    // 박스(한 줄 미리보기) — 폴더 카드 클릭 시 그 폴더에서 브라우저 열기(하위 진입).
     const grid = el('div', { class: 'proj-file-grid dash-fold-grid' });
-    for (const name of dirs)
-        grid.append(dashFolderCard(name));
+    for (const name of dirs) {
+        const card = dashFolderCard(name);
+        card.classList.add('dash-fold-open');
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.title = name + ' 열기';
+        card.addEventListener('click', () => openBrowser(name));
+        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openBrowser(name);
+        } });
+        grid.append(card);
+    }
     zone.body.replaceChildren(grid);
 }
-// 공유 폴더 아이콘 카드 — 박스·팝업 공용. 프로젝트 상세 공유 폴더(proj-file-*)와 동일.
+// 공유 폴더 아이콘 카드 — 박스·브라우저 공용. 프로젝트 상세 공유 폴더(proj-file-*)와 동일.
 function dashFolderCard(name) {
     return el('div', { class: 'proj-file-card', title: name }, el('div', { class: 'proj-file-card-ic' }, dashFolderThumb()), el('div', { class: 'proj-file-card-nm', text: name }), el('div', { class: 'proj-file-card-sz', text: '폴더' }));
+}
+// ── 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 하위 진입 + 파일 표시 + CRUD. ──
+//  루트 브라우즈 API(/api/ui/terminal/browse[/file])만 쓴다 — 공유 워크스페이스는 셸(터미널)로 이미 rw 라 UI CRUD 가 권한을 넓히지 않는다.
+//  파일 프리미티브(authUpload/Download·fmtSize)는 프로젝트 탭 파일함에서 검증된 것을 그대로 재사용.
+function dashFolderBrowser(root, startPath) {
+    const container = el('div', { class: 'dash-fb' });
+    let curPath = startPath || '';
+    const qp = (p) => 'root=' + encodeURIComponent(root) + '&path=' + encodeURIComponent(p);
+    const relOf = (name) => (curPath ? curPath + '/' : '') + name;
+    const busy = (on) => { if (on)
+        container.setAttribute('aria-busy', 'true');
+    else
+        container.removeAttribute('aria-busy'); };
+    const load = async () => {
+        container.replaceChildren(el('div', { class: 'dash-fb-load' }, skeleton('불러오는 중')));
+        let data;
+        try {
+            data = await api('/api/ui/terminal/browse?' + qp(curPath));
+        }
+        catch (e) {
+            busy(false);
+            container.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다'));
+            return;
+        }
+        curPath = data.path || '';
+        render(data);
+        busy(false); // 새 상태 렌더 완료 → 진행중 표시 해제(성공 경로에서도 반드시 — 안 그러면 pointer-events:none 이 남아 잠김).
+    };
+    const newFolder = async () => {
+        const name = (prompt('새 폴더 이름') || '').trim();
+        if (!name)
+            return;
+        busy(true);
+        try {
+            await api('/api/ui/terminal/browse/mkdir?' + qp(relOf(name)), { method: 'POST' });
+            await load();
+        }
+        catch (e) {
+            toast('폴더 생성 실패 — ' + e.message, true);
+            busy(false);
+        }
+    };
+    const uploadFiles = () => {
+        const inp = el('input', { type: 'file', multiple: 'true' });
+        inp.onchange = async () => {
+            const files = Array.from(inp.files || []);
+            if (!files.length)
+                return;
+            busy(true);
+            try {
+                for (const f of files)
+                    await authUpload('/api/ui/terminal/browse/file?' + qp(relOf(f.name)), f);
+                await load();
+            }
+            catch (e) {
+                toast('업로드 실패 — ' + e.message, true);
+                busy(false);
+            }
+        };
+        inp.click();
+    };
+    const renameItem = async (name) => {
+        const to = (prompt('새 이름', name) || '').trim();
+        if (!to || to === name)
+            return;
+        busy(true);
+        try {
+            await api('/api/ui/terminal/browse/rename?' + qp(relOf(name)) + '&to=' + encodeURIComponent(to), { method: 'POST' });
+            await load();
+        }
+        catch (e) {
+            toast('이름 변경 실패 — ' + e.message, true);
+            busy(false);
+        }
+    };
+    const deleteItem = async (name, isDir) => {
+        if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’' + (isDir ? ' 및 그 안의 모든 내용' : '') + '을(를) 삭제할까요? 되돌릴 수 없어요.'))
+            return;
+        busy(true);
+        try {
+            await api('/api/ui/terminal/browse?' + qp(relOf(name)), { method: 'DELETE' });
+            await load();
+        }
+        catch (e) {
+            toast('삭제 실패 — ' + e.message, true);
+            busy(false);
+        }
+    };
+    const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
+    const fbCard = (it) => {
+        const isDir = it.type === 'dir';
+        const card = el('div', { class: 'proj-file-card dash-fb-card', title: it.name, role: 'button', tabindex: '0' }, el('div', { class: 'proj-file-card-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('div', { class: 'proj-file-card-nm', text: it.name }), el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }));
+        const open = () => { if (isDir) {
+            curPath = relOf(it.name);
+            load();
+        }
+        else
+            download(it.name); };
+        card.addEventListener('click', (e) => { if (e.target.closest('.dash-fb-actions'))
+            return; open(); });
+        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            open();
+        } });
+        const act = (icon, title, danger, onClick) => {
+            const b = el('button', { class: 'dash-fb-act' + (danger ? ' danger' : ''), type: 'button', title, 'aria-label': title }, icon);
+            b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+            return b;
+        };
+        const actions = el('div', { class: 'dash-fb-actions' });
+        if (!isDir)
+            actions.append(act(dashDownloadIcon(), '다운로드', false, () => download(it.name)));
+        actions.append(act(dashRenameIcon(), '이름 바꾸기', false, () => renameItem(it.name)));
+        actions.append(act(dashTrashIcon(), '삭제', true, () => deleteItem(it.name, isDir)));
+        card.append(actions);
+        return card;
+    };
+    const render = (data) => {
+        // 브레드크럼(루트 → 하위 진입 경로).
+        const crumb = el('div', { class: 'dash-fb-crumb' }, el('button', { class: 'dash-fb-seg', type: 'button', text: '공유 워크스페이스', onclick: () => { curPath = ''; load(); } }));
+        let acc = '';
+        for (const seg of (curPath ? curPath.split('/') : [])) {
+            acc = acc ? acc + '/' + seg : seg;
+            const p = acc;
+            crumb.append(el('span', { class: 'dash-fb-sep', text: '/' }), el('button', { class: 'dash-fb-seg', type: 'button', text: seg, onclick: () => { curPath = p; load(); } }));
+        }
+        // 도구모음 — 상위로 · 새 폴더 · 파일 올리기.
+        const tools = el('div', { class: 'dash-fb-tools' }, (curPath ? el('button', { class: 'dash-fb-btn', type: 'button', text: '⬆ 상위', onclick: () => { curPath = data.parent || ''; load(); } }) : null), el('span', { class: 'dash-fb-spacer' }), el('button', { class: 'dash-fb-btn', type: 'button', text: '＋ 새 폴더', onclick: newFolder }), el('button', { class: 'dash-fb-btn primary', type: 'button', text: '⬆ 파일 올리기', onclick: uploadFiles }));
+        const items = (data.items || []);
+        const grid = el('div', { class: 'proj-file-grid dash-fb-grid' });
+        if (!items.length)
+            grid.append(dashEmpty('이 폴더가 비어 있어요.'));
+        for (const it of items)
+            grid.append(fbCard(it));
+        container.replaceChildren(crumb, tools, grid);
+    };
+    load();
+    return container;
+}
+// 파일 타입 아이콘 — 프로젝트 상세 공유 폴더 docIcon 동형(#619 인라인 원칙: projects.ts 안 건드림). 흰 페이지+접힘+색 띠+라벨.
+const DASH_FILE_META = {
+    pdf: ['PDF', 'ft-pdf'], doc: ['DOC', 'ft-word'], docx: ['DOC', 'ft-word'], hwp: ['HWP', 'ft-word'], hwpx: ['HWP', 'ft-word'],
+    ppt: ['PPT', 'ft-ppt'], pptx: ['PPT', 'ft-ppt'], key: ['KEY', 'ft-ppt'],
+    xls: ['XLS', 'ft-xls'], xlsx: ['XLS', 'ft-xls'], csv: ['CSV', 'ft-xls'],
+    zip: ['ZIP', 'ft-zip'], tar: ['TAR', 'ft-zip'], gz: ['GZ', 'ft-zip'], rar: ['RAR', 'ft-zip'], '7z': ['7Z', 'ft-zip'],
+    mp3: ['MP3', 'ft-av'], wav: ['WAV', 'ft-av'], m4a: ['M4A', 'ft-av'], flac: ['FLAC', 'ft-av'],
+    mp4: ['MP4', 'ft-av'], mov: ['MOV', 'ft-av'], webm: ['WEBM', 'ft-av'], mkv: ['MKV', 'ft-av'],
+    md: ['MD', 'ft-txt'], txt: ['TXT', 'ft-txt'], rtf: ['RTF', 'ft-txt'],
+};
+function dashFileThumb(name) {
+    const i = String(name || '').lastIndexOf('.');
+    const ext = i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+    const meta = DASH_FILE_META[ext] || [(ext.toUpperCase().slice(0, 4) || 'FILE'), 'ft-generic'];
+    const n = sv('svg', { class: 'ft ft-file ' + meta[1], viewBox: '0 0 40 48', fill: 'none', 'aria-hidden': 'true' });
+    n.append(sv('path', { class: 'ft-page', d: 'M6 2.5h17.5L34 13v30.5a2.5 2.5 0 0 1-2.5 2.5h-25A2.5 2.5 0 0 1 4 43.5V5A2.5 2.5 0 0 1 6 2.5z' }));
+    n.append(sv('path', { class: 'ft-fold', d: 'M23.5 2.5V11a2 2 0 0 0 2 2H34z' }));
+    n.append(sv('rect', { class: 'ft-band', x: 4, y: 29, width: 30, height: 12, rx: 2.5 }));
+    const t = sv('text', { class: 'ft-label', x: 19, y: 37.8, 'text-anchor': 'middle' });
+    t.textContent = meta[0];
+    n.append(t);
+    return n;
+}
+function dashDownloadIcon() {
+    const n = sv('svg', { viewBox: '0 0 24 24', width: 14, height: 14, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M12 4v10' }), sv('path', { d: 'M8 11l4 4 4-4' }), sv('path', { d: 'M5 19h14' }));
+    return n;
+}
+function dashRenameIcon() {
+    const n = sv('svg', { viewBox: '0 0 24 24', width: 14, height: 14, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M14.5 5.5l4 4' }), sv('path', { d: 'M4 20l1-4L16 5l3 3L8 19z' }));
+    return n;
+}
+function dashTrashIcon() {
+    const n = sv('svg', { viewBox: '0 0 24 24', width: 14, height: 14, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M4 7h16' }), sv('path', { d: 'M9 7V4h6v3' }), sv('path', { d: 'M6 7l1 13h10l1-13' }), sv('path', { d: 'M10 11v6M14 11v6' }));
+    return n;
 }
 // 맥 스타일 폴더 아이콘 — 프로젝트 상세 공유 폴더의 folderThumb 과 동일(ft ft-folder; 색은 styles.css).
 function dashFolderThumb() {

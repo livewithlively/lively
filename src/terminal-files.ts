@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { canAttach, sessionDir, resolveRootPath, sessionOsUser, userOsUser } from "./terminal-sessions.js";
-import { memberLs, memberStat, memberMkdir, memberReadTo, memberWriteFrom, type LsEntry } from "./terminal-member-fs.js";
+import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberWriteFrom, type LsEntry } from "./terminal-member-fs.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
 const MAX_PREVIEW = 2 * 1024 * 1024; // 2MB
@@ -32,34 +32,129 @@ async function resolveInSession(req: express.Request, requireFile: boolean): Pro
 export function registerTerminalFiles(app: express.Express, verifier: BearerVerifier): void {
   const auth = sessionOrBearer(verifier); // 세션 쿠키(웹 로그인) OR bearer(에이전트) — 둘 다 수용
 
-  // 생성폼 폴더 탐색(세션 무관) — 허용 루트 내부 디렉터리 목록. 격리 멤버면 그 uid 로(개인 루트=멤버 홈 700).
+  // 루트 브라우즈용 경로 해소(+접근 osUser). requireSub=true 면 루트 자체(base)는 거부(대상 경로 필요).
+  //  경로 봉쇄(루트 내부, .. 탈출 거부)는 resolveRootPath 가 이미 건다.
+  async function resolveBrowse(req: express.Request, requireSub: boolean): Promise<{ base: string; abs: string; osUser: string | null }> {
+    const u = userOf(req);
+    const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), String(req.query.path ?? ""));
+    if (requireSub && abs === base) throw new HttpError(400, "대상 경로가 필요합니다");
+    const osUser = await userOsUser(u);
+    return { base, abs, osUser };
+  }
+
+  // 생성폼 폴더 탐색 + 공유 폴더 브라우저(세션 무관) — 허용 루트 내부 목록. 격리 멤버면 그 uid 로(개인 루트=멤버 홈 700).
+  //  dirs = 폴더명(하위호환: 생성폼 폴더 피커·대시보드 박스). items = 폴더+파일(type·size, 대시보드 폴더 브라우저 #672).
   app.get("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), String(req.query.path ?? ""));
     const osUser = await userOsUser(u);
-    let dirs: string[];
+    const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
     if (osUser) {
       await memberMkdir(osUser, base).catch(() => { /* 루트 없으면 생성 */ });
       let entries: LsEntry[] = [];
       try { entries = await memberLs(osUser, abs); } catch { entries = []; }
-      dirs = entries.filter((e) => e.type === "dir" && !e.name.startsWith(".")).map((e) => e.name).sort((a, b) => a.localeCompare(b));
+      for (const e of entries) if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size });
     } else {
       await fsp.mkdir(base, { recursive: true }).catch(() => { /* 개인 루트 없으면 생성 */ });
       let entries: fs.Dirent[] = [];
       try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { entries = []; }
-      dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name).sort((a, b) => a.localeCompare(b));
+      for (const e of entries) {
+        if (e.name.startsWith(".")) continue;
+        const isDir = e.isDirectory();
+        let size = 0;
+        if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
+        items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+      }
     }
+    items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+    const dirs = items.filter((i) => i.type === "dir").map((i) => i.name);
     const rel = path.relative(base, abs);
     res.setHeader("Cache-Control", "no-store");
-    res.json({ root: req.query.root, path: rel, parent: rel ? (path.dirname(rel) === "." ? "" : path.dirname(rel)) : null, dirs });
+    res.json({ root: req.query.root, path: rel, parent: rel ? (path.dirname(rel) === "." ? "" : path.dirname(rel)) : null, dirs, items });
   }));
-  // 생성폼에서 새 폴더 만들기(세션 무관). 격리 멤버면 그 uid 로(생성 폴더 소유자=멤버).
+  // 생성폼·브라우저에서 새 폴더 만들기(세션 무관). 격리 멤버면 그 uid 로(생성 폴더 소유자=멤버).
   app.post("/api/ui/terminal/browse/mkdir", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const { abs } = await resolveRootPath(u, String(req.query.root ?? ""), String(req.query.path ?? ""));
     const osUser = await userOsUser(u);
     if (osUser) await memberMkdir(osUser, abs);
     else await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
+    res.json({ ok: true });
+  }));
+  // ── 공유 폴더 브라우저 CRUD(#672) — 루트 내부 파일/폴더 이름변경·삭제·다운로드·업로드. ──
+  //  게이트: browse/mkdir 과 동일(auth 만) — 이 루트는 셸(터미널)로 이미 rw 가능하므로 UI CRUD 가 새 권한경계를 열지 않는다.
+  //  이름변경 — 같은 폴더 안에서만(to 는 파일명 1개, 경로 구분자 금지). 대상 존재 시 409(덮어쓰기 방지).
+  app.post("/api/ui/terminal/browse/rename", auth, wrap(async (req, res) => {
+    const { base, abs, osUser } = await resolveBrowse(req, true);
+    const toName = String(req.query.to ?? "").trim();
+    if (!toName || toName.includes("/") || toName.includes("\\") || toName === "." || toName === "..") throw new HttpError(400, "새 이름이 올바르지 않습니다");
+    const toAbs = path.resolve(path.dirname(abs), toName);
+    if (toAbs !== base && !toAbs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+    if (osUser) {
+      if (await memberStat(osUser, toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+      await memberMv(osUser, abs, toAbs);
+    } else {
+      if (fs.existsSync(toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+      await fsp.rename(abs, toAbs);
+    }
+    res.json({ ok: true });
+  }));
+  // 삭제(파일/폴더 재귀). 루트 자체는 거부.
+  app.delete("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
+    const { abs, osUser } = await resolveBrowse(req, true);
+    if (osUser) await memberRm(osUser, abs);
+    else await fsp.rm(abs, { recursive: true, force: true });
+    res.json({ ok: true });
+  }));
+  // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
+  app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
+    const { abs, osUser } = await resolveBrowse(req, true);
+    const download = req.query.download === "1";
+    const setDl = (): void => {
+      res.setHeader("Cache-Control", "no-store");
+      if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
+    };
+    if (osUser) {
+      const st = await memberStat(osUser, abs);
+      if (!st) throw new HttpError(404, "파일 없음");
+      if (!st.file) throw new HttpError(400, "파일이 아닙니다");
+      if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+      setDl();
+      await memberReadTo(osUser, abs, res).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
+      return;
+    }
+    let st: fs.Stats;
+    try { st = await fsp.stat(abs); } catch { throw new HttpError(404, "파일 없음"); }
+    if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
+    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+    setDl();
+    fs.createReadStream(abs).pipe(res);
+  }));
+  // 업로드(raw 스트림 → 파일). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
+  app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
+    const { abs, osUser } = await resolveBrowse(req, true);
+    if (osUser) {
+      await memberMkdir(osUser, path.dirname(abs));
+      await memberWriteFrom(osUser, abs, req, MAX_UPLOAD).catch((e) => {
+        if ((e as Error).message === "too large") throw new HttpError(413, "파일이 너무 큽니다(50MB 초과)");
+        throw new HttpError(500, "업로드 실패");
+      });
+      res.json({ ok: true });
+      return;
+    }
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      const ws = fs.createWriteStream(abs);
+      let size = 0;
+      req.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > MAX_UPLOAD) { ws.destroy(); req.destroy(); reject(new HttpError(413, "파일이 너무 큽니다(50MB 초과)")); }
+      });
+      req.on("error", reject);
+      ws.on("error", reject);
+      ws.on("finish", () => resolve());
+      req.pipe(ws);
+    });
     res.json({ ok: true });
   }));
 
