@@ -4340,6 +4340,12 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 
 /* ① 내 프로젝트 — 리스트 블럭(개요 카드)(#622). 프로젝트 탭 개요(pjv-ov-*) 카드 재사용, 좁은 존에 맞게 그리드만 조밀하게. */
 .dash-ov-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 4px 4px 8px; }
+/* #req R20 개요 '+ 새 리스트' 추가 카드 — 점선 카드, 클릭 시 그 자리 입력. */
+.dash-ov-addcard { border: 1px dashed var(--line-net-2, var(--line)); border-radius: 12px; padding: 13px 14px; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 64px; color: var(--muted); transition: border-color .12s, color .12s, background .12s; }
+.dash-ov-addcard:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-punch); }
+.dash-ov-add-plus { font-size: 17px; font-weight: 700; line-height: 1; }
+.dash-ov-add-lbl { font-size: 13px; font-weight: 700; }
+.dash-ov-add-input { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13.5px; color: var(--ink); background: var(--bg); border: 1px solid var(--blue); border-radius: 8px; padding: 7px 10px; outline: none; }
 
 /* 최신 알림 섹션 헤더(다가오는 마감·최근 활동) — 얇은 소제목. */
 .dash-ghead { display: flex; align-items: center; gap: 7px; padding: 10px 8px 4px; font-size: 12.5px; font-weight: 800; color: var(--ink-sub); }

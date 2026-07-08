@@ -350,6 +350,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     if (visibleOrder.length) {
       gridEl = el('div', { class: 'pjv-ov-grid dash-ov-grid' });
       for (const listId of visibleOrder) gridEl.append(projBlock(listId, listById.get(listId), byList.get(listId)));
+      gridEl.append(dashListAddCard()); // #req R20 — 개요 맨 끝 '+ 새 리스트'
     } else {
       // 전부 숨김 — 그리드 대신 복원 힌트(선택된 리스트 목록은 아래에 그대로 유지).
       gridEl = el('div', { class: 'dash-ov-allhidden' },
@@ -364,9 +365,40 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   };
   // 프로젝트 변경(생성·삭제·이동·상태) 후 위젯 새로고침 — 최신 mine=1 재요청 후 재렌더.
   const reloadAll = async () => {
-    try { const d = await api('/api/ui/v6/projects?mine=1'); projects = (d && d.projects) || []; onCount(projects.filter((p) => !isDone(p)).length); }
-    catch { /* 실패 시 기존 데이터 유지 */ }
+    try {
+      const [pd, ld] = await Promise.all([
+        api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []),
+        api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || lists).catch(() => lists),
+      ]);
+      projects = pd; lists = ld;
+      listById.clear(); for (const l of lists) listById.set(l.id, l); // 리스트 추가/변경 반영(같은 Map 참조 유지)
+      onCount(projects.filter((p) => !isDone(p)).length);
+    } catch { /* 실패 시 기존 데이터 유지 */ }
     draw();
+  };
+  // #req R20 — 개요 그리드 맨 끝 '+ 새 리스트' 카드: 클릭→그 자리 입력, Enter→리스트 생성(POST /project-lists) 후 새로고침.
+  const dashListAddCard = () => {
+    const card = el('div', { class: 'pjv-ov-card dash-ov-addcard', role: 'button', tabindex: '0', title: '새 리스트 추가' });
+    const showBtn = () => card.replaceChildren(el('span', { class: 'dash-ov-add-plus', text: '+' }), el('span', { class: 'dash-ov-add-lbl', text: '새 리스트' }));
+    const showInput = () => {
+      let busy = false;
+      const input = el('input', { class: 'dash-ov-add-input', type: 'text', placeholder: '리스트 이름 후 Enter', 'aria-label': '새 리스트 이름' });
+      const submit = async () => {
+        const name = (input.value || '').trim();
+        if (busy) return;
+        if (!name) { showBtn(); return; }
+        busy = true; input.disabled = true;
+        try { await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) }); toast('리스트를 추가했어요'); await reloadAll(); }
+        catch (e: any) { toast('실패 — ' + (e && e.message || e), true); busy = false; input.disabled = false; input.focus(); }
+      };
+      input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); showBtn(); } });
+      input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim()) showBtn(); });
+      card.replaceChildren(input); input.focus();
+    };
+    card.addEventListener('click', (e: any) => { if (e.target.closest('input')) return; showInput(); });
+    card.addEventListener('keydown', (e: any) => { if ((e.key === 'Enter' || e.key === ' ') && !card.querySelector('input')) { e.preventDefault(); showInput(); } });
+    showBtn();
+    return card;
   };
   // 헤더 ⚙ — 개요 카드 표시/숨김 사용자화 팝오버(#671). 존이 DOM 에 있으니 한 번만 배치(go-link 앞).
   const openOvPrefs = (anchor) => {
