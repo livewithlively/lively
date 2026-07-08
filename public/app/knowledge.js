@@ -1,6 +1,6 @@
 // knowledge.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 //  (#592) 문서 캔버스·속성 시스템·상세 패널·칩 생성기는 knowledge-doc.ts 로 이관 — 여기서 import 해 재사용/재수출.
-import { api, applyReveal, el, errorNote, pageHead, relTime, selectFilter, state, sv, toast } from './core.js';
+import { api, applyReveal, el, errorNote, relTime, selectFilter, state, sv, toast } from './core.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { hasScope } from './admin.js';
 import { KN_TYPE_LABEL, SOURCE_KIND_LABEL, SPACE_LABEL, buildKnowledgeDetail, knAuthorChip, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knPageIcon, knProvChip, knTreeIcon, knTypeChip, openKnowledgePeek, openProjectChooser, openQuickSearch, openSourceDetail, reanchorKnowledgePeek } from './knowledge-doc.js';
@@ -268,15 +268,17 @@ async function renderKnowledgeSpace(view, _space, params) {
                 setCatTab('docs'); // #657w 선택은 목록 작업 — 문서 탭으로
             refetch(); // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
         } });
-    // (#req) 상단 큰 제목·부제 제거 — WIKI 탭 자체가 정체성이라 군더더기. 액션(＋새 페이지·선택·그래프·자료·휴지통)만 남긴다.
-    const head = pageHead('', null, [
-        hasScope('memory') ? el('a', { class: 'btn btn-primary btn-sm', href: '#/knowledge/new',
-            title: '새 페이지를 작성합니다 — 노션처럼 바로 타이핑', text: '＋ 새 페이지' }) : null,
-        selectBtn,
-        knGraphBtn(),
-        knSourcesBtn(),
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', text: '🗑 휴지통' }),
-    ]);
+    // (#req) 상단 툴바 폐기 — ＋새 페이지·선택·그래프·자료·휴지통을 전부 사이드바로 이동(프로젝트 탭 #670 방향과 동일).
+    //  ＋새 페이지는 사이드바 상단 primary, 나머지는 하단 유틸리티 섹션(buildSide 에서 배치).
+    const newPageBtn = hasScope('memory') ? el('a', { class: 'kn-side-newpage', href: '#/knowledge/new',
+        title: '새 페이지를 작성합니다 — 노션처럼 바로 타이핑', text: '＋ 새 페이지' }) : null;
+    const graphBtn = knGraphBtn();
+    graphBtn.classList.add('kn-side-actionitem');
+    const sourcesBtn = knSourcesBtn();
+    sourcesBtn.classList.add('kn-side-actionitem');
+    const trashBtn = el('a', { class: 'kn-side-actionitem', href: '#/trash', title: '삭제한 지식·카테고리 복원', text: '🗑 휴지통' });
+    selectBtn.classList.add('kn-side-actionitem');
+    const sideActions = el('div', { class: 'kn-side-actions' }, selectBtn, graphBtn, sourcesBtn, trashBtn);
     // 좌측 카테고리 사이드바 — 3 space 통합(우리 팀 상단 펼침 ★ + space별 접이식). 클릭 = 필터(category_id).
     //  (#592) .kn-shell 의 고정 260px 자체 스크롤 컬럼(.kn-side) — 내용(buildSide)은 기존 그대로.
     const side = el('aside', { class: 'kn-side' });
@@ -297,7 +299,8 @@ async function renderKnowledgeSpace(view, _space, params) {
         const selKey = f.indexed ? KN_INDEXED : f.category;
         buildKnowledgeNav(nav, bySpace, selKey, myIds, { indexed: true, onOpen: (name) => openKnowledgePeek(name, { onRefresh: refetch }) });
         // 헤더('지식 카테고리') 맨 위 → 검색창 → 트리 — 프로젝트 탭 사이드바(.pjv-side-nav-head/.pjv-side-search)와 동일 컴포넌트(#req).
-        side.replaceChildren(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' })), knMakeSideSearch(nav, knSideState), nav, mirrorBox);
+        side.replaceChildren(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' })), newPageBtn, // (#req) ＋새 페이지 = 사이드바 상단 primary
+        knMakeSideSearch(nav, knSideState), nav, mirrorBox, sideActions); // (#req) 선택·지식 그래프·자료·휴지통 = 하단 유틸리티
         knSideFilterNav(nav, knSideState.q); // 재빌드 후에도 필터 유지
     }
     buildSide();
@@ -435,10 +438,10 @@ async function renderKnowledgeSpace(view, _space, params) {
             return knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id)), { group, onReorder });
         };
         // (#req) 우리 팀/그 외 구분을 '확실하게' — 작은 별·작은 글씨 폐기. 큰 섹션 헤더 + 팀 카드엔 '우리 팀' 라벨(카드 위).
-        const secHead = (cls, title, sub, count, ctrl) => el('div', { class: 'kn-home-sechead2 ' + cls }, el('div', { class: 'kn-home-sechead2-main' }, el('span', { class: 'kn-home-sechead2-title', text: title }), el('span', { class: 'kn-home-sechead2-count', text: String(count) + '개 분류' }), sub ? el('span', { class: 'kn-home-sechead2-sub', text: sub }) : null), ctrl || null);
+        const secHead = (cls, title, sub, count, ctrl) => el('div', { class: 'kn-home-sechead2 ' + cls }, el('div', { class: 'kn-home-sechead2-main' }, el('span', { class: 'kn-home-sechead2-title', text: title }), el('span', { class: 'kn-home-sechead2-count', text: String(count) + '개 카테고리' }), sub ? el('span', { class: 'kn-home-sechead2-sub', text: sub }) : null), ctrl || null);
         const cardParts = [];
         if (mine.length) {
-            cardParts.push(secHead('is-mine', '우리 팀 담당', '우리 팀이 소유·관리하는 분류', mine.length, orderControl()));
+            cardParts.push(secHead('is-mine', '내 소유 카테고리', '내가 소유·관리하는 카테고리', mine.length, orderControl()));
             const gm = el('div', { class: 'kn-home-cats' });
             mine.forEach((c, i) => gm.append(cardAt(c, i, 'mine')));
             cardParts.push(gm);
@@ -469,7 +472,7 @@ async function renderKnowledgeSpace(view, _space, params) {
         pool.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
         const recent = pool.slice(0, HOME_RECENT_CAP);
         lastEntries = recent;
-        const sechead = el('div', { class: 'kn-home-sechead' }, el('span', { class: 'kn-home-sectitle', text: mine.length ? '우리 팀 최근 지식' : '최근 지식' }), el('button', { class: 'kn-home-all', type: 'button', title: '카테고리 구분 없이 전체 지식을 최신순으로 봅니다',
+        const sechead = el('div', { class: 'kn-home-sechead' }, el('span', { class: 'kn-home-sectitle', text: mine.length ? '내 소유 카테고리 최근 지식' : '최근 지식' }), el('button', { class: 'kn-home-all', type: 'button', title: '카테고리 구분 없이 전체 지식을 최신순으로 봅니다',
             text: '전체 지식 보기 →', onclick: () => { browseAll = true; refetch(); } }));
         const recentBox = el('div', { class: 'list-box browse-list kn-home-list' }, ...(recent.length ? recent.map((e) => knRow(e, null, openRow))
             : [el('div', { class: 'empty', text: '아직 지식이 없습니다 — 위의 ＋ 새 페이지로 시작해 보세요.' })]));
@@ -751,7 +754,7 @@ async function renderKnowledgeSpace(view, _space, params) {
     const searchGroup = el('div', { class: 'kn-search-group' }, qInput, modeSel);
     const filterBar = el('div', { class: 'filter-bar browse-filter' }, searchGroup, provSel, typeSel);
     // (#592) .kn-shell — 사이드바(260px, border-right, 자체 스크롤) + 콘텐츠(flex1, 자체 패딩). 헤더·서브탭도 콘텐츠 컬럼 안으로.
-    const layout = el('div', { class: 'kn-shell' }, side, el('section', { class: 'kn-main' }, head, catBox, bulkBar, listBox, foot));
+    const layout = el('div', { class: 'kn-shell' }, side, el('section', { class: 'kn-main' }, catBox, bulkBar, listBox, foot));
     knApplySideW(layout);
     layout.append(knSideResizeHandle(layout)); // (#670) 프로젝트 탭과 동일 폭 조절 핸들(같은 --pjv-side-w / localStorage 'pjv:sideW')
     view.replaceChildren(layout);
@@ -932,7 +935,7 @@ function knMakeSideSearch(nav, state) {
 // 우리 팀 표시(#req) — 208px(프로젝트 폭) 사이드바에선 '우리 팀' 글자칩이 이름을 잘라먹어 컴팩트 ★(이름 앞)로.
 //  의미는 하단 범례(knStarLegend)가 설명. 프로젝트 탭도 좁을 땐 카테고리 칩을 숨김(container query) — 동일 취지.
 function knTeamChip() {
-    return el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', title: '우리 팀이 담당하는 카테고리', text: '★' });
+    return el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', title: '내 소유 카테고리', text: '★' });
 }
 function knSideItem(label, catVal, on, opts) {
     // 프로젝트 탭 사이드바 행(.pjv-side-navitem)과 동일 마크업(#req). opts.star = 우리 팀 → '우리 팀' 칩.
@@ -1025,9 +1028,9 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
             grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id))));
         nav.append(grp);
     }
-    // ★ 범례(#req) — 별표가 왜 붙는지(우리 팀 소유) 한 줄 설명. 팀 소유가 하나라도 있을 때만.
+    // 범례(#req) — 파랗게 강조된 카테고리 = 내 소유. 팀 소유가 하나라도 있을 때만.
     if (myIds && myIds.size)
-        nav.append(el('div', { class: 'kn-star-legend' }, el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }), el('span', { text: '우리 팀이 담당하는 분류' })));
+        nav.append(el('div', { class: 'kn-star-legend' }, el('span', { class: 'kn-star-legend-swatch', 'aria-hidden': 'true' }), el('span', { text: '파란 글씨 = 내 소유 카테고리' })));
 }
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
 //  마크업은 프로젝트 탭 리스트 행(.pjv-side-navitem — 라벨·칩·우측 개수 .pjv-side-navcount)과 동일(#req).
@@ -1036,9 +1039,9 @@ function knNavCatNode(c, on, onOpen, isMine) {
     const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false',
         title: '이 카테고리의 지식 펼치기', text: '▸' });
     const cnt = Number(c.knowledge_count);
-    const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : ''), href: '#',
+    const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : '') + (isMine ? ' kn-cat-mine' : ''), href: '#',
         'data-cat-val': String(c.id), role: 'button', tabindex: '0',
-        ...(isMine ? { title: '우리 팀이 담당하는 카테고리 — ' + (c.name || c.key) } : {}) }, tw, isMine ? knTeamChip() : null, el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }), Number.isFinite(cnt) ? el('span', { class: 'pjv-side-navcount' + (cnt === 0 ? ' kn-count-zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
+        ...(isMine ? { title: '내 소유 카테고리 — ' + (c.name || c.key) } : {}) }, tw, el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }), Number.isFinite(cnt) ? el('span', { class: 'pjv-side-navcount' + (cnt === 0 ? ' kn-count-zero' : ''), title: '지식 ' + cnt + '개', text: String(cnt) }) : null);
     const kids = el('div', { class: 'kn-nav-kids' });
     kids.hidden = true;
     let opened = false, loaded = false;
@@ -1217,10 +1220,10 @@ function knHomeCatCard(c, home, count, isMine, onOpen, dragCtx) {
         text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
     // (#req) 우리 팀 = 카드 위 뚜렷한 라벨(흰 글자·파란 필). 작은 별은 감이 안 온다는 피드백.
     if (isMine)
-        cover.append(el('span', { class: 'kn-hcard-teambadge', text: '우리 팀' }));
+        cover.append(el('span', { class: 'kn-hcard-teambadge', text: '내 소유' }));
     const spaceEl = el('span', { class: 'kn-hcard-space', text: SPACE_LABEL[c.space] || c.space || '' });
     const card = el('div', { class: 'kn-hcard' + (isMine ? ' kn-hcard-mine' : ''), role: 'link', tabindex: '0',
-        title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 우리 팀 카테고리' : '') }, cover, el('div', { class: 'kn-hcard-body' }, el('div', { class: 'kn-hcard-name', text: c.name || c.key }), c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null, el('div', { class: 'kn-hcard-meta' }, spaceEl, el('span', { class: 'kn-hcard-count', text: String(count) }))));
+        title: (c.name || c.key) + ' 대문 열기' + (isMine ? ' · 내 소유 카테고리' : '') }, cover, el('div', { class: 'kn-hcard-body' }, el('div', { class: 'kn-hcard-name', text: c.name || c.key }), c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null, el('div', { class: 'kn-hcard-meta' }, spaceEl, el('span', { class: 'kn-hcard-count', text: String(count) }))));
     card.addEventListener('click', onOpen);
     card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
         onOpen(); });
