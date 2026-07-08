@@ -66,6 +66,9 @@ import { secretsEnabled } from "../org/secret-box.js";
 // #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
 import { startConnectorRun, listConnectorRuns, getConnectorRun, cancelConnectorRun } from "../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../connectors/discover.js";
+// #697 매핑 소급 — 관리탭 멤버 매핑(person_identity) 변경을 이미 미러된 데이터에 즉시 재해소.
+import { reresolveMirrorMembers } from "../v6/connector-mirror.js";
+import { logger } from "../log.js";
 
 // 감사 actor 는 안정 식별자(userId) 우선 — email 은 변동/위조 가능(B23).
 const actorOf = (u: LivelyUser): string => u?.userId || u?.email || "unknown";
@@ -430,6 +433,23 @@ export const deliveryCapabilities: Capability[] = [
               [id, prev.system, prev.external_id, JSON.stringify({ email: prev.email ?? null, actor: actorOf(user) })]);
           }
         }
+      }
+      // #697 매핑 소급 — clickup 신원 매핑(person_identity)이 **실제로 바뀌었을 때만**, 이미 미러된 데이터(어사이니/
+      //  작성자/멤버)의 raw 값을 방금 갱신된 매핑으로 재해소한다(관리탭 매핑을 과거 미러에 즉시 반영 — 증분 싱크가
+      //  미변경 태스크를 재수집 안 해 생기던 소급 누락 수정). 가드가 '변경 시에만'이라 display_name/scopes 만 바꾼
+      //  저장에는 안 돈다(full sweep 비용 회피). 재해소는 raw→member_id 단방향이라 해제 시 기존 치환을 되돌리진
+      //  않는다(다음 미러가 raw 재도입, 다음 싱크가 수렴). best-effort — 실패해도 매핑 저장은 성립(healPmMirror 가
+      //  동일 함수로 수렴). PM 미러 대상 = 현재 clickup 만.
+      const cuKey = (idns: MemberIdentity[]): string =>
+        idns.filter((i) => i.system === "clickup").map((i) => `${i.external_id}|${i.email ?? ""}`).sort().join(",");
+      if (input.identities !== undefined && cuKey(member.identities) !== cuKey(existed?.identities ?? [])) {
+        const rc = await itemsPool.connect();
+        try {
+          const rr = await reresolveMirrorMembers(rc, "clickup");
+          if (rr.assignee || rr.surfaces) logger.info({ member: id, ...rr }, "#697 매핑 소급 재해소");
+        } catch (e) {
+          logger.warn({ err: (e as Error)?.message ?? String(e) }, "#697 재해소 실패(무시 — 다음 싱크 수렴)");
+        } finally { rc.release(); }
       }
       // 신규 human 멤버 → 로컬 로그인 계정 자동 발급(초기 비번 1회 반환 — 관리자가 멤버에게 전달).
       //  로그인이 이메일 기준이라 **유효 이메일이 있을 때만** 발급(없으면 못 쓰는 계정 → 발급 안 함).

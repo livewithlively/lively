@@ -247,7 +247,7 @@ async function runClickupSync(): Promise<boolean> {
     try {
       const included = await getIncludedListIds();
       const healed = await healPmMirror(client, "clickup", { pruneEmptyContainers: !!included });
-      if (healed.parents || healed.lists || healed.statusKeys || healed.prunedContainers) logger.info(healed, "clickup 미러 힐(부모/리스트/상태키/빈컨테이너 수렴)");
+      if (healed.parents || healed.lists || healed.statusKeys || healed.prunedContainers || healed.reresolvedAssignee || healed.reresolvedSurfaces) logger.info(healed, "clickup 미러 힐(부모/리스트/상태키/빈컨테이너/멤버재해소 수렴)");
     } catch (err) {
       logger.warn({ err: (err as Error)?.message ?? String(err) }, "clickup 미러 힐 실패(무시 — 다음 run 재시도)");
     } finally {

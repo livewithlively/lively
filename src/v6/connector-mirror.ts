@@ -32,6 +32,7 @@ import type pg from "pg";
 import { redactDeep, redactString } from "../org/redact.js";
 // unitName/normalizeExternalInstance 는 external-identity 가 SoT(구 미러와 byte-identical 슬러그·정규화 공유).
 import { unitName, normalizeExternalInstance } from "../org/external-identity.js";
+import { buildMemberResolver, reresolveMemberList } from "./member-resolve.js"; // #697 재해소 순수 로직(테스트 분리)
 import { routeIngestV6, classifyIngest } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
 import { itemsPool } from "../items/store.js";
@@ -295,8 +296,138 @@ async function resolveMemberId(
     const hit = (r.rows[0] as { id: string } | undefined)?.id;
     if (hit) return hit;
   }
-  // ③ raw 폴백(손실 0 — UI 는 raw 표시, 매핑 후 다음 싱크가 수렴).
+  // ③ raw 폴백(손실 0 — UI 는 raw 표시). 사후 매핑은 reresolveMirrorMembers 가 소급(#697): 매핑 저장 시점 즉시 +
+  //    매 clickup 싱크(healPmMirror)에서 재해소. (구주석 '다음 싱크가 수렴'은 증분 창 밖 태스크에 미성립이었음.)
   return email || (actor.id != null ? String(actor.id) : null);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── 미러 멤버 재해소(#697) — 뒤늦게 건 매핑을 이미 미러된 데이터에 소급 적용 ──
+// ════════════════════════════════════════════════════════════════════════════
+//  문제: resolveMemberId 는 미러 시점 eager 해소라, 당시 미매핑이던 어사이니/작성자/멤버는 raw(email 소문자 또는
+//   ClickUp 숫자 id — resolveMemberId ③)로 굳는다. 이후 관리탭에서 매핑(person_identity)을 걸어도 (a) 매핑 저장은
+//   person_identity 만 갱신하고 (b) 증분 싱크는 그 태스크가 외부에서 안 바뀌면 재수집하지 않아 raw 가 영구 잔존한다.
+//  해법: raw→org_member.id 재해소를 (1) 매핑 저장 시점(delivery org_member_upsert)과 (2) 매 clickup 싱크
+//   (healPmMirror) 양쪽에서 돌려 소급·수렴시킨다. 대상 7개 표면: project.assignee(+external_base.assignee)·
+//   task_assignee·project_member·task_comment.author·task_comment_reaction.member·task_time_entry.member·
+//   task_checklist_item.assignee. 멱등: 이미 org_member.id 인 값(슬러그)은 맵 키(이메일/숫자)에 없어 불변이고,
+//   raw(이메일/숫자)만 매칭되므로 네이티브(비미러) 행은 건드리지 않는다.
+
+// 표면 재해소 실행 — member-resolve 맵으로 raw→org_member.id 치환 + 어사이니 표면 백필. 자체 트랜잭션(원자적).
+//  best-effort 호출자(healPmMirror/delivery)가 예외를 격리한다(롤백 후 rethrow — 부분 적용 split-brain 방지).
+export async function reresolveMirrorMembers(
+  client: pg.PoolClient, system: string,
+): Promise<{ assignee: number; surfaces: number }> {
+  // 맵 소스 — person_identity(org_member 실재 조인) + org_member.email.
+  const idn = await client.query(
+    `SELECT pi.external_id, pi.email, pi.person_id AS member_id
+       FROM person_identity pi JOIN org_member om ON om.id = pi.person_id
+      WHERE pi.system=$1`, [system]);
+  const mem = await client.query(`SELECT lower(email) AS email, id FROM org_member WHERE email <> ''`);
+  const idnRows = idn.rows as Array<{ external_id: string; email: string | null; member_id: string }>;
+  const memRows = mem.rows as Array<{ email: string; id: string }>;
+  const resolve = buildMemberResolver(idnRows, memRows);
+
+  // (raw-key → mid) 쌍 — key!=mid 만. 실제 존재 대조는 SQL 이 하니 맵 전체를 후보로(미존재는 0행).
+  const pairMap = new Map<string, string>();
+  for (const r of idnRows) {
+    if (r.external_id && r.external_id !== r.member_id) pairMap.set(r.external_id, r.member_id);
+    const ek = (r.email ?? "").trim().toLowerCase();
+    if (ek && ek !== r.member_id && !pairMap.has(ek)) pairMap.set(ek, r.member_id);
+  }
+  for (const r of memRows) {
+    const ek = (r.email ?? "").trim().toLowerCase();
+    if (ek && ek !== r.id && !pairMap.has(ek)) pairMap.set(ek, r.id);
+  }
+  const pairs = [...pairMap.entries()]; // Array<[raw, mid]>
+
+  let assignee = 0, surfaces = 0;
+  await client.query("BEGIN"); // 다중 문 원자성 — 부분 적용/split-brain 방지(실패 시 전체 롤백, 다음 호출 재시도).
+  try {
+    if (pairs.length) {
+      const flat: string[] = pairs.flat();
+      // (VALUES ($1::text,$2::text),($3,$4),...) — 첫 튜플에 text 캐스팅으로 컬럼 타입 확정.
+      const vlist = pairs.map((_, i) => (i === 0 ? `($1::text,$2::text)` : `($${i * 2 + 1},$${i * 2 + 2})`)).join(",");
+
+      // ── 단순 컬럼(유니크 없음) — 통째 UPDATE. raw(이메일/숫자)만 매칭 → 네이티브 슬러그 불가침. ──
+      for (const tc of [["task_comment", "author"], ["task_checklist_item", "assignee"]] as const) {
+        const r = await client.query(
+          `UPDATE ${tc[0]} t SET ${tc[1]}=m.mid FROM (VALUES ${vlist}) AS m(raw,mid) WHERE t.${tc[1]}=m.raw`, flat);
+        surfaces += r.rowCount ?? 0;
+      }
+
+      // ── PK 유니크 표면 — mid 행을 생성(ON CONFLICT skip: 기존 mid·배치 중복 둘 다 흡수)한 뒤 raw 행 삭제. ──
+      //  단순 UPDATE 면, 한 스코프에 같은 사람이 두 raw 형태(숫자 id + 이메일)로 쌓여 있을 때(#541 표면 백필은 raw 만
+      //  INSERT·삭제 안 함) 둘 다 같은 mid 로 바뀌며 유니크 위반이 난다. INSERT-then-DELETE 는 그 collapse 를 흡수한다.
+      const pk = [
+        { table: "task_assignee", col: "member_id", cols: "task_id, member_id, sort", sel: "t.task_id, m.mid, t.sort", conflict: "task_id, member_id" },
+        { table: "project_member", col: "member_id", cols: "project_id, member_id, role, sort, status_message", sel: "t.project_id, m.mid, t.role, t.sort, t.status_message", conflict: "project_id, member_id" },
+        { table: "task_comment_reaction", col: "member", cols: "comment_id, emoji, member", sel: "t.comment_id, t.emoji, m.mid", conflict: "comment_id, emoji, member" },
+      ];
+      for (const s of pk) {
+        const ins = await client.query(
+          `INSERT INTO ${s.table}(${s.cols}) SELECT ${s.sel}
+             FROM ${s.table} t JOIN (VALUES ${vlist}) AS m(raw,mid) ON t.${s.col}=m.raw
+           ON CONFLICT (${s.conflict}) DO NOTHING`, flat);
+        surfaces += ins.rowCount ?? 0;
+        await client.query(
+          `DELETE FROM ${s.table} t USING (VALUES ${vlist}) AS m(raw,mid) WHERE t.${s.col}=m.raw`, flat);
+      }
+
+      // ── task_time_entry — external_id 유니크가 있어 INSERT 복제 불가 → UPDATE. 부분유니크(task_id,member)
+      //  WHERE ended_at IS NULL(열린 타이머) 충돌만 선삭제(미러 타임엔트리는 대부분 종료라 열린 충돌은 희소). ──
+      await client.query(
+        `DELETE FROM task_time_entry t USING (VALUES ${vlist}) AS m(raw,mid)
+          WHERE t.member=m.raw AND t.ended_at IS NULL
+            AND EXISTS (SELECT 1 FROM task_time_entry t2 WHERE t2.task_id=t.task_id AND t2.member=m.mid AND t2.ended_at IS NULL)`, flat);
+      const te = await client.query(
+        `UPDATE task_time_entry t SET member=m.mid FROM (VALUES ${vlist}) AS m(raw,mid) WHERE t.member=m.raw`, flat);
+      surfaces += te.rowCount ?? 0;
+    }
+
+    // ── project.assignee(JSON 배열 문자열) 재해소 + external_base.assignee 동기 + 어사이니 표면 백필(#541 흡수). ──
+    //  external_base.assignee 는 mirrorProjectV6 가 JSON 배열 **문자열**(jsonb string)로 심으므로(미푸시 필드 base=theirs)
+    //  같은 shape 로 갱신한다(안 맞추면 다음 싱크 merge3 가 base(raw)≠ours(치환) 로 raw 재기록). 표면 백필은 매핑
+    //  유무와 무관하게 항상 — 재미러 창 밖 행의 project_member/task_assignee 표면을 materialize(매핑 저장 훅에서도
+    //  즉시 완결되게: 재해소만으론 '표면에 아예 없던' 어사이니는 안 생긴다). 멱등(ON CONFLICT skip).
+    const rows = await client.query(
+      `SELECT id, level, assignee, external_base FROM project WHERE external_system=$1 AND assignee LIKE '[%'`, [system]);
+    for (const row of rows.rows as Array<{ id: number; level: string; assignee: string; external_base: Record<string, unknown> | null }>) {
+      let arr: string[];
+      try { const a = JSON.parse(row.assignee); if (!Array.isArray(a)) continue; arr = a.filter(Boolean).map(String); }
+      catch { continue; }
+      const next = reresolveMemberList(arr, resolve);
+      if (next) {
+        const nextStr = JSON.stringify(next);
+        const baseHasAssignee = row.external_base != null && Object.prototype.hasOwnProperty.call(row.external_base, "assignee");
+        await client.query(
+          `UPDATE project SET assignee=$2,
+              external_base = CASE WHEN $3::boolean
+                THEN jsonb_set(COALESCE(external_base,'{}'::jsonb), '{assignee}', to_jsonb($2::text)) ELSE external_base END
+            WHERE id=$1`,
+          [row.id, nextStr, baseHasAssignee]);
+        assignee++;
+      }
+      const members = next ?? arr; // 재해소됐으면 치환값, 아니면 원본(이미 member_id 또는 미매핑 raw — 손실0)
+      let sort = 100; // 사람 추가분(0~) 뒤에
+      for (const m of members) {
+        await client.query(
+          `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
+          [row.id, m, sort]);
+        if (row.level === "project") {
+          await client.query(
+            `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3) ON CONFLICT (project_id, member_id) DO NOTHING`,
+            [row.id, m, sort]);
+        }
+        sort++;
+      }
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err; // 호출자(healPmMirror/delivery)가 best-effort 격리 — 다음 호출/싱크가 멱등 재시도.
+  }
+  return { assignee, surfaces };
 }
 
 // ms epoch(문자열/숫자) → 'YYYY-MM-DD'(KST — 조직 표준시. 원본 ms 는 fields 백스톱에 병존).
@@ -1115,7 +1246,7 @@ async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string
 //  잎부터 제거 — 과거 무필터 이관이 남긴 빈 컨테이너 정리(네이티브 폴더·리스트 보유 컨테이너는 불가침).
 export async function healPmMirror(
   client: pg.PoolClient, system: string, opts?: { pruneEmptyContainers?: boolean },
-): Promise<{ parents: number; lists: number; statusKeys: number; prunedContainers: number }> {
+): Promise<{ parents: number; lists: number; statusKeys: number; prunedContainers: number; reresolvedAssignee: number; reresolvedSurfaces: number }> {
   const p = await client.query(
     `UPDATE project c SET parent_id = par.id
        FROM project par
@@ -1143,30 +1274,10 @@ export async function healPmMirror(
                 WHERE p1.id = c.parent_id))
         AND c.status_raw IS NOT NULL AND st->>'label' = c.status_raw AND st->>'key' <> c.status_raw`,
     [system]);
-  // 어사이니 표면 백필(#541) — 이미 이관된 행(재미러 창 밖)의 assignee(JSON 배열 문자열)를 표시 표면으로 일괄 동기:
-  //  level='project' → project_member(보드/상세 '팀원'), 전 레벨 → task_assignee(섀도). 멱등(ON CONFLICT skip),
-  //  JSON 파싱은 TS 에서(::jsonb 캐스팅 실패가 쿼리 전체를 깨지 않게).
-  const rows = await client.query(
-    `SELECT id, level, assignee FROM project
-      WHERE external_system=$1 AND assignee IS NOT NULL AND assignee LIKE '[%'`,
-    [system]);
-  for (const r of rows.rows as Array<{ id: number; level: string; assignee: string }>) {
-    let members: string[] = [];
-    try { const a = JSON.parse(r.assignee); if (Array.isArray(a)) members = a.filter(Boolean).map(String); } catch { continue; }
-    let sort = 100;
-    for (const m of members) {
-      await client.query(
-        `INSERT INTO task_assignee(task_id, member_id, sort) VALUES($1,$2,$3) ON CONFLICT (task_id, member_id) DO NOTHING`,
-        [r.id, m, sort]);
-      if (r.level === "project") {
-        await client.query(
-          `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3)
-           ON CONFLICT (project_id, member_id) DO NOTHING`,
-          [r.id, m, sort]);
-      }
-      sort++;
-    }
-  }
+  // 멤버 재해소 + 어사이니 표면 백필(#697/#541) — raw(이메일/숫자)로 굳은 어사이니/작성자/멤버를 현재 매핑으로 소급
+  //  치환하고, project.assignee 를 표시 표면(project_member/task_assignee)에 materialize 한다(재미러 창 밖 행 포함,
+  //  멱등). 매핑 저장 훅(delivery)과 공유하는 동일 함수 — 자체 트랜잭션(원자적).
+  const rr = await reresolveMirrorMembers(client, system);
 
   // 빈 커넥터 컨테이너 정리 — 잎(하위 폴더·리스트 없음)부터 반복 삭제(≤5회 — 실제 깊이 2). project_view 는 FK CASCADE.
   let pruned = 0;
@@ -1182,7 +1293,8 @@ export async function healPmMirror(
       if (!d.rowCount) break;
     }
   }
-  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0, prunedContainers: pruned };
+  return { parents: p.rowCount ?? 0, lists: l.rowCount ?? 0, statusKeys: s.rowCount ?? 0, prunedContainers: pruned,
+           reresolvedAssignee: rr.assignee, reresolvedSurfaces: rr.surfaces };
 }
 
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 client 공유 — item 단위 BEGIN/COMMIT(다중 테이블 원자성). ──
