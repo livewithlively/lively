@@ -3178,6 +3178,11 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-search.has-q .pjv-side-search-clear { display: inline-flex; }
 .pjv-side-tree { display: flex; flex-direction: column; gap: 2px; }
 .pjv-side-empty { padding: 14px 8px; font-size: 12.5px; color: var(--muted-2); text-align: center; }
+/* 휴지통 — 사이드바 맨 아래 폴더형 항목(#670). 상단 헤더 줄에서 내림. 남는 공간 있으면 바닥에 붙이고, 위 얇은 구분선으로 트리와 분리. 무채(조용한 유틸). */
+.pjv-side-trash { margin-top: auto; padding-top: 9px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); text-decoration: none; }
+.pjv-side-trash .pjv-side-navtrash-ico { display: inline-flex; width: 20px; justify-content: center; font-size: 14px; line-height: 1; filter: grayscale(.35); }
+.pjv-side-trash .pjv-side-navlabel { color: var(--muted); font-weight: 600; }
+.pjv-side-trash:hover .pjv-side-navlabel { color: var(--ink); }
 /* 검색 결과 프로젝트 행(#665) — 리스트 아래 들여쓴 결과. 리스트 항목보다 살짝 작고 옅게, 클릭=상세. */
 .pjv-side-navproj { padding-top: 4px; padding-bottom: 4px; font-size: 13px; font-weight: 500; gap: 7px; }
 .pjv-side-navproj .pjv-status-ic { flex: none; }

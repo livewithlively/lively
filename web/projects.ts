@@ -53,12 +53,10 @@ function pjvRestoreScroll(y) {
 // 프로젝트 하위 탭 바(대시보드·탐색) 폐지 — 별도 페이지로 존재할 이유가 없어 제거. 프로젝트 탭 = 보드 하나만
 //  (클릭 = 프로젝트 보드로 바로). '탐색'(지식·프로젝트·자료 둘러보기)은 제거, '작업 로그'는 이미 터미널로 이관(#609).
 
-// 프로젝트 탭 공통 페이지 헤더 — 공용 pageHead(#367). 제목 + 🗑 휴지통 진입점. 삭제 프로젝트 복원은 #/trash 공용 페이지.
+// 프로젝트 탭 공통 페이지 헤더 — 상단 헤더 줄 폐지(#670): 제목·부제는 이미 없었고, 남아있던 🗑 휴지통도
+//  사이드바 맨 아래 폴더형 항목으로 내렸다(상단에 통째로 비던 한 줄·여백 제거). → 헤드 없음(null).
 function projectPageHead() {
-  // 제목·부제 제거(#req) — 상단 군더더기 없이 바로 보드. 휴지통 진입만 남긴다.
-  return pageHead('', null, [
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원', text: '🗑 휴지통' }),
-  ]);
+  return null;
 }
 
 // 프로젝트(v2) 진입 — 하위 탭(탐색) 폐지: 상세(p) 외 모든 진입은 프로젝트 보드로. 옛 worklog→터미널(#609) 유지, 옛 browse URL 도 보드로 흡수.
@@ -331,7 +329,7 @@ async function renderProjectV2Board(view, scopeKey?) {
   //  이 배치를 pjvProjectListBoard 가 byArea 에 따라 옮긴다(#607 — WIKI 형 풀블리드 사이드바).
   //  옛 '프로젝트 보드 / 폴더·리스트로 정리한 프로젝트.' 중분류 헤드(eyebrow+설명)는 WIKI 탭과 통일감 위해 제거(#617)
   //  — 이제 head(제목+설명) 바로 아래 보드. 중분류 탭 폐지(#629)와 같은 방향(보드 하나).
-  const pageChrome = el('div', { class: 'pjv-board-chrome' }, head);
+  const pageChrome = head ? el('div', { class: 'pjv-board-chrome' }, head) : null; // 헤드 없으면 크롬 줄 자체를 안 그림(#670)
   view.replaceChildren(
     pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders, pageChrome),
     // '회사 전체'(회사 활동 피드)는 터미널 탭의 '작업 로그' 섹션으로 이관(#609 — companyTimelineSection).
@@ -780,6 +778,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     navInner.append(searchBox);
     const treeWrap = el('div', { class: 'pjv-side-tree' });
     navInner.append(treeWrap);
+    // 휴지통 — 상단 헤더 줄에서 내려 사이드바 '맨 아래' 폴더형 항목으로(#670). 위 구분선으로 트리와 분리, 남는 공간 있으면 바닥에 붙음.
+    navInner.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' },
+      el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
     // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
     treeWrap.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') { ev.preventDefault(); try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ } } });
     treeWrap.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list') return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
