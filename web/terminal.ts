@@ -588,4 +588,7 @@ export {
   startTerminalTour,
   openTermCreateForm,
   teardownTerminal,
+  // '실행 설정' 기억(#673) — 프로젝트 탭 '웹에서 바로 열기' 폼도 같은 키를 읽고 써 두 폼이 기억을 공유한다(#req).
+  termCreatePrefs,
+  saveTermCreatePrefs,
 };
