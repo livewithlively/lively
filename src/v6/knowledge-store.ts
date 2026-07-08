@@ -67,10 +67,11 @@ async function embedKnowledgeBestEffort(name: string, fields: { title?: string |
 
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
-  lifecycle?: string; q?: string; limit?: number; orderBy?: string; is_wiki?: boolean; type?: string;
+  lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
 }
 
-export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeRow[]> {
+// listKnowledge / countKnowledge 공유 필터 — JOIN·WHERE·params 를 한 곳에서 조립(목록과 총계가 항상 같은 조건).
+function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: string; params: unknown[] } {
   const params: unknown[] = [];
   let join = "";
   // 카테고리/스페이스 필터 = knowledge_category 조인(rejected 매핑 제외).
@@ -91,12 +92,35 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   else wh.push(`k.lifecycle='active'`);
   if (f.q) wh.push(grepWhere(["k.title", "k.body_md"], parseGrep(f.q), params));  // grep 매처(regex|토큰 AND) — knowledge_grep 과 동일 의미
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
+  return { join, where, params };
+}
+
+// #709 페이징 방어 — limit(1~500, 기본 200)·offset(0~1e6). capability(clampPage)가 이미 정규화하지만
+//  내부 호출처(org publish·materialize 등)·직접 호출도 안전하도록 store 에서 한 번 더 강제한다.
+function knowledgePage(f: KnowledgeFilter): { limit: number; offset: number } {
+  const limit = Math.min(Math.max(Number(f.limit) || 200, 1), 500);
+  const offset = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);
+  return { limit, offset };
+}
+
+export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeRow[]> {
+  const { join, where, params } = knowledgeListFilter(f);
   const order = f.orderBy === "name" ? "k.name" : "k.updated_at DESC";
-  params.push(Math.min(f.limit ?? 200, 500));
+  const { limit, offset } = knowledgePage(f);
+  params.push(limit); const limP = `$${params.length}`;
+  params.push(offset); const offP = `$${params.length}`;
   // icon/cover(#657, props_ui) — 목록 행 아이콘·갤러리 카드 커버용 얕은 노출(전체 props_ui 는 상세 전용 유지).
   return q(itemsPool,
     `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover
-     FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT $${params.length}`, params);
+     FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
+}
+
+// #709 총계 — 같은 필터의 전체 건수(페이징 메타 total/has_more 용). 목록의 DISTINCT 와 일치하도록 count(DISTINCT k.name).
+export async function countKnowledge(f: KnowledgeFilter = {}): Promise<number> {
+  const { join, where, params } = knowledgeListFilter(f);
+  const row = await one(itemsPool,
+    `SELECT count(DISTINCT k.name)::int AS n FROM knowledge k ${join} ${where}`, params);
+  return Number((row as { n?: number } | undefined)?.n ?? 0);
 }
 
 export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {

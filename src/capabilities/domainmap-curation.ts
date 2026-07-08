@@ -94,9 +94,13 @@ const dmDebtList: Capability = {
 const dmHistory: Capability = {
   name: "dm_history",
   title: "domainmap 변경 이력",
-  description: "change_log 스트림(최신순, limit 1..500 기본 80 — 구 UI 동일) — 웹 큐레이션 전용(REST only).",
+  description: "change_log 스트림(최신순, limit 1..500 기본 80 — 구 UI 동일). offset 으로 최신 N건 너머 과거 이력 페이지네이션(#709) — 웹 큐레이션 전용(REST only).",
   scope: "context",
-  input: { repo: z.string().regex(REPO_RE).max(100), limit: z.number().int().min(1).max(500).default(80) },
+  input: {
+    repo: z.string().regex(REPO_RE).max(100),
+    limit: z.number().int().min(1).max(500).default(80),
+    offset: z.number().int().min(0).default(0).describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 이력(#709)"),
+  },
   expose: {
     mcp: false,
     rest: [{
@@ -111,12 +115,19 @@ const dmHistory: Capability = {
           if (!Number.isInteger(n) || n < 1 || n > 500) throw new HttpError(400, "limit 은(는) 1~500 사이 정수여야 합니다");
           limit = n;
         }
-        return { repo, limit };
+        const rawOff = req.query.offset;
+        let offset = 0;
+        if (rawOff !== undefined && rawOff !== "") {
+          const n = Number(rawOff);
+          if (!Number.isInteger(n) || n < 0) throw new HttpError(400, "offset 은(는) 0 이상 정수여야 합니다");
+          offset = n;
+        }
+        return { repo, limit, offset };
       },
     }],
   },
-  handler: async (input: { repo: string; limit: number }) =>
-    dmRead(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}`, () => history(input.repo, input.limit)),
+  handler: async (input: { repo: string; limit: number; offset: number }) =>
+    dmRead(`/api/repo/${enc(input.repo)}/history?limit=${input.limit}&offset=${input.offset}`, () => history(input.repo, input.limit, input.offset)),
 };
 
 // 도메인맵 탭(회사맥락 하위) 단일 read — 한 레포의 should(의도)/is(구조)/debt(괴리)와 그 변화의 두 축

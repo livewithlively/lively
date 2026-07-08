@@ -244,16 +244,17 @@ export async function cancelConnectorRun(id: number, actor?: string | null): Pro
 }
 
 /** 실행 목록(로그 제외 — 목록은 가볍게). stale = running 인데 하트비트 끊김(추적 사망 추정). */
-export async function listConnectorRuns(system?: string, limit = 20): Promise<Record<string, unknown>[]> {
+export async function listConnectorRuns(system?: string, limit = 20, offset = 0): Promise<Record<string, unknown>[]> {
   await ensureRunSchema();
   const params: unknown[] = [];
   let where = "";
   if (system) { params.push(system); where = `WHERE system=$${params.length}`; }
-  params.push(Math.min(Math.max(1, limit), 100));
+  params.push(Math.min(Math.max(1, limit), 100)); const limP = `$${params.length}`;
+  params.push(Math.min(Math.max(0, Math.trunc(Number(offset) || 0)), 1_000_000)); const offP = `$${params.length}`;   // #709 offset — 과거 이력 도달
   const r = await itemsPool.query(
     `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, length(log) AS log_size, started_by, heartbeat_at,
             (status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds') AS stale
-     FROM connector_run ${where} ORDER BY started_at DESC LIMIT $${params.length}`, params);
+     FROM connector_run ${where} ORDER BY started_at DESC LIMIT ${limP} OFFSET ${offP}`, params);
   return r.rows as Record<string, unknown>[];
 }
 

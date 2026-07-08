@@ -2,14 +2,14 @@
 //  전부 REST 전용(웹 프로젝트 탭 모달이 소비), scope='memory'(조직 공유 작업 평면 — projects-v6 와 동일).
 //  데이터 접근/감사는 v6/task-detail-store 가 담당. 경로 prefix=/api/ui/v6/tasks|tags|projects.
 import { z } from "zod";
-import { HttpError } from "./rest-util.js";
+import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   getTaskDetail, listAllTags, addTaskTag, removeTaskTag, updateTag, deleteTag,
   startTimer, stopTimer, addManualTime, deleteTimeEntry,
   createChecklist, renameChecklist, deleteChecklist, addChecklistItem, updateChecklistItem, deleteChecklistItem,
   addTaskLink, removeTaskLink, searchLinkTargets,
-  postComment, toggleCommentReaction, getTaskFeed,
+  postComment, toggleCommentReaction, getTaskFeedPage,
 } from "../v6/task-detail-store.js";
 
 function parseId(v: unknown): number {
@@ -193,15 +193,17 @@ const linkTargetsV6: Capability = {
   title: "연결 후보 검색(v6)",
   description: "프로젝트 내 task/subtask 를 이름으로 검색(의존성 추가 피커).",
   scope: "memory",
-  input: { id: z.number().int().positive(), exclude: z.number().optional(), q: z.string().optional() },
+  input: { id: z.number().int().positive(), exclude: z.number().optional(), q: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional().describe("최대 후보 수(1~100, 기본 20) — 구 `LIMIT 20` 하드코딩 해제(#709)") },
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/link-targets"],
       parse: (req) => ({ id: parseId(req.params?.id),
         exclude: req.query?.exclude ? parseId(req.query.exclude) : 0,
-        q: req.query?.q ? String(req.query.q) : "" }) }],
+        q: req.query?.q ? String(req.query.q) : "",
+        limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
   },
-  handler: async (input: any) => ({ targets: await searchLinkTargets(input.id, input.exclude ?? 0, input.q ?? "") }),
+  handler: async (input: any) => ({ targets: await searchLinkTargets(input.id, input.exclude ?? 0, input.q ?? "", input.limit) }),
 };
 
 // ── POST 댓글 작성 ──
@@ -287,13 +289,25 @@ const projectCommentsV6: Capability = {
   title: "프로젝트 코멘트(v6)",
   description: "프로젝트(루트) 행의 코멘트/활동 피드. 댓글(task_comment) + 시스템 이벤트. 웹 코멘트 드로어 전용.",
   scope: "memory",
-  input: { id: z.number().int().positive() },
+  input: {
+    id: z.number().int().positive(),
+    limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(≤500, 기본 300) — 구 `slice(-300)` 하드캡 해제(#709)"),
+    offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 오래된 코멘트/이벤트 순회(#709)"),
+  },
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/v6/projects/:id/comments"],
-      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+      parse: (req) => ({
+        id: parseId(req.params?.id),
+        limit: req.query?.limit ? Number(req.query.limit) : undefined,
+        offset: req.query?.offset ? Number(req.query.offset) : undefined,
+      }) }],
   },
-  handler: async (input: any, user: any, ctx: any) => ({ feed: await getTaskFeed(input.id, actorOf(user, ctx)) }),
+  handler: async (input: any, user: any, ctx: any) => {
+    const { limit, offset } = clampPage(input, 300, 500);
+    const { feed, total } = await getTaskFeedPage(input.id, actorOf(user, ctx), { limit, offset });
+    return { feed, total, limit, offset, has_more: offset + feed.length < total };
+  },
 };
 
 export const taskDetailV6Capabilities: Capability[] = [

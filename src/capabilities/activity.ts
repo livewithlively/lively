@@ -122,6 +122,7 @@ const activityList: Capability = {
     project_id: z.number().int().positive().optional().describe("이 프로젝트(task) id 를 진척시킨 작업만"),
     repo: z.string().optional(),
     limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 작업 이력 순회(#709)"),
   },
   expose: {
     mcp: true,
@@ -135,12 +136,13 @@ const activityList: Capability = {
         project_id: req.query.project_id ? Number(req.query.project_id) : undefined,
         repo: req.query.repo ? String(req.query.repo) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : undefined,
+        offset: req.query.offset ? Number(req.query.offset) : undefined,
       }),
     }],
   },
   handler: async (input: any) => listActivities({
     author_person: input.author_person, author_agent: input.author_agent, type: input.type,
-    project_id: input.project_id, repo: input.repo, limit: input.limit,
+    project_id: input.project_id, repo: input.repo, limit: input.limit, offset: input.offset,
   }),
 };
 

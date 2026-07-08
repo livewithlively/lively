@@ -21,19 +21,35 @@ export interface SourceRow {
 const auditSource = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("source", key, op, before, after, ctx);
 
-export interface SourceFilter { kind?: string; provenance?: string; q?: string; limit?: number }
+export interface SourceFilter { kind?: string; provenance?: string; q?: string; limit?: number; offset?: number }
 
-// 목록 — kind/provenance/q(title·body ILIKE) 필터. 최신 발생/수정순. 본문 미포함(얕게).
-export async function listSources(f: SourceFilter = {}): Promise<Record<string, unknown>[]> {
+// listSources / countSources 공유 필터 — WHERE·params 를 한 곳에서(목록·총계가 항상 같은 조건).
+function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] } {
   const params: unknown[] = [];
   const wh: string[] = [`s.lifecycle='active'`];
   if (f.kind) { params.push(f.kind); wh.push(`s.kind=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`s.provenance=$${params.length}`); }
   if (f.q) { params.push(`%${f.q}%`); wh.push(`(s.title ILIKE $${params.length} OR s.body_md ILIKE $${params.length})`); }
-  params.push(Math.min(f.limit ?? 100, 500));
+  return { where: wh.join(" AND "), params };
+}
+
+// 목록 — kind/provenance/q(title·body ILIKE) 필터. 최신 발생/수정순. 본문 미포함(얕게). #709 limit·offset 페이지네이션.
+export async function listSources(f: SourceFilter = {}): Promise<Record<string, unknown>[]> {
+  const { where, params } = sourceListFilter(f);
+  const limit = Math.min(Math.max(Number(f.limit) || 100, 1), 500);
+  const offset = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);
+  params.push(limit); const limP = `$${params.length}`;
+  params.push(offset); const offP = `$${params.length}`;
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL} FROM source s WHERE ${wh.join(" AND ")}
-     ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $${params.length}`, params);
+    `SELECT ${S_LIST_SEL} FROM source s WHERE ${where}
+     ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
+}
+
+// #709 총계 — 같은 필터의 전체 자료 건수(페이징 메타 total/has_more 용).
+export async function countSources(f: SourceFilter = {}): Promise<number> {
+  const { where, params } = sourceListFilter(f);
+  const row = await one(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${where}`, params);
+  return Number((row as { n?: number } | undefined)?.n ?? 0);
 }
 
 // distill 대상 — 아직 지식으로 증류되지 않은 자료(knowledge_source 링크가 하나도 없는 active source). 최근 발생순.

@@ -980,14 +980,20 @@ export const deliveryCapabilities: Capability[] = [
       return { run_id: run.runId, already_running: run.alreadyRunning }; // done 은 await 하지 않는다(비동기)
     }),
   restOnly("org_connector_runs", "커넥터 실행 이력",
-    "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로.",
+    "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로. limit(≤100, 기본 20)·offset 으로 과거 이력 페이지네이션(#709).",
     [{ method: "GET", paths: ["/api/ui/org/connector/runs"], parse: (req) => ({
       system: req.query?.system ? String(req.query.system) : undefined,
       limit: req.query?.limit ? Number(req.query.limit) : undefined,
+      offset: req.query?.offset ? Number(req.query.offset) : undefined,
     }) }],
     async (input: Record<string, unknown>) => {
       const limit = Number.isFinite(Number(input.limit)) && Number(input.limit) > 0 ? Number(input.limit) : 20;
-      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit) };
+      const offset = Number.isFinite(Number(input.offset)) && Number(input.offset) > 0 ? Number(input.offset) : 0;
+      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit, offset) };
+    }, {
+      system: z.string().optional().describe("커넥터 시스템(예: clickup)으로 필터"),
+      limit: z.number().int().min(1).max(100).optional().describe("페이지 크기(≤100, 기본 20)"),
+      offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 이력(#709)"),
     }),
   restOnly("org_connector_run_log", "커넥터 실행 로그",
     "실행 1건의 메타 + 로그 청크(offset 이후) — 웹이 폴링으로 이어붙여 진행상황을 본다.",

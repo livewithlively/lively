@@ -125,11 +125,11 @@ export async function restore(change_id: number, actor: Actor): Promise<RestoreR
 }
 
 // repo 스코프 열람(HTTP /history 의 소스 — 최신순, saneLimit 기본 50/최대 500).
-export async function history(name: string, limit: unknown = 50): Promise<any[]> {
+export async function history(name: string, limit: unknown = 50, offset: unknown = 0): Promise<any[]> {
   const r = await getRepo(name);
   return q(itemsPool,
-    "SELECT id,at,op,entity_type,entity_id,actor_type,actor_id,before,after,note FROM change_log WHERE repo_id=$1 ORDER BY id DESC LIMIT $2",
-    [r.id, saneLimit(limit)]);
+    "SELECT id,at,op,entity_type,entity_id,actor_type,actor_id,before,after,note FROM change_log WHERE repo_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3",   // #709 offset — 과거 이력 페이지네이션
+    [r.id, saneLimit(limit), Math.min(Math.max(Number(offset) || 0, 0), 1_000_000)]);
 }
 
 // CLI 전용 글로벌 열람(전 repo 무필터, SELECT * — store.mjs historyCmd 의 쿼리 그대로).

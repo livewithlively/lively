@@ -2,10 +2,10 @@
 //  레거시 ctx_*/memory_* 와 병행(REST-only 로 시작 — 웹 지식 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 지식 — ctx_* 와 동일). injection/provenance 는 v6 직교축.
 import { z } from "zod";
-import { HttpError } from "./rest-util.js";
+import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
-  listKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
+  listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
   setKnowledgePropsUi, moveKnowledge,
@@ -22,7 +22,7 @@ const DEDUP_WARN_SIMILARITY = 0.6;
 const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만.",
+  description: "지식을 space/카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
   scope: "memory",
   // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 로 매핑). injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
   input: {
@@ -35,6 +35,8 @@ const knowledgeList: Capability = {
     q: z.string().optional(),
     orderBy: z.enum(["name", "updated_at"]).optional(),
     is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
+    limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 200) — 구 200 하드캡 해제(#709)"),
+    offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — limit 과 함께 상한 너머 전량 순회(#709)"),
   },
   expose: {
     mcp: true,
@@ -51,10 +53,20 @@ const knowledgeList: Capability = {
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
           is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+          offset: query.offset ? Number(query.offset) : undefined,
         };
       } }],
   },
-  handler: async (input: any) => ({ entries: await listKnowledge(input) }),
+  // #709 limit/offset 페이지네이션 + total/has_more. 구 200 하드캡(구 parse 가 limit/offset 미배선)을 해제.
+  handler: async (input: any) => {
+    const { limit, offset } = clampPage(input, 200, 500);
+    const [entries, total] = await Promise.all([
+      listKnowledge({ ...input, limit, offset }),
+      countKnowledge(input),
+    ]);
+    return { entries, total, limit, offset, has_more: offset + entries.length < total };
+  },
 };
 
 const knowledgeGet: Capability = {

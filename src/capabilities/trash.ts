@@ -18,13 +18,19 @@ const deletedList: Capability = {
     "삭제된 항목(지식/프로젝트/카테고리)을 최신 삭제순으로 조회한다 — 감사로그(org_content_audit) 기반으로 " +
     "각 항목의 마지막 작업이 'delete' 인 것만(이후 복원/재생성된 건 제외). 복원은 content_restore.",
   scope: "memory",
-  input: { limit: z.number().int().min(1).max(500).optional() },
+  input: {
+    limit: z.number().int().min(1).max(500).optional(),
+    offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 삭제 N건 너머 옛 항목 순회(#709)"),
+  },
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/deleted"],
-      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+      parse: (req) => ({
+        limit: req.query?.limit ? Number(req.query.limit) : undefined,
+        offset: req.query?.offset ? Number(req.query.offset) : undefined,
+      }) }],
   },
-  handler: async (input: any) => ({ entries: await listDeleted(input.limit) }),
+  handler: async (input: any) => ({ entries: await listDeleted(input.limit, input.offset) }),
 };
 
 const contentRestore: Capability = {

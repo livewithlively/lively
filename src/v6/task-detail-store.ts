@@ -250,15 +250,16 @@ export async function removeTaskLink(fromTask: number, toTask: number, type: str
   return getTaskLinks(fromTask);
 }
 // 연결 후보 — 같은 프로젝트의 다른 task/subtask 검색(이름 부분일치). 이미 연결된 건 프론트가 거른다.
-export async function searchLinkTargets(projectId: number, exclude: number, query: string): Promise<any[]> {
+export async function searchLinkTargets(projectId: number, exclude: number, query: string, limit = 20): Promise<any[]> {
   const like = `%${query.trim()}%`;
+  const lim = Math.min(Math.max(Number(limit) || 20, 1), 100);   // #709 — 구 `LIMIT 20` 하드코딩 → limit 파라미터화(피커라 offset 은 불요)
   return q(itemsPool,
     `WITH RECURSIVE down AS (
        SELECT id, parent_id, level, name, status FROM project WHERE id=$1
        UNION ALL SELECT p.id, p.parent_id, p.level, p.name, p.status FROM project p JOIN down ON p.parent_id = down.id)
      SELECT id, name, status, level FROM down
      WHERE level IN ('task','subtask') AND id<>$2 AND ($3='' OR name ILIKE $4)
-     ORDER BY name LIMIT 20`, [projectId, exclude, query.trim(), like]);
+     ORDER BY name LIMIT $5`, [projectId, exclude, query.trim(), like, lim]);
 }
 
 // ── 댓글 + 활동 피드 ────────────────────────────────────────────────────────────
@@ -282,7 +283,7 @@ const FEED_FIELDS: Array<[string, string]> = [
   ["status", "상태"], ["assignee", "담당자"], ["priority", "우선순위"],
   ["due_date", "마감일"], ["start_date", "시작일"], ["name", "이름"], ["description", "설명"],
 ];
-export async function getTaskFeed(taskId: number, viewer?: string | null): Promise<any[]> {
+async function buildTaskFeed(taskId: number, viewer?: string | null): Promise<any[]> {
   const comments = await q(itemsPool,
     `SELECT c.id, c.body, c.created_at, c.author AS actor, c.reply_to, m.display_name
      FROM task_comment c LEFT JOIN org_member m ON m.id = c.author
@@ -328,7 +329,25 @@ export async function getTaskFeed(taskId: number, viewer?: string | null): Promi
     }
   }
   feed.sort((x, y) => new Date(x.ts).getTime() - new Date(y.ts).getTime());
-  return feed.slice(-300);
+  return feed;
+}
+
+// 하위호환 — 최근 300건(#709 이전 계약 유지). 여러 mutation(postComment 등)이 작성 후 이걸로 갱신 피드를 에코한다.
+export async function getTaskFeed(taskId: number, viewer?: string | null): Promise<any[]> {
+  return (await buildTaskFeed(taskId, viewer)).slice(-300);
+}
+
+// #709 페이지네이션 — slice(-300) 하드캡 제거. 오래된 코멘트/이벤트를 offset 으로 전량 순회 + 전체 total.
+//  병합·정렬은 전량 계산(댓글+감사 이벤트를 시간축 병합)이지만, 반환은 최신순 페이지로 잘라 준다(offset=최신에서 뒤로).
+export async function getTaskFeedPage(
+  taskId: number, viewer: string | null | undefined, opts: { limit?: number; offset?: number },
+): Promise<{ feed: any[]; total: number }> {
+  const all = await buildTaskFeed(taskId, viewer);
+  const limit = Math.min(Math.max(Number(opts.limit) || 300, 1), 500);
+  const offset = Math.min(Math.max(Number(opts.offset) || 0, 0), 1_000_000);
+  const end = all.length - offset;
+  const feed = end > 0 ? all.slice(Math.max(0, end - limit), end) : [];
+  return { feed, total: all.length };
 }
 
 // 댓글 반응 토글 — (comment_id, emoji, member) 있으면 제거, 없으면 추가. 갱신된 emoji별 집계 반환.

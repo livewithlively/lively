@@ -27,7 +27,7 @@ function labelOf(entity: string, before: Record<string, unknown> | null): string
 }
 
 // 현재 삭제 상태인 항목 — 각 (entity, entity_key) 의 최신 감사행이 op='delete' 인 것만, 최신 삭제순.
-export async function listDeleted(limit = 200): Promise<DeletedRow[]> {
+export async function listDeleted(limit = 200, offset = 0): Promise<DeletedRow[]> {
   const rows = await q(itemsPool,
     `SELECT entity, entity_key, at, actor, actor_kind, before
        FROM (
@@ -39,8 +39,9 @@ export async function listDeleted(limit = 200): Promise<DeletedRow[]> {
        ) latest
       WHERE latest.op = 'delete'
       ORDER BY at DESC
-      LIMIT $2`,
-    [TRASH_ENTITIES as unknown as string[], Math.min(limit, 500)]);
+      LIMIT $2 OFFSET $3`,   // #709 offset — 최신 삭제 N건 너머 옛 삭제 항목 복원 도달
+    [TRASH_ENTITIES as unknown as string[], Math.min(Math.max(Number(limit) || 200, 1), 500),
+     Math.min(Math.max(Number(offset) || 0, 0), 1_000_000)]);
   return rows.map((r: any) => ({
     entity: r.entity,
     key: r.entity_key,

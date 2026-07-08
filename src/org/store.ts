@@ -1681,12 +1681,13 @@ export interface ProjectActivity {
   external_system: string | null; external_url: string | null;
 }
 export async function listProjectActivities(
-  projectId: number, authorPerson?: string, limit = 100,
+  projectId: number, authorPerson?: string, limit = 100, offset = 0,
 ): Promise<ProjectActivity[]> {
   const params: unknown[] = [projectId];
   let personFilter = "";
   if (authorPerson) { params.push(authorPerson); personFilter = ` AND a.author_person = $${params.length}`; }
-  params.push(Math.min(Math.max(Number(limit) || 100, 1), 200));
+  params.push(Math.min(Math.max(Number(limit) || 100, 1), 200)); const limP = `$${params.length}`;
+  params.push(Math.min(Math.max(Number(offset) || 0, 0), 1_000_000)); const offP = `$${params.length}`;   // #709 offset — 최신 N건 너머 과거 타임라인
   // 이 프로젝트에 연결된 작업 — 둘 중 하나면 포함:
   //  ① activity.project_id 가 이 프로젝트(명시적 링크 — activity_log 가 직접 박는 가장 권위 있는 신호), 또는
   //  ② activity.session_id 가 session_project(이 프로젝트의 터미널 세션)에 매핑된 것(세션 추론).
@@ -1700,7 +1701,7 @@ export async function listProjectActivities(
              OR a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1))
       ${personFilter}
       ORDER BY COALESCE(a.committed_at, a.created_at) DESC
-      LIMIT $${params.length}`,
+      LIMIT ${limP} OFFSET ${offP}`,
     params,
   );
   return r.rows as ProjectActivity[];

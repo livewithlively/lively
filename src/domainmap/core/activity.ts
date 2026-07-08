@@ -123,6 +123,7 @@ export interface ListActivitiesFilter {
   project_id?: number; // v6: 이 프로젝트(task)를 진척시킨 작업만 (구 task_ku=W ku 대체)
   repo?: string;
   limit?: number;
+  offset?: number;   // #709 페이지네이션 — 최신 N건 너머 과거 이력 도달
 }
 
 // 사람×AI 작업현황(대시보드) — author_person(누가) × author_agent(어떤 AI) 2단 집계.
@@ -250,7 +251,9 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   if (f.type) { args.push(f.type); where.push(`a.type=$${args.length}`); }
   if (f.repo) { args.push(f.repo); where.push(`a.repo_id=(SELECT id FROM repo WHERE name=$${args.length})`); }
   if (f.project_id) { args.push(f.project_id); where.push(`a.project_id=$${args.length}`); }
-  args.push(lim);
+  const off = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);   // #709 페이지네이션
+  args.push(lim); const limP = `$${args.length}`;
+  args.push(off); const offP = `$${args.length}`;
   const rows = await q(itemsPool, `
     SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent, a.session_id,
            a.commit_sha, a.committed_at, a.should_review, a.is_review, a.created_at, a.project_id,
@@ -258,7 +261,7 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
     FROM activity a
     LEFT JOIN repo r ON r.id = a.repo_id
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
-    ORDER BY COALESCE(a.committed_at, a.created_at) DESC LIMIT $${args.length}`, args);
+    ORDER BY COALESCE(a.committed_at, a.created_at) DESC LIMIT ${limP} OFFSET ${offP}`, args);
   if (!rows.length) return rows;
   // 연결을 한 방에 곁들인다(id IN ANY). v6: 과업=project(a.project_id), 지식=activity_knowledge⨝knowledge(같은 풀이라 조인).
   const ids = rows.map((r: any) => r.id);

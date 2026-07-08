@@ -114,7 +114,7 @@ registerProjectV6Routes(app, verifier, {
     return p ? { id: p.id, name: p.name, folder: p.folder } : undefined;
   },
   isProjectMember: (id, m) => v6IsProjectMember(id, m),
-  listProjectActivities: (id, a, l) => listProjectActivities(id, a, l),
+  listProjectActivities: (id, a, l, o) => listProjectActivities(id, a, l, o),
   ensureFolder: async (project) => {
     const folder = await createProjectFolder(project.id);
     await v6SetProjectFolder(project.id, folder, { source: "web" });

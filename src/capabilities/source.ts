@@ -2,9 +2,9 @@
 //  ★별도 테이블이라 recall(knowledge_search)에 안 섞인다. 정제하면 knowledge_save 로 지식을 만들고 source_link_knowledge 로 인용.
 //  scope='memory'(조직 지식과 동일 축). 전부 expose.mcp:true(자동등록) + REST(웹 자료 탭 /api/ui/sources).
 import { z } from "zod";
-import { HttpError } from "./rest-util.js";
+import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { listSources, getSource, upsertSource, deleteSource, listUndistilledSources } from "../v6/source-store.js";
+import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 
 const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "notion_doc", "clickup_doc", "other"] as const;
@@ -13,12 +13,14 @@ const sourceList: Capability = {
   name: "source_list",
   title: "자료 목록",
   description:
-    "자료(raw 입력 — 회의 전사록·이메일·슬랙·외부 미러)를 kind/provenance/q 로 조회. 지식(knowledge)과 별도 테이블이라 recall(knowledge_search)에 안 섞인다. 본문은 미포함(목록은 얕게).",
+    "자료(raw 입력 — 회의 전사록·이메일·슬랙·외부 미러)를 kind/provenance/q 로 조회. 지식(knowledge)과 별도 테이블이라 recall(knowledge_search)에 안 섞인다. 본문은 미포함(목록은 얕게). limit(≤500, 기본 100)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
   scope: "memory",
   input: {
     kind: z.enum(SOURCE_KINDS).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     q: z.string().optional(),
+    limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 100) — 구 100 하드캡 해제(#709)"),
+    offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 상한 너머 전량 순회(#709)"),
   },
   expose: {
     mcp: true,
@@ -29,10 +31,20 @@ const sourceList: Capability = {
           kind: query.kind ? String(query.kind) : undefined,
           provenance: query.provenance ? String(query.provenance) : undefined,
           q: query.q ? String(query.q) : undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+          offset: query.offset ? Number(query.offset) : undefined,
         };
       } }],
   },
-  handler: async (input: any) => ({ entries: await listSources(input) }),
+  // #709 limit/offset 페이지네이션 + total/has_more. 구 100 하드캡(parse 가 limit 미배선)을 해제.
+  handler: async (input: any) => {
+    const { limit, offset } = clampPage(input, 100, 500);
+    const [entries, total] = await Promise.all([
+      listSources({ ...input, limit, offset }),
+      countSources(input),
+    ]);
+    return { entries, total, limit, offset, has_more: offset + entries.length < total };
+  },
 };
 
 const sourceGet: Capability = {

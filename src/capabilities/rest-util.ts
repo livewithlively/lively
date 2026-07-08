@@ -56,4 +56,17 @@ export function qiso(v: unknown): string | undefined {
   return s;
 }
 
+// 목록 페이징 정규화(#709) — limit(1~max, 기본 def) · offset(0~1,000,000). org_audit_list(listContentAudit) 관례를 표준화한다.
+//  랭킹 top-K 검색(search/grep/similar)엔 offset 이 부적절하므로 목록·시계열 피드형 도구에만 쓴다. NaN/음수/0 은 안전 폴백.
+export function clampPage(
+  input: { limit?: unknown; offset?: unknown } | undefined,
+  def: number, max: number,
+): { limit: number; offset: number } {
+  const l = Number(input?.limit);
+  const limit = Number.isFinite(l) && l > 0 ? Math.min(Math.floor(l), max) : def;
+  const o = Number(input?.offset);
+  const offset = Number.isFinite(o) && o > 0 ? Math.min(Math.floor(o), 1_000_000) : 0;
+  return { limit, offset };
+}
+
 // v6 은퇴(2026-06-24): qtype·MappingBody·parseMappingBody(구 item→domain 매핑 body 검증) 제거 — 매핑 서브시스템 폐기.

@@ -40,7 +40,7 @@ interface ProjectDeps {
   prefix: string;
   getProject: (id: number) => Promise<{ id: number; name: string; folder: string | null } | undefined | null>;
   isProjectMember: (id: number, memberId: string) => Promise<boolean>;
-  listProjectActivities: (id: number, authorPerson?: string, limit?: number) => Promise<unknown[]>;
+  listProjectActivities: (id: number, authorPerson?: string, limit?: number, offset?: number) => Promise<unknown[]>;
   // folder 가 비었을 때 물리 폴더를 생성하고 DB 에 반영 후 상대경로 반환(v6 보강용). 없으면 폴더 없음 400.
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
 }
@@ -295,8 +295,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await projBase(id); // 존재·폴더 확인(멤버십 게이트 없음 — #452)
     const authorPerson = req.query.author_person ? String(req.query.author_person) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : 100;
+    const offset = req.query.offset ? Number(req.query.offset) : 0;   // #709 페이지네이션 — 과거 타임라인 도달
     res.setHeader("Cache-Control", "no-store");
-    res.json({ activities: await deps.listProjectActivities(id, authorPerson, limit) });
+    res.json({ activities: await deps.listProjectActivities(id, authorPerson, limit, offset) });
   }));
 }
 
