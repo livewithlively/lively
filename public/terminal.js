@@ -908,6 +908,22 @@ async function loadSessionLabel() {
   if (SESSION_LABEL) setTitle(SESSION_LABEL);
 }
 
+// 따라하기(#673) — ?welcome=1 로 열린(따라하기로 만든) 세션이면 이 터미널 탭에서 완료 안내를 띄운다.
+//  완료 흐름을 원래 탭이 아니라 실제 터미널(자동으로 뜬 새 탭) 위에서 끝내, 동작과 안내가 맞물리게 한다.
+function maybeShowWelcome() {
+  if (new URLSearchParams(location.search).get('welcome') !== '1') return;
+  try { const u = new URL(location.href); u.searchParams.delete('welcome'); history.replaceState(null, '', u.toString()); } catch (_) { /* noop */ }
+  const dismiss = () => { back.remove(); try { term && term.focus(); } catch (_) { /* noop */ } };
+  const card = el('div', { style: 'max-width:440px;width:100%;background:#fff;color:#15233B;border-radius:16px;padding:28px 30px;box-shadow:0 24px 64px rgba(0,0,0,.4);text-align:center;font-family:-apple-system,BlinkMacSystemFont,Pretendard,system-ui,sans-serif' },
+    el('div', { style: 'font-size:44px;line-height:1;margin-bottom:8px', text: '🎉' }),
+    el('h2', { style: 'margin:0 0 14px;font-size:21px;font-weight:800', text: '다 됐어요!' }),
+    el('p', { style: 'margin:0 0 10px;font-size:14px;line-height:1.65;color:#5A6B85', text: '이 터미널 창에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
+    el('p', { style: 'margin:0 0 22px;font-size:14px;line-height:1.65;color:#5A6B85', text: '세션은 창을 닫아도 서버에 남아, 다음에 [터미널] 탭에서 이어서 쓸 수 있어요.' }),
+    el('button', { style: 'border:none;background:#2D6BF0;color:#fff;font-size:14.5px;font-weight:700;padding:11px 26px;border-radius:10px;cursor:pointer', text: '시작하기', onclick: dismiss }));
+  const back = el('div', { style: 'position:fixed;inset:0;background:rgba(21,35,59,.5);display:flex;align-items:center;justify-content:center;z-index:500;padding:20px', onclick: (e) => { if (e.target === back) dismiss(); } }, card);
+  document.body.append(back);
+}
+
 async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -1005,6 +1021,7 @@ async function boot() {
   // 다른 브라우저 창에서 이 창으로 전환(같은 창 탭전환은 visibilitychange, 창 전환은 focus)될 때도 동일하게 크기 재요구.
   window.addEventListener('focus', () => { if (ws && ws.readyState === 1) forceRedraw(); });
 
+  maybeShowWelcome(); // 따라하기(#517)로 만든 세션이면 이 새 탭에서 완료 안내를 띄운다(#673)
   connectNow();
 }
 

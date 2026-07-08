@@ -1758,6 +1758,12 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-preset-sum b { color: var(--ink); font-weight: 700; }
 .term-preset-chev { color: var(--muted); font-size: 12px; flex: none; }
 .term-preset-body { margin-top: 10px; }
+/* 프리셋 세로 압축(#673 후속) — 필드 간격 좁히고, 모델·effort 는 한 줄에(라벨 짧고 내용 비슷). */
+.term-preset-body .field { margin: 8px 0 0; }
+.term-preset-body .field-label { margin-bottom: 3px; }
+.term-preset-body .term-flags { display: flex; gap: 10px; flex-wrap: wrap; }
+.term-preset-body .term-flags > .field { flex: 1; min-width: 150px; }
+.term-preset-body .caption { font-size: 11px; margin-top: 3px; line-height: 1.4; }
 /* 실행 옵션 — 두 체크박스(워크트리·자동 승인)를 한 묶음으로(#673). */
 .term-checks { display: flex; flex-direction: column; gap: 9px; margin: 14px 0 2px; }
 .term-checks .term-auto { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13.5px; color: var(--ink); cursor: pointer; }
