@@ -214,7 +214,7 @@ async function renderKnowledgeSpace(view, _space, params) {
   let lastEntries: any[] = [];
   const bulkBar = el('div', { class: 'bulk-bar', hidden: true });
   const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 지식을 골라 한 번에 삭제',
-    onclick: () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); paintList(); repaintBulk(); } });
+    onclick: () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); refetch(); } });   // 홈(#657h)에서도 전체 목록으로 전환되게 refetch
 
   // (#614) 지식이 WIKI 화면의 주(主) 뷰 — 큰 제목이 정체성. 자료·그래프·휴지통은 헤더의 보조 버튼(동급 탭 아님).
   const head = pageHead('지식', '팀이 쌓아 온 지식을 한곳에 모아 둡니다. 왼쪽에서 분류로 좁히고, 위에서 검색·필터로 찾으세요.', [
@@ -288,6 +288,58 @@ async function renderKnowledgeSpace(view, _space, params) {
   function openRow(e) {
     if (e.is_folder && curCat()) { f.folder = e.name; syncHash(); refetch(); return; }
     openKnowledgePeek(e.name, { onRefresh: refetch });
+  }
+
+  // ── #657h 위키 홈 — '전체'(무필터) 진입 시: 카테고리 카드(클릭=대문) + 우리 팀 최근 지식(캡 8건). ──
+  //  '전체 지식 보기'를 누르면 browseAll 로 기존 전체 목록. 검색어/출처/유형 필터·선택 모드는 자동으로 목록 전환.
+  let browseAll = false;
+  const HOME_RECENT_CAP = 8;
+  function isHome() {
+    return !browseAll && !f.category && !f.indexed && !f.folder && !f.q.trim() && !f.provenance && !f.type && !sel.mode;
+  }
+  // 사이드바/카드 공용 카테고리 선택 — 카드 클릭 = 대문 진입(paintCatHead 가 대문을 그린다).
+  function selectCategory(v) {
+    browseAll = false;
+    f.indexed = v === KN_INDEXED;
+    f.category = f.indexed ? '' : v;
+    f.folder = '';              // 카테고리 전환 = 드릴다운 해제(#592)
+    entryListMode = false;      // entry '목록 보기' 일시 토글도 리셋
+    buildSide(); paintCatHead(); syncHash(); refetch();
+  }
+  async function paintHome() {
+    listBox.replaceChildren(skeletonRows(3));
+    foot.replaceChildren();
+    // 카테고리 나열 — 우리 팀 먼저(space 순서 유지), 나머지 뒤에.
+    const all: any[] = [];
+    for (const sk of ['business', 'product', 'system']) for (const c of (bySpace[sk] || [])) all.push(c);
+    const mine = all.filter((c) => myIds.has(String(c.id)));
+    const rest = all.filter((c) => !myIds.has(String(c.id)));
+    const ordered = [...mine, ...rest];
+    // 카테고리별 rows(세션 캐시 공유 — 사이드바 펼침과 동일 소스). 대문 문서(icon/cover)·문서 수·최근 지식이 전부 여기서 나온다.
+    const rowsPer = await Promise.all(ordered.map((c) => knFetchCategoryRows(c.id).catch(() => [])));
+    const grid = el('div', { class: 'kn-home-cats' });
+    ordered.forEach((c, i) => {
+      const rows = rowsPer[i];
+      const home = rows.find((r) => isCategoryHomeDoc(r.name));
+      const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
+      grid.append(knHomeCatCard(c, home, docs.length, myIds.has(String(c.id)), () => selectCategory(String(c.id))));
+    });
+    // 우리 팀 최근 지식(팀 미소속이면 전체) — 최신순 캡. 폴더·대문 제외.
+    const poolRows = mine.length ? rowsPer.slice(0, mine.length) : rowsPer;
+    const pool: any[] = [];
+    for (const rows of poolRows) for (const r of rows) if (!isCategoryHomeDoc(r.name) && !r.is_folder) pool.push(r);
+    pool.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
+    const recent = pool.slice(0, HOME_RECENT_CAP);
+    lastEntries = recent;
+    const sechead = el('div', { class: 'kn-home-sechead' },
+      el('span', { class: 'kn-home-sectitle', text: mine.length ? '우리 팀 최근 지식' : '최근 지식' }),
+      el('button', { class: 'kn-home-all', type: 'button', title: '카테고리 구분 없이 전체 지식을 최신순으로 봅니다',
+        text: '전체 지식 보기 →', onclick: () => { browseAll = true; refetch(); } }));
+    const recentBox = el('div', { class: 'list-box browse-list kn-home-list' },
+      ...(recent.length ? recent.map((e) => knRow(e, null, openRow))
+        : [el('div', { class: 'empty', text: '아직 지식이 없습니다 — 위의 ＋ 새 페이지로 시작해 보세요.' })]));
+    listBox.replaceChildren(grid, sechead, recentBox);
+    repaintBulk();
   }
 
   // 상단 필터 — 검색(q) + injection select + provenance select.
@@ -471,6 +523,8 @@ async function renderKnowledgeSpace(view, _space, params) {
         foot.replaceChildren(el('span', { class: 'caption', text: lastEntries.length + '건 · 폴더 안' }));
         return;
       }
+      // #657h 위키 홈 — 무필터 '전체' 진입은 카테고리 카드 + 우리 팀 최근으로.
+      if (isHome()) { await paintHome(); return; }
       let r;
       if (f.q.trim() && f.semantic) {
         // 의미검색 — 하이브리드(벡터+grep RRF). 전역 랭킹이라 카테고리 필터는 미적용(주입/출처는 적용). 임베딩 off면 서버가 grep 폴백.
@@ -520,13 +574,8 @@ async function renderKnowledgeSpace(view, _space, params) {
     const item = ev.target.closest('[data-cat-val]');
     if (!item) return;
     ev.preventDefault();
-    // 인덱스 센티넬이면 f.indexed 토글(category 비움), 아니면 일반 카테고리(#336).
-    const v = item.dataset.catVal || '';
-    f.indexed = v === KN_INDEXED;
-    f.category = f.indexed ? '' : v;
-    f.folder = '';              // 카테고리 전환 = 드릴다운 해제(#592)
-    entryListMode = false;      // entry '목록 보기' 일시 토글도 리셋
-    buildSide(); paintCatHead(); syncHash(); refetch();
+    // 인덱스 센티넬이면 f.indexed 토글(category 비움), 아니면 일반 카테고리(#336). 홈 카드와 동일 경로(selectCategory).
+    selectCategory(item.dataset.catVal || '');
   });
 
   const filterBar = el('div', { class: 'filter-bar browse-filter' }, qInput, modeSel, provSel, typeSel);
@@ -825,6 +874,28 @@ function knGallery(entries, open) {
   }
   if (!entries.length) grid.append(el('div', { class: 'empty', text: '표시할 페이지가 없습니다.' }));
   return grid;
+}
+
+// ── #657h 위키 홈 카테고리 카드 — 커버 스트립(대문 커버 미리보기) + 아이콘 타일 + 이름/설명 + space·문서 수. ──
+//  클릭 = 그 카테고리 대문으로(onOpen → selectCategory). 대문 문서(home)의 icon/cover 를 그대로 이어받아
+//  카드가 대문의 축소판이 되게 한다(설정 0이면 결정적 톤 그라디언트 + 첫 글자 타일 — 대문 기본과 동일).
+function knHomeCatCard(c, home, count, isMine, onOpen) {
+  const cover = el('div', { class: 'kn-hcard-cover' });
+  if (!applyCoverBg(cover, home && home.cover)) applyCoverBg(cover, defaultCoverFor(c.key || String(c.id)));
+  const ic = (home && home.icon) || '';
+  cover.append(el('span', { class: 'kn-hcard-ic' + (ic ? '' : ' kn-hcard-ic-letter'),
+    text: ic || String(c.name || c.key || '?').trim().charAt(0).toUpperCase() }));
+  const card = el('div', { class: 'kn-hcard', role: 'link', tabindex: '0', title: (c.name || c.key) + ' 대문 열기' },
+    cover,
+    el('div', { class: 'kn-hcard-body' },
+      el('div', { class: 'kn-hcard-name', text: c.name || c.key }),
+      c.description ? el('div', { class: 'kn-hcard-desc', text: c.description }) : null,
+      el('div', { class: 'kn-hcard-meta' },
+        el('span', { class: 'kn-hcard-space', text: (isMine ? '★ ' : '') + (SPACE_LABEL[c.space] || c.space || '') }),
+        el('span', { class: 'kn-hcard-count', text: String(count) }))));
+  card.addEventListener('click', onOpen);
+  card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') onOpen(); });
+  return card;
 }
 
 // #657 갤러리 로컬 오버라이드 — 서버 view_mode(list|table|entry 그대로) 위에 얹는 브라우저 보기 설정.
