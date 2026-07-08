@@ -83,10 +83,30 @@ export function embeddingConfigFromEnv(): EmbeddingConfig {
   });
 }
 
+// ── #688 관리탭 '명시적 끄기' — DB 에 {"provider":"off","explicit":true} 로 저장된 off 는 env 시드로 부활하지 않는다. ──
+//  배경(어니스트 박스 실사례): 관리탭 토글 off 는 DB 만 off 로 써서 .env(EMBEDDINGS_*)가 있으면 env 폴백으로 되살아나
+//  "껐는데 켜져 있는" 혼동을 만들었다. 레거시/미설정 off({"provider":"off"} 마커 없음)는 기존대로 env 폴백(부트스트랩 비파괴).
+//  우선순위: 관리탭(DB) > .env — 명시적으로 껐으면 enable-embeddings.sh(env 만 세팅)로도 안 켜진다(관리탭에서 켜기 저장).
+export type EmbeddingConfigPatch = EmbeddingConfig | { provider: "off"; explicit: true };
+export function isExplicitEmbeddingOff(raw: unknown): boolean {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  return !!o && String(o.provider ?? "").toLowerCase() === "off" && o.explicit === true;
+}
+
 // getRuntimeConfig 가 쓰는 병합 정책: DB(운영자 웹 설정)가 켜져 있으면 DB 우선, off/미설정이면 env 시드.
+//  단 '명시적 끄기'(explicit:true)는 env 를 무시하고 완전 off(#688).
 export function resolveEmbeddingConfig(dbRaw: unknown): EmbeddingConfig {
   const db = normalizeEmbeddingConfig(dbRaw);
-  return db.provider !== "off" ? db : embeddingConfigFromEnv();
+  if (db.provider !== "off") return db;
+  if (isExplicitEmbeddingOff(dbRaw)) return { ...EMBEDDING_OFF };
+  return embeddingConfigFromEnv();
+}
+
+// 유효 설정의 출처(관리 UI 안내, #688) — db=관리탭 저장(on) · db-off=관리탭에서 명시적으로 끔 · env=.env 시드 · off=미설정.
+export function embeddingConfigSource(dbRaw: unknown): "db" | "db-off" | "env" | "off" {
+  if (normalizeEmbeddingConfig(dbRaw).provider !== "off") return "db";
+  if (isExplicitEmbeddingOff(dbRaw)) return "db-off";
+  return embeddingConfigFromEnv().provider !== "off" ? "env" : "off";
 }
 
 // 타임아웃(AbortSignal.timeout)·취소·네트워크 실패('fetch failed')는 배치를 줄이면 통할 수 있어 축소 재시도 대상.

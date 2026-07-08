@@ -28,7 +28,7 @@ import {
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
-  getRuntimeConfig, updateRuntimeConfig, listMcpServers, upsertMcpServer, removeMcpServer,
+  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
   listTools, upsertTool, removeTool, listAutoApproveTools,
@@ -53,7 +53,7 @@ import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
 // 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
 import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
-import type { EmbeddingConfig } from "../v6/embedding-provider.js";
+import type { EmbeddingConfigPatch } from "../v6/embedding-provider.js";
 import {
   DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS,
@@ -669,7 +669,7 @@ export const deliveryCapabilities: Capability[] = [
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[]; write_tools?: string[];
-        embedding_config?: EmbeddingConfig;
+        embedding_config?: EmbeddingConfigPatch;
       } = {};
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -742,8 +742,9 @@ export const deliveryCapabilities: Capability[] = [
           if (!Number.isFinite(timeoutMs) || timeoutMs < EMBEDDING_TIMEOUT_MIN_MS || timeoutMs > EMBEDDING_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.request_timeout_ms 는 ${EMBEDDING_TIMEOUT_MIN_MS}~${EMBEDDING_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
           timeoutMs = Math.floor(timeoutMs);
         }
-        patch.embedding_config = {
-          provider: provider as "off" | "http",
+        // #688 관리탭에서 끄기 저장 = '명시적 off' 마커 — .env(EMBEDDINGS_*) 시드로 부활하지 않는다(관리탭 > env).
+        patch.embedding_config = provider === "off" ? { provider: "off", explicit: true } : {
+          provider: "http",
           base_url: (e.base_url === undefined || e.base_url === null || e.base_url === "") ? null : str(e.base_url, "embedding_config.base_url", 500).trim(),
           model: (e.model === undefined || e.model === null || e.model === "") ? null : str(e.model, "embedding_config.model", 200).trim(),
           dimensions,
@@ -771,7 +772,8 @@ export const deliveryCapabilities: Capability[] = [
     async () => {
       const cfg = await getRuntimeConfig();
       const backlog = await countEmbeddingBacklog();
-      return { config: cfg.embedding_config, backlog, job: getBackfillJob() };
+      // config_source(#688): db(관리탭)·db-off(명시적 끄기)·env(.env 시드)·off — UI 가 설정 출처를 안내.
+      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob() };
     }),
   restOnly("org_embeddings_backfill", "기존 지식 임베딩(백필) 실행",
     "이미 저장된 지식을 배치로 임베딩(뒤늦게 켠 경우). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/embeddings 폴링. 이미 실행 중이면 409.",
@@ -794,7 +796,7 @@ export const deliveryCapabilities: Capability[] = [
     async () => {
       const cfg = await getRuntimeConfig();
       const backlog = await countEmbeddingBacklog(PROJECT_TARGET);
-      return { config: cfg.embedding_config, backlog, job: getBackfillJob(PROJECT_TARGET) };
+      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob(PROJECT_TARGET) };
     }),
   restOnly("org_project_embeddings_backfill", "프로젝트 임베딩(백필) 실행",
     "프로젝트·태스크·서브태스크를 배치로 임베딩(검색 #631). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/project-embeddings 폴링. 이미 실행 중이면 409. knowledge 백필과 독립(동시 실행 가능).",

@@ -13,7 +13,10 @@ import {
   type KnowledgeRow,
 } from "../v6/knowledge-store.js";
 // 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
-import { type EmbeddingConfig, resolveEmbeddingConfig, normalizeEmbeddingConfig } from "../v6/embedding-provider.js";
+import {
+  type EmbeddingConfig, type EmbeddingConfigPatch, resolveEmbeddingConfig, normalizeEmbeddingConfig,
+  isExplicitEmbeddingOff, embeddingConfigSource, EMBEDDING_OFF,
+} from "../v6/embedding-provider.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -645,7 +648,7 @@ export async function updateRuntimeConfig(
     allowed_db_secret_refs?: string[];
     allowed_db_hosts?: string[];
     write_tools?: string[];
-    embedding_config?: EmbeddingConfig;
+    embedding_config?: EmbeddingConfigPatch;
   },
   actor?: string,
   source?: string,
@@ -661,7 +664,18 @@ export async function updateRuntimeConfig(
   const allowedDbHosts = patch.allowed_db_hosts !== undefined ? patch.allowed_db_hosts.map((s) => s.toLowerCase()) : before.allowed_db_hosts;
   const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
-  const embeddingConfig = patch.embedding_config !== undefined ? normalizeEmbeddingConfig(patch.embedding_config) : before.embedding_config;
+  //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
+  //  (env 시드 부활 금지). ② embedding_config 를 안 건드린 저장은 DB '원본'을 유지 — before(resolved)를 되쓰면
+  //  env 시드 값이 DB 로 굳고(미설정→영구화) 명시적 off 마커도 소실된다(둘 다 실제로 겪은 함정).
+  let embeddingConfig: unknown;
+  if (patch.embedding_config !== undefined) {
+    embeddingConfig = isExplicitEmbeddingOff(patch.embedding_config)
+      ? { ...EMBEDDING_OFF, explicit: true }
+      : normalizeEmbeddingConfig(patch.embedding_config);
+  } else {
+    const raw = await itemsPool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
+    embeddingConfig = (raw.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null;
+  }
   await itemsPool.query(
     `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by)
        VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,1,now(),$10)
@@ -676,6 +690,17 @@ export async function updateRuntimeConfig(
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
+}
+
+// #688 유효 임베딩 설정의 출처(관리 UI 안내) — db(관리탭 on)·db-off(명시적 끄기)·env(.env 시드)·off(미설정).
+//  getRuntimeConfig 는 resolved 만 주므로 출처 판정은 DB 원본으로 별도 조회.
+export async function getEmbeddingConfigSource(): Promise<"db" | "db-off" | "env" | "off"> {
+  try {
+    const r = await itemsPool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
+    return embeddingConfigSource((r.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null);
+  } catch {
+    return embeddingConfigSource(null); // 테이블 부재(부트스트랩 전) — env/off 로 판정
+  }
 }
 
 // ════════ MCP 서버 레지스트리 — org_mcp_server ════════
