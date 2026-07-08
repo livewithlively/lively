@@ -3139,12 +3139,6 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-view-item-label { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .pjv-view-item.on .pjv-view-item-label { color: var(--blue); }
 .pjv-view-item-hint { font-size: 11.5px; color: var(--muted-2); line-height: 1.35; white-space: normal; }
-/* 보기 방식 단일 선택(#670) — 토글 스위치 대신 라디오. 선택된 항목만 파란 채움 + 옅은 배경. */
-.pjv-view-radio { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-net, #d9dee6); box-sizing: border-box; position: relative; transition: border-color .15s ease, background .15s ease; }
-.pjv-view-item.on .pjv-view-radio { border-color: var(--blue); background: var(--blue); }
-.pjv-view-item.on .pjv-view-radio::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: #fff; }
-.pjv-view-item.on { background: color-mix(in srgb, var(--blue) 7%, transparent); }
-.pjv-view-item.on:hover { background: color-mix(in srgb, var(--blue) 11%, transparent); }
 
 /* 토글 스위치(iOS 형) */
 .pjv-switch { flex: none; width: 34px; height: 20px; border-radius: 999px; background: var(--line-net, #d9dee6); position: relative; transition: background .15s ease; }
@@ -4189,24 +4183,12 @@ main.doc-mode { max-width: none; padding: 0; }
    예전 오버라이드(head margin-bottom 4 / search margin 0 2 8)가 프로젝트와 검색창 위 간격을 미세하게 어긋나게 했음. 제거해 완전 일치. */
 .kn-tree2 { display: flex; flex-direction: column; gap: 1px; }
 .kn-side-glyph { flex: none; width: 16px; text-align: center; color: var(--muted-2); font-size: 12px; line-height: 1; }
-/* (#req) 내 소유 카테고리 = 사이드바에서 파란 굵은 글씨(작은 별은 안 보인다는 피드백). 범례가 그 뜻을 설명. */
+/* (#req) 우리 팀 ★ — 이름 앞 컴팩트 마커(글자칩이 208px 에서 이름 잘라먹던 것 대체) + 하단 범례. */
 .kn-cat-star { flex: none; width: 12px; color: var(--blue); font-size: 10px; line-height: 1; text-align: center; }
-.kn-cat-mine .pjv-side-navlabel { font-weight: 800; color: var(--blue-deep, #1f47c2); }
-.kn-cat-mine .kn-nav-count { color: color-mix(in srgb, var(--blue) 55%, var(--muted-2)); }
-.kn-star-legend { display: flex; align-items: center; gap: 7px; margin: 14px 2px 2px; padding-top: 11px;
-  border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.kn-star-legend-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; background: var(--blue-deep, #1f47c2); }
-
-/* (#req) 상단 툴바를 사이드바로 이동 — ＋새 페이지(상단 primary) + 선택·그래프·자료·휴지통(하단 유틸). */
-.kn-side-newpage { display: flex; align-items: center; justify-content: center; gap: 6px; box-sizing: border-box; width: 100%;
-  margin: 10px 0 6px; padding: 9px 12px; border-radius: 9px; background: var(--blue); color: #fff;
-  font-size: 13.5px; font-weight: 700; text-decoration: none; transition: background .12s; }
-.kn-side-newpage:hover { background: var(--blue-deep, #1f47c2); color: #fff; }
-.kn-side-actions { display: flex; flex-direction: column; gap: 1px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
-.kn-side-actions .kn-side-actionitem { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-start;
-  width: 100%; box-sizing: border-box; border: none; background: none; cursor: pointer; text-decoration: none;
-  padding: 7px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-sub); font-family: inherit; }
-.kn-side-actions .kn-side-actionitem:hover { background: var(--bg-tint); color: var(--ink); }
+.pjv-side-navitem.active .kn-cat-star { color: var(--blue); }
+.kn-star-legend { display: flex; align-items: center; gap: 7px; margin: 12px 2px 2px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.kn-star-legend .kn-cat-star { width: auto; }
 .kn-side-item-sub { padding-left: 26px; }
 /* space 섹션 헤더 — details/summary 를 프로젝트 탭 스페이스 행처럼(마커 제거 + 캐럿 우측). */
 .kn-space-group { margin: 0; }
