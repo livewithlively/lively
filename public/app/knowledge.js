@@ -349,6 +349,12 @@ async function renderKnowledgeSpace(view, _space, params) {
     function isHome() {
         return !browseAll && !f.category && !f.indexed && !f.folder && !f.q.trim() && !f.provenance && !f.type && !sel.mode;
     }
+    // 안내 문구(부제)는 위키 첫 화면(홈)에서만 — 카테고리/검색/필터 안에선 잡음이라 숨긴다(사용자 요청).
+    function syncHomeSubtitle() {
+        const s = head.querySelector('.sub');
+        if (s)
+            s.hidden = !isHome();
+    }
     // 사이드바/카드 공용 카테고리 선택 — 카드 클릭 = 대문 진입(paintCatHead 가 대문을 그린다).
     function selectCategory(v) {
         browseAll = false;
@@ -628,6 +634,7 @@ async function renderKnowledgeSpace(view, _space, params) {
         refetch();
     }
     async function refetch() {
+        syncHomeSubtitle(); // 부제는 홈에서만 노출
         listBox.replaceChildren(skeletonRows(4));
         foot.replaceChildren();
         try {

@@ -900,23 +900,28 @@ export function createBlockEditor(opts: {
     markDirty();
     return nb;
   }
+  // 토글 전환(공용) — 슬래시 '/토글' 과 마크다운 '> '(노션: > = 토글) 둘 다 사용. 현재 텍스트를 요약으로 옮기고 빈 자식 1개.
+  function toToggleBlock(b: HTMLElement, summaryText: string): HTMLElement {
+    const nb = makeBlock({ type: 'toggle', summary: String(summaryText || '').replace(/\n+/g, ' '), children: [{ type: 'p', text: '' }] });
+    b.replaceWith(nb);
+    ensureOne(); renumber(); markDirty();
+    const sum = nb.querySelector('.be-togglesum') as HTMLElement;
+    if (sum) { sum.focus(); placeCaret(sum, false); }
+    return nb;
+  }
 
   // ════════ 슬래시 메뉴 ════════
   const SLASH_ITEMS: any[] = [
     { k: 'text', ic: '¶', label: '텍스트', hint: '일반 문단', kw: 'text plain 텍스트 문단 본문', apply: (b) => convertBlock(b, { type: 'p' }) },
-    { k: 'h1', ic: 'H1', label: '제목 1', hint: '큰 섹션 제목', kw: 'h1 heading title 제목 헤딩 대제목', apply: (b) => convertBlock(b, { type: 'h', level: 1 }) },
-    { k: 'h2', ic: 'H2', label: '제목 2', hint: '중간 제목', kw: 'h2 heading 제목 소제목', apply: (b) => convertBlock(b, { type: 'h', level: 2 }) },
-    { k: 'h3', ic: 'H3', label: '제목 3', hint: '작은 제목', kw: 'h3 heading 제목', apply: (b) => convertBlock(b, { type: 'h', level: 3 }) },
-    { k: 'bullet', ic: '•', label: '글머리 기호 목록', hint: '- 목록', kw: 'bullet list ul 목록 글머리 리스트', apply: (b) => convertBlock(b, { type: 'bullet', indent: 0 }) },
-    { k: 'numbered', ic: '1.', label: '번호 매기기 목록', hint: '1. 2. 3.', kw: 'numbered ordered ol list 번호 목록 리스트', apply: (b) => convertBlock(b, { type: 'numbered', indent: 0 }) },
-    { k: 'todo', ic: '☑', label: '할 일 목록', hint: '체크박스', kw: 'todo check task 할일 체크 체크박스', apply: (b) => convertBlock(b, { type: 'todo', indent: 0, checked: false }) },
-    { k: 'toggle', ic: '▸', label: '토글', hint: '접고 펼치는 블록', kw: 'toggle collapse 토글 접기 펼치기 목록', apply: (b) => {
+    { k: 'h1', ic: 'H1', label: '제목 1', hint: '큰 섹션 제목', kw: 'h1 # heading title 제목 헤딩 대제목', apply: (b) => convertBlock(b, { type: 'h', level: 1 }) },
+    { k: 'h2', ic: 'H2', label: '제목 2', hint: '중간 제목', kw: 'h2 ## heading 제목 소제목', apply: (b) => convertBlock(b, { type: 'h', level: 2 }) },
+    { k: 'h3', ic: 'H3', label: '제목 3', hint: '작은 제목', kw: 'h3 ### heading 제목', apply: (b) => convertBlock(b, { type: 'h', level: 3 }) },
+    { k: 'bullet', ic: '•', label: '글머리 기호 목록', hint: '- 목록', kw: 'bullet list ul unordered 목록 글머리 리스트 점', apply: (b) => convertBlock(b, { type: 'bullet', indent: 0 }) },
+    { k: 'numbered', ic: '1.', label: '번호 매기기 목록', hint: '1. 2. 3.', kw: 'numbered ordered ol list 번호 목록 리스트 숫자', apply: (b) => convertBlock(b, { type: 'numbered', indent: 0 }) },
+    { k: 'todo', ic: '☑', label: '할 일 목록', hint: '체크박스', kw: 'todo [] checkbox check task 할일 체크 체크박스 체크리스트', apply: (b) => convertBlock(b, { type: 'todo', indent: 0, checked: false }) },
+    { k: 'toggle', ic: '▸', label: '토글', hint: '접고 펼치는 블록', kw: 'toggle > collapse details 토글 접기 펼치기 드롭다운', apply: (b) => {
       const cur = blockData(b);
-      const nb = makeBlock({ type: 'toggle', summary: String(cur.text !== undefined ? cur.text : (cur.summary || '')).replace(/\n+/g, ' '), children: [{ type: 'p', text: '' }] });
-      b.replaceWith(nb);
-      ensureOne(); renumber(); markDirty();
-      const sum = nb.querySelector('.be-togglesum') as HTMLElement;
-      if (sum) { sum.focus(); placeCaret(sum, false); }
+      toToggleBlock(b, String(cur.text !== undefined ? cur.text : (cur.summary || '')));
     } },
     { k: 'columns', ic: '⫴', label: '2열 컬럼', hint: '블록을 나란히 — 드래그로도 생성', kw: 'columns column 컬럼 열 나란히 레이아웃 layout 분할', apply: (b) => {
       const cur = blockData(b);
@@ -927,10 +932,19 @@ export function createBlockEditor(opts: {
       const ft = nb.querySelector('.be-col .be-text') as HTMLElement;
       if (ft) { ft.focus(); placeCaret(ft, false); }
     } },
-    { k: 'quote', ic: '❝', label: '인용', hint: '인용 블록', kw: 'quote 인용 블록쿼트', apply: (b) => convertBlock(b, { type: 'quote' }) },
-    { k: 'callout', ic: '💡', label: '콜아웃', hint: '아이콘 강조 상자', kw: 'callout 콜아웃 강조 배너 안내', apply: (b) => convertBlock(b, { type: 'callout', icon: '💡', color: 'default' }) },
-    { k: 'code', ic: '</>', label: '코드', hint: '코드 블록', kw: 'code snippet 코드 소스', apply: (b) => convertBlock(b, { type: 'code', lang: '' }) },
-    { k: 'divider', ic: '—', label: '구분선', hint: '수평선', kw: 'divider hr line 구분선 나누기', apply: (b) => {
+    { k: 'quote', ic: '❝', label: '인용', hint: '인용 블록', kw: 'quote " blockquote 인용 인용구 블록쿼트', apply: (b) => convertBlock(b, { type: 'quote' }) },
+    { k: 'callout', ic: '💡', label: '콜아웃', hint: '아이콘 강조 상자', kw: 'callout note 콜아웃 강조 배너 안내 노트', apply: (b) => convertBlock(b, { type: 'callout', icon: '💡', color: 'default' }) },
+    { k: 'code', ic: '</>', label: '코드', hint: '코드 블록', kw: 'code ``` snippet codeblock 코드 소스 코드블록', apply: (b) => convertBlock(b, { type: 'code', lang: '' }) },
+    { k: 'equation', ic: '∑', label: '수식', hint: 'LaTeX 블록 수식($$)', kw: 'equation math latex tex formula 수식 수학 공식', apply: (b) => {
+      const cur = blockData(b);
+      const tmpl = '$$\n\n$$';
+      let nb: HTMLElement;
+      if (b.dataset.type === 'p' && !String(cur.text || '').trim()) nb = convertBlock(b, { type: 'raw', text: tmpl });
+      else nb = insertBlockAfter(b, { type: 'raw', text: tmpl });
+      const wrap = nb.querySelector('.be-raw') as HTMLElement;
+      if (wrap) openRawEditor(nb, wrap);
+    } },
+    { k: 'divider', ic: '—', label: '구분선', hint: '수평선', kw: 'divider --- hr line rule separator 구분선 나누기 수평선', apply: (b) => {
       const cur = blockData(b);
       if (!String(cur.text || '').trim()) { const nb = convertBlock(b, { type: 'divider', text: undefined }); const p = insertBlockAfter(nb, { type: 'p', text: '' }); focusBlock(p); }
       else { const d = insertBlockAfter(b, { type: 'divider' }); const p = insertBlockAfter(d, { type: 'p', text: '' }); focusBlock(p); }
@@ -1632,7 +1646,8 @@ export function createBlockEditor(opts: {
       if (/^([-*+])\s$/.test(txt)) { convertBlock(block, { type: 'bullet', indent: 0, text: '' }); return; }
       if (/^(\d+)[.)]\s$/.test(txt)) { convertBlock(block, { type: 'numbered', indent: 0, text: '' }); return; }
       if (/^\[( |x)?\]\s$/.test(txt)) { convertBlock(block, { type: 'todo', indent: 0, checked: /x/.test(txt), text: '' }); return; }
-      if (/^>\s$/.test(txt)) { convertBlock(block, { type: 'quote', text: '' }); return; }
+      if (/^>\s$/.test(txt)) { toToggleBlock(block, ''); return; }        // 노션: > = 토글
+      if (/^"\s$/.test(txt)) { convertBlock(block, { type: 'quote', text: '' }); return; }  // 노션: " = 인용
       if (txt === '```') { convertBlock(block, { type: 'code', lang: '', text: '' }); return; }
       if (txt === '---') {
         const nb = convertBlock(block, { type: 'divider', text: undefined });
@@ -1654,19 +1669,21 @@ export function createBlockEditor(opts: {
     const node: any = r.startContainer;
     if (node.parentElement && node.parentElement.closest('code, a')) return;   // 코드/링크 안은 원문 유지
     const upto = (node.textContent || '').slice(0, r.startOffset);
-    const rules: Array<[RegExp, string]> = [
-      [/\*\*([^*\n]+)\*\*$/, 'strong'],
-      [/`([^`\n]+)`$/, 'code'],
-      [/~~([^~\n]+)~~$/, 'del'],
-      [/==([^=\n]+)==$/, 'mark'],
-      [/\+\+([^+\n]+)\+\+$/, 'u'],
-      [/(^|[\s(가-힣])\*([^*\s\n](?:[^*\n]*[^*\s\n])?)\*$/, 'em'],
+    // lead=true → 그룹1은 선행 경계문자(치환 대상 아님), inner=그룹2. 노션 인라인 서식 페어 전부.
+    const rules: Array<[RegExp, string, boolean]> = [
+      [/\*\*([^*\n]+)\*\*$/, 'strong', false],
+      [/`([^`\n]+)`$/, 'code', false],
+      [/~~([^~\n]+)~~$/, 'del', false],
+      [/==([^=\n]+)==$/, 'mark', false],
+      [/\+\+([^+\n]+)\+\+$/, 'u', false],
+      [/(^|[^~])~([^~\s\n](?:[^~\n]*[^~\s\n])?)~$/, 'del', true],   // 노션: 단일 ~ 취소선(~~ 규칙 뒤에 둬 이중이 우선)
+      [/(^|[\s(가-힣])\*([^*\s\n](?:[^*\n]*[^*\s\n])?)\*$/, 'em', true],
     ];
-    for (const [re, tag] of rules) {
+    for (const [re, tag, lead] of rules) {
       const m = re.exec(upto);
       if (!m) continue;
-      const inner = tag === 'em' ? m[2] : m[1];
-      const mdLen = (tag === 'em' ? m[0].length - (m[1] ? m[1].length : 0) : m[0].length);
+      const inner = lead ? m[2] : m[1];
+      const mdLen = (lead ? m[0].length - (m[1] ? m[1].length : 0) : m[0].length);
       const from = r.startOffset - mdLen;
       const wrap = el(tag === 'code' ? 'code' : tag, tag === 'code' ? { class: 'md-code' } : (tag === 'mark' ? { class: 'md-mark' } : {}), inner);
       const after = node.splitText(r.startOffset);
