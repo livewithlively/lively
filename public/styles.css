@@ -4877,7 +4877,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .ke-cover:hover .kn-cover-btns { opacity: 1; }
 .ke-cover-btns { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity .12s; }
 .ke-cover:hover .ke-cover-btns { opacity: 1; }
-.ke-canvas { max-width: 820px; margin: 0 auto; padding: 26px 24px 0; }
+.ke-canvas { max-width: 940px; margin: 0 auto; padding: 22px 32px 0; }
 .ke-icon { width: 68px; height: 68px; font-size: 42px; line-height: 1; background: transparent; border: none; cursor: pointer;
   padding: 0; display: block; margin: 0 0 4px; border-radius: 12px; text-align: left; }
 .ke-icon:hover { background: var(--bg-tint); }
