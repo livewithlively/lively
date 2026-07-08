@@ -979,8 +979,9 @@ async function fillSessions(zone, onCount, projectsP) {
         }
         const list = el('div', { class: 'dash-sess-list' });
         for (const s of shown) {
-            // #req R16 — 하단 회색 경로(s.dir) 제거: 태그(하네스) · 만든 시간만. 제목(라벨)은 윗줄, 카드는 2줄로 콤팩트.
-            const sub = [harnessLabel(s.harness), sessTime(s.created)].filter(Boolean).join(' · ');
+            // #req R16 후속 — 부제는 만든 시간만('Claude Code' 하네스 라벨은 매 카드 반복되는 노이즈라 제거, 툴팁으로만).
+            const sub = sessTime(s.created);
+            const subTitle = [harnessLabel(s.harness), sub].filter(Boolean).join(' · ');
             const badges = el('span', { class: 'dash-sess-badges' });
             if (s.attached)
                 badges.append(el('span', { class: 'dash-badge live', text: '접속중' }));
@@ -996,17 +997,26 @@ async function fillSessions(zone, onCount, projectsP) {
             }
             else
                 badges.append(el('span', { class: 'dash-badge', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
-            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' }), badges), el('div', { class: 'dash-sess-sub', title: sub, text: sub }));
-            const openBtn = el('button', { class: 'dash-sess-open', type: 'button', text: '열기' });
-            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
-            const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
-            // #req R15 — 열기 옆 '⋯' 메뉴(수정·삭제). 소유자 세션만(서버도 비소유 403 재검증).
+            const info = el('div', { class: 'dash-sess-info' }, el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' }), badges), el('div', { class: 'dash-sess-sub', title: subTitle, text: sub }));
+            // #req 버튼 재설계 — 카드 높이만큼 늘어난 [열기]·[⋮] 버튼 폐기. 카드 전체 클릭 = 열기(주 행동),
+            //  우측엔 작은 고스트 아이콘 두 개(↗ 열기 힌트 · ⋮ 관리)만 — 호버 시 나타나 평소엔 조용.
+            const open = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+            const acts = el('div', { class: 'dash-sess-acts' });
+            acts.append(el('span', { class: 'dash-sess-openhint', 'aria-hidden': 'true', title: '새 창에서 열기', text: '↗' }));
+            // ⋮ 메뉴(이름 수정·삭제) — 소유자 세션만(서버도 비소유 403 재검증).
             if (s.owned) {
                 const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
-                moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
+                moreBtn.onclick = (e) => { e.stopPropagation(); openSessMenu(moreBtn, s, reloadSessions); };
                 acts.append(moreBtn);
             }
-            list.append(el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : '') }, info, acts));
+            const box = el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : ''), role: 'button', tabindex: '0',
+                title: '클릭하면 새 창에서 열립니다' }, info, acts);
+            box.addEventListener('click', open);
+            box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                open();
+            } });
+            list.append(box);
         }
         zone.body.replaceChildren(list);
     };
