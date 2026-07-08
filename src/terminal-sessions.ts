@@ -86,6 +86,7 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
+  wtBranch?: string; // 워크트리 세션이면 격리 브랜치명(@box_wt_branch). 없으면 빈 문자열 = 폴더 직접 작업. 수정 팝업 표시용(#673).
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; worktree?: boolean; }
 
@@ -276,7 +277,7 @@ async function getOpt(name: string, opt: string): Promise<string> {
 // 단일 tmux 호출로 모든 box-* 세션 + @box_* 메타를 읽는다(#{@user-option} 포맷 지원).
 // @box_flags·@box_invites 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
 //  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_label}";
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{@box_label}";
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   let out = "";
@@ -285,7 +286,7 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, ...labelParts] = line.split("\t");
     const owned = !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     // 프로젝트 폴더 세션은 '프로젝트 공동 세션' — 소비자(프로젝트 페이지)가 프로젝트 멤버십으로 게이트하고
@@ -299,7 +300,7 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
       id: name, label: (labelParts.join("\t") || name), harness: harness || "shell", dir: dir || "",
       autoApprove: auto === "1", owner: owner || "", owned,
       created: Number(created) || 0, attached: Number(attached) > 0, invites, flags,
-      projectId: Number(projectRaw) || 0,
+      projectId: Number(projectRaw) || 0, wtBranch: wtBranchRaw || "",
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
@@ -489,7 +490,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags, wtBranch: worktree ? worktree.branch : "" };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
