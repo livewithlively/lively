@@ -432,25 +432,20 @@ function setupClipboard() {
     //  Meta-b/Meta-f(\eb/\ef — bash readline·zsh 기본 바인딩)를 직접 셸로 흘려 비개발자도 단어 점프가 되게 한다.
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       const wordSeq = e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf';
-      try { const _t = term.textarea || {}; console.log('#633 HANDLER ' + e.key + ' isComposing=' + e.isComposing + ' alt=' + e.altKey + ' taVal=' + JSON.stringify(_t.value || '') + ' caret=' + _t.selectionStart); } catch (_) { /* noop */ }
-      // #633 (반복 버그): preventDefault 필수. return false 는 xterm '자체' 처리만 막을 뿐 브라우저 기본동작은
-      //  안 막는다(확인: 이 핸들러 뒤 defaultPrevented=false). 그래서 브라우저가 Option+←/→ 의 기본동작 =
-      //  xterm 히든 textarea 안에서 '단어 단위 캐럿 이동'을 수행(실측 캐럿 9→6)해 IME 상태를 오염시키고,
-      //  이후 모든 타이핑에 '직전 글자가 눌러붙어 반복'된다. → 항상 기본동작을 차단한다.
-      e.preventDefault(); // 커서이동 유발(브라우저 캐럿이동=반복버그 + xterm 기본 Alt+화살표 시퀀스=따라감) 전부 차단
-      // #633 조합 중(미완성 음절 '박스')엔 그 음절이 아직 셸에 없다(compositionend 전). preventDefault 로 IME
-      //  자연확정이 막히므로, xterm 자신의 compositionend 를 '직접 발동'시켜 조합 음절을 제자리(현재 커서)에서
-      //  확정시킨다 — xterm 이 조합 substring 만 정확히 셸로 보낸다(blur=취소로 사라짐, value통째읽기=줄중복, 둘 다 회피).
-      //  그 다음 단어이동 → 음절이 먼저 셸에 들어간 뒤 커서가 이동한다.
-      if (e.isComposing) {
-        try { const ta = term.textarea || e.target; if (ta) ta.dispatchEvent(new CompositionEvent('compositionend', { data: ta.value, bubbles: true, cancelable: true })); } catch (_) { /* noop */ }
-        // xterm 의 _finalizeComposition 은 '비동기'(propagation 대기)로 음절을 셸에 보낸다 → 단어이동을 동기로
-        //  보내면 음절보다 먼저 나가 커서가 앞서 움직인다(야바보). 그래서 이동은 한 틱 미뤄 음절 뒤로 순서를 맞춘다.
-        const d = wordSeq;
-        setTimeout(() => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }, 0);
-        return false;
-      }
-      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: wordSeq })); } catch (_) { /* noop */ } }
+      // #633 preventDefault 필수: return false 는 xterm '자체' 처리만 막을 뿐 브라우저 기본동작은 안 막는다
+      //  (실측 defaultPrevented=false). 안 막으면 브라우저가 Option+←/→ 기본동작 = xterm 히든 textarea 안에서
+      //  '단어 단위 캐럿 이동'(실측 9→6)을 해 IME 상태를 오염시켜 '직전 글자가 눌러붙어 반복'된다. → 항상 차단.
+      e.preventDefault(); // 항상: 커서이동(브라우저 캐럿=반복버그 + xterm 기본 Alt+화살표 시퀀스=따라감) 원천차단
+      // #633 실측(실브라우저 콘솔 로그): macOS 한글 IME 는 조합 중 Option+←/→ 를 keydown '두 번' 준다 —
+      //  ① isComposing=true(조합 중) → 그 사이 IME 가 미완성 음절을 '스스로' 확정(compositionend → xterm 이
+      //  '비동기'로 그 음절을 셸에 전송) → ② isComposing=false(확정 후). 즉 우리가 손대지 않아도 음절은 IME 가
+      //  알아서 제자리에서 확정한다(과거의 synthetic compositionend·blur·textarea.value 읽기는 전부 불필요·유해였다:
+      //  따라감/사라짐/줄중복/자모누출의 원인). → ①(조합 중 keydown)에선 '아무 것도 안 하고', ②(비조합 keydown,
+      //  영문 타이핑도 이 경로)에서만 단어이동을 보낸다. 단, xterm 의 음절 전송이 비동기라 단어이동을 '동기'로
+      //  보내면 음절보다 앞서 커서가 움직여 '야바보'가 되므로, setTimeout(0)로 미뤄 '음절 → 단어이동' 순서를 맞춘다.
+      if (e.isComposing) return false; // ① 조합 중 keydown: IME 자연확정 방해 금지(아무 동작 안 함)
+      const dSeq = wordSeq;            // ② 비조합 keydown: 단어이동을 한 틱 미뤄(비동기 음절 전송 뒤로) 보냄
+      setTimeout(() => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: dSeq })); } catch (_) { /* noop */ } } }, 0);
       return false;
     }
     // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
@@ -483,19 +478,6 @@ function setupClipboard() {
     }
     return true;
   });
-  // #633 임시 진단 로깅 — 실제 브라우저의 한글 IME 이벤트 순서를 콘솔에 찍는다(캡처용, 조사 끝나면 제거).
-  try {
-    const L = (m) => { try { console.log('#633 ' + m); } catch (_) { /* noop */ } };
-    if (!WebSocket.prototype.__d633) {
-      const O = WebSocket.prototype.send;
-      WebSocket.prototype.send = function (dd) { try { const m = JSON.parse(dd); if (m && m.t === 'i') L('WS-send ' + JSON.stringify(String(m.d).replace(/\x1b/g, '<ESC>'))); } catch (_) { /* noop */ } return O.call(this, dd); };
-      WebSocket.prototype.__d633 = true;
-    }
-    const ta = term.textarea;
-    if (ta) {
-      ['compositionstart', 'compositionupdate', 'compositionend'].forEach((ev) => ta.addEventListener(ev, (e) => L(ev + ' data=' + JSON.stringify(e.data || '') + ' taVal=' + JSON.stringify(ta.value) + ' caret=' + ta.selectionStart)));
-    }
-  } catch (_) { /* noop */ }
 }
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
 //  capture 단계에서 xterm 텍스트영역보다 먼저 잡아 기본 붙여넣기를 막고 우리가 처리(중복 방지). 이미지=업로드+경로, 텍스트=bracketed.
@@ -921,22 +903,6 @@ async function loadSessionLabel() {
   if (SESSION_LABEL) setTitle(SESSION_LABEL);
 }
 
-// 따라하기(#673) — ?welcome=1 로 열린(따라하기로 만든) 세션이면 이 터미널 탭에서 완료 안내를 띄운다.
-//  완료 흐름을 원래 탭이 아니라 실제 터미널(자동으로 뜬 새 탭) 위에서 끝내, 동작과 안내가 맞물리게 한다.
-function maybeShowWelcome() {
-  if (new URLSearchParams(location.search).get('welcome') !== '1') return;
-  try { const u = new URL(location.href); u.searchParams.delete('welcome'); history.replaceState(null, '', u.toString()); } catch (_) { /* noop */ }
-  const dismiss = () => { back.remove(); try { term && term.focus(); } catch (_) { /* noop */ } };
-  const card = el('div', { style: 'max-width:440px;width:100%;background:#fff;color:#15233B;border-radius:16px;padding:28px 30px;box-shadow:0 24px 64px rgba(0,0,0,.4);text-align:center;font-family:-apple-system,BlinkMacSystemFont,Pretendard,system-ui,sans-serif' },
-    el('div', { style: 'font-size:44px;line-height:1;margin-bottom:8px', text: '🎉' }),
-    el('h2', { style: 'margin:0 0 14px;font-size:21px;font-weight:800', text: '다 됐어요!' }),
-    el('p', { style: 'margin:0 0 10px;font-size:14px;line-height:1.65;color:#5A6B85', text: '이 터미널 창에 하고 싶은 말을 그냥 입력하면 됩니다. 회사 맥락·규칙은 이미 들어가 있어요.' }),
-    el('p', { style: 'margin:0 0 22px;font-size:14px;line-height:1.65;color:#5A6B85', text: '세션은 창을 닫아도 서버에 남아, 다음에 [터미널] 탭에서 이어서 쓸 수 있어요.' }),
-    el('button', { style: 'border:none;background:#2D6BF0;color:#fff;font-size:14.5px;font-weight:700;padding:11px 26px;border-radius:10px;cursor:pointer', text: '시작하기', onclick: dismiss }));
-  const back = el('div', { style: 'position:fixed;inset:0;background:rgba(21,35,59,.5);display:flex;align-items:center;justify-content:center;z-index:500;padding:20px', onclick: (e) => { if (e.target === back) dismiss(); } }, card);
-  document.body.append(back);
-}
-
 async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -1034,7 +1000,6 @@ async function boot() {
   // 다른 브라우저 창에서 이 창으로 전환(같은 창 탭전환은 visibilitychange, 창 전환은 focus)될 때도 동일하게 크기 재요구.
   window.addEventListener('focus', () => { if (ws && ws.readyState === 1) forceRedraw(); });
 
-  maybeShowWelcome(); // 따라하기(#517)로 만든 세션이면 이 새 탭에서 완료 안내를 띄운다(#673)
   connectNow();
 }
 
