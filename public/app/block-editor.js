@@ -6,7 +6,7 @@
 //    ⋮⋮ 드래그 재정렬, ＋ 블록 추가, Enter 분할·Backspace 병합, Tab 들여쓰기. 한국어 IME 조합 가드(#505 동형).
 //  · 보안 불변식 유지: innerHTML 금지 — 모든 DOM 은 el/renderInline/renderMarkdown(전부 textContent 기반)로만.
 //  순환 import 금지: core/learn/page-decor 만 import (knowledge-doc/knowledge-edit/category-home 이 이 모듈을 쓴다).
-import { el, renderInline, renderMarkdown, safeHref, toast } from './core.js';
+import { api, el, renderInline, renderMarkdown, safeHref, toast } from './core.js';
 import { overlayBox } from './learn.js';
 import { openEmojiPicker } from './page-decor.js';
 // ── 블록 데이터 모델 ──
@@ -1034,6 +1034,121 @@ export function createBlockEditor(opts = {}) {
         paintSlash();
         positionSlash(slash.block);
     }
+    // ════════ [[ 페이지 멘션 — 노션 @링크/옵시디언 [[]] 동형(#657t). 다른 지식으로의 인라인 링크. ════════
+    //  타이핑 중 '[[' 감지 → 지식 검색 메뉴 → 선택 시 '[[쿼리' 를 <a href="#/k/이름">제목</a> 로 치환.
+    //  직렬화는 기존 A 브랜치([제목](#/k/이름)) — renderInline 의 내부 앵커(safeHref '#')와 왕복 호환.
+    let mention = null; // { block, node, from(''[[' 시작 오프셋), query, menu, items, sel, timer }
+    function closeMention() {
+        if (!mention)
+            return;
+        clearTimeout(mention.timer);
+        mention.menu.remove();
+        mention = null;
+    }
+    function paintMention() {
+        if (!mention)
+            return;
+        const items = mention.items || [];
+        if (mention.sel >= items.length)
+            mention.sel = Math.max(0, items.length - 1);
+        mention.menu.replaceChildren(el('div', { class: 'be-slash-head', text: '페이지 링크' }), ...(!items.length ? [el('div', { class: 'be-slash-empty', text: mention.query ? '결과 없음' : '검색어를 입력하세요' })]
+            : items.map((it, idx) => {
+                const row = el('button', { class: 'be-slash-item' + (idx === mention.sel ? ' on' : ''), type: 'button' }, el('span', { class: 'be-slash-ic', text: it.icon || '📄' }), el('span', { class: 'be-slash-label', text: it.title || it.name }));
+                row.addEventListener('mousedown', (e) => e.preventDefault());
+                row.onclick = () => applyMention(it);
+                return row;
+            })));
+        const r = caretRange();
+        let rect = r ? r.getBoundingClientRect() : mention.block.getBoundingClientRect();
+        if (!rect.width && !rect.height && !rect.top)
+            rect = mention.block.getBoundingClientRect();
+        const h = Math.min(mention.menu.scrollHeight || 280, 280);
+        mention.menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 320)) + 'px';
+        mention.menu.style.top = (rect.bottom + 6 + h > window.innerHeight ? Math.max(8, rect.top - h - 6) : rect.bottom + 6) + 'px';
+    }
+    function scheduleMentionSearch() {
+        if (!mention)
+            return;
+        clearTimeout(mention.timer);
+        mention.timer = setTimeout(async () => {
+            if (!mention)
+                return;
+            const q = mention.query.trim();
+            try {
+                const url = q
+                    ? '/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '8', mode: 'names', injection: 'recalled' })
+                    : '/api/ui/knowledge?' + new URLSearchParams({ limit: '8', orderBy: 'updated_at', injection: 'recalled' });
+                const r = await api(url);
+                if (!mention)
+                    return;
+                mention.items = ((r && r.entries) || []).filter((e) => !String(e.name || '').startsWith('category-home-'));
+                mention.sel = 0;
+                paintMention();
+            }
+            catch (_) { /* 검색 실패 — 이전 결과 유지 */ }
+        }, 250);
+    }
+    // input 마다 — 캐럿 앞 '[[쿼리' 프로브. 없으면 닫기, 있으면 열기/갱신.
+    function syncMention(target) {
+        const r = caretRange();
+        if (!r || !r.collapsed || r.startContainer.nodeType !== 3) {
+            closeMention();
+            return;
+        }
+        const node = r.startContainer;
+        const upto = (node.textContent || '').slice(0, r.startOffset);
+        const m = /\[\[([^\[\]\n]{0,40})$/.exec(upto);
+        if (!m) {
+            closeMention();
+            return;
+        }
+        const block = blockOf(target);
+        if (!block) {
+            closeMention();
+            return;
+        }
+        if (!mention) {
+            const menu = el('div', { class: 'be-slash be-mention', role: 'menu' });
+            document.body.append(menu);
+            mention = { block, node, menu, items: [], sel: 0, query: '', timer: null };
+        }
+        mention.block = block;
+        mention.node = node;
+        mention.from = r.startOffset - m[1].length - 2; // '[[' 시작
+        if (mention.query !== m[1] || !mention.items.length) {
+            mention.query = m[1];
+            scheduleMentionSearch();
+        }
+        paintMention();
+    }
+    // 선택 — '[[쿼리' 삭제 후 <a> + ZWSP 삽입(마크 지속 차단 패딩과 동일 수법).
+    function applyMention(it) {
+        const m = mention;
+        closeMention();
+        if (!m)
+            return;
+        try {
+            const node = m.node;
+            const r = caretRange();
+            const to = r && r.startContainer === node ? r.startOffset : (m.from + 2 + m.query.length);
+            node.textContent = node.textContent.slice(0, m.from) + node.textContent.slice(to);
+            const a = el('a', { class: 'md-link', href: '#/k/' + encodeURIComponent(it.name), text: it.title || it.name });
+            const after = node.splitText(Math.min(m.from, node.textContent.length));
+            node.parentNode.insertBefore(a, after);
+            const pad = document.createTextNode('\u200B');
+            node.parentNode.insertBefore(pad, after);
+            const s = window.getSelection();
+            const nr = document.createRange();
+            nr.setStart(pad, 1);
+            nr.collapse(true);
+            s.removeAllRanges();
+            s.addRange(nr);
+            markDirty();
+        }
+        catch (_) {
+            toast('링크 삽입 실패 — 다시 시도해 주세요', true);
+        }
+    }
     function promptImage(block) {
         const urlIn = el('input', { type: 'text', placeholder: 'https://… 이미지 주소', style: 'width:100%' });
         const altIn = el('input', { type: 'text', placeholder: '설명(alt, 선택)', style: 'width:100%' });
@@ -1099,29 +1214,117 @@ export function createBlockEditor(opts = {}) {
         }
         catch (_) { /* 경계 걸친 드문 케이스 — no-op */ }
     }
-    function promptLink() {
-        const r = caretRange();
-        if (!r || r.collapsed)
+    // 링크 — 노션형 인라인 팝오버(입력 + 적용/해제). window.prompt 금지(#657t).
+    //  선택 레인지를 저장해 두고 input 포커스로 선택이 사라져도 적용 시 복원 후 execCommand.
+    function openLinkPop() {
+        const r0 = caretRange();
+        if (!r0 || r0.collapsed)
             return;
-        let n = r.commonAncestorContainer;
+        const saved = r0.cloneRange();
+        const old = document.querySelector('.be-linkpop');
+        if (old) {
+            old.remove();
+            return;
+        }
+        let n = r0.commonAncestorContainer;
         if (n.nodeType === 3)
             n = n.parentElement;
-        const a = n && n.closest ? n.closest('a') : null;
-        if (a && root.contains(a)) { // 이미 링크 → 해제
-            document.execCommand('unlink');
-            return;
-        }
-        const url = window.prompt('링크 URL (https://…)');
-        if (!url)
-            return;
-        const safe = safeHref(url.trim());
-        if (!safe) {
-            toast('허용되지 않는 URL 입니다', true);
-            return;
-        }
-        document.execCommand('createLink', false, safe);
+        const existing = n && n.closest ? n.closest('a') : null;
+        const input = el('input', { class: 'be-linkpop-in', type: 'text', spellcheck: 'false',
+            placeholder: '주소 붙여넣기 (https://… 또는 #/k/문서명)',
+            value: existing ? (existing.getAttribute('href') || '') : '' });
+        const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+        const restoreSel = () => { const s = window.getSelection(); s.removeAllRanges(); s.addRange(saved); };
+        const apply = () => {
+            const url = input.value.trim();
+            if (!url) {
+                restoreSel();
+                document.execCommand('unlink');
+                close();
+                markDirty();
+                return;
+            }
+            const safe = safeHref(url);
+            if (!safe) {
+                toast('허용되지 않는 URL 입니다', true);
+                input.focus();
+                return;
+            }
+            restoreSel();
+            document.execCommand('createLink', false, safe);
+            close();
+            markDirty();
+        };
+        const applyBtn = el('button', { class: 'be-linkpop-btn', type: 'button', text: '적용' });
+        applyBtn.onclick = apply;
+        const unlinkBtn = existing ? el('button', { class: 'be-linkpop-btn be-linkpop-un', type: 'button', text: '해제',
+            onclick: () => { restoreSel(); document.execCommand('unlink'); close(); markDirty(); } }) : null;
+        const pop = el('div', { class: 'be-linkpop' }, input, applyBtn, unlinkBtn);
+        document.body.append(pop);
+        const rect = saved.getBoundingClientRect();
+        pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 330)) + 'px';
+        pop.style.top = (rect.bottom + 8) + 'px';
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.isComposing) {
+                e.preventDefault();
+                apply();
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                close();
+            }
+            e.stopPropagation();
+        });
+        const onDoc = (ev) => { if (!pop.contains(ev.target))
+            close(); };
+        setTimeout(() => { document.addEventListener('mousedown', onDoc, true); input.focus(); }, 0);
     }
-    tools.append(toolBtn('B', '굵게 (⌘B)', () => document.execCommand('bold'), 'be-tool-b'), toolBtn('I', '기울임 (⌘I)', () => document.execCommand('italic'), 'be-tool-i'), toolBtn('S', '취소선', () => document.execCommand('strikeThrough'), 'be-tool-s'), toolBtn('U', '밑줄 (⌘U)', () => document.execCommand('underline'), 'be-tool-u'), toolBtn('<>', '인라인 코드 (⌘E)', () => toggleWrap('code'), 'be-tool-code'), toolBtn('▉', '하이라이트', () => toggleWrap('mark'), 'be-tool-mark'), toolBtn('🔗', '링크', () => promptLink()));
+    // 전환 드롭다운(툴바 좌측) — 현재 블록 유형 라벨 + 리스트(노션 'Text ∨' 동형).
+    const TURN_LABEL = { p: '텍스트', h1: '제목 1', h2: '제목 2', h3: '제목 3',
+        bullet: '글머리 목록', numbered: '번호 목록', todo: '할 일', quote: '인용', callout: '콜아웃', code: '코드', toggle: '토글' };
+    const curTypeKey = (block) => {
+        const t = block.dataset.type;
+        return t === 'h' ? 'h' + Math.min(Number(block.dataset.level) || 1, 3) : t;
+    };
+    let toolsBlock = null; // 현재 선택이 속한 블록(전환 대상)
+    const turnLabel = el('span', { class: 'be-turn-label', text: '텍스트' });
+    const turnBtn = el('button', { class: 'be-tool be-tool-turn', type: 'button', title: '블록 유형 전환' }, turnLabel, el('span', { class: 'be-turn-caret', 'aria-hidden': 'true', text: '⌄' }));
+    turnBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    turnBtn.onclick = () => {
+        const old = document.querySelector('.be-turnpop');
+        if (old) {
+            old.remove();
+            return;
+        }
+        if (!toolsBlock)
+            return;
+        const block = toolsBlock;
+        const pop = el('div', { class: 'be-turnpop' });
+        const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+        for (const it of SLASH_ITEMS) {
+            if (!['text', 'h1', 'h2', 'h3', 'bullet', 'numbered', 'todo', 'toggle', 'quote', 'callout', 'code'].includes(it.k))
+                continue;
+            const cur = curTypeKey(block) === (it.k === 'text' ? 'p' : it.k);
+            const b = el('button', { class: 'be-turnpop-item' + (cur ? ' on' : ''), type: 'button' }, el('span', { class: 'be-slash-ic', text: it.ic }), el('span', { text: it.label }), cur ? el('span', { class: 'be-turnpop-check', text: '✓' }) : null);
+            b.addEventListener('mousedown', (e) => e.preventDefault());
+            b.onclick = () => { close(); it.apply(block); };
+            pop.append(b);
+        }
+        document.body.append(pop);
+        const r = turnBtn.getBoundingClientRect();
+        pop.style.left = Math.max(8, r.left) + 'px';
+        pop.style.top = (r.bottom + 6) + 'px';
+        const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== turnBtn)
+            close(); };
+        setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
+    };
+    const markBtns = {};
+    const addTool = (key, label, title, fn, cls) => {
+        const b = toolBtn(label, title, fn, cls);
+        markBtns[key] = b;
+        return b;
+    };
+    tools.append(turnBtn, el('span', { class: 'be-tools-sep', 'aria-hidden': 'true' }), addTool('b', 'B', '굵게 — ⌘B', () => document.execCommand('bold'), 'be-tool-b'), addTool('i', 'i', '기울임 — ⌘I', () => document.execCommand('italic'), 'be-tool-i'), addTool('u', 'U', '밑줄 — ⌘U', () => document.execCommand('underline'), 'be-tool-u'), addTool('s', 'S', '취소선', () => document.execCommand('strikeThrough'), 'be-tool-s'), addTool('code', '</>', '인라인 코드 — ⌘E', () => toggleWrap('code'), 'be-tool-code'), addTool('mark', '형광', '하이라이트 — ⌘⇧H', () => toggleWrap('mark'), 'be-tool-mark'), el('span', { class: 'be-tools-sep', 'aria-hidden': 'true' }), addTool('a', '링크', '링크 걸기', () => openLinkPop(), 'be-tool-link'));
     function positionTools() {
         const s = window.getSelection();
         if (!s || !s.rangeCount || s.isCollapsed) {
@@ -1141,16 +1344,29 @@ export function createBlockEditor(opts = {}) {
             tools.hidden = true;
             return;
         }
+        // 활성 마크 상태 + 현재 블록 유형 라벨(노션 'Text ∨').
+        toolsBlock = blockOf(t);
+        if (toolsBlock)
+            turnLabel.textContent = TURN_LABEL[curTypeKey(toolsBlock)] || '텍스트';
+        const on = (sel) => !!(ancEl && ancEl.closest && ancEl.closest(sel));
+        markBtns.b.classList.toggle('on', on('b, strong'));
+        markBtns.i.classList.toggle('on', on('i, em'));
+        markBtns.u.classList.toggle('on', on('u'));
+        markBtns.s.classList.toggle('on', on('s, del, strike'));
+        markBtns.code.classList.toggle('on', on('code'));
+        markBtns.mark.classList.toggle('on', on('mark'));
+        markBtns.a.classList.toggle('on', on('a'));
         tools.hidden = false;
-        const w = tools.offsetWidth || 240;
+        const w = tools.offsetWidth || 300;
         tools.style.left = Math.max(8, Math.min(rect.left + rect.width / 2 - w / 2, window.innerWidth - w - 8)) + 'px';
-        tools.style.top = Math.max(8, rect.top - tools.offsetHeight - 8) + 'px';
+        tools.style.top = Math.max(8, rect.top - tools.offsetHeight - 9) + 'px';
     }
     const onSelChange = () => {
         if (!root.isConnected) {
             document.removeEventListener('selectionchange', onSelChange);
             tools.remove();
             closeSlashMenu();
+            closeMention();
             return;
         }
         requestAnimationFrame(positionTools);
@@ -1183,6 +1399,32 @@ export function createBlockEditor(opts = {}) {
             e.preventDefault();
             moveBlockDir(block, e.key === 'ArrowUp' ? -1 : 1);
             return;
+        }
+        // [[ 멘션 메뉴 열림 — 방향키/Enter/Esc 는 메뉴가 소비(#657t).
+        if (mention) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const n = mention.items ? mention.items.length : 0;
+                if (n) {
+                    mention.sel = (mention.sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+                    paintMention();
+                }
+                return;
+            }
+            if ((e.key === 'Enter' || e.key === 'Tab') && !composing && e.keyCode !== 229) {
+                e.preventDefault();
+                const it = mention.items && mention.items[mention.sel];
+                if (it)
+                    applyMention(it);
+                else
+                    closeMention();
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeMention();
+                return;
+            }
         }
         // 슬래시 메뉴 열림 — 방향키/Enter/Esc 는 메뉴가 소비.
         if (slash) {
@@ -1520,6 +1762,8 @@ export function createBlockEditor(opts = {}) {
             syncSlashQuery();
             return;
         }
+        if (target.classList.contains('be-text') && !target.classList.contains('be-code'))
+            syncMention(target); // [[ 멘션(조합 중 갱신 허용)
         if (composing || e.isComposing)
             return;
         const block = blockOf(target);
@@ -1650,6 +1894,16 @@ export function createBlockEditor(opts = {}) {
             const block = blockOf(h);
             openBlockMenu(block, h);
             return;
+        }
+        // 에디터 안 내부 링크(#/k/… 멘션 등) 클릭 = 이동(노션 멘션 동일). 외부 링크는 기본(캐럿).
+        const link = e.target.closest ? e.target.closest('a[href]') : null;
+        if (link && root.contains(link)) {
+            const href = link.getAttribute('href') || '';
+            if (href.startsWith('#/')) {
+                e.preventDefault();
+                location.hash = href;
+                return;
+            }
         }
         if (e.target === root) { // 본문 아래 여백 클릭 → 마지막 블록(비면 그거, 아니면 새 문단)
             const bs = blockEls();
@@ -1873,9 +2127,12 @@ export function createBlockEditor(opts = {}) {
             document.removeEventListener('selectionchange', onSelChange);
             tools.remove();
             closeSlashMenu();
-            const bm = document.querySelector('.be-blockmenu');
-            if (bm)
-                bm.remove();
+            closeMention();
+            for (const sel of ['.be-blockmenu', '.be-turnpop', '.be-linkpop']) {
+                const n = document.querySelector(sel);
+                if (n)
+                    n.remove();
+            }
         },
     };
 }
