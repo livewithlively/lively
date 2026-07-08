@@ -9,6 +9,7 @@ import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
+import { installGlobalUndo } from './undo.js';
 
 // ── 라우터 ──
 function parseHash() {
@@ -211,6 +212,7 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
   }
 });
 
+installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();
 
 export {
