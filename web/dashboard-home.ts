@@ -228,14 +228,26 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     card.addEventListener('click', pick);
     card.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
     // 드래그 순서 변경 — 대시보드-로컬(localStorage) 저장, 프로젝트 탭 리스트 순서와는 독립.
+    //  커서가 카드 좌/우 절반 어디냐로 '앞/뒤' 삽입을 정하고, 삽입 지점(카드 사이 간격)에 세로 디바이더
+    //  (.drop-before::before / .drop-after::after)를 띄워 '어디로 들어가는지'를 명확히 보여준다(맨 끝 삽입도 가능).
+    const clearDrop = () => card.classList.remove('drop-before', 'drop-after');
     card.addEventListener('dragstart', (e: any) => { dragListId = listId; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(listId)); } catch { /* */ } card.classList.add('drag-src'); });
-    card.addEventListener('dragend', () => { dragListId = null; card.classList.remove('drag-src'); document.querySelectorAll('.dash-ov-card2.drag-over').forEach((n) => n.classList.remove('drag-over')); });
-    card.addEventListener('dragover', (e: any) => { if (dragListId == null || dragListId === listId) return; e.preventDefault(); card.classList.add('drag-over'); });
-    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
-    card.addEventListener('drop', (e: any) => {
-      e.preventDefault(); card.classList.remove('drag-over');
+    card.addEventListener('dragend', () => { dragListId = null; card.classList.remove('drag-src'); document.querySelectorAll('.dash-ov-card2.drop-before, .dash-ov-card2.drop-after').forEach((n) => n.classList.remove('drop-before', 'drop-after')); });
+    card.addEventListener('dragover', (e: any) => {
       if (dragListId == null || dragListId === listId) return;
-      dashReorderList(currentOrder, dragListId, listId); draw();
+      e.preventDefault();
+      const r = card.getBoundingClientRect();
+      const after = (e.clientX - r.left) > r.width / 2; // 오른쪽 절반이면 이 카드 '뒤'로
+      card.classList.toggle('drop-after', after);
+      card.classList.toggle('drop-before', !after);
+    });
+    card.addEventListener('dragleave', clearDrop);
+    card.addEventListener('drop', (e: any) => {
+      e.preventDefault();
+      const after = card.classList.contains('drop-after');
+      clearDrop();
+      if (dragListId == null || dragListId === listId) return;
+      dashReorderList(currentOrder, dragListId, listId, after); draw();
     });
     // 이 개요 카드 숨기기(#671) — hover ✕. 기기별 저장·즉시 재렌더. 카드 선택/드래그로 새지 않게 이벤트 격리.
     const hideBtn = el('button', { class: 'dash-ov-hide', type: 'button', title: '이 카드 숨기기', 'aria-label': name + ' 개요 카드 숨기기', text: '✕' });
@@ -413,11 +425,12 @@ function dashApplyListOrder(base) {
   const tail = base.filter((id) => !head.includes(id));
   return [...head, ...tail];
 }
-// dragId 를 targetId 앞으로 이동 → 저장(현재 화면 밖 리스트 순서도 보존해 병합).
-function dashReorderList(order, dragId, targetId) {
+// dragId 를 targetId 앞(after=false)/뒤(after=true)로 이동 → 저장(현재 화면 밖 리스트 순서도 보존해 병합).
+function dashReorderList(order, dragId, targetId, after?) {
   const arr = order.filter((id) => id !== dragId);
   const ti = arr.indexOf(targetId);
-  arr.splice(ti < 0 ? arr.length : ti, 0, dragId);
+  const at = ti < 0 ? arr.length : ti + (after ? 1 : 0);
+  arr.splice(at, 0, dragId);
   const saved = dashListOrderSaved();
   dashSaveListOrder([...arr, ...saved.filter((id) => !arr.includes(id))]);
 }
