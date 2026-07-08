@@ -5193,13 +5193,10 @@ main.doc-mode .kn-home-orderreset:hover { color: var(--blue); background: var(--
    · 편집 버튼 폐지([핀]+[⋯]) · 속성(분류·유형) 인라인 피커 · [[ 페이지 멘션
    ══════════════════════════════════════════════════════════════════════ */
 
-/* ── 측정폭 — 노션 기본(≈720px)에 맞춰 820→760(한글 가독 줄길이) ── */
-.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels, .kn-comments { max-width: 760px; }
-.kn-doc-head { max-width: 760px; }
-/* (#req) 사이드바 접기(전체 화면) 시 본문을 넓혀 여백 낭비 제거 — 760 은 사이드바 있을 때의 가독폭, 접으면 그 공간을 실제로 쓴다. */
-.kn-shell.side-off .kn-doc-title, .kn-shell.side-off .kn-doc-badges, .kn-shell.side-off .kn-props-slot,
-.kn-shell.side-off .kn-doc-hr, .kn-shell.side-off .kn-doc-body, .kn-shell.side-off .kn-doc-panels,
-.kn-shell.side-off .kn-comments, .kn-shell.side-off .kn-doc-head { max-width: 1080px; }
+/* ── 측정폭 제거(#req) — 사이드바 제외한 캔버스 폭 전체를 본문이 쓴다(760 고정폭이 남기던 좌우 여백 제거).
+     .kn-doc 자체 패딩(40px)만 좌우 거터로. 사이드바 접으면 그만큼 더 넓어짐(별도 규칙 불필요). ── */
+.kn-doc-title, .kn-doc-badges, .kn-props-slot, .kn-doc-hr, .kn-doc-body, .kn-doc-panels, .kn-comments,
+.kn-doc-head { max-width: none; }
 
 /* ── 읽기 뷰(.kn-doc-md — 문서 본문 전용) 타이포 ── */
 .kn-doc-md.md-rendered { font-size: 16px; line-height: 1.68; }
