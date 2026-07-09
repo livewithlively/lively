@@ -936,12 +936,14 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED,
       { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
   }
-  const favOpts = { favCatIds, onToggleFav };
   // ⭐ '내 소유 카테고리'(#670 후속) — 프로젝트 탭 즐겨찾기(노란 별)와 '똑같은 토글·앵커 로직', WIKI 만 이름='내 소유 카테고리'·별=파란색.
-  //  예전의 자동 팀-소유(team_category_ids) 파란 별·상단 정렬·범례를 이 사용자 토글 방식으로 대체(통일성). 파란 별을 누르면 이 구역에 고정.
+  //  ★기본 채움: 내 팀이 소유한 카테고리(team_category_ids=myIds)는 '모두에게 자동으로' 파란 별 ON + 이 구역 상단 고정(일일이 안 눌러도 됨).
+  //   + 사용자가 파란 별로 추가한 것(favCatIds)도 합집합. onToggleFav 는 favCatIds(수동분)만 바꾸고, 팀-소유는 항상 유지.
+  const ownedIds = new Set<string>([...favCatIds, ...Array.from(myIds)]);
+  const favOpts = { favCatIds: ownedIds, onToggleFav };  // 표시(별 ON·is-fav)는 합집합 기준, 토글은 onToggleFav 가 실제 즐겨찾기만 변경
   {
     const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
-    const favCats = allCats.filter((c) => favCatIds.has(String(c.id)));
+    const favCats = allCats.filter((c) => ownedIds.has(String(c.id)));
     if (favCats.length) {
       nav.append(el('div', { class: 'pjv-side-favhead fav-blue', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '★' }), el('span', { text: '내 소유 카테고리' })));
       for (const c of favCats) nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
