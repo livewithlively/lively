@@ -1048,14 +1048,15 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
         nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED, { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
     }
     const favOpts = { favCatIds, onToggleFav };
-    // ⭐ 즐겨찾기(#670) — 즐겨찾기한 카테고리를 맨 위 고정 구역에(프로젝트 탭 사이드바와 동일 UI). 본래 위치에도 그대로 남고 별 표시.
+    // ⭐ '내 소유 카테고리'(#670 후속) — 프로젝트 탭 즐겨찾기(노란 별)와 '똑같은 토글·앵커 로직', WIKI 만 이름='내 소유 카테고리'·별=파란색.
+    //  예전의 자동 팀-소유(team_category_ids) 파란 별·상단 정렬·범례를 이 사용자 토글 방식으로 대체(통일성). 파란 별을 누르면 이 구역에 고정.
     {
         const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
         const favCats = allCats.filter((c) => favCatIds.has(String(c.id)));
         if (favCats.length) {
-            nav.append(el('div', { class: 'pjv-side-favhead', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '⭐' }), el('span', { text: '즐겨찾기' })));
+            nav.append(el('div', { class: 'pjv-side-favhead fav-blue', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '★' }), el('span', { text: '내 소유 카테고리' })));
             for (const c of favCats)
-                nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id)), favOpts));
+                nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
             nav.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
         }
     }
@@ -1063,29 +1064,25 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
         const cats = (bySpace[sk] || []);
         if (!cats.length)
             continue;
-        // 우리 팀 카테고리 먼저(그 안에선 기존 이름순 유지), 나머지는 뒤에.
-        const mine = cats.filter((c) => myIds.has(String(c.id)));
-        const rest = cats.filter((c) => !myIds.has(String(c.id)));
-        const ordered = [...mine, ...rest];
+        // (#670 후속) 팀-소유 우선정렬 폐기 — '내 소유'는 이제 사용자 토글(위 파란 별 구역)로. 여기선 원래 순서 그대로.
+        const ordered = cats;
         // 합계는 개수 데이터가 실제로 있을 때만(구 백엔드 폴백 — knowledge_count 미지원이면 '0' 거짓 표시 대신 생략).
         const hasCounts = ordered.some((c) => Number.isFinite(Number(c.knowledge_count)));
         const total = ordered.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
         const grp = knSpaceGroup(sk, hasCounts ? el('span', { class: 'pjv-side-navcount', title: '이 스페이스의 지식 수', text: String(total) }) : null);
         for (const c of ordered)
-            grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, myIds.has(String(c.id)), favOpts));
+            grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
         nav.append(grp);
     }
-    // ★ 범례(#req) — 별표가 왜 붙는지(우리 팀 소유) 한 줄 설명. 팀 소유가 하나라도 있을 때만.
-    if (myIds && myIds.size)
-        nav.append(el('div', { class: 'kn-star-legend' }, el('span', { class: 'kn-cat-star', 'aria-hidden': 'true', text: '★' }), el('span', { text: '내 소유 카테고리' })));
 }
 // 카테고리 노드 — 행(▸ 셰브런 + 이름 + ['우리 팀' 칩] + 지식 수, data-cat-val 로 필터 위임 유지) + 인라인 자식 목록(지연 로드).
 //  마크업은 프로젝트 탭 리스트 행(.pjv-side-navitem — 라벨·칩·우측 개수 .pjv-side-navcount)과 동일(#req).
 //  레벨1 = 카테고리 지식 중 트리 최상위(부모가 같은 카테고리 안에 없는 행)만 — 폴더 자식은 폴더 노드에서 펼친다.
 // ⭐ 즐겨찾기 별 토글(#670) — 프로젝트 탭(pjvFavStar)과 동일 마크업(.pjv-side-navfav)·톤. 두 사이드바 통일성.
 function knFavStar(isFav, onToggle) {
-    const btn = el('button', { class: 'pjv-side-navfav' + (isFav ? ' on' : ''), type: 'button',
-        title: isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-label': isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가',
+    // WIKI 는 '내 소유 카테고리' — 프로젝트 탭 즐겨찾기와 같은 컴포넌트(.pjv-side-navfav)·같은 로직, 색만 파란색(.fav-blue).
+    const btn = el('button', { class: 'pjv-side-navfav fav-blue' + (isFav ? ' on' : ''), type: 'button',
+        title: isFav ? '내 소유 카테고리에서 제거' : '내 소유 카테고리로 표시', 'aria-label': isFav ? '내 소유 카테고리에서 제거' : '내 소유 카테고리로 표시',
         'aria-pressed': String(isFav), text: isFav ? '★' : '☆' });
     btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onToggle(!isFav); });
     return btn;

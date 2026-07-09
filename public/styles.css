@@ -3308,9 +3308,13 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-navitem:hover .pjv-side-navfav, .pjv-side-navfav:focus-visible { opacity: 1; }
 .pjv-side-navfav:hover { background: var(--bg); color: #f5a623; }
 .pjv-side-navfav.on { opacity: 1; color: #f5a623; }
-.pjv-side-navitem.is-fav:hover .pjv-side-navcount, .pjv-side-navitem.is-fav .pjv-side-navcount { opacity: 0; } /* 즐겨찾기 항목은 개수 대신 금별 상시표시(겹침 방지) */
+/* WIKI '내 소유 카테고리'(#670 후속) — 프로젝트 탭 즐겨찾기(노란 별)와 완전히 같은 컴포넌트·로직, 색만 파란색. */
+.pjv-side-navfav.fav-blue:hover { color: var(--blue); }
+.pjv-side-navfav.fav-blue.on { color: var(--blue); }
+.pjv-side-favhead.fav-blue .pjv-side-favhead-ic { color: var(--blue); }
+.pjv-side-navitem.is-fav:hover .pjv-side-navcount, .pjv-side-navitem.is-fav .pjv-side-navcount { opacity: 0; } /* 즐겨찾기 항목은 개수 대신 별 상시표시(겹침 방지) */
 .pjv-side-navfolder .pjv-side-navfav { right: 56px; } /* 폴더는 ⋯(right:32)·캐럿 자리 감안 — (폴더엔 별 없지만 방어) */
-/* 즐겨찾기 구역 헤더·구분선 — 사이드바 맨 위 고정 핀 목록. */
+/* 즐겨찾기 / '내 소유 카테고리' 구역 헤더·구분선 — 사이드바 맨 위 고정 핀 목록. */
 .pjv-side-favhead { display: flex; align-items: center; gap: 6px; padding: 4px 10px 3px; margin-top: 2px; font-size: 11px; font-weight: 800; letter-spacing: .3px; color: var(--muted-2); text-transform: uppercase; }
 .pjv-side-favhead-ic { font-size: 11px; }
 .pjv-side-favsep { height: 1px; margin: 5px 8px 6px; background: var(--line-soft, var(--bg-tint-2)); }
@@ -4542,6 +4546,23 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
 .dash-sess-tags { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
 .dash-badge-proj { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
+/* #req 에이전트 실행상태 배지 — 🔴작업중(깜빡)/🟢대기중/⚪종료. 접속중과 별개 축. */
+.dash-state { display: inline-flex; align-items: center; gap: 4px; }
+.dash-state-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dash-state.is-busy { color: #d97706; border-color: color-mix(in srgb, #f59e0b 45%, var(--bg)); background: color-mix(in srgb, #f59e0b 12%, transparent); }
+.dash-state.is-busy .dash-state-dot { background: #f59e0b; animation: dashPulse 1.3s ease-in-out infinite; }
+.dash-state.is-idle { color: var(--mint-deep); border-color: color-mix(in srgb, var(--mint-deep) 45%, var(--bg)); }
+.dash-state.is-idle .dash-state-dot { background: var(--mint-deep); }
+.dash-state.is-exited { color: var(--muted); }
+.dash-state.is-exited .dash-state-dot { background: var(--muted); }
+@keyframes dashPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+@media (prefers-reduced-motion: reduce) { .dash-state.is-busy .dash-state-dot { animation: none; } }
+/* 세션 일괄 선택 체크박스 — 평소 옅게, 호버·선택 시 뚜렷. */
+.dash-sess-checkwrap { flex: none; display: flex; align-items: center; }
+.dash-sess-check { width: 16px; height: 16px; cursor: pointer; opacity: .3; transition: opacity .12s; accent-color: var(--accent, #5b6cff); }
+.dash-sess-box:hover .dash-sess-check, .dash-sess-list.has-sel .dash-sess-check, .dash-sess-check:checked { opacity: 1; }
+.dash-sess-box.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg-tint)); }
+.dash-bulkbar--sess { margin: 8px 6px 4px; bottom: 4px; border-radius: 10px; }
 .dash-sess-acts { flex: none; display: flex; align-items: center; gap: 5px; }
 .dash-sess-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 13px; background: var(--bg); cursor: pointer; font-family: inherit; }
 .dash-sess-open:hover { background: var(--bg-punch); }
