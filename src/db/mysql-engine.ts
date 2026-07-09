@@ -15,10 +15,12 @@
 //   timeout(클라이언트 백스톱 — 초과·오류 시 커넥션 파기로 서버측 중단 유도).
 //  읽기전용 4중: START TRANSACTION READ ONLY(InnoDB 쓰기 거부 ER1792 — spike 실측) + 단일 SELECT 게이트
 //   (firewall) + 계정 SELECT-only(운영 전제) + reader 엔드포인트(innodb_read_only).
+import net from "node:net";
 import mysql from "mysql2/promise";
+import awsSslProfiles from "aws-ssl-profiles";
 import { getSourceConfig, type DbSource } from "./sources.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { inspectMysqlUrl, isSecretRefAllowed, pinHost } from "./source-guard.js";
+import { inspectMysqlUrl, isSecretRefAllowed, pinHost, type MysqlSslMode } from "./source-guard.js";
 import type { FieldMeta } from "./mask.js";
 
 // ── 풀 레지스트리 — pool.ts(pg) 패턴 미러: 키 `name@fingerprint`, 생성 프라미스 즉시 등록(경쟁 차단). ──
@@ -78,20 +80,46 @@ async function resolveMysqlPoolOptions(src: DbSource): Promise<mysql.PoolOptions
     password = process.env[src.secretSource] || undefined;
   }
   const ip = await pinHost(mi.host, rc.allowed_db_hosts); // 검증 + IP 핀
+  const port = mi.port ?? 3306;
 
   const opts: mysql.PoolOptions = {
     host: ip,
-    port: mi.port,
+    port,
     user: mi.user,
     database: mi.database, // 커넥션을 소스 스키마로 고정 — 미수식 테이블이 이 스키마로 해석(firewall 전제)
     password,
     connectionLimit: 10,
     multipleStatements: false, // 기본값이지만 명시(다중문 차단 — firewall 과 이중)
   };
-  // ssl=require: 전송 암호화 전용 — 서버 인증서 검증은 후속(RDS CA 번들 + verifyIdentity). 검증을 안 하므로
-  //  SNI(servername)도 불요(mysql2 SslOptions 에 없음). IP 핀 + 서브넷 제한 경로 전제.
-  if (mi.ssl) opts.ssl = { rejectUnauthorized: false };
+  // TLS(#743): sslMode 별 옵션 조립(buildMysqlSsl). verify-identity 는 서버 hostname 을 인증서(CN/SAN)와 대조하는데,
+  //  mysql2 는 servername 을 config.host 에서만 계산하고(IP 면 undefined → 검증 무력화) ssl.servername 을 무시한다.
+  //  → host 는 원 호스트명으로 두고, 실제 TCP 는 pinHost 로 검증한 IP 로 여는 stream 팩토리를 주입한다(IP 핀=DNS
+  //  리바인딩 방어 유지 + hostname 검증 동시 — pg resolveConnectionString 의 servername 트릭과 등가). require/
+  //  verify-ca 는 hostname 을 안 보므로(servername 무관) host 를 IP 로 핀한 채 둔다.
+  opts.ssl = buildMysqlSsl(mi.sslMode);
+  if (mi.sslMode === "verify-identity") {
+    opts.host = mi.host;
+    opts.stream = () => {
+      const s = net.connect(port, ip); // 검증된 IP 로만 연결(재resolve 없음 — DNS 리바인딩 차단)
+      s.setNoDelay(true); // stream 팩토리 경로는 mysql2 가 setNoDelay 를 자동 안 함(base/connection.js) — pg TCP_NODELAY 등가
+      return s;
+    };
+  }
   return opts;
+}
+
+// ssl 모드 → mysql2 ssl 옵션 (#743, 순수 함수·단위테스트). require=전송 암호화만(CA 미검증 — #715 잠정, 하위호환) /
+//  verify-ca=RDS CA 번들로 서버 인증서 체인 검증 / verify-identity=CA + 서버 hostname 대조(MITM 방어 최강).
+//  CA 는 aws-ssl-profiles(mysql2 정규 의존성 — RDS/Aurora 전 리전 CA 번들, mysql2 팀이 자동 최신 관리)를 쓴다.
+//  별도 .pem 배포·env 불요(박스 npm ci 로 설치). rejectUnauthorized 는 verify 계열에서만 true(require 는 false).
+export function buildMysqlSsl(mode: MysqlSslMode | undefined): mysql.PoolOptions["ssl"] {
+  if (!mode) return undefined; // ssl 파라미터 없음 = 평문
+  if (mode === "require") return { rejectUnauthorized: false };
+  return {
+    ca: awsSslProfiles.ca,
+    rejectUnauthorized: true, // CA 체인 검증(미검증이면 핸드셰이크 실패)
+    verifyIdentity: mode === "verify-identity", // 서버 hostname(인증서 CN/SAN) 대조
+  };
 }
 
 // ── 읽기 실행 — 목 주입 가능한 최소 표면(tools/db.test.ts 가 pg execReadQuery 와 동일 패턴으로 검증) ──

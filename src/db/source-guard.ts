@@ -61,9 +61,12 @@ export function isSecretRefAllowed(ref: string, allowed: string[]): boolean {
 }
 
 // ── mysql 접속 URL 검사(#715) — pg 와 달리 쿼리파라미터 스머글링 표면이 없도록 엄격 화이트리스트. ──
-//  형식: mysql://user@host[:port]/database[?ssl=require] — 비번 인라인 금지(auth_ref), database(스키마) 필수
-//  (게이트웨이가 소스를 그 스키마로 고정 — firewall 크로스-스키마 거부·db_schema DATABASE() 필터의 전제).
+//  형식: mysql://user@host[:port]/database[?ssl=require|verify-ca|verify-identity] — 비번 인라인 금지(auth_ref),
+//  database(스키마) 필수(게이트웨이가 소스를 그 스키마로 고정 — firewall 크로스-스키마 거부·db_schema DATABASE() 필터의 전제).
 //  파라미터는 ssl 하나만 허용(그 외 전부 거부 — mysql2 옵션 주입 차단). 순수 함수(단위테스트).
+//  ssl 모드(#743): require=전송 암호화만(CA 미검증, 하위호환) / verify-ca=RDS CA 번들로 서버 인증서 체인 검증 /
+//   verify-identity=CA + 서버 hostname 검증(MITM 방어 최강). 실제 ssl 옵션 조립은 mysql-engine.buildMysqlSsl.
+export type MysqlSslMode = "require" | "verify-ca" | "verify-identity";
 export interface MysqlUrlInspect {
   ok: boolean;
   error?: string;
@@ -72,7 +75,8 @@ export interface MysqlUrlInspect {
   port?: number;
   user?: string;
   database?: string;
-  ssl?: boolean;
+  ssl?: boolean; // TLS 사용 여부(sslMode !== undefined) — 하위호환 표면
+  sslMode?: MysqlSslMode; // 미설정 = 평문(ssl 파라미터 없음)
 }
 
 export function inspectMysqlUrl(url: string): MysqlUrlInspect {
@@ -89,11 +93,14 @@ export function inspectMysqlUrl(url: string): MysqlUrlInspect {
   if (!database || database.includes("/")) {
     return { ok: false, error: "database(스키마) 필수 — mysql://user@host:3306/dbname 형식" };
   }
-  let ssl = false;
+  let sslMode: MysqlSslMode | undefined;
   for (const [k, v] of u.searchParams) {
     if (k !== "ssl") return { ok: false, error: `허용되지 않은 url 파라미터: ${k} (ssl 만 허용)` };
-    if (!["1", "true", "require"].includes(v.toLowerCase())) return { ok: false, error: "ssl 파라미터는 1|true|require 만" };
-    ssl = true;
+    const val = v.toLowerCase();
+    if (["1", "true", "require"].includes(val)) sslMode = "require";
+    else if (val === "verify-ca") sslMode = "verify-ca";
+    else if (val === "verify-identity") sslMode = "verify-identity";
+    else return { ok: false, error: "ssl 파라미터는 require|verify-ca|verify-identity 만 (1|true=require)" };
   }
   const port = u.port ? Number(u.port) : 3306;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return { ok: false, error: "port 가 올바르지 않습니다" };
@@ -103,7 +110,8 @@ export function inspectMysqlUrl(url: string): MysqlUrlInspect {
     port,
     user: u.username ? decodeURIComponent(u.username) : undefined,
     database,
-    ssl,
+    ssl: sslMode !== undefined,
+    sslMode,
   };
 }
 

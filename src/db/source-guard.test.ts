@@ -83,8 +83,31 @@ t("inspectMysqlUrl: ssl=require 인식", () => {
   const m = inspectMysqlUrl("mysql://u@h/db?ssl=require");
   assert.equal(m.ok, true);
   assert.equal(m.ssl, true);
+  assert.equal(m.sslMode, "require");
+});
+t("inspectMysqlUrl: ssl=1|true → require(하위호환)", () => {
+  assert.equal(inspectMysqlUrl("mysql://u@h/db?ssl=1").sslMode, "require");
+  assert.equal(inspectMysqlUrl("mysql://u@h/db?ssl=TRUE").sslMode, "require");
+});
+t("inspectMysqlUrl: ssl=verify-ca 인식(#743)", () => {
+  const m = inspectMysqlUrl("mysql://u@h/db?ssl=verify-ca");
+  assert.equal(m.ok, true);
+  assert.equal(m.ssl, true);
+  assert.equal(m.sslMode, "verify-ca");
+});
+t("inspectMysqlUrl: ssl=verify-identity 인식(#743)", () => {
+  const m = inspectMysqlUrl("mysql://u@h/db?ssl=verify-identity");
+  assert.equal(m.ok, true);
+  assert.equal(m.sslMode, "verify-identity");
+});
+t("inspectMysqlUrl: ssl 파라미터 없으면 평문(sslMode undefined)", () => {
+  const m = inspectMysqlUrl("mysql://u@h/db");
+  assert.equal(m.ok, true);
+  assert.equal(m.ssl, false);
+  assert.equal(m.sslMode, undefined);
 });
 t("inspectMysqlUrl: 미지 파라미터 거부(옵션 주입 차단)", () => assert.equal(inspectMysqlUrl("mysql://u@h/db?connectTimeout=1").ok, false));
 t("inspectMysqlUrl: ssl 이상값 거부", () => assert.equal(inspectMysqlUrl("mysql://u@h/db?ssl=disable").ok, false));
+t("inspectMysqlUrl: ssl=verify_ca(언더스코어) 거부 — 정확 매칭", () => assert.equal(inspectMysqlUrl("mysql://u@h/db?ssl=verify_ca").ok, false));
 
 console.log(`\n${pass} checks passed`);
