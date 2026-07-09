@@ -13,7 +13,7 @@ export const STS_MIN_DURATION = 900;
 export const STS_MAX_DURATION = 3600; // 브로커 상한(짧은 JIT — role 자체 MaxSessionDuration 과 별개로 게이트웨이가 캡)
 
 const ARN_RE = /^arn:aws(?:-[a-z-]+)?:iam::\d{12}:role\/[\w+=,.@/-]{1,512}$/;
-const REGION_RE = /^[a-z]{2}-[a-z]+-\d$/;
+const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/; // us-gov-west-1 등 다중 하이픈 리전도 허용
 
 // 멤버ID → 유효 RoleSessionName. AWS 규칙 [\w+=,.@-]{2,64}. 접두 'lively-' + 정제(비허용문자→-) + 64자 절단.
 export function roleSessionName(memberId: string): string {

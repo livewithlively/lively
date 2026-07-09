@@ -20,7 +20,7 @@ const awsCredentials: Capability = {
   scope: null,
   input: {
     scope_key: z.string().optional().describe("여러 role 등록 시 대상 구분(org_credential scope_key). 단일이면 생략"),
-    duration_seconds: z.number().int().optional().describe("자격 유효기간(900~3600, 기본 3600)"),
+    duration_seconds: z.number().int().optional().describe("자격 유효기간 초(900~3600, 기본 900=15분)"),
   },
   expose: {
     mcp: true,
@@ -34,8 +34,11 @@ const awsCredentials: Capability = {
     const base = gatewayBaseCreds();
     if (!base) throw new HttpError(503, "AWS 브로커 미설정 — 게이트웨이 프로세스 env(AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)가 필요합니다(운영자)");
 
-    // role 은 조직 자격(통합) — 개인 role 오버라이드도 허용(member 우선). meta-only kind 라 secret 없이 meta 로 role/region 전달.
-    const resolved = await resolveMemberSecret(user.userId, "aws_role_arn", { scopeKey, allowFallback: true });
+    // ⚠ role 은 **조직(gateway) 자격만** 해소 — 멤버 개인 오버라이드 금지(리뷰 blocking).
+    //  게이트웨이가 자기 공용 신원(base)으로 AssumeRole 하므로, 멤버가 임의 role ARN 을 지정하게 두면
+    //  게이트웨이 신원이 임의 role 을 가정 시도하는 confused-deputy/권한상승이 된다. memberId=null → member 조회 건너뛰고 gateway 만.
+    //  (me_credential_set 도 kind='aws_role_arn' 등록을 거부해 이중 방어.) role 등록은 org_credential(admin) 전용.
+    const resolved = await resolveMemberSecret(null, "aws_role_arn", { scopeKey, allowFallback: true });
     if (!resolved) {
       throw new HttpError(404, `AWS role 미등록 — 관리자가 org_credential(kind=aws_role_arn${scopeKey ? `, scope_key=${scopeKey}` : ""})에 role_arn·region 을 meta 로 등록해야 합니다`);
     }
@@ -45,7 +48,7 @@ const awsCredentials: Capability = {
     const externalId = typeof meta.external_id === "string" ? meta.external_id : null;
     if (!roleArn || !region) throw new HttpError(400, "aws_role_arn 자격의 meta 에 role_arn·region 이 필요합니다");
 
-    const duration = clampDuration(i.duration_seconds ?? 3600);
+    const duration = clampDuration(i.duration_seconds ?? 900); // 기본 최소(15분) — 짧은 JIT 의도에 맞춤(리뷰)
     let creds;
     try {
       creds = await assumeRole({ roleArn, region, memberId: user.userId, externalId, durationSeconds: duration, baseCreds: base, now: new Date() });

@@ -36,7 +36,8 @@ export interface SignInput {
 export function signRequestV4(inp: SignInput): Record<string, string> {
   const { amzDate: xAmzDate, dateStamp } = amzDate(inp.now);
   const canonicalHeadersMap: Record<string, string> = {};
-  for (const [k, v] of Object.entries(inp.headers ?? {})) canonicalHeadersMap[k.toLowerCase()] = String(v).trim();
+  // 값 정규화: trim + 내부 연속 공백 1칸으로(AWS canonicalization). 현재 서명 헤더엔 내부공백 없으나 범용 export 안전.
+  for (const [k, v] of Object.entries(inp.headers ?? {})) canonicalHeadersMap[k.toLowerCase()] = String(v).trim().replace(/\s+/g, " ");
   canonicalHeadersMap["host"] = inp.host;
   canonicalHeadersMap["x-amz-date"] = xAmzDate;
   if (inp.creds.sessionToken) canonicalHeadersMap["x-amz-security-token"] = inp.creds.sessionToken;

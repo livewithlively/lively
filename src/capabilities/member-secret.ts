@@ -58,6 +58,11 @@ const meCredentialSet: Capability = {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const i = (input ?? {}) as Record<string, unknown>;
     if (!s(i.kind)) throw new HttpError(400, "kind 는 필수입니다");
+    // ⚠ aws_role_arn 은 멤버 개인 등록 금지(관리자 org_credential 전용) — 게이트웨이 공용 신원이 가정할 role 을
+    //  멤버가 지정하면 confused-deputy/권한상승. AWS 단기자격은 me_aws_credentials 로 발급받는다(role 은 org 만).
+    if (s(i.kind).toLowerCase() === "aws_role_arn") {
+      throw new HttpError(403, "aws_role_arn 은 개인 자격으로 등록할 수 없습니다 — 관리자가 통합 자격(org)으로만 등록합니다. AWS 단기자격은 me_aws_credentials 로 발급받으세요.");
+    }
     if (i.secret !== undefined && s(i.secret) && !secretsEnabled()) {
       throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
     }

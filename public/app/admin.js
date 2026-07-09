@@ -44,6 +44,8 @@ const ADMIN_SECTIONS = [
     { key: 'org-audit', label: '변경 감사 로그', meaning: null, group: 'ai' },
     { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
     { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
+    // 자격(커넥터 로그인) — 능동 커넥터(GitLab·Slack·AWS 등)가 쓰는 per-user 토큰 vault(#746 P1). '내 자격'은 전원, '통합 자격'·AWS 는 admin.
+    { key: 'credentials', label: '자격(커넥터 로그인)', meaning: null, group: 'ai' },
     // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
     { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
     // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
@@ -270,6 +272,8 @@ function renderAdminDetail(detail, sel, data) {
         return connectorEditor(detail, data);
     if (sel === 'db-sources')
         return dbSourceEditor(detail, data);
+    if (sel === 'credentials')
+        return credentialsEditor(detail);
     if (sel === 'embeddings')
         return embeddingsEditor(detail, data);
     if (sel === 'repos')
@@ -3721,20 +3725,41 @@ function toolForm(root, t, data, detail, isNew) {
     const methodSel = el('select', {}, ...['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => el('option', { value: m, text: m })));
     methodSel.value = t.method || 'GET';
     const urlIn = el('input', { type: 'text', value: t.url || '', placeholder: 'https://api.acme.com/v1/search' });
-    let authEl;
-    if (policy.allowed_auth_envs.length) {
-        authEl = el('select', {}, el('option', { value: '', text: '(인증 없음)' }), ...policy.allowed_auth_envs.map((e) => el('option', { value: e, text: e })));
-        authEl.value = t.auth_env || '';
-    }
-    else {
-        authEl = el('input', { type: 'text', value: '', placeholder: '아래 「외부 호출 안전범위」에 allowed_auth_envs 를 먼저 등록하세요', disabled: '' });
-    }
+    // 등급(#746 P2) — 이 도구가 하는 일의 성격. L2(집행)는 자동승인에서 강제 제외돼 매번 하네스 확인.
+    const levelSel = el('select', {}, el('option', { value: 'L0', text: 'L0 · 조회 (읽기)' }), el('option', { value: 'L1', text: 'L1 · 제안 (MR·초안 만들기)' }), el('option', { value: 'L2', text: 'L2 · 집행 (외부발신·상태변경 — 매번 확인)' }));
+    levelSel.value = t.level || 'L0';
+    // ── 인증 방식(#746 P1) — 조직 공용(환경변수) vs 구성원 개인 자격(vault). 드롭다운으로 전환. ──
+    const authEnvSel = policy.allowed_auth_envs.length
+        ? el('select', {}, el('option', { value: '', text: '(선택)' }), ...policy.allowed_auth_envs.map((e) => el('option', { value: e, text: e })))
+        : el('input', { type: 'text', placeholder: '아래 「외부 호출 안전범위」에 allowed_auth_envs 를 먼저 등록', disabled: '' });
+    if (authEnvSel.tagName === 'SELECT')
+        authEnvSel.value = t.auth_env || '';
+    const authKindSel = el('select', {}, ...CRED_KINDS.map((k) => el('option', { value: k.kind, text: k.label })));
+    if (t.auth_kind)
+        authKindSel.value = t.auth_kind;
+    const authScopeIn = el('input', { type: 'text', value: t.auth_scope_key || '', placeholder: '대상 구분(선택 · 예 git 호스트)' });
+    const initialMode = t.auth_kind ? 'kind' : (t.auth_env ? 'env' : 'none');
+    const authModeSel = el('select', {}, el('option', { value: 'none', text: '인증 없음 (공개 API)' }), el('option', { value: 'env', text: '조직 공용 (환경변수) — 전원 같은 자격' }), el('option', { value: 'kind', text: '구성원 개인 자격 (요청자별)' }));
+    authModeSel.value = initialMode;
+    const envField = field('공용 자격 (auth_env)', authEnvSel);
+    const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel, el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 「자격(커넥터 로그인)」에서 자기 토큰을 넣어요.' })));
+    const kindScopeField = field('개인 자격 대상(선택)', authScopeIn);
+    const syncAuthMode = () => {
+        const m = authModeSel.value;
+        envField.style.display = m === 'env' ? '' : 'none';
+        kindField.style.display = m === 'kind' ? '' : 'none';
+        kindScopeField.style.display = m === 'kind' ? '' : 'none';
+    };
+    authModeSel.addEventListener('change', syncAuthMode);
+    syncAuthMode();
     const schemaTa = el('textarea', { rows: '5', class: 'admin-ta', placeholder: '{ "type":"object", "properties": { "q": {"type":"string"} }, "required":["q"] }' });
     schemaTa.value = typeof t.input_schema === 'string' ? t.input_schema : (t.input_schema ? JSON.stringify(t.input_schema, null, 2) : '');
     const enChk = el('input', { type: 'checkbox' });
     enChk.checked = t.enabled !== false;
     const aaChk = el('input', { type: 'checkbox' });
     aaChk.checked = !!t.auto_approve;
+    const piiChk = el('input', { type: 'checkbox' });
+    piiChk.checked = !!t.pii_scrub;
     const hostHint = el('p', { class: 'admin-hint', text: policy.url_allowlist.length ? '허용 호스트: ' + policy.url_allowlist.join(', ') : '⚠ 허용 호스트가 없습니다 — 아래 「외부 호출 안전범위」의 url_allowlist 에 먼저 추가해야 호출됩니다.' });
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
     const status = el('span', { class: 'admin-status' });
@@ -3755,7 +3780,17 @@ function toolForm(root, t, data, detail, isNew) {
         }
         saveBtn.disabled = true;
         try {
-            const payload = { name: nameIn.value.trim(), kind: 'http_proxy', enabled: enChk.checked, auto_approve: aaChk.checked, title: titleIn.value.trim() || null, description: descTa.value.trim(), scope: scopeSel.value, method: methodSel.value, url: urlIn.value.trim(), auth_env: (authEl.value || '').trim() || null, input_schema: schema };
+            const mode = authModeSel.value;
+            const payload = {
+                name: nameIn.value.trim(), kind: 'http_proxy', enabled: enChk.checked, auto_approve: aaChk.checked,
+                title: titleIn.value.trim() || null, description: descTa.value.trim(), scope: scopeSel.value,
+                method: methodSel.value, url: urlIn.value.trim(), input_schema: schema,
+                level: levelSel.value, pii_scrub: piiChk.checked,
+                // 인증 방식 — 배타(서버도 강제). env 모드면 auth_env, kind 모드면 auth_kind(+scope), none 이면 둘 다 비움.
+                auth_env: mode === 'env' ? (authEnvSel.value || '').trim() || null : null,
+                auth_kind: mode === 'kind' ? authKindSel.value : null,
+                auth_scope_key: mode === 'kind' ? (authScopeIn.value.trim() || null) : null,
+            };
             await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify(payload) });
             await loadAdmin(true);
             state.admin.toolSel = payload.name;
@@ -3783,7 +3818,7 @@ function toolForm(root, t, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa), field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel), field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint, field('인증 환경변수 (auth_env)', authEl), field('입력 스키마 (JSON Schema, 선택)', schemaTa), el('label', { class: 'admin-check' }, enChk, ' 활성'), el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'), actions);
+    root.replaceChildren(field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa), field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel), field('등급 (하는 일의 성격)', levelSel), field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint, field('인증 방식', authModeSel), envField, kindField, kindScopeField, el('label', { class: 'admin-check' }, piiChk, ' 응답에서 개인정보(PII) 자동 가리기'), field('입력 스키마 (JSON Schema, 선택)', schemaTa), el('label', { class: 'admin-check' }, enChk, ' 활성'), el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'), actions);
 }
 // ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
 function deployPanel(detail, data) {
@@ -4201,6 +4236,170 @@ function openGitCredentialManager(scope) {
         body.replaceChildren(...rows);
     };
     reload();
+}
+// ── 자격(커넥터 로그인) vault UI(#746 P1) — 능동 커넥터가 쓰는 per-user 토큰. 텍스트 최소화·드롭다운 위주. ──
+//  kind 는 드롭다운(친숙한 라벨), kind 별 필요한 필드만 노출, 헤더 형식은 프리셋(고급 토글 없이 숨김). '내 자격'은 전원,
+//  '통합 자격'·AWS 역할은 admin. secret 은 password 입력이고 목록엔 등록됨(✓)만 보인다(값 비노출).
+const CRED_KINDS = [
+    { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요.' },
+    { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.' },
+    { kind: 'notion_token', label: 'Notion 토큰', secretLabel: 'Notion 토큰', secretPh: 'secret_… / ntn_…' },
+    { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' } },
+    { kind: 'google_oauth_refresh', label: 'Google OAuth (refresh token)', secretLabel: 'refresh token', help: 'Google Cloud OAuth 동의화면이 In production 이어야 만료되지 않습니다. gmail.readonly·drive.readonly 스코프.' },
+    { kind: 'prometheus_bearer', label: 'Prometheus Bearer 토큰', secretLabel: 'Bearer 토큰' },
+    { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' } },
+];
+const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
+async function credentialsEditor(detail) {
+    const isAdmin = hasScope('admin');
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
+    let mine = { credentials: [], encryption_ready: true };
+    let org = { credentials: [] };
+    try {
+        mine = await api('/api/ui/me/credentials');
+        if (isAdmin)
+            org = await api('/api/ui/org/credentials');
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '자격을 불러오지 못했습니다')));
+        return;
+    }
+    const encReady = mine.encryption_ready !== false;
+    const cards = [
+        el('div', { class: 'card' }, sectionTitle('자격 (커넥터 로그인)', '커넥터(GitLab·Slack·AWS 등)에 로그인할 내 토큰을 여기 한 번 넣어두면, AI가 나 대신 그 서비스를 읽고 쓸 때 이 자격으로 로그인해요. 토큰은 암호화되어 저장되고 다른 사람에게 보이지 않아요.'), encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
+    ];
+    cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', mine.credentials || [], encReady, () => credentialsEditor(detail)));
+    if (isAdmin) {
+        cards.push(credVaultCard('org', '통합 자격 (관리자)', '개인 자격이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 자격 필수).', (org.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
+        cards.push(awsRoleCard((org.credentials || []).filter((c) => c.kind === 'aws_role_arn'), () => credentialsEditor(detail)));
+    }
+    detail.replaceChildren(...cards);
+}
+// 자격 목록 + 추가 폼 카드(me 또는 org). aws_role_arn 은 별도(awsRoleCard).
+function credVaultCard(owner, title, intro, creds, encReady, reload) {
+    const base = owner === 'me' ? '/api/ui/me/credential' : '/api/ui/org/credential';
+    const kindLabel = (k) => (CRED_KINDS.find((x) => x.kind === k)?.label || k);
+    const rows = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: intro })];
+    // 등록된 자격 — 칩 + scope_key + 삭제(값 비노출).
+    if (creds.length) {
+        for (const c of creds) {
+            rows.push(el('div', { class: 'card', style: 'padding:9px 12px; margin:6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;' }, el('span', { class: 'pill pill-ok', text: kindLabel(c.kind) }), c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null, el('span', { class: 'mini-meta', text: c.has_secret ? '토큰 등록됨 ✓' : '토큰 없음' }), el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '삭제', onclick: async () => {
+                    if (!confirm(`${kindLabel(c.kind)}${c.scope_key ? ' (' + c.scope_key + ')' : ''} 자격을 삭제할까요?`))
+                        return;
+                    try {
+                        await api(base + '/delete', { method: 'POST', body: JSON.stringify({ kind: c.kind, scope_key: c.scope_key || '' }) });
+                        toast('삭제됨');
+                        reload();
+                    }
+                    catch (e) {
+                        toast((e && e.message) || '삭제 실패', true);
+                    }
+                } })));
+        }
+    }
+    else
+        rows.push(el('p', { class: 'admin-hint', text: '등록된 자격이 없습니다.' }));
+    // ── 추가 폼 — kind 드롭다운 → 필요한 필드만 노출 ──
+    const kindSel = el('select', {}, ...CRED_KINDS.map((k) => el('option', { value: k.kind, text: k.label })));
+    const scopeIn = el('input', { type: 'text', placeholder: '' });
+    const scopeField = field('대상 구분(선택)', scopeIn);
+    const secretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: '' });
+    const secretField = field('토큰', secretIn);
+    const helpP = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
+    const submit = el('button', { class: 'btn btn-primary', text: '저장' });
+    const status = el('span', { class: 'admin-status' });
+    const syncKind = () => {
+        const spec = CRED_KINDS.find((x) => x.kind === kindSel.value);
+        scopeField.style.display = spec.scope ? '' : 'none';
+        scopeField.querySelector('.field-label').textContent = (spec.scope || '대상 구분') + '(선택)';
+        scopeIn.placeholder = spec.scopePh || '';
+        secretField.querySelector('.field-label').textContent = spec.secretLabel;
+        secretIn.placeholder = spec.secretPh || '토큰 값 붙여넣기';
+        helpP.textContent = spec.help || '';
+        helpP.style.display = spec.help ? '' : 'none';
+    };
+    kindSel.addEventListener('change', syncKind);
+    syncKind();
+    submit.addEventListener('click', async () => {
+        if (!encReady) {
+            toast('암호화 키 미설정 — 저장 불가', true);
+            return;
+        }
+        if (!secretIn.value.trim()) {
+            toast('토큰을 입력하세요', true);
+            return;
+        }
+        const spec = CRED_KINDS.find((x) => x.kind === kindSel.value);
+        const payload = { kind: spec.kind, secret: secretIn.value };
+        if (spec.scope && scopeIn.value.trim())
+            payload.scope_key = scopeIn.value.trim();
+        if (spec.meta)
+            payload.meta = spec.meta; // 헤더 형식 프리셋(사용자가 신경 안 써도 됨)
+        submit.disabled = true;
+        status.textContent = '저장 중…';
+        try {
+            await api(base, { method: 'POST', body: JSON.stringify(payload) });
+            toast('저장됨');
+            reload();
+        }
+        catch (e) {
+            status.textContent = '';
+            submit.disabled = false;
+            toast((e && e.message) || '저장 실패', true);
+        }
+    });
+    rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ 자격 추가' }), field('서비스', kindSel), scopeField, secretField, helpP, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
+    return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: title }), ...rows);
+}
+// AWS 역할 카드(통합 자격의 특수형 — secret 없이 role ARN·리전만). 게이트웨이가 이 역할을 가정해 멤버 단기자격을 발급.
+function awsRoleCard(creds, reload) {
+    const rows = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: 'AWS 는 토큰 대신 "역할(role)"을 등록해요. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분짜리 단기 자격을 발급합니다 — 장기 키가 새어나갈 일이 없고, AWS CloudTrail 에 누가 무엇을 했는지 남아요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 해요.)' })];
+    for (const c of creds) {
+        const m = c.meta || {};
+        rows.push(el('div', { class: 'card', style: 'padding:9px 12px; margin:6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;' }, el('span', { class: 'pill pill-ok', text: 'AWS 역할' }), c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null, el('span', { class: 'mini-meta', text: (m.role_arn || '(role_arn 미설정)') + (m.region ? ' · ' + m.region : '') }), el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '삭제', onclick: async () => {
+                if (!confirm('AWS 역할 자격을 삭제할까요?'))
+                    return;
+                try {
+                    await api('/api/ui/org/credential/delete', { method: 'POST', body: JSON.stringify({ kind: 'aws_role_arn', scope_key: c.scope_key || '' }) });
+                    toast('삭제됨');
+                    reload();
+                }
+                catch (e) {
+                    toast((e && e.message) || '삭제 실패', true);
+                }
+            } })));
+    }
+    if (!creds.length)
+        rows.push(el('p', { class: 'admin-hint', text: '등록된 AWS 역할이 없습니다.' }));
+    const arnIn = el('input', { type: 'text', placeholder: 'arn:aws:iam::123456789012:role/lively-readonly' });
+    const regionSel = el('select', {}, ...AWS_REGIONS.map((r) => el('option', { value: r, text: r })));
+    const extIn = el('input', { type: 'text', placeholder: '역할 신뢰관계가 ExternalId 를 요구할 때만' });
+    const scopeIn = el('input', { type: 'text', placeholder: '여러 역할이면 구분 이름(선택)' });
+    const submit = el('button', { class: 'btn btn-primary', text: '저장' });
+    const status = el('span', { class: 'admin-status' });
+    submit.addEventListener('click', async () => {
+        if (!arnIn.value.trim()) {
+            toast('역할 ARN 을 입력하세요', true);
+            return;
+        }
+        const meta = { role_arn: arnIn.value.trim(), region: regionSel.value };
+        if (extIn.value.trim())
+            meta.external_id = extIn.value.trim();
+        submit.disabled = true;
+        status.textContent = '저장 중…';
+        try {
+            await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'aws_role_arn', scope_key: scopeIn.value.trim() || '', meta }) });
+            toast('저장됨');
+            reload();
+        }
+        catch (e) {
+            status.textContent = '';
+            submit.disabled = false;
+            toast((e && e.message) || '저장 실패', true);
+        }
+    });
+    rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ AWS 역할 추가' }), field('역할 ARN (role ARN)', arnIn), field('리전 (region)', regionSel), field('ExternalId(선택)', extIn), field('구분 이름(선택)', scopeIn), el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
+    return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: 'AWS 역할 (단기자격)' }), ...rows);
 }
 async function openMyProfile() {
     let data;

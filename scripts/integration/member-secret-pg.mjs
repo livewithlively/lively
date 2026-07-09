@@ -72,6 +72,20 @@ try {
   if (aws?.secret !== null || aws?.meta?.role_arn !== "arn:aws:iam::425515538094:role/lively-ro") throw new Error("meta-only 실패 " + JSON.stringify(aws));
   ok(step);
 
+  step = "⑨b AWS role 경계(리뷰 blocking) — memberId=null 해소는 gateway role 만(멤버 self-등록 오버라이드 무효)";
+  // 멤버가 self-등록한 role(공격 시나리오) + gateway(관리자) role 을 서로 다르게 심는다.
+  await v.setMemberSecret(v.memberOwner("attacker"), "aws_role_arn", "", { meta: { role_arn: "arn:aws:iam::999999999999:role/evil", region: "ap-northeast-2" } }, "attacker");
+  await v.setMemberSecret(v.GATEWAY_OWNER, "aws_role_arn", "", { meta: { role_arn: "arn:aws:iam::425515538094:role/org-ro", region: "ap-northeast-2" } }, "admin");
+  // me_aws_credentials 핸들러가 쓰는 방식: memberId=null → gateway role 만(공격자 role 무시)
+  const orgOnly = await v.resolveMemberSecret(null, "aws_role_arn", { allowFallback: true });
+  if (orgOnly?.meta?.role_arn !== "arn:aws:iam::425515538094:role/org-ro") throw new Error("null 해소가 gateway role 이 아님 — " + JSON.stringify(orgOnly?.meta));
+  // 대조: memberId=attacker 로 부르면 공격자 role 이 이김(=옛 취약 코드가 그랬음, 그래서 null 을 써야 함)
+  const asMember = await v.resolveMemberSecret("attacker", "aws_role_arn", { allowFallback: true });
+  if (asMember?.meta?.role_arn !== "arn:aws:iam::999999999999:role/evil") throw new Error("대조군 실패");
+  await v.deleteMemberSecret(v.memberOwner("attacker"), "aws_role_arn", "");
+  await v.deleteMemberSecret(v.GATEWAY_OWNER, "aws_role_arn", "");
+  ok(step);
+
   step = "⑩ 삭제 → 해소 null";
   const del = await v.deleteMemberSecret(v.memberOwner("u1"), "gitlab_pat", "git.honestfund.kr");
   if (!del) throw new Error("삭제 실패");
