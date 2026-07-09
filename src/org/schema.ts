@@ -972,6 +972,30 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── member_secret — per-user 백엔드 자격 vault(P1, #746). 능동 커넥터 툴(gitlab·slack·google·aws…)이 쓰는
+  //  자격을 사용자별 격리 보관. git_credential(owner=gateway|member:<id>) 패턴을 임의 kind 로 일반화한 것.
+  //  ⚠ member_credential(로컬 로그인 비번, scrypt 단방향)과 다르다 — 여기는 API 호출용이라 복원 가능해야 함(secret-box AES-GCM).
+  //  owner: 'gateway'(라이블리 통합 자격, 관리자 설정 — 비-PII read 폴백) | 'member:<id>'(개인 자격 — write·raw-PII 필수).
+  //  kind: gitlab_pat|slack_user_token|google_oauth_refresh|clickup_token|notion_token|aws_role_arn|prometheus_bearer|… (확장 TEXT).
+  //  scope_key: 같은 kind 의 다중 대상 구분(예 gitlab host, aws account) — 없으면 ''(단일). PK=(owner,kind,scope_key).
+  //  secret_enc: 봉투 암호화된 시크릿(secret-box). meta: 비밀 아닌 부속정보(oauth client_id·aws region 등, jsonb 평문).
+  //  해소 체인 resolveMemberSecret: member 우선 → (허용 시) gateway 폴백 → null. write/외부발신은 폴백 금지(per-user 필수).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS member_secret(
+      owner TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      scope_key TEXT NOT NULL DEFAULT '',
+      secret_enc TEXT,
+      meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+      label TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT,
+      last_used_at TIMESTAMPTZ,
+      PRIMARY KEY (owner, kind, scope_key));
+    CREATE INDEX IF NOT EXISTS member_secret_kind_idx ON member_secret(kind, scope_key);
+  `);
+
   // ── web_session — 사람 웹 로그인 세션(P4). HttpOnly 쿠키가 나르는 평문 세션ID 는 저장 안 함(sha256 만). ──
   //  revoke=logout/회수, expires_at 만료. scope 는 저장하지 않는다 — 인증 시 org_member.scopes 를 LIVE 로 읽어
   //  desync 를 원천 차단(토큰과 달리 세션은 사람이 본인으로 행위 → 멤버 권한 그대로, 최소권한 캡 없음).
