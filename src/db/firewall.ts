@@ -130,6 +130,7 @@ const DENIED_TABLES = new Set([
   "auth_token", "org_content_audit", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref", "org_mcp_server", "org_db_source",
   "member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log",
   "db_access_log", "org_db_subject_key", // P5(#746) 감사 기록·감사 설정 — 조회는 전용 표면(db_audit_list)으로만
+  "member_secret", // P1(#746) per-user 자격 vault(secret_enc) — git_credential 과 동급 시크릿 테이블(db_query 자유 SELECT·self 소스 정책우회 차단)
 ]);
 
 // 게이트웨이 내부 테이블 절대 deny(B18) 여부 — 웹 정책과 무관하게 항상 차단(웹 UI·db_schema 가 정직하게 '시스템 차단'으로 표시하는 데 쓴다).

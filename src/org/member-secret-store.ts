@@ -119,7 +119,9 @@ export async function resolveMemberSecret(
 ): Promise<MemberSecretResolved | null> {
   const kind = normalizeKind(kindRaw);
   const scopeKey = normalizeScopeKey(opts.scopeKey ?? "");
-  const allowFallback = opts.allowFallback !== false; // 기본 true(read 관례) — write 경로가 명시적으로 false 를 넘긴다
+  // fail-safe 기본값 = false(통합 폴백 금지). 비-PII read 만 호출측이 명시적으로 allowFallback:true 를 넘긴다 —
+  //  옵션을 잊은 신규 커넥터가 조용히 사칭 위험(통합 자격 오용)에 빠지지 않게, 안전한 쪽(per-user 전용)을 디폴트로.
+  const allowFallback = opts.allowFallback === true;
   if (memberId) {
     const mine = await getMemberSecret(memberOwner(memberId), kind, scopeKey);
     if (mine) return mine;

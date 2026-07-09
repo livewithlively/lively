@@ -50,6 +50,11 @@ try {
   if (r3b?.secret !== "glpat-SECRET-u1") throw new Error("write member 해소 실패 " + r3b?.secret);
   ok(step);
 
+  step = "⑥b fail-safe 기본값 — allowFallback 생략 시 통합 폴백 금지(옵션 안 준 신규 커넥터 안전)";
+  const r3c = await v.resolveMemberSecret("u2", "gitlab_pat", { scopeKey: "git.honestfund.kr" }); // allowFallback 생략
+  if (r3c !== null) throw new Error("기본값이 폴백 허용됨(위험) — " + JSON.stringify(r3c));
+  ok(step);
+
   step = "⑦ 멤버 격리 — u1 자격이 u3 에게 안 샘(member 없고 fallback 금지)";
   const r4 = await v.resolveMemberSecret("u3", "gitlab_pat", { scopeKey: "git.honestfund.kr", allowFallback: false });
   if (r4 !== null) throw new Error("격리 위반 — u3 가 자격 획득 " + JSON.stringify(r4));

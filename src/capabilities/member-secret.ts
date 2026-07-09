@@ -33,7 +33,7 @@ const SET_INPUT = {
   kind: z.string().describe(KIND_DESC),
   scope_key: z.string().optional().describe("같은 kind 다중 대상 구분(예 gitlab host). 단일이면 생략"),
   secret: z.string().optional().describe("시크릿 값(토큰·refresh token 등). 생략 시 기존 유지 — meta/label 만 갱신"),
-  meta: z.record(z.any()).optional().describe("비밀 아닌 부속정보(oauth client_id·aws account/region 등)"),
+  meta: z.record(z.any()).optional().describe("비밀 아닌 부속정보(oauth client_id·aws account/region 등). ⚠ 평문 저장·admin 열람가능 — 토큰/시크릿은 절대 meta 에 넣지 말고 secret 에 넣을 것(secret 만 암호화·비노출)"),
   label: z.string().optional(),
 };
 const DEL_INPUT = { kind: z.string().describe(KIND_DESC), scope_key: z.string().optional() };
