@@ -8,7 +8,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { listEnabledProxyTools, getRuntimeConfig, getOrgProfile, type OrgTool } from "../org/store.js";
 import { safeFetch, SsrfError } from "../org/ssrf.js";
 import { redactDeep } from "../org/redact.js";
-import { resolveUser, requireScope } from "../context.js";
+import { scrubPii } from "../org/pii-scrub.js";
+import { resolveMemberSecret } from "../org/member-secret-store.js";
+import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { isScope } from "./scopes.js";
 import { logger } from "../log.js";
@@ -61,8 +63,15 @@ export function jsonSchemaToZodShape(schema: unknown): ZodRawShape {
 
 export interface ProxyResult { status: number; body: string; truncated: boolean; ok: boolean }
 
-// http_proxy 툴 1회 호출 — auth_env 화이트리스트 확인 + url 고정 + args 는 query/body 로만.
-export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unknown>): Promise<ProxyResult> {
+// P1·P2(#746) — 커넥터 툴의 vault 자격 해소 폴백 정책은 등급이 정한다(순수, 테스트용 export):
+//  L2(집행/외부발신)=false(per-user 필수, 통합 폴백 금지 — 사칭 방지) / 그 외=true(비-PII read 는 통합 폴백 허용).
+export function proxyAuthFallback(level: string | null | undefined): boolean {
+  return level !== "L2";
+}
+
+// http_proxy 툴 1회 호출 — 인증(env 또는 per-user vault) + url 고정 + args 는 query/body 로만 + 응답 redact(+옵션 PII 스크럽).
+//  callerId(P1 #746): tool.auth_kind 설정 시 이 멤버의 vault 자격으로 인증(요청자 귀속). 미설정이면 종전 auth_env(조직 공용).
+export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unknown>, callerId?: string | null): Promise<ProxyResult> {
   if (!tool.url) throw new Error("툴 url 미설정");
   const cfg = await getRuntimeConfig();
   const selfHosts: string[] = [];
@@ -72,7 +81,24 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
   } catch { /* 프로필 없음 — selfHosts 비움 */ }
 
   const headers: Record<string, string> = { "User-Agent": "lively-context-tool" };
-  if (tool.auth_env) {
+  if (tool.auth_kind) {
+    // P1(#746) per-user vault 인증 — 요청자 개인 자격 우선. 폴백 정책은 등급이 정한다:
+    //  L2(집행/외부발신)=per-user 필수(통합 폴백 금지 — 사칭 방지) / 그 외=통합(gateway) 폴백 허용(비-PII read, 온보딩 0).
+    const allowFallback = proxyAuthFallback(tool.level);
+    const resolved = await resolveMemberSecret(callerId, tool.auth_kind, { scopeKey: tool.auth_scope_key ?? "", allowFallback });
+    if (!resolved || !resolved.secret) {
+      throw new Error(
+        `자격 없음 — 이 툴은 '${tool.auth_kind}' 자격이 필요합니다. ` +
+        (allowFallback ? "개인 자격을 '내 자격'(me_credential_set)에 등록하거나 관리자에게 통합 자격 설정을 요청하세요."
+                       : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
+      );
+    }
+    // 헤더 형식: meta.auth_header(기본 'Authorization: Bearer')·meta.token_prefix 로 커스터마이즈. 기본 Bearer.
+    const meta = resolved.meta ?? {};
+    const headerName = typeof meta.auth_header === "string" && meta.auth_header ? meta.auth_header : "Authorization";
+    const prefix = typeof meta.token_prefix === "string" ? meta.token_prefix : "Bearer ";
+    headers[headerName] = `${prefix}${resolved.secret}`;
+  } else if (tool.auth_env) {
     // auth_env 는 운영자 화이트리스트(allowed_auth_envs)에 등록된 이름만 — 인프라 시크릿명(DATABASE_URL 등) 차단.
     if (!cfg.allowed_auth_envs.includes(tool.auth_env)) {
       throw new Error(`auth_env '${tool.auth_env}' 는 허용 목록(allowed_auth_envs)에 없습니다`);
@@ -100,7 +126,8 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     allowHttp: false,
     maxRedirects: 2,
   });
-  const cleanBody = redactDeep(res.body).slice(0, 256 * 1024); // 응답 본문도 redact(에코된 토큰 등 차단)
+  let cleanBody = redactDeep(res.body).slice(0, 256 * 1024); // 응답 본문 redact(에코된 토큰 등 차단)
+  if (tool.pii_scrub) cleanBody = scrubPii(cleanBody).text; // P3(#746) 비정형 PII 마스킹(응답에 섞인 개인정보)
   return { status: res.status, body: cleanBody, truncated: res.truncated, ok: res.status >= 200 && res.status < 300 };
 }
 
@@ -123,10 +150,10 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
       tool.name,
       { title: tool.title || tool.name, description: tool.description || "", inputSchema: shape },
       async (args: Record<string, unknown>, extra: unknown) => {
-        const u = resolveUser(extra);
+        const u: LivelyUser = resolveUser(extra);
         requireScope(u, callScope);
         try {
-          const r = await runHttpProxyTool(tool, args ?? {});
+          const r = await runHttpProxyTool(tool, args ?? {}, u.userId); // P1: 요청자 신원으로 vault 자격 해소
           return {
             content: [{ type: "text" as const, text: JSON.stringify({ status: r.status, ok: r.ok, truncated: r.truncated, body: r.body }, null, 2) }],
             isError: !r.ok,

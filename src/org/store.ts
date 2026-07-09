@@ -1442,6 +1442,9 @@ export interface OrgTool {
   auto_approve: boolean;
   always_load: boolean | null; // 주입모드 override(#187): null=코드기본, true=항상 주입, false=deferred. Claude Code _meta(anthropic/alwaysLoad)로 변환.
   level: "L0" | "L1" | "L2" | null; // 권한 등급(P2 #746): L0 조회 / L1 제안 / L2 집행. L2 는 auto-approve 강제 제외. null=코드기본(L0).
+  auth_kind: string | null; // P1(#746): 설정 시 http_proxy 가 member_secret(호출자 개인 자격 우선)로 인증. null=auth_env(조직 공용) 사용.
+  auth_scope_key: string | null; // vault 조회 scope_key(예 host)
+  pii_scrub: boolean; // P3(#746): true 면 응답 본문에 scrubPiiDeep(비정형 PII 마스킹)
   note: string | null;
   sort: number;
   version: number;
@@ -1466,6 +1469,9 @@ function mapTool(row: Record<string, unknown>): OrgTool {
     auto_approve: row.auto_approve === true,
     always_load: row.always_load == null ? null : row.always_load === true,
     level: (row.level as "L0" | "L1" | "L2" | null) ?? null,
+    auth_kind: (row.auth_kind as string) ?? null,
+    auth_scope_key: (row.auth_scope_key as string) ?? null,
+    pii_scrub: row.pii_scrub === true,
     note: (row.note as string) ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -1474,7 +1480,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
   };
 }
 
-const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, note, sort, version, updated_at, updated_by";
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, auth_kind, auth_scope_key, pii_scrub, note, sort, version, updated_at, updated_by";
 
 export async function listTools(): Promise<OrgTool[]> {
   const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
@@ -1542,6 +1548,9 @@ export interface OrgToolInput {
   auto_approve?: boolean;
   always_load?: boolean | null; // #187 주입모드: undefined=유지, null=코드기본 복귀, true=항상, false=deferred.
   level?: "L0" | "L1" | "L2" | null; // P2(#746) 등급: undefined=유지, null=코드기본, L0/L1/L2 명시.
+  auth_kind?: string | null; // P1(#746) vault 인증 kind: undefined=유지, null/""=env 사용, 값=member_secret 해소.
+  auth_scope_key?: string | null;
+  pii_scrub?: boolean; // P3(#746) 응답 PII 마스킹
   note?: string | null;
   sort?: number;
 }
@@ -1559,18 +1568,23 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   // 주입모드(#187): undefined=기존 유지, null=코드기본 복귀, true/false=명시. ??-병합은 null 을 흘려보내므로 직접 분기.
   const alwaysLoad = t.always_load !== undefined ? t.always_load : (before?.always_load ?? null);
   const level = t.level !== undefined ? t.level : (before?.level ?? null);
+  // 커넥터 자격/마스킹(P1·P3 #746) — http_proxy 에만 유효(빌트인 게이팅 행은 비움). null/"" 이면 env 인증(기존).
+  const authKind = isProxy ? (t.auth_kind !== undefined ? (t.auth_kind || null) : (before?.auth_kind ?? null)) : null;
+  const authScopeKey = isProxy ? (t.auth_scope_key !== undefined ? (t.auth_scope_key || null) : (before?.auth_scope_key ?? null)) : null;
+  const piiScrub = isProxy ? (t.pii_scrub !== undefined ? !!t.pii_scrub : (before?.pii_scrub ?? false)) : false;
   await itemsPool.query(
-    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,note,sort,version,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,1,now(),$19)
      ON CONFLICT (name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
-       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level,
+       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, pii_scrub=EXCLUDED.pii_scrub, note=EXCLUDED.note, sort=EXCLUDED.sort,
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
-     ctx.actor ?? null],
+     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub,
+     t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0, ctx.actor ?? null],
   );
   const after = await getTool(t.name);
   await audit("org_tool", t.name, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
