@@ -651,11 +651,18 @@ function dashTaskChip(p) {
 // ── 위젯별 기본 표시 설정(기기별 localStorage) — 헤더 ⚙ 통일 컨트롤이 읽고/쓴다. ──
 const DASH_FOLD_VIEW_KEY = 'dash_fb_view_v1';    // 공유 폴더 브라우저 기본 뷰(icon|list)
 const DASH_SESS_FILTER_KEY = 'dash_sess_filter_v1'; // 내 AI 세션 기본 필터(all|mine|invited|myproj)
+const DASH_SESS_SHOWCLOSED_KEY = 'dash_sess_showclosed_v1'; // 완료·보관 프로젝트 세션 포함 여부(기본 off=숨김) #req
+const DASH_SESS_SORT_KEY = 'dash_sess_sort_v1'; // 세션 카드 정렬(smart|recent|name) #req
 const DASH_LOG_TYPE_KEY = 'dash_log_type_v1';   // 작업 로그 기본 유형 필터(''=전체 | feature·fix·… #req R14)
 function dashFoldView() { try { return localStorage.getItem(DASH_FOLD_VIEW_KEY) === 'list' ? 'list' : 'icon'; } catch { return 'icon'; } }
 function dashSaveFoldView(v) { try { localStorage.setItem(DASH_FOLD_VIEW_KEY, v === 'list' ? 'list' : 'icon'); } catch { /* 무시 */ } }
 function dashSessFilter() { try { const v = localStorage.getItem(DASH_SESS_FILTER_KEY); return ['all', 'private', 'invited', 'myproj'].includes(v as string) ? v : 'all'; } catch { return 'all'; } }
 function dashSaveSessFilter(v) { try { localStorage.setItem(DASH_SESS_FILTER_KEY, v); } catch { /* 무시 */ } }
+// #req 완료·보관(done/closed) 프로젝트 세션은 기본 숨김 — 토글 켜면 포함(표시). 기기별 저장.
+function dashSessShowClosed() { try { return localStorage.getItem(DASH_SESS_SHOWCLOSED_KEY) === '1'; } catch { return false; } }
+function dashSaveSessShowClosed(v) { try { if (v) localStorage.setItem(DASH_SESS_SHOWCLOSED_KEY, '1'); else localStorage.removeItem(DASH_SESS_SHOWCLOSED_KEY); } catch { /* 무시 */ } }
+function dashSessSort() { try { const v = localStorage.getItem(DASH_SESS_SORT_KEY); return ['active', 'recent', 'name'].includes(v as string) ? v : 'active'; } catch { return 'active'; } }
+function dashSaveSessSort(v) { try { localStorage.setItem(DASH_SESS_SORT_KEY, v); } catch { /* 무시 */ } }
 function dashLogType() { try { return localStorage.getItem(DASH_LOG_TYPE_KEY) || ''; } catch { return ''; } }
 function dashSaveLogType(v) { try { if (v) localStorage.setItem(DASH_LOG_TYPE_KEY, v); else localStorage.removeItem(DASH_LOG_TYPE_KEY); } catch { /* 무시 */ } }
 // 폴더 기본 뷰 설정 팝오버(⚙) — 브라우저 열 때 initial 뷰가 됨.
@@ -800,71 +807,165 @@ async function fillSessions(zone, onCount, projectsP?) {
   let mode = dashSessFilter(); // 전체 | 내 프로젝트 | 비공개 | 초대받음 (저장된 기본 필터)
   // 비공개 = 내 소유인데 초대가 없는(나만 보는) 세션(#req).
   const isPrivateSess = (s) => s.owned && !((s.invites || []).length);
+  // #req 완료·보관(done/closed) 프로젝트의 세션은 기본 숨김. ⚙ 설정 팝오버의 '완료·보관 프로젝트 세션 표시' 토글로 포함. 비프로젝트·분류불가 세션은 항상 유지.
+  let showClosed = dashSessShowClosed();
+  let sortMode = dashSessSort(); // active(최근 작업순) | recent(최근 생성순) | name(작업 제목순)
+  const isProjClosed = (p) => !!p && (p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed'); // 내 프로젝트 모달 isDone 과 동형
+  const closedPids = new Set<number>((projects || []).filter(isProjClosed).map((p) => p.id));
+  const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid); };
+  const setShowClosed = (v) => { showClosed = v; dashSaveSessShowClosed(v); draw(); };
+  const setSortMode = (v) => { sortMode = v; dashSaveSessSort(v); draw(); };
+  // #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
+  const selected = new Set<string>();
+  const killSelected = async () => {
+    const ids = [...selected]; if (!ids.length) return;
+    if (!confirm(ids.length + '개 세션을 삭제할까요?\n실행 중인 작업도 함께 종료되고 되돌릴 수 없어요.')) return;
+    let failed = 0;
+    for (const id of ids) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id), { method: 'DELETE' }); } catch { failed++; } }
+    toast(failed ? ((ids.length - failed) + '개 삭제 · ' + failed + '건 실패') : (ids.length + '개 세션을 삭제했어요'), !!failed);
+    selected.clear(); await reloadSessions();
+  };
+  const bar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
+  const renderBar = () => {
+    const n = selected.size; bar.hidden = n === 0; if (!n) return;
+    bar.replaceChildren(
+      el('span', { class: 'dash-bulkbar-n', text: n + '개 선택' }),
+      el('button', { class: 'dash-bulkbar-btn danger', type: 'button', text: '삭제', onclick: killSelected }),
+      el('button', { class: 'dash-bulkbar-x', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', text: '✕', onclick: () => { selected.clear(); draw(); } }));
+  };
   const draw = () => {
-    const shown = sessions
+    // 정렬(#req ⚙에서 선택): active(기본)=마지막 작업 최신순(가장 최근에 작업한 세션이 위) / recent=생성 최신순 / name=제목(작업요약)순.
+    const dispOf = (s) => ((s.title && s.title.trim()) || s.label || '').toLowerCase();
+    const cmp = sortMode === 'recent' ? ((a, b) => (Number(b.created) || 0) - (Number(a.created) || 0))
+      : sortMode === 'name' ? ((a, b) => dispOf(a).localeCompare(dispOf(b), 'ko'))
+      : ((a, b) => (Number(b.lastActive) || 0) - (Number(a.lastActive) || 0) || (Number(b.created) || 0) - (Number(a.created) || 0)); // active(기본)
+    const base = sessions
       .filter((s) => mode === 'private' ? isPrivateSess(s) : mode === 'invited' ? !s.owned : mode === 'myproj' ? isMyProjectSess(s) : true)
-      .sort((a, b) => (b.attached ? 1 : 0) - (a.attached ? 1 : 0) || (Number(b.created) || 0) - (Number(a.created) || 0));
+      .sort(cmp);
+    // #req 완료·보관 프로젝트 세션은 기본 숨김(showClosed 켜면 포함) — 현재 모드 위에 추가 적용.
+    const hiddenClosed = showClosed ? 0 : base.filter(isClosedProjSess).length;
+    const shown = showClosed ? base : base.filter((s) => !isClosedProjSess(s));
+    // 필터 전환 시 안 보이게 된 선택은 해제(내 프로젝트 모달과 동형).
+    const ownedShown = new Set(shown.filter((s) => s.owned).map((s) => s.id));
+    for (const id of [...selected]) if (!ownedShown.has(id)) selected.delete(id);
     zone.countEl.textContent = String(shown.length);
     // #req 칩 순서: 전체 · 내 프로젝트(그런 세션 있을 때만) · 비공개 · 초대받음.
     const chips: any[] = [['all', '전체']];
     if (sessions.some(isMyProjectSess)) chips.push(['myproj', '내 프로젝트']);
     chips.push(['private', '비공개'], ['invited', '초대받음']);
     dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
+    // '완료 프로젝트 세션 표시'는 칩이 아니라 ⚙ 설정 팝오버 토글로(#req) — 칩 줄은 필터만.
     if (!shown.length) {
-      zone.body.replaceChildren(mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
+      zone.body.replaceChildren(
+        (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
+        : mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
         : mode === 'myproj' ? dashEmpty('내 프로젝트에서 만든 세션이 없어요.')
         : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
       return;
     }
     const list = el('div', { class: 'dash-sess-list' });
     for (const s of shown) {
-      // #req 카드 = 1열 제목 / 2열 생성시각·태그. [열기]·[⋮]는 우측에 '항상 보이는' 버튼(호버 반응 폐지).
-      const tags = el('span', { class: 'dash-sess-tags' });
-      if (s.attached) tags.append(el('span', { class: 'dash-badge live', text: '접속중' }));
+      // #req 재설계 — 상태(작업중/대기중)가 카드의 주인공. 좌측 색 레일 + 색 상태라벨로 한눈에 스캔.
+      const stt = dashSessState(s);            // { key, label }
       const pid = Number(s.projectId) || 0;
-      if (pid) { const mine = projName.has(pid); tags.append(el('span', { class: 'dash-badge dash-badge-proj' + (mine ? ' dash-badge-proj-mine' : ''), title: (mine ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('프로젝트 #' + pid) })); }
-      if (s.owned) { if ((s.invites || []).length) tags.append(el('span', { class: 'dash-badge', text: '초대 ' + s.invites.length })); }
-      else tags.append(el('span', { class: 'dash-badge', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
-      // #req 하네스 태그 제거 · 순서 태그 → 시간.
-      const info = el('div', { class: 'dash-sess-info' },
-        el('div', { class: 'dash-sess-title' }, el('span', { class: 'dash-sess-name', title: s.label, text: s.label || '(이름 없음)' })),
-        el('div', { class: 'dash-sess-sub' },
-          tags,
-          el('span', { class: 'dash-sess-when', text: sessTime(s.created) })));
-      const openBtn = el('button', { class: 'dash-sess-open', type: 'button', text: '열기' });
+      const mineProj = !!(pid && projName.has(pid));
+      const meta = el('div', { class: 'dash-scard-meta' });
+      if (stt.label) meta.append(el('span', { class: 'dash-scard-status is-' + stt.key },
+        el('span', { class: 'dash-scard-dot' }), el('span', { text: stt.label })));
+      if (pid) meta.append(el('span', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), title: (mineProj ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('#' + pid) }));
+      if (!s.owned) meta.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
+      else if ((s.invites || []).length) meta.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
+      meta.append(el('span', { class: 'dash-scard-when', text: sessTime(s.created) }));
+      const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
       openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
-      const acts = el('div', { class: 'dash-sess-acts' }, openBtn);
+      const acts = el('div', { class: 'dash-scard-acts' }, openBtn);
       if (s.owned) { // 이름 수정·삭제는 소유자만(서버도 비소유 403 재검증).
-        const moreBtn = el('button', { class: 'dash-sess-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
+        const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
         moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
         acts.append(moreBtn);
       }
-      list.append(el('div', { class: 'dash-sess-box' + (s.attached ? ' live' : '') }, info, acts));
+      // #req 제목 = Claude 가 써두는 '지금 하는 일' 요약(s.title, 실시간). 없으면 세션 이름(label)로 폴백.
+      const dispName = (s.title && s.title.trim()) || s.label || '(이름 없음)';
+      const main = el('div', { class: 'dash-scard-main' },
+        el('span', { class: 'dash-scard-name', title: dispName, text: dispName }), meta);
+      const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
+      if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
+        const cb: any = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' }); cb.checked = selected.has(s.id);
+        cb.onchange = () => { if (cb.checked) selected.add(s.id); else selected.delete(s.id); box.classList.toggle('sel', cb.checked); list.classList.toggle('has-sel', selected.size > 0); renderBar(); };
+        box.append(el('label', { class: 'dash-sess-checkwrap' }, cb));
+      }
+      box.append(main, acts);
+      list.append(box);
     }
     // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).
     list.append(el('div', { class: 'dash-sess-addrow' },
       el('button', { class: 'dash-sess-addbtn', type: 'button', 'data-tour': 'new-session', title: '새 세션 만들기',
         onclick: () => { if (cfg) openTermCreateForm(cfg, null, () => reloadSessions()); else location.hash = '#/terminal'; } },
         el('span', { class: 'dash-sess-addplus', text: '＋' }), el('span', { text: '새 세션' }))));
-    zone.body.replaceChildren(list);
+    list.classList.toggle('has-sel', selected.size > 0);
+    zone.body.replaceChildren(list, bar);
+    renderBar();
   };
-  // 세션 변경(이름 수정·삭제) 후 새로고침 — base 세션 + 프로젝트 세션 재병합 후 재렌더.
-  const reloadSessions = async () => {
+  // base 세션 + 프로젝트 세션 재병합(재렌더 없이 sessions 만 갱신).
+  const refetchSessions = async () => {
+    const d = await api('/api/ui/terminal/sessions'); sessions = (d && d.sessions) || [];
+    const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
+    if (withSess.length) {
+      const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
+      const seen = new Set(sessions.map((x) => x.id));
+      for (const arr of arrs) for (const x of arr) if (x.owned && !seen.has(x.id)) { seen.add(x.id); sessions.push(x); }
+    }
+    onCount(sessions.filter((x) => x.attached).length);
+  };
+  // 세션 변경(이름 수정·삭제·종료) 후 새로고침.
+  const reloadSessions = async () => { try { await refetchSessions(); } catch { /* 유지 */ } draw(); };
+  // #req 실시간 반영 — 상태(작업중/대기중)를 주기적으로 폴링. 상태가 실제로 바뀔 때만 재렌더(스크롤 튐·깜빡임 방지). 위젯이 사라지면 자동 중단.
+  const stateSig = () => sessions.map((s) => s.id + ':' + (s.agentState || '') + ':' + (s.attached ? 1 : 0) + ':' + (s.title || '')).join('|');
+  let lastSig = stateSig();
+  let polling = false;
+  const pollTick = async () => {
+    if (polling || document.hidden) return; polling = true; // 탭 백그라운드면 건너뜀
     try {
-      const d = await api('/api/ui/terminal/sessions'); sessions = (d && d.sessions) || [];
-      const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
-      if (withSess.length) {
-        const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
-        const seen = new Set(sessions.map((x) => x.id));
-        for (const arr of arrs) for (const x of arr) if (x.owned && !seen.has(x.id)) { seen.add(x.id); sessions.push(x); }
-      }
-      onCount(sessions.filter((x) => x.attached).length);
-    } catch { /* 유지 */ }
-    draw();
+      await refetchSessions();
+      const sig = stateSig();
+      if (sig !== lastSig) { lastSig = sig; const sc = zone.body.scrollTop; draw(); zone.body.scrollTop = sc; }
+    } catch { /* 무시 */ } finally { polling = false; }
   };
-  // 헤더 우상단 통일 컨트롤 — ⚙(기본 세션 필터) + →(터미널 딥링크).
-  dashCtl(zone, { gear: { title: '세션 표시 설정', open: (a) => dashChoicePopover(a, '기본 세션 필터', [['all', '전체'], ['myproj', '내 프로젝트'], ['private', '비공개'], ['invited', '초대받음']], mode, (k) => { dashSaveSessFilter(k); mode = k; draw(); }) }, action: { href: '#/terminal', title: '터미널로' } });
+  const pollId = setInterval(() => {
+    if (!document.body.contains(zone.box)) { clearInterval(pollId); return; }
+    pollTick();
+  }, 5000);
+  // 헤더 우상단 통일 컨트롤 — ⚙(세션 표시 설정) + →(터미널 딥링크). ⚙ = '완료·보관 프로젝트 세션 표시' 토글(#req, 기존 '기본 필터'는 칩과 중복이라 폐지).
+  const openSessPrefs = (a) => {
+    const panel = el('div', { class: 'dash-pop-panel' });
+    let close = () => { /* dashPopover 반환값으로 대체 */ };
+    panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '세션 표시 설정' }), el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
+    const cb: any = el('input', { type: 'checkbox' }); cb.checked = showClosed;
+    cb.onchange = () => setShowClosed(cb.checked);
+    panel.append(el('label', { class: 'dash-pop-row' }, cb,
+      el('span', { class: 'dash-pop-txt' },
+        el('span', { class: 'dash-pop-name', text: '완료·보관 프로젝트 세션 표시' }),
+        el('span', { class: 'dash-pop-desc', text: 'done/closed 프로젝트에 속한 세션도 목록에 표시(기본 숨김)' }))));
+    // #req 카드 정렬 선택.
+    panel.append(el('div', { class: 'dash-pop-gh', text: '카드 정렬' }));
+    for (const [k, label] of [['active', '최근 작업순 (기본)'], ['recent', '최근 생성순'], ['name', '작업 제목순 (가나다)']] as [string, string][]) {
+      const row = el('button', { class: 'dash-pop-opt' + (k === sortMode ? ' sel' : ''), type: 'button' },
+        el('span', { class: 'dash-pop-name', text: label }),
+        k === sortMode ? el('span', { class: 'dash-pop-check', text: '✓' }) : null);
+      row.onclick = () => { close(); setSortMode(k); };
+      panel.append(row);
+    }
+    close = dashPopover(a, panel);
+  };
+  dashCtl(zone, { gear: { title: '세션 표시 설정', open: openSessPrefs }, action: { href: '#/terminal', title: '터미널로' } });
   draw();
+}
+// #req 세션 상태(4단계) → { key, label }. 서버가 CPU·pane 내용으로 판정한 s.agentState 를 그대로 매핑.
+//  busy=작업중(주황) / waiting=확인 필요(빨강, 사용자 선택·승인 대기) / idle=대기중(초록) / offline=오프라인(회색).
+function dashSessState(s): { key: string; label: string } {
+  const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', offline: '오프라인' };
+  const k = (s && s.agentState) || 'offline';
+  return { key: k, label: map[k] || '오프라인' };
 }
 // 세션 '⋯' 메뉴(#req R15) — 이름 수정(POST /sessions/:id {label}) · 삭제(DELETE /sessions/:id). 소유자만 노출.
 function openSessMenu(anchor, s, onChange) {

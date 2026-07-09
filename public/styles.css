@@ -1463,6 +1463,67 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-badge.author { color: var(--ink-note); background: var(--bg-tint-2); }
 .term-badge.owner { color: var(--ink-note); background: var(--bg-tint-2); border-color: var(--line-note); }
 .term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+/* ════ 터미널 탭 세션 보드(#745) — 라이브 상태(작업중/대기/오프라인) + 프로젝트 할당 미션컨트롤 ════ */
+/* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
+.tsess-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
+.tsess-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tsess-controls-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tsess-chip-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.tsess-chip-btn:hover { border-color: var(--muted-2); }
+.tsess-chip-btn.active { color: var(--ink); background: var(--bg-sel); border-color: var(--line-net-2); }
+.tsess-chip-n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 800; }
+.tsess-chip-btn.active .tsess-chip-n { color: var(--ink-note); }
+.tsess-projsel { font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; cursor: pointer; max-width: 220px; }
+
+.tsess-list { display: flex; flex-direction: column; gap: 8px; }
+/* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
+.tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
+.tsess-card.tsess-busy { border-left-color: var(--mint-deep); }
+.tsess-card.tsess-waiting { border-left-color: var(--blue); }
+.tsess-card.tsess-idle { border-left-color: #D4922E; }
+.tsess-card.tsess-offline { border-left-color: var(--muted-2); background: var(--bg); }
+.tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+.tsess-card--sel { cursor: pointer; }
+.tsess-check { flex: none; display: flex; align-items: center; }
+.tsess-check input { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+
+.tsess-info { flex: 1; min-width: 0; }
+.tsess-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 5px; min-width: 0; }
+.tsess-name { font-size: 14.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.tsess-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
+.tsess-dot-busy { background: var(--mint-deep); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+.tsess-dot-waiting { background: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent); }
+.tsess-dot-idle { background: #D4922E; }
+.tsess-dot-offline { background: var(--muted-2); }
+.tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
+.tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
+.tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
+.tsess-badge.live { color: var(--mint-deep); background: var(--bg-success); border-color: color-mix(in srgb, var(--mint-deep) 35%, var(--bg)); }
+.tsess-badge.live::before { content: "●"; font-size: 8px; margin-right: 3px; vertical-align: 1px; }
+.tsess-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+.tsess-meta { margin-top: 5px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
+.tsess-meta .tsess-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.tsess-sep { color: var(--muted-3); }
+.tsess-stat { font-weight: 800; }
+.tsess-stat-busy { color: var(--mint-deep); }
+.tsess-stat-waiting { color: var(--blue-deep); }
+.tsess-stat-idle { color: #B87A2A; }
+.tsess-stat-offline { color: var(--muted); }
+/* '지금 하는 일' 실시간 요약(백엔드 title) — 라벨 아래 한 줄. */
+.tsess-worktitle { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
+
+.tsess-acts { flex: none; display: flex; align-items: center; gap: 6px; }
+.tsess-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 8px; padding: 6px 15px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.tsess-open:hover { background: var(--bg-punch); }
+.tsess-icon { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.tsess-icon:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.tsess-icon.danger { color: var(--coral-text); border-color: #F0DCC4; }
+.tsess-icon.danger:hover { background: #FBF1E7; }
+@media (max-width: 720px) {
+  .tsess-card { flex-wrap: wrap; }
+  .tsess-acts { flex-wrap: wrap; }
+  .tsess-name { max-width: 200px; }
+}
 
 /* ════ 도메인 맵 (#/domainmap) — 회사맥락 하위. should(의도)·is(구조) 2열 + 괴리/변경이력. ════ */
 /* 준비중 안내 배너 — 탭 최상단(프로젝트 #342). 아직 불완전한 기능임을 알린다(warn 앰버 톤: warn-badge·dm-debt 팔레트 재사용). */
@@ -4372,6 +4433,7 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 .dash-wh-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); text-decoration: none; }
 .dash-wh-btn:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .dash-wh-btn svg { display: block; }
+/* 필터로 숨긴 세션 안내 줄 */
 /* 선택형 팝오버 옵션(⚙ 기본값 설정) */
 .dash-pop-opt { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; padding: 7px 8px; border: none; background: none; border-radius: 8px; cursor: pointer; font-family: inherit; text-align: left; }
 .dash-pop-opt:hover { background: var(--bg-tint); }
@@ -4535,39 +4597,51 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-empty-title { font-size: 15px; font-weight: 800; color: var(--ink); }
 .dash-sess-empty-desc { font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
 .dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 5px; }
-/* #req 카드 = 1열 제목 / 2열 생성시각·태그. [열기]·[⋮]는 우측에 '항상 보이는' 버튼(호버 반응·카드클릭 폐지). */
-.dash-sess-box { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
-.dash-sess-box.live { border-color: color-mix(in srgb, var(--mint-deep) 40%, var(--line)); }
-.dash-sess-info { flex: 1; min-width: 0; }
-.dash-sess-title { min-width: 0; }
-.dash-sess-name { display: block; font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-sess-sub { margin-top: 3px; display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
-.dash-sess-when { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.dash-sess-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
-.dash-sess-tags { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
-.dash-badge-proj { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 30%, var(--bg)); background: var(--bg-punch); }
-/* #req 에이전트 실행상태 배지 — 🔴작업중(깜빡)/🟢대기중/⚪종료. 접속중과 별개 축. */
-.dash-state { display: inline-flex; align-items: center; gap: 4px; }
-.dash-state-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.dash-state.is-busy { color: #d97706; border-color: color-mix(in srgb, #f59e0b 45%, var(--bg)); background: color-mix(in srgb, #f59e0b 12%, transparent); }
-.dash-state.is-busy .dash-state-dot { background: #f59e0b; animation: dashPulse 1.3s ease-in-out infinite; }
-.dash-state.is-idle { color: var(--mint-deep); border-color: color-mix(in srgb, var(--mint-deep) 45%, var(--bg)); }
-.dash-state.is-idle .dash-state-dot { background: var(--mint-deep); }
-.dash-state.is-exited { color: var(--muted); }
-.dash-state.is-exited .dash-state-dot { background: var(--muted); }
-@keyframes dashPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
-@media (prefers-reduced-motion: reduce) { .dash-state.is-busy .dash-state-dot { animation: none; } }
+/* #req 세션 카드 — 0부터 재설계. 좌측 상태 레일(색) + 굵은 색 상태라벨로 '작업중/대기중'을 한눈에. 2줄: 제목 / 상태·프로젝트·시간, [열기]·[⋮] 우측 중앙. */
+.dash-scard { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
+.dash-scard:hover { border-color: var(--muted-2); box-shadow: 0 1px 5px rgba(21,35,59,.05); }
+.dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 12px 0 0 12px; background: var(--line); }
+/* 상태별 레일 — 작업중은 살짝 주황 배경까지 줘서 목록에서 도드라지게. */
+.dash-scard.is-busy::before { background: #f59e0b; }
+.dash-scard.is-busy { background: color-mix(in srgb, #f59e0b 6%, var(--bg)); border-color: color-mix(in srgb, #f59e0b 32%, var(--line)); }
+.dash-scard.is-waiting::before { background: var(--coral, #e5484d); }
+.dash-scard.is-waiting { background: color-mix(in srgb, var(--coral, #e5484d) 7%, var(--bg)); border-color: color-mix(in srgb, var(--coral, #e5484d) 34%, var(--line)); }
+.dash-scard.is-idle::before { background: var(--mint-deep); }
+.dash-scard.is-offline::before { background: var(--muted-2); }
+.dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
+.dash-scard.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
+.dash-scard.sel::before { background: var(--accent, #5b6cff); }
+.dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dash-scard-name { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-scard-meta { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+/* 상태 = 카드의 주인공. 색 점(작업중은 깜빡) + 굵은 색 라벨. */
+.dash-scard-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; letter-spacing: -.01em; }
+.dash-scard-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dash-scard-status.is-busy { color: #d97706; }
+.dash-scard-status.is-busy .dash-scard-dot { background: #f59e0b; animation: dashPulse 1.25s ease-in-out infinite; }
+.dash-scard-status.is-waiting { color: var(--coral, #e5484d); }
+.dash-scard-status.is-waiting .dash-scard-dot { background: var(--coral, #e5484d); animation: dashPulse 1.1s ease-in-out infinite; }
+.dash-scard-status.is-idle { color: var(--mint-deep); }
+.dash-scard-status.is-idle .dash-scard-dot { background: var(--mint-deep); }
+.dash-scard-status.is-offline { color: var(--muted); }
+.dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
+.dash-scard-proj { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border-radius: 6px; padding: 1.5px 7px; }
+.dash-scard-proj.mine { color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 10%, transparent); }
+.dash-scard-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
+.dash-scard-when { flex: none; margin-left: auto; padding-left: 6px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@keyframes dashPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.72); } }
+@media (prefers-reduced-motion: reduce) { .dash-scard-status.is-busy .dash-scard-dot, .dash-scard-status.is-waiting .dash-scard-dot { animation: none; } }
+/* 액션 — 항상 보이는 [열기] + 소유자 [⋮], 카드 우측 세로 중앙. */
+.dash-scard-acts { flex: none; display: flex; align-items: center; gap: 5px; }
+.dash-scard-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 13px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.dash-scard-open:hover { background: var(--bg-punch); }
+.dash-scard-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
+.dash-scard-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 /* 세션 일괄 선택 체크박스 — 평소 옅게, 호버·선택 시 뚜렷. */
 .dash-sess-checkwrap { flex: none; display: flex; align-items: center; }
 .dash-sess-check { width: 16px; height: 16px; cursor: pointer; opacity: .3; transition: opacity .12s; accent-color: var(--accent, #5b6cff); }
-.dash-sess-box:hover .dash-sess-check, .dash-sess-list.has-sel .dash-sess-check, .dash-sess-check:checked { opacity: 1; }
-.dash-sess-box.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg-tint)); }
+.dash-scard:hover .dash-sess-check, .dash-sess-list.has-sel .dash-sess-check, .dash-sess-check:checked { opacity: 1; }
 .dash-bulkbar--sess { margin: 8px 6px 4px; bottom: 4px; border-radius: 10px; }
-.dash-sess-acts { flex: none; display: flex; align-items: center; gap: 5px; }
-.dash-sess-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 13px; background: var(--bg); cursor: pointer; font-family: inherit; }
-.dash-sess-open:hover { background: var(--bg-punch); }
-.dash-sess-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
-.dash-sess-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 /* #req 세션 목록 맨 밑 '+ 새 세션'(대시보드서 바로 생성) — 프로젝트 인라인 추가와 같은 톤. */
 .dash-sess-addrow { padding: 2px 6px 4px; }
 .dash-sess-addbtn { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 34px; padding: 5px 8px; border: 1px dashed var(--line-net-2, var(--line)); background: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--muted); }
