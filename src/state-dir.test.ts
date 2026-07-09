@@ -13,6 +13,9 @@ import path from "node:path";
 const CWD_ALLOW = new Set(["src/state-dir.ts", "src/connectors/run-tracker.ts"]);
 // 경로-리터럴 fs 쓰기가 정당한 곳(현재 없음 — 새로 생기면 리뷰 후 여기 추가).
 const LITERAL_ALLOW = new Set<string>([]);
+// 스캔 제외 — 게이트웨이 런타임 코드가 아닌 '생성된 데이터' 파일. default-content.ts 는 캡처된 멤버측 훅·스킬
+//  본문(멤버 머신에서 도는 훅은 정당하게 process.cwd()/파일쓰기 사용)을 문자열로 담을 뿐이라 이 가드레일 범위 밖.
+const SCAN_SKIP = new Set(["src/org/default-content.ts"]);
 
 // R2: fs 변이 호출의 첫 인자가 문자열 리터럴이거나 resolve()/join() 로 감싼 리터럴(=하드코딩 경로). 정상은 변수/헬퍼.
 const FS_WRITE = /\.\s*(mkdir|mkdirSync|writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|rename|renameSync|cp|copyFile|copyFileSync|symlink|symlinkSync)\s*\(\s*((path\.)?(resolve|join)\s*\(\s*)?(["'`])/;
@@ -49,6 +52,7 @@ const SRC = path.resolve(process.cwd(), "src");
 const violations: string[] = [];
 for (const f of walk(SRC)) {
   const rel = path.relative(process.cwd(), f).split(path.sep).join("/");
+  if (SCAN_SKIP.has(rel)) continue;
   const cwdAllowed = CWD_ALLOW.has(rel);
   const literalAllowed = LITERAL_ALLOW.has(rel);
   readFileSync(f, "utf8").split("\n").forEach((ln, i) => {
