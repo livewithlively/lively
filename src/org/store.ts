@@ -1198,6 +1198,43 @@ export async function removeColumnMask(source: string, table_name: string, colum
   await audit("org_db_column_mask", `${source}.${table_name}.${column_name}`, "delete", before.rows[0], null, actor, "web");
 }
 
+// ── org_db_subject_key — db 접근 감사(P5, #746)의 '조회 대상 식별자' 컬럼 지정. 정책 오버레이(FK 없음)라
+//    소스 연결 전 사전작성 가능(table_policy/column_mask 와 동일 모델). ⚠ 민감 원값 컬럼 지정 금지(운영 규약).
+export interface DbSubjectKeyRow {
+  source: string;
+  table_name: string;
+  column_name: string;
+  note: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export async function listSubjectKeys(source?: string): Promise<DbSubjectKeyRow[]> {
+  const r = source
+    ? await itemsPool.query(`SELECT source, table_name, column_name, note, updated_at, updated_by FROM org_db_subject_key WHERE source=$1 ORDER BY table_name, column_name`, [source])
+    : await itemsPool.query(`SELECT source, table_name, column_name, note, updated_at, updated_by FROM org_db_subject_key ORDER BY source, table_name, column_name`);
+  return r.rows as DbSubjectKeyRow[];
+}
+
+export async function upsertSubjectKey(k: { source: string; table_name: string; column_name: string; note?: string | null }, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_subject_key WHERE source=$1 AND table_name=$2 AND column_name=$3`, [k.source, k.table_name, k.column_name]);
+  await itemsPool.query(
+    `INSERT INTO org_db_subject_key(source, table_name, column_name, note, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,1,now(),$5)
+     ON CONFLICT (source, table_name, column_name) DO UPDATE SET
+       note=EXCLUDED.note, version=org_db_subject_key.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [k.source, k.table_name, k.column_name, k.note ?? null, actor ?? null],
+  );
+  await audit("org_db_subject_key", `${k.source}.${k.table_name}.${k.column_name}`, before.rows[0] ? "update" : "insert", before.rows[0] ?? null, k, actor, "web");
+}
+
+export async function removeSubjectKey(source: string, table_name: string, column_name: string, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_subject_key WHERE source=$1 AND table_name=$2 AND column_name=$3`, [source, table_name, column_name]);
+  if (!before.rows[0]) return;
+  await itemsPool.query(`DELETE FROM org_db_subject_key WHERE source=$1 AND table_name=$2 AND column_name=$3`, [source, table_name, column_name]);
+  await audit("org_db_subject_key", `${source}.${table_name}.${column_name}`, "delete", before.rows[0], null, actor, "web");
+}
+
 // ════════ 커스텀 훅 — org_hook ════════
 export type HookHarness = "claude" | "codex" | "openclaw" | "all";
 export interface OrgHook {

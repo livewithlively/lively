@@ -1,7 +1,7 @@
 // db_query 소스별 정책(#186) — 테이블 allow/deny + 컬럼 마스킹의 런타임 로더.
 //  단일 출처(SoT): DB(org_db_table_policy · org_db_column_mask, 웹 관리). 라이브 스키마 위 오버레이 — 스키마 사본은 저장 안 함.
 //  db_query 가 매 호출 refreshPolicy() 로 짧은 TTL 스냅샷을 최신화 → 웹 편집 무재시작 반영(sources.ts 와 동일 패턴).
-import { listTablePolicies, listColumnMasks } from "../org/store.js";
+import { listTablePolicies, listColumnMasks, listSubjectKeys } from "../org/store.js";
 import { getSourceConfig } from "./sources.js";
 import type { SourcePolicy } from "./firewall.js";
 import type { MaskStyle } from "./mask.js";
@@ -10,6 +10,7 @@ import { SELF_SOURCE, selfBaseTableMode } from "./self-source.js";
 interface PolicySnap {
   tableMode: Map<string, "allow" | "deny">; // lower(table) -> mode
   maskStyle: Map<string, MaskStyle>; // `${lower(table)}.${lower(col)}` -> style
+  subjectCols: Set<string>; // `${lower(table)}.${lower(col)}` — 감사 대상 식별자 컬럼(P5, #746)
 }
 
 let _snap: Map<string, PolicySnap> | null = null;
@@ -23,8 +24,9 @@ export async function refreshPolicy(force = false): Promise<void> {
   if (!process.env.ITEMS_DATABASE_URL) { _snap = _snap ?? new Map(); _loadedAt = now; return; }
   let policies: Awaited<ReturnType<typeof listTablePolicies>>;
   let masks: Awaited<ReturnType<typeof listColumnMasks>>;
+  let subjects: Awaited<ReturnType<typeof listSubjectKeys>>;
   try {
-    [policies, masks] = await Promise.all([listTablePolicies(), listColumnMasks()]);
+    [policies, masks, subjects] = await Promise.all([listTablePolicies(), listColumnMasks(), listSubjectKeys()]);
   } catch {
     if (!_snap) _snap = new Map();
     return; // 직전 스냅샷 유지(있으면)
@@ -32,17 +34,23 @@ export async function refreshPolicy(force = false): Promise<void> {
   const m = new Map<string, PolicySnap>();
   const of = (src: string): PolicySnap => {
     let s = m.get(src);
-    if (!s) { s = { tableMode: new Map(), maskStyle: new Map() }; m.set(src, s); }
+    if (!s) { s = { tableMode: new Map(), maskStyle: new Map(), subjectCols: new Set() }; m.set(src, s); }
     return s;
   };
   for (const p of policies) of(p.source).tableMode.set(p.table_name.toLowerCase(), p.mode);
   for (const c of masks) of(c.source).maskStyle.set(`${c.table_name.toLowerCase()}.${c.column_name.toLowerCase()}`, c.style);
+  for (const s of subjects) of(s.source).subjectCols.add(`${s.table_name.toLowerCase()}.${s.column_name.toLowerCase()}`);
   _snap = m;
   _loadedAt = now;
 }
 
 function snapOf(source: string): PolicySnap {
-  return _snap?.get(source) ?? { tableMode: new Map(), maskStyle: new Map() };
+  return _snap?.get(source) ?? { tableMode: new Map(), maskStyle: new Map(), subjectCols: new Set() };
+}
+
+// db 접근 감사(P5, #746) — 이 소스의 '조회 대상 식별자' 컬럼 집합(`table.col` lower).
+export function getSubjectColSet(source: string): Set<string> {
+  return snapOf(source).subjectCols;
 }
 
 // db_schema 컬럼 마스킹 표시용 — `${lower(table)}.${lower(col)}` -> style.
@@ -105,9 +113,41 @@ export async function resolveMaskedAttrs(source: string, q: Queryable): Promise<
   return attr;
 }
 
+// ── db 접근 감사(P5, #746)용 — subject 컬럼(table.col)을 pg 카탈로그의 (oid,attnum)=srcKey 로 해석. ──
+//  resolveMaskedAttrs 미러(전용 캐시). mysql 은 srcKey 가 이미 table.col 이라 해석 불요(tools/db.ts 직접 매칭).
+interface SubjEntry { attr: Map<string, string>; at: number } // srcKey(oid:attnum) -> `table.col`
+const _subjCache = new Map<string, SubjEntry>();
+
+export async function resolveSubjectAttrs(source: string, q: Queryable): Promise<Map<string, string>> {
+  const now = Date.now();
+  const cached = _subjCache.get(source);
+  if (cached && now - cached.at < TTL_MS) return cached.attr;
+
+  const subjectCols = snapOf(source).subjectCols;
+  const attr = new Map<string, string>();
+  if (subjectCols.size === 0) { _subjCache.set(source, { attr, at: now }); return attr; }
+
+  const tables = [...new Set([...subjectCols].map((k) => k.slice(0, k.indexOf("."))))];
+  const r = await q.query(
+    `SELECT c.oid::int8 AS oid, c.relname, a.attnum, a.attname
+       FROM pg_class c
+       JOIN pg_attribute a ON a.attrelid = c.oid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped`,
+    [tables],
+  );
+  for (const row of r.rows) {
+    const key = `${String(row.relname).toLowerCase()}.${String(row.attname).toLowerCase()}`;
+    if (subjectCols.has(key)) attr.set(`${Number(row.oid)}:${Number(row.attnum)}`, key);
+  }
+  _subjCache.set(source, { attr, at: now });
+  return attr;
+}
+
 // 테스트/즉시반영 — 캐시 무효화.
 export function _resetPolicyCacheForTest(): void {
   _snap = null;
   _loadedAt = 0;
   _attrCache.clear();
+  _subjCache.clear();
 }

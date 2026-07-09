@@ -524,6 +524,76 @@ export async function initOrgSchema(): Promise<void> {
     END $$;
   `);
 
+  // ── org_db_subject_key — db 접근 감사(P5, #746)의 '조회 대상 식별자' 컬럼 지정(웹/REST 관리). ──
+  //  관리자가 소스별로 '이 컬럼 값 = 조회 대상의 서로게이트 키(고객ID 등)'를 지정하면, db_query 가 그 컬럼의
+  //  반환값을 db_access_log.subject_keys 에 상한부 수집한다(신용정보법 R8 '누구의 정보를 조회했나').
+  //  ⚠ 운영 규약: 민감 원값 컬럼(주민번호·계좌 등)은 지정 금지 — 감사로그가 PII 저장소가 되면 안 된다.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_subject_key(
+      source TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      column_name TEXT NOT NULL,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT,
+      PRIMARY KEY (source, table_name, column_name));
+  `);
+
+  // ── db_access_log — 데이터 접근 감사(P5, #746). append-only + 해시체인(위변조 증거). ──
+  //  db_query(성공·차단·실패)와 db_schema 접근을 전건 기록한다. 기록 실패 시 db_query 는 fail-closed
+  //  (결과 미반환 — 비상 우회 env DB_AUDIT_FAIL_OPEN=1). 쓰기 단일 진입점 = src/db/access-log.ts(advisory lock 으로 체인 선형화).
+  //  row_hash = sha256(canonical([prev_hash, at, user_id, …])) — UPDATE/DELETE/TRUNCATE 는 트리거로 차단하되,
+  //  진짜 방어는 체인(db_audit_verify 가 재계산 검증 — 슈퍼유저가 행을 고치면 이후 전 행이 깨진다).
+  //  sql 은 리터럴 스크럽본(#705, PII 미잔존). subject_keys 는 org_db_subject_key 지정 컬럼의 반환값 상한부 수집.
+  //  unmasked_columns/grant_ids 는 P4(언마스크 게이트) 예약 — v1 에선 항상 []/null.
+  //  보존정책: v1 무제한(컴플라이언스 기록 — prune 하지 않는다). 성장 시 파티셔닝/아카이브를 별도 설계.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS db_access_log(
+      id BIGSERIAL PRIMARY KEY,
+      at TIMESTAMPTZ NOT NULL,
+      user_id TEXT NOT NULL,
+      token_hash_prefix TEXT,
+      harness TEXT,
+      op TEXT NOT NULL DEFAULT 'query',
+      source TEXT NOT NULL,
+      sql TEXT,
+      tables JSONB NOT NULL DEFAULT '[]'::jsonb,
+      masked_columns JSONB NOT NULL DEFAULT '[]'::jsonb,
+      unmasked_columns JSONB NOT NULL DEFAULT '[]'::jsonb,
+      grant_ids JSONB,
+      subject_keys JSONB,
+      row_count INT NOT NULL DEFAULT 0,
+      duration_ms INT,
+      ok BOOLEAN NOT NULL,
+      error TEXT,
+      prev_hash TEXT NOT NULL,
+      row_hash TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS db_access_log_at_idx ON db_access_log(at DESC);
+    CREATE INDEX IF NOT EXISTS db_access_log_user_at_idx ON db_access_log(user_id, at DESC);
+    CREATE INDEX IF NOT EXISTS db_access_log_source_at_idx ON db_access_log(source, at DESC);
+    CREATE INDEX IF NOT EXISTS db_access_log_tables_gin ON db_access_log USING GIN (tables);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='db_access_log'::regclass AND conname='db_access_log_op_chk') THEN
+        ALTER TABLE db_access_log ADD CONSTRAINT db_access_log_op_chk CHECK (op IN ('query','schema'));
+      END IF;
+    END $$;
+    CREATE OR REPLACE FUNCTION db_access_log_block_mutation() RETURNS trigger AS $fn$
+      BEGIN RAISE EXCEPTION 'db_access_log is append-only (P5 감사 — 수정/삭제 불가)'; RETURN NULL; END
+    $fn$ LANGUAGE plpgsql;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='db_access_log_immutable' AND tgrelid='db_access_log'::regclass) THEN
+        CREATE TRIGGER db_access_log_immutable BEFORE UPDATE OR DELETE ON db_access_log
+          FOR EACH ROW EXECUTE FUNCTION db_access_log_block_mutation();
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='db_access_log_no_truncate' AND tgrelid='db_access_log'::regclass) THEN
+        CREATE TRIGGER db_access_log_no_truncate BEFORE TRUNCATE ON db_access_log
+          FOR EACH STATEMENT EXECUTE FUNCTION db_access_log_block_mutation();
+      END IF;
+    END $$;
+  `);
+
   // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
   //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
   //  보안: action 은 allowlist enum(임의 셸 금지 — org_hook 은 멤버 머신, 이건 게이트웨이 권한이라 블래스트 반경↑).

@@ -34,6 +34,7 @@ import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { toolUsageCapabilities } from "./tool-usage.js";
 import { recallCapabilities } from "./recall.js";
+import { dbAuditCapabilities } from "./db-audit.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "./mcp-surface.js";
@@ -99,6 +100,7 @@ const all: Capability[] = [
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
   ...recallCapabilities, // #637: 컨텍스트 라우팅(recall_route) — memory scope, REST 전용(POST /api/ui/recall/route). 작업맥락(프롬프트+최근Read경로)→도메인 HUB·leaf 지식 포인터. 훅 전용(주입은 훅이 포맷).
+  ...dbAuditCapabilities, // P5(#746): db 접근 감사 — db_audit_list/verify(해시체인 검증) + org_db_subject_key(감사 대상 식별자 지정). admin scope, MCP+REST(/api/ui/db-audit*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)

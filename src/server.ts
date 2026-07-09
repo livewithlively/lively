@@ -63,7 +63,7 @@ export function buildServer(
     const cb = typeof handler === "function" ? instrument(name, handler, harness) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
-  registerDbTools(server);                    // 제품 DB (읽기전용) — capability 밖, 직접 등록(override false 면 래핑이 스킵)
+  registerDbTools(server, harness);           // 제품 DB (읽기전용) — capability 밖, 직접 등록(override false 면 래핑이 스킵). harness=P5 감사 귀속
   registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness); // capability: expose.mcp 기본값 + org_tool override(양방향) + 주입모드 _meta
   return server;
 }

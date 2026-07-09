@@ -129,6 +129,7 @@ function assertNoForbiddenFunctions(ast: unknown, forbidden: Set<string> = FORBI
 const DENIED_TABLES = new Set([
   "auth_token", "org_content_audit", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref", "org_mcp_server", "org_db_source",
   "member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log",
+  "db_access_log", "org_db_subject_key", // P5(#746) 감사 기록·감사 설정 — 조회는 전용 표면(db_audit_list)으로만
 ]);
 
 // 게이트웨이 내부 테이블 절대 deny(B18) 여부 — 웹 정책과 무관하게 항상 차단(웹 UI·db_schema 가 정직하게 '시스템 차단'으로 표시하는 데 쓴다).
@@ -148,6 +149,7 @@ export interface SourcePolicy {
 export interface QueryPlan {
   minMaskedOutputs: number; // 최상위 투영에 그대로 나온 마스킹 컬럼 수(하한)
   hasTopStarOverMaskedTable: boolean; // 최상위 * 가 마스킹 테이블을 덮는가
+  tables?: string[]; // 참조 테이블 전수(lower, 조인/서브쿼리 포함) — db 접근 감사(P5, #746) 기록용. assertSafeSelect 가 채운다.
 }
 const EMPTY_PLAN: QueryPlan = { minMaskedOutputs: 0, hasTopStarOverMaskedTable: false };
 
@@ -330,20 +332,26 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
   const srcSchema = (opts?.schema ?? "").toLowerCase();
   const tableNames: string[] = [];
-  for (const t of tables) {
-    const segs = t.split("::");
-    const name = segs[segs.length - 1]?.toLowerCase();
-    if (!name) continue;
-    // mysql 크로스-스키마 거부(#715) — db-수식 참조는 소스 스키마와 일치할 때만(미수식 'null' 은 통과 —
-    //  커넥션이 소스 스키마로 고정돼 있어 미수식은 그 스키마로 해석된다). information_schema/mysql/sys 포함 전부 차단.
-    const dbPart = segs.length >= 3 ? segs[1] : null;
-    if (dialect === "mysql" && dbPart && dbPart !== "null" && dbPart.toLowerCase() !== srcSchema) {
-      throw new Error(`Blocked: 다른 스키마(db) 참조 '${dbPart}.${name}' — 이 소스는 '${opts?.schema ?? ""}' 스키마만 조회할 수 있습니다`);
+  try {
+    for (const t of tables) {
+      const segs = t.split("::");
+      const name = segs[segs.length - 1]?.toLowerCase();
+      if (!name) continue;
+      tableNames.push(name); // 차단으로 throw 하더라도 감사(P5)가 '어떤 테이블을 건드리려 했나'를 알도록 먼저 수집
+      // mysql 크로스-스키마 거부(#715) — db-수식 참조는 소스 스키마와 일치할 때만(미수식 'null' 은 통과 —
+      //  커넥션이 소스 스키마로 고정돼 있어 미수식은 그 스키마로 해석된다). information_schema/mysql/sys 포함 전부 차단.
+      const dbPart = segs.length >= 3 ? segs[1] : null;
+      if (dialect === "mysql" && dbPart && dbPart !== "null" && dbPart.toLowerCase() !== srcSchema) {
+        throw new Error(`Blocked: 다른 스키마(db) 참조 '${dbPart}.${name}' — 이 소스는 '${opts?.schema ?? ""}' 스키마만 조회할 수 있습니다`);
+      }
+      if (DENIED_TABLES.has(name)) throw new Error(`Blocked table: ${name} — 민감 테이블은 db_query 로 조회할 수 없습니다`);
     }
-    if (DENIED_TABLES.has(name)) throw new Error(`Blocked table: ${name} — 민감 테이블은 db_query 로 조회할 수 없습니다`);
-    tableNames.push(name);
-  }
 
-  if (!policy) return EMPTY_PLAN;
-  return assertSourcePolicy(stmts[0] as Record<string, unknown>, tableNames, policy);
+    if (!policy) return { ...EMPTY_PLAN, tables: tableNames };
+    return { ...assertSourcePolicy(stmts[0] as Record<string, unknown>, tableNames, policy), tables: tableNames };
+  } catch (e) {
+    // P5(#746) — 차단 에러에 참조 테이블을 실어 tools/db.ts 가 감사 행(tables)을 채우게 한다(구조화 필터 db_audit_list table= 대응).
+    if (e instanceof Error) (e as Error & { tables?: string[] }).tables = tableNames;
+    throw e;
+  }
 }

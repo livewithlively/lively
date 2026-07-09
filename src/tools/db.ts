@@ -6,8 +6,9 @@ import { getMysqlPool, execReadQueryMysql, type MysqlPoolLike } from "../db/mysq
 import { listTableNames, listColumnsMeta } from "../db/catalog.js";
 import { assertSafeSelect, isSystemDeniedTable, type SafeSelectOpts } from "../db/firewall.js";
 import { auditQuery } from "../db/audit.js";
+import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAccessOrThrow } from "../db/access-log.js";
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
-import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap } from "../db/policy.js";
+import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
 import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess } from "../context.js";
 
@@ -68,7 +69,8 @@ export const DB_TOOLS = [
     inputSchema: { type: "object", required: ["sql"], properties: { sql: { type: "string", description: "실행할 단일 SELECT 문" }, source: { type: "string", description: "데이터소스 이름(db_sources 로 확인)" } } } },
 ] as const;
 
-export function registerDbTools(server: McpServer): void {
+// harness: 이 요청의 접속 신원(buildServer 가 전달) — db 접근 감사(P5, #746)의 harness 귀속에 쓴다.
+export function registerDbTools(server: McpServer, harness?: string | null): void {
   // 등록된 읽기 데이터소스 디스커버리 — 자유 SQL 전에 여기서 소스 이름을 확인한다(접속 URL·자격증명 미노출).
   server.registerTool(
     "db_sources",
@@ -111,33 +113,49 @@ export function registerDbTools(server: McpServer): void {
       const user = resolveUser(extra);
       await refreshSources();
       await refreshPolicy();
-      const src = resolveSourceName(source);
-      requireDbSource(user, src);
-      const policy = getSourcePolicy(src); // 테이블 정책 오버레이(라이브 스키마 위)
-      const masks = getMaskStyleMap(src);
-      // 카탈로그 조회는 엔진 공통 모듈(db/catalog.ts) — pg='public' / mysql=소스 스키마(DATABASE()) (#715).
-      if (table) {
-        const tl = table.toLowerCase();
-        if (isSystemDeniedTable(tl)) throw new Error(`Blocked table: ${tl} — 게이트웨이 내부 테이블은 조회할 수 없습니다(시스템 차단)`);
-        const mode = policy.tableMode.get(tl) ?? policy.tableDefault;
-        if (mode === "deny") throw new Error(`Blocked table: ${tl} — 이 소스에서 조회가 허용되지 않은 테이블입니다(웹 관리)`);
-        const cols = await listColumnsMeta(src, table);
-        const rows = cols.map((r) => {
-          const style = masks.get(`${tl}.${r.column_name.toLowerCase()}`);
-          return style ? { ...r, masked: style } : r; // 마스킹 컬럼 표시(에이전트가 파생/필터 회피하도록)
+      // P5(#746) — 스키마 접근도 성공·차단·실패 전건 감사에 남긴다(메타데이터라 best-effort — 기록 실패가 조회를 막진 않음).
+      //  차단 프로빙(deny/시스템 테이블 이름 더듬기)이 기록에서 빠지면 안 되므로 권한·정책 체크도 try 안에서 진행(리뷰 blocking①).
+      let src = String(source ?? "").trim() || "(미지정)";
+      const schemaAudit = (ok: boolean, tables: string[], error?: string): void =>
+        persistAccessBestEffort({
+          userId: user.userId, tokenHashPrefix: user.tokenHashPrefix ?? null, harness: harness ?? null,
+          op: "schema", source: src, sql: null, tables, maskedColumns: [], rowCount: 0, durationMs: 0,
+          ok, error: error ?? null, subjectKeys: null,
         });
-        return { content: [{ type: "text", text: JSON.stringify({ source: src, table, rows }, null, 2) }] };
+      try {
+        src = resolveSourceName(source);
+        requireDbSource(user, src);
+        const policy = getSourcePolicy(src); // 테이블 정책 오버레이(라이브 스키마 위)
+        const masks = getMaskStyleMap(src);
+        // 카탈로그 조회는 엔진 공통 모듈(db/catalog.ts) — pg='public' / mysql=소스 스키마(DATABASE()) (#715).
+        if (table) {
+          const tl = table.toLowerCase();
+          if (isSystemDeniedTable(tl)) throw new Error(`Blocked table: ${tl} — 게이트웨이 내부 테이블은 조회할 수 없습니다(시스템 차단)`);
+          const mode = policy.tableMode.get(tl) ?? policy.tableDefault;
+          if (mode === "deny") throw new Error(`Blocked table: ${tl} — 이 소스에서 조회가 허용되지 않은 테이블입니다(웹 관리)`);
+          const cols = await listColumnsMeta(src, table);
+          const rows = cols.map((r) => {
+            const style = masks.get(`${tl}.${r.column_name.toLowerCase()}`);
+            return style ? { ...r, masked: style } : r; // 마스킹 컬럼 표시(에이전트가 파생/필터 회피하도록)
+          });
+          schemaAudit(true, [tl]);
+          return { content: [{ type: "text", text: JSON.stringify({ source: src, table, rows }, null, 2) }] };
+        }
+        // effective-allow 테이블만 노출(시스템 내부 테이블 제외) — allow-list(table_default='deny') 모드면 허용된 것만 보인다.
+        const names = await listTableNames(src);
+        const rows = names
+          .filter((n) => {
+            const tn = n.toLowerCase();
+            if (isSystemDeniedTable(tn)) return false;
+            return (policy.tableMode.get(tn) ?? policy.tableDefault) === "allow";
+          })
+          .map((n) => ({ table_name: n }));
+        schemaAudit(true, []);
+        return { content: [{ type: "text", text: JSON.stringify({ source: src, rows }, null, 2) }] };
+      } catch (e) {
+        schemaAudit(false, table ? [String(table).toLowerCase()] : [], (e as Error).message);
+        throw e;
       }
-      // effective-allow 테이블만 노출(시스템 내부 테이블 제외) — allow-list(table_default='deny') 모드면 허용된 것만 보인다.
-      const names = await listTableNames(src);
-      const rows = names
-        .filter((n) => {
-          const tn = n.toLowerCase();
-          if (isSystemDeniedTable(tn)) return false;
-          return (policy.tableMode.get(tn) ?? policy.tableDefault) === "allow";
-        })
-        .map((n) => ({ table_name: n }));
-      return { content: [{ type: "text", text: JSON.stringify({ source: src, rows }, null, 2) }] };
     },
   );
 
@@ -162,13 +180,22 @@ export function registerDbTools(server: McpServer): void {
       const cfg = getSourceConfig(src);
       if (!cfg) throw new Error(`db source '${src}' 설정을 찾을 수 없습니다`); // 리프레시-삭제 경합 방어
       const policy = getSourcePolicy(src);
-      // 방어선 1·2 + 게이트1(테이블 allow/deny · 마스킹-파생 차단) — mysql 은 dialect+크로스-스키마 거부(#715).
       const gateOpts: SafeSelectOpts | undefined =
         cfg.driver === "mysql" ? { dialect: "mysql", schema: cfg.database } : undefined;
-      const plan = assertSafeSelect(sql, policy, gateOpts);
 
+      // P5(#746) — 게이트1 차단·실행 실패·성공 전부 db_access_log 에 남도록 게이트1부터 try 안에서 진행한다.
       const started = Date.now();
+      const auditBase = {
+        userId: user.userId, tokenHashPrefix: user.tokenHashPrefix ?? null, harness: harness ?? null,
+        op: "query" as const, source: src, sql,
+      };
+      let planTables: string[] = [];
+      let maskedColNames: string[] = [];
       try {
+        // 방어선 1·2 + 게이트1(테이블 allow/deny · 마스킹-파생 차단) — mysql 은 dialect+크로스-스키마 거부(#715).
+        const plan = assertSafeSelect(sql, policy, gateOpts);
+        planTables = plan.tables ?? [];
+
         // ── 엔진별 실행 → 엔진 중립 형태(rows + fields.srcKey)로 정규화 ──
         interface NormResult { columns: string[]; rows: unknown[][]; rowCount: number; truncated: boolean; fields: FieldMeta[] }
         let out: NormResult;
@@ -209,7 +236,27 @@ export function registerDbTools(server: McpServer): void {
           }
           if (targets.length > 0) out = { ...out, rows: applyRowMasking(out.rows, targets) };
           masked = targets.length;
+          maskedColNames = targets.map((t) => out.fields[t.index]?.name ?? `#${t.index}`);
         }
+
+        // P5 — 조회 대상 식별자(subject) 수집: 지정 컬럼(org_db_subject_key)의 반환값만 상한부.
+        //  mysql=srcKey(table.col) 직접 매칭 / pg=카탈로그 해석(oid:attnum→table.col). 마스킹 적용 후 값 기준(fail-safe).
+        let subjectKeys: ReturnType<typeof collectSubjectKeys> = null;
+        const subjSet = getSubjectColSet(src);
+        if (subjSet.size > 0) {
+          if (cfg.driver === "mysql") {
+            subjectKeys = collectSubjectKeys(out.fields, out.rows, (k) => (subjSet.has(k) ? k : null));
+          } else {
+            const attrs = await resolveSubjectAttrs(src, await getPool(src));
+            subjectKeys = collectSubjectKeys(out.fields, out.rows, (k) => attrs.get(k) ?? null);
+          }
+        }
+
+        // P5 — 감사 우선(fail-closed): 기록이 성공해야 결과를 반환한다(실패 시 AuditWriteError → 아래 catch).
+        await persistAccessOrThrow({
+          ...auditBase, tables: planTables, maskedColumns: maskedColNames,
+          rowCount: out.rowCount, durationMs: Date.now() - started, ok: true, subjectKeys,
+        });
         auditQuery({ userId: user.userId, source: src, sql, rowCount: out.rowCount, ms: Date.now() - started, ok: true, masked });
         return {
           content: [{
@@ -229,6 +276,16 @@ export function registerDbTools(server: McpServer): void {
           ok: false,
           error: (e as Error).message,
         });
+        // P5 — 차단(게이트1)·실행 실패도 감사에 남긴다(best-effort). 감사 실패로 인한 거부(AuditWriteError)는 재시도 무의미.
+        if (!(e instanceof AuditWriteError)) {
+          // 게이트1 차단 시 plan 이 없으므로, firewall 이 에러에 실어준 참조 테이블로 감사 행을 채운다.
+          const errTables = (e as { tables?: string[] }).tables;
+          if (planTables.length === 0 && Array.isArray(errTables)) planTables = errTables;
+          persistAccessBestEffort({
+            ...auditBase, tables: planTables, maskedColumns: maskedColNames,
+            rowCount: 0, durationMs: Date.now() - started, ok: false, error: (e as Error).message, subjectKeys: null,
+          });
+        }
         throw e;
       }
     },
