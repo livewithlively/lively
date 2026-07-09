@@ -23,19 +23,28 @@ t("hash → sha256: 접두 + 64hex, 결정론적", () => {
 });
 t("숫자 입력 full → ***", () => assert.equal(maskValue(12345, "full"), "***"));
 
-// ── planMaskTargets — 출처(tableID:columnID) 매칭만 대상, 표현식(tableID 0)·미매칭 제외 ──
+// ── planMaskTargets — 출처(srcKey) 매칭만 대상, 무출처(null)·미매칭 제외 ──
+//  srcKey: pg `${tableID}:${columnID}` / mysql `${orgTable}.${orgName}`(lower) — 엔진 중립(#715).
 const attr = new Map<string, "full" | "partial" | "email" | "hash" | "null">([["21400:2", "full"], ["21400:5", "email"]]);
-t("출처 매칭 컬럼만 대상(스타일 동반)", () => {
+t("pg 출처(oid:attnum) 매칭 컬럼만 대상(스타일 동반)", () => {
   const fields = [
-    { name: "id", tableID: 21400, columnID: 1 }, // 미매칭
-    { name: "ssn", tableID: 21400, columnID: 2 }, // 매칭 full
-    { name: "renamed_email", tableID: 21400, columnID: 5 }, // 매칭 email(이름 달라도 출처로 잡힘)
-    { name: "expr", tableID: 0, columnID: 0 }, // 표현식 — 제외
+    { name: "id", srcKey: "21400:1" }, // 미매칭
+    { name: "ssn", srcKey: "21400:2" }, // 매칭 full
+    { name: "renamed_email", srcKey: "21400:5" }, // 매칭 email(이름 달라도 출처로 잡힘)
+    { name: "expr", srcKey: null }, // 표현식 — 제외
   ];
   const targets = planMaskTargets(fields, attr);
   assert.deepEqual(targets, [{ index: 1, style: "full" }, { index: 2, style: "email" }]);
 });
-t("매칭 없으면 빈 대상", () => assert.deepEqual(planMaskTargets([{ name: "x", tableID: 999, columnID: 1 }], attr), []));
+t("매칭 없으면 빈 대상", () => assert.deepEqual(planMaskTargets([{ name: "x", srcKey: "999:1" }], attr), []));
+t("mysql 출처(table.col) 키도 동일 동작(#715)", () => {
+  const attrMy = new Map<string, "full" | "partial" | "email" | "hash" | "null">([["tb_cr_error.ssn", "full"]]);
+  const targets = planMaskTargets(
+    [{ name: "x", srcKey: "tb_cr_error.ssn" }, { name: "grade", srcKey: "tb_cr_error.grade" }, { name: "expr", srcKey: null }],
+    attrMy,
+  );
+  assert.deepEqual(targets, [{ index: 0, style: "full" }]);
+});
 
 // ── applyRowMasking — 대상 인덱스만 마스킹, 나머지 보존, 원본 불변 ──
 t("행 마스킹 적용 + 원본 불변", () => {

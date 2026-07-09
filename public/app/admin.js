@@ -3276,11 +3276,25 @@ function dbSourceForm(root, s, data, detail, isNew) {
     const allowed = (data.runtimeConfig && data.runtimeConfig.allowed_db_secret_refs) || [];
     const nameIn = el('input', { type: 'text', value: s.name, placeholder: '소스 이름(영문/숫자)', disabled: isNew ? null : '' });
     const urlIn = el('input', { type: 'text', value: '', placeholder: isNew ? 'postgres://readonly@host:5432/db (비번 제외)' : ('현재 host: ' + (s.host || '-') + ' · 변경 시에만 입력(비번 제외)') });
+    // 드라이버(#715) — postgres | mysql(Aurora). mysql 은 RLS 미지원이라 선택 시 rls 입력을 잠근다.
+    const drvSel = el('select', {}, el('option', { value: 'postgres', text: 'postgres' }), el('option', { value: 'mysql', text: 'mysql (Aurora MySQL)' }));
+    drvSel.value = s.driver === 'mysql' ? 'mysql' : 'postgres';
     const modeSel = el('select', {}, el('option', { value: 'password', text: 'password (env 참조)' }), el('option', { value: 'iam', text: 'iam (후속)', disabled: '' }), el('option', { value: 'mtls', text: 'mtls (후속)', disabled: '' }), el('option', { value: 'vault', text: 'vault (후속)', disabled: '' }));
     modeSel.value = s.auth_mode || 'password';
     const refIn = el('input', { type: 'text', value: s.auth_ref || '', placeholder: '예: ANALYTICS_DB_PW (env 이름, 값 아님)' });
     const refHint = el('p', { class: 'admin-hint', text: allowed.length ? '참조 가능한 env: ' + allowed.join(', ') : '⚠ 비번 있는 DB면 allowed_db_secret_refs 에 env 이름이 등록돼 있어야 합니다(운영자 설정 · 비번 없는 DB면 비워도 됩니다)' });
     const rlsIn = el('input', { type: 'text', value: s.rls || '', placeholder: 'app.current_user (비우면 행수준 격리 없음)' });
+    const syncDrv = () => {
+        const my = drvSel.value === 'mysql';
+        if (isNew)
+            urlIn.placeholder = my ? 'mysql://readonly@host:3306/dbname (비번 제외 · 스키마 필수)' : 'postgres://readonly@host:5432/db (비번 제외)';
+        rlsIn.disabled = my;
+        if (my)
+            rlsIn.value = '';
+        rlsIn.placeholder = my ? 'mysql 미지원 — 비움 고정' : 'app.current_user (비우면 행수준 격리 없음)';
+    };
+    drvSel.addEventListener('change', syncDrv);
+    syncDrv();
     const maxIn = el('input', { type: 'number', value: (s.max_rows == null ? '' : s.max_rows), placeholder: '기본 1000' });
     const toIn = el('input', { type: 'number', value: (s.timeout_ms == null ? '' : s.timeout_ms), placeholder: '기본 5000' });
     const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
@@ -3304,9 +3318,9 @@ function dbSourceForm(root, s, data, detail, isNew) {
                 return;
             }
             const payload = {
-                name: nameIn.value.trim(), driver: 'postgres', auth_mode: modeSel.value,
+                name: nameIn.value.trim(), driver: drvSel.value, auth_mode: modeSel.value,
                 auth_ref: refIn.value.trim() || null,
-                rls: rlsIn.value.trim() || null,
+                rls: drvSel.value === 'mysql' ? null : (rlsIn.value.trim() || null),
                 max_rows: maxIn.value ? Number(maxIn.value) : null,
                 timeout_ms: toIn.value ? Number(toIn.value) : null,
                 note: noteIn.value.trim() || null, enabled: enChk.checked, table_default: tdSel.value,
@@ -3340,7 +3354,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(field('이름', nameIn), field('접속 URL (비번 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel), field('비번 환경변수 이름 (auth_ref)', refIn), refHint, field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn), field('테이블 기본자세 (table_default)', tdSel), field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
+    root.replaceChildren(field('이름', nameIn), field('드라이버 (driver)', drvSel), field('접속 URL (비번 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel), field('비번 환경변수 이름 (auth_ref)', refIn), refHint, field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn), field('테이블 기본자세 (table_default)', tdSel), field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
 }
 // ── 테이블 정책 · 컬럼 마스킹 패널(#186) — 라이브 스키마 오버레이. 고객 DB 무수정, 게이트웨이 집행. ──
 async function renderDbPolicyPanel(panel, source) {

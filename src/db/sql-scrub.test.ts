@@ -20,6 +20,10 @@ t("소규모 숫자 보존(LIMIT)", () =>
   assert.equal(scrubSqlLiterals("SELECT * FROM t LIMIT 100"), "SELECT * FROM t LIMIT 100"));
 t("달러-인용 마스킹", () =>
   assert.ok(!scrubSqlLiterals("SELECT $t$secret 홍길동$t$ AS x").includes("홍길동")));
+t("mysql 백슬래시 이스케이프도 내용 은닉(#715)", () => {
+  const out = scrubSqlLiterals("SELECT * FROM t WHERE name = 'O\\'Brien' AND a=1");
+  assert.ok(!out.includes("Brien"), out);
+});
 t("빈 문자열 no-op", () => assert.equal(scrubSqlLiterals(""), ""));
 
 console.log(`\n${pass} checks passed`);

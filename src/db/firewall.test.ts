@@ -117,4 +117,46 @@ rejectsP("UNION 관여 거부", "SELECT ssn FROM users UNION SELECT ssn FROM u2"
 rejectsP("서브쿼리 * 반출 거부", "SELECT x.id FROM (SELECT * FROM users) x", withMask("users.ssn"), /비최상위/);
 rejectsP("CTE 반출 거부", "WITH c AS (SELECT ssn FROM users) SELECT * FROM c", withMask("users.ssn"), /최상위 SELECT 투영/);
 
+// ══════════ mysql dialect(#715) — Aurora MySQL 소스용 파서·차단목록·크로스-스키마 ══════════
+const MY = { dialect: "mysql" as const, schema: "hf" };
+const okMy = (name: string, sql: string, pol?: SourcePolicy, check?: (p: ReturnType<typeof assertSafeSelect>) => void): void => {
+  const p = assertSafeSelect(sql, pol, MY); if (check) check(p); pass++; console.log(`ok  ${name}`);
+};
+const rejMy = (name: string, sql: string, re?: RegExp, pol?: SourcePolicy): void => {
+  assert.throws(() => assertSafeSelect(sql, pol, MY), re ?? /./, name); pass++; console.log(`ok  ${name}`);
+};
+
+okMy("mysql: 기본 SELECT(백틱) 통과", "SELECT `id`, `name` FROM `tb_lo_apply` WHERE `id` = 1");
+okMy("mysql: 같은 스키마 수식 통과", "SELECT id FROM hf.tb_lo_apply");
+okMy("mysql: 조인/서브쿼리 통과", "SELECT u.id FROM users u WHERE u.id IN (SELECT user_id FROM orders)");
+rejMy("mysql: 크로스 스키마(db-수식) 거부", "SELECT secret FROM otherdb.tb_secret", /다른 스키마/);
+rejMy("mysql: information_schema 수식 거부", "SELECT table_name FROM information_schema.tables", /다른 스키마/);
+rejMy("mysql: mysql 시스템 스키마 거부", "SELECT user FROM mysql.user", /다른 스키마/);
+rejMy("mysql: 조인에 낀 크로스 스키마도 거부", "SELECT a.id FROM users a JOIN otherdb.t b ON b.id=a.id", /다른 스키마/);
+rejMy("mysql: INTO OUTFILE 거부", "SELECT * FROM t INTO OUTFILE '/tmp/x'", /Blocked SQL/);
+rejMy("mysql: LOAD_FILE 거부", "SELECT LOAD_FILE('/etc/passwd')", /Blocked/);
+rejMy("mysql: SLEEP 거부", "SELECT SLEEP(10)", /Blocked/);
+rejMy("mysql: BENCHMARK 거부", "SELECT BENCHMARK(100000000, SHA1('x'))", /Blocked/);
+rejMy("mysql: GET_LOCK 거부", "SELECT GET_LOCK('a', 10)", /Blocked/);
+rejMy("mysql: SET SESSION(주입 타임아웃 무력화) 거부", "SET SESSION max_execution_time=0", /Blocked/);
+rejMy("mysql: SET @@ 거부", "SET @@max_execution_time=0", /Blocked/);
+rejMy("mysql: REPLACE INTO(쓰기) 거부", "REPLACE INTO t VALUES (1)", /Blocked/);
+rejMy("mysql: LOAD DATA 거부", "LOAD DATA INFILE 'x' INTO TABLE t", /Blocked/);
+rejMy("mysql: INSERT 거부", "INSERT INTO t(a) VALUES(1)", /Blocked/);
+rejMy("mysql: 다중 문 거부", "SELECT 1; SELECT 2");
+
+// mysql 게이트1(마스킹-파생 차단) — pg 와 동일 AST 규칙이 mysql dialect 에서도 동작
+okMy("mysql 게이트1: 별칭 최상위 투영 통과 + minMasked=1", "SELECT ssn AS x FROM users", withMask("users.ssn"),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okMy("mysql 게이트1: * 통과 + hasTopStar", "SELECT * FROM users", withMask("users.ssn"),
+  (p) => assert.equal(p.hasTopStarOverMaskedTable, true));
+rejMy("mysql 게이트1: WHERE 필터 거부", "SELECT id FROM users WHERE ssn = '1'", /최상위 SELECT 투영/, withMask("users.ssn"));
+rejMy("mysql 게이트1: substring 파생 거부", "SELECT substring(ssn,1,3) FROM users", /최상위 SELECT 투영/, withMask("users.ssn"));
+rejMy("mysql 게이트1: 파생테이블 반출 거부", "SELECT s FROM (SELECT ssn AS s FROM users) d", /최상위 SELECT 투영/, withMask("users.ssn"));
+rejMy("mysql 게이트1: 비최상위 * 거부", "SELECT x.id FROM (SELECT * FROM users) x", /비최상위/, withMask("users.ssn"));
+rejMy("mysql 게이트1: UNION 관여 거부", "SELECT ssn FROM users UNION SELECT ssn FROM u2", /집합연산/, withMask("users.ssn"));
+rejMy("mysql 테이블 게이트: allow-list 미등록 거부", "SELECT id FROM secret",
+  /Blocked table/, policy({ tableDefault: "deny", tableMode: new Map([["users", "allow"]]) }));
+okMy("mysql 테이블 게이트: 명시 allow 통과", "SELECT id FROM users", policy({ tableDefault: "deny", tableMode: new Map([["users", "allow"]]) }));
+
 console.log(`\n${pass} checks passed`);

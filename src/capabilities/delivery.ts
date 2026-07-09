@@ -33,7 +33,7 @@ import {
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
   listAssetPrefs, setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
-  listDbSources, upsertDbSource, removeDbSource,
+  listDbSources, getDbSource, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
   listIngestPolicies, upsertIngestPolicy, removeIngestPolicy, ingestObservability,
   upsertTablePolicy, removeTablePolicy, upsertColumnMask, removeColumnMask,
@@ -47,8 +47,9 @@ import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; //
 import { getTeam as getClickUpTeam, type ClickUpTeam } from "../connectors/clickup.js";
 import { resetConnectorConfigCache } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
-import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString } from "../db/source-guard.js";
-import { invalidatePool, getPool } from "../db/pool.js";
+import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
+import { invalidatePool } from "../db/pool.js";
+import { listTableNames, listColumnsMeta } from "../db/catalog.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
 import { isSystemDeniedTable } from "../db/firewall.js";
@@ -1374,8 +1375,16 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const cfg = await getRuntimeConfig(); // host·auth_ref 화이트리스트 검증 공용(운영자 통제 경계)
       const name = slug(input.name, "name");
-      const driver = input.driver === undefined ? "postgres" : str(input.driver, "driver", 20);
-      if (driver !== "postgres") throw new HttpError(400, "driver 는 postgres 만 지원합니다(1차 pg-only)");
+      // driver — 미전송 시 기존 소스 값 유지(수정 시 mysql 소스가 postgres 로 뒤집히지 않게, #715).
+      const existing = await getDbSource(name);
+      let driver: "postgres" | "mysql";
+      if (input.driver === undefined) {
+        driver = existing?.driver === "mysql" ? "mysql" : "postgres";
+      } else {
+        const d = str(input.driver, "driver", 20);
+        if (d !== "postgres" && d !== "mysql") throw new HttpError(400, "driver 는 postgres|mysql (#715)");
+        driver = d;
+      }
       const authMode = input.auth_mode === undefined ? "password" : str(input.auth_mode, "auth_mode", 12);
       if (!["password", "iam", "mtls", "vault"].includes(authMode)) throw new HttpError(400, "auth_mode 는 password|iam|mtls|vault");
       if (authMode !== "password") throw new HttpError(400, `auth_mode '${authMode}' 는 아직 지원되지 않습니다(1차 password 만 — iam/mtls/vault 후속)`);
@@ -1387,12 +1396,21 @@ export const deliveryCapabilities: Capability[] = [
         else {
           url = str(input.url, "url", 1000).trim();
           assertNoHardSecrets(url, "url");
-          // pg 파서 기준 검사(검증=접속 일치) — new URL 이 못 보는 ?host=/?password=/?hostaddr= 쿼리파라미터 우회 차단.
-          const ins = inspectConnString(url);
-          if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름)로 참조하세요");
-          if (ins.hasHostAddr) throw new HttpError(400, "url 에 hostaddr 파라미터는 허용되지 않습니다");
-          if (!ins.host) throw new HttpError(400, "url 이 올바른 접속문자열이 아닙니다(host 없음)");
-          if (await isHostBlocked(ins.host, cfg.allowed_db_hosts)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${ins.host} — 외부 DB host 만 허용됩니다(사설/localhost 는 런타임설정 allowed_db_hosts 에 먼저 등록하세요)`);
+          let host: string;
+          if (driver === "mysql") {
+            // mysql url(#715) — 엄격 화이트리스트 검사(스킴·비번 금지·database 필수·파라미터는 ssl 만).
+            const mi = inspectMysqlUrl(url);
+            if (!mi.ok || !mi.host) throw new HttpError(400, `mysql url 불량: ${mi.error ?? "host 없음"}`);
+            host = mi.host;
+          } else {
+            // pg 파서 기준 검사(검증=접속 일치) — new URL 이 못 보는 ?host=/?password=/?hostaddr= 쿼리파라미터 우회 차단.
+            const ins = inspectConnString(url);
+            if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름)로 참조하세요");
+            if (ins.hasHostAddr) throw new HttpError(400, "url 에 hostaddr 파라미터는 허용되지 않습니다");
+            if (!ins.host) throw new HttpError(400, "url 이 올바른 접속문자열이 아닙니다(host 없음)");
+            host = ins.host;
+          }
+          if (await isHostBlocked(host, cfg.allowed_db_hosts)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${host} — 외부 DB host 만 허용됩니다(사설/localhost 는 런타임설정 allowed_db_hosts 에 먼저 등록하세요)`);
         }
       }
       // auth_ref — 환경변수 이름 형식 + 화이트리스트(인프라 시크릿 차단).
@@ -1409,6 +1427,11 @@ export const deliveryCapabilities: Capability[] = [
       }
       let rls: string | null | undefined;
       if (input.rls !== undefined) rls = (input.rls === null || input.rls === "") ? null : str(input.rls, "rls", 200).trim();
+      // mysql 은 RLS(GUC set_config) 등가가 없다(#715) — 유효값(rls 미전송이면 기존값)이 남으면 명시적으로 거부.
+      if (driver === "mysql") {
+        const effectiveRls = rls !== undefined ? rls : (existing?.rls ?? null);
+        if (effectiveRls) throw new HttpError(400, "mysql 소스는 rls(행수준 격리)를 지원하지 않습니다 — rls 를 비워두세요");
+      }
       const posIntOpt = (v: unknown, label: string): number | null | undefined => {
         if (v === undefined) return undefined;
         if (v === null || v === "") return null;
@@ -1459,32 +1482,25 @@ export const deliveryCapabilities: Capability[] = [
       if (!listSourceConfigs().some((s) => s.name === src)) throw new HttpError(404, `db source '${src}' 없음(먼저 등록·활성화)`);
       const policy = getSourcePolicy(src);
       const masks = getMaskStyleMap(src);
-      const pool = await getPool(src);
-      const client = await pool.connect();
-      try {
-        const tRes = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
-        const tables = tRes.rows.map((r) => {
-          const name = String(r.table_name);
-          // 게이트웨이 내부 테이블(B18 절대 deny) — 웹 정책 무관하게 항상 차단. 편집 불가로 정직하게 표시.
-          if (isSystemDeniedTable(name)) return { name, mode: "deny", explicit: true, system: true, maskedCount: 0 };
-          const explicit = policy.tableMode.get(name.toLowerCase());
-          const maskedCount = [...masks.keys()].filter((k) => k.startsWith(name.toLowerCase() + ".")).length;
-          return { name, mode: explicit ?? policy.tableDefault, explicit: explicit !== undefined, system: false, maskedCount };
-        });
-        let columns: Array<Record<string, unknown>> | undefined;
-        if (input.table !== undefined && input.table !== "") {
-          const table = str(input.table, "table", 200);
-          const cRes = await client.query(
-            `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, [table]);
-          columns = cRes.rows.map((r) => ({
-            column_name: r.column_name, data_type: r.data_type,
-            masked: masks.get(`${table.toLowerCase()}.${String(r.column_name).toLowerCase()}`) ?? null,
-          }));
-        }
-        return { source: src, table_default: policy.tableDefault, tables, columns, meaning: MEANING["db-source"] };
-      } finally {
-        client.release();
+      // 카탈로그 조회는 엔진 공통 모듈(db/catalog.ts) — pg='public' / mysql=소스 스키마(DATABASE()) (#715).
+      const names = await listTableNames(src);
+      const tables = names.map((name) => {
+        // 게이트웨이 내부 테이블(B18 절대 deny) — 웹 정책 무관하게 항상 차단. 편집 불가로 정직하게 표시.
+        if (isSystemDeniedTable(name)) return { name, mode: "deny", explicit: true, system: true, maskedCount: 0 };
+        const explicit = policy.tableMode.get(name.toLowerCase());
+        const maskedCount = [...masks.keys()].filter((k) => k.startsWith(name.toLowerCase() + ".")).length;
+        return { name, mode: explicit ?? policy.tableDefault, explicit: explicit !== undefined, system: false, maskedCount };
+      });
+      let columns: Array<Record<string, unknown>> | undefined;
+      if (input.table !== undefined && input.table !== "") {
+        const table = str(input.table, "table", 200);
+        const cols = await listColumnsMeta(src, table);
+        columns = cols.map((r) => ({
+          column_name: r.column_name, data_type: r.data_type,
+          masked: masks.get(`${table.toLowerCase()}.${r.column_name.toLowerCase()}`) ?? null,
+        }));
       }
+      return { source: src, table_default: policy.tableDefault, tables, columns, meaning: MEANING["db-source"] };
     }),
   restOnly("org_db_table_policy_set", "테이블 조회 정책 저장/삭제",
     "db_query 소스의 테이블별 조회 허용/차단(allow|deny)을 저장한다. remove=true 면 정책행 삭제(기본자세로 복귀). 즉시 반영.",

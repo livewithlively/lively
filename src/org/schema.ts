@@ -451,9 +451,15 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     DO $$ BEGIN
+      -- #715: driver 제약 확장(postgres→postgres|mysql). 구버전 pg-only chk 가 있으면 교체(멱등).
+      IF EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_driver_chk'
+                   AND pg_get_constraintdef(oid) NOT ILIKE '%mysql%') THEN
+        ALTER TABLE org_db_source DROP CONSTRAINT org_db_source_driver_chk;
+      END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_driver_chk') THEN
-        ALTER TABLE org_db_source ADD CONSTRAINT org_db_source_driver_chk CHECK (driver = 'postgres');
+        ALTER TABLE org_db_source ADD CONSTRAINT org_db_source_driver_chk CHECK (driver IN ('postgres','mysql'));
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_db_source'::regclass AND conname='org_db_source_auth_mode_chk') THEN

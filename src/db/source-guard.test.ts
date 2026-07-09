@@ -1,7 +1,7 @@
 // DB 소스 보안 가드 단위 체크 — SSRF(IP 차단) + 시크릿 참조 화이트리스트.
 // 실행: npm run build && node dist/db/source-guard.test.js
 import assert from "node:assert/strict";
-import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, pinHost } from "./source-guard.js";
+import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl, pinHost } from "./source-guard.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -58,5 +58,33 @@ await at("isHostBlocked: 허용목록 밖 사설 IP → 여전히 차단", async
 await at("pinHost: 허용목록 사설 IP → 그대로 핀", async () => assert.equal(await pinHost("10.0.0.5", ["10.0.0.5"]), "10.0.0.5"));
 await at("pinHost: 허용목록 127.0.0.1 → 그대로 핀", async () => assert.equal(await pinHost("127.0.0.1", ["127.0.0.1"]), "127.0.0.1"));
 await at("pinHost: 허용목록 밖 사설 IP → 여전히 거부", async () => { await assert.rejects(() => pinHost("10.0.0.5", ["127.0.0.1"]), /차단/); });
+
+// ── inspectMysqlUrl(#715 — mysql 소스 url 엄격 검사) ──
+t("inspectMysqlUrl: 정상(포트·스키마·유저)", () => {
+  const m = inspectMysqlUrl("mysql://wikibot_ro@prod-x.cluster-ro.rds.amazonaws.com:3306/hf");
+  assert.equal(m.ok, true);
+  assert.equal(m.host, "prod-x.cluster-ro.rds.amazonaws.com");
+  assert.equal(m.port, 3306);
+  assert.equal(m.user, "wikibot_ro");
+  assert.equal(m.database, "hf");
+  assert.equal(m.ssl, false);
+});
+t("inspectMysqlUrl: 포트 생략 → 3306", () => assert.equal(inspectMysqlUrl("mysql://u@h/db").port, 3306));
+t("inspectMysqlUrl: 대문자 host 소문자화", () => assert.equal(inspectMysqlUrl("mysql://u@RDS.EXAMPLE.COM/db").host, "rds.example.com"));
+t("inspectMysqlUrl: 비번 인라인 거부", () => {
+  const m = inspectMysqlUrl("mysql://u:pw@h/db");
+  assert.equal(m.ok, false);
+  assert.equal(m.hasPassword, true);
+});
+t("inspectMysqlUrl: database(스키마) 없으면 거부", () => assert.equal(inspectMysqlUrl("mysql://u@h:3306").ok, false));
+t("inspectMysqlUrl: 다단 path 거부", () => assert.equal(inspectMysqlUrl("mysql://u@h/db/extra").ok, false));
+t("inspectMysqlUrl: 스킴 오류 거부", () => assert.equal(inspectMysqlUrl("postgres://u@h/db").ok, false));
+t("inspectMysqlUrl: ssl=require 인식", () => {
+  const m = inspectMysqlUrl("mysql://u@h/db?ssl=require");
+  assert.equal(m.ok, true);
+  assert.equal(m.ssl, true);
+});
+t("inspectMysqlUrl: 미지 파라미터 거부(옵션 주입 차단)", () => assert.equal(inspectMysqlUrl("mysql://u@h/db?connectTimeout=1").ok, false));
+t("inspectMysqlUrl: ssl 이상값 거부", () => assert.equal(inspectMysqlUrl("mysql://u@h/db?ssl=disable").ok, false));
 
 console.log(`\n${pass} checks passed`);

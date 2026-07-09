@@ -60,6 +60,53 @@ export function isSecretRefAllowed(ref: string, allowed: string[]): boolean {
   return allowed.includes(ref);
 }
 
+// ── mysql 접속 URL 검사(#715) — pg 와 달리 쿼리파라미터 스머글링 표면이 없도록 엄격 화이트리스트. ──
+//  형식: mysql://user@host[:port]/database[?ssl=require] — 비번 인라인 금지(auth_ref), database(스키마) 필수
+//  (게이트웨이가 소스를 그 스키마로 고정 — firewall 크로스-스키마 거부·db_schema DATABASE() 필터의 전제).
+//  파라미터는 ssl 하나만 허용(그 외 전부 거부 — mysql2 옵션 주입 차단). 순수 함수(단위테스트).
+export interface MysqlUrlInspect {
+  ok: boolean;
+  error?: string;
+  hasPassword?: boolean;
+  host?: string;
+  port?: number;
+  user?: string;
+  database?: string;
+  ssl?: boolean;
+}
+
+export function inspectMysqlUrl(url: string): MysqlUrlInspect {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return { ok: false, error: "URL 형식이 아닙니다" };
+  }
+  if (u.protocol !== "mysql:") return { ok: false, error: "mysql:// 스킴이어야 합니다" };
+  if (!u.hostname) return { ok: false, error: "host 가 없습니다" };
+  if (u.password) return { ok: false, error: "url 에 비밀번호를 넣지 마세요 — auth_ref(환경변수 이름)로 참조하세요", hasPassword: true };
+  const database = decodeURIComponent(u.pathname.replace(/^\//, ""));
+  if (!database || database.includes("/")) {
+    return { ok: false, error: "database(스키마) 필수 — mysql://user@host:3306/dbname 형식" };
+  }
+  let ssl = false;
+  for (const [k, v] of u.searchParams) {
+    if (k !== "ssl") return { ok: false, error: `허용되지 않은 url 파라미터: ${k} (ssl 만 허용)` };
+    if (!["1", "true", "require"].includes(v.toLowerCase())) return { ok: false, error: "ssl 파라미터는 1|true|require 만" };
+    ssl = true;
+  }
+  const port = u.port ? Number(u.port) : 3306;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return { ok: false, error: "port 가 올바르지 않습니다" };
+  return {
+    ok: true,
+    host: u.hostname.replace(/^\[|\]$/g, "").toLowerCase(),
+    port,
+    user: u.username ? decodeURIComponent(u.username) : undefined,
+    database,
+    ssl,
+  };
+}
+
 // host 를 검증된 공인 IP '하나'로 핀해 반환(DB 소스 connect 대상으로 고정). DNS 리바인딩·멀티앤서 우회 차단:
 //  도메인의 A 레코드 중 하나라도 사설/메타데이터면 거부(every public 일 때만 통과), 통과하면 그 공인 IP 로 고정.
 //  pg 는 이 IP 로 직접 connect(재resolve 없음)하고, TLS 는 원래 호스트명을 servername 으로 검증한다(resolveConnectionString).

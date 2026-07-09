@@ -27,6 +27,41 @@ const BLOCKED: RegExp[] = [
   /\btruncate\b/i,
 ];
 
+// ── mysql dialect(#715) — MySQL(Aurora) 소스용 차단목록. pg 목록(BLOCKED)은 후방호환 위해 무변경. ──
+//  파일 I/O(LOAD_FILE·INTO OUTFILE/DUMPFILE·LOAD DATA)·DoS(BENCHMARK·SLEEP·GET_LOCK)·세션변수(SET GLOBAL/
+//  SESSION/@@ — 게이트웨이가 주입한 max_execution_time 무력화 방지)·프로시저/동적SQL(CALL·PREPARE·EXECUTE·
+//  HANDLER)·복제/관리(KILL·MASTER_POS_WAIT) + 공통 DML/DDL. 정규식은 리터럴에도 매칭될 수 있으나 fail-closed(안전측).
+const MYSQL_BLOCKED: RegExp[] = [
+  /\bload_file\b/i,
+  /\bload\s+data\b/i,
+  /\binto\s+(outfile|dumpfile)\b/i,
+  /\bbenchmark\b/i,
+  /\bsleep\b/i,
+  /\bget_lock\b/i,
+  /\brelease_lock\b/i,
+  /\bis_free_lock\b/i,
+  /\bis_used_lock\b/i,
+  /\bmaster_pos_wait\b/i,
+  /\bwait_for_executed_gtid_set\b/i,
+  /\bset\s+(global|session|persist|@@)/i, // 게이트웨이 주입 세션변수(max_execution_time) 덮어쓰기 방지
+  /\bhandler\b/i,
+  /\bprepare\b/i,
+  /\bexecute\b/i,
+  /\bcall\b/i,
+  /\bkill\b/i,
+  /\breplace\b/i, // REPLACE INTO(쓰기). 문자열함수 REPLACE() 도 걸리지만 fail-closed 수용
+  /\block\s+tables\b/i,
+  /\bcreate\b/i,
+  /\balter\b/i,
+  /\bdrop\b/i,
+  /\bgrant\b/i,
+  /\brevoke\b/i,
+  /\binsert\b/i,
+  /\bupdate\b/i,
+  /\bdelete\b/i,
+  /\btruncate\b/i,
+];
+
 // 방어선 2: AST 함수호출 차단목록. 정규식은 주석/스키마수식(pg_catalog.set_config)으로 우회 가능하므로,
 // astify 결과를 walk 하여 CTE·서브쿼리까지 포함한 모든 function 노드를 검사한다 — RLS GUC 덮어쓰기/읽기와
 // 파일·sleep 류를 SQL 한 줄로 무력화하지 못하게 하는 진짜 방어선.
@@ -40,8 +75,20 @@ const FORBIDDEN_FUNCTIONS = new Set([
   "pg_sleep",
   "dblink",
 ]);
+// mysql AST 함수 차단(#715) — 주석 삽입(`SLEEP/**/(1)`) 등 정규식 우회 대비 2차 방어선.
+const MYSQL_FORBIDDEN_FUNCTIONS = new Set([
+  "load_file",
+  "sleep",
+  "benchmark",
+  "get_lock",
+  "release_lock",
+  "is_free_lock",
+  "is_used_lock",
+  "master_pos_wait",
+  "wait_for_executed_gtid_set",
+]);
 
-function assertNoForbiddenFunctions(ast: unknown): void {
+function assertNoForbiddenFunctions(ast: unknown, forbidden: Set<string> = FORBIDDEN_FUNCTIONS): void {
   const stack: unknown[] = [ast];
   while (stack.length > 0) {
     const node = stack.pop();
@@ -57,7 +104,7 @@ function assertNoForbiddenFunctions(ast: unknown): void {
       if (Array.isArray(parts)) {
         for (const part of parts) {
           const v = (part as { value?: unknown } | null)?.value;
-          if (typeof v === "string" && FORBIDDEN_FUNCTIONS.has(v.toLowerCase())) {
+          if (typeof v === "string" && forbidden.has(v.toLowerCase())) {
             throw new Error(`Blocked function: ${v}`);
           }
         }
@@ -236,19 +283,32 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   return { minMaskedOutputs, hasTopStarOverMaskedTable };
 }
 
+// 엔진별 SQL dialect(#715) — 파서·차단목록 선택. 기본 postgresql(후방호환).
+export type SqlDialect = "postgresql" | "mysql";
+export interface SafeSelectOpts {
+  dialect?: SqlDialect;
+  // mysql 전용: 소스가 고정된 스키마(=database). db-수식 참조(`otherdb.t`)가 이 스키마 밖이면 거부 —
+  //  MySQL 계정은 여러 스키마를 SELECT 할 수 있어, 스키마 밖 참조를 허용하면 per-source 정책(테이블
+  //  allow/deny·마스킹이 bare 테이블명 키)이 다른 스키마의 동명/이명 테이블로 우회된다(fail-open). 원천 차단.
+  schema?: string | null;
+}
+
 /**
  * 자유 SQL 의 1차 방어선. 진짜 권한 경계는 DB의 읽기전용 role + RLS 다(이건 보조).
  * 단일 SELECT 만 통과시키고, 금지 함수(특히 set_config/current_setting)는 CTE·서브쿼리까지 차단한다.
  * policy 를 주면 소스별 테이블 allow/deny + 마스킹-파생 차단(게이트1)까지 집행하고, 게이트2용 QueryPlan 을 돌려준다.
+ * opts.dialect="mysql" 이면 mysql 파서·차단목록 + 크로스-스키마 거부(opts.schema 기준)로 동작(#715).
  */
-export function assertSafeSelect(sql: string, policy?: SourcePolicy): QueryPlan {
-  for (const re of BLOCKED) {
+export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: SafeSelectOpts): QueryPlan {
+  const dialect: SqlDialect = opts?.dialect ?? "postgresql";
+  const blocked = dialect === "mysql" ? MYSQL_BLOCKED : BLOCKED;
+  for (const re of blocked) {
     if (re.test(sql)) throw new Error(`Blocked SQL pattern: ${re.source}`);
   }
 
   let ast: unknown;
   try {
-    ast = parser.astify(sql, { database: "postgresql" });
+    ast = parser.astify(sql, { database: dialect });
   } catch (e) {
     throw new Error(`Unparseable SQL: ${(e as Error).message}`);
   }
@@ -258,19 +318,28 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy): QueryPlan 
   if ((stmts[0] as { type?: string }).type !== "select") {
     throw new Error("Only SELECT statements are allowed");
   }
-  assertNoForbiddenFunctions(stmts[0]); // CTE/서브쿼리 포함 전 함수 호출 검사(set_config/current_setting 등)
+  // CTE/서브쿼리 포함 전 함수 호출 검사 — pg: set_config/current_setting 등 / mysql: sleep·load_file 등(주석 우회 대비)
+  assertNoForbiddenFunctions(stmts[0], dialect === "mysql" ? MYSQL_FORBIDDEN_FUNCTIONS : FORBIDDEN_FUNCTIONS);
 
   // 참조 테이블 deny — node-sql-parser 의 tableList: "{type}::{db}::{table}" (조인/서브쿼리 포함 전수).
   let tables: string[];
   try {
-    tables = parser.tableList(sql, { database: "postgresql" });
+    tables = parser.tableList(sql, { database: dialect });
   } catch (e) {
     throw new Error(`Unparseable SQL: ${(e as Error).message}`);
   }
+  const srcSchema = (opts?.schema ?? "").toLowerCase();
   const tableNames: string[] = [];
   for (const t of tables) {
-    const name = t.split("::").pop()?.toLowerCase();
+    const segs = t.split("::");
+    const name = segs[segs.length - 1]?.toLowerCase();
     if (!name) continue;
+    // mysql 크로스-스키마 거부(#715) — db-수식 참조는 소스 스키마와 일치할 때만(미수식 'null' 은 통과 —
+    //  커넥션이 소스 스키마로 고정돼 있어 미수식은 그 스키마로 해석된다). information_schema/mysql/sys 포함 전부 차단.
+    const dbPart = segs.length >= 3 ? segs[1] : null;
+    if (dialect === "mysql" && dbPart && dbPart !== "null" && dbPart.toLowerCase() !== srcSchema) {
+      throw new Error(`Blocked: 다른 스키마(db) 참조 '${dbPart}.${name}' — 이 소스는 '${opts?.schema ?? ""}' 스키마만 조회할 수 있습니다`);
+    }
     if (DENIED_TABLES.has(name)) throw new Error(`Blocked table: ${name} — 민감 테이블은 db_query 로 조회할 수 없습니다`);
     tableNames.push(name);
   }

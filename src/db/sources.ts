@@ -11,7 +11,7 @@
 import pg from "pg";
 import { parse } from "pg-connection-string";
 import { listDbSources, getRuntimeConfig } from "../org/store.js";
-import { isSecretRefAllowed, pinHost } from "./source-guard.js";
+import { inspectMysqlUrl, isSecretRefAllowed, pinHost } from "./source-guard.js";
 import { SELF_SOURCE } from "./self-source.js";
 
 export type AuthMode = "password" | "iam" | "mtls" | "vault";
@@ -19,8 +19,9 @@ export type AuthMode = "password" | "iam" | "mtls" | "vault";
 export interface DbSource {
   name: string;
   url: string;
-  driver: "postgres"; // 1차 pg-only — firewall 파서·information_schema·RLS 주입이 전부 pg 전제
-  rls: string | null; // null = 행수준 격리 없음(SET LOCAL 미주입)
+  driver: "postgres" | "mysql"; // postgres(#186 원설계) | mysql(Aurora MySQL, #715 — 접속·실행은 mysql-engine.ts 경유)
+  database: string | null; // mysql: 조회 대상 스키마(url path — firewall 크로스-스키마 거부·db_schema 필터 기준) / pg: null(public 고정)
+  rls: string | null; // null = 행수준 격리 없음(SET LOCAL 미주입). mysql 은 등가 없음 — 항상 null 강제(#715)
   maxRows: number;
   timeoutMs: number;
   authMode: AuthMode;
@@ -78,6 +79,7 @@ async function loadDbSources(): Promise<Map<string, DbSource>> {
     name: SELF_SOURCE,
     url: "", // 미사용 — getPool 이 itemsPool 직결로 단락(resolveConnectionString 미경유)
     driver: "postgres",
+    database: null,
     rls: null, // admin 은 조직 콘텐츠 전체 열람(단일 org/게이트웨이 전제)
     maxRows: defMaxRows,
     timeoutMs: defTimeout,
@@ -93,12 +95,21 @@ async function loadDbSources(): Promise<Map<string, DbSource>> {
     return m;
   }
   for (const r of rows) {
-    if (!r.enabled || r.driver !== "postgres" || !r.url) continue;
+    if (!r.enabled || !r.url) continue;
+    const driver = r.driver === "postgres" || r.driver === "mysql" ? r.driver : null;
+    if (!driver) continue; // 미지원 드라이버 행은 무시(등록 게이트가 막지만 방어적)
+    let database: string | null = null;
+    if (driver === "mysql") {
+      const mi = inspectMysqlUrl(r.url);
+      if (!mi.ok || !mi.database) continue; // 스키마 없는 mysql url 은 로드 불가(등록 게이트가 보장 — 방어적 스킵)
+      database = mi.database;
+    }
     m.set(r.name, {
       name: r.name,
       url: r.url,
-      driver: "postgres",
-      rls: r.rls,
+      driver,
+      database,
+      rls: driver === "mysql" ? null : r.rls, // mysql 은 RLS 등가 없음 — 강제 null(#715)
       maxRows: typeof r.max_rows === "number" && r.max_rows > 0 ? r.max_rows : defMaxRows,
       timeoutMs: typeof r.timeout_ms === "number" && r.timeout_ms > 0 ? r.timeout_ms : defTimeout,
       authMode: r.auth_mode,
@@ -149,6 +160,10 @@ export async function resolveConnectionString(src: DbSource): Promise<pg.PoolCon
   if (src.origin === "builtin") {
     // 내장 self 소스는 itemsPool 직결 — getPool 이 단락하므로 여기 도달하면 안 된다(호출 경로 회귀 방어).
     throw new Error(`db source '${src.name}' 은 내장(builtin) 소스로 접속문자열을 만들지 않습니다 — getPool 이 itemsPool 로 처리`);
+  }
+  if (src.driver !== "postgres") {
+    // mysql 접속 조립은 mysql-engine.resolveMysqlPoolOptions — 여기 도달하면 배선 오류(회귀 방어, #715).
+    throw new Error(`db source '${src.name}' driver '${src.driver}' 는 pg 접속 조립 대상이 아닙니다(mysql-engine 경유)`);
   }
   if (src.authMode !== "password") {
     throw new Error(`db source '${src.name}' auth_mode '${src.authMode}' 미지원 — 1차 password 만(iam/mtls/vault 후속)`);

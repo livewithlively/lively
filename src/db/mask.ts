@@ -1,6 +1,8 @@
-// 결정론적 컬럼 마스킹 (#186) — 고객 DB 무수정, 게이트웨이(TS)에서 값 변환.
+// 결정론적 컬럼 마스킹 (#186, mysql #715) — 고객 DB 무수정, 게이트웨이(TS)에서 값 변환.
 //  db_query 결과 행(rowMode:"array")의 특정 출력 컬럼 값을 style 에 따라 마스킹한다. 순수 함수 — 단위테스트(mask.test.ts).
-//  마스킹 대상 식별은 '출력 컬럼명'이 아니라 DB 가 알려주는 출처(pg field.tableID/columnID)로 한다(이름바꾸기 우회 무력화).
+//  마스킹 대상 식별은 '출력 컬럼명'이 아니라 DB 가 알려주는 출처로 한다(이름바꾸기 우회 무력화) — 엔진 중립
+//  srcKey 로 일반화: pg `${tableID}:${columnID}`(oid:attnum, policy.resolveMaskedAttrs 가 해석) /
+//  mysql `${orgTable}.${orgName}`(lower — 정책 키와 같은 도메인이라 카탈로그 조회 불요, mysql-engine 이 채움).
 import { createHash } from "node:crypto";
 
 export type MaskStyle = "full" | "partial" | "email" | "hash" | "null";
@@ -42,21 +44,22 @@ function maskPartial(s: string): string {
 
 export interface FieldMeta {
   name: string;
-  tableID?: number;
-  columnID?: number;
+  // 출처 키 — pg `${tableID}:${columnID}` / mysql `${orgTable}.${orgName}`(lower).
+  //  null = 표현식·무출처·스키마 불일치(마스킹 비대상 — 게이트1이 마스킹 컬럼의 표현식/파생 접촉을 이미 거부).
+  srcKey?: string | null;
 }
 export interface MaskTarget {
   index: number;
   style: MaskStyle;
 }
 
-// 출력 필드 중 마스킹 대상(출처 oid:attnum 이 attrStyles 에 있는 컬럼)의 인덱스·스타일을 뽑는다.
-//  attrStyles 키 = `${tableID}:${columnID}`. tableID 0(표현식)·미매칭은 대상 아님(게이트1이 표현식 PII 미접촉 보장).
+// 출력 필드 중 마스킹 대상(출처 srcKey 가 attrStyles 에 있는 컬럼)의 인덱스·스타일을 뽑는다.
+//  attrStyles 키 = srcKey 와 같은 도메인(pg oid:attnum / mysql table.col). 무출처(srcKey null)·미매칭은 대상 아님.
 export function planMaskTargets(fields: FieldMeta[], attrStyles: Map<string, MaskStyle>): MaskTarget[] {
   const targets: MaskTarget[] = [];
   fields.forEach((f, i) => {
-    if (!f.tableID || !f.columnID) return; // 표현식/무출처 — 마스킹 대상 아님
-    const style = attrStyles.get(`${f.tableID}:${f.columnID}`);
+    if (!f.srcKey) return; // 표현식/무출처 — 마스킹 대상 아님
+    const style = attrStyles.get(f.srcKey);
     if (style) targets.push({ index: i, style });
   });
   return targets;

@@ -1,5 +1,6 @@
 import pg from "pg";
 import { getSourceConfig, resolveConnectionString, type DbSource } from "./sources.js";
+import { invalidateMysqlPool } from "./mysql-engine.js";
 import { itemsPool } from "../items/store.js";
 
 // 데이터소스별 lazy 풀 레지스트리 — db_query/db_schema 가 source 이름으로 풀을 얻는다.
@@ -17,7 +18,8 @@ export async function getPool(source: string): Promise<pg.Pool> {
   const cfg = getSourceConfig(source);
   if (!cfg) throw new Error(`알 수 없는 db source '${source}'`);
   if (cfg.driver !== "postgres") {
-    throw new Error(`db source '${source}' driver '${cfg.driver}' 미지원(pg-only)`);
+    // mysql 소스(#715)는 mysql-engine.getMysqlPool 경유 — 호출자(tools/db·catalog)가 driver 로 분기한다.
+    throw new Error(`db source '${source}' driver '${cfg.driver}' 는 pg 풀 대상이 아닙니다(mysql-engine 경유)`);
   }
   // 내장 self 소스(#604) — 게이트웨이 자기 items 풀 재사용(새 풀/시크릿 해소 없이). itemsPool 은 RW 지만
   //  db_query 의 execReadQuery 가 BEGIN READ ONLY→ROLLBACK 으로 감싸 읽기전용을 보장. invalidatePool 대상 아님(공유 풀).
@@ -45,6 +47,7 @@ export async function getPool(source: string): Promise<pg.Pool> {
 }
 
 // 소스 upsert/remove 시 호출 — 해당 이름의 모든 풀(현/구 fingerprint)을 detach 후 drain.
+//  mysql 풀(#715)도 함께 무효화 — 호출자(delivery)가 드라이버를 몰라도 한 번으로 정리되게 위임.
 export function invalidatePool(source: string): void {
   for (const [k, p] of pools) {
     if (k === source || k.startsWith(`${source}@`)) {
@@ -52,4 +55,5 @@ export function invalidatePool(source: string): void {
       void p.then((pool) => pool.end()).catch(() => { /* drain 실패 무시 */ });
     }
   }
+  invalidateMysqlPool(source);
 }
