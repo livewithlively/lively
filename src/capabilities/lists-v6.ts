@@ -9,7 +9,7 @@ import {
   setProjectListMembers, setProjectListForProject, getProjectListRow, setProjectListSettings,
   getListClickupFields, reorderProjectLists,
 } from "../v6/list-store.js";
-import { projectIdsInList } from "../v6/project-store.js";
+import { projectIdsInList, deleteProject } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 // 리스트 카테고리 변경(#541 후속 F4) — 그 리스트 모든 프로젝트가 상속하므로 AGENTS.md 재생성. best-effort·비차단.
 const regenAgentsForList = async (listId: number) => {
@@ -134,23 +134,36 @@ const projectListUpdateV6: Capability = {
   },
 };
 
-// ── 리스트 삭제 — 소속 프로젝트는 보존(list_id SET NULL → 미분류). ──
+// ── 리스트 삭제 — 기본은 소속 프로젝트 보존(list_id SET NULL → 미분류). cascade_projects=true 면 소속 프로젝트도 함께 삭제. ──
 const projectListDeleteV6: Capability = {
   name: "project_list_delete_v6",
   title: "프로젝트 리스트 삭제(v6)",
-  description: "리스트를 삭제한다. 소속 프로젝트는 사라지지 않고 '미분류'로 이동(list_id 해제), 리스트 멤버 연결만 정리된다.",
+  description: "리스트를 삭제한다. 기본은 소속 프로젝트를 보존해 '미분류'로 이동(list_id 해제)하고 리스트 멤버 연결만 정리한다. cascade_projects=true 면 소속 프로젝트(그 하위 태스크·서브태스크 포함)도 함께 삭제한다(각각 감사 스냅샷 → 휴지통에서 복원 가능).",
   scope: "memory",
-  input: { id: z.number().int().positive() },
+  input: { id: z.number().int().positive(), cascade_projects: z.boolean().optional() },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/v6/project-lists/:id/delete"],
-      parse: (req) => ({ id: parseId(req.params?.id) }) }],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        // cascade_projects — true/'true'/1 만 참(그 외 전부 거짓). 미지정=기존 동작(프로젝트 보존).
+        const cascade = b.cascade_projects === true || b.cascade_projects === "true" || b.cascade_projects === 1;
+        return { id: parseId(req.params?.id), cascade_projects: cascade };
+      } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
     const before = await getProjectListRow(input.id);
     if (!before) throw new HttpError(404, `리스트 #${input.id} 없음`);
-    const list = await deleteProjectList(input.id, writeCtxOf(user, ctx));
-    return { deleted: true, id: input.id, list };
+    const wctx = writeCtxOf(user, ctx);
+    // cascade — 리스트 삭제(list_id SET NULL)로 프로젝트가 미분류로 새기 전에, 소속 프로젝트를 먼저 삭제.
+    //  deleteProject 는 하위 태스크(parent_id CASCADE)까지 지우고 각 프로젝트마다 감사 스냅샷을 남겨 휴지통 복원이 된다.
+    let deletedProjects = 0;
+    if (input.cascade_projects) {
+      const pids = await projectIdsInList(input.id); // 보드 앵커(list_id NULL)는 애초에 제외됨.
+      for (const pid of pids) { await deleteProject(pid, wctx); deletedProjects++; }
+    }
+    const list = await deleteProjectList(input.id, wctx);
+    return { deleted: true, id: input.id, list, deleted_projects: deletedProjects, cascade: !!input.cascade_projects };
   },
 };
 

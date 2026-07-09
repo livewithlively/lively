@@ -3629,6 +3629,13 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-visrow-hint { font-size: 12px; color: var(--ink-sub); line-height: 1.4; }
 .pjv-visrow .pjv-switch { pointer-events: none; }  /* 카드 전체가 토글 — 스위치는 표시만 */
 
+/* 리스트 삭제 확인 모달(#732) — overlayBox 안, pjv-visrow 토글 카드 + 안내. */
+.ov-box.pjv-modal-narrow { max-width: 440px; }
+.pjv-dellist { display: flex; flex-direction: column; gap: 14px; }
+.pjv-dellist-lead { margin: 2px 0 0; font-size: 15px; line-height: 1.5; color: var(--ink); }
+.pjv-dellist-name { font-weight: 700; }
+.pjv-dellist-note { font-size: 12.5px; color: var(--ink-sub); line-height: 1.55; background: var(--bg-tint); border-radius: 8px; padding: 10px 12px; }
+
 /* 멤버 선택(#500) — 참여 인원 요약 + 체크 표시(＋추가/✓선택됨 텍스트 대체) */
 .proj-mp-count { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
 .proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, #d9dee6); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }

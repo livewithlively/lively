@@ -1371,12 +1371,64 @@ function pjvSideNavDrop(elm, handlers) {
 }
 const PJV_OUTDENT_PX = 30; // 아웃덴트 트리거 — 항목 왼쪽 이만큼(px) 안으로 커서가 들어오면 '폴더 밖'으로 해석(#670).
 
+// 리스트 삭제 확인 — 우리 디자인 모달(#732). 브라우저 confirm() 대신 overlayBox + 스위치 카드.
+//  '리스트 안의 프로젝트도 함께 삭제'를 토글로 물어 선택대로 수행: OFF(기본)=리스트만 삭제하고 프로젝트는
+//  ‘기타(미분류)’로 이동해 보존 / ON=cascade_projects 로 프로젝트(하위 태스크 포함)까지 삭제(휴지통에서 복원 가능).
 function pjvDeleteList(list, reload) {
-  if (!confirm('리스트 ‘' + list.name + '’을(를) 삭제할까요?\n\n리스트만 사라지고, 속한 프로젝트는 ‘기타(미분류)’로 이동합니다(프로젝트는 보존).')) return;
-  (async () => {
-    try { await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST' }); toast('리스트를 삭제했습니다'); reload(); }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); }
-  })();
+  const count = Number.isFinite(Number(list && list.project_count)) ? Number(list.project_count) : 0;
+  let cascade = false;
+
+  const hint = el('div', { class: 'pjv-dellist-note' });
+  const paintHint = () => {
+    hint.textContent = count === 0
+      ? '이 리스트에는 프로젝트가 없어요. 리스트만 삭제합니다.'
+      : (cascade
+          ? '리스트와 그 안의 프로젝트 ' + count + '개를 모두 삭제해요. 휴지통(#/trash)에서 되살릴 수 있어요.'
+          : '리스트만 삭제하고, 프로젝트 ' + count + '개는 ‘기타(미분류)’로 옮겨 보존해요.');
+  };
+
+  // '함께 삭제' 스위치 카드 — openListForm 공개범위 토글과 동일한 pjv-visrow/pjv-switch 결(우리 디자인).
+  const sw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
+  const toggleRow = el('div', { class: 'pjv-visrow', role: 'switch', tabindex: '0', 'aria-checked': 'false' },
+    el('span', { class: 'pjv-visrow-txt' },
+      el('span', { class: 'pjv-visrow-title', text: '리스트 안의 프로젝트도 함께 삭제' }),
+      el('span', { class: 'pjv-visrow-hint', text: '끄면 프로젝트는 ‘기타(미분류)’로 옮겨져 보존돼요.' })),
+    sw);
+  const delBtn = el('button', { class: 'btn btn-danger' });
+  const updateBtn = () => { delBtn.textContent = (cascade && count > 0) ? '리스트·프로젝트 삭제' : '리스트 삭제'; };
+  const toggle = () => {
+    cascade = !cascade;
+    toggleRow.classList.toggle('on', cascade); sw.classList.toggle('on', cascade);
+    toggleRow.setAttribute('aria-checked', cascade ? 'true' : 'false');
+    paintHint(); updateBtn();
+  };
+  toggleRow.onclick = (e) => { e.stopPropagation(); toggle(); };
+  toggleRow.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+
+  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+  const body = el('div', { class: 'pjv-dellist' },
+    el('p', { class: 'pjv-dellist-lead' }, el('span', { class: 'pjv-dellist-name', text: '‘' + list.name + '’' }), ' 리스트를 삭제할까요?'),
+    count > 0 ? toggleRow : null,
+    hint);
+
+  let busy = false;
+  const go = async () => {
+    if (busy) return;
+    busy = true; delBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      await api('/api/ui/v6/project-lists/' + list.id + '/delete', { method: 'POST', body: JSON.stringify({ cascade_projects: cascade }) });
+      back.remove();
+      toast((cascade && count > 0) ? '리스트와 프로젝트 ' + count + '개를 삭제했습니다' : '리스트를 삭제했습니다');
+      if (reload) reload();
+    } catch (e) { toast('삭제 실패 — ' + e.message, true); busy = false; delBtn.disabled = false; cancelBtn.disabled = false; }
+  };
+  delBtn.onclick = go;
+
+  const back = overlayBox('리스트 삭제', body, el('div', { class: 'ov-actions' }, delBtn, cancelBtn));
+  const boxEl = back.querySelector('.ov-box'); if (boxEl) boxEl.classList.add('pjv-modal-narrow');
+  paintHint(); updateBtn();
+  setTimeout(() => cancelBtn.focus(), 0);
+  return back;
 }
 
 // 리스트 멤버 저장(조용히 — 팝오버 안에서 연속 토글, reload 없음). 멤버십 변화는 다음 렌더에 펼침/접힘으로 반영.
