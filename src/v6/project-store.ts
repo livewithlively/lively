@@ -578,7 +578,7 @@ export async function reorderProjects(ids: number[], _ctx?: WriteCtx): Promise<{
 export async function updateTask(
   id: number,
   patch: Partial<{
-    name: string; description: string | null; append_description: string; status: string;
+    name: string; description: string | null; append_description: string; status: string; status_raw: string | null;
     priority: string | null; assignee: string | null; start_date: string | null; due_date: string | null;
   }>,
   ctx?: WriteCtx,
@@ -611,6 +611,9 @@ export async function updateTask(
     vals.push(categoryOf(patch.status));
     sets.push(`status_category=$${vals.length}`);
   }
+  // #731 리스트 커스텀 상태 키(개방 어휘). status 와 함께(또는 단독) 지정 — 태스크도 프로젝트처럼 status_raw 로 커스텀 상태 보존.
+  //  주어졌을 때만 갱신(부재=무변경, null=해제). 커스텀 리스트 태스크는 항상 status_raw 를 함께 보낸다.
+  if (patch.status_raw !== undefined) set("status_raw", patch.status_raw);
   if (!sets.length) return before; // 패치 비어있음 — no-op
 
   sets.push("updated_at=now()");

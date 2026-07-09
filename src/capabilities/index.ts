@@ -18,6 +18,7 @@ import { knowledgeCapabilities } from "./knowledge.js";
 import { sourceCapabilities } from "./source.js";
 import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
+import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
 import { folderV6Capabilities } from "./folders-v6.js";
 import { viewV6Capabilities } from "./views-v6.js";
@@ -85,6 +86,7 @@ const all: Capability[] = [
   ...sourceCapabilities, // #290: 자료(source) CRUD + 지식 인용(knowledge_source) — scope=memory. raw 입력층(전사록·이메일·슬랙·미러), knowledge 와 분리(recall 미포함). expose.mcp:true(자동등록)+REST(웹 자료 탭 /api/ui/sources).
   ...projectV6Capabilities, // v6: 프로젝트/태스크/서브태스크 위계 + 카테고리·지식(필요/산출) 연결 — scope=memory(/api/ui/v6/projects). 전부 expose.mcp:true(자동등록)+REST. project_delete_v6·task_delete_v6 는 org_tool 기본 OFF(위험삭제, 운영자 토글).
   ...listV6Capabilities, // v6: 프로젝트 묶음(리스트=클릭업 List층) CRUD·멤버·프로젝트 소속 — scope=memory(/api/ui/v6/project-lists + /projects/:id/list). 네이티브 전용(외부 미러 없음). 전부 expose.mcp:true+REST.
+  ...statusTemplateV6Capabilities, // v6(#729): 상태 체계 템플릿 — 스페이스 기본 + 이름있는 재사용 템플릿(/api/ui/v6/status-templates). inherit 리스트가 기본을 상속. 전부 expose.mcp:true+REST.
   ...favoritesCapabilities, // #670: 멤버별 즐겨찾기(리스트·카테고리 사이드바 핀) — scope=null(인증만), REST 전용(/api/ui/v6/favorites GET·POST).
   ...folderV6Capabilities, // v6(#475): 폴더(=클릭업 Folder층) CRUD + 리스트 소속 — scope=memory(/api/ui/v6/project-folders + /project-lists/:id/folder). 폴더는 정리용(멤버·권한 없음). 전부 expose.mcp:true+REST.
   ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.

@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, buildWysiwygToolbar, debounce, fileIconSvg, fmtSize, mdFromDom, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, authDownload, authUpload, debounce, fileIconSvg, fmtSize, mountBodyEditor, openFileViewer, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, uploadBodyFile } from './projects.js';
 // 커스텀 필드 셀 컨트롤(pjvFieldControl) 재사용용 네임스페이스(#541) — projects.ts 는 동시 편집 중이라 직접
 //  수정하지 않고, export 목록에 오르는 즉시 자동으로 붙는다(없으면 읽기전용 폴백 — pjvtmFieldReadonly).
 import * as PJ from './projects.js';
@@ -228,9 +228,8 @@ function pjvOpenTaskModal(taskId, pageReload) {
     let dirty = false;
     let tickTimer = null;
     let pasteCtx = null; // 클립보드 붙여넣기 대상 — render 에서 {pid, taskId, refresh} 로 갱신
-    // 본문(설명) 편집 중 상태 — 바깥클릭/Esc 로 모달이 닫혀 작성 중인 글이 날아가는 것을 막는다(#139-6).
-    let descEditing = false;
-    let descCommit = null;
+    // 본문(설명) 블록 에디터(#730) — 항시 편집·자동저장. 모달 닫힘/재렌더 시 flush(미저장 저장)+destroy.
+    let bodyEditor = null;
     const back = el('div', { class: 'pjv-tm-back' });
     const box = el('div', { class: 'pjv-tm' });
     // Activity 패널 폭 복원(#496) — 저장돼 있으면 기본값 대신 그 폭으로. box 는 재렌더에도 유지.
@@ -245,11 +244,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
     back.addEventListener('mousedown', (e) => {
         if (e.target !== back)
             return;
-        if (descEditing && descCommit) {
-            descCommit(true);
-            return;
-        }
-        closeModal();
+        closeModal(); // closeModal 이 본문 flush(자동저장)까지 처리
     });
     const onKey = (e) => {
         if (e.key !== 'Escape')
@@ -259,8 +254,9 @@ function pjvOpenTaskModal(taskId, pageReload) {
             pb._cancel && pb._cancel();
             return;
         } // 붙여넣기 다이얼로그가 떠 있으면 그것부터 닫기
-        if (descEditing)
-            return; // 본문 편집 중이면 에디터 자체의 Esc(취소)가 처리 — 모달은 닫지 않음
+        // 본문 블록 에디터의 팝업(슬래시·전환·링크·블록메뉴·멘션) 또는 오버레이가 떠 있으면 Esc 는 그쪽이 처리 — 모달은 유지.
+        if (document.querySelector('.be-slash, .be-turnpop, .be-linkpop, .be-blockmenu, .be-mentionmenu, .ov-back'))
+            return;
         if (!document.querySelector('.pjv-pop'))
             closeModal();
     };
@@ -268,6 +264,10 @@ function pjvOpenTaskModal(taskId, pageReload) {
     //  이미지가 있을 때만 가로채고, 텍스트 등 비-이미지 붙여넣기는 기본 동작 그대로 통과시킨다.
     const onPaste = (e) => {
         if (!pasteCtx || pasteCtx.pid == null)
+            return;
+        // #730 본문 블록 에디터 안에서의 붙여넣기는 에디터가 인라인 이미지로 처리 — 여기서 가로채지 않는다(첨부로 새지 않게).
+        const tgt = e.target;
+        if (tgt && tgt.closest && tgt.closest('.be'))
             return;
         if (document.querySelector('.pjv-tm-paste-back'))
             return; // 이미 다이얼로그 열림
@@ -299,12 +299,14 @@ function pjvOpenTaskModal(taskId, pageReload) {
     document.body.append(back);
     document.body.classList.add('pjv-tm-open');
     function closeModal() {
-        // 어떤 경로로 닫더라도(✕·Esc·바깥클릭) 편집 중인 본문은 먼저 저장(flush)해 유실 방지(#139-6).
-        if (descEditing && descCommit) {
+        // 어떤 경로로 닫더라도(✕·Esc·바깥클릭) 편집 중인 본문은 먼저 저장(flush)해 유실 방지(#139-6, #730).
+        if (bodyEditor) {
             try {
-                descCommit(true);
+                bodyEditor.flush();
+                bodyEditor.destroy();
             }
             catch (_) { /* noop */ }
+            bodyEditor = null;
         }
         if (tickTimer)
             clearInterval(tickTimer);
@@ -334,6 +336,15 @@ function pjvOpenTaskModal(taskId, pageReload) {
         if (tickTimer) {
             clearInterval(tickTimer);
             tickTimer = null;
+        }
+        // 재렌더 전 본문 에디터 정리 — 미저장분 flush + 리스너/툴바 destroy(중복 방지). 새 본문 섹션이 다시 마운트.
+        if (bodyEditor) {
+            try {
+                bodyEditor.flush();
+                bodyEditor.destroy();
+            }
+            catch (_) { /* noop */ }
+            bodyEditor = null;
         }
         const t = d.task;
         pasteCtx = { pid: d.project && d.project.id, taskId: t.id, refresh }; // 클립보드 붙여넣기 대상 갱신
@@ -396,7 +407,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
         });
         main.append(titleIn);
         // 필드 그리드(2열): 좌(상태·기간·시간추적) 우(담당자·우선순위·태그)
-        main.append(el('div', { class: 'pjv-tm-fields' }, pjvtmFieldRow('◎', '상태', pjvtmStatusField(t, refresh)), pjvtmFieldRow('👤', '담당자', pjvtmAssigneeField(t, members, refresh)), pjvtmFieldRow('🗓', '기간', pjvtmDatesField(t, refresh)), pjvtmFieldRow('⚑', '우선순위', pjvtmPriorityField(t, refresh)), pjvtmFieldRow('⏱', '시간 추적', pjvtmTimeField(d, t, refresh)), pjvtmFieldRow('🏷', '태그', pjvtmTagsField(d, t, refresh))));
+        main.append(el('div', { class: 'pjv-tm-fields' }, pjvtmFieldRow('◎', '상태', pjvtmStatusField(t, refresh, d.list)), pjvtmFieldRow('👤', '담당자', pjvtmAssigneeField(t, members, refresh)), pjvtmFieldRow('🗓', '기간', pjvtmDatesField(t, refresh)), pjvtmFieldRow('⚑', '우선순위', pjvtmPriorityField(t, refresh)), pjvtmFieldRow('⏱', '시간 추적', pjvtmTimeField(d, t, refresh)), pjvtmFieldRow('🏷', '태그', pjvtmTagsField(d, t, refresh))));
         // 커스텀 필드(#541) — 루트 프로젝트 정의(detail.fields)를 리스트뷰 셀 컨트롤로 편집(낙관 저장).
         main.append(pjvtmCustomFields(d, t, refresh));
         // 설명(마크다운)
@@ -413,30 +424,19 @@ function pjvOpenTaskModal(taskId, pageReload) {
     function pjvtmFieldRow(glyph, label, control) {
         return el('div', { class: 'pjv-tm-field' }, el('span', { class: 'pjv-tm-field-ico', 'aria-hidden': 'true', text: glyph }), el('span', { class: 'pjv-tm-field-label', text: label }), el('div', { class: 'pjv-tm-field-val' }, control));
     }
-    // 상태 — 색 pill(라벨). 클릭 → 메뉴.
-    function pjvtmStatusField(t, refresh) {
+    // 상태 — #731 프로젝트/행과 동일한 디자인으로 통일. 소속 리스트가 커스텀 상태면 그 상태들(색·이름)을 pill+메뉴로,
+    //  아니면 네이티브 3단계. d.list(리스트 상태 체계)로 판단. onPick 은 status(네이티브 투영)+status_raw(커스텀 키)를 함께 저장.
+    function pjvtmStatusField(t, refresh, listStatus) {
+        const ctrl = pjvTaskModalStatusField(t, listStatus, (patch) => pjvPatchTask(t.id, patch, refresh));
+        // 원문 상태 칩(#541 무손실) — 커스텀 리스트면 raw 가 곧 커스텀 상태라 병기 불필요. 네이티브 리스트인데 이관 raw 가
+        //  3상태 라벨과 다르면(예: 'in review') 읽기전용 병기. 네이티브 행은 status_raw=NULL 이라 표시 없음.
+        const isCustom = !!(listStatus && listStatus.statusMode === 'custom' && Array.isArray(listStatus.statuses) && listStatus.statuses.length);
         const meta = pjvStatusMeta(t.status);
-        const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
-        btn.onclick = (e) => {
-            e.stopPropagation();
-            const menu = el('div', { class: 'pjv-menu' });
-            const close = pjvPopover(btn, menu);
-            for (const key of PJV_STATUS_ORDER) {
-                const m = PJV_TASK_STATUS[key];
-                const sel = meta.bucket === key;
-                const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
-                item.onclick = () => { close(); if (!sel)
-                    pjvPatchTask(t.id, { status: key }, refresh); };
-                menu.append(item);
-            }
-        };
-        // 원문 상태 칩(#541 무손실) — 이관 태스크의 status_raw(소스 커스텀 상태명)가 3상태 라벨과 다르면
-        //  읽기전용 작은 pill 로 병기(예: 'in review'). 네이티브 행은 status_raw=NULL 이라 표시 없음.
         const raw = String(t.status_raw || '').trim();
-        if (raw && raw.toLowerCase() !== meta.label.toLowerCase() && raw.toLowerCase() !== String(t.status || '').toLowerCase()) {
-            return el('span', { class: 'pjv-tm-statuswrap' }, btn, el('span', { class: 'pjv-tm-statusraw', title: '원본 상태(읽기전용): ' + raw, text: raw }));
+        if (!isCustom && raw && raw.toLowerCase() !== meta.label.toLowerCase() && raw.toLowerCase() !== String(t.status || '').toLowerCase()) {
+            return el('span', { class: 'pjv-tm-statuswrap' }, ctrl, el('span', { class: 'pjv-tm-statusraw', title: '원본 상태(읽기전용): ' + raw, text: raw }));
         }
-        return btn;
+        return ctrl;
     }
     // 커스텀 필드(#541) — 루트 프로젝트의 task_field 정의별 한 행(라벨+셀 컨트롤). 컨트롤은 리스트뷰의
     //  pjvFieldControl(낙관 저장 포함)을 재사용, 아직 export 전이면 값만 읽기전용 노출(pjvtmFieldReadonly).
@@ -885,117 +885,25 @@ function pjvOpenTaskModal(taskId, pageReload) {
         }
         showList('');
     }
-    // 설명(본문) — 프로젝트 탭 '본문' 섹션(projectBodySection)과 동일한 위지위그(WYSIWYG)로 통일(#139-2,3,6).
-    //  평상시: 렌더된 마크다운만 보임(클릭→그 자리 편집). 편집: contentEditable + 서식바, ⌘/Ctrl+Enter·바깥클릭(blur) 저장 · Esc 취소.
-    //  저장 버튼 없음(blur 자동저장) → 클립보드 붙여넣기·바깥클릭으로 작성 내용이 날아가지 않는다.
+    // 설명(본문) — #730 프로젝트 탭 '본문'(projectBodySection)과 동일한 노션형 블록 에디터로 통일. 항시 편집·자동저장.
+    //  슬래시(/) 명령·블록 드래그·선택 툴바·이미지 붙여넣기/드롭. 미저장분은 모달 닫힘·재렌더 시 flush(closeModal/render).
     function pjvtmDescription(t, refresh) {
         const sec = el('div', { class: 'pjv-tm-desc' });
         const bodyWrap = el('div', { class: 'proj-body-sec' });
         sec.append(bodyWrap);
-        const editBody = () => {
-            const ce = el('div', { class: 'proj-body-wysiwyg md-rendered', contenteditable: 'true', spellcheck: 'false' });
-            if (t.description && t.description.trim()) {
-                const rendered = renderMarkdown(t.description);
-                while (rendered.firstChild)
-                    ce.append(rendered.firstChild);
-            }
-            else {
-                ce.append(el('p', {}, el('br', {})));
-            }
-            bodyWrap.replaceChildren(ce);
-            ce.focus();
-            try {
-                const r = document.createRange();
-                r.selectNodeContents(ce);
-                r.collapse(false);
-                const s = window.getSelection();
-                if (s) {
-                    s.removeAllRanges();
-                    s.addRange(r);
-                }
-            }
-            catch (_) { /* noop */ }
-            const toolbar = buildWysiwygToolbar(ce);
-            let fin = false;
-            const done = (save) => {
-                if (fin)
-                    return;
-                fin = true;
-                descEditing = false;
-                descCommit = null;
-                toolbar.destroy();
-                const nv = save ? mdFromDom(ce) : (t.description || '');
-                if (save && nv !== (t.description || '')) {
-                    t.description = nv;
-                    dirty = true;
-                    api('/api/ui/v6/tasks/' + t.id, { method: 'POST', body: JSON.stringify({ description: nv || null }) })
-                        .catch((e) => toast('본문 수정 실패 — ' + e.message, true));
-                }
-                render();
-            };
-            // 편집 중 표식 + 바깥클릭/Esc-닫기 가드용 커밋 핸들(#139-6).
-            descEditing = true;
-            descCommit = (save) => done(save);
-            // 저장=⌘/Ctrl+Enter 또는 바깥클릭(blur), 취소=Esc. (Enter 는 줄바꿈/문단)
-            ce.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    done(true);
-                }
-                else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    done(false);
-                }
-            });
-            // 지연 체크 — 서식 바 클릭으로 잠깐 포커스가 떠도(다시 에디터로 돌아오면) 저장/종료하지 않음.
-            ce.addEventListener('blur', () => setTimeout(() => {
-                if (fin)
-                    return;
-                if (document.activeElement === ce)
-                    return;
-                if (document.querySelector('.fmt-toolbar:hover'))
-                    return;
-                done(true);
-            }, 150));
-        };
-        const render = () => {
-            bodyWrap.replaceChildren();
-            if (t.description && t.description.trim()) {
-                const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(t.description));
-                body.onclick = editBody; // 본문(커서) 클릭 → 그 자리 편집(전체 펼친 상태로)
-                // 펼침 컨트롤(프로젝트 탭과 동일) — 길면 접힘+페이드+'더 보기' 알약, 짧으면 컨트롤 숨기고 펼침.
-                const wrap = el('div', { class: 'proj-detail-body-wrap is-collapsed' });
-                const box = el('div', { class: 'proj-detail-body-box collapsed' }, body);
-                const lbl = el('span', { class: 'lbl', text: '더 보기' });
-                const caret = el('span', { class: 'caret', text: '⌄' });
-                const exBtn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, lbl, caret);
-                const exRow = el('div', { class: 'proj-detail-body-expand-row' }, exBtn);
-                exBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    const collapsed = box.classList.toggle('collapsed');
-                    wrap.classList.toggle('is-collapsed', collapsed);
-                    caret.textContent = collapsed ? '⌄' : '⌃';
-                    lbl.textContent = collapsed ? '더 보기' : '접기';
-                };
-                wrap.append(box, exRow);
-                bodyWrap.append(wrap);
-                // 짧은 본문(접어도 다 보이는)이면 펼침 불필요 → 펼친 채 두고 컨트롤 숨김(레이아웃 후 측정).
-                requestAnimationFrame(() => {
-                    if (body.scrollHeight <= box.clientHeight + 2) {
-                        box.classList.remove('collapsed');
-                        wrap.classList.remove('is-collapsed');
-                        exRow.style.display = 'none';
-                    }
-                });
-            }
-            else {
-                const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 본문 추가' });
-                add.onclick = editBody;
-                bodyWrap.append(add);
-            }
-        };
-        render();
+        // 첨부 업로드용 프로젝트 id — /file 라우트는 루트 프로젝트 폴더를 쓰므로 pasteCtx.pid(=d.project.id) 사용.
+        const pid = (pasteCtx && pasteCtx.pid != null) ? pasteCtx.pid : t.id;
+        bodyEditor = mountBodyEditor({
+            initial: t.description || '',
+            placeholder: '본문을 입력하세요.  ‘/’ 로 블록 삽입 · 이미지 붙여넣기/드롭',
+            uploadFile: (file) => uploadBodyFile(pid, '_attachments/task-' + t.id, file),
+            save: async (md) => {
+                t.description = md;
+                dirty = true;
+                await api('/api/ui/v6/tasks/' + t.id, { method: 'POST', body: JSON.stringify({ description: md || null }) });
+            },
+        });
+        bodyWrap.append(bodyEditor.el);
         return sec;
     }
     // 하위 태스크 — 프로젝트 탭 태스크 리스트(pjvTaskRow)를 그대로 재사용해 '이전 페이지와 정확히 똑같게'(#139-1,4).

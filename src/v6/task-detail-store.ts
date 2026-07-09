@@ -29,6 +29,19 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
      SELECT id, name FROM up WHERE level='project' LIMIT 1`, [id]);
   const projectId: number | null = root?.id ?? null;
 
+  // #731 루트 프로젝트가 속한 리스트의 상태 체계 — 모달이 태스크 상태를 리스트 커스텀 상태(색·이름·아이콘)로 렌더/선택하게.
+  let projectListId: number | null = null;
+  let listStatus: { id: number; statusMode: string | null; statuses: any[] } | null = null;
+  if (projectId != null) {
+    const pr: any = await one(itemsPool, `SELECT list_id FROM project WHERE id=$1`, [projectId]);
+    projectListId = pr?.list_id ?? null;
+    if (projectListId != null) {
+      const lr: any = await one(itemsPool, `SELECT COALESCE(settings, '{}'::jsonb) AS settings FROM project_list WHERE id=$1`, [projectListId]);
+      const s: any = lr?.settings || {};
+      listStatus = { id: projectListId, statusMode: s.statusMode || null, statuses: Array.isArray(s.statuses) ? s.statuses : [] };
+    }
+  }
+
   // 직속 상위(브레드크럼용) — subtask 면 부모(task)를, top-level task 면 부모가 프로젝트라 null.
   //  프론트 모달 좌상단 크럼이 '프로젝트 / 상위태스크 / (현재)' 로 직전 층위까지 하이퍼링크되게 한다(#139-5).
   const parentRow: any = (task.level === "subtask" && task.parent_id)
@@ -72,7 +85,8 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
       ...task, field_values: fieldValues,
       subtasks: subtasks.map((s: any) => ({ ...s, field_values: valuesByTask.get(s.id) ?? {} })),
     },
-    project: root ? { id: root.id, name: root.name } : null,
+    project: root ? { id: root.id, name: root.name, list_id: projectListId } : null,
+    list: listStatus,   // #731 리스트 상태 체계(커스텀이면 statuses[]) — 모달 상태 필드가 커스텀 상태로 렌더.
     parent: parentRow ? { id: parentRow.id, name: parentRow.name, level: parentRow.level } : null,
     members, tags, time, checklists, links, feed,
     // #541 가산: attachments=DB 첨부(ClickUp 이관), fields=루트 정의, field_values=이 태스크 값 맵.

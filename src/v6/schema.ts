@@ -490,6 +490,22 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS project_list_category_idx ON project_list(category_id) WHERE category_id IS NOT NULL;
   `);
 
+  // ── 6e-2) 상태 체계 템플릿(#729) — 리스트 상태 스킴을 워크스페이스('스페이스') 단위 재사용 템플릿으로 관리.
+  //  리스트를 새로 만들 때마다 상태 체계를 재생성하던 문제 해소: is_default=true 인 1개가 '스페이스 기본'으로,
+  //  inherit(기본 상태 사용) 리스트가 이 스킴을 물려받는다(하드코딩 3단계 대신). 나머지는 이름있는 템플릿
+  //  (상태편집기·새 리스트 폼에서 불러오기/적용). statuses=[{key,label,color,category(active|done|closed)}].
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_status_template(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      statuses JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_default BOOLEAN NOT NULL DEFAULT false,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE UNIQUE INDEX IF NOT EXISTS project_status_template_default_uidx ON project_status_template(is_default) WHERE is_default;
+  `);
+
   // ── 6f) project_view — 리스트/폴더 뷰(#541: ClickUp View 이관 + 우리 커스텀 뷰·컬럼 저장). ──
   //  config JSONB = { columns:[{field,idx,width,hidden,name}], grouping, sorting, filters, settings } — 클릭업 View shape 보존 + 우리 커스텀 컬럼.
   //  external_* 있으면 ClickUp 이관 뷰(멱등), NULL 이면 우리가 만든 로컬 뷰. 사용자 "뷰 저장 안됨/커스텀 컬럼" 해소의 저장층.

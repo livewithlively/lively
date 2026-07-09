@@ -7,6 +7,7 @@ import { loadAdmin } from './admin.js';
 import { field } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
 import { saveTermCreatePrefs, termCreatePrefs } from './terminal.js'; // '실행 설정' 기억 공유(#673/#req — 세션 폼 프리필)
+import { createBlockEditor } from './block-editor.js'; // #730 본문(프로젝트/태스크) 노션형 블록 에디터 — 슬래시 명령·이미지 붙여넣기
 // ════════════════════════════════════════════
 // 프로젝트(v2) #/projects2 — 맥락 = 카테고리 + 지식 + 프로젝트 중 '프로젝트'(= 맥락의 *변화*).
 //  지식 탭과 대칭인 하위 탭: [대시보드 · 작업 현황 · 사업 · 제품 · 시스템].
@@ -384,6 +385,7 @@ async function renderProjectV2Board(view, scopeKey) {
             api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
             api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
             api('/api/ui/v6/favorites').then((d) => d || {}).catch(() => ({})),
+            pjvLoadStatusTemplates(), // #729 스페이스 기본 상태 스킴 로드 — pjvSetStatusRegistry/pjvListStatusDefs 가 참조(inherit 상속).
         ]);
     }
     catch (e) {
@@ -1914,6 +1916,21 @@ function openListForm(reload, list, opts) {
     const catField = pjvListCategoryField(editing ? (list.category_id ?? null) : (opts.categoryId ?? null));
     // 멤버 — 생성뿐 아니라 수정 때도 편집(만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
     const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
+    // #729 새 리스트 상태 체계 — 스페이스 기본 상속(기본, 재생성 불필요) 또는 저장된 템플릿에서 시작.
+    let statusTmplSelect = null;
+    let statusTmplField = null;
+    if (!editing) {
+        statusTmplSelect = el('select', { class: 'pjv-newlist-tmpl' });
+        const paintTmplOpts = () => {
+            statusTmplSelect.replaceChildren(el('option', { value: '', text: '스페이스 기본 상속 (권장)' }));
+            for (const t of pjvStatusTemplatesCache)
+                statusTmplSelect.append(el('option', { value: String(t.id), text: t.name + (t.is_default ? '  ★ 기본' : '') }));
+        };
+        paintTmplOpts();
+        if (!pjvStatusTemplatesCache.length)
+            pjvLoadStatusTemplates().then(paintTmplOpts).catch(() => { });
+        statusTmplField = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '상태 체계' }), statusTmplSelect, el('div', { class: 'field-hint', text: '기본은 스페이스 기본 상태를 물려받아요(리스트마다 다시 만들 필요 없음). 저장된 템플릿으로 시작할 수도 있어요.' }));
+    }
     const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
     const rows = [
@@ -1922,6 +1939,7 @@ function openListForm(reload, list, opts) {
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '아이콘' }), iconRow),
         catField.row,
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '참여 멤버' }), picker.box),
+        statusTmplField,
         el('div', { class: 'field', style: 'margin-top:12px' }, visRow),
     ];
     const back = overlayBox(editing ? '리스트 설정' : '새 리스트', ...rows, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
@@ -1952,6 +1970,13 @@ function openListForm(reload, list, opts) {
                         await api('/api/ui/v6/project-lists/' + created.id, { method: 'POST', body: JSON.stringify({ visibility }) }).catch(() => { });
                     if (icon)
                         await api('/api/ui/v6/project-lists/' + created.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { icon } }) }).catch(() => { });
+                    // #729 상태 체계 — 템플릿 선택 시 그 스킴을 커스텀으로 적용(미선택=스페이스 기본 상속, settings 미변경).
+                    if (statusTmplSelect && statusTmplSelect.value) {
+                        const t = pjvStatusTemplatesCache.find((x) => String(x.id) === statusTmplSelect.value);
+                        const statuses = t ? pjvNormStatusDefs(t.statuses) : [];
+                        if (statuses.length)
+                            await api('/api/ui/v6/project-lists/' + created.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { statusMode: 'custom', statuses } }) }).catch(() => { });
+                    }
                     if (opts.folderId != null)
                         await api('/api/ui/v6/project-lists/' + created.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: opts.folderId }) }).catch(() => { });
                 }
@@ -2071,12 +2096,43 @@ function pjvListStatusEditor(list, reload) {
         return r;
     };
     const radios = el('div', { class: 'pjv-statused-radios' });
-    const paintRadios = () => radios.replaceChildren(radio('inherit', '기본 상태 사용', '할 일 · 진행 중 · 완료 (표준 3단계)'), radio('custom', '커스텀 상태 사용', '버킷 안에 중간 단계를 자유롭게'));
+    const paintRadios = () => radios.replaceChildren(radio('inherit', '기본(스페이스) 상태 사용', (pjvSpaceDefaultDefs && pjvSpaceDefaultDefs.length)
+        ? ('스페이스 기본 상태 체계를 따름 — ' + pjvSpaceDefaultDefs.map((d) => d.label).join(' · '))
+        : '할 일 · 진행 중 · 완료 (표준 3단계)'), radio('custom', '커스텀 상태 사용', '이 리스트만의 상태 — 버킷 안에 중간 단계를 자유롭게'));
     paintRadios();
     paint();
+    // #729 템플릿 바 — 저장된 템플릿 불러오기(적용) + 현재 구성을 템플릿으로 저장(스페이스 기본 지정 가능).
+    //  클릭업 'Edit statuses' 의 'Inherit from Space' + 'Save template' 대응. 리스트마다 재생성하던 문제 해소.
+    const tmplSelect = el('select', { class: 'pjv-statused-tmpl' });
+    const paintTmpl = () => {
+        tmplSelect.replaceChildren(el('option', { value: '', text: '템플릿 불러오기…' }));
+        for (const t of pjvStatusTemplatesCache)
+            tmplSelect.append(el('option', { value: String(t.id), text: t.name + (t.is_default ? '  ★ 기본' : '') }));
+    };
+    paintTmpl();
+    tmplSelect.onchange = () => {
+        const id = Number(tmplSelect.value);
+        tmplSelect.value = '';
+        if (!id)
+            return;
+        const t = pjvStatusTemplatesCache.find((x) => Number(x.id) === id);
+        const loaded = t ? pjvNormStatusDefs(t.statuses) : [];
+        if (!loaded.length) {
+            toast('빈 템플릿이에요', true);
+            return;
+        }
+        mode = 'custom';
+        defs = loaded.map((d) => ({ key: d.key, label: d.label, color: d.color, category: d.category }));
+        paintRadios();
+        paint();
+        toast('‘' + t.name + '’ 불러옴 — 저장하면 이 리스트에 적용돼요');
+    };
+    const saveTmplBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 템플릿으로 저장',
+        onclick: () => pjvSaveStatusTemplate(defs, reload, paintTmpl) });
+    const tmplBar = el('div', { class: 'pjv-statused-tmplbar' }, el('div', { class: 'field-label', text: '템플릿' }), el('div', { class: 'pjv-statused-tmplrow' }, tmplSelect, saveTmplBtn), el('div', { class: 'field-hint', text: '스페이스 단위로 상태 체계를 재사용해요. 저장 시 ‘스페이스 기본’으로 지정하면 새 리스트가 자동으로 상속합니다.' }));
     const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const layout = el('div', { class: 'pjv-statused' }, el('div', { class: 'pjv-statused-left' }, el('div', { class: 'field-label', text: '상태 유형' }), radios), el('div', { class: 'pjv-statused-right' }, groupsBox));
+    const layout = el('div', { class: 'pjv-statused' }, el('div', { class: 'pjv-statused-left' }, el('div', { class: 'field-label', text: '상태 유형' }), radios, tmplBar), el('div', { class: 'pjv-statused-right' }, groupsBox));
     const back = overlayBox('‘' + list.name + '’ 상태 편집', layout, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     saveBtn.onclick = async () => {
         // 검증 — 커스텀이면 각 상태 라벨 채우고, 각 버킷 최소 1개.
@@ -2110,6 +2166,54 @@ function pjvListStatusEditor(list, reload) {
         }
     };
     return back;
+}
+// #729 현재 상태 구성을 재사용 템플릿으로 저장 — 이름 + '스페이스 기본으로 지정' 옵션. 저장 후 캐시 리로드·드롭다운 갱신.
+//  스페이스 기본으로 지정하면 inherit(기본 상태 사용) 리스트·새 리스트가 이 스킴을 물려받는다(reload 로 반영).
+function pjvSaveStatusTemplate(defs, reload, refreshSelect) {
+    for (const d of defs)
+        if (!String(d.label).trim()) {
+            toast('상태 이름을 모두 입력하세요', true);
+            return;
+        }
+    for (const cat of PJV_STATUS_CATS)
+        if (cat.key !== 'closed' && !defs.some((d) => d.category === cat.key)) {
+            toast('‘' + cat.label + '’에 상태가 최소 1개 필요해요', true);
+            return;
+        }
+    const statuses = defs.map((d) => ({ key: d.key, label: String(d.label).trim(), color: d.color, category: d.category }));
+    const nameIn = el('input', { type: 'text', placeholder: '템플릿 이름 (예: 개발 표준)', maxlength: '120' });
+    const defChk = el('input', { type: 'checkbox' });
+    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
+    const back = overlayBox('상태 템플릿으로 저장', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('label', { class: 'pjv-tmpl-defrow' }, defChk, el('span', { text: '스페이스 기본으로 지정 — 새 리스트·기본 상속 리스트가 이 체계를 따름' })), el('div', { class: 'ov-actions' }, saveBtn, el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() })));
+    setTimeout(() => nameIn.focus(), 0);
+    const go = async () => {
+        const nm = nameIn.value.trim();
+        if (!nm) {
+            nameIn.focus();
+            toast('이름을 입력하세요', true);
+            return;
+        }
+        saveBtn.disabled = true;
+        try {
+            await api('/api/ui/v6/status-templates', { method: 'POST', body: JSON.stringify({ name: nm, statuses, is_default: defChk.checked }) });
+            await pjvLoadStatusTemplates();
+            if (refreshSelect)
+                refreshSelect();
+            back.remove();
+            toast(defChk.checked ? '템플릿 저장 + 스페이스 기본으로 지정했어요' : '템플릿을 저장했어요');
+            if (defChk.checked && reload)
+                reload(); // 스페이스 기본 변경 → inherit 리스트 재렌더
+        }
+        catch (e) {
+            toast('저장 실패 — ' + e.message, true);
+            saveBtn.disabled = false;
+        }
+    };
+    saveBtn.onclick = go;
+    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
+        e.preventDefault();
+        go();
+    } });
 }
 // 프로젝트를 다른 리스트로 이동(또는 미분류로) — 행 ⋯ 메뉴에서 호출. 리스트 목록을 그 자리에서 fetch.
 function pjvMoveProjectList(anchor, p, reload) {
@@ -2203,6 +2307,33 @@ function pjvListIsCustomStatus(list) {
     const s = list && list.settings;
     return !!(s && s.statusMode === 'custom' && Array.isArray(s.statuses) && s.statuses.length);
 }
+// ── #729 스페이스(워크스페이스) 기본 상태 스킴 + 재사용 템플릿 ──────────────────────────────
+//  리스트를 새로 만들 때마다 상태 체계를 재생성하던 문제 해소: is_default 템플릿이 '스페이스 기본'으로,
+//  inherit(기본 상태 사용) 리스트가 이 스킴을 물려받는다(하드코딩 3단계 대신). project_status_template 를 로드해 캐시.
+let pjvSpaceDefaultDefs = null; // 스페이스 기본 defs(없으면 null=표준 3단계 폴백)
+let pjvStatusTemplatesCache = []; // 템플릿 목록(에디터·새 리스트 폼 드롭다운)
+let pjvSpaceDefaultId = null; // 스페이스 기본 템플릿 id
+// 원시 statuses[] → 정규화 defs(리스트 커스텀 상태 정규화와 동형).
+function pjvNormStatusDefs(statuses) {
+    if (!Array.isArray(statuses))
+        return [];
+    return statuses.filter((x) => x && x.key).map((x) => ({
+        key: String(x.key), label: String(x.label || x.key), color: x.color || '#94a3b8',
+        category: (x.category === 'done' || x.category === 'closed') ? x.category : 'active',
+    }));
+}
+// 상태 템플릿(스페이스 기본 포함) 로드 — 실패해도 조용히(기본=null → 표준 3단계). 레지스트리 세팅/렌더 전에 await.
+async function pjvLoadStatusTemplates() {
+    try {
+        const d = await api('/api/ui/v6/status-templates');
+        pjvStatusTemplatesCache = (d && d.templates) || [];
+        pjvSpaceDefaultId = (d && d.default_id) != null ? Number(d.default_id) : null;
+        const def = (d && d.default) || pjvStatusTemplatesCache.find((t) => t.is_default) || null;
+        const defs = def ? pjvNormStatusDefs(def.statuses) : [];
+        pjvSpaceDefaultDefs = defs.length ? defs : null;
+    }
+    catch (_) { /* 미설정/실패 → 표준 3단계 폴백 */ }
+}
 // 리스트의 상태 정의(커스텀이면 그것, 아니면 기본 3단계). 항상 {key,label,color,category,frac} 정규화.
 //  frac = Active 버킷 안 진행도(0=첫 상태=점선 할일 → (n-1)/n=거의 가득). Done/Closed 는 체크라 무관. #499
 function pjvListStatusDefs(list) {
@@ -2215,7 +2346,9 @@ function pjvListStatusDefs(list) {
         }));
     }
     else {
-        defs = PJV_DEFAULT_STATUS_DEFS.map((d) => ({ ...d }));
+        // #729 inherit(기본 상태 사용) — 하드코딩 3단계 대신 스페이스 기본 스킴을 상속(있으면).
+        const base = (pjvSpaceDefaultDefs && pjvSpaceDefaultDefs.length) ? pjvSpaceDefaultDefs : PJV_DEFAULT_STATUS_DEFS;
+        defs = base.map((d) => ({ ...d }));
     }
     return pjvAssignFracs(defs);
 }
@@ -2230,9 +2363,44 @@ function pjvAssignFracs(defs) {
 let pjvStatusReg = new Map();
 function pjvSetStatusRegistry(lists) {
     pjvStatusReg = new Map();
-    for (const l of lists || [])
-        if (pjvListIsCustomStatus(l))
+    const hasSpaceDefault = !!(pjvSpaceDefaultDefs && pjvSpaceDefaultDefs.length);
+    for (const l of lists || []) {
+        // 커스텀이면 그 스킴을, 아니면(inherit) 스페이스 기본이 있을 때만 등록 — 그래야 inherit 리스트의 프로젝트/태스크
+        //  행도 스페이스 기본 상태(색·이름)로 보인다. 스페이스 기본이 없으면 등록 안 함(네이티브 3단계 폴백 경로 유지).
+        if (pjvListIsCustomStatus(l) || hasSpaceDefault)
             pjvStatusReg.set(Number(l.id), pjvListStatusDefs(l));
+    }
+}
+// #731 프로젝트 id → 소속 리스트 id 맵. 태스크/하위태스크는 list_id 가 없어(부모 체인으로 해소), 행 상태칩이
+//  '루트 프로젝트의 리스트' 커스텀 상태를 쓰게 하는 다리. 프로젝트 행/상세가 렌더될 때 채워진다(그 뒤 태스크 행이 그림).
+let pjvProjListReg = new Map();
+function pjvRegisterProjList(projectId, listId) {
+    if (projectId != null)
+        pjvProjListReg.set(Number(projectId), listId != null ? Number(listId) : null);
+}
+// 태스크(하위 포함)의 상태 정의 — 루트 프로젝트 id 로 소속 리스트를 찾아 커스텀 상태 defs 반환(없으면 null=네이티브 3단계).
+function pjvTaskStatusDefs(projectId) {
+    if (projectId == null)
+        return null;
+    const listId = pjvProjListReg.get(Number(projectId));
+    if (listId == null)
+        return null;
+    const defs = pjvStatusReg.get(Number(listId));
+    return (defs && defs.length) ? defs : null;
+}
+// 커스텀 상태 defs 에서 (status_raw 우선, 없으면 네이티브 status 흡수) 현재 상태 def 해소 — 프로젝트/태스크 공용.
+function pjvResolveStatusDef(statusRaw, status, defs) {
+    if (!defs || !defs.length)
+        return null;
+    const rawKey = statusRaw || status;
+    let d = defs.find((x) => x.key === rawKey);
+    if (!d) {
+        if (status === 'done')
+            d = defs.find((x) => x.category === 'done') || defs.find((x) => x.category === 'closed') || null;
+        else
+            d = defs.find((x) => x.category === 'active') || null;
+    }
+    return d;
 }
 // 프로젝트의 실제 상태 정의(커스텀 리스트면 커스텀 def, 아니면 null=기본 meta). status_raw 우선, 없으면 카테고리로 흡수.
 function pjvResolveProjStatus(p) {
@@ -3914,6 +4082,7 @@ function pjvRowTagsEl(row, reload) {
 }
 function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
     fields = fields || [];
+    pjvRegisterProjList(p.id, p.list_id); // #731 이 프로젝트의 태스크 행이 소속 리스트 커스텀 상태를 쓰게 등록.
     const isDone = p.status === 'done';
     const selectable = !!select && canDelete(p);
     const wrap = el('div', { class: 'pjv-trow-wrap pjv-proj-wrap', 'data-proj-id': p.id, 'data-proj-name': p.name || '' });
@@ -4072,7 +4241,7 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     const subcountEl = subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: subs.length + '개 하위 — 클릭하여 펼치기' }, pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null;
     const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowGrip('task', t, { reload }), // 좌측 드래그 핸들(#366) — 잡고 끌어 순서 변경
     pjvRowCheck('task', t, { reload, projectId, members }), // 프로젝트 행과 동일한 선택 체크박스(16px) — 정렬·다중선택 모두 동일하게
-    caret, pjvStatusControl(t, reload), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
+    caret, pjvStatusControl(t, reload, projectId), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
     titleCell.style.paddingLeft = (depth * 22) + 'px';
     const subBox = el('div', { class: 'pjv-trow-subs' });
     subBox.hidden = true;
@@ -5267,6 +5436,16 @@ async function renderProjectV2Detail(view, idStr) {
         return;
     }
     const p = data;
+    // #731 상세 뷰는 보드처럼 전체 리스트를 싣지 않아 상태 레지스트리가 비어있을 수 있다 → 이 프로젝트·태스크 상태칩이
+    //  소속 리스트의 커스텀 상태(색·이름)를 쓰도록 리스트 레지스트리를 보강하고 프로젝트→리스트 매핑을 등록한다.
+    pjvRegisterProjList(p.id, p.list_id);
+    if (p.list_id != null && !pjvStatusReg.has(Number(p.list_id))) {
+        try {
+            const [ld] = await Promise.all([api('/api/ui/v6/project-lists'), pjvLoadStatusTemplates()]); // #729 스페이스 기본도 함께 로드
+            pjvSetStatusRegistry((ld && ld.lists) || []);
+        }
+        catch (_) { /* 실패 시 네이티브 폴백 */ }
+    }
     const members = p.members || [];
     const isDone = p.status === 'done';
     const reload = () => renderProjectV2Detail(view, idStr);
@@ -5438,140 +5617,115 @@ async function unfurlKnowledgeLinks(body, desc, first, onBodyClick, measure) {
     if (measure)
         requestAnimationFrame(measure);
 }
+// #730 본문 파일 업로드 — 프로젝트 폴더 하위(dir)에 저장하고 인라인 서빙 URL(/api/ui/…/file?path=)을 돌려준다.
+//  core.ts 의 이미지 로더(#551)가 /api/ui/ 경로 이미지를 인증 fetch→blob 으로 렌더하므로 ![](url) 로 바로 표시·왕복.
+async function uploadBodyFile(projId, dir, file) {
+    try {
+        const orig = (file && file.name) || 'file';
+        const dot = orig.lastIndexOf('.');
+        const ext = dot > 0 ? orig.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : (String(file.type || '').split('/')[1] || '').replace(/[^a-z0-9]/g, '');
+        const stem = (dot > 0 ? orig.slice(0, dot) : orig).replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').replace(/\s+/g, '_').slice(0, 60) || 'file';
+        const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+        const stamp = '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
+        const fname = stem + '-' + stamp + (ext ? '.' + ext : '');
+        const relPath = dir + '/' + fname;
+        const url = '/api/ui/v6/projects/' + projId + '/file?path=' + encodeURIComponent(relPath);
+        await authUpload(url, new File([file], fname, { type: file.type }));
+        return url;
+    }
+    catch (e) {
+        toast('업로드 실패 — ' + (e && e.message || e), true);
+        return null;
+    }
+}
+// #730 본문 블록 에디터 마운트 — 프로젝트/태스크/하위태스크 공용. 노션형 블록 에디터(항시 편집·자동저장).
+//  config.save(md):Promise — 서버 저장. config.uploadFile(file):Promise<url|null> — 이미지/첨부 업로드.
+//  반환 { el, flush, isDirty, destroy } — 호출부가 닫힐 때 flush()(미저장분 저장) + destroy() 권장.
+function mountBodyEditor(config) {
+    let saveTimer = null, saving = false, lastSaved = config.initial || '';
+    const chip = el('span', { class: 'pjv-bodyed-chip' });
+    const setChip = (t, warn) => { chip.textContent = t || ''; chip.classList.toggle('warn', !!warn); };
+    const doSave = async () => {
+        if (saving)
+            return;
+        const md = editor.getMarkdown();
+        if (md === lastSaved) {
+            editor.resetDirty();
+            setChip('');
+            return;
+        }
+        saving = true;
+        setChip('저장 중…');
+        try {
+            await config.save(md);
+            lastSaved = md;
+            editor.resetDirty();
+            setChip('저장됨');
+            setTimeout(() => { if (chip.textContent === '저장됨')
+                setChip(''); }, 1600);
+        }
+        catch (e) {
+            setChip('저장 실패', true);
+            toast('본문 저장 실패 — ' + (e && e.message || e), true);
+        }
+        saving = false;
+        if (editor.isDirty())
+            queueSave();
+    };
+    const queueSave = () => { setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 1200); };
+    const flush = () => { clearTimeout(saveTimer); return editor.isDirty() ? doSave() : Promise.resolve(); };
+    const editor = createBlockEditor({
+        initial: config.initial || '',
+        placeholder: config.placeholder,
+        onChange: queueSave,
+        onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
+        uploadFile: config.uploadFile,
+    });
+    const box = el('div', { class: 'pjv-bodyed' }, editor.el, el('div', { class: 'pjv-bodyed-bar' }, chip));
+    // 에디터 밖으로 포커스가 완전히 나가면 자동저장 flush(슬래시/툴바 팝업 클릭은 box 밖이지만 저장은 멱등이라 무해).
+    box.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement))
+        flush(); }, 200));
+    return { el: box, flush, isDirty: () => editor.isDirty(), destroy: () => editor.destroy() };
+}
 function projectBodySection(id, p, reload) {
     const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
     const bodyWrap = el('div', { class: 'proj-body-sec' });
-    // '✎ 편집' 버튼 제거 — 본문을 클릭하면 그 자리에서 편집되고(아래 render: body.onclick=editBody / '＋ 본문 추가'), 버튼은 불필요.
     card.append(el('div', { class: 'card-head' }, el('h3', { text: '본문' })));
     card.append(bodyWrap);
-    const editBody = () => {
-        // 위지위그(WYSIWYG) — 렌더된 본문 '위에서 바로' 편집(contentEditable). 미리보기 따로 없음.
-        //  굵게/기울임/말머리 등을 서식 바로 누르면 그 자리에서 즉시 굵게/목록으로 보인다. 저장 시 DOM→마크다운으로 직렬화.
-        const ce = el('div', { class: 'proj-body-wysiwyg md-rendered', contenteditable: 'true', spellcheck: 'false' });
-        if (p.description && p.description.trim()) {
-            const rendered = renderMarkdown(p.description);
-            while (rendered.firstChild)
-                ce.append(rendered.firstChild);
-        }
-        else {
-            ce.append(el('p', {}, el('br', {})));
-        }
-        bodyWrap.replaceChildren(ce);
-        ce.focus();
-        try {
-            const r = document.createRange();
-            r.selectNodeContents(ce);
-            r.collapse(false);
-            const sel = window.getSelection();
-            if (sel) {
-                sel.removeAllRanges();
-                sel.addRange(r);
-            }
-        }
-        catch (_) { /* noop */ }
-        const toolbar = buildWysiwygToolbar(ce);
-        let fin = false;
-        const done = async (save) => {
-            if (fin)
-                return;
-            fin = true;
-            toolbar.destroy();
-            const nv = save ? mdFromDom(ce) : (p.description || '');
-            if (save && nv !== (p.description || '')) {
-                try {
-                    await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: nv || null }) });
-                    p.description = nv;
-                }
-                catch (e) {
-                    toast('본문 수정 실패 — ' + e.message, true);
-                }
-            }
-            render();
-        };
-        // 저장=⌘/Ctrl+Enter 또는 바깥클릭(blur), 취소=Esc. (Enter 는 줄바꿈/문단)
-        ce.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                done(true);
-            }
-            else if (e.key === 'Escape') {
-                e.preventDefault();
-                done(false);
-            }
-        });
-        // 지연 체크 — 서식 바 클릭·링크 prompt 로 잠깐 포커스가 떠도(다시 에디터로 돌아오면) 저장/종료하지 않음.
-        ce.addEventListener('blur', () => setTimeout(() => {
-            if (document.activeElement === ce)
-                return;
-            if (document.querySelector('.fmt-toolbar:hover'))
-                return;
-            done(true);
-        }, 150));
-    };
-    const render = () => {
-        bodyWrap.replaceChildren();
-        if (p.description) {
-            // 지식 링크 언펄(#317) — 현재 origin 으로 즉시 치환(흔한 경우), 게이트웨이 host·제목은 비동기 보강.
-            const first = linkifyKnowledgeRefs(p.description, new Set([location.host]));
-            const body = el('div', { class: 'proj-detail-body md-rendered', title: '클릭해 본문 수정' }, renderMarkdown(first.md));
-            body.onclick = editBody;
-            // 펼침 컨트롤(클릭업/노션식) — 접힘 땐 페이드 위에 작은 알약으로 가운데 떠 있고, 펼치면 본문 아래 가운데로.
-            const wrap = el('div', { class: 'proj-detail-body-wrap is-collapsed' });
-            const box = el('div', { class: 'proj-detail-body-box collapsed' }, body);
-            const lbl = el('span', { class: 'lbl', text: '더 보기' });
-            const caret = el('span', { class: 'caret', text: '⌄' });
-            const exBtn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, lbl, caret);
-            const exRow = el('div', { class: 'proj-detail-body-expand-row' }, exBtn);
-            exBtn.onclick = (e) => {
-                e.stopPropagation();
-                const collapsed = box.classList.toggle('collapsed');
-                wrap.classList.toggle('is-collapsed', collapsed);
-                caret.textContent = collapsed ? '⌄' : '⌃';
-                lbl.textContent = collapsed ? '더 보기' : '접기';
-            };
-            wrap.append(box, exRow);
-            bodyWrap.append(wrap);
-            // 짧은 본문(접어도 다 보이는)이면 펼침 불필요 → 펼친 채로 두고 컨트롤 숨김. (레이아웃 후 측정)
-            const measure = () => {
-                if (body.scrollHeight <= box.clientHeight + 2) {
-                    box.classList.remove('collapsed');
-                    wrap.classList.remove('is-collapsed');
-                    exRow.style.display = 'none';
-                }
-            };
-            requestAnimationFrame(measure);
-            unfurlKnowledgeLinks(body, p.description, first, editBody, measure); // 비동기: 게이트웨이 host + 제목 보강(#317)
-        }
-        else {
-            const add = el('button', { class: 'proj-detail-desc-add', type: 'button', text: '＋ 본문 추가' });
-            add.onclick = editBody;
-            bodyWrap.append(add);
-        }
-        // #541 이관 첨부(task_attachment — ClickUp attachments[]/인라인 이미지) — 본문 아래 칩 그리드(읽기전용, 새 탭).
-        //  원본 URL 은 서명 URL 이라 만료 가능 → 이미지 로드 실패 시 파일 칩으로 폴백(레이아웃 보존).
-        const atts = Array.isArray(p.attachments) ? p.attachments : [];
-        if (atts.length) {
-            const grid = el('div', { class: 'proj-att-grid' });
-            for (const a of atts) {
-                const url = a && a.url && /^https?:\/\//i.test(String(a.url)) ? String(a.url) : null;
-                const isImg = /^image\//.test(String(a.mimetype || '')) || /(png|jpe?g|gif|webp|svg)$/i.test(String(a.extension || ''));
-                const chip = el(url ? 'a' : 'span', { class: 'proj-att-chip', ...(url ? { href: url, target: '_blank', rel: 'noopener noreferrer' } : {}) });
-                if (isImg && url) {
-                    const img = el('img', { class: 'proj-att-thumb', src: String(a.thumbnail || url), alt: a.title || '첨부 이미지', loading: 'lazy', referrerpolicy: 'no-referrer' });
-                    img.onerror = () => { img.replaceWith(el('span', { class: 'proj-att-fallback', text: '🖼' })); };
-                    chip.append(img);
-                }
-                else {
-                    chip.append(el('span', { class: 'proj-att-fallback', text: '📎' }));
-                }
-                chip.append(el('span', { class: 'proj-att-cap', text: a.title || String(a.url || '첨부').split('/').pop() }));
-                grid.append(chip);
-            }
-            bodyWrap.append(el('div', { class: 'proj-att-sec' }, el('div', { class: 'proj-att-head', text: '첨부 (' + atts.length + ')' }), grid));
-        }
-    };
-    render();
+    // #730 노션형 블록 에디터로 통일 — 슬래시(/) 명령·블록 드래그·선택 툴바·이미지 붙여넣기/드롭. 항시 편집(자동저장).
+    const bodyEd = mountBodyEditor({
+        initial: p.description || '',
+        placeholder: '본문을 입력하세요.  ‘/’ 로 블록 삽입 · 이미지 붙여넣기/드롭 · 드래그로 정렬',
+        uploadFile: (file) => uploadBodyFile(id, '_attachments/project-' + id, file),
+        save: async (md) => { await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: md || null }) }); p.description = md; },
+    });
+    bodyWrap.append(bodyEd.el);
+    projectBodyAttachments(bodyWrap, p); // 이관 첨부 그리드(있으면)
     return card;
+}
+// #541 이관 첨부(task_attachment — ClickUp attachments[]/인라인 이미지) 그리드(읽기전용) — 본문 에디터 아래.
+//  원본 URL 은 서명 URL 이라 만료 가능 → 이미지 로드 실패 시 파일 칩으로 폴백(레이아웃 보존).
+function projectBodyAttachments(bodyWrap, p) {
+    const atts = Array.isArray(p.attachments) ? p.attachments : [];
+    if (atts.length) {
+        const grid = el('div', { class: 'proj-att-grid' });
+        for (const a of atts) {
+            const url = a && a.url && /^https?:\/\//i.test(String(a.url)) ? String(a.url) : null;
+            const isImg = /^image\//.test(String(a.mimetype || '')) || /(png|jpe?g|gif|webp|svg)$/i.test(String(a.extension || ''));
+            const chip = el(url ? 'a' : 'span', { class: 'proj-att-chip', ...(url ? { href: url, target: '_blank', rel: 'noopener noreferrer' } : {}) });
+            if (isImg && url) {
+                const img = el('img', { class: 'proj-att-thumb', src: String(a.thumbnail || url), alt: a.title || '첨부 이미지', loading: 'lazy', referrerpolicy: 'no-referrer' });
+                img.onerror = () => { img.replaceWith(el('span', { class: 'proj-att-fallback', text: '🖼' })); };
+                chip.append(img);
+            }
+            else {
+                chip.append(el('span', { class: 'proj-att-fallback', text: '📎' }));
+            }
+            chip.append(el('span', { class: 'proj-att-cap', text: a.title || String(a.url || '첨부').split('/').pop() }));
+            grid.append(chip);
+        }
+        bodyWrap.append(el('div', { class: 'proj-att-sec' }, el('div', { class: 'proj-att-head', text: '첨부 (' + atts.length + ')' }), grid));
+    }
 }
 // ── '연결된 지식' 섹션 — 본문 바로 아래. 「필요 지식 → 이 프로젝트 → 산출 지식」 구조를 한 화면에(#245·#317). ──
 //  '막막함' 제거(#317): ① 필요 빈칸은 죽은 끝 대신 추천을 인라인으로 먼저 보여줌(openKnowledgePicker = 추천-우선 단일 픽커)
@@ -6994,7 +7148,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
 const PJV_TASK_STATUS = {
     todo: { label: '할 일', bucket: 'todo', glyph: '', cls: 'todo' },
     in_progress: { label: '진행 중', bucket: 'in_progress', glyph: '◐', cls: 'inprog' },
-    done: { label: 'Closed', bucket: 'done', glyph: '✓', cls: 'done' },
+    done: { label: '완료', bucket: 'done', glyph: '✓', cls: 'done' }, // #731 프로젝트('완료')와 라벨 통일(구 'Closed')
 };
 const PJV_STATUS_ORDER = ['todo', 'in_progress', 'done'];
 // 레거시 'active'(구 토글)·클릭업 미러 적재값을 'todo' 버킷으로 흡수. 그 외 미지정도 todo.
@@ -7080,8 +7234,31 @@ async function pjvPatchTask(taskId, patch, reload) {
         toast('수정 실패 — ' + e.message, true);
     }
 }
-// 상태 점(클릭→메뉴: 할 일/진행 중/완료).
-function pjvStatusControl(t, reload) {
+// 상태 점(클릭→메뉴) — #731 프로젝트 행(pjvProjStatusDot)과 동일한 디자인으로 통일. 소속(루트 프로젝트) 리스트가
+//  커스텀 상태면 그 상태들(색·이름·아이콘·진행 파이)을 그대로 제시하고, 아니면 네이티브 3단계(할 일/진행 중/완료).
+//  projectId = 루트 프로젝트 id(태스크는 list_id 가 없어 이걸로 소속 리스트 커스텀 상태를 해소, pjvTaskStatusDefs).
+function pjvStatusControl(t, reload, projectId) {
+    const defs = pjvTaskStatusDefs(projectId);
+    if (defs) {
+        const cur = pjvResolveStatusDef(t.status_raw, t.status, defs) || defs[0];
+        const btn = el('button', { class: 'pjv-status-btn', type: 'button',
+            title: '상태: ' + cur.label, 'aria-label': '상태 ' + cur.label }, pjvStatusIcon(cur.category, cur.color, cur.frac));
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = el('div', { class: 'pjv-menu' });
+            const close = pjvPopover(btn, menu);
+            for (const cat of PJV_STATUS_CATS) {
+                for (const d of defs.filter((x) => x.category === cat.key)) {
+                    const isCur = d.key === cur.key;
+                    const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, pjvCustomStatusDot(d, 'sm'), el('span', { text: d.label }));
+                    item.onclick = () => { close(); if (!isCur)
+                        pjvPatchTask(t.id, { status: pjvNativeStatusOf(d.category), status_raw: d.key }, reload); };
+                    menu.append(item);
+                }
+            }
+        };
+        return btn;
+    }
     const meta = pjvStatusMeta(t.status);
     const btn = pjvStatusIconBtn(pjvStatusIconStd(meta.bucket), { title: '상태: ' + meta.label, 'aria-label': '상태 ' + meta.label });
     btn.onclick = (e) => {
@@ -7093,7 +7270,50 @@ function pjvStatusControl(t, reload) {
             const sel = meta.bucket === key;
             const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
             item.onclick = () => { close(); if (!sel)
-                pjvPatchTask(t.id, { status: key }, reload); };
+                pjvPatchTask(t.id, { status: key, status_raw: null }, reload); };
+            menu.append(item);
+        }
+    };
+    return btn;
+}
+// #731 태스크 모달 상태 pill(라벨) — 리스트 커스텀 상태가 있으면 그 상태들(색·이름·아이콘), 아니면 네이티브 3단계.
+//  listStatus = task_detail 의 d.list ({id, statusMode, statuses[]}) | null. onPick(patch) 로 저장(패치={status, status_raw}).
+function pjvTaskModalStatusField(t, listStatus, onPick) {
+    let defs = null;
+    if (listStatus && listStatus.statusMode === 'custom' && Array.isArray(listStatus.statuses) && listStatus.statuses.length) {
+        defs = pjvListStatusDefs({ settings: { statusMode: 'custom', statuses: listStatus.statuses } });
+    }
+    if (defs) {
+        const cur = pjvResolveStatusDef(t.status_raw, t.status, defs) || defs[0];
+        const btn = el('button', { class: 'pjv-tm-statuspill ' + pjvCatMeta(cur.category).cls, type: 'button' }, pjvStatusIcon(cur.category, cur.color, cur.frac), el('span', { text: cur.label }));
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const menu = el('div', { class: 'pjv-menu' });
+            const close = pjvPopover(btn, menu);
+            for (const cat of PJV_STATUS_CATS) {
+                for (const d of defs.filter((x) => x.category === cat.key)) {
+                    const isCur = d.key === cur.key;
+                    const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' }, pjvCustomStatusDot(d, 'sm'), el('span', { text: d.label }));
+                    item.onclick = () => { close(); if (!isCur)
+                        onPick({ status: pjvNativeStatusOf(d.category), status_raw: d.key }); };
+                    menu.append(item);
+                }
+            }
+        };
+        return btn;
+    }
+    const meta = pjvStatusMeta(t.status);
+    const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' }, pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        const menu = el('div', { class: 'pjv-menu' });
+        const close = pjvPopover(btn, menu);
+        for (const key of PJV_STATUS_ORDER) {
+            const m = PJV_TASK_STATUS[key];
+            const sel = meta.bucket === key;
+            const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' }, pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
+            item.onclick = () => { close(); if (!sel)
+                onPick({ status: key, status_raw: null }); };
             menu.append(item);
         }
     };
@@ -9045,7 +9265,7 @@ function pjvTaskRow(projectId, t, members, reload, depth, fields) {
     const tagsEl = pjvRowTagsEl(t, reload);
     const subcountEl = subs.length ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: subs.length + '개 하위 — 클릭하여 펼치기' }, pjvSubtaskIcon(), el('span', { text: String(subs.length) })) : null;
     const titleCell = el('div', { class: 'pjv-trow-title-cell' }, pjvRowGrip('task', t, { reload }), // 좌측 드래그 핸들(#366) — 잡고 끌어 순서 변경
-    pjvRowCheck('task', t, { reload, projectId, members }), caret, pjvStatusControl(t, reload), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
+    pjvRowCheck('task', t, { reload, projectId, members }), caret, pjvStatusControl(t, reload, projectId), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
     if (depth)
         titleCell.style.paddingLeft = (depth * 22) + 'px';
     // 하위 영역 — 하위 행도 pjvTaskRow 재귀라 담당자·마감일·우선순위·커스텀필드까지 상위와 완전 동일하게 동작.
@@ -10695,4 +10915,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, };

@@ -669,6 +669,8 @@ const taskUpdateV6: Capability = {
       .describe("본문(description) 끝에 이어붙일 텍스트. 원문을 보존한 채 빈 줄로 구분해 append 한다(전체 교체 없이 보강). description 과 동시 지정 불가.")
       .optional(),
     status: z.enum(TASK_STATUSES).optional(),
+    // #731 리스트별 커스텀 상태 키(개방 어휘, null=해제) — 태스크도 프로젝트처럼 커스텀 상태 저장. status(네이티브 투영)와 함께 온다.
+    status_raw: z.string().max(120).nullable().optional(),
     priority: z.enum(PRIORITIES).nullable().optional(),
     assignee: z.string().nullable().optional(),
     start_date: z.string().nullable().optional(),
@@ -688,6 +690,7 @@ const taskUpdateV6: Capability = {
         if ("description" in b) patch.description = b.description == null ? null : String(b.description);
         if ("append_description" in b) patch.append_description = String(b.append_description ?? "");
         if ("status" in b) patch.status = parseTaskStatus(b.status);
+        if ("status_raw" in b) { const rw = b.status_raw; patch.status_raw = (rw == null || rw === "") ? null : String(rw).trim().slice(0, 120); }
         if ("priority" in b) patch.priority = parsePriorityOrNull(b.priority);
         if ("assignee" in b) patch.assignee = parseAssigneeOrNull(b.assignee);
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);

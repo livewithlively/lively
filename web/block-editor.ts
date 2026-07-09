@@ -409,6 +409,9 @@ export function createBlockEditor(opts: {
   placeholder?: string;
   onChange?: () => void;
   onSaveShortcut?: () => void;
+  // 파일 업로드 콜백(#730) — 이미지 붙여넣기·드롭·슬래시 업로드·첨부에 사용. 저장 후 서빙 URL(또는 실패 null) 반환.
+  //  넘기지 않으면(지식 문서 등) 업로드형 명령은 숨고, 이미지는 URL 삽입만 가능.
+  uploadFile?: (file: File) => Promise<string | null>;
 } = {}) {
   const root = el('div', { class: 'be', 'data-ph': opts.placeholder || "내용을 입력하세요. '/' 를 누르면 블록 메뉴가 열립니다." });
   let dirty = false;
@@ -449,7 +452,7 @@ export function createBlockEditor(opts: {
       case 'h': {
         const lvl = Math.min(Math.max(d.level || 1, 1), 6);
         block.dataset.level = String(lvl);
-        main.append(textDiv('be-h be-h' + Math.min(lvl, 3), d.text, '제목 ' + Math.min(lvl, 3)));
+        main.append(textDiv('be-h be-h' + Math.min(lvl, 4), d.text, '제목 ' + Math.min(lvl, 4)));   // #730 H4 시각 구분(h5·h6 은 h4 스타일 공유)
         break;
       }
       case 'bullet': case 'numbered': case 'todo': {
@@ -970,7 +973,33 @@ export function createBlockEditor(opts: {
       const wrap = nb.querySelector('.be-raw') as HTMLElement;
       if (wrap) openRawEditor(nb, wrap);
     } },
+    // ── #730 확장: 제목4 · 미디어(업로드/링크) · 인라인 삽입 · 서식 ──
+    { k: 'h4', ic: 'H4', label: '제목 4', hint: '더 작은 제목', kw: 'h4 #### heading 제목 소제목', apply: (b) => convertBlock(b, { type: 'h', level: 4 }) },
+    { k: 'imageup', ic: '📤', label: '이미지 업로드', hint: '내 기기에서 올리기', kw: 'image upload file photo 이미지 업로드 사진 그림 파일', up: true, apply: (b) => pickAndUploadFile(b, true) },
+    { k: 'attach', ic: '📎', label: '첨부 파일', hint: '파일 올려 링크로', kw: 'attachment file upload download 첨부 파일 업로드 다운로드', up: true, apply: (b) => pickAndUploadFile(b, false) },
+    { k: 'bookmark', ic: '🔖', label: '북마크 / 링크 카드', hint: '웹 주소를 링크로', kw: 'bookmark link url web embed 북마크 링크 주소 웹 카드 임베드', apply: (b) => insertLinkAtBlock(b, true) },
+    { k: 'link', ic: '🔗', label: '링크', hint: '하이퍼링크 삽입', kw: 'link url hyperlink 링크 주소 하이퍼링크', apply: (b) => insertLinkAtBlock(b, false) },
+    { k: 'mppage', ic: '@', label: '페이지 멘션', hint: '다른 지식 문서 링크', kw: 'mention page link doc 멘션 페이지 문서 링크 지식 앳', apply: (b) => { const t = textElOf(b); if (t) { t.focus(); insertText('[['); syncMention(t); } } },
+    { k: 'date', ic: '📅', label: '오늘 날짜', hint: 'YYYY-MM-DD', kw: 'date today time now 날짜 오늘 시간', apply: (b) => { const t = textElOf(b); if (t) { t.focus(); insertText(beToday()); markDirty(); } } },
+    { k: 'bold', ic: 'B', label: '굵게', hint: '**굵게**', kw: 'bold strong 굵게 볼드 강조', apply: () => { document.execCommand('bold'); markDirty(); } },
+    { k: 'italic', ic: '𝑖', label: '기울임', hint: '*기울임*', kw: 'italic em 기울임 이탤릭', apply: () => { document.execCommand('italic'); markDirty(); } },
+    { k: 'underline', ic: 'U̲', label: '밑줄', hint: '++밑줄++', kw: 'underline 밑줄', apply: () => { document.execCommand('underline'); markDirty(); } },
+    { k: 'strike', ic: 'S̶', label: '취소선', hint: '~~취소선~~', kw: 'strike strikethrough 취소선 지움', apply: () => { document.execCommand('strikeThrough'); markDirty(); } },
+    { k: 'icode', ic: '</>', label: '인라인 코드', hint: '`코드`', kw: 'code inline mono 코드 인라인 모노', apply: () => wrapOrInsertInline('code') },
+    { k: 'highlight', ic: '🖍', label: '형광펜', hint: '==강조==', kw: 'highlight mark 형광펜 강조 마커 하이라이트', apply: () => wrapOrInsertInline('mark') },
+    { k: 'clearfmt', ic: '⌫', label: '서식 지우기', hint: '선택 서식 제거', kw: 'clear format remove clean 서식 지우기 초기화 제거', apply: () => { document.execCommand('removeFormat'); document.execCommand('unlink'); markDirty(); } },
   ];
+  // #730 슬래시 카테고리(클릭업/노션식 섹션 그룹핑). k → 카테고리.
+  const SLASH_CAT: Record<string, string> = {
+    text: 'basic', h1: 'basic', h2: 'basic', h3: 'basic', h4: 'basic',
+    bullet: 'list', numbered: 'list', todo: 'list', toggle: 'list',
+    quote: 'block', callout: 'block', divider: 'block', code: 'block', equation: 'block', columns: 'block', table: 'block', pagecard: 'block', collection: 'block',
+    image: 'media', imageup: 'media', attach: 'media', bookmark: 'media',
+    link: 'inline', mppage: 'inline', date: 'inline',
+    bold: 'format', italic: 'format', underline: 'format', strike: 'format', icode: 'format', highlight: 'format', clearfmt: 'format',
+  };
+  const SLASH_CAT_ORDER: Array<[string, string]> = [['basic', '기본'], ['list', '목록'], ['block', '블록'], ['media', '미디어'], ['inline', '인라인'], ['format', '서식']];
+  const slashCatIndex = (k: string) => { const c = SLASH_CAT[k] || 'block'; const i = SLASH_CAT_ORDER.findIndex(([kk]) => kk === c); return i < 0 ? 99 : i; };
   let slash: any = null;   // { block, anchorNode, anchorOffset, menu, items, sel, typed }
 
   function openSlashMenu(block: HTMLElement, typed: boolean) {
@@ -995,24 +1024,37 @@ export function createBlockEditor(opts: {
   }
   function slashCandidates() {
     const q = (slash.query || '').trim().toLowerCase();
-    return SLASH_ITEMS.filter((it) => !q || it.label.toLowerCase().includes(q) || it.kw.includes(q) || it.k.includes(q));
+    // 업로드형 명령(up)은 uploadFile 콜백이 있을 때만 노출. 카테고리 순서로 정렬(그룹 헤더용).
+    return SLASH_ITEMS
+      .filter((it) => (!it.up || !!opts.uploadFile) && (!q || it.label.toLowerCase().includes(q) || it.kw.includes(q) || it.k.includes(q)))
+      .slice().sort((a, b) => slashCatIndex(a.k) - slashCatIndex(b.k));
   }
   function paintSlash() {
     if (!slash) return;
     const items = slashCandidates();
     slash.items = items;
     if (slash.sel >= items.length) slash.sel = Math.max(0, items.length - 1);
-    slash.menu.replaceChildren(
-      el('div', { class: 'be-slash-head', text: '블록' }),
-      ...(!items.length ? [el('div', { class: 'be-slash-empty', text: '결과 없음' })] : items.map((it, idx) => {
-        const row = el('button', { class: 'be-slash-item' + (idx === slash.sel ? ' on' : ''), type: 'button', role: 'menuitem' },
-          el('span', { class: 'be-slash-ic', text: it.ic }),
-          el('span', { class: 'be-slash-label', text: it.label }),
-          el('span', { class: 'be-slash-hint', text: it.hint }));
-        row.addEventListener('mousedown', (e) => e.preventDefault());   // 포커스/선택 유지
-        row.onclick = () => applySlash(it);
-        return row;
-      })));
+    if (!items.length) { slash.menu.replaceChildren(el('div', { class: 'be-slash-empty', text: '결과 없음' })); return; }
+    const kids: any[] = [];
+    let lastCat = '';
+    items.forEach((it, idx) => {
+      const cat = SLASH_CAT[it.k] || 'block';
+      if (cat !== lastCat) {
+        lastCat = cat;
+        const found = SLASH_CAT_ORDER.find(([k]) => k === cat);
+        kids.push(el('div', { class: 'be-slash-head', text: found ? found[1] : '블록' }));
+      }
+      const row = el('button', { class: 'be-slash-item' + (idx === slash.sel ? ' on' : ''), type: 'button', role: 'menuitem' },
+        el('span', { class: 'be-slash-ic', text: it.ic }),
+        el('span', { class: 'be-slash-label', text: it.label }),
+        el('span', { class: 'be-slash-hint', text: it.hint }));
+      row.addEventListener('mousedown', (e) => e.preventDefault());   // 포커스/선택 유지
+      row.onclick = () => applySlash(it);
+      kids.push(row);
+    });
+    slash.menu.replaceChildren(...kids);
+    const onEl = slash.menu.querySelector('.be-slash-item.on') as HTMLElement;
+    if (onEl && onEl.scrollIntoView) onEl.scrollIntoView({ block: 'nearest' });
   }
   function closeSlashMenu() {
     if (!slash) return;
@@ -1173,6 +1215,92 @@ export function createBlockEditor(opts: {
     urlIn.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' && !e.isComposing) go(); });
   }
 
+  // ── #730 파일/이미지/링크/서식 삽입 헬퍼 (슬래시·붙여넣기·드롭 공용) ──
+  function beToday() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  // 마크다운 조각을 현재 블록에 넣는다(빈 문단이면 대체, 아니면 아래 새 블록). promptImage 와 동일 결.
+  function insertMdBlock(block: HTMLElement, md: string): HTMLElement {
+    const cur = blockData(block);
+    let nb: HTMLElement;
+    if (block.dataset.type === 'p' && !String(cur.text || '').trim()) nb = convertBlock(block, { type: 'p', text: md });
+    else nb = insertBlockAfter(block, { type: 'p', text: md });
+    focusBlock(nb, false);
+    return nb;
+  }
+  // 업로드된 이미지들을 순차로 넣는다(플레이스홀더 → 업로드 → 이미지 md 로 교체).
+  async function insertUploadedImages(block: HTMLElement, files: File[]) {
+    if (!opts.uploadFile) return;
+    let anchor = block;
+    for (let i = 0; i < files.length; i++) {
+      const cur = blockData(anchor);
+      const empty = i === 0 && anchor.dataset.type === 'p' && !String(cur.text || '').trim();
+      const ph = empty ? convertBlock(anchor, { type: 'p', text: '⬆︎ 이미지 업로드 중…' }) : insertBlockAfter(anchor, { type: 'p', text: '⬆︎ 이미지 업로드 중…' });
+      anchor = ph; markDirty();
+      try {
+        const url = await opts.uploadFile(files[i]);
+        anchor = convertBlock(ph, { type: 'p', text: url ? '![](' + url + ')' : '(이미지 업로드 실패)' });
+      } catch (_) { anchor = convertBlock(ph, { type: 'p', text: '(이미지 업로드 실패)' }); }
+      markDirty();
+    }
+    focusBlock(anchor, false);
+    if (opts.onChange) opts.onChange();
+  }
+  // 파일 선택 → 업로드 → 이미지면 ![](), 아니면 [📎 파일명](url) 링크.
+  function pickAndUploadFile(block: HTMLElement, asImage: boolean) {
+    if (!opts.uploadFile) return;
+    const inp = el('input', { type: 'file', accept: asImage ? 'image/*' : '', style: 'position:fixed;left:-9999px' }) as HTMLInputElement;
+    document.body.append(inp);
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      inp.remove();
+      if (!f) return;
+      if (asImage) { await insertUploadedImages(block, [f]); return; }
+      const ph = insertMdBlock(block, '⬆︎ 첨부 업로드 중…');
+      try {
+        const url = await opts.uploadFile!(f);
+        convertBlock(ph, { type: 'p', text: url ? '[📎 ' + f.name.replace(/[[\]]/g, '') + '](' + url + ')' : '(첨부 업로드 실패)' });
+      } catch (_) { convertBlock(ph, { type: 'p', text: '(첨부 업로드 실패)' }); }
+      markDirty(); if (opts.onChange) opts.onChange();
+    });
+    inp.click();
+  }
+  // 링크/북마크 — 선택이 있으면 그 선택에 링크(툴바 팝오버), 없으면 주소·표시텍스트를 물어 인라인 링크 삽입.
+  function insertLinkAtBlock(block: HTMLElement, bookmark: boolean) {
+    const r = caretRange();
+    if (r && !r.collapsed) { openLinkPop(); return; }
+    const urlIn = el('input', { type: 'text', placeholder: 'https://…', style: 'width:100%' }) as HTMLInputElement;
+    const txtIn = el('input', { type: 'text', placeholder: bookmark ? '표시 이름(선택)' : '표시할 텍스트(선택)', style: 'width:100%' }) as HTMLInputElement;
+    const goBtn = el('button', { class: 'btn btn-primary', text: '삽입' });
+    const back = overlayBox(bookmark ? '링크 카드' : '링크 삽입',
+      el('div', { class: 'field' }, el('label', { class: 'field-label', text: '주소' }), urlIn),
+      el('div', { class: 'field', style: 'margin-top:10px' }, el('label', { class: 'field-label', text: '표시 텍스트' }), txtIn),
+      el('div', { class: 'ov-actions' }, goBtn, el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() })));
+    setTimeout(() => urlIn.focus(), 0);
+    const go = () => {
+      const u = urlIn.value.trim();
+      if (!safeHref(u) || !/^(https?:\/\/|#\/)/i.test(u)) { toast('https:// 또는 #/… 주소를 입력하세요', true); return; }
+      back.remove();
+      const label = (txtIn.value.trim() || u).replace(/[[\]]/g, '');
+      insertMdBlock(block, (bookmark ? '🔖 ' : '') + '[' + label + '](' + u + ')');
+      markDirty(); if (opts.onChange) opts.onChange();
+    };
+    goBtn.onclick = go;
+    urlIn.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' && !e.isComposing) go(); });
+  }
+  // 인라인 마크(code/mark) — 선택이 있으면 감싸고, 없으면 빈 래퍼를 넣고 그 안에 캐럿(다음 타이핑이 안에 들어감).
+  function wrapOrInsertInline(tag: string) {
+    const r = caretRange();
+    if (r && !r.collapsed) { toggleWrap(tag); markDirty(); return; }
+    if (!r) return;
+    const wrap = el(tag, tag === 'code' ? { class: 'md-code' } : (tag === 'mark' ? { class: 'md-mark' } : {}));
+    wrap.append(document.createTextNode('​'));
+    try {
+      r.insertNode(wrap);
+      const s = window.getSelection()!; const nr = document.createRange();
+      nr.setStart(wrap.firstChild!, 1); nr.collapse(true); s.removeAllRanges(); s.addRange(nr);
+    } catch (_) { /* 경계 드문 케이스 */ }
+    markDirty();
+  }
+
   // ════════ 인라인 서식 툴바 ════════
   const tools = el('div', { class: 'be-tools', hidden: true });
   document.body.append(tools);
@@ -1253,11 +1381,11 @@ export function createBlockEditor(opts: {
   }
 
   // 전환 드롭다운(툴바 좌측) — 현재 블록 유형 라벨 + 리스트(노션 'Text ∨' 동형).
-  const TURN_LABEL: Record<string, string> = { p: '텍스트', h1: '제목 1', h2: '제목 2', h3: '제목 3',
+  const TURN_LABEL: Record<string, string> = { p: '텍스트', h1: '제목 1', h2: '제목 2', h3: '제목 3', h4: '제목 4',
     bullet: '글머리 목록', numbered: '번호 목록', todo: '할 일', quote: '인용', callout: '콜아웃', code: '코드', toggle: '토글' };
   const curTypeKey = (block: HTMLElement) => {
     const t = block.dataset.type!;
-    return t === 'h' ? 'h' + Math.min(Number(block.dataset.level) || 1, 3) : t;
+    return t === 'h' ? 'h' + Math.min(Number(block.dataset.level) || 1, 4) : t;
   };
   let toolsBlock: HTMLElement | null = null;   // 현재 선택이 속한 블록(전환 대상)
   const turnLabel = el('span', { class: 'be-turn-label', text: '텍스트' });
@@ -1765,6 +1893,15 @@ export function createBlockEditor(opts: {
     if (target.classList && (target.classList.contains('be-raw-ta') || target.classList.contains('be-code-lang'))) return;
     const block = blockOf(target);
     if (!block || !target.classList || !target.classList.contains('be-text')) return;
+    // #730 이미지 붙여넣기 — 클립보드에 이미지 파일이 있고 업로더가 있으면 인라인 삽입(첨부로 새지 않음).
+    const cd = e.clipboardData || (window as any).clipboardData;
+    if (opts.uploadFile && cd) {
+      const imgs: File[] = [];
+      for (const it of (cd.items || [])) { if (it.kind === 'file' && /^image\//.test(it.type || '')) { const f = it.getAsFile(); if (f) imgs.push(f); } }
+      if (!imgs.length) for (const f of (cd.files || [])) { if (/^image\//.test(f.type || '')) imgs.push(f); }
+      const plain = cd.getData ? (cd.getData('text/plain') || '') : '';
+      if (imgs.length && !plain.trim()) { e.preventDefault(); insertUploadedImages(block, imgs); return; }
+    }
     const text = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
     if (text == null) return;
     e.preventDefault();
@@ -1793,6 +1930,19 @@ export function createBlockEditor(opts: {
     renumber();
     markDirty();
     if (rest.length) focusBlock(anchor, false);
+  });
+
+  // ── #730 이미지 드롭 — 파일을 에디터에 끌어다 놓으면 인라인 삽입(업로더 있을 때만) ──
+  root.addEventListener('dragover', (e: any) => {
+    if (opts.uploadFile && e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); }
+  });
+  root.addEventListener('drop', (e: any) => {
+    if (!opts.uploadFile || !e.dataTransfer) return;
+    const files = (Array.from(e.dataTransfer.files || []) as File[]).filter((f) => /^image\//.test(f.type || ''));
+    if (!files.length) return;
+    e.preventDefault();
+    const block = blockOf(e.target as HTMLElement) || blockEls()[blockEls().length - 1];
+    if (block) insertUploadedImages(block, files);
   });
 
   // ── 블록 메뉴(⋮⋮ 클릭) — 전환(단순 텍스트 블록) + 복제/이동/삭제. 노션 핸들 메뉴 동형(#657n). ──
