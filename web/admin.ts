@@ -3091,11 +3091,12 @@ function dbSourceEditor(detail, data) {
     right.append(panel);
     void renderDbPolicyPanel(panel, sel);
   }
-  const rcDb = data.runtimeConfig || { allowed_db_hosts: [] };
+  const rcDb = data.runtimeConfig || { allowed_db_hosts: [], allowed_db_secret_refs: [] };
   const dbSafety = allowlistCard(data, 'DB 접속 안전범위 (allowlist)',
-    'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단(SSRF 방어). 외부 공인 DB 는 등록 불요.',
+    'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host(이 목록 밖의 사설/localhost 는 차단 — SSRF 방어. 외부 공인 DB 는 등록 불요)와, auth_ref 가 참조할 수 있는 비번 env 이름(값 아님 — 게이트웨이 프로세스 env 에 있어야 함)입니다.',
     [
       { key: 'allowed_db_hosts', label: '허용 DB host (allowed_db_hosts)', initial: rcDb.allowed_db_hosts, placeholder: 'localhost\ndb.internal.acme.com\n줄당 host 한 개' },
+      { key: 'allowed_db_secret_refs', label: '허용 비번 env 이름 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs, placeholder: 'HONEST_RDS_RO_PASSWORD\n줄당 env 이름 한 개(값 금지)' },
     ]);
   detail.replaceChildren(
     el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two' }, listCol, right)),

@@ -733,12 +733,13 @@ export const deliveryCapabilities: Capability[] = [
       return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
-    "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts)를 저장한다.",
+    "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
     [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
-        allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[]; write_tools?: string[];
+        allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
+        allowed_db_secret_refs?: string[]; write_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
       } = {};
       if (input.hooks !== undefined) {
@@ -771,6 +772,15 @@ export const deliveryCapabilities: Capability[] = [
       if (input.allowed_db_hosts !== undefined) {
         if (!Array.isArray(input.allowed_db_hosts)) throw new HttpError(400, "allowed_db_hosts 는 배열이어야 합니다");
         patch.allowed_db_hosts = input.allowed_db_hosts.map((h) => str(h, "allowed_db_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      // db 소스 auth_ref 가 참조할 수 있는 비번 env '이름' 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
+      //  외부(비번 필요) 소스 등록이 불가능했다). allowed_auth_envs 와 동일한 env 이름 형식 검증. 값이 아니라 이름만.
+      if (input.allowed_db_secret_refs !== undefined) {
+        if (!Array.isArray(input.allowed_db_secret_refs)) throw new HttpError(400, "allowed_db_secret_refs 는 배열이어야 합니다");
+        patch.allowed_db_secret_refs = input.allowed_db_secret_refs.map((e) => str(e, "allowed_db_secret_refs[]", 100).trim()).filter(Boolean);
+        for (const e of patch.allowed_db_secret_refs) {
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) throw new HttpError(400, `allowed_db_secret_refs 항목 '${e}' 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)`);
+        }
       }
       if (input.write_tools !== undefined) {
         if (!Array.isArray(input.write_tools)) throw new HttpError(400, "write_tools 는 배열이어야 합니다");
@@ -832,6 +842,7 @@ export const deliveryCapabilities: Capability[] = [
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
+      allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
     }),
 
