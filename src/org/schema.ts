@@ -271,7 +271,7 @@ export async function initOrgSchema(): Promise<void> {
     -- 커넥터 자격/마스킹 결선(P1·P3 #746) — http_proxy 툴이 per-user vault 자격으로 인증하고 응답 PII 를 마스킹.
     --  auth_kind: 설정 시 auth_env(조직 공용 env) 대신 member_secret(호출자 개인 자격 우선)로 Authorization 해소.
     --   해소 폴백 정책은 level 이 정한다: L2(집행/외부발신)=per-user 필수(통합 폴백 금지) / 그 외=통합 폴백 허용(비-PII read).
-    --  auth_scope_key: vault 조회 scope_key(예 gitlab host). pii_scrub: true 면 응답 본문에 scrubPiiDeep 적용(비정형 PII 마스킹).
+    --  auth_scope_key: vault 조회 scope_key(예 gitlab host). pii_scrub: true 면 응답 본문(문자열)에 scrubPii 적용(비정형 PII 마스킹).
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;

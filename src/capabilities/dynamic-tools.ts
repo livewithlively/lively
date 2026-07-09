@@ -64,9 +64,19 @@ export function jsonSchemaToZodShape(schema: unknown): ZodRawShape {
 export interface ProxyResult { status: number; body: string; truncated: boolean; ok: boolean }
 
 // P1·P2(#746) — 커넥터 툴의 vault 자격 해소 폴백 정책은 등급이 정한다(순수, 테스트용 export):
-//  L2(집행/외부발신)=false(per-user 필수, 통합 폴백 금지 — 사칭 방지) / 그 외=true(비-PII read 는 통합 폴백 허용).
+//  L0/L1/미지정(비-PII read)=true(통합 폴백 허용) / L2 및 그 외 모든 값=false(per-user 필수 — 사칭 방지).
+//  allow-list 로 판정(deny-list 아님) — 예상 밖 등급값이 들어와도 fail-closed(폴백 금지) 쪽으로.
 export function proxyAuthFallback(level: string | null | undefined): boolean {
-  return level !== "L2";
+  return level === "L0" || level === "L1" || level == null;
+}
+
+// P1(#746) — vault 해소 결과로 인증 헤더를 만든다(순수, 테스트용 export). meta.auth_header/token_prefix 로 형식 지정.
+//  반환: headers(주입할 헤더) + headerName(리다이렉트 시 벗겨야 할 자격 헤더명 — safeFetch.sensitiveHeaders 로 전달).
+export function buildProxyAuthHeaders(meta: Record<string, unknown> | undefined, secret: string): { headers: Record<string, string>; headerName: string } {
+  const m = meta ?? {};
+  const headerName = typeof m.auth_header === "string" && m.auth_header.trim() ? m.auth_header.trim() : "Authorization";
+  const prefix = typeof m.token_prefix === "string" ? m.token_prefix : "Bearer ";
+  return { headers: { [headerName]: `${prefix}${secret}` }, headerName };
 }
 
 // http_proxy 툴 1회 호출 — 인증(env 또는 per-user vault) + url 고정 + args 는 query/body 로만 + 응답 redact(+옵션 PII 스크럽).
@@ -81,6 +91,8 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
   } catch { /* 프로필 없음 — selfHosts 비움 */ }
 
   const headers: Record<string, string> = { "User-Agent": "lively-context-tool" };
+  let injectedSecret: string | null = null; // 응답 리터럴 스크럽용(에코된 자격 차단)
+  const sensitiveHeaders: string[] = [];    // 크로스-오리진 리다이렉트 시 벗길 자격 헤더명(safeFetch 로 전달)
   if (tool.auth_kind) {
     // P1(#746) per-user vault 인증 — 요청자 개인 자격 우선. 폴백 정책은 등급이 정한다:
     //  L2(집행/외부발신)=per-user 필수(통합 폴백 금지 — 사칭 방지) / 그 외=통합(gateway) 폴백 허용(비-PII read, 온보딩 0).
@@ -93,11 +105,10 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
                        : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
       );
     }
-    // 헤더 형식: meta.auth_header(기본 'Authorization: Bearer')·meta.token_prefix 로 커스터마이즈. 기본 Bearer.
-    const meta = resolved.meta ?? {};
-    const headerName = typeof meta.auth_header === "string" && meta.auth_header ? meta.auth_header : "Authorization";
-    const prefix = typeof meta.token_prefix === "string" ? meta.token_prefix : "Bearer ";
-    headers[headerName] = `${prefix}${resolved.secret}`;
+    const built = buildProxyAuthHeaders(resolved.meta, resolved.secret);
+    Object.assign(headers, built.headers);
+    injectedSecret = resolved.secret;
+    sensitiveHeaders.push(built.headerName); // 커스텀 헤더명(PRIVATE-TOKEN 등)도 리다이렉트에서 벗기게(#746)
   } else if (tool.auth_env) {
     // auth_env 는 운영자 화이트리스트(allowed_auth_envs)에 등록된 이름만 — 인프라 시크릿명(DATABASE_URL 등) 차단.
     if (!cfg.allowed_auth_envs.includes(tool.auth_env)) {
@@ -125,9 +136,12 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
     timeoutMs: 8000,
     allowHttp: false,
     maxRedirects: 2,
+    sensitiveHeaders, // 커스텀 자격 헤더명도 크로스-오리진 리다이렉트에서 벗긴다(#746)
   });
   let cleanBody = redactDeep(res.body).slice(0, 256 * 1024); // 응답 본문 redact(에코된 토큰 등 차단)
-  if (tool.pii_scrub) cleanBody = scrubPii(cleanBody).text; // P3(#746) 비정형 PII 마스킹(응답에 섞인 개인정보)
+  // 주입한 자격이 응답에 그대로 에코될 경우 대비 — redactDeep 의 정적 패턴이 못 잡는 임의 벤더 토큰을 리터럴로 스크럽(#746 리뷰).
+  if (injectedSecret && injectedSecret.length >= 8) cleanBody = cleanBody.split(injectedSecret).join("[REDACTED]");
+  if (tool.pii_scrub) cleanBody = scrubPii(cleanBody).text; // P3(#746) 비정형 PII 마스킹(응답에 섞인 개인정보, 평문 문자열)
   return { status: res.status, body: cleanBody, truncated: res.truncated, ok: res.status >= 200 && res.status < 300 };
 }
 

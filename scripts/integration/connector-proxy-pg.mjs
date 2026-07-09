@@ -60,8 +60,24 @@ try {
   if (l2b?.secret !== "glpat-U1") throw new Error("L2 개인자격 해소 실패 " + l2b?.secret);
   ok(step);
 
-  step = "⑥ auth_env↔auth_kind 배타 — auth_kind 설정 시 auth_env 는 null 로 저장됨(store)";
+  step = "⑥ auth_env↔auth_kind 배타 — auth_kind 설정 시 auth_env 는 null 로 저장됨(신규 INSERT)";
   if (got.auth_env !== null) throw new Error("auth_env 잔류 " + got.auth_env);
+  ok(step);
+
+  step = "⑦ 배타 회귀(리뷰 blocking①) — 기존 auth_env 툴을 auth_kind 로 전환 시 stale auth_env 제거";
+  await store.upsertTool({ name: "env2kind", kind: "http_proxy", scope: "items",
+    url: "https://prom.honestfund.kr/api/v1/query", method: "GET", auth_env: "PROM_TOKEN" }, { actor: "admin" });
+  const before = await store.getTool("env2kind");
+  if (before.auth_env !== "PROM_TOKEN") throw new Error("초기 auth_env 미설정 " + before.auth_env);
+  // auth_kind 만 주고 auth_env 는 안 줌(자연스런 마이그레이션) → stale auth_env 가 살면 안 됨
+  await store.upsertTool({ name: "env2kind", kind: "http_proxy", auth_kind: "prometheus_bearer" }, { actor: "admin" });
+  const after = await store.getTool("env2kind");
+  if (after.auth_env !== null) throw new Error("stale auth_env 잔류(배타 위반) — " + after.auth_env);
+  if (after.auth_kind !== "prometheus_bearer") throw new Error("auth_kind 미반영 " + after.auth_kind);
+  // 되돌리기: auth_kind 를 null 로 clear 하면 auth_env 는 여전히 null(재활성 없음)
+  await store.upsertTool({ name: "env2kind", kind: "http_proxy", auth_kind: null }, { actor: "admin" });
+  const cleared = await store.getTool("env2kind");
+  if (cleared.auth_env !== null || cleared.auth_kind !== null) throw new Error("clear 후 잔류 " + JSON.stringify({ e: cleared.auth_env, k: cleared.auth_kind }));
   ok(step);
 
   console.log("\nCONNECTOR-PROXY INTEGRATION ALL GREEN");

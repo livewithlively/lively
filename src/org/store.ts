@@ -1444,7 +1444,7 @@ export interface OrgTool {
   level: "L0" | "L1" | "L2" | null; // 권한 등급(P2 #746): L0 조회 / L1 제안 / L2 집행. L2 는 auto-approve 강제 제외. null=코드기본(L0).
   auth_kind: string | null; // P1(#746): 설정 시 http_proxy 가 member_secret(호출자 개인 자격 우선)로 인증. null=auth_env(조직 공용) 사용.
   auth_scope_key: string | null; // vault 조회 scope_key(예 host)
-  pii_scrub: boolean; // P3(#746): true 면 응답 본문에 scrubPiiDeep(비정형 PII 마스킹)
+  pii_scrub: boolean; // P3(#746): true 면 응답 본문(문자열)에 scrubPii(비정형 PII 마스킹)
   note: string | null;
   sort: number;
   version: number;
@@ -1562,7 +1562,6 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   // http_proxy 가 아닌 행(빌트인 게이팅)은 url/method/auth_env/scope/input_schema 를 비운다(잔류 방지).
   const url = isProxy ? (t.url ?? before?.url ?? null) : null;
   const method = isProxy ? (t.method ?? before?.method ?? null) : null;
-  const authEnv = isProxy ? (t.auth_env ?? before?.auth_env ?? null) : null;
   const scope = isProxy ? (t.scope ?? before?.scope ?? null) : null;
   const inputSchema = isProxy ? (t.input_schema ?? before?.input_schema ?? DEFAULT_INPUT_SCHEMA) : DEFAULT_INPUT_SCHEMA;
   // 주입모드(#187): undefined=기존 유지, null=코드기본 복귀, true/false=명시. ??-병합은 null 을 흘려보내므로 직접 분기.
@@ -1570,6 +1569,8 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   const level = t.level !== undefined ? t.level : (before?.level ?? null);
   // 커넥터 자격/마스킹(P1·P3 #746) — http_proxy 에만 유효(빌트인 게이팅 행은 비움). null/"" 이면 env 인증(기존).
   const authKind = isProxy ? (t.auth_kind !== undefined ? (t.auth_kind || null) : (before?.auth_kind ?? null)) : null;
+  // 배타(리뷰 blocking①): authKind 가 있으면 authEnv 는 강제 null — 저장된 stale auth_env 잔류/이중 인증출처 방지(?? 병합의 함정).
+  const authEnv = isProxy ? (authKind ? null : (t.auth_env ?? before?.auth_env ?? null)) : null;
   const authScopeKey = isProxy ? (t.auth_scope_key !== undefined ? (t.auth_scope_key || null) : (before?.auth_scope_key ?? null)) : null;
   const piiScrub = isProxy ? (t.pii_scrub !== undefined ? !!t.pii_scrub : (before?.pii_scrub ?? false)) : false;
   await itemsPool.query(
