@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, setPersonAvatar, state, toast } from './core.js';
+import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
 import { overlayBox, skeleton } from './learn.js';
 
@@ -48,6 +48,8 @@ const ADMIN_SECTIONS = [
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
   // 자격(커넥터 로그인) — 능동 커넥터(GitLab·Slack·AWS 등)가 쓰는 per-user 토큰 vault(#746 P1). '내 자격'은 전원, '통합 자격'·AWS 는 admin.
   { key: 'credentials', label: '자격(커넥터 로그인)', meaning: null, group: 'ai' },
+  // DB 접근 감사(#746 P5) — 누가·언제·어떤 테이블/식별자를 조회했나(위변조 방지 해시체인). 신용정보법 R8. admin 전용.
+  { key: 'db-audit', label: 'DB 접근 감사', meaning: null, group: 'ai' },
   // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
   { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
   // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
@@ -71,7 +73,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy', 'review-queue']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절, 검토 큐 웹 탭은 MVP admin — 승인 백엔드는 memory scope 라 워킹레벨 MCP/REST 검토는 열림)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy', 'review-queue']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절, 검토 큐 웹 탭은 MVP admin — 승인 백엔드는 memory scope 라 워킹레벨 MCP/REST 검토는 열림)
 const RUNTIME_ONLY = ['custom-hooks', 'harness-assets', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -278,6 +280,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'connectors') return connectorEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'credentials') return credentialsEditor(detail);
+  if (sel === 'db-audit') return dbAuditEditor(detail, data);
   if (sel === 'embeddings') return embeddingsEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'cron') return cronPanel(detail, data);
@@ -3093,6 +3096,9 @@ function dbSourceEditor(detail, data) {
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(panel);
     void renderDbPolicyPanel(panel, sel);
+    const gpanel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(gpanel);
+    void renderUnmaskGrantPanel(gpanel, sel, data);
   }
   const rcDb = data.runtimeConfig || { allowed_db_hosts: [], allowed_db_secret_refs: [] };
   const dbSafety = allowlistCard(data, 'DB 접속 안전범위 (allowlist)',
@@ -4136,6 +4142,196 @@ function awsRoleCard(creds: any[], reload: () => void) {
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
   return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: 'AWS 역할 (단기자격)' }), ...rows);
+}
+
+// ── DB 접근 감사 뷰(#746 P5) — 누가·언제·무엇을 조회했나(위변조 방지). 필터는 드롭다운 위주. admin. ──
+const AUDIT_PERIODS: Array<[string, string]> = [['1d', '최근 24시간'], ['7d', '최근 7일'], ['30d', '최근 30일'], ['all', '전체 기간']];
+function auditSince(period: string): string | null {
+  const now = Date.now();
+  const ms = period === '1d' ? 86400000 : period === '7d' ? 7 * 86400000 : period === '30d' ? 30 * 86400000 : 0;
+  return ms ? new Date(now - ms).toISOString() : null;
+}
+async function dbAuditEditor(detail, data) {
+  const f = state.admin.dbAuditFilter || (state.admin.dbAuditFilter = { source: '', op: '', result: '', period: '7d', user: '', table: '' });
+  const sources = (data.dbSources || []).map((s: any) => s.name);
+  const srcSel = selectFilter([['', '모든 소스'], ...sources.map((n: string) => [n, n] as [string, string])], f.source);
+  const opSel = selectFilter([['', '조회+스키마'], ['query', '쿼리(db_query)'], ['schema', '스키마(db_schema)']], f.op);
+  const resSel = selectFilter([['', '성공+실패'], ['errors', '차단·실패만']], f.result);
+  const perSel = selectFilter(AUDIT_PERIODS, f.period);
+  const userIn = el('input', { type: 'text', value: f.user || '', placeholder: '조회자 id(선택)', style: 'max-width:150px' });
+  const tableIn = el('input', { type: 'text', value: f.table || '', placeholder: '테이블명(선택)', style: 'max-width:150px' });
+  const body = el('div', {});
+  const subjPanel = el('div', { class: 'card', style: 'margin-top:12px' });
+  const apply = () => {
+    f.source = srcSel.value; f.op = opSel.value; f.result = resSel.value; f.period = perSel.value; f.user = userIn.value.trim(); f.table = tableIn.value.trim();
+    void loadAuditRows(body, f);
+    if (f.source) void renderSubjectKeyPanel(subjPanel, f.source, data);
+    else subjPanel.replaceChildren(el('p', { class: 'admin-hint', text: "특정 소스를 고르면 '누구의 정보를 조회했는지' 기록할 식별자 컬럼을 지정할 수 있습니다." }));
+  };
+  for (const c of [srcSel, opSel, resSel, perSel]) c.addEventListener('change', apply);
+  const searchBtn = el('button', { class: 'btn btn-sm', text: '조회', onclick: apply });
+  const bar = el('div', { class: 'audit-bar' }, srcSel, opSel, resSel, perSel, userIn, tableIn, searchBtn);
+  const verifyOut = el('span', { class: 'admin-status' });
+  const verifyBtn = el('button', { class: 'btn btn-sm', text: '위변조 검증', onclick: async () => {
+    verifyOut.textContent = '검증 중…';
+    try {
+      const r = await api('/api/ui/db-audit/verify');
+      verifyOut.replaceChildren(r.ok
+        ? el('span', { class: 'audit-ok', text: `✓ 무결 (${r.checked}건 검증)` })
+        : el('span', { class: 'audit-bad', text: `⚠ 위변조 의심 — id ${r.broken?.id} (${r.broken?.reason})` }));
+    } catch (e: any) { verifyOut.replaceChildren(el('span', { class: 'audit-bad', text: e.message })); }
+  } });
+  const card = el('div', { class: 'card' },
+    sectionTitle('DB 접근 감사', '구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 위변조 방지(해시체인)이며, 신용정보법상 조회 기록 보존에 씁니다.'),
+    bar,
+    el('div', { class: 'audit-verify' }, verifyBtn, verifyOut),
+    body);
+  if (f.source) void renderSubjectKeyPanel(subjPanel, f.source, data);
+  else subjPanel.append(el('p', { class: 'admin-hint', text: "위 '모든 소스'를 특정 소스로 바꾸면, 그 소스에서 '누구의 정보를 조회했는지' 기록할 식별자 컬럼(예: 고객ID)을 지정할 수 있습니다." }));
+  detail.replaceChildren(card, subjPanel);
+  void loadAuditRows(body, f);
+}
+
+async function loadAuditRows(body, f) {
+  body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  const qs = new URLSearchParams({ limit: '100' });
+  if (f.source) qs.set('source', f.source);
+  if (f.op) qs.set('op', f.op);
+  if (f.result === 'errors') qs.set('errors', '1');
+  if (f.user) qs.set('user', f.user);
+  if (f.table) qs.set('table', f.table.toLowerCase());
+  const since = auditSince(f.period); if (since) qs.set('since', since);
+  let r;
+  try { r = await api('/api/ui/db-audit?' + qs.toString()); }
+  catch (e: any) { body.replaceChildren(errorNote(e, '감사 기록을 불러오지 못했습니다')); return; }
+  const rows = r.rows || [];
+  if (!rows.length) { body.replaceChildren(el('p', { class: 'admin-hint', text: '해당 조건의 조회 기록이 없습니다.' })); return; }
+  const tbl = el('table', { class: 'audit-table' });
+  tbl.append(el('tr', {}, ...['시각', '조회자', '구분', '소스', '테이블', '마스킹', '열람(raw)', '행', '결과'].map((h) => el('th', { text: h }))));
+  for (const row of rows) {
+    const unmasked = (row.unmasked_columns || []);
+    const masked = (row.masked_columns || []);
+    const subj = row.subject_keys ? Object.keys(row.subject_keys).length : 0;
+    tbl.append(el('tr', { class: row.ok ? '' : 'audit-row-bad' },
+      el('td', { class: 'audit-time', text: relTime(row.at) }),
+      el('td', {}, row.user_id || '-', row.harness ? el('span', { class: 'mini-meta', text: ' · ' + row.harness }) : null),
+      el('td', { text: row.op === 'schema' ? '스키마' : '쿼리' }),
+      el('td', { text: row.source || '-' }),
+      el('td', { class: 'audit-tables' }, (row.tables || []).join(', ') || '-', subj ? el('span', { class: 'mini-meta', text: ` · 대상 ${subj}` }) : null),
+      el('td', { text: masked.length ? String(masked.length) : '-' }),
+      el('td', {}, unmasked.length ? el('span', { class: 'pill pill-warn', text: unmasked.join(', ') }) : el('span', { class: 'mini-meta', text: '-' })),
+      el('td', { class: 'audit-num', text: row.ok ? String(row.row_count) : '-' }),
+      el('td', {}, row.ok ? el('span', { class: 'audit-ok', text: '성공' }) : withTip(el('span', { class: 'audit-bad', text: '차단' }), row.error || '차단됨'))));
+  }
+  body.replaceChildren(
+    el('p', { class: 'admin-hint', text: `${rows.length}건${r.total > rows.length ? ` (전체 ${r.total}건 중 최근 100건)` : ''} · '열람(raw)'은 마스킹 우회(언마스크) 조회 — 붉은 표시는 주목 대상` }),
+    el('div', { class: 'audit-scroll' }, tbl));
+}
+
+async function renderSubjectKeyPanel(panel, source, data) {
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: '식별자 설정 불러오는 중…' }));
+  let keys: any[] = [];
+  let schema: any = null;
+  try {
+    const r = await api('/api/ui/org/db-source/subject-keys?source=' + encodeURIComponent(source));
+    keys = r.keys || [];
+    schema = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source)).catch(() => null);
+  } catch (e: any) { panel.replaceChildren(errorNote(e, '식별자 설정을 불러오지 못했습니다')); return; }
+  const rows: any[] = [
+    sectionTitle('대상 식별자 컬럼 — ' + source, "이 소스에서 조회 시 '누구의 정보인지'를 감사에 남길 컬럼을 지정합니다(예: 고객ID). ⚠ 주민번호·계좌 같은 민감 원값 컬럼은 지정하지 마세요 — 감사기록이 개인정보 저장소가 되면 안 됩니다. 서로게이트 키(내부 ID)만 지정하세요."),
+  ];
+  if (keys.length) {
+    for (const k of keys) {
+      rows.push(el('div', { class: 'item' },
+        el('span', { class: 'pill', text: k.table_name + '.' + k.column_name }),
+        el('button', { class: 'btn btn-ghost btn-sm spacer', text: '해제', onclick: async () => {
+          try { await api('/api/ui/org/db-source/subject-key', { method: 'POST', body: JSON.stringify({ source, table: k.table_name, column: k.column_name, remove: true }) }); toast('해제됨'); renderSubjectKeyPanel(panel, source, data); }
+          catch (e: any) { toast(e.message, true); }
+        } })));
+    }
+  } else rows.push(el('p', { class: 'admin-hint', text: '지정된 식별자 컬럼이 없습니다.' }));
+  const tables = schema && schema.tables ? schema.tables.filter((t: any) => t.mode === 'allow' && !t.system).map((t: any) => t.name) : [];
+  const tableSel = tables.length ? selectFilter([['', '테이블 선택'], ...tables.map((t: string) => [t, t] as [string, string])], '') : el('input', { type: 'text', placeholder: '테이블명' });
+  const colInput = el('input', { type: 'text', placeholder: '컬럼명 (예: customer_id)' });
+  const addBtn = el('button', { class: 'btn btn-primary btn-sm', text: '식별자로 지정', onclick: async () => {
+    const table = (tableSel as any).value.trim(); const column = colInput.value.trim();
+    if (!table || !column) { toast('테이블·컬럼을 입력하세요', true); return; }
+    try { await api('/api/ui/org/db-source/subject-key', { method: 'POST', body: JSON.stringify({ source, table, column }) }); toast('지정됨'); renderSubjectKeyPanel(panel, source, data); }
+    catch (e: any) { toast(e.message, true); }
+  } });
+  rows.push(el('div', { class: 'addbox', style: 'margin-top:10px' },
+    el('div', { class: 'admin-actions', style: 'gap:8px; flex-wrap:wrap' }, tableSel, colInput, addBtn)));
+  panel.replaceChildren(...rows);
+}
+
+
+// ── raw-PII 언마스크 권한(grant) 패널(#746 P4) — 이 소스의 마스킹을 특정 구성원이 우회(raw 조회)하도록 허가. ──
+//  직무상 raw PII 가 필요한 사람(심사역·CS 등)용. 만료(JIT) 드롭다운·승인자 기록(maker-checker). 텍스트 최소.
+const GRANT_EXPIRY: Array<[string, string]> = [['72h', '3일 (권장)'], ['24h', '1일'], ['7d', '7일'], ['30d', '30일'], ['', '무기한 (지양)']];
+async function renderUnmaskGrantPanel(panel, source, data) {
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: '언마스크 권한 불러오는 중…' }));
+  let grants: any[] = [];
+  let schema: any = null;
+  try {
+    const r = await api('/api/ui/org/db-source/unmask-grants?source=' + encodeURIComponent(source) + '&active=1');
+    grants = r.grants || [];
+    schema = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source)).catch(() => null);
+  } catch (e: any) { panel.replaceChildren(errorNote(e, '언마스크 권한을 불러오지 못했습니다')); return; }
+  const rows: any[] = [
+    sectionTitle('raw-PII 열람 권한 (언마스크)', '기본은 전원 마스킹입니다. 직무상 원본이 꼭 필요한 구성원에게만, 특정 테이블·컬럼을, 기간을 정해 열어줍니다 — 열람 내역은 「DB 접근 감사」에 남습니다.'),
+  ];
+  if (grants.length) {
+    for (const g of grants) {
+      const exp = g.expires_at ? relTime(g.expires_at) + ' 만료' : '무기한';
+      rows.push(el('div', { class: 'item' },
+        el('span', { class: 'pill pill-warn', text: g.member_id }),
+        el('span', { class: 'mini-meta', text: g.table_name + '.' + g.column_name }),
+        el('span', { class: 'mini-meta', text: exp }),
+        g.reason ? el('span', { class: 'mini-meta', text: '· ' + g.reason }) : null,
+        el('button', { class: 'btn btn-ghost btn-sm spacer', text: '회수', onclick: async () => {
+          if (!confirm(`${g.member_id} 의 ${g.table_name}.${g.column_name} 언마스크 권한을 회수할까요?`)) return;
+          try { await api('/api/ui/org/db-source/unmask-grant/revoke', { method: 'POST', body: JSON.stringify({ id: g.id }) }); toast('회수됨'); renderUnmaskGrantPanel(panel, source, data); }
+          catch (e: any) { toast(e.message, true); }
+        } })));
+    }
+  } else rows.push(el('p', { class: 'admin-hint', text: '부여된 언마스크 권한이 없습니다 (전원 마스킹).' }));
+
+  // 추가 — 구성원(드롭다운)·테이블(마스킹 있는 테이블 드롭다운)·컬럼(그 테이블 마스킹 컬럼 드롭다운, * 포함)·만료·승인자·사유
+  const memberC = memberCombo({ placeholder: '구성원 선택' });
+  const maskedTables = schema && schema.tables ? schema.tables.filter((t: any) => (t.maskedCount || 0) > 0).map((t: any) => t.name) : [];
+  const tableSel = maskedTables.length
+    ? selectFilter([['', '테이블 선택'], ...maskedTables.map((t: string) => [t, t] as [string, string])], '')
+    : el('input', { type: 'text', placeholder: '테이블명' });
+  const colSel = el('select', {}, el('option', { value: '*', text: '* (그 테이블의 마스킹 컬럼 전체)' }));
+  const refreshCols = async () => {
+    const tv = (tableSel as any).value;
+    while (colSel.options.length > 1) colSel.remove(1);
+    if (!tv) return;
+    try {
+      const sc = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(tv));
+      for (const c of (sc.rows || [])) if (c.masked) colSel.append(el('option', { value: c.column_name, text: c.column_name + ' (' + c.masked + ')' }));
+    } catch { /* graceful — * 만 */ }
+  };
+  if ((tableSel as any).tagName === 'SELECT') tableSel.addEventListener('change', refreshCols);
+  const expSel = selectFilter(GRANT_EXPIRY, '72h');
+  const approverC = memberCombo({ placeholder: '승인자(선택)' });
+  const reasonIn = el('input', { type: 'text', placeholder: '사유(선택 · 예: 대출 심사)' });
+  const addBtn = el('button', { class: 'btn btn-primary btn-sm', text: '권한 부여', onclick: async () => {
+    const member = memberC.value(); const table = (tableSel as any).value.trim();
+    if (!member || !table) { toast('구성원·테이블을 선택하세요', true); return; }
+    const payload: any = { member, source, table, column: colSel.value || '*' };
+    if (expSel.value) payload.expires = expSel.value;
+    if (approverC.value()) payload.approved_by = approverC.value();
+    if (reasonIn.value.trim()) payload.reason = reasonIn.value.trim();
+    try { await api('/api/ui/org/db-source/unmask-grant', { method: 'POST', body: JSON.stringify(payload) }); toast('부여됨'); renderUnmaskGrantPanel(panel, source, data); }
+    catch (e: any) { toast(e.message, true); }
+  } });
+  rows.push(el('div', { class: 'addbox', style: 'margin-top:10px' },
+    el('div', { class: 'addbox-h', text: '+ 언마스크 권한 부여' }),
+    field('구성원', memberC.el), field('테이블', tableSel), field('컬럼', colSel),
+    field('만료 (JIT)', expSel), field('승인자 (maker-checker)', approverC.el), field('사유', reasonIn),
+    el('div', { class: 'admin-actions', style: 'margin-top:10px' }, addBtn)));
+  panel.replaceChildren(...rows);
 }
 
 async function openMyProfile() {
