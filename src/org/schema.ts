@@ -259,6 +259,15 @@ export async function initOrgSchema(): Promise<void> {
     -- always_load(주입모드 override) — NULL=코드 기본값(cap.meta) 사용, true=항상 주입, false=deferred(검색 시 로드). #187.
     --  Claude Code 만 해석하는 _meta(anthropic/alwaysLoad)로 변환된다(Codex 는 서버측 deferral 미지원). 비파괴 ADD COLUMN.
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS always_load BOOLEAN;
+    -- level(권한 등급, P2 #746) — NULL=코드 기본값(L0). L0=조회 / L1=제안(MR·draft) / L2=집행(외부발신·상태변경).
+    --  L2 툴은 auto_approve 목록에서 강제 제외(listAutoApproveTools) → 하네스 인터랙티브 컨펌으로만 집행. prod apply·배포·sync 는 미노출(관리자 전담).
+    ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS level TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_tool'::regclass AND conname='org_tool_level_chk') THEN
+        ALTER TABLE org_tool ADD CONSTRAINT org_tool_level_chk CHECK (level IS NULL OR level IN ('L0','L1','L2'));
+      END IF;
+    END $$;
   `);
 
   // ── org_harness_asset — 조직 하네스 자산(스킬·서브에이전트·슬래시커맨드, 관리자 정의). org_hook 과 같은 runtime ──
@@ -538,6 +547,30 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT,
       PRIMARY KEY (source, table_name, column_name));
+  `);
+
+  // ── org_db_unmask_grant — raw-PII 언마스크 권한(P4, #746). 직무 RBAC + JIT(만료) + maker-checker(승인자 기록). ──
+  //  기본은 전원 마스킹(#186/#705). 이 grant 를 받은 멤버만 지정 (source, table, column) 을 raw 로 조회한다.
+  //  column='*' = 그 테이블의 모든 마스킹 컬럼 언마스크(편의). effective = revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()).
+  //  집행: db_query 가 요청 userId 의 유효 grant 를 해소해 그 컬럼을 마스킹 대상에서 per-user 차감(Gate1/Gate2 자동 정합).
+  //  언마스크 조회는 db_access_log 에 unmasked_columns·grant_ids 로 구분 기록(P5). FK 없음(정책 오버레이 — 소스 연결 전 사전작성 가능).
+  //  ⚠ expires_at NULL(무기한)은 지양 — JIT 원칙상 기간 제한 권장. approved_by ≠ member_id 권장(maker-checker).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_unmask_grant(
+      id BIGSERIAL PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      table_name TEXT NOT NULL,
+      column_name TEXT NOT NULL DEFAULT '*',
+      reason TEXT,
+      approved_by TEXT,
+      granted_by TEXT,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      revoked_at TIMESTAMPTZ,
+      revoked_by TEXT);
+    CREATE INDEX IF NOT EXISTS org_db_unmask_grant_lookup_idx
+      ON org_db_unmask_grant(member_id, source) WHERE revoked_at IS NULL;
   `);
 
   // ── db_access_log — 데이터 접근 감사(P5, #746). append-only + 해시체인(위변조 증거). ──

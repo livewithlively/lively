@@ -63,8 +63,8 @@ export interface HashedRowFields {
   sql: string | null; // 스크럽본
   tables: string[];
   maskedColumns: string[];
-  unmaskedColumns: string[]; // P4 예약(현재 항상 [])
-  grantIds: unknown; // P4 예약(현재 null)
+  unmaskedColumns: string[]; // P4 — grant 로 언마스크돼 raw 반환된 컬럼(`table.col`, 출력 실재분만)
+  grantIds: unknown; // P4 — 그 언마스크를 연 grant id 배열(관여 grant 만), 없으면 null
   subjectKeys: unknown; // Record<table.col, SubjectKeyCapture> | null
   rowCount: number;
   durationMs: number | null;
@@ -128,6 +128,8 @@ export interface DbAccessRecord {
   sql?: string | null; // 원문 — 저장 전 여기서 리터럴 스크럽(#705)
   tables: string[];
   maskedColumns: string[];
+  unmaskedColumns?: string[]; // P4 — grant 로 언마스크된 컬럼(`table.col`)
+  grantIds?: unknown; // P4 — 적용된 언마스크 grant id 배열(없으면 null)
   rowCount: number;
   durationMs: number | null;
   ok: boolean;
@@ -151,8 +153,8 @@ export async function writeAccessRow(client: Queryable, rec: DbAccessRecord, atI
     sql: rec.sql ? scrubSqlLiterals(rec.sql) : null,
     tables: rec.tables,
     maskedColumns: rec.maskedColumns,
-    unmaskedColumns: [],
-    grantIds: null,
+    unmaskedColumns: rec.unmaskedColumns ?? [],
+    grantIds: rec.grantIds ?? null,
     subjectKeys: rec.subjectKeys ?? null,
     rowCount: rec.rowCount,
     durationMs: rec.durationMs === null ? null : Math.round(rec.durationMs),

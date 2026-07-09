@@ -1235,6 +1235,76 @@ export async function removeSubjectKey(source: string, table_name: string, colum
   await audit("org_db_subject_key", `${source}.${table_name}.${column_name}`, "delete", before.rows[0], null, actor, "web");
 }
 
+// ── org_db_unmask_grant — raw-PII 언마스크 권한(P4, #746). 직무 RBAC + JIT + maker-checker. ──
+export interface DbUnmaskGrantRow {
+  id: string;
+  member_id: string;
+  source: string;
+  table_name: string;
+  column_name: string; // '*' = 테이블 내 전체 마스킹 컬럼
+  reason: string | null;
+  approved_by: string | null;
+  granted_by: string | null;
+  expires_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+}
+
+// 유효(활성) grant 만 — 특정 멤버·소스. db_query 언마스크 해소(policy.ts)가 쓴다. revoke·만료 즉시 반영.
+export async function listActiveUnmaskGrants(memberId: string, source: string): Promise<DbUnmaskGrantRow[]> {
+  const r = await itemsPool.query(
+    `SELECT id, member_id, source, table_name, column_name, reason, approved_by, granted_by,
+            expires_at, created_at, revoked_at, revoked_by
+       FROM org_db_unmask_grant
+      WHERE member_id=$1 AND source=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+      ORDER BY table_name, column_name`,
+    [memberId, source],
+  );
+  return r.rows as DbUnmaskGrantRow[];
+}
+
+// 관리 목록 — 필터(멤버·소스·활성만). 관리탭/감사가 쓴다.
+export async function listUnmaskGrants(opts?: { memberId?: string; source?: string; activeOnly?: boolean }): Promise<DbUnmaskGrantRow[]> {
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.memberId) { params.push(opts.memberId); conds.push(`member_id=$${params.length}`); }
+  if (opts?.source) { params.push(opts.source); conds.push(`source=$${params.length}`); }
+  if (opts?.activeOnly) conds.push(`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`);
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const r = await itemsPool.query(
+    `SELECT id, member_id, source, table_name, column_name, reason, approved_by, granted_by,
+            expires_at, created_at, revoked_at, revoked_by
+       FROM org_db_unmask_grant ${where} ORDER BY created_at DESC`,
+    params,
+  );
+  return r.rows as DbUnmaskGrantRow[];
+}
+
+export async function createUnmaskGrant(g: {
+  member_id: string; source: string; table_name: string; column_name?: string;
+  reason?: string | null; approved_by?: string | null; expires_at?: string | null;
+}, actor?: string): Promise<DbUnmaskGrantRow> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_db_unmask_grant(member_id, source, table_name, column_name, reason, approved_by, granted_by, expires_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [g.member_id, g.source, g.table_name.toLowerCase(), (g.column_name ?? "*").toLowerCase(),
+     g.reason ?? null, g.approved_by ?? null, actor ?? null, g.expires_at ?? null],
+  );
+  const row = r.rows[0] as DbUnmaskGrantRow;
+  await audit("org_db_unmask_grant", String(row.id), "insert", null, row, actor, "web");
+  return row;
+}
+
+export async function revokeUnmaskGrant(id: string, actor?: string): Promise<void> {
+  const before = await itemsPool.query(`SELECT * FROM org_db_unmask_grant WHERE id=$1`, [id]);
+  if (!before.rows[0]) throw new Error(`언마스크 grant 없음: ${id}`);
+  if ((before.rows[0] as DbUnmaskGrantRow).revoked_at) return; // 멱등
+  await itemsPool.query(`UPDATE org_db_unmask_grant SET revoked_at=now(), revoked_by=$2 WHERE id=$1`, [id, actor ?? null]);
+  const after = await itemsPool.query(`SELECT * FROM org_db_unmask_grant WHERE id=$1`, [id]);
+  await audit("org_db_unmask_grant", String(id), "update", before.rows[0], after.rows[0], actor, "web");
+}
+
 // ════════ 커스텀 훅 — org_hook ════════
 export type HookHarness = "claude" | "codex" | "openclaw" | "all";
 export interface OrgHook {
@@ -1371,6 +1441,7 @@ export interface OrgTool {
   auth_env: string | null;
   auto_approve: boolean;
   always_load: boolean | null; // 주입모드 override(#187): null=코드기본, true=항상 주입, false=deferred. Claude Code _meta(anthropic/alwaysLoad)로 변환.
+  level: "L0" | "L1" | "L2" | null; // 권한 등급(P2 #746): L0 조회 / L1 제안 / L2 집행. L2 는 auto-approve 강제 제외. null=코드기본(L0).
   note: string | null;
   sort: number;
   version: number;
@@ -1394,6 +1465,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
     auth_env: (row.auth_env as string) ?? null,
     auto_approve: row.auto_approve === true,
     always_load: row.always_load == null ? null : row.always_load === true,
+    level: (row.level as "L0" | "L1" | "L2" | null) ?? null,
     note: (row.note as string) ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -1402,7 +1474,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
   };
 }
 
-const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, note, sort, version, updated_at, updated_by";
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, note, sort, version, updated_at, updated_by";
 
 export async function listTools(): Promise<OrgTool[]> {
   const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
@@ -1446,7 +1518,8 @@ export async function listBuiltinAlwaysLoad(): Promise<Map<string, boolean>> {
 // 설치 번들용 — auto_approve 가 켜진(그리고 enabled) 툴 이름. 멤버 settings 의 무확인 실행 허용목록에 들어간다.
 export async function listAutoApproveTools(): Promise<{ name: string; kind: ToolKind }[]> {
   const r = await itemsPool.query(
-    `SELECT name, kind FROM org_tool WHERE auto_approve=true AND enabled=true ORDER BY name`);
+    // P2(#746): L2(집행) 툴은 auto_approve 가 켜져 있어도 무확인 실행 목록에서 강제 제외 — 하네스 인터랙티브 컨펌 강제.
+    `SELECT name, kind FROM org_tool WHERE auto_approve=true AND enabled=true AND (level IS NULL OR level <> 'L2') ORDER BY name`);
   return r.rows.map((row) => ({ name: (row as { name: string }).name, kind: (row as { kind: ToolKind }).kind }));
 }
 
@@ -1468,6 +1541,7 @@ export interface OrgToolInput {
   auth_env?: string | null;
   auto_approve?: boolean;
   always_load?: boolean | null; // #187 주입모드: undefined=유지, null=코드기본 복귀, true=항상, false=deferred.
+  level?: "L0" | "L1" | "L2" | null; // P2(#746) 등급: undefined=유지, null=코드기본, L0/L1/L2 명시.
   note?: string | null;
   sort?: number;
 }
@@ -1484,17 +1558,18 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   const inputSchema = isProxy ? (t.input_schema ?? before?.input_schema ?? DEFAULT_INPUT_SCHEMA) : DEFAULT_INPUT_SCHEMA;
   // 주입모드(#187): undefined=기존 유지, null=코드기본 복귀, true/false=명시. ??-병합은 null 을 흘려보내므로 직접 분기.
   const alwaysLoad = t.always_load !== undefined ? t.always_load : (before?.always_load ?? null);
+  const level = t.level !== undefined ? t.level : (before?.level ?? null);
   await itemsPool.query(
-    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,note,sort,version,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
      ON CONFLICT (name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
-       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level, note=EXCLUDED.note, sort=EXCLUDED.sort,
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
+     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0,
      ctx.actor ?? null],
   );
   const after = await getTool(t.name);

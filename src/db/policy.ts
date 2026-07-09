@@ -1,7 +1,7 @@
 // db_query 소스별 정책(#186) — 테이블 allow/deny + 컬럼 마스킹의 런타임 로더.
 //  단일 출처(SoT): DB(org_db_table_policy · org_db_column_mask, 웹 관리). 라이브 스키마 위 오버레이 — 스키마 사본은 저장 안 함.
 //  db_query 가 매 호출 refreshPolicy() 로 짧은 TTL 스냅샷을 최신화 → 웹 편집 무재시작 반영(sources.ts 와 동일 패턴).
-import { listTablePolicies, listColumnMasks, listSubjectKeys } from "../org/store.js";
+import { listTablePolicies, listColumnMasks, listSubjectKeys, listActiveUnmaskGrants } from "../org/store.js";
 import { getSourceConfig } from "./sources.js";
 import type { SourcePolicy } from "./firewall.js";
 import type { MaskStyle } from "./mask.js";
@@ -53,15 +53,75 @@ export function getSubjectColSet(source: string): Set<string> {
   return snapOf(source).subjectCols;
 }
 
-// db_schema 컬럼 마스킹 표시용 — `${lower(table)}.${lower(col)}` -> style.
-export function getMaskStyleMap(source: string): Map<string, MaskStyle> {
-  return snapOf(source).maskStyle;
+// ── raw-PII 언마스크 해소(P4, #746) — 요청 멤버·소스의 유효 grant 를 `table.col` 집합으로. ──
+//  '*' 컬럼 grant 는 그 테이블의 모든 마스킹 컬럼으로 확장(정책 스냅샷 기준). userId+source 짧은 TTL 캐시.
+//  해소 실패는 빈 집합(fail-safe — 전부 마스킹 유지). 반환 집합은 getSourcePolicy/getMaskStyleMap/resolveMaskedAttrs 의 unmask 인자로.
+export interface UnmaskResolution {
+  keys: Set<string>; // `table.col` 언마스크 대상(정책의 실제 마스킹 컬럼만)
+  grantsByKey: Map<string, string[]>; // `table.col` -> 그 컬럼을 연 grant id[](감사 정확성: 컬럼별 귀속)
+}
+interface UnmaskEntry extends UnmaskResolution { at: number }
+const _unmaskCache = new Map<string, UnmaskEntry>();
+const EMPTY_UNMASK: UnmaskResolution = { keys: new Set(), grantsByKey: new Map() };
+
+export async function resolveUnmaskKeys(userId: string, source: string): Promise<UnmaskResolution> {
+  const snap = snapOf(source);
+  if (snap.maskStyle.size === 0) return EMPTY_UNMASK; // 마스킹 없는 소스 — 언마스크 무의미
+  const cacheKey = `${userId}:${source}`;
+  const now = Date.now();
+  const cached = _unmaskCache.get(cacheKey);
+  if (cached && now - cached.at < TTL_MS) return { keys: cached.keys, grantsByKey: cached.grantsByKey };
+
+  const keys = new Set<string>();
+  const grantsByKey = new Map<string, string[]>(); // `table.col` -> grant id[](컬럼별 — 감사에 실제 관여 grant 만 귀속)
+  const addKey = (mk: string, gid: string): void => {
+    keys.add(mk);
+    const arr = grantsByKey.get(mk); if (arr) { if (!arr.includes(gid)) arr.push(gid); } else grantsByKey.set(mk, [gid]);
+  };
+  try {
+    const grants = await listActiveUnmaskGrants(userId, source);
+    const maskedKeys = [...snap.maskStyle.keys()]; // `table.col`
+    for (const g of grants) {
+      const tbl = g.table_name.toLowerCase();
+      const col = g.column_name.toLowerCase();
+      const gid = String(g.id);
+      if (col === "*") {
+        for (const mk of maskedKeys) if (mk.slice(0, mk.indexOf(".")) === tbl) addKey(mk, gid);
+      } else if (maskedKeys.includes(`${tbl}.${col}`)) {
+        addKey(`${tbl}.${col}`, gid); // 실제 마스킹 컬럼을 연 grant 만(무효/스테일 grant 는 감사 잡음 배제)
+      }
+    }
+  } catch {
+    // fail-safe — 해소 실패 시 언마스크 0(전부 마스킹 유지). 다음 TTL 에 재시도.
+    return EMPTY_UNMASK;
+  }
+  _unmaskCache.set(cacheKey, { keys, grantsByKey, at: now });
+  return { keys, grantsByKey };
+}
+
+// P4 감사 정확성용 — 캐시된 pg 카탈로그 base(srcKeyToCol, 언마스크 전 전체)를 조회한다.
+//  db_query 가 이 쿼리 출력(out.fields)의 srcKey 를 `table.col` 로 되돌려 '실제 반환된 언마스크 컬럼'만 감사에 남기게 한다.
+//  resolveMaskedAttrs 가 먼저 불려 base 가 캐시돼 있어야 한다(마스킹 있는 pg 소스면 db_query 가 이미 호출).
+export function peekMaskedSrcKeyToCol(source: string): Map<string, string> | undefined {
+  return _attrCache.get(source)?.srcKeyToCol;
+}
+
+// db_schema 컬럼 마스킹 표시용 — `${lower(table)}.${lower(col)}` -> style. unmask 를 주면 그 키를 뺀 맵(언마스크 반영).
+export function getMaskStyleMap(source: string, unmask?: ReadonlySet<string>): Map<string, MaskStyle> {
+  const full = snapOf(source).maskStyle;
+  if (!unmask || unmask.size === 0) return full;
+  const out = new Map<string, MaskStyle>();
+  for (const [k, v] of full) if (!unmask.has(k)) out.set(k, v);
+  return out;
 }
 
 // 방화벽(게이트1)에 넘길 SourcePolicy 조립 — tableDefault 는 org_db_source(sources 스냅샷)에서.
-export function getSourcePolicy(source: string): SourcePolicy {
+//  unmask(P4): 이 집합의 `table.col` 은 마스킹 대상에서 제외 → Gate1 파생차단·Gate2 값마스킹·minMaskedOutputs 가
+//  요청자 기준으로 자연 정합(언마스크 권한자는 그 컬럼을 raw 로 WHERE/JOIN/파생 가능).
+export function getSourcePolicy(source: string, unmask?: ReadonlySet<string>): SourcePolicy {
   const s = snapOf(source);
-  const maskedCols = new Set(s.maskStyle.keys());
+  const effMask = getMaskStyleMap(source, unmask);
+  const maskedCols = new Set(effMask.keys());
   const maskedColNames = new Set<string>();
   for (const k of maskedCols) maskedColNames.add(k.slice(k.indexOf(".") + 1));
   // #604 내장 self 소스 — default-deny 위에 콘텐츠 allow-list 를 베이스로 깔고, 그 위에 web(org_db_table_policy 'self')
@@ -76,41 +136,57 @@ export function getSourcePolicy(source: string): SourcePolicy {
     tableMode,
     maskedCols,
     maskedColNames,
-    hasMasks: s.maskStyle.size > 0,
+    hasMasks: maskedCols.size > 0,
   };
 }
 
 // ── 게이트2(출처기반 마스킹)용 — 마스킹 (table,col) 을 소스 카탈로그의 (oid,attnum) 로 해석해 style 맵을 만든다. ──
 //  캐시(소스별 짧은 TTL). 스키마 쉬프트로 oid 가 바뀌어도 fail-closed 카운트 교차검증(tools/db.ts)이 유출 대신 deny 로 막는다.
-interface AttrEntry { attr: Map<string, MaskStyle>; at: number }
+interface AttrEntry { attr: Map<string, MaskStyle>; at: number; srcKeyToCol?: Map<string, string> }
 const _attrCache = new Map<string, AttrEntry>();
 
 interface Queryable { query: (text: string, values?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> }
 
-export async function resolveMaskedAttrs(source: string, q: Queryable): Promise<Map<string, MaskStyle>> {
+//  unmask(P4): 이 `table.col` 집합은 결과 마스킹에서 제외한다(per-user 언마스크). 캐시는 언마스크 전(원본)을
+//  소스별로 두고, 언마스크는 그 위에서 매 호출 필터 — 사용자마다 다른 언마스크가 캐시를 오염시키지 않게 한다.
+export async function resolveMaskedAttrs(source: string, q: Queryable, unmask?: ReadonlySet<string>): Promise<Map<string, MaskStyle>> {
   const now = Date.now();
-  const cached = _attrCache.get(source);
-  if (cached && now - cached.at < TTL_MS) return cached.attr;
-
-  const styleMap = snapOf(source).maskStyle;
-  const attr = new Map<string, MaskStyle>();
-  if (styleMap.size === 0) { _attrCache.set(source, { attr, at: now }); return attr; }
-
-  const tables = [...new Set([...styleMap.keys()].map((k) => k.slice(0, k.indexOf("."))))];
-  const r = await q.query(
-    `SELECT c.oid::int8 AS oid, c.relname, a.attnum, a.attname
-       FROM pg_class c
-       JOIN pg_attribute a ON a.attrelid = c.oid
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped`,
-    [tables],
-  );
-  for (const row of r.rows) {
-    const style = styleMap.get(`${String(row.relname).toLowerCase()}.${String(row.attname).toLowerCase()}`);
-    if (style) attr.set(`${Number(row.oid)}:${Number(row.attnum)}`, style);
+  let base = _attrCache.get(source);
+  if (!base || now - base.at >= TTL_MS) {
+    const styleMap = snapOf(source).maskStyle;
+    const attr = new Map<string, MaskStyle>(); // srcKey(oid:attnum) -> style
+    const srcKeyToCol = new Map<string, string>(); // srcKey -> `table.col`(언마스크 필터용)
+    if (styleMap.size > 0) {
+      const tables = [...new Set([...styleMap.keys()].map((k) => k.slice(0, k.indexOf("."))))];
+      const r = await q.query(
+        `SELECT c.oid::int8 AS oid, c.relname, a.attnum, a.attname
+           FROM pg_class c
+           JOIN pg_attribute a ON a.attrelid = c.oid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped`,
+        [tables],
+      );
+      for (const row of r.rows) {
+        const col = `${String(row.relname).toLowerCase()}.${String(row.attname).toLowerCase()}`;
+        const style = styleMap.get(col);
+        if (style) {
+          const srcKey = `${Number(row.oid)}:${Number(row.attnum)}`;
+          attr.set(srcKey, style);
+          srcKeyToCol.set(srcKey, col);
+        }
+      }
+    }
+    base = { attr, at: now, srcKeyToCol } as AttrEntry;
+    _attrCache.set(source, base);
   }
-  _attrCache.set(source, { attr, at: now });
-  return attr;
+  if (!unmask || unmask.size === 0) return base.attr;
+  const out = new Map<string, MaskStyle>();
+  for (const [srcKey, style] of base.attr) {
+    const col = base.srcKeyToCol?.get(srcKey);
+    if (col && unmask.has(col)) continue; // 언마스크 컬럼 — 마스킹 대상에서 제외
+    out.set(srcKey, style);
+  }
+  return out;
 }
 
 // ── db 접근 감사(P5, #746)용 — subject 컬럼(table.col)을 pg 카탈로그의 (oid,attnum)=srcKey 로 해석. ──
@@ -150,4 +226,5 @@ export function _resetPolicyCacheForTest(): void {
   _loadedAt = 0;
   _attrCache.clear();
   _subjCache.clear();
+  _unmaskCache.clear();
 }
