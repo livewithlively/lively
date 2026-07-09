@@ -18,7 +18,7 @@
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 을 리다이렉트(라이브 머신 보호). 미지정 시 os.homedir().
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -95,6 +95,14 @@ export function uninstallClaudeSettings({ dry = DRY } = {}) {
   cur.hooks = nextHooks;
   // hooks 가 완전히 비면 키 자체를 드롭(install 전 상태와 대칭 — 단, 원래 hooks 키가 있었는지 모르므로 빈 객체면 제거).
   if (Object.keys(cur.hooks).length === 0) delete cur.hooks;
+
+  // 제거 후 객체가 완전히 비면({}) lively 가 만든 빈 껍데기 → 파일 삭제(greenfield 설치전상태=파일없음 으로 복구).
+  //  사용자 키가 하나라도 있으면 아래 writeFile 로 보존. 백업은 위에서 이미 뜸.
+  if (Object.keys(cur).length === 0) {
+    rmSync(settingsPath, { force: true });
+    log(`  ✓ ~/.claude/settings.json — lively 훅 ${removed}건 제거 후 빈 객체 → 파일 삭제(잔재 방지, 백업: backups/settings.json.uninstall.bak)`);
+    return removed;
+  }
 
   // 의도된 동작: JSON.stringify 로 재직렬화하므로 결과는 의미상 동일하되 byte-identical 은 아님(2-space indent 통일,
   //  키 순서가 바뀔 수 있고, 비워진 이벤트 키가 빠짐). lively 훅 + 빈 이벤트 키만 제거되고 tmux/기타 키는 보존된다.

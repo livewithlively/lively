@@ -7,8 +7,8 @@
 //        + [[hooks.*]] 가 모두 들어있다(install 이 한 블록으로 발행). 사용자 키(model/projects trust/tui/다른 mcp/hooks)는
 //        한 바이트도 안 건드린다. 편집 전 config.toml.uninstall.bak 백업. 결과가 유효 TOML 인지 확인.
 //        현재·옛(harness-kit) BEGIN 둘 다 인식(R3 리네임 마이그레이션 — 라이브 머신은 옛 마커 사용 중).
-//  (2) ~/.codex/AGENTS.md  ← install 이 정적 org-context 로 **통째 덮어쓴** 파일. lively 가 소유하므로 제거.
-//        (사용자 원본이 있었을 수 있으니 백업 후 제거. 마커가 없는 파일이라 '우리 것' 확신이 어려워 백업 필수.)
+//  (2) ~/.codex/AGENTS.md  ← install 이 AG_BEGIN/END 센티넬로 org-context 를 **비파괴 머지**한 파일. 그 블록만 surgical 제거.
+//        (센티넬 밖 사용자 글로벌 지침은 보존. 센티넬이 없으면 사용자 파일로 보고 보존. 블록 제거 후 내용이 비면 파일 삭제 — 모두 백업 후.)
 //  (3) MCP 등록 해제: 블록 strip 으로 [mcp_servers.lively] 가 빠지지만, `codex mcp remove lively` 도 시도(있으면). 에러 무시.
 //
 // 공유 자산(~/.lively/*)은 여기서 안 지운다 — 공통 정리(setup/uninstall.mjs)가 담당.
@@ -103,8 +103,14 @@ export function uninstallCodexConfig({ dry = DRY } = {}) {
     try { copyFileSync(cfgPath, cfgPath + ".uninstall.bak"); }
     catch (e2) { console.error(`✗ config.toml 백업 실패 — 중단(클로버 금지): ${e.message} / ${e2.message}`); process.exit(1); }
   }
-  writeFileSync(cfgPath, user);
-  log("  ✓ ~/.codex/config.toml — lively-managed 블록 제거(사용자 키 보존, 백업: backups/config.toml.codex.uninstall.bak)");
+  if (user.trim()) {
+    writeFileSync(cfgPath, user);
+    log("  ✓ ~/.codex/config.toml — lively-managed 블록 제거(사용자 키 보존, 백업: backups/config.toml.codex.uninstall.bak)");
+  } else {
+    // 블록 제거 후 사용자 키가 하나도 없음 → lively 전용이었음. 0바이트 잔재 대신 파일 삭제(설치전상태=파일없음 복구). AGENTS.md 와 동일 패턴.
+    rmSync(cfgPath, { force: true });
+    log("  ✓ ~/.codex/config.toml 삭제(lively 전용이었음 — 빈 파일 잔재 방지, 백업됨)");
+  }
   return true;
 }
 

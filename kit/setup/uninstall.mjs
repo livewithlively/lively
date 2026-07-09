@@ -73,16 +73,22 @@ export function uninstallRcBlock({ dry = DRY } = {}) {
       const r = stripSentinel(next, b, e); if (r.had) { next = r.text; hits.push(label); }
     }
     if (!hits.length) continue;
-    next = next.replace(/\s+$/, "") + "\n";
+    const stripped = next.replace(/\s+$/, "");
+    const emptyNow = stripped.trim() === ""; // lively 블록만 있던 rc → 파일 삭제(설치전상태=파일없음 복구)
     const short = rc.replace(HOME, "~");
-    if (dry) { log(`  [dry-run] ${short} — ${hits.join("+")} 센티넬 블록 제거 예정(나머지 보존)`); total++; continue; }
+    if (dry) { log(`  [dry-run] ${short} — ${hits.join("+")} 센티넬 블록 제거 예정${emptyNow ? "(내용 없음 → 파일 삭제 예정)" : "(나머지 보존)"}`); total++; continue; }
     // 백업 먼저(클로버 금지).
     try {
       mkdirSync(join(LIVELY, "backups"), { recursive: true });
       copyFileSync(rc, join(LIVELY, "backups", "zshrc.uninstall.bak"));
     } catch { try { copyFileSync(rc, rc + ".uninstall.bak"); } catch { /* 백업 실패 시에도 진행 — 블록만 제거 */ } }
-    writeFileSync(rc, next);
-    log(`  ✓ ${short} — ${hits.join("+")} 센티넬 블록 제거(나머지 보존)`);
+    if (emptyNow) {
+      rmSync(rc, { force: true });
+      log(`  ✓ ${short} — ${hits.join("+")} 블록 제거 후 내용 없음 → 파일 삭제(lively 전용이었음, 백업됨)`);
+    } else {
+      writeFileSync(rc, stripped + "\n");
+      log(`  ✓ ${short} — ${hits.join("+")} 센티넬 블록 제거(나머지 보존)`);
+    }
     total++;
   }
   if (total === 0) log("  · ~/.zshrc(및 형제 rc) — lively 관리 블록 없음(이미 제거됨/미설치)");

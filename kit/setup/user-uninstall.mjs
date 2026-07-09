@@ -9,7 +9,7 @@
 // 하는 일(전부 idempotent · surgical · 백업 먼저 · LLM/모델 호출 없음):
 //  (1) ~/.claude/settings.json  ← lively 훅 항목만 제거(command 에 ".lively/hooks/" 포함). tmux/기타 키 보존. + claude mcp remove lively --scope user
 //  (2) ~/.codex/config.toml     ← lively-managed 센티넬 블록(BEGIN..END, [mcp_servers.lively]+[[hooks.*]])만 제거. 사용자 키 보존.
-//  (3) ~/.codex/AGENTS.md        ← install 이 통째 덮어쓴 org-context. 백업 후 제거.
+//  (3) ~/.codex/AGENTS.md        ← install 이 센티넬(AG_BEGIN/END)로 비파괴 머지한 org-context 블록만 제거(사용자 지침 보존). 백업 후.
 //  (4) ~/.zshrc(및 형제 rc)      ← LIVELY_TOKEN 센티넬 블록 제거. 나머지 보존.
 //  (5) ~/.lively/               ← 기본 휴지통 이동(~/.lively.removed-<stamp>, 되돌릴 수 있음). --purge 면 하드 삭제.
 //
@@ -137,6 +137,26 @@ function uninstallAutoApprove() {
   return removed;
 }
 
+// settings.json 이 우리 제거로 '빈 껍데기'만 남았고(다른 사용자 키 전무) → lively 가 만든 잔재이므로 파일 삭제
+//  (greenfield 설치전상태=파일없음 복구). 허용되는 '빈' 형태: {} · {permissions:{}} · {permissions:{allow:[]}}.
+//  사용자 키(env/theme/hooks/기타 permissions)가 하나라도 있으면 보존. hooks·auto-approve 제거 뒤(마지막)에 호출.
+function cleanupEmptyClaudeSettings() {
+  const sp = join(HOME, ".claude", "settings.json");
+  if (!existsSync(sp) || DRY) return;
+  let cur; try { cur = JSON.parse(readFileSync(sp, "utf8")); } catch { return; }
+  if (!cur || typeof cur !== "object" || Array.isArray(cur)) return;
+  const effectivelyEmpty = Object.keys(cur).every((k) => {
+    if (k !== "permissions") return false; // permissions 외 키 = 사용자 콘텐츠 → 보존
+    const p = cur.permissions;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return false;
+    return Object.keys(p).every((pk) => pk === "allow" && Array.isArray(p.allow) && p.allow.length === 0);
+  });
+  if (!effectivelyEmpty) return; // 사용자 키 존재 — 보존(byte-identical 라운드트립 불변)
+  backup(sp, "settings.json.empty.uninstall.bak");
+  rmSync(sp, { force: true });
+  log("  ✓ ~/.claude/settings.json 삭제(lively 전용 빈 껍데기였음 — 잔재 방지, 백업됨)");
+}
+
 // 추가 MCP 서버(org_mcp_server) 등록 해제 — ~/.lively/mcp-servers.json 순회 claude mcp remove(lively 는 별도). idempotent.
 function deregisterExtraMcp() {
   const f = join(LIVELY, "mcp-servers.json");
@@ -176,10 +196,16 @@ function uninstallCodexConfig() {
   if (user.includes(CDX_BEGIN) || CDX_LEGACY_BEGINS.some((b) => user.includes(b)) || user.includes(CDX_END) || /^\s*\[mcp_servers\.lively\]\s*$/m.test(user)) {
     log("  ⚠️ ~/.codex/config.toml — 블록 제거 후 lively 잔재 — 무수정(수동 확인 필요)"); return;
   }
-  if (DRY) { log("  [dry-run] ~/.codex/config.toml — lively-managed 블록 제거 예정 · 사용자 키 보존"); return; }
+  if (DRY) { log(`  [dry-run] ~/.codex/config.toml — lively-managed 블록 제거 예정${user.trim() ? " · 사용자 키 보존" : " · 빈 파일이라 파일 삭제 예정"}`); return; }
   backup(cp, "config.toml.codex.uninstall.bak");
-  writeFileSync(cp, user);
-  log("  ✓ ~/.codex/config.toml — lively-managed 블록 제거(사용자 키 보존, 백업됨)");
+  if (user.trim()) {
+    writeFileSync(cp, user);
+    log("  ✓ ~/.codex/config.toml — lively-managed 블록 제거(사용자 키 보존, 백업됨)");
+  } else {
+    // 블록 제거 후 사용자 키 전무 → lively 전용이었음. 0바이트 잔재 대신 파일 삭제(설치전상태=파일없음). AGENTS.md 와 동일 패턴.
+    rmSync(cp, { force: true });
+    log("  ✓ ~/.codex/config.toml 삭제(lively 전용이었음 — 빈 파일 잔재 방지, 백업됨)");
+  }
 }
 
 // (3) ~/.codex/AGENTS.md — lively-managed 센티넬 블록만 제거(사용자 글로벌 지침 보존). 센티넬 없으면 사용자 파일로 간주·보존.
@@ -214,12 +240,18 @@ function uninstallRcBlock() {
       const r = stripSentinel(next, b, e); if (r.had) { next = r.text; hits.push(label); }
     }
     if (!hits.length) continue;
-    next = next.replace(/\s+$/, "") + "\n";
+    const stripped = next.replace(/\s+$/, "");
+    const emptyNow = stripped.trim() === ""; // lively 블록만 있던 rc(예: user-install 이 만든 LIVELY_TOKEN 전용 .zshrc)
     const short = rc.replace(HOME, "~");
-    if (DRY) { log(`  [dry-run] ${short} — ${hits.join("+")} 센티넬 블록 제거 예정(나머지 보존)`); total++; continue; }
+    if (DRY) { log(`  [dry-run] ${short} — ${hits.join("+")} 센티넬 블록 제거 예정${emptyNow ? "(내용 없음 → 파일 삭제 예정)" : "(나머지 보존)"}`); total++; continue; }
     backup(rc, "zshrc.uninstall.bak");
-    writeFileSync(rc, next);
-    log(`  ✓ ${short} — ${hits.join("+")} 센티넬 블록 제거(나머지 보존)`);
+    if (emptyNow) {
+      rmSync(rc, { force: true });
+      log(`  ✓ ${short} — ${hits.join("+")} 블록 제거 후 내용 없음 → 파일 삭제(lively 전용이었음, 백업됨)`);
+    } else {
+      writeFileSync(rc, stripped + "\n");
+      log(`  ✓ ${short} — ${hits.join("+")} 센티넬 블록 제거(나머지 보존)`);
+    }
     total++;
   }
   if (total === 0) log("  · ~/.zshrc(및 형제 rc) — lively 관리 블록 없음(이미 제거됨/미설치)");
@@ -291,7 +323,7 @@ function main() {
     log("\n✓ lively 가 이 머신에 설치되어 있지 않습니다 — 제거할 것이 없습니다(no-op)."); return;
   }
   log(`\n[1] 하네스 감지: claude=${d.claude ? "o" : "x"} codex=${d.codex ? "o" : "x"} (대상=${want.join(",")})`);
-  if (want.includes("claude")) { if (d.claude) { uninstallClaudeSettings(); uninstallAutoApprove(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); } else log("  · Claude — lively 미설치, 건너뜀"); }
+  if (want.includes("claude")) { if (d.claude) { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); } else log("  · Claude — lively 미설치, 건너뜀"); }
   if (want.includes("codex")) { if (d.codex) { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); } else log("  · Codex — lively 미설치, 건너뜀"); }
   // 공유 자산(~/.lively + LIVELY_TOKEN export)은 claude·codex 공용 — codex 블록은 /.lively/hooks/* 참조 + LIVELY_TOKEN 인증.
   //  --harness 로 한쪽만 제거했는데 다른 하네스가 아직 설치됐으면 공유 자산을 지우면 그 하네스가 깨진다 → 보존(설치 하네스가 0 일 때만 제거).
