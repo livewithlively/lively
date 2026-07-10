@@ -751,7 +751,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
         if (pjvBoardView.overview && selFolder) {
             // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
-            const isSpace = typeof selFolder.external_id === 'string' && selFolder.external_id.startsWith('space:');
+            const isSpace = pjvFolderIsSpace(selFolder);
             // 개요 통계도 Closed 토글을 따른다(#541 리뷰) — 사이드바 navcount·본문과 '보이는 것' 일치. 완료(done)는 Closed 켤 때만 집계.
             const vis = (arr) => pjvProjClosedView.done ? arr : arr.filter((p) => p.status !== 'done');
             const brk = (arr0) => {
@@ -796,7 +796,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 return c;
             };
             for (const f of childFolders) {
-                const isSp = typeof f.external_id === 'string' && f.external_id.startsWith('space:');
+                const isSp = pjvFolderIsSpace(f);
                 const g = isSp
                     ? el('span', { class: 'pjv-side-space-avatar', text: (String(f.name).trim()[0] || 'S').toUpperCase(), style: 'background:' + (f.color || avatarColor('space' + f.id)) })
                     : pjvBundleIcon(f.color || 'var(--muted-2)');
@@ -1002,7 +1002,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             const open = sideSearchActive() ? true : isFolderOpen(f.id); // 검색 중엔 강제 펼침
             const fkey = 'F' + f.id;
             // Space(#541 — ClickUp 이관 최상위) 는 폴더와 구분되는 스페이스 스타일: 색 사각 아바타(첫 글자) + 볼드 라벨.
-            const isSpace = typeof f.external_id === 'string' && f.external_id.startsWith('space:');
+            const isSpace = pjvFolderIsSpace(f);
             // 접힘/펼침 세모는 오른쪽 끝으로(#508) — 왼쪽에 두면 폴더 아이콘이 밀려 최상위 리스트와 어긋나 위계가 안 느껴진다.
             const caret = el('button', { class: 'pjv-side-folder-caret', type: 'button', 'aria-expanded': String(open), title: open ? '접기' : '펼치기', 'aria-label': open ? '접기' : '펼치기', text: open ? '▾' : '▸' });
             caret.addEventListener('click', (e) => { e.stopPropagation(); toggleFolder(f.id); });
@@ -1027,13 +1027,35 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             pjvSideNavDrop(fit, {
                 onList: (lid) => pjvMoveListToFolder(lid, f.id, reload),
                 // 폴더→폴더 드롭(#541): 같은 부모(형제) 안에서만 순서 재정렬(커서 위/아래로 앞/뒤, 가로 삽입선) — 스페이스↔하위폴더 간 이동 오조작 방지.
-                reorderFolder: (fid) => { if (String(fid) === String(f.id))
-                    return false; const d = folderList.find((x) => String(x.id) === String(fid)); return !!(d && String(d.parent_id ?? '') === String(f.parent_id ?? '')); },
+                //  #766: 스페이스로 드롭하면 재정렬이 아니라 그 스페이스 하위로 '넣기'(중첩) — 삽입선 대신 하이라이트로 유도.
+                reorderFolder: (fid) => {
+                    if (String(fid) === String(f.id))
+                        return false;
+                    if (isSpace)
+                        return false; // 스페이스로는 '넣기'만(재정렬 삽입선 X)
+                    const d = folderList.find((x) => String(x.id) === String(fid));
+                    if (d && pjvFolderIsSpace(d))
+                        return false; // 스페이스는 폴더 사이에 끼우지 않음
+                    return !!(d && String(d.parent_id ?? '') === String(f.parent_id ?? ''));
+                },
                 onFolder: (fid, after) => {
                     if (String(fid) === String(f.id))
                         return;
                     const dragged = folderList.find((x) => String(x.id) === String(fid));
-                    const sameParent = dragged && String(dragged.parent_id ?? '') === String(f.parent_id ?? '');
+                    if (!dragged)
+                        return;
+                    if (isSpace) {
+                        // #766 스페이스로 드롭 = 그 스페이스 하위로 중첩. 스페이스 자신은 못 넣고, 이미 그 자식이면 무시.
+                        if (pjvFolderIsSpace(dragged)) {
+                            toast('스페이스는 다른 스페이스 안에 넣을 수 없어요', true);
+                            return;
+                        }
+                        if (String(dragged.parent_id ?? '') === String(f.id))
+                            return;
+                        pjvMoveFolderToParent(dragged.id, f.id, reload);
+                        return;
+                    }
+                    const sameParent = String(dragged.parent_id ?? '') === String(f.parent_id ?? '');
                     if (!sameParent) {
                         toast('같은 위치의 폴더끼리만 순서를 바꿀 수 있어요', true);
                         return;
@@ -1142,8 +1164,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             //  빈 곳 드롭 → 최상위 는 treeWrap 의 dragover/drop 이 폴백으로 계속 처리.
             // 휴지통 — 상단 헤더 줄에서 내려 사이드바 폴더형 항목으로(#670). 새 폴더/새 리스트 버튼 '위'에 배치.
             treeWrap.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
-            // 새 폴더 / 새 리스트
-            treeWrap.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
+            // 새 스페이스 / 새 폴더 / 새 리스트 (#766 — 네이티브 스페이스 생성)
+            treeWrap.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 스페이스 (최상위 구획)', onclick: (e) => { e.stopPropagation(); openFolderForm(reload, undefined, { kind: 'space' }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 스페이스' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
         };
         buildTree();
         // 검색 입력 → 트리만 재빌드(포커스 유지). × 로 지움.
@@ -1560,6 +1582,17 @@ function pjvReorderFolders(orderedIds, reload) {
         reload(); })
         .catch((e) => toast('폴더 순서 저장 실패 — ' + e.message, true));
 }
+// 스페이스 판정(#766) — 커넥터 미러(external_id 'space:…', #541) 또는 네이티브(settings.kind==='space'). 백엔드 folderIsSpace 와 동형.
+function pjvFolderIsSpace(f) {
+    return !!(f && ((typeof f.external_id === 'string' && f.external_id.startsWith('space:')) || (f.settings && f.settings.kind === 'space')));
+}
+// 폴더를 스페이스/폴더 하위로 이동(parentId=null 이면 최상위로) — parent_id 패치. #766
+function pjvMoveFolderToParent(folderId, parentId, reload) {
+    api('/api/ui/v6/project-folders/' + folderId, { method: 'POST', body: JSON.stringify({ parent_id: parentId }) })
+        .then(() => { toast(parentId == null ? '최상위로 옮겼어요' : '스페이스로 옮겼어요'); if (reload)
+        reload(); })
+        .catch((e) => toast('이동 실패 — ' + e.message, true));
+}
 // 리스트 사이드바 순서 저장(#541) — 같은 폴더 형제의 새 순서(id 배열)를 배치 저장(sort=1..n).
 function pjvReorderLists(orderedIds, reload) {
     api('/api/ui/v6/project-lists-reorder', { method: 'POST', body: JSON.stringify({ ids: orderedIds }) })
@@ -1730,11 +1763,17 @@ function pjvSaveListMembers(id, ids) {
 // ── 폴더(project_folder) CRUD·메뉴(#475) — 폴더는 정리용(멤버·권한 없음). 리스트를 담아 사이드바에서 폴더›리스트로. ──
 function pjvFolderTreeMenu(menu, close, folder, reload) {
     const mk = (label, fn, danger) => { const b = el('button', { class: 'pjv-menu-item' + (danger ? ' danger' : ''), type: 'button' }, el('span', { text: label })); b.onclick = (e) => { e.stopPropagation(); close(); fn(); }; return b; };
+    const isSpace = pjvFolderIsSpace(folder); // #766 스페이스면 메뉴 문구·항목이 달라진다
+    const kindLabel = isSpace ? '스페이스' : '폴더';
     menu.append(el('div', { class: 'pjv-menu-head', text: folder.name }));
-    menu.append(mk('폴더 설정 (이름·색)', () => openFolderForm(reload, folder)));
-    menu.append(mk('이 폴더에 새 리스트', () => openListForm(reload, undefined, { folderId: folder.id })));
+    menu.append(mk(kindLabel + ' 설정 (이름·색)', () => openFolderForm(reload, folder)));
+    if (isSpace)
+        menu.append(mk('이 스페이스에 새 폴더', () => openFolderForm(reload, undefined, { parentId: folder.id }))); // #766 스페이스 하위 폴더 생성
+    menu.append(mk('이 ' + kindLabel + '에 새 리스트', () => openListForm(reload, undefined, { folderId: folder.id })));
+    if (!isSpace && folder.parent_id != null)
+        menu.append(mk('최상위로 빼기', () => pjvMoveFolderToParent(folder.id, null, reload))); // #766 중첩 해제
     menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
-    menu.append(mk('폴더 삭제', () => pjvDeleteFolder(folder, reload), true));
+    menu.append(mk(kindLabel + ' 삭제', () => pjvDeleteFolder(folder, reload), true));
 }
 function pjvDeleteFolder(folder, reload) {
     if (!confirm('폴더 ‘' + folder.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 리스트는 ‘최상위(폴더 없음)’로 이동합니다(리스트·프로젝트는 보존).'))
@@ -1750,10 +1789,15 @@ function pjvDeleteFolder(folder, reload) {
         }
     })();
 }
-// 새 폴더 / 폴더 수정 폼 — 이름·색(정리용, 멤버 없음).
-function openFolderForm(reload, folder) {
+// 새 폴더/스페이스 · 폴더 수정 폼 — 이름·색(정리용, 멤버 없음).
+//  #766 opts.kind='space' → 스페이스 생성(최상위 구획). 일반 폴더는 '상위 스페이스' 선택으로 스페이스
+//  하위에 생성/이동(opts.parentId = 초기 상위). 수정 시 folder 가 스페이스면 상위 선택 숨김(최상위 전용).
+function openFolderForm(reload, folder, opts) {
+    opts = opts || {};
     const editing = !!folder;
-    const nameIn = el('input', { type: 'text', value: editing ? folder.name : '', placeholder: '폴더 이름 (예: 개인신용대출)', maxlength: '120' });
+    const isSpace = editing ? pjvFolderIsSpace(folder) : (opts.kind === 'space');
+    const kindLabel = isSpace ? '스페이스' : '폴더';
+    const nameIn = el('input', { type: 'text', value: editing ? folder.name : '', placeholder: kindLabel + ' 이름 (예: ' + (isSpace ? 'Lively 제품' : '개인신용대출') + ')', maxlength: '120' });
     let color = editing ? (folder.color || '') : '';
     const swatches = el('div', { class: 'pjv-color-swatches' });
     const paintSw = () => {
@@ -1766,9 +1810,33 @@ function openFolderForm(reload, folder) {
         }));
     };
     paintSw();
+    // 상위 스페이스 선택(#766) — 일반 폴더만(스페이스는 최상위 전용이라 숨김). 스페이스 목록을 비동기 로드.
+    const initialParent = editing ? (folder.parent_id ?? null) : (opts.parentId != null ? Number(opts.parentId) : null);
+    const parentSel = el('select', { class: 'pjv-cat-select' });
+    const parentField = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '상위 스페이스' }), parentSel, el('div', { class: 'field-hint', text: '스페이스를 고르면 그 안에 들어가요. ‘없음’이면 최상위.' }));
+    if (!isSpace) {
+        parentSel.append(el('option', { value: '', text: '불러오는 중…' }));
+        parentSel.disabled = true;
+        (async () => {
+            let folders = [];
+            try {
+                folders = await api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []);
+            }
+            catch (_) {
+                parentSel.replaceChildren(el('option', { value: '', text: '없음 (최상위)' }));
+                parentSel.disabled = false;
+                return;
+            }
+            // 스페이스만 상위 후보(자기 자신 제외 — 편집 중 폴더는 스페이스가 아니므로 자동 제외됨).
+            const spaces = folders.filter(pjvFolderIsSpace);
+            parentSel.replaceChildren(el('option', { value: '', text: '없음 (최상위)' }), ...spaces.map((s) => { const o = el('option', { value: String(s.id), text: s.name }); if (initialParent != null && Number(initialParent) === Number(s.id))
+                o.selected = true; return o; }));
+            parentSel.disabled = false;
+        })();
+    }
     const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox(editing ? '폴더 수정' : '새 폴더', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches), el('div', { class: 'pjv-side-nav-hint', style: 'margin-top:10px', text: '폴더는 정리용이에요 — 멤버·공개범위·상태는 리스트에서 설정해요.' }), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox(editing ? (kindLabel + ' 수정') : ('새 ' + kindLabel), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches), isSpace ? null : parentField, el('div', { class: 'pjv-side-nav-hint', style: 'margin-top:10px', text: isSpace ? '스페이스는 최상위 구획이에요 — 안에 폴더·리스트를 담아요.' : '폴더는 정리용이에요 — 멤버·공개범위·상태는 리스트에서 설정해요.' }), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); }, 0);
     let busy = false; // 재진입 가드 — Enter 키반복/Enter+클릭 이중 제출로 2개 생성되던 버그 방지.
     const go = async () => {
@@ -1780,15 +1848,24 @@ function openFolderForm(reload, folder) {
             toast('이름을 입력하세요', true);
             return;
         }
+        const pid = isSpace ? null : (parentSel.value ? Number(parentSel.value) : null); // 폴더의 상위 스페이스(빈=최상위)
         busy = true;
         saveBtn.disabled = true;
         try {
             if (editing) {
-                await api('/api/ui/v6/project-folders/' + folder.id, { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+                const body = { name: nm, color: color || null };
+                if (!isSpace)
+                    body.parent_id = pid; // 폴더면 상위 반영(이동 포함). 스페이스는 최상위 전용이라 건드리지 않음.
+                await api('/api/ui/v6/project-folders/' + folder.id, { method: 'POST', body: JSON.stringify(body) });
             }
             else {
-                // 새 폴더는 맨 위로(#473 후속) — 배치 재정렬 엔드포인트(#541 — 서버가 1..n 재부여, 0-based 구 시맨틱 폐기).
-                const r = await api('/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify({ name: nm, color: color || null }) });
+                const body = { name: nm, color: color || null };
+                if (isSpace)
+                    body.kind = 'space';
+                else if (pid != null)
+                    body.parent_id = pid;
+                // 새 폴더/스페이스는 맨 위로(#473 후속) — 배치 재정렬 엔드포인트(#541 — 서버가 1..n 재부여).
+                const r = await api('/api/ui/v6/project-folders', { method: 'POST', body: JSON.stringify(body) });
                 const newId = r && (r.folder ? r.folder.id : r.id);
                 if (newId != null) {
                     try {
@@ -1797,11 +1874,11 @@ function openFolderForm(reload, folder) {
                         if (others.length)
                             await api('/api/ui/v6/project-folders-reorder', { method: 'POST', body: JSON.stringify({ ids: [newId, ...others] }) });
                     }
-                    catch (_) { /* 재정렬 실패해도 폴더는 생성됨 */ }
+                    catch (_) { /* 재정렬 실패해도 생성은 됨 */ }
                 }
             }
             back.remove();
-            toast(editing ? '폴더를 수정했습니다' : '폴더를 만들었습니다');
+            toast(editing ? (kindLabel + '를 수정했습니다') : (kindLabel + '를 만들었습니다'));
             if (reload)
                 reload();
         }

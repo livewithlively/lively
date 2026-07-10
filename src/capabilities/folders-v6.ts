@@ -50,11 +50,14 @@ const projectFolderIndexV6: Capability = {
 const projectFolderCreateV6: Capability = {
   name: "project_folder_create_v6",
   title: "프로젝트 폴더 생성(v6)",
-  description: "폴더(정리용 상위 층)를 만든다. 폴더는 멤버·권한 없이 리스트를 담아 정리만 한다.",
+  description: "폴더(정리용 상위 층)를 만든다. 폴더는 멤버·권한 없이 리스트를 담아 정리만 한다. "
+    + "kind='space' 면 최상위 스페이스로 생성(#766). parent_id 를 주면 그 스페이스/폴더 하위에 중첩 생성(스페이스는 최상위 전용이라 parent_id 무시).",
   scope: "memory",
   input: {
     name: z.string().min(1).max(120),
     color: z.string().max(32).nullable().optional(),
+    parent_id: z.number().int().positive().nullable().optional(),
+    kind: z.enum(["space", "folder"]).optional(),
   },
   expose: {
     mcp: true,
@@ -64,7 +67,13 @@ const projectFolderCreateV6: Capability = {
         const name = String(b.name ?? "").trim();
         if (!name) throw new HttpError(400, "name 이 필요합니다");
         if (name.length > 120) throw new HttpError(400, "name 이 너무 깁니다(최대 120자)");
-        return { name, color: parseColorOrNull(b.color) };
+        let parentId: number | null = null;
+        if (b.parent_id != null) {
+          parentId = Number(b.parent_id);
+          if (!Number.isInteger(parentId) || parentId <= 0) throw new HttpError(400, "parent_id 가 올바르지 않습니다");
+        }
+        const kind = b.kind === "space" ? "space" : undefined;
+        return { name, color: parseColorOrNull(b.color), parent_id: parentId, kind };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
@@ -77,13 +86,15 @@ const projectFolderCreateV6: Capability = {
 const projectFolderUpdateV6: Capability = {
   name: "project_folder_update_v6",
   title: "프로젝트 폴더 수정(v6)",
-  description: "폴더의 이름·색·정렬을 수정한다(주어진 키만 변경).",
+  description: "폴더의 이름·색·정렬·상위(parent_id)를 수정한다(주어진 키만 변경). "
+    + "parent_id=<스페이스/폴더 id> 로 이동(중첩), null 로 최상위 이동(#766). 스페이스는 최상위 전용, 순환 금지.",
   scope: "memory",
   input: {
     id: z.number().int().positive(),
     name: z.string().min(1).max(120).optional(),
     color: z.string().max(32).nullable().optional(),
     sort: z.number().int().optional(),
+    parent_id: z.number().int().positive().nullable().optional(),
   },
   expose: {
     mcp: true,
@@ -99,6 +110,14 @@ const projectFolderUpdateV6: Capability = {
         }
         if ("color" in b) patch.color = parseColorOrNull(b.color);
         if ("sort" in b) patch.sort = Number(b.sort) || 0;
+        if ("parent_id" in b) {
+          if (b.parent_id == null) patch.parent_id = null;
+          else {
+            const pid = Number(b.parent_id);
+            if (!Number.isInteger(pid) || pid <= 0) throw new HttpError(400, "parent_id 가 올바르지 않습니다");
+            patch.parent_id = pid;
+          }
+        }
         return patch;
       } }],
   },
