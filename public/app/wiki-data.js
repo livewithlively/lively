@@ -11,6 +11,27 @@ const HOME_PREFIX = 'category-home-';
 const HOME_EMPTY = '\u200B';
 function homeDocName(cat) { return HOME_PREFIX + (cat.key || cat.id); }
 function isCategoryHomeDoc(name) { return String(name || '').startsWith(HOME_PREFIX); }
+// \u2500\u2500 \uB77C\uC6B0\uD2B8 \uC774\uD0C8 \uCCAD\uC18C \u2014 \uD45C\uBA74\uC774 \uB9CC\uB4E0 \uBE14\uB85D \uC5D0\uB514\uD130\u00B7body \uC9C1\uC18D \uD31D\uC624\uBC84\uB97C \uB77C\uC6B0\uD130(main.ts route)\uAC00 \uD55C \uBC88\uC5D0 \uC815\uB9AC. \u2500\u2500
+//  \uC5D0\uB514\uD130\uB294 destroy \uBBF8\uD638\uCD9C \uC2DC body \uC758 .be-tools \uC640 document selectionchange \uB9AC\uC2A4\uB108\uAC00 \uB204\uC801\uB41C\uB2E4(\uBE14\uB85D\uC5D0\uB514\uD130 \uACC4\uC57D).
+//  \uD45C\uBA74\uC740 wkTrackEditor \uB85C \uAC10\uC2F8 \uB4F1\uB85D\uB9CC \uD558\uBA74 \uB418\uACE0, \uB8E8\uD2B8\uAC00 DOM \uC5D0\uC11C \uBD84\uB9AC\uB41C \uC778\uC2A4\uD134\uC2A4\uB9CC \uC5EC\uAE30\uC11C destroy \uB41C\uB2E4.
+const wkLiveEditors = new Set();
+function wkTrackEditor(ed) { wkLiveEditors.add(ed); return ed; }
+function wkRouteCleanup() {
+    for (const ed of Array.from(wkLiveEditors)) {
+        try {
+            if (!ed.el || !ed.el.isConnected) {
+                ed.destroy();
+                wkLiveEditors.delete(ed);
+            }
+        }
+        catch (_) {
+            wkLiveEditors.delete(ed);
+        }
+    }
+    document.querySelectorAll('.wk-morepop, .wk-propspop, .kn-metapop').forEach((n) => {
+        (n._close || (() => n.remove()))();
+    });
+}
 // ── 라벨 사전(지식 공용) — knowledge.ts 에서 이관(#592). ──
 const SPACE_LABEL = { business: '사업', product: '제품', system: '시스템' };
 // injection(주입축) 한글 라벨 — 칩 표기는 짧게(항상 주입 / 검색). 힌트는 비개발자 친화 한 줄 설명.
@@ -521,7 +542,7 @@ function openKnowledgeLinkPicker(k, reload) {
             const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '15' }))
                 : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '15', orderBy: 'updated_at' }));
             const r = await api(url);
-            const entries = ((r && r.entries) || []).filter((e) => e.name !== k.name);
+            const entries = ((r && r.entries) || []).filter((e) => e.name !== k.name && !isCategoryHomeDoc(e.name));
             if (!entries.length) {
                 results.replaceChildren(el('div', { class: 'empty', text: '결과 없음' }));
                 return;
@@ -942,4 +963,4 @@ async function knFolderChildrenBlock(k) {
 function knPageIcon(e) {
     return (e && e.icon) || (e && e.is_folder ? '📁' : '📄');
 }
-export { HOME_EMPTY, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knFetchAuthoredTree, knFetchCategoryRows, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, };
+export { HOME_EMPTY, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knFetchAuthoredTree, knFetchCategoryRows, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, wkRouteCleanup, wkTrackEditor, };

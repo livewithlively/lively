@@ -9,7 +9,7 @@ import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
-import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
+import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, wkTrackEditor, } from './wiki-data.js';
 import { wkDeck, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
@@ -42,8 +42,8 @@ function openFolderForm(cat, parentFolder, done) {
         }
     };
     makeBtn.onclick = go;
-    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter')
-        go(); });
+    nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229)
+        go(); }); // IME 조합 확정 Enter 가드(#505)
 }
 // ── 리드 카드 — 시작점의 첫 문서(핀 우선). 데크 = 본문 첫 문단 발췌(클릭 전에 내용이 읽힌다). ──
 function wkLeadCard(e, open) {
@@ -92,8 +92,13 @@ async function renderCategorySurface(box, cat, ctx) {
         openWikiPeek(e.name, { onRefresh: refresh, originEl: rowEl });
     };
     // ── 대문 문서 멱등 생성/저장(스키마 변경 0 — 지식 문서 1건이 대문의 전부). ──
+    //  생성은 in-flight 1개로 직렬화 — 본문 자동저장과 장식 저장이 동시에 생성 경합하면
+    //  빈(ZWSP) 생성이 늦게 도착해 방금 쓴 큐레이션 본문을 덮을 수 있다.
+    let homeCreating = null;
     async function ensureHome(bodyMd) {
         const name = homeDocName(cat);
+        if (!home && homeCreating)
+            await homeCreating.catch(() => { });
         if (home && home.name) {
             if (bodyMd !== undefined) {
                 await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({ name, body_md: bodyMd || HOME_EMPTY }) });
@@ -101,10 +106,16 @@ async function renderCategorySurface(box, cat, ctx) {
             }
             return name;
         }
-        const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({
+        homeCreating = api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify({
                 name, title: (cat.name || cat.key) + ' 대문', body_md: bodyMd || HOME_EMPTY, category: cat.key, type: 'reference',
             }) });
-        home = (r && r.knowledge) || { name, body_md: bodyMd || HOME_EMPTY, props_ui: null };
+        try {
+            const r = await homeCreating;
+            home = (r && r.knowledge) || { name, body_md: bodyMd || HOME_EMPTY, props_ui: null };
+        }
+        finally {
+            homeCreating = null;
+        }
         return name;
     }
     async function saveDecor(patch) {
@@ -133,7 +144,8 @@ async function renderCategorySurface(box, cat, ctx) {
             coverAddBtn.hidden = hasCover;
         const ic = (home && home.props_ui && home.props_ui.icon) || '';
         iconBtn.classList.toggle('letter', !ic);
-        iconBtn.textContent = ic || String(cat.name || cat.key || '?').trim().charAt(0).toUpperCase();
+        // charAt(0) 는 이모지(서로게이트 페어) 이름에서 깨진 문자 — 코드포인트 단위로 첫 문자소.
+        iconBtn.textContent = ic || (Array.from(String(cat.name || cat.key || '?').trim())[0] || '?').toUpperCase();
     }
     if (canDoc) {
         iconBtn.onclick = () => openEmojiPicker(iconBtn, {
@@ -212,11 +224,12 @@ async function renderCategorySurface(box, cat, ctx) {
     moreBtn.onclick = () => {
         const old = document.querySelector('.wk-morepop');
         if (old) {
-            old.remove();
+            (old._close || (() => old.remove()))();
             return;
-        }
+        } // 토글 닫기도 close 경유 — 리스너 잔존 방지
         const pop = el('div', { class: 'wk-morepop', role: 'menu' });
         const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+        pop._close = close;
         const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== moreBtn)
             close(); };
         const item = (label, fn) => {
@@ -226,8 +239,9 @@ async function renderCategorySurface(box, cat, ctx) {
         };
         if (canDoc)
             pop.append(item('📁 폴더 만들기', () => openFolderForm(cat, f.folder, refresh)));
-        pop.append(item(sel.mode ? '선택 모드 끄기' : '☑ 여러 개 선택', () => { sel.mode = !sel.mode; if (!sel.mode)
-            sel.names.clear(); paintLibrary(); }));
+        if (canDoc)
+            pop.append(item(sel.mode ? '선택 모드 끄기' : '☑ 여러 개 선택', () => { sel.mode = !sel.mode; if (!sel.mode)
+                sel.names.clear(); paintLibrary(); }));
         document.body.append(pop);
         const r = moreBtn.getBoundingClientRect();
         pop.style.top = (r.bottom + 6) + 'px';
@@ -261,12 +275,12 @@ async function renderCategorySurface(box, cat, ctx) {
                 queue();
         };
         const queue = () => { setChip('수정됨…', true); clearTimeout(timer); timer = setTimeout(doSave, 2000); };
-        const editor = createBlockEditor({
+        const editor = wkTrackEditor(createBlockEditor({
             initial: homeBody(),
             placeholder: "여는 글을 쓰세요 — '/'로 페이지 카드·라이브 목록·콜아웃·컬럼",
             onChange: queue,
             onSaveShortcut: () => { clearTimeout(timer); doSave(); },
-        });
+        }));
         editor.el.addEventListener('focusout', () => { if (editor.isDirty()) {
             clearTimeout(timer);
             doSave();

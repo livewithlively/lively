@@ -5789,3 +5789,6 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-row.has-snip { align-items: flex-start; padding-top: 8px; padding-bottom: 8px; }
 .wk-row.has-snip .wk-tick, .wk-row.has-snip .wk-row-ic { margin-top: 5px; }
 .wk-row.has-snip .wk-row-meta { margin-top: 3px; }
+/* #764 보정 — 피크(z 1200) 안에서 여는 공용 오버레이(.ov-back — 링크/프로젝트 피커·이동·자료)가
+   피크 뒤에 깔리지 않게. 모달은 어떤 컨텍스트에서든 최상층이어야 한다(토스트 2000 아래). */
+.ov-back { z-index: 1450; }

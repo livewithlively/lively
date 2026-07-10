@@ -3,6 +3,7 @@ import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, prof
 import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
+import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
@@ -38,6 +39,7 @@ async function route() {
         return;
     endTour(); // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
     dismissWikiPeek();
+    wkRouteCleanup(); // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
     if (!state.me) {
         showGate();
         return;

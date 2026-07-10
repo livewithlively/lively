@@ -10,7 +10,7 @@ import { absTime, api, el, errorNote, relTime, renderMarkdown, safeHref, toast }
 import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
-import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, } from './wiki-data.js';
+import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, wkTrackEditor, } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkRecordVisit, wkTick } from './wiki-ui.js';
 // ════════════════════════════════════════════
@@ -90,11 +90,12 @@ async function buildWikiDoc(container, name, opts = {}) {
     moreBtn.onclick = () => {
         const old = document.querySelector('.wk-morepop');
         if (old) {
-            old.remove();
+            (old._close || (() => old.remove()))();
             return;
-        }
+        } // 토글 닫기도 close 경유 — 리스너 잔존 방지
         const pop = el('div', { class: 'wk-morepop', role: 'menu' });
         const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+        pop._close = close;
         const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== moreBtn)
             close(); };
         const item = (label, fn, danger) => {
@@ -196,6 +197,7 @@ async function buildWikiDoc(container, name, opts = {}) {
                     payload.is_folder = true;
                 await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
                 k.title = t;
+                knInvalidateTreeCaches(); // 사이드바 트리·목록에 옛 제목이 남지 않게
                 const cur = crumbs.querySelector('.wk-crumb-cur');
                 if (cur)
                     cur.textContent = t;
@@ -225,6 +227,7 @@ async function buildWikiDoc(container, name, opts = {}) {
             }
             catch (_) { /* 다음 리로드에서 정합 */ }
         }
+        knInvalidateTreeCaches(); // 사이드바 트리·카테고리 목록 캐시에 stale 유형/분류가 남지 않게
         toast('저장했습니다');
         paintPropline();
     };
@@ -257,11 +260,12 @@ async function buildWikiDoc(container, name, opts = {}) {
     function openProplinePopover(anchor) {
         const old = document.querySelector('.wk-propspop');
         if (old) {
-            old.remove();
+            (old._close || (() => old.remove()))();
             return;
         }
         const pop = el('div', { class: 'wk-propspop' });
         const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey); };
+        pop._close = close;
         const onDoc = (ev) => { if (!pop.contains(ev.target) && ev.target !== anchor)
             close(); };
         const onKey = (ev) => { if (ev.key === 'Escape')
@@ -291,9 +295,11 @@ async function buildWikiDoc(container, name, opts = {}) {
     let editor = null;
     let saveTimer = null;
     let saving = false;
+    let lastSaveFailed = false;
     const setChip = (t, busy) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
-    const doSave = async () => {
-        if (!editor || saving || !editor.isDirty())
+    // force: 원문 적용 등 dirty 게이트를 우회해야 하는 경로(setMarkdown 이 dirty 를 리셋하므로).
+    const doSave = async (force) => {
+        if (!editor || saving || (!force && !editor.isDirty()))
             return;
         saving = true;
         setChip('저장 중…', true);
@@ -303,29 +309,31 @@ async function buildWikiDoc(container, name, opts = {}) {
             await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
             editor.resetDirty();
             k.body_md = md;
+            lastSaveFailed = false;
             setChip('저장됨');
             setTimeout(() => { if (saveChip.textContent === '저장됨')
                 setChip(''); }, 2500);
         }
         catch (e) {
+            lastSaveFailed = true; // 자동 재시도 금지 — 다음 입력/focusout/⌘S 에서만(실패 토스트 무한 반복 방지)
             setChip('저장 실패', true);
             toast('저장 실패 — ' + e.message, true);
         }
         saving = false;
-        if (editor && editor.isDirty())
-            queueSave(); // 저장 중 추가 편집분 재큐잉
+        if (!lastSaveFailed && editor && editor.isDirty())
+            queueSave(); // 저장 중 추가 편집분 재큐잉(성공 시에만)
     };
-    const queueSave = () => { setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 2000); };
+    const queueSave = () => { lastSaveFailed = false; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 2000); };
     if (k.is_folder) {
         body.append(await knFolderChildrenBlock(k));
     }
     else if (editableDoc) {
-        editor = createBlockEditor({
+        editor = wkTrackEditor(createBlockEditor({
             initial: k.body_md || '',
             placeholder: "내용 입력 · '/' 블록 메뉴",
             onChange: queueSave,
             onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
-        });
+        }));
         editor.el.addEventListener('focusout', () => { if (editor.isDirty()) {
             clearTimeout(saveTimer);
             doSave();
@@ -337,6 +345,7 @@ async function buildWikiDoc(container, name, opts = {}) {
         body.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(k.body_md || '')));
     }
     // MD 원문 토글(⋯ 메뉴) — 편집 가능하면 textarea(완료 시 에디터에 반영), 아니면 읽기 pre.
+    //  ⚠ textarea 값은 el() attr(setAttribute)로는 안 들어간다 — 반드시 .value 프로퍼티 대입.
     let rawBox = null;
     function toggleRaw() {
         if (rawOpen) {
@@ -344,8 +353,8 @@ async function buildWikiDoc(container, name, opts = {}) {
                 const ta = rawBox.querySelector('textarea');
                 if (ta && editor) {
                     editor.setMarkdown(ta.value);
-                    queueSave();
-                }
+                    doSave(true);
+                } // setMarkdown 이 dirty 리셋 → 강제 저장
             }
             if (rawBox)
                 rawBox.remove();
@@ -358,9 +367,12 @@ async function buildWikiDoc(container, name, opts = {}) {
         body.hidden = true;
         const backBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button',
             text: editableDoc ? '✓ 원문 적용하고 서식으로' : '¶ 서식 보기로', onclick: () => toggleRaw() });
-        rawBox = el('div', { class: 'wk-rawbox' }, el('div', { class: 'wk-rawbox-bar' }, el('span', { class: 'wk-rawbox-label', text: 'MD 원문' }), backBtn), editableDoc
-            ? el('textarea', { class: 'wk-rawbox-ta', spellcheck: 'false', value: editor ? editor.getMarkdown() : (k.body_md || '') })
-            : el('pre', { class: 'wk-rawbox-pre', text: k.body_md || '' }));
+        let rawIn = null;
+        if (editableDoc) {
+            rawIn = el('textarea', { class: 'wk-rawbox-ta', spellcheck: 'false' });
+            rawIn.value = editor ? editor.getMarkdown() : (k.body_md || '');
+        }
+        rawBox = el('div', { class: 'wk-rawbox' }, el('div', { class: 'wk-rawbox-bar' }, el('span', { class: 'wk-rawbox-label', text: 'MD 원문' }), backBtn), editableDoc ? rawIn : el('pre', { class: 'wk-rawbox-pre', text: k.body_md || '' }));
         body.after(rawBox);
     }
     // ── 부속(문서의 끝 아래) — 하위·노션 속성·연결·프로젝트·유사. 뷰포트 진입 시 지연 로드. ──
@@ -464,10 +476,14 @@ function dismissWikiPeek() {
 function openWikiPeek(name, opts) {
     const fromUrl = !!(opts && opts.fromUrl);
     const onRefresh = opts && opts.onRefresh;
-    // 좁은 화면 — 피크 대신 페이지로(호버·오버레이가 비좁음). URL 복원 진입은 예외 없이 페이지 이동.
+    // 좁은 화면 — 피크 대신 페이지로(호버·오버레이가 비좁음). URL 복원(fromUrl) 진입은 반드시 replace —
+    //  push 하면 뒤로가기가 &peek= 해시로 돌아와 다시 강등되는 무한 전방 트랩이 생긴다.
     if (matchMedia('(max-width: 1100px)').matches) {
         dismissWikiPeek();
-        location.hash = '#/k/' + encodeURIComponent(name);
+        if (fromUrl)
+            location.replace(location.href.split('#')[0] + '#/k/' + encodeURIComponent(name));
+        else
+            location.hash = '#/k/' + encodeURIComponent(name);
         return;
     }
     const prevPushed = wkPeekCur && opts && opts._traverse ? wkPeekCur.pushed : false;
@@ -532,6 +548,8 @@ function openWikiPeek(name, opts) {
     };
     const onKey = (ev) => {
         if (ev.key === 'Escape') {
+            if (document.querySelector('.qk-back'))
+                return; // ⌘K 팔레트가 위에 떠 있으면 그쪽이 먼저 닫힌다
             requestClose();
             return;
         }
@@ -577,6 +595,8 @@ function openWikiSearch() {
     wkQkOpen = true;
     let entries = [];
     let sel = 0;
+    let closed = false;
+    let qkSeq = 0; // 의미검색 응답 순서 역전 가드 — 늦게 온 이전 검색어 결과 폐기
     const input = el('input', { class: 'qk-input', type: 'search',
         placeholder: '검색어 입력 — 자연어 의미검색', 'aria-label': '빠른 검색' });
     const list = el('div', { class: 'qk-results' }, el('div', { class: 'qk-hint', text: '전체 지식에서 의미로 찾습니다. ↑↓ 이동 · Enter 미리보기 · ⌘Enter 페이지로' }));
@@ -584,10 +604,15 @@ function openWikiSearch() {
     const panel = el('div', { class: 'qk-panel', role: 'dialog', 'aria-label': '빠른 검색' }, el('div', { class: 'qk-inrow' }, el('span', { class: 'qk-glass', 'aria-hidden': 'true', text: '🔍' }), input, el('span', { class: 'qk-esc', text: 'esc' })), list, newRow);
     const back = el('div', { class: 'qk-back' }, panel);
     const close = () => {
+        if (closed)
+            return;
+        closed = true;
         back.remove();
         wkQkOpen = false;
         document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('hashchange', close);
     };
+    window.addEventListener('hashchange', close); // 라우트 이동(뒤로가기 포함) 시 팔레트가 다른 화면 위에 남지 않게
     newRow.onclick = () => {
         const q = input.value.trim();
         close();
@@ -633,6 +658,7 @@ function openWikiSearch() {
         clearTimeout(t);
         t = setTimeout(async () => {
             const q = input.value.trim();
+            const seq = ++qkSeq;
             if (!q) {
                 entries = [];
                 sel = 0;
@@ -641,6 +667,8 @@ function openWikiSearch() {
             }
             try {
                 const r = await api('/api/ui/knowledge/semantic?' + new URLSearchParams({ q, limit: '12', injection: 'recalled' }));
+                if (seq !== qkSeq || closed)
+                    return; // 그 사이 검색어가 바뀜/닫힘 — 이 결과는 폐기
                 entries = ((r && r.entries) || []).filter((e) => !isCategoryHomeDoc(e.name));
                 sel = 0;
                 paint();
@@ -821,12 +849,12 @@ async function renderWikiDraft(view, params) {
         }
     }
     // 본문 에디터.
-    const editor = createBlockEditor({
+    const editor = wkTrackEditor(createBlockEditor({
         initial: '',
         placeholder: "내용 입력 · '/' 블록 메뉴",
         onChange: () => queue(),
         onSaveShortcut: () => { clearTimeout(timer); commit(); },
-    });
+    }));
     // ── 자동 생성/저장 ──
     const queue = () => {
         setChip(created ? '수정됨…' : '', true);
@@ -840,6 +868,8 @@ async function renderWikiDraft(view, params) {
             return;
         }
         if (!created) {
+            if (!canvas.isConnected)
+                return; // 생성 전에 페이지를 떠남 — 지연 타이머가 유령 문서를 만들지 않게
             if (!title || !catKey)
                 return; // 제목+분류가 서야 생성 — 유령 문서 0
             saving = true;
@@ -874,9 +904,11 @@ async function renderWikiDraft(view, params) {
             catch (e) {
                 setChip('저장 실패', true);
                 toast('페이지 생성 실패 — ' + e.message, true);
+                saving = false;
+                return; // 실패 시 자동 재시도 금지 — 다음 입력(queue)에서만(1.2초 토스트 폭주 방지)
             }
             saving = false;
-            if (editor.isDirty() || (titleEl.textContent || '').trim() !== (created && created.title))
+            if (created && (editor.isDirty() || (titleEl.textContent || '').trim() !== created.title))
                 queue();
             return;
         }
@@ -899,6 +931,8 @@ async function renderWikiDraft(view, params) {
         catch (e) {
             setChip('저장 실패', true);
             toast('저장 실패 — ' + e.message, true);
+            saving = false;
+            return; // 실패 시 자동 재시도 금지 — 다음 입력/focusout 에서만
         }
         saving = false;
         if (editor.isDirty())

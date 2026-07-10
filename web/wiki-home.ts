@@ -74,7 +74,8 @@ async function renderHomeSurface(box: HTMLElement, ctx: any) {
       if (!cats.length) continue;
       sec.body.append(el('div', { class: 'wk-space-label', text: SPACE_KO[sk] || sk }));
       for (const c of cats) {
-        const icEl = el('span', { class: 'wk-catrow-ic letter', 'aria-hidden': 'true', text: String(c.name || c.key || '?').trim().charAt(0).toUpperCase() });
+        const icEl = el('span', { class: 'wk-catrow-ic letter', 'aria-hidden': 'true',
+          text: (Array.from(String(c.name || c.key || '?').trim())[0] || '?').toUpperCase() });   // charAt 은 이모지 서로게이트 깨짐
         const cnt = Number(c.knowledge_count);
         const otherTeam = c.owner_team_name && !myIds.has(String(c.id)) ? c.owner_team_name : '';
         const metaEl = el('span', { class: 'wk-row-meta' },

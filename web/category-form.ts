@@ -24,10 +24,11 @@ function openCategoryForm(space, existing, reload) {
   const keyIn = el('input', { type: 'text', placeholder: '키 (소문자 영문·숫자·-, 비우면 이름에서 자동)', maxlength: '120',
     value: editing ? (existing.key || '') : '' });
   if (editing) keyIn.disabled = true; // 키는 생성 후 불변(엔드포인트가 수정 지원 안 함)
-  const shouldIn = el('textarea', { rows: '4', placeholder: '정의 · 범위 · 규칙 (should)', maxlength: '8000',
-    value: editing ? (existing.should || '') : '' });
-  const descIn = el('textarea', { rows: '2', placeholder: '한 줄 설명 (선택)', maxlength: '2000',
-    value: editing ? (existing.description || '') : '' });
+  // ⚠ textarea 는 value 를 setAttribute 로 못 받는다(el 헬퍼) — 프로퍼티로 직접 대입.
+  const shouldIn = el('textarea', { rows: '4', placeholder: '정의 · 범위 · 규칙 (should)', maxlength: '8000' });
+  shouldIn.value = editing ? (existing.should || '') : '';
+  const descIn = el('textarea', { rows: '2', placeholder: '한 줄 설명 (선택)', maxlength: '2000' });
+  descIn.value = editing ? (existing.description || '') : '';
   const saveBtn = el('button', { class: 'btn btn-primary', text: editing ? '저장' : '만들기' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
   const back = overlayBox(editing ? '카테고리 수정' : ('새 카테고리 · ' + (SPACE_LABEL[space] || space)),
@@ -61,7 +62,7 @@ function openCategoryForm(space, existing, reload) {
     } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
-  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) go(); });   // IME 가드(#505)
 }
 
 export { SPACE_SUBS, openCategoryForm, slugifyKey };

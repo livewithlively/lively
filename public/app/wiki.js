@@ -5,7 +5,7 @@
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
 import { api, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
-import { KN_TYPE_LABEL, SOURCE_KIND_LABEL, isCategoryHomeDoc, openSourceDetail } from './wiki-data.js';
+import { KN_TYPE_LABEL, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
 import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
@@ -36,10 +36,13 @@ async function renderWikiSpace(view, params) {
         f.all = false;
     }
     if (params) {
+        // category 딥링크는 폴더 드릴다운을 리셋 — 세션 잔존 f.folder 가 다른 카테고리로 새면
+        //  '폴더가 비어 있어요' 빈 화면이 뜬다. ?category=..&folder=.. 조합은 아래 folder 절이 다시 채운다.
         if (params.has('category')) {
             f.category = params.get('category') || '';
             f.indexed = false;
             f.all = false;
+            f.folder = '';
         }
         if (params.has('folder'))
             f.folder = params.get('folder') || '';
@@ -123,25 +126,34 @@ async function renderWikiSpace(view, params) {
         sideCtl.rebuild();
         repaint();
     }
+    // repaint 는 매번 새 surface 박스를 깐다 — 사이드바 연타 등으로 비동기 렌더가 겹쳐도
+    //  늦게 끝난 이전 렌더는 자기(분리된) 박스에 그릴 뿐 최신 화면을 덮지 못한다.
     function repaint() {
-        if (f.q || f.all || f.indexed)
-            return renderFilterList(main, ctx);
+        const box = el('div', { class: 'wk-surface' });
+        main.replaceChildren(box);
+        // type 이 category 와 함께면 카테고리 페이지의 인라인 필터가 처리 — 단독 딥링크만 목록으로.
+        if (f.q || f.all || f.indexed || (f.type && !f.category))
+            return renderFilterList(box, ctx);
         if (f.category) {
             const cat = sideCtl.findCat(f.category);
             if (cat)
-                return renderCategorySurface(main, cat, ctx);
+                return renderCategorySurface(box, cat, ctx);
             // 카테고리를 못 찾음(삭제/딥링크 오류) — 홈으로 조용히 폴백.
             f.category = '';
             f.folder = '';
             syncHash();
             sideCtl.rebuild();
         }
-        return renderHomeSurface(main, ctx);
+        return renderHomeSurface(box, ctx);
     }
     const shell = el('div', { class: 'kn-shell' }, sideCtl.side, main);
     knApplySideW(shell);
     shell.append(knSideResizeHandle(shell));
     await sideCtl.ready; // 카테고리 해석(findCat)·홈 지도(bySpace)에 필요
+    // 로딩(카테고리 fetch) 중 사용자가 다른 탭으로 떠났으면 여기서 멈춘다 — 늦은 mount 가
+    //  남의 화면을 덮고 replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
+    if (document.body.dataset.route !== 'knowledge')
+        return;
     view.replaceChildren(shell);
     syncHash();
     repaint();
@@ -157,7 +169,7 @@ async function renderFilterList(box, ctx) {
     const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at', injection: 'recalled' });
     if (f.indexed)
         p.set('is_wiki', 'true');
-    if (f.category)
+    if (f.category && !f.indexed)
         p.set('category', f.category);
     if (f.type)
         p.set('type', f.type);
@@ -223,6 +235,8 @@ async function renderWikiTrash(view) {
         view.replaceChildren(el('div', { class: 'wk-plainpad' }, errorNote(e, '휴지통을 불러오지 못했습니다')));
         return;
     }
+    if (document.body.dataset.route !== 'trash')
+        return; // 로딩 중 라우트 이탈 — 늦은 mount 방지
     const sec = wkSection('휴지통', {
         count: entries.length,
         hint: '삭제된 지식·프로젝트·카테고리 — 본체만 복원됩니다(삭제 시 정리된 연결은 제외)',
@@ -238,6 +252,8 @@ async function renderWikiTrash(view) {
                 restoreBtn.disabled = true;
                 try {
                     await api('/api/ui/deleted/restore', { method: 'POST', body: JSON.stringify({ entity: e.entity, key: e.key }) });
+                    if (e.entity === 'knowledge')
+                        knInvalidateTreeCaches(); // 복원 문서가 목록/트리에 바로 보이게
                     toast('복원했습니다');
                     renderWikiTrash(view);
                 }
