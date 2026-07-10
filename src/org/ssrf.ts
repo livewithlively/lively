@@ -20,6 +20,14 @@ export interface SafeFetchOpts {
   timeoutMs?: number;    // 기본 8s
   allowHttp?: boolean;   // 기본 false(https 전용)
   maxRedirects?: number; // 기본 2
+  sensitiveHeaders?: string[]; // 크로스-오리진 리다이렉트 시 벗길 자격 헤더명(Authorization 외 — 예 PRIVATE-TOKEN). B14 확장(#746).
+}
+
+// 크로스-오리진 리다이렉트 시 제거할 자격 헤더 집합(소문자) — Authorization 항상 + 호출자 지정 민감 헤더(#746 커스텀 헤더명).
+export function credentialHeaderNames(sensitive?: string[]): Set<string> {
+  const s = new Set<string>(["authorization", "cookie", "proxy-authorization"]);
+  for (const h of sensitive ?? []) { const n = String(h || "").trim().toLowerCase(); if (n) s.add(n); }
+  return s;
 }
 
 // private/loopback/link-local/CGNAT/메타데이터/멀티캐스트 대역 차단. v4-mapped/6to4/Teredo IPv6 는 내부 v4 로 재검증.
@@ -120,7 +128,11 @@ function once(url: string, opts: SafeFetchOpts, redirectsLeft: number): Promise<
         let loc: string;
         try { loc = new URL(res.headers.location, u).toString(); } catch { return fail(new SsrfError("잘못된 리디렉트 Location")); }
         const nextHeaders = { ...(opts.headers ?? {}) };
-        if (new URL(loc).hostname.toLowerCase() !== host) { delete nextHeaders.Authorization; delete nextHeaders.authorization; }
+        if (new URL(loc).hostname.toLowerCase() !== host) {
+          // 크로스-오리진 → 모든 자격 헤더 제거(대소문자 무관). Authorization 뿐 아니라 커스텀 헤더명(PRIVATE-TOKEN 등)도(#746).
+          const drop = credentialHeaderNames(opts.sensitiveHeaders);
+          for (const k of Object.keys(nextHeaders)) if (drop.has(k.toLowerCase())) delete nextHeaders[k];
+        }
         once(loc, { ...opts, headers: nextHeaders }, redirectsLeft - 1).then(finish, fail);
         return;
       }

@@ -4,7 +4,8 @@ import { renderDomainmap } from './domainmap.js';
 import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
 import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
+import { renderInstall, renderLearn, renderLearnTour, renderOnboarding } from './learn.js';
+import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
@@ -30,11 +31,12 @@ function setActiveTab(name) {
 }
 async function route() {
     teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
-    endTour(); // 진행 중이던 온보딩 투어(#517) 오버레이도 함께 정리
     // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
     //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
+    //  (#761) 투어 정리는 이 가드 '뒤'에서 — 피크 개폐만으로는 진행 중 둘러보기를 죽이지 않는다(본문도 그대로니까).
     if (consumeKnPeekNavGuard())
         return;
+    endTour(); // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
     dismissKnowledgePeek();
     if (!state.me) {
         showGate();
@@ -58,6 +60,8 @@ async function route() {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
             if (segs[1] === 'install')
                 await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
+            else if (segs[1] === 'tour')
+                await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
             else
                 await renderLearn(view);
         }
@@ -132,6 +136,7 @@ async function route() {
             setActiveTab('dashboard'); // 알 수 없는 경로 → 홈(대시보드)
             await renderMyDashboard(view);
         }
+        resumeGuideTour(); // (#761) Lively 둘러보기 — 렌더 끝난 화면이 진행 중 플랜의 장면이면 스포트라이트 재개(플랜 없으면 no-op)
     }
     catch (e) {
         if (e && e.status === 401)

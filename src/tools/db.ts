@@ -8,7 +8,7 @@ import { assertSafeSelect, isSystemDeniedTable, type SafeSelectOpts } from "../d
 import { auditQuery } from "../db/audit.js";
 import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAccessOrThrow } from "../db/access-log.js";
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
-import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs } from "../db/policy.js";
+import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs, resolveUnmaskKeys, peekMaskedSrcKeyToCol } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
 import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess } from "../context.js";
 
@@ -126,7 +126,9 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
         src = resolveSourceName(source);
         requireDbSource(user, src);
         const policy = getSourcePolicy(src); // 테이블 정책 오버레이(라이브 스키마 위)
-        const masks = getMaskStyleMap(src);
+        // P4(#746) — masked 표시도 요청자 언마스크를 반영(권한자에겐 db_query 가 raw 를 주므로 masked 로 오도하지 않게).
+        const unmask = await resolveUnmaskKeys(user.userId, src);
+        const masks = getMaskStyleMap(src, unmask.keys);
         // 카탈로그 조회는 엔진 공통 모듈(db/catalog.ts) — pg='public' / mysql=소스 스키마(DATABASE()) (#715).
         if (table) {
           const tl = table.toLowerCase();
@@ -179,7 +181,10 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
       requireDbSource(user, src); // 방어선 0: 소스별 권한
       const cfg = getSourceConfig(src);
       if (!cfg) throw new Error(`db source '${src}' 설정을 찾을 수 없습니다`); // 리프레시-삭제 경합 방어
-      const policy = getSourcePolicy(src);
+      // P4(#746) — raw-PII 언마스크: 요청 멤버의 유효 grant 를 해소해 마스킹 대상에서 per-user 차감.
+      //  Gate1(파생차단)·Gate2(값마스킹)·fail-closed 카운트가 요청자 기준으로 자연 정합(권한자는 그 컬럼 raw 조회).
+      const unmask = await resolveUnmaskKeys(user.userId, src);
+      const policy = getSourcePolicy(src, unmask.keys);
       const gateOpts: SafeSelectOpts | undefined =
         cfg.driver === "mysql" ? { dialect: "mysql", schema: cfg.database } : undefined;
 
@@ -191,6 +196,8 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
       };
       let planTables: string[] = [];
       let maskedColNames: string[] = [];
+      let unmaskedColNames: string[] = [];
+      let unmaskedGrantIds: string[] = [];
       try {
         // 방어선 1·2 + 게이트1(테이블 allow/deny · 마스킹-파생 차단) — mysql 은 dialect+크로스-스키마 거부(#715).
         const plan = assertSafeSelect(sql, policy, gateOpts);
@@ -204,7 +211,7 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
           // mysql(#715): 출처가 결과 필드(orgTable/orgName)에 직접 실려 온다 — 정책 키(table.col)와 같은 도메인.
           const pool = (await getMysqlPool(src)) as unknown as MysqlPoolLike;
           out = await execReadQueryMysql(pool, { timeoutMs: cfg.timeoutMs, maxRows: cfg.maxRows, database: cfg.database }, sql);
-          if (policy.hasMasks) attrStyles = getMaskStyleMap(src);
+          if (policy.hasMasks || unmask.keys.size > 0) attrStyles = getMaskStyleMap(src, unmask.keys);
         } else {
           const pool = await getPool(src);
           const client = await pool.connect();
@@ -223,11 +230,11 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
             fields: r.fields.map((f) => ({ name: f.name, srcKey: f.tableID && f.columnID ? `${f.tableID}:${f.columnID}` : null })),
           };
           // 게이트2(pg) — (table,col) 정책을 소스 카탈로그의 (oid,attnum)=srcKey 로 해석.
-          if (policy.hasMasks) attrStyles = await resolveMaskedAttrs(src, pool);
+          if (policy.hasMasks || unmask.keys.size > 0) attrStyles = await resolveMaskedAttrs(src, pool, unmask.keys);
         }
 
         let masked = 0;
-        if (policy.hasMasks && attrStyles) {
+        if (attrStyles) {
           // 게이트2 — DB 가 알려주는 출처(srcKey)로 마스킹 대상 식별해 게이트웨이에서 값 마스킹(고객 DB 무수정).
           const targets = planMaskTargets(out.fields, attrStyles);
           // fail-closed — 게이트1 기대 마스킹 출력에 미달(뷰/무출처 등)하면 유출 대신 거부.
@@ -237,6 +244,22 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
           if (targets.length > 0) out = { ...out, rows: applyRowMasking(out.rows, targets) };
           masked = targets.length;
           maskedColNames = targets.map((t) => out.fields[t.index]?.name ?? `#${t.index}`);
+        }
+
+        // P4 — 이 쿼리 출력에 '실제로 반환된' 언마스크 컬럼만 감사에 기록(테이블 멤버십이 아니라 out.fields 기준 — 과다기록 방지).
+        //  mysql: srcKey 자체가 `table.col` / pg: 캐시된 srcKeyToCol(oid:attnum→table.col)로 되돌린다. grant_ids 는 그 컬럼을 연 grant 만.
+        if (unmask.keys.size > 0) {
+          const s2c = cfg.driver === "mysql" ? null : peekMaskedSrcKeyToCol(src);
+          const outCols = new Set<string>();
+          for (const f of out.fields) {
+            if (!f.srcKey) continue;
+            const col = cfg.driver === "mysql" ? f.srcKey : s2c?.get(f.srcKey);
+            if (col && unmask.keys.has(col)) outCols.add(col);
+          }
+          unmaskedColNames = [...outCols];
+          const gidSet = new Set<string>();
+          for (const col of outCols) for (const gid of (unmask.grantsByKey.get(col) ?? [])) gidSet.add(gid);
+          unmaskedGrantIds = [...gidSet];
         }
 
         // P5 — 조회 대상 식별자(subject) 수집: 지정 컬럼(org_db_subject_key)의 반환값만 상한부.
@@ -255,6 +278,7 @@ export function registerDbTools(server: McpServer, harness?: string | null): voi
         // P5 — 감사 우선(fail-closed): 기록이 성공해야 결과를 반환한다(실패 시 AuditWriteError → 아래 catch).
         await persistAccessOrThrow({
           ...auditBase, tables: planTables, maskedColumns: maskedColNames,
+          unmaskedColumns: unmaskedColNames, grantIds: unmaskedGrantIds.length > 0 ? unmaskedGrantIds : null,
           rowCount: out.rowCount, durationMs: Date.now() - started, ok: true, subjectKeys,
         });
         auditQuery({ userId: user.userId, source: src, sql, rowCount: out.rowCount, ms: Date.now() - started, ok: true, masked });

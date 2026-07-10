@@ -1273,6 +1273,28 @@ export const deliveryCapabilities: Capability[] = [
         base.url = url;
         base.auth_env = authEnv;
         base.input_schema = input.input_schema ?? undefined;
+        // P2(#746) 등급 — L0/L1/L2. L2 는 auto_approve 강제 제외(집행은 하네스 컨펌).
+        if (input.level !== undefined) {
+          const lvl = input.level === null ? null : str(input.level, "level", 2).toUpperCase();
+          if (lvl !== null && lvl !== "L0" && lvl !== "L1" && lvl !== "L2") throw new HttpError(400, "level 은 L0|L1|L2");
+          base.level = lvl as "L0" | "L1" | "L2" | null;
+        }
+        // P1(#746) per-user vault 인증 — auth_kind 설정 시 auth_env 대신 member_secret 로 해소(요청자 개인 자격 우선).
+        //  auth_env 와 동시 지정 금지(인증 출처 하나만). auth_kind 형식은 member_secret_store 와 동일 정규식.
+        if (input.auth_kind !== undefined && input.auth_kind !== null && input.auth_kind !== "") {
+          const ak = str(input.auth_kind, "auth_kind", 40).trim().toLowerCase();
+          if (!/^[a-z0-9_]{1,40}$/.test(ak)) throw new HttpError(400, "auth_kind 는 소문자·숫자·_ 1~40자여야 합니다");
+          if (authEnv) throw new HttpError(400, "auth_env 와 auth_kind 는 동시에 쓸 수 없습니다(인증 출처 하나만)");
+          base.auth_kind = ak;
+          if (input.auth_scope_key !== undefined && input.auth_scope_key !== null && input.auth_scope_key !== "") {
+            const sk = str(input.auth_scope_key, "auth_scope_key", 120).trim();
+            if (!/^[A-Za-z0-9._:-]{0,120}$/.test(sk)) throw new HttpError(400, "auth_scope_key 형식 오류");
+            base.auth_scope_key = sk;
+          } else base.auth_scope_key = null;
+        } else if (input.auth_kind === null || input.auth_kind === "") {
+          base.auth_kind = null; base.auth_scope_key = null;
+        }
+        if (input.pii_scrub !== undefined) base.pii_scrub = Boolean(input.pii_scrub);
       }
       return { tool: await upsertTool(base, wctx(user, ctx)) };
     }),

@@ -67,8 +67,9 @@ ok("isSystemDeniedTable: 내부 테이블 true / 일반 false", () => {
 });
 rejects("시스템 테이블은 정책 없어도 차단", "SELECT * FROM auth_token", /Blocked table/);
 // #604 백스톱 확대 — 시크릿/자격증명/세션/콜로그 (items DB self 소스 도입에 따른 노출면 확대 대응)
-ok("isSystemDeniedTable: #604 확장 테이블 true", () => {
-  for (const t of ["member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log"]) {
+ok("isSystemDeniedTable: #604 확장 + #746 감사/자격 테이블 true", () => {
+  for (const t of ["member_credential", "web_session", "git_credential", "org_connector", "mcp_call_log",
+    "db_access_log", "org_db_subject_key", "member_secret"]) {
     assert.equal(isSystemDeniedTable(t), true, t);
   }
 });
@@ -76,6 +77,8 @@ rejects("member_credential 정책 없어도 차단", "SELECT * FROM member_crede
 rejects("git_credential 정책 없어도 차단", "SELECT https_token_enc FROM git_credential", /Blocked table/);
 rejects("org_connector 정책 없어도 차단", "SELECT secrets FROM org_connector", /Blocked table/);
 rejects("web_session 정책 없어도 차단", "SELECT session_hash FROM web_session", /Blocked table/);
+rejects("member_secret(P1 자격 vault) 정책 없어도 차단", "SELECT secret_enc FROM member_secret", /Blocked table/);
+rejects("db_access_log(P5 감사) 정책 없어도 차단", "SELECT * FROM db_access_log", /Blocked table/);
 
 // ── #604 내장 self 소스 정책(default-deny + 콘텐츠 allow-list) 집행 ──
 const selfPolicy = (): SourcePolicy => policy({ tableDefault: "deny", tableMode: selfBaseTableMode() });
