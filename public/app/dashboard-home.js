@@ -976,9 +976,9 @@ catch { /* 무시 */ } }
 function dashInitColResize(zonesEl) {
     const cols = dashCols();
     const HANDLE = 16, MIN_FR = 1.2; // 핸들 트랙 폭(px) · 열 최소 폭(fr, 붕괴 방지).
-    // #req 1열 최소 폭 = 내 프로젝트 개요 카드(148px) 3개 + 갭·패딩. 아래로는 안 줄어 항상 3장이 가로로 보인다(<1100px 는 세로 스택이라 무시됨).
-    const COL0_MIN = 500;
-    const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(${COL0_MIN}px,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
+    // #758 1열 px 하드 최소(500px) 제거 — 이게 있으면 1열이 그 밑으로 안 줄고, 그 하한을 넘겨 끌면 그리드가 부족분을
+    //   먼 3열에서 뺏어와(px 하한 vs fr 클램프 불일치) 멀쩡한 3열이 같이 줄던 버그. minmax(0,fr)로 fr 보존이 유일 기준.
+    const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(0,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
     const kids = Array.from(zonesEl.children); // 스냅샷 [col0, col1, col2]
     const mkHandle = (idx) => {
         const h = el('div', { class: 'dash-col-handle', role: 'separator', 'aria-orientation': 'vertical', title: '열 폭 조절 (더블클릭=기본, ←/→ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-col-grip' }));
