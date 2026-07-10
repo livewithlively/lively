@@ -4062,6 +4062,9 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 
 /* ── #541 프로젝트 보드 풀스크린 — ClickUp 처럼 좌우 마진 없이(보드 라우트 한정, 상세는 읽기 폭 유지) ── */
 body[data-route="projects2-board"] main { max-width: none; padding-left: 16px; padding-right: 16px; }
+/* 도메인 맵도 다른 탭(보드·대시보드·WIKI)과 같이 풀스크린 — 기본 main 은 콘텐츠 폭(fit-content)+가운데 정렬이라
+   좁은 도메인 맵만 좌우로 붕 떠 보였다. margin:0 으로 auto 중앙정렬을 풀어 flex-column .app 안에서 전폭 stretch. */
+body[data-route="domainmap"] main { max-width: none; margin: 0; }
 
 /* ── #541 그룹바이/컬럼 정렬 ── */
 .pjv-groupby-btn .pjv-view-btn-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
