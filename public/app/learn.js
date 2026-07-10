@@ -26,7 +26,7 @@ function learnSubBar(active) {
     return bar;
 }
 async function renderLearn(view) {
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })), el('p', { class: 'sub', text: '비개발자도 5분이면 이 도구가 무엇이고 각 메뉴가 무슨 일을 하는지 전부 이해할 수 있어요. 헷갈릴 때 언제든 다시 오세요.' }));
+    const head = el('div', { class: 'page-head' }, el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })));
     view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' }, heroCard(), // ① 서비스를 관통하는 설명 + 작동 3단계
     tabsGuideCard(), // ② 각 메뉴(탭)가 무슨 일을 하나
     quickStartCard(), // 처음이라면 이 순서로
@@ -55,20 +55,21 @@ function flowStep(icon, title, desc) {
     return el('div', { class: 'guide-flow-step' }, el('span', { class: 'guide-flow-icon' }, tabIcon(icon)), el('div', { class: 'guide-flow-title', text: title }), el('p', { class: 'guide-flow-desc', text: desc }));
 }
 function flowArrow() { return el('div', { class: 'guide-flow-arrow', 'aria-hidden': 'true', text: '→' }); }
-// ── ② 메뉴 한눈에 보기 — 7개 탭을 성격이 비슷한 묶음(챕터) 4개로 그룹핑 ──
-//  ① 시작(시작하기) ② 실무=AI로 직접 일하기(터미널·프로젝트) ③ 저장소=회사 코드·지식 데이터(WIKI·도메인 맵) ④ 설정·도움말(관리·사용가이드).
+// ── ② 메뉴 한눈에 보기 — 주요 화면 7개를 성격이 비슷한 묶음(챕터) 4개로 그룹핑(#761: 상단 내비 개편 반영) ──
+//  ① 시작(홈=대시보드) ② 실무=AI로 직접 일하기(터미널·프로젝트) ③ 저장소=회사 지식·코드 데이터(WIKI·도메인 맵) ④ 설정·도움말(관리·사용가이드).
+//  #617 이후 IA: 터미널(AI 세션)은 상단 탭이 아니라 '홈'에서 열고, 옛 상단 '시작하기'는 사용 가이드 서브탭(#/learn/install)으로 이동.
 //  탭 객체: [아이콘, 이름, 태그, 강조색, 강조배경, 한줄요약, 친절설명, 링크, 링크라벨, 현재페이지?].
 const GUIDE_CHAPTERS = [
-    { num: '1', title: '시작', sub: 'AI를 회사 맥락과 연결하는 첫 세팅', tabs: [
-            { icon: 'play-circle', name: '시작하기', tag: '맨 처음 한 번', hue: '#2D6BF0', bg: '#EEF4FF',
-                summary: 'AI와 회사 맥락을 연결하는 첫 세팅',
-                desc: 'AI가 회사 사정을 아는 채로 일하게 만드는 출발점이에요. 설치 없이 웹에서 바로 쓰거나(터미널), 내 컴퓨터에 한 번 설치하는(약 5분) 두 가지 방법을 상황에 맞춰 단계별로 안내합니다.',
-                href: '#/learn/install', link: '시작하기 열기' },
+    { num: '1', title: '시작', sub: '로그인하면 처음 만나는 내 화면', tabs: [
+            { icon: 'home', name: '홈', tag: '로그인 후 첫 화면', hue: '#2D6BF0', bg: '#EEF4FF',
+                summary: '내 일과 팀 소식을 한눈에 모은 대시보드',
+                desc: '라이블리에 들어오면 가장 먼저 만나는 나만의 화면이에요. 내가 맡은 프로젝트, 팀이 공유하는 폴더, 최신 알림, 내가 켜 둔 AI 세션, 팀의 작업 기록을 한 화면에 모아 보여줍니다. 여기 ‘내 AI 세션’에서 [+ 새 세션]을 누르면 곧바로 AI와 대화를 시작할 수 있어요.',
+                href: '#/dashboard', link: '홈 열기' },
         ] },
     { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
-            { icon: 'terminal', name: '터미널', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
+            { icon: 'terminal', name: '터미널 (AI 세션)', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
                 summary: '웹에서 곧장 AI와 대화하는 곳',
-                desc: '브라우저에서 바로 AI와 대화할 수 있어요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
+                desc: '브라우저에서 바로 AI와 대화하는 화면이에요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 홈의 ‘내 AI 세션’에서 [+ 새 세션]으로 열 수 있고, 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
                 href: '#/terminal', link: '터미널 열기' },
             { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC',
                 summary: '회사에서 지금 무슨 일이 진행 중인지',
@@ -92,7 +93,7 @@ const GUIDE_CHAPTERS = [
                 href: '#/system', link: '관리 열기' },
             { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
                 summary: '이 도구 전체를 설명하는 안내서',
-                desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 길을 잃으면 언제든 다시 오세요.',
+                desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 위쪽 ‘시작하기’ 탭에는 내 컴퓨터에 라이블리를 연결하는 설치 안내가 함께 있어요. 길을 잃으면 언제든 다시 오세요.',
                 current: true },
         ] },
 ];
@@ -103,7 +104,7 @@ function tabsGuideCard() {
             grid.append(tabCard(t));
         return el('div', { class: 'tabchapter' }, el('div', { class: 'tabchapter-head' }, el('span', { class: 'tabchapter-num', 'aria-hidden': 'true', text: c.num }), el('div', { class: 'tabchapter-headtext' }, el('div', { class: 'tabchapter-title', text: c.title }), el('div', { class: 'tabchapter-sub', text: c.sub }))), grid);
     });
-    return el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '메뉴 한눈에 보기' })), el('p', { class: 'guide-lead', text: '위쪽 메뉴는 성격에 따라 네 묶음이에요 — ① 시작, ② 실무(터미널·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }), ...chapters);
+    return el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '메뉴 한눈에 보기' })), el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }), ...chapters);
 }
 // 탭 한 칸 — 현재 페이지는 클릭 불가 카드(점선), 나머지는 클릭하면 해당 탭으로 이동하는 링크 카드.
 function tabCard(t) {
@@ -147,6 +148,7 @@ function projectKnowledgeCard() {
 }
 // 탭/단계 아이콘 — feather 스타일 라인 아이콘(taskmodal 의 sv 패턴 재사용). 무채 스트로크, currentColor 상속.
 const GUIDE_ICONS = {
+    home: [['path', { d: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }], ['polyline', { points: '9 22 9 12 15 12 15 22' }]],
     'play-circle': [['circle', { cx: 12, cy: 12, r: 10 }], ['polygon', { points: '10 8 16 12 10 16 10 8' }]],
     terminal: [['polyline', { points: '4 17 10 11 4 5' }], ['line', { x1: 12, y1: 19, x2: 20, y2: 19 }]],
     trello: [['rect', { x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2 }], ['line', { x1: 9, y1: 8, x2: 9, y2: 16 }], ['line', { x1: 15, y1: 8, x2: 15, y2: 11 }]],
