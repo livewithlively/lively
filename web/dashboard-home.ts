@@ -898,10 +898,10 @@ async function fillSessions(zone, onCount, projectsP?) {
     const ownedShown = new Set(shown.filter((s) => s.owned).map((s) => s.id));
     for (const id of [...selected]) if (!ownedShown.has(id)) selected.delete(id);
     zone.countEl.textContent = String(shown.length);
-    // #req 칩 순서: 전체 · 내 프로젝트(그런 세션 있을 때만) · 비공개 · 초대받음.
+    // 칩 순서: 전체 · 프로젝트(그런 세션 있을 때만) · 개인 · 초대. 짧고 톤 일정(위젯 제목이 이미 '내 AI 세션'이라 '내'·'세션' 군더더기 제거, #670).
     const chips: any[] = [['all', '전체']];
-    if (sessions.some(isMyProjectSess)) chips.push(['myproj', '내 프로젝트']);
-    chips.push(['private', '비공개'], ['invited', '초대받음']);
+    if (sessions.some(isMyProjectSess)) chips.push(['myproj', '프로젝트']);
+    chips.push(['private', '개인'], ['invited', '초대']);
     dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
     // '완료 프로젝트 세션 표시'는 칩이 아니라 ⚙ 설정 팝오버 토글로(#req) — 칩 줄은 필터만.
     if (!shown.length) {
