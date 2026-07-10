@@ -4645,16 +4645,6 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-checkwrap { flex: none; display: none; align-items: center; }
 .dash-sess-list.selectmode .dash-sess-checkwrap { display: flex; }
 .dash-sess-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent, #5b6cff); }
-/* #758 간략히(compact) 보기 — 카드를 한 줄로 접어 더 많은 세션을 한눈에. 상태는 좌측 색 레일 + 작은 점(작업중·확인필요는 점이 깜빡). 프로젝트/시각은 유지, 상태 라벨·초대 배지는 접는다. */
-.dash-sess-list.compact { gap: 5px; }
-.dash-sess-list.compact .dash-scard { padding-top: 6px; padding-bottom: 6px; }
-.dash-sess-list.compact .dash-scard-main { flex-direction: row; align-items: center; gap: 8px; }
-.dash-sess-list.compact .dash-scard-name { flex: 1 1 auto; min-width: 3em; font-size: 13px; }
-.dash-sess-list.compact .dash-scard-meta { flex: 0 0 auto; }
-.dash-sess-list.compact .dash-scard-status { gap: 0; }
-.dash-sess-list.compact .dash-scard-status > span:last-child { display: none; } /* 상태 라벨 텍스트 숨김 — 점만 남겨 색·깜빡임으로 표시 */
-.dash-sess-list.compact .dash-scard-tag { display: none; }                     /* 초대 배지 숨김(간략) */
-.dash-sess-list.compact .dash-scard-when { margin-left: 0; }
 .dash-bulkbar--sess { margin: 8px 6px 4px; bottom: 4px; border-radius: 10px; }
 /* #req 세션 목록 맨 밑 '+ 새 세션'(대시보드서 바로 생성) — 프로젝트 인라인 추가와 같은 톤. */
 .dash-sess-addrow { padding: 2px 6px 4px; }

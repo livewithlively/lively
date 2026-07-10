@@ -1279,7 +1279,7 @@ async function fillSessions(zone, onCount, projectsP) {
                             : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
             return;
         }
-        const list = el('div', { class: 'dash-sess-list' + (density === 'compact' ? ' compact' : '') + (selectMode ? ' selectmode' : '') }); // #758 간략히=한 줄 카드 · 선택모드=체크박스 노출
+        const list = el('div', { class: 'dash-sess-list' + (selectMode ? ' selectmode' : '') }); // #758 선택모드=체크박스 노출 (자세히/간략히 차이는 카드 구조로 분기 — 아래 density)
         for (const s of shown) {
             // #req 재설계 — 상태(작업중/대기중)가 카드의 주인공. 좌측 색 레일 + 색 상태라벨로 한눈에 스캔.
             const stt = dashSessState(s); // { key, label }
@@ -1289,7 +1289,7 @@ async function fillSessions(zone, onCount, projectsP) {
             if (stt.label)
                 meta.append(el('span', { class: 'dash-scard-status is-' + stt.key }, el('span', { class: 'dash-scard-dot' }), el('span', { text: stt.label })));
             if (pid)
-                meta.append(el('span', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), title: (mineProj ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('#' + pid) }));
+                meta.append(el('span', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), title: (mineProj ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: '프로젝트: ' + (projName.get(pid) || ('#' + pid)) })); // #758 '프로젝트:' 접두로 프로젝트임을 명시
             if (!s.owned)
                 meta.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
             else if ((s.invites || []).length)
@@ -1303,10 +1303,18 @@ async function fillSessions(zone, onCount, projectsP) {
                 moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
                 acts.append(moreBtn);
             }
-            // #req 제목 = 세션 이름(label) — 터미널 창 상단에 뜨는 이름과 같아야 '내가 있는 창'을 찾음. 그 아래 Claude 작업요약(s.title)을 부제로.
+            // #758 자세히 = 1행: 하고 있는 작업(볼드 검정) / 2행: '터미널 제목: 세션명'(회색 부제) / 3행: 메타. (요청 swap — 작업을 위로, 세션명은 부제로)
+            //       간략히 = 이전 짧은 2줄 디자인: 세션명(볼드) + 메타 (작업요약 줄 없음).
             const nameStr = s.label || '(이름 없음)';
             const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
-            const main = el('div', { class: 'dash-scard-main' }, el('span', { class: 'dash-scard-name', title: nameStr, text: nameStr }), worksum ? el('div', { class: 'dash-scard-work', title: worksum }, el('span', { class: 'dash-scard-work-ic', text: '↳ ' }), worksum) : null, meta);
+            let main;
+            if (density === 'compact') {
+                main = el('div', { class: 'dash-scard-main' }, el('span', { class: 'dash-scard-name', title: nameStr, text: nameStr }), meta);
+            }
+            else {
+                const headline = worksum || nameStr; // 작업요약 없으면 세션명이 제목(부제 생략 — 중복 방지)
+                main = el('div', { class: 'dash-scard-main' }, el('span', { class: 'dash-scard-name', title: headline, text: headline }), worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null, meta);
+            }
             const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
             if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
                 const cb = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
