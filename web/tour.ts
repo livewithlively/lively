@@ -15,6 +15,9 @@ interface TourStep {
   placement?: 'top' | 'bottom' | 'left' | 'right' | 'center' | 'auto';
   padding?: number;                           // 스포트라이트 여백(px, 기본 8)
   advanceOn?: 'click' | 'next';               // 'click' = 강조된 실제 요소를 누르면 자동으로 다음 단계
+  advanceWhen?: () => boolean;                // 매 프레임 평가해 true 면 자동 진행. 타깃이 클릭 후 재렌더돼
+  //   click 리스너가 유실되는 요소(예: 도메인맵 노드 → 선택 시 그래프 재렌더)에 쓴다. [이전]/[다음]도 함께 노출(안 막힘).
+  onAdvance?: () => void;                      // [다음] 클릭 시 go 대신 실행(예: 데모 프로젝트로 라우팅). 설정 시 [다음]이 이걸 호출.
   advanceDelay?: number;                      // click 자동진행 지연(ms) — 모달 오픈/폼 제출이 먼저 일어나게(기본 80)
   scrollIntoView?: boolean;                   // 진입 시 타깃을 화면에 보이게 스크롤(모달 하단 버튼 등)
   ctaNext?: string;                           // [다음] 버튼 라벨 오버라이드(마지막 단계 '마치기' 등)
@@ -92,7 +95,7 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
       else if (typeof step.body === 'string') bodyWrap.append(el('p', { class: 'tour-p', text: step.body }));
       else bodyWrap.append(step.body);
     }
-    if (step.advanceOn === 'click') bodyWrap.append(el('p', { class: 'tour-hint', text: '↑ 강조된 버튼을 직접 눌러 보세요.' }));
+    if (step.advanceOn === 'click' || step.advanceWhen) bodyWrap.append(el('p', { class: 'tour-hint', text: step.advanceWhen ? '↑ 강조된 곳을 눌러 보세요 (또는 아래 [다음]).' : '↑ 강조된 버튼을 직접 눌러 보세요.' }));
     const kids: any[] = [
       el('div', { class: 'tour-pop-top' }, counter, close),
       el('div', { class: 'tour-title', text: step.title }),
@@ -100,7 +103,9 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
     ];
     if (step.advanceOn !== 'click') {
       const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '이전', onclick: () => go(idx - 1), disabled: idx === 0 });
-      const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'), onclick: () => go(idx + 1) });
+      // onAdvance — [다음] 을 누르면 go 대신 이걸 실행(예: 데모 프로젝트로 라우팅). 라우팅이면 route→resume 이 흐름을 잇는다.
+      const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'),
+        onclick: () => { if (step.onAdvance) step.onAdvance(); else go(idx + 1); } });
       kids.push(el('div', { class: 'tour-pop-foot' }, prev, next));
     }
     pop.replaceChildren(...kids);
@@ -110,6 +115,13 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
   function tick() {
     if (active !== t) return; // 내 투어가 교체/종료됐으면 이 rAF 루프도 멈춤(스테일 프레임 방지)
     const step = steps[t.i];
+    // advanceWhen — 조건(예: 도메인맵 패널 열림)이 충족되면 자동 진행. 클릭 후 타깃이 재렌더돼 click 리스너가
+    //  유실되는 요소를 위한 경로(그런 요소는 advanceOn:'click' 이 안 먹는다). raf=0 로 두고 go 가 루프를 재개한다.
+    if (step.advanceWhen) {
+      let met = false;
+      try { met = !!step.advanceWhen(); } catch (_) { met = false; }
+      if (met) { t.raf = 0; go(t.i + 1); return; }
+    }
     const target = resolve(step);
     const pad = step.padding == null ? 8 : step.padding;
     const r = target ? target.getBoundingClientRect() : null;

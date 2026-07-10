@@ -4525,7 +4525,105 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
   setTimeout(() => { try { search.focus(); } catch (_) { /* noop */ } }, 0);
 }
 
+// ── Lively 둘러보기(#761) 전용 예시 프로젝트 — 실제 데이터 대신 '선행/후행·연결된 지식·과업'을 직관적으로 보여주는
+//  큐레이팅된 상세 페이지. 실제 UI 컴포넌트(메타패널·본문·지식·태스크)를 그대로 재사용해 진짜처럼 보이되 내용만 고정.
+//  라우트: #/projects2/p/__demo__ (아래 renderProjectV2Detail 상단 가드). 저장/생성 액션은 안 쓴다(투어는 취소로 끝).
+const DEMO_PROJECT: any = {
+  id: '__demo__', name: '새 요금제 ‘팀 플랜’ 출시', status: 'in_progress', list_id: null,
+  body: '기존 개인 요금제에 여러 명이 함께 쓰는 ‘팀 플랜’을 새로 추가한다. 목표는 3개월 내 유료 전환율 +15%.',
+  description: '기존 개인 요금제에 여러 명이 함께 쓰는 ‘팀 플랜’을 새로 추가한다. 목표는 3개월 내 유료 전환율 +15%.',
+  members: [{ member_id: 'demo-me', display_name: '나' }, { member_id: 'demo-minji', display_name: '민지' }],
+  edges: {
+    // 선행(outgoing)=이 프로젝트가 뒤따르는 앞 일 · 후행(incoming)=이 프로젝트를 뒤따르는 뒤 일. 조사 → (출시) → 분석 흐름.
+    outgoing: [{ project_id: 'demo-pre', project_name: '경쟁사 요금제 조사', relation: 'follow_up' }],
+    incoming: [{ project_id: 'demo-post', project_name: '출시 후 전환율 분석', relation: 'follow_up' }],
+  },
+  knowledge: {
+    required: [
+      { name: 'demo-kn-price', title: '경쟁사 가격 비교 (2월 조사)' },
+      { name: 'demo-kn-policy', title: '요금 정책 결정 로그' },
+    ],
+    produced: [],
+  },
+  tasks: [
+    { id: 'demo-t1', name: '팀 플랜 가격·인원 정책 확정', status: 'done', subtasks: [] },
+    { id: 'demo-t2', name: '결제 페이지에 팀 플랜 추가', status: 'in_progress', subtasks: [] },
+    { id: 'demo-t3', name: '기존 고객에게 출시 안내 메일 발송', status: 'todo', subtasks: [] },
+  ],
+  fields: [], repos: [],
+};
+
+function renderProjectDemo(view) {
+  const P = DEMO_PROJECT, members = P.members, noop = () => {};
+  const meId = (state.me && (state.me.userId || state.me.email)) || 'demo-me';
+  const backLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2', text: '← 프로젝트' });
+  const head = el('div', { class: 'page-head' }, backLink);
+  const titleEl = el('h1', { class: 'proj-detail-title', text: P.name });
+  const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
+    onclick: () => toast('둘러보기 예시라 여기선 생략돼요 — 실제 프로젝트에서 열 수 있어요.') });
+  head.append(el('div', { class: 'proj-detail-titlebar' },
+    el('div', { class: 'proj-detail-titlebox' }, titleEl),
+    el('div', { class: 'proj-detail-actions' }, settingsBtn)));
+  head.append(pjvProjMetaPanel(P, members, noop));
+  view.replaceChildren(head,
+    projectBodySection('__demo__', P, noop),
+    projectKnowledgeSection('__demo__', P, noop),
+    pjvTasksSection('__demo__', P.tasks, members, noop, []),
+    demoFolderCard(),
+    demoTerminalCard(members, meId));
+  (document.getElementById('view') as any)?.focus?.();
+}
+
+// 데모 공유 폴더 — 파일 fetch 없이 '공유 폴더' 카드(제목·앵커는 실제와 동일 → 투어가 짚는다).
+function demoFolderCard() {
+  const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '공유 폴더' }),
+    el('div', { class: 'card-head-actions' },
+      el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 폴더' }),
+      el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 업로드' }))));
+  const file = (ic, nm) => el('div', { class: 'proj-file-card' },
+    el('div', { class: 'proj-file-card-ic', text: ic }),
+    el('div', { class: 'proj-file-card-nm', text: nm }));
+  card.append(el('div', { style: 'display:flex;gap:14px;flex-wrap:wrap;padding:6px 2px' },
+    file('📊', '요금제_비교표.xlsx'), file('📄', '출시_공지_초안.docx'), file('🖼', '결제화면_시안.png')));
+  return card;
+}
+
+// 데모 터미널 세션 — 실제 '＋ 새 세션' 드롭다운·만들기 팝업(openProjectSessionForm)을 그대로 열어 투어가 시연.
+//  세션 목록은 fetch 없이 팀원 진열만. 만들기 팝업은 제출 안 하고 취소로 끝나므로 데모 id 여도 안전.
+function demoTerminalCard(members, meId) {
+  const card = el('div', { class: 'card proj-term-card', style: 'margin-bottom:18px' });
+  const newBtn = el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'proj-new-session', text: '＋ 새 세션' });
+  newBtn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
+    const close = pjvPopover(newBtn, menu, { align: 'right' });
+    const mkItem = (icon, label, desc, fn) => {
+      const item = el('button', { class: 'pjv-menu-item', type: 'button' },
+        el('span', { class: 'pjv-sess-ico', text: icon }),
+        el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' },
+          el('span', { text: label }), el('span', { class: 'caption', text: desc })));
+      item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
+      return item;
+    };
+    const localItem = mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행',
+      () => openLocalWorkModal('__demo__', { id: '__demo__', name: DEMO_PROJECT.name, repos: [] }));
+    const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용',
+      () => openProjectSessionForm('__demo__', () => {}, '/api/ui/v6/projects/', DEMO_PROJECT.name, []));
+    webItem.dataset.tour = 'sess-web';
+    menu.append(localItem, webItem);
+  };
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
+  const person = (m) => el('div', { class: 'proj-person' },
+    personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id),
+    el('div', { class: 'proj-person-name', text: m.display_name || m.member_id }),
+    el('div', { class: 'proj-person-status empty', text: m.member_id === meId ? '✎ 상태 남기기' : '' }));
+  card.append(el('div', { class: 'proj-people-grid' }, ...members.map(person)));
+  return card;
+}
+
 async function renderProjectV2Detail(view, idStr) {
+  if (idStr === '__demo__') return renderProjectDemo(view); // Lively 둘러보기 전용 예시 프로젝트(#761)
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화
   pjvSortCtx = null; pjvGroupCtx = null; // 보드의 정렬/그룹 컨텍스트 잔존 차단(#541 리뷰 — 상세 헤더가 보드 리스트 설정을 오염)
   const id = Number(idStr);

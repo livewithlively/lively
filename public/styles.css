@@ -4076,6 +4076,10 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 .pjv-ov-name { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-ov-stats { display: inline-flex; gap: 6px; flex: none; }
 .pjv-ov-stat { font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px; }
+/* 개요 통계 칩 '진행/완료'를 리스트 상태 보드의 상태 알약과 같은 톤(꽉 찬 색·흰 글자)으로 통일(#762).
+   statRow 순서 고정: 1=전체(합계, 중립 유지)·2=진행·3=완료. 색은 개요 미니바(prog=파랑·done=민트)와 동일. */
+.pjv-ov-stat:nth-child(2) { color: #fff; background: var(--blue); border-color: transparent; }
+.pjv-ov-stat:nth-child(3) { color: #fff; background: var(--mint); border-color: transparent; }
 .pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 10px; } /* 최소 폭 220→164(#req) — 열 폭을 줄여 1행당 카드 수 증가 */
 .pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 8px; }
 .pjv-ov-card:hover { border-color: var(--accent, #5b6cff); box-shadow: 0 3px 12px rgba(21,35,59,.08); }
@@ -4354,10 +4358,8 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 .dash-wh-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); text-decoration: none; }
 .dash-wh-btn:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .dash-wh-btn svg { display: block; }
-/* #758 '선택'(일괄 선택 모드) 토글 — 텍스트 버튼, 켜지면 파랑. */
-.dash-wh-sel { width: auto; padding: 0 9px; font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -.01em; }
-.dash-wh-sel.on { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 45%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, var(--bg)); }
-.dash-wh-sel.on:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 14%, var(--bg)); }
+/* #758 세션 보기 필터 드롭다운(전체 ▾) — 칩 4개를 대체한 텍스트 버튼. */
+.dash-wh-filter { width: auto; padding: 0 9px; gap: 3px; font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 /* 필터로 숨긴 세션 안내 줄 */
 /* 선택형 팝오버 옵션(⚙ 기본값 설정) */
 .dash-pop-opt { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; padding: 7px 8px; border: none; background: none; border-radius: 8px; cursor: pointer; font-family: inherit; text-align: left; }
@@ -4491,6 +4493,8 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-bulkbar-btn:hover { background: rgba(255,255,255,.24); }
 .dash-bulkbar-btn.danger { background: color-mix(in srgb, var(--coral) 60%, transparent); border-color: color-mix(in srgb, var(--coral) 50%, transparent); }
 .dash-bulkbar-btn.danger:hover { background: var(--coral); }
+.dash-bulkbar-push { margin-left: auto; } /* #758 삭제·완료 버튼을 우측으로 밀기 */
+.dash-bulkbar-btn:disabled { opacity: .4; cursor: default; }
 .dash-bulkbar-x { margin-left: auto; width: 28px; height: 28px; border: none; background: rgba(255,255,255,.12); color: #fff; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
 .dash-bulkbar-x:hover { background: rgba(255,255,255,.22); }
 /* 새 프로젝트 만들기(경량 모달) + 위젯 하단 '+ 새 프로젝트' 버튼. */

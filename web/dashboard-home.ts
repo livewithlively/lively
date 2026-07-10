@@ -178,10 +178,10 @@ function dashUpdateChipClip(chipsEl) {
 function dashCtl(zone, opts) {
   const ctl = zone.ctlEl; if (!ctl) return;
   const kids: any[] = [];
-  if (opts.select) { // #758 일괄 선택 모드 토글 — 켜면 카드에 체크박스 노출(평소엔 숨김). 켠 상태는 파랑.
-    const s = el('button', { class: 'dash-wh-btn dash-wh-sel' + (opts.select.on ? ' on' : ''), type: 'button', title: opts.select.title, 'aria-pressed': opts.select.on ? 'true' : 'false', text: opts.select.on ? '완료' : '선택' });
-    s.onclick = () => opts.select.toggle();
-    kids.push(s);
+  if (opts.filter) { // #758 세션 보기 필터 — 칩 4개 대신 드롭다운 하나(전체/프로젝트/개인/초대). 헤더 정리.
+    const f = el('button', { class: 'dash-wh-btn dash-wh-filter', type: 'button', title: '보기 필터', 'aria-haspopup': 'true' }, opts.filter.label + ' ▾');
+    f.onclick = () => opts.filter.open(f);
+    kids.push(f);
   }
   if (opts.gear) {
     const g = el('button', { class: 'dash-wh-btn dash-wh-btn-gear', type: 'button', title: opts.gear.title, 'aria-label': opts.gear.title }, dashGearIcon());
@@ -718,9 +718,9 @@ function dashSaveCols(a) { try { localStorage.setItem(DASH_COLS_KEY, JSON.string
 function dashInitColResize(zonesEl) {
   const cols = dashCols();
   const HANDLE = 16, MIN_FR = 1.2; // 핸들 트랙 폭(px) · 열 최소 폭(fr, 붕괴 방지).
-  // #req 1열 최소 폭 = 내 프로젝트 개요 카드(148px) 3개 + 갭·패딩. 아래로는 안 줄어 항상 3장이 가로로 보인다(<1100px 는 세로 스택이라 무시됨).
-  const COL0_MIN = 500;
-  const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(${COL0_MIN}px,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
+  // #758 1열 px 하드 최소(500px) 제거 — 이게 있으면 1열이 그 밑으로 안 줄고, 그 하한을 넘겨 끌면 그리드가 부족분을
+  //   먼 3열에서 뺏어와(px 하한 vs fr 클램프 불일치) 멀쩡한 3열이 같이 줄던 버그. minmax(0,fr)로 fr 보존이 유일 기준.
+  const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(0,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
   const kids = Array.from(zonesEl.children); // 스냅샷 [col0, col1, col2]
   const mkHandle = (idx) => {
     const h = el('div', { class: 'dash-col-handle', role: 'separator', 'aria-orientation': 'vertical', title: '열 폭 조절 (더블클릭=기본, ←/→ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-col-grip' }));
@@ -872,7 +872,10 @@ async function fillSessions(zone, onCount, projectsP?) {
   const setOnlineOnly = (v) => { onlineOnly = v; dashSaveSessOnlineOnly(v); draw(); };
   const setSortMode = (v) => { sortMode = v; dashSaveSessSort(v); draw(); };
   const setDensity = (v) => { density = v; dashSaveSessDensity(v); draw(); }; // #758
-  const setSelectMode = (v) => { selectMode = v; if (!v) selected.clear(); renderCtl(); draw(); }; // #758 끄면 선택 해제
+  const setSelectMode = (v) => { selectMode = v; if (!v) selected.clear(); draw(); }; // #758 끄면 선택 해제. 헤더 재렌더 불필요(선택 UI는 ⚙·하단 바)
+  // #758 보기 필터 옵션 — 칩 4개 대신 헤더 드롭다운 하나로. 전체 · 프로젝트(그런 세션 있을 때만) · 개인 · 초대.
+  const filterChips = (): any[] => { const c: any[] = [['all', '전체']]; if (sessions.some(isMyProjectSess)) c.push(['myproj', '프로젝트']); c.push(['private', '개인'], ['invited', '초대']); return c; };
+  const filterLabel = () => { const f = filterChips().find(([k]) => k === mode); return (f && f[1]) || '전체'; };
   // #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
   const selected = new Set<string>();
   const killSelected = async () => {
@@ -885,11 +888,15 @@ async function fillSessions(zone, onCount, projectsP?) {
   };
   const bar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
   const renderBar = () => {
-    const n = selected.size; bar.hidden = n === 0; if (!n) return;
+    // #758 선택 모드일 때 항상 표시(0개여도) — 안내 + 삭제 + 완료(모드 종료). 진입은 ⚙ '세션 선택'.
+    bar.hidden = !selectMode; if (!selectMode) return;
+    const n = selected.size;
+    const delBtn: any = el('button', { class: 'dash-bulkbar-btn danger dash-bulkbar-push', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: killSelected });
+    delBtn.disabled = n === 0;
     bar.replaceChildren(
-      el('span', { class: 'dash-bulkbar-n', text: n + '개 선택' }),
-      el('button', { class: 'dash-bulkbar-btn danger', type: 'button', text: '삭제', onclick: killSelected }),
-      el('button', { class: 'dash-bulkbar-x', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', text: '✕', onclick: () => { selected.clear(); draw(); } }));
+      el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }),
+      delBtn,
+      el('button', { class: 'dash-bulkbar-btn', type: 'button', title: '선택 모드 종료', text: '완료', onclick: () => setSelectMode(false) }));
   };
   const draw = () => {
     // 정렬(#req ⚙에서 선택): active(기본)=마지막 작업 최신순(가장 최근에 작업한 세션이 위) / recent=생성 최신순 / name=제목(작업요약)순.
@@ -911,12 +918,7 @@ async function fillSessions(zone, onCount, projectsP?) {
     const ownedShown = new Set(shown.filter((s) => s.owned).map((s) => s.id));
     for (const id of [...selected]) if (!ownedShown.has(id)) selected.delete(id);
     zone.countEl.textContent = String(shown.length);
-    // 칩 순서: 전체 · 프로젝트(그런 세션 있을 때만) · 개인 · 초대. 짧고 톤 일정(위젯 제목이 이미 '내 AI 세션'이라 '내'·'세션' 군더더기 제거, #670).
-    const chips: any[] = [['all', '전체']];
-    if (sessions.some(isMyProjectSess)) chips.push(['myproj', '프로젝트']);
-    chips.push(['private', '개인'], ['invited', '초대']);
-    dashChips(zone.chipsEl, chips, mode, (k) => { mode = k; draw(); });
-    // '완료 프로젝트 세션 표시'는 칩이 아니라 ⚙ 설정 팝오버 토글로(#req) — 칩 줄은 필터만.
+    // #758 필터는 헤더 드롭다운(renderCtl 의 filter)으로 이동 — 칩 줄 폐지(헤더 정리).
     if (!shown.length) {
       zone.body.replaceChildren(
         (onlineOnly && hiddenOffline > 0) ? dashEmpty('온라인 세션이 없어요 — ⚙ 설정에서 ‘온라인 세션만’을 끄면 오프라인 세션도 보여요.')
@@ -947,17 +949,18 @@ async function fillSessions(zone, onCount, projectsP?) {
         moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
         acts.append(moreBtn);
       }
-      // #758 자세히 = 1행: 하고 있는 작업(볼드 검정) / 2행: '터미널 제목: 세션명'(회색 부제) / 3행: 메타. (요청 swap — 작업을 위로, 세션명은 부제로)
-      //       간략히 = 이전 짧은 2줄 디자인: 세션명(볼드) + 메타 (작업요약 줄 없음).
+      // #758 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명. 자세히·간략히 공통.
+      //   자세히: 작업(제목) / '터미널 제목: 세션명'(회색 부제) / 메타 (3줄).
+      //   간략히: 작업(제목) / 메타 (2줄 — 터미널 제목 부제 생략).
       const nameStr = s.label || '(이름 없음)';
       const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
+      const headline = worksum || nameStr;
       let main;
       if (density === 'compact') {
         main = el('div', { class: 'dash-scard-main' },
-          el('span', { class: 'dash-scard-name', title: nameStr, text: nameStr }),
+          el('span', { class: 'dash-scard-name', title: headline, text: headline }),
           meta);
       } else {
-        const headline = worksum || nameStr; // 작업요약 없으면 세션명이 제목(부제 생략 — 중복 방지)
         main = el('div', { class: 'dash-scard-main' },
           el('span', { class: 'dash-scard-name', title: headline, text: headline }),
           worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null,
@@ -1048,11 +1051,20 @@ async function fillSessions(zone, onCount, projectsP?) {
       row.onclick = () => { close(); setDensity(k); };
       panel.append(row);
     }
+    // #758 여러 세션 선택·삭제 — 헤더의 '선택' 버튼을 여기로 이동(평소엔 체크박스 숨김, 눌러야 나옴).
+    panel.append(el('div', { class: 'dash-pop-gh', text: '관리' }));
+    const selRow = el('button', { class: 'dash-pop-opt' + (selectMode ? ' sel' : ''), type: 'button' },
+      el('span', { class: 'dash-pop-txt' },
+        el('span', { class: 'dash-pop-name', text: selectMode ? '세션 선택 끝내기' : '세션 선택 · 여러 개 삭제' }),
+        el('span', { class: 'dash-pop-desc', text: selectMode ? '카드 체크박스를 숨겨요' : '카드에 체크박스가 나와요 — 여러 개 골라 한 번에 삭제' })),
+      selectMode ? el('span', { class: 'dash-pop-check', text: '✓' }) : null);
+    selRow.onclick = () => { close(); setSelectMode(!selectMode); };
+    panel.append(selRow);
     close = dashPopover(a, panel);
   };
-  // 헤더 컨트롤 — [선택](일괄 선택 모드) + [⚙ 설정] + [→ 터미널]. 선택 모드 토글 시 버튼 상태 갱신 위해 재렌더.
+  // #758 헤더 컨트롤 정리 — [전체 ▾ 필터] + [⚙ 설정(선택 모드 포함)] + [→ 터미널]. 칩·선택 버튼을 여기서 뺌.
   const renderCtl = () => dashCtl(zone, {
-    select: { on: selectMode, title: selectMode ? '선택 완료' : '세션 선택 (일괄 삭제)', toggle: () => setSelectMode(!selectMode) },
+    filter: { label: filterLabel(), open: (anchor) => dashChoicePopover(anchor, '보기', filterChips(), mode, (k) => { mode = k; renderCtl(); draw(); }) },
     gear: { title: '세션 표시 설정', open: openSessPrefs },
     action: { href: '#/terminal', title: '터미널로' },
   });
