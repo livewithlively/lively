@@ -4084,6 +4084,10 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 .pjv-ov-name { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-ov-stats { display: inline-flex; gap: 6px; flex: none; }
 .pjv-ov-stat { font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; padding: 3px 9px; }
+/* 개요 통계 칩 '진행/완료'를 리스트 상태 보드의 상태 알약과 같은 톤(꽉 찬 색·흰 글자)으로 통일(#762).
+   statRow 순서 고정: 1=전체(합계, 중립 유지)·2=진행·3=완료. 색은 개요 미니바(prog=파랑·done=민트)와 동일. */
+.pjv-ov-stat:nth-child(2) { color: #fff; background: var(--blue); border-color: transparent; }
+.pjv-ov-stat:nth-child(3) { color: #fff; background: var(--mint); border-color: transparent; }
 .pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 10px; } /* 최소 폭 220→164(#req) — 열 폭을 줄여 1행당 카드 수 증가 */
 .pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 8px; }
 .pjv-ov-card:hover { border-color: var(--accent, #5b6cff); box-shadow: 0 3px 12px rgba(21,35,59,.08); }
