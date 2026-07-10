@@ -88,8 +88,14 @@ async function renderMyDashboard(view) {
       el('div', { class: 'dash-date' }, todayLabel(), sepEl, summaryEl)),
     el('div', { class: 'dash-acts' },
       obSlot,
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2', text: '+ 새 프로젝트' }),
-      el('a', { class: 'btn btn-primary btn-sm', href: '#/terminal', text: '+ 새 세션' })));
+      // #req 탭 이동 대신 대시보드 위에 생성 팝업을 그대로 띄운다(프로젝트=dashCreateProject, 세션=openTermCreateForm). 생성 후 대시보드 재렌더로 즉시 반영.
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(null, null, () => renderMyDashboard(view)) }),
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 세션', onclick: async (e: any) => {
+        const b = e.currentTarget; b.disabled = true;
+        try { const cfg = await api('/api/ui/terminal/config'); openTermCreateForm(cfg, null, () => renderMyDashboard(view)); }
+        catch { location.hash = '#/terminal'; }
+        finally { b.disabled = false; }
+      } })));
 
   // 3열 — 사람이 열 폭을 드래그로 조절(#req, 기기별 저장). 열 사이 핸들 2개 + 반응형(좁으면 세로 스택, CSS가 인라인 grid 무시).
   const colLeft = el('div', { class: 'dash-colleft' }, zoneProj.box, zoneFold.box);
@@ -205,6 +211,9 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   const isDone = (p) => p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed';
   onCount(projects.filter((p) => !isDone(p)).length);
   const listById = new Map<number, any>(lists.map((l) => [l.id, l]));
+  // #req ⚙ 팝오버에서 즐겨찾기 리스트를 상단에 — 백그라운드 로드(지연/실패 시 빈 집합, 무해).
+  let favLists = new Set<number>();
+  api('/api/ui/v6/favorites').then((d) => { favLists = new Set(((d && d.project_lists) || []).map((x) => Number(x))); }).catch(() => { /* 무시 */ });
   // 상태 묶음(개요 미니바) — 프로젝트 탭 개요의 brk 와 동일 3버킷(할일·진행·완료).
   const brk = (arr) => ({ total: arr.length, done: arr.filter(isDone).length,
     prog: arr.filter((p) => !isDone(p) && p.status !== 'todo').length, todo: arr.filter((p) => p.status === 'todo').length });
@@ -375,7 +384,10 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
     // #req R11.1/R19 — '+ 새 프로젝트'는 리스트 그룹 맨 밑 인라인 행(dashInlineAdd)으로 이동(프로젝트 탭과 동일).
     const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), arr));
-    zone.body.replaceChildren(gridEl, listEl);
+    // #req 리스트 카드(개요) ↔ 프로젝트 목록 사이 높이 조절 핸들 — 위젯 사이 리사이즈와 동일 UI(fr·기기별 저장). 기본은 개요 auto(현재 모습), 드래그하면 fr 전환.
+    const split = el('div', { class: 'dash-proj-split' }, gridEl, listEl);
+    zone.body.replaceChildren(split);
+    dashInitRowResize(split, 'dash_proj_split_v1', [3, 5], true);
   };
   // 프로젝트 변경(생성·삭제·이동·상태) 후 위젯 새로고침 — 최신 mine=1 재요청 후 재렌더.
   const reloadAll = async () => {
@@ -433,23 +445,36 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     };
     seg('태스크 수 표시', [['active', '진행 중만'], ['all', '전체'], ['progress', '완료·전체']], dashTaskCountMode(), (k) => dashSaveTaskCountMode(k));
     seg('기본 상태 필터', [['active', '진행 중'], ['all', '전체']], dashProjFilterDefault(), (k) => { dashSaveProjFilterDefault(k); mode = k; });
-    // 빈 리스트 숨김 + 리스트별 개요 표시/숨김.
-    panel.append(el('div', { class: 'dash-pop-gh', text: '개요 카드' }));
+    // #req 소제목을 이해되는 워딩으로 — 이 섹션은 '위 요약 카드에 어떤 리스트를 보일지' 고르는 곳.
+    panel.append(el('div', { class: 'dash-pop-gh', text: '위에 요약 카드로 표시할 리스트' }));
     const heCb = el('input', { type: 'checkbox' }); heCb.checked = dashHideEmptyLists();
     heCb.onchange = () => { dashSaveHideEmptyLists(heCb.checked); draw(); };
     panel.append(el('label', { class: 'dash-pop-row' }, heCb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '빈 리스트(프로젝트 0개) 숨기기' }))));
-    const hidden = dashOvHidden();
-    if (!currentOrder.length) panel.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '표시할 리스트가 없어요.' })));
-    for (const id of currentOrder) {
-      const l = listById.get(id);
-      const cb = el('input', { type: 'checkbox' });
-      cb.checked = !hidden.has(Number(id));
-      cb.onchange = () => { const h = dashOvHidden(); if (cb.checked) h.delete(Number(id)); else h.add(Number(id)); dashSaveOvHidden(h); draw(); };
-      panel.append(el('label', { class: 'dash-pop-row' }, cb,
-        el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: (l && l.name) || '미분류' }))));
-    }
+    // #req 리스트 검색 + 즐겨찾기(⭐) 상단 정렬.
+    const search = el('input', { class: 'dash-pop-search', type: 'text', placeholder: '리스트 검색…', 'aria-label': '리스트 검색' });
+    const rowsWrap = el('div', { class: 'dash-pop-listrows' });
+    const renderRows = () => {
+      const q = (search.value || '').trim().toLowerCase();
+      const hidden = dashOvHidden();
+      const ordered = currentOrder.slice().sort((a, b) => (favLists.has(Number(b)) ? 1 : 0) - (favLists.has(Number(a)) ? 1 : 0)); // 즐겨찾기 먼저(안정정렬로 원래 순서 유지)
+      const items = ordered.filter((id) => !q || (((listById.get(id) || {}).name || '미분류').toLowerCase().includes(q)));
+      rowsWrap.replaceChildren();
+      if (!currentOrder.length) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '표시할 리스트가 없어요.' }))); return; }
+      if (!items.length) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '검색 결과가 없어요.' }))); return; }
+      for (const id of items) {
+        const l = listById.get(id);
+        const cb = el('input', { type: 'checkbox' }); cb.checked = !hidden.has(Number(id));
+        cb.onchange = () => { const h = dashOvHidden(); if (cb.checked) h.delete(Number(id)); else h.add(Number(id)); dashSaveOvHidden(h); draw(); };
+        const nm = el('span', { class: 'dash-pop-name' }, favLists.has(Number(id)) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, (l && l.name) || '미분류');
+        rowsWrap.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, nm)));
+      }
+    };
+    search.addEventListener('input', renderRows);
+    if (currentOrder.length > 6) panel.append(search); // 리스트 많을 때만 검색 노출
+    panel.append(rowsWrap);
+    renderRows();
     if (currentOrder.length) {
-      const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '개요 모두 표시' });
+      const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '모두 표시' });
       resetBtn.onclick = () => { dashSaveOvHidden(new Set()); draw(); openOvPrefs(anchor); };
       panel.append(el('div', { class: 'dash-pop-foot' }, resetBtn));
     }
@@ -652,6 +677,7 @@ function dashTaskChip(p) {
 const DASH_FOLD_VIEW_KEY = 'dash_fb_view_v1';    // 공유 폴더 브라우저 기본 뷰(icon|list)
 const DASH_SESS_FILTER_KEY = 'dash_sess_filter_v1'; // 내 AI 세션 기본 필터(all|mine|invited|myproj)
 const DASH_SESS_SHOWCLOSED_KEY = 'dash_sess_showclosed_v1'; // 완료·보관 프로젝트 세션 포함 여부(기본 off=숨김) #req
+const DASH_SESS_ONLINEONLY_KEY = 'dash_sess_onlineonly_v1'; // 접속 중(온라인=attached) 세션만 보기(기본 off) #670
 const DASH_SESS_SORT_KEY = 'dash_sess_sort_v1'; // 세션 카드 정렬(smart|recent|name) #req
 const DASH_LOG_TYPE_KEY = 'dash_log_type_v1';   // 작업 로그 기본 유형 필터(''=전체 | feature·fix·… #req R14)
 function dashFoldView() { try { return localStorage.getItem(DASH_FOLD_VIEW_KEY) === 'list' ? 'list' : 'icon'; } catch { return 'icon'; } }
@@ -661,8 +687,14 @@ function dashSaveSessFilter(v) { try { localStorage.setItem(DASH_SESS_FILTER_KEY
 // #req 완료·보관(done/closed) 프로젝트 세션은 기본 숨김 — 토글 켜면 포함(표시). 기기별 저장.
 function dashSessShowClosed() { try { return localStorage.getItem(DASH_SESS_SHOWCLOSED_KEY) === '1'; } catch { return false; } }
 function dashSaveSessShowClosed(v) { try { if (v) localStorage.setItem(DASH_SESS_SHOWCLOSED_KEY, '1'); else localStorage.removeItem(DASH_SESS_SHOWCLOSED_KEY); } catch { /* 무시 */ } }
+// #670 접속 중(온라인=attached)인 세션만 보기 — 토글 켜면 오프라인/미접속 세션 숨김. 기기별 저장.
+function dashSessOnlineOnly() { try { return localStorage.getItem(DASH_SESS_ONLINEONLY_KEY) === '1'; } catch { return false; } }
+function dashSaveSessOnlineOnly(v) { try { if (v) localStorage.setItem(DASH_SESS_ONLINEONLY_KEY, '1'); else localStorage.removeItem(DASH_SESS_ONLINEONLY_KEY); } catch { /* 무시 */ } }
 function dashSessSort() { try { const v = localStorage.getItem(DASH_SESS_SORT_KEY); return ['active', 'recent', 'name'].includes(v as string) ? v : 'active'; } catch { return 'active'; } }
 function dashSaveSessSort(v) { try { localStorage.setItem(DASH_SESS_SORT_KEY, v); } catch { /* 무시 */ } }
+// #req 새 프로젝트에서 'Claude로 실행' 시 쓸 LLM 기본값(빈 문자열=하네스 기본). 기기별 저장.
+function dashDefaultModel() { try { const v = localStorage.getItem('dash_default_model_v1') || ''; return ['', 'opus', 'sonnet', 'haiku'].includes(v) ? v : ''; } catch { return ''; } }
+function dashSaveDefaultModel(v) { try { if (v) localStorage.setItem('dash_default_model_v1', v); else localStorage.removeItem('dash_default_model_v1'); } catch { /* 무시 */ } }
 function dashLogType() { try { return localStorage.getItem(DASH_LOG_TYPE_KEY) || ''; } catch { return ''; } }
 function dashSaveLogType(v) { try { if (v) localStorage.setItem(DASH_LOG_TYPE_KEY, v); else localStorage.removeItem(DASH_LOG_TYPE_KEY); } catch { /* 무시 */ } }
 // 폴더 기본 뷰 설정 팝오버(⚙) — 브라우저 열 때 initial 뷰가 됨.
@@ -677,7 +709,9 @@ function dashSaveCols(a) { try { localStorage.setItem(DASH_COLS_KEY, JSON.string
 function dashInitColResize(zonesEl) {
   const cols = dashCols();
   const HANDLE = 16, MIN_FR = 1.2; // 핸들 트랙 폭(px) · 열 최소 폭(fr, 붕괴 방지).
-  const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(0,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
+  // #req 1열 최소 폭 = 내 프로젝트 개요 카드(148px) 3개 + 갭·패딩. 아래로는 안 줄어 항상 3장이 가로로 보인다(<1100px 는 세로 스택이라 무시됨).
+  const COL0_MIN = 500;
+  const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(${COL0_MIN}px,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
   const kids = Array.from(zonesEl.children); // 스냅샷 [col0, col1, col2]
   const mkHandle = (idx) => {
     const h = el('div', { class: 'dash-col-handle', role: 'separator', 'aria-orientation': 'vertical', title: '열 폭 조절 (더블클릭=기본, ←/→ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-col-grip' }));
@@ -752,11 +786,19 @@ function dashModal(title, content, wide?, opts?) {
     el('div', { class: 'dash-modal-head' }, el('strong', { text: title }), closeBtn),
     el('div', { class: 'dash-modal-body' }, content));
   const ov = el('div', { class: 'dash-modal-ov' }, box);
-  const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
+  // opts.history: 열 때 히스토리 항목 push → 브라우저 뒤로가기가 대시보드를 이동시키지 않고 이 팝업만 닫는다(라우터는 hashchange 기반이라 같은 해시 push 는 라우팅 안 함). knowledge-doc peek 와 동형.
+  const useHistory = !!(opts && opts.history);
+  let byPop = false;
+  const close = () => {
+    ov.remove(); document.removeEventListener('keydown', onKey, true);
+    if (useHistory) { window.removeEventListener('popstate', onPop); if (!byPop) { try { history.back(); } catch { /* */ } } }
+  };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onPop = () => { byPop = true; close(); };
   if (!(opts && opts.persistent)) ov.addEventListener('mousedown', (e: any) => { if (e.target === ov) close(); });
   closeBtn.onclick = close;
   document.addEventListener('keydown', onKey, true);
+  if (useHistory) { try { history.pushState({ dashModal: true }, ''); } catch { /* */ } window.addEventListener('popstate', onPop); }
   document.body.append(ov);
   return close;
 }
@@ -806,14 +848,17 @@ async function fillSessions(zone, onCount, projectsP?) {
   const isMyProjectSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && projName.has(pid); };
   let mode = dashSessFilter(); // 전체 | 내 프로젝트 | 비공개 | 초대받음 (저장된 기본 필터)
   // 비공개 = 내 소유인데 초대가 없는(나만 보는) 세션(#req).
-  const isPrivateSess = (s) => s.owned && !((s.invites || []).length);
+  // 비공개 = 내 소유 + 초대 없음 + 프로젝트 세션 아님(프로젝트 세션은 멤버 누구나 봄 → 비공개 아님, #req 버그수정).
+  const isPrivateSess = (s) => s.owned && !((s.invites || []).length) && !(Number(s.projectId) || 0);
   // #req 완료·보관(done/closed) 프로젝트의 세션은 기본 숨김. ⚙ 설정 팝오버의 '완료·보관 프로젝트 세션 표시' 토글로 포함. 비프로젝트·분류불가 세션은 항상 유지.
   let showClosed = dashSessShowClosed();
+  let onlineOnly = dashSessOnlineOnly(); // #670 접속 중(온라인=attached) 세션만 보기
   let sortMode = dashSessSort(); // active(최근 작업순) | recent(최근 생성순) | name(작업 제목순)
   const isProjClosed = (p) => !!p && (p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed'); // 내 프로젝트 모달 isDone 과 동형
   const closedPids = new Set<number>((projects || []).filter(isProjClosed).map((p) => p.id));
   const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid); };
   const setShowClosed = (v) => { showClosed = v; dashSaveSessShowClosed(v); draw(); };
+  const setOnlineOnly = (v) => { onlineOnly = v; dashSaveSessOnlineOnly(v); draw(); };
   const setSortMode = (v) => { sortMode = v; dashSaveSessSort(v); draw(); };
   // #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
   const selected = new Set<string>();
@@ -844,7 +889,11 @@ async function fillSessions(zone, onCount, projectsP?) {
       .sort(cmp);
     // #req 완료·보관 프로젝트 세션은 기본 숨김(showClosed 켜면 포함) — 현재 모드 위에 추가 적용.
     const hiddenClosed = showClosed ? 0 : base.filter(isClosedProjSess).length;
-    const shown = showClosed ? base : base.filter((s) => !isClosedProjSess(s));
+    const shownClosed = showClosed ? base : base.filter((s) => !isClosedProjSess(s));
+    // #670 온라인 세션만 보기 토글 — 켜면 '오프라인'(에이전트 상태 offline) 세션 숨김. 작업중/대기중/확인필요만 표시. showClosed 위에 추가.
+    const isOnline = (s) => dashSessState(s).key !== 'offline';
+    const hiddenOffline = onlineOnly ? shownClosed.filter((s) => !isOnline(s)).length : 0;
+    const shown = onlineOnly ? shownClosed.filter(isOnline) : shownClosed;
     // 필터 전환 시 안 보이게 된 선택은 해제(내 프로젝트 모달과 동형).
     const ownedShown = new Set(shown.filter((s) => s.owned).map((s) => s.id));
     for (const id of [...selected]) if (!ownedShown.has(id)) selected.delete(id);
@@ -857,7 +906,8 @@ async function fillSessions(zone, onCount, projectsP?) {
     // '완료 프로젝트 세션 표시'는 칩이 아니라 ⚙ 설정 팝오버 토글로(#req) — 칩 줄은 필터만.
     if (!shown.length) {
       zone.body.replaceChildren(
-        (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
+        (onlineOnly && hiddenOffline > 0) ? dashEmpty('온라인 세션이 없어요 — ⚙ 설정에서 ‘온라인 세션만’을 끄면 오프라인 세션도 보여요.')
+        : (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
         : mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
         : mode === 'myproj' ? dashEmpty('내 프로젝트에서 만든 세션이 없어요.')
         : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
@@ -875,7 +925,7 @@ async function fillSessions(zone, onCount, projectsP?) {
       if (pid) meta.append(el('span', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), title: (mineProj ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: projName.get(pid) || ('#' + pid) }));
       if (!s.owned) meta.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
       else if ((s.invites || []).length) meta.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
-      meta.append(el('span', { class: 'dash-scard-when', text: sessTime(s.created) }));
+      meta.append(el('span', { class: 'dash-scard-when', title: '마지막 사용', text: sessTime(s.lastUsed || s.created) })); // #req 생성일 대신 마지막 사용(작업·접속) 시각
       const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
       openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
       const acts = el('div', { class: 'dash-scard-acts' }, openBtn);
@@ -884,10 +934,13 @@ async function fillSessions(zone, onCount, projectsP?) {
         moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
         acts.append(moreBtn);
       }
-      // #req 제목 = Claude 가 써두는 '지금 하는 일' 요약(s.title, 실시간). 없으면 세션 이름(label)로 폴백.
-      const dispName = (s.title && s.title.trim()) || s.label || '(이름 없음)';
+      // #req 제목 = 세션 이름(label) — 터미널 창 상단에 뜨는 이름과 같아야 '내가 있는 창'을 찾음. 그 아래 Claude 작업요약(s.title)을 부제로.
+      const nameStr = s.label || '(이름 없음)';
+      const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
       const main = el('div', { class: 'dash-scard-main' },
-        el('span', { class: 'dash-scard-name', title: dispName, text: dispName }), meta);
+        el('span', { class: 'dash-scard-name', title: nameStr, text: nameStr }),
+        worksum ? el('div', { class: 'dash-scard-work', title: worksum }, el('span', { class: 'dash-scard-work-ic', text: '↳ ' }), worksum) : null,
+        meta);
       const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
       if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
         const cb: any = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' }); cb.checked = selected.has(s.id);
@@ -946,6 +999,13 @@ async function fillSessions(zone, onCount, projectsP?) {
       el('span', { class: 'dash-pop-txt' },
         el('span', { class: 'dash-pop-name', text: '완료·보관 프로젝트 세션 표시' }),
         el('span', { class: 'dash-pop-desc', text: 'done/closed 프로젝트에 속한 세션도 목록에 표시(기본 숨김)' }))));
+    // #670 온라인 세션만 보기 토글 — '오프라인'(비활성) 세션 숨김.
+    const cbOnline: any = el('input', { type: 'checkbox' }); cbOnline.checked = onlineOnly;
+    cbOnline.onchange = () => setOnlineOnly(cbOnline.checked);
+    panel.append(el('label', { class: 'dash-pop-row' }, cbOnline,
+      el('span', { class: 'dash-pop-txt' },
+        el('span', { class: 'dash-pop-name', text: '온라인 세션만' }),
+        el('span', { class: 'dash-pop-desc', text: '작업 중·대기 중·확인 필요만 표시 — 오프라인 세션 숨김' }))));
     // #req 카드 정렬 선택.
     panel.append(el('div', { class: 'dash-pop-gh', text: '카드 정렬' }));
     for (const [k, label] of [['active', '최근 작업순 (기본)'], ['recent', '최근 생성순'], ['name', '작업 제목순 (가나다)']] as [string, string][]) {
@@ -1015,7 +1075,7 @@ function dashSessionEmpty(cfg, reloadSessions) {
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
 async function fillFolders(zone) {
   // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
-  const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true, { persistent: true, resizable: true });
+  const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true, { persistent: true, resizable: true, history: true });
   let dirs: string[] = [];
   // 뷰(아이콘|목록)를 ⚙ 설정(dashFoldView, 전체보기와 공유)에 맞춰 렌더 — #670: 목록으로 바꾸면 대시보드 위젯도 목록으로.
   const paint = () => {
@@ -1752,28 +1812,68 @@ async function openProjSessionsPicker(anchor, p) {
   }
   close = dashPopover(anchor, panel);
 }
-// ── R11.1 새 프로젝트 만들기 — 경량 모달(이름 입력 + 현재 리스트에 생성). POST /api/ui/v6/projects. ──
-function dashCreateProject(listId, listById, onDone) {
+// ── 새 프로젝트 만들기 — 이름 + (선택)첫 태스크들 + [만들기]/[만들고 Claude로 실행]/[모델]. POST /projects, /projects/:id/tasks, /projects/:id/sessions. ──
+function dashCreateProject(listId, listById, onDone, prefillName?) {
   const l = listId ? listById.get(listId) : null;
-  const input = el('input', { class: 'dash-cp-input', type: 'text', placeholder: '새 프로젝트 이름', 'aria-label': '새 프로젝트 이름' });
+  const input = el('input', { class: 'dash-cp-input', type: 'text', placeholder: '새 프로젝트 이름', 'aria-label': '새 프로젝트 이름', value: prefillName || '' });
   const err = el('div', { class: 'dash-cp-err' });
-  const submitBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기' });
-  const submit = async () => {
+  // #req 첫 태스크(선택) — 여러 줄, 생성 시 프로젝트에 태스크로 저장(입력한 게 사라지지 않게).
+  const taskList = el('div', { class: 'dash-cp-tasks' });
+  const taskInputs: any[] = [];
+  const addTaskRow = (focus?) => {
+    const ti = el('input', { class: 'dash-cp-task', type: 'text', placeholder: '태스크 이름', 'aria-label': '태스크' });
+    const del = el('button', { class: 'dash-cp-task-x', type: 'button', title: '삭제', 'aria-label': '태스크 삭제', text: '✕' });
+    const row = el('div', { class: 'dash-cp-task-row' }, ti, del);
+    del.onclick = () => { const i = taskInputs.indexOf(ti); if (i >= 0) taskInputs.splice(i, 1); row.remove(); };
+    ti.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); addTaskRow(true); } });
+    taskInputs.push(ti); taskList.append(row);
+    if (focus) setTimeout(() => ti.focus(), 10);
+  };
+  const addBtn = el('button', { class: 'dash-cp-addtask', type: 'button', text: '＋ 태스크 추가' });
+  addBtn.onclick = () => addTaskRow(true);
+  // 버튼들
+  const cancelBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소' });
+  const createBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기' });
+  const runBtn = el('button', { class: 'btn btn-primary btn-sm dash-cp-run', type: 'button', text: '만들고 Claude로 실행' });
+  const modelBtn = el('button', { class: 'btn btn-ghost btn-sm dash-cp-model', type: 'button' });
+  const setModelLabel = () => { modelBtn.textContent = '모델: ' + (dashDefaultModel() || '기본'); };
+  setModelLabel();
+  modelBtn.onclick = () => dashChoicePopover(modelBtn, 'LLM 기본값', [['', '(기본)'], ['opus', 'opus'], ['sonnet', 'sonnet'], ['haiku', 'haiku']], dashDefaultModel(), (k) => { dashSaveDefaultModel(k); setModelLabel(); });
+  const run = async (withClaude) => {
     const name = (input.value || '').trim();
     if (!name) { input.focus(); return; }
-    submitBtn.disabled = true; err.textContent = '';
+    const tasks = taskInputs.map((t) => (t.value || '').trim()).filter(Boolean);
+    createBtn.disabled = true; runBtn.disabled = true; err.textContent = '';
     try {
-      await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
-      toast('프로젝트를 만들었어요'); close(); onDone && onDone();
-    } catch (e: any) { err.textContent = '실패 — ' + (e && e.message || e); submitBtn.disabled = false; }
+      const pd = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name, list_id: listId || undefined }) });
+      const pid = pd && pd.project && pd.project.id;
+      for (const t of tasks) { try { await api('/api/ui/v6/projects/' + pid + '/tasks', { method: 'POST', body: JSON.stringify({ name: t }) }); } catch { /* 개별 태스크 실패는 무시(프로젝트는 이미 생성) */ } }
+      const tnote = tasks.length ? ' · 태스크 ' + tasks.length + '개' : '';
+      if (withClaude && pid) {
+        const model = dashDefaultModel();
+        const sd = await api('/api/ui/v6/projects/' + pid + '/sessions', { method: 'POST', body: JSON.stringify({ label: name, harness: 'claude', autoApprove: true, flags: model ? { '--model': model } : {} }) });
+        const sid = sd && sd.session && sd.session.id;
+        toast('프로젝트 생성 + Claude 세션 시작' + tnote); close(); onDone && onDone();
+        if (sid) window.open('/ui/terminal.html?session=' + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
+      } else {
+        toast('프로젝트를 만들었어요' + tnote); close(); onDone && onDone();
+      }
+    } catch (e: any) { err.textContent = '실패 — ' + (e && e.message || e); createBtn.disabled = false; runBtn.disabled = false; }
   };
-  submitBtn.onclick = submit;
-  input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  cancelBtn.onclick = () => close();
+  createBtn.onclick = () => run(false);
+  runBtn.onclick = () => run(true);
+  input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); run(false); } });
   const form = el('div', { class: 'dash-cp' },
     el('div', { class: 'dash-cp-where', text: l ? '리스트: ' + (l.name || '미분류') : '미분류(리스트 없음)' }),
-    input, err, el('div', { class: 'dash-cp-foot' }, submitBtn));
+    input,
+    el('div', { class: 'dash-cp-tasklabel' }, el('strong', { text: '태스크' }), el('span', { class: 'dash-cp-opt', text: '선택' })),
+    el('div', { class: 'dash-cp-taskhint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }),
+    taskList, addBtn, err,
+    el('div', { class: 'dash-cp-foot' }, cancelBtn, el('span', { class: 'dash-cp-foot-sp' }), createBtn, runBtn, modelBtn));
   const close = dashModal('새 프로젝트', form);
-  setTimeout(() => input.focus(), 30);
+  // 이름을 이미 인라인에서 받아왔으면(prefill) 바로 태스크 입력으로, 아니면 이름칸에 포커스.
+  if (prefillName) addTaskRow(true); else setTimeout(() => input.focus(), 30);
 }
 // ── R10+R11 리스트 프로젝트 팝업 — 그 리스트의 프로젝트를 프로젝트 탭식으로(상태·체크박스·벌크·새 프로젝트). 대시보드 네이티브 경량. ──
 async function openListProjectsModal(listId, listById, onChanged) {
