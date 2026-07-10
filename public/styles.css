@@ -4440,10 +4440,8 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 .dash-wh-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); text-decoration: none; }
 .dash-wh-btn:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .dash-wh-btn svg { display: block; }
-/* #758 '선택'(일괄 선택 모드) 토글 — 텍스트 버튼, 켜지면 파랑. */
-.dash-wh-sel { width: auto; padding: 0 9px; font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -.01em; }
-.dash-wh-sel.on { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 45%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, var(--bg)); }
-.dash-wh-sel.on:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 14%, var(--bg)); }
+/* #758 세션 보기 필터 드롭다운(전체 ▾) — 칩 4개를 대체한 텍스트 버튼. */
+.dash-wh-filter { width: auto; padding: 0 9px; gap: 3px; font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 /* 필터로 숨긴 세션 안내 줄 */
 /* 선택형 팝오버 옵션(⚙ 기본값 설정) */
 .dash-pop-opt { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; padding: 7px 8px; border: none; background: none; border-radius: 8px; cursor: pointer; font-family: inherit; text-align: left; }
@@ -4577,6 +4575,8 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-bulkbar-btn:hover { background: rgba(255,255,255,.24); }
 .dash-bulkbar-btn.danger { background: color-mix(in srgb, var(--coral) 60%, transparent); border-color: color-mix(in srgb, var(--coral) 50%, transparent); }
 .dash-bulkbar-btn.danger:hover { background: var(--coral); }
+.dash-bulkbar-push { margin-left: auto; } /* #758 삭제·완료 버튼을 우측으로 밀기 */
+.dash-bulkbar-btn:disabled { opacity: .4; cursor: default; }
 .dash-bulkbar-x { margin-left: auto; width: 28px; height: 28px; border: none; background: rgba(255,255,255,.12); color: #fff; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
 .dash-bulkbar-x:hover { background: rgba(255,255,255,.22); }
 /* 새 프로젝트 만들기(경량 모달) + 위젯 하단 '+ 새 프로젝트' 버튼. */
