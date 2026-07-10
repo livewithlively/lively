@@ -21,6 +21,9 @@ const COURSES = [
 
 const q = (sel: string) => document.querySelector(sel);
 function p(text: string) { return el('p', { class: 'tour-p', text }); }
+// 코치마크 본문 가독성(#761 피드백): 긴 문단 대신 짧은 줄 + 핵심만 굵게. b()=굵은 조각, pb(lead, rest)=굵은 리드 + 설명 한 줄.
+function b(text: string) { return el('b', { text }); }
+function pb(lead: string, rest: any) { return el('p', { class: 'tour-p' }, b(lead), rest); }
 
 // 상단 탭으로 이동시키는 스텝 — 실제 내비 링크를 스포트라이트, 직접 눌러야 진행(advanceOn:'click').
 function navStep(tab: string, title?: string) {
@@ -55,10 +58,14 @@ const SCENES: any[] = [
     build(ctx: any) {
       const steps: any[] = [];
       steps.push({ target: '.pjv-board-scroll, .pjv-board-wrap', padding: 4, title: '이 목록·할 일 관리는 익숙할 거예요',
-        body: '프로젝트를 폴더·리스트로 묶어 관리해요 — 여러분이 쓰던 클릭업과 최대한 비슷하게 맞췄어요. 그래서 이 앞부분은 빠르게 지나갈게요. 라이블리만의 진짜는 프로젝트 하나를 열었을 때 그 안에 있어요.' });
+        body: [
+          el('p', { class: 'tour-p' }, '프로젝트를 폴더·리스트로 묶어 관리해요 — ', b('쓰던 클릭업과 비슷하게'), ' 맞췄어요.'),
+          el('p', { class: 'tour-p' }, '여긴 빠르게 넘길게요. ', b('진짜 중요한 건 프로젝트 안'), '에 있어요.'),
+        ] });
       if (q('.pjv-trow-title')) {
         steps.push({ target: () => q('.pjv-trow-title'), scrollIntoView: true, advanceOn: 'click',
-          title: '프로젝트를 하나 열어볼까요?', body: '이름을 눌러 프로젝트 안으로 들어가 볼게요 — 여기부터가 핵심이에요.' });
+          title: '프로젝트를 하나 열어볼까요?',
+          body: el('p', { class: 'tour-p' }, '이름을 눌러 프로젝트 ', b('안'), '으로 들어가 볼게요 — 여기부터가 핵심이에요.') });
         return steps; // 클릭이 상세 장면으로 데려간다
       }
       // 열어 볼 프로젝트가 없을 때 — 만드는 곳만 짚고 다음 정거장/마무리로(막다른 길 0).
@@ -75,42 +82,47 @@ const SCENES: any[] = [
     build(ctx: any) {
       const steps: any[] = [];
       steps.push({ target: 'main .page-head', placement: 'bottom', title: '프로젝트 안 — 위에서부터 볼게요',
-        body: '제목을 누르면 바로 이름을 고쳐요. 오른쪽 [⚙ 프로젝트 세부 설정]에서 팀원·분류·연결 레포·AI 규칙·삭제를 다뤄요.' });
+        body: [
+          p('제목을 누르면 바로 이름을 고쳐요.'),
+          el('p', { class: 'tour-p' }, '오른쪽 ', b('[⚙ 세부 설정]'), ' — 팀원·분류·레포·AI 규칙·삭제.'),
+        ] });
 
       // ⭐ 선행/후행 프로젝트 — 라이블리 고유 ①. 속성판은 2열 그리드(선행=좌·후행=우)라 코치마크를 아래로 둬야
       //  오른쪽 칸(후행)이 안 가린다 → 패널 전체 스포트라이트 + placement 'bottom'.
       if (q('.pjv-proj-meta')) steps.push({
         target: '.pjv-proj-meta', placement: 'bottom', scrollIntoView: true, padding: 6,
-        title: '⭐ 선행 · 후행 프로젝트 — 라이블리다운 ①',
+        title: '⭐ 선행 · 후행 프로젝트',
         body: [
-          p('이 속성판 맨 윗줄 두 칸이에요 — 왼쪽이 선행, 오른쪽이 후행. 이 일이 어떤 일 뒤에 오고(선행), 어떤 일로 이어지는지(후행)를 서로 연결해요. (아래 상태·팀원·기간은 익숙한 속성이에요.)'),
-          p('왜 좋냐면 — 흩어진 프로젝트가 순서·의존으로 이어져 큰 그림이 잡히고, 이 프로젝트를 맡은 AI도 “이건 X 다음 단계”라는 맥락을 안 채로 시작해요. 후속을 만들 땐 선행의 연결 지식·배경까지 그대로 물려받아요.'),
+          el('p', { class: 'tour-p' }, b('맨 윗줄 두 칸'), ' — 왼쪽 선행, 오른쪽 후행. 이 일의 앞뒤 프로젝트를 이어 둬요. (나머지는 상태·팀원 등 익숙한 속성.)'),
+          pb('좋은 점: ', '일의 순서가 한눈에 잡히고, AI도 “이건 X 다음 단계”를 안 채로 시작해요.'),
         ],
       });
 
       // 개요(본문)
       if (cardByHeading(/^본문$/)) steps.push({ target: () => cardByHeading(/^본문$/), scrollIntoView: true,
-        title: '개요', body: '이 일이 왜·무엇인지 적는 곳이에요. 여기 적은 배경도 이 프로젝트의 AI 세션에 함께 전달돼요.' });
+        title: '개요',
+        body: el('p', { class: 'tour-p' }, '이 일이 ', b('왜·무엇인지'), ' 적는 곳. 여기 배경도 이 프로젝트 AI 세션에 함께 전달돼요.') });
 
       // ⭐ 연결된 지식 — 라이블리 고유 ②
       if (knFlowCard()) steps.push({ target: knFlowCard, scrollIntoView: true,
-        title: '⭐ 연결된 지식 — 라이블리다운 ②',
+        title: '⭐ 연결된 지식',
         body: [
-          p('WIKI에 쌓인 회사 지식을 이 프로젝트의 ‘필요지식’으로 연결해요.'),
-          p('왜 좋냐면 — 이 프로젝트를 맡은 AI가 그 지식을 처음부터 손에 쥐고 시작해요. 배경을 매번 설명 안 해도 되고, 팀이 내린 결정대로 정확히 일해요. 일하며 새로 만든 지식은 ‘산출’로 여기 쌓여, 다음 사람·다음 AI가 또 씁니다.'),
+          el('p', { class: 'tour-p' }, 'WIKI 지식을 이 프로젝트의 ', b('‘필요지식’'), '으로 붙여둬요.'),
+          pb('좋은 점: ', 'AI가 그 내용을 처음부터 알고 시작 — 배경 설명 반복 없이, 팀 결정대로. (새로 만든 지식은 ‘산출’로 쌓여요.)'),
         ],
       });
 
       // 할 일(태스크) — 클릭업류, 짧게
       if (q('main .pjv-tasks-card')) steps.push({ target: 'main .pjv-tasks-card', scrollIntoView: true, padding: 4,
-        title: '할 일 (태스크)', body: '프로젝트를 잘게 나눠 관리해요 — 이 부분도 클릭업과 비슷해서 금방 익숙해질 거예요.' });
+        title: '할 일 (태스크)',
+        body: el('p', { class: 'tour-p' }, '프로젝트를 잘게 나눠 관리 — ', b('이 부분도 클릭업과 비슷'), '해요.') });
 
       // 공유 폴더 — '어디에' 생기나
       if (cardByHeading(/공유 폴더/)) steps.push({ target: () => cardByHeading(/공유 폴더/), scrollIntoView: true,
         title: '공유 폴더 — 파일은 “어디에” 생기나',
         body: [
-          p('이 프로젝트 전용 폴더예요. 올린 파일은 내 컴퓨터가 아니라 라이블리 중앙(박스)의 이 프로젝트 폴더에 저장돼요.'),
-          p('그래서 팀원 모두가 같은 파일을 보고, 이 프로젝트의 AI 세션도 바로 이 폴더에서 열려 이 파일들을 곧장 읽어요. 끌어다 놓거나 붙여넣기(⌘V)로 올릴 수 있어요.'),
+          el('p', { class: 'tour-p' }, '이 프로젝트 전용 폴더 — 파일은 ', b('내 PC가 아니라 중앙(박스)'), '에 저장돼요.'),
+          p('그래서 팀원 모두 같은 파일을 보고, 이 프로젝트 AI 세션도 여기서 열려 바로 읽어요. 끌어다 놓기·붙여넣기(⌘V)로 올려요.'),
         ],
       });
 
@@ -118,7 +130,7 @@ const SCENES: any[] = [
       if (q('.proj-term-card')) {
         steps.push({ target: '.proj-term-card', scrollIntoView: true,
           title: '⭐ 터미널 세션 — 이 프로젝트에서 AI 켜기',
-          body: '이 프로젝트 폴더에서 여는 AI 작업 세션이에요. 팀원별로 세션이 모여 보여, 누가 무슨 작업을 켰는지 한눈에 알 수 있어요.' });
+          body: el('p', { class: 'tour-p' }, '이 프로젝트에서 여는 ', b('AI 작업 세션'), '이에요. 팀원별로 모여 보여, 누가 뭘 켰는지 한눈에.') });
         steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left', advanceOn: 'click',
           title: '세션 만들기 ① — ＋ 새 세션', body: '오른쪽 위 [＋ 새 세션]을 눌러 볼게요.' });
         // 드롭다운: 두 옵션을 설명하되 클릭 진행은 '웹에서 바로 열기'에만 건다 — '내 PC' 항목은 딤에 가려 못 눌러
@@ -126,19 +138,31 @@ const SCENES: any[] = [
         steps.push({ target: '[data-tour="sess-web"]', placement: 'left', advanceOn: 'click',
           title: '세션 만들기 ② — 어디서 켤까',
           body: [
-            p('두 갈래가 떠요 — 💻 내 PC에서 열기(개발자용, 내 컴퓨터에 설치해 실행)와 ☁️ 웹에서 바로 열기(설치 없이 중앙 박스에서 여는 팀 공용 세션).'),
-            p('비개발자는 웹이 제일 쉬워요. 밝게 표시된 [☁️ 웹에서 바로 열기]를 눌러 만들기 창을 띄워 볼게요.'),
+            p('두 갈래가 떠요:'),
+            el('p', { class: 'tour-p' }, b('💻 내 PC'), ' — 개발자용. 내 컴퓨터에 설치.'),
+            el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 여는 팀 공용. 비개발자는 이게 쉬워요.'),
+            el('p', { class: 'tour-p' }, '밝은 ', b('[☁️ 웹에서 바로 열기]'), '를 눌러 볼게요.'),
           ] });
         steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
-          title: '만들기 창 — 세션 이름', body: '나중에 알아보기 쉽게 이름을 정해요. 예: “랜딩 카피 수정”.' });
+          title: '만들기 창 — 세션 이름',
+          body: el('p', { class: 'tour-p' }, '알아보기 쉽게 이름을 정해요. 예: ', b('“랜딩 카피 수정”'), '.') });
         steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
-          title: '코드 저장소 (선택)', body: '코드를 다루는 작업이면 저장소를 고르세요 — 박스가 그 코드를 자동으로 가져와 AI가 바로 작업하게 준비해요. 코드 작업이 아니면 비워두면 돼요(공유 폴더만 써요).' });
+          title: '코드 저장소 (선택)',
+          body: [
+            p('코드 작업이면 저장소를 고르세요 — 박스가 그 코드를 자동으로 가져와 준비해요.'),
+            el('p', { class: 'tour-p' }, b('코드가 아니면 비워도 돼요.')),
+          ] });
         steps.push({ target: '.proj-sess-preset', placement: 'right', scrollIntoView: true,
-          title: '실행 설정', body: '함께 일할 AI·모델과 자동 승인 여부예요. 이전 설정을 기억하니 보통 그대로 두면 되고, 잘 모르겠으면 기본값으로.' });
+          title: '실행 설정',
+          body: el('p', { class: 'tour-p' }, '함께 일할 ', b('AI·모델'), '과 자동 승인. 이전 설정을 기억하니 보통 그대로 둬도 돼요.') });
         steps.push({ target: '[data-tour="sess-create"]', placement: 'top', scrollIntoView: true,
-          title: '만들면 이렇게 돼요', body: '[만들고 입장]을 누르면 중앙 박스에 세션이 열리고 새 탭에 까만 터미널 창이 떠요 — 거기서 AI에게 바로 말을 걸면 됩니다. 회사 맥락과 이 프로젝트 맥락(연결된 지식·개요)은 이미 들어가 있어요.' });
+          title: '만들면 이렇게 돼요',
+          body: [
+            el('p', { class: 'tour-p' }, b('[만들고 입장]'), '을 누르면 새 탭에 터미널이 열려요 — AI에게 바로 말을 걸면 돼요.'),
+            p('회사·이 프로젝트 맥락은 이미 들어가 있어요.'),
+          ] });
         steps.push({ target: '[data-tour="sess-cancel"]', placement: 'top', advanceOn: 'click',
-          title: '둘러보기라 여기까지', body: '실제로 만들지는 않을게요 — [취소]를 눌러 닫고 계속할게요.' });
+          title: '둘러보기라 여기까지', body: '실제로 만들지는 않을게요 — [취소]로 닫고 계속할게요.' });
       }
       return steps.concat(tail(ctx));
     },
@@ -150,14 +174,20 @@ const SCENES: any[] = [
     build(ctx: any) {
       const steps: any[] = [];
       steps.push({ target: '.dmx-canvas', padding: 4, title: '제품 코드의 지도',
-        body: '상자 하나가 기능 덩어리(도메인), 화살표는 의존 관계예요. 이 안에서는 자유롭게 끌고 확대해 봐도 좋아요.' });
+        body: [
+          el('p', { class: 'tour-p' }, '상자 하나가 ', b('기능 덩어리(도메인)'), ', 화살표는 의존이에요.'),
+          p('드래그·휠로 자유롭게 움직여 봐도 좋아요.'),
+        ] });
       if (q('.dmx-controls')) steps.push({ target: '.dmx-controls', title: '의도 vs 실제',
-        body: '하려던 구조(should)와 실제 코드(is)를 겹쳐 보고, 서로 어긋난 곳(괴리)을 찾는 스위치예요.' });
+        body: el('p', { class: 'tour-p' }, b('하려던 구조(should)'), '와 ', b('실제 코드(is)'), '를 겹쳐 보고, 어긋난 곳을 찾는 스위치예요.') });
       if (q('.dmx-node')) {
-        steps.push({ target: () => q('.dmx-node'), advanceOn: 'click',
-          title: '도메인 속 들여다보기', body: '이 상자를 눌러 보세요.' });
+        // 노드는 선택 시 그래프가 재렌더돼(draw) click 리스너 타깃이 사라진다 → advanceOn:'click' 무효.
+        //  대신 advanceWhen(패널 열림)으로 진행하고 [다음]도 노출(절대 안 막힘). (#761 사용자 리포트)
+        steps.push({ target: () => q('.dmx-node'), advanceWhen: () => !!q('.dmx-panel.open'),
+          title: '도메인 속 들여다보기',
+          body: el('p', { class: 'tour-p' }, '상자를 하나 눌러 보세요 — 오른쪽에 그 도메인의 ', b('자세히'), '가 열려요.') });
         steps.push({ target: '.dmx-panel.open', placement: 'left', title: '정의 · 범위 · 괴리',
-          body: '이 도메인이 무엇인지(의도), 실제 코드는 어떤지, 어긋남은 없는지 보여줘요.' });
+          body: el('p', { class: 'tour-p' }, '이 도메인의 ', b('정의·범위(의도)'), ', 실제 코드, 둘의 ', b('어긋남(괴리)'), '을 보여줘요.') });
       }
       return steps.concat(tail(ctx));
     },

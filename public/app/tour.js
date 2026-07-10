@@ -94,8 +94,8 @@ function startTour(steps, opts) {
             else
                 bodyWrap.append(step.body);
         }
-        if (step.advanceOn === 'click')
-            bodyWrap.append(el('p', { class: 'tour-hint', text: '↑ 강조된 버튼을 직접 눌러 보세요.' }));
+        if (step.advanceOn === 'click' || step.advanceWhen)
+            bodyWrap.append(el('p', { class: 'tour-hint', text: step.advanceWhen ? '↑ 강조된 곳을 눌러 보세요 (또는 아래 [다음]).' : '↑ 강조된 버튼을 직접 눌러 보세요.' }));
         const kids = [
             el('div', { class: 'tour-pop-top' }, counter, close),
             el('div', { class: 'tour-title', text: step.title }),
@@ -113,6 +113,22 @@ function startTour(steps, opts) {
         if (active !== t)
             return; // 내 투어가 교체/종료됐으면 이 rAF 루프도 멈춤(스테일 프레임 방지)
         const step = steps[t.i];
+        // advanceWhen — 조건(예: 도메인맵 패널 열림)이 충족되면 자동 진행. 클릭 후 타깃이 재렌더돼 click 리스너가
+        //  유실되는 요소를 위한 경로(그런 요소는 advanceOn:'click' 이 안 먹는다). raf=0 로 두고 go 가 루프를 재개한다.
+        if (step.advanceWhen) {
+            let met = false;
+            try {
+                met = !!step.advanceWhen();
+            }
+            catch (_) {
+                met = false;
+            }
+            if (met) {
+                t.raf = 0;
+                go(t.i + 1);
+                return;
+            }
+        }
         const target = resolve(step);
         const pad = step.padding == null ? 8 : step.padding;
         const r = target ? target.getBoundingClientRect() : null;
