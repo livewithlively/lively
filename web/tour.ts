@@ -17,6 +17,7 @@ interface TourStep {
   advanceOn?: 'click' | 'next';               // 'click' = 강조된 실제 요소를 누르면 자동으로 다음 단계
   advanceWhen?: () => boolean;                // 매 프레임 평가해 true 면 자동 진행. 타깃이 클릭 후 재렌더돼
   //   click 리스너가 유실되는 요소(예: 도메인맵 노드 → 선택 시 그래프 재렌더)에 쓴다. [이전]/[다음]도 함께 노출(안 막힘).
+  onAdvance?: () => void;                      // [다음] 클릭 시 go 대신 실행(예: 데모 프로젝트로 라우팅). 설정 시 [다음]이 이걸 호출.
   advanceDelay?: number;                      // click 자동진행 지연(ms) — 모달 오픈/폼 제출이 먼저 일어나게(기본 80)
   scrollIntoView?: boolean;                   // 진입 시 타깃을 화면에 보이게 스크롤(모달 하단 버튼 등)
   ctaNext?: string;                           // [다음] 버튼 라벨 오버라이드(마지막 단계 '마치기' 등)
@@ -102,7 +103,9 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
     ];
     if (step.advanceOn !== 'click') {
       const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '이전', onclick: () => go(idx - 1), disabled: idx === 0 });
-      const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'), onclick: () => go(idx + 1) });
+      // onAdvance — [다음] 을 누르면 go 대신 이걸 실행(예: 데모 프로젝트로 라우팅). 라우팅이면 route→resume 이 흐름을 잇는다.
+      const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'),
+        onclick: () => { if (step.onAdvance) step.onAdvance(); else go(idx + 1); } });
       kids.push(el('div', { class: 'tour-pop-foot' }, prev, next));
     }
     pop.replaceChildren(...kids);

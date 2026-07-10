@@ -54,24 +54,19 @@ const SCENES: any[] = [
     // 보드(앞단) — 목록·할 일 관리는 클릭업과 거의 같다(#761 요청): 짧게 넘기고 곧장 '프로젝트 안'으로.
     key: 'projects-board', tab: 'projects2',
     match: (h: string) => h.startsWith('#/projects2') && !h.startsWith('#/projects2/p/'),
-    ready: () => !!q('.pjv-board-wrap'), hint: '.pjv-trow-title',
-    build(ctx: any) {
-      const steps: any[] = [];
-      steps.push({ target: '.pjv-board-scroll, .pjv-board-wrap', padding: 4, title: '이 목록·할 일 관리는 익숙할 거예요',
+    ready: () => !!q('.pjv-board-wrap'),
+    build() {
+      // 실제 데이터 대신 이해를 돕는 예시 프로젝트(#/projects2/p/__demo__)로 데려간다(#761) — 실데이터·빈 조직 무관.
+      return [{
+        target: '.pjv-board-scroll, .pjv-board-wrap', padding: 4,
+        title: '이 목록·할 일 관리는 익숙할 거예요',
         body: [
           el('p', { class: 'tour-p' }, '프로젝트를 폴더·리스트로 묶어 관리해요 — ', b('쓰던 클릭업과 비슷하게'), ' 맞췄어요.'),
-          el('p', { class: 'tour-p' }, '여긴 빠르게 넘길게요. ', b('진짜 중요한 건 프로젝트 안'), '에 있어요.'),
-        ] });
-      if (q('.pjv-trow-title')) {
-        steps.push({ target: () => q('.pjv-trow-title'), scrollIntoView: true, advanceOn: 'click',
-          title: '프로젝트를 하나 열어볼까요?',
-          body: el('p', { class: 'tour-p' }, '이름을 눌러 프로젝트 ', b('안'), '으로 들어가 볼게요 — 여기부터가 핵심이에요.') });
-        return steps; // 클릭이 상세 장면으로 데려간다
-      }
-      // 열어 볼 프로젝트가 없을 때 — 만드는 곳만 짚고 다음 정거장/마무리로(막다른 길 0).
-      if (q('.pjv-addrow-trigger')) steps.push({ target: '.pjv-addrow-trigger', title: '새 프로젝트는 여기서',
-        body: '[＋ 프로젝트]로 새 일을 등록해요. (지금은 열어 볼 프로젝트가 없어, 안쪽 기능은 실제 프로젝트가 생기면 볼 수 있어요.)' });
-      return steps.concat(tail(ctx));
+          el('p', { class: 'tour-p' }, '여긴 빠르게 넘길게요. ', b('진짜는 프로젝트 안'), '에 있어요 — 예시로 하나 열어볼게요.'),
+        ],
+        ctaNext: '예시 프로젝트 열기 →',
+        onAdvance: () => { location.hash = '#/projects2/p/__demo__'; },
+      }];
     },
   },
   {
@@ -83,7 +78,7 @@ const SCENES: any[] = [
       const steps: any[] = [];
       steps.push({ target: 'main .page-head', placement: 'bottom', title: '프로젝트 안 — 위에서부터 볼게요',
         body: [
-          p('제목을 누르면 바로 이름을 고쳐요.'),
+          el('p', { class: 'tour-p' }, '예시 프로젝트 ', b('“새 요금제 ‘팀 플랜’ 출시”'), ' 예요. 이름·상태가 위에 있어요.'),
           el('p', { class: 'tour-p' }, '오른쪽 ', b('[⚙ 세부 설정]'), ' — 팀원·분류·레포·AI 규칙·삭제.'),
         ] });
 

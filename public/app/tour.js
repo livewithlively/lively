@@ -103,7 +103,12 @@ function startTour(steps, opts) {
         ];
         if (step.advanceOn !== 'click') {
             const prev = el('button', { class: 'btn btn-ghost btn-sm', text: '이전', onclick: () => go(idx - 1), disabled: idx === 0 });
-            const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'), onclick: () => go(idx + 1) });
+            // onAdvance — [다음] 을 누르면 go 대신 이걸 실행(예: 데모 프로젝트로 라우팅). 라우팅이면 route→resume 이 흐름을 잇는다.
+            const next = el('button', { class: 'btn btn-primary btn-sm', text: step.ctaNext || (last ? '마치기' : '다음 →'),
+                onclick: () => { if (step.onAdvance)
+                    step.onAdvance();
+                else
+                    go(idx + 1); } });
             kids.push(el('div', { class: 'tour-pop-foot' }, prev, next));
         }
         pop.replaceChildren(...kids);
