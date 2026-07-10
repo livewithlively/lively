@@ -161,22 +161,22 @@ const SCENES = [
     {
         key: 'wiki', tab: 'knowledge',
         match: (h) => h.startsWith('#/knowledge'),
-        ready: () => !!q('.kn-side, main .list-box'), hint: 'main .list-box .row',
+        ready: () => !!q('.kn-side, .wk-home, .wk-cat'), hint: 'main .wk-row', // #764 재구축 표면
         build(ctx) {
             const steps = [];
             if (q('.kn-side'))
                 steps.push({ target: '.kn-side', placement: 'right', title: 'AI가 읽는 지식 창고',
                     body: '회사의 규칙·결정·자료가 사업·제품·시스템으로 분류돼 쌓여요. 📌 인덱스에 핀된 지식은 매 대화 첫머리에 항상 깔려요.' });
-            // 검색 — 홈(전체) 뷰는 사이드바 검색(.pjv-side-search), 카테고리 목록 뷰는 상단 검색(.kn-search-group).
-            if (q('.kn-search-group, .kn-side .pjv-side-search'))
+            // 검색 — 사이드바 분류·지식 검색(전문 의미검색은 ⌘K).
+            if (q('.kn-side .pjv-side-search'))
                 steps.push({
-                    target: '.kn-search-group, .kn-side .pjv-side-search', title: '검색 — AI도 이렇게 찾아요',
+                    target: '.kn-side .pjv-side-search', title: '검색 — AI도 이렇게 찾아요',
                     body: '여기서 검색하는 그대로, AI도 일할 때 이 지식을 검색해 꺼내 써요. 잘 쌓일수록 AI가 똑똑해져요.'
                 });
-            if (q('main .list-box .row')) {
-                steps.push({ target: () => q('main .list-box .row'), scrollIntoView: true, advanceOn: 'click',
+            if (q('main .wk-row')) {
+                steps.push({ target: () => q('main .wk-row'), scrollIntoView: true, advanceOn: 'click',
                     title: '하나 열어볼까요?', body: '지식을 누르면 오른쪽에 살짝 열려요(피크).' });
-                steps.push({ target: '.kn-peek', placement: 'left', title: '지식 한 덩어리',
+                steps.push({ target: '.wk-peek', placement: 'left', title: '지식 한 덩어리',
                     body: '제목·본문과 분류·핀 상태가 한눈에 — 이 내용이 그대로 AI에게 전달되는 회사 맥락이에요.' });
             }
             return steps.concat(tail(ctx));
@@ -193,7 +193,7 @@ function cardByHeading(re) {
 }
 function knFlowCard() { return cardByHeading(/연결된 지식/); }
 // 둘러보기 중 사용자가 연 임시 오버레이(세션 만들기 모달·＋새 세션 드롭다운)를 장면이 끝날 때 정리(#761) —
-//  탭 이동 스텝(navStep)이 모달에 가려 안 눌리거나, 마무리/이탈 후 잔여 모달이 남지 않게. 지식 피크(.kn-peek)는 건드리지 않는다.
+//  탭 이동 스텝(navStep)이 모달에 가려 안 눌리거나, 마무리/이탈 후 잔여 모달이 남지 않게. 지식 피크(.wk-peek)는 건드리지 않는다.
 function closeStrayOverlays() {
     document.querySelectorAll('.ov-back, .pjv-pop').forEach((n) => n.remove());
 }

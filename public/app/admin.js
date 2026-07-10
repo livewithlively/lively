@@ -1,6 +1,6 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
-import { SPACE_SUBS, openCategoryForm } from './knowledge.js';
+import { SPACE_SUBS, openCategoryForm } from './category-form.js'; // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 // ════════════════════════════════════════════════════════════════════
 // 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에

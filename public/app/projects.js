@@ -1,6 +1,6 @@
 // projects.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, personFace, relTime, renderMarkdown, safeHref, state, sv, toast } from './core.js';
-import { SPACE_LABEL, knInjectChip, knProvChip } from './knowledge.js';
+import { SPACE_LABEL, knInjectChip, knProvChip } from './wiki-data.js'; // #764 — knowledge.ts 해체(미사용 심볼 정리: knRow 등은 로컬 정의가 섀도잉하고 있었음)
 import { activityTimelineRow } from './dashboard.js';
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { loadAdmin } from './admin.js';

@@ -1,8 +1,8 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
-import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
-import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
+import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
+import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
@@ -34,10 +34,10 @@ async function route() {
     // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
     //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
     //  (#761) 투어 정리는 이 가드 '뒤'에서 — 피크 개폐만으로는 진행 중 둘러보기를 죽이지 않는다(본문도 그대로니까).
-    if (consumeKnPeekNavGuard())
+    if (consumeWikiPeekGuard())
         return;
     endTour(); // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
-    dismissKnowledgePeek();
+    dismissWikiPeek();
     if (!state.me) {
         showGate();
         return;
@@ -75,20 +75,21 @@ async function route() {
             await renderDomainmap(view, params);
         }
         else if (page === 'knowledge') {
-            setActiveTab('knowledge'); // 지식(맥락의 기록) — 사업·제품·시스템 + 통계·검토. injection/provenance 직교축.
-            await renderKnowledge(view, segs[1] || 'business', params);
+            setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
+            await renderWiki(view, segs[1] || '', params);
         }
         else if (page === 'trash') {
             setActiveTab('knowledge'); // 휴지통(삭제됨)은 지식 탭 계열의 하위 회수 뷰 — 상위 탭 활성 유지
-            await renderTrash(view);
+            await renderWikiTrash(view);
         }
         else if (page === 'k') {
             setActiveTab('knowledge'); // 지식 상세는 지식 탭의 하위 뷰 — 상위 탭 활성 유지
-            await renderKnowledgeDetail(view, decodeURIComponent(segs.slice(1).join('/')));
+            await renderWikiDocPage(view, decodeURIComponent(segs.slice(1).join('/')));
         }
         else if (page === 'k-edit') {
-            setActiveTab('knowledge'); // 지식 편집(별도 페이지, 모달 아님 #290) — #/k-edit/<name>
-            await renderKnowledgeForm(view, undefined, decodeURIComponent(segs.slice(1).join('/')));
+            // #764 — 별도 편집 페이지 폐지(문서 페이지가 곧 에디터). 구 링크·북마크는 문서로 리다이렉트(MD 원문은 ⋯ 메뉴).
+            location.replace('#/k/' + segs.slice(1).join('/'));
+            return;
         }
         else if (page === 'projects') {
             // v1 프로젝트 탭 폐기(2026-06-23) — projects2 로 통합. 옛 링크/북마크는 리다이렉트.
