@@ -200,6 +200,11 @@ function dashCtl(zone, opts) {
     if (!ctl)
         return;
     const kids = [];
+    if (opts.select) { // #758 일괄 선택 모드 토글 — 켜면 카드에 체크박스 노출(평소엔 숨김). 켠 상태는 파랑.
+        const s = el('button', { class: 'dash-wh-btn dash-wh-sel' + (opts.select.on ? ' on' : ''), type: 'button', title: opts.select.title, 'aria-pressed': opts.select.on ? 'true' : 'false', text: opts.select.on ? '완료' : '선택' });
+        s.onclick = () => opts.select.toggle();
+        kids.push(s);
+    }
     if (opts.gear) {
         const g = el('button', { class: 'dash-wh-btn dash-wh-btn-gear', type: 'button', title: opts.gear.title, 'aria-label': opts.gear.title }, dashGearIcon());
         g.onclick = () => opts.gear.open(g);
@@ -847,6 +852,7 @@ const DASH_SESS_FILTER_KEY = 'dash_sess_filter_v1'; // 내 AI 세션 기본 필�
 const DASH_SESS_SHOWCLOSED_KEY = 'dash_sess_showclosed_v1'; // 완료·보관 프로젝트 세션 포함 여부(기본 off=숨김) #req
 const DASH_SESS_ONLINEONLY_KEY = 'dash_sess_onlineonly_v1'; // 접속 중(온라인=attached) 세션만 보기(기본 off) #670
 const DASH_SESS_SORT_KEY = 'dash_sess_sort_v1'; // 세션 카드 정렬(smart|recent|name) #req
+const DASH_SESS_DENSITY_KEY = 'dash_sess_density_v1'; // 세션 카드 보기 밀도(full=자세히 기본 | compact=간략히) #758
 const DASH_LOG_TYPE_KEY = 'dash_log_type_v1'; // 작업 로그 기본 유형 필터(''=전체 | feature·fix·… #req R14)
 function dashFoldView() { try {
     return localStorage.getItem(DASH_FOLD_VIEW_KEY) === 'list' ? 'list' : 'icon';
@@ -921,6 +927,20 @@ function dashSaveDefaultModel(v) { try {
         localStorage.setItem('dash_default_model_v1', v);
     else
         localStorage.removeItem('dash_default_model_v1');
+}
+catch { /* 무시 */ } }
+// #758 세션 카드 보기 밀도 — full(자세히, 기본=#745 리치 2줄 카드) | compact(간략히, 한 줄). ⚙ 설정 팝오버에서 선택, 기기별 저장.
+function dashSessDensity() { try {
+    return localStorage.getItem(DASH_SESS_DENSITY_KEY) === 'compact' ? 'compact' : 'full';
+}
+catch {
+    return 'full';
+} }
+function dashSaveSessDensity(v) { try {
+    if (v === 'compact')
+        localStorage.setItem(DASH_SESS_DENSITY_KEY, 'compact');
+    else
+        localStorage.removeItem(DASH_SESS_DENSITY_KEY);
 }
 catch { /* 무시 */ } }
 function dashLogType() { try {
@@ -1182,12 +1202,17 @@ async function fillSessions(zone, onCount, projectsP) {
     let showClosed = dashSessShowClosed();
     let onlineOnly = dashSessOnlineOnly(); // #670 접속 중(온라인=attached) 세션만 보기
     let sortMode = dashSessSort(); // active(최근 작업순) | recent(최근 생성순) | name(작업 제목순)
+    let density = dashSessDensity(); // #758 full(자세히·기본) | compact(간략히) — 카드 한 줄로 접기
     const isProjClosed = (p) => !!p && (p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed'); // 내 프로젝트 모달 isDone 과 동형
     const closedPids = new Set((projects || []).filter(isProjClosed).map((p) => p.id));
     const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid); };
+    let selectMode = false; // #758 일괄 선택 모드 — 평소엔 체크박스 숨김, '선택' 버튼으로 켜야 노출.
     const setShowClosed = (v) => { showClosed = v; dashSaveSessShowClosed(v); draw(); };
     const setOnlineOnly = (v) => { onlineOnly = v; dashSaveSessOnlineOnly(v); draw(); };
     const setSortMode = (v) => { sortMode = v; dashSaveSessSort(v); draw(); };
+    const setDensity = (v) => { density = v; dashSaveSessDensity(v); draw(); }; // #758
+    const setSelectMode = (v) => { selectMode = v; if (!v)
+        selected.clear(); renderCtl(); draw(); }; // #758 끄면 선택 해제
     // #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
     const selected = new Set();
     const killSelected = async () => {
@@ -1254,7 +1279,7 @@ async function fillSessions(zone, onCount, projectsP) {
                             : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
             return;
         }
-        const list = el('div', { class: 'dash-sess-list' });
+        const list = el('div', { class: 'dash-sess-list' + (density === 'compact' ? ' compact' : '') + (selectMode ? ' selectmode' : '') }); // #758 간략히=한 줄 카드 · 선택모드=체크박스 노출
         for (const s of shown) {
             // #req 재설계 — 상태(작업중/대기중)가 카드의 주인공. 좌측 색 레일 + 색 상태라벨로 한눈에 스캔.
             const stt = dashSessState(s); // { key, label }
@@ -1378,9 +1403,22 @@ async function fillSessions(zone, onCount, projectsP) {
             row.onclick = () => { close(); setSortMode(k); };
             panel.append(row);
         }
+        // #758 카드 보기 밀도 — 자세히(리치 2줄) vs 간략히(한 줄). '두 줄이어서 짧던' 예전 느낌으로 접을 수 있게.
+        panel.append(el('div', { class: 'dash-pop-gh', text: '카드 보기' }));
+        for (const [k, label, desc] of [['full', '자세히 (기본)', '상태·프로젝트·시각까지 보여주는 카드'], ['compact', '간략히', '한 줄로 접어 더 많은 세션을 한눈에']]) {
+            const row = el('button', { class: 'dash-pop-opt' + (k === density ? ' sel' : ''), type: 'button' }, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: label }), el('span', { class: 'dash-pop-desc', text: desc })), k === density ? el('span', { class: 'dash-pop-check', text: '✓' }) : null);
+            row.onclick = () => { close(); setDensity(k); };
+            panel.append(row);
+        }
         close = dashPopover(a, panel);
     };
-    dashCtl(zone, { gear: { title: '세션 표시 설정', open: openSessPrefs }, action: { href: '#/terminal', title: '터미널로' } });
+    // 헤더 컨트롤 — [선택](일괄 선택 모드) + [⚙ 설정] + [→ 터미널]. 선택 모드 토글 시 버튼 상태 갱신 위해 재렌더.
+    const renderCtl = () => dashCtl(zone, {
+        select: { on: selectMode, title: selectMode ? '선택 완료' : '세션 선택 (일괄 삭제)', toggle: () => setSelectMode(!selectMode) },
+        gear: { title: '세션 표시 설정', open: openSessPrefs },
+        action: { href: '#/terminal', title: '터미널로' },
+    });
+    renderCtl();
     draw();
 }
 // #req 세션 상태(4단계) → { key, label }. 서버가 CPU·pane 내용으로 판정한 s.agentState 를 그대로 매핑.

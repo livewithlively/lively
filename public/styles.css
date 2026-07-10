@@ -4433,6 +4433,10 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 .dash-wh-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); text-decoration: none; }
 .dash-wh-btn:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .dash-wh-btn svg { display: block; }
+/* #758 '선택'(일괄 선택 모드) 토글 — 텍스트 버튼, 켜지면 파랑. */
+.dash-wh-sel { width: auto; padding: 0 9px; font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -.01em; }
+.dash-wh-sel.on { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 45%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, var(--bg)); }
+.dash-wh-sel.on:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 14%, var(--bg)); }
 /* 필터로 숨긴 세션 안내 줄 */
 /* 선택형 팝오버 옵션(⚙ 기본값 설정) */
 .dash-pop-opt { display: flex; align-items: center; justify-content: space-between; gap: 9px; width: 100%; padding: 7px 8px; border: none; background: none; border-radius: 8px; cursor: pointer; font-family: inherit; text-align: left; }
@@ -4598,9 +4602,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-empty-desc { font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
 .dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 5px; }
 /* #req 세션 카드 — 0부터 재설계. 좌측 상태 레일(색) + 굵은 색 상태라벨로 '작업중/대기중'을 한눈에. 2줄: 제목 / 상태·프로젝트·시간, [열기]·[⋮] 우측 중앙. */
-.dash-scard { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
+.dash-scard { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
 .dash-scard:hover { border-color: var(--muted-2); box-shadow: 0 1px 5px rgba(21,35,59,.05); }
-.dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 12px 0 0 12px; background: var(--line); }
+.dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--line); } /* #758 라운딩은 카드 overflow:hidden 이 클립 — 레일이 모서리 밖으로 삐져나오지 않게 */
 /* 상태별 레일 — 작업중은 살짝 주황 배경까지 줘서 목록에서 도드라지게. */
 .dash-scard.is-busy::before { background: #f59e0b; }
 .dash-scard.is-busy { background: color-mix(in srgb, #f59e0b 6%, var(--bg)); border-color: color-mix(in srgb, #f59e0b 32%, var(--line)); }
@@ -4637,10 +4641,20 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard-open:hover { background: var(--bg-punch); }
 .dash-scard-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
 .dash-scard-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
-/* 세션 일괄 선택 체크박스 — 평소 옅게, 호버·선택 시 뚜렷. */
-.dash-sess-checkwrap { flex: none; display: flex; align-items: center; }
-.dash-sess-check { width: 16px; height: 16px; cursor: pointer; opacity: .3; transition: opacity .12s; accent-color: var(--accent, #5b6cff); }
-.dash-scard:hover .dash-sess-check, .dash-sess-list.has-sel .dash-sess-check, .dash-sess-check:checked { opacity: 1; }
+/* #758 세션 일괄 선택 체크박스 — 평소엔 숨김, 헤더 '선택' 버튼으로 선택 모드를 켜야 노출(항상 보일 필요 없음). */
+.dash-sess-checkwrap { flex: none; display: none; align-items: center; }
+.dash-sess-list.selectmode .dash-sess-checkwrap { display: flex; }
+.dash-sess-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent, #5b6cff); }
+/* #758 간략히(compact) 보기 — 카드를 한 줄로 접어 더 많은 세션을 한눈에. 상태는 좌측 색 레일 + 작은 점(작업중·확인필요는 점이 깜빡). 프로젝트/시각은 유지, 상태 라벨·초대 배지는 접는다. */
+.dash-sess-list.compact { gap: 5px; }
+.dash-sess-list.compact .dash-scard { padding-top: 6px; padding-bottom: 6px; }
+.dash-sess-list.compact .dash-scard-main { flex-direction: row; align-items: center; gap: 8px; }
+.dash-sess-list.compact .dash-scard-name { flex: 1 1 auto; min-width: 3em; font-size: 13px; }
+.dash-sess-list.compact .dash-scard-meta { flex: 0 0 auto; }
+.dash-sess-list.compact .dash-scard-status { gap: 0; }
+.dash-sess-list.compact .dash-scard-status > span:last-child { display: none; } /* 상태 라벨 텍스트 숨김 — 점만 남겨 색·깜빡임으로 표시 */
+.dash-sess-list.compact .dash-scard-tag { display: none; }                     /* 초대 배지 숨김(간략) */
+.dash-sess-list.compact .dash-scard-when { margin-left: 0; }
 .dash-bulkbar--sess { margin: 8px 6px 4px; bottom: 4px; border-radius: 10px; }
 /* #req 세션 목록 맨 밑 '+ 새 세션'(대시보드서 바로 생성) — 프로젝트 인라인 추가와 같은 톤. */
 .dash-sess-addrow { padding: 2px 6px 4px; }
