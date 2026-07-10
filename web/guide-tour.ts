@@ -48,35 +48,98 @@ function tail(ctx: any) { return ctx.nextTab ? [navStep(ctx.nextTab)] : [finaleS
 // ── 장면 정의 — match: 담당 해시 · ready: 필수 크롬 대기 · hint: 콘텐츠(행·노드) 소프트 대기 · build: 실제 DOM 기반 스텝. ──
 const SCENES: any[] = [
   {
+    // 보드(앞단) — 목록·할 일 관리는 클릭업과 거의 같다(#761 요청): 짧게 넘기고 곧장 '프로젝트 안'으로.
     key: 'projects-board', tab: 'projects2',
     match: (h: string) => h.startsWith('#/projects2') && !h.startsWith('#/projects2/p/'),
     ready: () => !!q('.pjv-board-wrap'), hint: '.pjv-trow-title',
     build(ctx: any) {
       const steps: any[] = [];
-      steps.push({ target: '.pjv-board-scroll, .pjv-board-wrap', padding: 4, title: '회사의 일이 다 여기에',
-        body: '진행 중인 프로젝트가 리스트로 묶여 보여요. 팀이 지금 뭘 하는지 궁금할 때 가장 먼저 여는 화면이에요.' });
-      if (q('.pjv-side-nav')) steps.push({ target: '.pjv-side-nav', placement: 'right', title: '왼쪽은 폴더 · 리스트',
-        body: '사업·제품처럼 성격별로 일이 정리돼요. 위 검색창으로 프로젝트를 바로 찾을 수도 있어요.' });
+      steps.push({ target: '.pjv-board-scroll, .pjv-board-wrap', padding: 4, title: '이 목록·할 일 관리는 익숙할 거예요',
+        body: '프로젝트를 폴더·리스트로 묶어 관리해요 — 여러분이 쓰던 클릭업과 최대한 비슷하게 맞췄어요. 그래서 이 앞부분은 빠르게 지나갈게요. 라이블리만의 진짜는 프로젝트 하나를 열었을 때 그 안에 있어요.' });
       if (q('.pjv-trow-title')) {
         steps.push({ target: () => q('.pjv-trow-title'), scrollIntoView: true, advanceOn: 'click',
-          title: '하나 열어볼까요?', body: '프로젝트 이름을 누르면 그 일의 상세로 들어가요.' });
-        return steps; // 다음 장면(상세)으로는 위 클릭이 데려간다
+          title: '프로젝트를 하나 열어볼까요?', body: '이름을 눌러 프로젝트 안으로 들어가 볼게요 — 여기부터가 핵심이에요.' });
+        return steps; // 클릭이 상세 장면으로 데려간다
       }
-      if (q('.pjv-addrow-trigger')) steps.push({ target: '.pjv-addrow-trigger', title: '새 일은 여기서',
-        body: '[＋ 프로젝트]를 누르면 새 일을 등록해요. 지금은 구경만 할게요.' });
-      return steps.concat(tail(ctx)); // 열어 볼 프로젝트가 없으면 이 화면에서 다음 정거장/마무리로
+      // 열어 볼 프로젝트가 없을 때 — 만드는 곳만 짚고 다음 정거장/마무리로(막다른 길 0).
+      if (q('.pjv-addrow-trigger')) steps.push({ target: '.pjv-addrow-trigger', title: '새 프로젝트는 여기서',
+        body: '[＋ 프로젝트]로 새 일을 등록해요. (지금은 열어 볼 프로젝트가 없어, 안쪽 기능은 실제 프로젝트가 생기면 볼 수 있어요.)' });
+      return steps.concat(tail(ctx));
     },
   },
   {
+    // 상세 — 위→아래로 실제 섹션을 훑되, 라이블리 고유(선행/후행·연결된 지식·공유폴더·터미널 세션)는 '왜 좋은지'까지(#761).
     key: 'projects-detail', tab: 'projects2',
     match: (h: string) => h.startsWith('#/projects2/p/'),
     ready: () => !!q('main .page-head'),
     build(ctx: any) {
       const steps: any[] = [];
-      steps.push({ target: 'main .page-head', title: '프로젝트의 얼굴',
-        body: '이름·상태·팀원 — 이 일의 기본 정보예요. 아래로 개요와 태스크(할 일), 작업 기록이 이어져요.' });
-      if (knFlowCard()) steps.push({ target: knFlowCard, scrollIntoView: true, title: '이 일에 필요한 지식',
-        body: 'WIKI 지식을 \'필요지식\'으로 연결해 두면, 이 프로젝트를 맡은 AI가 그 내용을 처음부터 알고 시작해요.' });
+      steps.push({ target: 'main .page-head', placement: 'bottom', title: '프로젝트 안 — 위에서부터 볼게요',
+        body: '제목을 누르면 바로 이름을 고쳐요. 오른쪽 [⚙ 프로젝트 세부 설정]에서 팀원·분류·연결 레포·AI 규칙·삭제를 다뤄요.' });
+
+      // ⭐ 선행/후행 프로젝트 — 라이블리 고유 ①. 속성판은 2열 그리드(선행=좌·후행=우)라 코치마크를 아래로 둬야
+      //  오른쪽 칸(후행)이 안 가린다 → 패널 전체 스포트라이트 + placement 'bottom'.
+      if (q('.pjv-proj-meta')) steps.push({
+        target: '.pjv-proj-meta', placement: 'bottom', scrollIntoView: true, padding: 6,
+        title: '⭐ 선행 · 후행 프로젝트 — 라이블리다운 ①',
+        body: [
+          p('이 속성판 맨 윗줄 두 칸이에요 — 왼쪽이 선행, 오른쪽이 후행. 이 일이 어떤 일 뒤에 오고(선행), 어떤 일로 이어지는지(후행)를 서로 연결해요. (아래 상태·팀원·기간은 익숙한 속성이에요.)'),
+          p('왜 좋냐면 — 흩어진 프로젝트가 순서·의존으로 이어져 큰 그림이 잡히고, 이 프로젝트를 맡은 AI도 “이건 X 다음 단계”라는 맥락을 안 채로 시작해요. 후속을 만들 땐 선행의 연결 지식·배경까지 그대로 물려받아요.'),
+        ],
+      });
+
+      // 개요(본문)
+      if (cardByHeading(/^본문$/)) steps.push({ target: () => cardByHeading(/^본문$/), scrollIntoView: true,
+        title: '개요', body: '이 일이 왜·무엇인지 적는 곳이에요. 여기 적은 배경도 이 프로젝트의 AI 세션에 함께 전달돼요.' });
+
+      // ⭐ 연결된 지식 — 라이블리 고유 ②
+      if (knFlowCard()) steps.push({ target: knFlowCard, scrollIntoView: true,
+        title: '⭐ 연결된 지식 — 라이블리다운 ②',
+        body: [
+          p('WIKI에 쌓인 회사 지식을 이 프로젝트의 ‘필요지식’으로 연결해요.'),
+          p('왜 좋냐면 — 이 프로젝트를 맡은 AI가 그 지식을 처음부터 손에 쥐고 시작해요. 배경을 매번 설명 안 해도 되고, 팀이 내린 결정대로 정확히 일해요. 일하며 새로 만든 지식은 ‘산출’로 여기 쌓여, 다음 사람·다음 AI가 또 씁니다.'),
+        ],
+      });
+
+      // 할 일(태스크) — 클릭업류, 짧게
+      if (q('main .pjv-tasks-card')) steps.push({ target: 'main .pjv-tasks-card', scrollIntoView: true, padding: 4,
+        title: '할 일 (태스크)', body: '프로젝트를 잘게 나눠 관리해요 — 이 부분도 클릭업과 비슷해서 금방 익숙해질 거예요.' });
+
+      // 공유 폴더 — '어디에' 생기나
+      if (cardByHeading(/공유 폴더/)) steps.push({ target: () => cardByHeading(/공유 폴더/), scrollIntoView: true,
+        title: '공유 폴더 — 파일은 “어디에” 생기나',
+        body: [
+          p('이 프로젝트 전용 폴더예요. 올린 파일은 내 컴퓨터가 아니라 라이블리 중앙(박스)의 이 프로젝트 폴더에 저장돼요.'),
+          p('그래서 팀원 모두가 같은 파일을 보고, 이 프로젝트의 AI 세션도 바로 이 폴더에서 열려 이 파일들을 곧장 읽어요. 끌어다 놓거나 붙여넣기(⌘V)로 올릴 수 있어요.'),
+        ],
+      });
+
+      // ⭐ 터미널 세션 — 어떻게 만드나 + 팝업(＋새 세션 → 드롭다운 → 웹 폼 → 취소로 닫기)
+      if (q('.proj-term-card')) {
+        steps.push({ target: '.proj-term-card', scrollIntoView: true,
+          title: '⭐ 터미널 세션 — 이 프로젝트에서 AI 켜기',
+          body: '이 프로젝트 폴더에서 여는 AI 작업 세션이에요. 팀원별로 세션이 모여 보여, 누가 무슨 작업을 켰는지 한눈에 알 수 있어요.' });
+        steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left', advanceOn: 'click',
+          title: '세션 만들기 ① — ＋ 새 세션', body: '오른쪽 위 [＋ 새 세션]을 눌러 볼게요.' });
+        // 드롭다운: 두 옵션을 설명하되 클릭 진행은 '웹에서 바로 열기'에만 건다 — '내 PC' 항목은 딤에 가려 못 눌러
+        //  오작동(로컬 모달 오픈)이 원천 차단되고, 설명 단계와 클릭 단계를 하나로 합쳐 순서 어긋남도 없앤다.
+        steps.push({ target: '[data-tour="sess-web"]', placement: 'left', advanceOn: 'click',
+          title: '세션 만들기 ② — 어디서 켤까',
+          body: [
+            p('두 갈래가 떠요 — 💻 내 PC에서 열기(개발자용, 내 컴퓨터에 설치해 실행)와 ☁️ 웹에서 바로 열기(설치 없이 중앙 박스에서 여는 팀 공용 세션).'),
+            p('비개발자는 웹이 제일 쉬워요. 밝게 표시된 [☁️ 웹에서 바로 열기]를 눌러 만들기 창을 띄워 볼게요.'),
+          ] });
+        steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
+          title: '만들기 창 — 세션 이름', body: '나중에 알아보기 쉽게 이름을 정해요. 예: “랜딩 카피 수정”.' });
+        steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
+          title: '코드 저장소 (선택)', body: '코드를 다루는 작업이면 저장소를 고르세요 — 박스가 그 코드를 자동으로 가져와 AI가 바로 작업하게 준비해요. 코드 작업이 아니면 비워두면 돼요(공유 폴더만 써요).' });
+        steps.push({ target: '.proj-sess-preset', placement: 'right', scrollIntoView: true,
+          title: '실행 설정', body: '함께 일할 AI·모델과 자동 승인 여부예요. 이전 설정을 기억하니 보통 그대로 두면 되고, 잘 모르겠으면 기본값으로.' });
+        steps.push({ target: '[data-tour="sess-create"]', placement: 'top', scrollIntoView: true,
+          title: '만들면 이렇게 돼요', body: '[만들고 입장]을 누르면 중앙 박스에 세션이 열리고 새 탭에 까만 터미널 창이 떠요 — 거기서 AI에게 바로 말을 걸면 됩니다. 회사 맥락과 이 프로젝트 맥락(연결된 지식·개요)은 이미 들어가 있어요.' });
+        steps.push({ target: '[data-tour="sess-cancel"]', placement: 'top', advanceOn: 'click',
+          title: '둘러보기라 여기까지', body: '실제로 만들지는 않을게요 — [취소]를 눌러 닫고 계속할게요.' });
+      }
       return steps.concat(tail(ctx));
     },
   },
@@ -121,12 +184,19 @@ const SCENES: any[] = [
     },
   },
 ];
-// 프로젝트 상세의 '연결된 지식' 카드 — 고정 id 가 없어 제목 텍스트로 찾는다(없으면 스텝 생략).
-function knFlowCard() {
+// 프로젝트 상세의 섹션 카드를 제목(h3/h2) 텍스트로 찾는다 — 고정 id 가 없어서(없으면 그 스텝은 생략).
+function cardByHeading(re: RegExp): Element | null {
   for (const h of document.querySelectorAll('main .card-head h3, main .card-head h2')) {
-    if (/연결된 지식/.test(h.textContent || '')) return h.closest('.card');
+    if (re.test(h.textContent || '')) return h.closest('.card');
   }
   return null;
+}
+function knFlowCard(): Element | null { return cardByHeading(/연결된 지식/); }
+
+// 둘러보기 중 사용자가 연 임시 오버레이(세션 만들기 모달·＋새 세션 드롭다운)를 장면이 끝날 때 정리(#761) —
+//  탭 이동 스텝(navStep)이 모달에 가려 안 눌리거나, 마무리/이탈 후 잔여 모달이 남지 않게. 지식 피크(.kn-peek)는 건드리지 않는다.
+function closeStrayOverlays() {
+  document.querySelectorAll('.ov-back, .pjv-pop').forEach((n) => n.remove());
 }
 
 // ── 플랜(sessionStorage) — { v, keys: 장면 key 순서, i: 현재 장면 인덱스(-1=출발 전) } ──
@@ -174,7 +244,7 @@ function startGuideTour(courseKeys?: string[]) {
   savePlan({ v: 1, keys, i: -1 });
   const first = sceneByKey(keys[0]);
   startTour([navStep(first.tab, '출발 — 첫 정거장은 ' + TAB_LABEL[first.tab])],
-    { onEnd: (r) => { if (r === 'user') foldGuideTour(true); } });
+    { onEnd: (r) => { closeStrayOverlays(); if (r === 'user') foldGuideTour(true); } });
 }
 
 // ── 재개(main.ts route() 끝에서 매 라우팅마다) — 플랜 없으면 no-op. ──
@@ -204,6 +274,7 @@ async function resumeGuideTour() {
   if (!steps.length) return;
   const hasFinale = steps.some((s: any) => s && s.__finale);
   startTour(steps, { onEnd: (r) => {
+    closeStrayOverlays(); // 장면 종료 시 잔여 세션 모달·드롭다운 정리(#761)
     if (r === 'user') { foldGuideTour(true); return; }
     // 자연 완주는 마무리 스텝이 있던 장면에서만 의미 — 이동 클릭 직후의 잔여 complete(라우팅 경합)는 무시.
     if (r === 'complete' && hasFinale) finishGuideTour();

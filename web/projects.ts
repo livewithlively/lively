@@ -8703,7 +8703,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   // '＋ 새 세션' — 곧장 폼이 아니라 드롭다운으로 '어디서 작업할지' 먼저 고른다.
   //  · 내 컴퓨터에서 작업 — 내 PC 터미널 실행 명령을 안내(openLocalWorkModal). 웹은 원격 PC를 스트리밍하지 않음.
   //  · 중앙 컴퓨터에서 작업 — 중앙(박스)에서 공동 세션을 바로 생성(openProjectSessionForm). 관련 레포가 기본값.
-  const newBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 세션' });
+  const newBtn = el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'proj-new-session', text: '＋ 새 세션' });
   newBtn.onclick = (e) => {
     e.stopPropagation();
     const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
@@ -8717,11 +8717,12 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
       return item;
     };
-    menu.append(
-      mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행',
-        () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos })),
-      mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용',
-        () => openProjectSessionForm(id, load, B, projectName, projectRepos)));
+    const localItem = mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행',
+      () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos }));
+    const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용',
+      () => openProjectSessionForm(id, load, B, projectName, projectRepos));
+    webItem.dataset.tour = 'sess-web';  // Lively 둘러보기(#761) 앵커 — 이 항목을 눌러 만들기 창을 띄운다
+    menu.append(localItem, webItem);
   };
   card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
   card.append(body);
@@ -8965,14 +8966,14 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
   // 이 프로젝트의 관련 레포를 기본 행으로(있으면) — 없으면 빈 채로 '+ 레포 추가' 안내.
   (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
 
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들고 입장' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
+  const saveBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'sess-create', text: '만들고 입장' });
+  const cancelBtn = el('button', { class: 'btn btn-ghost', 'data-tour': 'sess-cancel', text: '취소', onclick: () => back.remove() });
   // 옛 '▸ 고급 설정 (실행기·모델·자동 승인)' 접이 토글 폐기(#req) — 터미널 탭과 동일한 '실행 설정' 프리셋을
   //  기본 펼침으로 바로 노출(presetToggle + presetBody 위에서 구성). 이전 설정 프리필이라 대부분 그대로 만들면 된다.
   const back = overlayBox('새 터미널 세션',
     el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }),
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
-    el('div', { class: 'field', style: 'margin-top:12px' },
+    el('div', { class: 'field', 'data-tour': 'sess-name' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
+    el('div', { class: 'field', 'data-tour': 'sess-repos', style: 'margin-top:12px' },
       el('label', { class: 'field-label', text: '코드 저장소에서 작업 (선택)' }),
       el('div', { class: 'caption', text: '코드를 다루는 작업이면 작업할 저장소를 고르세요 — 그 코드를 자동으로 가져와, 에이전트가 바로 작업할 수 있게 준비해 둡니다. 코드 작업이 아니라면 그냥 비워두고 넘어가도 돼요.' }),
       reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
