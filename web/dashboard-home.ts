@@ -947,17 +947,18 @@ async function fillSessions(zone, onCount, projectsP?) {
         moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
         acts.append(moreBtn);
       }
-      // #758 자세히 = 1행: 하고 있는 작업(볼드 검정) / 2행: '터미널 제목: 세션명'(회색 부제) / 3행: 메타. (요청 swap — 작업을 위로, 세션명은 부제로)
-      //       간략히 = 이전 짧은 2줄 디자인: 세션명(볼드) + 메타 (작업요약 줄 없음).
+      // #758 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명. 자세히·간략히 공통.
+      //   자세히: 작업(제목) / '터미널 제목: 세션명'(회색 부제) / 메타 (3줄).
+      //   간략히: 작업(제목) / 메타 (2줄 — 터미널 제목 부제 생략).
       const nameStr = s.label || '(이름 없음)';
       const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
+      const headline = worksum || nameStr;
       let main;
       if (density === 'compact') {
         main = el('div', { class: 'dash-scard-main' },
-          el('span', { class: 'dash-scard-name', title: nameStr, text: nameStr }),
+          el('span', { class: 'dash-scard-name', title: headline, text: headline }),
           meta);
       } else {
-        const headline = worksum || nameStr; // 작업요약 없으면 세션명이 제목(부제 생략 — 중복 방지)
         main = el('div', { class: 'dash-scard-main' },
           el('span', { class: 'dash-scard-name', title: headline, text: headline }),
           worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null,
