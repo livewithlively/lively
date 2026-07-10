@@ -1,6 +1,7 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, pageHead, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
+import { isGuideTourDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
 
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
@@ -11,11 +12,13 @@ import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 // 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
 //  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
 //  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
-// ── 사용 가이드 상위 탭의 서브탭(사용 가이드·시작하기) — 지식 탭과 같은 .sub-cats 패턴(#617). ──
-//  옛 상단 내비 '시작하기'(설치)를 사용 가이드 안으로 옮기며 그 자리를 '대시보드'로 개편. active = 'guide' | 'install'.
+// ── 사용 가이드 상위 탭의 서브탭(사용 가이드·시작하기·Lively 둘러보기) — 지식 탭과 같은 .sub-cats 패턴(#617). ──
+//  옛 상단 내비 '시작하기'(설치)를 사용 가이드 안으로 옮기며 그 자리를 '대시보드'로 개편. active = 'guide' | 'install' | 'tour'.
+//  'Lively 둘러보기'(#761) = 실제 화면 위에서 버튼을 직접 눌러 보는 크로스탭 스포트라이트 투어(guide-tour.ts).
 const LEARN_SUBS = [
   { key: 'guide', label: '사용 가이드', href: '#/learn' },
   { key: 'install', label: '시작하기', href: '#/learn/install' },
+  { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
 ];
 function learnSubBar(active) {
   const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '사용 가이드 보기' });
@@ -117,7 +120,7 @@ const GUIDE_CHAPTERS = [
       href: '#/system', link: '관리 열기' },
     { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
       summary: '이 도구 전체를 설명하는 안내서',
-      desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 위쪽 ‘시작하기’ 탭에는 내 컴퓨터에 라이블리를 연결하는 설치 안내가 함께 있어요. 길을 잃으면 언제든 다시 오세요.',
+      desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 위쪽 ‘시작하기’ 탭에는 설치 안내가, ‘Lively 둘러보기’ 탭에는 화면을 직접 눌러 보며 배우는 투어가 있어요. 길을 잃으면 언제든 다시 오세요.',
       current: true },
   ] },
 ];
@@ -165,7 +168,7 @@ function quickStartCard() {
     el('p', { class: 'admin-hint', text: '3분이면 충분해요. 아래 버튼을 누르면 해당 화면으로 바로 이동합니다.' }),
     el('div', { class: 'guide-path' },
       pathStep('1', '말 걸어보기', '터미널에서 AI를 띄우고, 까만 창에 하고 싶은 말을 그냥 입력해 보세요. 설치가 필요 없어 가장 쉬운 시작이에요.', '#/terminal', '터미널 열기', true),
-      pathStep('2', '둘러보기', 'WIKI에서 우리 회사에 어떤 맥락(규칙·지식)이 쌓여 있는지 구경해 보세요.', '#/knowledge', 'WIKI 열기', false),
+      pathStep('2', '둘러보기', '메뉴가 낯설면 Lively 둘러보기로 — 프로젝트·도메인 맵·WIKI를 실제 화면에서 직접 눌러 보며 익혀요.', '#/learn/tour', 'Lively 둘러보기', false),
       pathStep('3', '내 컴퓨터에 연결(선택)', '내 노트북에서 직접 AI를 쓰고 싶다면 시작하기에서 한 번 설치하세요. 약 5분이면 끝나요.', '#/learn/install', '시작하기 열기', false)));
 }
 
@@ -277,6 +280,44 @@ function tabIcon(name) {
     'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   for (const [t, a] of (GUIDE_ICONS[name] || [])) svg.append(sv(t, a));
   return svg;
+}
+
+// ── Lively 둘러보기(#/learn/tour, #761) — 실제 화면 위 스포트라이트 투어의 랜딩. ──
+//  시작만 여기서: 진행은 guide-tour.ts(장면 오케스트레이터)가 상단 탭 클릭 → 라우팅 → 재개로 이어 간다.
+//  §0.5 채색 예산: 채운 파란 버튼은 [▶ 둘러보기 시작] 1개뿐 — 코스별 버튼은 ghost.
+async function renderLearnTour(view) {
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, 'Lively ', el('span', { class: 'accent', text: '둘러보기' })));
+
+  const intro = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '눌러보며 익혀요' })),
+    el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 스포트라이트된 버튼을 직접 누르면서 프로젝트 → 도메인 맵 → WIKI를 한 바퀴 돕니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
+    isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 전에 한 번 완주했어요 — 언제든 다시 돌아도 좋아요.' }) : null,
+    el('div', { class: 'step-cta' },
+      el('button', { class: 'btn btn-primary', text: '▶ 둘러보기 시작 (약 3분)', onclick: () => startGuideTour() })));
+
+  // 코스 한 줄 — pathStep 과 같은 시각 언어(번호·제목·설명), 이동 대신 코스 시작 버튼.
+  const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' },
+    el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }),
+    el('div', { class: 'guide-path-body' },
+      el('div', { class: 'guide-path-title', text: title }),
+      el('p', { class: 'guide-path-desc', text: desc }),
+      el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '이 코스만 보기', onclick: () => startGuideTour([key]) })));
+  const courses = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '무엇을 보게 되나요' })),
+    el('div', { class: 'guide-path' },
+      courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'),
+      courseRow('2', 'domainmap', '도메인 맵 — 코드의 지도', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'),
+      courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
+
+  const extra = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })),
+    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ',
+      el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ',
+      el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
+
+  view.replaceChildren(head, learnSubBar('tour'), el('div', { class: 'guide-cards' }, intro, courses, extra));
+  document.getElementById('view')!.focus?.();
 }
 
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
@@ -653,6 +694,7 @@ export {
   overlayBox,
   renderInstall,
   renderLearn,
+  renderLearnTour,
   renderOnboarding,
   skeleton,
   skeletonRows,

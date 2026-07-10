@@ -8,7 +8,8 @@
 import { el, reducedMotion } from './core.js';
 let active = null; // 현재 진행 중인 투어(중복 방지 — 새 투어 시작 시 기존 것 종료)
 // 투어 종료 — rAF 정지, 리스너 해제, 오버레이 제거. 라우트 이탈 시에도 호출해 잔여 오버레이 방지.
-function endTour() {
+//  reason 은 onEnd 로 전달(기본 'auto' — 기존 호출부(main.ts route 등)는 인자 없이 그대로).
+function endTour(reason = 'auto') {
     if (!active)
         return;
     const t = active;
@@ -19,9 +20,15 @@ function endTour() {
         t.clickBound.el.removeEventListener('click', t.clickBound.fn, true);
     window.removeEventListener('keydown', t.onKey, true);
     t.root.remove();
+    if (t.opts && t.opts.onEnd) {
+        try {
+            t.opts.onEnd(reason);
+        }
+        catch (_) { /* 콜백 오류가 정리를 막지 않게 */ }
+    }
 }
 // 투어 시작 — steps 를 순서대로 안내. 이미 진행 중이면 교체.
-function startTour(steps) {
+function startTour(steps, opts) {
     if (!Array.isArray(steps) || !steps.length)
         return;
     endTour();
@@ -30,12 +37,12 @@ function startTour(steps) {
     const pop = el('div', { class: 'tour-pop', role: 'dialog', 'aria-live': 'polite' });
     const root = el('div', { class: 'tour-root', role: 'presentation' }, ...dims, ring, pop);
     document.body.append(root);
-    const t = { root, dims, ring, pop, steps, i: -1, raf: 0, clickBound: null, onKey: null };
+    const t = { root, dims, ring, pop, steps, i: -1, raf: 0, clickBound: null, onKey: null, opts: opts || null };
     active = t;
     // ESC 로 투어만 종료 — 캡처 단계에서 잡고 전파를 멈춰, 아래(모달)의 ESC 닫기까지 번지지 않게 한다.
     t.onKey = (e) => { if (e.key === 'Escape') {
         e.stopPropagation();
-        endTour();
+        endTour('user');
     } };
     window.addEventListener('keydown', t.onKey, true);
     go(0);
@@ -49,10 +56,12 @@ function startTour(steps) {
     }
     // 단계 이동 — 코치마크를 다시 그리고, 필요 시 타깃을 스크롤로 보이게 한 뒤 rAF 추적을 (없으면) 켠다.
     function go(idx) {
-        if (idx < 0 || idx >= steps.length) {
-            endTour();
+        if (idx < 0)
+            return; // [이전]은 0에서 비활성 — 방어만
+        if (idx >= steps.length) {
+            endTour('complete');
             return;
-        }
+        } // 마지막 단계 통과 = 자연 완주
         t.i = idx;
         const step = steps[idx];
         if (t.clickBound) {
@@ -75,7 +84,7 @@ function startTour(steps) {
     function drawPop(step, idx) {
         const last = idx === steps.length - 1;
         const counter = el('div', { class: 'tour-count', text: (idx + 1) + ' / ' + steps.length });
-        const close = el('button', { class: 'btn btn-text tour-close', text: '✕', title: '따라하기 닫기', 'aria-label': '따라하기 닫기', onclick: () => endTour() });
+        const close = el('button', { class: 'btn btn-text tour-close', text: '✕', title: '따라하기 닫기', 'aria-label': '따라하기 닫기', onclick: () => endTour('user') });
         const bodyWrap = el('div', { class: 'tour-body' });
         if (step.body != null) {
             if (Array.isArray(step.body))
@@ -101,8 +110,8 @@ function startTour(steps) {
     }
     // 매 프레임: 타깃 위치를 다시 읽어 딤·링·말풍선을 갱신하고, click 자동진행 리스너를 (있으면) 건다.
     function tick() {
-        if (!active)
-            return;
+        if (active !== t)
+            return; // 내 투어가 교체/종료됐으면 이 rAF 루프도 멈춤(스테일 프레임 방지)
         const step = steps[t.i];
         const target = resolve(step);
         const pad = step.padding == null ? 8 : step.padding;
@@ -114,7 +123,9 @@ function startTour(steps) {
                 if (t.clickBound)
                     t.clickBound.el.removeEventListener('click', t.clickBound.fn, true);
                 const cur = t.i;
-                const fn = () => { setTimeout(() => { if (active && t.i === cur)
+                // active === t: '이 투어'가 여전히 살아 있을 때만 진행 — 지연(80ms) 사이 라우팅으로 다른 투어가
+                //  올라오면(크로스탭 둘러보기 #761 장면 전환) 스테일 클로저가 새 투어를 끝내 버리는 것을 차단.
+                const fn = () => { setTimeout(() => { if (active === t && t.i === cur)
                     go(cur + 1); }, step.advanceDelay == null ? 80 : step.advanceDelay); };
                 target.addEventListener('click', fn, true);
                 t.clickBound = { el: target, fn };
