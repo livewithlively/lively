@@ -354,8 +354,8 @@ function openTermCreateForm(cfg, view, onCreated?) {
   const flagsBox = el('div', { class: 'term-flags' });
   // 두 개의 체크박스(워크트리·자동 승인)는 '실행 옵션'으로 묶는다(#673). 워크트리 기본 ON, 자동승인 기본 OFF.
   const autoCb = el('input', { type: 'checkbox' });
-  const autoWrap = el('label', { class: 'term-auto term-auto-danger' }, autoCb,
-    el('span', { text: ' 자동 승인 (위험) — AI 가 확인 없이 파일 수정·명령 실행. 공유 폴더 주의.' }));
+  const autoWrap = el('label', { class: 'term-auto' }, autoCb,
+    el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
   const wtCb = el('input', { type: 'checkbox', checked: '' });
   const wtWrap = el('label', { class: 'term-auto' }, wtCb,
     el('span', { text: ' git 워크트리에서 작업 (권장) — 폴더가 git 저장소면 새 브랜치 워크트리에서 격리 작업(다른 세션·메인 체크아웃과 안 충돌).' }));
@@ -642,7 +642,7 @@ function startTerminalTour(firstStep?) {
       target: '[data-tour="options"]',
       title: '④ 실행 옵션',
       body: [el('p', { class: 'tour-p' }, el('b', { text: 'git 워크트리' }), ' — 저장소면 새 브랜치의 워크트리에서 격리 작업해요(다른 세션·메인과 안 충돌). 기본 켜짐.'),
-        el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — AI 가 확인 없이 파일 수정·명령 실행. 빠르지만 위험하니 공유 폴더에선 꺼 두세요.')],
+        el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.')],
       placement: 'right', scrollIntoView: true,
     },
     {

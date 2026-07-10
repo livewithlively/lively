@@ -149,9 +149,13 @@ function startTour(steps: TourStep[]) {
     const pr = pop.getBoundingClientRect();
     const pw = pr.width || 320, ph = pr.height || 160;
     let place = step.placement || 'auto';
-    const spaceBelow = vh - (ht + hh), spaceAbove = ht;
+    const spaceBelow = vh - (ht + hh), spaceAbove = ht, spaceRight = vw - (hl + hw), spaceLeft = hl;
     if (hw === 0 && hh === 0) place = 'center';
-    else if (place === 'auto') place = (spaceBelow >= ph + gap) ? 'bottom' : (spaceAbove >= ph + gap ? 'top' : 'right');
+    else {
+      // 지정 placement 라도 그 방향에 말풍선이 안 들어가면(작은 창) 여유 있는 쪽으로 자동 뒤집어 타깃(강조 버튼) 가림 방지(#670).
+      const fits: any = { bottom: spaceBelow >= ph + gap, top: spaceAbove >= ph + gap, right: spaceRight >= pw + gap, left: spaceLeft >= pw + gap };
+      if (place === 'auto' || !fits[place]) place = fits.bottom ? 'bottom' : fits.top ? 'top' : fits.right ? 'right' : fits.left ? 'left' : 'center';
+    }
     let x: number, y: number;
     if (place === 'center') { x = (vw - pw) / 2; y = (vh - ph) / 2; }
     else if (place === 'bottom') { x = hl + hw / 2 - pw / 2; y = ht + hh + gap; }
