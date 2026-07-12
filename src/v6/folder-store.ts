@@ -116,9 +116,10 @@ export async function updateProjectFolder(
   if (patch.parent_id !== undefined) {
     const target = patch.parent_id;
     if (target != null) {
-      if (folderIsSpace(before)) throw new Error("스페이스는 최상위여야 합니다");
+      // 메시지에 wrap() 인식 토큰(허용/없음)을 포함해야 사용자에게 400 으로 노출된다(rest-util.ts) — 아니면 internal_error.
+      if (folderIsSpace(before)) throw new Error("스페이스는 최상위만 허용됩니다 (다른 폴더/스페이스 하위로 이동 불가)");
       if (!(await getProjectFolderRow(target))) throw new Error(`상위 폴더 #${target} 없음`);
-      if (await folderIsSelfOrDescendant(id, target)) throw new Error("자기 자신이나 하위 폴더를 상위로 옮길 수 없습니다(순환)");
+      if (await folderIsSelfOrDescendant(id, target)) throw new Error("자기 자신·하위 폴더를 상위로 두는 순환은 허용되지 않습니다");
     }
     set("parent_id", target);
   }
