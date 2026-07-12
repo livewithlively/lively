@@ -1,23 +1,19 @@
-// wiki-category.ts — #764v4 카테고리 대문. "하나의 원자(지식), 다섯 투영."
-//  모든 구역은 카테고리 rows 1콜의 재가공이다(추가 API 0 — 최소 단위는 작성된 페이지):
-//  ① 정체 — 커버(상시 오로라)·아이콘·이름·설명 + 정의 한 문장(cat.should 발췌) + mono 현황.
-//  ② 입구 — 우측 레일 '먼저 읽기'(소개글 페이지 카드 순서 > 핀∪사람 저작, 읽음 진행률).
-//  ③ 일 — 좌측 주인공 '일의 흐름': 사건 피드(스레드=#NNN 묶음 카드+서수 도트 레일+델타 연대기 /
-//     정본 스택=개정판 접기 / 단신). 절대 시각은 제목 파싱 날짜가 있을 때만(updated_at 은 정렬 폴백만).
-//  ④ 주제 — 점선 리더 색인(n≥40만) → 전체 문서에 주제 필터.
-//  ⑤ 전체 — 서고(유형 카운트 + 발췌 행 목록).
-//  규모 적응: 0건=초대 / 1~9건=목록 중심 단열 / 10~39건=색인 생략 / ≥40건=풀 구성.
-import { api, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
+// wiki-category.ts — #764v6 카테고리 대문 = "대문 빌더".
+//  고정 레이아웃을 강요하지 않는다 — 사용자가 지식 블록을 얹고·옮기고·바꿔서 직접 짜는 캔버스.
+//  블록: intro(자유 소개글)·heading·rule·highlight(핀/고른 큰 카드)·list(조건 목록)·gallery(커버 카드)·stat(구성 현황).
+//  모든 지식 블록은 카테고리 rows(allDocs)를 cfg(유형·사람저작·고정·최신 + 개수)로 질의한다 —
+//  제목 형식과 무관하게 어떤 지식이든 동일하게 흘러든다(범용). 추가 API 0.
+//  레이아웃(블록 배열)은 대문 문서(category-home-*)의 body_md 에 JSON 으로 저장(props-ui 는 icon/cover 화이트리스트).
+//  읽기 모드 = 완성된 대문 · 편집 모드 = 커스터마이즈(드래그·⚙조건·크기·삭제·＋블록).
+import { api, el, errorNote, relTime, state, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
-import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import {
   HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc,
-  knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, wkTrackEditor,
+  knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser,
 } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkIsRead, wkRow, wkSection, wkTick } from './wiki-ui.js';
-import { mineEvents, mineThemes } from './wiki-mine.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 import { openCategoryForm } from './category-form.js';   // 정의·범위(should) 편집
 
@@ -76,29 +72,9 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   const hasContent = !!homeBody().trim();
 
   const refresh = () => { knInvalidateTreeCaches(); ctx.repaint(); };
-  // 피크로 문서를 읽으면(wkMarkRead 는 진입 즉시 기록) 대문의 읽음 표식을 제자리 갱신 — 전체 repaint 없이
-  //  '먼저 읽기' 진행률·번호 원 ✓·델타 연대기 '읽음' 뱃지만 다시 칠한다(펼침·스크롤 상태 보존).
-  function syncReadState() {
-    const items = box.querySelectorAll('.wk-c4-it[data-nm]');
-    let readN = 0;
-    items.forEach((it: any) => {
-      const read = wkIsRead(it.getAttribute('data-nm'));
-      if (read) readN++;
-      it.classList.toggle('read', read);
-      const num = it.querySelector('.wk-c4-num');
-      if (num && read) num.textContent = '✓';
-    });
-    const prog: any = box.querySelector('.wk-rail-prog');
-    if (prog && items.length) { prog.textContent = readN + '/' + items.length; prog.classList.toggle('done', readN === items.length); }
-    box.querySelectorAll('.wk-ev-kid[data-nm]').forEach((kid: any) => {
-      const read = wkIsRead(kid.getAttribute('data-nm'));
-      kid.classList.toggle('read', read);
-      if (read && !kid.querySelector('.wk-ev-kid-read')) kid.append(el('span', { class: 'wk-row-m wk-ev-kid-read', text: '읽음' }));
-    });
-  }
   const openDoc = (e: any, rowEl?: HTMLElement) => {
     if (e.is_folder) { f.folder = e.name; ctx.syncHash(); ctx.repaint(); return; }
-    openWikiPeek(e.name, { onRefresh: refresh, onClose: syncReadState, originEl: rowEl });
+    openWikiPeek(e.name, { onRefresh: refresh, originEl: rowEl });
   };
 
   // ── 대문 문서 멱등 생성/저장(스키마 변경 0 — 지식 문서 1건이 대문의 전부). ──
@@ -234,50 +210,9 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
   };
 
-  // ── 팀의 소개(큐레이션) — 대문 본문(블록 에디터, 자동 저장). 개요 챕터의 한 칸에 들어간다.
-  //  페이지 카드([제목](#/k/이름))를 쓰면 그 순서가 곧 '읽기 코스'가 된다(코스 큐레이션 = 그냥 글쓰기).
-  const curation = el('div', { class: 'wk-cat-curation' });
-  if (canDoc) {
-    let timer: any = null;
-    let saving = false;
-    const setChip = (t, busy?) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
-    const doSave = async () => {
-      if (saving || !editor.isDirty()) return;
-      saving = true;
-      setChip('저장 중…', true);
-      try {
-        await ensureHome(editor.getMarkdown().trim());
-        editor.resetDirty();
-        setChip('저장됨');
-        setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
-      } catch (e) {
-        setChip('저장 실패', true);
-        toast('대문 저장 실패 — ' + e.message, true);
-      }
-      saving = false;
-      if (editor.isDirty()) queue();
-    };
-    const queue = () => { setChip('수정됨…', true); clearTimeout(timer); timer = setTimeout(doSave, 2000); };
-    const editor = wkTrackEditor(createBlockEditor({
-      initial: homeBody(),
-      placeholder: "팀의 말로 소개를 쓰세요 — 페이지 카드([[)를 넣으면 읽기 코스가 그 순서를 따라요",
-      onChange: queue,
-      onSaveShortcut: () => { clearTimeout(timer); doSave(); },
-    }));
-    editor.el.addEventListener('focusout', () => { if (editor.isDirty()) { clearTimeout(timer); doSave(); } });
-    curation.append(editor.el);
-  } else if (hasContent) {
-    curation.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(homeBody())));
-  }
+  // (팀의 소개/엔트리 카드는 #764v6 에서 빌더의 'intro' 블록으로 흡수 — 대문 본문 body_md 는 이제 빌더 레이아웃 JSON.)
 
-  // 엔트리 문서 하위호환(view_mode=entry) — 큐레이션 위 문서 카드로 흡수.
-  const entrySlot = el('div', { class: 'wk-cat-entry' });
-  if (cat.view_mode === 'entry' && cat.entry_name && !isCategoryHomeDoc(cat.entry_name)) {
-    const e = rows.find((r) => r.name === cat.entry_name);
-    if (e) entrySlot.append(wkDocCard(e, { open: (x, r) => openDoc(x, r), deckCap: 150, cls: 'entry' }));
-  }
-
-  // ── 라이브러리(항상) — 시작점 · 폴더 · 유형 카운트 · 문서 목록. ──
+  // ── 라이브러리(전체 문서 관리) — 폴더 · 유형 카운트 · 문서 목록 · 선택. 빌더 캔버스 아래 상시. ──
   const library = el('div', { class: 'wk-cat-library' });
   const sel = { mode: false, names: new Set<string>() };
   // 주제 색인 → 서고 필터(세션 내 일시 상태 — URL 미반영). paintLibrary 최초 호출 전에 선언(TDZ).
@@ -421,366 +356,282 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   }
   paintLibrary();
 
-  // ════════ #764v4 — 다섯 투영. 전부 rows 1콜 재가공(추가 API 0), 최소 단위 = 지식 페이지. ════════
-  const byName = new Map(rows.map((r) => [r.name, r]));
-  const smoothOpt: any = matchMedia('(prefers-reduced-motion: reduce)').matches ? { block: 'start' } : { behavior: 'smooth', block: 'start' };
-  const events = mineEvents(allDocs);
-  const themes = mineThemes(allDocs, cat.name || cat.key, { minDocs: 40 });
-  const threadsN = events.filter((e) => e.kind === 'thread').length;
-  const liveN = events.filter((e) => e.live).length;
+  // ════════════════ #764v6 대문 빌더 — 지식 블록으로 짜는 커스텀 캔버스 ════════════════
+  //  레이아웃 = 블록 배열. 대문 문서 body_md 에 JSON 으로 저장. 읽기/편집 모드.
+  let editing = false;
+  let blkSeq = 1;
+  const canvas = el('div', { class: 'wk-bld-canvas' });
 
-  // 절대 시각 표기 — **제목에서 파싱된 날짜가 있을 때만**(패널 심사의 공통 안전 규칙: updated_at 은
-  //  전부 최근 뭉침·시스템 어림이라 절대 위치를 주장하면 거짓 정밀도가 된다. 정렬 폴백으로만 쓴다).
-  function fmtDay(iso: string): string {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-').map((x) => parseInt(x, 10));
-    return (y !== new Date().getFullYear() ? (y % 100) + '.' : '') + m + '.' + d;
+  const SRC_OPTS: [string, string][] = [
+    ['pin', '고정(핀)한 문서'], ['human', '사람이 쓴 문서'], ['recent', '전체(최신순)'],
+    ['decision', '결정'], ['reference', '참조·규칙'], ['how-to', '런북'], ['research', '리서치'], ['concept', '개념'],
+  ];
+  const SRC_LABEL: any = {
+    pin: '먼저 볼 것', human: '사람이 쓴 것', recent: '최근 문서',
+    decision: '결정', reference: '참조·규칙', 'how-to': '런북', research: '리서치', concept: '개념',
+  };
+
+  function normBlock(b: any): any {
+    return {
+      id: b.id || ('b' + (blkSeq++)), type: b.type, w: b.w === 'half' ? 'half' : 'full',
+      cfg: Object.assign({ src: 'recent', limit: 5 }, b.cfg || {}), text: typeof b.text === 'string' ? b.text : '',
+    };
   }
-
-  // 섹션 골격 — 챕터 앵커(id) + 큼직한 제목(v3 bf 문법 유지).
-  function bfSection(id: string, title: string, count: number | null, ...actions2: any[]) {
-    const head = el('div', { class: 'wk-bf-head' },
-      el('h2', { class: 'wk-bf-title', text: title }),
-      count != null ? el('span', { class: 'wk-bf-count', text: String(count) }) : null,
-      el('span', { class: 'wk-sec-sp' }),
-      ...actions2.filter(Boolean));
-    const body = el('div', { class: 'wk-bf-body' });
-    return { el: el('section', { class: 'wk-bf-sec', id }, head, body), body };
-  }
-
-  // ── 투영 1 · 정의 한 문장 — cat.should 첫 문장 발췌(신규 입사자가 제일 먼저 읽는 문장) + 전문 펼침. ──
-  //  설명(desc)과 겹치면 문장은 생략하고 '정의·범위 전문 ▾' 토글만 남긴다(같은 말 두 번 방지).
-  function buildDef() {
-    const shouldTxt = String(cat.should || '').trim();
-    if (!shouldTxt) return null;
-    const plain = wkDeck(shouldTxt, 400) || shouldTxt.replace(/\s+/g, ' ').slice(0, 400);
-    const m = plain.match(/^(.{10,160}?(?:다|요|것|함|음)\.)(?:\s|$)/);
-    const first = m ? m[1] : (plain.slice(0, 140) + (plain.length > 140 ? '…' : ''));
-    const norm = (s: string) => String(s || '').replace(/\s+/g, '').replace(/[.·,]/g, '');
-    const dn = norm(cat.description); const fn = norm(first);
-    const redundant = !!dn && !!fn && (dn.startsWith(fn.slice(0, 14)) || fn.startsWith(dn.slice(0, 14)));
-    const full = el('div', { class: 'md-rendered wk-def-full', hidden: true }, renderMarkdown(shouldTxt));
-    const moreBtn = el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙 전문', text: redundant ? '정의·범위 ▾' : '전문 ▾' });
-    const collapsedLbl = redundant ? '정의·범위 ▾' : '전문 ▾';
-    moreBtn.onclick = () => { full.hidden = !full.hidden; moreBtn.textContent = full.hidden ? collapsedLbl : '접기 ▴'; };
-    const editBtn = canCat ? el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙(should) 편집', text: '✎',
-      onclick: () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); }) }) : null;
-    return el('div', { class: 'wk-cat-def' + (redundant ? ' compact' : '') },
-      el('div', { class: 'wk-def-line' }, ...(redundant
-        ? [moreBtn, editBtn]
-        : [el('span', { class: 'wk-def-dash', 'aria-hidden': 'true', text: '—' }),
-          el('span', { class: 'wk-def-text', text: first }), moreBtn, editBtn]).filter(Boolean)),
-      full);
-  }
-
-  // ── 투영 3 · 일의 흐름 — 사건 피드. 스레드 = 카드(서수 도트 레일: 개수·순서·최근성만 주장 —
-  //  등간격이라 시간 간격을 주장하지 않는 정직한 인코딩), 정본 = 개정판 스택, 단신 = 발췌 행. ──
-  function railDots(n: number, live: boolean) {
-    const rail = el('span', { class: 'wk-ev-rail', 'aria-hidden': 'true' });
-    const dot = (cls = '') => el('i', { class: 'wk-ev-dot' + cls });
-    if (n <= 8) { for (let i = 0; i < n - 1; i++) rail.append(dot()); }
-    else {
-      rail.append(dot(), dot(), el('span', { class: 'wk-ev-gap', text: '‥' + (n - 7) }), dot(), dot(), dot(), dot());
+  //  레이아웃 로드 — body_md 가 '[...]' JSON 이면 그 배열, 아니면(기존 큐레이션·빈) 기본 레이아웃.
+  function loadLayout(): any[] {
+    const raw = homeBody().trim();
+    if (raw && raw[0] === '[') {
+      try { const p = JSON.parse(raw); if (Array.isArray(p) && p.length && p.every((b) => b && b.type)) return p.map(normBlock); }
+      catch (_) { /* JSON 아님 → 기본 */ }
     }
-    rail.append(dot(' last' + (live ? ' live' : '')));
-    return rail;
+    return defaultLayout(raw);
   }
-  function threadCard(ev: any) {
-    const kids = el('div', { class: 'wk-ev-kids', hidden: true });   // 자식이 role=link 라 role=list 부적합(빈 목록 안내됨)
-    let filled = false;
-    const head = el('button', { class: 'wk-ev-head', type: 'button', 'aria-expanded': 'false' },
-      el('span', { class: 'wk-ev-title', text: ev.label }),
-      el('span', { class: 'wk-ev-no', text: ev.id }),
-      railDots(ev.docs.length, ev.live),
-      el('span', { class: 'wk-ev-tw', 'aria-hidden': 'true', text: '▸' }));
-    const period = (ev.dateMin && ev.dateMax && ev.dateMin !== ev.dateMax)
-      ? fmtDay(ev.dateMin) + ' → ' + fmtDay(ev.dateMax) : (ev.dateMax ? fmtDay(ev.dateMax) : '');
-    const meta = el('div', { class: 'wk-ev-meta' }, ...[
-      el('span', { class: 'wk-row-m', text: '문서 ' + ev.docs.length }),
-      period ? el('span', { class: 'wk-row-m', text: period }) : null,
-      ev.live ? el('span', { class: 'wk-row-m wk-ev-livelbl', text: '진행 중' }) : null,
-    ].filter(Boolean));
-    const lk = ev.kids[0];
-    const latest = el('button', { class: 'wk-ev-latest', type: 'button', title: lk.doc.title || lk.doc.name },
-      el('span', { class: 'wk-ev-latestlbl', text: '최신' }),
-      el('span', { class: 'wk-ev-latesttxt', text: lk.delta }));
-    latest.onclick = (e2: any) => { e2.stopPropagation(); openDoc(lk.doc, latest); };
-    const card = el('article', { class: 'wk-ev wk-ev-thread' + (ev.live ? ' live' : '') }, head, meta, latest, kids);
-    head.onclick = () => {
-      const open = kids.hidden;
-      if (open && !filled) {
-        filled = true;
-        // 델타 연대기 — 위에서부터 '지금 → 과거'(최신 제목 = 스레드의 현재 상태).
-        const hasDates = ev.kids.some((k2: any) => k2.date);   // 날짜가 전무하면 컬럼 자체 생략
-        for (const k of ev.kids) {
-          const read = wkIsRead(k.doc.name);
-          const kid = el('div', { class: 'wk-ev-kid' + (read ? ' read' : ''), role: 'link', tabindex: '0', 'data-nm': k.doc.name, title: k.doc.title || k.doc.name },
-            hasDates ? el('span', { class: 'wk-ev-kid-date wk-row-m', text: k.date ? fmtDay(k.date) : '' }) : null,
-            wkTick(k.doc),
-            el('span', { class: 'wk-ev-kid-delta', text: k.delta }),
-            read ? el('span', { class: 'wk-row-m wk-ev-kid-read', text: '읽음' }) : null);
-          const go = () => openDoc(k.doc, kid);
-          kid.addEventListener('click', go);
-          kid.addEventListener('keydown', (ev2: any) => { if (ev2.key === 'Enter') go(); });
-          kids.append(kid);
-        }
-      }
-      kids.hidden = !open;
-      head.setAttribute('aria-expanded', String(open));
-      card.classList.toggle('open', open);
-    };
-    return card;
+  //  기본 레이아웃 — (기존 큐레이션 있으면 소개로 보존) + 핀 하이라이트 + 상위 2유형 목록 + 갤러리.
+  //  설명(desc)은 헤더에 이미 있으므로 기본 소개 블록은 넣지 않는다(중복 방지) — 팀이 원하면 ＋로 추가.
+  function defaultLayout(existing: string): any[] {
+    const L: any[] = [];
+    const seed = existing && existing[0] !== '[' ? wkDeck(existing, 480) : '';
+    if (seed) L.push(normBlock({ type: 'intro', text: seed }));   // 기존 큐레이션 보존
+    if (allDocs.some((r) => r.is_wiki)) L.push(normBlock({ type: 'highlight', cfg: { src: 'pin', limit: 3 } }));
+    const counts = new Map<string, number>();
+    for (const r of allDocs) if (r.type) counts.set(r.type, (counts.get(r.type) || 0) + 1);
+    //  유형 목록 — ≥3건인 유형만(1~2건짜리 약한 목록 방지). 하나뿐이면 전폭, 둘이면 반폭씩.
+    const bigTypes = Array.from(counts.entries()).filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 2);
+    bigTypes.forEach(([t]) => L.push(normBlock({ type: 'list', w: bigTypes.length > 1 ? 'half' : 'full', cfg: { src: t, limit: 5 } })));
+    if (allDocs.length) L.push(normBlock({ type: 'gallery', cfg: { src: 'recent', limit: 6 } }));
+    return L.length ? L : [normBlock({ type: 'intro', text: '' })];
   }
-  function canonCard(ev: any) {
-    const cur = ev.docs[0];
-    const olds = ev.docs.slice(1);
-    const deck = wkDeck(cur.body_md || '', 110);
-    const kids = el('div', { class: 'wk-ev-kids wk-canon-old', hidden: true });
-    let filled = false;
-    const toggle = el('button', { class: 'wk-ev-toggle', type: 'button', text: '이전 판 ' + olds.length + ' ▾' });
-    toggle.onclick = (e2: any) => {
-      e2.stopPropagation();
-      if (kids.hidden && !filled) {
-        filled = true;
-        for (const o of olds) kids.append(wkRow(o, { open: openDoc, metas: [relTime(o.updated_at)] }));
-      }
-      kids.hidden = !kids.hidden;
-      toggle.textContent = '이전 판 ' + olds.length + (kids.hidden ? ' ▾' : ' ▴');
-    };
-    const card = el('article', { class: 'wk-ev wk-ev-canon', role: 'link', tabindex: '0', title: cur.title || cur.name },
-      el('div', { class: 'wk-ev-canonhead' },
-        el('span', { class: 'wk-canon-badge', text: '정본' }),
-        el('span', { class: 'wk-ev-title', text: ev.label })),
-      deck ? el('p', { class: 'wk-ev-deck', text: deck }) : null,
-      el('div', { class: 'wk-ev-meta' },
-        el('span', { class: 'wk-row-m', text: '개정 ' + ev.docs.length + '판' }),
-        ev.dateMax ? el('span', { class: 'wk-row-m', text: fmtDay(ev.dateMax) }) : null,
-        toggle),
-      kids);
-    card.addEventListener('click', (e2: any) => { if (!kids.contains(e2.target) && e2.target !== toggle) openDoc(cur, card); });
-    // 카드 자체가 포커스 대상일 때만 — 내부 토글·이전 판 행에서 버블된 Enter 가 정본을 덮어 열지 않게.
-    card.addEventListener('keydown', (ev2: any) => { if (ev2.key === 'Enter' && ev2.target === card) openDoc(cur, card); });
-    return card;
+  let blocks: any[] = loadLayout();
+
+  // 저장 — body_md 에 블록 JSON. 디바운스.
+  let saveTimer: any = null;
+  const setChip = (t: string, busy?: boolean) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
+  async function doSaveLayout() {
+    setChip('저장 중…', true);
+    try {
+      await ensureHome(JSON.stringify(blocks.map((b) => ({ type: b.type, w: b.w, cfg: b.cfg, text: b.text }))));
+      setChip('저장됨');
+      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2000);
+    } catch (e) { setChip('저장 실패', true); toast('대문 저장 실패 — ' + e.message, true); }
   }
-  // 단신 = 사건 1건. 스레드·정본과 같은 카드 셸(.wk-ev)을 써 피드 리듬을 하나로(들쭉날쭉 제거).
-  function briefCard(ev: any) {
-    const x = ev.docs[0];
-    const deck = wkDeck(x.body_md || '', 120);
-    const card = el('article', { class: 'wk-ev wk-ev-brief' + (ev.live ? ' live' : ''), role: 'link', tabindex: '0', 'data-nm': x.name, title: x.title || x.name },
-      el('div', { class: 'wk-ev-head' },
-        wkTick(x),
-        el('span', { class: 'wk-ev-title', text: x.title || x.name })),
-      deck ? el('p', { class: 'wk-ev-deck', text: deck }) : null,
-      el('div', { class: 'wk-ev-meta' }, ...[
-        x.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
-        x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null,
-        el('span', { class: 'wk-row-m', text: ev.dateMax ? fmtDay(ev.dateMax) : relTime(x.updated_at) }),
-        ev.live ? el('span', { class: 'wk-row-m wk-ev-livelbl', text: '진행 중' }) : null,
+  function scheduleSave() { if (!canDoc) return; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSaveLayout, 900); }
+
+  // 질의 — allDocs 를 cfg 로. 어떤 지식이든 제목 형식 무관하게 흘러든다(범용).
+  function queryDocs(cfg: any): any[] {
+    const src = cfg.src || 'recent';
+    let d = allDocs.slice();
+    if (src === 'pin') d = d.filter((r) => r.is_wiki);
+    else if (src === 'human') d = d.filter((r) => r.confidence === 'human');
+    else if (src !== 'recent' && src !== 'all') d = d.filter((r) => (r.type || '') === src);
+    d.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    return d.slice(0, Math.max(1, Math.min(24, +cfg.limit || 5)));
+  }
+  const blkTitle = (b: any) => (b.cfg && b.cfg.title) || (b.type === 'stat' ? '이 카테고리의 구성' : (SRC_LABEL[b.cfg.src] || '문서'));
+  const cfgLabel = (c: any) => (SRC_LABEL[c.src] || '최신') + ' · ' + (c.limit || 5) + '건';
+  const emptyBlk = () => el('div', { class: 'wk-bld-empty', text: editing ? '이 조건에 맞는 문서가 아직 없어요 — ⚙로 조건을 바꿔 보세요.' : '아직 문서가 없어요.' });
+
+  // 갤러리 카드 — 오로라 커버 + 제목(#764v2 시각 자산 재사용).
+  function galCard(x: any) {
+    const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name },
+      wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }),
+      el('div', { class: 'wk-galc-b' },
+        el('div', { class: 'wk-galc-t', text: x.title || x.name }),
+        el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
+    const go = () => openDoc(x, c);
+    c.addEventListener('click', go);
+    c.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') go(); });
+    return c;
+  }
+  function statBody() {
+    const counts = new Map<string, number>();
+    for (const r of allDocs) counts.set(r.type || '기타', (counts.get(r.type || '기타') || 0) + 1);
+    const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const total = allDocs.length || 1;
+    const humanN = allDocs.filter((r) => r.confidence === 'human').length;
+    return el('div', {},
+      el('div', { class: 'wk-stat-bar' }, ...entries.map(([t, n]) =>
+        el('span', { class: 'wk-stat-seg', 'data-ty': t, title: (KN_TYPE_LABEL[t] || t) + ' ' + n, style: 'width:' + (n / total * 100).toFixed(1) + '%' }))),
+      el('div', { class: 'wk-stat-leg' }, ...[
+        ...entries.map(([t, n]) => el('span', { class: 'wk-stat-li' }, el('i', { class: 'wk-stat-dot', 'data-ty': t }), el('span', { text: (KN_TYPE_LABEL[t] || t) + ' ' + n }))),
+        humanN ? el('span', { class: 'wk-stat-li wk-stat-human', text: '사람저작 ' + humanN }) : null,
       ].filter(Boolean)));
-    const go = () => openDoc(x, card);
-    card.addEventListener('click', go);
-    card.addEventListener('keydown', (e2: any) => { if (e2.key === 'Enter' && e2.target === card) go(); });
-    return card;
   }
-  function renderEvent(ev: any) {
-    if (ev.kind === 'thread') return threadCard(ev);
-    if (ev.kind === 'canon') return canonCard(ev);
-    return briefCard(ev);
+
+  // 블록 본문(읽기 형태 — 편집도 같은 본문, 위에 크롬만 얹음).
+  function blockContent(b: any) {
+    if (b.type === 'rule') return el('hr', { class: 'wk-bld-rule' });
+    if (b.type === 'intro' || b.type === 'heading') {
+      const ed = editing && canDoc;
+      const node = el('div', { class: (b.type === 'heading' ? 'wk-bld-heading' : 'wk-bld-intro') + (ed ? ' ed' : ''),
+        ...(ed ? { contenteditable: 'true', spellcheck: 'false', 'data-ph': b.type === 'heading' ? '소제목' : '이 카테고리가 무엇인지 팀의 말로…' } : {}) });
+      node.textContent = b.text || '';
+      if (ed) node.addEventListener('blur', () => { const t = node.textContent || ''; if (t !== b.text) { b.text = t; scheduleSave(); } });
+      return node;
+    }
+    const head = el('div', { class: 'wk-bld-head' },
+      el('span', { class: 'wk-bld-title', text: blkTitle(b) }),
+      el('span', { class: 'wk-bld-meta', text: b.type === 'stat' ? (allDocs.length + '건') : cfgLabel(b.cfg) }));
+    let body: any;
+    if (b.type === 'stat') body = statBody();
+    else {
+      const d = queryDocs(b.cfg);
+      if (!d.length) body = emptyBlk();
+      else if (b.type === 'highlight') body = el('div', { class: 'wk-bld-hl' }, ...d.slice(0, b.cfg.limit || 3).map((x) => wkDocCard(x, { open: openDoc, deckCap: 128, cls: 'wk-hlcard' })));
+      else if (b.type === 'gallery') body = el('div', { class: 'wk-bld-gal' }, ...d.map(galCard));
+      else { body = el('div', { class: 'wk-bld-list' }); for (const x of d) body.append(wkRow(x, { open: openDoc, deck: wkDeck(x.body_md || '', 92), metas: [x.is_wiki ? '인덱스' : null, x.type ? (KN_TYPE_LABEL[x.type] || x.type) : null, relTime(x.updated_at)] })); }
+    }
+    return el('div', {}, head, body);
   }
-  function buildFeed() {
-    if (!events.length) return null;
-    const sec = bfSection('wk-ch-now', '일의 흐름', events.length,
-      liveN ? el('span', { class: 'wk-feed-live', text: '지금 움직임 ' + liveN }) : null);
-    const INITIAL = 8, MORE = 32;
-    const feed = el('div', { class: 'wk-feed' }, ...events.slice(0, INITIAL).map(renderEvent));
-    sec.body.append(feed);
-    if (events.length > INITIAL) {
-      const moreBtn = el('button', { class: 'wk-feed-more', type: 'button', text: '지난 일 ' + (events.length - INITIAL) + '건 더 보기 ▾' });
-      moreBtn.onclick = () => {
-        feed.append(...events.slice(INITIAL, INITIAL + MORE).map(renderEvent));
-        moreBtn.remove();
-        if (events.length > INITIAL + MORE) sec.body.append(el('div', { class: 'wk-feed-note',
-          text: '나머지 ' + (events.length - INITIAL - MORE) + '건은 아래 전체 문서에서 이어져요.' }));
+
+  // 블록 DOM(편집 모드에서만 크롬·드래그).
+  function blockEl(b: any, i: number) {
+    const isText = b.type === 'intro' || b.type === 'heading' || b.type === 'rule';
+    const wrap = el('div', { class: 'wk-blk' + (b.w === 'half' ? ' half' : '') + (isText ? ' text' : ''), 'data-i': String(i) });
+    if (editing && canDoc) {
+      wrap.setAttribute('draggable', 'true');
+      wrap.append(el('span', { class: 'wk-blk-grip', 'aria-hidden': 'true', title: '끌어서 이동', text: '⠿' }));
+      const chrome = el('div', { class: 'wk-blk-chrome' });
+      const cbtn = (a: string, label: string, title: string, warn?: boolean) => {
+        const btn = el('button', { class: 'wk-blk-cbtn' + (warn ? ' warn' : ''), type: 'button', title, 'aria-label': title, text: label });
+        btn.onclick = (e: any) => { e.stopPropagation(); blkAct(a, i, btn); };
+        return btn;
       };
-      sec.body.append(moreBtn);
+      if (!isText) chrome.append(cbtn('cfg', '⚙', '어떤 지식을 보일지'));
+      chrome.append(cbtn('w', '⤢', '너비 바꾸기'), cbtn('up', '↑', '위로'), cbtn('down', '↓', '아래로'), cbtn('del', '✕', '삭제', true));
+      wrap.append(chrome);
+      wireBlkDrag(wrap, i);
     }
-    return sec.el;
+    wrap.append(blockContent(b));
+    return wrap;
+  }
+  function addBtnEl(label: string) {
+    const b = el('button', { class: 'wk-blk-add', type: 'button', text: label });
+    b.onclick = openPalette;
+    return b;
+  }
+  function renderCanvas() {
+    canvas.replaceChildren();
+    if (!blocks.length && !(editing && canDoc)) { canvas.append(wkEmpty('아직 대문이 비어 있어요.', canDoc ? addBtnEl('＋ 첫 블록 추가') : null)); return; }
+    blocks.forEach((b, i) => canvas.append(blockEl(b, i)));
+    if (editing && canDoc) canvas.append(el('div', { class: 'wk-blk-add-slot' }, addBtnEl('＋ 블록 추가')));
+    const shown: string[] = [];
+    canvas.querySelectorAll('[data-nm]').forEach((n: any) => { const nm = n.getAttribute('data-nm'); if (nm) shown.push(nm); });
+    if (shown.length) setWikiPeekList(shown);
   }
 
-  // ── 투영 2 · 먼저 읽기 — 소개글 페이지 카드 순서(큐레이션 = 글쓰기) > 핀 ∪ 사람 저작(실측상
-  //  유일하게 신뢰 가능한 앵커 풀). 읽음(기기 로컬) 진행률. ──
-  function firstReadDocs(): { docs: any[], curated: boolean } {
-    const picked: any[] = [];
-    const seen = new Set<string>();
-    const re = /\[[^\]]*\]\(#\/k\/([^)]+)\)/g;
-    let m;
-    while ((m = re.exec(homeBody())) && picked.length < 5) {
-      let nm = m[1]; try { nm = decodeURIComponent(nm); } catch (_) { /* 원문 유지 */ }
-      if (seen.has(nm) || isCategoryHomeDoc(nm)) continue;
-      seen.add(nm);
-      const r = byName.get(nm);
-      if (r && !r.is_folder) picked.push(r);
-    }
-    if (picked.length >= 2) return { docs: picked, curated: true };
-    const byUpdatedDesc = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
-    const auto: any[] = [];
-    const push = (r) => { if (r && !auto.includes(r) && auto.length < 5) auto.push(r); };
-    allDocs.filter((r) => r.is_wiki).sort(byUpdatedDesc).forEach(push);
-    allDocs.filter((r) => r.confidence === 'human').sort(byUpdatedDesc).forEach(push);
-    return { docs: auto, curated: false };
-  }
-  function introBlock(cls = '') {
-    if (!canDoc && !hasContent) return null;
-    return el('div', { class: 'wk-rail-sec wk-rail-intro' + (cls ? ' ' + cls : '') },
-      el('div', { class: 'wk-rail-label' }, el('span', { text: '팀의 소개' }), saveChip),
-      curation);
-  }
-  // 팀이 직접 쓴 소개가 '리치'(헤딩·페이지 카드·목록·긴 글)면 그게 곧 읽기 가이드 — 자동 '먼저 읽기'는
-  //  같은 문서를 두 번 세우는 중복이라 접고, 소개에 레일을 내준다. 빈/짧은 카테고리에서만 자동 앵커.
-  const curationRich = (() => {
-    const cb = homeBody();
-    return cb.length > 140 || /\]\(#\/k\/|\[\[[^\]]/.test(cb)
-      || /(^|\n)\s{0,3}#{1,3}\s/.test(cb) || /(^|\n)\s*[-*]\s+\S/.test(cb);
-  })();
-  function buildRail() {
-    const rail = el('aside', { class: 'wk-v4-rail' });
-    const fr = curationRich ? { docs: [], curated: false } : firstReadDocs();
-    if (fr.docs.length >= 2) {
-      const readN = fr.docs.filter((d) => wkIsRead(d.name)).length;
-      const blk = el('div', { class: 'wk-rail-sec' },
-        el('div', { class: 'wk-rail-label' },
-          el('span', { text: '먼저 읽기' }),
-          el('span', { class: 'wk-rail-prog' + (readN === fr.docs.length ? ' done' : ''), text: readN + '/' + fr.docs.length })));
-      fr.docs.forEach((d, i) => {
-        const read = wkIsRead(d.name);
-        const it = el('div', { class: 'wk-c4-it' + (read ? ' read' : ''), role: 'link', tabindex: '0', 'data-nm': d.name, title: d.title || d.name },
-          el('span', { class: 'wk-c4-num', 'aria-hidden': 'true', text: read ? '✓' : String(i + 1) }),
-          el('span', { class: 'wk-c4-title', text: d.title || d.name }));
-        const go = () => openDoc(d, it);
-        it.addEventListener('click', go);
-        it.addEventListener('keydown', (ev2: any) => { if (ev2.key === 'Enter') go(); });
-        blk.append(it);
-      });
-      if (!fr.curated && canDoc) blk.append(el('div', { class: 'wk-rail-hint', text: '소개글에 페이지 카드([[)를 넣으면 이 순서를 직접 짤 수 있어요.' }));
-      rail.append(blk);
-    }
-    const intro = introBlock();
-    if (intro) rail.append(intro);
-    return rail.childElementCount ? rail : null;
+  function blkAct(a: string, i: number, btn?: HTMLElement) {
+    if (a === 'del') { blocks.splice(i, 1); renderCanvas(); scheduleSave(); return; }
+    if (a === 'up' && i > 0) { const t = blocks[i - 1]; blocks[i - 1] = blocks[i]; blocks[i] = t; renderCanvas(); scheduleSave(); return; }
+    if (a === 'down' && i < blocks.length - 1) { const t = blocks[i + 1]; blocks[i + 1] = blocks[i]; blocks[i] = t; renderCanvas(); scheduleSave(); return; }
+    if (a === 'w') { blocks[i].w = blocks[i].w === 'half' ? 'full' : 'half'; renderCanvas(); scheduleSave(); return; }
+    if (a === 'cfg' && btn) openCfg(i, btn);
   }
 
-  // ── 투영 4 · 주제 색인 — 점선 리더(신문 목차 문법: 주제→규모→진입 한 행). n≥40 만. ──
-  function setTopic(label: string, names: Set<string>) {
-    topicFilter = { label, names };
-    paintLibrary();
-    const t = document.getElementById('wk-ch-docs');
-    if (t) t.scrollIntoView(smoothOpt);
-  }
-  function buildIndex() {
-    if (!themes.length) return null;
-    const covered: Set<string> = (themes as any).coveredNames || new Set();
-    const uncov = allDocs.filter((r) => !covered.has(r.name));
-    const pct = Math.round(covered.size / Math.max(1, allDocs.length) * 100);
-    const sec = bfSection('wk-ch-index', '주제', null,
-      el('span', { class: 'wk-index-note', text: '제목 기준 자동 분류 · 커버 ' + pct + '%' }));
-    const grid = el('div', { class: 'wk-index' });
-    const idxRow = (label: string, names: Set<string>, extraCls = '') => {
-      const row = el('button', { class: 'wk-index-row' + extraCls, type: 'button', title: '「' + label + '」 문서만 보기' },
-        el('span', { class: 'wk-index-topic', text: label }),
-        el('span', { class: 'wk-index-dots', 'aria-hidden': 'true' }),
-        el('span', { class: 'wk-index-n', text: String(names.size) }));
-      row.onclick = () => setTopic(label, names);
-      return row;
-    };
-    for (const g of themes) grid.append(idxRow(g.label, new Set<string>(g.docs.map((d) => d.name))));
-    if (uncov.length) grid.append(idxRow('그 외', new Set<string>(uncov.map((d) => d.name)), ' etc'));
-    sec.body.append(grid);
-    return sec.el;
+  // 설정 팝오버 — 어떤 지식(src) + 개수.
+  function openCfg(i: number, anchor: HTMLElement) {
+    document.querySelectorAll('.wk-blk-cfg').forEach((p: any) => (p._close ? p._close() : p.remove()));
+    const b = blocks[i];
+    const srcSel: any = el('select', { class: 'wk-cfg-sel' },
+      ...SRC_OPTS.map(([v, lab]) => el('option', { value: v, ...(b.cfg.src === v ? { selected: 'selected' } : {}), text: lab })));
+    const limIn: any = el('input', { class: 'wk-cfg-num', type: 'number', min: '1', max: '24', value: String(b.cfg.limit || 5) });
+    const pop: any = el('div', { class: 'wk-blk-cfg' },
+      el('div', { class: 'wk-cfg-h', text: '이 블록의 지식' }),
+      el('label', { class: 'wk-cfg-l', text: '무엇을 보일까' }), srcSel,
+      el('label', { class: 'wk-cfg-l', text: '몇 개' }), limIn);
+    const close = () => { pop.remove(); document.removeEventListener('mousedown', onDoc, true); };
+    pop._close = close;
+    const onDoc = (ev: any) => { if (!pop.contains(ev.target) && ev.target !== anchor) close(); };
+    srcSel.onchange = () => { b.cfg.src = srcSel.value; b.cfg.title = null; close(); renderCanvas(); scheduleSave(); };
+    limIn.onchange = () => { b.cfg.limit = Math.max(1, Math.min(24, +limIn.value || 5)); close(); renderCanvas(); scheduleSave(); };
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = (r.bottom + 6 + window.scrollY) + 'px';
+    pop.style.left = Math.max(8, r.right - 240) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
   }
 
-  // ── 챕터 바 — 대문의 목차(스크롤 스파이 + 점프). 챕터 2개 이상일 때만. ──
-  function buildChapterBar(sections: { id: string, label: string, count?: number | null }[]) {
-    if (sections.length < 2) return null;
-    const bar = el('nav', { class: 'wk-chbar', 'aria-label': '대문 목차' });
-    const items = new Map<string, any>();
-    for (const s of sections) {
-      const it = el('button', { class: 'wk-ch-it', type: 'button' },
-        el('span', { text: s.label }),
-        s.count != null ? el('span', { class: 'wk-ch-count', text: String(s.count) }) : null);
-      it.onclick = () => { const t = document.getElementById(s.id); if (t) t.scrollIntoView(smoothOpt); };
-      items.set(s.id, it);
-      bar.append(it);
-    }
-    if (typeof IntersectionObserver !== 'undefined') {
-      const io = new IntersectionObserver((ents) => {
-        for (const en of ents) {
-          const it = items.get((en.target as any).id);
-          if (!it) continue;
-          if (en.isIntersecting) {
-            bar.querySelectorAll('.wk-ch-it.on').forEach((n: any) => n.classList.remove('on'));
-            it.classList.add('on');
-          }
-        }
-      }, { rootMargin: '-120px 0px -65% 0px' });
-      setTimeout(() => { for (const s of sections) { const t = document.getElementById(s.id); if (t) io.observe(t); } }, 0);
-    }
-    return bar;
+  // 블록 추가 팔레트.
+  const PALETTE: any[] = [
+    { type: 'intro', ic: '✍', name: '소개 · 자유 글', desc: '팀의 말로 이 카테고리가 무엇인지 직접 씁니다.', text: '' },
+    { type: 'highlight', ic: '◆', name: '핵심 하이라이트', desc: '고정하거나 고른 문서를 큰 카드로 — 본문 미리보기와 함께.', cfg: { src: 'pin', limit: 3 } },
+    { type: 'list', ic: '≣', name: '문서 목록', desc: '조건(유형·사람저작·최신)에 맞는 지식을 목록으로.', w: 'half', cfg: { src: 'recent', limit: 5 } },
+    { type: 'gallery', ic: '▦', name: '문서 갤러리', desc: '지식을 커버 카드 그리드로 — 시각적으로.', cfg: { src: 'recent', limit: 6 } },
+    { type: 'stat', ic: '◧', name: '구성 현황', desc: '이 카테고리가 무엇으로 이뤄졌는지 한눈에.' },
+    { type: 'heading', ic: 'H', name: '소제목', desc: '구역을 나누는 제목.', text: '' },
+    { type: 'rule', ic: '—', name: '구분선', desc: '얇은 가로선으로 구분.' },
+  ];
+  function openPalette() {
+    const grid = el('div', { class: 'wk-pal-grid' });
+    const back = overlayBox('블록 추가',
+      el('p', { class: 'wk-pal-note', text: '모든 블록은 이 카테고리의 지식에서 나옵니다. 조건은 나중에 ⚙로 바꿀 수 있어요.' }),
+      grid);
+    PALETTE.forEach((p) => {
+      const card = el('button', { class: 'wk-pal-card', type: 'button' },
+        el('span', { class: 'wk-pal-ic', 'aria-hidden': 'true', text: p.ic }),
+        el('b', { class: 'wk-pal-name', text: p.name }), el('span', { class: 'wk-pal-desc', text: p.desc }));
+      card.onclick = () => {
+        blocks.push(normBlock({ type: p.type, w: p.w || 'full', cfg: p.cfg, text: p.text || '' }));
+        back.remove(); renderCanvas(); scheduleSave();
+        const slot = canvas.querySelector('.wk-blk-add-slot');
+        if (slot) slot.scrollIntoView({ block: 'center' });
+      };
+      grid.append(card);
+    });
   }
 
-  // ── 조립 — 통일 뼈대: 문서가 1건이라도 있으면 모든 카테고리가 같은 구조를 쓴다(규모로 레이아웃을
-  //  갈아엎지 않는다 — 적으면 그 구역만 조용히 비거나 빠진다). 커버→정의→현황→챕터바→
-  //  [일의 흐름 · 먼저읽기/소개]→주제(n≥40)→서고. 드릴다운=작업 모드, 0건=초대. ──
-  const SPACE_KO2 = { business: '사업', product: '제품', system: '시스템' };
-  const latestAt = allDocs.reduce((m, r) => (String(r.updated_at || '') > m ? String(r.updated_at) : m), '');
-  const statsLine = el('div', { class: 'wk-cat-stats' }, ...[
-    el('span', { class: 'wk-row-m', text: SPACE_KO2[cat.space] || cat.space || '' }),
-    el('span', { class: 'wk-row-m', text: '문서 ' + allDocs.length }),
-    threadsN ? el('span', { class: 'wk-row-m', text: '스레드 ' + threadsN }) : null,
-    liveN ? el('span', { class: 'wk-row-m wk-stats-live', text: '진행 중 ' + liveN }) : null,
-    topFolders.length ? el('span', { class: 'wk-row-m', text: '폴더 ' + topFolders.length }) : null,
-    latestAt ? el('span', { class: 'wk-row-m', text: '최근 ' + relTime(latestAt) }) : null,
-  ].filter(Boolean));
+  // 블록 드래그 재배치.
+  let dragFrom: number | null = null;
+  function wireBlkDrag(elm: HTMLElement, i: number) {
+    elm.addEventListener('dragstart', (e: any) => { dragFrom = i; elm.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+    elm.addEventListener('dragend', () => { elm.classList.remove('dragging'); canvas.querySelectorAll('.dragover').forEach((x) => x.classList.remove('dragover')); });
+    elm.addEventListener('dragover', (e: any) => { e.preventDefault(); if (dragFrom !== null && dragFrom !== i) elm.classList.add('dragover'); });
+    elm.addEventListener('dragleave', () => elm.classList.remove('dragover'));
+    elm.addEventListener('drop', (e: any) => { e.preventDefault(); if (dragFrom === null || dragFrom === i) return; const m = blocks.splice(dragFrom, 1)[0]; blocks.splice(i, 0, m); dragFrom = null; renderCanvas(); scheduleSave(); });
+  }
 
+  // 편집/읽기 토글 — canDoc 만.
+  const modeToggle = canDoc ? el('button', { class: 'wk-bld-mode btn btn-ghost btn-sm', type: 'button' }) : null;
+  const editHint = el('div', { class: 'wk-bld-hint' },
+    el('span', { text: '✎ 편집 모드 — 블록을 끌어 옮기고, ⚙로 어떤 지식을 담을지 바꾸고, ⤢로 크기를, 아래 ＋로 새 블록을. 원하는 모양으로.' }));
+
+  const inDrill = !!f.folder;   // 폴더 드릴다운은 작업 모드 — 캔버스 생략(빵부스러기+폴더 내용만)
   library.id = 'wk-ch-docs';
-  const inDrill = !!f.folder;   // 폴더 드릴다운은 작업 모드 — 대문 구역 생략(빵부스러기+폴더 내용만)
-  const populated = !inDrill && allDocs.length > 0;
+  actions.append(...[saveChip, modeToggle].filter(Boolean));
 
-  const defRow = inDrill ? null : buildDef();
-  const feedSec = populated ? buildFeed() : null;
-  const railEl = populated ? buildRail() : null;
-  const indexSec = populated ? buildIndex() : null;   // buildIndex 내부에서 n≥40 게이트 — 없으면 조용히 빠짐
-  // 서고(전체 문서)는 피드가 다 담지 못할 때만 = 아카이브: 스레드로 묶여 숨은 문서가 있거나 · 폴더가 있거나 ·
-  //  양이 많을 때(>24). 소형 평면 카테고리(피드가 곧 전부)에서는 같은 목록 두 번을 피한다.
-  const showLibrary = inDrill || !populated || topFolders.length > 0
-    || allDocs.length > events.length || allDocs.length > 24 || !!f.type || !!topicFilter;
-  const chapterDefs = (populated ? [
-    feedSec ? { id: 'wk-ch-now', label: '일의 흐름', count: events.length } : null,
-    indexSec ? { id: 'wk-ch-index', label: '주제', count: themes.length } : null,
-    showLibrary ? { id: 'wk-ch-docs', label: '전체 문서', count: allDocs.length } : null,
-  ].filter(Boolean) : []) as any[];
-  const chbar = populated ? buildChapterBar(chapterDefs) : null;
-  // 중앙부 — 항상 2열(좌 일의 흐름 + 우 레일). 레일이 비면(권한·풀 부재) 피드 전폭. 0건은 초대만.
-  const mid = populated
-    ? (railEl ? el('div', { class: 'wk-v4-grid' }, el('div', { class: 'wk-v4-main' }, ...[feedSec].filter(Boolean)), railEl)
-      : feedSec)
-    : (inDrill ? null : introBlock('wide'));
+  // 전체 문서(관리) — 캔버스 아래 접이식(기본 접힘). 대문은 빌더가 주인공이고, 서고는 펼쳐 보는 아카이브.
+  //  드릴다운(폴더 안)일 땐 이게 곧 작업 화면이므로 항상 펼침.
+  let libOpen = inDrill;
+  const libToggle = el('button', { class: 'wk-lib-toggle', type: 'button' });
+  const libSec = el('section', { class: 'wk-lib-sec' });
+  function paintLibSec() {
+    if (inDrill) { libSec.replaceChildren(library); return; }
+    libToggle.textContent = (libOpen ? '▾ ' : '▸ ') + '전체 문서 ' + allDocs.length;
+    libSec.replaceChildren(...[libToggle, libOpen ? library : null].filter(Boolean));
+  }
+  libToggle.onclick = () => { libOpen = !libOpen; paintLibSec(); };
+  paintLibSec();
 
-  box.replaceChildren(
-    el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v4' },
-      cover,
-      el('div', { class: 'wk-cat-inner' }, ...[
-        iconBtn,
-        el('div', { class: 'wk-cat-headrow' },
-          el('div', { class: 'wk-cat-headmain' }, titleEl, descEl),
-          actions),
-        defRow,
-        statsLine,
-        entrySlot,
-        chbar,
-        mid,
-        indexSec,
-        showLibrary ? library : null,
-      ].filter(Boolean))));
+  const root = el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v6' }, cover,
+    el('div', { class: 'wk-cat-inner' }, ...[
+      iconBtn,
+      el('div', { class: 'wk-cat-headrow' },
+        el('div', { class: 'wk-cat-headmain' }, titleEl, descEl),
+        actions),
+      inDrill ? null : editHint,
+      inDrill ? null : canvas,
+      libSec,
+    ].filter(Boolean)));
+
+  function paintMode() {
+    if (modeToggle) { modeToggle.textContent = editing ? '✓ 완료' : '✎ 편집'; modeToggle.classList.toggle('on', editing); }
+    root.classList.toggle('editing', editing);
+    canvas.classList.toggle('editing', editing);
+  }
+  if (modeToggle) modeToggle.onclick = () => { editing = !editing; if (!editing) { clearTimeout(saveTimer); doSaveLayout(); } paintMode(); renderCanvas(); };
+
+  renderCanvas();
+  paintMode();
+  box.replaceChildren(root);
 }
 
 export { renderCategorySurface };
