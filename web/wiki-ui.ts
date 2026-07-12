@@ -35,6 +35,23 @@ function wkReadVisits(): any[] {
   catch (_) { return []; }
 }
 
+// ── 읽음 추적(기기 로컬) — 대문 '읽기 코스' 진행률의 근거. 문서를 열면(피크·페이지) 읽음 처리. ──
+const WK_READ_KEY = 'wk_read_v1';
+function wkReadNames(): Set<string> {
+  try { const v = JSON.parse(localStorage.getItem(WK_READ_KEY) || '[]'); return new Set(Array.isArray(v) ? v : []); }
+  catch (_) { return new Set(); }
+}
+function wkMarkRead(name: string) {
+  try {
+    if (!name || isCategoryHomeDoc(name)) return;
+    const s = wkReadNames();
+    if (s.has(name)) return;
+    s.add(name);
+    localStorage.setItem(WK_READ_KEY, JSON.stringify(Array.from(s).slice(-800)));
+  } catch (_) { /* 프라이빗 모드 등 — 추적 생략 */ }
+}
+function wkIsRead(name: string): boolean { return wkReadNames().has(name); }
+
 // ── 해시 — 시드 문자열의 결정적 정수(오로라 레시피 선택 등). ──
 function wkHash(s: string): number {
   let h = 0;
@@ -189,4 +206,4 @@ function wkEmpty(text: string, action?: any) {
   return el('div', { class: 'wk-empty' }, el('span', { text }), action || null);
 }
 
-export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };
+export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };

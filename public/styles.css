@@ -5973,3 +5973,117 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
   .wk-ccard, .wk-doccard, .wk-folder-tile, .wk-hero-search { transition: none; }
   .wk-ccard:hover, .wk-doccard:hover, .wk-folder-tile:hover { transform: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   #764v3 브리핑 대문 — "대문 = 쌓인 지식을 온보딩용으로 가공한 화면".
+   개요(정의·범위 should + 팀의 소개) · 읽기 코스(진행률) · 핵심 개념(사전 카드) ·
+   결정 기록(월별 타임라인) · 런북 · 전체 문서 — 챕터 바(스크롤 스파이)가 목차.
+   ════════════════════════════════════════════════════════════════════════════ */
+/* ── 챕터 바 — 대문의 목차. sticky(topbar 64px 아래), 현재 챕터 강조. ── */
+.wk-chbar { position: sticky; top: 64px; z-index: 5; display: flex; gap: 2px; align-items: center;
+  margin: 18px -10px 6px; padding: 8px 10px; background: var(--bg); border-bottom: 1px solid var(--line-row);
+  overflow-x: auto; scrollbar-width: none; }
+.wk-chbar::-webkit-scrollbar { display: none; }
+.wk-ch-it { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--muted); padding: 6px 11px; border-radius: 8px; white-space: nowrap; }
+.wk-ch-it:hover { color: var(--ink-sub); background: var(--bg-tint); }
+.wk-ch-it.on { color: var(--ink); background: var(--bg-sel); }
+.wk-ch-count { font-family: var(--wkm); font-size: 10.5px; color: var(--muted-2); font-weight: 400; }
+.wk-ch-it.on .wk-ch-count { color: var(--ink-note); }
+
+/* ── 브리핑 섹션 — 가르치는 문서의 스케일(섹션 제목 17px). 챕터 점프 여백 확보. ── */
+.wk-bf-sec { margin: 34px 0 0; scroll-margin-top: 124px; }
+.wk-bf-head { display: flex; align-items: baseline; gap: 9px; margin: 0 0 12px; }
+.wk-bf-title { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.3px; color: var(--ink); }
+.wk-bf-count { font-family: var(--wkm); font-size: 11.5px; color: var(--muted-2); }
+#wk-ch-docs { scroll-margin-top: 124px; }
+
+/* ── 개요 — 정의·범위(should) + 팀의 소개 2단. ── */
+.wk-bf-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+.wk-bf-grid.two { grid-template-columns: 1.1fr .9fr; }
+.wk-bf-col { min-width: 0; border: 1px solid var(--line-row); border-radius: 12px; padding: 14px 18px 16px;
+  background: var(--bg-tint); }
+.wk-bf-collabel { font-family: var(--wkm); font-size: 10.5px; color: var(--muted-2); margin-bottom: 8px; }
+.wk-bf-should.md-rendered { font-size: 14px; line-height: 1.7; color: var(--ink-note); }
+.wk-bf-should .md-p { margin: 0 0 9px; }
+.wk-bf-should.clamped { max-height: 264px; overflow: hidden; position: relative; }
+.wk-bf-should.clamped::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px;
+  background: linear-gradient(180deg, transparent, var(--bg-tint)); }
+.wk-bf-more { border: none; background: none; cursor: pointer; font-size: 12px; font-weight: 600;
+  color: var(--muted); padding: 6px 0 0; }
+.wk-bf-more:hover { color: var(--ink-sub); }
+.wk-bf-invite { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; border: 1px dashed var(--line-net);
+  background: var(--bg); border-radius: 10px; padding: 14px 16px; cursor: pointer; font-size: 13px; line-height: 1.6;
+  color: var(--muted); }
+.wk-bf-invite:hover { border-color: var(--blue); color: var(--ink-sub); }
+.wk-bf-invite-act { color: var(--blue-deep); font-weight: 700; font-size: 12.5px; }
+.wk-bf-col .wk-cat-curation { margin-top: 0; }
+.wk-bf-col .be { min-height: 60px; padding-bottom: 8px; font-size: 14.5px; }
+
+/* ── 읽기 코스 — 연결선으로 이어진 스텝. 읽으면 민트 체크. ── */
+.wk-course { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; position: relative; }
+.wk-step { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  padding: 12px 14px; cursor: pointer; min-width: 0; display: flex; gap: 10px; align-items: flex-start;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.wk-step:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(21, 35, 59, .09); border-color: var(--line-net); }
+.wk-step:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.wk-step:not(:first-child)::before { content: ''; position: absolute; top: 50%; left: -11px; width: 12px;
+  border-top: 2px solid var(--line-net); }
+.wk-step-num { flex: none; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-family: var(--wkm); font-size: 12px; font-weight: 700; color: var(--ink-note);
+  background: var(--bg-sel); border: 1px solid var(--line-net); }
+.wk-step.read .wk-step-num { color: #fff; background: var(--mint); border-color: var(--mint); }
+.wk-step-main { min-width: 0; }
+.wk-step-title { font-size: 13.5px; font-weight: 650; color: var(--ink); line-height: 1.4; letter-spacing: -.1px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wk-step-meta { display: flex; gap: 8px; margin-top: 6px; }
+.wk-step-readlbl { color: var(--mint-deep); }
+.wk-course-progress { font-family: var(--wkm); font-size: 11.5px; color: var(--muted); }
+.wk-course-progress.done { color: var(--mint-deep); }
+.wk-course-hint { margin-top: 9px; font-size: 11.5px; color: var(--muted-2); }
+
+/* ── 결정 타임라인 — 좌측 레일 + 점 + 월 라벨. 도메인의 스토리. ── */
+.wk-timeline { position: relative; padding-left: 20px; }
+.wk-timeline::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px;
+  background: var(--line-row); border-radius: 1px; }
+.wk-tl-month { position: relative; font-family: var(--wkm); font-size: 11px; color: var(--muted-2); margin: 14px 0 6px; }
+.wk-tl-month:first-child { margin-top: 0; }
+.wk-tl-item { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px 7px 2px;
+  margin: 0 -10px 0 0; border-radius: 8px; cursor: pointer; min-width: 0; }
+.wk-tl-item:hover { background: var(--bg-tint); }
+.wk-tl-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.wk-tl-dot { position: absolute; left: -19px; top: 14px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--blue); box-sizing: border-box; }
+.wk-tl-main { flex: 1; min-width: 0; }
+.wk-tl-title { font-size: 14px; font-weight: 650; color: var(--ink); letter-spacing: -.1px; line-height: 1.45;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-tl-deck { margin-top: 2px; font-size: 12.5px; color: var(--muted-2); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-tl-date { flex: none; margin-top: 3px; }
+
+/* ── 핵심 개념 — 2열 사전 카드(데크 3줄) ── */
+.wk-concept-grid { grid-template-columns: repeat(2, 1fr); }
+.wk-concept-grid .wk-doccard-deck { -webkit-line-clamp: 3; }
+
+/* 전체 문서 챕터로 자연스럽게 — 라이브러리 상단 여백 */
+.wk-cat-v3 .wk-cat-library { margin-top: 10px; }
+.wk-cat-v3 .wk-doclist-wrap .wk-typerow { margin-top: 30px; }
+
+/* ── 반응형 ── */
+@media (max-width: 1100px) {
+  .wk-course { grid-template-columns: repeat(2, 1fr); }
+  .wk-step:nth-child(odd)::before { display: none; }
+}
+@media (max-width: 900px) {
+  .wk-bf-grid.two { grid-template-columns: 1fr; }
+  .wk-concept-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .wk-course { grid-template-columns: 1fr; }
+  .wk-step::before { display: none; }
+  .wk-chbar { top: 56px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wk-step { transition: none; }
+  .wk-step:hover { transform: none; }
+}
