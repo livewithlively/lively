@@ -443,11 +443,13 @@ function dismissWikiPeek() {
     setTimeout(() => o.classList.remove('wk-row-flash'), 900);
   }
   wkPeekOriginEl = null;
+  if (cur.onClose) { try { cur.onClose(); } catch (_) { /* 갱신 실패는 무해 — 다음 repaint 가 바로잡음 */ } }
 }
 
 function openWikiPeek(name: string, opts?: any) {
   const fromUrl = !!(opts && opts.fromUrl);
   const onRefresh = opts && opts.onRefresh;
+  const onClose = opts && opts.onClose;   // 닫힘(교체·순회·닫기) 시 1회 — 호출부의 제자리 읽음 갱신 등
   // 좁은 화면 — 피크 대신 페이지로(호버·오버레이가 비좁음). URL 복원(fromUrl) 진입은 반드시 replace —
   //  push 하면 뒤로가기가 &peek= 해시로 돌아와 다시 강등되는 무한 전방 트랩이 생긴다.
   if (matchMedia('(max-width: 1100px)').matches) {
@@ -489,7 +491,7 @@ function openWikiPeek(name: string, opts?: any) {
     if (!nowPeek) { wkPeekNavGuard = true; dismissWikiPeek(); return; }          // 뒤로가기 = 닫힘
     if (nowPeek !== cur.name) {                                                  // 다른 피크로 이동 — 내용 교체
       wkPeekNavGuard = true;
-      openWikiPeek(nowPeek, { fromUrl: true, onRefresh: cur.onRefresh });
+      openWikiPeek(nowPeek, { fromUrl: true, onRefresh: cur.onRefresh, onClose: cur.onClose });
     }
   };
   const traverse = (dir: number) => {
@@ -499,7 +501,7 @@ function openWikiPeek(name: string, opts?: any) {
     const next = wkPeekListCtx[at + dir];
     if (!next) return true;   // 끝 — 소비만
     history.replaceState(null, '', wkHashWithPeek(next));
-    openWikiPeek(next, { onRefresh, _traverse: true });
+    openWikiPeek(next, { onRefresh, onClose, _traverse: true });
     return true;
   };
   const onKey = (ev: any) => {
@@ -523,7 +525,7 @@ function openWikiPeek(name: string, opts?: any) {
 
   document.body.append(back);
   requestAnimationFrame(() => back.classList.add('open'));
-  wkPeekCur = { back, name, pushed: prevPushed, baseHash, onPop, onKey, onRefresh };
+  wkPeekCur = { back, name, pushed: prevPushed, baseHash, onPop, onKey, onRefresh, onClose };
   if (!fromUrl && !(opts && opts._traverse)) { history.pushState(null, '', wkHashWithPeek(name)); wkPeekCur.pushed = true; }
   window.addEventListener('popstate', onPop);
   document.addEventListener('keydown', onKey, true);
