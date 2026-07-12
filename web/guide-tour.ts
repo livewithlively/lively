@@ -190,7 +190,7 @@ const SCENES: any[] = [
   {
     key: 'wiki', tab: 'knowledge',
     match: (h: string) => h.startsWith('#/knowledge'),
-    ready: () => !!q('.kn-side, .wk-home, .wk-cat'), hint: 'main .wk-row',   // #764 재구축 표면
+    ready: () => !!q('.kn-side, .wk-home, .wk-cat'), hint: 'main .wk-row, main .wk-doccard',   // #764v2 카드 표면 포함
     build(ctx: any) {
       const steps: any[] = [];
       if (q('.kn-side')) steps.push({ target: '.kn-side', placement: 'right', title: 'AI가 읽는 지식 창고',
@@ -199,8 +199,8 @@ const SCENES: any[] = [
       if (q('.kn-side .pjv-side-search')) steps.push({
         target: '.kn-side .pjv-side-search', title: '검색 — AI도 이렇게 찾아요',
         body: '여기서 검색하는 그대로, AI도 일할 때 이 지식을 검색해 꺼내 써요. 잘 쌓일수록 AI가 똑똑해져요.' });
-      if (q('main .wk-row')) {
-        steps.push({ target: () => q('main .wk-row'), scrollIntoView: true, advanceOn: 'click',
+      if (q('main .wk-row, main .wk-doccard')) {
+        steps.push({ target: () => q('main .wk-row, main .wk-doccard'), scrollIntoView: true, advanceOn: 'click',
           title: '하나 열어볼까요?', body: '지식을 누르면 오른쪽에 살짝 열려요(피크).' });
         steps.push({ target: '.wk-peek', placement: 'left', title: '지식 한 덩어리',
           body: '제목·본문과 분류·핀 상태가 한눈에 — 이 내용이 그대로 AI에게 전달되는 회사 맥락이에요.' });

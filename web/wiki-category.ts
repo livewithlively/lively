@@ -13,7 +13,7 @@ import {
   HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc,
   knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, wkTrackEditor,
 } from './wiki-data.js';
-import { wkDeck, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
@@ -44,24 +44,7 @@ function openFolderForm(cat: any, parentFolder: string, done: () => void) {
   nameIn.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) go(); });   // IME 조합 확정 Enter 가드(#505)
 }
 
-// ── 리드 카드 — 시작점의 첫 문서(핀 우선). 데크 = 본문 첫 문단 발췌(클릭 전에 내용이 읽힌다). ──
-function wkLeadCard(e: any, open: (e: any, rowEl: HTMLElement) => void) {
-  const deck = wkDeck(e.body_md || '', 170);
-  const card = el('div', { class: 'wk-lead', role: 'link', tabindex: '0', 'data-author': e.confidence || '' },
-    el('div', { class: 'wk-lead-toprow' },
-      wkTick(e),
-      e.icon ? el('span', { class: 'wk-lead-ic', 'aria-hidden': 'true', text: e.icon }) : null,
-      el('span', { class: 'wk-lead-title', text: e.title || e.name })),
-    deck ? el('p', { class: 'wk-lead-deck', text: deck }) : null,
-    el('div', { class: 'wk-lead-meta' },
-      e.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
-      e.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[e.type] || e.type }) : null,
-      e.updated_at ? el('span', { class: 'wk-row-m', text: relTime(e.updated_at) }) : null));
-  const go = () => open(e, card);
-  card.addEventListener('click', go);
-  card.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') go(); });
-  return card;
-}
+// (시작점/엔트리 카드 = wiki-ui 의 wkDocCard 공용 — #764v2 에서 wkLeadCard 폐지)
 
 // ════════════════════════════════════════════
 // renderCategorySurface(box, cat, ctx { f, syncHash, onCatChanged, repaint })
@@ -125,24 +108,27 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     paintDecor();
   }
 
-  // ── 커버 + 아이콘 ──
-  const cover = el('div', { class: 'wk-cat-cover', hidden: true });
+  // ── 커버 + 아이콘 — 커버는 **항상** 있다(#764v2): 커스텀(props_ui.cover)이 없으면 카테고리 시드의
+  //  오로라(공간 색 계열 제너레이티브 + 오버사이즈 워터마크). 큐레이션 0에서도 대문이 대문답게 보이게. ──
+  const cover = el('div', { class: 'wk-cat-cover' });
   const iconBtn = el('button', { class: 'wk-cat-icon', type: 'button', title: canDoc ? '아이콘 변경' : '' });
-  const coverAddBtn = canDoc ? el('button', { class: 'wk-addcover', type: 'button', text: '🖼 커버 추가',
-    onclick: (e: any) => openCoverPicker(e.target, { current: null, onPick: (v) => saveDecor({ cover: v }) }) }) : null;
+  const letterOf = () => (Array.from(String(cat.name || cat.key || '?').trim())[0] || '?').toUpperCase();
   function paintDecor() {
     const cv = (home && home.props_ui && home.props_ui.cover) || '';
-    const hasCover = applyCoverBg(cover, cv);
-    cover.hidden = !hasCover;
-    cover.replaceChildren(...[hasCover && canDoc ? el('div', { class: 'wk-cover-btns' },
-      el('button', { class: 'wk-cover-btn', type: 'button', text: '커버 변경',
-        onclick: (e: any) => openCoverPicker(e.target, { current: cv || null, onPick: (v) => saveDecor({ cover: v }) }) }),
-      el('button', { class: 'wk-cover-btn', type: 'button', text: '제거', onclick: () => saveDecor({ cover: null }) })) : null].filter(Boolean));
-    if (coverAddBtn) coverAddBtn.hidden = hasCover;
     const ic = (home && home.props_ui && home.props_ui.icon) || '';
+    cover.replaceChildren();
+    cover.removeAttribute('style');
+    const hasCustom = !!cv && applyCoverBg(cover, cv);
+    if (!hasCustom) cover.append(wkAurora(String(cat.key || cat.id), cat.space, { cls: 'wk-cat-aurora', watermark: ic || letterOf() }));
+    if (canDoc) {
+      cover.append(el('div', { class: 'wk-cover-btns' },
+        el('button', { class: 'wk-cover-btn', type: 'button', text: hasCustom ? '커버 변경' : '커버 직접 고르기',
+          onclick: (e: any) => openCoverPicker(e.target, { current: cv || null, onPick: (v) => saveDecor({ cover: v }) }) }),
+        hasCustom ? el('button', { class: 'wk-cover-btn', type: 'button', title: '기본(자동 생성) 커버로 되돌립니다', text: '기본으로',
+          onclick: () => saveDecor({ cover: null }) }) : null));
+    }
     iconBtn.classList.toggle('letter', !ic);
-    // charAt(0) 는 이모지(서로게이트 페어) 이름에서 깨진 문자 — 코드포인트 단위로 첫 문자소.
-    iconBtn.textContent = ic || (Array.from(String(cat.name || cat.key || '?').trim())[0] || '?').toUpperCase();
+    iconBtn.textContent = ic || letterOf();
   }
   if (canDoc) {
     iconBtn.onclick = () => openEmojiPicker(iconBtn, {
@@ -273,11 +259,11 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     curation.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(homeBody())));
   }
 
-  // 엔트리 문서 하위호환(view_mode=entry) — 큐레이션 위 리드 카드로 흡수.
+  // 엔트리 문서 하위호환(view_mode=entry) — 큐레이션 위 문서 카드로 흡수.
   const entrySlot = el('div', { class: 'wk-cat-entry' });
   if (cat.view_mode === 'entry' && cat.entry_name && !isCategoryHomeDoc(cat.entry_name)) {
     const e = rows.find((r) => r.name === cat.entry_name);
-    if (e) entrySlot.append(wkLeadCard(e, (x, r) => openDoc(x, r)));
+    if (e) entrySlot.append(wkDocCard(e, { open: (x, r) => openDoc(x, r), deckCap: 150, cls: 'entry' }));
   }
 
   // ── 라이브러리(항상) — 시작점 · 폴더 · 유형 카운트 · 문서 목록. ──
@@ -359,28 +345,39 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       return;
     }
 
-    // 시작점 — 대문이 비어 있을 때만(대문이 생기면 자동 오리엔테이션이 조용히 물러난다).
+    // 시작점 — 대문이 비어 있을 때만(대문이 생기면 자동 오리엔테이션이 조용히 물러난다). 카드 그리드(#764v2).
     if (!hasContent && !f.type && !sel.mode) {
-      const pinned = allDocs.filter((r) => r.is_wiki);
-      const rest = allDocs.filter((r) => !r.is_wiki);
-      const lead = pinned[0] || rest.find((r) => r.type === 'decision') || rest[0];
-      if (lead) {
-        const more = [...pinned.filter((r) => r !== lead), ...rest.filter((r) => r !== lead && r.type === 'concept')].slice(0, 3);
+      const pinnedDocs = allDocs.filter((r) => r.is_wiki);
+      const restDocs = allDocs.filter((r) => !r.is_wiki);
+      const picks = [...pinnedDocs, ...restDocs.filter((r) => r.type === 'concept'), ...restDocs.filter((r) => r.type === 'decision'), ...restDocs]
+        .filter((v, i, a) => a.indexOf(v) === i).slice(0, 3);
+      if (picks.length) {
         const sec = wkSection('먼저 읽기', { hint: '핀·개념 문서 우선 — 대문을 쓰면 이 자동 구성이 대체됩니다' });
-        sec.body.append(wkLeadCard(lead, (x, r) => openDoc(x, r)));
-        if (more.length) sec.body.append(...more.map((r) => wkRow(r, { open: openDoc })));
+        sec.body.append(el('div', { class: 'wk-doccard-grid wk-start-grid' },
+          ...picks.map((r) => wkDocCard(r, { open: (x, rEl) => openDoc(x, rEl), deckCap: 130 }))));
         library.append(sec.el);
       }
     }
 
-    // 폴더 — 대표 제목 3개 미리보기(클릭 전 폴더 성격 파악).
+    // 폴더 — 타일 그리드(큰 아이콘 + 이름 + 개수 + 대표 제목 미리보기).
     if (topFolders.length && !f.type && !sel.mode) {
       const sec = wkSection('폴더', { count: topFolders.length });
+      const grid = el('div', { class: 'wk-folder-grid' });
       for (const fd of topFolders) {
         const kids = rows.filter((r) => r.parent_name === fd.name && !r.is_folder);
-        const preview = kids.slice(0, 3).map((r) => r.title || r.name).join(' · ');
-        sec.body.append(wkRow(fd, { open: openDoc, metas: [preview ? preview.slice(0, 60) : null, kids.length + '개'] }));
+        const preview = kids.slice(0, 2).map((r) => r.title || r.name).join(' · ');
+        const tile = el('div', { class: 'wk-folder-tile', role: 'link', tabindex: '0', title: fd.title || fd.name },
+          el('span', { class: 'wk-folder-tile-ic', 'aria-hidden': 'true', text: fd.icon || '📁' }),
+          el('div', { class: 'wk-folder-tile-main' },
+            el('div', { class: 'wk-folder-tile-name', text: fd.title || fd.name }),
+            preview ? el('div', { class: 'wk-folder-tile-prev', text: preview }) : null),
+          el('span', { class: 'wk-row-m', text: kids.length + '개' }));
+        const go = () => openDoc(fd);
+        tile.addEventListener('click', go);
+        tile.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') go(); });
+        grid.append(tile);
       }
+      sec.body.append(grid);
       library.append(sec.el);
     }
 
@@ -406,6 +403,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       for (const r of list) sec.body.append(wkRow(r, {
         open: openDoc,
         select: sel.mode ? { names: sel.names, onToggle: repaintBulk } : null,
+        deck: sel.mode ? '' : wkDeck(r.body_md || '', 110),   // 발췌 한 줄 — 목록이 피드처럼 읽히게(#764v2)
         metas: [r.is_wiki ? '인덱스' : null, !f.type && r.type ? (KN_TYPE_LABEL[r.type] || r.type) : null, relTime(r.updated_at)],
       }));
       if (!sel.mode) setWikiPeekList(list.map((r) => r.name));
@@ -415,16 +413,26 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   }
   paintLibrary();
 
-  // ── 조립 ──
+  // ── 조립 — 커버 밴드(상시) → 겹침 아이콘 + 제목/설명/액션 → mono 현황 라인 → 큐레이션 → 라이브러리. ──
+  const SPACE_KO2 = { business: '사업', product: '제품', system: '시스템' };
+  const latestAt = allDocs.reduce((m, r) => (String(r.updated_at || '') > m ? String(r.updated_at) : m), '');
+  const decisionN = allDocs.filter((r) => r.type === 'decision').length;
+  const statsLine = el('div', { class: 'wk-cat-stats' }, ...[
+    el('span', { class: 'wk-row-m', text: SPACE_KO2[cat.space] || cat.space || '' }),
+    el('span', { class: 'wk-row-m', text: '문서 ' + allDocs.length }),
+    decisionN ? el('span', { class: 'wk-row-m', text: '결정 ' + decisionN }) : null,
+    topFolders.length ? el('span', { class: 'wk-row-m', text: '폴더 ' + topFolders.length }) : null,
+    latestAt ? el('span', { class: 'wk-row-m', text: '최근 ' + relTime(latestAt) }) : null,
+  ].filter(Boolean));
   box.replaceChildren(
-    el('div', { class: 'wk-cat' },
+    el('div', { class: 'wk-cat wk-cat-v2' },
       cover,
       el('div', { class: 'wk-cat-inner' },
-        coverAddBtn,
         iconBtn,
         el('div', { class: 'wk-cat-headrow' },
           el('div', { class: 'wk-cat-headmain' }, titleEl, descEl),
           actions),
+        statsLine,
         entrySlot,
         curation,
         library)));

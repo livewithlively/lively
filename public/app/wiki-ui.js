@@ -39,9 +39,48 @@ function wkReadVisits() {
         return [];
     }
 }
+// ── 해시 — 시드 문자열의 결정적 정수(오로라 레시피 선택 등). ──
+function wkHash(s) {
+    let h = 0;
+    for (let i = 0; i < String(s).length; i++)
+        h = ((h * 31) + String(s).charCodeAt(i)) | 0;
+    return Math.abs(h);
+}
+// ── 오로라 커버 — 공간(space) 색 계열의 결정적 제너레이티브 커버(#764v2 시그니처). ──
+//  사진 업로드 없이 모든 카테고리/카드가 고유한 시각 정체성을 갖는다: 시드(key) 해시 → 공간별 3레시피 중
+//  하나 + 오버사이즈 워터마크(아이콘/첫 글자, 잉크 6~8% — 타이포그래피 장식, 이미지 아님).
+//  사업=앰버, 제품=블루·민트, 시스템=바이올렛 — 사이드바 space 아바타와 같은 의미색(구조=정보).
+function wkAurora(seed, space, opts = {}) {
+    const sp = (space === 'business' || space === 'system') ? space : 'product';
+    const n = (wkHash(seed) % 3) + 1;
+    const cover = el('div', { class: 'wk-aurora wk-aur-' + sp + '-' + n + (opts.cls ? ' ' + opts.cls : ''), 'aria-hidden': 'true' });
+    if (opts.watermark)
+        cover.append(el('span', { class: 'wk-aurora-wm', text: String(opts.watermark) }));
+    return cover;
+}
+// ── 문서 카드 — 데크(본문 첫 문단 발췌)로 클릭 전에 내용이 읽히는 카드. 홈 핀/최근·카테고리 시작점 공용. ──
+//  opts: { open(e, el), deckCap, metas?: 추가 메타 노드, cls }
+function wkDocCard(e, opts = {}) {
+    const deck = wkDeck(e.body_md || '', opts.deckCap || 120);
+    const card = el('div', { class: 'wk-doccard' + (opts.cls ? ' ' + opts.cls : ''), role: 'link', tabindex: '0', 'data-author': e.confidence || '' }, el('div', { class: 'wk-doccard-top' }, wkTick(e), e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null, el('span', { class: 'wk-doccard-title', text: e.title || e.name })), deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null, el('div', { class: 'wk-doccard-meta' }, ...([
+        e.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
+        e.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[e.type] || e.type }) : null,
+        ...(opts.metas || []),
+        e.updated_at ? el('span', { class: 'wk-row-m', text: relTime(e.updated_at) }) : null,
+    ].filter(Boolean))));
+    const go = () => { if (opts.open)
+        opts.open(e, card);
+    else
+        location.hash = '#/k/' + encodeURIComponent(e.name); };
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
+        go(); });
+    return card;
+}
 // ── 목록 행 — [틱][아이콘?][제목(1줄)] ────────── [mono 메타]. ──
 //  opts: { open(e, rowEl)  클릭(미전달 = #/k 이동)
 //          metas: (string|Node|null)[]  우측 메타(호출자가 '변하는 값만' 규칙으로 구성. 미전달 = 유형·시간)
+//          deck?: string  제목 아래 발췌 한 줄(카테고리 문서 목록 — 목록을 피드처럼 읽히게)
 //          select?: { names:Set, onToggle }  선택 모드(행 클릭=토글) }
 function wkRow(e, opts = {}) {
     const ic = e.icon || (e.is_folder ? '📁' : '');
@@ -51,11 +90,11 @@ function wkRow(e, opts = {}) {
         e.updated_at ? relTime(e.updated_at) : null,
     ]).filter((x) => x != null && x !== '');
     const metaEl = el('span', { class: 'wk-row-meta' }, ...metas.map((m) => (m && m.nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })));
-    // 검색(grep) 결과의 매치 스니펫 — 있을 때만 제목 아래 한 줄(L<n>: 등 기계 표기는 정리).
-    const snip = e.snippet
+    // 발췌 줄 — opts.deck(본문 발췌) 또는 검색(grep) 매치 스니펫(L<n>: 등 기계 표기는 정리).
+    const snip = opts.deck || (e.snippet
         ? String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '')
             .replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 180)
-        : '';
+        : '');
     const row = el('div', {
         class: 'wk-row' + (e.is_folder ? ' folder' : '') + (e.lifecycle === 'archived' ? ' archived' : '') + (snip ? ' has-snip' : ''),
         role: 'link', tabindex: '0',
@@ -168,4 +207,4 @@ function wkDayLabel(iso) {
 function wkEmpty(text, action) {
     return el('div', { class: 'wk-empty' }, el('span', { text }), action || null);
 }
-export { wkDayLabel, wkDeck, wkEmpty, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };
+export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };
