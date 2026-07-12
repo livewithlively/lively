@@ -4854,12 +4854,16 @@ export function openProjectV2Form(reload, prefill) {
     // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
     const taskEd = npTaskEditor();
     const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
+    // #758 만들고 바로 이 프로젝트에 내 AI 세션 열기 + 그 세션 실행 기본값 편집(기본값 = pjvBulkRunDefaultsModal 의 __new__ 전역 스코프).
+    const runBtn = el('button', { class: 'btn btn-primary np-run', text: '만들고 AI세션 실행', title: '프로젝트를 만들고 바로 이 프로젝트에 내 AI 세션을 열어 새 탭으로 입장' });
+    const defaultsBtn = el('button', { class: 'btn btn-ghost np-run-cfg', type: 'button', text: '기본값', title: 'AI세션 실행 기본값 — 실행기·모델·자동승인·워크트리 등' });
+    defaultsBtn.onclick = () => pjvBulkRunDefaultsModal({ projectId: '__new__' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
     const back = overlayBox('새 프로젝트', el('div', { class: 'np-form' }, el('div', { class: 'np-hero' }, el('label', { class: 'np-hero-lbl', text: '이름' }), nameIn, el('label', { class: 'np-hero-lbl', style: 'margin-top:14px', text: '설명' }), descIn, 
     // 태스크(선택) — 설명 바로 아래에 얹되 '선택'임을 라벨 배지 + 안내로 분명히. 각 태스크 아래로 하위 태스크까지 넣을 수 있음.
-    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리(도메인)는 소속 리스트에서 물려받아요. 레포·팀원은 비워둬도 되고 나중에 언제든 바꿀 수 있어요.' }), repoField.row, memberField.row, knRow)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    el('label', { class: 'np-hero-lbl np-hero-lbl-opt', style: 'margin-top:16px' }, el('span', { text: '태스크' }), el('span', { class: 'np-opt', text: '선택' })), el('div', { class: 'np-tasks-hint', text: '지금 떠오르는 태스크가 있으면 여기에 적어두세요 — 각 태스크 아래로 하위 태스크까지 넣을 수 있어요. 비워둬도 되고, 나중에 프로젝트 안에서 얼마든지 추가·정리할 수 있어요.' }), taskEd.box), el('div', { class: 'np-meta' }, el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box), el('div', { class: 'np-meta-cap', text: '카테고리(도메인)는 소속 리스트에서 물려받아요. 레포·팀원은 비워둬도 되고 나중에 언제든 바꿀 수 있어요.' }), repoField.row, memberField.row, knRow)), el('div', { class: 'ov-actions' }, saveBtn, runBtn, defaultsBtn, cancelBtn));
     setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
-    const go = async () => {
+    const go = async (withRun) => {
         const name = nameIn.value.trim();
         if (!name) {
             nameIn.focus();
@@ -4874,6 +4878,7 @@ export function openProjectV2Form(reload, prefill) {
             return;
         }
         saveBtn.disabled = true;
+        runBtn.disabled = true;
         try {
             const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
                     name, description: descIn.value.trim() || undefined, members: memberField.getSelected(),
@@ -4932,6 +4937,28 @@ export function openProjectV2Form(reload, prefill) {
                 localStorage.setItem('lively.newproj.recentRepos', JSON.stringify(repoNames));
             }
             catch (_) { /* */ }
+            // #758 '만들고 AI세션 실행' — 생성 직후 이 프로젝트에 내 세션을 열고 새 탭으로 입장. 실행 기본값은 pjvBulkRunDefaultsModal(__new__ 전역).
+            if (withRun && np && np.id) {
+                const rd = pjvRunDefaults('__new__', []);
+                const sbody = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove !== false };
+                if (rd.model)
+                    sbody.flags = { '--model': rd.model };
+                let sid = '';
+                try {
+                    const sr = await api('/api/ui/v6/projects/' + np.id + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
+                    sid = (sr && sr.session && sr.session.id) || '';
+                }
+                catch (e) {
+                    toast('프로젝트는 만들었지만 세션 실행 실패 — ' + (e.message || e), true);
+                }
+                back.remove();
+                if (reload)
+                    reload();
+                toast(sid ? '프로젝트 생성 · AI세션을 새 탭에서 열었어요' : '프로젝트를 만들었어요');
+                if (sid)
+                    window.open('/ui/terminal.html?session=' + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
+                return;
+            }
             back.remove();
             toast('프로젝트를 만들었습니다');
             // stay(#670) — 대시보드처럼 '목록 흐름 유지'가 필요한 호출측은 상세로 튀지 않고 그 자리 목록만 갱신(새 프로젝트가 목록 맨 아래에 자연스럽게).
@@ -4947,12 +4974,14 @@ export function openProjectV2Form(reload, prefill) {
         catch (e) {
             toast('실패 — ' + e.message, true);
             saveBtn.disabled = false;
+            runBtn.disabled = false;
         }
     };
-    saveBtn.onclick = go;
+    saveBtn.onclick = () => go(false);
+    runBtn.onclick = () => go(true);
     // 한글(IME) 조합 중 Enter 는 조합 확정용 — 조합 끝난 진짜 Enter 에서만 생성(#505 중복 방지).
     nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229)
-        go(); });
+        go(false); });
     return back; // 호출측(인라인 추가행)이 팝업 닫힘을 감지해 인라인 행을 정리할 수 있게 오버레이 엘리먼트 반환
 }
 // 프로젝트 상세(v2) #/projects2/p/:id — 헤더(이름·상태 토글·팀원) + 태스크▸하위 트리 + 필요/산출 지식.
