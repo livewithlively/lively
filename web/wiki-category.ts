@@ -449,22 +449,27 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   }
 
   // ── 투영 1 · 정의 한 문장 — cat.should 첫 문장 발췌(신규 입사자가 제일 먼저 읽는 문장) + 전문 펼침. ──
+  //  설명(desc)과 겹치면 문장은 생략하고 '정의·범위 전문 ▾' 토글만 남긴다(같은 말 두 번 방지).
   function buildDef() {
     const shouldTxt = String(cat.should || '').trim();
     if (!shouldTxt) return null;
     const plain = wkDeck(shouldTxt, 400) || shouldTxt.replace(/\s+/g, ' ').slice(0, 400);
     const m = plain.match(/^(.{10,160}?(?:다|요|것|함|음)\.)(?:\s|$)/);
     const first = m ? m[1] : (plain.slice(0, 140) + (plain.length > 140 ? '…' : ''));
+    const norm = (s: string) => String(s || '').replace(/\s+/g, '').replace(/[.·,]/g, '');
+    const dn = norm(cat.description); const fn = norm(first);
+    const redundant = !!dn && !!fn && (dn.startsWith(fn.slice(0, 14)) || fn.startsWith(dn.slice(0, 14)));
     const full = el('div', { class: 'md-rendered wk-def-full', hidden: true }, renderMarkdown(shouldTxt));
-    const moreBtn = el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙 전문', text: '전문 ▾' });
-    moreBtn.onclick = () => { full.hidden = !full.hidden; moreBtn.textContent = full.hidden ? '전문 ▾' : '접기 ▴'; };
-    return el('div', { class: 'wk-cat-def' },
-      el('div', { class: 'wk-def-line' },
-        el('span', { class: 'wk-def-dash', 'aria-hidden': 'true', text: '—' }),
-        el('span', { class: 'wk-def-text', text: first }),
-        moreBtn,
-        canCat ? el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙(should) 편집', text: '✎',
-          onclick: () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); }) }) : null),
+    const moreBtn = el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙 전문', text: redundant ? '정의·범위 ▾' : '전문 ▾' });
+    const collapsedLbl = redundant ? '정의·범위 ▾' : '전문 ▾';
+    moreBtn.onclick = () => { full.hidden = !full.hidden; moreBtn.textContent = full.hidden ? collapsedLbl : '접기 ▴'; };
+    const editBtn = canCat ? el('button', { class: 'wk-def-more', type: 'button', title: '정의·범위·규칙(should) 편집', text: '✎',
+      onclick: () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); }) }) : null;
+    return el('div', { class: 'wk-cat-def' + (redundant ? ' compact' : '') },
+      el('div', { class: 'wk-def-line' }, ...(redundant
+        ? [moreBtn, editBtn]
+        : [el('span', { class: 'wk-def-dash', 'aria-hidden': 'true', text: '—' }),
+          el('span', { class: 'wk-def-text', text: first }), moreBtn, editBtn]).filter(Boolean)),
       full);
   }
 
@@ -557,12 +562,30 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     card.addEventListener('keydown', (ev2: any) => { if (ev2.key === 'Enter' && ev2.target === card) openDoc(cur, card); });
     return card;
   }
+  // 단신 = 사건 1건. 스레드·정본과 같은 카드 셸(.wk-ev)을 써 피드 리듬을 하나로(들쭉날쭉 제거).
+  function briefCard(ev: any) {
+    const x = ev.docs[0];
+    const deck = wkDeck(x.body_md || '', 120);
+    const card = el('article', { class: 'wk-ev wk-ev-brief' + (ev.live ? ' live' : ''), role: 'link', tabindex: '0', 'data-nm': x.name, title: x.title || x.name },
+      el('div', { class: 'wk-ev-head' },
+        wkTick(x),
+        el('span', { class: 'wk-ev-title', text: x.title || x.name })),
+      deck ? el('p', { class: 'wk-ev-deck', text: deck }) : null,
+      el('div', { class: 'wk-ev-meta' }, ...[
+        x.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
+        x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null,
+        el('span', { class: 'wk-row-m', text: ev.dateMax ? fmtDay(ev.dateMax) : relTime(x.updated_at) }),
+        ev.live ? el('span', { class: 'wk-row-m wk-ev-livelbl', text: '진행 중' }) : null,
+      ].filter(Boolean)));
+    const go = () => openDoc(x, card);
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', (e2: any) => { if (e2.key === 'Enter' && e2.target === card) go(); });
+    return card;
+  }
   function renderEvent(ev: any) {
     if (ev.kind === 'thread') return threadCard(ev);
     if (ev.kind === 'canon') return canonCard(ev);
-    const x = ev.docs[0];
-    return wkRow(x, { open: openDoc, deck: wkDeck(x.body_md || '', 110),
-      metas: [x.type ? (KN_TYPE_LABEL[x.type] || x.type) : null, ev.dateMax ? fmtDay(ev.dateMax) : relTime(x.updated_at)] });
+    return briefCard(ev);
   }
   function buildFeed() {
     if (!events.length) return null;
@@ -612,9 +635,16 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       el('div', { class: 'wk-rail-label' }, el('span', { text: '팀의 소개' }), saveChip),
       curation);
   }
+  // 팀이 직접 쓴 소개가 '리치'(헤딩·페이지 카드·목록·긴 글)면 그게 곧 읽기 가이드 — 자동 '먼저 읽기'는
+  //  같은 문서를 두 번 세우는 중복이라 접고, 소개에 레일을 내준다. 빈/짧은 카테고리에서만 자동 앵커.
+  const curationRich = (() => {
+    const cb = homeBody();
+    return cb.length > 140 || /\]\(#\/k\/|\[\[[^\]]/.test(cb)
+      || /(^|\n)\s{0,3}#{1,3}\s/.test(cb) || /(^|\n)\s*[-*]\s+\S/.test(cb);
+  })();
   function buildRail() {
     const rail = el('aside', { class: 'wk-v4-rail' });
-    const fr = firstReadDocs();
+    const fr = curationRich ? { docs: [], curated: false } : firstReadDocs();
     if (fr.docs.length >= 2) {
       const readN = fr.docs.filter((d) => wkIsRead(d.name)).length;
       const blk = el('div', { class: 'wk-rail-sec' },
@@ -697,8 +727,9 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     return bar;
   }
 
-  // ── 조립 — 규모 적응(폴백 사다리): 드릴다운=작업 모드 / 0건=초대 / 1~9건=목록 중심 단열 /
-  //  10건↑=그리드(좌 일의 흐름 + 우 레일), 색인은 n≥40 만(mineThemes 게이트가 겸함). ──
+  // ── 조립 — 통일 뼈대: 문서가 1건이라도 있으면 모든 카테고리가 같은 구조를 쓴다(규모로 레이아웃을
+  //  갈아엎지 않는다 — 적으면 그 구역만 조용히 비거나 빠진다). 커버→정의→현황→챕터바→
+  //  [일의 흐름 · 먼저읽기/소개]→주제(n≥40)→서고. 드릴다운=작업 모드, 0건=초대. ──
   const SPACE_KO2 = { business: '사업', product: '제품', system: '시스템' };
   const latestAt = allDocs.reduce((m, r) => (String(r.updated_at || '') > m ? String(r.updated_at) : m), '');
   const statsLine = el('div', { class: 'wk-cat-stats' }, ...[
@@ -712,21 +743,26 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
 
   library.id = 'wk-ch-docs';
   const inDrill = !!f.folder;   // 폴더 드릴다운은 작업 모드 — 대문 구역 생략(빵부스러기+폴더 내용만)
-  const isFull = !inDrill && allDocs.length >= 10;
+  const populated = !inDrill && allDocs.length > 0;
 
   const defRow = inDrill ? null : buildDef();
-  const feedSec = isFull ? buildFeed() : null;
-  const railEl = isFull ? buildRail() : null;
-  const indexSec = isFull ? buildIndex() : null;
-  const chapterDefs = (isFull ? [
+  const feedSec = populated ? buildFeed() : null;
+  const railEl = populated ? buildRail() : null;
+  const indexSec = populated ? buildIndex() : null;   // buildIndex 내부에서 n≥40 게이트 — 없으면 조용히 빠짐
+  // 서고(전체 문서)는 피드가 다 담지 못할 때만 = 아카이브: 스레드로 묶여 숨은 문서가 있거나 · 폴더가 있거나 ·
+  //  양이 많을 때(>24). 소형 평면 카테고리(피드가 곧 전부)에서는 같은 목록 두 번을 피한다.
+  const showLibrary = inDrill || !populated || topFolders.length > 0
+    || allDocs.length > events.length || allDocs.length > 24 || !!f.type || !!topicFilter;
+  const chapterDefs = (populated ? [
     feedSec ? { id: 'wk-ch-now', label: '일의 흐름', count: events.length } : null,
     indexSec ? { id: 'wk-ch-index', label: '주제', count: themes.length } : null,
-    { id: 'wk-ch-docs', label: '전체 문서', count: allDocs.length },
+    showLibrary ? { id: 'wk-ch-docs', label: '전체 문서', count: allDocs.length } : null,
   ].filter(Boolean) : []) as any[];
-  const chbar = isFull ? buildChapterBar(chapterDefs) : null;
-  // 그리드 중앙부 — 레일이 없으면(권한·풀 부재) 피드가 전폭. 소형 카테고리는 소개만 전폭으로.
-  const mid = isFull
-    ? (railEl ? el('div', { class: 'wk-v4-grid' }, el('div', { class: 'wk-v4-main' }, feedSec), railEl) : feedSec)
+  const chbar = populated ? buildChapterBar(chapterDefs) : null;
+  // 중앙부 — 항상 2열(좌 일의 흐름 + 우 레일). 레일이 비면(권한·풀 부재) 피드 전폭. 0건은 초대만.
+  const mid = populated
+    ? (railEl ? el('div', { class: 'wk-v4-grid' }, el('div', { class: 'wk-v4-main' }, ...[feedSec].filter(Boolean)), railEl)
+      : feedSec)
     : (inDrill ? null : introBlock('wide'));
 
   box.replaceChildren(
@@ -743,7 +779,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
         chbar,
         mid,
         indexSec,
-        library,
+        showLibrary ? library : null,
       ].filter(Boolean))));
 }
 

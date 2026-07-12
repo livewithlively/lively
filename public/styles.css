@@ -6012,6 +6012,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
    ════════════════════════════════════════════════════════════════════════════ */
 /* ── 정의 한 문장 — 제목 아래 최상단(신규 입사자가 제일 먼저 읽는 문장) ── */
 .wk-cat-def { margin: 10px 0 0; }
+.wk-cat-def.compact { margin: 6px 0 0; }   /* 설명과 겹칠 땐 토글만 — 같은 말 두 번 안 함 */
 .wk-def-line { display: flex; gap: 9px; align-items: baseline; max-width: 76ch; }
 .wk-def-dash { font-family: var(--wkm); color: var(--muted-2); flex: none; }
 .wk-def-text { font-size: 15px; font-weight: 500; line-height: 1.62; color: var(--ink-note); min-width: 0; }
@@ -6054,16 +6055,21 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-feed { display: flex; flex-direction: column; gap: 8px; }
 .wk-feed-live { font-family: var(--wkm); font-size: 11.5px; font-weight: 700; color: var(--mint-deep); }
 .wk-feed > .wk-row { margin: 0; }
-.wk-ev { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 0 0 10px;
+.wk-ev { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 0 0 11px;
   transition: border-color .16s ease, box-shadow .16s ease; }
 .wk-ev:hover { border-color: var(--line-net); box-shadow: 0 6px 18px rgba(21, 35, 59, .06); }
-.wk-ev-thread.live { box-shadow: inset 3px 0 0 var(--mint); }
-.wk-ev-thread.live:hover { box-shadow: inset 3px 0 0 var(--mint), 0 6px 18px rgba(21, 35, 59, .06); }
+.wk-ev-thread.live, .wk-ev-brief.live { box-shadow: inset 3px 0 0 var(--mint); }
+.wk-ev-thread.live:hover, .wk-ev-brief.live:hover { box-shadow: inset 3px 0 0 var(--mint), 0 6px 18px rgba(21, 35, 59, .06); }
 .wk-ev-head { display: flex; align-items: center; gap: 10px; width: 100%; border: none; background: none;
   cursor: pointer; text-align: left; padding: 12px 14px 0; min-width: 0; }
 .wk-ev-head:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 10px; }
-.wk-ev-title { flex: 1; min-width: 0; font-size: 15.5px; font-weight: 700; letter-spacing: -.2px; color: var(--ink);
-  line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-ev-brief .wk-ev-head { cursor: default; }   /* 단신은 카드 전체가 클릭 대상 — 헤드 자체는 포인터 안 바꿈 */
+.wk-ev-title { flex: 1; min-width: 0; font-size: 15px; font-weight: 700; letter-spacing: -.2px; color: var(--ink);
+  line-height: 1.42; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 단신 카드 — 스레드·정본과 같은 셸, 발췌 여백만 카드 안쪽으로 정합(.wk-ev 는 좌우 패딩 0). */
+.wk-ev-brief { cursor: pointer; }
+.wk-ev-brief .wk-ev-deck { padding: 0 14px; margin-top: 4px; }
+.wk-ev-brief .wk-ev-title { font-weight: 650; }
 .wk-ev-no { flex: none; font-family: var(--wkm); font-size: 11.5px; font-weight: 700; color: var(--blue-deep);
   background: var(--bg-tint-2); border-radius: 6px; padding: 2px 7px; }
 .wk-ev-tw { flex: none; color: var(--muted-2); font-size: 10px; transition: transform .16s ease; }
