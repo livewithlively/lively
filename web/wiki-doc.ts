@@ -17,7 +17,7 @@ import {
   wkTrackEditor,
 } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
-import { wkRecordVisit, wkTick } from './wiki-ui.js';
+import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
 
 // ════════════════════════════════════════════
 // 문서 캔버스 — buildWikiDoc(container, name, opts { mode: 'page'|'peek', onDeleted?, originHash? })
@@ -53,6 +53,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   const canRename = canMeta;
   const editableDoc = canMeta && !k.is_folder;
   if (mode === 'page') wkRecordVisit(k);
+  wkMarkRead(k.name);   // 피크·페이지 모두 '읽음' — 대문 읽기 코스 진행률의 근거
 
   // ── 본문(선언 먼저 — 제목 rename·메타 저장의 bodyMdNow 가 참조) ──
   const body = el('div', { class: 'wk-doc-body' });

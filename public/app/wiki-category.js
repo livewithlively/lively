@@ -10,8 +10,9 @@ import { hasScope } from './admin.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, wkTrackEditor, } from './wiki-data.js';
-import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkIsRead, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
+import { openCategoryForm } from './category-form.js'; // 개요 ✎ — 정의·범위(should) 편집
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat, parentFolder, done) {
     const nameIn = el('input', { type: 'text', placeholder: '폴더 이름', maxlength: '200' });
@@ -242,7 +243,8 @@ async function renderCategorySurface(box, cat, ctx) {
         pop.style.left = Math.max(8, r.right - 200) + 'px';
         setTimeout(() => document.addEventListener('mousedown', onDoc, true), 0);
     };
-    // ── 큐레이션 층 — 대문 본문(블록 에디터, 자동 저장). 비면 유령 텍스트가 초대한다. ──
+    // ── 팀의 소개(큐레이션) — 대문 본문(블록 에디터, 자동 저장). 개요 챕터의 한 칸에 들어간다.
+    //  페이지 카드([제목](#/k/이름))를 쓰면 그 순서가 곧 '읽기 코스'가 된다(코스 큐레이션 = 그냥 글쓰기).
     const curation = el('div', { class: 'wk-cat-curation' });
     if (canDoc) {
         let timer = null;
@@ -271,7 +273,7 @@ async function renderCategorySurface(box, cat, ctx) {
         const queue = () => { setChip('수정됨…', true); clearTimeout(timer); timer = setTimeout(doSave, 2000); };
         const editor = wkTrackEditor(createBlockEditor({
             initial: homeBody(),
-            placeholder: "여는 글을 쓰세요 — '/'로 페이지 카드·라이브 목록·콜아웃·컬럼",
+            placeholder: "팀의 말로 소개를 쓰세요 — 페이지 카드([[)를 넣으면 읽기 코스가 그 순서를 따라요",
             onChange: queue,
             onSaveShortcut: () => { clearTimeout(timer); doSave(); },
         }));
@@ -280,25 +282,6 @@ async function renderCategorySurface(box, cat, ctx) {
             doSave();
         } });
         curation.append(editor.el);
-        if (!hasContent) {
-            const tplBtn = el('button', { class: 'wk-tpl-btn', type: 'button', title: '핀 문서 카드 + 최근/결정 라이브 목록으로 시작' }, el('span', { text: '✨ 템플릿으로 시작' }));
-            tplBtn.onclick = async () => {
-                tplBtn.disabled = true;
-                try {
-                    const md = await buildHomeTemplate(cat);
-                    editor.setMarkdown(md);
-                    await ensureHome(md);
-                    setChip('저장됨');
-                    tplBtn.remove();
-                    toast('대문 템플릿을 만들었습니다 — 자유롭게 고쳐보세요');
-                }
-                catch (e) {
-                    toast('템플릿 생성 실패 — ' + e.message, true);
-                    tplBtn.disabled = false;
-                }
-            };
-            curation.append(el('div', { class: 'wk-tpl' }, tplBtn));
-        }
     }
     else if (hasContent) {
         curation.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(homeBody())));
@@ -399,18 +382,7 @@ async function renderCategorySurface(box, cat, ctx) {
             library.append(wkEmpty('아직 문서가 없어요. 첫 페이지로 이 카테고리를 시작해 보세요.', canDoc ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new?category=' + encodeURIComponent(cat.key), text: '＋ 첫 페이지' }) : null));
             return;
         }
-        // 시작점 — 대문이 비어 있을 때만(대문이 생기면 자동 오리엔테이션이 조용히 물러난다). 카드 그리드(#764v2).
-        if (!hasContent && !f.type && !sel.mode) {
-            const pinnedDocs = allDocs.filter((r) => r.is_wiki);
-            const restDocs = allDocs.filter((r) => !r.is_wiki);
-            const picks = [...pinnedDocs, ...restDocs.filter((r) => r.type === 'concept'), ...restDocs.filter((r) => r.type === 'decision'), ...restDocs]
-                .filter((v, i, a) => a.indexOf(v) === i).slice(0, 3);
-            if (picks.length) {
-                const sec = wkSection('먼저 읽기', { hint: '핀·개념 문서 우선 — 대문을 쓰면 이 자동 구성이 대체됩니다' });
-                sec.body.append(el('div', { class: 'wk-doccard-grid wk-start-grid' }, ...picks.map((r) => wkDocCard(r, { open: (x, rEl) => openDoc(x, rEl), deckCap: 130 }))));
-                library.append(sec.el);
-            }
-        }
+        // (구 '시작점/먼저 읽기'는 #764v3 브리핑의 '읽기 코스'로 대체 — 아래 buildCourse)
         // 폴더 — 타일 그리드(큰 아이콘 + 이름 + 개수 + 대표 제목 미리보기).
         if (topFolders.length && !f.type && !sel.mode) {
             const sec = wkSection('폴더', { count: topFolders.length });
@@ -460,39 +432,232 @@ async function renderCategorySurface(box, cat, ctx) {
         library.append(wrap);
     }
     paintLibrary();
-    // ── 조립 — 커버 밴드(상시) → 겹침 아이콘 + 제목/설명/액션 → mono 현황 라인 → 큐레이션 → 라이브러리. ──
+    // ════════ #764v3 브리핑 — 지식을 온보딩용으로 '가공'한다: 개요(정의·범위 + 팀의 소개) ·
+    //  읽기 코스(진행률) · 핵심 개념(사전 카드) · 결정 기록(타임라인) · 런북. 전부 rows 1콜 재가공(추가 API 0). ════════
+    const byName = new Map(rows.map((r) => [r.name, r]));
+    const byUpdatedDesc = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    const concepts = allDocs.filter((r) => r.type === 'concept').sort(byUpdatedDesc);
+    const decisions = allDocs.filter((r) => r.type === 'decision').sort(byUpdatedDesc);
+    const howtos = allDocs.filter((r) => r.type === 'how-to').sort(byUpdatedDesc);
+    const smoothOpt = matchMedia('(prefers-reduced-motion: reduce)').matches ? { block: 'start' } : { behavior: 'smooth', block: 'start' };
+    // 브리핑 섹션 골격 — 챕터 앵커(id) + 큼직한 제목(가르치는 문서의 스케일).
+    function bfSection(id, title, count, ...actions2) {
+        const head = el('div', { class: 'wk-bf-head' }, el('h2', { class: 'wk-bf-title', text: title }), count != null ? el('span', { class: 'wk-bf-count', text: String(count) }) : null, el('span', { class: 'wk-sec-sp' }), ...actions2.filter(Boolean));
+        const body = el('div', { class: 'wk-bf-body' });
+        return { el: el('section', { class: 'wk-bf-sec', id }, head, body), body };
+    }
+    // '모두 보기 →' — 유형 필터를 걸고 전체 문서 챕터로 데려간다.
+    function seeAllBtn(type) {
+        return el('button', { class: 'wk-sec-act', type: 'button', text: '모두 보기 →',
+            onclick: () => {
+                f.type = type;
+                ctx.syncHash();
+                paintLibrary();
+                const t = document.getElementById('wk-ch-docs');
+                if (t)
+                    t.scrollIntoView(smoothOpt);
+            } });
+    }
+    // ── 개요 — 좌: 정의·범위·규칙(cat.should — 도메인의 헌법을 대문에 처음 승격) / 우: 팀의 소개(큐레이션). ──
+    function buildOverview() {
+        const shouldTxt = String(cat.should || '').trim();
+        const introSlot = canDoc || hasContent;
+        if (!shouldTxt && !introSlot && !cat.description)
+            return null;
+        const sec = bfSection('wk-ch-overview', '개요', null, canCat ? el('button', { class: 'wk-sec-act', type: 'button', title: '정의·범위·규칙(should)과 설명을 편집합니다',
+            text: '✎ 정의 편집', onclick: () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); }) }) : null);
+        const grid = el('div', { class: 'wk-bf-grid' + ((shouldTxt && introSlot) ? ' two' : '') });
+        if (shouldTxt) {
+            const bodyEl = el('div', { class: 'md-rendered wk-bf-should' }, renderMarkdown(shouldTxt));
+            const col = el('div', { class: 'wk-bf-col' }, el('div', { class: 'wk-bf-collabel', text: '정의 · 범위 · 규칙' }), bodyEl);
+            // 길면 접기 — 개요는 지도이지 전문이 아니다.
+            setTimeout(() => {
+                if (bodyEl.scrollHeight > 300) {
+                    bodyEl.classList.add('clamped');
+                    const more = el('button', { class: 'wk-bf-more', type: 'button', text: '전체 펼치기 ▾' });
+                    more.onclick = () => {
+                        const on = bodyEl.classList.toggle('clamped');
+                        more.textContent = on ? '전체 펼치기 ▾' : '접기 ▴';
+                    };
+                    col.append(more);
+                }
+            }, 0);
+            grid.append(col);
+        }
+        else if (canCat) {
+            grid.append(el('div', { class: 'wk-bf-col' }, el('div', { class: 'wk-bf-collabel', text: '정의 · 범위 · 규칙' }), el('button', { class: 'wk-bf-invite', type: 'button',
+                onclick: () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); }) }, el('span', { text: '이 카테고리의 정의와 범위를 적어두면, 새로 오는 팀원의 첫 지도가 됩니다.' }), el('span', { class: 'wk-bf-invite-act', text: '✎ 작성하기' }))));
+        }
+        if (introSlot) {
+            grid.append(el('div', { class: 'wk-bf-col' }, el('div', { class: 'wk-bf-collabel', text: '팀의 소개' }), curation));
+        }
+        sec.body.append(grid);
+        return sec.el;
+    }
+    // ── 읽기 코스 — "처음이라면 이 순서로". 대문 본문의 페이지 카드가 있으면 그 순서(큐레이션=글쓰기),
+    //  없으면 핀→개념→결정→런북에서 자동 구성. 읽음(기기 로컬)은 민트 체크 + 진행률. ──
+    function courseDocs() {
+        const picked = [];
+        const seen = new Set();
+        const re = /\[[^\]]*\]\(#\/k\/([^)]+)\)/g;
+        let m;
+        while ((m = re.exec(homeBody())) && picked.length < 5) {
+            let nm = m[1];
+            try {
+                nm = decodeURIComponent(nm);
+            }
+            catch (_) { /* 원문 유지 */ }
+            if (seen.has(nm) || isCategoryHomeDoc(nm))
+                continue;
+            seen.add(nm);
+            const r = byName.get(nm);
+            if (r && !r.is_folder)
+                picked.push(r);
+        }
+        if (picked.length >= 2)
+            return picked;
+        const auto = [];
+        const push = (r) => { if (r && !auto.includes(r) && auto.length < 5)
+            auto.push(r); };
+        allDocs.filter((r) => r.is_wiki).slice(0, 2).forEach(push);
+        push(concepts[0]);
+        push(decisions[0]);
+        push(howtos[0]);
+        for (const r of allDocs) {
+            if (auto.length >= 4)
+                break;
+            push(r);
+        }
+        return auto;
+    }
+    function buildCourse() {
+        const docs = courseDocs();
+        if (docs.length < 2)
+            return null;
+        const readN = docs.filter((d) => wkIsRead(d.name)).length;
+        const sec = bfSection('wk-ch-course', '처음이라면', null, el('span', { class: 'wk-course-progress' + (readN === docs.length ? ' done' : ''), text: readN + '/' + docs.length + ' 읽음' }));
+        const track = el('div', { class: 'wk-course' });
+        docs.forEach((d, i) => {
+            const read = wkIsRead(d.name);
+            const step = el('div', { class: 'wk-step' + (read ? ' read' : ''), role: 'link', tabindex: '0', title: d.title || d.name }, el('span', { class: 'wk-step-num', 'aria-hidden': 'true', text: read ? '✓' : String(i + 1) }), el('div', { class: 'wk-step-main' }, el('div', { class: 'wk-step-title', text: d.title || d.name }), el('div', { class: 'wk-step-meta' }, d.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[d.type] || d.type }) : null, read ? el('span', { class: 'wk-row-m wk-step-readlbl', text: '읽음' }) : null)));
+            const go = () => openDoc(d, step);
+            step.addEventListener('click', go);
+            step.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
+                go(); });
+            track.append(step);
+        });
+        sec.body.append(track, el('div', { class: 'wk-course-hint', text: '이 순서는 대문 소개글의 페이지 카드를 따라요 — 소개글에 카드를 넣어 코스를 직접 짤 수 있어요.' }));
+        return sec.el;
+    }
+    // ── 핵심 개념 — 이 도메인의 언어(사전 카드). ──
+    function buildConcepts() {
+        if (!concepts.length)
+            return null;
+        const CAP = 6;
+        const sec = bfSection('wk-ch-concepts', '핵심 개념', concepts.length, concepts.length > CAP ? seeAllBtn('concept') : null);
+        sec.body.append(el('div', { class: 'wk-doccard-grid wk-concept-grid' }, ...concepts.slice(0, CAP).map((r) => wkDocCard(r, { open: (x, rEl) => openDoc(x, rEl), deckCap: 160, cls: 'concept' }))));
+        return sec.el;
+    }
+    // ── 결정 기록 — 도메인의 스토리(월별 타임라인). ──
+    function buildDecisions() {
+        if (!decisions.length)
+            return null;
+        const CAP = 8;
+        const sec = bfSection('wk-ch-decisions', '결정 기록', decisions.length, decisions.length > CAP ? seeAllBtn('decision') : null);
+        const tl = el('div', { class: 'wk-timeline' });
+        let curMonth = '';
+        for (const d of decisions.slice(0, CAP)) {
+            const dt = new Date(d.updated_at);
+            const month = isNaN(dt.getTime()) ? '' : (dt.getFullYear() + '년 ' + (dt.getMonth() + 1) + '월');
+            if (month && month !== curMonth) {
+                curMonth = month;
+                tl.append(el('div', { class: 'wk-tl-month', text: month }));
+            }
+            const deck = wkDeck(d.body_md || '', 110);
+            const item = el('div', { class: 'wk-tl-item', role: 'link', tabindex: '0', title: d.title || d.name }, el('span', { class: 'wk-tl-dot', 'aria-hidden': 'true' }), el('div', { class: 'wk-tl-main' }, el('div', { class: 'wk-tl-title', text: d.title || d.name }), deck ? el('div', { class: 'wk-tl-deck', text: deck }) : null), el('span', { class: 'wk-row-m wk-tl-date', text: isNaN(dt.getTime()) ? '' : ((dt.getMonth() + 1) + '/' + dt.getDate()) }));
+            const go = () => openDoc(d, item);
+            item.addEventListener('click', go);
+            item.addEventListener('keydown', (ev) => { if (ev.key === 'Enter')
+                go(); });
+            tl.append(item);
+        }
+        sec.body.append(tl);
+        return sec.el;
+    }
+    // ── 런북·방법 — 손에 잡히는 실행(발췌 행). ──
+    function buildRunbooks() {
+        if (!howtos.length)
+            return null;
+        const CAP = 6;
+        const sec = bfSection('wk-ch-runbooks', '런북 · 방법', howtos.length, howtos.length > CAP ? seeAllBtn('how-to') : null);
+        for (const r of howtos.slice(0, CAP)) {
+            sec.body.append(wkRow(r, { open: (x, rEl) => openDoc(x, rEl), deck: wkDeck(r.body_md || '', 100), metas: [relTime(r.updated_at)] }));
+        }
+        return sec.el;
+    }
+    // ── 챕터 바 — 대문의 목차(스크롤 스파이 + 점프). 챕터 2개 이상일 때만. ──
+    function buildChapterBar(sections) {
+        if (sections.length < 2)
+            return null;
+        const bar = el('nav', { class: 'wk-chbar', 'aria-label': '대문 목차' });
+        const items = new Map();
+        for (const s of sections) {
+            const it = el('button', { class: 'wk-ch-it', type: 'button' }, el('span', { text: s.label }), s.count != null ? el('span', { class: 'wk-ch-count', text: String(s.count) }) : null);
+            it.onclick = () => { const t = document.getElementById(s.id); if (t)
+                t.scrollIntoView(smoothOpt); };
+            items.set(s.id, it);
+            bar.append(it);
+        }
+        if (typeof IntersectionObserver !== 'undefined') {
+            const io = new IntersectionObserver((ents) => {
+                for (const en of ents) {
+                    const it = items.get(en.target.id);
+                    if (!it)
+                        continue;
+                    if (en.isIntersecting) {
+                        bar.querySelectorAll('.wk-ch-it.on').forEach((n) => n.classList.remove('on'));
+                        it.classList.add('on');
+                    }
+                }
+            }, { rootMargin: '-120px 0px -65% 0px' });
+            setTimeout(() => { for (const s of sections) {
+                const t = document.getElementById(s.id);
+                if (t)
+                    io.observe(t);
+            } }, 0);
+        }
+        return bar;
+    }
+    // ── 조립 — 커버(상시) → 아이콘/제목/설명/액션 → 현황 라인 → 챕터 바 → 브리핑 → 전체 문서. ──
     const SPACE_KO2 = { business: '사업', product: '제품', system: '시스템' };
     const latestAt = allDocs.reduce((m, r) => (String(r.updated_at || '') > m ? String(r.updated_at) : m), '');
-    const decisionN = allDocs.filter((r) => r.type === 'decision').length;
     const statsLine = el('div', { class: 'wk-cat-stats' }, ...[
         el('span', { class: 'wk-row-m', text: SPACE_KO2[cat.space] || cat.space || '' }),
         el('span', { class: 'wk-row-m', text: '문서 ' + allDocs.length }),
-        decisionN ? el('span', { class: 'wk-row-m', text: '결정 ' + decisionN }) : null,
+        decisions.length ? el('span', { class: 'wk-row-m', text: '결정 ' + decisions.length }) : null,
         topFolders.length ? el('span', { class: 'wk-row-m', text: '폴더 ' + topFolders.length }) : null,
         latestAt ? el('span', { class: 'wk-row-m', text: '최근 ' + relTime(latestAt) }) : null,
     ].filter(Boolean));
-    box.replaceChildren(el('div', { class: 'wk-cat wk-cat-v2' }, cover, el('div', { class: 'wk-cat-inner' }, iconBtn, el('div', { class: 'wk-cat-headrow' }, el('div', { class: 'wk-cat-headmain' }, titleEl, descEl), actions), statsLine, entrySlot, curation, library)));
-}
-// ── 대문 스타터 템플릿 — 콜아웃 환영 + 핀 우선 카드 + 2열(최근 | 결정) 라이브 컬렉션. ──
-async function buildHomeTemplate(cat) {
-    let rows = [];
-    try {
-        rows = await knFetchCategoryRows(cat.id);
-    }
-    catch (_) { /* 목록 실패 — 카드 없는 템플릿 */ }
-    const docs = rows.filter((r) => !isCategoryHomeDoc(r.name) && !r.is_folder);
-    const pinned = docs.filter((r) => r.is_wiki);
-    const rest = docs.filter((r) => !r.is_wiki);
-    const key = docs.length ? [...pinned, ...rest].slice(0, 3) : [];
-    const cards = key.map((r) => '[' + String(r.title || r.name).replace(/[\[\]]/g, ' ').trim() + '](#/k/' + encodeURIComponent(r.name) + ')').join('\n');
-    const name = cat.name || cat.key;
-    return ':::callout icon=👋 color=default\n'
-        + '**' + name + '** 카테고리에 오신 걸 환영해요. 처음이라면 아래 핵심 문서부터 보세요 — 이 대문은 팀 누구나 자유롭게 고칠 수 있어요 (\'/\'로 블록 추가, ⋮⋮로 배치 이동).\n'
-        + ':::\n\n'
-        + (cards ? '# 핵심 문서\n' + cards + '\n\n' : '')
-        + ':::columns\n'
-        + ':::column\n## 최근 업데이트\n:::collection category=' + cat.key + ' limit=5\n:::\n:::\n'
-        + ':::column\n## 결정 기록\n:::collection category=' + cat.key + ' type=decision limit=5\n:::\n:::\n'
-        + ':::';
+    library.id = 'wk-ch-docs';
+    const inDrill = !!f.folder; // 폴더 드릴다운은 작업 모드 — 브리핑·챕터 바 생략(빵부스러기+폴더 내용만)
+    const briefing = inDrill ? [] : [buildOverview(), buildCourse(), buildConcepts(), buildDecisions(), buildRunbooks()].filter(Boolean);
+    const chapterDefs = inDrill ? [] : [
+        briefing.find((s) => s.id === 'wk-ch-overview') ? { id: 'wk-ch-overview', label: '개요', count: null } : null,
+        briefing.find((s) => s.id === 'wk-ch-course') ? { id: 'wk-ch-course', label: '처음이라면', count: null } : null,
+        concepts.length ? { id: 'wk-ch-concepts', label: '개념', count: concepts.length } : null,
+        decisions.length ? { id: 'wk-ch-decisions', label: '결정', count: decisions.length } : null,
+        howtos.length ? { id: 'wk-ch-runbooks', label: '런북', count: howtos.length } : null,
+        { id: 'wk-ch-docs', label: '전체 문서', count: allDocs.length },
+    ].filter(Boolean);
+    const chbar = inDrill ? null : buildChapterBar(chapterDefs);
+    box.replaceChildren(el('div', { class: 'wk-cat wk-cat-v2 wk-cat-v3' }, cover, el('div', { class: 'wk-cat-inner' }, ...[
+        iconBtn,
+        el('div', { class: 'wk-cat-headrow' }, el('div', { class: 'wk-cat-headmain' }, titleEl, descEl), actions),
+        statsLine,
+        entrySlot,
+        chbar,
+        ...briefing,
+        library,
+    ].filter(Boolean))));
 }
 export { renderCategorySurface };
