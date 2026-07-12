@@ -200,11 +200,6 @@ function dashCtl(zone, opts) {
     if (!ctl)
         return;
     const kids = [];
-    if (opts.filter) { // #758 세션 보기 필터 — 칩 4개 대신 드롭다운 하나(전체/프로젝트/개인/초대). 헤더 정리.
-        const f = el('button', { class: 'dash-wh-btn dash-wh-filter', type: 'button', title: '보기 필터', 'aria-haspopup': 'true' }, opts.filter.label + ' ▾');
-        f.onclick = () => opts.filter.open(f);
-        kids.push(f);
-    }
     if (opts.gear) {
         const g = el('button', { class: 'dash-wh-btn dash-wh-btn-gear', type: 'button', title: opts.gear.title, 'aria-label': opts.gear.title }, dashGearIcon());
         g.onclick = () => opts.gear.open(g);
@@ -1217,6 +1212,18 @@ async function fillSessions(zone, onCount, projectsP) {
     const filterChips = () => { const c = [['all', '전체']]; if (sessions.some(isMyProjectSess))
         c.push(['myproj', '프로젝트']); c.push(['private', '개인'], ['invited', '초대']); return c; };
     const filterLabel = () => { const f = filterChips().find(([k]) => k === mode); return (f && f[1]) || '전체'; };
+    // #758 필터 드롭다운 메뉴 — 팀 작업 로그(openTypeMenu)와 동일 형식. 칩 영역에 현재값 ▾, 눌러 목록.
+    const openFilterMenu = (anchor) => {
+        const panel = el('div', { class: 'dash-pop-panel' });
+        panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '세션 보기' })));
+        let closeM = () => { };
+        for (const [k, label] of filterChips()) {
+            const b = el('button', { class: 'dash-pop-opt' + (k === mode ? ' sel' : ''), type: 'button' }, el('span', { class: 'dash-pop-name', text: label }), k === mode ? el('span', { class: 'dash-pop-check', text: '✓' }) : null);
+            b.onclick = () => { closeM(); mode = k; draw(); };
+            panel.append(b);
+        }
+        closeM = dashPopover(anchor, panel);
+    };
     // #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
     const selected = new Set();
     const killSelected = async () => {
@@ -1271,7 +1278,10 @@ async function fillSessions(zone, onCount, projectsP) {
             if (!ownedShown.has(id))
                 selected.delete(id);
         zone.countEl.textContent = String(shown.length);
-        // #758 필터는 헤더 드롭다운(renderCtl 의 filter)으로 이동 — 칩 줄 폐지(헤더 정리).
+        // #758 필터 = 팀 작업 로그와 동일 형식의 chip 드롭다운(칩 영역·dash-chip-dd·현재값 ▾).
+        const fdd = el('button', { class: 'dash-chip dash-chip-dd' + (mode !== 'all' ? ' on' : ''), type: 'button', 'aria-haspopup': 'true', title: '세션 보기 필터' }, el('span', { text: filterLabel() }), el('span', { class: 'dash-chip-caret', 'aria-hidden': 'true', text: '▾' }));
+        fdd.onclick = () => openFilterMenu(fdd);
+        zone.chipsEl.replaceChildren(fdd);
         if (!shown.length) {
             zone.body.replaceChildren((onlineOnly && hiddenOffline > 0) ? dashEmpty('온라인 세션이 없어요 — ⚙ 설정에서 ‘온라인 세션만’을 끄면 오프라인 세션도 보여요.')
                 : (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
@@ -1427,9 +1437,8 @@ async function fillSessions(zone, onCount, projectsP) {
         panel.append(selRow);
         close = dashPopover(a, panel);
     };
-    // #758 헤더 컨트롤 정리 — [전체 ▾ 필터] + [⚙ 설정(선택 모드 포함)] + [→ 터미널]. 칩·선택 버튼을 여기서 뺌.
+    // #758 헤더 컨트롤 — [⚙ 설정(선택 모드 포함)] + [→ 터미널]. 필터는 칩 영역 드롭다운(작업 로그와 동일), 선택은 ⚙ 안.
     const renderCtl = () => dashCtl(zone, {
-        filter: { label: filterLabel(), open: (anchor) => dashChoicePopover(anchor, '보기', filterChips(), mode, (k) => { mode = k; renderCtl(); draw(); }) },
         gear: { title: '세션 표시 설정', open: openSessPrefs },
         action: { href: '#/terminal', title: '터미널로' },
     });
