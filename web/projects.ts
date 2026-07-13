@@ -6,7 +6,7 @@ import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { loadAdmin } from './admin.js';
 import { field, overlay } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
-import { saveTermCreatePrefs, termCreatePrefs } from './terminal.js';   // '실행 설정' 기억 공유(#673/#req — 세션 폼 프리필)
+import { saveTermCreatePrefs, termAutoApprovePref, termCreatePrefs } from './terminal.js';   // '실행 설정' 기억 공유(#673/#req — 세션 폼 프리필). 자동 승인 기억은 #782.
 import { createBlockEditor } from './block-editor.js';   // #730 본문(프로젝트/태스크) 노션형 블록 에디터 — 슬래시 명령·이미지 붙여넣기
 
 
@@ -2872,7 +2872,7 @@ async function pjvBulkRunClaude(btn?) {
 
   if (labelSpan) labelSpan.textContent = '세션 여는 중…';
   try {
-    const sbody: any = { label, harness: rd.harness || 'claude', autoApprove: rd.autoApprove !== false };
+    const sbody: any = { label, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true };   // #782 기본 꺼짐 — 켠 사람만 켜짐
     if (rd.model) sbody.flags = { '--model': rd.model };
     if (subpath) sbody.subpath = subpath;
     const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
@@ -2888,11 +2888,19 @@ async function pjvBulkRunClaude(btn?) {
   }
 }
 // ── '클로드로 실행' 기본값(실행 위치·실행기·모델·자동승인·워크트리·레포) — 프로젝트별 localStorage. 플로팅바 원클릭(pjvBulkRunClaude)이 읽는다. ──
-const pjvRunDefaultsKey = (pid) => 'lively:runclaude:defaults:' + pid;
+//  #782 키를 사용자별로도 나눈다(v2) — 한 브라우저를 여러 계정이 써도 남의 자동 승인이 내 기본값이 되지 않게.
+//  자동 승인의 기본은 '꺼짐'(termAutoApprovePref = 내가 세션 폼에서 마지막에 고른 값)이고, 옛 키(v1)의 autoApprove 는
+//  기본값이 켜져 있던 시절(#480)에 저장된 잔재라 이어받지 않는다 — 나머지(실행 위치·실행기·모델·워크트리·레포)만 이어받는다.
+const pjvRunDefaultsKey = (pid) => 'lively:runclaude:defaults:v2:' + ((state.me && (state.me.userId || state.me.email)) || 'anon') + ':' + pid;
+const pjvRunDefaultsLegacyKey = (pid) => 'lively:runclaude:defaults:' + pid;
 function pjvRunDefaults(pid, projectRepos) {
-  const base: any = { where: 'web', harness: 'claude', model: '', autoApprove: true, worktree: true, branch: 'project/' + pid, repos: null };
+  const base: any = { where: 'web', harness: 'claude', model: '', autoApprove: termAutoApprovePref(), worktree: true, branch: 'project/' + pid, repos: null };
   let saved: any = {};
-  try { saved = JSON.parse(localStorage.getItem(pjvRunDefaultsKey(pid)) || '{}') || {}; } catch (_) { saved = {}; }
+  try {
+    const raw = localStorage.getItem(pjvRunDefaultsKey(pid));
+    if (raw != null) saved = JSON.parse(raw) || {};
+    else { saved = JSON.parse(localStorage.getItem(pjvRunDefaultsLegacyKey(pid)) || '{}') || {}; delete saved.autoApprove; }
+  } catch (_) { saved = {}; }
   const d = { ...base, ...saved };
   d.branch = 'project/' + pid;   // 워크트리 브랜치는 프로젝트 id 로 자동 고정 — 팝업에서 편집하지 않는다(#514 후속 피드백: 자동 파생값을 '기본값'으로 노출하면 오해)
   // repos: null=관련 레포 전부(미래에 추가되는 레포도 자동 포함). 배열이면 현재 프로젝트 레포와 교집합(빠진 레포 정리).
@@ -2951,7 +2959,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
   harnessSel.addEventListener('change', renderModels);
   renderModels();
   if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model)) modelSel.value = d.model;
-  autoCb.checked = d.autoApprove !== false;
+  autoCb.checked = d.autoApprove === true;   // #782 기본 해제(저장된 값이 있을 때만 켬)
 
   // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 프로젝트에서 자동 파생되므로 사용자에게 안 물어본다(#514 후속 피드백).
   const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = d.worktree !== false;
@@ -4216,7 +4224,7 @@ export function openProjectV2Form(reload, prefill?: any) {
       // #758 '만들고 AI세션 실행' — 생성 직후 이 프로젝트에 내 세션을 열고 새 탭으로 입장. 실행 기본값은 pjvBulkRunDefaultsModal(__new__ 전역).
       if (withRun && np && np.id) {
         const rd = pjvRunDefaults('__new__', []);
-        const sbody: any = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove !== false };
+        const sbody: any = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true };   // #782 기본 꺼짐
         if (rd.model) sbody.flags = { '--model': rd.model };
         let sid = '';
         try { const sr = await api('/api/ui/v6/projects/' + np.id + '/sessions', { method: 'POST', body: JSON.stringify(sbody) }); sid = (sr && sr.session && sr.session.id) || ''; }
@@ -9075,7 +9083,8 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key, text: h.label })));
   const flagsBox = el('div', { class: 'term-flags' });
   const autoCb = el('input', { type: 'checkbox' });
-  autoCb.checked = true;  // #480: '웹에서 바로 열기'는 멈춤 없이 바로 실행되도록 자동승인 기본 켬(사용자 지정).
+  // #782: 자동 승인 기본 해제(옛 #480 의 '기본 켬' 철회) — 켠 적이 있는 사람만 그 선택이 이어진다(사용자별 기억).
+  autoCb.checked = prefs.autoApprove === true;
   const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 파일 수정·명령 실행을 매번 묻지 않고 바로 진행 (신뢰하는 작업에만)' }));
   // '실행 설정' — 터미널 탭 새 세션 팝업의 프리셋 UI 그대로(#req — 같은 term-preset-* 컴포넌트/요약줄).
   //  요약줄이 프리필 값(하네스·모델·effort)을 그대로 보여주므로 기본 '접힘'(#req 후속 — 터미널 탭과 동일), 클릭으로 펼침.
@@ -9197,7 +9206,7 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
       const v = ctrl.type === 'checkbox' ? (ctrl.checked ? 'true' : '') : ctrl.value;
       if (v) flags[k] = v;
     }
-    saveTermCreatePrefs({ harness: harnessSel.value, flags });   // 다음 생성 때 기본값(터미널 탭과 공유 — #673/#req)
+    saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked });   // 다음 생성 때 기본값(터미널 탭과 공유 — #673/#req, 자동 승인은 #782)
     try {
       // 선택한 레포(들)를 먼저 박스에 provision(clone/worktree + 비워크트리 add-dir). 세션은 프로젝트 폴더에서 연다.
       const specs = rrows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim() })).filter((s) => s.name);

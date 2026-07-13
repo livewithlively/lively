@@ -31,12 +31,21 @@ function termPrefs() {
 }
 function saveTermPrefs(p) { try { localStorage.setItem(TERM_PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 
-// 새 세션 폼 '실행 설정' 기억(#673) — 마지막으로 쓴 하네스 + 플래그(모델·effort)를 브라우저에 저장해 다음 생성 때 기본값으로 복원.
+// 새 세션 폼 '실행 설정' 기억(#673) — 마지막으로 쓴 하네스 + 플래그(모델·effort) + 자동 승인(#782)을 저장해 다음 생성 때 복원.
+//  #782 키를 사용자별로 나눈다 — 한 브라우저를 여러 계정이 쓰면 남이 켠 자동 승인이 내 기본값이 되면 안 된다.
+//  옛 전역 키는 내 키가 없을 때만 폴백으로 읽어 하네스·모델 기억을 잇는다(자동 승인은 그 시절 저장하지 않았으므로 항상 꺼진 채 시작).
 const TERM_CREATE_PREFS_KEY = 'lively_term_create_prefs';
+const termCreatePrefsKey = (): string => TERM_CREATE_PREFS_KEY + '::' + ((state.me && (state.me.userId || state.me.email)) || 'anon');
 function termCreatePrefs(): any {
-  try { const p = JSON.parse(localStorage.getItem(TERM_CREATE_PREFS_KEY) || '{}'); return (p && typeof p === 'object') ? p : {}; } catch (_) { return {}; }
+  try {
+    const raw = localStorage.getItem(termCreatePrefsKey()) || localStorage.getItem(TERM_CREATE_PREFS_KEY) || '{}';
+    const p = JSON.parse(raw);
+    return (p && typeof p === 'object') ? p : {};
+  } catch (_) { return {}; }
 }
-function saveTermCreatePrefs(p) { try { localStorage.setItem(TERM_CREATE_PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
+function saveTermCreatePrefs(p) { try { localStorage.setItem(termCreatePrefsKey(), JSON.stringify(p)); } catch (_) { /* noop */ } }
+// 자동 승인(--dangerously-skip-permissions)의 기본값 — 기본은 꺼짐, 내가 마지막으로 켰을 때만 켠 채로 복원(#782).
+function termAutoApprovePref(): boolean { return termCreatePrefs().autoApprove === true; }
 
 // 활성 터미널(세션) — 라우트 이탈/재진입 시 정리한다(ws 종료 + xterm dispose + 리스너 제거).
 let termSession: any = null;
@@ -533,7 +542,9 @@ function openTermCreateForm(cfg, view, onCreated?) {
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
   // 두 개의 체크박스(워크트리·자동 승인)는 '실행 옵션'으로 묶는다(#673). 워크트리 기본 ON, 자동승인 기본 OFF.
+  //  자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
   const autoCb = el('input', { type: 'checkbox' });
+  autoCb.checked = prefs.autoApprove === true;
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
     el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
   const wtCb = el('input', { type: 'checkbox', checked: '' });
@@ -638,7 +649,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
         const payload = { label: labelI.value, rootKey: rootSel.value, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
-          saveTermCreatePrefs({ harness: harnessSel.value, flags }); // 이 설정을 다음 생성 때 기본값으로 기억(#673)
+          saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
           back.remove();
           // 워크트리 켰는데 서버가 안 만들었으면(=폴더가 git 저장소 아님) 조용히 넘기지 말고 알린다(#673 — 사용자 혼란 방지).
           if (wtCb.checked && out && out.session && !out.session.wtBranch) toast('세션 생성됨 — 폴더가 git 저장소가 아니라 워크트리는 미적용(폴더에서 직접 실행).', true);
@@ -858,4 +869,5 @@ export {
   // '실행 설정' 기억(#673) — 프로젝트 탭 '웹에서 바로 열기' 폼도 같은 키를 읽고 써 두 폼이 기억을 공유한다(#req).
   termCreatePrefs,
   saveTermCreatePrefs,
+  termAutoApprovePref,   // 체크박스 없는 원클릭 실행(대시보드 '만들고 Claude로 실행' 등)이 쓰는 자동 승인 기본값(#782)
 };
