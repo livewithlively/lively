@@ -6465,3 +6465,39 @@ body.pjv-pm-open { overflow: hidden; }
 /* 별은 right:30px + 폭 21px → 행 우측 51px 를 차지. 개수가 그 앞에서 끝나도록 물린다(겹침 0). */
 .kn-nav-cat.is-fav .pjv-side-navcount { opacity: 1; margin-right: 46px; }
 .kn-nav-cat.is-fav:hover .pjv-side-navcount { opacity: 0; }
+.wk-cat-v6 .wk-lib-sec .wk-cat-library { margin-top: 8px; }
+
+/* ── 사용 가이드 = 문서 사이트(#780) — 좌측 사이드바 + 본문 (code.claude.com/docs 형식) ── */
+.docs-layout { display: flex; align-items: flex-start; gap: 34px; }
+.docs-side { flex: 0 0 216px; position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
+  padding: 2px 2px 28px; }
+.docs-side-group { margin: 0 0 18px; }
+.docs-side-title { font-size: 11px; font-weight: 800; letter-spacing: .05em; color: #8a94a6; margin: 0 0 5px; padding: 0 10px; }
+.docs-side a.docs-item { display: block; padding: 5px 10px; border-radius: 7px; font-size: 13px; line-height: 1.45;
+  color: var(--ink-sub); text-decoration: none; }
+.docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
+.docs-side a.docs-item.active { background: #EEF4FF; color: var(--blue); font-weight: 700; }
+.docs-body { flex: 1; min-width: 0; max-width: 840px; padding-bottom: 64px; }
+.docs-body > .page-head { margin-bottom: 10px; }
+/* 문서 본문 타이포 — 지식 캔버스보다 문서답게 크게 */
+.docs-md .md-h1 { font-size: 26px; margin: 4px 0 14px; letter-spacing: -.02em; }
+.docs-md .md-h2 { font-size: 19px; margin: 30px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.docs-md .md-h3 { font-size: 16px; margin: 22px 0 8px; }
+.docs-md .md-h4 { font-size: 14.5px; margin: 18px 0 6px; }
+.docs-md .md > blockquote:first-child .md-p, .docs-md .md-h1 + blockquote .md-p { color: var(--ink-sub); }
+.docs-md .md-table { width: 100%; }
+@media (max-width: 960px) {
+  .docs-layout { flex-direction: column; gap: 14px; }
+  .docs-side { position: static; flex: none; width: 100%; max-height: none; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .docs-side-group { margin: 0; }
+}
+
+/* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) ── */
+.md-tabs { margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.md-tabs-bar { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--bg-tint); padding: 4px 8px 0; }
+.md-tab-btn { appearance: none; border: 0; background: none; padding: 8px 12px; font-size: 13px; font-weight: 700;
+  color: var(--ink-sub); cursor: pointer; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; }
+.md-tab-btn:hover { color: var(--ink); }
+.md-tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+.md-tabs-body { padding: 14px 16px 6px; }
+.md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }

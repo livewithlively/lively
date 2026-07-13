@@ -5163,7 +5163,8 @@ function projectKnowledgeSection(id, p, reload) {
       el('span', { class: 'pjk-head-hint' },
         '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ',
         // 가이드도 새 탭(#804) — 지식 링크와 같은 이유(모달 뒤 라우트 변경 = 죽은 클릭) + 읽던 프로젝트를 잃지 않는다.
-        el('a', { href: '#/learn?focus=required', target: '_blank', rel: 'noopener', title: '새 탭에서 사용 가이드 열기',
+        //  목적지는 문서 사이트의 WIKI 페이지(#780) — 필요지식 카드가 그리로 이사했다.
+        el('a', { href: '#/learn/docs/wiki?focus=required', target: '_blank', rel: 'noopener', title: '새 탭에서 사용 가이드 열기',
           style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
     knAddBtn));
 
