@@ -8,14 +8,16 @@
 import { el, toast } from './core.js';
 import { isTourActive, startTour } from './tour.js';
 const PLAN_KEY = 'lively_gtour_plan_v1'; // sessionStorage — 진행 중 플랜(새로고침에도 이어짐, 탭 단위)
-const DONE_KEY = 'lively_gtour_done_v1'; // localStorage — 완주 표시(랜딩 배지)
+const DONE_KEY = 'lively_gtour_done_v1'; // (구) localStorage — 전체 완주 타임스탬프. 하위호환 읽기만(= 세 섹션 다 봄).
+const DONE_SECTIONS_KEY = 'lively_gtour_done_sections_v1'; // localStorage — 섹션별 완료 표시(랜딩 ✓)
 const TAB_LABEL = { projects2: '프로젝트', domainmap: '도메인 맵', knowledge: 'WIKI' };
-// 코스(랜딩 카드 단위) → 장면 구성. 개별 코스도 같은 장면 정의를 부분집합으로 쓴다.
+// 섹션(랜딩 진입 단위) → 장면 구성. 전체 투어 = 세 섹션을 이어 붙인 것 == 섹션 하나만 골라 들어갈 수도 있다(#780).
 const COURSES = [
     { key: 'projects', label: '프로젝트', scenes: ['projects-board', 'projects-detail'] },
     { key: 'domainmap', label: '도메인 맵', scenes: ['domainmap'] },
     { key: 'wiki', label: 'WIKI', scenes: ['wiki'] },
 ];
+const courseLabel = (k) => (COURSES.find((c) => c.key === k) || { label: k }).label;
 const q = (sel) => document.querySelector(sel);
 function p(text) { return el('p', { class: 'tour-p', text }); }
 // 코치마크 본문 가독성(#761 피드백): 긴 문단 대신 짧은 줄 + 핵심만 굵게. b()=굵은 조각, pb(lead, rest)=굵은 리드 + 설명 한 줄.
@@ -25,24 +27,35 @@ function pb(lead, rest) { return el('p', { class: 'tour-p' }, b(lead), rest); }
 function navStep(tab, title) {
     return {
         target: '.tabs a[data-tab="' + tab + '"]', placement: 'bottom',
-        title: title || '다음 정거장 — ' + TAB_LABEL[tab],
+        title: title || '다음은 ' + TAB_LABEL[tab],
         body: '상단의 [' + TAB_LABEL[tab] + '] 탭을 눌러 이동하세요.',
         advanceOn: 'click',
     };
 }
 // 마무리(중앙 카드) — 타깃 없음 = 엔진의 전체 딤 + 중앙 말풍선 폴백을 그대로 사용. __finale 로 완주 판정.
-function finaleStep() {
+//  섹션만 골라 본 경우(#780)엔 '다 봤다'고 하지 않는다 — 본 섹션만 짚고, 남은 섹션을 어디서 볼 수 있는지 알려 준다.
+function finaleStep(courses) {
+    const seen = COURSES.filter((c) => courses.includes(c.key));
+    const rest = COURSES.filter((c) => !courses.includes(c.key));
+    const terminal = el('p', { class: 'tour-p' }, '이제 직접 해볼 차례 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 →' }), ' 로 AI에게 첫 말을 걸어보세요.');
+    const body = rest.length
+        ? [
+            p(seen.map((c) => c.label).join(' · ') + ' 섹션은 여기까지예요.'),
+            el('p', { class: 'tour-p' }, '남은 ', b(rest.map((c) => c.label).join(' · ')), ' 섹션도 사용 가이드 › Lively 둘러보기에서 골라 볼 수 있어요.'),
+            terminal,
+        ]
+        : [
+            p('프로젝트(일의 흐름) → 도메인 맵(코드의 구조) → WIKI(AI가 읽는 지식)를 봤어요. 여기 쌓이는 만큼 회사 AI가 똑똑해져요.'),
+            terminal,
+        ];
     return {
         target: () => null, __finale: true, ctaNext: '마치기',
-        title: '여기까지 — 둘러보기 끝!',
-        body: [
-            p('프로젝트(일의 흐름) → 도메인 맵(코드의 지도) → WIKI(AI가 읽는 지식)를 봤어요. 여기 쌓이는 만큼 회사 AI가 똑똑해져요.'),
-            el('p', { class: 'tour-p' }, '이제 직접 해볼 차례 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 →' }), ' 로 AI에게 첫 말을 걸어보세요.'),
-        ],
+        title: rest.length ? seen.map((c) => c.label).join(' · ') + ' 섹션 끝!' : '여기까지 — 둘러보기 끝!',
+        body,
     };
 }
 // 장면 꼬리 — 플랜에 다음 탭이 남았으면 그 탭으로 보내는 이동 스텝, 없으면 마무리.
-function tail(ctx) { return ctx.nextTab ? [navStep(ctx.nextTab)] : [finaleStep()]; }
+function tail(ctx) { return ctx.nextTab ? [navStep(ctx.nextTab)] : [finaleStep(ctx.courses)]; }
 // ── 장면 정의 — match: 담당 해시 · ready: 필수 크롬 대기 · hint: 콘텐츠(행·노드) 소프트 대기 · build: 실제 DOM 기반 스텝. ──
 const SCENES = [
     {
@@ -74,52 +87,53 @@ const SCENES = [
             steps.push({ target: 'main .page-head', placement: 'bottom', title: '프로젝트 안 — 위에서부터 볼게요',
                 body: [
                     el('p', { class: 'tour-p' }, '예시 프로젝트 ', b('“새 요금제 ‘팀 플랜’ 출시”'), ' 예요. 이름·상태가 위에 있어요.'),
-                    el('p', { class: 'tour-p' }, '오른쪽 ', b('[⚙ 세부 설정]'), ' — 팀원·분류·레포·AI 규칙·삭제.'),
+                    el('p', { class: 'tour-p' }, '오른쪽 ', b('[⚙ 세부 설정]'), '에서 팀원·분류·레포·AI 규칙을 바꾸거나 프로젝트를 지울 수 있어요.'),
                 ] });
-            // ⭐ 선행/후행 프로젝트 — 라이블리 고유 ①. 속성판은 2열 그리드(선행=좌·후행=우)라 코치마크를 아래로 둬야
-            //  오른쪽 칸(후행)이 안 가린다 → 패널 전체 스포트라이트 + placement 'bottom'.
-            if (q('.pjv-proj-meta'))
+            // ⭐ 선행/후속 프로젝트 — 라이블리 고유 ①. 속성판 2열 그리드의 '첫 줄 두 칸'(선행=좌·후속=우)만 뚫는다 —
+            //  패널(.pjv-proj-meta) 전체를 뚫으면 상태·리스트·팀원까지 밝아져 어디를 보라는 건지 흐려진다(#780 사용자 리포트).
+            //  코치마크는 아래(bottom)로: 'right' 면 오른쪽 칸(후속)을 가린다.
+            if (edgeFields().length === 2)
                 steps.push({
-                    target: '.pjv-proj-meta', placement: 'bottom', scrollIntoView: true, padding: 6,
-                    title: '⭐ 선행 · 후행 프로젝트',
+                    target: edgeFields, placement: 'bottom', scrollIntoView: true, padding: 6,
+                    title: '⭐ 선행 · 후속 프로젝트',
                     body: [
-                        el('p', { class: 'tour-p' }, b('맨 윗줄 두 칸'), ' — 왼쪽 선행, 오른쪽 후행. 이 일의 앞뒤 프로젝트를 이어 둬요. (나머지는 상태·팀원 등 익숙한 속성.)'),
-                        pb('좋은 점: ', '일의 순서가 한눈에 잡히고, AI도 “이건 X 다음 단계”를 안 채로 시작해요.'),
+                        el('p', { class: 'tour-p' }, '왼쪽이 ', b('선행'), ', 오른쪽이 ', b('후속'), ' 이에요. 이 일의 앞뒤에 오는 프로젝트를 여기에 이어 둬요.'),
+                        pb('좋은 점: ', '일의 순서가 한눈에 잡히고, AI도 이 일이 어떤 일 다음에 오는지 안 채로 시작해요.'),
                     ],
                 });
             // 개요(본문)
             if (cardByHeading(/^본문$/))
                 steps.push({ target: () => cardByHeading(/^본문$/), scrollIntoView: true,
                     title: '개요',
-                    body: el('p', { class: 'tour-p' }, '이 일이 ', b('왜·무엇인지'), ' 적는 곳. 여기 배경도 이 프로젝트 AI 세션에 함께 전달돼요.') });
+                    body: el('p', { class: 'tour-p' }, '이 일이 ', b('왜 필요한지, 무엇을 하는지'), ' 적는 곳이에요. 여기 적은 배경도 이 프로젝트의 AI 세션에 함께 전달돼요.') });
             // ⭐ 연결된 지식 — 라이블리 고유 ②
             if (knFlowCard())
                 steps.push({ target: knFlowCard, scrollIntoView: true,
                     title: '⭐ 연결된 지식',
                     body: [
-                        el('p', { class: 'tour-p' }, 'WIKI 지식을 이 프로젝트의 ', b('‘필요지식’'), '으로 붙여둬요.'),
-                        pb('좋은 점: ', 'AI가 그 내용을 처음부터 알고 시작 — 배경 설명 반복 없이, 팀 결정대로. (새로 만든 지식은 ‘산출’로 쌓여요.)'),
+                        el('p', { class: 'tour-p' }, 'WIKI 지식을 이 프로젝트의 ', b('‘필요지식’'), '으로 붙여둬요. 이 일을 하려면 알아야 하는 것들이에요.'),
+                        pb('좋은 점: ', 'AI가 그 내용을 처음부터 알고 시작해요. 배경을 매번 다시 설명할 필요가 없고, 팀이 정해 둔 대로 일해요. 일하면서 새로 만든 지식은 ‘산출지식’으로 여기 쌓여요.'),
                     ],
                 });
             // 할 일(태스크) — 클릭업류, 짧게
             if (q('main .pjv-tasks-card'))
                 steps.push({ target: 'main .pjv-tasks-card', scrollIntoView: true, padding: 4,
                     title: '할 일 (태스크)',
-                    body: el('p', { class: 'tour-p' }, '프로젝트를 잘게 나눠 관리 — ', b('이 부분도 클릭업과 비슷'), '해요.') });
+                    body: el('p', { class: 'tour-p' }, '프로젝트를 잘게 나눠 관리해요. ', b('이 부분도 클릭업과 비슷'), '해요.') });
             // 공유 폴더 — '어디에' 생기나
             if (cardByHeading(/공유 폴더/))
                 steps.push({ target: () => cardByHeading(/공유 폴더/), scrollIntoView: true,
                     title: '공유 폴더 — 파일은 “어디에” 생기나',
                     body: [
-                        el('p', { class: 'tour-p' }, '이 프로젝트 전용 폴더 — 파일은 ', b('내 PC가 아니라 중앙(박스)'), '에 저장돼요.'),
-                        p('그래서 팀원 모두 같은 파일을 보고, 이 프로젝트 AI 세션도 여기서 열려 바로 읽어요. 끌어다 놓기·붙여넣기(⌘V)로 올려요.'),
+                        el('p', { class: 'tour-p' }, '이 프로젝트 전용 폴더예요. 파일은 ', b('내 PC가 아니라 중앙(박스)'), '에 저장돼요.'),
+                        p('그래서 팀원 모두 같은 파일을 보고, 이 프로젝트의 AI 세션도 여기서 열려 그 파일을 바로 읽어요. 끌어다 놓거나 붙여넣기(⌘V)로 파일을 올릴 수 있어요.'),
                     ],
                 });
             // ⭐ 터미널 세션 — 어떻게 만드나 + 팝업(＋새 세션 → 드롭다운 → 웹 폼 → 취소로 닫기)
             if (q('.proj-term-card')) {
                 steps.push({ target: '.proj-term-card', scrollIntoView: true,
                     title: '⭐ 터미널 세션 — 이 프로젝트에서 AI 켜기',
-                    body: el('p', { class: 'tour-p' }, '이 프로젝트에서 여는 ', b('AI 작업 세션'), '이에요. 팀원별로 모여 보여, 누가 뭘 켰는지 한눈에.') });
+                    body: el('p', { class: 'tour-p' }, '이 프로젝트에서 여는 ', b('AI 작업 세션'), '이에요. 팀원별로 모여 보여서 누가 무슨 일을 하고 있는지 한눈에 알 수 있어요.') });
                 steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left', advanceOn: 'click',
                     title: '세션 만들기 ① — ＋ 새 세션', body: '오른쪽 위 [＋ 새 세션]을 눌러 볼게요.' });
                 // 드롭다운: 두 옵션을 설명하되 클릭 진행은 '웹에서 바로 열기'에만 건다 — '내 PC' 항목은 딤에 가려 못 눌러
@@ -127,23 +141,23 @@ const SCENES = [
                 steps.push({ target: '[data-tour="sess-web"]', placement: 'left', advanceOn: 'click',
                     title: '세션 만들기 ② — 어디서 켤까',
                     body: [
-                        p('두 갈래가 떠요:'),
-                        el('p', { class: 'tour-p' }, b('💻 내 PC'), ' — 개발자용. 내 컴퓨터에 설치.'),
-                        el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 여는 팀 공용. 비개발자는 이게 쉬워요.'),
+                        p('두 가지가 떠요:'),
+                        el('p', { class: 'tour-p' }, b('💻 내 PC'), ' — 개발자용이에요. 내 컴퓨터에 설치해서 써요.'),
+                        el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 열리는 팀 공용 세션이에요. 비개발자는 이게 쉬워요.'),
                         el('p', { class: 'tour-p' }, '밝은 ', b('[☁️ 웹에서 바로 열기]'), '를 눌러 볼게요.'),
                     ] });
                 steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
                     title: '만들기 창 — 세션 이름',
-                    body: el('p', { class: 'tour-p' }, '알아보기 쉽게 이름을 정해요. 예: ', b('“랜딩 카피 수정”'), '.') });
+                    body: el('p', { class: 'tour-p' }, '무슨 일을 하는 세션인지 알아보기 쉽게 이름을 정해요. 예를 들어 ', b('“출시 안내 메일 초안”'), ' 처럼요.') });
                 steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
                     title: '코드 저장소 (선택)',
                     body: [
-                        p('코드 작업이면 저장소를 고르세요 — 박스가 그 코드를 자동으로 가져와 준비해요.'),
-                        el('p', { class: 'tour-p' }, b('코드가 아니면 비워도 돼요.')),
+                        p('코드 작업이면 저장소를 고르세요. 박스가 그 코드를 자동으로 가져와 준비해 둬요.'),
+                        el('p', { class: 'tour-p' }, b('코드 작업이 아니면 비워도 돼요.')),
                     ] });
                 steps.push({ target: '.proj-sess-preset', placement: 'right', scrollIntoView: true,
                     title: '실행 설정',
-                    body: el('p', { class: 'tour-p' }, '함께 일할 ', b('AI·모델'), '과 자동 승인. 이전 설정을 기억하니 보통 그대로 둬도 돼요.') });
+                    body: el('p', { class: 'tour-p' }, '함께 일할 ', b('AI·모델'), '과 자동 승인 여부를 고르는 곳이에요. 이전 설정을 기억하니 보통 그대로 둬도 돼요.') });
                 steps.push({ target: '[data-tour="sess-create"]', placement: 'top', scrollIntoView: true,
                     title: '만들면 이렇게 돼요',
                     body: [
@@ -162,9 +176,9 @@ const SCENES = [
         ready: () => !!q('.dmx-canvas'), hint: '.dmx-node',
         build(ctx) {
             const steps = [];
-            steps.push({ target: '.dmx-canvas', padding: 4, title: '제품 코드의 지도',
+            steps.push({ target: '.dmx-canvas', padding: 4, title: '제품 코드의 구조',
                 body: [
-                    el('p', { class: 'tour-p' }, '상자 하나가 ', b('기능 덩어리(도메인)'), ', 화살표는 의존이에요.'),
+                    el('p', { class: 'tour-p' }, '상자 하나가 ', b('기능 덩어리(도메인)'), '이고, 화살표는 그 사이의 의존 관계예요.'),
                     p('드래그·휠로 자유롭게 움직여 봐도 좋아요.'),
                 ] });
             if (q('.dmx-controls'))
@@ -189,7 +203,7 @@ const SCENES = [
         build(ctx) {
             const steps = [];
             if (q('.kn-side'))
-                steps.push({ target: '.kn-side', placement: 'right', title: 'AI가 읽는 지식 창고',
+                steps.push({ target: '.kn-side', placement: 'right', title: 'AI가 읽는 회사 지식',
                     body: '회사의 규칙·결정·자료가 사업·제품·시스템으로 분류돼 쌓여요. 📌 인덱스에 핀된 지식은 매 대화 첫머리에 항상 깔려요.' });
             // 검색 — 사이드바 분류·지식 검색(전문 의미검색은 ⌘K).
             if (q('.kn-side .pjv-side-search'))
@@ -201,7 +215,7 @@ const SCENES = [
                 steps.push({ target: () => q('main .wk-row, main .wk-doccard'), scrollIntoView: true, advanceOn: 'click',
                     title: '하나 열어볼까요?', body: '지식을 누르면 오른쪽에 살짝 열려요(피크).' });
                 steps.push({ target: '.wk-peek', placement: 'left', title: '지식 한 덩어리',
-                    body: '제목·본문과 분류·핀 상태가 한눈에 — 이 내용이 그대로 AI에게 전달되는 회사 맥락이에요.' });
+                    body: '제목·본문과 분류·핀 상태를 한눈에 볼 수 있어요. 이 내용이 그대로 AI에게 전달되는 회사 맥락이에요.' });
             }
             return steps.concat(tail(ctx));
         },
@@ -216,17 +230,34 @@ function cardByHeading(re) {
     return null;
 }
 function knFlowCard() { return cardByHeading(/연결된 지식/); }
+// 속성판(2열 그리드)에서 선행·후속 두 칸만 — 라벨 텍스트로 찾는다(행 순서가 바뀌어도 안전).
+//  둘을 배열로 넘기면 엔진이 '합친 사각형' 하나로 뚫는다 → 상태·팀원 등 다른 속성은 딤 아래 그대로(#780).
+function edgeFields() {
+    const hit = (re) => {
+        for (const f of document.querySelectorAll('.pjv-proj-meta .pjv-tm-field')) {
+            const lab = f.querySelector('.pjv-tm-field-label');
+            if (lab && re.test(lab.textContent || ''))
+                return f;
+        }
+        return null;
+    };
+    return [hit(/선행/), hit(/후속|후행/)].filter(Boolean);
+}
 // 둘러보기 중 사용자가 연 임시 오버레이(세션 만들기 모달·＋새 세션 드롭다운)를 장면이 끝날 때 정리(#761) —
 //  탭 이동 스텝(navStep)이 모달에 가려 안 눌리거나, 마무리/이탈 후 잔여 모달이 남지 않게. 지식 피크(.wk-peek)는 건드리지 않는다.
 function closeStrayOverlays() {
     document.querySelectorAll('.ov-back, .pjv-pop').forEach((n) => n.remove());
 }
-// ── 플랜(sessionStorage) — { v, keys: 장면 key 순서, i: 현재 장면 인덱스(-1=출발 전) } ──
+// ── 플랜(sessionStorage) — { v, keys: 장면 key 순서, i: 현재 장면 인덱스(-1=시작 전), courses: 이번에 보는 섹션 key } ──
 function sceneByKey(k) { return SCENES.find((s) => s.key === k) || null; }
 function loadPlan() {
     try {
         const p0 = JSON.parse(sessionStorage.getItem(PLAN_KEY) || 'null');
-        return p0 && p0.v === 1 && Array.isArray(p0.keys) && p0.keys.length ? p0 : null;
+        if (!(p0 && p0.v === 1 && Array.isArray(p0.keys) && p0.keys.length))
+            return null;
+        if (!Array.isArray(p0.courses))
+            p0.courses = COURSES.map((c) => c.key); // 구 플랜(섹션 정보 없음) = 전체 투어
+        return p0;
     }
     catch (_) {
         return null;
@@ -246,9 +277,9 @@ function foldGuideTour(say) {
         return;
     dropPlan();
     if (say)
-        toast('둘러보기를 닫았어요 — 사용 가이드 › Lively 둘러보기에서 언제든 다시 시작할 수 있어요.');
+        toast('둘러보기를 닫았어요 — 사용 가이드 › Lively 둘러보기에서 원하는 섹션부터 다시 시작할 수 있어요.');
 }
-// j 번째 장면 뒤에 '다른 탭'의 장면이 남았으면 그 탭(다음 정거장), 없으면 null(=이 장면에서 마무리).
+// j 번째 장면 뒤에 '다른 탭'의 장면이 남았으면 그 탭(다음 이동처), 없으면 null(=이 장면에서 마무리).
 function nextTabAfter(plan, j) {
     const cur = (sceneByKey(plan.keys[j]) || {}).tab;
     for (let k = j + 1; k < plan.keys.length; k++) {
@@ -278,16 +309,16 @@ async function waitFor(fn, ms) {
         await new Promise((r) => setTimeout(r, 60));
     }
 }
-// ── 시작(랜딩 버튼) — 플랜 저장 후 '출발' 스텝(첫 코스의 상단 탭 스포트라이트)만 즉시 띄운다. ──
+// ── 시작(랜딩 버튼) — 플랜 저장 후 첫 스텝(첫 코스의 상단 탭 스포트라이트)만 즉시 띄운다. ──
 //  이후 진행은 사용자의 실제 탭 클릭 → 라우팅 → resumeGuideTour 가 이어받는다.
 function startGuideTour(courseKeys) {
     const courses = courseKeys && courseKeys.length ? COURSES.filter((c) => courseKeys.includes(c.key)) : COURSES;
     const keys = courses.flatMap((c) => c.scenes);
     if (!keys.length)
         return;
-    savePlan({ v: 1, keys, i: -1 });
+    savePlan({ v: 1, keys, i: -1, courses: courses.map((c) => c.key) });
     const first = sceneByKey(keys[0]);
-    startTour([navStep(first.tab, '출발 — 첫 정거장은 ' + TAB_LABEL[first.tab])], { onEnd: (r) => { closeStrayOverlays(); if (r === 'user')
+    startTour([navStep(first.tab, TAB_LABEL[first.tab] + '부터 볼게요')], { onEnd: (r) => { closeStrayOverlays(); if (r === 'user')
             foldGuideTour(true); } });
 }
 // ── 재개(main.ts route() 끝에서 매 라우팅마다) — 플랜 없으면 no-op. ──
@@ -325,7 +356,7 @@ async function resumeGuideTour() {
     const cur = loadPlan();
     if (!cur || cur.i !== j)
         return; // 대기 중 플랜이 접히거나 이동함
-    const steps = sc.build({ nextTab: nextTabAfter(cur, j) });
+    const steps = sc.build({ nextTab: nextTabAfter(cur, j), courses: cur.courses });
     if (!steps.length)
         return;
     const hasFinale = steps.some((s) => s && s.__finale);
@@ -337,22 +368,37 @@ async function resumeGuideTour() {
             }
             // 자연 완주는 마무리 스텝이 있던 장면에서만 의미 — 이동 클릭 직후의 잔여 complete(라우팅 경합)는 무시.
             if (r === 'complete' && hasFinale)
-                finishGuideTour();
+                finishGuideTour(cur.courses);
         } });
 }
-function finishGuideTour() {
-    dropPlan();
+// 완료 표시 — 섹션 단위(#780). 세 섹션을 다 봐야 '완주'다(옛 전체완주 타임스탬프는 세 섹션 완료로 읽어 준다).
+function doneSections() {
     try {
-        localStorage.setItem(DONE_KEY, new Date().toISOString());
+        const raw = JSON.parse(localStorage.getItem(DONE_SECTIONS_KEY) || 'null');
+        if (Array.isArray(raw))
+            return raw.filter((k) => typeof k === 'string');
+        return localStorage.getItem(DONE_KEY) ? COURSES.map((c) => c.key) : [];
+    }
+    catch (_) {
+        return [];
+    }
+}
+function markSectionsDone(keys) {
+    const merged = [...new Set([...doneSections(), ...keys])];
+    try {
+        localStorage.setItem(DONE_SECTIONS_KEY, JSON.stringify(merged));
     }
     catch (_) { /* noop */ }
-    toast('Lively 둘러보기 완주 — 수고했어요!');
-    location.hash = '#/learn/tour'; // 랜딩으로 복귀(완주 배지)
 }
-function isGuideTourDone() { try {
-    return !!localStorage.getItem(DONE_KEY);
+function isSectionDone(key) { return doneSections().includes(key); }
+function isGuideTourDone() { return COURSES.every((c) => isSectionDone(c.key)); }
+function finishGuideTour(courses) {
+    dropPlan();
+    markSectionsDone(courses);
+    const rest = COURSES.filter((c) => !isSectionDone(c.key));
+    toast(rest.length
+        ? courses.map(courseLabel).join(' · ') + ' 섹션 완료 — 남은 ' + rest.map((c) => c.label).join(' · ') + ' 섹션도 골라 볼 수 있어요.'
+        : 'Lively 둘러보기 완주 — 수고했어요!');
+    location.hash = '#/learn/tour'; // 랜딩으로 복귀(섹션 ✓ · 완주 배지)
 }
-catch (_) {
-    return false;
-} }
-export { COURSES, isGuideTourDone, resumeGuideTour, startGuideTour };
+export { COURSES, isGuideTourDone, isSectionDone, resumeGuideTour, startGuideTour };

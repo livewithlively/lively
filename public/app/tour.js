@@ -46,13 +46,31 @@ function startTour(steps, opts) {
     } };
     window.addEventListener('keydown', t.onKey, true);
     go(0);
-    function resolve(step) {
+    // 타깃 해석 — 배열이면 그대로(합집합 강조용), 단일이면 1개짜리 목록. 스크롤·클릭 바인딩은 항상 첫 요소 기준.
+    function resolveAll(step) {
+        let v;
         try {
-            return typeof step.target === 'function' ? step.target() : document.querySelector(step.target);
+            v = typeof step.target === 'function' ? step.target() : document.querySelector(step.target);
         }
         catch (_) {
-            return null;
+            return [];
         }
+        return (Array.isArray(v) ? v : [v]).filter(Boolean);
+    }
+    function resolve(step) { return resolveAll(step)[0] || null; }
+    // 뚫을 사각형 — 요소가 여럿이면 합집합. 아직 안 뜬(넓이 0) 요소는 뺀다.
+    function holeRect(step) {
+        let l = Infinity, t0 = Infinity, r0 = -Infinity, b0 = -Infinity;
+        for (const n of resolveAll(step)) {
+            const q = n.getBoundingClientRect();
+            if (!q.width && !q.height)
+                continue;
+            l = Math.min(l, q.left);
+            t0 = Math.min(t0, q.top);
+            r0 = Math.max(r0, q.right);
+            b0 = Math.max(b0, q.bottom);
+        }
+        return l === Infinity ? null : { left: l, top: t0, width: r0 - l, height: b0 - t0 };
     }
     // 단계 이동 — 코치마크를 다시 그리고, 필요 시 타깃을 스크롤로 보이게 한 뒤 rAF 추적을 (없으면) 켠다.
     function go(idx) {
@@ -136,7 +154,7 @@ function startTour(steps, opts) {
         }
         const target = resolve(step);
         const pad = step.padding == null ? 8 : step.padding;
-        const r = target ? target.getBoundingClientRect() : null;
+        const r = holeRect(step);
         if (target && r && (r.width > 0 || r.height > 0)) {
             layout(r, pad);
             ring.style.display = '';
