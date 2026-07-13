@@ -4352,6 +4352,19 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     pjvRowCheck('task', t, { reload, projectId, members }), // 프로젝트 행과 동일한 선택 체크박스(16px) — 정렬·다중선택 모두 동일하게
     caret, pjvStatusControl(t, reload, projectId), el('span', { class: 'pjv-trow-title' + (isDone ? ' done' : ''), text: t.name || t.title || '(제목 없음)' }), subcountEl, tagsEl);
     titleCell.style.paddingLeft = (depth * 22) + 'px';
+    // 제목(셀) 클릭 = 태스크 상세 모달 (#811). 이 행은 보드 전용 렌더러라 pjvTaskRow 에 붙는 모달 배선(data-tm-wired)이
+    //  없어서 **눌러도 아무 일도 안 일어났다** — 보드에서 태스크를 열 방법 자체가 없었다. 주소 동기화(#/projects2/t/<id>)는
+    //  pjvOpenTaskModal 이 하므로 배선만 하면 따라온다(#810). 컨트롤(그립·체크·캐럿·상태·하위수·행액션)은 각자 동작하도록 통과.
+    const titleEl = titleCell.querySelector('.pjv-trow-title');
+    if (titleEl) {
+        titleEl.classList.add('clickable');
+        titleEl.title = '상세 열기';
+    }
+    titleCell.addEventListener('click', (e) => {
+        if (e.target.closest('button, input, a, .pjv-trow-caret, .pjv-row-actions'))
+            return;
+        pjvOpenTaskModal(t.id, reload);
+    });
     const subBox = el('div', { class: 'pjv-trow-subs' });
     subBox.hidden = true;
     if (subs.length && depth < 4) {
