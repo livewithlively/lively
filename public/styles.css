@@ -6496,38 +6496,79 @@ body.pjv-pm-open { overflow: hidden; }
 .docs-title { font-size: 27px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.35;
   color: var(--ink); margin: 0 0 14px; }
 
-/* 본문 타이포 — guide-hero-lead 의 리듬(15px/1.75) */
-.docs-md { font-size: 15px; line-height: 1.75; color: var(--ink-sub); }
-.docs-md .md-p { margin: 0 0 14px; }
-.docs-md strong { color: var(--ink); }
-.docs-md .md-h1 { font-size: 27px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); margin: 4px 0 14px; }
-.docs-md .md-h2 { font-size: 19px; font-weight: 800; letter-spacing: -.2px; color: var(--ink);
-  margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-.docs-md .md > .md-h2:first-child { margin-top: 8px; }
-.docs-md .md-h3 { font-size: 16px; font-weight: 800; color: var(--ink); margin: 26px 0 8px; }
-.docs-md .md-h4 { font-size: 14.5px; font-weight: 800; color: var(--ink); margin: 20px 0 6px; }
+/* ── 문서 = 가이드 카드의 연속 ──────────────────────────────────────
+   ## 섹션 하나 = .card 하나(제품 가이드 카드와 같은 박스). 카드 안은 흘러가는 글이 아니라
+   구조화된 조각들: 리드(guide-lead) · 피처 카드(kn-axis-opt) · 번호 단계(guide-path) ·
+   이동 카드(tabguide-card) · 콜아웃(guide-remember) · 탭(tabchapter). */
+.docs-lead { font-size: 15.5px; line-height: 1.8; color: var(--ink-sub); margin: -2px 0 4px; max-width: 780px; }
+.docs-lead .md-p { margin: 0 0 10px; }
+.docs-lead .md-p:last-child { margin-bottom: 0; }
+.docs-lead .md-quote { background: none; border: 0; padding: 0; margin: 0 0 10px; color: var(--ink-sub); }
+.docs-lead strong, .docs-lead b { color: var(--ink); }
+.docs-lead a { color: var(--blue); text-decoration: none; font-weight: 600; }
+.docs-lead a:hover { text-decoration: underline; }
+
+.docs-card { padding: 22px 24px 24px; }
+.docs-card .card-head { margin-bottom: 12px; }
+.docs-md { font-size: 14.5px; line-height: 1.7; color: var(--ink-sub); }
+.docs-md > .md > :last-child { margin-bottom: 0; }
+.docs-md .md-p { margin: 0 0 12px; }
+.docs-md .guide-lead { font-size: 14.5px; line-height: 1.7; color: var(--ink); margin: 0 0 14px; }
+.docs-md strong, .docs-md b { color: var(--ink); font-weight: 700; }
+.docs-md .md-h3 { font-size: 15px; font-weight: 800; color: var(--ink); margin: 22px 0 8px; letter-spacing: -.2px; }
+.docs-md .md-h4 { font-size: 14px; font-weight: 800; color: var(--ink); margin: 16px 0 6px; }
 .docs-md a { color: var(--blue); text-decoration: none; font-weight: 600; }
 .docs-md a:hover { text-decoration: underline; }
-.docs-md .md-list { margin: 0 0 14px; padding-left: 22px; }
-.docs-md .md-list li { margin: 4px 0; }
+.docs-md .md-list { margin: 0 0 12px; padding-left: 20px; }
+.docs-md .md-list li { margin: 5px 0; }
 .docs-md .md-list li::marker { color: var(--muted-2); }
-.docs-md .md-hr { margin: 30px 0; }
-.docs-md .md-code { font-size: 13px; border-color: var(--line-net); border-radius: 6px; padding: 1.5px 6px; }
-.docs-md .md-pre { padding: 14px 16px; margin: 4px 0 16px; border-radius: 12px; }
-.docs-md .md-pre code { font-size: 13px; line-height: 1.6; }
+.docs-md .md-hr { margin: 22px 0; }
+.docs-md .md-code { font-size: 12.5px; border-color: var(--line-net); border-radius: 6px; padding: 1.5px 6px; }
+.docs-md .md-pre { padding: 13px 15px; margin: 2px 0 14px; border-radius: 11px; border-color: var(--line-net); }
+.docs-md .md-pre code { font-size: 12.5px; line-height: 1.6; }
 
-/* 콜아웃 — 인용(팁·알아두기)을 '딱 한 줄'(guide-remember)과 같은 언어로 */
+/* 피처 카드 — '**굵은 제목** — 설명' 목록. 지식 축 옵션(kn-axis-opt)과 같은 틴트 박스. */
+.docs-featgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 6px; }
+.docs-feat { background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 12px; padding: 13px 15px; }
+.docs-feat-t { font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; margin-bottom: 4px; }
+.docs-feat-d { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
+.docs-feat-d strong, .docs-feat-d b { color: var(--ink); }
+
+/* 번호 단계 — 순서 목록. 둘러보기 코스(guide-path)·챕터 번호(tabchapter-num)와 같은 뱃지. */
+.docs-steps { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 12px; }
+.docs-step { display: flex; align-items: flex-start; gap: 11px; }
+.docs-step-num { flex: none; width: 23px; height: 23px; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12.5px; font-weight: 800; color: var(--blue); background: var(--bg-punch);
+  border: 1px solid var(--line-net-2); border-radius: 8px; }
+.docs-step-body { flex: 1; min-width: 0; font-size: 14px; line-height: 1.65; color: var(--ink-sub); padding-top: 1px; }
+.docs-step-body strong { color: var(--ink); }
+
+/* 이동 카드 — 문서 끝 '다음 단계'. 메뉴 카드(tabguide-card)와 같은 호버·화살표. */
+.docs-linkgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 2px 0 2px; }
+a.docs-linkcard { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); text-decoration: none; color: inherit;
+  transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(21,35,59,.07); transform: translateY(-2px); text-decoration: none; }
+a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.docs-linkcard-t { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.docs-linkcard-arrow { flex: none; color: var(--blue); font-weight: 700; }
+.docs-linkcard-d { display: block; margin-top: 4px; font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
+
+/* 콜아웃 — 팁·알아두기. '딱 한 줄'(guide-remember)과 같은 파란 틴트 박스. */
 .docs-md .md-quote { background: rgba(45,107,240,.05); border: 1px solid var(--line-note);
-  border-radius: 12px; padding: 12px 16px; margin: 16px 0; color: var(--ink-sub); }
+  border-radius: 12px; padding: 12px 15px; margin: 14px 0; color: var(--ink-sub); font-size: 14px; line-height: 1.65; }
+.docs-md .md-quote .md-p { margin: 0; }
 .docs-md .md-quote strong { color: var(--ink); }
-/* 리드 — 문서의 첫 인용은 콜아웃이 아니라 히어로 리드(맨몸 문단) */
-.docs-md .md > .md-quote:first-child { background: none; border: 0; border-radius: 0; padding: 0;
-  margin: 0 0 24px; font-size: 15.5px; line-height: 1.8; }
 
 /* 표 — 조용한 그리드: 머리행만 틴트 */
-.docs-md .md-table { font-size: 14px; margin: 4px 0 18px; }
+.docs-md .md-table { width: 100%; font-size: 13.5px; margin: 2px 0 12px; }
 .docs-md .md-table th, .docs-md .md-table td { border-color: var(--line); padding: 8px 12px; line-height: 1.55; }
-.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); }
+.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); font-weight: 700; }
+
+@media (max-width: 720px) {
+  .docs-featgrid, .docs-linkgrid { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 960px) {
   .docs-layout { flex-direction: column; gap: 16px; }
@@ -6537,7 +6578,7 @@ body.pjv-pm-open { overflow: hidden; }
 }
 
 /* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) — 틴트 박스 안 화이트 카드(tabchapter 문법) ── */
-.md-tabs { margin: 16px 0 20px; background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 14px; padding: 10px; }
+.md-tabs { margin: 10px 0 4px; background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 14px; padding: 10px; }
 .md-tabs-bar { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 2px 10px; }
 .md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
   font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
