@@ -73,6 +73,35 @@ rm -rf "$TMPHOME2"
 run 'this is not json {{{' session-preload.mjs LIVELY_HOOKS_OFF=1
 [ $CODE -eq 0 ] && ok "preload⑤ 비JSON stdin 무해(미사용)" || bad "preload⑤ 비JSON stdin" "code=$CODE"
 
+# ── 자산 sync 배선 자기치유(#742) — 배선 없는 기존 멤버: settings 배선 추가 + 러너 1회 실행 + reloadSkills 봉투 ──
+#  게이트웨이 무접촉(죽은 GW 주소): 러너는 fail-open 즉시 종료, 배선/출력만 검증한다.
+TMPHOME3=$(mktemp -d)
+mkdir -p "$TMPHOME3/.lively/hooks" "$TMPHOME3/.claude"
+cp "$HERE/sync-harness-assets.mjs" "$TMPHOME3/.lively/hooks/"
+cat > "$TMPHOME3/.claude/settings.json" <<'EOF'
+{"hooks":{"SessionStart":[{"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"\"node\" \"$HOME/.lively/hooks/session-preload.mjs\""}]}]}}
+EOF
+run '' session-preload.mjs HOME="$TMPHOME3" LIVELY_TOKEN=dummy LIVELY_GATEWAY_URL=http://127.0.0.1:1
+WIRED=$(grep -c 'sync-harness-assets' "$TMPHOME3/.claude/settings.json")
+if [ $CODE -eq 0 ] && [ "$WIRED" = "1" ] && [ -f "$TMPHOME3/.claude/settings.json.bak-asset-wiring" ] && printf '%s' "$OUT" | grep -q '"reloadSkills":true'; then
+  ok "preload⑥ 자기치유 — settings 배선 추가+백업+reloadSkills 봉투"
+else bad "preload⑥ 자기치유" "code=$CODE wired=$WIRED out=${OUT:0:120}"; fi
+
+run '' session-preload.mjs HOME="$TMPHOME3" LIVELY_TOKEN=dummy LIVELY_GATEWAY_URL=http://127.0.0.1:1
+WIRED2=$(grep -c 'sync-harness-assets' "$TMPHOME3/.claude/settings.json")
+if [ $CODE -eq 0 ] && [ "$WIRED2" = "1" ] && ! printf '%s' "$OUT" | grep -q 'reloadSkills'; then
+  ok "preload⑥b 자기치유 멱등 — 재실행에 중복 배선·봉투 없음"
+else bad "preload⑥b 자기치유 멱등" "code=$CODE wired=$WIRED2 out=${OUT:0:120}"; fi
+
+TMPHOME4=$(mktemp -d)
+mkdir -p "$TMPHOME4/.claude"
+printf '{"hooks":{"SessionStart":[]}}\n' > "$TMPHOME4/.claude/settings.json"
+run '' session-preload.mjs HOME="$TMPHOME4" LIVELY_TOKEN=dummy LIVELY_GATEWAY_URL=http://127.0.0.1:1
+if [ $CODE -eq 0 ] && ! grep -q 'sync-harness-assets' "$TMPHOME4/.claude/settings.json"; then
+  ok "preload⑥c 러너 파일 부재 → 배선 안 함(없는 파일 배선 금지)"
+else bad "preload⑥c 러너 부재" "code=$CODE"; fi
+rm -rf "$TMPHOME3" "$TMPHOME4"
+
 if [ "${LIVE:-0}" = "1" ]; then
   run '' session-preload.mjs
   if [ $CODE -eq 0 ] && printf '%s' "$OUT" | grep -q '미매핑'; then

@@ -13,7 +13,8 @@
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -37,14 +38,16 @@ const HARNESS = (() => {
 
 // 하네스별 컨텍스트 주입 출력. text 가 비면 아무것도 안 쓴다(무출력 = 무주입).
 //   codex → JSON 봉투(additionalContext), 그 외(claude/미설정) → raw 텍스트.
-function emitContext(text) {
-  if (!text) return;
-  if (HARNESS === "codex") {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text },
-      }) + "\n",
-    );
+//   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
+//   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
+function emitContext(text, opts = {}) {
+  const reload = !!opts.reloadSkills && HARNESS !== "codex";
+  if (!text && !reload) return;
+  if (HARNESS === "codex" || reload) {
+    const out = { hookEventName: "SessionStart" };
+    if (text) out.additionalContext = text;
+    if (reload) out.reloadSkills = true;
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: out }) + "\n");
   } else {
     process.stdout.write(text + "\n");
   }
@@ -125,6 +128,40 @@ function reconcileClaudeAutoApprove(dir, want) {
   } catch { /* fail-soft */ }
 }
 
+// 자산 sync 배선 자기치유(#742) — sync-harness-assets 의 SessionStart 배선은 user-install(#636, 2026-07-07)부터
+//  설치돼, 그 전에 프로비저닝된 멤버는 kit refresh 로 러너 파일만 최신이고 배선이 없어 조직 스킬·서브에이전트가
+//  영영 materialize 안 됐다(재설치 없음 · refresh-member-kits.sh 는 settings 무영향). 전원 배선된 이 훅이 수렴시킨다:
+//  배선이 없으면 ① settings.json 에 배선 추가(다음 세션부턴 전용 훅의 정상 경로) ② 이번 세션 몫으로 러너를 직접
+//  1회 실행(materialize) 후 true 반환 → 호출부가 reloadSkills 를 실어 스킬을 같은 세션에 동적 로드. 전 경로 fail-soft.
+//  Codex 배선은 config.toml 센티넬(설치 시점 관리)이라 제외. 러너 파일이 없는 구형 로컬 kit 은 건드리지 않는다
+//  (없는 파일을 배선하면 매 세션 훅 에러) — 그 경우는 kit 재설치가 경로.
+function healAssetSyncWiring() {
+  if (HARNESS === "codex") return false;
+  try {
+    const runner = join(homedir(), ".lively", "hooks", "sync-harness-assets.mjs");
+    if (!existsSync(runner)) return false;
+    const sp = join(homedir(), ".claude", "settings.json");
+    if (!existsSync(sp)) return false; // claude 미설치/미배선 멤버 — 건드리지 않음
+    let cur; try { cur = JSON.parse(readFileSync(sp, "utf8")); } catch { return false; }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
+    cur.hooks = (cur.hooks && typeof cur.hooks === "object" && !Array.isArray(cur.hooks)) ? cur.hooks : {};
+    const ss = Array.isArray(cur.hooks.SessionStart) ? cur.hooks.SessionStart : [];
+    if (JSON.stringify(ss).includes("sync-harness-assets")) return false; // 이미 배선 — 정상 경로
+    // node 실행자는 기존 session-preload 엔트리의 첫 토큰을 미러(번들 node·플랫폼 형태 유지), 스크립트는
+    //  ~/.lively 러너 절대경로로 고정 — 프로젝트 스코프 변형 배선($CLAUDE_PROJECT_DIR)을 잘못 미러하지 않게.
+    const pre = ss.find((e) => JSON.stringify(e).includes("session-preload.mjs"));
+    const preCmd = pre && pre.hooks && pre.hooks[0] && typeof pre.hooks[0].command === "string" ? pre.hooks[0].command : "";
+    const nodeTok = (preCmd.match(/^\s*("[^"]+"|\S+)/) || [])[1] || "node";
+    ss.push({ matcher: "startup|resume|clear", hooks: [{ type: "command", command: `${nodeTok} "${runner}"` }] });
+    cur.hooks.SessionStart = ss;
+    try { copyFileSync(sp, sp + ".bak-asset-wiring"); } catch { /* 백업 실패해도 진행 */ }
+    writeFileSync(sp, JSON.stringify(cur, null, 2) + "\n");
+    // 이번 세션 몫 — 러너 직접 1회 실행(자체 타임박스·fail-open·hooks-config 자기게이팅 내장).
+    try { execFileSync(process.execPath, [runner], { stdio: "ignore", timeout: 8000 }); } catch { /* fail-soft */ }
+    return true;
+  } catch { return false; }
+}
+
 // 런타임 설정 동적 갱신 — 게이트웨이 org_runtime_config 를 받아 ~/.lively/hooks-config.json + work-roots 갱신.
 //  어드민의 훅 on/off·너지문구·work-roots 변경이 재설치 없이 다음 세션부터 반영(④ 패턴). 전부 fail-open.
 //  주의: session_preload 가 비활성이어도 이건 항상 돌려야 재활성화가 가능(자기-잠금 방지).
@@ -161,10 +198,12 @@ try {
   // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
   const result = await Promise.race([Promise.all([refreshRuntimeConfig(), fetchOrgContext()]), sleep(4500)]);
   const [, orgCtx] = Array.isArray(result) ? result : [null, null];
+  // 자산 sync 자기치유 — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스). 배선 정상이면 즉시 false.
+  const healed = healAssetSyncWiring();
   // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-  if (hookDisabled("session_preload")) process.exit(0);
+  if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
   const blocks = [orgCtx || STATIC].filter(Boolean); // 게이트웨이 org-context 우선, 없으면 로컬 STATIC
-  emitContext(blocks.join("\n\n"));
+  emitContext(blocks.join("\n\n"), { reloadSkills: healed });
 } catch {
   // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)는 내보낸다.
   emitContext(STATIC);
