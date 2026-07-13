@@ -49,6 +49,9 @@ const ADMIN_SECTIONS = [
     { key: 'credentials', label: '자격(커넥터 로그인)', meaning: null, group: 'ai' },
     // DB 접근 감사(#746 P5) — 누가·언제·어떤 테이블/식별자를 조회했나(위변조 방지 해시체인). 신용정보법 R8. admin 전용.
     { key: 'db-audit', label: 'DB 접근 감사', meaning: null, group: 'ai' },
+    // 저장소·로그(#813) — 박스 디스크가 얼마나 찼나 + 로그 상한. 디스크가 100% 가 되면 DB 가 죽어 전 기능이 500 이 된다
+    //  (2026-07-13 사고). 고객 박스는 우리가 SSH 로 못 들어가므로 **여기가 유일한 관측·조절 창구**다. admin 전용(인프라).
+    { key: 'storage', label: '저장소 · 로그', meaning: null, group: 'ai' },
     // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
     { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
     // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
@@ -72,7 +75,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'storage', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
 // #783 검토 큐는 워킹레벨 개방 — 승인 백엔드가 이미 memory scope 다(#638 결정: "승인 자격제한 없음 — 카테고리 전문성 있는
 //  워킹레벨이 오너보다 잘 검토한다"). 에이전트 지식 게이트를 켜면 큐 볼륨이 오너 한 명으로 감당 안 되기도 한다.
 const MEMORY_SCOPE_SECTIONS = ['review-queue'];
@@ -289,6 +292,8 @@ function renderAdminDetail(detail, sel, data) {
         return credentialsEditor(detail);
     if (sel === 'db-audit')
         return dbAuditEditor(detail, data);
+    if (sel === 'storage')
+        return storageEditor(detail, data);
     if (sel === 'embeddings')
         return embeddingsEditor(detail, data);
     if (sel === 'repos')
@@ -2307,6 +2312,113 @@ function runtimeEditor(detail, data) {
 //  config SoT = org_runtime_config.embedding_config(DB, 무재시작). 저장 = POST runtime-config{embedding_config}.
 //  "뒤늦게 켜기": provider 를 켠다고 이미 저장된 지식이 자동 임베딩되진 않는다(쓰기훅은 신규·수정분만) →
 //   [백필] 버튼(POST /api/ui/org/embeddings/backfill)으로 기존 지식을 일괄 임베딩(재실행 안전, 진행 폴링).
+// ── 저장소 · 로그(#813) ──────────────────────────────────────────────
+// 왜 이 화면이 있나: 2026-07-13 에 디스크가 100% 차서 Postgres 가 recovery mode 에 갇혔고 로그인을 포함한 **모든 기능이
+//  500** 이 됐다. 그런데 /healthz 는 끝까지 초록이라 아무도 몰랐다. 고객 박스는 우리가 SSH 로 들어갈 수 없으니
+//  **관리탭이 유일한 관측·조절 창구**다. (지식: gateway-disk-leak-audit-2026-07-13)
+// UI 원칙: 숫자를 그대로 뱉지 말고 **뜻을 보여준다** — 게이지로 한눈에, 설정값은 "그래서 최대 얼마"까지 계산해서.
+function fmtBytes(n) {
+    if (!Number.isFinite(n) || n < 0)
+        return '—';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let v = n, i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i++;
+    }
+    return (i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)) + units[i];
+}
+function storageEditor(detail, data) {
+    const canEdit = !!data.canEdit;
+    const body = el('div');
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('저장소 · 로그', null), el('p', { class: 'admin-hint', text: '이 박스의 디스크가 얼마나 찼는지 보고, 로그가 무한히 쌓이지 않게 상한을 정합니다. 디스크가 가득 차면 DB가 죽어 로그인을 포함한 모든 기능이 멈춥니다 — 그 전에 알아채는 것이 이 화면의 목적입니다. 저장하면 게이트웨이 재시작 없이 즉시 반영됩니다.' }), body));
+    body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    async function load() {
+        let st;
+        try {
+            st = await api('/api/ui/org/storage');
+        }
+        catch (e) {
+            body.replaceChildren(el('p', { class: 'admin-hint', text: '상태를 불러오지 못했습니다: ' + e.message }));
+            return;
+        }
+        build(st);
+    }
+    function build(st) {
+        const p = st.policy || {};
+        // ── ① 지금 상태 — 디스크 게이지 ──
+        const LV = { ok: ['여유', 'ok'], warn: ['경고', 'warn'], critical: ['위험', 'critical'] };
+        const diskRows = (st.disks || []).map((d) => {
+            const [lvLabel, lvKey] = LV[d.level] || LV.ok;
+            const fill = el('div', { class: 'gauge-fill gauge-' + lvKey });
+            fill.style.width = Math.min(100, Math.max(2, d.usedPct)) + '%';
+            return el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('code', { text: d.path }), el('span', { class: 'storage-lv storage-lv-' + lvKey, text: lvLabel + ' · ' + d.usedPct + '%' })), el('div', { class: 'gauge' }, fill), el('p', { class: 'storage-calc', text: `전체 ${fmtBytes(d.totalBytes)} 중 ${fmtBytes(d.availBytes)} 남음` }));
+        });
+        if (!diskRows.length)
+            diskRows.push(el('p', { class: 'admin-hint', text: '디스크 정보를 읽지 못했습니다.' }));
+        // ── ① 지금 상태 — 로그 ──
+        const logs = st.logs || { files: [], totalBytes: 0, capBytes: 0, dir: '' };
+        const current = (logs.files || []).filter((f) => !f.rotated);
+        const kept = (logs.files || []).filter((f) => f.rotated);
+        const logLine = logs.capBytes > 0
+            ? `현재 ${fmtBytes(logs.totalBytes)} — 정책상 최대 ${fmtBytes(logs.capBytes)} 까지만 자랍니다`
+            : `현재 ${fmtBytes(logs.totalBytes)} — ⚠ 회전이 꺼져 있어 상한이 없습니다`;
+        const logDetail = (logs.files || []).length
+            ? el('p', { class: 'storage-calc', text: `현재 로그 ${current.length}개 · 보관본 ${kept.length}개 (${(logs.files || []).slice(0, 4).map((f) => f.name + ' ' + fmtBytes(f.bytes)).join(' · ')})` })
+            : el('p', { class: 'storage-calc', text: '로그 파일 없음' });
+        // ── ② 정책 ──
+        const numIn = (val, min, max) => {
+            const i = el('input', { class: 'input input-num', type: 'number', min: String(min), max: String(max) });
+            i.value = String(val);
+            i.disabled = !canEdit;
+            return i;
+        };
+        const logMaxIn = numIn(p.log_max_mb ?? 50, 0, 10000);
+        const logKeepIn = numIn(p.log_keep ?? 3, 0, 50);
+        const warnIn = numIn(p.disk_warn_pct ?? 85, 1, 99);
+        const critIn = numIn(p.disk_critical_pct ?? 95, 1, 100);
+        // 설정값의 '뜻'을 즉시 계산해 보여준다 — 숫자만 놓으면 이게 무슨 의미인지 아무도 모른다.
+        const logCalc = el('p', { class: 'storage-calc' });
+        const recalc = () => {
+            const mb = Number(logMaxIn.value) || 0;
+            const keep = Number(logKeepIn.value) || 0;
+            logCalc.textContent = mb <= 0
+                ? '⚠ 0 = 회전 끔 — 로그가 무한히 자랍니다(권장하지 않음).'
+                : `→ 로그가 차지할 수 있는 최대 용량: ${fmtBytes(mb * 1024 * 1024 * (keep + 1))} (${mb}MB 씩 현재 1개 + 보관 ${keep}개)`;
+        };
+        logMaxIn.addEventListener('input', recalc);
+        logKeepIn.addEventListener('input', recalc);
+        recalc();
+        const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' });
+        saveBtn.disabled = !canEdit;
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            try {
+                const storage_policy = {
+                    log_max_mb: Number(logMaxIn.value),
+                    log_keep: Number(logKeepIn.value),
+                    disk_warn_pct: Number(warnIn.value),
+                    disk_critical_pct: Number(critIn.value),
+                };
+                await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy }) });
+                toast('저장됨 — 즉시 반영됩니다(재시작 불필요).');
+                load();
+            }
+            catch (e) {
+                toast(e.message, true);
+                saveBtn.disabled = false;
+            }
+        });
+        // 설정 출처 안내 — .env 시드로 도는지, 관리탭 저장값인지(혼동 방지, #688 임베딩과 같은 관례).
+        const srcNote = st.policy_source === 'env'
+            ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+            : st.policy_source === 'default'
+                ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+                : null;
+        body.replaceChildren(el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' }), el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), el('div', { class: 'storage-actions' }, saveBtn));
+    }
+    load();
+}
 function embeddingsEditor(detail, data) {
     const canEdit = !!data.canEdit;
     const body = el('div');

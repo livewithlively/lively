@@ -11,14 +11,20 @@ const okPool = (): QueryablePool => ({ query: async () => ({ rows: [{ "?column?"
 const failPool = (msg: string): QueryablePool => ({ query: async () => { throw new Error(msg); } });
 const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영원히 미결 */ }) });
 
-// ── 임계 레벨 경계 ──
+// ── 임계 레벨 경계 (임계치는 관리탭 정책에서 주입된다) ──
 {
-  assert.equal(levelFor(0, 85, 95), "ok");
-  assert.equal(levelFor(84.9, 85, 95), "ok");
-  assert.equal(levelFor(85, 85, 95), "warn", "경계값은 경고에 포함");
-  assert.equal(levelFor(94.9, 85, 95), "warn");
-  assert.equal(levelFor(95, 85, 95), "critical", "경계값은 위험에 포함");
-  assert.equal(levelFor(100, 85, 95), "critical");
+  const t = { warnPct: 85, criticalPct: 95 };
+  assert.equal(levelFor(0, t), "ok");
+  assert.equal(levelFor(84.9, t), "ok");
+  assert.equal(levelFor(85, t), "warn", "경계값은 경고에 포함");
+  assert.equal(levelFor(94.9, t), "warn");
+  assert.equal(levelFor(95, t), "critical", "경계값은 위험에 포함");
+  assert.equal(levelFor(100, t), "critical");
+
+  // 관리탭에서 임계치를 낮추면 같은 사용률이 다르게 판정돼야 한다(설정이 실제로 먹는다는 증거).
+  const strict = { warnPct: 50, criticalPct: 70 };
+  assert.equal(levelFor(60, strict), "warn", "임계치를 낮추면 60% 도 경고");
+  assert.equal(levelFor(75, strict), "critical");
 }
 
 // ── 시크릿 유출 방지: 미인증 /readyz 응답에 접속 자격이 실리면 안 된다 ──
@@ -39,6 +45,10 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
   assert.ok(d.availBytes >= 0);
   assert.ok(d.usedPct >= 0 && d.usedPct <= 100, `사용률이 0~100 범위여야: ${d.usedPct}`);
   assert.equal(d.level, levelFor(d.usedPct));
+
+  // 임계치를 0 에 가깝게 주면 무조건 critical — 주입한 임계치가 실제 판정에 쓰인다는 증거.
+  const strict = await checkDisk(os.tmpdir(), { warnPct: 1, criticalPct: 2 });
+  assert.equal(strict?.level, "critical", "주입 임계치가 무시되면 안 된다");
 
   // 없는 경로는 에러가 아니라 null — 세션 루트가 아직 없는 신규 박스에서 헬스체크가 죽으면 안 된다.
   assert.equal(await checkDisk("/nonexistent-path-for-health-test"), null);

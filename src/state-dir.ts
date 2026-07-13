@@ -17,6 +17,14 @@ export function stateDir(...segs: string[]): string {
   return path.join(stateRoot(), ...segs);
 }
 
+// 로그 루트(#813) — 서비스 유닛이 stdout/stderr 을 여기로 리다이렉트한다
+//  (systemd `StandardOutput=append:<APP_DIR>/logs/gateway.log` · launchd `StandardOutPath`).
+//  로그 재니터(src/log-janitor.ts)가 여기서 회전한다. LIVELY_LOG_DIR 로 오버라이드.
+//  ※ data(stateRoot) 와 분리 — 배포가 logs/ 와 data/ 를 각각 소유·보존한다(deploy render_service_unit).
+export function logRoot(): string {
+  return path.resolve(process.env.LIVELY_LOG_DIR || path.join(process.cwd(), "logs"));
+}
+
 // 부팅 1회(멱등) — 루트 + 알려진 하위를 보장 + 실제 쓰기 프로브. 서비스 유저 소유라 성공해야 정상.
 //  새 런타임 하위 디렉이 생기면 여기에 등록한다(= '경로 쓰기 가능성'을 보장하는 단일 지점).
 //  ⚠ 정적 가드레일(state-dir.test.ts)이 놓친 오구성(예: STATE_DIR 이 타 uid 소유)을 부팅 때 **시끄럽게** 드러내는 방어선 —

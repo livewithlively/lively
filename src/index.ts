@@ -31,6 +31,9 @@ import { startScheduler } from "./scheduler.js";
 import { ensureStateDirs, stateRoot } from "./state-dir.js";
 import { ROOTS } from "./terminal-sessions.js";
 import { readyReport } from "./health.js";
+import { startLogJanitor } from "./log-janitor.js";
+import { effectiveStoragePolicy } from "./org/storage-policy.js";
+import { getRuntimeConfig } from "./org/store.js";
 import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
@@ -69,13 +72,23 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
 });
 
+// 저장소 정책(#813) — 디스크 임계치·로그 상한의 단일 출처는 **관리탭(DB)**, .env 는 시드일 뿐(고객 박스는 우리가
+//  못 들어가므로 env 전용이면 아무도 못 바꾼다). effectiveStoragePolicy 는 짧게 캐시하고 **DB 가 죽어도 throw 하지
+//  않는다** — /readyz 가 가장 필요한 순간이 바로 DB 다운이라 그때도 디스크 판정은 나와야 한다.
+const loadStoragePolicy = () => getRuntimeConfig().then((c) => c.storage_policy);
+
 // readiness — '실제로 서비스가 되나'(#813 T2). DB 도달 + 디스크 여유. **모니터·알림은 healthz 가 아니라 이걸 봐야 한다.**
 //  2026-07-13: 디스크풀 → Postgres recovery mode → 모든 로그인 500 인데도 /healthz 는 초록이라 아무도 몰랐다.
 //  DB 불가 → 503(진짜 not-ready). 디스크 경고는 200 + status=degraded — 멀쩡한 서비스를 LB 에서 빼지 않는다(health.ts 참조).
 //  미인증: LB·모니터가 호출한다(k8s readiness 관례). 응답의 DB 에러는 health.ts 가 자격증명을 마스킹한다.
 app.get("/readyz", async (_req, res) => {
   try {
-    const report = await readyReport({ pool: itemsPool, paths: [stateRoot(), ...ROOTS.map((r) => r.base)] });
+    const policy = await effectiveStoragePolicy(loadStoragePolicy);
+    const report = await readyReport({
+      pool: itemsPool,
+      paths: [stateRoot(), ...ROOTS.map((r) => r.base)],
+      thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
+    });
     res.status(report.ok ? 200 : 503).json(report);
   } catch (err) {
     // 점검 자체가 터지면 '준비됨'이라 우길 근거가 없다 → fail-closed.
@@ -245,6 +258,10 @@ const server = app.listen(PORT, () => {
       //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
       //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startScheduler(); })
+      // 로그 재니터(#813 T4) — logs/ 의 로그가 상한(관리탭 저장소 정책)을 넘으면 copytruncate 로 회전한다.
+      //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
+      //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
+      .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startLogJanitor(loadStoragePolicy); })
       // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
       //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
       //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,

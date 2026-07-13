@@ -17,14 +17,20 @@
 import fsp from "node:fs/promises";
 import { logger } from "./log.js";
 
-// 임계치 — 배포별 조정 가능(디스크가 작은 고객 박스는 더 일찍 경고하고 싶을 수 있다).
-const WARN_PCT = Number(process.env.DISK_WARN_PCT ?? 85);
-const CRIT_PCT = Number(process.env.DISK_CRITICAL_PCT ?? 95);
 // DB 가 recovery mode 면 pg 가 즉시 FATAL 을 던지지만, 네트워크·풀 고갈 시엔 매달릴 수 있다 → 헬스체크는 빨리 답해야 한다.
 const DB_TIMEOUT_MS = Number(process.env.HEALTH_DB_TIMEOUT_MS ?? 3000);
 
 export type Level = "ok" | "warn" | "critical";
 export type Status = "ok" | "degraded" | "down";
+
+/** 디스크 임계치 — **관리탭(DB) 저장소 정책이 단일 출처**(src/org/storage-policy.ts). 호출자가 주입한다. */
+export interface Thresholds {
+  warnPct: number;
+  criticalPct: number;
+}
+
+// DB 를 못 읽는 상황(=DB 다운, 헬스체크가 가장 필요한 순간)에도 판정은 해야 한다 → 최후 폴백.
+export const FALLBACK_THRESHOLDS: Thresholds = { warnPct: 85, criticalPct: 95 };
 
 /** pg.Pool 중 우리가 쓰는 부분만 — 테스트가 스텁을 넣을 수 있게 좁힌다. */
 export interface QueryablePool {
@@ -50,12 +56,13 @@ export interface ReadyReport {
   status: Status;
   db: DbCheck;
   disks: DiskCheck[];
+  thresholds: Thresholds; // 어떤 기준으로 판정했는지 — 관리탭에서 바꾼 값이 실제로 먹는지 눈으로 확인 가능해야 한다
   uptimeSec: number;
 }
 
-export function levelFor(usedPct: number, warn = WARN_PCT, crit = CRIT_PCT): Level {
-  if (usedPct >= crit) return "critical";
-  if (usedPct >= warn) return "warn";
+export function levelFor(usedPct: number, t: Thresholds = FALLBACK_THRESHOLDS): Level {
+  if (usedPct >= t.criticalPct) return "critical";
+  if (usedPct >= t.warnPct) return "warn";
   return "ok";
 }
 
@@ -66,7 +73,7 @@ export function scrubError(msg: string): string {
 
 // df 와 같은 관례로 사용률을 낸다: used/(used+avail). statfs.blocks 엔 root 예약분이 포함돼 있어 bavail(비특권
 //  가용)을 안 쓰면 사람이 `df` 에서 보는 수치와 어긋난다 — 운영자가 대조할 수 있어야 하므로 df 를 따른다.
-export async function checkDisk(p: string): Promise<DiskCheck | null> {
+export async function checkDisk(p: string, t: Thresholds = FALLBACK_THRESHOLDS): Promise<DiskCheck | null> {
   try {
     const st = await fsp.statfs(p);
     const bsize = Number(st.bsize);
@@ -76,7 +83,7 @@ export async function checkDisk(p: string): Promise<DiskCheck | null> {
     const used = blocks - bfree;
     const denom = used + bavail;
     const usedPct = denom > 0 ? Math.round((used / denom) * 1000) / 10 : 0;
-    return { path: p, totalBytes: blocks * bsize, availBytes: bavail * bsize, usedPct, level: levelFor(usedPct) };
+    return { path: p, totalBytes: blocks * bsize, availBytes: bavail * bsize, usedPct, level: levelFor(usedPct, t) };
   } catch (err) {
     // 경로 부재(미프로비저닝 세션 루트)·statfs 미지원 — 치명 아님. 리포트에서 빠지고 나머지는 계속 본다.
     logger.warn({ err, path: p }, "디스크 점검 실패 — 리포트에서 제외");
@@ -85,7 +92,7 @@ export async function checkDisk(p: string): Promise<DiskCheck | null> {
 }
 
 // 앱 상태루트와 세션 루트가 같은 볼륨인 경우가 흔하다 → 디바이스로 중복 제거(같은 디스크를 두 번 세지 않게).
-export async function checkDisks(paths: string[]): Promise<DiskCheck[]> {
+export async function checkDisks(paths: string[], t: Thresholds = FALLBACK_THRESHOLDS): Promise<DiskCheck[]> {
   const seenDev = new Set<number>();
   const out: DiskCheck[] = [];
   for (const p of paths) {
@@ -97,7 +104,7 @@ export async function checkDisks(paths: string[]): Promise<DiskCheck[]> {
     }
     if (seenDev.has(dev)) continue;
     seenDev.add(dev);
-    const c = await checkDisk(p);
+    const c = await checkDisk(p, t);
     if (c) out.push(c);
   }
   return out;
@@ -143,9 +150,14 @@ export function summarize(db: DbCheck, disks: DiskCheck[]): { ok: boolean; statu
 export async function readyReport(opts: {
   pool: QueryablePool;
   paths: string[];
+  thresholds?: Thresholds; // 관리탭 저장소 정책에서 온다(호출자가 주입 — DB 다운 시 폴백은 호출자 책임)
   timeoutMs?: number;
 }): Promise<ReadyReport> {
-  const [db, disks] = await Promise.all([pingDb(opts.pool, opts.timeoutMs), checkDisks(opts.paths)]);
+  const thresholds = opts.thresholds ?? FALLBACK_THRESHOLDS;
+  const [db, disks] = await Promise.all([
+    pingDb(opts.pool, opts.timeoutMs),
+    checkDisks(opts.paths, thresholds),
+  ]);
   const { ok, status } = summarize(db, disks);
-  return { ok, status, db, disks, uptimeSec: Math.round(process.uptime()) };
+  return { ok, status, db, disks, thresholds, uptimeSec: Math.round(process.uptime()) };
 }

@@ -19,6 +19,11 @@ import {
   isExplicitEmbeddingOff, embeddingConfigSource, EMBEDDING_OFF,
 } from "../v6/embedding-provider.js";
 import { invalidateOrgTimezone } from "./timezone.js"; // #778 시간대 캐시 무효화(프로필 저장 시)
+// 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. embedding_config 와 같은 seam(env 시드 + DB 우선).
+import {
+  type StoragePolicy, type StoragePolicyPatch, resolveStoragePolicy, normalizeStoragePolicy,
+  storagePolicySource, invalidateStoragePolicyCache,
+} from "./storage-policy.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -609,6 +614,7 @@ export interface OrgRuntimeConfig {
   allowed_internal_hosts: string[]; // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(소문자, deny-all 기본) — #746 T1
   write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
+  storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -619,7 +625,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, storage_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -639,6 +645,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     allowed_internal_hosts: strArrSafe(row?.allowed_internal_hosts).map((s) => s.toLowerCase()),
     write_tools: strArrSafe(row?.write_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
+    storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -657,6 +664,7 @@ export async function updateRuntimeConfig(
     allowed_internal_hosts?: string[];
     write_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
+    storage_policy?: StoragePolicyPatch;
   },
   actor?: string,
   source?: string,
@@ -685,18 +693,30 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
     embeddingConfig = (raw.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null;
   }
+  // 저장소 정책(#813) — embedding_config 와 같은 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다.**
+  //  before(resolved)를 되쓰면 env 시드/기본값이 DB 로 굳어 '미설정' 상태가 영구히 사라진다(#688 에서 겪은 함정).
+  let storagePolicy: unknown;
+  if (patch.storage_policy !== undefined) {
+    storagePolicy = normalizeStoragePolicy({ ...before.storage_policy, ...patch.storage_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT storage_policy FROM org_runtime_config WHERE id=1`);
+    storagePolicy = (raw.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? {};
+  }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,1,now(),$11)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, storage_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,1,now(),$12)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
        allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, embedding_config=EXCLUDED.embedding_config,
+       storage_policy=EXCLUDED.storage_policy,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null],
   );
+  // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
+  if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
@@ -710,6 +730,17 @@ export async function getEmbeddingConfigSource(): Promise<"db" | "db-off" | "env
     return embeddingConfigSource((r.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null);
   } catch {
     return embeddingConfigSource(null); // 테이블 부재(부트스트랩 전) — env/off 로 판정
+  }
+}
+
+// 저장소 정책(#813)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
+//  getRuntimeConfig 는 resolved 만 주므로 출처 판정은 DB 원본으로 별도 조회(임베딩과 같은 방식).
+export async function getStoragePolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT storage_policy FROM org_runtime_config WHERE id=1`);
+    return storagePolicySource((r.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? null);
+  } catch {
+    return storagePolicySource(null); // 테이블 부재(부트스트랩 전)
   }
 }
 
