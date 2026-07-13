@@ -14,6 +14,7 @@ import {
   effectiveStoragePolicy, invalidateStoragePolicyCache,
 } from "./org/storage-policy.js";
 import { rotateFile, sweepLogs } from "./log-janitor.js";
+import { sessionCacheEnv, sharedCacheRoot, safeCacheEnv, homeRelocateEnv, dirSize } from "./session-cache.js";
 
 // ── 정책 해석 ──
 {
@@ -127,4 +128,57 @@ import { rotateFile, sweepLogs } from "./log-janitor.js";
   await fsp.rm(dir, { recursive: true, force: true });
 }
 
-console.log("storage-policy.test.ts ok — 관리탭 값 우선 · DB 다운에도 정책 응답 · copytruncate(inode 유지) · keep 초과 삭제");
+// ── 공유 빌드 캐시(#813 T3) ──
+//  회귀 대상: **자격증명이 딸려가는 변수(GRADLE_USER_HOME·CARGO_HOME)가 기본으로 켜지면 고객 빌드가 깨진다.**
+//   그 둘은 캐시가 아니라 '홈'이라 ~/.gradle/gradle.properties(서명키)·~/.cargo/credentials.toml(토큰)을 무시하게 만든다.
+//   → 기본 OFF 여야 하고, 명시적 opt-in 일 때만 들어가야 한다.
+{
+  const base = "/srv/lively/shared";
+  assert.equal(sharedCacheRoot(base), "/srv/lively/shared/.cache");
+
+  // 기본(순수 캐시만) — 홈 이전 변수는 절대 들어가면 안 된다.
+  const safe = sessionCacheEnv(base, { enabled: true, relocateHome: false });
+  assert.ok(safe.npm_config_cache?.startsWith("/srv/lively/shared/.cache"), "npm 캐시가 공유 루트를 가리켜야");
+  assert.ok(safe.npm_config_store_dir, "pnpm 스토어(하드링크 공유)도 있어야");
+  assert.ok(safe.GOMODCACHE && safe.PIP_CACHE_DIR && safe.UV_CACHE_DIR && safe.YARN_CACHE_FOLDER);
+  assert.match(safe.MAVEN_ARGS ?? "", /^-Dmaven\.repo\.local=/, "Maven 은 로컬저장소만 옮긴다(settings.xml 보존)");
+  assert.equal(safe.GRADLE_USER_HOME, undefined, "⚠ 기본값에 GRADLE_USER_HOME 이 들어가면 gradle.properties(서명키)가 무시돼 고객 빌드가 깨진다");
+  assert.equal(safe.CARGO_HOME, undefined, "⚠ 기본값에 CARGO_HOME 이 들어가면 credentials.toml(레지스트리 토큰)이 무시된다");
+
+  // opt-in 하면 그때만 들어간다.
+  const withHome = sessionCacheEnv(base, { enabled: true, relocateHome: true });
+  assert.ok(withHome.GRADLE_USER_HOME && withHome.CARGO_HOME, "opt-in 시엔 홈 이전 변수도 주입");
+  assert.deepEqual(Object.keys(safeCacheEnv("/x")).length + Object.keys(homeRelocateEnv("/x")).length, Object.keys(withHome).length);
+
+  // 꺼두면 **아무것도 주입하지 않는다**(무회귀 — 기존 세션 동작 그대로).
+  assert.deepEqual(sessionCacheEnv(base, { enabled: false, relocateHome: true }), {}, "꺼져 있으면 relocateHome 이어도 빈 객체");
+
+  // 기본 정책이 안전한가 — 이게 뒤집히면 위 회귀가 무의미해진다.
+  assert.equal(DEFAULT_STORAGE_POLICY.shared_cache_enabled, true);
+  assert.equal(DEFAULT_STORAGE_POLICY.shared_cache_relocate_home, false, "홈 이전은 기본 꺼짐이어야 한다");
+}
+
+// ── dirSize: 시간 예산 · 심볼릭 링크 미추적 ──
+{
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "dirsize-"));
+  const sub = path.join(dir, "a", "b");
+  await fsp.mkdir(sub, { recursive: true });
+  await fsp.writeFile(path.join(dir, "f1"), "x".repeat(1000));
+  await fsp.writeFile(path.join(sub, "f2"), "x".repeat(2000));
+  const r = await dirSize(dir);
+  assert.equal(r.bytes, 3000, "재귀 합산");
+  assert.equal(r.partial, false);
+
+  // 심볼릭 링크는 안 따라간다(순환·이중계산 방지).
+  await fsp.symlink(dir, path.join(dir, "loop"));
+  const r2 = await dirSize(dir);
+  assert.equal(r2.bytes, 3000, "심링크를 따라가면 무한/이중계산이 된다");
+
+  // 예산 0 이면 즉시 partial.
+  const r3 = await dirSize(dir, 0);
+  assert.equal(r3.partial, true, "시간 예산을 넘기면 partial 로 알린다(관리탭이 멈추면 안 된다)");
+
+  await fsp.rm(dir, { recursive: true, force: true });
+}
+
+console.log("storage-policy.test.ts ok — 관리탭 값 우선 · DB 다운에도 정책 응답 · copytruncate(inode 유지) · keep 초과 삭제 · 공유캐시 기본 안전(홈 이전 opt-in) · dirSize 예산/심링크");

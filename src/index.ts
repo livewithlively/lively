@@ -29,11 +29,12 @@ import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
 import { ensureStateDirs, stateRoot } from "./state-dir.js";
-import { ROOTS } from "./terminal-sessions.js";
+import { ROOTS, SHARED_ROOT } from "./terminal-sessions.js";
 import { readyReport } from "./health.js";
 import { startLogJanitor } from "./log-janitor.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
+import { ensureSharedCache } from "./session-cache.js";
 import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
@@ -262,6 +263,15 @@ const server = app.listen(PORT, () => {
       //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
       //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startLogJanitor(loadStoragePolicy); })
+      // 공유 빌드 캐시(#813 T3) — 세션이 쓸 캐시 디렉터리를 그룹쓰기(2775)로 미리 보장한다.
+      //  멤버별 격리 OS 유저(#524)들이 같은 캐시를 써야 하므로 권한이 중요하다. 비치명(툴이 각자 만들기도 한다).
+      .then(async () => {
+        const sp = await effectiveStoragePolicy(loadStoragePolicy);
+        await ensureSharedCache(SHARED_ROOT.base, {
+          enabled: sp.shared_cache_enabled,
+          relocateHome: sp.shared_cache_relocate_home,
+        });
+      })
       // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
       //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
       //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,

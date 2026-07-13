@@ -23,8 +23,9 @@ import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { checkDisks } from "../health.js";
 import { listLogs } from "../log-janitor.js";
 import { stateRoot, logRoot } from "../state-dir.js";
-import { ROOTS as TERMINAL_ROOTS } from "../terminal-sessions.js";
+import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -776,6 +777,8 @@ export const deliveryCapabilities: Capability[] = [
         if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
         if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
         if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
+        if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
+        if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
         const merged = normalizeStoragePolicy({ ...(await getRuntimeConfig()).storage_policy, ...patchIn });
         if (patchIn.disk_warn_pct !== undefined && patchIn.disk_warn_pct >= merged.disk_critical_pct) {
@@ -907,6 +910,9 @@ export const deliveryCapabilities: Capability[] = [
         { warnPct: p.disk_warn_pct, criticalPct: p.disk_critical_pct },
       );
       const files = await listLogs(logRoot());
+      // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
+      const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
+      const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
@@ -917,6 +923,12 @@ export const deliveryCapabilities: Capability[] = [
           totalBytes: files.reduce((sum, f) => sum + f.bytes, 0),
           // 정책상 로그가 최대 얼마까지 자랄 수 있나 — '설정이 뭘 뜻하는지'를 UI 가 계산 없이 그대로 보여줄 수 있게.
           capBytes: p.log_max_mb * 1024 * 1024 * (p.log_keep + 1),
+        },
+        cache: {
+          root: cacheRoot,
+          // 세션에 실제로 주입되는 변수 이름들(값=경로는 안 민감하지만 이름만으로 충분히 설명된다).
+          vars: Object.keys(sessionCacheEnv(TERMINAL_SHARED_ROOT.base, cacheOpts)).sort(),
+          bytes: await dirSize(cacheRoot),
         },
       };
     }),

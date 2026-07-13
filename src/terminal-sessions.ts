@@ -13,7 +13,10 @@ import type { LivelyUser } from "./context.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
-import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
+import { listMembers, getMember, mintToken, listTokens, revokeToken, getRuntimeConfig } from "./org/store.js";
+// 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
+import { sessionCacheEnv } from "./session-cache.js";
+import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
@@ -60,6 +63,10 @@ export const ROOTS: Root[] = [
   { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
   { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
 ];
+
+// 공유 워크스페이스 루트 — 공유 빌드 캐시(#813)가 이 아래 `.cache` 로 산다.
+//  그 디렉터리의 그룹·setgid 권한을 물려받아야 멤버별 격리 OS 유저(#524)들이 캐시를 함께 쓸 수 있다.
+export const SHARED_ROOT: Root = ROOTS.find((r) => r.key === "shared") ?? ROOTS[0];
 
 // ── 하네스 플래그 카탈로그(보수적 화이트리스트) ──
 export interface FlagDef { name: string; label: string; desc: string; type: "select" | "bool" | "text"; choices?: string[]; default?: string; }
@@ -511,6 +518,23 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //   (deploy/linux/sudoers-lively). 구 sudoers 면 미보존 → 시스템 TZ 폴백 = 종전 동작(무회귀).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(#633 과 동일 — 옛 세션은 재생성 시 정상화).
   args.push("-e", `TZ=${await orgTimezone()}`);
+  // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
+  //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
+  //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(LANG·TZ 와 같은 성질).
+  //  ⚠ 셸 rc 가 같은 변수를 다시 설정하면 rc 가 이긴다 = 고객의 명시 설정이 우선(비파괴).
+  //  관리탭에서 끌 수 있다(저장소·로그 → 공유 빌드 캐시). 꺼져 있으면 빈 객체 = 아무것도 안 바꾼다(무회귀).
+  try {
+    const sp = await effectiveStoragePolicy(() => getRuntimeConfig().then((c) => c.storage_policy));
+    const cacheEnv = sessionCacheEnv(SHARED_ROOT.base, {
+      enabled: sp.shared_cache_enabled,
+      relocateHome: sp.shared_cache_relocate_home,
+    });
+    for (const [k, v] of Object.entries(cacheEnv)) args.push("-e", `${k}=${v}`);
+  } catch (err) {
+    // 정책을 못 읽어도 세션 생성을 막지 않는다 — 캐시 공유는 최적화지 필수 기능이 아니다.
+    console.warn(`[terminal] 공유 캐시 env 주입 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
+  }
   // 구성원 격리(#524): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv, osUser 는 위에서 구함).
   //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
   //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).

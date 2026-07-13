@@ -6493,3 +6493,6 @@ body.pjv-pm-open { overflow: hidden; }
 .storage-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .input-num { width: 110px; }
 .storage-actions { margin-top: 14px; }
+.storage-toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
+.storage-toggle input { margin: 0; }
+.storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }

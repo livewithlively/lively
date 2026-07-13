@@ -2325,6 +2325,22 @@ function storageEditor(detail, data) {
     logKeepIn.addEventListener('input', recalc);
     recalc();
 
+    // ── ② 정책 — 공유 빌드 캐시(#813 T3) ──
+    const cache = st.cache || { root: '', vars: [], bytes: 0, partial: false };
+    const cacheChk = el('input', { type: 'checkbox' });
+    cacheChk.checked = p.shared_cache_enabled !== false; cacheChk.disabled = !canEdit;
+    const homeChk = el('input', { type: 'checkbox' });
+    homeChk.checked = !!p.shared_cache_relocate_home; homeChk.disabled = !canEdit;
+    const cacheState = el('p', { class: 'storage-calc' });
+    const syncCacheState = () => {
+      homeChk.disabled = !canEdit || !cacheChk.checked;
+      cacheState.textContent = cacheChk.checked
+        ? `현재 ${fmtBytes(cache.bytes)}${cache.partial ? '+' : ''} 사용 · 세션에 주입되는 변수 ${cache.vars.length}개 (${(cache.vars || []).slice(0, 4).join(', ')}…)`
+        : '꺼짐 — 세션마다 의존성을 새로 내려받습니다(디스크·시간 낭비).';
+    };
+    cacheChk.addEventListener('change', syncCacheState);
+    syncCacheState();
+
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' });
     saveBtn.disabled = !canEdit;
     saveBtn.addEventListener('click', async () => {
@@ -2335,6 +2351,8 @@ function storageEditor(detail, data) {
           log_keep: Number(logKeepIn.value),
           disk_warn_pct: Number(warnIn.value),
           disk_critical_pct: Number(critIn.value),
+          shared_cache_enabled: cacheChk.checked,
+          shared_cache_relocate_home: homeChk.checked,
         };
         await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy }) });
         toast('저장됨 — 즉시 반영됩니다(재시작 불필요).');
@@ -2375,6 +2393,17 @@ function storageEditor(detail, data) {
           el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)),
         el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }),
         el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })),
+
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '공유 빌드 캐시' }),
+        el('label', { class: 'storage-toggle' }, cacheChk,
+          el('span', { text: ' 의존성 캐시를 박스 한 곳에 모읍니다 (권장)' })),
+        cacheState,
+        el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }),
+        el('label', { class: 'storage-toggle' }, homeChk,
+          el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })),
+        el('p', { class: 'admin-hint storage-warn', text: '⚠ 이걸 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 깨질 수 있으니, 쓰지 않는 것이 확실할 때만 켜세요.' })),
+
       el('div', { class: 'storage-actions' }, saveBtn),
     );
   }
