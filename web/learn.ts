@@ -17,6 +17,7 @@ import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'
 //  'Lively 둘러보기'(#761) = 실제 화면 위에서 버튼을 직접 눌러 보는 크로스탭 스포트라이트 투어(guide-tour.ts).
 const LEARN_SUBS = [
   { key: 'guide', label: '사용 가이드', href: '#/learn' },
+  { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' }, // #780 — 가이드 본문에 있던 메뉴 설명을 독립 서브탭으로
   { key: 'install', label: '시작하기', href: '#/learn/install' },
   { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
 ];
@@ -34,10 +35,9 @@ async function renderLearn(view) {
     el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })),
   );
 
+  // '메뉴 한눈에 보기'는 서브탭(#/learn/menu)으로 분리, '처음이라면 이 순서로' 카드는 폐기(#780).
   view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' },
     heroCard(),       // ① 서비스를 관통하는 설명 + 작동 3단계
-    tabsGuideCard(),  // ② 각 메뉴(탭)가 무슨 일을 하나
-    quickStartCard(), // 처음이라면 이 순서로
     kindsCard(),      // WIKI 에 쌓이는 '지식 한 덩어리'란?
     projectKnowledgeCard(), // 그 지식을 [프로젝트]에 '필요지식'으로 연결하면 뭐가 좋나 (#317)
   ));
@@ -120,7 +120,7 @@ const GUIDE_CHAPTERS = [
       href: '#/system', link: '관리 열기' },
     { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
       summary: '이 도구 전체를 설명하는 안내서',
-      desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 위쪽 ‘시작하기’ 탭에는 설치 안내가, ‘Lively 둘러보기’ 탭에는 화면을 직접 눌러 보며 배우는 투어가 있어요. 길을 잃으면 언제든 다시 오세요.',
+      desc: '지금 보고 있는 안내서예요. 위쪽 서브탭으로 나뉘어 있어요 — ‘사용 가이드’는 이 서비스가 무엇인지, ‘메뉴 한눈에 보기’(지금 이 화면)는 각 메뉴가 무슨 일을 하는지, ‘시작하기’는 내 컴퓨터 설치 안내, ‘Lively 둘러보기’는 화면을 직접 눌러 보며 배우는 투어예요.',
       current: true },
   ] },
 ];
@@ -137,8 +137,8 @@ function tabsGuideCard() {
           el('div', { class: 'tabchapter-sub', text: c.sub }))),
       grid);
   });
+  // 제목은 페이지 h1('메뉴 한눈에 보기')이 이미 말하므로 카드 머리는 두지 않는다(#780 — 서브탭 분리).
   return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '메뉴 한눈에 보기' })),
     el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }),
     ...chapters);
 }
@@ -161,24 +161,13 @@ function tabCard(t) {
       el('span', { class: 'tabguide-go-arrow', 'aria-hidden': 'true', text: '→' })));
 }
 
-// ── 처음이라면 — 바로 따라 할 수 있는 순서(버튼으로 이동) ──
-function quickStartCard() {
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '처음이라면, 이 순서로 해보세요' })),
-    el('p', { class: 'admin-hint', text: '3분이면 충분해요. 아래 버튼을 누르면 해당 화면으로 바로 이동합니다.' }),
-    el('div', { class: 'guide-path' },
-      pathStep('1', '말 걸어보기', '터미널에서 AI를 띄우고, 까만 창에 하고 싶은 말을 그냥 입력해 보세요. 설치가 필요 없어 가장 쉬운 시작이에요.', '#/terminal', '터미널 열기', true),
-      pathStep('2', '둘러보기', '메뉴가 낯설면 Lively 둘러보기로 — 프로젝트·도메인 맵·WIKI를 실제 화면에서 직접 눌러 보며 익혀요.', '#/learn/tour', 'Lively 둘러보기', false),
-      pathStep('3', '내 컴퓨터에 연결(선택)', '내 노트북에서 직접 AI를 쓰고 싶다면 시작하기에서 한 번 설치하세요. 약 5분이면 끝나요.', '#/learn/install', '시작하기 열기', false)));
-}
-
-function pathStep(num, title, desc, href, link, primary) {
-  return el('div', { class: 'guide-path-step' },
-    el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }),
-    el('div', { class: 'guide-path-body' },
-      el('div', { class: 'guide-path-title', text: title }),
-      el('p', { class: 'guide-path-desc', text: desc }),
-      el('a', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost') + ' guide-path-btn', href }, link)));
+// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 가이드 본문에 묻혀 있던 메뉴 설명을 독립 서브탭으로. ──
+//  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
+async function renderLearnMenu(view) {
+  const head = el('div', { class: 'page-head' },
+    el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
+  view.replaceChildren(head, learnSubBar('menu'), el('div', { class: 'guide-cards' }, tabsGuideCard()));
+  document.getElementById('view')!.focus?.();
 }
 
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
@@ -697,6 +686,7 @@ export {
   overlayBox,
   renderInstall,
   renderLearn,
+  renderLearnMenu,
   renderLearnTour,
   renderOnboarding,
   skeleton,
