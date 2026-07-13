@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
 
 const args = process.argv.slice(2);
@@ -146,12 +146,33 @@ function safeMergeUserSettings(blockHooks) {
   }
   cur.hooks = cur.hooks && typeof cur.hooks === "object" && !Array.isArray(cur.hooks) ? cur.hooks : {};
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // lively kit 훅의 정체성 = 스크립트 파일명(+인자) — command 전문이 아니다. command 표기는 설치 세대에 따라
+  //  흔들린다(`node` vs `"node"` vs 번들 런타임 절대경로, POSIX $HOME vs Windows 절대경로). 전문 일치로만 dedup 하면
+  //  세대가 바뀔 때마다 같은 훅이 한 벌씩 누적된다(맥미니 실측 15→30, 전 훅 이벤트당 2회 실행). 그래서 같은
+  //  (정체성, matcher)의 구표기 lively 항목은 최신 command 로 교체(회수)한다. 사용자 고유 훅(비 .lively/hooks)은 불변.
+  const kitHookId = (cmd) => {
+    const m = typeof cmd === "string" ? cmd.match(/[/\\]\.lively[/\\]hooks[/\\]([^"'\s]+)['"]?\s*(.*)$/) : null;
+    return m ? `${m[1]}|${m[2].trim()}` : null;
+  };
   for (const [event, entries] of Object.entries(blockHooks)) {
-    const arr = Array.isArray(cur.hooks[event]) ? cur.hooks[event] : [];
+    let arr = Array.isArray(cur.hooks[event]) ? cur.hooks[event] : [];
     for (const entry of entries) {
+      const matcher = entry.matcher ?? null;
       const cmds = new Set(entry.hooks.map((h) => h.command));
+      const ids = new Set(entry.hooks.map((h) => kitHookId(h.command)).filter(Boolean));
+      // 구표기 회수 — 같은 (정체성, matcher)인데 command 표기만 다른 lively 항목 제거(아래에서 최신형이 자리를 차지).
+      arr = arr.filter((e) => {
+        if (!same(e.matcher ?? null, matcher)) return true;
+        const hs = e.hooks ?? [];
+        if (!hs.length) return true;
+        const stale = hs.every((h) => {
+          const id = kitHookId(h.command);
+          return id && ids.has(id) && !cmds.has(h.command);
+        });
+        return !stale;
+      });
       const dup = arr.some(
-        (e) => (e.hooks ?? []).some((h) => cmds.has(h.command)) && same(e.matcher ?? null, entry.matcher ?? null),
+        (e) => (e.hooks ?? []).some((h) => cmds.has(h.command)) && same(e.matcher ?? null, matcher),
       );
       if (!dup) arr.push(entry);
     }
@@ -499,4 +520,8 @@ async function main() {
   console.log("✓ user-level 설치 완료 — 다음 세션부터 적용(현 세션은 안전).");
 }
 
-main().catch((e) => { console.error("✗ user-level 설치 실패:", e?.message || e); process.exit(1); });
+// 직접 실행일 때만 설치 수행 — 테스트가 아래 export 를 import 해도 설치가 돌지 않게 하는 최소 가드.
+const DIRECT_RUN = (() => { try { return import.meta.url === pathToFileURL(process.argv[1] || "").href; } catch { return true; } })();
+if (DIRECT_RUN) main().catch((e) => { console.error("✗ user-level 설치 실패:", e?.message || e); process.exit(1); });
+
+export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock };
