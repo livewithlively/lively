@@ -852,10 +852,17 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 화살촉 — 왼쪽 끝에서 위(=[모아두기])를 가리킨다. */
 .guide-loop::after { content: ''; position: absolute; left: 21px; top: -6px; width: 0; height: 0;
   border-left: 5.5px solid transparent; border-right: 5.5px solid transparent; border-bottom: 8px solid var(--line-net-2); }
+/* 라벨 — 레일 위에 걸치는 pill. 작은 회색 한 덩어리로 뭉개지지 않게 '기호 + 굵은 핵심 + 보조' 세 조각으로 나눈다. */
 .guide-loop-label { position: absolute; left: 50%; bottom: 15px; transform: translate(-50%, 50%);
-  max-width: calc(100% - 60px); background: var(--bg); border: 1px solid var(--line-note); border-radius: 999px;
-  padding: 5px 14px; font-size: 12.5px; line-height: 1.4; font-weight: 600; color: var(--ink-sub); text-align: center; }
-.guide-loop-label b { color: var(--ink); font-weight: 800; }
+  max-width: calc(100% - 56px); display: inline-flex; align-items: center; gap: 9px; white-space: nowrap;
+  background: var(--bg); border: 1px solid var(--line-note); border-radius: 999px; padding: 6px 15px 6px 11px;
+  box-shadow: 0 2px 8px rgba(21,35,59,.05); }
+.guide-loop-key { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; background: var(--bg-punch); color: var(--blue); font-size: 13px; font-weight: 800; line-height: 1; }
+.guide-loop-label b { font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.guide-loop-sub { font-size: 13px; font-weight: 600; color: var(--muted-head); }
+.guide-loop-sub::before { content: '·'; margin-right: 7px; color: var(--muted-2); }
+@media (max-width: 520px) { .guide-loop-label { white-space: normal; } .guide-loop-sub { display: none; } }
 @media (max-width: 900px) {
   .guide-cycle .guide-flow { flex-direction: column; }
   .guide-cycle .guide-flow-arrow { transform: rotate(90deg); margin: -3px 0; }
@@ -6529,6 +6536,12 @@ body.pjv-pm-open { overflow: hidden; }
    ## 섹션 하나 = .card 하나(제품 가이드 카드와 같은 박스). 카드 안은 흘러가는 글이 아니라
    구조화된 조각들: 리드(guide-lead) · 피처 카드(kn-axis-opt) · 번호 단계(guide-path) ·
    이동 카드(tabguide-card) · 콜아웃(guide-remember) · 탭(tabchapter). */
+/* 한국어 줄바꿈 — 상위 .md-rendered 의 break-word(글자 단위 절단) 대신 어절 단위(keep-all).
+   좁은 칸에서 한글이 한 글자씩 세로로 쪼개지는 것을 막는다. 코드·URL 만 강제 개행 유지. */
+.docs-md, .docs-lead, .docs-feat, .docs-step-body, .docs-linkcard, .md-prompt, .docs-title {
+  word-break: keep-all; overflow-wrap: break-word;
+}
+.docs-md .md-code, .docs-md .md-pre { word-break: break-all; }
 .docs-lead { font-size: 15.5px; line-height: 1.8; color: var(--ink-sub); margin: -2px 0 4px; max-width: 780px; }
 .docs-lead .md-p { margin: 0 0 10px; }
 .docs-lead .md-p:last-child { margin-bottom: 0; }
@@ -6590,10 +6603,29 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .docs-md .md-quote .md-p { margin: 0; }
 .docs-md .md-quote strong { color: var(--ink); }
 
-/* 표 — 조용한 그리드: 머리행만 틴트 */
-.docs-md .md-table { width: 100%; font-size: 13.5px; margin: 2px 0 12px; }
-.docs-md .md-table th, .docs-md .md-table td { border-color: var(--line); padding: 8px 12px; line-height: 1.55; }
-.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); font-weight: 700; }
+/* 표 — 카드 폭을 꽉 채우는 조용한 그리드. 기본 .md-table 은 display:block(내용폭)이라 오른쪽이 텅 비고
+   정렬이 어긋난다 → 래퍼(.docs-tablewrap)가 가로 스크롤을 맡고, 표는 display:table + width:100% 로 폭을 채운다.
+   ⚠ 열 폭을 %/1% 로 고정하지 말 것 — 한국어는 글자 단위로 끊겨 첫 열이 세로 한 줄로 쪼개진다(#780 실측 사고).
+   대신 ①어절 단위 줄바꿈(keep-all) ②이름표 열 최소폭 ③자동 배분(table-layout:auto) 셋으로 잡는다. */
+.docs-tablewrap { overflow-x: auto; margin: 4px 0 14px; border: 1px solid var(--line); border-radius: 12px; }
+.docs-md .docs-tablewrap .md-table { display: table; table-layout: auto; width: 100%; margin: 0; border: 0; font-size: 13.5px; }
+.docs-md .md-table th, .docs-md .md-table td { border: 0; border-bottom: 1px solid var(--line);
+  padding: 10px 14px; line-height: 1.6; vertical-align: top; text-align: left;
+  word-break: keep-all; overflow-wrap: break-word; }
+.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); font-weight: 700; white-space: nowrap; }
+.docs-md .md-table tr:last-child td { border-bottom: 0; }
+.docs-md .md-table tbody tr:hover td { background: var(--bg-tint); }
+/* 첫 열 = 행의 이름표 — 잉크색·굵게로 왼쪽 기둥을 세우되, 좁아져 쪼개지지 않게 최소폭을 준다. */
+.docs-md .md-table td:first-child { color: var(--ink); font-weight: 600; min-width: 9.5em; }
+.docs-md .md-table td:last-child, .docs-md .md-table th:last-child { padding-right: 16px; }
+
+/* 프롬프트 예시 — AI에게 실제로 시켜 볼 말(:::prompt). 명령어 코드블록과 다른 표면. */
+.md-prompt { position: relative; background: var(--bg-tint); border: 1px solid var(--line-net);
+  border-left: 3px solid var(--blue); border-radius: 10px; padding: 12px 15px 12px 42px; margin: 8px 0;
+  font-size: 14.5px; line-height: 1.65; font-weight: 600; color: var(--ink); }
+.md-prompt::before { content: '💬'; position: absolute; left: 14px; top: 11px; font-size: 15px; line-height: 1.4; }
+.md-prompt .md-p { margin: 0; }
+.md-prompt + .md-prompt { margin-top: 8px; }
 
 @media (max-width: 720px) {
   .docs-featgrid, .docs-linkgrid { grid-template-columns: 1fr; }
