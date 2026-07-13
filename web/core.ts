@@ -321,6 +321,34 @@ function renderContainer(type, rest, bodyLines) {
       if (Number.isFinite(ratio) && ratio > 0 && ratio <= 1) col.style.flex = String(ratio) + ' 1 0';
       return moveChildren(inner(), col);
     }
+    case 'tabs': {
+      // 전환형 탭(#780 사용설명서) — 자식 :::tab 패널들을 버튼 바로 전환(Claude Code docs 의 Tabs 대응).
+      //  패널이 하나도 없으면(문법 오용) 내용을 그대로 흘려 안전 강등.
+      const rendered = inner();
+      const panes = Array.from(rendered.children).filter((n: any) => n.classList && n.classList.contains('md-tabpane'));
+      if (!panes.length) return moveChildren(rendered, el('div', { class: 'md-tabs-fallback' }));
+      const bar = el('div', { class: 'md-tabs-bar', role: 'tablist' });
+      const body = el('div', { class: 'md-tabs-body' });
+      const btns: any[] = [];
+      panes.forEach((p: any, idx: number) => {
+        const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : ''), type: 'button', role: 'tab',
+          'aria-selected': idx === 0 ? 'true' : 'false', text: p.getAttribute('data-tab-label') || '탭 ' + (idx + 1) });
+        btn.onclick = () => btns.forEach((b, k) => {
+          const on = b === btn;
+          b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
+          (panes[k] as any).style.display = on ? '' : 'none';
+        });
+        btns.push(btn);
+        if (idx > 0) p.style.display = 'none';
+        bar.append(btn); body.append(p);
+      });
+      return el('div', { class: 'md-tabs' }, bar, body);
+    }
+    case 'tab': {
+      const pane = el('div', { class: 'md-tabpane' });
+      pane.setAttribute('data-tab-label', (summary || rest || '탭').trim());
+      return moveChildren(inner(), pane);
+    }
     case 'synced': {
       const box = el('div', { class: 'md-synced' });
       box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));

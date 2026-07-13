@@ -5,7 +5,7 @@ import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전�
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -59,6 +59,7 @@ async function route() {
       if (segs[1] === 'install') await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
       else if (segs[1] === 'tour') await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
       else if (segs[1] === 'menu') await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
+      else if (segs[1] === 'docs') await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
       else await renderLearn(view);
     } else if (page === 'install') {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).

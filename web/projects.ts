@@ -5006,7 +5006,7 @@ function projectKnowledgeSection(id, p, reload) {
       el('h3', { text: '연결된 지식' }),
       el('span', { class: 'pjk-head-hint' },
         '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ',
-        el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
+        el('a', { href: '#/learn/docs/wiki?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
     knAddBtn));
 
   const reqList = el('div', { class: 'pjk-list' });

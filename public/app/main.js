@@ -5,7 +5,7 @@ import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -66,6 +66,8 @@ async function route() {
                 await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
             else if (segs[1] === 'menu')
                 await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
+            else if (segs[1] === 'docs')
+                await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
             else
                 await renderLearn(view);
         }

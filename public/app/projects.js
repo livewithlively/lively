@@ -5957,7 +5957,7 @@ function projectKnowledgeSection(id, p, reload) {
     const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
         title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
         onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
-    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' }, el('h3', { text: '연결된 지식' }), el('span', { class: 'pjk-head-hint' }, '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ', el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))), knAddBtn));
+    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' }, el('h3', { text: '연결된 지식' }), el('span', { class: 'pjk-head-hint' }, '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ', el('a', { href: '#/learn/docs/wiki?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))), knAddBtn));
     const reqList = el('div', { class: 'pjk-list' });
     const prodList = el('div', { class: 'pjk-list' });
     const reqCount = el('span', { class: 'pjk-count' });

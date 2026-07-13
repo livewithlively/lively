@@ -1,7 +1,8 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, pageHead, state, sv } from './core.js';
+import { TOKEN_KEY, api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
+import { DOC_PAGES, INSTALL_EXTRA_MD } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
 
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
@@ -12,38 +13,68 @@ import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'
 // 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
 //  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
 //  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
-// ── 사용 가이드 상위 탭의 서브탭(사용 가이드·시작하기·Lively 둘러보기) — 지식 탭과 같은 .sub-cats 패턴(#617). ──
-//  옛 상단 내비 '시작하기'(설치)를 사용 가이드 안으로 옮기며 그 자리를 '대시보드'로 개편. active = 'guide' | 'install' | 'tour'.
-//  'Lively 둘러보기'(#761) = 실제 화면 위에서 버튼을 직접 눌러 보는 크로스탭 스포트라이트 투어(guide-tour.ts).
-const LEARN_SUBS = [
-  { key: 'guide', label: '사용 가이드', href: '#/learn' },
-  { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' }, // #780 — 가이드 본문에 있던 메뉴 설명을 독립 서브탭으로
-  { key: 'install', label: '시작하기', href: '#/learn/install' },
-  { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
+// ── 사용 가이드 = 문서 사이트(#780) — code.claude.com/docs/ko 형식: 좌측 사이드바(그룹>페이지) + 본문. ──
+//  옛 서브탭 바(.sub-cats)는 폐지 — 사이드바가 내비를 전담한다. 원고(md)는 docs-content.ts, 렌더는
+//  core.renderMarkdown(:::tabs 지원). 설치·둘러보기·메뉴 한눈에 보기는 인터랙티브 화면 그대로 셸 안에 들어간다.
+//  active 키: 'overview'(=#/learn) | DOC_PAGES slug(#/learn/docs/<slug>) | 'install' | 'tour' | 'menu'.
+const DOCS_NAV = [
+  { group: '시작하기', items: [
+    { key: 'overview', label: '라이블리 개요', href: '#/learn' },
+    { key: 'quickstart', label: '빠른 시작', href: '#/learn/docs/quickstart' },
+    { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
+    { key: 'install', label: '내 컴퓨터에 연결 (설치)', href: '#/learn/install' },
+    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
+  ] },
+  { group: '화면별 안내', items: [
+    { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' },
+    { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
+    { key: 'terminal', label: '터미널 — AI 세션', href: '#/learn/docs/terminal' },
+    { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
+    { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
+    { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
+    { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
+  ] },
+  { group: '레퍼런스', items: [
+    { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
+    { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
+  ] },
 ];
-function learnSubBar(active) {
-  const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '사용 가이드 보기' });
-  for (const s of LEARN_SUBS) {
-    const on = s.key === active;
-    bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label }));
-  }
-  return bar;
-}
-async function renderLearn(view) {
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })),
-  );
 
-  // '메뉴 한눈에 보기'는 서브탭(#/learn/menu)으로 분리, '처음이라면 이 순서로' 카드는 폐기(#780).
-  view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' },
-    heroCard(),       // ① 서비스를 관통하는 설명 + 작동 3단계
-    kindsCard(),      // WIKI 에 쌓이는 '지식 한 덩어리'란?
-    projectKnowledgeCard(), // 그 지식을 [프로젝트]에 '필요지식'으로 연결하면 뭐가 좋나 (#317)
-  ));
+function docsSidebar(active) {
+  const side = el('nav', { class: 'docs-side', 'aria-label': '사용 가이드 문서' });
+  for (const g of DOCS_NAV) {
+    const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.group }));
+    for (const it of g.items) {
+      box.append(el('a', { class: 'docs-item' + (it.key === active ? ' active' : ''), href: it.href,
+        'aria-current': it.key === active ? 'page' : null, text: it.label }));
+    }
+    side.append(box);
+  }
+  return side;
+}
+
+// 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴)이 이 셸 안에서 렌더된다.
+function docsShell(view, active, ...content) {
+  view.replaceChildren(el('div', { class: 'docs-layout' },
+    docsSidebar(active),
+    el('article', { class: 'docs-body' }, ...content)));
   document.getElementById('view')!.focus?.();
-  // 프로젝트 '연결된 지식' 부제의 [자세히](#/learn?focus=required)로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
-  if (/[?&]focus=required(?:&|$)/.test(location.hash)) {
+}
+
+// md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
+async function renderLearnDocs(view, slug) {
+  const page = DOC_PAGES.find((p) => p.slug === slug);
+  if (!page) { location.replace('#/learn'); return; }
+  const body: any[] = [el('div', { class: 'md-rendered docs-md' }, renderMarkdown(page.md))];
+  if (slug === 'wiki') {
+    body.push(el('div', { class: 'guide-cards', style: 'margin-top:26px' },
+      kindsCard(),            // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
+      projectKnowledgeCard()  // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
+    ));
+  }
+  docsShell(view, slug, ...body);
+  // 프로젝트 '연결된 지식' 부제의 [자세히]로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
+  if (slug === 'wiki' && /[?&]focus=required(?:&|$)/.test(location.hash)) {
     requestAnimationFrame(() => {
       const card = document.getElementById('learn-required');
       if (!card) return;
@@ -53,6 +84,16 @@ async function renderLearn(view) {
       setTimeout(() => { card.style.boxShadow = ''; }, 1500);
     });
   }
+}
+
+// #/learn — 문서 홈 = '라이블리 개요'. 히어로(서비스 정의+작동 3단계)를 원고 위에 얹는다(구 가이드 랜딩 보존).
+async function renderLearn(view) {
+  // 구 딥링크 #/learn?focus=required(#317) — 필요지식 카드는 WIKI 문서 페이지로 이사했다.
+  if (/[?&]focus=required(?:&|$)/.test(location.hash)) { location.replace('#/learn/docs/wiki?focus=required'); return; }
+  const page = DOC_PAGES.find((p) => p.slug === 'overview');
+  docsShell(view, 'overview',
+    heroCard(),
+    el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(page ? page.md : '')));
 }
 
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
@@ -161,13 +202,12 @@ function tabCard(t) {
       el('span', { class: 'tabguide-go-arrow', 'aria-hidden': 'true', text: '→' })));
 }
 
-// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 가이드 본문에 묻혀 있던 메뉴 설명을 독립 서브탭으로. ──
+// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 문서 셸 안의 인터랙티브 페이지. ──
 //  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
 async function renderLearnMenu(view) {
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
-  view.replaceChildren(head, learnSubBar('menu'), el('div', { class: 'guide-cards' }, tabsGuideCard()));
-  document.getElementById('view')!.focus?.();
+  docsShell(view, 'menu', head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
 }
 
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
@@ -308,8 +348,7 @@ async function renderLearnTour(view) {
       el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ',
       el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
 
-  view.replaceChildren(head, learnSubBar('tour'), el('div', { class: 'guide-cards' }, intro, courses, extra));
-  document.getElementById('view')!.focus?.();
+  docsShell(view, 'tour', head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
 
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
@@ -317,13 +356,13 @@ async function renderLearnTour(view) {
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-  // 부제 없음(#780) — 다른 사용 가이드 서브탭은 제목 한 줄뿐이라, 여기만 부제가 붙으면 제목·서브탭 줄이 세로로 어긋난다.
+  // 부제 없음(#780) — 문서 셸의 다른 페이지들과 제목 줄을 맞춘다.
   const head = pageHead('시작하기', null, [], '하기');
   const slot = el('div', { class: 'install-guide' });
   slot.append(skeleton('설치 안내를 준비하는 중'));
-  view.replaceChildren(head, learnSubBar('install'), slot); // 사용 가이드 서브탭 바(#617) — 머리 아래, 본문 위
-
-  document.getElementById('view')!.focus?.();
+  // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드 아래 정적 문서로.
+  const extra = el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(INSTALL_EXTRA_MD));
+  docsShell(view, 'install', head, slot, extra);
   onboardingBanner().then((b) => { if (b) head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
     .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
@@ -687,6 +726,7 @@ export {
   overlayBox,
   renderInstall,
   renderLearn,
+  renderLearnDocs,
   renderLearnMenu,
   renderLearnTour,
   renderOnboarding,
