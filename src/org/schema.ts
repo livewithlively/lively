@@ -194,11 +194,10 @@ export async function initOrgSchema(): Promise<void> {
                      WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_level_chk') THEN
         ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_level_chk CHECK (level IS NULL OR level IN ('L0','L1','L2'));
       END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_auth_mode_chk') THEN
-        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_auth_mode_chk CHECK (auth_mode IS NULL OR auth_mode IN ('bearer','oauth'));
-      END IF;
     END $$;
+    -- auth_mode 허용값 확장(#746: +sigv4) — CHECK 은 IF NOT EXISTS 로 라이브 제약이 안 바뀌므로 DROP+ADD(멱등).
+    ALTER TABLE org_mcp_server DROP CONSTRAINT IF EXISTS org_mcp_server_auth_mode_chk;
+    ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_auth_mode_chk CHECK (auth_mode IS NULL OR auth_mode IN ('bearer','oauth','sigv4'));
   `);
 
   // ── org_connector — 커넥터별 설정/토큰 레지스트리 (프로젝트 #541). system PK = 1행/커넥터(단일테넌트). ──

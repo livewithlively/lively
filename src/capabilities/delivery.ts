@@ -968,7 +968,12 @@ export const deliveryCapabilities: Capability[] = [
         pii_scrub: input.pii_scrub === undefined ? undefined : Boolean(input.pii_scrub),
         auth_kind: authKind,
         auth_scope_key: input.auth_scope_key === undefined ? undefined : (input.auth_scope_key === null || input.auth_scope_key === "" ? null : str(input.auth_scope_key, "auth_scope_key", 120).trim()),
-        auth_mode: input.auth_mode === undefined ? undefined : (input.auth_mode === null || input.auth_mode === "" ? null : (str(input.auth_mode, "auth_mode", 10) === "oauth" ? "oauth" : "bearer")),
+        auth_mode: input.auth_mode === undefined ? undefined : ((): "bearer" | "oauth" | "sigv4" | null => {
+          if (input.auth_mode === null || input.auth_mode === "") return null;
+          const v = str(input.auth_mode, "auth_mode", 10);
+          if (v !== "bearer" && v !== "oauth" && v !== "sigv4") throw new HttpError(400, "auth_mode 는 bearer|oauth|sigv4 만 허용됩니다");
+          return v;
+        })(),
       }, actorOf(user), "web");
       return { server };
     }, {
@@ -986,7 +991,7 @@ export const deliveryCapabilities: Capability[] = [
       pii_scrub: z.boolean().optional(),
       auth_kind: z.string().nullable().optional().describe("proxy per-member vault 인증 kind"),
       auth_scope_key: z.string().nullable().optional(),
-      auth_mode: z.enum(["bearer", "oauth"]).nullable().optional().describe("bearer=정적토큰(기본) / oauth=per-member OAuth 브로커(#746 T2)"),
+      auth_mode: z.enum(["bearer", "oauth", "sigv4"]).nullable().optional().describe("bearer=정적토큰(기본) / oauth=per-member OAuth(T2) / sigv4=AWS 요청서명(#746)"),
     }),
   restOnly("org_mcp_refresh", "MCP 프록시 스냅샷 새로고침(발행)",
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",

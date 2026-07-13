@@ -735,7 +735,7 @@ export interface McpServer {
   pii_scrub: boolean;
   auth_kind: string | null;
   auth_scope_key: string | null;
-  auth_mode: "bearer" | "oauth" | null; // T2: null/bearer=정적토큰, oauth=per-member OAuth 브로커
+  auth_mode: "bearer" | "oauth" | "sigv4" | null; // null/bearer=정적토큰, oauth=per-member OAuth(T2), sigv4=AWS 요청서명(#746)
 }
 
 function mapMcp(row: Record<string, unknown>): McpServer {
@@ -790,7 +790,7 @@ export interface McpServerInput {
   pii_scrub?: boolean;
   auth_kind?: string | null;
   auth_scope_key?: string | null;
-  auth_mode?: "bearer" | "oauth" | null;
+  auth_mode?: "bearer" | "oauth" | "sigv4" | null;
 }
 
 export async function upsertMcpServer(m: McpServerInput, actor?: string, source?: string): Promise<McpServer> {
