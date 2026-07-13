@@ -15,6 +15,8 @@ import { SPACE_SUBS } from './category-form.js';
 
 // 관리탭 스위치가 관리하는 규칙의 표식 — 사람이 손으로 만든 세부 규칙과 구분(서버 org_ingest_policy.preset).
 const GATE_PRESET = 'agent-knowledge';
+// 도메인 필터의 '미분류' 센티넬 — 빈 문자열은 '모든 도메인'(전체) 값이라 겹친다.
+const CAT_NONE = '__none__';
 
 // 신규 저장 시 동작.
 const CREATE_ACTS: [string, string][] = [
@@ -388,7 +390,7 @@ export async function reviewQueuePanel(detail, data): Promise<void> {
   // 필터 적용 후 화면에 실제 보이는 것들(키보드 커서·일괄 승인의 대상).
   const visible = (): QItem[] => items.filter((i) =>
     (rqUi.filter === 'all' || rqUi.filter === i.kind)
-    && (!rqUi.cat || i.cat === rqUi.cat)
+    && (!rqUi.cat || (rqUi.cat === CAT_NONE ? !i.cat : i.cat === rqUi.cat))
     && (!rqUi.who || i.whoKind === rqUi.who));
 
   const paint = (): void => {
@@ -421,10 +423,13 @@ export async function reviewQueuePanel(detail, data): Promise<void> {
   };
   const chips = el('span', { style: 'display:flex;gap:6px' }, ...chipEls());
 
-  const cats = [...new Set(items.map((i) => i.cat + ' ' + i.catName))].map((s) => s.split(' '));
+  // 도메인 필터 — key→이름 맵. (key+구분자+name 을 합쳐 split 하는 방식은 이름의 공백/구분자에 취약하다.)
+  //  미분류는 key 가 '' 라 '모든 도메인'(value='')과 값이 겹치므로 센티넬(CAT_NONE)로 치환한다.
+  const catMap = new Map();
+  for (const it of items) { const ck = it.cat || CAT_NONE; if (!catMap.has(ck)) catMap.set(ck, it.catName); }
   const catSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:150px' }) as HTMLSelectElement;
   catSel.append(el('option', { value: '', text: '모든 도메인' }));
-  for (const [k, n] of cats) catSel.append(el('option', { value: k, text: n }));
+  for (const [k, n] of catMap) catSel.append(el('option', { value: k, text: n }));
   catSel.value = rqUi.cat;
   catSel.onchange = () => { rqUi.cat = catSel.value; rqUi.cur = 0; paint(); };
 
@@ -440,8 +445,8 @@ export async function reviewQueuePanel(detail, data): Promise<void> {
   const stats = obs ? el('div', { class: 'rq-stats' },
     stat(items.filter((i) => i.kind === 'new').length, '새 지식 대기', '승인해야 검색·주입에 반영됩니다'),
     stat(items.filter((i) => i.kind === 'edit').length, '수정 대기', '기존 지식을 고친 건 — diff 를 확인하세요'),
-    stat(obs.approved + obs.rev_approved, '최근 승인', obs.days + '일 내 승인'),
-    stat(obs.rejected + obs.rev_rejected, '최근 반려', obs.days + '일 내 반려·되돌리기'),
+    stat((obs.approved || 0) + (obs.rev_approved || 0), '최근 승인', obs.days + '일 내 승인'),
+    stat((obs.rejected || 0) + (obs.rev_rejected || 0), '최근 반려', obs.days + '일 내 반려·되돌리기'),
     stat(obs.agent_auto, '검토 없이 반영', obs.days + '일 내 에이전트가 게이트 없이 즉시 반영한 신규 지식')) : null;
 
   const banner = (gateOn === false)

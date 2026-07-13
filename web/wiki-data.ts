@@ -126,11 +126,14 @@ function knFetchAuthoredTree(): Promise<any[]> {
 }
 
 // 카테고리 지식 rows(폴더 포함, recalled 전용 — 지식탭과 동일 축) — 사이드바 펼침·이동 피커 공용.
+//  #783 lifecycle=active,pending — 검토 대기 지식도 트리엔 띄우되 '검토' 배지로 구분한다(wiki-side knNavDocNode).
+//   · 안 띄우면: 폴더 하위 pending 은 보이고(트리 API 는 lifecycle 필터가 없다) 최상위 pending 은 안 보이는 불일치가 난다.
+//   · 띄워도 격리는 안 깨진다 — 검색·grep·벡터·similar·recall·항상주입은 여전히 active 전용(거긴 lifecycle 미전달).
 function knFetchCategoryRows(catId): Promise<any[]> {
   const key = String(catId);
   let p = knCatRowsCache.get(key);
   if (!p) {
-    p = api('/api/ui/knowledge?' + new URLSearchParams({ category: key, limit: '200', orderBy: 'updated_at', injection: 'recalled' }))
+    p = api('/api/ui/knowledge?' + new URLSearchParams({ category: key, limit: '200', orderBy: 'updated_at', injection: 'recalled', lifecycle: 'active,pending' }))
       .then((r) => (r && r.entries) || [])
       .catch((e) => { knCatRowsCache.delete(key); throw e; });
     knCatRowsCache.set(key, p);

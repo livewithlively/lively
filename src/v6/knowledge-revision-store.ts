@@ -159,9 +159,13 @@ export async function getRevision(id: number): Promise<{ revision: KnowledgeRevi
 }
 
 // 특정 지식의 검토 대기 수정 1건(있으면) — knowledge_get 이 "이 지식엔 검토 대기 수정이 있다"를 알리는 용도.
+//  ⚠ fail-open: 스키마 마이그레이션은 listen 이후에 돈다(런북) → 부팅 직후 짧은 창엔 테이블이 아직 없을 수 있다.
+//   그 창에서 knowledge_get(회수 진입점, 상시 로드 툴)이 통째로 500 나면 안 된다 → 조회 실패는 '대기 수정 없음'으로 삼킨다.
 export async function pendingRevisionFor(name: string): Promise<KnowledgeRevisionRow | undefined> {
-  return await one(itemsPool,
-    `SELECT ${REV_SEL} FROM knowledge_revision WHERE name=$1 AND status='pending'`, [name]) as KnowledgeRevisionRow | undefined;
+  try {
+    return await one(itemsPool,
+      `SELECT ${REV_SEL} FROM knowledge_revision WHERE name=$1 AND status='pending'`, [name]) as KnowledgeRevisionRow | undefined;
+  } catch { return undefined; }
 }
 
 export async function countPendingRevisions(): Promise<number> {
