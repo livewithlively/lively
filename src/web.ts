@@ -7,6 +7,7 @@
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
 import path from "node:path";
+import { readFileSync, statSync } from "node:fs";
 import { stateDir } from "./state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
@@ -143,6 +144,22 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));
+  // #762/#766 후속 — 캐시 버스팅: index.html 의 로컬 자산(styles.css·app/main.js)에 파일 mtime 버전(?v=)을 박는다.
+  //  기본 express.static 은 Cache-Control: max-age=0(재검증) 이지만 일부 브라우저가 재검증을 건너뛰어(bfcache·메모리캐시)
+  //  배포 후 옛 CSS/JS 를 계속 보여주던 문제 방지 — 자산이 바뀌면 mtime→URL 이 바뀌어 브라우저가 강제 재요청한다.
+  const assetVer = (rel: string): string => {
+    try { return String(Math.floor(statSync(path.join(publicDir, rel)).mtimeMs)); } catch { return "0"; }
+  };
+  const serveIndex = (_req: express.Request, res: express.Response): void => {
+    try {
+      const html = readFileSync(path.join(publicDir, "index.html"), "utf8")
+        .replace(/\.\/styles\.css/g, `./styles.css?v=${assetVer("styles.css")}`)
+        .replace(/\.\/app\/main\.js/g, `./app/main.js?v=${assetVer("app/main.js")}`);
+      res.setHeader("Cache-Control", "no-store"); // index.html 자체는 항상 최신(버전 스탬프가 최신이도록)
+      res.type("html").send(html);
+    } catch { res.sendFile(path.join(publicDir, "index.html")); } // 실패 시 원본 폴백
+  };
+  app.get(["/ui", "/ui/", "/ui/index.html"], serveIndex);
   app.use("/ui", express.static(publicDir));
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }
