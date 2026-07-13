@@ -4579,7 +4579,7 @@ function pjvProjEdgesField(p, reload, dir) {
       const pm = _pjvPmOpen;
       if (!pm || !link.closest('.pjv-pm')) return;
       ev.preventDefault();
-      pm.close();
+      pm.close(true);  // 교체일 뿐이니 뒤 화면(보드) 재렌더는 생략 — 새 모달이 곧 그 위를 덮는다
       pjvOpenProjectModal(e.project_id, pm.pageReload);
     };
     const chip = el('span', { class: 'pjv-edge-chip' }, link);
@@ -4753,8 +4753,12 @@ function demoTerminalCard(members, meId) {
 //  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
 //  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
 //  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
-// 지금 열린 프로젝트 모달(항상 최대 1개) — 모달 안에서 다른 프로젝트로 갈 때 '모달 교체'(드릴인)에 쓴다(#804 — pjvProjEdgesField).
-let _pjvPmOpen: { close: () => void; pageReload?: any } | null = null;
+// 지금 열린 프로젝트 모달(항상 최대 1개) — 두 곳이 쓴다(#804):
+//  ① 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 '교체'(드릴인)  ② 라우트가 바뀌면 라우터가 닫는다(pjvCloseProjectModalOnRoute).
+let _pjvPmOpen: { close: (skipReload?: boolean) => void; pageReload?: any } | null = null;
+// 라우터(main.ts route())가 호출 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다. 안 닫으면 새 페이지가
+//  모달 뒤에 렌더돼 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일). 편집 중 본문은 모달이 닫히며 저장된다.
+function pjvCloseProjectModalOnRoute() { if (_pjvPmOpen) _pjvPmOpen.close(true); }
 
 function pjvOpenProjectModal(projectId, pageReload?) {
   const back = el('div', { class: 'pjv-pm-back' });
@@ -4767,14 +4771,16 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   back.append(box);
 
   let closed = false;
-  function closeModal() {
+  // skipReload=true — 라우터가 닫거나(곧 $view 를 새로 그린다) 다른 프로젝트로 교체(드릴인)하는 경우.
+  //  그때 pageReload(대시보드·보드 재렌더)를 돌리면 새로 그려질 화면과 레이스가 나거나 헛일이 된다.
+  function closeModal(skipReload?: boolean) {
     if (closed) return;
     closed = true;
     if (_pjvPmOpen && _pjvPmOpen.close === closeModal) _pjvPmOpen = null;
     document.removeEventListener('keydown', onKey, true);
     document.body.classList.remove('pjv-pm-open');
     back.remove();
-    if (pageReload) pageReload(); // 모달 안에서 고친 내용이 대시보드 목록에 반영되도록
+    if (pageReload && !skipReload) pageReload(); // 모달 안에서 고친 내용이 대시보드 목록에 반영되도록
   }
   // Esc — 중첩 팝업(태스크 모달·팝오버·오버레이·블록에디터 팝업)이 떠 있으면 그쪽이 먼저 처리하고 이 모달은 유지.
   function onKey(e) {
@@ -4784,7 +4790,7 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   }
   back.addEventListener('mousedown', (e) => { if (e.target === back) closeModal(); }); // 배경 클릭
   closeBtn.onclick = (e) => { e.stopPropagation(); closeModal(); };
-  fullLink.onclick = () => closeModal(); // 전체 페이지로 나갈 땐 모달을 닫는다
+  fullLink.onclick = () => closeModal(true); // 전체 페이지로 나갈 땐 모달을 닫는다(라우터가 곧 그 페이지를 그리므로 재렌더는 생략)
   document.addEventListener('keydown', onKey, true);
   document.body.append(back);
   document.body.classList.add('pjv-pm-open');
@@ -9638,6 +9644,7 @@ export {
   pjvFmtDate,
   pjvGridTemplate,
   pjvIsOverdue,
+  pjvCloseProjectModalOnRoute,
   pjvOpenProjectModal,
   pjvPatchTask,
   pjvPopover,
