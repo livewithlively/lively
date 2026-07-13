@@ -45,6 +45,17 @@ export function proxyToolName(serverName: string, toolName: string): string {
   return `${NS}${serverName}__${toolName}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
 }
 
+// per-tool 등급 휴리스틱(#746) — read 동사=L0(조회) / write·mutate 동사=L2(집행) / 나머지=서버 기본. 관리자 per-tool 오버라이드는 후속.
+//  ambiguous 는 안전측(L2)으로: WRITE 먼저 검사. AWS MCP 처럼 read+write 섞인 상류에서 describe 는 자유, put/delete 는 컨펌.
+const WRITE_VERBS = /^(create|put|delete|del|update|modify|set|add|remove|attach|detach|start|stop|terminate|reboot|run|apply|deploy|invoke|send|post|tag|untag|enable|disable|reset|register|deregister|associate|disassociate|authorize|revoke|grant|cancel|restore|copy|import|upload|write|patch|replace|move|rename|purge|drain)/i;
+const READ_VERBS = /^(describe|list|get|read|search|lookup|query|scan|head|batch_?get|select|fetch|show|view|count|export|download)/i;
+export function classifyToolLevel(name: string, dflt: "L0" | "L1" | "L2"): "L0" | "L1" | "L2" {
+  const n = String(name || "");
+  if (WRITE_VERBS.test(n)) return "L2"; // 안전측 우선
+  if (READ_VERBS.test(n)) return "L0";
+  return dflt;
+}
+
 // 상류 접속 — SSRF-안전 fetch + StreamableHTTP + (택1) 정적 인증 헤더(bearer) 또는 OAuthClientProvider(oauth). 호출자가 close 책임.
 //  운영자 명시 내부 host(allowed_internal_hosts) 외의 사설/메타데이터/게이트웨이 자기자신은 makeSsrfFetch 가 차단.
 async function connectUpstream(url: string, opts: { headers?: Record<string, string>; authProvider?: OAuthClientProvider; sigv4?: { creds: AwsCreds; region: string; service: string } }): Promise<Client> {
@@ -107,8 +118,9 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
 }
 
 // tools/call 프록시 — per-member 자격 해소·주입 → 상류 호출 → (옵션) 응답 PII 스크럽 + 주입자격 리터럴 스크럽. 통제는 등록 핸들러(scope)가 선행.
-async function callUpstream(server: McpServerRow, toolName: string, args: Record<string, unknown>, callerId: string | null): Promise<{ content: unknown[]; isError: boolean }> {
+async function callUpstream(server: McpServerRow, toolName: string, args: Record<string, unknown>, callerId: string | null, level?: "L0" | "L1" | "L2"): Promise<{ content: unknown[]; isError: boolean }> {
   if (!server.url) throw new Error("proxy url 미설정");
+  const effLevel = level ?? server.level; // per-tool 등급 우선(없으면 서버 기본) — 폴백 정책 결정
   const headers: Record<string, string> = {};
   let authProvider: OAuthClientProvider | undefined;
   let sigv4: { creds: AwsCreds; region: string; service: string } | undefined;
@@ -127,10 +139,10 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
     if (!tk) throw new Error(`'${server.auth_kind}' OAuth 미연결 — me_oauth_connect 로 먼저 인증하세요.`);
     authProvider = provider; injectedSecret = tk.access_token ?? null;
   } else if (server.auth_kind) {
-    // 등급이 폴백 정책을 정한다: L2(집행)=per-user 필수(통합 폴백 금지) / 그 외=통합 폴백 허용(비-PII read).
-    const resolved = await resolveMemberSecret(callerId, server.auth_kind, { scopeKey: server.auth_scope_key ?? "", allowFallback: proxyAuthFallback(server.level) });
+    // 등급(툴별)이 폴백 정책을 정한다: L2(집행)=per-user 필수(통합 폴백 금지) / 그 외=통합 폴백 허용(비-PII read).
+    const resolved = await resolveMemberSecret(callerId, server.auth_kind, { scopeKey: server.auth_scope_key ?? "", allowFallback: proxyAuthFallback(effLevel) });
     if (!resolved || !resolved.secret) {
-      throw new Error(`자격 없음 — 이 커넥터는 '${server.auth_kind}' 자격이 필요합니다('내 자격'에 등록${proxyAuthFallback(server.level) ? " 또는 관리자 통합 자격" : "(L2: 개인 자격 필수)"}).`);
+      throw new Error(`자격 없음 — 이 커넥터는 '${server.auth_kind}' 자격이 필요합니다('내 자격'에 등록${proxyAuthFallback(effLevel) ? " 또는 관리자 통합 자격" : "(L2: 개인 자격 필수)"}).`);
     }
     injectedSecret = resolved.secret;
     Object.assign(headers, buildProxyAuthHeaders(resolved.meta, resolved.secret).headers);
@@ -174,19 +186,25 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
       continue;
     }
     const callScope = srv.scope as string;
+    const serverDefault = (srv.level === "L0" || srv.level === "L1" || srv.level === "L2") ? srv.level : "L1";
     for (const tool of (srv.tools_snapshot ?? [])) {
       if (!tool || typeof tool.name !== "string") continue;
       const toolName = proxyToolName(srv.name, tool.name);
       const shape = jsonSchemaToZodShape(tool.inputSchema);
+      const toolLevel = classifyToolLevel(tool.name, serverDefault); // per-tool 등급(휴리스틱)
       try {
         server.registerTool(
           toolName,
-          { title: `${srv.name}: ${tool.name}`, description: tool.description || `${srv.name} 프록시 툴`, inputSchema: shape },
+          {
+            title: `${srv.name}: ${tool.name}`, description: tool.description || `${srv.name} 프록시 툴`, inputSchema: shape,
+            // L0=읽기전용(자유), L2=파괴적(하네스 실행 전 컨펌). 하네스 auto-approve/컨펌 UX 가 이 힌트를 본다.
+            annotations: { readOnlyHint: toolLevel === "L0", destructiveHint: toolLevel === "L2" },
+          },
           async (args: Record<string, unknown>, extra: unknown) => {
             const u = resolveUser(extra);
             requireScope(u, callScope);          // scope 게이트(멤버 권한)
             try {
-              const r = await callUpstream(srv, tool.name, args ?? {}, u.userId);
+              const r = await callUpstream(srv, tool.name, args ?? {}, u.userId, toolLevel);
               return { content: r.content as never, isError: r.isError }; // 상류 content 는 임의 구조 — SDK 블록 유니온으로 정적 검증 불가
             } catch (err) {
               const msg = (err as Error).message; // callUpstream 에서 주입 자격은 이미 스크럽됨

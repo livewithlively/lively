@@ -2,7 +2,7 @@
 // 실행: npm run build && node dist/capabilities/mcp-proxy.test.js
 //  커버: scope fail-closed(P2) / 툴이름 위생·절단 / 주입자격 리터럴 스크럽(응답·에러 유출 차단) / SSRF 가드(사설·메타데이터·self·scheme).
 import assert from "node:assert/strict";
-import { proxyScopeAllowed, proxyToolName, redactSecret } from "./mcp-proxy.js";
+import { proxyScopeAllowed, proxyToolName, redactSecret, classifyToolLevel } from "./mcp-proxy.js";
 import { makeSsrfFetch } from "../org/mcp-ssrf-fetch.js";
 
 let pass = 0;
@@ -38,6 +38,18 @@ t("proxyToolName: 128자 절단", () => {
   const long = proxyToolName("s", "x".repeat(300));
   assert.equal(long.length, 128);
   assert.ok(long.startsWith("ext__s__xxx"));
+});
+
+// ── per-tool 등급 휴리스틱(#746) — read=L0 / write=L2 / 나머지=서버 기본, ambiguous 는 안전측(L2) ──
+t("classifyToolLevel: read 동사 → L0", () => {
+  for (const n of ["describe_instances", "ListBuckets", "getObject", "search_messages", "query", "head_object"]) assert.equal(classifyToolLevel(n, "L1"), "L0", n);
+});
+t("classifyToolLevel: write/mutate 동사 → L2", () => {
+  for (const n of ["put_object", "DeleteBucket", "create_stack", "terminate_instances", "update_item", "runInstances", "send_message", "reset_x"]) assert.equal(classifyToolLevel(n, "L1"), "L2", n);
+});
+t("classifyToolLevel: 미매칭 → 서버 기본", () => {
+  assert.equal(classifyToolLevel("frobnicate", "L1"), "L1");
+  assert.equal(classifyToolLevel("frobnicate", "L0"), "L0");
 });
 
 // ── P1/P2 주입 자격 유출 차단 — 상류 응답/에러에 에코된 자격 리터럴 스크럽 ──
