@@ -3461,7 +3461,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-groupseg-btn.active { background: var(--blue); color: #fff; }
 /* 2단계(리스트›상태) — 리스트 안의 상태 하위그룹: 헤더만 살짝 들여쓰고 라벨은 작게(행 그리드는 정렬 유지) */
 .pjv-list-group .pjv-tgroup-body .pjv-tgroup > .pjv-tgroup-head { padding-left: 26px; }
-.pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+/* 상태 알약(.pjv-status-pill)은 제외 — 이 규칙이 특이도(4)로 알약의 흰 글자(color:#fff, 특이도 2)를 덮어써
+   폴더 '리스트 묶음' 뷰에서만 상태 pill 글자가 어둡게 나오던 버그(#762). 리스트 보드와 톤 일치. */
+.pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label:not(.pjv-status-pill) { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 
 /* === 선행/후속 프로젝트 필드(프로퍼티) — #359. 별도 박스(projectEdgesSection) 없애고 상단 프로퍼티로 이관 === */
 /* 프로퍼티 그리드(2열) 맨 아래 한 줄을 풀폭으로 잡고, 그 안에서 다시 좌(선행)/우(후속)로 나눈다. */
