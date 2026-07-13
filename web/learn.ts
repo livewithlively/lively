@@ -60,12 +60,24 @@ function docsShell(view, active, ...content) {
     el('article', { class: 'docs-body' }, ...content)));
   document.getElementById('view')!.focus?.();
 }
+// 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
+function docsEyebrow(key) {
+  for (const g of DOCS_NAV) if (g.items.some((i) => i.key === key)) return el('div', { class: 'docs-eyebrow', text: g.group });
+  return null;
+}
 
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
+//  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
-  const body: any[] = [el('div', { class: 'md-rendered docs-md' }, renderMarkdown(page.md))];
+  const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
+  const md = h1 ? page.md.slice(h1[0].length) : page.md;
+  const body: any[] = [
+    docsEyebrow(slug),
+    el('h1', { class: 'docs-title', text: (h1 ? h1[1] : page.title).trim() }),
+    el('div', { class: 'md-rendered docs-md' }, renderMarkdown(md)),
+  ];
   if (slug === 'wiki') {
     body.push(el('div', { class: 'guide-cards', style: 'margin-top:26px' },
       kindsCard(),            // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
@@ -207,7 +219,7 @@ function tabCard(t) {
 async function renderLearnMenu(view) {
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
-  docsShell(view, 'menu', head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
+  docsShell(view, 'menu', docsEyebrow('menu'), head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
 }
 
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
@@ -348,7 +360,7 @@ async function renderLearnTour(view) {
       el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ',
       el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
 
-  docsShell(view, 'tour', head, el('div', { class: 'guide-cards' }, intro, courses, extra));
+  docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
 
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
@@ -362,7 +374,7 @@ async function renderInstall(view) {
   slot.append(skeleton('설치 안내를 준비하는 중'));
   // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드 아래 정적 문서로.
   const extra = el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(INSTALL_EXTRA_MD));
-  docsShell(view, 'install', head, slot, extra);
+  docsShell(view, 'install', docsEyebrow('install'), head, slot, extra);
   onboardingBanner().then((b) => { if (b) head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
     .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
