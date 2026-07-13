@@ -51,6 +51,11 @@ t("classifyToolLevel: 미매칭 → 서버 기본", () => {
   assert.equal(classifyToolLevel("frobnicate", "L1"), "L1");
   assert.equal(classifyToolLevel("frobnicate", "L0"), "L0");
 });
+// 회귀(#746 실측 Notion) — 상류가 네임스페이스 접두를 붙이면 동사가 접두 뒤에 온다. ^앵커면 놓쳐 쓰기가 L0 로 새던 버그.
+t("classifyToolLevel: 네임스페이스 접두 뒤 동사도 분류(notion-/github_/slack.)", () => {
+  for (const n of ["notion-create-pages", "notion-update-page", "notion-move-pages", "notion-duplicate-page", "notion-create-database", "github_create_issue", "slack.postMessage", "jira-delete-ticket"]) assert.equal(classifyToolLevel(n, "L0"), "L2", n);
+  for (const n of ["notion-search", "notion-fetch", "notion-get-users", "notion-query-data-sources", "notion-get-comments", "github_list_repos"]) assert.equal(classifyToolLevel(n, "L2"), "L0", n);
+});
 
 // ── P1/P2 주입 자격 유출 차단 — 상류 응답/에러에 에코된 자격 리터럴 스크럽 ──
 t("redactSecret: 길이 ≥8 자격은 [REDACTED] 로", () => {

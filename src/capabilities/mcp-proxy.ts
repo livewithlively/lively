@@ -47,8 +47,11 @@ export function proxyToolName(serverName: string, toolName: string): string {
 
 // per-tool 등급 휴리스틱(#746) — read 동사=L0(조회) / write·mutate 동사=L2(집행) / 나머지=서버 기본. 관리자 per-tool 오버라이드는 후속.
 //  ambiguous 는 안전측(L2)으로: WRITE 먼저 검사. AWS MCP 처럼 read+write 섞인 상류에서 describe 는 자유, put/delete 는 컨펌.
-const WRITE_VERBS = /^(create|put|delete|del|update|modify|set|add|remove|attach|detach|start|stop|terminate|reboot|run|apply|deploy|invoke|send|post|tag|untag|enable|disable|reset|register|deregister|associate|disassociate|authorize|revoke|grant|cancel|restore|copy|import|upload|write|patch|replace|move|rename|purge|drain)/i;
-const READ_VERBS = /^(describe|list|get|read|search|lookup|query|scan|head|batch_?get|select|fetch|show|view|count|export|download)/i;
+// 동사 매칭은 이름 '세그먼트' 경계 기준 — 상류가 네임스페이스 접두를 붙이는 흔한 패턴(notion-create-pages,
+//  github_create_issue, slack.postMessage)이라 ^앵커면 접두 뒤 동사를 놓쳐 전부 서버기본 등급으로 오분류된다
+//  (쓰기 툴이 L0 로 새 P2 컨펌 우회). 시작 또는 구분자(-_.:/ 공백) 뒤의 동사를 잡는다. WRITE 를 먼저 검사(안전측).
+const WRITE_VERBS = /(?:^|[-_.:/ ])(create|put|delete|del|update|modify|set|add|remove|attach|detach|start|stop|terminate|reboot|run|apply|deploy|invoke|send|post|tag|untag|enable|disable|reset|register|deregister|associate|disassociate|authorize|revoke|grant|cancel|restore|copy|import|upload|write|patch|replace|move|rename|purge|drain|duplicate|archive|trash|insert|append)/i;
+const READ_VERBS = /(?:^|[-_.:/ ])(describe|list|get|read|search|lookup|query|scan|head|batch_?get|select|fetch|show|view|count|export|download|retrieve)/i;
 export function classifyToolLevel(name: string, dflt: "L0" | "L1" | "L2"): "L0" | "L1" | "L2" {
   const n = String(name || "");
   if (WRITE_VERBS.test(n)) return "L2"; // 안전측 우선
