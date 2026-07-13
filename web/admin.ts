@@ -2405,7 +2405,101 @@ function storageEditor(detail, data) {
         el('p', { class: 'admin-hint storage-warn', text: '⚠ 이걸 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 깨질 수 있으니, 쓰지 않는 것이 확실할 때만 켜세요.' })),
 
       el('div', { class: 'storage-actions' }, saveBtn),
+
+      el('h3', { class: 'storage-h', text: '워크스페이스' }),
+      wsRegion,
     );
+    loadWorkspace();
+  }
+
+  // ── 워크스페이스(#813 T3-2 백스톱) ──
+  // 프로젝트 마무리 루틴이 회수를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done
+  //  처리하거나, 프로젝트가 방치되면 아무도 안 치운다. 여기서 관리자가 보고 **직접** 회수한다.
+  //  ⚠ 자동 삭제는 없다. 반드시 [분석](dry-run) → 내용 확인 → [회수] 순서로만 지워진다.
+  const wsRegion = el('div');
+  async function loadWorkspace() {
+    wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)' }));
+    let ws;
+    try { ws = await api('/api/ui/org/workspace'); }
+    catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
+
+    const rows = (ws.projects || []).map((p) => {
+      const detailBox = el('div');
+      const analyzeBtn = el('button', { class: 'btn btn-sm', text: '분석' });
+      analyzeBtn.disabled = !canEdit || p.project_id == null;
+
+      analyzeBtn.addEventListener('click', async () => {
+        analyzeBtn.disabled = true;
+        detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '확인 중…' }));
+        try {
+          const plan = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, { method: 'POST', body: JSON.stringify({}) });
+          renderPlan(plan);
+        } catch (e: any) {
+          detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '실패: ' + e.message }));
+          analyzeBtn.disabled = false;
+        }
+      });
+
+      function renderPlan(plan) {
+        const parts: any[] = [];
+        for (const r of plan.results || []) {
+          const derived = (r.derived || []);
+          const unc = (r.unclassified || []);
+          parts.push(el('div', { class: 'ws-plan' },
+            el('p', { class: 'storage-calc', text: `회수 가능 ${fmtBytes(r.reclaimable_bytes)} — ${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '없음'}` }),
+            ...(unc.length ? [el('p', { class: 'storage-calc', text: `미분류(지우지 않음): ${unc.map((d) => d.path).join(', ')}` })] : []),
+            ...(r.protected_kept?.length ? [el('p', { class: 'storage-calc', text: `보호(절대 안 지움): ${r.protected_kept.join(', ')}` })] : []),
+            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음)' : `워크트리: 유지 — ${r.worktree_reason}` })));
+        }
+        // 워크트리까지 지울지는 **모든 레포가 제거 가능할 때만** 선택지로 준다.
+        const allRemovable = (plan.results || []).length > 0 && (plan.results || []).every((r) => r.worktree_removable);
+        const wtChk = el('input', { type: 'checkbox' }); wtChk.disabled = !allRemovable;
+        const total = (plan.results || []).reduce((s, r) => s + (r.reclaimable_bytes || 0), 0);
+
+        const doBtn = el('button', { class: 'btn btn-primary btn-sm', text: `회수 (${fmtBytes(total)})` });
+        doBtn.disabled = !canEdit || total <= 0;
+        doBtn.addEventListener('click', async () => {
+          const msg = wtChk.checked
+            ? `파생물 ${fmtBytes(total)} 를 지우고 워크트리도 제거합니다.\n\n워크트리는 push 된 상태라 나중에 다시 만들 수 있습니다. 계속할까요?`
+            : `파생물 ${fmtBytes(total)} 를 지웁니다(node_modules·build 등). 다시 빌드하면 복구됩니다. 계속할까요?`;
+          if (!confirm(msg)) return;
+          doBtn.disabled = true;
+          try {
+            const res = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, {
+              method: 'POST',
+              body: JSON.stringify({ apply: true, remove_worktree: wtChk.checked }),
+            });
+            const freed = (res.results || []).reduce((s, r) => s + (r.applied?.freedBytes || 0), 0);
+            const skipped = (res.results || []).map((r) => r.applied?.worktreeSkippedReason).filter(Boolean);
+            toast(`회수 완료 — ${fmtBytes(freed)}` + (skipped.length ? ` (워크트리 유지: ${skipped[0]})` : ''));
+            loadWorkspace();
+          } catch (e: any) { toast(e.message, true); doBtn.disabled = false; }
+        });
+
+        detailBox.replaceChildren(
+          ...parts,
+          el('div', { class: 'ws-actions' },
+            el('label', { class: 'storage-toggle' }, wtChk,
+              el('span', { text: allRemovable ? ' 워크트리도 제거 (push 완료 — provision 으로 복구 가능)' : ' 워크트리 제거 불가 (위 사유 참조)' })),
+            doBtn));
+      }
+
+      const badges: any[] = [];
+      if (p.active_session) badges.push(el('span', { class: 'storage-lv storage-lv-warn', text: '작업 중' }));
+      if (p.kind === 'archived') badges.push(el('span', { class: 'storage-lv storage-lv-ok', text: '완료 보관' }));
+
+      return el('div', { class: 'storage-item' },
+        el('div', { class: 'storage-head' },
+          el('span', {}, el('strong', { text: p.name || String(p.project_id) }),
+            el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` })),
+          el('span', { class: 'ws-badges' }, ...badges, analyzeBtn)),
+        detailBox);
+    });
+
+    wsRegion.replaceChildren(
+      el('p', { class: 'storage-calc', text: `${(ws.projects || []).length}개 프로젝트 · 합계 ${fmtBytes(ws.total_bytes)} — ${ws.root}` }),
+      el('p', { class: 'admin-hint', text: '프로젝트별로 [분석]을 눌러 무엇이 회수 가능한지 먼저 확인하세요(아무것도 지우지 않습니다). 회수 대상은 다시 만들 수 있는 것뿐입니다 — node_modules·빌드 산출물 등. 소스·커밋·설정(.env)·데이터는 절대 지우지 않으며, 작업 중인 세션이 있거나 push 안 한 커밋이 있으면 거부합니다. 자동 삭제는 하지 않습니다.' }),
+      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '워크스페이스가 비어 있습니다.' })]));
   }
 
   load();
@@ -2785,19 +2879,8 @@ function mcpForm(root, s, data, detail, isNew) {
     try { const r = await api('/api/ui/org/mcp-server/refresh', { method: 'POST', body: JSON.stringify({ name: s.name }) }); toast(`발행됨 — 툴 ${r.tool_count}개`); await loadAdmin(true); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); refreshBtn.disabled = false; }
   });
-  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다(상류 서비스의 자체 동의 화면). 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다. 자격 종류(auth_kind)는 이 서버의 토큰 슬롯 이름입니다(예: notion_oauth).' });
+  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.' });
   const sigv4Hint = el('div', { class: 'admin-hint', text: 'AWS(sigv4): 자격 종류는 aws_role_arn 으로 두세요. 실제 역할(role ARN·리전·service)과 구성원별 오버라이드는 [자격] 탭 ▸ "AWS 역할"에서 등록·할당합니다. 툴 등급은 자동(describe=조회 / put·delete=집행 컨펌).' });
-  // OAuth 클라이언트(선택) — 상류가 자동등록(DCR)을 지원하면 비워둠(게이트웨이가 자동 등록). Google·Slack 등 콘솔 앱은 사전등록 client 를 입력.
-  //  저장 시 (gateway,auth_kind,'oauth:client') 슬롯에 시딩 → SDK 가 client_secret 유무로 confidential/public 자동 판정. 비우면 기존 유지.
-  const oauthClientIdIn = el('input', { type: 'text', value: '', placeholder: '비우면 자동등록(DCR). Google·Slack 등은 콘솔 client_id 입력' });
-  const oauthClientSecretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: 'confidential 앱이면 client_secret (변경할 때만 입력)' });
-  const oauthCallback = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
-  const oauthClientBox = el('div', { class: 'admin-subcard', style: 'margin-top:8px' },
-    el('div', { class: 'admin-subhead', text: 'OAuth 클라이언트 (선택 — 자동등록 미지원 상류만)' }),
-    el('div', { class: 'admin-hint', text: '상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)' }),
-    field('client_id', oauthClientIdIn),
-    field('client_secret', oauthClientSecretIn),
-    el('div', { class: 'admin-hint', text: `redirect URI(콜백): ${oauthCallback}  — 이 값을 상류 콘솔(Google/Slack 등)의 허용 redirect URI 에 그대로 등록하세요.` }));
   const authEnvField = field('인증 환경변수 이름 (auth_env)', authIn);
   const proxyBox = el('div', { class: 'admin-subcard' },
     el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }),
@@ -2807,7 +2890,7 @@ function mcpForm(root, s, data, detail, isNew) {
     field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)),
     field('자격 대상 구분 (선택)', authScopeIn),
     el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'),
-    oauthHint, oauthClientBox, sigv4Hint,
+    oauthHint, sigv4Hint,
     isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
 
   const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
@@ -2817,7 +2900,6 @@ function mcpForm(root, s, data, detail, isNew) {
     // proxy 는 auth_kind(vault)로 인증 → auth_env(client 전용) 숨김. oauth 면 auth_kind 는 vault kind(토큰 슬롯).
     authEnvField.style.display = proxy ? 'none' : '';
     oauthHint.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
-    oauthClientBox.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
     sigv4Hint.style.display = proxy && authModeSel.value === 'sigv4' ? '' : 'none';
     if (proxy && authModeSel.value === 'sigv4' && !authKindIn.value.trim()) authKindIn.value = 'aws_role_arn';
   };
@@ -2847,17 +2929,6 @@ function mcpForm(root, s, data, detail, isNew) {
         pii_scrub: proxy ? piiChk.checked : false,
       };
       await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
-      // OAuth 사전등록 클라이언트 시딩(선택) — client_id 입력 시에만. (gateway,auth_kind,'oauth:client') 슬롯.
-      if (proxy && authModeSel.value === 'oauth' && oauthClientIdIn.value.trim()) {
-        const kind = authKindIn.value.trim();
-        if (!kind) { toast('OAuth 클라이언트를 저장하려면 자격 종류(auth_kind)가 필요합니다', true); }
-        else {
-          const seed: any = { client_id: oauthClientIdIn.value.trim() };
-          if (oauthClientSecretIn.value.trim()) seed.client_secret = oauthClientSecretIn.value.trim();
-          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind, scope_key: 'oauth:client', secret: JSON.stringify(seed) }) });
-          oauthClientIdIn.value = ''; oauthClientSecretIn.value = '';
-        }
-      }
       await loadAdmin(true); state.admin.mcpSel = payload.name; toast('저장됨 — 다음 세션부터 반영'); renderAdminDetail(detail, 'mcp', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });

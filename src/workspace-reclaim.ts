@@ -102,6 +102,46 @@ async function git(args: string[], cwd: string): Promise<{ ok: boolean; out: str
   }
 }
 
+/** 디렉터리 크기 — 관리탭이 프로젝트 수십 개를 한 번에 재야 해서 OS `du` 를 쓴다(수십만 파일에서 Node 워크보다 훨씬 빠르다).
+ *  실패하면(du 없음·권한) Node 폴백(dirSize). 둘 다 안 되면 null = '못 쟀음'(UI 는 '—' 로 표시). */
+export async function dirSizeFast(p: string, timeoutMs = 8000): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync("du", ["-sk", p], { timeout: timeoutMs, maxBuffer: 64 * 1024 });
+    const kb = Number(stdout.trim().split(/\s+/)[0]);
+    if (Number.isFinite(kb)) return kb * 1024;
+  } catch { /* du 없음/실패 → 폴백 */ }
+  const r = await dirSize(p, Math.min(timeoutMs, 3000));
+  return r.partial && r.bytes === 0 ? null : r.bytes;
+}
+
+/** 여러 디렉터리 크기를 **한 번의 du 호출**로. 프로세스를 경로 수만큼 띄우면 관리탭이 몇 초씩 멈춘다
+ *  (실측: 300개 순차 호출 5.2초 → 한 번에 묶으면 1초 미만). 못 잰 경로는 null. */
+export async function dirSizesFast(paths: string[], timeoutMs = 20_000): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>(paths.map((p) => [p, null]));
+  if (!paths.length) return out;
+  try {
+    const { stdout } = await execFileAsync("du", ["-sk", ...paths], {
+      timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
+    });
+    for (const line of stdout.split("\n")) {
+      // "12345\t/path/with spaces" — 첫 탭/공백 뒤가 전부 경로다(경로에 공백이 있을 수 있으므로 split 한 번만).
+      const m = /^(\d+)\s+(.+)$/.exec(line);
+      if (!m || !m[1] || !m[2]) continue;
+      if (out.has(m[2])) out.set(m[2], Number(m[1]) * 1024);
+    }
+  } catch (err) {
+    // ⚠ 여기서 경로 수만큼 개별 폴백을 돌리면 안 된다 — 300개 × 2초 = 10분 동안 관리탭이 멈춘다.
+    //  전체 예산 안에서만 최대한 재고, 못 잰 건 null(UI 는 '—')로 둔다. 크기를 못 재는 건 불편할 뿐 치명적이지 않다.
+    logger.warn({ err, count: paths.length }, "du 일괄 측정 실패 — 예산 내 개별 폴백");
+    const deadline = Date.now() + Math.min(timeoutMs, 10_000);
+    for (const p of paths) {
+      if (Date.now() >= deadline) break;
+      out.set(p, await dirSizeFast(p, 1500));
+    }
+  }
+  return out;
+}
+
 /** 워크트리의 **베이스 레포**(공유 부모 클론) 경로. `git worktree remove` 는 워크트리 자신이 아니라 부모에서 돌려야 한다.
  *  `--git-common-dir` 이 부모의 `.git` 을 가리키므로 그 상위가 베이스 레포 루트. 못 찾으면 null(제거 안 함). */
 export async function baseRepoOf(wt: string): Promise<string | undefined> {

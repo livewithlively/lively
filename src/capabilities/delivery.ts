@@ -26,6 +26,13 @@ import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
 import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
+// 워크스페이스 사용량(#813 T3-2 백스톱) — 프로젝트별로 얼마나 쌓였나. 회수 실행은 workspace_reclaim 이 한다.
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR } from "../project-fs.js";
+import { dirSizesFast, isInside } from "../workspace-reclaim.js";
+import { listSessions } from "../terminal-sessions.js";
+import { getProject as getV6Project } from "../v6/project-store.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -931,6 +938,60 @@ export const deliveryCapabilities: Capability[] = [
           bytes: await dirSize(cacheRoot),
         },
       };
+    }),
+
+  // ── 워크스페이스 사용량(#813 T3-2) — **백스톱**. ──
+  //  close-out 루틴(project-closeout-routine §6)이 회수를 하지만 그건 best-effort 다: 에이전트가 스텝을 건너뛰거나,
+  //  사람이 웹 UI 에서 바로 done 처리하거나, 프로젝트가 방치되면 아무도 안 치운다 — 그리고 **쌓이는 건 바로 그런 것들**이다.
+  //  그래서 관리자가 '무엇이 얼마나 쌓였나'를 보고 **수동으로** 회수할 창구가 필요하다.
+  //  ⚠ 무인 자동 삭제는 **없다**(설계 결정) — 이 화면은 보여주기만 하고, 지우는 건 사람이 버튼을 눌러야 한다.
+  //  회수 실행은 기존 workspace_reclaim(POST /api/ui/v6/projects/:id/reclaim) 을 그대로 쓴다(안전선 재구현 금지).
+  restOnly("org_workspace_status", "워크스페이스 사용량",
+    "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 회수 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/workspace"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      // 진행 중(project/) + 완료 보관(legacy-project/) 둘 다 — done 처리는 폴더를 **이동**할 뿐 지우지 않는다.
+      const roots = [
+        { kind: "active", dir: path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR) },
+        { kind: "archived", dir: path.join(PROJECT_SHARED_BASE, LEGACY_SUBDIR) },
+      ];
+      let sessionDirs: string[] = [];
+      try { sessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean); } catch { /* 세션 조회 실패 → 활성표시만 비움 */ }
+
+      interface WsItem {
+        project_id: number | null; name: string; status: string | null; kind: string;
+        dir: string; bytes: number | null; last_used: number; active_session: boolean;
+      }
+      // 후보 디렉터리를 먼저 모아 **du 를 한 번만** 부른다(프로젝트가 수백 개라 개별 호출하면 페이지가 몇 초 멈춘다).
+      const found: { dir: string; name: string; kind: string; mtimeMs: number }[] = [];
+      for (const root of roots) {
+        for (const name of await fsp.readdir(root.dir).catch(() => [] as string[])) {
+          const dir = path.join(root.dir, name);
+          const st = await fsp.stat(dir).catch(() => null);
+          if (!st?.isDirectory()) continue;
+          found.push({ dir, name, kind: root.kind, mtimeMs: st.mtimeMs });
+        }
+      }
+      const sizes = await dirSizesFast(found.map((f) => f.dir));
+
+      const items: WsItem[] = [];
+      for (const f of found) {
+        const id = Number(f.name);
+        const project = Number.isInteger(id) && id > 0 ? await getV6Project(id).catch(() => null) : null;
+        items.push({
+          project_id: Number.isInteger(id) ? id : null,
+          name: project?.name ?? f.name,
+          status: project?.status ?? null,
+          kind: f.kind,
+          dir: f.dir,
+          bytes: sizes.get(f.dir) ?? null,
+          last_used: Math.round(f.mtimeMs / 1000), // 마지막으로 무언가 쓰인 시각(오래된 것부터 정리 판단)
+          active_session: sessionDirs.some((d) => isInside(d, f.dir)),
+        });
+      }
+      items.sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0));
+      const total = items.reduce((sum, i) => sum + (i.bytes ?? 0), 0);
+      return { root: PROJECT_SHARED_BASE, total_bytes: total, projects: items };
     }),
 
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
