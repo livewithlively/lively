@@ -4,7 +4,8 @@ import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
-import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
+import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
+import { pjvCloseTaskModalOnRoute } from './taskmodal.js'; // #804 — 라우트 이탈 시 상세 모달 정리
 import { renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
@@ -40,6 +41,13 @@ async function route() {
     endTour(); // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
     dismissWikiPeek();
     wkRouteCleanup(); // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
+    // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
+    //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).
+    //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)되고, 페이지 재렌더는
+    //  건너뛴다 — 라우터가 곧 $view 를 새로 그리므로 보드 재렌더와 레이스가 난다.
+    //  (지식·가이드 같은 '참조' 링크는 애초에 새 탭으로 열려 여기까지 오지 않는다 — 그게 목적이므로.)
+    pjvCloseTaskModalOnRoute();
+    pjvCloseProjectModalOnRoute();
     if (!state.me) {
         showGate();
         return;

@@ -224,6 +224,11 @@ function pjvtmSideResizer(box) {
     });
     return r;
 }
+// 지금 열린 태스크 모달(최상단 1개) — 라우트가 바뀌면 라우터(main.ts route())가 이걸 닫는다(#804).
+//  모달은 document.body 에 얹혀 라우터가 존재를 모르므로, 안 닫으면 새 페이지가 모달 뒤에 렌더돼 죽은 클릭이 된다.
+let _pjvTmOpen = null;
+function pjvCloseTaskModalOnRoute() { if (_pjvTmOpen)
+    _pjvTmOpen.close(true); }
 function pjvOpenTaskModal(taskId, pageReload) {
     let dirty = false;
     let tickTimer = null;
@@ -298,7 +303,16 @@ function pjvOpenTaskModal(taskId, pageReload) {
     document.addEventListener('paste', onPaste, true);
     document.body.append(back);
     document.body.classList.add('pjv-tm-open');
-    function closeModal() {
+    _pjvTmOpen = { close: closeModal }; // 라우트 변경 시 라우터가 닫을 수 있게(#804)
+    // skipReload=true — 라우터가 닫는 경우. 곧 $view 를 새로 그리므로 pageReload(보드 재렌더)는 건너뛴다(레이스 방지).
+    //  본문 flush(자동저장)는 어느 경로든 그대로 수행한다.
+    let tmClosed = false;
+    function closeModal(skipReload) {
+        if (tmClosed)
+            return;
+        tmClosed = true;
+        if (_pjvTmOpen && _pjvTmOpen.close === closeModal)
+            _pjvTmOpen = null;
         // 어떤 경로로 닫더라도(✕·Esc·바깥클릭) 편집 중인 본문은 먼저 저장(flush)해 유실 방지(#139-6, #730).
         if (bodyEditor) {
             try {
@@ -314,7 +328,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
         document.removeEventListener('paste', onPaste, true);
         document.body.classList.remove('pjv-tm-open');
         back.remove();
-        if (dirty && pageReload)
+        if (dirty && pageReload && !skipReload)
             pageReload();
     }
     box.append(el('div', { class: 'pjv-tm-loading' }, '불러오는 중…'));
@@ -1585,4 +1599,4 @@ function pjvOpenTaskModal(taskId, pageReload) {
 PJV_TM_ICONS.search = { p: [['circle', { cx: 11, cy: 11, r: 7 }], ['line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }]] };
 PJV_TM_ICONS.bell = { p: [['path', { d: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9' }], ['path', { d: 'M13.73 21a2 2 0 0 1-3.46 0' }]] };
 PJV_TM_ICONS.filter = { p: [['line', { x1: 4, y1: 7, x2: 20, y2: 7 }], ['line', { x1: 7, y1: 12, x2: 17, y2: 12 }], ['line', { x1: 10, y1: 17, x2: 14, y2: 17 }]] };
-export { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar, };
+export { PJV_TAG_NONE, pjvCloseTaskModalOnRoute, pjvOpenTaskModal, pjvtmComposerToolbar, };
