@@ -2,6 +2,7 @@
 import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js'; // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
+import { ingestPolicyPanel, reviewQueuePanel } from './review.js'; // #783 지식 검토 게이트 + 검토 큐
 // ════════════════════════════════════════════════════════════════════
 // 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
 // '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
@@ -53,8 +54,8 @@ const ADMIN_SECTIONS = [
     // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
     { key: 'connectors', label: '커넥터(외부 소스)', meaning: null, group: 'ai' },
     // 인입 허용선 게이트(#638) — 자동 인입(미러/distill)을 auto/confirm/drop 로 조절 + 검토 큐(pending 승인).
-    { key: 'ingest-policy', label: '인입 허용선 (게이트)', meaning: null, group: 'ai' },
-    { key: 'review-queue', label: '검토 큐 (자동 인입)', meaning: null, group: 'ai' },
+    { key: 'ingest-policy', label: '지식 검토 게이트', meaning: null, group: 'ai' },
+    { key: 'review-queue', label: '검토 큐', meaning: null, group: 'ai' },
     // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
     { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
     // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
@@ -71,7 +72,10 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy', 'review-queue']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절, 검토 큐 웹 탭은 MVP admin — 승인 백엔드는 memory scope 라 워킹레벨 MCP/REST 검토는 열림)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
+// #783 검토 큐는 워킹레벨 개방 — 승인 백엔드가 이미 memory scope 다(#638 결정: "승인 자격제한 없음 — 카테고리 전문성 있는
+//  워킹레벨이 오너보다 잘 검토한다"). 에이전트 지식 게이트를 켜면 큐 볼륨이 오너 한 명으로 감당 안 되기도 한다.
+const MEMORY_SCOPE_SECTIONS = ['review-queue'];
 const RUNTIME_ONLY = ['custom-hooks', 'harness-assets', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
 // V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
 //  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
@@ -90,6 +94,8 @@ function sectionHidden(key, data) {
         return true;
     if (RUNTIME_ONLY.includes(key) && !data.canRuntime)
         return true;
+    if (MEMORY_SCOPE_SECTIONS.includes(key) && !(data.canEdit || hasScope('memory')))
+        return true; // #783 지식 쓰기 권한자면 검토 가능
     return false;
 }
 // 현재 토큰이 가진 scope 보유 여부(/api/ui/me 의 scopes). 어휘 CRUD 권한(context) 판정에 쓴다.
@@ -884,195 +890,7 @@ async function cronDelete(id, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-// ════════ 인입 허용선 정책(#638) — 자동 인입(미러/distill)을 auto/confirm/drop 로 조절. ════════
-async function ingestPolicyPanel(detail, data) {
-    const reload = () => ingestPolicyPanel(detail, data);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('인입 정책을 불러오는 중')));
-    let policies;
-    try {
-        const r = await api('/api/ui/org/ingest-policy');
-        policies = (r && r.policies) || [];
-    }
-    catch (e) {
-        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '인입 정책을 불러오지 못했습니다')));
-        return;
-    }
-    const rows = el('div', { class: 'wikicat-rows' });
-    if (!policies.length)
-        rows.append(el('div', { class: 'wikicat-empty', text: '정책 규칙이 없습니다 — 규칙이 없으면 모든 자동 인입은 auto(즉시 지식화)입니다(현행). 특정 출처·카테고리를 검토 큐로 보내려면 규칙을 추가하세요.' }));
-    for (const p of policies) {
-        const m = [p.match_category && 'category=' + p.match_category, p.match_system && 'system=' + p.match_system,
-            p.match_channel && 'channel=' + p.match_channel, p.match_provenance && 'provenance=' + p.match_provenance,
-            p.match_sensitive && '민감=' + p.match_sensitive].filter(Boolean).join(' & ') || '전체(모든 자동 인입)';
-        const actLabel = p.action === 'drop' ? '🚫 drop (미적재)' : p.action === 'confirm' ? '🔎 confirm (검토대기)' : '✅ auto (자동)';
-        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: actLabel }), el('span', { class: 'wikicat-key mono', text: m }), el('span', { class: 'dm-tag', text: p.enabled ? ('우선순위 ' + (p.priority || 0)) : '꺼짐' }));
-        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: p.enabled ? '끄기' : '켜기', onclick: () => ingestPolicyToggle(p, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openIngestPolicyForm(p, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => ingestPolicyDelete(p.id, reload) }));
-        rows.append(el('div', { class: 'wikicat-row' }, main, acts));
-    }
-    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '허용선 정책 규칙' }), el('span', { class: 'wikicat-groupcount', text: String(policies.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 규칙 추가', onclick: () => openIngestPolicyForm(null, reload) }));
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '인입 허용선 (자동화 게이트)' })), el('p', { class: 'admin-hint', text: '자동 인입(커넥터 미러·자료 distill)이 만든 지식을 auto(즉시 반영)·confirm(검토 큐로 격리)·drop(미적재) 중 어디로 보낼지 규칙으로 정합니다. 규칙이 없으면 모두 auto(현행). 여러 규칙에 걸리면 가장 보수적(drop>confirm>auto)이 적용됩니다. confirm 된 지식은 “검토 큐”에서 승인해야 검색·주입에 반영됩니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
-    detail.replaceChildren(card);
-}
-async function openIngestPolicyForm(pol, reload) {
-    const isNew = !pol;
-    const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
-    const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
-    // 카테고리 목록(모든 space) 로드 — 드롭다운용. 실패해도 폼은 뜬다(빈 목록=전체 옵션만).
-    let cats = [];
-    try {
-        const lists = await Promise.all(SPACE_SUBS.map((s) => api('/api/ui/categories?' + new URLSearchParams({ space: s.key })).then((d) => (d && d.categories) || []).catch(() => [])));
-        cats = lists.flat();
-    }
-    catch {
-        cats = [];
-    }
-    const actSel = el('select', { style: inputStyle });
-    for (const o of [['auto', 'auto — 즉시 지식화(active)'], ['confirm', 'confirm — 검토 큐로 격리(pending)'], ['drop', 'drop — 적재 안 함']])
-        actSel.append(el('option', { value: o[0], text: o[1] }));
-    actSel.value = (pol && pol.action) || 'confirm';
-    // 카테고리 = 드롭다운(로드된 목록). 미등록 기존값은 옵션 추가해 보존.
-    const catSel = el('select', { style: inputStyle });
-    catSel.append(el('option', { value: '', text: '전체 (모든 카테고리)' }));
-    for (const c of cats)
-        catSel.append(el('option', { value: c.key, text: (c.name || c.key) + ' (' + c.key + ')' }));
-    if (pol && pol.match_category) {
-        if (!cats.some((c) => c.key === pol.match_category))
-            catSel.append(el('option', { value: pol.match_category, text: pol.match_category + ' (미등록)' }));
-        catSel.value = pol.match_category;
-    }
-    // 시스템 = 드롭다운(커넥터 고정 목록).
-    const sysSel = el('select', { style: inputStyle });
-    sysSel.append(el('option', { value: '', text: '전체 (모든 시스템)' }));
-    for (const s of ['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'])
-        sysSel.append(el('option', { value: s, text: s }));
-    if (pol && pol.match_system) {
-        if (!['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].includes(pol.match_system))
-            sysSel.append(el('option', { value: pol.match_system, text: pol.match_system }));
-        sysSel.value = pol.match_system;
-    }
-    const chanInp = el('input', { type: 'text', style: inputStyle, value: (pol && pol.match_channel) || '', placeholder: '특정 채널·폴더 id (비우면 시스템 전체)' });
-    const provSel = el('select', { style: inputStyle });
-    for (const o of [['', '전체'], ['observed', 'observed (커넥터 미러 — 정제문서 직행)'], ['authored', 'authored (자료 distill — LLM 증류)']])
-        provSel.append(el('option', { value: o[0], text: o[1] }));
-    if (pol && pol.match_provenance)
-        provSel.value = pol.match_provenance;
-    // 민감 라벨 = 드롭다운(통제어휘).
-    const sensSel = el('select', { style: inputStyle });
-    for (const o of [['', '전체 (판정 무관)'], ['cooking', 'cooking (쿠킹 중)'], ['planning', 'planning (기획 단계)'], ['unfinished', 'unfinished (미완결·미확정)']])
-        sensSel.append(el('option', { value: o[0], text: o[1] }));
-    if (pol && pol.match_sensitive)
-        sensSel.value = pol.match_sensitive;
-    const prioInp = el('input', { type: 'number', style: inputStyle, value: String((pol && pol.priority) || 0) });
-    const enabledChk = el('input', { type: 'checkbox', ...((pol ? pol.enabled : true) ? { checked: true } : {}) });
-    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('동작 (action)', 'auto=즉시 반영 · confirm=검토 큐 격리 · drop=미적재. 여러 규칙에 걸리면 가장 보수적이 이깁니다.', actSel), block('카테고리 (선택)', '이 도메인 지식에만 적용. 비우면 모든 카테고리.', catSel), block('시스템 (선택)', '출처 커넥터. 비우면 모든 시스템.', sysSel), block('출처 채널/폴더 (선택)', '특정 slack 채널·notion 폴더 등(id). 비우면 시스템 전체. (동적 목록 픽커는 후속.)', chanInp), block('경로 (선택)', 'observed=커넥터 미러(정제문서 직행) · authored=자료 distill(LLM 증류).', provSel), block('민감 라벨 (선택)', 'distill/미러 LLM 이 내용에서 판정. 비우면 판정 무관.', sensSel), block('우선순위', '표시·정렬용(평가는 가장 보수적 규칙 우선). 큰 값이 위.', prioInp), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
-    const back = overlayBox(isNew ? '허용선 규칙 추가' : '허용선 규칙 수정', form);
-    const boxw = back.querySelector('.ov-box');
-    if (boxw)
-        boxw.classList.add('ov-box-wide');
-    saveBtn.onclick = async () => {
-        const body = { action: actSel.value,
-            match_category: catSel.value || null, match_system: sysSel.value || null,
-            match_channel: chanInp.value.trim() || null, match_provenance: provSel.value || null,
-            match_sensitive: sensSel.value || null, priority: Number(prioInp.value) || 0, enabled: enabledChk.checked };
-        if (pol)
-            body.id = pol.id;
-        saveBtn.disabled = true;
-        try {
-            await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify(body) });
-            toast(isNew ? '규칙을 추가했습니다' : '저장했습니다');
-            back.remove();
-            reload();
-        }
-        catch (e) {
-            toast('실패 — ' + e.message, true);
-            saveBtn.disabled = false;
-        }
-    };
-}
-// 토글은 전체 필드 재전송(upsert 는 미전송 필드를 기본값으로 덮으므로) — enabled 만 반전.
-async function ingestPolicyToggle(pol, reload) {
-    try {
-        await api('/api/ui/org/ingest-policy', { method: 'POST', body: JSON.stringify({
-                id: pol.id, enabled: !pol.enabled, action: pol.action, priority: pol.priority,
-                match_category: pol.match_category, match_system: pol.match_system, match_channel: pol.match_channel,
-                match_provenance: pol.match_provenance, match_sensitive: pol.match_sensitive
-            }) });
-        reload();
-    }
-    catch (e) {
-        toast('실패 — ' + e.message, true);
-    }
-}
-async function ingestPolicyDelete(id, reload) {
-    if (!confirm('이 규칙을 삭제할까요?'))
-        return;
-    try {
-        await api('/api/ui/org/ingest-policy/remove', { method: 'POST', body: JSON.stringify({ id }) });
-        toast('삭제했습니다');
-        reload();
-    }
-    catch (e) {
-        toast('실패 — ' + e.message, true);
-    }
-}
-// ════════ 검토 큐(#638) — 자동 인입이 정책상 pending 으로 격리한 지식을 승인/반려. ════════
-async function reviewQueuePanel(detail, data) {
-    const reload = () => reviewQueuePanel(detail, data);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 대기 지식을 불러오는 중')));
-    let items;
-    let obs = null;
-    try {
-        const r = await api('/api/ui/knowledge?lifecycle=pending&orderBy=updated_at');
-        items = (r && r.entries) || [];
-    }
-    catch (e) {
-        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 큐를 불러오지 못했습니다')));
-        return;
-    }
-    try {
-        obs = await api('/api/ui/org/ingest-observability?days=30');
-    }
-    catch {
-        obs = null;
-    }
-    const igStat = (label, val, hint) => el('div', { class: 'ig-stat', title: hint, style: 'flex:1 1 110px;min-width:100px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-tint)' }, el('b', { style: 'display:block;font-size:22px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums', text: String(val) }), el('span', { style: 'font-size:11px;color:var(--muted)', text: label }));
-    const statBox = obs ? el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 14px' }, igStat('검토 대기', obs.pending_now, '지금 승인을 기다리는 지식'), igStat('최근 승인', obs.approved, obs.days + '일 내 pending→승인'), igStat('최근 반려', obs.rejected, obs.days + '일 내 pending 반려(삭제)'), igStat('게이트 격리', obs.pending_created, obs.days + '일 내 정책이 검토 큐로 보낸 수'), igStat('미러 자동통과', obs.mirror_auto, obs.days + '일 내 커넥터 미러가 즉시 반영')) : null;
-    const rows = el('div', { class: 'wikicat-rows' });
-    if (!items.length)
-        rows.append(el('div', { class: 'wikicat-empty', text: '검토 대기 중인 지식이 없습니다. (자동 인입이 허용선 정책상 confirm 대상일 때 여기에 쌓입니다.)' }));
-    for (const k of items) {
-        const prov = k.provenance === 'observed' ? '커넥터 미러' : '자료 distill';
-        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: k.title || k.name }), el('span', { class: 'wikicat-key mono', text: (k.type || '지식') + ' · ' + prov + (k.source ? ' · ' + k.source : '') }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '수집' }), relTime(k.updated_at)));
-        const acts = el('div', { class: 'wikicat-row-acts' }, el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/' + encodeURIComponent(k.name), text: '열기' }), el('button', { class: 'btn btn-primary btn-sm', text: '✓ 승인', onclick: () => reviewApprove(k.name, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '✕ 반려', onclick: () => reviewReject(k.name, reload) }));
-        rows.append(el('div', { class: 'wikicat-row' }, main, acts));
-    }
-    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '검토 대기' }), el('span', { class: 'wikicat-groupcount', text: String(items.length) }));
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '검토 큐 (자동 인입)' })), el('p', { class: 'admin-hint', text: '자동 인입(커넥터 미러·자료 distill)이 허용선 정책상 “검토 대기(pending)”로 격리한 지식입니다. 승인 전에는 검색·세션 주입·목록에 뜨지 않습니다. 열어서 정확성(할루시네이션·최신성)을 확인하고 승인하면 지식이 되고, 반려하면 삭제(휴지통, 복원 가능)됩니다. 승인/반려는 변경 감사에 기록됩니다.' }), statBox, el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
-    detail.replaceChildren(card);
-}
-async function reviewApprove(name, reload) {
-    try {
-        await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/lifecycle', { method: 'POST', body: JSON.stringify({ lifecycle: 'active' }) });
-        toast('승인 — 지식으로 반영했습니다');
-        reload();
-    }
-    catch (e) {
-        toast('실패 — ' + e.message, true);
-    }
-}
-async function reviewReject(name, reload) {
-    if (!confirm('이 지식을 반려(삭제)할까요? 휴지통으로 이동해 복원할 수 있습니다.'))
-        return;
-    try {
-        await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
-        toast('반려했습니다');
-        reload();
-    }
-    catch (e) {
-        toast('실패 — ' + e.message, true);
-    }
-}
+// 인입 허용선(게이트) · 검토 큐 패널은 web/review.ts 로 분리(#783) — 이 파일은 라우팅만.
 // ── 상시 세션(에이전트) — 항상 떠있는 에이전트 세션 CRUD + 격리 워크스페이스 + keep-alive. 크론(map_unmapped 등)이 타깃. ──
 //  '에이전트를 위한 프로젝트' — createSession + 공유폴더(managed/<id>) 재사용. account=라이블리 계정/프로필(클로드 로그인, 멀티프로필 대비).
 async function managedSessionsPanel(detail, data) {

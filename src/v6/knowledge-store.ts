@@ -27,7 +27,9 @@ export interface KnowledgeRow {
   [k: string]: unknown;
 }
 
-function slugify(s: string): string {
+// export: knowledge_save 게이트(#783)가 upsert 전에 '신규냐 수정이냐'를 알아야 해서 같은 규칙으로 name 을 미리 해석한다.
+//  (슬러그 규칙이 두 벌이 되면 게이트가 엉뚱한 행을 보므로 단일 진실원천 유지.)
+export function slugify(s: string): string {
   return ((s || "untitled").toLowerCase().trim()
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
@@ -110,9 +112,17 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   params.push(limit); const limP = `$${params.length}`;
   params.push(offset); const offP = `$${params.length}`;
   // icon/cover(#657, props_ui) — 목록 행 아이콘·갤러리 카드 커버용 얕은 노출(전체 props_ui 는 상세 전용 유지).
+  // category_key/name(#783) — 목록 행에 소속 도메인 표시(검토 큐가 도메인별로 묶고, 에이전트도 목록에서 분류를 본다).
+  //  단일 카테고리 정책(#290)이라 LATERAL LIMIT 1 — 행 증식 없음(DISTINCT 와도 무해).
   return q(itemsPool,
-    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover
-     FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
+    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
+            cat.key AS category_key, cat.name AS category_name
+     FROM knowledge k ${join}
+     LEFT JOIN LATERAL (
+       SELECT cc.key, cc.name FROM knowledge_category kc2 JOIN category cc ON cc.id=kc2.category_id
+        WHERE kc2.name=k.name AND kc2.state<>'rejected' ORDER BY kc2.category_id LIMIT 1
+     ) cat ON true
+     ${where} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
 // #709 총계 — 같은 필터의 전체 건수(페이징 메타 total/has_more 용). 목록의 DISTINCT 와 일치하도록 count(DISTINCT k.name).

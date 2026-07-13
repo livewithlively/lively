@@ -1047,13 +1047,17 @@ export const deliveryCapabilities: Capability[] = [
       return { ok: true };
     }),
 
-  // ── 자동 인입 허용선 정책 (#638) — distill/mirror 를 auto|confirm|drop 로 오너가 조절(디폴트 auto). ──
+  // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
+  //  #783: 축에 작성자(ai/human)·하네스·page-type 이 추가되고, 액션이 [신규(action)]·[수정(action_update)] 2축이 됐다.
   restOnly("org_ingest_policy_list", "인입 허용선 정책 목록",
-    "자동 인입(distill/mirror) 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변).",
+    "인입 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변).",
     [{ method: "GET", paths: ["/api/ui/org/ingest-policy"], parse: () => ({}) }],
     async () => ({ policies: await listIngestPolicies() })),
   restOnly("org_ingest_policy_upsert", "인입 허용선 정책 저장",
-    "인입 정책 규칙 저장(id 있으면 수정, 없으면 신규). match_*(카테고리·시스템·채널·provenance·민감라벨)는 빈값=any, action=auto|confirm|drop. 여러 규칙 매치 시 가장 보수적(drop>confirm>auto).",
+    "인입 정책 규칙 저장(id 있으면 수정 · preset 키가 있으면 그 프리셋 행을 갱신 · 둘 다 없으면 신규). " +
+    "match_*(카테고리·시스템·채널·provenance·민감라벨·작성자(ai|human)·하네스·page-type)는 빈값=any. " +
+    "action=auto|confirm|drop(신규 저장) · action_update=auto|review|stage|drop(기존 지식 수정). " +
+    "여러 규칙 매치 시 축별 가장 보수적(신규 drop>confirm>auto · 수정 drop>stage>review>auto). is_exception=true 면 그 규칙이 확정(carve-out).",
     [{ method: "POST", paths: ["/api/ui/org/ingest-policy"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const nStr = (v: unknown): string | null | undefined => v === undefined ? undefined : (v === null || v === "" ? null : String(v));
@@ -1065,7 +1069,13 @@ export const deliveryCapabilities: Capability[] = [
         match_channel: nStr(input.match_channel),
         match_provenance: nStr(input.match_provenance),
         match_sensitive: nStr(input.match_sensitive),
+        match_actor_kind: nStr(input.match_actor_kind),
+        match_agent: nStr(input.match_agent),
+        match_type: nStr(input.match_type),
         action: input.action === undefined ? undefined : String(input.action),
+        action_update: input.action_update === undefined ? undefined : String(input.action_update),
+        is_exception: input.is_exception === undefined ? undefined : Boolean(input.is_exception),
+        preset: nStr(input.preset),
         priority: input.priority === undefined ? undefined : Number(input.priority),
         note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : String(input.note)),
       }, actorOf(user), "web");
@@ -1078,7 +1088,13 @@ export const deliveryCapabilities: Capability[] = [
       match_channel: z.string().nullable().optional(),
       match_provenance: z.string().nullable().optional(),
       match_sensitive: z.string().nullable().optional(),
+      match_actor_kind: z.enum(["ai", "human"]).nullable().optional(),
+      match_agent: z.string().nullable().optional(),
+      match_type: z.string().nullable().optional(),
       action: z.enum(["auto", "confirm", "drop"]).optional(),
+      action_update: z.enum(["auto", "review", "stage", "drop"]).optional(),
+      is_exception: z.boolean().optional(),
+      preset: z.string().nullable().optional(),
       priority: z.number().optional(),
       note: z.string().nullable().optional(),
     }),

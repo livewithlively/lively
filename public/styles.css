@@ -4319,6 +4319,10 @@ main.doc-mode { max-width: none; padding: 0; }
 .kn-nav-count { flex: none; margin-left: 6px; min-width: 1.8em; text-align: right; font-size: 11.5px; font-weight: 600;
   color: var(--muted-2); font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .kn-nav-count.zero { opacity: .45; }
+/* #783 검토 대기(pending) — 트리엔 보이지만 검색·주입엔 없는 상태. 배지 없이 두면 승인된 지식으로 오인된다. */
+.kn-nav-review { min-width: 0; padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: 800;
+  color: var(--ink-note); background: var(--bg-note); border: 1px solid var(--line-note); }
+.kn-tree-pending .tree-label { color: var(--ink-sub); }
 
 /* 검색 캡슐(#req) — 검색 입력 + 검색방식 셀렉트를 한 컨테이너로(오른쪽 도킹·hairline 구분선). */
 

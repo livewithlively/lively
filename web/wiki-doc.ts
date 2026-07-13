@@ -27,11 +27,15 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   container.classList.add('wk-doc', 'wk-doc-' + mode);
   container.replaceChildren(skeleton('문서를 불러오는 중'));
   let k: any; let hidden: string[] = [];
+  let pendingRev: any = null;   // #783 이 문서에 검토 대기 중인 수정(있으면) — 응답의 형제 필드라 knowledge 만 꺼내면 유실된다.
   try {
-    [k, hidden] = await Promise.all([
-      api('/api/ui/knowledge/' + encodeURIComponent(name)).then((d) => (d && d.knowledge) || d),
+    let resp: any;
+    [resp, hidden] = await Promise.all([
+      api('/api/ui/knowledge/' + encodeURIComponent(name)),
       fetchKnHiddenProps(),
     ]);
+    k = (resp && resp.knowledge) || resp;
+    pendingRev = (resp && resp.pending_revision) || null;
   } catch (e: any) {
     if (e && e.status === 404) {
       container.replaceChildren(el('div', { class: 'wk-doc-missing' },
@@ -234,6 +238,8 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       canMeta ? { title: '카테고리 — 클릭해서 변경', click: (a) => openKnMetaPicker(a, 'category', k, editMetaSave) } : {}));
     if (always) parts.push(proplineItem('⚡ 항상 주입', { cls: 'warn', title: '모든 세션 첫머리에 항상 주입되는 문서' }));
     if (k.lifecycle === 'archived') parts.push(proplineItem('📦 보관됨', { cls: 'dim' }));
+    // #783 승인 전 지식 — 검색·주입에서 빠져 있다는 사실이 문서 자체에서 보여야 한다.
+    if (k.lifecycle === 'pending') parts.push(proplineItem('🔎 검토 대기', { cls: 'warn', title: '승인 전까지 검색·세션주입·목록에 노출되지 않습니다' }));
     if (k.updated_at) parts.push(proplineItem('갱신 ' + relTime(k.updated_at), { cls: 'time', title: absTime(k.updated_at) + (k.updated_by ? ' · ' + k.updated_by : '') }));
     parts.push(proplineItem('속성 모두', { cls: 'all', title: '모든 속성 보기·노출 설정', click: (a) => openProplinePopover(a) }));
     propline.replaceChildren(...parts);
@@ -270,6 +276,44 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     banner = el('div', { class: 'wk-banner always' },
       el('span', { class: 'wk-banner-txt', text: '항상 주입 문서 — 본문은 관리 탭 · 세션 주입에서 편집합니다' }),
       el('a', { class: 'wk-banner-link', href: '#/system/injection-map', text: '세션 주입 열기 →' }));
+  }
+
+  // ── #783 검토 배너 — 이 문서가 '승인 전'이거나 '검토 대기 수정'을 안고 있으면 그 사실을 문서 위에서 알린다. ──
+  //  게이트가 켜지면 pending 지식이 트리엔 보이는데 검색·주입엔 없다 → 이 배너가 없으면 "왜 안 나오지?"가 된다.
+  let reviewBanner: any = null;
+  if (k.lifecycle === 'pending') {
+    const acts: any[] = [];
+    if (canEdit) {
+      acts.push(el('button', {
+        class: 'btn btn-ghost btn-sm', text: '✓ 승인',
+        onclick: async () => {
+          try {
+            await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/lifecycle', { method: 'POST', body: JSON.stringify({ lifecycle: 'active' }) });
+            toast('승인 — 지식으로 반영했습니다'); reload();
+          } catch (e: any) { toast('실패 — ' + e.message, true); }
+        },
+      }));
+      acts.push(el('button', {
+        class: 'btn btn-ghost btn-sm', text: '✕ 반려',
+        onclick: async () => {
+          if (!confirm('이 지식을 반려할까요? 휴지통으로 이동하며 복원할 수 있습니다.')) return;
+          try {
+            await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/delete', { method: 'POST' });
+            toast('반려했습니다(휴지통)'); location.hash = '#/knowledge';
+          } catch (e: any) { toast('실패 — ' + e.message, true); }
+        },
+      }));
+    }
+    acts.push(el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
+    reviewBanner = el('div', { class: 'wk-banner always' },
+      el('span', { class: 'wk-banner-txt', text: '검토 대기 — 승인 전까지 검색·세션주입·목록에 노출되지 않습니다' + (k.confidence === 'ai' ? ' (에이전트가 작성)' : '') }),
+      ...acts);
+  } else if (pendingRev) {
+    reviewBanner = el('div', { class: 'wk-banner always' },
+      el('span', { class: 'wk-banner-txt', text: pendingRev.mode === 'staged'
+        ? '검토 대기 중인 수정 제안이 있습니다 — 아래 본문은 아직 옛 승인본입니다(승인하면 교체)'
+        : '최근 수정이 사람 검토 대기 중입니다 — 본문은 반영돼 있으나 되돌려질 수 있습니다' }),
+      el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
   }
 
   // ── 본문 — 폴더=자식 목록 / 편집 가능=블록 에디터(자동 저장) / 그 외=읽기 렌더. ──
@@ -396,6 +440,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     el('div', { class: 'wk-doc-head' }, iconBtn, decorAdd, titleEl),
     propline,
     banner,
+    reviewBanner,   // #783 검토 대기(pending) · 대기 중인 수정 제안
     body,
     tail,
     commentsSlot,

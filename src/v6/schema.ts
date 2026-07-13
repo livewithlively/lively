@@ -201,6 +201,51 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS knowledge_parent_idx ON knowledge(parent_name);
   `);
 
+  // ── knowledge_revision — 지식 '수정' 검토 큐(#783). 신규 지식은 lifecycle='pending' 으로 격리되지만, ──
+  //  기존 active 지식의 수정은 그렇게 못 한다(pending 으로 내리면 이미 승인된 라이브 지식이 검색·주입에서 사라진다).
+  //  그래서 수정은 본문과 분리된 이 테이블로 검토한다 — 인입정책 action_update(org_ingest_policy)가 mode 를 정한다:
+  //   · mode='staged'  (action_update=stage)  = 본문 **미반영**. 승인해야 knowledge.body_md 에 적용(라이브는 옛 승인본 유지).
+  //   · mode='applied' (action_update=review) = 본문 **이미 반영**(라이브 유지). 사람은 사후에 diff 를 보고 확인(ack) 또는 되돌리기(revert).
+  //  base_* = 수정 전 스냅샷(diff 기준 + applied 되돌리기 원본), new_* = 에이전트가 제안/적용한 내용.
+  //  coalesce: (name) 당 pending 1행 — 에이전트가 같은 지식을 5번 저장해도 큐는 1건(base 는 최초 것 보존, new 는 최신 갱신)
+  //   → 큐 홍수 방지. 승인/반려로 pending 이 비워지면 다음 수정이 새 행을 연다.
+  //  FK 없음(지식이 삭제돼도 검토 이력 보존 — org_content_audit 와 같은 원칙).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_revision(
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      base_version INT,
+      base_title TEXT,
+      base_body_md TEXT,
+      base_confidence TEXT,
+      new_title TEXT,
+      new_body_md TEXT NOT NULL,
+      new_summary TEXT,
+      new_type TEXT,
+      proposed_by TEXT,
+      actor_kind TEXT,
+      agent TEXT,
+      rule_id BIGINT,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMPTZ,
+      edits INT NOT NULL DEFAULT 1);
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_revision'::regclass AND conname='knowledge_revision_mode_chk') THEN
+        ALTER TABLE knowledge_revision ADD CONSTRAINT knowledge_revision_mode_chk CHECK (mode IN ('staged','applied'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_revision'::regclass AND conname='knowledge_revision_status_chk') THEN
+        ALTER TABLE knowledge_revision ADD CONSTRAINT knowledge_revision_status_chk CHECK (status IN ('pending','approved','rejected'));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS knowledge_revision_pending_uq ON knowledge_revision(name) WHERE status='pending';
+    CREATE INDEX IF NOT EXISTS knowledge_revision_status_idx ON knowledge_revision(status, updated_at DESC);
+  `);
+
   // (#335) 항상-주입 섹션 N개화 — 정렬 시드 + 팀블록 위치 보존. 1회성: 두 기본 섹션이 모두 pristine(sort=0)일 때만 실행
   //  → 한 번 정렬(0,1)되면 조건 거짓이라 재실행 안 됨(관리자 재정렬·${team} 제거를 덮어쓰지 않음).
   await pool.query(`

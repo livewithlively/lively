@@ -720,10 +720,9 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
-  // ── org_ingest_policy — 자동 인입(distill/mirror) 허용선 정책(#638). 오너가 카테고리·출처·경로·민감라벨별로 ──
-  //  auto(즉시 active) | confirm(pending 격리→검토 승인) | drop(미적재) 을 조절. 매치 규칙 0개면 디폴트 auto(현행 무변).
-  //  평가(resolveIngestPolicy, src/org/ingest-policy.ts) = 매치된 규칙 중 가장 보수적 action(drop>confirm>auto). 각 match_* 는 null=any.
-  //  distill(authored)·mirror(observed) 둘 다 이 정책을 태운다. per-record 검토 자격제한 없음(승인=set_lifecycle, memory scope).
+  // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
+  //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest-policy.ts).
+  //  적용 경로: mirror(observed·신규만) + knowledge_save(에이전트 MCP·사람 웹·distill — 신규/수정 양축).
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS org_ingest_policy(
       id BIGSERIAL PRIMARY KEY,
@@ -752,6 +751,38 @@ export async function initOrgSchema(): Promise<void> {
       END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS org_ingest_policy_enabled_idx ON org_ingest_policy(enabled);
+  `);
+
+  // ── #783 정책 축·액션 확장 — 멱등 가산(구 행은 NULL/기본값 = 현행 동작 그대로). ──
+  //  · match_actor_kind = 누가 썼나(ai=MCP 에이전트 | human=웹 사람). 서버가 채널로 판정(db/write.ts actorKindOf) — 자기보고 아님.
+  //  · match_agent      = 하네스 id(claude-code|codex|openclaw…) — 접속 신원(org/agent-identity.ts). 자율 실행만 좁혀 게이트 가능.
+  //  · match_type       = page-type(decision|concept|how-to|reference|research|entity) — 예: 런북(how-to)만 사람 승인.
+  //  · action_update    = 기존 지식 '수정' 시 동작(auto|review|stage|drop). NULL/auto = 수정 게이트 없음(구 규칙 무변).
+  //      review=반영하되 diff 를 검토 큐에 적재(사후검토) · stage=본문 미반영, 승인해야 반영(리비전 제안) · drop=수정 거부.
+  //      신규(action)와 분리한 이유: 에이전트 쓰기의 상당수가 '기존 지식 갱신'이라 신규만 막으면 게이트가 샌다.
+  //  · is_exception     = 예외(carve-out) — 매치되면 보수적 누적을 건너뛰고 이 규칙이 확정("전부 검토하되 이 도메인만 통과").
+  //  · preset           = 관리탭 프리셋 스위치가 관리하는 규칙 표식('agent-knowledge') — 사람이 만든 세부 규칙과 구분.
+  await itemsPool.query(`
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS match_actor_kind TEXT;
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS match_agent      TEXT;
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS match_type       TEXT;
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS action_update    TEXT NOT NULL DEFAULT 'auto';
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS is_exception     BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE org_ingest_policy ADD COLUMN IF NOT EXISTS preset           TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_ingest_policy'::regclass AND conname='org_ingest_policy_actor_kind_chk') THEN
+        ALTER TABLE org_ingest_policy ADD CONSTRAINT org_ingest_policy_actor_kind_chk
+          CHECK (match_actor_kind IS NULL OR match_actor_kind IN ('ai','human'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_ingest_policy'::regclass AND conname='org_ingest_policy_action_update_chk') THEN
+        ALTER TABLE org_ingest_policy ADD CONSTRAINT org_ingest_policy_action_update_chk
+          CHECK (action_update IN ('auto','review','stage','drop'));
+      END IF;
+    END $$;
+    -- 프리셋 규칙은 종류당 1행(관리탭 스위치가 upsert 로 관리 — 중복 생성 방지).
+    CREATE UNIQUE INDEX IF NOT EXISTS org_ingest_policy_preset_uq ON org_ingest_policy(preset) WHERE preset IS NOT NULL;
   `);
 
   // 멤버 상태메시지 — 본인이 설정해 프로필 밑에 공유하는 '현재 상태'(프로젝트 팀원 프로필 그리드).

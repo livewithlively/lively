@@ -98,8 +98,11 @@ function knNavCatNode(c, on, onOpen, isMine, favOpts) {
 function knNavDocNode(r, depth, onOpen, childN) {
     const pad = 8 + depth * 14;
     if (!r.is_folder) {
-        const row = el('a', { class: 'tree-item kn-nav-doc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : ''),
-            href: '#/k/' + encodeURIComponent(r.name), style: 'padding-left:' + pad + 'px', title: r.title || r.name }, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }));
+        // #783 pending(검토 대기) — 트리엔 보이지만 검색·주입엔 없는 상태라, 배지 없이 두면 '승인된 지식'으로 오인된다.
+        const pending = r.lifecycle === 'pending';
+        const row = el('a', { class: 'tree-item kn-nav-doc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : '') + (pending ? ' kn-tree-pending' : ''),
+            href: '#/k/' + encodeURIComponent(r.name), style: 'padding-left:' + pad + 'px',
+            title: (r.title || r.name) + (pending ? ' — 검토 대기(승인 전, 검색·주입 제외)' : '') }, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }), pending ? el('span', { class: 'kn-nav-count kn-nav-review', title: '검토 대기 — 승인해야 검색·주입에 반영됩니다', text: '검토' }) : null);
         row.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(r.name); });
         return row;
     }
