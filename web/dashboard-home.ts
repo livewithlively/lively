@@ -6,8 +6,9 @@
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
-// 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUploadProgress/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
-//  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795).
+// 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
+//  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
+//  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
 import { UP_CONFIRM, authDownload, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upProgress, upSend, upToast, type UpItem } from './projects.js';
 import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
@@ -1146,6 +1147,7 @@ function dashSessionEmpty(cfg, reloadSessions) {
 async function fillFolders(zone) {
   // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
   const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true, { persistent: true, resizable: true, history: true });
+  const qp = (p) => 'root=shared&path=' + encodeURIComponent(p || '');   // 위젯은 항상 공유 워크스페이스 루트 기준(현재 경로 개념이 없다)
   let dirs: string[] = [];
   // 뷰(아이콘|목록)를 ⚙ 설정(dashFoldView, 전체보기와 공유)에 맞춰 렌더 — #670: 목록으로 바꾸면 대시보드 위젯도 목록으로.
   const paint = () => {
@@ -1170,12 +1172,50 @@ async function fillFolders(zone) {
   // 헤더 우상단 통일 컨트롤 — ⚙(폴더 기본 뷰: 저장 후 위젯도 즉시 그 뷰로 재렌더) + ⤢(전체 보기 모달).
   const openPrefs = (anchor) => dashChoicePopover(anchor, '폴더 기본 뷰', [['icon', '아이콘'], ['list', '목록']], dashFoldView(), (v) => { dashSaveFoldView(v); paint(); });
   dashCtl(zone, { gear: { title: '폴더 기본 뷰 설정', open: openPrefs }, action: { onClick: () => openBrowser(''), title: '공유 폴더 전체 보기 · 파일 관리' } });
-  let data;
-  try { data = await api('/api/ui/terminal/browse?root=shared&path='); }
-  catch (e) { zone.body.replaceChildren(errorNote(e, '공유 폴더를 불러오지 못했습니다')); return; }
-  dirs = (data && data.dirs) || [];
-  zone.countEl.textContent = String(dirs.length);
-  paint();
+  // 목록 로드 — 업로드 뒤에도 다시 부른다(#796: 예전엔 fetch 가 함수 안에 인라인이라 재로드 경로가 아예 없었다).
+  const reload = async () => {
+    let data;
+    try { data = await api('/api/ui/terminal/browse?' + qp('')); }
+    catch (e) { zone.body.replaceChildren(errorNote(e, '공유 폴더를 불러오지 못했습니다')); return; }
+    dirs = (data && data.dirs) || [];
+    zone.countEl.textContent = String(dirs.length);
+    paint();
+  };
+
+  // ── 드래그앤드롭 업로드(#796) — 위젯 박스 위로 파일·폴더를 끌어다 놓으면 공유 워크스페이스 '루트'로 올린다. ──
+  //  여기엔 드롭이 아예 없어서 끌어다 놔도 아무 일도 안 일어났다(모달·프로젝트 카드는 되는데 위젯만 안 되던 톤 어긋남).
+  //  업로드 '버튼'은 두지 않는다 — 존 헤더는 [⚙][⤢] 로 5개 존이 동일해야 한다(#req 통일성). 버튼 업로드는 ⤢ 전체 보기 모달의 '⬆ 업로드'(#795).
+  //  전송 루프·진행바·취소는 프리미티브(upSend/upProgress)를 그대로 쓴다 — 네 화면이 같은 취소를 공유한다(#797).
+  let prog: any = null;   // 업로드 중이면 진행·취소 바 — 박스가 작아 헤더 아래 한 줄로(목록은 계속 보인다)
+  const progSlot = el('div', { class: 'up-prog-box' });
+  zone.box.insertBefore(progSlot, zone.body);   // 목록(zone.body)은 paint 가 통째로 갈아끼우므로 슬롯은 그 밖(헤더와 목록 사이)에 둔다
+  async function uploadItems(items: UpItem[], emptyDirs: string[]) {
+    // 업로드 중 또 드롭하면 진행 상태가 엉킨다 — 잠금(data-uploading)은 '목록'에만 걸리고(박스는 드롭을 계속 받아야 한다) 여기서 막는다.
+    if (prog) { toast('업로드 중입니다 — 끝난 뒤에 올려 주세요', true); return; }
+    const arr = items || [], eds = emptyDirs || [];
+    if (!arr.length && !eds.length) { toast('올릴 파일이 없습니다', true); return; }
+    if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
+    const ac = new AbortController();
+    prog = upProgress(arr.length, () => ac.abort());   // '취소' → 남은 파일은 안 보내고, 보내던 파일도 끊는다(#797)
+    progSlot.append(prog.row);
+    zone.box.setAttribute('data-uploading', '1');   // 목록 조작만 잠금 — 헤더(⚙·⤢)와 진행 바는 살아 있다(흐려지지 않는다)
+    const r = await upSend({
+      items: arr, emptyDirs: eds, signal: ac.signal,
+      fileUrl: (rel) => '/api/ui/terminal/browse/file?' + qp(rel),
+      dirUrl: (d) => '/api/ui/terminal/browse/mkdir?' + qp(d),
+      onProgress: (i, rel, pct) => { if (prog) prog.set(i, rel, pct); },
+    });
+    prog.row.remove();
+    prog = null;
+    zone.box.removeAttribute('data-uploading');
+    // 위젯은 '폴더'만 보여 준다 → 루트로 올린 파일은 목록에 안 나타난다. 어디로 갔는지 토스트가 말해 준다(파일은 ⤢ 전체 보기에서 확인).
+    if (r.canceled) toast(r.ok ? ('팀 공유 폴더에 ' + r.ok + '개까지 올리고 취소했습니다') : '업로드를 취소했습니다');
+    else if (r.ok || r.made) toast('팀 공유 폴더에 ' + (r.ok ? r.ok + '개 업로드 완료' : r.made + '개 폴더 생성') + (r.fail ? (' · ' + r.fail + '개 실패') : ''));
+    await reload();
+  }
+  upDropZone(zone.box, zone.box, (items, emptyDirs) => uploadItems(items, emptyDirs));   // 박스가 곧 드롭존 + 하이라이트(.dash-zone.drop-active)
+
+  await reload();
 }
 // 공유 폴더 목록 행(#670) — 아이콘 카드 대신 컴팩트 리스트. 폴더 아이콘 + 굵은 이름 + hover 시 슬라이드 셰브런.
 function dashFolderRow(name, onOpen) {
@@ -1196,7 +1236,7 @@ function dashFolderCard(name) {
 }
 // ── 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 하위 진입 + 파일 표시 + CRUD + 업로드(파일·폴더·드롭, #795). ──
 //  루트 브라우즈 API(/api/ui/terminal/browse[/file])만 쓴다 — 공유 워크스페이스는 셸(터미널)로 이미 rw 라 UI CRUD 가 권한을 넓히지 않는다.
-//  파일 프리미티브(authUploadProgress/Download·fmtSize)와 업로드 프리미티브(upControl/upDropZone)는 프로젝트 공유 폴더에서 검증된 것을 그대로 재사용.
+//  파일 프리미티브(authDownload·fmtSize)와 업로드 프리미티브(upControl/upDropZone/upSend/upProgress)는 프로젝트 공유 폴더에서 검증된 것을 그대로 재사용.
 function dashFolderBrowser(root, startPath) {
   const container = el('div', { class: 'dash-fb' });
   let curPath = startPath || '';

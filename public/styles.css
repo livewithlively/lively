@@ -4844,6 +4844,14 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb[data-uploading="1"] .up-prog { pointer-events: auto; }
 /* 진행 바가 목록 자리를 통째로 대신하므로 세로 여백을 더 준다(예전 .dash-fb-prog 톤 유지). */
 .dash-fb .up-prog { margin: 0; min-height: 96px; padding: 20px 14px; }
+/* ── 팀 공유 폴더 '위젯'(대시보드 홈) — 박스 위로 드롭 → 공유 루트 업로드(#796). 드롭존이 박스 자체라 하이라이트도 박스에. ── */
+.dash-zone.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
+/* 업로드 중 — '목록'만 잠근다. 박스에 pointer-events:none 을 걸면 드롭이 박스를 통과해 페이지 배경에 떨어지고,
+   브라우저가 그 파일을 열어 화면(SPA 상태)을 날린다. 헤더(⚙·⤢)와 진행·취소 바는 살아 있어야 한다.
+   (진행 바는 목록 밖(헤더와 목록 사이)이라 이 잠금에 안 걸린다 → 취소 버튼이 눌린다, #797) */
+.dash-zone[data-uploading="1"] .dash-wl { pointer-events: none; }
+/* 위젯은 박스가 작다 — 목록을 가리지 않게 헤더 아래 한 줄로 컴팩트하게(#797, 예전 .dash-fold-prog 자리). */
+.dash-zone .up-prog { margin: 0 16px 10px; padding: 8px 12px; }
 /* ── 공유 폴더 위젯 목록 뷰(#670) — 아이콘 카드 대신 컴팩트 리스트(전체보기 목록과 톤 일치). ── */
 .dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
 .dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }
