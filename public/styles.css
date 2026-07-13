@@ -6689,3 +6689,6 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .storage-toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
 .storage-toggle input { margin: 0; }
 .storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }
+.ws-badges { display: flex; align-items: center; gap: 6px; }
+.ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint, #f6f7f9); }
+.ws-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
