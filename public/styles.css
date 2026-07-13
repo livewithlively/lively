@@ -6668,3 +6668,8 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .ws-badges { display: flex; align-items: center; gap: 6px; }
 .ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint, #f6f7f9); }
 .ws-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+.storage-banner { padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; }
+.storage-banner strong { display: block; font-size: 14px; }
+.storage-banner p { margin: 6px 0 0; font-size: 12.5px; opacity: .9; }
+.storage-banner-critical { background: #fee2e2; color: #7f1d1d; border: 1px solid #fca5a5; }
+.storage-banner-warn { background: #fef3c7; color: #78350f; border: 1px solid #fcd34d; }

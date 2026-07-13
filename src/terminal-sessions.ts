@@ -17,6 +17,9 @@ import { listMembers, getMember, mintToken, listTokens, revokeToken, getRuntimeC
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "./session-cache.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
+// 디스크 가드(#813 T5) — 세션은 워크트리·의존성으로 디스크를 크게 먹는다. 꽉 찬 뒤엔 DB 가 죽어 복구가 수동이라,
+//  차기 **전에** 신규 세션을 막는다(기존 세션·읽기는 안 막는다).
+import { assertDiskWritable } from "./disk-guard.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
@@ -457,6 +460,17 @@ async function removeSessionWorktree(repoRoot: string, wtPath: string): Promise<
 }
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
+  // 디스크 가드(#813 T5) — **맨 앞**에서 막는다. 세션은 워크트리 체크아웃 + 의존성 설치로 디스크를 크게 먹는데,
+  //  꽉 차면 Postgres 가 죽어 전 기능이 500 이 되고 공간을 비워도 수동 재시작이 필요하다(2026-07-13 실증).
+  //  기존 세션·읽기는 막지 않는다 — 더 붓지만 못하게 할 뿐이다. 임계치는 관리탭 저장소 정책.
+  {
+    const sp = await effectiveStoragePolicy(() => getRuntimeConfig().then((c) => c.storage_policy)).catch(() => null);
+    await assertDiskWritable(
+      "새 세션",
+      ROOTS.map((r) => r.base),
+      sp ? { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct } : undefined,
+    );
+  }
   // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 세션도 개인 세션과 '동일하게'
   //  생성자 box_<멤버> 로 격리 실행한다(#524 인증 프로필 단위화): claude 자격증명이 각 box_ 홈(700)에 커널 격리
   //  → 공유 lively 로 띄우면 멤버 간 인증이 안 갈리고 재로그인을 요구했다. 공유 프로젝트 폴더는 lively-shared 그룹으로

@@ -20,6 +20,15 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       if (res.headersSent) return;
       if (err instanceof HttpError) { res.status(err.status).json({ error: err.message }); return; }
       const msg = err instanceof Error ? err.message : "";
+      // 디스크 부족(#813 T5) — 지금까지 정체불명 500("internal_error")으로 나가 사용자도 운영자도 원인을 몰랐다.
+      //  ENOSPC 는 원인이 명확하니 그대로 말하고 무엇을 해야 하는지 알려준다(507 Insufficient Storage).
+      //  ⚠ 순환 import 방지로 여기서 정규식을 직접 둔다(disk-guard 는 rest-util 의 HttpError 를 쓴다).
+      if ((err as NodeJS.ErrnoException)?.code === "ENOSPC" || (err as NodeJS.ErrnoException)?.code === "EDQUOT"
+          || /ENOSPC|no space left on device|quota exceeded/i.test(msg)) {
+        logger.error({ err, path: req.path }, "디스크 부족으로 실패");
+        res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 회수하거나 디스크를 늘리세요." });
+        return;
+      }
       if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }
       if (msg.includes("domainmap")) { res.status(502).json({ error: `domainmap 연결 실패 — ${msg}` }); return; }
       if (/검증 실패|허용|필수|미지정|형식/.test(msg)) { res.status(400).json({ error: msg }); return; }
