@@ -7,8 +7,8 @@
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUpload/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
-import { authDownload, authUpload, companyTimelineSection, fmtSize, openProjectV2Form } from './projects.js';
-import { openTermCreateForm, startTerminalTour } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req)
+import { authDownload, authUpload, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal } from './projects.js';
+import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -246,7 +246,15 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     // #req 행 맨 뒤 '⋯' — 호버 시 노출, 삭제 등 관리 메뉴. 행 링크로 전파 안 되게 격리.
     const more = el('button', { class: 'dash-projrow-more', type: 'button', title: '프로젝트 관리', 'aria-label': '프로젝트 관리', text: '⋯' });
     more.addEventListener('click', (e: any) => { e.preventDefault(); e.stopPropagation(); openProjRowMenu(more, p, reloadAll); });
-    return el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell, more);
+    // 행 클릭 = 페이지 이동 대신 **상세 팝업**(내용 그대로·모달 내부 스크롤). href 는 남겨둬서 ⌘/Ctrl/중클릭·새 탭은 기존대로 전체 페이지로.
+    //  행 안의 상태점·태스크칩·세션배지·⋯ 는 이미 각자 preventDefault/stopPropagation 하므로 여기까지 오지 않는다.
+    const row = el('a', { class: 'dash-projrow2', href: '#/projects2/p/' + p.id }, cell, more);
+    row.addEventListener('click', (e: any) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      pjvOpenProjectModal(p.id, reloadAll);
+    });
+    return row;
   };
   // 리스트 그룹 — 프로젝트 탭 리스트 헤더(pjv-list-head: 캐럿·글리프·이름·개수, 접기/펼치기) + 행들. 미분류는 색점.
   // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'. 프로젝트 탭 보드 추가행(pjvProjAddRow)과 동일 클래스·톤(테두리 없는 인라인 입력).
@@ -1912,7 +1920,8 @@ function dashCreateProject(listId, listById, onDone, prefillName?) {
       const tnote = tasks.length ? ' · 태스크 ' + tasks.length + '개' : '';
       if (withClaude && pid) {
         const model = dashDefaultModel();
-        const sd = await api('/api/ui/v6/projects/' + pid + '/sessions', { method: 'POST', body: JSON.stringify({ label: name, harness: 'claude', autoApprove: true, flags: model ? { '--model': model } : {} }) });
+        // 자동 승인은 여기(체크박스 없는 원클릭)에서 켜지 않는다 — 기본 꺼짐, 세션 폼에서 내가 마지막으로 켰을 때만 이어서 켠다(#782).
+        const sd = await api('/api/ui/v6/projects/' + pid + '/sessions', { method: 'POST', body: JSON.stringify({ label: name, harness: 'claude', autoApprove: termAutoApprovePref(), flags: model ? { '--model': model } : {} }) });
         const sid = sd && sd.session && sd.session.id;
         toast('프로젝트 생성 + Claude 세션 시작' + tnote); close(); onDone && onDone();
         if (sid) window.open('/ui/terminal.html?session=' + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
@@ -1992,7 +2001,18 @@ async function openListProjectsModal(listId, listById, onChanged) {
       row.append(
         el('label', { class: 'dash-lpm-check' }, cb),
         dashProjStatusControl(p, listById, () => { reload(); notify(); }),
-        el('a', { class: 'dash-lpm-nm' + (isDone(p) ? ' done' : ''), href: '#/projects2/p/' + p.id, title: p.name, text: p.name || '(제목 없음)', onclick: () => close() }),
+        // 이름 클릭 = 페이지 이동 대신 **프로젝트 상세 팝업**(이 리스트 팝업은 닫고 그 위에 상세를 띄운다).
+        //  href 는 유지 → ⌘/Ctrl/중클릭·새 탭은 기존대로 전체 페이지. 상세 팝업을 닫으면 notify() 로 위젯 갱신.
+        (() => {
+          const nm = el('a', { class: 'dash-lpm-nm' + (isDone(p) ? ' done' : ''), href: '#/projects2/p/' + p.id, title: p.name, text: p.name || '(제목 없음)' });
+          nm.addEventListener('click', (e: any) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            close();
+            pjvOpenProjectModal(p.id, notify);
+          });
+          return nm;
+        })(),
         (() => { const c = dashTaskChip(p); return c ? el('span', { class: 'dash-lpm-meta', title: c.title, text: '태스크 ' + c.text }) : null; })(),
         p.my_session_count ? el('span', { class: 'dash-badge', text: '세션 ' + p.my_session_count }) : null);
       list.append(row);

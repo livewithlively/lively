@@ -2174,6 +2174,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 상세 ① 공유 폴더 */
 .proj-file-search { max-width: 180px; }
 .card.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
+/* '전체 보기' 모달도 같은 드롭 대상(#781) — 카드와 동일한 점선 하이라이트. */
+.ov-box.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
 .proj-file-list { display: flex; flex-direction: column; }
 .proj-file-crumb { font-size: 12.5px; color: var(--ink-sub); padding: 4px 2px 10px; }
 .proj-crumb-link { color: var(--blue); cursor: pointer; font-weight: 600; }
@@ -3496,7 +3498,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-groupseg-btn.active { background: var(--blue); color: #fff; }
 /* 2단계(리스트›상태) — 리스트 안의 상태 하위그룹: 헤더만 살짝 들여쓰고 라벨은 작게(행 그리드는 정렬 유지) */
 .pjv-list-group .pjv-tgroup-body .pjv-tgroup > .pjv-tgroup-head { padding-left: 26px; }
-.pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+/* 상태 알약(.pjv-status-pill)은 제외 — 이 규칙이 특이도(4)로 알약의 흰 글자(color:#fff, 특이도 2)를 덮어써
+   폴더 '리스트 묶음' 뷰에서만 상태 pill 글자가 어둡게 나오던 버그(#762). 리스트 보드와 톤 일치. */
+.pjv-list-group .pjv-tgroup-body .pjv-tgroup .pjv-tgroup-label:not(.pjv-status-pill) { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 
 /* === 선행/후속 프로젝트 필드(프로퍼티) — #359. 별도 박스(projectEdgesSection) 없애고 상단 프로퍼티로 이관 === */
 /* 프로퍼티 그리드(2열) 맨 아래 한 줄을 풀폭으로 잡고, 그 안에서 다시 좌(선행)/우(후속)로 나눈다. */
@@ -6411,3 +6415,27 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
   .wk-pal-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .wk-blk, .wk-galc, .wk-pal-card, .wk-blk-cbtn { transition: none; } }
+
+/* ============================================================
+   프로젝트 상세 팝업(.pjv-pm) — 대시보드 '내 프로젝트' 행 클릭 시.
+   상세 페이지를 그대로 모달에 렌더하고 모달 안에서 스크롤. 태스크 팝업(.pjv-tm)과 동일한 셸.
+   ============================================================ */
+body.pjv-pm-open { overflow: hidden; }
+.pjv-pm-back { position: fixed; inset: 0; background: rgba(21,35,59,.5); display: flex; align-items: center; justify-content: center; padding: 4vh 20px; z-index: 210; }
+.pjv-pm { display: flex; flex-direction: column; width: min(1100px, 96vw); height: min(90vh, 940px); background: var(--bg); border: 1px solid var(--line-net); border-radius: 14px; box-shadow: 0 24px 64px rgba(20,35,59,.28); overflow: hidden; }
+.pjv-pm-head { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); }
+.pjv-pm-x { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; border-radius: 7px; padding: 0; }
+.pjv-pm-x:hover { background: var(--bg-tint-2); color: var(--ink); }
+/* 내부 스크롤 — 상세 내용이 길어도 모달 안에서만 스크롤(페이지는 고정). */
+.pjv-pm-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 6px 26px 34px; }
+/* 페이지용 '← 프로젝트' 백링크는 모달에선 불필요(✕·Esc·배경클릭으로 닫음) — 눌러서 이탈하는 사고 방지. */
+.pjv-pm .proj-detail-back { display: none; }
+.pjv-pm .page-head { margin-top: 0; }
+
+/* WIKI 사이드바 — 즐겨찾기(★)된 카테고리도 '지식 개수'를 보여준다.
+   전역 규칙(.pjv-side-navitem.is-fav .pjv-side-navcount { opacity:0 })이 별과의 겹침을 피하려고 개수를 통째로 숨기고 있었다.
+   별은 우측 절대배치(right:30px)이므로, 개수를 그만큼 왼쪽으로 물려 겹치지 않게 하고 다시 노출한다.
+   호버 시엔 기존 동작 유지(개수 감추고 ★·⋯ 노출) — 전역 :hover 규칙과 동일. */
+/* 별은 right:30px + 폭 21px → 행 우측 51px 를 차지. 개수가 그 앞에서 끝나도록 물린다(겹침 0). */
+.kn-nav-cat.is-fav .pjv-side-navcount { opacity: 1; margin-right: 46px; }
+.kn-nav-cat.is-fav:hover .pjv-side-navcount { opacity: 0; }

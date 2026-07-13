@@ -740,10 +740,12 @@ async function cronPanel(detail, data) {
     detail.replaceChildren(el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
     let jobs;
     let actions = [];
+    let tz = 'Asia/Seoul'; // tz(#778) = cron식을 해석하는 벽시계 기준(조직 시간대)
     try {
         const r = await api('/api/ui/cron');
         jobs = (r && r.jobs) || [];
         actions = (r && r.actions) || [];
+        tz = (r && r.timezone) || tz;
     }
     catch (e) {
         detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다')));
@@ -757,17 +759,18 @@ async function cronPanel(detail, data) {
         const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
         const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
         const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: j.label || j.id }), el('span', { class: 'wikicat-key mono', text: j.action + sess }), el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
-        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
+        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload, tz) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
         rows.append(el('div', { class: 'wikicat-row' }, main, acts));
     }
-    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '스케줄 잡' }), el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload) }));
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '스케줄러 (자동화)' })), el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 세션에 주입, 팀플랜 과금)·커넥터 sync 등. 주기는 “초” 또는 cron식.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '스케줄 잡' }), el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '스케줄러 (자동화)' })), el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 세션에 주입, 팀플랜 과금)·커넥터 sync 등. 주기는 “초” 또는 cron식.' }), el('p', { class: 'admin-hint', text: 'cron식의 시각은 ' + tz + ' 기준입니다(서버 머신의 OS 시간대와 무관 — [조직 · 연결] ▸ 조직 시간대에서 바꿉니다).' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
 }
 // 잡 추가/수정 폼(오버레이) — id·이름·액션·주기(초 또는 cron식)·켬 + 액션별 params(map_unmapped=세션 피커, refresh_repo=repo, connector_sync=system).
 // actions = 액션 레지스트리(cron_list 의 actions = CRON_ACTIONS). 드롭다운·파라미터 필드를 여기서 데이터로 생성(하드코딩 X).
-async function openCronForm(job, actions, reload) {
+async function openCronForm(job, actions, reload, tz) {
     const isNew = !job;
+    tz = tz || 'Asia/Seoul'; // cron식 해석 기준(조직 시간대) — 폼에서 명시해 UTC 오해를 막는다(#778).
     const jp = (job && job.params) || {};
     const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
@@ -827,7 +830,7 @@ async function openCronForm(job, actions, reload) {
     actionSel.onchange = renderParams;
     await renderParams();
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '잡 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('액션', '게이트웨이가 실행할 작업(등록된 액션 레지스트리). 액션마다 필요한 인자가 아래에 자동으로 뜹니다.', actionSel), paramsWrap, block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp), block('cron식 (선택)', '벽시계 스케줄. 예: 0 9 * * 1-5 = 평일 09:00. 비우면 주기초.', cronInp), block('한 번만 실행', '체크 시 주기·cron 무시 → 1회 실행 후 자동으로 꺼짐(반복 안 함). 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('잡 id', isNew ? '소문자 슬러그(a-z0-9_-). 잡의 고유 키.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('액션', '게이트웨이가 실행할 작업(등록된 액션 레지스트리). 액션마다 필요한 인자가 아래에 자동으로 뜹니다.', actionSel), paramsWrap, block('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp), block('cron식 (선택)', '벽시계 스케줄 — 시각은 ' + tz + ' 기준입니다. 예: 0 9 * * 1-5 = 평일 ' + tz + ' 09:00. 비우면 주기초.', cronInp), block('한 번만 실행', '체크 시 주기·cron 무시 → 1회 실행 후 자동으로 꺼짐(반복 안 함). 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))), block('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '스케줄 잡 추가' : '스케줄 잡 수정 — ' + job.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -1843,14 +1846,19 @@ function profileEditor(detail, data) {
     const p = data.profile;
     const dnIn = el('input', { type: 'text', value: p.display_name || '', placeholder: '조직 표시명' });
     const gwIn = el('input', { type: 'text', value: p.gateway_url || '', placeholder: 'http://게이트웨이:포트' });
+    // 조직 시간대(#778) — 비우면 서버가 기본값(Asia/Seoul)으로 되돌린다. 흔한 존은 datalist 로 제안하되 자유 입력 허용(IANA 검증은 서버).
+    const tzIn = el('input', { type: 'text', value: p.timezone || '', placeholder: 'Asia/Seoul (비우면 기본값)', list: 'org-tz-list' });
+    const tzList = el('datalist', { id: 'org-tz-list' }, ...['Asia/Seoul', 'UTC', 'Asia/Tokyo', 'America/Los_Angeles', 'America/New_York', 'Europe/London'].map((z) => el('option', { value: z })));
     if (!canEdit) {
         dnIn.disabled = true;
         gwIn.disabled = true;
+        tzIn.disabled = true;
     }
     const body = [
         el('h2', { text: '조직 기본 정보' }),
         fieldWithHelp('조직 표시명', dnIn, data.meaning['display_name']),
         fieldWithHelp('게이트웨이 주소', gwIn, data.meaning['gateway-url']),
+        fieldWithHelp('조직 시간대', tzIn, data.meaning['timezone']), tzList,
     ];
     if (canEdit) {
         const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
@@ -1858,8 +1866,9 @@ function profileEditor(detail, data) {
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
             try {
-                const r = await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ display_name: dnIn.value.trim(), gateway_url: gwIn.value.trim() }) });
+                const r = await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ display_name: dnIn.value.trim(), gateway_url: gwIn.value.trim(), timezone: tzIn.value.trim() }) });
                 data.profile = r.profile;
+                tzIn.value = r.profile.timezone || '';
                 toast('저장됨');
                 status.textContent = '저장됨';
             }

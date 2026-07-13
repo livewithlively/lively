@@ -14,6 +14,7 @@ import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
+import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
@@ -502,6 +503,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 한글(멀티바이트) 편집 정상화 — pane 에 UTF-8 로케일 주입(#633). 세션스코프 -e 라 전역/타세션 누수 없음.
   //  격리(box-spawn=sudo)·비격리 두 분기 공통으로 먼저 넣는다(sudo 기본 env_keep 이 LANG/LC_* 를 보존). 근거는 PANE_LOCALE 주석.
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
+  // 시간대(#778) — pane(셸·클로드코드 등)이 **조직 시간대**의 로컬 시각을 보게 한다. 박스 OS TZ 는 대개 UTC 라
+  //  안 주면 클로드코드의 크레딧 리셋 안내 등이 UTC 로 뜬다(클로드코드는 Intl.DateTimeFormat().resolvedOptions()
+  //  .timeZone = TZ env 를 읽는다 — 바이너리 실측). OS 전역 TZ(timedatectl)를 바꾸지 않고 세션스코프로만 푼다:
+  //  게이트웨이는 비-root 서비스 유저고, 박스의 OS 전역 상태는 고객 소유라 침습하지 않는다.
+  //  ⚠ 격리(sudo → box-spawn) 분기는 sudo 의 env_reset 이 env 를 털 수 있어 sudoers 가 TZ 를 명시 보존한다
+  //   (deploy/linux/sudoers-lively). 구 sudoers 면 미보존 → 시스템 TZ 폴백 = 종전 동작(무회귀).
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(#633 과 동일 — 옛 세션은 재생성 시 정상화).
+  args.push("-e", `TZ=${await orgTimezone()}`);
   // 구성원 격리(#524): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv, osUser 는 위에서 구함).
   //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
   //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).

@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import { itemsPool } from "../items/store.js";
 import { runCronById, CRON_ACTIONS, CRON_ACTION_KEYS } from "../scheduler.js";
 import { isValidCron } from "../cron-expr.js";
+import { orgTimezone } from "../org/timezone.js"; // #778 cron_expr 해석 기준 시간대(폼 힌트용)
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -19,14 +20,21 @@ function parseCronId(v: unknown): string {
 const cronList: Capability = {
   name: "cron_list",
   title: "스케줄 잡 목록",
-  description: "서버사이드 스케줄 잡(org_cron) 목록 — 액션·주기·enabled·마지막 실행 상태/요약·다음 실행. 트리거 표준화의 관리 표면.",
+  description: "서버사이드 스케줄 잡(org_cron) 목록 — 액션·주기·enabled·마지막 실행 상태/요약·다음 실행. 트리거 표준화의 관리 표면. " +
+    "timezone = cron_expr 을 해석하는 벽시계 기준(조직 시간대).",
   scope: "admin",
   input: {},
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/cron"], parse: () => ({}) }],
   },
-  handler: async () => ({ jobs: (await itemsPool.query(`SELECT * FROM org_cron ORDER BY sort, id`)).rows, actions: CRON_ACTIONS }),
+  // timezone(#778): cron_expr 이 '서버 로컬 TZ' 가 아니라 조직 시간대로 해석된다는 걸 호출자(웹 폼·MCP)가 알아야
+  //  '0 9 * * *' 를 UTC 로 오해하지 않는다. 폼이 이 값을 그대로 힌트로 띄운다.
+  handler: async () => ({
+    jobs: (await itemsPool.query(`SELECT * FROM org_cron ORDER BY sort, id`)).rows,
+    actions: CRON_ACTIONS,
+    timezone: await orgTimezone(),
+  }),
 };
 
 const cronSet: Capability = {
@@ -35,6 +43,7 @@ const cronSet: Capability = {
   description:
     "스케줄 잡을 upsert(id 기준). action 은 등록된 액션 레지스트리(CRON_ACTIONS) 중 하나(임의 셸 불가). " +
     "스케줄 2모드: cron_expr(절대 벽시계 5필드, 예 '0 9 * * 1-5')가 있으면 그게 우선, 없으면 interval_sec(상대, 최소 60s). " +
+    "⚠ cron_expr 은 **조직 시간대**(org_profile.timezone, 기본 Asia/Seoul — cron_list 의 timezone)의 벽시계로 해석된다(UTC·서버 로컬 아님). " +
     "cron_expr=\"\"(빈문자열)로 보내면 interval 모드로 되돌림. params=액션 인자(예: refresh_repo→{repo}, connector_sync→{system}). 커스텀 잡은 이걸로 추가.",
   scope: "admin",
   input: {

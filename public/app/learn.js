@@ -1,7 +1,7 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, pageHead, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
-import { isGuideTourDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
+import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
 //  V4: 종류(kind)·주제(area=space+domain)·출처(provenance)는 별개 축 — 종류는 본질, 주제는 도메인, 출처는 채널 사실.
@@ -16,6 +16,7 @@ import { isGuideTourDone, startGuideTour } from './guide-tour.js'; // Lively 둘
 //  'Lively 둘러보기'(#761) = 실제 화면 위에서 버튼을 직접 눌러 보는 크로스탭 스포트라이트 투어(guide-tour.ts).
 const LEARN_SUBS = [
     { key: 'guide', label: '사용 가이드', href: '#/learn' },
+    { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' }, // #780 — 가이드 본문에 있던 메뉴 설명을 독립 서브탭으로
     { key: 'install', label: '시작하기', href: '#/learn/install' },
     { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
 ];
@@ -30,9 +31,8 @@ function learnSubBar(active) {
 }
 async function renderLearn(view) {
     const head = el('div', { class: 'page-head' }, el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })));
+    // '메뉴 한눈에 보기'는 서브탭(#/learn/menu)으로 분리, '처음이라면 이 순서로' 카드는 폐기(#780).
     view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' }, heroCard(), // ① 서비스를 관통하는 설명 + 작동 3단계
-    tabsGuideCard(), // ② 각 메뉴(탭)가 무슨 일을 하나
-    quickStartCard(), // 처음이라면 이 순서로
     kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란?
     projectKnowledgeCard()));
     document.getElementById('view').focus?.();
@@ -96,7 +96,7 @@ const GUIDE_CHAPTERS = [
                 href: '#/system', link: '관리 열기' },
             { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
                 summary: '이 도구 전체를 설명하는 안내서',
-                desc: '지금 보고 있는 이 페이지예요. 서비스가 무엇인지, 각 메뉴가 무슨 일을 하는지 한곳에 모아 설명합니다. 위쪽 ‘시작하기’ 탭에는 설치 안내가, ‘Lively 둘러보기’ 탭에는 화면을 직접 눌러 보며 배우는 투어가 있어요. 길을 잃으면 언제든 다시 오세요.',
+                desc: '지금 보고 있는 안내서예요. 위쪽 서브탭으로 나뉘어 있어요 — ‘사용 가이드’는 이 서비스가 무엇인지, ‘메뉴 한눈에 보기’(지금 이 화면)는 각 메뉴가 무슨 일을 하는지, ‘시작하기’는 내 컴퓨터 설치 안내, ‘Lively 둘러보기’는 화면을 직접 눌러 보며 배우는 투어예요.',
                 current: true },
         ] },
 ];
@@ -107,7 +107,8 @@ function tabsGuideCard() {
             grid.append(tabCard(t));
         return el('div', { class: 'tabchapter' }, el('div', { class: 'tabchapter-head' }, el('span', { class: 'tabchapter-num', 'aria-hidden': 'true', text: c.num }), el('div', { class: 'tabchapter-headtext' }, el('div', { class: 'tabchapter-title', text: c.title }), el('div', { class: 'tabchapter-sub', text: c.sub }))), grid);
     });
-    return el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '메뉴 한눈에 보기' })), el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }), ...chapters);
+    // 제목은 페이지 h1('메뉴 한눈에 보기')이 이미 말하므로 카드 머리는 두지 않는다(#780 — 서브탭 분리).
+    return el('div', { class: 'card' }, el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }), ...chapters);
 }
 // 탭 한 칸 — 현재 페이지는 클릭 불가 카드(점선), 나머지는 클릭하면 해당 탭으로 이동하는 링크 카드.
 function tabCard(t) {
@@ -119,12 +120,12 @@ function tabCard(t) {
     }
     return el('a', { class: 'tabguide-card', href: t.href }, top, summary, desc, el('span', { class: 'tabguide-go' }, t.link, el('span', { class: 'tabguide-go-arrow', 'aria-hidden': 'true', text: '→' })));
 }
-// ── 처음이라면 — 바로 따라 할 수 있는 순서(버튼으로 이동) ──
-function quickStartCard() {
-    return el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '처음이라면, 이 순서로 해보세요' })), el('p', { class: 'admin-hint', text: '3분이면 충분해요. 아래 버튼을 누르면 해당 화면으로 바로 이동합니다.' }), el('div', { class: 'guide-path' }, pathStep('1', '말 걸어보기', '터미널에서 AI를 띄우고, 까만 창에 하고 싶은 말을 그냥 입력해 보세요. 설치가 필요 없어 가장 쉬운 시작이에요.', '#/terminal', '터미널 열기', true), pathStep('2', '둘러보기', '메뉴가 낯설면 Lively 둘러보기로 — 프로젝트·도메인 맵·WIKI를 실제 화면에서 직접 눌러 보며 익혀요.', '#/learn/tour', 'Lively 둘러보기', false), pathStep('3', '내 컴퓨터에 연결(선택)', '내 노트북에서 직접 AI를 쓰고 싶다면 시작하기에서 한 번 설치하세요. 약 5분이면 끝나요.', '#/learn/install', '시작하기 열기', false)));
-}
-function pathStep(num, title, desc, href, link, primary) {
-    return el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title', text: title }), el('p', { class: 'guide-path-desc', text: desc }), el('a', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost') + ' guide-path-btn', href }, link)));
+// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 가이드 본문에 묻혀 있던 메뉴 설명을 독립 서브탭으로. ──
+//  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
+async function renderLearnMenu(view) {
+    const head = el('div', { class: 'page-head' }, el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
+    view.replaceChildren(head, learnSubBar('menu'), el('div', { class: 'guide-cards' }, tabsGuideCard()));
+    document.getElementById('view').focus?.();
 }
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
 //  옛 R·K·H·W '종류'는 폐기. WIKI 탭과 동일 용어·칩(kn-chip)으로 맞춘다: 주입=항상 주입/검색, 출처=저작/외부 미러.
@@ -178,10 +179,11 @@ function tabIcon(name) {
 //  §0.5 채색 예산: 채운 파란 버튼은 [▶ 둘러보기 시작] 1개뿐 — 코스별 버튼은 ghost.
 async function renderLearnTour(view) {
     const head = el('div', { class: 'page-head' }, el('h1', {}, 'Lively ', el('span', { class: 'accent', text: '둘러보기' })));
-    const intro = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '눌러보며 익혀요' })), el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 스포트라이트된 버튼을 직접 누르면서 프로젝트 → 도메인 맵 → WIKI를 한 바퀴 돕니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }), isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 전에 한 번 완주했어요 — 언제든 다시 돌아도 좋아요.' }) : null, el('div', { class: 'step-cta' }, el('button', { class: 'btn btn-primary', text: '▶ 둘러보기 시작 (약 3분)', onclick: () => startGuideTour() })));
-    // 코스 한 줄 — pathStep 과 같은 시각 언어(번호·제목·설명), 이동 대신 코스 시작 버튼.
-    const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title', text: title }), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '이 코스만 보기', onclick: () => startGuideTour([key]) })));
-    const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '무엇을 보게 되나요' })), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 지도', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
+    const intro = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '눌러보며 익혀요' })), el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 처음부터 쭉 볼 수도 있고, 아래에서 원하는 섹션만 골라 볼 수도 있어요. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }), isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 세 섹션을 모두 봤어요 — 언제든 다시 돌아도 좋아요.' }) : null, el('div', { class: 'step-cta' }, el('button', { class: 'btn btn-primary', text: '▶ 처음부터 쭉 보기 (프로젝트 → 도메인 맵 → WIKI, 약 3분)', onclick: () => startGuideTour() })));
+    // 섹션 한 줄(#780) — 골라 들어가는 게 주 동선이라 진입 버튼을 각 줄에 두고, 본 섹션은 ✓ 로 표시한다.
+    //  pathStep 과 같은 시각 언어(번호·제목·설명). §0.5 채색 예산: 채운 파란 버튼은 위 '처음부터 쭉 보기' 하나뿐.
+    const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title' }, el('span', { text: title }), isSectionDone(key) ? el('span', { class: 'admin-hint', style: 'margin-left:8px;font-weight:400', text: '✓ 봤어요' }) : null), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '▶ ' + title.split(' — ')[0] + '만 보기', onclick: () => startGuideTour([key]) })));
+    const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
     const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ', el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
     view.replaceChildren(head, learnSubBar('tour'), el('div', { class: 'guide-cards' }, intro, courses, extra));
     document.getElementById('view').focus?.();
@@ -191,7 +193,8 @@ async function renderLearnTour(view) {
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-    const head = pageHead('시작하기', '라이블리에서 AI(Claude Code·Codex)로 일하는 방법은 두 가지입니다. 아래에서 지금 상황을 고르면 그에 맞춰 안내합니다.', [], '하기');
+    // 부제 없음(#780) — 다른 사용 가이드 서브탭은 제목 한 줄뿐이라, 여기만 부제가 붙으면 제목·서브탭 줄이 세로로 어긋난다.
+    const head = pageHead('시작하기', null, [], '하기');
     const slot = el('div', { class: 'install-guide' });
     slot.append(skeleton('설치 안내를 준비하는 중'));
     view.replaceChildren(head, learnSubBar('install'), slot); // 사용 가이드 서브탭 바(#617) — 머리 아래, 본문 위
@@ -440,4 +443,4 @@ async function renderOnboarding(view) {
         slot.replaceChildren(errorNote(e, '온보딩 진행상황을 불러오지 못했습니다'));
     }
 }
-export { checklist, overlayBox, renderInstall, renderLearn, renderLearnTour, renderOnboarding, skeleton, skeletonRows, };
+export { checklist, overlayBox, renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding, skeleton, skeletonRows, };

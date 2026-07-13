@@ -8,8 +8,11 @@
 import { el, reducedMotion } from './core.js';
 
 // 한 단계: 무엇을 강조하고(target) 어떻게 안내하는지. target 은 셀렉터 또는 요소 반환 함수(매 프레임 재해석).
+//  요소를 '배열'로 돌려주면 그 요소들을 합친 사각형 하나만 뚫는다 — 떨어져 있지 않고 나란한 몇 칸이 한 덩어리일 때
+//  (예: 속성판 2열 그리드의 첫 줄 = 선행·후속) 부모 전체를 뚫어 무관한 속성까지 밝히지 않기 위함(#780).
+//  스크롤·클릭 기준은 배열의 첫 요소.
 interface TourStep {
-  target: string | (() => Element | null);
+  target: string | (() => Element | Element[] | null);
   title: string;
   body?: any;                                 // 문자열 또는 노드(들) — 코치마크 본문
   placement?: 'top' | 'bottom' | 'left' | 'right' | 'center' | 'auto';
@@ -61,9 +64,24 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
 
   go(0);
 
-  function resolve(step: TourStep): Element | null {
-    try { return typeof step.target === 'function' ? step.target() : document.querySelector(step.target); }
-    catch (_) { return null; }
+  // 타깃 해석 — 배열이면 그대로(합집합 강조용), 단일이면 1개짜리 목록. 스크롤·클릭 바인딩은 항상 첫 요소 기준.
+  function resolveAll(step: TourStep): Element[] {
+    let v: any;
+    try { v = typeof step.target === 'function' ? step.target() : document.querySelector(step.target); }
+    catch (_) { return []; }
+    return (Array.isArray(v) ? v : [v]).filter(Boolean) as Element[];
+  }
+  function resolve(step: TourStep): Element | null { return resolveAll(step)[0] || null; }
+
+  // 뚫을 사각형 — 요소가 여럿이면 합집합. 아직 안 뜬(넓이 0) 요소는 뺀다.
+  function holeRect(step: TourStep): any {
+    let l = Infinity, t0 = Infinity, r0 = -Infinity, b0 = -Infinity;
+    for (const n of resolveAll(step)) {
+      const q = n.getBoundingClientRect();
+      if (!q.width && !q.height) continue;
+      l = Math.min(l, q.left); t0 = Math.min(t0, q.top); r0 = Math.max(r0, q.right); b0 = Math.max(b0, q.bottom);
+    }
+    return l === Infinity ? null : { left: l, top: t0, width: r0 - l, height: b0 - t0 };
   }
 
   // 단계 이동 — 코치마크를 다시 그리고, 필요 시 타깃을 스크롤로 보이게 한 뒤 rAF 추적을 (없으면) 켠다.
@@ -124,7 +142,7 @@ function startTour(steps: TourStep[], opts?: TourOpts) {
     }
     const target = resolve(step);
     const pad = step.padding == null ? 8 : step.padding;
-    const r = target ? target.getBoundingClientRect() : null;
+    const r = holeRect(step);
     if (target && r && (r.width > 0 || r.height > 0)) {
       layout(r, pad);
       ring.style.display = '';
