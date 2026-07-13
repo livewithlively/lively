@@ -62,6 +62,112 @@ function docsEyebrow(key) {
             return el('div', { class: 'docs-eyebrow', text: g.group });
     return null;
 }
+// ── 원고(md) → 가이드 카드의 연속(#780 디자인 통일). ────────────────────────────────────────
+//  문서가 히어로·WIKI 설명 카드와 '같이 만든 물건'으로 보이려면, 흘러가는 마크다운이 아니라 제품의 카드 문법이어야 한다:
+//  ## 섹션 하나 = .card 하나(card-head h2 + guide-lead + 구조화된 본문). 첫 H2 앞 도입부는 카드 밖 리드(히어로 리드).
+//  카피는 손대지 않는다 — 같은 문장을 제품의 시각 언어(피처 카드·번호 단계·이동 카드)로 다시 조판할 뿐이다.
+function docsBody(md) {
+    const secs = [{ title: null, lines: [] }];
+    let fence = false, depth = 0;
+    for (const line of String(md || '').split('\n')) {
+        if (/^(```|~~~)/.test(line))
+            fence = !fence;
+        else if (!fence && /^:::\s*[a-zA-Z_-]/.test(line))
+            depth++;
+        else if (!fence && line.trim() === ':::')
+            depth = Math.max(0, depth - 1);
+        const h2 = !fence && !depth && /^##\s+(.+)$/.exec(line);
+        if (h2) {
+            secs.push({ title: h2[1].trim(), lines: [] });
+            continue;
+        }
+        secs[secs.length - 1].lines.push(line);
+    }
+    const cards = el('div', { class: 'guide-cards' });
+    for (const s of secs) {
+        const body = s.lines.join('\n').trim();
+        if (!body)
+            continue;
+        if (!s.title) {
+            // 도입부 — 문단·인용까지만 카드 밖 리드. 표·목록·코드 같은 '내용'이 시작되면 그 아래는 제목 없는 카드로
+            //  감싼다(용어집처럼 본문이 통째로 표인 문서가 카드 밖으로 새는 것 방지).
+            const at = s.lines.findIndex((l) => /^\s*(\||[-*+]\s|\d+\.\s|```|~~~|:::)/.test(l));
+            const lead = (at < 0 ? s.lines : s.lines.slice(0, at)).join('\n').trim();
+            const rest = at < 0 ? '' : s.lines.slice(at).join('\n').trim();
+            if (lead)
+                cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead)));
+            if (rest)
+                cards.append(el('div', { class: 'card docs-card' }, el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest)))));
+            continue;
+        }
+        cards.append(el('div', { class: 'card docs-card' }, el('div', { class: 'card-head' }, el('h2', { text: s.title })), el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body)))));
+    }
+    return cards;
+}
+// 렌더된 마크다운을 제품 시각 언어로 승격 — 문장은 그대로, 조판만 바꾼다.
+//  ① 첫 문단 = 리드(guide-lead) ② '**굵은 제목** — 설명' 목록 = 피처 카드 그리드(kn-axis-opt 문법)
+//  ③ 링크로 시작하는 목록('다음 단계') = 이동 카드 그리드(tabguide-card 문법) ④ 번호 목록 = 번호 단계(guide-path 문법)
+function docsDecorate(root) {
+    const lead = root.querySelector(':scope > .md-p');
+    if (lead)
+        lead.classList.add('guide-lead');
+    for (const ul of Array.from(root.querySelectorAll('ul.md-list'))) {
+        const lis = Array.from(ul.children);
+        if (!lis.length)
+            continue;
+        const first = (li) => li.firstElementChild && li.firstElementChild === li.firstChild ? li.firstElementChild.tagName : '';
+        const strip = (box) => {
+            const n = box.firstChild;
+            if (n && n.nodeType === 3)
+                n.textContent = String(n.textContent).replace(/^\s*[—–-]\s*/, '');
+        };
+        // ② 피처 카드 — 모든 항목이 굵은 제목으로 시작할 때
+        if (lis.every((li) => first(li) === 'STRONG')) {
+            const grid = el('div', { class: 'docs-featgrid' });
+            for (const li of lis) {
+                const t = el('div', { class: 'docs-feat-t', text: li.firstElementChild.textContent });
+                li.firstElementChild.remove();
+                const d = el('div', { class: 'docs-feat-d' });
+                while (li.firstChild)
+                    d.append(li.firstChild);
+                strip(d);
+                grid.append(el('div', { class: 'docs-feat' }, t, d));
+            }
+            ul.replaceWith(grid);
+            continue;
+        }
+        // ③ 이동 카드 — 모든 항목이 링크로 시작할 때(문서 끝 '다음 단계')
+        if (lis.every((li) => first(li) === 'A')) {
+            const grid = el('div', { class: 'docs-linkgrid' });
+            for (const li of lis) {
+                const a = li.firstElementChild;
+                const card = el('a', { class: 'docs-linkcard', href: a.getAttribute('href') || '#' });
+                card.append(el('span', { class: 'docs-linkcard-t' }, el('span', { text: a.textContent }), el('span', { class: 'docs-linkcard-arrow', 'aria-hidden': 'true', text: '→' })));
+                a.remove();
+                const d = el('span', { class: 'docs-linkcard-d' });
+                while (li.firstChild)
+                    d.append(li.firstChild);
+                strip(d);
+                if (d.textContent.trim())
+                    card.append(d);
+                grid.append(card);
+            }
+            ul.replaceWith(grid);
+        }
+    }
+    // ④ 번호 단계 — 순서 목록을 제품의 번호 뱃지 줄(guide-path)로
+    for (const ol of Array.from(root.querySelectorAll('ol.md-list'))) {
+        const steps = el('div', { class: 'docs-steps' });
+        Array.from(ol.children).forEach((li, i) => {
+            const body = el('div', { class: 'docs-step-body' });
+            while (li.firstChild)
+                body.append(li.firstChild);
+            steps.append(el('div', { class: 'docs-step' }, el('span', { class: 'docs-step-num', 'aria-hidden': 'true', text: String(i + 1) }), body));
+        });
+        ol.replaceWith(steps);
+    }
+    return root;
+}
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
 //  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
@@ -75,10 +181,10 @@ async function renderLearnDocs(view, slug) {
     const body = [
         docsEyebrow(slug),
         el('h1', { class: 'docs-title', text: (h1 ? h1[1] : page.title).trim() }),
-        el('div', { class: 'md-rendered docs-md' }, renderMarkdown(md)),
+        docsBody(md),
     ];
     if (slug === 'wiki') {
-        body.push(el('div', { class: 'guide-cards', style: 'margin-top:26px' }, kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
+        body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' }, kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
         projectKnowledgeCard() // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
         ));
     }
@@ -104,7 +210,8 @@ async function renderLearn(view) {
         return;
     }
     const page = DOC_PAGES.find((p) => p.slug === 'overview');
-    docsShell(view, 'overview', heroCard(), el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(page ? page.md : '')));
+    docsShell(view, 'overview', el('div', { class: 'guide-cards' }, heroCard()), // 히어로도 같은 카드 흐름 안에 — 아래 섹션 카드들과 같은 간격
+    docsBody(page ? page.md : ''));
 }
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
 function heroCard() {
@@ -252,8 +359,8 @@ async function renderInstall(view) {
     const head = pageHead('시작하기', null, [], '하기');
     const slot = el('div', { class: 'install-guide' });
     slot.append(skeleton('설치 안내를 준비하는 중'));
-    // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드 아래 정적 문서로.
-    const extra = el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(INSTALL_EXTRA_MD));
+    // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드와 같은 카드 문법으로 이어 붙인다.
+    const extra = el('div', { style: 'margin-top:18px' }, docsBody(INSTALL_EXTRA_MD));
     docsShell(view, 'install', docsEyebrow('install'), head, slot, extra);
     onboardingBanner().then((b) => { if (b)
         head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
