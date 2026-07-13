@@ -4015,6 +4015,8 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .pjv-kb-col.drop-over { border-color: var(--blue); background: var(--bg-tint-2); }
 .pjv-kb-head { display: flex; align-items: center; gap: 7px; padding: 4px 6px 8px; font-weight: 700; font-size: 13px; }
 .pjv-kb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* #762 후속 — 칸반 헤더 라벨을 상태 알약(흰 글자+상태색 배경)으로: 리스트 상태보드 pill·개요 칩과 톤 통일(기존 검은 라벨 해소). flex:1 대신 내용폭. */
+.pjv-kb-label.pjv-status-pill { flex: 0 1 auto; color: #fff; background: var(--sc, var(--muted-2)); font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; letter-spacing: -.1px; min-width: 0; }
 .pjv-kb-count { font-size: 11.5px; color: var(--muted-2); font-weight: 600; }
 .pjv-kb-body { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
 .pjv-kb-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; cursor: pointer; }
