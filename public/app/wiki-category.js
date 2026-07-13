@@ -442,7 +442,7 @@ async function renderCategorySurface(box, cat, ctx) {
         bigTypes.forEach(([t]) => L.push(normBlock({ type: 'list', w: bigTypes.length > 1 ? 'half' : 'full', cfg: { src: t, limit: 5 } })));
         if (allDocs.length)
             L.push(normBlock({ type: 'gallery', cfg: { src: 'recent', limit: 6 } }));
-        return L.length ? L : [normBlock({ type: 'intro', text: '' })];
+        return L; // 비면 [] — 캔버스가 '첫 페이지' 초대를 띄운다(빈 소개 블록 방지)
     }
     let blocks = loadLayout();
     // 저장 — body_md 에 블록 JSON. 디바운스.
@@ -566,7 +566,10 @@ async function renderCategorySurface(box, cat, ctx) {
     function renderCanvas() {
         canvas.replaceChildren();
         if (!blocks.length && !(editing && canDoc)) {
-            canvas.append(wkEmpty('아직 대문이 비어 있어요.', canDoc ? addBtnEl('＋ 첫 블록 추가') : null));
+            if (!allDocs.length)
+                canvas.append(wkEmpty('이 카테고리엔 아직 문서가 없어요. 첫 페이지로 시작해 보세요.', canDoc ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new?category=' + encodeURIComponent(cat.key), text: '＋ 첫 페이지' }) : null));
+            else
+                canvas.append(wkEmpty('대문이 비어 있어요.', canDoc ? addBtnEl('＋ 블록 추가') : null));
             return;
         }
         blocks.forEach((b, i) => canvas.append(blockEl(b, i)));

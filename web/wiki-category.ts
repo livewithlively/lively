@@ -400,7 +400,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     const bigTypes = Array.from(counts.entries()).filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 2);
     bigTypes.forEach(([t]) => L.push(normBlock({ type: 'list', w: bigTypes.length > 1 ? 'half' : 'full', cfg: { src: t, limit: 5 } })));
     if (allDocs.length) L.push(normBlock({ type: 'gallery', cfg: { src: 'recent', limit: 6 } }));
-    return L.length ? L : [normBlock({ type: 'intro', text: '' })];
+    return L;   // 비면 [] — 캔버스가 '첫 페이지' 초대를 띄운다(빈 소개 블록 방지)
   }
   let blocks: any[] = loadLayout();
 
@@ -512,7 +512,12 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   }
   function renderCanvas() {
     canvas.replaceChildren();
-    if (!blocks.length && !(editing && canDoc)) { canvas.append(wkEmpty('아직 대문이 비어 있어요.', canDoc ? addBtnEl('＋ 첫 블록 추가') : null)); return; }
+    if (!blocks.length && !(editing && canDoc)) {
+      if (!allDocs.length) canvas.append(wkEmpty('이 카테고리엔 아직 문서가 없어요. 첫 페이지로 시작해 보세요.',
+        canDoc ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/new?category=' + encodeURIComponent(cat.key), text: '＋ 첫 페이지' }) : null));
+      else canvas.append(wkEmpty('대문이 비어 있어요.', canDoc ? addBtnEl('＋ 블록 추가') : null));
+      return;
+    }
     blocks.forEach((b, i) => canvas.append(blockEl(b, i)));
     if (editing && canDoc) canvas.append(el('div', { class: 'wk-blk-add-slot' }, addBtnEl('＋ 블록 추가')));
     const shown: string[] = [];
