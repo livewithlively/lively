@@ -4570,9 +4570,19 @@ function pjvProjEdgesField(p, reload, dir) {
   const list = (dir === 'out' ? edges.outgoing : edges.incoming) || [];
   const wrap = el('div', { class: 'pjv-proj-edges' });
   for (const e of list) {
-    const chip = el('span', { class: 'pjv-edge-chip' },
-      el('a', { class: 'pjv-edge-chip-link', href: '#/projects2/p/' + e.project_id,
-        title: '#' + e.project_id + ' ' + (e.project_name || ''), text: e.project_name || ('#' + e.project_id) }));
+    const link = el('a', { class: 'pjv-edge-chip-link', href: '#/projects2/p/' + e.project_id,
+      title: '#' + e.project_id + ' ' + (e.project_name || ''), text: e.project_name || ('#' + e.project_id) });
+    // 모달 안에서 누르면 그 프로젝트 모달로 '교체'(드릴인) — 같은 탭 해시 이동은 모달 뒤에서 라우트만 바꿔
+    //  '클릭해도 아무 일 없는' 죽은 클릭이 된다(#804). 태스크 모달의 하위 태스크 드릴인과 동일 결.
+    //  전체 페이지에선 기본 동작(같은 탭 이동) 유지 — 거기선 모달이 없어 정상 작동한다.
+    link.onclick = (ev) => {
+      const pm = _pjvPmOpen;
+      if (!pm || !link.closest('.pjv-pm')) return;
+      ev.preventDefault();
+      pm.close();
+      pjvOpenProjectModal(e.project_id, pm.pageReload);
+    };
+    const chip = el('span', { class: 'pjv-edge-chip' }, link);
     const x = el('button', { class: 'pjv-edge-chip-x', type: 'button', title: '관계 해제', text: '✕' });
     x.onclick = async (ev) => {
       ev.preventDefault(); ev.stopPropagation();
@@ -4743,6 +4753,9 @@ function demoTerminalCard(members, meId) {
 //  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
 //  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
 //  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
+// 지금 열린 프로젝트 모달(항상 최대 1개) — 모달 안에서 다른 프로젝트로 갈 때 '모달 교체'(드릴인)에 쓴다(#804 — pjvProjEdgesField).
+let _pjvPmOpen: { close: () => void; pageReload?: any } | null = null;
+
 function pjvOpenProjectModal(projectId, pageReload?) {
   const back = el('div', { class: 'pjv-pm-back' });
   const box = el('div', { class: 'pjv-pm' });
@@ -4757,6 +4770,7 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   function closeModal() {
     if (closed) return;
     closed = true;
+    if (_pjvPmOpen && _pjvPmOpen.close === closeModal) _pjvPmOpen = null;
     document.removeEventListener('keydown', onKey, true);
     document.body.classList.remove('pjv-pm-open');
     back.remove();
@@ -4774,6 +4788,7 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   document.addEventListener('keydown', onKey, true);
   document.body.append(back);
   document.body.classList.add('pjv-pm-open');
+  _pjvPmOpen = { close: closeModal, pageReload };  // 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 교체할 수 있게(#804)
 
   renderProjectV2Detail(bodyEl, String(projectId)); // 페이지와 동일한 렌더러 → 내용 축약 없음
   return closeModal;
@@ -4986,6 +5001,16 @@ function mountBodyEditor(config: { initial?: string; placeholder?: string; save:
     uploadFile: config.uploadFile,
   });
   const box = el('div', { class: 'pjv-bodyed' }, editor.el, el('div', { class: 'pjv-bodyed-bar' }, chip));
+  // 본문 속 지식 링크(#/k/…)는 새 탭(#804). 프로젝트·태스크 본문은 모달로도 뜨는데(pjvOpenProjectModal·pjvOpenTaskModal),
+  //  모달은 body 에 얹히고 라우터엔 모달 정리가 없어 같은 탭 이동은 모달 뒤에서 라우트만 바꾼다 → 죽은 클릭.
+  //  편집 중인 본문(항시 편집·자동저장)을 두고 페이지가 떠나지도 않는다. 링크는 매 재렌더마다 새로 생기므로 위임(capture)으로 잡는다.
+  //  ⚠ WIKI 문서 에디터는 createBlockEditor 를 직접 쓰므로 여기 안 걸린다 — 위키 내부 문서 이동은 같은 탭 유지.
+  box.addEventListener('click', (e: any) => {
+    const a = e.target && e.target.closest && e.target.closest('a.md-link[href^="#/k/"]');
+    if (!a || !box.contains(a)) return;
+    e.preventDefault(); e.stopPropagation();
+    window.open(a.getAttribute('href'), '_blank', 'noopener');
+  }, true);
   // 에디터 밖으로 포커스가 완전히 나가면 자동저장 flush(슬래시/툴바 팝업 클릭은 box 밖이지만 저장은 멱등이라 무해).
   box.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement)) flush(); }, 200));
   return { el: box, flush, isDirty: () => editor.isDirty(), destroy: () => editor.destroy() };
@@ -5061,7 +5086,9 @@ function projectKnowledgeSection(id, p, reload) {
       el('h3', { text: '연결된 지식' }),
       el('span', { class: 'pjk-head-hint' },
         '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ',
-        el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
+        // 가이드도 새 탭(#804) — 지식 링크와 같은 이유(모달 뒤 라우트 변경 = 죽은 클릭) + 읽던 프로젝트를 잃지 않는다.
+        el('a', { href: '#/learn?focus=required', target: '_blank', rel: 'noopener', title: '새 탭에서 사용 가이드 열기',
+          style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))),
     knAddBtn));
 
   const reqList = el('div', { class: 'pjk-list' });
