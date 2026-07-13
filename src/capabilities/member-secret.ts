@@ -121,14 +121,15 @@ const orgCredentialSet: Capability = {
   },
 };
 const orgCredentialDelete: Capability = {
-  name: "org_credential_delete", title: "게이트웨이 통합 자격 삭제",
-  description: "게이트웨이 통합 자격을 삭제한다(admin).",
-  scope: "admin", input: DEL_INPUT,
+  name: "org_credential_delete", title: "게이트웨이 통합/구성원 자격 삭제",
+  description: "자격을 삭제한다(admin). member 지정 시 그 구성원 오버라이드 삭제(owner=member), 생략 시 조직 통합.",
+  scope: "admin", input: { ...DEL_INPUT, member: z.string().optional().describe("지정 시 그 구성원 오버라이드 삭제") },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/credential/delete"], parse: (req) => req.body ?? {} }] },
   handler: async (input) => {
     const i = (input ?? {}) as Record<string, unknown>;
     if (!s(i.kind)) throw new HttpError(400, "kind 는 필수입니다");
-    return { deleted: await deleteMemberSecret(GATEWAY_OWNER, i.kind, i.scope_key) };
+    const target = s(i.member);
+    return { deleted: await deleteMemberSecret(target ? memberOwner(target) : GATEWAY_OWNER, i.kind, i.scope_key) };
   },
 };
 
