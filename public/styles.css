@@ -6619,3 +6619,18 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
+
+/* ============================================================
+   사이드바 스크롤바 — 평소엔 숨기고, 그 영역에 호버(=스크롤할 때)만 얇게 노출.
+   WIKI(.kn-side)와 프로젝트 탭(.pjv-side-nav-inner)에 동일 적용 → 두 탭 디자인 통일.
+   기존 .dash-fold-grid 의 호버-노출 스크롤바 패턴과 같은 결(8px 트랙 · 투명 썸 · 호버 시 muted).
+   ============================================================ */
+/* 자리(thin 게터)는 항상 확보하고 '색'만 투명 → 호버 시 색이 들어오므로 내용이 밀리는 레이아웃 점프가 없다.
+   (scrollbar-width:none ↔ thin 으로 토글하면 호버마다 8px 씩 밀림) */
+.kn-side, .pjv-side-nav-inner { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.kn-side:hover, .pjv-side-nav-inner:hover { scrollbar-color: var(--muted-3) transparent; }
+.kn-side::-webkit-scrollbar, .pjv-side-nav-inner::-webkit-scrollbar { width: 8px; }
+.kn-side::-webkit-scrollbar-track, .pjv-side-nav-inner::-webkit-scrollbar-track { background: transparent; }
+.kn-side::-webkit-scrollbar-thumb, .pjv-side-nav-inner::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+.kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
+.kn-side:hover::-webkit-scrollbar-thumb:hover, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
