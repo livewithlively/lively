@@ -922,6 +922,21 @@ export const deliveryCapabilities: Capability[] = [
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authEnv)) throw new HttpError(400, "auth_env 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
         }
       }
+      // A-어댑터(#746 T1) proxy 필드 — mode=proxy 면 게이트웨이가 상류 MCP 를 프록시(통제·재노출). auth_kind=per-member vault 인증.
+      let level: "L0" | "L1" | "L2" | null | undefined;
+      if (input.level !== undefined) {
+        const lv = input.level === null ? null : str(input.level, "level", 2).toUpperCase();
+        if (lv !== null && lv !== "L0" && lv !== "L1" && lv !== "L2") throw new HttpError(400, "level 은 L0|L1|L2");
+        level = lv as "L0" | "L1" | "L2" | null;
+      }
+      let authKind: string | null | undefined;
+      if (input.auth_kind !== undefined) {
+        if (input.auth_kind === null || input.auth_kind === "") authKind = null;
+        else {
+          authKind = str(input.auth_kind, "auth_kind", 40).trim().toLowerCase();
+          if (!/^[a-z0-9_]{1,40}$/.test(authKind)) throw new HttpError(400, "auth_kind 는 소문자·숫자·_ 1~40자");
+        }
+      }
       const server = await upsertMcpServer({
         name, transport,
         url: input.url === undefined ? undefined : (input.url === null || input.url === "" ? null : str(input.url, "url", 1000).trim()),
@@ -930,6 +945,12 @@ export const deliveryCapabilities: Capability[] = [
         note: input.note === undefined ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+        mode: input.mode === undefined ? undefined : (str(input.mode, "mode", 10) === "proxy" ? "proxy" : "client"),
+        scope: input.scope === undefined ? undefined : (input.scope === null || input.scope === "" ? null : str(input.scope, "scope", 20)),
+        level,
+        pii_scrub: input.pii_scrub === undefined ? undefined : Boolean(input.pii_scrub),
+        auth_kind: authKind,
+        auth_scope_key: input.auth_scope_key === undefined ? undefined : (input.auth_scope_key === null || input.auth_scope_key === "" ? null : str(input.auth_scope_key, "auth_scope_key", 120).trim()),
       }, actorOf(user), "web");
       return { server };
     }, {
@@ -941,6 +962,20 @@ export const deliveryCapabilities: Capability[] = [
       note: z.string().optional(),
       enabled: z.boolean().optional(),
       sort: z.number().optional(),
+      mode: z.enum(["client", "proxy"]).optional().describe("client=멤버 클라 직접등록(기존) / proxy=게이트웨이 프록시(통제·재노출, #746)"),
+      scope: z.string().nullable().optional().describe("proxy 툴 접근 scope(items|context|db|memory|code)"),
+      level: z.enum(["L0", "L1", "L2"]).nullable().optional(),
+      pii_scrub: z.boolean().optional(),
+      auth_kind: z.string().nullable().optional().describe("proxy per-member vault 인증 kind"),
+      auth_scope_key: z.string().nullable().optional(),
+    }),
+  restOnly("org_mcp_refresh", "MCP 프록시 스냅샷 새로고침(발행)",
+    "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
+    [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const { refreshProxySnapshot } = await import("./mcp-proxy.js");
+      const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      return { ok: true, tool_count: r.count };
     }),
   restOnly("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",

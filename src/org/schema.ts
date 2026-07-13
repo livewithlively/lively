@@ -169,6 +169,27 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_transport_chk CHECK (transport IN ('http','stdio'));
       END IF;
     END $$;
+    -- A-어댑터: 게이트웨이 MCP 프록시(#746 T1). mode='client'(기존 ③ — register-clients 가 멤버 클라에 직접 등록) |
+    --  'proxy'(게이트웨이가 상류 MCP 클라이언트가 되어 tools 를 자기 /mcp 에 재노출·통제·포워딩). 기존 행은 client 유지(무회귀).
+    --  tools_snapshot = 발행 시 캡처한 상류 tools/list(핀). scope/level/pii_scrub = 프록시 툴 통제. auth_kind/scope_key = per-member vault 인증(T2 OAuth 확장 전엔 정적토큰).
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'client';
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS tools_snapshot JSONB;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS scope TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS level TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_kind TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_mode_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_mode_chk CHECK (mode IN ('client','proxy'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_level_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_level_chk CHECK (level IS NULL OR level IN ('L0','L1','L2'));
+      END IF;
+    END $$;
   `);
 
   // ── org_connector — 커넥터별 설정/토큰 레지스트리 (프로젝트 #541). system PK = 1행/커넥터(단일테넌트). ──

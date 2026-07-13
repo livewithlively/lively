@@ -10,6 +10,7 @@ import { agentFromHeaders } from "./org/agent-identity.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
+import { registerProxiedMcpTools } from "./capabilities/mcp-proxy.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
@@ -72,6 +73,7 @@ app.post("/mcp", auth, async (req, res) => {
   const harness = agentFromHeaders(req.headers);
   const server = buildServer(overrides, alwaysLoad, harness);
   try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
+  try { await registerProxiedMcpTools(server); } catch (err) { logger.warn({ err }, "프록시 MCP 등록 실패(무시)"); }
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     transport.close();
