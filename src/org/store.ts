@@ -1851,10 +1851,13 @@ export async function clearAssetPref(target_kind: AssetPrefKind, ref_id: string,
 // ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
 //  activity 는 itemsPool 동일 DB(지식참조=activity_knowledge→knowledge FK). project_member.member_id ↔ activity.author_person 조인.
 export interface ProjectActivity {
-  id: number; type: string; title: string | null; summary: string | null;
+  id: number; type: string; title: string | null; summary: string | null; body: string | null;
   author_person: string | null; author_agent: string | null;
   commit_sha: string | null; committed_at: string | null; created_at: string | null;
+  should_review: string | null; is_review: string | null; repo: string | null;
   external_system: string | null; external_url: string | null;
+  refs: { name: string; title: string | null; relation: string }[];
+  touchCount: number;
 }
 export async function listProjectActivities(
   projectId: number, authorPerson?: string, limit = 100, offset = 0,
@@ -1870,9 +1873,11 @@ export async function listProjectActivities(
   //  (예전엔 author_person 조인으로 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음 → 그 폭넓은 조인은 유지하지 않는다.
   //   project_id=이 프로젝트는 정의상 이 프로젝트 작업이라 session_id 가 없어도 표시되어야 한다 — MCP activity_log 로 직접 기록한 작업 포함.)
   const r = await itemsPool.query(
-    `SELECT a.id, a.type, a.title, a.summary, a.author_person, a.author_agent,
-            a.commit_sha, a.committed_at, a.created_at, a.external_system, a.external_url
+    `SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent,
+            a.commit_sha, a.committed_at, a.created_at, a.should_review, a.is_review,
+            a.external_system, a.external_url, rp.name AS repo
        FROM activity a
+       LEFT JOIN repo rp ON rp.id = a.repo_id
       WHERE (a.project_id = $1
              OR a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1))
       ${personFilter}
@@ -1880,6 +1885,24 @@ export async function listProjectActivities(
       LIMIT ${limP} OFFSET ${offP}`,
     params,
   );
-  return r.rows as ProjectActivity[];
+  const rows = r.rows as ProjectActivity[];
+  if (!rows.length) return rows;
+  // 펼침 연결(산출/참조 지식 + 코드 touch 수)을 곁들인다 — 회사 타임라인(listActivities)과 같은 프로젝션이어야
+  // 공용 렌더러(web activityTimelineRow)가 프로젝트 상세에서도 본문·참조를 그린다. tasks 는 이 프로젝트 자신이라 생략.
+  const ids = rows.map((row) => row.id);
+  const [refRes, touchRes] = await Promise.all([
+    itemsPool.query(
+      `SELECT ak.activity_id, ak.name, ak.relation, k.title
+         FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
+        WHERE ak.activity_id = ANY($1) ORDER BY ak.created_at`, [ids]),
+    itemsPool.query(
+      `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
+        WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),
+  ]);
+  const byId = new Map<number, ProjectActivity>();
+  for (const row of rows) { row.refs = []; row.touchCount = 0; byId.set(row.id, row); }
+  for (const rf of refRes.rows) byId.get(rf.activity_id)?.refs.push({ name: rf.name, title: rf.title, relation: rf.relation });
+  for (const t of touchRes.rows) { const row = byId.get(t.activity_id); if (row) row.touchCount = t.n; }
+  return rows;
 }
 

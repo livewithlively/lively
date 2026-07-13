@@ -5484,8 +5484,20 @@ function pjvProjEdgesField(p, reload, dir) {
     const list = (dir === 'out' ? edges.outgoing : edges.incoming) || [];
     const wrap = el('div', { class: 'pjv-proj-edges' });
     for (const e of list) {
-        const chip = el('span', { class: 'pjv-edge-chip' }, el('a', { class: 'pjv-edge-chip-link', href: '#/projects2/p/' + e.project_id,
-            title: '#' + e.project_id + ' ' + (e.project_name || ''), text: e.project_name || ('#' + e.project_id) }));
+        const link = el('a', { class: 'pjv-edge-chip-link', href: '#/projects2/p/' + e.project_id,
+            title: '#' + e.project_id + ' ' + (e.project_name || ''), text: e.project_name || ('#' + e.project_id) });
+        // 모달 안에서 누르면 그 프로젝트 모달로 '교체'(드릴인) — 같은 탭 해시 이동은 모달 뒤에서 라우트만 바꿔
+        //  '클릭해도 아무 일 없는' 죽은 클릭이 된다(#804). 태스크 모달의 하위 태스크 드릴인과 동일 결.
+        //  전체 페이지에선 기본 동작(같은 탭 이동) 유지 — 거기선 모달이 없어 정상 작동한다.
+        link.onclick = (ev) => {
+            const pm = _pjvPmOpen;
+            if (!pm || !link.closest('.pjv-pm'))
+                return;
+            ev.preventDefault();
+            pm.close();
+            pjvOpenProjectModal(e.project_id, pm.pageReload);
+        };
+        const chip = el('span', { class: 'pjv-edge-chip' }, link);
         const x = el('button', { class: 'pjv-edge-chip-x', type: 'button', title: '관계 해제', text: '✕' });
         x.onclick = async (ev) => {
             ev.preventDefault();
@@ -5642,6 +5654,8 @@ function demoTerminalCard(members, meId) {
 //  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
 //  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
 //  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
+// 지금 열린 프로젝트 모달(항상 최대 1개) — 모달 안에서 다른 프로젝트로 갈 때 '모달 교체'(드릴인)에 쓴다(#804 — pjvProjEdgesField).
+let _pjvPmOpen = null;
 function pjvOpenProjectModal(projectId, pageReload) {
     const back = el('div', { class: 'pjv-pm-back' });
     const box = el('div', { class: 'pjv-pm' });
@@ -5656,6 +5670,8 @@ function pjvOpenProjectModal(projectId, pageReload) {
         if (closed)
             return;
         closed = true;
+        if (_pjvPmOpen && _pjvPmOpen.close === closeModal)
+            _pjvPmOpen = null;
         document.removeEventListener('keydown', onKey, true);
         document.body.classList.remove('pjv-pm-open');
         back.remove();
@@ -5677,6 +5693,7 @@ function pjvOpenProjectModal(projectId, pageReload) {
     document.addEventListener('keydown', onKey, true);
     document.body.append(back);
     document.body.classList.add('pjv-pm-open');
+    _pjvPmOpen = { close: closeModal, pageReload }; // 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 교체할 수 있게(#804)
     renderProjectV2Detail(bodyEl, String(projectId)); // 페이지와 동일한 렌더러 → 내용 축약 없음
     return closeModal;
 }
@@ -5952,6 +5969,18 @@ function mountBodyEditor(config) {
         uploadFile: config.uploadFile,
     });
     const box = el('div', { class: 'pjv-bodyed' }, editor.el, el('div', { class: 'pjv-bodyed-bar' }, chip));
+    // 본문 속 지식 링크(#/k/…)는 새 탭(#804). 프로젝트·태스크 본문은 모달로도 뜨는데(pjvOpenProjectModal·pjvOpenTaskModal),
+    //  모달은 body 에 얹히고 라우터엔 모달 정리가 없어 같은 탭 이동은 모달 뒤에서 라우트만 바꾼다 → 죽은 클릭.
+    //  편집 중인 본문(항시 편집·자동저장)을 두고 페이지가 떠나지도 않는다. 링크는 매 재렌더마다 새로 생기므로 위임(capture)으로 잡는다.
+    //  ⚠ WIKI 문서 에디터는 createBlockEditor 를 직접 쓰므로 여기 안 걸린다 — 위키 내부 문서 이동은 같은 탭 유지.
+    box.addEventListener('click', (e) => {
+        const a = e.target && e.target.closest && e.target.closest('a.md-link[href^="#/k/"]');
+        if (!a || !box.contains(a))
+            return;
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(a.getAttribute('href'), '_blank', 'noopener');
+    }, true);
     // 에디터 밖으로 포커스가 완전히 나가면 자동저장 flush(슬래시/툴바 팝업 클릭은 box 밖이지만 저장은 멱등이라 무해).
     box.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement))
         flush(); }, 200));
@@ -6005,13 +6034,21 @@ function projectBodyAttachments(bodyWrap, p) {
 function projectKnowledgeSection(id, p, reload) {
     const knName = (k) => k.name || k.knowledge_name;
     let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
+    // 지식 링크는 새 탭(#804). 프로젝트 상세는 모달로도 뜨는데(pjvOpenProjectModal — 대시보드·보드 행 클릭),
+    //  모달은 body 에 얹히고 라우터엔 모달 정리가 없어 같은 탭 해시 이동(#/k/…)이 **모달 뒤에서** 라우트만 바꾼다
+    //  → 사용자 눈엔 '클릭해도 아무 일 없는' 죽은 클릭. 새 탭이면 프로젝트를 띄워 둔 채 지식을 읽는다(작업맥락 보존).
+    //  지식 픽커(ps-kn-pick-main)가 이미 같은 규약이라 페이지에서도 동일하게 맞춘다.
+    const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
     let remeasure = null; // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
     const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
     // 섹션 액션 — 칼럼별 버튼 대신 우상단 단일 버튼 하나(#317). 관계(필요/산출)는 픽커 라디오에서 고른다.
     const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
         title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
         onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
-    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' }, el('h3', { text: '연결된 지식' }), el('span', { class: 'pjk-head-hint' }, '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ', el('a', { href: '#/learn?focus=required', style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))), knAddBtn));
+    card.append(el('div', { class: 'card-head' }, el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' }, el('h3', { text: '연결된 지식' }), el('span', { class: 'pjk-head-hint' }, '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ', 
+    // 가이드도 새 탭(#804) — 지식 링크와 같은 이유(모달 뒤 라우트 변경 = 죽은 클릭) + 읽던 프로젝트를 잃지 않는다.
+    el('a', { href: '#/learn?focus=required', target: '_blank', rel: 'noopener', title: '새 탭에서 사용 가이드 열기',
+        style: 'color:var(--blue); text-decoration:none; white-space:nowrap;', text: '자세히' }))), knAddBtn));
     const reqList = el('div', { class: 'pjk-list' });
     const prodList = el('div', { class: 'pjk-list' });
     const reqCount = el('span', { class: 'pjk-count' });
@@ -6046,7 +6083,7 @@ function projectKnowledgeSection(id, p, reload) {
                 toast('연결 실패 — ' + e.message, true);
             }
         };
-        return el('div', { class: 'pjk-rec-row' }, el('a', { class: 'pjk-rec-title', href: '#/k/' + encodeURIComponent(name), text: m.title || name }), m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁' }) : null, pct > 0 ? el('span', { class: 'admin-hint pjk-rec-pct', title: '의미 유사도', text: pct + '%' }) : null, addBtn);
+        return el('div', { class: 'pjk-rec-row' }, el('a', { class: 'pjk-rec-title', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }), m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁' }) : null, pct > 0 ? el('span', { class: 'admin-hint pjk-rec-pct', title: '의미 유사도', text: pct + '%' }) : null, addBtn);
     }
     // 필요지식 칼럼 = 연결된 항목 + 아직 연결 안 된 추천을 **함께** 그린다(#138).
     //  하나 연결해도 나머지 추천은 그대로 남아 계속 추가 연결 가능(예전엔 첫 연결 순간 추천 목록이 통째로 사라짐).
@@ -6077,7 +6114,7 @@ function projectKnowledgeSection(id, p, reload) {
     // 지식 한 줄 — 제목(상세 링크) + 메타칩 + 연결 해제(✕). relation 별로 unlink 한다.
     function knRow(k, relation) {
         const name = knName(k);
-        const r = el('div', { class: 'pjk-row' }, el('a', { class: 'pjk-row-title', href: '#/k/' + encodeURIComponent(name), text: k.title || name }), el('div', { class: 'pjk-row-meta' }, 
+        const r = el('div', { class: 'pjk-row' }, el('a', { class: 'pjk-row-title', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }), el('div', { class: 'pjk-row-meta' }, 
         // 배지는 '예외만' 표시 — 기본값(검색=recalled·저작=authored·유효=active)은 매 행 똑같이 반복돼
         // 차별성 0 인 노이즈라 숨긴다. 벗어난 것만(주입·미러·폐기 등) 배지로 떠 제목 폭을 최대로 확보(#59 가독성).
         // 간격은 CSS gap — 예전 리터럴 공백(' '·'  ') span 래핑은 간격이 들쭉날쭉해 제거.
