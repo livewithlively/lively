@@ -8,7 +8,7 @@ import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUpload/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 import { authDownload, authUpload, companyTimelineSection, fmtSize, openProjectV2Form } from './projects.js';
-import { openTermCreateForm, startTerminalTour } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req)
+import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -1912,7 +1912,8 @@ function dashCreateProject(listId, listById, onDone, prefillName?) {
       const tnote = tasks.length ? ' · 태스크 ' + tasks.length + '개' : '';
       if (withClaude && pid) {
         const model = dashDefaultModel();
-        const sd = await api('/api/ui/v6/projects/' + pid + '/sessions', { method: 'POST', body: JSON.stringify({ label: name, harness: 'claude', autoApprove: true, flags: model ? { '--model': model } : {} }) });
+        // 자동 승인은 여기(체크박스 없는 원클릭)에서 켜지 않는다 — 기본 꺼짐, 세션 폼에서 내가 마지막으로 켰을 때만 이어서 켠다(#782).
+        const sd = await api('/api/ui/v6/projects/' + pid + '/sessions', { method: 'POST', body: JSON.stringify({ label: name, harness: 'claude', autoApprove: termAutoApprovePref(), flags: model ? { '--model': model } : {} }) });
         const sid = sd && sd.session && sd.session.id;
         toast('프로젝트 생성 + Claude 세션 시작' + tnote); close(); onDone && onDone();
         if (sid) window.open('/ui/terminal.html?session=' + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
