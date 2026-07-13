@@ -5656,8 +5656,28 @@ let _pjvPmOpen = null;
 let _pjvPmUrl = null;
 // 라우터(main.ts route())가 호출 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다. 안 닫으면 새 페이지가
 //  모달 뒤에 렌더돼 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일). 편집 중 본문은 모달이 닫히며 저장된다.
-function pjvCloseProjectModalOnRoute() { if (_pjvPmOpen)
-    _pjvPmOpen.close('route'); }
+// #810 — 모달은 '자기 주소'를 소유한다(#808). 새 주소가 그 주소면 **살려둔다**: 위에 겹쳤던 태스크 모달을 닫고
+//  이 모달의 주소로 되돌아온 경우다. true 를 돌려주면 라우터는 뒤 화면(보드·대시보드)도 다시 그리지 않는다 —
+//  모달 뒤는 열었을 때 그대로여야 하니까.
+function pjvCloseProjectModalOnRoute() {
+    if (!_pjvPmOpen)
+        return false;
+    if (_pjvPmOpen.url === location.hash)
+        return true;
+    _pjvPmOpen.close('route');
+    return false;
+}
+// 프로젝트 모달이 떠 있나 — 태스크 모달(#810)이 '내가 pop 하면 라우터가 뒤 화면을 다시 그릴지'를 판단할 때 쓴다.
+//  떠 있으면 라우터는 그 모달을 살려두느라 아무것도 안 그리므로, 태스크 모달이 직접 pageReload 해야 한다.
+function pjvProjectModalOpen() { return !!_pjvPmOpen; }
+// 전역 실행취소(undo.ts) 처럼 '지금 화면'을 다시 그려야 할 때 — 이 모달이 주소의 주인이면 라우터는 안 도니(위 규칙)
+//  모달 안을 직접 다시 그린다. 그리지 않으면 되돌린 결과가 화면에 안 보이는 조용한 스테일이 된다.
+function pjvProjectModalRefreshIfRoute() {
+    if (!_pjvPmOpen || _pjvPmOpen.url !== location.hash)
+        return false;
+    _pjvPmOpen.refresh();
+    return true;
+}
 function pjvOpenProjectModal(projectId, pageReload) {
     // 주소는 지금 보고 있는 것을 가리킨다(#808) — 모달이 뜨면 URL 도 그 프로젝트가 된다(복사·공유·북마크가 통하고,
     //  새로고침하면 같은 내용이 전체 페이지로 뜬다. 뒤로가기 = 모달 닫고 목록). pushState 는 hashchange 를 쏘지 않으므로
@@ -5745,7 +5765,8 @@ function pjvOpenProjectModal(projectId, pageReload) {
     document.addEventListener('keydown', onKey, true);
     document.body.append(back);
     document.body.classList.add('pjv-pm-open');
-    _pjvPmOpen = { close: closeModal, pageReload }; // 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 교체할 수 있게(#804)
+    //  url = 이 모달이 소유한 주소(라우터가 '살려둘지' 판단 · #810), refresh = 모달 안만 다시 그리기(undo 등)
+    _pjvPmOpen = { close: closeModal, pageReload, url, refresh: () => renderProjectV2Detail(bodyEl, String(projectId)) };
     renderProjectV2Detail(bodyEl, String(projectId)); // 페이지와 동일한 렌더러 → 내용 축약 없음
     return closeModal;
 }
@@ -11531,4 +11552,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upProgress, upSend, upToast, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen, pjvProjectModalRefreshIfRoute, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upProgress, upSend, upToast, };
