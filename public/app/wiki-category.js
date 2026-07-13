@@ -428,8 +428,9 @@ async function renderCategorySurface(box, cat, ctx) {
     function defaultLayout(existing) {
         const L = [];
         const seed = existing && existing[0] !== '[' ? wkDeck(existing, 480) : '';
-        if (seed)
-            L.push(normBlock({ type: 'intro', text: seed })); // 기존 큐레이션 보존
+        // 의미 있는 큐레이션만 소개로 보존 — '#' 같은 마크다운 부호 잔재는 버린다(빈/쓰레기 소개 방지).
+        if (seed && seed.replace(/[#*_>·\-\s]/g, '').length >= 12)
+            L.push(normBlock({ type: 'intro', text: seed }));
         if (allDocs.some((r) => r.is_wiki))
             L.push(normBlock({ type: 'highlight', cfg: { src: 'pin', limit: 3 } }));
         const counts = new Map();
