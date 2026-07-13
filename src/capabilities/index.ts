@@ -39,6 +39,7 @@ import { dbGrantCapabilities } from "./db-grant.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
+import { brokerCapabilities } from "./broker.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "./mcp-surface.js";
@@ -109,6 +110,7 @@ const all: Capability[] = [
   ...memberSecretCapabilities, // P1(#746): per-user 백엔드 자격 vault — me_credential(s)(본인, 인증만)+org_credential(s)(통합, admin). 커넥터 툴이 resolveMemberSecret 로 해소. MCP+REST(/api/ui/{me,org}/credential*).
   ...awsCredentialCapabilities, // #746 파도2: AWS STS 브로커 — me_aws_credentials(role 가정→credential_process JSON, RoleSessionName=요청자). scope=null, MCP+REST(/api/ui/me/aws-credentials).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
+  ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
