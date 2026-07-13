@@ -38,9 +38,13 @@ export async function routeToBroker(slug: string, req: unknown, spawner: Spawner
   return brokerCall(await ensureBroker(slug, spawner), req);
 }
 
+// 멤버↔브로커 공유 작업 베이스 — provision 이 /srv/lively/member-work/<slug>(box_<slug>:m_<slug> 2770)로 만든다.
+//  멤버는 여기서 편집, 브로커는 여기서 git/terraform 실행(멤버 홈 700 크레덴셜 격벽과 별개).
+const MEMBER_WORK_BASE = process.env.LIVELY_MEMBER_WORK_BASE || "/srv/lively/member-work";
+export function brokerWorkroot(slug: string): string { return `${MEMBER_WORK_BASE}/${slug}`; }
+
 export interface BrokerSpawnOpts {
   entry: string;                 // 브로커 진입 js(world-readable 앱경로, 예 /opt/context-ontology/dist/broker/index.js)
-  workrootBase?: string;         // 브로커 홈 베이스(기본 /home) → workroot=<base>/broker_<slug>/work
   allowedTools?: string[];       // 실행 허용 도구(기본 broker 기본목록)
   internalHosts?: string[];      // mcp-forward 내부 host 허용(SSRF)
 }
@@ -54,7 +58,7 @@ export function defaultBrokerSpawner(opts: BrokerSpawnOpts): Spawner {
       ...process.env,
       LIVELY_BROKER_MEMBER: slug,
       LIVELY_BROKER_SOCKET: brokerSocketPath(slug),
-      LIVELY_BROKER_WORKROOT: `${opts.workrootBase || "/home"}/${brokerUser(slug)}/work`,
+      LIVELY_BROKER_WORKROOT: brokerWorkroot(slug),
       LIVELY_BROKER_ENTRY: opts.entry,
     };
     if (opts.allowedTools?.length) env.LIVELY_BROKER_ALLOWED_TOOLS = opts.allowedTools.join(",");

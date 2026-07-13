@@ -15,7 +15,7 @@ fail=0; note(){ echo "  $*"; }; pass(){ echo "ok  $*"; }; bad(){ echo "FAIL $*";
 
 cleanup(){
   sudo pkill -u "$BROKER_U" 2>/dev/null
-  sudo rm -f "$SUDOERS"; sudo rm -rf "$T" "$APP" "$RUNDIR"/t.sock
+  sudo rm -f "$SUDOERS"; sudo rm -rf "$T" "$APP" "$RUNDIR"/t.sock /srv/lively/member-work/t
   for u in "$BROKER_U" "$GW_U" "$MEMBER_U"; do sudo userdel -r "$u" 2>/dev/null; done
 }
 trap cleanup EXIT
@@ -26,6 +26,8 @@ sudo useradd -m -d /home/$BROKER_U -s /usr/sbin/nologin -G broker_members,lively
 sudo useradd -M -s /usr/sbin/nologin -G lively-broker "$GW_U" 2>/dev/null || sudo usermod -aG lively-broker "$GW_U"  # 게이트웨이 대역(sudo 주체·소켓 그룹)
 sudo useradd -M -s /usr/sbin/nologin "$MEMBER_U" 2>/dev/null || true                                              # 멤버 대역(lively-broker 아님)
 sudo install -d -m 2770 -o "$BROKER_U" -g lively-broker /home/$BROKER_U/work
+# 공유 작업 dir(defaultBrokerSpawner 가 LIVELY_BROKER_WORKROOT=/srv/lively/member-work/t 로 설정) — 브로커 접근 가능해야 기동됨
+sudo install -d -m 2770 -o "$BROKER_U" -g lively-broker /srv/lively/member-work/t
 # world-readable 앱(브로커 entry·node_modules) — prod /opt/context-ontology 미러
 sudo rm -rf "$APP"; sudo mkdir -p "$APP"; sudo cp -a "$CO/dist" "$CO/node_modules" "$CO/package.json" "$APP/"; sudo chmod -R a+rX "$APP"
 # box-spawn 래퍼 설치(root:root 0755) — 코드 BOX_SPAWN 경로와 일치
