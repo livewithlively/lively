@@ -16,6 +16,7 @@ import { HttpError } from "./rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import { refreshProxySnapshot } from "./mcp-proxy.js";
+import { broadcastToolListChanged } from "../mcp-sessions.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
@@ -984,7 +985,9 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
-      return { ok: true, tool_count: r.count };
+      // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
+      const pushed = broadcastToolListChanged();
+      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
     }),
   restOnly("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",
