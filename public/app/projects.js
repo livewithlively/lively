@@ -10261,39 +10261,206 @@ async function deleteEntry(id, rel, name, isDir, reload, base) {
         toast('실패 — ' + e.message, true);
     }
 }
+const UP_MANY = 12; // 이보다 많으면 파일별 카드 대신 묶음 진행 카드 1개(그리드 폭주 방지)
+const UP_CONFIRM = 200; // 이보다 많으면 확인 — 큰 폴더를 실수로 떨어뜨렸을 때의 안전핀
+// 상대경로 정규화 — 빈 세그먼트 제거, '.' 제거, '..'(경로 탈출)은 항목 자체를 버림. 서버도 봉쇄하지만 프론트에서 먼저 막는다.
+function upSafeRel(rel) {
+    const parts = String(rel || '').split('/').filter((s) => s !== '' && s !== '.');
+    if (!parts.length || parts.some((s) => s === '..'))
+        return null;
+    return parts.join('/');
+}
+// 숨김(.으로 시작) 항목은 폴더 안에서만 걸러낸다 — 서버 목록·매니페스트가 dotfile 을 숨기므로 올려도 화면에 안 보이고
+//  로컬로도 안 내려간다(= .DS_Store·Thumbs.db 같은 OS 잡동사니만 쌓인다). 사용자가 직접 고른 최상위 파일은 존중해 그대로 올린다.
+function upHidden(rel) {
+    const parts = rel.split('/');
+    return parts.length > 1 && parts.some((s) => s.startsWith('.'));
+}
+function upNormalize(items) {
+    const out = [];
+    for (const it of items) {
+        const rel = upSafeRel(it.rel);
+        if (!rel || upHidden(rel))
+            continue;
+        out.push({ file: it.file, rel });
+    }
+    return out;
+}
+// <input webkitdirectory> 로 고른 폴더 — File.webkitRelativePath('폴더명/하위/파일')가 구조를 담고 있다(윈도·리눅스·맥 동일).
+//  일반 파일 선택이면 webkitRelativePath 가 빈 문자열이라 rel = 파일명.
+function upFromInput(input) {
+    return upNormalize(Array.from(input.files || []).map((f) => ({ file: f, rel: String(f.webkitRelativePath || f.name) })));
+}
+// 브라우저가 폴더 선택을 지원하는가(webkitdirectory) — 데스크탑 크롬·엣지·파폭·사파리는 모두 지원. 미지원이면 메뉴에서 감춘다.
+function upDirSupported() {
+    try {
+        return 'webkitdirectory' in HTMLInputElement.prototype;
+    }
+    catch (_) {
+        return false;
+    }
+}
+// 드롭한 폴더는 dataTransfer.files 로는 못 읽는다(내용 없는 항목으로만 잡혀 통째로 유실).
+//  webkitGetAsEntry()(FileSystemEntry)로 트리를 재귀 순회해야 하위 파일까지 온다 — 크롬·엣지·파폭·사파리 공통.
+//  ⚠ dataTransfer.items 는 드롭 핸들러가 끝나면 무효화된다 → await 하기 전에 동기로 entry 를 전부 꺼내둔다.
+function upDropEntries(dt) {
+    const out = [];
+    for (const it of Array.from(dt.items || [])) {
+        if (it.kind !== 'file')
+            continue;
+        const ent = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+        if (ent)
+            out.push(ent);
+    }
+    return out;
+}
+// FileSystemDirectoryReader.readEntries 는 한 번에 최대 100건만 준다 — 빈 배열이 올 때까지 반복해야 폴더를 다 읽는다.
+function upReadAll(reader) {
+    return new Promise((resolve, reject) => {
+        const acc = [];
+        const step = () => reader.readEntries((batch) => {
+            if (!batch || !batch.length) {
+                resolve(acc);
+                return;
+            }
+            acc.push(...batch);
+            step();
+        }, reject);
+        step();
+    });
+}
+const upEntryFile = (ent) => new Promise((res, rej) => ent.file(res, rej));
+// 드롭 이벤트 → 업로드 목록. emptyDirs = 파일이 하나도 없는 폴더(빈 폴더도 만들어 줘야 구조가 보존된다).
+//  entries API 가 없는 구형 브라우저는 예전처럼 파일만 받는다(폴더는 못 받음 — 기존 동작 유지).
+async function upFromDrop(dt) {
+    const roots = upDropEntries(dt); // ⚠ 반드시 await 전에(동기) — items 무효화 회피
+    if (!roots.length) {
+        const items = upNormalize(Array.from(dt.files || []).map((f) => ({ file: f, rel: String(f.name) })));
+        return { items, emptyDirs: [] };
+    }
+    const items = [];
+    const emptyDirs = [];
+    const walk = async (ent, prefix) => {
+        const name = String(ent.name || '');
+        if (prefix && name.startsWith('.'))
+            return; // 폴더 안의 숨김은 제외(최상위로 직접 끌어온 건 존중)
+        const rel = prefix ? prefix + '/' + name : name;
+        if (ent.isFile) {
+            items.push({ file: await upEntryFile(ent), rel });
+            return;
+        }
+        if (!ent.isDirectory)
+            return;
+        const kids = (await upReadAll(ent.createReader())).filter((k) => !String(k.name || '').startsWith('.'));
+        if (!kids.length) {
+            emptyDirs.push(rel);
+            return;
+        }
+        for (const k of kids)
+            await walk(k, rel);
+    };
+    for (const ent of roots)
+        await walk(ent, '');
+    return { items: upNormalize(items), emptyDirs: emptyDirs.map(upSafeRel).filter(Boolean) };
+}
+// '＋ 업로드' 버튼 — 파일 / 폴더 선택 메뉴(폴더는 <input webkitdirectory> 로만 고를 수 있어 입력이 따로다).
+//  반환한 입력 두 개는 호출부가 헤더에 함께 append 한다(숨김 input).
+function upControl(onPick) {
+    const fileIn = el('input', { type: 'file', multiple: '', style: 'display:none' });
+    const dirIn = el('input', { type: 'file', multiple: '', webkitdirectory: '', style: 'display:none' });
+    fileIn.addEventListener('change', () => { onPick(upFromInput(fileIn)); fileIn.value = ''; });
+    dirIn.addEventListener('change', () => { onPick(upFromInput(dirIn)); dirIn.value = ''; });
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 업로드' });
+    btn.onclick = (e) => {
+        e.stopPropagation();
+        const menu = el('div', { class: 'pjv-menu' });
+        const close = pjvPopover(btn, menu, { align: 'right' });
+        const mk = (label, desc, fn) => {
+            const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' }, el('span', { text: label }), el('span', { class: 'caption', text: desc })));
+            item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
+            return item;
+        };
+        menu.append(mk('파일 올리기', '여러 개 선택 가능', () => fileIn.click()));
+        if (upDirSupported())
+            menu.append(mk('폴더 올리기', '하위 폴더까지 구조 그대로', () => dirIn.click()));
+    };
+    return { btn, fileIn, dirIn };
+}
+// 드래그앤드롭 배선 — zone 위로 파일·폴더를 끌어오면 hi 에 .drop-active, 놓으면 onDrop(items, emptyDirs).
+//  드롭 핸들러는 동기로 upFromDrop 을 호출해야 한다(items 무효화) → 여기서 한 번만 제대로 해두고 두 화면이 같이 쓴다.
+function upDropZone(zone, hi, onDrop) {
+    let depth = 0;
+    const hasFiles = (ev) => ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes('Files');
+    const clear = () => { depth = 0; hi.classList.remove('drop-active'); };
+    zone.addEventListener('dragenter', (ev) => { if (hasFiles(ev)) {
+        ev.preventDefault();
+        depth++;
+        hi.classList.add('drop-active');
+    } });
+    zone.addEventListener('dragover', (ev) => { if (hasFiles(ev)) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'copy';
+    } });
+    zone.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth)
+        hi.classList.remove('drop-active'); });
+    zone.addEventListener('drop', (ev) => {
+        if (!hasFiles(ev))
+            return;
+        ev.preventDefault();
+        clear();
+        upFromDrop(ev.dataTransfer) // 동기 시작(내부에서 entry 를 먼저 꺼낸다)
+            .then(({ items, emptyDirs }) => onDrop(items, emptyDirs))
+            .catch((e) => toast('끌어온 항목을 읽지 못했습니다 — ' + (e && e.message ? e.message : e), true));
+    });
+}
 // 공유 폴더 '전체 보기' — 넓은 팝업에 일반 파일 목록(행 단위)으로 전부 표시. 폴더 탐색·파일 열기 가능.
 function openFolderGrid(id, startPath, base) {
     const B = base || '/api/ui/projects/';
     const st = { path: startPath || '', q: '' };
     const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '파일 검색…' });
     searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
-    const fileInput = el('input', { type: 'file', multiple: '', style: 'display:none' });
-    fileInput.addEventListener('change', async () => { await uploadHere(fileInput.files); fileInput.value = ''; });
+    const up = upControl((items) => uploadHere(items, []));
     const mkdirBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 폴더', onclick: () => mkdirHere() });
-    const uploadBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 업로드', onclick: () => fileInput.click() });
     const crumb = el('div', { class: 'proj-file-crumb' });
     const listBox = el('div', { class: 'proj-file-llist' });
-    const back = overlayBox('공유 폴더 — 전체 보기', el('div', { class: 'proj-fg-head' }, searchIn, el('div', { class: 'proj-fg-actions' }, mkdirBtn, uploadBtn, fileInput)), crumb, listBox);
+    const back = overlayBox('공유 폴더 — 전체 보기', el('div', { class: 'proj-fg-head' }, searchIn, el('div', { class: 'proj-fg-actions' }, mkdirBtn, up.btn, up.fileIn, up.dirIn)), crumb, listBox);
     const box = back.querySelector('.ov-box');
     if (box)
         box.classList.add('ov-box-wide');
+    // 드래그앤드롭 업로드(#781) — 이 모달엔 아예 없었다(그래서 끌어다 놔도 아무 일도 안 일어났다).
+    //  받는 영역은 오버레이 전체(back) — 모달 밖 배경에 떨어뜨려도 브라우저가 그 파일을 열어 화면을 날리지 않게.
+    upDropZone(back, box || back, (items, emptyDirs) => uploadHere(items, emptyDirs));
     const join = (a, b) => (a ? a + '/' + b : b);
     load();
-    async function uploadHere(files) {
-        const arr = Array.from(files || []);
-        if (!arr.length)
+    async function uploadHere(items, emptyDirs) {
+        const arr = items || [];
+        const dirs = emptyDirs || [];
+        if (!arr.length && !dirs.length) {
+            toast('올릴 파일이 없습니다', true);
             return;
+        }
+        if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?'))
+            return;
+        const dest = st.path; // 업로드 중 폴더를 옮겨도 '떨어뜨린 그 폴더'로 간다
+        const at = (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel);
         if (arr.length > 1)
             toast(arr.length + '개 업로드 중…');
         let ok = 0;
-        for (const f of arr) {
+        for (const u of arr) {
             try {
-                await authUpload(B + id + '/file?path=' + encodeURIComponent((st.path ? st.path + '/' : '') + f.name), f);
+                await authUpload(at(u.rel), u.file);
                 ok += 1;
             }
             catch (e) {
-                toast(f.name + ' 실패 — ' + e.message, true);
+                toast(u.rel + ' 실패 — ' + e.message, true);
             }
+        }
+        // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
+        for (const d of dirs) {
+            try {
+                await api(B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d), { method: 'POST' });
+            }
+            catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
         }
         if (ok)
             toast(ok + '개 업로드 완료');
@@ -10373,12 +10540,10 @@ function projectFolderSection(id, base) {
     const body = el('div', {});
     const st = { path: '', q: '' };
     let lastData = null; // 마지막 서버 응답(업로드 중 그리드 즉시 재구성용)
-    const uploading = []; // 업로드 중 파일 [{ name, pct, pctEl, fill }]
+    const uploading = []; // 업로드 중 카드 [{ name, label, pct, pctEl, fill, nmEl }] — 폴더 업로드는 묶음 카드 1장
     const searchIn = el('input', { type: 'search', placeholder: '파일 검색…', class: 'proj-file-search' });
     searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
-    const fileInput = el('input', { type: 'file', multiple: '', style: 'display:none' });
-    fileInput.addEventListener('change', () => { uploadFiles(fileInput.files); fileInput.value = ''; });
-    const uploadBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 업로드', onclick: () => fileInput.click() });
+    const up = upControl((items) => uploadFiles(items, []));
     const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '전체 보기', onclick: () => openFolderGrid(id, st.path, B) });
     const mkdirBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 폴더', onclick: () => openMkdir() });
     // 선택(일괄삭제) 모드 — 카드 뷰에서 여러 항목을 골라 한 번에 삭제. ids = 선택된 rel(상대경로) 집합.
@@ -10386,25 +10551,11 @@ function projectFolderSection(id, base) {
     let lastPairs = [];
     const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 항목을 골라 한 번에 삭제', onclick: () => toggleSelMode() });
     const selBar = el('div', { class: 'bulk-bar', hidden: true });
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '공유 폴더' }), el('div', { class: 'card-head-actions' }, searchIn, allBtn, mkdirBtn, uploadBtn, selectBtn, fileInput)));
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '공유 폴더' }), el('div', { class: 'card-head-actions' }, searchIn, allBtn, mkdirBtn, up.btn, selectBtn, up.fileIn, up.dirIn)));
     card.append(selBar);
     card.append(body);
-    // 드래그앤드롭 업로드 — 카드 위로 파일을 끌어다 놓으면 현재 폴더에 올림(여러 개 동시 가능).
-    let dragDepth = 0;
-    const hasFiles = (ev) => ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes('Files');
-    card.addEventListener('dragenter', (ev) => { if (hasFiles(ev)) {
-        ev.preventDefault();
-        dragDepth++;
-        card.classList.add('drop-active');
-    } });
-    card.addEventListener('dragover', (ev) => { if (hasFiles(ev)) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = 'copy';
-    } });
-    card.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth)
-        card.classList.remove('drop-active'); });
-    card.addEventListener('drop', (ev) => { ev.preventDefault(); dragDepth = 0; card.classList.remove('drop-active'); if (ev.dataTransfer.files && ev.dataTransfer.files.length)
-        uploadFiles(ev.dataTransfer.files); });
+    // 드래그앤드롭 업로드 — 카드 위로 파일·폴더를 끌어다 놓으면 현재 폴더에 올림(폴더는 하위 구조 그대로, #781).
+    upDropZone(card, card, (items, emptyDirs) => uploadFiles(items, emptyDirs));
     // 클립보드 이미지 붙여넣기 — 프로젝트 상세에서 (텍스트 입력칸이 아닌 곳에) 붙여넣으면 현재 공유 폴더로 업로드.
     //  card 가 DOM 에서 사라지면(다른 화면 이동) 다음 paste 때 스스로 해제(언마운트 훅이 없어 누수 방지용 self-clean).
     const onPaste = (ev) => {
@@ -10428,7 +10579,7 @@ function projectFolderSection(id, base) {
             return; // 이미지가 없으면 평소 붙여넣기 동작 유지
         ev.preventDefault();
         const dest = '공유 폴더' + (st.path ? ' / ' + st.path : '');
-        openPasteDialog(imgs, dest, (files) => uploadFiles(files));
+        openPasteDialog(imgs, dest, (files) => uploadFiles(files.map((f) => ({ file: f, rel: String(f.name) })), []));
     };
     document.addEventListener('paste', onPaste);
     load();
@@ -10477,32 +10628,59 @@ function projectFolderSection(id, base) {
         load();
     }
     // 여러 파일 업로드 — 그리드에 '업로드 중 카드'(비활성 아이콘 + 실시간 %) 띄우고 순차 전송.
-    async function uploadFiles(files) {
-        const arr = Array.from(files || []);
-        if (!arr.length)
+    //  items[].rel = 대상 폴더 기준 상대경로 — 폴더 업로드면 'sub/child/a.png' 처럼 하위 경로가 들어있고,
+    //  서버 PUT 이 dirname 을 mkdir -p 하므로 그 구조 그대로 만들어진다. emptyDirs = 파일 없는 빈 폴더(따로 mkdir).
+    async function uploadFiles(items, emptyDirs) {
+        const arr = items || [];
+        const dirs = emptyDirs || [];
+        if (!arr.length && !dirs.length) {
+            toast('올릴 파일이 없습니다', true);
             return;
-        const items = arr.map((f) => ({ name: f.name, pct: 0 }));
-        uploading.push(...items);
+        }
+        if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?'))
+            return;
+        const dest = st.path; // 업로드 중 다른 폴더로 들어가도 '떨어뜨린 그 폴더'로 간다
+        // 파일이 많으면(폴더 업로드) 파일별 카드 대신 묶음 카드 1개 — 그리드가 수백 장으로 폭주하지 않게.
+        const many = arr.length > UP_MANY;
+        const cards = many
+            ? [{ name: arr.length + '개 파일', label: '0/' + arr.length + ' 업로드 중', pct: 0 }]
+            : arr.map((u) => ({ name: u.rel, label: u.rel, pct: 0 }));
+        uploading.push(...cards);
         if (lastData)
             render(lastData); // 업로드 카드 즉시 표시(load 기다리지 않음)
         let ok = 0, fail = 0;
         for (let i = 0; i < arr.length; i++) {
-            const f = arr[i], u = items[i];
-            const target = (st.path ? st.path + '/' : '') + f.name;
+            const u = arr[i], c = many ? cards[0] : cards[i];
+            const onPct = (pct) => {
+                c.pct = many ? ((i + pct / 100) / arr.length) * 100 : pct;
+                if (many)
+                    c.label = i + '/' + arr.length + ' — ' + (u.rel.split('/').pop() || u.rel);
+                updateUpCard(c);
+            };
             try {
-                await authUploadProgress(B + id + '/file?path=' + encodeURIComponent(target), f, (pct) => { u.pct = pct; updateUpCard(u); });
-                u.pct = 100;
-                updateUpCard(u);
+                await authUploadProgress(B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + u.rel), u.file, onPct);
+                onPct(100);
                 ok += 1;
             }
             catch (e) {
                 fail += 1;
-                toast(f.name + ' 실패 — ' + e.message, true);
+                toast(u.rel + ' 실패 — ' + e.message, true);
             }
         }
-        uploading.length = 0;
-        if (ok)
-            toast(ok + '개 업로드 완료' + (fail ? (' · ' + fail + '개 실패') : ''));
+        // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
+        for (const d of dirs) {
+            try {
+                await api(B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d), { method: 'POST' });
+            }
+            catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
+        }
+        for (const c of cards) {
+            const ix = uploading.indexOf(c);
+            if (ix >= 0)
+                uploading.splice(ix, 1);
+        } // 이 배치 카드만 걷어냄(동시 업로드 보호)
+        if (ok || dirs.length)
+            toast((ok ? ok + '개 업로드 완료' : dirs.length + '개 폴더 생성') + (fail ? (' · ' + fail + '개 실패') : ''));
         st.q = '';
         searchIn.value = '';
         load();
@@ -10510,15 +10688,19 @@ function projectFolderSection(id, base) {
     function uploadingCard(u) {
         const pctEl = el('div', { class: 'proj-up-pct', text: Math.round(u.pct) + '%' });
         const fill = el('div', { class: 'proj-up-bar-fill', style: 'width:' + u.pct + '%' });
+        const nmEl = el('div', { class: 'proj-file-card-nm', text: u.label || u.name });
         u.pctEl = pctEl;
         u.fill = fill;
-        return el('div', { class: 'proj-file-card uploading', title: u.name }, el('div', { class: 'proj-up-icwrap' }, el('div', { class: 'proj-file-card-ic', text: iconFor(u.name) }), el('div', { class: 'proj-up-overlay' }, pctEl)), el('div', { class: 'proj-file-card-nm', text: u.name }), el('div', { class: 'proj-up-bar' }, fill));
+        u.nmEl = nmEl;
+        return el('div', { class: 'proj-file-card uploading', title: u.name }, el('div', { class: 'proj-up-icwrap' }, el('div', { class: 'proj-file-card-ic', text: iconFor(u.name) }), el('div', { class: 'proj-up-overlay' }, pctEl)), nmEl, el('div', { class: 'proj-up-bar' }, fill));
     }
     function updateUpCard(u) {
         if (u.pctEl)
             u.pctEl.textContent = Math.round(u.pct) + '%';
         if (u.fill)
             u.fill.style.width = u.pct + '%';
+        if (u.nmEl)
+            u.nmEl.textContent = u.label || u.name;
     }
     // 현재 폴더 안에 하위 폴더 생성.
     function openMkdir() {
@@ -10579,7 +10761,7 @@ function projectFolderSection(id, base) {
             frag.push(crumb);
             pairs = data.items.map((it) => ({ it, rel: join(st.path, it.name) }));
             if (!data.items.length && !data.path)
-                frag.push(el('div', { class: 'empty', text: '빈 폴더입니다. ‘＋ 업로드’로 파일을 올려 보세요.' }));
+                frag.push(el('div', { class: 'empty', text: '빈 폴더입니다. ‘＋ 업로드’를 누르거나, 파일·폴더를 끌어다 놓으세요.' }));
         }
         const cards = [];
         for (const u of uploading)
