@@ -1523,6 +1523,7 @@ function dashSessionEmpty(cfg, reloadSessions) {
 async function fillFolders(zone) {
     // '전체 보기' → 공유 폴더 브라우저 모달(하위 폴더 진입 + 파일 표시 + CRUD, #672). 넓은 모달로.
     const openBrowser = (startPath) => dashModal('팀 공유 폴더', dashFolderBrowser('shared', startPath || ''), true, { persistent: true, resizable: true, history: true });
+    const qp = (p) => 'root=shared&path=' + encodeURIComponent(p || ''); // 위젯은 항상 공유 워크스페이스 루트 기준(현재 경로 개념이 없다)
     let dirs = [];
     // 뷰(아이콘|목록)를 ⚙ 설정(dashFoldView, 전체보기와 공유)에 맞춰 렌더 — #670: 목록으로 바꾸면 대시보드 위젯도 목록으로.
     const paint = () => {
@@ -1557,17 +1558,90 @@ async function fillFolders(zone) {
     // 헤더 우상단 통일 컨트롤 — ⚙(폴더 기본 뷰: 저장 후 위젯도 즉시 그 뷰로 재렌더) + ⤢(전체 보기 모달).
     const openPrefs = (anchor) => dashChoicePopover(anchor, '폴더 기본 뷰', [['icon', '아이콘'], ['list', '목록']], dashFoldView(), (v) => { dashSaveFoldView(v); paint(); });
     dashCtl(zone, { gear: { title: '폴더 기본 뷰 설정', open: openPrefs }, action: { onClick: () => openBrowser(''), title: '공유 폴더 전체 보기 · 파일 관리' } });
-    let data;
-    try {
-        data = await api('/api/ui/terminal/browse?root=shared&path=');
+    // 목록 로드 — 업로드 뒤에도 다시 부른다(#796: 예전엔 fetch 가 함수 안에 인라인이라 재로드 경로가 아예 없었다).
+    const reload = async () => {
+        let data;
+        try {
+            data = await api('/api/ui/terminal/browse?' + qp(''));
+        }
+        catch (e) {
+            zone.body.replaceChildren(errorNote(e, '공유 폴더를 불러오지 못했습니다'));
+            return;
+        }
+        dirs = (data && data.dirs) || [];
+        zone.countEl.textContent = String(dirs.length);
+        paint();
+    };
+    // ── 드래그앤드롭 업로드(#796) — 위젯 박스 위로 파일·폴더를 끌어다 놓으면 공유 워크스페이스 '루트'로 올린다. ──
+    //  여기엔 드롭이 아예 없어서 끌어다 놔도 아무 일도 안 일어났다(모달·프로젝트 카드는 되는데 위젯만 안 되던 톤 어긋남).
+    //  업로드 '버튼'은 두지 않는다 — 존 헤더는 [⚙][⤢] 로 5개 존이 동일해야 한다(#req 통일성). 버튼 업로드는 ⤢ 전체 보기 모달의 '⬆ 업로드'(#795).
+    //  프리미티브(upDropZone/UP_CONFIRM/authUploadProgress)는 프로젝트 공유 폴더(#781)·전체 보기 모달(#795)에서 검증된 것 그대로 — 서버 변경 0.
+    let prog = null; // 업로드 중 { i, total, name, pct } — 박스가 작아 진행은 헤더 아래 얇은 스트립 1줄로(목록은 계속 보인다)
+    const progLabel = el('div', { class: 'dash-fold-prog-label' });
+    const progFill = el('div', { class: 'dash-fold-prog-fill' });
+    const progStrip = el('div', { class: 'dash-fold-prog', hidden: true }, progLabel, el('div', { class: 'dash-fold-prog-bar' }, progFill));
+    zone.box.insertBefore(progStrip, zone.body); // 목록(zone.body)은 paint 가 통째로 갈아끼우므로 스트립은 그 밖(헤더와 목록 사이)에 둔다
+    const paintProg = () => {
+        if (!prog)
+            return;
+        progLabel.textContent = dashUpLabel(prog.i, prog.total, prog.name);
+        progFill.style.width = prog.pct + '%';
+    };
+    async function uploadItems(items, emptyDirs) {
+        // 업로드 중 또 드롭하면 진행 상태가 엉킨다 — 잠금(data-uploading)은 '목록'에만 걸리고(박스는 드롭을 계속 받아야 한다) 여기서 막는다.
+        if (prog) {
+            toast('업로드 중입니다 — 끝난 뒤에 올려 주세요', true);
+            return;
+        }
+        const arr = items || [], eds = emptyDirs || [];
+        if (!arr.length && !eds.length) {
+            toast('올릴 파일이 없습니다', true);
+            return;
+        }
+        if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?'))
+            return;
+        prog = { i: 0, total: arr.length, name: arr.length ? arr[0].rel : '', pct: 0 };
+        zone.box.setAttribute('data-uploading', '1'); // 목록 조작만 잠금 — 헤더(⚙·⤢)와 진행 스트립은 살아 있다(흐려지지 않는다)
+        progStrip.hidden = false;
+        paintProg();
+        let ok = 0, fail = 0;
+        for (let i = 0; i < arr.length; i++) {
+            const u = arr[i];
+            prog.i = i;
+            prog.name = u.rel;
+            try {
+                await authUploadProgress('/api/ui/terminal/browse/file?' + qp(u.rel), u.file, (pct) => { prog.pct = ((i + pct / 100) / arr.length) * 100; paintProg(); });
+                ok += 1;
+            }
+            catch (e) {
+                fail += 1;
+                toast(u.rel + ' 실패 — ' + e.message, true);
+            }
+        }
+        // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
+        for (const d of eds) {
+            try {
+                await api('/api/ui/terminal/browse/mkdir?' + qp(d), { method: 'POST' });
+            }
+            catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
+        }
+        prog = null;
+        progStrip.hidden = true;
+        zone.box.removeAttribute('data-uploading');
+        // 위젯은 '폴더'만 보여 준다 → 루트로 올린 파일은 목록에 안 나타난다. 어디로 갔는지 토스트가 말해 준다(파일은 ⤢ 전체 보기에서 확인).
+        if (ok || eds.length)
+            toast('팀 공유 폴더에 ' + (ok ? ok + '개 업로드 완료' : eds.length + '개 폴더 생성') + (fail ? (' · ' + fail + '개 실패') : ''));
+        await reload();
     }
-    catch (e) {
-        zone.body.replaceChildren(errorNote(e, '공유 폴더를 불러오지 못했습니다'));
-        return;
-    }
-    dirs = (data && data.dirs) || [];
-    zone.countEl.textContent = String(dirs.length);
-    paint();
+    upDropZone(zone.box, zone.box, (items, emptyDirs) => uploadItems(items, emptyDirs)); // 박스가 곧 드롭존 + 하이라이트(.dash-zone.drop-active)
+    await reload();
+}
+// 업로드 진행 라벨 — 여러 개면 '업로드 중 — 3/106 · a.png', 하나면 '업로드 중 — a.png'. 위젯 스트립과 전체 보기 모달 패널이 같이 쓴다(#796).
+function dashUpLabel(i, total, name) {
+    if (!total)
+        return '폴더 만드는 중…'; // 빈 폴더만 떨어뜨린 경우(올릴 파일 0)
+    const base = String(name || '').split('/').pop() || String(name || '');
+    return total > 1 ? ('업로드 중 — ' + Math.min(i + 1, total) + '/' + total + ' · ' + base) : ('업로드 중 — ' + base);
 }
 // 공유 폴더 목록 행(#670) — 아이콘 카드 대신 컴팩트 리스트. 폴더 아이콘 + 굵은 이름 + hover 시 슬라이드 셰브런.
 function dashFolderRow(name, onOpen) {
@@ -1632,10 +1706,7 @@ function dashFolderBrowser(root, startPath) {
     const paintProg = () => {
         if (!prog || !prog.labelEl)
             return;
-        const base = String(prog.name || '').split('/').pop() || prog.name;
-        prog.labelEl.textContent = prog.total > 1
-            ? ('업로드 중 — ' + Math.min(prog.i + 1, prog.total) + '/' + prog.total + ' · ' + base)
-            : ('업로드 중 — ' + base);
+        prog.labelEl.textContent = dashUpLabel(prog.i, prog.total, prog.name);
         prog.fillEl.style.width = prog.pct + '%';
     };
     const progPanel = () => {

@@ -4835,6 +4835,16 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-prog-label { font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-fb-prog-bar { height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
 .dash-fb-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
+/* ── 팀 공유 폴더 '위젯'(대시보드 홈) — 박스 위로 드롭 → 공유 루트 업로드(#796). 드롭존이 박스 자체라 하이라이트도 박스에. ── */
+.dash-zone.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
+/* 업로드 중 — '목록'만 잠근다. 박스에 pointer-events:none 을 걸면 드롭이 박스를 통과해 페이지 배경에 떨어지고,
+   브라우저가 그 파일을 열어 화면(SPA 상태)을 날린다. 헤더(⚙·⤢)와 진행 스트립은 살아 있어야 한다. */
+.dash-zone[data-uploading="1"] .dash-wl { pointer-events: none; }
+/* 진행 스트립 — 박스가 작아 목록을 가리지 않고 헤더 아래 1줄(라벨 + 얇은 바). opacity 로 흐리게 만들지 않는다(#795 함정: 진행 바까지 흐려져 '멈춘 것'처럼 보인다). */
+.dash-fold-prog { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 10px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-fold-prog-label { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-fold-prog-bar { height: 4px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
+.dash-fold-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
 /* ── 공유 폴더 위젯 목록 뷰(#670) — 아이콘 카드 대신 컴팩트 리스트(전체보기 목록과 톤 일치). ── */
 .dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
 .dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }
