@@ -8,6 +8,7 @@
 import { itemsPool, q } from "./domainmap/db.js";
 import { refreshRepoFromGit } from "./domainmap/git-pull.js";
 import { parseCron, cronMatches, nextCronTime } from "./cron-expr.js";
+import { orgTimezone } from "./org/timezone.js"; // #778 cron 벽시계 = 조직 시간대(서버 로컬 TZ 아님)
 import type { Actor } from "./domainmap/core/types.js";
 import { logger } from "./log.js";
 
@@ -366,10 +367,11 @@ function buildMapPrompt(repo: string, count: number): string {
 }
 
 // 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분, interval 은 now+interval.
-function computeNextRun(job: CronJob): string | null {
+//  tz(#778) = 조직 시간대. cron_expr 은 그 벽시계로 해석된다(서버 로컬 TZ 아님 — cron-expr.ts 헤더 참조).
+function computeNextRun(job: CronJob, tz: string): string | null {
   if (job.run_once) return null; // 1회성 — 다음 실행 없음
   if (job.cron_expr) {
-    try { const n = nextCronTime(parseCron(job.cron_expr), new Date()); return n ? n.toISOString() : null; }
+    try { const n = nextCronTime(parseCron(job.cron_expr), new Date(), tz); return n ? n.toISOString() : null; }
     catch { return null; }
   }
   return new Date(Date.now() + Math.max(60, Number(job.interval_sec) || 600) * 1000).toISOString();
@@ -384,7 +386,7 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
     let res: { status: string; summary: unknown };
     try { res = await runJob(job); }
     catch (e) { res = { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
-    const nextIso = computeNextRun(job);
+    const nextIso = computeNextRun(job, await orgTimezone());
     try {
       await itemsPool.query(
         `UPDATE org_cron SET last_run_at=$2, last_status=$3, last_summary=$4, next_run_at=$5, updated_at=now() WHERE id=$1`,
@@ -396,15 +398,15 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
   } finally { running.delete(job.id); }
 }
 
-// 잡이 지금 due 인가 — cron_expr(절대) 또는 interval_sec(상대).
-function isDue(job: CronJob, now: number): boolean {
+// 잡이 지금 due 인가 — cron_expr(절대) 또는 interval_sec(상대). tz(#778) = cron 벽시계 기준 = 조직 시간대.
+function isDue(job: CronJob, now: number, tz: string): boolean {
   if (job.run_once) return !job.last_run_at; // 1회성 — 아직 안 돌았으면 due(다음 틱 실행), 실행되면 executeAndRecord 가 비활성화
   if (job.cron_expr) {
     // 절대(벽시계): cron 매치 + 같은 '분'에 아직 안 돌았으면 due(30s 틱이 분당 2회라 매치 분을 놓치지 않음).
     try {
       const nowMin = Math.floor(now / 60000);
       const lastMin = job.last_run_at ? Math.floor(new Date(job.last_run_at).getTime() / 60000) : -1;
-      return cronMatches(parseCron(job.cron_expr), new Date(now)) && nowMin !== lastMin;
+      return cronMatches(parseCron(job.cron_expr), new Date(now), tz) && nowMin !== lastMin;
     } catch { return false; } // 잘못된 expr → 미실행(검증은 cron_set). 다음 틱도 동일.
   }
   // 상대(interval): last_run + interval 경과 시.
@@ -417,10 +419,11 @@ async function tick(): Promise<void> {
   try { jobs = await q(itemsPool, `SELECT * FROM org_cron WHERE enabled=true`); }
   catch { return; } // 테이블 부재/DB 미연결 → 조용히 패스(다음 틱 재시도).
 
+  const tz = await orgTimezone(); // 틱당 1회(캐시) — cron_expr 벽시계 기준.
   const now = Date.now();
   for (const job of jobs) {
     if (running.has(job.id)) continue; // 진행 중 → 중첩 skip.
-    if (!isDue(job, now)) continue;
+    if (!isDue(job, now, tz)) continue;
     void executeAndRecord(job); // fire-and-forget — 락이 중첩을 막는다.
   }
 }

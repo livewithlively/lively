@@ -30,6 +30,12 @@ export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 : "${LANG:=C.UTF-8}"; : "${LC_ALL:=C.UTF-8}"; : "${LC_CTYPE:=C.UTF-8}"
 export LANG LC_ALL LC_CTYPE
 
+# 시간대(#778) — 세션 안 하네스(클로드코드 등)가 **조직 시간대**로 시각을 표시하게 한다(박스 OS TZ 는 대개 UTC).
+#  경로: 게이트웨이가 tmux `-e TZ=<조직 시간대>` 로 pane 에 주입 → sudo 는 sudoers 의 `env_keep += "TZ"` 로 보존
+#  (이 파일 헤더의 교리대로 sudo 의 env 처리를 신뢰하지 않고 **명시** 보존시킨다) → 여기서 재-export 로 계약을 못박는다.
+#  미설정(구 sudoers·비주입)이면 손대지 않는다 → 시스템 TZ 그대로 = 종전 동작(무회귀).
+if [ -n "${TZ:-}" ]; then export TZ; fi
+
 # TERM — 웹터미널은 tmux pane → control mode → **xterm.js(브라우저)** 로 렌더된다. 그래서 xterm-256color 로
 #  강제하는 게 옳고(렌더러와 일치) + 가장 견고하다: sudo 가 TERM 을 'unknown' 으로 떨구거나, tmux 가 넘긴
 #  'tmux-256color' terminfo 엔트리가 그 박스에 없으면(ncurses-term 미설치 흔함) claude/Codex 의 Ink TUI 가
