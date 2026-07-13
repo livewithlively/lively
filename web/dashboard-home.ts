@@ -6,9 +6,10 @@
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
-// 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authUploadProgress/Download·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
-//  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795).
-import { UP_CONFIRM, authDownload, authUploadProgress, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, type UpItem } from './projects.js';
+// 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
+//  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
+//  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
+import { UP_CONFIRM, authDownload, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upProgress, upSend, upToast, type UpItem } from './projects.js';
 import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
@@ -1184,59 +1185,37 @@ async function fillFolders(zone) {
   // ── 드래그앤드롭 업로드(#796) — 위젯 박스 위로 파일·폴더를 끌어다 놓으면 공유 워크스페이스 '루트'로 올린다. ──
   //  여기엔 드롭이 아예 없어서 끌어다 놔도 아무 일도 안 일어났다(모달·프로젝트 카드는 되는데 위젯만 안 되던 톤 어긋남).
   //  업로드 '버튼'은 두지 않는다 — 존 헤더는 [⚙][⤢] 로 5개 존이 동일해야 한다(#req 통일성). 버튼 업로드는 ⤢ 전체 보기 모달의 '⬆ 업로드'(#795).
-  //  프리미티브(upDropZone/UP_CONFIRM/authUploadProgress)는 프로젝트 공유 폴더(#781)·전체 보기 모달(#795)에서 검증된 것 그대로 — 서버 변경 0.
-  let prog: any = null;   // 업로드 중 { i, total, name, pct } — 박스가 작아 진행은 헤더 아래 얇은 스트립 1줄로(목록은 계속 보인다)
-  const progLabel = el('div', { class: 'dash-fold-prog-label' });
-  const progFill = el('div', { class: 'dash-fold-prog-fill' });
-  const progStrip = el('div', { class: 'dash-fold-prog', hidden: true },
-    progLabel, el('div', { class: 'dash-fold-prog-bar' }, progFill));
-  zone.box.insertBefore(progStrip, zone.body);   // 목록(zone.body)은 paint 가 통째로 갈아끼우므로 스트립은 그 밖(헤더와 목록 사이)에 둔다
-  const paintProg = () => {
-    if (!prog) return;
-    progLabel.textContent = dashUpLabel(prog.i, prog.total, prog.name);
-    progFill.style.width = prog.pct + '%';
-  };
+  //  전송 루프·진행바·취소는 프리미티브(upSend/upProgress)를 그대로 쓴다 — 네 화면이 같은 취소를 공유한다(#797).
+  let prog: any = null;   // 업로드 중이면 진행·취소 바 — 박스가 작아 헤더 아래 한 줄로(목록은 계속 보인다)
+  const progSlot = el('div', { class: 'up-prog-box' });
+  zone.box.insertBefore(progSlot, zone.body);   // 목록(zone.body)은 paint 가 통째로 갈아끼우므로 슬롯은 그 밖(헤더와 목록 사이)에 둔다
   async function uploadItems(items: UpItem[], emptyDirs: string[]) {
     // 업로드 중 또 드롭하면 진행 상태가 엉킨다 — 잠금(data-uploading)은 '목록'에만 걸리고(박스는 드롭을 계속 받아야 한다) 여기서 막는다.
     if (prog) { toast('업로드 중입니다 — 끝난 뒤에 올려 주세요', true); return; }
     const arr = items || [], eds = emptyDirs || [];
     if (!arr.length && !eds.length) { toast('올릴 파일이 없습니다', true); return; }
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
-    prog = { i: 0, total: arr.length, name: arr.length ? arr[0].rel : '', pct: 0 };
-    zone.box.setAttribute('data-uploading', '1');   // 목록 조작만 잠금 — 헤더(⚙·⤢)와 진행 스트립은 살아 있다(흐려지지 않는다)
-    progStrip.hidden = false;
-    paintProg();
-    let ok = 0, fail = 0;
-    for (let i = 0; i < arr.length; i++) {
-      const u = arr[i];
-      prog.i = i; prog.name = u.rel;
-      try {
-        await authUploadProgress('/api/ui/terminal/browse/file?' + qp(u.rel), u.file,
-          (pct) => { prog.pct = ((i + pct / 100) / arr.length) * 100; paintProg(); });
-        ok += 1;
-      } catch (e) { fail += 1; toast(u.rel + ' 실패 — ' + e.message, true); }
-    }
-    // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
-    for (const d of eds) {
-      try { await api('/api/ui/terminal/browse/mkdir?' + qp(d), { method: 'POST' }); }
-      catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
-    }
+    const ac = new AbortController();
+    prog = upProgress(arr.length, () => ac.abort());   // '취소' → 남은 파일은 안 보내고, 보내던 파일도 끊는다(#797)
+    progSlot.append(prog.row);
+    zone.box.setAttribute('data-uploading', '1');   // 목록 조작만 잠금 — 헤더(⚙·⤢)와 진행 바는 살아 있다(흐려지지 않는다)
+    const r = await upSend({
+      items: arr, emptyDirs: eds, signal: ac.signal,
+      fileUrl: (rel) => '/api/ui/terminal/browse/file?' + qp(rel),
+      dirUrl: (d) => '/api/ui/terminal/browse/mkdir?' + qp(d),
+      onProgress: (i, rel, pct) => { if (prog) prog.set(i, rel, pct); },
+    });
+    prog.row.remove();
     prog = null;
-    progStrip.hidden = true;
     zone.box.removeAttribute('data-uploading');
     // 위젯은 '폴더'만 보여 준다 → 루트로 올린 파일은 목록에 안 나타난다. 어디로 갔는지 토스트가 말해 준다(파일은 ⤢ 전체 보기에서 확인).
-    if (ok || eds.length) toast('팀 공유 폴더에 ' + (ok ? ok + '개 업로드 완료' : eds.length + '개 폴더 생성') + (fail ? (' · ' + fail + '개 실패') : ''));
+    if (r.canceled) toast(r.ok ? ('팀 공유 폴더에 ' + r.ok + '개까지 올리고 취소했습니다') : '업로드를 취소했습니다');
+    else if (r.ok || r.made) toast('팀 공유 폴더에 ' + (r.ok ? r.ok + '개 업로드 완료' : r.made + '개 폴더 생성') + (r.fail ? (' · ' + r.fail + '개 실패') : ''));
     await reload();
   }
   upDropZone(zone.box, zone.box, (items, emptyDirs) => uploadItems(items, emptyDirs));   // 박스가 곧 드롭존 + 하이라이트(.dash-zone.drop-active)
 
   await reload();
-}
-// 업로드 진행 라벨 — 여러 개면 '업로드 중 — 3/106 · a.png', 하나면 '업로드 중 — a.png'. 위젯 스트립과 전체 보기 모달 패널이 같이 쓴다(#796).
-function dashUpLabel(i, total, name) {
-  if (!total) return '폴더 만드는 중…';   // 빈 폴더만 떨어뜨린 경우(올릴 파일 0)
-  const base = String(name || '').split('/').pop() || String(name || '');
-  return total > 1 ? ('업로드 중 — ' + Math.min(i + 1, total) + '/' + total + ' · ' + base) : ('업로드 중 — ' + base);
 }
 // 공유 폴더 목록 행(#670) — 아이콘 카드 대신 컴팩트 리스트. 폴더 아이콘 + 굵은 이름 + hover 시 슬라이드 셰브런.
 function dashFolderRow(name, onOpen) {
@@ -1257,7 +1236,7 @@ function dashFolderCard(name) {
 }
 // ── 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 하위 진입 + 파일 표시 + CRUD + 업로드(파일·폴더·드롭, #795). ──
 //  루트 브라우즈 API(/api/ui/terminal/browse[/file])만 쓴다 — 공유 워크스페이스는 셸(터미널)로 이미 rw 라 UI CRUD 가 권한을 넓히지 않는다.
-//  파일 프리미티브(authUploadProgress/Download·fmtSize)와 업로드 프리미티브(upControl/upDropZone)는 프로젝트 공유 폴더에서 검증된 것을 그대로 재사용.
+//  파일 프리미티브(authDownload·fmtSize)와 업로드 프리미티브(upControl/upDropZone/upSend/upProgress)는 프로젝트 공유 폴더에서 검증된 것을 그대로 재사용.
 function dashFolderBrowser(root, startPath) {
   const container = el('div', { class: 'dash-fb' });
   let curPath = startPath || '';
@@ -1284,20 +1263,8 @@ function dashFolderBrowser(root, startPath) {
   // ── 업로드: 파일 + '폴더' + 드래그앤드롭 (#795) — 프로젝트 공유 폴더(#781)의 프리미티브를 그대로 쓴다. ──
   //  items[].rel = 현재 폴더 기준 상대경로. 폴더를 올리면 'sub/child/a.png' 처럼 중첩 경로가 들어오고,
   //  서버 PUT 이 dirname 을 mkdir -p 하므로(src/terminal-files.ts) 그 구조가 디스크에 그대로 생긴다 → 서버 변경 불필요.
-  let prog: any = null;   // 업로드 중 진행 상태 { i, total, name, pct, labelEl, fillEl } — 목록 자리에 진행 패널 1장(파일별 카드 X)
+  let prog: any = null;   // 업로드 중이면 진행·취소 바(upProgress) — 목록 자리에 1장(폴더 업로드는 수백 건이라 파일별 카드 X)
   const up = upControl((items) => uploadItems(items, []), { className: 'dash-fb-btn primary', label: '⬆ 업로드' });
-  const paintProg = () => {
-    if (!prog || !prog.labelEl) return;
-    prog.labelEl.textContent = dashUpLabel(prog.i, prog.total, prog.name);
-    prog.fillEl.style.width = prog.pct + '%';
-  };
-  const progPanel = () => {
-    prog.labelEl = el('div', { class: 'dash-fb-prog-label' });
-    prog.fillEl = el('div', { class: 'dash-fb-prog-fill' });
-    const panel = el('div', { class: 'dash-fb-prog' }, prog.labelEl, el('div', { class: 'dash-fb-prog-bar' }, prog.fillEl));
-    paintProg();
-    return panel;
-  };
   async function uploadItems(items: UpItem[], emptyDirs: string[]) {
     // 업로드 중 또 드롭하면 진행 상태가 엉킨다 — 조작 잠금(data-uploading)은 container 에만 걸리고 드롭존은 오버레이라 여기서 막는다.
     if (prog) { toast('업로드 중입니다 — 끝난 뒤에 올려 주세요', true); return; }
@@ -1305,27 +1272,19 @@ function dashFolderBrowser(root, startPath) {
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
     const dest = curPath;   // 업로드 중 다른 폴더로 들어가도 '끌어다 놓은 그 폴더'로 간다
-    prog = { i: 0, total: arr.length, name: arr.length ? arr[0].rel : '', pct: 0 };
+    const ac = new AbortController();
+    prog = upProgress(arr.length, () => ac.abort());  // '취소' → 남은 파일은 안 보내고, 보내던 파일도 끊는다(#797)
     container.setAttribute('data-uploading', '1');   // 조작 잠금 — 진행 패널이 흐려지지 않게 aria-busy(opacity .5) 대신 이 속성
-    render(null);
-    let ok = 0, fail = 0;
-    for (let i = 0; i < arr.length; i++) {
-      const u = arr[i];
-      prog.i = i; prog.name = u.rel;
-      try {
-        await authUploadProgress('/api/ui/terminal/browse/file?' + qp((dest ? dest + '/' : '') + u.rel), u.file,
-          (pct) => { prog.pct = ((i + pct / 100) / arr.length) * 100; paintProg(); });
-        ok += 1;
-      } catch (e) { fail += 1; toast(u.rel + ' 실패 — ' + e.message, true); }
-    }
-    // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
-    for (const d of dirs) {
-      try { await api('/api/ui/terminal/browse/mkdir?' + qp((dest ? dest + '/' : '') + d), { method: 'POST' }); }
-      catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
-    }
+    render(null);                                    // ⚠ 잠금은 pointer-events:none 이라 CSS 에서 .up-prog 만 되살린다(안 그러면 취소 버튼이 안 눌린다)
+    const r = await upSend({
+      items: arr, emptyDirs: dirs, signal: ac.signal,
+      fileUrl: (rel) => '/api/ui/terminal/browse/file?' + qp((dest ? dest + '/' : '') + rel),
+      dirUrl: (d) => '/api/ui/terminal/browse/mkdir?' + qp((dest ? dest + '/' : '') + d),
+      onProgress: (i, rel, pct) => { if (prog) prog.set(i, rel, pct); },
+    });
     prog = null;
     container.removeAttribute('data-uploading');
-    if (ok || dirs.length) toast((ok ? ok + '개 업로드 완료' : dirs.length + '개 폴더 생성') + (fail ? (' · ' + fail + '개 실패') : ''));
+    upToast(r);
     await load();
   }
   // 드래그앤드롭 — 이 브라우저엔 드롭 핸들러가 아예 없었다(그래서 끌어다 놔도 아무 일도 안 일어났다).
@@ -1476,7 +1435,7 @@ function dashFolderBrowser(root, startPath) {
       up.btn, up.fileIn, up.dirIn);
     const items = (data.items || []);
     let body;
-    if (prog) { body = progPanel(); }   // 업로드 중 — 목록 대신 진행 패널(폴더 업로드는 수백 건이라 파일별 카드 대신 묶음 1장)
+    if (prog) { body = prog.row; }   // 업로드 중 — 목록 대신 진행·취소 바(같은 노드를 다시 넣는다 = 이동이라 리스너 유지)
     else if (!items.length) { body = el('div', { class: 'proj-file-grid dash-fb-grid' }, dashEmpty('이 폴더가 비어 있어요. ‘⬆ 업로드’를 누르거나, 파일·폴더를 끌어다 놓으세요.')); }
     else if (viewMode === 'list') { body = el('div', { class: 'dash-fb-list' }); for (const it of items) body.append(fbRow(it)); }
     else { body = el('div', { class: 'proj-file-grid dash-fb-grid' }); for (const it of items) body.append(fbCard(it)); }

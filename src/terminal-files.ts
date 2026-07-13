@@ -10,7 +10,8 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { canAttach, sessionDir, resolveRootPath, sessionOsUser, userOsUser } from "./terminal-sessions.js";
-import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberWriteFrom, type LsEntry } from "./terminal-member-fs.js";
+import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
+import { receiveUpload, uploadError } from "./upload-file.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
 const MAX_PREVIEW = 2 * 1024 * 1024; // 2MB
@@ -130,31 +131,12 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     setDl();
     fs.createReadStream(abs).pipe(res);
   }));
-  // 업로드(raw 스트림 → 파일). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
+  // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
+  //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
     const { abs, osUser } = await resolveBrowse(req, true);
-    if (osUser) {
-      await memberMkdir(osUser, path.dirname(abs));
-      await memberWriteFrom(osUser, abs, req, MAX_UPLOAD).catch((e) => {
-        if ((e as Error).message === "too large") throw new HttpError(413, "파일이 너무 큽니다(50MB 초과)");
-        throw new HttpError(500, "업로드 실패");
-      });
-      res.json({ ok: true });
-      return;
-    }
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      const ws = fs.createWriteStream(abs);
-      let size = 0;
-      req.on("data", (c: Buffer) => {
-        size += c.length;
-        if (size > MAX_UPLOAD) { ws.destroy(); req.destroy(); reject(new HttpError(413, "파일이 너무 큽니다(50MB 초과)")); }
-      });
-      req.on("error", reject);
-      ws.on("error", reject);
-      ws.on("finish", () => resolve());
-      req.pipe(ws);
-    });
+    try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
+    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true });
   }));
 
@@ -219,33 +201,13 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     res.json({ ok: true });
   }));
 
-  // 업로드(raw 스트림 → 파일). content-type 무관(express.json 은 json 만 소비하므로 스트림 보존).
+  // 업로드(raw 스트림 → 임시파일 → rename). content-type 무관(express.json 은 json 만 소비하므로 스트림 보존).
   //  격리 세션은 멤버 uid 로 써서 파일 소유자가 멤버가 되게 한다(그래야 세션 셸이 이후 편집 가능).
   app.put("/api/ui/terminal/sessions/:id/file", auth, wrap(async (req, res) => {
     const { abs } = await resolveInSession(req, true);
     const osUser = await sessionOsUser(req.params.id);
-    if (osUser) {
-      await memberMkdir(osUser, path.dirname(abs));
-      await memberWriteFrom(osUser, abs, req, MAX_UPLOAD).catch((e) => {
-        if ((e as Error).message === "too large") throw new HttpError(413, "파일이 너무 큽니다(50MB 초과)");
-        throw new HttpError(500, "업로드 실패");
-      });
-      res.json({ ok: true, path: abs });
-      return;
-    }
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      const ws = fs.createWriteStream(abs);
-      let size = 0;
-      req.on("data", (c: Buffer) => {
-        size += c.length;
-        if (size > MAX_UPLOAD) { ws.destroy(); req.destroy(); reject(new HttpError(413, "파일이 너무 큽니다(50MB 초과)")); }
-      });
-      req.on("error", reject);
-      ws.on("error", reject);
-      ws.on("finish", () => resolve());
-      req.pipe(ws);
-    });
+    try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
+    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true, path: abs }); // abs = 세션 작업폴더 기준 절대경로(드롭 업로드가 입력창에 꽂아 cwd 무관하게 찾게)
   }));
 }
