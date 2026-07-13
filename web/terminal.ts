@@ -148,15 +148,17 @@ async function renderTerminal(view) {
   function repaintBulk() {
     if (!sel.mode) { bulkBar.hidden = true; bulkBar.replaceChildren(); return; }
     const n = sel.ids.size;
-    const allOn = ownedSessions.length > 0 && ownedSessions.every((s) => sel.ids.has(s.id));
+    const allOn = sessions.length > 0 && sessions.every((s) => sel.ids.has(s.id));
     const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: allOn ? '전체 해제' : '전체 선택',
-      onclick: () => { if (allOn) sel.ids.clear(); else ownedSessions.forEach((s) => sel.ids.add(s.id)); draw(); } });
+      onclick: () => { if (allOn) sel.ids.clear(); else sessions.forEach((s) => sel.ids.add(s.id)); draw(); } });
+    const openBtn = el('button', { class: 'btn btn-primary btn-sm', text: '선택 열기', disabled: n === 0, title: '고른 세션들을 한 탭 그리드로 동시에 열기',
+      onclick: () => bulkOpen() });
     const delBtn = el('button', { class: 'btn btn-sm btn-danger', text: '선택 삭제', disabled: n === 0,
       onclick: () => bulkDelete(delBtn) });
     bulkBar.hidden = false;
     bulkBar.replaceChildren(
-      el('span', { class: 'bulk-bar-count', text: n ? n + '개 선택됨' : '삭제할 세션을 고르세요' }),
-      el('div', { class: 'bulk-bar-actions' }, allBtn, delBtn));
+      el('span', { class: 'bulk-bar-count', text: n ? n + '개 선택됨' : '세션을 골라 한 탭에 열거나 삭제하세요' }),
+      el('div', { class: 'bulk-bar-actions' }, allBtn, openBtn, delBtn));
   }
   sel.onToggle = repaintBulk; // 카드 체크박스 토글 시 bulkBar 카운트만 갱신(전체 재렌더 없이)
 
@@ -181,8 +183,9 @@ async function renderTerminal(view) {
       chip('대기', 'idle', 'idle'),
       chip('오프라인', 'offline', 'offline'));
 
-    // 우측 컨트롤 — 프로젝트 필터(세션에 프로젝트가 있을 때만) + 선택(일괄삭제) 토글.
+    // 우측 컨트롤 — 통합 질문검색 + 프로젝트 필터(세션에 프로젝트가 있을 때만) + 선택(일괄삭제) 토글.
     const right = el('div', { class: 'tsess-controls-right' });
+    right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
     const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
     if (projIds.length) {
       const psel = el('select', { class: 'tsess-projsel', onchange: () => { projF = Number((psel as any).value) || 0; draw(); } },
@@ -192,7 +195,7 @@ async function renderTerminal(view) {
     }
     const selToggle = sel.mode
       ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
-      : (ownedSessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
+      : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
     if (selToggle) right.append(selToggle);
     controls.replaceChildren(chips, right);
 
@@ -208,6 +211,17 @@ async function renderTerminal(view) {
     for (const s of shown) list.append(tsessCard(s, ctx));
     listWrap.replaceChildren(list);
     repaintBulk();
+  }
+
+  // 선택 열기 — 고른 세션들을 한 탭 그리드로. 1개면 단독 탭, 여러 개면 배치(그리드) 선택 팝업 후 terminal-grid.html.
+  function bulkOpen() {
+    const items = [...sel.ids]
+      .map((id) => sessions.find((s) => s.id === id))
+      .filter(Boolean)
+      .map((s) => ({ id: s.id, label: s.label || '' }));
+    if (!items.length) return;
+    if (items.length === 1) { window.open('/ui/terminal.html?session=' + encodeURIComponent(items[0].id) + '&label=' + encodeURIComponent(items[0].label), '_blank'); return; }
+    openGridPicker(items);
   }
 
   async function bulkDelete(btn) {
@@ -269,17 +283,18 @@ function tsessCard(s, ctx) {
 
   const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
 
-  // 선택(일괄삭제) 모드 — 내 소유 카드에 체크박스(카드 전체 토글).
-  if (sel && sel.mode && s.owned) {
+  // 선택 모드 — 모든 카드에 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
+  if (sel && sel.mode) {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = sel.ids.has(s.id);
     cb.addEventListener('change', () => { if (cb.checked) sel.ids.add(s.id); else sel.ids.delete(s.id); if (sel.onToggle) sel.onToggle(); });
     return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
   }
 
-  // 액션 — 열기(항상) + 소유자면 수정·삭제.
+  // 액션 — 열기(항상) + 내 질문(항상) + 소유자면 수정·삭제.
   const acts = el('div', { class: 'tsess-acts' },
-    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') }));
+    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') }),
+    el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
     acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
@@ -289,6 +304,171 @@ function tsessCard(s, ctx) {
     } }));
   }
   return el('div', { class: 'tsess-card tsess-' + st.cls + (s.attached ? ' attached' : '') }, info, acts);
+}
+
+// 카드 '내 질문' 팝아웃(#745) — 이 세션에서 클로드에게 보낸 사용자 질문(프롬프트)만 시간순으로 모아 본다(위=최근).
+//  백엔드가 ~/.claude 트랜스크립트에서 사람이 친 질문만 추출(툴결과·주입 메시지 제외). 접근통제는 서버 canAttach.
+// 여러 세션을 한 탭 그리드로(#745) — n개에 맞는 배치 후보(격자·가로·세로·2열·3열). cols*rows>=n 인 것만.
+function gridLayouts(n) {
+  const out: any[] = []; const seen = new Set();
+  const add = (cols, rows, label) => { const k = cols + 'x' + rows; if (cols >= 1 && rows >= 1 && cols * rows >= n && !seen.has(k)) { seen.add(k); out.push({ cols, rows, label }); } };
+  const sq = Math.ceil(Math.sqrt(n));
+  add(sq, Math.ceil(n / sq), '격자');          // 정사각형에 가깝게
+  add(n, 1, '가로 한 줄');
+  add(1, n, '세로 한 줄');
+  add(2, Math.ceil(n / 2), '2열');
+  if (n >= 6) add(3, Math.ceil(n / 3), '3열');
+  return out.slice(0, 5);
+}
+// 배치(그리드) 선택 팝업 — 고른 뒤 terminal-grid.html 을 새 탭으로. items = [{id,label}].
+function openGridPicker(items) {
+  const n = items.length;
+  const container = el('div', { class: 'tgrid-opts' });
+  const back = overlay(n + '개 세션을 한 탭에서 열기 — 배치를 고르세요', container);
+  const openGrid = (cols, rows) => {
+    const ids = items.map((x) => x.id).join(',');
+    const labels = encodeURIComponent(JSON.stringify(items.map((x) => x.label || '')));
+    window.open('/ui/terminal-grid.html?sessions=' + encodeURIComponent(ids) + '&labels=' + labels + '&cols=' + cols + '&rows=' + rows, '_blank');
+    back.remove();
+  };
+  for (const L of gridLayouts(n)) {
+    const preview = el('div', { class: 'tgrid-prev', style: 'grid-template-columns:repeat(' + L.cols + ',1fr);grid-template-rows:repeat(' + L.rows + ',1fr)' });
+    for (let i = 0; i < L.cols * L.rows; i++) preview.append(el('span', { class: 'tgrid-prev-cell' + (i < n ? ' on' : '') }));
+    container.append(el('button', { class: 'tgrid-opt', type: 'button', onclick: () => openGrid(L.cols, L.rows) },
+      preview, el('div', { class: 'tgrid-opt-lbl', text: L.label }), el('div', { class: 'tgrid-opt-dim', text: L.cols + '×' + L.rows })));
+  }
+}
+function qWhen(ts) {
+  const ms = Date.parse(ts || ''); if (!ms) return '';
+  return relAgo(Math.floor(ms / 1000));
+}
+// 검색어 → 토큰(공백분리·중복제거·소문자).
+function qTerms(q) { return [...new Set(String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean))]; }
+// 관련도 점수(백엔드 scoreText 와 동형) — 팝아웃 내 검색(클라이언트)도 같은 랭킹. matched=매치 단어 수(AND 판정).
+const QBOUNDARY_RE = /[\s.,!?()[\]{}"'“”‘’·\-—:;/\\]/;
+function qScore(textLower, terms, phrase) {
+  let score = 0, matched = 0; const positions: number[] = [];
+  for (const t of terms) {
+    const idx = textLower.indexOf(t);
+    if (idx === -1) continue;
+    matched++; positions.push(idx); score += 10;
+    if (idx === 0 || QBOUNDARY_RE.test(textLower[idx - 1])) score += 5;
+    let c = 0, i = idx; while (i !== -1 && c < 5) { c++; i = textLower.indexOf(t, i + t.length); }
+    score += Math.min(c - 1, 3);
+  }
+  if (matched === 0) return { score: 0, matched: 0 };
+  if (terms.length > 1) {
+    if (matched === terms.length && positions.length) { const span = Math.max(...positions) - Math.min(...positions); if (span < 30) score += 20; else if (span < 100) score += 8; }
+    if (textLower.includes(phrase)) score += 50;
+  }
+  return { score, matched };
+}
+// 질문 텍스트에서 각 검색 토큰의 모든 등장을 <mark> 로 강조(el/textContent — XSS 안전). terms 없으면 그냥 텍스트.
+function qHighlight(text, terms) {
+  const wrap = el('div', { class: 'tsess-qtext' });
+  if (!terms || !terms.length) { wrap.textContent = text; return wrap; }
+  const lower = String(text).toLowerCase();
+  const ranges: any[] = [];
+  for (const t of terms) { let i = 0, idx; while ((idx = lower.indexOf(t, i)) !== -1) { ranges.push([idx, idx + t.length]); i = idx + t.length; } }
+  if (!ranges.length) { wrap.textContent = text; return wrap; }
+  ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged = [ranges[0].slice()];
+  for (let k = 1; k < ranges.length; k++) { const last = merged[merged.length - 1]; if (ranges[k][0] <= last[1]) last[1] = Math.max(last[1], ranges[k][1]); else merged.push(ranges[k].slice()); }
+  let pos = 0;
+  for (const [a, b] of merged) { if (a > pos) wrap.append(document.createTextNode(text.slice(pos, a))); wrap.append(el('mark', { class: 'tsess-qmark', text: text.slice(a, b) })); pos = b; }
+  if (pos < text.length) wrap.append(document.createTextNode(text.slice(pos)));
+  return wrap;
+}
+// 한 세션 '내 질문' 팝아웃 — 상단 검색으로 그 세션 질문을 즉시 필터(클라이언트). 최신이 위, #N=시간순 번호.
+async function openSessPrompts(s) {
+  const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
+  overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
+  try {
+    const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts');
+    const prompts = (d && d.prompts) || [];
+    const total = (d && d.total) || prompts.length;
+    if (!prompts.length) {
+      body.replaceChildren(el('div', { class: 'empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
+      return;
+    }
+    const search = el('input', { class: 'tsess-qsearch', type: 'search', placeholder: '이 세션의 질문 검색…' });
+    const cap = el('div', { class: 'caption tsess-qcap' });
+    const list = el('div', { class: 'tsess-qlist' });
+    const draw = () => {
+      const query = search.value.trim();
+      const terms = qTerms(query);
+      list.replaceChildren();
+      if (!terms.length) { // 검색 없음 → 최신순 전체
+        cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
+        prompts.slice().reverse().forEach((p) => {
+          list.append(el('div', { class: 'tsess-qitem' },
+            el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { text: qWhen(p.ts) })),
+            qHighlight(p.text, null)));
+        });
+        return;
+      }
+      const phrase = query.toLowerCase();
+      const scored: any[] = [];
+      for (let i = 0; i < prompts.length; i++) { const r = qScore(prompts[i].text.toLowerCase(), terms, phrase); if (r.matched >= 1) scored.push({ p: prompts[i], chrono: i + 1, score: r.score, matched: r.matched }); }
+      const strict = scored.filter((x) => x.matched === terms.length);
+      const isPartial = strict.length === 0 && terms.length > 1;
+      const pool = isPartial ? scored : strict;
+      pool.sort((a, b) => b.score - a.score || (b.chrono - a.chrono));  // 관련도 → 최신
+      cap.textContent = pool.length ? (pool.length + ' / ' + total + '개 일치 · 관련도순' + (isPartial ? ' (일부 단어)' : '')) : '';
+      if (!pool.length) { list.append(el('div', { class: 'empty', text: '일치하는 질문이 없어요.' })); return; }
+      pool.forEach(({ p, chrono }) => {
+        list.append(el('div', { class: 'tsess-qitem' },
+          el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { text: qWhen(p.ts) })),
+          qHighlight(p.text, terms)));
+      });
+    };
+    search.addEventListener('input', draw);
+    body.replaceChildren(search, cap, list);
+    draw();
+  } catch (e) {
+    body.replaceChildren(el('div', { class: 'empty', text: '질문을 불러오지 못했어요 — ' + (e && e.message || e) }));
+  }
+}
+// 전체 세션 통합 '질문 검색' 팝아웃(#745) — 여러 터미널에서 보낸 질문을 한 번에 검색하고, 각 결과가 '어느 세션'인지 보여준다.
+//  결과 클릭 = 그 세션 터미널 열기. 서버가 접근 가능한 세션만 검색(개인 소유/초대 + 내 프로젝트 세션).
+function openGlobalPromptSearch(ctx) {
+  const { projName, myProjIds } = ctx;
+  const input = el('input', { class: 'tsess-gsearch', type: 'search', placeholder: '모든 세션에서 내 질문 검색 — 뜻이 비슷한 것도 찾아요' });
+  const status = el('div', { class: 'caption tsess-qcap', text: '내가 여러 세션에서 클로드에게 보낸 질문을 한 번에 검색해요 (의미 기반).' });
+  const results = el('div', { class: 'tsess-qlist tsess-gresults' });
+  overlay('질문 검색 · 모든 세션', el('div', { class: 'tsess-qbody tsess-gbody' }, input, status, results));
+  let timer: any = null, lastQ: any = null;
+  const run = async () => {
+    const q = input.value.trim();
+    if (q === lastQ) return; lastQ = q;
+    if (q.length < 2) { status.textContent = '두 글자 이상 입력하세요.'; results.replaceChildren(); return; }
+    status.textContent = '검색 중…'; results.replaceChildren();
+    try {
+      const d = await api('/api/ui/terminal/prompts/search?q=' + encodeURIComponent(q));
+      if (input.value.trim() !== q) return; // 늦게 온 응답 무시
+      const rows = (d && d.results) || [];
+      const mode = d.semantic ? '의미 검색' : '관련도순';
+      status.textContent = rows.length ? (rows.length + '개 · ' + mode + (d.partial ? ' (일부 단어만 일치)' : '') + (d.truncated ? ' · 많아서 일부만' : '')) : '일치하는 질문이 없어요.';
+      results.replaceChildren();
+      const ql = qTerms(q);
+      rows.forEach((r) => {
+        const pid = Number(r.projectId) || 0;
+        const meta = el('div', { class: 'tsess-qmeta' },
+          el('span', { class: 'tsess-gsess', title: r.label, text: r.label || r.sessionId }),
+          pid ? el('span', { class: 'tsess-proj' + (myProjIds.has(pid) ? ' mine' : ''), title: (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }) : null,
+          el('span', { text: qWhen(r.ts) }),
+          el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
+        const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, qHighlight(r.text, ql));
+        item.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
+        results.append(item);
+      });
+    } catch (e) {
+      if (input.value.trim() !== q) return;
+      status.textContent = '검색 실패 — ' + (e && e.message || e);
+    }
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 300); });
+  setTimeout(() => input.focus(), 30);
 }
 
 // 구성원 격리(#524) — 이 세션의 claude 가 '내 격리 계정(box_)'으로 뜨는지 안내. box_ 격리가 #346 멀티프로필을 대체.

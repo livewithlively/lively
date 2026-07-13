@@ -833,6 +833,26 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             if (!any)
                 boardBox.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
         }
+        else if (pjvBoardView.byFolder) {
+            // 리스트로 나누기(#756) — 사이드바를 닫지 않고(상태로·칸반과 동일하게 유지) 우측 컬럼에 '리스트별 접이식 그룹'으로.
+            //  폴더 뷰(위 selFolder 분기)와 동형: 전체 스코프면 모든 리스트(+미분류), 단일 리스트 스코프면 그 리스트만.
+            //  byStatus 는 false 라 리스트 안 상태 중첩 없음(순수 리스트 그룹).
+            boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null));
+            const lgs = selList ? groups.filter((g) => g.list && g.list.id === selList.id) : groups.filter((g) => g.list);
+            let anyL = false;
+            for (const g of lgs) {
+                if (mineOnly && !visCount(g.projects))
+                    continue;
+                anyL = true;
+                boardBox.append(pjvListGroup(pjvListOpen.has(g.key) ? g : { ...g, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+            }
+            if (!selList && unGroup && visCount(unGroup.projects) > 0) {
+                anyL = true;
+                boardBox.append(pjvListGroup(pjvListOpen.has(unGroup.key) ? unGroup : { ...unGroup, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+            }
+            if (!anyL)
+                boardBox.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
+        }
         else if (byStatus) {
             // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
             pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort });
@@ -4884,7 +4904,18 @@ function npTaskEditor() {
         addInput.focus();
     });
     const box = el('div', { class: 'np-tasks-tree' }, listEl, addRow);
-    return { box, getTasks: () => model.map((t) => ({ name: t.name, subs: t.subs.map((s) => s.name) })) };
+    // 입력칸에 Enter 안 하고 남겨둔 텍스트도 커밋(#req 버그수정) — 안 그러면 마지막에 친 태스크가 저장 안 되고 사라짐(증발).
+    const flushPending = () => {
+        const name = (addInput.value || '').trim();
+        if (!name)
+            return;
+        if (indentTask && model.indexOf(indentTask) >= 0)
+            indentTask.subs.push({ name });
+        else
+            model.push({ name, subs: [] });
+        addInput.value = '';
+    };
+    return { box, getTasks: () => { flushPending(); return model.map((t) => ({ name: t.name, subs: t.subs.map((s) => s.name) })); } };
 }
 // 새 프로젝트(v2) 폼 — 이름·설명·할 일(히어로) + 컴팩트 메타(폴더·카테고리·레포·팀원). 생성 후 상세로 이동.
 export function openProjectV2Form(reload, prefill) {
@@ -4984,6 +5015,7 @@ export function openProjectV2Form(reload, prefill) {
                 await api('/api/ui/v6/projects/' + np.id + '/list', { method: 'POST', body: JSON.stringify({ list_id: listChoice.listId }) }).catch(() => { });
             // 할 일(선택) — 드래프트 트리를 순서대로 태스크로 생성: 상위 먼저(순차·순서 보존) → 그 하위를 parent_task_id 로. 실패는 조용히 건너뜀(프로젝트는 이미 생성됨).
             const draftTasks = taskEd.getTasks();
+            let taskFail = 0; // #req 조용히 삼키지 말고 실패 개수 집계 → 사용자에게 알림.
             if (np && np.id && draftTasks.length) {
                 for (const dt of draftTasks) {
                     let parentId = null;
@@ -4991,12 +5023,16 @@ export function openProjectV2Form(reload, prefill) {
                         const tr = await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: dt.name }) });
                         parentId = tr && tr.task && tr.task.id;
                     }
-                    catch (_) { /* 상위 생성 실패 시 그 하위도 건너뜀 */ }
+                    catch (_) {
+                        taskFail++;
+                    } // 상위 생성 실패 시 그 하위도 건너뜀
                     if (parentId && dt.subs.length) {
                         for (const sn of dt.subs)
-                            await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: sn, parent_task_id: parentId }) }).catch(() => { });
+                            await api('/api/ui/v6/projects/' + np.id + '/tasks', { method: 'POST', body: JSON.stringify({ name: sn, parent_task_id: parentId }) }).catch(() => { taskFail++; });
                     }
                 }
+                if (taskFail)
+                    toast(taskFail + '개 태스크 저장 실패 — 프로젝트 안에서 다시 추가해 주세요', true);
             }
             // 선행/후속 엣지(#519) — 후속 피커에서 인라인 생성한 경우 현재 프로젝트와 연결. edgeDir='in'=새 프로젝트가 edgeWith 의 후속(new→follow_up→edgeWith),
             //  'out'=새 프로젝트가 edgeWith 의 선행(edgeWith→follow_up→new). (from --follow_up--> to = from 이 to 의 후속, #340.)
@@ -7754,9 +7790,10 @@ function pjvViewMenu(anchor, onChange) {
         pjvBoardView.kanban = m === 'kanban';
         pjvBoardView.byFolder = m === 'list';
         pjvBoardView.byStatus = m === 'status';
-        // 리스트로 나누기 → 좌측 사이드바(byArea)·스코프 해제(#662) — 안 그러면 스코프 유지 렌더가 우선해 리스트 구역이 안 보인다.
-        if (m === 'list') {
-            pjvBoardView.byArea = false;
+        pjvBoardView.overview = false; // 구체 뷰 모드를 고르면 폴더 '개요(Overview)' 요약을 벗어난다(#756 — 개요 상태에서 리스트/칸반 선택이 안 먹던 것도 해소)
+        // 리스트로 나누기(#756) — 사이드바가 켜져 있으면 닫지 않고 유지한 채 우측 컬럼에 리스트별 그룹으로(renderArea 의
+        //  byFolder 분기). 사이드바가 꺼져 있을 때만 기존 전폭 인라인(renderByFolder) 경로 — 그땐 스코프 해제 후 렌더.
+        if (m === 'list' && !pjvBoardView.byArea) {
             pjvSidebarSel.key = '__all__';
             pjvSidebarSel.explicit = false;
             pjvExitAreaMode();

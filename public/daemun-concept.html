@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>카테고리 대문 — 새 설계안</title>
+</head>
+<body>
+<style>
+  :root {
+    --paper:#ffffff; --panel:#f4f6fb; --panel-2:#eef1f8;
+    --ink:#121821; --ink-2:#3a4453; --muted:#5c6675; --faint:#8a93a2;
+    --line:#e6eaf1; --line-2:#d7dde8;
+    --blue:#2d6bf0; --blue-deep:#1f52c4; --mint:#10b48a; --mint-deep:#0b8f6d;
+    --t-decision:#4a6fa6; --t-reference:#6a7280; --t-howto:#2f9a84; --t-research:#7b6bb2; --t-concept:#b0863c; --t-entity:#a85d6b;
+    --wash:#f7f9fd;
+    --sans:"Pretendard",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",system-ui,"Segoe UI",Roboto,sans-serif;
+    --mono:"D2Coding",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --col:940px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0d1117; --panel:#141b25; --panel-2:#19212d;
+      --ink:#e8edf4; --ink-2:#c2ccd9; --muted:#95a1b2; --faint:#6b7688;
+      --line:#222c39; --line-2:#2c3745;
+      --blue:#5b8df5; --blue-deep:#84a9f8; --mint:#38d4a8; --mint-deep:#5fdcb8;
+      --t-decision:#8aa8d8; --t-reference:#9aa3b2; --t-howto:#5cc6ac; --t-research:#a99bd6; --t-concept:#d6ac6a; --t-entity:#d193a0;
+      --wash:#111823;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#ffffff; --panel:#f4f6fb; --panel-2:#eef1f8; --ink:#121821; --ink-2:#3a4453; --muted:#5c6675; --faint:#8a93a2;
+    --line:#e6eaf1; --line-2:#d7dde8; --blue:#2d6bf0; --blue-deep:#1f52c4; --mint:#10b48a; --mint-deep:#0b8f6d;
+    --t-decision:#4a6fa6; --t-reference:#6a7280; --t-howto:#2f9a84; --t-research:#7b6bb2; --t-concept:#b0863c; --t-entity:#a85d6b; --wash:#f7f9fd;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0d1117; --panel:#141b25; --panel-2:#19212d; --ink:#e8edf4; --ink-2:#c2ccd9; --muted:#95a1b2; --faint:#6b7688;
+    --line:#222c39; --line-2:#2c3745; --blue:#5b8df5; --blue-deep:#84a9f8; --mint:#38d4a8; --mint-deep:#5fdcb8;
+    --t-decision:#8aa8d8; --t-reference:#9aa3b2; --t-howto:#5cc6ac; --t-research:#a99bd6; --t-concept:#d6ac6a; --t-entity:#d193a0; --wash:#111823;
+  }
+
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; line-height:1.5; }
+  .wrap { max-width:var(--col); margin:0 auto; padding:0 28px 120px; }
+
+  /* ── top bar : domain switch (proof of generality) ── */
+  .topbar { position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--paper) 86%, transparent);
+    backdrop-filter:saturate(1.2) blur(10px); border-bottom:1px solid var(--line); }
+  .topbar-in { max-width:var(--col); margin:0 auto; padding:12px 28px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .brand { font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); font-weight:700; }
+  .brand b { color:var(--muted); }
+  .switch { margin-left:auto; display:inline-flex; gap:2px; padding:3px; background:var(--panel); border:1px solid var(--line); border-radius:999px; }
+  .switch button { font-family:var(--sans); font-size:13px; font-weight:650; color:var(--muted); border:0; background:none;
+    padding:6px 15px; border-radius:999px; cursor:pointer; transition:color .15s, background .15s; }
+  .switch button[aria-pressed="true"] { color:#fff; background:var(--blue); }
+  :root[data-theme="dark"] .switch button[aria-pressed="true"], @media (prefers-color-scheme: dark){ .switch button[aria-pressed="true"]{ color:#0d1117; } }
+
+  /* ── hero ── */
+  .hero { padding:64px 0 8px; border-bottom:1px solid var(--line); }
+  .eyebrow { display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px; letter-spacing:.06em;
+    color:var(--muted); text-transform:uppercase; }
+  .eyebrow .dom-dot { width:8px; height:8px; border-radius:50%; background:var(--blue); }
+  .name { margin:16px 0 0; font-size:clamp(34px,5vw,46px); font-weight:820; letter-spacing:-.025em; line-height:1.05;
+    text-wrap:balance; }
+  .definition { margin:22px 0 0; max-width:33em; font-size:clamp(18px,2.3vw,21.5px); font-weight:400; line-height:1.62;
+    color:var(--ink-2); letter-spacing:-.01em; }
+  .definition .arr { color:var(--blue); font-weight:600; padding:0 .12em; }
+  .no-def { margin:22px 0 0; max-width:33em; font-size:18px; line-height:1.6; color:var(--muted); }
+  .no-def b { color:var(--ink-2); font-weight:650; }
+
+  .fingerprint { margin:26px 0 30px; display:flex; flex-direction:column; gap:12px; }
+  .fp-line { font-family:var(--mono); font-size:12.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:0 6px;
+    align-items:baseline; font-variant-numeric:tabular-nums; }
+  .fp-line .k { color:var(--ink); font-weight:700; }
+  .fp-line .sep { color:var(--line-2); }
+  .fp-line .human { color:var(--mint-deep); }
+  /* composition — quiet fingerprint bar (what this domain is made of) */
+  .comp { display:flex; height:7px; border-radius:4px; overflow:hidden; background:var(--panel); }
+  .comp span { display:block; }
+  .comp-legend { display:flex; flex-wrap:wrap; gap:5px 16px; font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .comp-legend i { display:inline-flex; align-items:center; gap:6px; }
+  .comp-legend b { width:7px; height:7px; border-radius:2px; }
+  .character { font-size:14px; color:var(--muted); }
+  .character b { color:var(--ink-2); font-weight:650; }
+
+  /* ── section frame ── */
+  section.block { padding:48px 0 0; }
+  .sec-head { display:flex; align-items:baseline; gap:12px; margin:0 0 4px; }
+  .sec-title { font-size:19px; font-weight:750; letter-spacing:-.02em; }
+  .sec-note { font-family:var(--mono); font-size:12px; color:var(--faint); }
+  .sec-sub { margin:0 0 22px; font-size:14px; color:var(--muted); }
+
+  /* ── understanding anchors : the spine you read ── */
+  .anchors { display:flex; flex-direction:column; }
+  .anchor { display:grid; grid-template-columns:26px 1fr; gap:0 16px; padding:22px 0; border-top:1px solid var(--line);
+    cursor:pointer; }
+  .anchor:hover .a-title { color:var(--blue-deep); }
+  .anchor .rail { display:flex; flex-direction:column; align-items:center; gap:8px; padding-top:4px; }
+  .anchor .idx { font-family:var(--mono); font-size:12.5px; font-weight:700; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .a-body { min-width:0; }
+  .a-meta { display:flex; align-items:center; gap:10px; margin:0 0 7px; }
+  .tag { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11.5px; font-weight:650;
+    color:var(--muted); letter-spacing:.02em; }
+  .tag .d { width:7px; height:7px; border-radius:2px; background:var(--muted); }
+  .pin, .by-human { font-family:var(--mono); font-size:11px; letter-spacing:.03em; }
+  .pin { color:var(--blue); }
+  .by-human { display:inline-flex; align-items:center; gap:5px; color:var(--mint-deep); }
+  .by-human::before { content:""; width:6px; height:6px; border-radius:50%; background:var(--mint); }
+  .a-title { font-size:17.5px; font-weight:720; line-height:1.4; letter-spacing:-.015em; color:var(--ink);
+    transition:color .15s; text-wrap:pretty; }
+  .a-sub { margin:9px 0 0; font-size:14.5px; line-height:1.66; color:var(--ink-2); max-width:56em; }
+  .a-sub .lk { color:var(--muted); border-bottom:1px solid var(--line-2); }
+
+  /* ── corpus : every atom, by substance ── */
+  .filters { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 8px; }
+  .filters button { font-family:var(--mono); font-size:12px; font-weight:600; color:var(--muted); background:none;
+    border:1px solid var(--line); border-radius:999px; padding:5px 13px; cursor:pointer; transition:all .14s;
+    font-variant-numeric:tabular-nums; }
+  .filters button:hover { border-color:var(--line-2); color:var(--ink-2); }
+  .filters button[aria-pressed="true"] { color:var(--ink); border-color:var(--ink-2); background:var(--panel); }
+  .corpus { display:flex; flex-direction:column; }
+  .row { display:grid; grid-template-columns:1fr auto; gap:4px 18px; padding:16px 0; border-top:1px solid var(--line); cursor:pointer; align-items:baseline; }
+  .row:hover .r-title { color:var(--blue-deep); }
+  .r-title { grid-column:1; font-size:15px; font-weight:640; line-height:1.42; letter-spacing:-.01em; color:var(--ink);
+    transition:color .15s; text-wrap:pretty; }
+  .r-meta { grid-column:2; grid-row:1; display:inline-flex; align-items:center; gap:11px; white-space:nowrap; padding-top:2px; }
+  .r-sub { grid-column:1 / -1; font-size:13.5px; line-height:1.55; color:var(--muted); max-width:70ch;
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; }
+
+  .foot { margin-top:56px; padding-top:22px; border-top:1px solid var(--line); font-size:13px; color:var(--faint); line-height:1.7; }
+  .foot b { color:var(--muted); font-weight:650; }
+
+  :focus-visible { outline:2px solid var(--blue); outline-offset:3px; border-radius:3px; }
+  @media (max-width:640px){
+    .wrap,.topbar-in { padding-left:18px; padding-right:18px; }
+    .hero { padding-top:40px; }
+    .anchor { grid-template-columns:1fr; } .anchor .rail{ flex-direction:row; padding-top:0; margin-bottom:6px; }
+    .row { grid-template-columns:1fr; } .r-meta{ grid-column:1; grid-row:auto; }
+  }
+  @media (prefers-reduced-motion:reduce){ *{ transition:none!important; } }
+</style>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">Lively · <b>카테고리 대문 설계안</b></span>
+    <div class="switch" id="switch" role="group" aria-label="도메인 선택"></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header class="hero">
+    <span class="eyebrow"><span class="dom-dot"></span><span id="eyebrow"></span></span>
+    <h1 class="name" id="name"></h1>
+    <div id="def-slot"></div>
+    <div class="fingerprint">
+      <div class="fp-line" id="fp"></div>
+      <div class="comp" id="comp" aria-hidden="true"></div>
+      <div class="comp-legend" id="legend"></div>
+      <div class="character" id="character"></div>
+    </div>
+  </header>
+
+  <section class="block">
+    <div class="sec-head">
+      <span class="sec-title">먼저 이해하기</span>
+      <span class="sec-note" id="anchor-note"></span>
+    </div>
+    <p class="sec-sub">이 몇 개만 읽어도 이 카테고리가 무엇인지 잡힙니다. 팀이 고정했거나 사람이 직접 쓴 기둥 문서 — 각 문서가 무엇을 담는지 여기서 바로 보입니다.</p>
+    <div class="anchors" id="anchors"></div>
+  </section>
+
+  <section class="block">
+    <div class="sec-head">
+      <span class="sec-title">전체 지식</span>
+      <span class="sec-note" id="corpus-note"></span>
+    </div>
+    <p class="sec-sub">모든 지식은 제목이 아니라 <b style="color:var(--ink-2);font-weight:600">담긴 내용</b>으로 서 있습니다 — 형식과 무관하게 한 조각씩 그대로.</p>
+    <div class="filters" id="filters"></div>
+    <div class="corpus" id="corpus"></div>
+  </section>
+
+  <div class="foot">
+    설계안 · 실제 지식 데이터로 렌더. 활동(진행 중·스레드·날짜)이 아니라 <b>각 지식이 무엇을 말하는가</b>로 카테고리를 설명합니다.<br>
+    좌상단 토글로 <b>컨텍스트 저장소</b>(정의가 풍부한 기술 도메인)와 <b>시장·경쟁</b>(정의 없는 리서치 코퍼스)을 오가며 — 같은 설계가 둘 다 작동함을 보실 수 있습니다.
+  </div>
+</div>
+
+<script>
+const DATA = {"canonical-context-store": {"name": "컨텍스트 저장소", "space": "product", "total": 152, "comp": [{"ty": "decision", "tk": "결정", "n": 64}, {"ty": "reference", "tk": "참조", "n": 45}, {"ty": "how-to", "tk": "런북", "n": 28}, {"ty": "research", "tk": "리서치", "n": 13}, {"ty": "concept", "tk": "개념", "n": 2}], "human": 9, "pin": 3, "anchors": [{"t": "런북: context-ontology 릴리스 → 고객 실박스 전달 (커밋→태그→릴리스→presign→한 줄 설치)", "ty": "how-to", "tk": "런북", "h": false, "p": true, "s": "고객 셀프호스트 박스에 새 코드를 내보내는 표준 절차. main 전진 ≠ 릴리스 — vX.Y.Z 태그 push 가 트리거. 유저·소유권 모델 [[box-gateway-lively-deploy]], 토폴로지·최초 파일럿 [[context-ontology-셀프호스트-배포-option2-ec2-파일럿]], 태그 필수 경위 [[context-ontology-rel"}, {"t": "런북: dev :8080 게이트웨이 빌드·재시작 (context-ontology) — launchd 상시구동", "ty": "how-to", "tk": "런북", "h": false, "p": true, "s": "dev.lvly.io:8080 (context-ontology 게이트웨이 + 웹UI /ui) 운영 런북. 2026-06-24 launchd 상시구동으로 전환(구 nohup 방식 폐기 — 셸/도구 종료 시 같이 죽어 :8080 빈 구간 발생). - :8080 은 이 맥(laibeulliui-Macmini)에서 launchd 상시 구동. LaunchAgent "}, {"t": "⚠불변식: items-DB 컨테이너는 pgvector/pgvector:pg18 이미지여야 함 (#172 벡터검색) — plain postgres:18로 재생성 금지", "ty": "reference", "tk": "참조", "h": false, "p": true, "s": "2026-06-26. 172 벡터검색 활성화로 Mac(laibeulliui-Macmini) items-DB 컨테이너 lc-items-db(colima/docker, 55433→5432)를 postgres:18 → pgvector/pgvector:pg18로 교체했다(같은 익명 볼륨 재부착, 데이터 보존). 게이트웨이 knowledge.embeddingvect"}, {"t": "WIKI 탭 전면 재구축(#764) — \"모든 것은 페이지다\": wk-* 표면 신설·민트 틱·드래프트 자동 생성·대문=페이지 (사이드바 유지)", "ty": "decision", "tk": "결정", "h": true, "p": false, "s": "2026-07-10, dev :8080 라이브(project/764 → 메인 워크스페이스 autostash 머지, 커밋 589da90→f75402a→a66cb3a). 사용자(장원준): \"사이드바 빼고 디자인 UI 모든 게 다 맘에 안 든다. 카테고리·지식 보여주는 방식 모두. 기존 걸 고치지 말고 아예 완전히 새로 만들어라. 노션 참고, 자유 편집, 카테고"}], "corpus": [{"t": "터미널 여러 세션 한 탭 그리드로 열기(#745) — 선택→배치선택→iframe 그리드 뷰어", "ty": "how-to", "tk": "런북", "h": false, "p": false, "s": "구현 2026-07-12 · 요청: 장원준 · 구현: 다온(Claude Opus 4.8) · 상태: 라이브 반영 완료(dev :8080, 프론트 전용·재시작 불요). [[터미널-탭-재설계-세션-미션컨트롤-agentstate-745]] 후속. 터미널 탭(/terminal) 선택 모드 → 이제 모든 카드에 체크박스(기존엔 소유 카드만). 여러 세션 체크 → 벌"}, {"t": "제품 웹 UI 디자인 피드백 — 차분·가독·최소 색 (2026-06-11)", "ty": "concept", "tk": "개념", "h": false, "p": false, "s": "제품 웹 UI에 대한 사용자 피드백(2026-06-11, Lively Context UI 1차 빌드 직후): \"보기 편안하고 가독성 있으면서 복잡하지 않고 심플하게. 색은 꼭 필요한 곳만 — 지금 약간 많은 감. 브랜드 컬러가 쨍해서 눈 아픔. 오히려 보기 편한 건 기존 도메인맵 UI — 그 수준에서 브랜드 디자인 적용.\" Why: 제품 UI는 팀이 하루 "}, {"t": "터미널 '내 질문' 팝아웃(#745) + 질문 검색(의미/렉시컬 하이브리드) + Claude 트랜스크립트 추출", "ty": "how-to", "tk": "런북", "h": false, "p": false, "s": "구현 2026-07-10 · 요청: 장원준 · 구현: 다온(Claude Opus 4.8) · 상태: 라이브 반영 완료(dev :8080, 게이트웨이 재시작 반영). [[터미널-탭-재설계-세션-미션컨트롤-agentstate-745]] 후속. 터미널 탭(/terminal) 각 세션 카드에 내 질문 버튼(열기 옆) → 그 세션에서 사람이 클로드에게 보낸 질문만 "}, {"t": "웹 'Lively 둘러보기' — 크로스탭 스포트라이트 투어 설계·구현 (#761)", "ty": "decision", "tk": "결정", "h": false, "p": false, "s": "사용 가이드 › Lively 둘러보기(/learn/tour): 프로젝트 → 도메인 맵 → WIKI를 실제 화면 위에서 직접 눌러 보며 배우는 인터랙티브 투어. [[web-terminal-onboarding-spotlight-tour]](517, 터미널 단일 화면 투어)의 후속 — 같은 엔진(web/tour.ts)을 여러 탭에 걸쳐 이어 붙인다. 커밋 3b2"}, {"t": "context-ontology 웹 반응형 규약 + 함정 카탈로그 (#701 전면 정비)", "ty": "reference", "tk": "참조", "h": false, "p": false, "s": "커밋 58f89b1 (project/700)로 전 페이지 반응형 전면 정비. public/styles.css 말미의 \"701 반응형 전면 정비\" 섹션에 모든 모바일 오버라이드가 모여 있다(새 반응형 수정도 가급적 이 섹션에 추가 — 산재 방지). - 기능을 숨기지 않는다 — 좁아져도 접근 가능(랩·스택·자체 스크롤)으로 해결. display:none 은 장"}, {"t": "터미널 상태 포인트 컬러 = 대시보드 '내 AI 세션'(dash-scard) 팔레트와 통일 (#760)", "ty": "decision", "tk": "결정", "h": false, "p": false, "s": "결정·구현·라이브 반영 2026-07-10 · 요청: 장원준(jang, 프로젝트 759 \"터미널 창 수정\" / 태스크 760) · 구현: 다온(Claude Opus 4.8). 터미널 탭(/terminal)의 세션 상태 색이 대시보드 '내 AI 세션'(/dashboard 의 dash-scard)과 달랐다. 같은 agentState(busy/waiting/id"}, {"t": "대시보드 최신 알림 ↔ 팀 작업 로그 콘텐츠 분리 + 새 지식·문서 알림 (#755)", "ty": "decision", "tk": "결정", "h": false, "p": false, "s": "[[dashboard-cockpit-iteration-2-notif-sessions-worklog]] 의 알림 인박스 설계 후속. 2026-07-10 장원준 요청. 레포 context-ontology, 파일 web/dashboard-home.ts·public/styles.css(+컴파일 public/app/dashboard-home.js). 커밋 e2611"}, {"t": "AWS STS 브로커 — SigV4 자체구현 + role 가정→credential_process 단기자격 + 권한경계 (#746, v0.1.123)", "ty": "reference", "tk": "참조", "h": false, "p": false, "s": "구현·리뷰·검증 완료 (2026-07-09, 다온). 커밋 aff3dea(브로커)·366687e(kit 헬퍼)·96a42aa(리뷰fix+UI) · 릴리즈 v0.1.123. 활성 조건은 어니스트 provisioning(아래). 상위 [[connector-per-user-auth-vault-p1-746]](P1 vault). IAM Identity Center"}, {"t": "런북: 능동 커넥터 등록 — 코드 없이 org_tool 행으로 (per-user 인증·PII마스킹·등급) (#746)", "ty": "how-to", "tk": "런북", "h": false, "p": false, "s": "메커니즘 [[connector-per-user-auth-vault-p1-746]]. v0.1.122+ 필요. 커넥터 추가 = ① allowlist 호스트 등록 → ② orgtool 행 등록 → ③ (per-user면) 멤버 자격 등록. 코드 배포 불요. - CONNECTORSECRETKEY env 설정(자격 암호화 — 없으면 자격 저장 400). - org"}]}, "market-competition": {"name": "시장·경쟁", "space": "business", "total": 16, "comp": [{"ty": "research", "tk": "리서치", "n": 15}, {"ty": "entity", "tk": "엔티티", "n": 1}], "human": 7, "pin": 0, "anchors": [{"t": "경쟁 분석 완전본(2026-06-18, 자사페이지 1차검증) — 카테고리가 다 우리 영역으로 수렴, 무경쟁 잔존축=① domain debt, dev-org 최근접=Augment", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "2026-06-18 통합(다온). 도메인맵 한정(①) + 3축 + Playwright로 18개 자사 홈 1차 검증. competitive-3axis-map supersede. 전체본 [[2026-06-18-경쟁분석-완전본]]. 2025~26 전 카테고리가 우리 문제프레이밍 + ②컨텍스트 + ③에이전트거버넌스 + ④MCP로 수렴. 자사페이지 1차 인용: Co"}, {"t": "DDD 철학 구현 도구 — 우리 domainmap과 경쟁 비교 (2024~2026)", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "작성 2026-06-17 (다온). 목적: \"DDD 철학을 도구로 구현한\" 제품/오픈소스를 조사해 우리 domainmap의 고유 조합과 1:1 비교 → 무경쟁축(해자)·상품화축·인접 경쟁사 식별. 세일즈/전략 장표 근거. 방법: 카테고리 1~4는 deep-research 하네스(22소스→108주장→상위 25 3표 적대검증, 23/25 통과). 카테고리 5~"}, {"t": "Port · CoreStory — 회사·제품 프로파일 (경쟁 추적)", "ty": "entity", "tk": "엔티티", "h": true, "p": false, "s": "작성 2026-06-17 (다온). 목적: DDD 구현도구 경쟁비교([[2026-06-17-ddd-구현도구-경쟁비교]])에서 우리 domainmap과 인접/벤치마크로 지목된 Port(IDP 거인)와 CoreStory(인접 위협 1위)의 상세 프로파일. 세일즈/경쟁 추적·재사용용. 방법: 두 회사 각각 별도 deep-research(5~6각도 검색→소스 페치"}, {"t": "유사 플레이어 / 경쟁 랜드스케이프 — 심층 조사", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "- 작성: 다온 · 2026-06-04 - 대상: \"(가칭) 온톨로지 기반 통합 데이터 레이어\"([[design-doc]])와 비슷한 문제를 푸는 플레이어 — 형태(OSS/SaaS/엔터프라이즈/사내툴) 불문, 해외+국내. - 방법: WebSearch 기반 다각 조사. 모든 사실 주장에 인라인 출처. 추측은 (추측) 표기. - ⚠️ 이 문서는 1차 소스(공식"}], "corpus": [{"t": "경쟁 플레이어 8사 서비스 딜리버리 프로파일 — LLM통합·배포·컨설팅·가격·데이터레지던시·MCP (2026-06)", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "작성 2026-06-29(다온). 9-에이전트 워크플로(8사 전담+종합). 목적: 278 \"컨설팅 vs SaaS·표준화 가능성\" 판단을 위한 경쟁사 딜리버리 모델 사실 프로파일. ⚠️포지셔닝/3축 비교는 별도 — [[competitive-master-2026-06]]. 자매: [[제품조직-타깃-saas-서비스-지형맵-2026-06]]·[[2026-06-04"}, {"t": "제품조직 타깃 SaaS·서비스 시장 지형 맵 (해외+국내, 14 카테고리 + AX) — 2026-06 deep-research", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "작성 2026-06-29(다온). 16-에이전트 deep-research(13 카테고리 팬아웃 + 한국전담 + AX전담) 종합. 목적: 278 GTM·경쟁 지형 근거. 비상장 ARR·밸류는 대부분 getlatka·Sacra·Tracxn 등 추정이며 출처간 편차 큼(추정/불명 표기). 자매지식 [[compare-clickup-atlassian-microsof"}, {"t": "제품조직 특화 AX 딜리버리 경쟁지형 — \"가운데 레인(특화+표준화 AX-as-product)\" 비어있음 가설, 적대적 반증 생존 [2026-06-29 deep-research]", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "작성: 2026-06-29 (다온). 방법: deep-research 하네스(5앵글 fan-out → 18소스 페치 → 84주장 추출 → 25주장 3표 적대적검증[2/3 반증 시 폐기] → 23 confirmed·2 killed → 8 합성, 100 에이전트). 맥락: 프로젝트 278 \"PMF 찾기\"가 명시한 숙제 — \"제품조직 대상 AX하려는 곳이 있나?"}, {"t": "경쟁 비교 — ClickUp vs Atlassian(Jira) vs Microsoft: 제품조직 작업관리 툴 기능·포지셔닝 차이 (2025–26)", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "제품조직 대상 작업관리(work management) 시장의 3대 축(ClickUp / Atlassian / Microsoft) 비교. 278 GTM·경쟁 포지셔닝 근거. 2025–26 기준, 모든 수치 출처 명시. - 전 세계 PM 소프트웨어 시장 2025년 약 $9B, CAGR ~12% (Metastat Insights). - 매출 기준 서열: Atla"}, {"t": "Anthropic 한국 생태계 + Claude Technology 파트너 2모델(API임베드 vs BYO구독/MCP) — 채널톡≠라이블리 [2026-06-27 빌링축 정정]", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "작성: 2026-06-27. 맥락: [[llm-msp-market-claude-partner-network-2026-06]] / [[cpn-select-first-two-deployments-2026-06]]에서 \"라이블리=Technology(Build/ISV) 트랙\" 정정 후, 트랙 상세·사례·국내 여부 + 빌링/아키텍처 축 구분. - (1) API 임베"}, {"t": "LLM 도입 MSP 시장 지도 + Claude Partner Network 진입 분석 (라이블리 피벗 GTM) [2026-06-27 트랙 정정]", "ty": "research", "tk": "리서치", "h": false, "p": false, "s": "작성: 2026-06-26 (트랙 정정 2026-06-27). 맥락: 라이블리 피벗(IT 제품조직용 AI 협업 인프라/컨설팅)의 경쟁·GTM 자산. \"메가존이 AWS MSP 하듯, LLM 제작사(Anthropic/OpenAI/Google) 파트너로 기업 LLM 도입 MSP 하는 곳이 있나?\"에서 출발 → Claude Partner Network 진입 가능성"}, {"t": "라이블리 3축 전체 — 경쟁 지도 (도메인맵 + 컨텍스트 온톨로지 + AI 워크플로 표준화)", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "작성 2026-06-17 (다온). 목적: 지금까지 도메인맵(①축)만 떼어 본 경쟁 분석을, 3축 전체(① 도메인맵 + ② 컨텍스트 온톨로지 + ③ AI 워크플로 표준화) 기준으로 통합해 \"전체적으로 가장 유사한 경쟁자\"를 식별. 세일즈/전략·해자 정의용. 소스 통합: ①②축 = [[2026-06-04-유사-플레이어-경쟁-랜드스케이프]](6축·deep-re"}, {"t": "3축 전체 경쟁지도(①도메인맵+②컨텍스트온톨로지+③AI워크플로표준화) — 세축 다덮는곳 0, 가장유사=Atlassian(얕음), 빈칸=domain debt+하네스메모리 표준화", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "2026-06-17 통합(다온). ①②축(2026-06-04 경쟁 랜드스케이프 + 이번 세션 DDD구현도구) + ③축 신규 deep-research(27소스·3표검증 20/25) 합본. ①②축 개별 경쟁자는 [[2026-06-04-유사-플레이어-경쟁-랜드스케이프]] 참조. 전체 문서 [[2026-06-17-3축-전체-경쟁지도]]. 우리 3축 정의(스코어 기"}, {"t": "라이블리 경쟁 분석 — 완전본 (2026-06-18, 1차 자사페이지 검증판)", "ty": "research", "tk": "리서치", "h": true, "p": false, "s": "작성 2026-06-18 (다온). 이번 세션의 경쟁조사 전부 통합한 단일 완전본: ① 도메인맵 한정 조사(DDD 구현도구·코드인텔·아키부채·IDP) + ②③ 3축 지도 + 자사 페이지 1차 검증(Playwright)으로 현재 포지셔닝 갱신. 세일즈/전략 캐노니컬. ★ 방법 정정(중요): 이전 라운드는 deep-research가 1차(공식 docs/blog"}]}};
+const DEF = {
+  "canonical-context-store": {
+    space:"제품 도메인",
+    def:`제품조직의 맥락을 <span class="arr">수집·저장·전달</span>한다. 아이템·사람(신원통합)·지식(맥락의 기록)·프로젝트/과업(맥락의 변화)을 소스 무관하게 정규화하고, 퍼유저 인증·스코프로 통제해 에이전트에 전달한다.`
+  },
+  "market-competition": {
+    space:"사업 도메인",
+    def:null, desc:"시장 규모·경쟁사·포지셔닝·경쟁지도."
+  }
+};
+const T_VAR = {decision:"--t-decision",reference:"--t-reference","how-to":"--t-howto",research:"--t-research",concept:"--t-concept",entity:"--t-entity"};
+const tc = t => `var(${T_VAR[t]||"--muted"})`;
+const clean = s => (s||"").replace(/\[\[([^\]]*)\]\]/g, (m,x)=>`<span class="lk">${x.split(/[·\-]/)[0].slice(0,22)}</span>`);
+
+let cur = "canonical-context-store";
+let filter = "";
+
+function charLine(d){
+  const top = d.comp[0], sec = d.comp[1];
+  if (d.space==="사업 도메인" || (top && top.ty==="research"))
+    return `<b>리서치 ${top.n}건</b>으로 이루어진 조사·분석 코퍼스입니다.`;
+  return `<b>${top.tk}</b>과(와) <b>${sec?sec.tk:""}</b>가 중심인, 기록이 쌓여 온 도메인입니다.`;
+}
+
+function render(){
+  const d = DATA[cur], meta = DEF[cur];
+  document.getElementById("eyebrow").textContent = meta.space + " · 지식 " + d.total;
+  document.getElementById("name").textContent = d.name;
+
+  const slot = document.getElementById("def-slot");
+  if (meta.def) slot.innerHTML = `<p class="definition">${meta.def}</p>`;
+  else slot.innerHTML = `<p class="no-def"><b>${meta.desc}</b><br>팀이 쓴 정의는 아직 없습니다 — 이 도메인은 아래 지식 자체로 파악합니다.</p>`;
+
+  // fingerprint line
+  const fp = document.getElementById("fp");
+  fp.innerHTML = `<span><span class="k">${d.total}</span> 지식</span><span class="sep">·</span>`
+    + `<span class="human">사람저작 ${d.human}</span><span class="sep">·</span>`
+    + d.comp.map(c=>`<span><span class="k">${c.n}</span> ${c.tk}</span>`).join('<span class="sep">·</span>');
+
+  // composition bar + legend
+  const bar = document.getElementById("comp");
+  bar.innerHTML = d.comp.map(c=>`<span style="width:${(c.n/d.total*100).toFixed(2)}%;background:${tc(c.ty)}"></span>`).join("");
+  document.getElementById("legend").innerHTML = d.comp.map(c=>`<i><b style="background:${tc(c.ty)}"></b>${c.tk} ${c.n}</i>`).join("");
+  document.getElementById("character").innerHTML = charLine(d);
+
+  // anchors
+  document.getElementById("anchor-note").textContent = (d.pin? `핀 ${d.pin} · `:"") + `사람저작 ${d.human}`;
+  document.getElementById("anchors").innerHTML = d.anchors.map((a,i)=>`
+    <article class="anchor">
+      <div class="rail"><span class="idx">${String(i+1).padStart(2,"0")}</span></div>
+      <div class="a-body">
+        <div class="a-meta">
+          <span class="tag"><span class="d" style="background:${tc(a.ty)}"></span>${a.tk}</span>
+          ${a.p?'<span class="pin">◆ 고정</span>':''}
+          ${a.h?'<span class="by-human">사람저작</span>':''}
+        </div>
+        <h3 class="a-title">${a.t}</h3>
+        <p class="a-sub">${clean(a.s)}…</p>
+      </div>
+    </article>`).join("");
+
+  // filters
+  const fbox = document.getElementById("filters");
+  fbox.innerHTML = `<button data-t="" aria-pressed="${filter===''}">전체 ${d.total}</button>`
+    + d.comp.map(c=>`<button data-t="${c.ty}" aria-pressed="${filter===c.ty}">${c.tk} ${c.n}</button>`).join("");
+  fbox.querySelectorAll("button").forEach(b=> b.onclick=()=>{ filter=b.dataset.t; render(); });
+
+  // corpus
+  const rows = d.corpus.filter(r=> !filter || r.ty===filter);
+  document.getElementById("corpus-note").textContent = `${d.total}건 중 최근 ${d.corpus.length} 표시`;
+  document.getElementById("corpus").innerHTML = rows.map(r=>`
+    <div class="row">
+      <div class="r-title">${r.t}</div>
+      <div class="r-meta">
+        <span class="tag"><span class="d" style="background:${tc(r.ty)}"></span>${r.tk}</span>
+        ${r.h?'<span class="by-human">사람</span>':''}
+      </div>
+      <div class="r-sub">${clean(r.s)}</div>
+    </div>`).join("") || `<div class="r-sub" style="padding:16px 0">이 유형의 문서가 없습니다.</div>`;
+}
+
+// domain switch
+const sw = document.getElementById("switch");
+sw.innerHTML = Object.keys(DATA).map(k=>`<button data-k="${k}" aria-pressed="${k===cur}">${DATA[k].name}</button>`).join("");
+sw.querySelectorAll("button").forEach(b=> b.onclick=()=>{ cur=b.dataset.k; filter=""; sw.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", x.dataset.k===cur)); render(); });
+
+render();
+</script>
+
+</body>
+</html>

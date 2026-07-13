@@ -181,6 +181,10 @@ async function renderSystem(view, sub) {
     return renderAdmin(view, sub);
 }
 async function renderAdmin(view, sub) {
+    // #670 FOUC 방지 — loadAdmin(첫 진입 미캐시) 을 기다리기 전에 view 를 스켈레톤으로 먼저 비운다.
+    //  안 그러면 라우터가 body[data-route]='system' 을 즉시 바꿔, 이전 탭(대시보드/보드/도메인맵 — 풀스크린 route CSS 의존)
+    //  콘텐츠가 그 CSS 를 잃고 '로데이터·텍스트만' 처럼 깨진 채로 로드 시간만큼 잠깐 보인다(renderTerminal 과 동일한 선-스켈레톤 패턴).
+    view.replaceChildren(skeleton('관리 데이터를 불러오는 중'));
     let data;
     try {
         data = await loadAdmin();

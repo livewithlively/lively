@@ -53,6 +53,20 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* display 지정 요소(#gate 등)에서도 hidden 속성이 이기도록 */
 html, body { margin: 0; padding: 0; }
+/* 페이지(루트) 세로 스크롤바를 레이아웃에서 완전히 빼고(자리 안 먹음 → 밀림 0), 콘텐츠 위에 '겹쳐 뜨는'
+   얇은 오버레이 막대로 대체한다(#756). 이렇게 하면 스크롤 없는 탭(홈·관리)과 스크롤 탭(프로젝트·도메인맵·
+   위키)을 오가도 뷰포트 가로폭이 불변 → 중앙정렬 상단탭·본문이 안 밀린다. 홈은 이전처럼 전폭 유지(거터 예약 X).
+   실제 막대는 page-scrollbar.js 가 그린다. 내부 스크롤러(사이드바·모달 등)는 자체 스크롤바를 그대로 둔다. */
+html { scrollbar-width: none; }                                    /* Firefox — 루트 스크롤바 숨김(공간 0) */
+html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display: none; } /* Blink/WebKit 루트 */
+/* 오버레이 스크롤바 — 우측 끝에 겹쳐 뜨는 얇은 막대. 스크롤 가능할 때만(.on) 은은히, 스크롤 중·호버 시(.act) 진하게. */
+.page-scroll { position: fixed; right: 2px; width: 12px; z-index: 60; pointer-events: none; }
+.page-scroll-thumb { position: absolute; right: 2px; top: 0; width: 6px; border-radius: 999px;
+  background: var(--muted-3, #aab3c0); opacity: 0; pointer-events: auto; cursor: default;
+  transition: opacity .35s ease, width .12s ease, background .12s ease; }
+.page-scroll.on .page-scroll-thumb { opacity: .26; }
+.page-scroll.on.act .page-scroll-thumb { opacity: .82; }
+.page-scroll-thumb:hover, .page-scroll-thumb:active { width: 9px; background: var(--muted-2, #8a94a4); opacity: .95; }
 body {
   font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -1470,9 +1484,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-list { display: flex; flex-direction: column; gap: 8px; }
 /* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
 .tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
-.tsess-card.tsess-busy { border-left-color: var(--mint-deep); }
-.tsess-card.tsess-waiting { border-left-color: var(--blue); }
-.tsess-card.tsess-idle { border-left-color: #D4922E; }
+.tsess-card.tsess-busy { border-left-color: #f59e0b; }
+.tsess-card.tsess-waiting { border-left-color: var(--coral, #e5484d); }
+.tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
 .tsess-card.tsess-offline { border-left-color: var(--muted-2); background: var(--bg); }
 .tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
 .tsess-card--sel { cursor: pointer; }
@@ -1483,9 +1497,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 5px; min-width: 0; }
 .tsess-name { font-size: 14.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .tsess-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
-.tsess-dot-busy { background: var(--mint-deep); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
-.tsess-dot-waiting { background: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent); }
-.tsess-dot-idle { background: #D4922E; }
+/* 상태 포인트 컬러 = 대시보드 '내 AI 세션'(dash-scard)과 통일: busy=주황·waiting=코랄·idle=민트·offline=회색. */
+.tsess-dot-busy { background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 22%, transparent); }
+.tsess-dot-waiting { background: var(--coral, #e5484d); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, #e5484d) 22%, transparent); }
+.tsess-dot-idle { background: var(--mint-deep); }
 .tsess-dot-offline { background: var(--muted-2); }
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
 .tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
@@ -1497,9 +1512,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-meta .tsess-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .tsess-sep { color: var(--muted-3); }
 .tsess-stat { font-weight: 800; }
-.tsess-stat-busy { color: var(--mint-deep); }
-.tsess-stat-waiting { color: var(--blue-deep); }
-.tsess-stat-idle { color: #B87A2A; }
+.tsess-stat-busy { color: #d97706; }
+.tsess-stat-waiting { color: var(--coral, #e5484d); }
+.tsess-stat-idle { color: var(--mint-deep); }
 .tsess-stat-offline { color: var(--muted); }
 /* '지금 하는 일' 실시간 요약(백엔드 title) — 라벨 아래 한 줄. */
 .tsess-worktitle { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
@@ -1511,6 +1526,34 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-icon:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
 .tsess-icon.danger { color: var(--coral-text); border-color: #F0DCC4; }
 .tsess-icon.danger:hover { background: #FBF1E7; }
+.tsess-icon.tsess-q { white-space: nowrap; }
+/* '내 질문' 팝아웃(#745) — 이 세션에 보낸 질문만 시간순(위=최근). */
+.tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }
+.tsess-qcap { margin-bottom: 8px; }
+.tsess-qlist { display: flex; flex-direction: column; gap: 8px; max-height: 62vh; overflow-y: auto; padding-right: 2px; }
+.tsess-qitem { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.tsess-qmeta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.tsess-qnum { font-weight: 800; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+.tsess-qtext { font-size: 13px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 질문 검색(팝아웃 내 + 전체 통합) */
+.tsess-qsearch, .tsess-gsearch { width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); margin-bottom: 8px; }
+.tsess-qsearch:focus, .tsess-gsearch:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
+.tsess-qmark { background: color-mix(in srgb, #F5C518 55%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.tsess-gbody { min-width: min(620px, 88vw); }
+.tsess-gresults { max-height: 64vh; }
+.tsess-gitem { cursor: pointer; }
+.tsess-gitem:hover { border-color: var(--blue); background: var(--bg-punch); }
+.tsess-gsess { font-weight: 700; color: var(--ink-sub); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-gopen { margin-left: auto; color: var(--blue); font-weight: 700; }
+/* 여러 세션 한 탭 그리드 — 배치 선택 팝업(#745) */
+.tgrid-opts { display: flex; gap: 12px; flex-wrap: wrap; }
+.tgrid-opt { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); cursor: pointer; font-family: inherit; min-width: 100px; }
+.tgrid-opt:hover { border-color: var(--blue); background: var(--bg-punch); }
+.tgrid-prev { display: grid; gap: 3px; width: 78px; height: 58px; }
+.tgrid-prev-cell { background: var(--line); border-radius: 3px; }
+.tgrid-prev-cell.on { background: color-mix(in srgb, var(--blue) 55%, var(--bg)); }
+.tgrid-opt-lbl { font-size: 13px; font-weight: 700; color: var(--ink); }
+.tgrid-opt-dim { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) {
   .tsess-card { flex-wrap: wrap; }
   .tsess-acts { flex-wrap: wrap; }
@@ -3767,6 +3810,23 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .dmx-note strong{color:var(--ink);}
 .dmx-stage-inner{position:relative;flex:1;overflow:hidden;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;background:linear-gradient(0deg,var(--bg-tint,#f6faff) 0%,var(--bg) 62%);}
 .dmx-stage-inner.dragging{cursor:grabbing;}
+/* 도메인 맵 = 홈·관리처럼 한 화면 고정(페이지 스크롤 없음) — 그래프 캔버스가 남는 높이를 채운다(#756).
+   기존엔 캔버스가 min(680px,72vh) 고정이라 그 위 헤더·컨트롤 + main 상하패딩(96px)이 더해져 페이지가
+   ~96px 만 '쓸데없이' 세로 스크롤됐다(그래프는 팬·줌이라 페이지 스크롤이 무의미·혼란). 캔버스를 flex:1 로
+   늘려 뷰포트에 딱 맞추면 스크롤이 사라진다(그래프는 첫 렌더 rAF 의 fitAll 이 새 캔버스 높이에 자동 적합). */
+body[data-route="domainmap"] { height: 100vh; overflow: hidden; }
+body[data-route="domainmap"] #app { height: 100%; display: flex; flex-direction: column; }
+body[data-route="domainmap"] main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 22px; }
+body[data-route="domainmap"] .dmx-canvas { flex: 1; min-height: 0; height: auto; }
+body[data-route="domainmap"] .app-foot { display: none; }   /* 캔버스가 하단까지 차니 좌하단 고정칩 숨김(대시보드와 동일 톤) */
+/* 저높이·모바일 — 한 화면에 다 못 담으면 코크핏 해제(스크롤 허용, 캔버스 원래 높이 복귀) */
+@media (max-height: 620px), (max-width: 760px) {
+  body[data-route="domainmap"] { height: auto; overflow: visible; }
+  body[data-route="domainmap"] #app { height: auto; display: block; }
+  body[data-route="domainmap"] main { display: block; }
+  body[data-route="domainmap"] .dmx-canvas { flex: none; height: min(680px, 72vh); }
+  body[data-route="domainmap"] .app-foot { display: block; }
+}
 .dmx-graph{display:block;width:100%;height:100%;}
 .dmx-viewport .dmx-node{cursor:pointer;}
 .dmx-zoom-ctrl{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;gap:5px;z-index:4;}
@@ -4394,7 +4454,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #req 개요(리스트) 카드 최소 폭 190→148 — 좁은 폭에서도 한 행에 더 많은 열이 들어가게. */
 .dash-ov-grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; padding: 4px 4px 8px; }
 /* #req R20 개요 '+ 새 리스트' 추가 카드 — 점선 카드, 클릭 시 그 자리 입력. */
-.dash-ov-addcard { border: 1px dashed var(--line-net-2, var(--line)); border-radius: 12px; padding: 13px 14px; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 64px; color: var(--muted); transition: border-color .12s, color .12s, background .12s; }
+/* 데이터 카드(dash-ov-card2)와 크기를 맞춘다: 그리드 align-items:start 라 자연 높이로 서던 것을 align-self:stretch 로
+   같은 행 최고 카드(데이터 카드) 높이에 스냅. 혼자 한 행일 땐 스냅할 형제가 없으니 min-height 로 같은 높이(데이터 카드 자연 높이 ≈88px) 확보. */
+.dash-ov-addcard { border: 1px dashed var(--line-net-2, var(--line)); border-radius: 12px; padding: 13px 14px; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 88px; align-self: stretch; color: var(--muted); transition: border-color .12s, color .12s, background .12s; }
 .dash-ov-addcard:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-punch); }
 .dash-ov-add-plus { font-size: 17px; font-weight: 700; line-height: 1; }
 .dash-ov-add-lbl { font-size: 13px; font-weight: 700; }
@@ -4405,6 +4467,11 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 
 /* 개요 블럭 아래 프로젝트 목록 — 프로젝트 탭 리스트 그룹(pjv-list-head)·행(pjv-trow-title)을 그대로 차용,
    좁은 대시보드 폭에 맞춰 표의 나머지 열은 생략하고 제목 셀만 단열로(#619 후속 · 프로젝트 탭 UI 정합). */
+/* #req 리스트 카드(개요) ↔ 프로젝트 목록 사이 높이 조절 — 기본은 개요 auto(현재 모습), 핸들 드래그하면 fr 로 각각 스크롤. */
+.dash-proj-split { display: grid; grid-template-rows: auto 14px minmax(0, 1fr); height: 100%; min-height: 0; }
+.dash-proj-split > .dash-ov-grid, .dash-proj-split > .dash-ov-allhidden, .dash-proj-split > .dash-projlist { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* #req 개요 영역을 늘려도 카드가 세로로 안 늘어나게 — 행을 위로 모으고 남는 건 여백. 카드도 자기 높이 유지. */
+.dash-proj-split > .dash-ov-grid { align-content: start; align-items: start; }
 .dash-projlist { margin-top: 6px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
 .dash-projlist .pjv-list-group { margin-top: 0; }
 .dash-projlist .pjv-tgroup-head.pjv-list-head { padding: 8px 6px; margin-top: 4px; }
@@ -4502,7 +4569,24 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-cp-input:focus { border-color: var(--blue); }
 .dash-cp-err { font-size: 12px; color: var(--coral-text, var(--coral)); }
 .dash-cp-err:empty { display: none; }
-.dash-cp-foot { display: flex; justify-content: flex-end; }
+.dash-cp-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dash-cp-foot-sp { flex: 1; } /* 취소 왼쪽, 나머지 오른쪽 */
+/* #req 첫 태스크(선택) 섹션 */
+.dash-cp-tasklabel { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 2px; }
+.dash-cp-tasklabel strong { color: var(--ink); }
+.dash-cp-opt { font-size: 11px; font-weight: 700; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.dash-cp-taskhint { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.dash-cp-tasks { display: flex; flex-direction: column; gap: 6px; }
+.dash-cp-tasks:empty { display: none; }
+.dash-cp-task-row { display: flex; align-items: center; gap: 6px; }
+.dash-cp-task { flex: 1; min-width: 0; box-sizing: border-box; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; background: var(--bg); }
+.dash-cp-task:focus { border-color: var(--blue); }
+.dash-cp-task-x { flex: none; width: 26px; height: 26px; border: none; background: none; color: var(--muted-2); cursor: pointer; border-radius: 6px; font-family: inherit; }
+.dash-cp-task-x:hover { background: var(--bg-tint); color: var(--coral, #e5484d); }
+.dash-cp-addtask { align-self: flex-start; display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--muted); background: none; border: 1px dashed var(--line-net-2, var(--line)); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-family: inherit; }
+.dash-cp-addtask:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+.dash-cp-model { flex: none; }
+.dash-cp-run { flex: none; }
 /* #req R19 인라인 '+ 새 프로젝트' — 프로젝트 행과 같은 위치·톤. 클릭→그 자리 입력, Enter→생성·상세 이동. */
 .dash-projadd { padding: 6px 6px 2px; } /* (구) — 모달 버튼용, 인라인으로 대체 */
 .dash-inlineadd { padding: 2px 6px 4px; }
@@ -4540,6 +4624,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard.sel::before { background: var(--accent, #5b6cff); }
 .dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .dash-scard-name { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* #req 세션 카드 부제 = Claude 작업 요약(제목=세션 이름과 별개). */
+.dash-scard-work { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-scard-work-ic { color: var(--muted-2); }
 .dash-scard-meta { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
 /* 상태 = 카드의 주인공. 색 점(작업중은 깜빡) + 굵은 색 라벨. */
 .dash-scard-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; letter-spacing: -.01em; }
@@ -4633,6 +4720,11 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-head strong { font-size: 13.5px; }
 .dash-pop-sub { font-size: 10.5px; color: var(--muted-2); }
 .dash-pop-gh { font-size: 11px; font-weight: 800; color: var(--muted-2); padding: 8px 8px 3px; letter-spacing: .02em; }
+/* #req ⚙ 팝오버 리스트 검색 + 즐겨찾기 상단 + 스크롤 */
+.dash-pop-search { width: 100%; box-sizing: border-box; margin: 2px 0 3px; padding: 6px 9px; font-family: inherit; font-size: 13px; color: var(--ink); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; outline: none; }
+.dash-pop-search:focus { border-color: var(--blue); }
+.dash-pop-listrows { max-height: 240px; overflow-y: auto; scrollbar-width: thin; }
+.dash-pop-fav { color: #f5a623; }
 .dash-pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .dash-pop-row:hover { background: var(--bg-tint); }
 .dash-pop-row input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; flex: none; }

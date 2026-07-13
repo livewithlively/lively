@@ -414,7 +414,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     const draw = () => {
         const shown = mode === 'active' ? projects.filter((p) => !isDone(p)) : projects;
         zone.countEl.textContent = String(shown.length);
-        dashChips(zone.chipsEl, [['active', '진행 중'], ['all', '전체']], mode, (k) => { mode = k; draw(); });
+        dashChips(zone.chipsEl, [['all', '전체'], ['active', '진행 중']], mode, (k) => { mode = k; draw(); });
         if (!shown.length) {
             zone.body.replaceChildren(dashEmpty(mode === 'active' ? '진행 중인 내 프로젝트가 없어요.' : '내가 참여한 프로젝트가 없어요.'));
             return;
