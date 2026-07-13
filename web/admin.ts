@@ -2785,8 +2785,19 @@ function mcpForm(root, s, data, detail, isNew) {
     try { const r = await api('/api/ui/org/mcp-server/refresh', { method: 'POST', body: JSON.stringify({ name: s.name }) }); toast(`발행됨 — 툴 ${r.tool_count}개`); await loadAdmin(true); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); refreshBtn.disabled = false; }
   });
-  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.' });
+  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다(상류 서비스의 자체 동의 화면). 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다. 자격 종류(auth_kind)는 이 서버의 토큰 슬롯 이름입니다(예: notion_oauth).' });
   const sigv4Hint = el('div', { class: 'admin-hint', text: 'AWS(sigv4): 자격 종류는 aws_role_arn 으로 두세요. 실제 역할(role ARN·리전·service)과 구성원별 오버라이드는 [자격] 탭 ▸ "AWS 역할"에서 등록·할당합니다. 툴 등급은 자동(describe=조회 / put·delete=집행 컨펌).' });
+  // OAuth 클라이언트(선택) — 상류가 자동등록(DCR)을 지원하면 비워둠(게이트웨이가 자동 등록). Google·Slack 등 콘솔 앱은 사전등록 client 를 입력.
+  //  저장 시 (gateway,auth_kind,'oauth:client') 슬롯에 시딩 → SDK 가 client_secret 유무로 confidential/public 자동 판정. 비우면 기존 유지.
+  const oauthClientIdIn = el('input', { type: 'text', value: '', placeholder: '비우면 자동등록(DCR). Google·Slack 등은 콘솔 client_id 입력' });
+  const oauthClientSecretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: 'confidential 앱이면 client_secret (변경할 때만 입력)' });
+  const oauthCallback = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
+  const oauthClientBox = el('div', { class: 'admin-subcard', style: 'margin-top:8px' },
+    el('div', { class: 'admin-subhead', text: 'OAuth 클라이언트 (선택 — 자동등록 미지원 상류만)' }),
+    el('div', { class: 'admin-hint', text: '상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)' }),
+    field('client_id', oauthClientIdIn),
+    field('client_secret', oauthClientSecretIn),
+    el('div', { class: 'admin-hint', text: `redirect URI(콜백): ${oauthCallback}  — 이 값을 상류 콘솔(Google/Slack 등)의 허용 redirect URI 에 그대로 등록하세요.` }));
   const authEnvField = field('인증 환경변수 이름 (auth_env)', authIn);
   const proxyBox = el('div', { class: 'admin-subcard' },
     el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }),
@@ -2796,7 +2807,7 @@ function mcpForm(root, s, data, detail, isNew) {
     field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)),
     field('자격 대상 구분 (선택)', authScopeIn),
     el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'),
-    oauthHint, sigv4Hint,
+    oauthHint, oauthClientBox, sigv4Hint,
     isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
 
   const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
@@ -2806,6 +2817,7 @@ function mcpForm(root, s, data, detail, isNew) {
     // proxy 는 auth_kind(vault)로 인증 → auth_env(client 전용) 숨김. oauth 면 auth_kind 는 vault kind(토큰 슬롯).
     authEnvField.style.display = proxy ? 'none' : '';
     oauthHint.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
+    oauthClientBox.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
     sigv4Hint.style.display = proxy && authModeSel.value === 'sigv4' ? '' : 'none';
     if (proxy && authModeSel.value === 'sigv4' && !authKindIn.value.trim()) authKindIn.value = 'aws_role_arn';
   };
@@ -2835,6 +2847,17 @@ function mcpForm(root, s, data, detail, isNew) {
         pii_scrub: proxy ? piiChk.checked : false,
       };
       await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
+      // OAuth 사전등록 클라이언트 시딩(선택) — client_id 입력 시에만. (gateway,auth_kind,'oauth:client') 슬롯.
+      if (proxy && authModeSel.value === 'oauth' && oauthClientIdIn.value.trim()) {
+        const kind = authKindIn.value.trim();
+        if (!kind) { toast('OAuth 클라이언트를 저장하려면 자격 종류(auth_kind)가 필요합니다', true); }
+        else {
+          const seed: any = { client_id: oauthClientIdIn.value.trim() };
+          if (oauthClientSecretIn.value.trim()) seed.client_secret = oauthClientSecretIn.value.trim();
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind, scope_key: 'oauth:client', secret: JSON.stringify(seed) }) });
+          oauthClientIdIn.value = ''; oauthClientSecretIn.value = '';
+        }
+      }
       await loadAdmin(true); state.admin.mcpSel = payload.name; toast('저장됨 — 다음 세션부터 반영'); renderAdminDetail(detail, 'mcp', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
