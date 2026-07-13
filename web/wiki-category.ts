@@ -466,7 +466,8 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       const node = el('div', { class: (b.type === 'heading' ? 'wk-bld-heading' : 'wk-bld-intro') + (ed ? ' ed' : ''),
         ...(ed ? { contenteditable: 'true', spellcheck: 'false', 'data-ph': b.type === 'heading' ? '소제목' : '이 카테고리가 무엇인지 팀의 말로…' } : {}) });
       node.textContent = b.text || '';
-      if (ed) node.addEventListener('blur', () => { const t = node.textContent || ''; if (t !== b.text) { b.text = t; scheduleSave(); } });
+      // 실제로 바뀐 경우만 저장 — 포커스만 했다 빠져도(공백 정규화 차이) 저장되어 기존 큐레이션을 덮는 것 방지.
+      if (ed) node.addEventListener('blur', () => { const t = (node.textContent || '').trim(); if (t !== (b.text || '').trim()) { b.text = t; scheduleSave(); } });
       return node;
     }
     const head = el('div', { class: 'wk-bld-head' },
