@@ -15,6 +15,7 @@ const { itemsPool } = await import(path.join(DIST, "items/store.js"));
 const store = await import(path.join(DIST, "org/store.js"));
 const vault = await import(path.join(DIST, "org/member-secret-store.js"));
 const oauth = await import(path.join(DIST, "org/oauth-broker.js"));
+const proxy = await import(path.join(DIST, "capabilities/mcp-proxy.js"));
 
 let step = "";
 const ok = (m) => console.log("ok  " + m);
@@ -76,7 +77,17 @@ try {
   if (!(await pf.tokens())) throw new Error("providerForServer 가 기존 토큰을 못 읽음");
   ok(step);
 
-  step = "⑧ disconnect — 토큰 삭제";
+  step = "⑧ OAuth 분기 가드(#2) — callerId 없음/미연결은 per-user 로 차단(통합 폴백 사칭 없음)";
+  // callProxyTool 은 callUpstream 의 oauth 분기를 탄다. 두 경우 모두 상류 접속 '전에' 차단(네트워크 없음).
+  let g1 = false;
+  try { await proxy.callProxyTool("notion", "search", {}, null); } catch (e) { if (/개인 연결/.test(String(e.message))) g1 = true; else throw e; }
+  if (!g1) throw new Error("callerId=null 이 차단되지 않음");
+  let g2 = false;
+  try { await proxy.callProxyTool("notion", "search", {}, "u_noconn"); } catch (e) { if (/미연결/.test(String(e.message))) g2 = true; else throw e; }
+  if (!g2) throw new Error("미연결 멤버가 차단되지 않음(통합 폴백 사칭 위험)");
+  ok(step);
+
+  step = "⑨ disconnect — 토큰 삭제";
   const del = await vault.deleteMemberSecret(vault.memberOwner("u1"), "notion_oauth", "");
   if (!del) throw new Error("토큰 삭제 실패");
   if (await (new oauth.VaultOAuthProvider({ memberId: "u1", serverName: "notion", authKind: "notion_oauth", tokenScopeKey: "", redirectUrl: "https://gw.example.com/oauth/callback" }).tokens())) throw new Error("삭제 후에도 토큰 조회됨");

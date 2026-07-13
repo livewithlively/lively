@@ -11,7 +11,7 @@ import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
 import { registerProxiedMcpTools } from "./capabilities/mcp-proxy.js";
-import { finishConsent } from "./org/oauth-broker.js";
+import { finishConsent, abandonConsent } from "./org/oauth-broker.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
@@ -113,7 +113,10 @@ const oauthPage = (msg: string): string =>
   `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p></body>`;
 app.get("/oauth/callback", async (req, res) => {
   const q = req.query as Record<string, string | undefined>;
-  if (q.error) return res.status(400).send(oauthPage(`인증이 거부되었습니다: ${q.error}`));
+  if (q.error) {
+    if (q.state) await abandonConsent(String(q.state)).catch(() => { /* best-effort 정리 */ }); // 거부 시 임시 PKCE verifier 정리(리뷰 #1)
+    return res.status(400).send(oauthPage(`인증이 거부되었습니다: ${q.error}`));
+  }
   if (!q.code || !q.state) return res.status(400).send(oauthPage("code 또는 state 가 없습니다."));
   try {
     const r = await finishConsent(String(q.state), String(q.code));

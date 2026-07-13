@@ -55,15 +55,18 @@ function toPublic(r: Row): MemberSecretPublic {
   };
 }
 
+// OAuth 브로커 내부 슬롯 — 사용자 자격이 아니라 인프라(임시 PKCE verifier·DCR 클라정보). 공개 목록에서 숨긴다(#746 리뷰 #1).
+const HIDDEN_SCOPE_KEYS = ["oauth:pkce", "oauth:client"];
+
 export async function listMemberSecretsPublic(owner: string): Promise<MemberSecretPublic[]> {
-  const r = await itemsPool.query("SELECT * FROM member_secret WHERE owner=$1 ORDER BY kind, scope_key", [owner]);
+  const r = await itemsPool.query("SELECT * FROM member_secret WHERE owner=$1 AND scope_key <> ALL($2) ORDER BY kind, scope_key", [owner, HIDDEN_SCOPE_KEYS]);
   return (r.rows as Row[]).map(toPublic);
 }
 
 // 특정 kind 전체(owner 무관) — 관리자 개관용(시크릿 없음). member_id 는 owner 에서 파생.
 export async function listSecretsByKindPublic(kind: string): Promise<MemberSecretPublic[]> {
   const k = normalizeKind(kind);
-  const r = await itemsPool.query("SELECT * FROM member_secret WHERE kind=$1 ORDER BY owner, scope_key", [k]);
+  const r = await itemsPool.query("SELECT * FROM member_secret WHERE kind=$1 AND scope_key <> ALL($2) ORDER BY owner, scope_key", [k, HIDDEN_SCOPE_KEYS]);
   return (r.rows as Row[]).map(toPublic);
 }
 

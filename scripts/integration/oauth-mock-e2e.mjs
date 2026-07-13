@@ -64,7 +64,7 @@ try {
   if (au.searchParams.get("state") !== r.state) throw new Error("authorize state 불일치");
   if (registerHits < 1) throw new Error("DCR(/register) 미호출");
   // PKCE verifier 가 vault 에 저장됐는지(콜백이 찾을 수 있게)
-  const pkceRows = (await itemsPool.query("SELECT count(*)::int n FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key LIKE 'oauth:pkce:%'", [vault.memberOwner("u1"), "mock_oauth"])).rows[0].n;
+  const pkceRows = (await itemsPool.query("SELECT count(*)::int n FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key LIKE 'oauth:pkce%'", [vault.memberOwner("u1"), "mock_oauth"])).rows[0].n;
   if (pkceRows < 1) throw new Error("PKCE verifier 미저장");
   ok(step + ` (client_id 발급, PKCE 저장, /register ${registerHits}회)`);
 
@@ -81,7 +81,7 @@ try {
   ok(step + ` (access_token=${tk.access_token})`);
 
   step = "⑦ 1회용 PKCE verifier 정리(finishConsent 후)";
-  const pkceLeft = (await itemsPool.query("SELECT count(*)::int n FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key LIKE 'oauth:pkce:%'", [vault.memberOwner("u1"), "mock_oauth"])).rows[0].n;
+  const pkceLeft = (await itemsPool.query("SELECT count(*)::int n FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key LIKE 'oauth:pkce%'", [vault.memberOwner("u1"), "mock_oauth"])).rows[0].n;
   if (pkceLeft !== 0) throw new Error(`PKCE verifier 미정리(${pkceLeft})`);
   ok(step);
 

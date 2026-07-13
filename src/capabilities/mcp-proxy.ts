@@ -71,6 +71,7 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
   let authProvider: OAuthClientProvider | undefined;
   if (server.auth_mode === "oauth" && server.auth_kind) {
     // oauth: 목록 캡처에도 유효 토큰 필요 — 새로고침 주체(actor)의 개인 OAuth 로. 미연결이면 SDK 401→헤드리스 실패 전에 친절히 차단.
+    //  actor 는 이중 역할: (1) 감사상의 새로고침 수행자, (2) 그 개인 토큰을 쓸 memberId — 관리자가 직접 연결해야 OAuth 서버를 새로고침 가능(의도).
     if (!actor) throw new Error("OAuth 프록시 새로고침은 연결된 멤버 신원이 필요합니다(먼저 커넥트).");
     const provider = await providerForServer(actor, server, actor);
     const tk = await provider.tokens();

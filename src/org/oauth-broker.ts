@@ -57,7 +57,7 @@ export function verifyState(token: string): StatePayload {
   let payload: StatePayload;
   try { payload = JSON.parse(Buffer.from(parts[0], B64).toString("utf8")); }
   catch { throw new Error("state 페이로드 파싱 실패"); }
-  if (!payload || typeof payload.m !== "string" || typeof payload.s !== "string" || typeof payload.n !== "string" || typeof payload.e !== "number") {
+  if (!payload || typeof payload.m !== "string" || typeof payload.s !== "string" || typeof payload.k !== "string" || typeof payload.n !== "string" || typeof payload.e !== "number") {
     throw new Error("state 페이로드 필드 누락");
   }
   if (Math.floor(Date.now() / 1000) > payload.e) throw new Error("state 만료");
@@ -94,8 +94,10 @@ export function buildClientMetadata(opts: { redirectUrl: string; clientName?: st
 }
 
 // vault 슬롯 키 — 토큰은 서버 설정 scope_key(resolveMemberSecret 이 읽는 슬롯), 클라정보/PKCE 는 예약 scope_key 로 분리.
-const CLIENT_SCOPE = "oauth:client";                 // owner=gateway(조직 공용 DCR 등록)
-const pkceScope = (nonce: string): string => `oauth:pkce:${nonce}`; // owner=member(콜백까지 임시)
+const CLIENT_SCOPE = "oauth:client";  // owner=gateway(조직 공용 DCR 등록)
+// PKCE verifier — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지(리뷰 #1);
+//  finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
+export const PKCE_SCOPE = "oauth:pkce";
 
 export interface VaultOAuthOpts {
   memberId: string;
@@ -152,17 +154,17 @@ export class VaultOAuthProvider implements OAuthClientProvider {
 
   redirectToAuthorization(authorizationUrl: URL): void { this.authorizationUrl = authorizationUrl; } // 헤드리스: 캡처만
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    await setMemberSecret(this.owner(), this.o.authKind, pkceScope(this._nonce), { secret: codeVerifier }, this.o.actor ?? "oauth");
+    await setMemberSecret(this.owner(), this.o.authKind, PKCE_SCOPE, { secret: codeVerifier }, this.o.actor ?? "oauth");
   }
   async codeVerifier(): Promise<string> {
-    const r = await getMemberSecret(this.owner(), this.o.authKind, pkceScope(this._nonce));
+    const r = await getMemberSecret(this.owner(), this.o.authKind, PKCE_SCOPE);
     if (!r?.secret) throw new Error("PKCE code_verifier 없음(만료/미개시) — 동의를 다시 시작하세요.");
     return r.secret;
   }
 
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
     if (scope === "tokens" || scope === "all") await deleteMemberSecret(this.owner(), this.o.authKind, this.tokenScope());
-    if (scope === "verifier" || scope === "all") await deleteMemberSecret(this.owner(), this.o.authKind, pkceScope(this._nonce));
+    if (scope === "verifier" || scope === "all") await deleteMemberSecret(this.owner(), this.o.authKind, PKCE_SCOPE);
     if (scope === "client" || scope === "all") await deleteMemberSecret(GATEWAY_OWNER, this.o.authKind, CLIENT_SCOPE);
     // 'discovery' — 캐시하지 않으므로 no-op.
   }
@@ -220,8 +222,23 @@ export async function finishConsent(stateToken: string, code: string, actor?: st
   const srv = await loadProxyServer(p.s);
   const redirectUrl = await callbackUrl();
   const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl, state: stateToken, actor });
-  const res = await auth(provider, { serverUrl: srv.url, authorizationCode: code, fetchFn: await gatewaySsrfFetch() });
-  if (res !== "AUTHORIZED") throw new Error("토큰 교환 실패");
-  await provider.invalidateCredentials("verifier"); // 1회용 PKCE verifier 정리
-  return { ok: true, memberId: p.m, serverName: p.s };
+  try {
+    const res = await auth(provider, { serverUrl: srv.url, authorizationCode: code, fetchFn: await gatewaySsrfFetch() });
+    if (res !== "AUTHORIZED") throw new Error("토큰 교환 실패");
+    return { ok: true, memberId: p.m, serverName: p.s };
+  } finally {
+    // 성공/실패 무관 1회용 PKCE verifier 정리(리뷰 #1 — 실패·예외 경로에서도 고아 방지).
+    await provider.invalidateCredentials("verifier").catch(() => { /* best-effort */ });
+  }
+}
+
+// 동의 취소/거부/실패(콜백 error 경로 등) 시 임시 PKCE verifier 정리 — state 만으로. 위조/만료 state 는 조용히 무시(무해).
+export async function abandonConsent(stateToken: string): Promise<void> {
+  let p: StatePayload;
+  try { p = verifyState(stateToken); } catch { return; }
+  try {
+    const srv = await loadProxyServer(p.s);
+    const provider = new VaultOAuthProvider({ memberId: p.m, serverName: p.s, authKind: srv.authKind, tokenScopeKey: p.k, redirectUrl: await callbackUrl(), state: stateToken });
+    await provider.invalidateCredentials("verifier");
+  } catch { /* best-effort */ }
 }

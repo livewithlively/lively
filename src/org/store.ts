@@ -798,6 +798,9 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
   // proxy 는 http 전송 전제(상류 remote MCP). auth_kind 지정 시 auth_env 는 비운다(인증 출처 하나 — org_tool 배타와 동일).
   const authKind = m.auth_kind !== undefined ? (m.auth_kind || null) : (before?.auth_kind ?? null);
   const authEnv = authKind ? null : (m.auth_env ?? before?.auth_env ?? null);
+  const authMode = m.auth_mode !== undefined ? (m.auth_mode || null) : (before?.auth_mode ?? null);
+  // auth_mode=oauth 는 auth_kind(vault 토큰 슬롯 kind) 필수(#746 리뷰 #3) — 없으면 연결/호출 시점까지 오류가 늦어진다.
+  if (authMode === "oauth" && !authKind) throw new Error("auth_mode=oauth 는 auth_kind(자격 종류)가 필요합니다");
   await itemsPool.query(
     `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
@@ -814,7 +817,7 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
      m.level !== undefined ? m.level : (before?.level ?? null),
      m.pii_scrub !== undefined ? !!m.pii_scrub : (before?.pii_scrub ?? false),
      authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
-     m.auth_mode !== undefined ? (m.auth_mode || null) : (before?.auth_mode ?? null),
+     authMode,
      actor ?? null],
   );
   // url/mode 변경 시 pinned tools_snapshot 무효화(#746 리뷰) — 옛 상류 기준 툴 정체성/목적지 불일치 방지.
