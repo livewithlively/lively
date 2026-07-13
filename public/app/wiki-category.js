@@ -715,7 +715,10 @@ async function renderCategorySurface(box, cat, ctx) {
     const editHint = el('div', { class: 'wk-bld-hint' }, el('span', { text: '✎ 편집 모드 — 블록을 끌어 옮기고, ⚙로 어떤 지식을 담을지 바꾸고, ⤢로 크기를, 아래 ＋로 새 블록을. 원하는 모양으로.' }));
     const inDrill = !!f.folder; // 폴더 드릴다운은 작업 모드 — 캔버스 생략(빵부스러기+폴더 내용만)
     library.id = 'wk-ch-docs';
-    actions.append(...[saveChip, modeToggle].filter(Boolean));
+    // 헤더 액션 순서: ＋ 새 페이지 · ✎ 편집 · (저장칩) · ⋯ — 편집을 ⋯ 앞으로.
+    if (modeToggle)
+        actions.insertBefore(modeToggle, moreBtn);
+    actions.insertBefore(saveChip, moreBtn);
     // 전체 문서(관리) — 캔버스 아래 접이식(기본 접힘). 대문은 빌더가 주인공이고, 서고는 펼쳐 보는 아카이브.
     //  드릴다운(폴더 안)일 땐 이게 곧 작업 화면이므로 항상 펼침.
     let libOpen = inDrill;

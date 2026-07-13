@@ -291,7 +291,7 @@ async function renderTerminal(view) {
         sel.ids.clear();
         reRender();
     }
-    const head = pageHead('터미널', '내 AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 오프라인인지 한눈에.', [headActions], '널');
+    const head = pageHead('내 AI 세션', '내 AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 오프라인인지 한눈에.', [headActions], '세션');
     view.replaceChildren(...[loginBannerEl(cfg, view), head, bulkBar, controls, listWrap].filter(Boolean));
     draw();
 }

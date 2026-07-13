@@ -1,7 +1,8 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, pageHead, state, sv } from './core.js';
+import { TOKEN_KEY, api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
+import { DOC_PAGES, INSTALL_EXTRA_MD } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
 //  V4: 종류(kind)·주제(area=space+domain)·출처(provenance)는 별개 축 — 종류는 본질, 주제는 도메인, 출처는 채널 사실.
@@ -11,33 +12,188 @@ import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'
 // 가이드(#/learn) — 비개발자가 이 서비스 '전체'와 '각 메뉴'를 한 번에 이해하도록 재구성(2026-06-30).
 //  두 기둥: ① 히어로 = 서비스를 관통하는 한 문장 + 작동 3단계 ② 메뉴 한눈에 보기 = 탭별 친절 설명.
 //  보조: 처음이라면(순서 경로) + WIKI 에 쌓이는 '지식 한 덩어리'(R·K·H·W) 예시. 정적 — API 불필요.
-// ── 사용 가이드 상위 탭의 서브탭(사용 가이드·시작하기·Lively 둘러보기) — 지식 탭과 같은 .sub-cats 패턴(#617). ──
-//  옛 상단 내비 '시작하기'(설치)를 사용 가이드 안으로 옮기며 그 자리를 '대시보드'로 개편. active = 'guide' | 'install' | 'tour'.
-//  'Lively 둘러보기'(#761) = 실제 화면 위에서 버튼을 직접 눌러 보는 크로스탭 스포트라이트 투어(guide-tour.ts).
-const LEARN_SUBS = [
-    { key: 'guide', label: '사용 가이드', href: '#/learn' },
-    { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' }, // #780 — 가이드 본문에 있던 메뉴 설명을 독립 서브탭으로
-    { key: 'install', label: '시작하기', href: '#/learn/install' },
-    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
+// ── 사용 가이드 = 문서 사이트(#780) — code.claude.com/docs/ko 형식: 좌측 사이드바(그룹>페이지) + 본문. ──
+//  옛 서브탭 바(.sub-cats)는 폐지 — 사이드바가 내비를 전담한다. 원고(md)는 docs-content.ts, 렌더는
+//  core.renderMarkdown(:::tabs 지원). 설치·둘러보기·메뉴 한눈에 보기는 인터랙티브 화면 그대로 셸 안에 들어간다.
+//  active 키: 'overview'(=#/learn) | DOC_PAGES slug(#/learn/docs/<slug>) | 'install' | 'tour' | 'menu'.
+const DOCS_NAV = [
+    { group: '시작하기', items: [
+            { key: 'overview', label: '라이블리 개요', href: '#/learn' },
+            { key: 'quickstart', label: '빠른 시작', href: '#/learn/docs/quickstart' },
+            { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
+        ] },
+    { group: '화면별 안내', items: [
+            { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' },
+            { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
+            { key: 'terminal', label: '내 AI 세션', href: '#/learn/docs/terminal' },
+            { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
+            { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
+            { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
+            { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
+        ] },
+    // 읽는 문서가 아니라 '직접 해보는' 화면 둘 — 설치 명령을 만들고, 실제 화면 위 투어를 켠다(#780).
+    { group: '직접 해보기', items: [
+            { key: 'install', label: '내 컴퓨터에 연결 (설치)', href: '#/learn/install' },
+            { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
+        ] },
+    { group: '레퍼런스', items: [
+            { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
+            { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
+        ] },
 ];
-function learnSubBar(active) {
-    const bar = el('div', { class: 'sub-cats', role: 'tablist', 'aria-label': '사용 가이드 보기' });
-    for (const s of LEARN_SUBS) {
-        const on = s.key === active;
-        bar.append(el('a', { class: 'sub-cat' + (on ? ' active' : ''), href: s.href,
-            role: 'tab', 'aria-selected': on ? 'true' : 'false', text: s.label }));
+function docsSidebar(active) {
+    const side = el('nav', { class: 'docs-side', 'aria-label': '사용 가이드 문서' });
+    for (const g of DOCS_NAV) {
+        const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.group }));
+        for (const it of g.items) {
+            box.append(el('a', { class: 'docs-item' + (it.key === active ? ' active' : ''), href: it.href,
+                'aria-current': it.key === active ? 'page' : null, text: it.label }));
+        }
+        side.append(box);
     }
-    return bar;
+    return side;
 }
-async function renderLearn(view) {
-    const head = el('div', { class: 'page-head' }, el('h1', {}, '사용 ', el('span', { class: 'accent', text: '가이드' })));
-    // '메뉴 한눈에 보기'는 서브탭(#/learn/menu)으로 분리, '처음이라면 이 순서로' 카드는 폐기(#780).
-    view.replaceChildren(head, learnSubBar('guide'), el('div', { class: 'guide-cards' }, heroCard(), // ① 서비스를 관통하는 설명 + 작동 3단계
-    kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란?
-    projectKnowledgeCard()));
+// 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴)이 이 셸 안에서 렌더된다.
+function docsShell(view, active, ...content) {
+    view.replaceChildren(el('div', { class: 'docs-layout' }, docsSidebar(active), el('article', { class: 'docs-body' }, ...content)));
     document.getElementById('view').focus?.();
-    // 프로젝트 '연결된 지식' 부제의 [자세히](#/learn?focus=required)로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
-    if (/[?&]focus=required(?:&|$)/.test(location.hash)) {
+}
+// 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
+function docsEyebrow(key) {
+    for (const g of DOCS_NAV)
+        if (g.items.some((i) => i.key === key))
+            return el('div', { class: 'docs-eyebrow', text: g.group });
+    return null;
+}
+// ── 원고(md) → 가이드 카드의 연속(#780 디자인 통일). ────────────────────────────────────────
+//  문서가 히어로·WIKI 설명 카드와 '같이 만든 물건'으로 보이려면, 흘러가는 마크다운이 아니라 제품의 카드 문법이어야 한다:
+//  ## 섹션 하나 = .card 하나(card-head h2 + guide-lead + 구조화된 본문). 첫 H2 앞 도입부는 카드 밖 리드(히어로 리드).
+//  카피는 손대지 않는다 — 같은 문장을 제품의 시각 언어(피처 카드·번호 단계·이동 카드)로 다시 조판할 뿐이다.
+function docsBody(md) {
+    const secs = [{ title: null, lines: [] }];
+    let fence = false, depth = 0;
+    for (const line of String(md || '').split('\n')) {
+        if (/^(```|~~~)/.test(line))
+            fence = !fence;
+        else if (!fence && /^:::\s*[a-zA-Z_-]/.test(line))
+            depth++;
+        else if (!fence && line.trim() === ':::')
+            depth = Math.max(0, depth - 1);
+        const h2 = !fence && !depth && /^##\s+(.+)$/.exec(line);
+        if (h2) {
+            secs.push({ title: h2[1].trim(), lines: [] });
+            continue;
+        }
+        secs[secs.length - 1].lines.push(line);
+    }
+    const cards = el('div', { class: 'guide-cards' });
+    for (const s of secs) {
+        const body = s.lines.join('\n').trim();
+        if (!body)
+            continue;
+        if (!s.title) {
+            // 도입부 — 문단·인용까지만 카드 밖 리드. 표·목록·코드 같은 '내용'이 시작되면 그 아래는 제목 없는 카드로
+            //  감싼다(용어집처럼 본문이 통째로 표인 문서가 카드 밖으로 새는 것 방지).
+            const at = s.lines.findIndex((l) => /^\s*(\||[-*+]\s|\d+\.\s|```|~~~|:::)/.test(l));
+            const lead = (at < 0 ? s.lines : s.lines.slice(0, at)).join('\n').trim();
+            const rest = at < 0 ? '' : s.lines.slice(at).join('\n').trim();
+            if (lead)
+                cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead)));
+            if (rest)
+                cards.append(el('div', { class: 'card docs-card' }, el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest)))));
+            continue;
+        }
+        cards.append(el('div', { class: 'card docs-card' }, el('div', { class: 'card-head' }, el('h2', { text: s.title })), el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body)))));
+    }
+    return cards;
+}
+// 렌더된 마크다운을 제품 시각 언어로 승격 — 문장은 그대로, 조판만 바꾼다.
+//  ① 첫 문단 = 리드(guide-lead) ② '**굵은 제목** — 설명' 목록 = 피처 카드 그리드(kn-axis-opt 문법)
+//  ③ 링크로 시작하는 목록('다음 단계') = 이동 카드 그리드(tabguide-card 문법) ④ 번호 목록 = 번호 단계(guide-path 문법)
+function docsDecorate(root) {
+    const lead = root.querySelector(':scope > .md-p');
+    if (lead)
+        lead.classList.add('guide-lead');
+    for (const ul of Array.from(root.querySelectorAll('ul.md-list'))) {
+        const lis = Array.from(ul.children);
+        if (!lis.length)
+            continue;
+        const first = (li) => li.firstElementChild && li.firstElementChild === li.firstChild ? li.firstElementChild.tagName : '';
+        const strip = (box) => {
+            const n = box.firstChild;
+            if (n && n.nodeType === 3)
+                n.textContent = String(n.textContent).replace(/^\s*[—–-]\s*/, '');
+        };
+        // ② 피처 카드 — 모든 항목이 굵은 제목으로 시작할 때
+        if (lis.every((li) => first(li) === 'STRONG')) {
+            const grid = el('div', { class: 'docs-featgrid' });
+            for (const li of lis) {
+                const t = el('div', { class: 'docs-feat-t', text: li.firstElementChild.textContent });
+                li.firstElementChild.remove();
+                const d = el('div', { class: 'docs-feat-d' });
+                while (li.firstChild)
+                    d.append(li.firstChild);
+                strip(d);
+                grid.append(el('div', { class: 'docs-feat' }, t, d));
+            }
+            ul.replaceWith(grid);
+            continue;
+        }
+        // ③ 이동 카드 — 모든 항목이 링크로 시작할 때(문서 끝 '다음 단계')
+        if (lis.every((li) => first(li) === 'A')) {
+            const grid = el('div', { class: 'docs-linkgrid' });
+            for (const li of lis) {
+                const a = li.firstElementChild;
+                const card = el('a', { class: 'docs-linkcard', href: a.getAttribute('href') || '#' });
+                card.append(el('span', { class: 'docs-linkcard-t' }, el('span', { text: a.textContent }), el('span', { class: 'docs-linkcard-arrow', 'aria-hidden': 'true', text: '→' })));
+                a.remove();
+                const d = el('span', { class: 'docs-linkcard-d' });
+                while (li.firstChild)
+                    d.append(li.firstChild);
+                strip(d);
+                if (d.textContent.trim())
+                    card.append(d);
+                grid.append(card);
+            }
+            ul.replaceWith(grid);
+        }
+    }
+    // ④ 번호 단계 — 순서 목록을 제품의 번호 뱃지 줄(guide-path)로
+    for (const ol of Array.from(root.querySelectorAll('ol.md-list'))) {
+        const steps = el('div', { class: 'docs-steps' });
+        Array.from(ol.children).forEach((li, i) => {
+            const body = el('div', { class: 'docs-step-body' });
+            while (li.firstChild)
+                body.append(li.firstChild);
+            steps.append(el('div', { class: 'docs-step' }, el('span', { class: 'docs-step-num', 'aria-hidden': 'true', text: String(i + 1) }), body));
+        });
+        ol.replaceWith(steps);
+    }
+    return root;
+}
+// md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
+//  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
+async function renderLearnDocs(view, slug) {
+    const page = DOC_PAGES.find((p) => p.slug === slug);
+    if (!page) {
+        location.replace('#/learn');
+        return;
+    }
+    const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
+    const md = h1 ? page.md.slice(h1[0].length) : page.md;
+    const body = [
+        docsEyebrow(slug),
+        el('h1', { class: 'docs-title', text: (h1 ? h1[1] : page.title).trim() }),
+        docsBody(md),
+    ];
+    if (slug === 'wiki') {
+        body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' }, kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
+        projectKnowledgeCard() // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
+        ));
+    }
+    docsShell(view, slug, ...body);
+    // 프로젝트 '연결된 지식' 부제의 [자세히]로 들어오면 해당 카드로 스크롤 + 잠깐 강조(#317).
+    if (slug === 'wiki' && /[?&]focus=required(?:&|$)/.test(location.hash)) {
         requestAnimationFrame(() => {
             const card = document.getElementById('learn-required');
             if (!card)
@@ -49,9 +205,22 @@ async function renderLearn(view) {
         });
     }
 }
+// #/learn — 문서 홈 = '라이블리 개요'. 히어로(서비스 정의+작동 3단계)를 원고 위에 얹는다(구 가이드 랜딩 보존).
+async function renderLearn(view) {
+    // 구 딥링크 #/learn?focus=required(#317) — 필요지식 카드는 WIKI 문서 페이지로 이사했다.
+    if (/[?&]focus=required(?:&|$)/.test(location.hash)) {
+        location.replace('#/learn/docs/wiki?focus=required');
+        return;
+    }
+    const page = DOC_PAGES.find((p) => p.slug === 'overview');
+    docsShell(view, 'overview', el('div', { class: 'guide-cards' }, heroCard()), // 히어로도 같은 카드 흐름 안에 — 아래 섹션 카드들과 같은 간격
+    docsBody(page ? page.md : ''));
+}
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
 function heroCard() {
-    return el('div', { class: 'card guide-hero' }, el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }), el('h2', { class: 'guide-hero-title' }, '한마디로, 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'), el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }), el('div', { class: 'guide-flow' }, flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'), flowArrow(), flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'), flowArrow(), flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.')), el('div', { class: 'guide-remember' }, el('span', { class: 'guide-remember-key', text: '딱 한 줄' }), el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
+    return el('div', { class: 'card guide-hero' }, el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }), el('h2', { class: 'guide-hero-title' }, '한마디로, 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'), el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }), 
+    // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
+    el('div', { class: 'guide-cycle' }, el('div', { class: 'guide-flow' }, flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'), flowArrow(), flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'), flowArrow(), flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'), flowArrow(), flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')), el('div', { class: 'guide-loop' }, el('span', { class: 'guide-loop-label' }, el('b', { text: '남긴 지식은 다시 [모아두기]로' }), ' — 쓸수록 맥락이 쌓여 AI가 더 정확해져요.'))), el('div', { class: 'guide-remember' }, el('span', { class: 'guide-remember-key', text: '딱 한 줄' }), el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
 }
 // 작동 3단계 — 아이콘 + 제목 + 한 줄.
 function flowStep(icon, title, desc) {
@@ -70,10 +239,10 @@ const GUIDE_CHAPTERS = [
                 href: '#/dashboard', link: '홈 열기' },
         ] },
     { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
-            { icon: 'terminal', name: '터미널 (AI 세션)', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
+            { icon: 'terminal', name: '내 AI 세션', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
                 summary: '웹에서 곧장 AI와 대화하는 곳',
                 desc: '브라우저에서 바로 AI와 대화하는 화면이에요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 홈의 ‘내 AI 세션’에서 [+ 새 세션]으로 열 수 있고, 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
-                href: '#/terminal', link: '터미널 열기' },
+                href: '#/terminal', link: '내 AI 세션 열기' },
             { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC',
                 summary: '회사에서 지금 무슨 일이 진행 중인지',
                 desc: '진행 중·완료된 프로젝트와 할 일을 모아 보는 곳이에요. 누가 무엇을 했고 지금 무엇을 하는지(작업 현황)를 한눈에 볼 수 있어, 팀 전체의 흐름을 따라가기 좋습니다. 사업·제품·시스템별로도 훑어볼 수 있어요.',
@@ -120,12 +289,11 @@ function tabCard(t) {
     }
     return el('a', { class: 'tabguide-card', href: t.href }, top, summary, desc, el('span', { class: 'tabguide-go' }, t.link, el('span', { class: 'tabguide-go-arrow', 'aria-hidden': 'true', text: '→' })));
 }
-// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 가이드 본문에 묻혀 있던 메뉴 설명을 독립 서브탭으로. ──
+// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 문서 셸 안의 인터랙티브 페이지. ──
 //  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
 async function renderLearnMenu(view) {
     const head = el('div', { class: 'page-head' }, el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
-    view.replaceChildren(head, learnSubBar('menu'), el('div', { class: 'guide-cards' }, tabsGuideCard()));
-    document.getElementById('view').focus?.();
+    docsShell(view, 'menu', docsEyebrow('menu'), head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
 }
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
 //  옛 R·K·H·W '종류'는 폐기. WIKI 탭과 동일 용어·칩(kn-chip)으로 맞춘다: 주입=항상 주입/검색, 출처=저작/외부 미러.
@@ -166,6 +334,9 @@ const GUIDE_ICONS = {
     layers: [['polygon', { points: '12 2 2 7 12 12 22 7 12 2' }], ['polyline', { points: '2 17 12 22 22 17' }], ['polyline', { points: '2 12 12 17 22 12' }]],
     send: [['line', { x1: 22, y1: 2, x2: 11, y2: 13 }], ['polygon', { points: '22 2 15 22 11 13 2 9 22 2' }]],
     zap: [['polygon', { points: '13 2 3 14 12 14 11 22 21 10 12 10 13 2' }]],
+    // '다시 쌓기'(#780 순환 4단계) — 일한 결과를 지식으로 남겨 되돌려 놓는다(feather save).
+    save: [['path', { d: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' }],
+        ['polyline', { points: '17 21 17 13 7 13 7 21' }], ['polyline', { points: '7 3 7 8 15 8' }]],
 };
 function tabIcon(name) {
     const svg = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7,
@@ -185,20 +356,20 @@ async function renderLearnTour(view) {
     const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title' }, el('span', { text: title }), isSectionDone(key) ? el('span', { class: 'admin-hint', style: 'margin-left:8px;font-weight:400', text: '✓ 봤어요' }) : null), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '▶ ' + title.split(' — ')[0] + '만 보기', onclick: () => startGuideTour([key]) })));
     const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
     const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ', el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
-    view.replaceChildren(head, learnSubBar('tour'), el('div', { class: 'guide-cards' }, intro, courses, extra));
-    document.getElementById('view').focus?.();
+    docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
 //  핵심: 쓰는 곳이 두 갈래라 시작법이 다르다 — (web) 라이블리 [터미널] 탭=서버에서 claude/codex 가 돌고
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-    // 부제 없음(#780) — 다른 사용 가이드 서브탭은 제목 한 줄뿐이라, 여기만 부제가 붙으면 제목·서브탭 줄이 세로로 어긋난다.
+    // 부제 없음(#780) — 문서 셸의 다른 페이지들과 제목 줄을 맞춘다.
     const head = pageHead('시작하기', null, [], '하기');
     const slot = el('div', { class: 'install-guide' });
     slot.append(skeleton('설치 안내를 준비하는 중'));
-    view.replaceChildren(head, learnSubBar('install'), slot); // 사용 가이드 서브탭 바(#617) — 머리 아래, 본문 위
-    document.getElementById('view').focus?.();
+    // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드와 같은 카드 문법으로 이어 붙인다.
+    const extra = el('div', { style: 'margin-top:18px' }, docsBody(INSTALL_EXTRA_MD));
+    docsShell(view, 'install', docsEyebrow('install'), head, slot, extra);
     onboardingBanner().then((b) => { if (b)
         head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
     loadAdmin().then((data) => drawInstallGuide(slot, data))
@@ -443,4 +614,4 @@ async function renderOnboarding(view) {
         slot.replaceChildren(errorNote(e, '온보딩 진행상황을 불러오지 못했습니다'));
     }
 }
-export { checklist, overlayBox, renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding, skeleton, skeletonRows, };
+export { checklist, overlayBox, renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding, skeleton, skeletonRows, };
