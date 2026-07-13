@@ -5043,6 +5043,12 @@ function projectKnowledgeSection(id, p, reload) {
   const knName = (k) => k.name || k.knowledge_name;
   let cur = { required: (p.knowledge || {}).required || [], produced: (p.knowledge || {}).produced || [] };
 
+  // 지식 링크는 새 탭(#804). 프로젝트 상세는 모달로도 뜨는데(pjvOpenProjectModal — 대시보드·보드 행 클릭),
+  //  모달은 body 에 얹히고 라우터엔 모달 정리가 없어 같은 탭 해시 이동(#/k/…)이 **모달 뒤에서** 라우트만 바꾼다
+  //  → 사용자 눈엔 '클릭해도 아무 일 없는' 죽은 클릭. 새 탭이면 프로젝트를 띄워 둔 채 지식을 읽는다(작업맥락 보존).
+  //  지식 픽커(ps-kn-pick-main)가 이미 같은 규약이라 페이지에서도 동일하게 맞춘다.
+  const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
+
   let remeasure: any = null;  // 길이 초과 시 접기 컨트롤 재측정(접힘 박스 생성 후 할당). 리스트 변경마다 호출.
 
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
@@ -5082,7 +5088,7 @@ function projectKnowledgeSection(id, p, reload) {
         toast('연결했습니다'); refresh(); }
       catch (e) { addBtn.disabled = false; toast('연결 실패 — ' + e.message, true); } };
     return el('div', { class: 'pjk-rec-row' },
-      el('a', { class: 'pjk-rec-title', href: '#/k/' + encodeURIComponent(name), text: m.title || name }),
+      el('a', { class: 'pjk-rec-title', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
       m.shares_category ? el('span', { class: 'kn-chip', title: '프로젝트와 같은 분류', text: '📁' }) : null,
       pct > 0 ? el('span', { class: 'admin-hint pjk-rec-pct', title: '의미 유사도', text: pct + '%' }) : null,
       addBtn);
@@ -5119,7 +5125,7 @@ function projectKnowledgeSection(id, p, reload) {
   function knRow(k, relation) {
     const name = knName(k);
     const r = el('div', { class: 'pjk-row' },
-      el('a', { class: 'pjk-row-title', href: '#/k/' + encodeURIComponent(name), text: k.title || name }),
+      el('a', { class: 'pjk-row-title', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: k.title || name }),
       el('div', { class: 'pjk-row-meta' },
         // 배지는 '예외만' 표시 — 기본값(검색=recalled·저작=authored·유효=active)은 매 행 똑같이 반복돼
         // 차별성 0 인 노이즈라 숨긴다. 벗어난 것만(주입·미러·폐기 등) 배지로 떠 제목 폭을 최대로 확보(#59 가독성).
