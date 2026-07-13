@@ -22,7 +22,7 @@ Runas_Alias LIVELY_BROKERS = %broker_members
 # ① 세션 spawn + ③ 브로커 spawn — box_members·broker_members 로 wrapper 하나만, 비밀번호 없이.
 lively ALL=(LIVELY_BOX_MEMBERS,LIVELY_BROKERS) NOPASSWD: /opt/lively/libexec/box-spawn
 # ③ 브로커 config 는 env 로 전달(sudo env_reset 우회) — LIVELY_BROKER_* 만 보존. 비밀 아님(소켓경로·workroot·툴목록).
-Defaults!/opt/lively/libexec/box-spawn env_keep += "LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY"
+Defaults!/opt/lively/libexec/box-spawn env_keep += "LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
 
 # ② 웹 프로비저닝 — root 로 provision 스크립트 하나만. 토큰·이름·이메일만 env 보존(PATH 등은 미보존).
 Defaults!/opt/lively/libexec/provision-member env_keep += "LIVELY_TOKEN MEMBER_NAME MEMBER_EMAIL LIVELY_SHARED_DIR"

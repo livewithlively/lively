@@ -2,10 +2,20 @@
 //  소켓은 브로커 uid 소유 + lively 그룹(0660) → 게이트웨이(lively)만 연결, 멤버 대화 uid(box_<member>)는 접근 불가.
 //  → 자격을 쥔 브로커 프로세스를 멤버가 변조/열람 못 함(전용 uid + 소켓 권한 이중).
 import http from "node:http";
+import crypto from "node:crypto";
 import { runExec, type ExecRequest, type ExecPolicy, type ExecResult } from "./exec.js";
 import { mcpForward, type McpRequest } from "./mcp.js";
 
-export interface BrokerConfig extends ExecPolicy { member: string }
+export interface BrokerConfig extends ExecPolicy { member: string; authToken?: string | null }
+
+// per-broker 인증(리뷰#2) — 게이트웨이가 보낸 x-lively-broker-auth 가 이 브로커의 토큰과 일치해야. 타이밍-세이프.
+//  authToken 미설정(레거시/개발)이면 검사 생략. 설정되면 불일치 시 401 → 같은 소켓 그룹의 타 브로커도 위조 불가.
+function authOk(cfg: BrokerConfig, headerVal: string | string[] | undefined): boolean {
+  if (!cfg.authToken) return true;
+  const got = typeof headerVal === "string" ? headerVal : "";
+  const a = Buffer.from(got); const b = Buffer.from(cfg.authToken);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // 요청 1건 처리 — op 디스패치(ping/exec/mcp). 자격/env 는 응답에 절대 안 실림(runExec/mcpForward 가 보장).
 async function handle(body: unknown, cfg: BrokerConfig): Promise<{ status: number; payload: unknown }> {
@@ -25,6 +35,9 @@ async function handle(body: unknown, cfg: BrokerConfig): Promise<{ status: numbe
 export function createBrokerServer(cfg: BrokerConfig, maxBody = 256 * 1024): http.Server {
   return http.createServer((httpReq, httpRes) => {
     if (httpReq.method !== "POST") { httpRes.writeHead(405).end(); return; }
+    if (!authOk(cfg, httpReq.headers["x-lively-broker-auth"])) { // per-broker 인증(크로스-멤버 차단)
+      httpRes.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: "broker auth 불일치" })); return;
+    }
     const chunks: Buffer[] = [];
     let len = 0, aborted = false;
     httpReq.on("data", (c: Buffer) => {

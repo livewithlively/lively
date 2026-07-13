@@ -33,8 +33,9 @@ export async function mcpForward(req: McpRequest): Promise<McpResult> {
     const r = await client.callTool({ name: req.tool, arguments: req.args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS });
     return { ok: r.isError !== true, content: (r.content as unknown[]) ?? [], isError: r.isError === true };
   } catch (e) {
-    clients.delete(req.url); // 연결이 죽었을 수 있음 → 캐시 무효화(다음 호출에 재연결)
-    try { const c = clients.get(req.url); await c?.close(); } catch { /* */ }
+    const dead = clients.get(req.url); // delete 前에 잡아서 close(리뷰: delete 후 get 은 항상 undefined 였음)
+    clients.delete(req.url);           // 연결이 죽었을 수 있음 → 캐시 무효화(다음 호출에 재연결)
+    try { await dead?.close(); } catch { /* */ }
     return { ok: false, error: (e as Error).message };
   }
 }

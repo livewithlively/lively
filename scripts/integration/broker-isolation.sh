@@ -15,6 +15,7 @@ T=/tmp/brokertest                  # 제한 소켓 디렉토리(2770) + 임시
 LOG=/tmp/broker-t.log
 BROKER_U=broker_t; GW_U=gw_t; MEMBER_U=box_t; GRP=lively
 FAKE_SECRET="super-secret-token-DO-NOT-LEAK"
+CSK="${CONNECTOR_SECRET_KEY:-$(openssl rand -hex 32)}"  # routeToBroker 의 brokerAuthToken 계산용(브로커는 authToken 미설정→검사 스킵)
 fail=0; note(){ echo "  $*"; }; pass(){ echo "ok  $*"; }; bad(){ echo "FAIL $*"; fail=1; }
 
 cleanup(){
@@ -74,7 +75,7 @@ R=$(sudo -u "$GW_U" node "$T/call.mjs" "$SOCK" '{"op":"exec","tool":"echo","args
 note "gw 응답: $R"; echo "$R" | grep -q 'ISOLATION-OK' && pass "(b) 게이트웨이 raw exec 성공" || bad "(b) 실패: $R"
 
 echo "=== (b2) 게이트웨이 라우팅(routeToBroker ①) → 멤버 브로커 exec ==="
-R=$(sudo -u "$GW_U" env LIVELY_BROKER_SOCK_DIR="$T/sock" node "$T/route-call.mjs" t '{"op":"exec","tool":"echo","args":["ROUTED-OK"]}' 2>&1)
+R=$(sudo -u "$GW_U" env LIVELY_BROKER_SOCK_DIR="$T/sock" CONNECTOR_SECRET_KEY="$CSK" node "$T/route-call.mjs" t '{"op":"exec","tool":"echo","args":["ROUTED-OK"]}' 2>&1)
 note "route 응답: $R"; echo "$R" | grep -q 'ROUTED-OK' && pass "(b2) routeToBroker → 브로커 exec 라우팅 성공" || bad "(b2) 실패: $R"
 
 echo "=== (c) 멤버 대역(lively 그룹 아님) → 소켓 연결 불가 ==="

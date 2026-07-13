@@ -1,12 +1,13 @@
 // 브로커 exec 코어(#746 T4) 단위 체크 — 소켓·uid 불요(순수 로직). 소켓+uid 격리 E2E 는 scripts/integration/broker-isolation.sh(박스).
 // 실행: npm run build && node dist/broker/broker.test.js
 //  커버: 도구 화이트리스트(경로/`..`/미허용 거부) · cwd workroot 봉쇄(이탈 거부) · exec(허용실행·미허용거부·이탈거부·타임아웃).
+process.env.CONNECTOR_SECRET_KEY ||= "0".repeat(64); // brokerAuthToken HMAC 키 소스(테스트 결정값)
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertAllowedTool, resolveCwd, runExec } from "./exec.js";
-import { brokerUser, brokerSocketPath, brokerSpawnArgv } from "./route.js";
+import { brokerUser, brokerSocketPath, brokerSpawnArgv, brokerAuthToken } from "./route.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -66,6 +67,20 @@ t("route: spawn argv = sudo -n -u broker_<slug> -- box-spawn node <entry>", () =
   assert.deepEqual(a.slice(0, 5), ["sudo", "-n", "-u", "broker_yoon", "--"]);
   assert.equal(a[a.length - 2], "node");
   assert.equal(a[a.length - 1], "/opt/co/dist/broker/index.js");
+});
+
+// ── per-broker 인증 토큰(리뷰#2 크로스-멤버 차단) — 결정론·slug별 상이·게이트웨이만 계산가능 ──
+t("brokerAuthToken: slug별 결정론 + 상이(위조불가 전제) + url-safe", () => {
+  assert.equal(brokerAuthToken("a"), brokerAuthToken("a"));       // 결정론(재시작에도 일관)
+  assert.notEqual(brokerAuthToken("a"), brokerAuthToken("b"));    // slug별 상이 → broker_a 는 broker_b 토큰 모름
+  assert.doesNotMatch(brokerAuthToken("a"), /[+/=]/);             // base64url
+});
+
+// ── resolveCwd: realpath 실패(댕글링 심볼릭) → 거부(레이스 우회 차단) ──
+t("resolveCwd: 댕글링 심볼릭/미존재 → 거부(unresolved 폴백 없음)", () => {
+  fs.symlinkSync("/nonexistent-target-xyz", path.join(tmp, "dangling"));
+  throws(() => resolveCwd("dangling", tmp), /해석 실패/);
+  throws(() => resolveCwd("does-not-exist", tmp), /해석 실패/);
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

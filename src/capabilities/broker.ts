@@ -9,7 +9,10 @@ import { routeToBroker, defaultBrokerSpawner } from "../broker/route.js";
 
 // 브로커 진입 js — 배포 앱경로(APP_DIR/dist/broker/index.js, world-readable → broker_<slug> 가독). env 우선.
 const BROKER_ENTRY = process.env.LIVELY_BROKER_ENTRY || fileURLToPath(new URL("../broker/index.js", import.meta.url));
-const DEFAULT_TOOLS = (process.env.LIVELY_BROKER_ALLOWED_TOOLS || "git,kubectl,terraform,helm,aws").split(",").map((s) => s.trim()).filter(Boolean);
+// ⚠ 보안 모델(리뷰#1): 화이트리스트 도구라도 arg 로 임의실행 가능(git -c·kubectl --kubeconfig·terraform local-exec) →
+//  브로커는 '자기 uid 에 대한 샌드박스가 아니다'. 그래서 (1) 도구는 기본 비움(운영자가 LIVELY_BROKER_ALLOWED_TOOLS 로 opt-in),
+//  (2) 브로커엔 '그 멤버 본인 자격'만 둔다(org/상승 자격 금지 — 멤버가 자기 것 접근은 위반 아님), (3) 크로스-멤버는 per-broker 토큰 차단.
+const DEFAULT_TOOLS = (process.env.LIVELY_BROKER_ALLOWED_TOOLS || "").split(",").map((s) => s.trim()).filter(Boolean);
 // slug — provision-member.sh / terminal-sessions.userSlug 와 동일 규칙(불변식). 게이트웨이가 파생하는 osUser 와 일치해야.
 const memberSlug = (id: string): string => id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 

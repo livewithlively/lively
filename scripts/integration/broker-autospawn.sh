@@ -35,14 +35,15 @@ sudo install -d -m 0755 /opt/lively/libexec
 sudo install -m 0755 -o root -g root "$CO/deploy/linux/box-spawn" /opt/lively/libexec/box-spawn
 # 소켓 디렉토리(설치 스크립트와 동일: root:lively-broker 2770 setgid)
 sudo install -d -m 2770 -o root -g lively-broker "$RUNDIR"; sudo chmod g+s "$RUNDIR"
+CSK="${CONNECTOR_SECRET_KEY:-$(openssl rand -hex 32)}"  # brokerAuthToken HMAC 키(게이트웨이-측 caller 에 주입)
 # 테스트 sudoers — gw_t 가 broker_members 로 box-spawn 만, LIVELY_BROKER_* env_keep(실 sudoers 파일과 별개 파일)
 sudo tee "$SUDOERS" >/dev/null <<EOF
 Runas_Alias LIVELY_BROKERS_T = %broker_members
-Defaults!/opt/lively/libexec/box-spawn env_keep += "LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY"
+Defaults!/opt/lively/libexec/box-spawn env_keep += "LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
 $GW_U ALL=(LIVELY_BROKERS_T) NOPASSWD: /opt/lively/libexec/box-spawn
 EOF
 sudo visudo -cf "$SUDOERS" >/dev/null || { bad "테스트 sudoers 검증 실패"; exit 1; }
-# 게이트웨이-측 caller — routeToBroker + defaultBrokerSpawner(실제 sudo/box-spawn spawn)
+# 게이트웨이-측 caller — routeToBroker + defaultBrokerSpawner(실제 sudo/box-spawn spawn, per-broker 토큰 주입)
 sudo mkdir -p "$T"
 echo '{"type":"module"}' | sudo tee "$T/package.json" >/dev/null
 sudo tee "$T/autospawn-call.mjs" >/dev/null <<EOF
@@ -52,13 +53,19 @@ const spawner = defaultBrokerSpawner({ entry: "$APP/dist/broker/index.js", allow
 try { console.log(JSON.stringify(await routeToBroker(slug, JSON.parse(req || "{}"), spawner))); }
 catch (e) { console.log(JSON.stringify({ ok: false, error: e.message })); process.exitCode = 3; }
 EOF
+# raw caller(토큰 없이) — 크로스-멤버/멤버가 소켓에 닿아도 토큰 없으면 401 임을 검증
+sudo tee "$T/raw-call.mjs" >/dev/null <<EOF
+import { brokerCall } from "$APP/dist/broker/client.js";
+try { console.log(JSON.stringify(await brokerCall(process.argv[2], { op: "ping" }, 5000 /* no token */))); }
+catch (e) { console.log(JSON.stringify({ ok: false, error: e.message })); }
+EOF
 sudo chmod -R 755 "$T"
 
 echo "=== 사전확인: 브로커 미기동(소켓 없음) ==="
 sudo test -S "$RUNDIR/t.sock" && bad "이미 소켓 존재(사전상태 오염)" || pass "사전: broker_t 소켓 없음(미기동)"
 
 echo "=== (핵심) gw_t 가 routeToBroker 호출 → 브로커 '자동' 기동 + exec 라우팅 ==="
-R=$(cd "$T" && sudo -u "$GW_U" node "$T/autospawn-call.mjs" t '{"op":"exec","tool":"echo","args":["AUTOSPAWN-OK"]}' 2>&1)
+R=$(cd "$T" && sudo -u "$GW_U" env CONNECTOR_SECRET_KEY="$CSK" node "$T/autospawn-call.mjs" t '{"op":"exec","tool":"echo","args":["AUTOSPAWN-OK"]}' 2>&1)
 note "응답: $R"
 echo "$R" | grep -q 'AUTOSPAWN-OK' && pass "routeToBroker → 브로커 자동 기동 후 exec 성공(명시적 spawn 액션 없음)" || bad "auto-spawn 라우팅 실패: $R"
 BPID=$(pgrep -u "$BROKER_U" -f "broker/index.js" | head -1)
@@ -66,7 +73,7 @@ BPID=$(pgrep -u "$BROKER_U" -f "broker/index.js" | head -1)
 [ -n "$BPID" ] && note "소켓: $(sudo stat -c '%U:%G %a' "$RUNDIR/t.sock" 2>/dev/null)"
 
 echo "=== 2차 호출은 재기동 없이 기존 브로커 재사용(idempotent) ==="
-R2=$(cd "$T" && sudo -u "$GW_U" node "$T/autospawn-call.mjs" t '{"op":"exec","tool":"echo","args":["REUSE-OK"]}' 2>&1)
+R2=$(cd "$T" && sudo -u "$GW_U" env CONNECTOR_SECRET_KEY="$CSK" node "$T/autospawn-call.mjs" t '{"op":"exec","tool":"echo","args":["REUSE-OK"]}' 2>&1)
 BPID2=$(pgrep -u "$BROKER_U" -f "broker/index.js" | head -1)
 { echo "$R2" | grep -q 'REUSE-OK' && [ "$BPID" = "$BPID2" ]; } && pass "2차 호출 = 동일 브로커 재사용(pid 불변)" || bad "재사용 실패(R2=$R2 pid $BPID→$BPID2)"
 
@@ -74,6 +81,12 @@ echo "=== 격리 유지: 멤버 대역(lively-broker 아님)은 auto-spawn 된 �
 R3=$(sudo -u "$MEMBER_U" node -e 'const http=require("http");const r=http.request({socketPath:process.argv[1],path:"/",method:"POST"},()=>console.log("CONNECTED"));r.on("error",e=>console.log(e.code||e.message));r.end("{}")' "$RUNDIR/t.sock" 2>&1)
 note "member 접근: $R3"
 echo "$R3" | grep -qiE 'EACCES|ENOENT' && pass "멤버 → auto-spawn 소켓 접근 불가(EACCES/ENOENT — 격리 유지)" || bad "멤버가 접근됨(격리 실패!): $R3"
+
+echo "=== (리뷰#2) 소켓에 닿아도 per-broker 토큰 없으면 401 — 크로스-멤버 차단 ==="
+# gw_t 는 lively-broker 그룹이라 소켓에 '닿을 수' 있음(같은 그룹 = 타 브로커 대역). 토큰 없이 호출 → 401 이어야.
+R4=$(cd "$T" && sudo -u "$GW_U" node "$T/raw-call.mjs" "$RUNDIR/t.sock" 2>&1)
+note "무토큰 응답: $R4"
+echo "$R4" | grep -qi 'auth 불일치\|401' && pass "무토큰 요청 → 401(같은 그룹 reacher 도 토큰 없으면 차단 = 크로스-멤버 방어)" || bad "무토큰인데 통과됨(토큰 게이트 미작동!): $R4"
 
 echo
 [ "$fail" = "0" ] && echo "BROKER-AUTOSPAWN(T4 ②) ALL GREEN" || echo "BROKER-AUTOSPAWN(T4 ②) 실패 있음"

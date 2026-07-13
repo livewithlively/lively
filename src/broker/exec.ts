@@ -22,8 +22,10 @@ export function resolveCwd(reqCwd: string | undefined, workroot: string): string
   const root = fs.realpathSync(workroot);
   if (!reqCwd) return root;
   const abs = path.resolve(root, reqCwd);
+  // realpath 실패(미존재/댕글링 심볼릭)면 거부 — 옛 폴백(unresolved 경로 통과)은 심볼릭 레이스 우회 허용(리뷰). 존재+해석돼야 통과.
   let real: string;
-  try { real = fs.realpathSync(abs); } catch { real = abs; } // 미존재면 정규화 경로로 검사
+  try { real = fs.realpathSync(abs); }
+  catch { throw new Error(`cwd 해석 실패(존재하지 않거나 접근 불가): ${reqCwd}`); }
   if (real !== root && !real.startsWith(root + path.sep)) {
     throw new Error(`cwd 가 workroot 밖입니다: ${reqCwd}`);
   }

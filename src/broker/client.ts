@@ -4,11 +4,13 @@ import http from "node:http";
 
 export interface BrokerResponse { ok: boolean; stdout?: string; stderr?: string; code?: number | null; error?: string; [k: string]: unknown }
 
-export function brokerCall(socketPath: string, req: unknown, timeoutMs = 65000): Promise<BrokerResponse> {
+export function brokerCall(socketPath: string, req: unknown, timeoutMs = 65000, authToken?: string): Promise<BrokerResponse> {
   return new Promise<BrokerResponse>((resolve, reject) => {
     const body = JSON.stringify(req ?? {});
+    const headers: Record<string, string> = { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) };
+    if (authToken) headers["x-lively-broker-auth"] = authToken; // per-broker 인증(크로스-멤버 차단)
     const r = http.request(
-      { socketPath, path: "/", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }, timeout: timeoutMs },
+      { socketPath, path: "/", method: "POST", headers, timeout: timeoutMs },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));

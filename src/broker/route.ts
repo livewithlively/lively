@@ -1,6 +1,7 @@
 // 게이트웨이-측 브로커 라우팅(#746 T4, ①) — 멤버 요청을 그 멤버의 브로커 프로세스로 라우팅.
 //  lazy 보장: 소켓이 살아있으면 즉시, 아니면 spawner 로 기동(첫 호출에 자동 — '명시적 트리거 불요', 사용자 Q2).
 //  spawn 은 기존 격리 특권경로 재사용(sudo -n -u broker_<slug> -- box-spawn), install-isolation ②(broker 그룹·sudoers·provision) 전제.
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { BOX_SPAWN } from "../terminal-isolation.js";
 import { brokerCall, type BrokerResponse } from "./client.js";
@@ -9,6 +10,19 @@ const SOCK_DIR = process.env.LIVELY_BROKER_SOCK_DIR || "/run/lively-broker";
 export const BROKER_USER_PREFIX = "broker_";
 export function brokerUser(slug: string): string { return `${BROKER_USER_PREFIX}${slug}`; }
 export function brokerSocketPath(slug: string): string { return `${SOCK_DIR}/${slug}.sock`; }
+
+// per-broker 인증 토큰(#746 리뷰 blocking#2) — 크로스-멤버 차단. token(slug)=HMAC(key, slug), key=HKDF(CONNECTOR_SECRET_KEY).
+//  게이트웨이만 key 를 알아 임의 slug 토큰 계산 가능. 브로커는 자기 토큰(env LIVELY_BROKER_AUTH)만 알고 검증 → 같은 소켓 그룹이라도
+//  broker_A(멤버 RCE 포함)는 broker_B 토큰을 위조 못 함(key 없음). 결정론 유도라 게이트웨이 재시작에도 일관.
+function brokerAuthKey(): Buffer {
+  const raw = process.env.CONNECTOR_SECRET_KEY?.trim();
+  if (!raw) throw new Error("CONNECTOR_SECRET_KEY 미설정 — 브로커 인증 토큰 유도 불가");
+  const ikm = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : crypto.createHash("sha256").update(raw, "utf8").digest();
+  return Buffer.from(crypto.hkdfSync("sha256", ikm, Buffer.alloc(0), Buffer.from("lively-broker-auth-v1"), 32));
+}
+export function brokerAuthToken(slug: string): string {
+  return crypto.createHmac("sha256", brokerAuthKey()).update(slug).digest("base64url");
+}
 
 // 프로덕션 spawn argv — 게이트웨이가 잠긴 sudo 로 broker_<slug> 로 브로커 기동(box-spawn 재사용, box_members 와 동형·runas 그룹제한).
 export function brokerSpawnArgv(slug: string, entry: string): string[] {
@@ -20,7 +34,7 @@ export type Spawner = (slug: string) => void | Promise<void>;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function ping(slug: string, timeoutMs = 1200): Promise<boolean> {
-  try { return (await brokerCall(brokerSocketPath(slug), { op: "ping" }, timeoutMs)).ok === true; }
+  try { return (await brokerCall(brokerSocketPath(slug), { op: "ping" }, timeoutMs, brokerAuthToken(slug))).ok === true; }
   catch { return false; }
 }
 
@@ -35,7 +49,7 @@ export async function ensureBroker(slug: string, spawner: Spawner, timeoutMs = 6
 
 // 라우팅 — 멤버 브로커 보장 후 요청 포워딩(exec/mcp). 게이트웨이 capability 가 호출.
 export async function routeToBroker(slug: string, req: unknown, spawner: Spawner): Promise<BrokerResponse> {
-  return brokerCall(await ensureBroker(slug, spawner), req);
+  return brokerCall(await ensureBroker(slug, spawner), req, undefined, brokerAuthToken(slug));
 }
 
 // 멤버↔브로커 공유 작업 베이스 — provision 이 /srv/lively/member-work/<slug>(box_<slug>:m_<slug> 2770)로 만든다.
@@ -60,6 +74,7 @@ export function defaultBrokerSpawner(opts: BrokerSpawnOpts): Spawner {
       LIVELY_BROKER_SOCKET: brokerSocketPath(slug),
       LIVELY_BROKER_WORKROOT: brokerWorkroot(slug),
       LIVELY_BROKER_ENTRY: opts.entry,
+      LIVELY_BROKER_AUTH: brokerAuthToken(slug), // per-broker 인증 토큰 — 브로커가 요청 검증(크로스-멤버 차단, 리뷰#2)
     };
     if (opts.allowedTools?.length) env.LIVELY_BROKER_ALLOWED_TOOLS = opts.allowedTools.join(",");
     if (opts.internalHosts?.length) env.LIVELY_BROKER_INTERNAL_HOSTS = opts.internalHosts.join(",");

@@ -21,10 +21,14 @@ const workroot = process.env.LIVELY_BROKER_WORKROOT;
 if (!workroot) { console.error("LIVELY_BROKER_WORKROOT 미설정"); process.exit(2); }
 const cfg: BrokerConfig = {
   member,
-  allowedTools: envList("LIVELY_BROKER_ALLOWED_TOOLS", ["git", "kubectl", "terraform", "helm", "aws"]),
+  // 기본 deny-all(리뷰#1) — 도구는 운영자가 LIVELY_BROKER_ALLOWED_TOOLS 로 명시 opt-in. ⚠ 화이트리스트 도구라도
+  //  arg 로 임의실행 가능(git -c·kubectl --kubeconfig·terraform local-exec) → 브로커는 자기 uid 에 대한 샌드박스가 아니다.
+  //  따라서 브로커엔 '그 멤버 본인 자격'만 둔다(org/상승 자격 금지). 크로스-멤버는 per-broker 토큰(authToken)이 차단.
+  allowedTools: envList("LIVELY_BROKER_ALLOWED_TOOLS", []),
   workroot: fs.realpathSync(workroot),
   timeoutMs: Number(process.env.LIVELY_BROKER_TIMEOUT_MS) || 60000,
-  // env: 이 프로세스 env 를 자식에 그대로(자격 포함). 응답엔 안 실림.
+  authToken: process.env.LIVELY_BROKER_AUTH || null, // 게이트웨이가 spawn 시 주입(HMAC) — 요청 검증
+  // env: 이 프로세스 env 를 자식에 그대로. 자격은 '멤버 본인 것'만(위 주석) — 응답엔 안 실림.
 };
 
 fs.mkdirSync(path.dirname(socketPath), { recursive: true });
