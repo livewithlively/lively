@@ -168,9 +168,35 @@ export async function pendingRevisionFor(name: string): Promise<KnowledgeRevisio
   } catch { return undefined; }
 }
 
-export async function countPendingRevisions(): Promise<number> {
-  const r = await one(itemsPool, `SELECT count(*)::int AS n FROM knowledge_revision WHERE status='pending'`) as { n: number } | undefined;
-  return Number(r?.n ?? 0);
+// 검토 큐 카운트(#802) — 대시보드 알림·관리탭 nav 배지가 '몇 건인지'만 알기 위한 집계 1회.
+//  왜 필요한가: 검토 큐 화면은 pending 지식 500건 + 리비전 500건을 본문째 긁는다(diff·중복경고에 본문이 필요).
+//   숫자만 필요한 표면이 그걸 매번 긁으면 안 된다.
+//  mine = 내 팀이 '오너'인 도메인 — 하루 ~11건이면 "전부 검토"는 부담이라 자기 도메인이 검토의 첫 진입점이다(#783 §9).
+//   ownerCatIds 가 비면(팀·오너십 미설정) mine=0 — ANY(빈 배열)은 항상 false라 자연히 그렇게 된다.
+//  ⚠ 신규(new)는 검토 큐 목록(listKnowledge lifecycle='pending')과 **같은 집합**을 센다 — is_folder 를 빼지 않는다.
+//   게이트는 폴더를 안 태우므로(#783 §4) 실제로 폴더가 여기 낄 일은 없지만, 배지 N 과 큐 N 이 어긋나는 게 더 나쁘다.
+export interface ReviewQueueCounts {
+  new: number; edit: number; total: number;
+  mine_new: number; mine_edit: number; mine_total: number;
+}
+export async function reviewQueueCounts(ownerCatIds: number[] = []): Promise<ReviewQueueCounts> {
+  const ids = (ownerCatIds || []).map(Number).filter((n) => Number.isFinite(n));
+  const r = await one(itemsPool, `
+    SELECT
+      (SELECT count(*)::int FROM knowledge k WHERE k.lifecycle='pending') AS n_new,
+      (SELECT count(*)::int FROM knowledge_revision r WHERE r.status='pending') AS n_edit,
+      (SELECT count(*)::int FROM knowledge k
+        WHERE k.lifecycle='pending' AND EXISTS (
+          SELECT 1 FROM knowledge_category kc
+           WHERE kc.name=k.name AND kc.state <> 'rejected' AND kc.category_id = ANY($1::int[]))) AS n_new_mine,
+      (SELECT count(*)::int FROM knowledge_revision r
+        WHERE r.status='pending' AND EXISTS (
+          SELECT 1 FROM knowledge_category kc
+           WHERE kc.name=r.name AND kc.state <> 'rejected' AND kc.category_id = ANY($1::int[]))) AS n_edit_mine`,
+    [ids]) as Record<string, unknown> | undefined;
+  const nNew = Number(r?.n_new ?? 0), nEdit = Number(r?.n_edit ?? 0);
+  const mNew = Number(r?.n_new_mine ?? 0), mEdit = Number(r?.n_edit_mine ?? 0);
+  return { new: nNew, edit: nEdit, total: nNew + nEdit, mine_new: mNew, mine_edit: mEdit, mine_total: mNew + mEdit };
 }
 
 // 리비전 본문을 지식에 적용 — upsertKnowledge 재사용(감사·버전업·재임베딩·facet 보존이 전부 거기 있다).
