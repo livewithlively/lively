@@ -317,7 +317,8 @@ async function renderLearnTour(view) {
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-  const head = pageHead('시작하기', '라이블리에서 AI(Claude Code·Codex)로 일하는 방법은 두 가지입니다. 아래에서 지금 상황을 고르면 그에 맞춰 안내합니다.', [], '하기');
+  // 부제 없음(#780) — 다른 사용 가이드 서브탭은 제목 한 줄뿐이라, 여기만 부제가 붙으면 제목·서브탭 줄이 세로로 어긋난다.
+  const head = pageHead('시작하기', null, [], '하기');
   const slot = el('div', { class: 'install-guide' });
   slot.append(skeleton('설치 안내를 준비하는 중'));
   view.replaceChildren(head, learnSubBar('install'), slot); // 사용 가이드 서브탭 바(#617) — 머리 아래, 본문 위
