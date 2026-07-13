@@ -550,6 +550,9 @@ async function openSourceDetail(id) {
   overlayBox(s.title || ('자료 #' + id),
     el('div', { class: 'detail-meta', style: 'margin-bottom:10px' },
       el('span', { class: 'kn-chip kn-source-kind', text: SOURCE_KIND_LABEL[s.kind] || s.kind }),
+      // #735 구조화 메타(채널명·작성자) — source.fields 에서 커넥터-불가지 표시(id만으론 유실되던 지식화 맥락).
+      (s.fields && s.fields.container_name) ? el('span', { class: 'kn-chip wk-src-chan', text: '#' + s.fields.container_name }) : null,
+      (s.fields && s.fields.author_name) ? el('span', { class: 'kn-chip', text: '@' + s.fields.author_name }) : null,
       knProvChip(s.provenance),
       s.occurred_at ? el('span', { class: 'caption', text: '  ' + absTime(s.occurred_at) }) : null),
     derived.length ? el('div', {}, el('div', { class: 'sec-label', text: '여기서 파생된 지식' }),

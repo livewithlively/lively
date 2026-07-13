@@ -6705,3 +6705,12 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .storage-banner p { margin: 6px 0 0; font-size: 12.5px; opacity: .9; }
 .storage-banner-critical { background: #fee2e2; color: #7f1d1d; border: 1px solid #fca5a5; }
 .storage-banner-warn { background: #fef3c7; color: #78350f; border: 1px solid #fcd34d; }
+
+/* #735 자료 목록 — 채널칩 + 더보기 페이지네이션(source.fields 구조화 메타 표시) */
+.wk-src-more { display: flex; justify-content: center; padding: 10px 0; }
+.wk-more-btn { font: inherit; cursor: pointer; padding: 6px 16px; border-radius: 8px; font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--accent, #5b6cff) 40%, var(--bg, #fff));
+  background: color-mix(in srgb, var(--accent, #5b6cff) 8%, transparent); color: var(--accent, #5b6cff); }
+.wk-more-btn:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 16%, transparent); }
+.wk-src-count { color: var(--muted, #8a94a6); font-size: 12px; padding: 4px 0; }
+.wk-src-chan { color: var(--accent, #5b6cff); font-weight: 600; }

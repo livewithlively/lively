@@ -227,38 +227,74 @@ async function renderSources(view) {
     hint: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다',
     actions: [el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' })],
   });
-  sec.body.append(el('div', { class: 'wk-src-filters' }, qIn, kindSel, provSel), listBox);
+  const moreBox = el('div', { class: 'wk-src-more' });
+  sec.body.append(el('div', { class: 'wk-src-filters' }, qIn, kindSel, provSel), listBox, moreBox);
   view.replaceChildren(el('div', { class: 'wk-plainpad' }, sec.el));
 
-  async function refetch() {
-    listBox.replaceChildren(skeletonRows(4));
+  const PAGE = 100;
+  let offset = 0, loading = false;
+
+  // 행 렌더 — 채널명(container_name)·작성자(author_name)는 커넥터-불가지 구조화 메타(source.fields)에서 표시(#735).
+  //  slack=채널, 다른 커넥터도 각자 container/author 를 fields 에 담으면 동일하게 노출된다.
+  function rowOf(s: any) {
+    const f = (s.fields || {}) as any;
+    const meta = el('span', { class: 'wk-row-meta' },
+      el('span', { class: 'wk-row-m', text: SOURCE_KIND_LABEL[s.kind] || s.kind }));
+    if (f.container_name) meta.append(el('span', { class: 'wk-row-m wk-src-chan', text: '#' + f.container_name }));
+    if (f.author_name) meta.append(el('span', { class: 'wk-row-m', text: '@' + f.author_name }));
+    meta.append(el('span', { class: 'wk-row-m', text: relTime(s.occurred_at || s.updated_at) }));
+    const row = el('div', { class: 'wk-row', role: 'button', tabindex: '0' },
+      el('span', { class: 'wk-tick' + (s.provenance === 'observed' ? ' mirror' : '') }),
+      el('span', { class: 'wk-row-title', text: s.title || ('자료 #' + s.id) }),
+      meta);
+    const open = () => openSourceDetail(s.id);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') open(); });
+    return row;
+  }
+
+  // 페이지네이션 — 서버 기본 100건 cap + has_more 를 [더 보기]로 이어붙인다(#735: 예전엔 limit/offset 미전송으로
+  //  100건에서 잘려 나머지가 안 보였다). 필터 변경/검색은 reset(offset=0), 더보기는 append.
+  async function loadPage(reset: boolean) {
+    if (loading) return;
+    loading = true;
+    if (reset) { offset = 0; listBox.replaceChildren(skeletonRows(4)); moreBox.replaceChildren(); }
     try {
       const p = new URLSearchParams();
       if ((kindSel as any).value) p.set('kind', (kindSel as any).value);
       if ((provSel as any).value) p.set('provenance', (provSel as any).value);
       if ((qIn as any).value.trim()) p.set('q', (qIn as any).value.trim());
-      const r = await api('/api/ui/sources' + (p.toString() ? '?' + p.toString() : ''));
+      p.set('limit', String(PAGE));
+      p.set('offset', String(offset));
+      const r = await api('/api/ui/sources?' + p.toString());
       const entries = (r && r.entries) || [];
-      if (!entries.length) { listBox.replaceChildren(wkEmpty('자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.')); return; }
-      listBox.replaceChildren(...entries.map((s) => {
-        const row = el('div', { class: 'wk-row', role: 'button', tabindex: '0' },
-          el('span', { class: 'wk-tick' + (s.provenance === 'observed' ? ' mirror' : '') }),
-          el('span', { class: 'wk-row-title', text: s.title || ('자료 #' + s.id) }),
-          el('span', { class: 'wk-row-meta' },
-            el('span', { class: 'wk-row-m', text: SOURCE_KIND_LABEL[s.kind] || s.kind }),
-            el('span', { class: 'wk-row-m', text: relTime(s.occurred_at || s.updated_at) })));
-        const open = () => openSourceDetail(s.id);
-        row.addEventListener('click', open);
-        row.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') open(); });
-        return row;
-      }));
-    } catch (e) { listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다')); }
+      if (reset) listBox.replaceChildren();
+      if (offset === 0 && !entries.length) {
+        listBox.replaceChildren(wkEmpty('자료가 없습니다. 커넥터(이메일·슬랙)나 회의록이 여기로 들어옵니다.'));
+        moreBox.replaceChildren();
+        return;
+      }
+      for (const s of entries) listBox.append(rowOf(s));
+      offset += entries.length;
+      const total = (r && typeof r.total === 'number') ? r.total : offset;
+      if (r && r.has_more) {
+        const btn = el('button', { class: 'wk-more-btn', text: `더 보기 (${offset}/${total})` });
+        btn.addEventListener('click', () => loadPage(false));
+        moreBox.replaceChildren(btn);
+      } else {
+        moreBox.replaceChildren(el('div', { class: 'wk-src-count', text: `전체 ${offset}건` }));
+      }
+    } catch (e) {
+      if (reset) listBox.replaceChildren(errorNote(e, '자료를 불러오지 못했습니다'));
+    } finally {
+      loading = false;
+    }
   }
   let t: any = null;
-  qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refetch, 250); });
-  kindSel.addEventListener('change', refetch);
-  provSel.addEventListener('change', refetch);
-  refetch();
+  qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadPage(true), 250); });
+  kindSel.addEventListener('change', () => loadPage(true));
+  provSel.addEventListener('change', () => loadPage(true));
+  loadPage(true);
 }
 
 export { renderWiki, renderWikiTrash };
