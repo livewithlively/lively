@@ -16,6 +16,8 @@ import { SPACE_SUBS } from './category-form.js';
 const GATE_PRESET = 'agent-knowledge';
 // 도메인 필터의 '미분류' 센티넬 — 빈 문자열은 '모든 도메인'(전체) 값이라 겹친다.
 const CAT_NONE = '__none__';
+// #802 '내 도메인'(내 팀이 오너인 카테고리 전체) 센티넬 — 단일 카테고리 key 가 아니라 집합이라 별도 값이 필요하다.
+const CAT_MINE = '__mine__';
 // 신규 저장 시 동작.
 const CREATE_ACTS = [
     ['confirm', '검토 후 반영 — 승인 전엔 검색·주입에서 제외'],
@@ -105,8 +107,46 @@ function rqEnsureStyles() {
 .rq-bulk{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;padding:10px 12px;margin-top:12px;border:1px solid var(--line-net-2);border-radius:12px;background:var(--bg-punch)}
 .rq-bulk b{font-size:13px;color:var(--ink)}
 .rq-empty{padding:22px 14px;text-align:center;color:var(--muted);font-size:13px}
+/* #802 관리탭 nav '검토 큐' 카운트 배지 — 대기 0이면 아예 안 그린다(nav 는 라벨만 두는 게 관례).
+   톤은 지식탭 트리의 '검토' 배지(.kn-nav-review)와 같은 note 토큰 — 두 표면이 같은 것(검토 대기)을 가리키니 같아 보여야 한다. */
+.rq-navn{display:none}
+.rq-navn.on{display:inline-block;margin-left:8px;padding:0 6px;border-radius:999px;font-size:10px;font-weight:800;
+  font-variant-numeric:tabular-nums;color:var(--ink-note);background:var(--bg-note);border:1px solid var(--line-note)}
 `,
     }));
+}
+// ════════ #802 관리탭 사이드 nav '검토 큐' 배지 — 큐가 관리탭 안에만 있어 방치되는 걸 막는 표면 ① ════════
+//  nav 는 원래 라벨만이다(#613 부제 제거). 그래서 배지는 **대기가 0보다 클 때만** 나타난다 —
+//  평소 화면은 지금과 완전히 동일하고, 쌓였을 때만 눈에 띈다(새 관례를 최소로 도입).
+let rqBadgeEl = null;
+export function reviewNavBadge() {
+    rqEnsureStyles();
+    const sp = el('span', { class: 'rq-navn', 'aria-label': '검토 대기' });
+    rqBadgeEl = sp;
+    void refreshReviewBadge();
+    return sp;
+}
+// 큐에서 승인·반려하면 그 자리에서 배지도 줄인다(재요청 없이) — n 을 주면 그 값, 없으면 서버에서 다시 센다.
+export async function refreshReviewBadge(n) {
+    const sp = rqBadgeEl;
+    if (!sp)
+        return;
+    let total = n;
+    if (total == null) {
+        // 검토 권한(memory scope)이 없으면 403 — 배지 없이 조용히 지나간다(검토 못 하는 사람에게 알릴 이유가 없다).
+        try {
+            const s = await api('/api/ui/review-queue/summary');
+            total = Number((s && s.total) || 0);
+        }
+        catch {
+            total = 0;
+        }
+    }
+    if (sp !== rqBadgeEl)
+        return; // 그 사이 탭을 옮겨 다시 그렸으면(다른 배지 노드) 늦게 온 응답은 버린다
+    sp.textContent = total > 0 ? String(total) : '';
+    sp.classList.toggle('on', total > 0);
+    sp.title = total > 0 ? `검토 대기 ${total}건` : '';
 }
 // ════════════════════════════════════════════════════════════════════
 // ① 지식 검토 게이트 — 정책(org_ingest_policy). 스위치 1개로 95%, 나머지는 '세부 규칙'.
@@ -333,6 +373,16 @@ export async function reviewQueuePanel(detail, data) {
     catch {
         obs = null;
     }
+    // #802 '내 도메인' = 내 팀이 오너인 카테고리 집합(서버가 판정 — me.team_owner_category_ids 와 같은 소스).
+    //  실패하면 그 필터 옵션만 빠진다(큐 자체는 그대로).
+    let mineCats = [];
+    try {
+        const s = await api('/api/ui/review-queue/summary');
+        mineCats = (s && s.mine_category_keys) || [];
+    }
+    catch {
+        mineCats = [];
+    }
     let gateOn = null; // admin 만 조회 가능 — 아니면 null(배너 생략)
     try {
         const r = await api('/api/ui/org/ingest-policy');
@@ -361,9 +411,19 @@ export async function reviewQueuePanel(detail, data) {
     ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
     const listBox = el('div', {});
     const bulkBox = el('div', {});
+    const mineSet = new Set(mineCats);
     // 필터 적용 후 화면에 실제 보이는 것들(키보드 커서·일괄 승인의 대상).
+    const catMatch = (i) => {
+        if (!rqUi.cat)
+            return true; // 모든 도메인
+        if (rqUi.cat === CAT_MINE)
+            return mineSet.has(i.cat); // 내 도메인(내 팀 소유 카테고리 집합)
+        if (rqUi.cat === CAT_NONE)
+            return !i.cat; // 미분류
+        return i.cat === rqUi.cat;
+    };
     const visible = () => items.filter((i) => (rqUi.filter === 'all' || rqUi.filter === i.kind)
-        && (!rqUi.cat || (rqUi.cat === CAT_NONE ? !i.cat : i.cat === rqUi.cat))
+        && catMatch(i)
         && (!rqUi.who || i.whoKind === rqUi.who));
     const paint = () => {
         const vis = visible();
@@ -381,6 +441,7 @@ export async function reviewQueuePanel(detail, data) {
         rqUi.sel.delete(key);
         rqUi.open.delete(key);
         paint();
+        void refreshReviewBadge(items.length); // #802 nav 배지도 같이 줄인다(남은 = 전체 대기 — 필터와 무관)
     };
     const chipEls = () => {
         const nNew = items.filter((i) => i.kind === 'new').length;
@@ -406,8 +467,14 @@ export async function reviewQueuePanel(detail, data) {
     }
     const catSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:150px' });
     catSel.append(el('option', { value: '', text: '모든 도메인' }));
+    // #802 '내 도메인' — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#783 설계원칙). 대기 건이 있을 때만 띄운다.
+    const nMine = items.filter((i) => mineSet.has(i.cat)).length;
+    if (nMine)
+        catSel.append(el('option', { value: CAT_MINE, text: `내 도메인 (${nMine})` }));
     for (const [k, n] of catMap)
         catSel.append(el('option', { value: k, text: n }));
+    if (rqUi.cat === CAT_MINE && !nMine)
+        rqUi.cat = ''; // 내 도메인 건을 다 처리했으면 전체로 되돌림(빈 화면 방지)
     catSel.value = rqUi.cat;
     catSel.onchange = () => { rqUi.cat = catSel.value; rqUi.cur = 0; paint(); };
     const whoSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:120px' });

@@ -17,8 +17,10 @@ import {
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../v6/knowledge-gate.js";
 import {
-  proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor,
+  proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor, reviewQueueCounts,
 } from "../v6/knowledge-revision-store.js";
+// #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
+import { memberCategories } from "../v6/team-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
 //  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
@@ -872,6 +874,31 @@ const knowledgeRevisionReview: Capability = {
   },
 };
 
+// ════════ #802 검토 큐 요약(카운트) — 검토 큐를 관리탭 밖으로 꺼내는 표면들의 공용 데이터원. ════════
+//  문제: 검토 큐가 관리탭 안에만 있어, 아무도 안 들어가면 에이전트가 쓴 지식이 승인 대기로 묻힌다
+//   (pending 은 검색·세션주입에서 빠져 있으므로 "기록했는데 아무도 못 쓰는" 상태).
+//  → 대시보드 '최신 알림'의 검토 대기 리마인더 + 관리탭 nav 배지 + 큐의 '내 도메인' 필터가 이걸 함께 먹는다.
+//  scope='memory' — 검토 큐(knowledge_revisions)와 동일. 검토할 수 없는 사람에겐 애초에 알리지 않는다(403 → 표면 생략).
+const reviewQueueSummary: Capability = {
+  name: "review_queue_summary",
+  title: "검토 큐 요약",
+  description: "검토 대기 건수 — 신규(pending 지식) + 수정(리비전). 전체와 '내 도메인'(내 팀이 오너인 카테고리)을 분리해 준다.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,   // 검토는 사람이 웹에서 하는 일 — 에이전트 툴 표면을 늘리지 않는다(knowledge_revisions 와 동일 판단).
+    rest: [{ method: "GET", paths: ["/api/ui/review-queue/summary"], parse: () => ({}) }],
+  },
+  handler: async (_input: any, user: any) => {
+    const memberId = String(user?.userId ?? "");
+    // 팀 미설정·스키마 초기 등으로 실패해도 카운트 자체는 살린다(개인화만 빠짐 — 전체 건수는 여전히 유효).
+    const cats = memberId ? await memberCategories(memberId).catch(() => []) : [];
+    const owner = cats.filter((c) => c.owner);
+    const counts = await reviewQueueCounts(owner.map((c) => c.category_id));
+    return { ...counts, mine_category_keys: owner.map((c) => c.key) };
+  },
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
@@ -882,6 +909,7 @@ export const knowledgeCapabilities: Capability[] = [
   knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree,
   knowledgeViewGet, knowledgeViewSet, knowledgeCommentReaction,   // #592 정적 경로 — /:name 계열보다 먼저
   knowledgeRevisions, knowledgeRevisionGet, knowledgeRevisionReview,   // #783 수정 검토 큐(/knowledge-revisions* — :name 과 다른 경로)
+  reviewQueueSummary,   // #802 검토 대기 카운트(/review-queue/summary — 대시보드·nav 배지)
   knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
   knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)

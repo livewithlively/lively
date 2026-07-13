@@ -44,6 +44,11 @@ const DASH_NOTIF_GROUPS = [
   { title: '일정', items: [
     { key: 'due', label: '마감 임박·지남', desc: '7일 이내 또는 지난 마감', on: true },
   ] },
+  // #802 검토 대기 — 지금까진 관리탭 ‹검토 큐›에 직접 들어가야만 보였다. 아무도 안 들어가면 에이전트가 쓴 지식이
+  //  승인 대기로 묻힌다(pending 은 검색·세션주입에서 빠져 있다 = "기록했는데 아무도 못 쓰는" 상태).
+  { title: '지식', items: [
+    { key: 'review', label: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', on: true },
+  ] },
 ];
 const DASH_NOTIF_DEFAULTS: Record<string, boolean> = (() => {
   const d: Record<string, boolean> = {};
@@ -1605,13 +1610,16 @@ async function fillNotifications(zone, projectsP) {
     .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
     .slice(0, K).map((p) => p.id);
 
-  const [acts, feeds, sess, scfg] = await Promise.all([
+  const [acts, feeds, sess, scfg, review] = await Promise.all([
     api('/api/ui/activity/list?limit=100').then((d) => (Array.isArray(d) ? d : (d && d.rows) || [])).catch(() => []),
     Promise.all(topIds.map((id) =>
       api('/api/ui/v6/projects/' + id + '/comments')
         .then((d) => ({ id, feed: (d && d.feed) || [] })).catch(() => ({ id, feed: [] })))),
     api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []).catch(() => []), // 세션 초대용
     api('/api/ui/terminal/config').catch(() => null),
+    // #802 검토 대기 건수(신규 pending 지식 + 수정 리비전, '내 도메인' 분리). 검토 권한(memory scope)이 없으면 403 →
+    //  null → 행 자체를 안 그린다(검토할 수 없는 사람에게 알릴 이유가 없다).
+    api('/api/ui/review-queue/summary').catch(() => null),
   ]);
   const memberName = (id) => { const m = ((scfg && scfg.members) || []).find((x) => x.id === id); return (m && m.name) || id || ''; };
 
@@ -1669,6 +1677,8 @@ async function fillNotifications(zone, projectsP) {
     const read = dashNotifReadSet();
     const feedItems = items.filter((it) => prefs[it.pref]).slice(0, 24);
     const dueShown = prefs.due ? due : [];
+    // 검토 대기 — 마감과 같은 '상시 리마인더'(읽음 대상 아님, 처리하면 사라짐). 0건이면 아예 안 뜬다.
+    const revShown = (prefs.review && review && Number(review.total) > 0) ? review : null;
     const unread = feedItems.filter((it) => !read.has(it.key));
     // 헤더: 안 읽음 수 뱃지(있으면) + '모두 읽음' 액션.
     zone.countEl.replaceChildren(unread.length
@@ -1679,8 +1689,8 @@ async function fillNotifications(zone, projectsP) {
       markBtn.onclick = () => { const s = dashNotifReadSet(); feedItems.forEach((it) => s.add(it.key)); dashSaveNotifRead(s); render(); };
       zone.chipsEl.replaceChildren(markBtn);
     } else zone.chipsEl.replaceChildren();
-    if (!dueShown.length && !feedItems.length) {
-      zone.body.replaceChildren(dashEmpty(items.length || due.length
+    if (!dueShown.length && !feedItems.length && !revShown) {
+      zone.body.replaceChildren(dashEmpty(items.length || due.length || (review && Number(review.total) > 0)
         ? '표시할 알림이 없어요. ⚙에서 유형을 켜 보세요.'
         : '새 알림이 없어요. 내 프로젝트에 활동·댓글·멘션이 생기면 여기 모여요.'));
       return;
@@ -1690,8 +1700,12 @@ async function fillNotifications(zone, projectsP) {
       frag.push(el('div', { class: 'dash-ghead', text: '다가오는 마감' }));
       for (const { p, n } of dueShown) frag.push(dashDueRow(p, n as number));
     }
+    if (revShown) {
+      frag.push(el('div', { class: 'dash-ghead', text: '검토 대기' }));
+      frag.push(dashReviewRow(revShown));
+    }
     if (feedItems.length) {
-      if (dueShown.length) frag.push(el('div', { class: 'dash-ghead', text: '알림' }));
+      if (dueShown.length || revShown) frag.push(el('div', { class: 'dash-ghead', text: '알림' }));
       for (const it of feedItems) frag.push(notifRow(it, !read.has(it.key)));
     }
     zone.body.replaceChildren(...frag);
@@ -1728,6 +1742,30 @@ function dashDueRow(p, n) {
         el('span', { class: 'dash-ntf-dbadge' + (overdue ? ' overdue' : ''), text: badge })),
       el('span', { class: 'dash-ntf-sub', text: '마감 ' + dueLabel(n) })));
 }
+// 검토 대기 알림(#802) — 마감과 같은 상시 리마인더(읽음 대상 아님 — 승인·반려해야 사라진다). 클릭 → 검토 큐.
+//  개인화: 내 팀이 오너인 도메인('내 도메인')에 대기 건이 있으면 그 숫자를 앞세운다 — 하루 ~11건이 쌓이면
+//  "전부 검토"는 부담이라, 사람이 실제로 판단할 수 있는 자기 도메인이 첫 진입점이다(#783 §9).
+function dashReviewRow(r) {
+  const total = Number(r.total) || 0, mine = Number(r.mine_total) || 0;
+  const primary = mine > 0 ? mine : total;
+  const sub = mine > 0
+    ? (total > mine ? `전체 ${total}건 중 · 승인해야 검색·주입에 반영돼요` : '승인해야 검색·주입에 반영돼요')
+    : `신규 ${Number(r.new) || 0} · 수정 ${Number(r.edit) || 0} · 승인해야 검색·주입에 반영돼요`;
+  return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/system/review-queue' },
+    el('span', { class: 'dash-ntf-tile t-amber' }, dashReviewIcon()),
+    el('span', { class: 'dash-ntf-main' },
+      el('span', { class: 'dash-ntf-line' },
+        el('b', { class: 'dash-ntf-who', text: `검토 대기 ${primary}건` }),
+        el('span', { class: 'dash-ntf-dbadge', text: mine > 0 ? '내 도메인' : '전체' })),
+      el('span', { class: 'dash-ntf-sub', text: sub })));
+}
+function dashReviewIcon() {
+  const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z' }),
+    sv('path', { d: 'm8.5 12.2 2.4 2.4 4.6-5' }));
+  return n;
+}
+
 // 유형 타일 — 라운드 스퀘어(앱 아이콘 톤) + 유형색 글리프. 피드의 둥근 점과 명확히 구분되는 '알림' 시그니처.
 function dashNotifTile(it) {
   const kind = it.kind;

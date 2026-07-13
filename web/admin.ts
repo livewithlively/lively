@@ -2,7 +2,7 @@
 import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
-import { ingestPolicyPanel, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐
+import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -250,8 +250,9 @@ async function renderAdmin(view, sub) {
     if (s.group !== activeGroup) continue; // 활성 중분류 섹션만 좌측 nav 에.
     if (sectionHidden(s.key, data)) continue;
     // 회색 부제(row-meta) 제거 — 라벨만 노출(#613 후속, 장원준 피드백: 모든 탭의 회색 부제가 어색).
+    //  예외는 '검토 큐'뿐(#802): 대기 건수 배지 — 큐가 관리탭 안에만 있어 방치되는 걸 막는다. 0건이면 안 그린다(=평소엔 관례 그대로).
     list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key },
-      el('div', { class: 'row-title', text: s.label })));
+      el('div', { class: 'row-title' }, el('span', { text: s.label }), s.key === 'review-queue' ? reviewNavBadge() : null)));
   }
   const detail = el('div', { class: soloSection ? 'admin-solo-detail' : 'split-detail' });
   renderAdminDetail(detail, sel, data);
