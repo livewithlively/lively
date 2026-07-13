@@ -18,11 +18,11 @@
 //     (어댑터 adapters/codex/install.mjs 와 동일 동작을 발행물 자산만으로 자체완결 재현 — generator 미의존.)
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, chmodSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, chmodSync, realpathSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
 
 const args = process.argv.slice(2);
@@ -521,7 +521,13 @@ async function main() {
 }
 
 // 직접 실행일 때만 설치 수행 — 테스트가 아래 export 를 import 해도 설치가 돌지 않게 하는 최소 가드.
-const DIRECT_RUN = (() => { try { return import.meta.url === pathToFileURL(process.argv[1] || "").href; } catch { return true; } })();
+//  ⚠ 비교는 realpath 로 — macOS 표준 설치 경로 /tmp/* 는 /private/tmp 심링크고 Node ESM 은 엔트리를
+//  realpath 로 풀어 import.meta.url 과 argv[1] 의 URL 문자열 비교가 어긋난다(main 조용히 스킵 — v0.1.131 회귀
+//  실측). 판정 불가(argv[1] 부재 등)면 fail-open = 실행: 설치기의 종전 기본 동작이 '항상 실행'이었다.
+const DIRECT_RUN = (() => {
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] || ""); }
+  catch { return true; }
+})();
 if (DIRECT_RUN) main().catch((e) => { console.error("✗ user-level 설치 실패:", e?.message || e); process.exit(1); });
 
 export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock };
