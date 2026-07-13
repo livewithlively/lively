@@ -15,6 +15,8 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { assertSafeJsonSchema } from "./dynamic-tools.js";
+import { refreshProxySnapshot } from "./mcp-proxy.js";
+import { broadcastToolListChanged } from "../mcp-sessions.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
@@ -747,6 +749,7 @@ export const deliveryCapabilities: Capability[] = [
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
+        allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
       } = {};
@@ -780,6 +783,11 @@ export const deliveryCapabilities: Capability[] = [
       if (input.allowed_db_hosts !== undefined) {
         if (!Array.isArray(input.allowed_db_hosts)) throw new HttpError(400, "allowed_db_hosts 는 배열이어야 합니다");
         patch.allowed_db_hosts = input.allowed_db_hosts.map((h) => str(h, "allowed_db_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(#746 T1) — 기본 deny-all, 여기 명시한 host 만 SSRF 면제.
+      if (input.allowed_internal_hosts !== undefined) {
+        if (!Array.isArray(input.allowed_internal_hosts)) throw new HttpError(400, "allowed_internal_hosts 는 배열이어야 합니다");
+        patch.allowed_internal_hosts = input.allowed_internal_hosts.map((h) => str(h, "allowed_internal_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
       }
       // db 소스 auth_ref 가 참조할 수 있는 비번 env '이름' 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
       //  외부(비번 필요) 소스 등록이 불가능했다). allowed_auth_envs 와 동일한 env 이름 형식 검증. 값이 아니라 이름만.
@@ -850,6 +858,7 @@ export const deliveryCapabilities: Capability[] = [
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
+      allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
     }),
@@ -930,6 +939,21 @@ export const deliveryCapabilities: Capability[] = [
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authEnv)) throw new HttpError(400, "auth_env 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
         }
       }
+      // A-어댑터(#746 T1) proxy 필드 — mode=proxy 면 게이트웨이가 상류 MCP 를 프록시(통제·재노출). auth_kind=per-member vault 인증.
+      let level: "L0" | "L1" | "L2" | null | undefined;
+      if (input.level !== undefined) {
+        const lv = input.level === null ? null : str(input.level, "level", 2).toUpperCase();
+        if (lv !== null && lv !== "L0" && lv !== "L1" && lv !== "L2") throw new HttpError(400, "level 은 L0|L1|L2");
+        level = lv as "L0" | "L1" | "L2" | null;
+      }
+      let authKind: string | null | undefined;
+      if (input.auth_kind !== undefined) {
+        if (input.auth_kind === null || input.auth_kind === "") authKind = null;
+        else {
+          authKind = str(input.auth_kind, "auth_kind", 40).trim().toLowerCase();
+          if (!/^[a-z0-9_]{1,40}$/.test(authKind)) throw new HttpError(400, "auth_kind 는 소문자·숫자·_ 1~40자");
+        }
+      }
       const server = await upsertMcpServer({
         name, transport,
         url: input.url === undefined ? undefined : (input.url === null || input.url === "" ? null : str(input.url, "url", 1000).trim()),
@@ -938,6 +962,13 @@ export const deliveryCapabilities: Capability[] = [
         note: input.note === undefined ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
+        mode: input.mode === undefined ? undefined : (str(input.mode, "mode", 10) === "proxy" ? "proxy" : "client"),
+        scope: input.scope === undefined ? undefined : (input.scope === null || input.scope === "" ? null : str(input.scope, "scope", 20)),
+        level,
+        pii_scrub: input.pii_scrub === undefined ? undefined : Boolean(input.pii_scrub),
+        auth_kind: authKind,
+        auth_scope_key: input.auth_scope_key === undefined ? undefined : (input.auth_scope_key === null || input.auth_scope_key === "" ? null : str(input.auth_scope_key, "auth_scope_key", 120).trim()),
+        auth_mode: input.auth_mode === undefined ? undefined : (input.auth_mode === null || input.auth_mode === "" ? null : (str(input.auth_mode, "auth_mode", 10) === "oauth" ? "oauth" : "bearer")),
       }, actorOf(user), "web");
       return { server };
     }, {
@@ -949,6 +980,22 @@ export const deliveryCapabilities: Capability[] = [
       note: z.string().optional(),
       enabled: z.boolean().optional(),
       sort: z.number().optional(),
+      mode: z.enum(["client", "proxy"]).optional().describe("client=멤버 클라 직접등록(기존) / proxy=게이트웨이 프록시(통제·재노출, #746)"),
+      scope: z.string().nullable().optional().describe("proxy 툴 접근 scope(items|context|db|memory|code)"),
+      level: z.enum(["L0", "L1", "L2"]).nullable().optional(),
+      pii_scrub: z.boolean().optional(),
+      auth_kind: z.string().nullable().optional().describe("proxy per-member vault 인증 kind"),
+      auth_scope_key: z.string().nullable().optional(),
+      auth_mode: z.enum(["bearer", "oauth"]).nullable().optional().describe("bearer=정적토큰(기본) / oauth=per-member OAuth 브로커(#746 T2)"),
+    }),
+  restOnly("org_mcp_refresh", "MCP 프록시 스냅샷 새로고침(발행)",
+    "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
+    [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
+      const pushed = broadcastToolListChanged();
+      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
     }),
   restOnly("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",

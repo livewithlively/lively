@@ -10,6 +10,10 @@ import { agentFromHeaders } from "./org/agent-identity.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
+import { registerProxiedMcpTools } from "./capabilities/mcp-proxy.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { sessionedEnabled, newSessionId, getSession, putSession, dropSession } from "./mcp-sessions.js";
+import { finishConsent, abandonConsent } from "./org/oauth-broker.js";
 import { buildInstallBundle } from "./org/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { init as initDomainmapSchema } from "./domainmap/core/schema.js";
@@ -62,21 +66,50 @@ app.get("/healthz", (_req, res) => {
 
 // 모든 MCP 요청은 bearer 인증 필수 → req.auth 가 핸들러의 extra.authInfo 로 전달됨.
 // Stateless: 요청마다 새 서버+트랜스포트 (수평 확장 단순).
-app.post("/mcp", auth, async (req, res) => {
-  // (A) 빌트인 게이팅 + (A'') 주입모드 + (B) 동적 org_tool 등록 — DB 의존(ITEMS_DATABASE_URL). 실패는 fail-open(기본 표면 유지).
+// 서버 1개 빌드 + 동적/프록시 툴 등록(무상태·sessioned 공용). fail-open(등록 실패해도 기본 표면 유지).
+async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   let overrides: Map<string, boolean> | undefined;
   try { overrides = await listBuiltinOverrides(); } catch { overrides = undefined; }
   let alwaysLoad: Map<string, boolean> | undefined;
   try { alwaysLoad = await listBuiltinAlwaysLoad(); } catch { alwaysLoad = undefined; }
-  // 하네스 신원(x-lively-harness 우선, 없으면 UA) — _meta(anthropic/alwaysLoad) 를 하네스별로 emit/생략(#187).
-  const harness = agentFromHeaders(req.headers);
+  const harness = agentFromHeaders(req.headers); // 하네스 신원(x-lively-harness>UA) — _meta 하네스별(#187)
   const server = buildServer(overrides, alwaysLoad, harness);
   try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
+  try { await registerProxiedMcpTools(server); } catch (err) { logger.warn({ err }, "프록시 MCP 등록 실패(무시)"); }
+  return server;
+}
+
+app.post("/mcp", auth, async (req, res) => {
+  // sessioned(#746 T5, 플래그 on) — 세션 유지 + tools/list_changed 라이브 push. 기본 off 면 아래 무상태 경로(무회귀).
+  if (sessionedEnabled()) {
+    const sid = req.headers["mcp-session-id"] as string | undefined;
+    try {
+      if (sid) {
+        const e = getSession(sid);
+        if (!e) { res.status(404).json({ error: "unknown_session" }); return; }
+        await e.transport.handleRequest(req, res, req.body); // 기존 세션 라우팅
+        return;
+      }
+      // 새 세션(initialize) — sessionId 생성·레지스트리 등록, onclose 로 정리.
+      const server = await buildRegisteredServer(req);
+      let transport: StreamableHTTPServerTransport; // 콜백이 참조하므로 let+타입(순환 초기화 회피)
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: newSessionId,
+        onsessioninitialized: (id: string) => putSession(id, { transport, server }),
+      });
+      transport.onclose = () => { if (transport.sessionId) { dropSession(transport.sessionId); server.close(); } };
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      logger.error({ err }, "mcp(session) 요청 실패");
+      if (!res.headersSent) res.status(500).json({ error: "internal_error" });
+    }
+    return;
+  }
+  // ── 무상태(기본) — 요청마다 새 서버+트랜스포트(수평 확장 단순). 툴 변경은 '다음 세션'부터. ──
+  const server = await buildRegisteredServer(req);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on("close", () => {
-    transport.close();
-    server.close();
-  });
+  res.on("close", () => { transport.close(); server.close(); });
   try {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
@@ -84,6 +117,22 @@ app.post("/mcp", auth, async (req, res) => {
     logger.error({ err }, "mcp request failed");
     if (!res.headersSent) res.status(500).json({ error: "internal_error" });
   }
+});
+
+// sessioned 전용 — 서버→클라 SSE 스트림(GET) + 세션 종료(DELETE). 무상태 모드에선 405(미사용).
+app.get("/mcp", auth, async (req, res) => {
+  if (!sessionedEnabled()) { res.status(405).end(); return; }
+  const sid = req.headers["mcp-session-id"] as string | undefined;
+  const e = sid ? getSession(sid) : undefined;
+  if (!e) { res.status(404).end(); return; }
+  try { await e.transport.handleRequest(req, res); } catch (err) { logger.error({ err }, "mcp GET(SSE) 실패"); if (!res.headersSent) res.status(500).end(); }
+});
+app.delete("/mcp", auth, async (req, res) => {
+  if (!sessionedEnabled()) { res.status(405).end(); return; }
+  const sid = req.headers["mcp-session-id"] as string | undefined;
+  const e = sid ? getSession(sid) : undefined;
+  if (!e) { res.status(404).end(); return; }
+  try { await e.transport.handleRequest(req, res); } catch (err) { logger.error({ err }, "mcp DELETE 실패"); if (!res.headersSent) res.status(500).end(); }
 });
 
 // 멤버 설치 — 토큰게이트 curl 모델(git clone 대체). 인증된 멤버 토큰이면 그 조직의 발행 아티팩트를
@@ -101,6 +150,26 @@ app.get("/install", auth, async (_req, res) => {
   } catch (err) {
     logger.error({ err }, "install bundle 생성 실패");
     if (!res.headersSent) res.status(500).json({ error: "install_bundle_failed" });
+  }
+});
+
+// OAuth 콜백(#746 T2) — 인가서버가 code+state 로 리다이렉트하는 착지점. 브라우저-facing 이라 bearer 인증 밖:
+//  보안은 서명된 state(HMAC·만료·멤버 귀속)가 담보한다 — 위조 불가 → 타인 vault 에 토큰 주입 불가. finishConsent 가 검증·교환·저장.
+const oauthPage = (msg: string): string =>
+  `<!doctype html><meta charset="utf-8"><title>Lively 커넥터</title><body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem;line-height:1.6"><h2>Lively 커넥터</h2><p>${String(msg).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p></body>`;
+app.get("/oauth/callback", async (req, res) => {
+  const q = req.query as Record<string, string | undefined>;
+  if (q.error) {
+    if (q.state) await abandonConsent(String(q.state)).catch(() => { /* best-effort 정리 */ }); // 거부 시 임시 PKCE verifier 정리(리뷰 #1)
+    return res.status(400).send(oauthPage(`인증이 거부되었습니다: ${q.error}`));
+  }
+  if (!q.code || !q.state) return res.status(400).send(oauthPage("code 또는 state 가 없습니다."));
+  try {
+    const r = await finishConsent(String(q.state), String(q.code));
+    res.send(oauthPage(`연결이 완료되었습니다 — ${r.serverName}. 이 창을 닫아도 됩니다.`));
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "oauth 콜백 실패");
+    res.status(400).send(oauthPage(`연결에 실패했습니다: ${(err as Error).message}`));
   }
 });
 

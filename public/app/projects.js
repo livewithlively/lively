@@ -10623,8 +10623,9 @@ function upToast(r) {
 }
 // 업로드 진행 + 취소 바 — 배치 하나당 한 줄. 배치가 동시에 여러 개 돌면 줄도 여러 개라 '어느 업로드를 끊는지' 헷갈리지 않는다.
 //  세 화면이 같은 바를 쓴다(.up-prog) — 취소 어포던스를 화면마다 다르게 만들 이유가 없다.
-function upProgress(total, onCancel) {
-    const label = el('div', { class: 'up-prog-label', text: '업로드 준비 중…' });
+//  opts.label — 전송 시작 전에 보일 문구(예: 공유 폴더에서 첨부는 '원본을 읽는 중…'). set() 이 불리면 '업로드 중 — …' 으로 바뀐다.
+function upProgress(total, onCancel, opts) {
+    const label = el('div', { class: 'up-prog-label', text: (opts && opts.label) || '업로드 준비 중…' });
     const fill = el('div', { class: 'up-prog-fill' });
     const btn = el('button', { class: 'btn btn-ghost btn-sm up-prog-cancel', type: 'button', text: '취소' });
     const row = el('div', { class: 'up-prog' }, el('div', { class: 'up-prog-main' }, label, el('div', { class: 'up-prog-bar' }, fill)), btn);
@@ -11530,4 +11531,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upProgress, upSend, upToast, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upProgress, upSend, upToast, };

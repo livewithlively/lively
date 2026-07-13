@@ -15,8 +15,9 @@ import { HttpError } from "./rest-util.js";
 import { isScope } from "./scopes.js";
 import { logger } from "../log.js";
 
-// http_proxy 호출 scope 로 허용되는 집합(B19) — fleet 제어(admin/runtime)·무권한(null) 불가.
-const CALLABLE_SCOPES = new Set(["items", "context", "db", "memory", "code"]);
+// http_proxy·MCP 프록시 호출 scope 로 허용되는 집합(B19) — fleet 제어(admin/runtime)·무권한(null) 불가.
+//  프록시 툴이 admin 표면을 자가호출하지 못하게 하는 2차 게이트(#746 T1 도 재사용).
+export const CALLABLE_SCOPES = new Set(["items", "context", "db", "memory", "code"]);
 
 // 저장 시 input_schema 위생 검사(B21 경량판 — ajv 무의존): $ref 금지·크기/깊이 상한·최상위 object.
 export function assertSafeJsonSchema(schema: unknown): void {

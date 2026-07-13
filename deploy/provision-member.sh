@@ -24,6 +24,30 @@ echo "멤버=$MEMBER  slug=$SLUG  osUser=$OSUSER"
 # 그룹 보장(install-isolation.sh 가 이미 했어도 멱등)
 getent group box_members   >/dev/null || groupadd box_members
 getent group lively-shared >/dev/null || groupadd lively-shared
+getent group broker_members >/dev/null || groupadd broker_members
+getent group lively-broker  >/dev/null || groupadd lively-broker
+
+# ─── 브로커 전용 uid(#746 T4) — 멤버 대화 uid(box_$SLUG)와 분리. 자격은 이 계정에만 → 멤버가 변조/열람 불가. ───
+#   nologin(대화형 진입 불가; 게이트웨이 sudo→box-spawn 로만 기동). broker_members(sudoers runas)+lively-broker(소켓 그룹).
+BROKER_USER="broker_$SLUG"
+if id "$BROKER_USER" >/dev/null 2>&1; then
+  usermod -aG broker_members,lively-broker "$BROKER_USER"; echo "브로커 유저 $BROKER_USER 갱신"
+else
+  useradd -m -d "/home/$BROKER_USER" -s /usr/sbin/nologin -G broker_members,lively-broker "$BROKER_USER"
+  passwd -l "$BROKER_USER" >/dev/null 2>&1 || true
+  echo "브로커 유저 $BROKER_USER 생성(nologin · broker_members+lively-broker)"
+fi
+chmod 750 "/home/$BROKER_USER" 2>/dev/null || true
+
+# ─── 멤버↔브로커 공유 작업 dir(#746 T4) — per-member 그룹 m_<slug>(box_·broker_ 둘만) + /srv/lively/member-work/<slug>. ───
+#   멤버는 여기서 편집(레포·terraform state), 브로커는 여기서 git/kubectl/terraform 실행. 멤버 홈(700 크레덴셜 격벽)과 별개.
+#   각 멤버 전용 그룹이라 타 멤버 uid 는 접근 불가(격리 유지). setgid 2770 → 새 파일이 m_<slug> 상속.
+MGROUP="m_$SLUG"
+getent group "$MGROUP" >/dev/null || { groupadd "$MGROUP"; echo "groupadd $MGROUP (멤버 전용 공유그룹)"; }
+usermod -aG "$MGROUP" "$OSUSER"; usermod -aG "$MGROUP" "$BROKER_USER"
+WORK_BASE="${LIVELY_MEMBER_WORK_BASE:-/srv/lively/member-work}"
+install -d -m 2770 -o "$OSUSER" -g "$MGROUP" "$WORK_BASE/$SLUG"; chmod g+s "$WORK_BASE/$SLUG"
+echo "공유 작업 dir → $WORK_BASE/$SLUG ($OSUSER:$MGROUP 2770 setgid) — 멤버·브로커 공유(타 멤버 격리)"
 
 # 유저(멱등) — 홈·셸·그룹·비번잠금(대화형 로그인 불가; 진입은 게이트웨이 sudo→box-spawn 로만)
 if id "$OSUSER" >/dev/null 2>&1; then

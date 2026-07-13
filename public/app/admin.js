@@ -2270,6 +2270,9 @@ function runtimeEditor(detail, data) {
     // DB 데이터소스 안전 화이트리스트 — db_query/db_schema 소스가 접속 허용될 사설/내부 host(외부 공인 DB 는 등록 불요).
     const dbHostTa = el('textarea', { rows: '3', placeholder: 'localhost\ndb.internal.acme.com\n줄당 host 한 개(사설/localhost 만 — 외부 공인 DB 는 불요)' });
     dbHostTa.value = (rc.allowed_db_hosts || []).join('\n');
+    // MCP 프록시 안전 화이트리스트(#746 T2) — 프록시가 접속할 사설/내부 MCP 서버 host(외부 공인 https 는 등록 불요, 기본 차단).
+    const internalHostTa = el('textarea', { rows: '2', placeholder: 'localhost\n10.0.0.5\n줄당 host 한 개(사설/내부 MCP 만 — 공인 https 는 불요)' });
+    internalHostTa.value = (rc.allowed_internal_hosts || []).join('\n');
     // 기록 인정 툴(write_tools) — 이 lively MCP 툴을 쓰면 '기록함'으로 보고 종료 너지를 안 띄운다. 비우면 훅 내장 v6 기본목록.
     const writeToolsTa = el('textarea', { rows: '4', placeholder: '비우면 기본 목록 사용\n줄당 lively MCP 툴 이름 한 개 (예: knowledge_save)' });
     writeToolsTa.value = (rc.write_tools || []).join('\n');
@@ -2285,8 +2288,9 @@ function runtimeEditor(detail, data) {
             const allowed_auth_envs = envTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
             const url_allowlist = hostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
             const allowed_db_hosts = dbHostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
+            const allowed_internal_hosts = internalHostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
             const write_tools = writeToolsTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-            const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots, allowed_auth_envs, url_allowlist, allowed_db_hosts, write_tools }) });
+            const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots, allowed_auth_envs, url_allowlist, allowed_db_hosts, allowed_internal_hosts, write_tools }) });
             data.runtimeConfig = r.runtimeConfig;
             status.textContent = '저장됨';
             toast('저장됨 — 구성원 다음 세션부터 반영');
@@ -2297,7 +2301,7 @@ function runtimeEditor(detail, data) {
         }
         saveBtn.disabled = false;
     });
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('런타임 훅 (기본 리플렉스)', data.meaning['runtime']), el('p', { class: 'admin-hint', text: '게이트웨이가 제공하는 기본 세션 훅(리플렉스)의 ON/OFF 와 작업 폴더를 중앙에서 제어합니다. 구성원 머신은 매 세션 게이트웨이에서 훅을 받아 실행하므로(runner fetch), 변경은 다음 세션에 자동 반영됩니다(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로. ※ 코드까지 직접 정의하는 사내 훅은 ‘커스텀 훅’에서, 각 훅이 실제로 주입하는 메시지는 ‘훅 주입 미리보기’에서.' }), field('기본 리플렉스 훅 ON/OFF', hookWrap), field('writeback 너지 문구 (선택)', noticeTa), field('기록 인정 툴 (write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', writeToolsTa), field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa), el('div', { class: 'admin-subhead', text: 'AI 도구(http_proxy) 안전 화이트리스트' }), el('p', { class: 'admin-hint', text: 'AI 도구가 외부를 호출할 수 있는 범위 — 이 목록 밖은 전부 차단됩니다(SSRF 방어).' }), field('허용 인증 환경변수 이름 (allowed_auth_envs)', envTa), field('허용 호스트 (url_allowlist)', hostTa), el('div', { class: 'admin-subhead', text: 'DB 데이터소스 안전 화이트리스트' }), el('p', { class: 'admin-hint', text: 'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록 불요.' }), field('허용 DB host (allowed_db_hosts)', dbHostTa), el('div', { class: 'admin-actions' }, saveBtn, status)));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('런타임 훅 (기본 리플렉스)', data.meaning['runtime']), el('p', { class: 'admin-hint', text: '게이트웨이가 제공하는 기본 세션 훅(리플렉스)의 ON/OFF 와 작업 폴더를 중앙에서 제어합니다. 구성원 머신은 매 세션 게이트웨이에서 훅을 받아 실행하므로(runner fetch), 변경은 다음 세션에 자동 반영됩니다(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로. ※ 코드까지 직접 정의하는 사내 훅은 ‘커스텀 훅’에서, 각 훅이 실제로 주입하는 메시지는 ‘훅 주입 미리보기’에서.' }), field('기본 리플렉스 훅 ON/OFF', hookWrap), field('writeback 너지 문구 (선택)', noticeTa), field('기록 인정 툴 (write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', writeToolsTa), field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa), el('div', { class: 'admin-subhead', text: 'AI 도구(http_proxy) 안전 화이트리스트' }), el('p', { class: 'admin-hint', text: 'AI 도구가 외부를 호출할 수 있는 범위 — 이 목록 밖은 전부 차단됩니다(SSRF 방어).' }), field('허용 인증 환경변수 이름 (allowed_auth_envs)', envTa), field('허용 호스트 (url_allowlist)', hostTa), el('div', { class: 'admin-subhead', text: 'DB 데이터소스 안전 화이트리스트' }), el('p', { class: 'admin-hint', text: 'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록 불요.' }), field('허용 DB host (allowed_db_hosts)', dbHostTa), el('div', { class: 'admin-subhead', text: 'MCP 프록시 안전 화이트리스트 (#746)' }), el('p', { class: 'admin-hint', text: 'MCP 프록시(proxy 모드 서버)가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost/메타데이터 IP 는 차단됩니다(SSRF 방어). 외부 공인 https MCP 는 등록 불요.' }), field('허용 내부 MCP host (allowed_internal_hosts)', internalHostTa), el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
 // ════════ 임베딩(벡터검색 #172) — provider 토글 + 기존 지식 백필 ════════
 //  config SoT = org_runtime_config.embedding_config(DB, 무재시작). 저장 = POST runtime-config{embedding_config}.
@@ -2639,11 +2643,13 @@ function mcpEditor(detail, data) {
         right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
     detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('MCP 서버', data.meaning['mcp']), el('div', { class: 'admin-two' }, listCol, right)));
 }
+// 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
+const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
 function mcpForm(root, s, data, detail, isNew) {
     const nameIn = el('input', { type: 'text', value: s.name, placeholder: '서버 이름(영문/숫자)', disabled: isNew ? null : '' });
     const transSel = el('select', {}, ...['http', 'stdio'].map((t) => el('option', { value: t, text: t })));
     transSel.value = s.transport || 'http';
-    const urlIn = el('input', { type: 'text', value: s.url || '', placeholder: 'http://host:port/mcp' });
+    const urlIn = el('input', { type: 'text', value: s.url || '', placeholder: 'https://host/mcp' });
     const cmdIn = el('input', { type: 'text', value: s.command || '', placeholder: 'node /path/server.mjs --arg' });
     const authIn = el('input', { type: 'text', value: s.auth_env || '', placeholder: '예: ACME_TOKEN (값 아님)' });
     const noteIn = el('input', { type: 'text', value: s.note || '', placeholder: '설명(선택)' });
@@ -2651,8 +2657,54 @@ function mcpForm(root, s, data, detail, isNew) {
     enChk.checked = s.enabled !== false;
     const urlField = field('URL (http)', urlIn);
     const cmdField = field('command (stdio)', cmdIn);
+    // ── 방식(mode) — client(멤버 클라 직접등록, 통제 없음) / proxy(게이트웨이가 대신 호출·통제·재노출, #746) ──
+    const modeSel = el('select', {}, el('option', { value: 'client', text: 'client — 멤버 클라에 직접 등록(게이트웨이 통제 없음)' }), el('option', { value: 'proxy', text: 'proxy — 게이트웨이가 대신 호출(권한·PII·감사 통제)' }));
+    modeSel.value = s.mode || 'client';
+    const scopeSel = el('select', {}, ...['items', 'context', 'db', 'memory', 'code'].map((v) => el('option', { value: v, text: v })));
+    scopeSel.value = s.scope || 'items';
+    const levelSel = el('select', {}, el('option', { value: 'L0', text: 'L0 — 조회(read)' }), el('option', { value: 'L1', text: 'L1 — 제안(MR·draft)' }), el('option', { value: 'L2', text: 'L2 — 집행(개인 자격 필수)' }));
+    levelSel.value = s.level || 'L0';
+    const authModeSel = el('select', {}, el('option', { value: 'bearer', text: 'bearer — 정적 토큰(vault 저장)' }), el('option', { value: 'oauth', text: 'oauth — 구성원별 OAuth 연결' }));
+    authModeSel.value = s.auth_mode || 'bearer';
+    const kindsListId = 'mcp-auth-kinds';
+    const kindsList = el('datalist', { id: kindsListId }, ...MCP_AUTH_KINDS.map((k) => el('option', { value: k })));
+    const authKindIn = el('input', { type: 'text', value: s.auth_kind || '', placeholder: '예: notion_oauth', list: kindsListId });
+    const authScopeIn = el('input', { type: 'text', value: s.auth_scope_key || '', placeholder: '대상 구분(선택 · 예 워크스페이스)' });
+    const piiChk = el('input', { type: 'checkbox' });
+    piiChk.checked = !!s.pii_scrub;
+    // 발행/새로고침 — 상류 tools/list 캡처(핀). 저장된 proxy 서버만.
+    const snapN = (s.tools_snapshot && s.tools_snapshot.length) || 0;
+    const snapInfo = el('div', { class: 'caption', text: snapN
+            ? `발행됨 · 툴 ${snapN}개${s.snapshot_at ? ' · ' + String(s.snapshot_at).slice(0, 16).replace('T', ' ') : ''}`
+            : '미발행 — 발행하면 상류 tools/list 를 캡처해 다음 세션부터 구성원에게 노출됩니다.' });
+    const refreshBtn = el('button', { class: 'btn btn-ghost btn-sm', text: snapN ? '새로고침(상류 툴 재캡처)' : '발행(상류 툴 캡처)' });
+    refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        try {
+            const r = await api('/api/ui/org/mcp-server/refresh', { method: 'POST', body: JSON.stringify({ name: s.name }) });
+            toast(`발행됨 — 툴 ${r.tool_count}개`);
+            await loadAdmin(true);
+            renderAdminDetail(detail, 'mcp', state.admin.data);
+        }
+        catch (e) {
+            toast(e.message, true);
+            refreshBtn.disabled = false;
+        }
+    });
+    const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.' });
+    const authEnvField = field('인증 환경변수 이름 (auth_env)', authIn);
+    const proxyBox = el('div', { class: 'admin-subcard' }, el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }), field('접근 권한 scope', scopeSel), field('권한 등급', levelSel), field('인증 방식', authModeSel), field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)), field('자격 대상 구분 (선택)', authScopeIn), el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'), oauthHint, isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
     const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
+    const syncMode = () => {
+        const proxy = modeSel.value === 'proxy';
+        proxyBox.style.display = proxy ? '' : 'none';
+        // proxy 는 auth_kind(vault)로 인증 → auth_env(client 전용) 숨김. oauth 면 auth_kind 는 vault kind(토큰 슬롯).
+        authEnvField.style.display = proxy ? 'none' : '';
+        oauthHint.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
+    };
     transSel.addEventListener('change', syncTransport);
+    modeSel.addEventListener('change', syncMode);
+    authModeSel.addEventListener('change', syncMode);
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
     const status = el('span', { class: 'admin-status' });
     saveBtn.addEventListener('click', async () => {
@@ -2663,11 +2715,24 @@ function mcpForm(root, s, data, detail, isNew) {
         saveBtn.disabled = true;
         try {
             const http = transSel.value === 'http';
-            const payload = { name: nameIn.value.trim(), transport: transSel.value, url: http ? urlIn.value.trim() : null, command: http ? null : cmdIn.value.trim(), auth_env: authIn.value.trim() || null, note: noteIn.value.trim() || null, enabled: enChk.checked };
+            const proxy = modeSel.value === 'proxy';
+            const payload = {
+                name: nameIn.value.trim(), transport: transSel.value,
+                url: http ? urlIn.value.trim() : null, command: http ? null : cmdIn.value.trim(),
+                auth_env: proxy ? null : (authIn.value.trim() || null),
+                note: noteIn.value.trim() || null, enabled: enChk.checked,
+                mode: modeSel.value,
+                scope: proxy ? scopeSel.value : null,
+                level: proxy ? levelSel.value : null,
+                auth_mode: proxy ? authModeSel.value : null,
+                auth_kind: proxy ? (authKindIn.value.trim() || null) : null,
+                auth_scope_key: proxy ? (authScopeIn.value.trim() || null) : null,
+                pii_scrub: proxy ? piiChk.checked : false,
+            };
             await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
             await loadAdmin(true);
             state.admin.mcpSel = payload.name;
-            toast('저장됨 — 다음 설치/업데이트 시 등록');
+            toast('저장됨 — 다음 세션부터 반영');
             renderAdminDetail(detail, 'mcp', state.admin.data);
         }
         catch (e) {
@@ -2691,8 +2756,9 @@ function mcpForm(root, s, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(field('이름', nameIn), field('전송 방식', transSel), urlField, cmdField, field('인증 환경변수 이름 (auth_env)', authIn), field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
+    root.replaceChildren(field('이름', nameIn), field('방식', modeSel), field('전송 방식', transSel), urlField, cmdField, authEnvField, field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), proxyBox, actions);
     syncTransport();
+    syncMode();
 }
 // ── 커넥터(외부 소스) — admin 전용 (프로젝트 #541 · #586 UX 개편). ──
 //  #586: 활성화=자동 싱크(sync-<system> 크론 자동 등록/해제 — 스케줄러 별도 등록 불필요),
@@ -4089,13 +4155,52 @@ const CRED_KINDS = [
     { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' } },
 ];
 const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
+// OAuth 커넥터 카드(#746 T2/T3) — 멤버 셀프 연결/해제. 연결은 새 탭에서 인증(브라우저 리다이렉트), 완료 후 새로고침.
+function oauthConnectorsCard(conns, reload) {
+    const rows = conns.map((c) => {
+        const status = el('span', { class: 'pill', text: c.connected ? '연결됨' : '미연결' });
+        const connectBtn = el('button', { class: 'btn btn-sm ' + (c.connected ? 'btn-ghost' : 'btn-primary'), text: c.connected ? '재연결' : '연결',
+            onclick: async () => {
+                try {
+                    const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: c.server }) });
+                    if (r.authorized) {
+                        toast('이미 연결됨');
+                        reload();
+                        return;
+                    }
+                    window.open(r.authorization_url, '_blank', 'noopener');
+                    toast('새 탭에서 로그인·동의하세요 — 완료 후 [새로고침]');
+                }
+                catch (e) {
+                    toast(e.message, true);
+                }
+            } });
+        const discBtn = c.connected ? el('button', { class: 'btn-text', text: '해제',
+            onclick: async () => {
+                if (!confirm(`'${c.server}' 연결을 해제할까요?`))
+                    return;
+                try {
+                    await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: c.server }) });
+                    toast('해제됨');
+                    reload();
+                }
+                catch (e) {
+                    toast(e.message, true);
+                }
+            } }) : null;
+        return el('div', { class: 'mini-row' }, el('div', { class: 'mini-title', text: c.server }, status), c.note ? el('div', { class: 'mini-meta', text: c.note }) : null, el('div', { class: 'admin-actions' }, connectBtn, discBtn));
+    });
+    return el('div', { class: 'card' }, sectionTitle('OAuth 커넥터', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 커넥터예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'), el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })), ...rows);
+}
 async function credentialsEditor(detail) {
     const isAdmin = hasScope('admin');
     detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
     let mine = { credentials: [], encryption_ready: true };
     let org = { credentials: [] };
+    let oauthConns = { connectors: [] };
     try {
         mine = await api('/api/ui/me/credentials');
+        oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
         if (isAdmin)
             org = await api('/api/ui/org/credentials');
     }
@@ -4108,6 +4213,8 @@ async function credentialsEditor(detail) {
         el('div', { class: 'card' }, sectionTitle('자격 (커넥터 로그인)', '커넥터(GitLab·Slack·AWS 등)에 로그인할 내 토큰을 여기 한 번 넣어두면, AI가 나 대신 그 서비스를 읽고 쓸 때 이 자격으로 로그인해요. 토큰은 암호화되어 저장되고 다른 사람에게 보이지 않아요.'), encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
     ];
     cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', mine.credentials || [], encReady, () => credentialsEditor(detail)));
+    if ((oauthConns.connectors || []).length)
+        cards.push(oauthConnectorsCard(oauthConns.connectors, () => credentialsEditor(detail)));
     if (isAdmin) {
         cards.push(credVaultCard('org', '통합 자격 (관리자)', '개인 자격이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 자격 필수).', (org.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
         cards.push(awsRoleCard((org.credentials || []).filter((c) => c.kind === 'aws_role_arn'), () => credentialsEditor(detail)));

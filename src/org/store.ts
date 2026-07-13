@@ -606,6 +606,7 @@ export interface OrgRuntimeConfig {
   url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
   allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
   allowed_db_hosts: string[]; // db 소스가 접속 가능한 host 화이트리스트(소문자, deny-all 기본) — 사설/localhost SSRF 면제 대상
+  allowed_internal_hosts: string[]; // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(소문자, deny-all 기본) — #746 T1
   write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   version: number;
@@ -618,7 +619,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -635,6 +636,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     url_allowlist: strArrSafe(row?.url_allowlist).map((s) => s.toLowerCase()),
     allowed_db_secret_refs: strArrSafe(row?.allowed_db_secret_refs),
     allowed_db_hosts: strArrSafe(row?.allowed_db_hosts).map((s) => s.toLowerCase()),
+    allowed_internal_hosts: strArrSafe(row?.allowed_internal_hosts).map((s) => s.toLowerCase()),
     write_tools: strArrSafe(row?.write_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     version: (row?.version as number) ?? 1,
@@ -652,6 +654,7 @@ export async function updateRuntimeConfig(
     url_allowlist?: string[];
     allowed_db_secret_refs?: string[];
     allowed_db_hosts?: string[];
+    allowed_internal_hosts?: string[];
     write_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
   },
@@ -667,6 +670,7 @@ export async function updateRuntimeConfig(
   const urlAllowlist = patch.url_allowlist !== undefined ? patch.url_allowlist.map((s) => s.toLowerCase()) : before.url_allowlist;
   const allowedDbSecretRefs = patch.allowed_db_secret_refs !== undefined ? patch.allowed_db_secret_refs : before.allowed_db_secret_refs;
   const allowedDbHosts = patch.allowed_db_hosts !== undefined ? patch.allowed_db_hosts.map((s) => s.toLowerCase()) : before.allowed_db_hosts;
+  const allowedInternalHosts = patch.allowed_internal_hosts !== undefined ? patch.allowed_internal_hosts.map((s) => s.toLowerCase()) : before.allowed_internal_hosts;
   const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
@@ -682,15 +686,16 @@ export async function updateRuntimeConfig(
     embeddingConfig = (raw.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,1,now(),$10)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,1,now(),$11)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
+       allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, embedding_config=EXCLUDED.embedding_config,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
   );
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
@@ -721,6 +726,16 @@ export interface McpServer {
   version: number;
   updated_at: string | null;
   updated_by: string | null;
+  // A-어댑터 프록시(#746 T1)
+  mode: "client" | "proxy";
+  tools_snapshot: Array<{ name: string; description?: string; inputSchema?: unknown }> | null;
+  snapshot_at: string | null;
+  scope: string | null;
+  level: "L0" | "L1" | "L2" | null;
+  pii_scrub: boolean;
+  auth_kind: string | null;
+  auth_scope_key: string | null;
+  auth_mode: "bearer" | "oauth" | null; // T2: null/bearer=정적토큰, oauth=per-member OAuth 브로커
 }
 
 function mapMcp(row: Record<string, unknown>): McpServer {
@@ -736,10 +751,19 @@ function mapMcp(row: Record<string, unknown>): McpServer {
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
     updated_by: (row.updated_by as string) ?? null,
+    mode: (row.mode as McpServer["mode"]) ?? "client",
+    tools_snapshot: Array.isArray(row.tools_snapshot) ? (row.tools_snapshot as McpServer["tools_snapshot"]) : null,
+    snapshot_at: (row.snapshot_at as string) ?? null,
+    scope: (row.scope as string) ?? null,
+    level: (row.level as McpServer["level"]) ?? null,
+    pii_scrub: row.pii_scrub === true,
+    auth_kind: (row.auth_kind as string) ?? null,
+    auth_scope_key: (row.auth_scope_key as string) ?? null,
+    auth_mode: (row.auth_mode as McpServer["auth_mode"]) ?? null,
   };
 }
 
-const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by";
+const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode";
 
 export async function listMcpServers(): Promise<McpServer[]> {
   const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server ORDER BY sort, name`);
@@ -760,6 +784,13 @@ export interface McpServerInput {
   note?: string | null;
   enabled?: boolean;
   sort?: number;
+  mode?: "client" | "proxy";
+  scope?: string | null;
+  level?: "L0" | "L1" | "L2" | null;
+  pii_scrub?: boolean;
+  auth_kind?: string | null;
+  auth_scope_key?: string | null;
+  auth_mode?: "bearer" | "oauth" | null;
 }
 
 export async function upsertMcpServer(m: McpServerInput, actor?: string, source?: string): Promise<McpServer> {
@@ -768,17 +799,37 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
   // transport 와 맞지 않는 필드는 비운다(http↔stdio 전환 시 옛 url/command 잔류로 인한 잘못된 상태 방지).
   const url = transport === "http" ? (m.url ?? before?.url ?? null) : null;
   const command = transport === "stdio" ? (m.command ?? before?.command ?? null) : null;
+  const mode = m.mode ?? before?.mode ?? "client";
+  // proxy 는 http 전송 전제(상류 remote MCP). auth_kind 지정 시 auth_env 는 비운다(인증 출처 하나 — org_tool 배타와 동일).
+  const authKind = m.auth_kind !== undefined ? (m.auth_kind || null) : (before?.auth_kind ?? null);
+  const authEnv = authKind ? null : (m.auth_env ?? before?.auth_env ?? null);
+  const authMode = m.auth_mode !== undefined ? (m.auth_mode || null) : (before?.auth_mode ?? null);
+  // auth_mode=oauth 는 auth_kind(vault 토큰 슬롯 kind) 필수(#746 리뷰 #3) — 없으면 연결/호출 시점까지 오류가 늦어진다.
+  if (authMode === "oauth" && !authKind) throw new Error("auth_mode=oauth 는 auth_kind(자격 종류)가 필요합니다");
   await itemsPool.query(
-    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,now(),$9)
+    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
      ON CONFLICT (name) DO UPDATE SET
        transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
        note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
+       mode=EXCLUDED.mode, scope=EXCLUDED.scope, level=EXCLUDED.level, pii_scrub=EXCLUDED.pii_scrub,
+       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, auth_mode=EXCLUDED.auth_mode,
        version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.name, transport, url, command,
-     m.auth_env ?? before?.auth_env ?? null, m.note ?? before?.note ?? null,
-     m.enabled ?? before?.enabled ?? true, m.sort ?? before?.sort ?? 0, actor ?? null],
+     authEnv, m.note ?? before?.note ?? null,
+     m.enabled ?? before?.enabled ?? true, m.sort ?? before?.sort ?? 0,
+     mode, m.scope !== undefined ? m.scope : (before?.scope ?? null),
+     m.level !== undefined ? m.level : (before?.level ?? null),
+     m.pii_scrub !== undefined ? !!m.pii_scrub : (before?.pii_scrub ?? false),
+     authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
+     authMode,
+     actor ?? null],
   );
+  // url/mode 변경 시 pinned tools_snapshot 무효화(#746 리뷰) — 옛 상류 기준 툴 정체성/목적지 불일치 방지.
+  //  listProxyServers 는 snapshot NOT NULL 만 노출하므로, 재발행(refresh)까지 이 서버는 프록시 등록에서 빠진다(fail-safe).
+  if (before && (before.url !== url || before.mode !== mode)) {
+    await itemsPool.query(`UPDATE org_mcp_server SET tools_snapshot=NULL, snapshot_at=NULL WHERE name=$1`, [m.name]);
+  }
   const after = await getMcpServer(m.name);
   await audit("org_mcp_server", m.name, before ? "update" : "insert", before, after, actor, source);
   return after as McpServer;
@@ -789,6 +840,24 @@ export async function removeMcpServer(name: string, actor?: string, source?: str
   if (!before) return;
   await itemsPool.query(`DELETE FROM org_mcp_server WHERE name=$1`, [name]);
   await audit("org_mcp_server", name, "delete", before, null, actor, source);
+}
+
+// A-어댑터(#746 T1) — 발행 시 상류 tools/list 스냅샷(핀) 저장. 관리자 '새로고침/버전업' 액션이 호출.
+export async function setMcpToolsSnapshot(name: string, tools: Array<{ name: string; description?: string; inputSchema?: unknown }>, actor?: string): Promise<void> {
+  const before = await getMcpServer(name);
+  if (!before) throw new Error(`MCP 서버 없음: ${name}`);
+  await itemsPool.query(
+    `UPDATE org_mcp_server SET tools_snapshot=$2::jsonb, snapshot_at=now(), version=version+1, updated_at=now(), updated_by=$3 WHERE name=$1`,
+    [name, JSON.stringify(tools), actor ?? null],
+  );
+  await audit("org_mcp_server", name, "update", { tool_count: before.tools_snapshot?.length ?? 0 }, { tool_count: tools.length, action: "snapshot" }, actor, "web");
+}
+
+// /mcp 프록시 등록용 — enabled + mode='proxy' + 스냅샷 보유(발행됨) 서버만. buildServer 가 이 스냅샷으로 툴을 재노출한다.
+export async function listProxyServers(): Promise<McpServer[]> {
+  const r = await itemsPool.query(
+    `SELECT ${MCP_COLS} FROM org_mcp_server WHERE enabled=true AND mode='proxy' AND tools_snapshot IS NOT NULL ORDER BY sort, name`);
+  return r.rows.map(mapMcp);
 }
 
 // ════════ 커넥터 설정/토큰 레지스트리 — org_connector (프로젝트 #541) ════════

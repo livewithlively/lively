@@ -16,14 +16,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 Runas_Alias LIVELY_BOX_MEMBERS = %box_members
+# ③ 브로커 spawn(#746 T4) — broker_members 로 같은 wrapper 하나만. 멤버 대화 uid(box_*)와 분리된 전용 uid.
+Runas_Alias LIVELY_BROKERS = %broker_members
 
-# ① 세션 spawn — box_members 로 wrapper 하나만, 비밀번호 없이.
-#  TZ 보존(#778): 게이트웨이가 tmux `-e TZ=<조직 시간대>` 로 pane 에 주입한 시간대를 sudo(env_reset)가 털지 않게
-#   명시 보존한다 → 격리 세션의 클로드코드/셸이 UTC 가 아닌 조직 시간대로 시각을 표시한다. **권한 확대 아님**:
-#   TZ 는 비밀이 아니고, 멤버는 자기 셸에서 어차피 TZ 를 바꿀 수 있다(sudo 는 이미 그 멤버 uid 로 내려간 뒤).
-#   미적용(구 sudoers)이면 TZ 가 안 넘어가 시스템 TZ 폴백 = 종전 동작(무회귀).
-Defaults!/opt/lively/libexec/box-spawn env_keep += "TZ"
-lively ALL=(LIVELY_BOX_MEMBERS) NOPASSWD: /opt/lively/libexec/box-spawn
+# ① 세션 spawn + ③ 브로커 spawn(#746 T4) — box_members·broker_members 로 wrapper 하나만, 비밀번호 없이.
+lively ALL=(LIVELY_BOX_MEMBERS,LIVELY_BROKERS) NOPASSWD: /opt/lively/libexec/box-spawn
+# env_keep(sudo env_reset 우회): TZ 보존(#778 — 조직 시간대를 격리 세션 셸/클로드에 전달, 비밀 아님·권한확대 아님) +
+#  브로커 config(#746 T4 — 소켓·member·workroot·툴목록·내부host·entry·per-broker 토큰. 전부 비밀 아님).
+Defaults!/opt/lively/libexec/box-spawn env_keep += "TZ LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
 
 # ② 웹 프로비저닝 — root 로 provision 스크립트 하나만. 토큰·이름·이메일만 env 보존(PATH 등은 미보존).
 Defaults!/opt/lively/libexec/provision-member env_keep += "LIVELY_TOKEN MEMBER_NAME MEMBER_EMAIL LIVELY_SHARED_DIR"

@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, debounce, fileIconSvg, fmtSize, mountBodyEditor, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, uploadBodyFile } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUploadProgress, debounce, fileIconSvg, fmtSize, mountBodyEditor, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, upIsAbort, upProgress, upSend, upToast, uploadBodyFile, type UpItem } from './projects.js';
 // 커스텀 필드 셀 컨트롤(pjvFieldControl) 재사용용 네임스페이스(#541) — projects.ts 는 동시 편집 중이라 직접
 //  수정하지 않고, export 목록에 오르는 즉시 자동으로 붙는다(없으면 읽기전용 폴백 — pjvtmFieldReadonly).
 import * as PJ from './projects.js';
@@ -1002,7 +1002,8 @@ function pjvOpenTaskModal(taskId, pageReload) {
   }
 
   // 첨부 파일 — 프로젝트 폴더 `_attachments/task-<id>/` 재사용(기존 파일 API: 멤버게이트·50MB·미리보기·다운로드).
-  //  의존성/연결·체크리스트와 같은 레벨의 블록. 업로드=authUpload(PUT), 목록=/files, 미리보기=openFileViewer, 삭제=DELETE.
+  //  의존성/연결·체크리스트와 같은 레벨의 블록. 업로드=upSend/upProgress(진행·취소 — 공유 폴더와 같은 프리미티브, #807),
+  //  목록=/files, 미리보기=openFileViewer, 삭제=DELETE.
   function pjvtmAttachments(d, t, refresh) {
     const sec = el('div', { class: 'pjv-tm-block' });
     sec.append(el('div', { class: 'pjv-tm-block-head' },
@@ -1040,16 +1041,29 @@ function pjvOpenTaskModal(taskId, pageReload) {
     })();
     const fileInput = el('input', { type: 'file', multiple: 'true', style: 'display:none' });
     const addBtn = el('button', { class: 'pjv-tm-block-add', type: 'button', text: '📎 파일 첨부' });
-    fileInput.addEventListener('change', async () => {
+    const progBox = el('div', { class: 'up-prog-box' });   // 업로드 진행·취소 바(#807 — 공유 폴더와 같은 프리미티브)
+    // 첨부 업로드 — 전송 루프·진행바·취소는 공유 폴더에서 검증된 프리미티브 그대로(#797).
+    //  취소하면 남은 파일을 안 보낼 뿐 아니라 전송 중인 파일도 끊긴다. 서버가 임시파일→rename 이라 끊겨도 목적지는 무손상.
+    async function uploadAttach(items: UpItem[]) {
+      if (pid == null || !items.length) return;
+      const ac = new AbortController();
+      const bar = upProgress(items.length, () => ac.abort());
+      progBox.append(bar.row);
+      addBtn.disabled = true;
+      const r = await upSend({
+        items, signal: ac.signal,
+        fileUrl: (rel) => base + pid + '/file?path=' + encodeURIComponent(dir + '/' + rel),
+        onProgress: (i, rel, pct) => bar.set(i, rel, pct),
+      });
+      bar.row.remove();
+      addBtn.disabled = false;
+      upToast(r);
+      refresh();   // 취소했어도 '올라간 데까지'는 목록에 보여 준다
+    }
+    fileInput.addEventListener('change', () => {
       const picked: any[] = Array.from(fileInput.files || []);
-      if (!picked.length || pid == null) return;
-      addBtn.disabled = true; addBtn.textContent = '업로드 중…';
-      try {
-        for (const file of picked) {
-          await authUpload(base + pid + '/file?path=' + encodeURIComponent(dir + '/' + file.name), file);
-        }
-        refresh();
-      } catch (e) { toast('업로드 실패 — ' + e.message, true); addBtn.disabled = false; addBtn.textContent = '📎 파일 첨부'; }
+      fileInput.value = '';   // 같은 파일을 다시 고를 수 있게 — 리셋을 안 하면 두 번째 선택이 change 를 안 낸다(기존 버그)
+      uploadAttach(picked.map((f) => ({ file: f, rel: String(f.name) })));
     });
     // 공유 프로젝트 폴더에서 첨부 — 폴더 브라우저 팝오버에서 파일을 고르면 그 파일을 이 태스크 첨부폴더로 복사한다.
     const attachFromFolder = () => {
@@ -1074,13 +1088,30 @@ function pjvOpenTaskModal(taskId, pageReload) {
           const childPath = curPath ? curPath + '/' + it.name : it.name;
           if (it.type === 'dir') { rowsBox.append(el('button', { class: 'pjv-files-row dir', type: 'button', onclick: () => { curPath = childPath; load(); } }, fileIconSvg(it.name, true), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-chev', text: '›' }))); continue; }
           rowsBox.append(el('button', { class: 'pjv-files-row file', type: 'button', onclick: async () => {
-            close(); addBtn.disabled = true; addBtn.textContent = '첨부 중…';
+            close();
+            // 원본을 브라우저로 내려받아 첨부 폴더로 다시 올린다(서버 내부 복사가 아니라 왕복) — 큰 파일이면 오래 걸리므로
+            //  다운로드·업로드 **양쪽 다** 같은 signal 로 끊는다(#807).
+            const ac = new AbortController();
+            const bar = upProgress(1, () => ac.abort(), { label: '원본을 읽는 중… — ' + it.name });
+            progBox.append(bar.row);
+            addBtn.disabled = true;
             try {
               const tok = localStorage.getItem(TOKEN_KEY);
-              const blob = await fetch(base + pid + '/file?download=1&path=' + encodeURIComponent(childPath), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} }).then((r) => { if (!r.ok) throw new Error('원본 읽기 실패 (' + r.status + ')'); return r.blob(); });
-              await authUpload(base + pid + '/file?path=' + encodeURIComponent(dir + '/' + it.name), new File([blob], it.name));
-              refresh();
-            } catch (e2) { toast('첨부 실패 — ' + e2.message, true); addBtn.disabled = false; addBtn.textContent = '📎 파일 첨부'; }
+              const blob = await fetch(base + pid + '/file?download=1&path=' + encodeURIComponent(childPath),
+                { headers: tok ? { Authorization: 'Bearer ' + tok } : {}, signal: ac.signal })
+                .then((r) => { if (!r.ok) throw new Error('원본 읽기 실패 (' + r.status + ')'); return r.blob(); });
+              const res = await upSend({
+                items: [{ file: new File([blob], it.name), rel: it.name }], signal: ac.signal,
+                fileUrl: (rel) => base + pid + '/file?path=' + encodeURIComponent(dir + '/' + rel),
+                onProgress: (i, rel, pct) => bar.set(i, rel, pct),
+              });
+              bar.row.remove(); addBtn.disabled = false;
+              upToast(res); refresh();
+            } catch (e2) {
+              bar.row.remove(); addBtn.disabled = false;
+              if (upIsAbort(e2)) { toast('첨부를 취소했습니다'); return; }   // 원본을 읽는 중에 끊은 경우
+              toast('첨부 실패 — ' + e2.message, true);
+            }
           } }, fileIconSvg(it.name, false), el('span', { class: 'pjv-files-name', text: it.name }), el('span', { class: 'pjv-files-size', text: fmtSize(it.size) })));
         }
       };
@@ -1095,7 +1126,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
       menu.append(mk('내 컴퓨터에서 업로드', () => fileInput.click()));
       menu.append(mk('공유 프로젝트 폴더에서 선택', attachFromFolder));
     };
-    sec.append(fileInput, addBtn);
+    sec.append(progBox, fileInput, addBtn);   // 진행·취소 바는 목록과 '📎 파일 첨부' 사이
     sec.append(el('div', { class: 'pjv-tm-att-hint' },
       el('span', { class: 'pjv-tm-att-hint-ic', 'aria-hidden': 'true', text: '📋' }),
       el('span', {}, '이미지를 복사한 뒤 이 창에서 ', el('b', { text: 'Ctrl/⌘ + V' }), ' 로 바로 붙여넣을 수도 있어요.')));
@@ -1171,15 +1202,24 @@ function pjvOpenTaskModal(taskId, pageReload) {
       const cap = (nameIn.value || '').trim();
       const safe = cap.replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').replace(/\s+/g, '_').slice(0, 80);
       const fname = (safe || '붙여넣은-이미지') + '-' + pjvtmStamp() + '.' + ext;
-      okBtn.disabled = true; cancelBtn.disabled = true; okBtn.textContent = '첨부 중…';
+      okBtn.disabled = true; okBtn.textContent = '첨부 중…';
+      // 업로드 중에도 '취소'는 살려 둔다 — 누르면 전송 중인 요청을 끊는다(#807).
+      //  예전엔 여기서 취소 버튼까지 비활성화해, 큰 이미지를 올리기 시작하면 멈출 방법이 없었다.
+      const ac = new AbortController();
+      cancelBtn.onclick = () => ac.abort();
       try {
-        await authUpload(ctx.base + ctx.pid + '/file?path=' + encodeURIComponent(ctx.dir + '/' + fname), new File([blob], fname, { type: blob.type }));
+        await authUploadProgress(ctx.base + ctx.pid + '/file?path=' + encodeURIComponent(ctx.dir + '/' + fname),
+          new File([blob], fname, { type: blob.type }),
+          (pct) => { okBtn.textContent = '첨부 중… ' + Math.round(pct) + '%'; },   // 바 대신 버튼에 진행률(다이얼로그가 좁다)
+          ac.signal);
         cleanup();
         ctx.refresh();
         toast('이미지를 첨부했어요');
       } catch (e2) {
+        cancelBtn.onclick = cleanup;   // 취소 버튼을 원래 동작(닫기)으로 되돌린다
+        if (upIsAbort(e2)) { cleanup(); toast('첨부를 취소했습니다'); return; }
         err.textContent = '첨부 실패 — ' + e2.message; err.hidden = false;
-        okBtn.disabled = false; cancelBtn.disabled = false; okBtn.textContent = '첨부';
+        okBtn.disabled = false; okBtn.textContent = '첨부';
       }
     };
     okBtn.onclick = doUpload;

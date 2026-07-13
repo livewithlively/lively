@@ -25,8 +25,22 @@ echo "게이트웨이 유저(sudoers 주체) = $GW"
 # ① 그룹
 getent group box_members   >/dev/null || { groupadd box_members;   echo "groupadd box_members"; }
 getent group lively-shared >/dev/null || { groupadd lively-shared; echo "groupadd lively-shared"; }
-# ④ 게이트웨이 → lively-shared (공유 워크스페이스 read/write)
+# ①-b 브로커(#746 T4): broker_members(sudoers runas 제한) + lively-broker(브로커 소켓 접근 그룹 — 게이트웨이만, 멤버 제외)
+getent group broker_members >/dev/null || { groupadd broker_members; echo "groupadd broker_members"; }
+getent group lively-broker  >/dev/null || { groupadd lively-broker;  echo "groupadd lively-broker"; }
+# ④ 게이트웨이 → lively-shared (공유 워크스페이스) + lively-broker (브로커 소켓 연결)
 id -nG "$GW" | tr ' ' '\n' | grep -qx lively-shared || { usermod -aG lively-shared "$GW"; echo "usermod -aG lively-shared $GW (재로그인/서비스 재시작 후 반영)"; }
+id -nG "$GW" | tr ' ' '\n' | grep -qx lively-broker || { usermod -aG lively-broker "$GW"; echo "usermod -aG lively-broker $GW (브로커 소켓 접근 — 서비스 재시작 후 반영)"; }
+
+# ⑤-b 브로커 소켓 디렉토리(#746 T4) — root:lively-broker 2770(setgid) → 소켓이 lively-broker 그룹 상속(게이트웨이만 접근).
+#   /run 은 tmpfs(재부팅 소멸) → systemd-tmpfiles 로 부팅 시 재생성. broker_<slug>(lively-broker)만 여기 소켓 생성.
+BROKER_RUN_DIR="/run/lively-broker"
+install -d -m 2770 -o root -g lively-broker "$BROKER_RUN_DIR"; chmod g+s "$BROKER_RUN_DIR"
+if [ -d /etc/tmpfiles.d ]; then
+  echo "d $BROKER_RUN_DIR 2770 root lively-broker -" > /etc/tmpfiles.d/lively-broker.conf
+  echo "tmpfiles → /etc/tmpfiles.d/lively-broker.conf (부팅 시 $BROKER_RUN_DIR 재생성)"
+fi
+echo "브로커 소켓 디렉토리 → $BROKER_RUN_DIR (root:lively-broker 2770 setgid)"
 
 # ⑤ 공유 워크스페이스 dir(#524 ROOTS-under-isolation) — resolveRootPath 의 shared 루트. setgid 2775 로
 #    새 파일이 lively-shared 그룹 상속 → 게이트웨이·멤버 공동 접근(개인 크레덴셜은 멤버 홈 700 에 별도 격리).

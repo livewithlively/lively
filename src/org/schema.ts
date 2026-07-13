@@ -172,6 +172,33 @@ export async function initOrgSchema(): Promise<void> {
         ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_transport_chk CHECK (transport IN ('http','stdio'));
       END IF;
     END $$;
+    -- A-어댑터: 게이트웨이 MCP 프록시(#746 T1). mode='client'(기존 ③ — register-clients 가 멤버 클라에 직접 등록) |
+    --  'proxy'(게이트웨이가 상류 MCP 클라이언트가 되어 tools 를 자기 /mcp 에 재노출·통제·포워딩). 기존 행은 client 유지(무회귀).
+    --  tools_snapshot = 발행 시 캡처한 상류 tools/list(핀). scope/level/pii_scrub = 프록시 툴 통제. auth_kind/scope_key = per-member vault 인증(T2 OAuth 확장 전엔 정적토큰).
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'client';
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS tools_snapshot JSONB;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS scope TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS level TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_kind TEXT;
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
+    -- auth_mode(#746 T2): 'bearer'(정적토큰, 기본) | 'oauth'(per-member OAuth 브로커 — 토큰 생명주기·refresh 를 게이트웨이가 관리).
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_mode TEXT;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_mode_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_mode_chk CHECK (mode IN ('client','proxy'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_level_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_level_chk CHECK (level IS NULL OR level IN ('L0','L1','L2'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_auth_mode_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_auth_mode_chk CHECK (auth_mode IS NULL OR auth_mode IN ('bearer','oauth'));
+      END IF;
+    END $$;
   `);
 
   // ── org_connector — 커넥터별 설정/토큰 레지스트리 (프로젝트 #541). system PK = 1행/커넥터(단일테넌트). ──
@@ -434,6 +461,13 @@ export async function initOrgSchema(): Promise<void> {
   //  명시한 host 만 사설/내부 DB(예: localhost 의 items)를 db 소스로 접속 허용 — 신뢰경계를 운영자에 고정.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_db_hosts JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장(#746 T1): MCP 프록시가 접속 가능한 '내부(사설/localhost)' host 화이트리스트(deny-all 기본). ──
+  // 프록시 대상 remote MCP 는 기본 공인 https 만 — 사설/메타데이터/loopback 은 SSRF 로 차단. 격리 VPC 내부 MCP 서버처럼
+  //  정당한 사설 대상은 운영자가 admin 으로 여기에 명시한 host 만 예외 허용(allowed_db_hosts 와 동형 — 신뢰경계를 운영자에 고정).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_internal_hosts JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
   // ── org_runtime_config 확장: write_tools — work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록. ──
