@@ -3,16 +3,20 @@
 //  → 자격을 쥔 브로커 프로세스를 멤버가 변조/열람 못 함(전용 uid + 소켓 권한 이중).
 import http from "node:http";
 import { runExec, type ExecRequest, type ExecPolicy, type ExecResult } from "./exec.js";
+import { mcpForward, type McpRequest } from "./mcp.js";
 
 export interface BrokerConfig extends ExecPolicy { member: string }
 
-// 요청 1건 처리 — op 디스패치. exec/ping 만(MVP). 자격/env 는 응답에 절대 안 실림(runExec 가 보장).
+// 요청 1건 처리 — op 디스패치(ping/exec/mcp). 자격/env 는 응답에 절대 안 실림(runExec/mcpForward 가 보장).
 async function handle(body: unknown, cfg: BrokerConfig): Promise<{ status: number; payload: unknown }> {
   const req = (body ?? {}) as Record<string, unknown>;
   if (req.op === "ping") return { status: 200, payload: { ok: true, member: cfg.member } };
   if (req.op === "exec") {
     const res: ExecResult = await runExec(req as unknown as ExecRequest, cfg);
     return { status: 200, payload: res }; // exec 실패(비정상 종료)도 200 + ok:false (전송계층 성공)
+  }
+  if (req.op === "mcp") {
+    return { status: 200, payload: await mcpForward(req as unknown as McpRequest) }; // stateful 상류 프록시
   }
   return { status: 400, payload: { ok: false, error: `알 수 없는 op: ${String(req.op)}` } };
 }

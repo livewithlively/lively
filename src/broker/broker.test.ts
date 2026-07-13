@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertAllowedTool, resolveCwd, runExec } from "./exec.js";
+import { brokerUser, brokerSocketPath, brokerSpawnArgv } from "./route.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -53,6 +54,18 @@ await ta("runExec: 인자는 배열로만(셸 인젝션 불가 — 메타문자 
   const r = await runExec({ op: "exec", tool: "echo", args: ["a; rm -rf /"] }, { allowedTools: ["echo"], workroot: tmp });
   assert.equal(r.ok, true);
   assert.match(r.stdout, /a; rm -rf \//); // 셸 미경유라 메타문자가 리터럴 출력(실행 안 됨)
+});
+
+// ── 라우팅 헬퍼(①) — 전용 uid·소켓 경로·spawn argv(기존 격리 특권경로 재사용) ──
+t("route: brokerUser = broker_<slug>, socketPath = <dir>/<slug>.sock", () => {
+  assert.equal(brokerUser("yoon"), "broker_yoon");
+  assert.match(brokerSocketPath("yoon"), /\/yoon\.sock$/);
+});
+t("route: spawn argv = sudo -n -u broker_<slug> -- box-spawn node <entry>", () => {
+  const a = brokerSpawnArgv("yoon", "/opt/co/dist/broker/index.js");
+  assert.deepEqual(a.slice(0, 5), ["sudo", "-n", "-u", "broker_yoon", "--"]);
+  assert.equal(a[a.length - 2], "node");
+  assert.equal(a[a.length - 1], "/opt/co/dist/broker/index.js");
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });
