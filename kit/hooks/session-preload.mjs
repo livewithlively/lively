@@ -13,7 +13,7 @@
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -128,6 +128,61 @@ function reconcileClaudeAutoApprove(dir, want) {
   } catch { /* fail-soft */ }
 }
 
+// kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임
+//  절대경로)로 같은 훅이 여러 벌 배선된 settings 를 세션 시작마다 한 벌로 수렴시킨다(v0.1.131 설치기 dedup 과
+//  동일 정체성 규칙 = 스크립트 파일명(+인자)+matcher — 설치기는 설치 시에만 돌므로, 재설치 없는 머신은 이게 정리).
+//  대상은 `.lively/hooks/*` 를 가리키는 단일-훅 lively 항목만 — 사용자 고유 훅·복합 항목은 불변. 남길 한 벌 =
+//  실행 확실성 순(지금 이 훅을 실행 중인 node 와 동일 실행자 > 존재 확인된 절대경로/PATH형 > 나머지, 동점이면
+//  가장 뒤 = 최근 설치분). 변화 없으면 무기록, 전 경로 fail-soft.
+const kitHookId = (cmd) => {
+  const m = typeof cmd === "string" ? cmd.match(/[/\\]\.lively[/\\]hooks[/\\]([^"'\s]+)['"]?\s*(.*)$/) : null;
+  return m ? `${m[1]}|${m[2].trim()}` : null;
+};
+function dedupKitWiring() {
+  if (HARNESS === "codex") return false; // codex 배선은 config.toml 센티널 — 이 dedup 은 Claude settings 전용
+  try {
+    const sp = join(homedir(), ".claude", "settings.json");
+    if (!existsSync(sp)) return false;
+    let cur; try { cur = JSON.parse(readFileSync(sp, "utf8")); } catch { return false; }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
+    if (!cur.hooks || typeof cur.hooks !== "object" || Array.isArray(cur.hooks)) return false;
+    const tokOf = (c) => { const m = String(c).match(/^\s*(?:"([^"]+)"|(\S+))/); return m ? (m[1] || m[2] || "") : ""; };
+    let myNode = process.execPath; try { myNode = realpathSync(process.execPath); } catch { /* 그대로 */ }
+    const aliveScore = (t) => {
+      if (!t) return 0;
+      if (!t.includes("/") && !t.includes("\\")) return 1;               // PATH 형(node) — 존재 가정
+      try { if (realpathSync(t) === myNode) return 2; } catch { /* 아래로 */ }
+      return existsSync(t) ? 1 : 0;                                      // 절대경로 — 파일 존재로 판정
+    };
+    let changed = false;
+    for (const [ev, arr] of Object.entries(cur.hooks)) {
+      if (!Array.isArray(arr)) continue;
+      const groups = new Map(); // (matcher, kit 정체성) → 항목 인덱스들
+      arr.forEach((e, i) => {
+        const hs = e && Array.isArray(e.hooks) ? e.hooks : null;
+        if (!hs || hs.length !== 1 || typeof hs[0].command !== "string") return; // kit 항목은 단일 훅 — 그 외 불변
+        const id = kitHookId(hs[0].command);
+        if (!id) return;
+        const key = JSON.stringify([e.matcher ?? null, id]);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(i);
+      });
+      const drop = new Set();
+      for (const idxs of groups.values()) {
+        if (idxs.length < 2) continue;
+        let keep = idxs[0], best = -1;
+        for (const i of idxs) { const s = aliveScore(tokOf(arr[i].hooks[0].command)); if (s >= best) { best = s; keep = i; } }
+        for (const i of idxs) if (i !== keep) drop.add(i);
+      }
+      if (drop.size) { cur.hooks[ev] = arr.filter((_, i) => !drop.has(i)); changed = true; }
+    }
+    if (!changed) return false;
+    try { copyFileSync(sp, sp + ".bak-hook-dedup"); } catch { /* 백업 실패해도 진행 */ }
+    writeFileSync(sp, JSON.stringify(cur, null, 2) + "\n");
+    return true;
+  } catch { return false; }
+}
+
 // 자산 sync 배선 자기치유(#742) — sync-harness-assets 의 SessionStart 배선은 user-install(#636, 2026-07-07)부터
 //  설치돼, 그 전에 프로비저닝된 멤버는 kit refresh 로 러너 파일만 최신이고 배선이 없어 조직 스킬·서브에이전트가
 //  영영 materialize 안 됐다(재설치 없음 · refresh-member-kits.sh 는 settings 무영향). 전원 배선된 이 훅이 수렴시킨다:
@@ -198,7 +253,9 @@ try {
   // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
   const result = await Promise.race([Promise.all([refreshRuntimeConfig(), fetchOrgContext()]), sleep(4500)]);
   const [, orgCtx] = Array.isArray(result) ? result : [null, null];
-  // 자산 sync 자기치유 — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스). 배선 정상이면 즉시 false.
+  // 자산 sync 자기치유 + kit 훅 중복 dedup — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스).
+  //  dedup 먼저(깨끗한 베이스 위에 배선 판정) — 둘 다 정상 상태면 즉시 false·무기록.
+  dedupKitWiring();
   const healed = healAssetSyncWiring();
   // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
   if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }

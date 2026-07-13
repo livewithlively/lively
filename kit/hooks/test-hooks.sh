@@ -102,6 +102,38 @@ if [ $CODE -eq 0 ] && ! grep -q 'sync-harness-assets' "$TMPHOME4/.claude/setting
 else bad "preload⑥c 러너 부재" "code=$CODE"; fi
 rm -rf "$TMPHOME3" "$TMPHOME4"
 
+# ── kit 훅 중복 dedup(#742) — 세대 드리프트로 중복 배선된 settings 를 세션 시작이 한 벌로 수렴 ──
+#  구(무인용 node)+신("node") 두 벌 + 사용자 tmux 훅 공존 → kit 항목만 각 1개, 사용자 훅 보존, 멱등.
+TMPHOME5=$(mktemp -d)
+mkdir -p "$TMPHOME5/.lively/hooks" "$TMPHOME5/.claude"
+cp "$HERE/sync-harness-assets.mjs" "$TMPHOME5/.lively/hooks/"
+cat > "$TMPHOME5/.claude/settings.json" <<'EOF'
+{"hooks":{"SessionStart":[
+  {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"node \"$HOME/.lively/hooks/session-preload.mjs\""}]},
+  {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"\"node\" \"$HOME/.lively/hooks/session-preload.mjs\""}]},
+  {"matcher":"startup|resume|clear","hooks":[{"type":"command","command":"\"node\" \"$HOME/.lively/hooks/sync-harness-assets.mjs\""}]}],
+"Stop":[
+  {"hooks":[{"type":"command","command":"tmux display-message ok"}]},
+  {"hooks":[{"type":"command","command":"node \"$HOME/.lively/hooks/run-custom.mjs\" Stop"}]},
+  {"hooks":[{"type":"command","command":"\"node\" \"$HOME/.lively/hooks/run-custom.mjs\" Stop"}]}]}}
+EOF
+run '' session-preload.mjs HOME="$TMPHOME5" LIVELY_TOKEN=dummy LIVELY_GATEWAY_URL=http://127.0.0.1:1
+SP_N=$(grep -c 'session-preload.mjs' "$TMPHOME5/.claude/settings.json")
+RC_N=$(grep -c 'run-custom.mjs' "$TMPHOME5/.claude/settings.json")
+SY_N=$(grep -c 'sync-harness-assets' "$TMPHOME5/.claude/settings.json")
+TM_N=$(grep -c 'tmux display-message' "$TMPHOME5/.claude/settings.json")
+KEPT_NEW=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const c=s.hooks.SessionStart.flatMap(e=>e.hooks.map(h=>h.command)).filter(x=>x.includes("session-preload"));process.stdout.write(c.length===1&&c[0].startsWith("\"node\"")?"1":"0")' "$TMPHOME5/.claude/settings.json")
+if [ $CODE -eq 0 ] && [ "$SP_N" = "1" ] && [ "$RC_N" = "1" ] && [ "$SY_N" = "1" ] && [ "$TM_N" = "1" ] && [ "$KEPT_NEW" = "1" ] && [ -f "$TMPHOME5/.claude/settings.json.bak-hook-dedup" ]; then
+  ok "preload⑦ 훅 중복 dedup — kit 각 1개(뒤=최근 유지)·사용자 훅 보존·백업"
+else bad "preload⑦ dedup" "code=$CODE sp=$SP_N rc=$RC_N sync=$SY_N tmux=$TM_N keptNew=$KEPT_NEW"; fi
+
+cp "$TMPHOME5/.claude/settings.json" "$TMPHOME5/before2.json"
+run '' session-preload.mjs HOME="$TMPHOME5" LIVELY_TOKEN=dummy LIVELY_GATEWAY_URL=http://127.0.0.1:1
+if [ $CODE -eq 0 ] && cmp -s "$TMPHOME5/.claude/settings.json" "$TMPHOME5/before2.json"; then
+  ok "preload⑦b dedup 멱등 — 재실행 무변경"
+else bad "preload⑦b dedup 멱등" "code=$CODE (파일 변경됨)"; fi
+rm -rf "$TMPHOME5"
+
 if [ "${LIVE:-0}" = "1" ]; then
   run '' session-preload.mjs
   if [ $CODE -eq 0 ] && printf '%s' "$OUT" | grep -q '미매핑'; then
