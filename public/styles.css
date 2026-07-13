@@ -4826,6 +4826,15 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 /* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */
 .dash-fb-row-go, .dash-fold-row-go { flex: none; color: var(--muted-2); font-size: 17px; line-height: 1; opacity: 0; transition: opacity .12s, transform .12s; }
 .dash-fb-row:hover .dash-fb-row-go, .dash-fold-row:hover .dash-fold-row-go, .dash-fold-row:focus-within .dash-fold-row-go { opacity: 1; transform: translateX(2px); }
+/* ── 팀 공유 폴더 — 파일·폴더 드래그앤드롭 업로드(#795). 프로젝트 공유 폴더(.card/.ov-box.drop-active)와 같은 점선 하이라이트. ── */
+/*  드롭존은 모달 오버레이 전체(배경 낙하 사고 방지)라, 하이라이트는 그 안의 모달 박스에 준다. */
+.dash-modal.drop-active, .dash-fb.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
+/* 업로드 중 — 조작만 잠근다. aria-busy(opacity .5)를 쓰면 진행 패널까지 흐려져 '멈춘 것'처럼 보인다. */
+.dash-fb[data-uploading="1"] { pointer-events: none; }
+.dash-fb-prog { display: flex; flex-direction: column; gap: 9px; padding: 26px 10px; min-height: 96px; justify-content: center; }
+.dash-fb-prog-label { font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-fb-prog-bar { height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
+.dash-fb-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
 /* ── 공유 폴더 위젯 목록 뷰(#670) — 아이콘 카드 대신 컴팩트 리스트(전체보기 목록과 톤 일치). ── */
 .dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
 .dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }

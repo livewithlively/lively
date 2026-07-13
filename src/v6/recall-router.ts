@@ -230,7 +230,7 @@ export async function routeRecall(input: RecallInput): Promise<RecallResult> {
       repoNames = (await q(itemsPool, `SELECT name FROM repo WHERE name IS NOT NULL AND COALESCE(state,'active')='active'`))
         .map((r) => r.name as string);
     } catch { repoNames = []; }
-    const catByUnitPath = new Map<string, number>();        // "<repo> <path>" → category_id
+    const catByUnitPath = new Map<string, number>();        // Read 한 파일의 절대경로 → category_id
     const domainByCat = new Map<number, DomainRow>(domains.map((d) => [d.id, d]));
     const orderedCats: number[] = [];                       // Read 순서 보존(최근이 앞) — dedup 하며 캡
 

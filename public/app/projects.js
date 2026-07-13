@@ -2882,7 +2882,7 @@ function pjvRenderFieldGroups(main, shownProjects, selList, opts, gb, sortArr, t
             groups.set(key, { label, sortVal, arr: [] });
         groups.get(key).arr.push(p);
     };
-    const NONE = ' none';
+    const NONE = '\u0000none'; // 그룹키 센티넬(실제 키와 절대 충돌 안 함). 리터럴 NUL 이 아니라 이스케이프 — 소스에 NUL 이 있으면 grep 이 파일을 바이너리로 보고 건너뛴다.
     for (const p of shownProjects) {
         if (gb.field === 'assignee') {
             const ms = (p.members || []);
@@ -10419,12 +10419,13 @@ async function upFromDrop(dt) {
 }
 // '＋ 업로드' 버튼 — 파일 / 폴더 선택 메뉴(폴더는 <input webkitdirectory> 로만 고를 수 있어 입력이 따로다).
 //  반환한 입력 두 개는 호출부가 헤더에 함께 append 한다(숨김 input).
-function upControl(onPick) {
+//  opts.className/label — 버튼 톤을 부르는 화면에 맞춘다(프로젝트 카드 = btn btn-ghost, 대시보드 브라우저 = dash-fb-btn, #795).
+function upControl(onPick, opts) {
     const fileIn = el('input', { type: 'file', multiple: '', style: 'display:none' });
     const dirIn = el('input', { type: 'file', multiple: '', webkitdirectory: '', style: 'display:none' });
     fileIn.addEventListener('change', () => { onPick(upFromInput(fileIn)); fileIn.value = ''; });
     dirIn.addEventListener('change', () => { onPick(upFromInput(dirIn)); dirIn.value = ''; });
-    const btn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 업로드' });
+    const btn = el('button', { class: (opts && opts.className) || 'btn btn-ghost btn-sm', type: 'button', text: (opts && opts.label) || '＋ 업로드' });
     btn.onclick = (e) => {
         e.stopPropagation();
         const menu = el('div', { class: 'pjv-menu' });
@@ -11372,4 +11373,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, };
