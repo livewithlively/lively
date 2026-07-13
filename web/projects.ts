@@ -4579,7 +4579,7 @@ function pjvProjEdgesField(p, reload, dir) {
       const pm = _pjvPmOpen;
       if (!pm || !link.closest('.pjv-pm')) return;
       ev.preventDefault();
-      pm.close(true);  // 교체일 뿐이니 뒤 화면(보드) 재렌더는 생략 — 새 모달이 곧 그 위를 덮는다
+      pm.close('swap');  // 교체일 뿐이니 뒤 화면(보드) 재렌더는 생략 — 새 모달이 곧 그 위를 덮는다. URL 항목은 새 모달이 이어받는다(#808)
       pjvOpenProjectModal(e.project_id, pm.pageReload);
     };
     const chip = el('span', { class: 'pjv-edge-chip' }, link);
@@ -4753,34 +4753,66 @@ function demoTerminalCard(members, meId) {
 //  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
 //  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
 //  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
-// 지금 열린 프로젝트 모달(항상 최대 1개) — 두 곳이 쓴다(#804):
-//  ① 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 '교체'(드릴인)  ② 라우트가 바뀌면 라우터가 닫는다(pjvCloseProjectModalOnRoute).
-let _pjvPmOpen: { close: (skipReload?: boolean) => void; pageReload?: any } | null = null;
+// 지금 열린 프로젝트 모달(항상 최대 1개) — 세 곳이 쓴다:
+//  ① 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 '교체'(드릴인, #804)
+//  ② 라우트가 바뀌면 라우터가 닫는다(pjvCloseProjectModalOnRoute, #804)
+//  ③ 모달이 소유한 URL(히스토리 항목)을 닫을 때 되돌린다(#808 — 아래 _pjvPmUrl)
+// 닫는 경로마다 URL·재렌더 처리가 달라 mode 로 구분한다(#808 — 옛 skipReload 불리언을 대체):
+//  'user'  ✕·Esc·배경클릭   → 우리가 넣은 히스토리 항목을 pop(뒤로) → 원래 URL 복귀 + 라우터가 뒤 화면을 다시 그림
+//  'route' 라우터가 닫음     → URL 은 이미 다른 곳으로 갔다 → 히스토리·재렌더 둘 다 손대지 않는다
+//  'page'  '전체 페이지로 ↗' → 같은 URL 에서 페이지가 렌더된다 → 항목은 그대로 두고 재렌더는 라우터에 맡긴다
+//  'swap'  선행/후속 드릴인  → 다음 모달이 같은 항목을 replaceState 로 이어받는다(히스토리가 안 쌓인다)
+type PjvPmClose = 'user' | 'route' | 'page' | 'swap';
+let _pjvPmOpen: { close: (mode?: PjvPmClose) => void; pageReload?: any } | null = null;
+// 모달이 소유한 히스토리 항목(#808) — 열 때 push 한 '#/projects2/p/<id>'. ret = 그 직전 해시(닫으면 돌아갈 곳).
+//  null = URL 을 소유하지 않음(push 실패했거나 이미 그 해시) → 닫을 때 히스토리를 건드리지 않는다.
+let _pjvPmUrl: { ret: string } | null = null;
 // 라우터(main.ts route())가 호출 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다. 안 닫으면 새 페이지가
 //  모달 뒤에 렌더돼 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일). 편집 중 본문은 모달이 닫히며 저장된다.
-function pjvCloseProjectModalOnRoute() { if (_pjvPmOpen) _pjvPmOpen.close(true); }
+function pjvCloseProjectModalOnRoute() { if (_pjvPmOpen) _pjvPmOpen.close('route'); }
 
 function pjvOpenProjectModal(projectId, pageReload?) {
+  // 주소는 지금 보고 있는 것을 가리킨다(#808) — 모달이 뜨면 URL 도 그 프로젝트가 된다(복사·공유·북마크가 통하고,
+  //  새로고침하면 같은 내용이 전체 페이지로 뜬다. 뒤로가기 = 모달 닫고 목록). pushState 는 hashchange 를 쏘지 않으므로
+  //  (#541 스코프 딥링크가 이미 기대는 사실) 라우터가 돌지 않는다 — 돌면 #804 의 '라우트가 바뀌면 모달을 닫는다'가
+  //  방금 연 모달을 닫아버리는 자충수가 된다.
+  const url = '#/projects2/p/' + projectId;
+  if (_pjvPmUrl) {
+    // 드릴인 교체(선행/후속 칩) — 앞 모달이 이미 항목을 소유 중이니 늘리지 말고 갈아끼운다(뒤로가기 한 번 = 목록).
+    try { history.replaceState(null, '', url); } catch (_) { /* noop */ }
+  } else if (location.hash !== url) {
+    const ret = location.hash || '#/';
+    try { history.pushState(null, '', url); _pjvPmUrl = { ret }; } catch (_) { /* noop */ }
+  }
+
   const back = el('div', { class: 'pjv-pm-back' });
   const box = el('div', { class: 'pjv-pm' });
   const bodyEl = el('div', { class: 'pjv-pm-body' });
-  const fullLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + projectId,
+  const fullLink = el('a', { class: 'btn btn-ghost btn-sm', href: url,
     text: '전체 페이지로 ↗', title: '이 프로젝트를 전체 페이지로 열기' });
   const closeBtn = el('button', { class: 'pjv-pm-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', text: '✕' });
   box.append(el('div', { class: 'pjv-pm-head' }, fullLink, closeBtn), bodyEl);
   back.append(box);
 
   let closed = false;
-  // skipReload=true — 라우터가 닫거나(곧 $view 를 새로 그린다) 다른 프로젝트로 교체(드릴인)하는 경우.
-  //  그때 pageReload(대시보드·보드 재렌더)를 돌리면 새로 그려질 화면과 레이스가 나거나 헛일이 된다.
-  function closeModal(skipReload?: boolean) {
+  function closeModal(mode: PjvPmClose = 'user') {
     if (closed) return;
     closed = true;
     if (_pjvPmOpen && _pjvPmOpen.close === closeModal) _pjvPmOpen = null;
     document.removeEventListener('keydown', onKey, true);
     document.body.classList.remove('pjv-pm-open');
     back.remove();
-    if (pageReload && !skipReload) pageReload(); // 모달 안에서 고친 내용이 대시보드 목록에 반영되도록
+    // URL 되돌리기(#808) — 우리가 넣은 항목을 pop 하면 원래 해시(보드·대시보드)로 돌아가고, 그 hashchange 로 라우터가
+    //  뒤 화면을 새로 그린다 → pageReload(모달 안 수정을 목록에 반영)는 그 재렌더가 대신하므로 생략한다(이중 렌더·중복
+    //  fetch 방지 — #804 가 라우터 close 에서 편 논리와 같다). 'route'(이미 다른 데로 이동)·'page'(같은 URL 에서 페이지가
+    //  렌더됨)에서 히스토리를 되돌리면 사용자를 엉뚱한 곳으로 돌려보내게 된다 → 항목만 놓아준다. 'swap' 은 다음 모달이 이어받는다.
+    let popped = false;
+    if (mode === 'user') {
+      if (_pjvPmUrl) { _pjvPmUrl = null; try { history.back(); popped = true; } catch (_) { /* noop */ } }
+    } else if (mode !== 'swap') {
+      _pjvPmUrl = null;
+    }
+    if (pageReload && mode === 'user' && !popped) pageReload(); // 모달 안에서 고친 내용이 대시보드 목록에 반영되도록
   }
   // Esc — 중첩 팝업(태스크 모달·팝오버·오버레이·블록에디터 팝업)이 떠 있으면 그쪽이 먼저 처리하고 이 모달은 유지.
   function onKey(e) {
@@ -4790,7 +4822,16 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   }
   back.addEventListener('mousedown', (e) => { if (e.target === back) closeModal(); }); // 배경 클릭
   closeBtn.onclick = (e) => { e.stopPropagation(); closeModal(); };
-  fullLink.onclick = () => closeModal(true); // 전체 페이지로 나갈 땐 모달을 닫는다(라우터가 곧 그 페이지를 그리므로 재렌더는 생략)
+  // '전체 페이지로 ↗' — 모달을 닫고 같은 주소에서 전체 페이지를 그린다. URL 은 이미 이 프로젝트라(#808) 앵커를 그대로
+  //  두면 해시가 안 바뀌어 hashchange 가 안 뜨고 → 라우터가 안 돌아 '눌러도 아무 일 없는' 죽은 클릭이 된다(#804 부류).
+  //  라우터를 직접 깨운다(undo.ts rerenderRoute 와 같은 방식). ⌘/Ctrl/Shift/중클릭 은 브라우저 기본(새 탭) — 모달은 유지.
+  fullLink.onclick = (e: any) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    closeModal('page'); // 라우터가 곧 그 페이지를 그리므로 재렌더는 생략. 히스토리 항목은 그대로(이제 페이지가 그 URL 의 주인)
+    if (location.hash === url) window.dispatchEvent(new HashChangeEvent('hashchange'));
+    else location.hash = url; // URL 동기화가 안 된 예외(pushState 실패 등) — 평소대로 해시 이동
+  };
   document.addEventListener('keydown', onKey, true);
   document.body.append(back);
   document.body.classList.add('pjv-pm-open');

@@ -71,6 +71,31 @@ s = readS();
 const bashKept = (s.hooks.PostToolUse || []).some((e) => e.matcher === "Bash");
 bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad("⑤ matcher 격리", "Bash 항목 소실");
 
+// ⑥ 심링크 경로 직접 실행 — macOS /tmp(→/private/tmp) 재현: 설치기 main 이 실제로 돌아야 한다(v0.1.131 회귀 방지).
+//   가드가 URL 문자열 비교면 심링크에서 main 이 조용히 스킵돼 설치가 no-op 이 된다.
+{
+  const { symlinkSync, cpSync, existsSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const HERE = join(fileURLToPath(import.meta.url), "..");
+  const box = mkdtempSync(join(tmpdir(), "ui-sym-"));
+  const bundle = join(box, "real", "bundle");
+  mkdirSync(join(bundle, ".claude", "hooks"), { recursive: true });
+  cpSync(join(HERE, "..", "hooks"), join(bundle, ".claude", "hooks"), { recursive: true });
+  cpSync(HERE, join(bundle, "setup"), { recursive: true });
+  symlinkSync(join(box, "real"), join(box, "link"));
+  const home = join(box, "home");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", "settings.json"), "{}\n");
+  execFileSync(process.execPath, [join(box, "link", "bundle", "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", join(box, "link", "bundle")],
+    { env: { ...process.env, LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude") }, stdio: "ignore" });
+  const after = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  const n = countHooks(after);
+  const hooksInstalled = existsSync(join(home, ".lively", "hooks", "sync-harness-assets.mjs"));
+  n > 0 && hooksInstalled ? ok(`⑥ 심링크 경로 실행에도 main 수행 (${n}개 배선+러너 설치)`) : bad("⑥ 심링크 직접실행", `count=${n} hooks=${hooksInstalled}`);
+  rmSync(box, { recursive: true, force: true });
+}
+
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`user-install tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);

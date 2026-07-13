@@ -386,7 +386,18 @@ function pjvOpenTaskModal(taskId, pageReload) {
     function pjvtmMain(d, t, members, refresh, closeModal, pageReload) {
         const main = el('div', { class: 'pjv-tm-main' });
         // 상단바: 브레드크럼(프로젝트 / 상위태스크 / …) + 닫기. 하위태스크면 직전 층위(상위 태스크)까지 하이퍼링크(#139-5).
-        main.append(el('div', { class: 'pjv-tm-top' }, el('div', { class: 'pjv-tm-crumb' }, d.project ? el('a', { class: 'pjv-tm-crumb-link', href: '#/projects2/p/' + d.project.id, text: d.project.name, onclick: () => closeModal() }) : null, d.project ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null, d.parent ? el('a', { class: 'pjv-tm-crumb-link', href: '#', title: '상위 태스크로 돌아가기',
+        main.append(el('div', { class: 'pjv-tm-top' }, el('div', { class: 'pjv-tm-crumb' }, 
+        // 프로젝트 크럼 — 그 프로젝트로 간다. 단, 프로젝트 모달 위에 겹쳐 뜬 태스크 모달(또는 프로젝트 페이지 위)이면
+        //  주소가 이미 그 프로젝트다(#808) → 같은 URL 앵커 클릭은 hashchange 를 쏘지 않아(Chrome 실측) 라우터가 돌지 않는다
+        //  = 아무 데도 안 간다. 명시적으로 막고 태스크 모달만 닫아 그 프로젝트(모달·페이지)를 드러낸다 — 크럼의 뜻 그대로다.
+        //  (히스토리 항목은 Chrome 에선 안 늘지만 브라우저마다 다를 수 있어 기본동작에 기대지 않는다.)
+        d.project ? (() => {
+            const href = '#/projects2/p/' + d.project.id;
+            const a = el('a', { class: 'pjv-tm-crumb-link', href, text: d.project.name });
+            a.onclick = (e) => { if (location.hash === href)
+                e.preventDefault(); closeModal(); };
+            return a;
+        })() : null, d.project ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null, d.parent ? el('a', { class: 'pjv-tm-crumb-link', href: '#', title: '상위 태스크로 돌아가기',
             text: d.parent.name,
             onclick: (e) => { e.preventDefault(); dirty = true; closeModal(); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null, d.parent ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null), el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
         // 타입 pill + 하위수 + 원본 링크(#541) — 외부 이관 태스크(external_url)면 원 시스템으로 새 탭 점프.
