@@ -67,6 +67,13 @@ await ta("SSRF: http(평문)는 원격 금지(https 전용)", async () => {
 await ta("SSRF: 게이트웨이 자기자신(self-host) 차단 — confused-deputy", async () => {
   await rejectsWith(() => F("https://gw.example.com/mcp"), /자기 자신/);
 });
+await ta("SSRF: self-host trailing-dot 우회 차단(정규화)", async () => {
+  await rejectsWith(() => F("https://gw.example.com./mcp"), /자기 자신/); // DNS 등가 후행점으로 문자열검사 우회 시도
+});
+await ta("SSRF: self-host 를 해소 IP(리터럴)로 우회해도 차단", async () => {
+  const Fip = makeSsrfFetch({ allowedInternalHosts: [], selfHosts: ["93.184.216.34"] }); // 공인 IP 를 self 로
+  await rejectsWith(() => Fip("https://93.184.216.34/mcp"), /자기 자신/); // 핀된 IP 가 self IP 집합에 속함
+});
 await ta("SSRF: 잘못된 URL 거부", async () => {
   await rejectsWith(() => F("not-a-url"), /잘못된 URL/);
 });
