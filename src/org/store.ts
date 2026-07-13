@@ -730,6 +730,7 @@ export interface McpServer {
   pii_scrub: boolean;
   auth_kind: string | null;
   auth_scope_key: string | null;
+  auth_mode: "bearer" | "oauth" | null; // T2: null/bearer=정적토큰, oauth=per-member OAuth 브로커
 }
 
 function mapMcp(row: Record<string, unknown>): McpServer {
@@ -753,10 +754,11 @@ function mapMcp(row: Record<string, unknown>): McpServer {
     pii_scrub: row.pii_scrub === true,
     auth_kind: (row.auth_kind as string) ?? null,
     auth_scope_key: (row.auth_scope_key as string) ?? null,
+    auth_mode: (row.auth_mode as McpServer["auth_mode"]) ?? null,
   };
 }
 
-const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, auth_kind, auth_scope_key";
+const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode";
 
 export async function listMcpServers(): Promise<McpServer[]> {
   const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server ORDER BY sort, name`);
@@ -783,6 +785,7 @@ export interface McpServerInput {
   pii_scrub?: boolean;
   auth_kind?: string | null;
   auth_scope_key?: string | null;
+  auth_mode?: "bearer" | "oauth" | null;
 }
 
 export async function upsertMcpServer(m: McpServerInput, actor?: string, source?: string): Promise<McpServer> {
@@ -796,13 +799,13 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
   const authKind = m.auth_kind !== undefined ? (m.auth_kind || null) : (before?.auth_kind ?? null);
   const authEnv = authKind ? null : (m.auth_env ?? before?.auth_env ?? null);
   await itemsPool.query(
-    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
+    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
      ON CONFLICT (name) DO UPDATE SET
        transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
        note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        mode=EXCLUDED.mode, scope=EXCLUDED.scope, level=EXCLUDED.level, pii_scrub=EXCLUDED.pii_scrub,
-       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key,
+       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, auth_mode=EXCLUDED.auth_mode,
        version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.name, transport, url, command,
      authEnv, m.note ?? before?.note ?? null,
@@ -811,6 +814,7 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
      m.level !== undefined ? m.level : (before?.level ?? null),
      m.pii_scrub !== undefined ? !!m.pii_scrub : (before?.pii_scrub ?? false),
      authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
+     m.auth_mode !== undefined ? (m.auth_mode || null) : (before?.auth_mode ?? null),
      actor ?? null],
   );
   // url/mode 변경 시 pinned tools_snapshot 무효화(#746 리뷰) — 옛 상류 기준 툴 정체성/목적지 불일치 방지.

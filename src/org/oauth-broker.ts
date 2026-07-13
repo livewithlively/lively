@@ -191,6 +191,18 @@ async function loadProxyServer(name: string): Promise<{ url: string; authKind: s
   return { url: s.url, authKind: s.auth_kind, scopeKey: s.auth_scope_key ?? "", clientName: `Lively Gateway (${name})` };
 }
 
+// 호출/새로고침 경로용 provider 팩토리 — 이미 서버 행을 쥔 호출자(mcp-proxy)가 DB 왕복 없이 provider 를 얻는다.
+//  토큰 해소/자동 refresh 는 SDK 가 이 provider 로 수행(tokens()/saveTokens()). state/consent 는 이 경로에선 미사용.
+export async function providerForServer(
+  memberId: string,
+  server: { name: string; auth_kind: string | null; auth_scope_key?: string | null },
+  actor?: string,
+): Promise<VaultOAuthProvider> {
+  if (!server.auth_kind) throw new Error(`'${server.name}' 은 auth_kind(OAuth) 설정이 없습니다`);
+  const redirectUrl = await callbackUrl();
+  return new VaultOAuthProvider({ memberId, serverName: server.name, authKind: server.auth_kind, tokenScopeKey: server.auth_scope_key ?? "", redirectUrl, actor });
+}
+
 export interface ConsentStart { authorized: boolean; authorizationUrl?: string; state?: string }
 // 동의 개시 — PKCE·서명 state 로 authorization URL 생성(브라우저 오픈용). 이미 토큰 있으면 authorized:true.
 export async function startConsent(memberId: string, serverName: string, actor?: string): Promise<ConsentStart> {

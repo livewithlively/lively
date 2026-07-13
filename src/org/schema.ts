@@ -180,6 +180,8 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
+    -- auth_mode(#746 T2): 'bearer'(정적토큰, 기본) | 'oauth'(per-member OAuth 브로커 — 토큰 생명주기·refresh 를 게이트웨이가 관리).
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_mode TEXT;
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_mode_chk') THEN
@@ -188,6 +190,10 @@ export async function initOrgSchema(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_level_chk') THEN
         ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_level_chk CHECK (level IS NULL OR level IN ('L0','L1','L2'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid='org_mcp_server'::regclass AND conname='org_mcp_server_auth_mode_chk') THEN
+        ALTER TABLE org_mcp_server ADD CONSTRAINT org_mcp_server_auth_mode_chk CHECK (auth_mode IS NULL OR auth_mode IN ('bearer','oauth'));
       END IF;
     END $$;
   `);
