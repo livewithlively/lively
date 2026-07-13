@@ -4249,8 +4249,8 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             lead.click();
         }
         else {
-            location.hash = '#/projects2/p/' + p.id;
-        }
+            pjvOpenProjectModal(p.id, reload);
+        } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
     };
     // 펼침 캐럿 — 태스크가 있는 프로젝트만(클릭 시 그 프로젝트의 태스크를 안에 펼침). 선택모드/모드없음/0개면 빈 캐럿.
     const nTasks = Number(p.task_count || 0);
@@ -4275,8 +4275,8 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             lead.click();
         }
         else {
-            location.hash = '#/projects2/p/' + p.id;
-        }
+            pjvOpenProjectModal(p.id, reload);
+        } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
     });
     const row = el('div', { class: 'pjv-trow pjv-proj-row' }, titleCell, el('div', { class: 'pjv-tcell', 'data-col': 'team' }, pjvProjTeamControl(p.members || [], (ids) => pjvSaveProjMembers(p.id, ids))), el('div', { class: 'pjv-tcell', 'data-col': 'due' }, pjvDueControl(p, (patch) => projPatch(p.id, patch, reload))), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'start' }, el('span', { class: 'pjv-fval', text: p.start_date ? pjvFmtDate(p.start_date) : '' })), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'created' }, el('span', { class: 'pjv-fval', text: p.created_at ? pjvFmtDate(p.created_at) : '' })), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'updated' }, el('span', { class: 'pjv-fval', text: p.updated_at ? pjvFmtDate(p.updated_at) : '' })), el('div', { class: 'pjv-tcell', 'data-col': 'priority' }, pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), el('div', { class: 'pjv-tcell pjv-sess-cell', 'data-col': 'sess' }, pjvProjSessionCell(p, reload)), ...(fields).map((f) => el('div', { class: 'pjv-tcell pjv-fcell', 'data-col': 'f:' + f.id }, pjvFieldControl(p, f, reload))), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvProjMore(p, reload, canDelete)));
     row.style.gridTemplateColumns = pjvProjGridTemplate(fields);
@@ -5637,6 +5637,48 @@ function demoTerminalCard(members, meId) {
     const person = (m) => el('div', { class: 'proj-person' }, personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id), el('div', { class: 'proj-person-name', text: m.display_name || m.member_id }), el('div', { class: 'proj-person-status empty', text: m.member_id === meId ? '✎ 상태 남기기' : '' }));
     card.append(el('div', { class: 'proj-people-grid' }, ...members.map(person)));
     return card;
+}
+// 프로젝트 상세 팝업 — 대시보드 '내 프로젝트' 행 클릭 시 페이지로 튀지 않고 모달로 연다. 상세를 **그대로**(축약 없이)
+//  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
+//  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
+//  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
+function pjvOpenProjectModal(projectId, pageReload) {
+    const back = el('div', { class: 'pjv-pm-back' });
+    const box = el('div', { class: 'pjv-pm' });
+    const bodyEl = el('div', { class: 'pjv-pm-body' });
+    const fullLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + projectId,
+        text: '전체 페이지로 ↗', title: '이 프로젝트를 전체 페이지로 열기' });
+    const closeBtn = el('button', { class: 'pjv-pm-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', text: '✕' });
+    box.append(el('div', { class: 'pjv-pm-head' }, fullLink, closeBtn), bodyEl);
+    back.append(box);
+    let closed = false;
+    function closeModal() {
+        if (closed)
+            return;
+        closed = true;
+        document.removeEventListener('keydown', onKey, true);
+        document.body.classList.remove('pjv-pm-open');
+        back.remove();
+        if (pageReload)
+            pageReload(); // 모달 안에서 고친 내용이 대시보드 목록에 반영되도록
+    }
+    // Esc — 중첩 팝업(태스크 모달·팝오버·오버레이·블록에디터 팝업)이 떠 있으면 그쪽이 먼저 처리하고 이 모달은 유지.
+    function onKey(e) {
+        if (e.key !== 'Escape')
+            return;
+        if (document.querySelector('.pjv-tm-back, .pjv-pop, .ov-back, .be-slash, .be-turnpop, .be-linkpop, .be-blockmenu, .be-mentionmenu'))
+            return;
+        closeModal();
+    }
+    back.addEventListener('mousedown', (e) => { if (e.target === back)
+        closeModal(); }); // 배경 클릭
+    closeBtn.onclick = (e) => { e.stopPropagation(); closeModal(); };
+    fullLink.onclick = () => closeModal(); // 전체 페이지로 나갈 땐 모달을 닫는다
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(back);
+    document.body.classList.add('pjv-pm-open');
+    renderProjectV2Detail(bodyEl, String(projectId)); // 페이지와 동일한 렌더러 → 내용 축약 없음
+    return closeModal;
 }
 async function renderProjectV2Detail(view, idStr) {
     if (idStr === '__demo__')
@@ -11330,4 +11372,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUpload, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, };
