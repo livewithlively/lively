@@ -15,6 +15,7 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { assertSafeJsonSchema } from "./dynamic-tools.js";
+import { refreshProxySnapshot } from "./mcp-proxy.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
 import { previewMemberContext, runPublish } from "../org/publish.js";
@@ -739,6 +740,7 @@ export const deliveryCapabilities: Capability[] = [
       const patch: {
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
+        allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
       } = {};
@@ -772,6 +774,11 @@ export const deliveryCapabilities: Capability[] = [
       if (input.allowed_db_hosts !== undefined) {
         if (!Array.isArray(input.allowed_db_hosts)) throw new HttpError(400, "allowed_db_hosts 는 배열이어야 합니다");
         patch.allowed_db_hosts = input.allowed_db_hosts.map((h) => str(h, "allowed_db_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
+      }
+      // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(#746 T1) — 기본 deny-all, 여기 명시한 host 만 SSRF 면제.
+      if (input.allowed_internal_hosts !== undefined) {
+        if (!Array.isArray(input.allowed_internal_hosts)) throw new HttpError(400, "allowed_internal_hosts 는 배열이어야 합니다");
+        patch.allowed_internal_hosts = input.allowed_internal_hosts.map((h) => str(h, "allowed_internal_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
       }
       // db 소스 auth_ref 가 참조할 수 있는 비번 env '이름' 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
       //  외부(비번 필요) 소스 등록이 불가능했다). allowed_auth_envs 와 동일한 env 이름 형식 검증. 값이 아니라 이름만.
@@ -842,6 +849,7 @@ export const deliveryCapabilities: Capability[] = [
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
+      allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
     }),
@@ -973,7 +981,6 @@ export const deliveryCapabilities: Capability[] = [
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const { refreshProxySnapshot } = await import("./mcp-proxy.js");
       const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
       return { ok: true, tool_count: r.count };
     }),

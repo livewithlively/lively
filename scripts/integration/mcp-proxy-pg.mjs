@@ -10,7 +10,8 @@ import path from "node:path";
 if (!process.env.ITEMS_DATABASE_URL) { console.error("ITEMS_DATABASE_URL 미설정(스크래치 pg)"); process.exit(2); }
 if (!process.env.CONNECTOR_SECRET_KEY) { console.error("CONNECTOR_SECRET_KEY 미설정"); process.exit(2); }
 if (!process.env.LOOPBACK_TOKEN) { console.error("LOOPBACK_TOKEN 미설정(상류 /mcp 인증용)"); process.exit(2); }
-const UP = process.env.LOOPBACK_URL || "http://localhost:8080/mcp";
+const UP = process.env.LOOPBACK_URL || "http://127.0.0.1:8080/mcp"; // 상류=루프백(사설) — 기본 SSRF 차단, allowed_internal_hosts 로 opt-in
+const UP_HOST = new URL(UP).hostname.toLowerCase();
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../dist");
 const { initOrgSchema } = await import(path.join(DIST, "org/schema.js"));
 const { itemsPool } = await import(path.join(DIST, "items/store.js"));
@@ -33,6 +34,19 @@ try {
   }, "admin", "web");
   const srv = await store.getMcpServer("selfloop");
   if (srv.mode !== "proxy" || srv.auth_kind !== "selfloop" || srv.auth_env !== null) throw new Error("proxy 필드 왕복 실패 " + JSON.stringify(srv));
+  ok(step);
+
+  step = "②b SSRF 가드 — allowed_internal_hosts 미등록 시 루프백(사설) 상류는 차단(fail-closed)";
+  let blocked = false;
+  try { await proxy.refreshProxySnapshot("selfloop", "admin"); }
+  catch (e) { if (/차단된 host|허용되지 않은 scheme/.test(String(e.message))) blocked = true; else throw e; }
+  if (!blocked) throw new Error("사설 상류가 SSRF 가드 없이 접속됨(가드 미작동)");
+  ok(step);
+
+  step = "②c 운영자 opt-in — allowed_internal_hosts 에 상류 host 등록(내부 MCP 허용)";
+  await store.updateRuntimeConfig({ allowed_internal_hosts: [UP_HOST] }, "admin", "web");
+  const rc = await store.getRuntimeConfig();
+  if (!rc.allowed_internal_hosts.includes(UP_HOST)) throw new Error("allowed_internal_hosts 저장 실패");
   ok(step);
 
   step = "③ refreshProxySnapshot — 상류 접속·tools/list 캡처·핀 저장";

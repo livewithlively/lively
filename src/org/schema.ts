@@ -454,6 +454,13 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_db_hosts JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
+  // ── org_runtime_config 확장(#746 T1): MCP 프록시가 접속 가능한 '내부(사설/localhost)' host 화이트리스트(deny-all 기본). ──
+  // 프록시 대상 remote MCP 는 기본 공인 https 만 — 사설/메타데이터/loopback 은 SSRF 로 차단. 격리 VPC 내부 MCP 서버처럼
+  //  정당한 사설 대상은 운영자가 admin 으로 여기에 명시한 host 만 예외 허용(allowed_db_hosts 와 동형 — 신뢰경계를 운영자에 고정).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allowed_internal_hosts JSONB NOT NULL DEFAULT '[]'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: write_tools — work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록. ──
   // 비면(기본 '[]') 훅 내장 v6 기본목록 사용(writeback_notice 와 동형 오버라이드). 온톨로지 변경 시 재배포 없이 웹에서 갱신.
   await itemsPool.query(`

@@ -601,6 +601,7 @@ export interface OrgRuntimeConfig {
   url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
   allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
   allowed_db_hosts: string[]; // db 소스가 접속 가능한 host 화이트리스트(소문자, deny-all 기본) — 사설/localhost SSRF 면제 대상
+  allowed_internal_hosts: string[]; // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(소문자, deny-all 기본) — #746 T1
   write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   version: number;
@@ -613,7 +614,7 @@ const strArrSafe = (v: unknown): string[] =>
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -630,6 +631,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     url_allowlist: strArrSafe(row?.url_allowlist).map((s) => s.toLowerCase()),
     allowed_db_secret_refs: strArrSafe(row?.allowed_db_secret_refs),
     allowed_db_hosts: strArrSafe(row?.allowed_db_hosts).map((s) => s.toLowerCase()),
+    allowed_internal_hosts: strArrSafe(row?.allowed_internal_hosts).map((s) => s.toLowerCase()),
     write_tools: strArrSafe(row?.write_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     version: (row?.version as number) ?? 1,
@@ -647,6 +649,7 @@ export async function updateRuntimeConfig(
     url_allowlist?: string[];
     allowed_db_secret_refs?: string[];
     allowed_db_hosts?: string[];
+    allowed_internal_hosts?: string[];
     write_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
   },
@@ -662,6 +665,7 @@ export async function updateRuntimeConfig(
   const urlAllowlist = patch.url_allowlist !== undefined ? patch.url_allowlist.map((s) => s.toLowerCase()) : before.url_allowlist;
   const allowedDbSecretRefs = patch.allowed_db_secret_refs !== undefined ? patch.allowed_db_secret_refs : before.allowed_db_secret_refs;
   const allowedDbHosts = patch.allowed_db_hosts !== undefined ? patch.allowed_db_hosts.map((s) => s.toLowerCase()) : before.allowed_db_hosts;
+  const allowedInternalHosts = patch.allowed_internal_hosts !== undefined ? patch.allowed_internal_hosts.map((s) => s.toLowerCase()) : before.allowed_internal_hosts;
   const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
@@ -677,15 +681,16 @@ export async function updateRuntimeConfig(
     embeddingConfig = (raw.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, write_tools, embedding_config, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,1,now(),$10)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, embedding_config, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,1,now(),$11)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
+       allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, embedding_config=EXCLUDED.embedding_config,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(embeddingConfig), actor ?? null],
   );
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
@@ -808,6 +813,11 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
      authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
      actor ?? null],
   );
+  // url/mode 변경 시 pinned tools_snapshot 무효화(#746 리뷰) — 옛 상류 기준 툴 정체성/목적지 불일치 방지.
+  //  listProxyServers 는 snapshot NOT NULL 만 노출하므로, 재발행(refresh)까지 이 서버는 프록시 등록에서 빠진다(fail-safe).
+  if (before && (before.url !== url || before.mode !== mode)) {
+    await itemsPool.query(`UPDATE org_mcp_server SET tools_snapshot=NULL, snapshot_at=NULL WHERE name=$1`, [m.name]);
+  }
   const after = await getMcpServer(m.name);
   await audit("org_mcp_server", m.name, before ? "update" : "insert", before, after, actor, source);
   return after as McpServer;
