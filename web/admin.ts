@@ -4005,7 +4005,8 @@ async function credentialsEditor(detail) {
       encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
   ];
 
-  cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', mine.credentials || [], encReady, () => credentialsEditor(detail)));
+  // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
+  cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
 
   if ((oauthConns.connectors || []).length) cards.push(oauthConnectorsCard(oauthConns.connectors, () => credentialsEditor(detail)));
 
