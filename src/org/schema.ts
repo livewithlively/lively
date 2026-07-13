@@ -8,7 +8,9 @@
 import { itemsPool } from "../items/store.js";
 
 export async function initOrgSchema(): Promise<void> {
-  // ── org_profile — 단일 행(id=1): 조직 표시명 + 게이트웨이 주소. ──
+  // ── org_profile — 단일 행(id=1): 조직 표시명 + 게이트웨이 주소 + 시간대. ──
+  //  timezone(#778): 게이트웨이의 벽시계 의미론(cron·일자집계·세션 pane TZ) 기준. NULL=미설정 → 코드 기본값
+  //  (org/timezone.ts DEFAULT_TZ). DB DEFAULT 를 안 박는 이유 = 기본값 출처를 한 곳(코드)으로 유지.
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS org_profile(
       id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -19,6 +21,7 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     INSERT INTO org_profile(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+    ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS timezone TEXT;
   `);
 
   // org_content/org_memory 폐기(2026-06-24) — v6 knowledge 컷오버 완료(store 함수=v6 래퍼). knowledge_unit 복사 후 원본 DROP.

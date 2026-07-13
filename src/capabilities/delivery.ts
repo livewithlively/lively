@@ -17,6 +17,7 @@ import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
+import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
@@ -331,15 +332,22 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/learn"], parse: () => ({}) }],
     async () => learnGroundTruth()),
 
-  // ── 프로필(표시명·게이트웨이 주소) ──
+  // ── 프로필(표시명·게이트웨이 주소·시간대) ──
   restOnly("org_update_profile", "조직 프로필 수정",
-    "조직 표시명/게이트웨이 주소를 수정한다.",
+    "조직 표시명/게이트웨이 주소/시간대를 수정한다. timezone 은 IANA 존(예 Asia/Seoul) — 스케줄러 cron 의 벽시계 기준이자 웹터미널 세션의 TZ.",
     [{ method: "POST", paths: ["/api/ui/org/profile"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const patch: { name?: string; display_name?: string; gateway_url?: string } = {};
+      const patch: { name?: string; display_name?: string; gateway_url?: string; timezone?: string } = {};
       if (input.name !== undefined) patch.name = str(input.name, "name", 200).trim();
       if (input.display_name !== undefined) patch.display_name = str(input.display_name, "display_name", 200).trim();
       if (input.gateway_url !== undefined) patch.gateway_url = str(input.gateway_url, "gateway_url", 500).trim();
+      // 시간대(#778) — 저장 전 IANA 검증. 빈 값 = 기본값(DEFAULT_TZ)으로 되돌림.
+      //  이 값은 cron 해석·일자 집계·세션 pane TZ 로 흘러가므로 여기가 유일한 진입 게이트다.
+      if (input.timezone !== undefined) {
+        const tz = str(input.timezone, "timezone", 64).trim();
+        if (tz && !isValidTimezone(tz)) throw new HttpError(400, `알 수 없는 시간대입니다: '${tz}' (IANA 존 — 예: Asia/Seoul, UTC)`);
+        patch.timezone = tz || DEFAULT_TZ;
+      }
       return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
     }),
 

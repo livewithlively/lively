@@ -72,6 +72,16 @@ export const MEANING: Record<string, FieldMeaning> = {
     example: "서버를 옮겨 주소를 바꾸면, 구성원이 재설치한 뒤부터 새 주소에서 라이브 현황을 받습니다(연결 실패 시엔 정적 컨텍스트만 — 안전).",
     tone: "infra",
   },
+  "timezone": {
+    key: "timezone",
+    label: "조직 시간대",
+    what: "게이트웨이가 '벽시계'를 읽는 기준입니다(IANA 존 — 예: Asia/Seoul). 서버 머신의 OS 시간대와 무관하게 여기서 정합니다.",
+    reach: "스케줄러(자동화) 잡 · 웹터미널 세션 · 일자별 통계",
+    when: "스케줄러는 즉시, 웹터미널 세션은 **새로 만든 세션**부터(이미 떠 있는 세션은 재생성해야 반영).",
+    where: "cron 식('0 9 * * *' = 아침 9시)이 어느 시간대의 9시인지, 세션 안 클로드코드가 크레딧 리셋 시각을 몇 시로 보여줄지를 결정합니다.",
+    example: "박스가 UTC 인데 여기를 Asia/Seoul 로 두면, '0 9 * * *' 잡은 (UTC 09시가 아니라) 한국 시간 09시에 돌고 세션 안 시각도 한국 시간으로 뜹니다.",
+    tone: "infra",
+  },
   "runtime": {
     key: "runtime",
     label: "훅 · 작업 폴더(work-roots)",
