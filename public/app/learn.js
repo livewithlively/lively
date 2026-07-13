@@ -31,9 +31,9 @@ const DOCS_NAV = [
             { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
             { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
         ] },
-    // 읽는 문서가 아니라 '직접 해보는' 화면 둘 — 설치 명령을 만들고, 실제 화면 위 투어를 켠다(#780).
+    // 읽는 문서가 아니라 '직접 해보는' 화면 둘 — 세션을 어디서 열지 고르고(웹/내 PC), 실제 화면 위 투어를 켠다(#780).
     { group: '직접 해보기', items: [
-            { key: 'install', label: '내 컴퓨터에 연결 (설치)', href: '#/learn/install' },
+            { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
             { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
         ] },
     { group: '레퍼런스', items: [
@@ -69,7 +69,7 @@ function docsEyebrow(key) {
 //  문서가 히어로·WIKI 설명 카드와 '같이 만든 물건'으로 보이려면, 흘러가는 마크다운이 아니라 제품의 카드 문법이어야 한다:
 //  ## 섹션 하나 = .card 하나(card-head h2 + guide-lead + 구조화된 본문). 첫 H2 앞 도입부는 카드 밖 리드(히어로 리드).
 //  카피는 손대지 않는다 — 같은 문장을 제품의 시각 언어(피처 카드·번호 단계·이동 카드)로 다시 조판할 뿐이다.
-function docsBody(md) {
+function docsBody(md, ...lead) {
     const secs = [{ title: null, lines: [] }];
     let fence = false, depth = 0;
     for (const line of String(md || '').split('\n')) {
@@ -86,7 +86,7 @@ function docsBody(md) {
         }
         secs[secs.length - 1].lines.push(line);
     }
-    const cards = el('div', { class: 'guide-cards' });
+    const cards = el('div', { class: 'guide-cards' }, ...lead.filter(Boolean)); // 히어로 등 앞머리 카드도 같은 흐름(간격 통일)
     for (const s of secs) {
         const body = s.lines.join('\n').trim();
         if (!body)
@@ -158,6 +158,12 @@ function docsDecorate(root) {
             ul.replaceWith(grid);
         }
     }
+    // ⑤ 표 — 가로 스크롤 래퍼로 감싼다(좁은 화면에서 카드를 밀지 않게). 폭·정렬은 CSS(.docs-tablewrap).
+    for (const t of Array.from(root.querySelectorAll('table.md-table'))) {
+        const wrap = el('div', { class: 'docs-tablewrap' });
+        t.replaceWith(wrap);
+        wrap.append(t);
+    }
     // ④ 번호 단계 — 순서 목록을 제품의 번호 뱃지 줄(guide-path)로
     for (const ol of Array.from(root.querySelectorAll('ol.md-list'))) {
         const steps = el('div', { class: 'docs-steps' });
@@ -213,14 +219,13 @@ async function renderLearn(view) {
         return;
     }
     const page = DOC_PAGES.find((p) => p.slug === 'overview');
-    docsShell(view, 'overview', el('div', { class: 'guide-cards' }, heroCard()), // 히어로도 같은 카드 흐름 안에 — 아래 섹션 카드들과 같은 간격
-    docsBody(page ? page.md : ''));
+    docsShell(view, 'overview', docsBody(page ? page.md : '', heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
 }
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
 function heroCard() {
     return el('div', { class: 'card guide-hero' }, el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }), el('h2', { class: 'guide-hero-title' }, '한마디로, 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'), el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }), 
     // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
-    el('div', { class: 'guide-cycle' }, el('div', { class: 'guide-flow' }, flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'), flowArrow(), flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'), flowArrow(), flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'), flowArrow(), flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')), el('div', { class: 'guide-loop' }, el('span', { class: 'guide-loop-label' }, el('b', { text: '남긴 지식은 다시 [모아두기]로' }), ' — 쓸수록 맥락이 쌓여 AI가 더 정확해져요.'))), el('div', { class: 'guide-remember' }, el('span', { class: 'guide-remember-key', text: '딱 한 줄' }), el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
+    el('div', { class: 'guide-cycle' }, el('div', { class: 'guide-flow' }, flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'), flowArrow(), flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'), flowArrow(), flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'), flowArrow(), flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')), el('div', { class: 'guide-loop' }, el('span', { class: 'guide-loop-label' }, el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }), el('b', { text: '남긴 지식은 다시 [모아두기]로' }), el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 더 정확해져요' })))), el('div', { class: 'guide-remember' }, el('span', { class: 'guide-remember-key', text: '딱 한 줄' }), el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
 }
 // 작동 3단계 — 아이콘 + 제목 + 한 줄.
 function flowStep(icon, title, desc) {
@@ -265,7 +270,7 @@ const GUIDE_CHAPTERS = [
                 href: '#/system', link: '관리 열기' },
             { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
                 summary: '이 도구 전체를 설명하는 안내서',
-                desc: '지금 보고 있는 안내서예요. 위쪽 서브탭으로 나뉘어 있어요 — ‘사용 가이드’는 이 서비스가 무엇인지, ‘메뉴 한눈에 보기’(지금 이 화면)는 각 메뉴가 무슨 일을 하는지, ‘시작하기’는 내 컴퓨터 설치 안내, ‘Lively 둘러보기’는 화면을 직접 눌러 보며 배우는 투어예요.',
+                desc: '지금 보고 있는 안내서예요. 왼쪽 목차로 나뉘어 있어요 — ‘시작하기’는 이 서비스가 무엇이고 어떻게 동작하는지, ‘화면별 안내’(지금 이 화면 포함)는 각 메뉴가 무슨 일을 하는지, ‘직접 해보기’는 내 AI 세션을 만들거나 화면을 눌러 보며 배우는 투어예요.',
                 current: true },
         ] },
 ];
@@ -355,7 +360,7 @@ async function renderLearnTour(view) {
     //  pathStep 과 같은 시각 언어(번호·제목·설명). §0.5 채색 예산: 채운 파란 버튼은 위 '처음부터 쭉 보기' 하나뿐.
     const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title' }, el('span', { text: title }), isSectionDone(key) ? el('span', { class: 'admin-hint', style: 'margin-left:8px;font-weight:400', text: '✓ 봤어요' }) : null), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '▶ ' + title.split(' — ')[0] + '만 보기', onclick: () => startGuideTour([key]) })));
     const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
-    const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ', el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
+    const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ', el('a', { href: '#/learn/install', text: '내 AI 세션 생성' }), ' 에서.'));
     docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
@@ -363,8 +368,8 @@ async function renderLearnTour(view) {
 //  회사맥락이 이미 설치돼 있어 '설치 0' / (local) 내 컴퓨터 터미널=내 머신에 한 번 설치. mode 토글로 분기.
 //  게이트웨이 주소는 org 프로필에서(loadAdmin — 비-admin 도 안전: tokens redact).
 async function renderInstall(view) {
-    // 부제 없음(#780) — 문서 셸의 다른 페이지들과 제목 줄을 맞춘다.
-    const head = pageHead('시작하기', null, [], '하기');
+    // 부제 없음(#780) — 문서 셸의 다른 페이지들과 제목 줄을 맞춘다. 화면 이름은 '내 AI 세션 생성'(사이드바와 동일).
+    const head = pageHead('내 AI 세션 생성', null, [], '생성');
     const slot = el('div', { class: 'install-guide' });
     slot.append(skeleton('설치 안내를 준비하는 중'));
     // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드와 같은 카드 문법으로 이어 붙인다.
