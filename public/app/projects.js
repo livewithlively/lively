@@ -9897,10 +9897,14 @@ async function authDownload(url, filename) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-// 인증 fetch 업로드(PUT raw 스트림). 파일 본문 그대로 — Content-Type 비워 서버가 스트림으로 받음.
-async function authUpload(url, file) {
+// 업로드 취소(#797) — 취소는 어느 경로로 끊었든 name==='AbortError' 하나로 알아본다(XHR·fetch·루프 공통).
+//  끊긴 PUT 은 서버가 임시파일만 지우고 목적지는 손대지 않는다(src/upload-file.ts) → 취소해도 깨진 파일이 남지 않는다.
+const upAbortErr = () => { const e = new Error('업로드를 취소했습니다'); e.name = 'AbortError'; return e; };
+const upIsAbort = (e) => !!e && (e.name === 'AbortError');
+// 인증 fetch 업로드(PUT raw 스트림). 파일 본문 그대로 — Content-Type 비워 서버가 스트림으로 받음. signal(선택) = 취소.
+async function authUpload(url, file, signal) {
     const token = localStorage.getItem(TOKEN_KEY);
-    const res = await fetch(url, { method: 'PUT', headers: token ? { Authorization: 'Bearer ' + token } : {}, body: file });
+    const res = await fetch(url, { method: 'PUT', headers: token ? { Authorization: 'Bearer ' + token } : {}, body: file, signal });
     if (!res.ok) {
         let m = '';
         try {
@@ -9911,13 +9915,21 @@ async function authUpload(url, file) {
     }
 }
 // 진행률 콜백 업로드 — fetch 는 업로드 progress 가 없어 XHR 사용. onProgress(pct 0~100).
-function authUploadProgress(url, file, onProgress) {
+//  signal(선택) — 취소되면 xhr.abort() 로 **지금 전송 중인 파일까지** 즉시 끊는다(다음 파일을 안 보내는 것만으론 큰 파일에서 한참 기다린다).
+function authUploadProgress(url, file, onProgress, signal) {
     return new Promise((resolve, reject) => {
+        if (signal && signal.aborted) {
+            reject(upAbortErr());
+            return;
+        }
         const token = localStorage.getItem(TOKEN_KEY);
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', url);
         if (token)
             xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        const onAbort = () => xhr.abort();
+        if (signal)
+            signal.addEventListener('abort', onAbort);
         xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress)
             onProgress((ev.loaded / ev.total) * 100); };
         xhr.onload = () => {
@@ -9933,6 +9945,9 @@ function authUploadProgress(url, file, onProgress) {
             }
         };
         xhr.onerror = () => reject(new Error('네트워크 오류'));
+        xhr.onabort = () => reject(upAbortErr());
+        xhr.onloadend = () => { if (signal)
+            signal.removeEventListener('abort', onAbort); }; // load·error·abort 어느 쪽이든 리스너 정리
         xhr.send(file);
     });
 }
@@ -10468,6 +10483,70 @@ function upDropZone(zone, hi, onDrop) {
             .catch((e) => toast('끌어온 항목을 읽지 못했습니다 — ' + (e && e.message ? e.message : e), true));
     });
 }
+async function upSend(o) {
+    const arr = o.items || [], dirs = o.emptyDirs || [];
+    let ok = 0, fail = 0, made = 0;
+    for (let i = 0; i < arr.length; i++) {
+        if (o.signal.aborted)
+            return { ok, fail, made, canceled: true };
+        const u = arr[i];
+        if (o.onProgress)
+            o.onProgress(i, u.rel, 0);
+        try {
+            await authUploadProgress(o.fileUrl(u.rel), u.file, (pct) => { if (o.onProgress)
+                o.onProgress(i, u.rel, pct); }, o.signal);
+            ok += 1;
+            if (o.onProgress)
+                o.onProgress(i, u.rel, 100);
+        }
+        catch (e) {
+            if (upIsAbort(e))
+                return { ok, fail, made, canceled: true }; // 전송 중이던 파일이 끊김 = 취소
+            fail += 1;
+            toast(u.rel + ' 실패 — ' + e.message, true);
+        }
+    }
+    // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
+    for (const d of dirs) {
+        if (o.signal.aborted)
+            return { ok, fail, made, canceled: true };
+        if (!o.dirUrl)
+            break;
+        try {
+            await api(o.dirUrl(d), { method: 'POST' });
+            made += 1;
+        }
+        catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
+    }
+    return { ok, fail, made, canceled: false };
+}
+// 업로드 결과 알림 — 취소했으면 **몇 개까지 올라갔는지** 반드시 말한다(조용히 멈추면 사용자가 폴더 상태를 알 수 없다).
+function upToast(r) {
+    if (r.canceled) {
+        toast(r.ok ? (r.ok + '개까지 올리고 취소했습니다') : '업로드를 취소했습니다');
+        return;
+    }
+    if (r.ok || r.made)
+        toast((r.ok ? r.ok + '개 업로드 완료' : r.made + '개 폴더 생성') + (r.fail ? (' · ' + r.fail + '개 실패') : ''));
+}
+// 업로드 진행 + 취소 바 — 배치 하나당 한 줄. 배치가 동시에 여러 개 돌면 줄도 여러 개라 '어느 업로드를 끊는지' 헷갈리지 않는다.
+//  세 화면이 같은 바를 쓴다(.up-prog) — 취소 어포던스를 화면마다 다르게 만들 이유가 없다.
+function upProgress(total, onCancel) {
+    const label = el('div', { class: 'up-prog-label', text: '업로드 준비 중…' });
+    const fill = el('div', { class: 'up-prog-fill' });
+    const btn = el('button', { class: 'btn btn-ghost btn-sm up-prog-cancel', type: 'button', text: '취소' });
+    const row = el('div', { class: 'up-prog' }, el('div', { class: 'up-prog-main' }, label, el('div', { class: 'up-prog-bar' }, fill)), btn);
+    btn.onclick = (ev) => { ev.stopPropagation(); btn.disabled = true; btn.textContent = '취소 중…'; onCancel(); };
+    return {
+        row,
+        // i = 0-based 현재 파일, pct = 그 파일의 진행률 → 바는 배치 전체 기준으로 채운다.
+        set(i, rel, pct) {
+            const nm = String(rel || '').split('/').pop() || rel;
+            label.textContent = '업로드 중 — ' + (total > 1 ? (Math.min(i + 1, total) + '/' + total + ' · ') : '') + nm;
+            fill.style.width = (total > 0 ? ((i + pct / 100) / total) * 100 : pct) + '%';
+        },
+    };
+}
 // 공유 폴더 '전체 보기' — 넓은 팝업에 일반 파일 목록(행 단위)으로 전부 표시. 폴더 탐색·파일 열기 가능.
 function openFolderGrid(id, startPath, base) {
     const B = base || '/api/ui/projects/';
@@ -10478,7 +10557,8 @@ function openFolderGrid(id, startPath, base) {
     const mkdirBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 폴더', onclick: () => mkdirHere() });
     const crumb = el('div', { class: 'proj-file-crumb' });
     const listBox = el('div', { class: 'proj-file-llist' });
-    const back = overlayBox('공유 폴더 — 전체 보기', el('div', { class: 'proj-fg-head' }, searchIn, el('div', { class: 'proj-fg-actions' }, mkdirBtn, up.btn, up.fileIn, up.dirIn)), crumb, listBox);
+    const progBox = el('div', { class: 'up-prog-box' }); // 업로드 진행·취소 바(배치별 한 줄, #797)
+    const back = overlayBox('공유 폴더 — 전체 보기', el('div', { class: 'proj-fg-head' }, searchIn, el('div', { class: 'proj-fg-actions' }, mkdirBtn, up.btn, up.fileIn, up.dirIn)), crumb, progBox, listBox);
     const box = back.querySelector('.ov-box');
     if (box)
         box.classList.add('ov-box-wide');
@@ -10487,6 +10567,7 @@ function openFolderGrid(id, startPath, base) {
     upDropZone(back, box || back, (items, emptyDirs) => uploadHere(items, emptyDirs));
     const join = (a, b) => (a ? a + '/' + b : b);
     load();
+    // 업로드 — 여기엔 진행 표시가 아예 없었다(수백 개를 올려도 화면이 조용했다). 이제 진행 바 + 취소(#797).
     async function uploadHere(items, emptyDirs) {
         const arr = items || [];
         const dirs = emptyDirs || [];
@@ -10497,28 +10578,17 @@ function openFolderGrid(id, startPath, base) {
         if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?'))
             return;
         const dest = st.path; // 업로드 중 폴더를 옮겨도 '떨어뜨린 그 폴더'로 간다
-        const at = (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel);
-        if (arr.length > 1)
-            toast(arr.length + '개 업로드 중…');
-        let ok = 0;
-        for (const u of arr) {
-            try {
-                await authUpload(at(u.rel), u.file);
-                ok += 1;
-            }
-            catch (e) {
-                toast(u.rel + ' 실패 — ' + e.message, true);
-            }
-        }
-        // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
-        for (const d of dirs) {
-            try {
-                await api(B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d), { method: 'POST' });
-            }
-            catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
-        }
-        if (ok)
-            toast(ok + '개 업로드 완료');
+        const ac = new AbortController();
+        const bar = upProgress(arr.length, () => ac.abort());
+        progBox.append(bar.row);
+        const r = await upSend({
+            items: arr, emptyDirs: dirs, signal: ac.signal,
+            fileUrl: (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel),
+            dirUrl: (d) => B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d),
+            onProgress: (i, rel, pct) => bar.set(i, rel, pct),
+        });
+        bar.row.remove();
+        upToast(r);
         st.q = '';
         searchIn.value = '';
         load();
@@ -10606,8 +10676,10 @@ function projectFolderSection(id, base) {
     let lastPairs = [];
     const selectBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 항목을 골라 한 번에 삭제', onclick: () => toggleSelMode() });
     const selBar = el('div', { class: 'bulk-bar', hidden: true });
+    const progBox = el('div', { class: 'up-prog-box' }); // 업로드 진행·취소 바(배치별 한 줄, #797). 그리드의 '업로드 중 카드'는 위치 표시로 그대로.
     card.append(el('div', { class: 'card-head' }, el('h3', { text: '공유 폴더' }), el('div', { class: 'card-head-actions' }, searchIn, allBtn, mkdirBtn, up.btn, selectBtn, up.fileIn, up.dirIn)));
     card.append(selBar);
+    card.append(progBox);
     card.append(body);
     // 드래그앤드롭 업로드 — 카드 위로 파일·폴더를 끌어다 놓으면 현재 폴더에 올림(폴더는 하위 구조 그대로, #781).
     upDropZone(card, card, (items, emptyDirs) => uploadFiles(items, emptyDirs));
@@ -10703,39 +10775,32 @@ function projectFolderSection(id, base) {
         uploading.push(...cards);
         if (lastData)
             render(lastData); // 업로드 카드 즉시 표시(load 기다리지 않음)
-        let ok = 0, fail = 0;
-        for (let i = 0; i < arr.length; i++) {
-            const u = arr[i], c = many ? cards[0] : cards[i];
-            const onPct = (pct) => {
+        // 취소는 이 배치만 끊는다 — 배치마다 컨트롤러·바가 따로라 동시 업로드끼리 서로 영향이 없다(#797).
+        const ac = new AbortController();
+        const bar = upProgress(arr.length, () => ac.abort());
+        progBox.append(bar.row);
+        const r = await upSend({
+            items: arr, emptyDirs: dirs, signal: ac.signal,
+            fileUrl: (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel),
+            dirUrl: (d) => B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d),
+            onProgress: (i, rel, pct) => {
+                bar.set(i, rel, pct);
+                const c = many ? cards[0] : cards[i];
+                if (!c)
+                    return;
                 c.pct = many ? ((i + pct / 100) / arr.length) * 100 : pct;
                 if (many)
-                    c.label = i + '/' + arr.length + ' — ' + (u.rel.split('/').pop() || u.rel);
+                    c.label = i + '/' + arr.length + ' — ' + (rel.split('/').pop() || rel);
                 updateUpCard(c);
-            };
-            try {
-                await authUploadProgress(B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + u.rel), u.file, onPct);
-                onPct(100);
-                ok += 1;
-            }
-            catch (e) {
-                fail += 1;
-                toast(u.rel + ' 실패 — ' + e.message, true);
-            }
-        }
-        // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
-        for (const d of dirs) {
-            try {
-                await api(B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d), { method: 'POST' });
-            }
-            catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
-        }
+            },
+        });
+        bar.row.remove();
         for (const c of cards) {
             const ix = uploading.indexOf(c);
             if (ix >= 0)
                 uploading.splice(ix, 1);
         } // 이 배치 카드만 걷어냄(동시 업로드 보호)
-        if (ok || dirs.length)
-            toast((ok ? ok + '개 업로드 완료' : dirs.length + '개 폴더 생성') + (fail ? (' · ' + fail + '개 실패') : ''));
+        upToast(r);
         st.q = '';
         searchIn.value = '';
         load();
@@ -11373,4 +11438,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvOpenProjectModal, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upProgress, upSend, upToast, };

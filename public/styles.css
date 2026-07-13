@@ -2225,6 +2225,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-up-pct { font-size: 14px; font-weight: 800; color: var(--ink); }
 .proj-up-bar { width: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 4px; }
 .proj-up-bar-fill { height: 100%; width: 0; background: var(--blue); transition: width .15s ease; }
+/* ── 업로드 진행 + 취소 바(#797) — 세 화면(공유 폴더 카드 · '전체 보기' 모달 · 대시보드 팀 공유 폴더) 공통. ──
+   배치 하나당 한 줄. 동시에 여러 배치가 돌면 줄도 여러 개 = '어느 업로드를 끊는지' 헷갈리지 않는다. */
+.up-prog-box:empty { display: none; }
+.up-prog { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; padding: 10px 14px; background: var(--bg-sel); border: 1px solid var(--line-net); border-radius: 12px; }
+.up-prog-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.up-prog-label { font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up-prog-bar { height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
+.up-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
+.up-prog-cancel { flex-shrink: 0; }
 /* '전체 보기' 팝업 — 넓은 모달 + 여러 행 그리드(횡스크롤 없이 다 보임). */
 .ov-box-wide { max-width: 920px; }
 /* '전체 보기' — 깔끔한 파일 목록(행 호버 시 아이콘 액션). */
@@ -4831,10 +4840,10 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-modal.drop-active, .dash-fb.drop-active { outline: 2px dashed var(--line-net-2); outline-offset: -4px; background: var(--bg-tint); }
 /* 업로드 중 — 조작만 잠근다. aria-busy(opacity .5)를 쓰면 진행 패널까지 흐려져 '멈춘 것'처럼 보인다. */
 .dash-fb[data-uploading="1"] { pointer-events: none; }
-.dash-fb-prog { display: flex; flex-direction: column; gap: 9px; padding: 26px 10px; min-height: 96px; justify-content: center; }
-.dash-fb-prog-label { font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dash-fb-prog-bar { height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
-.dash-fb-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
+/* ⚠ 그 잠금(pointer-events:none)이 '취소' 버튼까지 먹어버린다 — 진행 바만 되살린다(#797). */
+.dash-fb[data-uploading="1"] .up-prog { pointer-events: auto; }
+/* 진행 바가 목록 자리를 통째로 대신하므로 세로 여백을 더 준다(예전 .dash-fb-prog 톤 유지). */
+.dash-fb .up-prog { margin: 0; min-height: 96px; padding: 20px 14px; }
 /* ── 공유 폴더 위젯 목록 뷰(#670) — 아이콘 카드 대신 컴팩트 리스트(전체보기 목록과 톤 일치). ── */
 .dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
 .dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }

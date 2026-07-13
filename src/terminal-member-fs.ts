@@ -119,6 +119,8 @@ export function memberSh(osUser: string, script: string, stdin?: string): Promis
 }
 
 // src(req) → 멤버 파일. `sh -c 'cat > "$0"' <abs>` 로 멤버 소유 파일 생성. maxBytes 초과 시 중단('too large').
+//  ⚠ 호출부는 **임시 경로**를 주고 완료 후 memberMv 로 목적지에 옮긴다(upload-file.ts) — cat 은 목적지를 즉시 truncate 하므로
+//  업로드가 끊기면(취소) 여기에 목적지를 바로 주면 원본이 잘려나간다(#797).
 export function memberWriteFrom(osUser: string, absPath: string, src: Readable, maxBytes: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["sh", "-c", 'cat > "$0"', absPath], ["pipe", "ignore", "pipe"]);
@@ -127,13 +129,20 @@ export function memberWriteFrom(osUser: string, absPath: string, src: Readable, 
     const stdin = c.stdin;
     if (!stdin) return reject(new Error("member write: no stdin"));
     let size = 0, aborted = false;
+    const abort = (e: Error): void => {
+      if (aborted) return;
+      aborted = true;
+      try { c.kill("SIGKILL"); } catch { /* 이미 죽었으면 무시 */ }
+      reject(e);
+    };
     src.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > maxBytes && !aborted) { aborted = true; try { c.kill("SIGKILL"); } catch { /* */ } src.destroy(); reject(new Error("too large")); return; }
+      // 초과분은 더 읽지 않되 소켓은 죽이지 않는다 — 죽이면 413 응답을 보낼 상대가 사라진다.
+      if (size > maxBytes && !aborted) { src.pause(); abort(new Error("too large")); return; }
       stdin.write(chunk);
     });
     src.on("end", () => { try { stdin.end(); } catch { /* */ } });
-    src.on("error", reject);
+    src.on("error", abort); // 클라이언트가 업로드를 끊음(취소) — cat 도 같이 죽여 stdin 열린 채 남지 않게
     c.on("close", (code) => { if (aborted) return; code === 0 ? resolve() : reject(new Error(err.get() || `member write exit ${code}`)); });
   });
 }
