@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
-import { initItemSchema } from "./items/store.js";
+import { initItemSchema, itemsPool } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
 import { listBuiltinOverrides, listBuiltinAlwaysLoad } from "./org/store.js";
 import { agentFromHeaders } from "./org/agent-identity.js";
@@ -28,7 +28,9 @@ import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setPr
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
-import { ensureStateDirs } from "./state-dir.js";
+import { ensureStateDirs, stateRoot } from "./state-dir.js";
+import { ROOTS } from "./terminal-sessions.js";
+import { readyReport } from "./health.js";
 import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
@@ -60,8 +62,26 @@ app.use(express.json({ limit: "1mb" }));
 const verifier = new BearerVerifier();
 const auth = requireBearerAuth({ verifier });
 
+// liveness — '프로세스가 살아있나'. **얕은 채로 둔다.**
+//  deploy/lib/common.sh 의 wait_healthz() 가 설치·업데이트 중 이걸 60회 재시도로 폴링해 기동을 확인하는데,
+//  그 시점엔 DB 가 아직 안 떠 있을 수 있다 → 여기에 DB 를 물리면 정상 설치가 실패한다(닭-달걀). 깊은 점검은 /readyz.
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
+});
+
+// readiness — '실제로 서비스가 되나'(#813 T2). DB 도달 + 디스크 여유. **모니터·알림은 healthz 가 아니라 이걸 봐야 한다.**
+//  2026-07-13: 디스크풀 → Postgres recovery mode → 모든 로그인 500 인데도 /healthz 는 초록이라 아무도 몰랐다.
+//  DB 불가 → 503(진짜 not-ready). 디스크 경고는 200 + status=degraded — 멀쩡한 서비스를 LB 에서 빼지 않는다(health.ts 참조).
+//  미인증: LB·모니터가 호출한다(k8s readiness 관례). 응답의 DB 에러는 health.ts 가 자격증명을 마스킹한다.
+app.get("/readyz", async (_req, res) => {
+  try {
+    const report = await readyReport({ pool: itemsPool, paths: [stateRoot(), ...ROOTS.map((r) => r.base)] });
+    res.status(report.ok ? 200 : 503).json(report);
+  } catch (err) {
+    // 점검 자체가 터지면 '준비됨'이라 우길 근거가 없다 → fail-closed.
+    logger.error({ err }, "readyz 점검 실패");
+    res.status(503).json({ ok: false, status: "down" });
+  }
 });
 
 // 모든 MCP 요청은 bearer 인증 필수 → req.auth 가 핸들러의 extra.authInfo 로 전달됨.
