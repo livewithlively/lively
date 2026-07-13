@@ -22,8 +22,6 @@ const DOCS_NAV = [
     { key: 'overview', label: '라이블리 개요', href: '#/learn' },
     { key: 'quickstart', label: '빠른 시작', href: '#/learn/docs/quickstart' },
     { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
-    { key: 'install', label: '내 컴퓨터에 연결 (설치)', href: '#/learn/install' },
-    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
   ] },
   { group: '화면별 안내', items: [
     { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' },
@@ -33,6 +31,11 @@ const DOCS_NAV = [
     { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
     { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
     { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
+  ] },
+  // 읽는 문서가 아니라 '직접 해보는' 화면 둘 — 설치 명령을 만들고, 실제 화면 위 투어를 켠다(#780).
+  { group: '직접 해보기', items: [
+    { key: 'install', label: '내 컴퓨터에 연결 (설치)', href: '#/learn/install' },
+    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
   ] },
   { group: '레퍼런스', items: [
     { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
@@ -213,12 +216,19 @@ function heroCard() {
     el('h2', { class: 'guide-hero-title' },
       '한마디로, 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'),
     el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
-    el('div', { class: 'guide-flow' },
-      flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'),
-      flowArrow(),
-      flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'),
-      flowArrow(),
-      flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.')),
+    // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
+    el('div', { class: 'guide-cycle' },
+      el('div', { class: 'guide-flow' },
+        flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'),
+        flowArrow(),
+        flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'),
+        flowArrow(),
+        flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'),
+        flowArrow(),
+        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')),
+      el('div', { class: 'guide-loop' },
+        el('span', { class: 'guide-loop-label' },
+          el('b', { text: '남긴 지식은 다시 [모아두기]로' }), ' — 쓸수록 맥락이 쌓여 AI가 더 정확해져요.'))),
     el('div', { class: 'guide-remember' },
       el('span', { class: 'guide-remember-key', text: '딱 한 줄' }),
       el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
@@ -413,6 +423,9 @@ const GUIDE_ICONS = {
   layers: [['polygon', { points: '12 2 2 7 12 12 22 7 12 2' }], ['polyline', { points: '2 17 12 22 22 17' }], ['polyline', { points: '2 12 12 17 22 12' }]],
   send: [['line', { x1: 22, y1: 2, x2: 11, y2: 13 }], ['polygon', { points: '22 2 15 22 11 13 2 9 22 2' }]],
   zap: [['polygon', { points: '13 2 3 14 12 14 11 22 21 10 12 10 13 2' }]],
+  // '다시 쌓기'(#780 순환 4단계) — 일한 결과를 지식으로 남겨 되돌려 놓는다(feather save).
+  save: [['path', { d: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' }],
+    ['polyline', { points: '17 21 17 13 7 13 7 21' }], ['polyline', { points: '7 3 7 8 15 8' }]],
 };
 function tabIcon(name) {
   const svg = sv('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7,

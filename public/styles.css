@@ -835,6 +835,35 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
   .guide-flow { flex-direction: column; }
   .guide-flow-arrow { transform: rotate(90deg); margin: -3px 0; }
 }
+/* ── 순환(플라이휠, #780) — 4단계 뒤 '다시 모아두기'로 돌아오는 레일. 점선 U자 + 왼쪽 끝 화살촉. ──
+   4-up 이라 카드가 좁아진 만큼 이 컨테이너 안에서만 스텝 밀도를 한 단계 낮춘다(다른 guide-flow 는 그대로). */
+.guide-cycle { position: relative; }
+.guide-cycle .guide-flow { gap: 8px; }
+.guide-cycle .guide-flow-step { padding: 15px 14px 14px; }
+.guide-cycle .guide-flow-icon { width: 36px; height: 36px; border-radius: 10px; margin-bottom: 9px; }
+.guide-cycle .guide-flow-icon svg { width: 19px; height: 19px; }
+.guide-cycle .guide-flow-title { font-size: 14.5px; }
+.guide-cycle .guide-flow-desc { font-size: 12.5px; line-height: 1.5; }
+.guide-cycle .guide-flow-arrow { font-size: 17px; }
+.guide-loop { position: relative; height: 42px; margin-top: 2px; }
+/* 되돌아가는 레일 — 마지막 단계에서 내려와 왼쪽 첫 단계로 올라간다(위쪽은 뚫린 U자). */
+.guide-loop::before { content: ''; position: absolute; left: 26px; right: 26px; top: 0; bottom: 15px;
+  border: 1.5px dashed var(--line-net-2); border-top: 0; border-radius: 0 0 16px 16px; }
+/* 화살촉 — 왼쪽 끝에서 위(=[모아두기])를 가리킨다. */
+.guide-loop::after { content: ''; position: absolute; left: 21px; top: -6px; width: 0; height: 0;
+  border-left: 5.5px solid transparent; border-right: 5.5px solid transparent; border-bottom: 8px solid var(--line-net-2); }
+.guide-loop-label { position: absolute; left: 50%; bottom: 15px; transform: translate(-50%, 50%);
+  max-width: calc(100% - 60px); background: var(--bg); border: 1px solid var(--line-note); border-radius: 999px;
+  padding: 5px 14px; font-size: 12.5px; line-height: 1.4; font-weight: 600; color: var(--ink-sub); text-align: center; }
+.guide-loop-label b { color: var(--ink); font-weight: 800; }
+@media (max-width: 900px) {
+  .guide-cycle .guide-flow { flex-direction: column; }
+  .guide-cycle .guide-flow-arrow { transform: rotate(90deg); margin: -3px 0; }
+  .guide-loop { height: auto; margin-top: 12px; text-align: center; }
+  .guide-loop::before, .guide-loop::after { display: none; }
+  .guide-loop-label { position: static; transform: none; display: inline-block; max-width: 100%; }
+}
+
 /* '딱 한 줄' 강조 */
 .guide-remember { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 13px 16px;
   background: rgba(45,107,240,.06); border: 1px solid var(--line-note); border-radius: 12px; }
