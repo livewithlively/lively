@@ -19,6 +19,13 @@ import { refreshProxySnapshot } from "./mcp-proxy.js";
 import { broadcastToolListChanged } from "../mcp-sessions.js";
 import type { LivelyUser } from "../context.js";
 import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
+// 저장소·로그(#813) — 관리탭이 박스 디스크·로그를 보는 창구(고객 박스엔 우리가 SSH 로 못 들어간다).
+import { checkDisks } from "../health.js";
+import { listLogs } from "../log-janitor.js";
+import { stateRoot, logRoot } from "../state-dir.js";
+import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
+import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -31,7 +38,7 @@ import {
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
-  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, listMcpServers, upsertMcpServer, removeMcpServer,
+  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
   listAssetPrefs, setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
@@ -752,7 +759,33 @@ export const deliveryCapabilities: Capability[] = [
         allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
+        storage_policy?: StoragePolicyPatch;
       } = {};
+      // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
+      //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
+      if (input.storage_policy !== undefined) {
+        const raw = input.storage_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "storage_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const num = (v: unknown, field: string, min: number, max: number): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < min || n > max) throw new HttpError(400, `storage_policy.${field} 는 ${min}~${max} 정수여야 합니다`);
+          return Math.floor(n);
+        };
+        const patchIn: StoragePolicyPatch = {};
+        if (s.log_max_mb !== undefined) patchIn.log_max_mb = num(s.log_max_mb, "log_max_mb", 0, 10_000);
+        if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
+        if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
+        if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
+        if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
+        if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
+        // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
+        const merged = normalizeStoragePolicy({ ...(await getRuntimeConfig()).storage_policy, ...patchIn });
+        if (patchIn.disk_warn_pct !== undefined && patchIn.disk_warn_pct >= merged.disk_critical_pct) {
+          throw new HttpError(400, `경고 임계치(${patchIn.disk_warn_pct}%)는 위험 임계치(${merged.disk_critical_pct}%)보다 낮아야 합니다`);
+        }
+        patch.storage_policy = patchIn;
+      }
       if (input.hooks !== undefined) {
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
@@ -861,6 +894,43 @@ export const deliveryCapabilities: Capability[] = [
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
+    }),
+
+  // ── 저장소·로그(#813) 상태 — 박스 디스크 사용률 + 로그 크기 + 유효 정책·출처. ──
+  //  왜 필요한가: 고객 박스는 우리가 SSH 로 못 들어간다. 디스크가 차면 Postgres 가 죽고 전 기능이 500 이 되는데
+  //  (2026-07-13 사고) 그걸 볼 창구가 없었다. 관리탭이 그 창구다.
+  restOnly("org_storage_status", "저장소·로그 상태",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치)과 그 출처. admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
+    async () => {
+      const cfg = await getRuntimeConfig();
+      const p = cfg.storage_policy;
+      const disks = await checkDisks(
+        [stateRoot(), logRoot(), ...TERMINAL_ROOTS.map((r) => r.base)],
+        { warnPct: p.disk_warn_pct, criticalPct: p.disk_critical_pct },
+      );
+      const files = await listLogs(logRoot());
+      // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
+      const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
+      const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
+      return {
+        policy: p,
+        policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
+        disks,
+        logs: {
+          dir: logRoot(),
+          files,
+          totalBytes: files.reduce((sum, f) => sum + f.bytes, 0),
+          // 정책상 로그가 최대 얼마까지 자랄 수 있나 — '설정이 뭘 뜻하는지'를 UI 가 계산 없이 그대로 보여줄 수 있게.
+          capBytes: p.log_max_mb * 1024 * 1024 * (p.log_keep + 1),
+        },
+        cache: {
+          root: cacheRoot,
+          // 세션에 실제로 주입되는 변수 이름들(값=경로는 안 민감하지만 이름만으로 충분히 설명된다).
+          vars: Object.keys(sessionCacheEnv(TERMINAL_SHARED_ROOT.base, cacheOpts)).sort(),
+          bytes: await dirSize(cacheRoot),
+        },
+      };
     }),
 
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──

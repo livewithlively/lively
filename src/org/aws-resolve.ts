@@ -16,7 +16,8 @@ export async function assumeMemberRole(memberId: string, scopeKey = ""): Promise
   const key = memberId + " " + scopeKey;
   const hit = cache.get(key);
   if (hit && hit.expEpochMs > Date.now() + SKEW_MS) return hit.v;
-  const resolved = await resolveMemberSecret(null, "aws_role_arn", { scopeKey, allowFallback: true }); // org-only(멤버 role 등록 금지 — confused-deputy)
+  // per-user 오버라이드 체인: 멤버 오버라이드(관리자 지정 owner=member) 우선 → org 디폴트. 멤버 self-set 은 거부돼 안전(오버라이드=admin 전용).
+  const resolved = await resolveMemberSecret(memberId, "aws_role_arn", { scopeKey, allowFallback: true });
   if (!resolved) throw new Error("AWS role 미등록 — 관리자가 org_credential(kind=aws_role_arn)에 role_arn·region 을 meta 로 등록해야 합니다");
   const meta = resolved.meta ?? {};
   const roleArn = String(meta.role_arn || "");

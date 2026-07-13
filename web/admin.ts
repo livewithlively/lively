@@ -51,6 +51,9 @@ const ADMIN_SECTIONS = [
   { key: 'credentials', label: '자격(커넥터 로그인)', meaning: null, group: 'ai' },
   // DB 접근 감사(#746 P5) — 누가·언제·어떤 테이블/식별자를 조회했나(위변조 방지 해시체인). 신용정보법 R8. admin 전용.
   { key: 'db-audit', label: 'DB 접근 감사', meaning: null, group: 'ai' },
+  // 저장소·로그(#813) — 박스 디스크가 얼마나 찼나 + 로그 상한. 디스크가 100% 가 되면 DB 가 죽어 전 기능이 500 이 된다
+  //  (2026-07-13 사고). 고객 박스는 우리가 SSH 로 못 들어가므로 **여기가 유일한 관측·조절 창구**다. admin 전용(인프라).
+  { key: 'storage', label: '저장소 · 로그', meaning: null, group: 'ai' },
   // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
   { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
   // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
@@ -74,7 +77,7 @@ const ADMIN_SECTIONS = [
 // 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
 // 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
 const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
+const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'storage', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
 // #783 검토 큐는 워킹레벨 개방 — 승인 백엔드가 이미 memory scope 다(#638 결정: "승인 자격제한 없음 — 카테고리 전문성 있는
 //  워킹레벨이 오너보다 잘 검토한다"). 에이전트 지식 게이트를 켜면 큐 볼륨이 오너 한 명으로 감당 안 되기도 한다.
 const MEMORY_SCOPE_SECTIONS = ['review-queue'];
@@ -291,6 +294,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'credentials') return credentialsEditor(detail);
   if (sel === 'db-audit') return dbAuditEditor(detail, data);
+  if (sel === 'storage') return storageEditor(detail, data);
   if (sel === 'embeddings') return embeddingsEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
   if (sel === 'cron') return cronPanel(detail, data);
@@ -2239,6 +2243,174 @@ function runtimeEditor(detail, data) {
 //  config SoT = org_runtime_config.embedding_config(DB, 무재시작). 저장 = POST runtime-config{embedding_config}.
 //  "뒤늦게 켜기": provider 를 켠다고 이미 저장된 지식이 자동 임베딩되진 않는다(쓰기훅은 신규·수정분만) →
 //   [백필] 버튼(POST /api/ui/org/embeddings/backfill)으로 기존 지식을 일괄 임베딩(재실행 안전, 진행 폴링).
+// ── 저장소 · 로그(#813) ──────────────────────────────────────────────
+// 왜 이 화면이 있나: 2026-07-13 에 디스크가 100% 차서 Postgres 가 recovery mode 에 갇혔고 로그인을 포함한 **모든 기능이
+//  500** 이 됐다. 그런데 /healthz 는 끝까지 초록이라 아무도 몰랐다. 고객 박스는 우리가 SSH 로 들어갈 수 없으니
+//  **관리탭이 유일한 관측·조절 창구**다. (지식: gateway-disk-leak-audit-2026-07-13)
+// UI 원칙: 숫자를 그대로 뱉지 말고 **뜻을 보여준다** — 게이지로 한눈에, 설정값은 "그래서 최대 얼마"까지 계산해서.
+function fmtBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)) + units[i];
+}
+
+function storageEditor(detail, data) {
+  const canEdit = !!data.canEdit;
+  const body = el('div');
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('저장소 · 로그', null),
+    el('p', { class: 'admin-hint', text: '이 박스의 디스크가 얼마나 찼는지 보고, 로그가 무한히 쌓이지 않게 상한을 정합니다. 디스크가 가득 차면 DB가 죽어 로그인을 포함한 모든 기능이 멈춥니다 — 그 전에 알아채는 것이 이 화면의 목적입니다. 저장하면 게이트웨이 재시작 없이 즉시 반영됩니다.' }),
+    body));
+  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+
+  async function load() {
+    let st;
+    try { st = await api('/api/ui/org/storage'); }
+    catch (e: any) { body.replaceChildren(el('p', { class: 'admin-hint', text: '상태를 불러오지 못했습니다: ' + e.message })); return; }
+    build(st);
+  }
+
+  function build(st) {
+    const p = st.policy || {};
+
+    // ── ① 지금 상태 — 디스크 게이지 ──
+    const LV = { ok: ['여유', 'ok'], warn: ['경고', 'warn'], critical: ['위험', 'critical'] };
+    const diskRows = (st.disks || []).map((d) => {
+      const [lvLabel, lvKey] = LV[d.level] || LV.ok;
+      const fill = el('div', { class: 'gauge-fill gauge-' + lvKey });
+      fill.style.width = Math.min(100, Math.max(2, d.usedPct)) + '%';
+      return el('div', { class: 'storage-item' },
+        el('div', { class: 'storage-head' },
+          el('code', { text: d.path }),
+          el('span', { class: 'storage-lv storage-lv-' + lvKey, text: lvLabel + ' · ' + d.usedPct + '%' })),
+        el('div', { class: 'gauge' }, fill),
+        el('p', { class: 'storage-calc', text: `전체 ${fmtBytes(d.totalBytes)} 중 ${fmtBytes(d.availBytes)} 남음` }));
+    });
+    if (!diskRows.length) diskRows.push(el('p', { class: 'admin-hint', text: '디스크 정보를 읽지 못했습니다.' }));
+
+    // ── ① 지금 상태 — 로그 ──
+    const logs = st.logs || { files: [], totalBytes: 0, capBytes: 0, dir: '' };
+    const current = (logs.files || []).filter((f) => !f.rotated);
+    const kept = (logs.files || []).filter((f) => f.rotated);
+    const logLine = logs.capBytes > 0
+      ? `현재 ${fmtBytes(logs.totalBytes)} — 정책상 최대 ${fmtBytes(logs.capBytes)} 까지만 자랍니다`
+      : `현재 ${fmtBytes(logs.totalBytes)} — ⚠ 회전이 꺼져 있어 상한이 없습니다`;
+    const logDetail = (logs.files || []).length
+      ? el('p', { class: 'storage-calc', text: `현재 로그 ${current.length}개 · 보관본 ${kept.length}개 (${(logs.files || []).slice(0, 4).map((f) => f.name + ' ' + fmtBytes(f.bytes)).join(' · ')})` })
+      : el('p', { class: 'storage-calc', text: '로그 파일 없음' });
+
+    // ── ② 정책 ──
+    const numIn = (val, min, max) => {
+      const i = el('input', { class: 'input input-num', type: 'number', min: String(min), max: String(max) });
+      i.value = String(val); i.disabled = !canEdit;
+      return i;
+    };
+    const logMaxIn = numIn(p.log_max_mb ?? 50, 0, 10000);
+    const logKeepIn = numIn(p.log_keep ?? 3, 0, 50);
+    const warnIn = numIn(p.disk_warn_pct ?? 85, 1, 99);
+    const critIn = numIn(p.disk_critical_pct ?? 95, 1, 100);
+
+    // 설정값의 '뜻'을 즉시 계산해 보여준다 — 숫자만 놓으면 이게 무슨 의미인지 아무도 모른다.
+    const logCalc = el('p', { class: 'storage-calc' });
+    const recalc = () => {
+      const mb = Number(logMaxIn.value) || 0;
+      const keep = Number(logKeepIn.value) || 0;
+      logCalc.textContent = mb <= 0
+        ? '⚠ 0 = 회전 끔 — 로그가 무한히 자랍니다(권장하지 않음).'
+        : `→ 로그가 차지할 수 있는 최대 용량: ${fmtBytes(mb * 1024 * 1024 * (keep + 1))} (${mb}MB 씩 현재 1개 + 보관 ${keep}개)`;
+    };
+    logMaxIn.addEventListener('input', recalc);
+    logKeepIn.addEventListener('input', recalc);
+    recalc();
+
+    // ── ② 정책 — 공유 빌드 캐시(#813 T3) ──
+    const cache = st.cache || { root: '', vars: [], bytes: 0, partial: false };
+    const cacheChk = el('input', { type: 'checkbox' });
+    cacheChk.checked = p.shared_cache_enabled !== false; cacheChk.disabled = !canEdit;
+    const homeChk = el('input', { type: 'checkbox' });
+    homeChk.checked = !!p.shared_cache_relocate_home; homeChk.disabled = !canEdit;
+    const cacheState = el('p', { class: 'storage-calc' });
+    const syncCacheState = () => {
+      homeChk.disabled = !canEdit || !cacheChk.checked;
+      cacheState.textContent = cacheChk.checked
+        ? `현재 ${fmtBytes(cache.bytes)}${cache.partial ? '+' : ''} 사용 · 세션에 주입되는 변수 ${cache.vars.length}개 (${(cache.vars || []).slice(0, 4).join(', ')}…)`
+        : '꺼짐 — 세션마다 의존성을 새로 내려받습니다(디스크·시간 낭비).';
+    };
+    cacheChk.addEventListener('change', syncCacheState);
+    syncCacheState();
+
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' });
+    saveBtn.disabled = !canEdit;
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      try {
+        const storage_policy = {
+          log_max_mb: Number(logMaxIn.value),
+          log_keep: Number(logKeepIn.value),
+          disk_warn_pct: Number(warnIn.value),
+          disk_critical_pct: Number(critIn.value),
+          shared_cache_enabled: cacheChk.checked,
+          shared_cache_relocate_home: homeChk.checked,
+        };
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy }) });
+        toast('저장됨 — 즉시 반영됩니다(재시작 불필요).');
+        load();
+      } catch (e: any) { toast(e.message, true); saveBtn.disabled = false; }
+    });
+
+    // 설정 출처 안내 — .env 시드로 도는지, 관리탭 저장값인지(혼동 방지, #688 임베딩과 같은 관례).
+    const srcNote = st.policy_source === 'env'
+      ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+      : st.policy_source === 'default'
+        ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+        : null;
+
+    body.replaceChildren(
+      el('h3', { class: 'storage-h', text: '지금 상태' }),
+      el('div', { class: 'storage-block' }, ...diskRows),
+      el('div', { class: 'storage-block' },
+        el('div', { class: 'storage-head' },
+          el('strong', { text: '로그' }),
+          el('code', { text: logs.dir || '' })),
+        el('p', { class: 'storage-calc', text: logLine }),
+        logDetail),
+
+      el('h3', { class: 'storage-h', text: '정책' }),
+      ...(srcNote ? [srcNote] : []),
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '로그 보관' }),
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn),
+          el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)),
+        logCalc,
+        el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })),
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '디스크 경고' }),
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn),
+          el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)),
+        el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }),
+        el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })),
+
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '공유 빌드 캐시' }),
+        el('label', { class: 'storage-toggle' }, cacheChk,
+          el('span', { text: ' 의존성 캐시를 박스 한 곳에 모읍니다 (권장)' })),
+        cacheState,
+        el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }),
+        el('label', { class: 'storage-toggle' }, homeChk,
+          el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })),
+        el('p', { class: 'admin-hint storage-warn', text: '⚠ 이걸 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 깨질 수 있으니, 쓰지 않는 것이 확실할 때만 켜세요.' })),
+
+      el('div', { class: 'storage-actions' }, saveBtn),
+    );
+  }
+
+  load();
+}
+
 function embeddingsEditor(detail, data) {
   const canEdit = !!data.canEdit;
   const body = el('div');
@@ -2593,7 +2765,8 @@ function mcpForm(root, s, data, detail, isNew) {
   levelSel.value = s.level || 'L0';
   const authModeSel = el('select', {},
     el('option', { value: 'bearer', text: 'bearer — 정적 토큰(vault 저장)' }),
-    el('option', { value: 'oauth', text: 'oauth — 구성원별 OAuth 연결' }));
+    el('option', { value: 'oauth', text: 'oauth — 구성원별 OAuth 연결' }),
+    el('option', { value: 'sigv4', text: 'sigv4 — AWS 요청서명(역할 assume)' }));
   authModeSel.value = s.auth_mode || 'bearer';
   const kindsListId = 'mcp-auth-kinds';
   const kindsList = el('datalist', { id: kindsListId }, ...MCP_AUTH_KINDS.map((k) => el('option', { value: k })));
@@ -2612,17 +2785,29 @@ function mcpForm(root, s, data, detail, isNew) {
     try { const r = await api('/api/ui/org/mcp-server/refresh', { method: 'POST', body: JSON.stringify({ name: s.name }) }); toast(`발행됨 — 툴 ${r.tool_count}개`); await loadAdmin(true); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); refreshBtn.disabled = false; }
   });
-  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.' });
+  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다(상류 서비스의 자체 동의 화면). 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다. 자격 종류(auth_kind)는 이 서버의 토큰 슬롯 이름입니다(예: notion_oauth).' });
+  const sigv4Hint = el('div', { class: 'admin-hint', text: 'AWS(sigv4): 자격 종류는 aws_role_arn 으로 두세요. 실제 역할(role ARN·리전·service)과 구성원별 오버라이드는 [자격] 탭 ▸ "AWS 역할"에서 등록·할당합니다. 툴 등급은 자동(describe=조회 / put·delete=집행 컨펌).' });
+  // OAuth 클라이언트(선택) — 상류가 자동등록(DCR)을 지원하면 비워둠(게이트웨이가 자동 등록). Google·Slack 등 콘솔 앱은 사전등록 client 를 입력.
+  //  저장 시 (gateway,auth_kind,'oauth:client') 슬롯에 시딩 → SDK 가 client_secret 유무로 confidential/public 자동 판정. 비우면 기존 유지.
+  const oauthClientIdIn = el('input', { type: 'text', value: '', placeholder: '비우면 자동등록(DCR). Google·Slack 등은 콘솔 client_id 입력' });
+  const oauthClientSecretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: 'confidential 앱이면 client_secret (변경할 때만 입력)' });
+  const oauthCallback = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
+  const oauthClientBox = el('div', { class: 'admin-subcard', style: 'margin-top:8px' },
+    el('div', { class: 'admin-subhead', text: 'OAuth 클라이언트 (선택 — 자동등록 미지원 상류만)' }),
+    el('div', { class: 'admin-hint', text: '상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)' }),
+    field('client_id', oauthClientIdIn),
+    field('client_secret', oauthClientSecretIn),
+    el('div', { class: 'admin-hint', text: `redirect URI(콜백): ${oauthCallback}  — 이 값을 상류 콘솔(Google/Slack 등)의 허용 redirect URI 에 그대로 등록하세요.` }));
   const authEnvField = field('인증 환경변수 이름 (auth_env)', authIn);
   const proxyBox = el('div', { class: 'admin-subcard' },
     el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }),
     field('접근 권한 scope', scopeSel),
-    field('권한 등급', levelSel),
+    field('권한 등급(기본 · 툴별 자동분류)', levelSel),
     field('인증 방식', authModeSel),
     field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)),
     field('자격 대상 구분 (선택)', authScopeIn),
     el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'),
-    oauthHint,
+    oauthHint, oauthClientBox, sigv4Hint,
     isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
 
   const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
@@ -2632,6 +2817,9 @@ function mcpForm(root, s, data, detail, isNew) {
     // proxy 는 auth_kind(vault)로 인증 → auth_env(client 전용) 숨김. oauth 면 auth_kind 는 vault kind(토큰 슬롯).
     authEnvField.style.display = proxy ? 'none' : '';
     oauthHint.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
+    oauthClientBox.style.display = proxy && authModeSel.value === 'oauth' ? '' : 'none';
+    sigv4Hint.style.display = proxy && authModeSel.value === 'sigv4' ? '' : 'none';
+    if (proxy && authModeSel.value === 'sigv4' && !authKindIn.value.trim()) authKindIn.value = 'aws_role_arn';
   };
   transSel.addEventListener('change', syncTransport);
   modeSel.addEventListener('change', syncMode);
@@ -2659,6 +2847,17 @@ function mcpForm(root, s, data, detail, isNew) {
         pii_scrub: proxy ? piiChk.checked : false,
       };
       await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
+      // OAuth 사전등록 클라이언트 시딩(선택) — client_id 입력 시에만. (gateway,auth_kind,'oauth:client') 슬롯.
+      if (proxy && authModeSel.value === 'oauth' && oauthClientIdIn.value.trim()) {
+        const kind = authKindIn.value.trim();
+        if (!kind) { toast('OAuth 클라이언트를 저장하려면 자격 종류(auth_kind)가 필요합니다', true); }
+        else {
+          const seed: any = { client_id: oauthClientIdIn.value.trim() };
+          if (oauthClientSecretIn.value.trim()) seed.client_secret = oauthClientSecretIn.value.trim();
+          await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind, scope_key: 'oauth:client', secret: JSON.stringify(seed) }) });
+          oauthClientIdIn.value = ''; oauthClientSecretIn.value = '';
+        }
+      }
       await loadAdmin(true); state.admin.mcpSel = payload.name; toast('저장됨 — 다음 세션부터 반영'); renderAdminDetail(detail, 'mcp', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
@@ -3982,11 +4181,16 @@ async function credentialsEditor(detail) {
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
   let mine: any = { credentials: [], encryption_ready: true };
   let org: any = { credentials: [] };
+  let awsRoles: any = { credentials: [] };
   let oauthConns: any = { connectors: [] };
   try {
     mine = await api('/api/ui/me/credentials');
     oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
-    if (isAdmin) org = await api('/api/ui/org/credentials');
+    if (isAdmin) {
+      org = await api('/api/ui/org/credentials');
+      // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
+      awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
+    }
   } catch (e: any) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '자격을 불러오지 못했습니다'))); return; }
 
   const encReady = mine.encryption_ready !== false;
@@ -3996,13 +4200,14 @@ async function credentialsEditor(detail) {
       encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
   ];
 
-  cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', mine.credentials || [], encReady, () => credentialsEditor(detail)));
+  // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
+  cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
 
   if ((oauthConns.connectors || []).length) cards.push(oauthConnectorsCard(oauthConns.connectors, () => credentialsEditor(detail)));
 
   if (isAdmin) {
     cards.push(credVaultCard('org', '통합 자격 (관리자)', '개인 자격이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 자격 필수).', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
-    cards.push(awsRoleCard((org.credentials || []).filter((c: any) => c.kind === 'aws_role_arn'), () => credentialsEditor(detail)));
+    cards.push(awsRoleCard(awsRoles.credentials || [], () => credentialsEditor(detail)));
   }
   detail.replaceChildren(...cards);
 }
@@ -4070,45 +4275,72 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
   return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: title }), ...rows);
 }
 
-// AWS 역할 카드(통합 자격의 특수형 — secret 없이 role ARN·리전만). 게이트웨이가 이 역할을 가정해 멤버 단기자격을 발급.
+// AWS 역할 카드(통합 자격의 특수형 — secret 없이 role ARN·리전·service). 게이트웨이가 이 역할을 각 구성원 이름으로 가정해 15분 단기자격 발급.
+//  owner=gateway → 전원 기본(readonly 권장), owner=member:<id> → 그 구성원 오버라이드(write 포함 가능). #746 P1 오버라이드 체인.
 function awsRoleCard(creds: any[], reload: () => void) {
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: 'AWS 는 토큰 대신 "역할(role)"을 등록해요. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분짜리 단기 자격을 발급합니다 — 장기 키가 새어나갈 일이 없고, AWS CloudTrail 에 누가 무엇을 했는지 남아요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 해요.)' })];
-  for (const c of creds) {
+  const ownerLabel = (o: string) => (o && o.startsWith('member:') ? '구성원 ' + o.slice(7) : '전원 기본');
+  const ownerMember = (o: string) => (o && o.startsWith('member:') ? o.slice(7) : ''); // '' = 조직 통합
+  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: 'AWS 는 토큰 대신 "역할(role)"을 등록해요. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분짜리 단기 자격을 발급합니다 — 장기 키가 새어나갈 일이 없고, AWS CloudTrail 에 누가 무엇을 했는지 남아요. "전원 기본"은 조회(readonly) 역할로 두고, 쓰기가 필요한 구성원만 개별 오버라이드하세요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 해요.)' })];
+  // owner 정렬: 전원 기본(gateway) 먼저, 그 다음 구성원 오버라이드.
+  const sorted = [...creds].sort((a, b) => (ownerMember(a.owner) ? 1 : 0) - (ownerMember(b.owner) ? 1 : 0) || String(a.owner).localeCompare(String(b.owner)));
+  for (const c of sorted) {
     const m = c.meta || {};
+    const mem = ownerMember(c.owner);
     rows.push(el('div', { class: 'card', style: 'padding:9px 12px; margin:6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;' },
-      el('span', { class: 'pill pill-ok', text: 'AWS 역할' }),
+      el('span', { class: mem ? 'pill' : 'pill pill-ok', text: mem ? '오버라이드' : '전원 기본' }),
+      el('span', { class: 'mini-meta', text: ownerLabel(c.owner) }),
       c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null,
-      el('span', { class: 'mini-meta', text: (m.role_arn || '(role_arn 미설정)') + (m.region ? ' · ' + m.region : '') }),
+      el('span', { class: 'mini-meta', text: (m.role_arn || '(role_arn 미설정)') + (m.region ? ' · ' + m.region : '') + (m.service ? ' · ' + m.service : '') }),
       el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '삭제', onclick: async () => {
-        if (!confirm('AWS 역할 자격을 삭제할까요?')) return;
-        try { await api('/api/ui/org/credential/delete', { method: 'POST', body: JSON.stringify({ kind: 'aws_role_arn', scope_key: c.scope_key || '' }) }); toast('삭제됨'); reload(); }
+        if (!confirm(ownerLabel(c.owner) + ' AWS 역할 자격을 삭제할까요?')) return;
+        const body: any = { kind: 'aws_role_arn', scope_key: c.scope_key || '' };
+        if (mem) body.member = mem;
+        try { await api('/api/ui/org/credential/delete', { method: 'POST', body: JSON.stringify(body) }); toast('삭제됨'); reload(); }
         catch (e: any) { toast((e && e.message) || '삭제 실패', true); }
       } })));
   }
   if (!creds.length) rows.push(el('p', { class: 'admin-hint', text: '등록된 AWS 역할이 없습니다.' }));
 
+  // ── 추가/오버라이드 폼 ──
+  const targetSel = el('select', {},
+    el('option', { value: '', text: '전원 기본 (조직 통합 · readonly 권장)' }),
+    el('option', { value: 'member', text: '특정 구성원 오버라이드' })) as HTMLSelectElement;
+  const member = memberCombo({ placeholder: '구성원 id 선택/검색 (예: daon)' });
+  const memberField = field('대상 구성원', member.el);
   const arnIn = el('input', { type: 'text', placeholder: 'arn:aws:iam::123456789012:role/lively-readonly' });
   const regionSel = el('select', {}, ...AWS_REGIONS.map((r) => el('option', { value: r, text: r })));
+  const serviceIn = el('input', { type: 'text', placeholder: 'execute-api (기본) — aws-mcp 엔드포인트 서명 대상' });
   const extIn = el('input', { type: 'text', placeholder: '역할 신뢰관계가 ExternalId 를 요구할 때만' });
   const scopeIn = el('input', { type: 'text', placeholder: '여러 역할이면 구분 이름(선택)' });
   const submit = el('button', { class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
+
+  const syncTarget = () => { memberField.style.display = targetSel.value === 'member' ? '' : 'none'; };
+  targetSel.addEventListener('change', syncTarget); syncTarget();
+
   submit.addEventListener('click', async () => {
     if (!arnIn.value.trim()) { toast('역할 ARN 을 입력하세요', true); return; }
+    const isOverride = targetSel.value === 'member';
+    if (isOverride && !member.value()) { toast('오버라이드할 구성원을 선택하세요', true); return; }
     const meta: any = { role_arn: arnIn.value.trim(), region: regionSel.value };
+    if (serviceIn.value.trim()) meta.service = serviceIn.value.trim();
     if (extIn.value.trim()) meta.external_id = extIn.value.trim();
+    const body: any = { kind: 'aws_role_arn', scope_key: scopeIn.value.trim() || '', meta };
+    if (isOverride) body.member = member.value();
     (submit as any).disabled = true; status.textContent = '저장 중…';
     try {
-      await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify({ kind: 'aws_role_arn', scope_key: scopeIn.value.trim() || '', meta }) });
+      await api('/api/ui/org/credential', { method: 'POST', body: JSON.stringify(body) });
       toast('저장됨'); reload();
     } catch (e: any) { status.textContent = ''; (submit as any).disabled = false; toast((e && e.message) || '저장 실패', true); }
   });
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
-    el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ AWS 역할 추가' }),
-    field('역할 ARN (role ARN)', arnIn), field('리전 (region)', regionSel), field('ExternalId(선택)', extIn), field('구분 이름(선택)', scopeIn),
+    el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ AWS 역할 등록 / 오버라이드' }),
+    field('적용 대상', targetSel), memberField,
+    field('역할 ARN (role ARN)', arnIn), field('리전 (region)', regionSel),
+    field('서명 service(선택 · 기본 execute-api)', serviceIn), field('ExternalId(선택)', extIn), field('구분 이름(선택)', scopeIn),
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
-  return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: 'AWS 역할 (단기자격)' }), ...rows);
+  return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: 'AWS 역할 (단기자격 · 전원 기본 + 구성원 오버라이드)' }), ...rows);
 }
 
 // ── DB 접근 감사 뷰(#746 P5) — 누가·언제·무엇을 조회했나(위변조 방지). 필터는 드롭다운 위주. admin. ──

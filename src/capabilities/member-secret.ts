@@ -100,9 +100,9 @@ const orgCredentials: Capability = {
   },
 };
 const orgCredentialSet: Capability = {
-  name: "org_credential_set", title: "게이트웨이 통합 자격 등록",
-  description: "게이트웨이(조직 통합) 백엔드 자격을 등록한다(admin). 비-PII read 폴백용. write·외부발신·raw-PII 는 이 통합 자격으로 폴백하지 않는다(per-user 필수).",
-  scope: "admin", input: SET_INPUT,
+  name: "org_credential_set", title: "게이트웨이 통합/구성원 자격 등록",
+  description: "백엔드 자격을 등록한다(admin). member 생략 시 조직 통합(기본, 전원 폴백); member 지정 시 그 구성원 개인 오버라이드(owner=member). aws_role_arn 오버라이드는 여기(admin)로만 — 멤버 self-set 은 거부(confused-deputy 방지). 오버라이드 role 에 write 권한이 있으면 그 구성원은 write 가능(인가 경계=IAM role).",
+  scope: "admin", input: { ...SET_INPUT, member: z.string().optional().describe("지정 시 그 구성원 개인 오버라이드로 저장(owner=member:<id>). 생략 시 조직 통합 기본") },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/credential"], parse: (req) => req.body ?? {} }] },
   handler: async (input, user) => {
     const i = (input ?? {}) as Record<string, unknown>;
@@ -110,23 +110,26 @@ const orgCredentialSet: Capability = {
     if (i.secret !== undefined && s(i.secret) && !secretsEnabled()) {
       throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
     }
+    const target = s(i.member); // 지정 시 구성원 오버라이드, 아니면 조직 통합
+    const owner = target ? memberOwner(target) : GATEWAY_OWNER;
     const cred = await setMemberSecret(
-      GATEWAY_OWNER, i.kind, i.scope_key,
+      owner, i.kind, i.scope_key,
       { secret: i.secret === undefined ? null : s(i.secret), meta: metaOf(i.meta), label: s(i.label, 200) || null },
       user.userId,
     );
-    return { credential: cred };
+    return { credential: cred, owner };
   },
 };
 const orgCredentialDelete: Capability = {
-  name: "org_credential_delete", title: "게이트웨이 통합 자격 삭제",
-  description: "게이트웨이 통합 자격을 삭제한다(admin).",
-  scope: "admin", input: DEL_INPUT,
+  name: "org_credential_delete", title: "게이트웨이 통합/구성원 자격 삭제",
+  description: "자격을 삭제한다(admin). member 지정 시 그 구성원 오버라이드 삭제(owner=member), 생략 시 조직 통합.",
+  scope: "admin", input: { ...DEL_INPUT, member: z.string().optional().describe("지정 시 그 구성원 오버라이드 삭제") },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/credential/delete"], parse: (req) => req.body ?? {} }] },
   handler: async (input) => {
     const i = (input ?? {}) as Record<string, unknown>;
     if (!s(i.kind)) throw new HttpError(400, "kind 는 필수입니다");
-    return { deleted: await deleteMemberSecret(GATEWAY_OWNER, i.kind, i.scope_key) };
+    const target = s(i.member);
+    return { deleted: await deleteMemberSecret(target ? memberOwner(target) : GATEWAY_OWNER, i.kind, i.scope_key) };
   },
 };
 

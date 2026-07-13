@@ -6,6 +6,11 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { listSessions } from "../terminal-sessions.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
+// 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { projectAbsPath } from "../project-fs.js";
+import { planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 
 // 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
 //  폴더가 없으면(신규 생성 직후) ensureAgentsMd 내부에서 만든다. 비치명적(실패해도 본 작업은 성공).
@@ -830,7 +835,89 @@ const projectLinkProjectV6: Capability = {
   },
 };
 
+// ── 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다 ──
+//
+// 왜 도구인가(무인 데몬이 아니라): 되돌릴 수 없는 삭제를 자동 프로세스에 맡기지 않는다. **맥락을 아는 주체**
+//  (프로젝트를 마무리하는 에이전트/사람)가 생애주기 경계에서 호출한다 — 지식 project-closeout-routine 의 한 스텝.
+//  단 **삭제 규칙은 코드가 강제**한다(LLM 이 rm -rf 를 즉흥적으로 치는 것보다 안전): gitignored ∩ 알려진 파생물만,
+//  시크릿·로컬데이터는 보호, 미푸시·더티·활성세션이면 거부. 자세한 근거는 src/workspace-reclaim.ts 머리주석.
+const workspaceReclaim: Capability = {
+  name: "workspace_reclaim",
+  title: "워크스페이스 회수 (프로젝트 마무리)",
+  description:
+    "프로젝트 폴더에서 **재생성 가능한 것만** 회수한다 — 빌드 산출물·의존성(node_modules·build·target·.gradle·Pods…). " +
+    "**기본은 dry-run**(아무것도 안 지우고 무엇을 지울지만 보고). apply=true 로 실제 실행. " +
+    "remove_worktree=true 면 워크트리도 제거하되 **푸시 완료 + 미커밋 변경 없음**일 때만(아니면 이유를 말하고 거부). " +
+    "활성 세션이 붙어 있으면 아무것도 하지 않는다. 시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 지우지 않는다. " +
+    "프로젝트 마무리(close-out) 루틴에서 호출한다 — 워크트리는 push 돼 있으면 provision 으로 언제든 복구된다.",
+  scope: "memory",
+  input: {
+    project_id: z.number().int().positive().describe("v6 프로젝트 id"),
+    apply: z.boolean().optional().describe("true 면 실제 삭제(기본 false = dry-run: 계획만 반환)"),
+    remove_worktree: z.boolean().optional().describe("워크트리까지 제거(푸시 완료·클린일 때만 — 아니면 거부하고 이유 반환)"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/v6/projects/:id/reclaim"],
+      parse: (req) => ({ ...(req.body ?? {}), project_id: Number((req.params as Record<string, string>).id) }),
+    }],
+  },
+  handler: async (input: { project_id: number; apply?: boolean; remove_worktree?: boolean }, user) => {
+    const project = await getProject(input.project_id);
+    if (!project) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
+    if (!project.folder) throw new HttpError(400, "이 프로젝트에는 워크스페이스 폴더가 없습니다(회수할 것이 없습니다)");
+    const dir = projectAbsPath(project.folder); // project/<id> 또는 legacy-project/<id> 범위 밖이면 여기서 차단
+
+    // 지금 살아있는 세션들의 작업 디렉터리 — 이 폴더 안에서 작업 중이면 회수를 통째로 막는다(빌드 중일 수 있다).
+    let activeSessionDirs: string[] = [];
+    try {
+      activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
+    } catch { /* 세션 조회 실패 → 보수적으로 '활성 없음'이 아니라, 아래 planReclaim 이 못 막으므로 차단한다 */
+      throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+    }
+
+    // 프로젝트 폴더 안의 git 레포(워크트리)들을 각각 계획한다 — 한 프로젝트에 여러 레포가 붙을 수 있다.
+    const repos: string[] = [];
+    for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+      const p = path.join(dir, name);
+      if (await fsp.stat(path.join(p, ".git")).then(() => true).catch(() => false)) repos.push(p);
+    }
+    if (!repos.length) throw new HttpError(400, "이 프로젝트 폴더에 git 레포(워크트리)가 없습니다");
+
+    const results = [];
+    for (const wt of repos) {
+      const plan = await planReclaim(wt, { activeSessionDirs });
+      const applied = input.apply
+        ? await applyReclaim(plan, { removeWorktree: !!input.remove_worktree, repoRoot: await baseRepoOf(wt) })
+        : null;
+      results.push({
+        worktree: wt,
+        // 무엇을 지울지/지웠는지 + 지우지 않은 것과 그 이유까지 그대로 보여준다(에이전트가 사용자에게 설명할 수 있게).
+        reclaimable_bytes: plan.reclaimableBytes,
+        derived: plan.entries.filter((e) => e.kind === "derived").map((e) => ({ path: e.rel, bytes: e.bytes })),
+        unclassified: plan.entries.filter((e) => e.kind === "unclassified").map((e) => ({ path: e.rel, bytes: e.bytes })),
+        protected_kept: plan.entries.filter((e) => e.kind === "protected").map((e) => e.rel),
+        active_session: plan.active_session,
+        worktree_removable: plan.worktree_check.removable,
+        worktree_reason: plan.worktree_check.reason,
+        applied,
+      });
+    }
+    return {
+      dry_run: !input.apply,
+      project: { id: project.id, name: project.name, folder: project.folder },
+      results,
+      note: input.apply
+        ? "회수 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
+        : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 회수하려면 apply=true 로 다시 호출하세요.",
+    };
+  },
+};
+
 export const projectV6Capabilities: Capability[] = [
+  workspaceReclaim,
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   projectListV6, projectGrepV6, projectSearchV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,

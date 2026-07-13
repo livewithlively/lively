@@ -6634,3 +6634,34 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .kn-side::-webkit-scrollbar-thumb, .pjv-side-nav-inner::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
 .kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
 .kn-side:hover::-webkit-scrollbar-thumb:hover, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+
+/* ── 저장소 · 로그 (#813) ─────────────────────────────────────────────
+   디스크가 얼마나 찼는지 '숫자'가 아니라 '한눈'에 보이게. 색은 상태(여유/경고/위험) 신호이므로
+   테마와 무관하게 고정한다(초록/주황/빨강 = 보편적 위험 신호). 나머지는 기존 토큰(--line/--muted) 재사용. */
+.storage-h { margin: 18px 0 8px; font-size: 14px; font-weight: 700; }
+.storage-h:first-child { margin-top: 4px; }
+.storage-block { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; }
+.storage-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.storage-item:last-child { border-bottom: 0; }
+.storage-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.storage-head code { font-size: 12px; color: var(--muted); word-break: break-all; }
+
+.gauge { height: 10px; border-radius: 999px; background: var(--bg-tint, #eef0f3); overflow: hidden; margin: 7px 0 5px; }
+.gauge-fill { height: 100%; border-radius: 999px; transition: width .35s ease; }
+.gauge-ok { background: #22c55e; }
+.gauge-warn { background: #f59e0b; }
+.gauge-critical { background: #ef4444; }
+
+.storage-lv { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.storage-lv-ok { background: #dcfce7; color: #14532d; }
+.storage-lv-warn { background: #fef3c7; color: #78350f; }
+.storage-lv-critical { background: #fee2e2; color: #7f1d1d; }
+
+.storage-calc { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.storage-fields { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 4px; }
+.storage-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.input-num { width: 110px; }
+.storage-actions { margin-top: 14px; }
+.storage-toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
+.storage-toggle input { margin: 0; }
+.storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }

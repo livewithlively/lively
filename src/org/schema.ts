@@ -482,6 +482,13 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_config JSONB NOT NULL DEFAULT '{"provider":"off"}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: storage_policy — 박스 저장소 정책(#813). 로그 보관 상한 · 디스크 임계치. ──
+  // 기본 '{}' = 미설정 → env 시드(LOG_MAX_MB·DISK_WARN_PCT…) → 코드 기본값 순으로 해석(src/org/storage-policy.ts).
+  // **관리탭이 단일 창구**: 고객 박스는 우리가 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
   // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름/
   //  파일경로/role/path)만. 실제 비번 등은 런타임에 참조에서 해소(src/db/sources.ts resolveConnectionString).
