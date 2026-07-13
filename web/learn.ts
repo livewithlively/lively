@@ -26,7 +26,7 @@ const DOCS_NAV = [
   { group: '화면별 안내', items: [
     { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' },
     { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
-    { key: 'terminal', label: '터미널 — AI 세션', href: '#/learn/docs/terminal' },
+    { key: 'terminal', label: '내 AI 세션', href: '#/learn/docs/terminal' },
     { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
     { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
     { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
@@ -261,10 +261,10 @@ const GUIDE_CHAPTERS = [
       href: '#/dashboard', link: '홈 열기' },
   ] },
   { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
-    { icon: 'terminal', name: '터미널 (AI 세션)', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
+    { icon: 'terminal', name: '내 AI 세션', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
       summary: '웹에서 곧장 AI와 대화하는 곳',
       desc: '브라우저에서 바로 AI와 대화하는 화면이에요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 홈의 ‘내 AI 세션’에서 [+ 새 세션]으로 열 수 있고, 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
-      href: '#/terminal', link: '터미널 열기' },
+      href: '#/terminal', link: '내 AI 세션 열기' },
     { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC',
       summary: '회사에서 지금 무슨 일이 진행 중인지',
       desc: '진행 중·완료된 프로젝트와 할 일을 모아 보는 곳이에요. 누가 무엇을 했고 지금 무엇을 하는지(작업 현황)를 한눈에 볼 수 있어, 팀 전체의 흐름을 따라가기 좋습니다. 사업·제품·시스템별로도 훑어볼 수 있어요.',
