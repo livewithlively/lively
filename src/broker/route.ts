@@ -38,15 +38,28 @@ export async function routeToBroker(slug: string, req: unknown, spawner: Spawner
   return brokerCall(await ensureBroker(slug, spawner), req);
 }
 
-// 기본 spawner(프로덕션) — detached child(sudo→box-spawn→broker). 실패는 ensureBroker 폴링 타임아웃이 처리.
-//  ⚠ env 는 box-spawn 이 통과시키는 LIVELY_BROKER_* 화이트리스트로 브로커에 전달(② install-isolation 에서 확정).
-export function defaultBrokerSpawner(entry: string, extraEnv: Record<string, string> = {}): Spawner {
+export interface BrokerSpawnOpts {
+  entry: string;                 // 브로커 진입 js(world-readable 앱경로, 예 /opt/context-ontology/dist/broker/index.js)
+  workrootBase?: string;         // 브로커 홈 베이스(기본 /home) → workroot=<base>/broker_<slug>/work
+  allowedTools?: string[];       // 실행 허용 도구(기본 broker 기본목록)
+  internalHosts?: string[];      // mcp-forward 내부 host 허용(SSRF)
+}
+
+// 기본 spawner(프로덕션) — detached child(sudo -n -u broker_<slug> -- box-spawn node entry). 실패는 ensureBroker 폴링이 처리.
+//  env(LIVELY_BROKER_*)는 sudoers env_keep 로 box-spawn 통과 → 브로커가 config 수신(비밀 아님: 소켓·workroot·툴목록).
+export function defaultBrokerSpawner(opts: BrokerSpawnOpts): Spawner {
   return (slug: string) => {
-    const argv = brokerSpawnArgv(slug, entry);
-    const child = spawn(argv[0], argv.slice(1), {
-      detached: true, stdio: "ignore",
-      env: { ...process.env, ...extraEnv, LIVELY_BROKER_MEMBER: slug, LIVELY_BROKER_SOCKET: brokerSocketPath(slug) },
-    });
+    const argv = brokerSpawnArgv(slug, opts.entry);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      LIVELY_BROKER_MEMBER: slug,
+      LIVELY_BROKER_SOCKET: brokerSocketPath(slug),
+      LIVELY_BROKER_WORKROOT: `${opts.workrootBase || "/home"}/${brokerUser(slug)}/work`,
+      LIVELY_BROKER_ENTRY: opts.entry,
+    };
+    if (opts.allowedTools?.length) env.LIVELY_BROKER_ALLOWED_TOOLS = opts.allowedTools.join(",");
+    if (opts.internalHosts?.length) env.LIVELY_BROKER_INTERNAL_HOSTS = opts.internalHosts.join(",");
+    const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: "ignore", env });
     child.unref();
   };
 }

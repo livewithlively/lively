@@ -24,6 +24,22 @@ echo "멤버=$MEMBER  slug=$SLUG  osUser=$OSUSER"
 # 그룹 보장(install-isolation.sh 가 이미 했어도 멱등)
 getent group box_members   >/dev/null || groupadd box_members
 getent group lively-shared >/dev/null || groupadd lively-shared
+getent group broker_members >/dev/null || groupadd broker_members
+getent group lively-broker  >/dev/null || groupadd lively-broker
+
+# ─── 브로커 전용 uid(#746 T4) — 멤버 대화 uid(box_$SLUG)와 분리. 자격은 이 계정에만 → 멤버가 변조/열람 불가. ───
+#   nologin(대화형 진입 불가; 게이트웨이 sudo→box-spawn 로만 기동). broker_members(sudoers runas)+lively-broker(소켓 그룹).
+BROKER_USER="broker_$SLUG"
+if id "$BROKER_USER" >/dev/null 2>&1; then
+  usermod -aG broker_members,lively-broker "$BROKER_USER"; echo "브로커 유저 $BROKER_USER 갱신"
+else
+  useradd -m -d "/home/$BROKER_USER" -s /usr/sbin/nologin -G broker_members,lively-broker "$BROKER_USER"
+  passwd -l "$BROKER_USER" >/dev/null 2>&1 || true
+  echo "브로커 유저 $BROKER_USER 생성(nologin · broker_members+lively-broker)"
+fi
+chmod 750 "/home/$BROKER_USER" 2>/dev/null || true
+# 브로커 workroot(브로커 소유). ⚠ 멤버↔브로커 작업파일 공유(git 등)는 후속(per-member 공유그룹) — MVP 는 브로커 전용.
+install -d -m 2770 -o "$BROKER_USER" -g lively-broker "/home/$BROKER_USER/work" 2>/dev/null || true
 
 # 유저(멱등) — 홈·셸·그룹·비번잠금(대화형 로그인 불가; 진입은 게이트웨이 sudo→box-spawn 로만)
 if id "$OSUSER" >/dev/null 2>&1; then
