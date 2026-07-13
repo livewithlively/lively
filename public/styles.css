@@ -6380,37 +6380,82 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-lib-toggle:hover { color: var(--blue-deep); }
 .wk-cat-v6 .wk-lib-sec .wk-cat-library { margin-top: 8px; }
 
-/* ── 사용 가이드 = 문서 사이트(#780) — 좌측 사이드바 + 본문 (code.claude.com/docs 형식) ── */
-.docs-layout { display: flex; align-items: flex-start; gap: 34px; }
-.docs-side { flex: 0 0 216px; position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
-  padding: 2px 2px 28px; }
-.docs-side-group { margin: 0 0 18px; }
-.docs-side-title { font-size: 11px; font-weight: 800; letter-spacing: .05em; color: #8a94a6; margin: 0 0 5px; padding: 0 10px; }
-.docs-side a.docs-item { display: block; padding: 5px 10px; border-radius: 7px; font-size: 13px; line-height: 1.45;
-  color: var(--ink-sub); text-decoration: none; }
+/* ══════════════════════════════════════════════════════════════════
+   사용 가이드 = 문서 사이트(#780) — 히어로(guide-hero)의 디자인 언어로 통일:
+   아이브로(12px/자간2px/uppercase) · 리드(15px/1.75 ink-sub) · 틴트 박스(line-net) 안
+   화이트 카드 중첩(tabchapter↔tabguide-card 문법) · 파란 포인트는 아껴서(§0.5).
+   ══════════════════════════════════════════════════════════════════ */
+.docs-layout { display: flex; align-items: flex-start; gap: 40px; }
+.docs-side { flex: 0 0 232px; position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
+  padding: 10px 18px 32px 2px; border-right: 1px solid var(--line); }
+.docs-side-group { margin: 0 0 22px; }
+.docs-side-group:last-child { margin-bottom: 0; }
+.docs-side-title { font-size: 11.5px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--muted-head); margin: 0 0 7px; padding: 0 11px; }
+.docs-side a.docs-item { display: block; padding: 6px 11px; border-radius: 9px; font-size: 14px; line-height: 1.5;
+  color: var(--ink-sub); text-decoration: none; transition: background .12s ease, color .12s ease; }
 .docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
-.docs-side a.docs-item.active { background: #EEF4FF; color: var(--blue); font-weight: 700; }
-.docs-body { flex: 1; min-width: 0; max-width: 840px; padding-bottom: 64px; }
-.docs-body > .page-head { margin-bottom: 10px; }
-/* 문서 본문 타이포 — 지식 캔버스보다 문서답게 크게 */
-.docs-md .md-h1 { font-size: 26px; margin: 4px 0 14px; letter-spacing: -.02em; }
-.docs-md .md-h2 { font-size: 19px; margin: 30px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-.docs-md .md-h3 { font-size: 16px; margin: 22px 0 8px; }
-.docs-md .md-h4 { font-size: 14.5px; margin: 18px 0 6px; }
-.docs-md .md > blockquote:first-child .md-p, .docs-md .md-h1 + blockquote .md-p { color: var(--ink-sub); }
-.docs-md .md-table { width: 100%; }
+.docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
+.docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.docs-body { flex: 1; min-width: 0; max-width: 800px; padding-bottom: 72px; }
+.docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
+
+/* 문서 페이지 머리 — 아이브로(그룹명) + 제목: guide-hero-eyebrow/-title 과 같은 문법 */
+.docs-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted-head); margin: 8px 0 10px; }
+.docs-title { font-size: 27px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.35;
+  color: var(--ink); margin: 0 0 14px; }
+
+/* 본문 타이포 — guide-hero-lead 의 리듬(15px/1.75) */
+.docs-md { font-size: 15px; line-height: 1.75; color: var(--ink-sub); }
+.docs-md .md-p { margin: 0 0 14px; }
+.docs-md strong { color: var(--ink); }
+.docs-md .md-h1 { font-size: 27px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); margin: 4px 0 14px; }
+.docs-md .md-h2 { font-size: 19px; font-weight: 800; letter-spacing: -.2px; color: var(--ink);
+  margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.docs-md .md > .md-h2:first-child { margin-top: 8px; }
+.docs-md .md-h3 { font-size: 16px; font-weight: 800; color: var(--ink); margin: 26px 0 8px; }
+.docs-md .md-h4 { font-size: 14.5px; font-weight: 800; color: var(--ink); margin: 20px 0 6px; }
+.docs-md a { color: var(--blue); text-decoration: none; font-weight: 600; }
+.docs-md a:hover { text-decoration: underline; }
+.docs-md .md-list { margin: 0 0 14px; padding-left: 22px; }
+.docs-md .md-list li { margin: 4px 0; }
+.docs-md .md-list li::marker { color: var(--muted-2); }
+.docs-md .md-hr { margin: 30px 0; }
+.docs-md .md-code { font-size: 13px; border-color: var(--line-net); border-radius: 6px; padding: 1.5px 6px; }
+.docs-md .md-pre { padding: 14px 16px; margin: 4px 0 16px; border-radius: 12px; }
+.docs-md .md-pre code { font-size: 13px; line-height: 1.6; }
+
+/* 콜아웃 — 인용(팁·알아두기)을 '딱 한 줄'(guide-remember)과 같은 언어로 */
+.docs-md .md-quote { background: rgba(45,107,240,.05); border: 1px solid var(--line-note);
+  border-radius: 12px; padding: 12px 16px; margin: 16px 0; color: var(--ink-sub); }
+.docs-md .md-quote strong { color: var(--ink); }
+/* 리드 — 문서의 첫 인용은 콜아웃이 아니라 히어로 리드(맨몸 문단) */
+.docs-md .md > .md-quote:first-child { background: none; border: 0; border-radius: 0; padding: 0;
+  margin: 0 0 24px; font-size: 15.5px; line-height: 1.8; }
+
+/* 표 — 조용한 그리드: 머리행만 틴트 */
+.docs-md .md-table { font-size: 14px; margin: 4px 0 18px; }
+.docs-md .md-table th, .docs-md .md-table td { border-color: var(--line); padding: 8px 12px; line-height: 1.55; }
+.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); }
+
 @media (max-width: 960px) {
-  .docs-layout { flex-direction: column; gap: 14px; }
-  .docs-side { position: static; flex: none; width: 100%; max-height: none; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .docs-layout { flex-direction: column; gap: 16px; }
+  .docs-side { position: static; flex: none; width: 100%; max-height: none; border-right: 0;
+    border-bottom: 1px solid var(--line); padding: 0 0 14px; display: flex; flex-wrap: wrap; gap: 2px 26px; }
   .docs-side-group { margin: 0; }
 }
 
-/* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) ── */
-.md-tabs { margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.md-tabs-bar { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--bg-tint); padding: 4px 8px 0; }
-.md-tab-btn { appearance: none; border: 0; background: none; padding: 8px 12px; font-size: 13px; font-weight: 700;
-  color: var(--ink-sub); cursor: pointer; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; }
-.md-tab-btn:hover { color: var(--ink); }
-.md-tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
-.md-tabs-body { padding: 14px 16px 6px; }
+/* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) — 틴트 박스 안 화이트 카드(tabchapter 문법) ── */
+.md-tabs { margin: 16px 0 20px; background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 14px; padding: 10px; }
+.md-tabs-bar { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 2px 10px; }
+.md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
+  font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
+  transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.md-tab-btn:hover { color: var(--ink); background: rgba(255,255,255,.75); }
+.md-tab-btn.active { background: var(--bg); color: var(--blue); border-color: var(--line-net-2);
+  box-shadow: 0 1px 4px rgba(21,35,59,.06); }
+.md-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
+@media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }

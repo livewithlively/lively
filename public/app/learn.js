@@ -55,14 +55,28 @@ function docsShell(view, active, ...content) {
     view.replaceChildren(el('div', { class: 'docs-layout' }, docsSidebar(active), el('article', { class: 'docs-body' }, ...content)));
     document.getElementById('view').focus?.();
 }
+// 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
+function docsEyebrow(key) {
+    for (const g of DOCS_NAV)
+        if (g.items.some((i) => i.key === key))
+            return el('div', { class: 'docs-eyebrow', text: g.group });
+    return null;
+}
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
+//  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
     const page = DOC_PAGES.find((p) => p.slug === slug);
     if (!page) {
         location.replace('#/learn');
         return;
     }
-    const body = [el('div', { class: 'md-rendered docs-md' }, renderMarkdown(page.md))];
+    const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
+    const md = h1 ? page.md.slice(h1[0].length) : page.md;
+    const body = [
+        docsEyebrow(slug),
+        el('h1', { class: 'docs-title', text: (h1 ? h1[1] : page.title).trim() }),
+        el('div', { class: 'md-rendered docs-md' }, renderMarkdown(md)),
+    ];
     if (slug === 'wiki') {
         body.push(el('div', { class: 'guide-cards', style: 'margin-top:26px' }, kindsCard(), // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
         projectKnowledgeCard() // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
@@ -167,7 +181,7 @@ function tabCard(t) {
 //  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
 async function renderLearnMenu(view) {
     const head = el('div', { class: 'page-head' }, el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
-    docsShell(view, 'menu', head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
+    docsShell(view, 'menu', docsEyebrow('menu'), head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
 }
 // ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
 //  옛 R·K·H·W '종류'는 폐기. WIKI 탭과 동일 용어·칩(kn-chip)으로 맞춘다: 주입=항상 주입/검색, 출처=저작/외부 미러.
@@ -227,7 +241,7 @@ async function renderLearnTour(view) {
     const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title' }, el('span', { text: title }), isSectionDone(key) ? el('span', { class: 'admin-hint', style: 'margin-left:8px;font-weight:400', text: '✓ 봤어요' }) : null), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '▶ ' + title.split(' — ')[0] + '만 보기', onclick: () => startGuideTour([key]) })));
     const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
     const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ', el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ', el('a', { href: '#/learn/install', text: '시작하기' }), ' 에서.'));
-    docsShell(view, 'tour', head, el('div', { class: 'guide-cards' }, intro, courses, extra));
+    docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
 // 설치 탭(#/install) — 모든 구성원의 첫 행동. 비개발자도 그대로 따라 하도록 구성한다.
 //  핵심: 쓰는 곳이 두 갈래라 시작법이 다르다 — (web) 라이블리 [터미널] 탭=서버에서 claude/codex 가 돌고
@@ -240,7 +254,7 @@ async function renderInstall(view) {
     slot.append(skeleton('설치 안내를 준비하는 중'));
     // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드 아래 정적 문서로.
     const extra = el('div', { class: 'md-rendered docs-md', style: 'margin-top:22px' }, renderMarkdown(INSTALL_EXTRA_MD));
-    docsShell(view, 'install', head, slot, extra);
+    docsShell(view, 'install', docsEyebrow('install'), head, slot, extra);
     onboardingBanner().then((b) => { if (b)
         head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
     loadAdmin().then((data) => drawInstallGuide(slot, data))
