@@ -6536,6 +6536,12 @@ body.pjv-pm-open { overflow: hidden; }
    ## 섹션 하나 = .card 하나(제품 가이드 카드와 같은 박스). 카드 안은 흘러가는 글이 아니라
    구조화된 조각들: 리드(guide-lead) · 피처 카드(kn-axis-opt) · 번호 단계(guide-path) ·
    이동 카드(tabguide-card) · 콜아웃(guide-remember) · 탭(tabchapter). */
+/* 한국어 줄바꿈 — 상위 .md-rendered 의 break-word(글자 단위 절단) 대신 어절 단위(keep-all).
+   좁은 칸에서 한글이 한 글자씩 세로로 쪼개지는 것을 막는다. 코드·URL 만 강제 개행 유지. */
+.docs-md, .docs-lead, .docs-feat, .docs-step-body, .docs-linkcard, .md-prompt, .docs-title {
+  word-break: keep-all; overflow-wrap: break-word;
+}
+.docs-md .md-code, .docs-md .md-pre { word-break: break-all; }
 .docs-lead { font-size: 15.5px; line-height: 1.8; color: var(--ink-sub); margin: -2px 0 4px; max-width: 780px; }
 .docs-lead .md-p { margin: 0 0 10px; }
 .docs-lead .md-p:last-child { margin-bottom: 0; }
@@ -6598,17 +6604,19 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .docs-md .md-quote strong { color: var(--ink); }
 
 /* 표 — 카드 폭을 꽉 채우는 조용한 그리드. 기본 .md-table 은 display:block(내용폭)이라 오른쪽이 텅 비고
-   정렬이 어긋난다 → 래퍼(.docs-tablewrap)가 가로 스크롤을 맡고, 표는 display:table + width:100% 로 폭을 채운다. */
+   정렬이 어긋난다 → 래퍼(.docs-tablewrap)가 가로 스크롤을 맡고, 표는 display:table + width:100% 로 폭을 채운다.
+   ⚠ 열 폭을 %/1% 로 고정하지 말 것 — 한국어는 글자 단위로 끊겨 첫 열이 세로 한 줄로 쪼개진다(#780 실측 사고).
+   대신 ①어절 단위 줄바꿈(keep-all) ②이름표 열 최소폭 ③자동 배분(table-layout:auto) 셋으로 잡는다. */
 .docs-tablewrap { overflow-x: auto; margin: 4px 0 14px; border: 1px solid var(--line); border-radius: 12px; }
-.docs-md .docs-tablewrap .md-table { display: table; width: 100%; margin: 0; border: 0; font-size: 13.5px; }
+.docs-md .docs-tablewrap .md-table { display: table; table-layout: auto; width: 100%; margin: 0; border: 0; font-size: 13.5px; }
 .docs-md .md-table th, .docs-md .md-table td { border: 0; border-bottom: 1px solid var(--line);
-  padding: 10px 14px; line-height: 1.6; vertical-align: top; text-align: left; }
+  padding: 10px 14px; line-height: 1.6; vertical-align: top; text-align: left;
+  word-break: keep-all; overflow-wrap: break-word; }
 .docs-md .md-table th { background: var(--bg-tint); color: var(--ink); font-weight: 700; white-space: nowrap; }
 .docs-md .md-table tr:last-child td { border-bottom: 0; }
 .docs-md .md-table tbody tr:hover td { background: var(--bg-tint); }
-/* 첫 열 = 행의 이름표 — 잉크색·굵게로 왼쪽 기둥을 세운다(‘#’ 같은 번호 열이면 좁게 고정). */
-.docs-md .md-table td:first-child { color: var(--ink); font-weight: 600; }
-.docs-md .md-table th:first-child { width: 1%; }
+/* 첫 열 = 행의 이름표 — 잉크색·굵게로 왼쪽 기둥을 세우되, 좁아져 쪼개지지 않게 최소폭을 준다. */
+.docs-md .md-table td:first-child { color: var(--ink); font-weight: 600; min-width: 9.5em; }
 .docs-md .md-table td:last-child, .docs-md .md-table th:last-child { padding-right: 16px; }
 
 /* 프롬프트 예시 — AI에게 실제로 시켜 볼 말(:::prompt). 명령어 코드블록과 다른 표면. */
