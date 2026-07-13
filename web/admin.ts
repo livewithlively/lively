@@ -4095,13 +4095,45 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
 ];
 const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
 
+// OAuth 커넥터 카드(#746 T2/T3) — 멤버 셀프 연결/해제. 연결은 새 탭에서 인증(브라우저 리다이렉트), 완료 후 새로고침.
+function oauthConnectorsCard(conns, reload) {
+  const rows = conns.map((c) => {
+    const status = el('span', { class: 'pill', text: c.connected ? '연결됨' : '미연결' });
+    const connectBtn = el('button', { class: 'btn btn-sm ' + (c.connected ? 'btn-ghost' : 'btn-primary'), text: c.connected ? '재연결' : '연결',
+      onclick: async () => {
+        try {
+          const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: c.server }) });
+          if (r.authorized) { toast('이미 연결됨'); reload(); return; }
+          window.open(r.authorization_url, '_blank', 'noopener');
+          toast('새 탭에서 로그인·동의하세요 — 완료 후 [새로고침]');
+        } catch (e) { toast(e.message, true); }
+      } });
+    const discBtn = c.connected ? el('button', { class: 'btn-text', text: '해제',
+      onclick: async () => {
+        if (!confirm(`'${c.server}' 연결을 해제할까요?`)) return;
+        try { await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: c.server }) }); toast('해제됨'); reload(); }
+        catch (e) { toast(e.message, true); }
+      } }) : null;
+    return el('div', { class: 'mini-row' },
+      el('div', { class: 'mini-title', text: c.server }, status),
+      c.note ? el('div', { class: 'mini-meta', text: c.note }) : null,
+      el('div', { class: 'admin-actions' }, connectBtn, discBtn));
+  });
+  return el('div', { class: 'card' },
+    sectionTitle('OAuth 커넥터', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 커넥터예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'),
+    el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })),
+    ...rows);
+}
+
 async function credentialsEditor(detail) {
   const isAdmin = hasScope('admin');
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
   let mine: any = { credentials: [], encryption_ready: true };
   let org: any = { credentials: [] };
+  let oauthConns: any = { connectors: [] };
   try {
     mine = await api('/api/ui/me/credentials');
+    oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
     if (isAdmin) org = await api('/api/ui/org/credentials');
   } catch (e: any) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '자격을 불러오지 못했습니다'))); return; }
 
@@ -4113,6 +4145,8 @@ async function credentialsEditor(detail) {
   ];
 
   cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', mine.credentials || [], encReady, () => credentialsEditor(detail)));
+
+  if ((oauthConns.connectors || []).length) cards.push(oauthConnectorsCard(oauthConns.connectors, () => credentialsEditor(detail)));
 
   if (isAdmin) {
     cards.push(credVaultCard('org', '통합 자격 (관리자)', '개인 자격이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 자격 필수).', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));

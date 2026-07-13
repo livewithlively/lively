@@ -5,8 +5,8 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { secretsEnabled } from "../org/secret-box.js";
-import { getMcpServer } from "../org/store.js";
-import { deleteMemberSecret, memberOwner } from "../org/member-secret-store.js";
+import { getMcpServer, listMcpServers } from "../org/store.js";
+import { deleteMemberSecret, memberOwner, listMemberSecretsPublic } from "../org/member-secret-store.js";
 import { startConsent } from "../org/oauth-broker.js";
 
 function s(v: unknown, max = 200): string {
@@ -54,4 +54,19 @@ const meOauthDisconnect: Capability = {
   },
 };
 
-export const oauthConnectCapabilities: Capability[] = [meOauthConnect, meOauthDisconnect];
+// OAuth 커넥터 목록 + 내 연결 여부 — 웹 '자격' 화면·에이전트가 무엇을 연결할지 안내. 시크릿·URL 미노출(이름·설명·연결플래그만).
+const meOauthConnectors: Capability = {
+  name: "me_oauth_connectors", title: "OAuth 커넥터 목록(내 연결 상태)",
+  description: "auth_mode=oauth 인 프록시 MCP 서버(커넥터) 목록과 내 연결 여부. 연결은 me_oauth_connect, 해제는 me_oauth_disconnect.",
+  scope: null, input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/me/oauth/connectors"], parse: () => ({}) }] },
+  handler: async (_input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const servers = (await listMcpServers()).filter((s) => s.mode === "proxy" && s.auth_mode === "oauth" && s.enabled !== false && s.auth_kind);
+    const mine = await listMemberSecretsPublic(memberOwner(user.userId)); // has_secret 플래그만(복호·last_used 부작용 없음)
+    const connected = (kind: string, sk: string | null) => mine.some((c) => c.kind === kind && c.scope_key === (sk ?? "") && c.has_secret);
+    return { connectors: servers.map((s) => ({ server: s.name, note: s.note ?? null, connected: connected(s.auth_kind as string, s.auth_scope_key) })) };
+  },
+};
+
+export const oauthConnectCapabilities: Capability[] = [meOauthConnect, meOauthDisconnect, meOauthConnectors];
