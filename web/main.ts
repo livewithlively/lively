@@ -5,7 +5,7 @@ import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전�
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { pjvCloseTaskModalOnRoute } from './taskmodal.js';   // #804 — 라우트 이탈 시 상세 모달 정리
+import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';   // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
@@ -43,11 +43,14 @@ async function route() {
   wkRouteCleanup();   // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
   // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
   //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).
-  //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)되고, 페이지 재렌더는
-  //  건너뛴다 — 라우터가 곧 $view 를 새로 그리므로 보드 재렌더와 레이스가 난다.
+  //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)된다.
   //  (지식·가이드 같은 '참조' 링크는 애초에 새 탭으로 열려 여기까지 오지 않는다 — 그게 목적이므로.)
-  pjvCloseTaskModalOnRoute();
-  pjvCloseProjectModalOnRoute();
+  // #808·#810 모달은 '자기 주소'를 소유한다 → 새 주소가 그 모달의 주소면 **살려두고, 뒤 화면도 다시 그리지 않는다**:
+  //  중첩 태스크 모달을 닫아 프로젝트 모달의 주소로 돌아온 경우가 그것이다(모달 뒤 보드는 열었을 때 그대로여야 한다).
+  //  살아남은 모달이 곧 이 주소의 '페이지'이므로 라우터는 여기서 손을 뗀다.
+  const keptTask = pjvCloseTaskModalOnRoute();
+  const keptProject = pjvCloseProjectModalOnRoute();
+  if (keptTask || keptProject) return;
   if (!state.me) { showGate(); return; } // 인증 상태는 boot()/로그인이 state.me 로 표시(세션 쿠키 또는 토큰)
   const { segs, params } = parseHash();
   const view = $view();
@@ -93,12 +96,15 @@ async function route() {
       location.replace('#/projects2');
       return;
     } else if (page === 'projects2') {
-      setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 하위 탭(대시보드·탐색) 폐지: 상세(p) 외엔 보드 하나.
-      // 상세(p)만 읽기 페이지 폭, 그 외(보드·스코프 딥링크 /l·/f·/none, 옛 worklog·browse URL)는 전부 풀스크린 보드.
+      setActiveTab('projects2'); // 프로젝트(v2) — 맥락의 변화. 하위 탭(대시보드·탐색) 폐지: 상세(p·t) 외엔 보드 하나.
+      // 상세(p=프로젝트, t=태스크)만 읽기 페이지 폭, 그 외(보드·스코프 딥링크 /l·/f·/none, 옛 worklog·browse URL)는 전부 풀스크린 보드.
       //  스코프 딥링크(#541): /l/<id>·/f/<id>·/none 은 보드의 리스트/폴더/미분류 선택 — 새로고침·뒤로가기 복원.
+      //  태스크 딥링크(#810): /t/<id> — 태스크·서브태스크 공통(부모를 경로에 안 넣는 평면 id). 전용 페이지가 없으므로
+      //  소속 프로젝트 페이지 위에 태스크 모달로 뜬다(pjvRenderTaskRoute).
       const sub2 = segs[1] || 'dashboard';
-      document.body.dataset.route = sub2 === 'p' ? 'projects2-detail' : 'projects2-board';
+      document.body.dataset.route = (sub2 === 'p' || sub2 === 't') ? 'projects2-detail' : 'projects2-board';
       if (segs[1] === 'p' && segs[2]) await renderProjectV2Detail(view, segs[2]);
+      else if (segs[1] === 't' && segs[2]) await pjvRenderTaskRoute(view, segs[2]);
       else {
         let scopeKey: string | null = null;
         if (sub2 === 'l' && segs[2]) scopeKey = 'L' + segs[2];

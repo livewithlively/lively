@@ -41,7 +41,11 @@ function activityTimelineRow(a, nameOf) {
         detail.append(el('div', { class: 'act-row-tech', text: techTitle }));
     if (a.body)
         detail.append(el('div', { class: 'act-row-note', text: a.body }));
-    const linkList = (items) => el('span', { class: 'act-row-links' }, ...items.map((it) => el('a', { class: 'act-row-link', href: '#/k/' + encodeURIComponent(it.name), text: it.title || it.name })));
+    // 참조 지식(#/k/…)은 **새 탭** — 읽고 돌아오는 '참조' 링크라 작업 맥락(프로젝트 상세·모달)을 띄워 둔 채 읽는다.
+    //  #804 가 세운 규칙인데 이 타임라인 행만 빠져 있었다(#811): 모달에선 같은 탭 이동이 모달을 닫아 맥락을 날렸다.
+    //  '과업'(아래 #/projects2/p/…)은 참조가 아니라 '이동'이므로 같은 탭 그대로 둔다.
+    const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
+    const linkList = (items) => el('span', { class: 'act-row-links' }, ...items.map((it) => el('a', { class: 'act-row-link', href: '#/k/' + encodeURIComponent(it.name), ...KN_NEW_TAB, text: it.title || it.name })));
     // v6: 과업 = 진척시킨 프로젝트(task) — #/projects2/p/:id 로 링크(지식 refs 는 #/k/:name 유지).
     if (a.tasks && a.tasks.length) {
         detail.append(el('div', { class: 'act-row-sec' }, el('span', { class: 'act-row-sec-label', text: '과업' }), el('span', { class: 'act-row-links' }, ...a.tasks.map((t) => el('a', { class: 'act-row-link', href: '#/projects2/p/' + t.id, text: t.title || ('#' + t.id) })))));

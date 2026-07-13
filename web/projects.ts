@@ -3629,6 +3629,15 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
     subcountEl,
     tagsEl);
   titleCell.style.paddingLeft = (depth * 22) + 'px';
+  // 제목(셀) 클릭 = 태스크 상세 모달 (#811). 이 행은 보드 전용 렌더러라 pjvTaskRow 에 붙는 모달 배선(data-tm-wired)이
+  //  없어서 **눌러도 아무 일도 안 일어났다** — 보드에서 태스크를 열 방법 자체가 없었다. 주소 동기화(#/projects2/t/<id>)는
+  //  pjvOpenTaskModal 이 하므로 배선만 하면 따라온다(#810). 컨트롤(그립·체크·캐럿·상태·하위수·행액션)은 각자 동작하도록 통과.
+  const titleEl: any = titleCell.querySelector('.pjv-trow-title');
+  if (titleEl) { titleEl.classList.add('clickable'); titleEl.title = '상세 열기'; }
+  titleCell.addEventListener('click', (e: any) => {
+    if (e.target.closest('button, input, a, .pjv-trow-caret, .pjv-row-actions')) return;
+    pjvOpenTaskModal(t.id, reload);
+  });
 
   const subBox = el('div', { class: 'pjv-trow-subs' });
   subBox.hidden = true;
@@ -4753,23 +4762,42 @@ function demoTerminalCard(members, meId) {
 //  렌더하고 모달 안에서 스크롤한다: 페이지와 똑같은 renderProjectV2Detail 을 모달 컨테이너에 호출하므로 내용·편집·재렌더가 전부 동일.
 //  페이지용 '← 프로젝트' 백링크만 모달에선 CSS 로 숨긴다(모달은 ✕·Esc·배경클릭으로 닫음). 닫을 때 호출자(대시보드) 갱신.
 //  태스크 팝업(pjvOpenTaskModal)과 동일한 결. 상세가 등록하는 전역 paste 핸들러는 DOM 이탈 시 스스로 해제되므로 누수 없음.
-// 지금 열린 프로젝트 모달(항상 최대 1개) — 세 곳이 쓴다:
+// 지금 열린 프로젝트 모달(항상 최대 1개) — 네 곳이 쓴다:
 //  ① 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 '교체'(드릴인, #804)
-//  ② 라우트가 바뀌면 라우터가 닫는다(pjvCloseProjectModalOnRoute, #804)
+//  ② 라우트가 바뀌면 라우터가 닫는다(pjvCloseProjectModalOnRoute, #804) — 단 '자기 주소'면 살려둔다(#810)
 //  ③ 모달이 소유한 URL(히스토리 항목)을 닫을 때 되돌린다(#808 — 아래 _pjvPmUrl)
+//  ④ 위에 겹친 태스크 모달(#810)이 '내가 닫히면 라우터가 뒤 화면을 그릴까'를 판단할 때(pjvProjectModalOpen)
 // 닫는 경로마다 URL·재렌더 처리가 달라 mode 로 구분한다(#808 — 옛 skipReload 불리언을 대체):
 //  'user'  ✕·Esc·배경클릭   → 우리가 넣은 히스토리 항목을 pop(뒤로) → 원래 URL 복귀 + 라우터가 뒤 화면을 다시 그림
 //  'route' 라우터가 닫음     → URL 은 이미 다른 곳으로 갔다 → 히스토리·재렌더 둘 다 손대지 않는다
 //  'page'  '전체 페이지로 ↗' → 같은 URL 에서 페이지가 렌더된다 → 항목은 그대로 두고 재렌더는 라우터에 맡긴다
 //  'swap'  선행/후속 드릴인  → 다음 모달이 같은 항목을 replaceState 로 이어받는다(히스토리가 안 쌓인다)
 type PjvPmClose = 'user' | 'route' | 'page' | 'swap';
-let _pjvPmOpen: { close: (mode?: PjvPmClose) => void; pageReload?: any } | null = null;
+let _pjvPmOpen: { close: (mode?: PjvPmClose) => void; pageReload?: any; url: string; refresh: () => void } | null = null;
 // 모달이 소유한 히스토리 항목(#808) — 열 때 push 한 '#/projects2/p/<id>'. ret = 그 직전 해시(닫으면 돌아갈 곳).
 //  null = URL 을 소유하지 않음(push 실패했거나 이미 그 해시) → 닫을 때 히스토리를 건드리지 않는다.
 let _pjvPmUrl: { ret: string } | null = null;
 // 라우터(main.ts route())가 호출 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다. 안 닫으면 새 페이지가
 //  모달 뒤에 렌더돼 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일). 편집 중 본문은 모달이 닫히며 저장된다.
-function pjvCloseProjectModalOnRoute() { if (_pjvPmOpen) _pjvPmOpen.close('route'); }
+// #810 — 모달은 '자기 주소'를 소유한다(#808). 새 주소가 그 주소면 **살려둔다**: 위에 겹쳤던 태스크 모달을 닫고
+//  이 모달의 주소로 되돌아온 경우다. true 를 돌려주면 라우터는 뒤 화면(보드·대시보드)도 다시 그리지 않는다 —
+//  모달 뒤는 열었을 때 그대로여야 하니까.
+function pjvCloseProjectModalOnRoute(): boolean {
+  if (!_pjvPmOpen) return false;
+  if (_pjvPmOpen.url === location.hash) return true;
+  _pjvPmOpen.close('route');
+  return false;
+}
+// 프로젝트 모달이 떠 있나 — 태스크 모달(#810)이 '내가 pop 하면 라우터가 뒤 화면을 다시 그릴지'를 판단할 때 쓴다.
+//  떠 있으면 라우터는 그 모달을 살려두느라 아무것도 안 그리므로, 태스크 모달이 직접 pageReload 해야 한다.
+function pjvProjectModalOpen(): boolean { return !!_pjvPmOpen; }
+// 전역 실행취소(undo.ts) 처럼 '지금 화면'을 다시 그려야 할 때 — 이 모달이 주소의 주인이면 라우터는 안 도니(위 규칙)
+//  모달 안을 직접 다시 그린다. 그리지 않으면 되돌린 결과가 화면에 안 보이는 조용한 스테일이 된다.
+function pjvProjectModalRefreshIfRoute(): boolean {
+  if (!_pjvPmOpen || _pjvPmOpen.url !== location.hash) return false;
+  _pjvPmOpen.refresh();
+  return true;
+}
 
 function pjvOpenProjectModal(projectId, pageReload?) {
   // 주소는 지금 보고 있는 것을 가리킨다(#808) — 모달이 뜨면 URL 도 그 프로젝트가 된다(복사·공유·북마크가 통하고,
@@ -4835,7 +4863,8 @@ function pjvOpenProjectModal(projectId, pageReload?) {
   document.addEventListener('keydown', onKey, true);
   document.body.append(back);
   document.body.classList.add('pjv-pm-open');
-  _pjvPmOpen = { close: closeModal, pageReload };  // 모달 안 선행/후속 칩이 이 모달을 닫고 그 프로젝트로 교체할 수 있게(#804)
+  //  url = 이 모달이 소유한 주소(라우터가 '살려둘지' 판단 · #810), refresh = 모달 안만 다시 그리기(undo 등)
+  _pjvPmOpen = { close: closeModal, pageReload, url, refresh: () => renderProjectV2Detail(bodyEl, String(projectId)) };
 
   renderProjectV2Detail(bodyEl, String(projectId)); // 페이지와 동일한 렌더러 → 내용 축약 없음
   return closeModal;
@@ -9771,6 +9800,8 @@ export {
   pjvIsOverdue,
   pjvCloseProjectModalOnRoute,
   pjvOpenProjectModal,
+  pjvProjectModalOpen,
+  pjvProjectModalRefreshIfRoute,
   pjvPatchTask,
   pjvPopover,
   pjvPriorityControl,

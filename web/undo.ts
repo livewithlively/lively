@@ -6,6 +6,8 @@
 //  새 작업을 하면 그게 최신이라 자연히 먼저 취소된다(에디터 관례와 동일). 새로고침 = 스택 리셋(서버가 남의 작업·
 //  내 리버트 행을 거르므로 안전).
 import { api, state, toast } from './core.js';
+import { pjvProjectModalRefreshIfRoute } from './projects.js';   // #810 — 상세 모달이 지금 주소의 주인이면 라우터 대신 모달을 갱신
+import { pjvTaskModalRefreshIfRoute } from './taskmodal.js';
 
 const undoneIds: number[] = [];   // 이 탭에서 이미 되돌린 원본 감사 id (서버 픽 제외 목록)
 const redoIds: number[] = [];     // 다시 실행 후보(LIFO) — 마지막으로 되돌린 원본 감사 id
@@ -21,6 +23,11 @@ function inEditableOwner(t: any): boolean {
 function rerenderRoute() {
   const page = (location.hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard');
   if (page === 'terminal') return;
+  // 상세 모달(#808 프로젝트 · #810 태스크)이 지금 주소의 주인이면 라우터는 그 모달을 살려두느라 아무것도 안 그린다 →
+  //  hashchange 를 쏴 봐야 화면이 그대로다(되돌린 결과가 안 보이는 조용한 스테일). 그 모달 안을 직접 다시 그린다.
+  const tm = pjvTaskModalRefreshIfRoute();
+  const pm = pjvProjectModalRefreshIfRoute();
+  if (tm || pm) return;
   window.dispatchEvent(new HashChangeEvent('hashchange'));
 }
 

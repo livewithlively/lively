@@ -1,6 +1,6 @@
 // taskmodal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { TOKEN_KEY, api, el, errorNote, personFace, relTime, renderMarkdown, sv, toast } from './core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUploadProgress, debounce, fileIconSvg, fmtSize, mountBodyEditor, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, upIsAbort, upProgress, upSend, upToast, uploadBodyFile, type UpItem } from './projects.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, authDownload, authUploadProgress, debounce, fileIconSvg, fmtSize, mountBodyEditor, openFileViewer, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFmtDate, pjvGridTemplate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvProjectModalOpen, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, upIsAbort, upProgress, upSend, upToast, uploadBodyFile, type UpItem } from './projects.js';
 // 커스텀 필드 셀 컨트롤(pjvFieldControl) 재사용용 네임스페이스(#541) — projects.ts 는 동시 편집 중이라 직접
 //  수정하지 않고, export 목록에 오르는 즉시 자동으로 붙는다(없으면 읽기전용 폴백 — pjvtmFieldReadonly).
 import * as PJ from './projects.js';
@@ -205,10 +205,59 @@ function pjvtmSideResizer(box) {
 
 // 지금 열린 태스크 모달(최상단 1개) — 라우트가 바뀌면 라우터(main.ts route())가 이걸 닫는다(#804).
 //  모달은 document.body 에 얹혀 라우터가 존재를 모르므로, 안 닫으면 새 페이지가 모달 뒤에 렌더돼 죽은 클릭이 된다.
-let _pjvTmOpen: { close: (skipReload?: boolean) => void } | null = null;
-function pjvCloseTaskModalOnRoute() { if (_pjvTmOpen) _pjvTmOpen.close(true); }
+// #810 — 태스크 모달도 자기 주소를 소유한다('#/projects2/t/<id>'). 프로젝트 모달(#808)과 같은 계약이고,
+//  닫는 경로마다 히스토리 처리가 달라 mode 로 구분한다(옛 skipReload 불리언을 대체):
+//  'user'  ✕·Esc·배경클릭·프로젝트 크럼(뒤가 이미 그 프로젝트일 때) → 우리가 넣은 항목을 pop(뒤로)
+//  'route' 라우터가 닫음 · 크럼이 다른 곳으로 데려감 → 주소는 이미(또는 곧) 다른 데 있다. 히스토리를 손대지 않고
+//          재렌더도 라우터에 맡긴다(되돌리면 사용자를 엉뚱한 데로 돌려보낸다)
+//  'swap'  상위·하위·연결 태스크 드릴인 → 다음 모달이 같은 항목을 replaceState 로 이어받는다(히스토리가 안 쌓인다)
+type PjvTmClose = 'user' | 'route' | 'swap';
+let _pjvTmOpen: { close: (mode?: PjvTmClose) => void; url: string; refresh: () => void } | null = null;
+// 모달이 소유한 히스토리 항목 — ret = 그 직전 해시(= 모달 '뒤'에 있는 것: 프로젝트 모달·프로젝트 페이지·보드).
+let _pjvTmUrl: { ret: string } | null = null;
+// 라우터가 호출 — 새 주소가 이 모달의 주소면 살려두고(true) 아니면 닫는다. true 면 라우터는 뒤 화면도 안 그린다(#810).
+function pjvCloseTaskModalOnRoute(): boolean {
+  if (!_pjvTmOpen) return false;
+  if (_pjvTmOpen.url === location.hash) return true;
+  _pjvTmOpen.close('route');
+  return false;
+}
+// undo 등이 '지금 화면'을 다시 그려야 할 때 — 이 모달이 주소의 주인이면 라우터가 안 도니 모달 안을 직접 갱신(#810).
+function pjvTaskModalRefreshIfRoute(): boolean {
+  if (!_pjvTmOpen || _pjvTmOpen.url !== location.hash) return false;
+  _pjvTmOpen.refresh();
+  return true;
+}
+
+// 태스크 딥링크 라우트(#810) — '#/projects2/t/<id>' 로 콜드 로드(공유 링크·새로고침·앞으로가기) 진입했을 때.
+//  태스크는 전용 페이지가 없다(모달이 곧 상세) → **소속 프로젝트 페이지를 뒤에 그리고 그 위에 태스크 모달**을 연다
+//  (클릭업의 모달 레이아웃 = '열었던 위치가 뒤에 보인다'와 같은 결). 주소를 먼저 그 프로젝트로 replace 해 두면 모달이
+//  평소처럼 자기 주소를 push 하므로, 닫으면(뒤로) 자연스럽게 그 프로젝트로 돌아온다 — 히스토리가 모달 스택과 일치한다.
+//  서브태스크도 같은 주소 체계다(부모를 경로에 넣지 않는 평면 id — 클릭업 '/t/<id>' 와 동형).
+async function pjvRenderTaskRoute(view, taskIdStr) {
+  const id = Number(taskIdStr);
+  let d: any;
+  try { d = await api('/api/ui/v6/tasks/' + id + '/detail'); }
+  catch (e) { view.replaceChildren(errorNote(e, '태스크를 불러오지 못했습니다')); return; }
+  const pid = d && d.project && d.project.id;
+  if (!pid) { view.replaceChildren(el('div', { class: 'note', text: '태스크를 찾을 수 없습니다.' })); return; }
+  try { history.replaceState(null, '', '#/projects2/p/' + pid); } catch (_) { /* noop */ }
+  const reload = () => renderProjectV2Detail(view, String(pid));
+  const bg = reload();               // 뒤 화면(프로젝트 페이지)은 그리는 중에
+  pjvOpenTaskModal(id, reload);      // 모달은 곧바로 띄운다(자체 '불러오는 중…' 표시 → 딥링크가 빈 화면으로 안 보임)
+  await bg;
+}
 
 function pjvOpenTaskModal(taskId, pageReload) {
+  // 주소는 지금 보고 있는 것을 가리킨다(#810). pushState 는 hashchange 를 안 쏘므로 라우터가 돌지 않는다 —
+  //  돌면 라우터의 모달 정리가 방금 연 모달을 닫는 자충수가 된다(#808 과 같은 이유).
+  const url = '#/projects2/t/' + taskId;
+  if (_pjvTmUrl) {
+    try { history.replaceState(null, '', url); } catch (_) { /* noop */ }   // 드릴인 교체(상위·하위·연결 태스크)
+  } else if (location.hash !== url) {
+    const ret = location.hash || '#/';
+    try { history.pushState(null, '', url); _pjvTmUrl = { ret }; } catch (_) { /* noop */ }
+  }
   let dirty = false;
   let tickTimer: any = null;
   let pasteCtx: any = null; // 클립보드 붙여넣기 대상 — render 에서 {pid, taskId, refresh} 로 갱신
@@ -253,12 +302,12 @@ function pjvOpenTaskModal(taskId, pageReload) {
   document.addEventListener('paste', onPaste, true);
   document.body.append(back);
   document.body.classList.add('pjv-tm-open');
-  _pjvTmOpen = { close: closeModal };  // 라우트 변경 시 라우터가 닫을 수 있게(#804)
+  //  url = 이 모달이 소유한 주소(라우터가 '살려둘지' 판단 · #810), refresh = 모달 안만 다시 그리기(undo 등)
+  _pjvTmOpen = { close: closeModal, url, refresh };  // 라우트 변경 시 라우터가 닫거나 살려둘 수 있게(#804·#810)
 
-  // skipReload=true — 라우터가 닫는 경우. 곧 $view 를 새로 그리므로 pageReload(보드 재렌더)는 건너뛴다(레이스 방지).
-  //  본문 flush(자동저장)는 어느 경로든 그대로 수행한다.
+  // 본문 flush(자동저장)는 어느 경로든 그대로 수행한다. mode 별 히스토리·재렌더 계약은 위 PjvTmClose 주석 참고.
   let tmClosed = false;
-  function closeModal(skipReload?: boolean) {
+  function closeModal(mode: PjvTmClose = 'user') {
     if (tmClosed) return;
     tmClosed = true;
     if (_pjvTmOpen && _pjvTmOpen.close === closeModal) _pjvTmOpen = null;
@@ -269,7 +318,17 @@ function pjvOpenTaskModal(taskId, pageReload) {
     document.removeEventListener('paste', onPaste, true);
     document.body.classList.remove('pjv-tm-open');
     back.remove();
-    if (dirty && pageReload && !skipReload) pageReload();
+    // 주소 되돌리기(#810) — 우리가 넣은 항목을 pop 하면 뒤에 있던 주소로 돌아간다(프로젝트 모달 · 프로젝트 페이지 · 보드).
+    let popped = false;
+    if (mode === 'user') {
+      if (_pjvTmUrl) { _pjvTmUrl = null; try { history.back(); popped = true; } catch (_) { /* noop */ } }
+    } else if (mode !== 'swap') {
+      _pjvTmUrl = null;   // 'route' — 주소는 이미(또는 곧) 다른 곳에 있다
+    }
+    // pop 하면 그 hashchange 로 라우터가 뒤 화면을 다시 그린다 → pageReload 는 생략(이중 렌더 방지). 단 **프로젝트 모달이
+    //  그 주소의 주인이면 라우터는 살려두느라 아무것도 안 그린다**(#810) → 그땐 여기서 그 모달 안을 갱신해야 한다.
+    const routerWillRedraw = popped && !pjvProjectModalOpen();
+    if (dirty && pageReload && mode !== 'route' && !routerWillRedraw) pageReload();
   }
 
   box.append(el('div', { class: 'pjv-tm-loading' }, '불러오는 중…'));
@@ -279,7 +338,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
     let d: any;
     try { d = await api('/api/ui/v6/tasks/' + taskId + '/detail'); }
     catch (e) { box.replaceChildren(el('div', { class: 'pjv-tm-loading' }, errorNote ? errorNote(e, '태스크를 불러오지 못했습니다') : ('실패 — ' + e.message),
-      el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: closeModal }))); return; }
+      el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: () => closeModal() }))); return; } // 참조로 넘기면 MouseEvent 가 mode 인자로 샌다(#810)
     render(d);
   }
   // 편집 후 부분 갱신: 서버가 돌려준 조각으로 d 를 갱신하고 해당 영역만 다시 그릴 수도 있으나, 단순·정확을 위해 전체 재페치.
@@ -319,22 +378,30 @@ function pjvOpenTaskModal(taskId, pageReload) {
     // 상단바: 브레드크럼(프로젝트 / 상위태스크 / …) + 닫기. 하위태스크면 직전 층위(상위 태스크)까지 하이퍼링크(#139-5).
     main.append(el('div', { class: 'pjv-tm-top' },
       el('div', { class: 'pjv-tm-crumb' },
-        // 프로젝트 크럼 — 그 프로젝트로 간다. 단, 프로젝트 모달 위에 겹쳐 뜬 태스크 모달(또는 프로젝트 페이지 위)이면
-        //  주소가 이미 그 프로젝트다(#808) → 같은 URL 앵커 클릭은 hashchange 를 쏘지 않아(Chrome 실측) 라우터가 돌지 않는다
-        //  = 아무 데도 안 간다. 명시적으로 막고 태스크 모달만 닫아 그 프로젝트(모달·페이지)를 드러낸다 — 크럼의 뜻 그대로다.
-        //  (히스토리 항목은 Chrome 에선 안 늘지만 브라우저마다 다를 수 있어 기본동작에 기대지 않는다.)
+        // 프로젝트 크럼 — 그 프로젝트로 간다. 태스크 모달이 자기 주소를 갖게 되면서(#810) 두 경우로 갈린다:
+        //  · 바로 뒤가 이미 그 프로젝트면(프로젝트 모달 위 중첩 · 프로젝트 페이지 위 · 태스크 딥링크) → 태스크 모달만
+        //    닫으면 드러난다. 우리가 넣은 항목을 pop 하면 그 주소로 돌아가고, 라우터가 프로젝트 모달을 살려두거나 페이지를 그린다.
+        //  · 그 외(보드·대시보드에서 열었다) → 실제로 그 프로젝트로 이동한다(히스토리는 우리가 옮기므로 모달은 'route' 로 닫는다).
         d.project ? (() => {
           const href = '#/projects2/p/' + d.project.id;
           const a: any = el('a', { class: 'pjv-tm-crumb-link', href, text: d.project.name });
-          a.onclick = (e: any) => { if (location.hash === href) e.preventDefault(); closeModal(); };
+          a.onclick = (e: any) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // ⌘/중클릭 = 새 탭
+            e.preventDefault();
+            if (_pjvTmUrl && _pjvTmUrl.ret === href) { closeModal('user'); return; } // 뒤가 이미 그 프로젝트
+            closeModal('route');
+            location.hash = href;
+          };
           return a;
         })() : null,
         d.project ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null,
         d.parent ? el('a', { class: 'pjv-tm-crumb-link', href: '#', title: '상위 태스크로 돌아가기',
           text: d.parent.name,
-          onclick: (e) => { e.preventDefault(); dirty = true; closeModal(); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null,
+          onclick: (e) => { e.preventDefault(); dirty = true; closeModal('swap'); pjvOpenTaskModal(d.parent.id, pageReload); } }) : null,
         d.parent ? el('span', { class: 'pjv-tm-crumb-sep', text: ' /' }) : null),
-      el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: closeModal })));
+      // ⚠ onclick: closeModal (참조) 로 넘기면 MouseEvent 가 첫 인자(mode)로 샌다 — 옛 skipReload 시절엔 truthy 라
+      //  ✕ 로 닫을 때 pageReload 가 조용히 스킵됐고(#810 에서 발견), 지금은 주소 복원이 깨진다. 반드시 감싸서 호출.
+      el('button', { class: 'pjv-tm-x', type: 'button', title: '닫기 (Esc)', text: '✕', onclick: () => closeModal() })));
 
     // 타입 pill + 하위수 + 원본 링크(#541) — 외부 이관 태스크(external_url)면 원 시스템으로 새 탭 점프.
     const subs = t.subtasks || [];
@@ -843,7 +910,7 @@ function pjvOpenTaskModal(taskId, pageReload) {
       const sid = wrap && wrap.getAttribute('data-task-id');
       if (!sid) return;
       e.stopImmediatePropagation(); e.preventDefault();
-      dirty = true; closeModal(); pjvOpenTaskModal(Number(sid), pageReload);
+      dirty = true; closeModal('swap'); pjvOpenTaskModal(Number(sid), pageReload); // 드릴인 — 주소는 그 하위 태스크로 replace(#810)
     }, true);
     sec.append(list);
 
@@ -880,7 +947,9 @@ function pjvOpenTaskModal(taskId, pageReload) {
           sec.append(el('div', { class: 'pjv-tm-link-row' },
             el('span', { class: 'pjv-tm-link-type ' + type, text: lt.label }),
             pjvStatusIconStd(lmeta.bucket, 'sm'),
-            el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; pjvOpenTaskModal(l.id, pageReload); closeModal(); } }),
+            // 드릴인 — 다른 드릴인(상위·하위)과 같은 순서로 '닫고(swap) 연다'. 반대로 하면 새 모달이 세운 상태(주소 소유·
+            //  body 잠금 클래스)를 옛 모달의 close 가 도로 지운다(#810).
+            el('button', { class: 'pjv-tm-link-name', type: 'button', text: l.name, onclick: () => { dirty = true; closeModal('swap'); pjvOpenTaskModal(l.id, pageReload); } }),
             el('button', { class: 'pjv-tm-link-x', type: 'button', title: '연결 해제', text: '✕',
               onclick: async () => {
                 try { await api('/api/ui/v6/tasks/' + t.id + '/links', { method: 'POST', body: JSON.stringify({ to_task: l.id, type, remove: true }) }); refresh(); }
@@ -1379,5 +1448,7 @@ export {
   PJV_TAG_NONE,
   pjvCloseTaskModalOnRoute,
   pjvOpenTaskModal,
+  pjvRenderTaskRoute,
+  pjvTaskModalRefreshIfRoute,
   pjvtmComposerToolbar,
 };
