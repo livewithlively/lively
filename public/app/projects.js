@@ -279,7 +279,9 @@ function pjvKanbanBoard(projects, selList, ctx) {
     for (const d of defs) {
         const cards = byCol.get(d.key) || [];
         const col = el('div', { class: 'pjv-kb-col' });
-        col.append(el('div', { class: 'pjv-kb-head' }, pjvStatusIcon(d.category, d.color, d.frac, 'sm'), el('span', { class: 'pjv-kb-label', text: d.label }), el('span', { class: 'pjv-kb-count', text: String(cards.length) })));
+        col.append(el('div', { class: 'pjv-kb-head' }, pjvStatusIcon(d.category, d.color, d.frac, 'sm'), 
+        // #762 후속 — 칸반 헤더 라벨도 상태 알약(흰 글자+상태색)으로 통일(개요 칩·리스트 상태보드 pill 과 동일 톤). 기존 검은 라벨 해소.
+        el('span', { class: 'pjv-kb-label pjv-status-pill', style: '--sc:' + d.color, text: d.label }), el('span', { class: 'pjv-kb-count', text: String(cards.length) })));
         const body = el('div', { class: 'pjv-kb-body' });
         for (const p of cards) {
             const card = el('div', { class: 'pjv-kb-card' + (p.status === 'done' ? ' done' : ''), draggable: 'true', role: 'link', tabindex: '0' });
