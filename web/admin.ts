@@ -9,7 +9,7 @@ import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js
 // 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
 // '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
 // ════════════════════════════════════════════════════════════════════
-// 관리 중분류(가로 탭, 2026-06-20) — 비개발자가 섹션에서 길잃지 않게 3분류로 묶는다.
+// 관리 중분류(사이드바 1단, 2026-06-20 · #827 로 가로 탭 → 사이드바 그룹) — 비개발자가 섹션에서 길잃지 않게 묶는다.
 //  ① 기본 설정: 접속·구성원·토큰(굴러가게 하는 기본기) ② 회사·조직: 규칙·맥락·메모리·용어(AI에 가르치는 내용)
 //  ③ AI 동작·연결(고급): 훅·도구·MCP·DB(AI가 실제 어떻게 동작/어떤 데이터에 닿나).
 //  '지식 종류 레지스트리'·'설치'는 관리에서 빼 #/learn(가이드)로 이관 — 전자=용어설명, 후자=구성원 셋업.
@@ -230,48 +230,38 @@ async function renderAdmin(view, sub) {
   if (sel && SECTION_REMAP[sel]) sel = SECTION_REMAP[sel]; // 흡수된 구 섹션 URL → 새 섹션
   if (!sel || !visibleSections.some((s) => s.key === sel)) sel = (visibleSections[0] || ADMIN_SECTIONS[0]).key;
   state.admin.sel = sel;
-  // 활성 중분류 = 선택 섹션이 속한 그룹(URL/선택이 단일 진실 — 별도 상태 불필요).
-  const activeGroup = (ADMIN_SECTIONS.find((s) => s.key === sel) || ADMIN_SECTIONS[0]).group;
 
-  // ── 가로 중분류 바 — 클릭 시 그 분류의 첫 노출 섹션으로 이동. 권한으로 그룹 전체가 숨으면 탭도 숨김. ──
-  const groupBar = el('div', { class: 'admin-cats', role: 'tablist', 'aria-label': '관리 중분류' });
+  // ── 2단 사이드바(중분류 그룹 ▸ 섹션) — 사용 가이드(#/learn)의 문서 사이드바와 같은 시각 언어(docs-side, #827). ──
+  //  옛 내비는 '가로 중분류 탭 + 좌측 섹션 카드'로 위계가 두 곳에 쪼개져(다른 탭과 이질적) 어색했다.
+  //  이제 위계 2단을 사이드바 하나가 전담한다: 그룹명은 소제목, 섹션은 그 아래 항목. 전 그룹이 항상 펼쳐져 있어
+  //  '어디에 뭐가 있는지'가 한눈에 보이고, 그룹 전환에 클릭 한 단계가 덜 든다. 권한으로 빈 그룹은 통째로 숨는다.
+  const side = el('nav', { class: 'docs-side admin-side', 'aria-label': '관리 섹션' });
   for (const g of ADMIN_GROUPS) {
-    const first = visibleSections.find((s) => s.group === g.key);
-    if (!first) continue;
-    const on = g.key === activeGroup;
-    groupBar.append(el('a', { class: 'admin-cat' + (on ? ' active' : ''), href: '#/system/' + first.key,
-      role: 'tab', 'aria-selected': on ? 'true' : 'false', text: g.label }));
+    const items = visibleSections.filter((s) => s.group === g.key);
+    if (!items.length) continue;
+    const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.label }));
+    for (const s of items) {
+      // 회색 부제(row-meta) 없이 라벨만(#613 후속). 예외는 '검토 큐'(#802) — 대기 건수 배지(0건이면 안 그린다).
+      box.append(el('a', { class: 'docs-item' + (s.key === sel ? ' active' : ''), href: '#/system/' + s.key,
+        'aria-current': s.key === sel ? 'page' : null },
+        el('span', { text: s.label }), s.key === 'review-queue' ? reviewNavBadge() : null));
+    }
+    side.append(box);
   }
 
-  // 활성 중분류에 실제로 보이는 섹션 — 1개뿐이면 좌측 섹션 nav 가 무의미하므로 생략하고 본문을 전폭으로.
-  //  (예: '분류 체계 관리'=카테고리 설정 1개, '기본 설정'=조직 기본 정보 1개.)
-  const groupSections = visibleSections.filter((s) => s.group === activeGroup);
-  const soloSection = groupSections.length <= 1;
-
-  const list = el('div', { class: 'split-list card admin-nav' });
-  for (const s of ADMIN_SECTIONS) {
-    if (s.group !== activeGroup) continue; // 활성 중분류 섹션만 좌측 nav 에.
-    if (sectionHidden(s.key, data)) continue;
-    // 회색 부제(row-meta) 제거 — 라벨만 노출(#613 후속, 장원준 피드백: 모든 탭의 회색 부제가 어색).
-    //  예외는 '검토 큐'뿐(#802): 대기 건수 배지 — 큐가 관리탭 안에만 있어 방치되는 걸 막는다. 0건이면 안 그린다(=평소엔 관례 그대로).
-    list.append(el('a', { class: 'row' + (s.key === sel ? ' sel' : ''), href: '#/system/' + s.key },
-      el('div', { class: 'row-title' }, el('span', { text: s.label }), s.key === 'review-queue' ? reviewNavBadge() : null)));
-  }
-  const detail = el('div', { class: soloSection ? 'admin-solo-detail' : 'split-detail' });
+  const detail = el('div', {});
   renderAdminDetail(detail, sel, data);
-
-  // 섹션 1개 그룹은 좌측 nav 없이 본문만, 여러 개면 좌 nav + 본문 split.
-  const body = soloSection ? detail : el('div', { class: 'split admin-split' }, list, detail);
 
   // 상태 배지(조직명 / 읽기 전용) — 통일 헤더의 우측 액션 자리로. (#367)
   const statusEl = canEdit
     ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
     : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)');
-  view.replaceChildren(el('div', {},
+  // 본문은 문서(.docs-body)와 달리 폭 제한 없이 전폭 — 관리 화면은 표·그리드·에디터가 많다(#827).
+  const body = el('div', { class: 'admin-body' },
     pageHead('관리', '조직·권한, 분류 체계, 연결·데이터 등 시스템 전반을 설정합니다.', [statusEl], '리'),
-    groupBar,
-    body));
-  applyReveal(soloSection ? [detail] : [list, detail]);
+    detail);
+  view.replaceChildren(el('div', { class: 'docs-layout admin-layout' }, side, body));
+  applyReveal([body]);
 }
 
 function renderAdminDetail(detail, sel, data) {

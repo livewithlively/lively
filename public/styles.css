@@ -200,16 +200,11 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 .stat .num small { font-size: 16px; font-weight: 600; color: var(--muted-2); letter-spacing: 0; margin-left: 3px; }
 .stat .lbl { font-size: 12.5px; font-weight: 600; color: var(--muted-2); margin-top: 2px; }
 
-/* ── 그리드/분할 ── */
+/* ── 그리드 ── */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
 .grid-2 > * { min-width: 0; } /* nowrap 제목이 1fr 칼럼을 밀어내지 않게 */
-.split { display: flex; gap: 20px; align-items: flex-start; margin-top: 16px; }
-.split-list { flex: 1; min-width: 0; }
-.split-detail { flex: 1.35; min-width: 0; position: sticky; top: 80px; }
 @media (max-width: 960px) {
   .grid-2 { grid-template-columns: 1fr; }
-  .split:not(.admin-split) { flex-direction: column; }
-  .split-detail { position: static; width: 100%; }
 }
 
 /* ── 입장 모션(§6) — 부팅 1회만 ── */
@@ -608,10 +603,6 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* ════════ 관리(전달/관리) — workflow-std 흡수 섹션 ════════ */
 .admin-head { margin-bottom: 4px; }
 .admin-sub { font-size: 13px; font-weight: 600; color: var(--muted-head); }
-/* overflow:hidden — 행 배경(.row.sel 파란 채움)이 카드의 16px 라운딩 모서리를 삐져나오지 않게 클립. */
-.admin-nav { padding: 0; overflow: hidden; }
-/* nav 행은 <a> — .row 가 display 를 안 줘서 inline 으로 떨어지면 블록 자식(title/meta)과 충돌해 높이가 부풂. 명시 block. */
-.admin-nav .row { display: block; }
 .admin-hint { font-size: 13px; color: var(--ink-sub); margin: 4px 0 12px; line-height: 1.5; }
 .admin-what { font-size: 14.5px; font-weight: 600; color: var(--ink); margin: 2px 0 8px; }
 .admin-status { font-size: 13px; font-weight: 600; color: var(--muted-head); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -633,7 +624,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 
 /* 상세 박스 내부(목록·편집)는 1단(세로 스택) — 목록 위, 편집/내용 아래. (사용자 요청)
-   ※ 맨 좌측 카테고리 nav(.admin-split .split-list)는 사이드바 그대로 유지 — 여기선 건드리지 않음. */
+   ※ 맨 좌측 섹션 사이드바(.admin-side)는 별개 — 여기선 건드리지 않음. */
 .admin-two { display: flex; flex-direction: column; gap: 14px; align-items: stretch; margin-top: 8px; }
 .admin-sublist { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
 .admin-two > div:last-child { width: 100%; min-width: 0; }
@@ -742,22 +733,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
 .admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
 
-/* 관리 가로 중분류 바(기본 설정 · 회사·조직 · AI 동작/연결) — '관리' 머리글과 좌우 split 사이.
-   세그먼트형(밑줄 강조). 상단 .tabs 와 시각 언어를 맞추되 카드 안이라 살짝 담백하게. */
-.admin-cats {
-  display: flex; gap: 4px; flex-wrap: wrap;
-  margin: 4px 0 16px; padding-bottom: 2px;
-  border-bottom: 1px solid var(--line);
-}
-.admin-cat {
-  padding: 9px 16px; border-radius: 9px 9px 0 0;
-  font-size: 14px; font-weight: 700; color: var(--ink-sub);
-  text-decoration: none; white-space: nowrap;
-  border-bottom: 2px solid transparent; margin-bottom: -3px;
-}
-.admin-cat:hover { color: var(--ink); background: var(--bg-tint); }
-.admin-cat.active { color: var(--blue); border-bottom-color: var(--blue); }
-@media (max-width: 560px) { .admin-cat { padding: 8px 11px; font-size: 13px; } }
+/* (관리 가로 중분류 바(.admin-cats)는 #827 로 폐지 — 위계 2단을 좌측 사이드바(.admin-side)가 전담한다.) */
 
 /* 상위 탭(회사 맥락·시작하기)의 가로 중분류 바 — 페이지 맨 위에 깔리는 보조 탭 스트립(.admin-cats 와 같은 시각 언어). */
 .sub-cats {
@@ -947,12 +923,6 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .guide-note b { color: var(--ink); }
 .guide-note .kn-chip { flex: none; }
 
-/* 관리 좌:우 너비 3:7 (오른쪽 내용이 더 많음) */
-/* 탐색탭처럼 좌측 고정폭 nav + 우측 detail — 좁아져도 row 유지(아래로 안 내려감). */
-.admin-split .split-list { flex: 0 0 220px; }
-.admin-split .split-detail { flex: 1; }
-/* 섹션 1개 그룹 — 좌측 nav 없이 본문 전폭(.split 의 상단 여백만 승계). */
-.admin-solo-detail { margin-top: 16px; }
 /* 권한(scopes) 체크박스 */
 .scope-wrap { display: flex; flex-direction: column; gap: 2px; }
 .scope-opt { margin: 2px 0; }
@@ -1460,10 +1430,6 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* (6) 관리 헤더 + 반응형(우 섹션 wrap 방지) */
 .admin-head-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .admin-head-l h2 { margin: 0; }
-/* 훅 계층 — '훅'은 AI 도구·MCP·DB 와 동급 최상위 항목(클릭 시 개요 설명). 그 아래 런타임·커스텀·미리보기가 들여쓰기 자식(연결선). */
-.admin-nav .row.admin-nav-child { padding-left: 34px; position: relative; }
-.admin-nav .row.admin-nav-child .row-title { font-size: 13px; color: var(--ink-sub); }
-.admin-nav .row.admin-nav-child::before { content: '└'; position: absolute; left: 17px; top: 13px; color: var(--muted); font-size: 11px; }
 /* '훅' 개요 — 3 하위(런타임·커스텀·미리보기)로 가는 안내 카드. */
 .hooks-ov-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .hooks-ov-card { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; }
@@ -1473,12 +1439,6 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* admin-two(좌 목록·우 편집) 가 좁은 화면에서 wrap 되지 않게 — 기존 760 breakpoint 보강 */
 .admin-two { flex-wrap: nowrap; }
 @media (max-width: 760px) { .admin-two { flex-wrap: wrap; } }
-/* 좌측 nav(220px)+detail 가 더는 안 들어갈 만큼 좁을 때만 스택(탐색탭 820 패턴에 맞춤). */
-@media (max-width: 720px) {
-  .admin-split { flex-direction: column; }
-  .admin-split .split-list { flex: 1 1 auto; }
-  .admin-split .split-detail { position: static; width: 100%; }
-}
 
 /* (7) 영구삭제(hard-delete) 위험 버튼 + 행 액션 묶음 */
 .btn-text-danger { color: var(--coral-text); }
@@ -6526,6 +6486,17 @@ body.pjv-pm-open { overflow: hidden; }
 .docs-body { flex: 1; min-width: 0; max-width: 800px; padding-bottom: 72px; }
 .docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
 
+/* 관리(#/system, #827) — 사이드바는 위 문서 사이드바(.docs-side)를 그대로 쓰고, 본문만 다르다:
+   문서는 읽기 폭(800px) 컬럼이지만 관리는 표·그리드·에디터라 전폭(main 의 1200px 상한도 푼다). */
+body[data-route="system"] main { max-width: none; }
+.admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
+.admin-body > .page-head { padding-top: 0; }
+/* 섹션 항목 안의 대기 배지(검토 큐, #802) — 라벨 오른쪽 끝에 붙인다. */
+.admin-side a.docs-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 세로 스택(사이드바가 위로)될 땐 폭을 명시한다 — .docs-layout 의 align-items:flex-start 가 세로 모드에선
+   '내용 폭'으로 줄여, 표·그리드가 넓은 관리 본문이 화면 밖으로 삐져나온다(문서 본문은 max-width 800px 이라 안 겪던 문제). */
+@media (max-width: 960px) { .admin-body { width: 100%; } }
+
 /* 문서 페이지 머리 — 아이브로(그룹명) + 제목: guide-hero-eyebrow/-title 과 같은 문법 */
 .docs-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
   color: var(--muted-head); margin: 8px 0 10px; }
@@ -6654,18 +6625,18 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 
 /* ============================================================
    사이드바 스크롤바 — 평소엔 숨기고, 그 영역에 호버(=스크롤할 때)만 얇게 노출.
-   WIKI(.kn-side)와 프로젝트 탭(.pjv-side-nav-inner)에 동일 적용 → 두 탭 디자인 통일.
+   WIKI(.kn-side)·프로젝트(.pjv-side-nav-inner)·관리(.admin-side)에 동일 적용 → 탭 디자인 통일.
    기존 .dash-fold-grid 의 호버-노출 스크롤바 패턴과 같은 결(8px 트랙 · 투명 썸 · 호버 시 muted).
    ============================================================ */
 /* 자리(thin 게터)는 항상 확보하고 '색'만 투명 → 호버 시 색이 들어오므로 내용이 밀리는 레이아웃 점프가 없다.
    (scrollbar-width:none ↔ thin 으로 토글하면 호버마다 8px 씩 밀림) */
-.kn-side, .pjv-side-nav-inner { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.kn-side:hover, .pjv-side-nav-inner:hover { scrollbar-color: var(--muted-3) transparent; }
-.kn-side::-webkit-scrollbar, .pjv-side-nav-inner::-webkit-scrollbar { width: 8px; }
-.kn-side::-webkit-scrollbar-track, .pjv-side-nav-inner::-webkit-scrollbar-track { background: transparent; }
-.kn-side::-webkit-scrollbar-thumb, .pjv-side-nav-inner::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
-.kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
-.kn-side:hover::-webkit-scrollbar-thumb:hover, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+.kn-side, .pjv-side-nav-inner, .admin-side { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.kn-side:hover, .pjv-side-nav-inner:hover, .admin-side:hover { scrollbar-color: var(--muted-3) transparent; }
+.kn-side::-webkit-scrollbar, .pjv-side-nav-inner::-webkit-scrollbar, .admin-side::-webkit-scrollbar { width: 8px; }
+.kn-side::-webkit-scrollbar-track, .pjv-side-nav-inner::-webkit-scrollbar-track, .admin-side::-webkit-scrollbar-track { background: transparent; }
+.kn-side::-webkit-scrollbar-thumb, .pjv-side-nav-inner::-webkit-scrollbar-thumb, .admin-side::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+.kn-side:hover::-webkit-scrollbar-thumb, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb, .admin-side:hover::-webkit-scrollbar-thumb { background: var(--muted-3); }
+.kn-side:hover::-webkit-scrollbar-thumb:hover, .pjv-side-nav-inner:hover::-webkit-scrollbar-thumb:hover, .admin-side:hover::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
 
 /* ── 저장소 · 로그 (#813) ─────────────────────────────────────────────
    디스크가 얼마나 찼는지 '숫자'가 아니라 '한눈'에 보이게. 색은 상태(여유/경고/위험) 신호이므로
