@@ -349,6 +349,10 @@ function renderContainer(type, rest, bodyLines) {
       pane.setAttribute('data-tab-label', (summary || rest || '탭').trim());
       return moveChildren(inner(), pane);
     }
+    case 'prompt': {
+      // AI에게 실제로 시켜 볼 말 한 덩어리(#780 사용설명서) — 코드블록(명령어)과 구분되는 '대화 예시' 표면.
+      return moveChildren(inner(), el('div', { class: 'md-prompt' }));
+    }
     case 'synced': {
       const box = el('div', { class: 'md-synced' });
       box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));
