@@ -585,14 +585,30 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     });
   }
 
-  // 블록 드래그 재배치.
+  // 블록 드래그 재배치 — 삽입 위치를 파란 선으로(포인터가 블록 상/하반부 어디냐로 앞/뒤 결정).
   let dragFrom: number | null = null;
+  const clearDrop = () => canvas.querySelectorAll('.drop-before,.drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
   function wireBlkDrag(elm: HTMLElement, i: number) {
-    elm.addEventListener('dragstart', (e: any) => { dragFrom = i; elm.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-    elm.addEventListener('dragend', () => { elm.classList.remove('dragging'); canvas.querySelectorAll('.dragover').forEach((x) => x.classList.remove('dragover')); });
-    elm.addEventListener('dragover', (e: any) => { e.preventDefault(); if (dragFrom !== null && dragFrom !== i) elm.classList.add('dragover'); });
-    elm.addEventListener('dragleave', () => elm.classList.remove('dragover'));
-    elm.addEventListener('drop', (e: any) => { e.preventDefault(); if (dragFrom === null || dragFrom === i) return; const m = blocks.splice(dragFrom, 1)[0]; blocks.splice(i, 0, m); dragFrom = null; renderCanvas(); scheduleSave(); });
+    elm.addEventListener('dragstart', (e: any) => { dragFrom = i; setTimeout(() => elm.classList.add('dragging'), 0); e.dataTransfer.effectAllowed = 'move'; });
+    elm.addEventListener('dragend', () => { elm.classList.remove('dragging'); clearDrop(); dragFrom = null; });
+    elm.addEventListener('dragover', (e: any) => {
+      e.preventDefault();
+      if (dragFrom === null || dragFrom === i) { clearDrop(); return; }
+      const r = elm.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height / 2;
+      clearDrop();
+      elm.classList.add(after ? 'drop-after' : 'drop-before');
+    });
+    elm.addEventListener('drop', (e: any) => {
+      e.preventDefault();
+      if (dragFrom === null || dragFrom === i) return;
+      let insertIdx = elm.classList.contains('drop-after') ? i + 1 : i;
+      const m = blocks[dragFrom];
+      blocks.splice(dragFrom, 1);
+      if (dragFrom < insertIdx) insertIdx--;
+      blocks.splice(Math.max(0, Math.min(blocks.length, insertIdx)), 0, m);
+      clearDrop(); dragFrom = null; renderCanvas(); scheduleSave();
+    });
   }
 
   // 편집/읽기 토글 — canDoc 만.
