@@ -6163,3 +6163,127 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 @media (prefers-reduced-motion: reduce) {
   .wk-ev, .wk-ev-tw { transition: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   #764v6 대문 빌더 — 사용자가 지식 블록으로 직접 짜는 캔버스. 읽기/편집 모드.
+   블록: intro·heading·rule(자유) · highlight·list·gallery·stat(지식 질의). 레이아웃 = 대문 body_md JSON.
+   ════════════════════════════════════════════════════════════════════════════ */
+.wk-bld-mode { margin-left: 2px; }
+.wk-bld-mode.on { background: var(--blue); color: #fff; border-color: var(--blue); }
+.wk-bld-mode.on:hover { background: var(--blue-deep); }
+.wk-bld-hint { display: none; align-items: center; gap: 9px; margin: 4px 0 20px; padding: 11px 15px;
+  background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 11px; font-size: 13px; color: var(--ink-sub); line-height: 1.55; }
+.wk-cat-v6.editing .wk-bld-hint { display: flex; }
+
+/* 캔버스 그리드 */
+.wk-bld-canvas { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 8px; }
+.wk-blk { grid-column: span 2; min-width: 0; position: relative; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg); padding: 19px 21px; transition: border-color .15s, box-shadow .15s; }
+.wk-blk.half { grid-column: span 1; }
+.wk-blk.text { border-color: transparent; background: none; padding: 10px 2px; }
+.wk-cat-v6.editing .wk-blk { border-style: dashed; border-color: var(--line-net); cursor: grab; }
+.wk-cat-v6.editing .wk-blk.text { background: var(--bg-tint); }
+.wk-cat-v6.editing .wk-blk:hover { border-color: var(--blue); box-shadow: 0 4px 16px rgba(21,35,59,.06); }
+.wk-blk.dragging { opacity: .4; }
+.wk-blk.dragover { border-color: var(--blue) !important; border-style: solid !important; box-shadow: 0 0 0 3px var(--bg-sel); }
+
+/* 블록 크롬(편집 모드) */
+.wk-blk-grip { display: none; position: absolute; top: 9px; left: 9px; color: var(--muted-2); font-size: 13px; letter-spacing: -2px; cursor: grab; z-index: 2; }
+.wk-cat-v6.editing .wk-blk:hover .wk-blk-grip { display: block; }
+.wk-blk-chrome { display: none; position: absolute; top: 8px; right: 8px; gap: 4px; z-index: 3; }
+.wk-cat-v6.editing .wk-blk:hover .wk-blk-chrome, .wk-cat-v6.editing .wk-blk:focus-within .wk-blk-chrome { display: inline-flex; }
+.wk-blk-cbtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); background: var(--bg); border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 13px;
+  box-shadow: 0 1px 3px rgba(21,35,59,.08); }
+.wk-blk-cbtn:hover { color: var(--ink); border-color: var(--line-net); }
+.wk-blk-cbtn.warn:hover { color: #e0483d; border-color: #e0483d; }
+
+/* 자유 블록 */
+.wk-bld-intro { font-size: 16px; line-height: 1.68; color: var(--ink-note); max-width: 42em; }
+.wk-bld-intro.ed, .wk-bld-heading.ed { outline: none; }
+.wk-bld-heading { font-size: 19px; font-weight: 760; letter-spacing: -.02em; color: var(--ink); }
+.wk-bld-intro.ed:empty::before, .wk-bld-heading.ed:empty::before { content: attr(data-ph); color: var(--muted-2); }
+.wk-bld-rule { border: 0; border-top: 1px solid var(--line); margin: 2px 0; }
+
+/* 지식 블록 헤더 */
+.wk-bld-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
+.wk-bld-title { font-size: 14px; font-weight: 750; letter-spacing: -.01em; color: var(--ink); }
+.wk-bld-meta { font-family: var(--wkm); font-size: 11.5px; color: var(--muted-2); }
+.wk-bld-empty { padding: 6px 2px 2px; font-size: 13px; color: var(--muted-2); }
+
+/* 하이라이트 */
+.wk-bld-hl { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.wk-bld-hl .wk-doccard { background: var(--bg-tint); border-color: var(--line); }
+
+/* 목록 */
+.wk-bld-list { display: flex; flex-direction: column; }
+
+/* 갤러리 */
+.wk-bld-gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.wk-galc { text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+  background: var(--bg); cursor: pointer; transition: transform .14s, box-shadow .14s, border-color .14s; }
+.wk-galc:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(21,35,59,.09); border-color: var(--line-net); }
+.wk-galc:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.wk-galc-cov { height: 62px; }
+.wk-galc-cov.wk-aurora { border-radius: 0; }
+.wk-galc-b { padding: 11px 13px 13px; }
+.wk-galc-t { font-size: 13px; font-weight: 680; line-height: 1.36; color: var(--ink); letter-spacing: -.01em;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wk-galc-m { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+
+/* 구성 현황 */
+.wk-stat-bar { display: flex; height: 9px; border-radius: 5px; overflow: hidden; background: var(--bg-tint); margin: 2px 0 12px; }
+.wk-stat-seg { display: block; }
+.wk-stat-leg { display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: var(--wkm); font-size: 12px; color: var(--muted); }
+.wk-stat-li { display: inline-flex; align-items: center; gap: 6px; }
+.wk-stat-dot { width: 8px; height: 8px; border-radius: 2px; }
+.wk-stat-human { color: var(--mint-deep); }
+[data-ty="decision"] { background: #4a6fa6; }
+[data-ty="reference"] { background: #6a7280; }
+[data-ty="how-to"] { background: #2f9a84; }
+[data-ty="research"] { background: #7b6bb2; }
+[data-ty="concept"] { background: #b0863c; }
+[data-ty="entity"] { background: #a85d6b; }
+[data-ty="기타"] { background: #9aa3b2; }
+
+/* 블록 추가 */
+.wk-blk-add-slot { grid-column: span 2; }
+.wk-blk-add { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px;
+  border: 1.5px dashed var(--line-net); border-radius: 12px; background: none; color: var(--muted); font: inherit;
+  font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.wk-blk-add:hover { border-color: var(--blue); color: var(--blue-deep); background: var(--bg-tint); }
+
+/* 설정 팝오버 */
+.wk-blk-cfg { position: absolute; z-index: 60; width: 244px; background: var(--bg); border: 1px solid var(--line-net);
+  border-radius: 12px; box-shadow: 0 12px 40px rgba(10,15,25,.18); padding: 14px; }
+.wk-cfg-h { font-family: var(--wkm); font-size: 11px; letter-spacing: .04em; color: var(--muted-2); text-transform: uppercase; font-weight: 700; margin-bottom: 10px; }
+.wk-cfg-l { display: block; font-size: 12px; color: var(--muted); margin: 11px 0 5px; }
+.wk-cfg-l:first-of-type { margin-top: 0; }
+.wk-cfg-sel, .wk-cfg-num { width: 100%; font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg-tint); color: var(--ink); }
+
+/* 팔레트(overlayBox 안) */
+.wk-pal-note { margin: -4px 0 16px; font-size: 13px; color: var(--muted); line-height: 1.55; }
+.wk-pal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+.wk-pal-card { text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 14px; cursor: pointer;
+  background: var(--bg); transition: border-color .14s, box-shadow .14s; display: block; }
+.wk-pal-card:hover { border-color: var(--blue); box-shadow: 0 4px 16px rgba(21,35,59,.07); }
+.wk-pal-ic { font-size: 18px; color: var(--ink-sub); }
+.wk-pal-name { display: block; margin: 8px 0 3px; font-size: 14px; font-weight: 700; color: var(--ink); }
+.wk-pal-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+.wk-cat-v6 .wk-cat-library { margin-top: 40px; }
+
+@media (max-width: 760px) {
+  .wk-bld-canvas { grid-template-columns: 1fr; }
+  .wk-blk, .wk-blk.half, .wk-blk-add-slot { grid-column: span 1; }
+  .wk-pal-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .wk-blk, .wk-galc, .wk-pal-card { transition: none; } }
+
+/* 전체 문서 접이식(빌더 아래 아카이브) */
+.wk-lib-sec { margin-top: 44px; }
+.wk-lib-toggle { display: inline-flex; align-items: center; gap: 7px; border: none; background: none; cursor: pointer;
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); padding: 8px 0; }
+.wk-lib-toggle:hover { color: var(--blue-deep); }
+.wk-cat-v6 .wk-lib-sec .wk-cat-library { margin-top: 8px; }
