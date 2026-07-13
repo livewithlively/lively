@@ -14,6 +14,7 @@ import { HttpError } from "./capabilities/rest-util.js";
 import { dirToProjectFolder } from "./project-fs.js";
 import { recordSessionProject } from "./v6/project-store.js";
 import { listMembers, getMember, mintToken, listTokens, revokeToken } from "./org/store.js";
+import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
@@ -94,6 +95,8 @@ export interface SessionInfo {
   title?: string;
   // 마지막 'busy(작업중)' 관측 시각(epoch초, 폴링 기반) — '최근 작업순' 정렬용. 한 번도 busy 로 안 잡혔으면 undefined.
   lastActive?: number;
+  // 마지막 사용 시각(epoch초) = max(마지막 작업, 마지막 브라우저 접속). 카드 시간 표시용(생성일 대신).
+  lastUsed?: number;
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; worktree?: boolean; }
 
@@ -285,7 +288,7 @@ async function getOpt(name: string, opt: string): Promise<string> {
 // @box_flags·@box_invites 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
 //  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
 // pane_current_command(포그라운드 프로세스)·pane_pid(=포그라운드 pid, CPU 판정용)를 label 앞에 추가(label 은 탭 포함 가능해 ...rest 로 받으므로 뒤에 오면 삼켜짐).
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{pane_current_command}\t#{pane_pid}\t#{pane_title}\t#{@box_label}";
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{pane_current_command}\t#{session_last_attached}\t#{pane_title}\t#{@box_label}";
 
 // pane_title(=Claude Code 가 써두는 '지금 하는 일' 요약) → 표시용 제목. 상태 글리프(✳/스피너 등) 제거, 기본 셸 타이틀(user@host:path)·셸 세션은 무시.
 function sessionActivityTitle(paneTitle: string, harness: string): string {
@@ -295,32 +298,14 @@ function sessionActivityTitle(paneTitle: string, harness: string): string {
   return raw.replace(/^[^\p{L}\p{N}]+/u, "").trim();       // 앞의 상태 글리프·스피너·공백 제거 → 첫 글자(문자/숫자)부터
 }
 
-// 에이전트 실행 상태 판정(#req). 포그라운드가 셸이면 exited(Claude 나감). 아니면 그 프로세스그룹 CPU% 로 busy/idle.
-//  ⚠ session_activity 는 스피너 출력을 활동으로 안 잡아 항상 오래됨 → 신뢰 불가. 대신 CPU%: 작업 중이면 claude(+자식 MCP) CPU 가 크고(관측 ~19%),
-//  프롬프트/승인 대기면 ~0%. ps %cpu 는 최근 ~1분 감쇠평균이라 API 왕복 공백은 흡수, 끝나면 1분 내 idle 로 내려간다.
+// 에이전트 실행 상태 판정(#req). busy 는 Claude Code 가 pane_title 앞에 그리는 '스피너 글리프'로 본다.
+//  ⚠ CPU·session_activity 는 신뢰 불가 — CPU 는 API 왕복 중 0 으로 떨어져 작업중↔대기중 깜빡이고, activity 는 스피너를 활동으로 안 잡음.
+//  Claude Code 는 턴 진행 내내 브라유 스피너(U+2801~28FF, ⠂⠙⣾…)를 타이틀에 애니메이션하고, 끝나 프롬프트로 돌아가면 정적 별 '✳'(U+2733) 로 바꾼다 → 이게 '진짜 작동중' 신호.
 const SHELL_CMDS = new Set(["sh", "-sh", "bash", "-bash", "zsh", "-zsh", "fish", "-fish", "dash", "-dash", "tcsh", "-tcsh", "ksh", "-ksh", "csh", "-csh", "login", "-login"]);
-const AGENT_BUSY_CPU = 3; // 프로세스그룹 CPU% 임계 — 이상이면 '작업중'.
-// pgid → 그 그룹 전체 %cpu 합(claude+자식 MCP 를 pgid 로 묶음). ps 한 번 스냅샷을 2초 캐시 — 한 폴링 버스트의 여러 listSessions 가 공유.
-let _cpuCache: { at: number; map: Map<number, number> } | null = null;
-async function readPgidCpu(): Promise<Map<number, number>> {
-  const now = Date.now();
-  if (_cpuCache && now - _cpuCache.at < 2000) return _cpuCache.map;
-  const m = new Map<number, number>();
-  try {
-    const { stdout } = await execFileAsync("ps", ["-Ao", "pgid=,%cpu="], { timeout: 4000, maxBuffer: 8 * 1024 * 1024 });
-    for (const line of stdout.split("\n")) {
-      const t = line.trim(); if (!t) continue;
-      const sp = t.indexOf(" ");
-      const pgid = Number(t.slice(0, sp)), cpu = Number(t.slice(sp + 1));
-      if (Number.isFinite(pgid) && Number.isFinite(cpu)) m.set(pgid, (m.get(pgid) || 0) + cpu);
-    }
-  } catch { /* ps 실패 → 빈 맵(전부 idle 로 안전 폴백) */ }
-  _cpuCache = { at: now, map: m };
-  return m;
-}
-function claudeCpu(panePidRaw: string, pgidCpu: Map<number, number>): number {
-  const pid = Number(panePidRaw) || 0;                       // pane_pid = 포그라운드 프로세스(=claude, pgid 리더)
-  return pid ? (pgidCpu.get(pid) || 0) : 0;
+// 타이틀 첫 글자가 브라유(스피너)면 작업중. 공백 브라유(U+2800)는 제외. 정적 별(✳ U+2733)·문자면 아님.
+function isSpinning(paneTitle: string): boolean {
+  const c = (paneTitle || "").replace(/^\s+/, "").codePointAt(0);
+  return c !== undefined && c > 0x2800 && c <= 0x28ff;
 }
 // AI 미실행 = 포그라운드가 셸(하네스 종료)이거나 셸 하네스 세션 → offline.
 function isAgentOffline(harness: string, paneCmd: string): boolean {
@@ -349,34 +334,33 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
   const me = ownerId(user);
   const nowSec = Math.floor(Date.now() / 1000);
-  const pgidCpu = await readPgidCpu();
-  // 1차: 파싱 + 전역 lastBusy 갱신(CPU 기반, 뷰어 무관 — 정렬 recency 일관성). 보이는 세션만 rows 로.
+  // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성). 보이는 세션만 rows 로.
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, panePidRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, lastAttachedRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const owned = !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
-    const busy = !offline && claudeCpu(panePidRaw, pgidCpu) >= AGENT_BUSY_CPU;
+    const busy = !offline && isSpinning(paneTitleRaw);
     if (busy) lastBusyAt.set(name, nowSec);
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     if (!dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
-    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, labelParts, offline, busy });
+    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, lastAttachedRaw, labelParts, offline, busy });
   }
-  // 2차: '확인 필요' 감지 — 보이는 & 비offline & 비busy & 접속중(브라우저 연결)인 세션만 capture-pane(병렬).
+  // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
   const waitingIds = new Set<string>();
-  await Promise.all(rows.filter((r) => !r.offline && !r.busy && Number(r.attached) > 0).map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
+  await Promise.all(rows.filter((r) => !r.offline && !r.busy).map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
     let flags: Record<string, string> = {};
     try { if (r.flagsRaw) flags = JSON.parse(r.flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
-    // 브라우저 접속이 없으면(그리고 작업중이 아니면) offline — Claude 는 tmux 로 계속 떠 있어도 '아무도 안 붙은 유휴'는 오프라인 취급(#req).
+    // #req 우선순위: 셸종료 > 작업중 > 확인필요(접속 무관 — 사용자 결정 대기 알림) > 접속중이면 대기중 > 미접속이면 오프라인.
     const state: SessionInfo["agentState"] = r.offline ? "offline"
       : r.busy ? "busy"
-      : Number(r.attached) <= 0 ? "offline"
       : waitingIds.has(r.name) ? "waiting"
-      : "idle";
+      : Number(r.attached) > 0 ? "idle"
+      : "offline";
     sessions.push({
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
@@ -384,6 +368,8 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
       projectId: Number(r.projectRaw) || 0, wtBranch: r.wtBranchRaw || "",
       agentState: state, title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: lastBusyAt.get(r.name),
+      // #req 마지막 사용 시각 표시용 — 마지막 작업(busy) OR 마지막 브라우저 접속 중 더 최근. 둘 다 없으면 프론트가 created 로 폴백.
+      lastUsed: Math.max(lastBusyAt.get(r.name) || 0, Number(r.lastAttachedRaw) || 0) || undefined,
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
@@ -517,6 +503,14 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 한글(멀티바이트) 편집 정상화 — pane 에 UTF-8 로케일 주입(#633). 세션스코프 -e 라 전역/타세션 누수 없음.
   //  격리(box-spawn=sudo)·비격리 두 분기 공통으로 먼저 넣는다(sudo 기본 env_keep 이 LANG/LC_* 를 보존). 근거는 PANE_LOCALE 주석.
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
+  // 시간대(#778) — pane(셸·클로드코드 등)이 **조직 시간대**의 로컬 시각을 보게 한다. 박스 OS TZ 는 대개 UTC 라
+  //  안 주면 클로드코드의 크레딧 리셋 안내 등이 UTC 로 뜬다(클로드코드는 Intl.DateTimeFormat().resolvedOptions()
+  //  .timeZone = TZ env 를 읽는다 — 바이너리 실측). OS 전역 TZ(timedatectl)를 바꾸지 않고 세션스코프로만 푼다:
+  //  게이트웨이는 비-root 서비스 유저고, 박스의 OS 전역 상태는 고객 소유라 침습하지 않는다.
+  //  ⚠ 격리(sudo → box-spawn) 분기는 sudo 의 env_reset 이 env 를 털 수 있어 sudoers 가 TZ 를 명시 보존한다
+  //   (deploy/linux/sudoers-lively). 구 sudoers 면 미보존 → 시스템 TZ 폴백 = 종전 동작(무회귀).
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(#633 과 동일 — 옛 세션은 재생성 시 정상화).
+  args.push("-e", `TZ=${await orgTimezone()}`);
   // 구성원 격리(#524): 프로비저닝된 멤버면 셸/하네스를 그 멤버 OS 계정으로 내린다(drop-priv, osUser 는 위에서 구함).
   //  → 자격증명이 멤버 홈(700)에 uid 경계로 격리. CLAUDE_CONFIG_DIR 주입 불요(멤버 자기 $HOME/.claude 로 네이티브 격리 — #346 흡수).
   //  미프로비저닝/off = 아래 else(기존 단일-유저 + #346 멀티프로필). seam 한 곳에서만 분기(무회귀).

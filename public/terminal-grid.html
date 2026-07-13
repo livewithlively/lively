@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>터미널 그리드 · Lively Box</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231e1e2e'/%3E%3Crect x='3' y='3' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='8.5' y='3' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='3' y='8.5' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='8.5' y='8.5' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3C/svg%3E">
+<style>
+  :root { --bg:#e6ebf3; --bar:#ffffff; --fg:#15233b; --fg-dim:#5a6b85; --border:#d8e0ee; --accent:#16a37f; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11131a; --bar:#181825; --fg:#cdd6f4; --fg-dim:#9399b2; --border:#2a2c3a; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+  #bar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--bar); border-bottom: 1px solid var(--border); font-size: 13px; }
+  #bar .title { font-weight: 700; }
+  #bar .sub { color: var(--fg-dim); }
+  #bar .spacer { flex: 1; }
+  #bar button { font: inherit; font-size: 12.5px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bar); color: var(--fg); cursor: pointer; }
+  #bar button:hover { border-color: var(--accent); }
+  #grid { flex: 1; min-height: 0; display: grid; gap: 3px; padding: 3px; background: var(--border); }
+  .cell { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); border-radius: 6px; overflow: hidden; }
+  .cell-head { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; font-size: 12px; color: var(--fg-dim); background: var(--bar); border-bottom: 1px solid var(--border); }
+  .cell-head .lbl { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cell-head .spacer { flex: 1; }
+  .cell-head a { color: var(--fg-dim); text-decoration: none; font-size: 11.5px; white-space: nowrap; }
+  .cell-head a:hover { color: var(--accent); }
+  .cell iframe { flex: 1; width: 100%; border: 0; min-height: 0; background: #1e1e2e; }
+  #empty { margin: auto; color: var(--fg-dim); font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span class="title">터미널 그리드</span>
+  <span class="sub" id="count"></span>
+  <span class="spacer"></span>
+  <button id="btn-reload" title="모든 셀 새로고침">↻ 새로고침</button>
+  <button id="btn-close" title="이 탭 닫기">닫기</button>
+</div>
+<div id="grid"></div>
+<script>
+(function () {
+  var p = new URLSearchParams(location.search);
+  var ids = (p.get('sessions') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  var labels = [];
+  try { labels = JSON.parse(p.get('labels') || '[]'); } catch (e) { labels = []; }
+  if (!Array.isArray(labels)) labels = [];
+  var n = ids.length;
+  var cols = Math.max(1, parseInt(p.get('cols'), 10) || 0);
+  var rows = Math.max(1, parseInt(p.get('rows'), 10) || 0);
+  // 안전 폴백 — cols/rows 없거나 부족하면 정사각형에 가깝게.
+  if (!cols || !rows || cols * rows < n) { cols = Math.ceil(Math.sqrt(n || 1)); rows = Math.ceil((n || 1) / cols); }
+
+  var grid = document.getElementById('grid');
+  document.getElementById('count').textContent = n ? (n + '개 세션 · ' + cols + '×' + rows) : '';
+  document.title = n ? ('터미널 그리드 (' + n + ') · Lively Box') : '터미널 그리드';
+
+  if (!n) { grid.innerHTML = '<div id="empty">열 세션이 없습니다. 터미널 탭에서 세션을 선택해 다시 열어 주세요.</div>'; return; }
+
+  grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+  grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
+
+  ids.forEach(function (id, i) {
+    var label = labels[i] || id;
+    var url = '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(labels[i] || '');
+    var cell = document.createElement('div'); cell.className = 'cell';
+    var head = document.createElement('div'); head.className = 'cell-head';
+    var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = label; lbl.title = label;
+    var sp = document.createElement('span'); sp.className = 'spacer';
+    var pop = document.createElement('a'); pop.href = url; pop.target = '_blank'; pop.rel = 'noopener'; pop.textContent = '단독 열기 ↗'; pop.title = '이 세션만 새 탭으로';
+    head.appendChild(lbl); head.appendChild(sp); head.appendChild(pop);
+    var frame = document.createElement('iframe'); frame.src = url; frame.title = label;
+    frame.setAttribute('allow', 'clipboard-read; clipboard-write');
+    cell.appendChild(head); cell.appendChild(frame);
+    grid.appendChild(cell);
+  });
+
+  document.getElementById('btn-close').onclick = function () { window.close(); };
+  document.getElementById('btn-reload').onclick = function () {
+    [].forEach.call(grid.querySelectorAll('iframe'), function (f) { try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; } });
+  };
+})();
+</script>
+</body>
+</html>

@@ -22,6 +22,28 @@ export interface ProjectFolderRow {
 const auditFolder = (key: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("project_folder", key, op, before, after, ctx);
 
+// 스페이스 판정 — 네이티브(settings.kind='space', #766) 또는 커넥터 미러(external_id='space:…', #541).
+//  프론트 isSpace 헬퍼와 동형: 최상위 컨테이너 전용(스페이스는 부모를 갖지 않는다).
+export function folderIsSpace(row: Pick<ProjectFolderRow, "external_id" | "settings">): boolean {
+  return (typeof row.external_id === "string" && row.external_id.startsWith("space:"))
+    || (!!row.settings && (row.settings as Record<string, unknown>).kind === "space");
+}
+
+// candidate 가 ancestorId 자신이거나 그 자손인지 — parent_id 부모 체인을 위로 훑어 확인(사이클 방지, #766).
+async function folderIsSelfOrDescendant(ancestorId: number, candidateId: number): Promise<boolean> {
+  let cur: number | null = candidateId;
+  const seen = new Set<number>();
+  while (cur != null) {
+    if (cur === ancestorId) return true;
+    if (seen.has(cur)) break; // 방어 — 기존 데이터에 사이클이 있어도 무한루프 금지
+    seen.add(cur);
+    const row: { parent_id: number | null } | undefined = await one(itemsPool,
+      `SELECT parent_id FROM project_folder WHERE id=$1`, [cur]);
+    cur = row?.parent_id ?? null;
+  }
+  return false;
+}
+
 // ── 조회 ──────────────────────────────────────────────────────────────────
 // 모든 폴더 + 리스트 수. 사이드바가 소비. 정렬: sort → ClickUp orderindex(커넥터 미러 — 스페이스는 나열 위치) → 이름.
 export async function listProjectFolders(): Promise<ProjectFolderRow[]> {
@@ -57,23 +79,29 @@ export async function getProjectFolderRow(id: number): Promise<ProjectFolderRow 
 
 // ── 쓰기 ──────────────────────────────────────────────────────────────────
 export async function createProjectFolder(
-  input: { name: string; color?: string | null },
+  input: { name: string; color?: string | null; parent_id?: number | null; kind?: string | null },
   ctx?: WriteCtx,
 ): Promise<ProjectFolderRow> {
+  // #766 네이티브 스페이스/중첩: kind='space' 면 settings.kind='space' 로 표식(스키마 무변). 스페이스는 최상위 전용(부모 무시).
+  //  일반 폴더는 parent_id(스페이스/폴더) 하위로 둘 수 있다. 부모는 실재해야 한다.
+  const isSpace = input.kind === "space";
+  const parentId = isSpace ? null : (input.parent_id ?? null);
+  if (parentId != null && !(await getProjectFolderRow(parentId))) throw new Error(`상위 폴더 #${parentId} 없음`);
+  const settings = isSpace ? '{"kind":"space"}' : "{}";
   // 신규 폴더는 맨 뒤로(기존 최대 sort + 1) — 생성 순서 보존, 추후 재정렬 가능.
   const row: { id: number } = await one(itemsPool,
-    `INSERT INTO project_folder(name, color, sort, created_by, created_at, updated_at)
-     VALUES($1,$2,(SELECT COALESCE(MAX(sort),0)+1 FROM project_folder),$3,now(),now()) RETURNING id`,
-    [input.name, input.color ?? null, ctx?.actor ?? null]);
+    `INSERT INTO project_folder(name, color, sort, parent_id, settings, created_by, created_at, updated_at)
+     VALUES($1,$2,(SELECT COALESCE(MAX(sort),0)+1 FROM project_folder),$3,$4::jsonb,$5,now(),now()) RETURNING id`,
+    [input.name, input.color ?? null, parentId, settings, ctx?.actor ?? null]);
   const created = await getProjectFolderRow(row.id);
   await auditFolder(String(row.id), "insert", null, created, ctx);
   return created!;
 }
 
-// 이름·색·정렬 수정 — 주어진 키만 변경(부재=무변경).
+// 이름·색·정렬·상위(parent_id) 수정 — 주어진 키만 변경(부재=무변경).
 export async function updateProjectFolder(
   id: number,
-  patch: Partial<{ name: string; color: string | null; sort: number }>,
+  patch: Partial<{ name: string; color: string | null; sort: number; parent_id: number | null }>,
   ctx?: WriteCtx,
 ): Promise<ProjectFolderRow> {
   const before = await getProjectFolderRow(id);
@@ -84,6 +112,17 @@ export async function updateProjectFolder(
   if (patch.name !== undefined) set("name", patch.name);
   if (patch.color !== undefined) set("color", patch.color);
   if (patch.sort !== undefined) set("sort", patch.sort);
+  // #766 이동(중첩): 스페이스로 끌어넣기/빼기. 스페이스 자신은 최상위 유지, 자기·자손을 부모로 삼는 순환 금지.
+  if (patch.parent_id !== undefined) {
+    const target = patch.parent_id;
+    if (target != null) {
+      // 메시지에 wrap() 인식 토큰(허용/없음)을 포함해야 사용자에게 400 으로 노출된다(rest-util.ts) — 아니면 internal_error.
+      if (folderIsSpace(before)) throw new Error("스페이스는 최상위만 허용됩니다 (다른 폴더/스페이스 하위로 이동 불가)");
+      if (!(await getProjectFolderRow(target))) throw new Error(`상위 폴더 #${target} 없음`);
+      if (await folderIsSelfOrDescendant(id, target)) throw new Error("자기 자신·하위 폴더를 상위로 두는 순환은 허용되지 않습니다");
+    }
+    set("parent_id", target);
+  }
   if (sets.length) {
     sets.push("updated_at=now()");
     vals.push(id);

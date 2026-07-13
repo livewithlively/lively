@@ -1,10 +1,13 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
-import { renderKnowledge, renderKnowledgeDetail, renderKnowledgeForm, renderTrash } from './knowledge.js';
-import { consumeKnPeekNavGuard, dismissKnowledgePeek } from './knowledge-doc.js';
-import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
-import { renderInstall, renderLearn, renderOnboarding } from './learn.js';
+import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
+import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
+import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
+import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
+import { pjvCloseTaskModalOnRoute } from './taskmodal.js'; // #804 — 라우트 이탈 시 상세 모달 정리
+import { renderInstall, renderLearn, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
@@ -30,12 +33,21 @@ function setActiveTab(name) {
 }
 async function route() {
     teardownTerminal(); // 터미널 뷰를 떠나면 ws/xterm 정리(메모리·소켓 누수 방지)
-    endTour(); // 진행 중이던 온보딩 투어(#517) 오버레이도 함께 정리
     // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
     //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
-    if (consumeKnPeekNavGuard())
+    //  (#761) 투어 정리는 이 가드 '뒤'에서 — 피크 개폐만으로는 진행 중 둘러보기를 죽이지 않는다(본문도 그대로니까).
+    if (consumeWikiPeekGuard())
         return;
-    dismissKnowledgePeek();
+    endTour(); // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
+    dismissWikiPeek();
+    wkRouteCleanup(); // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
+    // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
+    //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).
+    //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)되고, 페이지 재렌더는
+    //  건너뛴다 — 라우터가 곧 $view 를 새로 그리므로 보드 재렌더와 레이스가 난다.
+    //  (지식·가이드 같은 '참조' 링크는 애초에 새 탭으로 열려 여기까지 오지 않는다 — 그게 목적이므로.)
+    pjvCloseTaskModalOnRoute();
+    pjvCloseProjectModalOnRoute();
     if (!state.me) {
         showGate();
         return;
@@ -58,6 +70,10 @@ async function route() {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
             if (segs[1] === 'install')
                 await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
+            else if (segs[1] === 'tour')
+                await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
+            else if (segs[1] === 'menu')
+                await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
             else
                 await renderLearn(view);
         }
@@ -71,20 +87,21 @@ async function route() {
             await renderDomainmap(view, params);
         }
         else if (page === 'knowledge') {
-            setActiveTab('knowledge'); // 지식(맥락의 기록) — 사업·제품·시스템 + 통계·검토. injection/provenance 직교축.
-            await renderKnowledge(view, segs[1] || 'business', params);
+            setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
+            await renderWiki(view, segs[1] || '', params);
         }
         else if (page === 'trash') {
             setActiveTab('knowledge'); // 휴지통(삭제됨)은 지식 탭 계열의 하위 회수 뷰 — 상위 탭 활성 유지
-            await renderTrash(view);
+            await renderWikiTrash(view);
         }
         else if (page === 'k') {
             setActiveTab('knowledge'); // 지식 상세는 지식 탭의 하위 뷰 — 상위 탭 활성 유지
-            await renderKnowledgeDetail(view, decodeURIComponent(segs.slice(1).join('/')));
+            await renderWikiDocPage(view, decodeURIComponent(segs.slice(1).join('/')));
         }
         else if (page === 'k-edit') {
-            setActiveTab('knowledge'); // 지식 편집(별도 페이지, 모달 아님 #290) — #/k-edit/<name>
-            await renderKnowledgeForm(view, undefined, decodeURIComponent(segs.slice(1).join('/')));
+            // #764 — 별도 편집 페이지 폐지(문서 페이지가 곧 에디터). 구 링크·북마크는 문서로 리다이렉트(MD 원문은 ⋯ 메뉴).
+            location.replace('#/k/' + segs.slice(1).join('/'));
+            return;
         }
         else if (page === 'projects') {
             // v1 프로젝트 탭 폐기(2026-06-23) — projects2 로 통합. 옛 링크/북마크는 리다이렉트.
@@ -132,6 +149,7 @@ async function route() {
             setActiveTab('dashboard'); // 알 수 없는 경로 → 홈(대시보드)
             await renderMyDashboard(view);
         }
+        resumeGuideTour(); // (#761) Lively 둘러보기 — 렌더 끝난 화면이 진행 중 플랜의 장면이면 스포트라이트 재개(플랜 없으면 no-op)
     }
     catch (e) {
         if (e && e.status === 401)

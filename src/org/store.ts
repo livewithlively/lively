@@ -7,6 +7,7 @@ import { CONNECTOR_SPECS, type ConnectorField } from "../connectors/config.js";
 import { encryptSecret, secretsEnabled } from "./secret-box.js";
 import { isScope } from "../capabilities/scopes.js";
 import { redactDeep } from "./redact.js";
+import { invalidateIngestPolicyCache } from "./ingest-policy-load.js";   // #783 정책 쓰기 → 캐시 즉시 무효화(스위치가 곧바로 먹게)
 // WIKI 인덱스(팀 메모리)·섹션 모두 v6 knowledge 사용(knowledge_unit 컷오버 완료 2026-06-24).
 import {
   listKnowledge as listK6, upsertKnowledge as upsertK6,
@@ -17,6 +18,7 @@ import {
   type EmbeddingConfig, type EmbeddingConfigPatch, resolveEmbeddingConfig, normalizeEmbeddingConfig,
   isExplicitEmbeddingOff, embeddingConfigSource, EMBEDDING_OFF,
 } from "../v6/embedding-provider.js";
+import { invalidateOrgTimezone } from "./timezone.js"; // #778 시간대 캐시 무효화(프로필 저장 시)
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -25,6 +27,7 @@ export interface OrgProfile {
   name: string | null;
   display_name: string | null;
   gateway_url: string | null;
+  timezone: string | null; // #778 조직 시간대(IANA). NULL=미설정 → org/timezone.ts DEFAULT_TZ.
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -189,15 +192,15 @@ export async function listContentAudit(f: ContentAuditFilter): Promise<{ rows: C
 // ── org_profile ──
 export async function getOrgProfile(): Promise<OrgProfile> {
   const r = await itemsPool.query(
-    `SELECT name, display_name, gateway_url, version, updated_at, updated_by FROM org_profile WHERE id=1`,
+    `SELECT name, display_name, gateway_url, timezone, version, updated_at, updated_by FROM org_profile WHERE id=1`,
   );
   return (r.rows[0] as OrgProfile) ?? {
-    name: null, display_name: null, gateway_url: null, version: 1, updated_at: null, updated_by: null,
+    name: null, display_name: null, gateway_url: null, timezone: null, version: 1, updated_at: null, updated_by: null,
   };
 }
 
 export async function updateOrgProfile(
-  patch: Partial<Pick<OrgProfile, "name" | "display_name" | "gateway_url">>,
+  patch: Partial<Pick<OrgProfile, "name" | "display_name" | "gateway_url" | "timezone">>,
   actor?: string,
   source?: string,
 ): Promise<OrgProfile> {
@@ -207,12 +210,14 @@ export async function updateOrgProfile(
        name = COALESCE($1, name),
        display_name = COALESCE($2, display_name),
        gateway_url = COALESCE($3, gateway_url),
+       timezone = COALESCE($4, timezone),
        version = version + 1,
        updated_at = now(),
-       updated_by = $4
+       updated_by = $5
      WHERE id=1`,
-    [patch.name ?? null, patch.display_name ?? null, patch.gateway_url ?? null, actor ?? null],
+    [patch.name ?? null, patch.display_name ?? null, patch.gateway_url ?? null, patch.timezone ?? null, actor ?? null],
   );
+  invalidateOrgTimezone(); // #778: 다음 cron 틱·세션 생성이 새 시간대를 즉시 쓰게(TTL 대기 없이).
   const after = await getOrgProfile();
   await audit("org_profile", "1", "update", before, after, actor, source);
   return after;
@@ -994,9 +999,12 @@ export interface IngestPolicyRow {
   id: number; enabled: boolean;
   match_category: string | null; match_system: string | null; match_channel: string | null;
   match_provenance: string | null; match_sensitive: string | null;
-  action: string; priority: number; note: string | null; updated_at: string | null;
+  match_actor_kind: string | null; match_agent: string | null; match_type: string | null;
+  action: string; action_update: string; is_exception: boolean; preset: string | null;
+  priority: number; note: string | null; updated_at: string | null;
 }
-const IPOL_SEL = `id, enabled, match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, note, updated_at`;
+const IPOL_SEL = `id, enabled, match_category, match_system, match_channel, match_provenance, match_sensitive,
+  match_actor_kind, match_agent, match_type, action, action_update, is_exception, preset, priority, note, updated_at`;
 
 export async function listIngestPolicies(): Promise<IngestPolicyRow[]> {
   const r = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy ORDER BY priority DESC, id`);
@@ -1007,7 +1015,9 @@ export interface IngestPolicyUpsertInput {
   id?: number; enabled?: boolean;
   match_category?: string | null; match_system?: string | null; match_channel?: string | null;
   match_provenance?: string | null; match_sensitive?: string | null;
-  action?: string; priority?: number; note?: string | null;
+  match_actor_kind?: string | null; match_agent?: string | null; match_type?: string | null;
+  action?: string; action_update?: string; is_exception?: boolean; preset?: string | null;
+  priority?: number; note?: string | null;
 }
 
 // 매치 축 정규화 — 빈 문자열/undefined/null → null(any). axisMatch(ingest-policy.ts) 와 일관되게 '없음'은 항상 null 로 저장.
@@ -1017,11 +1027,16 @@ function normMatch(v: string | null | undefined): string | null {
   return s === "" ? null : s;
 }
 
+// #783 프리셋 규칙(관리탭 스위치가 관리)은 id 없이도 preset 키로 찾아 갱신한다 — 스위치 토글이 중복 행을 만들지 않게.
 export async function upsertIngestPolicy(input: IngestPolicyUpsertInput, actor?: string, source?: string): Promise<IngestPolicyRow> {
   const action = input.action ?? "confirm";
   if (!["auto", "confirm", "drop"].includes(action)) throw new Error("action 은 auto|confirm|drop");
+  const actionUpdate = input.action_update ?? "auto";
+  if (!["auto", "review", "stage", "drop"].includes(actionUpdate)) throw new Error("action_update 는 auto|review|stage|drop");
   const prov = normMatch(input.match_provenance);
   if (prov !== null && !["authored", "observed"].includes(prov)) throw new Error("match_provenance 는 authored|observed 또는 비움");
+  const actorKind = normMatch(input.match_actor_kind);
+  if (actorKind !== null && !["ai", "human"].includes(actorKind)) throw new Error("match_actor_kind 는 ai|human 또는 비움");
   const vals = {
     enabled: input.enabled ?? true,
     match_category: normMatch(input.match_category),
@@ -1029,28 +1044,48 @@ export async function upsertIngestPolicy(input: IngestPolicyUpsertInput, actor?:
     match_channel: normMatch(input.match_channel),
     match_provenance: prov,
     match_sensitive: normMatch(input.match_sensitive),
+    match_actor_kind: actorKind,
+    match_agent: normMatch(input.match_agent),
+    match_type: normMatch(input.match_type),
     action,
+    action_update: actionUpdate,
+    is_exception: input.is_exception ?? false,
+    preset: normMatch(input.preset),
     priority: Number.isFinite(input.priority) ? Math.trunc(input.priority as number) : 0,
     note: input.note === undefined || input.note === "" ? null : input.note,
   };
-  if (input.id) {
-    const cur = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy WHERE id=$1`, [input.id]);
+  // 대상 행 결정 — id 우선, 없으면 preset 키(스위치 경로).
+  let targetId = input.id ?? null;
+  if (!targetId && vals.preset) {
+    const p = await itemsPool.query(`SELECT id FROM org_ingest_policy WHERE preset=$1`, [vals.preset]);
+    targetId = p.rows[0]?.id ?? null;
+  }
+  if (targetId) {
+    const cur = await itemsPool.query(`SELECT ${IPOL_SEL} FROM org_ingest_policy WHERE id=$1`, [targetId]);
     const before = cur.rows[0];
-    if (!before) throw new Error(`org_ingest_policy #${input.id} 없음`);
+    if (!before) throw new Error(`org_ingest_policy #${targetId} 없음`);
     const r = await itemsPool.query(
       `UPDATE org_ingest_policy SET enabled=$2, match_category=$3, match_system=$4, match_channel=$5,
          match_provenance=$6, match_sensitive=$7, action=$8, priority=$9, note=$10,
+         match_actor_kind=$12, match_agent=$13, match_type=$14, action_update=$15, is_exception=$16, preset=$17,
          version=version+1, updated_at=now(), updated_by=$11
        WHERE id=$1 RETURNING ${IPOL_SEL}`,
-      [input.id, vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance, vals.match_sensitive, vals.action, vals.priority, vals.note, actor ?? null]);
-    await audit("org_ingest_policy", String(input.id), "update", before, r.rows[0], actor, source);
+      [targetId, vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance,
+       vals.match_sensitive, vals.action, vals.priority, vals.note, actor ?? null,
+       vals.match_actor_kind, vals.match_agent, vals.match_type, vals.action_update, vals.is_exception, vals.preset]);
+    await audit("org_ingest_policy", String(targetId), "update", before, r.rows[0], actor, source);
+    invalidateIngestPolicyCache();   // 관리탭 저장 즉시 반영(캐시 TTL 대기 없이)
     return r.rows[0];
   }
   const r = await itemsPool.query(
-    `INSERT INTO org_ingest_policy(enabled, match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, note, created_by, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING ${IPOL_SEL}`,
-    [vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance, vals.match_sensitive, vals.action, vals.priority, vals.note, actor ?? null]);
+    `INSERT INTO org_ingest_policy(enabled, match_category, match_system, match_channel, match_provenance, match_sensitive,
+       action, priority, note, created_by, updated_by, match_actor_kind, match_agent, match_type, action_update, is_exception, preset)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,$13,$14,$15,$16) RETURNING ${IPOL_SEL}`,
+    [vals.enabled, vals.match_category, vals.match_system, vals.match_channel, vals.match_provenance, vals.match_sensitive,
+     vals.action, vals.priority, vals.note, actor ?? null,
+     vals.match_actor_kind, vals.match_agent, vals.match_type, vals.action_update, vals.is_exception, vals.preset]);
   await audit("org_ingest_policy", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
+  invalidateIngestPolicyCache();
   return r.rows[0];
 }
 
@@ -1059,6 +1094,7 @@ export async function removeIngestPolicy(id: number, actor?: string, source?: st
   if (!cur.rows[0]) return;
   await itemsPool.query(`DELETE FROM org_ingest_policy WHERE id=$1`, [id]);
   await audit("org_ingest_policy", String(id), "delete", cur.rows[0], null, actor, source);
+  invalidateIngestPolicyCache();
 }
 
 // #656 인입 게이트 관측 — org_content_audit(knowledge insert/set_lifecycle/delete) + pending 카운트를 집계.
@@ -1067,15 +1103,22 @@ export async function removeIngestPolicy(id: number, actor?: string, source?: st
 //  · pending_created = 게이트가 검토 큐로 보낸 것(정책 confirm). after.lifecycle='pending' AND 자동경로(connector 또는 ai).
 //  · approved/rejected = pending 을 승인(set_lifecycle→active)/반려(delete). before.lifecycle='pending'.
 //  · pending_now = 현재 검토 대기(knowledge.lifecycle='pending').
+//  #783 추가 축(에이전트 저작 — 게이트의 실제 대상):
+//   · agent_auto = 에이전트(MCP)가 쓴 신규 지식이 게이트 없이 즉시 active(=지금 무검증으로 라이브에 박히는 양. 게이트를 켜야 할 이유의 크기).
+//   · rev_pending = 검토 대기 '수정' 건수 · rev_approved/rev_rejected = 기간 내 처리량.
 export interface IngestObservability {
   days: number; mirror_auto: number; pending_created: number; approved: number; rejected: number; pending_now: number;
+  agent_auto: number; rev_pending: number; rev_approved: number; rev_rejected: number;
 }
 export async function ingestObservability(days = 30): Promise<IngestObservability> {
   const d = Math.max(1, Math.min(365, Math.trunc(Number(days) || 30)));
   const iv = `${d} days`;
   const one = async (sql: string, params: unknown[] = [iv]): Promise<number> =>
     Number((await itemsPool.query(sql, params)).rows[0]?.n ?? 0);
-  const [mirror_auto, pending_created, approved, rejected, pending_now] = await Promise.all([
+  const zero = async (sql: string, params: unknown[] = [iv]): Promise<number> => {
+    try { return await one(sql, params); } catch { return 0; }   // knowledge_revision 미생성(구 DB) → 0
+  };
+  const [mirror_auto, pending_created, approved, rejected, pending_now, agent_auto, rev_pending, rev_approved, rev_rejected] = await Promise.all([
     one(`SELECT count(*)::int AS n FROM org_content_audit
          WHERE entity='knowledge' AND op='insert' AND at >= now() - $1::interval
            AND (after->>'lifecycle')='active' AND channel='connector'`),
@@ -1089,8 +1132,14 @@ export async function ingestObservability(days = 30): Promise<IngestObservabilit
          WHERE entity='knowledge' AND op='delete' AND at >= now() - $1::interval
            AND (before->>'lifecycle')='pending'`),
     one(`SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='pending'`, []),
+    one(`SELECT count(*)::int AS n FROM org_content_audit
+         WHERE entity='knowledge' AND op='insert' AND at >= now() - $1::interval
+           AND (after->>'lifecycle')='active' AND actor_kind='ai' AND channel='mcp'`),
+    zero(`SELECT count(*)::int AS n FROM knowledge_revision WHERE status='pending'`, []),
+    zero(`SELECT count(*)::int AS n FROM knowledge_revision WHERE status='approved' AND reviewed_at >= now() - $1::interval`),
+    zero(`SELECT count(*)::int AS n FROM knowledge_revision WHERE status='rejected' AND reviewed_at >= now() - $1::interval`),
   ]);
-  return { days: d, mirror_auto, pending_created, approved, rejected, pending_now };
+  return { days: d, mirror_auto, pending_created, approved, rejected, pending_now, agent_auto, rev_pending, rev_approved, rev_rejected };
 }
 
 // ════════ DB 데이터소스 레지스트리 — org_db_source ════════
@@ -1871,10 +1920,13 @@ export async function clearAssetPref(target_kind: AssetPrefKind, ref_id: string,
 // ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
 //  activity 는 itemsPool 동일 DB(지식참조=activity_knowledge→knowledge FK). project_member.member_id ↔ activity.author_person 조인.
 export interface ProjectActivity {
-  id: number; type: string; title: string | null; summary: string | null;
+  id: number; type: string; title: string | null; summary: string | null; body: string | null;
   author_person: string | null; author_agent: string | null;
   commit_sha: string | null; committed_at: string | null; created_at: string | null;
+  should_review: string | null; is_review: string | null; repo: string | null;
   external_system: string | null; external_url: string | null;
+  refs: { name: string; title: string | null; relation: string }[];
+  touchCount: number;
 }
 export async function listProjectActivities(
   projectId: number, authorPerson?: string, limit = 100, offset = 0,
@@ -1890,9 +1942,11 @@ export async function listProjectActivities(
   //  (예전엔 author_person 조인으로 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음 → 그 폭넓은 조인은 유지하지 않는다.
   //   project_id=이 프로젝트는 정의상 이 프로젝트 작업이라 session_id 가 없어도 표시되어야 한다 — MCP activity_log 로 직접 기록한 작업 포함.)
   const r = await itemsPool.query(
-    `SELECT a.id, a.type, a.title, a.summary, a.author_person, a.author_agent,
-            a.commit_sha, a.committed_at, a.created_at, a.external_system, a.external_url
+    `SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent,
+            a.commit_sha, a.committed_at, a.created_at, a.should_review, a.is_review,
+            a.external_system, a.external_url, rp.name AS repo
        FROM activity a
+       LEFT JOIN repo rp ON rp.id = a.repo_id
       WHERE (a.project_id = $1
              OR a.session_id IN (SELECT session_id FROM session_project WHERE project_id = $1))
       ${personFilter}
@@ -1900,6 +1954,24 @@ export async function listProjectActivities(
       LIMIT ${limP} OFFSET ${offP}`,
     params,
   );
-  return r.rows as ProjectActivity[];
+  const rows = r.rows as ProjectActivity[];
+  if (!rows.length) return rows;
+  // 펼침 연결(산출/참조 지식 + 코드 touch 수)을 곁들인다 — 회사 타임라인(listActivities)과 같은 프로젝션이어야
+  // 공용 렌더러(web activityTimelineRow)가 프로젝트 상세에서도 본문·참조를 그린다. tasks 는 이 프로젝트 자신이라 생략.
+  const ids = rows.map((row) => row.id);
+  const [refRes, touchRes] = await Promise.all([
+    itemsPool.query(
+      `SELECT ak.activity_id, ak.name, ak.relation, k.title
+         FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
+        WHERE ak.activity_id = ANY($1) ORDER BY ak.created_at`, [ids]),
+    itemsPool.query(
+      `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
+        WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),
+  ]);
+  const byId = new Map<number, ProjectActivity>();
+  for (const row of rows) { row.refs = []; row.touchCount = 0; byId.set(row.id, row); }
+  for (const rf of refRes.rows) byId.get(rf.activity_id)?.refs.push({ name: rf.name, title: rf.title, relation: rf.relation });
+  for (const t of touchRes.rows) { const row = byId.get(t.activity_id); if (row) row.touchCount = t.n; }
+  return rows;
 }
 

@@ -4,6 +4,7 @@
 //  "직접 쿼리"하려면 db_query 로 mcp_call_log 를 SELECT 한다(이 집계는 사람 대시보드용 편의 표면).
 import type { Capability } from "./types.js";
 import { itemsPool } from "../items/store.js";
+import { orgTimezone } from "../org/timezone.js"; // #778 일자 버킷 = 조직 시간대
 
 // 조회 윈도(상대 기간) — 값=postgres interval 문자열, null=전체(무제한).
 const WINDOWS: Record<string, string | null> = {
@@ -83,6 +84,7 @@ const toolUsage: Capability = {
                      AND ($4 = '' OR tool = $4)`;
     const pBase: unknown[] = [interval, harness, errorsOnly];
     const p: unknown[] = [interval, harness, errorsOnly, tool];
+    const tz = await orgTimezone(); // #778 일자 버킷 기준. Promise.all **밖**에서 — 안에서 await 하면 뒤 쿼리들이 직렬화된다.
 
     const [summary, byTool, byHarness, byDay, recent, toolOptions] = await Promise.all([
       itemsPool.query(
@@ -116,15 +118,16 @@ const toolUsage: Capability = {
           ORDER BY calls DESC`,
         p,
       ),
+      // 일자 버킷은 **조직 시간대**로 자른다($5, #778) — 예전엔 'Asia/Seoul' 하드코딩이라 다른 시간대 조직에선 하루가 밀렸다.
       itemsPool.query(
-        `SELECT to_char((called_at AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD') AS day,
+        `SELECT to_char((called_at AT TIME ZONE $5)::date, 'YYYY-MM-DD') AS day,
                 count(*)::int AS calls,
                 count(*) FILTER (WHERE NOT ok)::int AS errors
            FROM mcp_call_log ${where}
           GROUP BY 1
           ORDER BY 1 DESC
           LIMIT 30`,
-        p,
+        [...p, tz],
       ),
       itemsPool.query(
         `SELECT id, called_at, tool, harness, actor, ok, error, duration_ms, args

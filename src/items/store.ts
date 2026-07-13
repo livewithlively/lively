@@ -370,6 +370,9 @@ export interface UiStats {
 export async function uiStats(): Promise<UiStats> {
   // v6 컷오버(2026-06-24): observed 외부미러 통계 소스를 knowledge_unit → knowledge(provenance='observed')로 리포인트.
   const OBS = `provenance='observed'`;
+  // 일자 키 시간대(#778) — 예전엔 'Asia/Seoul' 하드코딩. 이제 조직 설정(org_profile.timezone).
+  //  ⚠ 지연 import: org/timezone 은 여기(itemsPool)를 정적 import 한다 → 정적 순환 회피(org/publish.ts 와 동일 관용구).
+  const tz = await (await import("../org/timezone.js")).orgTimezone();
   //  repo별 도메인 매핑 coverage 는 knowledge_unit_domain 폐기로 사라짐(category=repo-free) → 빈 coverage 유지.
   const [head, bySystem, byType, daily] = await Promise.all([
     itemsPool.query(`SELECT count(*)::int AS total, max(occurred_at) AS last,
@@ -377,9 +380,9 @@ export async function uiStats(): Promise<UiStats> {
                      FROM knowledge WHERE ${OBS}`),
     itemsPool.query(`SELECT external_system AS system, count(*)::int AS count FROM knowledge WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
     itemsPool.query(`SELECT fields->>'_item_type' AS type, count(*)::int AS count FROM knowledge WHERE ${OBS} GROUP BY 1 ORDER BY 2 DESC`),
-    // 일자 키는 Asia/Seoul 고정 — 클라이언트(app.js 스파크라인)도 같은 TZ 로 키를 만들므로 서버 TZ 에 흔들리지 않음.
-    itemsPool.query(`SELECT (occurred_at AT TIME ZONE 'Asia/Seoul')::date::text AS day, count(*)::int AS count
-                     FROM knowledge WHERE ${OBS} AND occurred_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1`),
+    // 일자 키는 **조직 시간대**로 고정 — 서버 프로세스 TZ(대개 UTC)에 흔들리지 않는다.
+    itemsPool.query(`SELECT (occurred_at AT TIME ZONE $1)::date::text AS day, count(*)::int AS count
+                     FROM knowledge WHERE ${OBS} AND occurred_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1`, [tz]),
   ]);
   const h = head.rows[0] as { total: number; last: Date | null; replies: number };
   return {

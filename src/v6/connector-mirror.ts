@@ -35,8 +35,8 @@ import { unitName, normalizeExternalInstance } from "../org/external-identity.js
 import { buildMemberResolver, reresolveMemberList } from "./member-resolve.js"; // #697 재해소 순수 로직(테스트 분리)
 import { routeIngestV6, classifyIngest } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
-import { itemsPool } from "../items/store.js";
-import { resolveIngestPolicy, type IngestPolicyRule } from "../org/ingest-policy.js";
+import { resolveIngestPolicy } from "../org/ingest-policy.js";
+import { getIngestPolicyRules } from "../org/ingest-policy-load.js";
 import { embedProjectBestEffort } from "./project-store.js";
 
 // ── #624 프로젝트 임베딩 재트리거(검색 #631) — 미러 sync 에서 이름/설명이 '실제로 바뀐' project 행 id 만 모았다가,
@@ -134,20 +134,6 @@ async function auditConnector(
   );
 }
 
-// #638 인입 허용선 정책 규칙 캐시 — mirror 배치 중 반복 DB 조회 회피(짧은 TTL, 정책은 자주 안 바뀜). 실패=빈 규칙(디폴트 auto).
-let _ingestPolicyCache: { at: number; rules: IngestPolicyRule[] } | null = null;
-async function getIngestPolicyRules(): Promise<IngestPolicyRule[]> {
-  const now = Date.now();
-  if (_ingestPolicyCache && now - _ingestPolicyCache.at < 10_000) return _ingestPolicyCache.rules;
-  try {
-    const r = await itemsPool.query(
-      `SELECT match_category, match_system, match_channel, match_provenance, match_sensitive, action, priority, enabled
-         FROM org_ingest_policy WHERE enabled=true`);
-    _ingestPolicyCache = { at: now, rules: r.rows as IngestPolicyRule[] };
-    return _ingestPolicyCache.rules;
-  } catch { return []; }  // 테이블 부재 등 → 정책 없음 = 디폴트 auto(현행 무변)
-}
-
 // notion(및 K류) → knowledge(observed) 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
 //  #638 lifecycle: 신규는 인입정책(auto→active | confirm→pending | drop→skip), 재싱크는 사람 검토상태 보존(archived 전파만).
 async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
@@ -189,9 +175,12 @@ async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, system: str
       try { const cls = await classifyIngest({ text: body, source: `${it.type}:${system}`, externalSystem: system }); clsCategory = cls.area; clsSensitive = cls.sensitive; }
       catch { /* 분류 실패 → null(system·provenance 축만으로 폴백) */ }
     }
+    // #783 정책은 신규(create)/수정(update) 2축이 됐지만, 미러는 create 만 태운다 — 재싱크(update)는 원본이 진실이라
+    //  게이트 대상이 아니다(아래 ON CONFLICT CASE 가 사람의 검토 상태를 보존하는 것으로 이미 충분).
+    //  actor_kind='connector' 축은 두지 않는다 — 미러는 provenance='observed' 로 이미 결정론적으로 식별된다.
     const action = resolveIngestPolicy(
       { provenance: "observed", system, category: clsCategory, channel: null, sensitive: clsSensitive },
-      await getIngestPolicyRules());
+      await getIngestPolicyRules()).create;
     if (action === "drop") return false;   // 오너 정책상 이 출처는 위키화하지 않음(원본은 외부에 잔존)
     lifecycle = action === "confirm" ? "pending" : "active";
   } else lifecycle = "active"; // 재싱크: VALUES 미반영(ON CONFLICT CASE 가 기존 lifecycle 보존)

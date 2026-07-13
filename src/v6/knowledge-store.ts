@@ -27,7 +27,9 @@ export interface KnowledgeRow {
   [k: string]: unknown;
 }
 
-function slugify(s: string): string {
+// export: knowledge_save 게이트(#783)가 upsert 전에 '신규냐 수정이냐'를 알아야 해서 같은 규칙으로 name 을 미리 해석한다.
+//  (슬러그 규칙이 두 벌이 되면 게이트가 엉뚱한 행을 보므로 단일 진실원천 유지.)
+export function slugify(s: string): string {
   return ((s || "untitled").toLowerCase().trim()
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
@@ -88,8 +90,14 @@ function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: string;
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
   if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
-  if (f.lifecycle) { params.push(f.lifecycle); wh.push(`k.lifecycle=$${params.length}`); }
-  else wh.push(`k.lifecycle='active'`);
+  // lifecycle: 미지정=active(격리 불변식의 뿌리 — 검색·recall·주입이 전부 이 기본값에 기댄다).
+  //  #783 콤마 다중값 허용('active,pending') — WIKI 사이드바 트리가 검토 대기 지식을 배지와 함께 띄우기 위함.
+  //  (MCP 는 zod enum 이라 단일값만 들어온다 — 다중값은 REST 전용 경로.)
+  if (f.lifecycle) {
+    const lcs = String(f.lifecycle).split(",").map((s) => s.trim()).filter(Boolean);
+    params.push(lcs);
+    wh.push(`k.lifecycle = ANY($${params.length}::text[])`);
+  } else wh.push(`k.lifecycle='active'`);
   if (f.q) wh.push(grepWhere(["k.title", "k.body_md"], parseGrep(f.q), params));  // grep 매처(regex|토큰 AND) — knowledge_grep 과 동일 의미
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   return { join, where, params };
@@ -110,9 +118,17 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   params.push(limit); const limP = `$${params.length}`;
   params.push(offset); const offP = `$${params.length}`;
   // icon/cover(#657, props_ui) — 목록 행 아이콘·갤러리 카드 커버용 얕은 노출(전체 props_ui 는 상세 전용 유지).
+  // category_key/name(#783) — 목록 행에 소속 도메인 표시(검토 큐가 도메인별로 묶고, 에이전트도 목록에서 분류를 본다).
+  //  단일 카테고리 정책(#290)이라 LATERAL LIMIT 1 — 행 증식 없음(DISTINCT 와도 무해).
   return q(itemsPool,
-    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover
-     FROM knowledge k ${join} ${where} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
+    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
+            cat.key AS category_key, cat.name AS category_name
+     FROM knowledge k ${join}
+     LEFT JOIN LATERAL (
+       SELECT cc.key, cc.name FROM knowledge_category kc2 JOIN category cc ON cc.id=kc2.category_id
+        WHERE kc2.name=k.name AND kc2.state<>'rejected' ORDER BY kc2.category_id LIMIT 1
+     ) cat ON true
+     ${where} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
 // #709 총계 — 같은 필터의 전체 건수(페이징 메타 total/has_more 용). 목록의 DISTINCT 와 일치하도록 count(DISTINCT k.name).
@@ -307,6 +323,12 @@ export async function upsertKnowledge(
   // 벡터검색(#172) — 임베딩 on 이면 본문 임베딩 갱신(best-effort, off=no-op, 실패해도 저장 성공 보존).
   await embedKnowledgeBestEffort(name, { title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
   return after;
+}
+
+// 얕은 lifecycle 조회 — 게이트 가드용(#783 자가승인 차단). getKnowledge 는 카테고리·링크·트리까지 조인해 무겁다.
+export async function getKnowledgeLifecycle(name: string): Promise<string | undefined> {
+  const r = await one(itemsPool, `SELECT lifecycle FROM knowledge WHERE name=$1`, [name]);
+  return (r as { lifecycle?: string } | undefined)?.lifecycle;
 }
 
 export async function setKnowledgeLifecycle(name: string, lifecycle: string, ctx?: WriteCtx): Promise<KnowledgeRow> {

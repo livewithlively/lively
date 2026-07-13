@@ -5,7 +5,7 @@ import { z } from "zod";
 import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
-  listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
+  listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
   setKnowledgePropsUi, moveKnowledge,
@@ -14,6 +14,13 @@ import { getKnowledgeViewConfig, setKnowledgeViewConfig } from "../v6/view-confi
 import {
   postKnowledgeComment, getKnowledgeCommentFeed, toggleKnowledgeCommentReaction,
 } from "../v6/knowledge-comment-store.js";
+// #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
+import { resolveKnowledgeGate } from "../v6/knowledge-gate.js";
+import {
+  proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor, reviewQueueCounts,
+} from "../v6/knowledge-revision-store.js";
+// #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
+import { memberCategories } from "../v6/team-store.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
 //  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
@@ -92,7 +99,22 @@ const knowledgeGet: Capability = {
   handler: async (input: any) => {
     const knowledge = await getKnowledge(input.name);
     if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
-    if (input.offset == null && input.limit == null) return { knowledge };
+    // #783 이 지식에 검토 대기 중인 수정이 있으면 함께 알린다 — staged 면 "지금 보는 본문은 옛 승인본"이라는 뜻이라
+    //  사람·에이전트가 그 사실을 모르고 덧쓰면 안 된다(웹 문서화면은 이 값으로 배너를 띄운다).
+    const pendingRev = await pendingRevisionFor(input.name);
+    const revInfo = pendingRev
+      ? {
+        pending_revision: {
+          id: pendingRev.id, mode: pendingRev.mode, proposed_by: pendingRev.proposed_by,
+          actor_kind: pendingRev.actor_kind, agent: pendingRev.agent, edits: pendingRev.edits,
+          updated_at: pendingRev.updated_at,
+          note: pendingRev.mode === "staged"
+            ? "이 지식에는 검토 대기 중인 수정 제안이 있습니다 — 아래 본문은 아직 옛 승인본입니다(승인 시 교체)."
+            : "이 지식의 최근 수정이 사람 검토 대기 중입니다 — 본문은 반영돼 있으나 되돌려질 수 있습니다.",
+        },
+      }
+      : {};
+    if (input.offset == null && input.limit == null) return { knowledge, ...revInfo };
     // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
     const lines = (knowledge.body_md ?? "").split("\n");
     const from = Math.max(1, input.offset ?? 1);
@@ -102,6 +124,7 @@ const knowledgeGet: Capability = {
     return {
       knowledge: { ...knowledge, body_md: slice.join("\n") },
       body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
+      ...revInfo,
     };
   },
 };
@@ -112,7 +135,9 @@ const knowledgeSave: Capability = {
   description:
     "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. provenance 포함(지식은 항상 recalled — '항상 주입'은 관리탭 '세션 주입' 섹션 문서로만, knowledge_set_wiki 로 인덱스 핀). name 없으면 자동 슬러그. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
-    "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라.",
+    "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
+    "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
+    "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -168,14 +193,70 @@ const knowledgeSave: Capability = {
       throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const knowledge = await upsertKnowledge(input, writeCtx);
-    // 저장-시 중복감지(#172) — 신규(version=1)일 때만, 방금 저장된 임베딩으로 최근접 검색(재임베딩 X).
-    //  임베딩 off / 유사 없음이면 그냥 { knowledge }. 비차단 경고 — 중복이면 supersedes/병합을 사람·에이전트가 판단.
-    if ((knowledge as any)?.version === 1) {
-      const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
-      if (similar.length) {
-        return { knowledge, similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+
+    // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
+    const gate = await resolveKnowledgeGate(input, ctx);
+
+    // ① 신규 저장.
+    if (gate.isCreate) {
+      if (gate.create === "drop") {
+        throw new HttpError(403, "인입 허용선 정책상 이 지식은 저장할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
       }
+      // 서버 클램프: 에이전트가 lifecycle='active' 로 우회할 수 없다. 반대로 에이전트가 자진 pending 하면 존중(안전 방향).
+      const lifecycle = (gate.create === "confirm" || input.lifecycle === "pending") ? "pending" : (input.lifecycle ?? "active");
+      const knowledge = await upsertKnowledge({ ...input, lifecycle }, writeCtx);
+      const gateInfo = lifecycle === "pending"
+        ? { action: "confirm", state: "pending", rule_id: gate.rule_id,
+            note: "검토 대기(pending)로 저장됐습니다 — 사람이 승인하기 전까지 검색·세션주입·목록에 노출되지 않습니다(knowledge_get·knowledge_list(lifecycle='pending')로는 조회 가능). 같은 name 으로 다시 저장하면 이 초안이 갱신됩니다." }
+        : null;
+      // 저장-시 중복감지(#172) — 신규(version=1)일 때만, 방금 저장된 임베딩으로 최근접 검색(재임베딩 X).
+      //  임베딩 off / 유사 없음이면 그냥 { knowledge }. 비차단 경고 — 중복이면 supersedes/병합을 사람·에이전트가 판단.
+      if ((knowledge as any)?.version === 1) {
+        const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
+        if (similar.length) {
+          return { knowledge, ...(gateInfo ? { gate: gateInfo } : {}), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+        }
+      }
+      return { knowledge, ...(gateInfo ? { gate: gateInfo } : {}) };
+    }
+
+    // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
+    if (gate.update === "drop") {
+      throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
+    }
+    const before = gate.before!;
+    if (gate.update === "stage") {
+      // 본문 미반영 — 라이브는 옛 승인본 유지, 제안만 큐로. (같은 지식의 pending 제안은 1건으로 coalesce.)
+      const revision = await proposeRevision({
+        name: before.name, mode: "staged",
+        base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
+        next: { title: input.title ?? null, body_md: String(input.body_md ?? ""), summary: null, type: input.type ?? null },
+        proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+      });
+      return {
+        knowledge: null,
+        gate: {
+          action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
+        },
+      };
+    }
+    const knowledge = await upsertKnowledge(input, writeCtx);
+    if (gate.update === "review") {
+      // 본문은 즉시 반영(라이브 유지) — 사람은 사후에 diff 를 보고 확인 또는 되돌리기.
+      const revision = await proposeRevision({
+        name: before.name, mode: "applied",
+        base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
+        next: { title: input.title ?? null, body_md: String(input.body_md ?? ""), summary: null, type: input.type ?? null },
+        proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+      });
+      return {
+        knowledge,
+        gate: {
+          action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "수정이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다.",
+        },
+      };
     }
     return { knowledge };
   },
@@ -184,7 +265,8 @@ const knowledgeSave: Capability = {
 const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
-  description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(자동 인입 허용선 게이트, #638). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551).",
+  description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(#638/#783 게이트). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551). " +
+    "⚠ 승인(→active)과 '검토 대기 중 지식의 상태 변경'은 **사람 전용**(웹) — 에이전트(MCP)는 403. 자기가 쓴 지식을 스스로 승인할 수 없다.",
   scope: "memory",
   input: {
     name: z.string().min(1).max(64),
@@ -200,6 +282,20 @@ const knowledgeSetLifecycle: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    // 🔒 #783 자가승인 차단 — 이게 없으면 게이트가 통째로 무력화된다:
+    //  에이전트가 knowledge_save 로 pending 저장 → 곧바로 set_lifecycle(active) 로 스스로 승인 → 무검증 지식이 라이브.
+    //  검토는 사람의 행위다. knowledge_delete 가 같은 이유로 mcp 를 403 하는 것(자기 글 삭제 금지)과 동형 가드.
+    //  · →active(승인)는 MCP 금지. · 검토 대기(pending) 중인 지식의 상태 변경도 MCP 금지(큐에서 몰래 치우는 것 방지).
+    //  사람 경로(웹 REST, source='web')는 무영향 — 검토 큐·문서 배너의 승인 버튼이 그대로 동작한다.
+    if (ctx?.source === "mcp") {
+      if (input.lifecycle === "active") {
+        throw new HttpError(403, "승인(→active)은 사람이 웹 검토 큐에서 합니다 — 에이전트는 자기가 쓴 지식을 스스로 승인할 수 없습니다.");
+      }
+      const cur = await getKnowledgeLifecycle(input.name);
+      if (cur === "pending") {
+        throw new HttpError(403, "검토 대기 중인 지식의 상태 변경은 사람만 할 수 있습니다(검토 큐).");
+      }
+    }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
   },
@@ -712,6 +808,97 @@ const knowledgeMove: Capability = {
   },
 };
 
+// ════════ #783 수정 검토 큐 — 기존 active 지식을 에이전트가 고친 건을 사람이 diff 로 검토. ════════
+//  신규 지식은 lifecycle='pending' 으로 격리되므로 knowledge_list(lifecycle=pending)가 그 큐다.
+//  수정은 본문과 분리해 knowledge_revision 에 쌓인다(staged=미반영·applied=반영후검토) → 여기 3종이 그 표면.
+//  scope='memory' — #638 결정("승인 자격제한 없음, 카테고리 전문성 있는 워킹레벨이 더 잘 검토"). 승인자는 감사(actor)에 남는다.
+//  REST 전용: 검토는 사람이 웹에서 하는 일이라 MCP 툴 표면을 늘리지 않는다(에이전트는 knowledge_save 응답의 gate 로 상태를 안다).
+const knowledgeRevisions: Capability = {
+  name: "knowledge_revisions",
+  title: "지식 수정 검토 큐",
+  description: "검토 대기(또는 처리된) 지식 수정 목록 — 대상 지식·제안자(에이전트/사람)·모드(staged|applied)·증감 줄수·충돌 여부.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-revisions"],
+      parse: (req) => ({
+        status: req.query?.status ? String(req.query.status) : "pending",
+        limit: req.query?.limit ? Number(req.query.limit) : 200,
+      }) }],
+  },
+  handler: async (input: any) => {
+    const status = ["pending", "approved", "rejected"].includes(String(input.status)) ? String(input.status) : "pending";
+    return { entries: await listRevisions(status, Number(input.limit) || 200) };
+  },
+};
+
+const knowledgeRevisionGet: Capability = {
+  name: "knowledge_revision_get",
+  title: "지식 수정 제안 상세",
+  description: "수정 제안 1건 + 라이브 현재본 — diff 렌더용 전문 3종(수정 전 base / 라이브 현재 / 제안 new).",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-revisions/:id"],
+      parse: (req) => ({ id: Number(req.params?.id) }) }],
+  },
+  handler: async (input: any) => {
+    const got = await getRevision(Number(input.id));
+    if (!got) throw new HttpError(404, "수정 제안 없음");
+    return got;
+  },
+};
+
+const knowledgeRevisionReview: Capability = {
+  name: "knowledge_revision_review",
+  title: "지식 수정 승인/반려",
+  description: "승인 — staged: 제안 본문을 라이브에 적용 · applied: 확인(이미 반영됨). 반려 — staged: 제안 폐기(라이브 무변) · applied: 라이브를 수정 전으로 되돌림.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge-revisions/:id/review"],
+      parse: (req) => {
+        const decision = String(((req.body ?? {}) as Record<string, unknown>).decision ?? "");
+        if (!["approve", "reject"].includes(decision)) throw new HttpError(400, "decision 은 approve|reject");
+        return { id: Number(req.params?.id), decision };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return input.decision === "approve"
+      ? await approveRevision(Number(input.id), writeCtx)
+      : await rejectRevision(Number(input.id), writeCtx);
+  },
+};
+
+// ════════ #802 검토 큐 요약(카운트) — 검토 큐를 관리탭 밖으로 꺼내는 표면들의 공용 데이터원. ════════
+//  문제: 검토 큐가 관리탭 안에만 있어, 아무도 안 들어가면 에이전트가 쓴 지식이 승인 대기로 묻힌다
+//   (pending 은 검색·세션주입에서 빠져 있으므로 "기록했는데 아무도 못 쓰는" 상태).
+//  → 대시보드 '최신 알림'의 검토 대기 리마인더 + 관리탭 nav 배지 + 큐의 '내 도메인' 필터가 이걸 함께 먹는다.
+//  scope='memory' — 검토 큐(knowledge_revisions)와 동일. 검토할 수 없는 사람에겐 애초에 알리지 않는다(403 → 표면 생략).
+const reviewQueueSummary: Capability = {
+  name: "review_queue_summary",
+  title: "검토 큐 요약",
+  description: "검토 대기 건수 — 신규(pending 지식) + 수정(리비전). 전체와 '내 도메인'(내 팀이 오너인 카테고리)을 분리해 준다.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,   // 검토는 사람이 웹에서 하는 일 — 에이전트 툴 표면을 늘리지 않는다(knowledge_revisions 와 동일 판단).
+    rest: [{ method: "GET", paths: ["/api/ui/review-queue/summary"], parse: () => ({}) }],
+  },
+  handler: async (_input: any, user: any) => {
+    const memberId = String(user?.userId ?? "");
+    // 팀 미설정·스키마 초기 등으로 실패해도 카운트 자체는 살린다(개인화만 빠짐 — 전체 건수는 여전히 유효).
+    const cats = memberId ? await memberCategories(memberId).catch(() => []) : [];
+    const owner = cats.filter((c) => c.owner);
+    const counts = await reviewQueueCounts(owner.map((c) => c.category_id));
+    return { ...counts, mine_category_keys: owner.map((c) => c.key) };
+  },
+};
+
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
 //  뒤에 두면 'search'/'overview'가 :name 으로 잡혀 404). MCP 등록은 이름목록 기반이라 순서 무관.
@@ -721,6 +908,8 @@ const knowledgeMove: Capability = {
 export const knowledgeCapabilities: Capability[] = [
   knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree,
   knowledgeViewGet, knowledgeViewSet, knowledgeCommentReaction,   // #592 정적 경로 — /:name 계열보다 먼저
+  knowledgeRevisions, knowledgeRevisionGet, knowledgeRevisionReview,   // #783 수정 검토 큐(/knowledge-revisions* — :name 과 다른 경로)
+  reviewQueueSummary,   // #802 검토 대기 카운트(/review-queue/summary — 대시보드·nav 배지)
   knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
   knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)

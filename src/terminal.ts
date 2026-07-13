@@ -10,7 +10,9 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus } from "./terminal-sessions.js";
+import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
+import { activeEmbeddingProvider } from "./v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
@@ -132,6 +134,30 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     res.setHeader("Cache-Control", "no-store");
     res.json({ id: req.params.id, label: await getSessionLabel(req.params.id) });
+  }));
+  // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
+  //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.
+  app.get("/api/ui/terminal/sessions/:id/prompts", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const out = await sessionPrompts(await sessionDir(req.params.id));
+    res.setHeader("Cache-Control", "no-store");
+    res.json(out);
+  }));
+  // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
+  app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {
+    const q = String((req.query.q ?? "") as string);
+    const all = await listSessions(userOf(req));
+    const sessions = all
+      .filter((s) => !isProjectSessionDir(s.dir) || s.owned)   // 개인(소유/초대) + 내가 만든 프로젝트 세션만(남의 비공개 미검색)
+      .map((s) => ({ id: s.id, label: s.label, dir: s.dir, projectId: s.projectId }));
+    // 임베딩 provider 켜져 있으면 의미(하이브리드) 검색, 아니면 렉시컬(토큰 AND+랭킹). 하이브리드 실패 시 렉시컬 폴백.
+    const provider = await activeEmbeddingProvider().catch(() => null);
+    let out;
+    if (provider) { try { out = await searchPromptsHybrid(sessions, q, provider); } catch { out = await searchPrompts(sessions, q); } }
+    else out = await searchPrompts(sessions, q);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(out);
   }));
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;

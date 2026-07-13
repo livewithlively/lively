@@ -15,6 +15,7 @@ import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
+import { receiveUpload, uploadError } from "./upload-file.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -165,23 +166,12 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     fs.createReadStream(abs).pipe(res);
   }));
 
-  // 업로드(raw 스트림)
+  // 업로드(raw 스트림 → 임시파일 → rename). 취소·끊김이면 목적지는 손대지 않는다(#797 — upload-file.ts).
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      const ws = fs.createWriteStream(abs);
-      let size = 0;
-      req.on("data", (c: Buffer) => {
-        size += c.length;
-        if (size > MAX_UPLOAD) { ws.destroy(); req.destroy(); reject(new HttpError(413, "파일이 너무 큽니다(50MB 초과)")); }
-      });
-      req.on("error", reject);
-      ws.on("error", reject);
-      ws.on("finish", () => resolve());
-      req.pipe(ws);
-    });
+    try { await receiveUpload(req, abs, MAX_UPLOAD, null); }
+    catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
     res.json({ ok: true });
   }));
 
