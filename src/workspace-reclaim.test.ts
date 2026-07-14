@@ -28,8 +28,10 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await git(["config", "user.email", "t@t"], dir);
   await git(["config", "user.name", "t"], dir);
   await git(["remote", "add", "origin", remote], dir);
-  // gitignore: 파생물 + 시크릿/로컬데이터(현실 그대로 — 둘 다 gitignored 다)
-  await fsp.writeFile(path.join(dir, ".gitignore"), "node_modules/\nbuild/\ndist/\n.env\ndata/\nweird-cache/\n");
+  // gitignore: 파생물 + 시크릿/로컬데이터(현실 그대로 — 둘 다 gitignored 다).
+  // ⚠ `node_modules` 는 **슬래시 없이** — 실제 레포(context-ontology/.gitignore:1)와 동일. 슬래시를 붙이면
+  //  디렉터리만 매치해 **심링크가 안 잡히고**, 그러면 심링크 회귀 테스트가 조용히 무력해진다(실제로 겪음).
+  await fsp.writeFile(path.join(dir, ".gitignore"), "node_modules\nbuild/\ndist/\n.env\ndata/\nweird-cache/\n");
   await fsp.writeFile(path.join(dir, "src.txt"), "source");
   await git(["add", "-A"], dir);
   await git(["commit", "-m", "init"], dir);
@@ -147,6 +149,40 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   assert.deepEqual(res.removed, [], "⚠ 활성 세션이 있는데 파일을 지웠다 — 그 세션의 빌드가 깨진다!");
   assert.ok(fs.existsSync(path.join(dir, "node_modules")));
   assert.equal(res.worktreeRemoved, false);
+
+  await fsp.rm(path.dirname(dir), { recursive: true, force: true });
+}
+
+// ── ⚠ 심링크: 회수 대상이 되면 안 된다 (실제 사고 회귀, 2026-07-13) ──
+//  실사고: 누가 워크트리의 node_modules 를 **라이브 게이트웨이의 node_modules 로 가는 심링크**로 걸어뒀는데,
+//   dirSize 가 링크를 따라가 대상 크기(224MB)를 "회수 가능"으로 **거짓 보고**했다.
+//   ("라이브 의존성을 지울 뻔했다"고 알려졌으나, 실측하니 fs.rm 은 심링크를 lstat 으로 판별해 **링크만 unlink**
+//    한다 — 대상은 무사했다. 즉 데이터 손실 위험은 없었고 **거짓 회수량 보고**가 진짜 결함이었다.)
+//  어느 쪽이든 심링크는 지워봐야 0바이트 회수하고 남의 의도적 배치만 깨뜨린다 → 손대지 않고 '미분류'로 보고한다.
+{
+  const { dir } = await makeRepo();
+  const outside = path.join(path.dirname(dir), "LIVE_node_modules"); // 워크트리 '밖'의 라이브 의존성
+  await fsp.mkdir(outside, { recursive: true });
+  await fsp.writeFile(path.join(outside, "live.js"), "x".repeat(100000));
+  await fsp.symlink(outside, path.join(dir, "node_modules"), "dir");
+  // 대조군 — 진짜 파생물은 회수돼야 한다.
+  await fsp.mkdir(path.join(dir, "dist"), { recursive: true });
+  await fsp.writeFile(path.join(dir, "dist", "o"), "x".repeat(3000));
+
+  const plan = await planReclaim(dir);
+  const nm = plan.entries.find((e) => e.rel === "node_modules");
+  assert.ok(nm, "심링크도 후보 목록엔 보여야 한다(사람이 알아채게)");
+  assert.equal(nm.kind, "unclassified", "⚠ 심링크가 derived 로 잡히면 지워진다 — 반드시 미분류여야 한다");
+  assert.equal(nm.symlink, true, "심링크임을 표시해야 왜 안 지워지는지 안다");
+  assert.equal(nm.bytes, 0, "⚠ 심링크 대상의 크기를 우리 것인 양 보고하면 안 된다(거짓 회수량 = 실제 사고 원인)");
+
+  assert.ok(plan.reclaimableBytes < 100_000, `회수 가능량에 심링크 대상 크기가 섞였다: ${plan.reclaimableBytes}`);
+  assert.ok(plan.reclaimableBytes >= 3000, "진짜 파생물(dist)은 회수 가능량에 잡혀야 한다");
+
+  await applyReclaim(plan);
+  assert.ok(fs.existsSync(path.join(dir, "node_modules")), "⚠ 심링크를 지웠다 — 남의 의도적 배치를 깨뜨린다");
+  assert.ok(fs.existsSync(path.join(outside, "live.js")), "⚠⚠ 심링크 대상(라이브 의존성)이 지워졌다 — 데이터 손실!");
+  assert.ok(!fs.existsSync(path.join(dir, "dist")), "진짜 파생물은 회수돼야 한다");
 
   await fsp.rm(path.dirname(dir), { recursive: true, force: true });
 }

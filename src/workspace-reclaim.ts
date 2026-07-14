@@ -55,6 +55,8 @@ export interface ReclaimEntry {
   kind: EntryKind;
   bytes: number;
   partial: boolean; // 크기 측정이 시간 예산에 걸렸는지
+  /** 심링크인가 — 회수 대상에서 제외한다(아래 §심링크 참조). */
+  symlink?: boolean;
 }
 
 export interface WorktreeCheck {
@@ -190,9 +192,24 @@ export async function planReclaim(
       const m = /^Would remove (.+?)\/?$/.exec(line.trim());
       if (!m || !m[1]) continue;
       const rel = m[1];
+      const abs = path.join(wt, rel);
+
+      // ── §심링크 — **회수하지 않는다.** ──
+      //  ① 크기가 우리 것이 아니다: 심링크는 다른 곳을 가리키므로 이 워크트리가 쓰는 공간은 0 이다.
+      //     (예전엔 dirSize 가 링크를 따라가 대상의 크기를 "회수 가능"으로 **거짓 보고**했다 — 실제 사고.)
+      //  ② 지워도 공간이 안 생긴다: fs.rm 은 심링크를 lstat 으로 판별해 **링크만 unlink** 한다(대상은 무사).
+      //     즉 지워봐야 0바이트 회수하고 남의 의도적 배치만 깨뜨린다.
+      //  → 이름이 node_modules 여도 **심링크면 손대지 않고 '미분류'로 보고**한다(사람이 보고 판단).
+      let symlink = false;
+      try { symlink = (await fsp.lstat(abs)).isSymbolicLink(); } catch { /* 사라졌으면 아래에서 0 */ }
+      if (symlink) {
+        entries.push({ rel, kind: "unclassified", bytes: 0, partial: false, symlink: true });
+        continue;
+      }
+
       const kind = classify(rel);
       const budget = Math.max(0, Math.min(1500, deadline - Date.now()));
-      const { bytes, partial } = await dirSize(path.join(wt, rel), budget);
+      const { bytes, partial } = await dirSize(abs, budget);
       entries.push({ rel, kind, bytes, partial });
     }
   } else {

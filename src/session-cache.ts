@@ -74,6 +74,14 @@ export async function dirSize(root: string, budgetMs = 2000): Promise<{ bytes: n
   const deadline = Date.now() + budgetMs;
   let bytes = 0;
   let partial = false;
+  // ⚠ **루트가 심링크면 따라가지 않는다.** readdir 은 심링크를 따라가므로, 예컨대 node_modules 가 다른 곳을 가리키는
+  //  심링크면 **그 대상의 크기**를 이 디렉터리의 크기인 양 보고하게 된다(실측 확인). 회수 도구가 "224MB 회수 가능"
+  //  이라고 거짓 보고하는 원인이었다 — 정작 이 워크트리가 쓰는 공간은 0인데. 아래 항목 루프는 이미 심링크를 건너뛴다.
+  try {
+    if ((await fsp.lstat(root)).isSymbolicLink()) return { bytes: 0, partial: false };
+  } catch {
+    return { bytes: 0, partial: false }; // 없는 경로 — 0
+  }
   const stack: string[] = [root];
   while (stack.length) {
     // >= 로 본다: 예산 0 = '잴 시간이 없다' → 즉시 partial. (> 로 두면 같은 밀리초 안에 끝나버려 예산이 무의미해진다.)
