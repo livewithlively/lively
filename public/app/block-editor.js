@@ -2676,7 +2676,21 @@ export function createBlockEditor(opts = {}) {
         try {
             closeSlashMenu();
             closeMention();
-            root.replaceChildren(...mdToBlocks(h.md).map(makeBlock));
+            //  #764 부분 패치 — 블록 개수가 같으면 '달라진 블록만' 교체해 나머지 DOM·캐럿·스크롤을 보존한다.
+            //  (전체 replaceChildren 은 매 undo 마다 문서 전체를 다시 그려 깜빡임·캐럿튐을 유발) 구조 변경(개수 상이)은 안전하게 전체 재구성.
+            const target = mdToBlocks(h.md);
+            const cur = blockEls();
+            if (target.length > 0 && cur.length === target.length) {
+                for (let k = 0; k < target.length; k++) {
+                    const tMd = blocksToMd([target[k]]);
+                    const cMd = blocksToMd([blockData(cur[k])]);
+                    if (cMd !== tMd)
+                        cur[k].replaceWith(makeBlock(target[k]));
+                }
+            }
+            else {
+                root.replaceChildren(...target.map(makeBlock));
+            }
             ensureOne();
             renumber();
         }
