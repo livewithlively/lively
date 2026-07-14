@@ -142,7 +142,7 @@ export async function initOrgSchema(): Promise<void> {
   await itemsPool.query(`
     CREATE TABLE IF NOT EXISTS org_runtime_config(
       id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-      hooks JSONB NOT NULL DEFAULT '{"session_preload":true,"work_flag":true,"stop_writeback_gate":true}'::jsonb,
+      hooks JSONB NOT NULL DEFAULT '{"session_preload":true,"work_flag":true,"stop_writeback_gate":true,"self_update":true}'::jsonb,
       writeback_notice TEXT,
       work_roots JSONB NOT NULL DEFAULT '[]'::jsonb,
       version INT NOT NULL DEFAULT 1,
