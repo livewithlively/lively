@@ -334,13 +334,13 @@ async function buildWikiDoc(container, name, opts = {}) {
                 },
             }));
         }
-        acts.push(el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
+        acts.push(el('a', { class: 'wk-banner-link', href: '#/knowledge/review', text: '검토 대기 →' }));
         reviewBanner = el('div', { class: 'wk-banner always' }, el('span', { class: 'wk-banner-txt', text: '검토 대기 — 승인 전까지 검색·세션주입·목록에 노출되지 않습니다' + (k.confidence === 'ai' ? ' (에이전트가 작성)' : '') }), ...acts);
     }
     else if (pendingRev) {
         reviewBanner = el('div', { class: 'wk-banner always' }, el('span', { class: 'wk-banner-txt', text: pendingRev.mode === 'staged'
                 ? '검토 대기 중인 수정 제안이 있습니다 — 아래 본문은 아직 옛 승인본입니다(승인하면 교체)'
-                : '최근 수정이 사람 검토 대기 중입니다 — 본문은 반영돼 있으나 되돌려질 수 있습니다' }), el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
+                : '최근 수정이 사람 검토 대기 중입니다 — 본문은 반영돼 있으나 되돌려질 수 있습니다' }), el('a', { class: 'wk-banner-link', href: '#/knowledge/review', text: '검토 대기 →' }));
     }
     // ── 본문 — 폴더=자식 목록 / 편집 가능=블록 에디터(자동 저장) / 그 외=읽기 렌더. ──
     let editor = null;

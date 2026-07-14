@@ -15,7 +15,6 @@ import {
 } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkIsRead, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
-import { openCategoryForm } from './category-form.js';   // 정의·범위(should) 편집
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat: any, parentFolder: string, done: () => void) {
@@ -201,7 +200,10 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       return b;
     };
     if (canDoc) pop.append(item('📁 폴더 만들기', () => openFolderForm(cat, f.folder, refresh)));
-    if (canCat) pop.append(item('✎ 정의·범위 편집', () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); })));
+    // #837 — 카테고리 '정의·범위'의 편집 주인은 [관리 ▸ 카테고리(분류 체계)] 하나다(결정: 관리탭이 주인).
+    //  여기서도 열 수 있게 두면 편집 표면이 둘이 되어 '어디서 바꾸지'가 매번 퀴즈가 된다 — 링크로 보낸다.
+    //  (도메인맵 탭도 이미 같은 곳으로 링크만 건다.)
+    if (canCat) pop.append(item('✎ 정의·범위 편집 ↗', () => { location.hash = '#/system/wiki-categories'; }));
     if (canDoc) pop.append(item(sel.mode ? '선택 모드 끄기' : '☑ 여러 개 선택', () => { sel.mode = !sel.mode; if (!sel.mode) sel.names.clear(); paintLibrary(); }));
     document.body.append(pop);
     const r = moreBtn.getBoundingClientRect();
