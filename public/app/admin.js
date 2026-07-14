@@ -3094,7 +3094,7 @@ function mcpEditor(detail, data) {
         right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
     detail.replaceChildren(el('div', { class: 'card' }, 
     // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
-    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']), el('div', { class: 'admin-two' }, listCol, right)));
+    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
 const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
@@ -3297,7 +3297,7 @@ function connectorEditor(detail, data) {
     const banner = (editing && editing.secrets_enabled === false)
         ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
         : null;
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 // 실행 상태 라벨/소요 — run 카드·기록·로그 공용.
 function runStatusLabel(st) { return st === 'ok' ? '✅ 성공' : st === 'running' ? '⏳ 진행 중' : st === 'canceled' ? '⏹ 중지됨' : '❌ 실패'; }
@@ -3703,7 +3703,7 @@ function dbSourceEditor(detail, data) {
         { key: 'allowed_db_hosts', label: '허용 DB host (allowed_db_hosts)', initial: rcDb.allowed_db_hosts, placeholder: 'localhost\ndb.internal.acme.com\n줄당 host 한 개' },
         { key: 'allowed_db_secret_refs', label: '허용 비번 env 이름 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs, placeholder: 'HONEST_RDS_RO_PASSWORD\n줄당 env 이름 한 개(값 금지)' },
     ]);
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two' }, listCol, right)), dbSafety);
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)), dbSafety);
 }
 function dbSourceForm(root, s, data, detail, isNew) {
     const allowed = (data.runtimeConfig && data.runtimeConfig.allowed_db_secret_refs) || [];
@@ -3888,7 +3888,7 @@ function customHookEditor(detail, data) {
         hookForm(right, editing, data, detail, sel === '__new__');
     else
         right.append(el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }));
-    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 function hookForm(root, h, data, detail, isNew) {
     const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
@@ -3968,7 +3968,7 @@ function harnessAssetEditor(detail, data) {
         assetForm(right, editing, data, detail, sel === '__new__');
     else
         right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 세션 시작 때 디스크에 동기화되며 스킬/커맨드는 같은 세션 내 즉시 반영됩니다.' }));
-    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 function assetForm(root, a, data, detail, isNew) {
     const idIn = el('input', { type: 'text', value: a.id, placeholder: '자산 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
@@ -4073,7 +4073,7 @@ function toolsEditor(detail, data) {
         { key: 'url_allowlist', label: '허용 호스트 (url_allowlist)', initial: pol.url_allowlist, placeholder: 'api.acme.com\n.internal.acme.com (앞에 . = 서브도메인)' },
         { key: 'allowed_auth_envs', label: '허용 인증 환경변수 이름 (allowed_auth_envs)', initial: pol.allowed_auth_envs, placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름(값 아님)' },
     ]);
-    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)), toolsSafety);
+    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)), toolsSafety);
 }
 // MCP inputSchema(JSON Schema)의 properties → 필드 목록(이름:타입·필수여부·제약·설명). 하네스가 tools/list 에서 보는 입력 표면.
 function mcpFieldsEl(schema) {
@@ -4368,11 +4368,6 @@ const PROF_DEV = [
     { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
 ];
 const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '발랄·위트 있게'];
-const PROF_LEN = [
-    { v: '짧게', hint: '핵심만 — 군더더기 없이' },
-    { v: '보통', hint: '적당한 설명과 함께' },
-    { v: '자세히', hint: '배경·근거·대안까지 충분히' },
-];
 // 단일 선택 chip 그룹 — selected.v 를 토글(다시 누르면 해제). getVal/getLabel 로 옵션 모양에 무관.
 function profChips(opts, selected, getLabel, getVal, onPick) {
     const wrap = el('div', { class: 'prof-chips' });
@@ -4393,7 +4388,7 @@ function profChips(opts, selected, getLabel, getVal, onPick) {
 }
 // canonical body_md → 선택값 복원. 기본 견본(채워넣기/local.md)은 빈값으로(새로 시작).
 function parseMyProfile(md) {
-    const r = { role: '', dev: '', address: '', tone: '', len: '', area: '', tools: '', memo: '' };
+    const r = { role: '', dev: '', address: '', tone: '', memo: '' };
     if (!md || /채워넣기|members\/local\.md/.test(md))
         return r;
     const parts = md.split(/^##\s*추가 메모\s*$/m);
@@ -4407,10 +4402,7 @@ function parseMyProfile(md) {
     r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
     const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
     r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
-    const len = grab(/^[-*\s]*\**\s*응답\s*길이\s*\**\s*[:：]\s*(.+)$/m);
-    r.len = (PROF_LEN.find((l) => len.startsWith(l.v)) || {}).v || '';
-    r.area = grab(/^[-*\s]*\**\s*담당[^:：\n]*\**\s*[:：]\s*(.+)$/m);
-    r.tools = grab(/^[-*\s]*\**\s*자주[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+    // 응답 길이·담당 영역·자주 쓰는 도구는 #837 에서 제거 — 파싱도 안 한다(다음 저장에 자연 소멸).
     return r;
 }
 // 업로드 이미지 → 128px 정사각(center-crop) JPEG data URL. 작게 만들어 org_member.avatar 에 인라인 저장.
@@ -5264,7 +5256,16 @@ async function myProfileSection(detail) {
     });
     detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('내 정보', '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.'), field('프로필 사진', ava.node), field('표시 이름', nameIn), data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
-// ── [내 설정 ▸ AI 개인화] — 개인 레이어(body_md). AI 가 매 세션 첫머리에 그대로 읽는다. ──
+// ── [내 설정 ▸ AI 개인화] — 개인 레이어(org_member.body_md). ──
+//  #846 이 배선을 완성했다: previewMemberContext 가 `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)` 블록으로
+//  **본인 세션에만** 싣는다(memberId = bearer principal — 남의 개인 규칙이 새지 않는다). 그 전엔 저장은 됐지만
+//  **어떤 주입 경로도 읽지 않았다** — 그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)
+//  밖에 선택지가 없었다(남의 세션까지 오염). 이제 진짜로 반영되므로, 여기서 **실제 주입 전문**을 그대로 보여 준다.
+//
+//  필드는 4개로 줄였다(#837 · 사용자 지적: "응답길이랑 담당영역, 자주쓰는레포는 좀 불필요한거같아").
+//   · 응답 길이 — 대화에서 그때그때 말하면 되는 것(고정하면 오히려 방해).
+//   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
+//   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
 async function myAiSection(detail) {
     detail.replaceChildren(el('div', { class: 'card' }, skeleton('AI 개인화를 불러오는 중')));
     let data;
@@ -5278,9 +5279,7 @@ async function myAiSection(detail) {
     const pr = parseMyProfile(data.body_md || '');
     const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
     const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님 / 원준' });
-    const areaIn = el('input', { type: 'text', value: pr.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
-    const toolsIn = el('input', { type: 'text', value: pr.tools, placeholder: '예: context-ontology, Cursor, Figma' });
-    const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+    const memoTa = el('textarea', { class: 'admin-ta', rows: '5', placeholder: 'AI가 더 알면 좋은 것을 자유롭게 — 나만의 규칙·선호·맥락. 비밀번호·토큰은 넣지 마세요(자동 차단).' });
     memoTa.value = pr.memo;
     const devSel = { v: pr.dev };
     const devHint = el('p', { class: 'prof-hint' });
@@ -5289,11 +5288,34 @@ async function myAiSection(detail) {
     renderDevHint();
     const toneSel = { v: pr.tone };
     const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
-    const lenSel = { v: pr.len };
-    const lenHint = el('p', { class: 'prof-hint' });
-    const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
-    const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
-    renderLenHint();
+    // 실제 주입 전문 미리보기 — [세션 주입]의 것과 같은 관례지만 **개인 레이어까지 반영된** 내 컨텍스트다.
+    //  /api/ui/org/preview 는 bearer principal 기준(previewMemberContext(orgName, memberId)) 이라, 지금 로그인한
+    //  나의 팀 층 + 개인 층이 그대로 들어간 전문이 온다. 저장 후 다시 열면 방금 저장한 내용이 보인다.
+    function previewExpander() {
+        const box = el('div', { class: 'inj-preview' });
+        box.style.display = 'none';
+        const btn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '실제 주입 전문 미리보기 ▾' });
+        let open = false;
+        btn.addEventListener('click', async () => {
+            open = !open;
+            box.style.display = open ? 'block' : 'none';
+            btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입 전문 미리보기 ▾';
+            if (!open)
+                return;
+            box.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' })); // 열 때마다 새로 — 방금 저장한 게 보이게
+            try {
+                const r = await api('/api/ui/org/preview');
+                const ctx = (r && r.context) || '';
+                box.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 8px' }, ...inlineBold('내 AI 가 매 세션 첫머리에 **실제로 읽는 전문**입니다 — 조직 맥락 + 우리 팀 + 아래 개인 규칙. 다른 구성원에겐 그 사람의 개인 규칙이 실립니다.')), ctx
+                    ? el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(ctx))
+                    : el('p', { class: 'admin-hint', text: '미리볼 내용이 없습니다.' }));
+            }
+            catch (e) {
+                box.replaceChildren(errorNote(e, '미리보기를 불러오지 못했습니다'));
+            }
+        });
+        return el('div', {}, el('div', { class: 'admin-actions' }, btn), box);
+    }
     const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
     const status = el('span', { class: 'admin-status' });
     saveBtn.addEventListener('click', async () => {
@@ -5308,13 +5330,6 @@ async function myAiSection(detail) {
             lines.push('- 호칭: ' + addressIn.value.trim());
         if (toneSel.v)
             lines.push('- 말투: ' + toneSel.v);
-        const l = PROF_LEN.find((x) => x.v === lenSel.v);
-        if (l)
-            lines.push('- 응답 길이: ' + l.v + ' — ' + l.hint);
-        if (areaIn.value.trim())
-            lines.push('- 담당 영역: ' + areaIn.value.trim());
-        if (toolsIn.value.trim())
-            lines.push('- 자주 쓰는 도구·레포: ' + toolsIn.value.trim());
         let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
         const memo = memoTa.value.trim();
         if (memo)
@@ -5323,7 +5338,7 @@ async function myAiSection(detail) {
         // display_name·아바타는 **안 보낸다** — 서버가 보존하므로 [내 정보]가 지워지지 않는다.
         try {
             await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
-            toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
+            toast('저장됨 — 다음 세션부터 내 AI 가 반영합니다');
             status.textContent = '저장됨';
         }
         catch (e) {
@@ -5331,7 +5346,7 @@ async function myAiSection(detail) {
         }
         saveBtn.disabled = false;
     });
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 다른 구성원의 AI 에는 영향이 없어요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('응답 길이', el('div', {}, lenChips, lenHint)), field('담당 영역', areaIn), field('자주 쓰는 도구·레포', toolsIn), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status)));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 `내 개인 규칙` 으로 읽습니다 — 나에게만 적용되고 팀에 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status), previewExpander()));
 }
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {

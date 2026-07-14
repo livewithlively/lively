@@ -624,18 +624,35 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 구성원 추가 패널 — ①/② 단계 헤더 */
 .member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 
-/* 상세 박스 내부(목록·편집)는 1단(세로 스택) — 목록 위, 편집/내용 아래. (사용자 요청)
+/* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
+   .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
    ※ 맨 좌측 섹션 사이드바(.admin-side)는 별개 — 여기선 건드리지 않음. */
 .admin-two { display: flex; flex-direction: column; gap: 14px; align-items: stretch; margin-top: 8px; }
 .admin-sublist { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
 .admin-two > div:last-child { width: 100%; min-width: 0; }
-/* 좌우 2단 변형(구성원 관리 전용) — 목록 좌측 고정폭 + 편집 우측. 좁은 화면에서만 세로. */
+
+/* 좌우 2단(마스터-디테일) — 관리탭 목록형 화면 **전부**의 기본. (#837)
+   세로 스택이면 목록을 클릭해도 편집 폼이 목록 '아래'에 생겨 스크롤을 내려야 보였다.
+   → 목록은 좌측에 sticky 로 붙여두고, 편집은 우측에서 즉시 보이게 한다. */
 .admin-two-cols { flex-direction: row; gap: 18px; align-items: flex-start; }
-.admin-two-cols .admin-sublist { flex: 0 0 230px; width: auto; border-right: 1px solid var(--line); border-bottom: none; padding: 0 4px 0 0; }
+.admin-two-cols .admin-sublist {
+  flex: 0 0 240px; width: auto; border-right: 1px solid var(--line); border-bottom: none; padding: 0 8px 0 0;
+  /* 편집 폼이 길어도 목록이 화면에 남아 다른 항목으로 바로 건너뛸 수 있게. 헤더(sticky) 아래로. */
+  position: sticky; top: 78px; max-height: calc(100vh - 104px); overflow-y: auto; overscroll-behavior: contain;
+}
 .admin-two-cols > div:last-child { flex: 1; }
+/* 목록 스크롤바는 hover 때만 — 평소엔 헤어라인 하나로 보이게(.docs-side 와 같은 결) */
+.admin-two-cols .admin-sublist { scrollbar-width: none; }
+.admin-two-cols .admin-sublist::-webkit-scrollbar { width: 0; }
+.admin-two-cols .admin-sublist:hover { scrollbar-width: thin; }
+.admin-two-cols .admin-sublist:hover::-webkit-scrollbar { width: 6px; }
+.admin-two-cols .admin-sublist:hover::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 @media (max-width: 760px) {
   .admin-two-cols { flex-direction: column; }
-  .admin-two-cols .admin-sublist { flex-basis: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
+  .admin-two-cols .admin-sublist {
+    flex-basis: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px;
+    position: static; max-height: none; overflow-y: visible;
+  }
 }
 .mini-row { padding: 10px 12px; border-radius: 9px; cursor: pointer; }
 .mini-row:hover { background: var(--bg-tint); }
