@@ -87,7 +87,11 @@ export async function setHttpsCredential(
   owner: string, host: unknown, input: { username?: string | null; token: string; label?: string | null }, actor: string,
 ): Promise<GitCredentialPublic> {
   const h = normalizeHost(host);
-  const token = String(input.token || "");
+  // ⚠ trim 필수 — 복붙한 PAT 엔 꼬리 개행/앞 공백이 딸려온다. 이 토큰은 GIT_ASKPASS 스크립트가
+  //  printf '%s' "$GIT_CRED_PASS" 로 git 에 '그대로' 넘긴다 — HTTP 헤더(undici 가 값을 정규화해줌)와 달리
+  //  아무도 안 고쳐주므로, 개행 한 칸이 그대로 비밀번호에 실려 나가 클론이 인증 실패한다. 시크릿은 비노출이라
+  //  "토큰은 맞는데 왜 인증 실패" 로 시간을 태운다(#825 진단 중 발견 — member_secret 도 같이 고침).
+  const token = String(input.token || "").trim();
   if (!token) throw new Error("HTTPS 토큰이 필요합니다");
   const enc = encryptSecret(token);
   const user = input.username ? String(input.username).trim() : null;
