@@ -10,7 +10,8 @@
 //  (c) ~/.lively/hooks/*.mjs  ← 발행물 .claude/hooks/*.mjs 복사(chmod 755)
 //  (d) ~/.claude/settings.json ← SAFE-MERGE: user-level 절대경로 훅 블록 비파괴 머지(백업 먼저)
 //  (e) ~/.lively/work-roots   ← --work-root 시드(없을 때만, 기존 보존)
-//  MCP 등록은 setup-mac.sh 의 register-clients.sh 가 별도 담당(여기서 호출 안 함).
+//  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
+//  MCP 등록은 setup-mac.sh 의 register-clients.sh 또는 `lively install`(CLI) 이 담당(여기서 호출 안 함).
 //
 // 사용법(보통은 setup-mac.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|claude,codex] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
@@ -22,6 +23,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WORK_ROOTS_HEADER } from "./work-roots-header.mjs";
 
@@ -182,6 +184,114 @@ function safeMergeUserSettings(blockHooks) {
   }
   writeFileSync(settingsPath, JSON.stringify(cur, null, 2) + "\n");
   console.log(`  ✓ ${settingsPath} (user-level hooks 비파괴 머지, 절대경로)`);
+}
+
+// ── lively CLI (#864) — ~/.lively/lib/lively.mjs + ~/.lively/bin/lively(런처 심) + PATH 배선 ──────
+//  CLI 는 번들(cli/lively.mjs)로 온다 → kit_version 지문에 포함 → **자동 업데이트가 CLI 도 함께 갱신**한다.
+//  ⚠ 심 내용은 kit/cli/bootstrap.sh 가 만드는 것과 **바이트 동일**해야 한다(부트스트랩이든 재설치든 같은 결과 = 멱등).
+//   드리프트는 kit/cli/lively.test.mjs 의 '심 동일성' 케이스가 잡는다.
+//  ⚠ LIVELY_HOME 은 **HOME 리다이렉트**다(.lively 디렉터리가 아니라) — user-install/uninstall/self-update 전부 같은 계약.
+//   `${LIVELY_HOME:-$HOME/.lively}` 로 쓰면 샌드박스에서 <home>/lib/lively.mjs 를 찾아 죽는다(실측 후 수정).
+const CLI_SHIM = [
+  "#!/bin/sh",
+  "# lively 런처 — lively CLI 를 적절한 Node 로 실행한다. (kit/cli/bootstrap.sh · user-install.mjs 가 생성)",
+  "set -e",
+  'LV="${LIVELY_HOME:-$HOME}/.lively"',
+  'N="$LV/runtime/current/bin/node"',
+  '[ -x "$N" ] || N="$(command -v node 2>/dev/null || true)"',
+  '[ -n "$N" ] || { echo "lively: Node 를 찾을 수 없습니다. 다시 설치하세요:  curl -fsSL <게이트웨이>/cli | sh" >&2; exit 1; }',
+  'exec "$N" "$LV/lib/lively.mjs" "$@"',
+  "",
+].join("\n");
+// Windows 심 — 메시지는 ASCII 로만(콘솔 코드페이지에 따라 한글이 깨진다). bootstrap.ps1 과 동일 내용.
+const CLI_SHIM_CMD = [
+  "@echo off",
+  "setlocal EnableDelayedExpansion",
+  'set "LVH=%LIVELY_HOME%"',
+  'if "%LVH%"=="" set "LVH=%USERPROFILE%"',
+  'set "LV=%LVH%\\.lively"',
+  'set "N="',
+  'for /f "delims=" %%d in (\'dir /b /ad /o-n "%LV%\\runtime\\node-*" 2^>nul\') do (',
+  '  if exist "%LV%\\runtime\\%%d\\node.exe" (',
+  '    set "N=%LV%\\runtime\\%%d\\node.exe"',
+  "    goto :found",
+  "  )",
+  ")",
+  'where node >nul 2>nul && set "N=node"',
+  ":found",
+  "if not defined N (",
+  "  echo lively: Node not found. Reinstall:  irm ^<gateway^>/cli.ps1 ^| iex 1>&2",
+  "  exit /b 1",
+  ")",
+  '"%N%" "%LV%\\lib\\lively.mjs" %*',
+  "exit /b %errorlevel%",
+  "",
+].join("\r\n");
+
+const CLI_PATH_BEGIN = "# >>> lively-managed (PATH: cli) >>>";
+const CLI_PATH_END = "# <<< lively-managed (PATH: cli) <<<";
+
+// 새 터미널에서 `lively` 가 잡히게 rc 에 센티넬 블록을 **비파괴**로 심는다(이미 있으면 무변경).
+//  같은 리터럴을 bootstrap.sh 가 쓰고 user-uninstall.mjs 가 제거한다 — 세 곳이 한 센티넬을 공유한다.
+function wireCliPath() {
+  if (WIN) {
+    // Windows 는 rc 가 없다 — User PATH(레지스트리)에 넣는다. 관리자 권한 불필요. 실패해도 설치는 계속(fail-soft).
+    const binDir = join(LIVELY, "bin");
+    const ps = `$b='${binDir.replace(/'/g, "''")}'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); if(-not $p){$p=''}; if(($p -split ';') -notcontains $b){ [Environment]::SetEnvironmentVariable('PATH', ($b+';'+$p).TrimEnd(';'), 'User') }`;
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { stdio: "ignore" });
+    if (r.status === 0) console.log("  ✓ User PATH 에 ~/.lively/bin 추가(새 창부터 적용)");
+    else console.warn("  ⚠️ User PATH 등록 실패 — 새 PowerShell 에서 `lively` 가 안 잡히면 수동으로 추가하세요.");
+    return;
+  }
+  const block = [
+    CLI_PATH_BEGIN,
+    "# lively CLI 를 PATH 에 추가(제거 시 함께 정리됨).",
+    'if [ -d "$HOME/.lively/bin" ]; then case ":$PATH:" in *":$HOME/.lively/bin:"*) ;; *) export PATH="$HOME/.lively/bin:$PATH" ;; esac; fi',
+    CLI_PATH_END,
+  ].join("\n");
+  const candidates = [".zshrc", ".bashrc", ".bash_profile", ".profile"].map((f) => join(HOME, f));
+  let targets = candidates.filter((p) => existsSync(p));
+  if (!targets.length) targets = [join(HOME, ".zshrc")];
+  let wired = 0;
+  for (const rc of targets) {
+    let cur = "";
+    try { cur = existsSync(rc) ? readFileSync(rc, "utf8") : ""; } catch { continue; }
+    if (cur.includes(CLI_PATH_BEGIN)) { console.log(`  · ${rc.replace(HOME, "~")} (PATH 블록 기존 유지)`); continue; }
+    // 최초(pristine) 스냅샷만 보관 — 덮어쓰지 않는다(setup-mac.sh 의 _wire_rc_block 과 같은 규약).
+    const bakDir = join(LIVELY, "backups");
+    mkdirSync(bakDir, { recursive: true });
+    const bak = join(bakDir, `${rc.split("/").pop()}.path-cli.bak`);
+    try { if (existsSync(rc) && !existsSync(bak)) copyFileSync(rc, bak); } catch { /* 백업 실패해도 머지는 비파괴 */ }
+    try {
+      writeFileSync(rc, cur.replace(/\s+$/, "") + (cur.trim() ? "\n\n" : "") + block + "\n");
+      wired++;
+      console.log(`  ✓ ${rc.replace(HOME, "~")} (lively PATH 블록 추가)`);
+    } catch (e) { console.warn(`  ⚠️ ${rc.replace(HOME, "~")} 쓰기 실패(${e.message}) — 수동으로 ~/.lively/bin 을 PATH 에 추가하세요.`); }
+  }
+  if (wired) console.log("    (현재 셸 즉시 반영 안 됨 — 새 터미널 또는 `source ~/.zshrc`)");
+}
+
+// CLI 본체 + 심 설치. 번들에 cli/lively.mjs 가 없으면(구버전 번들) 조용히 건너뛴다(하위호환).
+function installCli() {
+  const src = cloneAbs(join("cli", "lively.mjs"));
+  if (!existsSync(src)) { console.log("  · lively CLI 보류(번들에 cli/lively.mjs 없음 — 구버전 번들)"); return; }
+  const lib = join(LIVELY, "lib");
+  const bin = join(LIVELY, "bin");
+  mkdirSync(lib, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  copyFileSync(src, join(lib, "lively.mjs"));
+  chmodSync(join(lib, "lively.mjs"), 0o755);
+  // 제거기 로컬 사본 — 로그아웃·오프라인 상태에서도 `lively uninstall` 이 되도록(제거는 언제나 가능해야 한다).
+  const un = cloneAbs(join("setup", "user-uninstall.mjs"));
+  if (existsSync(un)) { copyFileSync(un, join(lib, "user-uninstall.mjs")); chmodSync(join(lib, "user-uninstall.mjs"), 0o755); }
+  if (WIN) {
+    writeFileSync(join(bin, "lively.cmd"), CLI_SHIM_CMD);
+  } else {
+    writeFileSync(join(bin, "lively"), CLI_SHIM);
+    chmodSync(join(bin, "lively"), 0o755);
+  }
+  console.log(`  ✓ ~/.lively/bin/lively${WIN ? ".cmd" : ""} (lively CLI)`);
+  wireCliPath();
 }
 
 function seedWorkRoots(roots) {
@@ -467,11 +577,15 @@ async function installShared(workRoots) {
   console.log(`  ✓ ~/.lively/hooks/ (${HOOK_SCRIPTS.length}개)`);
 
   // work.mjs — '내 컴퓨터에서 작업' 부트스트랩(사용자 호출 도구, 훅 아님) → ~/.lively/work.mjs (chmod 755).
+  //  이제 `lively run <프로젝트번호>` 가 이걸 부른다(웹이 건네던 `node ~/.lively/work.mjs …` 를 대체).
   {
     const wsrc = cloneAbs(join("setup", "work.mjs"));
     if (existsSync(wsrc)) { copyFileSync(wsrc, join(LIVELY, "work.mjs")); chmodSync(join(LIVELY, "work.mjs"), 0o755); console.log("  ✓ ~/.lively/work.mjs"); }
     else console.log("  · ~/.lively/work.mjs 보류(번들에 setup/work.mjs 없음 — 구버전 번들)");
   }
+
+  // lively CLI(#864) — 이 한 줄이 기존 멤버 전원에게 `lively` 를 배달한다(자동 업데이트가 이 설치기를 돌리므로).
+  installCli();
 
   // 런타임 자산(발행 묶음 .lively/ — 게이트웨이가 org_runtime_config·org_mcp_server 에서 주입) → ~/.lively 복사.
   //  훅(hooks-config.json)·register-clients(mcp-servers.json)가 런타임에 읽음. 없으면 스킵(구버전 번들 호환).
@@ -534,4 +648,4 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => { console.error("✗ user-level 설치 실패:", e?.message || e); process.exit(1); });
 
-export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock };
+export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock, CLI_SHIM, CLI_SHIM_CMD, CLI_PATH_BEGIN, CLI_PATH_END };

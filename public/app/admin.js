@@ -4261,16 +4261,19 @@ function toolForm(root, t, data, detail, isNew) {
             } }));
     root.replaceChildren(field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa), field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel), field('등급 (하는 일의 성격)', levelSel), field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint, field('인증 방식', authModeSel), envField, kindField, kindScopeField, el('label', { class: 'admin-check' }, piiChk, ' 응답에서 개인정보(PII) 자동 가리기'), field('입력 스키마 (JSON Schema, 선택)', schemaTa), el('label', { class: 'admin-check' }, enChk, ' 활성'), el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'), actions);
 }
-// 설치 한 줄 명령(OS별) — 구 [설치·업데이트·제거] 화면(deployPanel)은 #837 에서 제거했지만, 이 헬퍼는
-//  사용 가이드(web/learn.ts 의 시작하기)와 아래 installMinterBlock(접속 열쇠 발급)이 계속 쓴다.
-function installCmd(gw, os, token) {
-    if (os === 'windows') {
-        // 맥과 동일: 번들 기반 설치(git clone 없음·토큰 프롬프트 없음) + 설치된 하네스 감지(claude/codex) → --harness.
-        //  claude 면 mcp add, codex 면 현재 세션 $env:LIVELY_TOKEN + PowerShell $PROFILE 에 "파일→env 수화" 블록
-        //  (Mac rc 패턴과 동일·토큰 리터럴은 ~/.lively/token 한 곳만 · setx 레지스트리 리터럴 제거). 새 PowerShell 부터 적용.
-        return `$T="${token}"; $G="${gw}"; $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(Test-Path "$HOME\\.lively\\token"){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")`;
-    }
-    return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh`;
+// 설치 한 줄 명령(OS별) — #864 부터 **lively CLI 부트스트랩**이다. 사용 가이드(web/learn.ts)가 쓴다.
+//
+//  ⚠ 이 줄에는 토큰이 없다. 종전엔 여기서 장기 토큰을 명령줄에 리터럴로 박았고, 그게 그대로
+//  ~/.zsh_history 에 영구히 남았다(화면공유·클립보드 매니저 노출). 이제 이 줄은 CLI 를 깔기만 하고,
+//  토큰은 CLI 의 `lively login` 이 /dev/tty **가림 입력**으로 받는다(어디에도 안 남음).
+//  부트스트랩은 TTY 가 있으면 곧장 `lively setup`(로그인+설치)으로 인계하므로 사용자는 여전히 **한 번만 복사**한다.
+//
+//  또 하나의 이득: 설치 로직이 CLI(Node) 한 곳으로 모여 mac/win 이 **같은 코드**를 돈다.
+//  (종전 PowerShell 판은 1,400자짜리 한 줄이라 사실상 아무도 검증하지 못했다 — 그래서 계속 '미검증' 이었다.)
+function installCmd(gw, os) {
+    if (os === 'windows')
+        return `irm ${gw}/cli.ps1 | iex`;
+    return `curl -fsSL ${gw}/cli | sh`;
 }
 // ── 접속 열쇠(토큰) 발급 — 구성원을 골라 발급하고 설치 한 줄을 건넨다. [구성원 ▸ 접속 열쇠] 안. ──
 function installMinterBlock(data, gw, opts = {}) {
@@ -4301,23 +4304,31 @@ function installMinterBlock(data, gw, opts = {}) {
     });
     return el('div', { class: 'deploy-block' }, el('h3', { class: 'member-add-step', text: opts.title || '토큰 발급 (새 팀원 추가)' }), el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 나옵니다. 그 토큰만 전달하면 — 받은 분이 첫 화면에 붙여넣고 로그인합니다(설치·명령어 불필요).' }), el('div', { class: 'install-minter' }, sel, go), result);
 }
+// 유지보수 명령 — #864 부터 **OS 무관**이다(lively CLI 가 mac/win 을 흡수). gw/os 는 부트스트랩 폴백 안내에만 쓴다.
+//  종전엔 여기 OS별로 갈라진 1,400자 PowerShell 과 sed 범벅 bash 가 각각 들어 있었다.
 function deployCommands(gw, os) {
-    if (os === 'windows') {
-        return [
-            { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
-            { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치(설치된 하네스 자동 감지). ⚠ Windows 미검증 — 테스트 후 사용.',
-                cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(Test-Path "$HOME\\.lively\\token"){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
-            { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [구성원 토큰 관리] 탭에서 접속 해제. ⚠ Windows 미검증.',
-                cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
-        ];
-    }
+    // `lively` 가 아직 없는 경우(자동 업데이트 전) 어떻게 되찾는지 — 모든 note 의 공통 꼬리.
+    const boot = os === 'windows' ? `irm ${gw}/cli.ps1 | iex` : `curl -fsSL ${gw}/cli | sh`;
+    const ifMissing = `\n\n※ 'lively: command not found' 가 나오면 — 새 터미널을 열어 보고(설치 직후엔 PATH 가 현 창에 아직 없습니다), 그래도 없으면 아래로 CLI 를 먼저 설치하세요:\n    ${boot}`;
     return [
-        { kind: 'install', title: '설치', note: '구성원 토큰 필요 — 아래에서 구성원을 골라 발급하면 토큰 박힌 완성형 명령이 나옵니다. (아래는 템플릿: <TOKEN> 교체)',
-            cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh` },
-        { kind: 'update', title: '업데이트 (보통은 불필요 — 자동입니다)', note: '키트는 세션을 켤 때마다 자동으로 최신과 맞춰집니다(백그라운드 설치 → 다음 세션부터 적용). 이 명령은 자동 업데이트를 껐거나(관리탭 토글 / LIVELY_NO_AUTO_UPDATE=1) 지금 즉시 맞춰야 할 때만 쓰세요. 설치된 토큰을 읽어 멱등 재설치합니다.',
-            cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" LIVELY_GATEWAY="$G/mcp" bash /tmp/lv/setup/setup-mac.sh` },
-        { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 [구성원 토큰 관리] 탭에서 접속을 해제해야 합니다.',
-            cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
+        { kind: 'install', title: '설치' }, // 설치 블록은 learn.ts 가 직접 렌더(단계 UI)
+        {
+            kind: 'update',
+            title: '업데이트 (보통은 불필요 — 자동입니다)',
+            note: '키트는 세션을 켤 때마다 자동으로 최신과 맞춰집니다(백그라운드 설치 → 다음 세션부터 적용). '
+                + '이 명령은 ① 자동 업데이트를 껐거나 ② 지금 당장 맞춰야 하거나 '
+                + '③ 관리자가 새 MCP 서버를 추가했을 때 씁니다 — ③ 은 자동 업데이트가 할 수 없는 유일한 일입니다'
+                + '(백그라운드에서 MCP 재등록을 하다 실패하면 등록이 사라질 수 있어 일부러 빼 뒀습니다).' + ifMissing,
+            cmd: 'lively update',
+        },
+        {
+            kind: 'uninstall',
+            title: '제거',
+            note: '설치 자산을 영구 제거합니다(lively 영역만 — tmux 훅·셸 별칭 등 본인 설정은 그대로 보존). '
+                + '미리 보려면 `lively uninstall --dry-run`. '
+                + '완전 차단하려면 관리자가 [구성원 ▸ 접속 열쇠] 에서 토큰을 회수해야 합니다.' + ifMissing,
+            cmd: 'lively uninstall',
+        },
     ];
 }
 // ── 공용 UI 헬퍼 ──
