@@ -2525,8 +2525,91 @@ function storageEditor(detail, data) {
             : st.policy_source === 'default'
                 ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
                 : null;
-        body.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' }), el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 박스 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이걸 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 깨질 수 있으니, 쓰지 않는 것이 확실할 때만 켜세요.' })), el('div', { class: 'storage-actions' }, saveBtn), el('h3', { class: 'storage-h', text: '워크스페이스' }), wsRegion);
+        body.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' }), el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 박스 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이걸 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 깨질 수 있으니, 쓰지 않는 것이 확실할 때만 켜세요.' })), el('div', { class: 'storage-actions' }, saveBtn), el('h3', { class: 'storage-h', text: '경보 알림' }), alertRegion, el('h3', { class: 'storage-h', text: '워크스페이스' }), wsRegion);
+        loadAlert();
         loadWorkspace();
+    }
+    // ── 경보 알림(#813) ──
+    // 2026-07-13 사고의 본질은 "디스크가 찼다"가 아니라 **"아무도 몰랐다"** 였다. 가드가 있어도 사람에게 닿지 않으면
+    //  똑같이 늦게 발견된다. 이 화면은 그 마지막 구멍을 막는다.
+    // ⚠ 웹훅 URL 은 시크릿이라 서버가 값을 돌려주지 않는다 → 레포 관례대로 항상 빈칸 + '설정됨' 표시 + 빈 제출=미변경.
+    const alertRegion = el('div');
+    async function loadAlert() {
+        alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+        let a;
+        try {
+            a = await api('/api/ui/org/alert');
+        }
+        catch (e) {
+            alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message }));
+            return;
+        }
+        const urlIn = el('input', {
+            class: 'input', type: 'password', value: '',
+            placeholder: a.configured ? '● 설정됨 — 변경할 때만 입력' : 'https://hooks.slack.com/services/…  (슬랙·디스코드 웹훅 또는 임의 JSON 웹훅)',
+        });
+        urlIn.disabled = !canEdit || !a.encryption_ready;
+        const minSel = el('select', { class: 'input' }, el('option', { value: 'warn', text: '경고부터 (85% 도달 시에도 알림)' }), el('option', { value: 'critical', text: '위험만 (95% 도달·DB 다운만 알림)' }));
+        minSel.value = a.min_severity || 'warn';
+        minSel.disabled = !canEdit;
+        const labelIn = el('input', { class: 'input', type: 'text', placeholder: '(선택) 채널 이름 — 예: #ops' });
+        labelIn.value = a.label || '';
+        labelIn.disabled = !canEdit;
+        const saveA = el('button', { class: 'btn btn-primary btn-sm', text: a.configured ? '설정 저장' : '웹훅 등록' });
+        saveA.disabled = !canEdit || !a.encryption_ready;
+        saveA.addEventListener('click', async () => {
+            saveA.disabled = true;
+            try {
+                await api('/api/ui/org/alert', {
+                    method: 'POST',
+                    body: JSON.stringify({ url: urlIn.value, min_severity: minSel.value, label: labelIn.value }),
+                });
+                toast('저장됨 — [테스트 전송]으로 실제로 닿는지 꼭 확인하세요.');
+                loadAlert();
+            }
+            catch (e) {
+                toast(e.message, true);
+                saveA.disabled = false;
+            }
+        });
+        // 테스트 전송 — 이게 없으면 "저장은 됐는데 정작 장애 때 안 오는" 상황을 못 잡는다(오타·만료·권한).
+        const testA = el('button', { class: 'btn btn-sm', text: '테스트 전송' });
+        testA.disabled = !canEdit || !a.configured;
+        testA.addEventListener('click', async () => {
+            testA.disabled = true;
+            testA.textContent = '보내는 중…';
+            try {
+                await api('/api/ui/org/alert/test', { method: 'POST', body: JSON.stringify({}) });
+                toast('보냈습니다 — 채널에 도착했는지 확인하세요.');
+            }
+            catch (e) {
+                toast(e.message, true);
+            }
+            testA.disabled = false;
+            testA.textContent = '테스트 전송';
+        });
+        const delA = el('button', { class: 'btn btn-sm btn-danger', text: '해제' });
+        delA.disabled = !canEdit || !a.configured;
+        delA.addEventListener('click', async () => {
+            if (!confirm('경보 웹훅을 해제합니다. 디스크가 위험해져도 알림이 오지 않습니다. 계속할까요?'))
+                return;
+            delA.disabled = true;
+            try {
+                await api('/api/ui/org/alert/delete', { method: 'POST', body: JSON.stringify({}) });
+                toast('해제됨');
+                loadAlert();
+            }
+            catch (e) {
+                toast(e.message, true);
+                delA.disabled = false;
+            }
+        });
+        const status = a.configured
+            ? el('p', { class: 'storage-calc', text: `설정됨${a.label ? ' · ' + a.label : ''} — 상태가 바뀔 때만 알립니다(같은 상태를 반복 발송하지 않습니다). 복구되면 해제 알림도 갑니다.` })
+            : el('p', { class: 'storage-calc storage-warn', text: '⚠ 미설정 — 디스크가 위험해지거나 DB가 죽어도 아무도 알지 못합니다(로그·이 화면에만 남습니다).' });
+        const keyNote = a.encryption_ready ? null
+            : el('p', { class: 'admin-hint storage-warn', text: '⚠ 시크릿 암호화 키(CONNECTOR_SECRET_KEY)가 설정되지 않아 웹훅을 저장할 수 없습니다. 웹훅 주소는 그 URL만 알면 누구나 글을 쓸 수 있어 평문으로 저장하지 않습니다.' });
+        alertRegion.replaceChildren(el('div', { class: 'storage-block' }, status, ...(keyNote ? [keyNote] : []), el('div', { class: 'storage-fields' }, el('label', { style: 'flex:1 1 320px' }, el('span', { text: '웹훅 주소' }), urlIn), el('label', {}, el('span', { text: '언제 알릴까' }), minSel), el('label', {}, el('span', { text: '이름(선택)' }), labelIn)), el('p', { class: 'admin-hint', text: '슬랙·디스코드의 incoming webhook 주소를 그대로 넣으면 됩니다. 무엇이 오나: 디스크 경고/위험 진입, DB 연결 불가, 그리고 각각의 복구. 저장된 주소는 암호화되어 다시 보여드리지 않습니다(변경할 때만 다시 입력).' }), el('div', { class: 'ws-actions' }, el('span', {}, testA, ' ', delA), saveA)));
     }
     // ── 워크스페이스(#813 T3-2 백스톱) ──
     // 프로젝트 마무리 루틴이 회수를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done

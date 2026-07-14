@@ -26,6 +26,8 @@ import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
 import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
+// 경보 알림(#813) — 웹훅 URL 은 시크릿이라 값이 응답·감사에 절대 나가지 않는다(alerts.ts 머리주석 참조).
+import { loadAlertChannel, saveAlertChannel, removeAlertChannel, sendTestAlert } from "../alerts.js";
 // 워크스페이스 사용량(#813 T3-2 백스톱) — 프로젝트별로 얼마나 쌓였나. 회수 실행은 workspace_reclaim 이 한다.
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -906,6 +908,50 @@ export const deliveryCapabilities: Capability[] = [
   // ── 저장소·로그(#813) 상태 — 박스 디스크 사용률 + 로그 크기 + 유효 정책·출처. ──
   //  왜 필요한가: 고객 박스는 우리가 SSH 로 못 들어간다. 디스크가 차면 Postgres 가 죽고 전 기능이 500 이 되는데
   //  (2026-07-13 사고) 그걸 볼 창구가 없었다. 관리탭이 그 창구다.
+  // ── 경보 알림 채널(#813) — 박스가 위험해졌을 때 **사람에게 실제로 닿는** 경로. ──
+  //  T5 로 가드는 넣었지만 그 사실을 아무도 모른다(로그는 안 보고, 관리탭·/readyz 는 가서 봐야 안다).
+  //  ⚠ 웹훅 URL 은 시크릿이다 — **값을 응답에 절대 싣지 않는다**(configured 불리언만). 저장은 암호화(alerts.ts).
+  restOnly("org_alert_status", "경보 알림 설정",
+    "박스 경보(디스크 위험·DB 다운)를 보낼 웹훅 설정 상태. **URL 값은 반환하지 않는다**(설정 여부만). admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/alert"], parse: () => ({}) }],
+    async () => loadAlertChannel()),
+
+  restOnly("org_alert_set", "경보 알림 설정 저장",
+    "경보 웹훅을 등록/변경한다(슬랙·디스코드 incoming webhook 또는 임의 JSON 웹훅). url 을 비워 보내면 **미변경**(기존 유지). min_severity=warn|critical. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      // ⚠ url 은 감사·로그에 남기지 않는다(시크릿). redactDeep 은 URL 패턴을 안 잡으므로 감사 스냅샷에 넣으면 그대로 샌다.
+      const url = input.url === undefined || input.url === null ? "" : str(input.url, "url", 2000);
+      const label = input.label === undefined || input.label === null ? null : str(input.label, "label", 100);
+      try {
+        return { alert: await saveAlertChannel({ url, min_severity: input.min_severity, label }, user.userId) };
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : "경보 설정을 저장하지 못했습니다");
+      }
+    }),
+
+  restOnly("org_alert_delete", "경보 알림 해제",
+    "등록된 경보 웹훅을 삭제한다. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert/delete"], parse: () => ({}) }],
+    async () => ({ removed: await removeAlertChannel(), alert: await loadAlertChannel() })),
+
+  restOnly("org_alert_test", "경보 알림 테스트 전송",
+    "지금 등록된 웹훅으로 테스트 경보를 1건 보낸다. **설정이 실제로 닿는지 확인하는 유일한 방법** — 저장만 하고 안 보내보면 정작 장애 때 안 온다. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert/test"], parse: () => ({}) }],
+    async () => {
+      const ch = await loadAlertChannel();
+      if (!ch.configured) throw new HttpError(400, "웹훅이 등록돼 있지 않습니다");
+      // min_severity 게이트를 우회해 **무조건** 보낸다 — 테스트인데 임계 때문에 안 가면 확인이 안 된다.
+      const r = await sendTestAlert({
+        severity: "ok",
+        title: "테스트 경보 — 라이블리 게이트웨이",
+        text: "이 메시지가 보이면 경보 채널이 정상입니다. 실제 경보는 디스크 위험·DB 다운 등 상태가 바뀔 때만 옵니다(같은 상태를 반복 발송하지 않습니다).",
+        detail: { test: true },
+      });
+      if (!r.sent) throw new HttpError(502, `전송 실패 — ${r.reason ?? "알 수 없는 오류"}`);
+      return { sent: true };
+    }),
+
   restOnly("org_storage_status", "저장소·로그 상태",
     "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치)과 그 출처. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
