@@ -7,10 +7,10 @@ import { auditOrgContent, type WriteCtx } from "../db/write.js";
 
 const S_COLS =
   `id, name, kind, title, body_md, provenance, external_system, external_instance, external_id, external_url,
-   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by`;
+   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by, fields`;
 const S_SEL = S_COLS.split(",").map((c) => "s." + c.trim()).join(", ");
 // 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다).
-const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at`;
+const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields`;
 
 export interface SourceRow {
   id: number; name: string | null; kind: string; title: string | null; body_md: string;

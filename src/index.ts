@@ -35,6 +35,7 @@ import { startLogJanitor } from "./log-janitor.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { ensureSharedCache } from "./session-cache.js";
+import { startDiskWatch } from "./disk-guard.js";
 import { recoverOrphanConnectorRuns } from "./connectors/run-tracker.js";
 import { logger } from "./log.js";
 
@@ -271,6 +272,19 @@ const server = app.listen(PORT, () => {
           enabled: sp.shared_cache_enabled,
           relocateHome: sp.shared_cache_relocate_home,
         });
+      })
+      // 디스크 감시(#813 T5) — 임계 **전이 시점에만** 크게 로그한다(5분마다 같은 경고를 찍으면 그 자체가 로그 릭).
+      //  알림 채널(슬랙·메일)은 아직 없다 → 로그 + 관리탭 + /readyz 가 창구. 채널이 생기면 disk-guard 에 notify 한 줄.
+      //  스케줄러와 같은 게이트(단일 프로세스 하우스키핑).
+      .then(() => {
+        if (process.env.LIVELY_NO_SCHEDULER === "1") return;
+        startDiskWatch(
+          () => [stateRoot(), ...ROOTS.map((r) => r.base)],
+          async () => {
+            const sp = await effectiveStoragePolicy(loadStoragePolicy);
+            return { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct };
+          },
+        );
       })
       // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
       //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).

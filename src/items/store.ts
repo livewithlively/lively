@@ -28,6 +28,7 @@ export interface RawItem {
   };
   actor?: { external_id?: string; display_name?: string; email?: string; is_bot?: boolean };
   container_ref?: string; // 채널/DB/페이지 id
+  container_name?: string; // 채널/페이지 표시명(#735 — id만으론 지식화 맥락 유실). 커넥터가 알면 채움.
   parent_external_id?: string; // 스레드/서브태스크 부모의 external_id (같은 system+instance)
   sort?: number; // 부모 안 형제 순서(#551 노션 페이지 트리 순서) — 미러가 knowledge.sort 로 보존. 부재 시 기존값 유지.
   level?: "project" | "task" | "subtask"; // 위계 레벨 — 커넥터가 소스 위계(예: ClickUp Task 깊이)를 우리 level 로 매핑. 부재 시 connector-mirror 가 parent 유무로 폴백(no-parent=project).

@@ -74,5 +74,11 @@ export function uploadError(e: unknown): HttpError | null {
   const m = e instanceof Error ? e.message : "";
   if (m === UPLOAD_TOO_LARGE) return new HttpError(413, "파일이 너무 큽니다(50MB 초과)");
   if (/aborted|ECONNRESET|socket hang up|premature close/i.test(m)) return null;
+  // 디스크 부족(#813 T5) — '업로드 실패'(500)로 뭉뚱그리면 사용자가 파일 탓/네트워크 탓을 하며 계속 재시도한다.
+  //  원인이 디스크면 그렇게 말하고 무엇을 해야 하는지 알려준다. (격리 멤버 경로는 자식 프로세스 stderr 로 온다.)
+  if ((e as NodeJS.ErrnoException)?.code === "ENOSPC" || (e as NodeJS.ErrnoException)?.code === "EDQUOT"
+      || /ENOSPC|no space left on device|quota exceeded/i.test(m)) {
+    return new HttpError(507, "디스크 공간이 부족해 업로드하지 못했습니다 — 관리 ▸ 저장소·로그 에서 정리하세요.");
+  }
   return new HttpError(500, "업로드 실패");
 }

@@ -582,7 +582,9 @@ async function openSourceDetail(id) {
         return;
     }
     const derived = s.knowledge || [];
-    overlayBox(s.title || ('자료 #' + id), el('div', { class: 'detail-meta', style: 'margin-bottom:10px' }, el('span', { class: 'kn-chip kn-source-kind', text: SOURCE_KIND_LABEL[s.kind] || s.kind }), knProvChip(s.provenance), s.occurred_at ? el('span', { class: 'caption', text: '  ' + absTime(s.occurred_at) }) : null), derived.length ? el('div', {}, el('div', { class: 'sec-label', text: '여기서 파생된 지식' }), el('div', { class: 'list-box' }, ...derived.map((d) => el('a', { class: 'row', href: '#/k/' + encodeURIComponent(d.name),
+    overlayBox(s.title || ('자료 #' + id), el('div', { class: 'detail-meta', style: 'margin-bottom:10px' }, el('span', { class: 'kn-chip kn-source-kind', text: SOURCE_KIND_LABEL[s.kind] || s.kind }), 
+    // #735 구조화 메타(채널명·작성자) — source.fields 에서 커넥터-불가지 표시(id만으론 유실되던 지식화 맥락).
+    (s.fields && s.fields.container_name) ? el('span', { class: 'kn-chip wk-src-chan', text: '#' + s.fields.container_name }) : null, (s.fields && s.fields.author_name) ? el('span', { class: 'kn-chip', text: '@' + s.fields.author_name }) : null, knProvChip(s.provenance), s.occurred_at ? el('span', { class: 'caption', text: '  ' + absTime(s.occurred_at) }) : null), derived.length ? el('div', {}, el('div', { class: 'sec-label', text: '여기서 파생된 지식' }), el('div', { class: 'list-box' }, ...derived.map((d) => el('a', { class: 'row', href: '#/k/' + encodeURIComponent(d.name),
         style: 'text-decoration:none; display:block', text: (KN_SOURCE_REL_LABEL[d.relation] || d.relation) + ' · ' + (d.title || d.name) })))) : null, el('div', { class: 'sec-label', text: '본문' }), el('div', { class: 'unit-body md-rendered', style: 'max-height:50vh; overflow:auto' }, renderMarkdown(s.body_md || '(본문 없음)')));
 }
 // ── 지식↔프로젝트 연결(#255~257 이관) — 피커 + 상세 '연결된 프로젝트' 섹션. ──

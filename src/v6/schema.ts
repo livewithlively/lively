@@ -893,6 +893,7 @@ export async function initV6Schema(): Promise<string> {
       title TEXT,
       body_md TEXT NOT NULL DEFAULT '',
       raw JSONB,
+      fields JSONB NOT NULL DEFAULT '{}'::jsonb,
       provenance TEXT NOT NULL DEFAULT 'observed',
       external_system TEXT, external_instance TEXT, external_id TEXT, external_url TEXT,
       sync_state JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -909,6 +910,8 @@ export async function initV6Schema(): Promise<string> {
         ALTER TABLE source ADD CONSTRAINT source_lifecycle_chk CHECK (lifecycle IN ('active','superseded'));
       END IF;
     END $$;
+    -- #735: 커넥터 구조화 메타(채널명·작성자·스레드 등) 보존용. 기존 배포 대상 ALTER(멱등).
+    ALTER TABLE source ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE UNIQUE INDEX IF NOT EXISTS source_name_uq ON source(name) WHERE name IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS source_external_uidx ON source(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS source_kind_idx ON source(kind);

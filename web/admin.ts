@@ -2357,6 +2357,18 @@ function storageEditor(detail, data) {
   function build(st) {
     const p = st.policy || {};
 
+    // ── 위험 배너(#813 T5) — 무엇이 이미 막히고 있는지 먼저 말한다. 숫자보다 '지금 무슨 일이 벌어지나'가 급하다. ──
+    const worst = (st.disks || []).reduce((w, d) => (!w || d.usedPct > w.usedPct ? d : w), null);
+    const banner = worst && worst.level === 'critical'
+      ? el('div', { class: 'storage-banner storage-banner-critical' },
+        el('strong', { text: `⚠ 디스크 위험 (${worst.usedPct}%) — 새 세션 · 레포 클론 · 파일 업로드가 차단되고 있습니다.` }),
+        el('p', { text: '아래 워크스페이스에서 [분석] → [회수]로 공간을 확보하세요. 100%에 닿으면 DB가 죽어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.' }))
+      : worst && worst.level === 'warn'
+        ? el('div', { class: 'storage-banner storage-banner-warn' },
+          el('strong', { text: `디스크 경고 (${worst.usedPct}%) — 아직 정상 동작하지만 정리가 필요합니다.` }),
+          el('p', { text: `${p.disk_critical_pct ?? 95}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.` }))
+        : null;
+
     // ── ① 지금 상태 — 디스크 게이지 ──
     const LV = { ok: ['여유', 'ok'], warn: ['경고', 'warn'], critical: ['위험', 'critical'] };
     const diskRows = (st.disks || []).map((d) => {
@@ -2450,6 +2462,7 @@ function storageEditor(detail, data) {
         : null;
 
     body.replaceChildren(
+      ...(banner ? [banner] : []),
       el('h3', { class: 'storage-h', text: '지금 상태' }),
       el('div', { class: 'storage-block' }, ...diskRows),
       el('div', { class: 'storage-block' },

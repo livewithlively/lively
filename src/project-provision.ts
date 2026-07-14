@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { PROJECT_SHARED_BASE, projectAbsPath } from "./project-fs.js";
+import { assertDiskWritable } from "./disk-guard.js"; // #813 T5 — 클론 전에 디스크 확인(꽉 차면 507)
 import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
@@ -241,6 +242,9 @@ export async function provisionProjectRepos(
         if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
         const url = sanitizeCloneUrl(row?.git_url ?? null);
         if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
+        // 디스크 가드(#813 T5) — 레포 클론은 통째로 내려받아 디스크를 크게 먹는다(고객 모노레포면 GB급).
+        //  꽉 찬 상태에서 시작하면 중간에 ENOSPC 로 깨져 반쯤 받은 레포가 남는다 → 시작 전에 막는다.
+        await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE]);
         await fsp.mkdir(path.dirname(repoPath), { recursive: true });
         // --config core.sharedRepository=group: .git 을 그룹 공유쓰기로 — 게이트웨이·멤버(lively-shared)가 같은 클론에서 fetch/commit(#522 B).
         const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
