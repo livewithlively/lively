@@ -4466,7 +4466,7 @@ function oauthConnectorsCard(conns, reload) {
 }
 
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
-function connectorStatusCard(catalog: any[], servers: any[]) {
+function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
   const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 커넥터 카탈로그의 현재 상태. 추가·발행은 [MCP 서버] 탭에서 프리셋으로, 구성원 연결은 각자 [연결].' })];
   for (const c of (catalog || [])) {
@@ -4514,7 +4514,7 @@ async function credentialsEditor(detail) {
   ];
 
   // 커넥터 현황 개관(#746 imp#4·#5) — 관리자에게 기본 카탈로그의 등록/설정 상태를 한눈에.
-  if (isAdmin) cards.push(connectorStatusCard(catalog.catalog || [], mcpServers.servers || []));
+  if (isAdmin) cards.push(catalogStatusCard(catalog.catalog || [], mcpServers.servers || []));
 
   // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
   cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));

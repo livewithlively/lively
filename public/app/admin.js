@@ -4629,7 +4629,7 @@ function oauthConnectorsCard(conns, reload) {
     return el('div', { class: 'card' }, sectionTitle('OAuth 커넥터', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 커넥터예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'), el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })), ...rows);
 }
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
-function connectorStatusCard(catalog, servers) {
+function catalogStatusCard(catalog, servers) {
     const byName = new Map((servers || []).map((s) => [s.name, s]));
     const rows = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 커넥터 카탈로그의 현재 상태. 추가·발행은 [MCP 서버] 탭에서 프리셋으로, 구성원 연결은 각자 [연결].' })];
     for (const c of (catalog || [])) {
@@ -4685,7 +4685,7 @@ async function credentialsEditor(detail) {
     ];
     // 커넥터 현황 개관(#746 imp#4·#5) — 관리자에게 기본 카탈로그의 등록/설정 상태를 한눈에.
     if (isAdmin)
-        cards.push(connectorStatusCard(catalog.catalog || [], mcpServers.servers || []));
+        cards.push(catalogStatusCard(catalog.catalog || [], mcpServers.servers || []));
     // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
     cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
     if ((oauthConns.connectors || []).length)
