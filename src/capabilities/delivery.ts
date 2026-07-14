@@ -531,11 +531,11 @@ export const deliveryCapabilities: Capability[] = [
     "구성원 신원(표시명·이메일·외부계정 연결·개인레이어)을 저장한다. person/person_identity 로도 동기화.",
     [{ method: "POST", paths: ["/api/ui/org/member"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
+      const kind = input.kind == null ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
-      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
       // 이메일 = 로그인 아이디 → 형식 검증(생성·로그인 일관). 빈 값은 허용(로그인 불요 멤버 — 계정 미발급).
-      const email = input.email === undefined ? undefined : str(input.email, "email", 200).trim();
+      const email = input.email == null ? undefined : str(input.email, "email", 200).trim();
       if (email) assertEmail(email);
       // 아이디: 명시되면 그대로(편집·고급), 없으면 신규 생성 → 이메일/표시이름에서 자동·유니크(관리자 비관여, 불변 내부키).
       const hasExplicitId = input.id !== undefined && String(input.id).trim() !== "";
@@ -553,7 +553,7 @@ export const deliveryCapabilities: Capability[] = [
         for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       }
       // 개인레이어 본문(body_md)은 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
-      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       const member = await upsertMember({
         id, kind,
@@ -724,9 +724,9 @@ export const deliveryCapabilities: Capability[] = [
       const existing = await getMember(userId);
       if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
       // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
-      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
       // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
-      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       // 아바타 — data:image data URL(클라이언트 128px 리사이즈). undefined=보존, null/''=이니셜로 되돌림.
       let avatar: string | null | undefined;
@@ -1281,7 +1281,7 @@ export const deliveryCapabilities: Capability[] = [
         url: input.url === undefined ? undefined : (input.url === null || input.url === "" ? null : str(input.url, "url", 1000).trim()),
         command: input.command === undefined ? undefined : (input.command === null || input.command === "" ? null : str(input.command, "command", 2000).trim()),
         auth_env: authEnv,
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
         mode: input.mode === undefined ? undefined : (str(input.mode, "mode", 10) === "proxy" ? "proxy" : "client"),
@@ -1571,9 +1571,9 @@ export const deliveryCapabilities: Capability[] = [
       const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
       const hook = await upsertOrgHook({
         id,
-        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -1641,9 +1641,9 @@ export const deliveryCapabilities: Capability[] = [
         auto_approve: input.auto_approve === undefined ? undefined : Boolean(input.auto_approve),
         // 주입모드(#187): undefined=유지, null=코드기본 복귀, true=항상 주입, false=deferred. 빌트인 토글 전용(Claude Code _meta).
         always_load: input.always_load === undefined ? undefined : (input.always_load === null ? null : Boolean(input.always_load)),
-        title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
-        description: input.description === undefined ? undefined : str(input.description, "description", 2000),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        title: input.title == null ? undefined : str(input.title, "title", 200).trim(),
+        description: input.description == null ? undefined : str(input.description, "description", 2000),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       };
       if (kind === "http_proxy") {
@@ -1732,7 +1732,7 @@ export const deliveryCapabilities: Capability[] = [
         ? null : assertHookId(input.paired_hook_id);
       const asset = await upsertOrgHarnessAsset({
         id, kind: kind as AssetKind,
-        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness, description, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
@@ -1880,7 +1880,7 @@ export const deliveryCapabilities: Capability[] = [
         name, driver, auth_mode: authMode as DbSourceInput["auth_mode"], url, auth_ref: authRef, rls,
         max_rows: posIntOpt(input.max_rows, "max_rows"),
         timeout_ms: posIntOpt(input.timeout_ms, "timeout_ms"),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         table_default: tableDefault,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -1946,7 +1946,7 @@ export const deliveryCapabilities: Capability[] = [
       } else {
         const mode = str(input.mode, "mode", 8);
         if (mode !== "allow" && mode !== "deny") throw new HttpError(400, "mode 는 allow|deny");
-        await upsertTablePolicy({ source, table_name: table, mode, note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+        await upsertTablePolicy({ source, table_name: table, mode, note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
       }
       await refreshPolicy(true);
       return { ok: true };
@@ -1965,7 +1965,7 @@ export const deliveryCapabilities: Capability[] = [
       } else {
         const style = str(input.style, "style", 12);
         if (!["full", "partial", "email", "hash", "null"].includes(style)) throw new HttpError(400, "style 는 full|partial|email|hash|null");
-        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
       }
       await refreshPolicy(true);
       return { ok: true };
