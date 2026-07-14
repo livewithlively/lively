@@ -16,6 +16,7 @@ import { listSessions, createSession } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { receiveUpload, uploadError } from "./upload-file.js";
+import { manifestFiles } from "./project-manifest.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
@@ -80,27 +81,8 @@ async function searchFiles(base: string, q: string, limit = 100): Promise<Array<
   return out;
 }
 
-// 공유 폴더 전체의 재귀 매니페스트(파일만, 숨김 제외) — 로컬 작업 PC 가 pull 동기화의 diff 기준으로 쓴다.
-//  path=상대경로, mtime=수정시각(ms epoch), size=바이트. 숨김(.lively/.git/.DS_Store/시크릿 등)은 동기화 대상 아님.
-async function manifestFiles(base: string, limit = 5000): Promise<Array<{ path: string; mtime: number; size: number }>> {
-  const out: Array<{ path: string; mtime: number; size: number }> = [];
-  async function walk(dir: string, rel: string, depth: number): Promise<void> {
-    if (out.length >= limit || depth > 24) return;
-    let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (e.name.startsWith(".")) continue;
-      const childRel = rel ? rel + "/" + e.name : e.name;
-      if (e.isDirectory()) { await walk(path.join(dir, e.name), childRel, depth + 1); continue; }
-      if (!e.isFile()) continue;
-      try { const st = await fsp.stat(path.join(dir, e.name)); out.push({ path: childRel, mtime: Math.floor(st.mtimeMs), size: st.size }); }
-      catch { /* 읽기 불가 — 스킵 */ }
-      if (out.length >= limit) return;
-    }
-  }
-  await walk(base, "", 0);
-  return out;
-}
+// 공유 폴더 매니페스트(재귀 walk, provision 레포/워크트리 제외 + truncated 신호)는 ./project-manifest.js 로 분리(#828).
+//  순수 fs 로직이라 DB/WS 없이 단위테스트(project-manifest.test.ts). 라우트는 아래에서 manifestFiles() 를 그대로 쓴다.
 
 // AGENTS.md 생성기·규칙 로더는 ./v6/agents-md.js 로 분리(캐퍼빌리티 계층도 생성 직후 호출). 여기선 import 만.
 //  '내 컴퓨터에서 작업'은 웹 모달이 `node ~/.lively/work.mjs <id> …` 한 줄을 직접 렌더한다(web/projects.ts) —
@@ -214,9 +196,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const { base } = await projBase(Number(req.params.id));
     if (isV6) await ensureAgentsMd(Number(req.params.id), base).catch(() => { /* 비치명 */ });
     res.setHeader("Cache-Control", "no-store");
-    const files = await manifestFiles(base);
+    const { files, truncated } = await manifestFiles(base);
     const newest = files.reduce((m, f) => (f.mtime > m ? f.mtime : m), 0);
-    res.json({ files, newest, count: files.length });
+    res.json({ files, newest, count: files.length, truncated });
   }));
 
   // ── ①-c 프로젝트 규칙(AGENTS.md 의 '규칙' 영역) — 로드/저장. digest 는 자동, 규칙만 사람이 편집. v6 전용. ──
