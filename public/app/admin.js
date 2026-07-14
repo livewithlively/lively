@@ -2105,8 +2105,16 @@ function injectionMap(detail, data) {
         });
         return el('label', { class: 'admin-check inj-toggle' }, chk, ' 주입 켜기');
     }
-    // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭).
-    const jump = (label, hash) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => { location.hash = hash; } });
+    // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
+    //  (#837 병합 후 필요해졌다: '커스텀 훅 편집 →'이 [스킬·훅] 화면엔 가지만 **스킬 탭**에 떨어지면
+    //   사용자는 훅을 못 찾는다 — 링크가 가리킨 곳과 도착지가 달라진다.)
+    const jump = (label, hash, tab) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => {
+            if (tab) {
+                state.admin.tab = state.admin.tab || {};
+                state.admin.tab[tab.section] = tab.key;
+            }
+            location.hash = hash;
+        } });
     function pieceRow(n, label, sub, editBtn) {
         return el('div', { class: 'inj-piece' }, el('span', { class: 'inj-n', text: n }), el('div', { class: 'inj-piece-body' }, el('div', { class: 'inj-piece-label', text: label }), sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null), editBtn || el('span', {}));
     }
@@ -2116,7 +2124,7 @@ function injectionMap(detail, data) {
         const wrap = el('div', { class: 'inj-custom' });
         for (const h of list)
             wrap.append(el('div', { class: 'inj-custom-row' }, el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null), el('span', { class: 'mini-meta', text: (h.harness || 'all') + (h.matcher ? ' · ' + h.matcher : '') })));
-        wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/custom-hooks')));
+        wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
         return wrap;
     }
     function momentBlock(title, when, toggleEl, ...children) {
@@ -2320,7 +2328,7 @@ function injectionMap(detail, data) {
     const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
     const otherBlock = el('div', { class: 'inj-moment' }, el('div', { class: 'inj-moment-head' }, el('div', { class: 'inj-moment-h' }, el('h3', { class: 'inj-moment-title', text: '기타 이벤트' }), el('div', { class: 'admin-hint inj-sub', text: 'UserPromptSubmit · Pre/PostToolUse 매처 · SubagentStop · Notification 등 — 코드로 정의하는 커스텀 훅.' }))), otherHooks.length
         ? el('div', { class: 'inj-custom' }, ...otherHooks.map((h) => el('div', { class: 'inj-custom-row' }, el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null), el('span', { class: 'mini-meta', text: h.event + ' · ' + (h.harness || 'all') }))))
-        : null, el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/custom-hooks')));
+        : null, el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
     detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('세션 주입', null), el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }), !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null, el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
 }
 // 외부 호출·DB 안전범위(allowlist) 카드 — runtime-config 의 SSRF 화이트리스트를 도구/DB 화면 안에 인라인(2026-06-26, 구 safetyEditor 폐기).

@@ -2031,8 +2031,13 @@ function injectionMap(detail, data) {
     return el('label', { class: 'admin-check inj-toggle' }, chk, ' 주입 켜기');
   }
 
-  // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭).
-  const jump = (label, hash) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => { location.hash = hash; } });
+  // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
+  //  (#837 병합 후 필요해졌다: '커스텀 훅 편집 →'이 [스킬·훅] 화면엔 가지만 **스킬 탭**에 떨어지면
+  //   사용자는 훅을 못 찾는다 — 링크가 가리킨 곳과 도착지가 달라진다.)
+  const jump = (label, hash, tab?) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => {
+    if (tab) { state.admin.tab = state.admin.tab || {}; state.admin.tab[tab.section] = tab.key; }
+    location.hash = hash;
+  } });
 
   function pieceRow(n, label, sub, editBtn) {
     return el('div', { class: 'inj-piece' },
@@ -2050,7 +2055,7 @@ function injectionMap(detail, data) {
     for (const h of list) wrap.append(el('div', { class: 'inj-custom-row' },
       el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
       el('span', { class: 'mini-meta', text: (h.harness || 'all') + (h.matcher ? ' · ' + h.matcher : '') })));
-    wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/custom-hooks')));
+    wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
     return wrap;
   }
 
@@ -2242,7 +2247,7 @@ function injectionMap(detail, data) {
           el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
           el('span', { class: 'mini-meta', text: h.event + ' · ' + (h.harness || 'all') }))))
       : null,
-    el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/custom-hooks')));
+    el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
 
   detail.replaceChildren(el('div', { class: 'card' },
     sectionTitle('세션 주입', null),
