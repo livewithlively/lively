@@ -6,6 +6,8 @@
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
+import { overlay } from './admin.js';            // 세션 이름 수정 팝업 — 다른 모달과 같은 프리미티브(#853)
+import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 재사용(#745) — 두 벌 만들지 않는다(#853)
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
@@ -826,12 +828,13 @@ function dashModal(title, content, wide?, opts?) {
 //  UI 는 터미널 탭의 세션 박스(term-row: 약간 푸른 카드)와 통일. 프로젝트 세션(@box_project)은 프로젝트 뱃지로 식별.
 //  [열기] = 터미널 새 창. (세션 created 는 unix '초' → relTime 은 ms/ISO 기대라 ×1000 변환: 1970 표기 버그 수정.)
 async function fillSessions(zone, onCount, projectsP?) {
-  let sessions, cfg, projects;
+  let sessions, cfg, projects, lists;
   try {
-    [sessions, cfg, projects] = await Promise.all([
+    [sessions, cfg, projects, lists] = await Promise.all([
       api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []),
       api('/api/ui/terminal/config').catch(() => null), // 라벨 보강용 — 실패해도 폴백으로 진행
       (projectsP || Promise.resolve([])).catch(() => []),  // 프로젝트 세션의 프로젝트명 매핑용
+      api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []), // 프로젝트 → 리스트(영역) 이름 매핑용
     ]);
   } catch (e) { onCount(null); zone.body.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
 
@@ -851,6 +854,9 @@ async function fillSessions(zone, onCount, projectsP?) {
 
   onCount(sessions.filter((s) => s.attached).length);
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
+  // 프로젝트 → 소속 리스트(영역) 이름(#853) — 카드에 '프로젝트:' 와 나란히 '리스트:' 뱃지로.
+  const listName = new Map<any, string>((lists || []).map((l) => [l.id, l.name]));
+  const projList = (pid) => { const p = (projects || []).find((x) => x.id === pid); return (p && listName.get(p.list_id)) || ''; };
   const memberName = (id) => {
     const m = ((cfg && cfg.members) || []).find((x) => x.id === id);
     return (m && m.name) || id || '';
@@ -956,49 +962,64 @@ async function fillSessions(zone, onCount, projectsP?) {
     }
     const list = el('div', { class: 'dash-sess-list' + (selectMode ? ' selectmode' : '') }); // #758 선택모드=체크박스 노출 (자세히/간략히 차이는 카드 구조로 분기 — 아래 density)
     for (const s of shown) {
-      // #req 재설계 — 상태(작업중/대기중)가 카드의 주인공. 좌측 색 레일 + 색 상태라벨로 한눈에 스캔.
+      // #853 재배치 — 읽는 순서를 고정한다: [상태 · 제목] → [부제·뱃지] → 우측 고정열 [마지막 작업 시각] → [열기 ⋮].
+      //  시각이 뱃지 줄 끝에 섞여 있으면(구버전) 프로젝트명 길이에 따라 위치가 춤춘다 → 세로로 스캔이 안 된다.
       const stt = dashSessState(s);            // { key, label }
       const pid = Number(s.projectId) || 0;
       const mineProj = !!(pid && projName.has(pid));
-      const meta = el('div', { class: 'dash-scard-meta' });
-      if (stt.label) meta.append(el('span', { class: 'dash-scard-status is-' + stt.key },
-        el('span', { class: 'dash-scard-dot' }), el('span', { text: stt.label })));
-      if (pid) meta.append(el('span', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), title: (mineProj ? '내 프로젝트: ' : '프로젝트: ') + (projName.get(pid) || pid), text: '프로젝트: ' + (projName.get(pid) || ('#' + pid)) })); // #758 '프로젝트:' 접두로 프로젝트임을 명시
-      if (!s.owned) meta.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
-      else if ((s.invites || []).length) meta.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
-      meta.append(el('span', { class: 'dash-scard-when', title: '마지막 사용', text: sessTime(s.lastUsed || s.created) })); // #req 생성일 대신 마지막 사용(작업·접속) 시각
+      const statusEl = stt.label ? el('span', { class: 'dash-scard-status is-' + stt.key },
+        el('span', { class: 'dash-scard-dot' }), el('span', { text: stt.label })) : null;
+      // 뱃지 줄 — 프로젝트(눌러서 이동) · 리스트(영역) · 초대.
+      const chips = el('div', { class: 'dash-scard-chips' });
+      if (pid) { // #853 팝업이 아니라 프로젝트 페이지로 아예 이동.
+        const pname = projName.get(pid) || ('#' + pid);
+        const go = el('button', { class: 'dash-scard-proj' + (mineProj ? ' mine' : ''), type: 'button',
+          title: '프로젝트 ‘' + pname + '’ 열기', text: '프로젝트: ' + pname });
+        go.onclick = (ev) => { ev.stopPropagation(); location.hash = '#/projects2/p/' + pid; };
+        chips.append(go);
+        const lname = projList(pid); // #853 프로젝트와 같은 형식의 '리스트:' 뱃지(자세히 보기에서만).
+        if (lname && density !== 'compact') chips.append(el('span', { class: 'dash-scard-list', title: '리스트(영역): ' + lname, text: '리스트: ' + lname }));
+      }
+      if (!s.owned) chips.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
+      else if ((s.invites || []).length) chips.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
+      // 우측 고정 시각열 — '마지막 작업'(클로드가 마지막으로 턴을 돌린/끝낸 때). 내가 열어본 시각과 무관(#853).
+      const worked = Number(s.lastActive) || 0;
+      const when = el('div', { class: 'dash-scard-when' + (worked ? '' : ' none'), title: worked ? '마지막 작업 — 클로드가 마지막으로 작업한 시각' : '아직 작업 기록이 없어요 (만든 시각)' },
+        density === 'compact' ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }),
+        el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
       const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
       openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
-      const acts = el('div', { class: 'dash-scard-acts' }, openBtn);
-      if (s.owned) { // 이름 수정·삭제는 소유자만(서버도 비소유 403 재검증).
-        const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
-        moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions);
-        acts.append(moreBtn);
-      }
-      // #758 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명. 자세히·간략히 공통.
-      //   자세히: 작업(제목) / '터미널 제목: 세션명'(회색 부제) / 메타 (3줄).
-      //   간략히: 작업(제목) / 메타 (2줄 — 터미널 제목 부제 생략).
+      const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·삭제)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
+      moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
+      const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
+      // 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명.
+      //   자세히: [상태 · 작업제목] / [터미널 제목: 세션명] / [뱃지]
+      //   간략히: [상태 · 작업제목 · 뱃지] 한 줄
       const nameStr = s.label || '(이름 없음)';
       const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
       const headline = worksum || nameStr;
-      let main;
-      if (density === 'compact') {
-        main = el('div', { class: 'dash-scard-main' },
-          el('span', { class: 'dash-scard-name', title: headline, text: headline }),
-          meta);
-      } else {
-        main = el('div', { class: 'dash-scard-main' },
-          el('span', { class: 'dash-scard-name', title: headline, text: headline }),
+      const nameEl = el('span', { class: 'dash-scard-name', title: headline, text: headline });
+      const main = density === 'compact'
+        ? el('div', { class: 'dash-scard-main compact' }, statusEl, nameEl, chips)
+        : el('div', { class: 'dash-scard-main' },
+          el('div', { class: 'dash-scard-head' }, statusEl, nameEl),
           worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null,
-          meta);
-      }
+          chips.childElementCount ? chips : null);
       const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
       if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
+        // #853 체크박스는 평소 숨김 → 카드 왼쪽에 호버하면 스르르 나타난다(CSS). '선택' 버튼을 먼저 누를 필요 없음.
+        //  체크하는 순간 선택 모드로 자동 진입해 하단 일괄 바가 뜬다(재렌더 없이 클래스만 토글 — 깜빡임 방지).
         const cb: any = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' }); cb.checked = selected.has(s.id);
-        cb.onchange = () => { if (cb.checked) selected.add(s.id); else selected.delete(s.id); box.classList.toggle('sel', cb.checked); list.classList.toggle('has-sel', selected.size > 0); renderBar(); };
-        box.append(el('label', { class: 'dash-sess-checkwrap' }, cb));
+        cb.onchange = () => {
+          if (cb.checked) selected.add(s.id); else selected.delete(s.id);
+          box.classList.toggle('sel', cb.checked);
+          list.classList.toggle('has-sel', selected.size > 0);
+          if (cb.checked && !selectMode) { selectMode = true; list.classList.add('selectmode'); }
+          renderBar();
+        };
+        box.append(el('label', { class: 'dash-sess-checkwrap', title: '선택 — 여러 개 골라 한 번에 삭제' }, cb));
       }
-      box.append(main, acts);
+      box.append(main, when, acts);
       list.append(box);
     }
     // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).
@@ -1103,21 +1124,53 @@ function dashSessState(s): { key: string; label: string } {
   const k = (s && s.agentState) || 'offline';
   return { key: k, label: map[k] || '오프라인' };
 }
-// 세션 '⋯' 메뉴(#req R15) — 이름 수정(POST /sessions/:id {label}) · 삭제(DELETE /sessions/:id). 소유자만 노출.
+// 세션 이름 수정 팝업(#853) — 브라우저 기본 prompt() 대신 우리 UI. overlay = 다른 모달과 같은 프리미티브(admin.js).
+//  Enter=저장 / Esc=닫기(overlay 기본). 빈 이름·무변경이면 저장 비활성.
+function openSessRename(s, onChange) {
+  const input: any = el('input', { class: 'dash-rename-input', type: 'text', maxlength: '120', placeholder: '예: 위키 개선 조사', value: s.label || '' });
+  const save: any = el('button', { class: 'btn btn-primary', type: 'button', text: '저장' });
+  const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: '취소' });
+  const err = el('div', { class: 'dash-rename-err', hidden: true });
+  const body = el('div', { class: 'dash-rename' },
+    el('label', { class: 'dash-rename-lbl', for: 'dash-rename-in', text: '세션 이름' }),
+    input,
+    el('div', { class: 'dash-rename-hint', text: '터미널 목록·대시보드 카드에 보이는 이름이에요. 지금 하는 작업 제목(클로드가 쓰는 것)과는 별개예요.' }),
+    err,
+    el('div', { class: 'dash-rename-acts' }, cancel, save));
+  const back = overlay('세션 이름 수정', body);
+  const close = () => back.remove();
+  cancel.onclick = close;
+  const sync = () => { const v = input.value.trim(); save.disabled = !v || v === (s.label || ''); };
+  input.addEventListener('input', sync); sync();
+  const submit = async () => {
+    const to = input.value.trim();
+    if (!to || to === (s.label || '')) return;
+    save.disabled = true; save.textContent = '저장 중…';
+    try {
+      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: to }) });
+      toast('이름을 바꿨어요'); close(); onChange && onChange();
+    } catch (e: any) {
+      err.textContent = '이름 변경 실패 — ' + ((e && e.message) || e); err.hidden = false;
+      save.disabled = false; save.textContent = '저장';
+    }
+  };
+  save.onclick = submit;
+  input.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+// 세션 '⋯' 메뉴 — 이름 수정 · 내 질문 보기 · 삭제. 이름 수정/삭제는 소유자만(서버도 비소유 403 재검증).
+//  '내 질문'은 터미널 탭의 팝업(openSessPrompts, #745)을 그대로 재사용 — 접근통제는 서버 canAttach.
 function openSessMenu(anchor, s, onChange) {
   const panel = el('div', { class: 'dash-pop-panel' });
   let close = () => { /* dashPopover 반환값으로 대체 */ };
-  const item = (label, danger, fn) => {
-    const b = el('button', { class: 'dash-pop-opt' + (danger ? ' danger' : ''), type: 'button' }, el('span', { class: 'dash-pop-name', text: label }));
+  const item = (label, desc, danger, fn) => {
+    const b = el('button', { class: 'dash-pop-opt' + (danger ? ' danger' : ''), type: 'button' },
+      el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: label }), desc ? el('span', { class: 'dash-pop-desc', text: desc }) : null));
     b.onclick = () => { close(); fn(); }; panel.append(b);
   };
-  item('이름 수정', false, async () => {
-    const to = (prompt('세션 이름', s.label || '') || '').trim();
-    if (!to || to === s.label) return;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: to }) }); toast('이름을 바꿨어요'); onChange && onChange(); }
-    catch (e: any) { toast('이름 변경 실패 — ' + (e && e.message || e), true); }
-  });
-  item('삭제', true, async () => {
+  if (s.owned) item('이름 수정', null, false, () => openSessRename(s, onChange));
+  item('내 질문 보기', '이 세션에서 클로드에게 보낸 질문만 모아보기', false, () => openSessPrompts(s));
+  if (s.owned) item('삭제', null, true, async () => {
     if (!confirm('세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).')) return;
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션을 삭제했어요'); onChange && onChange(); }
     catch (e: any) { toast('삭제 실패 — ' + (e && e.message || e), true); }
