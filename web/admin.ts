@@ -1067,6 +1067,9 @@ async function repoRefreshShared(name, ev) {
 }
 
 // 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
+//  #825: 3필드를 손으로 치는 대신 [목록에서 선택](저장된 토큰으로 호스트의 레포 조회 → 3필드 프리필) +
+//  [연결 확인](저장 전 ls-remote 로 접근·기본브랜치 확인). 둘 다 '제안' 이고, 텍스트 입력은 그대로 살아 있다
+//  (토큰 없는 호스트·SSH 전송·미지원 provider 에서도 기존처럼 등록 가능해야 하므로).
 function openRepoForm(repo, reload) {
   const isNew = !repo;
   const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
@@ -1076,11 +1079,53 @@ function openRepoForm(repo, reload) {
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
     hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+
+  // 선택한 레포를 3필드에 채운다. clone_url 은 서버가 그 호스트의 git 전송 방식(ssh/https)에 맞춰 고른 주소다
+  //  — 목록은 API 토큰으로 조회하고 클론은 SSH 로 하는 조합(HTTPS 막힌 셀프호스팅)이 실제로 있기 때문.
+  const fill = (o) => {
+    nameInp.value = o.name || '';
+    urlInp.value = o.clone_url || o.http_url || o.ssh_url || '';
+    branchInp.value = o.default_branch || 'main';
+    checkNote.replaceChildren(); // 이전 확인 결과는 무효 — 주소가 바뀌었으니.
+  };
+  const pickBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 선택',
+    onclick: () => openRepoPicker(fill) });
+  const checkBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결 확인' });
+  const checkNote = el('p', { class: 'ps-block-hint', style: 'margin:6px 0 0' });
+
+  checkBtn.onclick = async () => {
+    const url = urlInp.value.trim();
+    if (!url) { toast('git 주소를 먼저 입력하세요', true); return; }
+    checkBtn.disabled = true;
+    checkNote.replaceChildren(el('span', { class: 'admin-hint', text: '확인 중…' }));
+    try {
+      const r = await api('/api/ui/repos/check', { method: 'POST', body: JSON.stringify({ git_url: url }) });
+      if (r.ok) {
+        const drift = r.default_branch && branchInp.value.trim() && r.default_branch !== branchInp.value.trim();
+        checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)',
+          text: `✓ 접근 OK — ${r.host} · 브랜치 ${r.branches}개 · 원격 기본 브랜치 ${r.default_branch || '알 수 없음'}` }));
+        // 원격의 실제 기본 브랜치가 입력값과 다르면 조용히 넘기지 않는다 — 스캔이 엉뚱한 브랜치를 읽는 사고의 원인.
+        if (drift) {
+          const useBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `‘${r.default_branch}’ 로 맞추기`,
+            onclick: () => { branchInp.value = r.default_branch; checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)', text: `✓ 기본 브랜치를 ${r.default_branch} 로 설정했습니다` })); } });
+          checkNote.append(el('span', { text: ` — 입력한 ‘${branchInp.value.trim()}’ 와 다릅니다. ` }), useBtn);
+        }
+      } else {
+        checkNote.replaceChildren(el('span', { style: 'color:var(--danger,#dc2626)', text: '✗ ' + (r.detail || '접근 실패') }));
+      }
+    } catch (e) { checkNote.replaceChildren(el('span', { style: 'color:var(--danger,#dc2626)', text: '✗ 확인 실패 — ' + e.message })); }
+    checkBtn.disabled = false;
+  };
+
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '레포 추가' : '저장' });
   const form = el('div', { class: 'proj-settings' },
-    block('레포 이름', isNew ? '실제 git 레포 이름 — code_unit 이 이 이름으로 매핑됩니다.' : '이름을 바꿔도 매핑·도메인은 보존됩니다.', nameInp),
-    block('git 주소 (clone URL)', '도메인맵 스캔과 로컬 작업 클론이 이 주소를 씁니다. 비우면 git 미연결.', urlInp),
-    block('기본 브랜치', '비우면 main.', branchInp),
+    isNew ? el('div', { class: 'conn-pick-row', style: 'margin-bottom:10px' },
+      el('span', { class: 'admin-hint', style: 'margin:0; flex:1',
+        text: '등록된 git 자격으로 레포 목록을 불러와 고를 수 있어요 — 이름·주소·기본 브랜치가 함께 채워집니다.' }), pickBtn) : null,
+    block('레포 이름', isNew ? '실제 git 레포 이름 — code_unit 이 이 이름으로 매핑됩니다. (경로 컴포넌트라 슬래시 불가 — GitLab 서브그룹은 마지막 조각만 들어갑니다)' : '이름을 바꿔도 매핑·도메인은 보존됩니다.', nameInp),
+    block('git 주소 (clone URL)', '도메인맵 스캔과 로컬 작업 클론이 이 주소를 씁니다. 비우면 git 미연결.',
+      el('div', {}, el('div', { class: 'conn-pick-row' }, urlInp, checkBtn), checkNote)),
+    block('기본 브랜치', '비우면 main. [연결 확인]으로 원격의 실제 기본 브랜치를 확인할 수 있어요.', branchInp),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
   const back = overlayBox(isNew ? '레포 추가' : '레포 수정 — ' + repo.name, form);
   const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
@@ -1095,6 +1140,43 @@ function openRepoForm(repo, reload) {
       toast(isNew ? '레포를 추가했습니다' : '저장했습니다'); back.remove(); reload();
     } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
+}
+
+// 레포 픽커(#825) — 저장된 토큰으로 조회한 레포 목록에서 고른다. 커넥터 스코프 픽커(#586)의 git 판.
+//  목록이 비어도(SSH 뿐인 호스트·토큰 없음) 실패가 아니다 — 사유(note)를 보여주고 텍스트 입력으로 돌려보낸다.
+async function openRepoPicker(onPick) {
+  const box = el('div', {}, el('p', { class: 'admin-hint', text: '등록된 git 자격으로 레포 목록을 조회하는 중…' }));
+  const back = overlay('레포 — 목록에서 선택', box);
+  try {
+    const r = await api('/api/ui/repos/discover', { method: 'POST', body: JSON.stringify({}) });
+    const opts = r.options || [];
+    const noteEl = r.note ? el('p', { class: 'admin-hint', style: 'white-space:pre-line', text: r.note }) : null;
+    if (!opts.length) { box.replaceChildren(noteEl || el('p', { class: 'admin-hint', text: '고를 레포가 없습니다 — git 주소를 직접 입력하세요.' })); return; }
+
+    // 이미 등록된 레포는 회색 처리 — 중복 등록(409)을 누르기 전에 보이게.
+    let existing = new Set();
+    try { const rr = await api('/api/ui/repos'); existing = new Set(((rr && rr.domainmapRepos) || []).map((x) => x.name)); } catch (_) { /* 목록 못 읽어도 픽커는 동작 */ }
+
+    const search = el('input', { type: 'text', style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box', placeholder: '레포 이름·경로로 검색' });
+    const list = el('div', { class: 'conn-pick-list' });
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const hit = opts.filter((o) => !q || (o.full_path + ' ' + o.name).toLowerCase().includes(q));
+      list.replaceChildren(...(hit.length ? hit.map((o) => {
+        const dup = existing.has(o.name);
+        return el('label', { class: 'conn-pick-item', onclick: () => { onPick(o); back.remove(); toast(`‘${o.full_path}’ 를 채웠습니다 — [레포 추가]를 눌러야 등록됩니다`); } },
+          el('span', { text: o.private ? '🔒' : '🌐' }),
+          el('span', { class: 'conn-pick-label', text: o.full_path }),
+          el('span', { class: 'mini-meta mono', text: (o.default_branch || '?') + (dup ? ' · 이미 등록됨' : '') }));
+      }) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+    };
+    search.oninput = render;
+    render();
+    box.replaceChildren(noteEl, search, list,
+      el('p', { class: 'admin-hint', text: '고르면 이름·git 주소·기본 브랜치가 폼에 채워집니다(그대로 편집할 수 있어요). 목록에 없어도 주소를 직접 입력해 등록할 수 있습니다.' }));
+  } catch (e) {
+    box.replaceChildren(el('p', { class: 'admin-hint', text: '조회 실패: ' + e.message + ' — git 주소를 직접 입력하세요.' }));
+  }
 }
 
 async function repoSetDeprecated(name, isDeprecated, reload) {
@@ -2409,100 +2491,259 @@ function storageEditor(detail, data) {
 
       el('div', { class: 'storage-actions' }, saveBtn),
 
+      el('h3', { class: 'storage-h', text: '경보 알림' }),
+      alertRegion,
+
       el('h3', { class: 'storage-h', text: '워크스페이스' }),
       wsRegion,
     );
+    loadAlert();
     loadWorkspace();
+  }
+
+  // ── 경보 알림(#813) ──
+  // 2026-07-13 사고의 본질은 "디스크가 찼다"가 아니라 **"아무도 몰랐다"** 였다. 가드가 있어도 사람에게 닿지 않으면
+  //  똑같이 늦게 발견된다. 이 화면은 그 마지막 구멍을 막는다.
+  // ⚠ 웹훅 URL 은 시크릿이라 서버가 값을 돌려주지 않는다 → 레포 관례대로 항상 빈칸 + '설정됨' 표시 + 빈 제출=미변경.
+  const alertRegion = el('div');
+  async function loadAlert() {
+    alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    let a;
+    try { a = await api('/api/ui/org/alert'); }
+    catch (e: any) { alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
+
+    const urlIn = el('input', {
+      class: 'input', type: 'password', value: '',
+      placeholder: a.configured ? '● 설정됨 — 변경할 때만 입력' : 'https://hooks.slack.com/services/…  (슬랙·디스코드 웹훅 또는 임의 JSON 웹훅)',
+    });
+    urlIn.disabled = !canEdit || !a.encryption_ready;
+
+    const minSel = el('select', { class: 'input' },
+      el('option', { value: 'warn', text: '경고부터 (85% 도달 시에도 알림)' }),
+      el('option', { value: 'critical', text: '위험만 (95% 도달·DB 다운만 알림)' }));
+    minSel.value = a.min_severity || 'warn';
+    minSel.disabled = !canEdit;
+
+    const labelIn = el('input', { class: 'input', type: 'text', placeholder: '(선택) 채널 이름 — 예: #ops' });
+    labelIn.value = a.label || ''; labelIn.disabled = !canEdit;
+
+    const saveA = el('button', { class: 'btn btn-primary btn-sm', text: a.configured ? '설정 저장' : '웹훅 등록' });
+    saveA.disabled = !canEdit || !a.encryption_ready;
+    saveA.addEventListener('click', async () => {
+      saveA.disabled = true;
+      try {
+        await api('/api/ui/org/alert', {
+          method: 'POST',
+          body: JSON.stringify({ url: urlIn.value, min_severity: minSel.value, label: labelIn.value }),
+        });
+        toast('저장됨 — [테스트 전송]으로 실제로 닿는지 꼭 확인하세요.');
+        loadAlert();
+      } catch (e: any) { toast(e.message, true); saveA.disabled = false; }
+    });
+
+    // 테스트 전송 — 이게 없으면 "저장은 됐는데 정작 장애 때 안 오는" 상황을 못 잡는다(오타·만료·권한).
+    const testA = el('button', { class: 'btn btn-sm', text: '테스트 전송' });
+    testA.disabled = !canEdit || !a.configured;
+    testA.addEventListener('click', async () => {
+      testA.disabled = true; testA.textContent = '보내는 중…';
+      try {
+        await api('/api/ui/org/alert/test', { method: 'POST', body: JSON.stringify({}) });
+        toast('보냈습니다 — 채널에 도착했는지 확인하세요.');
+      } catch (e: any) { toast(e.message, true); }
+      testA.disabled = false; testA.textContent = '테스트 전송';
+    });
+
+    const delA = el('button', { class: 'btn btn-sm btn-danger', text: '해제' });
+    delA.disabled = !canEdit || !a.configured;
+    delA.addEventListener('click', async () => {
+      if (!confirm('경보 웹훅을 해제합니다. 디스크가 위험해져도 알림이 오지 않습니다. 계속할까요?')) return;
+      delA.disabled = true;
+      try { await api('/api/ui/org/alert/delete', { method: 'POST', body: JSON.stringify({}) }); toast('해제됨'); loadAlert(); }
+      catch (e: any) { toast(e.message, true); delA.disabled = false; }
+    });
+
+    const status = a.configured
+      ? el('p', { class: 'storage-calc', text: `설정됨${a.label ? ' · ' + a.label : ''} — 상태가 바뀔 때만 알립니다(같은 상태를 반복 발송하지 않습니다). 복구되면 해제 알림도 갑니다.` })
+      : el('p', { class: 'storage-calc storage-warn', text: '⚠ 미설정 — 디스크가 위험해지거나 DB가 죽어도 아무도 알지 못합니다(로그·이 화면에만 남습니다).' });
+
+    const keyNote = a.encryption_ready ? null
+      : el('p', { class: 'admin-hint storage-warn', text: '⚠ 시크릿 암호화 키(CONNECTOR_SECRET_KEY)가 설정되지 않아 웹훅을 저장할 수 없습니다. 웹훅 주소는 그 URL만 알면 누구나 글을 쓸 수 있어 평문으로 저장하지 않습니다.' });
+
+    alertRegion.replaceChildren(
+      el('div', { class: 'storage-block' },
+        status,
+        ...(keyNote ? [keyNote] : []),
+        el('div', { class: 'storage-fields' },
+          el('label', { style: 'flex:1 1 320px' }, el('span', { text: '웹훅 주소' }), urlIn),
+          el('label', {}, el('span', { text: '언제 알릴까' }), minSel),
+          el('label', {}, el('span', { text: '이름(선택)' }), labelIn)),
+        el('p', { class: 'admin-hint', text: '슬랙·디스코드의 incoming webhook 주소를 그대로 넣으면 됩니다. 무엇이 오나: 디스크 경고/위험 진입, DB 연결 불가, 그리고 각각의 복구. 저장된 주소는 암호화되어 다시 보여드리지 않습니다(변경할 때만 다시 입력).' }),
+        el('div', { class: 'ws-actions' }, el('span', {}, testA, ' ', delA), saveA)),
+    );
   }
 
   // ── 워크스페이스(#813 T3-2 백스톱) ──
   // 프로젝트 마무리 루틴이 회수를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done
   //  처리하거나, 프로젝트가 방치되면 아무도 안 치운다. 여기서 관리자가 보고 **직접** 회수한다.
   //  ⚠ 자동 삭제는 없다. 반드시 [분석](dry-run) → 내용 확인 → [회수] 순서로만 지워진다.
+  // ── 워크스페이스 회수 (#813 백스톱 · #845 UX 수정) ──────────────────────────────
+  //  #845 전에는 **목록의 78% 가 눌러봐야 에러**였다(307개 중 레포 없는 껍데기 184 + 고아 57).
+  //  그래서 세 가지를 지킨다:
+  //   ① **못 하는 일에 버튼을 주지 않는다** — 레포 없는 폴더는 접어두고 [분석] 버튼 자체를 안 만든다.
+  //   ② **일괄** — 8GB 가 어디 있는지 알려고 123번 클릭하게 두지 않는다.
+  //   ③ **청크로 끊어 부른다** — 한 요청에 전부 넣으면 du 가 수십 초를 먹고 프록시가 504 로 끊는다(#600).
   const wsRegion = el('div');
+  // ⚠ 키는 **folder** 다(project_id 아님). 폴더명이 숫자가 아닌 옛 규칙(project/<프로젝트 이름>)이 74개 있고,
+  //  그중 12개는 지금도 살아있는 프로젝트다 — id 로 키를 잡으면 이것들이 화면에서 통째로 사라진다.
+  const analyzed = new Map<string, any>(); // folder → 분석 결과(dry-run). 회수는 여기 담긴 것만 대상으로 한다.
+  const selected = new Set<string>();
+  let wsList: any = null;
+
+  const ANALYZE_CHUNK = 10; // 요청당 프로젝트 수 — du 비용이 크므로 작게. 서버 상한은 40.
+
+  async function runBatch(path: string, folders: string[], body: any, onProgress: (done: number) => void) {
+    const out: any[] = [];
+    for (let i = 0; i < folders.length; i += ANALYZE_CHUNK) {
+      const part = folders.slice(i, i + ANALYZE_CHUNK);
+      const res = await api(path, { method: 'POST', body: JSON.stringify({ ...body, folders: part }) });
+      out.push(...(res.projects || []));
+      onProgress(Math.min(i + ANALYZE_CHUNK, folders.length));
+    }
+    return out;
+  }
+
   async function loadWorkspace() {
     wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)' }));
-    let ws;
-    try { ws = await api('/api/ui/org/workspace'); }
+    analyzed.clear(); selected.clear();
+    try { wsList = await api('/api/ui/org/workspace'); }
     catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
+    renderWorkspace();
+  }
 
-    const rows = (ws.projects || []).map((p) => {
-      const detailBox = el('div');
-      const analyzeBtn = el('button', { class: 'btn btn-sm', text: '분석' });
-      analyzeBtn.disabled = !canEdit || p.project_id == null;
+  function renderWorkspace() {
+    const all = (wsList.projects || []).filter((p) => p.folder);
+    // 레포(워크트리)가 있는 것만 회수 대상 — 나머지는 '회수할 것이 없는' 정상 폴더다(에러가 아니다).
+    const targets = all.filter((p) => p.repos > 0);
+    const empties = all.filter((p) => !p.repos);
+    const emptyBytes = empties.reduce((s, p) => s + (p.bytes ?? 0), 0);
 
-      analyzeBtn.addEventListener('click', async () => {
-        analyzeBtn.disabled = true;
-        detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '확인 중…' }));
-        try {
-          const plan = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, { method: 'POST', body: JSON.stringify({}) });
-          renderPlan(plan);
-        } catch (e: any) {
-          detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '실패: ' + e.message }));
-          analyzeBtn.disabled = false;
-        }
-      });
+    // 이 프로젝트의 워크트리 중 하나라도 작업 중인 세션이 붙어 있나 — 붙어 있으면 회수 대상으로 고르지 않는다.
+    const hasActive = (pr) => (pr.results || []).some((r) => r.active_session);
 
-      function renderPlan(plan) {
-        const parts: any[] = [];
-        for (const r of plan.results || []) {
-          const derived = (r.derived || []);
-          const unc = (r.unclassified || []);
-          parts.push(el('div', { class: 'ws-plan' },
-            el('p', { class: 'storage-calc', text: `회수 가능 ${fmtBytes(r.reclaimable_bytes)} — ${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '없음'}` }),
-            ...(unc.length ? [el('p', { class: 'storage-calc', text: `미분류(지우지 않음): ${unc.map((d) => d.path).join(', ')}` })] : []),
-            ...(r.protected_kept?.length ? [el('p', { class: 'storage-calc', text: `보호(절대 안 지움): ${r.protected_kept.join(', ')}` })] : []),
-            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음)' : `워크트리: 유지 — ${r.worktree_reason}` })));
-        }
-        // 워크트리까지 지울지는 **모든 레포가 제거 가능할 때만** 선택지로 준다.
-        const allRemovable = (plan.results || []).length > 0 && (plan.results || []).every((r) => r.worktree_removable);
-        const wtChk = el('input', { type: 'checkbox' }); wtChk.disabled = !allRemovable;
-        const total = (plan.results || []).reduce((s, r) => s + (r.reclaimable_bytes || 0), 0);
+    // ── 상단: 일괄 분석 ──
+    const progress = el('span', { class: 'storage-calc', text: '' });
+    const analyzeAllBtn = el('button', { class: 'btn btn-sm', text: `전체 분석 (${targets.length}개)` });
+    analyzeAllBtn.disabled = !canEdit || !targets.length;
+    analyzeAllBtn.addEventListener('click', async () => {
+      analyzeAllBtn.disabled = true;
+      const folders = targets.map((p) => p.folder);
+      try {
+        const res = await runBatch('/api/ui/org/workspace/analyze', folders, {},
+          (done) => { progress.textContent = `  분석 중… ${done}/${folders.length}`; });
+        for (const pr of res) if (pr.folder) analyzed.set(pr.folder, pr);
+        // 회수할 게 있는 것만 미리 골라둔다 — 관리자가 해제하는 게 하나씩 켜는 것보다 빠르다.
+        // 작업 중인 세션이 붙은 건 **켜지 않는다**(서버도 거부하지만, 애초에 고르지 않는 게 정직하다).
+        for (const pr of res) if (pr.reclaimable_bytes > 0 && !hasActive(pr)) selected.add(pr.folder);
+        renderWorkspace();
+      } catch (e: any) { toast(e.message, true); analyzeAllBtn.disabled = false; progress.textContent = ''; }
+    });
 
-        const doBtn = el('button', { class: 'btn btn-primary btn-sm', text: `회수 (${fmtBytes(total)})` });
-        doBtn.disabled = !canEdit || total <= 0;
-        doBtn.addEventListener('click', async () => {
-          const msg = wtChk.checked
-            ? `파생물 ${fmtBytes(total)} 를 지우고 워크트리도 제거합니다.\n\n워크트리는 push 된 상태라 나중에 다시 만들 수 있습니다. 계속할까요?`
-            : `파생물 ${fmtBytes(total)} 를 지웁니다(node_modules·build 등). 다시 빌드하면 복구됩니다. 계속할까요?`;
-          if (!confirm(msg)) return;
-          doBtn.disabled = true;
+    // ── 상단: 선택 회수 ──
+    const selFolders = [...selected].filter((f) => (analyzed.get(f)?.reclaimable_bytes ?? 0) > 0);
+    const selBytes = selFolders.reduce((s, f) => s + (analyzed.get(f)?.reclaimable_bytes ?? 0), 0);
+    const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: `선택 회수 (${selFolders.length}개 · ${fmtBytes(selBytes)})` });
+    reclaimSelBtn.disabled = !canEdit || !selFolders.length;
+    reclaimSelBtn.addEventListener('click', async () => {
+      if (!confirm(`${selFolders.length}개 프로젝트에서 파생물 ${fmtBytes(selBytes)} 를 지웁니다.\n\nnode_modules·빌드 산출물 등 다시 만들 수 있는 것만 지웁니다. 소스·커밋·.env·data/ 는 건드리지 않고, 워크트리도 유지합니다.\n\n계속할까요?`)) return;
+      reclaimSelBtn.disabled = true;
+      try {
+        const res = await runBatch('/api/ui/org/workspace/reclaim', selFolders, { remove_worktree: false },
+          (done) => { progress.textContent = `  회수 중… ${done}/${selFolders.length}`; });
+        const freed = res.reduce((s, pr) => s + (pr.freed_bytes || 0), 0);
+        toast(`회수 완료 — ${fmtBytes(freed)} (${res.length}개 프로젝트)`);
+        loadWorkspace();
+      } catch (e: any) { toast(e.message, true); reclaimSelBtn.disabled = false; progress.textContent = ''; }
+    });
+
+    // ── 회수 대상 행 ──
+    const rows = targets.map((p) => {
+      const pr = analyzed.get(p.folder);
+      const detail = el('div');
+      const right: any[] = [];
+
+      if (p.active_session) right.push(el('span', { class: 'storage-lv storage-lv-warn', text: '작업 중' }));
+      if (p.orphan) right.push(el('span', { class: 'storage-lv storage-lv-warn', text: '고아' }));
+      if (p.kind === 'archived') right.push(el('span', { class: 'storage-lv storage-lv-ok', text: '완료 보관' }));
+
+      let head: any;
+      if (!pr) {
+        const btn = el('button', { class: 'btn btn-sm', text: '분석' });
+        btn.disabled = !canEdit;
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          detail.replaceChildren(el('p', { class: 'storage-calc', text: '확인 중…' }));
           try {
-            const res = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, {
-              method: 'POST',
-              body: JSON.stringify({ apply: true, remove_worktree: wtChk.checked }),
-            });
-            const freed = (res.results || []).reduce((s, r) => s + (r.applied?.freedBytes || 0), 0);
-            const skipped = (res.results || []).map((r) => r.applied?.worktreeSkippedReason).filter(Boolean);
-            toast(`회수 완료 — ${fmtBytes(freed)}` + (skipped.length ? ` (워크트리 유지: ${skipped[0]})` : ''));
-            loadWorkspace();
-          } catch (e: any) { toast(e.message, true); doBtn.disabled = false; }
+            const res = await api('/api/ui/org/workspace/analyze', { method: 'POST', body: JSON.stringify({ folders: [p.folder] }) });
+            const one = (res.projects || [])[0];
+            if (one) analyzed.set(p.folder, one);
+            if (one?.reclaimable_bytes > 0 && !hasActive(one)) selected.add(p.folder);
+            renderWorkspace();
+          } catch (e: any) {
+            detail.replaceChildren(el('p', { class: 'storage-calc', text: '실패: ' + e.message }));
+            btn.disabled = false;
+          }
         });
+        right.push(btn);
+        head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` });
+      } else {
+        const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+        chk.checked = selected.has(p.folder);
+        chk.disabled = !canEdit || !(pr.reclaimable_bytes > 0) || hasActive(pr);
+        chk.addEventListener('change', () => {
+          if (chk.checked) selected.add(p.folder); else selected.delete(p.folder);
+          renderWorkspace(); // 상단 [선택 회수] 합계를 다시 그린다
+        });
+        right.unshift(chk);
+        head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · 회수 가능 ${fmtBytes(pr.reclaimable_bytes || 0)}` });
 
-        detailBox.replaceChildren(
-          ...parts,
-          el('div', { class: 'ws-actions' },
-            el('label', { class: 'storage-toggle' }, wtChk,
-              el('span', { text: allRemovable ? ' 워크트리도 제거 (push 완료 — provision 으로 복구 가능)' : ' 워크트리 제거 불가 (위 사유 참조)' })),
-            doBtn));
+        for (const r of pr.results || []) {
+          const derived = r.derived || [];
+          detail.append(el('div', { class: 'ws-plan' },
+            el('p', { class: 'storage-calc', text: `${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '회수할 파생물 없음'}` }),
+            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음) — 여기서는 유지합니다' : `워크트리: 유지 — ${r.worktree_reason}` })));
+        }
       }
-
-      const badges: any[] = [];
-      if (p.active_session) badges.push(el('span', { class: 'storage-lv storage-lv-warn', text: '작업 중' }));
-      if (p.kind === 'archived') badges.push(el('span', { class: 'storage-lv storage-lv-ok', text: '완료 보관' }));
 
       return el('div', { class: 'storage-item' },
         el('div', { class: 'storage-head' },
-          el('span', {}, el('strong', { text: p.name || String(p.project_id) }),
+          el('span', {}, el('strong', { text: p.name || p.folder }), head),
+          el('span', { class: 'ws-badges' }, ...right)),
+        detail);
+    });
+
+    // ── 레포 없는 폴더: 접어두고 버튼도 주지 않는다 ──
+    const emptyBox = el('div');
+    const emptyToggle = el('button', { class: 'btn btn-ghost btn-sm', text: `레포 없는 폴더 ${empties.length}개 보기 (${fmtBytes(emptyBytes)})` });
+    let emptyOpen = false;
+    emptyToggle.addEventListener('click', () => {
+      emptyOpen = !emptyOpen;
+      emptyToggle.textContent = emptyOpen ? `레포 없는 폴더 접기` : `레포 없는 폴더 ${empties.length}개 보기 (${fmtBytes(emptyBytes)})`;
+      emptyBox.replaceChildren(...(emptyOpen ? empties.map((p) => el('div', { class: 'storage-item' },
+        el('div', { class: 'storage-head' },
+          el('span', {}, el('strong', { text: p.name || p.folder }),
             el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` })),
-          el('span', { class: 'ws-badges' }, ...badges, analyzeBtn)),
-        detailBox);
+          el('span', { class: 'ws-badges' }, ...(p.orphan ? [el('span', { class: 'storage-lv storage-lv-warn', text: '고아' })] : []))))) : []));
     });
 
     wsRegion.replaceChildren(
-      el('p', { class: 'storage-calc', text: `${(ws.projects || []).length}개 프로젝트 · 합계 ${fmtBytes(ws.total_bytes)} — ${ws.root}` }),
-      el('p', { class: 'admin-hint', text: '프로젝트별로 [분석]을 눌러 무엇이 회수 가능한지 먼저 확인하세요(아무것도 지우지 않습니다). 회수 대상은 다시 만들 수 있는 것뿐입니다 — node_modules·빌드 산출물 등. 소스·커밋·설정(.env)·데이터는 절대 지우지 않으며, 작업 중인 세션이 있거나 push 안 한 커밋이 있으면 거부합니다. 자동 삭제는 하지 않습니다.' }),
-      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '워크스페이스가 비어 있습니다.' })]));
+      el('p', { class: 'storage-calc', text: `${all.length}개 폴더 · 합계 ${fmtBytes(wsList.total_bytes)} — ${wsList.root}` }),
+      el('div', { class: 'ws-actions' }, analyzeAllBtn, reclaimSelBtn, progress),
+      el('p', { class: 'admin-hint', text: '[전체 분석]은 아무것도 지우지 않습니다 — 무엇이 회수 가능한지만 계산합니다. 회수 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.' }),
+      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '회수할 워크트리가 있는 프로젝트가 없습니다.' })]),
+      ...(empties.length ? [
+        el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 회수할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
+        emptyToggle, emptyBox,
+      ] : []));
   }
 
   load();
@@ -2941,12 +3182,50 @@ function mcpForm(root, s, data, detail, isNew) {
     try { await api('/api/ui/org/mcp-server/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.mcpSel = null; toast('제거됨'); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); }
   } }));
-  root.replaceChildren(
+  // ── 프리셋(기본 카탈로그) — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=connector-catalog.ts. ──
+  const presetSel = el('select', {}, el('option', { value: '', text: '— 직접 입력 —' }));
+  const presetHint = el('div', { class: 'admin-hint', style: 'display:none;margin-top:6px' });
+  let catalog: any[] = [];
+  api('/api/ui/org/connector-catalog').then((r: any) => {
+    catalog = r.catalog || [];
+    for (const c of catalog) presetSel.append(el('option', { value: c.name, text: c.label + (c.dcr ? ' · 자동(DCR)' : ' · client 필요') }));
+  }).catch(() => {});
+  presetSel.addEventListener('change', () => {
+    const c = catalog.find((x) => x.name === presetSel.value);
+    if (!c) { presetHint.style.display = 'none'; return; }
+    if (isNew) nameIn.value = c.name;
+    transSel.value = 'http'; urlIn.value = c.url;
+    modeSel.value = 'proxy'; authModeSel.value = 'oauth';
+    authKindIn.value = c.auth_kind; scopeSel.value = c.scope; levelSel.value = c.level; piiChk.checked = !!c.pii_scrub;
+    syncTransport(); syncMode();
+    // 셋업 위저드(imp#1) — DCR이면 0세팅, 아니면 provider 콘솔 체크리스트 + 정확한 콜백 URL.
+    const cb = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
+    presetHint.replaceChildren();
+    if (c.dcr) {
+      presetHint.append(el('div', { text: `${c.label}: 자동 클라이언트 등록(DCR) — OAuth client 입력 불필요. 저장 → [발행](연결 테스트) → 구성원이 [연결]하면 끝.` }));
+    } else {
+      presetHint.append(
+        el('div', { style: 'font-weight:600;margin-bottom:4px', text: `${c.label}: 사전등록 OAuth client 필요 — provider 콘솔 셋업:` }),
+        el('ol', { style: 'margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px' },
+          el('li', { text: 'provider 콘솔에서 "웹 애플리케이션" OAuth 클라이언트 생성' }),
+          el('li', { text: '필요한 스코프 추가(아래 note 참조)' }),
+          el('li', {}, '승인된 redirect URI 에 게이트웨이 콜백 등록 → ', el('code', { text: cb })),
+          el('li', {}, '발급된 client_id/secret 를 아래 ', el('b', { text: 'OAuth 클라이언트' }), ' 필드에 입력'),
+          el('li', { text: '저장 → [발행]로 연결 스모크(막히면 스코프/콜백 재확인)' })));
+    }
+    if (c.note) presetHint.append(el('div', { class: 'caption', style: 'margin-top:4px', text: c.note }));
+    presetHint.style.display = '';
+  });
+  const presetField = field('프리셋(기본 카탈로그)', el('div', {}, presetSel, presetHint));
+
+  root.replaceChildren(...[
+    isNew ? presetField : null,
     field('이름', nameIn), field('방식', modeSel), field('전송 방식', transSel), urlField, cmdField,
     authEnvField, field('설명', noteIn),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     proxyBox,
-    actions);
+    actions,
+  ].filter(Boolean));
   syncTransport();
   syncMode();
 }
@@ -4209,14 +4488,14 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
 // ── 자격(커넥터 로그인) vault UI(#746 P1) — 능동 커넥터가 쓰는 per-user 토큰. 텍스트 최소화·드롭다운 위주. ──
 //  kind 는 드롭다운(친숙한 라벨), kind 별 필요한 필드만 노출, 헤더 형식은 프리셋(고급 토글 없이 숨김). '내 자격'은 전원,
 //  '통합 자격'·AWS 역할은 admin. secret 은 password 입력이고 목록엔 등록됨(✓)만 보인다(값 비노출).
-const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secretPh?: string; scope?: string; scopePh?: string; meta?: Record<string, string>; help?: string }> = [
-  { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요.' },
-  { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.' },
-  { kind: 'notion_token', label: 'Notion 토큰', secretLabel: 'Notion 토큰', secretPh: 'secret_… / ntn_…' },
-  { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' } },
-  { kind: 'google_oauth_refresh', label: 'Google OAuth (refresh token)', secretLabel: 'refresh token', help: 'Google Cloud OAuth 동의화면이 In production 이어야 만료되지 않습니다. gmail.readonly·drive.readonly 스코프.' },
+const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secretPh?: string; scope?: string; scopePh?: string; meta?: Record<string, string>; help?: string; docUrl?: string }> = [
+  { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송이 SSH 여도 이것만 있으면 목록이 뜹니다.' },
+  { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', docUrl: 'https://github.com/settings/tokens', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송이 SSH(deploy key) 여도 이것만 있으면 목록이 뜹니다.' },
+  { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.', docUrl: 'https://api.slack.com/apps' },
+  // notion_token·google_oauth_refresh 제거(#746) — 이 서비스는 OAuth 커넥터(관리탭 MCP 서버)로 연결. 정적 토큰 슬롯은 중복·미사용(죽은 옵션)이었음.
+  { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' }, help: 'ClickUp ▸ Settings ▸ Apps 에서 개인 API 토큰(pk_…) 발급.', docUrl: 'https://app.clickup.com/settings/apps' },
   { kind: 'prometheus_bearer', label: 'Prometheus Bearer 토큰', secretLabel: 'Bearer 토큰' },
-  { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' } },
+  { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' }, help: 'Figma ▸ Settings ▸ Security ▸ Personal access tokens 에서 발급(figd_…).', docUrl: 'https://www.figma.com/settings' },
 ];
 const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
 
@@ -4250,6 +4529,25 @@ function oauthConnectorsCard(conns, reload) {
     ...rows);
 }
 
+// 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
+function catalogStatusCard(catalog: any[], servers: any[]) {
+  const byName = new Map((servers || []).map((s: any) => [s.name, s]));
+  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 커넥터 카탈로그의 현재 상태. 추가·발행은 [MCP 서버] 탭에서 프리셋으로, 구성원 연결은 각자 [연결].' })];
+  for (const c of (catalog || [])) {
+    const s = byName.get(c.name);
+    let chip: any; let hint = '';
+    if (s && s.enabled !== false) { chip = el('span', { class: 'pill pill-ok', text: '✓ 등록됨' }); hint = c.dcr ? '구성원이 [연결]하면 사용' : 'OAuth client 시딩 확인 후 [연결]'; }
+    else if (c.dcr) { chip = el('span', { class: 'pill', text: '+ 추가 가능(자동)' }); hint = 'MCP 서버 ▸ 프리셋에서 추가(DCR — client 불필요)'; }
+    else { chip = el('span', { class: 'pill', style: 'background:#faefdd;color:#b45309', text: '⚙ 설정 필요' }); hint = '사전등록 OAuth client 만들어 프리셋으로 추가'; }
+    rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' },
+      el('span', { style: 'font-weight:650;min-width:110px', text: c.label }),
+      chip,
+      el('span', { class: 'mini-meta', text: hint })));
+  }
+  if (!(catalog || []).length) rows.push(el('p', { class: 'admin-hint', text: '카탈로그를 불러오지 못했습니다.' }));
+  return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: '커넥터 현황 (기본 카탈로그)' }), ...rows);
+}
+
 async function credentialsEditor(detail) {
   const isAdmin = hasScope('admin');
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
@@ -4257,6 +4555,8 @@ async function credentialsEditor(detail) {
   let org: any = { credentials: [] };
   let awsRoles: any = { credentials: [] };
   let oauthConns: any = { connectors: [] };
+  let catalog: any = { catalog: [] };
+  let mcpServers: any = { servers: [] };
   try {
     mine = await api('/api/ui/me/credentials');
     oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
@@ -4264,6 +4564,9 @@ async function credentialsEditor(detail) {
       org = await api('/api/ui/org/credentials');
       // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
       awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
+      // 커넥터 현황(#746 imp#5) — 기본 카탈로그 × 등록상태
+      catalog = await api('/api/ui/org/connector-catalog').catch(() => ({ catalog: [] }));
+      mcpServers = await api('/api/ui/org/mcp-servers').catch(() => ({ servers: [] }));
     }
   } catch (e: any) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '자격을 불러오지 못했습니다'))); return; }
 
@@ -4273,6 +4576,9 @@ async function credentialsEditor(detail) {
       sectionTitle('자격 (커넥터 로그인)', '커넥터(GitLab·Slack·AWS 등)에 로그인할 내 토큰을 여기 한 번 넣어두면, AI가 나 대신 그 서비스를 읽고 쓸 때 이 자격으로 로그인해요. 토큰은 암호화되어 저장되고 다른 사람에게 보이지 않아요.'),
       encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
   ];
+
+  // 커넥터 현황 개관(#746 imp#4·#5) — 관리자에게 기본 카탈로그의 등록/설정 상태를 한눈에.
+  if (isAdmin) cards.push(catalogStatusCard(catalog.catalog || [], mcpServers.servers || []));
 
   // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
   cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
@@ -4314,6 +4620,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
   const secretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: '' });
   const secretField = field('토큰', secretIn);
   const helpP = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
+  const docLink = el('a', { class: 'admin-hint', target: '_blank', rel: 'noopener', style: 'display:none;margin:4px 0 0' });
   const submit = el('button', { class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
 
@@ -4326,6 +4633,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
     secretIn.placeholder = spec.secretPh || '토큰 값 붙여넣기';
     helpP.textContent = spec.help || '';
     helpP.style.display = spec.help ? '' : 'none';
+    if (spec.docUrl) { docLink.setAttribute('href', spec.docUrl); (docLink as any).textContent = '토큰 발급 페이지 열기 ↗'; docLink.style.display = ''; } else { docLink.style.display = 'none'; }
   };
   kindSel.addEventListener('change', syncKind); syncKind();
 
@@ -4343,7 +4651,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
 
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
     el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ 자격 추가' }),
-    field('서비스', kindSel), scopeField, secretField, helpP,
+    field('서비스', kindSel), scopeField, secretField, helpP, docLink,
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
   return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: title }), ...rows);

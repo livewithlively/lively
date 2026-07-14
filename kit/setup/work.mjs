@@ -8,6 +8,8 @@
 //   5) 그 폴더에서 하네스(claude|codex) 실행
 //  ⚠ 코드(레포/worktree)는 git, 공유폴더만 pull. push 없음(pull-only). 외부 바이너리 의존 없음(node + git 만).
 //  사용: node work.mjs <projectId> [--repo-path <p>] [--worktree] [--branch <b>] [--git-url <u>] [--harness claude|codex] [--no-launch]
+//        node work.mjs <projectId> --pull-only   # 공유폴더만 다시 pull(하네스·레포 provision 없이) — 세션 중 수동 '지금 동기화'
+//        node work.mjs <projectId> --status      # pull 없이 상태만: 마지막 pull·서버 최신·로컬 미반영 파일 수 출력(+sync-status.json 갱신)
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +27,8 @@ function parseArgs(argv) {
     const t = argv[i];
     if (t === "--worktree") a.worktree = true;
     else if (t === "--no-launch") a.launch = false;
+    else if (t === "--pull-only") a.pullOnly = true;   // 공유폴더만 pull 후 종료(하네스·레포 provision 생략)
+    else if (t === "--status") a.status = true;        // pull 없이 동기화 상태만 점검·출력 후 종료(sync-status.json 갱신)
     else if (t === "--repo-path") a.repoPath = argv[++i];
     else if (t === "--git-url") a.gitUrl = argv[++i];
     else if (t === "--branch") a.branch = argv[++i];
@@ -67,29 +71,87 @@ const projDir = path.join(HOME, "lively", "projects", projectId);
 await fsp.mkdir(projDir, { recursive: true });
 
 // ── 2) 공유폴더 pull (매니페스트 diff → 변경분만 다운로드, 단방향·삭제 없음) ──
-async function pullShared() {
-  let manifest;
-  try { manifest = await (await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`)).json(); }
+async function fetchManifest() {
+  try { return await (await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`)).json(); }
   catch (e) { die("공유폴더 매니페스트를 가져오지 못했습니다 — " + e.message + " (프로젝트 멤버인지, 게이트웨이 동작 확인)"); }
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
-  let pulled = 0;
+}
+// 로컬과 매니페스트를 비교해 아직 안 받은(크기·mtime 다른) 파일만 반환 — pull·status 공용.
+function pendingFiles(files) {
+  const out = [];
   for (const f of files) {
     const dest = path.join(projDir, f.path);
     if (path.relative(projDir, dest).startsWith("..")) continue; // 경로 탈출 방어
-    let need = true;
-    try { const st = fs.statSync(dest); if (st.size === f.size && Math.floor(st.mtimeMs) >= f.mtime) need = false; } catch { /* 로컬 없음 → 받기 */ }
-    if (!need) continue;
-    const res = await jfetch(`/api/ui/v6/projects/${projectId}/file?path=${encodeURIComponent(f.path)}`);
-    await fsp.mkdir(path.dirname(dest), { recursive: true });
-    const buf = Buffer.from(await res.arrayBuffer());
-    await fsp.writeFile(dest, buf);
-    if (f.mtime) { try { const t = new Date(f.mtime); fs.utimesSync(dest, t, t); } catch { /* mtime 보존 실패 무해 */ } }
-    pulled++;
+    try { const st = fs.statSync(dest); if (st.size === f.size && Math.floor(st.mtimeMs) >= f.mtime) continue; } catch { /* 로컬 없음 → pending */ }
+    out.push(f);
   }
-  log(`공유폴더 pull: ${pulled}/${files.length} 파일 갱신 → ${projDir}`);
+  return out;
+}
+// sync 상태를 .lively/sync-status.json 에 기록 — 웹/세션이 '동기화 됐나'를 확인하는 표면(#828). best-effort.
+async function writeSyncStatus(status) {
+  try {
+    await fsp.mkdir(path.join(projDir, ".lively"), { recursive: true });
+    await fsp.writeFile(path.join(projDir, ".lively", "sync-status.json"), JSON.stringify(status, null, 2) + "\n");
+  } catch { /* 상태기록 실패는 무해 */ }
+}
+async function pullShared() {
+  const manifest = await fetchManifest();
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const todo = pendingFiles(files);
+  let pulled = 0, failed = 0;
+  for (const f of todo) {
+    const dest = path.join(projDir, f.path);
+    try {
+      const res = await jfetch(`/api/ui/v6/projects/${projectId}/file?path=${encodeURIComponent(f.path)}`);
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+      if (f.mtime) { try { const t = new Date(f.mtime); fs.utimesSync(dest, t, t); } catch { /* mtime 보존 실패 무해 */ } }
+      pulled++;
+    } catch { failed++; } // 개별 파일 실패는 건너뛰고 계속(다음 동기화에서 재시도)
+  }
+  log(`공유폴더 pull: ${pulled}/${todo.length} 파일 갱신 → ${projDir}` + (failed ? ` (실패 ${failed}, 다음 동기화에서 재시도)` : ""));
+  if (manifest.truncated) log("⚠ 서버 매니페스트가 파일 상한에 도달 — 일부 문서가 동기화 목록에서 누락됐을 수 있습니다(관리자 확인 필요).");
+  await writeSyncStatus({
+    at: new Date().toISOString(),
+    server_newest: manifest.newest || 0,
+    server_count: typeof manifest.count === "number" ? manifest.count : files.length,
+    pulled, pending: failed, truncated: !!manifest.truncated,
+  });
   return manifest.newest || 0;
 }
+
+// ── (옵션) --status: 읽기전용 동기화 상태 점검 후 종료 — sync 가시화(#828) ──
+if (args.status) {
+  const manifest = await fetchManifest();
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const pending = pendingFiles(files);
+  let lastPull = 0;
+  try { lastPull = Number(JSON.parse(fs.readFileSync(path.join(projDir, ".lively", "project.json"), "utf8")).last_pull) || 0; } catch { /* 마커 없음 */ }
+  const iso = (ms) => (ms ? new Date(ms).toISOString() : "없음");
+  const serverCount = typeof manifest.count === "number" ? manifest.count : files.length;
+  log(`동기화 상태 — 프로젝트 #${projectId}`);
+  log(`  로컬 폴더        : ${projDir}`);
+  log(`  마지막 pull      : ${iso(lastPull)}`);
+  log(`  서버 최신(newest): ${iso(manifest.newest || 0)}`);
+  log(`  서버 파일 수     : ${serverCount}${manifest.truncated ? "  ⚠ 상한 도달(일부 문서 누락 가능)" : ""}`);
+  log(`  로컬 미반영      : ${pending.length} 파일` + (pending.length ? `  → 'node work.mjs ${projectId} --pull-only' 로 받으세요` : "  (최신)"));
+  await writeSyncStatus({ at: new Date().toISOString(), server_newest: manifest.newest || 0, server_count: serverCount, pulled: 0, pending: pending.length, truncated: !!manifest.truncated });
+  process.exit(0);
+}
+
 const newest = await pullShared();
+
+// ── (옵션) --pull-only: 마커 last_pull 만 갱신(기존 repos/provisioned 보존) 후 종료 — 하네스·레포 provision 생략(#828) ──
+if (args.pullOnly) {
+  const markerPath = path.join(projDir, ".lively", "project.json");
+  let marker = {};
+  try { marker = JSON.parse(fs.readFileSync(markerPath, "utf8")); } catch { /* 신규 */ }
+  marker.project_id = Number(projectId);
+  marker.last_pull = newest;
+  await fsp.mkdir(path.dirname(markerPath), { recursive: true });
+  await fsp.writeFile(markerPath, JSON.stringify(marker, null, 2) + "\n");
+  log(`pull-only 완료 (하네스·레포 provision 생략) → ${projDir}`);
+  process.exit(0);
+}
 
 // ── 3) 코드 레포: repo-path 사용(없으면 clone 폴백) + worktree | add-dir ──
 function git(args, cwd) {

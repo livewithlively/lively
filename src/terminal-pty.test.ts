@@ -1,7 +1,9 @@
-// 순수 단위 체크(node:assert) — control-mode 클라 의도 → tmux 명령 인코더(인젝션·UTF-8·클램프·청크).
+// 순수 단위 체크(node:assert) — control-mode 클라 의도 → tmux 명령 인코더(인젝션·UTF-8·클램프·청크)
+//  + '세션 종료 확답' 판정(#835).
 // 실행: npm run build && node dist/terminal-pty.test.js
 import assert from "node:assert/strict";
 import { inputToSendKeys, resizeToRefresh, captureCmd } from "./terminal-pty.js";
+import { isSessionGoneError } from "./terminal-sessions.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -52,6 +54,31 @@ t("백필 → capture-pane(-N 줄끝 보존), 0..100000 클램프 + 비정상 �
   assert.equal(captureCmd(-1), "capture-pane -peqN -S -0 -E -");
   assert.equal(captureCmd(1e9), "capture-pane -peqN -S -100000 -E -");
   assert.equal(captureCmd(NaN), "capture-pane -peqN -S -0 -E -");
+});
+
+// ── 세션 종료 확답 판정(#835) ──
+// 핵심 비대칭: '종료됨'은 tmux 가 응답해서 없다고 말할 때만. 판정 불가(타임아웃·소켓 접속불가)를 종료로 넘기면
+//  살아있는 세션을 죽었다고 알리게 된다(#687 이 막으려던 오인) → 그 경우들은 전부 false 여야 한다.
+t("tmux 확답 'can't find session' → 종료됨", () => {
+  assert.equal(isSessionGoneError({ code: 1, stderr: "can't find session: box-a-0011ffee\n" }), true);
+});
+
+t("타임아웃(kill/SIGTERM, tmux 과부하 #687) → 종료 아님(판정 불가)", () => {
+  assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "" }), false);
+  // 타임아웃인데 직전 stderr 가 우연히 섞여 들어와도 시그널이 있으면 판정 불가로 본다.
+  assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "can't find session: box-a-0011ffee" }), false);
+});
+
+t("tmux 서버 접속 불가(소켓 없음·no server running) → 종료 아님(판정 불가)", () => {
+  assert.equal(isSessionGoneError({ code: 1, stderr: "error connecting to /private/tmp/tmux-501/default (No such file or directory)" }), false);
+  assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }), false);
+});
+
+t("tmux 실행 자체 실패·알 수 없는 오류 → 종료 아님", () => {
+  assert.equal(isSessionGoneError({ code: "ENOENT", stderr: "" }), false);
+  assert.equal(isSessionGoneError(new Error("boom")), false);
+  assert.equal(isSessionGoneError(null), false);
+  assert.equal(isSessionGoneError(undefined), false);
 });
 
 console.log(`\n${pass} passed`);

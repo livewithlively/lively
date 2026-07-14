@@ -55,6 +55,8 @@ export interface ReclaimEntry {
   kind: EntryKind;
   bytes: number;
   partial: boolean; // 크기 측정이 시간 예산에 걸렸는지
+  /** 심링크인가 — 회수 대상에서 제외한다(아래 §심링크 참조). */
+  symlink?: boolean;
 }
 
 export interface WorktreeCheck {
@@ -172,6 +174,23 @@ export async function checkWorktree(wt: string): Promise<WorktreeCheck> {
   return { removable: true, reason: null, dirty, unpushed, branch };
 }
 
+/** 프로젝트 폴더 안의 git 레포(워크트리) 경로들 — **한 프로젝트에 여러 레포가 붙을 수 있다.**
+ *
+ *  ⚠ 목록·분석·회수가 **모두 이 함수를 써야 한다.** 각자 따로 판정하면 "목록엔 [분석] 버튼이 있는데 누르면
+ *   '레포가 없습니다' 에러" 같은 어긋남이 생긴다(실제로 그랬다 — #845). 판정은 한 곳에서.
+ *
+ *  `.git` 은 **워크트리면 파일**(gitdir 포인터), 일반 클론이면 디렉터리다 — stat 은 둘 다 잡는다.
+ *  레포를 provision 하지 않은 프로젝트 폴더는 여기서 **빈 배열**이 나온다(정상이다 — 회수할 파생물이 없을 뿐,
+ *  에러가 아니다). dev 박스 실측 307개 중 184개가 그런 폴더였다. */
+export async function reposIn(dir: string): Promise<string[]> {
+  const repos: string[] = [];
+  for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+    const p = path.join(dir, name);
+    if (await fsp.stat(path.join(p, ".git")).then(() => true).catch(() => false)) repos.push(p);
+  }
+  return repos.sort();
+}
+
 /** 회수 계획 — **아무것도 지우지 않는다.** 무엇을 지울지/못 지울지와 그 이유만 돌려준다.
  *  activeSessionDirs: 지금 살아있는 세션들의 작업 디렉터리(호출자가 tmux 에서 수집). 이 워크트리 안에 있으면
  *  회수를 통째로 막는다 — 빌드 중인 워크트리의 node_modules 를 지우면 그 세션이 깨진다. */
@@ -190,9 +209,24 @@ export async function planReclaim(
       const m = /^Would remove (.+?)\/?$/.exec(line.trim());
       if (!m || !m[1]) continue;
       const rel = m[1];
+      const abs = path.join(wt, rel);
+
+      // ── §심링크 — **회수하지 않는다.** ──
+      //  ① 크기가 우리 것이 아니다: 심링크는 다른 곳을 가리키므로 이 워크트리가 쓰는 공간은 0 이다.
+      //     (예전엔 dirSize 가 링크를 따라가 대상의 크기를 "회수 가능"으로 **거짓 보고**했다 — 실제 사고.)
+      //  ② 지워도 공간이 안 생긴다: fs.rm 은 심링크를 lstat 으로 판별해 **링크만 unlink** 한다(대상은 무사).
+      //     즉 지워봐야 0바이트 회수하고 남의 의도적 배치만 깨뜨린다.
+      //  → 이름이 node_modules 여도 **심링크면 손대지 않고 '미분류'로 보고**한다(사람이 보고 판단).
+      let symlink = false;
+      try { symlink = (await fsp.lstat(abs)).isSymbolicLink(); } catch { /* 사라졌으면 아래에서 0 */ }
+      if (symlink) {
+        entries.push({ rel, kind: "unclassified", bytes: 0, partial: false, symlink: true });
+        continue;
+      }
+
       const kind = classify(rel);
       const budget = Math.max(0, Math.min(1500, deadline - Date.now()));
-      const { bytes, partial } = await dirSize(path.join(wt, rel), budget);
+      const { bytes, partial } = await dirSize(abs, budget);
       entries.push({ rel, kind, bytes, partial });
     }
   } else {

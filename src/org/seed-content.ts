@@ -56,13 +56,32 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
-  // ── 지식(knowledge) — raw INSERT … ON CONFLICT (name) DO NOTHING (category-less general) ──
+  // ── 지식(knowledge) — 신규는 삽입, **손 안 댄 시드는 갱신**(category-less general) ──
+  //
+  //  ⚠ 시맨틱 변경(#813): 종전엔 `ON CONFLICT (name) DO NOTHING` 이라 **기존 박스는 영원히 옛 본문**이었다.
+  //   실제로 문제가 됐다 — 마무리 루틴에 워크스페이스 회수 스텝을 추가했는데, 이미 뜬 고객 게이트웨이는
+  //   그 스텝을 **영영 못 받아** 아무도 회수를 안 하고 디스크가 계속 찼다(그 릭을 막으려고 만든 도구인데).
+  //   코드가 이름으로 전제하는 런북(#713)은 **코드와 함께 진화**해야 한다 — 코드는 새 도구를 부르는데
+  //   런북은 옛 절차를 가리키면 그 자체가 댕글링이다.
+  //
+  //  그렇다고 무조건 덮어쓰면 원래 취지(운영자 편집 보존)가 깨진다 → **손 안 댄 것만 갱신**한다:
+  //   · `updated_by='system'` = 우리가 심은 뒤 아무도 안 건드림 → 갱신 안전.
+  //   · 운영자·에이전트가 한 번이라도 편집하면 updated_by 가 그 사람 id 로 바뀐다 → **그 행은 영구 보존**.
+  //   · 본문이 실제로 달라질 때만 UPDATE(불필요한 version bump·감사 노이즈 방지).
+  //  훅·스킬은 종전 시맨틱("없을 때만") 유지 — content_hash·토글 상태가 얽혀 있어 별도 판단이 필요하다.
   for (const k of DEFAULT_KNOWLEDGE) {
     try {
       const r = await itemsPool.query(
         `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, is_wiki, type, updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'system')
-         ON CONFLICT (name) DO NOTHING`,
+         ON CONFLICT (name) DO UPDATE
+           SET title = EXCLUDED.title,
+               body_md = EXCLUDED.body_md,
+               is_wiki = EXCLUDED.is_wiki,
+               updated_at = now()
+         WHERE knowledge.updated_by = 'system'
+           AND (knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md
+                OR knowledge.title IS DISTINCT FROM EXCLUDED.title)`,
         [k.name, k.title, k.body_md, k.injection, k.provenance, k.lifecycle, k.is_wiki, k.type]);
       if (r.rowCount) res.knowledge++;
     } catch (err) {

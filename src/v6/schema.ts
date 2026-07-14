@@ -893,8 +893,10 @@ export async function initV6Schema(): Promise<string> {
       title TEXT,
       body_md TEXT NOT NULL DEFAULT '',
       raw JSONB,
+      fields JSONB NOT NULL DEFAULT '{}'::jsonb,
       provenance TEXT NOT NULL DEFAULT 'observed',
       external_system TEXT, external_instance TEXT, external_id TEXT, external_url TEXT,
+      parent_external_id TEXT,
       sync_state JSONB NOT NULL DEFAULT '{}'::jsonb,
       occurred_at TIMESTAMPTZ, last_synced_at TIMESTAMPTZ,
       author TEXT,
@@ -909,6 +911,12 @@ export async function initV6Schema(): Promise<string> {
         ALTER TABLE source ADD CONSTRAINT source_lifecycle_chk CHECK (lifecycle IN ('active','superseded'));
       END IF;
     END $$;
+    -- #735: 커넥터 구조화 메타(채널명·작성자·스레드 등) 보존용. 기존 배포 대상 ALTER(멱등).
+    ALTER TABLE source ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- #735 후속: 스레드/계층 링크(자료 간 관계) — 답글→스레드루트·자식페이지→부모. 전 커넥터가 RawItem.parent_external_id 로 방출.
+    --  external 좌표(system,instance)+parent_external_id 로 조인해 "스레드 답글들"·"페이지 자식들"을 결정적 탐색(resolution 타이밍 무관).
+    ALTER TABLE source ADD COLUMN IF NOT EXISTS parent_external_id TEXT;
+    CREATE INDEX IF NOT EXISTS source_parent_idx ON source(external_system, external_instance, parent_external_id) WHERE parent_external_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS source_name_uq ON source(name) WHERE name IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS source_external_uidx ON source(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS source_kind_idx ON source(kind);

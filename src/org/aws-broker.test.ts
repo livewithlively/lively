@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   assumeRole, roleSessionName, clampDuration, toCredentialProcessJson,
   STS_MIN_DURATION, STS_MAX_DURATION, type StsHttp,
+  fetchImdsBaseCreds, resolveGatewayBaseCreds, __resetImdsCache, type ImdsHttp,
 } from "./aws-broker.js";
 
 let pass = 0;
@@ -86,6 +87,57 @@ await t("assumeRole: STS 에러(403) → 안전 메시지(자격 미노출)", as
 await t("assumeRole: Credentials 누락 응답 → 파싱 실패 throw", async () => {
   const mock: StsHttp = async () => ({ status: 200, body: "<AssumeRoleResponse></AssumeRoleResponse>" });
   await assert.rejects(() => assumeRole({ roleArn: "arn:aws:iam::425515538094:role/r", region: "ap-northeast-2", memberId: "u", baseCreds: base, now: new Date() }, mock), /파싱 실패/);
+});
+
+// ── IMDSv2 베이스-크레드 폴백(#746 imp#4) — mock ImdsHttp 로 실 네트워크 없이 ──
+const imdsOk = (opts?: { code?: string }): ImdsHttp => async (method, path) => {
+  if (method === "PUT" && path === "/latest/api/token") return { status: 200, body: "TOKENVAL" };
+  if (path === "/latest/meta-data/iam/security-credentials/") return { status: 200, body: "my-role\n" };
+  if (path.startsWith("/latest/meta-data/iam/security-credentials/")) {
+    return { status: 200, body: JSON.stringify({ Code: opts?.code ?? "Success", AccessKeyId: "ASIAIMDS", SecretAccessKey: "imdssecret", Token: "imdstoken", Expiration: "2026-07-09T01:00:00Z" }) };
+  }
+  return { status: 404, body: "" };
+};
+
+await t("fetchImdsBaseCreds: IMDSv2 토큰→role→creds (토큰헤더·role경로 확인)", async () => {
+  __resetImdsCache();
+  const calls: { m: string; p: string; h: Record<string, string> }[] = [];
+  const mock: ImdsHttp = async (m, p, h) => { calls.push({ m, p, h }); return imdsOk()(m, p, h); };
+  const c = await fetchImdsBaseCreds(mock);
+  assert.equal(c?.accessKeyId, "ASIAIMDS");
+  assert.equal(c?.sessionToken, "imdstoken");
+  assert.equal(calls[0].m, "PUT");                       // IMDSv2: 토큰 먼저
+  assert.equal(calls[0].p, "/latest/api/token");
+  assert.ok(calls[0].h["X-aws-ec2-metadata-token-ttl-seconds"]);
+  assert.equal(calls[1].h["X-aws-ec2-metadata-token"], "TOKENVAL"); // 이후 GET 에 토큰 헤더
+  assert.ok(calls[2].p.endsWith("/my-role"));
+});
+
+await t("fetchImdsBaseCreds: 비EC2(토큰 획득 실패) → null", async () => {
+  __resetImdsCache();
+  const mock: ImdsHttp = async () => { throw new Error("ECONNREFUSED"); };
+  assert.equal(await fetchImdsBaseCreds(mock), null);
+});
+
+await t("fetchImdsBaseCreds: creds Code!=Success → null(자격 미사용)", async () => {
+  __resetImdsCache();
+  assert.equal(await fetchImdsBaseCreds(imdsOk({ code: "AssumeRoleUnauthorizedAccess" })), null);
+});
+
+await t("resolveGatewayBaseCreds: env 우선 — IMDS 미호출", async () => {
+  __resetImdsCache();
+  process.env.AWS_ACCESS_KEY_ID = "AKIAENV"; process.env.AWS_SECRET_ACCESS_KEY = "envsecret";
+  const never: ImdsHttp = async () => { throw new Error("IMDS should not be called when env present"); };
+  const c = await resolveGatewayBaseCreds(never);
+  assert.equal(c?.accessKeyId, "AKIAENV");
+  delete process.env.AWS_ACCESS_KEY_ID; delete process.env.AWS_SECRET_ACCESS_KEY;
+});
+
+await t("resolveGatewayBaseCreds: env 없으면 IMDS 폴백", async () => {
+  __resetImdsCache();
+  delete process.env.AWS_ACCESS_KEY_ID; delete process.env.AWS_SECRET_ACCESS_KEY;
+  const c = await resolveGatewayBaseCreds(imdsOk());
+  assert.equal(c?.accessKeyId, "ASIAIMDS");
 });
 
 console.log(`\naws-broker tests: ${pass} passed`);

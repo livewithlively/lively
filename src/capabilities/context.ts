@@ -13,7 +13,8 @@ import { productOverview, listProductDomains, listProductDebts, listProductEntit
 import { uiStats } from "../items/store.js";
 import type { Capability } from "./types.js";
 import { DM_KINDS, HttpError } from "./rest-util.js";
-import { refreshSharedRepo } from "../project-provision.js";
+import { refreshSharedRepo, checkGitRemote } from "../project-provision.js";
+import { discoverRepos } from "../org/repo-discover.js";
 
 const enc = encodeURIComponent;
 
@@ -146,6 +147,58 @@ const domainmapProxy: Capability = {
   },
 };
 
+// 레포 발견(#825) — 관리탭 '레포 추가' 드롭다운. 저장된 토큰(API 전용 토큰 → git HTTPS 자격 순)으로 호스트가
+//  가진 레포를 조회한다. 커넥터 스코프 픽커(#586)의 git 판 — id/URL 복붙을 없앤다. 미지원 호스트(SSH 뿐 등)는
+//  빈 목록 + note 로 안내하고 폼은 텍스트 입력으로 그대로 동작한다(드롭다운은 제안이지 제약이 아니다).
+//  scope=context: 레포 편집 권한(관리탭 CONTEXT_EDIT)과 같은 게이트 — 픽커만 admin 이면 편집 가능한 사람이 403 을 본다.
+const repoDiscover: Capability = {
+  name: "repo_discover",
+  title: "레포 목록 조회(픽커)",
+  description:
+    "저장된 자격으로 git 호스트가 가진 레포 목록을 조회한다 — 관리탭 '레포 추가' 드롭다운용. 조회 토큰은 " +
+    "member_secret(gitlab_pat|github_pat, scope_key=host) 우선, 없으면 git_credential 의 HTTPS 토큰을 재사용한다. " +
+    "⚠ SSH 자격뿐인 호스트는 목록 조회가 원천적으로 불가능하다(SSH 키를 받는 REST API 가 없다) — 빈 목록 + 안내를 반환하니 " +
+    "git 주소를 직접 입력하면 된다. 반환 {options:[{host,name,full_path,http_url,ssh_url,default_branch,private}],hosts,note}.",
+  scope: "context",
+  input: { host: z.string().trim().max(253).optional().describe("특정 호스트만 조회(생략하면 자격이 있는 전 호스트)") },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/repos/discover"],
+      parse: (req) => {
+        const h = (req.body ?? {}).host;
+        return h ? { host: String(h).trim() } : {};
+      },
+    }],
+  },
+  handler: async (input: { host?: string }, user) => discoverRepos(user?.userId ?? null, input.host ?? null),
+};
+
+// git 주소 연결 확인(#825) — 저장 전에 ls-remote 로 접근 가능 여부 + 실제 기본 브랜치를 확인한다.
+//  드롭다운이 못 덮는 구간(SSH 전송·API 토큰 없는 셀프호스팅)을 메꾼다.
+//  mcp:false — repo_set_source 와 같은 스탠스(레포 큐레이션은 사람의 웹 표면). 임의 URL 로 git 을 spawn 하므로
+//  에이전트에게 열지 않는다(같은 URL 을 등록하면 스캐너가 어차피 클론하니 새 위협은 아니지만, 표면은 좁게).
+const repoCheck: Capability = {
+  name: "repo_check",
+  title: "레포 git 주소 연결 확인",
+  description:
+    "git 주소에 ls-remote 를 걸어 실제로 접근되는지와 원격의 실제 기본 브랜치를 확인한다(클론 없이). " +
+    "자격 해소는 클론과 동일 체인(요청 멤버 → 게이트웨이 폴백)이라 여기서 통과하면 provision 클론도 통과한다. " +
+    "반환 {ok,host,default_branch,branches,auth_error,detail} — 시크릿·원격 URL 은 응답에 싣지 않는다.",
+  scope: "context",
+  input: { git_url: z.string().trim().min(1).max(500) },
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/repos/check"],
+      parse: (req) => ({ git_url: String((req.body ?? {}).git_url ?? "").trim() }),
+    }],
+  },
+  handler: async (input: { git_url: string }, user) => checkGitRemote(input.git_url, user?.userId ?? null),
+};
+
 export const contextCapabilities: Capability[] = [
-  repoList, repoRefresh, contextOverview, debtList, domainmapProxy,
+  repoList, repoRefresh, repoDiscover, repoCheck, contextOverview, debtList, domainmapProxy,
 ];

@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { planReclaim, applyReclaim, checkWorktree, isInside, DERIVED_NAMES, PROTECTED_NAMES } from "./workspace-reclaim.js";
+import { planReclaim, applyReclaim, checkWorktree, isInside, reposIn, DERIVED_NAMES, PROTECTED_NAMES } from "./workspace-reclaim.js";
 
 const exec = promisify(execFile);
 const git = (args: string[], cwd: string) => exec("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -28,8 +28,10 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await git(["config", "user.email", "t@t"], dir);
   await git(["config", "user.name", "t"], dir);
   await git(["remote", "add", "origin", remote], dir);
-  // gitignore: 파생물 + 시크릿/로컬데이터(현실 그대로 — 둘 다 gitignored 다)
-  await fsp.writeFile(path.join(dir, ".gitignore"), "node_modules/\nbuild/\ndist/\n.env\ndata/\nweird-cache/\n");
+  // gitignore: 파생물 + 시크릿/로컬데이터(현실 그대로 — 둘 다 gitignored 다).
+  // ⚠ `node_modules` 는 **슬래시 없이** — 실제 레포(context-ontology/.gitignore:1)와 동일. 슬래시를 붙이면
+  //  디렉터리만 매치해 **심링크가 안 잡히고**, 그러면 심링크 회귀 테스트가 조용히 무력해진다(실제로 겪음).
+  await fsp.writeFile(path.join(dir, ".gitignore"), "node_modules\nbuild/\ndist/\n.env\ndata/\nweird-cache/\n");
   await fsp.writeFile(path.join(dir, "src.txt"), "source");
   await git(["add", "-A"], dir);
   await git(["commit", "-m", "init"], dir);
@@ -151,6 +153,40 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await fsp.rm(path.dirname(dir), { recursive: true, force: true });
 }
 
+// ── ⚠ 심링크: 회수 대상이 되면 안 된다 (실제 사고 회귀, 2026-07-13) ──
+//  실사고: 누가 워크트리의 node_modules 를 **라이브 게이트웨이의 node_modules 로 가는 심링크**로 걸어뒀는데,
+//   dirSize 가 링크를 따라가 대상 크기(224MB)를 "회수 가능"으로 **거짓 보고**했다.
+//   ("라이브 의존성을 지울 뻔했다"고 알려졌으나, 실측하니 fs.rm 은 심링크를 lstat 으로 판별해 **링크만 unlink**
+//    한다 — 대상은 무사했다. 즉 데이터 손실 위험은 없었고 **거짓 회수량 보고**가 진짜 결함이었다.)
+//  어느 쪽이든 심링크는 지워봐야 0바이트 회수하고 남의 의도적 배치만 깨뜨린다 → 손대지 않고 '미분류'로 보고한다.
+{
+  const { dir } = await makeRepo();
+  const outside = path.join(path.dirname(dir), "LIVE_node_modules"); // 워크트리 '밖'의 라이브 의존성
+  await fsp.mkdir(outside, { recursive: true });
+  await fsp.writeFile(path.join(outside, "live.js"), "x".repeat(100000));
+  await fsp.symlink(outside, path.join(dir, "node_modules"), "dir");
+  // 대조군 — 진짜 파생물은 회수돼야 한다.
+  await fsp.mkdir(path.join(dir, "dist"), { recursive: true });
+  await fsp.writeFile(path.join(dir, "dist", "o"), "x".repeat(3000));
+
+  const plan = await planReclaim(dir);
+  const nm = plan.entries.find((e) => e.rel === "node_modules");
+  assert.ok(nm, "심링크도 후보 목록엔 보여야 한다(사람이 알아채게)");
+  assert.equal(nm.kind, "unclassified", "⚠ 심링크가 derived 로 잡히면 지워진다 — 반드시 미분류여야 한다");
+  assert.equal(nm.symlink, true, "심링크임을 표시해야 왜 안 지워지는지 안다");
+  assert.equal(nm.bytes, 0, "⚠ 심링크 대상의 크기를 우리 것인 양 보고하면 안 된다(거짓 회수량 = 실제 사고 원인)");
+
+  assert.ok(plan.reclaimableBytes < 100_000, `회수 가능량에 심링크 대상 크기가 섞였다: ${plan.reclaimableBytes}`);
+  assert.ok(plan.reclaimableBytes >= 3000, "진짜 파생물(dist)은 회수 가능량에 잡혀야 한다");
+
+  await applyReclaim(plan);
+  assert.ok(fs.existsSync(path.join(dir, "node_modules")), "⚠ 심링크를 지웠다 — 남의 의도적 배치를 깨뜨린다");
+  assert.ok(fs.existsSync(path.join(outside, "live.js")), "⚠⚠ 심링크 대상(라이브 의존성)이 지워졌다 — 데이터 손실!");
+  assert.ok(!fs.existsSync(path.join(dir, "dist")), "진짜 파생물은 회수돼야 한다");
+
+  await fsp.rm(path.dirname(dir), { recursive: true, force: true });
+}
+
 // ── 경로 포함 판정: /a/b 와 /a/bc 를 헷갈리면 안 된다 ──
 {
   assert.equal(isInside("/a/b/c", "/a/b"), true);
@@ -166,4 +202,37 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   }
 }
 
-console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 미푸시·더티·활성세션이면 거부");
+// ── reposIn: 레포 탐지 (#845) ──────────────────────────────────────────────────
+//  이 판정이 목록·분석·회수에서 갈리면 "목록엔 [분석] 버튼이 있는데 누르면 '레포가 없습니다' 에러"가 난다.
+//  실제로 그랬다 — dev 박스 307개 폴더 중 184개가 레포 없는 껍데기였고, 관리탭은 거기에도 버튼을 달았다.
+{
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "reposin-"));
+
+  // ① 레포를 provision 하지 않은 프로젝트 폴더 = 껍데기. **에러가 아니라 빈 배열**이어야 한다.
+  const shell = path.join(root, "shell");
+  await fsp.mkdir(shell, { recursive: true });
+  await fsp.mkdir(path.join(shell, ".lively"), { recursive: true });
+  await fsp.writeFile(path.join(shell, "AGENTS.md"), "# agents");
+  assert.deepEqual(await reposIn(shell), [], "레포 없는 폴더는 빈 배열(에러가 아니다 — 회수할 게 없을 뿐)");
+
+  // ② 없는 폴더도 던지지 않는다(고아 폴더가 그새 사라졌을 수 있다).
+  assert.deepEqual(await reposIn(path.join(root, "nope")), [], "없는 폴더는 빈 배열");
+
+  // ③ 워크트리(.git = **파일**)와 일반 클론(.git = **디렉터리**)을 **둘 다** 잡아야 한다.
+  //    워크트리의 .git 은 gitdir 포인터 파일이라, isDirectory() 로 판정하면 워크트리를 통째로 놓친다.
+  const proj = path.join(root, "proj");
+  const asWorktree = path.join(proj, "repo-worktree");
+  const asClone = path.join(proj, "repo-clone");
+  const notRepo = path.join(proj, "uploads"); // 스크린샷·업로드 등 — 레포가 아니다
+  for (const d of [asWorktree, asClone, notRepo]) await fsp.mkdir(d, { recursive: true });
+  await fsp.writeFile(path.join(asWorktree, ".git"), "gitdir: /somewhere/.git/worktrees/x\n"); // 파일
+  await fsp.mkdir(path.join(asClone, ".git"), { recursive: true }); // 디렉터리
+  await fsp.writeFile(path.join(notRepo, "shot.png"), "x");
+
+  const found = await reposIn(proj);
+  assert.deepEqual(found, [asClone, asWorktree].sort(), "워크트리(.git 파일)와 일반 클론(.git 디렉터리) 둘 다 — 레포 아닌 폴더는 제외");
+
+  await fsp.rm(root, { recursive: true, force: true });
+}
+
+console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 미푸시·더티·활성세션이면 거부 · reposIn(워크트리=.git파일/클론=.git디렉터리 둘 다, 껍데기는 빈 배열)");

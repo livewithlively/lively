@@ -96,41 +96,7 @@ export function isDiskFullText(text: string | undefined | null): boolean {
   return !!text && ENOSPC_TEXT.test(text);
 }
 
-// ── 주기 점검 + 임계 전이 경보 ──────────────────────────────────────────
-// 알림 채널(슬랙·메일)이 아직 없다 → **전이 시점에만** 큰 소리로 로그하고(중복 스팸 금지), 관리탭·/readyz 가 상태를
-//  보여준다. 채널이 생기면 여기 notify() 한 줄만 붙이면 된다.
-let lastLevel: Level | null = null;
-let timer: NodeJS.Timeout | null = null;
-const CHECK_MS = Number(process.env.DISK_CHECK_INTERVAL_MS ?? 5 * 60_000);
-
-export function startDiskWatch(
-  paths: () => string[],
-  loadThresholds: () => Promise<Thresholds>,
-): void {
-  if (timer) return;
-  const tick = async (): Promise<void> => {
-    try {
-      invalidateDiskState(); // 감시는 항상 새로 잰다(캐시된 옛값으로 경보하면 의미 없다)
-      const st = await diskState(paths(), await loadThresholds());
-      if (!st) return;
-      if (st.level !== lastLevel) {
-        // 전이할 때만 소리를 낸다 — 5분마다 같은 경고를 찍으면 로그가 차고(그 자체가 L3 릭) 아무도 안 본다.
-        const line = { usedPct: st.usedPct, availBytes: st.availBytes, path: st.path, from: lastLevel, to: st.level };
-        if (st.level === "critical") logger.error(line, "디스크 위험 — 신규 세션·클론·업로드를 차단합니다. 즉시 정리 필요");
-        else if (st.level === "warn") logger.warn(line, "디스크 경고 — 정리가 필요합니다(관리 ▸ 저장소·로그)");
-        else logger.info(line, "디스크 정상 복귀");
-        lastLevel = st.level;
-      }
-    } catch (err) {
-      logger.warn({ err }, "디스크 감시 tick 실패");
-    }
-  };
-  timer = setInterval(() => { void tick(); }, CHECK_MS);
-  timer.unref?.();
-  void tick(); // 부팅 직후 1회 — 이미 위험한 상태로 뜬 박스를 다음 주기까지 방치하지 않는다
-}
-
-export function stopDiskWatch(): void {
-  if (timer) { clearInterval(timer); timer = null; }
-  lastLevel = null;
-}
+// ── 주기 감시는 box-watch.ts 로 이관(#813) ──────────────────────────────
+// 여기서 로그만 찍던 것을, 이제 **디스크 + DB 를 함께 보고 등록된 웹훅으로 밀어서 알리는** box-watch 가 맡는다.
+//  (이 파일은 '가드'와 '상태 조회'만 — 감시·경보는 box-watch 의 책임이다.)
+// 남은 stopDiskWatch/startDiskWatch 는 없다: src/box-watch.ts 의 startBoxWatch 를 쓴다.

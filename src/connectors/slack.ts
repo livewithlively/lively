@@ -93,6 +93,8 @@ export interface SlackUser {
 // toRawItem 에 넘기는 컨텍스트 — 변환을 네트워크와 분리하기 위한 순수 입력.
 export interface SlackToRawItemCtx {
   channel: string; // 채널 id (container_ref)
+  channelName?: string; // 채널 표시명(#735 — search match channel.name). container_name 으로 보존(지식화 맥락).
+  channelPrivate?: boolean; // 비공개 채널 여부(맥락/민감도 라벨) → fields.channel_is_private.
   instance: string; // 워크스페이스/팀 식별자 (provenance.instance)
   teamDomain?: string; // 딥링크용 <team>.slack.com 의 <team>. 없으면 딥링크 생략.
   /** user id → 표시이름/이메일 해소 맵 (네트워크 없이 주입). */
@@ -103,7 +105,7 @@ export interface SlackToRawItemCtx {
 
 // ── 순수 변환: 원본 메시지 1건 → RawItem (네트워크 없음, 단위테스트 대상) ──────
 export function toRawItem(msg: SlackMessage, ctx: SlackToRawItemCtx): RawItem {
-  const { channel, instance, teamDomain, userMap, explicitUrl } = ctx;
+  const { channel, instance, teamDomain, userMap, explicitUrl, channelName, channelPrivate } = ctx;
 
   // external_id: system+instance 내에서 안정·고유. 채널 + ts 조합.
   const external_id = `${channel}:${msg.ts}`;
@@ -151,6 +153,7 @@ export function toRawItem(msg: SlackMessage, ctx: SlackToRawItemCtx): RawItem {
         }
       : undefined,
     container_ref: channel,
+    container_name: channelName,
     parent_external_id,
     // 메시지엔 별도 제목이 없다. 본문 첫 줄을 짧게 잘라 제목 보조로 둔다.
     title: deriveTitle(msg.text),
@@ -159,6 +162,7 @@ export function toRawItem(msg: SlackMessage, ctx: SlackToRawItemCtx): RawItem {
     updated_at,
     fields: {
       ts: msg.ts,
+      channel_is_private: channelPrivate,
       thread_ts: msg.thread_ts,
       subtype: msg.subtype,
       reply_count: msg.reply_count,
@@ -428,6 +432,8 @@ function searchMatchToRawItem(m: SearchMatch, base: SweepBase): RawItem | null {
   };
   return toRawItem(msg, {
     channel,
+    channelName: c.name,
+    channelPrivate: c.is_private,
     instance: base.instance,
     teamDomain: base.teamDomain,
     userMap: base.userMap,

@@ -26,13 +26,14 @@ import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
 import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
+// 경보 알림(#813) — 웹훅 URL 은 시크릿이라 값이 응답·감사에 절대 나가지 않는다(alerts.ts 머리주석 참조).
+import { loadAlertChannel, saveAlertChannel, removeAlertChannel, sendTestAlert } from "../alerts.js";
 // 워크스페이스 사용량(#813 T3-2 백스톱) — 프로젝트별로 얼마나 쌓였나. 회수 실행은 workspace_reclaim 이 한다.
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR } from "../project-fs.js";
-import { dirSizesFast, isInside } from "../workspace-reclaim.js";
+import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } from "../project-fs.js";
+import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
-import { getProject as getV6Project } from "../v6/project-store.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, runPublish } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -57,6 +58,7 @@ import {
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
+import { DEFAULT_CONNECTORS } from "../org/connector-catalog.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
@@ -250,6 +252,119 @@ function parseAssetFrontmatter(raw: unknown): Record<string, unknown> {
   }
   return out;
 }
+
+// 워크스페이스에서 **주소의 단위는 폴더다 — 프로젝트 id 가 아니다.**
+//
+//  ⚠ 이걸 id 로 잡으면 두 부류가 통째로 사라진다(#845 에서 실제로 겪음):
+//   ① **이름 기반 폴더**(2026-06-25 이전 규칙): `project/라이블리 웹사이트 빌드-4` 처럼 폴더명이 **프로젝트 이름**이다.
+//      dev 박스에 74개(136MB) 있고 그중 **12개는 지금도 살아있는 프로젝트**다. 폴더명이 숫자가 아니라는 이유로
+//      DB 조회를 건너뛰면 **살아있는 프로젝트를 '고아'로 오분류**하고, id 로 주소를 잡는 API 는 아예 못 건드린다.
+//   ② **고아 폴더**: 프로젝트를 지워도 폴더는 안 지워진다. id 로 DB 를 먼저 조회하는 API 는 404 로 죽는다.
+//
+//  → 폴더(`project/<x>` · `legacy-project/<x>`)를 그대로 받고, **프로젝트는 폴더로 역조회**한다(있으면 라벨, 없으면 고아).
+//  경로 안전은 projectAbsPath 가 강제한다(범위 이탈·`..` 탈출 차단). 여기에 **한 세그먼트**만 허용을 더 건다.
+const FOLDER_RE = new RegExp(`^(?:${PROJECT_SUBDIR}|${LEGACY_SUBDIR})/[^/\\\\]+$`);
+
+interface FolderProject { id: number; name: string; status: string | null }
+
+// 폴더 → 프로젝트. **한 방 쿼리**다 — 예전엔 폴더마다 getV6Project 를 불러 300번씩 왕복했다(관리탭이 느렸던 이유).
+async function projectsByFolder(): Promise<Map<string, FolderProject>> {
+  const r = await itemsPool.query<{ id: number; name: string; status: string | null; folder: string }>(
+    "SELECT id, name, status, folder FROM project WHERE folder IS NOT NULL");
+  const m = new Map<string, FolderProject>();
+  for (const row of r.rows) m.set(row.folder.replace(/^[/\\]+/, ""), { id: row.id, name: row.name, status: row.status });
+  return m;
+}
+
+// 회수 대상 폴더 목록을 받아 계획(또는 적용)한다. analyze/reclaim 이 같은 코드를 쓰므로 **본 것과 지우는 것이 갈리지 않는다.**
+async function planOrApply(
+  folders: string[], user: LivelyUser, opts: { apply: boolean; removeWorktree: boolean },
+): Promise<{ projects: unknown[]; total_reclaimable_bytes: number; total_freed_bytes: number }> {
+  if (!Array.isArray(folders) || !folders.length) throw new HttpError(400, "folders 가 필요합니다");
+  if (folders.length > 40) throw new HttpError(400, "한 번에 최대 40개까지 — 나눠서 호출하세요(오래 걸리면 프록시가 끊습니다)");
+  for (const f of folders) {
+    if (typeof f !== "string" || !FOLDER_RE.test(f)) {
+      throw new HttpError(400, `잘못된 folder: ${String(f)} — '${PROJECT_SUBDIR}/<이름>' 또는 '${LEGACY_SUBDIR}/<이름>' 한 단계만 허용됩니다`);
+    }
+  }
+
+  // 활성 세션 조회 실패 시 **회수를 중단**한다 — '활성 없음'으로 낙관하면 빌드 중인 워크트리를 깨뜨린다.
+  //  (분석[dry-run]은 아무것도 안 지우므로 빈 목록으로 계속해도 안전하다.)
+  let activeSessionDirs: string[] = [];
+  try {
+    activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
+  } catch {
+    if (opts.apply) throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+  }
+
+  const pmap = await projectsByFolder();
+  const projects: unknown[] = [];
+  let totalReclaimable = 0;
+  let totalFreed = 0;
+  for (const folder of folders) {
+    const dir = projectAbsPath(folder); // 범위 이탈이면 여기서 400
+    const p = pmap.get(folder) ?? null;
+    const label = { folder, project_id: p?.id ?? null, name: p?.name ?? folder.split("/").pop(), orphan: !p, dir };
+    if (!await fsp.stat(dir).then((s) => s.isDirectory()).catch(() => false)) {
+      projects.push({ ...label, skipped: "워크스페이스 폴더가 없습니다" });
+      continue;
+    }
+    const repos = await reposIn(dir);
+    if (!repos.length) { projects.push({ ...label, repos: 0, reclaimable_bytes: 0, freed_bytes: 0, results: [] }); continue; }
+
+    const results = [];
+    let reclaimable = 0;
+    let freed = 0;
+    for (const wt of repos) {
+      const plan = await planReclaim(wt, { activeSessionDirs });
+      const applied = opts.apply
+        ? await applyReclaim(plan, { removeWorktree: opts.removeWorktree, repoRoot: await baseRepoOf(wt) })
+        : null;
+      reclaimable += plan.reclaimableBytes;
+      freed += applied?.freedBytes ?? 0;
+      results.push({
+        worktree: wt,
+        reclaimable_bytes: plan.reclaimableBytes,
+        derived: plan.entries.filter((e) => e.kind === "derived").map((e) => ({ path: e.rel, bytes: e.bytes })),
+        active_session: plan.active_session,
+        worktree_removable: plan.worktree_check.removable,
+        worktree_reason: plan.worktree_check.reason,
+        applied,
+      });
+    }
+    totalReclaimable += reclaimable;
+    totalFreed += freed;
+    projects.push({ ...label, repos: repos.length, reclaimable_bytes: reclaimable, freed_bytes: freed, results });
+  }
+  return { projects, total_reclaimable_bytes: totalReclaimable, total_freed_bytes: totalFreed };
+}
+
+const FOLDERS_IN = z.array(z.string().min(1).max(300)).min(1).max(40)
+  .describe("워크스페이스 폴더 (예 'project/845'·'legacy-project/612'·'project/라이블리 웹사이트 빌드-4'). 최대 40개 — GET /api/ui/org/workspace 의 folder 값을 그대로 쓴다");
+
+const workspaceBatchCapabilities = (): Capability[] => [
+  restOnly("org_workspace_analyze", "워크스페이스 일괄 분석(dry-run)",
+    "주어진 폴더들의 회수 가능량을 한 번에 계산한다 — **아무것도 지우지 않는다.** " +
+    "**프로젝트 id 가 아니라 폴더**로 지정하므로, DB 에서 삭제된 고아 폴더와 이름 기반 옛 폴더도 다룬다(프로젝트별 REST 는 404 로 죽는다). " +
+    "⚠ 한 번에 최대 40개 — 더 많으면 나눠서 호출한다(du 가 오래 걸리면 프록시가 끊는다). admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/workspace/analyze"], parse: (req) => ({ ...(req.body ?? {}) }) }],
+    async (input: { folders: string[] }, user: LivelyUser) =>
+      ({ dry_run: true, ...await planOrApply(input.folders, user, { apply: false, removeWorktree: false }) }),
+    { folders: FOLDERS_IN }),
+
+  restOnly("org_workspace_reclaim", "워크스페이스 일괄 회수",
+    "주어진 폴더들에서 **재생성 가능한 파생물만** 실제로 지운다(node_modules·build·target·.gradle…). " +
+    "소스·커밋·.env·data/ 는 절대 지우지 않고, 활성 세션이 붙어 있으면 그 폴더는 건너뛴다. " +
+    "remove_worktree=true 여도 **푸시 완료 + 더티 없음**인 워크트리만 제거한다(아니면 이유를 남기고 유지). " +
+    "고아 폴더·이름 기반 옛 폴더도 회수한다. ⚠ 한 번에 최대 40개. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/workspace/reclaim"], parse: (req) => ({ ...(req.body ?? {}) }) }],
+    async (input: { folders: string[]; remove_worktree?: boolean }, user: LivelyUser) =>
+      ({ dry_run: false, ...await planOrApply(input.folders, user, { apply: true, removeWorktree: !!input.remove_worktree }) }),
+    {
+      folders: FOLDERS_IN,
+      remove_worktree: z.boolean().optional().describe("워크트리까지 제거(푸시 완료·클린일 때만 — 아니면 유지하고 이유를 남긴다)"),
+    }),
+];
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
@@ -906,6 +1021,50 @@ export const deliveryCapabilities: Capability[] = [
   // ── 저장소·로그(#813) 상태 — 박스 디스크 사용률 + 로그 크기 + 유효 정책·출처. ──
   //  왜 필요한가: 고객 박스는 우리가 SSH 로 못 들어간다. 디스크가 차면 Postgres 가 죽고 전 기능이 500 이 되는데
   //  (2026-07-13 사고) 그걸 볼 창구가 없었다. 관리탭이 그 창구다.
+  // ── 경보 알림 채널(#813) — 박스가 위험해졌을 때 **사람에게 실제로 닿는** 경로. ──
+  //  T5 로 가드는 넣었지만 그 사실을 아무도 모른다(로그는 안 보고, 관리탭·/readyz 는 가서 봐야 안다).
+  //  ⚠ 웹훅 URL 은 시크릿이다 — **값을 응답에 절대 싣지 않는다**(configured 불리언만). 저장은 암호화(alerts.ts).
+  restOnly("org_alert_status", "경보 알림 설정",
+    "박스 경보(디스크 위험·DB 다운)를 보낼 웹훅 설정 상태. **URL 값은 반환하지 않는다**(설정 여부만). admin 전용.",
+    [{ method: "GET", paths: ["/api/ui/org/alert"], parse: () => ({}) }],
+    async () => loadAlertChannel()),
+
+  restOnly("org_alert_set", "경보 알림 설정 저장",
+    "경보 웹훅을 등록/변경한다(슬랙·디스코드 incoming webhook 또는 임의 JSON 웹훅). url 을 비워 보내면 **미변경**(기존 유지). min_severity=warn|critical. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      // ⚠ url 은 감사·로그에 남기지 않는다(시크릿). redactDeep 은 URL 패턴을 안 잡으므로 감사 스냅샷에 넣으면 그대로 샌다.
+      const url = input.url === undefined || input.url === null ? "" : str(input.url, "url", 2000);
+      const label = input.label === undefined || input.label === null ? null : str(input.label, "label", 100);
+      try {
+        return { alert: await saveAlertChannel({ url, min_severity: input.min_severity, label }, user.userId) };
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : "경보 설정을 저장하지 못했습니다");
+      }
+    }),
+
+  restOnly("org_alert_delete", "경보 알림 해제",
+    "등록된 경보 웹훅을 삭제한다. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert/delete"], parse: () => ({}) }],
+    async () => ({ removed: await removeAlertChannel(), alert: await loadAlertChannel() })),
+
+  restOnly("org_alert_test", "경보 알림 테스트 전송",
+    "지금 등록된 웹훅으로 테스트 경보를 1건 보낸다. **설정이 실제로 닿는지 확인하는 유일한 방법** — 저장만 하고 안 보내보면 정작 장애 때 안 온다. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/alert/test"], parse: () => ({}) }],
+    async () => {
+      const ch = await loadAlertChannel();
+      if (!ch.configured) throw new HttpError(400, "웹훅이 등록돼 있지 않습니다");
+      // min_severity 게이트를 우회해 **무조건** 보낸다 — 테스트인데 임계 때문에 안 가면 확인이 안 된다.
+      const r = await sendTestAlert({
+        severity: "ok",
+        title: "테스트 경보 — 라이블리 게이트웨이",
+        text: "이 메시지가 보이면 경보 채널이 정상입니다. 실제 경보는 디스크 위험·DB 다운 등 상태가 바뀔 때만 옵니다(같은 상태를 반복 발송하지 않습니다).",
+        detail: { test: true },
+      });
+      if (!r.sent) throw new HttpError(502, `전송 실패 — ${r.reason ?? "알 수 없는 오류"}`);
+      return { sent: true };
+    }),
+
   restOnly("org_storage_status", "저장소·로그 상태",
     "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치)과 그 출처. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
@@ -952,34 +1111,40 @@ export const deliveryCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       // 진행 중(project/) + 완료 보관(legacy-project/) 둘 다 — done 처리는 폴더를 **이동**할 뿐 지우지 않는다.
       const roots = [
-        { kind: "active", dir: path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR) },
-        { kind: "archived", dir: path.join(PROJECT_SHARED_BASE, LEGACY_SUBDIR) },
+        { kind: "active", sub: PROJECT_SUBDIR, dir: path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR) },
+        { kind: "archived", sub: LEGACY_SUBDIR, dir: path.join(PROJECT_SHARED_BASE, LEGACY_SUBDIR) },
       ];
       let sessionDirs: string[] = [];
       try { sessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean); } catch { /* 세션 조회 실패 → 활성표시만 비움 */ }
 
       interface WsItem {
-        project_id: number | null; name: string; status: string | null; kind: string;
+        folder: string; project_id: number | null; name: string; status: string | null; kind: string;
         dir: string; bytes: number | null; last_used: number; active_session: boolean;
+        repos: number; orphan: boolean;
       }
       // 후보 디렉터리를 먼저 모아 **du 를 한 번만** 부른다(프로젝트가 수백 개라 개별 호출하면 페이지가 몇 초 멈춘다).
-      const found: { dir: string; name: string; kind: string; mtimeMs: number }[] = [];
+      const found: { dir: string; name: string; sub: string; kind: string; mtimeMs: number }[] = [];
       for (const root of roots) {
         for (const name of await fsp.readdir(root.dir).catch(() => [] as string[])) {
           const dir = path.join(root.dir, name);
           const st = await fsp.stat(dir).catch(() => null);
           if (!st?.isDirectory()) continue;
-          found.push({ dir, name, kind: root.kind, mtimeMs: st.mtimeMs });
+          found.push({ dir, name, sub: root.sub, kind: root.kind, mtimeMs: st.mtimeMs });
         }
       }
       const sizes = await dirSizesFast(found.map((f) => f.dir));
+      // ⚠ 프로젝트는 **폴더로** 역조회한다(id 로 하지 않는다). 폴더명이 숫자라는 보장이 없다 — 2026-06-25 이전
+      //  규칙은 폴더명이 **프로젝트 이름**이고(dev 박스 74개), 그중 12개는 지금도 살아있다. 숫자만 조회하면
+      //  그 12개를 '고아'로 오분류하고 목록에서 놓친다. 한 방 쿼리라 폴더마다 왕복하던 것보다 빠르기도 하다.
+      const pmap = await projectsByFolder();
 
       const items: WsItem[] = [];
       for (const f of found) {
-        const id = Number(f.name);
-        const project = Number.isInteger(id) && id > 0 ? await getV6Project(id).catch(() => null) : null;
+        const folder = `${f.sub}/${f.name}`;
+        const project = pmap.get(folder) ?? null;
         items.push({
-          project_id: Number.isInteger(id) ? id : null,
+          folder, // ← 회수 API 의 주소. project_id 는 라벨일 뿐이다(없을 수도 있다).
+          project_id: project?.id ?? null,
           name: project?.name ?? f.name,
           status: project?.status ?? null,
           kind: f.kind,
@@ -987,12 +1152,34 @@ export const deliveryCapabilities: Capability[] = [
           bytes: sizes.get(f.dir) ?? null,
           last_used: Math.round(f.mtimeMs / 1000), // 마지막으로 무언가 쓰인 시각(오래된 것부터 정리 판단)
           active_session: sessionDirs.some((d) => isInside(d, f.dir)),
+          // ⚠ 아래 두 필드가 없으면 UI 가 **회수할 게 없는 폴더에도 [분석] 버튼**을 달고, 누르면 에러가 난다(#845).
+          //  실측(dev 박스): 308개 중 191개가 레포 없는 껍데기. 목록의 다수가 '눌러봐야 에러'였다.
+          repos: (await reposIn(f.dir)).length, // 0 = 회수할 파생물이 없다(정상 — provision 안 한 프로젝트)
+          orphan: !project, // DB 에 프로젝트가 없다(삭제됨) — 폴더만 남았다. 폴더 기준 API 만이 이걸 회수할 수 있다.
         });
       }
       items.sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0));
       const total = items.reduce((sum, i) => sum + (i.bytes ?? 0), 0);
       return { root: PROJECT_SHARED_BASE, total_bytes: total, projects: items };
     }),
+
+  // ── 워크스페이스 일괄 분석·회수 (#845) ─────────────────────────────────────────────
+  //
+  //  왜 프로젝트별 REST(POST /v6/projects/:id/reclaim) 로 안 되나 — 두 가지 때문이다:
+  //   ① **고아 폴더.** 프로젝트를 지워도 워크스페이스 폴더는 안 지워진다. 그 REST 는 DB 프로젝트를 먼저 조회해
+  //      404 로 죽으므로 **영영 회수할 수 없는 사각지대**가 된다(dev 박스 실측: 고아 57개, 그중 8개가 워크트리 보유).
+  //      여기(admin)는 **폴더를 기준**으로 풀기 때문에 고아도 다룬다. 고아는 프로젝트 멤버십을 물을 수 없으니
+  //      **admin scope 가 유일하게 옳은 자리**다(restOnly = admin).
+  //   ② **일괄.** 8GB 가 어디 있는지 알려고 123번 클릭할 수는 없다.
+  //
+  //  ⚠ **한 요청에 전부 넣지 마라.** du 가 수 GB 를 훑느라 수십 초가 걸리면 프록시가 504 로 끊는다(#600 에서 겪음).
+  //   그래서 이 API 는 **호출자가 준 id 목록만** 처리하고, 웹 UI 가 청크로 끊어 부르며 진행률을 보여준다.
+  //   서버에 잡 상태를 두지 않으므로 중단·재시도가 그냥 된다.
+  //
+  //  안전선은 프로젝트별 회수와 **완전히 동일**하다(같은 planReclaim/applyReclaim 을 쓴다):
+  //   gitignored ∩ 알려진 파생물만 · .env·data/·소스 보호 · 심링크 미회수 · 활성 세션이면 거부 ·
+  //   워크트리 제거는 **푸시 완료 + 더티 없음**일 때만. 일괄이라고 안전선을 낮추지 않는다.
+  ...workspaceBatchCapabilities(),
 
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
   restOnly("org_embeddings_status", "임베딩(벡터검색) 상태",
@@ -1051,6 +1238,10 @@ export const deliveryCapabilities: Capability[] = [
         name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
       })) };
     }),
+  restOnly("org_connector_catalog", "기본 커넥터 카탈로그(프리셋)",
+    "관리탭 '커넥터 추가'가 프리셋으로 채우는 기본 커넥터 정본(호스팅 OAuth MCP). 코드 SoT(connector-catalog.ts). 시크릿 없음.",
+    [{ method: "GET", paths: ["/api/ui/org/connector-catalog"], parse: () => ({}) }],
+    async () => ({ catalog: DEFAULT_CONNECTORS })),
   restOnly("org_mcp_upsert", "MCP 서버 추가·수정",
     "조직 MCP 서버를 저장한다. transport http(url)|stdio(command). 인증은 auth_env(환경변수 이름만 — 시크릿 금지).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server"], parse: (req) => req.body ?? {} }],

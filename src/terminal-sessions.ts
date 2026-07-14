@@ -625,6 +625,24 @@ export async function canAttach(id: string, userId: string): Promise<boolean> {
   // 개인(비프로젝트) 세션: 소유자 또는 초대된 멤버만.
   return m.owner === userId || m.invites.includes(userId);
 }
+// ── '이 세션은 진짜 끝났다'의 확답 판정(#835) ──
+// canAttach=false 는 두 가지가 섞여 있다: ⓐ 권한 없음 ⓑ 세션이 아예 없음(종료됨) ⓒ tmux 가 답을 못 줌(과부하·타임아웃).
+//  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
+//  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
+//  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
+export function isSessionGoneError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown };
+  if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
+  // tmux 응답: "can't find session: <id>". 소켓 접속불가("error connecting to …", "no server running")는
+  //  tmux 서버가 죽었거나 못 붙은 것 = 판정 불가로 둔다(일시장애일 수 있음 → 재연결 유지).
+  return /can't find session|session not found/i.test(String(e.stderr ?? ""));
+}
+export async function sessionGone(id: string): Promise<boolean> {
+  if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청
+  try { await tmux(["has-session", "-t", id]); return false; } // 살아있음
+  catch (err) { return isSessionGoneError(err); }
+}
 async function assertManage(user: LivelyUser, id: string): Promise<void> {
   const m = await ownerMeta(id);
   if (!m || m.owner !== ownerId(user)) throw new HttpError(403, "본인 세션이 아닙니다");
