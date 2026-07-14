@@ -1565,25 +1565,14 @@ export function createBlockEditor(opts: {
     }
     if (!t) return;
 
-    // '/' — 슬래시 메뉴(빈 위치/공백 뒤에서만: 경로 등 일반 타이핑 방해 최소화).
+    // '/' — 슬래시 메뉴. 임의 위치에서 열림(단어 중간·끝 포함) — 쿼리에 공백 들어오면 syncSlashQuery 가 자동으로 닫는다.
     if (e.key === '/' && !composing && !slash) {
-      const r = caretRange();
-      let prevCh = '';
-      if (r && r.collapsed && r.startContainer.nodeType === 3 && r.startOffset > 0) {
-        prevCh = (r.startContainer.textContent || '')[r.startOffset - 1] || '';
-      } else if (r && r.collapsed && caretAtStart(t)) {
-        prevCh = '';
-      } else if (r && r.startContainer.nodeType !== 3) {
-        prevCh = '';
-      }
-      if (!prevCh || /\s/.test(prevCh)) {
-        setTimeout(() => {   // 기본 입력('/')이 DOM 에 들어간 뒤 앵커 기록
-          const rr = caretRange();
-          if (!rr) return;
-          openSlashMenu(block, true);
-          if (slash) { slash.anchorNode = rr.startContainer; slash.anchorOffset = rr.startOffset; }
-        }, 0);
-      }
+      setTimeout(() => {   // 기본 입력('/')이 DOM 에 들어간 뒤 앵커 기록
+        const rr = caretRange();
+        if (!rr) return;
+        openSlashMenu(block, true);
+        if (slash) { slash.anchorNode = rr.startContainer; slash.anchorOffset = rr.startOffset; }
+      }, 0);
       return;
     }
 
@@ -1759,6 +1748,9 @@ export function createBlockEditor(opts: {
     const target = e.target as HTMLElement;
     if (target.classList && (target.classList.contains('be-raw-ta') || target.classList.contains('be-code-lang'))) { markDirtyType(); return; }
     markDirtyType();
+    //  #764 단어 단위 실행취소 — 공백·구두점 입력 시 직전 타이핑 버스트를 히스토리 1스텝으로 확정(노션 감각).
+    //  IME 조합 중엔 건너뛴다(조합 종료 후의 공백만 경계로).
+    if (!composing && !e.isComposing && e.inputType === 'insertText' && e.data && /[\s.,;:!?)\]}"'、。]/.test(e.data)) histFlushTyping();
     if (slash) { syncSlashQuery(); return; }
     if (target.classList.contains('be-text') && !target.classList.contains('be-code')) syncMention(target);   // [[ 멘션(조합 중 갱신 허용)
     if (composing || e.isComposing) return;
@@ -1770,7 +1762,7 @@ export function createBlockEditor(opts: {
     // 블록 단축(내용이 프리픽스뿐일 때) — p 에서 변환, 리스트에선 '[] '로 할일 전환.
     if (type === 'p') {
       let m;
-      if ((m = /^(#{1,3})\s$/.exec(txt))) { convertBlock(block, { type: 'h', level: m[1].length, text: '' }); return; }
+      if ((m = /^(#{1,6})\s$/.exec(txt))) { convertBlock(block, { type: 'h', level: m[1].length, text: '' }); return; }
       if (/^([-*+])\s$/.test(txt)) { convertBlock(block, { type: 'bullet', indent: 0, text: '' }); return; }
       if (/^(\d+)[.)]\s$/.test(txt)) { convertBlock(block, { type: 'numbered', indent: 0, text: '' }); return; }
       if (/^\[( |x)?\]\s$/.test(txt)) { convertBlock(block, { type: 'todo', indent: 0, checked: /x/.test(txt), text: '' }); return; }

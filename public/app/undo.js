@@ -84,6 +84,8 @@ export function installGlobalUndo() {
             return; // 미로그인(게이트) — 관여하지 않음
         if (inEditableOwner(e.target))
             return; // 텍스트/블록에디터가 소유 — 네이티브·자체 undo 에 양보
+        if (document.querySelector('.be'))
+            return; // #764 위키 편집 화면 — ⌘Z 는 블록에디터 소유(포커스가 에디터 밖이어도 전역 서버 undo 가 마지막 저장을 통째 revert 하는 사고 방지)
         e.preventDefault();
         if (busy)
             return; // 키 반복 연타 중 중복 호출 방지(직전 요청 완료 후 다음 Z)
