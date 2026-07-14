@@ -1705,6 +1705,29 @@ function showInitialAccount(id, name, email, password, data) {
     el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [사용 가이드 › 시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.' }));
 }
 
+// 외부 계정 연결(identities) 요약 — 읽기 전용 표시 + 매핑 화면 링크(#837).
+//  identities 는 "이 슬랙 메시지 쓴 사람 = 우리 윤상민"을 AI 가 알아보는 근거다. 편집 SoT 는
+//  [외부 자료 수집 ▸ 멤버 매핑] — 거기선 커넥터가 실제 사용자 목록을 줘서 드롭다운으로 고른다.
+//  구성원 화면에서 손타이핑하게 두면 외부 id 를 어디서 찾는지도 모르고 오타가 조용히 매칭을 깨뜨린다.
+function idnSummary(identities) {
+  const wrap = el('div', { class: 'idn-wrap' });
+  if (!identities.length) {
+    wrap.append(el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: '연결된 외부 계정이 없습니다.' }));
+  } else {
+    for (const idn of identities) {
+      wrap.append(el('div', { class: 'idn-row idn-ro' },
+        el('span', { class: 'pill', text: idn.system }),
+        el('span', { class: 'mini-title', text: idn.external_id }),
+        idn.email ? el('span', { class: 'mini-meta', text: idn.email }) : null));
+    }
+  }
+  wrap.append(el('div', { class: 'admin-actions' },
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '외부 자료 수집에서 매핑 →' }),
+    el('span', { class: 'admin-hint', style: 'margin:0',
+      text: '커넥터별 사용자 목록에서 골라 연결합니다 — 외부 ID를 직접 찾을 필요가 없어요.' })));
+  return wrap;
+}
+
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
 //  권한 있는 사람(canEdit)만 [수정] 버튼이 보이고, 누르면 편집모드로 전환(memberForm). 비-admin 은 버튼 없음.
 function memberRead(root, m, data, detail, opts: any = {}) {
@@ -1716,9 +1739,6 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       canEdit ? (m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })) : null),
   ];
   if (canEdit) {
-    const idnText = (m.identities && m.identities.length)
-      ? m.identities.map((idn) => idn.system + ':' + idn.external_id + (idn.email ? ' (' + idn.email + ')' : '')).join('\n')
-      : '';
     const scopeText = (m.scopes || []).map((sk) => MEMBER_SCOPE_LABEL[sk] ? MEMBER_SCOPE_LABEL[sk] + ' (' + sk + ')' : sk).join(', ');
     kids.push(
       roRow('아이디', m.id),
@@ -1726,7 +1746,7 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       roRow('대표 이메일', m.email),
       roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'),
       roRow('권한 (이 구성원 토큰의 scope)', scopeText),
-      field('외부 계정 연결 (신원 매칭 키)', el('div', { class: 'admin-ro admin-ro-pre', text: idnText || '—' })),
+      field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])),
       field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
   } else {
     kids.push(el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }));
@@ -1780,32 +1800,22 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     scopeWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label + ' (' + sk + ')'));
   }
 
-  // 외부 계정 연결(identities) — 신원 매칭 키. 구조화 행 + 추가/삭제.
-  const idnWrap = el('div', { class: 'idn-wrap' });
-  const idnRows: any[] = [];
-  function addIdn(idn) {
-    const sysIn = el('input', { type: 'text', value: (idn && idn.system) || '', placeholder: 'slack / discord / notion …', class: 'idn-sys' });
-    const extIn = el('input', { type: 'text', value: (idn && idn.external_id) || '', placeholder: '외부 계정 ID', class: 'idn-ext' });
-    const emIn = el('input', { type: 'text', value: (idn && idn.email) || '', placeholder: '이메일(선택)', class: 'idn-em' });
-    const rm = el('button', { class: 'btn-text', text: '✕', title: '삭제' });
-    const row = el('div', { class: 'idn-row' }, sysIn, extIn, emIn, rm);
-    const rec = { row, sysIn, extIn, emIn };
-    rm.addEventListener('click', () => { row.remove(); const i = idnRows.indexOf(rec); if (i >= 0) idnRows.splice(i, 1); });
-    idnRows.push(rec);
-    idnWrap.append(row);
-  }
-  (m.identities || []).forEach(addIdn);
+  // 외부 계정 연결(identities) — **여기선 읽기 전용**(#837).
+  //  예전엔 여기서 system·external_id 를 **손으로 타이핑**했다. 그런데 ClickUp 숫자 id 를 어디서 찾는지 알 길이
+  //  없고, 시스템명 오타는 조용히 매칭 실패로 끝났다. 매핑의 편집 SoT 는 [외부 자료 수집 ▸ 멤버 매핑]이다 —
+  //  거기선 커넥터가 실제 사용자 목록을 주므로 드롭다운으로 고르기만 하면 된다(오타 불가).
+  //  ⚠ 저장 시 identities 를 **안 보낸다** → 서버가 보존한다(delivery.org_member_upsert: undefined 면 미변경).
+  const idnWrap = idnSummary(m.identities || []);
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: opts.saveLabel || (isNew ? '추가' : '저장') });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
-    const identities = idnRows.map((r) => ({ system: r.sysIn.value.trim(), external_id: r.extIn.value.trim(), email: r.emIn.value.trim() || undefined }))
-      .filter((x) => x.system && x.external_id);
     const knownScopes = SCOPE_OPTS.map(([sk]) => sk);
     const payload = {
       // 신규는 아이디를 보내지 않는다 — 서버가 이메일/표시이름에서 불변 내부키를 자동·유니크 생성(관리자 비관여).
       id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
-      email: emailIn.value.trim(), identities, body_md: bodyTa.value, state: stateSel.value,
+      // identities 는 **보내지 않는다** — 서버가 보존하고, 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만 한다(#837).
+      email: emailIn.value.trim(), body_md: bodyTa.value, state: stateSel.value,
       // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
       scopes: [...knownScopes.filter((sk) => scopeChks[sk].checked), ...(m.scopes || []).filter((sk) => !knownScopes.includes(sk))],
     };
@@ -1857,8 +1867,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('종류', kindSel),
     field('대표 이메일', emailIn), field('상태', stateSel),
     field('권한 (이 구성원 토큰의 scope)', scopeWrap),
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
-      el('button', { class: 'btn-text', text: '+ 계정 추가', onclick: () => addIdn(null) })),
+    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap),
     field('개인 레이어', bodyTa),
     actions);
 }
@@ -3217,11 +3226,12 @@ function connectorEditor(detail, data) {
     connectorStatusCard(right, editing);
     connectorForm(right, editing, data, detail);
   } else right.append(el('p', { class: 'admin-hint', text: '수집할 외부 소스를 선택하세요.' }));
-  // ClickUp 멤버 매핑 패널(#541) — clickup 선택 시에만(db-sources 의 renderDbPolicyPanel 패턴).
-  if (editing && editing.system === 'clickup') {
+  // 사람 매핑 패널(#541 → #837 일반화) — 커넥터가 사용자 목록을 줄 수 있으면 붙인다.
+  //  서버가 supported:false 로 답하면 패널이 스스로 사라진다(gmail·gdrive 는 개인 OAuth 라 '멤버' 개념이 없다).
+  if (editing && editing.system && editing.system !== '__new__') {
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(panel);
-    void renderClickupMemberPanel(panel);
+    void renderConnectorMemberPanel(panel, editing.system);
   }
   const banner = (editing && editing.secrets_enabled === false)
     ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
@@ -3440,62 +3450,78 @@ function connectorForm(root, c, data, detail) {
 //  어사이니 해소는 person_identity(system='clickup') → org_member 로 이뤄지고, 수동 매핑의 SoT 는
 //  org_member.identities(JSONB) — 저장/해제는 POST /api/ui/org/member(identities 병합) 재사용(서버가
 //  person_identity 로 즉시 동기). 매핑 상태는 GET /api/ui/org/connector/clickup/members 가 계산해 준다.
-async function renderClickupMemberPanel(panel) {
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: 'ClickUp 멤버 불러오는 중…' }));
+// ── 사람 매핑(#541 clickup → #837 커넥터 일반) ──────────────────────────────────
+//  **편집 SoT 는 여기다**(구성원 화면이 아니라). 매핑은 "외부 시스템의 사람 ↔ 우리 구성원"인데,
+//  구성원 화면은 외부 목록을 안 가져오므로 관리자가 외부 id 를 손으로 타이핑해야 했다 —
+//  ClickUp 숫자 id 를 어디서 찾는지도 모르고, 시스템명 오타는 조용히 매칭 실패로 끝난다.
+//  여기선 커넥터가 실제 사용자 목록을 주므로 드롭다운으로 고르기만 하면 된다(오타 불가).
+//  → 구성원 화면의 '외부 계정 연결'은 읽기 전용 + 이리로 오는 링크가 됐다(#837).
+async function renderConnectorMemberPanel(panel, system) {
+  const spec = (state.admin.data && (state.admin.data.connectors || []).find((c) => c.system === system)) || {};
+  const label = spec.label || system;
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 불러오는 중…' }));
   let res;
-  try { res = await api('/api/ui/org/connector/clickup/members'); }
-  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: 'ClickUp 멤버 로드 실패: ' + e.message })); return; }
-  const head = sectionTitle('ClickUp 멤버 매핑', null);
-  const intro = el('p', { class: 'admin-hint', text: 'ClickUp 담당자(어사이니)를 구성원으로 연결합니다 — 연결하면 다음 싱크부터 태스크 담당자가 해당 구성원으로 매칭돼요. 이메일이 같으면 자동매치 후보가 미리 선택됩니다.' });
+  try { res = await api('/api/ui/org/connector/' + encodeURIComponent(system) + '/members'); }
+  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 로드 실패: ' + e.message })); return; }
+
+  // 이 커넥터는 사람 매핑을 지원하지 않는다(gmail·gdrive 등) — 패널을 아예 안 그린다.
+  if (res.supported === false) { panel.remove(); return; }
+
+  const head = sectionTitle('멤버 매핑 · ' + label,
+    label + ' 의 사람을 우리 구성원과 연결합니다 — 연결하면 다음 싱크부터 작성자·담당자가 그 구성원으로 매칭돼요. 이메일이 같으면 자동매치 후보가 미리 선택됩니다. **여기가 매핑을 편집하는 곳입니다** — 구성원 화면에서는 결과만 보여요.');
   if (res.error) { panel.replaceChildren(head, el('p', { class: 'admin-hint', text: '⚠ ' + res.error })); return; }
   const users = res.users || [];
-  if (!users.length) { panel.replaceChildren(head, intro, el('p', { class: 'admin-hint', text: 'ClickUp 팀 멤버가 없습니다.' })); return; }
+  if (!users.length) { panel.replaceChildren(head, el('p', { class: 'admin-hint', text: label + ' 사용자가 없습니다.' })); return; }
+
   const members = (state.admin.data && state.admin.data.members) || [];
   const activeMembers = members.filter((m) => (m.state || 'active') === 'active');
   const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? (m.display_name || m.id) : id; };
-  // 저장/해제 공통 — 대상 구성원의 identities 에 clickup 신원을 병합(add)/제거(remove) 후 부분 페이로드
+
+  // 저장/해제 — 대상 구성원의 identities 에 이 시스템 신원을 병합(add)/제거(remove) 후 **부분 페이로드**
   //  { id, identities } 로 POST(다른 필드는 서버가 보존 — 낡은 화면값으로 덮어쓰기 방지).
-  const postIdentities = async (memberId, cu, add) => {
+  //  ⚠ 이 저장이 #697 의 소급 재해소 훅(delivery.org_member_upsert)을 태운다 — 매핑 이전에 raw 로 굳은
+  //    미러 데이터까지 되돌려 고쳐 준다. 그래서 매핑은 반드시 이 엔드포인트를 통해야 한다.
+  const postIdentities = async (memberId, u, add) => {
     const m = members.find((x) => x.id === memberId);
     if (!m) throw new Error('구성원을 찾을 수 없습니다 — 새로고침 후 다시 시도하세요');
-    const emailLower = (cu.email || '').trim().toLowerCase();
-    const isCu = (idn) => idn.system === 'clickup'
-      && (idn.external_id === String(cu.id) || (!!emailLower && (idn.external_id || '').toLowerCase() === emailLower));
-    const identities = (m.identities || []).filter((idn) => !isCu(idn));
+    const emailLower = (u.email || '').trim().toLowerCase();
+    const isThis = (idn) => idn.system === system
+      && (idn.external_id === String(u.id) || (!!emailLower && (idn.external_id || '').toLowerCase() === emailLower));
+    const identities = (m.identities || []).filter((idn) => !isThis(idn));
     if (add) {
-      identities.push({ system: 'clickup', external_id: String(cu.id), email: cu.email || undefined, instance: res.teamId || undefined });
+      identities.push({ system, external_id: String(u.id), email: u.email || undefined, instance: u.instance || res.instance || undefined });
     } else if (identities.length === (m.identities || []).length) {
-      // 구성원 identities 에 해당 행이 없는 매핑(게이트웨이 바인딩 파일 등 다른 경로) — 여기선 해제 불가.
-      throw new Error('이 연결은 구성원의 외부 계정 목록 밖에서 온 신원이라 여기서 해제할 수 없어요 — 구성원 관리에서 확인하세요');
+      // 구성원 identities 밖에서 온 신원(게이트웨이 바인딩 파일 등) — 여기선 해제 불가.
+      throw new Error('이 연결은 구성원의 외부 계정 목록 밖에서 온 신원이라 여기서 해제할 수 없어요');
     }
     await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: m.id, identities }) });
     await loadAdmin(true); // members(identities) 최신화 — 패널 재조회 전 로컬 데이터 동기
   };
+
   const tbl = el('table', { class: 'fields-table cu-map-table' });
-  tbl.append(el('tr', {}, el('th', { text: 'ClickUp 멤버' }), el('th', { text: '연결된 구성원' }), el('th', {})));
+  tbl.append(el('tr', {}, el('th', { text: label + ' 사용자' }), el('th', { text: '연결된 구성원' }), el('th', {})));
   for (const r of users) {
-    const cu = r.clickup || {};
-    // 아바타 — ClickUp 프로필 색은 검증된 hex 일 때만 style 로(외부 데이터 CSS 주입 방지), 이니셜은 textContent.
-    const dot = el('span', { class: 'cu-avatar', text: (cu.initials || String(cu.username || '?').slice(0, 2)).toUpperCase() });
-    if (/^#[0-9a-fA-F]{3,8}$/.test(cu.color || '')) { dot.style.background = cu.color; dot.style.color = '#fff'; }
-    const userCell = el('td', {}, el('div', { class: 'cu-user' }, dot,
+    const u = r.user || {};
+    // 아바타 — 외부 색은 검증된 hex 일 때만 style 로(외부 데이터 CSS 주입 방지), 이니셜은 textContent.
+    const dot = el('span', { class: 'cu-avatar', text: (u.initials || String(u.name || u.id || '?').slice(0, 2)).toUpperCase() });
+    if (/^#[0-9a-fA-F]{3,8}$/.test(u.color || '')) { dot.style.background = u.color; dot.style.color = '#fff'; }
+    const userCell = el('td', { class: u.inactive ? 'cu-inactive' : '' }, el('div', { class: 'cu-user' }, dot,
       el('div', {},
-        el('div', { class: 'mini-title', text: cu.username || ('id ' + cu.id) }),
-        el('div', { class: 'mini-meta', text: cu.email || ('id ' + cu.id) }))));
+        el('div', { class: 'mini-title' }, el('span', { text: u.name || ('id ' + u.id) }),
+          u.inactive ? el('span', { class: 'pill', text: '비활성' }) : null),
+        el('div', { class: 'mini-meta', text: u.email || ('id ' + u.id) }))));
     if (r.mapped_via === 'identity') {
-      // ① 매핑됨(identities 명시 행) — 표시명 + 해제.
       const unlink = el('button', { class: 'btn-text', text: '해제' });
       unlink.addEventListener('click', async () => {
-        if (!confirm(`'${cu.username || cu.id}' ↔ '${nameOf(r.mapped_member_id)}' 연결을 해제할까요?`)) return;
+        if (!confirm(`'${u.name || u.id}' ↔ '${nameOf(r.mapped_member_id)}' 연결을 해제할까요?`)) return;
         unlink.disabled = true;
-        try { await postIdentities(r.mapped_member_id, cu, false); toast('연결 해제됨 — 다음 싱크부터 반영'); void renderClickupMemberPanel(panel); }
+        try { await postIdentities(r.mapped_member_id, u, false); toast('연결 해제됨 — 다음 싱크부터 반영'); void renderConnectorMemberPanel(panel, system); }
         catch (e) { toast(e.message, true); unlink.disabled = false; }
       });
       tbl.append(el('tr', {}, userCell,
         el('td', {}, el('span', { class: 'pill pill-ok', text: '연결됨' }), ' ', nameOf(r.mapped_member_id)),
         el('td', {}, unlink)));
     } else {
-      // ② 미매핑(또는 이메일 자동매치만) — 활성 구성원 드롭다운(+자동매치 미리 선택) + 연결 저장.
       const selBox = el('select', { class: 'cu-map-sel' }, el('option', { value: '', text: '구성원 선택…' }),
         ...activeMembers.map((m) => el('option', { value: m.id, text: (m.display_name || m.id) + (m.email ? ' (' + m.email + ')' : '') })));
       if (r.suggested_member_id) selBox.value = r.suggested_member_id;
@@ -3503,7 +3529,7 @@ async function renderClickupMemberPanel(panel) {
       saveB.addEventListener('click', async () => {
         if (!selBox.value) { toast('연결할 구성원을 선택하세요', true); return; }
         saveB.disabled = true;
-        try { await postIdentities(selBox.value, cu, true); toast('연결됨 — 다음 싱크부터 담당자에 반영'); void renderClickupMemberPanel(panel); }
+        try { await postIdentities(selBox.value, u, true); toast('연결됨 — 다음 싱크부터 반영'); void renderConnectorMemberPanel(panel, system); }
         catch (e) { toast(e.message, true); saveB.disabled = false; }
       });
       tbl.append(el('tr', {}, userCell,
@@ -3511,10 +3537,9 @@ async function renderClickupMemberPanel(panel) {
         el('td', {}, saveB)));
     }
   }
-  panel.replaceChildren(head, intro, tbl);
+  panel.replaceChildren(head, tbl);
 }
 
-// ── DB 데이터소스 — admin 전용. db_query/db_schema 가 읽는 외부 운영 DB(읽기전용). ──
 function dbSourceEditor(detail, data) {
   const sources = data.dbSources || [];
   const envSources = data.envSources || [];
