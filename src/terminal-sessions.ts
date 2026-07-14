@@ -323,11 +323,29 @@ function isAgentOffline(harness: string, paneCmd: string): boolean {
 }
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).
 const lastBusyAt = new Map<string, number>();
-// pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지 — 번호 선택지 위에 커서(❯ 1.) 또는 승인 문구. 2.5초 캐시(폴링 버스트 공유).
+// pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지. 2.5초 캐시(폴링 버스트 공유).
+//
+// ⚠ 화면 전체를 grep 하면 안 된다(#853 오탐). Claude Code 는 **과거 사용자 메시지도 '❯ ' 프리픽스로**
+//   전사(transcript)에 그린다 → 사용자가 번호목록을 붙여넣은 세션엔 화면에 "❯ 1. 최근에 위키를…" 이
+//   남아, 승인 메뉴 커서("❯ 1. Yes")와 구별되지 않아 이미 끝난 대화가 계속 '확인 필요' 빨강으로 떴다.
+//
+// 판정은 **하단 라이브 UI 영역**만 본다. 불변식: 다이얼로그(모달)가 뜨면 입력창이 감춰진다.
+//   - 대기 아님(입력창 살아있음): "───" 틀 + "❯ " 입력줄 + 모드 푸터("⏵⏵ auto mode on …" / "⏸ manual mode on · ? for shortcuts")
+//   - 승인 대기:  " Do you want to create hello.txt?" · " ❯ 1. Yes" · " Esc to cancel · Tab to amend"
+//   - 질문 대기:  " ❯ 1. Red" · " Enter to select · ↑/↓ to navigate · Esc to cancel"
+//   (승인 문구는 툴마다 다르다 — "Do you want to create X?" — 문구만 매칭하면 놓친다. 커서·힌트가 주신호.)
 const _paneWaitCache = new Map<string, { at: number; waiting: boolean }>();
-function detectAwaiting(pane: string): boolean {
-  for (const ln of pane.split("\n")) if (/❯\s*\d+[.)]\s/.test(ln)) return true; // 커서가 번호 선택지 위 = 메뉴/승인 대기
-  return /Do you want to (proceed|continue)\??|Would you like to proceed|Select (an|the) option|Choose an option/i.test(pane);
+const TAIL_LINES = 14;                                      // 하단 라이브 UI 영역(입력창 또는 다이얼로그). 전사는 이 위에 있다.
+const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i;
+const MENU_CURSOR = /^\s*[│┃|]?\s*❯\s*\d+[.)]\s/;           // 번호 선택지 위의 커서(다이얼로그 테두리 안일 수 있다)
+const MENU_HINT = /Enter to select|↑\/↓ to navigate|Esc to cancel/i;
+const APPROVE_PHRASE = /Do you want to |Would you like to proceed|Select (an|the) option|Choose an option/i;
+export function detectAwaiting(pane: string): boolean {
+  const lines = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+  const tail = lines.slice(-TAIL_LINES);
+  if (tail.some((l) => INPUT_BOX.test(l))) return false;    // 입력창이 떠 있다 = 모달 없음 = 대기 아님
+  const tailText = tail.join("\n");
+  return tail.some((l) => MENU_CURSOR.test(l)) || MENU_HINT.test(tailText) || APPROVE_PHRASE.test(tailText);
 }
 async function paneAwaitingInput(sessionId: string): Promise<boolean> {
   const now = Date.now();
