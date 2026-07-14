@@ -25,6 +25,16 @@ const KNOWLEDGE_NAMES = [
   "domainmap-is-bootstrap-runbook",  // src/scheduler.ts — 〃 (도구 델타)
 ];
 
+// ⚠ 신규 설치 기본값 오버라이드 — canonical 게이트웨이에서 **시험 삼아 켜 둔 것**이 그대로
+//  '신규 고객 기본 켜짐'으로 굳는 것을 막는다. capture 는 DB 를 스냅샷하므로 우리 dev 토글이
+//  디폴트를 오염시킨다(2026-07-14 실측: project-pull-turn 이 false→true 로 뒤집힐 뻔했다 —
+//  #828 은 "기본 꺼짐, 각 고객이 관리탭에서 켠다"로 결정했는데 우리가 dev 에서 켜 뒀을 뿐이다).
+//  여기 등재된 id 는 DB 상태와 무관하게 enabled=false 로 시딩된다. 운영자가 켜면 그 상태는
+//  보존된다(seed-content 는 '없을 때만 삽입' — 기존 행을 안 덮는다).
+const SEED_DISABLED = new Set([
+  "project-pull-turn",   // #828 — 턴마다 shared pull. 매니페스트 축소(#829)가 전제라 각 고객이 판단해 켠다.
+]);
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, "..", "src", "org", "default-content.ts");
 
@@ -83,6 +93,11 @@ async function main() {
 
   const missing = KNOWLEDGE_NAMES.filter((n) => !knowledge.some((k) => k.name === n));
   if (missing.length) console.warn(`⚠ 코드 참조 지식 누락(이 게이트웨이에 없음): ${missing.join(", ")}`);
+
+  // 신규 설치 기본값 강제(위 SEED_DISABLED) — 우리 dev 토글이 고객 디폴트로 새지 않게.
+  const forced = [...hooks, ...skills].filter((r) => SEED_DISABLED.has(r.id) && r.enabled);
+  for (const r of forced) r.enabled = false;
+  if (forced.length) console.warn(`⚠ 시드 기본값 강제 off(dev 에선 켜져 있음): ${forced.map((r) => r.id).join(", ")}`);
 
   fs.writeFileSync(OUT, emitDefaultContentModule({ hooks, skills, knowledge }));
   console.log(`✓ ${path.relative(path.join(here, ".."), OUT)} — hooks=${hooks.length} skills=${skills.length} knowledge=${knowledge.length}`);
