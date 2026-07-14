@@ -1,5 +1,5 @@
 // learn.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { TOKEN_KEY, api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
+import { api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
 import { DOC_PAGES, INSTALL_EXTRA_MD } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
@@ -461,87 +461,43 @@ function localGuideNodes(gw, slot, data) {
     const term = isWin
         ? installStep(1, '명령 입력 창(PowerShell) 열기', el('p', { class: 'step-p' }, '화면 왼쪽 아래 ', kbd('시작'), ' 버튼을 누르고 ', kbd('powershell'), ' 라고 입력 → 목록에서 ', el('b', { text: 'Windows PowerShell' }), ' 을 클릭하세요.'), el('p', { class: 'step-note', text: '파란색 글자 입력 창이 하나 뜹니다. 이게 명령을 붙여넣을 곳이에요.' }))
         : installStep(1, '명령 입력 창(터미널 앱) 열기', el('p', { class: 'step-p' }, '키보드에서 ', kbd('⌘'), ' + ', kbd('스페이스바'), ' 를 동시에 눌러 검색창을 띄우고, ', kbd('터미널'), ' 이라고 입력한 뒤 ', kbd('Enter'), ' 를 누르세요.'), el('p', { class: 'step-note', text: '글자만 있는 작은 창이 하나 뜹니다. macOS 에 기본으로 들어 있는 앱이고, 여기에 명령을 붙여넣게 됩니다.' }));
-    const mint = installStep(2, '내 설치 명령 만들기', el('p', { class: 'step-p' }, '아래 ', el('b', { text: '[설치 명령 만들기]' }), ' 를 누르면 본인 전용 설치 명령이 자동으로 만들어집니다 — 토큰을 직접 다룰 필요가 없어요.'), el('p', { class: 'step-note', text: '명령에는 본인 접속 키가 들어 있으니 남과 공유하지 마세요. 만든 다음 [명령 복사]를 누르면 됩니다.' }), installSelfCmdBox(gw, os));
-    const run = installStep(3, '명령 붙여넣고 실행하기', el('p', { class: 'step-p' }, '1단계에서 연 창을 클릭한 다음, 방금 복사한 명령을 붙여넣고(', isWin ? kbd('Ctrl') : kbd('⌘'), ' + ', kbd('V'), ') ', kbd('Enter'), ' 를 누르세요.'), el('p', { class: 'step-note', text: '명령이 길어 보여도 한 줄이에요 — 통째로 붙여넣으면 됩니다. 그러면 알아서 진행됩니다. 도중에 이런 게 나올 수 있어요:' }), el('ul', { class: 'step-ul' }, el('li', {}, 'Claude Code 가 없으면 ', el('b', { text: '“설치할까요? [y/N]”' }), ' 라고 물어봐요 → ', kbd('y'), ' 를 누르고 ', kbd('Enter'), '.'), el('li', {}, '회사 계정 ', el('b', { text: '로그인 브라우저 창' }), ' 이 뜨면 회사 계정으로 로그인하세요.'), el('li', {}, el('b', { text: '“=== 끝! ===”' }), ' 비슷한 메시지가 보이면 설치가 끝난 거예요.')));
-    const verify = installStep(4, '잘 됐는지 확인하기', el('p', { class: 'step-p' }, '같은 창에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'), cmdLine('claude mcp list'), el('p', { class: 'step-note' }, '목록에 ', el('b', { text: 'lively' }), ' 가 보이면 성공이에요. ', '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다. ', '(자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
+    // 2단계 — 토큰 발급. #864 부터 토큰은 **명령줄에 들어가지 않는다**(셸 히스토리에 영구히 남던 문제).
+    //  대신 설치 중 터미널이 가림 프롬프트로 물어보고, 사용자는 여기서 복사한 걸 붙여넣는다.
+    const mint = installStep(2, '내 접속 토큰 받기', el('p', { class: 'step-p' }, '아래 ', el('b', { text: '[내 토큰 발급]' }), ' 을 누르면 본인 전용 토큰이 나옵니다. 복사해 두세요 — 3단계에서 터미널이 물어봅니다.'), el('p', { class: 'step-note', text: '토큰은 비밀번호 같은 거예요. 남과 공유하지 마세요. (터미널에 붙여넣어도 화면에 보이지 않습니다.)' }), tokenMintBox());
+    const run = installStep(3, '설치 명령 붙여넣고 실행하기', el('p', { class: 'step-p' }, '1단계에서 연 창을 클릭한 다음, 아래 명령을 복사해 붙여넣고(', isWin ? kbd('Ctrl') : kbd('⌘'), ' + ', kbd('V'), ') ', kbd('Enter'), ' 를 누르세요.'), cmdLine(installCmd(gw, os)), el('p', { class: 'step-note', text: '그러면 알아서 진행됩니다. 도중에 이런 게 나와요:' }), el('ul', { class: 'step-ul' }, el('li', {}, el('b', { text: '“접속 토큰을 붙여넣으세요”' }), ' → 2단계에서 복사한 토큰을 붙여넣고 ', kbd('Enter'), '. ', el('span', { class: 'step-note-inline', text: '(입력해도 화면에 아무것도 안 보이는 게 정상이에요 — 비밀번호처럼 가려집니다.)' })), el('li', {}, 'Claude Code 가 없으면 ', el('b', { text: '“지금 설치할까요?”' }), ' 라고 물어봐요 → ', kbd('Y'), ' 를 누르고 ', kbd('Enter'), '.'), el('li', {}, '회사 계정 ', el('b', { text: '로그인 브라우저 창' }), ' 이 뜨면 회사 계정으로 로그인하세요.'), el('li', {}, el('b', { text: '“=== 끝! ===”' }), ' 이 보이면 설치가 끝난 거예요.')));
+    const verify = installStep(4, '잘 됐는지 확인하기', el('p', { class: 'step-p' }, '같은 창에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'), cmdLine('lively status'), el('p', { class: 'step-note' }, '게이트웨이 ', el('b', { text: '도달 OK' }), ' · 내 이름 · ', el('b', { text: 'MCP 등록 ✓' }), ' 가 보이면 성공이에요. ', '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다. ', '(자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'), el('p', { class: 'step-note' }, '뭔가 이상하면 ', el('code', { class: 'md-code', text: 'lively doctor' }), ' — 무엇이 잘못됐고 어떻게 고치는지 알려 줍니다.'));
     const steps = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '설치 단계' }), el('div', { class: 'os-pick' }, el('span', { class: 'os-pick-label', text: '내 컴퓨터' }), osTabs)), isWin ? el('p', { class: 'admin-warn', text: '⚠ Windows 설치는 아직 검증이 충분치 않습니다. 막히면 관리자에게 알려주세요.' }) : null, el('div', { class: 'step-list' }, term, mint, run, verify));
     // ── 3. 끝났어요 — 이제 뭘 하나 ──
     const next = el('div', { class: 'card install-next' }, el('div', { class: 'card-head' }, el('h2', { text: '끝났어요 — 이제 뭘 하나요' })), el('p', { class: 'guide-lead', text: '설치가 끝나면 평소처럼 Claude Code 를 켜서 일하면 됩니다. 어느 폴더에서 켜든 회사 공통 맥락·규칙이 자동으로 함께 들어가요. 매번 회사 사정을 설명하지 않아도 됩니다.' }), el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '내 컴퓨터에서 켜든 웹에서 켜든 같은 회사 맥락을 씁니다 — 웹에서 열고 싶으면 ', el('a', { href: '#/dashboard', text: '[홈]' }), ' 의 「내 AI 세션」에서 [+ 새 세션]을 누르세요. 회사에 어떤 맥락이 쌓여 있는지는 ', el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 에서 볼 수 있어요.'));
     // ── 4. 유지보수(접힘) — 업데이트는 이제 자동이라 평소엔 볼 일이 없다(#858). 제거·강제갱신용. ──
     const staticBlock = (c) => el('div', { class: 'deploy-block' }, el('div', { class: 'deploy-head' }, el('h3', { text: c.title }), c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null), el('p', { class: 'admin-hint', text: c.note }), el('pre', { class: 'admin-preview', text: c.cmd }));
     const auto = el('p', { class: 'admin-hint' }, el('b', { text: '업데이트는 자동입니다. ' }), 'Claude Code(또는 Codex)를 켤 때마다 라이블리가 최신인지 확인하고, 다르면 백그라운드로 받아 설치합니다 — ', el('b', { text: '다음에 켤 때부터' }), ' 적용돼요(작업 중인 세션은 방해하지 않습니다). 아래 명령은 ', el('b', { text: '자동 업데이트를 껐거나, 지금 당장 맞춰야 할 때' }), '만 쓰면 됩니다.');
-    const maint = el('details', { class: 'install-maint' }, el('summary', { text: '＋ 나중에 필요할 때: 업데이트 · 제거 (지금은 안 봐도 됩니다)' }), auto, ...deployCommands(gw, os).filter((c) => c.kind !== 'install').map(staticBlock));
+    // 설치 후 쓸 수 있는 명령들 — 유지보수 패널을 열었다는 건 "뭔가 손봐야 한다"는 뜻이니 doctor 를 가장 먼저 보여준다.
+    const cheats = el('div', { class: 'deploy-block' }, el('h3', { text: '알아 두면 좋은 명령' }), el('p', { class: 'admin-hint', text: '설치가 끝나면 터미널에서 `lively` 를 쓸 수 있어요.' }), el('div', { class: 'step-list' }, cmdLine('lively doctor'), el('p', { class: 'step-note', text: '뭐가 잘못됐는지 + 어떻게 고치는지 알려 줍니다. 문제가 생기면 이것부터.' }), cmdLine('lively status'), el('p', { class: 'step-note', text: '지금 설치 상태 · 버전 · MCP 등록 여부.' }), cmdLine('lively run 123'), el('p', { class: 'step-note', text: '프로젝트를 내 PC 에서 열기(프로젝트 번호). 프로젝트 화면의 [💻 내 PC에서 열기] 가 만들어 주는 명령과 같습니다.' })));
+    const maint = el('details', { class: 'install-maint' }, el('summary', { text: '＋ 나중에 필요할 때: 명령어 · 업데이트 · 제거 (지금은 안 봐도 됩니다)' }), cheats, auto, ...deployCommands(gw, os).filter((c) => c.kind !== 'install').map(staticBlock));
     return [callout, needs, steps, next, maint];
 }
 // 번호 매긴 설치 단계 한 칸.
 function installStep(n, title, ...body) {
     return el('div', { class: 'step' }, el('div', { class: 'step-num', 'aria-hidden': 'true', text: String(n) }), el('div', { class: 'step-body' }, el('div', { class: 'step-title', text: title }), ...body));
 }
-// 사용자가 '관리자에게 받아 첫 로그인 때 입력한 토큰'을 직접 넣으면 그 토큰으로 설치 명령을 만든다(서버 발급 안 함).
-//  입력값은 게이트 로그인 토큰(localStorage TOKEN_KEY)과 정확히 일치할 때만 통과 — 아무 문자열이나 명령으로
-//  나가지 않게(아무거나 넣어도 산출되던 문제 차단). 일치하는 토큰은 state.start.token 에 캐시(OS 토글 시 재입력 불필요).
-function installCmdBox(gw, os) {
+// 접속 토큰 셀프 발급 (#864) — 로그인된 본인이 [내 토큰 발급] 한 번으로 본인 토큰을 받는다.
+//  종전(installSelfCmdBox)은 이 토큰을 **설치 명령줄에 구워** 건넸다 → 복붙하면 ~/.zsh_history 에 평문으로 영구히 남았다.
+//  이제는 토큰만 건네고, 설치 명령(3단계)은 토큰 없는 정적 한 줄이다. 토큰은 CLI 의 가림 프롬프트에 붙여넣는다.
+//  (그래서 이 함수는 OS 를 몰라도 된다 — 토큰은 mac/win 이 같다.)
+function tokenMintBox() {
     const result = el('div', { class: 'install-cmd-slot' });
-    const err = el('p', { class: 'install-token-err' });
-    err.hidden = true;
-    const draw = () => {
-        if (!state.start.token) {
-            result.replaceChildren();
-            return;
-        }
-        const cmd = installCmd(gw, os, state.start.token);
-        result.replaceChildren(el('p', { class: 'install-ok', text: '✓ 토큰이 확인됐어요. 설치 명령이 만들어졌습니다 — [명령 복사]를 누른 뒤 3단계로 가세요.' }), el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')), el('pre', { class: 'admin-preview', text: cmd }));
-    };
-    const showErr = (msg) => { err.textContent = msg; err.hidden = false; result.replaceChildren(); };
-    const tokenIn = el('input', {
-        type: 'password', class: 'term-input', autocomplete: 'off', spellcheck: 'false',
-        'aria-label': '관리자에게 받은 접속 토큰',
-        placeholder: '관리자에게 받은 토큰 (첫 로그인 때 입력한 것)', value: state.start.token || '',
-    });
-    const go = el('button', { class: 'btn btn-primary btn-sm', text: '설치 명령 만들기' });
-    const make = () => {
-        const t = tokenIn.value.trim();
-        if (!t) {
-            showErr('토큰을 입력하세요.');
-            tokenIn.focus();
-            return;
-        }
-        // 게이트(첫 로그인) 때 입력한 토큰과 정확히 일치하는지 확인 — 일치할 때만 명령 생성.
-        const login = (localStorage.getItem(TOKEN_KEY) || '').trim();
-        if (login && t !== login) {
-            showErr('이 화면에 처음 들어올 때 입력한 토큰과 다릅니다. 그때 입력한 토큰을 그대로 넣어 주세요. (잊었다면 관리자에게 다시 받으세요.)');
-            return;
-        }
-        err.hidden = true;
-        state.start.token = t;
-        draw();
-    };
-    go.addEventListener('click', make);
-    tokenIn.addEventListener('input', () => { if (!err.hidden)
-        err.hidden = true; });
-    tokenIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
-        e.preventDefault();
-        make();
-    } });
-    draw();
-    return el('div', {}, el('div', { class: 'install-minter' }, tokenIn, go), err, result);
-}
-// 설치 명령 셀프 베이크(P3) — 로그인된 본인이 [설치 명령 만들기] 한 번으로 본인 토큰을 자동 발급해 명령에 굽는다.
-//  토큰을 손으로 만지지 않는다(self-mint = admin/runtime 제외 저권한). 기본 설치 플로우.
-function installSelfCmdBox(gw, os) {
-    const result = el('div', { class: 'install-cmd-slot' });
-    // #632: admin/runtime 보유자만 — 관리 권한을 이 설치 토큰에 실을지 opt-in(기본 off). 멤버 scope 가 상한(증폭 불가).
+    // #632: admin/runtime 보유자만 — 관리 권한을 이 토큰에 실을지 opt-in(기본 off). 멤버 scope 가 상한(증폭 불가).
     //  (state.me.scopes = 현재 세션 유효 scope — admin.ts hasScope 와 동일 판정.)
     const canCp = !!(state.me && Array.isArray(state.me.scopes) && (state.me.scopes.includes('admin') || state.me.scopes.includes('runtime')));
     const cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
-    const cpLabel = canCp ? el('label', { class: 'caption', style: 'display:block;margin:6px 0;cursor:pointer' }, cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 명령으로 설치한 로컬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다.' })) : null;
-    const go = el('button', { class: 'btn btn-primary btn-sm', text: '설치 명령 만들기' });
+    const cpLabel = canCp ? el('label', { class: 'caption', style: 'display:block;margin:6px 0;cursor:pointer' }, cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 토큰으로 설치한 로컬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다.' })) : null;
+    const go = el('button', { class: 'btn btn-primary btn-sm', text: '내 토큰 발급' });
     go.addEventListener('click', async () => {
         go.disabled = true;
         try {
             const r = await api('/api/ui/org/token/self', { method: 'POST', body: JSON.stringify({ includeControlPlane: canCp && cpChk.checked }) });
-            const cmd = installCmd(gw, os, r.token);
-            result.replaceChildren(el('p', { class: 'install-ok', text: '✓ 설치 명령이 만들어졌어요 — [명령 복사]를 누른 뒤 3단계로 가세요. (본인 접속 키가 들어 있으니 공유 금지.)' }), el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')), el('pre', { class: 'admin-preview', text: cmd }));
+            result.replaceChildren(el('p', { class: 'install-ok', text: '✓ 토큰이 발급됐어요 — [토큰 복사]를 누른 뒤 3단계로 가세요.' }), el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '내 접속 토큰' }), copyButton(() => r.token, '토큰 복사')), el('pre', { class: 'admin-preview', text: r.token }), el('p', { class: 'admin-hint', text: '⚠ 지금 이 화면에서만 보여요 — 닫으면 다시 볼 수 없습니다(잃어버리면 다시 발급하면 됩니다).' }));
         }
         catch (e) {
             result.replaceChildren(el('p', { class: 'install-token-err', text: '발급 실패 — ' + e.message }));

@@ -556,6 +556,14 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   copyShWithHeader(regSrc, join(setupDir, "register-clients.sh"), existsSync(gwReg) ? "context-ontology/scripts/register-clients.sh" : "kit/setup/register-clients.sh (vendored)", orgLabel);
   copied.push("setup/register-clients.sh");
 
+  // lively CLI (#864) — 멤버가 쓰는 단일 명령 표면. user-install.mjs 가 ~/.lively/{lib,bin} 으로 앉힌다.
+  //  **번들에 넣는 것이 핵심**: kit_version 지문에 포함된다 → 기존 멤버 전원이 자동 업데이트(#858)로
+  //  `lively` 를 손 안 대고 획득한다(부트스트랩 재실행 불요). 하네스 무관이라 emit 이 아니라 여기서 동봉한다.
+  //  같은 파일이 게이트웨이의 무인증 /cli/lively.mjs 로도 서빙된다(부트스트랩용) — 한 파일, 두 개의 문.
+  mkdirSync(join(target, "cli"), { recursive: true });
+  copyMjsWithHeader(kitAbs("cli/lively.mjs"), join(target, "cli", "lively.mjs"), "kit/cli/lively.mjs", orgLabel);
+  copied.push("cli/lively.mjs");
+
   // 가이드 md(멤버가 번들에서 바로 읽음)
   for (const g of ["setup/사용가이드.md", "setup/온보딩.md"]) {
     const src = kitAbs(g); if (!existsSync(src)) continue;

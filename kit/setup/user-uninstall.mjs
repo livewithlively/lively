@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
@@ -51,6 +51,10 @@ const RC_END = "# <<< lively-managed (codex LIVELY_TOKEN) <<<";
 //  local-bin 블록(# >>> lively-managed (PATH: local-bin) >>>)은 claude 소유라 의도적으로 보존한다.
 const PATH_NODE_BEGIN = "# >>> lively-managed (PATH: node) >>>";
 const PATH_NODE_END = "# <<< lively-managed (PATH: node) <<<";
+// #864: lively CLI PATH 블록(~/.lively/bin) — bootstrap.sh · user-install.mjs 가 심는 것과 **동일 리터럴**.
+//  ~/.lively 를 통째로 걷어내므로 이 블록을 남기면 죽은 PATH 항목이 rc 에 영구히 남는다(설치↔제거 대칭 불변식).
+const PATH_CLI_BEGIN = "# >>> lively-managed (PATH: cli) >>>";
+const PATH_CLI_END = "# <<< lively-managed (PATH: cli) <<<";
 
 // text 에서 [begin,end] 센티넬 블록 1개를 제거해 { text, had } 반환(END 손상 시 begin 한 줄만 제거·아래 보존).
 function stripSentinel(text, begin, end) {
@@ -228,7 +232,30 @@ function deregisterCodexMcp() {
   log("  · codex MCP 등록 해제: config.toml 블록 제거로 완료(별도 store 없음 · CLI 재작성 위험 회피).");
 }
 
-// (4) rc 의 lively 관리 블록 제거 — LIVELY_TOKEN + 번들 Node PATH(#355). local-bin 블록은 claude 소유라 보존.
+// (4-win) Windows User PATH 정리 — POSIX 의 rc 센티넬 블록에 대응한다(#864).
+//  Windows 엔 셸 rc 가 없어서 user-install.mjs 의 wireCliPath() 가 **레지스트리 User PATH** 에 ~/.lively\bin 을 넣는다.
+//  → 여기서 안 빼면 ~/.lively 를 지운 뒤에도 죽은 경로가 레지스트리에 영구히 남는다(설치↔제거 대칭 위반).
+//  ⚠ 이 파일이 `lively uninstall` 이 실제로 부르는 캐노니컬 제거기다 — uninstall-windows.ps1 에만 두면
+//   CLI 로 제거한 사람은 정리가 안 된다. 그래서 여기(크로스플랫폼)에 둔다.
+function uninstallWindowsPath() {
+  if (process.platform !== "win32") return 0;
+  const binDir = join(LIVELY, "bin");
+  if (DRY) { log(`  [dry-run] User PATH 에서 ${binDir} 제거 예정`); return 1; }
+  // 우리 항목만 제거 — 사용자의 다른 PATH 항목은 그대로 둔다(비파괴).
+  const ps = `$b='${binDir.replace(/'/g, "''")}'; $p=[Environment]::GetEnvironmentVariable('PATH','User'); `
+    + `if($p){ $c=(@($p -split ';' | Where-Object { $_ -and ($_ -ne $b) }) -join ';'); `
+    + `if($c -ne $p){ [Environment]::SetEnvironmentVariable('PATH',$c,'User'); Write-Output 'removed' } }`;
+  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8" });
+  if (r.status === 0 && String(r.stdout || "").includes("removed")) {
+    log("  ✓ User PATH 에서 ~/.lively\\bin 제거"); return 1;
+  }
+  if (r.status !== 0) log("  ⚠️ User PATH 정리 실패 — 수동으로 ~/.lively\\bin 항목을 지우세요(무해하지만 죽은 경로).");
+  else log("  · User PATH — lively 항목 없음(이미 제거됨/미설치)");
+  return 0;
+}
+
+// (4) rc 의 lively 관리 블록 제거 — LIVELY_TOKEN + 번들 Node PATH(#355) + lively CLI PATH(#864).
+//  local-bin 블록은 claude 소유라 보존.
 function uninstallRcBlock() {
   const candidates = [".zshrc", ".bashrc", ".bash_profile", ".profile"].map((f) => join(HOME, f));
   let total = 0;
@@ -236,7 +263,7 @@ function uninstallRcBlock() {
     if (!existsSync(rc)) continue;
     let cur; try { cur = readFileSync(rc, "utf8"); } catch { continue; }
     let next = cur; const hits = [];
-    for (const [b, e, label] of [[RC_BEGIN, RC_END, "LIVELY_TOKEN"], [PATH_NODE_BEGIN, PATH_NODE_END, "PATH(node)"]]) {
+    for (const [b, e, label] of [[RC_BEGIN, RC_END, "LIVELY_TOKEN"], [PATH_NODE_BEGIN, PATH_NODE_END, "PATH(node)"], [PATH_CLI_BEGIN, PATH_CLI_END, "PATH(cli)"]]) {
       const r = stripSentinel(next, b, e); if (r.had) { next = r.text; hits.push(label); }
     }
     if (!hits.length) continue;
@@ -310,7 +337,7 @@ function detect() {
   if (existsSync(sp)) { try { const h = (JSON.parse(readFileSync(sp, "utf8")).hooks) || {}; out.claude = Object.values(h).some((es) => Array.isArray(es) && es.some((e) => Array.isArray(e?.hooks) && e.hooks.some((x) => String(x?.command || "").includes(LIVELY_HOOK_MARK)))); } catch { /* */ } }
   const cp = join(CODEX, "config.toml");
   if (existsSync(cp)) { try { const t = readFileSync(cp, "utf8"); out.codex = t.includes("lively-managed") && t.includes("[mcp_servers.lively]"); } catch { /* */ } }
-  for (const f of [".zshrc", ".bashrc", ".bash_profile", ".profile"]) { const rc = join(HOME, f); if (existsSync(rc)) { try { const t = readFileSync(rc, "utf8"); if (t.includes(RC_BEGIN) || t.includes(PATH_NODE_BEGIN)) { out.rc = true; break; } } catch { /* */ } } }
+  for (const f of [".zshrc", ".bashrc", ".bash_profile", ".profile"]) { const rc = join(HOME, f); if (existsSync(rc)) { try { const t = readFileSync(rc, "utf8"); if (t.includes(RC_BEGIN) || t.includes(PATH_NODE_BEGIN) || t.includes(PATH_CLI_BEGIN)) { out.rc = true; break; } } catch { /* */ } } }
   return out;
 }
 
@@ -330,11 +357,14 @@ function main() {
   const othersStillInstalled = (d.claude && !want.includes("claude")) || (d.codex && !want.includes("codex"));
   if (othersStillInstalled) {
     const remain = [d.claude && !want.includes("claude") ? "claude" : null, d.codex && !want.includes("codex") ? "codex" : null].filter(Boolean).join(",");
-    log("\n[2] 셸 rc(LIVELY_TOKEN·번들 Node PATH 블록) — 보존(다른 하네스가 아직 설치됨 — 공유 자산 유지)");
+    log("\n[2] PATH 설정(셸 rc · Windows User PATH) — 보존(다른 하네스가 아직 설치됨 — 공유 자산 유지)");
     log("\n[3] ~/.lively 공유 자산 — 보존(다른 하네스가 아직 lively 를 사용 중 — 그 하네스 보호)");
     log(`  · 남은 하네스(${remain})까지 제거하려면 --harness all 로 다시 실행하세요.`);
   } else {
-    log("\n[2] 셸 rc(LIVELY_TOKEN·번들 Node PATH 블록) 정리"); uninstallRcBlock();
+    // PATH 정리는 ~/.lively 제거와 **한 몸**이다(둘 다 공유 자산) — 경로가 가리키던 디렉터리가 사라지므로.
+    log("\n[2] PATH 설정 정리 — 셸 rc(LIVELY_TOKEN·Node·CLI 블록)" + (process.platform === "win32" ? " + Windows User PATH" : ""));
+    uninstallRcBlock();
+    uninstallWindowsPath();   // #864 — POSIX rc 센티넬의 Windows 대응(레지스트리 User PATH)
     log("\n[3] ~/.lively 공유 자산 제거" + (PURGE ? "(--purge: 하드 삭제)" : "(기본: 휴지통 이동, 되돌릴 수 있음)")); removeLivelyDir();
   }
   log("\n✓ lively 제거 완료." + (DRY ? " (dry-run — 아무것도 변경하지 않았습니다.)" : othersStillInstalled ? " (지정 하네스만 제거 — 공유 자산은 남은 하네스를 위해 유지됨.)" : ""));
