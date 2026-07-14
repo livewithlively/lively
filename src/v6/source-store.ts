@@ -7,10 +7,10 @@ import { auditOrgContent, type WriteCtx } from "../db/write.js";
 
 const S_COLS =
   `id, name, kind, title, body_md, provenance, external_system, external_instance, external_id, external_url,
-   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by, fields`;
+   occurred_at, last_synced_at, author, lifecycle, created_at, updated_at, updated_by, fields, parent_external_id`;
 const S_SEL = S_COLS.split(",").map((c) => "s." + c.trim()).join(", ");
-// 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다).
-const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields`;
+// 목록/그래프용 얕은 컬럼(본문 제외 — 자료는 28k+ 전사록이라 목록에 전문 싣지 않는다). parent_external_id=스레드/계층 관계(#735).
+const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id`;
 
 export interface SourceRow {
   id: number; name: string | null; kind: string; title: string | null; body_md: string;
@@ -64,14 +64,33 @@ export async function listUndistilledSources(limit = 50): Promise<Record<string,
     [Math.min(limit, 500)]);
 }
 
-// 단건 + 이 자료에서 파생된 지식(knowledge_source 역방향) — 자료 상세에서 "여기서 나온 지식" 표시.
+// 단건 + 파생 지식(knowledge_source 역방향) + 스레드/계층 관계(부모·답글/자식) — 자료 상세용.
 export async function getSource(id: number): Promise<(SourceRow & { knowledge: unknown[] }) | undefined> {
-  const s = await one(itemsPool, `SELECT ${S_SEL} FROM source s WHERE s.id=$1`, [id]);
+  const s = await one(itemsPool, `SELECT ${S_SEL} FROM source s WHERE s.id=$1`, [id]) as SourceRow | undefined;
   if (!s) return undefined;
   const knowledge = await q(itemsPool,
     `SELECT ks.name, ks.relation, k.title FROM knowledge_source ks JOIN knowledge k ON k.name=ks.name
      WHERE ks.source_id=$1 AND k.lifecycle='active' ORDER BY ks.relation`, [id]);
-  return { ...(s as SourceRow), knowledge };
+  // #735 스레드/계층 관계 — 부모(스레드 루트·부모 페이지) + 이 자료를 부모로 갖는 답글/자식(같은 external 좌표 결정적 조인).
+  //  parent_external_id/external_id 로 잇는다(resolution 불요 — 부모 미수집이면 parent=null, 안전).
+  const sys = s.external_system as string | null;
+  const inst = (s.external_instance ?? null) as string | null;
+  const parentExt = s.parent_external_id as string | null;
+  const selfExt = s.external_id as string | null;
+  let parent: unknown = null;
+  if (sys && parentExt) {
+    parent = await one(itemsPool,
+      `SELECT ${S_LIST_SEL} FROM source s WHERE s.external_system=$1 AND s.external_instance IS NOT DISTINCT FROM $2
+         AND s.external_id=$3 AND s.lifecycle='active'`, [sys, inst, parentExt]) ?? null;
+  }
+  let replies: unknown[] = [];
+  if (sys && selfExt) {
+    replies = await q(itemsPool,
+      `SELECT ${S_LIST_SEL} FROM source s WHERE s.external_system=$1 AND s.external_instance IS NOT DISTINCT FROM $2
+         AND s.parent_external_id=$3 AND s.lifecycle='active'
+       ORDER BY COALESCE(s.occurred_at, s.updated_at) ASC LIMIT 200`, [sys, inst, selfExt]);
+  }
+  return { ...(s as SourceRow), knowledge, parent, replies, reply_count: replies.length };
 }
 
 export async function upsertSource(

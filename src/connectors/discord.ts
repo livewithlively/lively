@@ -75,6 +75,8 @@ export interface ToRawItemCtx {
   guildId: string;
   /** 메시지가 속한 채널 id (스레드면 스레드 id) */
   channelId: string;
+  /** 채널/스레드 표시명(#735 — container_name 으로 보존, 지식화 맥락). listGuildChannels/threads 의 name. */
+  channelName?: string;
   /**
    * 이 채널이 스레드일 때 부모 텍스트 채널 id.
    * 메시지에 명시적 리플라이(message_reference)가 없을 때 parent_external_id 후보로 사용.
@@ -83,7 +85,7 @@ export interface ToRawItemCtx {
 }
 
 export function toRawItem(msg: DiscordMessage, ctx: ToRawItemCtx): RawItem {
-  const { guildId, channelId, threadParentChannelId } = ctx;
+  const { guildId, channelId, threadParentChannelId, channelName } = ctx;
   // external_id 는 system+instance 내에서 안정·고유해야 함. 채널+메시지 조합 사용.
   const externalId = `${channelId}:${msg.id}`;
   const externalUrl = `https://discord.com/channels/${guildId}/${channelId}/${msg.id}`;
@@ -124,6 +126,7 @@ export function toRawItem(msg: DiscordMessage, ctx: ToRawItemCtx): RawItem {
       is_bot: msg.author?.bot ?? false,
     },
     container_ref: channelId,
+    container_name: channelName,
     parent_external_id: parentExternalId,
     title,
     body: msg.content ?? "",
@@ -336,11 +339,12 @@ async function* drainChannel(
   channelId: string,
   threadParentChannelId: string | null,
   since?: string,
+  channelName?: string,
 ): AsyncGenerator<RawItem> {
   try {
     for await (const msg of fetchChannelMessages(channelId, token, since)) {
       try {
-        yield toRawItem(msg, { guildId, channelId, threadParentChannelId });
+        yield toRawItem(msg, { guildId, channelId, threadParentChannelId, channelName });
       } catch (err) {
         // 단일 메시지 변환 실패는 건너뛰고 계속(전체 백필을 죽이지 않음).
         console.error(`[discord] 메시지 변환 실패 ${channelId}:${msg?.id}, skip:`, err);
@@ -391,11 +395,11 @@ export const discordConnector: Connector = {
       );
 
       for (const ch of textChannels) {
-        yield* drainChannel(token, guild.id, ch.id, null, since);
+        yield* drainChannel(token, guild.id, ch.id, null, since, ch.name ?? undefined);
       }
       for (const th of threadChannels) {
-        // 스레드의 부모 텍스트 채널 id 는 parent_id.
-        yield* drainChannel(token, guild.id, th.id, th.parent_id ?? null, since);
+        // 스레드의 부모 텍스트 채널 id 는 parent_id. 스레드명(th.name)을 container_name 으로.
+        yield* drainChannel(token, guild.id, th.id, th.parent_id ?? null, since, th.name ?? undefined);
       }
     }
   },

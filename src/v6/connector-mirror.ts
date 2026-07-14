@@ -1271,7 +1271,6 @@ async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string
   const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type };
   if (it.container_ref) fields.container_ref = it.container_ref;
   if (it.container_name) fields.container_name = redactString(String(it.container_name));
-  if (it.parent_external_id) fields.parent_external_id = it.parent_external_id;
   if (it.actor?.external_id) fields.author_external_id = it.actor.external_id;
   if (it.actor?.display_name) fields.author_name = redactString(String(it.actor.display_name));
   if (it.actor?.email) fields.author_email = redactString(String(it.actor.email));
@@ -1291,21 +1290,21 @@ async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string
   const r = await client.query(
     `INSERT INTO source(
         kind, title, body_md, raw, fields, provenance,
-        external_system, external_instance, external_id, external_url,
+        external_system, external_instance, external_id, external_url, parent_external_id,
         occurred_at, last_synced_at, author, updated_at, updated_by)
       VALUES($1,$2,$3,$4::jsonb,$11::jsonb,'observed',
-             $5,$6,$7,$8,
+             $5,$6,$7,$8,$12,
              $9, now(), $10, now(), $10)
      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
-        fields=EXCLUDED.fields,
+        fields=EXCLUDED.fields, parent_external_id=EXCLUDED.parent_external_id,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
         last_synced_at=now(), updated_at=now(), updated_by=EXCLUDED.updated_by
      RETURNING id`,
     [kind, title, body, raw == null ? null : JSON.stringify(raw),
      system, instance, externalId, it.provenance.external_url ?? null,
-     it.occurred_at ?? null, author, JSON.stringify(fields)],
+     it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null],
   );
   const id = (r.rows[0] as { id: number }).id;
 

@@ -542,6 +542,19 @@ function openKnowledgeLinkPicker(k, reload) {
 }
 
 // 자료(source) 상세 오버레이 — 지식 '출처 자료' 행과 자료 탭(knowledge.ts renderSources) 공용.
+// #735 자료 참조 행(스레드 부모/답글·자식) — 클릭하면 그 자료 상세로 이동.
+function srcRefRow(r: any) {
+  const f = r.fields || {};
+  const sub = (SOURCE_KIND_LABEL[r.kind] || r.kind) + (f.container_name ? ' · #' + f.container_name : '') + (f.author_name ? ' · @' + f.author_name : '');
+  const row = el('div', { class: 'row', role: 'button', tabindex: '0', style: 'cursor:pointer' },
+    el('div', { text: r.title || ('자료 #' + r.id) }),
+    el('span', { class: 'caption', text: sub }));
+  const open = () => openSourceDetail(r.id);
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') open(); });
+  return row;
+}
+
 async function openSourceDetail(id) {
   let s: any;
   try { const r = await api('/api/ui/sources/' + id); s = (r && r.source) || r; }
@@ -558,6 +571,12 @@ async function openSourceDetail(id) {
     derived.length ? el('div', {}, el('div', { class: 'sec-label', text: '여기서 파생된 지식' }),
       el('div', { class: 'list-box' }, ...derived.map((d) => el('a', { class: 'row', href: '#/k/' + encodeURIComponent(d.name),
         style: 'text-decoration:none; display:block', text: (KN_SOURCE_REL_LABEL[d.relation] || d.relation) + ' · ' + (d.title || d.name) })))) : null,
+    // #735 스레드/계층 관계 — 부모(스레드 루트·상위 페이지) + 답글/자식(같은 스레드·하위). 자료 간 관계 표면.
+    (s.parent || (s.replies && s.replies.length)) ? el('div', {},
+      s.parent ? el('div', { class: 'sec-label', text: '상위 (스레드/부모)' }) : null,
+      s.parent ? el('div', { class: 'list-box' }, srcRefRow(s.parent)) : null,
+      (s.replies && s.replies.length) ? el('div', { class: 'sec-label', text: '답글·자식 ' + s.reply_count + '건' }) : null,
+      (s.replies && s.replies.length) ? el('div', { class: 'list-box' }, ...s.replies.map(srcRefRow)) : null) : null,
     el('div', { class: 'sec-label', text: '본문' }),
     el('div', { class: 'unit-body md-rendered', style: 'max-height:50vh; overflow:auto' }, renderMarkdown(s.body_md || '(본문 없음)')));
 }
