@@ -16,6 +16,9 @@ const throws = (fn: () => void, re: RegExp): void => { assert.throws(fn, (e: Err
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "brk-")));
 fs.mkdirSync(path.join(tmp, "sub"), { recursive: true });
+// workroot **바깥의 존재하는** 형제 디렉터리 + 그걸 가리키는 심링크 — 이탈 단언을 TMPDIR 지형에 의존하지 않게 한다(아래 주석).
+const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "brk-outside-")));
+fs.symlinkSync(outside, path.join(tmp, "escape-link"));
 
 // ── 도구 화이트리스트 — 경로 포함·`..`·미허용 거부(임의 바이너리 실행 차단) ──
 t("assertAllowedTool: 허용 도구 통과 / 경로·..·미허용 거부", () => {
@@ -27,11 +30,20 @@ t("assertAllowedTool: 허용 도구 통과 / 경로·..·미허용 거부", () =
 });
 
 // ── cwd 봉쇄 — workroot 하위만(경로 이탈 차단) ──
-t("resolveCwd: workroot 하위 허용 / 이탈 거부", () => {
+//  ⚠ 이탈은 **존재하는 바깥 경로**로 단언한다. resolveCwd 의 거부 사유가 둘로 갈리기 때문이다:
+//   미존재/댕글링이면 "해석 실패", 존재하지만 바깥이면 "workroot 밖" — 둘 다 거부지만 문구가 다르다.
+//   예전엔 `../../etc` 로 후자를 노렸는데 그게 **TMPDIR 지형에 의존**했다:
+//    · 리눅스 CI(TMPDIR=/tmp)      → workroot=/tmp/brk-X   → ../../etc = /etc (존재)        → "workroot 밖" ✅
+//    · macOS(TMPDIR=/var/folders/…/T) → workroot=…/T/brk-X → ../../etc = …/<hash>/etc (미존재) → "해석 실패" ❌ 깨짐
+//   코드 결함이 아니라 단언이 환경 의존이었다. 이제 바깥 경로를 직접 만들어 지형과 무관하게 만든다.
+t("resolveCwd: workroot 하위 허용 / 이탈·심링크이탈·미존재 거부", () => {
   assert.equal(resolveCwd(undefined, tmp), tmp);
   assert.equal(resolveCwd("sub", tmp), path.join(tmp, "sub"));
-  throws(() => resolveCwd("../../etc", tmp), /workroot 밖/);
-  throws(() => resolveCwd("/etc", tmp), /workroot 밖/);
+  throws(() => resolveCwd(path.join("..", path.basename(outside)), tmp), /workroot 밖/); // `..` 이탈(존재하는 형제)
+  throws(() => resolveCwd(outside, tmp), /workroot 밖/); // 절대경로 이탈
+  throws(() => resolveCwd("/etc", tmp), /workroot 밖/); // 어디서나 존재하는 절대경로
+  throws(() => resolveCwd("escape-link", tmp), /workroot 밖/); // 심링크로 바깥 — realpath 후 거부(코드의 핵심 의도인데 그동안 미커버)
+  throws(() => resolveCwd("nope-does-not-exist", tmp), /해석 실패/); // 미존재는 통과시키지 않는다(옛 폴백은 심볼릭 레이스 우회를 허용했음)
 });
 
 // ── exec — no-shell·화이트리스트·봉쇄·실패코드 ──
@@ -47,7 +59,7 @@ await ta("runExec: 미허용 도구 → ok:false(실행 안 함)", async () => {
   assert.match(r.error || "", /허용되지 않은 도구/);
 });
 await ta("runExec: cwd 이탈 → ok:false(실행 안 함)", async () => {
-  const r = await runExec({ op: "exec", tool: "echo", args: ["x"], cwd: "../../.." }, { allowedTools: ["echo"], workroot: tmp });
+  const r = await runExec({ op: "exec", tool: "echo", args: ["x"], cwd: path.join("..", path.basename(outside)) }, { allowedTools: ["echo"], workroot: tmp });
   assert.equal(r.ok, false);
   assert.match(r.error || "", /workroot 밖/);
 });
