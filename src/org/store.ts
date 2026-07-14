@@ -633,7 +633,8 @@ export async function memberHasActiveToken(memberId: string): Promise<boolean> {
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
 export interface OrgRuntimeConfig {
-  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean };
+  // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean };
   writeback_notice: string | null;
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
@@ -664,6 +665,8 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       session_preload: hooksRaw.session_preload !== false,
       work_flag: hooksRaw.work_flag !== false,
       stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
+      // 기존 org 행엔 이 키가 없다 — `!== false` 규약이 곧 '없으면 켜짐'이라 마이그레이션 없이 전원 활성.
+      self_update: hooksRaw.self_update !== false,
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
     work_roots: strArrSafe(row?.work_roots),

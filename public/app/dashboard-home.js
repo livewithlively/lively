@@ -2772,4 +2772,15 @@ function dueInDays(dateStr) {
     return Math.round((+d - +today) / 86400000);
 }
 function dueLabel(n) { return n < 0 ? Math.abs(n) + '일 지남' : (n === 0 ? '오늘' : n + '일 뒤'); }
-export { renderMyDashboard, };
+// 홈에서 '내 AI 세션 만들기' 따라하기 시작(#780) — 사용 가이드의 [내 AI 세션 생성]이 #/dashboard?tour=1 로 보낸다.
+//  세션 위젯은 비동기로 채워지므로 앵커([data-tour="new-session"] — 목록 하단 ＋새 세션 / 빈 상태 버튼)가 뜰 때까지 기다린다.
+//  ①단계만 대시보드용이고 ②~⑦(생성 폼)은 터미널과 동일 폼이라 그대로 이어진다.
+async function startDashboardSessionTour() {
+    for (let i = 0; i < 40 && !document.querySelector('[data-tour="new-session"]'); i++) {
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!document.querySelector('[data-tour="new-session"]'))
+        return; // 못 찾으면 조용히 포기(딤만 남기지 않는다)
+    startTerminalTour(dashTourStep1());
+}
+export { startDashboardSessionTour, renderMyDashboard, };

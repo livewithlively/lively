@@ -35,7 +35,7 @@ import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } fr
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
-import { previewMemberContext, runPublish } from "../org/publish.js";
+import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { assertHookId, assertAssetId } from "../org/identity.js";
@@ -63,7 +63,8 @@ import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
-import { getTeam as getClickUpTeam, type ClickUpTeam } from "../connectors/clickup.js";
+import { connectors } from "../connectors/index.js";
+import type { ConnectorUser } from "../connectors/types.js";
 import { resetConnectorConfigCache } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
@@ -898,12 +899,16 @@ export const deliveryCapabilities: Capability[] = [
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
       const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+      // kit_version(#858) — 현재 서빙 중인 설치 번들의 지문. session-preload 가 로컬 ~/.lively/kit-version 과
+      //  비교해 다르면 백그라운드 재설치를 띄운다(키트 코드·배선 자동 갱신 — 멤버 수동 업데이트 폐지).
+      //  이미 매 세션 오는 응답에 얹으므로 왕복이 늘지 않는다. 계산 실패 시 null → 멤버는 아무것도 안 한다(fail-safe).
+      const kv = await kitVersion();
       // 너지 '유효값' 서빙(#270): 어드민 오버라이드가 없으면 서버 단일소스 DEFAULT_WRITEBACK_NOTICE 를 fold 해 준다.
       //  → session-preload 가 이 값을 매 세션 ~/.lively/hooks-config.json 에 기록 → 게이트가 라이브로 사용
       //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
       //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove, kit_version: kv };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -946,7 +951,7 @@ export const deliveryCapabilities: Capability[] = [
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
         patch.hooks = {};
-        for (const k of ["session_preload", "work_flag", "stop_writeback_gate"]) {
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update"]) {
           if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
         }
       }
@@ -1041,7 +1046,7 @@ export const deliveryCapabilities: Capability[] = [
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
-      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 훅 on/off"),
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
@@ -1537,15 +1542,25 @@ export const deliveryCapabilities: Capability[] = [
   //  응답 users[]: { clickup, mapped_member_id(①??②), mapped_via('identity'|'email'|null), suggested_member_id }
   //   — mapped_via='identity' 만 UI 에서 '해제' 가능(②는 이메일에서 오는 암묵 매핑 — 드롭다운 미리선택으로 확정 유도).
   //  ClickUp 토큰 미설정/호출 실패는 { error } 폴백(500 금지 — 패널이 우아하게 안내).
-  restOnly("org_connector_clickup_members", "ClickUp 멤버 매핑 목록",
-    "ClickUp 팀 멤버(user id/username/email/color)와 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 'ClickUp 멤버 매핑' 패널 전용.",
-    [{ method: "GET", paths: ["/api/ui/org/connector/clickup/members"], parse: () => ({}) }],
-    async () => {
-      let team: ClickUpTeam;
-      try { team = await getClickUpTeam(); }
-      catch (e) { return { error: `ClickUp 팀 조회 실패: ${e instanceof Error ? e.message : String(e)}` }; }
-      const users = (team.members ?? []).map((m) => m.user)
-        .filter((u): u is NonNullable<typeof u> => !!u && u.id != null);
+  // ── 사람 매핑 목록(#837) — 커넥터 **일반**. 구 org_connector_clickup_members 를 대체한다(구 경로는 별칭 유지). ──
+  //  왜 커넥터 쪽이 편집 SoT 인가: 매핑은 "외부 시스템의 사람 ↔ 우리 구성원"인데, 구성원 화면은 외부 목록을
+  //  안 가져오므로 관리자가 외부 id(ClickUp 숫자 id 등)를 **손으로 타이핑**해야 했다 — 어디서 찾는지도 모르고
+  //  오타는 조용히 매칭 실패로 끝난다. 여기선 커넥터가 실제 목록을 주므로 드롭다운으로 고르기만 하면 된다.
+  //  listUsers 를 안 다는 커넥터(gmail·gdrive — 개인 OAuth 라 '멤버' 개념이 없다)는 supported:false 로 답한다.
+  restOnly("org_connector_members", "커넥터 사람 매핑 목록",
+    "커넥터(clickup·slack·notion)의 사용자 목록과 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 [외부 자료 수집 ▸ 멤버 매핑] 패널용. 구 이름 org_connector_clickup_members.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/:system/members", "/api/ui/org/connector/clickup/members"],
+       parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "clickup") }) }],
+    async (input: { system: string }) => {
+      const system = String(input.system || "clickup");
+      const conn = connectors[system];
+      if (!conn) throw new HttpError(404, `알 수 없는 커넥터: ${system}`);
+      if (!conn.listUsers) return { system, supported: false, users: [] };
+
+      let users: ConnectorUser[];
+      try { users = await conn.listUsers(); }
+      catch (e) { return { system, supported: true, error: `${system} 사용자 목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
+
       const members = await listMembers();
       // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.
       const emailToMember = new Map<string, string>();
@@ -1553,7 +1568,9 @@ export const deliveryCapabilities: Capability[] = [
         const k = (m.email ?? "").trim().toLowerCase();
         if (k && !emailToMember.has(k)) emailToMember.set(k, m.id);
       }
-      // ① person_identity 배치 조회 — 유저별 후보 external_id(이메일 소문자·숫자 id)를 한 번에.
+      // ① person_identity 배치 조회 — 유저별 후보 external_id(외부 id · 소문자 이메일)를 한 번에.
+      //   (이메일도 후보인 이유: 관리탭 매핑은 external_id=외부 id 로 저장하지만, 미러가 raw 이메일로 굳혀 둔
+      //    과거 데이터가 있다 — #697 clickup-mirror-member-remap-retroactive 참조.)
       const extIds: string[] = [];
       for (const u of users) {
         extIds.push(String(u.id));
@@ -1565,7 +1582,7 @@ export const deliveryCapabilities: Capability[] = [
         const r = await itemsPool.query(
           `SELECT pi.external_id, pi.person_id FROM person_identity pi
              JOIN org_member om ON om.id = pi.person_id
-            WHERE pi.system='clickup' AND pi.external_id = ANY($1::text[])`, [extIds]);
+            WHERE pi.system=$2 AND pi.external_id = ANY($1::text[])`, [extIds, system]);
         for (const row of r.rows as Array<{ external_id: string; person_id: string }>) {
           identityMap.set(row.external_id, row.person_id);
         }
@@ -1575,14 +1592,13 @@ export const deliveryCapabilities: Capability[] = [
         const viaIdentity = identityMap.get(String(u.id)) ?? (em ? identityMap.get(em) : undefined) ?? null;
         const viaEmail = em ? (emailToMember.get(em) ?? null) : null;
         return {
-          clickup: { id: u.id, username: u.username ?? null, email: u.email ?? null,
-            color: u.color ?? null, initials: u.initials ?? null, profilePicture: u.profilePicture ?? null },
+          user: u,
           mapped_member_id: viaIdentity ?? viaEmail,
           mapped_via: viaIdentity ? "identity" : (viaEmail ? "email" : null),
           suggested_member_id: viaIdentity ? null : viaEmail,
         };
       });
-      return { teamId: team.id, teamName: team.name ?? null, users: rows };
+      return { system, supported: true, instance: users[0]?.instance ?? null, users: rows };
     }),
 
   // ════════ 커스텀 훅 CRUD (runtime 권한) ════════

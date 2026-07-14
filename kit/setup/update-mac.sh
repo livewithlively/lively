@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # 업데이트 — 설치된 토큰으로 최신 발행 묶음을 받아 멱등 재설치(install 의 대칭, self-contained).
-# 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동 갱신되므로, 이건 훅/제품(설정) 변경을 받을 때 쓴다.
+#
+# ⚠ **평소엔 이걸 돌릴 필요가 없다(#858).** 콘텐츠는 원래도 매 세션 자동이고, 키트(훅 코드·배선)도 이제
+#    session-preload 가 kit_version 을 비교해 백그라운드로 자동 재설치한다(적용은 다음 세션).
+#    이 스크립트는 **폴백**이다 — 자동 업데이트를 껐거나(LIVELY_NO_AUTO_UPDATE=1 / 관리탭 토글),
+#    지금 당장 강제로 맞춰야 하거나, MCP 클라이언트 재등록(claude mcp add — 자동 경로가 안 건드리는 유일한 축)이
+#    필요할 때 쓴다.
 #   bash update-mac.sh        # ~/.lively/token + gateway-url 을 읽음 — 토큰 재입력 불필요
 # 페일: 설치 안 됨/게이트웨이 주소 없음이면 명확히 실패. setup-mac.sh 가 멱등이라 몇 번 돌려도 안전.
 set -euo pipefail
@@ -27,4 +32,4 @@ echo "[3/3] 멱등 재설치(업데이트)"
 case "$GW" in */mcp) GW_MCP="$GW";; *) GW_MCP="$GW/mcp";; esac
 LIVELY_TOKEN="$TOKEN" LIVELY_GATEWAY="$GW_MCP" bash "$TMP/setup/setup-mac.sh"
 
-echo "✓ 업데이트 완료 — 다음 세션부터 최신 훅/설정 적용. (콘텐츠는 매 세션 자동 갱신.)"
+echo "✓ 업데이트 완료 — 다음 세션부터 최신 훅/설정 적용. (평소엔 이 명령 없이도 자동으로 갱신됩니다 — #858.)"

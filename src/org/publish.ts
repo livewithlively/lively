@@ -3,9 +3,10 @@
 //  콘텐츠는 설치-시 라이브 fetch + 세션 훅 write-back 캐시로 전달(번들 베이킹 폐지). 따라서 발행물엔 굽지 않으므로
 //  generator 의 **순수 buildKitBundle**(process.exit 안 함)을 import 해 부트스트랩만 조립한다. buildStaticContext 는 라이브 폴백용으로만 잔존.
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
 // (#335) getSection 직접호출 폐기 — 섹션은 listSections 로 동적 조립(buildSectionBlocks).
@@ -81,6 +82,71 @@ export async function materializeStaticContext(): Promise<{ context: string; org
   }
 }
 
+// ════════ 키트 버전(#858) — 멤버 자동 업데이트의 비교 키 ════════
+//
+// 멤버 키트의 네 축 중 콘텐츠·런타임설정·하네스자산은 이미 매 세션 라이브 동기화된다. 남은 한 축
+//  — **키트 코드(훅 .mjs)와 배선(settings.json·config.toml)** — 만 재설치가 필요했고, 그게 멤버가 손으로
+//  업데이트 한 줄을 돌려야 했던 이유다. 그 축에 버전을 붙여 멤버 훅이 스스로 갱신하게 한다.
+//
+// 버전 = **설치 번들의 지문**(경로+내용 sha256, 12 hex). "설치가 실제로 반영하는 바이트"가 곧 버전이라
+//  릴리스마다 사람이 숫자를 올릴 필요가 없다(빠뜨릴 수도 없다).
+// 제외 두 파일:
+//  · .lively/kit-version       — 지문 자신을 담는 파일(자기참조)
+//  · .lively/hooks-config.json — session-preload 가 매 세션 라이브 동기화 → 훅 on/off 토글마다 전원
+//                                재설치를 유발하는 건 낭비(설치가 반영할 게 없다).
+// 나머지 .lively/*(mcp-servers·auto-approve·work-roots)는 **설치 시점에만** 반영되므로 포함한다 —
+//  덕분에 그 셋의 관리자 변경도 이제 자동 전파된다(종전엔 수동 재설치가 유일한 경로였다).
+const VERSION_EXCLUDE = new Set([".lively/kit-version", ".lively/hooks-config.json"]);
+const KIT_VERSION_TTL_MS = 60_000; // 멤버 세션마다 조회되는 값 — 60초 캐시(번들 조립은 파일복사+소량 쿼리라 저렴하나 공짜는 아님)
+let kitVersionCache: { v: string; at: number } | null = null;
+let kitVersionInFlight: Promise<string | null> | null = null; // 게이트웨이 재기동 직후(캐시 콜드) 전 멤버가 동시에 붙어도 조립은 1회
+
+// 스테이지 트리의 상대경로 전량(정렬 전).
+async function walkRel(dir: string, base: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    const abs = join(dir, e.name);
+    if (e.isDirectory()) out.push(...await walkRel(abs, base));
+    else if (e.isFile()) out.push(relative(base, abs).split(sep).join("/"));
+  }
+  return out;
+}
+
+// 발행물 트리 → 결정적 지문. 경로를 정렬해 넣으므로 같은 입력이면 어느 머신에서든 같은 값.
+async function hashStage(stage: string): Promise<string> {
+  const rels = (await walkRel(stage, stage)).filter((r) => !VERSION_EXCLUDE.has(r)).sort();
+  const h = createHash("sha256");
+  for (const rel of rels) {
+    h.update(rel); h.update("\0");
+    h.update(await readFile(join(stage, rel))); h.update("\0");
+  }
+  return h.digest("hex").slice(0, 12);
+}
+
+// 현재 게이트웨이가 서빙하는 키트 버전. runtime-config 응답에 실려 매 세션 멤버 훅이 로컬 스탬프와 비교한다.
+//  실패 시 직전 성공값(없으면 null) — null 이면 멤버 훅이 업데이트를 시도하지 않는다(fail-safe: 모르면 안 건드림).
+export async function kitVersion(): Promise<string | null> {
+  if (kitVersionCache && Date.now() - kitVersionCache.at < KIT_VERSION_TTL_MS) return kitVersionCache.v;
+  if (kitVersionInFlight) return kitVersionInFlight; // 이미 조립 중 — 같이 기다린다(thundering herd 방지)
+  kitVersionInFlight = (async () => {
+    const stage = await mkdtemp(join(tmpdir(), "lively-kitver-"));
+    try {
+      await runPublish(stage, "claude");
+      await writeRuntimeBundle(stage);
+      const v = await hashStage(stage);
+      kitVersionCache = { v, at: Date.now() };
+      return v;
+    } catch (err) {
+      logger.warn({ err }, "kit 버전 계산 실패 — 멤버 자동 업데이트는 이번 조회에서 건너뜀");
+      return kitVersionCache?.v ?? null; // 직전 성공값(없으면 null → 멤버는 아무것도 안 한다)
+    } finally {
+      await rm(stage, { recursive: true, force: true }).catch((err) => logger.warn({ err }, "kit 버전 stage 정리 실패"));
+      kitVersionInFlight = null;
+    }
+  })();
+  return kitVersionInFlight;
+}
+
 // 설치 번들 — 발행 아티팩트를 tar.gz 로 묶어 바이트를 반환(/install 엔드포인트가 스트림). 임시물은 정리.
 export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: Buffer; orgName: string }> {
   const stage = await mkdtemp(join(tmpdir(), "lively-pub-"));
@@ -89,6 +155,12 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
     if (!res.ok) throw new Error("발행 아티팩트 생성 실패");
     // 런타임 설정/ MCP 목록을 번들 .lively/ 에 주입(DB → 설치기가 ~/.lively 로 복사).
     await writeRuntimeBundle(stage);
+    // 버전 스탬프 — **지금 내보내는 바이트**에서 직접 계산해 번들에 박는다(캐시값이 아니라).
+    //  설치기가 이걸 ~/.lively/kit-version 으로 복사 → 멤버 스탬프는 항상 '받은 것'과 일치한다.
+    //  (수동 설치·업데이트로도 스탬프가 찍히므로, 손으로 업데이트한 멤버가 곧바로 자동 업데이트를 또 돌지 않는다.)
+    const version = await hashStage(stage);
+    await writeFile(join(stage, ".lively", "kit-version"), version + "\n");
+    kitVersionCache = { v: version, at: Date.now() }; // 방금 조립한 게 곧 최신 — 캐시 갱신
     // buildKitBundle 가 org-콘텐츠를 애초에 안 만든다(부트스트랩만) — strip 불요. .lively/ 만 DB 에서 주입(위 writeRuntimeBundle).
     // tar -czf - -C <stage> .  → stdout 로 받기.
     const buf = await new Promise<Buffer>((resolve, reject) => {

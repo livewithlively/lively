@@ -9,9 +9,9 @@ import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; /
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
-import { renderMyDashboard } from './dashboard-home.js';
+import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
-import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
+import { changePasswordModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 // ── 라우터 ──
@@ -70,6 +70,12 @@ async function route() {
         if (page === 'dashboard') {
             setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
             await renderMyDashboard(view);
+            // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
+            //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
+            if (params.get('tour') === '1') {
+                history.replaceState(null, '', '#/dashboard');
+                startDashboardSessionTour();
+            }
         }
         else if (page === 'learn') {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
@@ -199,7 +205,7 @@ async function boot() {
         return;
     }
     hideGate();
-    // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→셀프 편집(openMyProfile).
+    // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→[관리 ▸ 내 설정 ▸ 내 정보].
     const userBtn = document.getElementById('user-email');
     if (userBtn) {
         const nm = state.me.display_name || state.me.email || state.me.userId || '';
@@ -232,13 +238,15 @@ async function boot() {
         showGate('로그아웃되었습니다.');
     });
 })();
-// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 셀프 편집 모달(표시 이름·개인 레이어). 한 번만 배선.
+// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 [관리 ▸ 내 설정 ▸ 내 정보]로 이동. 한 번만 배선.
+//  구 셀프 편집 모달(openMyProfile)은 폐지(#837 · 사용자 지적: "내 설정이랑 겹치니까 모달 지우고 이동하게").
+//  모달에 프사·표시이름이 남아 있으면 [내 정보]와 **같은 걸 두 곳에서 편집**하는 게 된다 — 그걸 없애려고 폈던 건데.
 (() => {
     const btn = document.getElementById('user-email');
     if (!btn)
         return;
     btn.addEventListener('click', () => { if (state.me)
-        openMyProfile(); });
+        location.hash = '#/system/me-profile'; });
 })();
 // ── 부팅 이전에 등록되던 DOM 리스너(원래 파일 상단 로드 시 등록 — 모듈 진입점으로 이동, 동작 동일) ──
 // ── 스킵 링크 — href 를 따라가면 해시 라우터가 오작동하므로 JS 로 포커스만 이동(§8) ──
