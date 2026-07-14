@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
+import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -297,14 +297,16 @@ async function renderAdmin(view, sub) {
   const detail = el('div', {});
   renderAdminDetail(detail, sel, data);
 
-  // 상태 배지(조직명 / 읽기 전용) — 통일 헤더의 우측 액션 자리로. (#367)
-  const statusEl = canEdit
-    ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
-    : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)');
-  // 본문은 문서(.docs-body)와 달리 폭 제한 없이 전폭 — 관리 화면은 표·그리드·에디터가 많다(#827).
-  const body = el('div', { class: 'admin-body' },
-    pageHead('관리', '조직·권한, 분류 체계, 연결·데이터 등 시스템 전반을 설정합니다.', [statusEl], '리'),
-    detail);
+  // 페이지 머리('관리' + 부제 + 조직명)는 폐지(#837 · 사용자 지적) — 상단 탭이 이미 '관리'를 켜 두었고
+  //  사이드바가 지금 어느 화면인지 말해 준다. 그 위에 16개 화면마다 같은 제목·부제가 반복되면 본문만 아래로
+  //  밀린다. 대신 **'읽기 전용' 배지만** 사이드바 맨 위로 — 비관리자가 "왜 버튼이 없지"의 답을 얻는 유일한
+  //  단서라 이건 지운다. (조직명은 지운다: 어느 조직인지 헷갈릴 표면이 아니다.)
+  if (!canEdit) {
+    side.prepend(el('div', { class: 'admin-side-ro' },
+      el('span', { class: 'pill', text: '읽기 전용' }),
+      el('span', { text: '편집은 관리자만' })));
+  }
+  const body = el('div', { class: 'admin-body' }, detail);
   view.replaceChildren(el('div', { class: 'docs-layout admin-layout' }, side, body));
   applyReveal([body]);
 }
