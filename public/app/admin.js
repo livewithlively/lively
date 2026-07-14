@@ -32,8 +32,9 @@ const ADMIN_GROUPS = [
 //   ⓐ 패시브 미러 — 외부 SaaS 를 우리 DB 로 **당겨와 저장**한다. `org_connector` · CONNECTOR_SPECS · sync run.
 //   ⓑ 액티브 프록시 — AI 가 **그때그때 호출**하는 외부 MCP 서버. `org_mcp_server`(mode=proxy, oauth).
 // 그런데 구 nav 는 ⓐ를 '커넥터(외부 소스)', ⓑ의 로그인을 '자격(커넥터 로그인)' 이라 부르며 아홉 줄 간격으로
-// 나란히 뒀다. 결정타: `/api/ui/org/connector-catalog` 는 이름과 달리 **ⓐ와 무관**하고 ⓑ의 프리셋이다
-// (src/org/connector-catalog.ts:12 — `name: string;  // org_mcp_server.name`). 그래서:
+// 나란히 뒀다. 결정타: 구 `/api/ui/org/connector-catalog` 는 이름과 달리 **ⓐ와 무관**하고 ⓑ의 프리셋이었다
+// (`name: string;  // org_mcp_server.name`) — 그래서 엔드포인트·파일·타입·MCP 툴명을 전부 mcp-server-presets
+// 로 개명했다(구 REST 경로는 별칭 유지). 그리고:
 //
 //   ⓐ → **'외부 자료 수집'**  (데이터 연결 그룹 — 가져와서 쌓는 것)
 //   ⓑ → **'AI 도구'** 안의 [외부 도구 서버] 서브탭  (AI 능력 그룹 — 호출하는 것)
@@ -48,7 +49,7 @@ const ADMIN_GROUPS = [
 //   · scope — 구성원 권한은 '권한', 도구 호출에 필요한 건 '필요 권한', OAuth 는 'OAuth 허용범위',
 //            수집 대상 고르기는 '수집 범위'(구 '스코프 픽커').
 // ※ 서버 식별자(엔드포인트·capability·테이블)는 그대로 둔다 — 이건 화면 용어 정리다(호환 파괴 0).
-//   후속 후보: `/api/ui/org/connector-catalog` → `mcp-server-presets` 개명(브레이킹이라 별도 판단).
+//   → 개명 완료: `/api/ui/org/mcp-server-presets` (구 경로는 별칭 유지). 파일·타입·상수·MCP 툴명도 함께.
 const ADMIN_SECTIONS = [
     // ── 조직 ──
     { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
@@ -416,7 +417,7 @@ function toolsSection(detail, data) {
     detail.replaceChildren(sectionHead('AI 도구', 'AI 가 호출할 수 있는 것 전부 — 기본 제공 도구, 우리가 감싼 사내 API, 외부 도구 서버(MCP).', data.meaning['tool']), segTabs('tools', [
         { key: 'proxy', label: '사내 API 도구', show: rt, render: (h) => toolsEditor(h, data) },
         { key: 'builtin', label: '기본 제공 도구', show: rt, render: (h) => h.append(builtinToggles(data)) },
-        // 외부 도구 서버 = 구 [MCP 서버]. 'connector-catalog' 프리셋이 실제로 채우는 게 바로 이것이다(이름과 달리).
+        // 외부 도구 서버 = 구 [MCP 서버]. 기본 프리셋(mcp-server-presets)이 실제로 채우는 게 바로 이것이다.
         { key: 'mcp', label: '외부 도구 서버 (MCP)', show: admin, render: (h) => mcpEditor(h, data) },
     ]));
 }
@@ -3040,11 +3041,11 @@ function mcpForm(root, s, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    // ── 프리셋(기본 카탈로그) — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=connector-catalog.ts. ──
+    // ── 프리셋 — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=mcp-server-presets.ts. ──
     const presetSel = el('select', {}, el('option', { value: '', text: '— 직접 입력 —' }));
     const presetHint = el('div', { class: 'admin-hint', style: 'display:none;margin-top:6px' });
     let catalog = [];
-    api('/api/ui/org/connector-catalog').then((r) => {
+    api('/api/ui/org/mcp-server-presets').then((r) => {
         catalog = r.catalog || [];
         for (const c of catalog)
             presetSel.append(el('option', { value: c.name, text: c.label + (c.dcr ? ' · 자동(DCR)' : ' · client 필요') }));
@@ -4518,9 +4519,8 @@ function catalogStatusCard(catalog, servers) {
         rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, el('span', { style: 'font-weight:650;min-width:110px', text: c.label }), chip, el('span', { class: 'mini-meta', text: hint })));
     }
     if (!(catalog || []).length)
-        rows.push(el('p', { class: 'admin-hint', text: '카탈로그를 불러오지 못했습니다.' }));
-    // ⚠ 서버 엔드포인트 이름은 /org/connector-catalog 지만, 담긴 건 org_mcp_server 프리셋이다(connector-catalog.ts:12).
-    //  이름이 '커넥터'라 org_connector(외부 자료 수집)로 오독되던 자리 — 화면에선 정체대로 부른다(#837).
+        rows.push(el('p', { class: 'admin-hint', text: '프리셋을 불러오지 못했습니다.' }));
+    // 외부 도구 서버(MCP) 기본 프리셋 현황 — org_connector(외부 자료 수집)와 무관하다(#837 에서 엔드포인트도 개명).
     return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: '외부 도구 서버 현황 (기본 프리셋)' }), ...rows);
 }
 // ── [서비스 로그인] — 조직 자격만(#837). ──
@@ -4539,9 +4539,8 @@ async function credentialsEditor(detail) {
         org = await api('/api/ui/org/credentials');
         // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
         awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
-        // ⚠ 이름과 달리 org_connector(외부 자료 수집)의 카탈로그가 **아니다** — org_mcp_server 프리셋이다
-        //   (src/org/connector-catalog.ts:12). 그래서 이 카드는 '외부 도구 서버' 현황을 보여준다.
-        catalog = await api('/api/ui/org/connector-catalog').catch(() => ({ catalog: [] }));
+        // 외부 도구 서버(MCP) 프리셋 — '외부 자료 수집'(org_connector 미러)과 무관하다.
+        catalog = await api('/api/ui/org/mcp-server-presets').catch(() => ({ catalog: [] }));
         mcpServers = await api('/api/ui/org/mcp-servers').catch(() => ({ servers: [] }));
     }
     catch (e) {
