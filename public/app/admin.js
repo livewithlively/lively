@@ -966,15 +966,27 @@ async function cronPanel(detail, data) {
         detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다')));
         return;
     }
+    // 자동 생성 잡(#837) — [외부 자료 수집]에서 커넥터를 켜면 서버가 `sync-<system>`(노션은 `-full` 도)을
+    //  **자동으로 등록/해제**한다(src/org/store.ts:987). 관리자가 만든 게 아닌데 목록에선 구분이 안 돼
+    //  "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면 커넥터는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+    const autoSystemOf = (j) => {
+        if (j.action !== 'connector_sync')
+            return null;
+        const sys = j.params && j.params.system;
+        if (!sys)
+            return null;
+        return (j.id === 'sync-' + sys || j.id === 'sync-' + sys + '-full') ? String(sys) : null;
+    };
     const rows = el('div', { class: 'wikicat-rows' });
     if (!jobs.length)
         rows.append(el('div', { class: 'wikicat-empty', text: '아직 스케줄 잡이 없습니다.' }));
     for (const j of jobs) {
+        const autoSys = autoSystemOf(j);
         const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : ('매 ' + (j.interval_sec || 0) + '초'));
         const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
         const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
-        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: j.label || j.id }), el('span', { class: 'wikicat-key mono', text: j.action + sess }), el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
-        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload, tz) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
+        const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: j.label || j.id }), autoSys ? withTip(el('span', { class: 'pill', text: '자동' }), '[외부 자료 수집]에서 ' + autoSys + ' 를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 커넥터를 끄세요.') : null, el('span', { class: 'wikicat-key mono', text: j.action + sess }), el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }), el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
+        const acts = el('div', { class: 'wikicat-row-acts' }, el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }), el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload, tz) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload, autoSys) }));
         rows.append(el('div', { class: 'wikicat-row' }, main, acts));
     }
     const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '스케줄 잡' }), el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
@@ -1096,8 +1108,14 @@ async function cronToggle(job, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-async function cronDelete(id, reload) {
-    if (!confirm('스케줄 잡 ‘' + id + '’을(를) 삭제할까요?'))
+// autoSys 가 있으면 이 잡은 [외부 자료 수집]이 만든 것 — 지워도 커넥터를 다시 켜면 되살아나고(ON CONFLICT DO UPDATE),
+//  그 사이엔 "커넥터는 켜져 있는데 싱크는 안 도는" 상태가 된다. 그러니 지우지 말고 커넥터를 끄라고 말해 준다.
+async function cronDelete(id, reload, autoSys) {
+    const warn = autoSys
+        ? '⚠ 이 잡은 [외부 자료 수집 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
+            + '그때까지는 커넥터만 켜져 있고 싱크는 안 도는 상태가 됩니다.\n싱크를 멈추려면 이 잡이 아니라 **커넥터를 끄세요**.\n\n그래도 삭제할까요?'
+        : '스케줄 잡 ‘' + id + '’을(를) 삭제할까요?';
+    if (!confirm(warn))
         return;
     try {
         await api('/api/ui/cron/' + encodeURIComponent(id) + '/delete', { method: 'POST' });
@@ -3070,7 +3088,9 @@ function mcpEditor(detail, data) {
         mcpForm(right, editing, data, detail, sel === '__new__');
     else
         right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
-    detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, 
+    // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
+    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']), el('div', { class: 'admin-two' }, listCol, right)));
 }
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
 const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
@@ -3272,7 +3292,7 @@ function connectorEditor(detail, data) {
     const banner = (editing && editing.secrets_enabled === false)
         ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
         : null;
-    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', '슬랙·노션·클릭업·지메일·구글드라이브를 주기적으로 **우리 DB 로 복사**해 옵니다(미러). AI 가 그때그때 호출하는 외부 시스템은 여기가 아니라 [AI 도구 ▸ 외부 도구 서버]에 있습니다.'), banner, el('div', { class: 'admin-two' }, listCol, right)));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', data.meaning && data.meaning['connector']), banner, el('div', { class: 'admin-two' }, listCol, right)));
 }
 // 실행 상태 라벨/소요 — run 카드·기록·로그 공용.
 function runStatusLabel(st) { return st === 'ok' ? '✅ 성공' : st === 'running' ? '⏳ 진행 중' : st === 'canceled' ? '⏹ 중지됨' : '❌ 실패'; }
@@ -5362,39 +5382,6 @@ async function myAssetsSection(detail) {
     };
     await reload();
 }
-// ── 우상단 [내 프로필] — **빠른 편집만**(#837 후속). ──
-//  예전엔 이 모달 하나에 필드 15개 + 중첩 모달 2개(스킬·훅 / 서비스 로그인)가 들어 있었다.
-//  사용자 지적대로 "진짜 프사나 표시 이름 변경 정도"만 남기고, 나머지는 [관리 ▸ 내 설정]으로 폈다.
-//  저장은 부분 갱신 — display_name·아바타만 보내므로 개인 레이어(AI 개인화)는 건드리지 않는다.
-async function openMyProfile() {
-    let data;
-    try {
-        data = await api('/api/ui/me/profile');
-    }
-    catch (e) {
-        toast((e && e.message) || '프로필을 불러오지 못했습니다', true);
-        return;
-    }
-    const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
-    const ava = avatarEditor(data, nameIn);
-    const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
-    const back = overlay('내 프로필', field('프로필 사진', ava.node), field('표시 이름', nameIn), el('div', { class: 'admin-actions' }, saveBtn, el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/me-profile', text: '전체 설정 →',
-        onclick: () => { back.remove(); } })), el('p', { class: 'admin-hint', style: 'margin:12px 0 0',
-        text: 'AI 개인화(호칭·말투·답변 길이)·서비스 로그인·내 스킬·훅·비밀번호는 [관리 ▸ 내 설정]에 있어요.' }));
-    saveBtn.addEventListener('click', async () => {
-        saveBtn.disabled = true;
-        try {
-            const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: nameIn.value.trim(), ...ava.payload() }) });
-            applyMyProfileSaved(res, data.id);
-            toast('저장됨');
-            back.remove();
-        }
-        catch (e) {
-            toast((e && e.message) || '저장하지 못했습니다', true);
-            saveBtn.disabled = false;
-        }
-    });
-}
 function overlay(title, ...content) {
     const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
     const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
@@ -5417,4 +5404,4 @@ function overlay(title, ...content) {
 //  데이터: GET /api/ui/v6/tasks/:id/detail 1회 페치, 각 편집은 전용 엔드포인트 패치 후 모달만 refresh.
 //  닫을 때 변경 있었으면 페이지 reload() 로 리스트 반영. 보안: el()/textContent/renderMarkdown 만.
 // ════════════════════════════════════════════
-export { changePasswordModal, copyButton, deployCommands, field, hasScope, installCmd, loadAdmin, openMyProfile, overlay, renderSystem, };
+export { changePasswordModal, copyButton, deployCommands, field, hasScope, installCmd, loadAdmin, overlay, renderSystem, };
