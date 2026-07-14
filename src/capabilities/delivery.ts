@@ -58,7 +58,7 @@ import {
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
-import { DEFAULT_CONNECTORS } from "../org/connector-catalog.js";
+import { MCP_SERVER_PRESETS } from "../org/mcp-server-presets.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
@@ -1238,10 +1238,13 @@ export const deliveryCapabilities: Capability[] = [
         name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
       })) };
     }),
-  restOnly("org_connector_catalog", "기본 커넥터 카탈로그(프리셋)",
-    "관리탭 '커넥터 추가'가 프리셋으로 채우는 기본 커넥터 정본(호스팅 OAuth MCP). 코드 SoT(connector-catalog.ts). 시크릿 없음.",
-    [{ method: "GET", paths: ["/api/ui/org/connector-catalog"], parse: () => ({}) }],
-    async () => ({ catalog: DEFAULT_CONNECTORS })),
+  // 외부 도구 서버(MCP) 기본 프리셋. 구 이름 org_connector_catalog / /org/connector-catalog 는 **오해를 부르는
+  //  이름이었다**(#837) — 담긴 건 org_connector(패시브 미러)가 아니라 org_mcp_server 다. 개명하되 **구 REST 경로는
+  //  별칭으로 남긴다**(이미 배포된 클라이언트 보호). MCP 툴 이름은 세션마다 tools/list 로 새로 발견되므로 개명해도 안전.
+  restOnly("org_mcp_server_presets", "외부 도구 서버(MCP) 기본 프리셋",
+    "관리탭 [AI 도구 ▸ 외부 도구 서버] 추가 시 프리셋으로 채우는 기본 MCP 서버 정본(호스팅 OAuth). 코드 SoT(mcp-server-presets.ts). 시크릿 없음. ※ 외부 자료 수집(org_connector 미러)과는 무관하다 — 구 이름 org_connector_catalog.",
+    [{ method: "GET", paths: ["/api/ui/org/mcp-server-presets", "/api/ui/org/connector-catalog"], parse: () => ({}) }],
+    async () => ({ catalog: MCP_SERVER_PRESETS })),
   restOnly("org_mcp_upsert", "MCP 서버 추가·수정",
     "조직 MCP 서버를 저장한다. transport http(url)|stdio(command). 인증은 auth_env(환경변수 이름만 — 시크릿 금지).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server"], parse: (req) => req.body ?? {} }],

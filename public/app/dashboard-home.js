@@ -2259,7 +2259,7 @@ function dashReviewRow(r) {
     const sub = mine > 0
         ? (total > mine ? `전체 ${total}건 중 · 승인해야 검색·주입에 반영돼요` : '승인해야 검색·주입에 반영돼요')
         : `신규 ${Number(r.new) || 0} · 수정 ${Number(r.edit) || 0} · 승인해야 검색·주입에 반영돼요`;
-    return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/system/review-queue' }, el('span', { class: 'dash-ntf-tile t-amber' }, dashReviewIcon()), el('span', { class: 'dash-ntf-main' }, el('span', { class: 'dash-ntf-line' }, el('b', { class: 'dash-ntf-who', text: `검토 대기 ${primary}건` }), el('span', { class: 'dash-ntf-dbadge', text: mine > 0 ? '내 도메인' : '전체' })), el('span', { class: 'dash-ntf-sub', text: sub })));
+    return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/knowledge/review' }, el('span', { class: 'dash-ntf-tile t-amber' }, dashReviewIcon()), el('span', { class: 'dash-ntf-main' }, el('span', { class: 'dash-ntf-line' }, el('b', { class: 'dash-ntf-who', text: `검토 대기 ${primary}건` }), el('span', { class: 'dash-ntf-dbadge', text: mine > 0 ? '내 도메인' : '전체' })), el('span', { class: 'dash-ntf-sub', text: sub })));
 }
 function dashReviewIcon() {
     const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });

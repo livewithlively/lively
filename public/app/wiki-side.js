@@ -3,6 +3,7 @@
 //  Notion 미러 트리·도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, el, state, sv } from './core.js';
+import { reviewNavBadge } from './review.js'; // #837 검토 대기 배지(대기 0이면 안 그려진다)
 import { isCategoryHomeDoc, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knPageIcon, knTreeIcon, SPACE_LABEL } from './wiki-data.js';
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
@@ -333,8 +334,12 @@ function knSideTools() {
         title: '도메인으로 묶은 지식 지도 — 풀스크린 새 창에서 팬·줌으로 탐색', onclick: openKnowledgeAtlas }, sv('svg', { class: 'sub-graph-ic', viewBox: '0 0 24 24', width: '14', height: '14', 'aria-hidden': 'true' }, sv('circle', { cx: '6', cy: '7', r: '2.4', fill: 'currentColor' }), sv('circle', { cx: '17', cy: '6', r: '2', fill: 'currentColor', opacity: '0.7' }), sv('circle', { cx: '13', cy: '17', r: '2.2', fill: 'currentColor', opacity: '0.85' }), sv('path', { d: 'M7.8 8.2 11.4 15.4M15.2 7.3 13.7 14.9', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', opacity: '0.5' })), ' 지식 그래프');
     const sourcesBtn = el('a', { class: 'btn btn-ghost btn-sm kn-sources-link kn-side-toolitem', href: '#/knowledge/sources',
         title: '회의록·이메일·슬랙 등 정제 전 원본 자료 — 지식과 분리된 보조 입력', text: '🗂 자료' });
+    // 검토 대기(#837) — 인입 게이트에 걸린 지식·수정 제안. 구 [관리 ▸ 검토 큐]가 여기로 왔다: 승인 권한이
+    //  워킹레벨(memory)인데 관리탭에 있어 정작 검토할 사람이 못 보고 방치됐다. 배지는 대기가 0보다 클 때만 뜬다.
+    const reviewBtn = el('a', { class: 'kn-side-toolitem', href: '#/knowledge/review',
+        title: '자동 인입 게이트에 걸린 지식·수정 제안 — 승인하거나 반려합니다', text: '📥 검토 대기' }, reviewNavBadge());
     const trashBtn = el('a', { class: 'kn-side-toolitem', href: '#/trash', title: '삭제한 지식·카테고리 복원', text: '🗑 휴지통' });
-    return el('div', { class: 'kn-side-tools' }, el('div', { class: 'eyebrow kn-side-tools-eyebrow', text: '도구' }), graphBtn, sourcesBtn, trashBtn);
+    return el('div', { class: 'kn-side-tools' }, el('div', { class: 'eyebrow kn-side-tools-eyebrow', text: '도구' }), graphBtn, sourcesBtn, reviewBtn, trashBtn);
 }
 // ── 폭 조절(프로젝트 탭과 동일 UX·같은 localStorage 'pjv:sideW' 공유) ──
 function knSideResizeHandle(shell) {

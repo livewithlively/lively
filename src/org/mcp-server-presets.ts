@@ -1,4 +1,9 @@
-// 기본 커넥터 카탈로그(#746) — 배포 시 자동 시딩되는 "호스팅 OAuth MCP 커넥터"의 정본(SoT).
+// 외부 도구 서버(MCP) 기본 프리셋 (#746) — 배포 시 자동 시딩되는 "호스팅 OAuth MCP 서버"의 정본(SoT).
+//
+// ⚠ 구 이름은 connector-catalog(DEFAULT_CONNECTORS) 였는데 **거짓말이었다**(#837). 여기 담긴 건 org_connector
+//  (슬랙·노션을 우리 DB 로 당겨오는 패시브 미러 = 화면상 "외부 자료 수집")와 **아무 관계가 없고**, org_mcp_server
+//  (AI 가 실시간 호출하는 외부 도구 서버) 의 프리셋이다 — 아래 name 필드가 그 증거다. 이름 때문에 코드 독자와
+//  API 소비자가 정반대 축으로 오독해 왔다. 그래서 파일·타입·상수·엔드포인트를 전부 mcp-server-presets 로 개명했다.
 //  bootstrap-connectors.mjs 가 seed=true 항목을 '없으면 등록'(멱등, 기존 보존)한다.
 //  가르는 축은 상류의 OAuth 클라이언트 등록 방식:
 //   - DCR(RFC7591) 지원 → 게이트웨이가 클라이언트를 동적 등록(무시크릿) → per-deploy 세팅 0 → seed=true(기본 출하).
@@ -8,7 +13,7 @@
 //   기본 enabled 로 출하해도 무해. 어떤 기본 커넥터를 영구 제외하려면 삭제가 아니라 '비활성(disable)' 하라
 //   (bootstrap 은 이름이 이미 존재하면 보존하므로 disable 상태가 유지된다; 삭제하면 다음 배포에 다시 시드됨).
 
-export interface ConnectorCatalogEntry {
+export interface McpServerPreset {
   name: string;            // org_mcp_server.name (slug)
   label: string;           // 표시명
   url: string;             // 상류 remote MCP 엔드포인트(http streamable)
@@ -21,7 +26,7 @@ export interface ConnectorCatalogEntry {
   note: string;
 }
 
-export const DEFAULT_CONNECTORS: ConnectorCatalogEntry[] = [
+export const MCP_SERVER_PRESETS: McpServerPreset[] = [
   // ── DCR 지원(무시크릿) — 배포 시 자동 등록. 구성원은 관리탭/자격에서 [연결]만. ──
   {
     name: "notion", label: "Notion", url: "https://mcp.notion.com/mcp",

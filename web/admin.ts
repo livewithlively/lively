@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, pageHead, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
+import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -9,95 +9,165 @@ import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js
 // 관리(전달/관리 — workflow-std 흡수). 핵심 원칙: 비개발자가 편집/확인하는 모든 항목 옆에
 // '구성원에게 미치는 효과'를 항상 보여준다(meaning 패널). 셸/디자인/라우터는 기존 재사용.
 // ════════════════════════════════════════════════════════════════════
-// 관리 중분류(사이드바 1단, 2026-06-20 · #827 로 가로 탭 → 사이드바 그룹) — 비개발자가 섹션에서 길잃지 않게 묶는다.
-//  ① 기본 설정: 접속·구성원·토큰(굴러가게 하는 기본기) ② 회사·조직: 규칙·맥락·메모리·용어(AI에 가르치는 내용)
-//  ③ AI 동작·연결(고급): 훅·도구·MCP·DB(AI가 실제 어떻게 동작/어떤 데이터에 닿나).
-//  '지식 종류 레지스트리'·'설치'는 관리에서 빼 #/learn(가이드)로 이관 — 전자=용어설명, 후자=구성원 셋업.
+// ════════ 관리탭 정보구조 (#837, 2026-07-14) ════════
+// 이전 구조(2026-06-20~)의 대분류 5개는 **서로 다른 잣대**로 잘려 있었다 — 빈도(기본 설정)·대상(조직·권한)·
+//  대상(분류 체계)·메커니즘(맥락·세션 주입), 그리고 **난이도**('연결·데이터 (고급)'). 마지막은 주제가 아니라
+//  형용사여서 기술적인 건 전부 거기로 밀렸다: 소분류 25개 중 17개(권한 체제는 5가지가 뒤섞임). 그 결과
+//  나머지 그룹 3개는 소분류가 1개뿐이라 좌측 nav 가 사라졌다 나타났다 했다(구 soloSection 예외).
+//
+// 그래서 분류축을 **하나**로 통일한다 — "무엇을 관리하는가":
+//  조직(누가 쓰나) · AI 맥락(AI에게 뭘 가르치나) · AI 능력(AI가 뭘 할 수 있나) · 데이터 연결(AI가 어디에 닿나) · 운영·감사(무슨 일이 있었나).
+// 그리고 **가로 중분류 바를 폐지**하고 좌측 사이드바 하나에 그룹 머리글로 편다(프로젝트 탭 중분류 폐지 #629 와 같은 방향).
+//  → 16개 화면이 항상 한눈에 보이고 화면 골격이 바뀌지 않는다.
+//
+// 병합 원칙(불변식, 2026-06-26 결정 계승): **합치는 건 화면이지 데이터가 아니다 — 새 진실 출처 0.**
+//  같은 리소스를 다루던 여러 탭을 한 화면의 서브탭으로 접을 뿐, 저장 경로(API)는 그대로 둔다.
+//
+// ⚠ 셸(내비 골격)은 #827 이 먼저 바꿨다 — 가로 중분류 바(.admin-cats) + 그룹별 좌측 카드 nav 를
+//  '사용 가이드(#/learn)의 docs-side 재사용 + 본문 전폭'으로 통합(main 594feb3). 여기서는 **그 셸을 그대로 쓰고**,
+//  #827 이 손대지 않은 **내용**(그룹·섹션 구성, 병합, 용어)을 바꾼다. 그래서 아래 그룹·섹션 정의가 이 파일의 핵심이다.
 const ADMIN_GROUPS = [
-  { key: 'basic', label: '기본 설정' },
-  { key: 'access', label: '조직·권한 설정' },
-  { key: 'wiki', label: '분류 체계 관리' },
-  { key: 'knowledge', label: '맥락·세션 주입' },
-  { key: 'ai', label: '연결·데이터 (고급)' },
+  // 내 설정 — 축이 다르다(대상이 '나'). 맨 위에 두는 이유: 비관리자에게는 관리탭에서 **실제로 할 수 있는 유일한 일**이다
+  //  (나머지는 전부 읽기 전용). 관리자도 호칭·말투는 자주 손본다. GitHub·Slack 도 개인 → 조직 순이다.
+  { key: 'me', label: '내 설정', hint: '나에 대한 것' },
+  { key: 'org', label: '조직', hint: '누가 쓰나' },
+  { key: 'context', label: 'AI 맥락', hint: 'AI에게 뭘 가르치나' },
+  { key: 'capability', label: 'AI 능력', hint: 'AI가 뭘 할 수 있나' },
+  { key: 'data', label: '데이터 연결', hint: 'AI가 어디에 닿나' },
+  { key: 'ops', label: '운영·감사', hint: '무슨 일이 있었나' },
 ];
+// ════════ 용어 사전 (#837) — 한 단어가 두 가지를 가리키던 것들을 갈랐다 ════════
+// 조사 결과 관리탭의 핵심 명사 대부분이 이중 의미였다. 특히 **'커넥터'는 정반대 두 축**에 붙어 있었다:
+//   ⓐ 패시브 미러 — 외부 SaaS 를 우리 DB 로 **당겨와 저장**한다. `org_connector` · CONNECTOR_SPECS · sync run.
+//   ⓑ 액티브 프록시 — AI 가 **그때그때 호출**하는 외부 MCP 서버. `org_mcp_server`(mode=proxy, oauth).
+// 그런데 구 nav 는 ⓐ를 '커넥터(외부 소스)', ⓑ의 로그인을 '자격(커넥터 로그인)' 이라 부르며 아홉 줄 간격으로
+// 나란히 뒀다. 결정타: 구 `/api/ui/org/connector-catalog` 는 이름과 달리 **ⓐ와 무관**하고 ⓑ의 프리셋이었다
+// (`name: string;  // org_mcp_server.name`) — 그래서 엔드포인트·파일·타입·MCP 툴명을 전부 mcp-server-presets
+// 로 개명했다(구 REST 경로는 별칭 유지). 그리고:
+//
+//   ⓐ → **'외부 자료 수집'**  (데이터 연결 그룹 — 가져와서 쌓는 것)
+//   ⓑ → **'AI 도구'** 안의 [외부 도구 서버] 서브탭  (AI 능력 그룹 — 호출하는 것)
+//   'connector/커넥터' 라는 말은 **UI 에서 전면 퇴출**한다. 두 축 어느 쪽도 그 이름으로 부르지 않는다.
+//
+// 그 밖에 갈라 놓은 것:
+//   · 세션 — 그냥 '세션' = AI 대화 세션(SessionStart). 구 '상시 세션'은 **'상시 에이전트'**로(충돌 해소).
+//            '터미널 세션'은 터미널 탭 소관. 이제 관리탭의 "다음 세션부터 반영"이 모호하지 않다.
+//   · 자격/토큰/열쇠 — **'접속 열쇠'** = 우리 게이트웨이 접속(auth_token). **'서비스 로그인'** = 외부 서비스
+//            자격(member_secret). 둘을 '토큰'이라 뭉뚱그리지 않는다.
+//   · 프로필 — 구 '중앙박스 계정(프로필)'은 **'AI 실행 계정'**([구성원] 안 서브탭). 우상단 '내 프로필'과 안 겹친다.
+//   · scope — 구성원 권한은 '권한', 도구 호출에 필요한 건 '필요 권한', OAuth 는 'OAuth 허용범위',
+//            수집 대상 고르기는 '수집 범위'(구 '스코프 픽커').
+// ※ 서버 식별자(엔드포인트·capability·테이블)는 그대로 둔다 — 이건 화면 용어 정리다(호환 파괴 0).
+//   → 개명 완료: `/api/ui/org/mcp-server-presets` (구 경로는 별칭 유지). 파일·타입·상수·MCP 툴명도 함께.
 const ADMIN_SECTIONS = [
-  // ① 기본 설정 — 한 번 세팅하면 굴러가는 조직 기본 정보(이름·서버 주소).
-  { key: 'profile', label: '조직 기본 정보', meaning: 'gateway-url', group: 'basic' },
-  // ② 조직·권한 설정 — 누가 함께 쓰나(구성원·팀) + 접속 권한.
-  { key: 'members', label: '구성원 관리', meaning: 'member', group: 'access' },
-  // 팀(스쿼드/사일로) 관리 — 구성원을 팀으로 묶고, 팀이 카테고리를 '소유'(오너십 배정은 분류체계관리에서). 팀 소유 = 표면화·주입의 '우리 팀' 기준.
-  { key: 'teams', label: '팀 관리', meaning: 'team', group: 'access' },
-  { key: 'member-add', label: '구성원 추가', meaning: 'member', group: 'access' },
-  { key: 'tokens', label: '구성원 토큰 관리', meaning: null, group: 'access' },
-  // 중앙박스 계정(프로필) — 멤버별 다른 Claude Code 계정(멀티프로필 #346/#442). config·MCP·훅은 여기서 설치, 로그인은 멤버가 웹터미널에서.
-  { key: 'profiles', label: '중앙박스 계정(프로필)', meaning: null, group: 'access' },
-  // ②-B WIKI 카테고리 관리 — 지식(위키)의 분류축(사업·제품·시스템 카테고리) CRUD. 제품 카테고리=도메인.
-  //  카테고리 탭(#/categories)과 같은 category-store(/api/ui/categories) — 여기 수정이 지식·프로젝트 탭 좌측에 반영.
-  { key: 'wiki-categories', label: '카테고리 설정', meaning: null, group: 'wiki' },
-  // ③ 맥락·세션 주입 — AI가 매 세션 무엇을 언제 주입받나(단일 지도). nav 엔 '세션 주입 지도'(injection-map) 한 화면만.
-  //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335). 구 #/system/<section> 라우트·SECTION_REMAP 흡수는 호환용 잔존.
-  //  WIKI 인덱스는 WIKI 탭, 주제 분류는 '카테고리 설정'으로 일원화(2026-06-24).
-  { key: 'injection-map', label: '세션 주입 지도', meaning: null, group: 'knowledge' },
-  // ④ 연결·데이터 (고급) — AI가 무엇에 닿나(도구·MCP·DB·레포) + 외부 호출/DB 안전범위 + 커스텀 훅(코드).
-  //  훅 개요·런타임 토글·주입 미리보기는 '세션 주입 지도'로 흡수(2026-06-26). 여기엔 연결/데이터/안전범위와 코드 훅만 남는다.
-  { key: 'tools', label: 'AI 도구(MCP)', meaning: 'tool', group: 'ai' },
-  // MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지(mcp_call_log 집계). 읽기 전용 대시보드(admin).
-  { key: 'tool-usage', label: 'MCP 호출 통계', meaning: null, group: 'ai' },
-  // 조직 변경 감사(#549) — 관리 항목이 누구(사람/AI)에 의해 어떤 경로(웹/MCP)로 언제 바뀌었나. 읽기 전용(admin).
-  { key: 'org-audit', label: '변경 감사 로그', meaning: null, group: 'ai' },
-  { key: 'mcp', label: 'MCP 서버', meaning: 'mcp', group: 'ai' },
-  { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'ai' },
-  // 자격(커넥터 로그인) — 능동 커넥터(GitLab·Slack·AWS 등)가 쓰는 per-user 토큰 vault(#746 P1). '내 자격'은 전원, '통합 자격'·AWS 는 admin.
-  { key: 'credentials', label: '자격(커넥터 로그인)', meaning: null, group: 'ai' },
-  // DB 접근 감사(#746 P5) — 누가·언제·어떤 테이블/식별자를 조회했나(위변조 방지 해시체인). 신용정보법 R8. admin 전용.
-  { key: 'db-audit', label: 'DB 접근 감사', meaning: null, group: 'ai' },
-  // 저장소·로그(#813) — 박스 디스크가 얼마나 찼나 + 로그 상한. 디스크가 100% 가 되면 DB 가 죽어 전 기능이 500 이 된다
-  //  (2026-07-13 사고). 고객 박스는 우리가 SSH 로 못 들어가므로 **여기가 유일한 관측·조절 창구**다. admin 전용(인프라).
-  { key: 'storage', label: '저장소 · 로그', meaning: null, group: 'ai' },
-  // 임베딩(벡터검색 #172) — 의미검색/유사도의 벡터 provider 토글 + 기존 지식 백필. admin 전용(인프라 설정).
-  { key: 'embeddings', label: '임베딩(벡터검색)', meaning: null, group: 'ai' },
-  // 커넥터(외부 소스) 설정·토큰 — slack/notion/clickup/gmail/drive 별 자격·설정. secrets 암호화 저장(#541).
-  { key: 'connectors', label: '커넥터(외부 소스)', meaning: null, group: 'ai' },
-  // 인입 허용선 게이트(#638) — 자동 인입(미러/distill)을 auto/confirm/drop 로 조절 + 검토 큐(pending 승인).
-  { key: 'ingest-policy', label: '지식 검토 게이트', meaning: null, group: 'ai' },
-  { key: 'review-queue', label: '검토 큐', meaning: null, group: 'ai' },
-  // 레포(git) 관리 — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
-  { key: 'repos', label: '레포(git) 관리', meaning: null, group: 'ai' },
-  // 스케줄러(자동화) — org_cron 잡. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped, 상시 세션에 주입)·sync 를 주기 실행. admin 전용.
-  { key: 'cron', label: '스케줄러 (자동화)', meaning: null, group: 'ai' },
-  // 상시 세션(에이전트) — 항상 떠있는 에이전트 세션 CRUD + 격리 워크스페이스 + keep-alive. 크론이 타깃. admin 전용.
-  { key: 'managed-sessions', label: '상시 세션 (에이전트)', meaning: null, group: 'ai' },
-  // (외부 호출·DB 안전범위 = allowlist 별도 탭 폐기(2026-06-26) → 'AI 도구'·'DB 데이터소스' 화면 안 allowlistCard 로 인라인.)
-  // 커스텀 훅(코드) — 특정 이벤트에 실행할 임의 코드. 세션 주입 지도에서 목록·요약을 보고 여기서 정의.
-  { key: 'custom-hooks', label: '커스텀 훅 (코드)', meaning: 'custom-hook', group: 'ai' },
-  // 하네스 자산(스킬·서브에이전트·슬래시커맨드) — 관리자가 정의해 구성원 하네스에 배포. 훅과 같은 runtime 자산군이나
-  //  멤버 디스크(~/.claude|.codex/{skills,agents,commands})에 materialize(하네스가 스캔해야 발견). 위험 통제=짝훅.
-  { key: 'harness-assets', label: '스킬·에이전트·커맨드', meaning: 'harness-asset', group: 'ai' },
+  // ── 내 설정 (#837 후속) ──
+  //  구조상 우상단 [내 프로필] 모달 하나에 필드 15개 + 중첩 모달 2개가 들어 있었다 —
+  //  사용자 지적: "개인 설정을 프로필 모달에서 하고있는데 이 경험이 안좋은거같아."
+  //  모달은 **빠른 편집(프사·표시 이름)**만 남기고 나머지를 여기로 폈다. 저장 경로는 그대로다 —
+  //  서버 me_profile_update 가 **부분 갱신(patch)** 이라(미전송 필드 보존) 화면을 쪼개도 한쪽이 다른쪽을 안 지운다.
+  //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
+  { key: 'me-profile', label: '내 정보', meaning: null, group: 'me' },
+  { key: 'me-ai', label: 'AI 개인화', meaning: null, group: 'me' },
+  { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
+  { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
+  // ── 조직 ──
+  { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
+  // 구성원 — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4개 탭을 한 화면(서브탭)으로.
+  //  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라져 있던 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에
+  //  점프하고 state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다(#837 에서 제거).
+  { key: 'members', label: '구성원', meaning: 'member', group: 'org' },
+  { key: 'teams', label: '팀', meaning: 'team', group: 'org' },
+  // ── AI 맥락 ──
+  //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335).
+  { key: 'injection-map', label: '세션 주입', meaning: null, group: 'context' },
+  // 카테고리(분류축) CRUD + 오너 팀 배정. 제품 카테고리 = 도메인. 여기가 정의·범위의 **주인**이다(#837 결정) —
+  //  WIKI 탭 카테고리 페이지의 '정의·범위 편집'은 이리로 보내는 링크로 바뀌었다(편집 표면 일원화).
+  { key: 'wiki-categories', label: '카테고리(분류 체계)', meaning: null, group: 'context' },
+  // 지식 검토 게이트(#638) — 자동 인입을 auto/confirm/drop 로 조절하는 **정책(밸브)**. 그 밸브가 만든 **대기열**
+  //  (구 [검토 큐])은 설정이 아니라 일감이고 권한도 워킹레벨(memory)이라 WIKI 탭으로 옮겼다(#837). 여기선 딥링크만.
+  { key: 'ingest-policy', label: '지식 검토 정책', meaning: null, group: 'context' },
+  // 벡터 검색(#172) — 의미검색·유사도의 임베딩 provider + 백필. AI가 지식을 '뜻으로' 찾는 능력이라 맥락 그룹.
+  { key: 'embeddings', label: '의미 검색', meaning: null, group: 'context' },
+  // ── AI 능력 ──
+  // 도구 — 구 [AI 도구(MCP)] + [MCP 서버]. 둘 다 이름에 MCP 가 붙어 헷갈렸지만 다른 것이었다:
+  //  전자=우리가 정의해 노출하는 도구(사내 API·빌트인), 후자=외부 MCP 서버 등록. 한 화면의 서브탭으로.
+  { key: 'tools', label: 'AI 도구', meaning: 'tool', group: 'capability' },
+  // 로그인 키 — member_secret vault. 구 라벨 '자격(커넥터 로그인)'은 오해였다: 이 키를 소비하는 건 커넥터가
+  //  아니라 **프록시 MCP 서버와 AI 도구**다(커넥터는 org_connector.secrets 라는 자기 테이블을 따로 쓴다).
+  //  그래서 커넥터가 아니라 도구 옆에 둔다. 개인용 vault('내 자격')는 [내 프로필]로 이관(#837) → 여기는 조직 키만.
+  { key: 'credentials', label: '서비스 로그인', meaning: null, group: 'capability' },
+  // 에이전트 자산 — 구 [커스텀 훅]+[스킬·에이전트·커맨드]. 둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서
+  //  도는 것'을 정의한다(자산의 paired_hook_id 가 훅을 참조하기까지 한다). 한 화면의 서브탭으로.
+  { key: 'agent-assets', label: '스킬 · 훅', meaning: 'harness-asset', group: 'capability' },
+  // 자동화 — 구 [스케줄러]+[상시 세션]. 크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시
+  //  세션을 필수 타깃으로 받는다(크론=언제 × 상시세션=어디서·누구로). 떨어뜨려 놓을 이유가 없다.
+  { key: 'automation', label: '자동화', meaning: null, group: 'capability' },
+  // ── 데이터 연결 ──
+  // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
+  //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
+  { key: 'connectors', label: '외부 자료 수집', meaning: null, group: 'data' },
+  // DB 데이터소스 — 등록 + 테이블 정책·컬럼 마스킹 + 감사 대상 식별자(subject-key) + 원본 열람 grant.
+  //  subject-key 는 구 [DB 접근 감사] 화면에 잘못 꽂혀 있었다 — 서버는 /org/db-source/* 하위 리소스로 본다(#837 에서 이관).
+  { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'data' },
+  // 레포(git) — repo 테이블(=실제 git 레포) 등록·git 연결. 도메인맵 스캔 + 로컬 작업 클론의 단일 소스.
+  { key: 'repos', label: '레포(git)', meaning: null, group: 'data' },
+  // ── 운영·감사 ──
+  // 감사 로그 — 구 [MCP 호출 통계]+[변경 감사 로그]+[DB 접근 감사]. 셋 다 "무슨 일이 있었나"를 묻는 읽기전용
+  //  대시보드이고 UI 골격도 이미 동형이었다(oa-* 는 tu-* 복제). 백엔드는 각각 다르므로 서브탭으로만 묶는다.
+  { key: 'audit', label: '감사 로그', meaning: null, group: 'ops' },
+  // 저장소·로그(#813) — 디스크가 100% 면 DB 가 죽어 전 기능이 500 이 된다(2026-07-13 사고). 고객 박스는 SSH 로
+  //  못 들어가므로 **여기가 유일한 관측·조절 창구**다.
+  { key: 'storage', label: '저장소 · 로그', meaning: null, group: 'ops' },
 ];
-// 구 URL(흡수된 섹션) → 새 섹션 리맵. 북마크·내부 링크 graceful 처리.
-// 흡수·폐기된 구 섹션 URL → 새 위치. org-defaults·guide 는 nav 에서 빠졌지만(모달 편집) 직접 URL 은 지도로 보낸다.
-const SECTION_REMAP = { 'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map', 'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map' };
-const ADMIN_ONLY = ['member-add', 'tokens', 'profiles', 'mcp', 'db-sources', 'db-audit', 'storage', 'embeddings', 'connectors', 'cron', 'managed-sessions', 'tool-usage', 'org-audit', 'ingest-policy']; // admin 권한 전용(쓰기/인프라 · #318 호출통계·#549 변경감사는 전 구성원 변경·before/after 노출이라 admin · #548 embeddings · #638 인입정책=오너 조절)
-// #783 검토 큐는 워킹레벨 개방 — 승인 백엔드가 이미 memory scope 다(#638 결정: "승인 자격제한 없음 — 카테고리 전문성 있는
-//  워킹레벨이 오너보다 잘 검토한다"). 에이전트 지식 게이트를 켜면 큐 볼륨이 오너 한 명으로 감당 안 되기도 한다.
-const MEMORY_SCOPE_SECTIONS = ['review-queue'];
-const RUNTIME_ONLY = ['custom-hooks', 'harness-assets', 'tools']; // runtime 권한 전용(멤버 머신 실행물 정의)
-// V4-P5/J: 어휘(도메인·레포·기능) CRUD = context 스코프(admin 완화). 도메인맵 CRUD 엔드포인트가 scope:'context'
-//  이므로 context 권한자면 편집 가능 — admin 전용 잠금 해제. context 없는 사용자는 읽기 전용(섹션 자체는 노출).
-const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams']; // context 스코프면 편집 가능(없으면 읽기 전용으로 표시)
-// 컨텍스트 온톨로지 가이드 섹션 — 매 대화에 깔리는 지식 인덱스 전체 템플릿. 잘못 바꾸면 모든 AI 동작이 망가질 수 있어 경고+되돌리기를 단다.
-const SCAFFOLD_SECTIONS = ['context-ontology-guide'];
-// 플레이스홀더 안내 — 편집창에 보여줄 자동주입 토큰 설명.
-const GUIDE_PLACEHOLDER_HINT = '이 글이 매 대화 첫머리의 “지식 인덱스”로 그대로 들어가요. 본문 안의 자리표시자 3개가 실제 데이터로 자동 채워집니다(그 자리에 두세요) — ${rules}=항상-주입 지식(injection=always), ${categories}=카테고리(주제) 지도, ${wiki}=WIKI 인덱스 핀.';
-// 비개발자용 경고 — '이게 무엇인지' 한 줄 + 공통 위험 안내(아래 sectionEditor 가 .admin-warn 으로 렌더).
-const SCAFFOLD_WARN = {
-  'context-ontology-guide': '이 글은 AI에게 "공유 지식이 무엇이고, 주제로 어떻게 찾고, 알게 된 걸 어디에 기록할지"를 알려주는 인덱스 전체 틀이에요.',
+// 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
+const SECTION_REMAP = {
+  // #837 병합
+  'member-add': 'members', 'tokens': 'members', 'profiles': 'members',
+  'mcp': 'tools',
+  'custom-hooks': 'agent-assets', 'harness-assets': 'agent-assets',
+  'cron': 'automation', 'managed-sessions': 'automation',
+  'tool-usage': 'audit', 'org-audit': 'audit', 'db-audit': 'audit',
+  // 과거 흡수분(2026-06-26)
+  'hooks-group': 'injection-map', 'hooks-preview': 'injection-map', 'runtime': 'injection-map',
+  'safety': 'tools', 'org-defaults': 'injection-map', 'context-ontology-guide': 'injection-map',
 };
-const SCAFFOLD_WARN_COMMON = '⚠️ 이건 모든 구성원의 AI가 지식을 정리·검색·기록하는 방식의 뼈대예요. 잘못 바꾸면 AI가 지식을 엉뚱하게 다루거나 못 찾을 수 있어요(특히 ${categories} 를 지우면 주제 목록이, ${rules} 를 지우면 항상-주입 규칙·지식이, ${wiki} 를 지우면 핀 인덱스가 사라져요). 평소엔 그대로 두는 게 안전하고, 꼭 바꿔야 하면 뜻을 정확히 아는 사람만 고치세요. 언제든 [기본값으로 되돌리기]로 원래대로 복구할 수 있어요.';
+// 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
+const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
+// admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
+const ADMIN_ONLY = ['credentials', 'connectors', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy'];
+const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
+// [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
+//  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
+const MIXED_SECTIONS = { tools: ['admin', 'runtime'] };
+// V4-P5/J: 어휘(카테고리·레포·팀) CRUD = context 스코프(admin 완화). context 없는 사용자는 읽기 전용(섹션은 노출).
+const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams'];
+// 내 설정 — 권한 게이트 없음(전 구성원 노출·편집). 서버도 me/* 엔드포인트라 principal 로 강제된다.
+const ME_SECTIONS = ['me-profile', 'me-ai', 'me-logins', 'me-assets'];
+// 이 섹션을 **내가** 편집할 수 있나 — 섹션마다 요구 권한이 다르다.
+//  ⚠ 전역 '읽기 전용 · 편집은 관리자만' 배지는 **거짓말이었다**(사용자 지적, #837 후속):
+//   admin 이 없어도 [카테고리]·[레포]·[팀]은 `context` 권한만으로 편집된다(CONTEXT_EDIT — 패널들이 canContext 로 게이팅).
+//   그런데 배지는 모든 섹션에 똑같이 "관리자만"이라 붙었다. 그래서 배지를 **섹션별**로 바꾸고 요구 권한을 정확히 말한다.
+function sectionCanEdit(key, data) {
+  if (ME_SECTIONS.includes(key)) return true;              // 내 설정 — 내 것이니 항상 편집 가능
+  if (CONTEXT_EDIT.includes(key)) return !!state.admin.canContext;
+  if (RUNTIME_ONLY.includes(key)) return !!data.canRuntime;
+  const any = MIXED_SECTIONS[key];
+  if (any) return any.some((sc) => (sc === 'admin' ? data.canEdit : sc === 'runtime' ? data.canRuntime : hasScope(sc)));
+  return !!data.canEdit;
+}
+// 편집하려면 어떤 권한이 필요한지 — 배지 문구에 그대로 쓴다("관리자만"이라고 뭉뚱그리지 않는다).
+function sectionNeedScope(key) {
+  if (CONTEXT_EDIT.includes(key)) return '컨텍스트(context)';
+  if (RUNTIME_ONLY.includes(key)) return '런타임(runtime)';
+  return '관리자(admin)';
+}
+
 function sectionHidden(key, data) {
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
-  if (MEMORY_SCOPE_SECTIONS.includes(key) && !(data.canEdit || hasScope('memory'))) return true;   // #783 지식 쓰기 권한자면 검토 가능
+  // 합집합 섹션([도구]) — 요구 권한 중 하나라도 있으면 노출(안에서 서브탭별로 다시 건다).
+  const any = MIXED_SECTIONS[key];
+  if (any && !any.some((s) => (s === 'admin' ? data.canEdit : s === 'runtime' ? data.canRuntime : hasScope(s)))) return true;
   return false;
 }
 // 현재 토큰이 가진 scope 보유 여부(/api/ui/me 의 scopes). 어휘 CRUD 권한(context) 판정에 쓴다.
@@ -200,8 +270,28 @@ function meaningCard(m0) {
 }
 
 // 섹션 제목 + 바로 옆 '이게 뭐예요?' 트리거(meaningCard 가 트리거 노드를 돌려준다). 제목 우측에 밋밋하게 붙는다.
+// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
+//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
+function inlineBold(text) {
+  const out: any[] = [];
+  const src = String(text);
+  let i = 0;
+  for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
+    const at = m.index as number;
+    if (at > i) out.push(src.slice(i, at));
+    out.push(el('b', { text: m[1] }));
+    i = at + m[0].length;
+  }
+  if (i < src.length) out.push(src.slice(i));
+  return out;
+}
+// 두 번째 인자는 meaning 객체(→ '이게 뭐예요?' 팝업) 또는 그냥 설명 문자열이다.
+//  문자열을 meaningCard 에 넘기면 m.what/m.reach 가 undefined 라 **빈 팝업**이 떴다(호출부 6곳). 문자열이면 설명 줄로 렌더한다.
 function sectionTitle(titleText, m) {
-  return el('div', { class: 'section-title' }, el('h2', { text: titleText }), meaningCard(m));
+  const isText = typeof m === 'string';
+  return el('div', {},
+    el('div', { class: 'section-title' }, el('h2', { text: titleText }), isText ? null : meaningCard(m)),
+    isText ? el('p', { class: 'admin-hint' }, ...inlineBold(m)) : null);
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -224,27 +314,31 @@ async function renderAdmin(view, sub) {
   //  엄격히 요구하므로(admin 자동 함의 없음 — web.ts mw), 버튼 노출도 context 보유로만 판정해 403 오작동을 막는다.
   state.admin.canContext = hasScope('context');
 
-  // 선택 섹션 — 없거나 권한으로 숨으면 첫 노출 섹션으로(과거 디폴트 'kinds'는 가이드로 이관돼 제거).
+  // 선택 섹션 — 없거나 권한으로 숨으면 첫 노출 섹션으로.
   const visibleSections = ADMIN_SECTIONS.filter((s) => !sectionHidden(s.key, data));
   let sel = sub || state.admin.sel;
-  if (sel && SECTION_REMAP[sel]) sel = SECTION_REMAP[sel]; // 흡수된 구 섹션 URL → 새 섹션
+  // 관리탭을 떠난 섹션(구 [검토 큐] → WIKI)의 옛 URL — 리다이렉트하고 렌더를 넘긴다(라우터가 다시 돈다).
+  if (sel && SECTION_EXIT[sel]) { location.replace(SECTION_EXIT[sel]); return; }
+  if (sel && SECTION_REMAP[sel]) sel = SECTION_REMAP[sel]; // 병합·흡수된 구 섹션 URL → 새 섹션
   if (!sel || !visibleSections.some((s) => s.key === sel)) sel = (visibleSections[0] || ADMIN_SECTIONS[0]).key;
   state.admin.sel = sel;
 
-  // ── 2단 사이드바(중분류 그룹 ▸ 섹션) — 사용 가이드(#/learn)의 문서 사이드바와 같은 시각 언어(docs-side, #827). ──
-  //  옛 내비는 '가로 중분류 탭 + 좌측 섹션 카드'로 위계가 두 곳에 쪼개져(다른 탭과 이질적) 어색했다.
-  //  이제 위계 2단을 사이드바 하나가 전담한다: 그룹명은 소제목, 섹션은 그 아래 항목. 전 그룹이 항상 펼쳐져 있어
-  //  '어디에 뭐가 있는지'가 한눈에 보이고, 그룹 전환에 클릭 한 단계가 덜 든다. 권한으로 빈 그룹은 통째로 숨는다.
+  // ── 2단 사이드바(그룹 ▸ 섹션) — 사용 가이드(#/learn)의 docs-side 시각 언어 재사용(#827). ──
+  //  위계 2단을 사이드바 하나가 전담한다: 그룹명은 소제목, 섹션은 그 아래 항목. 전 그룹이 항상 펼쳐져 있어
+  //  '어디에 뭐가 있는지'가 한눈에 보인다. 권한으로 섹션이 0개인 그룹은 통째로 숨는다.
+  //  #837 추가: 그룹명 아래 한 줄 힌트("누가 쓰나"·"AI에게 뭘 가르치나"…) — 새 분류축이 무엇인지 이름만으론 안 보인다.
   const side = el('nav', { class: 'docs-side admin-side', 'aria-label': '관리 섹션' });
   for (const g of ADMIN_GROUPS) {
     const items = visibleSections.filter((s) => s.group === g.key);
     if (!items.length) continue;
-    const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.label }));
+    const box = el('div', { class: 'docs-side-group' },
+      el('div', { class: 'docs-side-title', text: g.label }, g.hint ? el('span', { class: 'docs-side-hint', text: g.hint }) : null));
     for (const s of items) {
-      // 회색 부제(row-meta) 없이 라벨만(#613 후속). 예외는 '검토 큐'(#802) — 대기 건수 배지(0건이면 안 그린다).
+      // 회색 부제 없이 라벨만(#613). 예외는 '지식 검토 정책'(#802 계승) — 검토 대기 건수 배지(0건이면 안 그린다).
+      //  큐 자체는 WIKI 로 갔지만(#837), 게이트를 켠 관리자가 "내 밸브에 N건이 밀려 있다"를 여기서 보게 둔다.
       box.append(el('a', { class: 'docs-item' + (s.key === sel ? ' active' : ''), href: '#/system/' + s.key,
         'aria-current': s.key === sel ? 'page' : null },
-        el('span', { text: s.label }), s.key === 'review-queue' ? reviewNavBadge() : null));
+        el('span', { text: s.label }), s.key === 'ingest-policy' ? reviewNavBadge() : null));
     }
     side.append(box);
   }
@@ -252,46 +346,172 @@ async function renderAdmin(view, sub) {
   const detail = el('div', {});
   renderAdminDetail(detail, sel, data);
 
-  // 상태 배지(조직명 / 읽기 전용) — 통일 헤더의 우측 액션 자리로. (#367)
-  const statusEl = canEdit
-    ? el('span', { class: 'admin-sub', text: (data.profile.display_name || '조직') })
-    : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' ' + (data.profile.display_name || '조직') + ' · 보기 전용(편집은 관리자)');
-  // 본문은 문서(.docs-body)와 달리 폭 제한 없이 전폭 — 관리 화면은 표·그리드·에디터가 많다(#827).
-  const body = el('div', { class: 'admin-body' },
-    pageHead('관리', '조직·권한, 분류 체계, 연결·데이터 등 시스템 전반을 설정합니다.', [statusEl], '리'),
-    detail);
+  // 페이지 머리('관리' + 부제 + 조직명)는 폐지(#837) — 상단 탭이 이미 '관리'를 켜 두었고 사이드바가 지금 어느
+  //  화면인지 말해 준다. 그 위에 화면마다 같은 제목·부제가 반복되면 본문만 아래로 밀린다.
+  //  '읽기 전용'은 **이 섹션이 실제로 나에게 읽기 전용일 때만** 붙인다(섹션별 — 위 sectionCanEdit 주석 참조).
+  const ro = !sectionCanEdit(sel, data)
+    ? el('div', { class: 'admin-ro-note' },
+        el('span', { class: 'pill', text: '읽기 전용' }),
+        el('span', { text: '이 화면을 편집하려면 ' + sectionNeedScope(sel) + ' 권한이 필요합니다 — 관리자에게 요청하세요.' }))
+    : null;
+  const body = el('div', { class: 'admin-body' }, ro, detail);
   view.replaceChildren(el('div', { class: 'docs-layout admin-layout' }, side, body));
   applyReveal([body]);
 }
 
+// sel 은 두 종류가 들어온다:
+//  ① nav 섹션 키(ADMIN_SECTIONS) — 사이드바가 고른 것.
+//  ② 서브패널 키 — 병합된 화면 안의 개별 패널이 **자기 자리를 그 자리에서 다시 그릴 때** 쓰는 키.
+//     (패널들이 저장·삭제 후 renderAdminDetail(host, 'tokens', …) 식으로 자기를 재렌더한다. 그 host 는 서브탭 본문이라
+//      제자리 갱신이 된다. ②는 nav 에 없으므로 URL 로는 도달하지 않는다 — SECTION_REMAP 이 먼저 걸러낸다.)
 function renderAdminDetail(detail, sel, data) {
+  // ── ① nav 섹션 ──
+  if (sel === 'me-profile') return void myProfileSection(detail);
+  if (sel === 'me-ai') return void myAiSection(detail);
+  if (sel === 'me-logins') return void myLoginsSection(detail);
+  if (sel === 'me-assets') return void myAssetsSection(detail);
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
-  if (sel === 'org-defaults' || SCAFFOLD_SECTIONS.includes(sel)) return sectionEditor(detail, sel, data);
-  if (sel === 'members') return membersEditor(detail, data);
+  if (sel === 'members') return membersSection(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
-  if (sel === 'member-add') return memberAddPanel(detail, data);
-  if (sel === 'tokens') return tokensPanel(detail, data);
-  if (sel === 'profiles') return profilesEditor(detail);
   if (sel === 'profile') return profileEditor(detail, data);
   if (sel === 'injection-map') return injectionMap(detail, data);
-  if (sel === 'custom-hooks') return customHookEditor(detail, data);
-  if (sel === 'harness-assets') return harnessAssetEditor(detail, data);
-  if (sel === 'tools') return toolsEditor(detail, data);
-  if (sel === 'tool-usage') return toolUsagePanel(detail);
-  if (sel === 'org-audit') return orgAuditPanel(detail);
-  if (sel === 'mcp') return mcpEditor(detail, data);
+  if (sel === 'agent-assets') return agentAssetsSection(detail, data);
+  if (sel === 'tools') return toolsSection(detail, data);
+  if (sel === 'audit') return auditSection(detail, data);
+  if (sel === 'automation') return automationSection(detail, data);
   if (sel === 'connectors') return connectorEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'credentials') return credentialsEditor(detail);
-  if (sel === 'db-audit') return dbAuditEditor(detail, data);
   if (sel === 'storage') return storageEditor(detail, data);
   if (sel === 'embeddings') return embeddingsEditor(detail, data);
   if (sel === 'repos') return reposPanel(detail, data);
-  if (sel === 'cron') return cronPanel(detail, data);
   if (sel === 'ingest-policy') return ingestPolicyPanel(detail, data);
-  if (sel === 'review-queue') return reviewQueuePanel(detail, data);
-  if (sel === 'managed-sessions') return managedSessionsPanel(detail, data);
-  if (sel === 'deploy') return deployPanel(detail, data);
+  // ── ② 서브패널 제자리 재렌더 ──
+  //  ⚠ 'members'·'tools' 는 ①의 **병합 섹션**(탭 껍데기) 키다 — 그 안의 개별 패널이 자기를 다시 그릴 땐
+  //     반드시 아래 전용 키를 써야 한다. 안 그러면 탭 본문 안에 탭 껍데기가 또 렌더돼 중첩된다.
+  if (sel === 'members-list') return membersEditor(detail, data);
+  if (sel === 'tools-proxy') return toolsEditor(detail, data);
+  if (sel === 'tokens') return tokensPanel(detail, data);
+  if (sel === 'profiles') return void profilesEditor(detail);
+  if (sel === 'mcp') return mcpEditor(detail, data);
+  if (sel === 'custom-hooks') return customHookEditor(detail, data);
+  if (sel === 'harness-assets') return harnessAssetEditor(detail, data);
+  if (sel === 'tool-usage') return void toolUsagePanel(detail);
+  if (sel === 'org-audit') return void orgAuditPanel(detail);
+  if (sel === 'db-audit') return void dbAuditEditor(detail, data);
+  if (sel === 'cron') return void cronPanel(detail, data);
+  if (sel === 'managed-sessions') return void managedSessionsPanel(detail, data);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 화면 내 서브탭 (#837) — 여러 탭으로 갈라져 있던 **한 개념**을 한 화면에 접는다.
+//  좌측 nav 는 개념 단위로만 두고(16개), 그 개념의 여러 표면은 여기서 가른다. 라우팅은 섹션 단위 그대로라
+//  URL 은 안 늘어난다. 선택은 state.admin.tab[sectionKey] 에 남아 패널 자체의 재렌더(목록 갱신 등)에도 살아남는다.
+//  고아로 남아 있던 .seg-tabs 스타일을 되살려 쓴다(새 시각 언어 X — styles.css:534).
+//  tabs: [{ key, label, show?, render(host) }] — show 가 false 면 권한 없음 → 탭 자체를 안 그린다.
+function segTabs(sectionKey, tabs) {
+  const live = tabs.filter((t) => t.show !== false);
+  const host = el('div', {});
+  if (!live.length) return host;
+  state.admin.tab = state.admin.tab || {};
+  let cur = state.admin.tab[sectionKey];
+  if (!live.some((t) => t.key === cur)) cur = live[0].key;
+  state.admin.tab[sectionKey] = cur;
+
+  const body = el('div', {});
+  const bar = el('div', { class: 'seg-tabs', role: 'tablist' });
+  const paint = () => {
+    for (const b of bar.children as any) b.classList.toggle('on', b.dataset.k === state.admin.tab[sectionKey]);
+    body.replaceChildren();
+    (live.find((t) => t.key === state.admin.tab[sectionKey]) as any).render(body);
+  };
+  for (const t of live) {
+    const b = el('button', { type: 'button', role: 'tab', text: t.label });
+    (b as any).dataset.k = t.key;
+    b.addEventListener('click', () => { state.admin.tab[sectionKey] = t.key; paint(); });
+    bar.append(b);
+  }
+  // 탭이 하나뿐이면(권한으로 나머지가 숨음) 탭 바 자체가 의미 없다 — 본문만.
+  if (live.length > 1) host.append(bar);
+  host.append(body);
+  paint();
+  return host;
+}
+
+// 섹션 머리 — 제목 + 한 줄 설명 + '이게 뭐예요?'. 병합 섹션이 "여기 뭐가 들었나"를 먼저 말해준다.
+function sectionHead(title, hint, m?) {
+  return el('div', {}, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
+}
+
+// ── [구성원] — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4탭을 하나로. ──
+//  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라진 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에 점프하고
+//  state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다 — 한 화면이 되면서 그 해킹이 사라졌다.
+function membersSection(detail, data) {
+  const admin = !!state.admin.canEdit;
+  detail.replaceChildren(
+    sectionHead('구성원', '이 조직을 누가 쓰는지, 각자 무엇으로 접속하는지, AI 를 어떤 계정으로 돌리는지.', data.meaning['member']),
+    segTabs('members', [
+      { key: 'list', label: '구성원', render: (h) => membersEditor(h, data) },
+      // 접속 열쇠 = 우리 게이트웨이에 접속하는 bearer 토큰(auth_token). 외부 서비스 로그인과 다른 것 — 용어 사전 참조.
+      { key: 'tokens', label: '접속 열쇠', show: admin, render: (h) => tokensPanel(h, data) },
+      // 'AI 실행 계정' — 구 '중앙박스 계정(프로필)'. '프로필'은 우상단 [내 프로필]과 겹쳐 버렸다(#524 에서 개념도 은퇴).
+      { key: 'accounts', label: 'AI 실행 계정', show: admin, render: (h) => { void profilesEditor(h); } },
+    ]));
+}
+
+// ── [AI 도구] — 구 [AI 도구(MCP)] + [MCP 서버]. ──
+//  구 라벨은 거짓말이었다: 'AI 도구(MCP)' 화면에 정작 외부 MCP 서버가 노출하는 도구가 없었다(그건 [MCP 서버] 탭
+//  → [발행]로만 관리). 이제 AI 가 실제로 쥐는 세 종류를 한 화면에 모은다.
+//  권한이 갈린다 — 사내 API·빌트인은 runtime, 외부 서버 등록은 admin(MIXED_SECTIONS).
+function toolsSection(detail, data) {
+  const rt = !!state.admin.canRuntime, admin = !!state.admin.canEdit;
+  detail.replaceChildren(
+    sectionHead('AI 도구', 'AI 가 호출할 수 있는 것 전부 — 기본 제공 도구, 우리가 감싼 사내 API, 외부 도구 서버(MCP).', data.meaning['tool']),
+    segTabs('tools', [
+      { key: 'proxy', label: '사내 API 도구', show: rt, render: (h) => toolsEditor(h, data) },
+      { key: 'builtin', label: '기본 제공 도구', show: rt, render: (h) => h.append(builtinToggles(data)) },
+      // 외부 도구 서버 = 구 [MCP 서버]. 기본 프리셋(mcp-server-presets)이 실제로 채우는 게 바로 이것이다.
+      { key: 'mcp', label: '외부 도구 서버 (MCP)', show: admin, render: (h) => mcpEditor(h, data) },
+    ]));
+}
+
+// ── [스킬 · 훅] — 구 [커스텀 훅]+[스킬·에이전트·커맨드]. ──
+//  둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서 도는 것'을 정의한다(자산의 paired_hook_id 가 훅을 참조하기까지).
+function agentAssetsSection(detail, data) {
+  detail.replaceChildren(
+    sectionHead('스킬 · 훅', '구성원의 AI 에 배포되는 실행물(에이전트 자산) — 스킬·서브에이전트·커맨드와, 이벤트에 반응하는 코드 훅.', data.meaning['harness-asset']),
+    segTabs('agent-assets', [
+      { key: 'assets', label: '스킬 · 서브에이전트 · 커맨드', render: (h) => harnessAssetEditor(h, data) },
+      { key: 'hooks', label: '커스텀 훅 (코드)', render: (h) => customHookEditor(h, data) },
+    ]));
+}
+
+// ── [자동화] — 구 [스케줄러]+[상시 세션]. ──
+//  크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시 에이전트를 필수 타깃으로 받는다
+//  (크론=언제 × 상시 에이전트=어디서·누구로). 떨어뜨려 둘 이유가 없었다.
+//  '상시 세션' → '상시 에이전트' 로 개명 — 그래야 이 탭 도처의 "다음 세션부터 반영"(=AI 대화)이 모호하지 않다.
+function automationSection(detail, data) {
+  detail.replaceChildren(
+    sectionHead('자동화', '사람 없이 도는 것 — 정해진 시각에 실행하는 스케줄과, 그 작업을 수행할 상시 에이전트.'),
+    segTabs('automation', [
+      { key: 'cron', label: '스케줄', render: (h) => { void cronPanel(h, data); } },
+      { key: 'sessions', label: '상시 에이전트', render: (h) => { void managedSessionsPanel(h, data); } },
+    ]));
+}
+
+// ── [감사 로그] — 구 [MCP 호출 통계]+[변경 감사 로그]+[DB 접근 감사]. ──
+//  셋 다 "무슨 일이 있었나"를 묻는 읽기전용 대시보드이고 UI 골격도 이미 동형이었다(oa-* 스타일은 tu-* 복제).
+//  백엔드는 각각 다른 테이블이라 데이터는 안 합친다 — 서브탭으로만 묶는다(새 진실 출처 0).
+//  ⚠ 구 [DB 접근 감사] 화면에 있던 '감사 대상 식별자'(subject-key) 설정은 여기 없다 — 그건 감사가 아니라 **설정**이고
+//    서버도 /org/db-source/* 하위 리소스로 본다. [DB 데이터소스]로 옮겼다(#837).
+function auditSection(detail, data) {
+  detail.replaceChildren(
+    sectionHead('감사 로그', '누가·언제·무엇을 했나. 관리 항목 변경, DB 조회, AI 의 도구 호출 — 셋 다 읽기 전용입니다.'),
+    segTabs('audit', [
+      { key: 'org', label: '관리 변경', render: (h) => { void orgAuditPanel(h); } },
+      { key: 'db', label: 'DB 조회', render: (h) => { void dbAuditEditor(h, data); } },
+      { key: 'tools', label: 'AI 도구 호출', render: (h) => { void toolUsagePanel(h); } },
+    ]));
 }
 
 // ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
@@ -556,7 +776,6 @@ async function toolUsagePanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: 'MCP 호출 통계' })),
     el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지입니다. 모든 호출이 기록되며(시크릿 마스킹·큰 값 절단), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }),
     controls,
     stats,
@@ -574,13 +793,13 @@ async function toolUsagePanel(detail) {
 const ORG_AUDIT_STATE: any = { scope: 'admin', entity: '', actor_kind: '', channel: '', op: '', page: 1 };
 const OA_ENTITY_LABELS: any = {
   org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
-  org_runtime_config: '런타임 설정', org_connector: '커넥터', org_mcp_server: 'MCP 서버',
+  org_runtime_config: '런타임 설정', org_connector: '외부 자료 수집', org_mcp_server: '외부 도구 서버(MCP)',
   org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
   org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };
 const OA_OP_LABELS: any = { insert: '생성', update: '수정', delete: '삭제', revoke: '회수', mint: '발급', reorder: '순서변경' };
-const OA_CHANNEL_LABELS: any = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '커넥터', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
-const OA_KIND_LABELS: any = { human: '사람', ai: 'AI', system: '시스템', connector: '커넥터', unknown: '미상' };
+const OA_CHANNEL_LABELS: any = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '자료 수집기', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
+const OA_KIND_LABELS: any = { human: '사람', ai: 'AI', system: '시스템', connector: '자료 수집기', unknown: '미상' };
 
 // 스타일 1회 주입(테마 토큰 — 라이트/다크 자동). textContent 로만 삽입(보안 불변식). tool-usage 의 tu-* 를 oa-* 로 복제.
 function oaEnsureStyles() {
@@ -745,8 +964,7 @@ async function orgAuditPanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '조직 변경 감사 로그' })),
-    el('p', { class: 'admin-hint', text: '구성원·토큰·런타임·커넥터·DB소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록입니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있어요(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.' }),
+    el('p', { class: 'admin-hint', text: '구성원·접속 열쇠·런타임·외부 자료 수집·DB소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록입니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있어요(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.' }),
     controls,
     el('div', { class: 'oa-sub', text: '변경 이력' + (total ? ' (' + total.toLocaleString() + ')' : '') }),
     list, pagerBox);
@@ -785,8 +1003,7 @@ async function cronPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '스케줄러 (자동화)' })),
-    el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 세션에 주입, 팀플랜 과금)·커넥터 sync 등. 주기는 “초” 또는 cron식.' }),
+    el('p', { class: 'admin-hint', text: '게이트웨이가 주기 실행하는 잡입니다. is 신선화(refresh)·미매핑 코드 LLM 분류(map_unmapped → 타깃 상시 에이전트에 주입, 팀플랜 과금)·외부 자료 수집 싱크 등. 주기는 “초” 또는 cron식.' }),
     el('p', { class: 'admin-hint', text: 'cron식의 시각은 ' + tz + ' 기준입니다(서버 머신의 OS 시간대와 무관 — [조직 · 연결] ▸ 조직 시간대에서 바꿉니다).' }),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
@@ -917,7 +1134,6 @@ async function managedSessionsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(sessions.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 상시 세션 추가', onclick: () => openManagedSessionForm(null, reload) }));
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '상시 세션 (에이전트)' })),
     el('p', { class: 'admin-hint', text: '항상 떠 있는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 돌고, keep-alive 가 죽으면 재생성합니다. 크론(미매핑 분류 등)이 이 세션에 작업을 쏩니다 — 팀플랜 과금. account = 어떤 라이블리 계정(클로드 로그인)으로 띄울지.' }),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
@@ -1035,7 +1251,7 @@ async function reposPanel(detail, data) {
   if (canEdit) head.append(el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 레포 추가', onclick: () => openRepoForm(null, reload) }));
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '레포(git) 관리' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '레포(git)' }),
       state.admin.canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '게이트웨이 git 계정', onclick: () => openGitCredentialManager('gateway') }) : null,
       canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
     el('p', { class: 'admin-hint', text: '코드 레포(실제 git 레포)를 등록·연결합니다. 여기 설정한 git 주소·기본 브랜치는 도메인맵 스캔과 ‘내 컴퓨터에서 작업’ 클론이 함께 씁니다. 레포는 code_unit 이 매핑되는 단위예요. private 레포 클론 인증은 [게이트웨이 git 계정] 또는 각 구성원의 [내 프로필 ▸ git 인증]에서 설정합니다. HTTPS 가 막힌 셀프호스팅(GitLab 등)은 git 주소를 SSH 형(git@호스트:그룹/레포.git)으로 넣으세요.' }),
@@ -1279,7 +1495,7 @@ async function wikiCategoriesPanel(detail, data) {
   }
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '분류 체계 관리' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '카테고리 (분류 체계)' }),
       canEdit ? null : el('span', { class: 'admin-sub' }, el('span', { class: 'pill', text: '읽기 전용' }), ' 편집은 context 권한 필요')),
     el('p', { class: 'admin-hint', text: '지식(위키)의 분류축입니다. 사업·제품·시스템 카테고리를 한 화면에서 추가·수정·삭제하며, 변경은 지식·프로젝트 탭 좌측 카테고리에 그대로 반영됩니다. (제품 카테고리=도메인)' }),
     list);
@@ -1295,109 +1511,6 @@ async function deleteWikiCategory(c, reload) {
 
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
-function sectionEditor(detail, key, data) {
-  const canEdit = state.admin.canEdit;
-  const meaning = data.meaning[key];
-  const sec = data.sections[key] || { body_md: '', version: 0 };
-  const title = meaning ? meaningOf(meaning).label : key;
-  const isScaffold = SCAFFOLD_SECTIONS.includes(key);
-  // 골격 섹션 기본값(되돌리기·미편집 프리필) — 서버가 sectionDefaults 로 내려준다. 없으면 현재 본문 폴백(안전).
-  const defaultBody = (data.sectionDefaults && data.sectionDefaults[key]) || sec.body_md || '';
-
-  // editing 은 로컬 상태 — 섹션에 진입(renderAdminDetail 재호출)할 때마다 항상 읽기 전용으로 시작.
-  //  prefill 지정 시 textarea 를 그 값으로 채운다(되돌리기에서 기본값 프리필 — 저장 전까지 DB 미반영).
-  function render(editing?, prefill?) {
-    const ta = el('textarea', { rows: '18', class: 'admin-ta', 'aria-label': title });
-    ta.value = (prefill != null) ? prefill : (sec.body_md || '');
-    ta.readOnly = !editing;
-
-    // 기본값으로 되돌리기 — 골격 섹션은 읽기/수정 모두 상단에 노출(발견성). 클릭=텍스트영역에 기본값 채움(저장은 [저장]으로 확정).
-    const resetToDefault = () => {
-      toast('기본값을 불러왔어요 — [저장]을 눌러 확정하세요');
-      if (editing) { ta.value = defaultBody; ta.focus(); }
-      else render(true, defaultBody); // 보기 모드면 기본값 채운 수정 모드로 진입
-    };
-    // 미리보기 — 가이드 섹션은 '이 편집 부분만'(${area}/${rules} 채워진 인덱스), 그 외는 전체 멤버 컨텍스트.
-    const headBtns = el('div', { class: 'card-head-actions' },
-      el('button', { class: 'btn btn-ghost btn-sm', text: '미리보기',
-        onclick: isScaffold ? (() => showGuidePreview(ta.value)) : showMemberPreview }),
-      (canEdit && isScaffold)
-        ? el('button', { class: 'btn btn-ghost btn-sm', text: '기본값으로 되돌리기', onclick: resetToDefault })
-        : null,
-      canEdit
-        ? (editing
-            ? el('button', { class: 'btn btn-ghost btn-sm', text: '보기', onclick: () => render(false) })
-            : el('button', { class: 'btn btn-primary btn-sm', text: '수정', onclick: () => render(true) }))
-        : null);
-
-    const body = [
-      el('div', { class: 'card-head' },
-        el('div', { class: 'section-title' }, el('h2', { text: title }), meaningCard(meaning)),
-        headBtns),
-    ];
-    // 골격 섹션 — 비개발자용 경고 배너(무엇인지 한 줄 + 공통 위험 안내). 읽기/수정 모두 항상 표시.
-    if (isScaffold) {
-      body.push(el('div', { class: 'admin-warn' },
-        el('div', { text: SCAFFOLD_WARN[key] || '' }),
-        el('div', { style: 'margin-top:5px;font-weight:500', text: SCAFFOLD_WARN_COMMON })));
-    }
-    body.push(el('p', { class: 'admin-hint', text: editing
-        ? '여기 적은 내용은 [저장]하면 구성원이 다음 설치/업데이트 때 자동으로 받아요(저장 전엔 나만 보는 초안).'
-        : (canEdit ? '구성원에게 보이는 모습이에요. 고치려면 [수정]을 누르세요.' : '읽기 전용 — 이 내용이 모든 구성원의 AI에 깔립니다.') }));
-    // 가이드 섹션 — 플레이스홀더(${area}/${rules}) 안내. [미리보기]로 채워진 실제 모습을 볼 수 있다고 덧붙임.
-    if (isScaffold) {
-      body.push(el('p', { class: 'admin-hint', text: GUIDE_PLACEHOLDER_HINT + ' [미리보기]로 실제 채워진 모습을 볼 수 있어요.' }));
-    }
-    body.push(ta);
-
-    if (editing) {
-      const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-      const status = el('span', { class: 'admin-status' });
-      saveBtn.addEventListener('click', async () => {
-        saveBtn.disabled = true;
-        try {
-          const r = await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section: key, body_md: ta.value }) });
-          data.sections[key] = r.section;
-          sec.body_md = r.section.body_md; sec.version = r.section.version; // [보기] 전환 시 최신본 노출
-          status.textContent = '저장됨 · v' + r.section.version;
-          toast('저장됨 — 구성원이 다음 설치/업데이트 때 자동으로 받아요');
-        } catch (e) { toast(e.message, true); status.textContent = ''; }
-        saveBtn.disabled = false;
-      });
-      // '기본값으로 되돌리기'는 상단 버튼 줄(headBtns)로 이동 — 읽기/수정 모두에서 보이게(발견성).
-      body.push(el('div', { class: 'admin-actions' }, saveBtn, status));
-    }
-
-    detail.replaceChildren(el('div', { class: 'card' }, ...body));
-  }
-
-  render(false);
-}
-
-// 멤버가 실제 읽는 컨텍스트 미리보기(WYSIWYG) — 오버레이.
-async function showMemberPreview() {
-  try {
-    const r = await api('/api/ui/org/preview');
-    overlay('구성원의 AI가 매 세션 실제로 읽는 내용',
-      el('p', { class: 'admin-hint', text: '아래가 모든 구성원의 대화 첫머리에 주입되는 정적 컨텍스트입니다(라이브 현황은 별도로 매 세션 자동 추가).' }),
-      el('div', { class: 'md-rendered admin-md-box', style: 'max-height:70vh; overflow:auto' }, renderMarkdown(r.context || '(비어 있음)')));
-  } catch (e) { toast(e.message, true); }
-}
-
-// 컨텍스트 온톨로지 가이드 미리보기 — '이 편집 부분만'(${area}/${rules} 채워진 Knowledge Index). 편집 중 textarea 값을 보낸다(미저장 반영).
-async function showGuidePreview(bodyMd) {
-  try {
-    const r = await api('/api/ui/org/guide-preview', { method: 'POST', body: JSON.stringify({ body_md: bodyMd || '' }) });
-    overlay('이 가이드가 실제 주입되는 모습 (지식·주제·핀 자동 채움)',
-      el('p', { class: 'admin-hint', text: '아래는 이 편집 내용의 ${rules}(항상-주입 지식)·${categories}(카테고리 지도)·${wiki}(WIKI 인덱스 핀) 가 실제 데이터로 채워져 매 대화에 주입되는 부분입니다(회사 소개·규칙 섹션 등 다른 부분은 제외).' }),
-      el('div', { class: 'md-rendered admin-md-box', style: 'max-height:70vh; overflow:auto' }, renderMarkdown(r.context || '(비어 있음)')));
-  } catch (e) { toast(e.message, true); }
-}
-
-// ── 구성원 ──
-// 중앙박스 계정 격리(#524) — 구성원별 OS 유저(box_<slug>, 홈700)로 완전 격리. #346 멀티프로필(CLAUDE_CONFIG_DIR)은
-//  흡수됨(격리 시 멤버 네이티브 ~/.claude 사용) → '프로필 만들기' 버튼 은퇴. 프로비저닝은 '첫 세션에 자동'(lazy) —
-//  여긴 격리 상태 표시 + (선택) 미리 생성·재프로비저닝. provision 엔드포인트(#346)는 비격리 폴백용으로 코드에만 잔존.
 async function profilesEditor(detail) {
   const reload = () => profilesEditor(detail);
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('프로필 상태를 불러오는 중')));
@@ -1445,7 +1558,7 @@ async function profilesEditor(detail) {
   }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
   detail.replaceChildren(
     el('div', { class: 'card' },
-      el('h3', { text: '중앙박스 계정 격리' }),
+      el('h3', { text: 'AI 실행 계정 격리' }),
       el('p', { class: 'caption', text: '각 구성원은 자기 OS 계정(box_<slug>, 홈 700)으로 완전 격리됩니다 — 구성원 간 Claude 자격증명(.credentials.json) 상호열람 차단(외부상주·금융권). 격리 인프라(deploy/linux/install-isolation.sh)가 깔린 박스에서 구성원이 웹터미널을 처음 열면 격리 유저가 자동 생성되고(별도 버튼 불요), 그 세션부터 본인 Claude 로그인으로 뜹니다. 미프로비저닝 멤버는 공유 계정으로 폴백(무회귀). 첫 세션 지연 없이 미리 깔려면 [지금 미리 만들기], 끄려면 게이트웨이 env LIVELY_MEMBER_ISOLATION=off.' })),
     ...items);
 }
@@ -1495,24 +1608,46 @@ function membersEditor(detail, data) {
     value: state.admin.memberSearch || '', autocomplete: 'off', spellcheck: 'false', 'aria-label': '구성원 검색',
     placeholder: '이름·이메일·아이디로 검색  (총 ' + members.length + '명)',
     oninput: (e) => { state.admin.memberSearch = e.target.value; renderRows(); } });
-  const searchBar = el('div', { class: 'admin-member-searchbar' }, searchInp);
+  // ＋ 추가 — 구 [구성원 추가] 탭을 대신한다(#837). 다른 모든 목록 화면과 같은 관례(＋ 버튼 → 폼)로 통일.
+  //  구 탭은 저장 후 location.hash 로 [토큰] 탭에 점프하고 state.admin.memberAddPreselect 로 선택을 실어 날랐다.
+  //  이제 같은 화면 안이라 그냥 서브탭을 넘기면 된다 — 전역 상태로 탭 사이를 꿰맬 이유가 없다.
+  const addBtn = canEdit ? el('button', { class: 'btn btn-primary btn-sm', text: '＋ 구성원 추가',
+    onclick: () => openMemberModal(null, data, detail) }) : null;
+  const bar = el('div', { class: 'admin-member-searchbar' }, members.length ? searchInp : el('span', {}), addBtn);
 
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('구성원 관리', meaning),
-    members.length ? searchBar : null,
+    (members.length || canEdit) ? bar : null,
     listCol));
 }
 
 // ── 구성원 상세/편집 모달(#613 후속) — 카드 클릭 시 그리드 위에 오버레이로 띄운다.
 //  2단 collapse 대신 모달: 그리드 맥락을 유지한 채 상세를 보고, 닫으면 그리드로 복귀.
 //  보기(memberRead) ↔ 편집(memberForm) 을 모달 안에서 토글하고, 저장/제거 시 모달을 닫고 그리드를 새로고침.
+//  m === null 이면 **신규 등록**(구 [구성원 추가] 탭 대체, #837). 등록 뒤엔 곧바로 [접속 열쇠] 탭으로 넘겨
+//  발급까지 이어지게 한다 — 구조는 같지만 이제 같은 화면 안이라 전역 상태를 거치지 않는다.
 function openMemberModal(m, data, detail) {
+  const isNew = !m;
   const body = el('div', { class: 'member-modal-body' });
   let back: any = null;
-  let editing = false;
-  const refreshGrid = () => renderAdminDetail(detail, 'members', state.admin.data);
+  let editing = isNew;
+  const refreshGrid = () => renderAdminDetail(detail, 'members-list', state.admin.data);
   const closeModal = () => { if (back) { back.remove(); back = null; } };
+  const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] };
   const rerender = () => {
+    if (isNew) {
+      memberForm(body, blank, data, detail, true, {
+        saveLabel: '구성원 등록', showCancel: false, showRemove: false,
+        onSaved: () => {
+          toast('구성원 등록됨 — 접속 열쇠를 발급해 전달하세요');
+          closeModal();
+          // 같은 화면의 [접속 열쇠] 서브탭으로 전환하고 섹션을 다시 그린다(구 location.hash 점프 + preselect 해킹 제거).
+          state.admin.tab = state.admin.tab || {};
+          state.admin.tab['members'] = 'tokens';
+          renderAdminDetail(detail.closest('.admin-body') || detail, 'members', state.admin.data);
+        },
+      });
+      return;
+    }
     // 저장/리로드 후 최신 멤버 객체를 다시 집는다(이름·권한 변경 반영).
     const cur = ((state.admin.data && state.admin.data.members) || []).find((x) => x.id === m.id) || m;
     if (state.admin.canEdit && editing) {
@@ -1526,7 +1661,7 @@ function openMemberModal(m, data, detail) {
     }
   };
   rerender();
-  back = overlay('구성원 · ' + (m.display_name || m.id), body);
+  back = overlay(isNew ? '구성원 추가' : ('구성원 · ' + (m.display_name || m.id)), body);
 }
 
 // 구성원 권한(scope) 옵션 — 보기/편집 공유. 서버 SCOPES(capabilities/scopes.ts) 전체와 일치시킨다.
@@ -1581,7 +1716,7 @@ function memberRead(root, m, data, detail, opts: any = {}) {
     const acts = el('div', { class: 'admin-actions' },
       el('button', { class: 'btn btn-primary', text: '수정',
         // 모달에서 열렸으면 opts.onEdit 로 모달 안에서 폼으로 전환(전체 재렌더 대신). 기본은 기존 흐름.
-        onclick: () => { if (opts.onEdit) { opts.onEdit(); return; } state.admin.memberEditing = true; renderAdminDetail(detail, 'members', data); } }));
+        onclick: () => { if (opts.onEdit) { opts.onEdit(); return; } state.admin.memberEditing = true; renderAdminDetail(detail, 'members-list', data); } }));
     if ((m.kind || 'human') === 'human') {
       acts.append(el('button', { class: 'btn btn-ghost', text: '비밀번호 재설정',
         onclick: async () => {
@@ -1668,7 +1803,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
       state.admin.memberSel = savedId;
       state.admin.memberEditing = false; // 저장 후 보기 모드로 복귀
       toast('저장됨 — 신원 매칭에 즉시 반영됩니다');
-      renderAdminDetail(detail, 'members', state.admin.data);
+      renderAdminDetail(detail, 'members-list', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
 
@@ -1680,7 +1815,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
         if (opts.onCancel) { opts.onCancel(); return; }
         state.admin.memberEditing = false;
         if (isNew) state.admin.memberSel = null;
-        renderAdminDetail(detail, 'members', data);
+        renderAdminDetail(detail, 'members-list', data);
       } }));
   }
   actions.append(status);
@@ -1694,7 +1829,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
           await loadAdmin(true); toast('제거됨');
           // 모달에서 열렸으면 opts.onRemoved 로 모달 닫고 그리드 새로고침. 기본은 기존 흐름.
           if (opts.onRemoved) { opts.onRemoved(); return; }
-          state.admin.memberSel = null; renderAdminDetail(detail, 'members', state.admin.data); }
+          state.admin.memberSel = null; renderAdminDetail(detail, 'members-list', state.admin.data); }
         catch (e) { toast(e.message, true); }
       } }));
   }
@@ -1709,34 +1844,9 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     actions);
 }
 
-// ── 구성원 추가 — 새 팀원 등록 + 접속 열쇠(토큰) 발급을 한 곳에서. admin 전용([구성원 관리]에서 분리). ──
-function memberAddPanel(detail, data) {
-  // 토큰 발급(구 ② 접속 열쇠 발급)은 [구성원 토큰 관리] 탭으로 이관(#613 후속) — 여기선 새 구성원 등록만.
-  //  ①/② 넘버링 제거. 등록 성공 시 그 구성원을 미리선택한 채 [구성원 토큰 관리] 탭으로 이동해 발급으로 자연스럽게 이어진다.
-  const card = el('div', { class: 'card' },
-    sectionTitle('구성원 추가', data.meaning['member']),
-    el('p', { class: 'admin-hint', text: '새 팀원을 등록하세요. 등록하면 [구성원 토큰 관리] 탭으로 넘어가 그 사람의 접속 열쇠(토큰)를 발급·전달할 수 있어요.' }));
-
-  const formHost = el('div', {});
-  const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] };
-  memberForm(formHost, blank, data, detail, true, {
-    saveLabel: '구성원 등록',
-    showCancel: false,
-    showRemove: false,
-    onSaved: (payload) => {
-      state.admin.memberAddPreselect = payload.id; // [구성원 토큰 관리] 탭에서 이 구성원 미리선택
-      toast('구성원 등록됨 — 접속 열쇠를 발급해 전달하세요');
-      location.hash = '#/system/tokens'; // route() 재실행 → tokensPanel 렌더(발급 블록에서 미리선택)
-    },
-  });
-  card.append(formHost);
-
-  detail.replaceChildren(card);
-}
-
-// ── 팀 관리 — 구성원을 팀(스쿼드/사일로)으로 묶고, 팀이 카테고리를 '소유'(표면화·주입의 '우리 팀' 기준). ──
-//  오너십 배정 자체는 '분류 체계 관리'(카테고리별 오너 드롭다운)에서. 여기선 팀 CRUD + 팀원(역할) + 소유 현황 표시.
-//  membersEditor 2단 패턴 동형(좌: 팀 리스트, 우: 보기/수정). 편집은 context 스코프(canContext). ★오너십=우선순위, 접근제한 아님.
+// ── 팀 — 구성원을 팀(스쿼드)으로 묶고, 팀이 카테고리를 '소유'한다(표면화·주입의 '우리 팀' 기준). ──
+//  오너십 배정 자체는 [카테고리(분류 체계)] 화면(카테고리별 오너 드롭다운)에서. 여기선 팀 CRUD + 팀원(역할) + 소유 현황.
+//  ★오너십 = 우선순위이지 접근제한이 아니다. 편집은 context 스코프(canContext).
 const TEAM_ROLE_OPTS = [
   ['lead', '리드'], ['pm', 'PO/PM'], ['dev', '개발'], ['design', '디자인'], ['member', '멤버'],
 ];
@@ -1779,7 +1889,7 @@ async function teamsPanel(detail, data) {
   }
 
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('팀 관리', { key: 'team' }),
+    sectionTitle('팀', { key: 'team' }),
     el('p', { class: 'admin-hint', text: '구성원을 팀으로 묶고, 팀이 맡는 카테고리(도메인)를 정합니다. 카테고리 오너 배정은 [분류 체계 관리]에서, 여기선 팀과 팀원을 관리합니다. 팀 소유 카테고리는 팀원의 프로젝트·위키 탭과 AI 세션에 먼저 노출됩니다(오너십=우선순위, 접근제한 아님).' }),
     el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
@@ -1877,7 +1987,7 @@ function profileEditor(detail, data) {
     ...['Asia/Seoul', 'UTC', 'Asia/Tokyo', 'America/Los_Angeles', 'America/New_York', 'Europe/London'].map((z) => el('option', { value: z })));
   if (!canEdit) { dnIn.disabled = true; gwIn.disabled = true; tzIn.disabled = true; }
   const body = [
-    el('h2', { text: '조직 기본 정보' }),
+    el('h2', { text: '조직 정보' }),
     fieldWithHelp('조직 표시명', dnIn, data.meaning['display_name']),
     fieldWithHelp('게이트웨이 주소', gwIn, data.meaning['gateway-url']),
     fieldWithHelp('조직 시간대', tzIn, data.meaning['timezone']), tzList,
@@ -1925,15 +2035,12 @@ function tokensPanel(detail, data) {
       right);
   };
   const children = [
-    el('h2', { text: '구성원 토큰 관리' }),
-    el('p', { class: 'admin-hint', text: '구성원의 접속 열쇠(토큰)를 발급해 전달하고, 발급된 열쇠의 사용 현황을 보거나 더 이상 필요 없는 접속을 해제하는 곳입니다.' }),
-    // 발급 — 구성원을 골라 토큰 발급([구성원 추가]에서 이관). 등록 직후 넘어오면 그 구성원이 미리선택된다.
-    installMinterBlock(data, gw, { title: '접속 열쇠(토큰) 발급', preselectId: state.admin.memberAddPreselect }),
+    el('p', { class: 'admin-hint', text: '구성원이 우리 게이트웨이에 접속할 때 쓰는 열쇠입니다. 외부 서비스(슬랙·깃랩 등) 로그인은 [AI 능력 ▸ 서비스 로그인]으로 — 다른 것입니다.' }),
+    installMinterBlock(data, gw, { title: '접속 열쇠 발급' }),
     el('div', { class: 'meaning-grid', style: 'margin:16px 0 12px' },
       meaningRow('발급된 열쇠는', '지금 누가 회사 게이트웨이에 연결할 수 있는지 보여줘요. 사용 현황을 살펴보고, 필요할 때 특정 구성원의 접속을 해제(차단)합니다.'),
       meaningRow('언제 정리하나', '퇴사·기기 분실 등 그 사람의 접속을 끊어야 할 때. 해제하면 서버를 다시 켤 필요 없이 그 즉시 막힙니다(되돌릴 수 없음).')),
   ];
-  state.admin.memberAddPreselect = null; // 1회성 미리선택 소진(다음 렌더에 잔류 방지)
   if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '사용 중 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
   else children.push(el('p', { class: 'admin-hint', text: '아직 발급된 접속 열쇠가 없습니다 — 위에서 구성원을 골라 발급하세요.' }));
   if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '해제됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
@@ -1976,8 +2083,13 @@ function injectionMap(detail, data) {
     return el('label', { class: 'admin-check inj-toggle' }, chk, ' 주입 켜기');
   }
 
-  // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭).
-  const jump = (label, hash) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => { location.hash = hash; } });
+  // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
+  //  (#837 병합 후 필요해졌다: '커스텀 훅 편집 →'이 [스킬·훅] 화면엔 가지만 **스킬 탭**에 떨어지면
+  //   사용자는 훅을 못 찾는다 — 링크가 가리킨 곳과 도착지가 달라진다.)
+  const jump = (label, hash, tab?) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => {
+    if (tab) { state.admin.tab = state.admin.tab || {}; state.admin.tab[tab.section] = tab.key; }
+    location.hash = hash;
+  } });
 
   function pieceRow(n, label, sub, editBtn) {
     return el('div', { class: 'inj-piece' },
@@ -1995,7 +2107,7 @@ function injectionMap(detail, data) {
     for (const h of list) wrap.append(el('div', { class: 'inj-custom-row' },
       el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
       el('span', { class: 'mini-meta', text: (h.harness || 'all') + (h.matcher ? ' · ' + h.matcher : '') })));
-    wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/custom-hooks')));
+    wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
     return wrap;
   }
 
@@ -2187,10 +2299,10 @@ function injectionMap(detail, data) {
           el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
           el('span', { class: 'mini-meta', text: h.event + ' · ' + (h.harness || 'all') }))))
       : null,
-    el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/custom-hooks')));
+    el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
 
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('세션 주입 지도', null),
+    sectionTitle('세션 주입', null),
     el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
     el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
@@ -2228,98 +2340,6 @@ function allowlistCard(data, title, intro, fields) {
 // [DEPRECATED 2026-06-26] 아래 hooksOverview·runtimeEditor·hooksPreviewPanel 은 '세션 주입 지도'(injectionMap)로
 //  대체되어 라우팅에서 분리됨(미참조). 다음 청소 때 제거.
 // ── '훅' 그룹 개요(클릭 진입점) — 훅이 무엇인지 설명 + 3 하위(런타임·커스텀·미리보기) 안내/이동. ──
-function hooksOverview(detail, data) {
-  const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '훅 (Hooks)' })),
-    el('p', { class: 'admin-hint', text: '훅은 구성원의 AI 세션 중 특정 시점(이벤트)에 게이트웨이가 자동으로 끼어들어 실행하는 코드·설정입니다. 세션이 시작될 때 조직 컨텍스트를 주입하거나, 지금 작업 중인 폴더를 라이블리 작업으로 인식하거나, 세션이 끝날 때 기록을 남기도록 너지하는 식으로 동작합니다 — 사람이 매번 챙기지 않아도 AI가 조직의 방식대로 일하게 만드는 자동 장치입니다.' }),
-    el('p', { class: 'admin-hint', text: '구성원 머신은 매 세션 게이트웨이에서 훅을 내려받아 실행하므로(runner fetch), 여기서 바꾸면 재설치 없이 다음 세션부터 자동 반영됩니다. 주요 주입 시점: 세션 시작(SessionStart) · 프롬프트 제출(UserPromptSubmit) · 도구 사용 전후(Pre/PostToolUse) · 세션 종료(Stop). 아래 세 가지로 관리합니다.' }),
-  );
-  const items = [
-    ['runtime', '런타임 훅 (빌트인 리플렉스)', '게이트웨이가 기본 제공하는 세션 훅(컨텍스트 주입·작업 플래그·종료 기록 너지)을 코딩 없이 켜고 끕니다. 작업 폴더(work-roots)와 AI 도구의 외부 호출 안전범위도 여기서 정합니다.'],
-    ['custom-hooks', '커스텀 훅 (코드 정의)', '특정 이벤트에 실행할 임의의 코드를 직접 정의합니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).'],
-    ['hooks-preview', '주입 미리보기 (세션 주입물 확인)', '설치된 세션 훅이 실제 세션에 무엇을 주입하는지 그 최종 메시지 전문을 읽기 전용으로 확인합니다(정확/근사 충실도 표기).'],
-  ];
-  const list = el('div', { class: 'hooks-ov-list' });
-  for (const [key, title, desc] of items) {
-    if (sectionHidden(key, data)) continue; // 권한으로 숨은 하위는 안내에서도 제외(404 유도 방지).
-    list.append(el('a', { class: 'hooks-ov-card', href: '#/system/' + key },
-      el('div', { class: 'hooks-ov-title', text: title }),
-      el('div', { class: 'hooks-ov-desc', text: desc })));
-  }
-  if (list.childNodes.length) card.append(list);
-  detail.replaceChildren(card);
-}
-
-function runtimeEditor(detail, data) {
-  const rc = data.runtimeConfig || { hooks: { session_preload: true, work_flag: true, stop_writeback_gate: true }, writeback_notice: '', work_roots: [] };
-  const HOOK_OPTS = [
-    ['session_preload', '세션 시작 컨텍스트 주입 (session-preload)'],
-    ['work_flag', '작업 플래그 (work-flag)'],
-    ['stop_writeback_gate', '종료 시 기록 너지 (writeback-gate)'],
-  ];
-  const chks = {};
-  const hookWrap = el('div', { class: 'scope-wrap' });
-  for (const [k, label] of HOOK_OPTS) {
-    const chk = el('input', { type: 'checkbox' }); chk.checked = rc.hooks[k] !== false; chks[k] = chk;
-    hookWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label));
-  }
-  const noticeTa = el('textarea', { rows: '3', placeholder: '비우면 기본 안내문 사용' }); noticeTa.value = rc.writeback_notice || '';
-  const wrTa = el('textarea', { rows: '4', placeholder: '/Users/you/repo\n줄당 절대경로 한 개' }); wrTa.value = (rc.work_roots || []).join('\n');
-  // http_proxy 툴 안전 화이트리스트(B15) — 툴은 이 목록 안에서만 외부 호출/시크릿 참조 가능.
-  const envTa = el('textarea', { rows: '3', placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름 한 개(값 아님)' }); envTa.value = (rc.allowed_auth_envs || []).join('\n');
-  const hostTa = el('textarea', { rows: '3', placeholder: 'api.acme.com\n.internal.acme.com (앞에 . = 서브도메인 허용)' }); hostTa.value = (rc.url_allowlist || []).join('\n');
-  // DB 데이터소스 안전 화이트리스트 — db_query/db_schema 소스가 접속 허용될 사설/내부 host(외부 공인 DB 는 등록 불요).
-  const dbHostTa = el('textarea', { rows: '3', placeholder: 'localhost\ndb.internal.acme.com\n줄당 host 한 개(사설/localhost 만 — 외부 공인 DB 는 불요)' }); dbHostTa.value = (rc.allowed_db_hosts || []).join('\n');
-  // MCP 프록시 안전 화이트리스트(#746 T2) — 프록시가 접속할 사설/내부 MCP 서버 host(외부 공인 https 는 등록 불요, 기본 차단).
-  const internalHostTa = el('textarea', { rows: '2', placeholder: 'localhost\n10.0.0.5\n줄당 host 한 개(사설/내부 MCP 만 — 공인 https 는 불요)' }); internalHostTa.value = (rc.allowed_internal_hosts || []).join('\n');
-  // 기록 인정 툴(write_tools) — 이 lively MCP 툴을 쓰면 '기록함'으로 보고 종료 너지를 안 띄운다. 비우면 훅 내장 v6 기본목록.
-  const writeToolsTa = el('textarea', { rows: '4', placeholder: '비우면 기본 목록 사용\n줄당 lively MCP 툴 이름 한 개 (예: knowledge_save)' }); writeToolsTa.value = (rc.write_tools || []).join('\n');
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-  const status = el('span', { class: 'admin-status' });
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    try {
-      const hooks = {}; for (const [k] of HOOK_OPTS) hooks[k] = chks[k].checked;
-      const work_roots = wrTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const allowed_auth_envs = envTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const url_allowlist = hostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const allowed_db_hosts = dbHostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const allowed_internal_hosts = internalHostTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const write_tools = writeToolsTa.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks, writeback_notice: noticeTa.value.trim() || null, work_roots, allowed_auth_envs, url_allowlist, allowed_db_hosts, allowed_internal_hosts, write_tools }) });
-      data.runtimeConfig = r.runtimeConfig; status.textContent = '저장됨'; toast('저장됨 — 구성원 다음 세션부터 반영');
-    } catch (e) { toast(e.message, true); status.textContent = ''; }
-    saveBtn.disabled = false;
-  });
-  detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('런타임 훅 (기본 리플렉스)', data.meaning['runtime']),
-    el('p', { class: 'admin-hint', text: '게이트웨이가 제공하는 기본 세션 훅(리플렉스)의 ON/OFF 와 작업 폴더를 중앙에서 제어합니다. 구성원 머신은 매 세션 게이트웨이에서 훅을 받아 실행하므로(runner fetch), 변경은 다음 세션에 자동 반영됩니다(재설치 불요). 전체 끄기는 구성원이 LIVELY_OFF=1 로. ※ 코드까지 직접 정의하는 사내 훅은 ‘커스텀 훅’에서, 각 훅이 실제로 주입하는 메시지는 ‘훅 주입 미리보기’에서.' }),
-    field('기본 리플렉스 훅 ON/OFF', hookWrap),
-    field('writeback 너지 문구 (선택)', noticeTa),
-    field('기록 인정 툴 (write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', writeToolsTa),
-    field('work-roots — 이 폴더에서 켠 세션은 라이블리 작업으로 인식 (줄당 절대경로)', wrTa),
-    el('div', { class: 'admin-subhead', text: 'AI 도구(http_proxy) 안전 화이트리스트' }),
-    el('p', { class: 'admin-hint', text: 'AI 도구가 외부를 호출할 수 있는 범위 — 이 목록 밖은 전부 차단됩니다(SSRF 방어).' }),
-    field('허용 인증 환경변수 이름 (allowed_auth_envs)', envTa),
-    field('허용 호스트 (url_allowlist)', hostTa),
-    el('div', { class: 'admin-subhead', text: 'DB 데이터소스 안전 화이트리스트' }),
-    el('p', { class: 'admin-hint', text: 'db_query/db_schema 데이터소스가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost 는 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록 불요.' }),
-    field('허용 DB host (allowed_db_hosts)', dbHostTa),
-    el('div', { class: 'admin-subhead', text: 'MCP 프록시 안전 화이트리스트 (#746)' }),
-    el('p', { class: 'admin-hint', text: 'MCP 프록시(proxy 모드 서버)가 접속할 수 있는 사설/내부 host — 이 목록 밖의 사설/localhost/메타데이터 IP 는 차단됩니다(SSRF 방어). 외부 공인 https MCP 는 등록 불요.' }),
-    field('허용 내부 MCP host (allowed_internal_hosts)', internalHostTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status)));
-}
-
-// ════════ 임베딩(벡터검색 #172) — provider 토글 + 기존 지식 백필 ════════
-//  config SoT = org_runtime_config.embedding_config(DB, 무재시작). 저장 = POST runtime-config{embedding_config}.
-//  "뒤늦게 켜기": provider 를 켠다고 이미 저장된 지식이 자동 임베딩되진 않는다(쓰기훅은 신규·수정분만) →
-//   [백필] 버튼(POST /api/ui/org/embeddings/backfill)으로 기존 지식을 일괄 임베딩(재실행 안전, 진행 폴링).
-// ── 저장소 · 로그(#813) ──────────────────────────────────────────────
-// 왜 이 화면이 있나: 2026-07-13 에 디스크가 100% 차서 Postgres 가 recovery mode 에 갇혔고 로그인을 포함한 **모든 기능이
-//  500** 이 됐다. 그런데 /healthz 는 끝까지 초록이라 아무도 몰랐다. 고객 박스는 우리가 SSH 로 들어갈 수 없으니
-//  **관리탭이 유일한 관측·조절 창구**다. (지식: gateway-disk-leak-audit-2026-07-13)
-// UI 원칙: 숫자를 그대로 뱉지 말고 **뜻을 보여준다** — 게이지로 한눈에, 설정값은 "그래서 최대 얼마"까지 계산해서.
 function fmtBytes(n) {
   if (!Number.isFinite(n) || n < 0) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -2753,7 +2773,7 @@ function embeddingsEditor(detail, data) {
   const canEdit = !!data.canEdit;
   const body = el('div');
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('임베딩 (벡터검색)', null),
+    sectionTitle('의미 검색 (임베딩)', null),
     el('p', { class: 'admin-hint', text: '지식 의미검색·유사도·중복감지가 쓰는 벡터 임베딩을 켜고 끕니다. 기본은 꺼짐(정확 grep 검색으로 폴백). 켜면 OpenAI-compatible /v1/embeddings 엔드포인트(로컬 Ollama 사이드카 또는 외부 API)로 임베딩합니다. 설정은 게이트웨이 재시작 없이 즉시 반영됩니다.' }),
     body));
   body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
@@ -2978,83 +2998,6 @@ function embeddingsEditor(detail, data) {
 //  데이터 출처: GET /api/ui/org/hooks/preview (scope null = 인증만, REST 전용). 읽기 전용.
 //  보안: 모든 데이터 텍스트는 textContent(el text:)/renderMarkdown(createElement+textContent) 로만 — innerHTML 데이터주입 0.
 //  드리프트 정직성: 서버가 fidelity(exact/approximate)와 source 를 함께 주므로 그대로 표기(근사면 사유 명시).
-function hooksPreviewPanel(detail, data) {
-  const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '훅 주입 미리보기 (읽기 전용)' })),
-    el('p', { class: 'admin-hint', text: '구성원 머신에 설치된 세션 훅이 각자 세션 컨텍스트에 실제로 무엇을 주입하는지, 그 최종 메시지를 보여줍니다. 훅을 고르면 그 훅이 넣는 메시지 전문을 미리볼 수 있습니다. exact=게이트웨이/설치파일이 단일 출처(드리프트 없음), approximate=멤버 머신이 세션마다 동적으로 덧붙이는 부분이 있어 일부만 재현됩니다.' }));
-  detail.replaceChildren(card);
-
-  const loading = el('p', { class: 'admin-hint', text: '불러오는 중…' });
-  card.append(loading);
-  api('/api/ui/org/hooks/preview').then((r) => {
-    loading.remove();
-    const hooks = (r && r.hooks) || [];
-    if (!hooks.length) { card.append(el('p', { class: 'empty', text: '미리볼 세션 훅이 없습니다.' })); return; }
-    let sel = state.admin.hookPreviewSel;
-    if (!hooks.some((h) => h.id === sel)) sel = hooks[0].id;
-    state.admin.hookPreviewSel = sel;
-
-    const listCol = el('div', { class: 'admin-sublist admin-sublist-row' }); // 훅 목록은 가로 카드 배치
-    for (const h of hooks) {
-      const fidLabel = h.fidelity === 'exact' ? '정확' : '근사';
-      listCol.append(el('div', { class: 'mini-row' + (h.id === sel ? ' sel' : ''),
-        onclick: () => { state.admin.hookPreviewSel = h.id; renderHookPreviewDetail(); } },
-        el('div', { class: 'mini-title', text: h.title || h.id },
-          el('span', { class: 'pill', text: h.event })),
-        el('div', { class: 'mini-meta' },
-          el('span', { class: 'src-status' }, el('span', { class: 'dot6 ' + (h.fidelity === 'exact' ? 'ok' : 'dim'), 'aria-hidden': 'true' }), fidLabel), ' · ' + h.id)));
-    }
-    const right = el('div', {});
-    card.append(el('div', { class: 'admin-two' }, listCol, right));
-
-    function renderHookPreviewDetail() {
-      for (const row of listCol.querySelectorAll('.mini-row')) row.classList.remove('sel');
-      const idx = hooks.findIndex((h) => h.id === state.admin.hookPreviewSel);
-      const rows = listCol.querySelectorAll('.mini-row');
-      if (rows[idx]) rows[idx].classList.add('sel');
-      const h = hooks[idx] || hooks[0];
-
-      const metaTable = el('table', { class: 'fields-table' });
-      const metaRows = [
-        ['훅 id', h.id],
-        ['이벤트(주입 시점)', h.event],
-        ['충실도', (h.fidelity === 'exact' ? '정확(exact) — 게이트웨이/설치파일이 단일 출처, 드리프트 없음' : '근사(approximate) — 일부는 멤버 머신이 세션마다 동적 생성, 미포함')],
-        ['출처', h.source],
-      ];
-      for (const [k, v] of metaRows) metaTable.append(el('tr', {}, el('td', { text: k }), el('td', { text: v })));
-
-      const msg = h.message || '';
-      const detailBody = el('div', {},
-        el('h3', { text: h.title || h.id }),
-        metaTable,
-        el('div', { class: 'sec-label', style: 'margin-top:14px' }, '세션에 주입되는 최종 메시지'));
-
-      if (!msg) {
-        // work-flag 처럼 주입 메시지가 없는 훅 — provably empty 임을 명시(빈 pre 대신 안내).
-        detailBody.append(el('p', { class: 'admin-hint', text: '이 훅은 컨텍스트를 주입하지 않습니다(세션 플래그만 기록). 주입 메시지 없음.' }));
-      } else {
-        // 메시지 전문 — 서식(마크다운 안전 렌더)/원문 토글. 마크다운 본문 뷰어 재사용(innerHTML 미사용).
-        let showRaw = false;
-        const rendered = el('div', { class: 'md-rendered admin-md-box' }, renderMarkdown(msg));
-        const raw = el('pre', { class: 'admin-preview' }); raw.textContent = msg; raw.hidden = true;
-        const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: '원문 보기' });
-        toggle.addEventListener('click', () => {
-          showRaw = !showRaw; rendered.hidden = showRaw; raw.hidden = !showRaw;
-          toggle.textContent = showRaw ? '서식 보기' : '원문 보기';
-        });
-        detailBody.append(el('div', { class: 'admin-actions' }, toggle), rendered, raw);
-      }
-      right.replaceChildren(detailBody);
-    }
-    renderHookPreviewDetail();
-  }).catch((e) => {
-    // 라이브가 구 빌드면 404(엔드포인트 next-restart) — 정직하게 안내.
-    loading.remove();
-    card.append(errorNote(e, '훅 미리보기를 불러오지 못했습니다(서버 재시작 후 제공)'));
-  });
-}
-
-// ── MCP 서버 레지스트리 — admin 전용 ──
 function mcpEditor(detail, data) {
   const servers = data.mcpServers || [];
   const sel = state.admin.mcpSel;
@@ -3071,7 +3014,7 @@ function mcpEditor(detail, data) {
   const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
   if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('MCP 서버', data.meaning['mcp']), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
@@ -3182,11 +3125,11 @@ function mcpForm(root, s, data, detail, isNew) {
     try { await api('/api/ui/org/mcp-server/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.mcpSel = null; toast('제거됨'); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); }
   } }));
-  // ── 프리셋(기본 카탈로그) — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=connector-catalog.ts. ──
+  // ── 프리셋 — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=mcp-server-presets.ts. ──
   const presetSel = el('select', {}, el('option', { value: '', text: '— 직접 입력 —' }));
   const presetHint = el('div', { class: 'admin-hint', style: 'display:none;margin-top:6px' });
   let catalog: any[] = [];
-  api('/api/ui/org/connector-catalog').then((r: any) => {
+  api('/api/ui/org/mcp-server-presets').then((r: any) => {
     catalog = r.catalog || [];
     for (const c of catalog) presetSel.append(el('option', { value: c.name, text: c.label + (c.dcr ? ' · 자동(DCR)' : ' · client 필요') }));
   }).catch(() => {});
@@ -3251,7 +3194,7 @@ function connectorEditor(detail, data) {
   if (editing) {
     connectorStatusCard(right, editing);
     connectorForm(right, editing, data, detail);
-  } else right.append(el('p', { class: 'admin-hint', text: '커넥터를 선택하세요.' }));
+  } else right.append(el('p', { class: 'admin-hint', text: '수집할 외부 소스를 선택하세요.' }));
   // ClickUp 멤버 매핑 패널(#541) — clickup 선택 시에만(db-sources 의 renderDbPolicyPanel 패턴).
   if (editing && editing.system === 'clickup') {
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
@@ -3261,7 +3204,7 @@ function connectorEditor(detail, data) {
   const banner = (editing && editing.secrets_enabled === false)
     ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
     : null;
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커넥터(외부 소스)', data.meaning && data.meaning['connector']), banner,
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', '슬랙·노션·클릭업·지메일·구글드라이브를 주기적으로 **우리 DB 로 복사**해 옵니다(미러). AI 가 그때그때 호출하는 외부 시스템은 여기가 아니라 [AI 도구 ▸ 외부 도구 서버]에 있습니다.'), banner,
     el('div', { class: 'admin-two' }, listCol, right)));
 }
 
@@ -3576,7 +3519,10 @@ function dbSourceEditor(detail, data) {
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 읽는 외부 운영 DB(읽기전용)입니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조합니다 — 읽기전용 role + RLS 전제. env(.env)로 설정한 소스는 읽기 전용으로 표시됩니다.' }));
-  // 테이블 정책 · 컬럼 마스킹 — 기존(등록된) 소스 선택 시에만(라이브 스키마 오버레이, 무재시작).
+  // 등록된 소스를 고르면 그 소스의 **설정** 3종이 따라 붙는다(라이브 스키마 오버레이, 무재시작):
+  //  ① 테이블 정책·컬럼 마스킹 ② 원본 개인정보 열람 권한(unmask grant) ③ 감사 대상 식별자 컬럼(subject-key).
+  //  ③은 구 [DB 접근 감사] 화면에 꽂혀 있었지만 그건 **감사가 아니라 설정**이고, 서버도 /org/db-source/subject-key(s)
+  //  로 이 소스의 하위 리소스로 본다 — #837 에서 제자리로 옮겼다. 감사 화면엔 '무슨 일이 있었나'만 남는다.
   if (editing && sel !== '__new__') {
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(panel);
@@ -3584,6 +3530,9 @@ function dbSourceEditor(detail, data) {
     const gpanel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(gpanel);
     void renderUnmaskGrantPanel(gpanel, sel, data);
+    const spanel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(spanel);
+    void renderSubjectKeyPanel(spanel, sel, data);
   }
   const rcDb = data.runtimeConfig || { allowed_db_hosts: [], allowed_db_secret_refs: [] };
   const dbSafety = allowlistCard(data, 'DB 접속 안전범위 (allowlist)',
@@ -3761,7 +3710,7 @@ function customHookEditor(detail, data) {
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }));
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('커스텀 훅 (코드 정의)', data.meaning['custom-hook']), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function hookForm(root, h, data, detail, isNew) {
@@ -3830,7 +3779,7 @@ function harnessAssetEditor(detail, data) {
     : assets.find((a) => a.id === sel);
   if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 세션 시작 때 디스크에 동기화되며 스킬/커맨드는 같은 세션 내 즉시 반영됩니다.' }));
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('스킬 · 서브에이전트 · 슬래시커맨드', data.meaning['harness-asset']), el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
 }
 
 function assetForm(root, a, data, detail, isNew) {
@@ -3895,10 +3844,10 @@ function toolsEditor(detail, data) {
   const sel = state.admin.toolSel;
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 도구 추가',
-    onclick: () => { state.admin.toolSel = '__new__'; renderAdminDetail(detail, 'tools', data); } }));
+    onclick: () => { state.admin.toolSel = '__new__'; renderAdminDetail(detail, 'tools-proxy', data); } }));
   for (const t of proxyTools) {
     listCol.append(el('div', { class: 'mini-row' + (t.name === sel ? ' sel' : ''),
-      onclick: () => { state.admin.toolSel = t.name; renderAdminDetail(detail, 'tools', data); } },
+      onclick: () => { state.admin.toolSel = t.name; renderAdminDetail(detail, 'tools-proxy', data); } },
       el('div', { class: 'mini-title', text: t.name },
         t.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null,
         t.auto_approve ? el('span', { class: 'pill pill-warn', text: '자동승인' }) : null),
@@ -3909,9 +3858,9 @@ function toolsEditor(detail, data) {
     ? { name: '', kind: 'http_proxy', enabled: true, auto_approve: false, title: '', description: '', scope: 'items', method: 'GET', url: '', auth_env: '', input_schema: '', note: '' }
     : proxyTools.find((t) => t.name === sel);
   if (editing) toolForm(right, editing, data, detail, sel === '__new__');
+  // 빌트인 토글은 #837 에서 [기본 제공 도구] 서브탭으로 분리 — 여기서 또 그리면 같은 화면에 두 번 나온다.
   else right.append(
-    el('p', { class: 'admin-hint', text: '사내 API를 AI 도구로 래핑합니다. 저장 즉시(재설치 없이) 구성원 AI가 씁니다. 호출은 런타임 설정의 화이트리스트 안에서만, 인증은 환경변수 이름으로만.' }),
-    builtinToggles(data));
+    el('p', { class: 'admin-hint', text: '사내 API를 AI 도구로 래핑합니다. 저장 즉시(재설치 없이) 구성원 AI가 씁니다. 호출은 런타임 설정의 화이트리스트 안에서만, 인증은 환경변수 이름으로만.' }));
   const pol = data.toolPolicy || { url_allowlist: [], allowed_auth_envs: [] };
   const toolsSafety = allowlistCard(data, '외부 호출 안전범위 (allowlist)',
     'AI 도구(http_proxy)가 외부를 호출할 수 있는 범위 — 이 목록 밖은 차단(SSRF 방어). 사내 API 도구를 안 쓰면 비워둬도 됩니다.',
@@ -3920,7 +3869,7 @@ function toolsEditor(detail, data) {
       { key: 'allowed_auth_envs', label: '허용 인증 환경변수 이름 (allowed_auth_envs)', initial: pol.allowed_auth_envs, placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름(값 아님)' },
     ]);
   detail.replaceChildren(
-    el('div', { class: 'card' }, sectionTitle('AI 도구(MCP)', data.meaning['tool']), el('div', { class: 'admin-two' }, listCol, right)),
+    el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)),
     toolsSafety);
 }
 
@@ -4027,7 +3976,7 @@ function toolForm(root, t, data, detail, isNew) {
   authModeSel.value = initialMode;
   const envField = field('공용 자격 (auth_env)', authEnvSel);
   const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel,
-    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 「자격(커넥터 로그인)」에서 자기 토큰을 넣어요.' })));
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 우측 상단 [내 프로필 ▸ 내 서비스 로그인]에서 자기 로그인을 넣어요.' })));
   const kindScopeField = field('개인 자격 대상(선택)', authScopeIn);
   const syncAuthMode = () => {
     const m = authModeSel.value;
@@ -4062,13 +4011,13 @@ function toolForm(root, t, data, detail, isNew) {
         auth_scope_key: mode === 'kind' ? (authScopeIn.value.trim() || null) : null,
       };
       await api('/api/ui/org/tool', { method: 'POST', body: JSON.stringify(payload) });
-      await loadAdmin(true); state.admin.toolSel = payload.name; toast('저장됨 — 구성원 다음 대화부터 즉시'); renderAdminDetail(detail, 'tools', state.admin.data);
+      await loadAdmin(true); state.admin.toolSel = payload.name; toast('저장됨 — 구성원 다음 대화부터 즉시'); renderAdminDetail(detail, 'tools-proxy', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
   const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
   if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
     if (!confirm(`도구 '${t.name}' 제거? 구성원 AI 도구 목록에서 즉시 사라집니다.`)) return;
-    try { await api('/api/ui/org/tool/remove', { method: 'POST', body: JSON.stringify({ name: t.name }) }); await loadAdmin(true); state.admin.toolSel = null; toast('제거됨'); renderAdminDetail(detail, 'tools', state.admin.data); }
+    try { await api('/api/ui/org/tool/remove', { method: 'POST', body: JSON.stringify({ name: t.name }) }); await loadAdmin(true); state.admin.toolSel = null; toast('제거됨'); renderAdminDetail(detail, 'tools-proxy', state.admin.data); }
     catch (e) { toast(e.message, true); }
   } }));
   root.replaceChildren(
@@ -4084,31 +4033,8 @@ function toolForm(root, t, data, detail, isNew) {
     actions);
 }
 
-// ── 설치 · 업데이트 · 제거 (OS별 명령 복붙) — 모든 멤버에게 보임(자가 업데이트/제거) ──
-function deployPanel(detail, data) {
-  const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
-  const canEdit = state.admin.canEdit;
-  const os = state.admin.deployOs || 'mac';
-  state.admin.deployOs = os;
-  const osTabs = el('div', { class: 'os-tabs' },
-    ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
-      class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
-      onclick: () => { state.admin.deployOs = o; renderAdminDetail(detail, 'deploy', data); } })));
-  const staticBlock = (c) => el('div', { class: 'deploy-block' },
-    el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
-      c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
-    el('p', { class: 'admin-hint', text: c.note }),
-    el('pre', { class: 'admin-preview', text: c.cmd }));
-  // 설치 블록: 본인 토큰 자가발급(어드민·비어드민 동일). 업데이트·제거는 설치된 토큰 자동 읽기.
-  const blocks = deployCommands(gw, os).map((c) =>
-    c.kind === 'install' ? installSelfBlock(gw, os) : staticBlock(c));
-  detail.replaceChildren(el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '설치 · 업데이트 · 제거' }), osTabs),
-    el('p', { class: 'admin-hint', text: '본인 머신에 설치/업데이트/제거하는 명령입니다. 업데이트·제거는 설치된 토큰을 자동으로 읽어 토큰 재입력이 필요 없습니다. (다른 구성원에게 배포할 토큰은 [구성원 추가] 탭에서.)' }),
-    ...blocks));
-}
-
-// OS별 설치 명령(토큰 박음).
+// 설치 한 줄 명령(OS별) — 구 [설치·업데이트·제거] 화면(deployPanel)은 #837 에서 제거했지만, 이 헬퍼는
+//  사용 가이드(web/learn.ts 의 시작하기)와 아래 installMinterBlock(접속 열쇠 발급)이 계속 쓴다.
 function installCmd(gw, os, token) {
   if (os === 'windows') {
     // 맥과 동일: 번들 기반 설치(git clone 없음·토큰 프롬프트 없음) + 설치된 하네스 감지(claude/codex) → --harness.
@@ -4119,36 +4045,7 @@ function installCmd(gw, os, token) {
   return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh`;
 }
 
-// 설치(본인) — 자가발급으로 본인 토큰 → 본인 설치 명령. admin/비admin 동일.
-function installSelfBlock(gw, os) {
-  const result = el('div', {});
-  // #632: admin/runtime 보유자만 — 이 설치 토큰에 관리 권한을 실을지 opt-in(기본 off). 멤버 scope 가 상한.
-  const canCp = hasScope('admin') || hasScope('runtime');
-  const cpChk = el('input', { type: 'checkbox', style: 'margin-right:6px;vertical-align:middle' });
-  const cpLabel = canCp ? el('label', { class: 'caption', style: 'display:block;margin:3px 0 7px;cursor:pointer' },
-    cpChk, el('span', { text: '관리 권한(admin/runtime) 포함 — 이 토큰으로 설치한 로컬 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 직접 다룹니다. 변경은 감사에 AI로 남습니다(#632).' })) : null;
-  const go = el('button', { class: 'btn btn-primary btn-sm', text: '내 토큰 발급 → 설치 명령' });
-  go.addEventListener('click', async () => {
-    go.disabled = true;
-    try {
-      const r = await api('/api/ui/org/token/self', { method: 'POST', body: JSON.stringify({ includeControlPlane: canCp && cpChk.checked }) });
-      const cmd = installCmd(gw, os, r.token);
-      result.replaceChildren(
-        el('p', { class: 'admin-hint', text: '✓ 본인 토큰 발급됨(scope: ' + (r.scopes || []).join('/') + '). 본인 머신에서 아래를 실행하세요 — 토큰은 지금만 보입니다.' }),
-        el('div', { class: 'deploy-head' }, el('span', {}), copyButton(() => cmd, '명령 복사')),
-        el('pre', { class: 'admin-preview', text: cmd }));
-    } catch (e) { toast(e.message, true); }
-    go.disabled = false;
-  });
-  return el('div', { class: 'deploy-block' },
-    el('h3', { text: '설치 (본인 머신)' }),
-    el('p', { class: 'admin-hint', text: '본인 토큰을 발급해 본인 머신에 설치합니다(git 불필요). 새 기기/재설치 시 사용.' }),
-    cpLabel,
-    el('div', { class: 'install-minter' }, go),
-    result);
-}
-
-// 설치 미니터 — 구성원 선택 + 발급 → 그 사람 토큰이 박힌 완성형 설치 명령(복사).
+// ── 접속 열쇠(토큰) 발급 — 구성원을 골라 발급하고 설치 한 줄을 건넨다. [구성원 ▸ 접속 열쇠] 안. ──
 function installMinterBlock(data, gw, opts: any = {}) {
   const result = el('div', {});
   const sel = el('select', {}, ...(data.members || []).map((m) =>
@@ -4524,7 +4421,7 @@ function oauthConnectorsCard(conns, reload) {
       el('div', { class: 'admin-actions' }, connectBtn, discBtn));
   });
   return el('div', { class: 'card' },
-    sectionTitle('OAuth 커넥터', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 커넥터예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'),
+    sectionTitle('OAuth 로그인', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'),
     el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })),
     ...rows);
 }
@@ -4532,7 +4429,7 @@ function oauthConnectorsCard(conns, reload) {
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
 function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 커넥터 카탈로그의 현재 상태. 추가·발행은 [MCP 서버] 탭에서 프리셋으로, 구성원 연결은 각자 [연결].' })];
+  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 다른 것이에요. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서, 구성원 연결은 각자 [연결].' })];
   for (const c of (catalog || [])) {
     const s = byName.get(c.name);
     let chip: any; let hint = '';
@@ -4544,52 +4441,61 @@ function catalogStatusCard(catalog: any[], servers: any[]) {
       chip,
       el('span', { class: 'mini-meta', text: hint })));
   }
-  if (!(catalog || []).length) rows.push(el('p', { class: 'admin-hint', text: '카탈로그를 불러오지 못했습니다.' }));
-  return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: '커넥터 현황 (기본 카탈로그)' }), ...rows);
+  if (!(catalog || []).length) rows.push(el('p', { class: 'admin-hint', text: '프리셋을 불러오지 못했습니다.' }));
+  // 외부 도구 서버(MCP) 기본 프리셋 현황 — org_connector(외부 자료 수집)와 무관하다(#837 에서 엔드포인트도 개명).
+  return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: '외부 도구 서버 현황 (기본 프리셋)' }), ...rows);
 }
 
+// ── [서비스 로그인] — 조직 자격만(#837). ──
+//  개인 vault('내 자격' + OAuth 연결)는 **조직 관리가 아니라 개인 설정**이라 [내 프로필] 모달로 옮겼다.
+//  그것 때문에 이 섹션이 권한 게이트 없이 전 구성원에게 열려 있었고(ADMIN_ONLY 밖), 조직 관리 화면에
+//  개인 설정이 섞여 있었다. 이제 섹션은 admin 전용이고, 안에 조직 자격·AWS 역할·프리셋 현황만 남는다.
 async function credentialsEditor(detail) {
-  const isAdmin = hasScope('admin');
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
-  let mine: any = { credentials: [], encryption_ready: true };
+  let mine: any = { encryption_ready: true };
   let org: any = { credentials: [] };
   let awsRoles: any = { credentials: [] };
-  let oauthConns: any = { connectors: [] };
   let catalog: any = { catalog: [] };
   let mcpServers: any = { servers: [] };
   try {
-    mine = await api('/api/ui/me/credentials');
-    oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
-    if (isAdmin) {
-      org = await api('/api/ui/org/credentials');
-      // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
-      awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
-      // 커넥터 현황(#746 imp#5) — 기본 카탈로그 × 등록상태
-      catalog = await api('/api/ui/org/connector-catalog').catch(() => ({ catalog: [] }));
-      mcpServers = await api('/api/ui/org/mcp-servers').catch(() => ({ servers: [] }));
-    }
+    mine = await api('/api/ui/me/credentials');   // 암호화 키 준비 여부(encryption_ready)만 본다
+    org = await api('/api/ui/org/credentials');
+    // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
+    awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
+    // 외부 도구 서버(MCP) 프리셋 — '외부 자료 수집'(org_connector 미러)과 무관하다.
+    catalog = await api('/api/ui/org/mcp-server-presets').catch(() => ({ catalog: [] }));
+    mcpServers = await api('/api/ui/org/mcp-servers').catch(() => ({ servers: [] }));
   } catch (e: any) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '자격을 불러오지 못했습니다'))); return; }
 
   const encReady = mine.encryption_ready !== false;
   const cards: any[] = [
     el('div', { class: 'card' },
-      sectionTitle('자격 (커넥터 로그인)', '커넥터(GitLab·Slack·AWS 등)에 로그인할 내 토큰을 여기 한 번 넣어두면, AI가 나 대신 그 서비스를 읽고 쓸 때 이 자격으로 로그인해요. 토큰은 암호화되어 저장되고 다른 사람에게 보이지 않아요.'),
+      sectionTitle('서비스 로그인 (조직)', 'AI 가 외부 서비스(GitLab·Slack·AWS 등)에 접속할 때 쓰는 조직 공용 로그인입니다. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것이고(그건 [구성원 ▸ 접속 열쇠]), 개인 로그인은 우측 상단 [내 프로필]에 있습니다.'),
       encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
+    catalogStatusCard(catalog.catalog || [], mcpServers.servers || []),
+    credVaultCard('org', '통합 자격', '개인 로그인이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 로그인 필수).', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)),
+    awsRoleCard(awsRoles.credentials || [], () => credentialsEditor(detail)),
   ];
-
-  // 커넥터 현황 개관(#746 imp#4·#5) — 관리자에게 기본 카탈로그의 등록/설정 상태를 한눈에.
-  if (isAdmin) cards.push(catalogStatusCard(catalog.catalog || [], mcpServers.servers || []));
-
-  // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
-  cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
-
-  if ((oauthConns.connectors || []).length) cards.push(oauthConnectorsCard(oauthConns.connectors, () => credentialsEditor(detail)));
-
-  if (isAdmin) {
-    cards.push(credVaultCard('org', '통합 자격 (관리자)', '개인 자격이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인이에요. 쓰기·외부발신·민감정보에는 쓰이지 않아요(그건 개인 자격 필수).', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
-    cards.push(awsRoleCard(awsRoles.credentials || [], () => credentialsEditor(detail)));
-  }
   detail.replaceChildren(...cards);
+}
+
+// ── 내 서비스 로그인 — [내 프로필] 모달 안(#837). 개인 vault + OAuth 연결. 전 구성원. ──
+async function myCredentialsSection(host) {
+  host.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  let mine: any = { credentials: [], encryption_ready: true };
+  let oauthConns: any = { connectors: [] };
+  try {
+    mine = await api('/api/ui/me/credentials');
+    oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
+  } catch (e: any) { host.replaceChildren(errorNote(e, '내 로그인을 불러오지 못했습니다')); return; }
+  const encReady = mine.encryption_ready !== false;
+  const kids: any[] = [];
+  if (!encReady) kids.push(el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키가 없어 저장할 수 없습니다 — 관리자에게 요청하세요.' }));
+  // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
+  kids.push(credVaultCard('me', '내 서비스 로그인', 'AI 가 나로서 그 서비스에 접근할 때 씁니다(예: GitLab MR 올리기, Slack 검색). 암호화 저장되고 다른 사람에게 보이지 않아요.',
+    (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host)));
+  if ((oauthConns.connectors || []).length) kids.push(oauthConnectorsCard(oauthConns.connectors, () => myCredentialsSection(host)));
+  host.replaceChildren(...kids);
 }
 
 // 자격 목록 + 추가 폼 카드(me 또는 org). aws_role_arn 은 별도(awsRoleCard).
@@ -4742,12 +4648,9 @@ async function dbAuditEditor(detail, data) {
   const userIn = el('input', { type: 'text', value: f.user || '', placeholder: '조회자 id(선택)', style: 'max-width:150px' });
   const tableIn = el('input', { type: 'text', value: f.table || '', placeholder: '테이블명(선택)', style: 'max-width:150px' });
   const body = el('div', {});
-  const subjPanel = el('div', { class: 'card', style: 'margin-top:12px' });
   const apply = () => {
     f.source = srcSel.value; f.op = opSel.value; f.result = resSel.value; f.period = perSel.value; f.user = userIn.value.trim(); f.table = tableIn.value.trim();
     void loadAuditRows(body, f);
-    if (f.source) void renderSubjectKeyPanel(subjPanel, f.source, data);
-    else subjPanel.replaceChildren(el('p', { class: 'admin-hint', text: "특정 소스를 고르면 '누구의 정보를 조회했는지' 기록할 식별자 컬럼을 지정할 수 있습니다." }));
   };
   for (const c of [srcSel, opSel, resSel, perSel]) c.addEventListener('change', apply);
   const searchBtn = el('button', { class: 'btn btn-sm', text: '조회', onclick: apply });
@@ -4763,13 +4666,11 @@ async function dbAuditEditor(detail, data) {
     } catch (e: any) { verifyOut.replaceChildren(el('span', { class: 'audit-bad', text: e.message })); }
   } });
   const card = el('div', { class: 'card' },
-    sectionTitle('DB 접근 감사', '구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 위변조 방지(해시체인)이며, 신용정보법상 조회 기록 보존에 씁니다.'),
+    sectionTitle('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 위변조 방지(해시체인)이며, 신용정보법상 조회 기록 보존에 씁니다. — '누구의 정보인지' 기록할 식별자 컬럼 지정은 설정이므로 [데이터 연결 ▸ DB 데이터소스]에 있습니다."),
     bar,
     el('div', { class: 'audit-verify' }, verifyBtn, verifyOut),
     body);
-  if (f.source) void renderSubjectKeyPanel(subjPanel, f.source, data);
-  else subjPanel.append(el('p', { class: 'admin-hint', text: "위 '모든 소스'를 특정 소스로 바꾸면, 그 소스에서 '누구의 정보를 조회했는지' 기록할 식별자 컬럼(예: 고객ID)을 지정할 수 있습니다." }));
-  detail.replaceChildren(card, subjPanel);
+  detail.replaceChildren(card);
   void loadAuditRows(body, f);
 }
 
@@ -4915,29 +4816,24 @@ async function renderUnmaskGrantPanel(panel, source, data) {
   panel.replaceChildren(...rows);
 }
 
-async function openMyProfile() {
-  let data;
-  try { data = await api('/api/ui/me/profile'); }
-  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
-  const p = parseMyProfile(data.body_md || '');
+// ════════════════════════════════════════════════════════════════════
+// 개인 설정 (#837 후속) — 우상단 [내 프로필] 모달 하나에 필드 15개 + 중첩 모달 2개가 들어 있었다.
+//  사용자 지적: "개인 설정을 프로필 모달에서 하고있는데 이 경험이 안좋은거같아. 프로필 모달은 진짜 프사나
+//  표시 이름변경정도로 하고 나머지는 관리탭에 개인 설정 대분류 하나 파서 그 안으로 적절히 옮기는게 맞지 않을까?"
+//  → 모달 = 빠른 편집(프사·표시이름), 관리탭 [내 설정] = 전체. 저장 경로는 그대로다(서버가 부분 갱신).
+// ════════════════════════════════════════════════════════════════════
 
-  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
-  const roleIn = el('input', { type: 'text', value: p.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
-  const addressIn = el('input', { type: 'text', value: p.address, placeholder: '예: 원준님 / 대표님 / 원준' });
-  const areaIn = el('input', { type: 'text', value: p.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
-  const toolsIn = el('input', { type: 'text', value: p.tools, placeholder: '예: context-ontology, Cursor, Figma' });
-  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
-  memoTa.value = p.memo;
-
-  // ── 아바타 — 업로드 이미지(없으면 커스텀 글자·색 또는 이니셜+해시색). undefined=변경없음, null=기본으로, string=새 이미지. ──
-  let avatarState: string | null | undefined;
-  let charState = (data.avatar_char || '');   // 커스텀 글자(빈=이니셜)
-  let colorState = (data.avatar_color || '');  // 커스텀 배경색 #rrggbb(빈=해시색)
-  const avaPreview = el('span', { class: 'prof-ava-preview' });
-  const renderAva = () => {
+// 아바타 편집기 — 사진 업로드 / 커스텀 글자·색 / 기본(이니셜+해시색). 모달과 [내 정보]가 공유한다.
+//  payload(): undefined 인 필드는 안 보낸다 = 서버가 보존(me_profile_update 는 patch).
+function avatarEditor(data, nameInput) {
+  let avatarState: string | null | undefined;                 // undefined=변경없음 · null=기본으로 · string=새 이미지
+  let charState = (data.avatar_char || '');
+  let colorState = (data.avatar_color || '');
+  const preview = el('span', { class: 'prof-ava-preview' });
+  const render = () => {
     const cur = avatarState === undefined ? (data.avatar || null) : avatarState;
-    const nm = nameIn.value.trim() || data.display_name || data.email || data.id || '';
-    avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg', { char: charState, color: colorState }));
+    const nm = (nameInput && nameInput.value.trim()) || data.display_name || data.email || data.id || '';
+    preview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg', { char: charState, color: colorState }));
   };
   const fileIn = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
   const uploadBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '사진 올리기' });
@@ -4945,46 +4841,108 @@ async function openMyProfile() {
   uploadBtn.addEventListener('click', () => fileIn.click());
   fileIn.addEventListener('change', async () => {
     const f = fileIn.files && fileIn.files[0]; if (!f) return;
-    try { avatarState = await fileToAvatarDataUrl(f); renderAva(); }
-    catch (e) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
+    try { avatarState = await fileToAvatarDataUrl(f); render(); }
+    catch (e: any) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
     fileIn.value = '';
   });
-  removeBtn.addEventListener('click', () => { avatarState = null; renderAva(); });
-  nameIn.addEventListener('input', renderAva); // 이름 바꾸면 폴백 이니셜도 갱신
-  // 커스텀 글자 — 최대 3자(비우면 이름 이니셜). 이미지가 있으면 이미지가 우선.
+  removeBtn.addEventListener('click', () => { avatarState = null; render(); });
+  if (nameInput) nameInput.addEventListener('input', render);   // 이름을 바꾸면 폴백 이니셜도 갱신
   const charIn = el('input', { type: 'text', maxlength: '3', value: charState, placeholder: '글자', style: 'width:70px; text-align:center; font-weight:700;' });
-  charIn.addEventListener('input', () => { charState = charIn.value; renderAva(); });
-  // 커스텀 배경색 — 팔레트(‘A’=자동 해시색). 리스트/폴더 색 스와치(.pjv-sw) 재사용.
+  charIn.addEventListener('input', () => { charState = charIn.value; render(); });
   const AVA_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b', '#0ea5e9', '#14b8a6', '#f97316', '#8b5cf6'];
   const colorRow = el('div', { class: 'pjv-color-swatches' });
   const paintColors = () => {
     const auto = el('button', { type: 'button', class: 'pjv-sw pjv-sw-none' + (colorState ? '' : ' on'), title: '자동(이름 해시색)', text: 'A' });
-    auto.onclick = () => { colorState = ''; paintColors(); renderAva(); };
+    auto.onclick = () => { colorState = ''; paintColors(); render(); };
     colorRow.replaceChildren(auto, ...AVA_COLORS.map((c) => {
-      const s = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
-      s.onclick = () => { colorState = c; paintColors(); renderAva(); };
-      return s;
+      const sw = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
+      sw.onclick = () => { colorState = c; paintColors(); render(); };
+      return sw;
     }));
   };
-  paintColors();
-  renderAva();
-  const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview,
-    el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
-      el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' })));
-  const avaCharColor = el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
-    el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-    el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' }));
+  paintColors(); render();
+  const node = el('div', {},
+    el('div', { class: 'prof-ava-row' }, preview,
+      el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
+        el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' }))),
+    el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
+      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
+      el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' })));
+  const payload = () => {
+    const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
+    if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
+    return out;
+  };
+  return { node, payload };
+}
 
-  const devSel = { v: p.dev };
+// 저장 후 상단바(아바타·이름)·사람 아바타 맵 즉시 갱신 — 모달·[내 정보] 공유.
+function applyMyProfileSaved(res, fallbackId) {
+  const m = (res && res.member) || {};
+  if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null; }
+  setPersonAvatar((state.me && state.me.userId) || fallbackId, m);
+  const label = (m.display_name && m.display_name.trim()) || m.email || (state.me && (state.me.email || state.me.userId)) || '';
+  const ue = document.getElementById('user-email');
+  if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || fallbackId, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
+}
+
+// ── [내 설정 ▸ 내 정보] — 아바타 · 표시 이름 · 이메일(읽기) · 비밀번호 ──
+async function myProfileSection(detail) {
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 정보를 불러오는 중')));
+  let data: any;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '내 정보를 불러오지 못했습니다'))); return; }
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const ava = avatarEditor(data, nameIn);
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인화]가 지워지지 않는다.
+    const payload = { display_name: nameIn.value.trim(), ...ava.payload() };
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
+      applyMyProfileSaved(res, data.id);
+      toast('저장됨'); status.textContent = '저장됨';
+    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
+    saveBtn.disabled = false;
+  });
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('내 정보', '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.'),
+    field('프로필 사진', ava.node),
+    field('표시 이름', nameIn),
+    data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
+}
+
+// ── [내 설정 ▸ AI 개인화] — 개인 레이어(body_md). AI 가 매 세션 첫머리에 그대로 읽는다. ──
+async function myAiSection(detail) {
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('AI 개인화를 불러오는 중')));
+  let data: any;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '불러오지 못했습니다'))); return; }
+  const pr = parseMyProfile(data.body_md || '');
+
+  const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
+  const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님 / 원준' });
+  const areaIn = el('input', { type: 'text', value: pr.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
+  const toolsIn = el('input', { type: 'text', value: pr.tools, placeholder: '예: context-ontology, Cursor, Figma' });
+  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+  memoTa.value = pr.memo;
+
+  const devSel = { v: pr.dev };
   const devHint = el('p', { class: 'prof-hint' });
   const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 기술 답변 깊이를 맞춰요.'; };
   const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
   renderDevHint();
-
-  const toneSel = { v: p.tone };
+  const toneSel = { v: pr.tone };
   const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
-
-  const lenSel = { v: p.len };
+  const lenSel = { v: pr.len };
   const lenHint = el('p', { class: 'prof-hint' });
   const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
   const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
@@ -4992,32 +4950,6 @@ async function openMyProfile() {
 
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
-
-  const back = overlay('내 프로필',
-    el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
-      text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }),
-    field('프로필 사진', el('div', {}, avaRow, avaCharColor)),
-    field('표시 이름', nameIn),
-    data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
-    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
-    field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))),
-    field('내 스킬·훅 (#699)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '내 스킬·훅 설정', onclick: () => openMyAssets() }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요.' }))),
-    field('역할', roleIn),
-    field('개발 이해도', el('div', {}, devChips, devHint)),
-    field('호칭 (AI가 나를 부르는 말)', addressIn),
-    field('말투', toneChips),
-    field('응답 길이', el('div', {}, lenChips, lenHint)),
-    field('담당 영역', areaIn),
-    field('자주 쓰는 도구·레포', toolsIn),
-    field('추가 메모', memoTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status));
-
   saveBtn.addEventListener('click', async () => {
     // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
     const lines: string[] = [];
@@ -5033,44 +4965,53 @@ async function openMyProfile() {
     let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
     const memo = memoTa.value.trim();
     if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
-
-    const payload: any = { display_name: nameIn.value.trim(), body_md: body };
-    if (avatarState !== undefined) payload.avatar = avatarState; // null=기본으로, string=새 이미지(미변경이면 생략→보존)
-    payload.avatar_char = charState.trim() || null;  // 커스텀 글자(빈=이니셜 자동)
-    payload.avatar_color = colorState || null;        // 커스텀 배경색(빈=해시색 자동)
-
     saveBtn.disabled = true;
+    // display_name·아바타는 **안 보낸다** — 서버가 보존하므로 [내 정보]가 지워지지 않는다.
     try {
-      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
-      const m = (res && res.member) || {};
-      if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null; }
-      setPersonAvatar((state.me && state.me.userId) || data.id, m); // 사람 아바타 맵 즉시 갱신 → 다른 곳 칩/얼굴도 다음 렌더부터 반영
-      // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
-      const label = (m.display_name && m.display_name.trim()) || m.email
-        || (state.me && (state.me.email || state.me.userId)) || '';
-      const ue = document.getElementById('user-email');
-      if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
-      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
-      back.remove();
-    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+      await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
+      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다'); status.textContent = '저장됨';
+    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
+    saveBtn.disabled = false;
   });
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 다른 구성원의 AI 에는 영향이 없어요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+    field('역할', roleIn),
+    field('개발 이해도', el('div', {}, devChips, devHint)),
+    field('호칭 (AI가 나를 부르는 말)', addressIn),
+    field('말투', toneChips),
+    field('응답 길이', el('div', {}, lenChips, lenHint)),
+    field('담당 영역', areaIn),
+    field('자주 쓰는 도구·레포', toolsIn),
+    field('추가 메모', memoTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
 
-// ── 내 스킬·훅 셀프 설정(#699) — 멤버가 본인에게 배포되는 스킬·훅을 기본(관리자)/켜기/끄기로 조정. me/* 엔드포인트, principal 강제. ──
-async function openMyAssets() {
+// ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
+async function myLoginsSection(detail) {
+  const head = el('div', { class: 'card' },
+    sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'),
+    field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))));
+  const vault = el('div', {});
+  detail.replaceChildren(head, vault);
+  await myCredentialsSection(vault);
+}
+
+// ── [내 설정 ▸ 내 스킬·훅] — 관리자가 배포한 것 중 내게 적용되는 것을 켜고 끈다(#699). ──
+async function myAssetsSection(detail) {
   const KIND_LABEL: Record<string, string> = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
-  const back = overlay('내 스킬·훅',
-    el('p', { class: 'admin-hint', style: 'margin:0 0 12px',
-      text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요. “기본”은 관리자 설정을 따르고, “켜기/끄기”는 본인 세션에만 강제 적용됩니다(다른 구성원엔 영향 없음). 다음 세션부터 반영돼요.' }));
   const bodyBox = el('div', {});
-  (back.querySelector('.ov-box') as HTMLElement).append(bodyBox);
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('내 스킬 · 훅', '관리자가 배포한 스킬·훅 중 **나에게** 적용되는 것을 직접 켜고 끌 수 있어요. “기본”은 관리자 설정을 따르고, “켜기/끄기”는 내 세션에만 강제 적용됩니다(다른 구성원엔 영향 없음). 다음 세션부터 반영돼요.'),
+    bodyBox));
 
   const reload = async () => {
     bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
     let data: any;
     try { data = await api('/api/ui/me/assets'); }
     catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
-
     const mkRow = (targetKind: string, it: any, kindLabel: string) => {
       const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
       const effPill = el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' });
@@ -5095,18 +5036,50 @@ async function openMyAssets() {
           el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') })),
         seg);
     };
-
     const rows: any[] = [];
     const skills = (data.skills || []); const hooks = (data.hooks || []);
-    rows.push(el('h4', { style: 'margin:14px 0 6px', text: '스킬 · 에이전트 · 커맨드' }));
-    if (skills.length) skills.forEach((s: any) => rows.push(mkRow('harness_asset', s, KIND_LABEL[s.kind] || s.kind)));
+    rows.push(el('h4', { style: 'margin:14px 0 6px', text: '스킬 · 서브에이전트 · 커맨드' }));
+    if (skills.length) skills.forEach((sk: any) => rows.push(mkRow('harness_asset', sk, KIND_LABEL[sk.kind] || sk.kind)));
     else rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
     rows.push(el('h4', { style: 'margin:16px 0 6px', text: '커스텀 훅' }));
     if (hooks.length) hooks.forEach((h: any) => rows.push(mkRow('org_hook', h, h.event)));
     else rows.push(el('p', { class: 'admin-hint', text: '배포된 훅이 없어요.' }));
     bodyBox.replaceChildren(...rows);
   };
-  reload();
+  await reload();
+}
+
+// ── 우상단 [내 프로필] — **빠른 편집만**(#837 후속). ──
+//  예전엔 이 모달 하나에 필드 15개 + 중첩 모달 2개(스킬·훅 / 서비스 로그인)가 들어 있었다.
+//  사용자 지적대로 "진짜 프사나 표시 이름 변경 정도"만 남기고, 나머지는 [관리 ▸ 내 설정]으로 폈다.
+//  저장은 부분 갱신 — display_name·아바타만 보내므로 개인 레이어(AI 개인화)는 건드리지 않는다.
+async function openMyProfile() {
+  let data;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const ava = avatarEditor(data, nameIn);
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+
+  const back = overlay('내 프로필',
+    field('프로필 사진', ava.node),
+    field('표시 이름', nameIn),
+    el('div', { class: 'admin-actions' }, saveBtn,
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/me-profile', text: '전체 설정 →',
+        onclick: () => { back.remove(); } })),
+    el('p', { class: 'admin-hint', style: 'margin:12px 0 0',
+      text: 'AI 개인화(호칭·말투·답변 길이)·서비스 로그인·내 스킬·훅·비밀번호는 [관리 ▸ 내 설정]에 있어요.' }));
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: nameIn.value.trim(), ...ava.payload() }) });
+      applyMyProfileSaved(res, data.id);
+      toast('저장됨');
+      back.remove();
+    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+  });
 }
 
 function overlay(title, ...content) {

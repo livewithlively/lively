@@ -1,5 +1,5 @@
-// review.ts — 지식 검토 게이트(#783). 관리탭 2개 패널:
-//   ① '지식 검토 게이트' — 에이전트가 쓴 지식을 사람이 승인해야 유효해지게 할지(그리고 어디까지) 오너가 조절.
+// review.ts — 지식 검토 정책(#783). 관리탭 2개 패널:
+//   ① '지식 검토 정책' — 에이전트가 쓴 지식을 사람이 승인해야 유효해지게 할지(그리고 어디까지) 오너가 조절.
 //   ② '검토 큐'        — 사람이 실제로 승인/반려하는 곳. 이 화면의 설계 목표는 단 하나: **인지비용 최소화**.
 //
 //  검토 큐 설계 원칙(사용자 요구 "사람 사용성 좋게, 인지비용 부담 적게"):
@@ -26,7 +26,7 @@ const CREATE_ACTS = [
 ];
 // 기존 지식 수정 시 동작.
 const UPDATE_ACTS = [
-    ['review', '반영하되 사후검토 — 라이브는 유지, 검토 큐에 diff 적재'],
+    ['review', '반영하되 사후검토 — 라이브는 유지, 검토 대기에 diff 적재'],
     ['stage', '승인 후 반영 — 라이브는 옛 승인본 유지(제안만 접수)'],
     ['auto', '즉시 반영 — 검토 없음(현행)'],
     ['drop', '수정 금지'],
@@ -149,7 +149,7 @@ export async function refreshReviewBadge(n) {
     sp.title = total > 0 ? `검토 대기 ${total}건` : '';
 }
 // ════════════════════════════════════════════════════════════════════
-// ① 지식 검토 게이트 — 정책(org_ingest_policy). 스위치 1개로 95%, 나머지는 '세부 규칙'.
+// ① 지식 검토 정책 — 정책(org_ingest_policy). 스위치 1개로 95%, 나머지는 '세부 규칙'.
 // ════════════════════════════════════════════════════════════════════
 export async function ingestPolicyPanel(detail, data) {
     rqEnsureStyles();
@@ -173,7 +173,7 @@ export async function ingestPolicyPanel(detail, data) {
     }
     const preset = policies.find((p) => p.preset === GATE_PRESET) || null;
     const rules = policies.filter((p) => p.preset !== GATE_PRESET); // 프리셋은 위 스위치가 관리 — 목록에서 제외(두 곳 편집 방지)
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '지식 검토 게이트' })), el('p', { class: 'admin-hint', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이라 켜지 않으면 지금과 똑같이 동작합니다. 켜면 에이전트가 쓴 지식은 검토 큐로 가고, 승인 전까지는 검색·세션주입·목록에 뜨지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }), gateCard(preset, obs, reload), rulesSection(rules, reload));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '지식 검토 정책' })), el('p', { class: 'admin-hint', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이라 켜지 않으면 지금과 똑같이 동작합니다. 켜면 에이전트가 쓴 지식은 [WIKI ▸ 검토 대기]로 가고, 승인 전까지는 검색·세션주입·목록에 뜨지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }), gateCard(preset, obs, reload), rulesSection(rules, reload));
     detail.replaceChildren(card);
 }
 // 프리셋 카드 — "에이전트가 기록한 지식" 한 덩어리. 스위치 + 신규/수정 액션 선택.
@@ -206,7 +206,7 @@ function gateCard(preset, obs, reload) {
         hintBits.push(el('span', { text: `최근 30일 에이전트가 검토 없이 반영한 신규 지식 ${obs.agent_auto}건.` }));
     }
     if (waiting > 0) {
-        hintBits.push(el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/review-queue', text: `검토 대기 ${waiting}건 열기` }));
+        hintBits.push(el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/review', text: `검토 대기 ${waiting}건 열기` }));
     }
     return el('div', { class: 'rq-gate' }, el('div', { class: 'rq-gate-head' }, el('span', { class: 'rq-gate-title', text: '에이전트가 기록한 지식' }), sw), el('p', { class: 'rq-gate-state', text: stateText }), el('div', { class: 'rq-gate-opts' }, el('label', {}, el('span', { class: 'rq-opt-label', text: '새 지식을 쓸 때' }), createSel), el('label', {}, el('span', { class: 'rq-opt-label', text: '기존 지식을 고칠 때' }), updSel)), hintBits.length
         ? el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--ink-sub)' }, ...hintBits)
@@ -247,7 +247,7 @@ function rulesSection(rules, reload) {
             p.match_agent && ('하네스=' + p.match_agent),
             p.match_category && ('도메인=' + p.match_category),
             p.match_type && ('종류=' + (TYPE_LABEL[p.match_type] || p.match_type)),
-            p.match_provenance && (p.match_provenance === 'observed' ? '커넥터 미러' : '저작'),
+            p.match_provenance && (p.match_provenance === 'observed' ? '외부 자료 미러' : '저작'),
             p.match_system && ('시스템=' + p.match_system),
             p.match_channel && ('채널=' + p.match_channel),
             p.match_sensitive && ('민감=' + p.match_sensitive),
@@ -308,7 +308,7 @@ export async function openIngestPolicyForm(pol, reload) {
     const agentSel = sel([['', '전체 (모든 하네스)'], ...HARNESSES.map((h) => [h, h])], (pol && pol.match_agent) || '');
     const catSel = sel([['', '전체 (모든 도메인)'], ...cats.map((c) => [c.key, (c.name || c.key) + ' (' + c.key + ')'])], (pol && pol.match_category) || '');
     const typeSel = sel([['', '전체 (모든 종류)'], ...PAGE_TYPES.map((t) => [t, (TYPE_LABEL[t] || t) + ' (' + t + ')'])], (pol && pol.match_type) || '');
-    const provSel = sel([['', '전체'], ['authored', '저작 (에이전트·사람이 쓴 것)'], ['observed', '커넥터 미러 (외부 원본 복제)']], (pol && pol.match_provenance) || '');
+    const provSel = sel([['', '전체'], ['authored', '저작 (에이전트·사람이 쓴 것)'], ['observed', '외부 자료 미러 (외부 원본 복제)']], (pol && pol.match_provenance) || '');
     const sysSel = sel([['', '전체 (모든 시스템)'], ...['slack', 'notion', 'clickup', 'gmail', 'gdrive', 'discord'].map((s) => [s, s])], (pol && pol.match_system) || '');
     const chanInp = el('input', { type: 'text', class: 'rq-sel', value: (pol && pol.match_channel) || '', placeholder: '특정 slack 채널·notion 폴더 id (비우면 시스템 전체)' });
     const sensSel = sel([['', '전체 (판정 무관)'], ['cooking', 'cooking (쿠킹 중)'], ['planning', 'planning (기획 단계)'], ['unfinished', 'unfinished (미완결)']], (pol && pol.match_sensitive) || '');
@@ -316,7 +316,7 @@ export async function openIngestPolicyForm(pol, reload) {
     const excChk = el('input', { type: 'checkbox', ...((pol && pol.is_exception) ? { checked: true } : {}) });
     const enChk = el('input', { type: 'checkbox', ...((pol ? pol.enabled : true) ? { checked: true } : {}) });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '규칙 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('무엇을 할까 (신규 저장)', '이 규칙에 걸리는 새 지식을 어떻게 다룰지.', actSel), block('무엇을 할까 (기존 지식 수정)', '이미 있는 지식을 고칠 때. 에이전트 쓰기의 상당수가 “수정”입니다.', updSel), block('누가 썼나', '서버가 접속 경로로 판정합니다(MCP=에이전트 · 웹=사람). AI 자기보고가 아닙니다.', whoSel), block('어느 하네스 (선택)', '특정 도구로 실행된 에이전트만. 비우면 모든 하네스.', agentSel), block('어느 도메인 (선택)', '이 카테고리 지식에만 적용. 비우면 모든 도메인.', catSel), block('지식 종류 (선택)', '예: 런북(how-to)만 사람 승인. 비우면 모든 종류.', typeSel), block('경로 (선택)', '저작(에이전트·사람) vs 커넥터 미러(외부 복제).', provSel), block('시스템 (선택)', '커넥터 미러의 출처. 비우면 모든 시스템.', sysSel), block('출처 채널/폴더 (선택)', '특정 slack 채널·notion 폴더 등(id).', chanInp), block('민감 라벨 (선택)', 'distill/미러 LLM 이 내용에서 판정.', sensSel), block('예외 규칙', '켜면 이 규칙이 다른 규칙의 누적을 건너뛰고 확정합니다 — “전부 검토하되 여기만 자동통과” 용도.', el('label', { class: 'inline' }, excChk, el('span', { text: ' 이 규칙을 예외(carve-out)로' }))), block('우선순위', '예외가 여럿 걸릴 때 큰 값이 이깁니다.', prioInp), block('켬', '', el('label', { class: 'inline' }, enChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('무엇을 할까 (신규 저장)', '이 규칙에 걸리는 새 지식을 어떻게 다룰지.', actSel), block('무엇을 할까 (기존 지식 수정)', '이미 있는 지식을 고칠 때. 에이전트 쓰기의 상당수가 “수정”입니다.', updSel), block('누가 썼나', '서버가 접속 경로로 판정합니다(MCP=에이전트 · 웹=사람). AI 자기보고가 아닙니다.', whoSel), block('어느 하네스 (선택)', '특정 도구로 실행된 에이전트만. 비우면 모든 하네스.', agentSel), block('어느 도메인 (선택)', '이 카테고리 지식에만 적용. 비우면 모든 도메인.', catSel), block('지식 종류 (선택)', '예: 런북(how-to)만 사람 승인. 비우면 모든 종류.', typeSel), block('경로 (선택)', '저작(에이전트·사람) vs 외부 자료 미러(외부 복제).', provSel), block('시스템 (선택)', '외부 자료 미러의 출처. 비우면 모든 시스템.', sysSel), block('출처 채널/폴더 (선택)', '특정 slack 채널·notion 폴더 등(id).', chanInp), block('민감 라벨 (선택)', 'distill/미러 LLM 이 내용에서 판정.', sensSel), block('예외 규칙', '켜면 이 규칙이 다른 규칙의 누적을 건너뛰고 확정합니다 — “전부 검토하되 여기만 자동통과” 용도.', el('label', { class: 'inline' }, excChk, el('span', { text: ' 이 규칙을 예외(carve-out)로' }))), block('우선순위', '예외가 여럿 걸릴 때 큰 값이 이깁니다.', prioInp), block('켬', '', el('label', { class: 'inline' }, enChk, el('span', { text: ' 활성화' }))), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '검토 규칙 추가' : '검토 규칙 수정', form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -349,6 +349,9 @@ const rqUi = {
     filter: 'all', cat: '', who: '', sel: new Set(), open: new Set(), cur: 0,
 };
 let rqKeys = null;
+// #837 — 큐는 관리탭을 떠나 WIKI 탭(#/knowledge/review)으로 왔다. 설정이 아니라 **반복 처리하는 일감**이고
+//  권한도 워킹레벨(memory)이라, 관리(admin)탭에 두면 볼 사람이 못 보고 방치된다(그걸 배지로 때우고 있었다).
+//  data(관리 org 페이로드)는 이 패널이 쓰지 않으므로 옵셔널 — WIKI 에서 인자 없이 부른다.
 export async function reviewQueuePanel(detail, data) {
     rqEnsureStyles();
     const reload = () => reviewQueuePanel(detail, data);
@@ -363,7 +366,7 @@ export async function reviewQueuePanel(detail, data) {
         revs = (pr && pr.entries) || [];
     }
     catch (e) {
-        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 큐를 불러오지 못했습니다')));
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 대기 항목을 불러오지 못했습니다')));
         return;
     }
     let obs = null;
@@ -398,7 +401,7 @@ export async function reviewQueuePanel(detail, data) {
             key: 'new:' + k.name, kind: 'new', name: k.name, title: k.title || k.name,
             cat: k.category_key || '', catName: k.category_name || '미분류', type: k.type || null,
             whoKind: k.confidence === 'ai' ? 'ai' : (k.provenance === 'observed' ? 'connector' : 'human'),
-            who: k.provenance === 'observed' ? (k.source || '커넥터') : (k.updated_by || '—'),
+            who: k.provenance === 'observed' ? (k.source || '자료 수집기') : (k.updated_by || '—'),
             agent: null, at: k.updated_at,
         })),
         ...revs.map((r) => ({
@@ -478,7 +481,7 @@ export async function reviewQueuePanel(detail, data) {
     catSel.value = rqUi.cat;
     catSel.onchange = () => { rqUi.cat = catSel.value; rqUi.cur = 0; paint(); };
     const whoSel = el('select', { class: 'rq-sel', style: 'width:auto;min-width:120px' });
-    for (const [v, t] of [['', '누가 쓰든'], ['ai', '에이전트'], ['human', '사람'], ['connector', '커넥터 미러']]) {
+    for (const [v, t] of [['', '누가 쓰든'], ['ai', '에이전트'], ['human', '사람'], ['connector', '외부 자료 미러']]) {
         whoSel.append(el('option', { value: v, text: t }));
     }
     whoSel.value = rqUi.who;
@@ -486,9 +489,9 @@ export async function reviewQueuePanel(detail, data) {
     const stat = (v, label, hint) => el('div', { class: 'rq-stat', title: hint }, el('b', { text: String(v ?? 0) }), el('span', { text: label }));
     const stats = obs ? el('div', { class: 'rq-stats' }, stat(items.filter((i) => i.kind === 'new').length, '새 지식 대기', '승인해야 검색·주입에 반영됩니다'), stat(items.filter((i) => i.kind === 'edit').length, '수정 대기', '기존 지식을 고친 건 — diff 를 확인하세요'), stat((obs.approved || 0) + (obs.rev_approved || 0), '최근 승인', obs.days + '일 내 승인'), stat((obs.rejected || 0) + (obs.rev_rejected || 0), '최근 반려', obs.days + '일 내 반려·되돌리기'), stat(obs.agent_auto, '검토 없이 반영', obs.days + '일 내 에이전트가 게이트 없이 즉시 반영한 신규 지식')) : null;
     const banner = (gateOn === false)
-        ? el('div', { class: 'rq-dup', style: 'display:flex;align-items:center;gap:10px' }, el('span', { style: 'flex:1', text: '지식 검토 게이트가 꺼져 있습니다 — 에이전트가 쓴 지식이 사람 확인 없이 곧바로 유효해집니다.' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/ingest-policy', text: '게이트 설정' }))
+        ? el('div', { class: 'rq-dup', style: 'display:flex;align-items:center;gap:10px' }, el('span', { style: 'flex:1', text: '지식 검토 정책가 꺼져 있습니다 — 에이전트가 쓴 지식이 사람 확인 없이 곧바로 유효해집니다.' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/ingest-policy', text: '게이트 설정' }))
         : null;
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '검토 큐' })), el('p', { class: 'admin-hint', text: '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.' }), banner, stats, el('div', { class: 'rq-bar' }, chips, catSel, whoSel, el('span', { class: 'rq-kbd' }, el('b', { text: 'j/k' }), el('span', { text: ' 이동 · ' }), el('b', { text: 'Enter' }), el('span', { text: ' 펼침 · ' }), el('b', { text: 'a' }), el('span', { text: ' 승인 · ' }), el('b', { text: 'r' }), el('span', { text: ' 반려 · ' }), el('b', { text: 'x' }), el('span', { text: ' 선택' }))), listBox, bulkBox);
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '검토 대기' })), el('p', { class: 'admin-hint', text: '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.' }), banner, stats, el('div', { class: 'rq-bar' }, chips, catSel, whoSel, el('span', { class: 'rq-kbd' }, el('b', { text: 'j/k' }), el('span', { text: ' 이동 · ' }), el('b', { text: 'Enter' }), el('span', { text: ' 펼침 · ' }), el('b', { text: 'a' }), el('span', { text: ' 승인 · ' }), el('b', { text: 'r' }), el('span', { text: ' 반려 · ' }), el('b', { text: 'x' }), el('span', { text: ' 선택' }))), listBox, bulkBox);
     detail.replaceChildren(card);
     paint();
     installKeys(listBox, visible, paint, drop);
@@ -532,7 +535,7 @@ function renderRow(it, idx, paint, drop) {
     // 누가 썼나 — 검토자가 가장 먼저 보는 신호(에이전트가 쓴 글은 사실확인이 필요하다).
     const whoText = it.whoKind === 'ai'
         ? '에이전트' + (it.agent ? ' · ' + it.agent : '')
-        : it.whoKind === 'connector' ? '커넥터 미러 · ' + it.who : '사람 · ' + it.who;
+        : it.whoKind === 'connector' ? '외부 자료 미러 · ' + it.who : '사람 · ' + it.who;
     const badge = it.kind === 'new'
         ? el('span', { class: 'rq-badge new', text: '신규' })
         : el('span', { class: 'rq-badge edit', text: it.mode === 'staged' ? '수정 · 미반영' : '수정 · 반영됨' });

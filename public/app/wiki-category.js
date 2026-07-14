@@ -12,7 +12,6 @@ import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js'
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
 import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
-import { openCategoryForm } from './category-form.js'; // 정의·범위(should) 편집
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat, parentFolder, done) {
     const nameIn = el('input', { type: 'text', placeholder: '폴더 이름', maxlength: '200' });
@@ -234,8 +233,11 @@ async function renderCategorySurface(box, cat, ctx) {
         };
         if (canDoc)
             pop.append(item('📁 폴더 만들기', () => openFolderForm(cat, f.folder, refresh)));
+        // #837 — 카테고리 '정의·범위'의 편집 주인은 [관리 ▸ 카테고리(분류 체계)] 하나다(결정: 관리탭이 주인).
+        //  여기서도 열 수 있게 두면 편집 표면이 둘이 되어 '어디서 바꾸지'가 매번 퀴즈가 된다 — 링크로 보낸다.
+        //  (도메인맵 탭도 이미 같은 곳으로 링크만 건다.)
         if (canCat)
-            pop.append(item('✎ 정의·범위 편집', () => openCategoryForm(cat.space, cat, () => { ctx.onCatChanged(); ctx.repaint(); })));
+            pop.append(item('✎ 정의·범위 편집 ↗', () => { location.hash = '#/system/wiki-categories'; }));
         if (canDoc)
             pop.append(item(sel.mode ? '선택 모드 끄기' : '☑ 여러 개 선택', () => { sel.mode = !sel.mode; if (!sel.mode)
                 sel.names.clear(); paintLibrary(); }));
@@ -445,24 +447,49 @@ async function renderCategorySurface(box, cat, ctx) {
         return L; // 비면 [] — 캔버스가 '첫 페이지' 초대를 띄운다(빈 소개 블록 방지)
     }
     let blocks = loadLayout();
-    // 저장 — body_md 에 블록 JSON. 디바운스.
+    // 저장 — body_md 에 블록 JSON. 디바운스. (#764 큐레이션 보호)
+    //  savedBaseline 과 다를 때만 실제 저장 — 편집모드 토글만 하거나 blur 만 나도 저장되던 파괴 버그 차단.
+    //  rawWasMarkdown: 원본이 손수 쓴 글이면 첫 편집 진입 시 1회 확인(블록 저장이 원문 서식을 대체하므로).
+    const serializeBlocks = (bs) => JSON.stringify(bs.map((b) => ({ type: b.type, w: b.w, cfg: b.cfg, text: b.text })));
+    let savedBaseline = serializeBlocks(blocks);
+    const rawWasMarkdown = (() => { const raw = homeBody().trim(); return !!raw && raw[0] !== '['; })();
+    let mdConvertConfirmed = !rawWasMarkdown;
     let saveTimer = null;
+    let builderFirstEditAt = 0;
     const setChip = (t, busy) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
     async function doSaveLayout() {
+        const cur = serializeBlocks(blocks);
+        if (cur === savedBaseline) {
+            builderFirstEditAt = 0;
+            return;
+        } // 변경 없음 — body_md(기존 큐레이션 포함) 보존
         setChip('저장 중…', true);
         try {
-            await ensureHome(JSON.stringify(blocks.map((b) => ({ type: b.type, w: b.w, cfg: b.cfg, text: b.text }))));
-            setChip('저장됨');
-            setTimeout(() => { if (saveChip.textContent === '저장됨')
-                setChip(''); }, 2000);
+            await ensureHome(cur);
+            savedBaseline = cur;
+            builderFirstEditAt = 0;
+            setChip('저장됨'); // 상시 유지
         }
         catch (e) {
-            setChip('저장 실패', true);
+            setChip('저장 안 됨', true);
             toast('대문 저장 실패 — ' + e.message, true);
         }
     }
-    function scheduleSave() { if (!canDoc)
-        return; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSaveLayout, 900); }
+    //  실시간 저장 리듬 — 600ms 디바운스 + 최초 편집 후 4s maxWait 강제 flush.
+    function scheduleSave() {
+        if (!canDoc)
+            return;
+        if (!builderFirstEditAt)
+            builderFirstEditAt = Date.now();
+        setChip('저장 중…', true);
+        clearTimeout(saveTimer);
+        const waited = Date.now() - builderFirstEditAt;
+        if (waited >= 4000) {
+            doSaveLayout();
+            return;
+        }
+        saveTimer = setTimeout(doSaveLayout, Math.min(600, 4000 - waited));
+    }
     // 질의 — allDocs 를 cfg 로. 어떤 지식이든 제목 형식 무관하게 흘러든다(범용).
     function queryDocs(cfg) {
         const src = cfg.src || 'recent';
@@ -750,10 +777,24 @@ async function renderCategorySurface(box, cat, ctx) {
         canvas.classList.toggle('editing', editing);
     }
     if (modeToggle)
-        modeToggle.onclick = () => { editing = !editing; if (!editing) {
-            clearTimeout(saveTimer);
-            doSaveLayout();
-        } paintMode(); renderCanvas(); };
+        modeToggle.onclick = () => {
+            if (!editing) {
+                // 편집 진입 — 손수 쓴 글로 작성된 대문이면 1회 확인(블록 저장이 원문 서식을 대체).
+                if (!mdConvertConfirmed) {
+                    if (!confirm('이 대문은 기존 서식(글)으로 작성돼 있어요.\n블록으로 편집해 저장하면 원래 서식이 블록 구조로 대체됩니다. 계속할까요?'))
+                        return;
+                    mdConvertConfirmed = true;
+                }
+                editing = true;
+            }
+            else {
+                editing = false;
+                clearTimeout(saveTimer);
+                doSaveLayout(); // savedBaseline 과 다를 때만 실제 저장
+            }
+            paintMode();
+            renderCanvas();
+        };
     renderCanvas();
     paintMode();
     box.replaceChildren(root);

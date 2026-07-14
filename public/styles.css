@@ -526,7 +526,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .st.warn::before { background: var(--coral); }     /* 열린 이슈 */
 
 /* 인페이지 섹션 탭(언더라인 세그먼트 — 전역 내비 아님) */
-.seg-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-top: 16px; }
+/* 화면 내 서브탭 — #837 에서 관리탭 병합 섹션(구성원·AI 도구·스킬·훅·자동화·감사 로그)이 되살려 쓴다. */
+.seg-tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 4px 0 0; }
 .seg-tabs button {
   border: none; background: none; cursor: pointer; padding: 9px 14px;
   font-size: 14px; font-weight: 700; color: var(--ink-sub);
@@ -647,7 +648,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-sublist-row .mini-row.sel { box-shadow: inset 0 0 0 2px var(--blue); border-color: var(--blue); }
 
 /* 구성원 관리(#613) — 상단 검색바 + 아바타 카드 그리드(선택 전 전체폭) / 2단 목록 공유 행 */
-.admin-member-searchbar { margin: 12px 0 10px; position: relative; }
+.admin-member-searchbar { margin: 12px 0 10px; position: relative; display: flex; align-items: center; gap: 10px; }
+.admin-member-searchbar .admin-member-search { flex: 1; min-width: 0; }
+.admin-member-searchbar > .btn { flex: none; }
 .admin-member-search { width: 100%; box-sizing: border-box; padding-left: 34px; font-weight: 500;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A6B2C8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20.5 20.5l-4-4'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: 11px 50%; }
@@ -735,7 +738,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 
 /* (관리 가로 중분류 바(.admin-cats)는 #827 로 폐지 — 위계 2단을 좌측 사이드바(.admin-side)가 전담한다.) */
 
-/* 상위 탭(회사 맥락·시작하기)의 가로 중분류 바 — 페이지 맨 위에 깔리는 보조 탭 스트립(.admin-cats 와 같은 시각 언어). */
+/* 상위 탭의 가로 중분류 바 — 페이지 맨 위에 깔리는 보조 탭 스트립. */
 .sub-cats {
   display: flex; gap: 4px; flex-wrap: wrap;
   margin: 0 0 18px; border-bottom: 1px solid var(--line);
@@ -6490,9 +6493,23 @@ body.pjv-pm-open { overflow: hidden; }
    문서는 읽기 폭(800px) 컬럼이지만 관리는 표·그리드·에디터라 전폭(main 의 1200px 상한도 푼다). */
 body[data-route="system"] main { max-width: none; }
 .admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
-.admin-body > .page-head { padding-top: 0; }
+/* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
+   '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
+   admin 이 없어도 카테고리·레포·팀은 context 권한으로 편집된다 — 전역 배지는 거짓말이었다. */
+.admin-ro-note { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; padding: 9px 13px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint);
+  font-size: 13px; color: var(--ink-sub); }
+.admin-ro-note .pill { flex: none; }
+/* 사이드바가 본문과 같은 높이에서 시작하게 — 머리글이 사라진 만큼 위 여백을 맞춘다. */
+.admin-body { padding-top: 4px; }
 /* 섹션 항목 안의 대기 배지(검토 큐, #802) — 라벨 오른쪽 끝에 붙인다. */
 .admin-side a.docs-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 그룹 머리글 아래 한 줄 힌트(#837) — "누가 쓰나"·"AI에게 뭘 가르치나"…. 새 분류축이 무엇인지
+   그룹 이름만으로는 안 읽혀서 붙였다. 머리글보다 작고 흐리게, 굵기 대비로 위계를 준다. */
+.docs-side-hint { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted-2);
+  letter-spacing: 0; margin-top: 1px; }
+/* 배지가 붙는 항목은 라벨이 남는 폭을 다 먹게(배지는 오른쪽 끝) — 위 justify-content 와 짝. */
+.admin-side a.docs-item > span:first-child { min-width: 0; }
 /* 세로 스택(사이드바가 위로)될 땐 폭을 명시한다 — .docs-layout 의 align-items:flex-start 가 세로 모드에선
    '내용 폭'으로 줄여, 표·그리드가 넓은 관리 본문이 화면 밖으로 삐져나온다(문서 본문은 max-width 800px 이라 안 겪던 문제). */
 @media (max-width: 960px) { .admin-body { width: 100%; } }

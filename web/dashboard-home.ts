@@ -1768,7 +1768,7 @@ function dashReviewRow(r) {
   const sub = mine > 0
     ? (total > mine ? `전체 ${total}건 중 · 승인해야 검색·주입에 반영돼요` : '승인해야 검색·주입에 반영돼요')
     : `신규 ${Number(r.new) || 0} · 수정 ${Number(r.edit) || 0} · 승인해야 검색·주입에 반영돼요`;
-  return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/system/review-queue' },
+  return el('a', { class: 'dash-ntf dash-ntf--due', href: '#/knowledge/review' },
     el('span', { class: 'dash-ntf-tile t-amber' }, dashReviewIcon()),
     el('span', { class: 'dash-ntf-main' },
       el('span', { class: 'dash-ntf-line' },

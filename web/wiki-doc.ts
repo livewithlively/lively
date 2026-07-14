@@ -304,7 +304,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
         },
       }));
     }
-    acts.push(el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
+    acts.push(el('a', { class: 'wk-banner-link', href: '#/knowledge/review', text: '검토 대기 →' }));
     reviewBanner = el('div', { class: 'wk-banner always' },
       el('span', { class: 'wk-banner-txt', text: '검토 대기 — 승인 전까지 검색·세션주입·목록에 노출되지 않습니다' + (k.confidence === 'ai' ? ' (에이전트가 작성)' : '') }),
       ...acts);
@@ -313,38 +313,58 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       el('span', { class: 'wk-banner-txt', text: pendingRev.mode === 'staged'
         ? '검토 대기 중인 수정 제안이 있습니다 — 아래 본문은 아직 옛 승인본입니다(승인하면 교체)'
         : '최근 수정이 사람 검토 대기 중입니다 — 본문은 반영돼 있으나 되돌려질 수 있습니다' }),
-      el('a', { class: 'wk-banner-link', href: '#/system/review-queue', text: '검토 큐 →' }));
+      el('a', { class: 'wk-banner-link', href: '#/knowledge/review', text: '검토 대기 →' }));
   }
 
   // ── 본문 — 폴더=자식 목록 / 편집 가능=블록 에디터(자동 저장) / 그 외=읽기 렌더. ──
   let editor: any = null;
   let saveTimer: any = null;
+  let retryTimer: any = null;
+  let retryDelay = 0;
+  let firstEditAt = 0;   // 마지막 저장 이후 최초 편집 시각 — maxWait 강제 flush 기준
   let saving = false;
   let lastSaveFailed = false;
   const setChip = (t, busy?) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
   // force: 원문 적용 등 dirty 게이트를 우회해야 하는 경로(setMarkdown 이 dirty 를 리셋하므로).
-  const doSave = async (force?: boolean) => {
+  // opts.keepalive: 언로드/이탈 시 동기 flush — 응답을 기다리지 않고 keepalive fetch 로 전송을 보장(sendBeacon 은 Authorization 불가).
+  const doSave = async (force?: boolean, opts?: { keepalive?: boolean }) => {
     if (!editor || saving || (!force && !editor.isDirty())) return;
+    const keepalive = !!(opts && opts.keepalive);
     saving = true;
-    setChip('저장 중…', true);
+    if (!keepalive) setChip('저장 중…', true);
     const md = editor.getMarkdown();
     try {
       const payload: any = { name: k.name, body_md: md || HOME_EMPTY };
-      await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+      await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload), keepalive });
       editor.resetDirty();
       k.body_md = md;
       lastSaveFailed = false;
-      setChip('저장됨');
-      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
-    } catch (e) {
-      lastSaveFailed = true;   // 자동 재시도 금지 — 다음 입력/focusout/⌘S 에서만(실패 토스트 무한 반복 방지)
-      setChip('저장 실패', true);
-      toast('저장 실패 — ' + e.message, true);
+      retryDelay = 0; firstEditAt = 0; clearTimeout(retryTimer);
+      setChip('저장됨');   // 상시 유지 — 빈 문자열로 사라져 '미저장'과 혼동되던 문제 제거
+    } catch (e: any) {
+      lastSaveFailed = true;
+      setChip('저장 안 됨 — 재시도 중…', true);   // 소거되지 않는 상태 — 성공 시에만 사라짐
+      if (!keepalive) {   // 지수 백오프 자동 재시도(첫 실패에만 토스트 1회) — online 이벤트가 별도로 재플러시
+        const first = !retryDelay;
+        retryDelay = Math.min(retryDelay ? retryDelay * 2 : 2000, 30000);
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => { if (editor && editor.el.isConnected && editor.isDirty()) doSave(true); }, retryDelay);
+        if (first) toast('저장이 지연되고 있어요 — 자동 재시도 중', true);
+      }
     }
     saving = false;
     if (!lastSaveFailed && editor && editor.isDirty()) queueSave();   // 저장 중 추가 편집분 재큐잉(성공 시에만)
   };
-  const queueSave = () => { lastSaveFailed = false; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 2000); };
+  //  실시간 저장 리듬 — 600ms trailing 디바운스 + 최초 편집 후 4s 이내 강제 flush(연속 타이핑 중 미저장 창 제거).
+  const queueSave = () => {
+    lastSaveFailed = false;
+    if (!firstEditAt) firstEditAt = Date.now();
+    setChip('저장 중…', true);
+    clearTimeout(saveTimer);
+    const waited = Date.now() - firstEditAt;
+    if (waited >= 4000) { doSave(); return; }   // maxWait — 리셋 무시 강제 저장
+    saveTimer = setTimeout(doSave, Math.min(600, 4000 - waited));
+  };
 
   if (k.is_folder) {
     body.append(await knFolderChildrenBlock(k));
@@ -354,7 +374,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       placeholder: "내용 입력 · '/' 블록 메뉴",
       onChange: queueSave,
       onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
-    }));
+    }), () => { if (editor && editor.isDirty()) { clearTimeout(saveTimer); doSave(true, { keepalive: true }); } });   // 언로드 flush
     editor.el.addEventListener('focusout', () => { if (editor.isDirty()) { clearTimeout(saveTimer); doSave(); } });
     (body as any)._getMd = () => editor.getMarkdown();
     body.append(editor.el);
@@ -740,6 +760,27 @@ async function renderWikiDraft(view, params) {
   let saving = false;
   let timer: any = null;
 
+  // 초안 로컬 백업(#764 유실 봉쇄) — 제목·분류가 서기 전 본문은 서버에 저장되지 않으므로 localStorage 에 미러링.
+  //  생성 성공 시 정리. 진입 시 최근(7일 내) 초안이 있으면 복구. keepaliveSaveCreated 는 생성 후 언로드 flush.
+  const draftKey = 'wkdraft:' + preCatKey + ':' + preFolder + ':' + preProject;
+  function readDraft(): any { try { const s = localStorage.getItem(draftKey); return s ? JSON.parse(s) : null; } catch (_) { return null; } }
+  function clearDraft() { try { localStorage.removeItem(draftKey); } catch (_) { /* 무시 */ } }
+  function mirrorDraft() {
+    if (created) return;   // 생성됨 = 서버가 진실, 로컬 미러 불필요
+    const title = (titleEl.textContent || '').trim();
+    const body_md = editor ? editor.getMarkdown() : '';
+    if (!title && !body_md.trim()) { clearDraft(); return; }
+    try { localStorage.setItem(draftKey, JSON.stringify({ title, body_md, catKey, typeVal, ts: Date.now() })); } catch (_) { /* 용량 초과 등 무시 */ }
+  }
+  function keepaliveSaveCreated() {
+    if (!created) return;
+    const title = (titleEl.textContent || '').trim();
+    const payload: any = { name: created.name, title: title || created.title, body_md: editor.getMarkdown().trim() || HOME_EMPTY };
+    if (typeVal) payload.type = typeVal;
+    if (catKey) payload.category = catKey;
+    try { api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload), keepalive: true }); } catch (_) { /* 무시 */ }
+  }
+
   const saveChip = el('span', { class: 'wk-save-chip', 'aria-live': 'polite' });
   const setChip = (t, busy?) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
 
@@ -824,13 +865,19 @@ async function renderWikiDraft(view, params) {
     placeholder: "내용 입력 · '/' 블록 메뉴",
     onChange: () => queue(),
     onSaveShortcut: () => { clearTimeout(timer); commit(); },
-  }));
+  }), () => { if (created) keepaliveSaveCreated(); else mirrorDraft(); });   // 언로드 flush — 생성 후 keepalive, 생성 전 로컬 미러
 
-  // ── 자동 생성/저장 ──
+  // ── 자동 생성/저장 — 생성 후 600ms 디바운스+4s maxWait 강제 flush. 생성 전엔 localStorage 가 이미 보호. ──
+  let draftFirstEditAt = 0;
   const queue = () => {
-    setChip(created ? '수정됨…' : '', true);
+    mirrorDraft();   // 매 변경마다 로컬 백업 갱신(제목·분류 확정 전 유실 방지)
+    if (!draftFirstEditAt) draftFirstEditAt = Date.now();
+    if (created) setChip('저장 중…', true);
+    else setChip(editor && editor.getMarkdown().trim() ? '초안 보관 중' : '', false);   // 생성 전 — 로컬에 안전 보관 중임을 명시
     clearTimeout(timer);
-    timer = setTimeout(commit, created ? 2000 : 1200);
+    const waited = Date.now() - draftFirstEditAt;
+    if (created && waited >= 4000) { commit(); return; }   // maxWait — 연속 타이핑 중 강제 저장
+    timer = setTimeout(commit, created ? Math.min(600, 4000 - waited) : 1000);
   };
   async function commit() {
     const title = (titleEl.textContent || '').trim();
@@ -848,7 +895,9 @@ async function renderWikiDraft(view, params) {
         if (!created) throw new Error('생성 응답이 비었습니다');
         knInvalidateTreeCaches();
         editor.resetDirty();
-        setChip('저장됨');
+        clearDraft();   // 서버 생성 완료 — 로컬 초안 정리
+        draftFirstEditAt = 0;
+        setChip('저장됨');   // 상시 유지
         // URL 승격 — 뒤로가기 히스토리 오염 없이 이 화면이 곧 문서 페이지가 된다.
         history.replaceState(null, '', '#/k/' + encodeURIComponent(created.name));
         crumbs.replaceChildren(
@@ -870,7 +919,7 @@ async function renderWikiDraft(view, params) {
         wkRecordVisit(created);
         paintPropline();
       } catch (e) {
-        setChip('저장 실패', true);
+        setChip('저장 안 됨', true);   // 생성 전 본문은 localStorage 초안으로 보호됨
         toast('페이지 생성 실패 — ' + e.message, true);
         saving = false;
         return;   // 실패 시 자동 재시도 금지 — 다음 입력(queue)에서만(1.2초 토스트 폭주 방지)
@@ -889,10 +938,10 @@ async function renderWikiDraft(view, params) {
       await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
       editor.resetDirty();
       created.title = payload.title;
-      setChip('저장됨');
-      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
+      draftFirstEditAt = 0;
+      setChip('저장됨');   // 상시 유지
     } catch (e) {
-      setChip('저장 실패', true);
+      setChip('저장 안 됨', true);
       toast('저장 실패 — ' + e.message, true);
       saving = false;
       return;   // 실패 시 자동 재시도 금지 — 다음 입력/focusout 에서만
@@ -901,6 +950,17 @@ async function renderWikiDraft(view, params) {
     if (editor.isDirty()) queue();
   }
   editor.el.addEventListener('focusout', () => { clearTimeout(timer); commit(); });
+
+  // 최근 초안 복구 — 제목/분류 미확정으로 서버에 못 담긴 이전 작성분을 되살린다(7일 내).
+  const savedDraft = readDraft();
+  if (savedDraft && (Date.now() - (savedDraft.ts || 0) < 7 * 864e5) && (savedDraft.title || (savedDraft.body_md || '').trim())) {
+    if (savedDraft.title && !(titleEl.textContent || '').trim()) titleEl.textContent = savedDraft.title;
+    if (savedDraft.body_md) editor.setMarkdown(savedDraft.body_md);
+    if (savedDraft.catKey && !catKey) catKey = savedDraft.catKey;
+    if (savedDraft.typeVal && !typeVal) typeVal = savedDraft.typeVal;
+    toast('이전에 작성 중이던 초안을 불러왔어요');
+    setTimeout(() => queue(), 0);   // 제목+분류가 서 있으면 곧 생성/저장
+  }
 
   canvas.replaceChildren(
     coverEl,

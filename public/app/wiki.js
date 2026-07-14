@@ -10,8 +10,9 @@ import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './
 import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
+import { reviewQueuePanel } from './review.js'; // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
 import { renderHomeSurface } from './wiki-home.js';
-// ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|기타(구 space URL — 무시) } ──
+// ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 space URL — 무시) } ──
 async function renderWiki(view, sub, params) {
     if (sub === 'new')
         return renderWikiDraft(view, params);
@@ -21,7 +22,20 @@ async function renderWiki(view, sub, params) {
     } // 구 링크 보존
     if (sub === 'sources')
         return renderSources(view);
+    if (sub === 'review')
+        return renderReviewQueue(view); // #837 검토 대기 — 구 #/system/review-queue
     return renderWikiSpace(view, params);
+}
+// ── 검토 대기(#837) — 인입 게이트에 걸린 지식·수정 제안을 승인/반려한다. 구 [관리 ▸ 검토 큐].
+//  '자료'(renderSources)와 같은 셸(wk-plainpad)을 쓴다 — 둘 다 위키의 보조 표면이다.
+//  권한은 memory scope(워킹레벨 개방 — #638: "카테고리 전문성 있는 워킹레벨이 오너보다 잘 검토한다").
+//  없으면 패널 안에서 서버가 403 을 돌려주고 그대로 안내된다.
+async function renderReviewQueue(view) {
+    const host = el('div', {});
+    // '자료'와 같은 관례 — 사이드바 없는 보조 표면이므로 위키로 돌아가는 링크를 단다.
+    const back = el('div', { class: 'wk-src-filters', style: 'justify-content:flex-end' }, el('a', { class: 'wk-sec-act', href: '#/knowledge', text: '← 위키' }));
+    view.replaceChildren(el('div', { class: 'wk-plainpad' }, back, host));
+    await reviewQueuePanel(host);
 }
 // ── WIKI 셸 — 사이드바 + 콘텐츠 한 장. 상태 f 는 세션 전역(state.wiki). ──
 async function renderWikiSpace(view, params) {
