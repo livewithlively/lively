@@ -209,6 +209,7 @@ function forceRedraw() {
 //  버튼은 ws 를 끊고 '재연결'한다 → 새 파서로 onopen 의 fit·크기재전송·백필(alt-screen 보정 포함)·재렌더를
 //  다시 수행해 페이지 새로고침에 준하는 복구를 한다(이미 검증된 자동재연결 경로 재사용, tmux 세션은 영속).
 function softReconnect() {
+  if (sessionEnded) return;      // 종료된 세션엔 붙을 곳이 없다(#835) — 마지막 화면을 그대로 둔다
   try { if (fit && term) fit.fit(); } catch (_) { /* noop */ }
   didBackfill = false;           // 재연결 시 현재 화면 백필을 다시 받게
   reconnectDelay = 250;          // 즉시성 — onclose 자동재연결이 곧바로 붙도록 짧게
@@ -1022,25 +1023,56 @@ async function boot() {
 }
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
-let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false;
+let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false, attempts = 0;
 // 4403(입장 거부)이 '일시적'일 수 있다(#687): 재배포 직후 tmux 과부하로 서버가 세션 소유자 메타를 못 읽으면
 //  canAttach 가 false→4403 을 내는데, 이건 진짜 권한거부가 아니라 곧 풀리는 일시장애다. 그래서 4403 을 바로
 //  영구 게이트로 띄우지 않고 이 횟수만큼 재시도한다 — 일시장애면 그 사이 복구돼 붙고, 진짜 거부면 계속 4403 이라
 //  MAX 후 게이트로 간다(무한 재연결 방지 취지는 보존). 성공 연결(onopen) 시 0 으로 리셋.
+// ⚠ 세션이 '진짜 종료'된 경우는 4403 이 아니라 4410(session-gone)으로 온다(#835) — 서버가 tmux 에게 확답을
+//  받았을 때만 보낸다. 그래야 '살아있는데 죽었다고 오인'(#687) 없이 '죽었는데 영원히 재접속중'을 없앨 수 있다.
 let denyRetries = 0; const MAX_DENY_RETRIES = 5;
-function scheduleReconnect() {
+let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 영구 중단(아래 endSession)
+function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
+  if (sessionEnded) return;
+  attempts++;
+  // 재시도 횟수를 같이 보여준다 — '멈춘 것처럼 보이는 재접속중'이 아니라 '지금 몇 번째로 시도 중'임을 알린다.
+  try {
+    statusEl.textContent = label + (attempts > 1 ? ' (' + attempts + '회째)' : '');
+    statusEl.className = 'status err';
+  } catch (_) { /* noop */ }
   reconnectTimer = setTimeout(connectNow, reconnectDelay);
   reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5000); // 지수 백오프, 최대 5s
 }
+// 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
+//  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
+//  상단에 종료 배너 + 상태 pill 만 바꾸고, 입력만 막는다.
+function endSession() {
+  if (sessionEnded) return;
+  sessionEnded = true;
+  clearTimeout(reconnectTimer);
+  try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
+  try { statusEl.textContent = '세션 종료됨'; statusEl.className = 'status end'; } catch (_) { /* noop */ }
+  try { term.options.disableStdin = true; term.blur(); } catch (_) { /* noop */ }
+  if (!document.title.startsWith('(종료됨)')) document.title = '(종료됨) ' + document.title;
+  const main = document.getElementById('main');
+  if (!main || main.querySelector('.ended-bar')) return;
+  main.insertBefore(el('div', { class: 'ended-bar' },
+    el('span', { class: 'ended-ic', text: '⏹' }),
+    el('span', { class: 'ended-txt' },
+      el('b', { text: '이 세션은 종료되었습니다.' }),
+      ' 세션이 끝났거나(exit) 삭제되어 서버에 더 이상 없습니다 — 접속 오류가 아닙니다. 아래 마지막 화면은 그대로 읽고 복사할 수 있어요.'),
+    el('a', { class: 'ended-cta', href: '/ui/#/terminal', target: '_blank', rel: 'noopener', text: '세션 목록 열기 →' })), panesEl);
+}
 async function connectNow() {
+  if (sessionEnded) return; // 종료 확정 세션 — 어떤 트리거(탭 복귀·포커스)로도 다시 붙지 않는다
   if (connecting) return;
   if (ws && ws.readyState <= 1) return; // 이미 OPEN/CONNECTING
   connecting = true;
   clearTimeout(reconnectTimer);
   // 재기동 시 인메모리 티켓이 비워지므로 매 연결마다 티켓을 새로 발급받는다.
   try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
-  catch (e) { connecting = false; statusEl.textContent = '재연결 중…'; statusEl.className = 'status err'; scheduleReconnect(); return; }
+  catch (e) { connecting = false; scheduleReconnect('게이트웨이 응답 없음 — 재연결 중…'); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
   sock.binaryType = 'arraybuffer'; // 서버가 raw 바이트(바이너리)로 보냄 → 바이트 레벨 파싱(멀티바이트 경계 안전)
@@ -1064,10 +1096,13 @@ async function connectNow() {
         term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text);
       } catch (_) { /* noop */ }
     },
-    onExit: () => { try { sock.close(); } catch (_) { /* noop */ } },
+    // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다
+    //  (게이트웨이 재배포로 attach PTY 가 kill 돼도 %exit 이다). 그래서 여기서 종료를 단정하지 않고, 곧바로
+    //  재연결해 서버에게 물어본다(살아있으면 그대로 붙고, 진짜 없으면 4410 이 와서 종료 배너). 짧은 지연으로 빠르게 판정.
+    onExit: () => { reconnectDelay = 400; try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
-    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
+    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
@@ -1086,21 +1121,16 @@ async function connectNow() {
   sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     connecting = false;
+    if (e && e.code === 4410) { endSession(); return; } // 세션 종료 확정(#835) — 서버가 tmux 에 확인함
     if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)
       //  바로 게이트를 띄우지 않고 MAX_DENY_RETRIES 만큼 재시도 — 일시장애면 곧 복구돼 붙고, 진짜 거부면 계속 4403 이라
       //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 성공 시 onopen 에서 denyRetries 리셋.
-      if (++denyRetries <= MAX_DENY_RETRIES) {
-        statusEl.textContent = '재연결 중…'; statusEl.className = 'status err';
-        scheduleReconnect();
-        return;
-      }
+      if (++denyRetries <= MAX_DENY_RETRIES) { scheduleReconnect('연결 확인 중…'); return; }
       clearTimeout(reconnectTimer);
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
       return;
     }
-    statusEl.textContent = wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…';
-    statusEl.className = 'status err';
-    scheduleReconnect();
+    scheduleReconnect(wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…');
   };
   sock.onerror = () => { /* onclose 가 뒤따른다 */ };
 }
