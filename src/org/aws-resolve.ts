@@ -1,7 +1,7 @@
 // AWS per-user 자격 해소(#746) — org IAM role 을 요청자 귀속(RoleSessionName=memberId)으로 assume 해 STS 단기자격 반환.
 //  SigV4 프록시(mcp-proxy sigv4 auth 모드) 공용. role_arn·region·service 는 org_credential(kind=aws_role_arn) meta 에서
 //  (관리자 등록) — 엔드포인트별 SigV4 service 가 달라 코드 하드코딩 안 함. 15분 자격이라 (member,scope)별 캐시.
-import { assumeRole, gatewayBaseCreds } from "./aws-broker.js";
+import { assumeRole, resolveGatewayBaseCreds } from "./aws-broker.js";
 import { resolveMemberSecret } from "./member-secret-store.js";
 import type { AwsCreds } from "./aws-sigv4.js";
 
@@ -24,8 +24,8 @@ export async function assumeMemberRole(memberId: string, scopeKey = ""): Promise
   const region = String(meta.region || "");
   const service = String(meta.service || "execute-api");
   if (!roleArn || !region) throw new Error("aws_role_arn 자격 meta 에 role_arn·region 이 필요합니다");
-  const base = gatewayBaseCreds();
-  if (!base) throw new Error("게이트웨이 AWS 베이스 자격 없음(~/.aws 또는 env) — STS assume 불가");
+  const base = await resolveGatewayBaseCreds();
+  if (!base) throw new Error("게이트웨이 AWS 베이스 자격 없음(env 또는 EC2 인스턴스 프로파일) — STS assume 불가");
   const t = await assumeRole({ roleArn, region, memberId, externalId: meta.external_id ? String(meta.external_id) : undefined, durationSeconds: 900, baseCreds: base, now: new Date() });
   const creds: AwsCreds = { accessKeyId: t.accessKeyId, secretAccessKey: t.secretAccessKey, sessionToken: t.sessionToken };
   const v: MemberAwsCreds = { creds, region, service };

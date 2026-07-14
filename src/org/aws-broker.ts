@@ -7,6 +7,7 @@
 //  가정 대상 role ARN·region = vault(org_credential kind=aws_role_arn 의 meta) — 어니스트가 role·trust 를 세팅하면 등록.
 //  SigV4 는 자체 구현(aws-sigv4.ts, 실 STS GetCallerIdentity 로 E2E 검증). STS 호출은 주입가능(fetchSts)라 단위테스트 가능.
 import https from "node:https";
+import http from "node:http";
 import { signRequestV4, type AwsCreds } from "./aws-sigv4.js";
 
 export const STS_MIN_DURATION = 900;
@@ -110,7 +111,7 @@ export function toCredentialProcessJson(c: TempCreds): string {
   });
 }
 
-// 게이트웨이 base 자격 해소(env) — 없으면 null(브로커 비활성, 명시적 안내). 운영자가 게이트웨이 프로세스 env 에 설정.
+// 게이트웨이 base 자격 해소(env) — 없으면 null. 운영자가 게이트웨이 프로세스 env 에 설정. IMDS 폴백은 resolveGatewayBaseCreds.
 export function gatewayBaseCreds(): AwsCreds | null {
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID?.trim();
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim();
@@ -118,3 +119,57 @@ export function gatewayBaseCreds(): AwsCreds | null {
   const sessionToken = process.env.AWS_SESSION_TOKEN?.trim() || undefined;
   return { accessKeyId, secretAccessKey, sessionToken };
 }
+
+// ── EC2 인스턴스 프로파일(IMDSv2) 폴백 ──
+//  '장기키 금지' 전제상 base 자격은 정적 env 키가 아니라 EC2 인스턴스 프로파일(회전되는 단기자격)이 정석.
+//  링크로컬 169.254.169.254 는 makeSsrfFetch 가 (정당히) 차단하므로 여기 전용 신뢰 fetch(의도된 메타데이터 호출)로.
+//  IMDSv2(토큰) 만 사용 — v1 비활성 하드닝 환경 대비. 비EC2/미가용이면 즉시 null(부정 캐시로 느린 재시도 억제).
+const IMDS_HOST = "169.254.169.254";
+export interface ImdsHttp { (method: "GET" | "PUT", path: string, headers: Record<string, string>): Promise<{ status: number; body: string }> }
+const defaultImdsHttp: ImdsHttp = (method, path, headers) => new Promise((resolve, reject) => {
+  const req = http.request({ host: IMDS_HOST, path, method, headers, timeout: 1000 }, (res) => {
+    let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => resolve({ status: res.statusCode ?? 0, body: b }));
+  });
+  req.on("timeout", () => req.destroy(new Error("IMDS 타임아웃")));
+  req.on("error", reject);
+  req.end();
+});
+
+interface ImdsCache { creds: AwsCreds | null; expEpochMs: number }
+let imdsCache: ImdsCache | null = null;
+const IMDS_SKEW_MS = 300_000;   // 만료 5분 전 갱신(요청 중 만료 방지)
+const IMDS_NEG_TTL_MS = 60_000; // 미가용(비EC2 등) 부정 캐시 — 매 호출 느린 재시도 방지
+
+// IMDSv2 로 인스턴스 프로파일 단기자격 획득(캐시). imds 주입 시 단위테스트(실 네트워크 없이).
+export async function fetchImdsBaseCreds(imds: ImdsHttp = defaultImdsHttp): Promise<AwsCreds | null> {
+  const now = Date.now();
+  if (imdsCache && imdsCache.expEpochMs > now + (imdsCache.creds ? IMDS_SKEW_MS : 0)) return imdsCache.creds;
+  const neg = (): null => { imdsCache = { creds: null, expEpochMs: now + IMDS_NEG_TTL_MS }; return null; };
+  try {
+    const tok = await imds("PUT", "/latest/api/token", { "X-aws-ec2-metadata-token-ttl-seconds": "21600" });
+    if (tok.status !== 200 || !tok.body.trim()) return neg();
+    const h = { "X-aws-ec2-metadata-token": tok.body.trim() };
+    const roleRes = await imds("GET", "/latest/meta-data/iam/security-credentials/", h);
+    const role = roleRes.status === 200 ? (roleRes.body.trim().split(/\r?\n/)[0] ?? "").trim() : "";
+    if (!role) return neg();
+    const cr = await imds("GET", `/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`, h);
+    if (cr.status !== 200) return neg();
+    const j = JSON.parse(cr.body) as { AccessKeyId?: string; SecretAccessKey?: string; Token?: string; Expiration?: string; Code?: string };
+    if ((j.Code && j.Code !== "Success") || !j.AccessKeyId || !j.SecretAccessKey || !j.Token) return neg();
+    const creds: AwsCreds = { accessKeyId: j.AccessKeyId, secretAccessKey: j.SecretAccessKey, sessionToken: j.Token };
+    const exp = j.Expiration ? Date.parse(j.Expiration) : 0;
+    imdsCache = { creds, expEpochMs: exp || (now + 3_600_000) };
+    return creds;
+  } catch { return neg(); }
+}
+
+// 게이트웨이 base 자격 해소 — env 우선(무변경) → 없으면 EC2 인스턴스 프로파일(IMDSv2). 둘 다 없으면 null.
+//  additive·안전: env 설정 시 기존 동작 그대로, 없을 때만 IMDS 시도(비EC2면 null → 기존과 동일).
+export async function resolveGatewayBaseCreds(imds?: ImdsHttp): Promise<AwsCreds | null> {
+  const env = gatewayBaseCreds();
+  if (env) return env;
+  return fetchImdsBaseCreds(imds);
+}
+
+// 테스트용 — IMDS 캐시 리셋(테스트 케이스 간 격리).
+export function __resetImdsCache(): void { imdsCache = null; }

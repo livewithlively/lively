@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { logger } from "../log.js";
 import { resolveMemberSecret } from "../org/member-secret-store.js";
-import { assumeRole, gatewayBaseCreds, toCredentialProcessJson, clampDuration } from "../org/aws-broker.js";
+import { assumeRole, resolveGatewayBaseCreds, toCredentialProcessJson, clampDuration } from "../org/aws-broker.js";
 
 // aws_role_arn 자격의 meta 형태: { role_arn, region, external_id? }. 값 자체(secret)는 없어도 됨(meta-only kind).
 interface AwsRoleMeta { role_arn?: unknown; region?: unknown; external_id?: unknown }
@@ -31,8 +31,8 @@ const awsCredentials: Capability = {
     const i = (input ?? {}) as Record<string, unknown>;
     const scopeKey = i.scope_key === undefined || i.scope_key === null ? "" : String(i.scope_key).trim();
 
-    const base = gatewayBaseCreds();
-    if (!base) throw new HttpError(503, "AWS 브로커 미설정 — 게이트웨이 프로세스 env(AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)가 필요합니다(운영자)");
+    const base = await resolveGatewayBaseCreds();
+    if (!base) throw new HttpError(503, "AWS 브로커 미설정 — 게이트웨이 프로세스 env(AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) 또는 EC2 인스턴스 프로파일이 필요합니다(운영자)");
 
     // role 해소 = per-user 오버라이드 체인: 멤버 오버라이드(관리자 지정, owner=member) 우선 → 없으면 org 디폴트.
     //  안전: 오버라이드는 **관리자만**(org_credential_set member=), 멤버 self-set 은 me_credential_set 이 거부 →
