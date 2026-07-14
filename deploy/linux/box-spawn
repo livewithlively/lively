@@ -36,6 +36,13 @@ export LANG LC_ALL LC_CTYPE
 #  미설정(구 sudoers·비주입)이면 손대지 않는다 → 시스템 TZ 그대로 = 종전 동작(무회귀).
 if [ -n "${TZ:-}" ]; then export TZ; fi
 
+# 세션 신원(#852) — 이 pane 이 **어느 터미널 세션인지**. 세션 안 하네스(클로드코드 등)가 MCP 헤더
+#  `x-lively-session: ${LIVELY_SESSION_ID:-}` 로 되보내면, 게이트웨이가 "이 작업을 어느 세션에서 했나"를
+#  자동 기록한다(자기보고 아님 — author_agent 를 접속 헤더로 식별하는 것과 같은 원리).
+#  경로는 TZ 와 동일: 게이트웨이 tmux `-e LIVELY_SESSION_ID=box-…` → sudoers `env_keep` → 여기서 재-export.
+#  미설정(구 sudoers·비주입)이면 손대지 않는다 → 하네스가 빈 값을 보내고 게이트웨이가 무시 = 종전 동작(무회귀).
+if [ -n "${LIVELY_SESSION_ID:-}" ]; then export LIVELY_SESSION_ID; fi
+
 # TERM — 웹터미널은 tmux pane → control mode → **xterm.js(브라우저)** 로 렌더된다. 그래서 xterm-256color 로
 #  강제하는 게 옳고(렌더러와 일치) + 가장 견고하다: sudo 가 TERM 을 'unknown' 으로 떨구거나, tmux 가 넘긴
 #  'tmux-256color' terminfo 엔트리가 그 박스에 없으면(ncurses-term 미설치 흔함) claude/Codex 의 Ink TUI 가

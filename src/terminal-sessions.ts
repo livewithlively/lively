@@ -21,6 +21,7 @@ import { effectiveStoragePolicy } from "./org/storage-policy.js";
 //  차기 **전에** 신규 세션을 막는다(기존 세션·읽기는 안 막는다).
 import { assertDiskWritable } from "./disk-guard.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
+import { SESSION_ID_RE } from "./org/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
@@ -114,7 +115,7 @@ const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
 const ownerId = (u: LivelyUser): string => u.userId || u.email || "";
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
-const ID_RE = /^box-[a-z0-9-]+-[a-f0-9]{8}$/;
+const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
 
@@ -532,6 +533,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //   (deploy/linux/sudoers-lively). 구 sudoers 면 미보존 → 시스템 TZ 폴백 = 종전 동작(무회귀).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(#633 과 동일 — 옛 세션은 재생성 시 정상화).
   args.push("-e", `TZ=${await orgTimezone()}`);
+  // 세션 신원(#852) — 이 pane 안에서 도는 AI 가 작업(activity)을 기록할 때 **어느 세션에서 한 일인지**를
+  //  게이트웨이가 스스로 알게 한다. 지금까진 session_id 를 AI 자기보고에만 맡겨 아무도 안 넘겼고(전 기간 box- 형식 1건),
+  //  그래서 "그 작업을 한 터미널에 바로 들어가기"도 "프로젝트 타임라인의 세션 추론"(org/store.ts)도 죽어 있었다.
+  //  경로: 이 env → 하네스 MCP 설정 헤더 `x-lively-session: ${LIVELY_SESSION_ID}` → org/agent-identity.sessionFromHeaders.
+  //  author_agent 를 접속 헤더로 식별하는 것(#182)과 같은 자리·같은 원리 — 자기보고가 아니라 게이트웨이 권위.
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778 과 동일 성질. 옛 세션은 재생성 시 정상화).
+  //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
+  //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
+  args.push("-e", `LIVELY_SESSION_ID=${id}`);
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.

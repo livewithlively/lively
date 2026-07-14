@@ -5,6 +5,7 @@ import { z } from "zod";
 import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../domainmap/core/activity.js";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
+import { canAttach } from "../terminal-sessions.js"; // #852 세션 귀속 검증 — 그 세션에 들어갈 수 있는 사람만 그 세션으로 기록
 
 // activity_log REST(#533) parse 가 검증하는 type 화이트리스트 — zod input enum 과 동일(MCP/REST 파리티).
 //  REST 는 zod 를 안 타므로 parse 에서 필수·enum 을 직접 게이트한다(knowledge_save 파스와 동형).
@@ -21,7 +22,7 @@ const activityLog: Capability = {
     "commit_sha+touches(건드린 code_unit/data_entity)는 is(코드구조) 갱신 근거가 되고, 모든 유형은 should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
     "실질 지식(의사결정·산출물)은 knowledge_save 로 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
     "진척시킨 프로젝트/태스크는 project_id(task_create_v6 의 id)로 연결한다. " +
-    "author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하므로 넘기지 않아도 된다(자기보고는 게이트웨이 값이 없을 때만 폴백). session_id=세션. 사람×AI 작업현황 집계의 축. " +
+    "author_agent(어떤 AI)와 session_id(어느 터미널 세션)는 게이트웨이가 접속 신원으로 자동 식별하므로 **넘기지 마라**(자기보고는 게이트웨이가 식별 못 했을 때만 폴백). 사람×AI 작업현황 집계의 축. " +
     "external(system+id) 지정 시 멱등 upsert(PM 코멘트 라운드트립 재호출 안전). " +
     "title 은 기술 상세 제목(펼쳤을 때 표시), summary 는 작업현황 피드 겉에 보이는 짧은 라벨 '중분류 - 내용'(예: '웹 페이지 수정 - 작업현황 UI 개선') — 둘 다 채워라(summary 없으면 title 로 폴백).",
   scope: "memory",
@@ -43,7 +44,7 @@ const activityLog: Capability = {
     repo: z.string().max(100).optional().describe("repo 이름(commit 유형)"),
     committed_at: z.string().max(40).optional().describe("ISO 시각"),
     author_agent: z.string().max(120).optional().describe("어떤 AI(모델/하네스 id) — 보통 생략한다. 게이트웨이가 접속 신원으로 자동 식별(권위)하고, 이 값은 게이트웨이가 식별 못 했을 때만 폴백으로 쓰인다(프로젝트 #182)"),
-    session_id: z.string().max(200).optional(),
+    session_id: z.string().max(200).optional().describe("보통 생략한다 — 게이트웨이가 접속 헤더(x-lively-session)로 자동 식별(권위). 식별 못 했을 때만 폴백으로 쓰이며, 그 세션에 입장 권한이 없으면 무시된다(#852)"),
     external_system: z.string().max(60).optional().describe("PM 미러 시스템(예: clickup)"),
     external_id: z.string().max(200).optional(),
     external_url: z.string().max(500).optional(),
@@ -95,11 +96,20 @@ const activityLog: Capability = {
     // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 값이 권위(프로젝트 #182). 자기보고(input.author_agent)는
     //  게이트웨이가 식별 못 했을 때만 폴백(예: UA 없는 경로). 게이트웨이 값이 있으면 그게 이긴다.
     const authorAgent = ctx?.agent ?? input.author_agent ?? null;
+    // 세션(#852) — author_agent 와 동형: 게이트웨이가 접속 헤더(x-lively-session)로 본 세션이 권위, 자기보고는 폴백.
+    //  ⚠ 다만 author_agent 와 달리 **위조가 무해하지 않다** — session_id 는 프로젝트 타임라인의 세션 추론
+    //   (org/store.ts: session_project 조인)을 타고 '이 작업이 어느 프로젝트 것인가'를 바꾼다. 헤더는 클라이언트
+    //   자기주장이므로, **그 세션에 들어갈 수 있는 사람인지**(canAttach)를 확인하고서야 기록한다.
+    //   canAttach = 소유자·초대된 멤버, 그리고 프로젝트 폴더 세션이면 로그인한 누구나(#452 공동 세션).
+    //   자격이 없거나 이미 끝난 세션이면 조용히 미기록(null) — 기록 자체를 막지는 않는다(작업 기록이 더 중요).
+    const claimedSession = ctx?.session ?? input.session_id ?? null;
+    const sessionId = claimedSession && authorPerson && await canAttach(String(claimedSession), authorPerson)
+      ? String(claimedSession) : null;
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
       commit_sha: input.commit_sha ?? null, repo: input.repo ?? null, committed_at: input.committed_at ?? null,
-      author_agent: authorAgent, session_id: input.session_id ?? null,
+      author_agent: authorAgent, session_id: sessionId,
       external_system: input.external_system ?? null, external_id: input.external_id ?? null,
       external_url: input.external_url ?? null, external_instance: input.external_instance,
       should_review: input.should_review, is_review: input.is_review,
