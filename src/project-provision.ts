@@ -28,7 +28,8 @@ export interface ProvisionedRepo { name: string; path: string; worktree: boolean
 
 // git 실행 — async spawn(이벤트루프 비블로킹). 셸 미사용(arg-array) → 인젝션 불가. 타임아웃 시 kill.
 //  extraEnv: 자격 주입(#540) — GIT_SSH_COMMAND(키파일)/GIT_ASKPASS(토큰). process.env 위에 병합.
-function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<{ ok: boolean; out: string; err: string }> {
+//  timeoutMs: 기본은 클론/fetch 기준(180s). 사람이 버튼을 누르고 기다리는 호출(연결 확인 #825)은 짧게 준다.
+function git(args: string[], cwd?: string, extraEnv?: Record<string, string>, timeoutMs = GIT_TIMEOUT_MS): Promise<{ ok: boolean; out: string; err: string }> {
   return new Promise((resolve) => {
     // GIT_TERMINAL_PROMPT=0 은 항상 — 자격 미주입(앰비언트 폴백)이어도 git 이 Username/Password 프롬프트로 매달리지 않고
     //  즉시 실패하게 한다(무한대기 → 프록시 504 의 근본원인 제거, #522). 주입 자격(extraEnv)의 동일 키가 있으면 그 값이 뒤에서 우선.
@@ -39,7 +40,7 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>): P
     const p = spawn("sh", ["-c", 'umask 0002; exec "$@"', "sh", "git", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let out = "", err = "", done = false;
     const finish = (r: { ok: boolean; out: string; err: string }) => { if (!done) { done = true; resolve(r); } };
-    const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* */ } finish({ ok: false, out: out.trim(), err: `git 타임아웃(${GIT_TIMEOUT_MS}ms)` }); }, GIT_TIMEOUT_MS);
+    const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* */ } finish({ ok: false, out: out.trim(), err: `git 타임아웃(${timeoutMs}ms)` }); }, timeoutMs);
     p.stdout.on("data", (d) => { out += d; });
     p.stderr.on("data", (d) => { err += d; });
     p.on("error", (e) => { clearTimeout(timer); finish({ ok: false, out: out.trim(), err: err.trim() || e.message }); });
@@ -138,6 +139,59 @@ export async function refreshSharedRepo(name: string, memberId?: string | null):
 async function originUrl(repoPath: string): Promise<string | null> {
   const r = await git(["config", "--get", "remote.origin.url"], repoPath);
   return r.ok ? (r.out.trim() || null) : null;
+}
+
+const CHECK_TIMEOUT_MS = 20_000; // 사람이 [연결 확인] 누르고 기다리는 시간 — 클론(180s)과 달리 짧게.
+
+export interface RepoCheckResult {
+  ok: boolean;
+  host: string;
+  default_branch: string | null;   // 원격 HEAD 가 가리키는 실제 기본 브랜치(--symref)
+  branches: number;
+  auth_error: boolean;
+  detail: string | null;           // 실패 사유(자격·URL 스크럽됨)
+}
+
+// git 주소 연결 확인(#825) — 저장 전에 ls-remote 로 '진짜 접근되는지 + 기본 브랜치가 뭔지' 를 확인한다.
+//  드롭다운(repo_discover)이 못 덮는 구간(API 토큰 없는 호스트·SSH 전송·미지원 provider)을 메꾼다: 오타를
+//  '등록 후 스캔이 조용히 실패' 가 아니라 등록 시점에 잡는다. 자격은 클론과 동일 체인(멤버 → 게이트웨이 폴백)이라
+//  여기서 통과하면 provision 클론도 통과한다는 게 성립한다.
+//  ⚠ 응답에 시크릿·원격 URL 을 싣지 않는다 — describeGitError 가 URL/scp/자격을 스크럽한 한 줄만 남긴다.
+//  새 표면 아님: 같은 URL 을 repo_set_source 로 저장하면 스캐너가 어차피 clone/fetch 한다(ls-remote 는 그 예행).
+export async function checkGitRemote(gitUrl: string, memberId?: string | null): Promise<RepoCheckResult> {
+  const url = String(gitUrl ?? "").trim();
+  if (!url) throw new HttpError(400, "git 주소가 필요합니다");
+  const host = hostOf(url);
+  if (!host) throw new HttpError(400, "git 주소를 해석할 수 없습니다 — https://호스트/그룹/레포.git 또는 git@호스트:그룹/레포.git 형식이어야 합니다");
+
+  const secret = await resolveGitSecret(memberId ?? null, host).catch(() => null);
+  const auth = await prepareGitAuth(secret);
+  try {
+    // --symref: HEAD 의 심볼릭 참조(=원격 기본 브랜치)를 클론 없이 읽는다. 접근 확인과 브랜치 확인이 한 번에 끝난다.
+    const r = await git(["ls-remote", "--symref", url], undefined, auth.env, CHECK_TIMEOUT_MS);
+    if (!r.ok) {
+      // ⚠ 오타(없는 레포)와 '권한 없는 private 레포' 를 구분해 안내하면 안 된다 — GitHub·GitLab 이 의도적으로
+      //  둘을 같은 응답(not found)으로 은닉하기 때문에 우리도 알 수 없다(isAuthError 가 그래서 not-found 를 포함).
+      //  [연결 확인] 을 누르는 가장 흔한 이유가 주소 오타이므로, '자격 문제' 라고만 말하면 사람을 엉뚱한 곳으로 보낸다.
+      const authErr = isAuthError(r.err);
+      return {
+        ok: false, host, default_branch: null, branches: 0, auth_error: authErr,
+        detail: authErr
+          ? `접근할 수 없습니다 — ① 주소 오타(없는 레포)이거나 ② 호스트 '${host}' 자격이 없거나 권한이 부족합니다. `
+            + `(private 레포는 권한이 없으면 '없음'과 똑같이 보여서 둘을 구분할 수 없습니다.) `
+            + `주소를 먼저 확인하고, 자격은 관리탭 ▸ 게이트웨이 git 계정 또는 내 프로필 ▸ git 인증에서 '${host}' 에 등록하세요.`
+          : describeGitError(r.err, url),
+      };
+    }
+    // 출력: "ref: refs/heads/main\tHEAD" + "<sha>\tHEAD" + "<sha>\trefs/heads/<branch>" …
+    const lines = r.out.split("\n").map((l) => l.trim()).filter(Boolean);
+    const symref = lines.find((l) => l.startsWith("ref: refs/heads/"));
+    const defaultBranch = symref ? symref.slice("ref: refs/heads/".length).split(/\s/)[0] || null : null;
+    const branches = lines.filter((l) => /\srefs\/heads\//.test(l)).length;
+    return { ok: true, host, default_branch: defaultBranch, branches, auth_error: false, detail: null };
+  } finally {
+    await auth.cleanup();
+  }
 }
 
 // 경로 봉쇄 — 절대경로 정규화 후 workspace 루트 안에 있어야 함(.. 탈출 거부). 신뢰 위협모델이라 string-prefix 검사로 충분.

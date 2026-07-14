@@ -12,7 +12,7 @@ import {
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
 const KNOWN_KINDS = [
-  "gitlab_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
+  "gitlab_pat", "github_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
   "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token",
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;

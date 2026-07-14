@@ -1097,6 +1097,9 @@ async function repoRefreshShared(name, ev) {
     }
 }
 // 레포 추가/수정 폼(오버레이) — 이름(신규=생성 / 변경=이름변경) + git_url + default_branch.
+//  #825: 3필드를 손으로 치는 대신 [목록에서 선택](저장된 토큰으로 호스트의 레포 조회 → 3필드 프리필) +
+//  [연결 확인](저장 전 ls-remote 로 접근·기본브랜치 확인). 둘 다 '제안' 이고, 텍스트 입력은 그대로 살아 있다
+//  (토큰 없는 호스트·SSH 전송·미지원 provider 에서도 기존처럼 등록 가능해야 하므로).
 function openRepoForm(repo, reload) {
     const isNew = !repo;
     const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
@@ -1104,8 +1107,51 @@ function openRepoForm(repo, reload) {
     const urlInp = el('input', { type: 'text', style: inputStyle, value: (repo && repo.clone_url) || '', placeholder: 'https://github.com/org/repo.git' });
     const branchInp = el('input', { type: 'text', style: inputStyle, value: (repo && repo.default_branch) || 'main', placeholder: 'main' });
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    // 선택한 레포를 3필드에 채운다. clone_url 은 서버가 그 호스트의 git 전송 방식(ssh/https)에 맞춰 고른 주소다
+    //  — 목록은 API 토큰으로 조회하고 클론은 SSH 로 하는 조합(HTTPS 막힌 셀프호스팅)이 실제로 있기 때문.
+    const fill = (o) => {
+        nameInp.value = o.name || '';
+        urlInp.value = o.clone_url || o.http_url || o.ssh_url || '';
+        branchInp.value = o.default_branch || 'main';
+        checkNote.replaceChildren(); // 이전 확인 결과는 무효 — 주소가 바뀌었으니.
+    };
+    const pickBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 선택',
+        onclick: () => openRepoPicker(fill) });
+    const checkBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '연결 확인' });
+    const checkNote = el('p', { class: 'ps-block-hint', style: 'margin:6px 0 0' });
+    checkBtn.onclick = async () => {
+        const url = urlInp.value.trim();
+        if (!url) {
+            toast('git 주소를 먼저 입력하세요', true);
+            return;
+        }
+        checkBtn.disabled = true;
+        checkNote.replaceChildren(el('span', { class: 'admin-hint', text: '확인 중…' }));
+        try {
+            const r = await api('/api/ui/repos/check', { method: 'POST', body: JSON.stringify({ git_url: url }) });
+            if (r.ok) {
+                const drift = r.default_branch && branchInp.value.trim() && r.default_branch !== branchInp.value.trim();
+                checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)',
+                    text: `✓ 접근 OK — ${r.host} · 브랜치 ${r.branches}개 · 원격 기본 브랜치 ${r.default_branch || '알 수 없음'}` }));
+                // 원격의 실제 기본 브랜치가 입력값과 다르면 조용히 넘기지 않는다 — 스캔이 엉뚱한 브랜치를 읽는 사고의 원인.
+                if (drift) {
+                    const useBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `‘${r.default_branch}’ 로 맞추기`,
+                        onclick: () => { branchInp.value = r.default_branch; checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)', text: `✓ 기본 브랜치를 ${r.default_branch} 로 설정했습니다` })); } });
+                    checkNote.append(el('span', { text: ` — 입력한 ‘${branchInp.value.trim()}’ 와 다릅니다. ` }), useBtn);
+                }
+            }
+            else {
+                checkNote.replaceChildren(el('span', { style: 'color:var(--danger,#dc2626)', text: '✗ ' + (r.detail || '접근 실패') }));
+            }
+        }
+        catch (e) {
+            checkNote.replaceChildren(el('span', { style: 'color:var(--danger,#dc2626)', text: '✗ 확인 실패 — ' + e.message }));
+        }
+        checkBtn.disabled = false;
+    };
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '레포 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('레포 이름', isNew ? '실제 git 레포 이름 — code_unit 이 이 이름으로 매핑됩니다.' : '이름을 바꿔도 매핑·도메인은 보존됩니다.', nameInp), block('git 주소 (clone URL)', '도메인맵 스캔과 로컬 작업 클론이 이 주소를 씁니다. 비우면 git 미연결.', urlInp), block('기본 브랜치', '비우면 main.', branchInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, isNew ? el('div', { class: 'conn-pick-row', style: 'margin-bottom:10px' }, el('span', { class: 'admin-hint', style: 'margin:0; flex:1',
+        text: '등록된 git 자격으로 레포 목록을 불러와 고를 수 있어요 — 이름·주소·기본 브랜치가 함께 채워집니다.' }), pickBtn) : null, block('레포 이름', isNew ? '실제 git 레포 이름 — code_unit 이 이 이름으로 매핑됩니다. (경로 컴포넌트라 슬래시 불가 — GitLab 서브그룹은 마지막 조각만 들어갑니다)' : '이름을 바꿔도 매핑·도메인은 보존됩니다.', nameInp), block('git 주소 (clone URL)', '도메인맵 스캔과 로컬 작업 클론이 이 주소를 씁니다. 비우면 git 미연결.', el('div', {}, el('div', { class: 'conn-pick-row' }, urlInp, checkBtn), checkNote)), block('기본 브랜치', '비우면 main. [연결 확인]으로 원격의 실제 기본 브랜치를 확인할 수 있어요.', branchInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '레포 추가' : '레포 수정 — ' + repo.name, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -1132,6 +1178,44 @@ function openRepoForm(repo, reload) {
             saveBtn.disabled = false;
         }
     };
+}
+// 레포 픽커(#825) — 저장된 토큰으로 조회한 레포 목록에서 고른다. 커넥터 스코프 픽커(#586)의 git 판.
+//  목록이 비어도(SSH 뿐인 호스트·토큰 없음) 실패가 아니다 — 사유(note)를 보여주고 텍스트 입력으로 돌려보낸다.
+async function openRepoPicker(onPick) {
+    const box = el('div', {}, el('p', { class: 'admin-hint', text: '등록된 git 자격으로 레포 목록을 조회하는 중…' }));
+    const back = overlay('레포 — 목록에서 선택', box);
+    try {
+        const r = await api('/api/ui/repos/discover', { method: 'POST', body: JSON.stringify({}) });
+        const opts = r.options || [];
+        const noteEl = r.note ? el('p', { class: 'admin-hint', style: 'white-space:pre-line', text: r.note }) : null;
+        if (!opts.length) {
+            box.replaceChildren(noteEl || el('p', { class: 'admin-hint', text: '고를 레포가 없습니다 — git 주소를 직접 입력하세요.' }));
+            return;
+        }
+        // 이미 등록된 레포는 회색 처리 — 중복 등록(409)을 누르기 전에 보이게.
+        let existing = new Set();
+        try {
+            const rr = await api('/api/ui/repos');
+            existing = new Set(((rr && rr.domainmapRepos) || []).map((x) => x.name));
+        }
+        catch (_) { /* 목록 못 읽어도 픽커는 동작 */ }
+        const search = el('input', { type: 'text', style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box', placeholder: '레포 이름·경로로 검색' });
+        const list = el('div', { class: 'conn-pick-list' });
+        const render = () => {
+            const q = search.value.trim().toLowerCase();
+            const hit = opts.filter((o) => !q || (o.full_path + ' ' + o.name).toLowerCase().includes(q));
+            list.replaceChildren(...(hit.length ? hit.map((o) => {
+                const dup = existing.has(o.name);
+                return el('label', { class: 'conn-pick-item', onclick: () => { onPick(o); back.remove(); toast(`‘${o.full_path}’ 를 채웠습니다 — [레포 추가]를 눌러야 등록됩니다`); } }, el('span', { text: o.private ? '🔒' : '🌐' }), el('span', { class: 'conn-pick-label', text: o.full_path }), el('span', { class: 'mini-meta mono', text: (o.default_branch || '?') + (dup ? ' · 이미 등록됨' : '') }));
+            }) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+        };
+        search.oninput = render;
+        render();
+        box.replaceChildren(noteEl, search, list, el('p', { class: 'admin-hint', text: '고르면 이름·git 주소·기본 브랜치가 폼에 채워집니다(그대로 편집할 수 있어요). 목록에 없어도 주소를 직접 입력해 등록할 수 있습니다.' }));
+    }
+    catch (e) {
+        box.replaceChildren(el('p', { class: 'admin-hint', text: '조회 실패: ' + e.message + ' — git 주소를 직접 입력하세요.' }));
+    }
 }
 async function repoSetDeprecated(name, isDeprecated, reload) {
     try {
@@ -4360,7 +4444,8 @@ function openGitCredentialManager(scope) {
 //  kind 는 드롭다운(친숙한 라벨), kind 별 필요한 필드만 노출, 헤더 형식은 프리셋(고급 토글 없이 숨김). '내 자격'은 전원,
 //  '통합 자격'·AWS 역할은 admin. secret 은 password 입력이고 목록엔 등록됨(✓)만 보인다(값 비노출).
 const CRED_KINDS = [
-    { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요.' },
+    { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송이 SSH 여도 이것만 있으면 목록이 뜹니다.' },
+    { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송이 SSH(deploy key) 여도 이것만 있으면 목록이 뜹니다.' },
     { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.' },
     { kind: 'notion_token', label: 'Notion 토큰', secretLabel: 'Notion 토큰', secretPh: 'secret_… / ntn_…' },
     { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' } },
