@@ -3095,9 +3095,18 @@ function mcpEditor(detail, data) {
         mcpForm(right, editing, data, detail, sel === '__new__');
     else
         right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
+    // 내부 MCP 안전범위(#837) — `allowed_internal_hosts` 는 서버·스키마·감사까지 다 있는데 **편집 UI 만 없었다.**
+    //  runtime_config 1행을 5개 화면이 나눠 쓰는데 아무도 그 행 전체를 소유하지 않아 필드 하나가 통째로 샜다.
+    //  증상: 내부 MCP 를 등록하면 SSRF 가드에 조용히 막히고, 에러가 "allowed_internal_hosts 등록 필요" 라며
+    //  **관리탭에서 도달할 수 없는 필드 이름**을 댔다. 등록하다 막히는 바로 이 화면에 둔다.
+    const rcMcp = data.runtimeConfig || { allowed_internal_hosts: [] };
+    const mcpSafety = allowlistCard(data, '내부 접속 안전범위 (allowlist)', '사설·localhost 주소로 나가는 접속은 기본 전면 차단입니다(SSRF 방어). 여기 등록한 host 만 통과합니다 — ①내부 MCP 서버 ②OAuth 브로커 ③내부 경보 웹훅 셋에 공통 적용됩니다. 외부 공인 주소(https)는 등록 불요.', [
+        { key: 'allowed_internal_hosts', label: '허용 내부 host (allowed_internal_hosts)', initial: rcMcp.allowed_internal_hosts,
+            placeholder: 'localhost\nmcp.internal.acme.com\n줄당 host 한 개(포트·경로 없이)' },
+    ]);
     detail.replaceChildren(el('div', { class: 'card' }, 
     // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
-    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)), mcpSafety);
 }
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
 const MCP_AUTH_KINDS = ['notion_oauth', 'slack_oauth', 'google_oauth', 'gitlab_pat', 'slack_user_token', 'notion_token', 'clickup_token', 'prometheus_bearer', 'figma_token'];
