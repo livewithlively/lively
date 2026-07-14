@@ -7,7 +7,7 @@ import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 
 import { renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
-import { renderMyDashboard } from './dashboard-home.js';
+import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
 import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -54,6 +54,12 @@ async function route() {
     if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
       await renderMyDashboard(view);
+      // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
+      //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
+      if (params.get('tour') === '1') {
+        history.replaceState(null, '', '#/dashboard');
+        startDashboardSessionTour();
+      }
     } else if (page === 'learn') {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
       if (segs[1] === 'install') await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면

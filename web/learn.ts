@@ -474,7 +474,7 @@ async function renderLearnTour(view) {
   const extra = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ',
-      el('a', { href: '#/terminal?tour=1', text: '터미널 따라하기 시작 →' }), ' · 내 컴퓨터 설치는 ',
+      el('a', { href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }), ' · 내 컴퓨터 설치는 ',
       el('a', { href: '#/learn/install', text: '내 AI 세션 생성' }), ' 에서.'));
 
   docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
@@ -520,20 +520,16 @@ function drawInstallGuide(slot, data) {
       el('b', { text: '“어디서 켜느냐”' }), ' 입니다.'),
     el('p', { class: 'admin-hint', text: '아래에서 본인에게 편한 쪽을 고르세요. 잘 모르겠으면 왼쪽(설치 없이 바로)을 추천해요 — 나중에 둘 다 써도 됩니다.' }),
     el('div', { class: 'mode-choice' },
-      modeCard('web', '라이블리 웹에서 바로', '설치 없이 · 브라우저만', '비개발자 친화',
-        '터미널·코딩이 낯설거나, 지금 바로 써보고 싶은 분', mode, slot, data),
-      modeCard('local', '내 컴퓨터 터미널에서', '한 번 설치 · 약 5분', '개발자 친화',
-        '평소 터미널·CLI가 손에 익은 분', mode, slot, data)));
+      modeCard('web', '라이블리 웹에서 바로', '설치 없이 · 브라우저만', '비개발자 친화', mode, slot, data),
+      modeCard('local', '내 컴퓨터에서', '한 번 설치 · 약 5분', '개발자 친화', mode, slot, data)));
 
   const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data);
   slot.replaceChildren(intro, chooser, ...guide);
 }
 
-// 모드 선택 카드(웹 터미널 탭 vs 내 컴퓨터). 선택 시 재렌더.
-//  audience = 카드별 대상 핀(비개발자 친화 / 개발자 친화) — 각 카드가 누구를 위한지 바로 읽히게.
-//  who = 그 대상의 '상황' 한 줄. 위의 '기능은 양쪽 똑같다' 평등문구가 있어 라벨이 열등감으로 읽히지 않는다.
-//  (예전 별도 hint 줄은 tag/who 와 내용이 겹쳐 벽처럼 읽혀 제거 — 카드는 tag·title·audience+who 3줄로.)
-function modeCard(key, title, tag, audience, who, active, slot, data) {
+// 모드 선택 카드(라이블리 웹 vs 내 컴퓨터). 선택 시 재렌더.
+//  audience = 카드별 대상 핀(비개발자 친화 / 개발자 친화). '상황' 한 줄(who)은 위 안내와 겹쳐 제거(#780).
+function modeCard(key, title, tag, audience, active, slot, data) {
   const on = key === active;
   const pick = () => { if (state.start.mode !== key) { state.start.mode = key; drawInstallGuide(slot, data); } };
   return el('div', {
@@ -547,45 +543,44 @@ function modeCard(key, title, tag, audience, who, active, slot, data) {
       el('span', { class: 'mode-card-tag', text: tag })),
     el('div', { class: 'mode-card-title', text: title }),
     el('div', { class: 'mode-card-who' },
-      el('span', { class: 'mode-card-who-label', text: audience }),
-      el('span', { class: 'mode-card-who-text', text: who })));
+      el('span', { class: 'mode-card-who-label', text: audience })));
 }
 
-// (web) 라이블리 [터미널] 탭에서 쓰는 사람 — 내 컴퓨터엔 설치 0. 서버에서 claude/codex 가 회사맥락 가진 채 돈다.
+// (web) 라이블리 웹에서 쓰는 사람 — 내 컴퓨터엔 설치 0. AI 는 서버에서 회사맥락을 가진 채 돈다.
+//  세션 만들기는 [홈]에서 한다(#780) — 예전엔 터미널 탭으로 보냈으나, 홈의 「내 AI 세션」 카드가 첫 화면이자 상시 진입점.
 function webGuideNodes() {
   const callout = el('div', { class: 'card install-callout' },
-    el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 안 깔아도 됩니다.' }),
-    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 설치돼 있어요. 웹 브라우저만 있으면 바로 시작할 수 있습니다.' }));
+    el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 설치하지 않습니다.' }),
+    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 준비돼 있어요. 브라우저만 있으면 바로 시작할 수 있습니다.' }));
 
-  // #517: 예전엔 '터미널 새 창으로 열기'였다 — 새 창이 원래 창을 가려(동시에 안 보임) 헷갈렸다.
-  //  이제 같은 화면에서 터미널로 이동하며 '따라하기' 투어를 켠다: 눌러야 할 버튼만 밝게 남기고 나머지를
-  //  어둡게 덮은 뒤, 사용자가 실제 버튼을 직접 누르며 한 단계씩 진행한다(web/tour.ts + startTerminalTour).
-  //  href 의 ?tour=1 → 라우터가 renderTerminal 후 투어를 시작(main.ts). 새 창(target=_blank)으로 열어도
-  //  같은 파라미터라 새 탭에서도 투어가 뜬다. §0.5 예산: 채운 blue primary 는 이 화면 1개뿐(따라하기 시작).
+  // 따라하기 투어 — 홈(#/dashboard?tour=1)으로 이동하면서 스포트라이트를 켠다(main.ts → startDashboardSessionTour).
+  //  눌러야 할 곳만 밝게 남기고 나머지를 덮은 뒤, 실제 버튼을 직접 누르며 한 단계씩 진행한다.
+  //  §0.5 예산: 채운 blue primary 는 이 화면 1개뿐(따라하며 만들기).
   const tourBtn = el('a', {
-    class: 'btn btn-primary', href: '#/terminal?tour=1',
-    text: '터미널 열고 따라하기 시작 →',
+    class: 'btn btn-primary', href: '#/dashboard?tour=1',
+    text: '홈에서 따라하며 만들기 →',
   });
   const newWinBtn = el('a', {
-    class: 'btn btn-ghost btn-sm', href: '#/terminal?tour=1', target: '_blank', rel: 'noopener',
+    class: 'btn btn-ghost btn-sm', href: '#/dashboard?tour=1', target: '_blank', rel: 'noopener',
     text: '새 창으로 열기 ↗',
   });
 
   const steps = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '터미널에서 AI 켜기' })),
-    el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 터미널 화면으로 넘어가면서, 눌러야 할 버튼만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르고 [다음 →]으로 진행하면 됩니다.' }),
+    el('div', { class: 'card-head' }, el('h2', { text: '홈에서 내 AI 세션 만들기' })),
+    el('p', { class: 'admin-hint', text: '아래 버튼을 누르면 홈(대시보드)으로 넘어가면서, 눌러야 할 곳만 밝게 강조해 한 단계씩 짚어주는 “따라하기”가 시작돼요. 화면 속 버튼을 직접 누르며 진행하면 됩니다.' }),
     el('div', { class: 'step-cta' }, tourBtn, newWinBtn),
     // 미리보기 — 따라하기가 짚어줄 순서. JS 안내가 안 떠도 흐름을 알 수 있게 남겨 둔다(폴백).
     el('div', { class: 'step-list' },
-      installStep(1, '[+ 새 세션] 누르기',
-        el('p', { class: 'step-p' }, '터미널 화면 ', el('b', { text: '오른쪽 위 파란 [+ 새 세션]' }), ' 버튼을 누르면 만들기 창이 떠요.')),
+      installStep(1, '홈에서 [+ 새 세션] 누르기',
+        el('p', { class: 'step-p' }, '홈 가운데 ', el('b', { text: '「내 AI 세션」' }), ' 카드에서 ',
+          el('b', { text: '[+ 새 세션]' }), ' 을 누르면 만들기 창이 홈 위에 바로 떠요.')),
       installStep(2, '작업 폴더와 AI를 고르고 이름 정하기',
         el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }),
-          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
+          '), 함께 일할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
         el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })),
-      installStep(3, '[생성하기] → 바로 대화하기',
-        el('p', { class: 'step-p', text: '[생성하기]를 누르면 까만 창(터미널)이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
-        el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어, 다음에 [터미널] 탭에서 다시 이어서 쓸 수 있어요.' }))));
+      installStep(3, '[생성하기] → 바로 일 시키기',
+        el('p', { class: 'step-p', text: '[생성하기]를 누르면 새 탭에 세션 창이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
+        el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어요. 다음에 홈의 「내 AI 세션」에서 [열기]로 이어서 쓰면 됩니다.' }))));
 
   return [callout, steps];
 }
@@ -605,8 +600,9 @@ function localGuideNodes(gw, slot, data) {
     el('p', { class: 'admin-hint', text: '아래만 있으면 됩니다. 대부분 이미 갖춰져 있어요.' }),
     checklist([
       ['내 컴퓨터 (Mac 또는 Windows)', '회사에서 쓰는 본인 노트북이면 됩니다.'],
-      ['터미널 앱', '맥·윈도우에 기본으로 들어 있어요. 여는 법은 아래 1단계에서 알려드립니다.'],
-      ['Node.js (거의 항상 이미 있음)', '터미널을 연 뒤(아래 1단계) node -v 를 입력해 v20 같은 숫자가 보이면 통과예요. 안 보이면 nodejs.org 에서 ‘LTS’ 설치 파일을 받아 더블클릭하세요.'],
+      ['명령 입력 창', isWin ? 'Windows 에 기본으로 들어 있는 PowerShell 을 씁니다. 여는 법은 아래 1단계에서 알려드립니다.'
+        : 'macOS 에 기본으로 들어 있는 ‘터미널’ 앱을 씁니다. 여는 법은 아래 1단계에서 알려드립니다.'],
+      ['Node.js — 없어도 됩니다', '이미 있으면 그대로 쓰고, 없으면 설치기가 관리자 권한 없이 알아서 준비해요. 따로 받아 둘 필요가 없습니다.'],
       ['회사 계정', '설치 마지막에 회사 계정으로 로그인하는 브라우저 창이 한 번 뜹니다.'],
     ]));
 
@@ -616,15 +612,16 @@ function localGuideNodes(gw, slot, data) {
       class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
       onclick: () => { if (state.start.os !== o) { state.start.os = o; drawInstallGuide(slot, data); } } })));
 
+  // 1단계 — 명령 입력 창 열기. (여기서 말하는 '터미널'은 macOS 에 들어 있는 앱 이름이다. 제품의 AI 세션과는 다른 것.)
   const term = isWin
-    ? installStep(1, '터미널(PowerShell) 열기',
+    ? installStep(1, '명령 입력 창(PowerShell) 열기',
         el('p', { class: 'step-p' }, '화면 왼쪽 아래 ', kbd('시작'), ' 버튼을 누르고 ',
           kbd('powershell'), ' 라고 입력 → 목록에서 ', el('b', { text: 'Windows PowerShell' }), ' 을 클릭하세요.'),
         el('p', { class: 'step-note', text: '파란색 글자 입력 창이 하나 뜹니다. 이게 명령을 붙여넣을 곳이에요.' }))
-    : installStep(1, '터미널 열기',
+    : installStep(1, '명령 입력 창(터미널 앱) 열기',
         el('p', { class: 'step-p' }, '키보드에서 ', kbd('⌘'), ' + ', kbd('스페이스바'),
           ' 를 동시에 눌러 검색창을 띄우고, ', kbd('터미널'), ' 이라고 입력한 뒤 ', kbd('Enter'), ' 를 누르세요.'),
-        el('p', { class: 'step-note', text: '글자만 있는 작은 창이 하나 뜹니다. 이게 ‘터미널’이고, 여기에 명령을 붙여넣게 됩니다.' }));
+        el('p', { class: 'step-note', text: '글자만 있는 작은 창이 하나 뜹니다. macOS 에 기본으로 들어 있는 앱이고, 여기에 명령을 붙여넣게 됩니다.' }));
 
   const mint = installStep(2, '내 설치 명령 만들기',
     el('p', { class: 'step-p' }, '아래 ', el('b', { text: '[설치 명령 만들기]' }),
@@ -633,7 +630,7 @@ function localGuideNodes(gw, slot, data) {
     installSelfCmdBox(gw, os));
 
   const run = installStep(3, '명령 붙여넣고 실행하기',
-    el('p', { class: 'step-p' }, '1단계에서 연 터미널 창을 클릭한 다음, 방금 복사한 명령을 붙여넣고(',
+    el('p', { class: 'step-p' }, '1단계에서 연 창을 클릭한 다음, 방금 복사한 명령을 붙여넣고(',
       isWin ? kbd('Ctrl') : kbd('⌘'), ' + ', kbd('V'), ') ', kbd('Enter'), ' 를 누르세요.'),
     el('p', { class: 'step-note', text: '명령이 길어 보여도 한 줄이에요 — 통째로 붙여넣으면 됩니다. 그러면 알아서 진행됩니다. 도중에 이런 게 나올 수 있어요:' }),
     el('ul', { class: 'step-ul' },
@@ -642,10 +639,11 @@ function localGuideNodes(gw, slot, data) {
       el('li', {}, el('b', { text: '“=== 끝! ===”' }), ' 비슷한 메시지가 보이면 설치가 끝난 거예요.')));
 
   const verify = installStep(4, '잘 됐는지 확인하기',
-    el('p', { class: 'step-p' }, '같은 터미널에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'),
+    el('p', { class: 'step-p' }, '같은 창에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'),
     cmdLine('claude mcp list'),
     el('p', { class: 'step-note' }, '목록에 ', el('b', { text: 'lively' }), ' 가 보이면 성공이에요. ',
-      '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다.'));
+      '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다. ',
+      '(자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
 
   const steps = el('div', { class: 'card' },
     el('div', { class: 'card-head' },
@@ -658,8 +656,9 @@ function localGuideNodes(gw, slot, data) {
   const next = el('div', { class: 'card install-next' },
     el('div', { class: 'card-head' }, el('h2', { text: '끝났어요 — 이제 뭘 하나요' })),
     el('p', { class: 'guide-lead', text: '설치가 끝나면 평소처럼 Claude Code 를 켜서 일하면 됩니다. 어느 폴더에서 켜든 회사 공통 맥락·규칙이 자동으로 함께 들어가요. 매번 회사 사정을 설명하지 않아도 됩니다.' }),
-    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '회사에 어떤 맥락이 쌓여 있는지 둘러보려면 ',
-      el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 탭으로 가보세요. (자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
+    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '내 컴퓨터에서 켜든 웹에서 켜든 같은 회사 맥락을 씁니다 — 웹에서 열고 싶으면 ',
+      el('a', { href: '#/dashboard', text: '[홈]' }), ' 의 「내 AI 세션」에서 [+ 새 세션]을 누르세요. 회사에 어떤 맥락이 쌓여 있는지는 ',
+      el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 에서 볼 수 있어요.'));
 
   // ── 4. 유지보수(접힘) — 처음엔 필요 없음. 나중에 업데이트/제거할 때만. ──
   const staticBlock = (c) => el('div', { class: 'deploy-block' },
