@@ -210,6 +210,11 @@ if ($UserLevelDone) {
 } else {
   Say "  2) 이 폴더($BundleRoot)에서 claude 를 켜세요(정적 컨텍스트 자동 로드)."
 }
+Say "  3) **예전에 쓰시던 AI 환경이 있다면** — claude 를 켜고 이렇게 물어보세요:"
+Say "         온보딩 도와줘"
+Say "     예전 작업 메모리·스킬·MCP 연결·레포를 **읽기만** 해서 보여주고, 무엇을 라이블리로 올리고"
+Say "     무엇을 그대로 둘지 함께 정리합니다. **원본은 건드리지 않습니다**(복사만 — 지우거나 덮어쓰지 않음)."
+Say "     ※ 예전 메모리가 '사라진' 것처럼 보여도 지워진 게 아닙니다 — 폴더마다 따로 저장돼 안 보일 뿐이고, 위 도우미가 찾아줍니다."
 Say "  · incognito(전부 off): 환경변수 LIVELY_OFF=1" DarkGray
 Say "  · 업데이트/제거: setup/update-windows.ps1 / setup/uninstall-windows.ps1 (설치된 토큰 자동 사용)" DarkGray
 if ($nodeBootstrapped) {

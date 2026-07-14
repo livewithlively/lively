@@ -190,6 +190,19 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
   return out.join("\n\n");
 }
 
+// 개인 층(#846) — 그 멤버만의 규칙(org_member.body_md). me_profile_update 로 저장은 됐지만 **어떤 주입 경로도 읽지
+//  않아 죽은 칸**이었다(delivery.ts 주석은 "합성 컨텍스트에 실리는 자유텍스트"라 적어 둔 채 합성 지점이 없었음).
+//  그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)밖에 선택지가 없었다 — 남의 세션까지 오염.
+//  memberId 는 bearer 토큰 principal 이므로 본인 세션에만 실린다(남의 개인 규칙이 새지 않음). 조직·팀 층 **뒤**에 놓아
+//  개인 규칙이 조직 규칙을 덮어쓰는 것처럼 읽히지 않게 한다. fail-open — 개인 층 조회가 실패해도 조직 맥락은 나가야 한다.
+async function buildPersonalBlock(memberId: string): Promise<string> {
+  try {
+    const { getMember } = await import("./store.js");
+    const body = strip((await getMember(memberId))?.body_md || "");
+    return body ? `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)\n\n${body}` : "";
+  } catch { return ""; }
+}
+
 export async function previewMemberContext(orgName: string, memberId?: string): Promise<string> {
   const header = `# ${orgName} 컨텍스트`;
   // 팀 층 — memberId(=org_member.id, bearer 토큰 principal) 있을 때만. 훅이 멤버 토큰으로 fetch 하므로 게이트웨이가 신원을 안다.
@@ -204,7 +217,8 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   // 온보딩 baseline(#269) — 조직 미완이면 "남은 단계 + AI 지침"을 헤더보다 위에 주입(완료면 ""). SessionStart 훅의 live 소스.
   const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
   const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
-  const parts = [onboarding, header, sectionsText];
+  const personal = memberId ? await buildPersonalBlock(memberId) : ""; // 개인 층 — 본인 세션에만(조직·팀 층 뒤).
+  const parts = [onboarding, header, sectionsText, personal];
   // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext live 소스).
   //  substituteBlocks 가 섹션마다 이미 마스킹하나, 레거시 섹션 본문의 평문 시크릿 대비 조립 후 한 번 더 redactString(fail-open).
   return redactString(parts.filter(Boolean).join("\n\n")) + "\n";
