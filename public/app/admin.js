@@ -4583,12 +4583,12 @@ function openGitCredentialManager(scope) {
 //  '통합 자격'·AWS 역할은 admin. secret 은 password 입력이고 목록엔 등록됨(✓)만 보인다(값 비노출).
 const CRED_KINDS = [
     { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송이 SSH 여도 이것만 있으면 목록이 뜹니다.' },
-    { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송이 SSH(deploy key) 여도 이것만 있으면 목록이 뜹니다.' },
-    { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.' },
+    { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', docUrl: 'https://github.com/settings/tokens', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송이 SSH(deploy key) 여도 이것만 있으면 목록이 뜹니다.' },
+    { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.', docUrl: 'https://api.slack.com/apps' },
     // notion_token·google_oauth_refresh 제거(#746) — 이 서비스는 OAuth 커넥터(관리탭 MCP 서버)로 연결. 정적 토큰 슬롯은 중복·미사용(죽은 옵션)이었음.
-    { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' } },
+    { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' }, help: 'ClickUp ▸ Settings ▸ Apps 에서 개인 API 토큰(pk_…) 발급.', docUrl: 'https://app.clickup.com/settings/apps' },
     { kind: 'prometheus_bearer', label: 'Prometheus Bearer 토큰', secretLabel: 'Bearer 토큰' },
-    { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' } },
+    { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' }, help: 'Figma ▸ Settings ▸ Security ▸ Personal access tokens 에서 발급(figd_…).', docUrl: 'https://www.figma.com/settings' },
 ];
 const AWS_REGIONS = ['ap-northeast-2', 'ap-northeast-1', 'us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'];
 // OAuth 커넥터 카드(#746 T2/T3) — 멤버 셀프 연결/해제. 연결은 새 탭에서 인증(브라우저 리다이렉트), 완료 후 새로고침.
@@ -4727,6 +4727,7 @@ function credVaultCard(owner, title, intro, creds, encReady, reload) {
     const secretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: '' });
     const secretField = field('토큰', secretIn);
     const helpP = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
+    const docLink = el('a', { class: 'admin-hint', target: '_blank', rel: 'noopener', style: 'display:none;margin:4px 0 0' });
     const submit = el('button', { class: 'btn btn-primary', text: '저장' });
     const status = el('span', { class: 'admin-status' });
     const syncKind = () => {
@@ -4738,6 +4739,14 @@ function credVaultCard(owner, title, intro, creds, encReady, reload) {
         secretIn.placeholder = spec.secretPh || '토큰 값 붙여넣기';
         helpP.textContent = spec.help || '';
         helpP.style.display = spec.help ? '' : 'none';
+        if (spec.docUrl) {
+            docLink.setAttribute('href', spec.docUrl);
+            docLink.textContent = '토큰 발급 페이지 열기 ↗';
+            docLink.style.display = '';
+        }
+        else {
+            docLink.style.display = 'none';
+        }
     };
     kindSel.addEventListener('change', syncKind);
     syncKind();
@@ -4769,7 +4778,7 @@ function credVaultCard(owner, title, intro, creds, encReady, reload) {
             toast((e && e.message) || '저장 실패', true);
         }
     });
-    rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ 자격 추가' }), field('서비스', kindSel), scopeField, secretField, helpP, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
+    rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' }, el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '+ 자격 추가' }), field('서비스', kindSel), scopeField, secretField, helpP, docLink, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
     return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: title }), ...rows);
 }
 // AWS 역할 카드(통합 자격의 특수형 — secret 없이 role ARN·리전·service). 게이트웨이가 이 역할을 각 구성원 이름으로 가정해 15분 단기자격 발급.
