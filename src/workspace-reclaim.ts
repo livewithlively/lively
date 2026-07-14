@@ -174,6 +174,23 @@ export async function checkWorktree(wt: string): Promise<WorktreeCheck> {
   return { removable: true, reason: null, dirty, unpushed, branch };
 }
 
+/** 프로젝트 폴더 안의 git 레포(워크트리) 경로들 — **한 프로젝트에 여러 레포가 붙을 수 있다.**
+ *
+ *  ⚠ 목록·분석·회수가 **모두 이 함수를 써야 한다.** 각자 따로 판정하면 "목록엔 [분석] 버튼이 있는데 누르면
+ *   '레포가 없습니다' 에러" 같은 어긋남이 생긴다(실제로 그랬다 — #845). 판정은 한 곳에서.
+ *
+ *  `.git` 은 **워크트리면 파일**(gitdir 포인터), 일반 클론이면 디렉터리다 — stat 은 둘 다 잡는다.
+ *  레포를 provision 하지 않은 프로젝트 폴더는 여기서 **빈 배열**이 나온다(정상이다 — 회수할 파생물이 없을 뿐,
+ *  에러가 아니다). dev 박스 실측 307개 중 184개가 그런 폴더였다. */
+export async function reposIn(dir: string): Promise<string[]> {
+  const repos: string[] = [];
+  for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+    const p = path.join(dir, name);
+    if (await fsp.stat(path.join(p, ".git")).then(() => true).catch(() => false)) repos.push(p);
+  }
+  return repos.sort();
+}
+
 /** 회수 계획 — **아무것도 지우지 않는다.** 무엇을 지울지/못 지울지와 그 이유만 돌려준다.
  *  activeSessionDirs: 지금 살아있는 세션들의 작업 디렉터리(호출자가 tmux 에서 수집). 이 워크트리 안에 있으면
  *  회수를 통째로 막는다 — 빌드 중인 워크트리의 node_modules 를 지우면 그 세션이 깨진다. */

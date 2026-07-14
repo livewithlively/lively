@@ -7,10 +7,8 @@ import type { Capability } from "./types.js";
 import { listSessions } from "../terminal-sessions.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 // 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { projectAbsPath } from "../project-fs.js";
-import { planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
+import { planReclaim, applyReclaim, baseRepoOf, reposIn } from "../workspace-reclaim.js";
 
 // 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
 //  폴더가 없으면(신규 생성 직후) ensureAgentsMd 내부에서 만든다. 비치명적(실패해도 본 작업은 성공).
@@ -879,13 +877,11 @@ const workspaceReclaim: Capability = {
     }
 
     // 프로젝트 폴더 안의 git 레포(워크트리)들을 각각 계획한다 — 한 프로젝트에 여러 레포가 붙을 수 있다.
-    const repos: string[] = [];
-    for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
-      const p = path.join(dir, name);
-      if (await fsp.stat(path.join(p, ".git")).then(() => true).catch(() => false)) repos.push(p);
-    }
-    if (!repos.length) throw new HttpError(400, "이 프로젝트 폴더에 git 레포(워크트리)가 없습니다");
-
+    // ⚠ 레포가 없는 건 **에러가 아니라 '회수할 것이 없음'** 이다(#845). 레포를 provision 하지 않은 프로젝트 폴더는
+    //  `.lively`·AGENTS.md 만 있는 12KB 껍데기이고, dev 박스 실측 307개 중 **184개**가 그랬다.
+    //  예전엔 여기서 400 을 던져서 ① 관리탭이 정상 상태를 '실패'로 표시했고 ② 마무리 루틴이 레포 없는 프로젝트에서
+    //  에러로 멈췄다. 회수할 게 없는 것과 회수에 실패한 것은 다르다.
+    const repos = await reposIn(dir);
     const results = [];
     for (const wt of repos) {
       const plan = await planReclaim(wt, { activeSessionDirs });
@@ -909,9 +905,11 @@ const workspaceReclaim: Capability = {
       dry_run: !input.apply,
       project: { id: project.id, name: project.name, folder: project.folder },
       results,
-      note: input.apply
-        ? "회수 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
-        : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 회수하려면 apply=true 로 다시 호출하세요.",
+      note: !repos.length
+        ? "이 프로젝트 폴더에는 git 레포(워크트리)가 없어 회수할 파생물이 없습니다 — 정상입니다(레포를 provision 하지 않은 프로젝트)."
+        : input.apply
+          ? "회수 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
+          : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 회수하려면 apply=true 로 다시 호출하세요.",
     };
   },
 };
