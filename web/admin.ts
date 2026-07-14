@@ -3134,9 +3134,22 @@ function mcpForm(root, s, data, detail, isNew) {
     modeSel.value = 'proxy'; authModeSel.value = 'oauth';
     authKindIn.value = c.auth_kind; scopeSel.value = c.scope; levelSel.value = c.level; piiChk.checked = !!c.pii_scrub;
     syncTransport(); syncMode();
-    presetHint.textContent = c.dcr
-      ? `${c.label}: 자동 클라이언트 등록(DCR) — OAuth client 입력 불필요. 저장·발행 후 구성원이 [연결]하면 끝. ${c.note}`
-      : `${c.label}: 사전등록 OAuth client 필요 — 아래 'OAuth 클라이언트' 필드에 콘솔에서 만든 client_id/secret 입력. ${c.note}`;
+    // 셋업 위저드(imp#1) — DCR이면 0세팅, 아니면 provider 콘솔 체크리스트 + 정확한 콜백 URL.
+    const cb = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
+    presetHint.replaceChildren();
+    if (c.dcr) {
+      presetHint.append(el('div', { text: `${c.label}: 자동 클라이언트 등록(DCR) — OAuth client 입력 불필요. 저장 → [발행](연결 테스트) → 구성원이 [연결]하면 끝.` }));
+    } else {
+      presetHint.append(
+        el('div', { style: 'font-weight:600;margin-bottom:4px', text: `${c.label}: 사전등록 OAuth client 필요 — provider 콘솔 셋업:` }),
+        el('ol', { style: 'margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px' },
+          el('li', { text: 'provider 콘솔에서 "웹 애플리케이션" OAuth 클라이언트 생성' }),
+          el('li', { text: '필요한 스코프 추가(아래 note 참조)' }),
+          el('li', {}, '승인된 redirect URI 에 게이트웨이 콜백 등록 → ', el('code', { text: cb })),
+          el('li', {}, '발급된 client_id/secret 를 아래 ', el('b', { text: 'OAuth 클라이언트' }), ' 필드에 입력'),
+          el('li', { text: '저장 → [발행]로 연결 스모크(막히면 스코프/콜백 재확인)' })));
+    }
+    if (c.note) presetHint.append(el('div', { class: 'caption', style: 'margin-top:4px', text: c.note }));
     presetHint.style.display = '';
   });
   const presetField = field('프리셋(기본 카탈로그)', el('div', {}, presetSel, presetHint));
