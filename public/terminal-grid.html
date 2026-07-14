@@ -59,9 +59,11 @@
   grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
   grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
 
+  var nodes = (p.get('nodes') || '').split(','); // 세션별 실행 노드(#869) — sessions 와 인덱스 정렬, 빈 값=중앙
   ids.forEach(function (id, i) {
     var label = labels[i] || id;
-    var url = '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(labels[i] || '');
+    var url = '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(labels[i] || '')
+      + ((nodes[i] || '').trim() ? '&node=' + encodeURIComponent(nodes[i].trim()) : '');
     var cell = document.createElement('div'); cell.className = 'cell';
     var head = document.createElement('div'); head.className = 'cell-head';
     var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = label; lbl.title = label;

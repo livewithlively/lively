@@ -340,22 +340,34 @@ async function paneAwaitingInput(sessionId: string): Promise<boolean> {
 }
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
+  return collectSessions(ownerId(user));
+}
+
+// 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
+//  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
+//  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
+export async function listSessionsRaw(): Promise<SessionInfo[]> {
+  return collectSessions(null);
+}
+
+// me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
+async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   let out = "";
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
-  const me = ownerId(user);
   const nowSec = Math.floor(Date.now() / 1000);
   // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성). 보이는 세션만 rows 로.
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
     const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, lastAttachedRaw, paneTitleRaw, ...labelParts] = line.split("\t");
-    const owned = !!owner && owner === me;
+    const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
     if (busy) lastBusyAt.set(name, nowSec);
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
-    if (!dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
+    //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
+    if (me !== null && !dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
     rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, lastAttachedRaw, labelParts, offline, busy });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
@@ -666,6 +678,20 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
     const invites = await validInvites(patch.invites, ownerId(user));
     await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
   }
+}
+
+// (#869 노드 에이전트 전용) 게이트웨이가 이미 구성원 디렉터리로 검증한 초대 목록을 그대로 기록한다.
+//  노드엔 DB 가 없어 validInvites(listMembers)를 못 돌리므로 검증은 게이트웨이 라우트가, 기록만 노드가.
+//  게이트웨이 로컬 경로에선 쓰지 말 것 — editSession(검증 포함)이 정문. 소유자 확인은 동일하게 강제.
+export async function applyValidatedInvites(user: LivelyUser, id: string, invites: unknown): Promise<void> {
+  await assertManage(user, id);
+  const clean = Array.isArray(invites) ? invites.filter((x): x is string => typeof x === "string" && x !== ownerId(user)) : [];
+  await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(clean)]);
+}
+
+// (#869) 노드 세션 생성 전에 게이트웨이 라우트가 초대 후보를 검증할 수 있게 공개(구성원 실재·소유자 제외·중복 제거).
+export async function validateInvites(ids: unknown, ownerUid: string): Promise<string[]> {
+  return validInvites(ids, ownerUid);
 }
 
 // 리사이즈로 tmux 히스토리에 쌓인 프롬프트 중복(shrink→grow 시 overflow가 history 로 밀림)을 정리.

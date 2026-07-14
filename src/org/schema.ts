@@ -769,6 +769,28 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──
+  //  연결은 항상 노드→게이트웨이 아웃바운드 WSS(/node/ws) — 노드는 포트를 열지 않는다(단일 정문 유지).
+  //  token_hash = 이 노드 전용 auth_token(scopes=[] — REST/MCP 표면 접근 불가, 노드 채널 전용)의 해시.
+  //   재발급 시 교체(구 토큰 revoke). 인증 = org_node⋈auth_token(revoked_at IS NULL)⋈org_member(active) — 멤버
+  //   비활성/토큰 회수/노드 비활성 어느 하나로도 즉시 차단. platform/agent_ver/host/last_seen 은 hello 시 갱신(관측 필드).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_node(
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'member' CHECK (kind IN ('member','worker')),
+      owner_member TEXT NOT NULL,
+      token_hash TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      platform TEXT,
+      agent_ver TEXT,
+      host TEXT,
+      last_seen TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest-policy.ts).
   //  적용 경로: mirror(observed·신규만) + knowledge_save(에이전트 MCP·사람 웹·distill — 신규/수정 양축).

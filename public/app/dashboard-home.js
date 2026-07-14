@@ -1332,7 +1332,7 @@ async function fillSessions(zone, onCount, projectsP) {
                 meta.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
             meta.append(el('span', { class: 'dash-scard-when', title: '마지막 사용', text: sessTime(s.lastUsed || s.created) })); // #req 생성일 대신 마지막 사용(작업·접속) 시각
             const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
-            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
             const acts = el('div', { class: 'dash-scard-acts' }, openBtn);
             if (s.owned) { // 이름 수정·삭제는 소유자만(서버도 비소유 403 재검증).
                 const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: '세션 관리 (이름 수정·삭제)', 'aria-label': '세션 관리', text: '⋮' });
@@ -2515,7 +2515,7 @@ async function openProjSessionsPicker(anchor, p) {
         toast('세션을 불러오지 못했습니다', true);
         return;
     }
-    const openSess = (s) => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+    const openSess = (s) => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
     if (!sess.length) {
         toast('이 프로젝트의 내 세션이 없어요.');
         return;
