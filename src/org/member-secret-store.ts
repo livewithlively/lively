@@ -78,8 +78,12 @@ export async function setMemberSecret(
   const kind = normalizeKind(kindRaw);
   const scopeKey = normalizeScopeKey(scopeKeyRaw);
   // secret: undefined/null=변경 안 함(기존 유지), 빈 문자열도 "변경 안 함"으로 취급(실수로 비우기 방지 — 삭제는 delete 로).
-  const hasSecret = typeof input.secret === "string" && input.secret.length > 0;
-  const enc = hasSecret ? encryptSecret(input.secret as string) : null;
+  //  ⚠ trim 필수 — 여기 오는 건 전부 한 줄 API 토큰(PAT·xoxp·refresh token·ARN)인데, 사람이 복붙하면
+  //  꼬리 개행/공백이 딸려온다. 그대로 저장하면 헤더에 실려 나가 원격이 401 을 내고, 값이 비노출이라
+  //  "토큰이 맞는데 왜 401 이지" 로 몇 시간을 태운다(#825 진단 중 발견). 공백만 있으면 빈 값 → '변경 안 함'.
+  const secret = typeof input.secret === "string" ? input.secret.trim() : input.secret;
+  const hasSecret = typeof secret === "string" && secret.length > 0;
+  const enc = hasSecret ? encryptSecret(secret as string) : null;
   const meta = input.meta && typeof input.meta === "object" ? input.meta : {};
   await itemsPool.query(
     `INSERT INTO member_secret(owner,kind,scope_key,secret_enc,meta,label,updated_at,updated_by)
