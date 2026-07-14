@@ -7,10 +7,11 @@ import { isBuiltinToolName } from "../capabilities/mcp-surface.js";
 // 소문자 영숫자로 시작, 영숫자/_/- 1~64자. 한글·대문자·공백·점 불가.
 export const STRICT_SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-// 내장 훅 3종(런타임 토글로 별도 관리) + 런너 자체 — 커스텀 훅 id 로 못 쓴다(마커/언인스톨 충돌 방지).
+// 내장 훅(런타임 토글로 별도 관리) + 런너·업데이터 자체 — 커스텀 훅 id 로 못 쓴다(마커/언인스톨 충돌 방지).
 export const RESERVED_HOOK_IDS: ReadonlySet<string> = new Set([
   "session-preload", "work-flag", "stop-writeback-gate",
   "session_preload", "work_flag", "stop_writeback_gate", "run-custom",
+  "self-update", "self_update", "sync-harness-assets", "sync_harness_assets",
 ]);
 
 // 게이트웨이 빌트인 MCP 툴 이름은 부팅 시 mcp-surface(registry capability + db 직접등록)에 주입된다 — isBuiltinToolName 으로 조회.

@@ -36,7 +36,9 @@ const CODEX = join(HOME, ".codex");
 //  ~/.lively(컨텍스트·훅·토큰)는 HOME 기준 유지 = 프로필 간 공유(훅 command 는 런타임 $HOME/.lively 참조).
 //  계정별로 달라지는 건 settings(훅·권한)·MCP(.claude.json)·자격증명(.credentials.json)뿐 — 전부 CLAUDE_CONFIG_DIR 안.
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
+// self-update.mjs(#858)는 settings 에 **배선하지 않는다** — 훅이 아니라 session-preload 가 detached 로 띄우는
+//  백그라운드 업데이터다(세션 시작마다 프로세스를 하나 더 띄우지 않기 위함). 파일만 ~/.lively/hooks 에 놓는다.
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -473,7 +475,9 @@ async function installShared(workRoots) {
 
   // 런타임 자산(발행 묶음 .lively/ — 게이트웨이가 org_runtime_config·org_mcp_server 에서 주입) → ~/.lively 복사.
   //  훅(hooks-config.json)·register-clients(mcp-servers.json)가 런타임에 읽음. 없으면 스킵(구버전 번들 호환).
-  for (const f of ["hooks-config.json", "mcp-servers.json", "auto-approve.json"]) {
+  //  kit-version(#858): 이 번들의 지문. 여기 스탬프가 찍혀야 다음 세션의 session-preload 가 '최신'으로 보고
+  //  자동 업데이트를 안 돈다(= 수동 설치·업데이트도 자동 경로와 같은 좌표계에 들어온다).
+  for (const f of ["hooks-config.json", "mcp-servers.json", "auto-approve.json", "kit-version"]) {
     const src = cloneAbs(join(".lively", f));
     if (existsSync(src)) {
       copyFileSync(src, join(LIVELY, f));

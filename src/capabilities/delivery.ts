@@ -35,7 +35,7 @@ import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } fr
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
-import { previewMemberContext, runPublish } from "../org/publish.js";
+import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { assertHookId, assertAssetId } from "../org/identity.js";
@@ -865,12 +865,16 @@ export const deliveryCapabilities: Capability[] = [
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
       const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+      // kit_version(#858) — 현재 서빙 중인 설치 번들의 지문. session-preload 가 로컬 ~/.lively/kit-version 과
+      //  비교해 다르면 백그라운드 재설치를 띄운다(키트 코드·배선 자동 갱신 — 멤버 수동 업데이트 폐지).
+      //  이미 매 세션 오는 응답에 얹으므로 왕복이 늘지 않는다. 계산 실패 시 null → 멤버는 아무것도 안 한다(fail-safe).
+      const kv = await kitVersion();
       // 너지 '유효값' 서빙(#270): 어드민 오버라이드가 없으면 서버 단일소스 DEFAULT_WRITEBACK_NOTICE 를 fold 해 준다.
       //  → session-preload 가 이 값을 매 세션 ~/.lively/hooks-config.json 에 기록 → 게이트가 라이브로 사용
       //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
       //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove, kit_version: kv };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -913,7 +917,7 @@ export const deliveryCapabilities: Capability[] = [
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
         patch.hooks = {};
-        for (const k of ["session_preload", "work_flag", "stop_writeback_gate"]) {
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update"]) {
           if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
         }
       }
@@ -1008,7 +1012,7 @@ export const deliveryCapabilities: Capability[] = [
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
-      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 훅 on/off"),
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),

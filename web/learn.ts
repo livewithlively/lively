@@ -665,15 +665,20 @@ function localGuideNodes(gw, slot, data) {
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '회사에 어떤 맥락이 쌓여 있는지 둘러보려면 ',
       el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 탭으로 가보세요. (자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'));
 
-  // ── 4. 유지보수(접힘) — 처음엔 필요 없음. 나중에 업데이트/제거할 때만. ──
+  // ── 4. 유지보수(접힘) — 업데이트는 이제 자동이라 평소엔 볼 일이 없다(#858). 제거·강제갱신용. ──
   const staticBlock = (c) => el('div', { class: 'deploy-block' },
     el('div', { class: 'deploy-head' }, el('h3', { text: c.title }),
       c.cmd !== '(준비 중)' ? copyButton(() => c.cmd, '복사') : null),
     el('p', { class: 'admin-hint', text: c.note }),
     el('pre', { class: 'admin-preview', text: c.cmd }));
+  const auto = el('p', { class: 'admin-hint' },
+    el('b', { text: '업데이트는 자동입니다. ' }),
+    'Claude Code(또는 Codex)를 켤 때마다 라이블리가 최신인지 확인하고, 다르면 백그라운드로 받아 설치합니다 — ',
+    el('b', { text: '다음에 켤 때부터' }), ' 적용돼요(작업 중인 세션은 방해하지 않습니다). 아래 명령은 ',
+    el('b', { text: '자동 업데이트를 껐거나, 지금 당장 맞춰야 할 때' }), '만 쓰면 됩니다.');
   const maint = el('details', { class: 'install-maint' },
     el('summary', { text: '＋ 나중에 필요할 때: 업데이트 · 제거 (지금은 안 봐도 됩니다)' }),
-    el('p', { class: 'admin-hint', text: '처음 설치에는 필요 없습니다. 나중에 라이블리를 최신으로 갱신하거나, 내 컴퓨터에서 지울 때만 쓰는 명령이에요. 업데이트·제거는 설치된 토큰을 자동으로 읽어, 토큰을 다시 넣을 필요가 없습니다.' }),
+    auto,
     ...deployCommands(gw, os).filter((c) => c.kind !== 'install').map(staticBlock));
 
   return [callout, needs, steps, next, maint];

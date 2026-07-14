@@ -2101,14 +2101,16 @@ function injectionMap(detail, data) {
     toast(okMsg || '저장됨 — 구성원 다음 세션부터 반영');
   }
 
-  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존.
-  function momentToggle(hookKey) {
+  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존. label 을 주면 '주입' 외 토글(예: 자동 업데이트)에도 쓴다.
+  function momentToggle(hookKey, label?, onMsg?, offMsg?) {
     const chk = el('input', { type: 'checkbox' }); chk.checked = hooks[hookKey] !== false; chk.disabled = !canEdit;
     chk.addEventListener('change', async () => {
-      try { await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? '주입 켜짐' : '주입 꺼짐'); hooks[hookKey] = chk.checked; }
-      catch (e) { toast(e.message, true); chk.checked = hooks[hookKey] !== false; }
+      try {
+        await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? (onMsg || '주입 켜짐') : (offMsg || '주입 꺼짐'));
+        hooks[hookKey] = chk.checked;
+      } catch (e) { toast(e.message, true); chk.checked = hooks[hookKey] !== false; }
     });
-    return el('label', { class: 'admin-check inj-toggle' }, chk, ' 주입 켜기');
+    return el('label', { class: 'admin-check inj-toggle' }, chk, label || ' 주입 켜기');
   }
 
   // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
@@ -2316,6 +2318,13 @@ function injectionMap(detail, data) {
     canEdit ? writebackEditor() : null,
     customList('Stop'));
 
+  // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 지도에 둔다.
+  //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
+  const updBlock = momentBlock('키트 자동 업데이트 — SessionStart(백그라운드)',
+    '구성원 컴퓨터의 라이블리 키트(훅 코드·배선)를 게이트웨이 최신본과 맞춘다. 세션 시작에 버전만 비교하고, 다르면 백그라운드로 내려받아 재설치 → 다음 세션부터 적용(현재 세션은 방해하지 않음). 회사맥락·스킬은 원래도 매 세션 자동이라 이 토글과 무관.',
+    momentToggle('self_update', ' 자동 업데이트 켜기', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
+    el('p', { class: 'admin-hint inj-sub', text: '끄면 훅·배선 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1.' }));
+
   // 기타 이벤트 — 위 3시점 외 커스텀 훅.
   const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
   const otherBlock = el('div', { class: 'inj-moment' },
@@ -2333,7 +2342,7 @@ function injectionMap(detail, data) {
     sectionTitle('세션 주입', null),
     el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
-    el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
+    el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, updBlock, otherBlock)));
 }
 
 // 외부 호출·DB 안전범위(allowlist) 카드 — runtime-config 의 SSRF 화이트리스트를 도구/DB 화면 안에 인라인(2026-06-26, 구 safetyEditor 폐기).
@@ -4143,7 +4152,7 @@ function deployCommands(gw, os) {
   return [
     { kind: 'install', title: '설치', note: '구성원 토큰 필요 — 아래에서 구성원을 골라 발급하면 토큰 박힌 완성형 명령이 나옵니다. (아래는 템플릿: <TOKEN> 교체)',
       cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh` },
-    { kind: 'update', title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
+    { kind: 'update', title: '업데이트 (보통은 불필요 — 자동입니다)', note: '키트는 세션을 켤 때마다 자동으로 최신과 맞춰집니다(백그라운드 설치 → 다음 세션부터 적용). 이 명령은 자동 업데이트를 껐거나(관리탭 토글 / LIVELY_NO_AUTO_UPDATE=1) 지금 즉시 맞춰야 할 때만 쓰세요. 설치된 토큰을 읽어 멱등 재설치합니다.',
       cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" LIVELY_GATEWAY="$G/mcp" bash /tmp/lv/setup/setup-mac.sh` },
     { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 [구성원 토큰 관리] 탭에서 접속을 해제해야 합니다.',
       cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },

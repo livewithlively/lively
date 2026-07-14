@@ -9,12 +9,14 @@
 // 페일오픈: 토큰/게이트웨이/네트워크 어떤 실패든 조용히 exit 0 — 실제 작업 세션을 절대 막지 않는다.
 // stdin 은 읽지 않는다(hang 원천 차단). 토큰 값은 절대 출력/로깅하지 않는다.
 // 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — back-compat alias). OFF 면 정적·라이브 둘 다 미주입.
+// 부수효과(주입 외): 런타임설정 갱신 · auto-approve reconcile · 배선 자기치유/dedup · **키트 자가 업데이트 트리거**
+//   (#858 — 게이트웨이 kit_version ≠ 로컬 스탬프면 self-update.mjs 를 detached 로 띄운다. 적용은 다음 세션.)
 // 주입물: [정적 org-context (~/.lively/context.md — 어댑터가 설치 시 발행, 토큰/시크릿 없음)]
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -241,9 +243,44 @@ async function refreshRuntimeConfig() {
       if (HARNESS !== "codex") reconcileClaudeAutoApprove(dir, want);
     }
     // work-roots 는 동적 갱신하지 않는다 — 디렉토리 경로 노출 회피(scope-null endpoint 가 work_roots 미반환).
-    //  중앙 work-roots 는 설치 번들(.lively/work-roots)/재설치로만 적용된다.
+    //  중앙 work-roots 는 설치 번들(.lively/work-roots)/재설치로만 적용된다(자동 업데이트가 그 재설치를 돌린다).
   } catch { /* fail-open — 쓰기 실패해도 세션 안 막음 */ }
-  return null;
+  return rc; // kit_version(#858) 을 호출부가 읽는다
+}
+
+// ── 키트 자가 업데이트 트리거(#858) ──────────────────────────────
+// 게이트웨이가 서빙하는 kit_version 이 로컬 스탬프(~/.lively/kit-version)와 다르면 백그라운드 업데이터를
+//  **detached** 로 띄우고 즉시 반환한다. 다운로드·설치는 이 훅(과 세션)보다 오래 살아 알아서 끝난다.
+//  현재 세션엔 아무 영향이 없다 — 하네스가 훅·설정을 세션 시작에 스냅샷하므로 **다음 세션부터** 적용된다
+//  (클로드 코드 오토업데이터와 같은 계약: 체크=시작 시 · 설치=백그라운드 · 적용=다음 실행).
+//
+// 이 트리거가 session-preload 안에 있는 이유: **전원에게 이미 배선된 훅이 이것뿐**이다. 새 훅을 추가하면
+//  그걸 배선하려고 또 수동 업데이트가 필요해진다(닭-달걀). 여기 두면 앞으로의 모든 키트 변경 — 새 훅,
+//  새 이벤트 배선, 설치기 수정 — 이 손 안 대고 흐른다.
+function maybeSelfUpdate(remoteVersion) {
+  try {
+    if (!remoteVersion || typeof remoteVersion !== "string") return; // 게이트웨이가 버전을 안 줌 → 무동작
+    if (process.env.LIVELY_NO_AUTO_UPDATE === "1") return;
+    if (hookDisabled("self_update")) return;                          // 어드민 토글
+    if (readLocal("kit-version") === remoteVersion) return;           // 최신 — 대부분의 세션이 여기서 끝
+    const runner = join(homedir(), ".lively", "hooks", "self-update.mjs");
+    if (!existsSync(runner)) return;                                  // 구형 kit — 수동 업데이트가 경로
+    const argv = [runner, "--to", remoteVersion];
+    if (HARNESS) argv.push("--harness", HARNESS);
+    // stdio:"ignore" 가 핵심 — 자식이 파이프를 물면 하네스가 훅의 stdout EOF 를 기다리다 세션이 늘어진다.
+    spawn(process.execPath, argv, { detached: true, stdio: "ignore" }).unref();
+  } catch { /* fail-soft — 업데이트 실패가 세션을 막지 않는다 */ }
+}
+
+// 업데이터가 남긴 1회성 안내를 읽고 지운다(다음 세션엔 안 뜬다).
+function takeUpdateNotice() {
+  try {
+    const p = join(homedir(), ".lively", "update-notice");
+    if (!existsSync(p)) return null;
+    const t = readFileSync(p, "utf8").trim();
+    rmSync(p, { force: true });
+    return t || null;
+  } catch { return null; }
 }
 
 // 전체 하드 타임박스 4.5s — 어느 경로든 exit 0
@@ -252,14 +289,18 @@ try {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms, null));
   // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
   const result = await Promise.race([Promise.all([refreshRuntimeConfig(), fetchOrgContext()]), sleep(4500)]);
-  const [, orgCtx] = Array.isArray(result) ? result : [null, null];
+  const [rc, orgCtx] = Array.isArray(result) ? result : [null, null];
   // 자산 sync 자기치유 + kit 훅 중복 dedup — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스).
   //  dedup 먼저(깨끗한 베이스 위에 배선 판정) — 둘 다 정상 상태면 즉시 false·무기록.
   dedupKitWiring();
   const healed = healAssetSyncWiring();
+  // 자가 업데이트는 **맨 마지막**에 띄운다 — 업데이터도 settings.json 을 만지므로, 위 두 자기치유의 쓰기가
+  //  끝난 뒤에 시작해야 read-modify-write 가 겹치지 않는다. spawn 은 즉시 반환한다(타임박스 무관).
+  const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
+  maybeSelfUpdate(rc && rc.kit_version);
   // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
   if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
-  const blocks = [orgCtx || STATIC].filter(Boolean); // 게이트웨이 org-context 우선, 없으면 로컬 STATIC
+  const blocks = [notice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 게이트웨이 org-context(없으면 로컬 STATIC)
   emitContext(blocks.join("\n\n"), { reloadSkills: healed });
 } catch {
   // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)는 내보낸다.
