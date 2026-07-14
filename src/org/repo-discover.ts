@@ -53,17 +53,34 @@ async function apiJson(url: string, headers: Record<string, string>): Promise<un
   return res.json();
 }
 
+// API 전용 토큰 해소 — ⚠ 두 스토어의 키 정규화가 다르다: git_credential.host 는 소문자 강제(normalizeHost)인데
+//  member_secret.scope_key 는 대소문자를 보존한다(normalizeScopeKey 는 trim 만). 그래서 사람이 자격을 등록할 때
+//  호스트를 'GitHub.com' 처럼 넣으면, 소문자 host 로 찾는 조회가 조용히 빗나가 "토큰 없음" 으로 빈 드롭다운이 뜬다
+//  (호스트명은 DNS 상 대소문자 무시 — 사람이 틀린 게 아니다). 정확히 일치하는 키를 먼저 보고, 없으면 저장된
+//  scope_key 중 소문자화가 일치하는 것을 찾아 그 원본 키로 해소한다.
+//  allowFallback:true = 게이트웨이(조직 머신계정) 자격 폴백 허용 — member-secret-store 규약상 '비-PII read' 만
+//  허용되는데, 레포 목록 조회가 정확히 그 경우다(PII 없음·읽기 전용).
+async function apiToken(memberId: string | null | undefined, kind: string, host: string): Promise<string | null> {
+  const direct = await resolveMemberSecret(memberId, kind, { scopeKey: host, allowFallback: true }).catch(() => null);
+  if (direct?.secret) return direct.secret;
+  for (const owner of ownersOf(memberId)) {
+    const rows = await listMemberSecretsPublic(owner).catch(() => []);
+    const hit = rows.find((r) => r.kind === kind && r.has_secret && r.scope_key !== host && r.scope_key.toLowerCase() === host);
+    if (!hit) continue;
+    const s = await resolveMemberSecret(memberId, kind, { scopeKey: hit.scope_key, allowFallback: true }).catch(() => null);
+    if (s?.secret) return s.secret;
+  }
+  return null;
+}
+
 // 호스트 1개의 인증 상태 — 조회 토큰 + git 전송 방식(clone 주소를 SSH/HTTPS 중 뭘로 채울지 결정).
 //  조회 토큰: API 전용 토큰(member → gateway 폴백) 우선, 없으면 git 전송 자격의 HTTPS 토큰 재사용.
-//  allowFallback:true = 게이트웨이(조직 머신계정) 자격 폴백 허용. member-secret-store 규약상 '비-PII read' 만
-//  허용되는데, 레포 목록 조회가 정확히 그 경우다(PII 없음·읽기 전용).
 async function hostAuth(
   memberId: string | null | undefined, host: string,
 ): Promise<{ token: string | null; transport: "ssh" | "https" | null }> {
   const git = await resolveGitSecret(memberId, host).catch(() => null);
   const apiKind = host === "github.com" ? "github_pat" : "gitlab_pat";
-  const api = await resolveMemberSecret(memberId, apiKind, { scopeKey: host, allowFallback: true }).catch(() => null);
-  const token = api?.secret || (git?.kind === "https" ? git.https_token : null) || null;
+  const token = (await apiToken(memberId, apiKind, host)) || (git?.kind === "https" ? git.https_token : null) || null;
   return { token, transport: git?.kind ?? null };
 }
 
@@ -146,17 +163,22 @@ export async function listGitlab(host: string, token: string): Promise<{ options
 //  조회 토큰만 보면 'HTTPS git 자격 하나로 전송·조회를 다 하는' 조직(어니스트 wiki-bot PAT)을 놓친다.
 //  member_secret 의 scope_key 가 호스트다(''=미지정이면 github_pat 만 github.com 으로 해석 — gitlab 은 추론 불가).
 const API_KINDS = new Set(["gitlab_pat", "github_pat"]);
+const ownersOf = (memberId: string | null | undefined): string[] =>
+  (memberId ? [memberOwner(memberId), GATEWAY_OWNER] : [GATEWAY_OWNER]);
+
 async function candidateHosts(memberId: string | null | undefined): Promise<string[]> {
-  const owners = memberId ? [memberOwner(memberId), GATEWAY_OWNER] : [GATEWAY_OWNER];
+  const owners = ownersOf(memberId);
   const [gitCreds, apiCreds] = await Promise.all([
     Promise.all(owners.map((o) => listGitCredentialsPublic(o).catch(() => []))),
     Promise.all(owners.map((o) => listMemberSecretsPublic(o).catch(() => []))),
   ]);
   const hosts = new Set<string>();
-  for (const c of gitCreds.flat()) hosts.add(c.host);
+  for (const c of gitCreds.flat()) hosts.add(c.host);            // 이미 소문자(normalizeHost)
   for (const s of apiCreds.flat()) {
     if (!API_KINDS.has(s.kind) || !s.has_secret) continue;
-    const h = s.scope_key || (s.kind === "github_pat" ? "github.com" : "");
+    // scope_key 는 대소문자가 보존되므로 여기서 소문자로 정규화 — 호스트 후보를 한 표기로 모은다
+    //  (안 하면 'GitHub.com' 과 'github.com' 이 서로 다른 호스트로 잡혀 같은 레포가 두 번 뜬다).
+    const h = (s.scope_key || (s.kind === "github_pat" ? "github.com" : "")).toLowerCase();
     if (h) hosts.add(h);
   }
   return [...hosts].sort();
