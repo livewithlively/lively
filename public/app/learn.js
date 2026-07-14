@@ -128,8 +128,13 @@ function docsDecorate(root) {
         if (lis.every((li) => first(li) === 'STRONG')) {
             const grid = el('div', { class: 'docs-featgrid' });
             for (const li of lis) {
-                const t = el('div', { class: 'docs-feat-t', text: li.firstElementChild.textContent });
-                li.firstElementChild.remove();
+                // 제목의 인라인 노드를 그대로 옮긴다(텍스트만 뽑지 않는다) — '**[화면](#/system/…)**' 처럼
+                //  굵은 제목 안에 링크가 든 원고(관리 문서의 '전체 지도')에서 링크가 통째로 버려지던 것 방지.
+                const t = el('div', { class: 'docs-feat-t' });
+                const strong = li.firstElementChild;
+                while (strong.firstChild)
+                    t.append(strong.firstChild);
+                strong.remove();
                 const d = el('div', { class: 'docs-feat-d' });
                 while (li.firstChild)
                     d.append(li.firstChild);
