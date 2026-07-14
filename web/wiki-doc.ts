@@ -321,6 +321,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   let saveTimer: any = null;
   let retryTimer: any = null;
   let retryDelay = 0;
+  let firstEditAt = 0;   // 마지막 저장 이후 최초 편집 시각 — maxWait 강제 flush 기준
   let saving = false;
   let lastSaveFailed = false;
   const setChip = (t, busy?) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
@@ -338,9 +339,8 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       editor.resetDirty();
       k.body_md = md;
       lastSaveFailed = false;
-      retryDelay = 0; clearTimeout(retryTimer);
-      setChip('저장됨');
-      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
+      retryDelay = 0; firstEditAt = 0; clearTimeout(retryTimer);
+      setChip('저장됨');   // 상시 유지 — 빈 문자열로 사라져 '미저장'과 혼동되던 문제 제거
     } catch (e: any) {
       lastSaveFailed = true;
       setChip('저장 안 됨 — 재시도 중…', true);   // 소거되지 않는 상태 — 성공 시에만 사라짐
@@ -355,7 +355,16 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     saving = false;
     if (!lastSaveFailed && editor && editor.isDirty()) queueSave();   // 저장 중 추가 편집분 재큐잉(성공 시에만)
   };
-  const queueSave = () => { lastSaveFailed = false; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 2000); };
+  //  실시간 저장 리듬 — 600ms trailing 디바운스 + 최초 편집 후 4s 이내 강제 flush(연속 타이핑 중 미저장 창 제거).
+  const queueSave = () => {
+    lastSaveFailed = false;
+    if (!firstEditAt) firstEditAt = Date.now();
+    setChip('저장 중…', true);
+    clearTimeout(saveTimer);
+    const waited = Date.now() - firstEditAt;
+    if (waited >= 4000) { doSave(); return; }   // maxWait — 리셋 무시 강제 저장
+    saveTimer = setTimeout(doSave, Math.min(600, 4000 - waited));
+  };
 
   if (k.is_folder) {
     body.append(await knFolderChildrenBlock(k));
@@ -858,12 +867,17 @@ async function renderWikiDraft(view, params) {
     onSaveShortcut: () => { clearTimeout(timer); commit(); },
   }), () => { if (created) keepaliveSaveCreated(); else mirrorDraft(); });   // 언로드 flush — 생성 후 keepalive, 생성 전 로컬 미러
 
-  // ── 자동 생성/저장 ──
+  // ── 자동 생성/저장 — 생성 후 600ms 디바운스+4s maxWait 강제 flush. 생성 전엔 localStorage 가 이미 보호. ──
+  let draftFirstEditAt = 0;
   const queue = () => {
     mirrorDraft();   // 매 변경마다 로컬 백업 갱신(제목·분류 확정 전 유실 방지)
-    setChip(created ? '수정됨…' : '', true);
+    if (!draftFirstEditAt) draftFirstEditAt = Date.now();
+    if (created) setChip('저장 중…', true);
+    else setChip(editor && editor.getMarkdown().trim() ? '초안 보관 중' : '', false);   // 생성 전 — 로컬에 안전 보관 중임을 명시
     clearTimeout(timer);
-    timer = setTimeout(commit, created ? 2000 : 1200);
+    const waited = Date.now() - draftFirstEditAt;
+    if (created && waited >= 4000) { commit(); return; }   // maxWait — 연속 타이핑 중 강제 저장
+    timer = setTimeout(commit, created ? Math.min(600, 4000 - waited) : 1000);
   };
   async function commit() {
     const title = (titleEl.textContent || '').trim();
@@ -882,7 +896,8 @@ async function renderWikiDraft(view, params) {
         knInvalidateTreeCaches();
         editor.resetDirty();
         clearDraft();   // 서버 생성 완료 — 로컬 초안 정리
-        setChip('저장됨');
+        draftFirstEditAt = 0;
+        setChip('저장됨');   // 상시 유지
         // URL 승격 — 뒤로가기 히스토리 오염 없이 이 화면이 곧 문서 페이지가 된다.
         history.replaceState(null, '', '#/k/' + encodeURIComponent(created.name));
         crumbs.replaceChildren(
@@ -904,7 +919,7 @@ async function renderWikiDraft(view, params) {
         wkRecordVisit(created);
         paintPropline();
       } catch (e) {
-        setChip('저장 실패', true);
+        setChip('저장 안 됨', true);   // 생성 전 본문은 localStorage 초안으로 보호됨
         toast('페이지 생성 실패 — ' + e.message, true);
         saving = false;
         return;   // 실패 시 자동 재시도 금지 — 다음 입력(queue)에서만(1.2초 토스트 폭주 방지)
@@ -923,10 +938,10 @@ async function renderWikiDraft(view, params) {
       await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
       editor.resetDirty();
       created.title = payload.title;
-      setChip('저장됨');
-      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2500);
+      draftFirstEditAt = 0;
+      setChip('저장됨');   // 상시 유지
     } catch (e) {
-      setChip('저장 실패', true);
+      setChip('저장 안 됨', true);
       toast('저장 실패 — ' + e.message, true);
       saving = false;
       return;   // 실패 시 자동 재시도 금지 — 다음 입력/focusout 에서만

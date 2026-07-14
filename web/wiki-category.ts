@@ -414,19 +414,29 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   const rawWasMarkdown = (() => { const raw = homeBody().trim(); return !!raw && raw[0] !== '['; })();
   let mdConvertConfirmed = !rawWasMarkdown;
   let saveTimer: any = null;
+  let builderFirstEditAt = 0;
   const setChip = (t: string, busy?: boolean) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
   async function doSaveLayout() {
     const cur = serializeBlocks(blocks);
-    if (cur === savedBaseline) return;   // 변경 없음 — body_md(기존 큐레이션 포함) 보존
+    if (cur === savedBaseline) { builderFirstEditAt = 0; return; }   // 변경 없음 — body_md(기존 큐레이션 포함) 보존
     setChip('저장 중…', true);
     try {
       await ensureHome(cur);
       savedBaseline = cur;
-      setChip('저장됨');
-      setTimeout(() => { if (saveChip.textContent === '저장됨') setChip(''); }, 2000);
-    } catch (e) { setChip('저장 실패', true); toast('대문 저장 실패 — ' + e.message, true); }
+      builderFirstEditAt = 0;
+      setChip('저장됨');   // 상시 유지
+    } catch (e) { setChip('저장 안 됨', true); toast('대문 저장 실패 — ' + e.message, true); }
   }
-  function scheduleSave() { if (!canDoc) return; setChip('수정됨…', true); clearTimeout(saveTimer); saveTimer = setTimeout(doSaveLayout, 900); }
+  //  실시간 저장 리듬 — 600ms 디바운스 + 최초 편집 후 4s maxWait 강제 flush.
+  function scheduleSave() {
+    if (!canDoc) return;
+    if (!builderFirstEditAt) builderFirstEditAt = Date.now();
+    setChip('저장 중…', true);
+    clearTimeout(saveTimer);
+    const waited = Date.now() - builderFirstEditAt;
+    if (waited >= 4000) { doSaveLayout(); return; }
+    saveTimer = setTimeout(doSaveLayout, Math.min(600, 4000 - waited));
+  }
 
   // 질의 — allDocs 를 cfg 로. 어떤 지식이든 제목 형식 무관하게 흘러든다(범용).
   function queryDocs(cfg: any): any[] {
