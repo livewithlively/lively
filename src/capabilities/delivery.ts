@@ -59,6 +59,7 @@ import {
   type MemberIdentity, type WriteCtx, type HookHarness, type ToolKind, type OrgToolInput, type AssetKind,
   type DbSourceInput, type DbSourceRow,
 } from "../org/store.js";
+import { DEFAULT_CONNECTORS } from "../org/connector-catalog.js";
 import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
@@ -1097,6 +1098,10 @@ export const deliveryCapabilities: Capability[] = [
         name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env, enabled: s.enabled,
       })) };
     }),
+  restOnly("org_connector_catalog", "기본 커넥터 카탈로그(프리셋)",
+    "관리탭 '커넥터 추가'가 프리셋으로 채우는 기본 커넥터 정본(호스팅 OAuth MCP). 코드 SoT(connector-catalog.ts). 시크릿 없음.",
+    [{ method: "GET", paths: ["/api/ui/org/connector-catalog"], parse: () => ({}) }],
+    async () => ({ catalog: DEFAULT_CONNECTORS })),
   restOnly("org_mcp_upsert", "MCP 서버 추가·수정",
     "조직 MCP 서버를 저장한다. transport http(url)|stdio(command). 인증은 auth_env(환경변수 이름만 — 시크릿 금지).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server"], parse: (req) => req.body ?? {} }],

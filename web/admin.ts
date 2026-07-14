@@ -3118,12 +3118,37 @@ function mcpForm(root, s, data, detail, isNew) {
     try { await api('/api/ui/org/mcp-server/remove', { method: 'POST', body: JSON.stringify({ name: s.name }) }); await loadAdmin(true); state.admin.mcpSel = null; toast('제거됨'); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); }
   } }));
-  root.replaceChildren(
+  // ── 프리셋(기본 카탈로그) — 신규 등록 시 선택하면 필드 자동 채움(#746 imp#3). 코드 SoT=connector-catalog.ts. ──
+  const presetSel = el('select', {}, el('option', { value: '', text: '— 직접 입력 —' }));
+  const presetHint = el('div', { class: 'admin-hint', style: 'display:none;margin-top:6px' });
+  let catalog: any[] = [];
+  api('/api/ui/org/connector-catalog').then((r: any) => {
+    catalog = r.catalog || [];
+    for (const c of catalog) presetSel.append(el('option', { value: c.name, text: c.label + (c.dcr ? ' · 자동(DCR)' : ' · client 필요') }));
+  }).catch(() => {});
+  presetSel.addEventListener('change', () => {
+    const c = catalog.find((x) => x.name === presetSel.value);
+    if (!c) { presetHint.style.display = 'none'; return; }
+    if (isNew) nameIn.value = c.name;
+    transSel.value = 'http'; urlIn.value = c.url;
+    modeSel.value = 'proxy'; authModeSel.value = 'oauth';
+    authKindIn.value = c.auth_kind; scopeSel.value = c.scope; levelSel.value = c.level; piiChk.checked = !!c.pii_scrub;
+    syncTransport(); syncMode();
+    presetHint.textContent = c.dcr
+      ? `${c.label}: 자동 클라이언트 등록(DCR) — OAuth client 입력 불필요. 저장·발행 후 구성원이 [연결]하면 끝. ${c.note}`
+      : `${c.label}: 사전등록 OAuth client 필요 — 아래 'OAuth 클라이언트' 필드에 콘솔에서 만든 client_id/secret 입력. ${c.note}`;
+    presetHint.style.display = '';
+  });
+  const presetField = field('프리셋(기본 카탈로그)', el('div', {}, presetSel, presetHint));
+
+  root.replaceChildren(...[
+    isNew ? presetField : null,
     field('이름', nameIn), field('방식', modeSel), field('전송 방식', transSel), urlField, cmdField,
     authEnvField, field('설명', noteIn),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     proxyBox,
-    actions);
+    actions,
+  ].filter(Boolean));
   syncTransport();
   syncMode();
 }
