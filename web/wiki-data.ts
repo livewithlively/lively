@@ -17,7 +17,35 @@ function isCategoryHomeDoc(name: string): boolean { return String(name || '').st
 //  \uC5D0\uB514\uD130\uB294 destroy \uBBF8\uD638\uCD9C \uC2DC body \uC758 .be-tools \uC640 document selectionchange \uB9AC\uC2A4\uB108\uAC00 \uB204\uC801\uB41C\uB2E4(\uBE14\uB85D\uC5D0\uB514\uD130 \uACC4\uC57D).
 //  \uD45C\uBA74\uC740 wkTrackEditor \uB85C \uAC10\uC2F8 \uB4F1\uB85D\uB9CC \uD558\uBA74 \uB418\uACE0, \uB8E8\uD2B8\uAC00 DOM \uC5D0\uC11C \uBD84\uB9AC\uB41C \uC778\uC2A4\uD134\uC2A4\uB9CC \uC5EC\uAE30\uC11C destroy \uB41C\uB2E4.
 const wkLiveEditors = new Set<any>();
-function wkTrackEditor(ed: any) { wkLiveEditors.add(ed); return ed; }
+//  두 번째 인자 flush: 이 에디터의 '대기 중 저장을 언로드 후에도 보장'하는 동기 최선 저장(keepalive fetch / localStorage 미러).
+function wkTrackEditor(ed: any, flush?: () => void) { wkLiveEditors.add(ed); if (flush) ed.__wkFlush = flush; return ed; }
+//  비-에디터(카테고리 대문 빌더 등)도 언로드 flush 에 참여할 수 있게 — 등록/해제.
+const wkFlushers = new Set<() => void>();
+function wkRegisterFlush(fn: () => void) { wkFlushers.add(fn); return () => { wkFlushers.delete(fn); }; }
+//  화면이 숨겨지거나(탭 전환·닫기·백그라운드) 언로드·재접속될 때 — 살아있는 에디터/등록 flush 를 모두 실행.
+function wkFlushAll() {
+  for (const ed of Array.from(wkLiveEditors)) {
+    try { if (ed && ed.el && ed.el.isConnected && typeof ed.__wkFlush === 'function') ed.__wkFlush(); }
+    catch (_) { /* 최선 저장 — 실패 무시 */ }
+  }
+  for (const fn of Array.from(wkFlushers)) { try { fn(); } catch (_) { /* 무시 */ } }
+}
+function wkAnyEditorDirty() {
+  for (const ed of Array.from(wkLiveEditors)) {
+    try { if (ed && ed.el && ed.el.isConnected && ed.isDirty && ed.isDirty()) return true; } catch (_) { /* 무시 */ }
+  }
+  return false;
+}
+//  전역 언로드 가드(모듈 1회 설치) — 이탈 순간 대기 저장을 flush. 오프라인이라 flush 가 실패할 때만 이탈 경고(과잉 경고 방지).
+if (typeof window !== 'undefined' && !(window as any).__wkUnloadGuard) {
+  (window as any).__wkUnloadGuard = true;
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') wkFlushAll(); });
+  window.addEventListener('pagehide', () => wkFlushAll());
+  window.addEventListener('online', () => wkFlushAll());
+  window.addEventListener('beforeunload', (e: any) => {
+    if (!navigator.onLine && wkAnyEditorDirty()) { e.preventDefault(); e.returnValue = ''; }
+  });
+}
 function wkRouteCleanup() {
   for (const ed of Array.from(wkLiveEditors)) {
     try { if (!ed.el || !ed.el.isConnected) { ed.destroy(); wkLiveEditors.delete(ed); } }
@@ -964,6 +992,7 @@ export {
   openProjectChooser,
   openSourceDetail,
   saveKnPropsUi,
+  wkRegisterFlush,
   wkRouteCleanup,
   wkTrackEditor,
 };

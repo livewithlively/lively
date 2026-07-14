@@ -447,13 +447,23 @@ async function renderCategorySurface(box, cat, ctx) {
         return L; // 비면 [] — 캔버스가 '첫 페이지' 초대를 띄운다(빈 소개 블록 방지)
     }
     let blocks = loadLayout();
-    // 저장 — body_md 에 블록 JSON. 디바운스.
+    // 저장 — body_md 에 블록 JSON. 디바운스. (#764 큐레이션 보호)
+    //  savedBaseline 과 다를 때만 실제 저장 — 편집모드 토글만 하거나 blur 만 나도 저장되던 파괴 버그 차단.
+    //  rawWasMarkdown: 원본이 손수 쓴 글이면 첫 편집 진입 시 1회 확인(블록 저장이 원문 서식을 대체하므로).
+    const serializeBlocks = (bs) => JSON.stringify(bs.map((b) => ({ type: b.type, w: b.w, cfg: b.cfg, text: b.text })));
+    let savedBaseline = serializeBlocks(blocks);
+    const rawWasMarkdown = (() => { const raw = homeBody().trim(); return !!raw && raw[0] !== '['; })();
+    let mdConvertConfirmed = !rawWasMarkdown;
     let saveTimer = null;
     const setChip = (t, busy) => { saveChip.textContent = t; saveChip.classList.toggle('busy', !!busy); };
     async function doSaveLayout() {
+        const cur = serializeBlocks(blocks);
+        if (cur === savedBaseline)
+            return; // 변경 없음 — body_md(기존 큐레이션 포함) 보존
         setChip('저장 중…', true);
         try {
-            await ensureHome(JSON.stringify(blocks.map((b) => ({ type: b.type, w: b.w, cfg: b.cfg, text: b.text }))));
+            await ensureHome(cur);
+            savedBaseline = cur;
             setChip('저장됨');
             setTimeout(() => { if (saveChip.textContent === '저장됨')
                 setChip(''); }, 2000);
@@ -752,10 +762,24 @@ async function renderCategorySurface(box, cat, ctx) {
         canvas.classList.toggle('editing', editing);
     }
     if (modeToggle)
-        modeToggle.onclick = () => { editing = !editing; if (!editing) {
-            clearTimeout(saveTimer);
-            doSaveLayout();
-        } paintMode(); renderCanvas(); };
+        modeToggle.onclick = () => {
+            if (!editing) {
+                // 편집 진입 — 손수 쓴 글로 작성된 대문이면 1회 확인(블록 저장이 원문 서식을 대체).
+                if (!mdConvertConfirmed) {
+                    if (!confirm('이 대문은 기존 서식(글)으로 작성돼 있어요.\n블록으로 편집해 저장하면 원래 서식이 블록 구조로 대체됩니다. 계속할까요?'))
+                        return;
+                    mdConvertConfirmed = true;
+                }
+                editing = true;
+            }
+            else {
+                editing = false;
+                clearTimeout(saveTimer);
+                doSaveLayout(); // savedBaseline 과 다를 때만 실제 저장
+            }
+            paintMode();
+            renderCanvas();
+        };
     renderCanvas();
     paintMode();
     box.replaceChildren(root);
