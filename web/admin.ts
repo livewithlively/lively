@@ -4305,9 +4305,8 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
   { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.honestfund.kr', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송이 SSH 여도 이것만 있으면 목록이 뜹니다.' },
   { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송이 SSH(deploy key) 여도 이것만 있으면 목록이 뜹니다.' },
   { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.' },
-  { kind: 'notion_token', label: 'Notion 토큰', secretLabel: 'Notion 토큰', secretPh: 'secret_… / ntn_…' },
+  // notion_token·google_oauth_refresh 제거(#746) — 이 서비스는 OAuth 커넥터(관리탭 MCP 서버)로 연결. 정적 토큰 슬롯은 중복·미사용(죽은 옵션)이었음.
   { kind: 'clickup_token', label: 'ClickUp 토큰', secretLabel: 'ClickUp 토큰', secretPh: 'pk_…', meta: { token_prefix: '' } },
-  { kind: 'google_oauth_refresh', label: 'Google OAuth (refresh token)', secretLabel: 'refresh token', help: 'Google Cloud OAuth 동의화면이 In production 이어야 만료되지 않습니다. gmail.readonly·drive.readonly 스코프.' },
   { kind: 'prometheus_bearer', label: 'Prometheus Bearer 토큰', secretLabel: 'Bearer 토큰' },
   { kind: 'figma_token', label: 'Figma 토큰', secretLabel: 'Figma 토큰', secretPh: 'figd_…', meta: { auth_header: 'X-Figma-Token', token_prefix: '' } },
 ];

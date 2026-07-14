@@ -85,6 +85,12 @@ main() {
   else
     warn "baseline 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-baseline.mjs)"
   fi
+  # 기본 커넥터 카탈로그(#746) — DCR 지원 호스팅 OAuth MCP(Notion·Linear 등) '없으면 등록'(멱등, 기존 보존).
+  if run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" 2>&1; then
+    ok "기본 커넥터 시드 처리(없는 것만)"
+  else
+    warn "커넥터 시드 경고(나중에 재시도: node --env-file=.env deploy/bootstrap-connectors.mjs)"
+  fi
 
   # 중앙박스 키트 — 이 호스트의 claude 에 lively(MCP+훅+컨텍스트) 설치 → 웹터미널 세션이 맥락 CRUD 가능.
   phase "7/7 중앙박스 키트 설치(게이트웨이 유저의 claude 를 lively-aware 로)"

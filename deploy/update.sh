@@ -71,6 +71,9 @@ else
   launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
 fi
 wait_healthz
+# 기본 커넥터 카탈로그(#746) — DCR 지원 호스팅 OAuth MCP(Notion·Linear 등) '없으면 등록'(멱등, 기존 보존).
+#  기존 박스도 업데이트 때 신규 기본 커넥터를 수령. 삭제로 영구 제외하려면 disable(존재하면 보존).
+run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" 2>&1 || warn "커넥터 시드 경고 — 수동: node --env-file=.env deploy/bootstrap-connectors.mjs"
 proxy_up   # LIVELY_DOMAIN(.env) 설정 시 Caddy 재적용/기동(미설정 시 no-op) — 도메인 추가/변경도 여기서 반영
 
 if [ "${1:-}" = "--kit" ]; then
