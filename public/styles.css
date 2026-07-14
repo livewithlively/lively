@@ -6493,10 +6493,13 @@ body.pjv-pm-open { overflow: hidden; }
    문서는 읽기 폭(800px) 컬럼이지만 관리는 표·그리드·에디터라 전폭(main 의 1200px 상한도 푼다). */
 body[data-route="system"] main { max-width: none; }
 .admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
-/* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(16개 화면마다 반복될 이유 없음).
-   남은 건 '읽기 전용' 배지뿐이고, 사이드바 맨 위에 붙는다. */
-.admin-side-ro { display: flex; align-items: center; gap: 7px; margin: 0 0 18px; padding: 0 11px;
-  font-size: 12px; color: var(--muted-2); }
+/* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
+   '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
+   admin 이 없어도 카테고리·레포·팀은 context 권한으로 편집된다 — 전역 배지는 거짓말이었다. */
+.admin-ro-note { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; padding: 9px 13px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint);
+  font-size: 13px; color: var(--ink-sub); }
+.admin-ro-note .pill { flex: none; }
 /* 사이드바가 본문과 같은 높이에서 시작하게 — 머리글이 사라진 만큼 위 여백을 맞춘다. */
 .admin-body { padding-top: 4px; }
 /* 섹션 항목 안의 대기 배지(검토 큐, #802) — 라벨 오른쪽 끝에 붙인다. */

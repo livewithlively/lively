@@ -27,6 +27,9 @@ import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js
 //  '사용 가이드(#/learn)의 docs-side 재사용 + 본문 전폭'으로 통합(main 594feb3). 여기서는 **그 셸을 그대로 쓰고**,
 //  #827 이 손대지 않은 **내용**(그룹·섹션 구성, 병합, 용어)을 바꾼다. 그래서 아래 그룹·섹션 정의가 이 파일의 핵심이다.
 const ADMIN_GROUPS = [
+  // 내 설정 — 축이 다르다(대상이 '나'). 맨 위에 두는 이유: 비관리자에게는 관리탭에서 **실제로 할 수 있는 유일한 일**이다
+  //  (나머지는 전부 읽기 전용). 관리자도 호칭·말투는 자주 손본다. GitHub·Slack 도 개인 → 조직 순이다.
+  { key: 'me', label: '내 설정', hint: '나에 대한 것' },
   { key: 'org', label: '조직', hint: '누가 쓰나' },
   { key: 'context', label: 'AI 맥락', hint: 'AI에게 뭘 가르치나' },
   { key: 'capability', label: 'AI 능력', hint: 'AI가 뭘 할 수 있나' },
@@ -57,6 +60,16 @@ const ADMIN_GROUPS = [
 // ※ 서버 식별자(엔드포인트·capability·테이블)는 그대로 둔다 — 이건 화면 용어 정리다(호환 파괴 0).
 //   → 개명 완료: `/api/ui/org/mcp-server-presets` (구 경로는 별칭 유지). 파일·타입·상수·MCP 툴명도 함께.
 const ADMIN_SECTIONS = [
+  // ── 내 설정 (#837 후속) ──
+  //  구조상 우상단 [내 프로필] 모달 하나에 필드 15개 + 중첩 모달 2개가 들어 있었다 —
+  //  사용자 지적: "개인 설정을 프로필 모달에서 하고있는데 이 경험이 안좋은거같아."
+  //  모달은 **빠른 편집(프사·표시 이름)**만 남기고 나머지를 여기로 폈다. 저장 경로는 그대로다 —
+  //  서버 me_profile_update 가 **부분 갱신(patch)** 이라(미전송 필드 보존) 화면을 쪼개도 한쪽이 다른쪽을 안 지운다.
+  //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
+  { key: 'me-profile', label: '내 정보', meaning: null, group: 'me' },
+  { key: 'me-ai', label: 'AI 개인화', meaning: null, group: 'me' },
+  { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
+  { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
   // ── 조직 ──
   { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
   // 구성원 — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4개 탭을 한 화면(서브탭)으로.
@@ -128,6 +141,27 @@ const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에
 const MIXED_SECTIONS = { tools: ['admin', 'runtime'] };
 // V4-P5/J: 어휘(카테고리·레포·팀) CRUD = context 스코프(admin 완화). context 없는 사용자는 읽기 전용(섹션은 노출).
 const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams'];
+// 내 설정 — 권한 게이트 없음(전 구성원 노출·편집). 서버도 me/* 엔드포인트라 principal 로 강제된다.
+const ME_SECTIONS = ['me-profile', 'me-ai', 'me-logins', 'me-assets'];
+// 이 섹션을 **내가** 편집할 수 있나 — 섹션마다 요구 권한이 다르다.
+//  ⚠ 전역 '읽기 전용 · 편집은 관리자만' 배지는 **거짓말이었다**(사용자 지적, #837 후속):
+//   admin 이 없어도 [카테고리]·[레포]·[팀]은 `context` 권한만으로 편집된다(CONTEXT_EDIT — 패널들이 canContext 로 게이팅).
+//   그런데 배지는 모든 섹션에 똑같이 "관리자만"이라 붙었다. 그래서 배지를 **섹션별**로 바꾸고 요구 권한을 정확히 말한다.
+function sectionCanEdit(key, data) {
+  if (ME_SECTIONS.includes(key)) return true;              // 내 설정 — 내 것이니 항상 편집 가능
+  if (CONTEXT_EDIT.includes(key)) return !!state.admin.canContext;
+  if (RUNTIME_ONLY.includes(key)) return !!data.canRuntime;
+  const any = MIXED_SECTIONS[key];
+  if (any) return any.some((sc) => (sc === 'admin' ? data.canEdit : sc === 'runtime' ? data.canRuntime : hasScope(sc)));
+  return !!data.canEdit;
+}
+// 편집하려면 어떤 권한이 필요한지 — 배지 문구에 그대로 쓴다("관리자만"이라고 뭉뚱그리지 않는다).
+function sectionNeedScope(key) {
+  if (CONTEXT_EDIT.includes(key)) return '컨텍스트(context)';
+  if (RUNTIME_ONLY.includes(key)) return '런타임(runtime)';
+  return '관리자(admin)';
+}
+
 function sectionHidden(key, data) {
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
@@ -236,13 +270,28 @@ function meaningCard(m0) {
 }
 
 // 섹션 제목 + 바로 옆 '이게 뭐예요?' 트리거(meaningCard 가 트리거 노드를 돌려준다). 제목 우측에 밋밋하게 붙는다.
+// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
+//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
+function inlineBold(text) {
+  const out: any[] = [];
+  const src = String(text);
+  let i = 0;
+  for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
+    const at = m.index as number;
+    if (at > i) out.push(src.slice(i, at));
+    out.push(el('b', { text: m[1] }));
+    i = at + m[0].length;
+  }
+  if (i < src.length) out.push(src.slice(i));
+  return out;
+}
 // 두 번째 인자는 meaning 객체(→ '이게 뭐예요?' 팝업) 또는 그냥 설명 문자열이다.
 //  문자열을 meaningCard 에 넘기면 m.what/m.reach 가 undefined 라 **빈 팝업**이 떴다(호출부 6곳). 문자열이면 설명 줄로 렌더한다.
 function sectionTitle(titleText, m) {
   const isText = typeof m === 'string';
   return el('div', {},
     el('div', { class: 'section-title' }, el('h2', { text: titleText }), isText ? null : meaningCard(m)),
-    isText ? el('p', { class: 'admin-hint', text: m }) : null);
+    isText ? el('p', { class: 'admin-hint' }, ...inlineBold(m)) : null);
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -297,16 +346,15 @@ async function renderAdmin(view, sub) {
   const detail = el('div', {});
   renderAdminDetail(detail, sel, data);
 
-  // 페이지 머리('관리' + 부제 + 조직명)는 폐지(#837 · 사용자 지적) — 상단 탭이 이미 '관리'를 켜 두었고
-  //  사이드바가 지금 어느 화면인지 말해 준다. 그 위에 16개 화면마다 같은 제목·부제가 반복되면 본문만 아래로
-  //  밀린다. 대신 **'읽기 전용' 배지만** 사이드바 맨 위로 — 비관리자가 "왜 버튼이 없지"의 답을 얻는 유일한
-  //  단서라 이건 지운다. (조직명은 지운다: 어느 조직인지 헷갈릴 표면이 아니다.)
-  if (!canEdit) {
-    side.prepend(el('div', { class: 'admin-side-ro' },
-      el('span', { class: 'pill', text: '읽기 전용' }),
-      el('span', { text: '편집은 관리자만' })));
-  }
-  const body = el('div', { class: 'admin-body' }, detail);
+  // 페이지 머리('관리' + 부제 + 조직명)는 폐지(#837) — 상단 탭이 이미 '관리'를 켜 두었고 사이드바가 지금 어느
+  //  화면인지 말해 준다. 그 위에 화면마다 같은 제목·부제가 반복되면 본문만 아래로 밀린다.
+  //  '읽기 전용'은 **이 섹션이 실제로 나에게 읽기 전용일 때만** 붙인다(섹션별 — 위 sectionCanEdit 주석 참조).
+  const ro = !sectionCanEdit(sel, data)
+    ? el('div', { class: 'admin-ro-note' },
+        el('span', { class: 'pill', text: '읽기 전용' }),
+        el('span', { text: '이 화면을 편집하려면 ' + sectionNeedScope(sel) + ' 권한이 필요합니다 — 관리자에게 요청하세요.' }))
+    : null;
+  const body = el('div', { class: 'admin-body' }, ro, detail);
   view.replaceChildren(el('div', { class: 'docs-layout admin-layout' }, side, body));
   applyReveal([body]);
 }
@@ -318,6 +366,10 @@ async function renderAdmin(view, sub) {
 //      제자리 갱신이 된다. ②는 nav 에 없으므로 URL 로는 도달하지 않는다 — SECTION_REMAP 이 먼저 걸러낸다.)
 function renderAdminDetail(detail, sel, data) {
   // ── ① nav 섹션 ──
+  if (sel === 'me-profile') return void myProfileSection(detail);
+  if (sel === 'me-ai') return void myAiSection(detail);
+  if (sel === 'me-logins') return void myLoginsSection(detail);
+  if (sel === 'me-assets') return void myAssetsSection(detail);
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
   if (sel === 'members') return membersSection(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
@@ -4764,29 +4816,24 @@ async function renderUnmaskGrantPanel(panel, source, data) {
   panel.replaceChildren(...rows);
 }
 
-async function openMyProfile() {
-  let data;
-  try { data = await api('/api/ui/me/profile'); }
-  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
-  const p = parseMyProfile(data.body_md || '');
+// ════════════════════════════════════════════════════════════════════
+// 개인 설정 (#837 후속) — 우상단 [내 프로필] 모달 하나에 필드 15개 + 중첩 모달 2개가 들어 있었다.
+//  사용자 지적: "개인 설정을 프로필 모달에서 하고있는데 이 경험이 안좋은거같아. 프로필 모달은 진짜 프사나
+//  표시 이름변경정도로 하고 나머지는 관리탭에 개인 설정 대분류 하나 파서 그 안으로 적절히 옮기는게 맞지 않을까?"
+//  → 모달 = 빠른 편집(프사·표시이름), 관리탭 [내 설정] = 전체. 저장 경로는 그대로다(서버가 부분 갱신).
+// ════════════════════════════════════════════════════════════════════
 
-  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
-  const roleIn = el('input', { type: 'text', value: p.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
-  const addressIn = el('input', { type: 'text', value: p.address, placeholder: '예: 원준님 / 대표님 / 원준' });
-  const areaIn = el('input', { type: 'text', value: p.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
-  const toolsIn = el('input', { type: 'text', value: p.tools, placeholder: '예: context-ontology, Cursor, Figma' });
-  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
-  memoTa.value = p.memo;
-
-  // ── 아바타 — 업로드 이미지(없으면 커스텀 글자·색 또는 이니셜+해시색). undefined=변경없음, null=기본으로, string=새 이미지. ──
-  let avatarState: string | null | undefined;
-  let charState = (data.avatar_char || '');   // 커스텀 글자(빈=이니셜)
-  let colorState = (data.avatar_color || '');  // 커스텀 배경색 #rrggbb(빈=해시색)
-  const avaPreview = el('span', { class: 'prof-ava-preview' });
-  const renderAva = () => {
+// 아바타 편집기 — 사진 업로드 / 커스텀 글자·색 / 기본(이니셜+해시색). 모달과 [내 정보]가 공유한다.
+//  payload(): undefined 인 필드는 안 보낸다 = 서버가 보존(me_profile_update 는 patch).
+function avatarEditor(data, nameInput) {
+  let avatarState: string | null | undefined;                 // undefined=변경없음 · null=기본으로 · string=새 이미지
+  let charState = (data.avatar_char || '');
+  let colorState = (data.avatar_color || '');
+  const preview = el('span', { class: 'prof-ava-preview' });
+  const render = () => {
     const cur = avatarState === undefined ? (data.avatar || null) : avatarState;
-    const nm = nameIn.value.trim() || data.display_name || data.email || data.id || '';
-    avaPreview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg', { char: charState, color: colorState }));
+    const nm = (nameInput && nameInput.value.trim()) || data.display_name || data.email || data.id || '';
+    preview.replaceChildren(profileAvatar(cur, nm, data.id, 'prof-ava-lg', { char: charState, color: colorState }));
   };
   const fileIn = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
   const uploadBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '사진 올리기' });
@@ -4794,46 +4841,108 @@ async function openMyProfile() {
   uploadBtn.addEventListener('click', () => fileIn.click());
   fileIn.addEventListener('change', async () => {
     const f = fileIn.files && fileIn.files[0]; if (!f) return;
-    try { avatarState = await fileToAvatarDataUrl(f); renderAva(); }
-    catch (e) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
+    try { avatarState = await fileToAvatarDataUrl(f); render(); }
+    catch (e: any) { toast((e && e.message) || '이미지를 처리하지 못했습니다', true); }
     fileIn.value = '';
   });
-  removeBtn.addEventListener('click', () => { avatarState = null; renderAva(); });
-  nameIn.addEventListener('input', renderAva); // 이름 바꾸면 폴백 이니셜도 갱신
-  // 커스텀 글자 — 최대 3자(비우면 이름 이니셜). 이미지가 있으면 이미지가 우선.
+  removeBtn.addEventListener('click', () => { avatarState = null; render(); });
+  if (nameInput) nameInput.addEventListener('input', render);   // 이름을 바꾸면 폴백 이니셜도 갱신
   const charIn = el('input', { type: 'text', maxlength: '3', value: charState, placeholder: '글자', style: 'width:70px; text-align:center; font-weight:700;' });
-  charIn.addEventListener('input', () => { charState = charIn.value; renderAva(); });
-  // 커스텀 배경색 — 팔레트(‘A’=자동 해시색). 리스트/폴더 색 스와치(.pjv-sw) 재사용.
+  charIn.addEventListener('input', () => { charState = charIn.value; render(); });
   const AVA_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b', '#0ea5e9', '#14b8a6', '#f97316', '#8b5cf6'];
   const colorRow = el('div', { class: 'pjv-color-swatches' });
   const paintColors = () => {
     const auto = el('button', { type: 'button', class: 'pjv-sw pjv-sw-none' + (colorState ? '' : ' on'), title: '자동(이름 해시색)', text: 'A' });
-    auto.onclick = () => { colorState = ''; paintColors(); renderAva(); };
+    auto.onclick = () => { colorState = ''; paintColors(); render(); };
     colorRow.replaceChildren(auto, ...AVA_COLORS.map((c) => {
-      const s = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
-      s.onclick = () => { colorState = c; paintColors(); renderAva(); };
-      return s;
+      const sw = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
+      sw.onclick = () => { colorState = c; paintColors(); render(); };
+      return sw;
     }));
   };
-  paintColors();
-  renderAva();
-  const avaRow = el('div', { class: 'prof-ava-row' }, avaPreview,
-    el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
-      el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' })));
-  const avaCharColor = el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
-    el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-    el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' }));
+  paintColors(); render();
+  const node = el('div', {},
+    el('div', { class: 'prof-ava-row' }, preview,
+      el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
+        el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' }))),
+    el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
+      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
+      el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' })));
+  const payload = () => {
+    const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
+    if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
+    return out;
+  };
+  return { node, payload };
+}
 
-  const devSel = { v: p.dev };
+// 저장 후 상단바(아바타·이름)·사람 아바타 맵 즉시 갱신 — 모달·[내 정보] 공유.
+function applyMyProfileSaved(res, fallbackId) {
+  const m = (res && res.member) || {};
+  if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null; }
+  setPersonAvatar((state.me && state.me.userId) || fallbackId, m);
+  const label = (m.display_name && m.display_name.trim()) || m.email || (state.me && (state.me.email || state.me.userId)) || '';
+  const ue = document.getElementById('user-email');
+  if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || fallbackId, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
+}
+
+// ── [내 설정 ▸ 내 정보] — 아바타 · 표시 이름 · 이메일(읽기) · 비밀번호 ──
+async function myProfileSection(detail) {
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 정보를 불러오는 중')));
+  let data: any;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '내 정보를 불러오지 못했습니다'))); return; }
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const ava = avatarEditor(data, nameIn);
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+  const status = el('span', { class: 'admin-status' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인화]가 지워지지 않는다.
+    const payload = { display_name: nameIn.value.trim(), ...ava.payload() };
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
+      applyMyProfileSaved(res, data.id);
+      toast('저장됨'); status.textContent = '저장됨';
+    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
+    saveBtn.disabled = false;
+  });
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('내 정보', '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.'),
+    field('프로필 사진', ava.node),
+    field('표시 이름', nameIn),
+    data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null,
+    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
+}
+
+// ── [내 설정 ▸ AI 개인화] — 개인 레이어(body_md). AI 가 매 세션 첫머리에 그대로 읽는다. ──
+async function myAiSection(detail) {
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('AI 개인화를 불러오는 중')));
+  let data: any;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '불러오지 못했습니다'))); return; }
+  const pr = parseMyProfile(data.body_md || '');
+
+  const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
+  const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님 / 원준' });
+  const areaIn = el('input', { type: 'text', value: pr.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
+  const toolsIn = el('input', { type: 'text', value: pr.tools, placeholder: '예: context-ontology, Cursor, Figma' });
+  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+  memoTa.value = pr.memo;
+
+  const devSel = { v: pr.dev };
   const devHint = el('p', { class: 'prof-hint' });
   const renderDevHint = () => { const d = PROF_DEV.find((x) => x.v === devSel.v); devHint.textContent = d ? d.hint : '항목을 고르면 AI가 기술 답변 깊이를 맞춰요.'; };
   const devChips = profChips(PROF_DEV, devSel, (o) => o.label, (o) => o.v, renderDevHint);
   renderDevHint();
-
-  const toneSel = { v: p.tone };
+  const toneSel = { v: pr.tone };
   const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
-
-  const lenSel = { v: p.len };
+  const lenSel = { v: pr.len };
   const lenHint = el('p', { class: 'prof-hint' });
   const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
   const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
@@ -4841,41 +4950,6 @@ async function openMyProfile() {
 
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
-
-  const back = overlay('내 프로필',
-    el('p', { class: 'admin-hint', style: 'margin:0 0 16px',
-      text: '아래에서 고르면 당신의 AI가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).' }),
-    field('프로필 사진', el('div', {}, avaRow, avaCharColor)),
-    field('표시 이름', nameIn),
-    data.email ? field('이메일 (로그인 아이디 · 관리자 전용)', el('div', { class: 'admin-ro', text: data.email })) : null,
-    data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
-    field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))),
-    field('내 스킬·훅 (#699)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '내 스킬·훅 설정', onclick: () => openMyAssets() }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요.' }))),
-    // 내 서비스 로그인(#837) — 구 [관리 ▸ 자격 ▸ 내 자격]. 개인 설정이므로 조직 관리탭이 아니라 여기가 집이다.
-    //  (그것 하나 때문에 관리탭 '자격' 섹션이 전 구성원에게 열려 있었다.)
-    field('내 서비스 로그인', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '서비스 로그인 관리', onclick: () => {
-        const host = el('div', {});
-        overlay('내 서비스 로그인', host);
-        void myCredentialsSection(host);
-      } }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: 'AI 가 나로서 슬랙·깃랩 등에 접근할 때 쓸 내 로그인이에요(암호화 저장·타인 비공개).' }))),
-    field('역할', roleIn),
-    field('개발 이해도', el('div', {}, devChips, devHint)),
-    field('호칭 (AI가 나를 부르는 말)', addressIn),
-    field('말투', toneChips),
-    field('응답 길이', el('div', {}, lenChips, lenHint)),
-    field('담당 영역', areaIn),
-    field('자주 쓰는 도구·레포', toolsIn),
-    field('추가 메모', memoTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status));
-
   saveBtn.addEventListener('click', async () => {
     // 선택·입력 → canonical markdown(AI가 읽기 좋고 parseMyProfile 로 복원 가능). 빈 항목은 생략.
     const lines: string[] = [];
@@ -4891,44 +4965,53 @@ async function openMyProfile() {
     let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
     const memo = memoTa.value.trim();
     if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
-
-    const payload: any = { display_name: nameIn.value.trim(), body_md: body };
-    if (avatarState !== undefined) payload.avatar = avatarState; // null=기본으로, string=새 이미지(미변경이면 생략→보존)
-    payload.avatar_char = charState.trim() || null;  // 커스텀 글자(빈=이니셜 자동)
-    payload.avatar_color = colorState || null;        // 커스텀 배경색(빈=해시색 자동)
-
     saveBtn.disabled = true;
+    // display_name·아바타는 **안 보낸다** — 서버가 보존하므로 [내 정보]가 지워지지 않는다.
     try {
-      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
-      const m = (res && res.member) || {};
-      if (state.me) { state.me.display_name = m.display_name || null; state.me.avatar = m.avatar || null; state.me.avatar_char = m.avatar_char || null; state.me.avatar_color = m.avatar_color || null; }
-      setPersonAvatar((state.me && state.me.userId) || data.id, m); // 사람 아바타 맵 즉시 갱신 → 다른 곳 칩/얼굴도 다음 렌더부터 반영
-      // 상단 버튼 갱신(아바타 + 표시 이름) — 이름은 표시이름 우선, 없으면 이메일/아이디(main.ts boot 과 동일 규칙).
-      const label = (m.display_name && m.display_name.trim()) || m.email
-        || (state.me && (state.me.email || state.me.userId)) || '';
-      const ue = document.getElementById('user-email');
-      if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || data.id, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
-      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다');
-      back.remove();
-    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+      await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
+      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다'); status.textContent = '저장됨';
+    } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
+    saveBtn.disabled = false;
   });
+
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 다른 구성원의 AI 에는 영향이 없어요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+    field('역할', roleIn),
+    field('개발 이해도', el('div', {}, devChips, devHint)),
+    field('호칭 (AI가 나를 부르는 말)', addressIn),
+    field('말투', toneChips),
+    field('응답 길이', el('div', {}, lenChips, lenHint)),
+    field('담당 영역', areaIn),
+    field('자주 쓰는 도구·레포', toolsIn),
+    field('추가 메모', memoTa),
+    el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
 
-// ── 내 스킬·훅 셀프 설정(#699) — 멤버가 본인에게 배포되는 스킬·훅을 기본(관리자)/켜기/끄기로 조정. me/* 엔드포인트, principal 강제. ──
-async function openMyAssets() {
+// ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
+async function myLoginsSection(detail) {
+  const head = el('div', { class: 'card' },
+    sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'),
+    field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
+      el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))));
+  const vault = el('div', {});
+  detail.replaceChildren(head, vault);
+  await myCredentialsSection(vault);
+}
+
+// ── [내 설정 ▸ 내 스킬·훅] — 관리자가 배포한 것 중 내게 적용되는 것을 켜고 끈다(#699). ──
+async function myAssetsSection(detail) {
   const KIND_LABEL: Record<string, string> = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
-  const back = overlay('내 스킬·훅',
-    el('p', { class: 'admin-hint', style: 'margin:0 0 12px',
-      text: '관리자가 배포한 스킬·훅 중 본인에게 적용되는 것을 직접 켜고 끌 수 있어요. “기본”은 관리자 설정을 따르고, “켜기/끄기”는 본인 세션에만 강제 적용됩니다(다른 구성원엔 영향 없음). 다음 세션부터 반영돼요.' }));
   const bodyBox = el('div', {});
-  (back.querySelector('.ov-box') as HTMLElement).append(bodyBox);
+  detail.replaceChildren(el('div', { class: 'card' },
+    sectionTitle('내 스킬 · 훅', '관리자가 배포한 스킬·훅 중 **나에게** 적용되는 것을 직접 켜고 끌 수 있어요. “기본”은 관리자 설정을 따르고, “켜기/끄기”는 내 세션에만 강제 적용됩니다(다른 구성원엔 영향 없음). 다음 세션부터 반영돼요.'),
+    bodyBox));
 
   const reload = async () => {
     bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
     let data: any;
     try { data = await api('/api/ui/me/assets'); }
     catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
-
     const mkRow = (targetKind: string, it: any, kindLabel: string) => {
       const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
       const effPill = el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' });
@@ -4953,18 +5036,50 @@ async function openMyAssets() {
           el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') })),
         seg);
     };
-
     const rows: any[] = [];
     const skills = (data.skills || []); const hooks = (data.hooks || []);
-    rows.push(el('h4', { style: 'margin:14px 0 6px', text: '스킬 · 에이전트 · 커맨드' }));
-    if (skills.length) skills.forEach((s: any) => rows.push(mkRow('harness_asset', s, KIND_LABEL[s.kind] || s.kind)));
+    rows.push(el('h4', { style: 'margin:14px 0 6px', text: '스킬 · 서브에이전트 · 커맨드' }));
+    if (skills.length) skills.forEach((sk: any) => rows.push(mkRow('harness_asset', sk, KIND_LABEL[sk.kind] || sk.kind)));
     else rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
     rows.push(el('h4', { style: 'margin:16px 0 6px', text: '커스텀 훅' }));
     if (hooks.length) hooks.forEach((h: any) => rows.push(mkRow('org_hook', h, h.event)));
     else rows.push(el('p', { class: 'admin-hint', text: '배포된 훅이 없어요.' }));
     bodyBox.replaceChildren(...rows);
   };
-  reload();
+  await reload();
+}
+
+// ── 우상단 [내 프로필] — **빠른 편집만**(#837 후속). ──
+//  예전엔 이 모달 하나에 필드 15개 + 중첩 모달 2개(스킬·훅 / 서비스 로그인)가 들어 있었다.
+//  사용자 지적대로 "진짜 프사나 표시 이름 변경 정도"만 남기고, 나머지는 [관리 ▸ 내 설정]으로 폈다.
+//  저장은 부분 갱신 — display_name·아바타만 보내므로 개인 레이어(AI 개인화)는 건드리지 않는다.
+async function openMyProfile() {
+  let data;
+  try { data = await api('/api/ui/me/profile'); }
+  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
+
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const ava = avatarEditor(data, nameIn);
+  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
+
+  const back = overlay('내 프로필',
+    field('프로필 사진', ava.node),
+    field('표시 이름', nameIn),
+    el('div', { class: 'admin-actions' }, saveBtn,
+      el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/me-profile', text: '전체 설정 →',
+        onclick: () => { back.remove(); } })),
+    el('p', { class: 'admin-hint', style: 'margin:12px 0 0',
+      text: 'AI 개인화(호칭·말투·답변 길이)·서비스 로그인·내 스킬·훅·비밀번호는 [관리 ▸ 내 설정]에 있어요.' }));
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: nameIn.value.trim(), ...ava.payload() }) });
+      applyMyProfileSaved(res, data.id);
+      toast('저장됨');
+      back.remove();
+    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
+  });
 }
 
 function overlay(title, ...content) {
