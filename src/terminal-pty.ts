@@ -14,7 +14,7 @@ import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "./log.js";
 import os from "node:os";
-import { TMUX_BIN, canAttach, ensureSessionOpts } from "./terminal-sessions.js";
+import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
 
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
@@ -47,10 +47,16 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const id = url.searchParams.get("session") || "";
       const ok = await canAttach(id, tk.userId).catch(() => false);
       if (!ok) {
-        // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 4403 으로 닫아
-        //  terminal.js 가 명확히 '입장 불가'를 띄우고 재연결을 멈추게 한다. 거부는 그동안 무로그였으므로 진단 로그도 남긴다.
-        logger.info({ id, userId: tk.userId }, "ws attach 거부(프로젝트 접근권 없음 또는 세션-프로젝트 불일치)");
-        wss.handleUpgrade(req, socket, head, (ws) => { try { ws.close(4403, "no-access"); } catch { /* noop */ } });
+        // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
+        //  닫아 terminal.js 가 사용자에게 정확한 문구를 띄우게 한다. 이유는 둘이고 클라 동작이 갈린다(#835):
+        //   4410 session-gone — tmux 가 '그런 세션 없다'고 확답 → 세션이 진짜 끝남 → 클라는 재연결을 멈추고 '종료됨'을 명시.
+        //   4403 no-access    — 권한 없음, 또는 판정 불가(tmux 과부하·타임아웃 = #687 의 '가짜 4403') → 클라는 몇 번 더 재시도.
+        //  판정 불가를 gone 으로 넘기지 않는 게 핵심 — 살아있는 세션을 '종료됨'으로 오인하는 건 재연결 반복보다 나쁘다.
+        const gone = await sessionGone(id).catch(() => false);
+        logger.info({ id, userId: tk.userId, gone }, gone ? "ws attach 거부(세션이 종료됨)" : "ws attach 거부(접근권 없음 또는 세션-프로젝트 불일치)");
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          try { ws.close(gone ? 4410 : 4403, gone ? "session-gone" : "no-access"); } catch { /* noop */ }
+        });
         return;
       }
       await ensureSessionOpts(id).catch(() => { /* 비치명 */ });

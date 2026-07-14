@@ -64,6 +64,17 @@
   .status { font-size: 12px; color: var(--fg-dim); }
   .status.ok { color: var(--accent); }
   .status.err { color: var(--danger); }
+  .status.end { color: var(--fg-dim); font-weight: 600; }
+
+  /* 세션 종료 배너(#835) — 화면을 덮지 않고 툴바 아래에 한 줄. 마지막 출력은 그대로 읽을 수 있어야 한다. */
+  .ended-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg2);
+    border-bottom: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--danger); font-size: 12.5px; line-height: 1.5; }
+  .ended-ic { flex: 0 0 auto; color: var(--danger); font-size: 13px; }
+  .ended-txt { flex: 1; min-width: 0; color: var(--fg-dim); }
+  .ended-txt b { color: var(--fg); font-weight: 700; }
+  .ended-cta { flex: 0 0 auto; padding: 5px 10px; border: 1px solid var(--border); border-radius: 7px;
+    color: var(--fg); font-size: 12px; text-decoration: none; white-space: nowrap; }
+  .ended-cta:hover { border-color: var(--accent); }
 
   #panes { flex: 1; min-height: 0; position: relative; }
   .pane { position: absolute; inset: 0; display: none; flex-direction: column; }
