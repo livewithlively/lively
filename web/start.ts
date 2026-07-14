@@ -11,6 +11,7 @@
 //  판정: 자동(서버가 아는 것) 위주 + AI 보고(서버가 볼 수 없는 로컬 이관). 수동 마킹은 ⋯ 메뉴 안에만 둔다
 //   (기본 동선에 노출하지 않음 — 사용자가 손으로 체크하는 게 기본이 되면 진행률이 의미를 잃는다).
 import { api, el, pageHead, toast } from './core.js';
+import { docsEyebrow, docsShell } from './learn.js'; // 사용 가이드 사이드바 셸 — '직접 해보기 › 시작하기'가 이 페이지의 입구다
 
 const ICON: Record<string, string> = { done: '✓', skipped: '—', todo: '○' };
 const TONE: Record<string, string> = { done: '#3a9d6e', skipped: '#9aa0a6', todo: '#c9ccd1' };
@@ -72,7 +73,7 @@ function stepCard(it: any, view: any) {
 export async function renderStart(view: any) {
   const head = pageHead('시작하기', '라이블리를 쓸 준비가 얼마나 됐는지 한눈에 봅니다. AI 도 같은 현황을 읽으니, AI 에게 "온보딩 도와줘" 라고 하면 이어서 도와줍니다.');
   const slot = el('div', {});
-  view.replaceChildren(head, slot);
+  docsShell(view, 'start', docsEyebrow('start'), head, slot);   // 사이드바 유지 — 여기가 '직접 해보기'의 첫 항목
 
   let d: any;
   try { d = await api('/api/ui/me/onboarding'); }
@@ -100,7 +101,7 @@ export async function renderStart(view: any) {
 // #/start/migrate — "예전 환경 가져오기" 스텝의 안내. **여기서 이관을 하지 않는다**(로컬 파일은 웹이 못 만진다).
 //  AI 에게 시키는 법만 알려주고, 실제 작업·완료 보고는 lively-onboarding 스킬이 한다.
 export async function renderStartMigrate(view: any) {
-  view.replaceChildren(
+  docsShell(view, 'start', docsEyebrow('start'),
     pageHead('예전에 쓰던 AI 환경 가져오기', '이 일은 AI 가 합니다 — 웹에서는 할 수 없어요(내 컴퓨터의 파일을 웹이 읽을 수 없으니까요).'),
     el('div', { class: 'card' },
       el('strong', { text: '내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' }),

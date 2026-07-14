@@ -11,6 +11,7 @@
 //  판정: 자동(서버가 아는 것) 위주 + AI 보고(서버가 볼 수 없는 로컬 이관). 수동 마킹은 ⋯ 메뉴 안에만 둔다
 //   (기본 동선에 노출하지 않음 — 사용자가 손으로 체크하는 게 기본이 되면 진행률이 의미를 잃는다).
 import { api, el, pageHead, toast } from './core.js';
+import { docsEyebrow, docsShell } from './learn.js'; // 사용 가이드 사이드바 셸 — '직접 해보기 › 시작하기'가 이 페이지의 입구다
 const ICON = { done: '✓', skipped: '—', todo: '○' };
 const TONE = { done: '#3a9d6e', skipped: '#9aa0a6', todo: '#c9ccd1' };
 function bar(pct) {
@@ -46,7 +47,7 @@ function stepCard(it, view) {
 export async function renderStart(view) {
     const head = pageHead('시작하기', '라이블리를 쓸 준비가 얼마나 됐는지 한눈에 봅니다. AI 도 같은 현황을 읽으니, AI 에게 "온보딩 도와줘" 라고 하면 이어서 도와줍니다.');
     const slot = el('div', {});
-    view.replaceChildren(head, slot);
+    docsShell(view, 'start', docsEyebrow('start'), head, slot); // 사이드바 유지 — 여기가 '직접 해보기'의 첫 항목
     let d;
     try {
         d = await api('/api/ui/me/onboarding');
@@ -64,5 +65,5 @@ export async function renderStart(view) {
 // #/start/migrate — "예전 환경 가져오기" 스텝의 안내. **여기서 이관을 하지 않는다**(로컬 파일은 웹이 못 만진다).
 //  AI 에게 시키는 법만 알려주고, 실제 작업·완료 보고는 lively-onboarding 스킬이 한다.
 export async function renderStartMigrate(view) {
-    view.replaceChildren(pageHead('예전에 쓰던 AI 환경 가져오기', '이 일은 AI 가 합니다 — 웹에서는 할 수 없어요(내 컴퓨터의 파일을 웹이 읽을 수 없으니까요).'), el('div', { class: 'card' }, el('strong', { text: '내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' }), el('pre', { style: 'background:#f6f7f8;padding:12px;border-radius:6px;margin:10px 0', text: '온보딩 도와줘' }), el('p', { class: 'admin-hint', style: 'margin:0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽기만 해서 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 건드리지 않습니다(복사만 하고 지우지 않습니다). 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })), el('div', { class: 'card' }, el('strong', { text: '"예전 기억이 사라졌어요"' }), el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '사라지지 않았습니다. AI 의 작업 메모는 폴더마다 따로 저장돼서, 다른 폴더에서 켜면 안 보일 뿐입니다. 위 도우미가 다른 폴더에 있던 것까지 찾아서 보여줍니다.' })), el('div', { class: 'card' }, el('strong', { text: '웹 [터미널] 탭에서 쓰고 계신가요?' }), el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '그 세션은 회사 서버에서 돌아갑니다 — 그래서 내 노트북에 있던 예전 환경을 볼 수 없습니다. 가져오시려면 내 컴퓨터에 설치한 뒤 거기서 도우미를 부르세요. 가져올 게 없다면 이 항목은 건너뛰셔도 됩니다.' }), el('div', { style: 'margin-top:10px' }, el('a', { class: 'btn', href: '#/start/setup', text: '내 컴퓨터에 설치하기 →' }))));
+    docsShell(view, 'start', docsEyebrow('start'), pageHead('예전에 쓰던 AI 환경 가져오기', '이 일은 AI 가 합니다 — 웹에서는 할 수 없어요(내 컴퓨터의 파일을 웹이 읽을 수 없으니까요).'), el('div', { class: 'card' }, el('strong', { text: '내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' }), el('pre', { style: 'background:#f6f7f8;padding:12px;border-radius:6px;margin:10px 0', text: '온보딩 도와줘' }), el('p', { class: 'admin-hint', style: 'margin:0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽기만 해서 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 건드리지 않습니다(복사만 하고 지우지 않습니다). 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })), el('div', { class: 'card' }, el('strong', { text: '"예전 기억이 사라졌어요"' }), el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '사라지지 않았습니다. AI 의 작업 메모는 폴더마다 따로 저장돼서, 다른 폴더에서 켜면 안 보일 뿐입니다. 위 도우미가 다른 폴더에 있던 것까지 찾아서 보여줍니다.' })), el('div', { class: 'card' }, el('strong', { text: '웹 [터미널] 탭에서 쓰고 계신가요?' }), el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '그 세션은 회사 서버에서 돌아갑니다 — 그래서 내 노트북에 있던 예전 환경을 볼 수 없습니다. 가져오시려면 내 컴퓨터에 설치한 뒤 거기서 도우미를 부르세요. 가져올 게 없다면 이 항목은 건너뛰셔도 됩니다.' }), el('div', { style: 'margin-top:10px' }, el('a', { class: 'btn', href: '#/start/setup', text: '내 컴퓨터에 설치하기 →' }))));
 }

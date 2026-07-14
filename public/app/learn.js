@@ -31,8 +31,11 @@ const DOCS_NAV = [
             { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
             { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
         ] },
-    // 읽는 문서가 아니라 '직접 해보는' 화면 둘 — 세션을 어디서 열지 고르고(웹/내 PC), 실제 화면 위 투어를 켠다(#780).
+    // 읽는 문서가 아니라 '직접 해보는' 화면들 — 온보딩에서 시작해(#846/850), 세션을 어디서 열지 고르고(웹/내 PC),
+    //  실제 화면 위 투어를 켠다(#780). '시작하기'가 맨 위인 이유: **그게 온보딩의 입구**다. 여기 없으면
+    //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
     { group: '직접 해보기', items: [
+            { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
             { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
             { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
         ] },
@@ -53,13 +56,14 @@ function docsSidebar(active) {
     }
     return side;
 }
-// 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴)이 이 셸 안에서 렌더된다.
-function docsShell(view, active, ...content) {
+// 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴·온보딩)이 이 셸 안에서 렌더된다.
+//  export: #/start(start.ts)도 이 셸을 쓴다 — 사이드바에서 들어갔는데 사이드바가 사라지면 길을 잃는다.
+export function docsShell(view, active, ...content) {
     view.replaceChildren(el('div', { class: 'docs-layout' }, docsSidebar(active), el('article', { class: 'docs-body' }, ...content)));
     document.getElementById('view').focus?.();
 }
 // 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
-function docsEyebrow(key) {
+export function docsEyebrow(key) {
     for (const g of DOCS_NAV)
         if (g.items.some((i) => i.key === key))
             return el('div', { class: 'docs-eyebrow', text: g.group });
