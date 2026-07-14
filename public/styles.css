@@ -5244,6 +5244,11 @@ main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 12px; font-we
 .be-slash { border-radius: 12px; box-shadow: 0 20px 48px rgba(27,30,39,.18); }
 .be-slash-ic { border-radius: 8px; }
 .be-slash-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 10.5px; }
+/* #764 슬래시 항목 단축키 kbd 칩 — 마크다운 프리픽스·키보드 단축을 우측에 표기 */
+.be-slash-sc { flex: none; margin-left: 8px; font-family: 'D2Coding', ui-monospace, Menlo, monospace;
+  font-size: 10px; color: var(--muted-2); background: var(--bg-tint); border: 1px solid var(--line);
+  border-radius: 5px; padding: 1px 6px; line-height: 1.5; white-space: nowrap; font-weight: 600; }
+.be-slash-item.on .be-slash-sc, .be-slash-item:hover .be-slash-sc { border-color: var(--line-net); }
 main.doc-mode .be-callout { border-radius: 12px; }
 
 /* ── 휴지통·자료 등 kn-plain 페이지 ── */

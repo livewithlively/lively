@@ -989,6 +989,16 @@ export function createBlockEditor(opts: {
     { k: 'highlight', ic: '🖍', label: '형광펜', hint: '==강조==', kw: 'highlight mark 형광펜 강조 마커 하이라이트', apply: () => wrapOrInsertInline('mark') },
     { k: 'clearfmt', ic: '⌫', label: '서식 지우기', hint: '선택 서식 제거', kw: 'clear format remove clean 서식 지우기 초기화 제거', apply: () => { document.execCommand('removeFormat'); document.execCommand('unlink'); markDirty(); } },
   ];
+  // #764 슬래시 항목 단축키 표기 — 마크다운 프리픽스(줄머리 '# ' 등)와 키보드 단축을 메뉴 우측 kbd 로.
+  const _isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test((navigator as any).platform || '');
+  const _MOD = _isMac ? '⌘' : 'Ctrl+';
+  const _SFT = _isMac ? '⇧' : 'Shift+';
+  const SLASH_SC: Record<string, string> = {
+    h1: '#', h2: '##', h3: '###', h4: '####',
+    bullet: '-', numbered: '1.', todo: '[]', toggle: '>', quote: '"', code: '```', divider: '---',
+    bold: _MOD + 'B', italic: _MOD + 'I', underline: _MOD + 'U', icode: _MOD + 'E', highlight: _MOD + _SFT + 'H',
+  };
+  SLASH_ITEMS.forEach((it) => { if (SLASH_SC[it.k]) it.sc = SLASH_SC[it.k]; });
   // #730 슬래시 카테고리(클릭업/노션식 섹션 그룹핑). k → 카테고리.
   const SLASH_CAT: Record<string, string> = {
     text: 'basic', h1: 'basic', h2: 'basic', h3: 'basic', h4: 'basic',
@@ -1047,7 +1057,8 @@ export function createBlockEditor(opts: {
       const row = el('button', { class: 'be-slash-item' + (idx === slash.sel ? ' on' : ''), type: 'button', role: 'menuitem' },
         el('span', { class: 'be-slash-ic', text: it.ic }),
         el('span', { class: 'be-slash-label', text: it.label }),
-        el('span', { class: 'be-slash-hint', text: it.hint }));
+        el('span', { class: 'be-slash-hint', text: it.hint }),
+        it.sc ? el('kbd', { class: 'be-slash-sc', text: it.sc }) : null);
       row.addEventListener('mousedown', (e) => e.preventDefault());   // 포커스/선택 유지
       row.onclick = () => applySlash(it);
       kids.push(row);
