@@ -8266,14 +8266,19 @@ function pjvAddTask(projectId, parentTaskId, reload) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
 
-// 필요 지식 / 산출 지식 — 두 섹션. 각 행은 지식 상세(#/k/:name)로 링크.
+// 전체 작업 로그(대시보드 ④ 의 ⤢ 팝업) — 회사 전체 활동 피드 + 유형 칩 필터.
+//  #852: 예전엔 200건을 받아 놓고도 **6개만** 그리고 '＋N개 더 보기'로 10개씩 늘렸다 —
+//  큰 팝업을 열었는데 여섯 줄만 보이니 "한 번에 좀 보여 달라"가 됐다. 이제 받은 만큼 **다 그리고**
+//  모달 안에서 스크롤로 읽는다(행 상세는 펼칠 때 만드는 lazy 라 수백 행이어도 가볍다).
+//  더 과거는 #709 표준(limit/offset)으로 이어 붙인다.
+const CTL_PAGE = 200;
 function companyTimelineSection() {
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   const body = el('div', {});
   const st = { type: '' };
   let members: any[] = [];
   let acts: any[] = [];
-  let shown = 6;
+  let atEnd = false;              // 마지막 페이지까지 받음 → '더 불러오기' 숨김
   const nameOf = (pid) => { const m = members.find((x) => x.id === pid); return (m && m.display_name) || pid || '—'; };
   const TYPES = [['', '전체'], ['feature', '기능'], ['fix', '수정'], ['decision', '결정'], ['docs', '문서'], ['research', '리서치'], ['review', '검토'], ['chore', '운영'], ['other', '기타']];
   const chipsBar = el('div', { class: 'proj-tl-filter' });
@@ -8285,22 +8290,24 @@ function companyTimelineSection() {
   load();
   return card;
 
-  async function load() {
-    body.replaceChildren(skeletonRows(4));
+  async function load(more?: boolean) {
+    if (!more) { acts = []; atEnd = false; body.replaceChildren(skeletonRows(6)); }
     try {
-      const qs = '?limit=200' + (st.type ? '&type=' + encodeURIComponent(st.type) : '');
-      acts = await api('/api/ui/activity/list' + qs).then((d) => (Array.isArray(d) ? d : (d && d.rows) || []));
+      const qs = '?limit=' + CTL_PAGE + '&offset=' + acts.length + (st.type ? '&type=' + encodeURIComponent(st.type) : '');
+      const got = await api('/api/ui/activity/list' + qs).then((d) => (Array.isArray(d) ? d : (d && d.rows) || []));
+      if (got.length < CTL_PAGE) atEnd = true;      // 덜 왔다 = 마지막 페이지
+      acts = acts.concat(got);
     } catch (e) { body.replaceChildren(errorNote(e, '작업을 불러오지 못했습니다')); return; }
-    shown = 6;
     render();
   }
   function render() {
     if (!acts.length) { body.replaceChildren(el('div', { class: 'empty', text: '아직 기록된 작업이 없습니다.' })); return; }
-    const list = el('div', { class: 'proj-tl-list' }, ...acts.slice(0, shown).map(actRow));
-    body.replaceChildren(list);
-    if (acts.length > shown) {
-      body.append(el('button', { class: 'btn btn-ghost btn-sm proj-tl-more',
-        text: '＋ ' + (acts.length - shown) + '개 더 보기', onclick: () => { shown += 10; render(); } }));
+    body.replaceChildren(el('div', { class: 'proj-tl-count', text: acts.length + '개' + (atEnd ? '' : '+') + ' · 작업을 누르면 상세가 펼쳐집니다' }),
+      el('div', { class: 'proj-tl-list' }, ...acts.map(actRow)));
+    if (!atEnd) {
+      const more = el('button', { class: 'btn btn-ghost btn-sm proj-tl-more', text: '이전 작업 더 불러오기' });
+      more.onclick = () => { more.disabled = true; more.textContent = '불러오는 중…'; load(true); };
+      body.append(more);
     }
   }
   function actRow(a) { return activityTimelineRow(a, nameOf); }
