@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { planReclaim, applyReclaim, checkWorktree, isInside, DERIVED_NAMES, PROTECTED_NAMES } from "./workspace-reclaim.js";
+import { planReclaim, applyReclaim, checkWorktree, isInside, reposIn, DERIVED_NAMES, PROTECTED_NAMES } from "./workspace-reclaim.js";
 
 const exec = promisify(execFile);
 const git = (args: string[], cwd: string) => exec("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -202,4 +202,37 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   }
 }
 
-console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 미푸시·더티·활성세션이면 거부");
+// ── reposIn: 레포 탐지 (#845) ──────────────────────────────────────────────────
+//  이 판정이 목록·분석·회수에서 갈리면 "목록엔 [분석] 버튼이 있는데 누르면 '레포가 없습니다' 에러"가 난다.
+//  실제로 그랬다 — dev 박스 307개 폴더 중 184개가 레포 없는 껍데기였고, 관리탭은 거기에도 버튼을 달았다.
+{
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "reposin-"));
+
+  // ① 레포를 provision 하지 않은 프로젝트 폴더 = 껍데기. **에러가 아니라 빈 배열**이어야 한다.
+  const shell = path.join(root, "shell");
+  await fsp.mkdir(shell, { recursive: true });
+  await fsp.mkdir(path.join(shell, ".lively"), { recursive: true });
+  await fsp.writeFile(path.join(shell, "AGENTS.md"), "# agents");
+  assert.deepEqual(await reposIn(shell), [], "레포 없는 폴더는 빈 배열(에러가 아니다 — 회수할 게 없을 뿐)");
+
+  // ② 없는 폴더도 던지지 않는다(고아 폴더가 그새 사라졌을 수 있다).
+  assert.deepEqual(await reposIn(path.join(root, "nope")), [], "없는 폴더는 빈 배열");
+
+  // ③ 워크트리(.git = **파일**)와 일반 클론(.git = **디렉터리**)을 **둘 다** 잡아야 한다.
+  //    워크트리의 .git 은 gitdir 포인터 파일이라, isDirectory() 로 판정하면 워크트리를 통째로 놓친다.
+  const proj = path.join(root, "proj");
+  const asWorktree = path.join(proj, "repo-worktree");
+  const asClone = path.join(proj, "repo-clone");
+  const notRepo = path.join(proj, "uploads"); // 스크린샷·업로드 등 — 레포가 아니다
+  for (const d of [asWorktree, asClone, notRepo]) await fsp.mkdir(d, { recursive: true });
+  await fsp.writeFile(path.join(asWorktree, ".git"), "gitdir: /somewhere/.git/worktrees/x\n"); // 파일
+  await fsp.mkdir(path.join(asClone, ".git"), { recursive: true }); // 디렉터리
+  await fsp.writeFile(path.join(notRepo, "shot.png"), "x");
+
+  const found = await reposIn(proj);
+  assert.deepEqual(found, [asClone, asWorktree].sort(), "워크트리(.git 파일)와 일반 클론(.git 디렉터리) 둘 다 — 레포 아닌 폴더는 제외");
+
+  await fsp.rm(root, { recursive: true, force: true });
+}
+
+console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 미푸시·더티·활성세션이면 거부 · reposIn(워크트리=.git파일/클론=.git디렉터리 둘 다, 껍데기는 빈 배열)");

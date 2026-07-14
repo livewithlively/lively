@@ -2596,90 +2596,162 @@ function storageEditor(detail, data) {
   // 프로젝트 마무리 루틴이 회수를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done
   //  처리하거나, 프로젝트가 방치되면 아무도 안 치운다. 여기서 관리자가 보고 **직접** 회수한다.
   //  ⚠ 자동 삭제는 없다. 반드시 [분석](dry-run) → 내용 확인 → [회수] 순서로만 지워진다.
+  // ── 워크스페이스 회수 (#813 백스톱 · #845 UX 수정) ──────────────────────────────
+  //  #845 전에는 **목록의 78% 가 눌러봐야 에러**였다(307개 중 레포 없는 껍데기 184 + 고아 57).
+  //  그래서 세 가지를 지킨다:
+  //   ① **못 하는 일에 버튼을 주지 않는다** — 레포 없는 폴더는 접어두고 [분석] 버튼 자체를 안 만든다.
+  //   ② **일괄** — 8GB 가 어디 있는지 알려고 123번 클릭하게 두지 않는다.
+  //   ③ **청크로 끊어 부른다** — 한 요청에 전부 넣으면 du 가 수십 초를 먹고 프록시가 504 로 끊는다(#600).
   const wsRegion = el('div');
+  const analyzed = new Map<number, any>(); // project_id → 분석 결과(dry-run). 회수는 여기 담긴 것만 대상으로 한다.
+  const selected = new Set<number>();
+  let wsList: any = null;
+
+  const ANALYZE_CHUNK = 10; // 요청당 프로젝트 수 — du 비용이 크므로 작게. 서버 상한은 40.
+
+  async function runBatch(path: string, ids: number[], body: any, onProgress: (done: number) => void) {
+    const out: any[] = [];
+    for (let i = 0; i < ids.length; i += ANALYZE_CHUNK) {
+      const part = ids.slice(i, i + ANALYZE_CHUNK);
+      const res = await api(path, { method: 'POST', body: JSON.stringify({ ...body, project_ids: part }) });
+      out.push(...(res.projects || []));
+      onProgress(Math.min(i + ANALYZE_CHUNK, ids.length));
+    }
+    return out;
+  }
+
   async function loadWorkspace() {
     wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)' }));
-    let ws;
-    try { ws = await api('/api/ui/org/workspace'); }
+    analyzed.clear(); selected.clear();
+    try { wsList = await api('/api/ui/org/workspace'); }
     catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
+    renderWorkspace();
+  }
 
-    const rows = (ws.projects || []).map((p) => {
-      const detailBox = el('div');
-      const analyzeBtn = el('button', { class: 'btn btn-sm', text: '분석' });
-      analyzeBtn.disabled = !canEdit || p.project_id == null;
+  function renderWorkspace() {
+    const all = (wsList.projects || []).filter((p) => p.project_id != null);
+    // 레포(워크트리)가 있는 것만 회수 대상 — 나머지는 '회수할 것이 없는' 정상 폴더다(에러가 아니다).
+    const targets = all.filter((p) => p.repos > 0);
+    const empties = all.filter((p) => !p.repos);
+    const emptyBytes = empties.reduce((s, p) => s + (p.bytes ?? 0), 0);
 
-      analyzeBtn.addEventListener('click', async () => {
-        analyzeBtn.disabled = true;
-        detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '확인 중…' }));
-        try {
-          const plan = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, { method: 'POST', body: JSON.stringify({}) });
-          renderPlan(plan);
-        } catch (e: any) {
-          detailBox.replaceChildren(el('p', { class: 'storage-calc', text: '실패: ' + e.message }));
-          analyzeBtn.disabled = false;
-        }
-      });
+    // 이 프로젝트의 워크트리 중 하나라도 작업 중인 세션이 붙어 있나 — 붙어 있으면 회수 대상으로 고르지 않는다.
+    const hasActive = (pr) => (pr.results || []).some((r) => r.active_session);
 
-      function renderPlan(plan) {
-        const parts: any[] = [];
-        for (const r of plan.results || []) {
-          const derived = (r.derived || []);
-          const unc = (r.unclassified || []);
-          parts.push(el('div', { class: 'ws-plan' },
-            el('p', { class: 'storage-calc', text: `회수 가능 ${fmtBytes(r.reclaimable_bytes)} — ${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '없음'}` }),
-            ...(unc.length ? [el('p', { class: 'storage-calc', text: `미분류(지우지 않음): ${unc.map((d) => d.path).join(', ')}` })] : []),
-            ...(r.protected_kept?.length ? [el('p', { class: 'storage-calc', text: `보호(절대 안 지움): ${r.protected_kept.join(', ')}` })] : []),
-            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음)' : `워크트리: 유지 — ${r.worktree_reason}` })));
-        }
-        // 워크트리까지 지울지는 **모든 레포가 제거 가능할 때만** 선택지로 준다.
-        const allRemovable = (plan.results || []).length > 0 && (plan.results || []).every((r) => r.worktree_removable);
-        const wtChk = el('input', { type: 'checkbox' }); wtChk.disabled = !allRemovable;
-        const total = (plan.results || []).reduce((s, r) => s + (r.reclaimable_bytes || 0), 0);
+    // ── 상단: 일괄 분석 ──
+    const progress = el('span', { class: 'storage-calc', text: '' });
+    const analyzeAllBtn = el('button', { class: 'btn btn-sm', text: `전체 분석 (${targets.length}개)` });
+    analyzeAllBtn.disabled = !canEdit || !targets.length;
+    analyzeAllBtn.addEventListener('click', async () => {
+      analyzeAllBtn.disabled = true;
+      const ids = targets.map((p) => p.project_id);
+      try {
+        const res = await runBatch('/api/ui/org/workspace/analyze', ids, {},
+          (done) => { progress.textContent = `  분석 중… ${done}/${ids.length}`; });
+        for (const pr of res) if (pr.project_id != null) analyzed.set(pr.project_id, pr);
+        // 회수할 게 있는 것만 미리 골라둔다 — 관리자가 해제하는 게 하나씩 켜는 것보다 빠르다.
+        // 작업 중인 세션이 붙은 건 **켜지 않는다**(서버도 거부하지만, 애초에 고르지 않는 게 정직하다).
+        for (const pr of res) if (pr.reclaimable_bytes > 0 && !hasActive(pr)) selected.add(pr.project_id);
+        renderWorkspace();
+      } catch (e: any) { toast(e.message, true); analyzeAllBtn.disabled = false; progress.textContent = ''; }
+    });
 
-        const doBtn = el('button', { class: 'btn btn-primary btn-sm', text: `회수 (${fmtBytes(total)})` });
-        doBtn.disabled = !canEdit || total <= 0;
-        doBtn.addEventListener('click', async () => {
-          const msg = wtChk.checked
-            ? `파생물 ${fmtBytes(total)} 를 지우고 워크트리도 제거합니다.\n\n워크트리는 push 된 상태라 나중에 다시 만들 수 있습니다. 계속할까요?`
-            : `파생물 ${fmtBytes(total)} 를 지웁니다(node_modules·build 등). 다시 빌드하면 복구됩니다. 계속할까요?`;
-          if (!confirm(msg)) return;
-          doBtn.disabled = true;
+    // ── 상단: 선택 회수 ──
+    const selIds = [...selected].filter((id) => (analyzed.get(id)?.reclaimable_bytes ?? 0) > 0);
+    const selBytes = selIds.reduce((s, id) => s + (analyzed.get(id)?.reclaimable_bytes ?? 0), 0);
+    const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: `선택 회수 (${selIds.length}개 · ${fmtBytes(selBytes)})` });
+    reclaimSelBtn.disabled = !canEdit || !selIds.length;
+    reclaimSelBtn.addEventListener('click', async () => {
+      if (!confirm(`${selIds.length}개 프로젝트에서 파생물 ${fmtBytes(selBytes)} 를 지웁니다.\n\nnode_modules·빌드 산출물 등 다시 만들 수 있는 것만 지웁니다. 소스·커밋·.env·data/ 는 건드리지 않고, 워크트리도 유지합니다.\n\n계속할까요?`)) return;
+      reclaimSelBtn.disabled = true;
+      try {
+        const res = await runBatch('/api/ui/org/workspace/reclaim', selIds, { remove_worktree: false },
+          (done) => { progress.textContent = `  회수 중… ${done}/${selIds.length}`; });
+        const freed = res.reduce((s, pr) => s + (pr.freed_bytes || 0), 0);
+        toast(`회수 완료 — ${fmtBytes(freed)} (${res.length}개 프로젝트)`);
+        loadWorkspace();
+      } catch (e: any) { toast(e.message, true); reclaimSelBtn.disabled = false; progress.textContent = ''; }
+    });
+
+    // ── 회수 대상 행 ──
+    const rows = targets.map((p) => {
+      const pr = analyzed.get(p.project_id);
+      const detail = el('div');
+      const right: any[] = [];
+
+      if (p.active_session) right.push(el('span', { class: 'storage-lv storage-lv-warn', text: '작업 중' }));
+      if (p.orphan) right.push(el('span', { class: 'storage-lv storage-lv-warn', text: '고아' }));
+      if (p.kind === 'archived') right.push(el('span', { class: 'storage-lv storage-lv-ok', text: '완료 보관' }));
+
+      let head: any;
+      if (!pr) {
+        const btn = el('button', { class: 'btn btn-sm', text: '분석' });
+        btn.disabled = !canEdit;
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          detail.replaceChildren(el('p', { class: 'storage-calc', text: '확인 중…' }));
           try {
-            const res = await api(`/api/ui/v6/projects/${p.project_id}/reclaim`, {
-              method: 'POST',
-              body: JSON.stringify({ apply: true, remove_worktree: wtChk.checked }),
-            });
-            const freed = (res.results || []).reduce((s, r) => s + (r.applied?.freedBytes || 0), 0);
-            const skipped = (res.results || []).map((r) => r.applied?.worktreeSkippedReason).filter(Boolean);
-            toast(`회수 완료 — ${fmtBytes(freed)}` + (skipped.length ? ` (워크트리 유지: ${skipped[0]})` : ''));
-            loadWorkspace();
-          } catch (e: any) { toast(e.message, true); doBtn.disabled = false; }
+            const res = await api('/api/ui/org/workspace/analyze', { method: 'POST', body: JSON.stringify({ project_ids: [p.project_id] }) });
+            const one = (res.projects || [])[0];
+            if (one) analyzed.set(p.project_id, one);
+            if (one?.reclaimable_bytes > 0 && !hasActive(one)) selected.add(p.project_id);
+            renderWorkspace();
+          } catch (e: any) {
+            detail.replaceChildren(el('p', { class: 'storage-calc', text: '실패: ' + e.message }));
+            btn.disabled = false;
+          }
         });
+        right.push(btn);
+        head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` });
+      } else {
+        const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+        chk.checked = selected.has(p.project_id);
+        chk.disabled = !canEdit || !(pr.reclaimable_bytes > 0) || hasActive(pr);
+        chk.addEventListener('change', () => {
+          if (chk.checked) selected.add(p.project_id); else selected.delete(p.project_id);
+          renderWorkspace(); // 상단 [선택 회수] 합계를 다시 그린다
+        });
+        right.unshift(chk);
+        head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · 회수 가능 ${fmtBytes(pr.reclaimable_bytes || 0)}` });
 
-        detailBox.replaceChildren(
-          ...parts,
-          el('div', { class: 'ws-actions' },
-            el('label', { class: 'storage-toggle' }, wtChk,
-              el('span', { text: allRemovable ? ' 워크트리도 제거 (push 완료 — provision 으로 복구 가능)' : ' 워크트리 제거 불가 (위 사유 참조)' })),
-            doBtn));
+        for (const r of pr.results || []) {
+          const derived = r.derived || [];
+          detail.append(el('div', { class: 'ws-plan' },
+            el('p', { class: 'storage-calc', text: `${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '회수할 파생물 없음'}` }),
+            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음) — 여기서는 유지합니다' : `워크트리: 유지 — ${r.worktree_reason}` })));
+        }
       }
-
-      const badges: any[] = [];
-      if (p.active_session) badges.push(el('span', { class: 'storage-lv storage-lv-warn', text: '작업 중' }));
-      if (p.kind === 'archived') badges.push(el('span', { class: 'storage-lv storage-lv-ok', text: '완료 보관' }));
 
       return el('div', { class: 'storage-item' },
         el('div', { class: 'storage-head' },
+          el('span', {}, el('strong', { text: p.name || String(p.project_id) }), head),
+          el('span', { class: 'ws-badges' }, ...right)),
+        detail);
+    });
+
+    // ── 레포 없는 폴더: 접어두고 버튼도 주지 않는다 ──
+    const emptyBox = el('div');
+    const emptyToggle = el('button', { class: 'btn btn-ghost btn-sm', text: `레포 없는 폴더 ${empties.length}개 보기 (${fmtBytes(emptyBytes)})` });
+    let emptyOpen = false;
+    emptyToggle.addEventListener('click', () => {
+      emptyOpen = !emptyOpen;
+      emptyToggle.textContent = emptyOpen ? `레포 없는 폴더 접기` : `레포 없는 폴더 ${empties.length}개 보기 (${fmtBytes(emptyBytes)})`;
+      emptyBox.replaceChildren(...(emptyOpen ? empties.map((p) => el('div', { class: 'storage-item' },
+        el('div', { class: 'storage-head' },
           el('span', {}, el('strong', { text: p.name || String(p.project_id) }),
             el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` })),
-          el('span', { class: 'ws-badges' }, ...badges, analyzeBtn)),
-        detailBox);
+          el('span', { class: 'ws-badges' }, ...(p.orphan ? [el('span', { class: 'storage-lv storage-lv-warn', text: '고아' })] : []))))) : []));
     });
 
     wsRegion.replaceChildren(
-      el('p', { class: 'storage-calc', text: `${(ws.projects || []).length}개 프로젝트 · 합계 ${fmtBytes(ws.total_bytes)} — ${ws.root}` }),
-      el('p', { class: 'admin-hint', text: '프로젝트별로 [분석]을 눌러 무엇이 회수 가능한지 먼저 확인하세요(아무것도 지우지 않습니다). 회수 대상은 다시 만들 수 있는 것뿐입니다 — node_modules·빌드 산출물 등. 소스·커밋·설정(.env)·데이터는 절대 지우지 않으며, 작업 중인 세션이 있거나 push 안 한 커밋이 있으면 거부합니다. 자동 삭제는 하지 않습니다.' }),
-      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '워크스페이스가 비어 있습니다.' })]));
+      el('p', { class: 'storage-calc', text: `${all.length}개 폴더 · 합계 ${fmtBytes(wsList.total_bytes)} — ${wsList.root}` }),
+      el('div', { class: 'ws-actions' }, analyzeAllBtn, reclaimSelBtn, progress),
+      el('p', { class: 'admin-hint', text: '[전체 분석]은 아무것도 지우지 않습니다 — 무엇이 회수 가능한지만 계산합니다. 회수 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.' }),
+      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '회수할 워크트리가 있는 프로젝트가 없습니다.' })]),
+      ...(empties.length ? [
+        el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 회수할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
+        emptyToggle, emptyBox,
+      ] : []));
   }
 
   load();
