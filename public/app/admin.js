@@ -4628,6 +4628,32 @@ function oauthConnectorsCard(conns, reload) {
     });
     return el('div', { class: 'card' }, sectionTitle('OAuth 커넥터', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 커넥터예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'), el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })), ...rows);
 }
+// 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
+function connectorStatusCard(catalog, servers) {
+    const byName = new Map((servers || []).map((s) => [s.name, s]));
+    const rows = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 커넥터 카탈로그의 현재 상태. 추가·발행은 [MCP 서버] 탭에서 프리셋으로, 구성원 연결은 각자 [연결].' })];
+    for (const c of (catalog || [])) {
+        const s = byName.get(c.name);
+        let chip;
+        let hint = '';
+        if (s && s.enabled !== false) {
+            chip = el('span', { class: 'pill pill-ok', text: '✓ 등록됨' });
+            hint = c.dcr ? '구성원이 [연결]하면 사용' : 'OAuth client 시딩 확인 후 [연결]';
+        }
+        else if (c.dcr) {
+            chip = el('span', { class: 'pill', text: '+ 추가 가능(자동)' });
+            hint = 'MCP 서버 ▸ 프리셋에서 추가(DCR — client 불필요)';
+        }
+        else {
+            chip = el('span', { class: 'pill', style: 'background:#faefdd;color:#b45309', text: '⚙ 설정 필요' });
+            hint = '사전등록 OAuth client 만들어 프리셋으로 추가';
+        }
+        rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, el('span', { style: 'font-weight:650;min-width:110px', text: c.label }), chip, el('span', { class: 'mini-meta', text: hint })));
+    }
+    if (!(catalog || []).length)
+        rows.push(el('p', { class: 'admin-hint', text: '카탈로그를 불러오지 못했습니다.' }));
+    return el('div', { class: 'card', style: 'margin-top:12px' }, el('h3', { class: 'admin-subhead', text: '커넥터 현황 (기본 카탈로그)' }), ...rows);
+}
 async function credentialsEditor(detail) {
     const isAdmin = hasScope('admin');
     detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
@@ -4635,6 +4661,8 @@ async function credentialsEditor(detail) {
     let org = { credentials: [] };
     let awsRoles = { credentials: [] };
     let oauthConns = { connectors: [] };
+    let catalog = { catalog: [] };
+    let mcpServers = { servers: [] };
     try {
         mine = await api('/api/ui/me/credentials');
         oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
@@ -4642,6 +4670,9 @@ async function credentialsEditor(detail) {
             org = await api('/api/ui/org/credentials');
             // aws_role_arn 은 전 owner(통합 기본 + 구성원 오버라이드) 개관이 필요 → by-kind 조회
             awsRoles = await api('/api/ui/org/credentials?kind=aws_role_arn').catch(() => ({ credentials: [] }));
+            // 커넥터 현황(#746 imp#5) — 기본 카탈로그 × 등록상태
+            catalog = await api('/api/ui/org/connector-catalog').catch(() => ({ catalog: [] }));
+            mcpServers = await api('/api/ui/org/mcp-servers').catch(() => ({ servers: [] }));
         }
     }
     catch (e) {
@@ -4652,6 +4683,9 @@ async function credentialsEditor(detail) {
     const cards = [
         el('div', { class: 'card' }, sectionTitle('자격 (커넥터 로그인)', '커넥터(GitLab·Slack·AWS 등)에 로그인할 내 토큰을 여기 한 번 넣어두면, AI가 나 대신 그 서비스를 읽고 쓸 때 이 자격으로 로그인해요. 토큰은 암호화되어 저장되고 다른 사람에게 보이지 않아요.'), encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' })),
     ];
+    // 커넥터 현황 개관(#746 imp#4·#5) — 관리자에게 기본 카탈로그의 등록/설정 상태를 한눈에.
+    if (isAdmin)
+        cards.push(connectorStatusCard(catalog.catalog || [], mcpServers.servers || []));
     // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 'me' 카드에서 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
     cards.push(credVaultCard('me', '내 자격', '나만 쓰는 로그인이에요. AI가 나로서 그 서비스에 접근할 때 써요(예: GitLab MR 올리기, Slack 검색).', (mine.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)));
     if ((oauthConns.connectors || []).length)
