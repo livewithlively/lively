@@ -746,6 +746,40 @@ export const deliveryCapabilities: Capability[] = [
       return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
 
+  // ── 내 온보딩 현황 (#846/850) — 웹 #/start 페이지와 AI 스킬이 **같은 함수**를 읽는다(드리프트 0). ──
+  //  ⚠ 상태의 SoT 는 computeMemberOnboarding 이지 화면이 아니다. 화면은 진입·완주 표면일 뿐.
+  //  자동 판정(MCP 호출 이력·자격·레포)은 조회 시점 라이브 계산 — 보고로 거짓 완료를 만들 수 없다.
+  restRead("me_onboarding_get", "내 온보딩 현황 조회",
+    "현재 로그인한 구성원의 온보딩 진행 상태를 반환한다 — 스텝별 done/todo/skipped + 필수 여부 + 자동판정 여부 + 딥링크. 웹 온보딩 페이지와 AI 온보딩 스킬이 이 하나를 함께 읽는다.",
+    [{ method: "GET", paths: ["/api/ui/me/onboarding"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { computeMemberOnboarding } = await import("../org/onboarding.js");
+      return { status: await computeMemberOnboarding(userId) };
+    }),
+
+  restRead("me_onboarding_set", "내 온보딩 스텝 보고",
+    "온보딩 스텝의 상태를 보고한다. **주 사용자는 AI 온보딩 스킬**이다 — 서버가 볼 수 없는 로컬 작업(예: 예전 AI 환경 이관)을 마치면 done 으로, 이관할 게 없으면 skipped 로 보고한다. 사용자가 웹에서 의도적으로 마킹할 때도 같은 경로를 쓴다. state: done|skipped|reset(reset=보고 취소 → 자동 판정으로 복귀). ⚠ 자동 판정되는 스텝은 실제 신호가 이기므로 보고로 거짓 완료를 만들 수 없다.",
+    [{ method: "POST", paths: ["/api/ui/me/onboarding"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { isMemberStep, MEMBER_STEPS, computeMemberOnboarding } = await import("../org/onboarding.js");
+      const step = str(input.step, "step", 32).trim();
+      if (!isMemberStep(step)) throw new HttpError(400, `step 은 ${MEMBER_STEPS.join("|")} 중 하나여야 합니다`);
+      const state = str(input.state, "state", 12).trim();
+      if (!["done", "skipped", "reset"].includes(state)) throw new HttpError(400, "state 는 done|skipped|reset 만 허용됩니다");
+      const note = input.note == null ? undefined : (str(input.note, "note", 500).trim() || undefined);
+      if (note) assertNoHardSecrets(note, "note"); // 보고 메모도 멤버 레코드에 남으므로 평문 시크릿 차단
+      // by 는 표시용(누가 채웠는지) — 위조해도 무해하다. 기본은 self, 스킬이 ai 로 보낸다.
+      const by = input.by === "ai" ? "ai" as const : "self" as const;
+      const { setMemberOnboardingStep } = await import("../org/store.js");
+      await setMemberOnboardingStep(userId, step,
+        state === "reset" ? null : { state: state as "done" | "skipped", at: new Date().toISOString(), by, note });
+      return { status: await computeMemberOnboarding(userId) }; // 갱신된 현황을 바로 돌려준다(왕복 1회)
+    }),
+
   // ── 내 스킬·훅 셀프 설정 (#699) — 인증된 멤버가 본인에게 배포되는 스킬·훅을 보고 본인 것만 opt-in/out. admin 불요(principal 강제). ──
   //  관리자 정책(enabled+target_members)이 기본값, 멤버는 본인 오버라이드로 조정. 자산은 시크릿이 아니라 발견/배포 대상 — 본인 opt-in 은 자기 세션에만 영향(안전).
   restRead("me_assets_get", "내 스킬·훅 조회",

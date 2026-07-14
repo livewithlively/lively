@@ -7,6 +7,7 @@ import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 �
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -82,6 +83,19 @@ async function route() {
                 await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
             else
                 await renderLearn(view);
+        }
+        else if (page === 'start') {
+            // #/start — 구성원 온보딩(#846/850). **온보딩의 유일한 진입·완주 표면.** 상태 SoT 는 서버
+            //  computeMemberOnboarding 이고 이 화면과 AI 스킬이 같은 REST 를 읽는다(드리프트 0).
+            //  #/start/setup 은 기존 설치 화면(renderInstall)을 **그대로 재사용** — 화면을 복제하지 않는다
+            //  (#/learn/install 도 계속 살아 있어 기존 딥링크·북마크가 깨지지 않는다. 같은 컴포넌트, 두 경로).
+            setActiveTab('learn');
+            if (segs[1] === 'setup')
+                await renderInstall(view);
+            else if (segs[1] === 'migrate')
+                await renderStartMigrate(view);
+            else
+                await renderStart(view);
         }
         else if (page === 'install') {
             // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).

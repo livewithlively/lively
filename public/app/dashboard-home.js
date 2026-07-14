@@ -169,9 +169,18 @@ function myDisplayName() {
 function todayLabel() {
     return new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' });
 }
-// 온보딩 진행 칩 — 미완일 때만 표시(완료·실패면 조용히 생략). 클릭 → #/onboarding.
+// 온보딩 진행 칩 — 미완일 때만 표시(완료·실패면 조용히 생략).
+//  ⚠ 우선순위: **내 온보딩(#/start)이 먼저**다 — 내가 아직 라이블리를 못 쓰는 상태면, 관리자가 채우는
+//   조직 셋업보다 그게 급하다. 내 것이 끝났을 때만 조직 셋업(#/onboarding) 칩을 보여준다.
+//   두 개를 동시에 띄우지 않는다(대시보드 인사줄은 좁고, 지금 할 일은 하나여야 한다).
 async function fillOnboarding(slot) {
     try {
+        const me = await api('/api/ui/me/onboarding').catch(() => null);
+        if (me && me.status && !me.status.complete) {
+            const s = me.status;
+            slot.replaceChildren(el('a', { class: 'dash-ob', href: '#/start', title: '시작하기 — 준비 상황 보기' }, el('span', { text: `시작하기 ${s.done}/${s.total}` }), el('span', { class: 'dash-ob-bar' }, el('span', { class: 'dash-ob-fill', style: 'width:' + (s.pct || 0) + '%' }))));
+            return;
+        }
         const s = await api('/api/ui/org/onboarding');
         if (!s || s.complete)
             return;
