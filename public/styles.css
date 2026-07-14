@@ -689,6 +689,12 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* identities(외부 계정 연결) 에디터 */
 .idn-wrap { display: flex; flex-direction: column; gap: 6px; }
 .idn-row { display: flex; gap: 6px; align-items: center; }
+/* 읽기 전용 신원 행(#837) — 매핑 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만. 여기선 결과만 보여 준다. */
+.idn-row.idn-ro { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.idn-row.idn-ro .mini-title { font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; }
+.idn-row.idn-ro .mini-meta { color: var(--muted-2); }
+/* 커넥터 매핑 표 — 비활성 사용자는 흐리게(목록엔 두되 눈에 덜 띄게). */
+.cu-inactive { opacity: .55; }
 .idn-row .idn-sys { flex: 0 0 130px; }
 .idn-row input { width: 100%; }
 

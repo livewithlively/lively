@@ -24,7 +24,7 @@
 //   external_id = `${channel}:${ts}`(system+instance 내 안정·고유). 스레드 답글 = permalink 의 thread_ts 로 부모 링크.
 
 import { Readable } from "node:stream";
-import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import type { Connector, RawItem, BackfillOpts, ConnectorUser } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { ooxmlKindFromMime, extractOoxml, printableRatio, type OoxmlKind } from "./ooxml.js";
 
@@ -698,6 +698,22 @@ export async function slackFetchArtifact(
 
 export const slackConnector: Connector = {
   name: "slack",
+  // #837 — 사람 매핑 후보. loadUserMap 이 이미 users.list 를 부르므로(작성자 해소용) 그대로 재사용한다.
+  //  봇은 제외 — 사람 매핑 대상이 아니다. 토큰 실패 시 loadUserMap 이 빈 맵을 주므로 목록도 빈다(경고는 로그).
+  async listUsers(): Promise<ConnectorUser[]> {
+    const cfg = await resolveConnectorConfig("slack");
+    const token = cfg.user_token;
+    if (!token) throw new Error("Slack user_token 이 없습니다 — [외부 자료 수집]에서 토큰을 등록하세요");
+    const map = await loadUserMap(token);
+    return [...map.values()]
+      .filter((u) => !u.is_bot)
+      .map((u) => ({
+        id: u.id,
+        name: u.profile?.display_name || u.real_name || u.name || null,
+        email: u.profile?.email ?? null,
+        inactive: !!u.deleted,
+      }));
+  },
   fetchArtifact: slackFetchArtifact,
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
