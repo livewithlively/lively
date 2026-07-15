@@ -306,9 +306,12 @@ async function cmdNode(rest) {
     nodeTok = r.token;
     say(green(`✓ 노드 '${nodeId}' 등록됨`));
   }
-  // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다. TMUX_BIN 은 절대경로(데몬 최소 PATH 안전).
+  // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다.
+  //  PATH: 데몬(launchd/systemd)은 사용자 로그인 셸을 안 거쳐 최소 PATH 다 → tmux 서버가 pane 안 harness(claude 등)를
+  //   못 찾아 세션이 즉사한다(#869). `lively node` 는 사용자 대화형 셸에서 도니 지금 PATH 가 곧 사용자 PATH — 그걸 baked.
+  //   (TMUX_BIN 절대경로는 tmux 자체 해석용, PATH 는 그 tmux 서버가 띄우는 pane 의 명령 해석용 — 둘 다 필요.)
   writeLively("node-agent.env",
-    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\n`, 0o600);
+    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${process.env.PATH || ""}\n`, 0o600);
 
   // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
   say(dim("· 노드 에이전트 내려받는 중…"));

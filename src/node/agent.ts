@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import os from "node:os";
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, SHARED_ROOT, type CreateInput,
+  sessionGone, getSessionLabel, killEmptyTmuxServer, SHARED_ROOT, type CreateInput,
 } from "../terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal-pty.js";
 import type { LivelyUser } from "../context.js";
@@ -205,4 +205,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 }
 
 logger.info({ gw: GW_URL, node: NODE_ID || "(token-derived)" }, "노드 에이전트 시작");
+// 부팅 자가치유(#869) — 과거 최소 PATH 로 뜬 stale tmux 서버가 빈 채 남아 있으면 죽인다(세션 0개일 때만 = 무손실).
+//  이래야 첫 new-session 이 이 데몬의 PATH(env 파일에 baked 된 사용자 로그인 PATH)로 새 서버를 띄워 pane 이 claude 등을 찾는다.
+await killEmptyTmuxServer();
 connect();
