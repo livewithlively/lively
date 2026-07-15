@@ -4049,6 +4049,20 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-step-body > :first-child { margin-top: 0; }
 .md-step-body > :last-child { margin-bottom: 0; }
 .md-step-title { font-size: 15px; font-weight: 800; color: var(--ink); margin-bottom: 4px; }
+/* 라벨-설명 나열(#879 :::fields) — 번호 없는 필드 참조. 행 구분선 + 파란 ❯ 라벨(박스 아님). */
+.md-fields { display: flex; flex-direction: column; margin: 12px 0; }
+.md-field { padding: 13px 0; border-top: 1px solid var(--line-row); }
+.md-field:first-child { border-top: none; padding-top: 2px; }
+.md-field-name { font-size: 14.5px; font-weight: 800; color: var(--ink); margin-bottom: 4px; }
+.md-field-name::before { content: '❯'; color: var(--blue); font-weight: 800; margin-right: 8px; }
+.md-field-body { color: var(--ink-sub); }
+.md-field-body > :first-child { margin-top: 0; }
+.md-field-body > :last-child { margin-bottom: 0; }
+/* 가로 흐름 다이어그램(#879 :::flow) — 칩 + → 화살표(순서 있는 짧은 시퀀스). */
+.md-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.md-flow-item { display: inline-flex; align-items: center; padding: 6px 12px; background: var(--bg-note);
+  border: 1px solid var(--line); border-radius: 9px; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.md-flow-arrow { color: var(--muted-2); font-weight: 800; font-size: 14px; }
 
 /* 컬럼 레이아웃 — flex(비율은 인라인 flex 값), 좁은 화면은 세로 강등. */
 .md-columns { display: flex; gap: 22px; margin: 8px 0; align-items: flex-start; }

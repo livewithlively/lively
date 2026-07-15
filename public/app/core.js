@@ -402,6 +402,29 @@ function renderContainer(type, rest, bodyLines) {
             item.append(moveChildren(inner(), body));
             return item;
         }
+        case 'fields': {
+            // 라벨-설명 나열(#879) — 번호 없는 단계(폼 필드 등). :::step 과 같은 행 구분선 시각언어.
+            return moveChildren(inner(), el('div', { class: 'md-fields' }));
+        }
+        case 'field': {
+            const item = el('div', { class: 'md-field' });
+            if (summary)
+                item.append(el('div', { class: 'md-field-name' }, ...renderInline(summary)));
+            const body = el('div', { class: 'md-field-body' });
+            item.append(moveChildren(inner(), body));
+            return item;
+        }
+        case 'flow': {
+            // 가로 흐름 다이어그램(#879) — 한 줄당 한 칩, 사이에 → 화살표. 본문 줄을 그대로 칩으로.
+            const box = el('div', { class: 'md-flow' });
+            const items = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::');
+            items.forEach((it, idx) => {
+                if (idx)
+                    box.append(el('span', { class: 'md-flow-arrow', 'aria-hidden': 'true', text: '→' }));
+                box.append(el('span', { class: 'md-flow-item' }, ...renderInline(it)));
+            });
+            return box;
+        }
         case 'synced': {
             const box = el('div', { class: 'md-synced' });
             box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));
