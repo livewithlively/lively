@@ -520,7 +520,7 @@ export async function openSessPrompts(s) {
             if (!terms.length) { // 검색 없음 → 최신순 전체
                 cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
                 prompts.slice().reverse().forEach((p) => {
-                    list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { text: qWhen(p.ts) })), qHighlight(p.text, null)));
+                    list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), qHighlight(p.text, null)));
                 });
                 return;
             }
@@ -541,7 +541,7 @@ export async function openSessPrompts(s) {
                 return;
             }
             pool.forEach(({ p, chrono }) => {
-                list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { text: qWhen(p.ts) })), qHighlight(p.text, terms)));
+                list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), qHighlight(p.text, terms)));
             });
         };
         search.addEventListener('input', draw);
