@@ -929,9 +929,9 @@ export const deliveryCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getHarnessSnapshots, getHarnessLocalPref } = await import("../org/store.js");
-      const [assets, hooks, prefs, snaps, localPref] = await Promise.all([
-        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId),
+      const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias } = await import("../org/store.js");
+      const [assets, hooks, prefs, snaps, localPref, aliases] = await Promise.all([
+        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId),
       ]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
@@ -952,7 +952,7 @@ export const deliveryCapabilities: Capability[] = [
             overlap: livelyIds.has(a.id) ? (a.managed ? "managed" : "shadow") : "local-only",
             disabled: !!disabled[`${a.kind}:${a.id}`], // 이 머신에서 끄기로 지시됨(다음 세션 .disabled rename)
           }));
-          return { machine_id: machineId, host: snap.host ?? null, harness: snap.harness ?? null, at: snap.at ?? null, assets: list };
+          return { machine_id: machineId, host: snap.host ?? null, alias: aliases[machineId] ?? null, harness: snap.harness ?? null, at: snap.at ?? null, assets: list };
         })
         .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")); // 최근 관측 머신 먼저
       return { lively, machines };
@@ -1025,6 +1025,22 @@ export const deliveryCapabilities: Capability[] = [
       const { removeHarnessMachine } = await import("../org/store.js");
       await removeHarnessMachine(userId, machineId);
       return { ok: true };
+    }),
+
+  restRead("me_harness_machine_alias", "내 컴퓨터에 별명 지정",
+    "이 멤버의 특정 머신(machine_id)에 사용자 지정 별명을 붙이거나(alias 비우면 해제) 한다 — 웹 '내 스킬·훅'에서 PC 를 알아보기 쉽게. 관측(host)과 별개이고 세션 report 가 덮지 않는다. machine_id 필수, alias 40자 이내.",
+    [{ method: "POST", paths: ["/api/ui/me/harness/machine-alias"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      // 정적 토큰 허용 — 본인 머신 별명(자기 메타)이지 fleet 정책이 아니다(me_harness_local_pref 과 동급).
+      const machineId = str(input.machine_id, "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const alias = (input.alias == null ? "" : str(input.alias, "alias", 40)).trim();
+      if (alias) assertNoHardSecrets(alias, "alias");
+      const { setHarnessMachineAlias } = await import("../org/store.js");
+      await setHarnessMachineAlias(userId, machineId, alias);
+      return { ok: true, machine_id: machineId, alias: alias || null };
     }),
 
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
