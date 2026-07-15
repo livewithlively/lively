@@ -251,6 +251,40 @@ function resolveTmux() {
   return null;
 }
 
+// tmux 확보 — 있으면 절대경로, 없으면 **패키지 매니저로 자동 설치**(안내 말고 자동 — 사용자 요청). 그래도 없으면 die.
+function ensureTmux() {
+  const found = process.env.TMUX_BIN || resolveTmux();
+  if (found) return found;
+  say(dim("· tmux 가 없어 자동 설치를 시도합니다(웹터미널·위탁 세션 실행에 필요)…"));
+  if (autoInstallTmux()) {
+    const t = resolveTmux();
+    if (t) { say(green(`✓ tmux 설치됨 — ${t}`)); return t; }
+  }
+  die(tmuxHelp(), 2);
+}
+// 플랫폼 패키지 매니저로 tmux 설치. 성공=true. macOS 는 brew, Linux 는 apt/dnf/yum/pacman/apk/zypper(비-root 면 sudo).
+function autoInstallTmux() {
+  const run = (argv) => { say(dim(`  $ ${argv.join(" ")}`)); try { return spawnSync(argv[0], argv.slice(1), { stdio: "inherit" }).status === 0; } catch { return false; } };
+  if (process.platform === "darwin") return has("brew") ? run(["brew", "install", "tmux"]) : false;
+  if (process.platform === "linux") {
+    const root = typeof process.getuid === "function" && process.getuid() === 0;
+    const sudo = root ? [] : (has("sudo") ? ["sudo"] : []);
+    const spec = { "apt-get": ["install", "-y", "tmux"], dnf: ["install", "-y", "tmux"], yum: ["install", "-y", "tmux"], pacman: ["-S", "--noconfirm", "tmux"], apk: ["add", "tmux"], zypper: ["install", "-y", "tmux"] };
+    const pm = Object.keys(spec).find(has);
+    if (!pm) return false;
+    return run([...sudo, pm, ...spec[pm]]);
+  }
+  return false;
+}
+function tmuxHelp() {
+  if (process.platform === "darwin")
+    return "tmux 가 필요한데 Homebrew 가 없어 자동 설치를 못 했습니다. Homebrew 설치 후 `lively node` 를 다시 실행하면 tmux 를 자동 설치합니다:\n" +
+      '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+  if (process.platform === "linux")
+    return "tmux 자동 설치 실패(패키지 매니저·권한 확인). 수동: sudo apt install -y tmux (또는 dnf/pacman/apk/zypper).";
+  return "tmux 가 필요합니다 — 설치 후 다시 실행하세요.";
+}
+
 async function cmdNode(rest) {
   const sub = rest[0];
   if (sub === "stop") return nodeStop();
@@ -258,11 +292,9 @@ async function cmdNode(rest) {
   const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
   const gw = gateway(), tok = token();
   if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
-  // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 먼저 막아 반쪽 상태(등록됐지만 세션 불가)를
-  //  남기지 않는다. 이미 설정된 TMUX_BIN(격리 소켓 shim 등)은 존중, 없으면 상속 PATH 에서 해석. 절대경로라 데몬(최소 PATH)도 안전.
-  const tmuxPath = process.env.TMUX_BIN || resolveTmux();
-  if (!tmuxPath) die("tmux 가 필요합니다 — 웹터미널·위탁 세션이 tmux 로 실행됩니다. 설치 후 다시 실행하세요:\n" +
-    "  · macOS:        brew install tmux\n  · Debian/Ubuntu: sudo apt install -y tmux\n  · Fedora/RHEL:   sudo dnf install -y tmux", 2);
+  // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 확보한다(반쪽 상태 방지):
+  //  있으면 그 절대경로, 없으면 패키지 매니저로 자동 설치 → 그래도 없으면 안내 후 종료. 절대경로라 데몬(최소 PATH)도 안전.
+  const tmuxPath = ensureTmux();
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
   let nodeTok = readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_TOKEN");
