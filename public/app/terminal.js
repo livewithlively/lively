@@ -660,7 +660,20 @@ function openTermCreateForm(cfg, view, onCreated) {
     const harnesses = cfg.harnesses || [];
     const prefs = termCreatePrefs();
     const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
-    const rootSel = el('select', { class: 'term-input' }, ...roots.map((r) => el('option', { value: r.key }, r.label)));
+    // #853 작업 위치 = 공유/개인 2택 → 드롭다운 대신 세그먼트 토글(둘 중 하나를 명확히 고르게). 아래 '폴더'는 이 안의 하위 폴더.
+    let rootKey = (roots[0] && roots[0].key) || 'personal';
+    const rootBtns = {};
+    const rootDesc = { shared: '팀과 함께 쓰는 폴더', personal: '나만 쓰는 폴더' };
+    const rootSeg = el('div', { class: 'term-seg' }, ...roots.map((r) => {
+        const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-lbl', text: r.label }), rootDesc[r.key] ? el('span', { class: 'term-seg-sub', text: rootDesc[r.key] }) : null);
+        b.onclick = () => { if (rootKey === r.key)
+            return; rootKey = r.key; for (const k in rootBtns)
+            rootBtns[k].classList.toggle('active', k === rootKey); pickerPath = ''; paintPicker(); }; // #869 노드 모드면 원격경로 유지(paintPicker), 폴더 모드면 loadPicker
+        rootBtns[r.key] = b;
+        return b;
+    }));
+    if (rootBtns[rootKey])
+        rootBtns[rootKey].classList.add('active');
     const pickerBox = el('div', { class: 'term-picker' });
     let pickerPath = '';
     // 실행 위치(#869) — 기본 중앙 컴퓨터. 등록된 내 노드(멤버 PC 등)가 있으면 골라서 그 노드에 세션을 만든다.
@@ -745,14 +758,14 @@ function openTermCreateForm(cfg, view, onCreated) {
         pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
         let data;
         try {
-            data = await api('/api/ui/terminal/browse?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(pickerPath));
+            data = await api('/api/ui/terminal/browse?root=' + encodeURIComponent(rootKey) + '&path=' + encodeURIComponent(pickerPath));
         }
         catch (e) {
             pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더를 불러오지 못했습니다: ' + e.message }));
             return;
         }
         pickerPath = data.path || '';
-        const rootLabel = (roots.find((r) => r.key === rootSel.value) || {}).label || rootSel.value;
+        const rootLabel = (roots.find((r) => r.key === rootKey) || {}).label || rootKey;
         const crumb = el('div', { class: 'term-crumb' }, el('a', { class: 'crumb', text: rootLabel, onclick: () => { pickerPath = ''; loadPicker(); } }));
         let acc = '';
         for (const seg of (pickerPath ? pickerPath.split('/') : [])) {
@@ -778,7 +791,9 @@ function openTermCreateForm(cfg, view, onCreated) {
                     loadPicker();
                 }
             } }, el('option', { value: '' }, data.dirs.length ? '하위 폴더로 이동…' : '(하위 폴더 없음)'), (pickerPath ? el('option', { value: '__up__' }, '⬆ 상위 폴더로') : null), ...data.dirs.map((d) => el('option', { value: d }, '📁 ' + d)), el('option', { value: '__new__' }, '＋ 새 폴더 만들기…'));
-        pickerBox.replaceChildren(crumb, sel, el('div', { class: 'caption', text: '여기서 시작: /' + pickerPath }));
+        // #853 '여기서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작된다는 걸 직관적으로.
+        const runHere = el('div', { class: 'term-runhere' }, el('span', { class: 'term-runhere-ic', text: '▶' }), el('span', { class: 'term-runhere-txt' }, document.createTextNode('이 폴더에서 AI 실행 · '), el('b', { text: rootLabel }), document.createTextNode(pickerPath ? ' / ' + pickerPath : '')));
+        pickerBox.replaceChildren(crumb, sel, runHere);
     }
     async function newPickerFolder() {
         const name = prompt('새 폴더 이름');
@@ -786,7 +801,7 @@ function openTermCreateForm(cfg, view, onCreated) {
             return;
         const rel = (pickerPath ? pickerPath + '/' : '') + name.trim();
         try {
-            await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootSel.value) + '&path=' + encodeURIComponent(rel), { method: 'POST' });
+            await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootKey) + '&path=' + encodeURIComponent(rel), { method: 'POST' });
             pickerPath = rel;
             loadPicker();
         }
@@ -794,19 +809,20 @@ function openTermCreateForm(cfg, view, onCreated) {
             toast('폴더 생성 실패 — ' + e.message, true);
         }
     }
-    rootSel.addEventListener('change', () => { pickerPath = ''; paintPicker(); });
     loadPicker();
     // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
     //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → folder → options → preset → invite → create.
-    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), (nodes.length ? field('실행 위치', nodeSel) : null), el('div', { 'data-tour': 'folder' }, field('작업 위치', rootSel), field('폴더', pickerBox)), el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), (nodes.length ? field('실행 위치', nodeSel) : null), // #869 중앙 컴퓨터/등록 노드
+    // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
+    el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
             const flags = {};
             for (const c of flagsBox.querySelectorAll('[data-flag]'))
                 flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
-            const nodeId = nodeSel.value || '';
-            const payload = { label: labelI.value, rootKey: rootSel.value, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked, node: nodeId || undefined };
+            const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
+            const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked, node: nodeId || undefined };
             try {
                 const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
                 saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
