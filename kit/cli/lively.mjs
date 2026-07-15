@@ -229,17 +229,32 @@ async function streamAndExit(id, jsonMode) {
   process.exit(ok ? 0 : 1);
 }
 // ── 노드(#869) — 이 PC 를 라이블리 노드로 연결(로컬 터미널 원격 관리 + 위탁 워커). ──
-//  데몬 설치 없이 CLI 한 줄(foreground): 노드 등록(토큰) → 에이전트 번들 내려받기 → 실행. Ctrl-C 로 끊으면 노드 사라짐.
+//  `lively node`         : foreground(데몬 없이 이 세션 동안만, Ctrl-C 종료)
+//  `lively node --daemon`: 상시화(macOS LaunchAgent · Linux systemd --user · WSL2 nohup) — 부팅·로그인마다 자동 기동
+//  `lively node stop`    : 데몬 해제(등록·번들은 남김)
 //  번들 = agent.mjs(단일) + node-pty(네이티브). ~/.lively/node-agent/ 에 풀어 그 Node 로 실행.
+const NODE_AGENT_DIR = join(LIVELY, "node-agent");
+const NODE_ENV_FILE = join(LIVELY, "node-agent.env");
+const NODE_LOG = join(LIVELY, "logs", "node-agent.log");
+const LAUNCHD_LABEL = "io.lvly.node-agent";
+const PLIST_PATH = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+const SYSTEMD_UNIT = join(HOME, ".config", "systemd", "user", "lively-node-agent.service");
+
+function whichTmux() {
+  try { return execFileSync("bash", ["-lc", "command -v tmux"], { encoding: "utf8" }).trim() || null; }
+  catch { return null; }
+}
+
 async function cmdNode(rest) {
+  const sub = rest[0];
+  if (sub === "stop") return nodeStop();
+  const daemon = rest.includes("--daemon");
   const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
   const gw = gateway(), tok = token();
   if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
-  const agentDir = join(LIVELY, "node-agent");
-  const envFile = join(LIVELY, "node-agent.env");
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
-  let nodeTok = readEnvFile(envFile, "LIVELY_NODE_TOKEN");
+  let nodeTok = readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_TOKEN");
   if (!nodeTok) {
     say(dim(`· 노드 등록: ${nodeId}`));
     let r = await api("/api/ui/nodes", { method: "POST", body: { id: nodeId, name: hostname() } }).catch((e) => ({ __err: e }));
@@ -247,30 +262,111 @@ async function cmdNode(rest) {
       r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} }).catch((e2) => die(`노드 등록/회전 실패 — ${e2.message}`, 1));
     }
     nodeTok = r.token;
-    writeLively("node-agent.env", `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\n`, 0o600);
     say(green(`✓ 노드 '${nodeId}' 등록됨`));
   }
+  // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다. TMUX_BIN 포함(Linux/WSL2 필수).
+  //  이미 설정된 TMUX_BIN(예: 격리 소켓 shim)은 존중하고, 없을 때만 탐지 — 호출자 지정을 덮어쓰지 않는다.
+  const tmuxPath = process.env.TMUX_BIN || whichTmux();
+  writeLively("node-agent.env",
+    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\n${tmuxPath ? `TMUX_BIN=${tmuxPath}\n` : ""}`, 0o600);
 
   // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
   say(dim("· 노드 에이전트 내려받는 중…"));
-  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(NODE_AGENT_DIR, { recursive: true });
   const res = await fetch(gw + "/api/ui/node-agent", { headers: { authorization: `Bearer ${tok}` } });
   if (!res.ok) die(`에이전트 번들 다운로드 실패 HTTP ${res.status}`, 1);
-  const tgz = join(agentDir, "bundle.tgz");
+  const tgz = join(NODE_AGENT_DIR, "bundle.tgz");
   writeFileSync(tgz, Buffer.from(await res.arrayBuffer()));
-  try { execFileSync("tar", ["-xzf", tgz, "-C", agentDir], { stdio: "ignore" }); }
+  try { execFileSync("tar", ["-xzf", tgz, "-C", NODE_AGENT_DIR], { stdio: "ignore" }); }
   catch (e) { die(`번들 해제 실패 — ${e.message}`, 1); }
   rmSync(tgz, { force: true });
-  const agentJs = join(agentDir, "agent.mjs");
+  const agentJs = join(NODE_AGENT_DIR, "agent.mjs");
   if (!existsSync(agentJs)) die("번들에 agent.mjs 가 없습니다.", 1);
 
-  // 3) 실행(foreground, stdio 상속) — 데몬 없이 이 세션 동안만 노드. Ctrl-C 로 종료 시 노드 연결 해제.
+  // 3) 실행 — 데몬(상시화) 또는 foreground.
+  if (daemon) return nodeInstallDaemon(agentJs, nodeId);
   say(green(`✓ 노드 '${nodeId}' 연결 — 웹 터미널 탭의 '실행 위치'에서 이 노드를 고르세요. (Ctrl-C 로 종료)`));
   const child = spawn(process.execPath, [agentJs], {
     stdio: "inherit",
-    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId },
+    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId, ...(tmuxPath ? { TMUX_BIN: tmuxPath } : {}) },
   });
   child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
+}
+
+// 상시화 — install.sh 의 데몬 등록을 번들 기반으로 포팅(node ~/.lively/node-agent/agent.mjs).
+function nodeInstallDaemon(agentJs, nodeId) {
+  mkdirSync(join(LIVELY, "logs"), { recursive: true });
+  const nodeBin = process.execPath;
+  const runCmd = `set -a; . '${NODE_ENV_FILE}'; exec '${nodeBin}' '${agentJs}'`;
+  if (process.platform === "darwin") {
+    mkdirSync(join(HOME, "Library", "LaunchAgents"), { recursive: true });
+    const uid = process.getuid();
+    spawnSync("launchctl", ["bootout", `gui/${uid}`, PLIST_PATH], { stdio: "ignore" });
+    writeFileSync(PLIST_PATH, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>-lc</string><string>${runCmd.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${NODE_LOG}</string>
+  <key>StandardErrorPath</key><string>${NODE_LOG}</string>
+</dict></plist>\n`);
+    const r = spawnSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_PATH], { stdio: "inherit" });
+    if (r.status !== 0) die("LaunchAgent 등록 실패 — launchctl bootstrap", 1);
+    say(green(`✅ 노드 '${nodeId}' 상시화(LaunchAgent) — 부팅·로그인마다 자동 연결`));
+    say(dim(`   중지: lively node stop   ·   로그: tail -f ${NODE_LOG}`));
+    return;
+  }
+  if (process.platform === "linux") {
+    if (!existsSync("/run/systemd/system")) { // WSL2 등 systemd 미활성 → nohup
+      spawnSync("pkill", ["-f", "node-agent/agent.mjs"], { stdio: "ignore" });
+      spawn("bash", ["-lc", `nohup bash -lc "${runCmd}" >> '${NODE_LOG}' 2>&1 &`], { detached: true, stdio: "ignore" }).unref();
+      say(green(`✅ 노드 '${nodeId}' 기동(systemd 미활성 → nohup)`));
+      say(dim("   상시화: /etc/wsl.conf 에 [boot] systemd=true 추가 후 'wsl --shutdown' → 재실행"));
+      return;
+    }
+    mkdirSync(join(HOME, ".config", "systemd", "user"), { recursive: true });
+    writeFileSync(SYSTEMD_UNIT, `[Unit]
+Description=Lively node agent (#869)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=${NODE_ENV_FILE}
+ExecStart=${nodeBin} ${agentJs}
+Restart=always
+RestartSec=3
+StandardOutput=append:${NODE_LOG}
+StandardError=append:${NODE_LOG}
+
+[Install]
+WantedBy=default.target\n`);
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+    const r = spawnSync("systemctl", ["--user", "enable", "--now", "lively-node-agent.service"], { stdio: "inherit" });
+    if (r.status !== 0) die("systemd 등록 실패 — systemctl --user enable --now", 1);
+    say(green(`✅ 노드 '${nodeId}' 상시화(systemd --user)`));
+    say(dim("   부팅 유지: loginctl enable-linger $USER   ·   중지: lively node stop"));
+    return;
+  }
+  die(`미지원 OS: ${process.platform} — Windows 는 WSL2 안에서 실행하세요.`, 1);
+}
+
+function nodeStop() {
+  if (process.platform === "darwin") {
+    spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, PLIST_PATH], { stdio: "ignore" });
+    rmSync(PLIST_PATH, { force: true });
+    say(green("✅ 노드 데몬 해제(LaunchAgent)"));
+  } else if (process.platform === "linux") {
+    spawnSync("systemctl", ["--user", "disable", "--now", "lively-node-agent.service"], { stdio: "ignore" });
+    rmSync(SYSTEMD_UNIT, { force: true });
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+    spawnSync("pkill", ["-f", "node-agent/agent.mjs"], { stdio: "ignore" });
+    say(green("✅ 노드 데몬 해제(systemd)"));
+  } else { die(`미지원 OS: ${process.platform}`, 1); }
+  say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));
 }
 // 호스트명 → 노드 id 슬러그(소문자·숫자·하이픈).
 function slugHost() {
@@ -714,7 +810,8 @@ ${bold("작업")}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
   delegate status|logs|cancel <번호> · delegate list
-  node                   이 PC 를 노드로 연결 — 웹에서 로컬 터미널 관리/위탁 ${dim("(데몬 없이, Ctrl-C 로 종료)")}
+  node                   이 PC 를 노드로 연결 — 웹에서 로컬 터미널 관리/위탁 ${dim("(foreground, Ctrl-C 로 종료)")}
+      --daemon               상시화(부팅·로그인마다 자동) ${dim("macOS launchd · Linux systemd --user")}   ·   node stop  데몬 해제
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
