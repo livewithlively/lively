@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import os from "node:os";
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, type CreateInput, type SessionInfo,
+  sessionGone, getSessionLabel, SHARED_ROOT, type CreateInput,
 } from "../terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal-pty.js";
 import type { LivelyUser } from "../context.js";
@@ -16,6 +16,8 @@ import {
   NODE_WS_PATH, PROTO_VER, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
+// 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
+import { sampleResources, detectDocker, spawnTaskSession, checkTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { logger } from "../log.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
@@ -75,11 +77,26 @@ class ChanSocket implements AttachSocket {
   }
 }
 
+// 위탁 태스크 감시 목록(P2) — 상태 push 주기에 exit 파일을 확인해 taskdone 을 보고한다.
+//  에이전트 재시작 시 비워지지만, 게이트웨이가 재연결 때 watchTask 로 재장전한다(복구 경로).
+const trackedTasks = new Map<number, TaskWatch>();
+
 // ── ops 디스패치 — 게이트웨이가 이미 정책(소유·초대 검증)을 끝냈다는 전제의 기계적 실행. ──
 //  user 는 게이트웨이가 넘긴 신원 그대로 tmux 메타(@box_owner)·소유자 확인(assertManage)에 쓰인다.
 async function runOp(op: string, args: Record<string, unknown>): Promise<unknown> {
   const user = (args.user ?? {}) as LivelyUser;
   switch (op) {
+    case "runTask": {
+      const input = args as unknown as RunTaskInput;
+      const r = await spawnTaskSession(input);
+      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir });
+      return r;
+    }
+    case "watchTask": {
+      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir) };
+      if (w.taskId && w.taskDir) trackedTasks.set(w.taskId, w);
+      return { ok: true };
+    }
     case "list": return listSessionsRaw();
     case "create": {
       const session = await createSession(user, args.input as CreateInput);
@@ -110,21 +127,36 @@ function connect(): void {
   let lastPushed = "";
 
   const pushState = async (force = false): Promise<void> => {
+    if (ws.readyState !== WebSocket.OPEN) return;
     try {
-      const sessions: SessionInfo[] = await listSessionsRaw();
-      const body = JSON.stringify({ t: "state", sessions } satisfies NodeToGwMsg);
-      if (!force && body === lastPushed) return; // 무변화면 생략(대역 절약) — 게이트웨이 stale 판정은 RPC 재조회가 커버
-      lastPushed = body;
-      ws.send(body);
-    } catch { /* 게이트웨이 끊김/tmux 오류 — 다음 주기 */ }
+      // 리소스 상시 노출(§10) + 세션 스냅샷. res 는 매 push 변하므로 dedup 은 세션 부분만 본다.
+      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(SHARED_ROOT.base)]);
+      const sesKey = JSON.stringify(sessions);
+      const skip = !force && sesKey === lastPushed && trackedTasks.size === 0;
+      lastPushed = sesKey;
+      if (!skip) ws.send(JSON.stringify({ t: "state", sessions, res } satisfies NodeToGwMsg));
+      // 위탁 태스크 완료 감지(P2) — exit 파일 등장 시 1회 보고 후 감시 해제(세션 정리는 게이트웨이 지시).
+      for (const w of [...trackedTasks.values()]) {
+        const out = await checkTask(w).catch(() => null);
+        if (!out) continue;
+        trackedTasks.delete(w.taskId);
+        ws.send(JSON.stringify({ t: "taskdone", taskId: out.taskId, ok: out.ok, exit: out.exit, summary: out.summary, error: out.error } satisfies NodeToGwMsg));
+      }
+    } catch (err) {
+      // 다음 주기에 재시도 — 조용히 삼키면 배치 불가 원인을 못 찾는다(e2e 교훈: freemem 과소보고 진단 지연).
+      logger.warn({ err: (err as Error)?.message }, "상태 push 실패(비치명)");
+    }
   };
 
   ws.on("open", () => {
     attempt = 0;
     logger.info({ url }, "게이트웨이 연결됨");
-    ws.send(JSON.stringify({ t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname() } satisfies NodeToGwMsg));
-    void pushState(true);
-    pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);
+    void (async () => {
+      const hasDocker = await detectDocker();
+      ws.send(JSON.stringify({ t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname(), hasDocker } satisfies NodeToGwMsg));
+      await pushState(true);
+      pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);
+    })();
   });
 
   ws.on("message", (raw, isBinary) => {

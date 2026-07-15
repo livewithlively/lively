@@ -791,6 +791,40 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
 
+  // ── org_task — 위탁 태스크(P2 #869). 의뢰자가 delegate_run 으로 넣고, 태스크 스케줄러가 리소스-적합 노드에 ──
+  //  배치(§10: 예상 소모량 vs 노드 상시 리소스 push). 노드 사망 시 grace 후 재큐(attempt<max) 또는 실패+알림.
+  //  결과 전문은 워크스페이스 .lively-task/<id>/ 에, 여기엔 요약(result jsonb)만.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_task(
+      id BIGSERIAL PRIMARY KEY,
+      requester TEXT NOT NULL,
+      requester_session TEXT,
+      prompt TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      subpath TEXT NOT NULL DEFAULT '',
+      flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+      need_cpu REAL,
+      need_ram_mb INT,
+      need_disk_mb INT,
+      needs_docker BOOLEAN NOT NULL DEFAULT false,
+      node_pref TEXT,
+      env_lease BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed','canceled')),
+      node_id TEXT,
+      session_id TEXT,
+      task_dir TEXT,
+      attempt INT NOT NULL DEFAULT 0,
+      max_attempts INT NOT NULL DEFAULT 2,
+      timeout_sec INT NOT NULL DEFAULT 3600,
+      node_lost_at TIMESTAMPTZ,
+      result JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest-policy.ts).
   //  적용 경로: mirror(observed·신규만) + knowledge_save(에이전트 MCP·사람 웹·distill — 신규/수정 양축).
