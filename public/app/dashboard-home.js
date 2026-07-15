@@ -1280,14 +1280,15 @@ async function fillSessions(zone, onCount, projectsP) {
     };
     const bar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
     const renderBar = () => {
-        // #758 선택 모드일 때 항상 표시(0개여도) — 안내 + 삭제 + 완료(모드 종료). 진입은 ⚙ '세션 선택'.
-        bar.hidden = !selectMode;
-        if (!selectMode)
-            return;
+        // #853 하단 일괄 바 = 선택이 하나라도 있거나(호버 체크로 바로 진입) ⚙ 선택모드일 때 표시.
+        //  체크를 다 풀면(선택 0 & 비selectMode) 자동으로 숨는다.
         const n = selected.size;
+        bar.hidden = !selectMode && n === 0;
+        if (bar.hidden)
+            return;
         const delBtn = el('button', { class: 'dash-bulkbar-btn danger dash-bulkbar-push', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: killSelected });
         delBtn.disabled = n === 0;
-        bar.replaceChildren(el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }), delBtn, el('button', { class: 'dash-bulkbar-btn', type: 'button', title: '선택 모드 종료', text: '완료', onclick: () => setSelectMode(false) }));
+        bar.replaceChildren(el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }), delBtn, el('button', { class: 'dash-bulkbar-btn', type: 'button', title: selectMode ? '선택 모드 종료' : '선택 해제', text: '완료', onclick: () => setSelectMode(false) })); // setSelectMode(false)=선택 해제+재렌더
     };
     const draw = () => {
         // 정렬(#req ⚙에서 선택): active(기본)=마지막 작업 최신순(가장 최근에 작업한 세션이 위) / recent=생성 최신순 / name=제목(작업요약)순.
@@ -1325,13 +1326,17 @@ async function fillSessions(zone, onCount, projectsP) {
         }
         const list = el('div', { class: 'dash-sess-list' + (selectMode ? ' selectmode' : '') }); // #758 선택모드=체크박스 노출 (자세히/간략히 차이는 카드 구조로 분기 — 아래 density)
         for (const s of shown) {
-            // #853 재배치 — 읽는 순서를 고정한다: [상태 · 제목] → [부제·뱃지] → 우측 고정열 [마지막 작업 시각] → [열기 ⋮].
-            //  시각이 뱃지 줄 끝에 섞여 있으면(구버전) 프로젝트명 길이에 따라 위치가 춤춘다 → 세로로 스캔이 안 된다.
+            // #853 카드 레이아웃 전면 재설계 — 내용·위계는 유지, 배치만.
+            //  자세히: 3행. [행1: ●상태 · 제목 ↔ 열기 ⋮] / [행2: 터미널 제목] / [행3: 프로젝트·리스트 칩 ↔ 마지막 작업·시각]
+            //   → 액션은 우상단, 시각은 우하단에 앵커(구버전의 '붕 뜬 중앙 시각열' 폐기). 우측이 세로로 정렬돼 스캔이 쉽다.
+            //  간략히: 1행. [●상태 · 제목 ↔ 칩 · 시각 · 열기 ⋮]
+            //  체크박스: 카드 좌측 absolute 오버레이(레이아웃 시프트 0) — 호버/선택 시에만 보인다.
             const stt = dashSessState(s); // { key, label }
             const pid = Number(s.projectId) || 0;
             const mineProj = !!(pid && projName.has(pid));
-            const statusEl = stt.label ? el('span', { class: 'dash-scard-status is-' + stt.key }, el('span', { class: 'dash-scard-dot' }), el('span', { text: stt.label })) : null;
-            // 뱃지 줄 — 프로젝트(눌러서 이동) · 리스트(영역) · 초대.
+            const compact = density === 'compact';
+            const statusEl = stt.label ? el('span', { class: 'dash-scard-status is-' + stt.key }, el('span', { class: 'dash-scard-dot' }), el('span', { class: 'dash-scard-status-t', text: stt.label })) : null;
+            // 뱃지 — 프로젝트(눌러서 이동) · 리스트(영역) · 초대.
             const chips = el('div', { class: 'dash-scard-chips' });
             if (pid) { // #853 팝업이 아니라 프로젝트 페이지로 아예 이동.
                 const pname = projName.get(pid) || ('#' + pid);
@@ -1340,35 +1345,41 @@ async function fillSessions(zone, onCount, projectsP) {
                 go.onclick = (ev) => { ev.stopPropagation(); location.hash = '#/projects2/p/' + pid; };
                 chips.append(go);
                 const lname = projList(pid); // #853 프로젝트와 같은 형식의 '리스트:' 뱃지(자세히 보기에서만).
-                if (lname && density !== 'compact')
+                if (lname && !compact)
                     chips.append(el('span', { class: 'dash-scard-list', title: '리스트(영역): ' + lname, text: '리스트: ' + lname }));
             }
             if (!s.owned)
                 chips.append(el('span', { class: 'dash-scard-tag', title: '소유: ' + memberName(s.owner), text: memberName(s.owner) + ' · 초대받음' }));
             else if ((s.invites || []).length)
                 chips.append(el('span', { class: 'dash-scard-tag', text: '초대 ' + s.invites.length }));
-            // 우측 고정 시각열 — '마지막 작업'(클로드가 마지막으로 턴을 돌린/끝낸 때). 내가 열어본 시각과 무관(#853).
+            // 마지막 작업 시각 — 클로드가 마지막으로 턴을 돌린/끝낸 때. 내가 열어본 시각과 무관(#853).
+            //  자세히=라벨+시각 2줄(우하단), 간략히=시각만 한 줄.
             const worked = Number(s.lastActive) || 0;
-            const when = el('div', { class: 'dash-scard-when' + (worked ? '' : ' none'), title: worked ? '마지막 작업 — 클로드가 마지막으로 작업한 시각' : '아직 작업 기록이 없어요 (만든 시각)' }, density === 'compact' ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }), el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
+            const when = el('div', { class: 'dash-scard-when' + (worked ? '' : ' none'), title: worked ? '마지막 작업 — 클로드가 마지막으로 작업한 시각' : '아직 작업 기록이 없어요 (만든 시각)' }, compact ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }), el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
             const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
-            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
+            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank'); // #869 원격 노드면 node 파라미터
             const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·삭제)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
             moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
             const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
-            // 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명.
-            //   자세히: [상태 · 작업제목] / [터미널 제목: 세션명] / [뱃지]
-            //   간략히: [상태 · 작업제목 · 뱃지] 한 줄
+            // 제목 = 하고 있는 작업(s.title). 없으면 세션명.
             const nameStr = s.label || '(이름 없음)';
             const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
             const headline = worksum || nameStr;
             const nameEl = el('span', { class: 'dash-scard-name', title: headline, text: headline });
-            const main = density === 'compact'
-                ? el('div', { class: 'dash-scard-main compact' }, statusEl, nameEl, chips)
-                : el('div', { class: 'dash-scard-main' }, el('div', { class: 'dash-scard-head' }, statusEl, nameEl), worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null, chips.childElementCount ? chips : null);
-            const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
+            const box = el('div', { class: 'dash-scard is-' + stt.key + (compact ? ' compact' : '') + (selected.has(s.id) ? ' sel' : '') });
+            let main;
+            if (compact) {
+                // 간략히 — 한 줄: [상태 · 제목(신축)] [칩] [시각] [액션]
+                main = el('div', { class: 'dash-scard-body' }, el('div', { class: 'dash-scard-line' }, statusEl, nameEl, chips.childElementCount ? chips : null, when, acts));
+            }
+            else {
+                // 자세히 — 3행. 행1·행3 은 좌우 양끝 정렬(우측에 액션/시각 앵커).
+                main = el('div', { class: 'dash-scard-body' }, el('div', { class: 'dash-scard-r1' }, el('div', { class: 'dash-scard-head' }, statusEl, nameEl), acts), worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null, el('div', { class: 'dash-scard-r3' }, chips.childElementCount ? chips : el('span'), when));
+            }
             if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
-                // #853 체크박스는 평소 숨김 → 카드 왼쪽에 호버하면 스르르 나타난다(CSS). '선택' 버튼을 먼저 누를 필요 없음.
-                //  체크하는 순간 선택 모드로 자동 진입해 하단 일괄 바가 뜬다(재렌더 없이 클래스만 토글 — 깜빡임 방지).
+                // #853 체크박스는 카드 좌측 absolute 오버레이 — 평소 숨김, 카드 호버 또는 이미 선택됨일 때만 보인다(레이아웃 시프트 0).
+                //  ⚙ '세션 선택' 을 켜면(selectMode) 전부 상시 노출. 체크 자체로는 selectMode 를 켜지 않는다 —
+                //   그래서 체크를 다 풀면(선택 0) 체크박스가 다시 숨는다(#853 버그 수정: 예전엔 자동 selectMode 진입 후 안 꺼져 계속 노출됐다).
                 const cb = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
                 cb.checked = selected.has(s.id);
                 cb.onchange = () => {
@@ -1378,15 +1389,13 @@ async function fillSessions(zone, onCount, projectsP) {
                         selected.delete(s.id);
                     box.classList.toggle('sel', cb.checked);
                     list.classList.toggle('has-sel', selected.size > 0);
-                    if (cb.checked && !selectMode) {
-                        selectMode = true;
-                        list.classList.add('selectmode');
-                    }
-                    renderBar();
+                    renderBar(); // 선택이 하나라도 있으면 하단 일괄 바가 뜬다(selectMode 무관).
                 };
-                box.append(el('label', { class: 'dash-sess-checkwrap', title: '선택 — 여러 개 골라 한 번에 삭제' }, cb));
+                const wrap = el('label', { class: 'dash-sess-checkwrap', title: '선택 — 여러 개 골라 한 번에 삭제' }, cb);
+                wrap.addEventListener('click', (ev) => ev.stopPropagation()); // 체크박스 클릭이 카드로 안 번지게
+                box.append(wrap);
             }
-            box.append(main, when, acts);
+            box.append(main);
             list.append(box);
         }
         // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).
