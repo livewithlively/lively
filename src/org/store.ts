@@ -371,19 +371,55 @@ export async function setMemberOnboardingStep(
 
 // ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
 //  ⚠ 관측이지 보고가 아니다(onboarding 과 별 컬럼). **메타만**(id·kind·managed) — 스킬 본문·메모리는 절대 안 담는다.
+//  ⚠ **머신별 맵**이다 — 한 멤버가 PC 여러 대(집·회사)를 쓰면 각각 다른 로컬 환경이다. machine_id(훅이
+//   ~/.lively/machine-id 에 UUID 로 1회 생성)를 키로 각 머신 관측을 따로 보관 → 새 머신이 남의 관측을 안 덮는다.
 export interface HarnessSnapshotAsset { id: string; kind: string; managed: boolean }
 export interface HarnessSnapshot { at?: string; host?: string; harness?: string; assets: HarnessSnapshotAsset[] }
+export type HarnessSnapshots = Record<string, HarnessSnapshot>; // machine_id → 관측
 
-export async function getHarnessSnapshot(id: string): Promise<HarnessSnapshot | null> {
+export async function getHarnessSnapshots(id: string): Promise<HarnessSnapshots> {
   const r = await itemsPool.query(`SELECT harness_snapshot FROM org_member WHERE id=$1`, [id]);
   const v = r.rows[0]?.harness_snapshot as unknown;
-  if (!v || typeof v !== "object" || Array.isArray(v) || !Array.isArray((v as HarnessSnapshot).assets)) return null;
-  return v as HarnessSnapshot;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  // 옛 단일 형태({at,host,assets} 직접)는 버린다 — 관측이라 다음 세션에 머신맵으로 다시 채워진다(무손실).
+  if (Array.isArray((v as HarnessSnapshot).assets)) return {};
+  const out: HarnessSnapshots = {};
+  for (const [mid, snap] of Object.entries(v as Record<string, unknown>)) {
+    if (snap && typeof snap === "object" && Array.isArray((snap as HarnessSnapshot).assets)) out[mid] = snap as HarnessSnapshot;
+  }
+  return out;
 }
 
-export async function setHarnessSnapshot(id: string, snap: HarnessSnapshot): Promise<void> {
+// 그 machine_id 키만 갱신(다른 머신 관측 보존) — jsonb shallow merge.
+export async function setHarnessSnapshot(id: string, machineId: string, snap: HarnessSnapshot): Promise<void> {
   const r = await itemsPool.query(
-    `UPDATE org_member SET harness_snapshot=$2::jsonb WHERE id=$1 RETURNING id`, [id, JSON.stringify(snap)]);
+    `UPDATE org_member SET harness_snapshot = COALESCE(harness_snapshot,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+       WHERE id=$1 RETURNING id`, [id, machineId, JSON.stringify(snap)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
+// ── 로컬 파일 토글 지시(#891 슬라이스 2) — 머신별. 세션훅이 자기 machine_id 지시를 pull 해 .disabled rename ──
+//  라이블리 스킬 opt-out(me_asset_pref)과 다르다: 그건 멤버 단위(모든 머신 배포분), 이건 그 머신의 로컬 파일만.
+export type HarnessLocalPref = Record<string, Record<string, boolean>>; // machine_id → { "<kind>:<id>": disabled }
+
+export async function getHarnessLocalPref(id: string): Promise<HarnessLocalPref> {
+  const r = await itemsPool.query(`SELECT harness_local_pref FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.harness_local_pref as unknown;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v as HarnessLocalPref : {};
+}
+
+// 한 머신의 한 자산 지시만 갱신(disabled=true) 또는 제거(false=다시 켜기 → 키 삭제).
+export async function setHarnessLocalPref(id: string, machineId: string, assetKey: string, disabled: boolean): Promise<void> {
+  const sql = disabled
+    ? `UPDATE org_member SET harness_local_pref =
+         jsonb_set(COALESCE(harness_local_pref,'{}'::jsonb), ARRAY[$2::text],
+           COALESCE(harness_local_pref->$2::text,'{}'::jsonb) || jsonb_build_object($3::text, true), true)
+       WHERE id=$1 RETURNING id`
+    : `UPDATE org_member SET harness_local_pref =
+         jsonb_set(COALESCE(harness_local_pref,'{}'::jsonb), ARRAY[$2::text],
+           COALESCE(harness_local_pref->$2::text,'{}'::jsonb) - $3::text, true)
+       WHERE id=$1 RETURNING id`;
+  const r = await itemsPool.query(sql, [id, machineId, assetKey]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
 }
 
