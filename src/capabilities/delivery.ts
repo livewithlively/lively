@@ -35,7 +35,7 @@ import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } fr
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
-import { previewMemberContext, runPublish } from "../org/publish.js";
+import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { assertHookId, assertAssetId } from "../org/identity.js";
@@ -63,7 +63,8 @@ import { learnGroundTruth } from "../org/knowledge.js";
 import { previewHooks } from "../org/hooks-preview.js";
 import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
-import { getTeam as getClickUpTeam, type ClickUpTeam } from "../connectors/clickup.js";
+import { connectors } from "../connectors/index.js";
+import type { ConnectorUser } from "../connectors/types.js";
 import { resetConnectorConfigCache } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
@@ -531,11 +532,11 @@ export const deliveryCapabilities: Capability[] = [
     "구성원 신원(표시명·이메일·외부계정 연결·개인레이어)을 저장한다. person/person_identity 로도 동기화.",
     [{ method: "POST", paths: ["/api/ui/org/member"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
+      const kind = input.kind == null ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
-      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
       // 이메일 = 로그인 아이디 → 형식 검증(생성·로그인 일관). 빈 값은 허용(로그인 불요 멤버 — 계정 미발급).
-      const email = input.email === undefined ? undefined : str(input.email, "email", 200).trim();
+      const email = input.email == null ? undefined : str(input.email, "email", 200).trim();
       if (email) assertEmail(email);
       // 아이디: 명시되면 그대로(편집·고급), 없으면 신규 생성 → 이메일/표시이름에서 자동·유니크(관리자 비관여, 불변 내부키).
       const hasExplicitId = input.id !== undefined && String(input.id).trim() !== "";
@@ -553,7 +554,7 @@ export const deliveryCapabilities: Capability[] = [
         for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       }
       // 개인레이어 본문(body_md)은 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
-      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       const member = await upsertMember({
         id, kind,
@@ -724,9 +725,9 @@ export const deliveryCapabilities: Capability[] = [
       const existing = await getMember(userId);
       if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
       // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
-      const displayName = input.display_name === undefined ? undefined : str(input.display_name, "display_name", 200).trim();
+      const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
       // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
-      const memberBody = input.body_md === undefined ? undefined : str(input.body_md, "body_md", 20000);
+      const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
       // 아바타 — data:image data URL(클라이언트 128px 리사이즈). undefined=보존, null/''=이니셜로 되돌림.
       let avatar: string | null | undefined;
@@ -744,6 +745,40 @@ export const deliveryCapabilities: Capability[] = [
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
       const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
       return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+    }),
+
+  // ── 내 온보딩 현황 (#846/850) — 웹 #/start 페이지와 AI 스킬이 **같은 함수**를 읽는다(드리프트 0). ──
+  //  ⚠ 상태의 SoT 는 computeMemberOnboarding 이지 화면이 아니다. 화면은 진입·완주 표면일 뿐.
+  //  자동 판정(MCP 호출 이력·자격·레포)은 조회 시점 라이브 계산 — 보고로 거짓 완료를 만들 수 없다.
+  restRead("me_onboarding_get", "내 온보딩 현황 조회",
+    "현재 로그인한 구성원의 온보딩 진행 상태를 반환한다 — 스텝별 done/todo/skipped + 필수 여부 + 자동판정 여부 + 딥링크. 웹 온보딩 페이지와 AI 온보딩 스킬이 이 하나를 함께 읽는다.",
+    [{ method: "GET", paths: ["/api/ui/me/onboarding"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { computeMemberOnboarding } = await import("../org/onboarding.js");
+      return { status: await computeMemberOnboarding(userId) };
+    }),
+
+  restRead("me_onboarding_set", "내 온보딩 스텝 보고",
+    "온보딩 스텝의 상태를 보고한다. **주 사용자는 AI 온보딩 스킬**이다 — 서버가 볼 수 없는 로컬 작업(예: 예전 AI 환경 이관)을 마치면 done 으로, 이관할 게 없으면 skipped 로 보고한다. 사용자가 웹에서 의도적으로 마킹할 때도 같은 경로를 쓴다. state: done|skipped|reset(reset=보고 취소 → 자동 판정으로 복귀). ⚠ 자동 판정되는 스텝은 실제 신호가 이기므로 보고로 거짓 완료를 만들 수 없다.",
+    [{ method: "POST", paths: ["/api/ui/me/onboarding"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { isMemberStep, MEMBER_STEPS, computeMemberOnboarding } = await import("../org/onboarding.js");
+      const step = str(input.step, "step", 32).trim();
+      if (!isMemberStep(step)) throw new HttpError(400, `step 은 ${MEMBER_STEPS.join("|")} 중 하나여야 합니다`);
+      const state = str(input.state, "state", 12).trim();
+      if (!["done", "skipped", "reset"].includes(state)) throw new HttpError(400, "state 는 done|skipped|reset 만 허용됩니다");
+      const note = input.note == null ? undefined : (str(input.note, "note", 500).trim() || undefined);
+      if (note) assertNoHardSecrets(note, "note"); // 보고 메모도 멤버 레코드에 남으므로 평문 시크릿 차단
+      // by 는 표시용(누가 채웠는지) — 위조해도 무해하다. 기본은 self, 스킬이 ai 로 보낸다.
+      const by = input.by === "ai" ? "ai" as const : "self" as const;
+      const { setMemberOnboardingStep } = await import("../org/store.js");
+      await setMemberOnboardingStep(userId, step,
+        state === "reset" ? null : { state: state as "done" | "skipped", at: new Date().toISOString(), by, note });
+      return { status: await computeMemberOnboarding(userId) }; // 갱신된 현황을 바로 돌려준다(왕복 1회)
     }),
 
   // ── 내 스킬·훅 셀프 설정 (#699) — 인증된 멤버가 본인에게 배포되는 스킬·훅을 보고 본인 것만 opt-in/out. admin 불요(principal 강제). ──
@@ -864,12 +899,16 @@ export const deliveryCapabilities: Capability[] = [
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴 'mcp__lively__<tool>')도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
       const autoApprove = (await listAutoApproveTools()).map((t) => `mcp__lively__${t.name}`);
+      // kit_version(#858) — 현재 서빙 중인 설치 번들의 지문. session-preload 가 로컬 ~/.lively/kit-version 과
+      //  비교해 다르면 백그라운드 재설치를 띄운다(키트 코드·배선 자동 갱신 — 멤버 수동 업데이트 폐지).
+      //  이미 매 세션 오는 응답에 얹으므로 왕복이 늘지 않는다. 계산 실패 시 null → 멤버는 아무것도 안 한다(fail-safe).
+      const kv = await kitVersion();
       // 너지 '유효값' 서빙(#270): 어드민 오버라이드가 없으면 서버 단일소스 DEFAULT_WRITEBACK_NOTICE 를 fold 해 준다.
       //  → session-preload 가 이 값을 매 세션 ~/.lively/hooks-config.json 에 기록 → 게이트가 라이브로 사용
       //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
       //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove };
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove, kit_version: kv };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -912,7 +951,7 @@ export const deliveryCapabilities: Capability[] = [
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
         patch.hooks = {};
-        for (const k of ["session_preload", "work_flag", "stop_writeback_gate"]) {
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update"]) {
           if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
         }
       }
@@ -1007,7 +1046,7 @@ export const deliveryCapabilities: Capability[] = [
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
-      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 훅 on/off"),
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
@@ -1284,7 +1323,7 @@ export const deliveryCapabilities: Capability[] = [
         url: input.url === undefined ? undefined : (input.url === null || input.url === "" ? null : str(input.url, "url", 1000).trim()),
         command: input.command === undefined ? undefined : (input.command === null || input.command === "" ? null : str(input.command, "command", 2000).trim()),
         auth_env: authEnv,
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
         mode: input.mode === undefined ? undefined : (str(input.mode, "mode", 10) === "proxy" ? "proxy" : "client"),
@@ -1503,15 +1542,25 @@ export const deliveryCapabilities: Capability[] = [
   //  응답 users[]: { clickup, mapped_member_id(①??②), mapped_via('identity'|'email'|null), suggested_member_id }
   //   — mapped_via='identity' 만 UI 에서 '해제' 가능(②는 이메일에서 오는 암묵 매핑 — 드롭다운 미리선택으로 확정 유도).
   //  ClickUp 토큰 미설정/호출 실패는 { error } 폴백(500 금지 — 패널이 우아하게 안내).
-  restOnly("org_connector_clickup_members", "ClickUp 멤버 매핑 목록",
-    "ClickUp 팀 멤버(user id/username/email/color)와 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 'ClickUp 멤버 매핑' 패널 전용.",
-    [{ method: "GET", paths: ["/api/ui/org/connector/clickup/members"], parse: () => ({}) }],
-    async () => {
-      let team: ClickUpTeam;
-      try { team = await getClickUpTeam(); }
-      catch (e) { return { error: `ClickUp 팀 조회 실패: ${e instanceof Error ? e.message : String(e)}` }; }
-      const users = (team.members ?? []).map((m) => m.user)
-        .filter((u): u is NonNullable<typeof u> => !!u && u.id != null);
+  // ── 사람 매핑 목록(#837) — 커넥터 **일반**. 구 org_connector_clickup_members 를 대체한다(구 경로는 별칭 유지). ──
+  //  왜 커넥터 쪽이 편집 SoT 인가: 매핑은 "외부 시스템의 사람 ↔ 우리 구성원"인데, 구성원 화면은 외부 목록을
+  //  안 가져오므로 관리자가 외부 id(ClickUp 숫자 id 등)를 **손으로 타이핑**해야 했다 — 어디서 찾는지도 모르고
+  //  오타는 조용히 매칭 실패로 끝난다. 여기선 커넥터가 실제 목록을 주므로 드롭다운으로 고르기만 하면 된다.
+  //  listUsers 를 안 다는 커넥터(gmail·gdrive — 개인 OAuth 라 '멤버' 개념이 없다)는 supported:false 로 답한다.
+  restOnly("org_connector_members", "커넥터 사람 매핑 목록",
+    "커넥터(clickup·slack·notion)의 사용자 목록과 각자의 org_member 매핑 상태를 계산해 반환한다 — 관리탭 [외부 자료 수집 ▸ 멤버 매핑] 패널용. 구 이름 org_connector_clickup_members.",
+    [{ method: "GET", paths: ["/api/ui/org/connector/:system/members", "/api/ui/org/connector/clickup/members"],
+       parse: (req) => ({ system: String((req.params as Record<string, string>)?.system ?? "clickup") }) }],
+    async (input: { system: string }) => {
+      const system = String(input.system || "clickup");
+      const conn = connectors[system];
+      if (!conn) throw new HttpError(404, `알 수 없는 커넥터: ${system}`);
+      if (!conn.listUsers) return { system, supported: false, users: [] };
+
+      let users: ConnectorUser[];
+      try { users = await conn.listUsers(); }
+      catch (e) { return { system, supported: true, error: `${system} 사용자 목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
+
       const members = await listMembers();
       // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.
       const emailToMember = new Map<string, string>();
@@ -1519,7 +1568,9 @@ export const deliveryCapabilities: Capability[] = [
         const k = (m.email ?? "").trim().toLowerCase();
         if (k && !emailToMember.has(k)) emailToMember.set(k, m.id);
       }
-      // ① person_identity 배치 조회 — 유저별 후보 external_id(이메일 소문자·숫자 id)를 한 번에.
+      // ① person_identity 배치 조회 — 유저별 후보 external_id(외부 id · 소문자 이메일)를 한 번에.
+      //   (이메일도 후보인 이유: 관리탭 매핑은 external_id=외부 id 로 저장하지만, 미러가 raw 이메일로 굳혀 둔
+      //    과거 데이터가 있다 — #697 clickup-mirror-member-remap-retroactive 참조.)
       const extIds: string[] = [];
       for (const u of users) {
         extIds.push(String(u.id));
@@ -1531,7 +1582,7 @@ export const deliveryCapabilities: Capability[] = [
         const r = await itemsPool.query(
           `SELECT pi.external_id, pi.person_id FROM person_identity pi
              JOIN org_member om ON om.id = pi.person_id
-            WHERE pi.system='clickup' AND pi.external_id = ANY($1::text[])`, [extIds]);
+            WHERE pi.system=$2 AND pi.external_id = ANY($1::text[])`, [extIds, system]);
         for (const row of r.rows as Array<{ external_id: string; person_id: string }>) {
           identityMap.set(row.external_id, row.person_id);
         }
@@ -1541,14 +1592,13 @@ export const deliveryCapabilities: Capability[] = [
         const viaIdentity = identityMap.get(String(u.id)) ?? (em ? identityMap.get(em) : undefined) ?? null;
         const viaEmail = em ? (emailToMember.get(em) ?? null) : null;
         return {
-          clickup: { id: u.id, username: u.username ?? null, email: u.email ?? null,
-            color: u.color ?? null, initials: u.initials ?? null, profilePicture: u.profilePicture ?? null },
+          user: u,
           mapped_member_id: viaIdentity ?? viaEmail,
           mapped_via: viaIdentity ? "identity" : (viaEmail ? "email" : null),
           suggested_member_id: viaIdentity ? null : viaEmail,
         };
       });
-      return { teamId: team.id, teamName: team.name ?? null, users: rows };
+      return { system, supported: true, instance: users[0]?.instance ?? null, users: rows };
     }),
 
   // ════════ 커스텀 훅 CRUD (runtime 권한) ════════
@@ -1574,9 +1624,9 @@ export const deliveryCapabilities: Capability[] = [
       const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
       const hook = await upsertOrgHook({
         id,
-        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -1644,9 +1694,9 @@ export const deliveryCapabilities: Capability[] = [
         auto_approve: input.auto_approve === undefined ? undefined : Boolean(input.auto_approve),
         // 주입모드(#187): undefined=유지, null=코드기본 복귀, true=항상 주입, false=deferred. 빌트인 토글 전용(Claude Code _meta).
         always_load: input.always_load === undefined ? undefined : (input.always_load === null ? null : Boolean(input.always_load)),
-        title: input.title === undefined ? undefined : str(input.title, "title", 200).trim(),
-        description: input.description === undefined ? undefined : str(input.description, "description", 2000),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        title: input.title == null ? undefined : str(input.title, "title", 200).trim(),
+        description: input.description == null ? undefined : str(input.description, "description", 2000),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       };
       if (kind === "http_proxy") {
@@ -1735,7 +1785,7 @@ export const deliveryCapabilities: Capability[] = [
         ? null : assertHookId(input.paired_hook_id);
       const asset = await upsertOrgHarnessAsset({
         id, kind: kind as AssetKind,
-        label: input.label === undefined ? undefined : str(input.label, "label", 200).trim(),
+        label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness, description, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
@@ -1883,7 +1933,7 @@ export const deliveryCapabilities: Capability[] = [
         name, driver, auth_mode: authMode as DbSourceInput["auth_mode"], url, auth_ref: authRef, rls,
         max_rows: posIntOpt(input.max_rows, "max_rows"),
         timeout_ms: posIntOpt(input.timeout_ms, "timeout_ms"),
-        note: input.note === undefined ? undefined : str(input.note, "note", 500),
+        note: input.note == null ? undefined : str(input.note, "note", 500),
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         table_default: tableDefault,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -1949,7 +1999,7 @@ export const deliveryCapabilities: Capability[] = [
       } else {
         const mode = str(input.mode, "mode", 8);
         if (mode !== "allow" && mode !== "deny") throw new HttpError(400, "mode 는 allow|deny");
-        await upsertTablePolicy({ source, table_name: table, mode, note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+        await upsertTablePolicy({ source, table_name: table, mode, note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
       }
       await refreshPolicy(true);
       return { ok: true };
@@ -1968,7 +2018,7 @@ export const deliveryCapabilities: Capability[] = [
       } else {
         const style = str(input.style, "style", 12);
         if (!["full", "partial", "email", "hash", "null"].includes(style)) throw new HttpError(400, "style 는 full|partial|email|hash|null");
-        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note === undefined ? undefined : str(input.note, "note", 500) }, actorOf(user));
+        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
       }
       await refreshPolicy(true);
       return { ok: true };

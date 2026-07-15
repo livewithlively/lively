@@ -8,6 +8,8 @@ set -euo pipefail
 #       (키트의 install-via-curl.sh 는 setup-mac.sh 에만 위임 = Mac 전용 → 중앙박스/Linux 는 이 스크립트로.)
 #   결과: ~/.lively/{token,gateway-url,context.md,hooks/…} + ~/.claude/settings.json(훅 비파괴 머지)
 #         + `claude mcp add lively`(user scope). → 호스트에서 켜는 모든 claude 세션이 lively-aware.
+#         + ~/.lively/{lib,bin}/lively — **lively CLI 도 함께 깔린다**(#864). user-install.mjs 가 번들의
+#           cli/lively.mjs 를 설치하므로 박스도 공짜로 얻는다 → 박스에서 `lively status`/`lively doctor` 사용 가능.
 #
 # 사용:  bash deploy/install-kit.sh
 #   env(선택): LIVELY_GATEWAY(기본 http://localhost:$PORT) · LIVELY_TOKEN(기본 .env AUTH_TOKENS_JSON 첫 키)

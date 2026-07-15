@@ -336,13 +336,22 @@ function pasteText(t) {
 //  ⚠ 트리거는 '출력 1.6s 침묵/12s 하드캡'으로 '시작'하되, 그것만 믿고 blind Enter 하지 않는다 — 인증 MCP·SessionStart 훅이
 //   부팅 중 '침묵 갭'을 만들거나 시작 다이얼로그(신뢰폴더 등)가 떠 있으면 붙여넣기+Enter 가 씹혀 태스크가 유실됐다.
 //   그래서 붙여넣은 뒤 xterm 버퍼를 readback 해 '실제로 입력창에 들어갔는지' 확인될 때만 Enter 하고, 안 됐으면 재시도한다.
+//  ?welcome=1 (따라하기 투어를 마치고 만든 첫 세션)이면 온보딩 도우미를 자동으로 부른다 — 프롬프트가 고정이라
+//   localStorage 핸드오프가 필요 없고, 주입은 autosend 와 같은 경로(붙여넣기 → readback 확인 → Enter)를 그대로 탄다.
+//   ⚠ 이 세션은 중앙 박스(서버)에서 돈다 — 스킬이 그걸 감지해 로컬 스캔을 건너뛰고 사용법 안내로 분기한다(스킬 0단계).
+const WELCOME_PROMPT = '라이블리를 이제 막 시작했어. 온보딩을 도와줘 — 내가 쓰던 기존 AI 환경(작업 메모리·개인 스킬·MCP 연결·레포)이 있으면 먼저 읽기만 해서 보여주고, 무엇을 라이블리로 올리고 무엇을 로컬에 둘지 함께 정리하자. 없으면 라이블리 사용법을 알려줘.';
+let autosendIsWelcome = false;
 const AUTOSEND = (() => {
   try {
-    if (!new URLSearchParams(location.search).get('autosend')) return '';
-    const k = 'lively:autosend:' + SESSION_ID;
-    const v = localStorage.getItem(k) || '';
-    if (v) localStorage.removeItem(k);
-    return v;
+    const q = new URLSearchParams(location.search);
+    if (q.get('autosend')) {
+      const k = 'lively:autosend:' + SESSION_ID;
+      const v = localStorage.getItem(k) || '';
+      if (v) localStorage.removeItem(k);
+      return v;
+    }
+    if (q.get('welcome')) { autosendIsWelcome = true; return WELCOME_PROMPT; }
+    return '';
   } catch (_) { return ''; }
 })();
 let autosendDone = false, autosendLastOut = 0, autosendDeadline = 0, autosendTimer = null;
@@ -380,7 +389,7 @@ function autosendPasteTry(n) {
     if (autosendLanded(autosendReadScreen())) {
       autosendDone = true;
       try { sendInput('\r'); } catch (_) { /* noop */ }               // 안착 확인 후에만 제출.
-      try { toast('선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
+      try { toast(autosendIsWelcome ? '온보딩 도우미를 시작했어요' : '선택한 태스크를 클로드에게 전달했어요'); } catch (_) { /* noop */ }
     } else if (n < AUTOSEND_MAX_TRIES) {
       setTimeout(() => autosendPasteTry(n + 1), 800);                 // 아직 준비 전/씹힘 → 잠시 후 재시도.
     } else {

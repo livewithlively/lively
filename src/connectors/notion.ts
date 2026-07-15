@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateDir } from "../state-dir.js";
 import crypto from "node:crypto";
-import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import type { Connector, RawItem, BackfillOpts, ConnectorUser } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { unitName } from "../org/external-identity.js";
 import {
@@ -1474,6 +1474,25 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
 export const notionConnector: Connector = {
   name: "notion",
   backfill,
+  // #837 — 사람 매핑 후보. Notion `GET /v1/users`(페이지네이션). 봇·미확인은 제외(사람 매핑 대상이 아니다).
+  //  이미 hydrateUsers 가 개별 `/users/{id}` 를 부르고 있었다 — 여기선 전체 목록을 한 번에 받는다.
+  async listUsers(): Promise<ConnectorUser[]> {
+    const cfg = await loadConfig();
+    const out: ConnectorUser[] = [];
+    let cursor: string | undefined;
+    do {
+      const qs = new URLSearchParams({ page_size: "100" });
+      if (cursor) qs.set("start_cursor", cursor);
+      const res = (await notionFetch(cfg, `/users?${qs.toString()}`)) as
+        { results?: NotionUser[]; next_cursor?: string | null; has_more?: boolean };
+      for (const u of res.results ?? []) {
+        if (!u?.id || u.type === "bot") continue;
+        out.push({ id: u.id, name: u.name ?? null, email: u.person?.email ?? null, instance: cfg.instance || null });
+      }
+      cursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
+    } while (cursor);
+    return out;
+  },
 };
 
 // 테스트 훅 — 자산 재발급(만료 URL 치유) 경로의 결정적 검증용. 프로덕션 코드에서 사용 금지.

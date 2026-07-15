@@ -21,6 +21,7 @@ import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
+import { getOrgProfile } from "./org/store.js";
 
 // req.auth.extra 에 심긴 LivelyUser 를 꺼낸다(세션·bearer 공통 — 둘 다 이 형태로 채운다).
 const userOf = (req: express.Request): LivelyUser =>
@@ -146,6 +147,46 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       else app.post(path, ...mw(cap.scope), handler);
     }
   }
+
+  // ── lively CLI 부트스트랩 (#864) — **비인증**. 코드일 뿐 비밀이 없다(/ui 정적 자산과 같은 성격). ──
+  //  웹이 건네는 유일한 복붙 한 줄이 여기로 온다:   curl -fsSL <게이트웨이>/cli | sh
+  //  종전 설치 한 줄은 **장기 토큰을 명령줄에 박아** ~/.zsh_history 에 영구히 남겼다. 이제 그 줄엔 토큰이 없고,
+  //  토큰은 CLI 의 `lively login` 이 /dev/tty 가림 입력으로 받는다(화면·히스토리·클립보드 어디에도 안 남음).
+  //  ⚠ 인증을 걸면 안 된다 — 부트스트랩은 **토큰을 얻기 전에** 실행되는 유일한 지점이다(닭-달걀).
+  const kitCliDir = fileURLToPath(new URL("../kit/cli", import.meta.url));
+  // 게이트웨이 자기 주소(스크립트에 굽는 값): org 프로필 > PUBLIC_URL > 요청 헤더.
+  //  ⚠ req.protocol 을 못 믿는 이유 — Caddy 가 TLS 를 종단해 게이트웨이는 http 로 받는다(auth/sessions.ts:68 과 같은 사정).
+  //  그래서 공개 스킴은 org 프로필/PUBLIC_URL 이 권위고, 헤더는 최후 폴백이다.
+  //  ⚠ 이 값은 실행되는 셸/PowerShell 스크립트의 문자열 리터럴 안으로 들어간다 → **반드시 형태를 검증**한다.
+  //   헤더 폴백은 요청자가 통제할 수 있으니(Host), `"`·`$(…)`·백틱이 섞이면 자기 자신에게 셸 인젝션이 된다.
+  //   실사용에선 org 프로필/PUBLIC_URL 이 먼저 잡혀 폴백이 거의 안 쓰이지만, 방어는 값싸다.
+  const SAFE_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
+  const selfUrl = async (req: express.Request): Promise<string> => {
+    const clean = (u: string): string => u.replace(/\/mcp$/, "").replace(/\/+$/, "");
+    try {
+      const p = await getOrgProfile();
+      if (p.gateway_url && SAFE_URL.test(clean(p.gateway_url))) return clean(p.gateway_url);
+    } catch { /* DB 미가동 등 — 폴백 */ }
+    const pub = clean(process.env.PUBLIC_URL || "");
+    if (pub && SAFE_URL.test(pub)) return pub;
+    const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+    const guess = `${proto}://${req.get("host") ?? ""}`;
+    if (SAFE_URL.test(guess)) return guess;
+    throw new HttpError(500, "게이트웨이 주소를 확정할 수 없습니다 — 관리탭에서 게이트웨이 주소를 설정하세요.");
+  };
+  const serveBootstrap = (file: string): express.RequestHandler => wrap(async (req, res) => {
+    const src = readFileSync(path.join(kitCliDir, file), "utf8");
+    res.setHeader("Cache-Control", "no-store"); // 게이트웨이 주소가 바뀔 수 있다 — 부트스트랩은 항상 최신
+    res.type("text/plain; charset=utf-8").send(src.replaceAll("__LIVELY_GATEWAY__", await selfUrl(req)));
+  });
+  app.get("/cli", serveBootstrap("bootstrap.sh"));
+  app.get("/cli.ps1", serveBootstrap("bootstrap.ps1"));
+  // CLI 본체 — 부트스트랩이 받아 ~/.lively/lib/lively.mjs 로 앉힌다. 설치 후엔 이 **같은 파일**이 /install 번들에도
+  //  들어 있고(kit_version 지문에 포함) 자동 업데이트(#858)가 함께 갱신한다 = 한 파일, 두 개의 문.
+  app.get("/cli/lively.mjs", wrap(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.type("text/plain; charset=utf-8").send(readFileSync(path.join(kitCliDir, "lively.mjs"), "utf8"));
+  }));
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

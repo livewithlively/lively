@@ -171,9 +171,18 @@ function myDisplayName() {
 function todayLabel() {
     return new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' });
 }
-// 온보딩 진행 칩 — 미완일 때만 표시(완료·실패면 조용히 생략). 클릭 → #/onboarding.
+// 온보딩 진행 칩 — 미완일 때만 표시(완료·실패면 조용히 생략).
+//  ⚠ 우선순위: **내 온보딩(#/start)이 먼저**다 — 내가 아직 라이블리를 못 쓰는 상태면, 관리자가 채우는
+//   조직 셋업보다 그게 급하다. 내 것이 끝났을 때만 조직 셋업(#/onboarding) 칩을 보여준다.
+//   두 개를 동시에 띄우지 않는다(대시보드 인사줄은 좁고, 지금 할 일은 하나여야 한다).
 async function fillOnboarding(slot) {
     try {
+        const me = await api('/api/ui/me/onboarding').catch(() => null);
+        if (me && me.status && !me.status.complete) {
+            const s = me.status;
+            slot.replaceChildren(el('a', { class: 'dash-ob', href: '#/start', title: '시작하기 — 준비 상황 보기' }, el('span', { text: `시작하기 ${s.done}/${s.total}` }), el('span', { class: 'dash-ob-bar' }, el('span', { class: 'dash-ob-fill', style: 'width:' + (s.pct || 0) + '%' }))));
+            return;
+        }
         const s = await api('/api/ui/org/onboarding');
         if (!s || s.complete)
             return;
@@ -2779,4 +2788,15 @@ function dueInDays(dateStr) {
     return Math.round((+d - +today) / 86400000);
 }
 function dueLabel(n) { return n < 0 ? Math.abs(n) + '일 지남' : (n === 0 ? '오늘' : n + '일 뒤'); }
-export { renderMyDashboard, };
+// 홈에서 '내 AI 세션 만들기' 따라하기 시작(#780) — 사용 가이드의 [내 AI 세션 생성]이 #/dashboard?tour=1 로 보낸다.
+//  세션 위젯은 비동기로 채워지므로 앵커([data-tour="new-session"] — 목록 하단 ＋새 세션 / 빈 상태 버튼)가 뜰 때까지 기다린다.
+//  ①단계만 대시보드용이고 ②~⑦(생성 폼)은 터미널과 동일 폼이라 그대로 이어진다.
+async function startDashboardSessionTour() {
+    for (let i = 0; i < 40 && !document.querySelector('[data-tour="new-session"]'); i++) {
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!document.querySelector('[data-tour="new-session"]'))
+        return; // 못 찾으면 조용히 포기(딤만 남기지 않는다)
+    startTerminalTour(dashTourStep1());
+}
+export { startDashboardSessionTour, renderMyDashboard, };

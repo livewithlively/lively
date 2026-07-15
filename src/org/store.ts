@@ -340,6 +340,35 @@ export async function getMember(id: string): Promise<OrgMember | null> {
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
+// ── 구성원 온보딩(#846/850) — **보고된** 상태만 담는다 ──────────────────────────────
+//  자동 판정되는 것(MCP 호출 이력·자격 등록·레포 연결)은 여기 없다 — computeMemberOnboarding 이 조회
+//  시점에 라이브 계산한다. 이 컬럼엔 서버가 **볼 수 없는 것**(그 사람 노트북의 로컬 이관 완료 — AI 스킬이
+//  보고)과 사용자의 **의도적 오버라이드**(웹 ⋯ 메뉴)만 들어간다. 상태를 두 곳에 두면 반드시 어긋난다.
+//  OrgMember 타입엔 넣지 않는다 — listMembers/admin 응답에 실릴 이유가 없다.
+export interface ReportedStep { state: "done" | "skipped"; at: string; by: "ai" | "self"; note?: string }
+
+export async function getMemberOnboarding(id: string): Promise<Record<string, ReportedStep>> {
+  const r = await itemsPool.query(`SELECT onboarding FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.onboarding as unknown;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, ReportedStep> : {};
+}
+
+// 한 스텝만 갱신(다른 스텝 보존). patch=null 이면 그 키를 **삭제** = '다시 열기'(자동 판정으로 복귀).
+//  jsonb_set 은 상위 키가 없으면 no-op 이라 shallow merge(`||`)를 쓴다.
+export async function setMemberOnboardingStep(
+  id: string, step: string, patch: ReportedStep | null,
+): Promise<Record<string, ReportedStep>> {
+  const r = patch
+    ? await itemsPool.query(
+      `UPDATE org_member SET onboarding = COALESCE(onboarding,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+         WHERE id=$1 RETURNING onboarding`, [id, step, JSON.stringify(patch)])
+    : await itemsPool.query(
+      `UPDATE org_member SET onboarding = COALESCE(onboarding,'{}'::jsonb) - $2::text
+         WHERE id=$1 RETURNING onboarding`, [id, step]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].onboarding ?? {}) as Record<string, ReportedStep>;
+}
+
 // 이메일로 멤버 id 조회(대소문자 무시) — 이메일=로그인 키라 유일성 검증용. 없으면 null.
 export async function memberIdByEmail(email: string): Promise<string | null> {
   const r = await itemsPool.query(
@@ -604,7 +633,8 @@ export async function memberHasActiveToken(memberId: string): Promise<boolean> {
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
 export interface OrgRuntimeConfig {
-  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean };
+  // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean };
   writeback_notice: string | null;
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
@@ -635,6 +665,8 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       session_preload: hooksRaw.session_preload !== false,
       work_flag: hooksRaw.work_flag !== false,
       stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
+      // 기존 org 행엔 이 키가 없다 — `!== false` 규약이 곧 '없으면 켜짐'이라 마이그레이션 없이 전원 활성.
+      self_update: hooksRaw.self_update !== false,
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
     work_roots: strArrSafe(row?.work_roots),

@@ -213,7 +213,9 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 //  ※ user-level(~/.claude) 절대경로 변형은 claude 어댑터가 emit — 여기 아님.
 //  run-custom.mjs = 커스텀 훅 런너(발행물에 동봉 → user-install 이 ~/.lively/hooks 로 복사·등록).
 //  sync-harness-assets.mjs = 하네스 자산(스킬·서브에이전트·커맨드) materializer(SessionStart → 게이트웨이 fetch → 디스크 동기화).
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
+//  self-update.mjs(#858) = 키트 자가 업데이터. **배선되는 훅이 아니다** — session-preload 가 kit_version 불일치를
+//   보면 detached 로 띄우는 백그라운드 프로세스다. 번들·설치 대상엔 들어가되 settings 훅 목록엔 안 들어간다.
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");
@@ -543,9 +545,24 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   const vendored = kitAbs("setup/register-clients.sh");
   const regSrc = existsSync(gwReg) ? gwReg : vendored;
   if (!existsSync(regSrc)) throw new Error(`register-clients.sh 원본 없음: ${gwReg} (vendored 도 없음 — GATEWAY_DIR 확인)`);
-  if (existsSync(gwReg)) { copyFileSync(gwReg, vendored); chmodSync(vendored, 0o755); } // 캐노니컬에서 re-vendor
+  // 캐노니컬 → vendored re-vendor. **내용이 실제로 다를 때만** 쓴다(#858).
+  //  이 함수는 이제 kitVersion() 이 지문 계산용으로 주기적으로 호출한다(멤버 세션이 runtime-config 를 칠 때, 60s 캐시).
+  //  무조건 copy 하면 '읽기 경로'가 라이브 소스트리를 계속 건드리게 되고(mtime 요동), 읽기전용 배포에선 매번 조용히 실패한다.
+  if (existsSync(gwReg)) {
+    const canon = readFileSync(gwReg);
+    const same = existsSync(vendored) && readFileSync(vendored).equals(canon);
+    if (!same) { copyFileSync(gwReg, vendored); chmodSync(vendored, 0o755); }
+  }
   copyShWithHeader(regSrc, join(setupDir, "register-clients.sh"), existsSync(gwReg) ? "context-ontology/scripts/register-clients.sh" : "kit/setup/register-clients.sh (vendored)", orgLabel);
   copied.push("setup/register-clients.sh");
+
+  // lively CLI (#864) — 멤버가 쓰는 단일 명령 표면. user-install.mjs 가 ~/.lively/{lib,bin} 으로 앉힌다.
+  //  **번들에 넣는 것이 핵심**: kit_version 지문에 포함된다 → 기존 멤버 전원이 자동 업데이트(#858)로
+  //  `lively` 를 손 안 대고 획득한다(부트스트랩 재실행 불요). 하네스 무관이라 emit 이 아니라 여기서 동봉한다.
+  //  같은 파일이 게이트웨이의 무인증 /cli/lively.mjs 로도 서빙된다(부트스트랩용) — 한 파일, 두 개의 문.
+  mkdirSync(join(target, "cli"), { recursive: true });
+  copyMjsWithHeader(kitAbs("cli/lively.mjs"), join(target, "cli", "lively.mjs"), "kit/cli/lively.mjs", orgLabel);
+  copied.push("cli/lively.mjs");
 
   // 가이드 md(멤버가 번들에서 바로 읽음)
   for (const g of ["setup/사용가이드.md", "setup/온보딩.md"]) {

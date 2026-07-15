@@ -8,7 +8,7 @@
 // instance = team(workspace) id. external_id = task id (워크스페이스 내 안정·고유).
 // 액터 컨벤션(load-bearing): clickup 신원의 external_id 는 **소문자 이메일**(없으면 숫자 id 문자열) —
 // daon 의 manual 신원(clickup / 'lively@lvly.io')이 정확히 매치되어야 한다(resolveActor 정확 일치 룩업).
-import type { Connector, RawItem, BackfillOpts } from "./types.js";
+import type { Connector, ConnectorUser, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 
 export type { Connector, RawItem, BackfillOpts };
@@ -1186,6 +1186,21 @@ export async function* losslessStream(opts?: LosslessOpts): AsyncIterable<RawIte
 // ── Connector SPI 구현 — 무손실 스트림 그대로(run-backfill.js/run-sync generic 호환).
 export const clickupConnector: Connector = {
   name: "clickup",
+  // #837 — 팀 멤버를 그대로 매핑 후보로. 이미 getTeam() 이 5분 memo 라 추가 비용 없음.
+  async listUsers(): Promise<ConnectorUser[]> {
+    const team = await getTeam();
+    return (team.members ?? []).map((mm) => mm.user)
+      .filter((u): u is NonNullable<typeof u> => !!u && u.id != null)
+      .map((u) => ({
+        id: String(u.id),
+        name: u.username ?? null,
+        email: u.email ?? null,
+        initials: u.initials ?? null,
+        color: u.color ?? null,
+        avatar_url: u.profilePicture ?? null,
+        instance: team.id ?? null,
+      }));
+  },
 
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     const sinceMs = opts?.since ? new Date(opts.since).getTime() : undefined;
