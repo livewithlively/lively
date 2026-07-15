@@ -19,6 +19,20 @@ import {
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
 
+// 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
+//  준다) 띄운다. 자동저장이 짧은 간격으로 반복 커밋하므로 name 당 한 번만(같은 문서 재편집은 60s 쿨다운)
+//  띄워 토스트 폭주를 막는다. 문구는 서버가 준 그대로(각색 파일 경로·절차 포함) — 9s 노출.
+const _wkSeedWarnedAt = new Map<string, number>();
+function wkSeedWarn(r: any) {
+  const w = r && r.seed_warning;
+  if (!w) return;
+  const key = (r.knowledge && r.knowledge.name) || w;   // stage 응답은 knowledge:null — 문구를 키로
+  const now = Date.now();
+  if (now - (_wkSeedWarnedAt.get(key) || 0) < 60000) return;
+  _wkSeedWarnedAt.set(key, now);
+  toast(w, false, 9000);
+}
+
 // ════════════════════════════════════════════
 // 문서 캔버스 — buildWikiDoc(container, name, opts { mode: 'page'|'peek', onDeleted?, originHash? })
 // ════════════════════════════════════════════
@@ -195,12 +209,13 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       try {
         const payload: any = { name: k.name, title: t, body_md: bodyMdNow() };
         if (k.is_folder) payload.is_folder = true;
-        await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+        const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
         k.title = t;
         knInvalidateTreeCaches();   // 사이드바 트리·목록에 옛 제목이 남지 않게
         const cur = crumbs.querySelector('.wk-crumb-cur');
         if (cur) cur.textContent = t;
         toast('제목을 저장했습니다');
+        wkSeedWarn(r);   // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
       } catch (e) { toast('제목 저장 실패 — ' + e.message, true); titleEl.textContent = k.title || k.name; }
     });
   }
@@ -211,7 +226,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     const payload: any = { name: k.name, body_md: bodyMdNow() };
     if (k.is_folder) payload.is_folder = true;
     payload[field] = value;
-    await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+    const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
     if (field === 'type') { k.type = value; }
     else {
       try { const d = await api('/api/ui/knowledge/' + encodeURIComponent(k.name)); k.categories = ((d && d.knowledge) || d).categories || k.categories; }
@@ -219,6 +234,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     }
     knInvalidateTreeCaches();   // 사이드바 트리·카테고리 목록 캐시에 stale 유형/분류가 남지 않게
     toast('저장했습니다');
+    wkSeedWarn(r);   // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
     paintPropline();
   };
   function proplineItem(text: string, opts2: any = {}) {
@@ -916,6 +932,7 @@ async function renderWikiDraft(view, params) {
         if (r && r.similar && r.similar.length) {
           toast('비슷한 지식이 이미 있어요 — "' + (r.similar[0].title || r.similar[0].name) + '"');
         }
+        wkSeedWarn(r);   // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
         wkRecordVisit(created);
         paintPropline();
       } catch (e) {
@@ -935,11 +952,12 @@ async function renderWikiDraft(view, params) {
       const payload: any = { name: created.name, title: title || created.title, body_md: editor.getMarkdown().trim() || HOME_EMPTY };
       if (typeVal) payload.type = typeVal;
       if (catKey) payload.category = catKey;
-      await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+      const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
       editor.resetDirty();
       created.title = payload.title;
       draftFirstEditAt = 0;
       setChip('저장됨');   // 상시 유지
+      wkSeedWarn(r);   // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
     } catch (e) {
       setChip('저장 안 됨', true);
       toast('저장 실패 — ' + e.message, true);

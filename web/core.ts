@@ -710,11 +710,11 @@ function absTime(iso) {
 const fmtNum = (n) => Number(n || 0).toLocaleString('ko-KR');
 
 // ── 토스트 ──
-function toast(msg: any, isError?: any) {
+function toast(msg: any, isError?: any, ms?: number) {
   const box = document.getElementById('toasts')!;
   const t = el('div', { class: 'toast' + (isError ? ' coral' : ''), text: msg });
   box.append(t);
-  setTimeout(() => t.remove(), 3600);
+  setTimeout(() => t.remove(), ms || 3600);
 }
 
 
