@@ -24,12 +24,14 @@ const run: Capability = {
     "무거운 1회성 작업(풀빌드·대량 테스트·장기 스크립트 등)을 워커 노드나 중앙에 위탁한다. 서브에이전트를 소환하듯 쓴다 — " +
     "기본(wait)은 완료까지 기다렸다 결과를 바로 돌려준다. **로컬 리소스가 부족하거나 다른 노드에 오프로드하는 게 나을 때 시도하라.** " +
     "지금 가용 노드가 없으면 {no_capacity:true, reason}을 즉시 돌려주니 그때는 로컬에서 직접 실행하면 된다(무한 대기 안 함). " +
-    "queue:true 를 주면 적합 노드가 날 때까지 대기 등록(장기 잡). prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스와 대조), " +
-    "needs_docker·node(지정)·subpath. wait_sec=완료 대기 상한(기본 120s — 초과 시 백그라운드 계속+폴백 안내). 셸 세션은 `lively delegate` CLI 가 동형.",
+    "queue:true 를 주면 적합 노드가 날 때까지 대기 등록(장기 잡). repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 를 자동 준비해 워커 cwd 로 주니 프롬프트에서 클론 지시 불필요), ref=기준 브랜치(예 main). " +
+    "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스와 대조), needs_docker·node(지정)·subpath. wait_sec=완료 대기 상한(기본 120s). 셸 세션은 `lively delegate` CLI 가 동형.",
   scope: "context",
   input: {
     prompt: z.string().min(1).max(20000),
     subpath: z.string().max(300).optional(),
+    repo: z.string().max(100).optional(),   // 지정 시 게이트웨이가 공유 base clone→worktree 자동 준비, 워커 cwd=worktree
+    ref: z.string().max(100).optional(),    // worktree 분기 기준 브랜치(origin/<ref>, 예 main) — 없으면 base HEAD
     node: z.string().max(64).optional(),
     need_cpu: z.number().min(0).max(64).optional(),
     need_ram_mb: z.number().int().min(0).max(512000).optional(),
@@ -55,7 +57,7 @@ const run: Capability = {
     }
     const task = await createTask({
       requester, requesterSession: null, prompt: String(input.prompt),
-      subpath: input.subpath, flags: input.flags,
+      subpath: input.subpath, repo: input.repo ?? null, gitRef: input.ref ?? null, flags: input.flags,
       needCpu: input.need_cpu ?? null, needRamMb: input.need_ram_mb ?? null, needDiskMb: input.need_disk_mb ?? null,
       needsDocker: !!input.needs_docker, nodePref: input.node ?? null,
       timeoutSec: input.timeout_sec, maxAttempts: input.max_attempts,

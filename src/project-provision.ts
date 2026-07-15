@@ -205,6 +205,72 @@ function confineToWorkspace(abs: string, label: string): string {
 }
 const expandHome = (p: string): string => (p.startsWith("~/") ? path.join(process.env.HOME || "", p.slice(2)) : p);
 
+// 공유 base 클론 확보(#458/#660 RO 모델) — workspace/repos/<name> 에 호스트당 1회 clone, 재사용 시 upstream FF.
+//  이 base 는 '읽기 원본'이다: 실제 작업은 worktree 로 격리한다(base 직접 작업 금지 규율). 프로젝트·위탁 provision 공용.
+//  자격(#540): 레포 host 매칭 멤버(없으면 게이트웨이) 자격을 이 호출의 git 에만 주입. inputPath 로 기존 클론 경로 지정 가능(프로젝트용).
+async function ensureBaseClone(
+  name: string, memberId: string | null, opts?: { inputPath?: string | null; allowClone?: boolean },
+): Promise<{ repoPath: string; cloned: boolean }> {
+  if (!REPO_NAME_RE.test(name)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
+  const reposBase = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR);
+  const inputPath = opts?.inputPath && String(opts.inputPath).trim() ? expandHome(String(opts.inputPath).trim()) : path.join(reposBase, name);
+  const repoPath = confineToWorkspace(inputPath, "레포");
+  const allowClone = opts?.allowClone !== false;
+  const existed = await isRepo(repoPath);
+  const row = await getRepo(name).catch(() => null);
+  const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
+  const secret = await resolveGitSecret(memberId, host).catch(() => null);
+  const auth = await prepareGitAuth(secret);
+  let cloned = false;
+  try {
+    if (!existed) {
+      if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
+      const url = sanitizeCloneUrl(row?.git_url ?? null);
+      if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
+      await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE]);
+      await fsp.mkdir(path.dirname(repoPath), { recursive: true });
+      const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
+      if (!c.ok) {
+        if (isAuthError(c.err)) {
+          throw new HttpError(401, `레포 '${name}' 클론 인증 실패 — 호스트 '${host}' 자격이 없거나 프로토콜이 안 맞습니다. `
+            + `내 프로필 ▸ git 인증(또는 관리탭 ▸ 게이트웨이 git 계정)에 '${host}' 자격을 등록하세요. `
+            + `HTTPS 가 막힌 셀프호스팅(GitLab 등)은 레포 주소를 SSH 형(git@${host}:그룹/레포.git)으로 등록하고 SSH 키를 쓰세요. (git: ${c.err})`);
+        }
+        throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
+      }
+      cloned = true;
+    } else {
+      await ensureRepoGroupWritable(repoPath);
+      await git(["config", "core.sharedRepository", "group"], repoPath).catch(() => { /* best-effort */ });
+      await refreshRepo(repoPath, auth.env);
+    }
+    return { repoPath, cloned };
+  } finally {
+    await auth.cleanup();
+  }
+}
+
+// 위탁 태스크용 레포 provision(#869 P2 후속) — 공유 base(RO 원본) 확보 후, 태스크 전용 worktree 에 격리 브랜치로 체크아웃.
+//  워커 세션 cwd 는 이 worktree 다(base 직접작업 안 함 = RO 모델). ref 지정 시 그 upstream(origin/<ref>)에서 분기.
+//  중앙 노드·원격 노드가 각자 자기 호스트의 workspace/repos 에 클론(호스트별 로컬 복제본 — 미동기화, git remote 로 수렴).
+export async function provisionTaskRepo(
+  workspaceDir: string, taskId: number, repo: string, ref: string | null, memberId: string | null,
+): Promise<string> {
+  const { repoPath } = await ensureBaseClone(repo, memberId);
+  const wtParent = confineToWorkspace(workspaceDir, "위탁 워크스페이스");
+  const wtPath = confineToWorkspace(path.join(wtParent, repo), "위탁 워크트리");
+  const branch = `delegate/task-${taskId}`;
+  if (!BRANCH_RE.test(branch)) throw new HttpError(400, `브랜치명 형식 오류: ${branch}`);
+  if (!fs.existsSync(wtPath)) {
+    await fsp.mkdir(wtParent, { recursive: true });
+    const from = ref && BRANCH_RE.test(ref) ? [`origin/${ref}`] : []; // ref 지정 시 그 upstream 기준(없으면 base HEAD)
+    let w = await git(["worktree", "add", wtPath, "-b", branch, ...from], repoPath);
+    if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath); // 재큐로 이미 브랜치 있으면 attach 폴백
+    if (!w.ok) throw new HttpError(502, `위탁 워크트리 생성 실패(${repo}): ${w.err}`);
+  }
+  return wtPath;
+}
+
 // 프로젝트 레포들을 박스에 provision — 각 spec: 경로(없으면 workspace/repos/<name> 기본) 확보(없으면 clone) +
 //  worktree 옵션 시 project/<id>/<name> 워크트리(브랜치 project/<id>) 생성. 결과 경로를 .lively/project.json(provisioned)에 기록.
 //  멱등: 이미 있는 클론/워크트리는 재사용(덮어쓰기 없음). 비치명 호출 아님 — 실패 시 HttpError throw(엔드포인트가 4xx/5xx).
@@ -213,7 +279,6 @@ export async function provisionProjectRepos(
 ): Promise<ProvisionedRepo[]> {
   if (!folder) throw new HttpError(400, "프로젝트 폴더가 없습니다");
   const projDir = projectAbsPath(folder);                       // workspace/project/<id>
-  const reposBase = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR); // workspace/repos
   const allowClone = opts?.clone !== false;
   const out: ProvisionedRepo[] = [];
 
@@ -223,70 +288,25 @@ export async function provisionProjectRepos(
     const branch = (spec.branch && String(spec.branch).trim()) || `project/${projectId}`;
     if (!BRANCH_RE.test(branch)) throw new HttpError(400, `브랜치명 형식 오류: ${branch}`);
 
-    // ① 클론 경로 — 입력(워크스페이스 봉쇄) 또는 기본 workspace/repos/<name>
-    const inputPath = spec.path && String(spec.path).trim() ? expandHome(String(spec.path).trim()) : path.join(reposBase, name);
-    const repoPath = confineToWorkspace(inputPath, "레포");
+    // ①·② 공유 base 확보(clone 또는 재사용+FF) — 자격주입·디스크가드·RO 리프레시는 ensureBaseClone 공용(위탁도 재사용).
+    const { repoPath, cloned } = await ensureBaseClone(name, opts?.memberId ?? null, { inputPath: spec.path, allowClone });
 
-    // ①-b 자격 주입(#540) — 이 레포 호스트에 매칭되는 요청 멤버(없으면 gateway) 자격을 이 iteration 의 git 호출에만 주입.
-    //  host 우선순위: 레지스트리 git_url → (재사용 base면) origin remote → 기본 github.com. 자격 없으면 앰비언트 폴백(무주입).
-    const existed = await isRepo(repoPath);
-    const row = await getRepo(name).catch(() => null);
-    const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
-    const secret = await resolveGitSecret(opts?.memberId ?? null, host).catch(() => null);
-    const auth = await prepareGitAuth(secret);
-
-    let cloned = false;
-    try {
-      // ② 없으면 clone (레지스트리 clone_url 필요)
-      if (!existed) {
-        if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
-        const url = sanitizeCloneUrl(row?.git_url ?? null);
-        if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
-        // 디스크 가드(#813 T5) — 레포 클론은 통째로 내려받아 디스크를 크게 먹는다(고객 모노레포면 GB급).
-        //  꽉 찬 상태에서 시작하면 중간에 ENOSPC 로 깨져 반쯤 받은 레포가 남는다 → 시작 전에 막는다.
-        await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE]);
-        await fsp.mkdir(path.dirname(repoPath), { recursive: true });
-        // --config core.sharedRepository=group: .git 을 그룹 공유쓰기로 — 게이트웨이·멤버(lively-shared)가 같은 클론에서 fetch/commit(#522 B).
-        const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
-        if (!c.ok) {
-          // 인증 계열 실패는 '자격 등록하라'는 행동가능 메시지로(#522) — 무한대기/막연한 502 대신. 그 외(네트워크·경로 등)는 502.
-          if (isAuthError(c.err)) {
-            throw new HttpError(401, `레포 '${name}' 클론 인증 실패 — 호스트 '${host}' 자격이 없거나 프로토콜이 안 맞습니다. `
-              + `내 프로필 ▸ git 인증(또는 관리탭 ▸ 게이트웨이 git 계정)에 '${host}' 자격을 등록하세요. `
-              + `HTTPS 가 막힌 셀프호스팅(GitLab 등)은 레포 주소를 SSH 형(git@${host}:그룹/레포.git)으로 등록하고 SSH 키를 쓰세요. (git: ${c.err})`);
-          }
-          throw new HttpError(502, `git clone 실패(${name}): ${c.err}`);
-        }
-        cloned = true;
+    // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
+    let cwd = repoPath;
+    const worktree = !!spec.worktree;
+    if (worktree) {
+      const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
+      if (!fs.existsSync(wtPath)) {
+        await fsp.mkdir(projDir, { recursive: true });
+        // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
+        let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
+        if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
+        if (!w.ok) throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`);
       }
-
-      // ②-b 재사용 base(갓 clone 아님): (i) v0.1.70 이전 생성분은 group-write 아닐 수 있음 → 소급 보정(#522 B),
-      //   (ii) sharedRepository=group 설정(이후 git 이 그룹쓰기 유지), (iii) upstream 으로 fast-forward(best-effort).
-      if (!cloned) {
-        await ensureRepoGroupWritable(repoPath);
-        await git(["config", "core.sharedRepository", "group"], repoPath).catch(() => { /* best-effort */ });
-        await refreshRepo(repoPath, auth.env);
-      }
-
-      // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
-      let cwd = repoPath;
-      const worktree = !!spec.worktree;
-      if (worktree) {
-        const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
-        if (!fs.existsSync(wtPath)) {
-          await fsp.mkdir(projDir, { recursive: true });
-          // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
-          let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
-          if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
-          if (!w.ok) throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`);
-        }
-        cwd = wtPath;
-      }
-      const subpath = path.relative(PROJECT_SHARED_BASE, cwd);
-      out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
-    } finally {
-      await auth.cleanup(); // 시크릿 임시파일 즉시 삭제(성공/실패 무관)
+      cwd = wtPath;
     }
+    const subpath = path.relative(PROJECT_SHARED_BASE, cwd);
+    out.push({ name, path: repoPath, worktree, branch: worktree ? branch : null, cwd, subpath, cloned });
   }
 
   // 세션 cwd = 프로젝트 폴더(work.mjs 동형) — 워크트리는 그 폴더 하위라 그냥 접근된다. 비워크트리 클론(폴더 밖)만 add-dir.

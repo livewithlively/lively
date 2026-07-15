@@ -103,7 +103,7 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
   if (!pick) return { assigned: false, reason: capacityReason(t, nodes) };
   const runArgs = {
     user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
-    prompt: t.prompt, harness: t.harness, flags: t.flags ?? {}, env,
+    prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
   };
   let r: RunTaskResult;
   if (pick.id === CENTRAL_NODE_ID) {

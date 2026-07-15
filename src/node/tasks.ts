@@ -15,6 +15,7 @@ import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal-sessions.js";
 import { wrapAsMember } from "../terminal-isolation.js";
+import { provisionTaskRepo } from "../project-provision.js";
 import type { NodeResources } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -83,6 +84,8 @@ export interface RunTaskInput {
   subpath: string;             // 공유 루트 하위 작업 폴더(비우면 delegated/<id>)
   prompt: string;
   harness: string;             // v1: 'claude' 만
+  repo?: string | null;        // 지정 시 게이트웨이가 공유 base clone→worktree 자동 provision, cwd=worktree(#458 재사용)
+  gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
   env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
 }
@@ -107,8 +110,14 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   // 격리 게이트 — createSession 과 동일 seam(#524): Linux+인프라면 box_ 유저로 drop, 아니면 null(비격리 폴백).
   const osUser = await ensureMemberOsUser(user).catch(() => null);
   const sub = (input.subpath || "").trim() || `delegated/task-${input.taskId}`;
-  const { abs: workspace } = await resolveRootPath(user, "shared", sub, osUser ?? null);
-  const taskDir = path.join(workspace, ".lively-task", String(input.taskId));
+  const { abs: baseWs } = await resolveRootPath(user, "shared", sub, osUser ?? null);
+  // 레포 지정(#458 재사용) — 공유 base clone→worktree 자동 provision, 워커 cwd=worktree. .lively-task 는 worktree 밖(baseWs)에
+  //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
+  let workspace = baseWs;
+  if (input.repo) {
+    workspace = await provisionTaskRepo(baseWs, input.taskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null));
+  }
+  const taskDir = path.join(baseWs, ".lively-task", String(input.taskId));
   await fsp.mkdir(taskDir, { recursive: true, mode: 0o770 });
   // 재시도(같은 taskId 재큐) 대비 — 이전 시도의 종결 파일이 남아 있으면 즉시 '가짜 완료'로 오감지된다.
   for (const f of ["exit", "stream.jsonl", "stderr.log"]) await fsp.rm(path.join(taskDir, f), { force: true }).catch(() => { /* noop */ });

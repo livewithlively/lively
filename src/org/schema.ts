@@ -802,6 +802,8 @@ export async function initOrgSchema(): Promise<void> {
       prompt TEXT NOT NULL,
       harness TEXT NOT NULL DEFAULT 'claude',
       subpath TEXT NOT NULL DEFAULT '',
+      repo TEXT,
+      git_ref TEXT,
       flags JSONB NOT NULL DEFAULT '{}'::jsonb,
       need_cpu REAL,
       need_ram_mb INT,
