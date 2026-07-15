@@ -28,7 +28,9 @@ const BOX = mkdtempSync(join(tmpdir(), "selfupd-"));
 const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ } };
 
 // ── 번들 만들기 — 게이트웨이(buildInstallBundle)가 하는 일을 그대로: kit 조립 + .lively 런타임자산 + 버전 스탬프.
-function makeBundle(version, { corrupt = false } = {}) {
+//  appledouble=true: macOS 게이트웨이 번들 재현(#858 회귀) — bsdtar 가 xattr 을 `._<name>` 파일로 굽는 걸,
+//   러너마다 `._name.mjs`(구문 불가한 바이너리 쓰레기)를 심어 리눅스에서도 결정적으로 재현한다.
+function makeBundle(version, { corrupt = false, appledouble = false } = {}) {
   const stage = mkdtempSync(join(BOX, "stage-"));
   buildKitBundle(stage, { orgName: "테스트조직", orgLabel: "test", harness: "claude" });
   const lv = join(stage, ".lively");
@@ -40,6 +42,14 @@ function makeBundle(version, { corrupt = false } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   // 손상 번들 — 훅 하나에 구문 오류를 심는다(검증 게이트가 이걸 잡아야 한다).
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
+  // AppleDouble 쓰레기 — 각 러너 옆에 `._name.mjs`(구문 불가). 정상 러너는 그대로 두고 검증이 이 쓰레기에
+  //  걸리면 안 된다(설치기가 명시 이름만 복사하므로 배포조차 안 됨).
+  if (appledouble) {
+    const hd = join(stage, ".claude", "hooks");
+    for (const f of ["run-custom.mjs", "session-preload.mjs", "self-update.mjs"]) {
+      writeFileSync(join(hd, "._" + f), Buffer.from([0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00])); // AppleDouble 매직 흉내(비-JS)
+    }
+  }
   const tgz = join(BOX, `bundle-${version}.tgz`);
   execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
@@ -286,6 +296,25 @@ try {
     const { statSync: stat } = await import("node:fs");
     const mode = existsSync(lv(home, "update.log")) ? (stat(lv(home, "update.log")).mode & 0o777) : null;
     (mode === 0o600) ? ok("⑬b update.log 0600") : bad("⑬b 로그 퍼미션", `mode=${mode && mode.toString(8)}`);
+  }
+
+  // ⑭ **AppleDouble 쓰레기 내성**(#858 회귀 — 2026-07-14 어니스트 실사고). macOS 게이트웨이 번들엔 `._name.mjs`
+  //   가 섞이는데, 이게 `node --check` 를 못 통과한다고 **정상 업데이트 전체를 막으면 안 된다**(설치기는 명시
+  //   이름만 복사하므로 그 쓰레기는 배포조차 안 됨). 설치는 성공하고, `._` 파일은 멤버 홈에 안 남아야 한다.
+  {
+    serving.body = makeBundle("v-ad", { appledouble: true });
+    serving.version = "v-ad";
+    const home = freshHome(null);
+    await runUpdater(home);
+    const stamped = readIf(lv(home, "kit-version"));
+    const installedGarbage = existsSync(join(home, ".lively", "hooks", "._run-custom.mjs"));
+    const realRunner = existsSync(join(home, ".lively", "hooks", "run-custom.mjs"));
+    const st = JSON.parse(readFileSync(join(home, ".lively", "update-state.json"), "utf8"));
+    if (stamped === "v-ad" && !installedGarbage && realRunner && !st.failed_version) {
+      ok("⑭ AppleDouble(._) 쓰레기 섞인 번들 — 설치 성공 + 쓰레기 미배포 (과잉차단 회귀 방지)");
+    } else {
+      bad("⑭ AppleDouble 내성", `stamp=${stamped} garbage=${installedGarbage} realRunner=${realRunner} failed=${st.failed_version}`);
+    }
   }
 
   // ⑫ **번들 결정성** — 같은 입력이면 target 경로가 달라도 바이트가 같아야 한다.
