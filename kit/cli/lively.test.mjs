@@ -371,6 +371,28 @@ try {
     const r = await lively(H, ["run", "not-a-number"], { expectFail: true });
     check("⑮ run — 프로젝트 번호가 아니면 usage(exit 2)", r.code === 2, `code=${r.code}`);
   }
+
+  // ⑰ backupUserMcp — 비파괴 라운드트립의 설치측 절반: 유저가 라이블리 전부터 쓰던 org-겹침 MCP 를
+  //   덮어쓰기 전 스냅샷(유저 원본) + **최초 1회**(재설치가 이미 덮어쓴 라이블리 값으로 백업 오염 안 함).
+  //   서브프로세스 — LIVELY_HOME 샌드박스를 import 전에 걸어야 lively.mjs 의 HOME 상수가 박스로 굳는다(실기기 무접촉). claude 불요.
+  {
+    const box = mkdtempSync(join(tmpdir(), "lively-bak-"));
+    mkdirSync(join(box, ".lively"), { recursive: true });
+    writeFileSync(join(box, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user.example/mcp" } } }));
+    const probe = join(box, "probe.mjs");
+    writeFileSync(probe, [
+      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `import { writeFileSync as w } from "node:fs";`,
+      `backupUserMcp("linear"); backupUserMcp("notion");`,                                    // linear=유저것, notion=부재(null)
+      `w(${JSON.stringify(join(box, ".claude.json"))}, JSON.stringify({mcpServers:{linear:{type:"http",url:"https://org.example/mcp"}}}));`, // 라이블리가 덮어쓴 상태 모사
+      `backupUserMcp("linear");`,                                                             // 재호출 — 최초1회면 유저 원본 유지
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box }, stdio: "ignore" });
+    let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
+    check("⑰ backupUserMcp — 유저 원본 스냅샷 + 부재는 null + 최초1회(재설치 오염 방지)",
+      !!(bak.linear && bak.linear.url === "https://user.example/mcp") && bak.notion === null, JSON.stringify(bak));
+    rmSync(box, { recursive: true, force: true });
+  }
 } finally {
   server.close();
   cleanup();

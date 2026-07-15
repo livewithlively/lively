@@ -7,8 +7,8 @@
 //  uninstall 엔 없어서 이 버그가 배포됐다. 가드는 realpath 비교(DIRECT_RUN)로 고쳤고 이 테스트가 재발을 막는다.
 //  오프라인·fs-only: 샌드박스 HOME(LIVELY_HOME)에서만, 실제 ~/.lively·~/.claude·rc 무접촉.
 //  실행: node kit/setup/user-uninstall.test.mjs  (npm test 체인에 포함)
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, cpSync, symlinkSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, cpSync, symlinkSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +57,48 @@ function symlinkedBundle(prefix) {
     ? ok("② 심링크 경로 실행이 ~/.lively 를 실제 제거(--purge)")
     : bad("② 심링크 실제제거", "~/.lively 가 남아있음 — main 이 스킵됐거나 제거가 안 됨");
   rmSync(box, { recursive: true, force: true });
+}
+
+// ③ 비파괴 MCP 라운드트립 — 유저가 설치 전부터 쓰던 org-겹침 MCP(linear)를 install 이 덮어써도 uninstall 이 원복.
+//    설치가 덮어쓰기 전 최초 1회 스냅샷(~/.lively/mcp-user-backup.json) → 제거가 add-json 으로 복원. 신규(설치 전 없던 notion)는 제거 유지.
+//    실제 claude 로 register-clients.sh(스냅샷+덮어쓰기)→user-uninstall(복원) 왕복. CI 에 claude 없으면 스킵(스킵도 통과로 센다).
+{
+  const hasClaude = spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
+  if (!hasClaude) {
+    console.log("skip ③ 비파괴 MCP 라운드트립 (claude 미설치 — 통합테스트 건너뜀)");
+  } else {
+    const box = mkdtempSync(join(tmpdir(), "uninst-mcp-"));
+    const home = join(box, "home");
+    const USER_URL = "https://user-owns-this.example/mcp"; // 유저가 설치 전부터 쓰던 linear URL
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    // d.claude=true 되도록 lively 훅 심긴 settings.json(.lively/hooks/ 마커) — 없으면 uninstall 이 claude 블록을 건너뛴다.
+    writeFileSync(join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: 'node "$HOME/.lively/hooks/session-preload.mjs"' }] }] } }) + "\n");
+    spawnSync("claude", ["mcp", "add-json", "linear", JSON.stringify({ type: "http", url: USER_URL }), "--scope", "user"],
+      { env: { ...process.env, HOME: home }, stdio: "ignore" }); // 유저의 설치-전 linear
+    mkdirSync(join(home, ".lively"), { recursive: true });
+    writeFileSync(join(home, ".lively", "mcp-servers.json"),
+      JSON.stringify({ servers: [
+        { name: "linear", transport: "http", url: "https://mcp.linear.app/mcp", command: null, auth_env: null }, // org 겹침
+        { name: "notion", transport: "http", url: "https://mcp.notion.com/mcp", command: null, auth_env: null }, // 신규
+      ] }) + "\n");
+    writeFileSync(join(home, ".lively", "kit-version"), "test\n");
+    // 설치: register-clients.sh — 덮어쓰기 전 최초 1회 스냅샷 + 덮어쓰기
+    spawnSync("bash", [join(HERE, "register-clients.sh")],
+      { env: { ...process.env, HOME: home, STORE_URL: "http://localhost:8080/mcp", LIVELY_TOKEN: "dummy" }, stdio: "ignore" });
+    // 제거: user-uninstall — remove 후 유저 원본 복원
+    spawnSync(process.execPath, [join(HERE, "user-uninstall.mjs"), "--yes"],
+      { env: { ...process.env, HOME: home, LIVELY_HOME: home }, stdio: "ignore" });
+    let m = {};
+    try { m = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers || {}; } catch { /* */ }
+    const linearOk = !!(m.linear && m.linear.url === USER_URL); // 유저 원본으로 복원
+    const notionGone = !m.notion;   // 설치 전 없었으니 제거 유지
+    const livelyGone = !m.lively;   // 라이블리 본체 제거
+    (linearOk && notionGone && livelyGone)
+      ? ok("③ 비파괴 MCP 라운드트립 — 유저 기존 linear 원복 + 신규 notion 제거 유지 + lively 제거")
+      : bad("③ MCP 라운드트립", `linear=${m.linear && m.linear.url} notionGone=${notionGone} livelyGone=${livelyGone}`);
+    rmSync(box, { recursive: true, force: true });
+  }
 }
 
 console.log(`user-uninstall tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

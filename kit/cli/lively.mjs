@@ -343,6 +343,24 @@ function readMcpServers() {
   } catch { return []; }
 }
 
+// 비파괴 라운드트립 — 유저가 라이블리 이전부터 쓰던 org-겹침 MCP(linear/notion 등)를 **덮어쓰기 전에** 스냅샷한다.
+//  uninstall(deregisterExtraMcp)이 이걸 읽어 원복 → 유저 원본이 살아난다. 안 하면 설치가 덮어쓰고 제거가 지워 영구 소실(#744 갭).
+//  claude 는 user 스코프 MCP 를 $HOME/.claude.json 의 mcpServers 에 쓴다(run() 이 ambient HOME 으로 claude 실행 = 여기 HOME).
+function claudeUserMcp(name) {
+  try { return JSON.parse(readFileSync(join(HOME, ".claude.json"), "utf8"))?.mcpServers?.[name] ?? null; }
+  catch { return null; }
+}
+//  **최초 1회만** 스냅샷 — 이미 백업에 키가 있으면 스킵. 재설치/업데이트가 (이미 라이블리가 덮어쓴) 자기 항목을
+//  '유저 것'으로 오인해 백업을 오염시키지 않도록. 값: 유저 항목(객체) 또는 null(설치 전 없었음 → 제거 시 그대로 유지).
+function backupUserMcp(name) {
+  const p = join(LIVELY, "mcp-user-backup.json");
+  let bak = {};
+  try { bak = JSON.parse(readFileSync(p, "utf8")) || {}; } catch { bak = {}; }
+  if (Object.prototype.hasOwnProperty.call(bak, name)) return;
+  bak[name] = claudeUserMcp(name);
+  try { writeFileSync(p, JSON.stringify(bak, null, 2) + "\n", { mode: 0o600 }); } catch { /* best-effort — 백업 실패해도 등록은 진행 */ }
+}
+
 function registerClaudeMcp() {
   const gw = gateway(), tok = token();
   if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
@@ -359,6 +377,7 @@ function registerClaudeMcp() {
   // 조직 추가 MCP 서버 — auth_env 는 환경변수 '이름' 간접참조(토큰 리터럴을 파일에 두지 않는다).
   for (const s of readMcpServers()) {
     if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
+    backupUserMcp(s.name); // 덮어쓰기 전 유저 원본 스냅샷(최초 1회) — uninstall 원복용(비파괴 라운드트립)
     run("claude", ["mcp", "remove", s.name], { allowFail: true, quiet: true });
     try {
       if (s.transport === "stdio" && s.command) {
@@ -835,4 +854,4 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, winArg, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, REQUIRED_HOOKS, CLI_VERSION };

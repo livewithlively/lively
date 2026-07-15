@@ -28,6 +28,8 @@ if [ -n "$MCP_FILE" ] && [ -f "$MCP_FILE" ] && command -v node >/dev/null 2>&1; 
   node -e 'const fs=require("fs");let d={};try{d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{}for(const s of (d.servers||[])){if(s.enabled===false)continue;if((s.name||"")==="lively")continue;process.stdout.write([s.name||"",s.transport||"http",s.url||"",s.command||"",s.auth_env||""].join("\t")+"\n")}' "$MCP_FILE" \
   | while IFS="$(printf '\t')" read -r name transport url command auth_env; do
       [ -z "$name" ] && continue
+      # 비파괴 라운드트립 — 유저가 설치 전부터 쓰던 항목을 덮어쓰기 전 최초 1회 스냅샷(uninstall 원복용). lively.mjs backupUserMcp 와 동형.
+      node -e 'const fs=require("fs"),p=require("path");const[n,cj,bk]=process.argv.slice(1);let b={};try{b=JSON.parse(fs.readFileSync(bk,"utf8"))||{}}catch{}if(Object.prototype.hasOwnProperty.call(b,n))process.exit(0);let e=null;try{e=JSON.parse(fs.readFileSync(cj,"utf8"))?.mcpServers?.[n]??null}catch{}b[n]=e;try{fs.mkdirSync(p.dirname(bk),{recursive:true})}catch{}try{fs.writeFileSync(bk,JSON.stringify(b,null,2)+"\n",{mode:0o600})}catch{}' "$name" "$HOME/.claude.json" "$HOME/.lively/mcp-user-backup.json" 2>/dev/null || true
       claude mcp remove "$name" 2>/dev/null || true
       if [ "$transport" = "stdio" ]; then
         # $command 는 의도적 word-split(claude stdio 는 command+args 를 분리 인자로 받음). glob 확장만 차단(set -f).

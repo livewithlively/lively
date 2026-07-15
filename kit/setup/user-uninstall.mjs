@@ -163,19 +163,38 @@ function cleanupEmptyClaudeSettings() {
 }
 
 // 추가 MCP 서버(org_mcp_server) 등록 해제 — ~/.lively/mcp-servers.json 순회 claude mcp remove(lively 는 별도). idempotent.
+//  ⚠ 비파괴 라운드트립: 유저가 라이블리 **설치 전부터** 쓰던 항목은 지우기만 하면 영구 소실된다(설치가 덮어썼으므로).
+//   설치 때 registerClaudeMcp 가 덮어쓰기 전 최초 1회 스냅샷해 둔 ~/.lively/mcp-user-backup.json 을 읽어,
+//   remove 뒤 유저 원본을 add-json 으로 되살린다. 백업값: 객체=유저 것(원복) · null=설치 전 없었음(제거 유지) · 키없음=구설치(원복불가, 제거 유지).
 function deregisterExtraMcp() {
   const f = join(LIVELY, "mcp-servers.json");
   if (!existsSync(f)) { return; }
   let servers = [];
   try { const d = JSON.parse(readFileSync(f, "utf8")); servers = Array.isArray(d.servers) ? d.servers : []; } catch { return; }
+  let backup = {};
+  try { backup = JSON.parse(readFileSync(join(LIVELY, "mcp-user-backup.json"), "utf8")) || {}; } catch { backup = {}; }
+  const hasBak = (n) => Object.prototype.hasOwnProperty.call(backup, n);
   for (const s of servers) {
     const name = s && s.name;
     if (!name || name === "lively" || !/^[A-Za-z0-9_-]+$/.test(name)) continue;
-    if (DRY) { log(`  [dry-run] claude mcp remove ${name} --scope user`); continue; }
+    const orig = hasBak(name) ? backup[name] : undefined; // 객체=유저것 · null=설치전없음 · undefined=구설치(백업없음)
+    if (DRY) {
+      log(`  [dry-run] claude mcp remove ${name} --scope user` + (orig ? `  → 설치 전 유저 설정 복원 예정` : hasBak(name) ? `  (설치 전 없었음 — 제거 유지)` : ``));
+      continue;
+    }
     try {
       execFileSync("claude", ["mcp", "remove", name, "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
       log(`  ✓ claude mcp remove ${name} --scope user`);
     } catch { /* 미등록/CLI 부재 — 무시(idempotent) */ }
+    // 비파괴 원복 — 유저가 설치 전부터 쓰던 항목이면 그 원본을 되살린다(라이블리가 덮어썼던 것).
+    if (orig && typeof orig === "object") {
+      try {
+        execFileSync("claude", ["mcp", "add-json", name, JSON.stringify(orig), "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+        log(`  ↩ ${name} — 설치 전 유저 MCP 설정 복원(라이블리가 덮어썼던 것)`);
+      } catch (e) {
+        log(`  ⚠️ ${name} 복원 실패 — 수동 복원: claude mcp add-json ${name} '${JSON.stringify(orig)}' --scope user (${String(e.message || "").split("\n")[0]})`);
+      }
+    }
   }
 }
 
