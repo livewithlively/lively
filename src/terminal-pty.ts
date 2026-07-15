@@ -15,6 +15,15 @@ import type { Duplex } from "node:stream";
 import { logger } from "./log.js";
 import os from "node:os";
 import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
+import { nodeCanAttach, nodeRelayAttach } from "./node/registry.js";
+
+// attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
+//  단일 WSS 위의 '채널 어댑터'가 이 인터페이스를 구현해 같은 attach 로직(tmux -CC · 큐잉 · 정리)을 재사용한다.
+export interface AttachSocket {
+  send(data: Buffer | string): void;
+  close(code?: number, reason?: string): void;
+  on(event: "message" | "close" | "error" | "pong", listener: (...args: any[]) => void): void;
+}
 
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
@@ -45,6 +54,21 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       const tk = lookupTicket(req.headers.cookie);
       if (!tk) { socket.destroy(); return; }
       const id = url.searchParams.get("session") || "";
+      // 노드 세션(#869) — ?node=<id> 면 그 노드의 아웃바운드 채널로 릴레이한다. 정책(가시성)은 여기(게이트웨이)서
+      //  판정하고 노드는 기계적으로 attach 만 실행(F7). 거부 사유는 로컬과 같은 코드 체계(4410/4403)+4462(노드 오프라인).
+      const nodeId = url.searchParams.get("node") || "";
+      if (nodeId) {
+        const verdict = await nodeCanAttach(nodeId, id, tk.userId);
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          if (!verdict.ok) {
+            logger.info({ nodeId, id, userId: tk.userId, code: verdict.code }, "ws 노드 attach 거부");
+            try { ws.close(verdict.code, verdict.reason); } catch { /* noop */ }
+            return;
+          }
+          nodeRelayAttach(nodeId, id, ws);
+        });
+        return;
+      }
       const ok = await canAttach(id, tk.userId).catch(() => false);
       if (!ok) {
         // 거부를 조용히 끊으면(socket.destroy) 클라가 영원히 재연결한다 → WS 핸드셰이크만 완료한 뒤 '이유가 담긴 코드'로
@@ -111,11 +135,17 @@ function handleLegacyMsg(term: IPty, msg: { t?: string; d?: unknown; c?: unknown
 }
 
 function attach(ws: WebSocket, id: string): void {
+  attachSession(ws as unknown as AttachSocket, id);
+}
+
+// attach 본체 — 게이트웨이 로컬(WebSocket)과 노드 에이전트(채널 어댑터 #869)가 공유한다.
+export function attachSession(ws: AttachSocket, id: string): void {
   let term: IPty | undefined;
   // heartbeat(#687): 새 소켓은 살아있음으로 시작하고, 브라우저가 자동 응답하는 pong 을 받을 때마다 생존 표시.
   //  ping 은 WS 프로토콜 제어프레임이라 tmux 데이터와 무관 — 프론트 코드 변경 불요(브라우저가 투명하게 pong).
-  (ws as LiveWS).isAlive = true;
-  ws.on("pong", () => { (ws as LiveWS).isAlive = true; });
+  //  (노드 어댑터는 pong 이 안 와 isAlive 가 안 갱신되지만, 노드 채널 생존은 노드 WSS 자체 heartbeat 가 담당.)
+  (ws as { isAlive?: boolean }).isAlive = true;
+  ws.on("pong", () => { (ws as { isAlive?: boolean }).isAlive = true; });
   // attach 는 tmux **클라이언트**일 뿐 — 그 cwd 는 세션 pane 에 영향 없다. 세션 작업디렉터리(격리 시 멤버 700 홈)로
   //  chdir 하면 게이트웨이가 못 들어가 'chdir(2) failed: Permission denied' 가 반복된다(격리 개인폴더 attach 버그 #524).
   //  게이트웨이가 늘 접근 가능한 서버 홈을 쓴다.

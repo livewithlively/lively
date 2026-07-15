@@ -160,18 +160,101 @@ const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$
 const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
 const token = () => (process.env.LIVELY_TOKEN || readLively("token")).trim();
 
-async function api(path, { timeoutMs = 15000 } = {}) {
+async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
   const gw = gateway(), tok = token();
   if (!gw) throw new Error("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!tok) throw new Error("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.");
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(gw + path, { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
+    const headers = { authorization: `Bearer ${tok}` };
+    if (body !== undefined) headers["content-type"] = "application/json";
+    const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
     if (res.status === 401 || res.status === 403) throw new Error("토큰이 유효하지 않습니다(만료·회수됨?) — `lively login` 으로 다시 등록하세요.");
-    if (!res.ok) throw new Error(`게이트웨이 오류 ${res.status} (${path})`);
+    if (!res.ok) { let m = ""; try { m = (await res.json())?.error || ""; } catch { /* */ } throw new Error(`게이트웨이 오류 ${res.status}${m ? " — " + m : ""} (${path})`); }
     return await res.json();
   } finally { clearTimeout(timer); }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── 위탁(delegate, #869 §11) — 세션이 무거운 1회성 작업을 워커/중앙에 위탁하는 클라이언트 프로세스. ──
+//  하네스의 Bash/백그라운드셸/서브에이전트와 동형: 실행→진행 stdout 미러→결과 출력+exit code(0/1).
+//  진행 로그는 게이트웨이가 워커 stream.jsonl 을 오프셋 tail 로 릴레이(폴링). 진행은 stderr, 최종 결과는 stdout.
+// stream.jsonl 청크를 소비 — 항상 파싱해 최종 result 이벤트를 잡고(스케줄러 타이밍 무관 = 클라 자립),
+//  mirror 면 assistant 텍스트/툴사용을 stderr 로 흘린다(진행은 stderr, 최종 결과는 stdout — 분리).
+let _cbuf = "", _finalResult = null, _finalIsError = false;
+function consumeStream(chunk, mirror) {
+  _cbuf += chunk;
+  const lines = _cbuf.split("\n"); _cbuf = lines.pop();
+  for (const ln of lines) {
+    if (!ln.trim()) continue;
+    let ev; try { ev = JSON.parse(ln); } catch { continue; }
+    if (ev.type === "result") { _finalResult = typeof ev.result === "string" ? ev.result : JSON.stringify(ev); if (ev.is_error) _finalIsError = true; }
+    else if (mirror && ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
+      for (const b of ev.message.content) {
+        if (b.type === "text" && b.text) process.stderr.write(dim(b.text) + "\n");
+        else if (b.type === "tool_use") process.stderr.write(dim(`· ${b.name}`) + "\n");
+      }
+    }
+  }
+}
+async function streamAndExit(id, jsonMode) {
+  let from = 0, last = "", exitCode = null;
+  for (;;) {
+    let r;
+    try { r = await api(`/api/ui/delegate/${id}/logs?from=${from}`, { timeoutMs: 20000 }); }
+    catch (e) { say(dim(`(재연결: ${e.message})`)); await sleep(2000); continue; }
+    if (r.pending) { if (last !== "queued") { say(dim("적합한 노드를 기다리는 중…")); last = "queued"; } await sleep(2000); continue; }
+    if (r.status === "running" && last !== "running") { say(dim("워커에서 실행 중…")); last = "running"; }
+    if (r.chunk) { from = r.next; consumeStream(r.chunk, !jsonMode); }
+    if (r.done) { exitCode = r.exit; break; }
+    if (!r.chunk) await sleep(1000);
+  }
+  // 결과 텍스트는 스트림에서 직접 뽑은 게 우선(스케줄러 종결 마킹을 기다리지 않는다). 없으면 status 폴백.
+  let result = _finalResult, error = null;
+  if (result === null) {
+    for (let i = 0; i < 15; i++) {
+      const { task } = await api(`/api/ui/delegate/${id}`);
+      if (["done", "failed", "canceled"].includes(task.status)) { result = (task.result && task.result.summary) || ""; error = task.error; break; }
+      await sleep(1000);
+    }
+  }
+  const ok = exitCode === 0 && !_finalIsError && !error;
+  if (jsonMode) { const { task } = await api(`/api/ui/delegate/${id}`); process.stdout.write(JSON.stringify(task) + "\n"); }
+  else {
+    if (result) process.stdout.write(result + (result.endsWith("\n") ? "" : "\n"));
+    if (ok) say(green(`✓ 위탁 #${id} 완료`));
+    else say(red(`위탁 실패${error ? ": " + error : exitCode != null ? ` (exit ${exitCode})` : ""} — 워커 세션은 보존됨(웹터미널로 검시)`));
+  }
+  process.exit(ok ? 0 : 1);
+}
+async function cmdDelegate(rest) {
+  const sub = rest[0];
+  const needId = (v) => { if (!/^\d+$/.test(v || "")) die("위탁 번호가 필요합니다. 예: lively delegate status 3", 2); return v; };
+  if (sub === "status") { const { task } = await api(`/api/ui/delegate/${needId(rest[1])}`); process.stdout.write(JSON.stringify(task, null, 2) + "\n"); return; }
+  if (sub === "cancel") { await api(`/api/ui/delegate/${needId(rest[1])}/cancel`, { method: "POST", body: {} }); say(green(`위탁 #${rest[1]} 취소됨`)); return; }
+  if (sub === "list") { const { tasks } = await api("/api/ui/delegate"); for (const t of (tasks || [])) say(`#${t.id}  ${t.status}${t.node_id ? "  @" + t.node_id : ""}  ${dim((t.prompt || "").slice(0, 60).replace(/\s+/g, " "))}`); return; }
+  if (sub === "logs") { await streamAndExit(needId(rest[1]), rest.includes("--json")); return; }
+  // 기본: 위탁 실행 — rest = 프롬프트 + 옵션.
+  const need = {}; let detach = false, jsonMode = false; const parts = [];
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--ram") need.need_ram_mb = Number(rest[++i]);
+    else if (t === "--cpu") need.need_cpu = Number(rest[++i]);
+    else if (t === "--disk") need.need_disk_mb = Number(rest[++i]);
+    else if (t === "--timeout") need.timeout_sec = Number(rest[++i]);
+    else if (t === "--node") need.node = rest[++i];
+    else if (t === "--docker") need.needs_docker = true;
+    else if (t === "--detach") detach = true;
+    else if (t === "--json") jsonMode = true;
+    else parts.push(t);
+  }
+  const prompt = parts.join(" ").trim();
+  if (!prompt) die('위탁할 작업 지시가 필요합니다.  예: lively delegate "테스트 전체 실행하고 결과 보고" --ram 2048', 2);
+  const { task } = await api("/api/ui/delegate", { method: "POST", body: { prompt, ...need } });
+  if (detach) { say(green(`위탁 #${task.id} 생성 — 진행: lively delegate logs ${task.id}`)); process.stdout.write(String(task.id) + "\n"); return; }
+  say(dim(`위탁 #${task.id} 생성 — 배치 대기…`));
+  await streamAndExit(task.id, jsonMode);
 }
 
 // ── 5. 하네스 감지 ──────────────────────────────────────────────────────────
@@ -568,6 +651,10 @@ ${bold("확인")}
 
 ${bold("작업")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
+  delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
+      --ram/--cpu/--disk N   예상 소모량(스케줄러 배치 입력)  ${dim("--docker  --node <id>  --timeout <초>")}
+      --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
+  delegate status|logs|cancel <번호> · delegate list
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -613,6 +700,8 @@ async function main() {
     case "doctor": return cmdDoctor(o);
     // run 은 나머지 인자를 **그대로** work.mjs 로 넘긴다(--harness 등이 CLI 옵션과 겹쳐도 원형 보존).
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
+    // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
+    case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:

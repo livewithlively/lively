@@ -27,7 +27,7 @@
 // 토큰 값은 절대 출력/로깅하지 않는다.
 import {
   readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync,
-  existsSync, statSync, openSync, closeSync, readdirSync,
+  existsSync, statSync, openSync, closeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
@@ -148,10 +148,12 @@ function verifyBundle(root) {
     if (!existsSync(p)) throw new Error(`번들 손상 — .claude/hooks/${f} 없음`);
     if (statSync(p).size < 64) throw new Error(`번들 손상 — .claude/hooks/${f} 가 비어 있음`);
   }
-  // 구문검사: 번들에 든 훅 전부 + 설치기. 하나라도 파싱이 안 되면 설치하지 않는다.
-  const targets = [installer];
-  for (const f of readdirSync(hooksDir)) if (f.endsWith(".mjs")) targets.push(join(hooksDir, f));
-  for (const p of targets) {
+  // 구문검사: 설치기 + **설치기가 실제로 복사하는 러너만**(REQUIRED_HOOKS + self-update). 디렉터리를 글롭하지
+  //  않는다 — macOS 게이트웨이 번들엔 `._<name>` AppleDouble 쓰레기가 섞일 수 있는데(#858 회귀, tar/xattr),
+  //  설치기는 명시된 이름만 복사하므로 그 쓰레기는 애초에 배포되지 않는다. 그걸 검사해 전체를 막는 건 과잉 차단이었다.
+  //  (번들 자체를 깨끗하게 만드는 건 서버측 COPYFILE_DISABLE — 여기선 '설치될 파일'만 본다는 원칙으로 견고화.)
+  const runners = [...REQUIRED_HOOKS, "self-update.mjs"].filter((f) => existsSync(join(hooksDir, f)));
+  for (const p of [installer, ...runners.map((f) => join(hooksDir, f))]) {
     try { execFileSync(process.execPath, ["--check", p], { stdio: "ignore", timeout: 20_000 }); }
     catch { throw new Error(`번들 손상 — 구문 오류: ${p.replace(root, "")}`); }
   }

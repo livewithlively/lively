@@ -2255,6 +2255,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .ft-img:not(.loaded) img { opacity: 0; }
 .proj-file-card-nm { font-size: 12px; color: var(--ink); text-align: center; line-height: 1.35; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%; padding: 0 2px; }
 .proj-file-card-sz { font-size: 10.5px; color: var(--muted-2); }
+.proj-file-card-dt { font-size: 10px; color: var(--muted-2); opacity: .85; font-variant-numeric: tabular-nums; } /* 파일 수정일(#877) — 크기 아래 한 줄 더, 더 옅게 */
 /* 업로드 중 카드 — 비활성 아이콘 + 실시간 % + 진행 막대 */
 .proj-file-card.uploading { cursor: default; pointer-events: none; }
 .proj-file-card.uploading .proj-file-card-ic { opacity: .3; filter: grayscale(1); }
@@ -2291,6 +2292,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-file-lnm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-file-lnm.is-dir { font-weight: 600; }
 .proj-file-lsz { flex: none; min-width: 62px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.proj-file-ldt { flex: none; min-width: 88px; text-align: right; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; } /* 파일 수정일 열(#877) */
 .proj-file-lacts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; margin-left: 2px; }
 .proj-file-lrow:hover .proj-file-lacts { opacity: 1; }
 /* 단색 라인 아이콘 — currentColor 상속, 획굵기만 여기서. (.proj-file-lic / .proj-file-card-ic 가 크기·색 지정) */
@@ -2372,15 +2374,45 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .act-row-time { color: var(--muted-2); }
 .act-row-tag { display: inline-block; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--ink-note); background: var(--bg-note); border: 1px solid var(--line-note); border-radius: 6px; padding: 0 6px; line-height: 16px; vertical-align: 1px; }
 .act-row-detail { margin: 0 6px 11px 33px; padding: 11px 14px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
-.act-row-tech { font-size: 12.5px; font-weight: 700; color: var(--ink); word-break: break-word; }
-.act-row-note { font-size: 13px; color: var(--ink-sub); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-.act-row-sec { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
-.act-row-sec-label { flex: none; font-weight: 700; color: var(--muted-head); font-size: 11px; letter-spacing: .3px; min-width: 40px; }
-.act-row-links { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-.act-row-link { color: var(--blue); text-decoration: none; font-weight: 600; word-break: break-word; }
-.act-row-link:hover { text-decoration: underline; }
-.act-row-chg { color: var(--ink-sub); }
-.act-row-exact { font-size: 11px; color: var(--muted-2); }
+
+/* 작업 상세(act-doc) — 목록의 인라인 펼침과 단건 팝업이 **같은** 템플릿을 쓴다(#852).
+   유형이 8가지(기능·수정·결정·문서·리서치·검토·운영·기타)여도 뼈대는 하나:
+   무엇을 했나 → 자세히 → 결과물 → 어디에 반영됐나 → 언제. */
+.act-doc { display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+.act-doc-head { display: flex; flex-direction: column; gap: 7px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+.act-doc-titleline { display: flex; align-items: flex-start; gap: 8px; }
+.act-doc-titleline > .act-type { flex: none; margin-top: 3px; }
+.act-doc-title { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.45; word-break: break-word; min-width: 0; }
+.act-doc-by { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.act-doc-who { font-weight: 700; color: var(--ink-sub); }
+.act-doc-agent { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; line-height: 17px; }
+.act-doc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.act-doc-actions:empty { display: none; }
+.act-doc-sess { border-color: var(--blue); color: var(--blue); font-weight: 700; }
+.act-doc-sec { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.act-doc-label { font-size: 11px; font-weight: 700; letter-spacing: .3px; color: var(--muted-head); }
+.act-doc-what { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.5; word-break: break-word; }
+.act-doc-md { font-size: 13px; color: var(--ink-sub); line-height: 1.6; word-break: break-word; }
+/* 작업 본문은 '문서'가 아니라 '카드 속 메모'다 — 위키용 큰 헤딩(.md-h1~3 = 19~15.5px)이 그대로 먹으면
+   본문 소제목이 상세 제목(15px)보다 커져 위계가 뒤집힌다. 카드 눈금으로 눌러 준다(특이도 0,2,0 로 확실히). */
+.act-doc-md .md-h { margin: 12px 0 5px; }
+.act-doc-md .md-h1, .act-doc-md .md-h2, .act-doc-md .md-h3 { font-size: 13px; }
+.act-doc-md .md-h4, .act-doc-md .md-h5, .act-doc-md .md-h6 { font-size: 12.5px; }
+.act-doc-md .md-p, .act-doc-md .md-list, .act-doc-md .md-pre, .act-doc-md .md-quote { margin-bottom: 7px; }
+.act-doc-md .md-list { padding-left: 19px; }
+.act-doc-refrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; min-width: 0; }
+.act-doc-rel { flex: none; min-width: 54px; font-weight: 700; color: var(--muted); }
+.act-doc-links { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.act-doc-link { color: var(--blue); text-decoration: none; font-weight: 600; word-break: break-word; }
+.act-doc-link:hover { text-decoration: underline; }
+.act-doc-code { color: var(--ink-sub); }
+.act-doc-chg { color: var(--ink-sub); font-weight: 600; }
+.act-doc-foot { font-size: 11px; color: var(--muted-2); }
+.act-doc-empty { font-size: 13px; color: var(--muted); line-height: 1.55; }
+/* 인라인 펼침에선 긴 본문이 목록을 삼키지 않게 가둔다 — 팝업(단건·전체 보기)에선 제한 없이 다 읽힌다. */
+.act-row-detail .act-doc-md { max-height: 420px; overflow-y: auto; scrollbar-width: thin; }
+/* 전체 작업 로그 머리 — 지금 몇 개를 보고 있는지 + 조작 힌트(6개씩 끊어 보여주던 것 폐지). */
+.proj-tl-count { font-size: 11.5px; color: var(--muted); padding: 2px 2px 8px; }
 
 /* 붙여넣기 이름 지정 팝업 — 동작 안내 + [이름][.확장자 고정태그]. */
 .paste-action { margin: 0 0 14px; font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; }
@@ -4836,6 +4868,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fold-grid .proj-file-card-ic { height: 54px; }
 .dash-fold-grid .proj-file-card-ic .ft-folder { width: 60px; }
 .dash-fold-grid .proj-file-card-sz { display: none; } /* 박스 미리보기는 '폴더' 캡션 생략 — 이름만(세로 압축) */
+.dash-fold-grid .proj-file-card-dt { display: none; } /* 박스 미리보기(폴더 카드)는 수정일도 생략 */
 /* 박스 폴더 카드 — 클릭 시 브라우저 열기(#672). */
 .dash-fold-grid .proj-file-card.dash-fold-open { cursor: pointer; }
 .dash-fold-grid .proj-file-card.dash-fold-open:hover { background: var(--bg-sel); }
@@ -4895,6 +4928,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-row-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-fb-row.is-dir .dash-fb-row-nm { font-weight: 600; }
 .dash-fb-row-sz { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.dash-fb-row-dt { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; } /* 파일 수정일 열(#877) */
 .dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; }
 .dash-fb-row:hover .dash-fb-actions, .dash-fb-row:focus-within .dash-fb-actions { opacity: 1; }
 /* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */
@@ -6773,3 +6807,71 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .wk-more-btn:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 16%, transparent); }
 .wk-src-count { color: var(--muted, #8a94a6); font-size: 12px; padding: 4px 0; }
 .wk-src-chan { color: var(--accent, #5b6cff); font-weight: 600; }
+
+/* ── 시작하기(#/start) 온보딩 — #/learn 과 같은 카드 언어. 인라인 스타일 대신 여기(#870). ── */
+/* 진행률 요약 카드 */
+.ob-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.ob-progress-count { font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
+.ob-progress-note { font-size: 13px; color: var(--ink-sub); }
+.ob-bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.ob-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), #3a9d6e); border-radius: 999px; transition: width .35s ease; }
+/* 배너(회사 설정 미완·준비 끝) — guide-remember 계열 틴트 박스 */
+.ob-banner { display: block; text-decoration: none; color: inherit; border-radius: 14px; padding: 14px 16px; border: 1px solid var(--line-note); }
+.ob-banner.amber { background: rgba(217,164,65,.07); border-color: rgba(217,164,65,.3); }
+.ob-banner.green { background: rgba(58,157,110,.07); border-color: rgba(58,157,110,.3); }
+.ob-banner-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ob-banner-title { font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-banner-title b { color: var(--ink); }
+a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; font-size: 13.5px; }
+.ob-banner-sub { font-size: 13px; line-height: 1.6; color: var(--ink-sub); margin: 6px 0 0; }
+/* 단계 카드 — 상태 점 + 라벨 + 뱃지 + ⋯, 설명, [해보기] */
+/* 구조로 '할 일 vs 완료'를 가른다(#870): 미완=크고 뚜렷한 풀카드, 완료=접힌 얇은 줄. 점 색만 다르던 게
+   안 읽힌 원인 → 카드의 '크기·밀도' 자체를 다르게. 섹션 머리로 「지금 할 일 N」 / 「완료 N」 을 명시. */
+.ob-sec { display: flex; flex-direction: column; gap: 10px; }
+.ob-sec + .ob-sec { margin-top: 8px; }
+.ob-sec-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+.ob-sec-title { font-size: 12px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: var(--blue); }
+.ob-sec-title.done { color: var(--muted-head); }
+.ob-sec-count { font-size: 11px; font-weight: 800; color: var(--ink-sub); background: var(--bg-tint);
+  border: 1px solid var(--line-net); border-radius: 999px; padding: 0 8px; min-width: 20px; text-align: center; }
+
+/* 미완 = 할 일 풀카드 — 파란 좌측 바 + 옅은 파란 틴트. 필수(.req)는 두껍고 진하게. */
+.ob-step { padding: 16px 18px; border: 1px solid var(--line-note); border-left: 3px solid var(--blue);
+  background: rgba(45,107,240,.04); }
+.ob-step.req { border-left-width: 4px; background: rgba(45,107,240,.07); box-shadow: 0 0 0 1px rgba(45,107,240,.08); }
+.ob-step-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ob-step-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+/* 미완 점 = 속 빈 파란 링. 필수는 채운 파란 원 + 흰 중심('지금 여기'). */
+.ob-step-dot { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--bg); border: 2px solid var(--blue); }
+.ob-step.req .ob-step-dot { background: var(--blue); border-color: var(--blue); }
+.ob-step.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #fff; }
+.ob-step-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+
+/* 완료 = 접힌 얇은 줄 — 초록 체크 + 라벨(회색) + 상태 pill + ⋯. 설명·버튼 없음(끝난 일). */
+.ob-done-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: visible; background: var(--bg); }
+.ob-done-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.ob-done-row + .ob-done-row { border-top: 1px solid var(--line); }
+.ob-done-check { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: #3a9d6e; color: #fff; font-size: 11px; font-weight: 800; }
+.ob-done-row.skipped .ob-done-check { background: var(--bg-tint); color: var(--muted-2); border: 1px solid var(--line-net); }
+.ob-done-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-done-tag { flex: none; font-size: 11px; font-weight: 700; color: #3a9d6e; background: rgba(58,157,110,.1);
+  border-radius: 999px; padding: 1px 9px; }
+.ob-done-row.skipped .ob-done-tag { color: var(--muted-head); background: var(--bg-tint); }
+.ob-step-badge { font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint);
+  border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
+.ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
+/* 필수 미완의 '필수' 뱃지 = 채운 파랑(지금 해야 할 것). 완료된 필수는 조용한 틴트 그대로. */
+.ob-step.todo.req .ob-step-badge.req { color: #fff; background: var(--blue); border-color: var(--blue); }
+.ob-step-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 8px 0 0 32px; }
+.ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
+.ob-step-act { margin: 12px 0 0 32px; }
+/* ⋯ 메뉴 */
+.ob-more > summary { list-style: none; cursor: pointer; color: var(--muted-2); padding: 2px 8px; border-radius: 7px; }
+.ob-more > summary::-webkit-details-marker { display: none; }
+.ob-more > summary:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.ob-more-pop { position: absolute; right: 0; top: 28px; z-index: 5; padding: 6px; min-width: 152px;
+  display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(21,35,59,.12); }
+.ob-more-pop .btn { justify-content: flex-start; }

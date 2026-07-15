@@ -62,3 +62,28 @@ export function agentFromExtra(extra: unknown): string | null {
   const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
   return agentFromHeaders(headers);
 }
+
+// ── 세션 신원(#852) — "이 요청은 **어느 터미널 세션**에서 왔는가". ──
+//  author_agent(위)와 완전히 같은 원리다: **게이트웨이가 접속에서 본 것**이 권위이고 AI 자기보고가 아니다.
+//  경로: 세션 생성 시 pane 에 `-e LIVELY_SESSION_ID=box-…`(terminal-sessions.createSession)
+//        → 하네스 MCP 설정의 `x-lively-session: ${LIVELY_SESSION_ID}` 헤더(연결 시 env 확장)
+//        → 여기서 읽어 ctx.session → activity_log 가 기록.
+//  세션 밖(개인 랩탑 등)이면 env 가 없어 빈 값/미확장 문자열이 온다 → null(=미기록). 무회귀 폴백.
+//
+//  ⚠ 왜 형식만 보나: 헤더는 클라이언트 자기주장이다. 여기선 **모양**만 거른다(box-<slug>-<8hex>) —
+//   그것만으로도 옛 오염(하네스가 제 UUID 를 자기보고하던 값)과 미확장 리터럴 '${LIVELY_SESSION_ID}' 가 탈락한다.
+//   "그 세션에서 일할 자격이 있는 사람인가"는 형식으로 알 수 없으므로 **소비처(activity_log)가 canAttach 로** 본다
+//   (프로젝트 폴더 세션은 공동 세션이라 소유자가 아닌 팀원도 정당하게 그 세션에서 일한다 — 소유자 대조로는 못 가른다).
+export const SESSION_ID_RE = /^box-[a-z0-9-]+-[a-f0-9]{8}$/;
+
+export function sessionFromHeaders(headers: Headers): string | null {
+  const raw = headerValue(headers, "x-lively-session");
+  if (!raw) return null;
+  const v = String(raw).trim();
+  return SESSION_ID_RE.test(v) ? v : null;
+}
+
+export function sessionFromExtra(extra: unknown): string | null {
+  const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
+  return sessionFromHeaders(headers);
+}

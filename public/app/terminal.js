@@ -266,24 +266,24 @@ async function renderTerminal(view) {
         const items = [...sel.ids]
             .map((id) => sessions.find((s) => s.id === id))
             .filter(Boolean)
-            .map((s) => ({ id: s.id, label: s.label || '' }));
+            .map((s) => ({ id: s.id, label: s.label || '', node: (s.node && s.node.id) || '' }));
         if (!items.length)
             return;
         if (items.length === 1) {
-            window.open('/ui/terminal.html?session=' + encodeURIComponent(items[0].id) + '&label=' + encodeURIComponent(items[0].label), '_blank');
+            window.open(termUrl(items[0].id, items[0].label, items[0].node), '_blank');
             return;
         }
         openGridPicker(items);
     }
     async function bulkDelete(btn) {
-        const ids = [...sel.ids];
-        if (!ids.length)
+        const items = [...sel.ids].map((id) => sessions.find((s) => s.id === id)).filter(Boolean);
+        if (!items.length)
             return;
-        if (!confirm(ids.length + '개 세션을 삭제할까요?\n\n실행 중인 작업도 함께 종료됩니다(되돌릴 수 없음).'))
+        if (!confirm(items.length + '개 세션을 삭제할까요?\n\n실행 중인 작업도 함께 종료됩니다(되돌릴 수 없음).'))
             return;
         btn.disabled = true;
-        // 병렬 삭제 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 서버가 비소유분은 403.
-        const results = await Promise.allSettled(ids.map((id) => api('/api/ui/terminal/sessions/' + encodeURIComponent(id), { method: 'DELETE' })));
+        // 병렬 삭제 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 서버가 비소유분은 403. 노드 세션은 ?node= 로 위임(#869).
+        const results = await Promise.allSettled(items.map((s) => api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' })));
         const ok = results.filter((r) => r.status === 'fulfilled').length;
         const fail = results.length - ok;
         toast(fail ? (ok + '개 삭제 · ' + fail + '개 실패') : (ok + '개 세션을 삭제했습니다'), fail > 0);
@@ -294,6 +294,11 @@ async function renderTerminal(view) {
     const head = pageHead('내 AI 세션', '내 AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 오프라인인지 한눈에.', [headActions], '세션');
     view.replaceChildren(...[loginBannerEl(cfg, view), head, bulkBar, controls, listWrap].filter(Boolean));
     draw();
+}
+// 단독 터미널 페이지 URL — 노드 세션(#869)은 &node= 로 WS 릴레이 대상을 지정한다.
+function termUrl(id, label, nodeId, extra) {
+    return '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(label || '')
+        + (nodeId ? '&node=' + encodeURIComponent(nodeId) : '') + (extra || '');
 }
 // 세션 카드(#745) — 라이브 상태점 + 라벨(작업) / 상태·시각·하네스·모델·워크트리·폴더 + 프로젝트 칩 + 열기/관리.
 //  선택(일괄삭제) 모드면 내 소유 카드에 체크박스(카드 전체가 토글 = label). 남의 세션은 체크박스 없음(삭제 불가).
@@ -314,6 +319,9 @@ function tsessCard(s, ctx) {
         title.append(el('span', { class: 'tsess-badge live', text: '접속중' }));
     if (s.autoApprove)
         title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
+    // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
+    if (s.node)
+        title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
     if (!s.owned)
         title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' }));
     else if ((s.invites || []).length)
@@ -346,15 +354,17 @@ function tsessCard(s, ctx) {
             sel.onToggle(); });
         return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
     }
-    // 액션 — 열기(항상) + 내 질문(항상) + 소유자면 수정·삭제.
-    const acts = el('div', { class: 'tsess-acts' }, el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') }), el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
+    // 액션 — 열기(항상) + 내 질문(로컬 세션만 — 노드 세션 트랜스크립트 릴레이는 후속 #869) + 소유자면 수정·삭제.
+    const acts = el('div', { class: 'tsess-acts' }, el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+    if (!s.node)
+        acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
     if (s.owned) {
         acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
         acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
                 if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.'))
                     return;
                 try {
-                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
+                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
                     toast('세션 종료됨');
                     reRender();
                 }
@@ -392,7 +402,8 @@ function openGridPicker(items) {
     const openGrid = (cols, rows) => {
         const ids = items.map((x) => x.id).join(',');
         const labels = encodeURIComponent(JSON.stringify(items.map((x) => x.label || '')));
-        window.open('/ui/terminal-grid.html?sessions=' + encodeURIComponent(ids) + '&labels=' + labels + '&cols=' + cols + '&rows=' + rows, '_blank');
+        const nodes = items.map((x) => x.node || '').join(','); // 세션별 실행 노드(#869) — 그리드 셀 iframe 이 &node= 로 전달
+        window.open('/ui/terminal-grid.html?sessions=' + encodeURIComponent(ids) + '&labels=' + labels + '&nodes=' + encodeURIComponent(nodes) + '&cols=' + cols + '&rows=' + rows, '_blank');
         back.remove();
     };
     for (const L of gridLayouts(n)) {
@@ -657,7 +668,7 @@ function openTermCreateForm(cfg, view, onCreated) {
         const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-lbl', text: r.label }), rootDesc[r.key] ? el('span', { class: 'term-seg-sub', text: rootDesc[r.key] }) : null);
         b.onclick = () => { if (rootKey === r.key)
             return; rootKey = r.key; for (const k in rootBtns)
-            rootBtns[k].classList.toggle('active', k === rootKey); pickerPath = ''; loadPicker(); };
+            rootBtns[k].classList.toggle('active', k === rootKey); pickerPath = ''; paintPicker(); }; // #869 노드 모드면 원격경로 유지(paintPicker), 폴더 모드면 loadPicker
         rootBtns[r.key] = b;
         return b;
     }));
@@ -665,6 +676,24 @@ function openTermCreateForm(cfg, view, onCreated) {
         rootBtns[rootKey].classList.add('active');
     const pickerBox = el('div', { class: 'term-picker' });
     let pickerPath = '';
+    // 실행 위치(#869) — 기본 중앙 컴퓨터. 등록된 내 노드(멤버 PC 등)가 있으면 골라서 그 노드에 세션을 만든다.
+    //  오프라인 노드는 비활성(에이전트가 게이트웨이에 연결돼 있어야 생성 가능 — 서버도 409 재검증).
+    const nodes = cfg.nodes || [];
+    const nodeSel = el('select', { class: 'term-input' }, el('option', { value: '' }, '중앙 컴퓨터 (기본)'), ...nodes.map((n) => {
+        const o = el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.online ? '' : ' — 오프라인'));
+        if (!n.online)
+            o.disabled = true;
+        return o;
+    }));
+    // 노드 폴더는 원격이라 게이트웨이 browse 로 못 훑는다(v1) — 루트(공유/개인) 기준 하위 경로를 직접 입력.
+    const remoteSubI = el('input', { class: 'term-input', type: 'text', placeholder: '노드의 선택한 루트 기준 하위 경로 (비우면 루트)' });
+    const paintPicker = () => {
+        if (nodeSel.value)
+            pickerBox.replaceChildren(remoteSubI, el('div', { class: 'caption', text: '노드 로컬 경로 — 노드 머신의 선택한 루트(공유/개인 워크스페이스) 기준입니다.' }));
+        else
+            loadPicker();
+    };
+    nodeSel.addEventListener('change', paintPicker);
     const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
     const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
     const flagsBox = el('div', { class: 'term-flags' });
@@ -783,7 +812,7 @@ function openTermCreateForm(cfg, view, onCreated) {
     loadPicker();
     // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
     //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → folder → options → preset → invite → create.
-    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), 
+    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), (nodes.length ? field('실행 위치', nodeSel) : null), // #869 중앙 컴퓨터/등록 노드
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
@@ -792,7 +821,8 @@ function openTermCreateForm(cfg, view, onCreated) {
             const flags = {};
             for (const c of flagsBox.querySelectorAll('[data-flag]'))
                 flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
-            const payload = { label: labelI.value, rootKey, subpath: pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked };
+            const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
+            const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked, node: nodeId || undefined };
             try {
                 const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
                 saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
@@ -803,7 +833,7 @@ function openTermCreateForm(cfg, view, onCreated) {
                 else
                     toast('세션 생성됨');
                 if (out && out.session)
-                    window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || '') + (fromTour ? '&welcome=1' : ''), '_blank');
+                    window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
                 if (onCreated)
                     onCreated(out);
                 else
@@ -839,7 +869,7 @@ function openTermEdit(s, cfg, view) {
     const back = overlay('세션 수정', field('이름', labelI), field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box), lockNote, field('작업자', ro(author)), field('작업 폴더', ro(s.dir || '(기본)')), field('워크트리', ro(wtShown)), field('하네스', ro(harness.label || s.harness || '?')), flagFields, field('자동 승인', ro(autoShown)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
             ev.currentTarget.disabled = true;
             try {
-                await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected() }) });
+                await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected(), node: (s.node && s.node.id) || undefined }) });
                 back.remove();
                 toast('수정됨');
                 renderTerminal(view);

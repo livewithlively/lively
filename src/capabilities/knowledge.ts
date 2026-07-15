@@ -21,10 +21,29 @@ import {
 } from "../v6/knowledge-revision-store.js";
 // #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
 import { memberCategories } from "../v6/team-store.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { DEFAULT_KNOWLEDGE } from "../org/default-content.js";
 
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
 //  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
 const DEDUP_WARN_SIMILARITY = 0.6;
+
+// ── 시딩 지식 편집 경고(#846) — 고객 박스에 시딩되는 런북을 이 WIKI 에서 고치면, 고객이 받는 본문은
+//  여기가 아니라 src/org/seed-knowledge/<name>.md 의 각색 스냅샷이다(#846 이후 분리). 그 파일을 함께
+//  갱신하라고 저장 응답으로 알린다(정방향 드리프트 방지). seed 는 이제 DB 캡처가 아니라 파일이 SoT 라
+//  자동 동기화되지 않는다 — 사람 리마인더가 유일한 연결고리다.
+const SEEDED_KNOWLEDGE_NAMES = new Set(DEFAULT_KNOWLEDGE.map((k) => k.name));
+//  경고는 seed 소스가 실재하는 곳(우리 canonical 체크아웃 — src/ 포함)에서만 뜬다. 고객 릴리스 번들엔
+//  src/ 가 없으므로(release.yml: dist·public·kit…만 실림) 고객 박스에선 이 경고가 뜨지 않는다 —
+//  안 그러면 고객에게 없는 내부 경로를 노출하게 된다(유출 방지하려다 유출하는 역설 회피).
+const SEED_SOURCE_PRESENT = fs.existsSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "org", "seed-knowledge"));
+function seedSyncWarning(name: string | null | undefined): { seed_warning?: string } {
+  if (!SEED_SOURCE_PRESENT || !name || !SEEDED_KNOWLEDGE_NAMES.has(name)) return {};
+  return { seed_warning: `⚠ '${name}' 은 신규 고객 게이트웨이에 시딩되는 런북입니다(#713). 고객이 받는 본문은 이 WIKI 가 아니라 src/org/seed-knowledge/${name}.md 의 각색 스냅샷이라 — 이 편집은 고객 박스에 자동 반영되지 않습니다. 절차가 바뀌었다면 그 파일도 갱신하세요(내부 [[링크]]·이슈번호·사내 명칭·타 고객사명은 빼고 고객 맥락으로) → 편집 후 \`node scripts/sync-seed-knowledge.mjs\`. 미갱신 시 고객은 옛 절차를 봅니다.` };
+}
 
 const knowledgeList: Capability = {
   name: "knowledge_list",
@@ -137,7 +156,8 @@ const knowledgeSave: Capability = {
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
     "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
-    "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다.",
+    "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다. " +
+    "**시딩 지식 경고(#846): 응답에 seed_warning 이 오면** 이 지식은 신규 고객 게이트웨이에 시딩되는 런북이라, 이 WIKI 편집은 고객이 받는 각색 스냅샷(src/org/seed-knowledge/…)에 자동 반영되지 않는다 — 안내대로 그 파일도 갱신하고, 그 사실을 사용자에게 알려라.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -214,10 +234,10 @@ const knowledgeSave: Capability = {
       if ((knowledge as any)?.version === 1) {
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
         if (similar.length) {
-          return { knowledge, ...(gateInfo ? { gate: gateInfo } : {}), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...(gateInfo ? { gate: gateInfo } : {}) };
+      return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -235,6 +255,7 @@ const knowledgeSave: Capability = {
       });
       return {
         knowledge: null,
+        ...seedSyncWarning(before.name),
         gate: {
           action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
@@ -252,13 +273,14 @@ const knowledgeSave: Capability = {
       });
       return {
         knowledge,
+        ...seedSyncWarning(knowledge.name),
         gate: {
           action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다.",
         },
       };
     }
-    return { knowledge };
+    return { knowledge, ...seedSyncWarning(knowledge.name) };
   },
 };
 

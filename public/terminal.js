@@ -9,6 +9,9 @@ const PREFS_KEY = 'lively_term_prefs';
 const SESSION_ID = new URLSearchParams(location.search).get('session') || '';
 // 세션 라벨 — 입장 링크가 ?label= 로 실어 보낸다(프로젝트/팀 세션은 개인 /sessions 목록에 없어 API 폴백이 못 찾음).
 const SESSION_LABEL = new URLSearchParams(location.search).get('label') || '';
+// 분산 노드(#869) — 이 세션이 원격 노드에서 돌면 ?node= 로 온다. WS/REST 에 그대로 실어 게이트웨이가 릴레이.
+const NODE_ID = new URLSearchParams(location.search).get('node') || '';
+const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_ID) : '');
 
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
 // 어떤 글꼴을 골라도 한글은 D2Coding 으로 또렷하게 렌더된다(#279 한글 가독성). @font-face=terminal.html.
@@ -68,7 +71,7 @@ async function api(path, opts = {}) {
   return data;
 }
 function fetchAuth(path, opts = {}) { return fetch(path, Object.assign({}, opts, { headers: authHeaders(opts.headers) })); }
-const sUrl = (suffix) => '/api/ui/terminal/sessions/' + encodeURIComponent(SESSION_ID) + suffix;
+const sUrl = (suffix) => '/api/ui/terminal/sessions/' + encodeURIComponent(SESSION_ID) + suffix + nodeQ(suffix.indexOf('?') >= 0 ? '&' : '?');
 
 function toast(msg, isErr) {
   const t = el('div', { text: msg, style: 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:' + (isErr ? '#c0392b' : '#333') + ';color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,.3)' });
@@ -416,6 +419,7 @@ function scheduleAutosend() {
 //  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
 async function dropFileToAgent(file) {
   if (!file) return;
+  if (NODE_ID) { toast('원격 노드 세션은 파일 전달이 아직 지원되지 않습니다.', true); return; } // #869 후속(파일 릴레이)
   const pad = (n) => String(n).padStart(2, '0');
   const d = new Date();
   const stamp = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
@@ -698,6 +702,8 @@ async function loadDir(p) {
   curDir = p || '';
   const list = document.getElementById('exp-list');
   document.getElementById('exp-path').textContent = '/' + curDir;
+  // 노드 세션(#869) — 파일 API 는 아직 노드로 릴레이되지 않는다(후속 태스크). 서버도 403 으로 막지만 UX 는 안내로.
+  if (NODE_ID) { list.replaceChildren(el('div', { class: 'exp-item', text: '원격 노드 세션은 파일 탐색이 아직 지원되지 않습니다.' })); return; }
   list.replaceChildren(el('div', { class: 'exp-item', text: '불러오는 중…' }));
   let data;
   try { data = await api(sUrl('/ls?path=' + encodeURIComponent(curDir))); }
@@ -731,6 +737,7 @@ async function uploadFile(file, dir) {
   if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('' + res.status)); }
 }
 async function uploadMany(files, dir) {
+  if (NODE_ID) { toast('원격 노드 세션은 파일 업로드가 아직 지원되지 않습니다.', true); return; }
   for (const f of files) { try { await uploadFile(f, dir); toast('업로드: ' + f.name); } catch (e) { toast('업로드 실패: ' + f.name + ' — ' + e.message, true); } }
   loadDir(curDir);
 }
@@ -1083,7 +1090,7 @@ async function connectNow() {
   try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
   catch (e) { connecting = false; scheduleReconnect('게이트웨이 응답 없음 — 재연결 중…'); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID));
+  const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID) + nodeQ('&'));
   sock.binaryType = 'arraybuffer'; // 서버가 raw 바이트(바이너리)로 보냄 → 바이트 레벨 파싱(멀티바이트 경계 안전)
   ws = sock;
   // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.

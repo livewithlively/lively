@@ -16,6 +16,7 @@ import { restMounts } from "./capabilities/index.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./capabilities/scopes.js";
 import { sessionOrBearer } from "./auth/http-auth.js";
+import { sessionFromHeaders } from "./org/agent-identity.js"; // #852 요청이 온 터미널 세션(x-lively-session)
 import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
@@ -133,6 +134,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       res.json(await cap.handler(input, user, {
         source: "web",
         actor: user.userId || user.email,
+        // 세션(#852) — REST(스크립트)도 x-lively-session 을 실으면 MCP 와 같은 규칙으로 기록된다(형식 검증 + 소비처 canAttach).
+        //  ⚠ agent 는 일부러 안 채운다 — 여기서 User-Agent 를 읽으면 curl/스크립트의 UA("curl/8.4.0")가
+        //   author_agent 를 이겨 버린다(normalizeHarness 는 모르는 값을 원문 보존). REST 는 body.author_agent 폴백 유지.
+        session: sessionFromHeaders(req.headers) ?? undefined,
         tokenHashPrefix: user.tokenHashPrefix,
         ip: req.ip,
       }));

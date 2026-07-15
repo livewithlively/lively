@@ -146,7 +146,7 @@ export async function computeMemberOnboarding(memberId: string): Promise<MemberO
 
   const items: MemberOnboardingItem[] = [
     build("connect", "AI 켜기", true, connected,
-      "내 컴퓨터에 설치하거나, 웹 [터미널] 탭에서 세션을 만들면 됩니다.", "#/start/setup"),
+      "설치 없이 웹에서 바로 [내 AI 세션]을 열거나, 내 컴퓨터에 한 번 설치해 켤 수 있습니다.", "#/start/setup"),
     // 자동 신호가 없다(null) — 그 사람 노트북의 사실이라 서버가 볼 수 없다. AI 스킬이 스캔 후 보고한다
     //  (이관할 게 없으면 skipped 로). 그래서 화면이 페르소나를 물어볼 필요가 없다.
     build("migrate", "예전에 쓰던 AI 환경 가져오기", false, null,

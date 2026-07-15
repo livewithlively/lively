@@ -13,6 +13,7 @@ export interface CapabilityCtx {
   source?: string;
   actor?: string;           // 안정 식별자(userId 우선) — 감사 actor(사람 축, author_person)
   agent?: string;           // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 하네스(프로젝트 #182). MCP 경로만 채움
+  session?: string;         // 작업이 이뤄진 터미널 세션(tmux box) — 접속 헤더 x-lively-session 으로 식별(#852). 형식만 검증됨(권한은 소비처가)
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
 }

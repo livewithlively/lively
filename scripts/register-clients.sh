@@ -9,8 +9,12 @@ STORE_URL="${STORE_URL:-http://localhost:8080/mcp}"
 
 echo "▶ Claude Code"
 claude mcp remove "$MCP_LABEL" 2>/dev/null || true
+# x-lively-session(#852) — kit/setup/register-clients.sh 와 **같은 내용을 유지할 것**(그쪽이 번들 캐노니컬).
+#  작은따옴표 = 셸 확장 금지(설정엔 리터럴이 들어가고 Claude Code 가 연결 시 제 env 로 확장).
+#  `:-` 기본값이 필수 — 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(실측 2.1.209).
 claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
-  --header "Authorization: Bearer ${LIVELY_TOKEN}"
+  --header "Authorization: Bearer ${LIVELY_TOKEN}" \
+  --header 'x-lively-session: ${LIVELY_SESSION_ID:-}'
 
 # ── 추가 MCP 서버(org_mcp_server) — mcp-servers.json 순회 등록(claude). lively 는 위에서 등록됨. ──
 #  소스 우선순위: MCP_SERVERS_FILE env > 번들 ../.lively/mcp-servers.json > ~/.lively/mcp-servers.json.

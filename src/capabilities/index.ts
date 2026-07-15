@@ -5,7 +5,7 @@
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
-import { agentFromExtra } from "../org/agent-identity.js";
+import { agentFromExtra, sessionFromExtra } from "../org/agent-identity.js";
 import { contextCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -32,6 +32,7 @@ import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
+import { delegateCapabilities } from "./delegate.js";
 import { toolUsageCapabilities } from "./tool-usage.js";
 import { recallCapabilities } from "./recall.js";
 import { dbAuditCapabilities } from "./db-audit.js";
@@ -103,6 +104,7 @@ const all: Capability[] = [
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
+  ...delegateCapabilities, // P2(#869): 작업 위탁 — delegate_run/status/list/cancel(context scope, MCP+REST /api/ui/delegate*). 예상 소모량 신고→스케줄러가 노드 리소스 대조 배치, 결과는 .lively-task/<id>/.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
   ...recallCapabilities, // #637: 컨텍스트 라우팅(recall_route) — memory scope, REST 전용(POST /api/ui/recall/route). 작업맥락(프롬프트+최근Read경로)→도메인 HUB·leaf 지식 포인터. 훅 전용(주입은 훅이 포맷).
   ...dbAuditCapabilities, // P5(#746): db 접근 감사 — db_audit_list/verify(해시체인 검증) + org_db_subject_key(감사 대상 식별자 지정). admin scope, MCP+REST(/api/ui/db-audit*).
@@ -163,7 +165,9 @@ export function registerMcpCapabilities(
         if (cap.scope) requireScope(u, cap.scope);
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
-        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent }));
+        // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.
+        const session = sessionFromExtra(extra) ?? undefined;
+        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session }));
       },
     );
   }

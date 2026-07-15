@@ -10,13 +10,17 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
 import { isProjectSessionDir } from "./project-fs.js";
+// 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
+import { nodeSessionsFor, nodeRpc, nodeOnline, liveNodes } from "./node/registry.js";
+import { getNode, listNodes } from "./node/store.js";
+import { registerNodeRoutes } from "./node/routes.js";
 
 const COOKIE = "lively_term";
 const PREFIX = "/terminal";
@@ -75,6 +79,15 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       // 구성원 격리(#524): 이 세션이 '내 격리 OS 계정(box_)'으로 뜨는지 안내 — box_ 격리가 #346 프로필을 대체.
       //  {ready:인프라설치, provisioned:box_존재, osUser}. 미프로비저닝이어도 첫 세션에 자동 생성(lazy)됨.
       os: await memberOsStatus(userOf(req).userId),
+      // 분산 노드(#869): 생성폼 실행 위치 피커 — 내 노드(admin 은 전체)만. online 이어야 생성 가능(폼이 비활성 표시).
+      nodes: await (async () => {
+        const me = idOf(userOf(req));
+        const admin = !!userOf(req).scopes?.includes("admin");
+        const live = new Map(liveNodes().map((n) => [n.id, n.online]));
+        return (await listNodes().catch(() => []))
+          .filter((n) => n.enabled && (admin || n.owner_member === me))
+          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
+      })(),
     });
   }));
 
@@ -125,14 +138,24 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.setHeader("Cache-Control", "no-store");
     // 프로젝트 폴더 세션은 '프로젝트 공동 세션' — 터미널 탭에선 숨기고 프로젝트 페이지에서만 관리(팀원 전용).
     const all = await listSessions(userOf(req));
-    res.json({ sessions: all.filter((s) => !isProjectSessionDir(s.dir)) });
+    // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
+    const remote = nodeSessionsFor(idOf(userOf(req)));
+    res.json({ sessions: [...all.filter((s) => !isProjectSessionDir(s.dir)), ...remote] });
   }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
-    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     res.setHeader("Cache-Control", "no-store");
+    // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) {
+      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
+      if (!s) throw new HttpError(403, "세션에 접근할 수 없습니다");
+      res.json({ id: s.id, label: s.label });
+      return;
+    }
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     res.json({ id: req.params.id, label: await getSessionLabel(req.params.id) });
   }));
   // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
@@ -159,19 +182,51 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
+  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + 소유자(또는 admin)만. 초대는 여기서 구성원 디렉터리로
+  //  검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 — F7 정책/실행 분리).
+  const requireCreatableNode = async (req: express.Request, nodeId: string): Promise<void> => {
+    const n = await getNode(nodeId);
+    if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${nodeId}`);
+    const u = userOf(req);
+    if (n.owner_member !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 노드가 아닙니다");
+    if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
+  };
+
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const session = await createSession(userOf(req), {
+    const input: CreateInput = {
       label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
       harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
       autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile, worktree: !!b.worktree,
-    });
+    };
+    const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
+    if (nodeId) {
+      await requireCreatableNode(req, nodeId);
+      const me = idOf(userOf(req));
+      const invites = await validateInvites(b.invites, me);
+      const session = await nodeRpc<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
+      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
+      return;
+    }
+    const session = await createSession(userOf(req), input);
     res.json({ session });
   }));
-  // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제).
+  // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
+    const nodeId = String(b.node ?? req.query.node ?? "").trim();
+    if (nodeId) {
+      const me = idOf(userOf(req));
+      const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
+      await nodeRpc(nodeId, "edit", {
+        user: { userId: me }, id: req.params.id,
+        patch: { label: b.label !== undefined ? String(b.label) : undefined },
+        ...(invites !== undefined ? { invites } : {}),
+      });
+      res.json({ ok: true });
+      return;
+    }
     await editSession(userOf(req), req.params.id, {
       label: b.label !== undefined ? String(b.label) : undefined,
       invites: b.invites,
@@ -179,11 +234,18 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     res.json({ ok: true });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) {
+      await nodeRpc(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
+      res.json({ ok: true });
+      return;
+    }
     await killSession(userOf(req), req.params.id);
     res.json({ ok: true });
   }));
 
   registerTerminalFiles(app, verifier);
+  registerNodeRoutes(app, verifier); // 분산 노드(#869) — /api/ui/nodes* (등록·회전·활성·삭제·현황)
   setupPtyUpgrade(server, lookupTicket);
-  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws, files)");
+  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws, files, nodes)");
 }

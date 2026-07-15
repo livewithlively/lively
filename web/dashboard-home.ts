@@ -6,12 +6,14 @@
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
 import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
+// 작업 상세 = 회사 타임라인·프로젝트 타임라인과 **같은** 범용 템플릿(#852) — 한 곳에서 고치면 모든 뷰가 같이 나아진다.
+import { activityDetailView, activityHasDetail } from './dashboard.js';
 import { overlay } from './admin.js';            // 세션 이름 수정 팝업 — 다른 모달과 같은 프리미티브(#853)
 import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 재사용(#745) — 두 벌 만들지 않는다(#853)
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
-import { UP_CONFIRM, authDownload, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upProgress, upSend, upToast, type UpItem } from './projects.js';
+import { UP_CONFIRM, authDownload, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
 import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
@@ -1002,7 +1004,7 @@ async function fillSessions(zone, onCount, projectsP?) {
         density === 'compact' ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }),
         el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
       const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
-      openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+      openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank'); // #869 원격 노드면 node 파라미터
       const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·삭제)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
       moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
       const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
@@ -1347,6 +1349,8 @@ function dashFolderBrowser(root, startPath) {
     if (prog) { toast('업로드 중입니다 — 끝난 뒤에 올려 주세요', true); return; }
     const arr = items || [], dirs = emptyDirs || [];
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
+    const pc = upPrecheckOverwrite(arr, (curData && curData.items) || []);   // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
+    if (!pc.go) return;
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
     const dest = curPath;   // 업로드 중 다른 폴더로 들어가도 '끌어다 놓은 그 폴더'로 간다
     const ac = new AbortController();
@@ -1354,7 +1358,7 @@ function dashFolderBrowser(root, startPath) {
     container.setAttribute('data-uploading', '1');   // 조작 잠금 — 진행 패널이 흐려지지 않게 aria-busy(opacity .5) 대신 이 속성
     render(null);                                    // ⚠ 잠금은 pointer-events:none 이라 CSS 에서 .up-prog 만 되살린다(안 그러면 취소 버튼이 안 눌린다)
     const r = await upSend({
-      items: arr, emptyDirs: dirs, signal: ac.signal,
+      items: arr, emptyDirs: dirs, signal: ac.signal, overwriteNames: pc.over,
       fileUrl: (rel) => '/api/ui/terminal/browse/file?' + qp((dest ? dest + '/' : '') + rel),
       dirUrl: (d) => '/api/ui/terminal/browse/mkdir?' + qp((dest ? dest + '/' : '') + d),
       onProgress: (i, rel, pct) => { if (prog) prog.set(i, rel, pct); },
@@ -1462,7 +1466,8 @@ function dashFolderBrowser(root, startPath) {
     const card = el('div', { class: 'proj-file-card dash-fb-card', title: it.name, role: 'button', tabindex: '0' },
       el('div', { class: 'proj-file-card-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)),
       el('div', { class: 'proj-file-card-nm', text: it.name }),
-      el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }));
+      el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }),
+      it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }) : null);
     card.addEventListener('click', (e: any) => { if (e.target.closest('.dash-fb-actions')) return; openItem(it, isDir); });
     card.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(it, isDir); } });
     card.append(mkActions(it, isDir));
@@ -1476,6 +1481,7 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fb-row-nm', text: it.name }),
       // 폴더는 반복되던 '폴더' 텍스트 대신 hover 셰브런(열기), 파일은 크기(#670).
       isDir ? el('span', { class: 'dash-fb-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'dash-fb-row-sz', text: fmtSize(it.size) }),
+      el('span', { class: 'dash-fb-row-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }),
       mkActions(it, isDir));
     row.addEventListener('click', (e: any) => { if (e.target.closest('.dash-fb-actions')) return; openItem(it, isDir); });
     row.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(it, isDir); } });
@@ -1618,9 +1624,21 @@ function dashFolderThumb() {
   return n;
 }
 
-// ── ④ 팀 작업 로그 — 회사 전체 활동 피드(유형점 + 요약 + 사람·AI·상대시간). 팀원 칩 필터. ──
-//  헤더 '전체 보기'·행 클릭 = 전체 작업 로그 팝업(유형 필터·전체 목록·더보기). 별도 작업 로그 페이지는 폐지(#609 이관본도 팝업으로 통합).
-function openWorklogPopup() { dashModal('작업 로그', companyTimelineSection()); }
+// ── ④ 팀 작업 로그 — 회사 전체 활동 피드(유형점 + 요약 + 사람·AI·상대시간). 유형 드롭다운 필터. ──
+//  #852 로 클릭 두 갈래를 갈랐다 — 이전엔 **행을 눌러도 ⤢(전체 보기)와 똑같은 전체 목록**이 떠서,
+//  "이 작업이 궁금해서 눌렀는데 왜 전체가 뜨지?"가 됐다. 이제:
+//   · 행 클릭  → 그 작업 **한 건**의 상세 팝업(openActivityModal)
+//   · ⤢ 클릭  → 전체 작업 로그 팝업(넓은 창 + 한 번에 쭉 — 6개씩 끊어 보여주던 것 폐지)
+function openWorklogPopup() { dashModal('작업 로그', companyTimelineSection(), true); }
+// 작업 한 건 상세 — 목록 인라인 펼침과 같은 범용 템플릿(activityDetailView)을 팝업에 담는다.
+function openActivityModal(a, nameOf) {
+  const view = activityDetailView(a, nameOf, { head: true });
+  // 상세가 얇은 작업(제목·시각뿐)이면 팝업이 텅 빈 것처럼 보인다 — 비었다는 사실을 말해 준다.
+  if (!activityHasDetail(a)) {
+    view.append(el('div', { class: 'act-doc-empty', text: '이 작업에는 기록된 상세 내용이 없습니다. AI가 본문·연결 지식을 남기면 여기에 보입니다.' }));
+  }
+  dashModal('작업 상세', view, true);
+}
 async function fillActivity(zone) {
   let rows, people;
   try {
@@ -1668,7 +1686,9 @@ async function fillActivity(zone) {
       const when = a.committed_at || a.created_at;
       const sub = [nameOf(a.author_person), a.author_agent, when ? relTime(when) : '']
         .filter(Boolean).join(' · ');
-      return el('div', { class: 'dash-row dash-row--log', role: 'button', tabindex: '0', onclick: openWorklogPopup },
+      // 행 클릭 = **이 작업 한 건**의 상세 팝업(#852). 전체 목록은 헤더 ⤢ 로만.
+      return el('div', { class: 'dash-row dash-row--log', role: 'button', tabindex: '0',
+        title: '자세히 보기', onclick: () => openActivityModal(a, nameOf) },
         el('span', { class: 'dash-dot tn-' + (DASH_ACT_TONE[a.type] || 'mut'), title: DASH_ACT_LABEL[a.type] || a.type || '' }),
         el('span', { class: 'dash-nm' },
           el('span', { class: 'dash-nm-line', title: a.summary || a.title || '', text: a.summary || a.title || '(제목 없음)' }),
@@ -2044,7 +2064,7 @@ async function openProjSessionsPicker(anchor, p) {
   // #req 버그수정 — /terminal/sessions 는 프로젝트 세션을 숨긴다(터미널 탭 정책). 프로젝트 세션은 /projects/:id/sessions 에서 받고 내 것(owned)만.
   try { const d = await api('/api/ui/v6/projects/' + p.id + '/sessions'); sess = ((d && d.sessions) || []).filter((s) => s.owned); }
   catch { toast('세션을 불러오지 못했습니다', true); return; }
-  const openSess = (s) => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+  const openSess = (s) => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
   if (!sess.length) { toast('이 프로젝트의 내 세션이 없어요.'); return; }
   if (sess.length === 1) { openSess(sess[0]); return; }
   const panel = el('div', { class: 'dash-pop-panel dash-listpop' });

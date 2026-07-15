@@ -21,6 +21,7 @@ import { effectiveStoragePolicy } from "./org/storage-policy.js";
 //  차기 **전에** 신규 세션을 막는다(기존 세션·읽기는 안 막는다).
 import { assertDiskWritable } from "./disk-guard.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
+import { SESSION_ID_RE } from "./org/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { memberMkdir } from "./terminal-member-fs.js";
@@ -114,7 +115,7 @@ const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
 const ownerId = (u: LivelyUser): string => u.userId || u.email || "";
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
-const ID_RE = /^box-[a-z0-9-]+-[a-f0-9]{8}$/;
+const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
 
@@ -173,7 +174,8 @@ export function profileConfigDir(user: LivelyUser): string {
   return path.join(PROFILES_ROOT, userSlug(user), "claude");
 }
 // 프로필이 프로비저닝됐으면(로그인된 자격증명 존재) 그 CLAUDE_CONFIG_DIR 을 반환, 아니면 null(→공유 폴백).
-async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
+//  (P2 위탁 태스크 러너 node/tasks.ts 가 재사용 — export)
+export async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
   if (process.env.LIVELY_MULTIPROFILE === "0") return null;
   const dir = profileConfigDir(user);
   try { await fsp.access(path.join(dir, ".credentials.json")); return dir; }
@@ -359,16 +361,27 @@ async function paneAwaitingInput(sessionId: string): Promise<boolean> {
 }
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
+  return collectSessions(ownerId(user));
+}
+
+// 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
+//  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
+//  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
+export async function listSessionsRaw(): Promise<SessionInfo[]> {
+  return collectSessions(null);
+}
+
+// me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
+async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   let out = "";
   try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
-  const me = ownerId(user);
   const nowSec = Math.floor(Date.now() / 1000);
   // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성). 보이는 세션만 rows 로.
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
     const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
-    const owned = !!owner && owner === me;
+    const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -381,7 +394,8 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
       if (nowSec - persisted >= 30) void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
     }
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
-    if (!dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
+    //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
+    if (me !== null && !dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
     rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, labelParts, offline, busy, lastBusy });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
@@ -556,6 +570,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //   (deploy/linux/sudoers-lively). 구 sudoers 면 미보존 → 시스템 TZ 폴백 = 종전 동작(무회귀).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션**부터 적용(#633 과 동일 — 옛 세션은 재생성 시 정상화).
   args.push("-e", `TZ=${await orgTimezone()}`);
+  // 세션 신원(#852) — 이 pane 안에서 도는 AI 가 작업(activity)을 기록할 때 **어느 세션에서 한 일인지**를
+  //  게이트웨이가 스스로 알게 한다. 지금까진 session_id 를 AI 자기보고에만 맡겨 아무도 안 넘겼고(전 기간 box- 형식 1건),
+  //  그래서 "그 작업을 한 터미널에 바로 들어가기"도 "프로젝트 타임라인의 세션 추론"(org/store.ts)도 죽어 있었다.
+  //  경로: 이 env → 하네스 MCP 설정 헤더 `x-lively-session: ${LIVELY_SESSION_ID}` → org/agent-identity.sessionFromHeaders.
+  //  author_agent 를 접속 헤더로 식별하는 것(#182)과 같은 자리·같은 원리 — 자기보고가 아니라 게이트웨이 권위.
+  //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778 과 동일 성질. 옛 세션은 재생성 시 정상화).
+  //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
+  //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
+  args.push("-e", `LIVELY_SESSION_ID=${id}`);
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.
@@ -690,6 +713,20 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
     const invites = await validInvites(patch.invites, ownerId(user));
     await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
   }
+}
+
+// (#869 노드 에이전트 전용) 게이트웨이가 이미 구성원 디렉터리로 검증한 초대 목록을 그대로 기록한다.
+//  노드엔 DB 가 없어 validInvites(listMembers)를 못 돌리므로 검증은 게이트웨이 라우트가, 기록만 노드가.
+//  게이트웨이 로컬 경로에선 쓰지 말 것 — editSession(검증 포함)이 정문. 소유자 확인은 동일하게 강제.
+export async function applyValidatedInvites(user: LivelyUser, id: string, invites: unknown): Promise<void> {
+  await assertManage(user, id);
+  const clean = Array.isArray(invites) ? invites.filter((x): x is string => typeof x === "string" && x !== ownerId(user)) : [];
+  await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(clean)]);
+}
+
+// (#869) 노드 세션 생성 전에 게이트웨이 라우트가 초대 후보를 검증할 수 있게 공개(구성원 실재·소유자 제외·중복 제거).
+export async function validateInvites(ids: unknown, ownerUid: string): Promise<string[]> {
+  return validInvites(ids, ownerUid);
 }
 
 // 리사이즈로 tmux 히스토리에 쌓인 프롬프트 중복(shrink→grow 시 overflow가 history 로 밀림)을 정리.

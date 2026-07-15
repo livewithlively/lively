@@ -23,6 +23,8 @@ import { runAutoBackfillSweep } from "./v6/embedding-backfill.js";
 import { registerWebUi } from "./web.js";
 import { registerTerminal } from "./terminal.js";
 import { killAttachedPtys } from "./terminal-pty.js";
+import { setupNodeUpgrade } from "./node/registry.js";
+import { startTaskScheduler } from "./node/task-scheduler.js";
 import { registerProjectV6Routes } from "./project-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
@@ -234,6 +236,8 @@ const server = app.listen(PORT, () => {
   ensureStateDirs().catch((err) => logger.warn({ err }, "state dir ensure 실패(비치명)"));
   // 중앙 박스 도그푸드 — ttyd 터미널을 정문 뒤로 프록시(/terminal). server 핸들(upgrade)이 필요해 listen 후 배선.
   registerTerminal(app, server, verifier);
+  // 분산 노드(#869) — 노드 에이전트의 아웃바운드 WSS(/node/ws) 수신. 노드는 포트를 열지 않는다(단일 정문 유지).
+  setupNodeUpgrade(server);
   // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
   //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
   // 통합 DB(P0+P1): items/org/domainmap 이 한 DB(ITEMS_DATABASE_URL)에 병합됨. 세 init 을 **직렬** 체인으로
@@ -261,6 +265,8 @@ const server = app.listen(PORT, () => {
       //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
       //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startScheduler(); })
+      // 위탁 태스크 스케줄러(P2 #869) — org_task 큐를 노드 리소스와 대조 배치·감시·재스케줄. 같은 단일 프로세스 게이트.
+      .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startTaskScheduler(); })
       // 로그 재니터(#813 T4) — logs/ 의 로그가 상한(관리탭 저장소 정책)을 넘으면 copytruncate 로 회전한다.
       //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
       //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
