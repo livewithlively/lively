@@ -163,8 +163,12 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
     kitVersionCache = { v: version, at: Date.now() }; // 방금 조립한 게 곧 최신 — 캐시 갱신
     // buildKitBundle 가 org-콘텐츠를 애초에 안 만든다(부트스트랩만) — strip 불요. .lively/ 만 DB 에서 주입(위 writeRuntimeBundle).
     // tar -czf - -C <stage> .  → stdout 로 받기.
+    // ⚠ COPYFILE_DISABLE=1 필수(#858 회귀) — macOS 게이트웨이(우리 dev)에선 stage 파일에 com.apple.provenance
+    //  xattr 이 붙고, bsdtar 가 그걸 AppleDouble `._<name>` 파일로 아카이브에 굽는다. 리눅스 멤버가 풀면
+    //  `.claude/hooks/._run-custom.mjs` 같은 쓰레기가 생겨 self-update 의 `node --check` 검증이 전체를 막았다.
+    //  이 env 가 macOS tar 의 AppleDouble 생성을 끈다(리눅스 GNU tar 는 무시 — 무해, 크로스플랫폼 안전).
     const buf = await new Promise<Buffer>((resolve, reject) => {
-      const child = spawn("tar", ["-czf", "-", "-C", stage, "."]);
+      const child = spawn("tar", ["-czf", "-", "-C", stage, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
       const chunks: Buffer[] = [];
       let err = "";
       child.stdout.on("data", (d) => chunks.push(d as Buffer));
