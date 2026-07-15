@@ -5,6 +5,7 @@ import { buildServer } from "./server.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { initItemSchema, itemsPool } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
+import { reapDeviceAuth } from "./org/device-auth.js";
 import { listBuiltinOverrides, listBuiltinAlwaysLoad } from "./org/store.js";
 import { agentFromHeaders } from "./org/agent-identity.js";
 import { buildToolCandidates } from "./capabilities/index.js";
@@ -304,6 +305,8 @@ const server = app.listen(PORT, () => {
         if (process.env.LIVELY_NO_SCHEDULER === "1") return;
         setTimeout(() => { void runAutoBackfillSweep(); }, 30_000).unref();
         setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
+        // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
+        setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
       })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
