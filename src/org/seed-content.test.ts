@@ -3,7 +3,14 @@
 //  '시드 데이터 자체'의 무결성 + 코드가 전제하는 지식이 시드에 있는지(회귀 방지)만 본다.
 //  실행: npm run build && node dist/org/seed-content.test.js
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-content.js";
+
+// 시딩 지식 본문 SoT — src/org/seed-knowledge/(#846: DB 캡처가 아니라 파일이 원본). dist 에서 도는 이
+//  테스트가 소스 파일을 읽어 default-content.ts(baked) 와 대조한다. dist/org → ../.. → repoRoot → src/org.
+const SEED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "org", "seed-knowledge");
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
@@ -84,6 +91,53 @@ const INJECTIONS = new Set(["always", "recalled"]);
   for (const h of DEFAULT_HOOKS) scan("훅", h.id, h.source_code);
   for (const s of DEFAULT_SKILLS) scan("스킬", s.id, s.body + " " + JSON.stringify(s.frontmatter));
   ok("배포 안전성 — 훅·스킬 본문에 하드코딩 시크릿·내부호스트·절대경로 없음");
+}
+
+// ── #846 시딩 지식 SoT 동기화 가드 — default-content.ts 의 지식 본문·메타 == seed-knowledge/ 파일. ──
+//  왜: 지식 시딩본은 dev WIKI DB 를 그대로 캡처하면 내부 사고·[[링크]]·타 고객사명이 새어 나가(v0.1.148~150
+//  실측 유출) 고객 맥락으로 각색해야 한다. 그 각색본의 SoT 를 seed-knowledge/<name>.md 로 옮겨 capture(DB)가
+//  덮지 못하게 했다. default-content.ts(baked·런타임 시드)는 그 파일에서 재생성되며, 여기서 둘이 바이트
+//  일치함을 강제한다 — default-content.ts 를 손으로 고치거나 옛 capture 로 DB 본문을 도로 굳히면 이 테스트가
+//  깨진다. 고치는 법: seed-knowledge/<name>.md 편집 후 `node scripts/sync-seed-knowledge.mjs`.
+{
+  const meta: Array<Record<string, any>> = JSON.parse(fs.readFileSync(path.join(SEED_DIR, "manifest.json"), "utf8"));
+  const seedNames = meta.map((m) => m.name).sort();
+  const dcNames = DEFAULT_KNOWLEDGE.map((k) => k.name).sort();
+  assert.deepEqual(seedNames, dcNames, "manifest.json 의 지식 이름이 DEFAULT_KNOWLEDGE 와 불일치 — 한쪽만 추가/삭제됨");
+  for (const m of meta) {
+    const k = DEFAULT_KNOWLEDGE.find((x) => x.name === m.name)!;
+    const body = fs.readFileSync(path.join(SEED_DIR, `${m.name}.md`), "utf8");
+    assert.equal(k.body_md, body, `'${m.name}' 본문이 seed-knowledge/${m.name}.md 와 다름 — 'node scripts/sync-seed-knowledge.mjs' 를 실행하세요(default-content.ts 를 직접 고치지 말 것)`);
+    for (const f of ["title", "injection", "provenance", "lifecycle", "is_wiki", "type"] as const) {
+      assert.equal((k as any)[f], m[f], `'${m.name}' 의 ${f} 가 manifest.json 과 다름 — sync 필요`);
+    }
+  }
+  ok(`시딩 지식 ${meta.length}종이 seed-knowledge/ SoT 와 일치(본문·메타 바이트 대조 — 하드에딧·DB 재오염 가드)`);
+}
+
+// ── #846 배포 안전성 — 시딩 지식 본문·제목에 '고객 박스로 새면 안 되는 내부 흔적'이 없는지. ──
+//  구조적 트립와이어: [[내부 링크]](고객 박스엔 대상 지식이 없어 댕글링) · 시딩 메커니즘 자기참조 ·
+//  메타블록 · 시크릿/내부호스트/절대경로. (closeout 회귀는 [[]]+메타블록으로, domainmap 유출은 [[]]로
+//  여기서 걸렸을 것이다.) ⚠ 한계: 타 고객사명·사내 인물 같은 '평문 이름' 유출은 정규식으로 못 잡는다 —
+//  그건 seed-knowledge/*.md 를 사람이 각색할 때 + knowledge_save 의 seed_warning 리마인더가 막는 몫이다.
+{
+  const KN_LEAK = [
+    { re: /\[\[/, why: "위키 내부 링크([[…]]) — 고객 박스엔 대상이 없어 댕글링" },
+    { re: /src\/org\/(seed-knowledge|default-content)/, why: "시딩 메커니즘 자기참조(내부 경로)" },
+    { re: /고객 박스에도 시딩|이 (루틴|지식)은 .*고객 박스/, why: "시딩 메타블록(우리 내부 운영 설명)" },
+    { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, why: "개인키" },
+    { re: /\bAKIA[0-9A-Z]{16}\b/, why: "AWS 액세스키" },
+    { re: /lvly\.io/, why: "라이블리 내부 호스트" },
+    { re: /@snu\.ac\.kr/, why: "개인 이메일" },
+    { re: /\/Users\/[a-z]/, why: "맥 절대경로" },
+  ];
+  for (const k of DEFAULT_KNOWLEDGE) {
+    for (const { re, why } of KN_LEAK) {
+      assert.ok(!re.test(k.body_md), `시딩 지식 '${k.name}' 본문에 ${why} 로 보이는 것이 있음 — 고객 배포 부적합(seed-knowledge/${k.name}.md 각색)`);
+      assert.ok(!re.test(k.title ?? ""), `시딩 지식 '${k.name}' 제목에 ${why} 로 보이는 것이 있음`);
+    }
+  }
+  ok("배포 안전성 — 시딩 지식 본문·제목에 내부 링크·시딩메타·시크릿·내부호스트·절대경로 없음");
 }
 
 console.log(`\n${pass} passed`);

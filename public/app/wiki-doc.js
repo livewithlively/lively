@@ -13,6 +13,21 @@ import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js'
 import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, wkTrackEditor, } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
+// 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
+//  준다) 띄운다. 자동저장이 짧은 간격으로 반복 커밋하므로 name 당 한 번만(같은 문서 재편집은 60s 쿨다운)
+//  띄워 토스트 폭주를 막는다. 문구는 서버가 준 그대로(각색 파일 경로·절차 포함) — 9s 노출.
+const _wkSeedWarnedAt = new Map();
+function wkSeedWarn(r) {
+    const w = r && r.seed_warning;
+    if (!w)
+        return;
+    const key = (r.knowledge && r.knowledge.name) || w; // stage 응답은 knowledge:null — 문구를 키로
+    const now = Date.now();
+    if (now - (_wkSeedWarnedAt.get(key) || 0) < 60000)
+        return;
+    _wkSeedWarnedAt.set(key, now);
+    toast(w, false, 9000);
+}
 // ════════════════════════════════════════════
 // 문서 캔버스 — buildWikiDoc(container, name, opts { mode: 'page'|'peek', onDeleted?, originHash? })
 // ════════════════════════════════════════════
@@ -200,13 +215,14 @@ async function buildWikiDoc(container, name, opts = {}) {
                 const payload = { name: k.name, title: t, body_md: bodyMdNow() };
                 if (k.is_folder)
                     payload.is_folder = true;
-                await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+                const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
                 k.title = t;
                 knInvalidateTreeCaches(); // 사이드바 트리·목록에 옛 제목이 남지 않게
                 const cur = crumbs.querySelector('.wk-crumb-cur');
                 if (cur)
                     cur.textContent = t;
                 toast('제목을 저장했습니다');
+                wkSeedWarn(r); // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
             }
             catch (e) {
                 toast('제목 저장 실패 — ' + e.message, true);
@@ -221,7 +237,7 @@ async function buildWikiDoc(container, name, opts = {}) {
         if (k.is_folder)
             payload.is_folder = true;
         payload[field] = value;
-        await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+        const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
         if (field === 'type') {
             k.type = value;
         }
@@ -234,6 +250,7 @@ async function buildWikiDoc(container, name, opts = {}) {
         }
         knInvalidateTreeCaches(); // 사이드바 트리·카테고리 목록 캐시에 stale 유형/분류가 남지 않게
         toast('저장했습니다');
+        wkSeedWarn(r); // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
         paintPropline();
     };
     function proplineItem(text, opts2 = {}) {
@@ -1047,6 +1064,7 @@ async function renderWikiDraft(view, params) {
                 if (r && r.similar && r.similar.length) {
                     toast('비슷한 지식이 이미 있어요 — "' + (r.similar[0].title || r.similar[0].name) + '"');
                 }
+                wkSeedWarn(r); // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
                 wkRecordVisit(created);
                 paintPropline();
             }
@@ -1070,11 +1088,12 @@ async function renderWikiDraft(view, params) {
                 payload.type = typeVal;
             if (catKey)
                 payload.category = catKey;
-            await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+            const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
             editor.resetDirty();
             created.title = payload.title;
             draftFirstEditAt = 0;
             setChip('저장됨'); // 상시 유지
+            wkSeedWarn(r); // #846 시딩 지식이면 seed 파일도 갱신하라고 안내
         }
         catch (e) {
             setChip('저장 안 됨', true);
