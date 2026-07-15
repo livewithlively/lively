@@ -377,6 +377,17 @@ function renderContainer(type, rest, bodyLines) {
             // AI에게 실제로 시켜 볼 말 한 덩어리(#780 사용설명서) — 코드블록(명령어)과 구분되는 '대화 예시' 표면.
             return moveChildren(inner(), el('div', { class: 'md-prompt' }));
         }
+        case 'button':
+        case 'cta': {
+            // 설명서 안의 실제 CTA 버튼(#879) — href 로 이동(예: 따라하기 투어 #/dashboard?tour=1), 라벨은 요약 텍스트.
+            const a = el('a', { class: 'btn btn-primary md-cta', href: attrs.href || '#' });
+            if (attrs.target) {
+                a.setAttribute('target', attrs.target);
+                a.setAttribute('rel', 'noopener');
+            }
+            a.append(...renderInline(summary || rest || '열기'));
+            return a;
+        }
         case 'synced': {
             const box = el('div', { class: 'md-synced' });
             box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));
