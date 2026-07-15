@@ -251,7 +251,11 @@ async function cmdDelegate(rest) {
   }
   const prompt = parts.join(" ").trim();
   if (!prompt) die('위탁할 작업 지시가 필요합니다.  예: lively delegate "테스트 전체 실행하고 결과 보고" --ram 2048', 2);
-  const { task } = await api("/api/ui/delegate", { method: "POST", body: { prompt, ...need } });
+  // CLI 는 자체 로그 스트리밍(streamAndExit)을 하므로 서버 wait 는 끈다(이중 대기 방지).
+  //  queue 옵션은 CLI 에선 기본 대기(배치 불가면 계속 폴링) — 서버엔 queue:true 로 등록(no_capacity 즉실패 대신).
+  const res = await api("/api/ui/delegate", { method: "POST", body: { prompt, ...need, wait: false, queue: true } });
+  if (res.no_capacity) { say(red(`위탁 불가 — ${res.reason || "가용 노드 없음"}`)); say(dim("로컬에서 직접 실행하세요.")); process.exit(2); }
+  const task = res.task;
   if (detach) { say(green(`위탁 #${task.id} 생성 — 진행: lively delegate logs ${task.id}`)); process.stdout.write(String(task.id) + "\n"); return; }
   say(dim(`위탁 #${task.id} 생성 — 배치 대기…`));
   await streamAndExit(task.id, jsonMode);

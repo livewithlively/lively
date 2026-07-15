@@ -9,7 +9,10 @@ import { createTask, getTask, listTasks, markCanceled, type DelegateStatus } fro
 import { getNode } from "../node/store.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
-import { CENTRAL_NODE_ID } from "../node/task-scheduler.js";
+import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const DEFAULT_WAIT_SEC = 120; // wait 모드 기본 — 대부분의 위탁이 이 안에 끝난다. 초과분은 백그라운드 계속 + 폴백 안내.
 
 const uid = (user: any): string => String(user?.userId || user?.email || "");
 const isAdmin = (user: any): boolean => Array.isArray(user?.scopes) && user.scopes.includes("admin");
@@ -18,9 +21,11 @@ const run: Capability = {
   name: "delegate_run",
   title: "작업 위탁 실행",
   description:
-    "무거운 1회성 작업을 워커 노드(또는 중앙)에 위탁한다. prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(스케줄러가 노드 리소스와 대조), " +
-    "needs_docker=도커 필요 여부, node=특정 노드 지정(선택), subpath=공유 워크스페이스 하위 작업 폴더(비우면 delegated/task-<id>). " +
-    "반환 {task} — 진행은 delegate_logs(tail)·delegate_status 로. 셸에선 `lively delegate` CLI 가 진행 미러+결과 회수+exit 을 한 번에 한다(권장).",
+    "무거운 1회성 작업(풀빌드·대량 테스트·장기 스크립트 등)을 워커 노드나 중앙에 위탁한다. 서브에이전트를 소환하듯 쓴다 — " +
+    "기본(wait)은 완료까지 기다렸다 결과를 바로 돌려준다. **로컬 리소스가 부족하거나 다른 노드에 오프로드하는 게 나을 때 시도하라.** " +
+    "지금 가용 노드가 없으면 {no_capacity:true, reason}을 즉시 돌려주니 그때는 로컬에서 직접 실행하면 된다(무한 대기 안 함). " +
+    "queue:true 를 주면 적합 노드가 날 때까지 대기 등록(장기 잡). prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스와 대조), " +
+    "needs_docker·node(지정)·subpath. wait_sec=완료 대기 상한(기본 120s — 초과 시 백그라운드 계속+폴백 안내). 셸 세션은 `lively delegate` CLI 가 동형.",
   scope: "context",
   input: {
     prompt: z.string().min(1).max(20000),
@@ -33,7 +38,9 @@ const run: Capability = {
     flags: z.record(z.string()).optional(),
     timeout_sec: z.number().int().min(60).max(21600).optional(),
     max_attempts: z.number().int().min(1).max(5).optional(),
-    notify_session: z.string().max(120).optional(), // deprecated(§11) — 무시됨. 통지는 CLI/delegate_logs pull 로.
+    wait: z.boolean().optional(),       // 기본 true — 완료까지 대기 후 결과 반환(서브에이전트 동형). false=즉시 task 반환.
+    wait_sec: z.number().int().min(5).max(1800).optional(), // wait 상한(기본 120s)
+    queue: z.boolean().optional(),      // 배치 불가 시 즉시 no_capacity(기본) 대신 대기 등록(장기 잡)
   },
   expose: {
     mcp: true,
@@ -42,21 +49,36 @@ const run: Capability = {
   handler: async (input: any, user: any) => {
     const requester = uid(user);
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
-    if (input.node) {
-      if (input.node !== CENTRAL_NODE_ID) {
-        const n = await getNode(String(input.node));
-        if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${input.node}`);
-      }
+    if (input.node && input.node !== CENTRAL_NODE_ID) {
+      const n = await getNode(String(input.node));
+      if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${input.node}`);
     }
     const task = await createTask({
-      requester, requesterSession: null, prompt: String(input.prompt), // notify_session deprecated(§11) — 저장 안 함
-
+      requester, requesterSession: null, prompt: String(input.prompt),
       subpath: input.subpath, flags: input.flags,
       needCpu: input.need_cpu ?? null, needRamMb: input.need_ram_mb ?? null, needDiskMb: input.need_disk_mb ?? null,
       needsDocker: !!input.needs_docker, nodePref: input.node ?? null,
       timeoutSec: input.timeout_sec, maxAttempts: input.max_attempts,
     });
-    return { task, hint: "진행 확인: delegate_status { id: " + task.id + " }" };
+    // 요청→즉답 계약: 지금 배치 가능한지 그 자리에서 판정한다(스케줄러 tick 안 기다림).
+    const r = await tryAssignNow(task);
+    if (!r.assigned) {
+      if (!input.queue) {
+        // 큐잉 안 함(기본) — 가용 노드 없음을 즉시 알린다. 하네스는 로컬에서 직접 실행하면 된다.
+        await markCanceled(task.id);
+        return { no_capacity: true, reason: r.reason, hint: "지금 위탁 가능한 노드가 없습니다 — 로컬에서 직접 실행하거나, queue:true 로 대기 등록하세요." };
+      }
+      return { task: await getTask(task.id), queued: true, reason: r.reason, hint: `대기 등록됨 — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
+    }
+    // 배치됨. wait=false 면 즉시 반환, 기본은 완료까지 대기(상한 내).
+    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId}). 진행: delegate_status ${task.id}` };
+    const deadline = Date.now() + (input.wait_sec ?? DEFAULT_WAIT_SEC) * 1000;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      const cur = await getTask(task.id);
+      if (cur && ["done", "failed", "canceled"].includes(cur.status)) return { task: cur, done: true };
+    }
+    return { task: await getTask(task.id), still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
   },
 };
 
