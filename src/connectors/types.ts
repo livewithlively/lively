@@ -13,9 +13,37 @@ export interface BackfillOpts {
   retryIds?: string[];
 }
 
+/**
+ * 사람 매핑용 외부 사용자(#837) — 관리탭 [외부 자료 수집 ▸ 멤버 매핑] 패널이 쓴다.
+ *  매핑은 "외부 시스템의 사람 ↔ 우리 구성원"인데, **외부 목록이 없으면** 관리자가 외부 id 를 손으로 쳐야 한다
+ *  (ClickUp 숫자 id 를 어디서 찾는지도 모르고, 오타는 조용히 매칭 실패로 끝난다). 목록을 주면 드롭다운으로 고른다.
+ */
+export interface ConnectorUser {
+  /** 외부 시스템의 사용자 id — person_identity.external_id 로 저장된다. */
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  /** 아바타 대체 표기(있으면) */
+  initials?: string | null;
+  /** #rrggbb — 화면은 검증 후에만 style 에 쓴다(외부 데이터 CSS 주입 방지) */
+  color?: string | null;
+  avatar_url?: string | null;
+  /** 워크스페이스/팀 식별자 — person_identity.instance 로 저장 */
+  instance?: string | null;
+  /** 비활성·삭제된 사용자(목록엔 두되 흐리게) */
+  inactive?: boolean;
+}
+
 export interface Connector {
   /** 소스 식별자: "slack" | "discord" | "notion" */
   name: string;
+  /**
+   * (선택) 이 소스의 사용자 목록(#837) — 사람 매핑 패널용.
+   *  · 안 다는 커넥터: gmail·gdrive(개인 OAuth 라 '멤버' 개념 자체가 없다), domain-wiki(로컬 git).
+   *  · discord 는 guild members 에 privileged intent(GUILD_MEMBERS)가 필요하고 guild id 가 설정에 없어 보류 —
+   *    인터페이스는 열려 있으니 나중에 달면 UI 는 그대로 동작한다.
+   */
+  listUsers?(): Promise<ConnectorUser[]>;
   /** 과거 데이터 일괄 — RawItem 을 async 스트림으로 yield (페이지네이션은 내부에서 처리) */
   backfill(opts?: BackfillOpts): AsyncIterable<RawItem>;
   /** (선택) 실시간 — 신규/변경분을 onItem 으로 흘림 */

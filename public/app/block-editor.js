@@ -1181,6 +1181,17 @@ export function createBlockEditor(opts = {}) {
         { k: 'highlight', ic: '🖍', label: '형광펜', hint: '==강조==', kw: 'highlight mark 형광펜 강조 마커 하이라이트', apply: () => wrapOrInsertInline('mark') },
         { k: 'clearfmt', ic: '⌫', label: '서식 지우기', hint: '선택 서식 제거', kw: 'clear format remove clean 서식 지우기 초기화 제거', apply: () => { document.execCommand('removeFormat'); document.execCommand('unlink'); markDirty(); } },
     ];
+    // #764 슬래시 항목 단축키 표기 — 마크다운 프리픽스(줄머리 '# ' 등)와 키보드 단축을 메뉴 우측 kbd 로.
+    const _isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
+    const _MOD = _isMac ? '⌘' : 'Ctrl+';
+    const _SFT = _isMac ? '⇧' : 'Shift+';
+    const SLASH_SC = {
+        h1: '#', h2: '##', h3: '###', h4: '####',
+        bullet: '-', numbered: '1.', todo: '[]', toggle: '>', quote: '"', code: '```', divider: '---',
+        bold: _MOD + 'B', italic: _MOD + 'I', underline: _MOD + 'U', icode: _MOD + 'E', highlight: _MOD + _SFT + 'H',
+    };
+    SLASH_ITEMS.forEach((it) => { if (SLASH_SC[it.k])
+        it.sc = SLASH_SC[it.k]; });
     // #730 슬래시 카테고리(클릭업/노션식 섹션 그룹핑). k → 카테고리.
     const SLASH_CAT = {
         text: 'basic', h1: 'basic', h2: 'basic', h3: 'basic', h4: 'basic',
@@ -1242,7 +1253,7 @@ export function createBlockEditor(opts = {}) {
                 const found = SLASH_CAT_ORDER.find(([k]) => k === cat);
                 kids.push(el('div', { class: 'be-slash-head', text: found ? found[1] : '블록' }));
             }
-            const row = el('button', { class: 'be-slash-item' + (idx === slash.sel ? ' on' : ''), type: 'button', role: 'menuitem' }, el('span', { class: 'be-slash-ic', text: it.ic }), el('span', { class: 'be-slash-label', text: it.label }), el('span', { class: 'be-slash-hint', text: it.hint }));
+            const row = el('button', { class: 'be-slash-item' + (idx === slash.sel ? ' on' : ''), type: 'button', role: 'menuitem' }, el('span', { class: 'be-slash-ic', text: it.ic }), el('span', { class: 'be-slash-label', text: it.label }), el('span', { class: 'be-slash-hint', text: it.hint }), it.sc ? el('kbd', { class: 'be-slash-sc', text: it.sc }) : null);
             row.addEventListener('mousedown', (e) => e.preventDefault()); // 포커스/선택 유지
             row.onclick = () => applySlash(it);
             kids.push(row);
@@ -2676,7 +2687,21 @@ export function createBlockEditor(opts = {}) {
         try {
             closeSlashMenu();
             closeMention();
-            root.replaceChildren(...mdToBlocks(h.md).map(makeBlock));
+            //  #764 부분 패치 — 블록 개수가 같으면 '달라진 블록만' 교체해 나머지 DOM·캐럿·스크롤을 보존한다.
+            //  (전체 replaceChildren 은 매 undo 마다 문서 전체를 다시 그려 깜빡임·캐럿튐을 유발) 구조 변경(개수 상이)은 안전하게 전체 재구성.
+            const target = mdToBlocks(h.md);
+            const cur = blockEls();
+            if (target.length > 0 && cur.length === target.length) {
+                for (let k = 0; k < target.length; k++) {
+                    const tMd = blocksToMd([target[k]]);
+                    const cMd = blocksToMd([blockData(cur[k])]);
+                    if (cMd !== tMd)
+                        cur[k].replaceWith(makeBlock(target[k]));
+                }
+            }
+            else {
+                root.replaceChildren(...target.map(makeBlock));
+            }
             ensureOne();
             renumber();
         }

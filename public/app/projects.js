@@ -7132,20 +7132,20 @@ function copyText(text) {
     catch (_) { /* */ }
     fallback();
 }
-// 만든 명령을 OS별(Mac/Linux · Windows)로 렌더 — work.mjs 경로의 홈 표기가 셸마다 달라서(윈도우는 ~ 미확장).
+// 만든 명령을 렌더 — #864 부터 **한 줄**이다(`lively run <프로젝트번호> …`).
+//  종전엔 OS별로 두 벌을 보여줬다: `node ~/.lively/work.mjs …` 와 `node "$env:USERPROFILE\.lively\work.mjs" …`.
+//  갈라진 이유는 오직 홈 경로 표기(윈도우 셸은 ~ 를 확장하지 않는다)였는데, CLI 가 PATH 에 있으니 그 문제가 사라졌다.
+//  엔진은 그대로 work.mjs — `lively run` 이 인자를 그대로 넘긴다.
 function renderLocalWorkCommand(wrap, argStr, info) {
-    const cmdNix = 'node ~/.lively/work.mjs ' + argStr;
-    const cmdWin = 'node "$env:USERPROFILE\\.lively\\work.mjs" ' + argStr;
-    const cmdBlock = (label, cmd) => {
-        const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '복사' });
-        copyBtn.onclick = () => copyText(cmd);
-        return el('div', { style: 'margin-top:8px' }, el('p', { class: 'ps-block-hint', style: 'margin:0 0 4px', text: label }), el('div', { style: 'display:flex;gap:8px;align-items:flex-start' }, el('pre', { style: 'flex:1;margin:0;padding:8px 10px;background:rgba(127,127,127,.1);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;line-height:1.5;user-select:all' }, el('code', { text: cmd })), copyBtn));
-    };
-    const notes = ['내 OS에 맞는 한 줄을 터미널에 붙여넣어 실행하세요. (Node 필요)'];
+    const cmd = 'lively run ' + argStr;
+    const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '복사' });
+    copyBtn.onclick = () => copyText(cmd);
+    const notes = ['내 PC 터미널에 붙여넣어 실행하세요 (Mac · Windows 동일).'];
     if (info && info.repo && !info.hasUrl)
         notes.push('※ 이 레포는 git 주소 미설정 — --git-url 없음. 입력 경로에 레포가 이미 있어야 함(없으면 관리탭 ▸ 레포(git) 관리에서 git 주소 연결).');
+    notes.push("※ 'lively: command not found' 가 나오면 아직 라이블리를 설치하지 않은 거예요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요.");
     notes.push('복사가 안 되면(보안 컨텍스트 아님) 명령을 직접 드래그해 복사하세요.');
-    wrap.replaceChildren(el('div', { style: 'margin-top:14px;border-top:1px solid rgba(127,127,127,.18);padding-top:12px' }, el('h3', { class: 'ps-block-title', text: '내 PC에서 실행' }), cmdBlock('Mac / Linux', cmdNix), cmdBlock('Windows (PowerShell)', cmdWin), ...notes.map((n) => el('p', { class: 'ps-block-hint', text: n }))));
+    wrap.replaceChildren(el('div', { style: 'margin-top:14px;border-top:1px solid rgba(127,127,127,.18);padding-top:12px' }, el('h3', { class: 'ps-block-title', text: '내 PC에서 실행' }), el('div', { style: 'display:flex;gap:8px;align-items:flex-start;margin-top:8px' }, el('pre', { style: 'flex:1;margin:0;padding:8px 10px;background:rgba(127,127,127,.1);border-radius:6px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;line-height:1.5;user-select:all' }, el('code', { text: cmd })), copyBtn), ...notes.map((n) => el('p', { class: 'ps-block-hint', text: n }))));
 }
 // 팀원 블록 — 현재 팀원 칩 + '팀원 수정'(멀티선택 오버레이). 저장 시 설정 팝업 닫고 상세 재렌더.
 // (팀원·카테고리·관련레포 블록 제거 — #473 후속. 세부 설정은 새 프로젝트 폼과 같은 컴팩트 피커 + 자동저장으로 openProjectSettings 에 인라인.)

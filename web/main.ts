@@ -7,10 +7,11 @@ import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';   // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
-import { renderMyDashboard } from './dashboard-home.js';
+import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
-import { changePasswordModal, openMyProfile, renderSystem } from './admin.js';
+import { changePasswordModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 
@@ -65,6 +66,12 @@ async function route() {
     if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
       await renderMyDashboard(view);
+      // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
+      //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
+      if (params.get('tour') === '1') {
+        history.replaceState(null, '', '#/dashboard');
+        startDashboardSessionTour();
+      }
     } else if (page === 'learn') {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
       if (segs[1] === 'install') await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
@@ -72,6 +79,15 @@ async function route() {
       else if (segs[1] === 'menu') await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
       else if (segs[1] === 'docs') await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
       else await renderLearn(view);
+    } else if (page === 'start') {
+      // #/start — 구성원 온보딩(#846/850). **온보딩의 유일한 진입·완주 표면.** 상태 SoT 는 서버
+      //  computeMemberOnboarding 이고 이 화면과 AI 스킬이 같은 REST 를 읽는다(드리프트 0).
+      //  #/start/setup 은 기존 설치 화면(renderInstall)을 **그대로 재사용** — 화면을 복제하지 않는다
+      //  (#/learn/install 도 계속 살아 있어 기존 딥링크·북마크가 깨지지 않는다. 같은 컴포넌트, 두 경로).
+      setActiveTab('learn');
+      if (segs[1] === 'setup') await renderInstall(view);
+      else if (segs[1] === 'migrate') await renderStartMigrate(view);
+      else await renderStart(view);
     } else if (page === 'install') {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
       location.replace('#/learn/install');
@@ -152,7 +168,7 @@ async function boot() {
   }
   if (!state.me || !state.me.userId) { showGate(); return; }
   hideGate();
-  // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→셀프 편집(openMyProfile).
+  // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→[관리 ▸ 내 설정 ▸ 내 정보].
   const userBtn = document.getElementById('user-email');
   if (userBtn) {
     const nm = state.me.display_name || state.me.email || state.me.userId || '';
@@ -180,11 +196,13 @@ async function boot() {
     showGate('로그아웃되었습니다.');
   });
 })();
-// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 셀프 편집 모달(표시 이름·개인 레이어). 한 번만 배선.
+// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 [관리 ▸ 내 설정 ▸ 내 정보]로 이동. 한 번만 배선.
+//  구 셀프 편집 모달(openMyProfile)은 폐지(#837 · 사용자 지적: "내 설정이랑 겹치니까 모달 지우고 이동하게").
+//  모달에 프사·표시이름이 남아 있으면 [내 정보]와 **같은 걸 두 곳에서 편집**하는 게 된다 — 그걸 없애려고 폈던 건데.
 (() => {
   const btn = document.getElementById('user-email');
   if (!btn) return;
-  btn.addEventListener('click', () => { if (state.me) openMyProfile(); });
+  btn.addEventListener('click', () => { if (state.me) location.hash = '#/system/me-profile'; });
 })();
 // ── 부팅 이전에 등록되던 DOM 리스너(원래 파일 상단 로드 시 등록 — 모듈 진입점으로 이동, 동작 동일) ──
 // ── 스킵 링크 — href 를 따라가면 해시 라우터가 오작동하므로 JS 로 포커스만 이동(§8) ──

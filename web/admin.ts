@@ -980,14 +980,27 @@ async function cronPanel(detail, data) {
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; actions = (r && r.actions) || []; tz = (r && r.timezone) || tz; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
 
+  // 자동 생성 잡(#837) — [외부 자료 수집]에서 커넥터를 켜면 서버가 `sync-<system>`(노션은 `-full` 도)을
+  //  **자동으로 등록/해제**한다(src/org/store.ts:987). 관리자가 만든 게 아닌데 목록에선 구분이 안 돼
+  //  "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면 커넥터는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+  const autoSystemOf = (j) => {
+    if (j.action !== 'connector_sync') return null;
+    const sys = j.params && j.params.system;
+    if (!sys) return null;
+    return (j.id === 'sync-' + sys || j.id === 'sync-' + sys + '-full') ? String(sys) : null;
+  };
+
   const rows = el('div', { class: 'wikicat-rows' });
   if (!jobs.length) rows.append(el('div', { class: 'wikicat-empty', text: '아직 스케줄 잡이 없습니다.' }));
   for (const j of jobs) {
+    const autoSys = autoSystemOf(j);
     const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : ('매 ' + (j.interval_sec || 0) + '초'));
     const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
     const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
     const main = el('div', { class: 'wikicat-row-main' },
       el('span', { class: 'wikicat-name', text: j.label || j.id }),
+      autoSys ? withTip(el('span', { class: 'pill', text: '자동' }),
+        '[외부 자료 수집]에서 ' + autoSys + ' 를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 커넥터를 끄세요.') : null,
       el('span', { class: 'wikicat-key mono', text: j.action + sess }),
       el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }),
       el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
@@ -995,7 +1008,7 @@ async function cronPanel(detail, data) {
       el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openCronForm(j, actions, reload, tz) }),
-      el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload) }));
+      el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => cronDelete(j.id, reload, autoSys) }));
     rows.append(el('div', { class: 'wikicat-row' }, main, acts));
   }
   const head = el('div', { class: 'wikicat-grouphead' },
@@ -1095,8 +1108,14 @@ async function cronToggle(job, reload) {
   try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: job.id, enabled: !job.enabled }) }); reload(); }
   catch (e) { toast('실패 — ' + e.message, true); }
 }
-async function cronDelete(id, reload) {
-  if (!confirm('스케줄 잡 ‘' + id + '’을(를) 삭제할까요?')) return;
+// autoSys 가 있으면 이 잡은 [외부 자료 수집]이 만든 것 — 지워도 커넥터를 다시 켜면 되살아나고(ON CONFLICT DO UPDATE),
+//  그 사이엔 "커넥터는 켜져 있는데 싱크는 안 도는" 상태가 된다. 그러니 지우지 말고 커넥터를 끄라고 말해 준다.
+async function cronDelete(id, reload, autoSys?) {
+  const warn = autoSys
+    ? '⚠ 이 잡은 [외부 자료 수집 ▸ ' + autoSys + ']이(가) 자동으로 만든 것입니다.\n\n지워도 그 커넥터를 다시 켜면 되살아나고, '
+      + '그때까지는 커넥터만 켜져 있고 싱크는 안 도는 상태가 됩니다.\n싱크를 멈추려면 이 잡이 아니라 **커넥터를 끄세요**.\n\n그래도 삭제할까요?'
+    : '스케줄 잡 ‘' + id + '’을(를) 삭제할까요?';
+  if (!confirm(warn)) return;
   try { await api('/api/ui/cron/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
   catch (e) { toast('실패 — ' + e.message, true); }
 }
@@ -1686,6 +1705,29 @@ function showInitialAccount(id, name, email, password, data) {
     el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [사용 가이드 › 시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.' }));
 }
 
+// 외부 계정 연결(identities) 요약 — 읽기 전용 표시 + 매핑 화면 링크(#837).
+//  identities 는 "이 슬랙 메시지 쓴 사람 = 우리 윤상민"을 AI 가 알아보는 근거다. 편집 SoT 는
+//  [외부 자료 수집 ▸ 멤버 매핑] — 거기선 커넥터가 실제 사용자 목록을 줘서 드롭다운으로 고른다.
+//  구성원 화면에서 손타이핑하게 두면 외부 id 를 어디서 찾는지도 모르고 오타가 조용히 매칭을 깨뜨린다.
+function idnSummary(identities) {
+  const wrap = el('div', { class: 'idn-wrap' });
+  if (!identities.length) {
+    wrap.append(el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: '연결된 외부 계정이 없습니다.' }));
+  } else {
+    for (const idn of identities) {
+      wrap.append(el('div', { class: 'idn-row idn-ro' },
+        el('span', { class: 'pill', text: idn.system }),
+        el('span', { class: 'mini-title', text: idn.external_id }),
+        idn.email ? el('span', { class: 'mini-meta', text: idn.email }) : null));
+    }
+  }
+  wrap.append(el('div', { class: 'admin-actions' },
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/connectors', text: '외부 자료 수집에서 매핑 →' }),
+    el('span', { class: 'admin-hint', style: 'margin:0',
+      text: '커넥터별 사용자 목록에서 골라 연결합니다 — 외부 ID를 직접 찾을 필요가 없어요.' })));
+  return wrap;
+}
+
 // ── 구성원 보기 모드 — [수정]을 누르기 전 기본 화면. 폼이 아니라 읽기 전용 요약을 보여준다. ──
 //  권한 있는 사람(canEdit)만 [수정] 버튼이 보이고, 누르면 편집모드로 전환(memberForm). 비-admin 은 버튼 없음.
 function memberRead(root, m, data, detail, opts: any = {}) {
@@ -1697,9 +1739,6 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       canEdit ? (m.hasToken ? el('span', { class: 'pill pill-ok', text: '설치됨' }) : el('span', { class: 'pill', text: '미설치' })) : null),
   ];
   if (canEdit) {
-    const idnText = (m.identities && m.identities.length)
-      ? m.identities.map((idn) => idn.system + ':' + idn.external_id + (idn.email ? ' (' + idn.email + ')' : '')).join('\n')
-      : '';
     const scopeText = (m.scopes || []).map((sk) => MEMBER_SCOPE_LABEL[sk] ? MEMBER_SCOPE_LABEL[sk] + ' (' + sk + ')' : sk).join(', ');
     kids.push(
       roRow('아이디', m.id),
@@ -1707,7 +1746,7 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       roRow('대표 이메일', m.email),
       roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'),
       roRow('권한 (이 구성원 토큰의 scope)', scopeText),
-      field('외부 계정 연결 (신원 매칭 키)', el('div', { class: 'admin-ro admin-ro-pre', text: idnText || '—' })),
+      field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])),
       field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
   } else {
     kids.push(el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }));
@@ -1761,32 +1800,22 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     scopeWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label + ' (' + sk + ')'));
   }
 
-  // 외부 계정 연결(identities) — 신원 매칭 키. 구조화 행 + 추가/삭제.
-  const idnWrap = el('div', { class: 'idn-wrap' });
-  const idnRows: any[] = [];
-  function addIdn(idn) {
-    const sysIn = el('input', { type: 'text', value: (idn && idn.system) || '', placeholder: 'slack / discord / notion …', class: 'idn-sys' });
-    const extIn = el('input', { type: 'text', value: (idn && idn.external_id) || '', placeholder: '외부 계정 ID', class: 'idn-ext' });
-    const emIn = el('input', { type: 'text', value: (idn && idn.email) || '', placeholder: '이메일(선택)', class: 'idn-em' });
-    const rm = el('button', { class: 'btn-text', text: '✕', title: '삭제' });
-    const row = el('div', { class: 'idn-row' }, sysIn, extIn, emIn, rm);
-    const rec = { row, sysIn, extIn, emIn };
-    rm.addEventListener('click', () => { row.remove(); const i = idnRows.indexOf(rec); if (i >= 0) idnRows.splice(i, 1); });
-    idnRows.push(rec);
-    idnWrap.append(row);
-  }
-  (m.identities || []).forEach(addIdn);
+  // 외부 계정 연결(identities) — **여기선 읽기 전용**(#837).
+  //  예전엔 여기서 system·external_id 를 **손으로 타이핑**했다. 그런데 ClickUp 숫자 id 를 어디서 찾는지 알 길이
+  //  없고, 시스템명 오타는 조용히 매칭 실패로 끝났다. 매핑의 편집 SoT 는 [외부 자료 수집 ▸ 멤버 매핑]이다 —
+  //  거기선 커넥터가 실제 사용자 목록을 주므로 드롭다운으로 고르기만 하면 된다(오타 불가).
+  //  ⚠ 저장 시 identities 를 **안 보낸다** → 서버가 보존한다(delivery.org_member_upsert: undefined 면 미변경).
+  const idnWrap = idnSummary(m.identities || []);
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: opts.saveLabel || (isNew ? '추가' : '저장') });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
-    const identities = idnRows.map((r) => ({ system: r.sysIn.value.trim(), external_id: r.extIn.value.trim(), email: r.emIn.value.trim() || undefined }))
-      .filter((x) => x.system && x.external_id);
     const knownScopes = SCOPE_OPTS.map(([sk]) => sk);
     const payload = {
       // 신규는 아이디를 보내지 않는다 — 서버가 이메일/표시이름에서 불변 내부키를 자동·유니크 생성(관리자 비관여).
       id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
-      email: emailIn.value.trim(), identities, body_md: bodyTa.value, state: stateSel.value,
+      // identities 는 **보내지 않는다** — 서버가 보존하고, 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만 한다(#837).
+      email: emailIn.value.trim(), body_md: bodyTa.value, state: stateSel.value,
       // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
       scopes: [...knownScopes.filter((sk) => scopeChks[sk].checked), ...(m.scopes || []).filter((sk) => !knownScopes.includes(sk))],
     };
@@ -1838,8 +1867,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('종류', kindSel),
     field('대표 이메일', emailIn), field('상태', stateSel),
     field('권한 (이 구성원 토큰의 scope)', scopeWrap),
-    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap,
-      el('button', { class: 'btn-text', text: '+ 계정 추가', onclick: () => addIdn(null) })),
+    el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap),
     field('개인 레이어', bodyTa),
     actions);
 }
@@ -2073,14 +2101,16 @@ function injectionMap(detail, data) {
     toast(okMsg || '저장됨 — 구성원 다음 세션부터 반영');
   }
 
-  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존.
-  function momentToggle(hookKey) {
+  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존. label 을 주면 '주입' 외 토글(예: 자동 업데이트)에도 쓴다.
+  function momentToggle(hookKey, label?, onMsg?, offMsg?) {
     const chk = el('input', { type: 'checkbox' }); chk.checked = hooks[hookKey] !== false; chk.disabled = !canEdit;
     chk.addEventListener('change', async () => {
-      try { await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? '주입 켜짐' : '주입 꺼짐'); hooks[hookKey] = chk.checked; }
-      catch (e) { toast(e.message, true); chk.checked = hooks[hookKey] !== false; }
+      try {
+        await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? (onMsg || '주입 켜짐') : (offMsg || '주입 꺼짐'));
+        hooks[hookKey] = chk.checked;
+      } catch (e) { toast(e.message, true); chk.checked = hooks[hookKey] !== false; }
     });
-    return el('label', { class: 'admin-check inj-toggle' }, chk, ' 주입 켜기');
+    return el('label', { class: 'admin-check inj-toggle' }, chk, label || ' 주입 켜기');
   }
 
   // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
@@ -2288,6 +2318,13 @@ function injectionMap(detail, data) {
     canEdit ? writebackEditor() : null,
     customList('Stop'));
 
+  // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 지도에 둔다.
+  //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
+  const updBlock = momentBlock('키트 자동 업데이트 — SessionStart(백그라운드)',
+    '구성원 컴퓨터의 라이블리 키트(훅 코드·배선)를 게이트웨이 최신본과 맞춘다. 세션 시작에 버전만 비교하고, 다르면 백그라운드로 내려받아 재설치 → 다음 세션부터 적용(현재 세션은 방해하지 않음). 회사맥락·스킬은 원래도 매 세션 자동이라 이 토글과 무관.',
+    momentToggle('self_update', ' 자동 업데이트 켜기', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
+    el('p', { class: 'admin-hint inj-sub', text: '끄면 훅·배선 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1.' }));
+
   // 기타 이벤트 — 위 3시점 외 커스텀 훅.
   const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
   const otherBlock = el('div', { class: 'inj-moment' },
@@ -2305,7 +2342,7 @@ function injectionMap(detail, data) {
     sectionTitle('세션 주입', null),
     el('p', { class: 'admin-hint', text: '이 조직의 AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 한곳에 모았습니다. 항상-주입 섹션 문서(맨 위 자동 헤더 다음에 sort 순으로 깔림)는 여기서 직접 추가·편집·삭제·재정렬합니다.' }),
     !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
-    el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, otherBlock)));
+    el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, updBlock, otherBlock)));
 }
 
 // 외부 호출·DB 안전범위(allowlist) 카드 — runtime-config 의 SSRF 화이트리스트를 도구/DB 화면 안에 인라인(2026-06-26, 구 safetyEditor 폐기).
@@ -3014,7 +3051,22 @@ function mcpEditor(detail, data) {
   const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
   if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본 등록됩니다. 여기엔 추가 도구(MCP 서버)를 둡니다. 인증은 환경변수 이름만(시크릿 값 금지).' }));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+  // 내부 MCP 안전범위(#837) — `allowed_internal_hosts` 는 서버·스키마·감사까지 다 있는데 **편집 UI 만 없었다.**
+  //  runtime_config 1행을 5개 화면이 나눠 쓰는데 아무도 그 행 전체를 소유하지 않아 필드 하나가 통째로 샜다.
+  //  증상: 내부 MCP 를 등록하면 SSRF 가드에 조용히 막히고, 에러가 "allowed_internal_hosts 등록 필요" 라며
+  //  **관리탭에서 도달할 수 없는 필드 이름**을 댔다. 등록하다 막히는 바로 이 화면에 둔다.
+  const rcMcp = data.runtimeConfig || { allowed_internal_hosts: [] };
+  const mcpSafety = allowlistCard(data, '내부 접속 안전범위 (allowlist)',
+    '사설·localhost 주소로 나가는 접속은 기본 전면 차단입니다(SSRF 방어). 여기 등록한 host 만 통과합니다 — ①내부 MCP 서버 ②OAuth 브로커 ③내부 경보 웹훅 셋에 공통 적용됩니다. 외부 공인 주소(https)는 등록 불요.',
+    [
+      { key: 'allowed_internal_hosts', label: '허용 내부 host (allowed_internal_hosts)', initial: rcMcp.allowed_internal_hosts,
+        placeholder: 'localhost\nmcp.internal.acme.com\n줄당 host 한 개(포트·경로 없이)' },
+    ]);
+  detail.replaceChildren(el('div', { class: 'card' },
+    // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
+    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']),
+    el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+    mcpSafety);
 }
 
 // 프록시 자격 종류 힌트(datalist) — 오타 방지용 제안. 신규 커넥터가 확장 가능(자유입력 허용).
@@ -3195,17 +3247,18 @@ function connectorEditor(detail, data) {
     connectorStatusCard(right, editing);
     connectorForm(right, editing, data, detail);
   } else right.append(el('p', { class: 'admin-hint', text: '수집할 외부 소스를 선택하세요.' }));
-  // ClickUp 멤버 매핑 패널(#541) — clickup 선택 시에만(db-sources 의 renderDbPolicyPanel 패턴).
-  if (editing && editing.system === 'clickup') {
+  // 사람 매핑 패널(#541 → #837 일반화) — 커넥터가 사용자 목록을 줄 수 있으면 붙인다.
+  //  서버가 supported:false 로 답하면 패널이 스스로 사라진다(gmail·gdrive 는 개인 OAuth 라 '멤버' 개념이 없다).
+  if (editing && editing.system && editing.system !== '__new__') {
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(panel);
-    void renderClickupMemberPanel(panel);
+    void renderConnectorMemberPanel(panel, editing.system);
   }
   const banner = (editing && editing.secrets_enabled === false)
     ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
     : null;
-  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', '슬랙·노션·클릭업·지메일·구글드라이브를 주기적으로 **우리 DB 로 복사**해 옵니다(미러). AI 가 그때그때 호출하는 외부 시스템은 여기가 아니라 [AI 도구 ▸ 외부 도구 서버]에 있습니다.'), banner,
-    el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('외부 자료 수집', data.meaning && data.meaning['connector']), banner,
+    el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 // 실행 상태 라벨/소요 — run 카드·기록·로그 공용.
@@ -3418,62 +3471,78 @@ function connectorForm(root, c, data, detail) {
 //  어사이니 해소는 person_identity(system='clickup') → org_member 로 이뤄지고, 수동 매핑의 SoT 는
 //  org_member.identities(JSONB) — 저장/해제는 POST /api/ui/org/member(identities 병합) 재사용(서버가
 //  person_identity 로 즉시 동기). 매핑 상태는 GET /api/ui/org/connector/clickup/members 가 계산해 준다.
-async function renderClickupMemberPanel(panel) {
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: 'ClickUp 멤버 불러오는 중…' }));
+// ── 사람 매핑(#541 clickup → #837 커넥터 일반) ──────────────────────────────────
+//  **편집 SoT 는 여기다**(구성원 화면이 아니라). 매핑은 "외부 시스템의 사람 ↔ 우리 구성원"인데,
+//  구성원 화면은 외부 목록을 안 가져오므로 관리자가 외부 id 를 손으로 타이핑해야 했다 —
+//  ClickUp 숫자 id 를 어디서 찾는지도 모르고, 시스템명 오타는 조용히 매칭 실패로 끝난다.
+//  여기선 커넥터가 실제 사용자 목록을 주므로 드롭다운으로 고르기만 하면 된다(오타 불가).
+//  → 구성원 화면의 '외부 계정 연결'은 읽기 전용 + 이리로 오는 링크가 됐다(#837).
+async function renderConnectorMemberPanel(panel, system) {
+  const spec = (state.admin.data && (state.admin.data.connectors || []).find((c) => c.system === system)) || {};
+  const label = spec.label || system;
+  panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 불러오는 중…' }));
   let res;
-  try { res = await api('/api/ui/org/connector/clickup/members'); }
-  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: 'ClickUp 멤버 로드 실패: ' + e.message })); return; }
-  const head = sectionTitle('ClickUp 멤버 매핑', null);
-  const intro = el('p', { class: 'admin-hint', text: 'ClickUp 담당자(어사이니)를 구성원으로 연결합니다 — 연결하면 다음 싱크부터 태스크 담당자가 해당 구성원으로 매칭돼요. 이메일이 같으면 자동매치 후보가 미리 선택됩니다.' });
+  try { res = await api('/api/ui/org/connector/' + encodeURIComponent(system) + '/members'); }
+  catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 로드 실패: ' + e.message })); return; }
+
+  // 이 커넥터는 사람 매핑을 지원하지 않는다(gmail·gdrive 등) — 패널을 아예 안 그린다.
+  if (res.supported === false) { panel.remove(); return; }
+
+  const head = sectionTitle('멤버 매핑 · ' + label,
+    label + ' 의 사람을 우리 구성원과 연결합니다 — 연결하면 다음 싱크부터 작성자·담당자가 그 구성원으로 매칭돼요. 이메일이 같으면 자동매치 후보가 미리 선택됩니다. **여기가 매핑을 편집하는 곳입니다** — 구성원 화면에서는 결과만 보여요.');
   if (res.error) { panel.replaceChildren(head, el('p', { class: 'admin-hint', text: '⚠ ' + res.error })); return; }
   const users = res.users || [];
-  if (!users.length) { panel.replaceChildren(head, intro, el('p', { class: 'admin-hint', text: 'ClickUp 팀 멤버가 없습니다.' })); return; }
+  if (!users.length) { panel.replaceChildren(head, el('p', { class: 'admin-hint', text: label + ' 사용자가 없습니다.' })); return; }
+
   const members = (state.admin.data && state.admin.data.members) || [];
   const activeMembers = members.filter((m) => (m.state || 'active') === 'active');
   const nameOf = (id) => { const m = members.find((x) => x.id === id); return m ? (m.display_name || m.id) : id; };
-  // 저장/해제 공통 — 대상 구성원의 identities 에 clickup 신원을 병합(add)/제거(remove) 후 부분 페이로드
+
+  // 저장/해제 — 대상 구성원의 identities 에 이 시스템 신원을 병합(add)/제거(remove) 후 **부분 페이로드**
   //  { id, identities } 로 POST(다른 필드는 서버가 보존 — 낡은 화면값으로 덮어쓰기 방지).
-  const postIdentities = async (memberId, cu, add) => {
+  //  ⚠ 이 저장이 #697 의 소급 재해소 훅(delivery.org_member_upsert)을 태운다 — 매핑 이전에 raw 로 굳은
+  //    미러 데이터까지 되돌려 고쳐 준다. 그래서 매핑은 반드시 이 엔드포인트를 통해야 한다.
+  const postIdentities = async (memberId, u, add) => {
     const m = members.find((x) => x.id === memberId);
     if (!m) throw new Error('구성원을 찾을 수 없습니다 — 새로고침 후 다시 시도하세요');
-    const emailLower = (cu.email || '').trim().toLowerCase();
-    const isCu = (idn) => idn.system === 'clickup'
-      && (idn.external_id === String(cu.id) || (!!emailLower && (idn.external_id || '').toLowerCase() === emailLower));
-    const identities = (m.identities || []).filter((idn) => !isCu(idn));
+    const emailLower = (u.email || '').trim().toLowerCase();
+    const isThis = (idn) => idn.system === system
+      && (idn.external_id === String(u.id) || (!!emailLower && (idn.external_id || '').toLowerCase() === emailLower));
+    const identities = (m.identities || []).filter((idn) => !isThis(idn));
     if (add) {
-      identities.push({ system: 'clickup', external_id: String(cu.id), email: cu.email || undefined, instance: res.teamId || undefined });
+      identities.push({ system, external_id: String(u.id), email: u.email || undefined, instance: u.instance || res.instance || undefined });
     } else if (identities.length === (m.identities || []).length) {
-      // 구성원 identities 에 해당 행이 없는 매핑(게이트웨이 바인딩 파일 등 다른 경로) — 여기선 해제 불가.
-      throw new Error('이 연결은 구성원의 외부 계정 목록 밖에서 온 신원이라 여기서 해제할 수 없어요 — 구성원 관리에서 확인하세요');
+      // 구성원 identities 밖에서 온 신원(게이트웨이 바인딩 파일 등) — 여기선 해제 불가.
+      throw new Error('이 연결은 구성원의 외부 계정 목록 밖에서 온 신원이라 여기서 해제할 수 없어요');
     }
     await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: m.id, identities }) });
     await loadAdmin(true); // members(identities) 최신화 — 패널 재조회 전 로컬 데이터 동기
   };
+
   const tbl = el('table', { class: 'fields-table cu-map-table' });
-  tbl.append(el('tr', {}, el('th', { text: 'ClickUp 멤버' }), el('th', { text: '연결된 구성원' }), el('th', {})));
+  tbl.append(el('tr', {}, el('th', { text: label + ' 사용자' }), el('th', { text: '연결된 구성원' }), el('th', {})));
   for (const r of users) {
-    const cu = r.clickup || {};
-    // 아바타 — ClickUp 프로필 색은 검증된 hex 일 때만 style 로(외부 데이터 CSS 주입 방지), 이니셜은 textContent.
-    const dot = el('span', { class: 'cu-avatar', text: (cu.initials || String(cu.username || '?').slice(0, 2)).toUpperCase() });
-    if (/^#[0-9a-fA-F]{3,8}$/.test(cu.color || '')) { dot.style.background = cu.color; dot.style.color = '#fff'; }
-    const userCell = el('td', {}, el('div', { class: 'cu-user' }, dot,
+    const u = r.user || {};
+    // 아바타 — 외부 색은 검증된 hex 일 때만 style 로(외부 데이터 CSS 주입 방지), 이니셜은 textContent.
+    const dot = el('span', { class: 'cu-avatar', text: (u.initials || String(u.name || u.id || '?').slice(0, 2)).toUpperCase() });
+    if (/^#[0-9a-fA-F]{3,8}$/.test(u.color || '')) { dot.style.background = u.color; dot.style.color = '#fff'; }
+    const userCell = el('td', { class: u.inactive ? 'cu-inactive' : '' }, el('div', { class: 'cu-user' }, dot,
       el('div', {},
-        el('div', { class: 'mini-title', text: cu.username || ('id ' + cu.id) }),
-        el('div', { class: 'mini-meta', text: cu.email || ('id ' + cu.id) }))));
+        el('div', { class: 'mini-title' }, el('span', { text: u.name || ('id ' + u.id) }),
+          u.inactive ? el('span', { class: 'pill', text: '비활성' }) : null),
+        el('div', { class: 'mini-meta', text: u.email || ('id ' + u.id) }))));
     if (r.mapped_via === 'identity') {
-      // ① 매핑됨(identities 명시 행) — 표시명 + 해제.
       const unlink = el('button', { class: 'btn-text', text: '해제' });
       unlink.addEventListener('click', async () => {
-        if (!confirm(`'${cu.username || cu.id}' ↔ '${nameOf(r.mapped_member_id)}' 연결을 해제할까요?`)) return;
+        if (!confirm(`'${u.name || u.id}' ↔ '${nameOf(r.mapped_member_id)}' 연결을 해제할까요?`)) return;
         unlink.disabled = true;
-        try { await postIdentities(r.mapped_member_id, cu, false); toast('연결 해제됨 — 다음 싱크부터 반영'); void renderClickupMemberPanel(panel); }
+        try { await postIdentities(r.mapped_member_id, u, false); toast('연결 해제됨 — 다음 싱크부터 반영'); void renderConnectorMemberPanel(panel, system); }
         catch (e) { toast(e.message, true); unlink.disabled = false; }
       });
       tbl.append(el('tr', {}, userCell,
         el('td', {}, el('span', { class: 'pill pill-ok', text: '연결됨' }), ' ', nameOf(r.mapped_member_id)),
         el('td', {}, unlink)));
     } else {
-      // ② 미매핑(또는 이메일 자동매치만) — 활성 구성원 드롭다운(+자동매치 미리 선택) + 연결 저장.
       const selBox = el('select', { class: 'cu-map-sel' }, el('option', { value: '', text: '구성원 선택…' }),
         ...activeMembers.map((m) => el('option', { value: m.id, text: (m.display_name || m.id) + (m.email ? ' (' + m.email + ')' : '') })));
       if (r.suggested_member_id) selBox.value = r.suggested_member_id;
@@ -3481,7 +3550,7 @@ async function renderClickupMemberPanel(panel) {
       saveB.addEventListener('click', async () => {
         if (!selBox.value) { toast('연결할 구성원을 선택하세요', true); return; }
         saveB.disabled = true;
-        try { await postIdentities(selBox.value, cu, true); toast('연결됨 — 다음 싱크부터 담당자에 반영'); void renderClickupMemberPanel(panel); }
+        try { await postIdentities(selBox.value, u, true); toast('연결됨 — 다음 싱크부터 반영'); void renderConnectorMemberPanel(panel, system); }
         catch (e) { toast(e.message, true); saveB.disabled = false; }
       });
       tbl.append(el('tr', {}, userCell,
@@ -3489,10 +3558,9 @@ async function renderClickupMemberPanel(panel) {
         el('td', {}, saveB)));
     }
   }
-  panel.replaceChildren(head, intro, tbl);
+  panel.replaceChildren(head, tbl);
 }
 
-// ── DB 데이터소스 — admin 전용. db_query/db_schema 가 읽는 외부 운영 DB(읽기전용). ──
 function dbSourceEditor(detail, data) {
   const sources = data.dbSources || [];
   const envSources = data.envSources || [];
@@ -3542,7 +3610,7 @@ function dbSourceEditor(detail, data) {
       { key: 'allowed_db_secret_refs', label: '허용 비번 env 이름 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs, placeholder: 'HONEST_RDS_RO_PASSWORD\n줄당 env 이름 한 개(값 금지)' },
     ]);
   detail.replaceChildren(
-    el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two' }, listCol, right)),
+    el('div', { class: 'card' }, sectionTitle('DB 데이터소스', data.meaning['db-source']), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     dbSafety);
 }
 
@@ -3710,7 +3778,7 @@ function customHookEditor(detail, data) {
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 멤버 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(끄면 다음 세션부터 무효).' }));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 function hookForm(root, h, data, detail, isNew) {
@@ -3779,7 +3847,7 @@ function harnessAssetEditor(detail, data) {
     : assets.find((a) => a.id === sel);
   if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 세션 시작 때 디스크에 동기화되며 스킬/커맨드는 같은 세션 내 즉시 반영됩니다.' }));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 function assetForm(root, a, data, detail, isNew) {
@@ -3869,7 +3937,7 @@ function toolsEditor(detail, data) {
       { key: 'allowed_auth_envs', label: '허용 인증 환경변수 이름 (allowed_auth_envs)', initial: pol.allowed_auth_envs, placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름(값 아님)' },
     ]);
   detail.replaceChildren(
-    el('div', { class: 'card' }, el('div', { class: 'admin-two' }, listCol, right)),
+    el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     toolsSafety);
 }
 
@@ -4033,16 +4101,18 @@ function toolForm(root, t, data, detail, isNew) {
     actions);
 }
 
-// 설치 한 줄 명령(OS별) — 구 [설치·업데이트·제거] 화면(deployPanel)은 #837 에서 제거했지만, 이 헬퍼는
-//  사용 가이드(web/learn.ts 의 시작하기)와 아래 installMinterBlock(접속 열쇠 발급)이 계속 쓴다.
-function installCmd(gw, os, token) {
-  if (os === 'windows') {
-    // 맥과 동일: 번들 기반 설치(git clone 없음·토큰 프롬프트 없음) + 설치된 하네스 감지(claude/codex) → --harness.
-    //  claude 면 mcp add, codex 면 현재 세션 $env:LIVELY_TOKEN + PowerShell $PROFILE 에 "파일→env 수화" 블록
-    //  (Mac rc 패턴과 동일·토큰 리터럴은 ~/.lively/token 한 곳만 · setx 레지스트리 리터럴 제거). 새 PowerShell 부터 적용.
-    return `$T="${token}"; $G="${gw}"; $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvin"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; New-Item -ItemType Directory -Force "$HOME\\.lively"|Out-Null; Set-Content "$HOME\\.lively\\token" $T -NoNewline; Set-Content "$HOME\\.lively\\gateway-url" $G -NoNewline; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(Test-Path "$HOME\\.lively\\token"){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")`;
-  }
-  return `T=${token}; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh`;
+// 설치 한 줄 명령(OS별) — #864 부터 **lively CLI 부트스트랩**이다. 사용 가이드(web/learn.ts)가 쓴다.
+//
+//  ⚠ 이 줄에는 토큰이 없다. 종전엔 여기서 장기 토큰을 명령줄에 리터럴로 박았고, 그게 그대로
+//  ~/.zsh_history 에 영구히 남았다(화면공유·클립보드 매니저 노출). 이제 이 줄은 CLI 를 깔기만 하고,
+//  토큰은 CLI 의 `lively login` 이 /dev/tty **가림 입력**으로 받는다(어디에도 안 남음).
+//  부트스트랩은 TTY 가 있으면 곧장 `lively setup`(로그인+설치)으로 인계하므로 사용자는 여전히 **한 번만 복사**한다.
+//
+//  또 하나의 이득: 설치 로직이 CLI(Node) 한 곳으로 모여 mac/win 이 **같은 코드**를 돈다.
+//  (종전 PowerShell 판은 1,400자짜리 한 줄이라 사실상 아무도 검증하지 못했다 — 그래서 계속 '미검증' 이었다.)
+function installCmd(gw, os) {
+  if (os === 'windows') return `irm ${gw}/cli.ps1 | iex`;
+  return `curl -fsSL ${gw}/cli | sh`;
 }
 
 // ── 접속 열쇠(토큰) 발급 — 구성원을 골라 발급하고 설치 한 줄을 건넨다. [구성원 ▸ 접속 열쇠] 안. ──
@@ -4083,23 +4153,31 @@ function installMinterBlock(data, gw, opts: any = {}) {
     result);
 }
 
+// 유지보수 명령 — #864 부터 **OS 무관**이다(lively CLI 가 mac/win 을 흡수). gw/os 는 부트스트랩 폴백 안내에만 쓴다.
+//  종전엔 여기 OS별로 갈라진 1,400자 PowerShell 과 sed 범벅 bash 가 각각 들어 있었다.
 function deployCommands(gw, os) {
-  if (os === 'windows') {
-    return [
-      { kind: 'install', title: '설치 (PowerShell)' }, // 설치 블록은 installSelfBlock 가 렌더(자가발급)
-      { kind: 'update', title: '업데이트 (PowerShell)', note: '설치된 토큰을 읽어 최신 묶음 재설치(설치된 하네스 자동 감지). ⚠ Windows 미검증 — 테스트 후 사용.',
-        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $h=@(); if(Get-Command claude -EA 0){$h+="claude"}; if(Get-Command codex -EA 0){$h+="codex"}; if($h.Count -eq 0){$h=@("claude")}; $tmp="$env:TEMP\\lvup"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; if($h -contains "claude"){ claude mcp remove lively *>$null; claude mcp add --transport http --scope user lively "$G/mcp" --header "Authorization: Bearer $T" }; if($h -contains "codex"){ $env:LIVELY_TOKEN=$T; [Environment]::SetEnvironmentVariable('LIVELY_TOKEN',$null,'User'); $pf=$PROFILE.CurrentUserAllHosts; New-Item -ItemType Directory -Force (Split-Path $pf) *>$null; if(-not (Test-Path $pf)){ New-Item -ItemType File -Force $pf *>$null }; $m="# lively-managed (codex LIVELY_TOKEN)"; if(-not (Select-String -Path $pf -SimpleMatch $m -Quiet -EA 0)){ Add-Content $pf ""; Add-Content $pf $m; Add-Content $pf 'if(Test-Path "$HOME\\.lively\\token"){ $env:LIVELY_TOKEN=(Get-Content "$HOME\\.lively\\token" -Raw).Trim() }' } }; node "$tmp\\setup\\user-install.mjs" --clone-root $tmp --harness ($h -join ",")` },
-      { kind: 'uninstall', title: '제거 (PowerShell)', note: '설치 자산 제거(lively 영역만). 완전 차단은 관리자가 [구성원 토큰 관리] 탭에서 접속 해제. ⚠ Windows 미검증.',
-        cmd: `$T=(Get-Content "$HOME\\.lively\\token" -Raw).Trim(); $G=((Get-Content "$HOME\\.lively\\gateway-url" -Raw).Trim() -replace '/mcp$',''); $tmp="$env:TEMP\\lvun"; Remove-Item -Recurse -Force $tmp -EA 0; New-Item -ItemType Directory -Force $tmp|Out-Null; Invoke-WebRequest -Headers @{Authorization="Bearer $T"} "$G/install" -OutFile "$tmp\\b.tgz"; tar -xzf "$tmp\\b.tgz" -C $tmp; node "$tmp\\setup\\user-uninstall.mjs"` },
-    ];
-  }
+  // `lively` 가 아직 없는 경우(자동 업데이트 전) 어떻게 되찾는지 — 모든 note 의 공통 꼬리.
+  const boot = os === 'windows' ? `irm ${gw}/cli.ps1 | iex` : `curl -fsSL ${gw}/cli | sh`;
+  const ifMissing = `\n\n※ 'lively: command not found' 가 나오면 — 새 터미널을 열어 보고(설치 직후엔 PATH 가 현 창에 아직 없습니다), 그래도 없으면 아래로 CLI 를 먼저 설치하세요:\n    ${boot}`;
   return [
-    { kind: 'install', title: '설치', note: '구성원 토큰 필요 — 아래에서 구성원을 골라 발급하면 토큰 박힌 완성형 명령이 나옵니다. (아래는 템플릿: <TOKEN> 교체)',
-      cmd: `T=<TOKEN>; curl -fsSL -H "Authorization: Bearer $T" "${gw}/install" -o /tmp/lv.tgz && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN=$T LIVELY_GATEWAY=${gw}/mcp bash /tmp/lv/setup/setup-mac.sh` },
-    { kind: 'update', title: '업데이트', note: '설치된 토큰을 읽어 최신 묶음으로 멱등 재설치. 콘텐츠(강제규칙·회사맥락·메모리)는 매 세션 자동이라, 훅/설정 변경 시에만 필요합니다.',
-      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && LIVELY_TOKEN="$T" LIVELY_GATEWAY="$G/mcp" bash /tmp/lv/setup/setup-mac.sh` },
-    { kind: 'uninstall', title: '제거', note: '설치 자산을 영구 제거(lively-managed 영역만 — tmux 훅·셸 별칭 등 사용자 설정은 보존). 완전 차단하려면 관리자가 [구성원 토큰 관리] 탭에서 접속을 해제해야 합니다.',
-      cmd: `T="$(cat ~/.lively/token)"; G="$(sed 's#/mcp$##' ~/.lively/gateway-url)"; curl -fsSL -H "Authorization: Bearer $T" "$G/install" -o /tmp/lv.tgz && rm -rf /tmp/lv && mkdir -p /tmp/lv && tar -xzf /tmp/lv.tgz -C /tmp/lv && bash /tmp/lv/setup/uninstall-mac.sh` },
+    { kind: 'install', title: '설치' }, // 설치 블록은 learn.ts 가 직접 렌더(단계 UI)
+    {
+      kind: 'update',
+      title: '업데이트 (보통은 불필요 — 자동입니다)',
+      note: '키트는 세션을 켤 때마다 자동으로 최신과 맞춰집니다(백그라운드 설치 → 다음 세션부터 적용). '
+        + '이 명령은 ① 자동 업데이트를 껐거나 ② 지금 당장 맞춰야 하거나 '
+        + '③ 관리자가 새 MCP 서버를 추가했을 때 씁니다 — ③ 은 자동 업데이트가 할 수 없는 유일한 일입니다'
+        + '(백그라운드에서 MCP 재등록을 하다 실패하면 등록이 사라질 수 있어 일부러 빼 뒀습니다).' + ifMissing,
+      cmd: 'lively update',
+    },
+    {
+      kind: 'uninstall',
+      title: '제거',
+      note: '설치 자산을 영구 제거합니다(lively 영역만 — tmux 훅·셸 별칭 등 본인 설정은 그대로 보존). '
+        + '미리 보려면 `lively uninstall --dry-run`. '
+        + '완전 차단하려면 관리자가 [구성원 ▸ 접속 열쇠] 에서 토큰을 회수해야 합니다.' + ifMissing,
+      cmd: 'lively uninstall',
+    },
   ];
 }
 
@@ -4151,11 +4229,6 @@ const PROF_DEV = [
   { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
 ];
 const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '발랄·위트 있게'];
-const PROF_LEN = [
-  { v: '짧게', hint: '핵심만 — 군더더기 없이' },
-  { v: '보통', hint: '적당한 설명과 함께' },
-  { v: '자세히', hint: '배경·근거·대안까지 충분히' },
-];
 
 // 단일 선택 chip 그룹 — selected.v 를 토글(다시 누르면 해제). getVal/getLabel 로 옵션 모양에 무관.
 function profChips(opts, selected, getLabel, getVal, onPick?) {
@@ -4177,7 +4250,7 @@ function profChips(opts, selected, getLabel, getVal, onPick?) {
 
 // canonical body_md → 선택값 복원. 기본 견본(채워넣기/local.md)은 빈값으로(새로 시작).
 function parseMyProfile(md) {
-  const r = { role: '', dev: '', address: '', tone: '', len: '', area: '', tools: '', memo: '' };
+  const r = { role: '', dev: '', address: '', tone: '', memo: '' };
   if (!md || /채워넣기|members\/local\.md/.test(md)) return r;
   const parts = md.split(/^##\s*추가 메모\s*$/m);
   const head = parts[0] || '';
@@ -4189,10 +4262,7 @@ function parseMyProfile(md) {
   r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
   const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
   r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
-  const len = grab(/^[-*\s]*\**\s*응답\s*길이\s*\**\s*[:：]\s*(.+)$/m);
-  r.len = (PROF_LEN.find((l) => len.startsWith(l.v)) || ({} as any)).v || '';
-  r.area = grab(/^[-*\s]*\**\s*담당[^:：\n]*\**\s*[:：]\s*(.+)$/m);
-  r.tools = grab(/^[-*\s]*\**\s*자주[^:：\n]*\**\s*[:：]\s*(.+)$/m);
+  // 응답 길이·담당 영역·자주 쓰는 도구는 #837 에서 제거 — 파싱도 안 한다(다음 저장에 자연 소멸).
   return r;
 }
 
@@ -4920,7 +4990,16 @@ async function myProfileSection(detail) {
     el('div', { class: 'admin-actions' }, saveBtn, status)));
 }
 
-// ── [내 설정 ▸ AI 개인화] — 개인 레이어(body_md). AI 가 매 세션 첫머리에 그대로 읽는다. ──
+// ── [내 설정 ▸ AI 개인화] — 개인 레이어(org_member.body_md). ──
+//  #846 이 배선을 완성했다: previewMemberContext 가 `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)` 블록으로
+//  **본인 세션에만** 싣는다(memberId = bearer principal — 남의 개인 규칙이 새지 않는다). 그 전엔 저장은 됐지만
+//  **어떤 주입 경로도 읽지 않았다** — 그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)
+//  밖에 선택지가 없었다(남의 세션까지 오염). 이제 진짜로 반영되므로, 여기서 **실제 주입 전문**을 그대로 보여 준다.
+//
+//  필드는 4개로 줄였다(#837 · 사용자 지적: "응답길이랑 담당영역, 자주쓰는레포는 좀 불필요한거같아").
+//   · 응답 길이 — 대화에서 그때그때 말하면 되는 것(고정하면 오히려 방해).
+//   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
+//   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
 async function myAiSection(detail) {
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('AI 개인화를 불러오는 중')));
   let data: any;
@@ -4930,9 +5009,7 @@ async function myAiSection(detail) {
 
   const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
   const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님 / 원준' });
-  const areaIn = el('input', { type: 'text', value: pr.area, placeholder: '예: 컨텍스트 저장소, GTM, 프론트엔드' });
-  const toolsIn = el('input', { type: 'text', value: pr.tools, placeholder: '예: context-ontology, Cursor, Figma' });
-  const memoTa = el('textarea', { class: 'admin-ta', rows: '4', placeholder: 'AI가 더 알면 좋은 것을 자유롭게. 비밀번호·토큰은 넣지 마세요.' });
+  const memoTa = el('textarea', { class: 'admin-ta', rows: '5', placeholder: 'AI가 더 알면 좋은 것을 자유롭게 — 나만의 규칙·선호·맥락. 비밀번호·토큰은 넣지 마세요(자동 차단).' });
   memoTa.value = pr.memo;
 
   const devSel = { v: pr.dev };
@@ -4942,11 +5019,33 @@ async function myAiSection(detail) {
   renderDevHint();
   const toneSel = { v: pr.tone };
   const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
-  const lenSel = { v: pr.len };
-  const lenHint = el('p', { class: 'prof-hint' });
-  const renderLenHint = () => { const l = PROF_LEN.find((x) => x.v === lenSel.v); lenHint.textContent = l ? l.hint : ''; };
-  const lenChips = profChips(PROF_LEN, lenSel, (o) => o.v, (o) => o.v, renderLenHint);
-  renderLenHint();
+
+  // 실제 주입 전문 미리보기 — [세션 주입]의 것과 같은 관례지만 **개인 레이어까지 반영된** 내 컨텍스트다.
+  //  /api/ui/org/preview 는 bearer principal 기준(previewMemberContext(orgName, memberId)) 이라, 지금 로그인한
+  //  나의 팀 층 + 개인 층이 그대로 들어간 전문이 온다. 저장 후 다시 열면 방금 저장한 내용이 보인다.
+  function previewExpander() {
+    const box = el('div', { class: 'inj-preview' }); box.style.display = 'none';
+    const btn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '실제 주입 전문 미리보기 ▾' });
+    let open = false;
+    btn.addEventListener('click', async () => {
+      open = !open;
+      box.style.display = open ? 'block' : 'none';
+      btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입 전문 미리보기 ▾';
+      if (!open) return;
+      box.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));   // 열 때마다 새로 — 방금 저장한 게 보이게
+      try {
+        const r = await api('/api/ui/org/preview');
+        const ctx = (r && r.context) || '';
+        box.replaceChildren(
+          el('p', { class: 'admin-hint', style: 'margin:0 0 8px' },
+            ...inlineBold('내 AI 가 매 세션 첫머리에 **실제로 읽는 전문**입니다 — 조직 맥락 + 우리 팀 + 아래 개인 규칙. 다른 구성원에겐 그 사람의 개인 규칙이 실립니다.')),
+          ctx
+            ? el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(ctx))
+            : el('p', { class: 'admin-hint', text: '미리볼 내용이 없습니다.' }));
+      } catch (e) { box.replaceChildren(errorNote(e, '미리보기를 불러오지 못했습니다')); }
+    });
+    return el('div', {}, el('div', { class: 'admin-actions' }, btn), box);
+  }
 
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
@@ -4958,10 +5057,6 @@ async function myAiSection(detail) {
     if (d) lines.push('- 개발 이해도: ' + d.label + ' — ' + d.hint);
     if (addressIn.value.trim()) lines.push('- 호칭: ' + addressIn.value.trim());
     if (toneSel.v) lines.push('- 말투: ' + toneSel.v);
-    const l = PROF_LEN.find((x) => x.v === lenSel.v);
-    if (l) lines.push('- 응답 길이: ' + l.v + ' — ' + l.hint);
-    if (areaIn.value.trim()) lines.push('- 담당 영역: ' + areaIn.value.trim());
-    if (toolsIn.value.trim()) lines.push('- 자주 쓰는 도구·레포: ' + toolsIn.value.trim());
     let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
     const memo = memoTa.value.trim();
     if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
@@ -4969,22 +5064,20 @@ async function myAiSection(detail) {
     // display_name·아바타는 **안 보낸다** — 서버가 보존하므로 [내 정보]가 지워지지 않는다.
     try {
       await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ body_md: body }) });
-      toast('저장됨 — 다음 세션부터 AI가 이 프로필을 반영합니다'); status.textContent = '저장됨';
+      toast('저장됨 — 다음 세션부터 내 AI 가 반영합니다'); status.textContent = '저장됨';
     } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
     saveBtn.disabled = false;
   });
 
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 그대로 반영합니다 — 호칭·말투·답변 길이·기술 깊이 등. 다른 구성원의 AI 에는 영향이 없어요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+    sectionTitle('AI 개인화', '여기서 고르면 **내** AI 가 매 세션 첫머리에 `내 개인 규칙` 으로 읽습니다 — 나에게만 적용되고 팀에 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
     field('역할', roleIn),
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI가 나를 부르는 말)', addressIn),
     field('말투', toneChips),
-    field('응답 길이', el('div', {}, lenChips, lenHint)),
-    field('담당 영역', areaIn),
-    field('자주 쓰는 도구·레포', toolsIn),
     field('추가 메모', memoTa),
-    el('div', { class: 'admin-actions' }, saveBtn, status)));
+    el('div', { class: 'admin-actions' }, saveBtn, status),
+    previewExpander()));
 }
 
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
@@ -5049,39 +5142,6 @@ async function myAssetsSection(detail) {
   await reload();
 }
 
-// ── 우상단 [내 프로필] — **빠른 편집만**(#837 후속). ──
-//  예전엔 이 모달 하나에 필드 15개 + 중첩 모달 2개(스킬·훅 / 서비스 로그인)가 들어 있었다.
-//  사용자 지적대로 "진짜 프사나 표시 이름 변경 정도"만 남기고, 나머지는 [관리 ▸ 내 설정]으로 폈다.
-//  저장은 부분 갱신 — display_name·아바타만 보내므로 개인 레이어(AI 개인화)는 건드리지 않는다.
-async function openMyProfile() {
-  let data;
-  try { data = await api('/api/ui/me/profile'); }
-  catch (e) { toast((e && e.message) || '프로필을 불러오지 못했습니다', true); return; }
-
-  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
-  const ava = avatarEditor(data, nameIn);
-  const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
-
-  const back = overlay('내 프로필',
-    field('프로필 사진', ava.node),
-    field('표시 이름', nameIn),
-    el('div', { class: 'admin-actions' }, saveBtn,
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/me-profile', text: '전체 설정 →',
-        onclick: () => { back.remove(); } })),
-    el('p', { class: 'admin-hint', style: 'margin:12px 0 0',
-      text: 'AI 개인화(호칭·말투·답변 길이)·서비스 로그인·내 스킬·훅·비밀번호는 [관리 ▸ 내 설정]에 있어요.' }));
-
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    try {
-      const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify({ display_name: nameIn.value.trim(), ...ava.payload() }) });
-      applyMyProfileSaved(res, data.id);
-      toast('저장됨');
-      back.remove();
-    } catch (e) { toast((e && e.message) || '저장하지 못했습니다', true); saveBtn.disabled = false; }
-  });
-}
-
 function overlay(title, ...content) {
   const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
   const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
@@ -5110,7 +5170,6 @@ export {
   hasScope,
   installCmd,
   loadAdmin,
-  openMyProfile,
   overlay,
   renderSystem,
 };

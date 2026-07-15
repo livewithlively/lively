@@ -624,18 +624,35 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* 구성원 추가 패널 — ①/② 단계 헤더 */
 .member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 
-/* 상세 박스 내부(목록·편집)는 1단(세로 스택) — 목록 위, 편집/내용 아래. (사용자 요청)
+/* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
+   .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
    ※ 맨 좌측 섹션 사이드바(.admin-side)는 별개 — 여기선 건드리지 않음. */
 .admin-two { display: flex; flex-direction: column; gap: 14px; align-items: stretch; margin-top: 8px; }
 .admin-sublist { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
 .admin-two > div:last-child { width: 100%; min-width: 0; }
-/* 좌우 2단 변형(구성원 관리 전용) — 목록 좌측 고정폭 + 편집 우측. 좁은 화면에서만 세로. */
+
+/* 좌우 2단(마스터-디테일) — 관리탭 목록형 화면 **전부**의 기본. (#837)
+   세로 스택이면 목록을 클릭해도 편집 폼이 목록 '아래'에 생겨 스크롤을 내려야 보였다.
+   → 목록은 좌측에 sticky 로 붙여두고, 편집은 우측에서 즉시 보이게 한다. */
 .admin-two-cols { flex-direction: row; gap: 18px; align-items: flex-start; }
-.admin-two-cols .admin-sublist { flex: 0 0 230px; width: auto; border-right: 1px solid var(--line); border-bottom: none; padding: 0 4px 0 0; }
+.admin-two-cols .admin-sublist {
+  flex: 0 0 240px; width: auto; border-right: 1px solid var(--line); border-bottom: none; padding: 0 8px 0 0;
+  /* 편집 폼이 길어도 목록이 화면에 남아 다른 항목으로 바로 건너뛸 수 있게. 헤더(sticky) 아래로. */
+  position: sticky; top: 78px; max-height: calc(100vh - 104px); overflow-y: auto; overscroll-behavior: contain;
+}
 .admin-two-cols > div:last-child { flex: 1; }
+/* 목록 스크롤바는 hover 때만 — 평소엔 헤어라인 하나로 보이게(.docs-side 와 같은 결) */
+.admin-two-cols .admin-sublist { scrollbar-width: none; }
+.admin-two-cols .admin-sublist::-webkit-scrollbar { width: 0; }
+.admin-two-cols .admin-sublist:hover { scrollbar-width: thin; }
+.admin-two-cols .admin-sublist:hover::-webkit-scrollbar { width: 6px; }
+.admin-two-cols .admin-sublist:hover::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 @media (max-width: 760px) {
   .admin-two-cols { flex-direction: column; }
-  .admin-two-cols .admin-sublist { flex-basis: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
+  .admin-two-cols .admin-sublist {
+    flex-basis: auto; width: 100%; border-right: none; border-bottom: 1px solid var(--line); padding: 0 0 8px;
+    position: static; max-height: none; overflow-y: visible;
+  }
 }
 .mini-row { padding: 10px 12px; border-radius: 9px; cursor: pointer; }
 .mini-row:hover { background: var(--bg-tint); }
@@ -689,6 +706,12 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 /* identities(외부 계정 연결) 에디터 */
 .idn-wrap { display: flex; flex-direction: column; gap: 6px; }
 .idn-row { display: flex; gap: 6px; align-items: center; }
+/* 읽기 전용 신원 행(#837) — 매핑 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만. 여기선 결과만 보여 준다. */
+.idn-row.idn-ro { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.idn-row.idn-ro .mini-title { font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; }
+.idn-row.idn-ro .mini-meta { color: var(--muted-2); }
+/* 커넥터 매핑 표 — 비활성 사용자는 흐리게(목록엔 두되 눈에 덜 띄게). */
+.cu-inactive { opacity: .55; }
 .idn-row .idn-sys { flex: 0 0 130px; }
 .idn-row input { width: 100%; }
 
@@ -5265,6 +5288,11 @@ main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 12px; font-we
 .be-slash { border-radius: 12px; box-shadow: 0 20px 48px rgba(27,30,39,.18); }
 .be-slash-ic { border-radius: 8px; }
 .be-slash-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 10.5px; }
+/* #764 슬래시 항목 단축키 kbd 칩 — 마크다운 프리픽스·키보드 단축을 우측에 표기 */
+.be-slash-sc { flex: none; margin-left: 8px; font-family: 'D2Coding', ui-monospace, Menlo, monospace;
+  font-size: 10px; color: var(--muted-2); background: var(--bg-tint); border: 1px solid var(--line);
+  border-radius: 5px; padding: 1px 6px; line-height: 1.5; white-space: nowrap; font-weight: 600; }
+.be-slash-item.on .be-slash-sc, .be-slash-item:hover .be-slash-sc { border-color: var(--line-net); }
 main.doc-mode .be-callout { border-radius: 12px; }
 
 /* ── 휴지통·자료 등 kn-plain 페이지 ── */
@@ -6552,11 +6580,11 @@ body[data-route="system"] main { max-width: none; }
    구조화된 조각들: 리드(guide-lead) · 피처 카드(kn-axis-opt) · 번호 단계(guide-path) ·
    이동 카드(tabguide-card) · 콜아웃(guide-remember) · 탭(tabchapter). */
 /* 한국어 줄바꿈 — 상위 .md-rendered 의 break-word(글자 단위 절단) 대신 어절 단위(keep-all).
-   좁은 칸에서 한글이 한 글자씩 세로로 쪼개지는 것을 막는다. 코드·URL 만 강제 개행 유지. */
-.docs-md, .docs-lead, .docs-feat, .docs-step-body, .docs-linkcard, .md-prompt, .docs-title {
-  word-break: keep-all; overflow-wrap: break-word;
-}
-.docs-md .md-code, .docs-md .md-pre { word-break: break-all; }
+   좁은 칸에서 한글이 한 글자씩 세로로 쪼개지는 것을 막는다. 문서 셸 전체(설치 가이드·투어 랜딩 포함)에 적용.
+   코드·명령·URL 만 강제 개행 유지(길어도 잘라야 하므로). */
+.docs-body { word-break: keep-all; overflow-wrap: break-word; }
+.docs-body code, .docs-body pre, .docs-body .md-code, .docs-body .md-pre,
+.docs-body .admin-preview, .docs-body .install-cmd-slot { word-break: break-all; }
 .docs-lead { font-size: 15.5px; line-height: 1.8; color: var(--ink-sub); margin: -2px 0 4px; max-width: 780px; }
 .docs-lead .md-p { margin: 0 0 10px; }
 .docs-lead .md-p:last-child { margin-bottom: 0; }
