@@ -174,7 +174,8 @@ export function profileConfigDir(user: LivelyUser): string {
   return path.join(PROFILES_ROOT, userSlug(user), "claude");
 }
 // 프로필이 프로비저닝됐으면(로그인된 자격증명 존재) 그 CLAUDE_CONFIG_DIR 을 반환, 아니면 null(→공유 폴백).
-async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
+//  (P2 위탁 태스크 러너 node/tasks.ts 가 재사용 — export)
+export async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
   if (process.env.LIVELY_MULTIPROFILE === "0") return null;
   const dir = profileConfigDir(user);
   try { await fsp.access(path.join(dir, ".credentials.json")); return dir; }
