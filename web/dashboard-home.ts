@@ -99,8 +99,10 @@ async function renderMyDashboard(view) {
       el('div', { class: 'dash-date' }, todayLabel(), sepEl, summaryEl)),
     el('div', { class: 'dash-acts' },
       obSlot,
-      // #req 탭 이동 대신 대시보드 위에 생성 팝업을 그대로 띄운다(프로젝트=dashCreateProject, 세션=openTermCreateForm). 생성 후 대시보드 재렌더로 즉시 반영.
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(null, null, () => renderMyDashboard(view)) }),
+      // #req 탭 이동 대신 대시보드 위에 생성 팝업을 그대로 띄운다(세션=openTermCreateForm). 생성 후 대시보드 재렌더로 즉시 반영.
+      //  프로젝트 생성은 '내 프로젝트' 섹션 인라인 추가와 **같은 팝업**(openProjectV2Form — 리스트 선택·설명·태스크·레포·팀원·AI세션 실행)으로 통일.
+      //  stay:true = 생성 후 상세로 튀지 않고 여기서 재렌더만.
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => openProjectV2Form(() => renderMyDashboard(view), { stay: true }) }),
       el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 AI 세션', onclick: async (e: any) => {
         const b = e.currentTarget; b.disabled = true;
         try { const cfg = await api('/api/ui/terminal/config'); openTermCreateForm(cfg, null, () => renderMyDashboard(view)); }
