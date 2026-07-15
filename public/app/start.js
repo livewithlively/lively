@@ -46,7 +46,10 @@ function stepCard(it, view) {
         it.state === 'done' && it.by === 'auto' ? el('span', { class: 'ob-step-badge', text: '확인됨' }) : null,
         it.state === 'skipped' ? el('span', { class: 'ob-step-badge', text: '해당 없음' }) : null,
     ].filter(Boolean);
-    return el('div', { class: `card ob-step ${state}` }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot', text: ICON[it.state] || '○' }), el('span', { class: 'ob-step-label', text: it.label }), ...badges), more), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href && it.state !== 'done'
+    // 상태 위계(#870 수정): 완료는 조용히, 미완(특히 필수)은 도드라지게 — .req 로 필수 미완을 강조한다.
+    //  점 글리프: 완료 ✓ / 해당없음 — / 미완은 채운 원(글자 없이 CSS 로) — '할 일'로 읽히게.
+    const stateClass = state + (state === 'todo' && it.required ? ' req' : '');
+    return el('div', { class: `card ob-step ${stateClass}` }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot', text: state === 'todo' ? '' : (ICON[it.state] || '') }), el('span', { class: 'ob-step-label', text: it.label }), ...badges), more), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href && it.state !== 'done'
         ? el('div', { class: 'ob-step-act' }, el('a', { class: 'btn btn-primary btn-sm', href: it.href, text: '해보기 →' }))
         : null);
 }

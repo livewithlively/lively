@@ -6814,21 +6814,36 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; font-size: 13.5px; }
 .ob-banner-sub { font-size: 13px; line-height: 1.6; color: var(--ink-sub); margin: 6px 0 0; }
 /* 단계 카드 — 상태 점 + 라벨 + 뱃지 + ⋯, 설명, [해보기] */
-.ob-step { padding: 16px 18px; border-left: 3px solid var(--line-net-2); }
-.ob-step.done { border-left-color: #3a9d6e; }
-.ob-step.todo { border-left-color: var(--blue); }
-.ob-step.skipped { border-left-color: var(--muted-2); }
+/* 상태 위계(#870): 완료·해당없음은 '끝난 것'이라 조용히 뒤로, 미완(할 일)은 앞으로 — 특히 필수 미완(.req)을 강조.
+   원칙: done 은 채도·대비를 낮춰 마감된 느낌, todo 는 살짝 틴트 배경 + 진한 좌측 바로 '지금 할 일'로 읽히게. */
+.ob-step { padding: 16px 18px; border: 1px solid var(--line); border-left: 3px solid var(--line-net-2); }
+/* 완료 — 물러난다: 옅은 회색 바, 배경 무채, 살짝 흐리게. */
+.ob-step.done { border-left-color: var(--line-net-2); background: var(--bg); opacity: .72; }
+.ob-step.done:hover { opacity: 1; }
+.ob-step.skipped { border-left-color: var(--line-net); background: var(--bg); opacity: .6; }
+/* 미완 — 앞으로: 파란 바 + 아주 옅은 파란 틴트 배경. */
+.ob-step.todo { border-left-color: var(--blue); background: rgba(45,107,240,.035); }
+/* 필수 미완 — 가장 강조: 두꺼운 좌측 바 + 뚜렷한 틴트 + 은은한 파란 링. */
+.ob-step.todo.req { border-left-width: 4px; border-color: var(--line-note);
+  background: rgba(45,107,240,.06); box-shadow: 0 0 0 1px rgba(45,107,240,.08); }
 .ob-step-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ob-step-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .ob-step-dot { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 999px; font-size: 12px; font-weight: 800; }
-.ob-step.done .ob-step-dot { background: rgba(58,157,110,.12); color: #3a9d6e; }
-.ob-step.todo .ob-step-dot { background: var(--bg-punch); color: var(--blue); border: 1px solid var(--line-net-2); }
-.ob-step.skipped .ob-step-dot { background: var(--bg-tint); color: var(--muted-2); }
+/* 완료 = 채운 초록 원 + 흰 체크(끝난 것이 확실히 보이되 색은 절제). */
+.ob-step.done .ob-step-dot { background: #3a9d6e; color: #fff; }
+.ob-step.skipped .ob-step-dot { background: var(--bg-tint); color: var(--muted-2); border: 1px solid var(--line-net); }
+/* 미완 = 속 빈 파란 링(할 일). 필수 미완은 채운 파란 원 + 펄스 링으로 '지금 여기'. */
+.ob-step.todo .ob-step-dot { background: var(--bg); border: 2px solid var(--blue); }
+.ob-step.todo.req .ob-step-dot { background: var(--blue); border-color: var(--blue); }
+.ob-step.todo.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #fff; }
 .ob-step-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-step.done .ob-step-label, .ob-step.skipped .ob-step-label { color: var(--ink-sub); }
 .ob-step-badge { font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint);
   border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
 .ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
+/* 필수 미완의 '필수' 뱃지 = 채운 파랑(지금 해야 할 것). 완료된 필수는 조용한 틴트 그대로. */
+.ob-step.todo.req .ob-step-badge.req { color: #fff; background: var(--blue); border-color: var(--blue); }
 .ob-step-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 8px 0 0 32px; }
 .ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
 .ob-step-act { margin: 12px 0 0 32px; }
