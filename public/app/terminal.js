@@ -498,7 +498,8 @@ function qHighlight(text, terms) {
     return wrap;
 }
 // 한 세션 '내 질문' 팝아웃 — 상단 검색으로 그 세션 질문을 즉시 필터(클라이언트). 최신이 위, #N=시간순 번호.
-async function openSessPrompts(s) {
+//  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
+export async function openSessPrompts(s) {
     const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
     overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
     try {

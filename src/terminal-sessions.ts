@@ -103,10 +103,10 @@ export interface SessionInfo {
   agentState?: "busy" | "waiting" | "idle" | "offline";
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
-  // 마지막 'busy(작업중)' 관측 시각(epoch초, 폴링 기반) — '최근 작업순' 정렬용. 한 번도 busy 로 안 잡혔으면 undefined.
+  // 마지막 '작업(busy)' 시각(epoch초) — 클로드가 마지막으로 턴을 돌리고 있던(또는 끝낸) 때. 정렬·카드 시간 표시용.
+  //  ⚠ '내가 열어본(브라우저 접속)' 시각은 섞지 않는다(#853) — 열어보기는 작업이 아니다.
+  //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
-  // 마지막 사용 시각(epoch초) = max(마지막 작업, 마지막 브라우저 접속). 카드 시간 표시용(생성일 대신).
-  lastUsed?: number;
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; worktree?: boolean; }
 
@@ -298,7 +298,8 @@ async function getOpt(name: string, opt: string): Promise<string> {
 // @box_flags·@box_invites 는 label 앞에 둔다(label 은 탭 포함 가능해 ...rest 로 받으므로, 단일필드를 먼저 파싱).
 //  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
 // pane_current_command(포그라운드 프로세스)·pane_pid(=포그라운드 pid, CPU 판정용)를 label 앞에 추가(label 은 탭 포함 가능해 ...rest 로 받으므로 뒤에 오면 삼켜짐).
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{pane_current_command}\t#{session_last_attached}\t#{pane_title}\t#{@box_label}";
+// @box_last_busy = 마지막 작업(스피너 관측) 시각 epoch초 — 게이트웨이 재기동에도 살아남게 tmux 세션에 영속(#853).
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{pane_title}\t#{@box_label}";
 
 // pane_title(=Claude Code 가 써두는 '지금 하는 일' 요약) → 표시용 제목. 상태 글리프(✳/스피너 등) 제거, 기본 셸 타이틀(user@host:path)·셸 세션은 무시.
 function sessionActivityTitle(paneTitle: string, harness: string): string {
@@ -323,11 +324,29 @@ function isAgentOffline(harness: string, paneCmd: string): boolean {
 }
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).
 const lastBusyAt = new Map<string, number>();
-// pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지 — 번호 선택지 위에 커서(❯ 1.) 또는 승인 문구. 2.5초 캐시(폴링 버스트 공유).
+// pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지. 2.5초 캐시(폴링 버스트 공유).
+//
+// ⚠ 화면 전체를 grep 하면 안 된다(#853 오탐). Claude Code 는 **과거 사용자 메시지도 '❯ ' 프리픽스로**
+//   전사(transcript)에 그린다 → 사용자가 번호목록을 붙여넣은 세션엔 화면에 "❯ 1. 최근에 위키를…" 이
+//   남아, 승인 메뉴 커서("❯ 1. Yes")와 구별되지 않아 이미 끝난 대화가 계속 '확인 필요' 빨강으로 떴다.
+//
+// 판정은 **하단 라이브 UI 영역**만 본다. 불변식: 다이얼로그(모달)가 뜨면 입력창이 감춰진다.
+//   - 대기 아님(입력창 살아있음): "───" 틀 + "❯ " 입력줄 + 모드 푸터("⏵⏵ auto mode on …" / "⏸ manual mode on · ? for shortcuts")
+//   - 승인 대기:  " Do you want to create hello.txt?" · " ❯ 1. Yes" · " Esc to cancel · Tab to amend"
+//   - 질문 대기:  " ❯ 1. Red" · " Enter to select · ↑/↓ to navigate · Esc to cancel"
+//   (승인 문구는 툴마다 다르다 — "Do you want to create X?" — 문구만 매칭하면 놓친다. 커서·힌트가 주신호.)
 const _paneWaitCache = new Map<string, { at: number; waiting: boolean }>();
-function detectAwaiting(pane: string): boolean {
-  for (const ln of pane.split("\n")) if (/❯\s*\d+[.)]\s/.test(ln)) return true; // 커서가 번호 선택지 위 = 메뉴/승인 대기
-  return /Do you want to (proceed|continue)\??|Would you like to proceed|Select (an|the) option|Choose an option/i.test(pane);
+const TAIL_LINES = 14;                                      // 하단 라이브 UI 영역(입력창 또는 다이얼로그). 전사는 이 위에 있다.
+const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i;
+const MENU_CURSOR = /^\s*[│┃|]?\s*❯\s*\d+[.)]\s/;           // 번호 선택지 위의 커서(다이얼로그 테두리 안일 수 있다)
+const MENU_HINT = /Enter to select|↑\/↓ to navigate|Esc to cancel/i;
+const APPROVE_PHRASE = /Do you want to |Would you like to proceed|Select (an|the) option|Choose an option/i;
+export function detectAwaiting(pane: string): boolean {
+  const lines = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+  const tail = lines.slice(-TAIL_LINES);
+  if (tail.some((l) => INPUT_BOX.test(l))) return false;    // 입력창이 떠 있다 = 모달 없음 = 대기 아님
+  const tailText = tail.join("\n");
+  return tail.some((l) => MENU_CURSOR.test(l)) || MENU_HINT.test(tailText) || APPROVE_PHRASE.test(tailText);
 }
 async function paneAwaitingInput(sessionId: string): Promise<boolean> {
   const now = Date.now();
@@ -359,16 +378,23 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, lastAttachedRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
-    if (busy) lastBusyAt.set(name, nowSec);
+    // 마지막 작업 시각 = max(이번 프로세스 관측, tmux 에 영속된 값). busy 면 지금으로 갱신.
+    const persisted = Number(lastBusyRaw) || 0;
+    let lastBusy = Math.max(lastBusyAt.get(name) || 0, persisted);
+    if (busy) {
+      lastBusy = nowSec;
+      lastBusyAt.set(name, nowSec);
+      if (nowSec - persisted >= 30) void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+    }
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
     if (me !== null && !dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
-    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, lastAttachedRaw, labelParts, offline, busy });
+    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, labelParts, offline, busy, lastBusy });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
   const waitingIds = new Set<string>();
@@ -389,9 +415,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
       projectId: Number(r.projectRaw) || 0, wtBranch: r.wtBranchRaw || "",
       agentState: state, title: sessionActivityTitle(r.paneTitleRaw, r.harness),
-      lastActive: lastBusyAt.get(r.name),
-      // #req 마지막 사용 시각 표시용 — 마지막 작업(busy) OR 마지막 브라우저 접속 중 더 최근. 둘 다 없으면 프론트가 created 로 폴백.
-      lastUsed: Math.max(lastBusyAt.get(r.name) || 0, Number(r.lastAttachedRaw) || 0) || undefined,
+      lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
     });
   }
   sessions.sort((a, b) => (a.owned === b.owned ? b.created - a.created : a.owned ? -1 : 1));
