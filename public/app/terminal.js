@@ -394,8 +394,9 @@ function gridLayouts(n) {
         add(3, Math.ceil(n / 3), '3열');
     return out.slice(0, 5);
 }
-// 배치(그리드) 선택 팝업 — 고른 뒤 terminal-grid.html 을 새 탭으로. items = [{id,label}].
-function openGridPicker(items) {
+// 배치(그리드) 선택 팝업 — 고른 뒤 terminal-grid.html 을 새 탭으로. items = [{id,label,node}].
+//  대시보드 '내 AI 세션' 일괄 바도 이 함수를 재사용한다(#870 — 두 벌 만들지 않는다). 내부 의존(overlay·gridLayouts·el)은 이 모듈 스코프에서 해소된다.
+export function openGridPicker(items) {
     const n = items.length;
     const container = el('div', { class: 'tgrid-opts' });
     const back = overlay(n + '개 세션을 한 탭에서 열기 — 배치를 고르세요', container);

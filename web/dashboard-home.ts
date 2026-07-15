@@ -14,7 +14,7 @@ import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 �
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
 import { UP_CONFIRM, authDownload, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
-import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
+import { openGridPicker, openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어·그리드 열기(#870)를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -935,15 +935,33 @@ async function fillSessions(zone, onCount, projectsP?) {
     toast(failed ? ((ids.length - failed) + '개 삭제 · ' + failed + '건 실패') : (ids.length + '개 세션을 삭제했어요'), !!failed);
     selected.clear(); await reloadSessions();
   };
+  // #870 그리드로 열기 — 고른 세션들을 한 창(탭)에 그리드로 함께. 1개면 단독 탭, 여러 개면 배치 선택 팝업(터미널 탭과 동일 openGridPicker 재사용 — 두 벌 만들지 않는다).
+  const openSelectedGrid = () => {
+    const items = [...selected]
+      .map((id) => sessions.find((s) => s.id === id))
+      .filter(Boolean)
+      .map((s: any) => ({ id: s.id, label: s.label || '', node: (s.node && s.node.id) || '' }));
+    if (!items.length) return;
+    if (items.length === 1) {
+      const s = items[0];
+      window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label) + (s.node ? '&node=' + encodeURIComponent(s.node) : ''), '_blank');
+      return;
+    }
+    openGridPicker(items);
+  };
   const bar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
   const renderBar = () => {
     // #853 하단 일괄 바 = 선택이 하나라도 있거나(호버 체크로 바로 진입) ⚙ 선택모드일 때 표시. 다 풀면 자동으로 숨는다.
     const n = selected.size;
     bar.hidden = !selectMode && n === 0; if (bar.hidden) return;
-    const delBtn: any = el('button', { class: 'dash-bulkbar-btn danger dash-bulkbar-push', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: killSelected });
+    // #870 그리드로 열기 = 선택 모드의 주 동작(고른 세션을 한 창에 함께). dash-bulkbar-push 로 액션 묶음을 우측 정렬.
+    const gridBtn: any = el('button', { class: 'dash-bulkbar-btn primary dash-bulkbar-push', type: 'button', title: '고른 세션들을 한 창에 그리드로 함께 열기', text: '그리드로 열기' + (n ? ' (' + n + ')' : ''), onclick: openSelectedGrid });
+    gridBtn.disabled = n === 0;
+    const delBtn: any = el('button', { class: 'dash-bulkbar-btn danger', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: killSelected });
     delBtn.disabled = n === 0;
     bar.replaceChildren(
-      el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }),
+      el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 그리드로 열거나 삭제하세요' }),
+      gridBtn,
       delBtn,
       el('button', { class: 'dash-bulkbar-btn', type: 'button', title: selectMode ? '선택 모드 종료' : '선택 해제', text: '완료', onclick: () => setSelectMode(false) }));
   };
@@ -1027,7 +1045,8 @@ async function fillSessions(zone, onCount, projectsP?) {
           el('div', { class: 'dash-scard-head' }, statusEl, nameEl),
           worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null,
           chips.childElementCount ? chips : null);
-      const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
+      // #870 자세히(A안) = 상태 레일 + 2영역: 좌 콘텐츠 / 우 컬럼(시각을 [열기·⋮] 위에 스택). 간략히는 그대로.
+      const box = el('div', { class: 'dash-scard' + (density === 'compact' ? '' : ' dash-scard--full') + ' is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
       if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
         // #853 체크박스는 평소 숨김 → 카드 왼쪽에 호버하면 나타난다(CSS: 호버 || .sel || selectmode).
         //  ⚠ 체크 자체로 selectMode(전체 상시노출)를 켜지 않는다 — 그래야 체크를 다 풀면(선택 0) 다시 숨는다.
@@ -1043,9 +1062,10 @@ async function fillSessions(zone, onCount, projectsP?) {
         wrap.addEventListener('click', (ev) => ev.stopPropagation());
         box.append(wrap);
       }
-      // 간략히는 시각(when)을 메타 줄(2줄째) 안에 넣었으므로 box 직속엔 넣지 않는다. 자세히는 우측 고정열로 box 직속.
+      // 간략히는 시각(when)을 메타 줄(2줄째) 안에 넣었으므로 box 직속엔 넣지 않는다.
+      //  자세히(A안): 시각+액션을 우측 세로 컬럼(dash-scard-side)으로 묶어 '시각 위 · 열기·⋮ 아래'로 스택.
       if (density === 'compact') box.append(main, acts);
-      else box.append(main, when, acts);
+      else box.append(main, el('div', { class: 'dash-scard-side' }, when, acts));
       list.append(box);
     }
     // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).

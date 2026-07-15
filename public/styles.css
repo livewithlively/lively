@@ -4690,6 +4690,10 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-bulkbar-btn:hover { background: rgba(255,255,255,.24); }
 .dash-bulkbar-btn.danger { background: color-mix(in srgb, var(--coral) 60%, transparent); border-color: color-mix(in srgb, var(--coral) 50%, transparent); }
 .dash-bulkbar-btn.danger:hover { background: var(--coral); }
+/* #870 그리드로 열기 = 선택 모드의 주 동작 → 흰 솔리드로 강조(삭제=코랄과 구분). */
+.dash-bulkbar-btn.primary { background: #fff; border-color: #fff; color: var(--ink); }
+.dash-bulkbar-btn.primary:hover { background: #fff; filter: brightness(.94); }
+.dash-bulkbar-btn.primary:disabled { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.22); color: #fff; }
 .dash-bulkbar-push { margin-left: auto; } /* #758 삭제·완료 버튼을 우측으로 밀기 */
 .dash-bulkbar-btn:disabled { opacity: .4; cursor: default; }
 .dash-bulkbar-x { margin-left: auto; width: 28px; height: 28px; border: none; background: rgba(255,255,255,.12); color: #fff; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
@@ -4792,6 +4796,14 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 @media (prefers-reduced-motion: reduce) { .dash-scard-status.is-busy .dash-scard-dot, .dash-scard-status.is-waiting .dash-scard-dot { animation: none; } }
 /* 액션 — 항상 보이는 [열기] + 소유자 [⋮], 카드 우측 세로 중앙. */
 .dash-scard-acts { flex: none; display: flex; align-items: center; gap: 5px; }
+
+/* #870 자세히(A안) — 상태 레일 + 2영역. 카드는 상단 정렬, 우측에 시각을 [열기·⋮] 위로 스택한 세로 컬럼.
+   레일이 상태 스캔축이라 카드 배경 틴트는 걷어 깔끔하게(작업중/확인필요도 흰 배경 + 색 레일·라벨로 도드라짐).
+   간략히(compact)는 기존 flex-center 한 줄 그대로 — 이 규칙은 --full 에만 적용. */
+/* 자세히: 유일한 변경 = 우측을 세로 컬럼으로 묶어 '마지막 작업·시각' 위 · '열기·⋮' 아래로 스택.
+   나머지(상태 틴트·정렬·여백·칩)는 전부 기존 카드 그대로 둔다. */
+.dash-scard--full .dash-scard-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-left: auto; }
+.dash-scard--full .dash-scard-when { margin-left: 0; padding: 0; }
 .dash-scard-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 13px; background: var(--bg); cursor: pointer; font-family: inherit; }
 .dash-scard-open:hover { background: var(--bg-punch); }
 .dash-scard-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
@@ -6755,13 +6767,18 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .docs-md .md-table td:first-child { color: var(--ink); font-weight: 600; min-width: 9.5em; }
 .docs-md .md-table td:last-child, .docs-md .md-table th:last-child { padding-right: 16px; }
 
-/* 프롬프트 예시 — AI에게 실제로 시켜 볼 말(:::prompt). 명령어 코드블록과 다른 표면. */
-.md-prompt { position: relative; background: var(--bg-tint); border: 1px solid var(--line-net);
-  border-left: 3px solid var(--blue); border-radius: 10px; padding: 12px 15px 12px 42px; margin: 8px 0;
-  font-size: 14.5px; line-height: 1.65; font-weight: 600; color: var(--ink); }
-.md-prompt::before { content: '💬'; position: absolute; left: 14px; top: 11px; font-size: 15px; line-height: 1.4; }
-.md-prompt .md-p { margin: 0; }
-.md-prompt + .md-prompt { margin-top: 8px; }
+/* 프롬프트 예시 — AI에게 실제로 시켜 볼 말(:::prompt). 명령어 코드블록·콜아웃과 구분되는 '대화 예시' 카드.
+   #780 뷰티파이: 납작한 틴트 박스 → 아이콘 타일 + 부드러운 그림자 카드(호버 시 살짝 뜸). 아래 콜아웃(.md-quote)과 뚜렷이 구분. */
+.md-prompt { display: flex; align-items: flex-start; gap: 12px; position: relative;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
+  box-shadow: 0 1px 2px rgba(21,35,59,.04); transition: border-color .14s, box-shadow .14s, transform .14s; }
+.md-prompt:hover { border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  box-shadow: 0 6px 18px rgba(21,35,59,.08); transform: translateY(-1px); }
+.md-prompt::before { content: '💬'; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 9px; margin-top: 1px; font-size: 15px; line-height: 1;
+  background: color-mix(in srgb, var(--blue) 9%, var(--bg-punch)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 14%, transparent); }
+.md-prompt .md-p { flex: 1; min-width: 0; margin: 0; font-size: 14.5px; line-height: 1.7; font-weight: 500; color: var(--ink); }
+.md-prompt + .md-prompt { margin-top: 10px; }
 
 @media (max-width: 720px) {
   .docs-featgrid, .docs-linkgrid { grid-template-columns: 1fr; }
@@ -6935,3 +6952,42 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-more-pop { position: absolute; right: 0; top: 28px; z-index: 5; padding: 6px; min-width: 152px;
   display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(21,35,59,.12); }
 .ob-more-pop .btn { justify-content: flex-start; }
+
+/* ============================================================
+   맥락의 세 축 다이어그램(:::axes — 사용설명서 how-it-works).
+   카테고리(분류 컨테이너) 안에 지식(정적)⇄프로젝트(동적) 두 극이 담긴 구조.
+   ============================================================ */
+.md-axes { margin: 24px 0 28px; display: flex; flex-direction: column; align-items: center; }
+.md-axes .md-axes-ic { flex: none; line-height: 1; }
+.md-axes .md-axes-nm { font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.md-axes .md-axes-sub { font-weight: 600; color: var(--muted-2); }
+
+/* 정점 — 카테고리(지식·프로젝트를 담는 분류 컨테이너) */
+.md-axes-apex { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 999px;
+  background: var(--bg-tint); border: 1.5px solid var(--line-net, #d9dee6); }
+.md-axes-apex .md-axes-ic { font-size: 18px; }
+.md-axes-apex .md-axes-nm { font-size: 14.5px; }
+.md-axes-apex-hint { font-size: 12px; font-weight: 700; color: var(--muted-2); }
+/* 정점 → 흐름 연결선(삼각형 실루엣의 수직 레일) */
+.md-axes-stem { width: 2px; height: 20px; background: var(--line-net, #d9dee6); }
+
+/* 흐름 — 필요 지식 → 프로젝트 → 산출 지식 (정적 → 동적 → 정적) */
+.md-axes-flow { display: flex; align-items: stretch; justify-content: center; gap: 10px; flex-wrap: wrap; width: 100%; }
+.md-axes-fnode { flex: 1 1 0; min-width: 150px; max-width: 235px; display: flex; flex-direction: column; gap: 6px;
+  padding: 15px 16px; border-radius: 14px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(21,35,59,.04); }
+.md-axes-fnode .md-axes-ic { font-size: 22px; }
+.md-axes-fnode .md-axes-nm { font-size: 14.5px; }
+.md-axes-fnode .md-axes-sub { font-size: 12px; line-height: 1.55; }
+/* 지식 = 정적(민트) · 프로젝트 = 동적(파랑). 필요 지식은 선택이라 점선으로 '없어도 됨'을 표시. */
+.md-axes-fnode.is-req  { border-style: dashed; border-color: color-mix(in srgb, var(--mint, #46c8a0) 50%, var(--line));
+  background: color-mix(in srgb, var(--mint, #46c8a0) 5%, var(--bg)); }
+.md-axes-fnode.is-prod { border-top: 3px solid var(--mint, #46c8a0); }
+.md-axes-fnode.is-dynamic { border-top: 3px solid var(--blue); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); }
+.md-axes-arrow { flex: none; align-self: center; font-size: 20px; font-weight: 800; color: var(--muted-2); }
+
+/* 좁은 화면 — 세로 스택, 화살표 90° 회전 */
+@media (max-width: 640px) {
+  .md-axes-flow { flex-direction: column; align-items: stretch; }
+  .md-axes-fnode { max-width: none; }
+  .md-axes-arrow { transform: rotate(90deg); }
+}

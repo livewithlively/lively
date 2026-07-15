@@ -59,8 +59,70 @@ function docsSidebar(active) {
 // 문서 셸 — 사이드바 + 본문. 모든 사용 가이드 화면(문서·설치·둘러보기·메뉴·온보딩)이 이 셸 안에서 렌더된다.
 //  export: #/start(start.ts)도 이 셸을 쓴다 — 사이드바에서 들어갔는데 사이드바가 사라지면 길을 잃는다.
 export function docsShell(view, active, ...content) {
-    view.replaceChildren(el('div', { class: 'docs-layout' }, docsSidebar(active), el('article', { class: 'docs-body' }, ...content)));
+    const article = el('article', { class: 'docs-body' }, ...content);
+    wireGuideLinks(article); // #780 원고 링크 동작: 같은 페이지=부드러운 스크롤 / 다른 카테고리·탭·외부=새 브라우저 탭
+    view.replaceChildren(el('div', { class: 'docs-layout' }, docsSidebar(active), article));
     document.getElementById('view').focus?.();
+}
+// 해시 라우트를 페이지 키/쿼리/프래그먼트로 분해. '#/learn/docs/wiki?focus=required' → {page:'/learn/docs/wiki', query:'focus=required', frag:''}
+function guideRouteKey(hash) {
+    let h = String(hash || '');
+    const hi = h.indexOf('#');
+    if (hi >= 0)
+        h = h.slice(hi + 1); // 선두 '#' 제거
+    let frag = '';
+    const fi = h.indexOf('#');
+    if (fi >= 0) {
+        frag = h.slice(fi + 1);
+        h = h.slice(0, fi);
+    } // 2차 #앵커
+    let query = '';
+    const qi = h.indexOf('?');
+    if (qi >= 0) {
+        query = h.slice(qi + 1);
+        h = h.slice(0, qi);
+    }
+    return { page: h.replace(/\/+$/, ''), query, frag };
+}
+// 원고(프로즈) 안의 링크 동작(#780) — 목적지가 지금 이 페이지면 부드럽게 스크롤, 다른 세부 카테고리·다른 탭·외부면 새 브라우저 탭.
+//  사이드바(.docs-side)와 #/start 의 인터랙티브 카드는 건드리지 않는다: 렌더된 원고(.docs-md/.docs-lead) 안의 링크만 가로챈다.
+//  ⌘/ctrl/⇧/가운데클릭·자체 preventDefault 한 링크는 그대로 둔다(네이티브 새 탭·전용 핸들러 보존).
+function wireGuideLinks(article) {
+    article.addEventListener('click', (ev) => {
+        if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey)
+            return;
+        const a = ev.target?.closest?.('a[href]');
+        if (!a || !a.closest('.docs-md, .docs-lead'))
+            return; // 렌더된 원고 안의 링크만
+        const href = a.getAttribute('href') || '';
+        if (!href || href === '#')
+            return;
+        if (href.startsWith('#')) {
+            const tgt = guideRouteKey(href), cur = guideRouteKey(location.hash);
+            if (tgt.page && tgt.page === cur.page) { // ── 같은 페이지 → 부드러운 스크롤
+                ev.preventDefault();
+                let to = tgt.frag ? document.getElementById(tgt.frag) : null;
+                if (!to && /(^|&)focus=required(&|$)/.test(tgt.query))
+                    to = document.getElementById('learn-required');
+                if (to) {
+                    to.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    to.style.transition = 'box-shadow .3s ease'; // 도착 지점 살짝 강조(#317 focus 하이라이트와 동일)
+                    to.style.boxShadow = '0 0 0 2px var(--blue)';
+                    setTimeout(() => { to.style.boxShadow = ''; }, 1200);
+                }
+                else {
+                    article.scrollIntoView({ behavior: 'smooth', block: 'start' }); // 앵커 없는 자기 링크 → 맨 위로
+                }
+                return;
+            }
+            ev.preventDefault(); // ── 다른 세부 카테고리·다른 탭 → 새 브라우저 탭
+            window.open(location.href.split('#')[0] + href, '_blank', 'noopener');
+        }
+        else if (/^https?:\/\//i.test(href)) { // ── 외부 링크 → 새 브라우저 탭
+            ev.preventDefault();
+            window.open(href, '_blank', 'noopener');
+        }
+    });
 }
 // 페이지 아이브로 — 사이드바 그룹명을 히어로(guide-hero-eyebrow)와 같은 언어로 머리 위에 얹는다(#780 디자인 통일).
 export function docsEyebrow(key) {
