@@ -389,7 +389,10 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     // 리스트별 묶음, 미분류(list_id 없음)는 맨 뒤 → 저장된 개요 순서 적용.
     const byList = new Map();
     for (const p of shown) { const k = p.list_id || 0; if (!byList.has(k)) byList.set(k, []); byList.get(k).push(p); }
-    const base = [...lists.map((l) => l.id), ...(byList.has(0) ? [0] : [])]; // #req 프로젝트 없는(새로 추가한) 리스트도 개요에 노출
+    // '내 프로젝트' 개요는 **내 프로젝트가 있는 리스트만** — 전체 조직 리스트를 다 노출하던 버그 수정.
+    //  (예전 #req '빈 리스트도 노출'이 lists 전체에 과적용돼, 내 프로젝트 1개만 생겨도 관여 안 한 모든 열린 리스트가 카드로 떴다.
+    //   새/빈 리스트는 프로젝트를 추가하면 byList 에 들어와 자동 등장하고, '＋ 새 리스트' 카드로 만들 수 있다.)
+    const base = [...lists.filter((l) => byList.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
     currentOrder = dashApplyListOrder(base);
     // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
     const hiddenOv = dashOvHidden();
