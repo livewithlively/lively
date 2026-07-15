@@ -118,10 +118,12 @@
     setActive(((current + delta) % cells.length + cells.length) % cells.length, true);
   }
   function onKey(e) {
-    if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) { // Ctrl+Tab / Ctrl+Shift+Tab
-      e.preventDefault(); e.stopPropagation();
-      cycle(e.shiftKey ? -1 : 1);
-    }
+    // Alt+→(다음)/Alt+←(이전) — 브라우저·OS 가 안 가로채는 신뢰 가능 조합(주 단축키).
+    //  Ctrl+Tab/Ctrl+Shift+Tab 은 대부분 브라우저가 '탭 전환'으로 가로채 페이지에 안 오지만, 허용하는 브라우저를 위한 보너스로 함께 받는다.
+    var delta = null;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) delta = (e.key === 'ArrowRight' ? 1 : -1);
+    else if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) delta = (e.shiftKey ? -1 : 1);
+    if (delta !== null) { e.preventDefault(); e.stopPropagation(); cycle(delta); }
   }
   document.addEventListener('keydown', onKey, true);
   frames.forEach(function (f, i) {
@@ -145,8 +147,8 @@
       '<div id="help-box" role="dialog" aria-modal="true" aria-labelledby="help-t">'
       + '<h2 id="help-t">여러 세션, 키보드로 오가기</h2>'
       + '<p>지금 <b>' + n + '개 세션</b>이 한 그리드에 있어요. 한 세션에서 입력하다가 다음 세션으로 넘어가려면:</p>'
-      + '<p><kbd>Ctrl</kbd>+<kbd>Tab</kbd> 다음 세션 &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> 이전 세션</p>'
-      + '<p class="note">셀을 클릭해도 그 세션으로 이동해요. (일부 브라우저가 Ctrl+Tab을 탭 전환으로 가로채면 셀 클릭을 쓰세요. 일반 Tab은 셸 자동완성용이라 쓰지 않아요.)</p>'
+      + '<p><kbd>Alt</kbd>+<kbd>→</kbd> 다음 세션 &nbsp;·&nbsp; <kbd>Alt</kbd>+<kbd>←</kbd> 이전 세션</p>'
+      + '<p class="note">셀을 클릭해도 그 세션으로 이동해요. (일반 Tab은 셸 자동완성용이라 못 쓰고, Ctrl+Tab은 브라우저가 탭 전환으로 가로채요. Ctrl+Tab이 되는 브라우저면 그것도 동작해요.)</p>'
       + '<div class="help-row"><label><input type="checkbox" id="help-dontshow"> 다시 보지 않기</label>'
       + '<button class="help-close" id="help-close">닫기</button></div>'
       + '</div>';
