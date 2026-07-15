@@ -183,6 +183,36 @@ function emitReload() {
 // ── 로컬 하네스 인벤토리 관측·보고(#891 온보딩 C) — 웹에서 로컬↔라이블리 하네스를 한눈에 보게 한다. ──
 //  ⚠ **메타만**(id·kind·managed) push — 스킬 본문·메모리는 절대 안 읽는다(사생활·용량). managed = 매니페스트에
 //   이 id 가 있나(=라이블리가 심음). 매니페스트에 없는 = 그 사람 자산(shadow 후보). 실패는 조용히 삼킨다(관측이라 비치명).
+// 사용자 **자체** 훅 관측(#893 후속) — ~/.claude/settings.json 의 hooks 중 라이블리 배선(.lively/) 아닌 것만.
+//  라이블리 훅은 파일이 아니라 run-custom 중앙 디스패치라 여기선 안 센다(웹은 '배선된 PC=전부 실행'으로 다룬다).
+//  훅은 settings.json 항목이지 파일이 아니므로 managed=false 표시전용(비파괴 .disabled 토글 대상 아님).
+function scanLocalHooks() {
+  if (HARNESS === "codex") return []; // codex 훅은 config.toml(별도 포맷) — 미지원
+  let cfg;
+  try { cfg = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8")); } catch { return []; }
+  const hooksCfg = cfg && typeof cfg === "object" ? cfg.hooks : null;
+  if (!hooksCfg || typeof hooksCfg !== "object") return [];
+  const out = [], seen = new Set();
+  for (const [event, groups] of Object.entries(hooksCfg)) {
+    if (!Array.isArray(groups)) continue;
+    for (const g of groups) {
+      const hs = g && Array.isArray(g.hooks) ? g.hooks : [];
+      for (const h of hs) {
+        const cmd = h && typeof h.command === "string" ? h.command : "";
+        if (!cmd || cmd.includes(".lively/")) continue; // 라이블리 배선분 제외 = 내 것만
+        // 읽기 쉬운 id: <event>:<명령 요약(스크립트 basename)>. 길이/중복 가드.
+        const tok = cmd.replace(/["']/g, "").split(/\s+/).find((t) => /[\\/]/.test(t) && !t.startsWith("-")) || cmd.split(/\s+/)[0] || "hook";
+        const base = (tok.split(/[\\/]/).pop() || tok).slice(0, 40);
+        let id = `${event}:${base}`.slice(0, 60);
+        while (seen.has(id)) id = id.length < 62 ? id + "~" : id.slice(0, -1) + "~";
+        seen.add(id);
+        out.push({ id, kind: "hook", managed: false });
+      }
+    }
+  }
+  return out;
+}
+
 function scanLocalAssets(managedIds) {
   const out = [];
   const dirs = HARNESS === "codex"
@@ -200,6 +230,7 @@ function scanLocalAssets(managedIds) {
       out.push({ id, kind, managed: managedIds.has(id) });
     }
   }
+  for (const h of scanLocalHooks()) out.push(h); // 자체 훅(표시전용)
   return out;
 }
 

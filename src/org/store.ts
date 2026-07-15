@@ -409,9 +409,33 @@ export async function setHarnessSnapshot(id: string, machineId: string, snap: Ha
 export async function removeHarnessMachine(id: string, machineId: string): Promise<void> {
   const r = await itemsPool.query(
     `UPDATE org_member
-        SET harness_snapshot   = COALESCE(harness_snapshot,'{}'::jsonb)   - $2::text,
-            harness_local_pref = COALESCE(harness_local_pref,'{}'::jsonb) - $2::text
+        SET harness_snapshot      = COALESCE(harness_snapshot,'{}'::jsonb)      - $2::text,
+            harness_local_pref    = COALESCE(harness_local_pref,'{}'::jsonb)    - $2::text,
+            harness_machine_alias = COALESCE(harness_machine_alias,'{}'::jsonb) - $2::text
       WHERE id=$1 RETURNING id`, [id, machineId]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
+// ── 머신 별명(#893 후속) — 사용자가 각 PC 에 붙이는 이름. 관측(host)과 별개, 세션 report 가 안 덮는다. ──
+export type HarnessMachineAlias = Record<string, string>; // machine_id → 별명
+
+export async function getHarnessMachineAlias(id: string): Promise<HarnessMachineAlias> {
+  const r = await itemsPool.query(`SELECT harness_machine_alias FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.harness_machine_alias as unknown;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v as HarnessMachineAlias : {};
+}
+
+// 별명 지정(비우면 키 삭제 = 별명 해제).
+export async function setHarnessMachineAlias(id: string, machineId: string, alias: string): Promise<void> {
+  const trimmed = alias.trim();
+  const sql = trimmed
+    ? `UPDATE org_member SET harness_machine_alias =
+         COALESCE(harness_machine_alias,'{}'::jsonb) || jsonb_build_object($2::text, $3::text)
+       WHERE id=$1 RETURNING id`
+    : `UPDATE org_member SET harness_machine_alias =
+         COALESCE(harness_machine_alias,'{}'::jsonb) - $2::text
+       WHERE id=$1 RETURNING id`;
+  const r = await itemsPool.query(sql, trimmed ? [id, machineId, trimmed] : [id, machineId]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
 }
 

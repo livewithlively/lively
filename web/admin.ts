@@ -5106,7 +5106,7 @@ async function showHarnessDetail(kind: string, id: string, name: string) {
     const d: any = await api(`/api/ui/me/harness/detail?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`);
     const parts: any[] = [];
     if (d.description) parts.push(el('p', { style: 'color:var(--ink-sub); margin:0 0 10px', text: d.description }));
-    if (d.body) parts.push(el('div', { class: 'md' }, ...[(() => { const m = el('div', {}); m.innerHTML = renderMarkdown(String(d.body)); return m; })()]));
+    if (d.body) parts.push(el('div', { class: 'md md-rendered' }, renderMarkdown(String(d.body))));
     if (!parts.length) parts.push(el('p', { class: 'admin-hint', text: '(본문이 없습니다)' }));
     slot.replaceChildren(...parts);
   } catch (e: any) { slot.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + ((e && e.message) || '') })); }
@@ -5115,7 +5115,7 @@ async function showHarnessDetail(kind: string, id: string, name: string) {
 async function myAssetsSection(detail) {
   const bodyBox = el('div', {});
   detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('내 스킬 · 훅', '라이블리가 배포한 스킬·훅과 **내 컴퓨터에 깔린 로컬 하네스**를 한눈에 보고 켜고 꺼요. 겹치면 조직이 함께 관리·개선하는 라이블리 쪽을 권합니다. 다음 세션부터 반영돼요.'),
+    sectionTitle('내 스킬 · 훅', '라이블리가 배포한 스킬·훅이 **어느 컴퓨터에 깔렸는지** 한눈에 보고 켜고 꺼요. 켜져 있는데 아직 안 깔린 PC는 ‘미설치’로 표시돼요. 아래에는 컴퓨터마다 **내가 직접 만든** 로컬 하네스가 따로 나오고, 별명도 붙일 수 있어요. 다음 세션부터 반영돼요.'),
     bodyBox));
 
   const reload = async () => {
@@ -5124,8 +5124,35 @@ async function myAssetsSection(detail) {
     try { d = await api('/api/ui/me/harness'); }
     catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
 
-    // 라이블리 배포 자산 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 보기.
-    const livelyRow = (targetKind: string, it: any) => {
+    // 관측된 내 컴퓨터들 + 표시 이름/하네스 호환 헬퍼 (라이블리 자산이 어느 PC에 깔렸는지 대조에 씀).
+    const machines = d.machines || [];
+    const machineName = (m: any) => m.alias || m.host || '내 컴퓨터';
+    const compat = (ah: string, mh: any) => ah === 'all' || !mh || ah === mh; // 자산 하네스 vs 머신 하네스
+    const mIndex = machines.map((m: any) => {
+      const map = new Map<string, any>();
+      for (const a of (m.assets || [])) map.set(`${a.kind}:${a.id}`, a);
+      return { m, map };
+    });
+    // 라이블리 자산 1건이 각 PC 에 어떻게 있는지 칩으로. 훅=중앙 디스패치(배선된 PC 전부 실행), 스킬=파일 설치 대조.
+    const pcChips = (it: any, kind: string): { row: any; missing: boolean } => {
+      let missing = false;
+      if (!it.effective) return { row: el('span', { class: 'pc-chip muted', text: '꺼짐 · 어느 PC에도 적용 안 함' }), missing };
+      if (!machines.length) return { row: el('span', { class: 'admin-hint', text: '아직 관측된 PC 없음' }), missing };
+      const chips: any[] = [];
+      for (const { m, map } of mIndex) {
+        const nm = machineName(m);
+        if (kind === 'hook') { if (compat(it.harness || 'all', m.harness)) chips.push(el('span', { class: 'pc-chip', text: nm })); continue; }
+        const hit = map.get(`${it.kind}:${it.id}`);
+        if (hit && hit.overlap === 'managed') chips.push(el('span', { class: 'pc-chip', text: nm }));
+        else if (hit && hit.overlap === 'shadow') chips.push(el('span', { class: 'pc-chip warn', text: nm + ' · 로컬이 가림' }));
+        else if (compat(it.harness || 'all', m.harness)) { chips.push(el('span', { class: 'pc-chip warn', text: nm + ' · 미설치' })); missing = true; }
+      }
+      if (!chips.length) return { row: el('span', { class: 'admin-hint', text: '적용되는 PC 없음' }), missing };
+      return { row: el('div', { class: 'pc-chips' }, ...chips), missing };
+    };
+
+    // 라이블리 배포 자산 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 + 설치된 PC 칩.
+    const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
       const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
       const seg = el('div', { style: 'display:flex; gap:4px; flex-shrink:0;' });
       const opt = (v: string, label: string) => {
@@ -5141,77 +5168,76 @@ async function myAssetsSection(detail) {
         return b;
       };
       seg.append(opt('default', '기본' + (it.byDefault ? '(켬)' : '(끔)')), opt('on', '켜기'), opt('off', '끄기'));
-      const kindLabel = HARNESS_KIND_LABEL[it.kind] || (targetKind === 'org_hook' ? '훅' : it.kind);
+      const kindLabel = HARNESS_KIND_LABEL[kind] || kind;
       const desc = String(it.description || '');
       const nameLink = el('a', { href: '#', class: 'mini-title', style: 'text-decoration:none' }, el('span', { text: it.label || it.id }),
         el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' }));
-      nameLink.addEventListener('click', (ev: any) => { ev.preventDefault(); showHarnessDetail(it.kind || 'hook', it.id, it.label || it.id); });
-      return el('div', { class: 'mini-row', style: 'display:flex; align-items:center; gap:12px;' },
+      nameLink.addEventListener('click', (ev: any) => { ev.preventDefault(); showHarnessDetail(kind, it.id, it.label || it.id); });
+      const { row: chipRow, missing } = pcChips(it, kind);
+      return { node: el('div', { class: 'mini-row', style: 'display:flex; align-items:flex-start; gap:12px;' },
         el('div', { style: 'flex:1; min-width:0;' }, nameLink,
-          el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') })),
-        seg);
+          el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') }),
+          el('div', { style: 'margin-top:6px' }, chipRow)),
+        seg), missing };
     };
 
     const rows: any[] = [];
     rows.push(el('h4', { style: 'margin:4px 0 6px', text: '라이블리가 준 것' }));
     const lskills = d.lively?.skills || []; const lhooks = d.lively?.hooks || [];
-    if (lskills.length) lskills.forEach((sk: any) => rows.push(livelyRow('harness_asset', sk)));
+    let anyMissing = false;
+    if (lskills.length) lskills.forEach((sk: any) => { const r = livelyRow('harness_asset', sk, sk.kind || 'skill'); anyMissing = anyMissing || r.missing; rows.push(r.node); });
     else rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
-    if (lhooks.length) { rows.push(el('h4', { style: 'margin:14px 0 6px', text: '커스텀 훅' })); lhooks.forEach((h: any) => rows.push(livelyRow('org_hook', h))); }
+    if (lhooks.length) { rows.push(el('h4', { style: 'margin:14px 0 6px', text: '커스텀 훅' })); lhooks.forEach((h: any) => rows.push(livelyRow('org_hook', h, 'hook').node)); }
+    if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 안 깔린 PC가 있어요. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동 설치돼요 (‘미설치’로 표시된 PC).'));
 
-    // 내 컴퓨터별 로컬 하네스 — 머신 카드 N개. 로컬 자산 토글(.disabled rename, 그 머신만) + 상세 + '이 컴퓨터 지우기'.
-    const machines = d.machines || [];
-    let shadowTotal = 0;
+    // ── 내 컴퓨터별: 내가 직접 만든 로컬 자산만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
     if (machines.length) {
+      rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터 (직접 만든 로컬 하네스)' }));
       for (const m of machines) {
-        const title = m.host || '내 컴퓨터';
-        const head = el('div', { style: 'display:flex; align-items:center; gap:10px; margin:18px 0 6px' },
-          el('h4', { style: 'margin:0', text: title }),
-          m.at ? el('span', { class: 'mini-meta', text: '· ' + new Date(m.at).toLocaleString('ko-KR') }) : null);
-        // '이 컴퓨터 지우기' — 오래된/중복 관측 정리(uninstall 후 재설치로 남은 것 등).
+        const nm = machineName(m);
+        const head = el('div', { style: 'display:flex; align-items:center; gap:8px; margin:14px 0 6px; flex-wrap:wrap' },
+          el('h5', { style: 'margin:0; font-size:14px', text: nm }));
+        const editName = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '✎ 이름' });
+        editName.addEventListener('click', async () => {
+          const v = prompt(`이 컴퓨터의 별명 (비우면 해제). 관측된 호스트명: ${m.host || '?'}`, m.alias || '');
+          if (v === null) return;
+          try { await api('/api/ui/me/harness/machine-alias', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, alias: v }) }); toast('이름을 바꿨어요'); await reload(); }
+          catch (e: any) { toast((e && e.message) || '실패', true); }
+        });
+        head.append(editName);
+        if (m.alias && m.host) head.append(el('span', { class: 'mini-meta', text: '· ' + m.host }));
+        if (m.at) head.append(el('span', { class: 'mini-meta', text: '· ' + new Date(m.at).toLocaleString('ko-KR') + ' 관측' }));
         const del = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '이 컴퓨터 지우기' });
         del.addEventListener('click', async () => {
-          if (!confirm(`'${title}' 의 하네스 관측을 목록에서 지울까요? (그 컴퓨터에서 다시 세션을 열면 자동으로 다시 나타납니다.)`)) return;
+          if (!confirm(`'${nm}' 의 하네스 관측을 목록에서 지울까요? (그 컴퓨터에서 다시 세션을 열면 자동으로 다시 나타납니다.)`)) return;
           try { await api('/api/ui/me/harness/machine-remove', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id }) }); toast('지웠어요'); await reload(); }
           catch (e: any) { toast((e && e.message) || '실패', true); }
         });
         head.append(del);
         rows.push(head);
-        const list = (m.assets || []);
-        if (!list.length) { rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 자산은 없어요(라이블리가 준 것만).' })); continue; }
-        for (const a of list) {
-          if (a.overlap === 'shadow') shadowTotal++;
-          const kindLabel = HARNESS_KIND_LABEL[a.kind] || '스킬';
-          const tagText = a.disabled ? '꺼짐' : a.overlap === 'managed' ? '라이블리가 설치' : a.overlap === 'shadow' ? '라이블리 것을 가림' : '내가 만든 것';
-          const canToggle = a.overlap !== 'managed';
-          const seg = el('div', { style: 'flex-shrink:0' });
-          if (canToggle) {
-            const tb = el('button', { type: 'button', class: 'btn btn-sm btn-ghost', text: a.disabled ? '켜기' : '끄기' });
+        const own = (m.assets || []).filter((a: any) => a.overlap === 'local-only');
+        if (!own.length) { rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 자산은 없어요(라이블리가 준 것만 있어요).' })); continue; }
+        for (const a of own) {
+          const kindLabel = HARNESS_KIND_LABEL[a.kind] || a.kind;
+          const isHook = a.kind === 'hook'; // 훅은 settings.json 항목(파일 아님) — 비파괴 토글 불가라 여기선 표시만.
+          const meta = kindLabel + ' · ' + (isHook ? 'settings.json 에 직접 넣은 훅 (표시만)' : '내가 만든 것' + (a.disabled ? ' · 꺼짐' : ''));
+          let tb: any = null;
+          if (!isHook) {
+            tb = el('button', { type: 'button', class: 'btn btn-sm btn-ghost', style: 'flex-shrink:0', text: a.disabled ? '켜기' : '끄기' });
             tb.addEventListener('click', async () => {
               try { await api('/api/ui/me/harness-local-pref', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, kind: a.kind, id: a.id, disabled: !a.disabled }) }); toast(a.disabled ? '켜기로 표시 — 다음 세션에 복원' : '끄기로 표시 — 다음 세션에 반영'); await reload(); }
               catch (e: any) { toast((e && e.message) || '실패', true); }
             });
-            seg.append(tb);
           }
-          // managed 는 라이블리 본문 조회 가능(같은 id), 그 외는 로컬 파일이라 서버에 본문 없음.
-          const nameEl = a.overlap === 'managed'
-            ? (() => { const l = el('a', { href: '#', class: 'mini-title', style: 'text-decoration:none', text: a.id }); l.addEventListener('click', (ev: any) => { ev.preventDefault(); showHarnessDetail(a.kind, a.id, a.id); }); return l; })()
-            : el('span', { class: 'mini-title', text: a.id });
           rows.push(el('div', { class: 'mini-row', style: 'display:flex; align-items:center; gap:12px;' },
-            el('div', { style: 'flex:1; min-width:0;' }, nameEl,
-              el('div', { class: 'mini-meta', text: kindLabel + ' · ' + tagText })),
-            seg));
+            el('div', { style: 'flex:1; min-width:0;' }, el('span', { class: 'mini-title', text: a.id }),
+              el('div', { class: 'mini-meta', text: meta })),
+            tb));
         }
       }
     } else {
-      rows.push(el('h4', { style: 'margin:18px 0 6px', text: '내 컴퓨터에 있는 것' }));
+      rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터' }));
       rows.push(el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 못 봤어요. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타나요. 컴퓨터가 여러 대면 각각 따로 보여요. (웹 [터미널] 세션은 회사 서버라 로컬이 안 보입니다.)' }));
-    }
-
-    if (shadowTotal) {
-      rows.unshift(el('div', { class: 'admin-hint', style: 'padding:10px 12px; background:#fff6e6; border:1px solid #f0d59a; border-radius:8px; margin-bottom:10px' },
-        el('b', { text: `내 로컬 자산 ${shadowTotal}개가 라이블리 것과 이름이 같아 라이블리 배포를 가리고 있어요. ` }),
-        '같은 이름이면 라이블리 쪽을 권합니다(로컬 것을 끄면 라이블리 것이 살아나요). 내 것이 더 낫다면 AI 에게 “이 스킬 라이블리에 올리게 정리해줘” 라고 해서 관리자에게 전달하세요.'));
     }
     bodyBox.replaceChildren(...rows);
   };

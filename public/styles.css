@@ -318,6 +318,12 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .md-rendered { font-size: 15px; line-height: 1.6; color: var(--ink-sub); word-break: break-word; }
 .md-rendered > .md > :first-child { margin-top: 0; }
 .md-rendered > .md > :last-child { margin-bottom: 0; }
+/* 내 스킬·훅 — 라이블리 자산이 깔린 PC 칩 + sync 경고 (#893 후속) */
+.pc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pc-chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint, #F1F5FC); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.pc-chip.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d59a; }
+.pc-chip.muted { background: transparent; border-style: dashed; opacity: .75; }
+.sync-warn { padding: 10px 12px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: #6b4e00; line-height: 1.5; }
 .md-p { margin: 0 0 12px; }
 .md-h { color: var(--ink); font-weight: 800; line-height: 1.35; margin: 22px 0 8px; }
 .md-h1 { font-size: 19px; }
