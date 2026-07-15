@@ -92,8 +92,10 @@ const FLAG_WHITELIST = new Map((HARNESSES.find((h) => h.key === "claude")?.flags
 
 function taskScript(bin: string, flags: string[], taskDir: string): string {
   // 사용자 텍스트는 프롬프트 파일 안에만 있다 — 이 문자열의 가변부는 숫자/화이트리스트 경로뿐.
+  //  stream-json = 진행 이벤트를 stream.jsonl 에 줄단위 append → logs tail(파일 오프셋)로 실시간 미러(§11).
+  //  최종 결과(type=result)도 그 마지막 줄에 온다. exec $SHELL 로 세션 잔존(실패 시 사후 검시).
   const f = flags.join(" ");
-  return `cd "$LIVELY_TASK_WS" && ${bin} -p "$(cat "${taskDir}/prompt.txt")" ${f} --output-format json --dangerously-skip-permissions > "${taskDir}/result.json" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
+  return `cd "$LIVELY_TASK_WS" && ${bin} -p "$(cat "${taskDir}/prompt.txt")" ${f} --output-format stream-json --verbose --dangerously-skip-permissions > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
 }
 
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
@@ -109,7 +111,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   const taskDir = path.join(workspace, ".lively-task", String(input.taskId));
   await fsp.mkdir(taskDir, { recursive: true, mode: 0o770 });
   // 재시도(같은 taskId 재큐) 대비 — 이전 시도의 종결 파일이 남아 있으면 즉시 '가짜 완료'로 오감지된다.
-  for (const f of ["exit", "result.json", "stderr.log"]) await fsp.rm(path.join(taskDir, f), { force: true }).catch(() => { /* noop */ });
+  for (const f of ["exit", "stream.jsonl", "stderr.log"]) await fsp.rm(path.join(taskDir, f), { force: true }).catch(() => { /* noop */ });
   await fsp.writeFile(path.join(taskDir, "prompt.txt"), input.prompt, { mode: 0o660 });
 
   // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙.
@@ -155,18 +157,55 @@ export interface TaskOutcome { taskId: number; ok: boolean; exit: number | null;
 
 const SUMMARY_CAP = 8 * 1024;
 
+// stream.jsonl 의 마지막 type=result 이벤트에서 최종 텍스트를 뽑는다(claude stream-json 규약).
+//  못 찾으면 마지막 비어있지 않은 줄(진행 중 크래시 등) — 요약 목적이라 근사로 충분.
+function extractResult(streamJsonl: string): string {
+  const lines = streamJsonl.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const ev = JSON.parse(lines[i]) as { type?: string; result?: unknown; is_error?: boolean };
+      if (ev.type === "result") return typeof ev.result === "string" ? ev.result : JSON.stringify(ev);
+    } catch { /* 부분 줄 — 계속 위로 */ }
+  }
+  return lines.length ? lines[lines.length - 1] : "";
+}
+
 export async function checkTask(w: TaskWatch): Promise<TaskOutcome | null> {
   let exitRaw: string;
   try { exitRaw = (await fsp.readFile(path.join(w.taskDir, "exit"), "utf8")).trim(); }
   catch { return null; } // 아직 실행 중
   const exit = Number.parseInt(exitRaw, 10);
   const code = Number.isFinite(exit) ? exit : null;
-  let summary = "";
-  try { summary = (await fsp.readFile(path.join(w.taskDir, "result.json"), "utf8")).slice(0, SUMMARY_CAP); } catch { /* 결과 없음 */ }
+  let stream = "";
+  try { stream = await fsp.readFile(path.join(w.taskDir, "stream.jsonl"), "utf8"); } catch { /* 결과 없음 */ }
+  const summary = extractResult(stream).slice(0, SUMMARY_CAP);
   if (code === 0) return { taskId: w.taskId, ok: true, exit: code, summary };
   let err = "";
   try { err = (await fsp.readFile(path.join(w.taskDir, "stderr.log"), "utf8")).slice(-2048); } catch { /* noop */ }
   return { taskId: w.taskId, ok: false, exit: code, summary, error: err || `exit=${exitRaw}` };
+}
+
+// 진행 로그 tail(§11) — stream.jsonl 을 from 바이트부터 읽어 청크 반환. done=exit 파일 존재.
+//  중앙(로컬)·원격(노드 RPC 릴레이) 공용. 파일 미존재(claude 시작 전)면 빈 청크.
+export interface TailResult { chunk: string; next: number; done: boolean; exit: number | null }
+export async function tailTask(taskDir: string, from: number): Promise<TailResult> {
+  const p = path.join(taskDir, "stream.jsonl");
+  let chunk = "", next = from;
+  try {
+    const fh = await fsp.open(p, "r");
+    try {
+      const st = await fh.stat();
+      if (st.size > from) {
+        const buf = Buffer.allocUnsafe(Math.min(st.size - from, 256 * 1024)); // 청크 상한 256KB
+        const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+        chunk = buf.subarray(0, bytesRead).toString("utf8");
+        next = from + bytesRead;
+      } else { next = st.size < from ? st.size : from; } // 재시도로 파일이 짧아졌으면 리셋
+    } finally { await fh.close(); }
+  } catch { /* 아직 파일 없음 */ }
+  let exit: number | null = null, done = false;
+  try { const e = (await fsp.readFile(path.join(taskDir, "exit"), "utf8")).trim(); done = true; exit = Number.isFinite(Number(e)) ? Number(e) : null; } catch { /* 실행 중 */ }
+  return { chunk, next, done, exit };
 }
 
 // 세션 강제 종료(수집 후 정리·타임아웃·취소). 없는 세션은 무시.

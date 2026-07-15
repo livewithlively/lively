@@ -2,14 +2,13 @@
 //  ① 배치: 노드가 상시 push 하는 리소스(res) vs 태스크 예상 소모량(need_*)으로 적합 노드 선정(matchNode).
 //  ② 중앙 = 내장 노드(§9-8): 후보에 "central" 을 저용량(기본 1슬롯)으로 포함 — 동점 시 후순위(오프로드 취지).
 //  ③ 온오프 즉각 인지: registry heartbeat(10s)+close 이벤트. 노드 사망 시 grace(90s) 내 복귀면 감시 재장전(watchTask),
-//     아니면 재큐(attempt<max) 또는 실패 확정 — 어느 쪽이든 의뢰 세션에 알림(injectToSession, best-effort).
+//     아니면 재큐(attempt<max) 또는 실패 확정. 진행/결과 통지는 CLI 프로세스가 pull(§11) — 스케줄러는 상태 전이만.
 //  ④ 자격(D1 의뢰자 시트): 의뢰자의 setup-token 시크릿(member_secret kind=claude-setup-token)이 있으면 env 리스로
 //     아무 노드나, 없으면 의뢰자 프로필이 실재할 노드(central·본인 소유 노드)로만 배치.
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
 import { SHARED_ROOT } from "../terminal-sessions.js";
 import { getMemberSecret } from "../org/member-secret-store.js";
-import { injectToSession } from "../scheduler.js";
 import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode } from "./store.js";
 import {
@@ -30,15 +29,7 @@ const SECRET_KIND = "claude-setup-token"; // §8-3 — me_credential_set 으로 
 let ticking = false;
 let centralDocker: boolean | null = null;
 
-function summaryOf(t: DelegateTask): string {
-  return `위탁 #${t.id}`;
-}
-
-async function notify(t: DelegateTask, text: string): Promise<void> {
-  if (!t.requester_session) return;
-  await injectToSession(t.requester_session, `[lively] ${text}`).catch(() => { /* 의뢰 세션 종료됨 등 — 무시 */ });
-}
-
+// 상태 전이만 DB 에 기록한다 — 의뢰 세션 통지는 하지 않는다(§11: 흐름은 CLI 프로세스가 pull/스트림).
 async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary?: string, error?: string): Promise<void> {
   await markFinished(t.id, ok, {
     exit, node: t.node_id, session: t.session_id, task_dir: t.task_dir,
@@ -49,9 +40,6 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
     if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
     else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
   }
-  await notify(t, ok
-    ? `${summaryOf(t)} 완료 (node=${t.node_id}) — delegate_status ${t.id} 로 결과 확인`
-    : `${summaryOf(t)} 실패 (node=${t.node_id ?? "-"}): ${error ?? "unknown"} — 세션은 보존됨`);
   logger.info({ task: t.id, ok, node: t.node_id }, "위탁 태스크 종결");
 }
 
@@ -111,7 +99,6 @@ async function assignQueued(): Promise<void> {
       }
       await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
       extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
-      await notify(t, `${summaryOf(t)} 시작 (node=${pick.id}, session=${r.sessionId})`);
       logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");
     } catch (err) {
       logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 배정 실패 — 다음 tick 재시도");
@@ -142,12 +129,11 @@ async function watchRunning(): Promise<void> {
       // 원격 노드 생존 처리(③) — 오프라인이면 grace, 복귀면 감시 재장전.
       const online = t.node_id ? nodeOnline(t.node_id) : false;
       if (!online) {
-        if (!t.node_lost_at) { await setNodeLost(t.id, true); await notify(t, `${summaryOf(t)} 노드(${t.node_id}) 연결 끊김 — ${OFFLINE_GRACE_MS / 1000}s 복귀 대기`); continue; }
+        if (!t.node_lost_at) { await setNodeLost(t.id, true); logger.info({ task: t.id, node: t.node_id }, "노드 연결 끊김 — 복귀 대기"); continue; }
         if (now - new Date(t.node_lost_at).getTime() > OFFLINE_GRACE_MS) {
           if (t.attempt < t.max_attempts) {
             await requeue(t.id);
-            await notify(t, `${summaryOf(t)} 노드 유실 — 다른 노드로 재스케줄(시도 ${t.attempt}/${t.max_attempts})`);
-            logger.warn({ task: t.id, node: t.node_id }, "노드 유실 — 재큐");
+            logger.warn({ task: t.id, node: t.node_id, attempt: t.attempt }, "노드 유실 — 재큐");
           } else {
             await finish(t, false, null, undefined, `node-lost(${t.node_id})`);
           }
@@ -158,7 +144,7 @@ async function watchRunning(): Promise<void> {
         // 복귀 — 에이전트 재시작으로 감시 목록이 비었을 수 있어 재장전(멱등).
         await nodeRpc(t.node_id!, "watchTask", { taskId: t.id, sessionId: t.session_id, taskDir: t.task_dir }).catch(() => { /* 다음 tick */ });
         await setNodeLost(t.id, false);
-        await notify(t, `${summaryOf(t)} 노드(${t.node_id}) 복귀 — 작업 계속`);
+        logger.info({ task: t.id, node: t.node_id }, "노드 복귀 — 작업 계속");
       }
     } catch (err) {
       logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 감시 오류(비치명)");
