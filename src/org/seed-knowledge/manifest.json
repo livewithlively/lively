@@ -9,15 +9,6 @@
     "type": "how-to"
   },
   {
-    "name": "project-closeout-routine",
-    "title": "프로젝트 마무리(close-out) 루틴 — done 처리 전후 체크리스트",
-    "injection": "recalled",
-    "provenance": "authored",
-    "lifecycle": "active",
-    "is_wiki": true,
-    "type": "how-to"
-  },
-  {
     "name": "runbook-bootstrap-domains",
     "title": "runbook: bootstrap-domains — 도메인 taxonomy 추출 + 매핑 + 부채 1패스",
     "injection": "recalled",
