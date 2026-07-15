@@ -118,6 +118,9 @@ try {
     const mtmux = env.match(/^TMUX_BIN=(.+)$/m);
     check("③ env 에 TMUX_BIN 절대경로(데몬 최소 PATH 안전 — 세션생성 tmux 해석)",
       !!mtmux && mtmux[1].startsWith("/") && existsSync(mtmux[1]), `TMUX_BIN=${mtmux?.[1] ?? "(없음)"}`);
+    // PATH baked(#869) — 데몬은 최소 PATH 라, 사용자 로그인 PATH 를 넣어야 tmux 서버 pane 이 harness(claude 등)를 찾는다.
+    check("③ env 에 PATH baked(데몬 tmux 서버가 pane 명령 해석 — harness not-found 방지)",
+      /^PATH=\/.+/m.test(env), `PATH 줄: ${(env.match(/^PATH=.*/m) || ["(없음)"])[0]}`);
   }
 
   // ④ 번들 해제 — ~/.lively/node-agent/agent.mjs 로 풀렸다(데몬이 이걸 실행한다).

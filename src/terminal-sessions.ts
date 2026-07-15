@@ -371,6 +371,16 @@ export async function listSessionsRaw(): Promise<SessionInfo[]> {
   return collectSessions(null);
 }
 
+// 빈 tmux 서버 정리(#869 노드 자가치유) — 세션이 0개면 서버를 죽인다. 노드 데몬(launchd/systemd)이 과거 최소 PATH 로
+//  띄운 tmux 서버가 남아 있으면 새 세션 pane 이 harness(claude 등)를 못 찾아 즉사한다(tmux 는 서버 프로세스의 PATH 로만
+//  명령을 해석 — set-environment/-e 로 안 고쳐진다, 실측). 빈 서버를 죽여 다음 new-session 이 데몬의 현재 PATH(로그인 PATH
+//  baked)로 새 서버를 띄우게 한다. 세션이 있으면 보존(무손실 — 데몬 재시작 간 세션 지속 불변식).
+export async function killEmptyTmuxServer(): Promise<void> {
+  try {
+    if ((await listSessionsRaw()).length === 0) await tmuxQuiet(["kill-server"]);
+  } catch { /* 서버 없음 등 — 무시 */ }
+}
+
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
 async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   let out = "";
