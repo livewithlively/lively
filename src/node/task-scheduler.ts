@@ -54,6 +54,25 @@ function armTaskDoneHook(): void {
   });
 }
 
+// 큐 대기 상한(⑤) — queue:true 로 등록한 태스크가 적합 노드를 이 시간 안에 못 얻으면 no_capacity 로 실패.
+//  무한 대기(사용자 지적) 방지. 기본 10분, env 로 조정.
+const QUEUE_MAX_MS = Math.max(0, Number(process.env.LIVELY_TASK_QUEUE_MAX_MS ?? 600_000));
+
+// 배치 불가 사유(하네스에게 '왜 안 되는지'를 즉답 — 로컬 폴백 판단 재료). 각 후보 노드의 탈락 이유를 모은다.
+function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker">, nodes: SchedulableNode[]): string {
+  if (!nodes.length) return "가용 노드 없음(등록된 노드가 없거나, 의뢰자 자격으로 쓸 수 있는 노드가 없음 — setup-token 미등록 시 중앙·본인 노드만)";
+  const bits = nodes.map((n) => {
+    if (n.running >= n.capacity) return `${n.id}: 슬롯 만석(${n.running}/${n.capacity})`;
+    if (t.needs_docker && !n.hasDocker) return `${n.id}: docker 없음`;
+    if (!n.res) return `${n.id}: 리소스 미보고(오프라인?)`;
+    if (t.need_ram_mb != null && n.res.mem_free_mb < t.need_ram_mb + 512) return `${n.id}: RAM 여유 ${n.res.mem_free_mb}MB < 요구 ${t.need_ram_mb + 512}MB`;
+    if (t.need_disk_mb != null && n.res.disk_free_mb < t.need_disk_mb + 1024) return `${n.id}: 디스크 여유 ${n.res.disk_free_mb}MB 부족`;
+    if (t.need_cpu != null && Math.max(0, n.res.cpus - n.res.load1) < t.need_cpu) return `${n.id}: 유휴코어 ${Math.max(0, n.res.cpus - n.res.load1).toFixed(1)} < 요구 ${t.need_cpu}`;
+    return `${n.id}: 부적합`;
+  });
+  return "가용 노드 없음 — " + bits.join(" · ");
+}
+
 // 자격/후보 정책(④) — 리스 시크릿이 있으면 전 노드, 없으면 central + 의뢰자 소유 노드만.
 async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<{ nodes: SchedulableNode[]; env?: Record<string, string> }> {
   let env: Record<string, string> | undefined;
@@ -75,31 +94,54 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
   return { nodes, env };
 }
 
+// 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
+//  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
+export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string }
+async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
+  const { nodes, env } = await candidatesFor(t, counts, extra);
+  const pick = matchNode(t, nodes);
+  if (!pick) return { assigned: false, reason: capacityReason(t, nodes) };
+  const runArgs = {
+    user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
+    prompt: t.prompt, harness: t.harness, flags: t.flags ?? {}, env,
+  };
+  let r: RunTaskResult;
+  if (pick.id === CENTRAL_NODE_ID) {
+    r = await spawnTaskSession(runArgs as never);
+  } else {
+    const n = await getNode(pick.id);
+    if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
+    r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+  }
+  await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
+  extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
+  logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");
+  return { assigned: true, nodeId: pick.id };
+}
+
+// delegate_run 이 생성 직후 즉시 호출 — 배치 판정+실행을 그 자리에서(스케줄러 tick 을 안 기다림).
+//  이게 "요청→즉답" 계약의 핵심: 배치되면 running, 안 되면 reason 을 하네스에게 바로 준다(무한 큐 방지).
+export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
+  const counts = await runningCountByNode();
+  try { return await assignOne(t, counts, new Map()); }
+  catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
+}
+
 async function assignQueued(): Promise<void> {
   const queued = await queuedTasks();
   if (!queued.length) return;
+  const now = Date.now();
   const counts = await runningCountByNode();
   const extra = new Map<string, number>(); // 이번 tick 내 배정 가산(동일 노드 과배정 방지)
   for (const t of queued) {
     try {
-      const { nodes, env } = await candidatesFor(t, counts, extra);
-      const pick = matchNode(t, nodes);
-      if (!pick) continue; // 적합 노드 없음 — 큐 유지(다음 tick). 영영 없으면 사용자가 cancel/노드 추가.
-      let r: RunTaskResult;
-      const runArgs = {
-        user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
-        prompt: t.prompt, harness: t.harness, flags: t.flags ?? {}, env,
-      };
-      if (pick.id === CENTRAL_NODE_ID) {
-        r = await spawnTaskSession(runArgs as never);
-      } else {
-        const n = await getNode(pick.id);
-        if (!n || !n.enabled) continue; // 연결 후 비활성화된 노드 — 후보 제외
-        r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
+      // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
+      if (QUEUE_MAX_MS > 0 && now - new Date(t.created_at).getTime() > QUEUE_MAX_MS) {
+        await markFinished(t.id, false, { reason: "no_capacity_timeout" }, `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — 적합 노드 없음`);
+        logger.info({ task: t.id }, "큐 대기 초과 — no_capacity 실패");
+        continue;
       }
-      await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
-      extra.set(pick.id, (extra.get(pick.id) ?? 0) + 1);
-      logger.info({ task: t.id, node: pick.id, session: r.sessionId }, "위탁 태스크 배정");
+      await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
     } catch (err) {
       logger.warn({ err: (err as Error)?.message, task: t.id }, "위탁 배정 실패 — 다음 tick 재시도");
     }
