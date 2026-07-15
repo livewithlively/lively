@@ -1248,7 +1248,8 @@ function sourceKindOf(system: string): string {
     case "notion": return "notion_doc";
     case "clickup": return "clickup_doc";
     case "gdrive": return "drive_file"; // #541 Drive 파일 = raw 자료(source) → distill 대상
-    default: return "other"; // discord 등
+    case "discord": return "discord";   // #735 커넥터별 kind 충실화(종전 'other' 로 뭉뚱그려져 UI 필터 불가)
+    default: return "other";
   }
 }
 

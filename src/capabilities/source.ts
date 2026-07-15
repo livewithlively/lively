@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 
-const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "notion_doc", "clickup_doc", "other"] as const;
+const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "other"] as const;
 
 const sourceList: Capability = {
   name: "source_list",

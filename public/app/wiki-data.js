@@ -105,7 +105,7 @@ const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to
 const KN_REL_LABEL = { required: '필요', produced: '산출' };
 const KN_LINK_REL_LABEL = { related: '관련', refines: '구체화', contradicts: '모순', depends_on: '의존' };
 const KN_SOURCE_REL_LABEL = { derived_from: '증류', cites: '참조' };
-const SOURCE_KIND_LABEL = { transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', notion_doc: '노션', clickup_doc: '클릭업', other: '기타' };
+const SOURCE_KIND_LABEL = { transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', discord: '디스코드', notion_doc: '노션', clickup_doc: '클릭업', drive_file: '구글드라이브', other: '기타' };
 // memory 권한 보유 여부 — admin.ts hasScope 와 동일 판정(state.me.scopes). admin 을 import 하면
 //  admin → knowledge → knowledge-doc 순환이 생겨 여기 로컬로 복제한다(로직 2줄, 드리프트 위험 낮음).
 function hasMemoryScope() {
