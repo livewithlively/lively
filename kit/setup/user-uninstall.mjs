@@ -315,6 +315,26 @@ function uninstallHarnessAssets(harness) {
   log(`  ✓ ${harness} 하네스 자산 ${removed}개 제거`);
 }
 
+// (4.5) 서버 하네스 관측에서 이 머신 제거(#893) — ~/.lively 삭제 **전에**. 삭제 후엔 machine-id·토큰이 사라져
+//  못 부른다. 재설치 시 새 machine-id 가 생겨 서버에 같은 host 가 중복으로 남는 걸 막는다(haruui 사례). 비치명.
+async function syncServerHarnessRemove() {
+  try {
+    const rd = (n) => { try { return readFileSync(join(LIVELY, n), "utf8").trim() || null; } catch { return null; } };
+    const machineId = rd("machine-id"); const token = (process.env.LIVELY_TOKEN || "").trim() || rd("token");
+    const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || rd("gateway-url") || "").replace(/\/$/, "");
+    if (!machineId || !token || !gw) { log("  · 서버 하네스 관측 정리 건너뜀(machine-id/토큰/게이트웨이 없음)"); return; }
+    if (DRY) { log(`  [dry-run] 서버 하네스 관측에서 이 머신(${machineId.slice(0, 8)}…) 제거 예정`); return; }
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch(`${gw}/api/ui/me/harness/machine-remove`, {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ machine_id: machineId }),
+    }).catch(() => null);
+    clearTimeout(t);
+    log(res && res.ok ? "  ✓ 서버 하네스 관측에서 이 컴퓨터 제거" : "  · 서버 하네스 관측 정리 실패(무시 — 웹에서 '이 컴퓨터 지우기'로 정리 가능)");
+  } catch { /* 비치명 */ }
+}
+
 // (5) ~/.lively 제거 — 기본 휴지통 이동, --purge 면 하드 삭제.
 function removeLivelyDir() {
   if (!existsSync(LIVELY)) { log("  · ~/.lively 없음 — 건너뜀"); return; }
@@ -341,7 +361,7 @@ function detect() {
   return out;
 }
 
-function main() {
+async function main() {
   log(`▶ lively 제거 (발행물 동봉 제거기 — HOME=${HOME === homedir() ? "~" : HOME})${DRY ? "  [DRY-RUN — 변경 없음]" : ""}${PURGE ? "  [--purge]" : ""}`);
   log("  (uninstall = 영구 제거. 일시 off 는 incognito: env LIVELY_OFF=1 — 다름.)");
   const d = detect();
@@ -365,6 +385,7 @@ function main() {
     log("\n[2] PATH 설정 정리 — 셸 rc(LIVELY_TOKEN·Node·CLI 블록)" + (process.platform === "win32" ? " + Windows User PATH" : ""));
     uninstallRcBlock();
     uninstallWindowsPath();   // #864 — POSIX rc 센티넬의 Windows 대응(레지스트리 User PATH)
+    await syncServerHarnessRemove();  // ~/.lively 삭제 전에 서버 관측 정리(#893 — machine-id 사라지기 전)
     log("\n[3] ~/.lively 공유 자산 제거" + (PURGE ? "(--purge: 하드 삭제)" : "(기본: 휴지통 이동, 되돌릴 수 있음)")); removeLivelyDir();
   }
   log("\n✓ lively 제거 완료." + (DRY ? " (dry-run — 아무것도 변경하지 않았습니다.)" : othersStillInstalled ? " (지정 하네스만 제거 — 공유 자산은 남은 하네스를 위해 유지됨.)" : ""));
@@ -377,5 +398,5 @@ function main() {
 
 // 직접 실행할 때만 main() 을 돌린다 — import 만으로 파괴적 동작이 일어나면 안 됨(안전 가드).
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
+  main().catch((e) => { console.error(e); process.exit(1); });
 }

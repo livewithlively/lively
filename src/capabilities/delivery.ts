@@ -936,11 +936,11 @@ export const deliveryCapabilities: Capability[] = [
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
         const override = prefMap.has(`${kind}:${id}`) ? (prefMap.get(`${kind}:${id}`) as boolean) : null;
-        return { override, effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
+        return { override, byDefault: targetsMember(targetMembers, userId), effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
       const lively = {
         skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
-        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
       // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
@@ -992,6 +992,39 @@ export const deliveryCapabilities: Capability[] = [
         return { kind: k.slice(0, i), id: k.slice(i + 1) };
       });
       return { disabled };
+    }),
+
+  restRead("me_harness_detail", "라이블리 하네스 자산 상세(본문)",
+    "라이블리가 배포하는 스킬·서브에이전트·커맨드·훅의 **본문**을 반환한다 — 웹 '내 하네스 설정'에서 항목을 눌러 내용을 볼 때 lazy 로드. ⚠ 라이블리 배포분만: 로컬 자산 본문은 서버에 없다(메타만 관측). kind=skill|subagent|command 는 org_harness_asset.body, kind=hook 은 org_hook.source_code.",
+    [{ method: "GET", paths: ["/api/ui/me/harness/detail"], parse: (req) => ({ kind: req.query?.kind, id: req.query?.id }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const id = str(input.id ?? "", "id", 64).trim();
+      const kind = str(input.kind ?? "", "kind", 12).trim();
+      if (!id) throw new HttpError(400, "id 가 필요합니다");
+      if (kind === "hook") {
+        const h = await getOrgHook(id);
+        if (!h || !h.enabled) throw new HttpError(404, "훅이 없거나 비활성입니다");
+        return { id: h.id, kind: "hook", label: h.label, description: h.note ?? null, body: h.source_code ?? "", frontmatter: null };
+      }
+      // skill·subagent·command = org_harness_asset. 인증 멤버면 조회 OK(어차피 로컬로 배포되는 것 — redact 불요).
+      const a = await getOrgHarnessAsset(id);
+      if (!a || !a.enabled) throw new HttpError(404, "자산이 없거나 비활성입니다");
+      return { id: a.id, kind: a.kind, label: a.label, description: a.description ?? null, body: a.body ?? "", frontmatter: a.frontmatter ?? null };
+    }),
+
+  restRead("me_harness_machine_remove", "내 하네스 관측에서 이 컴퓨터 제거",
+    "이 멤버의 하네스 관측·토글지시에서 한 머신(machine_id)을 통째로 뺀다. uninstall 이 서버 싱크로 부르거나(재설치 시 새 UUID 로 중복 방지), 웹에서 '이 컴퓨터 지우기'로 오래된 관측을 정리한다. machine_id 필수.",
+    [{ method: "POST", paths: ["/api/ui/me/harness/machine-remove"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const machineId = str(input.machine_id, "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const { removeHarnessMachine } = await import("../org/store.js");
+      await removeHarnessMachine(userId, machineId);
+      return { ok: true };
     }),
 
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──

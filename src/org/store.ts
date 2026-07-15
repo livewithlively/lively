@@ -403,6 +403,18 @@ export async function setHarnessSnapshot(id: string, machineId: string, snap: Ha
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
 }
 
+// 한 머신의 관측·토글지시를 통째로 제거(#893) — uninstall 싱크 + 웹 수동 '이 컴퓨터 지우기'.
+//  ⚠ uninstall 시 ~/.lively/machine-id 가 지워져 재설치 때 새 UUID 가 생긴다 → 같은 host 가 중복으로 남는다.
+//  그걸 정리하는 경로. harness_snapshot·harness_local_pref 양쪽에서 그 머신 키를 뺀다.
+export async function removeHarnessMachine(id: string, machineId: string): Promise<void> {
+  const r = await itemsPool.query(
+    `UPDATE org_member
+        SET harness_snapshot   = COALESCE(harness_snapshot,'{}'::jsonb)   - $2::text,
+            harness_local_pref = COALESCE(harness_local_pref,'{}'::jsonb) - $2::text
+      WHERE id=$1 RETURNING id`, [id, machineId]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
 // ── 로컬 파일 토글 지시(#891 슬라이스 2) — 머신별. 세션훅이 자기 machine_id 지시를 pull 해 .disabled rename ──
 //  라이블리 스킬 opt-out(me_asset_pref)과 다르다: 그건 멤버 단위(모든 머신 배포분), 이건 그 머신의 로컬 파일만.
 export type HarnessLocalPref = Record<string, Record<string, boolean>>; // machine_id → { "<kind>:<id>": disabled }

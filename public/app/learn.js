@@ -36,7 +36,6 @@ const DOCS_NAV = [
     //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
     { group: '직접 해보기', items: [
             { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
-            { key: 'harness', label: '내 하네스 설정', href: '#/start/harness' }, // 로컬↔라이블리 스킬·훅 한눈에(#891)
             { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
             { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
         ] },
