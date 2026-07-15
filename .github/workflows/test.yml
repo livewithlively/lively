@@ -21,8 +21,6 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
-    env:
-      ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,10 +29,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       # ① 목 유닛(기존 체인 + kit/cli/lively.test.mjs). 실 DB 없이 돈다(각자 mock pool).
+      #    ⚠ ITEMS_DATABASE_URL 을 **주지 않는다** — 주면 평소 DB 없이 스킵되던 테스트가 스키마 없는 DB 에
+      #    실제로 붙어 org_profile 없음으로 죽는다(로컬 npm test 는 URL 없이 도는데 CI 만 다르던 원인).
       - name: 유닛 테스트 (mock)
         run: npm test
-      # ② 테스트 DB 스키마 자가마이그레이션(게이트웨이 부팅과 같은 순서 — FK 직렬). 포트 바인딩 없이 스키마만.
+      # ② 테스트 DB 스키마 자가마이그레이션(게이트웨이 부팅과 같은 순서 — FK 직렬). ITEMS_DATABASE_URL 은 이 스텝부터.
       - name: 스키마 마이그레이션 (테스트 Postgres)
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: >-
           node --input-type=module -e "
           import('./dist/items/store.js').then(m => m.initItemSchema())
@@ -43,4 +45,6 @@ jobs:
             .catch(e => { console.error(e); process.exit(1); });"
       # ③ device-auth PG 통합(실 트랜잭션·now()·RETURNING rowCount) — 두 HIGH 통제(원자성·PKCE 바인딩) 검증.
       - name: device-auth PG 통합 테스트
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/device-auth.pg-test.mjs
