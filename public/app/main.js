@@ -7,7 +7,7 @@ import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 �
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
-import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850)
+import { renderStart, renderStartMigrate, renderStartHarness } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 하네스 관리(#891)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -100,6 +100,8 @@ async function route() {
                 await renderInstall(view);
             else if (segs[1] === 'migrate')
                 await renderStartMigrate(view);
+            else if (segs[1] === 'harness')
+                await renderStartHarness(view); // #/start/harness — 로컬↔라이블리 하네스(#891)
             else
                 await renderStart(view);
         }

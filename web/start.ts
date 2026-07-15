@@ -136,6 +136,78 @@ export async function renderStart(view: any) {
   slot.replaceChildren(...cards as any[]);
 }
 
+// #/start/harness — 로컬 하네스 ↔ 라이블리 하네스 한눈에 (#891 온보딩 C, 슬라이스 1: 읽기).
+//  세션훅이 push 한 로컬 관측(me/harness)과 라이블리 배포(me_assets)를 나란히 + 중복 대조.
+//  ⚠ 값을 편집하지 않는다(슬라이스 1은 조회만). 토글은 슬라이스 2.
+function harnessRow(name: string, kindLabel: string, tag: { text: string; cls: string } | null, sub?: string) {
+  return el('div', { class: 'ob-done-row' },
+    el('span', { class: 'ob-done-check', text: '•' }),
+    el('span', { class: 'ob-done-label' }, el('b', { text: name }), sub ? el('span', { class: 'ob-step-desc', text: ' ' + sub }) : null),
+    el('span', { class: 'ob-done-tag', text: kindLabel }),
+    tag ? el('span', { class: 'ob-step-badge ' + tag.cls, text: tag.text }) : null);
+}
+
+export async function renderStartHarness(view: any) {
+  const head = [
+    docsEyebrow('start'),
+    el('h1', { class: 'docs-title', text: '내 하네스 설정' }),
+    el('p', { class: 'docs-lead', text: '라이블리가 배포하는 스킬·훅과, 내 컴퓨터에 깔린 로컬 하네스 자산을 한눈에 봅니다. 겹치는 건 조직이 함께 관리·개선하는 라이블리 쪽을 쓰시길 권합니다.' }),
+  ];
+  const slot = el('div', { class: 'guide-cards' });
+  docsShell(view, 'harness', ...head, slot);
+
+  let d: any;
+  try { d = await api('/api/ui/me/harness'); }
+  catch (e: any) { slot.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message })); return; }
+
+  // 라이블리 배포 — 스킬 + 훅. effective=false 면 내가 끈 것.
+  const livelyRows = [
+    ...d.lively.skills.map((a: any) => harnessRow(a.label || a.id, a.kind === 'subagent' ? '서브에이전트' : a.kind === 'command' ? '커맨드' : '스킬',
+      a.effective ? null : { text: '꺼짐', cls: 'off' }, a.description ? String(a.description).slice(0, 60) : '')),
+    ...d.lively.hooks.map((h: any) => harnessRow(h.label || h.id, '훅', h.effective ? null : { text: '꺼짐', cls: 'off' })),
+  ];
+  const livelyCard = el('div', { class: 'ob-sec' },
+    el('div', { class: 'ob-sec-head' },
+      el('span', { class: 'ob-sec-title', text: '라이블리가 준 것' }),
+      el('span', { class: 'ob-sec-count', text: String(livelyRows.length) })),
+    el('p', { class: 'ob-step-desc', text: '조직이 관리하는 스킬·훅입니다. 모두에게 배포되고 함께 개선됩니다. (끄고 켜기는 곧 여기서 됩니다.)' }),
+    el('div', { class: 'ob-done-list' }, ...(livelyRows.length ? livelyRows : [el('p', { class: 'admin-hint', text: '아직 없습니다.' })])));
+
+  // 로컬 관측 — 세션훅이 아직 push 안 했으면 observed=false.
+  const local = d.local;
+  let localBody;
+  if (!local.observed) {
+    localBody = el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 못 봤습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면, 다음 세션에 자동으로 여기 나타납니다. (웹 [터미널] 세션은 회사 서버라 로컬이 안 보입니다.)' });
+  } else {
+    const rows = (local.assets || []).map((a: any) => {
+      const kindLabel = a.kind === 'subagent' ? '서브에이전트' : a.kind === 'command' ? '커맨드' : a.kind === 'hook' ? '훅' : '스킬';
+      const tag = a.overlap === 'managed' ? { text: '라이블리가 설치', cls: 'muted' }
+        : a.overlap === 'shadow' ? { text: '라이블리 것을 가림', cls: 'warn' }
+          : { text: '내가 만든 것', cls: 'own' };
+      return harnessRow(a.id, kindLabel, tag);
+    });
+    localBody = el('div', { class: 'ob-done-list' }, ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 자산은 없습니다(라이블리가 준 것만 있어요).' })]));
+  }
+  const freshness = local.observed && local.at
+    ? el('p', { class: 'admin-hint', text: `${local.host ? local.host + ' · ' : ''}마지막 확인 ${new Date(local.at).toLocaleString('ko-KR')}` })
+    : null;
+  const localCard = el('div', { class: 'ob-sec' },
+    el('div', { class: 'ob-sec-head' },
+      el('span', { class: 'ob-sec-title', text: '내 컴퓨터에 있는 것' }),
+      local.observed ? el('span', { class: 'ob-sec-count', text: String((local.assets || []).length) }) : null),
+    localBody, freshness);
+
+  // shadow(가림)가 있으면 라이블리 채택 권고 배너.
+  const shadowCount = local.observed ? (local.assets || []).filter((a: any) => a.overlap === 'shadow').length : 0;
+  const shadowBanner = shadowCount
+    ? el('div', { class: 'ob-banner amber' },
+      el('div', { class: 'ob-banner-title', text: `내 로컬 자산 ${shadowCount}개가 라이블리 것과 이름이 같아 라이블리 배포를 가리고 있어요.` }),
+      el('p', { class: 'ob-banner-sub', text: '같은 이름이면 조직이 함께 관리·개선하는 라이블리 쪽을 쓰시길 권합니다. 내 것이 더 낫다면 AI 에게 "이 스킬 라이블리에 올리게 정리해줘" 라고 해서 관리자에게 전달하세요. (자동으로 바꾸지 않습니다 — 원하시면 그대로 두셔도 됩니다.)' }))
+    : null;
+
+  slot.replaceChildren(...[shadowBanner, livelyCard, localCard].filter(Boolean) as any[]);
+}
+
 // #/start/migrate — "예전 환경 가져오기" 스텝의 안내. **여기서 이관을 하지 않는다**(로컬 파일은 웹이 못 만진다).
 //  AI 에게 시키는 법만 알려주고, 실제 작업·완료 보고는 lively-onboarding 스킬이 한다.
 export async function renderStartMigrate(view: any) {

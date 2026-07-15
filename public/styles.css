@@ -6849,6 +6849,11 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
 /* 필수 미완의 '필수' 뱃지 = 채운 파랑(지금 해야 할 것). 완료된 필수는 조용한 틴트 그대로. */
 .ob-step.todo.req .ob-step-badge.req { color: #fff; background: var(--blue); border-color: var(--blue); }
+/* 하네스 관리(#891) 대조 뱃지 — off(내가 끔)·muted(라이블리가 설치)·warn(가림)·own(내 것). */
+.ob-step-badge.off { color: var(--ink-faint); background: transparent; }
+.ob-step-badge.muted { color: var(--ink-faint); }
+.ob-step-badge.warn { color: #a86a00; background: #fff6e6; border-color: #f0d59a; }
+.ob-step-badge.own { color: var(--blue); background: var(--bg-punch); }
 .ob-step-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 8px 0 0 32px; }
 .ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
 .ob-step-act { margin: 12px 0 0 32px; }

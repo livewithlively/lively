@@ -19,7 +19,7 @@
 // 페일오픈: 어떤 실패든 조용히 exit 0 — 실제 작업 세션을 절대 막지 않는다. 토큰 값은 절대 출력/로깅하지 않는다.
 // 비활성화(incognito): LIVELY_OFF=1 → no-op. 어드민 토글: hooks-config.json hooks.sync_harness_assets===false.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, dirname } from "node:path";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
@@ -167,6 +167,44 @@ function emitReload() {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", reloadSkills: true } }) + "\n");
 }
 
+// ── 로컬 하네스 인벤토리 관측·보고(#891 온보딩 C) — 웹에서 로컬↔라이블리 하네스를 한눈에 보게 한다. ──
+//  ⚠ **메타만**(id·kind·managed) push — 스킬 본문·메모리는 절대 안 읽는다(사생활·용량). managed = 매니페스트에
+//   이 id 가 있나(=라이블리가 심음). 매니페스트에 없는 = 그 사람 자산(shadow 후보). 실패는 조용히 삼킨다(관측이라 비치명).
+function scanLocalAssets(managedIds) {
+  const out = [];
+  const dirs = HARNESS === "codex"
+    ? [["skill", join(CODEX_DIR, "skills"), true]]
+    : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
+  for (const [kind, root, isDir] of dirs) {
+    let entries;
+    try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; } // 디렉터리 없음 = 자산 0
+    for (const e of entries) {
+      // skill = <root>/<id>/SKILL.md(디렉터리) · subagent·command = <root>/<id>.md(파일). .disabled 접미사는 무시(비활성분).
+      let id = null;
+      if (isDir) { if (e.isDirectory() && !e.name.endsWith(".disabled")) id = e.name; }
+      else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md")) id = e.name.slice(0, -3);
+      if (!id || !SLUG.test(id)) continue;
+      out.push({ id, kind, managed: managedIds.has(id) });
+    }
+  }
+  return out;
+}
+
+async function reportLocalInventory(managedIds) {
+  try {
+    const assets = scanLocalAssets(managedIds);
+    let host; try { host = hostname(); } catch { /* 무명 */ }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    await fetch(`${GW}/api/ui/me/harness-report`, {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ harness: HARNESS, host, assets }),
+    }).catch(() => {});
+    clearTimeout(t);
+  } catch { /* 관측 실패는 비치명 — 배포/정리에 영향 없음 */ }
+}
+
 async function main() {
   if (hookDisabled()) return;
   if (!TOKEN) return;
@@ -195,6 +233,10 @@ async function main() {
   manifest[HARNESS] = next;
   saveManifest(manifest);
   if (changed) emitReload();
+
+  // 배포·정리가 끝난 뒤 로컬 인벤토리를 관측·보고(#891) — managed = 방금 확정한 매니페스트 소유분.
+  //  이 자산 종류들(claude 하네스 파일 자산)만 push; org_hook(파일 아님)은 서버가 이미 안다.
+  await reportLocalInventory(new Set(Object.keys(next)));
 }
 
 try { await Promise.race([main(), new Promise((r) => setTimeout(r, HARD_MS + 500))]); } catch { /* fail-open */ }
