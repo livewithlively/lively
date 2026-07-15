@@ -206,6 +206,13 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     } catch { res.sendFile(path.join(publicDir, "index.html")); } // 실패 시 원본 폴백
   };
   app.get(["/ui", "/ui/", "/ui/index.html"], serveIndex);
-  app.use("/ui", express.static(publicDir));
+  // 로컬 앱 자산(JS/CSS/ES모듈)은 항상 재검증(no-cache) — main.js 에 버전(?v=)을 박아도 그 import 그래프(app/*.js:
+  //  dashboard-home.js·projects.js 등)는 고정 URL 이라 브라우저 캐시에 남아 배포가 안 보이던 문제(#762 후속).
+  //  no-cache = 캐시하되 매 사용 전 ETag 재검증(변경 O→200 새 코드, 변경 X→304 저비용). 정적자산은 미인증이라 안전.
+  app.use("/ui", express.static(publicDir, {
+    setHeaders: (res, filePath) => {
+      if (/\.(?:css|js|mjs)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache");
+    },
+  }));
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }
