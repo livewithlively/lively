@@ -17,7 +17,7 @@ import {
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
-import { sampleResources, detectDocker, spawnTaskSession, checkTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
+import { sampleResources, detectDocker, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { logger } from "../log.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
@@ -97,6 +97,7 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       if (w.taskId && w.taskDir) trackedTasks.set(w.taskId, w);
       return { ok: true };
     }
+    case "tailTask": return tailTask(String(args.taskDir), Number(args.from) || 0);
     case "list": return listSessionsRaw();
     case "create": {
       const session = await createSession(user, args.input as CreateInput);

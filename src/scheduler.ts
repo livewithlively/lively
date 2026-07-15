@@ -337,8 +337,7 @@ async function resolveSessionTmux(sessionRef: string): Promise<string> {
 // tmux send-keys 로 세션 PTY 에 텍스트 주입(+Enter). UTF-8 로케일 강제(한글 깨짐 방지 — terminal-sessions 와 동일).
 //  send-keys -l 은 **단일 라인**만 안전(개행=조기 Enter=중간 제출). 여기서 개행→공백으로 평탄화해 모든 주입 경로를 단일라인 안전화.
 //  (agent_inject 의 임의 멀티라인 프롬프트 대비 — 한 단락으로 합쳐 1회 제출.)
-// (P2 #869 위탁 스케줄러가 완료/실패 알림에 재사용 — export)
-export async function injectToSession(sessionId: string, text: string): Promise<void> {
+async function injectToSession(sessionId: string, text: string): Promise<void> {
   const oneLine = text.replace(/\s*\n\s*/g, " ").trim();
   const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
   const { execFile } = await import("node:child_process");

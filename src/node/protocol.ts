@@ -48,8 +48,9 @@ export interface CtlMsg { t: "ctl"; chan: number; m: Record<string, unknown> } /
 // 양방향
 export interface CloseChanMsg { t: "close"; chan: number }
 
-// runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구).
-export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask";
+// runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구)
+//  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
+export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask";
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;

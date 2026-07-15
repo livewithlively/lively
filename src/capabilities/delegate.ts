@@ -8,7 +8,7 @@ import type { Capability } from "./types.js";
 import { createTask, getTask, listTasks, markCanceled, type DelegateStatus } from "../node/task-store.js";
 import { getNode } from "../node/store.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
-import { killTaskSession } from "../node/tasks.js";
+import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID } from "../node/task-scheduler.js";
 
 const uid = (user: any): string => String(user?.userId || user?.email || "");
@@ -19,8 +19,8 @@ const run: Capability = {
   title: "작업 위탁 실행",
   description:
     "무거운 1회성 작업을 워커 노드(또는 중앙)에 위탁한다. prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(스케줄러가 노드 리소스와 대조), " +
-    "needs_docker=도커 필요 여부, node=특정 노드 지정(선택), subpath=공유 워크스페이스 하위 작업 폴더(비우면 delegated/task-<id>), " +
-    "notify_session=완료 알림을 주입할 tmux 세션 id(선택). 반환 {task} — 진행은 delegate_status 로.",
+    "needs_docker=도커 필요 여부, node=특정 노드 지정(선택), subpath=공유 워크스페이스 하위 작업 폴더(비우면 delegated/task-<id>). " +
+    "반환 {task} — 진행은 delegate_logs(tail)·delegate_status 로. 셸에선 `lively delegate` CLI 가 진행 미러+결과 회수+exit 을 한 번에 한다(권장).",
   scope: "context",
   input: {
     prompt: z.string().min(1).max(20000),
@@ -33,7 +33,7 @@ const run: Capability = {
     flags: z.record(z.string()).optional(),
     timeout_sec: z.number().int().min(60).max(21600).optional(),
     max_attempts: z.number().int().min(1).max(5).optional(),
-    notify_session: z.string().max(120).optional(),
+    notify_session: z.string().max(120).optional(), // deprecated(§11) — 무시됨. 통지는 CLI/delegate_logs pull 로.
   },
   expose: {
     mcp: true,
@@ -49,7 +49,8 @@ const run: Capability = {
       }
     }
     const task = await createTask({
-      requester, requesterSession: input.notify_session ?? null, prompt: String(input.prompt),
+      requester, requesterSession: null, prompt: String(input.prompt), // notify_session deprecated(§11) — 저장 안 함
+
       subpath: input.subpath, flags: input.flags,
       needCpu: input.need_cpu ?? null, needRamMb: input.need_ram_mb ?? null, needDiskMb: input.need_disk_mb ?? null,
       needsDocker: !!input.needs_docker, nodePref: input.node ?? null,
@@ -99,6 +100,37 @@ const list: Capability = {
   },
 };
 
+// 진행 로그 tail(§11) — CLI(lively delegate)가 from 오프셋으로 폴링해 워커 진행을 stdout 미러.
+//  아직 배정 전이면 대기 신호(pending), 종결이면 done+exit. 결과 전문은 delegate_status.
+const logs: Capability = {
+  name: "delegate_logs",
+  title: "위탁 진행 로그(tail)",
+  description: "위탁 작업의 진행 로그(claude stream-json)를 from 바이트 오프셋부터 tail 한다. 반환 {chunk,next,done,exit,pending}. CLI 미러링·자동화용.",
+  scope: "context",
+  input: { id: z.number().int().positive(), from: z.number().int().min(0).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/delegate/:id/logs"], parse: (req) => ({ id: Number(req.params?.id), from: req.query?.from ? Number(req.query.from) : 0 }) }],
+  },
+  handler: async (input: any, user: any) => {
+    const t = await getTask(Number(input.id));
+    if (!t) throw new HttpError(404, "위탁 작업 없음");
+    if (t.requester !== uid(user) && !isAdmin(user)) throw new HttpError(403, "본인 위탁만 조회할 수 있습니다");
+    const from = Number(input.from) || 0;
+    // 아직 배정 전(queued) — 로그 파일이 없다. CLI 가 '대기 중'을 알 수 있게 상태를 실어 준다.
+    if (t.status === "queued" || !t.task_dir || !t.node_id) {
+      return { status: t.status, pending: t.status === "queued", chunk: "", next: from, done: false, exit: null };
+    }
+    let tail: TailResult;
+    if (t.node_id === CENTRAL_NODE_ID) tail = await tailTask(t.task_dir, from);
+    else if (nodeOnline(t.node_id)) tail = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: t.task_dir, from });
+    else tail = { chunk: "", next: from, done: false, exit: null }; // 노드 오프라인 — 스케줄러 grace 가 처리, CLI 는 계속 폴링
+    // DB 상 종결(스케줄러가 이미 수집)이면 tail 이 놓쳐도 done 을 확정한다(경합 방지).
+    const doneByDb = t.status === "done" || t.status === "failed" || t.status === "canceled";
+    return { status: t.status, pending: false, ...tail, done: tail.done || doneByDb };
+  },
+};
+
 const cancel: Capability = {
   name: "delegate_cancel",
   title: "위탁 작업 취소",
@@ -123,4 +155,4 @@ const cancel: Capability = {
   },
 };
 
-export const delegateCapabilities: Capability[] = [run, status, list, cancel];
+export const delegateCapabilities: Capability[] = [run, status, list, logs, cancel];
