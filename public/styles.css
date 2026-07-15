@@ -1486,15 +1486,21 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 초대 피커는 프로젝트 팀원 피커(.proj-mp)와 UI 통일(#617) — 옛 .term-checklist/.term-check 제거. */
 .term-input:disabled { background: var(--bg-soft, #f4f4f6); color: var(--ink-sub); cursor: default; }
 /* #853 작업 위치 세그먼트 토글(공유/개인 2택) + 그 안 폴더를 한 블록으로 — '이 폴더에서 AI 실행' 직관. */
-.term-loc { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
-.term-seg { display: flex; gap: 0; }
-.term-seg-btn { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 13px; border: 0; background: var(--bg-tint); color: var(--muted); cursor: pointer; font-family: inherit; text-align: left; transition: background .12s, color .12s; }
-.term-seg-btn + .term-seg-btn { border-left: 1px solid var(--line); }
-.term-seg-btn:hover { background: var(--bg-punch); color: var(--ink-sub); }
-.term-seg-btn.active { background: var(--blue); color: #fff; }
-.term-seg-lbl { font-size: 13px; font-weight: 700; }
-.term-seg-sub { font-size: 11px; font-weight: 500; opacity: .82; }
-.term-loc-folder { border-top: 1px solid var(--line); padding: 10px 12px; }
+/* 작업 위치 2택 — .mode-card 선택 카드 언어(연한 강조·라디오 점). 진한 파란블록 금지(§0.5). */
+.term-loc { display: flex; flex-direction: column; gap: 10px; }
+.term-seg { display: flex; gap: 9px; }
+@media (max-width: 560px) { .term-seg { flex-direction: column; } }
+.term-seg-btn { flex: 1; display: flex; align-items: center; gap: 10px; padding: 12px 13px; border: 1.5px solid var(--line-net); border-radius: 11px; background: var(--bg); color: var(--ink); cursor: pointer; font-family: inherit; text-align: left; transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease; }
+.term-seg-btn:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.term-seg-btn.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.term-seg-ico { flex: none; font-size: 18px; line-height: 1.15; }
+.term-seg-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.term-seg-lbl { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.term-seg-btn.active .term-seg-lbl { color: var(--blue-deep); }
+.term-seg-sub { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
+.term-seg-check { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
+.term-seg-btn.active .term-seg-check { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
+.term-loc-folder { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); padding: 10px 12px; }
 .term-loc-folder .term-crumb { margin-bottom: 6px; }
 /* '이 폴더에서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작됨을 명시. */
 .term-runhere { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 6px 10px; font-size: 12px; color: var(--ink-sub); background: color-mix(in srgb, var(--blue) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--line)); border-radius: 7px; }
