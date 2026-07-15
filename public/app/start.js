@@ -35,23 +35,24 @@ async function orgBanner() {
         return null;
     }
 }
-function stepCard(it, view) {
-    const state = it.state === 'done' ? 'done' : it.state === 'skipped' ? 'skipped' : 'todo';
-    // ⋯ = escape hatch. 기본 동선이 아니다 — AI 보고·자동 판정이 주(主)이고, 이건 "의도적으로 마킹하고 싶을 때".
-    const more = el('details', { class: 'ob-more' }, el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }), el('div', { class: 'card ob-more-pop' }, it.state !== 'done' ? el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) }) : null, it.state !== 'skipped' && !it.required ? el('button', { class: 'btn btn-ghost btn-sm', text: '해당 없음', onclick: () => mark(it.key, 'skipped', view) }) : null, it.state !== 'todo' ? el('button', { class: 'btn btn-ghost btn-sm', text: '다시 열기', onclick: () => mark(it.key, 'reset', view) }) : null));
-    // 뱃지 — 필수 / 누가 채웠는지(왕복이 보이면 신뢰가 생긴다) / 해당 없음.
-    const badges = [
-        it.required ? el('span', { class: 'ob-step-badge req', text: '필수' }) : null,
-        it.state === 'done' && it.by === 'ai' ? el('span', { class: 'ob-step-badge', text: 'AI가 완료' }) : null,
-        it.state === 'done' && it.by === 'auto' ? el('span', { class: 'ob-step-badge', text: '확인됨' }) : null,
-        it.state === 'skipped' ? el('span', { class: 'ob-step-badge', text: '해당 없음' }) : null,
-    ].filter(Boolean);
-    // 상태 위계(#870 수정): 완료는 조용히, 미완(특히 필수)은 도드라지게 — .req 로 필수 미완을 강조한다.
-    //  점 글리프: 완료 ✓ / 해당없음 — / 미완은 채운 원(글자 없이 CSS 로) — '할 일'로 읽히게.
-    const stateClass = state + (state === 'todo' && it.required ? ' req' : '');
-    return el('div', { class: `card ob-step ${stateClass}` }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot', text: state === 'todo' ? '' : (ICON[it.state] || '') }), el('span', { class: 'ob-step-label', text: it.label }), ...badges), more), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href && it.state !== 'done'
+// ⋯ escape hatch — AI 보고·자동 판정이 주(主). "의도적으로 마킹하고 싶을 때"만.
+function stepMore(it, view) {
+    return el('details', { class: 'ob-more' }, el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }), el('div', { class: 'card ob-more-pop' }, it.state !== 'done' ? el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) }) : null, it.state !== 'skipped' && !it.required ? el('button', { class: 'btn btn-ghost btn-sm', text: '해당 없음', onclick: () => mark(it.key, 'skipped', view) }) : null, it.state !== 'todo' ? el('button', { class: 'btn btn-ghost btn-sm', text: '다시 열기', onclick: () => mark(it.key, 'reset', view) }) : null));
+}
+// 미완 = 크고 뚜렷한 '할 일' 카드 — 설명 + [해보기]. 필수는 .req 로 한 단계 더 강조.
+//  (완료/미완이 같은 크기 카드라 '점 색만' 다르던 게 안 읽힌 원인 → 미완만 풀카드로, 완료는 얇은 줄로 분리.)
+function todoCard(it, view) {
+    const cls = 'card ob-step todo' + (it.required ? ' req' : '');
+    return el('div', { class: cls }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot' }), // 속 빈/채운 파란 링 — CSS
+    el('span', { class: 'ob-step-label', text: it.label }), it.required ? el('span', { class: 'ob-step-badge req', text: '필수' }) : null), stepMore(it, view)), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href
         ? el('div', { class: 'ob-step-act' }, el('a', { class: 'btn btn-primary btn-sm', href: it.href, text: '해보기 →' }))
         : null);
+}
+// 완료(또는 해당없음) = 접힌 얇은 줄 — 체크 + 라벨 + 상태 pill + ⋯. 설명·버튼 없음(끝난 일이라 조용히).
+function doneRow(it, view) {
+    const skipped = it.state === 'skipped';
+    const by = it.by === 'ai' ? 'AI가 완료' : it.by === 'auto' ? '확인됨' : '완료';
+    return el('div', { class: 'ob-done-row' + (skipped ? ' skipped' : '') }, el('span', { class: 'ob-done-check', text: skipped ? '—' : '✓' }), el('span', { class: 'ob-done-label', text: it.label }), el('span', { class: 'ob-done-tag', text: skipped ? '해당 없음' : by }), stepMore(it, view));
 }
 export async function renderStart(view) {
     // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
@@ -71,15 +72,25 @@ export async function renderStart(view) {
         return;
     }
     const s = d.status;
-    const doneCard = s.complete
+    // 상태로 가른다 — 미완(할 일)은 위·풀카드, 완료(끝난 것)는 아래·얇은 줄. "무엇이 남았나"가 한눈에.
+    const todo = s.items.filter((it) => it.state !== 'done' && it.state !== 'skipped');
+    const done = s.items.filter((it) => it.state === 'done' || it.state === 'skipped');
+    const doneBanner = s.complete
         ? el('div', { class: 'ob-banner green' }, el('div', { class: 'ob-banner-title', text: '준비 끝 — 이제 그냥 쓰시면 됩니다.' }), el('p', { class: 'ob-banner-sub' }, '아래 선택 항목은 필요할 때 하시면 됩니다. ', el('a', { href: '#/dashboard', text: '내 AI 세션' }), ' 에서 AI 에게 한국어로 물어보세요 — 회사 맥락을 알고 답합니다.'))
         : null;
-    // null 은 배열에서 걸러 낸다(예전엔 그대로 렌더돼 화면에 'null' 이 찍혔다 — #870 버그).
+    const todoSection = todo.length
+        ? el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title', text: '지금 할 일' }), el('span', { class: 'ob-sec-count', text: String(todo.length) })), ...todo.map((it) => todoCard(it, view)))
+        : null;
+    const doneSection = done.length
+        ? el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title done', text: '완료' }), el('span', { class: 'ob-sec-count', text: String(done.length) })), el('div', { class: 'ob-done-list' }, ...done.map((it) => doneRow(it, view))))
+        : null;
+    // null 은 배열에서 걸러 낸다(예전엔 그대로 렌더돼 화면에 'null' 이 찍혔다).
     const cards = [
         progressCard(s),
         await orgBanner(),
-        doneCard,
-        ...s.items.map((it) => stepCard(it, view)),
+        doneBanner,
+        todoSection,
+        doneSection,
     ].filter(Boolean);
     slot.replaceChildren(...cards);
 }
