@@ -1224,14 +1224,17 @@ async function fillSessions(zone, onCount, projectsP) {
     // 비공개 = 내 소유인데 초대가 없는(나만 보는) 세션(#req).
     // 비공개 = 내 소유 + 초대 없음 + 프로젝트 세션 아님(프로젝트 세션은 멤버 누구나 봄 → 비공개 아님, #req 버그수정).
     const isPrivateSess = (s) => s.owned && !((s.invites || []).length) && !(Number(s.projectId) || 0);
-    // #req 완료·보관(done/closed) 프로젝트의 세션은 기본 숨김. ⚙ 설정 팝오버의 '완료·보관 프로젝트 세션 표시' 토글로 포함. 비프로젝트·분류불가 세션은 항상 유지.
+    // #req 완료·보관(done/closed) 프로젝트의 세션은 기본 숨김. ⚙ 설정 팝오버의 '완료·보관 프로젝트 세션 표시' 토글로 포함.
+    //  ⚠ #853: 단, '살아있는(non-offline = 작업중/확인필요/대기중)' 세션은 프로젝트가 done 이어도 **항상 표시**한다.
+    //   done 처리한 프로젝트 안에서 지금 실제로 돌아가는 세션이 대시보드에서 사라지면 안 된다(방금 그 세션에서 일했는데 안 보임 = 버그).
+    //   즉 숨김 대상은 '완료 프로젝트의 **종료된(offline)** 세션'뿐. 비프로젝트·분류불가 세션은 항상 유지.
     let showClosed = dashSessShowClosed();
     let onlineOnly = dashSessOnlineOnly(); // #670 접속 중(온라인=attached) 세션만 보기
     let sortMode = dashSessSort(); // active(최근 작업순) | recent(최근 생성순) | name(작업 제목순)
     let density = dashSessDensity(); // #758 full(자세히·기본) | compact(간략히) — 카드 한 줄로 접기
     const isProjClosed = (p) => !!p && (p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed'); // 내 프로젝트 모달 isDone 과 동형
     const closedPids = new Set((projects || []).filter(isProjClosed).map((p) => p.id));
-    const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid); };
+    const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid) && dashSessState(s).key === 'offline'; }; // #853 살아있는 세션은 done 프로젝트여도 숨기지 않는다
     let selectMode = false; // #758 일괄 선택 모드 — 평소엔 체크박스 숨김, '선택' 버튼으로 켜야 노출.
     const setShowClosed = (v) => { showClosed = v; dashSaveSessShowClosed(v); draw(); };
     const setOnlineOnly = (v) => { onlineOnly = v; dashSaveSessOnlineOnly(v); draw(); };
@@ -1316,7 +1319,7 @@ async function fillSessions(zone, onCount, projectsP) {
         zone.chipsEl.replaceChildren(fdd);
         if (!shown.length) {
             zone.body.replaceChildren((onlineOnly && hiddenOffline > 0) ? dashEmpty('온라인 세션이 없어요 — ⚙ 설정에서 ‘온라인 세션만’을 끄면 오프라인 세션도 보여요.')
-                : (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
+                : (!showClosed && hiddenClosed > 0) ? dashEmpty('완료·보관 프로젝트의 종료된 세션 ' + hiddenClosed + '개만 있어요 — ⚙ 설정에서 ‘완료·보관 프로젝트 세션 표시’를 켜면 보여요.')
                     : mode === 'invited' ? dashEmpty('초대받은 세션이 없어요.')
                         : mode === 'myproj' ? dashEmpty('내 프로젝트에서 만든 세션이 없어요.')
                             : dashSessionEmpty(cfg, reloadSessions)); // #req 세션 0개 첫 사용자 — 설명 + 따라하기/새 세션(대시보드서 바로)
@@ -1467,7 +1470,7 @@ async function fillSessions(zone, onCount, projectsP) {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = showClosed;
         cb.onchange = () => setShowClosed(cb.checked);
-        panel.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '완료·보관 프로젝트 세션 표시' }), el('span', { class: 'dash-pop-desc', text: 'done/closed 프로젝트에 속한 세션도 목록에 표시(기본 숨김)' }))));
+        panel.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '완료·보관 프로젝트 세션 표시' }), el('span', { class: 'dash-pop-desc', text: 'done/closed 프로젝트의 종료된(오프라인) 세션도 표시. 작업 중·확인 필요·대기 중 세션은 이 설정과 무관하게 항상 보여요.' }))));
         // #670 온라인 세션만 보기 토글 — '오프라인'(비활성) 세션 숨김.
         const cbOnline = el('input', { type: 'checkbox' });
         cbOnline.checked = onlineOnly;
