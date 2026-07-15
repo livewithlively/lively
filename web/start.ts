@@ -121,8 +121,15 @@ export async function renderStartMigrate(view: any) {
   ];
   docsShell(view, 'start', ...head,
     el('div', { class: 'guide-cards' },
+      // 전제 콜아웃 — 이 도우미는 라이블리가 내 컴퓨터에 설치돼 있어야 뜬다('온보딩 도와줘'는 라이블리 스킬).
+      el('div', { class: 'ob-banner amber' },
+        el('div', { class: 'ob-banner-row' },
+          el('span', { class: 'ob-banner-title' }, el('b', { text: '먼저, 내 컴퓨터에 라이블리가 설치돼 있어야 해요.' })),
+          el('a', { class: 'ob-banner-go', href: '#/start/setup', text: '설치하기 →' })),
+        el('p', { class: 'ob-banner-sub' }, '‘온보딩 도와줘’ 는 라이블리가 내 컴퓨터의 AI(Claude Code·Codex)에 심어 두는 도우미예요. 그래서 ',
+          el('a', { href: '#/start/setup', text: '내 컴퓨터에 설치' }), ' 를 먼저 마쳐야 아래 말이 통합니다. 아직이라면 설치부터 하세요.')),
       el('div', { class: 'card docs-card' },
-        el('div', { class: 'card-head' }, el('h2', { text: '내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' })),
+        el('div', { class: 'card-head' }, el('h2', { text: '설치했다면 — 내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' })),
         el('div', { class: 'md-prompt' }, el('p', { class: 'md-p', text: '온보딩 도와줘' })),
         el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽기만 해서 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 건드리지 않습니다(복사만 하고 지우지 않습니다). 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })),
       el('div', { class: 'card docs-card' },
