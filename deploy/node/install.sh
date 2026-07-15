@@ -36,14 +36,18 @@ fi
 [ -f "$AGENT" ] || { echo "빌드 실패: $AGENT 없음" >&2; exit 1; }
 
 # 접속정보 — 토큰은 유닛/plist 가 아니라 0600 env 파일에만 둔다.
+#  TMUX_BIN 도 여기 기록한다: 코드 기본값이 macOS homebrew 경로(/opt/homebrew/bin/tmux)라
+#  Linux/WSL2 노드는 미설정 시 tmux 호출이 전부 실패한다(게이트웨이 .env 의 TMUX_BIN 과 동일 관례).
+TMUX_PATH="$(command -v tmux || true)"
 umask 177
 cat > "$ENV_FILE" <<EOF
 LIVELY_GATEWAY_URL=$URL
 LIVELY_NODE_TOKEN=$TOKEN
 LIVELY_NODE_ID=${NODE_ID:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
+${TMUX_PATH:+TMUX_BIN=$TMUX_PATH}
 EOF
 umask 022
-echo "· 접속정보 저장: $ENV_FILE (0600)"
+echo "· 접속정보 저장: $ENV_FILE (0600)${TMUX_PATH:+ · tmux=$TMUX_PATH}"
 
 NODE_BIN="$(command -v node)"
 RUN_CMD="set -a; . '$ENV_FILE'; exec '$NODE_BIN' '$AGENT'"
@@ -71,6 +75,15 @@ PL
     echo "   상태: launchctl print gui/$(id -u)/io.lvly.node-agent | head"
     ;;
   Linux)
+    # WSL2 등 systemd 미활성 환경 — 유닛 등록 불가 → 즉시 기동(nohup) + 활성화 안내(§8-7 ⑸ Windows=WSL2 전제).
+    if [ ! -d /run/systemd/system ]; then
+      pkill -f "dist/node/agent.js" 2>/dev/null || true
+      nohup bash -c "$RUN_CMD" >> "$LOG_DIR/node-agent.log" 2>&1 &
+      echo "⚠ systemd 미활성(WSL2?) — 데몬 등록 대신 즉시 기동했습니다(재부팅 시 재실행 필요)."
+      echo "   상시화: /etc/wsl.conf 에 [boot] systemd=true 추가 후 'wsl --shutdown' → 이 스크립트 재실행."
+      echo "· 로그: tail -f $LOG_DIR/node-agent.log"
+      exit 0
+    fi
     UNIT_DIR="$HOME/.config/systemd/user"
     mkdir -p "$UNIT_DIR"
     cat > "$UNIT_DIR/lively-node-agent.service" <<UN
