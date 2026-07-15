@@ -3526,7 +3526,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const title = el('span', { class: 'pjv-trow-title clickable' + (isDone ? ' done' : ''), title: p.name, text: p.name });
   title.onclick = (e) => {
     e.stopPropagation();
-    if (select && selectable) { lead.click(); } else { pjvOpenProjectModal(p.id, reload); } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
+    if (select && selectable) { lead.click(); } else { location.hash = '#/projects2/p/' + p.id; } // #req 프로젝트 탭 목록은 페이지 이동(상세 팝업은 대시보드에서만). 선택모드는 그대로.
   };
   // 펼침 캐럿 — 태스크가 있는 프로젝트만(클릭 시 그 프로젝트의 태스크를 안에 펼침). 선택모드/모드없음/0개면 빈 캐럿.
   const nTasks = Number(p.task_count || 0);
@@ -3552,7 +3552,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   // 제목 셀 전체(글자 + 여백)를 클릭 영역으로 — 태스크 목록처럼. 캐럿·체크박스·상태점·행 액션·제목(자체 핸들러)은 제외(각자 처리).
   titleCell.addEventListener('click', (e) => {
     if ((e.target as Element).closest('button, input, a, .pjv-trow-caret, .pjv-row-actions, .pjv-trow-title')) return;
-    if (select && selectable) { lead.click(); } else { pjvOpenProjectModal(p.id, reload); } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
+    if (select && selectable) { lead.click(); } else { location.hash = '#/projects2/p/' + p.id; } // #req 프로젝트 탭 목록은 페이지 이동(상세 팝업은 대시보드에서만). 선택모드는 그대로.
   });
 
   const row = el('div', { class: 'pjv-trow pjv-proj-row' },

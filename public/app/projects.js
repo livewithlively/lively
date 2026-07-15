@@ -4249,8 +4249,8 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             lead.click();
         }
         else {
-            pjvOpenProjectModal(p.id, reload);
-        } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
+            location.hash = '#/projects2/p/' + p.id;
+        } // #req 프로젝트 탭 목록은 페이지 이동(상세 팝업은 대시보드에서만). 선택모드는 그대로.
     };
     // 펼침 캐럿 — 태스크가 있는 프로젝트만(클릭 시 그 프로젝트의 태스크를 안에 펼침). 선택모드/모드없음/0개면 빈 캐럿.
     const nTasks = Number(p.task_count || 0);
@@ -4275,8 +4275,8 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             lead.click();
         }
         else {
-            pjvOpenProjectModal(p.id, reload);
-        } // 페이지 이동 대신 상세 팝업(모달 안 '전체 페이지로 ↗' 로 페이지 이동 가능)
+            location.hash = '#/projects2/p/' + p.id;
+        } // #req 프로젝트 탭 목록은 페이지 이동(상세 팝업은 대시보드에서만). 선택모드는 그대로.
     });
     const row = el('div', { class: 'pjv-trow pjv-proj-row' }, titleCell, el('div', { class: 'pjv-tcell', 'data-col': 'team' }, pjvProjTeamControl(p.members || [], (ids) => pjvSaveProjMembers(p.id, ids))), el('div', { class: 'pjv-tcell', 'data-col': 'due' }, pjvDueControl(p, (patch) => projPatch(p.id, patch, reload))), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'start' }, el('span', { class: 'pjv-fval', text: p.start_date ? pjvFmtDate(p.start_date) : '' })), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'created' }, el('span', { class: 'pjv-fval', text: p.created_at ? pjvFmtDate(p.created_at) : '' })), el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'updated' }, el('span', { class: 'pjv-fval', text: p.updated_at ? pjvFmtDate(p.updated_at) : '' })), el('div', { class: 'pjv-tcell', 'data-col': 'priority' }, pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload))), el('div', { class: 'pjv-tcell pjv-sess-cell', 'data-col': 'sess' }, pjvProjSessionCell(p, reload)), ...(fields).map((f) => el('div', { class: 'pjv-tcell pjv-fcell', 'data-col': 'f:' + f.id }, pjvFieldControl(p, f, reload))), el('div', { class: 'pjv-tcell pjv-tcell-add' }, pjvProjMore(p, reload, canDelete)));
     row.style.gridTemplateColumns = pjvProjGridTemplate(fields);
