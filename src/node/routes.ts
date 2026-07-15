@@ -4,6 +4,10 @@
 //  - worker 노드: admin 만(조직 공용 실행기라 관리 표면).
 // 평문 토큰은 생성/회전 응답 1회만 반환(저장은 해시). 응답에 설치 한 줄을 같이 준다.
 import type express from "express";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
@@ -12,6 +16,8 @@ import { getOrgProfile } from "../org/store.js";
 import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, type OrgNode } from "./store.js";
 import { liveNodes } from "./registry.js";
 import { logger } from "../log.js";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."); // dist/node/ → 리포 루트
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -95,5 +101,24 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const r = await deleteNode(n.id, idOf(userOf(req)));
     logger.info({ node: n.id }, "노드 삭제(토큰 회수)");
     res.json(r);
+  }));
+
+  // 노드 에이전트 번들 배달(#869) — `lively node` 가 받아 실행. agent.mjs(단일 esbuild 번들) + node-pty(네이티브,
+  //  external 이라 실행환경에 필요). 인증된 멤버면 받는다(코드일 뿐 비밀 없음 — /install 과 동일 성격). tar.gz 스트림.
+  app.get("/api/ui/node-agent", auth, wrap(async (req, res) => {
+    if (!idOf(userOf(req))) throw new HttpError(403, "사용자 신원이 없습니다");
+    const bundle = path.join(REPO_ROOT, "dist", "node-agent", "agent.mjs");
+    if (!existsSync(bundle)) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Disposition", 'attachment; filename="node-agent.tgz"');
+    // dist/node-agent/agent.mjs → agent.mjs · node_modules/node-pty → node_modules/node-pty (전 플랫폼 prebuild 동봉)
+    const tar = spawn("tar", [
+      "-czf", "-",
+      "-C", path.join(REPO_ROOT, "dist", "node-agent"), "agent.mjs",
+      "-C", REPO_ROOT, "node_modules/node-pty",
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    tar.stdout.pipe(res);
+    tar.on("error", () => { if (!res.headersSent) res.status(500).end(); });
+    res.on("close", () => { try { tar.kill(); } catch { /* noop */ } });
   }));
 }

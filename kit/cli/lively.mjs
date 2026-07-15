@@ -24,9 +24,9 @@ import {
   readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, chmodSync,
   readdirSync, statSync, realpathSync, openSync, closeSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, hostname } from "node:os";
 import { join } from "node:path";
-import { spawnSync, spawn } from "node:child_process";
+import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -229,6 +229,59 @@ async function streamAndExit(id, jsonMode) {
   }
   process.exit(ok ? 0 : 1);
 }
+// ── 노드(#869) — 이 PC 를 라이블리 노드로 연결(로컬 터미널 원격 관리 + 위탁 워커). ──
+//  데몬 설치 없이 CLI 한 줄(foreground): 노드 등록(토큰) → 에이전트 번들 내려받기 → 실행. Ctrl-C 로 끊으면 노드 사라짐.
+//  번들 = agent.mjs(단일) + node-pty(네이티브). ~/.lively/node-agent/ 에 풀어 그 Node 로 실행.
+async function cmdNode(rest) {
+  const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
+  const gw = gateway(), tok = token();
+  if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
+  const agentDir = join(LIVELY, "node-agent");
+  const envFile = join(LIVELY, "node-agent.env");
+
+  // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
+  let nodeTok = readEnvFile(envFile, "LIVELY_NODE_TOKEN");
+  if (!nodeTok) {
+    say(dim(`· 노드 등록: ${nodeId}`));
+    let r = await api("/api/ui/nodes", { method: "POST", body: { id: nodeId, name: hostname() } }).catch((e) => ({ __err: e }));
+    if (r.__err) { // 이미 존재 → 토큰 회전으로 새 토큰 확보(본인 노드여야 통과)
+      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} }).catch((e2) => die(`노드 등록/회전 실패 — ${e2.message}`, 1));
+    }
+    nodeTok = r.token;
+    writeLively("node-agent.env", `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\n`, 0o600);
+    say(green(`✓ 노드 '${nodeId}' 등록됨`));
+  }
+
+  // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
+  say(dim("· 노드 에이전트 내려받는 중…"));
+  mkdirSync(agentDir, { recursive: true });
+  const res = await fetch(gw + "/api/ui/node-agent", { headers: { authorization: `Bearer ${tok}` } });
+  if (!res.ok) die(`에이전트 번들 다운로드 실패 HTTP ${res.status}`, 1);
+  const tgz = join(agentDir, "bundle.tgz");
+  writeFileSync(tgz, Buffer.from(await res.arrayBuffer()));
+  try { execFileSync("tar", ["-xzf", tgz, "-C", agentDir], { stdio: "ignore" }); }
+  catch (e) { die(`번들 해제 실패 — ${e.message}`, 1); }
+  rmSync(tgz, { force: true });
+  const agentJs = join(agentDir, "agent.mjs");
+  if (!existsSync(agentJs)) die("번들에 agent.mjs 가 없습니다.", 1);
+
+  // 3) 실행(foreground, stdio 상속) — 데몬 없이 이 세션 동안만 노드. Ctrl-C 로 종료 시 노드 연결 해제.
+  say(green(`✓ 노드 '${nodeId}' 연결 — 웹 터미널 탭의 '실행 위치'에서 이 노드를 고르세요. (Ctrl-C 로 종료)`));
+  const child = spawn(process.execPath, [agentJs], {
+    stdio: "inherit",
+    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId },
+  });
+  child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
+}
+// 호스트명 → 노드 id 슬러그(소문자·숫자·하이픈).
+function slugHost() {
+  return (hostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
+}
+function readEnvFile(file, key) {
+  try { const m = readFileSync(file, "utf8").match(new RegExp("^" + key + "=(.*)$", "m")); return m ? m[1].trim() : null; }
+  catch { return null; }
+}
+
 async function cmdDelegate(rest) {
   const sub = rest[0];
   const needId = (v) => { if (!/^\d+$/.test(v || "")) die("위탁 번호가 필요합니다. 예: lively delegate status 3", 2); return v; };
@@ -790,6 +843,7 @@ ${bold("작업")}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
   delegate status|logs|cancel <번호> · delegate list
+  node                   이 PC 를 노드로 연결 — 웹에서 로컬 터미널 관리/위탁 ${dim("(데몬 없이, Ctrl-C 로 종료)")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -837,6 +891,8 @@ async function main() {
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
     case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
+    // node — 이 PC 를 라이블리 노드로 연결(데몬 없이 foreground). 나머지 인자 원형 보존.
+    case "node": return cmdNode(argv.slice(argv.indexOf("node") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:
