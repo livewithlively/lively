@@ -664,8 +664,10 @@ function openTermCreateForm(cfg, view, onCreated) {
     let rootKey = (roots[0] && roots[0].key) || 'personal';
     const rootBtns = {};
     const rootDesc = { shared: '팀과 함께 쓰는 폴더', personal: '나만 쓰는 폴더' };
+    const rootIco = { shared: '👥', personal: '🔒' };
+    // #853 작업 위치 = 2택 선택 카드(.mode-card 언어) — 아이콘·제목·부제 + 라디오 점. 진한 파란블록 대신 연한 강조.
     const rootSeg = el('div', { class: 'term-seg' }, ...roots.map((r) => {
-        const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-lbl', text: r.label }), rootDesc[r.key] ? el('span', { class: 'term-seg-sub', text: rootDesc[r.key] }) : null);
+        const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-ico', text: rootIco[r.key] || '📁' }), el('span', { class: 'term-seg-txt' }, el('span', { class: 'term-seg-lbl', text: r.label }), rootDesc[r.key] ? el('span', { class: 'term-seg-sub', text: rootDesc[r.key] }) : null), el('span', { class: 'term-seg-check' }));
         b.onclick = () => { if (rootKey === r.key)
             return; rootKey = r.key; for (const k in rootBtns)
             rootBtns[k].classList.toggle('active', k === rootKey); pickerPath = ''; paintPicker(); }; // #869 노드 모드면 원격경로 유지(paintPicker), 폴더 모드면 loadPicker
