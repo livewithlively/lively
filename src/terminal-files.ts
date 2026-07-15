@@ -63,7 +63,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
         if (e.name.startsWith(".")) continue;
         const isDir = e.isDirectory();
         let size = 0, mtime = 0;
-        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = st.mtimeMs; if (!isDir) size = st.size; } catch { /* skip */ }
+        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* skip */ }
         items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
       }
     }
@@ -156,7 +156,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
         if (e.name.startsWith(".")) continue;
         const isDir = e.isDirectory();
         let size = 0, mtime = 0;
-        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = st.mtimeMs; if (!isDir) size = st.size; } catch { /* skip */ }
+        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* skip */ }
         items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
       }
     }

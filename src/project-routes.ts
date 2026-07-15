@@ -70,7 +70,7 @@ async function searchFiles(base: string, q: string, limit = 100): Promise<Array<
       const isDir = e.isDirectory();
       if (e.name.toLowerCase().includes(needle)) {
         let size = 0, mtime = 0;
-        try { const s = await fsp.stat(path.join(dir, e.name)); mtime = s.mtimeMs; if (!isDir) size = s.size; } catch { /* skip */ }
+        try { const s = await fsp.stat(path.join(dir, e.name)); mtime = Math.floor(s.mtimeMs); if (!isDir) size = s.size; } catch { /* skip */ }
         out.push({ name: e.name, path: childRel, type: isDir ? "dir" : "file", size, mtime });
         if (out.length >= limit) return;
       }
@@ -119,7 +119,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       if (e.name.startsWith(".")) continue;
       const isDir = e.isDirectory();
       let size = 0, mtime = 0;
-      try { const s = await fsp.stat(path.join(abs, e.name)); mtime = s.mtimeMs; if (!isDir) size = s.size; } catch { /* skip */ }
+      try { const s = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(s.mtimeMs); if (!isDir) size = s.size; } catch { /* skip */ }
       items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));

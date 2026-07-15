@@ -11,7 +11,7 @@ import { wrapAsMember } from "./terminal-isolation.js";
 const LS_JS =
   "const fs=require('fs'),p=process.argv[1],o=[];" +
   "for(const e of fs.readdirSync(p,{withFileTypes:true})){const d=e.isDirectory();let s=0,m=0;" +
-  "try{const st=fs.statSync(p+'/'+e.name);m=st.mtimeMs;if(!d)s=st.size}catch{}o.push({name:e.name,type:d?'dir':'file',size:s,mtime:m})}" +
+  "try{const st=fs.statSync(p+'/'+e.name);m=Math.floor(st.mtimeMs);if(!d)s=st.size}catch{}o.push({name:e.name,type:d?'dir':'file',size:s,mtime:m})}" +
   "process.stdout.write(JSON.stringify(o))";
 const STAT_JS =
   "const fs=require('fs');try{const s=fs.statSync(process.argv[1]);" +

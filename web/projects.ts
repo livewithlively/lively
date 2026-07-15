@@ -8843,29 +8843,31 @@ const UP_CONFIRM = 200;   // 이보다 많으면 확인 — 큰 폴더를 실수
 // 덮어쓰기 사전 검사(#877) — 올릴 항목이 현재 폴더의 기존 파일/폴더와 이름이 겹치는지 본다.
 //  currentItems = 지금 보고 있는 폴더 목록([{name,type}]) — 검색결과 화면이면 폴더 컨텍스트가 아니라 호출부가 [] 를 준다.
 //  중첩(rel 에 '/')은 최상위 세그먼트(폴더)만 판단: 그 폴더가 이미 있으면 '병합'이라 안쪽 같은 이름 파일만 덮인다.
-function upCollisions(items: UpItem[], currentItems: any[]): { files: string[]; dirs: string[] } {
+function upCollisions(items: UpItem[], currentItems: any[]): { files: string[]; dirs: string[]; conflicts: string[] } {
   const byName = new Map<string, string>();
   for (const it of (currentItems || [])) if (it && it.name) byName.set(it.name, it.type);
-  const files = new Set<string>(), dirs = new Set<string>();
+  const files = new Set<string>(), dirs = new Set<string>(), conflicts = new Set<string>();
   for (const u of (items || [])) {
     const top = String(u.rel || '').split('/')[0];
     const t = byName.get(top);
     if (!t) continue;
-    if (String(u.rel).includes('/')) { if (t === 'dir') dirs.add(top); }  // 폴더 병합 — 안의 같은 이름만 덮임
-    else if (t === 'file') files.add(top);                                // 직접 파일 덮어쓰기
+    if (String(u.rel).includes('/')) { if (t === 'dir') dirs.add(top); else conflicts.add(top); }  // 폴더 병합 vs 같은 이름 파일 아래로(서버가 거부)
+    else if (t === 'file') files.add(top);                                                          // 직접 파일 덮어쓰기
+    else conflicts.add(top);                                                                        // 폴더와 같은 이름의 파일(서버가 거부)
   }
-  return { files: [...files], dirs: [...dirs] };
+  return { files: [...files], dirs: [...dirs], conflicts: [...conflicts] };
 }
 // 덮어쓰기 확인 — 겹치는 게 있으면 무엇이 덮이는지 목록으로 보여주고 confirm(마이크 이슈 #877: 조용히 덮이던 것을 명시).
 //  반환: 계속하면 { go:true, over:Set<덮어쓸 직접 파일명> }, 취소면 { go:false }. over 는 결과 요약('N개 덮어씀')용으로 upSend 에 넘긴다.
 function upPrecheckOverwrite(items: UpItem[], currentItems: any[]): { go: boolean; over: Set<string> } {
-  const { files, dirs } = upCollisions(items, currentItems);
+  const { files, dirs, conflicts } = upCollisions(items, currentItems);
   const over = new Set(files);
-  if (!files.length && !dirs.length) return { go: true, over };
+  if (!files.length && !dirs.length && !conflicts.length) return { go: true, over };
   const cap = (arr) => arr.slice(0, 10).map((n) => '  • ' + n).join('\n') + (arr.length > 10 ? ('\n  …외 ' + (arr.length - 10) + '개') : '');
   const parts: string[] = [];
   if (files.length) parts.push('이미 있는 파일 ' + files.length + '개를 덮어씁니다:\n' + cap(files));
   if (dirs.length) parts.push('이미 있는 폴더 ' + dirs.length + '개 — 그 안의 같은 이름 파일만 덮어써집니다:\n' + cap(dirs));
+  if (conflicts.length) parts.push('이름이 겹쳐(파일↔폴더) 업로드가 거부될 수 있는 항목 ' + conflicts.length + '개:\n' + cap(conflicts));
   return { go: confirm(parts.join('\n\n') + '\n\n계속할까요?'), over };
 }
 
@@ -9067,7 +9069,7 @@ function upProgress(total: number, onCancel: () => void, opts?: { label?: string
 function openFolderGrid(id, startPath, base) {
   const B = base || '/api/ui/projects/';
   const st = { path: startPath || '', q: '' };
-  let lastData: any = null;   // 마지막 서버 응답 — 업로드 덮어쓰기 사전확인에 현재 폴더 목록으로 쓴다(#877)
+  let lastFolderItems: any[] = [];   // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877). 검색 중이어도 실제 업로드 대상 폴더 기준으로 판정.
   const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '파일 검색…' });
   searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
   const up = upControl((items) => uploadHere(items, []));
@@ -9090,7 +9092,7 @@ function openFolderGrid(id, startPath, base) {
     const arr = items || [];
     const dirs = emptyDirs || [];
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
-    const cur = (lastData && lastData.search === undefined) ? (lastData.items || []) : [];
+    const cur = lastFolderItems;   // 검색 중이어도 실제 업로드 대상 폴더 기준(#877 리뷰)
     const pc = upPrecheckOverwrite(arr, cur);   // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
     if (!pc.go) return;
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
@@ -9130,7 +9132,7 @@ function openFolderGrid(id, startPath, base) {
     let data: any;
     try { data = await api(B + id + '/files' + qs); }
     catch (e) { listBox.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다')); return; }
-    lastData = data;
+    if (data.search === undefined) lastFolderItems = data.items || [];   // 검색 응답은 무시 — 폴더 목록일 때만 갱신
     if (data.search !== undefined) {
       crumb.replaceChildren(el('span', { text: '“' + data.search + '” 검색 — ' + data.items.length + '건' }));
       const rows = (data.items || []).map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B));
@@ -9166,6 +9168,7 @@ function projectFolderSection(id, base) {
   const body = el('div', {});
   const st = { path: '', q: '' };
   let lastData: any = null;   // 마지막 서버 응답(업로드 중 그리드 즉시 재구성용)
+  let lastFolderItems: any[] = [];   // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877)
   const uploading: any[] = [];  // 업로드 중 카드 [{ name, label, pct, pctEl, fill, nmEl }] — 폴더 업로드는 묶음 카드 1장
   const searchIn = el('input', { type: 'search', placeholder: '파일 검색…', class: 'proj-file-search' });
   searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
@@ -9245,7 +9248,7 @@ function projectFolderSection(id, base) {
     const arr = items || [];
     const dirs = emptyDirs || [];
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
-    const cur = (lastData && lastData.search === undefined) ? (lastData.items || []) : [];
+    const cur = lastFolderItems;   // 검색 중이어도 실제 업로드 대상 폴더 기준(#877 리뷰)
     const pc = upPrecheckOverwrite(arr, cur);   // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
     if (!pc.go) return;
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
@@ -9327,6 +9330,7 @@ function projectFolderSection(id, base) {
   }
   function render(data) {
     lastData = data;
+    if (data.search === undefined) lastFolderItems = data.items || [];   // 검색결과는 무시 — 폴더 목록일 때만(#877)
     const frag: any[] = [];
     let pairs: any; // { it, rel }
     if (data.search !== undefined) {
