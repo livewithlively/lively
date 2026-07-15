@@ -9,12 +9,9 @@ STORE_URL="${STORE_URL:-http://localhost:8080/mcp}"
 
 echo "▶ Claude Code"
 claude mcp remove "$MCP_LABEL" 2>/dev/null || true
-# x-lively-session(#852) — "이 작업을 어느 터미널 세션에서 했나"를 게이트웨이가 자동으로 알게 하는 헤더.
-#  · **작은따옴표**다: 셸이 확장하면 안 된다. 설정 파일엔 리터럴이 들어가고 Claude Code 가 **연결할 때** 제 env 로 확장한다.
-#  · 세션 pane 에는 게이트웨이가 -e LIVELY_SESSION_ID 를 주입해 둔다(terminal-sessions.createSession).
-#  · **`:-` 기본값 문법이 필수다**(실측 2.1.209): 그냥 ${LIVELY_SESSION_ID} 로 쓰면 세션 밖(개인 랩탑 = env 없음)에서
-#    "Missing environment variables" 경고를 매번 띄우고 미확장 리터럴을 그대로 보낸다. `:-` 를 붙이면 조용히 빈 값이 간다.
-#    (게이트웨이는 어느 쪽이든 형식(box-<slug>-<8hex>)으로 걸러 무시하지만, 사용자에게 경고를 보일 이유가 없다.)
+# x-lively-session(#852) — kit/setup/register-clients.sh 와 **같은 내용을 유지할 것**(그쪽이 번들 캐노니컬).
+#  작은따옴표 = 셸 확장 금지(설정엔 리터럴이 들어가고 Claude Code 가 연결 시 제 env 로 확장).
+#  `:-` 기본값이 필수 — 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(실측 2.1.209).
 claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
   --header "Authorization: Bearer ${LIVELY_TOKEN}" \
   --header 'x-lively-session: ${LIVELY_SESSION_ID:-}'
