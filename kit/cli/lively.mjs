@@ -241,9 +241,14 @@ const LAUNCHD_LABEL = "io.lvly.node-agent";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 const SYSTEMD_UNIT = join(HOME, ".config", "systemd", "user", "lively-node-agent.service");
 
-function whichTmux() {
-  try { return execFileSync("bash", ["-lc", "command -v tmux"], { encoding: "utf8" }).trim() || null; }
-  catch { return null; }
+// tmux 절대경로 해석 — 웹터미널·위탁 세션은 tmux 로 실행되므로 노드에 tmux 가 필수다.
+//  ⚠ bash -l 로 PATH 를 재설정하지 않는다: 사용자의 대화형 셸(zsh 등) PATH 를 상속한 현재 프로세스에서 찾아야
+//   homebrew·사용자 설치 경로가 잡힌다(#869 haru 사례: bash -lc 이 zsh PATH 를 버려 tmux 미검출 → 노드가
+//   하드코딩 /opt/homebrew/bin/tmux 로 폴백 → spawn ENOENT → 세션생성 500). 상속 PATH 우선, 없으면 흔한 위치 폴백.
+function resolveTmux() {
+  try { const p = execFileSync("sh", ["-c", "command -v tmux"], { encoding: "utf8" }).trim(); if (p) return p; } catch { /* not on PATH */ }
+  for (const c of ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux", "/usr/bin/tmux"]) { if (existsSync(c)) return c; }
+  return null;
 }
 
 async function cmdNode(rest) {
@@ -253,6 +258,11 @@ async function cmdNode(rest) {
   const nodeId = (rest.includes("--id") ? rest[rest.indexOf("--id") + 1] : "") || slugHost();
   const gw = gateway(), tok = token();
   if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
+  // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 먼저 막아 반쪽 상태(등록됐지만 세션 불가)를
+  //  남기지 않는다. 이미 설정된 TMUX_BIN(격리 소켓 shim 등)은 존중, 없으면 상속 PATH 에서 해석. 절대경로라 데몬(최소 PATH)도 안전.
+  const tmuxPath = process.env.TMUX_BIN || resolveTmux();
+  if (!tmuxPath) die("tmux 가 필요합니다 — 웹터미널·위탁 세션이 tmux 로 실행됩니다. 설치 후 다시 실행하세요:\n" +
+    "  · macOS:        brew install tmux\n  · Debian/Ubuntu: sudo apt install -y tmux\n  · Fedora/RHEL:   sudo dnf install -y tmux", 2);
 
   // 1) 노드 토큰 — 로컬에 있으면 재사용, 없으면 등록(중복이면 회전).
   let nodeTok = readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_TOKEN");
@@ -265,11 +275,9 @@ async function cmdNode(rest) {
     nodeTok = r.token;
     say(green(`✓ 노드 '${nodeId}' 등록됨`));
   }
-  // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다. TMUX_BIN 포함(Linux/WSL2 필수).
-  //  이미 설정된 TMUX_BIN(예: 격리 소켓 shim)은 존중하고, 없을 때만 탐지 — 호출자 지정을 덮어쓰지 않는다.
-  const tmuxPath = process.env.TMUX_BIN || whichTmux();
+  // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다. TMUX_BIN 은 절대경로(데몬 최소 PATH 안전).
   writeLively("node-agent.env",
-    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\n${tmuxPath ? `TMUX_BIN=${tmuxPath}\n` : ""}`, 0o600);
+    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\n`, 0o600);
 
   // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
   say(dim("· 노드 에이전트 내려받는 중…"));
@@ -289,7 +297,7 @@ async function cmdNode(rest) {
   say(green(`✓ 노드 '${nodeId}' 연결 — 웹 터미널 탭의 '실행 위치'에서 이 노드를 고르세요. (Ctrl-C 로 종료)`));
   const child = spawn(process.execPath, [agentJs], {
     stdio: "inherit",
-    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId, ...(tmuxPath ? { TMUX_BIN: tmuxPath } : {}) },
+    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId, TMUX_BIN: tmuxPath },
   });
   child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
 }

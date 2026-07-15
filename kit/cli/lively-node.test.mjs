@@ -114,6 +114,10 @@ try {
     check("③ node-agent.env 0600 + 접속정보(URL·TOKEN·ID)",
       mode === "600" && env.includes(`LIVELY_GATEWAY_URL=${GW}`) && env.includes(`LIVELY_NODE_TOKEN=${NODE_TOKEN}`) && env.includes(`LIVELY_NODE_ID=${NODE_ID}`),
       `mode=${mode}\n${env}`);
+    // TMUX_BIN 절대경로 필수(#869 haru 회귀) — 데몬은 최소 PATH 라 상대경로/미설정이면 세션 생성이 spawn ENOENT 로 깨진다.
+    const mtmux = env.match(/^TMUX_BIN=(.+)$/m);
+    check("③ env 에 TMUX_BIN 절대경로(데몬 최소 PATH 안전 — 세션생성 tmux 해석)",
+      !!mtmux && mtmux[1].startsWith("/") && existsSync(mtmux[1]), `TMUX_BIN=${mtmux?.[1] ?? "(없음)"}`);
   }
 
   // ④ 번들 해제 — ~/.lively/node-agent/agent.mjs 로 풀렸다(데몬이 이걸 실행한다).

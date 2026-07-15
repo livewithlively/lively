@@ -19,8 +19,23 @@ import { listMembers } from "./org/store.js";
 import { isProjectSessionDir } from "./project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeOnline, liveNodes } from "./node/registry.js";
+import type { NodeOp } from "./node/protocol.js";
 import { getNode, listNodes } from "./node/store.js";
 import { registerNodeRoutes } from "./node/routes.js";
+
+// 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
+//  으로 묻히면 원인 진단이 불가능하다(#869 haru 사례: 세션 생성 500 의 진짜 원인이 로그에만 있고 응답엔 안 나왔다).
+//  오프라인·타임아웃은 전용 상태코드로, 그 외 노드측 오류는 502 로 메시지를 붙여 표면화한다.
+async function relayNodeOp<T>(nodeId: string, op: NodeOp, args: Record<string, unknown>): Promise<T> {
+  try {
+    return await nodeRpc<T>(nodeId, op, args);
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg === "node-offline") throw new HttpError(409, "노드가 오프라인입니다 — 그 PC 의 lively 노드 연결을 확인하세요.");
+    if (msg === "node-rpc-timeout") throw new HttpError(504, "노드 응답 시간 초과");
+    throw new HttpError(502, `노드에서 실행 실패: ${msg}`);
+  }
+}
 
 const COOKIE = "lively_term";
 const PREFIX = "/terminal";
@@ -205,7 +220,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       await requireCreatableNode(req, nodeId);
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);
-      const session = await nodeRpc<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }
@@ -219,7 +234,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     if (nodeId) {
       const me = idOf(userOf(req));
       const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
-      await nodeRpc(nodeId, "edit", {
+      await relayNodeOp(nodeId, "edit", {
         user: { userId: me }, id: req.params.id,
         patch: { label: b.label !== undefined ? String(b.label) : undefined },
         ...(invites !== undefined ? { invites } : {}),
@@ -236,7 +251,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const nodeId = String(req.query.node ?? "").trim();
     if (nodeId) {
-      await nodeRpc(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
+      await relayNodeOp(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
       res.json({ ok: true });
       return;
     }
