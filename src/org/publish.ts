@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { materializeOrgContent } from "./materialize.js";
+import { toClientBundleServers } from "./mcp-client-bundle.js";
 // (#335) getSection 직접호출 폐기 — 섹션은 listSections 로 동적 조립(buildSectionBlocks).
 import { DEFAULT_WRITEBACK_NOTICE } from "./hook-defaults.js";
 import { redactString } from "./redact.js";
@@ -199,9 +200,8 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   //  빌드타임 import 하지 않으므로 동일 텍스트를 유지한다(이 사본은 번들 .lively/work-roots 용 — 멤버 최종본은 user-install seed).
   const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 추가/제거 자유. env LIVELY_WORK_ROOTS 로도 augment 가능.";
   await writeFile(join(dir, "work-roots"), [wrHeader, ...cfg.work_roots].join("\n") + "\n");
-  const mcps = (await listMcpServers())
-    .filter((s) => s.enabled && (s.transport === "stdio" ? !!s.command : !!s.url)) // 불완전 서버(http인데 url없음 등) 제외
-    .map((s) => ({ name: s.name, transport: s.transport, url: s.url, command: s.command, auth_env: s.auth_env }));
+  // 클라 직접등록(레인 C) 번들 — mode='proxy' 는 게이트웨이 대리·통제 대상이라 제외(불변식 #894, mcp-client-bundle.ts).
+  const mcps = toClientBundleServers(await listMcpServers());
   await writeFile(join(dir, "mcp-servers.json"), JSON.stringify({ servers: mcps }, null, 2) + "\n");
   // auto-approve — 멤버 설치기가 settings.json 의 무확인 실행 허용목록(permissions.allow)에 머지.
   //  MCP 툴 이름은 하네스에서 'mcp__lively__<tool>' 로 노출되므로 그 형태로 굳힌다(lively=등록 라벨).
