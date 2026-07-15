@@ -4696,9 +4696,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 /* #853 자세히 = [상태 · 제목] 한 줄(상태가 제목 앞에 붙어 '무슨 작업이 어떤 상태인지'를 한 눈에). */
 .dash-scard-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-/* #853 간략히 = 한 줄에 [상태 · 제목 · 뱃지] — 제목이 늘어나고 뱃지는 줄지 않는다. */
-.dash-scard-main.compact { flex-direction: row; align-items: center; gap: 8px; }
-.dash-scard-main.compact .dash-scard-chips { flex: none; }
+/* #853 간략히 = 2줄: [제목] / [상태 · 프로젝트 · 시각] (원래 배치 복원). meta 는 dash-scard-main(flex-col) 의 2줄째. */
+.dash-scard-meta { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.dash-scard-meta .dash-scard-when { flex-direction: row; padding: 0; } /* 간략히 시각은 라벨 없는 한 줄 — 세로 스택 해제 */
 .dash-scard-name { flex: 1; font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* #req 세션 카드 부제 = Claude 작업 요약(제목=세션 이름과 별개). */
 .dash-scard-work { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4738,12 +4738,12 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #853 세션 선택 체크박스 — 평소엔 자리만 있고 안 보이다가, 카드에 호버하면 왼쪽에서 스르르 나타난다.
    ('선택' 버튼을 먼저 누를 필요 없음. 선택 모드이거나 이미 체크된 카드면 계속 보인다.)
    display:none 이 아니라 opacity/width 전환이라 카드 폭이 튀지 않는다. */
-.dash-sess-checkwrap { flex: none; display: flex; align-items: center; width: 0; opacity: 0; overflow: hidden; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
+.dash-sess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
 .dash-scard:hover .dash-sess-checkwrap,
 .dash-scard:focus-within .dash-sess-checkwrap,
 .dash-scard.sel .dash-sess-checkwrap,
-.dash-sess-list.selectmode .dash-sess-checkwrap { width: 16px; opacity: 1; margin-right: 2px; }
-.dash-sess-check { width: 16px; height: 16px; flex: none; cursor: pointer; accent-color: var(--accent, #5b6cff); }
+.dash-sess-list.selectmode .dash-sess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
+.dash-sess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
 @media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap { transition: none; } }
 /* #853 세션 이름 수정 팝업 — 브라우저 prompt() 대체. */
 .dash-rename { display: flex; flex-direction: column; gap: 8px; min-width: 340px; }

@@ -1283,14 +1283,14 @@ async function fillSessions(zone, onCount, projectsP) {
     };
     const bar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
     const renderBar = () => {
-        // #758 선택 모드일 때 항상 표시(0개여도) — 안내 + 삭제 + 완료(모드 종료). 진입은 ⚙ '세션 선택'.
-        bar.hidden = !selectMode;
-        if (!selectMode)
-            return;
+        // #853 하단 일괄 바 = 선택이 하나라도 있거나(호버 체크로 바로 진입) ⚙ 선택모드일 때 표시. 다 풀면 자동으로 숨는다.
         const n = selected.size;
+        bar.hidden = !selectMode && n === 0;
+        if (bar.hidden)
+            return;
         const delBtn = el('button', { class: 'dash-bulkbar-btn danger dash-bulkbar-push', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: killSelected });
         delBtn.disabled = n === 0;
-        bar.replaceChildren(el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }), delBtn, el('button', { class: 'dash-bulkbar-btn', type: 'button', title: '선택 모드 종료', text: '완료', onclick: () => setSelectMode(false) }));
+        bar.replaceChildren(el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '삭제할 세션을 골라 주세요' }), delBtn, el('button', { class: 'dash-bulkbar-btn', type: 'button', title: selectMode ? '선택 모드 종료' : '선택 해제', text: '완료', onclick: () => setSelectMode(false) }));
     };
     const draw = () => {
         // 정렬(#req ⚙에서 선택): active(기본)=마지막 작업 최신순(가장 최근에 작업한 세션이 위) / recent=생성 최신순 / name=제목(작업요약)순.
@@ -1359,19 +1359,20 @@ async function fillSessions(zone, onCount, projectsP) {
             moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
             const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
             // 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명.
-            //   자세히: [상태 · 작업제목] / [터미널 제목: 세션명] / [뱃지]
-            //   간략히: [상태 · 작업제목 · 뱃지] 한 줄
+            //   자세히: [상태 · 작업제목] / [터미널 제목: 세션명] / [뱃지] · 시각은 우측 고정열
+            //   간략히: [작업제목] / [상태 · 프로젝트 · 시각] 2줄 (원래 배치 — #853 에서 실수로 한 줄로 바꿨던 것 복원)
             const nameStr = s.label || '(이름 없음)';
             const worksum = (s.title && s.title.trim() && s.title.trim() !== nameStr) ? s.title.trim() : '';
             const headline = worksum || nameStr;
             const nameEl = el('span', { class: 'dash-scard-name', title: headline, text: headline });
             const main = density === 'compact'
-                ? el('div', { class: 'dash-scard-main compact' }, statusEl, nameEl, chips)
+                ? el('div', { class: 'dash-scard-main' }, nameEl, el('div', { class: 'dash-scard-meta' }, statusEl, chips.childElementCount ? chips : null, when)) // 2줄째: 상태·프로젝트·시각
                 : el('div', { class: 'dash-scard-main' }, el('div', { class: 'dash-scard-head' }, statusEl, nameEl), worksum ? el('div', { class: 'dash-scard-work', title: '터미널 제목: ' + nameStr, text: '터미널 제목: ' + nameStr }) : null, chips.childElementCount ? chips : null);
             const box = el('div', { class: 'dash-scard is-' + stt.key + (selected.has(s.id) ? ' sel' : '') });
             if (s.owned) { // 소유 세션만 일괄 선택 가능(비소유는 서버가 종료 403).
-                // #853 체크박스는 평소 숨김 → 카드 왼쪽에 호버하면 스르르 나타난다(CSS). '선택' 버튼을 먼저 누를 필요 없음.
-                //  체크하는 순간 선택 모드로 자동 진입해 하단 일괄 바가 뜬다(재렌더 없이 클래스만 토글 — 깜빡임 방지).
+                // #853 체크박스는 평소 숨김 → 카드 왼쪽에 호버하면 나타난다(CSS: 호버 || .sel || selectmode).
+                //  ⚠ 체크 자체로 selectMode(전체 상시노출)를 켜지 않는다 — 그래야 체크를 다 풀면(선택 0) 다시 숨는다.
+                //   (예전엔 체크 시 selectMode 자동진입 후 안 꺼져 다 풀어도 체크박스가 계속 떴다 — #853 버그.)
                 const cb = el('input', { type: 'checkbox', class: 'dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
                 cb.checked = selected.has(s.id);
                 cb.onchange = () => {
@@ -1381,15 +1382,17 @@ async function fillSessions(zone, onCount, projectsP) {
                         selected.delete(s.id);
                     box.classList.toggle('sel', cb.checked);
                     list.classList.toggle('has-sel', selected.size > 0);
-                    if (cb.checked && !selectMode) {
-                        selectMode = true;
-                        list.classList.add('selectmode');
-                    }
-                    renderBar();
+                    renderBar(); // 선택이 하나라도 있으면 하단 일괄 바 표시(selectMode 무관), 다 풀면 숨김.
                 };
-                box.append(el('label', { class: 'dash-sess-checkwrap', title: '선택 — 여러 개 골라 한 번에 삭제' }, cb));
+                const wrap = el('label', { class: 'dash-sess-checkwrap', title: '선택 — 여러 개 골라 한 번에 삭제' }, cb);
+                wrap.addEventListener('click', (ev) => ev.stopPropagation());
+                box.append(wrap);
             }
-            box.append(main, when, acts);
+            // 간략히는 시각(when)을 메타 줄(2줄째) 안에 넣었으므로 box 직속엔 넣지 않는다. 자세히는 우측 고정열로 box 직속.
+            if (density === 'compact')
+                box.append(main, acts);
+            else
+                box.append(main, when, acts);
             list.append(box);
         }
         // #req 세션이 있어도 대시보드에서 바로 새 세션 — 목록 맨 밑 '+ 새 세션'(팝업은 터미널과 동일 openTermCreateForm 재사용).
