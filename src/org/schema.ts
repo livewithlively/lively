@@ -63,6 +63,11 @@ export async function initOrgSchema(): Promise<void> {
     --  본 것"이라 노드 상태처럼 stale 가능(웹은 at 로 신선도 표시). 웹이 라이블리 자산(me_assets)과 대조해
     --  중복(라이블리 채택 권고)·shadow 를 보여준다.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- harness_local_pref = 로컬 파일 토글 지시(#891 슬라이스 2). 형태(머신별):
+    --   { "<machine_id>": { "<kind>:<id>": true } }  (true = 끄기 = 세션훅이 .disabled 로 rename)
+    -- 라이블리 스킬 opt-out(org_asset_pref)과 다르다: 그건 멤버 단위(모든 머신 배포분), 이건 **그 머신의 로컬 파일만**.
+    -- 세션훅(sync-harness-assets)이 자기 machine_id 지시를 pull 해 로컬 파일을 비파괴 rename 한다(원본 보존).
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_local_pref JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
   await itemsPool.query(`
     DO $$ BEGIN

@@ -18,8 +18,9 @@
 // 보안: id 슬러그 재검증 + 경로 containment(대상 디렉터리 밖이면 skip) + 심링크 통과 거부(멤버 파일 탈취 방지).
 // 페일오픈: 어떤 실패든 조용히 exit 0 — 실제 작업 세션을 절대 막지 않는다. 토큰 값은 절대 출력/로깅하지 않는다.
 // 비활성화(incognito): LIVELY_OFF=1 → no-op. 어드민 토글: hooks-config.json hooks.sync_harness_assets===false.
-import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync, renameSync } from "node:fs";
 import { homedir, hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join, dirname } from "node:path";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
@@ -35,6 +36,18 @@ const SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MANIFEST = join(LIVELY, "managed-harness-assets.json");
 
 const readLocal = (rel) => { try { return readFileSync(join(LIVELY, rel), "utf8").trim() || null; } catch { return null; } };
+
+// machine-id(#891) — 한 멤버의 여러 PC 를 구분. ~/.lively/machine-id 에 1회 생성(UUID), 이후 재사용.
+//  이게 있어야 집·회사 PC 의 로컬 관측·토글이 서로 안 덮어쓴다. 실패는 조용히(관측이라 비치명 — 서버가 host 폴백).
+function machineId() {
+  try {
+    const p = join(LIVELY, "machine-id");
+    const cur = readFileSync(p, "utf8").trim();
+    if (/^[a-f0-9-]{8,64}$/i.test(cur)) return cur;
+  } catch { /* 없음 → 생성 */ }
+  try { const id = randomUUID(); writeFileSync(join(LIVELY, "machine-id"), id + "\n", { mode: 0o600 }); return id; }
+  catch { return ""; } // 못 쓰면 서버가 host 로 폴백
+}
 
 const HARNESS = (() => {
   const i = process.argv.indexOf("--harness");
@@ -199,10 +212,46 @@ async function reportLocalInventory(managedIds) {
     await fetch(`${GW}/api/ui/me/harness-report`, {
       method: "POST", signal: ctrl.signal,
       headers: { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ harness: HARNESS, host, assets }),
+      body: JSON.stringify({ harness: HARNESS, host, machine_id: machineId(), assets }),
     }).catch(() => {});
     clearTimeout(t);
   } catch { /* 관측 실패는 비치명 — 배포/정리에 영향 없음 */ }
+}
+
+// 웹에서 이 머신에 대해 끄기로 지시한 로컬 파일을 .disabled 로 rename(#891 슬라이스 2) — 비파괴(원본 보존).
+//  다시 켜기(지시 해제 or false)면 .disabled 를 원복. 라이블리 managed 자산은 대상 아님(그건 me_asset_pref).
+async function applyLocalPref() {
+  try {
+    const mid = machineId();
+    if (!mid) return;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    const res = await fetch(`${GW}/api/ui/me/harness-local-pref/plan?machine_id=${encodeURIComponent(mid)}`, {
+      signal: ctrl.signal, headers: { "Authorization": `Bearer ${TOKEN}` },
+    }).catch(() => null);
+    clearTimeout(t);
+    if (!res || !res.ok) return; // 계획 못 받으면 아무것도 안 함(fail-safe — 사용자 파일 안 건드림)
+    const plan = await res.json().catch(() => null);
+    if (!plan || !Array.isArray(plan.disabled)) return;
+    const wantDisabled = new Set(plan.disabled.map((x) => `${x.kind}:${x.id}`)); // 꺼야 할 것
+    // 현재 로컬을 훑어 지시대로 맞춘다 — 켜진 파일 중 꺼야 할 건 .disabled 로, 꺼진 것 중 켜야 할 건 복원.
+    const dirs = HARNESS === "codex"
+      ? [["skill", join(CODEX_DIR, "skills"), true]]
+      : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
+    for (const [kind, root, isDir] of dirs) {
+      let entries; try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const base = e.name.endsWith(".disabled") ? e.name.slice(0, -".disabled".length) : e.name;
+        const id = isDir ? base : (base.endsWith(".md") ? base.slice(0, -3) : null);
+        if (!id || !SLUG.test(id)) continue;
+        const key = `${kind}:${id}`;
+        const isOff = e.name.endsWith(".disabled");
+        const shouldOff = wantDisabled.has(key);
+        if (shouldOff && !isOff) { try { renameSync(join(root, e.name), join(root, e.name + ".disabled")); } catch { /* skip */ } }
+        else if (!shouldOff && isOff) { try { renameSync(join(root, e.name), join(root, base)); } catch { /* skip */ } }
+      }
+    }
+  } catch { /* 비치명 */ }
 }
 
 async function main() {
@@ -234,6 +283,9 @@ async function main() {
   saveManifest(manifest);
   if (changed) emitReload();
 
+  // 웹 토글 지시 반영(#891 슬라이스 2) — 이 머신에서 끄기로 한 로컬 파일을 .disabled rename(비파괴).
+  //  ⚠ 관측 push 보다 **먼저** — 그래야 rename 결과가 반영된 상태로 인벤토리가 올라간다(웹이 최신 상태를 봄).
+  await applyLocalPref();
   // 배포·정리가 끝난 뒤 로컬 인벤토리를 관측·보고(#891) — managed = 방금 확정한 매니페스트 소유분.
   //  이 자산 종류들(claude 하네스 파일 자산)만 push; org_hook(파일 아님)은 서버가 이미 안다.
   await reportLocalInventory(new Set(Object.keys(next)));

@@ -915,41 +915,83 @@ export const deliveryCapabilities: Capability[] = [
         harness: input.harness === "codex" ? "codex" : "claude",
         assets,
       };
+      // machine_id — 한 멤버의 여러 PC 를 구분(훅이 ~/.lively/machine-id 에 UUID 생성). 없으면 host 로 폴백(구 훅 호환).
+      const machineId = (input.machine_id == null ? "" : str(input.machine_id, "machine_id", 64).trim())
+        || (snap.host ? `host:${snap.host}` : "unknown");
       const { setHarnessSnapshot } = await import("../org/store.js");
-      await setHarnessSnapshot(userId, snap);
-      return { ok: true, count: assets.length };
+      await setHarnessSnapshot(userId, machineId, snap);
+      return { ok: true, count: assets.length, machine_id: machineId };
     }),
 
   restRead("me_harness_get", "내 하네스 한눈에(로컬+라이블리)",
-    "라이블리가 배포하는 하네스 자산(me_assets)과 이 멤버 노트북의 로컬 관측 스냅샷을 함께 반환하고, 겹치는 것을 대조한다 — 웹 '내 하네스' 화면용. overlap: managed(라이블리가 깐 것) · shadow(로컬 동명 파일이 라이블리 자산을 가림).",
+    "라이블리가 배포하는 하네스 자산(me_assets)과 이 멤버의 **머신별** 로컬 관측을 함께 반환하고 겹치는 것을 대조한다 — 웹 '내 하네스' 화면용. machines[]: PC 마다 하나. overlap: managed(라이블리가 깐 것) · shadow(로컬 동명 파일이 라이블리 자산을 가림) · local-only(내 것).",
     [{ method: "GET", paths: ["/api/ui/me/harness"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getHarnessSnapshot } = await import("../org/store.js");
-      const [assets, hooks, prefs, snap] = await Promise.all([
-        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshot(userId),
+      const { getHarnessSnapshots, getHarnessLocalPref } = await import("../org/store.js");
+      const [assets, hooks, prefs, snaps, localPref] = await Promise.all([
+        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId),
       ]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
         const override = prefMap.has(`${kind}:${id}`) ? (prefMap.get(`${kind}:${id}`) as boolean) : null;
         return { override, effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
-      // 라이블리가 이 멤버에게 배포하는(effective) 자산 id 집합 — 로컬 대조의 기준.
       const lively = {
         skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
         hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
-      // 로컬 관측과 대조: 같은 id 가 라이블리에도 있으면 겹침 — managed 면 정상(라이블리가 깐 것), non-managed 면 shadow(가림).
-      const local = (snap?.assets ?? []).map((a) => {
-        const overlapLively = livelyIds.has(a.id);
-        return { ...a, overlap: overlapLively ? (a.managed ? "managed" : "shadow") : "local-only" };
+      // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
+      const machines = Object.entries(snaps)
+        .map(([machineId, snap]) => {
+          const disabled = localPref[machineId] || {};
+          const list = (snap.assets ?? []).map((a) => ({
+            ...a,
+            overlap: livelyIds.has(a.id) ? (a.managed ? "managed" : "shadow") : "local-only",
+            disabled: !!disabled[`${a.kind}:${a.id}`], // 이 머신에서 끄기로 지시됨(다음 세션 .disabled rename)
+          }));
+          return { machine_id: machineId, host: snap.host ?? null, harness: snap.harness ?? null, at: snap.at ?? null, assets: list };
+        })
+        .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")); // 최근 관측 머신 먼저
+      return { lively, machines };
+    }),
+
+  restRead("me_harness_local_pref", "로컬 하네스 파일 끄기/켜기(머신별)",
+    "이 멤버의 특정 머신에서 로컬 하네스 파일을 끈다(disabled=true → 다음 세션에 세션훅이 .disabled 로 비파괴 rename)·켠다(false → 복원). 라이블리 스킬 opt-out(me_asset_pref)과 다르다: 그건 멤버 단위, 이건 그 머신의 로컬 파일만. machine_id·kind·id 필수.",
+    [{ method: "POST", paths: ["/api/ui/me/harness-local-pref"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 설정할 수 없습니다 — 관리자에게 문의하세요");
+      const machineId = str(input.machine_id, "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const assetId = str(input.id, "id", 64).trim();
+      const kind = str(input.kind, "kind", 12).trim();
+      if (!["skill", "subagent", "command"].includes(kind)) throw new HttpError(400, "kind 는 skill|subagent|command 만(로컬 파일 자산)");
+      if (!assetId) throw new HttpError(400, "id 가 필요합니다");
+      const { setHarnessLocalPref } = await import("../org/store.js");
+      await setHarnessLocalPref(userId, machineId, `${kind}:${assetId}`, Boolean(input.disabled));
+      return { ok: true };
+    }),
+
+  restRead("me_harness_local_pref_plan", "이 머신의 로컬 끄기 계획(세션훅 pull)",
+    "세션훅(sync-harness-assets)이 자기 machine_id 로 이 머신에서 꺼야 할 로컬 파일 목록을 받아 .disabled 로 rename 한다. 목록에 없으면 켜기(복원). machine_id 쿼리 필수.",
+    [{ method: "GET", paths: ["/api/ui/me/harness-local-pref/plan"], parse: (req) => ({ machine_id: req.query?.machine_id }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const machineId = str(input.machine_id ?? "", "machine_id", 64).trim();
+      if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
+      const { getHarnessLocalPref } = await import("../org/store.js");
+      const pref = (await getHarnessLocalPref(userId))[machineId] || {};
+      // "<kind>:<id>": true 인 것만 = 꺼야 할 것. 훅이 쓰기 쉽게 {kind,id} 로 풀어 준다.
+      const disabled = Object.entries(pref).filter(([, v]) => v === true).map(([k]) => {
+        const i = k.indexOf(":");
+        return { kind: k.slice(0, i), id: k.slice(i + 1) };
       });
-      return {
-        lively,
-        local: { assets: local, at: snap?.at ?? null, host: snap?.host ?? null, harness: snap?.harness ?? null, observed: !!snap },
-      };
+      return { disabled };
     }),
 
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
