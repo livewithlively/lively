@@ -165,7 +165,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  no-cache = 캐시하되 매 사용 전 ETag 재검증(변경 O→200 새 코드, 변경 X→304 저비용). 정적자산은 미인증이라 안전.
   app.use("/ui", express.static(publicDir, {
     setHeaders: (res, filePath) => {
-      if (/\.(?:css|js|mjs)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache");
+      if (/\.(?:css|js|mjs|html)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache"); // .html 포함 — terminal.html·terminal-grid.html 도 새로고침에 항상 최신(index.html 은 위 serveIndex 가 no-store 로 먼저 처리)
     },
   }));
   app.get("/", (_req, res) => res.redirect("/ui/"));
