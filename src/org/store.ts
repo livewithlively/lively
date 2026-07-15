@@ -386,11 +386,11 @@ export async function getHarnessSnapshots(id: string): Promise<HarnessSnapshots>
   const r = await itemsPool.query(`SELECT harness_snapshot FROM org_member WHERE id=$1`, [id]);
   const v = r.rows[0]?.harness_snapshot as unknown;
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
-  // 옛 단일 형태({at,host,assets} 직접)는 버린다 — 관측이라 다음 세션에 머신맵으로 다시 채워진다(무손실).
-  if (Array.isArray((v as HarnessSnapshot).assets)) return {};
+  // 각 키를 순회하되 **값이 {assets:[...]} 인 것만** 머신으로 취급 — 옛 단일 형태의 top-level 잔재
+  //  (at/host/harness 문자열·assets 배열)는 값이 {assets} 아니라 자동으로 걸러진다(merge 로 공존해도 안전).
   const out: HarnessSnapshots = {};
   for (const [mid, snap] of Object.entries(v as Record<string, unknown>)) {
-    if (snap && typeof snap === "object" && Array.isArray((snap as HarnessSnapshot).assets)) out[mid] = snap as HarnessSnapshot;
+    if (snap && typeof snap === "object" && !Array.isArray(snap) && Array.isArray((snap as HarnessSnapshot).assets)) out[mid] = snap as HarnessSnapshot;
   }
   return out;
 }
