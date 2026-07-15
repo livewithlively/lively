@@ -1565,14 +1565,23 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-icon.danger { color: var(--coral-text); border-color: #F0DCC4; }
 .tsess-icon.danger:hover { background: #FBF1E7; }
 .tsess-icon.tsess-q { white-space: nowrap; }
-/* '내 질문' 팝아웃(#745) — 이 세션에 보낸 질문만 시간순(위=최근). */
+/* '내 질문' 팝아웃(#745) — 이 세션에 보낸 질문만 시간순(위=최근). #853 뷰티파이. */
 .tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }
-.tsess-qcap { margin-bottom: 8px; }
-.tsess-qlist { display: flex; flex-direction: column; gap: 8px; max-height: 62vh; overflow-y: auto; padding-right: 2px; }
-.tsess-qitem { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
-.tsess-qmeta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
-.tsess-qnum { font-weight: 800; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
-.tsess-qtext { font-size: 13px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.tsess-qcap { margin-bottom: 10px; font-weight: 600; }
+.tsess-qlist { display: flex; flex-direction: column; gap: 9px; max-height: 62vh; overflow-y: auto; padding-right: 3px; }
+/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조. */
+.tsess-qitem { position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
+.tsess-qitem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: color-mix(in srgb, var(--blue) 35%, var(--line)); opacity: 0; transition: opacity .12s; }
+.tsess-qitem:hover { border-color: color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
+.tsess-qitem:hover::before { opacity: 1; }
+.tsess-qmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.tsess-qnum { flex: none; font-size: 10.5px; font-weight: 800; color: var(--blue); background: color-mix(in srgb, var(--blue) 11%, transparent); border-radius: 999px; padding: 2px 8px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.tsess-qwhen { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.tsess-qtext { font-size: 13px; line-height: 1.62; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 리스트 스크롤바 — 얇고 은은하게. */
+.tsess-qlist::-webkit-scrollbar { width: 8px; }
+.tsess-qlist::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted-2) 45%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.tsess-qlist::-webkit-scrollbar-thumb:hover { background: var(--muted-2); background-clip: padding-box; }
 /* 질문 검색(팝아웃 내 + 전체 통합) */
 .tsess-qsearch, .tsess-gsearch { width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); margin-bottom: 8px; }
 .tsess-qsearch:focus, .tsess-gsearch:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
