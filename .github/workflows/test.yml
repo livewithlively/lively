@@ -1,0 +1,46 @@
+name: test
+# 테스트 CI (#880) — 종전엔 release.yml(태그 빌드)뿐이라 테스트가 CI 에서 안 돌았다.
+#  ① 목 유닛 체인(npm test, DB 불요)  ② **device-auth PG 통합 테스트**(실제 Postgres 필요 — 원자적 발급·
+#     slow_down·ON-CONFLICT·DB시각 만료는 목 pg 로 검증 불가, #880 설계 R2-NEW2).
+#  ⚠ items DB 는 pgvector 이미지여야 한다(items-db-pgvector-image-invariant, #172) — plain postgres 금지.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: lively_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build
+      # ① 목 유닛(기존 체인 + kit/cli/lively.test.mjs). 실 DB 없이 돈다(각자 mock pool).
+      - name: 유닛 테스트 (mock)
+        run: npm test
+      # ② 테스트 DB 스키마 자가마이그레이션(게이트웨이 부팅과 같은 순서 — FK 직렬). 포트 바인딩 없이 스키마만.
+      - name: 스키마 마이그레이션 (테스트 Postgres)
+        run: >-
+          node --input-type=module -e "
+          import('./dist/items/store.js').then(m => m.initItemSchema())
+            .then(() => import('./dist/org/schema.js')).then(m => m.initOrgSchema())
+            .then(() => { console.log('schema ready'); process.exit(0); })
+            .catch(e => { console.error(e); process.exit(1); });"
+      # ③ device-auth PG 통합(실 트랜잭션·now()·RETURNING rowCount) — 두 HIGH 통제(원자성·PKCE 바인딩) 검증.
+      - name: device-auth PG 통합 테스트
+        run: node src/org/device-auth.pg-test.mjs
