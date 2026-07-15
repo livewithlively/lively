@@ -55,6 +55,14 @@ export async function initOrgSchema(): Promise<void> {
     --  계산한다(computeMemberOnboarding). 이 컬럼엔 서버가 **볼 수 없는 것**(그 사람 노트북의 로컬 이관 완료 —
     --  AI 스킬이 보고)과 사용자의 **의도적 오버라이드**(웹 ⋯ 메뉴)만 담긴다. 상태를 두 곳에 두면 어긋난다.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS onboarding JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- harness_snapshot = 멤버 노트북의 로컬 하네스 자산 **관측 스냅샷**(#891 온보딩 C). 형태:
+    --   { "at": "<iso>", "host": "<hostname>", "harness": "claude"|"codex",
+    --     "assets": [ { "id", "kind": "skill"|"subagent"|"command"|"hook", "managed": bool } ] }
+    -- ⚠ 관측이지 보고가 아니다(onboarding 과 성격 다름 — 그래서 별 컬럼). 세션훅(session-preload)이 매 세션
+    --  로컬을 스캔해 **메타만** push 한다 — 스킬 본문·메모리 내용은 절대 안 담는다(사생활·용량). "마지막으로
+    --  본 것"이라 노드 상태처럼 stale 가능(웹은 at 로 신선도 표시). 웹이 라이블리 자산(me_assets)과 대조해
+    --  중복(라이블리 채택 권고)·shadow 를 보여준다.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
   await itemsPool.query(`
     DO $$ BEGIN
