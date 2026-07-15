@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p web/tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && node scripts/build-node-agent.mjs",
     "build:web": "tsc -p web/tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
@@ -35,6 +35,7 @@
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }
