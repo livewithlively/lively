@@ -4019,6 +4019,8 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-callout-blue, .md-callout-default { background: var(--bg-note); }
 .md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
 .md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
+/* 설명서 CTA 버튼(#879 :::button) — 문서 흐름에서 위아래 간격을 준다(자체는 .btn inline-flex). */
+.md-cta { margin: 6px 0 14px; }
 
 /* 컬럼 레이아웃 — flex(비율은 인라인 flex 값), 좁은 화면은 세로 강등. */
 .md-columns { display: flex; gap: 22px; margin: 8px 0; align-items: flex-start; }
