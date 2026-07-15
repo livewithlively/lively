@@ -4019,8 +4019,20 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-callout-blue, .md-callout-default { background: var(--bg-note); }
 .md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
 .md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
-/* 설명서 CTA 버튼(#879 :::button) — 문서 흐름에서 위아래 간격을 준다(자체는 .btn inline-flex). */
+/* 설명서 CTA 버튼(#879 :::button) — 문서 흐름 간격 + .docs-md a(블루)에 글자색을 뺏기지 않게 흰색 고정. */
 .md-cta { margin: 6px 0 14px; }
+.md-cta.btn-primary, .md-cta.btn-primary:hover { color: #fff; text-decoration: none; }
+/* 설명서 단계 흐름(#879 :::steps) — 설치 가이드 .step-list 와 같은 시각언어(파란 번호 배지·행 구분선). 번호는 CSS 카운터. */
+.md-steps { display: flex; flex-direction: column; counter-reset: mdstep; margin: 12px 0; }
+.md-step { display: flex; gap: 14px; align-items: flex-start; padding: 16px 0; border-top: 1px solid var(--line-row); counter-increment: mdstep; }
+.md-step:first-child { border-top: none; padding-top: 4px; }
+.md-step-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+.md-step-num::before { content: counter(mdstep); }
+.md-step-body { min-width: 0; flex: 1; }
+.md-step-body > :first-child { margin-top: 0; }
+.md-step-body > :last-child { margin-bottom: 0; }
+.md-step-title { font-size: 15px; font-weight: 800; color: var(--ink); margin-bottom: 4px; }
 
 /* 컬럼 레이아웃 — flex(비율은 인라인 flex 값), 좁은 화면은 세로 강등. */
 .md-columns { display: flex; gap: 22px; margin: 8px 0; align-items: flex-start; }

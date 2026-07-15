@@ -388,6 +388,20 @@ function renderContainer(type, rest, bodyLines) {
             a.append(...renderInline(summary || rest || '열기'));
             return a;
         }
+        case 'steps': {
+            // 번호 매겨진 단계 흐름(#879) — 설치 가이드의 .step-list 와 같은 시각언어. 번호는 CSS 카운터.
+            const box = el('div', { class: 'md-steps' });
+            return moveChildren(inner(), box);
+        }
+        case 'step': {
+            const item = el('div', { class: 'md-step' });
+            item.append(el('div', { class: 'md-step-num', 'aria-hidden': 'true' }));
+            const body = el('div', { class: 'md-step-body' });
+            if (summary)
+                body.append(el('div', { class: 'md-step-title' }, ...renderInline(summary)));
+            item.append(moveChildren(inner(), body));
+            return item;
+        }
         case 'synced': {
             const box = el('div', { class: 'md-synced' });
             box.append(el('span', { class: 'md-block-chip', text: '↻ 동기화 블록' }));
