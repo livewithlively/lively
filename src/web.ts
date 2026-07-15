@@ -22,6 +22,7 @@ import {
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
 import { getOrgProfile } from "./org/store.js";
+import { startDeviceAuth, pollDeviceAuth } from "./org/device-auth.js";
 
 // req.auth.extra 에 심긴 LivelyUser 를 꺼낸다(세션·bearer 공통 — 둘 다 이 형태로 채운다).
 const userOf = (req: express.Request): LivelyUser =>
@@ -186,6 +187,29 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   app.get("/cli/lively.mjs", wrap(async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.type("text/plain; charset=utf-8").send(readFileSync(path.join(kitCliDir, "lively.mjs"), "utf8"));
+  }));
+
+  // ── 디바이스 코드 로그인 (#880) — start/poll 은 **무인증**(pre-token, /cli 와 같은 성격). ──
+  //  세션 라우트(lookup/approve/deny)는 capabilities 에서 sessionOrBearer 뒤에 마운트된다.
+  //  토큰 응답이므로 no-store. verification_uri 는 selfUrl(호스트-only 검증) 재사용.
+  app.post("/cli/device/start", wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const out = await startDeviceAuth(String(body.code_challenge ?? ""), body.label, await selfUrl(req));
+    res.json(out);
+  }));
+  app.post("/cli/device/poll", wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const r = await pollDeviceAuth(String(body.device_code ?? ""), String(body.code_verifier ?? ""));
+    if (r.ok) { res.json({ token: r.token, scopes: r.scopes }); return; }
+    // RFC 8628 계열 상태코드로 매핑 — CLI 가 이걸로 분기(pending/slow_down 계속, denied/expired/invalid 종료).
+    const status = r.error === "authorization_pending" ? 202
+      : r.error === "slow_down" ? 429
+      : r.error === "access_denied" ? 403
+      : r.error === "invalid_verifier" ? 401
+      : 410; // expired_token
+    res.status(status).json({ error: r.error, ...(r.interval ? { interval: r.interval } : {}) });
   }));
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──

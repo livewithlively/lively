@@ -2,6 +2,7 @@
 // 모든 쓰기는 org_content_audit 에 before/after 를 남기고 version 을 올린다(낙관적 잠금 토대).
 // 멤버 쓰기는 person/person_identity 로도 동기화 → 비개발자의 UI 편집이 즉시 게이트웨이 신원 매칭에 반영.
 import crypto from "node:crypto";
+import type pg from "pg";
 import { itemsPool } from "../items/store.js";
 import { CONNECTOR_SPECS, type ConnectorField } from "../connectors/config.js";
 import { encryptSecret, secretsEnabled } from "./secret-box.js";
@@ -106,8 +107,12 @@ async function audit(
   after: unknown,
   actor: string | undefined,
   source: string | undefined,
-  meta?: { tokenHashPrefix?: string | null; ip?: string | null },
+  meta?: { tokenHashPrefix?: string | null; ip?: string | null } | pg.PoolClient,
 ): Promise<void> {
+  // #880: 마지막 인자로 PoolClient 를 주면 그 트랜잭션에서 INSERT(호출부의 BEGIN/COMMIT 원자성). 그 외는 meta.
+  const client = (meta && typeof (meta as pg.PoolClient).query === "function") ? (meta as pg.PoolClient) : undefined;
+  const m = client ? undefined : (meta as { tokenHashPrefix?: string | null; ip?: string | null } | undefined);
+  const exec = client ?? itemsPool;
   // B20: before/after 를 굳히기 전 시크릿 redaction — 감사 로그가 평문 토큰/키의 사본이 되지 않게.
   const b = before == null ? null : JSON.stringify(redactDeep(before));
   const a = after == null ? null : JSON.stringify(redactDeep(after));
@@ -115,7 +120,7 @@ async function audit(
   //  org_member.kind(신원)지 채널이 아니다(yoon 이 mcp 로 써도 human) → actor(=member id)로 조인 파생(agent→ai).
   //  actor 지정됐는데 멤버 아님=unknown, 미지정=NULL. channel(어떤 경로)은 source 에서 정규화. 에이전트가 MCP 로
   //  관리기능을 만지게 열렸으므로(#549) 이 두 컬럼이 'AI 가 관리탭을 바꿨다'를 감사에 드러낸다.
-  await itemsPool.query(
+  await exec.query(
     `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, token_hash_prefix, req_ip, actor_kind, channel)
      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,
        CASE WHEN $6::text IS NULL THEN NULL
@@ -123,7 +128,7 @@ async function audit(
                              FROM org_member m WHERE m.id = $6), 'unknown') END,
        $10)`,
     [entity, key, op, b, a, actor ?? null, source ?? null,
-     meta?.tokenHashPrefix ?? null, meta?.ip ?? null, sourceToChannel(source)],
+     m?.tokenHashPrefix ?? null, m?.ip ?? null, sourceToChannel(source)],
   );
 }
 
@@ -533,23 +538,26 @@ export async function upsertMemory(mem: MemoryInput, actor?: string, source?: st
 // ── auth_token (DB 기반 bearer) ──
 // 발급 — 평문 토큰을 1회 반환(저장은 해시만). prefix 'lvk_' 로 verifyDbToken 의 빠른 게이팅 가능.
 // email 은 토큰에 저장하지 않는다 — 귀속/표시용 email 은 member_id → org_member 에서 파생(중복·stale 제거).
+// client 를 넘기면 그 커넥션(트랜잭션 중)에서 INSERT+audit 을 실행한다(#880 device flow: consume-UPDATE 와
+//  같은 BEGIN/COMMIT 원자성 — 안 그러면 토큰이 독립 커밋돼 COMMIT 실패 시 orphan 토큰 누수). 기본은 풀(autocommit).
 export async function mintToken(input: {
   userId: string;
   scopes: string[];
   projects?: string[];
   label?: string | null;
   memberId?: string | null;
-}, actor?: string, source?: string): Promise<{ token: string; tokenHash: string }> {
+}, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string }> {
+  const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
-  await itemsPool.query(
+  await exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by)
        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7)`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null],
   );
   await audit("auth_token", input.userId, "mint",
-    null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId }, actor, source);
+    null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId }, actor, source, client);
   return { token, tokenHash };
 }
 

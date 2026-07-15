@@ -1196,5 +1196,30 @@ export async function initOrgSchema(): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS org_member_email_lc_uniq ON org_member (lower(email)) WHERE email IS NOT NULL AND email <> ''`,
   ).catch((e) => { console.warn("[org schema] 멤버 이메일 유니크 인덱스 보류(기존 중복 데이터?):", (e as Error)?.message); });
 
+  // ── pending_device_auth — CLI 브라우저 로그인(디바이스 코드, #880). CLI 가 device_code 보유, 사람이 user_code
+  //  를 브라우저에서 승인, CLI 가 폴링해 토큰 수령. 평문 토큰은 저장 안 함(폴 시점 발급) — sha256 지문만.
+  //  device_code_hash=sha256(평문 32B), code_challenge=S256(verifier)로 개시자 바인딩(도난 device_code 상환 차단).
+  //  status pending→approved→consumed / denied. TTL 15분, GC 로 회수(reaper + lazy delete-on-read).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS pending_device_auth(
+      device_code_hash TEXT PRIMARY KEY,
+      user_code TEXT NOT NULL,                          -- 저장형: 8자 대문자, 하이픈 없음
+      code_challenge TEXT NOT NULL,                     -- S256(code_verifier) base64url
+      status TEXT NOT NULL DEFAULT 'pending',           -- pending | approved | denied | consumed
+      member_id TEXT,                                   -- 승인 시 세션 멤버
+      approver_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,-- 승인자 scope 스냅샷(poll 이 ∩ 재교집합 → 증폭 차단)
+      include_control_plane BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      approved_at TIMESTAMPTZ,
+      last_polled_at TIMESTAMPTZ,
+      client_label TEXT);
+  `);
+  //  pending 중 user_code 유일(부분 유니크) — terminal 행은 자유 충돌 허용(user_code 재사용). 이메일 인덱스처럼
+  //  비치명 보류(신규 테이블이라 사실 충돌 불가지만 관례 유지).
+  await itemsPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS pending_device_user_code_idx ON pending_device_auth(user_code) WHERE status='pending'`,
+  ).catch((e) => { console.warn("[org schema] pending_device_auth user_code 유니크 인덱스 보류:", (e as Error)?.message); });
+
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
 const CLI_VERSION = "1.0.0";
@@ -429,27 +430,33 @@ async function syncKit({ label, offerHarness }) {
   }
 }
 
-// ── 9. 명령 ────────────────────────────────────────────────────────────────
-async function cmdLogin(opts) {
-  if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
-  const gw = gateway();
-  if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
+// ── 9. 로그인 ──────────────────────────────────────────────────────────────
+// PKCE S256 — 서버(device-auth.ts)와 동일 계산. verifier→challenge.
+const s256 = (verifier) => crypto.createHash("sha256").update(verifier).digest("base64url");
 
-  // --token 은 스크립트·프로비저닝용 탈출구. 사람에겐 가림 입력을 쓴다(셸 히스토리에 안 남게).
-  let tok = opts.token;
-  if (!tok) {
-    if (!interactive()) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
-    say(`\n${bold("라이블리 로그인")}  ${dim(gw)}`);
-    say(dim("  토큰은 관리자에게 받거나, 웹 [사용 가이드 › 내 AI 세션 생성] 에서 발급합니다."));
-    tok = await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ");
-  }
-  tok = String(tok || "").trim();
-  if (!tok) die("토큰이 비어 있습니다.");
+// 브라우저 자동 오픈 — best-effort·detached·비블로킹·전 에러 무시(폴 루프를 절대 안 막음, 설계 V2).
+//  darwin `open` · win `cmd /c start "" <url>`(빈 title 필수) · linux `xdg-open`(단 $DISPLAY 있을 때만 — headless no-op).
+function openBrowser(url) {
+  try {
+    let cmd, args;
+    if (process.platform === "darwin") { cmd = "open"; args = [url]; }
+    else if (WIN) { cmd = "cmd"; args = ["/c", "start", "", url]; }
+    else {
+      if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return; // 헤드리스 — URL 만 표시(위에서 이미 출력)
+      cmd = "xdg-open"; args = [url];
+    }
+    const c = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    c.on("error", () => { /* 브라우저 없음 등 — 무시 */ });
+    c.unref();
+  } catch { /* best-effort */ }
+}
 
-  // 검증 — 아무 문자열이나 받아 두고 나중에 401 로 터지게 하지 않는다. 여기서 바로 신원을 확인한다.
-  let me;
+// 토큰 신원 확인(옵션으로 저장) — --token·디바이스 흐름·폴백이 공유. me 반환. store=false 면 확인만(디바이스 흐름이
+//  저장 전 [Y/n] 을 물어야 하므로 — 저장 후 취소는 어색).
+async function validateAndStore(gw, tok, { announce = true, store = true } = {}) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 15000);
+  let me;
   try {
     const res = await fetch(gw + "/api/ui/me/profile", { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
     if (res.status === 401 || res.status === 403) die("토큰이 거부됐습니다 — 관리자에게 받은 토큰이 맞는지 확인하세요.");
@@ -459,12 +466,115 @@ async function cmdLogin(opts) {
     if (e?.name === "AbortError") die(`게이트웨이 응답 없음(타임아웃) — 주소·네트워크·VPN 을 확인하세요: ${gw}`);
     throw e;
   } finally { clearTimeout(timer); }
+  if (store) {
+    writeLively("token", tok);
+    writeLively("gateway-url", gw);
+    if (announce) {
+      say("");
+      ok(`${bold(me?.display_name || me?.id || "구성원")} 님으로 인증됐습니다.`);
+      info(`토큰 저장: ~/.lively/token (0600) · 게이트웨이: ${gw}`);
+    }
+  }
+  return me;
+}
 
-  writeLively("token", tok);
-  writeLively("gateway-url", gw);
+// 토큰 가림입력 경로(구 방식) — 롤백 폴백 + 비대화형이 아닐 때의 명시적 요청. 셸 히스토리에 안 남는다.
+async function loginWithPastedToken(gw) {
+  if (!interactive()) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
+  say(`\n${bold("라이블리 로그인")}  ${dim(gw)}`);
+  say(dim("  토큰은 관리자에게 받거나, 웹 [사용 가이드 › 내 AI 세션 생성] 에서 발급합니다."));
+  const tok = String(await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ") || "").trim();
+  if (!tok) die("토큰이 비어 있습니다.");
+  return validateAndStore(gw, tok);
+}
+
+// 디바이스 코드 흐름(기본 대화형). 서버가 디바이스 엔드포인트를 모르면(구 서버·롤백) 'unsupported' 반환 → 폴백.
+async function deviceLogin(gw) {
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const label = `${process.env.LIVELY_HARNESS || "lively"}@${hostLabel()}`;
+  // ① start — 404/501/비-JSON/500 이면 폴백(구 서버).
+  let start;
+  try {
+    const res = await fetch(gw + "/cli/device/start", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code_challenge: s256(verifier), label }),
+    });
+    if (res.status === 404 || res.status === 501 || res.status === 500) return "unsupported";
+    const text = await res.text();
+    try { start = JSON.parse(text); } catch { return "unsupported"; } // 비-JSON(로그인 HTML 등) → 폴백
+    if (!res.ok || !start.device_code) return "unsupported";
+  } catch (e) {
+    // 네트워크 실패는 폴백이 아니라 진짜 오류(주소·연결) — 명확히 알린다.
+    die(`게이트웨이에 연결하지 못했습니다 (${e.message}) — 주소·네트워크를 확인하세요: ${gw}`);
+  }
+
+  // ② URL·코드 먼저 출력(브라우저 오픈은 순수 부가).
+  say(`\n${bold("라이블리 로그인")}  ${dim(gw)}`);
+  say("  아래 주소를 브라우저에서 열어 승인하세요:");
+  say("    " + bold(start.verification_uri));
+  say("    코드: " + bold(start.user_code));
+  say(dim("  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"));
+  openBrowser(start.verification_uri_complete || start.verification_uri);
+  say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
+
+  // ③ 폴 루프 — 전송오류 내성(백오프 계속), 종료는 명시적 denied/expired/invalid 만.
+  let interval = Math.max(2, Number(start.interval) || 5);
+  const deadline = Date.now() + (Number(start.expires_in) || 900) * 1000;
+  for (;;) {
+    await sleep(interval * 1000);
+    if (Date.now() > deadline) die("코드가 만료됐습니다 — `lively login` 을 다시 실행하세요.");
+    let status, body;
+    try {
+      const res = await fetch(gw + "/cli/device/poll", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: start.device_code, code_verifier: verifier }),
+      });
+      status = res.status;
+      const text = await res.text();
+      try { body = JSON.parse(text); } catch { body = null; } // 비-JSON(Caddy 502 등) → 일시 오류
+    } catch { status = 0; body = null; } // ECONNREFUSED·타임아웃 등 → 일시 오류
+    if (status === 200 && body?.token) return { token: body.token, scopes: body.scopes || [] };
+    if (status === 202) continue;                                  // authorization_pending
+    if (status === 429) { interval = (Number(body?.interval) || interval) + 5; continue; } // slow_down
+    if (status === 403) die("승인이 거부됐습니다.");
+    if (status === 410 || status === 401) die("코드가 만료됐습니다 — `lively login` 을 다시 실행하세요.");
+    // 그 외(0·5xx·비-JSON) = 일시 오류 → 백오프 후 계속(게이트웨이 재시작 중일 수 있음, DB 행은 살아있음).
+  }
+}
+
+// 호스트 라벨(승인 화면 표시용, 자기주장 값) — 서버가 [\w .@-] 로 제한한다.
+function hostLabel() {
+  try { return String(spawnSync("hostname", [], { encoding: "utf8" }).stdout || "").trim().split(".")[0] || "내PC"; }
+  catch { return "내PC"; }
+}
+
+async function cmdLogin(opts) {
+  if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
+  const gw = gateway();
+  if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
+
+  // ① --token / LIVELY_TOKEN — CI·프로비저닝 탈출구(디바이스 흐름 건너뜀).
+  const explicit = opts.token || (process.env.LIVELY_TOKEN || "").trim();
+  if (explicit) return validateAndStore(gw, String(explicit).trim());
+
+  // ② 비대화형(TTY 없음)인데 토큰도 없음 → 명확 안내.
+  if (!interactive()) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
+
+  // ③ 기본: 브라우저 디바이스 흐름. 서버가 모르면(구 서버·롤백) 토큰 가림입력으로 폴백.
+  const dev = await deviceLogin(gw);
+  if (dev === "unsupported") {
+    info("이 게이트웨이는 브라우저 로그인을 아직 지원하지 않습니다 — 토큰 입력으로 진행합니다.");
+    return loginWithPastedToken(gw);
+  }
+  // ④ 저장 전 신원 확인(역방향 피싱 방어, R2-F1) — 불변 email 로. 확인 통과 후에만 저장.
+  const me = await validateAndStore(gw, dev.token, { store: false });
+  const who = me?.email || me?.id || "구성원";
   say("");
-  ok(`${bold(me?.display_name || me?.id || "구성원")} 님으로 인증됐습니다.`);
-  info(`토큰 저장: ~/.lively/token (0600) · 게이트웨이: ${gw}`);
+  const yes = await askYesNo(`  ${bold(who)} 로 로그인됩니다. 계속할까요?`, true);
+  if (!yes) die("이 로그인은 당신이 시작한 게 아닐 수 있습니다 — 저장을 취소했습니다.", 1);
+  writeLively("token", dev.token);
+  writeLively("gateway-url", gw);
+  ok(`${bold(who)} 님으로 로그인됐습니다. (토큰 저장: ~/.lively/token)`);
   return me;
 }
 

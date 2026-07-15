@@ -73,7 +73,8 @@ import { listTableNames, listColumnsMeta } from "../db/catalog.js";
 import { refreshSources, listSourceConfigs } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../db/policy.js";
 import { isSystemDeniedTable } from "../db/firewall.js";
-import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../auth/local-accounts.js";
+import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials, verifyOwnPassword } from "../auth/local-accounts.js";
+import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../org/device-auth.js";
 // 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
 import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfigPatch } from "../v6/embedding-provider.js";
@@ -745,6 +746,56 @@ export const deliveryCapabilities: Capability[] = [
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
       const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
       return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+    }),
+
+  // ── CLI 디바이스 로그인 승인 (#880) — 브라우저에서 CLI 를 승인한다. lookup/approve/deny. ──
+  //  ⚠ 정적 토큰 금지(회수불가 → self-mint 세탁 방지, delivery token/self 와 동형). 세션·회수가능 db 토큰만.
+  //  scope-null capability 라 web.ts B3/B5 게이트가 안 걸린다 → 여기서 tokenSource·rate-limit 직접 강제.
+  restRead("device_lookup", "디바이스 승인 대기 조회",
+    "user_code 로 승인 대기 중인 CLI 로그인 요청을 조회한다(승인 화면 표시용). pending·미만료만.",
+    [{ method: "GET", paths: ["/api/ui/cli/device/lookup"], parse: (req) => ({ code: (req.query?.code ?? "") }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 승인할 수 없습니다");
+      if (!checkDeviceRate(user.userId)) throw new HttpError(429, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요");
+      const r = await lookupDeviceAuth(String(input.code ?? ""));
+      if (!r) throw new HttpError(404, "해당 코드의 대기 중인 로그인이 없습니다(만료됐거나 잘못된 코드).");
+      return r;
+    }),
+
+  restRead("device_approve", "디바이스 로그인 승인",
+    "브라우저에서 CLI 로그인을 승인한다. member_id·scope 는 principal 강제. include_control_plane=true(관리권한 포함)는 비밀번호 재확인(step-up) 필요.",
+    [{ method: "POST", paths: ["/api/ui/cli/device/approve"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 승인할 수 없습니다");
+      if (!checkDeviceRate(user.userId)) throw new HttpError(429, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요");
+      const userCode = str(input.user_code, "user_code", 20);
+      const includeControlPlane = input.include_control_plane === true;
+      // step-up: control-plane 을 실제로 실을 수 있는 멤버(위험 scope 보유)만 비밀번호 재확인. 비번 없는 멤버
+      //  (프로비저닝·향후 SSO)는 세션 자체가 신선도 증거 → 통과(비번을 유일 게이트로 두면 잠김, 설계 R2-F3).
+      const memberScopes = Array.isArray(user.scopes) ? user.scopes : [];
+      const hasDangerous = memberScopes.some((s) => DANGEROUS_SCOPES.has(s as Scope));
+      if (includeControlPlane && hasDangerous && await hasCredential(user.userId)) {
+        const pw = typeof input.password === "string" ? input.password : "";
+        if (!pw || !(await verifyOwnPassword(user.userId, pw))) {
+          throw new HttpError(403, "관리 권한 포함 승인은 비밀번호 재확인이 필요합니다.");
+        }
+      }
+      const ok = await approveDeviceAuth(userCode, user.userId, memberScopes, includeControlPlane);
+      if (!ok) throw new HttpError(410, "이미 처리됐거나 만료된 코드입니다.");
+      return { ok: true };
+    }),
+
+  restRead("device_deny", "디바이스 로그인 거부",
+    "브라우저에서 CLI 로그인 요청을 거부한다.",
+    [{ method: "POST", paths: ["/api/ui/cli/device/deny"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 거부할 수 없습니다");
+      if (!checkDeviceRate(user.userId)) throw new HttpError(429, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요");
+      await denyDeviceAuth(str(input.user_code, "user_code", 20));
+      return { ok: true };
     }),
 
   // ── 내 온보딩 현황 (#846/850) — 웹 #/start 페이지와 AI 스킬이 **같은 함수**를 읽는다(드리프트 0). ──

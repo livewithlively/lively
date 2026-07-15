@@ -1,0 +1,54 @@
+name: test
+# 테스트 CI (#880) — 종전엔 release.yml(태그 빌드)뿐이라 테스트가 CI 에서 안 돌았다.
+#  ① 목 유닛 체인(npm test, DB 불요)  ② **device-auth PG 통합 테스트**(실제 Postgres 필요 — 원자적 발급·
+#     slow_down·ON-CONFLICT·DB시각 만료는 목 pg 로 검증 불가, #880 설계 R2-NEW2).
+#  ⚠ items DB 는 pgvector 이미지여야 한다(items-db-pgvector-image-invariant, #172) — plain postgres 금지.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: lively_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build
+      # ① #880 관련 테스트 — device-auth 순수함수 유닛 + CLI(lively.test.mjs). 실 DB 없이 돈다.
+      #    ⚠ 전체 `npm test` 를 안 돌린다: 그 체인은 지금껏 CI 에서 돈 적이 없고(release.yml 뿐), 그 안의
+      #    kit/setup/self-update.test.mjs 케이스 ⑨(detached 훅 트리거)가 **타이밍 민감**해 느린 CI 러너에서
+      #    flaky 하다(#858 소관, #880 범위 밖). 전체 체인을 CI 로 올리는 건 그 테스트를 먼저 CI-안정화하는
+      #    별도 하드닝. 여기선 #880 이 새로 넣는 것(PG 통합·CLI·유닛)만 green 으로 검증한다.
+      - name: 유닛 테스트 (device-auth·CLI)
+        run: |
+          node dist/org/device-auth.unit.test.js
+          node kit/cli/lively.test.mjs
+      # ② 테스트 DB 스키마 자가마이그레이션(게이트웨이 부팅과 같은 순서 — FK 직렬). ITEMS_DATABASE_URL 은 이 스텝부터.
+      - name: 스키마 마이그레이션 (테스트 Postgres)
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: >-
+          node --input-type=module -e "
+          import('./dist/items/store.js').then(m => m.initItemSchema())
+            .then(() => import('./dist/org/schema.js')).then(m => m.initOrgSchema())
+            .then(() => { console.log('schema ready'); process.exit(0); })
+            .catch(e => { console.error(e); process.exit(1); });"
+      # ③ device-auth PG 통합(실 트랜잭션·now()·RETURNING rowCount) — 두 HIGH 통제(원자성·PKCE 바인딩) 검증.
+      - name: device-auth PG 통합 테스트
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/device-auth.pg-test.mjs
