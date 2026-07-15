@@ -25,7 +25,20 @@
   .cell-head a { color: var(--fg-dim); text-decoration: none; font-size: 11.5px; white-space: nowrap; }
   .cell-head a:hover { color: var(--accent); }
   .cell iframe { flex: 1; width: 100%; border: 0; min-height: 0; background: #1e1e2e; }
+  .cell.active { box-shadow: inset 0 0 0 2px var(--accent); }        /* 지금 입력 중인 세션 강조(#req) */
+  .cell.active .cell-head .lbl { color: var(--accent); }
   #empty { margin: auto; color: var(--fg-dim); font-size: 14px; }
+  /* 첫 진입 안내 팝업(#req) — 세션 이동 단축키 소개. '다시 보지 않기'로 localStorage 영속. */
+  #help-ov { position: fixed; inset: 0; background: rgba(10,14,22,.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+  #help-box { max-width: 430px; width: calc(100% - 32px); background: var(--bar); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 16px; box-shadow: 0 16px 48px rgba(10,14,22,.4); }
+  #help-box h2 { margin: 0 0 12px; font-size: 16px; }
+  #help-box p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.65; color: var(--fg-dim); }
+  #help-box kbd { font: inherit; font-size: 12px; font-weight: 700; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  #help-box .note { font-size: 12px; color: var(--fg-dim); }
+  #help-box .help-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+  #help-box label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--fg-dim); cursor: pointer; user-select: none; }
+  #help-box .help-close { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 18px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; cursor: pointer; }
+  #help-box .help-close:hover { filter: brightness(1.06); }
 </style>
 </head>
 <body>
@@ -60,6 +73,7 @@
   grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
 
   var nodes = (p.get('nodes') || '').split(','); // 세션별 실행 노드(#869) — sessions 와 인덱스 정렬, 빈 값=중앙
+  var frames = [], cells = [], current = 0; // 세션 간 이동(#req)용 — iframe·셀 수집 + 현재 활성 셀
   ids.forEach(function (id, i) {
     var label = labels[i] || id;
     var url = '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(labels[i] || '')
@@ -74,12 +88,78 @@
     frame.setAttribute('allow', 'clipboard-read; clipboard-write');
     cell.appendChild(head); cell.appendChild(frame);
     grid.appendChild(cell);
+    frames.push(frame); cells.push(cell);
   });
 
   document.getElementById('btn-close').onclick = function () { window.close(); };
   document.getElementById('btn-reload').onclick = function () {
     [].forEach.call(grid.querySelectorAll('iframe'), function (f) { try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; } });
   };
+
+  // ── 세션 간 포커스 이동(#req) — Ctrl+Tab(다음)/Ctrl+Shift+Tab(이전) ──────────────────────────
+  //  각 셀은 그 자체가 xterm 터미널(same-origin iframe)이라 plain Tab 은 셸 자동완성용이라 못 쓴다.
+  //  부모가 각 iframe 문서에 **capture 단계** keydown 을 달아 xterm 보다 먼저 가로채 preventDefault → 다음 셀 포커스.
+  //  (Ctrl+Tab 을 브라우저 탭 전환으로 가로채는 브라우저에선 안 먹을 수 있어 — 그땐 셀 클릭으로 이동. 팝업에 안내.)
+  function setActive(i, focus) {
+    if (i < 0 || i >= cells.length) return;
+    current = i;
+    for (var k = 0; k < cells.length; k++) cells[k].classList.toggle('active', k === i);
+    if (focus) {
+      try {
+        frames[i].contentWindow.focus();
+        var doc = frames[i].contentDocument;
+        var ta = doc && (doc.querySelector('.xterm-helper-textarea') || doc.querySelector('textarea'));
+        if (ta) ta.focus();
+      } catch (e) { /* same-origin 이 정상 — 접근 실패 시 조용히 무시 */ }
+    }
+  }
+  function cycle(delta) {
+    if (cells.length < 2) return;
+    setActive(((current + delta) % cells.length + cells.length) % cells.length, true);
+  }
+  function onKey(e) {
+    if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) { // Ctrl+Tab / Ctrl+Shift+Tab
+      e.preventDefault(); e.stopPropagation();
+      cycle(e.shiftKey ? -1 : 1);
+    }
+  }
+  document.addEventListener('keydown', onKey, true);
+  frames.forEach(function (f, i) {
+    var wire = function () {
+      try {
+        var doc = f.contentDocument; if (!doc) return;
+        doc.addEventListener('keydown', onKey, true);                          // xterm 보다 먼저 가로채기
+        doc.addEventListener('mousedown', function () { setActive(i, false); }, true); // 클릭한 세션을 현재로
+      } catch (e) { /* */ }
+    };
+    f.addEventListener('load', wire);
+    try { if (f.contentDocument && f.contentDocument.readyState === 'complete') wire(); } catch (e) { /* */ }
+  });
+  setActive(0, false); // 첫 셀 강조(포커스는 사용자 클릭 전까지 뺏지 않음)
+
+  // ── 첫 진입 안내 팝업(#req) — '다시 보지 않기' 체크 시 다시 안 뜸(localStorage 영속) ──────────────
+  var HELP_KEY = 'lively_tgrid_nav_help_v1';
+  if (localStorage.getItem(HELP_KEY) !== '1') {
+    var ov = document.createElement('div'); ov.id = 'help-ov';
+    ov.innerHTML =
+      '<div id="help-box" role="dialog" aria-modal="true" aria-labelledby="help-t">'
+      + '<h2 id="help-t">여러 세션, 키보드로 오가기</h2>'
+      + '<p>지금 <b>' + n + '개 세션</b>이 한 그리드에 있어요. 한 세션에서 입력하다가 다음 세션으로 넘어가려면:</p>'
+      + '<p><kbd>Ctrl</kbd>+<kbd>Tab</kbd> 다음 세션 &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> 이전 세션</p>'
+      + '<p class="note">셀을 클릭해도 그 세션으로 이동해요. (일부 브라우저가 Ctrl+Tab을 탭 전환으로 가로채면 셀 클릭을 쓰세요. 일반 Tab은 셸 자동완성용이라 쓰지 않아요.)</p>'
+      + '<div class="help-row"><label><input type="checkbox" id="help-dontshow"> 다시 보지 않기</label>'
+      + '<button class="help-close" id="help-close">닫기</button></div>'
+      + '</div>';
+    document.body.appendChild(ov);
+    var closeHelp = function () {
+      try { if (document.getElementById('help-dontshow').checked) localStorage.setItem(HELP_KEY, '1'); } catch (e) { /* */ }
+      ov.remove();
+    };
+    document.getElementById('help-close').onclick = closeHelp;
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeHelp(); });          // 배경 클릭 닫기
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); closeHelp(); } });
+    document.getElementById('help-close').focus();
+  }
 })();
 </script>
 </body>
