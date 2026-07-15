@@ -836,7 +836,7 @@ const projectLinkProjectV6: Capability = {
 // ── 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다 ──
 //
 // 왜 도구인가(무인 데몬이 아니라): 되돌릴 수 없는 삭제를 자동 프로세스에 맡기지 않는다. **맥락을 아는 주체**
-//  (프로젝트를 마무리하는 에이전트/사람)가 생애주기 경계에서 호출한다 — 지식 project-closeout-routine 의 한 스텝.
+//  (프로젝트를 마무리하는 에이전트/사람)가 생애주기 경계에서 호출한다 — project-closeout 스킬의 한 스텝.
 //  단 **삭제 규칙은 코드가 강제**한다(LLM 이 rm -rf 를 즉흥적으로 치는 것보다 안전): gitignored ∩ 알려진 파생물만,
 //  시크릿·로컬데이터는 보호, 미푸시·더티·활성세션이면 거부. 자세한 근거는 src/workspace-reclaim.ts 머리주석.
 const workspaceReclaim: Capability = {

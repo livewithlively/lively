@@ -2,9 +2,9 @@
 //  않게, 기동시(org+v6 스키마 마이그레이션 뒤) idempotent 하게 시딩한다. (#713)
 //
 //  배경: org 콘텐츠(지식·커스텀훅·하네스자산)는 설치 번들에 안 굽고 게이트웨이 DB 에서 라이브 fetch 로
-//   전달된다(2026-06-24 컷오버). 그래서 신규 고객 게이트웨이엔 이 콘텐츠가 0 이라, 코드가
-//   knowledge_get('project-closeout-routine')(모든 프로젝트 AGENTS.md) 이나 도메인맵 is-부트스트랩의
-//   런북 2개를 가리켜도 댕글링이 됐다. 커스텀훅·스킬도 라이블리 게이트웨이엔 전부 있으나 고객사엔 0 이었다.
+//   전달된다(2026-06-24 컷오버). 그래서 신규 고객 게이트웨이엔 이 콘텐츠가 0 이라, 코드가 이름으로 전제하는
+//   자산(모든 프로젝트 AGENTS.md 가 가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개)을
+//   가리켜도 댕글링이 됐다. 커스텀훅·스킬도 라이블리 게이트웨이엔 전부 있으나 고객사엔 0 이었다.
 //
 //  시맨틱(org_tool 시드와 동일 규약 — schema.ts): **신규 설치 기본값만**. 이미 있는 행은 절대 안 건드린다
 //   (운영자 토글·편집 보존). 그래서:
@@ -17,12 +17,16 @@
 //  멱등: 두 번째 실행부터는 전부 present → 0 삽입. 새 디폴트가 추가되면 그 행만 다음 update(재기동)에 유입된다.
 //  비치명: 시딩 실패는 게이트웨이 기동을 막지 않는다(호출부가 .catch — baseline 시드와 동일 best-effort).
 import { itemsPool } from "../items/store.js";
-import { getOrgHook, upsertOrgHook, getOrgHarnessAsset, upsertOrgHarnessAsset,
-  type WriteCtx, type HookHarness, type AssetKind } from "./store.js";
+import { getOrgHook, upsertOrgHook, assetContentHash,
+  type WriteCtx, type HookHarness } from "./store.js";
 import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-content.js";
 import { logger } from "../log.js";
 
-export interface SeedResult { hooks: number; skills: number; knowledge: number }
+export interface SeedResult { hooks: number; skills: number; knowledge: number; knowledgeRetired?: number }
+
+// 은퇴한 시드 지식 — 더는 시드가 아닌(예: 스킬로 이동한) 이름. seedDefaultContent 가 손 안 댄 시드행
+//  (updated_by='system')만 회수해 orphan/이중출처를 막는다(#878). 이동 시 여기 이름을 넣는다.
+const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → project-closeout 스킬로 이동(#878)
 
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
@@ -42,15 +46,30 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
-  // ── 하네스 자산/스킬(org_harness_asset) — 없을 때만 삽입 ──
+  // ── 하네스 자산/스킬(org_harness_asset) — 신규 삽입 + **손 안 댄 시드는 갱신**(지식과 대칭, #878) ──
+  //  종전엔 "없을 때만 삽입(존재가드)"이라, 릴리스로 스킬 본문(절차)을 고쳐도 **이미 뜬 고객 박스는 영원히
+  //   옛 본문**을 봤다(지식이 #813 전에 겪은 병과 동형 — 코드가 이름으로 전제하는 스킬 project-closeout 은
+  //   코드와 함께 진화해야 한다). 그래서 지식과 같은 "손 안 댄 것만 갱신"으로 통일한다:
+  //   · updated_by='system' = 심은 뒤 아무도 안 건드림 → 갱신 안전. 운영자·에이전트가 한 번 편집하면 영구 보존.
+  //   · content_hash(assetContentHash — 관리메타 label·sort·enabled 제외)가 달라질 때만 UPDATE(불필요 bump 방지).
+  //   · **enabled·target_members 는 SET 에서 제외** — 운영자 토글(마스터킬)·타깃 지정을 재시딩이 되살리지
+  //     않도록 보존한다(종전 "없을 때만"이 지키던 축 — 지식엔 없는 축이라 여기서만 명시 보존).
+  //  훅(org_hook)은 여전히 "없을 때만"(위) — run-custom 이 content_hash 로 enforcement 무결성을 게이팅해 별도 판단이 필요.
   for (const s of DEFAULT_SKILLS) {
     try {
-      if (await getOrgHarnessAsset(s.id)) continue;
-      await upsertOrgHarnessAsset({
-        id: s.id, kind: s.kind as AssetKind, label: s.label, harness: s.harness as HookHarness, description: s.description,
-        body: s.body, frontmatter: s.frontmatter, paired_hook_id: s.paired_hook_id, enabled: s.enabled, sort: s.sort,
-      }, ctx);
-      res.skills++;
+      const contentHash = assetContentHash({ kind: s.kind, harness: s.harness, description: s.description, body: s.body, frontmatter: s.frontmatter });
+      const r = await itemsPool.query(
+        `INSERT INTO org_harness_asset(id, kind, label, harness, description, body, frontmatter, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by)
+           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,1,$11,'system',now(),'system')
+         ON CONFLICT (id) DO UPDATE
+           SET kind = EXCLUDED.kind, label = EXCLUDED.label, harness = EXCLUDED.harness,
+               description = EXCLUDED.description, body = EXCLUDED.body, frontmatter = EXCLUDED.frontmatter,
+               paired_hook_id = EXCLUDED.paired_hook_id, sort = EXCLUDED.sort,
+               content_hash = EXCLUDED.content_hash, version = org_harness_asset.version + 1, updated_at = now()
+         WHERE org_harness_asset.updated_by = 'system'
+           AND org_harness_asset.content_hash IS DISTINCT FROM EXCLUDED.content_hash`,
+        [s.id, s.kind, s.label, s.harness, s.description, s.body, JSON.stringify(s.frontmatter), s.paired_hook_id, s.enabled, s.sort, contentHash]);
+      if (r.rowCount) res.skills++;
     } catch (err) {
       logger.warn({ err, id: s.id }, "디폴트 스킬 시딩 실패(건너뜀) — 나머지는 계속");
     }
@@ -68,7 +87,8 @@ export async function seedDefaultContent(): Promise<SeedResult> {
   //   · `updated_by='system'` = 우리가 심은 뒤 아무도 안 건드림 → 갱신 안전.
   //   · 운영자·에이전트가 한 번이라도 편집하면 updated_by 가 그 사람 id 로 바뀐다 → **그 행은 영구 보존**.
   //   · 본문이 실제로 달라질 때만 UPDATE(불필요한 version bump·감사 노이즈 방지).
-  //  훅·스킬은 종전 시맨틱("없을 때만") 유지 — content_hash·토글 상태가 얽혀 있어 별도 판단이 필요하다.
+  //  스킬(위)도 #878 에서 같은 "손 안 댄 것만 갱신"으로 통일했다(enabled·target_members 는 보존). 훅만 "없을
+  //   때만" 유지 — run-custom 이 content_hash 로 enforcement 무결성을 게이팅해 별도 판단이 필요하다.
   for (const k of DEFAULT_KNOWLEDGE) {
     try {
       const r = await itemsPool.query(
@@ -89,8 +109,23 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
-  if (res.hooks || res.skills || res.knowledge) {
-    logger.info(res, "디폴트 콘텐츠 시딩(신규 설치 기본값 — 없던 것만 삽입)");
+  // ── 은퇴 시드 회수(#878) — 시드에서 빠진 지식(예: 스킬로 이동)의 '손 안 댄' 행을 회수한다. ──
+  //  "없을 때만/갱신만" 시맨틱은 시드에서 빠진 이름을 prune 하지 않아, 이미 뜬 박스에 옛 행이 orphan 으로
+  //   영구 잔존한다(is_wiki 면 WIKI 인덱스·AGENTS 포인터로 계속 노출 = 새 위치와 이중출처). 그래서 명시적
+  //   은퇴 목록의 행을 **운영자가 편집하지 않은 것(updated_by='system')만** 회수한다 — 편집분은 그들 자산이라
+  //   보존(수동 정리 몫). FK 가 전부 ON DELETE CASCADE(knowledge_category·project_knowledge·activity_knowledge·
+  //   knowledge_link)라 정션도 함께 정리된다.
+  for (const name of RETIRED_SEED_KNOWLEDGE) {
+    try {
+      const r = await itemsPool.query(`DELETE FROM knowledge WHERE name = $1 AND updated_by = 'system'`, [name]);
+      if (r.rowCount) res.knowledgeRetired = (res.knowledgeRetired ?? 0) + r.rowCount;
+    } catch (err) {
+      logger.warn({ err, name }, "은퇴 시드 지식 회수 실패(건너뜀) — 나머지는 계속");
+    }
+  }
+
+  if (res.hooks || res.skills || res.knowledge || res.knowledgeRetired) {
+    logger.info(res, "디폴트 콘텐츠 시딩(신규=삽입 · 손 안 댄 시드=갱신 · 은퇴 시드=회수)");
   }
   return res;
 }

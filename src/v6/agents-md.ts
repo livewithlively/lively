@@ -16,11 +16,13 @@ const LEGACY_DEFAULT_RULES = "여기에 이 프로젝트에서 AI가 지켰으�
 
 // 프로젝트 마무리(close-out) 루틴 — 모든 프로젝트 공통이라 digest(자동 섹션)에 박는다. 프로젝트 폴더에서만 노출돼
 //  '플젝 세션일 때만' 보이고(플젝 밖 0비용), 전역 always 주입의 과주입·미작동(라이브 템플릿 ${rules} 부재)을 피한다.
-//  단일출처: 절차·인자는 WIKI 권위문서(project-closeout-routine)에만 두고, 여기엔 흐름 한 줄 + 포인터만 — 드리프트 표면 제거(#334 후속).
+//  단일출처: 절차·인자는 project-closeout 스킬 본문에만 두고, 여기엔 흐름 한 줄 + 스킬 트리거만 — 드리프트 표면 제거(#334 후속).
+//  closeout 은 #878 에서 지식→스킬로 이동(진화전파·발견성 정밀화). done 순간은 프로젝트 세션(=이 AGENTS.md 가 뜨는 그 세션)이라
+//  여기서 스킬을 가리키는 게 정확한 타겟 발견 경로다(전역 WIKI 인덱스·벡터회수보다 노이즈 적음).
 const CLOSEOUT_SECTION = [
   "## 마무리 (이 프로젝트를 끝낼 때 — done 처리 전후)",
   "본문 보강(원문유지·append) → 산출/필요지식 연결 → 태스크·프로젝트 `done` → 범위 밖 후속은 **사용자에게 물어** 새 프로젝트로.",
-  "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 `knowledge_get('project-closeout-routine')` 를 따른다.",
+  "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 **`project-closeout` 스킬**을 따른다(마무리·done 처리 시 이 스킬을 invoke).",
 ].join("\n");
 
 function buildProjectDigest(p: any): string {
