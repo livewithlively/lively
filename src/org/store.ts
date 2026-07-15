@@ -369,6 +369,24 @@ export async function setMemberOnboardingStep(
   return (r.rows[0].onboarding ?? {}) as Record<string, ReportedStep>;
 }
 
+// ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
+//  ⚠ 관측이지 보고가 아니다(onboarding 과 별 컬럼). **메타만**(id·kind·managed) — 스킬 본문·메모리는 절대 안 담는다.
+export interface HarnessSnapshotAsset { id: string; kind: string; managed: boolean }
+export interface HarnessSnapshot { at?: string; host?: string; harness?: string; assets: HarnessSnapshotAsset[] }
+
+export async function getHarnessSnapshot(id: string): Promise<HarnessSnapshot | null> {
+  const r = await itemsPool.query(`SELECT harness_snapshot FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.harness_snapshot as unknown;
+  if (!v || typeof v !== "object" || Array.isArray(v) || !Array.isArray((v as HarnessSnapshot).assets)) return null;
+  return v as HarnessSnapshot;
+}
+
+export async function setHarnessSnapshot(id: string, snap: HarnessSnapshot): Promise<void> {
+  const r = await itemsPool.query(
+    `UPDATE org_member SET harness_snapshot=$2::jsonb WHERE id=$1 RETURNING id`, [id, JSON.stringify(snap)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+}
+
 // 이메일로 멤버 id 조회(대소문자 무시) — 이메일=로그인 키라 유일성 검증용. 없으면 null.
 export async function memberIdByEmail(email: string): Promise<string | null> {
   const r = await itemsPool.query(
