@@ -1492,7 +1492,7 @@ export const deliveryCapabilities: Capability[] = [
 
   // ── MCP 서버 레지스트리 ──
   restRead("org_mcp_servers", "MCP 서버 목록 조회",
-    "활성 MCP 서버 목록 — register-clients/세션훅이 fetch해 멤버 하네스에 등록(scope null). 시크릿 없음(auth_env=변수명).",
+    "활성 MCP 서버 목록(client+proxy 전체) — 관리탭 자격화면 상태칩(catalogStatusCard)이 프리셋 대비 '등록됨' 표시에 쓴다. ⚠ 클라 직접등록(레인 C) 소스가 아니다 — 그건 발행 번들 .lively/mcp-servers.json(publish.ts→toClientBundleServers, mode='client'만)이다. 여기에 클라 등록 consumer 를 붙이려면 반드시 mode='client' 로 필터(proxy=게이트웨이 대리, 직결 금지 — #894). 시크릿 없음(auth_env=변수명).",
     [{ method: "GET", paths: ["/api/ui/org/mcp-servers"], parse: () => ({}) }],
     async () => {
       const all = await listMcpServers();
