@@ -324,6 +324,9 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .pc-chip.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d59a; }
 .pc-chip.muted { background: transparent; border-style: dashed; opacity: .75; }
 .sync-warn { padding: 10px 12px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: #6b4e00; line-height: 1.5; }
+.harness-click { cursor: pointer; border-radius: 8px; margin: -4px -6px; padding: 4px 6px; transition: background .12s; }
+.harness-click:hover { background: var(--bg-tint, #F1F5FC); }
+.harness-click:hover .mini-title { text-decoration: underline; text-decoration-color: var(--line-net-2); text-underline-offset: 3px; }
 .md-p { margin: 0 0 12px; }
 .md-h { color: var(--ink); font-weight: 800; line-height: 1.35; margin: 22px 0 8px; }
 .md-h1 { font-size: 19px; }

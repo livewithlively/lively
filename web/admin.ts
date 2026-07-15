@@ -5170,15 +5170,15 @@ async function myAssetsSection(detail) {
       seg.append(opt('default', '기본' + (it.byDefault ? '(켬)' : '(끔)')), opt('on', '켜기'), opt('off', '끄기'));
       const kindLabel = HARNESS_KIND_LABEL[kind] || kind;
       const desc = String(it.description || '');
-      const nameLink = el('a', { href: '#', class: 'mini-title', style: 'text-decoration:none' }, el('span', { text: it.label || it.id }),
+      const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }),
         el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' }));
-      nameLink.addEventListener('click', (ev: any) => { ev.preventDefault(); showHarnessDetail(kind, it.id, it.label || it.id); });
       const { row: chipRow, missing } = pcChips(it, kind);
-      return { node: el('div', { class: 'mini-row', style: 'display:flex; align-items:flex-start; gap:12px;' },
-        el('div', { style: 'flex:1; min-width:0;' }, nameLink,
-          el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') }),
-          el('div', { style: 'margin-top:6px' }, chipRow)),
-        seg), missing };
+      // 카드 내용 영역(제목·설명·칩) 전체가 클릭 대상 — 제목 글자만이 아니라. 오른쪽 버튼(seg)은 별개라 모달 안 뜸.
+      const left = el('div', { class: 'harness-click', style: 'flex:1; min-width:0;', title: '눌러서 내용 보기' }, titleEl,
+        el('div', { class: 'mini-meta', text: kindLabel + (desc ? ' · ' + (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '') }),
+        el('div', { style: 'margin-top:6px' }, chipRow));
+      left.addEventListener('click', () => showHarnessDetail(kind, it.id, it.label || it.id));
+      return { node: el('div', { class: 'mini-row', style: 'display:flex; align-items:flex-start; gap:12px;' }, left, seg), missing };
     };
 
     const rows: any[] = [];
