@@ -108,7 +108,7 @@ async function renderMyDashboard(view) {
     const listsP = api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []);
     const strip = el('div', { class: 'dash-strip' }, el('div', {}, el('div', { class: 'dash-hi', text: greeting() + ', ' + myDisplayName() + '님' }), el('div', { class: 'dash-date' }, todayLabel(), sepEl, summaryEl)), el('div', { class: 'dash-acts' }, obSlot, 
     // #req 탭 이동 대신 대시보드 위에 생성 팝업을 그대로 띄운다(프로젝트=dashCreateProject, 세션=openTermCreateForm). 생성 후 대시보드 재렌더로 즉시 반영.
-    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(null, null, () => renderMyDashboard(view)) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 세션', onclick: async (e) => {
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(null, null, () => renderMyDashboard(view)) }), el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 AI 세션', onclick: async (e) => {
             const b = e.currentTarget;
             b.disabled = true;
             try {

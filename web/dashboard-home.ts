@@ -99,7 +99,7 @@ async function renderMyDashboard(view) {
       obSlot,
       // #req 탭 이동 대신 대시보드 위에 생성 팝업을 그대로 띄운다(프로젝트=dashCreateProject, 세션=openTermCreateForm). 생성 후 대시보드 재렌더로 즉시 반영.
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 프로젝트', onclick: () => dashCreateProject(null, null, () => renderMyDashboard(view)) }),
-      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 세션', onclick: async (e: any) => {
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '+ 새 AI 세션', onclick: async (e: any) => {
         const b = e.currentTarget; b.disabled = true;
         try { const cfg = await api('/api/ui/terminal/config'); openTermCreateForm(cfg, null, () => renderMyDashboard(view)); }
         catch { location.hash = '#/terminal'; }
