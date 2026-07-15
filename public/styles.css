@@ -2239,6 +2239,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .ft-img:not(.loaded) img { opacity: 0; }
 .proj-file-card-nm { font-size: 12px; color: var(--ink); text-align: center; line-height: 1.35; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%; padding: 0 2px; }
 .proj-file-card-sz { font-size: 10.5px; color: var(--muted-2); }
+.proj-file-card-dt { font-size: 10px; color: var(--muted-2); opacity: .85; font-variant-numeric: tabular-nums; } /* 파일 수정일(#877) — 크기 아래 한 줄 더, 더 옅게 */
 /* 업로드 중 카드 — 비활성 아이콘 + 실시간 % + 진행 막대 */
 .proj-file-card.uploading { cursor: default; pointer-events: none; }
 .proj-file-card.uploading .proj-file-card-ic { opacity: .3; filter: grayscale(1); }
@@ -2275,6 +2276,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-file-lnm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-file-lnm.is-dir { font-weight: 600; }
 .proj-file-lsz { flex: none; min-width: 62px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.proj-file-ldt { flex: none; min-width: 88px; text-align: right; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; } /* 파일 수정일 열(#877) */
 .proj-file-lacts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; margin-left: 2px; }
 .proj-file-lrow:hover .proj-file-lacts { opacity: 1; }
 /* 단색 라인 아이콘 — currentColor 상속, 획굵기만 여기서. (.proj-file-lic / .proj-file-card-ic 가 크기·색 지정) */
@@ -4850,6 +4852,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fold-grid .proj-file-card-ic { height: 54px; }
 .dash-fold-grid .proj-file-card-ic .ft-folder { width: 60px; }
 .dash-fold-grid .proj-file-card-sz { display: none; } /* 박스 미리보기는 '폴더' 캡션 생략 — 이름만(세로 압축) */
+.dash-fold-grid .proj-file-card-dt { display: none; } /* 박스 미리보기(폴더 카드)는 수정일도 생략 */
 /* 박스 폴더 카드 — 클릭 시 브라우저 열기(#672). */
 .dash-fold-grid .proj-file-card.dash-fold-open { cursor: pointer; }
 .dash-fold-grid .proj-file-card.dash-fold-open:hover { background: var(--bg-sel); }
@@ -4909,6 +4912,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-row-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-fb-row.is-dir .dash-fb-row-nm { font-weight: 600; }
 .dash-fb-row-sz { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.dash-fb-row-dt { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; } /* 파일 수정일 열(#877) */
 .dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; }
 .dash-fb-row:hover .dash-fb-actions, .dash-fb-row:focus-within .dash-fb-actions { opacity: 1; }
 /* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */

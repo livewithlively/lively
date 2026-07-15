@@ -13,7 +13,7 @@ import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 �
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
-import { UP_CONFIRM, authDownload, companyTimelineSection, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upProgress, upSend, upToast } from './projects.js';
+import { UP_CONFIRM, authDownload, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from './projects.js';
 import { openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -1761,6 +1761,9 @@ function dashFolderBrowser(root, startPath) {
             toast('올릴 파일이 없습니다', true);
             return;
         }
+        const pc = upPrecheckOverwrite(arr, (curData && curData.items) || []); // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
+        if (!pc.go)
+            return;
         if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?'))
             return;
         const dest = curPath; // 업로드 중 다른 폴더로 들어가도 '끌어다 놓은 그 폴더'로 간다
@@ -1769,7 +1772,7 @@ function dashFolderBrowser(root, startPath) {
         container.setAttribute('data-uploading', '1'); // 조작 잠금 — 진행 패널이 흐려지지 않게 aria-busy(opacity .5) 대신 이 속성
         render(null); // ⚠ 잠금은 pointer-events:none 이라 CSS 에서 .up-prog 만 되살린다(안 그러면 취소 버튼이 안 눌린다)
         const r = await upSend({
-            items: arr, emptyDirs: dirs, signal: ac.signal,
+            items: arr, emptyDirs: dirs, signal: ac.signal, overwriteNames: pc.over,
             fileUrl: (rel) => '/api/ui/terminal/browse/file?' + qp((dest ? dest + '/' : '') + rel),
             dirUrl: (d) => '/api/ui/terminal/browse/mkdir?' + qp((dest ? dest + '/' : '') + d),
             onProgress: (i, rel, pct) => { if (prog)
@@ -1907,7 +1910,7 @@ function dashFolderBrowser(root, startPath) {
     // 아이콘(카드) 뷰 항목 — 맥 데스크탑 아이콘 톤.
     const fbCard = (it) => {
         const isDir = it.type === 'dir';
-        const card = el('div', { class: 'proj-file-card dash-fb-card', title: it.name, role: 'button', tabindex: '0' }, el('div', { class: 'proj-file-card-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('div', { class: 'proj-file-card-nm', text: it.name }), el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }));
+        const card = el('div', { class: 'proj-file-card dash-fb-card', title: it.name, role: 'button', tabindex: '0' }, el('div', { class: 'proj-file-card-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('div', { class: 'proj-file-card-nm', text: it.name }), el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }), it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }) : null);
         card.addEventListener('click', (e) => { if (e.target.closest('.dash-fb-actions'))
             return; openItem(it, isDir); });
         card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
@@ -1922,7 +1925,7 @@ function dashFolderBrowser(root, startPath) {
         const isDir = it.type === 'dir';
         const row = el('div', { class: 'dash-fb-row' + (isDir ? ' is-dir' : ''), title: it.name, role: 'button', tabindex: '0' }, el('span', { class: 'dash-fb-row-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)), el('span', { class: 'dash-fb-row-nm', text: it.name }), 
         // 폴더는 반복되던 '폴더' 텍스트 대신 hover 셰브런(열기), 파일은 크기(#670).
-        isDir ? el('span', { class: 'dash-fb-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'dash-fb-row-sz', text: fmtSize(it.size) }), mkActions(it, isDir));
+        isDir ? el('span', { class: 'dash-fb-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'dash-fb-row-sz', text: fmtSize(it.size) }), el('span', { class: 'dash-fb-row-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }), mkActions(it, isDir));
         row.addEventListener('click', (e) => { if (e.target.closest('.dash-fb-actions'))
             return; openItem(it, isDir); });
         row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {

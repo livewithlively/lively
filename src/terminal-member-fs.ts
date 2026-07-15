@@ -10,8 +10,8 @@ import { wrapAsMember } from "./terminal-isolation.js";
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 const LS_JS =
   "const fs=require('fs'),p=process.argv[1],o=[];" +
-  "for(const e of fs.readdirSync(p,{withFileTypes:true})){const d=e.isDirectory();let s=0;" +
-  "if(!d){try{s=fs.statSync(p+'/'+e.name).size}catch{}}o.push({name:e.name,type:d?'dir':'file',size:s})}" +
+  "for(const e of fs.readdirSync(p,{withFileTypes:true})){const d=e.isDirectory();let s=0,m=0;" +
+  "try{const st=fs.statSync(p+'/'+e.name);m=st.mtimeMs;if(!d)s=st.size}catch{}o.push({name:e.name,type:d?'dir':'file',size:s,mtime:m})}" +
   "process.stdout.write(JSON.stringify(o))";
 const STAT_JS =
   "const fs=require('fs');try{const s=fs.statSync(process.argv[1]);" +
@@ -30,7 +30,7 @@ function collectErr(c: ChildProcess): { get: () => string } {
   return { get: () => err.trim() };
 }
 
-export interface LsEntry { name: string; type: "dir" | "file"; size: number; }
+export interface LsEntry { name: string; type: "dir" | "file"; size: number; mtime: number; }
 
 export function memberLs(osUser: string, absPath: string): Promise<LsEntry[]> {
   return new Promise((resolve, reject) => {

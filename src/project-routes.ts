@@ -57,8 +57,8 @@ function resolveIn(base: string, rel: unknown, requireFile: boolean): string {
 }
 
 // 이름에 q 가 든 파일/폴더 재귀 검색(숨김 제외, 깊이·결과 상한).
-async function searchFiles(base: string, q: string, limit = 100): Promise<Array<{ name: string; path: string; type: "dir" | "file"; size: number }>> {
-  const out: Array<{ name: string; path: string; type: "dir" | "file"; size: number }> = [];
+async function searchFiles(base: string, q: string, limit = 100): Promise<Array<{ name: string; path: string; type: "dir" | "file"; size: number; mtime: number }>> {
+  const out: Array<{ name: string; path: string; type: "dir" | "file"; size: number; mtime: number }> = [];
   const needle = q.toLowerCase();
   async function walk(dir: string, rel: string, depth: number): Promise<void> {
     if (out.length >= limit || depth > 8) return;
@@ -69,9 +69,9 @@ async function searchFiles(base: string, q: string, limit = 100): Promise<Array<
       const childRel = rel ? rel + "/" + e.name : e.name;
       const isDir = e.isDirectory();
       if (e.name.toLowerCase().includes(needle)) {
-        let size = 0;
-        if (!isDir) { try { size = (await fsp.stat(path.join(dir, e.name))).size; } catch { /* skip */ } }
-        out.push({ name: e.name, path: childRel, type: isDir ? "dir" : "file", size });
+        let size = 0, mtime = 0;
+        try { const s = await fsp.stat(path.join(dir, e.name)); mtime = s.mtimeMs; if (!isDir) size = s.size; } catch { /* skip */ }
+        out.push({ name: e.name, path: childRel, type: isDir ? "dir" : "file", size, mtime });
         if (out.length >= limit) return;
       }
       if (isDir) await walk(path.join(dir, e.name), childRel, depth + 1);
@@ -114,13 +114,13 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const abs = resolveIn(base, req.query.path, false);
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
-    const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
+    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
     for (const e of entries) {
       if (e.name.startsWith(".")) continue;
       const isDir = e.isDirectory();
-      let size = 0;
-      if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
-      items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+      let size = 0, mtime = 0;
+      try { const s = await fsp.stat(path.join(abs, e.name)); mtime = s.mtimeMs; if (!isDir) size = s.size; } catch { /* skip */ }
+      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);

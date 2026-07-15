@@ -49,12 +49,12 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const u = userOf(req);
     const { base, abs } = await resolveRootPath(u, String(req.query.root ?? ""), String(req.query.path ?? ""));
     const osUser = await userOsUser(u);
-    const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
+    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
     if (osUser) {
       await memberMkdir(osUser, base).catch(() => { /* 루트 없으면 생성 */ });
       let entries: LsEntry[] = [];
       try { entries = await memberLs(osUser, abs); } catch { entries = []; }
-      for (const e of entries) if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size });
+      for (const e of entries) if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime });
     } else {
       await fsp.mkdir(base, { recursive: true }).catch(() => { /* 개인 루트 없으면 생성 */ });
       let entries: fs.Dirent[] = [];
@@ -62,9 +62,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       for (const e of entries) {
         if (e.name.startsWith(".")) continue;
         const isDir = e.isDirectory();
-        let size = 0;
-        if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
-        items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+        let size = 0, mtime = 0;
+        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = st.mtimeMs; if (!isDir) size = st.size; } catch { /* skip */ }
+        items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
       }
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
@@ -144,20 +144,20 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   app.get("/api/ui/terminal/sessions/:id/ls", auth, wrap(async (req, res) => {
     const { base, abs } = await resolveInSession(req, false);
     const osUser = await sessionOsUser(req.params.id);
-    const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
+    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
     if (osUser) {
       let entries;
       try { entries = await memberLs(osUser, abs); } catch { throw new HttpError(404, "디렉터리 없음"); }
-      for (const e of entries) { if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size }); }
+      for (const e of entries) { if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime }); }
     } else {
       let entries: fs.Dirent[];
       try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
       for (const e of entries) {
         if (e.name.startsWith(".")) continue;
         const isDir = e.isDirectory();
-        let size = 0;
-        if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
-        items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+        let size = 0, mtime = 0;
+        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = st.mtimeMs; if (!isDir) size = st.size; } catch { /* skip */ }
+        items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
       }
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
