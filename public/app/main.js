@@ -8,6 +8,7 @@ import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } 
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850)
+import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -102,6 +103,12 @@ async function route() {
                 await renderStartMigrate(view);
             else
                 await renderStart(view);
+        }
+        else if (page === 'activate') {
+            // #/activate?code=XXXX — CLI 디바이스 로그인 승인(#880). 게이트(로그인) 뒤에 렌더되며, 딥링크의 ?code= 는
+            //  로그인 후에도 살아남는다(route 가 state.me 없으면 showGate 후 return — 해시는 보존, boot 이 재실행).
+            setActiveTab('');
+            await renderActivate(view);
         }
         else if (page === 'install') {
             // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
