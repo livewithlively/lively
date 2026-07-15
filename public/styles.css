@@ -6796,3 +6796,46 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .wk-more-btn:hover { background: color-mix(in srgb, var(--accent, #5b6cff) 16%, transparent); }
 .wk-src-count { color: var(--muted, #8a94a6); font-size: 12px; padding: 4px 0; }
 .wk-src-chan { color: var(--accent, #5b6cff); font-weight: 600; }
+
+/* ── 시작하기(#/start) 온보딩 — #/learn 과 같은 카드 언어. 인라인 스타일 대신 여기(#870). ── */
+/* 진행률 요약 카드 */
+.ob-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.ob-progress-count { font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
+.ob-progress-note { font-size: 13px; color: var(--ink-sub); }
+.ob-bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.ob-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), #3a9d6e); border-radius: 999px; transition: width .35s ease; }
+/* 배너(회사 설정 미완·준비 끝) — guide-remember 계열 틴트 박스 */
+.ob-banner { display: block; text-decoration: none; color: inherit; border-radius: 14px; padding: 14px 16px; border: 1px solid var(--line-note); }
+.ob-banner.amber { background: rgba(217,164,65,.07); border-color: rgba(217,164,65,.3); }
+.ob-banner.green { background: rgba(58,157,110,.07); border-color: rgba(58,157,110,.3); }
+.ob-banner-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ob-banner-title { font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-banner-title b { color: var(--ink); }
+a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; font-size: 13.5px; }
+.ob-banner-sub { font-size: 13px; line-height: 1.6; color: var(--ink-sub); margin: 6px 0 0; }
+/* 단계 카드 — 상태 점 + 라벨 + 뱃지 + ⋯, 설명, [해보기] */
+.ob-step { padding: 16px 18px; border-left: 3px solid var(--line-net-2); }
+.ob-step.done { border-left-color: #3a9d6e; }
+.ob-step.todo { border-left-color: var(--blue); }
+.ob-step.skipped { border-left-color: var(--muted-2); }
+.ob-step-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ob-step-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.ob-step-dot { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; font-size: 12px; font-weight: 800; }
+.ob-step.done .ob-step-dot { background: rgba(58,157,110,.12); color: #3a9d6e; }
+.ob-step.todo .ob-step-dot { background: var(--bg-punch); color: var(--blue); border: 1px solid var(--line-net-2); }
+.ob-step.skipped .ob-step-dot { background: var(--bg-tint); color: var(--muted-2); }
+.ob-step-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-step-badge { font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint);
+  border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
+.ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
+.ob-step-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 8px 0 0 32px; }
+.ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
+.ob-step-act { margin: 12px 0 0 32px; }
+/* ⋯ 메뉴 */
+.ob-more > summary { list-style: none; cursor: pointer; color: var(--muted-2); padding: 2px 8px; border-radius: 7px; }
+.ob-more > summary::-webkit-details-marker { display: none; }
+.ob-more > summary:hover { background: var(--bg-tint); color: var(--ink-sub); }
+.ob-more-pop { position: absolute; right: 0; top: 28px; z-index: 5; padding: 6px; min-width: 152px;
+  display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(21,35,59,.12); }
+.ob-more-pop .btn { justify-content: flex-start; }
