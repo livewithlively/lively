@@ -29,8 +29,11 @@ async function gatewayUrlHint(req: express.Request): Promise<string> {
   return `${req.protocol}://${req.get("host") ?? "localhost:8080"}`;
 }
 
-function installHint(gw: string, token: string, id: string): string {
-  return `bash deploy/node/install.sh --url ${gw} --token ${token} --id ${id}`;
+function installHint(_gw: string, _token: string, id: string): string {
+  // 정본(단일 번들 상시화): `lively` 설치 + `lively login`(멤버 인증) 후 이 PC 를 노드로 상시 연결.
+  //  `lively node` 는 멤버 로그인으로 self-register(게이트웨이 주소는 ~/.lively/gateway-url) 하므로,
+  //  응답의 노드 토큰(token)은 구 deploy/node/install.sh(헤드리스 토큰 주입) 경로에서만 쓴다.
+  return `lively node --daemon --id ${id}`;
 }
 
 interface NodeView extends Omit<OrgNode, "token_hash"> { online: boolean; sessions: number }
