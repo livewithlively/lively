@@ -18,9 +18,10 @@
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 을 리다이렉트(라이브 머신 보호). 미지정 시 os.homedir().
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync, realpathSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -143,7 +144,12 @@ export function uninstallClaude(opts = {}) {
 }
 
 // 직접 실행 시(오케스트레이터가 import 하면 자동 실행 안 됨).
-if (import.meta.url === `file://${process.argv[1]}`) {
+//  ⚠ realpath 비교 — /tmp·/var(/private/* 심링크)에서 실행 시 import.meta.url≠argv[1] 로 main 이 조용히 스킵되던 버그(install 측 동형).
+const DIRECT_RUN = (() => {
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] || ""); }
+  catch { return true; }
+})();
+if (DIRECT_RUN) {
   uninstallClaude();
   log("✓ Claude 어댑터 제거 완료." + (DRY ? " (dry-run — 변경 없음)" : ""));
 }

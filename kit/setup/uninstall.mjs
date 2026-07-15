@@ -18,9 +18,10 @@
 //   ※ 스크립트는 런타임 실행이므로 stamp(Date)·env 읽기 허용(워크플로 스크립트와 달리 결정성 제약 없음). LLM/모델 호출 없음.
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync, realpathSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { uninstallClaude } from "../adapters/claude/uninstall.mjs";
 import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
@@ -211,6 +212,11 @@ function hasRcBlock() {
 
 // 직접 실행할 때만 main() 을 돌린다 — import 만으로 파괴적 동작이 일어나면 안 됨(안전 가드).
 //  (uninstallRcBlock/removeLivelyDir 를 export 하므로 import 가능 — 그때 자동 실행 금지.)
-if (import.meta.url === `file://${process.argv[1]}`) {
+//  ⚠ realpath 비교 — /tmp·/var(/private/* 심링크)에서 실행 시 import.meta.url≠argv[1] 로 main 이 조용히 스킵되던 버그(install 측 동형).
+const DIRECT_RUN = (() => {
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] || ""); }
+  catch { return true; }
+})();
+if (DIRECT_RUN) {
   main();
 }

@@ -18,9 +18,10 @@
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 리다이렉트(라이브 보호). 미지정 시 os.homedir().
 
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync, lstatSync, readdirSync, rmdirSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, cpSync, lstatSync, readdirSync, rmdirSync, realpathSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 
@@ -397,6 +398,14 @@ async function main() {
 }
 
 // 직접 실행할 때만 main() 을 돌린다 — import 만으로 파괴적 동작이 일어나면 안 됨(안전 가드).
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(e); process.exit(1); });
+//  ⚠ 비교는 realpath 로 — /tmp·/var 는 /private/* 심링크고 Node ESM 은 엔트리를 realpath 로 풀어
+//  import.meta.url(=/private/var/...)과 argv[1](=/var/...)의 URL 문자열 비교가 어긋난다. 로그인 상태
+//  `lively uninstall` 은 번들을 mkdtemp(/var/folders/...)에서 실행하므로 이 가드가 영영 false → main 이
+//  조용히 스킵돼 "아무것도 안 지워지던" 버그. install 측 user-install.mjs 와 동형(v0.1.131 회귀 방지).
+const DIRECT_RUN = (() => {
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] || ""); }
+  catch { return true; }
+})();
+if (DIRECT_RUN) {
+  main().catch((e) => { console.error(e); process.exit(1); }); // #893 main 이 async(서버 관측 싱크) — reject 전파
 }
