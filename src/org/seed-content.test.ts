@@ -20,13 +20,14 @@ const KINDS = new Set(["skill", "subagent", "command"]);
 const INJECTIONS = new Set(["always", "recalled"]);
 
 // ── 코드가 이름으로 knowledge_get 하는 지식이 시드에 반드시 있어야 한다(댕글링 방지의 핵심 회귀 가드). ──
-//  근거: src/v6/agents-md.ts(project-closeout-routine), src/scheduler.ts(런북 2개). 이 이름을 시드에서 빼면
-//  고객 게이트웨이에서 그 포인터가 다시 댕글링이 된다 — 그때 이 테스트가 깨져 알려준다.
+//  근거: src/scheduler.ts(런북 2개 — 본문을 부트스트랩 프롬프트에 주입). 이 이름을 시드에서 빼면 고객
+//  게이트웨이에서 그 포인터가 다시 댕글링이 된다 — 그때 이 테스트가 깨져 알려준다.
+//  (project-closeout 은 #878 에서 지식→스킬로 이동해 여기서 빠졌다 — 스킬 무결성·유출가드는 위 스킬 섹션이 본다.)
 {
-  const CODE_REFERENCED = ["project-closeout-routine", "runbook-bootstrap-domains", "domainmap-is-bootstrap-runbook"];
+  const CODE_REFERENCED = ["runbook-bootstrap-domains", "domainmap-is-bootstrap-runbook"];
   const names = new Set(DEFAULT_KNOWLEDGE.map((k) => k.name));
   for (const n of CODE_REFERENCED) assert.ok(names.has(n), `코드 참조 지식 '${n}' 이 시드에 없음 — 댕글링 포인터가 된다`);
-  ok("코드가 전제하는 지식 3종이 모두 시드에 존재(project-closeout-routine·런북 2개)");
+  ok("코드가 전제하는 지식 2종이 모두 시드에 존재(도메인맵 is-부트스트랩 런북 2개)");
 }
 
 // ── 훅 무결성 ──
@@ -85,12 +86,31 @@ const INJECTIONS = new Set(["always", "recalled"]);
     { re: /\/Users\/[a-z]/, why: "맥 절대경로" },
     { re: /\/home\/[a-z][a-z0-9]+\//, why: "리눅스 홈 절대경로" },
   ];
+  // #878 스킬(고객이 보는 마크다운 본문·설명)에 지식 KN_LEAK 과 동형의 구조적 트립와이어 — 내부 링크·시딩
+  //  자기참조·메타블록. closeout 이 지식→스킬로 이동하며 스킬 본문 SoT 가 DB 캡처가 됐는데(각색 파일 레이어
+  //  없음), 종전 스킬 스캔은 시크릿·경로만 봐서 [[내부링크]]·메타블록을 놓쳤다(지식은 KN_LEAK 이 봤다). 그
+  //  구멍을 메운다. 훅(JS 소스)은 별개라 미적용([[·"고객 박스" 가 코드엔 정당히 나올 수 있다).
+  //  ⚠ exempt: llm-wiki-init-* 스킬은 위키링크 문법([[…]]) 자체를 가르치는 게 목적이라 [[ 는 정당한 교육
+  //   콘텐츠다(고객이 자기 위키에서 쓸 문법 예시 — 우리 내부 지식으로의 댕글링이 아니다). 그 스킬에서만 [[ 룰을
+  //   면제한다. 자기참조·메타블록 룰은 그 스킬에도 그대로 적용된다.
+  const MD_ASSET_LEAK: Array<{ re: RegExp; why: string; exempt?: (id: string) => boolean }> = [
+    { re: /\[\[/, why: "위키 내부 링크([[…]]) — 고객 박스엔 대상이 없어 댕글링", exempt: (id) => /^llm-wiki-/.test(id) },
+    { re: /src\/org\/(seed-knowledge|default-content)/, why: "시딩 메커니즘 자기참조(내부 경로)" },
+    { re: /고객 박스에도 시딩|이 (루틴|지식|스킬)은 .*고객 박스/, why: "시딩 메타블록(우리 내부 운영 설명)" },
+  ];
   const scan = (label: string, id: string, text: string) => {
     for (const { re, why } of LEAK) assert.ok(!re.test(text), `${label} '${id}' 에 ${why} 로 보이는 리터럴이 있음 — 디폴트 배포 부적합`);
   };
   for (const h of DEFAULT_HOOKS) scan("훅", h.id, h.source_code);
-  for (const s of DEFAULT_SKILLS) scan("스킬", s.id, s.body + " " + JSON.stringify(s.frontmatter));
-  ok("배포 안전성 — 훅·스킬 본문에 하드코딩 시크릿·내부호스트·절대경로 없음");
+  for (const s of DEFAULT_SKILLS) {
+    const text = s.body + " " + (s.description ?? "") + " " + JSON.stringify(s.frontmatter);
+    scan("스킬", s.id, text);
+    for (const { re, why, exempt } of MD_ASSET_LEAK) {
+      if (exempt && exempt(s.id)) continue;
+      assert.ok(!re.test(text), `스킬 '${s.id}' 에 ${why} 로 보이는 것이 있음 — 고객 배포 부적합(스킬 본문·설명은 고객 맥락으로 각색)`);
+    }
+  }
+  ok("배포 안전성 — 훅·스킬 본문에 시크릿·내부호스트·절대경로 없음 + 스킬 구조 트립와이어([[·자기참조·메타블록)");
 }
 
 // ── #846 시딩 지식 SoT 동기화 가드 — default-content.ts 의 지식 본문·메타 == seed-knowledge/ 파일. ──

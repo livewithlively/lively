@@ -1857,7 +1857,8 @@ const ASSET_COLS =
 const ASSET_COLS_Q = ASSET_COLS.split(", ").map((c) => "a." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 // content_hash — materialize 결과에 영향 주는 필드만 정규화 해시(클라 변경감지=재작성 skip). 관리메타(label·sort·enabled)는 제외.
-function assetContentHash(a: { kind: string; harness: string; description: string; body: string; frontmatter: Record<string, unknown> }): string {
+//  export: 시딩(seed-content.ts)이 "손 안 댄 시드만 갱신"을 이 해시의 IS DISTINCT 로 판정한다(관리메타 제외라 토글·정렬 변경엔 재시딩 안 함, #878).
+export function assetContentHash(a: { kind: string; harness: string; description: string; body: string; frontmatter: Record<string, unknown> }): string {
   const fmSorted: Record<string, unknown> = {};
   for (const k of Object.keys(a.frontmatter).sort()) fmSorted[k] = a.frontmatter[k];
   return sha256(JSON.stringify({ kind: a.kind, harness: a.harness, description: a.description, body: a.body, frontmatter: fmSorted }));

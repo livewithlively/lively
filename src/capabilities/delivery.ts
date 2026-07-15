@@ -38,6 +38,9 @@ import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직
 import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
+import { DEFAULT_SKILLS } from "../org/default-content.js"; // #878 시딩 스킬 편집 경고(seed_warning)
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { assertHookId, assertAssetId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
@@ -125,6 +128,19 @@ const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
 const HOOK_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"]);
 const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "all"]);
 const HARNESS_ASSET_KINDS = new Set(["skill", "subagent", "command"]); // 하네스 자산 종류(스킬·서브에이전트·슬래시커맨드)
+
+// ── 시딩 스킬 편집 경고(#878) — 지식 seedSyncWarning(knowledge.ts)과 대칭. 시딩되는 스킬(org_harness_asset)을
+//  이 게이트웨이에서 고치면, 고객이 받는 본문의 SoT 는 이 DB 가 아니라 src/org/default-content.ts(capture 스냅샷)다.
+//  시딩이 "손 안 댄 것 갱신"(#878)이라 canonical 에서 capture 후 릴리스하면 고객에 전파되지만, capture 를 빠뜨리면
+//  반영되지 않는다 → 그 리마인더. 경고는 seed 소스(src/)가 있는 canonical 체크아웃에서만 뜬다(고객 릴리스 번들엔
+//  src/ 없음 — 내부 경로 노출 방지, 지식 경고와 동일 스코핑).
+const SEEDED_SKILL_IDS = new Set(DEFAULT_SKILLS.map((s) => s.id));
+const SEED_ASSET_SOURCE_PRESENT = fs.existsSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "org", "default-content.ts"));
+function seedAssetSyncWarning(id: string | null | undefined): { seed_warning?: string } {
+  if (!SEED_ASSET_SOURCE_PRESENT || !id || !SEEDED_SKILL_IDS.has(id)) return {};
+  return { seed_warning: `⚠ '${id}' 은 신규 고객 게이트웨이에 시딩되는 스킬입니다(#713). 고객이 받는 본문의 SoT 는 이 게이트웨이 DB 가 아니라 src/org/default-content.ts(capture 스냅샷)입니다 — 이 편집을 고객 배포에 반영하려면 canonical 게이트웨이에서 \`node --env-file=.env scripts/capture-default-content.mjs\` 로 default-content.ts 를 재생성·릴리스하세요(내부 [[링크]]·이슈번호·사내 명칭·타 고객사명은 빼고 고객 맥락으로 — CI 가드가 잡습니다). 미갱신 시 신규 고객은 옛 본문을 받습니다.` };
+}
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
@@ -1255,7 +1271,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   // ── 워크스페이스 사용량(#813 T3-2) — **백스톱**. ──
-  //  close-out 루틴(project-closeout-routine §6)이 회수를 하지만 그건 best-effort 다: 에이전트가 스텝을 건너뛰거나,
+  //  close-out 루틴(project-closeout 스킬)이 회수를 하지만 그건 best-effort 다: 에이전트가 스텝을 건너뛰거나,
   //  사람이 웹 UI 에서 바로 done 처리하거나, 프로젝트가 방치되면 아무도 안 치운다 — 그리고 **쌓이는 건 바로 그런 것들**이다.
   //  그래서 관리자가 '무엇이 얼마나 쌓였나'를 보고 **수동으로** 회수할 창구가 필요하다.
   //  ⚠ 무인 자동 삭제는 **없다**(설계 결정) — 이 화면은 보여주기만 하고, 지우는 건 사람이 버튼을 눌러야 한다.
@@ -1907,7 +1923,7 @@ export const deliveryCapabilities: Capability[] = [
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, wctx(user, ctx));
-      return { asset };
+      return { asset, ...seedAssetSyncWarning(id) };
     }),
   restRuntime("org_harness_asset_remove", "하네스 자산 제거",
     "하네스 자산을 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",

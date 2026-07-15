@@ -3,7 +3,7 @@
 //  src/org/default-content.ts (신규 설치 시드 데이터)로 굳힌다. (#713)
 //
 //  배경: org 콘텐츠는 번들에 안 굽고 게이트웨이 DB 라이브 fetch 로 전달된다(2026-06-24 컷오버). 그래서
-//   신규 고객 게이트웨이엔 이 콘텐츠가 0 이라, 코드가 knowledge_get('project-closeout-routine') 등을
+//   신규 고객 게이트웨이엔 이 콘텐츠가 0 이라, 코드가 이름으로 전제하는 런북(도메인맵 is-부트스트랩 2개) 등을
 //   가리켜도 댕글링이 된다. 이 스크립트가 캡처한 데이터를 seed-content.ts 가 기동시 idempotent 시딩한다.
 //
 //  실행(canonical 게이트웨이 앱 루트, 빌드·.env 후):
@@ -25,9 +25,9 @@ import { fileURLToPath } from "node:url";
 // pg 는 DB 캡처(main)에만 필요 — emit/read/parse 순수함수를 import 하는 sync·테스트는 pg 없이도 돌게
 //  main() 안에서 동적 import 한다(회수된 워크트리처럼 node_modules 최소인 데서도 sync 가 동작).
 
-// 코드가 이름으로 전제하는 지식(댕글링 방지 대상). 근거: src/v6/agents-md.ts, src/scheduler.ts.
+// 코드가 이름으로 전제하는 지식(댕글링 방지 대상). 근거: src/scheduler.ts (런북 2개를 부트스트랩 프롬프트에 주입).
+//  (project-closeout 은 #878 에서 지식→스킬로 이동 — 스킬은 org_harness_asset 로 캡처된다.)
 const KNOWLEDGE_NAMES = [
-  "project-closeout-routine",        // src/v6/agents-md.ts — 모든 프로젝트 AGENTS.md digest
   "runbook-bootstrap-domains",       // src/scheduler.ts — 도메인맵 is 부트스트랩 프롬프트
   "domainmap-is-bootstrap-runbook",  // src/scheduler.ts — 〃 (도구 델타)
 ];
