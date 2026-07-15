@@ -6,7 +6,7 @@ export type DelegateStatus = "queued" | "running" | "done" | "failed" | "cancele
 
 export interface DelegateTask {
   id: number; requester: string; requester_session: string | null;
-  prompt: string; harness: string; subpath: string; flags: Record<string, string>;
+  prompt: string; harness: string; subpath: string; repo: string | null; git_ref: string | null; flags: Record<string, string>;
   need_cpu: number | null; need_ram_mb: number | null; need_disk_mb: number | null;
   needs_docker: boolean; node_pref: string | null; env_lease: boolean;
   status: DelegateStatus; node_id: string | null; session_id: string | null; task_dir: string | null;
@@ -17,14 +17,15 @@ export interface DelegateTask {
 
 export async function createTask(input: {
   requester: string; requesterSession?: string | null; prompt: string; subpath?: string;
+  repo?: string | null; gitRef?: string | null;
   flags?: Record<string, string>; needCpu?: number | null; needRamMb?: number | null; needDiskMb?: number | null;
   needsDocker?: boolean; nodePref?: string | null; timeoutSec?: number; maxAttempts?: number;
 }): Promise<DelegateTask> {
   const r = await itemsPool.query(
-    `INSERT INTO org_task(requester, requester_session, prompt, subpath, flags, need_cpu, need_ram_mb, need_disk_mb,
+    `INSERT INTO org_task(requester, requester_session, prompt, subpath, repo, git_ref, flags, need_cpu, need_ram_mb, need_disk_mb,
                           needs_docker, node_pref, timeout_sec, max_attempts)
-       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [input.requester, input.requesterSession ?? null, input.prompt, input.subpath ?? "",
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+    [input.requester, input.requesterSession ?? null, input.prompt, input.subpath ?? "", input.repo ?? null, input.gitRef ?? null,
      JSON.stringify(input.flags ?? {}), input.needCpu ?? null, input.needRamMb ?? null, input.needDiskMb ?? null,
      !!input.needsDocker, input.nodePref ?? null,
      Math.min(Math.max(60, input.timeoutSec ?? 3600), 6 * 3600), Math.min(Math.max(1, input.maxAttempts ?? 2), 5)],

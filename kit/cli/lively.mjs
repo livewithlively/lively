@@ -244,6 +244,8 @@ async function cmdDelegate(rest) {
     else if (t === "--disk") need.need_disk_mb = Number(rest[++i]);
     else if (t === "--timeout") need.timeout_sec = Number(rest[++i]);
     else if (t === "--node") need.node = rest[++i];
+    else if (t === "--repo") need.repo = rest[++i];
+    else if (t === "--ref") need.ref = rest[++i];
     else if (t === "--docker") need.needs_docker = true;
     else if (t === "--detach") detach = true;
     else if (t === "--json") jsonMode = true;
@@ -656,7 +658,7 @@ ${bold("확인")}
 ${bold("작업")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
-      --ram/--cpu/--disk N   예상 소모량(스케줄러 배치 입력)  ${dim("--docker  --node <id>  --timeout <초>")}
+      --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
   delegate status|logs|cancel <번호> · delegate list
 
