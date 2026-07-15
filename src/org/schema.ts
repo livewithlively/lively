@@ -834,6 +834,9 @@ export async function initOrgSchema(): Promise<void> {
       finished_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
+  // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
+  await itemsPool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
+  await itemsPool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
 
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest-policy.ts).
