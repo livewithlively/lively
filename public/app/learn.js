@@ -36,6 +36,7 @@ const DOCS_NAV = [
     //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
     { group: '직접 해보기', items: [
             { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
+            { key: 'harness', label: '내 하네스 설정', href: '#/start/harness' }, // 로컬↔라이블리 스킬·훅 한눈에(#891)
             { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
             { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
         ] },
@@ -232,7 +233,7 @@ async function renderLearn(view) {
 }
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──
 function heroCard() {
-    return el('div', { class: 'card guide-hero' }, el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }), el('h2', { class: 'guide-hero-title' }, '한마디로, 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'), el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }), 
+    return el('div', { class: 'card guide-hero' }, el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }), el('h2', { class: 'guide-hero-title' }, 'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'), el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }), 
     // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
     el('div', { class: 'guide-cycle' }, el('div', { class: 'guide-flow' }, flowStep('layers', '모아두기', '회사의 규칙·지식·할 일을 이곳에 정리해 둡니다.'), flowArrow(), flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'), flowArrow(), flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'), flowArrow(), flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')), el('div', { class: 'guide-loop' }, el('span', { class: 'guide-loop-label' }, el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }), el('b', { text: '남긴 지식은 다시 [모아두기]로' }), el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 더 정확해져요' })))), el('div', { class: 'guide-remember' }, el('span', { class: 'guide-remember-key', text: '딱 한 줄' }), el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
 }

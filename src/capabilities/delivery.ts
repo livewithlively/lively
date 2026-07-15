@@ -836,6 +836,71 @@ export const deliveryCapabilities: Capability[] = [
       return { pref };
     }),
 
+  // ── 로컬 하네스 관측(#891 온보딩 C) — 세션훅 채널로 로컬↔라이블리 하네스를 웹에서 한눈에. 노드 불요. ──
+  //  ⚠ 인벤토리는 **메타만**(id·kind·managed) — 스킬 본문·메모리는 서버로 안 온다(사생활·용량). 관측이지 보고 아님.
+  restRead("me_harness_report", "로컬 하네스 인벤토리 보고(세션훅)",
+    "멤버 세션훅(session-preload)이 매 세션 로컬 하네스 자산 메타(id·kind·managed 여부)를 push 한다. 서버는 마지막 관측만 보관하고 웹이 라이블리 자산과 대조한다. 스킬 본문·메모리 내용은 담지 않는다(hard).",
+    [{ method: "POST", paths: ["/api/ui/me/harness-report"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const rawAssets = Array.isArray(input.assets) ? input.assets : [];
+      if (rawAssets.length > 500) throw new HttpError(400, "자산이 너무 많습니다(500 초과)"); // 스캐너 폭주 가드
+      const KINDS = new Set(["skill", "subagent", "command", "hook"]);
+      const seen = new Set<string>();
+      const assets = [] as { id: string; kind: string; managed: boolean }[];
+      for (const a of rawAssets as Record<string, unknown>[]) {
+        const id = str(a?.id ?? "", "asset.id", 64).trim();
+        const kind = str(a?.kind ?? "", "asset.kind", 12).trim();
+        if (!id || !KINDS.has(kind)) continue;                 // 모르는 종류·빈 id 는 조용히 스킵(관측이라 관대)
+        const key = `${kind}:${id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        assets.push({ id, kind, managed: Boolean(a?.managed) });
+      }
+      const snap = {
+        at: new Date().toISOString(),
+        host: input.host == null ? undefined : str(input.host, "host", 200).trim() || undefined,
+        harness: input.harness === "codex" ? "codex" : "claude",
+        assets,
+      };
+      const { setHarnessSnapshot } = await import("../org/store.js");
+      await setHarnessSnapshot(userId, snap);
+      return { ok: true, count: assets.length };
+    }),
+
+  restRead("me_harness_get", "내 하네스 한눈에(로컬+라이블리)",
+    "라이블리가 배포하는 하네스 자산(me_assets)과 이 멤버 노트북의 로컬 관측 스냅샷을 함께 반환하고, 겹치는 것을 대조한다 — 웹 '내 하네스' 화면용. overlap: managed(라이블리가 깐 것) · shadow(로컬 동명 파일이 라이블리 자산을 가림).",
+    [{ method: "GET", paths: ["/api/ui/me/harness"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getHarnessSnapshot } = await import("../org/store.js");
+      const [assets, hooks, prefs, snap] = await Promise.all([
+        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshot(userId),
+      ]);
+      const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
+      const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
+        const override = prefMap.has(`${kind}:${id}`) ? (prefMap.get(`${kind}:${id}`) as boolean) : null;
+        return { override, effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
+      };
+      // 라이블리가 이 멤버에게 배포하는(effective) 자산 id 집합 — 로컬 대조의 기준.
+      const lively = {
+        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+      };
+      const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
+      // 로컬 관측과 대조: 같은 id 가 라이블리에도 있으면 겹침 — managed 면 정상(라이블리가 깐 것), non-managed 면 shadow(가림).
+      const local = (snap?.assets ?? []).map((a) => {
+        const overlapLively = livelyIds.has(a.id);
+        return { ...a, overlap: overlapLively ? (a.managed ? "managed" : "shadow") : "local-only" };
+      });
+      return {
+        lively,
+        local: { assets: local, at: snap?.at ?? null, host: snap?.host ?? null, harness: snap?.harness ?? null, observed: !!snap },
+      };
+    }),
+
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
   //  provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize(Slice 2).
   restRead("me_git_credential_get", "내 git 인증 조회",

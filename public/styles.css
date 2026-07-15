@@ -2239,6 +2239,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .ft-img:not(.loaded) img { opacity: 0; }
 .proj-file-card-nm { font-size: 12px; color: var(--ink); text-align: center; line-height: 1.35; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%; padding: 0 2px; }
 .proj-file-card-sz { font-size: 10.5px; color: var(--muted-2); }
+.proj-file-card-dt { font-size: 10px; color: var(--muted-2); opacity: .85; font-variant-numeric: tabular-nums; } /* 파일 수정일(#877) — 크기 아래 한 줄 더, 더 옅게 */
 /* 업로드 중 카드 — 비활성 아이콘 + 실시간 % + 진행 막대 */
 .proj-file-card.uploading { cursor: default; pointer-events: none; }
 .proj-file-card.uploading .proj-file-card-ic { opacity: .3; filter: grayscale(1); }
@@ -2275,6 +2276,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-file-lnm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-file-lnm.is-dir { font-weight: 600; }
 .proj-file-lsz { flex: none; min-width: 62px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.proj-file-ldt { flex: none; min-width: 88px; text-align: right; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; } /* 파일 수정일 열(#877) */
 .proj-file-lacts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; margin-left: 2px; }
 .proj-file-lrow:hover .proj-file-lacts { opacity: 1; }
 /* 단색 라인 아이콘 — currentColor 상속, 획굵기만 여기서. (.proj-file-lic / .proj-file-card-ic 가 크기·색 지정) */
@@ -4679,14 +4681,10 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-sess-empty-title { font-size: 15px; font-weight: 800; color: var(--ink); }
 .dash-sess-empty-desc { font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
 .dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 5px; }
-/* #853 세션 카드 — 레이아웃 전면 재설계(내용·위계 동일).
-   좌측 상태색 레일 + 좌측 체크박스 거터(호버 오버레이) + 본문.
-   자세히: 본문 3행 [행1 상태·제목 ↔ 열기·⋮] / [행2 터미널 제목] / [행3 프로젝트·리스트 칩 ↔ 마지막 작업·시각].
-   간략히: 본문 1행 [상태·제목 ↔ 칩·시각·열기·⋮]. */
-.dash-scard { position: relative; overflow: hidden; display: flex; align-items: stretch; padding: 11px 13px 11px 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
-.dash-scard.compact { padding-top: 9px; padding-bottom: 9px; align-items: center; }
+/* #req 세션 카드 — 0부터 재설계. 좌측 상태 레일(색) + 굵은 색 상태라벨로 '작업중/대기중'을 한눈에. 2줄: 제목 / 상태·프로젝트·시간, [열기]·[⋮] 우측 중앙. */
+.dash-scard { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
 .dash-scard:hover { border-color: var(--muted-2); box-shadow: 0 1px 5px rgba(21,35,59,.05); }
-.dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--line); } /* 라운딩은 카드 overflow:hidden 이 클립 — 레일이 모서리 밖으로 안 삐져나오게 */
+.dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--line); } /* #758 라운딩은 카드 overflow:hidden 이 클립 — 레일이 모서리 밖으로 삐져나오지 않게 */
 /* 상태별 레일 — 작업중은 살짝 주황 배경까지 줘서 목록에서 도드라지게. */
 .dash-scard.is-busy::before { background: #f59e0b; }
 .dash-scard.is-busy { background: color-mix(in srgb, #f59e0b 6%, var(--bg)); border-color: color-mix(in srgb, #f59e0b 32%, var(--line)); }
@@ -4697,22 +4695,18 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
 .dash-scard.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
 .dash-scard.sel::before { background: var(--accent, #5b6cff); }
-/* 본문 — 자세히=3행 세로 스택, 간략히=한 줄(아래 .compact). */
-.dash-scard-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-/* 행1 = 상태·제목(신축) ↔ 액션(우상단 앵커). 행3 = 칩(신축) ↔ 시각(우하단 앵커). */
-.dash-scard-r1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.dash-scard-r3 { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; min-width: 0; }
-.dash-scard-head { flex: 1; display: flex; align-items: baseline; gap: 8px; min-width: 0; } /* 상태 · 제목 */
-/* 간략히 = 한 줄: [상태 · 제목(신축)] [칩] [시각] [액션]. */
-.dash-scard.compact .dash-scard-body { flex-direction: row; }
-.dash-scard-line { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; }
+.dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+/* #853 자세히 = [상태 · 제목] 한 줄(상태가 제목 앞에 붙어 '무슨 작업이 어떤 상태인지'를 한 눈에). */
+.dash-scard-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+/* #853 간략히 = 2줄: [제목] / [상태 · 프로젝트 · 시각] (원래 배치 복원). meta 는 dash-scard-main(flex-col) 의 2줄째. */
+.dash-scard-meta { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.dash-scard-meta .dash-scard-when { flex-direction: row; padding: 0; } /* 간략히 시각은 라벨 없는 한 줄 — 세로 스택 해제 */
 .dash-scard-name { flex: 1; font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 부제 = Claude 작업요약(터미널 제목 = 세션 이름, 제목과 별개). */
+/* #req 세션 카드 부제 = Claude 작업 요약(제목=세션 이름과 별개). */
 .dash-scard-work { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-scard-work-ic { color: var(--muted-2); }
 .dash-scard-chips { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
-.dash-scard.compact .dash-scard-chips { flex: none; } /* 간략히에선 칩이 안 줄고 제목이 준다 */
-/* 상태 = 색 점(작업중은 깜빡) + 굵은 색 라벨. 제목 앞에 붙어 '무슨 작업이 어떤 상태인지' 한눈에. */
+/* 상태 = 카드의 주인공. 색 점(작업중은 깜빡) + 굵은 색 라벨. */
 .dash-scard-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; letter-spacing: -.01em; }
 .dash-scard-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dash-scard-status.is-busy { color: #d97706; }
@@ -4724,34 +4718,33 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard-status.is-offline { color: var(--muted); }
 .dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
 /* #853 프로젝트 뱃지 = 버튼(누르면 그 프로젝트 페이지로 이동 — 팝업 아님). 링크임을 밑줄 호버로 알린다. */
-.dash-scard-proj { min-width: 0; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 0; border-radius: 6px; padding: 2px 8px; font-family: inherit; cursor: pointer; }
+.dash-scard-proj { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 0; border-radius: 6px; padding: 1.5px 7px; font-family: inherit; cursor: pointer; }
 .dash-scard-proj:hover { text-decoration: underline; filter: brightness(.97); }
 .dash-scard-proj.mine { color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 10%, transparent); }
 /* #853 리스트(영역) 뱃지 — 프로젝트 뱃지와 같은 형식, 한 톤 낮춰 종속 관계를 보인다. */
-.dash-scard-list { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; padding: 2px 8px; }
+.dash-scard-list { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; padding: 1.5px 7px; }
 .dash-scard-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
-/* #853 시각 = 마지막 작업(라벨+시각). 자세히=우하단 앵커(칩 줄 오른쪽 끝), 간략히=시각만 한 줄. */
-.dash-scard-when { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 0; text-align: right; white-space: nowrap; }
-.dash-scard.compact .dash-scard-when { flex-direction: row; align-items: center; }
+/* #853 시각 = 우측 고정열(액션 왼쪽). 뱃지 줄에 섞여 있던 것을 빼내 카드마다 같은 자리에서 세로로 읽히게. */
+.dash-scard-when { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; margin-left: auto; padding: 0 10px 0 8px; text-align: right; }
 .dash-scard-when-lbl { font-size: 10px; font-weight: 700; color: var(--muted-2); letter-spacing: -.01em; }
 .dash-scard-when-t { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dash-scard-when.none .dash-scard-when-t { color: var(--muted-2); }
 @keyframes dashPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.72); } }
 @media (prefers-reduced-motion: reduce) { .dash-scard-status.is-busy .dash-scard-dot, .dash-scard-status.is-waiting .dash-scard-dot { animation: none; } }
-/* 액션 — [열기] + 소유자 [⋮]. 자세히=우상단(행1), 간략히=줄 끝. 항상 보인다. */
+/* 액션 — 항상 보이는 [열기] + 소유자 [⋮], 카드 우측 세로 중앙. */
 .dash-scard-acts { flex: none; display: flex; align-items: center; gap: 5px; }
-.dash-scard-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 4px 12px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.dash-scard-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 7px; padding: 5px 13px; background: var(--bg); cursor: pointer; font-family: inherit; }
 .dash-scard-open:hover { background: var(--bg-punch); }
-.dash-scard-more { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
+.dash-scard-more { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; font-size: 16px; line-height: 1; letter-spacing: 1px; }
 .dash-scard-more:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
-/* #853 세션 선택 체크박스 = 카드 좌측 absolute 오버레이(레일 옆, 세로 중앙).
-   레이아웃에 자리를 차지하지 않으므로(absolute) 호버로 나타나도 카드 폭·본문이 안 밀린다(구버전 시프트 문제 해결).
-   평소 숨김 → 카드 호버 / 이미 선택됨 / ⚙ 선택모드일 때만 보이고 클릭된다(안 보일 땐 pointer-events:none). */
-.dash-sess-checkwrap { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); z-index: 2; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+/* #853 세션 선택 체크박스 — 평소엔 자리만 있고 안 보이다가, 카드에 호버하면 왼쪽에서 스르르 나타난다.
+   ('선택' 버튼을 먼저 누를 필요 없음. 선택 모드이거나 이미 체크된 카드면 계속 보인다.)
+   display:none 이 아니라 opacity/width 전환이라 카드 폭이 튀지 않는다. */
+.dash-sess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
 .dash-scard:hover .dash-sess-checkwrap,
 .dash-scard:focus-within .dash-sess-checkwrap,
 .dash-scard.sel .dash-sess-checkwrap,
-.dash-sess-list.selectmode .dash-sess-checkwrap { opacity: 1; pointer-events: auto; }
+.dash-sess-list.selectmode .dash-sess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
 .dash-sess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
 @media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap { transition: none; } }
 /* #853 세션 이름 수정 팝업 — 브라우저 prompt() 대체. */
@@ -4859,6 +4852,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fold-grid .proj-file-card-ic { height: 54px; }
 .dash-fold-grid .proj-file-card-ic .ft-folder { width: 60px; }
 .dash-fold-grid .proj-file-card-sz { display: none; } /* 박스 미리보기는 '폴더' 캡션 생략 — 이름만(세로 압축) */
+.dash-fold-grid .proj-file-card-dt { display: none; } /* 박스 미리보기(폴더 카드)는 수정일도 생략 */
 /* 박스 폴더 카드 — 클릭 시 브라우저 열기(#672). */
 .dash-fold-grid .proj-file-card.dash-fold-open { cursor: pointer; }
 .dash-fold-grid .proj-file-card.dash-fold-open:hover { background: var(--bg-sel); }
@@ -4918,6 +4912,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-row-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-fb-row.is-dir .dash-fb-row-nm { font-weight: 600; }
 .dash-fb-row-sz { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.dash-fb-row-dt { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; } /* 파일 수정일 열(#877) */
 .dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; }
 .dash-fb-row:hover .dash-fb-actions, .dash-fb-row:focus-within .dash-fb-actions { opacity: 1; }
 /* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */
@@ -6814,36 +6809,51 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; font-size: 13.5px; }
 .ob-banner-sub { font-size: 13px; line-height: 1.6; color: var(--ink-sub); margin: 6px 0 0; }
 /* 단계 카드 — 상태 점 + 라벨 + 뱃지 + ⋯, 설명, [해보기] */
-/* 상태 위계(#870): 완료·해당없음은 '끝난 것'이라 조용히 뒤로, 미완(할 일)은 앞으로 — 특히 필수 미완(.req)을 강조.
-   원칙: done 은 채도·대비를 낮춰 마감된 느낌, todo 는 살짝 틴트 배경 + 진한 좌측 바로 '지금 할 일'로 읽히게. */
-.ob-step { padding: 16px 18px; border: 1px solid var(--line); border-left: 3px solid var(--line-net-2); }
-/* 완료 — 물러난다: 옅은 회색 바, 배경 무채, 살짝 흐리게. */
-.ob-step.done { border-left-color: var(--line-net-2); background: var(--bg); opacity: .72; }
-.ob-step.done:hover { opacity: 1; }
-.ob-step.skipped { border-left-color: var(--line-net); background: var(--bg); opacity: .6; }
-/* 미완 — 앞으로: 파란 바 + 아주 옅은 파란 틴트 배경. */
-.ob-step.todo { border-left-color: var(--blue); background: rgba(45,107,240,.035); }
-/* 필수 미완 — 가장 강조: 두꺼운 좌측 바 + 뚜렷한 틴트 + 은은한 파란 링. */
-.ob-step.todo.req { border-left-width: 4px; border-color: var(--line-note);
-  background: rgba(45,107,240,.06); box-shadow: 0 0 0 1px rgba(45,107,240,.08); }
+/* 구조로 '할 일 vs 완료'를 가른다(#870): 미완=크고 뚜렷한 풀카드, 완료=접힌 얇은 줄. 점 색만 다르던 게
+   안 읽힌 원인 → 카드의 '크기·밀도' 자체를 다르게. 섹션 머리로 「지금 할 일 N」 / 「완료 N」 을 명시. */
+.ob-sec { display: flex; flex-direction: column; gap: 10px; }
+.ob-sec + .ob-sec { margin-top: 8px; }
+.ob-sec-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+.ob-sec-title { font-size: 12px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: var(--blue); }
+.ob-sec-title.done { color: var(--muted-head); }
+.ob-sec-count { font-size: 11px; font-weight: 800; color: var(--ink-sub); background: var(--bg-tint);
+  border: 1px solid var(--line-net); border-radius: 999px; padding: 0 8px; min-width: 20px; text-align: center; }
+
+/* 미완 = 할 일 풀카드 — 파란 좌측 바 + 옅은 파란 틴트. 필수(.req)는 두껍고 진하게. */
+.ob-step { padding: 16px 18px; border: 1px solid var(--line-note); border-left: 3px solid var(--blue);
+  background: rgba(45,107,240,.04); }
+.ob-step.req { border-left-width: 4px; background: rgba(45,107,240,.07); box-shadow: 0 0 0 1px rgba(45,107,240,.08); }
 .ob-step-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ob-step-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+/* 미완 점 = 속 빈 파란 링. 필수는 채운 파란 원 + 흰 중심('지금 여기'). */
 .ob-step-dot { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px; font-size: 12px; font-weight: 800; }
-/* 완료 = 채운 초록 원 + 흰 체크(끝난 것이 확실히 보이되 색은 절제). */
-.ob-step.done .ob-step-dot { background: #3a9d6e; color: #fff; }
-.ob-step.skipped .ob-step-dot { background: var(--bg-tint); color: var(--muted-2); border: 1px solid var(--line-net); }
-/* 미완 = 속 빈 파란 링(할 일). 필수 미완은 채운 파란 원 + 펄스 링으로 '지금 여기'. */
-.ob-step.todo .ob-step-dot { background: var(--bg); border: 2px solid var(--blue); }
-.ob-step.todo.req .ob-step-dot { background: var(--blue); border-color: var(--blue); }
-.ob-step.todo.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #fff; }
+  border-radius: 999px; background: var(--bg); border: 2px solid var(--blue); }
+.ob-step.req .ob-step-dot { background: var(--blue); border-color: var(--blue); }
+.ob-step.req .ob-step-dot::after { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #fff; }
 .ob-step-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
-.ob-step.done .ob-step-label, .ob-step.skipped .ob-step-label { color: var(--ink-sub); }
+
+/* 완료 = 접힌 얇은 줄 — 초록 체크 + 라벨(회색) + 상태 pill + ⋯. 설명·버튼 없음(끝난 일). */
+.ob-done-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: visible; background: var(--bg); }
+.ob-done-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.ob-done-row + .ob-done-row { border-top: 1px solid var(--line); }
+.ob-done-check { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: #3a9d6e; color: #fff; font-size: 11px; font-weight: 800; }
+.ob-done-row.skipped .ob-done-check { background: var(--bg-tint); color: var(--muted-2); border: 1px solid var(--line-net); }
+.ob-done-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-done-tag { flex: none; font-size: 11px; font-weight: 700; color: #3a9d6e; background: rgba(58,157,110,.1);
+  border-radius: 999px; padding: 1px 9px; }
+.ob-done-row.skipped .ob-done-tag { color: var(--muted-head); background: var(--bg-tint); }
 .ob-step-badge { font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint);
   border: 1px solid var(--line-net); border-radius: 999px; padding: 1px 8px; }
 .ob-step-badge.req { color: var(--blue); background: var(--bg-punch); border-color: var(--line-net-2); }
 /* 필수 미완의 '필수' 뱃지 = 채운 파랑(지금 해야 할 것). 완료된 필수는 조용한 틴트 그대로. */
 .ob-step.todo.req .ob-step-badge.req { color: #fff; background: var(--blue); border-color: var(--blue); }
+/* 하네스 관리(#891) 대조 뱃지 — off(내가 끔)·muted(라이블리가 설치)·warn(가림)·own(내 것). */
+.ob-step-badge.off { color: var(--ink-faint); background: transparent; }
+.ob-step-badge.muted { color: var(--ink-faint); }
+.ob-step-badge.warn { color: #a86a00; background: #fff6e6; border-color: #f0d59a; }
+.ob-step-badge.own { color: var(--blue); background: var(--bg-punch); }
 .ob-step-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 8px 0 0 32px; }
 .ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
 .ob-step-act { margin: 12px 0 0 32px; }

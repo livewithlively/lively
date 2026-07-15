@@ -8499,6 +8499,31 @@ function fmtSize(n) {
   if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
   return (n / 1024 / 1024 / 1024).toFixed(1) + ' GB';
 }
+// 파일 수정일 컴팩트 표기(#877) — 목록에서 '언제 바뀐/올라온 버전인지' 식별용. 오늘/어제는 시각까지, 올해는 M/D, 지난해는 YY/M/D.
+//  mtime=0/미상(구버전 서버 응답)이면 빈 문자열 → 날짜를 아예 표시하지 않는다(graceful).
+function fmtFileDate(ms) {
+  const n = Number(ms) || 0;
+  if (!n) return '';
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const p = (x) => String(x).padStart(2, '0');
+  const sameYMD = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const yst = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (sameYMD(d, now)) return '오늘 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  if (sameYMD(d, yst)) return '어제 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '/' + d.getDate();
+  return (d.getFullYear() % 100) + '/' + (d.getMonth() + 1) + '/' + d.getDate();
+}
+// 전체 일시(툴팁) — 컴팩트 표기 위에 커서를 올리면 정확한 날짜·시각을 본다.
+function fmtFileDateFull(ms) {
+  const n = Number(ms) || 0;
+  if (!n) return '';
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (x) => String(x).padStart(2, '0');
+  return d.getFullYear() + '. ' + (d.getMonth() + 1) + '. ' + d.getDate() + '. ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 function fileExt(name) { const i = String(name || '').lastIndexOf('.'); return i >= 0 ? name.slice(i + 1).toLowerCase() : ''; }
 // 클립보드 붙여넣기 이미지 → 업로드용 File(고유 이름). File.name 은 read-only 라 새 File 로 감싼다.
 //  같은 시각 다중 붙여넣기 충돌 방지로 날짜-시각(+ms 2자리, 다중이면 순번). 공유폴더는 유니코드 보존이라 한글 이름 OK.
@@ -8729,7 +8754,8 @@ function projFileCardEl(id, it, rel, onDir, reload, base, select) {
   const c = el('div', { class: 'proj-file-card' + (select ? ' select-mode' : ''), title: it.name },
     el('div', { class: 'proj-file-card-ic' }, fileThumb(id, it, rel, base)),
     el('div', { class: 'proj-file-card-nm', text: it.name }),
-    el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }));
+    el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }),
+    it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }) : null);
   if (select) {
     // 선택 모드 — 카드 클릭 = 체크 토글(열기/진입 대신). 파일·폴더 모두 골라 일괄 삭제 가능.
     const ids = select.ids;
@@ -8763,6 +8789,7 @@ function projFileRowEl(id, it, rel, onDir, reload, base) {
     el('span', { class: 'proj-file-lic' }, fileThumb(id, it, rel, B)),
     el('span', { class: 'proj-file-lnm' + (isDir ? ' is-dir' : ''), text: it.name, title: it.name }),
     el('span', { class: 'proj-file-lsz', text: isDir ? '' : fmtSize(it.size) }),
+    el('span', { class: 'proj-file-ldt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }),
     acts);
   row.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, B);
   return row;
@@ -8812,6 +8839,37 @@ async function deleteEntry(id, rel, name, isDir, reload, base) {
 type UpItem = { file: any; rel: string };
 const UP_MANY = 12;       // 이보다 많으면 파일별 카드 대신 묶음 진행 카드 1개(그리드 폭주 방지)
 const UP_CONFIRM = 200;   // 이보다 많으면 확인 — 큰 폴더를 실수로 떨어뜨렸을 때의 안전핀
+
+// 덮어쓰기 사전 검사(#877) — 올릴 항목이 현재 폴더의 기존 파일/폴더와 이름이 겹치는지 본다.
+//  currentItems = 지금 보고 있는 폴더 목록([{name,type}]) — 검색결과 화면이면 폴더 컨텍스트가 아니라 호출부가 [] 를 준다.
+//  중첩(rel 에 '/')은 최상위 세그먼트(폴더)만 판단: 그 폴더가 이미 있으면 '병합'이라 안쪽 같은 이름 파일만 덮인다.
+function upCollisions(items: UpItem[], currentItems: any[]): { files: string[]; dirs: string[]; conflicts: string[] } {
+  const byName = new Map<string, string>();
+  for (const it of (currentItems || [])) if (it && it.name) byName.set(it.name, it.type);
+  const files = new Set<string>(), dirs = new Set<string>(), conflicts = new Set<string>();
+  for (const u of (items || [])) {
+    const top = String(u.rel || '').split('/')[0];
+    const t = byName.get(top);
+    if (!t) continue;
+    if (String(u.rel).includes('/')) { if (t === 'dir') dirs.add(top); else conflicts.add(top); }  // 폴더 병합 vs 같은 이름 파일 아래로(서버가 거부)
+    else if (t === 'file') files.add(top);                                                          // 직접 파일 덮어쓰기
+    else conflicts.add(top);                                                                        // 폴더와 같은 이름의 파일(서버가 거부)
+  }
+  return { files: [...files], dirs: [...dirs], conflicts: [...conflicts] };
+}
+// 덮어쓰기 확인 — 겹치는 게 있으면 무엇이 덮이는지 목록으로 보여주고 confirm(마이크 이슈 #877: 조용히 덮이던 것을 명시).
+//  반환: 계속하면 { go:true, over:Set<덮어쓸 직접 파일명> }, 취소면 { go:false }. over 는 결과 요약('N개 덮어씀')용으로 upSend 에 넘긴다.
+function upPrecheckOverwrite(items: UpItem[], currentItems: any[]): { go: boolean; over: Set<string> } {
+  const { files, dirs, conflicts } = upCollisions(items, currentItems);
+  const over = new Set(files);
+  if (!files.length && !dirs.length && !conflicts.length) return { go: true, over };
+  const cap = (arr) => arr.slice(0, 10).map((n) => '  • ' + n).join('\n') + (arr.length > 10 ? ('\n  …외 ' + (arr.length - 10) + '개') : '');
+  const parts: string[] = [];
+  if (files.length) parts.push('이미 있는 파일 ' + files.length + '개를 덮어씁니다:\n' + cap(files));
+  if (dirs.length) parts.push('이미 있는 폴더 ' + dirs.length + '개 — 그 안의 같은 이름 파일만 덮어써집니다:\n' + cap(dirs));
+  if (conflicts.length) parts.push('이름이 겹쳐(파일↔폴더) 업로드가 거부될 수 있는 항목 ' + conflicts.length + '개:\n' + cap(conflicts));
+  return { go: confirm(parts.join('\n\n') + '\n\n계속할까요?'), over };
+}
 
 // 상대경로 정규화 — 빈 세그먼트 제거, '.' 제거, '..'(경로 탈출)은 항목 자체를 버림. 서버도 봉쇄하지만 프론트에서 먼저 막는다.
 function upSafeRel(rel): string | null {
@@ -8939,47 +8997,51 @@ function upDropZone(zone, hi, onDrop: (items: UpItem[], emptyDirs: string[]) => 
 //  취소를 세 번 만들 이유가 없으니 루프 자체를 프리미티브로 내린다 — 화면은 진행 표시만 자기 방식대로 그린다.
 //  취소 정책: **이미 올라간 파일은 되돌리지 않는다**(서버에 트랜잭션이 없다). 대신 'N개까지 올리고 취소' 로 정직하게 알린다.
 //   전송 중이던 파일은 서버가 임시파일에만 쓰고 있었으므로 목적지엔 흔적이 없다(부분 파일 X, 덮어쓰던 원본도 무사 — src/upload-file.ts).
-type UpResult = { ok: number; fail: number; made: number; canceled: boolean };
+type UpResult = { ok: number; fail: number; made: number; over: number; canceled: boolean };
 async function upSend(o: {
   items: UpItem[];
   emptyDirs?: string[];
   signal: AbortSignal;
   fileUrl: (rel: string) => string;    // 파일 PUT 주소(대상 폴더는 호출부가 드롭 시점에 고정)
   dirUrl?: (rel: string) => string;    // 빈 폴더 mkdir 주소(구조 보존)
+  overwriteNames?: Set<string>;        // 사전확인에서 '덮어쓸' 것으로 판정된 직접 파일명(#877) — 결과 요약 카운트용
   onProgress?: (i: number, rel: string, pct: number) => void;
 }): Promise<UpResult> {
   const arr = o.items || [], dirs = o.emptyDirs || [];
-  let ok = 0, fail = 0, made = 0;
+  const overSet = o.overwriteNames || null;
+  let ok = 0, fail = 0, made = 0, over = 0;
   for (let i = 0; i < arr.length; i++) {
-    if (o.signal.aborted) return { ok, fail, made, canceled: true };
+    if (o.signal.aborted) return { ok, fail, made, over, canceled: true };
     const u = arr[i];
     if (o.onProgress) o.onProgress(i, u.rel, 0);
     try {
       await authUploadProgress(o.fileUrl(u.rel), u.file, (pct) => { if (o.onProgress) o.onProgress(i, u.rel, pct); }, o.signal);
       ok += 1;
+      if (overSet && !String(u.rel).includes('/') && overSet.has(u.rel)) over += 1;   // 기존 파일을 실제로 덮어씀
       if (o.onProgress) o.onProgress(i, u.rel, 100);
     } catch (e) {
-      if (upIsAbort(e)) return { ok, fail, made, canceled: true };   // 전송 중이던 파일이 끊김 = 취소
+      if (upIsAbort(e)) return { ok, fail, made, over, canceled: true };   // 전송 중이던 파일이 끊김 = 취소
       fail += 1;
       toast(u.rel + ' 실패 — ' + e.message, true);
     }
   }
   // 빈 폴더는 올릴 파일이 없으니 mkdir 로 만들어 준다(구조 보존).
   for (const d of dirs) {
-    if (o.signal.aborted) return { ok, fail, made, canceled: true };
+    if (o.signal.aborted) return { ok, fail, made, over, canceled: true };
     if (!o.dirUrl) break;
     try { await api(o.dirUrl(d), { method: 'POST' }); made += 1; }
     catch (_) { /* 비치명 — 파일은 이미 올라갔다 */ }
   }
-  return { ok, fail, made, canceled: false };
+  return { ok, fail, made, over, canceled: false };
 }
 // 업로드 결과 알림 — 취소했으면 **몇 개까지 올라갔는지** 반드시 말한다(조용히 멈추면 사용자가 폴더 상태를 알 수 없다).
 //  ⚠ ok 는 '성공 응답까지 확인한' 개수 = 하한이다. 취소를 누른 그 순간 서버가 이미 다 받아 저장을 마쳤는데 응답만 못 받은
 //   파일이 1개 더 있을 수 있다(끊는 쪽은 상대가 끝냈는지 알 길이 없다 — HTTP 취소의 본질적 모호성). 그래서 호출부는 취소
 //   뒤에도 목록을 다시 읽어 사용자가 '진짜 상태'를 보게 한다. 어느 경우든 파일 자체는 온전하다(부분 파일 X — src/upload-file.ts).
 function upToast(r: UpResult) {
-  if (r.canceled) { toast(r.ok ? (r.ok + '개까지 올리고 취소했습니다') : '업로드를 취소했습니다'); return; }
-  if (r.ok || r.made) toast((r.ok ? r.ok + '개 업로드 완료' : r.made + '개 폴더 생성') + (r.fail ? (' · ' + r.fail + '개 실패') : ''));
+  const over = r.over ? ' · ' + r.over + '개 덮어씀' : '';   // #877 — 덮어쓴 개수를 결과에도 명시(사전확인과 짝)
+  if (r.canceled) { toast(r.ok ? (r.ok + '개까지 올리고 취소했습니다' + over) : '업로드를 취소했습니다'); return; }
+  if (r.ok || r.made) toast((r.ok ? r.ok + '개 업로드 완료' : r.made + '개 폴더 생성') + over + (r.fail ? (' · ' + r.fail + '개 실패') : ''));
 }
 // 업로드 진행 + 취소 바 — 배치 하나당 한 줄. 배치가 동시에 여러 개 돌면 줄도 여러 개라 '어느 업로드를 끊는지' 헷갈리지 않는다.
 //  세 화면이 같은 바를 쓴다(.up-prog) — 취소 어포던스를 화면마다 다르게 만들 이유가 없다.
@@ -9007,6 +9069,7 @@ function upProgress(total: number, onCancel: () => void, opts?: { label?: string
 function openFolderGrid(id, startPath, base) {
   const B = base || '/api/ui/projects/';
   const st = { path: startPath || '', q: '' };
+  let lastFolderItems: any[] = [];   // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877). 검색 중이어도 실제 업로드 대상 폴더 기준으로 판정.
   const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '파일 검색…' });
   searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
   const up = upControl((items) => uploadHere(items, []));
@@ -9029,13 +9092,16 @@ function openFolderGrid(id, startPath, base) {
     const arr = items || [];
     const dirs = emptyDirs || [];
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
+    const cur = lastFolderItems;   // 검색 중이어도 실제 업로드 대상 폴더 기준(#877 리뷰)
+    const pc = upPrecheckOverwrite(arr, cur);   // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
+    if (!pc.go) return;
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
     const dest = st.path;    // 업로드 중 폴더를 옮겨도 '떨어뜨린 그 폴더'로 간다
     const ac = new AbortController();
     const bar = upProgress(arr.length, () => ac.abort());
     progBox.append(bar.row);
     const r = await upSend({
-      items: arr, emptyDirs: dirs, signal: ac.signal,
+      items: arr, emptyDirs: dirs, signal: ac.signal, overwriteNames: pc.over,
       fileUrl: (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel),
       dirUrl: (d) => B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d),
       onProgress: (i, rel, pct) => bar.set(i, rel, pct),
@@ -9066,6 +9132,7 @@ function openFolderGrid(id, startPath, base) {
     let data: any;
     try { data = await api(B + id + '/files' + qs); }
     catch (e) { listBox.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다')); return; }
+    if (data.search === undefined) lastFolderItems = data.items || [];   // 검색 응답은 무시 — 폴더 목록일 때만 갱신
     if (data.search !== undefined) {
       crumb.replaceChildren(el('span', { text: '“' + data.search + '” 검색 — ' + data.items.length + '건' }));
       const rows = (data.items || []).map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B));
@@ -9078,7 +9145,7 @@ function openFolderGrid(id, startPath, base) {
     const rows: any[] = [];
     if (data.path) rows.push(el('div', { class: 'proj-file-lrow', onclick: () => { st.path = data.parent || ''; load(); } },
       el('span', { class: 'proj-file-lic', text: '↩' }), el('span', { class: 'proj-file-lnm', text: '상위 폴더' }),
-      el('span', { class: 'proj-file-lsz' }), el('span', { class: 'proj-file-lacts' })));
+      el('span', { class: 'proj-file-lsz' }), el('span', { class: 'proj-file-ldt' }), el('span', { class: 'proj-file-lacts' })));
     for (const it of (data.items || [])) rows.push(projFileRowEl(id, it, join(st.path, it.name), (t) => { st.path = t; load(); }, load, B));
     listBox.replaceChildren(...(rows.length ? rows : [el('div', { class: 'empty', text: '빈 폴더입니다.' })]));
   }
@@ -9101,6 +9168,7 @@ function projectFolderSection(id, base) {
   const body = el('div', {});
   const st = { path: '', q: '' };
   let lastData: any = null;   // 마지막 서버 응답(업로드 중 그리드 즉시 재구성용)
+  let lastFolderItems: any[] = [];   // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877)
   const uploading: any[] = [];  // 업로드 중 카드 [{ name, label, pct, pctEl, fill, nmEl }] — 폴더 업로드는 묶음 카드 1장
   const searchIn = el('input', { type: 'search', placeholder: '파일 검색…', class: 'proj-file-search' });
   searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
@@ -9180,6 +9248,9 @@ function projectFolderSection(id, base) {
     const arr = items || [];
     const dirs = emptyDirs || [];
     if (!arr.length && !dirs.length) { toast('올릴 파일이 없습니다', true); return; }
+    const cur = lastFolderItems;   // 검색 중이어도 실제 업로드 대상 폴더 기준(#877 리뷰)
+    const pc = upPrecheckOverwrite(arr, cur);   // #877 — 겹치면 무엇이 덮이는지 보여주고 확인
+    if (!pc.go) return;
     if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
     const dest = st.path;   // 업로드 중 다른 폴더로 들어가도 '떨어뜨린 그 폴더'로 간다
     // 파일이 많으면(폴더 업로드) 파일별 카드 대신 묶음 카드 1개 — 그리드가 수백 장으로 폭주하지 않게.
@@ -9194,7 +9265,7 @@ function projectFolderSection(id, base) {
     const bar = upProgress(arr.length, () => ac.abort());
     progBox.append(bar.row);
     const r = await upSend({
-      items: arr, emptyDirs: dirs, signal: ac.signal,
+      items: arr, emptyDirs: dirs, signal: ac.signal, overwriteNames: pc.over,
       fileUrl: (rel) => B + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel),
       dirUrl: (d) => B + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d),
       onProgress: (i, rel, pct) => {
@@ -9259,6 +9330,7 @@ function projectFolderSection(id, base) {
   }
   function render(data) {
     lastData = data;
+    if (data.search === undefined) lastFolderItems = data.items || [];   // 검색결과는 무시 — 폴더 목록일 때만(#877)
     const frag: any[] = [];
     let pairs: any; // { it, rel }
     if (data.search !== undefined) {
@@ -9788,6 +9860,8 @@ export {
   debounce,
   fileIconSvg,
   fmtDateTime,
+  fmtFileDate,
+  fmtFileDateFull,
   fmtSize,
   initials,
   mdFromDom,
@@ -9820,6 +9894,7 @@ export {
   upControl,
   upDropZone,
   upIsAbort,
+  upPrecheckOverwrite,
   upProgress,
   upSend,
   upToast,

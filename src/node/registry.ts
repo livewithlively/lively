@@ -10,7 +10,7 @@ import { logger } from "../log.js";
 import type { SessionInfo } from "../terminal-sessions.js";
 import {
   NODE_WS_PATH, decodeChanFrame, parseMsg, nodeSessionVisible,
-  type NodeToGwMsg, type GwToNodeMsg, type NodeOp,
+  type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeToken, touchNode, type OrgNode } from "./store.js";
 
@@ -18,7 +18,9 @@ import { authNodeToken, touchNode, type OrgNode } from "./store.js";
 export const CLOSE_NODE_OFFLINE = 4462; // 노드 미연결(꺼짐·절전·네트워크) — 클라는 재시도 유지(일시 상태일 수 있음)
 
 const RPC_TIMEOUT_MS = 15_000;   // create 가 mkdir·워크트리로 수 초 걸릴 수 있어 여유
-const HEARTBEAT_MS = 30_000;     // 노드 WSS liveness(#687 과 동일 패턴 — 반쯤 끊긴 연결 회수)
+// 노드 WSS liveness(#687 패턴) — §10 "온오프 즉각 인지": 정상 종료/절전은 close 이벤트로 즉시,
+//  반쯤 열린 연결(VPN 절단 등)은 ping 무응답 1주기로 → 오프라인 인지 상한 ≈ 2×10s.
+const HEARTBEAT_MS = 10_000;
 const STATE_STALE_MS = 12_000;   // 상태 push(3s) 기준 신선 임계 — 넘으면 attach 정책 판정 전 RPC 로 재확인
 const TOUCH_MIN_MS = 60_000;     // last_seen DB 갱신 스로틀
 
@@ -34,10 +36,12 @@ interface NodeConn {
   nextChan: number;
   chans: Map<number, { browser: WebSocket; opened: boolean }>;
   lastTouch: number;
+  hasDocker: boolean;
 }
 
 // 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다(게이트웨이 재시작 시 리셋, 도그푸드 OK).
-interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string }
+//  res = 상시 노출 리소스(§10) — 스케줄러의 배치 입력(오프라인이면 후보 제외라 stale 무해).
+interface NodeState { ts: number; sessions: SessionInfo[]; name: string; kind: string; owner: string; res: NodeResources | null }
 
 const conns = new Map<string, NodeConn>();
 const states = new Map<string, NodeState>();
@@ -142,7 +146,7 @@ export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebS
   catch { cleanup(false); try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
 }
 
-function applyState(nodeId: string, sessions: SessionInfo[]): NodeState {
+function applyState(nodeId: string, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
   const c = conns.get(nodeId);
   const prev = states.get(nodeId);
   const st: NodeState = {
@@ -150,9 +154,25 @@ function applyState(nodeId: string, sessions: SessionInfo[]): NodeState {
     name: c?.node.name ?? prev?.name ?? nodeId,
     kind: c?.node.kind ?? prev?.kind ?? "member",
     owner: c?.node.owner_member ?? prev?.owner ?? "",
+    res: res ?? prev?.res ?? null,
   };
   states.set(nodeId, st);
   return st;
+}
+
+// 위탁 태스크 종결 훅(P2) — 스케줄러가 구독(순환 import 회피: registry 는 태스크 로직을 모른다).
+let taskDoneHandler: ((nodeId: string, m: TaskDoneMsg) => void) | null = null;
+export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void { taskDoneHandler = cb; }
+
+// 스케줄러용 원격 노드 뷰(§10) — 온라인 노드만(오프라인은 후보 자체가 아님).
+export interface RemoteSchedulable { id: string; kind: string; owner: string; hasDocker: boolean; res: NodeResources | null }
+export function schedulableRemotes(): RemoteSchedulable[] {
+  const out: RemoteSchedulable[] = [];
+  for (const [id, c] of conns) {
+    const st = states.get(id);
+    out.push({ id, kind: c.node.kind, owner: c.node.owner_member, hasDocker: c.hasDocker, res: st?.res ?? null });
+  }
+  return out;
 }
 
 function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
@@ -177,9 +197,18 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     return;
   }
   if (m.t === "state") {
-    applyState(c.node.id, Array.isArray(m.sessions) ? m.sessions : []);
+    applyState(c.node.id, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
     const now = Date.now();
     if (now - c.lastTouch > TOUCH_MIN_MS) { c.lastTouch = now; void touchNode(c.node.id).catch(() => { /* 비치명 */ }); }
+    return;
+  }
+  if (m.t === "hello") {
+    c.hasDocker = !!m.hasDocker;
+    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host }).catch(() => { /* 비치명 */ });
+    return;
+  }
+  if (m.t === "taskdone") {
+    try { taskDoneHandler?.(c.node.id, m); } catch { /* 스케줄러 오류는 태스크 1건에 한정 */ }
     return;
   }
   if (m.t === "opened") {
@@ -230,7 +259,7 @@ export function setupNodeUpgrade(server: Server): void {
       wss.handleUpgrade(req, socket, head, (ws) => {
         const prev = conns.get(node.id);
         if (prev) { logger.info({ node: node.id }, "노드 재연결 — 구 연결 교체"); try { prev.ws.terminate(); } catch { /* noop */ } onNodeDisconnected(prev); }
-        const c: NodeConn = { node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(), lastTouch: Date.now() };
+        const c: NodeConn = { node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(), lastTouch: Date.now(), hasDocker: false };
         conns.set(node.id, c);
         (ws as LiveWS).isAlive = true;
         ws.on("pong", () => { (ws as LiveWS).isAlive = true; });

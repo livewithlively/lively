@@ -55,6 +55,14 @@ export async function initOrgSchema(): Promise<void> {
     --  계산한다(computeMemberOnboarding). 이 컬럼엔 서버가 **볼 수 없는 것**(그 사람 노트북의 로컬 이관 완료 —
     --  AI 스킬이 보고)과 사용자의 **의도적 오버라이드**(웹 ⋯ 메뉴)만 담긴다. 상태를 두 곳에 두면 어긋난다.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS onboarding JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- harness_snapshot = 멤버 노트북의 로컬 하네스 자산 **관측 스냅샷**(#891 온보딩 C). 형태:
+    --   { "at": "<iso>", "host": "<hostname>", "harness": "claude"|"codex",
+    --     "assets": [ { "id", "kind": "skill"|"subagent"|"command"|"hook", "managed": bool } ] }
+    -- ⚠ 관측이지 보고가 아니다(onboarding 과 성격 다름 — 그래서 별 컬럼). 세션훅(session-preload)이 매 세션
+    --  로컬을 스캔해 **메타만** push 한다 — 스킬 본문·메모리 내용은 절대 안 담는다(사생활·용량). "마지막으로
+    --  본 것"이라 노드 상태처럼 stale 가능(웹은 at 로 신선도 표시). 웹이 라이블리 자산(me_assets)과 대조해
+    --  중복(라이블리 채택 권고)·shadow 를 보여준다.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
   await itemsPool.query(`
     DO $$ BEGIN
@@ -788,6 +796,40 @@ export async function initOrgSchema(): Promise<void> {
       last_seen TIMESTAMPTZ,
       created_by TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
+  // ── org_task — 위탁 태스크(P2 #869). 의뢰자가 delegate_run 으로 넣고, 태스크 스케줄러가 리소스-적합 노드에 ──
+  //  배치(§10: 예상 소모량 vs 노드 상시 리소스 push). 노드 사망 시 grace 후 재큐(attempt<max) 또는 실패+알림.
+  //  결과 전문은 워크스페이스 .lively-task/<id>/ 에, 여기엔 요약(result jsonb)만.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_task(
+      id BIGSERIAL PRIMARY KEY,
+      requester TEXT NOT NULL,
+      requester_session TEXT,
+      prompt TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      subpath TEXT NOT NULL DEFAULT '',
+      flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+      need_cpu REAL,
+      need_ram_mb INT,
+      need_disk_mb INT,
+      needs_docker BOOLEAN NOT NULL DEFAULT false,
+      node_pref TEXT,
+      env_lease BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed','canceled')),
+      node_id TEXT,
+      session_id TEXT,
+      task_dir TEXT,
+      attempt INT NOT NULL DEFAULT 0,
+      max_attempts INT NOT NULL DEFAULT 2,
+      timeout_sec INT NOT NULL DEFAULT 3600,
+      node_lost_at TIMESTAMPTZ,
+      result JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
 

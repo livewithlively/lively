@@ -35,23 +35,24 @@ async function orgBanner() {
         return null;
     }
 }
-function stepCard(it, view) {
-    const state = it.state === 'done' ? 'done' : it.state === 'skipped' ? 'skipped' : 'todo';
-    // ⋯ = escape hatch. 기본 동선이 아니다 — AI 보고·자동 판정이 주(主)이고, 이건 "의도적으로 마킹하고 싶을 때".
-    const more = el('details', { class: 'ob-more' }, el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }), el('div', { class: 'card ob-more-pop' }, it.state !== 'done' ? el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) }) : null, it.state !== 'skipped' && !it.required ? el('button', { class: 'btn btn-ghost btn-sm', text: '해당 없음', onclick: () => mark(it.key, 'skipped', view) }) : null, it.state !== 'todo' ? el('button', { class: 'btn btn-ghost btn-sm', text: '다시 열기', onclick: () => mark(it.key, 'reset', view) }) : null));
-    // 뱃지 — 필수 / 누가 채웠는지(왕복이 보이면 신뢰가 생긴다) / 해당 없음.
-    const badges = [
-        it.required ? el('span', { class: 'ob-step-badge req', text: '필수' }) : null,
-        it.state === 'done' && it.by === 'ai' ? el('span', { class: 'ob-step-badge', text: 'AI가 완료' }) : null,
-        it.state === 'done' && it.by === 'auto' ? el('span', { class: 'ob-step-badge', text: '확인됨' }) : null,
-        it.state === 'skipped' ? el('span', { class: 'ob-step-badge', text: '해당 없음' }) : null,
-    ].filter(Boolean);
-    // 상태 위계(#870 수정): 완료는 조용히, 미완(특히 필수)은 도드라지게 — .req 로 필수 미완을 강조한다.
-    //  점 글리프: 완료 ✓ / 해당없음 — / 미완은 채운 원(글자 없이 CSS 로) — '할 일'로 읽히게.
-    const stateClass = state + (state === 'todo' && it.required ? ' req' : '');
-    return el('div', { class: `card ob-step ${stateClass}` }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot', text: state === 'todo' ? '' : (ICON[it.state] || '') }), el('span', { class: 'ob-step-label', text: it.label }), ...badges), more), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href && it.state !== 'done'
+// ⋯ escape hatch — AI 보고·자동 판정이 주(主). "의도적으로 마킹하고 싶을 때"만.
+function stepMore(it, view) {
+    return el('details', { class: 'ob-more' }, el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }), el('div', { class: 'card ob-more-pop' }, it.state !== 'done' ? el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) }) : null, it.state !== 'skipped' && !it.required ? el('button', { class: 'btn btn-ghost btn-sm', text: '해당 없음', onclick: () => mark(it.key, 'skipped', view) }) : null, it.state !== 'todo' ? el('button', { class: 'btn btn-ghost btn-sm', text: '다시 열기', onclick: () => mark(it.key, 'reset', view) }) : null));
+}
+// 미완 = 크고 뚜렷한 '할 일' 카드 — 설명 + [해보기]. 필수는 .req 로 한 단계 더 강조.
+//  (완료/미완이 같은 크기 카드라 '점 색만' 다르던 게 안 읽힌 원인 → 미완만 풀카드로, 완료는 얇은 줄로 분리.)
+function todoCard(it, view) {
+    const cls = 'card ob-step todo' + (it.required ? ' req' : '');
+    return el('div', { class: cls }, el('div', { class: 'ob-step-top' }, el('div', { class: 'ob-step-head' }, el('span', { class: 'ob-step-dot' }), // 속 빈/채운 파란 링 — CSS
+    el('span', { class: 'ob-step-label', text: it.label }), it.required ? el('span', { class: 'ob-step-badge req', text: '필수' }) : null), stepMore(it, view)), el('p', { class: 'ob-step-desc', text: it.how }), it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null, it.href
         ? el('div', { class: 'ob-step-act' }, el('a', { class: 'btn btn-primary btn-sm', href: it.href, text: '해보기 →' }))
         : null);
+}
+// 완료(또는 해당없음) = 접힌 얇은 줄 — 체크 + 라벨 + 상태 pill + ⋯. 설명·버튼 없음(끝난 일이라 조용히).
+function doneRow(it, view) {
+    const skipped = it.state === 'skipped';
+    const by = it.by === 'ai' ? 'AI가 완료' : it.by === 'auto' ? '확인됨' : '완료';
+    return el('div', { class: 'ob-done-row' + (skipped ? ' skipped' : '') }, el('span', { class: 'ob-done-check', text: skipped ? '—' : '✓' }), el('span', { class: 'ob-done-label', text: it.label }), el('span', { class: 'ob-done-tag', text: skipped ? '해당 없음' : by }), stepMore(it, view));
 }
 export async function renderStart(view) {
     // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
@@ -71,17 +72,82 @@ export async function renderStart(view) {
         return;
     }
     const s = d.status;
-    const doneCard = s.complete
+    // 상태로 가른다 — 미완(할 일)은 위·풀카드, 완료(끝난 것)는 아래·얇은 줄. "무엇이 남았나"가 한눈에.
+    const todo = s.items.filter((it) => it.state !== 'done' && it.state !== 'skipped');
+    const done = s.items.filter((it) => it.state === 'done' || it.state === 'skipped');
+    const doneBanner = s.complete
         ? el('div', { class: 'ob-banner green' }, el('div', { class: 'ob-banner-title', text: '준비 끝 — 이제 그냥 쓰시면 됩니다.' }), el('p', { class: 'ob-banner-sub' }, '아래 선택 항목은 필요할 때 하시면 됩니다. ', el('a', { href: '#/dashboard', text: '내 AI 세션' }), ' 에서 AI 에게 한국어로 물어보세요 — 회사 맥락을 알고 답합니다.'))
         : null;
-    // null 은 배열에서 걸러 낸다(예전엔 그대로 렌더돼 화면에 'null' 이 찍혔다 — #870 버그).
+    const todoSection = todo.length
+        ? el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title', text: '지금 할 일' }), el('span', { class: 'ob-sec-count', text: String(todo.length) })), ...todo.map((it) => todoCard(it, view)))
+        : null;
+    const doneSection = done.length
+        ? el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title done', text: '완료' }), el('span', { class: 'ob-sec-count', text: String(done.length) })), el('div', { class: 'ob-done-list' }, ...done.map((it) => doneRow(it, view))))
+        : null;
+    // null 은 배열에서 걸러 낸다(예전엔 그대로 렌더돼 화면에 'null' 이 찍혔다).
     const cards = [
         progressCard(s),
         await orgBanner(),
-        doneCard,
-        ...s.items.map((it) => stepCard(it, view)),
+        doneBanner,
+        todoSection,
+        doneSection,
     ].filter(Boolean);
     slot.replaceChildren(...cards);
+}
+// #/start/harness — 로컬 하네스 ↔ 라이블리 하네스 한눈에 (#891 온보딩 C, 슬라이스 1: 읽기).
+//  세션훅이 push 한 로컬 관측(me/harness)과 라이블리 배포(me_assets)를 나란히 + 중복 대조.
+//  ⚠ 값을 편집하지 않는다(슬라이스 1은 조회만). 토글은 슬라이스 2.
+function harnessRow(name, kindLabel, tag, sub) {
+    return el('div', { class: 'ob-done-row' }, el('span', { class: 'ob-done-check', text: '•' }), el('span', { class: 'ob-done-label' }, el('b', { text: name }), sub ? el('span', { class: 'ob-step-desc', text: ' ' + sub }) : null), el('span', { class: 'ob-done-tag', text: kindLabel }), tag ? el('span', { class: 'ob-step-badge ' + tag.cls, text: tag.text }) : null);
+}
+export async function renderStartHarness(view) {
+    const head = [
+        docsEyebrow('start'),
+        el('h1', { class: 'docs-title', text: '내 하네스 설정' }),
+        el('p', { class: 'docs-lead', text: '라이블리가 배포하는 스킬·훅과, 내 컴퓨터에 깔린 로컬 하네스 자산을 한눈에 봅니다. 겹치는 건 조직이 함께 관리·개선하는 라이블리 쪽을 쓰시길 권합니다.' }),
+    ];
+    const slot = el('div', { class: 'guide-cards' });
+    docsShell(view, 'harness', ...head, slot);
+    let d;
+    try {
+        d = await api('/api/ui/me/harness');
+    }
+    catch (e) {
+        slot.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message }));
+        return;
+    }
+    // 라이블리 배포 — 스킬 + 훅. effective=false 면 내가 끈 것.
+    const livelyRows = [
+        ...d.lively.skills.map((a) => harnessRow(a.label || a.id, a.kind === 'subagent' ? '서브에이전트' : a.kind === 'command' ? '커맨드' : '스킬', a.effective ? null : { text: '꺼짐', cls: 'off' }, a.description ? String(a.description).slice(0, 60) : '')),
+        ...d.lively.hooks.map((h) => harnessRow(h.label || h.id, '훅', h.effective ? null : { text: '꺼짐', cls: 'off' })),
+    ];
+    const livelyCard = el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title', text: '라이블리가 준 것' }), el('span', { class: 'ob-sec-count', text: String(livelyRows.length) })), el('p', { class: 'ob-step-desc', text: '조직이 관리하는 스킬·훅입니다. 모두에게 배포되고 함께 개선됩니다. (끄고 켜기는 곧 여기서 됩니다.)' }), el('div', { class: 'ob-done-list' }, ...(livelyRows.length ? livelyRows : [el('p', { class: 'admin-hint', text: '아직 없습니다.' })])));
+    // 로컬 관측 — 세션훅이 아직 push 안 했으면 observed=false.
+    const local = d.local;
+    let localBody;
+    if (!local.observed) {
+        localBody = el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 못 봤습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면, 다음 세션에 자동으로 여기 나타납니다. (웹 [터미널] 세션은 회사 서버라 로컬이 안 보입니다.)' });
+    }
+    else {
+        const rows = (local.assets || []).map((a) => {
+            const kindLabel = a.kind === 'subagent' ? '서브에이전트' : a.kind === 'command' ? '커맨드' : a.kind === 'hook' ? '훅' : '스킬';
+            const tag = a.overlap === 'managed' ? { text: '라이블리가 설치', cls: 'muted' }
+                : a.overlap === 'shadow' ? { text: '라이블리 것을 가림', cls: 'warn' }
+                    : { text: '내가 만든 것', cls: 'own' };
+            return harnessRow(a.id, kindLabel, tag);
+        });
+        localBody = el('div', { class: 'ob-done-list' }, ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 자산은 없습니다(라이블리가 준 것만 있어요).' })]));
+    }
+    const freshness = local.observed && local.at
+        ? el('p', { class: 'admin-hint', text: `${local.host ? local.host + ' · ' : ''}마지막 확인 ${new Date(local.at).toLocaleString('ko-KR')}` })
+        : null;
+    const localCard = el('div', { class: 'ob-sec' }, el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title', text: '내 컴퓨터에 있는 것' }), local.observed ? el('span', { class: 'ob-sec-count', text: String((local.assets || []).length) }) : null), localBody, freshness);
+    // shadow(가림)가 있으면 라이블리 채택 권고 배너.
+    const shadowCount = local.observed ? (local.assets || []).filter((a) => a.overlap === 'shadow').length : 0;
+    const shadowBanner = shadowCount
+        ? el('div', { class: 'ob-banner amber' }, el('div', { class: 'ob-banner-title', text: `내 로컬 자산 ${shadowCount}개가 라이블리 것과 이름이 같아 라이블리 배포를 가리고 있어요.` }), el('p', { class: 'ob-banner-sub', text: '같은 이름이면 조직이 함께 관리·개선하는 라이블리 쪽을 쓰시길 권합니다. 내 것이 더 낫다면 AI 에게 "이 스킬 라이블리에 올리게 정리해줘" 라고 해서 관리자에게 전달하세요. (자동으로 바꾸지 않습니다 — 원하시면 그대로 두셔도 됩니다.)' }))
+        : null;
+    slot.replaceChildren(...[shadowBanner, livelyCard, localCard].filter(Boolean));
 }
 // #/start/migrate — "예전 환경 가져오기" 스텝의 안내. **여기서 이관을 하지 않는다**(로컬 파일은 웹이 못 만진다).
 //  AI 에게 시키는 법만 알려주고, 실제 작업·완료 보고는 lively-onboarding 스킬이 한다.

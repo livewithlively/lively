@@ -25,13 +25,22 @@ export function decodeChanFrame(buf: Buffer): { kind: number; chan: number; payl
   return { kind: buf.readUInt8(0), chan: buf.readUInt32BE(1), payload: buf.subarray(5) };
 }
 
+// 노드 리소스 스냅샷(P2 §10) — 상시 노출(상태 push 에 동봉). 스케줄러의 리소스-적합 배치 입력.
+export interface NodeResources {
+  cpus: number; load1: number;            // 논리 코어 수 · 1분 로드애버리지
+  mem_total_mb: number; mem_free_mb: number;
+  disk_total_mb: number; disk_free_mb: number; // 공유 워크스페이스 루트 기준
+}
+
 // ── 제어 메시지(JSON 텍스트 프레임) ──
 // 노드 → 게이트웨이
-export interface HelloMsg { t: "hello"; ver: number; node: string; platform: string; agentVer?: string; host?: string }
-export interface StateMsg { t: "state"; sessions: SessionInfo[] }
+export interface HelloMsg { t: "hello"; ver: number; node: string; platform: string; agentVer?: string; host?: string; hasDocker?: boolean }
+export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
 export interface OpenedMsg { t: "opened"; chan: number }
 export interface OpenFailMsg { t: "openfail"; chan: number; code: number; reason: string }
+// 위탁 태스크 종결 보고(P2) — 노드가 exit 파일 감지·결과 수집 후 1회 push. summary 는 상한 잘라 전송.
+export interface TaskDoneMsg { t: "taskdone"; taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 // 게이트웨이 → 노드
 export interface ReqMsg { t: "req"; id: number; op: NodeOp; args?: Record<string, unknown> }
 export interface OpenMsg { t: "open"; chan: number; session: string }
@@ -39,9 +48,11 @@ export interface CtlMsg { t: "ctl"; chan: number; m: Record<string, unknown> } /
 // 양방향
 export interface CloseChanMsg { t: "close"; chan: number }
 
-export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label";
+// runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구)
+//  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
+export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask";
 
-export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg;
+export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {
