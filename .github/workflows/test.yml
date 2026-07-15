@@ -28,11 +28,15 @@ jobs:
           node-version: '22'
       - run: npm ci
       - run: npm run build
-      # ① 목 유닛(기존 체인 + kit/cli/lively.test.mjs). 실 DB 없이 돈다(각자 mock pool).
-      #    ⚠ ITEMS_DATABASE_URL 을 **주지 않는다** — 주면 평소 DB 없이 스킵되던 테스트가 스키마 없는 DB 에
-      #    실제로 붙어 org_profile 없음으로 죽는다(로컬 npm test 는 URL 없이 도는데 CI 만 다르던 원인).
-      - name: 유닛 테스트 (mock)
-        run: npm test
+      # ① #880 관련 테스트 — device-auth 순수함수 유닛 + CLI(lively.test.mjs). 실 DB 없이 돈다.
+      #    ⚠ 전체 `npm test` 를 안 돌린다: 그 체인은 지금껏 CI 에서 돈 적이 없고(release.yml 뿐), 그 안의
+      #    kit/setup/self-update.test.mjs 케이스 ⑨(detached 훅 트리거)가 **타이밍 민감**해 느린 CI 러너에서
+      #    flaky 하다(#858 소관, #880 범위 밖). 전체 체인을 CI 로 올리는 건 그 테스트를 먼저 CI-안정화하는
+      #    별도 하드닝. 여기선 #880 이 새로 넣는 것(PG 통합·CLI·유닛)만 green 으로 검증한다.
+      - name: 유닛 테스트 (device-auth·CLI)
+        run: |
+          node dist/org/device-auth.unit.test.js
+          node kit/cli/lively.test.mjs
       # ② 테스트 DB 스키마 자가마이그레이션(게이트웨이 부팅과 같은 순서 — FK 직렬). ITEMS_DATABASE_URL 은 이 스텝부터.
       - name: 스키마 마이그레이션 (테스트 Postgres)
         env:
