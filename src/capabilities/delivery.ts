@@ -913,7 +913,7 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 설정할 수 없습니다 — 관리자에게 문의하세요");
+      // 정적 토큰 거부 안 함 — 본인 로컬 파일 비파괴 토글(me_onboarding_set 과 동급)이지 fleet 자산정책(me_asset_pref)이 아니다.
       const machineId = str(input.machine_id, "machine_id", 64).trim();
       if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
       const assetId = str(input.id, "id", 64).trim();
