@@ -200,7 +200,15 @@ function detectConflicts(userBody) {
 //  Codex 는 config.toml 의 토큰 리터럴을 거부(bearer_token_env_var 만 허용)하므로, 토큰은 셸 환경에 있어야 한다.
 //  Claude 와의 비대칭(claude 는 ~/.claude.json 헤더에 토큰 인라인 → 연결됨; codex 는 리터럴 거부 → env 필요)을 메운다.
 //  가드레일 준수: 토큰 리터럴을 어떤 파일에도 굽지 않는다 — rc 에는 `$(cat ~/.lively/token)` 런타임 읽기만 export.
-//  센티넬 가드로 idempotent(재실행해도 중복 추가 없음). LIVELY_TOKEN 이 이미 환경에 있으면(예: CI) 덮어쓰지 않게 가드.
+//  센티넬 가드로 idempotent(재실행해도 중복 추가 없음).
+//  ⚠ 이 export 는 **무조건 덮어쓴다**(조건은 파일 존재뿐) — 즉 새 셸의 LIVELY_TOKEN 은 곧
+//   '셸 시작 시각의 ~/.lively/token 스냅샷'이고, override 가 아니라 **파일의 캐시**다.
+//   CLI 는 이 사실에 맞춰 파일을 정본으로 읽는다(#916 — kit/cli/lively.mjs 의 token() 주석 참조).
+//   env 를 신원의 정본으로 취급하는 코드를 새로 만들지 말 것: 로그인 직후 같은 셸에서 반드시 스테일이다.
+//  ⛔ **`[ -z "${LIVELY_TOKEN:-}" ]` 같은 '이미 있으면 두기' 가드를 넣지 말 것.** 무조건 덮어쓰기가
+//   스테일 env 의 **유일한 자가치유 경로**다(새 셸이면 낫는다). 가드를 넣으면 옛 토큰이 모든 새 셸에
+//   영구 고착돼 #916 이 회복 불가능해진다. 이미 한 번 겪은 사고다 — deploy/provision-member.sh:86
+//   ("과거 `-z LIVELY_TOKEN` 가드는 옛 셸에 남은 stale 토큰이 파일 토큰을 shadow 해 401 을 유발했다").
 const RC_BEGIN = "# >>> lively-managed (codex LIVELY_TOKEN) >>>";
 const RC_END = "# <<< lively-managed (codex LIVELY_TOKEN) <<<";
 function wireCodexTokenEnv() {

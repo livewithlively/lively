@@ -5,8 +5,14 @@
 //  base 를 주면 그대로 쓰고, 안 주면 프로젝트 folder 를 해결(없으면 물리 폴더 생성)해서 쓴다 — 생성 직후에도 동작.
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { getProject as getProjectV6, setProjectFolder } from "./project-store.js";
+import {
+  getProject as getProjectV6, setProjectFolder,
+  upsertProjectFolderBinding, SHARED_BINDING_MEMBER,
+} from "./project-store.js";
 import { projectAbsPath, createProjectFolder } from "../project-fs.js";
+// 폴더 바인딩의 환경 id — 박스(게이트웨이 호스트)는 'central'(CENTRAL_NODE_ID 와 같은 어휘). 노드 스케줄러를
+//  import 하면 registry/WS 체인이 딸려 와 순환 위험이 있어, 이 leaf 에서는 리터럴로 둔다(값은 한 낱말·불변).
+const CENTRAL_NODE = "central";
 
 const RULES_MARK = "<!-- LIVELY:RULES — 아래는 사람이 작성·편집 (digest 는 자동 갱신, 규칙은 보존) -->";
 // 규칙이 비었을 때 '## 규칙' 본문 자리표시 — HTML 주석이라 사람이 파일을 열면 힌트로 보이되 AI 에겐 지시문으로
@@ -103,6 +109,9 @@ export async function readProjectAgentsMd(base: string): Promise<{ rules: string
 //  로컬 PC 는 work.mjs 가 같은 마커를 ~/lively/projects/<id> 에 쓴다 — 박스는 프로젝트 폴더(workspace/project/<id>)에 여기서 쓴다.
 //  박스는 비개발 경작업 전용이라 레포 워크트리를 provision 하지 않음(=로컬 러너 영역) → repos 는 이름만 기록. project_id 가 핵심.
 //  멱등·비파괴: project_id/repos 가 바뀔 때만 다시 쓰고, work.mjs 등이 채운 다른 키(last_pull 등)는 보존(머지).
+//  sync(#905 P1-②) — pull 훅의 '쓰기 자격' 게이트. 박스 프로젝트 폴더(workspace/project/<id>)는 공유폴더
+//   그 자체(라이블리 소유)라 pull 이 기본. 기존 값이 있으면 보존한다(사람이 끈 걸 되살리지 않는다).
+//   ⚠ 사용자 자기 폴더에 마커를 심는 `lively init`(C2a)의 기본값은 반대로 "none" — 혼동 금지(#905 §2).
 async function writeProjectMarker(base: string, p: any): Promise<void> {
   const dir = path.join(base, ".lively");
   const file = path.join(dir, "project.json");
@@ -110,7 +119,7 @@ async function writeProjectMarker(base: string, p: any): Promise<void> {
   let prevRaw = "";
   try { prevRaw = await fsp.readFile(file, "utf8"); prev = JSON.parse(prevRaw); } catch { /* 신규 또는 파손 → 새로 씀 */ }
   const repos = Array.isArray(p.repos) ? p.repos : [];
-  const next = { ...prev, project_id: p.id, repos };
+  const next = { ...prev, project_id: p.id, sync: prev.sync ?? "pull", repos };
   const serialized = JSON.stringify(next, null, 2) + "\n";
   if (serialized === prevRaw) return; // write-if-changed
   await fsp.mkdir(dir, { recursive: true });
@@ -146,4 +155,11 @@ export async function ensureAgentsMd(projectId: number, base?: string, manualOve
   if (prevC.trim() !== "@AGENTS.md") await fsp.writeFile(claude, "@AGENTS.md\n");
   // .lively/project.json 마커도 같이 보장 — 박스 프로젝트 폴더가 로컬 PC(work.mjs)와 동일하게 마커를 갖도록.
   await writeProjectMarker(resolvedBase, p);
+  // 폴더 바인딩 등록(#905 P1-①) — "이 프로젝트가 어느 환경 어디에 사는가" 인벤토리에 박스 폴더를 올린다.
+  //  (project.folder 는 경로해석용 정본 컬럼으로 그대로 두고, 이 테이블은 멤버 노트북·워커노드까지 아우르는
+  //   N:M 인벤토리다 — 설계가 세는 폴더 3개 중 하나가 이 박스 폴더다.) 실패해도 비치명(호출부가 .catch).
+  await upsertProjectFolderBinding({
+    projectId: p.id, memberId: SHARED_BINDING_MEMBER, nodeId: CENTRAL_NODE,
+    absPath: resolvedBase, sync: "pull",
+  }).catch(() => { /* 인벤토리 실패가 AGENTS.md 생성을 막지 않는다 */ });
 }
