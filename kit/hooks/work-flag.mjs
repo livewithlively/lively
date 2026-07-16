@@ -40,6 +40,9 @@ const WRITE_TOOLS_DEFAULT = [
   "project_link_category_v6", "project_set_members_v6", "task_create_v6", "task_set_status_v6",
   // 팀 공유 메모리
   "memory_save",
+  // 외부 원본 회수(#906) — ext MCP 등으로 끌어온 자료를 SoT 에 남긴 것도 '기록함'이다. 이게 없으면
+  //  "노션 읽고 → source_save 로 남기고 종료"한 모범 세션이 기록 안 한 것으로 판정돼 너지를 맞는다.
+  "source_save", "source_link_knowledge",
 ];
 // 하네스 무관 파일-편집 툴 집합: Claude(Edit/Write/MultiEdit/NotebookEdit) + Codex(apply_patch).
 //   Codex 0.138+ 는 파일 편집을 apply_patch 로 보고한다(tool_name:"apply_patch"). 추가는 가산적·무해 —
@@ -57,6 +60,21 @@ function effectiveWriteTools() {
     }
   } catch { /* 못 읽으면 기본 */ }
   return WRITE_TOOLS_DEFAULT;
+}
+
+// 외부 맥락을 '인입했다'로 볼 툴 이름 **prefix** 목록(#906) — hooks-config.json 의 pull_tools 가 유일한 출처.
+//   write_tools 와 시맨틱이 반대다: **내장 기본값이 없고, 비면 기능 꺼짐**. DB 기본값('mcp__lively__ext__')이 곧 on 이라
+//   어드민이 웹에서 비우면 그대로 꺼지고, 항목을 더하면 범위가 넓어진다 — 노브 하나로 on/off + 범위를 잡는다.
+//   게이트웨이가 영영 불가해 설정이 없으면 넛지 안 함(fail-safe — 오넛지보다 미넛지가 안전).
+//   prefix 매칭인 이유: 프록시 툴이 mcp__lively__ext__<server>__<tool> 라 앞부분만으로 갈린다. substring 이면
+//   'context__' 같은 서버명이 오탐된다. 이 함수 자체는 서버 라벨 무관이라 matcher 만 넓히면 자체설치 MCP 도 잡는다 —
+//   다만 지금 matcher 는 mcp__lively__.* 라 그 경로는 아직 안 열려 있다(후속).
+function effectivePullTools() {
+  try {
+    const cfg = JSON.parse(readFileSync(join(homedir(), ".lively", "hooks-config.json"), "utf8"));
+    if (cfg && Array.isArray(cfg.pull_tools)) return cfg.pull_tools.filter((t) => typeof t === "string" && t);
+  } catch { /* 못 읽으면 끔 */ }
+  return [];
 }
 
 function readStdin(ms = 2000) {
@@ -84,13 +102,19 @@ try {
   const flags = new Set();
   if (tool.startsWith("mcp__lively__")) {
     flags.add("lively"); // 자가 게이팅 신호 — 읽기/쓰기 무관, 이 세션은 lively work.
-  }
-  if (tool.startsWith("mcp__")) {
-    // MCP 툴 이름 형식: mcp__<server>__<tool> — 서버 라벨과 무관하게 쓰기 툴 suffix 만 본다.
+    // writeback = **우리 스토어에 썼다** → 그래서 lively 서버로 스코프한다(.lively 와 같은 기준). suffix 만 보면
+    //  남의 MCP 의 `...__knowledge_save` 같은 동명 툴이 우리 스토어엔 아무것도 안 쓰고 게이트를 조용히 끈다 —
+    //  실패가 '유실' 방향이라 치명적이다. 구 matcher(mcp__lively__.*)일 땐 tool 이 항상 우리 것이라 안 드러나던
+    //  잠재 버그였고, #906 이 matcher 를 mcp__.* 로 넓히며 실재화됐다.
     if (effectiveWriteTools().some((w) => tool.endsWith(`__${w}`))) flags.add("writeback");
   } else if (EDIT_TOOLS.has(tool)) {
     flags.add("worked");
   }
+  // 외부 맥락 인입(#906) — 파일 편집과 동급의 '의미있는 작업'으로 본다.
+  //   .worked 를 쓰는 이유: 종료 게이트 결정표(worked && !writeback)를 그대로 재사용 → 게이트 코드 변경 0.
+  //   이 줄이 없으면 "노션만 읽고 논의하고 종료"한 세션은 .worked 가 안 서서 게이트를 조용히 통과한다 —
+  //   정작 그 세션이 끌어온 외부 맥락은 프록시가 아무것도 안 남기므로(순수 passthrough) 그대로 증발한다.
+  if (effectivePullTools().some((p) => tool.startsWith(p))) flags.add("worked");
   if (flags.size) {
     mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
     for (const flag of flags) writeFileSync(join(FLAG_DIR, `${sid}.${flag}`), "");

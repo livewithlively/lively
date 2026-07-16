@@ -231,8 +231,11 @@ async function refreshRuntimeConfig() {
     const hooks = (rc.hooks && typeof rc.hooks === "object" && !Array.isArray(rc.hooks)) ? rc.hooks : {};
     // write_tools(기록 인정 툴 — work-flag 가 읽음): 비었으면 생략 → work-flag 내장 v6 기본목록 사용(오버라이드 해제).
     const writeTools = Array.isArray(rc.write_tools) && rc.write_tools.length ? rc.write_tools : undefined;
+    // pull_tools(외부 맥락 인입 prefix — work-flag 가 읽음, #906): 비었으면 생략 = **기능 꺼짐**(내장 폴백 없음).
+    //  write_tools 와 시맨틱이 반대다 — 여기선 어드민이 비운 게 곧 '끄기'라 기본값을 되씌우면 안 된다.
+    const pullTools = Array.isArray(rc.pull_tools) && rc.pull_tools.length ? rc.pull_tools : undefined;
     writeFileSync(join(dir, "hooks-config.json"),
-      JSON.stringify({ hooks, writeback_notice: rc.writeback_notice || undefined, write_tools: writeTools }, null, 2));
+      JSON.stringify({ hooks, writeback_notice: rc.writeback_notice || undefined, write_tools: writeTools, pull_tools: pullTools }, null, 2));
     // auto-approve(B) — 게이트웨이 자동승인 목록을 캐시(~/.lively/auto-approve.json)에 굳히고, Claude 면 settings.json
     //  permissions.allow 에 reconcile(매 세션 → admin 변경이 재설치 없이 다음 세션 반영). 'mcp__lively__*' 만 통과.
     //  Codex 는 auto-approve 가 config.toml 관리 센티넬 블록 안이라 훅이 매 세션 재생성하지 않는다 — 캐시만 굳히고
