@@ -3923,11 +3923,11 @@ function targetMembersField(targetKind, item, isNew) {
     const modeHint = el('p', { class: 'tm-hint' });
     const targetRow = el('div', { class: 'field', style: 'margin:10px 0 0' }, el('label', { class: 'field-label', text: '대상 구성원 id' }), targetIn);
     const staleNote = el('div', { class: 'tm-stale' });
-    const listBox = el('div', {});
     const countEl = el('span', { class: 'tm-count' });
-    const searchIn = el('input', { type: 'search', class: 'tm-search', placeholder: '이름·id 검색' });
+    const openBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '구성원별 조정…' });
     const clearBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '전체 기본값 복귀' });
     let rows = []; // 서버가 준 구성원별 상태(정책 기본값·오버라이드·실효)
+    let listHost = null; // 모달이 열려 있는 동안의 행 컨테이너(닫히면 isConnected=false → 자동 폐기)
     const dirty = () => mode !== saved.mode || (mode === 'some' && targetIn.value.trim() !== saved.targets);
     const paintPolicy = () => {
         for (const b of segBar.children) {
@@ -3936,9 +3936,10 @@ function targetMembersField(targetKind, item, isNew) {
         }
         modeHint.replaceChildren(...inlineBold(MODES.find((m) => m[0] === mode)[2]));
         targetRow.style.display = mode === 'some' ? '' : 'none';
-        staleNote.textContent = dirty() ? '정책을 바꿨습니다 — 아래 [저장] 을 눌러야 이 표의 실효 상태에 반영됩니다.' : '';
+        staleNote.textContent = dirty() ? '정책을 바꿨습니다 — [저장] 해야 구성원별 실효 상태에 반영됩니다.' : '';
         staleNote.style.display = dirty() ? '' : 'none';
-        listBox.classList.toggle('tm-list-stale', dirty());
+        if (listHost?.isConnected)
+            listHost.classList.toggle('tm-list-stale', dirty());
     };
     for (const [m, label] of MODES) {
         const b = el('button', { type: 'button', class: 'tm-seg-btn', text: label });
@@ -3953,7 +3954,6 @@ function targetMembersField(targetKind, item, isNew) {
     let seq = 0;
     const reload = async () => {
         const mine = ++seq;
-        listBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
         try {
             const d = await api(`/api/ui/org/asset-members?target_kind=${encodeURIComponent(targetKind)}&ref_id=${encodeURIComponent(refId)}`);
             if (mine !== seq)
@@ -3961,21 +3961,31 @@ function targetMembersField(targetKind, item, isNew) {
             rows = d.members || [];
         }
         catch (e) {
-            if (mine === seq)
-                listBox.replaceChildren(errorNote(e, '구성원 상태를 불러오지 못했습니다'));
+            if (mine !== seq)
+                return;
+            countEl.textContent = '구성원 상태를 불러오지 못했습니다';
+            openBtn.disabled = clearBtn.disabled = true;
+            if (listHost?.isConnected)
+                listHost.replaceChildren(errorNote(e, '구성원 상태를 불러오지 못했습니다'));
             return;
         }
-        paintList();
+        paintSummary();
+        if (listHost?.isConnected)
+            paintList(); // 모달이 열려 있으면 같이 갱신
     };
-    const paintList = () => {
-        const q = searchIn.value.trim().toLowerCase();
-        const shown = rows.filter((r) => !q || r.id.toLowerCase().includes(q) || String(r.display_name || '').toLowerCase().includes(q));
+    // 폼에 남는 건 요약 한 줄뿐 — 구성원 42명을 폼에 깔면 [저장] 이 스크롤 저 아래로 밀린다.
+    const paintSummary = () => {
         const exceptions = rows.filter((r) => r.override !== null).length;
         const inactive = rows.filter((r) => r.state !== 'active').length;
         countEl.textContent = `구성원 ${rows.length - inactive}명`
             + (inactive ? ` · 비활성 ${inactive}명` : '')
             + (exceptions ? ` · 예외 ${exceptions}명` : ' · 예외 없음');
+        openBtn.disabled = !rows.length;
         clearBtn.disabled = !exceptions;
+    };
+    const paintList = () => {
+        const q = String(searchIn?.value || '').trim().toLowerCase();
+        const shown = rows.filter((r) => !q || r.id.toLowerCase().includes(q) || String(r.display_name || '').toLowerCase().includes(q));
         const node = (r) => {
             const dead = r.state !== 'active'; // 비활성 = 인증부터 막힌다 → 정책과 무관하게 아무것도 못 받는다
             const stateNow = r.override === null ? 'default' : (r.override ? 'on' : 'off');
@@ -4004,10 +4014,22 @@ function targetMembersField(targetKind, item, isNew) {
                 : (r.override === null ? '정책 기본값' : (r.override ? '강제 켬 · 예외' : '강제 끔 · 예외'));
             return el('div', { class: 'tm-row' + (r.override !== null ? ' exc' : '') + (dead ? ' dead' : '') }, el('div', { class: 'tm-who' }, el('span', { class: 'tm-name', text: r.display_name || r.id }), el('span', { class: 'tm-id', text: r.id }), dead ? el('span', { class: 'pill', text: '비활성' }) : null, r.kind !== 'human' ? el('span', { class: 'pill', text: r.kind === 'agent' ? 'AI' : '시스템' }) : null), el('div', { class: 'tm-state' }, el('span', { class: 'pill' + (r.effective ? ' tm-on' : ''), text: r.effective ? '적용 중' : '미적용' }), el('span', { class: 'tm-why', text: why })), seg);
         };
-        listBox.replaceChildren(...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+        listHost.replaceChildren(...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
     };
-    searchIn.addEventListener('input', () => { if (rows.length)
-        paintList(); });
+    // 구성원별 예외는 **모달**로 — 폼에 인라인으로 깔면 구성원 수만큼 길어져(현재 42명) [저장] 이 화면 밖으로 밀린다.
+    //  폼엔 요약 한 줄(구성원 N명 · 예외 M명)만 남기고, 조정이 필요할 때만 연다.
+    let searchIn = null;
+    const openModal = () => {
+        searchIn = el('input', { type: 'search', class: 'tm-search', placeholder: '이름·id 검색', style: 'width:180px' });
+        searchIn.addEventListener('input', () => { if (listHost?.isConnected)
+            paintList(); });
+        listHost = el('div', { class: 'tm-list' + (dirty() ? ' tm-list-stale' : '') });
+        const note = dirty()
+            ? el('div', { class: 'tm-stale', text: '정책이 저장 전입니다 — 아래 실효 상태는 아직 옛 정책 기준이에요.' }) : null;
+        overlay(`구성원별 예외 — ${item.label || item.id}`, el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, ...inlineBold('**클릭 즉시 반영**됩니다(구성원 다음 세션부터). 예외를 두지 않으면 위 정책 기본값을 따릅니다.')), el('div', { class: 'tm-members-head' }, searchIn, el('span', { class: 'tm-when', style: 'margin-left:auto', text: '클릭 즉시 반영' })), note, listHost);
+        paintList();
+    };
+    openBtn.addEventListener('click', openModal);
     clearBtn.addEventListener('click', async () => {
         if (!confirm('이 스킬/훅의 구성원 예외를 전부 지울까요? 전원이 위 정책을 따르게 됩니다.'))
             return;
@@ -4021,13 +4043,16 @@ function targetMembersField(targetKind, item, isNew) {
         }
     });
     const membersCard = isNew
-        ? el('p', { class: 'admin-hint', text: '먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.' })
-        : el('div', { class: 'tm-members' }, el('div', { class: 'tm-members-head' }, countEl, searchIn, clearBtn, el('span', { class: 'tm-when', text: '클릭 즉시 반영' })), staleNote, listBox);
-    if (!isNew)
+        ? el('p', { class: 'admin-hint', style: 'margin:10px 0 0', text: '먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.' })
+        : el('div', { class: 'tm-members' }, countEl, openBtn, clearBtn);
+    if (!isNew) {
+        countEl.textContent = '불러오는 중…';
+        openBtn.disabled = clearBtn.disabled = true;
         void reload();
+    }
     paintPolicy();
     return {
-        node: el('div', { class: 'tm' }, el('div', { class: 'tm-policy' }, el('div', { class: 'tm-members-head' }, el('b', { text: '전원 (정책 기본값)' }), el('span', { class: 'tm-when', text: '[저장] 을 눌러야 반영' })), segBar, modeHint, targetRow), membersCard),
+        node: el('div', { class: 'tm' }, el('div', { class: 'tm-policy' }, el('div', { class: 'tm-members-head' }, el('b', { text: '전원 (정책 기본값)' }), el('span', { class: 'tm-when', text: '[저장] 을 눌러야 반영' })), segBar, modeHint, targetRow), staleNote, membersCard),
         enabled: enabledNow,
         targetMembers: targetsPayload,
         // 'some' 인데 목록이 비었으면 저장 거부 — 서버가 빈 배열을 '전원'으로 읽어 화면과 정반대가 된다.
