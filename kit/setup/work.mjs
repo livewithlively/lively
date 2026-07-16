@@ -45,6 +45,11 @@ const projectId = String(args._[0] || "").trim();
 if (!/^\d+$/.test(projectId)) die("프로젝트 id 가 필요합니다. 사용: node work.mjs <projectId> [--repo-path ..] [--worktree] [--git-url ..]");
 const branch = args.branch || `project/${projectId}`;
 const harness = args.harness === "codex" ? "codex" : "claude";
+// 마커의 싱크 모드(#905 P1-②) — pull 훅이 "이 폴더에 서버 파일을 써도 되나"를 이걸로 판정한다.
+//  work.mjs 가 만드는 ~/lively/projects/<id> 는 **공유폴더 그 자체**(라이블리 소유)라 pull 이 기본이다.
+//  ⚠ 사용자 자기 폴더에 마커를 심는 `lively init`(C2a)의 기본값은 반대로 "none" 이어야 한다 — 그쪽은
+//   사용자 파일이 사는 곳이라 서버 매니페스트가 덮으면 무음 파괴다(#905 §2). 두 기본값을 헷갈리지 말 것.
+const DEFAULT_SYNC = "pull";
 
 // ── 게이트웨이 base + 토큰 (session-preload 와 동일 출처) ──
 function readFirst(...candidates) {
@@ -146,6 +151,7 @@ if (args.pullOnly) {
   let marker = {};
   try { marker = JSON.parse(fs.readFileSync(markerPath, "utf8")); } catch { /* 신규 */ }
   marker.project_id = Number(projectId);
+  marker.sync = marker.sync || DEFAULT_SYNC;
   marker.last_pull = newest;
   await fsp.mkdir(path.dirname(markerPath), { recursive: true });
   await fsp.writeFile(markerPath, JSON.stringify(marker, null, 2) + "\n");
@@ -250,6 +256,7 @@ const markerFile = path.join(dotLively, "project.json");
 let marker = {};
 try { marker = JSON.parse(fs.readFileSync(markerFile, "utf8")); } catch { /* 신규/파손 */ }
 marker.project_id = Number(projectId);
+marker.sync = marker.sync || DEFAULT_SYNC; // 기존 선택(예: 사람이 none 으로 끔)은 보존
 marker.last_pull = newest;
 marker.repos = usedRepos;
 await fsp.mkdir(dotLively, { recursive: true });

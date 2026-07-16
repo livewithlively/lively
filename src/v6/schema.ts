@@ -444,6 +444,48 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS session_project_project_idx ON session_project(project_id);
   `);
 
+  // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──
+  //  ⚠ 이름 주의: **project_folder(6d) 와 무관하다.** 그건 클릭업 Folder(폴더›리스트›프로젝트 의 정리용 상위층)이고,
+  //   이건 **파일시스템 폴더의 호스트별 실물 위치**다. (같은 혼동이 코드에도 이미 있다 — createProjectFolder 가
+  //   v6/folder-store.ts[클릭업 폴더]와 project-fs.ts[물리 디렉터리] 두 곳에 서로 다른 뜻으로 존재한다.)
+  //
+  //  왜 필요한가: project.folder 는 **1:1 컬럼**이고 "게이트웨이 공유베이스 하위 project/<id>" 전용이다
+  //   (createProjectFolder(id) 가 project/<id> 만 만들고, projectAbsPath 가 그 밖이면 400). 그런데 실제로 한
+  //   프로젝트는 **1 프로젝트 × N 멤버 × N 환경**에서 벌어진다 — 지금도 같은 project_id 로 폴더가 셋이다:
+  //     ~/code/myapp(멤버가 진짜 일하는 곳) · ~/lively/projects/<id>(work.mjs) · workspace/project/<id>(정본이나 빈 껍데기).
+  //   1:1 컬럼으로는 표현 자체가 불가 → 이 테이블이 나머지를 표현한다(project.folder 는 그대로 '박스 정본'을 유지).
+  //
+  //  키 설계:
+  //   · node_id = 환경 식별자. 'central'=게이트웨이 박스(CENTRAL_NODE_ID 선례) · 등록 워커노드 id · 멤버 노트북은
+  //     slugHost()(kit/cli/lively.mjs). **FK 없음** — 멤버 노트북은 노드 레지스트리에 없는 게 정상이라 참조무결성을
+  //     걸면 정상 케이스가 막힌다.
+  //   · member_id '' = **환경 공유(멤버 무관)** — 박스/워커노드의 프로젝트 폴더는 특정 멤버의 것이 아니다.
+  //     (NULL 을 쓰면 PK 에 못 들어간다 → 빈 문자열 센티널.)
+  //   · abs_path 가 키에 포함 — (프로젝트,멤버,환경) 하나에 폴더가 여럿인 게 **현재 실측 사실**이라(위 3개) 그걸 표현해야 한다.
+  //   · sync = 그 폴더의 공유폴더 동기화 모드(none|pull|both). **로컬 마커(.lively/project.json)가 그 호스트의
+  //     권위**이고(훅이 오프라인·DB 무관하게 읽어 fail-safe 판정) 이 컬럼은 **보고된 사본**이다 — 중앙에서
+  //     "어디가 both 인가"를 보기 위한 것(웹/lively status/C3 up-sync 대상 선정). 권위를 여기로 옮기면
+  //     게이트가 네트워크에 의존하게 되어 오프라인에서 fail-open 이 된다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_folder_binding(
+      project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL DEFAULT '',
+      node_id TEXT NOT NULL,
+      abs_path TEXT NOT NULL,
+      sync TEXT NOT NULL DEFAULT 'none',
+      origin_key TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (project_id, member_id, node_id, abs_path));
+    CREATE INDEX IF NOT EXISTS project_folder_binding_member_idx ON project_folder_binding(member_id, node_id);
+    CREATE INDEX IF NOT EXISTS project_folder_binding_origin_idx ON project_folder_binding(origin_key) WHERE origin_key IS NOT NULL;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='project_folder_binding'::regclass AND conname='project_folder_binding_sync_chk') THEN
+        ALTER TABLE project_folder_binding ADD CONSTRAINT project_folder_binding_sync_chk CHECK (sync IN ('none','pull','both'));
+      END IF;
+    END $$;
+  `);
+
   // ── 6b) project_member FK 교정 — 구 org/schema.ts(:304)가 project_member 를 org_project 참조로 **먼저**
   //   만들면, 위 CREATE TABLE IF NOT EXISTS(project 참조)가 기존 테이블을 덮지 못한다(IF NOT EXISTS 함정).
   //   그 결과 FK 가 org_project 를 가리킨 채 남아, v6 project 생성+팀원추가가 FK 위반(500)으로 깨졌다.

@@ -32,13 +32,38 @@ export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
   const res: SeedResult = { hooks: 0, skills: 0, knowledge: 0 };
 
-  // ── 커스텀 훅(org_hook) — 없을 때만 삽입(운영자 편집·토글 보존) ──
+  // ── 커스텀 훅(org_hook) — 신규 삽입 + **손 안 댄 시드는 갱신**(스킬·지식과 대칭, #905) ──
+  //  종전엔 "없을 때만 삽입"이라 훅 로직을 고쳐도 **이미 뜬 박스는 영원히 옛 훅**이었다 — 지식이 #813 에,
+  //   스킬이 #878 에 겪은 병과 동형이다. 훅에서 이건 단순 기능낙후가 아니라 **안전 문제**다: project-pull 훅에
+  //   '쓰기 자격 게이트'를 넣어도(#905 P1-②) 기존 박스엔 안 닿으면, 그 박스는 계속 사용자 폴더를 무음으로 덮는다.
+  //  종전 주석은 "run-custom 이 content_hash 로 enforcement 무결성을 게이팅해 별도 판단이 필요"라 미뤘는데,
+  //   그 판단의 결론: **upsertOrgHook 이 source_code 로 content_hash 를 재계산**하므로(store.ts) 갱신해도
+  //   무결성 게이트는 그대로 성립한다. 미룰 이유가 없었다.
+  //  스킬과 같은 보존 규약:
+  //   · updated_by='system' = 심은 뒤 아무도 안 건드림 → 갱신 안전. 운영자·에이전트가 한 번 편집하면 영구 보존.
+  //   · source_code 가 실제로 다를 때만 UPDATE(불필요한 version bump·감사 노이즈 방지).
+  //   · **enabled·target_members 는 보존** — 운영자 토글(마스터킬)·타깃 지정을 재시딩이 되살리지 않는다.
+  //  ⚠ 한계(명시): 편집된 훅(updated_by≠'system')은 여기로 안 닿는다. 그런 박스의 안전 픽스는 관리탭 ▸ 커스텀
+  //   훅 또는 등록 스크립트(scripts/register-project-pull-hooks.mjs)로 **따로** 반영해야 한다.
   for (const h of DEFAULT_HOOKS) {
     try {
-      if (await getOrgHook(h.id)) continue;
+      const before = await getOrgHook(h.id);
+      if (!before) {
+        await upsertOrgHook({
+          id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, enabled: h.enabled, sort: h.sort,
+        }, ctx);
+        res.hooks++;
+        continue;
+      }
+      // 기존 행 — 손 안 댄 시드(updated_by='system')이고 소스가 실제로 달라졌을 때만 갱신.
+      if (before.updated_by !== "system" || before.source_code === h.source_code) continue;
       await upsertOrgHook({
         id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-        source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, enabled: h.enabled, sort: h.sort,
+        source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note,
+        enabled: before.enabled,                 // 운영자 토글 보존(재시딩이 켜거나 끄지 않는다)
+        target_members: before.target_members,   // 타깃 지정 보존
+        sort: h.sort,
       }, ctx);
       res.hooks++;
     } catch (err) {
