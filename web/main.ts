@@ -77,7 +77,7 @@ async function route() {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
       if (segs[1] === 'install') await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
       else if (segs[1] === 'tour') await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
-      else if (segs[1] === 'menu') await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
+      else if (segs[1] === 'menu') { location.replace('#/learn'); return; } // #/learn/menu 폐기 — 개요로 리다이렉트(옛 북마크·링크 방어)
       else if (segs[1] === 'docs') await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
       else await renderLearn(view);
     } else if (page === 'start') {

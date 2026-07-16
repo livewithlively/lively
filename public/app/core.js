@@ -426,15 +426,18 @@ function renderContainer(type, rest, bodyLines) {
             return box;
         }
         case 'axes': {
-            // 맥락의 세 축(사용설명서) — 카테고리(분류 컨테이너)를 정점으로, 그 아래를 '필요 지식 → 프로젝트 → 산출 지식'
-            //  흐름으로 편다(정적→동적→정적). 지식(정적)은 흐름의 양끝, 프로젝트(동적)는 가운데. 본문 3줄 `이모지 | 이름 | 부제`.
+            // 맥락의 세 축 — 카테고리(분류축)가 '지식'(정적)을 WIKI로 분류해 담고, 프로젝트(동적)가 그 지식을 필요할 때
+            //  꺼내(필요 지식) 일하며 새로 만들어 되돌린다(산출 지식). ⚠ 분류축이 정리하는 1차 대상은 프로젝트가 아니라 '지식'이다
+            //  → 카테고리는 지식과 한 묶음(정적 존)으로 두고, 프로젝트(동적)는 필요/산출 지식으로만 잇는다. 본문 3줄 `이모지 | 이름 | 부제`.
             const rows = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::').map((l) => l.split('|').map((s) => s.trim()));
             const cat = rows[0] || [], kn = rows[1] || [], pj = rows[2] || [];
-            const knIc = kn[0] || '📄', pjIc = pj[0] || '🔄';
-            const apex = el('div', { class: 'md-axes-apex' }, el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: cat[0] || '🗂' }), el('span', { class: 'md-axes-nm' }, ...renderInline(cat[1] || '카테고리')), el('span', { class: 'md-axes-apex-hint', text: '지식·프로젝트를 담는 분류' }));
-            const fnode = (ic, nm, sub, cls) => el('div', { class: 'md-axes-fnode ' + cls }, el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: ic }), el('span', { class: 'md-axes-nm' }, ...renderInline(nm)), el('span', { class: 'md-axes-sub' }, ...renderInline(sub)));
-            const arrow = () => el('span', { class: 'md-axes-arrow', 'aria-hidden': 'true', text: '→' });
-            return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 세 축' }, apex, el('span', { class: 'md-axes-stem', 'aria-hidden': 'true' }), el('div', { class: 'md-axes-flow' }, fnode(knIc, '필요 지식', '있으면 먼저 쥐고 시작 · 선택', 'is-req'), arrow(), fnode(pjIc, pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-dynamic'), arrow(), fnode(knIc, '산출 지식', '일이 남기는 지식 · WIKI에 쌓임', 'is-prod')));
+            const card = (ic, nm, sub, cls) => el('div', { class: 'md-axes-card ' + cls }, el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: ic }), el('span', { class: 'md-axes-txt' }, el('span', { class: 'md-axes-nm' }, ...renderInline(nm)), sub ? el('span', { class: 'md-axes-sub' }, ...renderInline(sub)) : null));
+            // 정적 존 — 카테고리(분류축) →담는다→ 지식(WIKI). 이 묶음이 '정리된 맥락'.
+            const staticZone = el('div', { class: 'md-axes-zone is-static' }, card(cat[0] || '🗂', cat[1] || '카테고리', cat[2] || '분류축 · 어디에 둘지', 'is-cat'), el('span', { class: 'md-axes-hold', 'aria-hidden': 'true' }, el('span', { class: 'md-axes-hold-lbl', text: '분류해 담는다' })), card(kn[0] || '📄', kn[1] || '지식', kn[2] || '정적 · 이미 정해진 것', 'is-know'), el('span', { class: 'md-axes-zlbl', text: '정적 · 정리된 맥락 (WIKI)' }));
+            // 동적 존 — 프로젝트가 지식을 꺼내(필요)/되돌린다(산출)
+            const conn = el('div', { class: 'md-axes-conn', 'aria-hidden': 'true' }, el('span', { class: 'md-axes-flow-lbl is-req' }, el('span', { text: '필요 지식' }), el('span', { class: 'md-axes-arr', text: '→' })), el('span', { class: 'md-axes-flow-lbl is-prod' }, el('span', { class: 'md-axes-arr', text: '←' }), el('span', { text: '산출 지식' })));
+            const dynZone = el('div', { class: 'md-axes-zone is-dyn' }, card(pj[0] || '🔄', pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-proj'), el('span', { class: 'md-axes-zlbl', text: '동적 · 맥락을 바꾸는 일' }));
+            return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 세 축' }, staticZone, conn, dynZone);
         }
         case 'synced': {
             const box = el('div', { class: 'md-synced' });

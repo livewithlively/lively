@@ -23,7 +23,6 @@ const DOCS_NAV = [
             { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
         ] },
     { group: '화면별 안내', items: [
-            { key: 'menu', label: '메뉴 한눈에 보기', href: '#/learn/menu' },
             { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
             { key: 'terminal', label: '내 AI 세션', href: '#/learn/docs/terminal' },
             { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },

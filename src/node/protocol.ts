@@ -50,7 +50,10 @@ export interface CloseChanMsg { t: "close"; chan: number }
 
 // runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구)
 //  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
-export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask";
+// fs* = 노드 세션 파일 릴레이(#875) — 세션 작업폴더(@box_dir) 기준. 바이트는 base64 청크(maxPayload 1MB 회피),
+//  게이트웨이가 nodeCanAttach 로 인가 후 위임(정책=게이트웨이, 실행=노드 F7). fsRead(len=0)=stat.
+export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask"
+  | "fsLs" | "fsRead" | "fsWrite" | "fsMkdir" | "prompts";
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;
