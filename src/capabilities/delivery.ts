@@ -52,7 +52,7 @@ import {
   getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
-  listAssetPrefs, setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
+  listAssetPrefs, setAssetPref, clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, getDbSource, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
@@ -2200,6 +2200,46 @@ export const deliveryCapabilities: Capability[] = [
       member_id: z.string().describe("오버라이드를 적용할 멤버 id"),
       state: z.boolean().optional().describe("true=강제 on, false=강제 off (clear=true 면 무시)"),
       clear: z.boolean().optional().describe("true=오버라이드 해제(관리자 정책 기본값으로 복귀)"),
+    }),
+  // 관리탭 [대상 구성원] 표(#860) — 자산/훅 1건 × 전 구성원의 정책 기본값·오버라이드·실효를 한 번에.
+  //  실효는 **서버가** asset-visibility SoT 로 계산해 내려준다. 웹(web/tsconfig rootDir='.')이 src/ 를 import 못 해
+  //  프론트가 규칙을 복제하면 그 파일이 금지한 4번째 구현이 되기 때문 — me_assets_get 과 같은 처방.
+  //  ⚠ me_assets_get 은 enabled 자산만 다뤄 enabled:true 를 상수로 넘기지만, 여기는 비활성 자산도 보여주므로 실제 값을 넘긴다
+  //   (그래야 '활성=끔 → 전원 미적용, 예외도 못 이김'이 표에 그대로 나온다).
+  restRuntime("org_asset_members", "자산 구성원별 상태",
+    "자산/훅 1건의 구성원별 상태 — 정책 기본값(byDefault) · 개인 오버라이드(override: true=강제 on/false=강제 off/null=없음) · 실효(effective=이 구성원이 실제로 받는가). 관리탭 '대상 구성원' 표용.",
+    [{ method: "GET", paths: ["/api/ui/org/asset-members"],
+      parse: (req) => ({ target_kind: req.query.target_kind, ref_id: req.query.ref_id }) }],
+    async (input: Record<string, unknown>) => {
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      const item = targetKind === "org_hook" ? await getOrgHook(refId) : await getOrgHarnessAsset(refId);
+      if (!item) throw new HttpError(404, "대상 스킬/훅이 없습니다");
+      const targetMembers = item.target_members ?? null;
+      const prefBy = new Map((await listAssetPrefs({ target_kind: targetKind, ref_id: refId })).map((p) => [p.member_id, p.state]));
+      const members = (await listMembers()).map((m) => {
+        const override = prefBy.has(m.id) ? prefBy.get(m.id)! : null;
+        // 가시성 정책(SoT)과 **비활성 구성원**은 직교한다 — asset-visibility 는 정책 레이어만 모델링하고 멤버 상태는 모른다.
+        //  비활성 멤버는 인증 자체가 막혀(store.verifyDbToken: 멤버 비활성 → 토큰 무효, auth/sessions: 세션 무효)
+        //  정책상 대상이어도 **아무것도 못 받는다**. effective 는 '실제로 받는가'라는 질문이므로 둘을 AND 해야
+        //  화면이 거짓말하지 않는다(정책만 보면 퇴사자가 '적용 중'으로 뜬다). SoT 규칙 재구현이 아니라 직교한 전제의 AND.
+        const visible = effectiveVisible({ enabled: item.enabled, targetMembers, memberId: m.id, override });
+        return {
+          id: m.id, kind: m.kind, display_name: m.display_name, state: m.state,
+          byDefault: targetsMember(targetMembers, m.id),
+          override,
+          effective: m.state === "active" && visible,
+        };
+      });
+      return { policy: { enabled: item.enabled, target_members: targetMembers, harness: item.harness }, members };
+    }),
+  restRuntime("org_asset_prefs_clear", "자산 오버라이드 일괄 해제",
+    "자산/훅 1건의 구성원 오버라이드를 전부 제거해 전원이 관리자 정책(enabled+target_members)을 따르게 한다 — 관리탭 '전체 기본값 복귀'. 정책 자체는 안 건드린다.",
+    [{ method: "POST", paths: ["/api/ui/org/asset-prefs/clear"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      return { ok: true, cleared: await clearAssetPrefs(targetKind, refId, wctx(user, ctx)) };
     }),
 
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════
