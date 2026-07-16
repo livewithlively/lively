@@ -3789,6 +3789,190 @@ async function setColumnMask(source, table, column, style) {
   } catch (e) { toast(e.message, true); }
 }
 
+// ── [대상 구성원](#860) — 정책(전원 켬/끔/지정) + 구성원별 예외를 한 자리에. 자산·훅 공용. ──
+//  #699 가 서버(org_asset_pref_set)·부트스트랩 데이터까지 만들어 두고 UI 만 안 끝냈던 자리다.
+//
+//  전원 on/off 를 **정책 레이어**(enabled·target_members)에 두는 게 이 화면의 핵심 결정이다. 구성원 전원에게
+//  예외 행(org_asset_pref)을 일괄로 박는 방식도 가능하지만, 그러면 그 뒤 합류한 구성원은 행이 없어 정책
+//  기본값으로 새고 관리자는 "전원 껐다"고 믿게 된다. 정책은 신규 구성원에게도 자동 적용되므로 그 구멍이 없다.
+//  예외 레이어의 일괄 연산은 '전체 기본값 복귀'(예외 일괄 삭제) 하나만 둔다.
+//
+//  ⚠ 두 레이어는 **저장 시점이 다르다** — 섞이면 사용자가 뭘 눌렀는지 모른다. 상자를 갈라 각각 명시한다:
+//   · 정책 = 이 폼의 필드라 아래 [저장] 을 눌러야 반영.
+//   · 예외 = 별개 객체(org_asset_pref)라 버튼 클릭 즉시 반영.
+//  그래서 정책만 고치고 저장 안 한 동안 아래 표의 실효 상태는 **옛 정책 기준**이다 — 그 사실을 배지로 알린다.
+//
+//  실효 상태는 서버가 SoT(src/org/asset-visibility.ts)로 계산해 준 값만 그린다. 여기서 재계산하면 그 파일이
+//  "세 곳이 똑같이 구현한다 — 드리프트 금지"라고 못박은 규칙의 4번째 사본이 된다(web/ 는 src/ 를 import 못 함).
+//  저장 후엔 호출부가 renderAdminDetail 로 폼을 통째로 다시 그리므로, 저장본 반영은 재생성이 담당한다.
+function targetMembersField(targetKind, item, isNew) {
+  const refId = item.id;
+  const modeOf = (enabled, targets) => (enabled === false ? 'off' : (targets && targets.length ? 'some' : 'all'));
+  let mode = modeOf(item.enabled, item.target_members);
+  const saved = { mode, targets: (item.target_members || []).join(', ') }; // 마지막 저장본 — 표가 '저장 전'인지 판정
+
+  const MODES = [
+    ['all', '전원 켬', '지금 있는 구성원과 **앞으로 합류할 구성원**까지 전원에게 갑니다. 개인별 예외는 아래 표에서.'],
+    ['off', '전원 끔', '전원에게 차단됩니다 — **아래 개인 예외도 이걸 못 이깁니다**(마스터 스위치).'],
+    ['some', '지정한 사람만', '적은 구성원에게만 갑니다. 목록에 없으면 기본값이 «끔» 이고, **나중에 합류하는 구성원도 자동 제외**됩니다.'],
+  ];
+  const targetIn = el('input', { type: 'text', value: saved.targets, placeholder: '구성원 id 쉼표구분 (예: yoon, jang)' });
+  const targetsNow = () => targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const enabledNow = () => mode !== 'off';
+  // 'some' 인데 목록이 비면 서버는 그걸 '전원'으로 읽는다(target_members NULL/빈=전원) — 화면과 어긋나므로 저장 시 막는다.
+  //  '전원 끔'은 target_members 를 **안 보낸다**(undefined=보존) — 마스터킬은 타깃팅과 직교하므로, 잠깐 껐다 켜는 동안
+  //  애써 지정해 둔 명단을 날리면 안 된다(구 UI 는 [활성] 체크박스와 명단이 별개 필드라 보존됐다 — 그 계약 유지).
+  const targetsPayload = () => {
+    if (mode === 'off') return undefined;                       // 보존
+    if (mode === 'all') return null;                            // 전원 = 명단 비움
+    return targetsNow().length ? targetsNow() : null;
+  };
+
+  const segBar = el('div', { class: 'tm-seg' });
+  const modeHint = el('p', { class: 'tm-hint' });
+  const targetRow = el('div', { class: 'field', style: 'margin:10px 0 0' },
+    el('label', { class: 'field-label', text: '대상 구성원 id' }), targetIn);
+  const staleNote = el('div', { class: 'tm-stale' });
+  const countEl = el('span', { class: 'tm-count' });
+  const openBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '구성원별 조정…' });
+  const clearBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '전체 기본값 복귀' });
+
+  let rows: any[] = [];   // 서버가 준 구성원별 상태(정책 기본값·오버라이드·실효)
+  let listHost: any = null; // 모달이 열려 있는 동안의 행 컨테이너(닫히면 isConnected=false → 자동 폐기)
+  const dirty = () => mode !== saved.mode || (mode === 'some' && targetIn.value.trim() !== saved.targets);
+
+  const paintPolicy = () => {
+    for (const b of segBar.children as any) {
+      b.classList.toggle('on', b.dataset.m === mode);
+      b.setAttribute('aria-pressed', String(b.dataset.m === mode));
+    }
+    modeHint.replaceChildren(...inlineBold((MODES.find((m) => m[0] === mode) as any)[2]));
+    targetRow.style.display = mode === 'some' ? '' : 'none';
+    staleNote.textContent = dirty() ? '정책을 바꿨습니다 — [저장] 해야 구성원별 실효 상태에 반영됩니다.' : '';
+    staleNote.style.display = dirty() ? '' : 'none';
+    if (listHost?.isConnected) listHost.classList.toggle('tm-list-stale', dirty());
+  };
+  for (const [m, label] of MODES) {
+    const b = el('button', { type: 'button', class: 'tm-seg-btn', text: label });
+    b.dataset.m = m;
+    b.addEventListener('click', () => { mode = m; paintPolicy(); });
+    segBar.append(b);
+  }
+  segBar.setAttribute('role', 'group');
+  targetIn.addEventListener('input', paintPolicy);
+
+  // 구성원별 예외 — 서버(/api/ui/org/asset-members)가 SoT 로 계산한 byDefault·override·effective 를 그대로 그린다.
+  //  seq: 버튼을 빠르게 여러 번 누르면 먼저 띄운 GET 이 나중에 도착해 표를 옛 상태로 덮을 수 있다 — 마지막 요청만 그린다.
+  let seq = 0;
+  const reload = async () => {
+    const mine = ++seq;
+    try {
+      const d: any = await api(`/api/ui/org/asset-members?target_kind=${encodeURIComponent(targetKind)}&ref_id=${encodeURIComponent(refId)}`);
+      if (mine !== seq) return; // 더 최신 요청이 이미 떴다 — 이 응답은 버린다
+      rows = d.members || [];
+    } catch (e: any) {
+      if (mine !== seq) return;
+      countEl.textContent = '구성원 상태를 불러오지 못했습니다';
+      openBtn.disabled = clearBtn.disabled = true;
+      if (listHost?.isConnected) listHost.replaceChildren(errorNote(e, '구성원 상태를 불러오지 못했습니다'));
+      return;
+    }
+    paintSummary();
+    if (listHost?.isConnected) paintList();   // 모달이 열려 있으면 같이 갱신
+  };
+  // 폼에 남는 건 요약 한 줄뿐 — 구성원 42명을 폼에 깔면 [저장] 이 스크롤 저 아래로 밀린다.
+  const paintSummary = () => {
+    const exceptions = rows.filter((r) => r.override !== null).length;
+    const inactive = rows.filter((r) => r.state !== 'active').length;
+    countEl.textContent = `구성원 ${rows.length - inactive}명`
+      + (inactive ? ` · 비활성 ${inactive}명` : '')
+      + (exceptions ? ` · 예외 ${exceptions}명` : ' · 예외 없음');
+    openBtn.disabled = !rows.length;
+    clearBtn.disabled = !exceptions;
+  };
+  const paintList = () => {
+    const q = String(searchIn?.value || '').trim().toLowerCase();
+    const shown = rows.filter((r) => !q || r.id.toLowerCase().includes(q) || String(r.display_name || '').toLowerCase().includes(q));
+
+    const node = (r) => {
+      const dead = r.state !== 'active'; // 비활성 = 인증부터 막힌다 → 정책과 무관하게 아무것도 못 받는다
+      const stateNow = r.override === null ? 'default' : (r.override ? 'on' : 'off');
+      const seg = el('div', { class: 'tm-seg tm-seg-row', role: 'group' });
+      for (const [v, label] of [['default', '기본' + (r.byDefault ? '(켬)' : '(끔)')], ['on', '켜기'], ['off', '끄기']]) {
+        const on = stateNow === v;
+        const b = el('button', { type: 'button', class: 'tm-seg-btn' + (on ? ' on' : ''), text: label, 'aria-pressed': String(on) });
+        b.addEventListener('click', async () => {
+          const body: any = { target_kind: targetKind, ref_id: refId, member_id: r.id };
+          if (v === 'default') body.clear = true; else body.state = (v === 'on');
+          try { await api('/api/ui/org/asset-pref', { method: 'POST', body: JSON.stringify(body) }); await reload(); }
+          catch (e: any) { toast((e && e.message) || '실패', true); }
+        });
+        seg.append(b);
+      }
+      // 비활성이면 예외 설정은 남겨 둔다(복직 시 되살아나고, 지금 정리할 수도 있어야 하니) — 다만 '적용 중'이라고 말하지 않는다.
+      const why = dead ? '비활성 구성원 — 접속 불가'
+        : (r.override === null ? '정책 기본값' : (r.override ? '강제 켬 · 예외' : '강제 끔 · 예외'));
+      return el('div', { class: 'tm-row' + (r.override !== null ? ' exc' : '') + (dead ? ' dead' : '') },
+        el('div', { class: 'tm-who' },
+          el('span', { class: 'tm-name', text: r.display_name || r.id }),
+          el('span', { class: 'tm-id', text: r.id }),
+          dead ? el('span', { class: 'pill', text: '비활성' }) : null,
+          r.kind !== 'human' ? el('span', { class: 'pill', text: r.kind === 'agent' ? 'AI' : '시스템' }) : null),
+        el('div', { class: 'tm-state' },
+          el('span', { class: 'pill' + (r.effective ? ' tm-on' : ''), text: r.effective ? '적용 중' : '미적용' }),
+          el('span', { class: 'tm-why', text: why })),
+        seg);
+    };
+    listHost.replaceChildren(
+      ...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+  };
+
+  // 구성원별 예외는 **모달**로 — 폼에 인라인으로 깔면 구성원 수만큼 길어져(현재 42명) [저장] 이 화면 밖으로 밀린다.
+  //  폼엔 요약 한 줄(구성원 N명 · 예외 M명)만 남기고, 조정이 필요할 때만 연다.
+  let searchIn: any = null;
+  const openModal = () => {
+    searchIn = el('input', { type: 'search', class: 'tm-search', placeholder: '이름·id 검색', style: 'width:180px' });
+    searchIn.addEventListener('input', () => { if (listHost?.isConnected) paintList(); });
+    listHost = el('div', { class: 'tm-list' + (dirty() ? ' tm-list-stale' : '') });
+    const note = dirty()
+      ? el('div', { class: 'tm-stale', text: '정책이 저장 전입니다 — 아래 실효 상태는 아직 옛 정책 기준이에요.' }) : null;
+    overlay(`구성원별 예외 — ${item.label || item.id}`,
+      el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
+        ...inlineBold('**클릭 즉시 반영**됩니다(구성원 다음 세션부터). 예외를 두지 않으면 위 정책 기본값을 따릅니다.')),
+      el('div', { class: 'tm-members-head' }, searchIn,
+        el('span', { class: 'tm-when', style: 'margin-left:auto', text: '클릭 즉시 반영' })),
+      note, listHost);
+    paintList();
+  };
+  openBtn.addEventListener('click', openModal);
+  clearBtn.addEventListener('click', async () => {
+    if (!confirm('이 스킬/훅의 구성원 예외를 전부 지울까요? 전원이 위 정책을 따르게 됩니다.')) return;
+    try {
+      const r: any = await api('/api/ui/org/asset-prefs/clear', { method: 'POST', body: JSON.stringify({ target_kind: targetKind, ref_id: refId }) });
+      toast(`예외 ${r.cleared}건 해제됨`); await reload();
+    } catch (e: any) { toast((e && e.message) || '실패', true); }
+  });
+
+  const membersCard = isNew
+    ? el('p', { class: 'admin-hint', style: 'margin:10px 0 0', text: '먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.' })
+    : el('div', { class: 'tm-members' }, countEl, openBtn, clearBtn);
+  if (!isNew) { countEl.textContent = '불러오는 중…'; openBtn.disabled = clearBtn.disabled = true; void reload(); }
+
+  paintPolicy();
+  return {
+    node: el('div', { class: 'tm' },
+      el('div', { class: 'tm-policy' },
+        el('div', { class: 'tm-members-head' }, el('b', { text: '전원 (정책 기본값)' }),
+          el('span', { class: 'tm-when', text: '[저장] 을 눌러야 반영' })),
+        segBar, modeHint, targetRow),
+      staleNote, membersCard),
+    enabled: enabledNow,
+    targetMembers: targetsPayload,
+    // 'some' 인데 목록이 비었으면 저장 거부 — 서버가 빈 배열을 '전원'으로 읽어 화면과 정반대가 된다.
+    validate: () => (mode === 'some' && !targetsNow().length ? '‘지정한 사람만’ 을 골랐으면 대상 구성원 id 를 하나 이상 적으세요 (비우면 전원이 됩니다).' : null),
+  };
+}
+
 // ── 커스텀 훅 — runtime 권한 ──
 function customHookEditor(detail, data) {
   const hooks = data.orgHooks || [];
@@ -3824,17 +4008,16 @@ function hookForm(root, h, data, detail, isNew) {
   const codeTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '#!/usr/bin/env node\n// 훅 입력은 stdin(JSON), 응답은 stdout / exit code' });
   codeTa.value = h.source_code || '';
   const timeoutIn = el('input', { type: 'number', value: String(h.timeout_sec || 10), min: '1', max: '120' });
-  const targetIn = el('input', { type: 'text', value: (h.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
-  const enChk = el('input', { type: 'checkbox' }); enChk.checked = h.enabled !== false;
+  const tm = targetMembersField('org_hook', h, isNew);
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
     if (!idIn.value.trim()) { toast('id 필수', true); return; }
+    const bad = tm.validate(); if (bad) { toast(bad, true); return; }
     if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
     saveBtn.disabled = true;
     try {
-      const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: targets.length ? targets : null, enabled: enChk.checked };
+      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: tm.targetMembers(), enabled: tm.enabled() };
       await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.hookSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'custom-hooks', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
@@ -3852,8 +4035,7 @@ function hookForm(root, h, data, detail, isNew) {
     field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn),
     field('코드 (Node.js)', codeTa),
     field('타임아웃(초, 1~120)', timeoutIn),
-    field('대상 구성원(비우면 전원 · 구성원이 본인 것 opt-in/out 가능)', targetIn),
-    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    field('대상 구성원', tm.node),
     actions);
 }
 
@@ -3895,9 +4077,8 @@ function assetForm(root, a, data, detail, isNew) {
   bodyTa.value = a.body || '';
   const fmTa = el('textarea', { rows: '4', class: 'admin-ta', placeholder: '추가 frontmatter(JSON, 선택) — 예: {"model":"opus","allowed-tools":["Read","Grep"]}' });
   fmTa.value = (a.frontmatter && Object.keys(a.frontmatter).length) ? JSON.stringify(a.frontmatter, null, 2) : '';
-  const targetIn = el('input', { type: 'text', value: (a.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
+  const tm = targetMembersField('harness_asset', a, isNew);
   const pairedIn = el('input', { type: 'text', value: a.paired_hook_id || '', placeholder: '짝훅 id(선택) — 위험 통제용 커스텀 훅' });
-  const enChk = el('input', { type: 'checkbox' }); enChk.checked = a.enabled !== false;
   const codexNote = el('p', { class: 'admin-hint' });
   const syncNote = () => { codexNote.textContent = (kindSel.value !== 'skill' && (harnessSel.value === 'codex' || harnessSel.value === 'all'))
     ? '※ 서브에이전트·슬래시커맨드는 Codex 네이티브 미지원 — Codex 세션엔 배포되지 않습니다(스킬만 양 하네스). Claude 에만 적용됩니다.' : ''; };
@@ -3908,13 +4089,13 @@ function assetForm(root, a, data, detail, isNew) {
     if (!idIn.value.trim()) { toast('id 필수', true); return; }
     let fm = {};
     if (fmTa.value.trim()) { try { fm = JSON.parse(fmTa.value); } catch { toast('frontmatter 가 올바른 JSON 이 아닙니다', true); return; } }
-    const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const bad = tm.validate(); if (bad) { toast(bad, true); return; }
     if (!confirm('구성원 하네스에 배포되어 그들의 AI가 사용합니다. 스킬은 도구·셸을 실행할 수 있습니다. 저장할까요?')) return;
     saveBtn.disabled = true;
     try {
       const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
         description: descIn.value, body: bodyTa.value, frontmatter: fm,
-        target_members: targets.length ? targets : null, paired_hook_id: pairedIn.value.trim() || null, enabled: enChk.checked };
+        target_members: tm.targetMembers(), paired_hook_id: pairedIn.value.trim() || null, enabled: tm.enabled() };
       await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.assetSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'harness-assets', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
@@ -3933,9 +4114,8 @@ function assetForm(root, a, data, detail, isNew) {
     field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn),
     field('본문(마크다운)', bodyTa),
     field('추가 frontmatter (JSON, 선택)', fmTa),
-    field('대상 구성원(비우면 전원)', targetIn),
     field('짝훅 id(선택 — 위험 통제)', pairedIn),
-    el('label', { class: 'admin-check' }, enChk, ' 활성'),
+    field('대상 구성원', tm.node),
     actions);
 }
 

@@ -12,6 +12,12 @@
 //   지식 name(=external_id) = 파일 basename 슬러그. 최초 수동이관이 이 규칙으로 name 을 부여했으므로 동일 규칙
 //   이어야 기존 행을 재싱크가 그대로 갱신(name 키 upsert)한다. 상대링크는 basename 만 보고 해소한다 —
 //   레포 슬러그가 전역 유니크라 디렉터리 traversal(`../`) 을 풀 필요가 없다.
+//
+//   위키링크 **문법**(RE_WIKI·펜스/인라인코드 규칙)은 v6/wikilink 가 단일 진실원천이다(#907 — 본문 [[…]] 가
+//   지식 그래프 엣지로도 해소되면서 문법이 두 벌이 될 위험이 생겼다). 여기선 그 문법으로 찾은 링크를
+//   '도메인위키 파일명' 규칙으로 풀 뿐이다.
+
+import { RE_WIKI, mapProseSegments } from "../v6/wikilink.js";
 
 /** 파일 basename(확장자 제외) → 지식 name 슬러그. 소문자·[a-z0-9_-] 외 '-'·양끝 '-' 제거·64자 상한. */
 export function wikiSlug(basename: string): string {
@@ -54,49 +60,40 @@ export function parseFrontmatter(raw: string): { title: string | null; body: str
 }
 
 const RE_MD = /(!?)\[([^\]]*)\]\(([^)\s]+)\)/g;         // [txt](href) / ![alt](href)
-const RE_WIKI = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;      // [[name]] / [[name|label]]
 
 /**
- * 링크 정규화. 코드펜스(```)·인라인코드(`…`) 밖의 텍스트에서만:
+ * 링크 정규화. 코드펜스(```)·인라인코드(`…`) 밖의 텍스트에서만(mapProseSegments):
  *  A) 노션 URL → `#/k/notion-<id>`  (해당 notion-<id> 가 knownTargets 에 있을 때만)
  *  B) `[[name]]`/`[[name|label]]` → `[label](#/k/<slug>)`  (slug 가 knownTargets 에 있을 때 / 없으면 평문 label)
  *  C) 상대경로 `.md`·경로형 링크 → `[label](#/k/<slug>)`  (slug 가 knownTargets 에 있을 때만)
  * 외부 http(s)/mailto·앵커(#)·절대경로(/…)·이미지(!)는 원형 유지.
+ *
+ * ⚠ 문법(RE_WIKI·펜스 규칙)은 v6/wikilink 와 공유하되 **해소는 다르다** — 여기는 도메인위키 파일명(wikiSlug,
+ *  한글 소거), 지식 그래프 엣지(#907)는 knowledge.name 규칙(slugify, 한글 보존). 섞으면 한글 지식이 미매칭된다.
  */
 export function normalizeWikiLinks(md: string, knownTargets: Set<string>): string {
-  const lines = md.split("\n");
-  let inFence = false;
-  const out = lines.map((line) => {
-    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return line; }
-    if (inFence) return line;
-    // 인라인코드 스팬 분리 — 짝수 인덱스(코드 밖)만 변환.
-    const parts = line.split(/(`[^`]*`)/);
-    for (let i = 0; i < parts.length; i += 2) {
-      let seg = parts[i];
-      // A + C : 마크다운 링크
-      seg = seg.replace(RE_MD, (m, bang: string, label: string, href: string) => {
-        if (bang === "!") return m;                               // 이미지 — 유지
-        const nid = notionIdFromUrl(href);
-        if (nid) {                                                // A: 노션 URL
-          const name = `notion-${nid}`;
-          return knownTargets.has(name) ? `[${label}](#/k/${name})` : m;
-        }
-        if (/^(https?:|mailto:|#|\/)/.test(href)) return m;       // 외부/앵커/절대 — 유지
-        if (href.includes("/") || /\.md($|[#?])/i.test(href)) {   // C: 경로형/.md 상대링크
-          const slug = relTargetSlug(href);
-          return knownTargets.has(slug) ? `[${label}](#/k/${slug})` : m;
-        }
-        return m;                                                 // 경로 신호 없는 bare — 모호 → 유지
-      });
-      // B : [[wikilink]]
-      seg = seg.replace(RE_WIKI, (_m, name: string, label?: string) => {
-        const slug = relTargetSlug(name.trim());                  // 경로형 [[a/b/c]] 도 basename 슬러그
-        const text = (label ?? name).trim().replace(/[[\]]/g, " ").replace(/\s+/g, " ").trim();
-        return knownTargets.has(slug) ? `[${text}](#/k/${slug})` : text;  // 미해소 → 평문(죽은 [[..]] 방지)
-      });
-      parts[i] = seg;
-    }
-    return parts.join("");
+  return mapProseSegments(md, (seg) => {
+    // A + C : 마크다운 링크
+    seg = seg.replace(RE_MD, (m, bang: string, label: string, href: string) => {
+      if (bang === "!") return m;                               // 이미지 — 유지
+      const nid = notionIdFromUrl(href);
+      if (nid) {                                                // A: 노션 URL
+        const name = `notion-${nid}`;
+        return knownTargets.has(name) ? `[${label}](#/k/${name})` : m;
+      }
+      if (/^(https?:|mailto:|#|\/)/.test(href)) return m;       // 외부/앵커/절대 — 유지
+      if (href.includes("/") || /\.md($|[#?])/i.test(href)) {   // C: 경로형/.md 상대링크
+        const slug = relTargetSlug(href);
+        return knownTargets.has(slug) ? `[${label}](#/k/${slug})` : m;
+      }
+      return m;                                                 // 경로 신호 없는 bare — 모호 → 유지
+    });
+    // B : [[wikilink]]
+    seg = seg.replace(RE_WIKI, (_m, name: string, label?: string) => {
+      const slug = relTargetSlug(name.trim());                  // 경로형 [[a/b/c]] 도 basename 슬러그
+      const text = (label ?? name).trim().replace(/[[\]]/g, " ").replace(/\s+/g, " ").trim();
+      return knownTargets.has(slug) ? `[${text}](#/k/${slug})` : text;  // 미해소 → 평문(죽은 [[..]] 방지)
+    });
+    return seg;
   });
-  return out.join("\n");
 }
