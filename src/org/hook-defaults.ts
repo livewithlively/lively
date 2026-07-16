@@ -20,7 +20,7 @@ export const DEFAULT_WRITEBACK_NOTICE =
   "대체된 옛 지식은 knowledge_set_lifecycle(superseded). 작업과는 activity_log 의 ku_refs(produced/references/decided)로 연결. " +
   "외부(노션·슬랙 등)에서 끌어온 자료 — 프록시(ext__*)나 외부 MCP 로 읽은 건 세션이 끝나면 그대로 증발한다(게이트웨이는 " +
   "무엇을 읽었는지 안 남긴다). 커넥터 미러가 이미 갖고 있으면(knowledge_search 로 먼저 확인) 중복 저장하지 말고, " +
-  "미러 범위 밖이라 SoT 에 없으면(개인·미공유 페이지, 커넥터 없는 툴, 방금 쓴 것) source_save 로 원문을 남긴다. " +
+  "미러 범위 밖이라 라이블리에 없으면(개인·미공유 페이지, 커넥터 없는 툴, 방금 쓴 것) source_save 로 원문을 자료로 남긴다. " +
   "원본을 지식으로 복제하지는 말고, 거기서 얻은 파생 인사이트만 knowledge_save 로 저작한다. " +
   "진행한 태스크/프로젝트는 상태 갱신(task_set_status_v6·project_set_status_v6), 쪼개진 후속 일은 task_create_v6 로 (하위)작업 신설, " +
   "이 세션이 만든 산출 지식은 project_link_knowledge_v6(produced)로 프로젝트에 연결(필요지식은 required). " +
