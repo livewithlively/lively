@@ -40,6 +40,7 @@ const KNOWLEDGE_NAMES = [
 //  보존된다(seed-content 는 '없을 때만 삽입' — 기존 행을 안 덮는다).
 const SEED_DISABLED = new Set([
   "project-pull-turn",   // #828 — 턴마다 shared pull. 매니페스트 축소(#829)가 전제라 각 고객이 판단해 켠다.
+  "project-push",        // #905 C3 — 턴 끝 up-sync. 팀 공유문서를 덮어쓸 수 있고 sync="both" 옵트인이 전제라 각 고객이 판단해 켠다.
 ]);
 
 const here = path.dirname(fileURLToPath(import.meta.url));

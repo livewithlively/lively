@@ -25,7 +25,7 @@ import {
   readdirSync, statSync, realpathSync, openSync, closeSync,
 } from "node:fs";
 import { homedir, tmpdir, hostname } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
@@ -1000,8 +1000,89 @@ async function gatherStatus() {
   return st;
 }
 
+// ── 프로젝트 섹션(#905 C5a) — cwd 가 프로젝트일 때만 붙는다(아니면 null → 렌더 자체가 없음). ──
+//  왜 `lively status` 안인가: `status` 는 인자 없는 `lively` 의 **기본 명령**이라 사람이 실제로 치는 유일한 표면이다.
+//   별도 하위명령을 만들면 아무도 안 친다 — `work.mjs --status`(같은 내용)가 호출자 0인 게 그 증거다.
+//  ⚠ 이 섹션의 진짜 값어치 = **sync 모드를 사람 눈에 보이게 하는 것**(#905 P1-②). 마커의 sync 는 "이 폴더에
+//   서버 공유파일을 써도 되는가"를 정하는데, 지금까지 그걸 볼 수 있는 표면이 **어디에도 없었다**. 안 보이는 게이트는
+//   틀렸을 때 아무도 모른다.
+async function gatherProjectStatus(cwd) {
+  const { findProjectMarkerUp, markerSyncMode } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
+  const found = findProjectMarkerUp(cwd);
+  if (!found) return null;
+  const p = {
+    id: found.meta.project_id,
+    name: null,
+    dir: found.dir,
+    sync: markerSyncMode(found.meta),           // null = 구 마커(훅이 폴더 소유권으로 판정)
+    last_pull: Number(found.meta.last_pull) || 0,
+    shared: null,                                // {server_newest, server_count, pending, truncated} — 조회 실패 시 null
+    error: null,
+  };
+  try { p.name = (await api(`/api/ui/v6/projects/${p.id}`, { timeoutMs: 8000 }))?.project?.name ?? null; }
+  catch (e) { p.error = e.message; }
+  // 공유폴더 상태 — sync 가 none 이면 애초에 안 받으므로 조회하지 않는다(불필요한 왕복 + 오해 소지).
+  if (p.sync !== "none") {
+    try {
+      const m = await api(`/api/ui/v6/projects/${p.id}/shared/manifest`, { timeoutMs: 8000 });
+      const files = Array.isArray(m.files) ? m.files : [];
+      let pending = 0;
+      for (const f of files) {
+        const dest = join(p.dir, f.path);
+        if (relative(p.dir, dest).startsWith("..")) continue;   // 경로 탈출 방어(work.mjs 동형)
+        try { const s = statSync(dest); if (s.size === f.size && Math.floor(s.mtimeMs) >= f.mtime) continue; } catch { /* 로컬 없음 → pending */ }
+        pending++;
+      }
+      p.shared = { server_newest: m.newest || 0, server_count: typeof m.count === "number" ? m.count : files.length, pending, truncated: !!m.truncated };
+    } catch (e) { p.error = p.error || e.message; }
+  }
+  // up-sync 결과(#905 C3) — 자동 up 은 확인할 사람이 없어(수동 업로드의 #877 confirm 과 다름) **기록이 유일한 표면**이다.
+  //  충돌이 조용히 쌓이면 "왜 내 변경이 안 올라갔지"를 아무도 모른다. host-local(dotfile — 동기화 안 됨).
+  try { p.up = JSON.parse(readFileSync(join(p.dir, ".lively", "sync-up.json"), "utf8")); } catch { p.up = null; }
+  return p;
+}
+
+function renderProjectStatus(p) {
+  const iso = (ms) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) : dim("없음"));
+  say(`  프로젝트      ${bold("#" + p.id)}${p.name ? " " + p.name : dim(" (이름 조회 실패)")}`);
+  say(`    폴더        ${p.dir}`);
+  if (p.sync === "none") {
+    // 사용자 자기 폴더의 기본값 — '안 받는 게 정상'임을 분명히 한다(고장으로 오해하지 않게).
+    say(`    공유폴더    ${dim("동기화 안 함")} ${dim("(sync=none — 이 폴더엔 서버 파일을 내려받지 않습니다)")}`);
+    say(`                ${dim("받으려면 " + p.dir + "/.lively/project.json 의 sync 를 \"pull\" 로.")}`);
+  } else if (!p.shared) {
+    say(`    공유폴더    ${yellow("상태 조회 실패")} ${dim(p.error || "")}`);
+  } else {
+    // ⚠ sync 가 없는 구 마커는 **모드를 단정하지 않는다.** 그때 pull 훅은 폴더 위치로 fail-safe 판정하는데
+    //  (라이블리가 만든 폴더면 pull, 그 밖은 none), 그 판정을 여기서 흉내내면 예측이 어긋나는 순간 이 화면이
+    //  거짓말을 한다 — 게이트를 보여주려고 만든 표면이 게이트를 오도하는 건 최악이다. 모르면 모른다고 쓴다.
+    const known = p.sync !== null;
+    say(`    공유폴더    ${known ? p.sync : yellow("미명시(구 마커)")} · 서버 ${p.shared.server_count}개 파일 · 마지막 pull ${iso(p.last_pull)}`
+      + (p.shared.truncated ? "  " + yellow("⚠ 서버 목록 상한 도달(일부 누락 가능)") : ""));
+    if (!known) {
+      say(`                ${dim("이 폴더가 받을지는 pull 훅이 폴더 위치로 판정합니다(라이블리가 만든 폴더면 받고, 그 밖은 안 받음).")}`);
+      say(`                ${dim("확실히 하려면 .lively/project.json 에 sync 를 \"pull\" 또는 \"none\" 으로 명시하세요.")}`);
+    }
+    const willPull = known && (p.sync === "pull" || p.sync === "both");
+    say(`    로컬 미반영  ${p.shared.pending
+      ? yellow(`${p.shared.pending} 파일`) + (willPull ? dim("  → 세션을 새로 시작하면 자동으로 받습니다") : "")
+      : green("없음(최신)")}`);
+  }
+  // ↑up(sync=both) 결과 — 특히 **충돌은 반드시 보인다**(자동 up 은 물어볼 사람이 없어 여기가 유일한 표면).
+  if (p.up) {
+    const c = (p.up.conflicts || []).length;
+    say(`    올린 변경    ${p.up.pushed || 0}개${p.up.failed ? yellow(` · 실패 ${p.up.failed}(다음 턴 재시도)`) : ""}`
+      + (c ? "  " + red(`⚠ 충돌 ${c}개 — 안 올림`) : ""));
+    for (const x of (p.up.conflicts || []).slice(0, 5)) {
+      say(`      ${red("✗")} ${x.path} ${dim("— " + x.why)}`);
+    }
+    if (c) say(`                ${dim("서버본을 먼저 받아 합치세요(내 로컬본으로 덮으면 남의 작업이 사라집니다).")}`);
+  }
+}
+
 async function cmdStatus(opts) {
   const st = await gatherStatus();
+  st.project = await gatherProjectStatus(process.cwd()).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효
   if (opts.json) { process.stdout.write(JSON.stringify(st, null, 2) + "\n"); return; }
   const mark = (b) => (b ? green("✓") : dim("–"));
   say(`\n${bold("라이블리")} ${dim("CLI " + st.cli)}\n`);
@@ -1016,6 +1097,7 @@ async function cmdStatus(opts) {
   say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록`);
   say(`  codex         ${mark(st.harness.codex.installed)} 설치   ${mark(st.harness.codex.wired)} 배선`);
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
+  if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");
   if (!st.account.authenticated) say(dim("  → ") + bold("lively login") + dim(" 으로 시작하세요."));
   else if (st.kit.remote && !st.kit.current) say(dim("  → ") + bold("lively update") + dim(" 로 최신화할 수 있습니다."));
@@ -1082,6 +1164,58 @@ function cmdRun(rest) {
 async function cmdMcpLocal() {
   const { serveMcpLocal } = await import(new URL("./lively-mcp-local.mjs", import.meta.url));
   await serveMcpLocal();
+}
+
+// `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
+//  (project-init-core.mjs — 드리프트 0). D8: 사람이 촉발해야 자연스러운 것은 사람 표면으로.
+//  기본은 **제안만**(무변경) — 사람이 보고 --create / --bind <id> 로 확정한다. '알아서 만들기'를 기본으로 두지 않는 이유:
+//  마커는 동기화되지 않아 다른 멤버가 이미 만든 프로젝트를 못 보는 게 정상이라, 자동 create 는 중복을 양산한다.
+async function cmdInit(rest) {
+  const { projectInit } = await import(new URL("./project-init-core.mjs", import.meta.url));
+  const ctx = {
+    cwd: process.cwd(),
+    sh: (cmd2, args, opts = {}) => { const r = run(cmd2, args, { quiet: true, allowFail: true, env: opts.env }); return { stdout: r.out, stderr: r.err, code: r.code }; },
+    api: (p2, opts) => api(p2, opts),
+  };
+  const a = { mode: "auto" };
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--create") a.mode = "create";
+    else if (t === "--bind") { a.mode = "bind"; a.project_id = Number(rest[++i]); }
+    else if (t === "--name") a.name = rest[++i];
+    else if (t === "--path") a.path = rest[++i];
+    else if (t === "--list") a.list_id = Number(rest[++i]);
+    else if (t === "--json") a.json = true;
+  }
+  let r;
+  try { r = await projectInit(ctx, a); }
+  catch (e) { die(e.message, 1); }
+  if (a.json) { process.stdout.write(JSON.stringify(r, null, 2) + "\n"); return; }
+
+  if (r.status === "already_project") { say(`\n${yellow("이미 프로젝트입니다")} — #${r.project_id}\n  ${dim(r.note)}\n`); return; }
+  if (r.status === "suggestion") {
+    say(`\n${bold("프로젝트 연결 제안")} ${dim(r.dir)}\n`);
+    say(`  git origin    ${r.git_url || dim("(없음 — git 레포가 아니거나 origin 미설정)")}`);
+    if (r.active_total) say(`  기존 후보     진행 중 ${r.active_total}개${r.truncated ? dim(` (아래는 최근 ${r.candidates.length}개만)`) : ""}`);
+    for (const c of (r.candidates || []).filter((c) => c.status !== "done").slice(0, 5)) say(`    ${dim("#" + c.project_id)} ${c.name} ${dim("(" + c.status + ")")}`);
+    say("");
+    if (r.suggestion.action === "bind") {
+      say(`  ${green("→ 붙이기를 권합니다")}: ${bold("lively init --bind " + r.suggestion.project_id)}`);
+      say(`     ${dim(r.suggestion.why)}`);
+    } else {
+      say(`  ${yellow("→ 판단이 필요합니다")}`);
+      say(`     ${dim(r.suggestion.why)}`);
+      say(`     새로: ${bold("lively init --create --name \"<이름>\"")}   ·   기존에: ${bold("lively init --bind <id>")}`);
+    }
+    say("");
+    return;
+  }
+  // created | bound
+  say(`\n${green("✓")} ${r.status === "created" ? "새 프로젝트 생성" : "기존 프로젝트에 연결"} — ${bold("#" + r.project_id)} ${r.name}`);
+  say(`  폴더        ${r.dir}`);
+  say(`  공유폴더    ${r.sync} ${dim("(사용자 폴더라 서버 파일을 내려받지 않습니다 — 당신 파일을 덮어쓰지 않기 위함)")}`);
+  if (r.binding_error) say(`  ${yellow("⚠ 중앙 폴더 인벤토리 등록 실패")} ${dim(r.binding_error)} ${dim("— 로컬 연결은 정상입니다")}`);
+  say(`\n  ${dim("다음 세션부터 이 폴더에서 프로젝트 맥락이 뜹니다. 상태: ")}${bold("lively status")}\n`);
 }
 
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
@@ -1172,9 +1306,13 @@ ${bold("설치 · 유지보수")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
+                         ${dim("프로젝트 폴더에서 실행하면 프로젝트 · 공유폴더 동기화 상태도 함께 보여줍니다")}
   doctor                 문제 진단 + 해결책               ${dim("--json")}
 
 ${bold("작업")}
+  init                   지금 폴더를 프로젝트로 — 기본은 ${bold("제안만")}(무엇을 할지 알려주고 아무것도 안 바꿈)
+      --create           새 프로젝트로 만들어 연결  ${dim('--name "<이름>"  --list <리스트id>')}
+      --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
@@ -1226,6 +1364,7 @@ async function main() {
     case "install": { await cmdInstall(); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
+    case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));
     case "status": return cmdStatus(o);
     case "doctor": return cmdDoctor(o);
     // run 은 나머지 인자를 **그대로** work.mjs 로 넘긴다(--harness 등이 CLI 옵션과 겹쳐도 원형 보존).

@@ -30,17 +30,38 @@ export function reposDir() {
   return first ? join(first, "repos") : join(HOME, "lively", "repos");
 }
 
-// cwd 에서 위로 .lively/project.json 을 찾아 project_id 를 얻는다(있으면 워크트리 브랜치 기본값 project/<id>
-//  → 서버 provisionProjectRepos 와 동일 규약). git 의 .git 상향탐색과 동형. 없으면 null(프로젝트 밖 세션).
-export function projectIdFromCwd(cwd) {
+// cwd 에서 위로 `.lively/project.json` 마커를 찾는다 — { dir, file, meta } 또는 null.
+//  git 의 `.git` 상향탐색과 동형. **40단계는 리더 전원이 지켜야 하는 계약**이다(pull 훅 2종·project_init·여기).
+//  한 곳이라도 깊이가 다르면 "어떤 리더는 프로젝트로 보고 어떤 리더는 아니라고 보는" 폴더가 생긴다.
+//  meta 는 마커 전문 — project_id 만이 아니라 sync(공유폴더 쓰기 자격, #905 P1-②)·last_pull·repos 도 들어 있다.
+export function findProjectMarkerUp(cwd) {
   let dir = cwd || HOME;
   for (let i = 0; i < 40; i++) {
-    try { const m = JSON.parse(readFileSync(join(dir, ".lively", "project.json"), "utf8")); if (m && m.project_id) return m.project_id; } catch { /* 없음 */ }
+    const file = join(dir, ".lively", "project.json");
+    try {
+      const meta = JSON.parse(readFileSync(file, "utf8"));
+      if (meta && meta.project_id) return { dir, file, meta };
+    } catch { /* 없음/파손 → 계속 위로 */ }
     const up = dirname(dir);
     if (up === dir) break;
     dir = up;
   }
   return null;
+}
+
+// cwd 의 프로젝트 id(워크트리 브랜치 기본값 project/<id> → 서버 provisionProjectRepos 와 동일 규약).
+//  없으면 null(프로젝트 밖 세션). 마커 전문이 필요하면 findProjectMarkerUp 을 직접 써라.
+export function projectIdFromCwd(cwd) {
+  return findProjectMarkerUp(cwd)?.meta.project_id ?? null;
+}
+
+// 마커의 공유폴더 동기화 모드(#905 P1-②) — none=안 받음 | pull=받음 | both=양방향(C3).
+//  사람에게 보여주기 위한 읽기 헬퍼. **판정 권위는 pull 훅 자신**이다(오프라인·fail-safe 폴백까지 포함) —
+//  여기선 마커에 명시된 값만 그대로 읽고, 없으면 null(= '구 마커, 훅이 폴더 소유권으로 판정')을 돌려준다.
+export const FOLDER_SYNC_MODES = ["none", "pull", "both"];
+export function markerSyncMode(meta) {
+  const m = String((meta && meta.sync) || "").trim().toLowerCase();
+  return FOLDER_SYNC_MODES.includes(m) ? m : null;
 }
 
 const isGitRepo = (ctx, p) => existsSync(p) && ctx.sh("git", ["-C", p, "rev-parse", "--git-dir"], { allowFail: true }).code === 0;
