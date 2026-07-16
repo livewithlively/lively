@@ -6,7 +6,7 @@ import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
-import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
+import { renderInstall, renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from './learn.js';
 import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 하네스 관리(#891)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
@@ -84,8 +84,10 @@ async function route() {
                 await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
             else if (segs[1] === 'tour')
                 await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
-            else if (segs[1] === 'menu')
-                await renderLearnMenu(view); // #/learn/menu — 메뉴 한눈에 보기(#780)
+            else if (segs[1] === 'menu') {
+                location.replace('#/learn');
+                return;
+            } // #/learn/menu 폐기 — 개요로 리다이렉트(옛 북마크·링크 방어)
             else if (segs[1] === 'docs')
                 await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
             else
