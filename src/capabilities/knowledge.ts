@@ -8,7 +8,7 @@ import {
   listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
-  setKnowledgePropsUi, moveKnowledge, type WikiLinkResult,
+  setKnowledgePropsUi, moveKnowledge, type WikiLinkResult, appendBody, isDuplicateAppend,
 } from "../v6/knowledge-store.js";
 import { getKnowledgeViewConfig, setKnowledgeViewConfig } from "../v6/view-config-store.js";
 import {
@@ -17,7 +17,7 @@ import {
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../v6/knowledge-gate.js";
 import {
-  proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor, reviewQueueCounts,
+  proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor, pendingStagedRevisionId, reviewQueueCounts,
 } from "../v6/knowledge-revision-store.js";
 // #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
 import { memberCategories } from "../v6/team-store.js";
@@ -29,6 +29,12 @@ import { DEFAULT_KNOWLEDGE } from "../org/default-content.js";
 // 저장-시 중복감지(#172) — 신규 지식이 이 코사인 유사도 이상의 기존 지식과 겹치면 응답에 경고(비차단).
 //  bge-m3 코사인 기준 보수적 임계(오탐 억제). 프로젝트 규칙 "새로 만들기 전 비슷한 거 찾기" 의 자동화.
 const DEDUP_WARN_SIMILARITY = 0.6;
+
+// 저장 본문 방어 상한 — zod(신규·교체 입력)와 append 결과에 같은 값을 쓴다(불변식 "저장된 본문 ≤ 이 값").
+//  append 가 이 상한을 결과에도 걸어야 하는 이유: zod 는 append 에선 '조각'만 재니, 안 걸면 base 199k + chunk 200k 가
+//  그대로 저장되고 — 그 문서는 그 순간부터 replace 로도 웹 편집기로도 저장 불가가 된다(되보내면 zod 가 튕김).
+//  즉 상한 초과는 문서를 '더 키우는 것 말곤 손댈 수 없는' 상태로 잠그는 one-way door 라 결과에서 막는다.
+const BODY_MD_MAX = 200_000;
 
 // ── 시딩 지식 편집 경고(#846) — 고객 박스에 시딩되는 런북을 이 WIKI 에서 고치면, 고객이 받는 본문은
 //  여기가 아니라 src/org/seed-knowledge/<name>.md 의 각색 스냅샷이다(#846 이후 분리). 그 파일을 함께
@@ -171,7 +177,10 @@ const knowledgeSave: Capability = {
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
     "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
     "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다. " +
-    "**시딩 지식 경고(#846): 응답에 seed_warning 이 오면** 이 지식은 신규 고객 게이트웨이에 시딩되는 런북이라, 이 WIKI 편집은 고객이 받는 각색 스냅샷(src/org/seed-knowledge/…)에 자동 반영되지 않는다 — 안내대로 그 파일도 갱신하고, 그 사실을 사용자에게 알려라.",
+    "**시딩 지식 경고(#846): 응답에 seed_warning 이 오면** 이 지식은 신규 고객 게이트웨이에 시딩되는 런북이라, 이 WIKI 편집은 고객이 받는 각색 스냅샷(src/org/seed-knowledge/…)에 자동 반영되지 않는다 — 안내대로 그 파일도 갱신하고, 그 사실을 사용자에게 알려라. " +
+    "**append 모드(#921): 기존 문서에 내용을 보탤 땐 mode='append' 를 써라** — 이때 body_md 는 전문이 아니라 **덧붙일 조각**이고, 서버가 기존 본문 끝에 빈 줄로 잇는다. " +
+    "전문을 읽어와(knowledge_get) 재조립해 통째로 되보내지 마라 — 원문이 그대로 보존되고(네가 재출력하며 생기는 요약·드리프트·누락이 없다) 전문이 컨텍스트를 오갈 일도 없다. " +
+    "기존 지식 전용(name 필수 · 신규는 mode 없이 만들고 · 외부 미러(observed)엔 불가), 응답엔 본문 전문 대신 증분 요약(appended)만 온다.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -180,7 +189,9 @@ const knowledgeSave: Capability = {
     //  구 40,000 은 정상 장문 설계문서(#534: 45k자 doc 이 쪼개짐)를 튕겨 무손실 저장을 막았다 → 200,000(≈50k토큰)으로 상향.
     //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
     //  min(1)은 zod 에선 완화(#592: 폴더는 빈 본문 허용) — is_folder=false 의 min 1 은 handler 가 강제(기존 계약 불변).
-    body_md: z.string().max(200000),
+    //  #921: mode='append' 면 이 값의 의미가 '전문'에서 '조각'으로 바뀐다 → describe 로 스키마에 명시(설명문만 믿게 두지 않는다).
+    body_md: z.string().max(BODY_MD_MAX)
+      .describe("본문 전문. **mode='append' 일 때만 의미가 다르다 — 전문이 아니라 기존 본문 끝에 덧붙일 '조각'**(그때 전문을 보내면 문서가 통째로 중복된다)."),
     provenance: z.enum(["authored", "observed"]).optional(),
     lifecycle: z.enum(["active", "pending"]).optional()
       .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
@@ -192,6 +203,8 @@ const knowledgeSave: Capability = {
       .describe("#592 폴더 노드 — true 면 트리 그룹핑용 폴더(title 필수, body_md 빈 문자열 허용). 미전송 시 기존값 보존."),
     parent_name: z.string().min(1).max(64).optional()
       .describe("#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존."),
+    mode: z.enum(["replace", "append"]).optional()
+      .describe("#921 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화). append 는 기존 지식 전용(name 필수)."),
   },
   expose: {
     mcp: true,
@@ -199,9 +212,16 @@ const knowledgeSave: Capability = {
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
         const is_folder = typeof b.is_folder === "boolean" ? b.is_folder : undefined;
-        const body_md = String(b.body_md ?? b.note ?? "").trim();
+        // #921 mode — REST 는 zod 를 안 타고 이 화이트리스트가 유일한 검증이라, 미인식 값을 조용히 흘리면
+        //  append 의도가 replace 로 떨어져 '조각이 문서를 통째로 교체'한다 → 여기서 fail-closed(provenance/lifecycle 과 같은 모양).
+        const mode = b.mode ? String(b.mode) : undefined;
+        if (mode && !["replace", "append"].includes(mode)) throw new HttpError(400, "mode 는 replace|append");
+        // #921 append 의 body_md 는 '조각' — trim 하면 첫 줄의 들여쓰기(들여쓴 코드블록)가 MCP 와 달리 REST 에서만 깨진다.
+        //  빈 값 검증만 trim 으로 하고 원본은 보존한다(구분 빈 줄·앞뒤 개행 정규화는 appendBody 가 한다).
+        const raw = String(b.body_md ?? b.note ?? "");
+        const body_md = mode === "append" ? raw : raw.trim();
         // #592: 폴더(is_folder=true)만 빈 본문 허용 — min 1 검증은 is_folder 일 때만 우회(기존 문서 계약 불변).
-        if (!body_md && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
+        if (!body_md.trim() && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
         // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
@@ -218,6 +238,7 @@ const knowledgeSave: Capability = {
           category,
           is_folder,
           parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
+          mode,                                                             // #921 replace(기본)|append
         };
       } }],
   },
@@ -230,6 +251,63 @@ const knowledgeSave: Capability = {
 
     // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
     const gate = await resolveKnowledgeGate(input, ctx);
+
+    // ── #921 append — body_md('조각')를 기존 본문 끝에 붙인 **전문**으로 바꿔 아래 경로 전체가 종전처럼 전문만 다루게 한다. ──
+    //  이 자리에서 한 번만 병합하는 게 핵심이다: 리비전 제안(next.body_md)에 조각이 들어가면 승인 시
+    //  applyRevisionBody 가 전문 교체(knowledge-revision-store.ts)라 문서가 그 조각으로 날아간다.
+    //  append 는 이 어댑터의 계약이라 병합·가드를 전부 여기 둔다 — 데이터 층(upsertKnowledge)은 시드/마이그/리비전
+    //  적용/undo 도 함께 쓰는 공용 경로라 append 계약을 물려받으면 안 된다(어댑터 층 가드: runbooks/secrets.md 선례).
+    const isAppend = input.mode === "append";
+    let appendBase: string | null = null;
+    let saveInput = input;
+    if (isAppend) {
+      // 신규 금지 — upsertKnowledge 의 category/type 필수(#290)가 실질적으로 막긴 하지만, 신규 분기는 dedup similar
+      //  검색 + 전문 에코라 append 의 응답 규약과 아예 다른 모양이다. 여기서 막는 게 그걸 따로 설계하는 것보다 싸다.
+      if (!gate.name) throw new HttpError(400, "append 에는 name 이 필수입니다 — 덧붙일 지식을 지정하세요.");
+      if (!gate.before) throw new HttpError(404, `지식 '${gate.name}' 없음 — append 는 기존 지식에만 됩니다(신규는 mode 없이 category·type 과 함께 만드세요).`);
+      // 외부 미러 — 다음 재싱크가 body_md 를 통째로 덮으므로(connector-mirror) 덧붙인 조각은 반드시 사라진다.
+      //  replace 는 안 막지만 그건 '전문을 되보내는 비용'이 사실상 억제해 왔다 — append 는 그 비용을 없애니 여기서 막는다.
+      //  (upsertKnowledge 도 observed 의 이동·폴더전환을 같은 이유로 거부한다 — 원본이 진실.)
+      if (gate.before.provenance === "observed") {
+        throw new HttpError(400, "외부 미러(observed) 지식엔 append 가 허용되지 않습니다 — 다음 재싱크가 본문을 통째로 덮어 덧붙인 내용이 사라집니다. 원본(노션 등)에서 고치거나, 파생 인사이트는 별도 지식(authored)으로 쓰세요.");
+      }
+      // 검토 대기(staged) 제안이 있으면 거부 — 라이브 위에 붙이면 그 제안이 승인되는 순간 이 append 가 통째로 덮이고,
+      //  반대로 제안 위에 쌓으면 라이브와 갈라져(그 사이 사람이 고쳤다면) 승인이 사람 개정을 지운다. 둘 다 조용한 유실이라
+      //  '어느 쪽에 붙일지'를 서버가 정하지 않고 사람이 큐를 처리한 뒤로 미룬다. (fail-closed 조회 — 삼키면 유실이 된다.)
+      const staged = await pendingStagedRevisionId(gate.before.name);
+      if (staged) {
+        throw new HttpError(409, `이 지식엔 검토 대기 중인 수정 제안(#${staged})이 있어 append 가 허용되지 않습니다 — 사람이 승인/반려한 뒤 다시 시도하세요(지금 붙이면 검토 결과에 덮여 사라집니다).`);
+      }
+      appendBase = gate.before.body_md ?? "";
+      // 중복 append(재시도) — replace 와 달리 append 는 멱등이 아니다. 응답을 잃은 호출자가 재시도하면 같은 단락이
+      //  두 번 붙는데, 본문을 읽지 않는 호출자는 그걸 알 수 없다 → 이미 끝에 그대로 있으면 붙이지 않고 사실을 알린다.
+      if (isDuplicateAppend(appendBase, String(input.body_md ?? ""))) {
+        throw new HttpError(409, "이 조각은 이미 본문 끝에 그대로 있습니다 — 앞선 append 가 이미 반영된 것으로 보입니다(응답을 못 받아 재시도한 경우라면 그 저장은 성공한 것입니다). 같은 내용을 한 번 더 붙이려는 게 정말 맞다면 mode 없이(replace) 전문으로 저장하세요.");
+      }
+      const merged = appendBody(appendBase, String(input.body_md ?? ""));
+      if (merged.length > BODY_MD_MAX) {
+        throw new HttpError(400, `append 결과가 본문 상한(${BODY_MD_MAX.toLocaleString()}자)을 넘습니다(현재 ${appendBase.length.toLocaleString()}자 + 조각 ${String(input.body_md ?? "").length.toLocaleString()}자) — 넘기면 그 문서는 전문 저장(replace·웹 편집기)이 영영 불가해집니다. 문서를 나누세요.`);
+      }
+      saveInput = { ...input, body_md: merged };
+    }
+
+    // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
+    //  stringify 해 에이전트에 돌려주므로, 전문을 에코하면 '전문을 컨텍스트에 안 싣는다'는 이 모드의 목적이 무효가 된다.
+    //  (replace 는 종전대로 전문 포함 — 기존 응답 계약 불변.)
+    const lineCount = (s: string): number => (s ? s.split("\n").length : 0);
+    const withBody = (k: any): Record<string, unknown> => {
+      if (appendBase == null) return { knowledge: k };
+      const { body_md, ...rest } = k ?? {};
+      const body = String(body_md ?? "");
+      return {
+        knowledge: rest,
+        appended: {
+          added_chars: body.length - appendBase.length, added_lines: lineCount(body) - lineCount(appendBase),
+          total_chars: body.length, total_lines: lineCount(body), version: rest?.version,
+          note: "본문 끝에 덧붙였습니다(기존 원문 그대로 보존). 응답에 전문은 넣지 않습니다 — 확인이 필요하면 knowledge_get 부분읽기(offset/limit)로 보세요.",
+        },
+      };
+    };
 
     // ① 신규 저장.
     if (gate.isCreate) {
@@ -265,7 +343,8 @@ const knowledgeSave: Capability = {
       const revision = await proposeRevision({
         name: before.name, mode: "staged",
         base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
-        next: { title: input.title ?? null, body_md: String(input.body_md ?? ""), summary: null, type: input.type ?? null },
+        // #921 append 면 saveInput.body_md 는 '조각'이 아니라 base+조각 전문 — 승인(applyRevisionBody)이 전문 교체라 조각을 넣으면 문서가 날아간다.
+        next: { title: input.title ?? null, body_md: String(saveInput.body_md ?? ""), summary: null, type: input.type ?? null },
         proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
       });
       return {
@@ -277,18 +356,19 @@ const knowledgeSave: Capability = {
         },
       };
     }
-    const { wikilinks, ...knowledge } = await upsertKnowledge(input, writeCtx);
+    // #921 saveInput — append 면 body_md 가 조각이 아니라 base+조각 전문(위 append 분기에서 병합).
+    const { wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx);
     const wl = wikiLinkInfo(wikilinks);
     if (gate.update === "review") {
       // 본문은 즉시 반영(라이브 유지) — 사람은 사후에 diff 를 보고 확인 또는 되돌리기.
       const revision = await proposeRevision({
         name: before.name, mode: "applied",
         base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
-        next: { title: input.title ?? null, body_md: String(input.body_md ?? ""), summary: null, type: input.type ?? null },
+        next: { title: input.title ?? null, body_md: String(saveInput.body_md ?? ""), summary: null, type: input.type ?? null },
         proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
       });
       return {
-        knowledge,
+        ...withBody(knowledge),
         ...seedSyncWarning(knowledge.name),
         ...wl,
         gate: {
@@ -297,7 +377,7 @@ const knowledgeSave: Capability = {
         },
       };
     }
-    return { knowledge, ...seedSyncWarning(knowledge.name), ...wl };
+    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...wl };
   },
 };
 

@@ -227,6 +227,42 @@ export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<stri
   };
 }
 
+/**
+ * #921 append 본문 병합 — 기존 본문(base) 끝에 조각(chunk)을 덧붙인 전문을 만든다.
+ *
+ * 구분자를 **서버가** 정규화하는 이유: append 의 요점은 호출자가 본문을 읽지 않는 것이라, 호출자는 base 가
+ * 개행으로 끝나는지 알 수 없다 — 그대로 이으면 조각이 마지막 줄에 들러붙는다. 빈 줄 하나로 이어 마크다운
+ * 블록 경계를 보장한다(그 대가로 기존 표·타이트 리스트에 '행 추가'는 안 된다 — 그건 replace 로).
+ * chunk 는 앞 개행만 지우고 들여쓰기는 보존한다(들여쓴 코드블록이 깨지지 않게).
+ *
+ * 불변식: base 의 내용은 절대 건드리지 않는다(끝 공백 제거만) — '원문유지·append' 가 이 모드의 존재 이유다.
+ */
+export function appendBody(base: string, chunk: string): string {
+  const b = (base ?? "").replace(/\s+$/, "");
+  const c = normalizeAppendChunk(chunk);
+  if (!b) return c;
+  if (!c) return b;
+  return `${b}\n\n${c}`;
+}
+
+// 조각 정규화 — appendBody 와 isDuplicateAppend 가 반드시 같은 문자열을 봐야 해서 한 곳에 둔다
+//  (다르면 '붙인 것'과 '중복 판정 대상'이 어긋나 감지가 헛돈다).
+const normalizeAppendChunk = (chunk: string): string => (chunk ?? "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");
+
+/**
+ * #921 중복 append 감지 — 조각이 이미 본문 끝에 그대로 있는가.
+ *
+ * replace 는 재시도해도 결과가 같지만(멱등) append 는 아니다 — 응답을 못 받은 호출자가 재시도하면 같은 단락이
+ * 두 번 붙는다. 그런데 append 호출자는 본문을 읽지 않으므로(그게 이 모드의 요점) 그 중복을 스스로 알 수 없다.
+ * → 서버가 본다. 유사도·부분일치가 아니라 **정규화 후 꼬리 정확일치**만 — 오탐은 '직전에 붙인 것과 완전히 같은
+ * 조각을 의도적으로 또 붙이는' 경우뿐이고, 그건 replace 로 하라고 안내하면 된다.
+ */
+export function isDuplicateAppend(base: string, chunk: string): boolean {
+  const c = normalizeAppendChunk(chunk);
+  if (!c) return false;
+  return (base ?? "").replace(/\s+$/, "").endsWith(c);
+}
+
 // ── #592 트리 부모 가드(공용: upsertKnowledge·moveKnowledge) — 존재 + observed 부모 금지 + 비순환. ──
 //  observed(외부 미러) 아래로의 배치 금지 = 미러 트리는 원본(노션)이 진실(재싱크가 재배치를 되돌린다).
 //  비순환 = parent 의 조상 체인(재귀 CTE, getKnowledge ancestors 동형)에 자신이 있으면 거부.
