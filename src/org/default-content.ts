@@ -377,6 +377,16 @@ export const DEFAULT_SKILLS: DefaultSkill[] = [
 // 코드가 이름으로 knowledge_get 하는 런북·루틴 — 신규 설치에 없으면 댕글링 포인터가 된다.
 export const DEFAULT_KNOWLEDGE: DefaultKnowledge[] = [
   {
+    "name": "code-work-in-worktree-selfservice",
+    "title": "코드 작업은 워크트리에서 — lively_local_repo_worktree 셀프서비스 (base 직접작업 금지)",
+    "injection": "recalled",
+    "provenance": "authored",
+    "lifecycle": "active",
+    "is_wiki": true,
+    "type": "how-to",
+    "body_md": "# 코드 작업은 워크트리에서 — lively_local_repo_worktree 셀프서비스\n\n**규칙:** 어느 실행 환경(중앙 박스·구성원 로컬 PC·워커 노드)에서든 코드를 만져야 하면 **현재 작업 디렉터리(cwd)에 워크트리를 먼저 떠서 그 위에서** 작업한다. 공유 base 레포(호스트별 클론 — 여러 워크트리의 부모)는 pristine 원본이라 **직접 작업·커밋·빌드 금지**. base 는 물리적으로 읽기전용이 아니므로(구성원이 fetch·최신화는 해야 하니) 이 규율이 작업면 격리의 담보다.\n\n## 어떻게 (lively 로컬 MCP — 툴 스키마가 매 세션 자동 주입되어 발견된다)\n- `lively_local_repo_list` — 이 머신에서 워크트리를 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·현재 브랜치·원격 대비 최신).\n- `lively_local_repo_worktree {repo, path?, branch?, ref?}` — base 를 확보(로컬에 없으면 clone·있으면 fetch)한 뒤 **cwd(기본) 또는 지정 경로에 격리 브랜치 워크트리**를 만든다. base 워킹트리는 건드리지 않고 원격 최신(origin/<ref>)에서 분기한다. 프로젝트 세션이면 브랜치 기본값은 그 프로젝트 브랜치이고, 아니면 `wt/<repo>`. → **반환된 워크트리 경로에서** 편집·커밋·빌드하라.\n- `lively_local_repo_worktree_remove {repo, path?, force?}` — 워크트리 제거(base·다른 워크트리 무영향).\n- lively 가 그 머신의 base 위치·격리·git 자격을 알아서 해석하므로 하네스는 실행 환경을 몰라도 된다.\n\n## 왜 base 직접작업을 피하나\n- base 는 여러 프로젝트 워크트리의 **부모**라 오염이 전파되고, **다른 사람이 진행 중인 작업**이 체크아웃돼 있을 수 있다(절대 날리지 말 것).\n- base 는 주기 갱신과 워크트리 생성 시 fetch 로 최신을 유지하므로, base 에서 직접 당길 이유가 없다.\n"
+  },
+  {
     "name": "domainmap-is-bootstrap-runbook",
     "title": "도메인맵 부트스트랩 도구 보강 — 결정론 사실 helper(dm scan)·MCP/REST write 경로(domainmap_ingest)·토큰규율 (runbook-bootstrap-domains 동반)",
     "injection": "recalled",
