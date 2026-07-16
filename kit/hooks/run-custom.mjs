@@ -31,6 +31,7 @@ const FETCH_MS = 3000;
 const REPORT_MS = 1500;   // 훅 실패 보고(fire-and-forget) 상한 — 세션을 절대 기다리게 하지 않는다.
 const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 같은 훅 실패 재보고 최소 간격(툴콜마다 왕복하지 않기 위해).
 const STDERR_KEEP = 800;  // 보고에 싣는 stderr 꼬리 길이(진단엔 충분, 페이로드는 작게).
+const CHECK_MS = 5000;    // `node --check` 상한 — 실패한 훅에서만 도는 느린 경로(정상 경로 비용 0).
 // PreToolUse 결정 중 러너가 하네스로 전파할 값 — 게이트웨이 미제공/구버전이면 이 기본값.
 //  'allow' 는 기본 제외: 관리자 훅이 멤버의 권한 프롬프트(동의 UI)를 소리 없이 건너뛰게 하지 않는다.
 //  관리탭에서 org 단위로 넓힐 수 있다(runtime_config.hook_relay_decisions).
@@ -183,31 +184,24 @@ function moduleExt(src) {
   return CJS_MARK.test(s) ? "cjs" : "mjs";
 }
 
-// 모듈 타입을 틀리게 골랐을 때 Node 가 내는 **파싱 단계** 오류들. 파싱에서 죽었다는 건 훅 본문이 단 한 줄도
-//  실행되지 않았다는 뜻이라, 반대 확장자로 딱 한 번 다시 돌려도 부작용이 두 번 일어날 수 없다(재시도 안전).
+// 이 파일이 **이 확장자로 파싱되는가** 를 Node 에게 직접 묻는다. `--check` 는 문법만 보고 **한 줄도 실행하지
+//  않는다**(실측: 부작용 파일이 안 생긴다). 재시도 자격은 이걸로만 판정한다.
 //
-//  ⚠ **런타임 ReferenceError 는 절대 넣지 마라** — `require`·`__dirname`·`module` 이 ESM 에서 없어서 나는 오류는
-//   파싱이 아니라 **그 줄에 도달했을 때** 난다(실측: `console.log("A"); console.log(__dirname)` 를 .mjs 로 돌리면
-//   A 가 먼저 찍히고 죽는다). 즉 그 전에 이미 파일을 쓰거나 POST 를 했을 수 있고, 재시도하면 그 부작용이 두 번
-//   일어난다. 여기 목록은 '재시도해도 안전한가'로만 판단한다 — '모듈 타입이 틀렸다는 신호인가'가 아니다.
-//   (그런 훅은 오분류돼도 종전(.mjs 고정)과 같이 그냥 실패로 보고될 뿐이라 더 나빠지지 않는다.)
-const MODULE_MISMATCH = /Cannot use import statement outside a module|Unexpected token 'export'|await is only valid in async functions|Cannot use 'import\.meta' outside a module/;
-
-// …그리고 그 오류가 **우리가 쓴 파일 자체의 파싱**에서 났는가. 문구만 봐선 부족하다: 훅이 `eval("await …")`
-//  나 `new Function` 을 쓰면 **모듈 타입이 맞아도** 똑같은 SyntaxError 가 나는데, 그건 이미 본문이 실행된 뒤라
-//  재시도하면 부작용이 두 번 난다(적대검증 3라운드 리프로).
-//  구분법: Node 치명오류 덤프의 **위치줄**(`<파일>:<줄>`, 스택 프레임과 달리 `at ` 접두어가 없다)이
-//   eval 계열이면 `<anonymous_script>:N`, 진짜 외부 파싱 실패면 우리 임시파일 경로다.
-//   ⚠ 단순 '경로 포함' 검사는 안 된다 — eval 케이스도 **스택 프레임**엔 임시파일 경로가 찍힌다. 위치줄만 본다.
-const LOC_LINE = /^(\S+):\d+$/;
-function isOuterParseFailure(stderr, tmp) {
-  const base = tmp.slice(tmp.lastIndexOf("/") + 1);
-  for (const raw of String(stderr || "").split("\n")) {
-    const m = LOC_LINE.exec(raw.trim());
-    if (!m) continue;          // 경고줄·스택프레임·본문발췌는 건너뛴다
-    return m[1].endsWith(base); // 첫 위치줄이 판정 대상 — 우리 파일이면 외부 파싱 실패
-  }
-  return false; // 위치줄이 없으면 판단 불가 → 재시도하지 않는다(부작용 중복보다 훅 1회 실패가 낫다)
+//  ⚠ **훅이 만든 텍스트로는 판정할 수 없다** — 훅은 자기 stderr 를 원하는 대로 만들 수 있기 때문이다.
+//   이 판정은 두 번 뚫렸다(적대검증):
+//    ① 오류 '문구'로 판정 → 훅이 `eval("await …")` 를 쓰면 모듈 타입이 맞아도 같은 SyntaxError 가 난다.
+//    ② 덤프 '위치줄'로 판정 → `vm.Script(code, { filename: process.argv[1] })` 로 위치줄을 **우리 파일 경로로
+//       위조**할 수 있다(그리고 그건 스택 가독성을 위한 정상적인 관행이다).
+//   둘 다 '이미 실행된 훅'을 '아직 실행 안 된 훅'으로 오인하게 만들어 부작용을 두 번 일으켰다.
+//   패턴을 더 깁는 대신 질문을 바꾼다 — 텍스트를 해석하지 말고 **파서에게 직접** 물어라. 훅을 실행하지
+//   않으므로 훅이 런타임에 무엇을 하든 속일 수 없다(설계상 위조 불가).
+//
+//  실패한 훅에서만(이미 느린 경로) 부르므로 정상 경로 비용은 0이다.
+function parsesUnder(file) {
+  try {
+    execFileSync("node", ["--check", file], { stdio: "ignore", timeout: CHECK_MS, killSignal: "SIGKILL" });
+    return true;
+  } catch { return false; } // 파싱 실패 = 확장자가 틀렸거나 훅 자체가 깨졌다
 }
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
@@ -218,12 +212,12 @@ function runHook(hook, stdin) {
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
   const first = moduleExt(hook.source_code);
   const r = spawnHook(hook, stdin, first);
-  // 확장자를 틀리게 골라 **우리 파일의 파싱 단계**에서 죽었으면 반대 확장자로 딱 한 번 다시. 그때만 본문이
-  //  한 줄도 안 돌았음이 보장돼 부작용 중복이 없다. 분류는 휴리스틱이라 변두리에서 틀리는데, 그때 훅을 죽이는
-  //  대신 자가교정한다(오분류의 비용이 '훅 사망'이면 안 된다 — 그게 #892 였다).
-  //  두 조건을 **함께** 본다: 문구가 모듈 불일치인가(MODULE_MISMATCH) + 그게 우리 파일 파싱에서 났는가
-  //  (isOuterParseFailure). 문구만 보면 훅이 eval 로 낸 같은 오류에 속아 부작용을 두 번 일으킨다.
-  if (r.fail && MODULE_MISMATCH.test(r.fail.stderr || "") && isOuterParseFailure(r.fail.stderr, r.tmp)) {
+  // 실패했고 **그 확장자로는 파일이 파싱조차 안 되면** 확장자를 잘못 고른 것 → 반대로 딱 한 번 다시.
+  //  파싱이 안 됐다 = 본문이 한 줄도 안 돌았다 → 부작용 중복이 원리적으로 불가능하다.
+  //  분류(moduleExt)는 휴리스틱이라 변두리에서 틀리는데, 그때 훅을 죽이는 대신 자가교정한다
+  //  (오분류의 비용이 '훅 사망'이면 안 된다 — 그게 #892 였다).
+  //  훅 자체가 문법오류면 반대쪽도 파싱 실패라 재시도 1회로 끝나고 원래 실패를 보고한다.
+  if (r.fail && r.parses === false) {
     const retry = spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs");
     if (!retry.fail) return retry;
   }
@@ -243,22 +237,21 @@ function spawnHook(hook, stdin, ext) {
       return { out: execFileSync("node", [tmp], {
         input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, LIVELY_HOOK_TIMEOUT_MS: String(timeout) }, maxBuffer: 4 * 1024 * 1024,
-      }), fail: null, tmp };
+      }), fail: null, parses: true };
     } catch (e) {
       // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
       const fail = {
         reason: e && e.signal === "SIGKILL" ? "timeout" : "crash",
         exit_code: e && typeof e.status === "number" ? e.status : null,
         signal: (e && e.signal) || null,
-        // **머리쪽**을 남긴다 — Node 치명오류 덤프는 [위치줄 → 에러메시지 → 스택] 순이라 꼬리를 자르면
-        //  정작 '어디서 왜'가 날아가고 스택 찌꺼기만 남는다(재시도 판정도 이 위치줄을 본다).
-        //  트레이드오프: 훅이 자기 로그를 잔뜩 뱉고 나서 죽으면 덤프가 잘려 나갈 수 있다. 그때 재시도 판정은
-        //  '위치줄 못 찾음 → 재시도 안 함'으로 **안전한 쪽**으로 넘어간다(부작용 중복보다 1회 실패가 낫다).
-        stderr: e && e.stderr ? String(e.stderr).slice(0, STDERR_KEEP) : "",
+        // 꼬리를 남긴다 — 훅이 자기 로그를 뱉고 나서 죽으면 정작 치명오류 덤프가 맨 뒤에 오기 때문.
+        //  덤프(보통 수백 자)는 통째로 들어오고, errorHeadline 이 그 안에서 에러 줄을 골라낸다.
+        stderr: e && e.stderr ? String(e.stderr).slice(-STDERR_KEEP) : "",
       };
-      return { out: e && e.stdout ? String(e.stdout) : "", fail, tmp };
+      // 실패했을 때만 파서에게 묻는다(느린 경로) — tmp 가 아직 살아 있는 이 안에서 불러야 한다(finally 가 지운다).
+      return { out: e && e.stdout ? String(e.stdout) : "", fail, parses: parsesUnder(tmp) };
     }
-  } catch (e) { return { out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || "").slice(0, STDERR_KEEP) }, tmp }; }
+  } catch (e) { return { out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || "").slice(-STDERR_KEEP) }, parses: true }; }
   finally { try { rmSync(tmp, { force: true }); } catch { /* */ } }
 }
 

@@ -450,6 +450,25 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
     : bad("A8 eval 오인 재시도", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
 }
 
+{
+  // ⑦ 훅은 자기 stderr 를 **위조할 수 있다**: vm.Script 의 filename 옵션은 오류 위치줄을 임의 경로로 바꾼다
+  //    (스택 가독성을 위한 정상 관행이기도 하다). 그래서 '오류 문구'나 '위치줄' 같이 훅이 영향 줄 수 있는
+  //    텍스트로 재시도를 판정하면 이미 실행된 훅을 미실행으로 오인해 부작용을 두 번 낸다.
+  //    판정은 파서에게 직접 물어야만(=훅을 실행하지 않아야만) 위조에 면역이다.
+  const sentinel = join(SANDBOX, "vm-side-effect.log");
+  const src = 'import("node:fs").then(async (fs) => {\n'
+    + `  fs.appendFileSync(${JSON.stringify(sentinel)}, "ran\\n");\n`
+    + '  const vm = await import("node:vm");\n'
+    + '  new vm.Script("await Promise.resolve(1)", { filename: process.argv[1] }).runInThisContext();\n'
+    + '});\n';
+  const r = run("PreToolUse", [{ id: "vm-forge-hook", src }]);
+  let lines = 0;
+  try { lines = readFileSync(sentinel, "utf8").trim().split("\n").filter(Boolean).length; } catch { /* 미생성 */ }
+  lines === 1
+    ? ok("A9 훅이 오류 위치줄을 위조해도 재시도에 속지 않는다")
+    : bad("A9 위치줄 위조", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
+}
+
 // ── §F 확장 — 하네스가 무시할 출력도 실패다 ──
 {
   // 훅은 정상 종료했지만 JSON 앞에 로그가 섞여 하네스가 통째로 무시한다 → 관리자는 게이트가 걸린 줄 아는데
