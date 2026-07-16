@@ -260,7 +260,7 @@ function termUrl(id, label, nodeId?, extra?) {
     + (nodeId ? '&node=' + encodeURIComponent(nodeId) : '') + (extra || '');
 }
 
-// 세션 카드(#745) — 라이브 상태점 + 라벨(작업) / 상태·시각·하네스·모델·워크트리·폴더 + 프로젝트 칩 + 열기/관리.
+// 세션 카드(#745) — 라이브 상태점 + 라벨(작업) / 상태·시각·하네스·모델·폴더 + 프로젝트 칩 + 열기/관리.
 //  선택(일괄삭제) 모드면 내 소유 카드에 체크박스(카드 전체가 토글 = label). 남의 세션은 체크박스 없음(삭제 불가).
 function tsessCard(s, ctx) {
   const { cfg, view, projName, myProjIds, reRender, sel } = ctx;
@@ -288,13 +288,12 @@ function tsessCard(s, ctx) {
   // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
   const workTitle = (s.title && s.title !== s.label) ? el('div', { class: 'tsess-worktitle', title: s.title, text: '💬 ' + s.title }) : null;
 
-  // ── 3행: 상태 · 시각 · 하네스·모델 · 워크트리 · 폴더 ──
+  // ── 3행: 상태 · 시각 · 하네스·모델 · 폴더 ──
   const bits: any[] = [];
   bits.push(el('span', { class: 'tsess-stat tsess-stat-' + st.cls, text: st.label }));
   const when = relAgo(s.lastActive || s.created);
   if (when) bits.push(el('span', { text: (s.lastActive ? '작업 ' : '') + when }));
   bits.push(el('span', { text: harnessLabel + (model ? '·' + model : '') }));
-  if (s.wtBranch) bits.push(el('span', { title: '워크트리 격리 브랜치', text: '🌿 ' + s.wtBranch }));
   if (s.dir) bits.push(el('span', { class: 'tsess-dir', title: s.dir, text: '📁 ' + shortDir(s.dir) }));
   const meta = el('div', { class: 'tsess-meta' });
   bits.forEach((b, i) => { if (i) meta.append(el('span', { class: 'tsess-sep', text: '·' })); meta.append(b); });
@@ -588,15 +587,12 @@ function openTermCreateForm(cfg, view, onCreated?) {
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
-  // 두 개의 체크박스(워크트리·자동 승인)는 '실행 옵션'으로 묶는다(#673). 워크트리 기본 ON, 자동승인 기본 OFF.
-  //  자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
+  // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
+  //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
   const autoCb = el('input', { type: 'checkbox' });
   autoCb.checked = prefs.autoApprove === true;
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
     el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
-  const wtCb = el('input', { type: 'checkbox', checked: '' });
-  const wtWrap = el('label', { class: 'term-auto' }, wtCb,
-    el('span', { text: ' git 워크트리에서 작업 (권장) — 폴더가 git 저장소면 새 브랜치 워크트리에서 격리 작업(다른 세션·메인 체크아웃과 안 충돌).' }));
 
   // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
   const presetSum = el('div', { class: 'term-preset-sum' });
@@ -692,7 +688,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
     (nodes.length ? field('실행 위치', nodeSel) : null), // #869 중앙 컴퓨터/등록 노드
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, wtWrap, autoWrap),
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap),
     presetToggle, presetBody,
     el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
     el('div', { class: 'ov-actions' },
@@ -702,14 +698,12 @@ function openTermCreateForm(cfg, view, onCreated?) {
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), worktree: wtCb.checked, node: nodeId || undefined };
+        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, invites: inviteBox.selected(), node: nodeId || undefined };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
           back.remove();
-          // 워크트리 켰는데 서버가 안 만들었으면(=폴더가 git 저장소 아님) 조용히 넘기지 말고 알린다(#673 — 사용자 혼란 방지).
-          if (wtCb.checked && out && out.session && !out.session.wtBranch) toast('세션 생성됨 — 폴더가 git 저장소가 아니라 워크트리는 미적용(폴더에서 직접 실행).', true);
-          else toast('세션 생성됨');
+          toast('세션 생성됨');
           if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
           if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
@@ -803,10 +797,8 @@ function openTermEdit(s, cfg, view) {
     return field(f.label, ro(shown));
   });
   const autoShown = harness.hasAutoApprove ? (s.autoApprove ? '켜짐 (위험)' : '꺼짐') : '해당 없음';
-  // 워크트리(#673) — 생성 시 격리 브랜치를 만들었으면 그 브랜치, 아니면 '사용 안 함'(폴더 직접). 다른 고정값과 함께 비활성 표시.
-  const wtShown = s.wtBranch ? (s.wtBranch + ' (격리 브랜치)') : '사용 안 함 (선택한 폴더에서 직접 작업)';
   const lockNote = el('div', { class: 'term-lock-note' },
-    el('span', { text: '🔒 작업 폴더 · 워크트리 · 하네스 · 모델 · 자동 승인은 세션을 처음 켤 때 정해집니다. 바꾸려면 실행 중인 LLM(또는 셸)을 닫고 새로 켜야 하므로 여기서는 수정할 수 없습니다 — 바꾸려면 새 세션을 만드세요.' }));
+    el('span', { text: '🔒 작업 폴더 · 하네스 · 모델 · 자동 승인은 세션을 처음 켤 때 정해집니다. 바꾸려면 실행 중인 LLM(또는 셸)을 닫고 새로 켜야 하므로 여기서는 수정할 수 없습니다 — 바꾸려면 새 세션을 만드세요.' }));
 
   const back = overlay('세션 수정',
     field('이름', labelI),
@@ -814,7 +806,6 @@ function openTermEdit(s, cfg, view) {
     lockNote,
     field('작업자', ro(author)),
     field('작업 폴더', ro(s.dir || '(기본)')),
-    field('워크트리', ro(wtShown)),
     field('하네스', ro(harness.label || s.harness || '?')),
     flagFields,
     field('자동 승인', ro(autoShown)),
@@ -957,8 +948,7 @@ function startTerminalTour(firstStep?) {
     {
       target: '[data-tour="options"]',
       title: '④ 실행 옵션',
-      body: [el('p', { class: 'tour-p' }, el('b', { text: 'git 워크트리' }), ' — 저장소면 새 브랜치의 워크트리에서 격리 작업해요(다른 세션·메인과 안 충돌). 기본 켜짐.'),
-        el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.')],
+      body: [el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.')],
       placement: 'right', scrollIntoView: true,
     },
     {

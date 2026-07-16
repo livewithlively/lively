@@ -98,7 +98,6 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
-  wtBranch?: string; // 워크트리 세션이면 격리 브랜치명(@box_wt_branch). 없으면 빈 문자열 = 폴더 직접 작업. 수정 팝업 표시용(#673).
   // 에이전트 실행 상태(#req 4단계) — busy=프로세스그룹 CPU 큼(작업중, 접속 무관), waiting=접속중+화면에 사용자 선택/승인 대기(확인 필요),
   //  idle=접속중+CPU~0+대기프롬프트없음(대기중), offline=브라우저 미접속(유휴) 또는 포그라운드가 셸(하네스 종료).
   agentState?: "busy" | "waiting" | "idle" | "offline";
@@ -109,7 +108,7 @@ export interface SessionInfo {
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; worktree?: boolean; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -301,7 +300,7 @@ async function getOpt(name: string, opt: string): Promise<string> {
 //  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
 // pane_current_command(포그라운드 프로세스)·pane_pid(=포그라운드 pid, CPU 판정용)를 label 앞에 추가(label 은 탭 포함 가능해 ...rest 로 받으므로 뒤에 오면 삼켜짐).
 // @box_last_busy = 마지막 작업(스피너 관측) 시각 epoch초 — 게이트웨이 재기동에도 살아남게 tmux 세션에 영속(#853).
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_wt_branch}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{pane_title}\t#{@box_label}";
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{pane_title}\t#{@box_label}";
 
 // pane_title(=Claude Code 가 써두는 '지금 하는 일' 요약) → 표시용 제목. 상태 글리프(✳/스피너 등) 제거, 기본 셸 타이틀(user@host:path)·셸 세션은 무시.
 function sessionActivityTitle(paneTitle: string, harness: string): string {
@@ -390,7 +389,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, wtBranchRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
@@ -406,7 +405,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
     if (me !== null && !dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
-    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, wtBranchRaw, paneTitleRaw, labelParts, offline, busy, lastBusy });
+    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, paneTitleRaw, labelParts, offline, busy, lastBusy });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
   const waitingIds = new Set<string>();
@@ -425,7 +424,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
-      projectId: Number(r.projectRaw) || 0, wtBranch: r.wtBranchRaw || "",
+      projectId: Number(r.projectRaw) || 0,
       agentState: state, title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
     });
@@ -462,50 +461,12 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
   return p;
 }
 
-// ── 세션 워크트리(#675) ──
-// 개인 터미널 세션을 '선택한 폴더가 속한 git 저장소의 새 워크트리(격리 브랜치)'에서 돌린다 — 다른 세션·메인 체크아웃과
-//  워킹트리를 안 나눠 써 병렬 작업이 서로의 변경을 안 밟는다(프로젝트 세션이 project-provision 으로 받는 격리를 개인 세션에도).
-//  비파괴·best-effort: 저장소가 아니거나 워크트리 생성이 실패하면 원래 폴더를 그대로 쓴다(세션 생성은 안 막음).
-//  ⚠ 격리(box_ osUser) 세션엔 적용 안 함 — 워크트리는 게이트웨이 uid 로 만들어져 멤버 700 홈 접근이 안 맞는다(폴백).
-
-// git 실행 — arg-array(셸 미경유 → 인젝션 불가). 실패는 ok:false 로 흡수(throw 안 함). GIT_TERMINAL_PROMPT=0=자격프롬프트 매달림 방지.
-async function gitCap(args: string[], cwd: string): Promise<{ ok: boolean; out: string; err: string }> {
-  try {
-    const { stdout } = await execFileAsync("git", args, { cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
-    return { ok: true, out: stdout.trim(), err: "" };
-  } catch (e) { const x = e as { stdout?: unknown; stderr?: unknown; message?: string }; return { ok: false, out: String(x?.stdout ?? "").trim(), err: String(x?.stderr ?? x?.message ?? "").trim() }; }
-}
-// 세션 브랜치명 — 라벨 슬러그 + 세션 id 꼬리(고유). git 브랜치로 유효한 값만(선두 특수문자·중복 하이픈 제거).
-function sessionBranchName(label: string, id: string): string {
-  const slug = (label || "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-._]+|[-._]+$/g, "").slice(0, 40);
-  const tail = (id.split("-").pop() || "").slice(0, 8) || "wt";
-  return `term/${slug ? slug + "-" : ""}${tail}`;
-}
-interface SessionWorktree { cwd: string; wtPath: string; repoRoot: string; branch: string; }
-// target 이 git 저장소 안이면 <repoRoot>-worktrees/<id> 에 새 브랜치 워크트리를 만들고, 세션 cwd 를
-//  (워크트리 + target 의 저장소 상대경로)로 옮긴다. 저장소 아님/실패 = null(호출부가 원래 target 유지).
-async function createSessionWorktree(target: string, id: string, label: string): Promise<SessionWorktree | null> {
-  const top = await gitCap(["rev-parse", "--show-toplevel"], target);
-  if (!top.ok || !top.out) return null;                          // git 저장소 아님 → 워크트리 미적용
-  const repoRoot = top.out;
-  const wtPath = `${repoRoot}-worktrees/${id}`;                   // 저장소 옆 형제 폴더(레포 워킹트리 안 오염 · 회수 쉬움)
-  const branch = sessionBranchName(label, id);
-  await fsp.mkdir(path.dirname(wtPath), { recursive: true }).catch(() => { /* best-effort */ });
-  // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 있으면 attach 폴백(project-provision 동형).
-  let w = await gitCap(["worktree", "add", wtPath, "-b", branch], repoRoot);
-  if (!w.ok) w = await gitCap(["worktree", "add", wtPath, branch], repoRoot);
-  if (!w.ok) { console.warn(`[terminal] git worktree add 실패 — 폴더에서 그대로 진행: ${w.err}`); return null; }
-  const rel = path.relative(repoRoot, target);                   // 저장소 안 하위경로 보존(예: repo/src → wt/src)
-  const cwd = rel && !rel.startsWith("..") ? path.join(wtPath, rel) : wtPath;
-  await fsp.mkdir(cwd, { recursive: true }).catch(() => { /* 워크트리 체크아웃에 이미 있을 것 */ });
-  return { cwd, wtPath, repoRoot, branch };
-}
-// 세션 종료 시 워크트리 회수(비강제) — 커밋은 브랜치에 남고, 미커밋 변경이 있으면 remove 가 거부해 보존한다(무손실).
-async function removeSessionWorktree(repoRoot: string, wtPath: string): Promise<void> {
-  if (!repoRoot || !wtPath) return;
-  const r = await gitCap(["worktree", "remove", wtPath], repoRoot);
-  if (!r.ok) console.warn(`[terminal] 워크트리 회수 보류(미커밋 변경 등) — 수동 정리 필요: ${wtPath} · ${r.err}`);
-}
+// 세션 워크트리(#675)는 #918 에서 제거됐다 — '고른 폴더가 git 저장소면 격리 워크트리에서 돌린다'는 기능이었으나
+//  생성 조건(`input.worktree && !osUser && !projectId`)이 이 조직에선 영영 거짓이었다: 멤버는 전원 OS 격리(box_)라
+//  osUser 가 항상 있고, 프로젝트 세션은 'project-provision 이 따로 준다'는 이유로 제외였다(그 provision 도 #918 에서
+//  제거). 실측 49세션 중 0건 · <repo>-worktrees/ 가 생긴 적 없음. 그런데 UI 는 '기본 켜짐·권장'으로 약속하고 미적용을
+//  "폴더가 git 저장소가 아니라서"로 **오진**했다(진짜 이유는 격리). 코드 작업면은 lively_local_repo_worktree
+//  셀프서비스가 환경·격리 무관하게 만든다 — 세션 생성은 워크트리를 만들지 않는다.
 
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   // 디스크 가드(#813 T5) — **맨 앞**에서 막는다. 세션은 워크트리 체크아웃 + 의존성 설치로 디스크를 크게 먹는데,
@@ -529,12 +490,6 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const osUser = await ensureMemberOsUser(user);
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   let { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath, osUser);
-  // 워크트리(#675) — 비격리 개인 세션 + 요청 시에만. 프로젝트 세션(별도 워크트리 provision)·격리(box_) 세션은 제외(폴백).
-  let worktree: SessionWorktree | null = null;
-  if (input.worktree && !osUser && !input.projectId) {
-    worktree = await createSessionWorktree(target, id, cleanLabel(input.label) || id);
-    if (worktree) target = worktree.cwd;
-  }
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
@@ -641,12 +596,6 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
-  // 워크트리(#675) — 만들었으면 경로·베이스 레포를 박아 세션 종료(killSession) 시 회수한다(비강제=무손실).
-  if (worktree) {
-    await tmux(["set-option", "-t", id, "@box_worktree", worktree.wtPath]);
-    await tmux(["set-option", "-t", id, "@box_wt_repo", worktree.repoRoot]);
-    await tmux(["set-option", "-t", id, "@box_wt_branch", worktree.branch]);
-  }
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -662,7 +611,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags, wtBranch: worktree ? worktree.branch : "" };
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
@@ -706,11 +655,7 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
 }
 export async function killSession(user: LivelyUser, id: string): Promise<void> {
   await assertManage(user, id);
-  // 워크트리(#675) 메타는 세션이 살아 있을 때 읽어둔다(kill 후엔 조회 불가). 회수는 kill 뒤 best-effort.
-  const wtPath = await getOpt(id, "@box_worktree");
-  const wtRepo = await getOpt(id, "@box_wt_repo");
   await tmux(["kill-session", "-t", id]);
-  if (wtPath && wtRepo) await removeSessionWorktree(wtRepo, wtPath).catch(() => { /* best-effort */ });
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
