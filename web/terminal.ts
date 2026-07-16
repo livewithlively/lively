@@ -309,10 +309,10 @@ function tsessCard(s, ctx) {
     return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
   }
 
-  // 액션 — 열기(항상) + 내 질문(로컬 세션만 — 노드 세션 트랜스크립트 릴레이는 후속 #869) + 소유자면 수정·삭제.
+  // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
   const acts = el('div', { class: 'tsess-acts' },
     el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
-  if (!s.node) acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
+  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
     acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
@@ -405,7 +405,7 @@ export async function openSessPrompts(s) {
   const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
   overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
   try {
-    const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts');
+    const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts' + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''));
     const prompts = (d && d.prompts) || [];
     const total = (d && d.total) || prompts.length;
     if (!prompts.length) {

@@ -53,7 +53,7 @@ export interface CloseChanMsg { t: "close"; chan: number }
 // fs* = 노드 세션 파일 릴레이(#875) — 세션 작업폴더(@box_dir) 기준. 바이트는 base64 청크(maxPayload 1MB 회피),
 //  게이트웨이가 nodeCanAttach 로 인가 후 위임(정책=게이트웨이, 실행=노드 F7). fsRead(len=0)=stat.
 export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask"
-  | "fsLs" | "fsRead" | "fsWrite" | "fsMkdir";
+  | "fsLs" | "fsRead" | "fsWrite" | "fsMkdir" | "prompts";
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;

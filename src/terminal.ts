@@ -18,7 +18,7 @@ import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers } from "./org/store.js";
 import { isProjectSessionDir } from "./project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeOnline, liveNodes } from "./node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeCanAttach, nodeOnline, liveNodes } from "./node/registry.js";
 import type { NodeOp } from "./node/protocol.js";
 import { getNode, listNodes } from "./node/store.js";
 import { registerNodeRoutes } from "./node/routes.js";
@@ -177,6 +177,13 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.
   app.get("/api/ui/terminal/sessions/:id/prompts", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) { // 노드 세션(#875 ③) — 인가(nodeCanAttach) 후 노드 트랜스크립트 릴레이.
+      const v = await nodeCanAttach(nodeId, req.params.id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+      const out = await relayNodeOp(nodeId, "prompts", { id: req.params.id, user: { userId: uid } });
+      res.setHeader("Cache-Control", "no-store"); res.json(out); return;
+    }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     const out = await sessionPrompts(await sessionDir(req.params.id));
     res.setHeader("Cache-Control", "no-store");

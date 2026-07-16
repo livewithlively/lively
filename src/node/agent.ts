@@ -13,6 +13,7 @@ import {
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT, type CreateInput,
 } from "../terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal-pty.js";
+import { sessionPrompts } from "../terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
   NODE_WS_PATH, PROTO_VER, encodeChanFrame, decodeChanFrame, parseMsg,
@@ -169,6 +170,8 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       await fsp.mkdir(abs, { recursive: true });
       return { ok: true };
     }
+    case "prompts": // '내 질문'(#875 ③) — 노드 세션의 tmux 트랜스크립트에서 사용자 프롬프트 추출(노드 로컬 ~/.claude 등).
+      return sessionPrompts(await sessionDir(String(args.id)));
     default: throw new Error(`unknown op: ${op}`);
   }
 }
