@@ -144,7 +144,13 @@ function runHook(hook, stdin) {
     const timeout = Math.min(Math.max(Number(hook.timeout_sec) || 10, 1), 120) * 1000;
     try {
       // killSignal SIGKILL — 훅이 SIGTERM 핸들러/동기 busy-loop 로 타임아웃을 살아남아 세션을 막는 것 방지(no-block 불변식).
-      return { out: execFileSync("node", [tmp], { input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: process.env, maxBuffer: 4 * 1024 * 1024 }), fail: null };
+      // LIVELY_HOOK_TIMEOUT_MS — 훅에게 **자기가 죽는 시각**을 알려준다(#905 C3). SIGKILL 은 정리 코드조차 못 돌게
+      //  하므로, I/O 하는 훅은 그 전에 스스로 멈춰 결과를 남겨야 한다(project-push 의 충돌 기록이 그 예). 이 값이
+      //  없으면 훅이 상한을 추측해 하드코딩하게 되고, 관리자가 timeout_sec 을 줄이는 순간 조용히 어긋난다.
+      return { out: execFileSync("node", [tmp], {
+        input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, LIVELY_HOOK_TIMEOUT_MS: String(timeout) }, maxBuffer: 4 * 1024 * 1024,
+      }), fail: null };
     } catch (e) {
       // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
       const fail = {

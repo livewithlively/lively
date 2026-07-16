@@ -70,7 +70,7 @@ function readHooksConfig() {
 //  가 그것이고 거의 항상 존재한다. 그래서 여기 전문을 박지 않는다(DEFAULT_WRITEBACK_NOTICE 가 라이브 단일소스 — 동기화 불요).
 const REASON =
   "이 세션에서 파일 작업을 했거나 외부 툴에서 맥락을 끌어왔는데 컨텍스트 스토어 기록이 없습니다. 마무리 전에 한 일을 " +
-  "activity_log·knowledge_save 등으로 컨텍스트 스토어에 기록하세요(외부에서 끌어온 원문 중 SoT 에 없는 건 source_save — " +
+  "activity_log·knowledge_save 등으로 컨텍스트 스토어에 기록하세요(외부에서 끌어온 원문 중 여기 없는 건 source_save — " +
   "세부 항목은 조직 너지 설정 참조). 기록할 것이 없으면 그대로 다시 종료하면 됩니다(이 알림은 세션당 1회).";
 
 try {
