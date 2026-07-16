@@ -41,8 +41,8 @@
 //      여기엔 **몇 초 안에 동기 완결되는 로컬 조작만**.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, mkdirSync, existsSync } from "node:fs";
+import { join, dirname, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -117,6 +117,172 @@ const TOOLS = [];
 
 // 다른 모듈/테스트가 프로그램적으로 툴을 조립할 때 쓰는 등록 유틸(배열 직접 push 와 동등).
 function registerTool(tool) { TOOLS.push(tool); return tool; }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  빌트인 로컬 툴 — 레포/워크트리 셀프서비스 (#900)
+//   설계: 지식 base-repo-worktree-selfservice-design-900. 어느 실행 환경(박스·로컬PC·워커노드)
+//   에서든 하네스가 균일한 한 조작으로 이 머신 cwd 에 최신 워크트리를 떠서 그 위에서 작업하게 한다.
+//   base(공유 원본)는 규율상 pristine — 여기선 fetch 로 refs 만 갱신하고 워킹트리는 안 건드린다
+//   (worktree 는 origin/<ref> 에서 바로 분기 → base RO 규율 유지). 서버측 provisionProjectRepos 의
+//   로컬판이며, work.mjs(멤버 PC) 의 clone/worktree 로직과 동형이되 프로젝트에 매이지 않는다.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;         // 경로 컴포넌트 — 슬래시·.. 금지(project-provision 과 동일)
+const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
+
+// 이 머신의 base 레포 dir — 박스/워커: <work-root>/repos · 멤버 PC: ~/lively/repos.
+//  work-roots(설치가 기록)의 첫 루트를 정본으로, 없으면 ~/lively/repos 폴백. env 로 override.
+function reposDir() {
+  if (process.env.LIVELY_REPOS_DIR) return process.env.LIVELY_REPOS_DIR;
+  const roots = readLively("work-roots").split("\n").map((s) => s.trim()).filter((l) => l && !l.startsWith("#"));
+  if (roots[0]) return join(roots[0], "repos");
+  return join(HOME, "lively", "repos");
+}
+
+// cwd 에서 위로 .lively/project.json 을 찾아 project_id 를 얻는다(있으면 워크트리 브랜치 기본값 project/<id>
+//  → 서버 provisionProjectRepos 와 동일 규약). git 의 .git 상향탐색과 동형. 없으면 null(프로젝트 밖 세션).
+function projectIdFromCwd(cwd) {
+  let dir = cwd || HOME;
+  for (let i = 0; i < 40; i++) {
+    try { const m = JSON.parse(readFileSync(join(dir, ".lively", "project.json"), "utf8")); if (m && m.project_id) return m.project_id; } catch { /* 없음 */ }
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
+
+const isGitRepo = (ctx, p) => existsSync(p) && ctx.sh("git", ["-C", p, "rev-parse", "--git-dir"], { allowFail: true }).code === 0;
+
+// origin 기본 브랜치(main/master 등) — symbolic-ref 우선, 없으면 흔한 후보 확인, 최종 폴백 main.
+function remoteDefaultBranch(ctx, base) {
+  const sym = ctx.sh("git", ["-C", base, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { allowFail: true }).stdout.trim();
+  if (sym) return sym.replace(/^origin\//, "");
+  for (const b of ["main", "master"]) {
+    if (ctx.sh("git", ["-C", base, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${b}`], { allowFail: true }).code === 0) return b;
+  }
+  return "main";
+}
+
+// 워크트리 목표 경로 해석 — 절대경로면 그대로, 상대면 cwd 기준, 미지정이면 cwd/<repo>.
+function resolveWtPath(ctx, repo, p) {
+  if (!p) return join(ctx.cwd, repo);
+  return isAbsolute(p) ? p : join(ctx.cwd, p);
+}
+
+registerTool({
+  name: "lively_local_repo_list",
+  title: "이 머신에서 워크트리 뜰 수 있는 레포",
+  description: "관리탭에 등록된 레포 목록 + 이 머신 로컬 base 클론 상태(클론됨?·현재 브랜치·origin 대비 최신)를 반환한다. "
+    + "코드 작업을 시작하기 전에 '어떤 레포를 lively_local_repo_worktree 로 뜰 수 있는지' 확인하는 용도. "
+    + "base 는 pristine 공유 원본이니 직접 작업하지 말고 워크트리를 떠서 작업하라.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  handler: async (_args, ctx) => {
+    const reg = await ctx.api("/api/ui/repos");
+    const cloneUrl = new Map();
+    for (const r of (reg.domainmapRepos || [])) if (r && typeof r.name === "string") cloneUrl.set(r.name, r.clone_url ?? null);
+    const names = Array.isArray(reg.repos) && reg.repos.length ? reg.repos : [...cloneUrl.keys()];
+    const dir = reposDir();
+    const repos = names.map((name) => {
+      const base = join(dir, name);
+      const cloned = isGitRepo(ctx, base);
+      let branch = null, head = null, status = null;
+      if (cloned) {
+        branch = ctx.sh("git", ["-C", base, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim() || null;
+        head = ctx.sh("git", ["-C", base, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim() || null;
+        status = (ctx.sh("git", ["-C", base, "status", "-sb"], { allowFail: true }).stdout.split("\n")[0] || "").trim() || null;
+      }
+      return { name, clone_url: cloneUrl.get(name) ?? null, cloned, base, branch, head, status };
+    });
+    return ctx.json({ repos_dir: dir, count: repos.length, repos });
+  },
+});
+
+registerTool({
+  name: "lively_local_repo_worktree",
+  title: "레포 워크트리를 cwd 에 생성(코드 작업 준비)",
+  description: "등록된 레포의 최신 코드를 이 머신에 확보(로컬에 없으면 clone·있으면 fetch)한 뒤, 지정 경로(기본 cwd 하위 <repo>)에 "
+    + "격리 브랜치로 git worktree 를 만든다. 반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 "
+    + "직접 작업하지 말 것. 프로젝트 세션이면 브랜치 기본값은 project/<id>. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
+      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). 기본 cwd/<repo>" },
+      branch: { type: "string", description: "워크트리 브랜치. 기본: 프로젝트 세션이면 project/<id>, 아니면 wt/<repo>" },
+      ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: origin 기본 브랜치 최신" },
+    },
+    required: ["repo"],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx) => {
+    const repo = String(args.repo).trim();
+    if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
+    const base = join(reposDir(), repo);
+
+    // ① base 확보 — 없으면 레지스트리 clone_url 로 clone, 있으면 fetch(refs 만; 워킹트리 미변경 = RO 규율).
+    if (!isGitRepo(ctx, base)) {
+      const reg = await ctx.api("/api/ui/repos");
+      const row = (reg.domainmapRepos || []).find((r) => r && r.name === repo);
+      const url = row && row.clone_url;
+      if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
+      mkdirSync(dirname(base), { recursive: true });
+      ctx.sh("git", ["clone", url, base]); // 실패(인증 등) 시 throw → 하네스에 tool-error
+    } else {
+      ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
+    }
+
+    // ② 브랜치·ref 결정 — 프로젝트면 project/<id>, ref 지정 시 origin/<ref> 에서 분기.
+    const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+    const pid = projectIdFromCwd(ctx.cwd);
+    const branch = (args.branch && String(args.branch).trim()) || (pid ? `project/${pid}` : `wt/${repo}`);
+    if (!BRANCH_RE.test(branch)) throw new Error(`브랜치명 형식 오류: ${branch}`);
+    const wt = resolveWtPath(ctx, repo, args.path && String(args.path).trim());
+
+    // 이미 워크트리면 그대로(멱등) — 재실행 안전.
+    if (isGitRepo(ctx, wt)) {
+      const b = ctx.sh("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim();
+      return ctx.json({ repo, worktree: wt, branch: b || branch, base, note: "이미 워크트리가 있어 그대로 사용합니다." });
+    }
+
+    // ③ worktree add — 새 브랜치(origin/<ref> 최신 기준) 시도 → 같은 브랜치가 이미 있으면 attach 폴백(provision 동형).
+    mkdirSync(dirname(wt), { recursive: true });
+    let r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch, `origin/${refBranch}`], { allowFail: true });
+    if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, branch], { allowFail: true });          // 기존 브랜치 attach
+    if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch], { allowFail: true });     // origin/<ref> 없을 때 base HEAD
+    if (r.code !== 0) throw new Error(`워크트리 생성 실패(${repo}): ${(r.stderr || "").trim().split("\n")[0]}`);
+
+    return ctx.json({
+      repo, worktree: wt, branch, base, ref: refBranch,
+      note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).`,
+    });
+  },
+});
+
+registerTool({
+  name: "lively_local_repo_worktree_remove",
+  title: "워크트리 제거",
+  description: "lively_local_repo_worktree 로 만든 워크트리를 제거한다(base·다른 워크트리 무영향). 커밋 안 한 변경이 있으면 실패하니 정리 후 재시도하거나 force:true 로.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "레포 이름" },
+      path: { type: "string", description: "워크트리 경로(절대 또는 cwd 상대). 기본 cwd/<repo>" },
+      force: { type: "boolean", description: "커밋 안 한 변경이 있어도 제거" },
+    },
+    required: ["repo"],
+    additionalProperties: false,
+  },
+  handler: (args, ctx) => {
+    const repo = String(args.repo).trim();
+    if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
+    const base = join(reposDir(), repo);
+    const wt = resolveWtPath(ctx, repo, args.path && String(args.path).trim());
+    const r = ctx.sh("git", ["-C", base, "worktree", "remove", ...(args.force ? ["--force"] : []), wt], { allowFail: true });
+    if (r.code !== 0) throw new Error(`워크트리 제거 실패: ${(r.stderr || "").trim().split("\n")[0]}`);
+    return ctx.text(`제거됨: ${wt}`);
+  },
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  런타임 — MCP stdio(JSON-RPC 2.0, newline-delimited).  ★툴 추가 시 건드리지 말 것★

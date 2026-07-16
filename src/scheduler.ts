@@ -24,6 +24,7 @@ export interface CronActionDef { key: string; label: string; params: CronActionP
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [] },
   { key: "refresh_repo", label: "한 repo is 신선화", params: [{ name: "repo", label: "repo", kind: "repo", hint: "context-ontology" }] },
+  { key: "refresh_bases", label: "작업 base 레포 확보·최신화 (워크트리 원본)", params: [] },
   { key: "connector_sync", label: "커넥터 sync (외부→우리)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
   { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
@@ -85,6 +86,17 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     const name = params.repo;
     if (!name) return { status: "error", summary: { error: "params.repo 필요" } };
     return { status: "ok", summary: await refreshRepoFromGit(String(name), actor) };
+  }
+
+  if (job.action === "refresh_bases") {
+    // 작업용 공유 base(workspace/repos/<name>) 확보·최신화 — 워크트리 셀프서비스(lively_local_repo_worktree)의 최신 원본(#900).
+    //  refresh_all(도메인맵 스캐너 클론 stateDir/repos)과 대상이 다르다(이건 provision base). 없으면 clone·있으면 FF, 전 repo 순회.
+    const { ensureProvisionBase } = await import("./project-provision.js");
+    const repos = await q(itemsPool,
+      `SELECT name FROM repo WHERE COALESCE(state,'active')='active' AND git_url IS NOT NULL AND git_url <> ''`);
+    const results = [];
+    for (const r of repos) results.push(await ensureProvisionBase(r.name, null));
+    return { status: "ok", summary: { repos: results.length, results } };
   }
 
   if (job.action === "eval_domain_debt") {

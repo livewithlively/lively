@@ -726,7 +726,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -739,6 +739,8 @@ export async function initOrgSchema(): Promise<void> {
     INSERT INTO org_cron(id, label, action, interval_sec, enabled, note) VALUES
       ('refresh-all-domainmap','도메인맵 is 신선화 (전 repo)','refresh_all',600,true,
        'last_refreshed_sha→origin/HEAD 증분 diff 를 결정적 refresh 엔진에 먹인다(LLM 없음). 멱등.'),
+      ('refresh-provision-bases','작업 base 레포 확보·최신화 (워크트리 원본)','refresh_bases',1800,true,
+       '관리탭 등록 레포를 이 호스트 workspace/repos 에 없으면 clone·있으면 FF — 워크트리 셀프서비스(lively_local_repo_worktree)의 최신 원본을 무인 보장. 도메인맵 스캐너 클론(refresh_all, stateDir/repos)과 대상이 다르다.'),
       ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
        '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
