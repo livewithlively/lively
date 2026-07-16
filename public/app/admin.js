@@ -2437,7 +2437,9 @@ function injectionMap(detail, data) {
     }
     paintSections();
     const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 섹션 문서들을 sort 순으로 조립. 추가/편집/삭제/재정렬 가능.', momentToggle('session_preload'), sectionsWrap, previewExpander(), customList('SessionStart'));
-    const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).', momentToggle('work_flag'), canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null, canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', rc.write_tools, 'write_tools', 'knowledge_save') : null, customList('PostToolUse'));
+    const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).', momentToggle('work_flag'), canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null, canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', rc.write_tools, 'write_tools', 'knowledge_save') : null, 
+    // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
+    canEdit ? listEditor('외부 인입 툴(pull_tools) — 이 prefix 로 시작하는 MCP 툴을 쓰면 “외부 맥락을 끌어왔다”로 보고 종료 너지 대상에 넣는다(끌어온 걸 SoT 에 안 남기고 끝내는 걸 막음) · 줄당 툴이름 prefix · 비우면 이 기능 끔. 기본 mcp__lively__ext__ = 라이블리 MCP 프록시 전체. ⚠ 훅이 관측하는 건 mcp__lively__* 뿐이라 다른 서버 prefix 는 적어도 안 잡힌다(구성원이 자기 하네스에 직접 단 MCP 커버는 후속 작업)', rc.pull_tools, 'pull_tools', 'mcp__lively__ext__') : null, customList('PostToolUse'));
     const stopBlock = momentBlock('세션 종료 — Stop', '작업했는데 기록을 안 남겼으면(조건 충족 시 1회) 기록하라고 너지한다.', momentToggle('stop_writeback_gate'), canEdit ? writebackEditor() : null, customList('Stop'));
     // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 지도에 둔다.
     //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).

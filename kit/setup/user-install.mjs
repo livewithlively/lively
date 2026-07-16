@@ -70,6 +70,10 @@ function userLevelHooksBlock() {
       { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("sync-harness-assets.mjs") }] },
     ],
     PostToolUse: [
+      // 우리 서버 한정 유지(#906) — ext__ 프록시는 mcp__lively__ext__… 라 이 matcher 로 이미 잡힌다.
+      //  구성원이 자기 하네스에 직접 단 MCP(mcp__<server>__…)까지 보려면 matcher 를 넓혀야 하는데, 넓히면 **모든** MCP
+      //  호출마다 훅이 스폰된다(실측 46ms/회 — playwright 200콜이면 ~9s). 그래서 확대는 보류하고, 넓힐 땐 matcher 를
+      //  pull_tools 에서 파생해 '관리자가 적은 서버만' 뜨게 하는 게 맞다(후속 태스크 — 매처 회수 설계 동반 필요).
       { matcher: "mcp__lively__.*", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
       { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
@@ -158,6 +162,9 @@ function safeMergeUserSettings(blockHooks) {
     const m = typeof cmd === "string" ? cmd.match(/[/\\]\.lively[/\\]hooks[/\\]([^"'\s]+)['"]?\s*(.*)$/) : null;
     return m ? `${m[1]}|${m[2].trim()}` : null;
   };
+  // ⚠ 아래 회수는 **matcher 가 같을 때만** 구표기를 걷는다. 그래서 kit 이 어떤 훅의 matcher 자체를 바꾸면(예 확대)
+  //  구항목이 '다른 matcher'라 살아남아 같은 훅이 두 벌 등록되고 툴마다 2회 실행된다 — 위 15→30 누적과 같은 사고다.
+  //  matcher 를 바꾸는 변경은 그 회수 설계(우리가 쓴 엔트리 ↔ 사용자가 쓴 엔트리 구분)를 반드시 동반해야 한다.
   for (const [event, entries] of Object.entries(blockHooks)) {
     let arr = Array.isArray(cur.hooks[event]) ? cur.hooks[event] : [];
     for (const entry of entries) {

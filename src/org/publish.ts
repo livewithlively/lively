@@ -195,7 +195,9 @@ async function writeRuntimeBundle(stageDir: string): Promise<void> {
   const cfg = await getRuntimeConfig();
   await writeFile(join(dir, "hooks-config.json"),
     JSON.stringify({ hooks: cfg.hooks, writeback_notice: cfg.writeback_notice || DEFAULT_WRITEBACK_NOTICE,
-      write_tools: cfg.write_tools?.length ? cfg.write_tools : undefined }, null, 2) + "\n");
+      write_tools: cfg.write_tools?.length ? cfg.write_tools : undefined,
+      // pull_tools(#906): 비면 생략 = 기능 꺼짐(write_tools 의 '비면 기본값'과 반대 — 여기선 생략이 곧 off 다).
+      pull_tools: cfg.pull_tools?.length ? cfg.pull_tools : undefined }, null, 2) + "\n");
   // work-roots 헤더 — 단일 출처는 kit/setup/work-roots-header.mjs(WORK_ROOTS_HEADER). 서버는 배포물 경계상 그 .mjs 를
   //  빌드타임 import 하지 않으므로 동일 텍스트를 유지한다(이 사본은 번들 .lively/work-roots 용 — 멤버 최종본은 user-install seed).
   const wrHeader = "# lively work-root 레지스트리 — 줄당 절대경로 prefix. 이 아래에서 켠 세션은 writeback 게이트가 작동.\n# 추가/제거 자유. env LIVELY_WORK_ROOTS 로도 augment 가능.";

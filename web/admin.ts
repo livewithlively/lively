@@ -2341,6 +2341,8 @@ function injectionMap(detail, data) {
     momentToggle('work_flag'),
     canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
     canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', rc.write_tools, 'write_tools', 'knowledge_save') : null,
+    // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
+    canEdit ? listEditor('외부 인입 툴(pull_tools) — 이 prefix 로 시작하는 MCP 툴을 쓰면 “외부 맥락을 끌어왔다”로 보고 종료 너지 대상에 넣는다(끌어온 걸 SoT 에 안 남기고 끝내는 걸 막음) · 줄당 툴이름 prefix · 비우면 이 기능 끔. 기본 mcp__lively__ext__ = 라이블리 MCP 프록시 전체. ⚠ 훅이 관측하는 건 mcp__lively__* 뿐이라 다른 서버 prefix 는 적어도 안 잡힌다(구성원이 자기 하네스에 직접 단 MCP 커버는 후속 작업)', rc.pull_tools, 'pull_tools', 'mcp__lively__ext__') : null,
     customList('PostToolUse'));
 
   const stopBlock = momentBlock('세션 종료 — Stop', '작업했는데 기록을 안 남겼으면(조건 충족 시 1회) 기록하라고 너지한다.',

@@ -924,6 +924,9 @@ const workspaceReclaim: Capability = {
   },
 };
 
+// 폴더 싱크 모드 어휘 — DB CHECK(project_folder_binding_sync_chk)·마커·pull 훅과 같은 3값. REST parse 가 이걸로 막는다.
+const FOLDER_SYNC_MODES: readonly string[] = ["none", "pull", "both"];
+
 // ── #905 C2a — `project_init`(로컬 MCP 툴)이 필요로 하는 서버 이음매 2종. ──
 //  왜 서버에 있나: init 은 멤버 머신에서 돌지만(로컬 git origin 을 읽고 로컬 마커를 써야 하므로),
 //   "이 origin 을 쓰는 프로젝트가 이미 있나"·"내 폴더 위치를 중앙에 기록" 은 중앙만 안다.
@@ -1006,13 +1009,18 @@ const projectBindFolderV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/folder-binding"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return {
-          id: parseId(req.params?.id),
-          node_id: String(b.node_id ?? "").trim(),
-          abs_path: String(b.abs_path ?? "").trim(),
-          sync: b.sync != null ? String(b.sync) : undefined,
-          git_url: b.git_url != null ? String(b.git_url) : undefined,
-        };
+        // ⚠ REST 는 zod input 을 안 태운다(parse 가 유일한 게이트) — 여기서 안 막으면 잘못된 값이 그대로 내려가
+        //  DB CHECK 에서 터진다(400 이어야 할 게 500 + SQL 메시지 노출). 기존 parseProjectStatus 관례와 동형.
+        const node_id = String(b.node_id ?? "").trim();
+        if (!node_id) throw new HttpError(400, "node_id 가 필요합니다(환경 식별자 — 노트북은 호스트 슬러그, 박스는 'central')");
+        const abs_path = String(b.abs_path ?? "").trim();
+        if (!abs_path) throw new HttpError(400, "abs_path 가 필요합니다(그 환경에서의 절대경로)");
+        let sync: string | undefined;
+        if (b.sync != null && b.sync !== "") {
+          sync = String(b.sync).trim();
+          if (!FOLDER_SYNC_MODES.includes(sync)) throw new HttpError(400, "sync 는 none|pull|both 중 하나여야 합니다");
+        }
+        return { id: parseId(req.params?.id), node_id, abs_path, sync, git_url: b.git_url != null ? String(b.git_url) : undefined };
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {

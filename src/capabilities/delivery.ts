@@ -1137,7 +1137,9 @@ export const deliveryCapabilities: Capability[] = [
       //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
       //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove, kit_version: kv };
+      // pull_tools(#906) — '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix. write_tools 와 달리 fold 안 함:
+      //  **비면 그대로 꺼짐**이 의도된 상태라 기본값을 씌우면 어드민의 '끄기'를 되살려버린다(DB 기본값이 곧 on).
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, pull_tools: c.pull_tools, auto_approve: autoApprove, kit_version: kv };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -1147,7 +1149,7 @@ export const deliveryCapabilities: Capability[] = [
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
         allowed_internal_hosts?: string[];
-        allowed_db_secret_refs?: string[]; write_tools?: string[];
+        allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
       } = {};
@@ -1230,6 +1232,18 @@ export const deliveryCapabilities: Capability[] = [
         }
         if (patch.write_tools.length > 100) throw new HttpError(400, "write_tools 가 너무 많습니다(100개 이하)");
       }
+      // pull_tools(#906) — '외부 맥락 인입'으로 볼 MCP 툴 이름 **prefix**. **비우면 기능 끔**(write_tools 의 '비우면 기본값'과 반대 시맨틱).
+      //  항목은 툴 이름 prefix 라 `_`·`-` 를 포함한다(예 'mcp__lively__ext__', 'mcp__lively-local__'). 서버명에 하이픈이 실제로 있다.
+      //  3자 미만은 거부 — 너무 짧은 prefix 는 거의 모든 툴을 잡아 세션마다 오넛지를 만든다.
+      if (input.pull_tools !== undefined) {
+        if (!Array.isArray(input.pull_tools)) throw new HttpError(400, "pull_tools 는 배열이어야 합니다");
+        patch.pull_tools = input.pull_tools.map((t) => str(t, "pull_tools[]", 100).trim()).filter(Boolean);
+        for (const t of patch.pull_tools) {
+          if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(t)) throw new HttpError(400, `pull_tools 항목 '${t}' 는 툴 이름 prefix 형식이어야 합니다(영문/숫자/_/-)`);
+          if (t.length < 3) throw new HttpError(400, `pull_tools 항목 '${t}' 가 너무 짧습니다(3자 이상) — 짧은 prefix 는 무관한 툴까지 잡습니다`);
+        }
+        if (patch.pull_tools.length > 100) throw new HttpError(400, "pull_tools 가 너무 많습니다(100개 이하)");
+      }
       // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
       if (input.embedding_config !== undefined) {
         const raw = input.embedding_config;
@@ -1284,6 +1298,7 @@ export const deliveryCapabilities: Capability[] = [
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
+      pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
       // ⚠ 중첩 객체도 하위 키를 다 적어야 한다 — zod 는 미선언 하위 키를 strip 한다(#923).
       storage_policy: z.object({
         log_max_mb: z.number().int().min(0).max(10_000).optional().describe("로그 파일 상한(MB)"),
