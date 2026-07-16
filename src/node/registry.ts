@@ -128,6 +128,11 @@ export async function nodeCanAttach(nodeId: string, sessionId: string, viewer: s
 export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebSocket): void {
   const c = conns.get(nodeId);
   if (!c) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } return; }
+  // WS liveness(#687·#869) — 이게 없으면 게이트웨이 heartbeat 가 **살아있는** 노드-릴레이 브라우저도 매 주기 isAlive=false
+  //  로 보고 terminate → 30s 마다 재연결·재attach 를 유발한다. 그 churn 이 노드에서 pty 를 반복 spawn/정리하게 만들고,
+  //  노드-pty 가 fd 를 완전히 안 닫아(#869 실측: revoked CHR 누적) EMFILE 로 붕괴한다. 브라우저 자동 pong 으로 생존 갱신.
+  (browser as { isAlive?: boolean }).isAlive = true;
+  browser.on("pong", () => { (browser as { isAlive?: boolean }).isAlive = true; });
   const chan = c.nextChan++;
   c.chans.set(chan, { browser, opened: false });
   const cleanup = (notifyNode: boolean): void => {

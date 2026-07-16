@@ -40,6 +40,11 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 //  kill(고아 방지), ⓒ 시작 시 이전 인스턴스가 남긴 고아 attach 회수.
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
 const liveTerms = new Set<IPty>();        // 이 인스턴스가 띄운 살아있는 attach node-pty — 종료 훅이 일괄 kill 한다.
+// 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
+//  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
+//  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
+const spawnFailStreak = new Map<string, { n: number; at: number }>();
+const SPAWN_FAIL_WINDOW_MS = 60_000, SPAWN_FAIL_MAX = 8, SPAWN_COOLDOWN_MS = 30_000;
 type LiveWS = WebSocket & { isAlive?: boolean };
 let heartbeat: NodeJS.Timeout | null = null;
 
@@ -140,6 +145,14 @@ function attach(ws: WebSocket, id: string): void {
 
 // attach 본체 — 게이트웨이 로컬(WebSocket)과 노드 에이전트(채널 어댑터 #869)가 공유한다.
 export function attachSession(ws: AttachSocket, id: string): void {
+  // 스폰 실패 폭주 차단(#869) — 이 세션 attach 가 최근 연속 실패했으면(예: node-pty 가 이 OS 에서 spawn 불가 = spawn-helper
+  //  비호환) 스폰을 건너뛰고 즉시 닫는다. pty 할당 자체를 안 하므로 fd 누수가 원천 차단(정상 스폰 1회로 스트릭 리셋).
+  const sf = spawnFailStreak.get(id);
+  if (sf && sf.n >= SPAWN_FAIL_MAX && Date.now() - sf.at < SPAWN_COOLDOWN_MS) {
+    logger.warn({ id, fails: sf.n }, "attach 스폰 반복 실패 — 쿨다운 스킵(fd 누수·핫루프 차단)");
+    try { ws.close(4403, "attach-throttled"); } catch { /* noop */ }
+    return;
+  }
   let term: IPty | undefined;
   // heartbeat(#687): 새 소켓은 살아있음으로 시작하고, 브라우저가 자동 응답하는 pong 을 받을 때마다 생존 표시.
   //  ping 은 WS 프로토콜 제어프레임이라 tmux 데이터와 무관 — 프론트 코드 변경 불요(브라우저가 투명하게 pong).
@@ -165,6 +178,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
       term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
+      spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
       //  그 에코가 control 도입자(\x1bP1000p)보다 먼저 도착해 클라가 raw 로 오인 → 명령 텍스트가 화면에 뜬다.
       //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
@@ -190,7 +204,14 @@ export function attachSession(ws: AttachSocket, id: string): void {
       ws.on("close", cleanup);
       ws.on("error", cleanup);
     })
-    .catch((err) => { logger.warn({ err, id }, "pty attach 실패"); try { ws.close(); } catch { /* noop */ } });
+    .catch((err) => {
+      // 실패 스트릭 증가(#869) — 임계 초과 시 위 서킷브레이커가 다음 attach 스폰을 건너뛴다(fd 누수·핫루프 상한).
+      const now = Date.now();
+      const s = spawnFailStreak.get(id);
+      if (s && now - s.at < SPAWN_FAIL_WINDOW_MS) { s.n++; s.at = now; } else spawnFailStreak.set(id, { n: 1, at: now });
+      logger.warn({ err, id, fails: spawnFailStreak.get(id)?.n }, "pty attach 실패");
+      try { ws.close(); } catch { /* noop */ }
+    });
 }
 
 // WS liveness heartbeat(#687) — 반쯤 끊긴 attach 소켓을 주기적으로 걸러 terminate 한다. terminate 는 'close' 를
