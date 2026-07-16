@@ -13,10 +13,12 @@
 //
 // 하는 일: /install 번들 다운로드 → **검증**(필수 파일 + node --check) → 번들 동봉 user-install.mjs 실행
 //          (비파괴·멱등 — 백업 후 센티넬/‌dedup 머지) → ~/.lively/kit-version 스탬프 → 다음 세션 안내 1줄.
-// 안 하는 일: **MCP 클라이언트 재등록(claude mcp remove/add)**. remove→add 가 원자적이지 않아, 백그라운드에서
-//          중간에 실패하면 멤버의 lively MCP 등록이 사라진다. 되돌리기 어려운 건 명시적 설치/업데이트
-//          (setup-mac.sh)의 몫으로 남긴다. → org MCP 서버 **목록 변경**은 Codex(config.toml 센티넬 통째 교체)엔
-//          자동 반영되지만 Claude 쪽 `claude mcp add` 는 수동 업데이트가 필요하다(알려진 한계).
+// MCP 등록(#862): **ADDITIVE reconcile 만** 한다 — 누락된 기대 서버(lively·lively-local·org)를 ~/.claude.json 에
+//          직접 추가하되 **remove 는 절대 안 한다**(과거엔 비원자 remove→add 가 백그라운드 중간실패로 등록을
+//          잃을 수 있어 아예 건너뛰었다 — additive 는 그 실패모드가 없어 안전). 기존 항목·유저 것은 불변.
+//          claude 바이너리 비의존(claude mcp add 대신 그 파일을 직접 편집 → detached PATH 빈약해도 동작).
+//          Codex 는 설치기가 config.toml 관리블록을 통째 갱신하므로 별도 불요(claude 전용 갭 해소).
+//          한계: 이 reconcile 코드가 멤버에 먼저 배달돼야 도니 **새 서버는 다음 kit 업데이트에 등록**된다(1회 지연).
 //
 // 안전장치
 //  · 락(O_EXCL)      — 동시 세션 N개가 떠도 업데이트는 한 번만(스테일 락 10분 후 회수).
@@ -160,6 +162,58 @@ function verifyBundle(root) {
   return installer;
 }
 
+// #862 — claude mcp --scope user 가 쓰는 유저 설정 파일(mcpServers 를 담는 그 파일)을 찾는다.
+//  CLAUDE_CONFIG_DIR 가 있으면 그 밑, 없으면 $HOME/.claude.json. 존재하는 것만 반환(없으면 null=미설치/타구조 → skip).
+function claudeUserConfigPath() {
+  const cands = [];
+  if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
+  cands.push(join(HOME, ".claude.json"));
+  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* */ } }
+  return null;
+}
+
+// #862 — Claude MCP 등록 ADDITIVE reconcile. 누락된 기대 서버만 ~/.claude.json 의 mcpServers 에 직접 추가한다.
+//  ⚠ 절대 remove/overwrite 안 함: 있으면 손대지 않고(URL·토큰 변경은 명시적 lively update 몫), 없는 것만 add →
+//   중간 실패로도 기존 등록 무손실(self-update 불변식). registerClaudeMcp(CLI)와 같은 서버 집합(lively·lively-local·org).
+function reconcileClaudeMcp(gw, token) {
+  const cj = claudeUserConfigPath();
+  if (!cj) return; // claude 유저 설정 없음 — 손대지 않음
+  let conf;
+  try { conf = JSON.parse(readFileSync(cj, "utf8")); } catch { return; } // 파손/못읽음 → 안전 skip(덮어쓰지 않음)
+  if (!conf || typeof conf !== "object" || Array.isArray(conf)) return;
+  const servers = (conf.mcpServers && typeof conf.mcpServers === "object" && !Array.isArray(conf.mcpServers)) ? conf.mcpServers : {};
+  const shim = join(LIVELY, "bin", process.platform === "win32" ? "lively.cmd" : "lively");
+  const want = {};
+  want["lively"] = { type: "http", url: `${gw}/mcp`, headers: { Authorization: `Bearer ${token}` } };
+  want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
+  // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
+  try {
+    const raw = JSON.parse(readFileSync(join(LIVELY, "mcp-servers.json"), "utf8"));
+    const list = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.servers) ? raw.servers : []);
+    for (const s of list) {
+      if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
+      if (s.transport === "stdio" && s.command) {
+        const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
+        if (parts.length) want[s.name] = { type: "stdio", command: parts[0], args: parts.slice(1), env: {} };
+      } else if (s.url) {
+        const sec = s.auth_env ? (process.env[s.auth_env] || "") : "";
+        want[s.name] = { type: "http", url: s.url, headers: sec ? { Authorization: `Bearer ${sec}` } : {} };
+      }
+    }
+  } catch { /* 목록 없음/파손 — 무시 */ }
+  let added = 0;
+  for (const [name, entry] of Object.entries(want)) {
+    if (servers[name]) continue; // 이미 등록 — 불변(additive)
+    servers[name] = entry;
+    added++;
+    log(`MCP additive 등록: ${name}`); // ⚠ 이름만 — 토큰/시크릿 미출력(불변식)
+  }
+  if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
+  conf.mcpServers = servers;
+  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); log(`✓ claude MCP additive reconcile — ${added}건 (다음 세션 적용)`); }
+  catch (e) { log(`MCP reconcile 쓰기 실패(무시): ${(e && e.message) || e}`); }
+}
+
 async function main() {
   if (hookDisabled()) return;
 
@@ -202,6 +256,8 @@ async function main() {
     try { installed = readFileSync(join(tmp, ".lively", "kit-version"), "utf8").trim() || target; } catch { /* 구 번들 → --to */ }
     writeFileSync(STAMP, installed + "\n", { mode: 0o600 });
     saveState({ ok_version: installed, ok_at: Date.now() });
+    // #862 — 새 MCP 서버(lively-local 등)를 기존 멤버에게도 additive 등록(claude 전용; codex 는 설치기가 config.toml 로 처리).
+    if (harnesses.includes("claude")) { try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); } }
     // 다음 세션에 한 번 알린다(그때는 이미 새 키트가 돌고 있다). session-preload 가 읽고 지운다.
     writeFileSync(NOTICE, `> 라이블리 키트가 자동으로 업데이트됐습니다(${installed}). 이번 세션부터 최신 훅·설정이 적용됩니다.`, { mode: 0o600 });
     log(`✓ 업데이트 완료 — ${installed} (다음 세션부터 적용)`);

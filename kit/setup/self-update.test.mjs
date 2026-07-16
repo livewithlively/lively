@@ -342,6 +342,41 @@ try {
     (ha === hb) ? ok(`⑫ 번들 결정성 — 다른 경로·같은 입력 → 같은 지문(${ha})`)
       : bad("⑫ 번들 결정성", `${ha} ≠ ${hb} — 생성물에 target 경로가 구워졌다(kit_version 이 매번 달라져 전원 무한 재설치)`);
   }
+
+  // ⑮ #862 — Claude MCP **additive reconcile**. 새 서버(lively-local)가 없는 기존 멤버에게 자동 등록되되, 기존 항목·유저 상태는 불변.
+  {
+    serving.body = makeBundle("v-mcp"); serving.version = "v-mcp";
+    const home = freshHome(null);
+    const cj = join(home, ".claude.json");
+    // '이미 lively(http)만 등록된' 멤버 — lively-local 없음. 유저 서버(other) + 무관 claude 상태(projects)도 둔다(보존돼야 함).
+    writeFileSync(cj, JSON.stringify({
+      mcpServers: {
+        lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } },
+        other: { type: "stdio", command: "/usr/bin/foo", args: [], env: {} },
+      },
+      projects: { "/some/path": { allowedTools: [] } },
+    }, null, 2) + "\n");
+    await runUpdater(home);
+    const conf = JSON.parse(readFileSync(cj, "utf8"));
+    const ll = conf.mcpServers && conf.mcpServers["lively-local"];
+    const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local" && String(ll.command).endsWith("/bin/lively"));
+    const userKept = !!(conf.mcpServers && conf.mcpServers.other && conf.projects && conf.projects["/some/path"]);
+    const livelyKept = !!(conf.mcpServers && conf.mcpServers.lively && conf.mcpServers.lively.url === `${GW}/mcp`);
+    (llOk && userKept && livelyKept)
+      ? ok("⑮ MCP additive reconcile — lively-local 자동 추가 + lively·유저 항목 불변")
+      : bad("⑮ MCP reconcile", `llOk=${llOk} userKept=${userKept} livelyKept=${livelyKept} ll=${JSON.stringify(ll)}`);
+
+    // ⑮b 멱등 — 이미 등록됐으면 재실행해도 파일을 안 건드린다(additive no-op).
+    rmSync(lv(home, "kit-version"), { force: true }); // 같은 버전 강제 재설치
+    const before = readFileSync(cj, "utf8");
+    await runUpdater(home);
+    (readFileSync(cj, "utf8") === before) ? ok("⑮b reconcile 멱등 — 이미 있으면 파일 미변경") : bad("⑮b 멱등", "파일이 변경됨");
+
+    // ⑮c ~/.claude.json 이 없는 멤버는 생성하지 않는다(무접촉 — 기존 테스트들이 reconcile 로 오염되지 않는 근거).
+    const bare = freshHome(null);
+    await runUpdater(bare);
+    (!existsSync(join(bare, ".claude.json"))) ? ok("⑮c .claude.json 없으면 미생성(무접촉)") : bad("⑮c 무접촉", ".claude.json 이 생성됨");
+  }
 } finally {
   server.close();
   cleanup();
