@@ -159,7 +159,16 @@ function writeLively(name, val, mode = 0o600) {
 // gateway-url 은 항상 **/mcp 없이** 저장한다(setup-mac.sh · user-install.mjs 와 같은 계약).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
-const token = () => (process.env.LIVELY_TOKEN || readLively("token")).trim();
+// ⚠ **파일이 정본이고 LIVELY_TOKEN env 는 그 캐시다**(#916 — 순서를 뒤집지 말 것).
+//  설치기가 codex 때문에(config.toml 은 토큰 리터럴을 거부하고 bearer_token_env_var 만 받는다) 셸 rc 에
+//  `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심는다 → env 는 '셸 시작 시각의 파일 스냅샷'이지
+//  의도적 override 가 아니다. env 를 우선하면 `lively login` 직후 **같은 셸**에서 옛 토큰이 살아남아
+//  install 이 옛 신원을 .claude.json 에 굽는다(전 단계가 ✓ 로 보이면서 — 실측 재현됨).
+//  새 셸에선 env==파일이라 이 순서는 무관하고, 파일이 없을 때만(CI·프로비저닝 컨테이너) env 로 폴백한다.
+const token = () => (readLively("token") || process.env.LIVELY_TOKEN || "").trim();
+// 이 프로세스가 **뜰 때** 셸이 준 토큰. 신원 판단엔 절대 쓰지 않는다(그건 token() 담당) — 오직
+//  "당신 셸의 env 는 이제 스테일이고 우리는 그걸 못 고친다"를 login·logout·doctor 가 알릴 때만 쓴다.
+const ENV_TOKEN_AT_START = (process.env.LIVELY_TOKEN || "").trim();
 
 async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
   const gw = gateway(), tok = token();
@@ -570,18 +579,30 @@ function backupUserMcp(name) {
   try { writeFileSync(p, JSON.stringify(bak, null, 2) + "\n", { mode: 0o600 }); } catch { /* best-effort — 백업 실패해도 등록은 진행 */ }
 }
 
+// lively 본체 등록 — **토큰을 담은 유일한 MCP 항목**이라 로그인(신원 교체)도 이것만 다시 굽는다.
+//  remove 후 add(재실행 안전). remove 실패는 정상(미등록 상태). 호출 전에 has("claude") 를 확인할 것.
+//  ⚠ 위치는 claude 가 정한다(--scope user → CLAUDE_CONFIG_DIR 존중, deploy/provision-profile.sh:37) —
+//   .claude.json 을 우리가 직접 읽어 판단하지 않는다(프로필 격리 #346 에서 엉뚱한 파일을 보게 된다).
+//  ⚠ **헤더는 반드시 register-clients.sh 와 같은 2개**(그쪽이 번들 캐노니컬). x-lively-session(#852)을 빠뜨리면
+//   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
+//   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
+//   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
+function registerLivelyMcp(gw, tok) {
+  run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
+  try {
+    run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
+      "--header", `Authorization: Bearer ${tok}`,
+      "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}"], { quiet: true });
+    ok(`MCP 등록: lively → ${gw}/mcp`);
+    return true;
+  } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
+}
+
 function registerClaudeMcp() {
   const gw = gateway(), tok = token();
   if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
   let registered = 0, failed = 0;
-  // lively 본체 — remove 후 add(재실행 안전). remove 실패는 정상(미등록 상태).
-  run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
-  try {
-    run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
-      "--header", `Authorization: Bearer ${tok}`], { quiet: true });
-    ok(`MCP 등록: lively → ${gw}/mcp`);
-    registered++;
-  } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); failed++; }
+  if (registerLivelyMcp(gw, tok)) registered++; else failed++;
 
   // lively-local — 로컬 조작 stdio MCP(#899). 같은 CLI 가 서버(`lively mcp-local`).
   //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-local.mjs 로
@@ -652,7 +673,11 @@ async function syncKit({ label, offerHarness }) {
 
     say(dim("  [2/3] 설치 중…"));
     // 설치의 엔진은 번들 동봉 user-install.mjs — 비파괴 머지·백업·auto-approve reconcile 이 전부 거기 있다.
-    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")]);
+    //  ⚠ LIVELY_TOKEN 을 **명시 주입**한다: user-install.mjs 의 org-seed fetch 는 아직 env 우선이라(그쪽:539),
+    //   안 주면 이 셸의 스테일 env 로 시드를 받아 **번들은 새 신원·시드는 옛 신원**으로 갈린다(#916 계열).
+    //   token() 이 정본(파일)을 이미 풀었으니 그 값을 그대로 물려준다 — process.env 전역을 덮지 않는 이유는 afterLogin 주석 참조.
+    run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")],
+      { env: { LIVELY_TOKEN: token() } });
 
     say(dim("  [3/3] MCP 등록 중…"));
     const r = registerClaudeMcp();
@@ -724,7 +749,9 @@ async function loginWithPastedToken(gw) {
   say(dim("  토큰은 관리자에게 받거나, 웹 [사용 가이드 › 내 AI 세션 생성] 에서 발급합니다."));
   const tok = String(await askHidden("  접속 토큰을 붙여넣으세요 (화면에 안 보입니다): ") || "").trim();
   if (!tok) die("토큰이 비어 있습니다.");
-  return validateAndStore(gw, tok);
+  const me = await validateAndStore(gw, tok);
+  afterLogin(gw, tok);
+  return me;
 }
 
 // 디바이스 코드 흐름(기본 대화형). 서버가 디바이스 엔드포인트를 모르면(구 서버·롤백) 'unsupported' 반환 → 폴백.
@@ -787,25 +814,70 @@ function hostLabel() {
   catch { return "내PC"; }
 }
 
+// 로그인 탈출구(디바이스 흐름 건너뜀) 판정 — **순수함수라 TTY 없이 직접 검증한다**(winArg 와 같은 이유:
+//  아래 분기는 제어단말이 있어야 밟히는데 e2e 하네스엔 없다). 분기표:
+//    --token 있음                 → 그 토큰. 문서화된 CI 경로(web/learn.ts) 이자 테스트가 쓰는 경로.
+//    파일 없음 + env 있음         → env. 이 박스는 로그인한 적 없다 = env 가 유일한 자격(CI·프로비저닝 컨테이너).
+//    비대화형 + env 있음          → env. 열 브라우저가 없다(탈출구의 본래 의도이자 기존 안내문구의 약속).
+//    파일 있음 + 대화형           → "" (탈출구 없음 → 브라우저 흐름).
+//  ⚠ **파일이 있는 대화형 셸에서 env 를 탈출구로 쓰면 안 된다**(#916): 설치기가 codex 용으로 rc 에
+//   `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심으므로 키트를 깐 사람의 셸엔 **항상** 있다
+//   → 옛 코드는 100% 이 탈출구로 빠져 브라우저를 안 열고 옛 토큰을 재검증·재저장만 하면서
+//   "✓ 인증됐습니다"를 찍었다(= 재로그인으로 권한을 바꾸는 게 구조적으로 불가능했다).
+//   판별자로 **파일 존재**를 함께 보는 이유: 그 rc 수화는 파일이 있어야만 일어나므로 '파일 있음+사람'이
+//   정확히 #916 의 조건이고, TTY 만으로 가르면 pty 를 붙인 프로비저닝 컨테이너(docker run -t)를 깬다.
+const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInteractive }) => {
+  if (flagToken) return String(flagToken).trim();
+  if (!fileToken || !isInteractive) return String(envToken || "").trim();
+  return "";
+};
+
+// 로그인 성공 뒤 마무리 — 신원의 **사본**을 새 토큰에 맞춘다(login 이 install 을 대신하진 않는다).
+//  ⚠ 여기서 `process.env.LIVELY_TOKEN` 을 덮지 **않는다**: 그러면 뒤이어 도는 registerClaudeMcp 의
+//   org 서버 루프가 `process.env[s.auth_env]` 로 그 값을 집어, 관리자가 지정한 임의 URL 의 Authorization
+//   헤더로 **멤버 개인 게이트웨이 토큰**을 구울 수 있다(auth_env 는 org MCP 서버 경로에서 화이트리스트
+//   강제가 없다 — allowed_auth_envs 는 org_tool 전용, dynamic-tools.ts:115). 필요 없기도 하다: token() 이
+//   파일 우선이고 로그인이 방금 파일을 썼으므로 같은 프로세스의 후속 호출은 이미 새 토큰을 본다.
+function afterLogin(gw, tok) {
+  // .claude.json 의 lively 항목은 **토큰의 사본**이고 방금 로그인이 그걸 무효화했다 → 여기서 다시 굽는다.
+  //  없으면: 사용자가 로그인만 하고 멈췄을 때(bootstrap.sh·웹 안내가 그렇게 시킨다) MCP 는 옛 신원으로 남는다.
+  if (has("claude")) registerLivelyMcp(gw, tok);
+  else info("claude 미설치 — MCP 등록 건너뜀");
+  // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
+  //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
+  if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
+    warn("이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — 새 터미널을 열거나 `source ~/.zshrc` 후 codex 를 쓰세요.");
+  }
+}
+
 async function cmdLogin(opts) {
   if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   const gw = gateway();
   if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
+  const isInteractive = interactive();
 
-  // ① --token / LIVELY_TOKEN — CI·프로비저닝 탈출구(디바이스 흐름 건너뜀).
-  const explicit = opts.token || (process.env.LIVELY_TOKEN || "").trim();
-  if (explicit) return validateAndStore(gw, String(explicit).trim());
+  // ① 탈출구(CI·프로비저닝) — 판정은 loginEscapeToken 의 분기표 참조.
+  const escape = loginEscapeToken({
+    flagToken: opts.token, envToken: process.env.LIVELY_TOKEN, fileToken: readLively("token"), isInteractive,
+  });
+  if (escape) { const me = await validateAndStore(gw, escape); afterLogin(gw, escape); return me; }
 
   // ② 비대화형(TTY 없음)인데 토큰도 없음 → 명확 안내.
-  if (!interactive()) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
+  if (!isInteractive) die("비대화형 환경입니다 — `lively login --token <토큰>` 또는 LIVELY_TOKEN 환경변수를 쓰세요.");
 
-  // ③ 기본: 브라우저 디바이스 흐름. 서버가 모르면(구 서버·롤백) 토큰 가림입력으로 폴백.
+  // ③ 대화형인데 env 토큰이 파일과 다르다 = 사람이 일부러 넣었을 수 있다 → 무시한다는 걸 알린다(조용히 버리지 않는다).
+  //   같으면(= rc 수화, 키트 사용자의 정상 상태) 할 말이 없으니 침묵한다.
+  if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== readLively("token")) {
+    info('환경변수 LIVELY_TOKEN 은 쓰지 않고 브라우저 로그인으로 진행합니다 — 그 토큰을 쓰려면 `lively login --token "$LIVELY_TOKEN"`.');
+  }
+
+  // ④ 기본: 브라우저 디바이스 흐름. 서버가 모르면(구 서버·롤백) 토큰 가림입력으로 폴백.
   const dev = await deviceLogin(gw);
   if (dev === "unsupported") {
     info("이 게이트웨이는 브라우저 로그인을 아직 지원하지 않습니다 — 토큰 입력으로 진행합니다.");
     return loginWithPastedToken(gw);
   }
-  // ④ 저장 전 신원 확인(역방향 피싱 방어, R2-F1) — 불변 email 로. 확인 통과 후에만 저장.
+  // ⑤ 저장 전 신원 확인(역방향 피싱 방어, R2-F1) — 불변 email 로. 확인 통과 후에만 저장.
   const me = await validateAndStore(gw, dev.token, { store: false });
   const who = me?.email || me?.id || "구성원";
   say("");
@@ -814,6 +886,7 @@ async function cmdLogin(opts) {
   writeLively("token", dev.token);
   writeLively("gateway-url", gw);
   ok(`${bold(who)} 님으로 로그인됐습니다. (토큰 저장: ~/.lively/token)`);
+  afterLogin(gw, dev.token);
   return me;
 }
 
@@ -822,6 +895,9 @@ function cmdLogout() {
   if (!existsSync(p)) { info("이미 로그아웃 상태입니다(저장된 토큰 없음)."); return; }
   rmSync(p, { force: true });
   ok("토큰을 지웠습니다 (~/.lively/token).");
+  // 파일만 지울 수 있다 — 이 셸의 env 는 자식이 못 고친다. 남아 있으면 token() 이 env 로 폴백해
+  //  `lively status` 가 계속 '인증됨' 을 보인다 → 조용히 두지 말고 사실대로 말한다(#916 계열).
+  if (ENV_TOKEN_AT_START) warn("이 셸의 LIVELY_TOKEN 은 아직 남아 있습니다 — 새 터미널을 열거나 `unset LIVELY_TOKEN` 하세요.");
   info("설치 자산은 그대로입니다 — 완전 제거는 `lively uninstall`.");
   info("claude 에 등록된 MCP 항목은 남아 있습니다 — 지우려면 `claude mcp remove lively`.");
 }
@@ -940,8 +1016,20 @@ async function cmdDoctor(opts) {
   chk("Node", true, `${process.version}`);
   chk("게이트웨이 설정", !!st.gateway.url, st.gateway.url || "~/.lively/gateway-url 없음", "lively login --gateway <url>");
   chk("게이트웨이 도달", st.gateway.reachable, st.gateway.reachable ? "OK" : (st.gateway.error || "실패"), "주소 · 네트워크 · VPN 확인");
-  chk("토큰", !!token(), token() ? "~/.lively/token 있음" : "없음", "lively login");
+  // 토큰의 **출처**를 사실대로 말한다 — 옛 코드는 출처와 무관하게 "~/.lively/token 있음"을 찍어서,
+  //  파일이 없는데(로그아웃 직후 등) env 폴백으로 인증되는 상태를 "파일 있음"으로 거짓 보고했다.
+  const tokFile = readLively("token");
+  chk("토큰", !!token(), tokFile ? "~/.lively/token" : (token() ? "LIVELY_TOKEN 환경변수 (파일 없음)" : "없음"), "lively login");
   chk("토큰 유효", st.account.authenticated, st.account.authenticated ? (st.account.name || st.account.id || "인증됨") : "미인증", "lively login");
+  // #916 — 이 셸의 env 가 파일과 다르면 **codex 와 이미 떠 있는 세션은 옛 신원으로** 게이트웨이에 붙는다.
+  //  CLI 는 파일을 정본으로 쓰므로 위 두 줄은 멀쩡해 보이는데, 그 상태가 정확히 #916 이었다.
+  //  진단이 이걸 안 보여줘서 그때는 /api/ui/me 를 손으로 찔러보고서야 잡혔다 → 도구화한다. ⚠ 값은 안 찍는다(사실만).
+  if (ENV_TOKEN_AT_START && tokFile) {
+    const same = ENV_TOKEN_AT_START === tokFile;
+    chk("신원 일치(이 셸 env ↔ 파일)", same,
+      same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — codex 는 옛 신원으로 붙습니다",
+      "새 터미널을 열거나  source ~/.zshrc");
+  }
   chk("Claude Code", st.harness.claude.installed, st.harness.claude.installed ? "PATH 에 있음" : "미설치 또는 PATH 밖", "curl -fsSL https://claude.ai/install.sh | bash");
   chk("훅 파일", st.hooks.installed === st.hooks.expected, `${st.hooks.installed}/${st.hooks.expected} (~/.lively/hooks)`, "lively install");
   chk("Claude 훅 배선", st.harness.claude.wired, st.harness.claude.wired ? "settings.json OK" : "미배선", "lively install");
@@ -1153,4 +1241,4 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };

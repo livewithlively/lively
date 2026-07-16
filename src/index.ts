@@ -29,7 +29,7 @@ import { startTaskScheduler } from "./node/task-scheduler.js";
 import { registerProjectV6Routes } from "./project-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
-import { createProjectFolder } from "./project-fs.js";
+import { createProjectFolder, backfillMarkerSync } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
 import { ensureStateDirs, stateRoot } from "./state-dir.js";
 import { ROOTS, SHARED_ROOT } from "./terminal-sessions.js";
@@ -259,6 +259,14 @@ const server = app.listen(PORT, () => {
       //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
       //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.
       .then(() => seedDefaultContent().catch((err) => logger.warn({ err }, "디폴트 콘텐츠 시딩 실패(비치명)")))
+      // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
+      //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
+      //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
+      //  구조로 못 알아본다. 자기 폴더를 아는 서버가 여기서 명시한다. 멱등(이미 sync 있으면 무시)·비치명.
+      //  DB 무관(순수 fs)이라 스키마 체인 어디에 붙어도 되지만, 세션이 붙기 전 초기에 한 번 도는 게 목적이다.
+      .then(() => backfillMarkerSync()
+        .then((r) => { if (r.stamped) logger.info(r, "프로젝트 마커 sync 백필(구 마커에 sync:pull stamp)"); })
+        .catch((err) => logger.warn({ err }, "마커 sync 백필 실패(비치명) — 해당 폴더는 자동 pull 이 멈출 수 있음(파일 파괴 아님)")))
       // 부팅 스윕(#586) — 재시작으로 추적이 끊긴 connector_run 잔재 정리(유령 running 이 새 싱크를 막지 않게).
       //  스케줄러 기동 **전**에 — 크론 첫 tick 이 유령 행에 막히지 않도록.
       .then(() => recoverOrphanConnectorRuns().catch((err) => logger.warn({ err }, "부팅 스윕 실패(비치명) — 유령 run 은 하트비트 정리로 수렴")))

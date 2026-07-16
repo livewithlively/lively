@@ -41,6 +41,9 @@ log "중앙박스 키트 설치 — gateway=$GW · harness=$HARNESS"
 #  ⚠ 프로필 모드(KIT_PROFILE_ONLY=1 — provisionProfile 이 '멤버 토큰'으로 호출): 공유 ~/.lively/token 은
 #    전 세션의 훅 fetch 가 공유하는 파일이라 멤버 토큰으로 덮으면 안 된다. HOME 공유분은 호스트 설치가 이미
 #    세팅했으니 건너뛰고, 멤버 토큰은 프로필 .claude.json(4단계 register-clients)에만 굽는다.
+#  ⛔ **이 스크립트는 `lively` CLI 를 부르면 안 된다**(아래 3·4 처럼 엔진을 직접 실행할 것). 프로필 모드는
+#    '파일(호스트 토큰) ≠ env(멤버 토큰)' 를 **의도적으로** 만드는 유일한 경로인데, CLI 의 token() 은
+#    #916 이후 **파일 우선**이다 → CLI 를 태우면 호스트 토큰이 멤버 프로필 .claude.json 에 구워진다(권한 상승).
 if [ "${KIT_PROFILE_ONLY:-0}" = 1 ]; then
   log "프로필 모드(KIT_PROFILE_ONLY) — 공유 ~/.lively/token 보존(멤버 토큰은 프로필 .claude.json 에만)"
 else

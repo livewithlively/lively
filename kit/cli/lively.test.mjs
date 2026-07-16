@@ -23,7 +23,9 @@ const REPO = join(KIT, "..");                                     // 레포 루�
 const CLI = join(HERE, "lively.mjs");
 const { buildKitBundle } = await import(join(KIT, "generator", "build-context.mjs"));
 const { CLI_SHIM, CLI_SHIM_CMD } = await import(join(KIT, "setup", "user-install.mjs"));
-const { winArg } = await import(CLI);   // 순수함수 — POSIX CI 에선 실행 경로에 없으니 직접 검증한다
+// 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
+//  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
+const { winArg, loginEscapeToken } = await import(CLI);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -35,6 +37,11 @@ const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } c
 
 const TOKEN = "lvk_test_0123456789abcdef";
 const BAD_TOKEN = "lvk_wrong";
+// #916 — '스코프를 넓히려는 재로그인' 을 모델링하려면 **유효한 토큰이 둘** 있어야 한다. 옛 토큰은 회수된 게
+//  아니라 스코프만 좁다 → 게이트웨이는 둘 다 받는다. (옛 토큰이 401 이면 버그가 시끄럽게 죽어서 안 숨는다 —
+//  #916 이 무서운 이유가 바로 옛 토큰이 **유효한 채로** 조용히 쓰이는 것이다.)
+const OLD_TOKEN = "lvk_test_old_narrow_scope";
+const VALID_TOKENS = new Set([TOKEN, OLD_TOKEN]);
 
 // ── 번들 — 게이트웨이(buildInstallBundle)가 하는 일 그대로: kit 조립 + .lively 런타임자산 + 버전 스탬프. ──
 function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
@@ -60,7 +67,7 @@ const server = createServer((req, res) => {
   const auth = String(req.headers.authorization || "");
   // /cli* 는 무인증(부트스트랩 — 토큰을 얻기 전에 실행되는 유일한 지점). 나머지는 bearer 필수.
   if (!path.startsWith("/cli")) {
-    if (auth !== `Bearer ${TOKEN}`) { res.writeHead(401).end(); return; }
+    if (!VALID_TOKENS.has(auth.replace(/^Bearer /, ""))) { res.writeHead(401).end(); return; }
   }
   if (path === "/install") {
     serving.installHits++;
@@ -171,8 +178,12 @@ try {
   // ④ **MCP 등록 인자** — register-clients.sh 와 동일해야 한다. 이 CLI 의 존재 이유이므로 argv 를 그대로 못박는다.
   {
     const adds = H.argv().filter((l) => l.startsWith("mcp add"));
-    const want = `mcp add --transport http --scope user lively ${GW}/mcp --header Authorization: Bearer ${TOKEN}`;
-    check("④ claude MCP 등록 argv 가 register-clients.sh 와 동일",
+    // ⚠ 헤더 **2개** — register-clients.sh:15-17 이 캐노니컬이다. 예전 want 는 x-lively-session(#852)이 빠진
+    //  드리프트 형태를 못박고 있었다(= 테스트가 버그를 고정). 이게 빠지면 remove→add 가 세션 헤더를 지워
+    //  그 세션의 작업 귀속이 끊긴다. 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로 한다.
+    const want = `mcp add --transport http --scope user lively ${GW}/mcp `
+      + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`;
+    check("④ claude MCP 등록 argv 가 register-clients.sh 와 동일(헤더 2개 — 토큰 + 세션귀속)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
@@ -392,6 +403,43 @@ try {
     check("⑰ backupUserMcp — 유저 원본 스냅샷 + 부재는 null + 최초1회(재설치 오염 방지)",
       !!(bak.linear && bak.linear.url === "https://user.example/mcp") && bak.notion === null, JSON.stringify(bak));
     rmSync(box, { recursive: true, force: true });
+  }
+
+  // ⑱ **#916 — 스테일 LIVELY_TOKEN 이 파일 토큰을 이기면 안 된다.**
+  //   설치기가 codex 용으로 rc 에 `export LIVELY_TOKEN="$(cat ~/.lively/token)"` 를 심으므로, 로그인 **후**
+  //   같은 셸의 env 는 옛 토큰이다. 그 상태로 `lively install` 을 돌리면 옛 코드는 옛 토큰을 .claude.json 에
+  //   구웠다(둘 다 유효하니 401 도 안 나고 전 단계가 ✓ 로 보인다 = 조용한 파손).
+  //   여기서 검증하는 건 "어느 신원이 .claude.json 에 구워졌나" — 그게 이 버그의 실제 피해다.
+  {
+    serving.body = makeBundle("v-ddd");
+    serving.version = "v-ddd";
+    const h = newHome("h-916-stale");
+    await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);          // 파일 = 새 토큰
+    await lively(h, ["install"], { env: { LIVELY_TOKEN: OLD_TOKEN } });     // 셸 env = 스테일 옛 토큰
+    const adds = h.argv().filter((l) => l.startsWith("mcp add"));
+    const baked = adds.filter((l) => l.includes(" lively ") && l.includes("Bearer "));
+    check("⑱ #916 — install 이 스테일 env 를 무시하고 파일(새) 토큰을 굽는다",
+      baked.length > 0 && baked.every((l) => l.includes(`Bearer ${TOKEN}`)) && !baked.some((l) => l.includes(`Bearer ${OLD_TOKEN}`)),
+      `got=${JSON.stringify(baked)}`);
+  }
+
+  // ⑲ **#916 — 로그인 탈출구 분기표**(loginEscapeToken). 이 분기는 **제어단말(/dev/tty)이 있어야** 밟히는데
+  //   execFile 하네스엔 없다 → winArg 와 같은 이유로 순수함수를 직접 못박는다(lively.mjs:93-102 참조).
+  //   핵심: '파일 있음 + 대화형' = 키트 사용자의 재로그인 → env 무시 → 브라우저 흐름. 이게 #916 의 조건.
+  {
+    const T = "lvk_env", F = "lvk_file", G = "lvk_flag";
+    const cases = [
+      // [설명,                              입력,                                                          기대]
+      ["--token 은 언제나 이긴다(대화형)",    { flagToken: G, envToken: T, fileToken: F, isInteractive: true },  G],
+      ["--token 은 언제나 이긴다(비대화형)",  { flagToken: G, envToken: T, fileToken: F, isInteractive: false }, G],
+      ["#916: 파일+대화형 → env 무시",        { envToken: T, fileToken: F, isInteractive: true },                ""],
+      ["CI(비대화형) → env 탈출구 유지",      { envToken: T, fileToken: F, isInteractive: false },               T],
+      ["프로비저닝(파일 없음) → env 탈출구",  { envToken: T, fileToken: "", isInteractive: true },               T],  // docker run -t 등 pty 붙은 컨테이너
+      ["파일만 있고 env 없음 → 브라우저",     { envToken: "", fileToken: F, isInteractive: true },               ""],
+    ];
+    const bads = cases.filter(([, input, want]) => loginEscapeToken(input) !== want)
+      .map(([why, input, want]) => `${why}: got=${JSON.stringify(loginEscapeToken(input))} want=${JSON.stringify(want)}`);
+    check("⑲ #916 — 로그인 탈출구 분기표(--token > 파일없음 > 비대화형 > 브라우저)", bads.length === 0, bads.join(" | "));
   }
 } finally {
   server.close();
