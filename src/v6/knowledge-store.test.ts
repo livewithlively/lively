@@ -1,4 +1,4 @@
-// resolveUpsertFacets 단위 체크 — DB 불요(순수 함수). 테스트 러너 없이 node:assert 로 자급.
+// knowledge-store 순수함수 단위 체크(resolveUpsertFacets · resolveWikiLinkTargets · appendBody/isDuplicateAppend) — DB 불요. 테스트 러너 없이 node:assert 로 자급.
 // 실행: npm run build && node dist/v6/knowledge-store.test.js
 //
 // 프로젝트 #345 회귀 방지 — knowledge_save(upsertKnowledge)가 기존 지식 '본문만' 편집할 때 미전송 facet
@@ -6,7 +6,7 @@
 //  편집하면 is_wiki 가 false 로 떨어져 매 세션 WIKI 인덱스에서 소리없이 빠짐 → 발견·소환 트리거 상실.
 //  불변식: "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
 import assert from "node:assert/strict";
-import { resolveUpsertFacets } from "./knowledge-store.js";
+import { resolveUpsertFacets, resolveWikiLinkTargets, appendBody, isDuplicateAppend } from "./knowledge-store.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -83,6 +83,121 @@ t("#592: 신규(before=null) → is_folder false·parent_name null 기본값", (
   const r = resolveUpsertFacets({}, null);
   assert.equal(r.isFolder, false);
   assert.equal(r.parentName, null);
+});
+
+// ── #907 본문 [[…]] → 엣지 해소. 아래 케이스는 전부 실 DB 에서 관측된 것이다(설계 근거 = 실측). ──
+//  불변식: "exact(작성자가 쓴 그대로) 우선 → slugify 폴백 → 없으면 미매칭 경고(저장은 성공)".
+const K = (...names: string[]): ReadonlySet<string> => new Set(names);
+
+t("#907: 정확한 name 은 그대로 해소", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["alpha"], K("alpha", "beta")),
+    { linked: ["alpha"], unmatched: [] });
+});
+t("#907: 미매칭은 경고로 — 예외 아님(붕 뜬 링크 알림)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["nope"], K("alpha")),
+    { linked: [], unmatched: ["nope"] });
+});
+t("#907: 표기가 흐트러지면 slugify 폴백('Some Title' → some-title)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["Some Title"], K("some-title")),
+    { linked: ["some-title"], unmatched: [] });
+});
+// ⚠ 회귀 방지 — slugify 가 strip→slice(64) 순서라 64자 절단 이름은 '-' 로 끝날 수 있다(실재: '작업-activity-…-폐기-',
+//  '배포-장애-수정-…-어니스트-'). 재슬러그화를 먼저 하면 꼬리 '-' 가 떨어져 **정확히 쓴 링크가 미매칭**된다.
+t("#907: 이름이 '-' 로 끝나는 실재 지식 — exact 우선이라 해소된다", () => {
+  const real = "배포-장애-수정-어니스트-";
+  assert.deepEqual(resolveWikiLinkTargets("from", [real], K(real)),
+    { linked: [real], unmatched: [] });
+});
+// ⚠ 회귀 방지 — 대소문자만 다른 동명 지식이 실재한다(2026-06-11-PM툴… / …-pm툴…, 같은 제목·둘 다 active).
+//  정규화를 먼저 태우면 작성자가 지목한 문서가 아닌 쪽에 엣지가 붙는다.
+t("#907: 대소문자 쌍둥이가 둘 다 있으면 exact(작성자 의도) 를 고른다", () => {
+  const upper = "2026-06-11-PM툴-설계결정", lower = "2026-06-11-pm툴-설계결정";
+  assert.deepEqual(resolveWikiLinkTargets("from", [upper], K(upper, lower)),
+    { linked: [upper], unmatched: [] });
+});
+t("#907: exact 가 없으면 slugify 로 대소문자 쌍둥이의 소문자 쪽에 붙는다", () => {
+  const lower = "2026-06-11-pm툴-설계결정";
+  assert.deepEqual(resolveWikiLinkTargets("from", ["2026-06-11-PM툴-설계결정"], K(lower)),
+    { linked: [lower], unmatched: [] });
+});
+t("#907: 자기 참조는 조용히 버린다(knowledge_link_noself_chk)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("alpha", ["alpha"], K("alpha")),
+    { linked: [], unmatched: [] });
+});
+t("#907: raw 와 slug 가 같은 문서로 접히면 1건(knowledge_link_uq)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["some-title", "Some Title"], K("some-title")),
+    { linked: ["some-title"], unmatched: [] });
+});
+t("#907: 같은 미매칭 이름이 여러 번 나와도 경고는 1건", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["nope", "nope"], K("alpha")),
+    { linked: [], unmatched: ["nope"] });
+});
+t("#907: 한글 이름은 slugify 가 보존한다(wikiSlug 였다면 뭉갠다 — 71건이 걸린 갈림길)", () => {
+  const ko = "런북-dev-8080-게이트웨이-빌드-재시작-context-ontology";
+  assert.deepEqual(resolveWikiLinkTargets("from", [ko], K(ko)),
+    { linked: [ko], unmatched: [] });
+});
+t("#907: pending 대상도 존재하면 링크(FK 는 존재만 요구 — '없음' 경고는 거짓말이 된다)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["draft"], K("draft")),
+    { linked: ["draft"], unmatched: [] });
+});
+
+// ── #921 appendBody — knowledge_save(mode='append')의 본문 병합. 호출자는 본문을 읽지 않으므로(그게 요점)
+//  base 가 개행으로 끝나는지 모른다 → 구분자 정규화는 전적으로 서버 책임이고, base 원문은 불변이어야 한다. ──
+t("#921: 기본 결합 — 빈 줄 하나로 이어 마크다운 블록 경계 보장", () => {
+  assert.equal(appendBody("# 제목", "- 항목"), "# 제목\n\n- 항목");
+});
+t("#921: base 의 끝 개행 유무와 무관하게 같은 결과(호출자가 알 수 없는 값이라 서버가 정규화)", () => {
+  const want = "본문\n\n추가";
+  assert.equal(appendBody("본문", "추가"), want);
+  assert.equal(appendBody("본문\n", "추가"), want);
+  assert.equal(appendBody("본문\n\n\n", "추가"), want);
+  assert.equal(appendBody("본문   \n  ", "추가"), want);
+});
+t("#921: chunk 의 앞 개행·뒤 공백 제거(빈 줄 폭주 방지)", () => {
+  assert.equal(appendBody("본문", "\n\n추가\n\n"), "본문\n\n추가");
+});
+t("#921: chunk 첫 줄의 들여쓰기는 보존 — 앞 '개행'만 지운다(들여쓴 코드블록이 깨지면 안 됨)", () => {
+  assert.equal(appendBody("본문", "\n    code()"), "본문\n\n    code()");
+});
+// ── 핵심 불변식: base 는 끝 공백 말고 아무것도 안 바뀐다. append 의 존재 이유가 '원문유지'다. ──
+t("#921: base 원문 불변 — 내부 공백·빈 줄·마크다운이 그대로 남는다", () => {
+  const base = "# 런북\n\n## 1단계\n\n    들여쓴 코드\n\n- a\n- b";
+  const got = appendBody(base, "## 2단계");
+  assert.equal(got.slice(0, base.length), base, "base 가 손상되면 안 됨");
+  assert.equal(got, `${base}\n\n## 2단계`);
+});
+t("#921: 반복 append 는 누적된다(앞선 조각이 유실되지 않음)", () => {
+  assert.equal(appendBody(appendBody("A", "B"), "C"), "A\n\nB\n\nC");
+});
+// ── 경계: 한쪽이 비면 구분자를 넣지 않는다(문서가 빈 줄로 시작/끝나지 않게). ──
+t("#921: base 가 비면(폴더 등 빈 본문) chunk 만 — 앞에 빈 줄이 붙지 않는다", () => {
+  assert.equal(appendBody("", "추가"), "추가");
+  assert.equal(appendBody("   \n ", "추가"), "추가");
+});
+t("#921: chunk 가 사실상 비면 base 그대로(no-op)", () => {
+  assert.equal(appendBody("본문", "\n\n  "), "본문");
+});
+
+// ── #921 isDuplicateAppend — append 는 replace 와 달리 멱등이 아니다(재시도 = 같은 단락 두 번).
+//  호출자는 본문을 안 읽어 중복을 스스로 못 보므로 서버가 꼬리 정확일치로 잡는다. ──
+t("#921: 방금 붙인 조각을 그대로 재시도 → 중복으로 감지(응답 유실 후 재시도 시나리오)", () => {
+  const chunk = "## 2단계\n\n덧붙인 내용";
+  assert.equal(isDuplicateAppend(appendBody("# 런북", chunk), chunk), true);
+});
+t("#921: appendBody 와 같은 정규화를 본다 — 앞 개행·뒤 공백이 달라도 같은 조각으로 감지", () => {
+  const stored = appendBody("# 런북", "## 2단계");
+  assert.equal(isDuplicateAppend(stored, "\n\n## 2단계\n\n"), true, "정규화가 어긋나면 감지가 헛돈다");
+});
+t("#921: 다른 조각은 중복 아님(정상 append 를 막으면 안 됨)", () => {
+  assert.equal(isDuplicateAppend(appendBody("# 런북", "## 2단계"), "## 3단계"), false);
+});
+t("#921: 꼬리가 아니라 중간에 같은 내용이 있는 건 중복 아님(그 뒤로 더 붙은 상태 = 정상)", () => {
+  const body = appendBody(appendBody("# 런북", "## 2단계"), "## 3단계");
+  assert.equal(isDuplicateAppend(body, "## 2단계"), false);
+});
+t("#921: 빈 조각은 중복 판정 대상 아님", () => {
+  assert.equal(isDuplicateAppend("# 런북", "\n\n  "), false);
 });
 
 console.log(`\n${pass} passed`);

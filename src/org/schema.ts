@@ -740,7 +740,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;

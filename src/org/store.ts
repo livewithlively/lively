@@ -2083,6 +2083,20 @@ export async function clearAssetPref(target_kind: AssetPrefKind, ref_id: string,
   await audit("org_asset_pref", `${target_kind}:${ref_id}:${member_id}`, "delete", before, null, ctx.actor, ctx.source, ctx);
 }
 
+// 자산/훅 1건의 오버라이드 전부 제거 — 관리탭 '전체 기본값 복귀'(전원이 정책을 따르게).
+//  삭제는 DELETE 한 방(RETURNING)으로 원자적으로 하고, 감사만 지워진 행마다 남긴다(clearAssetPref 와 같은 입도 —
+//  누가 누구의 예외를 언제 지웠는지). select-후-행별-delete 로 짜면 그 사이 멤버가 me_asset_pref 로 새로 만든
+//  오버라이드가 스냅샷에 없어 조용히 살아남는다(TOCTOU) — '전원이 정책을 따른다'는 이 연산의 약속이 깨진다.
+export async function clearAssetPrefs(target_kind: AssetPrefKind, ref_id: string, ctx: WriteCtx = {}): Promise<number> {
+  const r = await itemsPool.query(
+    `DELETE FROM org_asset_pref WHERE target_kind=$1 AND ref_id=$2 RETURNING ${PREF_COLS}`, [target_kind, ref_id]);
+  for (const row of r.rows) {
+    const before = mapPref(row);
+    await audit("org_asset_pref", `${target_kind}:${ref_id}:${before.member_id}`, "delete", before, null, ctx.actor, ctx.source, ctx);
+  }
+  return r.rows.length;
+}
+
 
 // ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
 //  activity 는 itemsPool 동일 DB(지식참조=activity_knowledge→knowledge FK). project_member.member_id ↔ activity.author_person 조인.
