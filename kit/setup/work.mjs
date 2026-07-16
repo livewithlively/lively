@@ -9,7 +9,8 @@
 //  ⚠ 코드(레포/worktree)는 git, 공유폴더만 pull. push 없음(pull-only). 외부 바이너리 의존 없음(node + git 만).
 //  사용: node work.mjs <projectId> [--repo-path <p>] [--worktree] [--branch <b>] [--git-url <u>] [--harness claude|codex] [--no-launch]
 //        node work.mjs <projectId> --pull-only   # 공유폴더만 다시 pull(하네스·레포 provision 없이) — 세션 중 수동 '지금 동기화'
-//        node work.mjs <projectId> --status      # pull 없이 상태만: 마지막 pull·서버 최신·로컬 미반영 파일 수 출력(+sync-status.json 갱신)
+//  ⚠ --status 는 폐지됨(#905 C5a) — 같은 내용을 `lively status` 의 프로젝트 섹션이 보여준다(sync 모드까지).
+//     이 명령은 호출자가 0이었다(사람이 안 침). 사람이 실제로 치는 표면 하나로 흡수했다.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -28,7 +29,6 @@ function parseArgs(argv) {
     if (t === "--worktree") a.worktree = true;
     else if (t === "--no-launch") a.launch = false;
     else if (t === "--pull-only") a.pullOnly = true;   // 공유폴더만 pull 후 종료(하네스·레포 provision 생략)
-    else if (t === "--status") a.status = true;        // pull 없이 동기화 상태만 점검·출력 후 종료(sync-status.json 갱신)
     else if (t === "--repo-path") a.repoPath = argv[++i];
     else if (t === "--git-url") a.gitUrl = argv[++i];
     else if (t === "--branch") a.branch = argv[++i];
@@ -122,25 +122,6 @@ async function pullShared() {
     pulled, pending: failed, truncated: !!manifest.truncated,
   });
   return manifest.newest || 0;
-}
-
-// ── (옵션) --status: 읽기전용 동기화 상태 점검 후 종료 — sync 가시화(#828) ──
-if (args.status) {
-  const manifest = await fetchManifest();
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
-  const pending = pendingFiles(files);
-  let lastPull = 0;
-  try { lastPull = Number(JSON.parse(fs.readFileSync(path.join(projDir, ".lively", "project.json"), "utf8")).last_pull) || 0; } catch { /* 마커 없음 */ }
-  const iso = (ms) => (ms ? new Date(ms).toISOString() : "없음");
-  const serverCount = typeof manifest.count === "number" ? manifest.count : files.length;
-  log(`동기화 상태 — 프로젝트 #${projectId}`);
-  log(`  로컬 폴더        : ${projDir}`);
-  log(`  마지막 pull      : ${iso(lastPull)}`);
-  log(`  서버 최신(newest): ${iso(manifest.newest || 0)}`);
-  log(`  서버 파일 수     : ${serverCount}${manifest.truncated ? "  ⚠ 상한 도달(일부 문서 누락 가능)" : ""}`);
-  log(`  로컬 미반영      : ${pending.length} 파일` + (pending.length ? `  → 'node work.mjs ${projectId} --pull-only' 로 받으세요` : "  (최신)"));
-  await writeSyncStatus({ at: new Date().toISOString(), server_newest: manifest.newest || 0, server_count: serverCount, pulled: 0, pending: pending.length, truncated: !!manifest.truncated });
-  process.exit(0);
 }
 
 const newest = await pullShared();

@@ -47,7 +47,7 @@ import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } from "./repo-worktree-core.mjs"; // #900 코어 공유(CLI `lively repo` 와 동일)
+import { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove, findProjectMarkerUp } from "./repo-worktree-core.mjs"; // #900 코어 공유(CLI `lively repo` 와 동일)
 
 const PROTOCOL = "2025-06-18";
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -172,23 +172,6 @@ registerTool({
 //   중앙이 아는 것(이 origin 을 쓰는 프로젝트가 있나 / 내 폴더 위치 기록)은 REST 로 묻는다.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// 마커 상향탐색 — 리더 3종(repo-worktree-core·pull 훅 2종)이 전부 40단계 상향이라 **동형이어야** 한다.
-//  여기서 못 찾고 새 마커를 심으면 중첩 프로젝트가 되고, 그때 pull 훅은 **가장 가까운 마커**를 집는다.
-function findMarkerUp(startDir) {
-  let dir = startDir;
-  for (let i = 0; i < 40; i++) {
-    const file = join(dir, ".lively", "project.json");
-    try {
-      const meta = JSON.parse(readFileSync(file, "utf8"));
-      if (meta && meta.project_id) return { dir, file, meta };
-    } catch { /* 없음/파손 → 계속 위로 */ }
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return null;
-}
-
 // origin URL 에서 자격(userinfo)을 벗긴다 — 게이트웨이로 토큰을 보내지 않기 위한 방어.
 //  ⚠ 정규화(신원 키 산출)는 여기서 하지 않는다 — 서버(project-origin.ts)가 유일 SoT 다.
 //  두 구현이 갈리면 같은 레포가 다른 키가 되어 **중복 프로젝트**가 생기므로, 클라이언트는 URL 만 나른다.
@@ -246,7 +229,7 @@ registerTool({
     const mode = args.mode || "auto";
 
     // ── ① 마커 상향탐색 — 이미 프로젝트면 여기서 끝(중첩 불허). ──
-    const found = findMarkerUp(dir);
+    const found = findProjectMarkerUp(dir); // 마커 리더는 공용 코어 하나 — 40단계 계약을 리더끼리 갈리지 않게
     if (found) {
       return ctx.json({
         status: "already_project",
