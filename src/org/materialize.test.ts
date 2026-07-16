@@ -158,7 +158,9 @@ t("idem: 멱등 — 같은 입력 2회 호출 byte-identical(중복 누적 0)", 
   const a = buildKnowledgeIndex([], amap);
   const b = buildKnowledgeIndex([], amap);
   assert.equal(a, b, "동일 입력은 동일 출력(결정적 = WYSIWYG byte-identical)");
-  assert.equal((a.match(/# Knowledge Index/g) ?? []).length, 1, "헤더 정확히 1개");
+  // #906: '# Knowledge Index' H1 제거 — 이 템플릿은 주입 블록의 한 섹션이라 문서 제목이 필요 없고, org DB 섹션엔
+  //  원래 없어서 코드↔DB 드리프트의 한 축이었다. 0개로 못박아 무심코 되살아나는 걸 막는다(중복 누적 가드는 아래 3줄이 유지).
+  assert.equal((a.match(/# Knowledge Index/g) ?? []).length, 0, "H1 헤더 없음(#906 — 코드↔DB 통일)");
   assert.equal((a.match(/## 강제 규칙/g) ?? []).length, 0, "강제 규칙 섹션은 폐기(0개)");
   assert.equal((a.match(/## 카테고리/g) ?? []).length, 1, "카테고리 지도 헤더 1개");
   assert.equal((a.match(/## 맥락 로드\/기록 가이드/g) ?? []).length, 1, "로드/기록 가이드 헤더 1개");
