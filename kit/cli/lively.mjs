@@ -403,8 +403,13 @@ WantedBy=default.target\n`);
     spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
     const r = spawnSync("systemctl", ["--user", "enable", "--now", "lively-node-agent.service"], { stdio: "inherit" });
     if (r.status !== 0) die("systemd 등록 실패 — systemctl --user enable --now", 1);
-    say(green(`✅ 노드 '${nodeId}' 상시화(systemd --user)`));
-    say(dim("   부팅 유지: loginctl enable-linger $USER   ·   중지: lively node stop"));
+    // linger 활성화(#869) — 이게 없으면 systemd --user 가 로그인 세션에 묶여 **세션 종료 시 데몬이 죽는다**(실측: SSH 닫힐
+    //  때마다 정지). 상시화(부팅·로그아웃 후 유지)의 필수 조건. 자기 linger 는 polkit 로 sudo 없이 되기도, 안 되면 sudo 폴백.
+    let linger = spawnSync("loginctl", ["enable-linger"], { stdio: "ignore" }).status === 0;
+    if (!linger) linger = spawnSync("sudo", ["-n", "loginctl", "enable-linger", process.env.USER || ""], { stdio: "ignore" }).status === 0;
+    say(green(`✅ 노드 '${nodeId}' 상시화(systemd --user${linger ? " + linger" : ""})`));
+    if (!linger) say(yellow("   ⚠ linger 활성화 실패 — 로그아웃 후 데몬이 멈출 수 있습니다. 수동: sudo loginctl enable-linger $USER"));
+    say(dim("   중지: lively node stop"));
     return;
   }
   die(`미지원 OS: ${process.platform} — Windows 는 WSL2 안에서 실행하세요.`, 1);
