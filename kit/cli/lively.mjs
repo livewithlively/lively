@@ -1153,6 +1153,58 @@ async function cmdMcpLocal() {
   await serveMcpLocal();
 }
 
+// `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
+//  (project-init-core.mjs — 드리프트 0). D8: 사람이 촉발해야 자연스러운 것은 사람 표면으로.
+//  기본은 **제안만**(무변경) — 사람이 보고 --create / --bind <id> 로 확정한다. '알아서 만들기'를 기본으로 두지 않는 이유:
+//  마커는 동기화되지 않아 다른 멤버가 이미 만든 프로젝트를 못 보는 게 정상이라, 자동 create 는 중복을 양산한다.
+async function cmdInit(rest) {
+  const { projectInit } = await import(new URL("./project-init-core.mjs", import.meta.url));
+  const ctx = {
+    cwd: process.cwd(),
+    sh: (cmd2, args, opts = {}) => { const r = run(cmd2, args, { quiet: true, allowFail: true, env: opts.env }); return { stdout: r.out, stderr: r.err, code: r.code }; },
+    api: (p2, opts) => api(p2, opts),
+  };
+  const a = { mode: "auto" };
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--create") a.mode = "create";
+    else if (t === "--bind") { a.mode = "bind"; a.project_id = Number(rest[++i]); }
+    else if (t === "--name") a.name = rest[++i];
+    else if (t === "--path") a.path = rest[++i];
+    else if (t === "--list") a.list_id = Number(rest[++i]);
+    else if (t === "--json") a.json = true;
+  }
+  let r;
+  try { r = await projectInit(ctx, a); }
+  catch (e) { die(e.message, 1); }
+  if (a.json) { process.stdout.write(JSON.stringify(r, null, 2) + "\n"); return; }
+
+  if (r.status === "already_project") { say(`\n${yellow("이미 프로젝트입니다")} — #${r.project_id}\n  ${dim(r.note)}\n`); return; }
+  if (r.status === "suggestion") {
+    say(`\n${bold("프로젝트 연결 제안")} ${dim(r.dir)}\n`);
+    say(`  git origin    ${r.git_url || dim("(없음 — git 레포가 아니거나 origin 미설정)")}`);
+    if (r.active_total) say(`  기존 후보     진행 중 ${r.active_total}개${r.truncated ? dim(` (아래는 최근 ${r.candidates.length}개만)`) : ""}`);
+    for (const c of (r.candidates || []).filter((c) => c.status !== "done").slice(0, 5)) say(`    ${dim("#" + c.project_id)} ${c.name} ${dim("(" + c.status + ")")}`);
+    say("");
+    if (r.suggestion.action === "bind") {
+      say(`  ${green("→ 붙이기를 권합니다")}: ${bold("lively init --bind " + r.suggestion.project_id)}`);
+      say(`     ${dim(r.suggestion.why)}`);
+    } else {
+      say(`  ${yellow("→ 판단이 필요합니다")}`);
+      say(`     ${dim(r.suggestion.why)}`);
+      say(`     새로: ${bold("lively init --create --name \"<이름>\"")}   ·   기존에: ${bold("lively init --bind <id>")}`);
+    }
+    say("");
+    return;
+  }
+  // created | bound
+  say(`\n${green("✓")} ${r.status === "created" ? "새 프로젝트 생성" : "기존 프로젝트에 연결"} — ${bold("#" + r.project_id)} ${r.name}`);
+  say(`  폴더        ${r.dir}`);
+  say(`  공유폴더    ${r.sync} ${dim("(사용자 폴더라 서버 파일을 내려받지 않습니다 — 당신 파일을 덮어쓰지 않기 위함)")}`);
+  if (r.binding_error) say(`  ${yellow("⚠ 중앙 폴더 인벤토리 등록 실패")} ${dim(r.binding_error)} ${dim("— 로컬 연결은 정상입니다")}`);
+  say(`\n  ${dim("다음 세션부터 이 폴더에서 프로젝트 맥락이 뜹니다. 상태: ")}${bold("lively status")}\n`);
+}
+
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
 //  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
 async function cmdRepo(rest) {
@@ -1241,9 +1293,13 @@ ${bold("설치 · 유지보수")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
+                         ${dim("프로젝트 폴더에서 실행하면 프로젝트 · 공유폴더 동기화 상태도 함께 보여줍니다")}
   doctor                 문제 진단 + 해결책               ${dim("--json")}
 
 ${bold("작업")}
+  init                   지금 폴더를 프로젝트로 — 기본은 ${bold("제안만")}(무엇을 할지 알려주고 아무것도 안 바꿈)
+      --create           새 프로젝트로 만들어 연결  ${dim('--name "<이름>"  --list <리스트id>')}
+      --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
@@ -1295,6 +1351,7 @@ async function main() {
     case "install": { await cmdInstall(); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
+    case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));
     case "status": return cmdStatus(o);
     case "doctor": return cmdDoctor(o);
     // run 은 나머지 인자를 **그대로** work.mjs 로 넘긴다(--harness 등이 CLI 옵션과 겹쳐도 원형 보존).

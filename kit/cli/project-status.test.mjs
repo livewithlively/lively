@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `lively status` 프로젝트 섹션 (#905 C5a) — 진짜 CLI 프로세스 + 픽스처 게이트웨이.
+// `lively` 의 프로젝트 표면 (#905 C5) — status 섹션 + init 명령. 진짜 CLI 프로세스 + 픽스처 게이트웨이.
 //  실행: node kit/cli/project-status.test.mjs   (npm test 체인)
 //  실제 ~/.lively 무접촉(LIVELY_HOME 샌드박스). 네트워크는 127.0.0.1 픽스처뿐.
 //
@@ -9,8 +9,8 @@
 //  이 섹션의 존재 이유 = **sync 모드를 사람 눈에 보이게 하는 것**(#905 P1-②). 그래서 여기 계약의 핵심은
 //   "모드를 정확히 보여주는가"와 "모르는 걸 아는 척하지 않는가" 두 가지다.
 import { createServer } from "node:http";
-import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -32,6 +32,7 @@ mkdirSync(join(HOME, ".lively"), { recursive: true });
 
 // ── 픽스처 게이트웨이 — 어떤 요청이 왔는지 기록한다("sync=none 이면 매니페스트를 안 부른다"를 증명하려면 필요). ──
 const hits = [];
+let CANDIDATES = [];
 const SERVER_FILES = [
   { path: "doc.md", mtime: 1_700_000_000_000, size: 5 },
   { path: "sub/spec.md", mtime: 1_700_000_000_000, size: 7 },
@@ -43,6 +44,9 @@ const server = createServer((req, res) => {
   if (req.url.startsWith("/api/ui/me/profile")) return j({ id: "yoon", display_name: "윤상민" });
   if (/\/api\/ui\/v6\/projects\/905\/shared\/manifest/.test(req.url)) return j({ files: SERVER_FILES, newest: 1_700_000_000_000, count: SERVER_FILES.length, truncated: false });
   if (/\/api\/ui\/v6\/projects\/905$/.test(req.url)) return j({ project: { id: 905, name: "프로젝트 관리 cli 만들기" } });
+  if (req.url === "/api/ui/v6/projects/find-by-origin") return j({ origin_key: "github.com/o/r", candidates: CANDIDATES, total: CANDIDATES.length, active_total: CANDIDATES.filter((c) => c.status !== "done").length, discriminating: CANDIDATES.length === 1, truncated: false, note: "" });
+  if (req.url === "/api/ui/v6/projects" && req.method === "POST") return j({ project: { id: 777, name: "새 플젝" } });
+  if (/\/folder-binding$/.test(req.url)) return j({ bound: { project_id: 1, member_id: "yoon" } });
   res.writeHead(404); res.end("{}");
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -134,6 +138,52 @@ try {
     const dir = mkProj("gone-proj", { project_id: 999, sync: "pull" });
     const st = await statusIn(dir);
     check("없는 프로젝트 → 섹션은 뜨되 error 로 표기(status 는 유효)", st.project?.id === 999 && st.project?.error, JSON.stringify(st.project));
+  }
+
+  // ══ `lively init` (#905 C5) — 코어는 project-init.test.mjs 가 본다. 여기선 **CLI 계층**(인자 파싱·무변경 계약). ══
+  // ⚠ 사람용 출력은 **stderr** 다(say) — stdout 은 --json 전용이라 깨끗해야 한다. 스트림을 헷갈리면
+  //  "출력이 비었는데 테스트는 통과"하는 공허한 검증이 된다(실제로 여기서 한 번 걸렸다).
+  const initIn = async (cwd, args) => {
+    const { stdout, stderr } = await pExecFile(process.execPath, [CLI, "init", ...args], {
+      cwd, env: { ...process.env, LIVELY_HOME: HOME, LIVELY_GATEWAY_URL: GW, LIVELY_TOKEN: "lvk_test_token", NO_COLOR: "1" }, timeout: 30_000,
+    });
+    return args.includes("--json") ? stdout : stderr;
+  };
+  const mkRepo = (name) => {
+    const dir = join(BOX, name); mkdirSync(dir, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:o/r.git"], { cwd: dir });
+    return dir;
+  };
+  const markerOf = (dir) => { try { return JSON.parse(readFileSync(join(dir, ".lively", "project.json"), "utf8")); } catch { return null; } };
+
+  {
+    CANDIDATES = [];
+    const dir = mkRepo("cli-auto");
+    const out = await initIn(dir, ["--json"]);
+    const r = JSON.parse(out);
+    check("🔴 lively init(기본) → 제안만·무변경(마커 없음)", r.status === "suggestion" && r.dry_run === true && markerOf(dir) === null, out.slice(0, 120));
+    check("lively init 기본 → 후보 0 이어도 ask_user(멋대로 create 안 함)", r.suggestion?.action === "ask_user", JSON.stringify(r.suggestion));
+  }
+  {
+    CANDIDATES = [];
+    const dir = mkRepo("cli-create");
+    const r = JSON.parse(await initIn(dir, ["--create", "--name", "새 플젝", "--json"]));
+    check("lively init --create → 생성·연결", r.status === "created" && r.project_id === 777, JSON.stringify(r).slice(0, 120));
+    check("🔴 lively init --create → 마커 sync=\"none\"(사용자 파일 보호)", markerOf(dir)?.sync === "none", JSON.stringify(markerOf(dir)));
+  }
+  {
+    CANDIDATES = [{ project_id: 905, name: "프로젝트 관리 cli 만들기", status: "in_progress", via: "repo", repo: "r" }];
+    const dir = mkRepo("cli-bind");
+    const r = JSON.parse(await initIn(dir, ["--bind", "905", "--json"]));
+    check("lively init --bind <id> → 기존 프로젝트 연결(인자 파싱)", r.status === "bound" && r.project_id === 905, JSON.stringify(r).slice(0, 120));
+    check("lively init --bind → 마커 sync=\"none\"", markerOf(dir)?.sync === "none", JSON.stringify(markerOf(dir)));
+  }
+  {
+    CANDIDATES = [{ project_id: 905, name: "P", status: "in_progress", via: "repo", repo: "r" }];
+    const dir = mkRepo("cli-suggest-bind");
+    const out = await initIn(dir, []);
+    check("lively init 사람용 출력 — 결정적 1건이면 --bind 를 권한다", /lively init --bind 905/.test(out), JSON.stringify(out));
   }
 
   console.log(`\n${fail ? "FAIL" : "PASS"} — ${pass} passed, ${fail} failed`);
