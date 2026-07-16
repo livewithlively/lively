@@ -400,7 +400,9 @@ export async function initOrgSchema(): Promise<void> {
   // 빌트인 도구 정책 시드 — 운영자 웹 최종 편집본(노출 enabled + 자동승인 auto_approve)을 신규 게이트웨이 기본으로 박는다.
   //  노출/자동승인 상태의 SoT 는 org_tool(DB). expose.mcp 는 "MCP 도구냐"만 선언하고, 노출·자동승인은 여기(DB)가 정한다.
   //  ON CONFLICT DO NOTHING = 최초 1회만 — 기존 인스턴스의 운영자 변경을 덮지 않는다(시드는 신규 설치 기본값일 뿐).
-  //  현 정책: 대부분 빌트인 노출+자동승인, 위험한 삭제만 OFF — project_delete_v6(프로젝트 영구삭제)·task_delete_v6(작업 캐스케이드 삭제)·task_field_delete_v6(컬럼+전체값 손실). 시드에 없는 신규 도구는
+  //  현 정책: 대부분 빌트인 노출+자동승인, 위험한 삭제만 OFF — project_delete_v6(프로젝트 영구삭제)·task_delete_v6(작업 캐스케이드 삭제)·task_field_delete_v6(컬럼+전체값 손실).
+  //  + delegate_run OFF(#904): MCP 동기 wait 는 하네스 인라인 블로킹 → 긴 위탁서 transport-drop(응답 유실) footgun. 위탁은 lively delegate CLI 를 Bash(run_in_background) 로(런북 delegate-background-cli-not-mcp-wait).
+  //   REST(POST /api/ui/delegate)·모니터(delegate_status/list/logs/cancel) 는 유지 — CLI·교차세션 관찰 무손상(모니터는 non-blocking 이라 footgun 아님). delegate_run 은 현재 org_tool 행이 없어 이 시드가 신규·기존 모든 박스에 INSERT 된다. 시드에 없는 신규 도구는
   //  org_tool 행 없음 → expose.mcp 기본(노출) + auto_approve OFF 로 동작 — 필요하면 웹 도구탭에서 토글한다.
   await itemsPool.query(`
     INSERT INTO org_tool(name, kind, enabled, auto_approve) VALUES
@@ -456,6 +458,7 @@ export async function initOrgSchema(): Promise<void> {
       ('task_set_status_v6','builtin',true,true),
       ('task_delete_v6','builtin',false,false),
       ('task_field_delete_v6','builtin',false,false),
+      ('delegate_run','builtin',false,false),
       ('knowledge_link','builtin',true,true),
       ('source_list','builtin',true,true),
       ('source_get','builtin',true,true),
