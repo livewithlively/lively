@@ -3373,9 +3373,10 @@ async function pjvBulkRunClaude(btn) {
     const proj0 = await api(B).then((dd) => dd && (dd.project || dd)).catch(() => null);
     const projRepos = ((proj0 && proj0.repos) || []).filter(Boolean);
     const rd = pjvRunDefaults(pid, projRepos);
-    const chosenRepos = (rd.repos === null) ? projRepos : projRepos.filter((n) => rd.repos.includes(n));
     // 실행 위치 = 내 PC(로컬): 박스 세션을 만들지 않고, 태스크 내용을 클립보드에 복사한 뒤 '내 PC에서 작업' 안내 모달을 기본값으로 선주입해 연다.
+    //  로컬은 work.mjs 한 줄이 코드 준비(clone/worktree)까지 겸하는 셋업이라 레포·워크트리 기본값을 그대로 넘긴다 — 아래 박스 세션과 다르다(#918).
     if (rd.where === 'local') {
+        const chosenRepos = (rd.repos === null) ? projRepos : projRepos.filter((n) => rd.repos.includes(n));
         try {
             copyText(prompt);
         }
@@ -3392,31 +3393,19 @@ async function pjvBulkRunClaude(btn) {
     const first = pjvSel.items.get(ids[0]);
     const firstName = (first && (first.name || first.title)) || ('태스크 ' + ids[0]);
     const label = meName + ' · ' + firstName + (ids.length > 1 ? (' 외 ' + (ids.length - 1) + '건') : '');
-    // 코드가 체크아웃되지 않은 프로젝트 폴더에서 시작하지 않도록: 세션 전에 프로젝트 관련 레포를 워크트리(브랜치 project/<id>)로
-    //  provision 하고, 단일 레포면 그 워크트리에서 세션을 연다(subpath). 원클릭은 '누르면 알아서' 가 핵심이라 선택 퍼널 없이 자동 —
-    //  레지스트리에 없거나 provision 이 실패해도 막지 않고(best-effort) 기존처럼 프로젝트 폴더에서 연다(에이전트가 직접 찾아갈 수 있게).
-    let subpath = '';
-    try {
-        if (chosenRepos.length) {
-            if (labelSpan)
-                labelSpan.textContent = '환경 준비 중…';
-            const specs = chosenRepos.map((name) => ({ name, worktree: rd.worktree, branch: rd.worktree ? rd.branch : '' }));
-            const pr = await api(B + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs }) }).catch(() => null);
-            const wts = ((pr && pr.provisioned) || []).filter((w) => w && w.worktree && w.subpath);
-            // 레포 1개면 그 워크트리에서 바로 시작. 여러 개면 프로젝트 폴더 루트에서 열어(모든 워크트리가 하위폴더로 접근) 모호성 회피.
-            if (wts.length === 1)
-                subpath = wts[0].subpath;
-        }
-    }
-    catch (_) { /* provision 은 best-effort — 실패해도 세션은 연다 */ }
+    // 세션은 프로젝트 폴더에서 연다 — 코드를 미리 provision 하지 않는다(#918).
+    //  이전엔 세션 전에 레포를 워크트리로 provision 하고 '단일 레포일 때만' cwd 를 거기로 뒀다. 그건 보장이 아니었다:
+    //  멀티레포·provision 실패·다른 진입 경로면 어차피 맨 프로젝트 폴더에서 떴고(실측: 코드 프로젝트의 40%), 실패는
+    //  .catch 로 삼켜 무음이었고, 회수된 워크트리 경로가 마커에 남아 오히려 에이전트를 속였다.
+    //  지금은 세션이 코드가 필요해진 시점에 스스로 뜬다 — 발견은 AGENTS.md '코드 작업' 섹션(프로젝트 폴더에 항상)과
+    //  lively_local_repo_worktree 의 _meta.alwaysLoad(스키마 상시 노출)가 보장한다. 미리 받아두고 싶으면 세션 생성
+    //  모달의 '레포 준비'(POST /provision)를 쓴다 — 거긴 실패가 4xx/5xx 로 표면화된다.
     if (labelSpan)
         labelSpan.textContent = '세션 여는 중…';
     try {
         const sbody = { label, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true }; // #782 기본 꺼짐 — 켠 사람만 켜짐
         if (rd.model)
             sbody.flags = { '--model': rd.model };
-        if (subpath)
-            sbody.subpath = subpath;
         const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
         const sid = r && r.session && r.session.id;
         if (!sid)
@@ -3539,9 +3528,17 @@ async function pjvBulkRunDefaultsModal(ctx) {
     const repoBox = projectRepos.length
         ? el('div', {}, ...repoChecks.map((r) => r.row))
         : el('div', { class: 'caption', text: '이 프로젝트에 연결된 레포가 없어요 — 레포 없이 실행됩니다.' });
+    // 코드 저장소 준비는 '내 PC' 실행 전용이다(#918) — work.mjs 한 줄(--worktree/--branch/레포)에만 실린다.
+    //  웹(박스) 세션은 코드를 미리 받지 않고, 세션이 코드가 필요해진 시점에 lively_local_repo_worktree 로 스스로 뜬다.
+    //  그래서 웹을 고른 상태에선 숨긴다 — 남겨두면 '준비해준다'는 거짓 약속이 된다(웹에선 아무 효과도 없다).
+    const repoField = el('div', { class: 'field', style: 'margin-top:14px' }, el('label', { class: 'field-label', text: '코드 저장소 준비 (내 PC 실행 시)' }), el('div', { class: 'caption', text: '내 PC에서 실행할 때 아래 레포를 준비합니다(있으면 재사용). 코드 작업이 아니면 모두 꺼도 돼요.' }), wtRow, wtHint, el('div', { style: 'margin-top:8px' }, repoBox));
+    const syncRepoField = () => { repoField.style.display = whereLocal.checked ? '' : 'none'; };
+    whereWeb.onchange = syncRepoField;
+    whereLocal.onchange = syncRepoField;
+    syncRepoField();
     const saveBtn = el('button', { class: 'btn btn-primary', text: '기본값 저장' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
-    const back = overlayBox('클로드로 실행 — 기본값', el('p', { class: 'admin-hint', text: '‘클로드로 실행’(플로팅 바)을 누를 때 쓰는 기본값이에요. 여기서 바꾸면 다음 실행부터 이 값으로 준비됩니다. (이 프로젝트에만 적용)' }), whereRow, el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행기' }), harnessSel), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '모델' }), modelSel), autoRow, el('div', { class: 'field', style: 'margin-top:14px' }, el('label', { class: 'field-label', text: '코드 저장소 준비' }), el('div', { class: 'caption', text: '실행 전에 아래 레포를 이 프로젝트 전용 작업 공간으로 자동 준비합니다(있으면 재사용). 코드 작업이 아니면 모두 꺼도 돼요.' }), wtRow, wtHint, el('div', { style: 'margin-top:8px' }, repoBox)), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox('클로드로 실행 — 기본값', el('p', { class: 'admin-hint', text: '‘클로드로 실행’(플로팅 바)을 누를 때 쓰는 기본값이에요. 여기서 바꾸면 다음 실행부터 이 값으로 준비됩니다. (이 프로젝트에만 적용)' }), whereRow, el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행기' }), harnessSel), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '모델' }), modelSel), autoRow, repoField, el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     saveBtn.onclick = () => {
         const chosen = repoChecks.filter((r) => r.cb.checked).map((r) => r.n);
         const allChosen = projectRepos.length > 0 && chosen.length === projectRepos.length;

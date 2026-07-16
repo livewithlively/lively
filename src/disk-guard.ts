@@ -52,7 +52,7 @@ export function diskFullError(what: string, st: DiskState): HttpError {
   return new HttpError(
     507,
     `디스크 공간이 부족해 ${what}을(를) 시작할 수 없습니다 (${st.usedPct}% 사용, ${fmtMb(st.availBytes)} 남음). ` +
-    `관리 ▸ 저장소·로그 에서 프로젝트 워크스페이스를 회수하거나 디스크를 늘리세요.`,
+    `관리 ▸ 저장소·로그 에서 프로젝트 워크스페이스를 정리하거나 디스크를 늘리세요.`,
   );
 }
 

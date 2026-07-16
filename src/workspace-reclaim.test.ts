@@ -2,7 +2,8 @@
 //  여기서 못 박는 것(하나라도 깨지면 고객 자산 손실):
 //   ① gitignored 라도 allow-list 밖이면 안 지운다 — `.env`(시크릿)·`data/`(로컬 데이터)는 전부 gitignored 다.
 //   ② allow-list 이름이어도 gitignored 가 아니면 안 지운다 — 소스 디렉터리가 `build/` 인 레포가 실제로 있다.
-//   ③ 더티/미푸시/upstream 없음 → 워크트리 제거 **거부**(이유를 말한다).
+//   ③ 더티 / 원격 어디에도 없는 커밋 → 워크트리 제거 **거부**(이유를 말한다).
+//     — 반대로 **원격에 있으면 upstream 설정이 없어도 허용**해야 한다(#922: 프록시를 보면 안전한 워크트리를 거부한다).
 //   ④ 활성 세션이 붙어 있으면 **아무것도** 안 지운다(빌드 중일 수 있다).
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -95,7 +96,7 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await fsp.rm(path.dirname(dir), { recursive: true, force: true });
 }
 
-// ── 워크트리 제거 게이트: 더티 / 미푸시 / upstream 없음 ──
+// ── 워크트리 제거 게이트: 더티 / 원격에 없는 커밋 ──
 {
   const { dir } = await makeRepo();
 
@@ -103,13 +104,13 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   let c = await checkWorktree(dir);
   assert.equal(c.removable, true, `클린·푸시완료면 제거 가능해야: ${c.reason}`);
 
-  // 미푸시 커밋 → 거부
+  // 미푸시 커밋 → 거부 (upstream 이 **있는** 브랜치 — 아래 'local-only' 케이스와 짝)
   await fsp.writeFile(path.join(dir, "src.txt"), "changed");
   await git(["commit", "-am", "wip"], dir);
   c = await checkWorktree(dir);
   assert.equal(c.removable, false, "⚠ 미푸시 커밋이 있는데 제거 가능이라 했다 — 커밋 손실!");
   assert.equal(c.unpushed, 1);
-  assert.match(c.reason ?? "", /push/);
+  assert.match(c.reason ?? "", /원격/);
 
   // 더티(미커밋 변경) → 거부
   await git(["push"], dir);
@@ -121,7 +122,9 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await fsp.rm(path.dirname(dir), { recursive: true, force: true });
 }
 
-// ── upstream 없는 브랜치 → 거부 (커밋이 이 워크트리에만 있다) ──
+// ── upstream 없는 브랜치 + 어디에도 push 안 함 → 거부 (박스를 재구축하면 사라진다) ──
+//  아래 #922 케이스와 **한 글자 차이**다(push 를 했나 안 했나). upstream 이 없다는 사실은 둘이 똑같으므로,
+//  판정이 upstream 설정을 보면 둘을 구분하지 못한다 — 이 짝이 "안전을 안 낮췄다"를 지킨다.
 {
   const { dir } = await makeRepo();
   await git(["checkout", "-b", "local-only"], dir);
@@ -129,9 +132,36 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await git(["add", "-A"], dir);
   await git(["commit", "-m", "local only"], dir);
   const c = await checkWorktree(dir);
-  assert.equal(c.removable, false, "⚠ 원격에 없는 브랜치인데 제거 가능이라 했다 — 커밋 소멸!");
-  assert.equal(c.unpushed, -1);
-  assert.match(c.reason ?? "", /upstream|원격/);
+  assert.equal(c.removable, false, "⚠ 원격 어디에도 없는 커밋인데 제거 가능이라 했다 — 박스 재구축 시 소멸!");
+  assert.equal(c.unpushed, 1);
+  assert.match(c.reason ?? "", /원격/);
+  await fsp.rm(path.dirname(dir), { recursive: true, force: true });
+}
+
+// ── ⚠ #922 회귀: 다른 이름으로 push 된 브랜치 → **허용** (upstream '설정' 이 아니라 '원격 도달성'을 물어야 한다) ──
+//  실사고(#904): `git push origin project/904:main` 으로 밀어 브랜치명이 달라 upstream 추적이 없었는데, 커밋은
+//   origin/main 에 멀쩡히 있었다. 그런데 판정이 upstream **설정**을 보고 "커밋이 이 워크트리에만 있습니다"라며
+//   거부했다 — 확인한 적도 없는 주장이었다.
+//  이건 엣지가 아니라 **기본 경로**다: provisionProjectRepos 는 시작점 없이 `worktree add -b project/<id>` 로 자르므로
+//   프로젝트 워크트리엔 애초에 upstream 이 안 붙는다 → 프록시를 보면 **푸시 여부와 무관하게 영영 거부**된다.
+{
+  const { dir } = await makeRepo();
+  await git(["checkout", "-b", "project/904"], dir); // provision 동형 — 시작점을 안 주므로 upstream 이 안 붙는다
+  await fsp.writeFile(path.join(dir, "new.txt"), "the work");
+  await git(["add", "-A"], dir);
+  await git(["commit", "-m", "work"], dir);
+  await git(["push", "origin", "project/904:main"], dir); // 브랜치명과 **다른 이름**으로 push(#904 가 실제로 한 것)
+
+  // 전제 확인 — upstream 은 정말 없다. 이게 깨지면(예: git 기본값이 바뀌어 추적이 붙으면) 이 테스트는 오탐을
+  //  재현하지 못한 채 조용히 통과한다. 재현 조건부터 못 박는다.
+  await assert.rejects(
+    git(["rev-parse", "--abbrev-ref", "@{upstream}"], dir),
+    "이 테스트는 upstream 없는 브랜치를 전제한다 — 추적이 붙었다면 #922 오탐을 재현하지 못한다",
+  );
+
+  const c = await checkWorktree(dir);
+  assert.equal(c.removable, true, `⚠ 커밋이 origin/main 에 있는데 거부했다 — 원격 도달성이 아니라 upstream 설정을 보고 있다: ${c.reason}`);
+  assert.equal(c.unpushed, 0, "origin/main 에서 닿는 커밋이므로 '원격에 없는 커밋' 은 0 이어야");
   await fsp.rm(path.dirname(dir), { recursive: true, force: true });
 }
 
@@ -235,4 +265,4 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   await fsp.rm(root, { recursive: true, force: true });
 }
 
-console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 미푸시·더티·활성세션이면 거부 · reposIn(워크트리=.git파일/클론=.git디렉터리 둘 다, 껍데기는 빈 배열)");
+console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 더티·원격에없는커밋·활성세션이면 거부(단 다른 이름으로 push 됐으면 upstream 없어도 허용) · reposIn(워크트리=.git파일/클론=.git디렉터리 둘 다, 껍데기는 빈 배열)");

@@ -55,7 +55,7 @@ const FETCH_MS = 4000;
     return `- ${e.title || e.name} (${e.name}) · 유사도 ${pct}%` + (snip ? `\n  ${snip}` : "");
   });
   process.stdout.write(
-    "[관련 팀 지식 — Lively 컨텍스트 저장소(자동 회수)]\n" +
+    "[관련 팀 지식 — Lively 컨텍스트 저장소(자동 검색)]\n" +
     "아래는 이 요청과 의미적으로 가까운 기존 팀 지식입니다. 관련되면 knowledge_get(name)으로 본문을 확인하고, 무관하면 무시하세요.\n" +
     lines.join("\n") + "\n");
 })().then(() => process.exit(0)).catch(() => process.exit(0));

@@ -26,7 +26,7 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       if ((err as NodeJS.ErrnoException)?.code === "ENOSPC" || (err as NodeJS.ErrnoException)?.code === "EDQUOT"
           || /ENOSPC|no space left on device|quota exceeded/i.test(msg)) {
         logger.error({ err, path: req.path }, "디스크 부족으로 실패");
-        res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 회수하거나 디스크를 늘리세요." });
+        res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 정리하거나 디스크를 늘리세요." });
         return;
       }
       if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }

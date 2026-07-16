@@ -17,6 +17,21 @@ import os from "node:os";
 
 const BUDGET_MS = 8000; // 턴 지연 상한 — 넘기면 부분만 받고 다음 턴에 이어받는다.
 
+// ── 싱크 모드 게이트(#905 P1-②) — SessionStart 판(project-pull)과 **동일 규칙**. 근거·배경은 그 훅 주석 참조. ──
+//  이 판은 **매 턴** 도므로 게이트가 없으면 사용자 폴더 파괴 창이 '세션당 1회'가 아니라 '턴당 1회'가 된다.
+const SYNC_MODES = ["none", "pull", "both"];
+function livelyOwnedDir(projDir, projectId) {
+  const parent = path.dirname(projDir);
+  return path.basename(projDir) === String(projectId)
+    && path.basename(parent) === "projects"
+    && path.basename(path.dirname(parent)) === "lively";
+}
+function syncMode(meta, projDir, projectId) {
+  const m = String((meta && meta.sync) || "").trim().toLowerCase();
+  if (SYNC_MODES.includes(m)) return m;
+  return livelyOwnedDir(projDir, projectId) ? "pull" : "none";
+}
+
 (async () => {
   const startedAt = Date.now();
   // 1) cwd — UserPromptSubmit 이벤트 stdin JSON 의 cwd 우선, 없으면 process.cwd()
@@ -43,6 +58,9 @@ const BUDGET_MS = 8000; // 턴 지연 상한 — 넘기면 부분만 받고 다�
   const projectId = meta && meta.project_id;
   const lastPull = Number(meta && meta.last_pull) || 0;
   if (!projectId) return;
+
+  // 2-b) 🔴 쓰기 자격 게이트 — 싱크 대상이 아니면 여기서 끝(턴당 네트워크 비용도 0).
+  if (syncMode(meta, projDir, projectId) === "none") return;
 
   // 3) 게이트웨이 base + 토큰 (session-preload/run-custom 와 동일 출처)
   const HOME = process.env.LIVELY_HOME || os.homedir();

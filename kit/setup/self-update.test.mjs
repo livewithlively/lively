@@ -233,7 +233,10 @@ try {
     const hookMs = Date.now() - t0;
     const injected = String(stdout || "").includes("테스트 컨텍스트"); // 훅 본연의 일(맥락 주입)은 그대로 했나
     const done = await waitFor(() => readIf(lv(home, "kit-version")) === "v-ddd");
-    const notice = readIf(lv(home, "update-notice"));
+    // ⚠ notice 도 **기다려야** 한다 — kit-version 스탬프(self-update.mjs:257)와 update-notice 기록(:262) 사이엔
+    //  saveState + reconcileClaudeMcp(게이트웨이 **네트워크 호출**, #862)가 있다. kit-version 만 폴링하고 notice 를
+    //  즉시 읽으면 그 틈에 걸려 notice=false 로 헛실패한다(부하가 걸릴수록 잘 재현 — 실측 플레이키의 원인).
+    const notice = await waitFor(() => !!readIf(lv(home, "update-notice")));
     if (done && injected && notice) ok(`⑨ 세션 시작 → 백그라운드 자동 업데이트 완료 (훅 반환 ${hookMs}ms · 맥락 주입 정상 · 다음 세션 안내 대기)`);
     else bad("⑨ 훅 트리거", `done=${done} injected=${injected} notice=${!!notice} hookMs=${hookMs}`);
 
