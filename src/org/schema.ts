@@ -816,11 +816,17 @@ export async function initOrgSchema(): Promise<void> {
       enabled BOOLEAN NOT NULL DEFAULT true,
       platform TEXT,
       agent_ver TEXT,
+      -- 노드가 hello 로 선언한 op 목록(#905 C4). 오프라인 노드의 능력도 관리탭에서 보이게 저장한다.
+      --  NULL = 아직 선언한 적 없음(구 에이전트) → 코드가 v1 기준선으로 해석(protocol.nodeCaps).
+      agent_caps TEXT[],
       host TEXT,
       last_seen TIMESTAMPTZ,
       created_by TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  
+    -- 기존 테이블에도 붙인다(#905 C4) — CREATE TABLE IF NOT EXISTS 는 이미 있는 테이블을 안 고친다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_caps TEXT[];
   `);
 
   // ── org_task — 위탁 태스크(P2 #869). 의뢰자가 delegate_run 으로 넣고, 태스크 스케줄러가 리소스-적합 노드에 ──

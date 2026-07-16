@@ -19,7 +19,12 @@ done
 [ -n "$URL" ] && [ -n "$TOKEN" ] || { echo "사용법: bash deploy/node/install.sh --url <게이트웨이URL> --token <노드토큰> [--id <노드id>]" >&2; exit 2; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-AGENT="$REPO_ROOT/dist/node/agent.js"
+# 게이트웨이가 /api/ui/node-agent 로 **서빙하는 바로 그 산출물**(esbuild 단일 번들)을 돌린다.
+#  ⚠ dist/node/agent.js(tsc 원본)를 돌리면 안 된다(#905 C4): 에이전트는 자기 파일을 해시해 agentVer 로 보고하고
+#   게이트웨이는 그걸 서빙 번들의 해시와 대조해 '최신인가'를 판정한다 → 다른 파일을 돌리면 같은 커밋에서 설치해도
+#   해시가 영원히 안 맞아 관리탭이 근거 없이 "구버전"이라 표시한다. 두 설치 경로(`lively node` · 이 스크립트)가
+#   같은 바이트를 돌아야 그 판정이 성립한다. node-pty(external)는 REPO_ROOT/node_modules 에서 해소된다(동일).
+AGENT="$REPO_ROOT/dist/node-agent/agent.mjs"
 LIVELY_DIR="$HOME/.lively"
 ENV_FILE="$LIVELY_DIR/node-agent.env"
 LOG_DIR="$LIVELY_DIR/logs"
@@ -77,7 +82,7 @@ PL
   Linux)
     # WSL2 등 systemd 미활성 환경 — 유닛 등록 불가 → 즉시 기동(nohup) + 활성화 안내(§8-7 ⑸ Windows=WSL2 전제).
     if [ ! -d /run/systemd/system ]; then
-      pkill -f "dist/node/agent.js" 2>/dev/null || true
+      pkill -f "dist/node-agent/agent.mjs" 2>/dev/null || true
       nohup bash -c "$RUN_CMD" >> "$LOG_DIR/node-agent.log" 2>&1 &
       echo "⚠ systemd 미활성(WSL2?) — 데몬 등록 대신 즉시 기동했습니다(재부팅 시 재실행 필요)."
       echo "   상시화: /etc/wsl.conf 에 [boot] systemd=true 추가 후 'wsl --shutdown' → 이 스크립트 재실행."

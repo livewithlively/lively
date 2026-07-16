@@ -34,7 +34,16 @@ export interface NodeResources {
 
 // ── 제어 메시지(JSON 텍스트 프레임) ──
 // 노드 → 게이트웨이
-export interface HelloMsg { t: "hello"; ver: number; node: string; platform: string; agentVer?: string; host?: string; hasDocker?: boolean }
+// hello — 노드가 붙자마자 자기 신원을 밝힌다.
+//  ver     = 프로토콜 버전(PROTO_VER). 게이트웨이가 대조한다 — 다르면 프레임 해석이 어긋나므로 붙이면 안 된다.
+//  agentVer= **도는 번들 자신의 지문**(sha256 12hex — 키트의 kit-version 과 같은 모델: "설치가 반영하는 바이트가 곧
+//            버전"이라 사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다). 게이트웨이가 서빙본 지문과 비교해 최신 여부를 안다.
+//  caps    = **이 빌드가 실제로 구현한 op 목록**(NODE_OPS). 버전은 '어떤 바이트냐'지 '무엇을 할 수 있냐'가 아니다 —
+//            그 질문엔 노드가 직접 답해야 한다. 없으면 구 노드 → v1 기준선으로 간주(nodeCaps).
+export interface HelloMsg {
+  t: "hello"; ver: number; node: string; platform: string;
+  agentVer?: string; caps?: string[]; host?: string; hasDocker?: boolean;
+}
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
 export interface OpenedMsg { t: "opened"; chan: number }
@@ -52,8 +61,38 @@ export interface CloseChanMsg { t: "close"; chan: number }
 //  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
 // fs* = 노드 세션 파일 릴레이(#875) — 세션 작업폴더(@box_dir) 기준. 바이트는 base64 청크(maxPayload 1MB 회피),
 //  게이트웨이가 nodeCanAttach 로 인가 후 위임(정책=게이트웨이, 실행=노드 F7). fsRead(len=0)=stat.
-export type NodeOp = "list" | "create" | "kill" | "edit" | "gone" | "label" | "runTask" | "watchTask" | "tailTask"
-  | "fsLs" | "fsRead" | "fsWrite" | "fsMkdir" | "prompts";
+//
+// ── 🔒 v1 기준선(#905 C4) — **이 배열은 절대 늘리지 않는다.** ──
+//  구 노드는 hello 에 caps 를 안 싣는다(그 필드가 없던 빌드다). 그때 게이트웨이가 "이 노드는 무엇을 할 수 있나"를
+//  물으면 답할 근거가 이 목록뿐이다 — "ver=1 로 붙은 노드는 최소한 이건 다 한다"는 사실. 여기에 새 op 를 끼워넣으면
+//  **구 노드가 못 하는 걸 한다고 주장하게 되고**, 게이트웨이는 그걸 믿고 디스패치해 정체불명의 문자열 에러를 받는다
+//  (그게 정확히 이 과업이 없애려는 상태다). 새 op 는 반드시 NODE_OPS_NEW 로만 들어간다.
+const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask", "watchTask", "tailTask",
+  "fsLs", "fsRead", "fsWrite", "fsMkdir", "prompts"] as const;
+// v1 이후 추가된 op — 이걸 지원하는 노드는 hello.caps 로 **스스로 선언한다**. 선언 없으면 게이트웨이가 안 보낸다.
+const NODE_OPS_NEW = [] as const;
+
+// 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
+export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;
+export type NodeOp = typeof NODE_OPS[number];
+export const NODE_BASELINE_OPS: readonly NodeOp[] = NODE_OPS_V1;
+
+// 이 노드가 실제로 할 수 있는 op 집합. caps 를 안 보낸 구 노드는 v1 기준선으로 본다.
+//  ⚠ "모르면 못 한다고 본다"가 원칙 — 기준선 밖의 op 는 **선언한 노드에만** 보낸다.
+export function nodeCaps(caps: readonly string[] | null | undefined): Set<string> {
+  return new Set(Array.isArray(caps) ? caps : NODE_BASELINE_OPS);
+}
+
+// 이 노드가 최신 번들을 도는가 — **3상**이다(#905 C4). 순수 함수로 둬 라우트 없이 검증한다.
+//  · true  = 서빙본과 같은 바이트
+//  · false = 다른 바이트(업데이트 필요)
+//  · null  = **판정 불가** — 노드가 agentVer 를 안 보냈거나(구 에이전트) 게이트웨이에 번들이 없다.
+//    🔴 null 을 false 로 뭉개면 근거 없이 "업데이트하세요"를 띄운다. 라이브 노드 2대가 지금 정확히 이 상태다
+//    (구 번들이라 agentVer 미전송) — 뭉갰다면 첫 화면부터 전원 '구버전'이라는 거짓말을 보게 된다.
+export function agentIsLatest(nodeVer: string | null | undefined, servedVer: string | null | undefined): boolean | null {
+  if (!nodeVer || !servedVer) return null;
+  return nodeVer === servedVer;
+}
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;

@@ -9,7 +9,7 @@ import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import type { SessionInfo } from "../terminal-sessions.js";
 import {
-  NODE_WS_PATH, decodeChanFrame, parseMsg, nodeSessionVisible,
+  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, NODE_BASELINE_OPS,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeToken, touchNode, type OrgNode } from "./store.js";
@@ -37,6 +37,9 @@ interface NodeConn {
   chans: Map<number, { browser: WebSocket; opened: boolean }>;
   lastTouch: number;
   hasDocker: boolean;
+  // 이 노드가 실제로 할 수 있는 op(#905 C4). hello 전에는 **기준선으로 시작한다** — hello 는 연결 직후 오지만
+  //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
+  caps: Set<string>;
 }
 
 // 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다(게이트웨이 재시작 시 리셋, 도그푸드 OK).
@@ -88,10 +91,23 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
   return out;
 }
 
+// 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
+//  ⚠ 아직 호출자가 없다(NODE_OPS_NEW 가 비어 모든 op 가 기준선이라 물어볼 게 없다). 기준선 밖 op 가 생기는
+//   순간(C4 본체의 provision) 스케줄러·라우트가 **배치 후보를 고를 때** 쓸 자리다 — 그때 못 할 노드를 고르면
+//   nodeRpc 가 던지고 사용자는 이유 모를 실패를 본다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).
+export function nodeSupports(nodeId: string, op: NodeOp): boolean {
+  const c = conns.get(nodeId);
+  return !!c && c.caps.has(op);
+}
+
 // 타입드 RPC — 노드에 op 실행을 위임하고 결과를 기다린다. 노드 미연결이면 즉시 실패.
 export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Record<string, unknown>): Promise<T> {
   const c = conns.get(nodeId);
   if (!c) throw new Error("node-offline");
+  // 🔴 미지원 노드엔 **보내지 않는다**(#905 C4). 보내면 구 노드가 `unknown op: <op>` 라는 **문자열**을 돌려주고,
+  //  호출자는 그걸 "실패"와 구별하지 못한다 — 기능이 없는 건지 하다 터진 건지 모른 채 재시도·오진이 쌓인다.
+  //  여기가 단일 관문이라 모든 호출자가 자동으로 보호된다. 에러코드는 기계가 분기할 수 있게 고정 문자열.
+  if (!c.caps.has(op)) throw new Error(`node-unsupported-op:${op}`);
   const id = c.nextReq++;
   const msg: GwToNodeMsg = { t: "req", id, op, args };
   return await new Promise<T>((resolve, reject) => {
@@ -208,8 +224,18 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     return;
   }
   if (m.t === "hello") {
+    // 🔴 프로토콜 버전 대조(#905 C4) — 여태 안 봤다. 다르면 프레임 해석이 어긋나므로 **붙여두면 안 된다**:
+    //  조용히 오동작하느니 끊고 로그를 남긴다(노드는 백오프 재접속하므로, 업데이트되면 알아서 복귀한다).
+    if (m.ver !== PROTO_VER) {
+      logger.warn({ node: c.node.id, nodeVer: m.ver, gatewayVer: PROTO_VER, agentVer: m.agentVer },
+        "노드 프로토콜 버전 불일치 — 연결 거부(노드 에이전트를 업데이트해야 한다)");
+      try { c.ws.close(4426, `proto-ver-mismatch:${PROTO_VER}`); } catch { /* noop */ }
+      return;
+    }
     c.hasDocker = !!m.hasDocker;
-    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host }).catch(() => { /* 비치명 */ });
+    c.caps = nodeCaps(m.caps);   // 미전송(구 노드) → v1 기준선. 기준선 밖 op 는 선언한 노드에만 간다.
+    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps] })
+      .catch(() => { /* 비치명 */ });
     return;
   }
   if (m.t === "taskdone") {
@@ -264,7 +290,12 @@ export function setupNodeUpgrade(server: Server): void {
       wss.handleUpgrade(req, socket, head, (ws) => {
         const prev = conns.get(node.id);
         if (prev) { logger.info({ node: node.id }, "노드 재연결 — 구 연결 교체"); try { prev.ws.terminate(); } catch { /* noop */ } onNodeDisconnected(prev); }
-        const c: NodeConn = { node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(), lastTouch: Date.now(), hasDocker: false };
+        // caps 는 **기준선으로 시작**한다 — hello 가 오기 전에도 v1 op 는 보낼 수 있어야 한다(구 노드와 동일 취급).
+        //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
+        const c: NodeConn = {
+          node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
+          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS),
+        };
         conns.set(node.id, c);
         (ws as LiveWS).isAlive = true;
         ws.on("pong", () => { (ws as LiveWS).isAlive = true; });

@@ -12,7 +12,7 @@ const sha256 = (s: string): string => crypto.createHash("sha256").update(s).dige
 export interface OrgNode {
   id: string; name: string; kind: "member" | "worker"; owner_member: string;
   token_hash: string | null; enabled: boolean;
-  platform: string | null; agent_ver: string | null; host: string | null;
+  platform: string | null; agent_ver: string | null; agent_caps: string[] | null; host: string | null;
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
@@ -77,12 +77,19 @@ export async function deleteNode(id: string, actor?: string): Promise<{ deleted:
 }
 
 // hello 시 관측 필드 갱신 + 생존 확인 주기 갱신.
-export async function touchNode(id: string, obs?: { platform?: string; agentVer?: string; host?: string }): Promise<void> {
+export async function touchNode(
+  id: string,
+  obs?: { platform?: string; agentVer?: string; host?: string; caps?: string[] },
+): Promise<void> {
+  // COALESCE — 관측값이 없으면(state push 로 부른 경우) 기존 값을 지우지 않는다.
+  //  ⚠ agent_ver 가 라이브에서 **영원히 NULL** 이던 원인이 여기가 아니라 **hello 가 안 보낸 것**이었다(#905 C4).
+  //   COALESCE 는 정상이었고, 넘어오는 값이 늘 undefined 였다.
   await itemsPool.query(
     `UPDATE org_node SET last_seen=now(), updated_at=now(),
-        platform=COALESCE($2, platform), agent_ver=COALESCE($3, agent_ver), host=COALESCE($4, host)
+        platform=COALESCE($2, platform), agent_ver=COALESCE($3, agent_ver), host=COALESCE($4, host),
+        agent_caps=COALESCE($5, agent_caps)
       WHERE id=$1`,
-    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null],
+    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null, obs?.caps ?? null],
   );
 }
 
