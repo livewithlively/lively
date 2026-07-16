@@ -977,6 +977,54 @@ async function cmdMcpLocal() {
   await serveMcpLocal();
 }
 
+// `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
+//  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
+async function cmdRepo(rest) {
+  const { repoList, repoWorktree, repoWorktreeRemove } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
+  const ctx = {
+    cwd: process.cwd(),
+    sh: (cmd, args, opts = {}) => { const r = run(cmd, args, { quiet: true, allowFail: true, env: opts.env }); return { stdout: r.out, stderr: r.err, code: r.code }; },
+    api: (p) => api(p),
+  };
+  const sub = String(rest[0] || "").toLowerCase();
+  const o = {}; const pos = [];
+  for (let i = 1; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--branch") o.branch = rest[++i];
+    else if (t === "--ref") o.ref = rest[++i];
+    else if (t === "--path") o.path = rest[++i];
+    else if (t === "--force") o.force = true;
+    else pos.push(t);
+  }
+  try {
+    if (!sub || sub === "list" || sub === "ls") {
+      const res = await repoList(ctx);
+      say(bold(`레포 ${res.count}개`) + dim(`  · base dir: ${res.repos_dir}`));
+      for (const r of res.repos) {
+        const dot = r.cloned ? green("●") : dim("○");
+        const meta = r.cloned ? (r.status || `${r.branch || "?"}@${r.head || "?"}`) : "미클론";
+        say(`  ${dot} ${r.name}  ${dim(meta)}`);
+      }
+      if (!res.repos.length) info("등록된 레포가 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.");
+      return;
+    }
+    if (sub === "worktree" || sub === "wt") {
+      const op = String(pos[0] || "").toLowerCase();
+      if (op === "remove" || op === "rm") {
+        const res = repoWorktreeRemove(ctx, { repo: pos[1], path: o.path, force: o.force });
+        ok(`워크트리 제거: ${res.removed}`); return;
+      }
+      const repo = pos[0];
+      if (!repo) die("레포 이름이 필요합니다.  예: lively repo worktree <repo> [--branch b] [--ref main] [--path .]");
+      const res = await repoWorktree(ctx, { repo, branch: o.branch, ref: o.ref, path: o.path });
+      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch})`)}`);
+      say("  " + dim(res.note));
+      return;
+    }
+    die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo worktree <repo> [--branch --ref --path]  ·  lively repo worktree remove <repo> [--force]`);
+  } catch (e) { die(e.message || String(e)); }
+}
+
 // 부트스트랩(curl … | sh)이 곧장 부르는 대화형 첫 설치 — 로그인 + 설치를 한 흐름으로.
 async function cmdSetup() {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
@@ -1014,6 +1062,8 @@ ${bold("작업")}
   delegate status|logs|cancel <번호> · delegate list
   node                   이 PC 를 노드로 연결 — 웹에서 로컬 터미널 관리/위탁 ${dim("(foreground, Ctrl-C 로 종료)")}
       --daemon               상시화(부팅·로그인마다 자동) ${dim("macOS launchd · Linux systemd --user")}   ·   node stop  데몬 해제
+  repo list              이 머신에서 뜰 수 있는 레포 + 로컬 상태
+  repo worktree <레포>   지금 폴더에 워크트리 생성(코드 작업면) ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -1065,6 +1115,8 @@ async function main() {
     case "node": return cmdNode(argv.slice(argv.indexOf("node") + 1));
     // mcp-local — 로컬 조작 stdio MCP 서버(하네스가 spawn). stdin 이 닫힐 때까지 블로킹.
     case "mcp-local": return cmdMcpLocal();
+    // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
+    case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:
