@@ -433,6 +433,23 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
     : bad("A7b exit 0", dbg(r));
 }
 
+{
+  // ⑥ 훅이 `eval("await …")` 를 쓰면 **모듈 타입이 맞아도** "await is only valid…" SyntaxError 가 난다.
+  //    문구만 보고 재시도하면, eval 앞에서 이미 끝난 부작용이 두 번 일어난다. 오류 문구가 아니라
+  //    **그게 우리 파일의 파싱에서 났는지**로 판정해야만 통과한다(eval 은 <anonymous_script> 로 찍힌다).
+  const sentinel = join(SANDBOX, "eval-side-effect.log");
+  const src = 'import("node:fs").then((fs) => {\n'
+    + `  fs.appendFileSync(${JSON.stringify(sentinel)}, "ran\\n");\n`
+    + '  eval("await Promise.resolve(1)");\n' // 모듈타입과 무관하게 SyntaxError — 위 append 는 이미 실행됨
+    + '});\n';
+  const r = run("PreToolUse", [{ id: "eval-hook", src }]);
+  let lines = 0;
+  try { lines = readFileSync(sentinel, "utf8").trim().split("\n").filter(Boolean).length; } catch { /* 미생성 */ }
+  lines === 1
+    ? ok("A8 훅이 eval 로 낸 모듈 오류에 속아 재시도하지 않는다")
+    : bad("A8 eval 오인 재시도", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
+}
+
 // ── §F 확장 — 하네스가 무시할 출력도 실패다 ──
 {
   // 훅은 정상 종료했지만 JSON 앞에 로그가 섞여 하네스가 통째로 무시한다 → 관리자는 게이트가 걸린 줄 아는데
