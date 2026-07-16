@@ -79,7 +79,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
   //   · content_hash(assetContentHash — 관리메타 label·sort·enabled 제외)가 달라질 때만 UPDATE(불필요 bump 방지).
   //   · **enabled·target_members 는 SET 에서 제외** — 운영자 토글(마스터킬)·타깃 지정을 재시딩이 되살리지
   //     않도록 보존한다(종전 "없을 때만"이 지키던 축 — 지식엔 없는 축이라 여기서만 명시 보존).
-  //  훅(org_hook)은 여전히 "없을 때만"(위) — run-custom 이 content_hash 로 enforcement 무결성을 게이팅해 별도 판단이 필요.
+  //  훅(org_hook)도 #905 에서 같은 규약으로 합류했다(위) — 이제 지식·스킬·훅 셋이 동일 시맨틱이다.
   for (const s of DEFAULT_SKILLS) {
     try {
       const contentHash = assetContentHash({ kind: s.kind, harness: s.harness, description: s.description, body: s.body, frontmatter: s.frontmatter });
@@ -112,8 +112,8 @@ export async function seedDefaultContent(): Promise<SeedResult> {
   //   · `updated_by='system'` = 우리가 심은 뒤 아무도 안 건드림 → 갱신 안전.
   //   · 운영자·에이전트가 한 번이라도 편집하면 updated_by 가 그 사람 id 로 바뀐다 → **그 행은 영구 보존**.
   //   · 본문이 실제로 달라질 때만 UPDATE(불필요한 version bump·감사 노이즈 방지).
-  //  스킬(위)도 #878 에서 같은 "손 안 댄 것만 갱신"으로 통일했다(enabled·target_members 는 보존). 훅만 "없을
-  //   때만" 유지 — run-custom 이 content_hash 로 enforcement 무결성을 게이팅해 별도 판단이 필요하다.
+  //  스킬(위)은 #878, 훅(맨 위)은 #905 에서 같은 "손 안 댄 것만 갱신"으로 합류했다(둘 다 enabled·target_members 보존).
+  //   ⇒ 지식·스킬·훅 셋이 동일 시맨틱 — "신규는 삽입 · 손 안 댄 시드는 갱신 · 편집된 것은 영구 보존".
   for (const k of DEFAULT_KNOWLEDGE) {
     try {
       const r = await itemsPool.query(
