@@ -137,7 +137,7 @@ function cacheFile(sid) {
 
   process.stdout.write(
     "[도메인 컨텍스트 — Lively 자동 라우팅(#637)]\n" +
-    "작업맥락으로 회수한 관련 도메인 지식입니다. 관련되면 knowledge_get(name)으로 본문을 확인하고, 무관하면 무시하세요.\n" +
+    "작업맥락으로 찾아온 관련 도메인 지식입니다. 관련되면 knowledge_get(name)으로 본문을 확인하고, 무관하면 무시하세요.\n" +
     blocks.join("\n") + "\n");
 
   // 5) 캐시 갱신(재주입 억제) — 무조건 exit 0

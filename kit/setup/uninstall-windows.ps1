@@ -2,7 +2,7 @@
 # 제거(Windows) — uninstall-mac.sh 의 PowerShell 대응. ⚠ Windows 미검증(테스트 후 사용).
 # 묶음의 user-uninstall.mjs(크로스플랫폼)가 ~/.claude 훅·`claude mcp remove lively`·~/.lively 를 surgical 제거.
 #   powershell -ExecutionPolicy Bypass -File uninstall-windows.ps1
-# 완전 차단은 관리자가 서버에서 토큰을 회수해야 한다([토큰] 탭).
+# 완전 차단은 관리자가 서버에서 그 열쇠의 접속을 해제해야 한다([구성원 ▸ 접속 열쇠]).
 $ErrorActionPreference = "Stop"
 $LivelyDir = Join-Path $HOME ".lively"
 $T = if (Test-Path (Join-Path $LivelyDir "token")) { (Get-Content (Join-Path $LivelyDir "token") -Raw).Trim() } else { "" }
@@ -28,5 +28,5 @@ try {
       if ($cleaned -ne $uPath) { [Environment]::SetEnvironmentVariable("Path", $cleaned, "User"); Write-Host "User PATH 에서 lively 번들 Node 경로 제거" -ForegroundColor DarkGray }
     }
   } catch {}
-  Write-Host "OK 제거 완료. 서버 토큰 회수는 관리자가 [토큰] 탭에서." -ForegroundColor Green
+  Write-Host "OK 제거 완료. 서버 쪽 접속 해제는 관리자가 [구성원 > 접속 열쇠] 에서." -ForegroundColor Green
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }

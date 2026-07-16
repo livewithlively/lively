@@ -562,13 +562,13 @@ const knowledgeSearch: Capability = {
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — grep 과 함께 상시(의미검색이 #172 의 헤드라인 능력)
   description:
     "지식을 **의미 기반 하이브리드 검색**한다 — 벡터 임베딩(의미 유사) + 렉시컬 grep 을 RRF 로 융합. " +
-    "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 회수한다(단어가 본문에 그대로 없어도 잡힘). " +
+    "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 찾아낸다(단어가 본문에 그대로 없어도 잡힘). " +
     "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본).",
   scope: "memory",
   input: {
-    q: z.string().min(1).describe("자연어 질문 또는 키워드 — 의미 유사도로 회수(grep 과 달리 문장 가능)"),
+    q: z.string().min(1).describe("자연어 질문 또는 키워드 — 의미 유사도로 검색(grep 과 달리 문장 가능)"),
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     limit: z.number().int().min(1).max(100).optional(),
@@ -656,7 +656,7 @@ const knowledgeLink: Capability = {
   title: "지식↔지식 링크",
   description:
     "지식을 다른 지식과 연결한다(또는 unlink=true 로 해제). relation=related(대칭 관련)|refines(이 지식이 to 를 구체화)|contradicts(모순)|depends_on(의존). " +
-    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·회수 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다.",
+    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·검색 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다.",
   scope: "memory",
   input: {
     name: z.string().min(1).max(64).describe("출발 지식(from)"),

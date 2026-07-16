@@ -183,7 +183,9 @@ async function* paginate(cfg: NotionConfig, make: (cursor?: string) => { path: s
   } while (cursor);
 }
 
-// ── 자산 다운로드 ─────────────────────────────────────────────────────────────
+// ── 자산(asset) 다운로드 ──────────────────────────────────────────────────────
+//  ⚠ 화면·로그에 내보내는 말은 **'첨부 파일'** 이다(#859) — '자산'은 관리탭에서 스킬·서브에이전트·커맨드를
+//  가리키는 다른 뜻으로 이미 쓰였다. 여기 식별자(assetDir·assetJobs·stats.assets)는 그대로 둔다.
 //  노션 파일 URL 은 발급 후 1시간 만료 — 대형 워크스페이스는 수집만 2시간+라 다운로드 시점(맨 끝)엔 초반
 //  URL 이 전부 죽는다(어니스트 실배포: 자산 403 48건 → 커서 동결 → 125분 full 무한 반복). 소유 블록/페이지를
 //  재조회하면 같은 S3 경로에 새 서명이 발급되므로(경로는 파일 버전당 안정), 만료·403 시 재조회로 치유한다.
@@ -1339,13 +1341,13 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const ticker = setInterval(() => {
     if (reqCount === lastTickReq) return; // 무진전 — 침묵(정체 감지 존중)
     lastTickReq = reqCount;
-    console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 자산 ${t.stats.assets}/${t.assetJobs.size}`);
+    console.error(`[notion] 진행중 — 요청 ${reqCount} · 페이지 ${t.pages.size} · DB ${t.dbs.size} · 첨부 ${t.stats.assets}/${t.assetJobs.size}`);
   }, 120_000);
   try {
 
   if (delta) await discoverDelta(t, sinceRaw!);
   else await discoverSeeds(t);
-  if (fastFull) console.error(`[notion] 가속 full — 원장 ${ledger!.byId.size}건 대조(미변경은 1req 관측·자산 실재 검사)`);
+  if (fastFull) console.error(`[notion] 가속 full — 원장 ${ledger!.byId.size}건 대조(미변경은 1req 관측·첨부 실재 검사)`);
 
   // 이전 run 의 귀속 실패 재시도(#586) — 커서는 전진했지만 이 항목들은 미완(자산 등). 강제 재수집으로 자가치유.
   const retrySeeds = [...new Set((opts?.retryIds ?? []).filter((rid) => typeof rid === "string" && rid.length === 36))];
@@ -1446,7 +1448,7 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       t.stats.assetFailures += t.assetJobs.size;
       t.stats.failures += t.assetJobs.size;
       for (const j of t.assetJobs.values()) { if (j.pageId) t.stats.retryIds.push(j.pageId); else t.stats.unattributed++; }
-      console.error(`[notion] 자산 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
+      console.error(`[notion] 첨부 파일 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
         + ` — 앱 디렉토리에서 'sudo chown -R $(whoami) data' 로 소유권을 서비스 유저로 바꾸면 다음 run 이 재수집합니다(커서 동결로 유실 없음)`);
       t.assetJobs.clear();
     }
@@ -1459,12 +1461,12 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
       t.stats.assetFailures++;
       t.stats.failures++;
       if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
-      console.error(`[notion] 자산 다운로드 실패 ${job.file}:`, (err as Error)?.message ?? err);
+      console.error(`[notion] 첨부 파일 다운로드 실패 ${job.file}:`, (err as Error)?.message ?? err);
     }
   }
 
   t.stats.requests = reqCount;
-  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 자산 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
+  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 첨부 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
 
   } finally {
     clearInterval(ticker); // 소비자 조기 종료(return/throw) 포함 — 티커 누수 방지

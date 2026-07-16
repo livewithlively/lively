@@ -8,6 +8,8 @@ import { listSessions } from "../terminal-sessions.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 // 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
 import { projectAbsPath } from "../project-fs.js";
+// #905 C2a — 크로스멤버 신원(origin URL 정규화). 정규화는 이 서버 한 곳이 SoT(클라이언트 중복구현 금지 — 갈리면 중복 프로젝트).
+import { originKey } from "../project-origin.js";
 import { planReclaim, applyReclaim, baseRepoOf, reposIn } from "../workspace-reclaim.js";
 
 // 프로젝트 digest(AGENTS.md) 를 변경 직후 재생성 — 매니페스트/세션시작 pull 전에도 파일이 최신으로 존재하게.
@@ -20,6 +22,7 @@ const regenAgentsForList = async (listId: number | null) => {
 };
 import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, getBoardFields,
+  upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
   linkProjectCategory, unlinkProjectCategory, setProjectCategories,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
@@ -190,7 +193,7 @@ const projectGrepV6: Capability = {
 const projectSearchV6: Capability = {
   name: "project_search",
   title: "프로젝트 검색(v6, 하이브리드)",
-  description: "프로젝트·태스크·서브태스크를 의미 기반 하이브리드 검색(벡터 임베딩 + 렉시컬 grep 을 RRF 로 융합). 자연어 질문·다른 표현도 회수(단어가 본문에 그대로 없어도). 임베딩 off 면 grep 폴백. 정확 토큰/정규식은 project_grep. level·list_id·status 로 좁힘. mode=snippets(기본)|names.",
+  description: "프로젝트·태스크·서브태스크를 의미 기반 하이브리드 검색(벡터 임베딩 + 렉시컬 grep 을 RRF 로 융합). 자연어 질문·다른 표현도 찾아냄(단어가 본문에 그대로 없어도). 임베딩 off 면 grep 폴백. 정확 토큰/정규식은 project_grep. level·list_id·status 로 좁힘. mode=snippets(기본)|names.",
   scope: "memory",
   input: {
     q: z.string().min(1),
@@ -848,9 +851,9 @@ const projectLinkProjectV6: Capability = {
 //  시크릿·로컬데이터는 보호, 미푸시·더티·활성세션이면 거부. 자세한 근거는 src/workspace-reclaim.ts 머리주석.
 const workspaceReclaim: Capability = {
   name: "workspace_reclaim",
-  title: "워크스페이스 회수 (프로젝트 마무리)",
+  title: "워크스페이스 정리 (프로젝트 마무리)",
   description:
-    "프로젝트 폴더에서 **재생성 가능한 것만** 회수한다 — 빌드 산출물·의존성(node_modules·build·target·.gradle·Pods…). " +
+    "프로젝트 폴더에서 **재생성 가능한 것만** 지운다 — 빌드 산출물·의존성(node_modules·build·target·.gradle·Pods…). " +
     "**기본은 dry-run**(아무것도 안 지우고 무엇을 지울지만 보고). apply=true 로 실제 실행. " +
     "remove_worktree=true 면 워크트리도 제거하되 **푸시 완료 + 미커밋 변경 없음**일 때만(아니면 이유를 말하고 거부). " +
     "활성 세션이 붙어 있으면 아무것도 하지 않는다. 시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 지우지 않는다. " +
@@ -872,7 +875,7 @@ const workspaceReclaim: Capability = {
   handler: async (input: { project_id: number; apply?: boolean; remove_worktree?: boolean }, user) => {
     const project = await getProject(input.project_id);
     if (!project) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
-    if (!project.folder) throw new HttpError(400, "이 프로젝트에는 워크스페이스 폴더가 없습니다(회수할 것이 없습니다)");
+    if (!project.folder) throw new HttpError(400, "이 프로젝트에는 워크스페이스 폴더가 없습니다(정리할 것이 없습니다)");
     const dir = projectAbsPath(project.folder); // project/<id> 또는 legacy-project/<id> 범위 밖이면 여기서 차단
 
     // 지금 살아있는 세션들의 작업 디렉터리 — 이 폴더 안에서 작업 중이면 회수를 통째로 막는다(빌드 중일 수 있다).
@@ -880,7 +883,7 @@ const workspaceReclaim: Capability = {
     try {
       activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
     } catch { /* 세션 조회 실패 → 보수적으로 '활성 없음'이 아니라, 아래 planReclaim 이 못 막으므로 차단한다 */
-      throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+      throw new HttpError(503, "세션 목록을 확인할 수 없어 정리를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
     }
 
     // 프로젝트 폴더 안의 git 레포(워크트리)들을 각각 계획한다 — 한 프로젝트에 여러 레포가 붙을 수 있다.
@@ -913,16 +916,121 @@ const workspaceReclaim: Capability = {
       project: { id: project.id, name: project.name, folder: project.folder },
       results,
       note: !repos.length
-        ? "이 프로젝트 폴더에는 git 레포(워크트리)가 없어 회수할 파생물이 없습니다 — 정상입니다(레포를 provision 하지 않은 프로젝트)."
+        ? "이 프로젝트 폴더에는 git 레포(워크트리)가 없어 정리할 파생물이 없습니다 — 정상입니다(레포를 provision 하지 않은 프로젝트)."
         : input.apply
-          ? "회수 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
-          : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 회수하려면 apply=true 로 다시 호출하세요.",
+          ? "정리 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
+          : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 정리하려면 apply=true 로 다시 호출하세요.",
     };
+  },
+};
+
+// ── #905 C2a — `project_init`(로컬 MCP 툴)이 필요로 하는 서버 이음매 2종. ──
+//  왜 서버에 있나: init 은 멤버 머신에서 돌지만(로컬 git origin 을 읽고 로컬 마커를 써야 하므로),
+//   "이 origin 을 쓰는 프로젝트가 이미 있나"·"내 폴더 위치를 중앙에 기록" 은 중앙만 안다.
+
+// origin URL → 기존 프로젝트 후보. **판정하지 않는다 — 후보만 준다**(설계 §4-P2 ⑥: 애매하면 사람에게 묻기).
+//  정규화(originKey)는 **여기 한 곳에만** 둔다 — 클라이언트가 자기 키를 만들어 보내면 두 구현이 갈리는 순간
+//  같은 레포가 다른 키가 되어 중복 프로젝트가 생긴다. 클라이언트는 URL 만 보낸다(자격은 보내기 전에 벗긴다).
+const projectFindByOriginV6: Capability = {
+  name: "project_find_by_origin_v6",
+  title: "git origin 으로 기존 프로젝트 찾기(v6)",
+  description: "git origin URL 로 그 레포를 쓰는 **기존 프로젝트 후보**를 찾는다(크로스멤버 신원 — #905 P1-③). "
+    + "프로토콜·자격·포트·.git 표기 차이를 흡수해 같은 레포면 같은 키로 본다. `project_init` 이 '새로 만들까 기존에 붙일까'를 "
+    + "가르는 근거. **후보만 반환하고 판정은 하지 않는다** — 여럿이거나 애매하면 사람에게 물어라. "
+    + "done 프로젝트도 후보에 포함하되 status 를 실어 주니 호출자가 거른다.",
+  scope: "memory",
+  input: {
+    git_url: z.string().min(1).max(500)
+      .describe("레포의 origin URL(`git remote get-url origin`). 자격(토큰)이 박힌 URL 은 보내기 전에 벗길 것 — 키에는 어차피 안 들어간다."),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/find-by-origin"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const gitUrl = String(b.git_url ?? "").trim();
+        if (!gitUrl) throw new HttpError(400, "git_url 이 필요합니다");
+        return { git_url: gitUrl };
+      } }],
+  },
+  handler: async (input: any) => {
+    const key = originKey(input.git_url);
+    if (!key) {
+      // fail-closed — 해석 못 한 URL 로 남의 프로젝트에 붙이지 않는다. 후보 0 이 '새로 만들라'는 뜻은 아니다.
+      return { origin_key: null, candidates: [], total: 0, active_total: 0, discriminating: false,
+        note: "git origin URL 을 해석할 수 없습니다 — 이 신원으로는 기존 프로젝트를 찾을 수 없습니다(후보 없음 ≠ 새로 만들어도 됨)." };
+    }
+    const all = await findProjectsByOriginKey(key);
+    const active = all.filter((c) => c.status !== "done");
+    // ⚠ **origin 은 '멤버 간 합의 가능한 값'이지 '프로젝트를 특정하는 값'이 아니다** — 레포↔프로젝트는 N:M 이다.
+    //  실측(2026-07-16, 라이블리 박스): `context-ontology` 한 레포에 프로젝트 156개(활성 37개)가 달려 있다(모노레포).
+    //  그래서 활성 후보가 1개일 때만 '결정적'이라 말할 수 있고, 많으면 origin 은 **판별력이 없다**고 정직하게 알린다.
+    //  (그 경우 후보 목록을 통째로 뱉으면 사람도 LLM 도 못 읽으므로 최근 갱신순으로 자른다 — 자른 사실을 명시한다.)
+    const CAP = 20;
+    const discriminating = active.length === 1;
+    return {
+      origin_key: key,
+      total: all.length,
+      active_total: active.length,
+      discriminating,
+      truncated: all.length > CAP,
+      candidates: all.slice(0, CAP),
+      note: !all.length
+        ? "이 origin 을 쓰는 기존 프로젝트가 없습니다. 다만 **마커는 설계상 동기화되지 않으므로** '못 찾음'이 '없음'을 뜻하진 않습니다 — 애매하면 물어보세요."
+        : discriminating
+          ? "이 레포를 쓰는 진행 중 프로젝트가 정확히 1개입니다 — origin 이 판별력을 가진 경우입니다."
+          : `이 레포를 ${all.length}개 프로젝트(진행 중 ${active.length}개)가 공유합니다 — **origin 으로는 어느 프로젝트인지 특정할 수 없습니다**(모노레포). `
+            + "후보는 최근 갱신순 일부만 실었습니다. 반드시 사람에게 물어 고르게 하세요.",
+    };
+  },
+};
+
+// 폴더 바인딩 등록 — "이 프로젝트가 내 환경의 이 절대경로에 산다"(#905 P1-①).
+//  member_id 는 **입력이 아니라 인증 주체**로 정한다 — 남의 이름으로 바인딩을 심지 못하게.
+const projectBindFolderV6: Capability = {
+  name: "project_bind_folder_v6",
+  title: "프로젝트 폴더 바인딩 등록(v6)",
+  description: "이 프로젝트가 **내 환경의 어느 절대경로에 사는지** 중앙에 기록한다(1 프로젝트 × N 멤버 × N 환경 인벤토리). "
+    + "`project_init` 이 로컬 마커를 심은 뒤 호출. 같은 (프로젝트·나·환경·경로)면 멱등 갱신. "
+    + "sync 는 그 폴더의 공유폴더 동기화 모드 — **사용자 자기 폴더는 반드시 'none'**(서버 파일이 사용자 파일을 덮어쓰지 않게).",
+  scope: "memory",
+  input: {
+    id: z.number().int().positive(),
+    node_id: z.string().min(1).max(120).describe("환경 식별자 — 멤버 노트북은 호스트 슬러그, 게이트웨이 박스는 'central', 워커노드는 그 노드 id."),
+    abs_path: z.string().min(1).max(1000).describe("그 환경에서의 절대경로."),
+    sync: z.enum(["none", "pull", "both"]).optional().describe("공유폴더 동기화 모드(기본 none — 사용자 폴더 안전값)."),
+    git_url: z.string().max(500).optional().describe("그 폴더의 git origin URL(선택) — 크로스멤버 신원 키로 정규화해 저장한다. 자격은 벗기고 보낼 것."),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/folder-binding"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return {
+          id: parseId(req.params?.id),
+          node_id: String(b.node_id ?? "").trim(),
+          abs_path: String(b.abs_path ?? "").trim(),
+          sync: b.sync != null ? String(b.sync) : undefined,
+          git_url: b.git_url != null ? String(b.git_url) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    if (!(await getProjectRow(input.id))) throw new HttpError(404, `프로젝트 #${input.id} 가 없습니다`);
+    const me = ctx?.actor ?? user?.userId ?? null;
+    if (!me) throw new HttpError(401, "바인딩은 인증된 멤버만 등록할 수 있습니다");
+    await upsertProjectFolderBinding({
+      projectId: input.id, memberId: me, nodeId: input.node_id, absPath: input.abs_path,
+      sync: input.sync ?? "none",
+      originKey: input.git_url ? originKey(input.git_url) : null,
+    });
+    return { bound: { project_id: input.id, member_id: me, node_id: input.node_id, abs_path: input.abs_path, sync: input.sync ?? "none" } };
   },
 };
 
 export const projectV6Capabilities: Capability[] = [
   workspaceReclaim,
+  projectFindByOriginV6, projectBindFolderV6,
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   projectListV6, projectGrepV6, projectSearchV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,

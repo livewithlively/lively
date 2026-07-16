@@ -180,7 +180,7 @@ async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
     const headers = { authorization: `Bearer ${tok}` };
     if (body !== undefined) headers["content-type"] = "application/json";
     const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-    if (res.status === 401 || res.status === 403) throw new Error("토큰이 유효하지 않습니다(만료·회수됨?) — `lively login` 으로 다시 등록하세요.");
+    if (res.status === 401 || res.status === 403) throw new Error("접속 열쇠가 유효하지 않습니다(만료·해제됨?) — `lively login` 으로 다시 등록하세요.");
     if (!res.ok) { let m = ""; try { m = (await res.json())?.error || ""; } catch { /* */ } throw new Error(`게이트웨이 오류 ${res.status}${m ? " — " + m : ""} (${path})`); }
     return await res.json();
   } finally { clearTimeout(timer); }
@@ -912,7 +912,7 @@ function cmdLogout() {
   // 파일만 지울 수 있다 — 이 셸의 env 는 자식이 못 고친다. 남아 있으면 token() 이 env 로 폴백해
   //  `lively status` 가 계속 '인증됨' 을 보인다 → 조용히 두지 말고 사실대로 말한다(#916 계열).
   if (ENV_TOKEN_AT_START) warn("이 셸의 LIVELY_TOKEN 은 아직 남아 있습니다 — 새 터미널을 열거나 `unset LIVELY_TOKEN` 하세요.");
-  info("설치 자산은 그대로입니다 — 완전 제거는 `lively uninstall`.");
+  info("설치 파일은 그대로입니다 — 완전 제거는 `lively uninstall`.");
   info("claude 에 등록된 MCP 항목은 남아 있습니다 — 지우려면 `claude mcp remove lively`.");
 }
 

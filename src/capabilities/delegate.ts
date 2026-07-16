@@ -23,7 +23,7 @@ const run: Capability = {
   description:
     "무거운 1회성 작업(풀빌드·대량 테스트·장기 스크립트 등)을 워커 노드나 중앙에 위탁한다. " +
     "⚠ 위탁은 이 MCP 툴이 아니라 `lively delegate` CLI 를 Bash(run_in_background) 로 실행하라(이 툴은 기본 비활성). " +
-    "MCP 동기 호출은 하네스에서 인라인 블로킹이라, 긴 wait 는 게이트웨이 long-poll 이 transport keepalive 를 넘겨 응답을 잃는다 — 서버측 작업은 완주하지만 결과 회수에 실패한다. " +
+    "MCP 동기 호출은 하네스에서 인라인 블로킹이라, 긴 wait 는 게이트웨이 long-poll 이 transport keepalive 를 넘겨 응답을 잃는다 — 서버측 작업은 완주하지만 결과를 받아오지 못한다. " +
     "CLI 는 wait=false 로 접수 후 진행을 미러링해 그 함정이 없다(런북 delegate-background-cli-not-mcp-wait). " +
     "가용 노드 없으면 {no_capacity:true, reason} 즉시 반환(무한 대기 안 함), queue:true=적합 노드 날 때까지 대기 등록(장기 잡). " +
     "repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 자동 준비해 워커 cwd 로 — 프롬프트 클론 지시 불필요), ref=기준 브랜치(예 main), " +
