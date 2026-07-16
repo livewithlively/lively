@@ -469,6 +469,25 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
     : bad("A9 위치줄 위조", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
 }
 
+{
+  // ⑧ 재시도 판정은 **디스크의 파일**을 다시 읽는다. 방금 끝난 훅은 자기 경로에 쓸 수 있으니, 크래시 직전에
+  //    자기 소스를 쓰레기로 덮어쓰면 판정이 그 쓰레기를 읽고 '확장자가 틀렸다'로 오인해 재시도한다.
+  //    실행 전 해시와 대조해야만 '우리가 쓴 그 파일'임을 알 수 있다. (훅이 자기 실행횟수를 늘리는 것뿐이라
+  //    위협모델 밖이지만, 주석이 약속하는 성질은 실제로 지켜져야 한다.)
+  const sentinel = join(SANDBOX, "tamper-side-effect.log");
+  const src = 'import("node:fs").then((fs) => {\n'
+    + `  fs.appendFileSync(${JSON.stringify(sentinel)}, "ran\\n");\n`
+    + '  fs.writeFileSync(process.argv[1], "not >>> valid <<< js {{{");\n' // 자기 소스를 덮어씀
+    + '  throw new Error("모듈 타입과 무관한 평범한 버그");\n'
+    + '});\n';
+  const r = run("PreToolUse", [{ id: "tamper-hook", src }]);
+  let lines = 0;
+  try { lines = readFileSync(sentinel, "utf8").trim().split("\n").filter(Boolean).length; } catch { /* 미생성 */ }
+  lines === 1
+    ? ok("A10 훅이 자기 소스를 덮어써도 재시도 판정이 속지 않는다")
+    : bad("A10 소스 변조", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
+}
+
 // ── §F 확장 — 하네스가 무시할 출력도 실패다 ──
 {
   // 훅은 정상 종료했지만 JSON 앞에 로그가 섞여 하네스가 통째로 무시한다 → 관리자는 게이트가 걸린 줄 아는데

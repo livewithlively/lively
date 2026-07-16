@@ -196,12 +196,23 @@ function moduleExt(src) {
 //   패턴을 더 깁는 대신 질문을 바꾼다 — 텍스트를 해석하지 말고 **파서에게 직접** 물어라. 훅을 실행하지
 //   않으므로 훅이 런타임에 무엇을 하든 속일 수 없다(설계상 위조 불가).
 //
+//  ⚠ 단, `--check` 는 **디스크의 파일**을 다시 읽는다 — 방금 끝난 훅은 자기 경로(process.argv[1])에 쓸 수 있으니
+//   크래시 직전에 자기 소스를 쓰레기로 덮어쓰면 이 검사가 그 쓰레기를 읽는다. 그래서 읽기 전에 **실행 전 해시와
+//   같은 파일인지** 먼저 확인한다. 이 확인까지 있어야 '훅이 뭘 하든 못 속인다'가 참이다.
+//   (이 우회는 훅이 자기 실행횟수를 늘릴 뿐이고 훅은 원래 임의 코드 실행 권한이라 새 권한도 아니지만,
+//    주석이 약속하는 성질은 실제로 지켜져야 한다 — 이 버그 사슬 전체가 '살짝 과한 전제'에서 나왔다.)
+//
+//  판단이 조금이라도 불확실하면 전부 '파싱된다'(=재시도 안 함)로 답한다 — 부작용 중복보다 훅 1회 실패가 낫다.
 //  실패한 훅에서만(이미 느린 경로) 부르므로 정상 경로 비용은 0이다.
-function parsesUnder(file) {
+function parsesUnder(file, expectHash) {
+  let actual;
+  try { actual = crypto.createHash("sha256").update(readFileSync(file)).digest("hex"); }
+  catch { return true; }                  // 파일을 못 읽는다(훅이 지웠나) → 판정 불가 → 재시도 안 함
+  if (actual !== expectHash) return true; // 우리가 쓴 그 파일이 아니다(훅이 덮어씀) → 판정 불가 → 재시도 안 함
   try {
     execFileSync("node", ["--check", file], { stdio: "ignore", timeout: CHECK_MS, killSignal: "SIGKILL" });
     return true;
-  } catch { return false; } // 파싱 실패 = 확장자가 틀렸거나 훅 자체가 깨졌다
+  } catch { return false; } // 우리가 쓴 그 소스가 이 확장자로 파싱 안 됨 = 확장자를 잘못 골랐다(또는 훅 자체가 깨졌다)
 }
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
@@ -211,20 +222,20 @@ function runHook(hook, stdin) {
   const h = crypto.createHash("sha256").update(hook.source_code || "").digest("hex");
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
   const first = moduleExt(hook.source_code);
-  const r = spawnHook(hook, stdin, first);
+  const r = spawnHook(hook, stdin, first, h);
   // 실패했고 **그 확장자로는 파일이 파싱조차 안 되면** 확장자를 잘못 고른 것 → 반대로 딱 한 번 다시.
   //  파싱이 안 됐다 = 본문이 한 줄도 안 돌았다 → 부작용 중복이 원리적으로 불가능하다.
   //  분류(moduleExt)는 휴리스틱이라 변두리에서 틀리는데, 그때 훅을 죽이는 대신 자가교정한다
   //  (오분류의 비용이 '훅 사망'이면 안 된다 — 그게 #892 였다).
   //  훅 자체가 문법오류면 반대쪽도 파싱 실패라 재시도 1회로 끝나고 원래 실패를 보고한다.
   if (r.fail && r.parses === false) {
-    const retry = spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs");
+    const retry = spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs", h);
     if (!retry.fail) return retry;
   }
   return r;
 }
 
-function spawnHook(hook, stdin, ext) {
+function spawnHook(hook, stdin, ext, expectHash) {
   const tmp = join(tmpdir(), `lively-hook-${crypto.randomBytes(8).toString("hex")}.${ext}`);
   try {
     writeFileSync(tmp, hook.source_code || "", { mode: 0o600 });
@@ -249,7 +260,7 @@ function spawnHook(hook, stdin, ext) {
         stderr: e && e.stderr ? String(e.stderr).slice(-STDERR_KEEP) : "",
       };
       // 실패했을 때만 파서에게 묻는다(느린 경로) — tmp 가 아직 살아 있는 이 안에서 불러야 한다(finally 가 지운다).
-      return { out: e && e.stdout ? String(e.stdout) : "", fail, parses: parsesUnder(tmp) };
+      return { out: e && e.stdout ? String(e.stdout) : "", fail, parses: parsesUnder(tmp, expectHash) };
     }
   } catch (e) { return { out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || "").slice(-STDERR_KEEP) }, parses: true }; }
   finally { try { rmSync(tmp, { force: true }); } catch { /* */ } }
