@@ -9654,8 +9654,8 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }),
     el('div', { class: 'field', 'data-tour': 'sess-name' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
     el('div', { class: 'field', 'data-tour': 'sess-repos', style: 'margin-top:12px' },
-      el('label', { class: 'field-label', text: '코드 저장소에서 작업 (선택)' }),
-      el('div', { class: 'caption', text: '코드를 다루는 작업이면 작업할 저장소를 고르세요 — 그 코드를 자동으로 가져와, 에이전트가 바로 작업할 수 있게 준비해 둡니다. 코드 작업이 아니라면 그냥 비워두고 넘어가도 돼요.' }),
+      el('label', { class: 'field-label', text: '코드 저장소 미리 받기 (선택 — 대개 필요 없어요)' }),
+      el('div', { class: 'caption', text: '코드 작업이어도 고를 필요 없어요 — 세션이 코드가 필요해지면 스스로 가져옵니다(프로젝트에 연결된 저장소가 없어도 후보를 찾아 물어봐요). 큰 저장소라 받는 데 오래 걸려서 세션 시작 전에 미리 받아두고 싶을 때만 쓰세요.' }),
       reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
     el('div', { class: 'term-preset proj-sess-preset', style: 'margin-top:12px' }, presetToggle, presetBody),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
