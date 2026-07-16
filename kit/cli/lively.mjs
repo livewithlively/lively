@@ -1036,6 +1036,9 @@ async function gatherProjectStatus(cwd) {
       p.shared = { server_newest: m.newest || 0, server_count: typeof m.count === "number" ? m.count : files.length, pending, truncated: !!m.truncated };
     } catch (e) { p.error = p.error || e.message; }
   }
+  // up-sync 결과(#905 C3) — 자동 up 은 확인할 사람이 없어(수동 업로드의 #877 confirm 과 다름) **기록이 유일한 표면**이다.
+  //  충돌이 조용히 쌓이면 "왜 내 변경이 안 올라갔지"를 아무도 모른다. host-local(dotfile — 동기화 안 됨).
+  try { p.up = JSON.parse(readFileSync(join(p.dir, ".lively", "sync-up.json"), "utf8")); } catch { p.up = null; }
   return p;
 }
 
@@ -1064,6 +1067,16 @@ function renderProjectStatus(p) {
     say(`    로컬 미반영  ${p.shared.pending
       ? yellow(`${p.shared.pending} 파일`) + (willPull ? dim("  → 세션을 새로 시작하면 자동으로 받습니다") : "")
       : green("없음(최신)")}`);
+  }
+  // ↑up(sync=both) 결과 — 특히 **충돌은 반드시 보인다**(자동 up 은 물어볼 사람이 없어 여기가 유일한 표면).
+  if (p.up) {
+    const c = (p.up.conflicts || []).length;
+    say(`    올린 변경    ${p.up.pushed || 0}개${p.up.failed ? yellow(` · 실패 ${p.up.failed}(다음 턴 재시도)`) : ""}`
+      + (c ? "  " + red(`⚠ 충돌 ${c}개 — 안 올림`) : ""));
+    for (const x of (p.up.conflicts || []).slice(0, 5)) {
+      say(`      ${red("✗")} ${x.path} ${dim("— " + x.why)}`);
+    }
+    if (c) say(`                ${dim("서버본을 먼저 받아 합치세요(내 로컬본으로 덮으면 남의 작업이 사라집니다).")}`);
   }
 }
 
