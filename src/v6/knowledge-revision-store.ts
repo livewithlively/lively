@@ -168,6 +168,17 @@ export async function pendingRevisionFor(name: string): Promise<KnowledgeRevisio
   } catch { return undefined; }
 }
 
+// #921 append 가드 — 이 지식에 '검토 대기 중인 staged 제안'이 있는가. 위 pendingRevisionFor 와 일부러 다른 함수다:
+//  ⚠ fail-closed(에러를 삼키지 않는다). 배너 누락은 무해하지만, 여기서 조회가 조용히 비면 append 는 라이브 본문
+//   위에 머지돼 저장되고 — 검토 대기 중인 수정이 승인되는 순간 그 append 가 통째로 덮인다(applyRevisionBody 는
+//   new_body_md 로 전문 교체). 본문을 읽지 않는 호출자는 그걸 영영 모른다 → 조회 실패는 그냥 던진다.
+//  mode='staged' 만 본다 — applied 는 라이브에 이미 반영돼 있어 append 가 그 위에 자연히 쌓인다.
+export async function pendingStagedRevisionId(name: string): Promise<number | null> {
+  const r = await one(itemsPool,
+    `SELECT id FROM knowledge_revision WHERE name=$1 AND status='pending' AND mode='staged'`, [name]);
+  return (r as { id?: number } | undefined)?.id ?? null;
+}
+
 // 검토 큐 카운트(#802) — 대시보드 알림·관리탭 nav 배지가 '몇 건인지'만 알기 위한 집계 1회.
 //  왜 필요한가: 검토 큐 화면은 pending 지식 500건 + 리비전 500건을 본문째 긁는다(diff·중복경고에 본문이 필요).
 //   숫자만 필요한 표면이 그걸 매번 긁으면 안 된다.

@@ -7,9 +7,6 @@
 //   ② 유효 scope = intersection(토큰, 멤버 LIVE) — 강등·퇴사 즉시 무효(store.ts computeEffectiveScopes),
 //   ③ 모든 쓰기는 org_content_audit 에 누가(actor_kind: 사람/AI)·경로(channel: mcp/web)·before/after 감사(조회: org_audit_list).
 // 모든 응답에 '구성원에게 미치는 효과'(meaning) 가이드를 함께 실어 UI 가 의미를 인지시킨다.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Capability, CapabilityCtx } from "./types.js";
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
@@ -18,7 +15,7 @@ import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import { refreshProxySnapshot } from "./mcp-proxy.js";
 import { broadcastToolListChanged } from "../mcp-sessions.js";
 import type { LivelyUser } from "../context.js";
-import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
+import { MEANING } from "../org/meaning.js";
 // 저장소·로그(#813) — 관리탭이 박스 디스크·로그를 보는 창구(고객 박스엔 우리가 SSH 로 못 들어간다).
 import { checkDisks } from "../health.js";
 import { listLogs } from "../log-janitor.js";
@@ -35,7 +32,7 @@ import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } fr
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
-import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
+import { previewMemberContext, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { DEFAULT_SKILLS } from "../org/default-content.js"; // #878 시딩 스킬 편집 경고(seed_warning)
@@ -52,7 +49,7 @@ import {
   getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
-  listAssetPrefs, setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
+  listAssetPrefs, setAssetPref, clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, getDbSource, upsertDbSource, removeDbSource,
   listConnectors, upsertConnector, removeConnector,
@@ -312,7 +309,7 @@ async function planOrApply(
   try {
     activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
   } catch {
-    if (opts.apply) throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+    if (opts.apply) throw new HttpError(503, "세션 목록을 확인할 수 없어 정리를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
   }
 
   const pmap = await projectsByFolder();
@@ -362,7 +359,7 @@ const FOLDERS_IN = z.array(z.string().min(1).max(300)).min(1).max(40)
 
 const workspaceBatchCapabilities = (): Capability[] => [
   restOnly("org_workspace_analyze", "워크스페이스 일괄 분석(dry-run)",
-    "주어진 폴더들의 회수 가능량을 한 번에 계산한다 — **아무것도 지우지 않는다.** " +
+    "주어진 폴더들의 정리 가능량을 한 번에 계산한다 — **아무것도 지우지 않는다.** " +
     "**프로젝트 id 가 아니라 폴더**로 지정하므로, DB 에서 삭제된 고아 폴더와 이름 기반 옛 폴더도 다룬다(프로젝트별 REST 는 404 로 죽는다). " +
     "⚠ 한 번에 최대 40개 — 더 많으면 나눠서 호출한다(du 가 오래 걸리면 프록시가 끊는다). admin 전용.",
     [{ method: "POST", paths: ["/api/ui/org/workspace/analyze"], parse: (req) => ({ ...(req.body ?? {}) }) }],
@@ -370,11 +367,11 @@ const workspaceBatchCapabilities = (): Capability[] => [
       ({ dry_run: true, ...await planOrApply(input.folders, user, { apply: false, removeWorktree: false }) }),
     { folders: FOLDERS_IN }),
 
-  restOnly("org_workspace_reclaim", "워크스페이스 일괄 회수",
+  restOnly("org_workspace_reclaim", "워크스페이스 일괄 정리(파생물 삭제)",
     "주어진 폴더들에서 **재생성 가능한 파생물만** 실제로 지운다(node_modules·build·target·.gradle…). " +
     "소스·커밋·.env·data/ 는 절대 지우지 않고, 활성 세션이 붙어 있으면 그 폴더는 건너뛴다. " +
     "remove_worktree=true 여도 **푸시 완료 + 더티 없음**인 워크트리만 제거한다(아니면 이유를 남기고 유지). " +
-    "고아 폴더·이름 기반 옛 폴더도 회수한다. ⚠ 한 번에 최대 40개. admin 전용.",
+    "고아 폴더·이름 기반 옛 폴더도 정리한다. ⚠ 한 번에 최대 40개. admin 전용.",
     [{ method: "POST", paths: ["/api/ui/org/workspace/reclaim"], parse: (req) => ({ ...(req.body ?? {}) }) }],
     async (input: { folders: string[]; remove_worktree?: boolean }, user: LivelyUser) =>
       ({ dry_run: false, ...await planOrApply(input.folders, user, { apply: true, removeWorktree: !!input.remove_worktree }) }),
@@ -432,7 +429,7 @@ export const deliveryCapabilities: Capability[] = [
         members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
-        meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
+        meaning: MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }, true),
 
@@ -498,6 +495,11 @@ export const deliveryCapabilities: Capability[] = [
         patch.timezone = tz || DEFAULT_TZ;
       }
       return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
+    }, {
+      name: z.string().optional().describe("조직 이름"),
+      display_name: z.string().optional().describe("조직 표시명"),
+      gateway_url: z.string().optional().describe("게이트웨이 주소(구성원 설치·접속의 기준)"),
+      timezone: z.string().optional().describe("IANA 시간대(예 Asia/Seoul) — 스케줄러 cron 의 벽시계이자 웹터미널 세션 TZ. 빈 문자열이면 기본값 복귀"),
     }),
 
   // ── 항상-주입 섹션(injection='always' 문서) 관리 — N개 생성/편집/삭제/재정렬 (#335). ──
@@ -522,6 +524,9 @@ export const deliveryCapabilities: Capability[] = [
       }
       assertNoHardSecrets(body, "body_md"); // P8: 섹션은 합성 컨텍스트에 항상 실린다 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point)
       return { section: await updateSection(section, body, actorOf(user), "web") };
+    }, {
+      section: z.string().describe("섹션 키(=knowledge.name) — 소문자·숫자·하이픈 2~64자"),
+      body_md: z.string().optional().describe("섹션 본문(markdown) — 매 세션 전문이 주입되므로 32KiB 이하. ${team}/${categories}/${wiki} 치환됨"),
     }),
 
   // ── 섹션 삭제 — 감사 스냅샷 보존(복원가능). 기본 문서(context-ontology-guide 등)도 삭제 가능 — UI 가 경고/확인. ──
@@ -531,6 +536,8 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const section = str(input.section, "section", 64);
       return { deleted: await deleteSection(section, actorOf(user), "web") };
+    }, {
+      section: z.string().describe("삭제할 섹션 키 — 감사 스냅샷으로 보존돼 content_restore 로 복원 가능"),
     }),
 
   // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──
@@ -542,6 +549,8 @@ export const deliveryCapabilities: Capability[] = [
       if (!order.length) throw new HttpError(400, "order 배열이 필요합니다");
       await setSectionsOrder(order, actorOf(user), "web");
       return { ok: true };
+    }, {
+      order: z.array(z.string()).describe("섹션 키 배열 — 이 배열 순서대로 sort(=세션 주입 순서)를 부여한다"),
     }),
 
   // ── 구성원 upsert/remove ──
@@ -652,6 +661,8 @@ export const deliveryCapabilities: Capability[] = [
       const password = generateInitialPassword();
       await setMemberPassword(id, password, { mustChange: true, actor: actorOf(user) });
       return { id, password };
+    }, {
+      id: z.string().describe("구성원 id(불변 내부키) — human 이고 이메일이 있어야 로그인 계정이 성립"),
     }),
   restOnly("org_member_remove", "구성원 제거",
     "org_member 에서 구성원을 제거한다(person 행은 참조무결성 위해 보존).",
@@ -659,6 +670,8 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeMember(slug(input.id, "id"), actorOf(user), "web");
       return { ok: true };
+    }, {
+      id: z.string().describe("제거할 구성원 id(불변 내부키) — person 행은 참조무결성 위해 보존된다"),
     }),
 
   // (레거시 org_memory 쓰기 엔드포인트 org_memory_upsert/org_memory_remove 는 #536 에서 제거 —
@@ -896,7 +909,7 @@ export const deliveryCapabilities: Capability[] = [
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const rawAssets = Array.isArray(input.assets) ? input.assets : [];
-      if (rawAssets.length > 500) throw new HttpError(400, "자산이 너무 많습니다(500 초과)"); // 스캐너 폭주 가드
+      if (rawAssets.length > 500) throw new HttpError(400, "항목이 너무 많습니다(500 초과)"); // 스캐너 폭주 가드
       const KINDS = new Set(["skill", "subagent", "command", "hook"]);
       const seen = new Set<string>();
       const assets = [] as { id: string; kind: string; managed: boolean }[];
@@ -1010,7 +1023,7 @@ export const deliveryCapabilities: Capability[] = [
       }
       // skill·subagent·command = org_harness_asset. 인증 멤버면 조회 OK(어차피 로컬로 배포되는 것 — redact 불요).
       const a = await getOrgHarnessAsset(id);
-      if (!a || !a.enabled) throw new HttpError(404, "자산이 없거나 비활성입니다");
+      if (!a || !a.enabled) throw new HttpError(404, "항목이 없거나 비활성입니다");
       return { id: a.id, kind: a.kind, label: a.label, description: a.description ?? null, body: a.body ?? "", frontmatter: a.frontmatter ?? null };
     }),
 
@@ -1076,13 +1089,22 @@ export const deliveryCapabilities: Capability[] = [
   restOnly("org_git_credential_set", "게이트웨이 git 계정 등록",
     "게이트웨이(조직 머신 계정) git 자격을 등록한다. kind=ssh 면 박스가 키페어 생성·공개키 반환, kind=https 면 토큰 저장.",
     [{ method: "POST", paths: ["/api/ui/org/git-credential"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => applyGitCredential(GATEWAY_OWNER, input, actorOf(user))),
+    async (input: Record<string, unknown>, user: LivelyUser) => applyGitCredential(GATEWAY_OWNER, input, actorOf(user)), {
+      // 필드는 applyGitCredential/parseGitHost 가 읽는다(핸들러가 input 을 통째로 넘김) — 거기 바뀌면 여기도 같이.
+      kind: z.enum(["ssh", "https"]).describe("ssh=박스가 ed25519 키페어 생성·공개키 반환(개인키는 박스 밖으로 안 나감) / https=토큰 저장"),
+      host: z.string().optional().describe("git 호스트(기본 github.com)"),
+      label: z.string().optional().describe("자격 라벨(메모용)"),
+      token: z.string().optional().describe("kind=https 일 때 필수 — 개인 액세스 토큰(봉투 암호화 저장)"),
+      username: z.string().optional().describe("kind=https 일 때 사용자명(선택)"),
+    }),
   restOnly("org_git_credential_delete", "게이트웨이 git 계정 삭제",
     "게이트웨이 git 자격을 삭제한다(host 지정, 기본 github.com).",
     [{ method: "POST", paths: ["/api/ui/org/git-credential/delete"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, _user: LivelyUser) => ({ deleted: await deleteGitCredential(GATEWAY_OWNER, parseGitHost(input)) })),
+    async (input: Record<string, unknown>, _user: LivelyUser) => ({ deleted: await deleteGitCredential(GATEWAY_OWNER, parseGitHost(input)) }), {
+      host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
+    }),
 
-  restOnly("org_token_revoke", "토큰 회수",
+  restOnly("org_token_revoke", "접속 열쇠 해제",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -1090,27 +1112,11 @@ export const deliveryCapabilities: Capability[] = [
       const hash = str(input.tokenHash, "tokenHash", 64).trim();
       await revokeToken(hash, actorOf(user), "web");
       return { ok: true };
+    }, {
+      tokenHash: z.string().describe("회수할 토큰의 **전체 해시** — 목록(org_overview)은 prefix 만 노출하므로 발급 시 받은 전체 해시가 필요하다"),
     }),
 
   // ── 발행(검증 + 산출 확인) ──
-  restOnly("org_publish_run", "발행 실행",
-    "DB→임시디렉토리 materialize→generator 로 발행 아티팩트를 만들어 검증한다(구성원은 curl /install 로 받는다).",
-    [{ method: "POST", paths: ["/api/ui/org/publish"], parse: (req) => req.body ?? {} }],
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), "lively-pubcheck-"));
-      try {
-        const res = await runPublish(dir, "claude");
-        return {
-          ok: res.ok,
-          artifactBytes: res.artifactBytes,
-          warning: res.warning ?? null,
-          meaning: PUBLISH_MEANING,
-        };
-      } finally {
-        await rm(dir, { recursive: true, force: true }).catch(() => { /* 임시디렉토리 정리 실패 무시 */ });
-      }
-    }),
-
   // ── 런타임 설정(훅 on/off · work-roots · 너지) ──
   restRead("org_runtime_config", "런타임 설정 조회",
     "훅 on/off·work-roots·writeback 너지문구 — 세션 훅이 동적 fetch(scope null, 멤버 토큰 OK).",
@@ -1131,7 +1137,9 @@ export const deliveryCapabilities: Capability[] = [
       //  (설치 .mjs 의 REASON 은 게이트웨이 영영 불가 시의 last-resort 스텁일 뿐). 재설치 없이 너지가 갱신된다.
       //  주의: 이 fold 는 '훅 서빙' 응답에만 적용 — 어드민 편집기는 data.runtimeConfig(원본 override, null=미설정)
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, auto_approve: autoApprove, kit_version: kv };
+      // pull_tools(#906) — '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix. write_tools 와 달리 fold 안 함:
+      //  **비면 그대로 꺼짐**이 의도된 상태라 기본값을 씌우면 어드민의 '끄기'를 되살려버린다(DB 기본값이 곧 on).
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, pull_tools: c.pull_tools, auto_approve: autoApprove, kit_version: kv };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -1141,7 +1149,7 @@ export const deliveryCapabilities: Capability[] = [
         hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
         allowed_internal_hosts?: string[];
-        allowed_db_secret_refs?: string[]; write_tools?: string[];
+        allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
       } = {};
@@ -1224,6 +1232,18 @@ export const deliveryCapabilities: Capability[] = [
         }
         if (patch.write_tools.length > 100) throw new HttpError(400, "write_tools 가 너무 많습니다(100개 이하)");
       }
+      // pull_tools(#906) — '외부 맥락 인입'으로 볼 MCP 툴 이름 **prefix**. **비우면 기능 끔**(write_tools 의 '비우면 기본값'과 반대 시맨틱).
+      //  항목은 툴 이름 prefix 라 `_`·`-` 를 포함한다(예 'mcp__lively__ext__', 'mcp__lively-local__'). 서버명에 하이픈이 실제로 있다.
+      //  3자 미만은 거부 — 너무 짧은 prefix 는 거의 모든 툴을 잡아 세션마다 오넛지를 만든다.
+      if (input.pull_tools !== undefined) {
+        if (!Array.isArray(input.pull_tools)) throw new HttpError(400, "pull_tools 는 배열이어야 합니다");
+        patch.pull_tools = input.pull_tools.map((t) => str(t, "pull_tools[]", 100).trim()).filter(Boolean);
+        for (const t of patch.pull_tools) {
+          if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(t)) throw new HttpError(400, `pull_tools 항목 '${t}' 는 툴 이름 prefix 형식이어야 합니다(영문/숫자/_/-)`);
+          if (t.length < 3) throw new HttpError(400, `pull_tools 항목 '${t}' 가 너무 짧습니다(3자 이상) — 짧은 prefix 는 무관한 툴까지 잡습니다`);
+        }
+        if (patch.pull_tools.length > 100) throw new HttpError(400, "pull_tools 가 너무 많습니다(100개 이하)");
+      }
       // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
       if (input.embedding_config !== undefined) {
         const raw = input.embedding_config;
@@ -1278,6 +1298,25 @@ export const deliveryCapabilities: Capability[] = [
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
+      pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
+      // ⚠ 중첩 객체도 하위 키를 다 적어야 한다 — zod 는 미선언 하위 키를 strip 한다(#923).
+      storage_policy: z.object({
+        log_max_mb: z.number().int().min(0).max(10_000).optional().describe("로그 파일 상한(MB)"),
+        log_keep: z.number().int().min(0).max(50).optional().describe("보관할 로그 파일 수"),
+        disk_warn_pct: z.number().int().min(1).max(99).optional().describe("디스크 경고 임계치(%) — 위험 임계치보다 낮아야 한다"),
+        disk_critical_pct: z.number().int().min(1).max(100).optional().describe("디스크 위험 임계치(%)"),
+        shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
+        shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
+      }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
+      embedding_config: z.object({
+        provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
+        base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),
+        model: z.string().nullable().optional().describe("임베딩 모델 이름"),
+        dimensions: z.number().int().min(1).max(16_000).optional().describe("임베딩 차원(기본 1024)"),
+        auth_env_ref: z.string().nullable().optional().describe("인증에 쓸 환경변수 **이름**(시크릿 값 금지)"),
+        batch_size: z.number().int().optional().describe("배치 크기(#602 — 느린/CPU 백엔드 대응). 비우면 기본값"),
+        request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
+      }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
     }),
 
   // ── 저장소·로그(#813) 상태 — 박스 디스크 사용률 + 로그 크기 + 유효 정책·출처. ──
@@ -1303,6 +1342,10 @@ export const deliveryCapabilities: Capability[] = [
       } catch (err) {
         throw new HttpError(400, err instanceof Error ? err.message : "경보 설정을 저장하지 못했습니다");
       }
+    }, {
+      url: z.string().optional().describe("웹훅 주소(슬랙·디스코드 incoming webhook 또는 임의 JSON 웹훅). **비워 보내면 미변경**(기존 유지) — 시크릿이라 조회로는 안 돌려준다"),
+      min_severity: z.enum(["warn", "critical"]).optional().describe("이 등급 이상만 발송(기본 warn)"),
+      label: z.string().optional().describe("채널 라벨(메모용)"),
     }),
 
   restOnly("org_alert_delete", "경보 알림 해제",
@@ -1368,7 +1411,7 @@ export const deliveryCapabilities: Capability[] = [
   //  ⚠ 무인 자동 삭제는 **없다**(설계 결정) — 이 화면은 보여주기만 하고, 지우는 건 사람이 버튼을 눌러야 한다.
   //  회수 실행은 기존 workspace_reclaim(POST /api/ui/v6/projects/:id/reclaim) 을 그대로 쓴다(안전선 재구현 금지).
   restOnly("org_workspace_status", "워크스페이스 사용량",
-    "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 회수 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",
+    "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 정리 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/workspace"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       // 진행 중(project/) + 완료 보관(legacy-project/) 둘 다 — done 처리는 폴더를 **이동**할 뿐 지우지 않는다.
@@ -1465,6 +1508,8 @@ export const deliveryCapabilities: Capability[] = [
       const { started, job } = startBackfillJob(mode as BackfillMode);
       if (!started) throw new HttpError(409, "이미 백필이 실행 중입니다.");
       return { started, job };
+    }, {
+      mode: z.enum(["pending", "model-changed", "all"]).optional().describe("pending(기본)=미임베딩만 · model-changed=모델 바뀐 것 · all=전체 재임베딩"),
     }),
 
   // ── 프로젝트 임베딩(검색 #631) 상태 + 백필 — knowledge 엔드포인트와 동형(타깃=project). embedding_config 는 공유. ──
@@ -1488,6 +1533,8 @@ export const deliveryCapabilities: Capability[] = [
       const { started, job } = startBackfillJob(mode as BackfillMode, PROJECT_TARGET);
       if (!started) throw new HttpError(409, "이미 프로젝트 백필이 실행 중입니다.");
       return { started, job };
+    }, {
+      mode: z.enum(["pending", "model-changed", "all"]).optional().describe("pending(기본)=미임베딩만 · model-changed=모델 바뀐 것 · all=전체 재임베딩. knowledge 백필과 독립(동시 실행 가능)"),
     }),
 
   // ── MCP 서버 레지스트리 ──
@@ -1588,6 +1635,8 @@ export const deliveryCapabilities: Capability[] = [
       // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
       const pushed = broadcastToolListChanged();
       return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
+    }, {
+      name: z.string().describe("스냅샷을 다시 뜰 proxy 모드 MCP 서버 이름"),
     }),
   restOnly("org_mcp_remove", "MCP 서버 제거",
     "조직 MCP 서버를 제거한다.",
@@ -1595,6 +1644,8 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser) => {
       await removeMcpServer(slug(input.name, "name"), actorOf(user), "web");
       return { ok: true };
+    }, {
+      name: z.string().describe("제거할 MCP 서버 이름"),
     }),
 
   // ── 커넥터 설정/토큰 (프로젝트 #541) — config=평문, secrets=암호화(secret-box) ──
@@ -1637,6 +1688,9 @@ export const deliveryCapabilities: Capability[] = [
       // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을 곧바로 흡수.
       if (!run.alreadyRunning) void run.done.then(() => runAutoBackfillSweep()).catch(() => {});
       return { run_id: run.runId, already_running: run.alreadyRunning }; // done 은 await 하지 않는다(비동기)
+    }, {
+      system: z.string().describe("커넥터 시스템(slack·notion·clickup 등)"),
+      full: z.boolean().optional().describe("true=전체 백필(커서 무시), 기본 false=증분"),
     }),
   restOnly("org_connector_runs", "커넥터 실행 이력",
     "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로. limit(≤100, 기본 20)·offset 으로 과거 이력 페이지네이션(#709).",
@@ -1666,6 +1720,9 @@ export const deliveryCapabilities: Capability[] = [
       const run = await getConnectorRun(id, off);
       if (!run) throw new HttpError(404, "run 없음");
       return run;
+    }, {
+      id: z.number().int().positive().describe("connector_run id(org_connector_runs 로 조회)"),
+      offset: z.number().int().min(0).optional().describe("로그 바이트 오프셋(기본 0) — 이 위치 이후 청크만 받아 이어붙인다"),
     }),
   restOnly("org_connector_run_cancel", "커넥터 실행 중지",
     "진행 중인 실행을 중지한다(자식 프로세스 kill + canceled 기록). 커서 미전진이라 데이터 손실 없음 — 다음 run 이 재수집.",
@@ -1674,6 +1731,8 @@ export const deliveryCapabilities: Capability[] = [
       const id = Number(input.id);
       if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "run id 필요");
       return await cancelConnectorRun(id, actorOf(user));
+    }, {
+      id: z.number().int().positive().describe("중지할 connector_run id — 커서 미전진이라 데이터 손실 없음(다음 run 이 재수집)"),
     }),
   restOnly("org_connector_discover", "커넥터 스코프 목록 조회",
     "저장된 토큰으로 소스의 선택지(노션 공유 페이지/DB, 클릭업 리스트)를 조회한다 — 관리탭 픽커용.",
@@ -1683,6 +1742,8 @@ export const deliveryCapabilities: Capability[] = [
       const { resetConnectorConfigCache } = await import("../connectors/config.js");
       resetConnectorConfigCache(); // 방금 저장한 토큰 즉시 반영
       return await discoverConnectorScope(system);
+    }, {
+      system: z.string().describe("커넥터 시스템(notion·clickup 등) — 저장된 토큰으로 선택지를 조회한다"),
     }),
 
   restOnly("org_connector_remove", "커넥터 설정 제거",
@@ -1692,6 +1753,8 @@ export const deliveryCapabilities: Capability[] = [
       await removeConnector(str(input.system, "system", 40).trim(), actorOf(user), "web");
       resetConnectorConfigCache(); // env 폴백 복귀도 즉시 반영
       return { ok: true };
+    }, {
+      system: z.string().describe("제거할 커넥터 시스템 — 설정/토큰 행이 사라지고 env 폴백으로 복귀한다"),
     }),
 
   // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
@@ -1753,11 +1816,15 @@ export const deliveryCapabilities: Capability[] = [
       if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "id 필요");
       await removeIngestPolicy(id, actorOf(user), "web");
       return { ok: true };
+    }, {
+      id: z.number().int().positive().describe("삭제할 인입 정책 규칙 id(org_ingest_policy_list 로 조회)"),
     }),
   restOnly("org_ingest_observability", "인입 게이트 관측",
     "자동 인입 게이트 집계(기간 일수) — mirror auto·pending 생성·승인·반려·현재 대기. 검토 대시(파일럿 1순위 지표: 오너가 어디까지 자동 허용하나).",
     [{ method: "GET", paths: ["/api/ui/org/ingest-observability"], parse: (req) => ({ days: req.query?.days ? Number(req.query.days) : 30 }) }],
-    async (input: Record<string, unknown>) => await ingestObservability(Number(input.days) || 30)),
+    async (input: Record<string, unknown>) => await ingestObservability(Number(input.days) || 30), {
+      days: z.number().int().positive().optional().describe("집계 기간(일, 기본 30)"),
+    }),
   // ── ClickUp 멤버 매핑 조회(#541) — 관리탭 커넥터 패널용. 팀 멤버 나열 + 매핑 상태 계산.
   //  '효과적 매핑'은 미러(connector-mirror resolveMemberId)와 동일 순서로 판정:
   //   ① person_identity(system='clickup', external_id∈{이메일 소문자, 숫자 id}) JOIN org_member(실재 확인)
@@ -1822,6 +1889,8 @@ export const deliveryCapabilities: Capability[] = [
         };
       });
       return { system, supported: true, instance: users[0]?.instance ?? null, users: rows };
+    }, {
+      system: z.string().optional().describe("커넥터 시스템(clickup·slack·notion — 기본 clickup). listUsers 미지원 커넥터(gmail·gdrive)는 supported:false 로 답한다"),
     }),
 
   // ════════ 커스텀 훅 CRUD (runtime 권한) ════════
@@ -1855,6 +1924,19 @@ export const deliveryCapabilities: Capability[] = [
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, wctx(user, ctx));
       return { hook };
+    }, {
+      id: z.string().describe("훅 id(슬러그) — 있으면 수정, 없으면 생성"),
+      event: z.enum(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"])
+        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원"),
+      source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block"),
+      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all)"),
+      matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴(빈 값=전체)"),
+      timeout_sec: z.number().int().min(1).max(120).optional().describe("실행 타임아웃 초(1~120, 기본 10)"),
+      target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
+      label: z.string().optional().describe("훅 라벨(표시명)"),
+      note: z.string().optional().describe("메모"),
+      enabled: z.boolean().optional().describe("활성 여부"),
+      sort: z.number().optional().describe("정렬 순서"),
     }),
   restRuntime("org_hook_remove", "커스텀 훅 제거",
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
@@ -1862,6 +1944,8 @@ export const deliveryCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       await removeOrgHook(assertHookId(input.id), wctx(user, ctx));
       return { ok: true };
+    }, {
+      id: z.string().describe("제거할 훅 id — 다음 세션부터 런너가 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지)"),
     }),
 
   // ── 훅 주입 가시화(J절) — 설치된 세션 훅이 각자 실제로 무엇을 주입하는지 최종 메시지 미리보기. ──
@@ -1971,6 +2055,26 @@ export const deliveryCapabilities: Capability[] = [
         if (input.pii_scrub !== undefined) base.pii_scrub = Boolean(input.pii_scrub);
       }
       return { tool: await upsertTool(base, wctx(user, ctx)) };
+    }, {
+      name: z.string().describe("툴 이름 — 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작). kind=builtin 이면 빌트인 도구 이름이어야 한다"),
+      kind: z.enum(["http_proxy", "builtin"]).optional().describe("http_proxy=사내 API 래핑(기본) · builtin=빌트인 토글(prompt 미지원)"),
+      enabled: z.boolean().optional().describe("노출 여부"),
+      auto_approve: z.boolean().optional().describe("하네스 컨펌 없이 자동 승인(level=L2 는 강제 제외)"),
+      always_load: z.boolean().nullable().optional().describe("상시주입(#187). undefined=유지, null=코드기본 복귀, true=항상 주입, false=deferred. 빌트인 토글 전용(Claude Code _meta)"),
+      title: z.string().optional().describe("표시명"),
+      description: z.string().optional().describe("툴 설명(에이전트가 읽는다)"),
+      note: z.string().optional().describe("메모"),
+      sort: z.number().optional().describe("정렬 순서"),
+      // ↓ kind=http_proxy 전용
+      scope: z.enum(["items", "context", "db", "memory", "code"]).optional().describe("http_proxy 호출 권한(기본 items — admin·null 불가)"),
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional().describe("http_proxy HTTP 메서드(기본 GET)"),
+      url: z.string().optional().describe("http_proxy 대상 절대 URL(https 필수). 평문 시크릿 hard-block"),
+      input_schema: z.record(z.unknown()).optional().describe("http_proxy 툴의 JSON Schema 입력 정의(단순 평면 스키마)"),
+      auth_env: z.string().optional().describe("인증에 쓸 환경변수 **이름**(값 금지). allowed_auth_envs 허용목록에 있어야 하며 auth_kind 와 동시 사용 불가"),
+      level: z.enum(["L0", "L1", "L2"]).nullable().optional().describe("P2 등급(#746) — L2 는 auto_approve 강제 제외(집행은 하네스 컨펌)"),
+      auth_kind: z.string().nullable().optional().describe("P1 per-user vault 인증 종류(소문자·숫자·_ 1~40자) — 지정 시 auth_env 대신 요청자 개인 자격으로 해소"),
+      auth_scope_key: z.string().nullable().optional().describe("auth_kind 의 스코프 키(선택)"),
+      pii_scrub: z.boolean().optional().describe("응답 PII 스크럽 여부"),
     }),
   restRuntime("org_tool_remove", "AI 도구 제거",
     "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",
@@ -1979,16 +2083,18 @@ export const deliveryCapabilities: Capability[] = [
       const name = str(input.name, "name", 64).trim().toLowerCase();
       await removeTool(name, wctx(user, ctx));
       return { ok: true };
+    }, {
+      name: z.string().describe("제거할 툴 이름 — http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀"),
     }),
 
   // ════════ 하네스 자산 CRUD (스킬·서브에이전트·슬래시커맨드 — runtime 권한) ════════
   //  훅과 같은 runtime 자산군이나 멤버 디스크에 파일로 materialize(하네스가 스캔해야 발견). 회수=fail-OPEN(capability —
   //  게이트웨이 블립에 스킬 상실 방지), 위험 enforcement 는 paired_hook(fail-CLOSED 런너)이 담당. 멤버 fetch=org_runner_assets(별도).
-  restRuntime("org_harness_assets", "하네스 자산 목록",
+  restRuntime("org_harness_assets", "스킬·서브에이전트·커맨드 목록",
     "조직 스킬·서브에이전트·슬래시커맨드 전체(본문 포함) — runtime 권한 전용. 멤버 materializer fetch 는 org_runner_assets(별도).",
     [{ method: "GET", paths: ["/api/ui/org/harness-assets"], parse: () => ({}) }],
     async () => ({ assets: await listOrgHarnessAssets(), meaning: MEANING["harness-asset"] })),
-  restRuntime("org_harness_asset_upsert", "하네스 자산 추가·수정",
+  restRuntime("org_harness_asset_upsert", "스킬·서브에이전트·커맨드 추가·수정",
     "구성원 하네스에 배포되는 스킬/서브에이전트/커맨드를 저장한다(runtime). 본문은 멤버 디스크에 materialize 되며 스킬은 도구·셸 실행권한을 가질 수 있다(위험 통제=짝훅).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
@@ -2015,13 +2121,27 @@ export const deliveryCapabilities: Capability[] = [
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, wctx(user, ctx));
       return { asset, ...seedAssetSyncWarning(id) };
+    }, {
+      id: z.string().describe("자산 id(슬러그) — 있으면 수정, 없으면 생성. 스킬이면 이 id 가 스킬 이름이 된다"),
+      kind: z.enum(["skill", "subagent", "command"]).optional().describe("자산 종류(기본 skill)"),
+      body: z.string().optional().describe("자산 본문 — 멤버 디스크에 파일로 materialize 된다. 평문 시크릿 hard-block"),
+      description: z.string().optional().describe("자산 설명(하네스가 소환 판단에 쓴다)"),
+      frontmatter: z.record(z.unknown()).optional().describe("자산 frontmatter(키:값 객체, 32키 이하)"),
+      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all)"),
+      target_members: z.array(z.string()).nullable().optional().describe("이 자산을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
+      paired_hook_id: z.string().nullable().optional().describe("짝훅 id — 자산의 위험 enforcement 담당(fail-CLOSED 런너)"),
+      label: z.string().optional().describe("자산 라벨(표시명)"),
+      enabled: z.boolean().optional().describe("활성 여부"),
+      sort: z.number().optional().describe("정렬 순서"),
     }),
-  restRuntime("org_harness_asset_remove", "하네스 자산 제거",
-    "하네스 자산을 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
+  restRuntime("org_harness_asset_remove", "스킬·서브에이전트·커맨드 제거",
+    "스킬·서브에이전트·커맨드를 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       await removeOrgHarnessAsset(assertAssetId(input.id), wctx(user, ctx));
       return { ok: true };
+    }, {
+      id: z.string().describe("제거할 자산 id — 다음 세션부터 materializer 가 멤버 디스크에서 지운다(미접속 머신은 직전 상태 유지)"),
     }),
 
   // ── materializer fetch — 멤버 세션훅(session-preload)이 매 세션 호출. 인증된 멤버면 OK(scope null). ──
@@ -2043,8 +2163,8 @@ export const deliveryCapabilities: Capability[] = [
 
   // ── per-member 개인 오버라이드 (#699) — 관리자 일괄 조회·변경(runtime). 유효성=정책(enabled+target_members) 위 오버라이드. ──
   //  관리자는 대량 배포를 target_members(자산/훅 편집)로, 개별 예외/멤버 opt-in-out 은 아래 오버라이드로. 멤버 본인은 me/asset-pref.
-  restRuntime("org_asset_prefs", "자산 개인 오버라이드 목록",
-    "하네스 자산·훅의 멤버별 개인 오버라이드(on/off) 전체 — 관리탭 일괄 조회용. target_kind/ref_id/member_id 로 필터.",
+  restRuntime("org_asset_prefs", "스킬·훅 개인 오버라이드 목록",
+    "스킬·서브에이전트·커맨드·훅의 멤버별 개인 오버라이드(on/off) 전체 — 관리탭 일괄 조회용. target_kind/ref_id/member_id 로 필터.",
     [{ method: "GET", paths: ["/api/ui/org/asset-prefs"],
       parse: (req) => ({ target_kind: req.query.target_kind, ref_id: req.query.ref_id, member_id: req.query.member_id }) }],
     async (input: Record<string, unknown>) => {
@@ -2053,9 +2173,13 @@ export const deliveryCapabilities: Capability[] = [
       if (typeof input.ref_id === "string" && input.ref_id) filter.ref_id = input.ref_id.trim();
       if (typeof input.member_id === "string" && input.member_id) filter.member_id = input.member_id.trim().toLowerCase();
       return { prefs: await listAssetPrefs(filter) };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).optional().describe("대상 종류로 필터"),
+      ref_id: z.string().optional().describe("자산/훅 id 로 필터"),
+      member_id: z.string().optional().describe("멤버 id 로 필터"),
     }),
-  restRuntime("org_asset_pref_set", "자산 개인 오버라이드 설정",
-    "특정 멤버의 자산/훅 개인 오버라이드를 설정(state=true=강제 on/false=강제 off)하거나 해제(clear=true=관리자 정책 기본값 복귀)한다.",
+  restRuntime("org_asset_pref_set", "스킬·훅 개인 오버라이드 설정",
+    "특정 멤버의 스킬/훅 개인 오버라이드를 설정(state=true=강제 on/false=강제 off)하거나 해제(clear=true=관리자 정책 기본값 복귀)한다.",
     [{ method: "POST", paths: ["/api/ui/org/asset-pref"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const targetKind = assertPrefKind(input.target_kind);
@@ -2064,6 +2188,58 @@ export const deliveryCapabilities: Capability[] = [
       if (input.clear === true) { await clearAssetPref(targetKind, refId, memberId, wctx(user, ctx)); return { ok: true, cleared: true }; }
       const pref = await setAssetPref(targetKind, refId, memberId, Boolean(input.state), wctx(user, ctx));
       return { pref };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).describe("오버라이드 대상 종류"),
+      ref_id: z.string().describe("대상 자산/훅 id"),
+      member_id: z.string().describe("오버라이드를 적용할 멤버 id"),
+      state: z.boolean().optional().describe("true=강제 on, false=강제 off (clear=true 면 무시)"),
+      clear: z.boolean().optional().describe("true=오버라이드 해제(관리자 정책 기본값으로 복귀)"),
+    }),
+  // 관리탭 [대상 구성원] 표(#860) — 자산/훅 1건 × 전 구성원의 정책 기본값·오버라이드·실효를 한 번에.
+  //  실효는 **서버가** asset-visibility SoT 로 계산해 내려준다. 웹(web/tsconfig rootDir='.')이 src/ 를 import 못 해
+  //  프론트가 규칙을 복제하면 그 파일이 금지한 4번째 구현이 되기 때문 — me_assets_get 과 같은 처방.
+  //  ⚠ me_assets_get 은 enabled 자산만 다뤄 enabled:true 를 상수로 넘기지만, 여기는 비활성 자산도 보여주므로 실제 값을 넘긴다
+  //   (그래야 '활성=끔 → 전원 미적용, 예외도 못 이김'이 표에 그대로 나온다).
+  restRuntime("org_asset_members", "자산 구성원별 상태",
+    "자산/훅 1건의 구성원별 상태 — 정책 기본값(byDefault) · 개인 오버라이드(override: true=강제 on/false=강제 off/null=없음) · 실효(effective=이 구성원이 실제로 받는가). 관리탭 '대상 구성원' 표용.",
+    [{ method: "GET", paths: ["/api/ui/org/asset-members"],
+      parse: (req) => ({ target_kind: req.query.target_kind, ref_id: req.query.ref_id }) }],
+    async (input: Record<string, unknown>) => {
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      const item = targetKind === "org_hook" ? await getOrgHook(refId) : await getOrgHarnessAsset(refId);
+      if (!item) throw new HttpError(404, "대상 스킬/훅이 없습니다");
+      const targetMembers = item.target_members ?? null;
+      const prefBy = new Map((await listAssetPrefs({ target_kind: targetKind, ref_id: refId })).map((p) => [p.member_id, p.state]));
+      const members = (await listMembers()).map((m) => {
+        const override = prefBy.has(m.id) ? prefBy.get(m.id)! : null;
+        // 가시성 정책(SoT)과 **비활성 구성원**은 직교한다 — asset-visibility 는 정책 레이어만 모델링하고 멤버 상태는 모른다.
+        //  비활성 멤버는 인증 자체가 막혀(store.verifyDbToken: 멤버 비활성 → 토큰 무효, auth/sessions: 세션 무효)
+        //  정책상 대상이어도 **아무것도 못 받는다**. effective 는 '실제로 받는가'라는 질문이므로 둘을 AND 해야
+        //  화면이 거짓말하지 않는다(정책만 보면 퇴사자가 '적용 중'으로 뜬다). SoT 규칙 재구현이 아니라 직교한 전제의 AND.
+        const visible = effectiveVisible({ enabled: item.enabled, targetMembers, memberId: m.id, override });
+        return {
+          id: m.id, kind: m.kind, display_name: m.display_name, state: m.state,
+          byDefault: targetsMember(targetMembers, m.id),
+          override,
+          effective: m.state === "active" && visible,
+        };
+      });
+      return { policy: { enabled: item.enabled, target_members: targetMembers, harness: item.harness }, members };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).describe("대상 종류"),
+      ref_id: z.string().describe("대상 스킬/훅 id"),
+    }),
+  restRuntime("org_asset_prefs_clear", "자산 오버라이드 일괄 해제",
+    "자산/훅 1건의 구성원 오버라이드를 전부 제거해 전원이 관리자 정책(enabled+target_members)을 따르게 한다 — 관리탭 '전체 기본값 복귀'. 정책 자체는 안 건드린다.",
+    [{ method: "POST", paths: ["/api/ui/org/asset-prefs/clear"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const targetKind = assertPrefKind(input.target_kind);
+      const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      return { ok: true, cleared: await clearAssetPrefs(targetKind, refId, wctx(user, ctx)) };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).describe("대상 종류"),
+      ref_id: z.string().describe("대상 스킬/훅 id"),
     }),
 
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════
@@ -2077,7 +2253,7 @@ export const deliveryCapabilities: Capability[] = [
       return { sources: all.map(maskDbSource), allowedSecretRefs: cfg.allowed_db_secret_refs, meaning: MEANING["db-source"] };
     }),
   restOnly("org_db_source_upsert", "DB 데이터소스 추가·수정",
-    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(풀 회수).",
+    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const cfg = await getRuntimeConfig(); // host·auth_ref 화이트리스트 검증 공용(운영자 통제 경계)
@@ -2165,9 +2341,22 @@ export const deliveryCapabilities: Capability[] = [
       invalidatePool(name);
       await refreshSources(true); // 무재시작 반영
       return { source: maskDbSource(src) };
+    }, {
+      name: z.string().describe("소스 이름(슬러그) — db_query 가 이 이름으로 참조"),
+      driver: z.enum(["postgres", "mysql"]).optional().describe("미전송 시 기존 소스 값 유지(수정 때 mysql 이 postgres 로 뒤집히지 않게, #715). 신규 기본 postgres"),
+      url: z.string().nullable().optional().describe("**비번 없는** 접속문자열. 인라인 비번(?password=)·hostaddr 금지, 외부 host 만(사설/메타데이터 IP 차단)"),
+      auth_mode: z.enum(["password", "iam", "mtls", "vault"]).optional().describe("기본 password — 현재 password 만 지원(iam/mtls/vault 는 후속)"),
+      auth_ref: z.string().nullable().optional().describe("비밀번호가 담긴 환경변수 **이름**(값 금지). allowed_db_secret_refs 허용목록에 있어야 한다"),
+      rls: z.string().nullable().optional().describe("행수준 격리 GUC 설정. mysql 은 등가가 없어 지원 안 함(#715)"),
+      max_rows: z.number().int().positive().nullable().optional().describe("조회 최대 행수(양의 정수)"),
+      timeout_ms: z.number().int().positive().nullable().optional().describe("조회 타임아웃 ms(양의 정수)"),
+      table_default: z.enum(["allow", "deny"]).optional().describe("테이블 정책 기본자세 — 개별 정책이 없는 테이블에 적용"),
+      note: z.string().optional().describe("메모"),
+      enabled: z.boolean().optional().describe("활성 여부"),
+      sort: z.number().optional().describe("정렬 순서"),
     }),
   restOnly("org_db_source_remove", "DB 데이터소스 제거",
-    "DB 데이터소스를 제거한다(db_query 즉시 반영 — 풀 회수).",
+    "DB 데이터소스를 제거한다(db_query 즉시 반영 — 연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const name = slug(input.name, "name");
@@ -2175,6 +2364,8 @@ export const deliveryCapabilities: Capability[] = [
       invalidatePool(name);
       await refreshSources(true);
       return { ok: true };
+    }, {
+      name: z.string().describe("제거할 DB 소스 이름 — db_query 즉시 반영(풀 회수)"),
     }),
 
   // ── db_query 테이블 정책 · 컬럼 마스킹 (admin, #186) — 라이브 스키마 위 오버레이 편집 ──
@@ -2208,6 +2399,9 @@ export const deliveryCapabilities: Capability[] = [
         }));
       }
       return { source: src, table_default: policy.tableDefault, tables, columns, meaning: MEANING["db-source"] };
+    }, {
+      source: z.string().describe("DB 소스 이름(등록·활성화돼 있어야 한다)"),
+      table: z.string().optional().describe("지정하면 그 테이블의 컬럼별 마스킹 스타일까지 반환"),
     }),
   restOnly("org_db_table_policy_set", "테이블 조회 정책 저장/삭제",
     "db_query 소스의 테이블별 조회 허용/차단(allow|deny)을 저장한다. remove=true 면 정책행 삭제(기본자세로 복귀). 즉시 반영.",
@@ -2226,6 +2420,12 @@ export const deliveryCapabilities: Capability[] = [
       }
       await refreshPolicy(true);
       return { ok: true };
+    }, {
+      source: z.string().describe("DB 소스 이름"),
+      table: z.string().describe("테이블 이름. 게이트웨이 내부 테이블은 항상 차단(시스템)이라 정책 대상이 아니다"),
+      mode: z.enum(["allow", "deny"]).optional().describe("조회 허용/차단. remove=true 가 아니면 필수"),
+      remove: z.boolean().optional().describe("true=정책행 삭제(소스의 기본자세 table_default 로 복귀)"),
+      note: z.string().optional().describe("메모"),
     }),
   restOnly("org_db_column_mask_set", "컬럼 마스킹 정책 저장/삭제",
     "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null)을 저장한다. remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
@@ -2245,6 +2445,13 @@ export const deliveryCapabilities: Capability[] = [
       }
       await refreshPolicy(true);
       return { ok: true };
+    }, {
+      source: z.string().describe("DB 소스 이름"),
+      table: z.string().describe("테이블 이름. 게이트웨이 내부 테이블은 항상 차단(시스템)이라 마스킹 대상이 아니다"),
+      column: z.string().describe("컬럼 이름"),
+      style: z.enum(["full", "partial", "email", "hash", "null"]).optional().describe("마스킹 방식. remove=true 가 아니면 필수. 게이트웨이가 결정론적으로 집행(고객 DB 무수정)"),
+      remove: z.boolean().optional().describe("true=마스킹 해제"),
+      note: z.string().optional().describe("메모"),
     }),
 
   // ── org 관리 변경 감사 조회(#549) — 누가(사람/AI)·언제·무엇을·어디서(mcp/web) 바꿨는지 + before/after. ──

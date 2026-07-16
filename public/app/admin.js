@@ -57,6 +57,34 @@ const ADMIN_GROUPS = [
 //            수집 대상 고르기는 '수집 범위'(구 '스코프 픽커').
 // ※ 서버 식별자(엔드포인트·capability·테이블)는 그대로 둔다 — 이건 화면 용어 정리다(호환 파괴 0).
 //   → 개명 완료: `/api/ui/org/mcp-server-presets` (구 경로는 별칭 유지). 파일·타입·상수·MCP 툴명도 함께.
+//
+// ════════ 이어서 (#859) — 위 목록에서 빠졌던 '자산' ════════
+// #837 은 이 섹션의 **라벨만** '스킬 · 훅'으로 고치고 본문을 안 고쳤다(부분 개명). 그 사이 meaning 카드는
+// 이미 '자산'을 버렸는데(`MEANING['harness-asset'].label = "스킬 · 서브에이전트 · 슬래시커맨드"`,
+// `src/org/meaning.ts` 전체 '자산' 0건) **그 카드를 띄우는 [ⓘ] 버튼 바로 위** 섹션 힌트가 '에이전트 자산'
+// 이라 불렀다. 감사로그 라벨맵(OA_ENTITY_LABELS)도 이미 '스킬·에이전트·커맨드'로 피하고 있었다.
+//   '자산' 은 한 낱말이 여섯 대상에 붙어 있었다 — 하네스 자산 · 노션 미디어 첨부 · 설치 파일 · 웹 정적 파일 ·
+//   디자인 산출물 · 그냥 '재산'(일반명사). 영어 `asset` 은 그 여섯에 균일하게 붙지만 한국어 '자산' 은
+//   **번역된 자리에서만** 도메인 개체 행세를 해서, 스킬 편집기 안에선 크롬("+ 자산 추가")과 본문("조직 자산과
+//   개인 사생활이 섞여 있다")이 서로 다른 뜻으로 마주 보고 있었다.
+//   → **'자산' 이라는 말은 UI 에서 전면 퇴출**한다('커넥터'와 같은 처리). 각각의 이름으로 부른다:
+//        하네스 자산 → **'스킬 · 서브에이전트 · 커맨드'** (meaning 카드가 이미 쓰는 이름)
+//        노션 미디어 → **'첨부 파일'**   ·   설치 번들 → **'설치 파일'**
+//   영문 식별자(`org_harness_asset`·`asset_dir`·`agent-assets`·`assetForm`…)는 그대로 둔다(호환 파괴 0).
+//
+// ════════ 이어서 (#859) — '회수' ════════
+// **영어 코드는 이미 갈려 있었고 한국어 UI 만 뭉갰다.** `reclaim`(디스크 파생물) · `revoke`(접속 열쇠/권한) ·
+// `recall`/`retrieval`(지식 검색) · `invalidatePool`(DB 풀) 이 전부 '회수' 한 단어로 번역돼 있었다.
+//   증상: [AI 도구 ▸ 기본 제공 도구]는 도구를 **이름순 한 리스트**로 편다. 그래서 한 스크롤 안에
+//   "워크스페이스 일괄 회수"(파일 영구삭제) · "토큰 회수"(되돌릴 수 없는 무효화) · "언마스크 grant 회수"
+//   (재부여 가능) · "의미로 회수한다"(**아무것도 안 지움**) 가 나란히 놓였다 — 파괴성이 안 읽힌다.
+//   또 한 행위(접속 열쇠 무효화)에 이름이 4개였다: 버튼='접속 해제' / 감사배지='회수' / 설치안내="회수" /
+//   Windows 언인스톨러="[토큰] 탭"(**없는 탭명** — #837 에서 [구성원 ▸ 접속 열쇠]로 합쳐졌다).
+//   → 코드의 구분을 그대로 한국어로 옮긴다(새 어휘 발명 아님):
+//        `reclaim` → **'정리'**(다시 만들 수 있는 것만 지움)   ·   `revoke`(auth_token) → **'접속 해제'**
+//        `revoke`(grant) → **'권한 해제'**(되돌릴 수 있음)      ·   `recall` → **'검색'**(용어집이 이미 쓰는 말)
+//        `invalidatePool` → **'연결 풀 재생성'**
+//   도구명·엔드포인트(`org_workspace_reclaim`·`org_token_revoke`…)는 그대로 둔다(호환 파괴 0).
 const ADMIN_SECTIONS = [
     // ── 내 설정 (#837 후속) ──
     //  구조상 우상단 [내 프로필] 모달 하나에 필드 15개 + 중첩 모달 2개가 들어 있었다 —
@@ -94,8 +122,8 @@ const ADMIN_SECTIONS = [
     //  아니라 **프록시 MCP 서버와 AI 도구**다(커넥터는 org_connector.secrets 라는 자기 테이블을 따로 쓴다).
     //  그래서 커넥터가 아니라 도구 옆에 둔다. 개인용 vault('내 자격')는 [내 프로필]로 이관(#837) → 여기는 조직 키만.
     { key: 'credentials', label: '서비스 로그인', meaning: null, group: 'capability' },
-    // 에이전트 자산 — 구 [커스텀 훅]+[스킬·에이전트·커맨드]. 둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서
-    //  도는 것'을 정의한다(자산의 paired_hook_id 가 훅을 참조하기까지 한다). 한 화면의 서브탭으로.
+    // 스킬 · 훅 — 구 [커스텀 훅]+[스킬·에이전트·커맨드]. 둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서
+    //  도는 것'을 정의한다(스킬의 paired_hook_id 가 훅을 참조하기까지 한다). 한 화면의 서브탭으로.
     { key: 'agent-assets', label: '스킬 · 훅', meaning: 'harness-asset', group: 'capability' },
     // 자동화 — 구 [스케줄러]+[상시 세션]. 크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시
     //  세션을 필수 타깃으로 받는다(크론=언제 × 상시세션=어디서·누구로). 떨어뜨려 놓을 이유가 없다.
@@ -489,9 +517,9 @@ function toolsSection(detail, data) {
     ]));
 }
 // ── [스킬 · 훅] — 구 [커스텀 훅]+[스킬·에이전트·커맨드]. ──
-//  둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서 도는 것'을 정의한다(자산의 paired_hook_id 가 훅을 참조하기까지).
+//  둘 다 runtime 권한이고 둘 다 '구성원 컴퓨터에서 도는 것'을 정의한다(스킬의 paired_hook_id 가 훅을 참조하기까지).
 function agentAssetsSection(detail, data) {
-    detail.replaceChildren(sectionHead('스킬 · 훅', '구성원의 AI 에 배포되는 실행물(에이전트 자산) — 스킬·서브에이전트·커맨드와, 이벤트에 반응하는 코드 훅.', data.meaning['harness-asset']), segTabs('agent-assets', [
+    detail.replaceChildren(sectionHead('스킬 · 훅', '구성원의 AI 에 배포되는 실행물 — 스킬·서브에이전트·커맨드와, 이벤트에 반응하는 코드 훅.', data.meaning['harness-asset']), segTabs('agent-assets', [
         { key: 'assets', label: '스킬 · 서브에이전트 · 커맨드', render: (h) => harnessAssetEditor(h, data) },
         { key: 'hooks', label: '커스텀 훅 (코드)', render: (h) => customHookEditor(h, data) },
     ]));
@@ -780,7 +808,9 @@ const OA_ENTITY_LABELS = {
     org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
     org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };
-const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '회수', mint: '발급', reorder: '순서변경' };
+// op=revoke 는 auth_token 만 쓴다(org/store.ts) — 그래서 '접속 해제'로 못박는다. 언마스크 권한 철회는
+//  op=update 로 감사되므로 이 라벨과 섞이지 않는다(#859).
+const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '접속 해제', mint: '발급', reorder: '순서변경' };
 const OA_CHANNEL_LABELS = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '자료 수집기', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
 const OA_KIND_LABELS = { human: '사람', ai: 'AI', system: '시스템', connector: '자료 수집기', unknown: '미상' };
 // 스타일 1회 주입(테마 토큰 — 라이트/다크 자동). textContent 로만 삽입(보안 불변식). tool-usage 의 tu-* 를 oa-* 로 복제.
@@ -2407,7 +2437,9 @@ function injectionMap(detail, data) {
     }
     paintSections();
     const ssBlock = momentBlock('세션 시작 — SessionStart', '대화가 열릴 때 조직 컨텍스트를 자동으로 깔아준다 — 맨 위 조직 헤더(자동) 다음, 아래 섹션 문서들을 sort 순으로 조립. 추가/편집/삭제/재정렬 가능.', momentToggle('session_preload'), sectionsWrap, previewExpander(), customList('SessionStart'));
-    const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).', momentToggle('work_flag'), canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null, canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', rc.write_tools, 'write_tools', 'knowledge_save') : null, customList('PostToolUse'));
+    const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).', momentToggle('work_flag'), canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null, canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 쓰면 종료 너지 안 함 · 비우면 기본 목록', rc.write_tools, 'write_tools', 'knowledge_save') : null, 
+    // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
+    canEdit ? listEditor('외부 인입 툴(pull_tools) — 이 prefix 로 시작하는 MCP 툴을 쓰면 “외부 맥락을 끌어왔다”로 보고 종료 너지 대상에 넣는다(끌어온 걸 SoT 에 안 남기고 끝내는 걸 막음) · 줄당 툴이름 prefix · 비우면 이 기능 끔. 기본 mcp__lively__ext__ = 라이블리 MCP 프록시 전체. ⚠ 훅이 관측하는 건 mcp__lively__* 뿐이라 다른 서버 prefix 는 적어도 안 잡힌다(구성원이 자기 하네스에 직접 단 MCP 커버는 후속 작업)', rc.pull_tools, 'pull_tools', 'mcp__lively__ext__') : null, customList('PostToolUse'));
     const stopBlock = momentBlock('세션 종료 — Stop', '작업했는데 기록을 안 남겼으면(조건 충족 시 1회) 기록하라고 너지한다.', momentToggle('stop_writeback_gate'), canEdit ? writebackEditor() : null, customList('Stop'));
     // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 지도에 둔다.
     //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
@@ -2491,7 +2523,7 @@ function storageEditor(detail, data) {
         // ── 위험 배너(#813 T5) — 무엇이 이미 막히고 있는지 먼저 말한다. 숫자보다 '지금 무슨 일이 벌어지나'가 급하다. ──
         const worst = (st.disks || []).reduce((w, d) => (!w || d.usedPct > w.usedPct ? d : w), null);
         const banner = worst && worst.level === 'critical'
-            ? el('div', { class: 'storage-banner storage-banner-critical' }, el('strong', { text: `⚠ 디스크 위험 (${worst.usedPct}%) — 새 세션 · 레포 클론 · 파일 업로드가 차단되고 있습니다.` }), el('p', { text: '아래 워크스페이스에서 [분석] → [회수]로 공간을 확보하세요. 100%에 닿으면 DB가 죽어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.' }))
+            ? el('div', { class: 'storage-banner storage-banner-critical' }, el('strong', { text: `⚠ 디스크 위험 (${worst.usedPct}%) — 새 세션 · 레포 클론 · 파일 업로드가 차단되고 있습니다.` }), el('p', { text: '아래 워크스페이스에서 [분석] → [정리]로 공간을 확보하세요. 100%에 닿으면 DB가 죽어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.' }))
             : worst && worst.level === 'warn'
                 ? el('div', { class: 'storage-banner storage-banner-warn' }, el('strong', { text: `디스크 경고 (${worst.usedPct}%) — 아직 정상 동작하지만 정리가 필요합니다.` }), el('p', { text: `${p.disk_critical_pct ?? 95}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.` }))
                 : null;
@@ -2670,10 +2702,12 @@ function storageEditor(detail, data) {
         alertRegion.replaceChildren(el('div', { class: 'storage-block' }, status, ...(keyNote ? [keyNote] : []), el('div', { class: 'storage-fields' }, el('label', { style: 'flex:1 1 320px' }, el('span', { text: '웹훅 주소' }), urlIn), el('label', {}, el('span', { text: '언제 알릴까' }), minSel), el('label', {}, el('span', { text: '이름(선택)' }), labelIn)), el('p', { class: 'admin-hint', text: '슬랙·디스코드의 incoming webhook 주소를 그대로 넣으면 됩니다. 무엇이 오나: 디스크 경고/위험 진입, DB 연결 불가, 그리고 각각의 복구. 저장된 주소는 암호화되어 다시 보여드리지 않습니다(변경할 때만 다시 입력).' }), el('div', { class: 'ws-actions' }, el('span', {}, testA, ' ', delA), saveA)));
     }
     // ── 워크스페이스(#813 T3-2 백스톱) ──
-    // 프로젝트 마무리 루틴이 회수를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done
-    //  처리하거나, 프로젝트가 방치되면 아무도 안 치운다. 여기서 관리자가 보고 **직접** 회수한다.
-    //  ⚠ 자동 삭제는 없다. 반드시 [분석](dry-run) → 내용 확인 → [회수] 순서로만 지워진다.
-    // ── 워크스페이스 회수 (#813 백스톱 · #845 UX 수정) ──────────────────────────────
+    // 프로젝트 마무리 루틴이 정리를 하지만 그건 best-effort 다 — 에이전트가 건너뛰거나, 사람이 웹UI 에서 바로 done
+    //  처리하거나, 프로젝트가 방치되면 아무도 안 치운다. 여기서 관리자가 보고 **직접** 정리한다.
+    //  ⚠ 자동 삭제는 없다. 반드시 [분석](dry-run) → 내용 확인 → [정리] 순서로만 지워진다.
+    // ── 워크스페이스 정리 (reclaim — #813 백스톱 · #845 UX 수정) ────────────────────
+    //  화면에선 '회수'라 부르지 않는다(#859) — 되돌릴 수 없는 접속 해제·재부여 가능한 권한 해제·아무것도
+    //  안 지우는 지식 검색이 전부 '회수'라 불려 파괴성이 안 읽혔다. 여기는 재생성 가능한 파생물만 지운다.
     //  #845 전에는 **목록의 78% 가 눌러봐야 에러**였다(307개 중 레포 없는 껍데기 184 + 고아 57).
     //  그래서 세 가지를 지킨다:
     //   ① **못 하는 일에 버튼을 주지 않는다** — 레포 없는 폴더는 접어두고 [분석] 버튼 자체를 안 만든다.
@@ -2682,7 +2716,7 @@ function storageEditor(detail, data) {
     const wsRegion = el('div');
     // ⚠ 키는 **folder** 다(project_id 아님). 폴더명이 숫자가 아닌 옛 규칙(project/<프로젝트 이름>)이 74개 있고,
     //  그중 12개는 지금도 살아있는 프로젝트다 — id 로 키를 잡으면 이것들이 화면에서 통째로 사라진다.
-    const analyzed = new Map(); // folder → 분석 결과(dry-run). 회수는 여기 담긴 것만 대상으로 한다.
+    const analyzed = new Map(); // folder → 분석 결과(dry-run). 정리는 여기 담긴 것만 대상으로 한다.
     const selected = new Set();
     let wsList = null;
     const ANALYZE_CHUNK = 10; // 요청당 프로젝트 수 — du 비용이 크므로 작게. 서버 상한은 40.
@@ -2711,11 +2745,11 @@ function storageEditor(detail, data) {
     }
     function renderWorkspace() {
         const all = (wsList.projects || []).filter((p) => p.folder);
-        // 레포(워크트리)가 있는 것만 회수 대상 — 나머지는 '회수할 것이 없는' 정상 폴더다(에러가 아니다).
+        // 레포(워크트리)가 있는 것만 정리 대상 — 나머지는 '정리할 것이 없는' 정상 폴더다(에러가 아니다).
         const targets = all.filter((p) => p.repos > 0);
         const empties = all.filter((p) => !p.repos);
         const emptyBytes = empties.reduce((s, p) => s + (p.bytes ?? 0), 0);
-        // 이 프로젝트의 워크트리 중 하나라도 작업 중인 세션이 붙어 있나 — 붙어 있으면 회수 대상으로 고르지 않는다.
+        // 이 프로젝트의 워크트리 중 하나라도 작업 중인 세션이 붙어 있나 — 붙어 있으면 정리 대상으로 고르지 않는다.
         const hasActive = (pr) => (pr.results || []).some((r) => r.active_session);
         // ── 상단: 일괄 분석 ──
         const progress = el('span', { class: 'storage-calc', text: '' });
@@ -2729,7 +2763,7 @@ function storageEditor(detail, data) {
                 for (const pr of res)
                     if (pr.folder)
                         analyzed.set(pr.folder, pr);
-                // 회수할 게 있는 것만 미리 골라둔다 — 관리자가 해제하는 게 하나씩 켜는 것보다 빠르다.
+                // 정리할 게 있는 것만 미리 골라둔다 — 관리자가 끄는 게 하나씩 켜는 것보다 빠르다.
                 // 작업 중인 세션이 붙은 건 **켜지 않는다**(서버도 거부하지만, 애초에 고르지 않는 게 정직하다).
                 for (const pr of res)
                     if (pr.reclaimable_bytes > 0 && !hasActive(pr))
@@ -2742,19 +2776,19 @@ function storageEditor(detail, data) {
                 progress.textContent = '';
             }
         });
-        // ── 상단: 선택 회수 ──
+        // ── 상단: 선택 정리 ──
         const selFolders = [...selected].filter((f) => (analyzed.get(f)?.reclaimable_bytes ?? 0) > 0);
         const selBytes = selFolders.reduce((s, f) => s + (analyzed.get(f)?.reclaimable_bytes ?? 0), 0);
-        const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: `선택 회수 (${selFolders.length}개 · ${fmtBytes(selBytes)})` });
+        const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: `선택 정리 (${selFolders.length}개 · ${fmtBytes(selBytes)})` });
         reclaimSelBtn.disabled = !canEdit || !selFolders.length;
         reclaimSelBtn.addEventListener('click', async () => {
             if (!confirm(`${selFolders.length}개 프로젝트에서 파생물 ${fmtBytes(selBytes)} 를 지웁니다.\n\nnode_modules·빌드 산출물 등 다시 만들 수 있는 것만 지웁니다. 소스·커밋·.env·data/ 는 건드리지 않고, 워크트리도 유지합니다.\n\n계속할까요?`))
                 return;
             reclaimSelBtn.disabled = true;
             try {
-                const res = await runBatch('/api/ui/org/workspace/reclaim', selFolders, { remove_worktree: false }, (done) => { progress.textContent = `  회수 중… ${done}/${selFolders.length}`; });
+                const res = await runBatch('/api/ui/org/workspace/reclaim', selFolders, { remove_worktree: false }, (done) => { progress.textContent = `  정리 중… ${done}/${selFolders.length}`; });
                 const freed = res.reduce((s, pr) => s + (pr.freed_bytes || 0), 0);
-                toast(`회수 완료 — ${fmtBytes(freed)} (${res.length}개 프로젝트)`);
+                toast(`정리 완료 — ${fmtBytes(freed)} 확보 (${res.length}개 프로젝트)`);
                 loadWorkspace();
             }
             catch (e) {
@@ -2763,7 +2797,7 @@ function storageEditor(detail, data) {
                 progress.textContent = '';
             }
         });
-        // ── 회수 대상 행 ──
+        // ── 정리 대상 행 ──
         const rows = targets.map((p) => {
             const pr = analyzed.get(p.folder);
             const detail = el('div');
@@ -2807,13 +2841,13 @@ function storageEditor(detail, data) {
                         selected.add(p.folder);
                     else
                         selected.delete(p.folder);
-                    renderWorkspace(); // 상단 [선택 회수] 합계를 다시 그린다
+                    renderWorkspace(); // 상단 [선택 정리] 합계를 다시 그린다
                 });
                 right.unshift(chk);
-                head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · 회수 가능 ${fmtBytes(pr.reclaimable_bytes || 0)}` });
+                head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · 정리 가능 ${fmtBytes(pr.reclaimable_bytes || 0)}` });
                 for (const r of pr.results || []) {
                     const derived = r.derived || [];
-                    detail.append(el('div', { class: 'ws-plan' }, el('p', { class: 'storage-calc', text: `${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '회수할 파생물 없음'}` }), el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음) — 여기서는 유지합니다' : `워크트리: 유지 — ${r.worktree_reason}` })));
+                    detail.append(el('div', { class: 'ws-plan' }, el('p', { class: 'storage-calc', text: `${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '정리할 파생물 없음'}` }), el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음) — 여기서는 유지합니다' : `워크트리: 유지 — ${r.worktree_reason}` })));
                 }
             }
             return el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('span', {}, el('strong', { text: p.name || p.folder }), head), el('span', { class: 'ws-badges' }, ...right)), detail);
@@ -2827,8 +2861,8 @@ function storageEditor(detail, data) {
             emptyToggle.textContent = emptyOpen ? `레포 없는 폴더 접기` : `레포 없는 폴더 ${empties.length}개 보기 (${fmtBytes(emptyBytes)})`;
             emptyBox.replaceChildren(...(emptyOpen ? empties.map((p) => el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('span', {}, el('strong', { text: p.name || p.folder }), el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · ${p.last_used ? relTime(p.last_used * 1000) : '—'}` })), el('span', { class: 'ws-badges' }, ...(p.orphan ? [el('span', { class: 'storage-lv storage-lv-warn', text: '고아' })] : []))))) : []));
         });
-        wsRegion.replaceChildren(el('p', { class: 'storage-calc', text: `${all.length}개 폴더 · 합계 ${fmtBytes(wsList.total_bytes)} — ${wsList.root}` }), el('div', { class: 'ws-actions' }, analyzeAllBtn, reclaimSelBtn, progress), el('p', { class: 'admin-hint', text: '[전체 분석]은 아무것도 지우지 않습니다 — 무엇이 회수 가능한지만 계산합니다. 회수 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.' }), ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '회수할 워크트리가 있는 프로젝트가 없습니다.' })]), ...(empties.length ? [
-            el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 회수할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
+        wsRegion.replaceChildren(el('p', { class: 'storage-calc', text: `${all.length}개 폴더 · 합계 ${fmtBytes(wsList.total_bytes)} — ${wsList.root}` }), el('div', { class: 'ws-actions' }, analyzeAllBtn, reclaimSelBtn, progress), el('p', { class: 'admin-hint', text: '[전체 분석]은 아무것도 지우지 않습니다 — 무엇을 정리할 수 있는지만 계산합니다. 정리 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.' }), ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '정리할 워크트리가 있는 프로젝트가 없습니다.' })]), ...(empties.length ? [
+            el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 정리할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
             emptyToggle, emptyBox,
         ] : []));
     }
@@ -3880,6 +3914,185 @@ async function setColumnMask(source, table, column, style) {
         toast(e.message, true);
     }
 }
+// ── [대상 구성원](#860) — 정책(전원 켬/끔/지정) + 구성원별 예외를 한 자리에. 자산·훅 공용. ──
+//  #699 가 서버(org_asset_pref_set)·부트스트랩 데이터까지 만들어 두고 UI 만 안 끝냈던 자리다.
+//
+//  전원 on/off 를 **정책 레이어**(enabled·target_members)에 두는 게 이 화면의 핵심 결정이다. 구성원 전원에게
+//  예외 행(org_asset_pref)을 일괄로 박는 방식도 가능하지만, 그러면 그 뒤 합류한 구성원은 행이 없어 정책
+//  기본값으로 새고 관리자는 "전원 껐다"고 믿게 된다. 정책은 신규 구성원에게도 자동 적용되므로 그 구멍이 없다.
+//  예외 레이어의 일괄 연산은 '전체 기본값 복귀'(예외 일괄 삭제) 하나만 둔다.
+//
+//  ⚠ 두 레이어는 **저장 시점이 다르다** — 섞이면 사용자가 뭘 눌렀는지 모른다. 상자를 갈라 각각 명시한다:
+//   · 정책 = 이 폼의 필드라 아래 [저장] 을 눌러야 반영.
+//   · 예외 = 별개 객체(org_asset_pref)라 버튼 클릭 즉시 반영.
+//  그래서 정책만 고치고 저장 안 한 동안 아래 표의 실효 상태는 **옛 정책 기준**이다 — 그 사실을 배지로 알린다.
+//
+//  실효 상태는 서버가 SoT(src/org/asset-visibility.ts)로 계산해 준 값만 그린다. 여기서 재계산하면 그 파일이
+//  "세 곳이 똑같이 구현한다 — 드리프트 금지"라고 못박은 규칙의 4번째 사본이 된다(web/ 는 src/ 를 import 못 함).
+//  저장 후엔 호출부가 renderAdminDetail 로 폼을 통째로 다시 그리므로, 저장본 반영은 재생성이 담당한다.
+function targetMembersField(targetKind, item, isNew) {
+    const refId = item.id;
+    const modeOf = (enabled, targets) => (enabled === false ? 'off' : (targets && targets.length ? 'some' : 'all'));
+    let mode = modeOf(item.enabled, item.target_members);
+    const saved = { mode, targets: (item.target_members || []).join(', ') }; // 마지막 저장본 — 표가 '저장 전'인지 판정
+    const MODES = [
+        ['all', '전원 켬', '지금 있는 구성원과 **앞으로 합류할 구성원**까지 전원에게 갑니다. 개인별 예외는 아래 표에서.'],
+        ['off', '전원 끔', '전원에게 차단됩니다 — **아래 개인 예외도 이걸 못 이깁니다**(마스터 스위치).'],
+        ['some', '지정한 사람만', '적은 구성원에게만 갑니다. 목록에 없으면 기본값이 «끔» 이고, **나중에 합류하는 구성원도 자동 제외**됩니다.'],
+    ];
+    const targetIn = el('input', { type: 'text', value: saved.targets, placeholder: '구성원 id 쉼표구분 (예: yoon, jang)' });
+    const targetsNow = () => targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const enabledNow = () => mode !== 'off';
+    // 'some' 인데 목록이 비면 서버는 그걸 '전원'으로 읽는다(target_members NULL/빈=전원) — 화면과 어긋나므로 저장 시 막는다.
+    //  '전원 끔'은 target_members 를 **안 보낸다**(undefined=보존) — 마스터킬은 타깃팅과 직교하므로, 잠깐 껐다 켜는 동안
+    //  애써 지정해 둔 명단을 날리면 안 된다(구 UI 는 [활성] 체크박스와 명단이 별개 필드라 보존됐다 — 그 계약 유지).
+    const targetsPayload = () => {
+        if (mode === 'off')
+            return undefined; // 보존
+        if (mode === 'all')
+            return null; // 전원 = 명단 비움
+        return targetsNow().length ? targetsNow() : null;
+    };
+    const segBar = el('div', { class: 'tm-seg' });
+    const modeHint = el('p', { class: 'tm-hint' });
+    const targetRow = el('div', { class: 'field', style: 'margin:10px 0 0' }, el('label', { class: 'field-label', text: '대상 구성원 id' }), targetIn);
+    const staleNote = el('div', { class: 'tm-stale' });
+    const countEl = el('span', { class: 'tm-count' });
+    const openBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '구성원별 조정…' });
+    const clearBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '전체 기본값 복귀' });
+    let rows = []; // 서버가 준 구성원별 상태(정책 기본값·오버라이드·실효)
+    let listHost = null; // 모달이 열려 있는 동안의 행 컨테이너(닫히면 isConnected=false → 자동 폐기)
+    const dirty = () => mode !== saved.mode || (mode === 'some' && targetIn.value.trim() !== saved.targets);
+    const paintPolicy = () => {
+        for (const b of segBar.children) {
+            b.classList.toggle('on', b.dataset.m === mode);
+            b.setAttribute('aria-pressed', String(b.dataset.m === mode));
+        }
+        modeHint.replaceChildren(...inlineBold(MODES.find((m) => m[0] === mode)[2]));
+        targetRow.style.display = mode === 'some' ? '' : 'none';
+        staleNote.textContent = dirty() ? '정책을 바꿨습니다 — [저장] 해야 구성원별 실효 상태에 반영됩니다.' : '';
+        staleNote.style.display = dirty() ? '' : 'none';
+        if (listHost?.isConnected)
+            listHost.classList.toggle('tm-list-stale', dirty());
+    };
+    for (const [m, label] of MODES) {
+        const b = el('button', { type: 'button', class: 'tm-seg-btn', text: label });
+        b.dataset.m = m;
+        b.addEventListener('click', () => { mode = m; paintPolicy(); });
+        segBar.append(b);
+    }
+    segBar.setAttribute('role', 'group');
+    targetIn.addEventListener('input', paintPolicy);
+    // 구성원별 예외 — 서버(/api/ui/org/asset-members)가 SoT 로 계산한 byDefault·override·effective 를 그대로 그린다.
+    //  seq: 버튼을 빠르게 여러 번 누르면 먼저 띄운 GET 이 나중에 도착해 표를 옛 상태로 덮을 수 있다 — 마지막 요청만 그린다.
+    let seq = 0;
+    const reload = async () => {
+        const mine = ++seq;
+        try {
+            const d = await api(`/api/ui/org/asset-members?target_kind=${encodeURIComponent(targetKind)}&ref_id=${encodeURIComponent(refId)}`);
+            if (mine !== seq)
+                return; // 더 최신 요청이 이미 떴다 — 이 응답은 버린다
+            rows = d.members || [];
+        }
+        catch (e) {
+            if (mine !== seq)
+                return;
+            countEl.textContent = '구성원 상태를 불러오지 못했습니다';
+            openBtn.disabled = clearBtn.disabled = true;
+            if (listHost?.isConnected)
+                listHost.replaceChildren(errorNote(e, '구성원 상태를 불러오지 못했습니다'));
+            return;
+        }
+        paintSummary();
+        if (listHost?.isConnected)
+            paintList(); // 모달이 열려 있으면 같이 갱신
+    };
+    // 폼에 남는 건 요약 한 줄뿐 — 구성원 42명을 폼에 깔면 [저장] 이 스크롤 저 아래로 밀린다.
+    const paintSummary = () => {
+        const exceptions = rows.filter((r) => r.override !== null).length;
+        const inactive = rows.filter((r) => r.state !== 'active').length;
+        countEl.textContent = `구성원 ${rows.length - inactive}명`
+            + (inactive ? ` · 비활성 ${inactive}명` : '')
+            + (exceptions ? ` · 예외 ${exceptions}명` : ' · 예외 없음');
+        openBtn.disabled = !rows.length;
+        clearBtn.disabled = !exceptions;
+    };
+    const paintList = () => {
+        const q = String(searchIn?.value || '').trim().toLowerCase();
+        const shown = rows.filter((r) => !q || r.id.toLowerCase().includes(q) || String(r.display_name || '').toLowerCase().includes(q));
+        const node = (r) => {
+            const dead = r.state !== 'active'; // 비활성 = 인증부터 막힌다 → 정책과 무관하게 아무것도 못 받는다
+            const stateNow = r.override === null ? 'default' : (r.override ? 'on' : 'off');
+            const seg = el('div', { class: 'tm-seg tm-seg-row', role: 'group' });
+            for (const [v, label] of [['default', '기본' + (r.byDefault ? '(켬)' : '(끔)')], ['on', '켜기'], ['off', '끄기']]) {
+                const on = stateNow === v;
+                const b = el('button', { type: 'button', class: 'tm-seg-btn' + (on ? ' on' : ''), text: label, 'aria-pressed': String(on) });
+                b.addEventListener('click', async () => {
+                    const body = { target_kind: targetKind, ref_id: refId, member_id: r.id };
+                    if (v === 'default')
+                        body.clear = true;
+                    else
+                        body.state = (v === 'on');
+                    try {
+                        await api('/api/ui/org/asset-pref', { method: 'POST', body: JSON.stringify(body) });
+                        await reload();
+                    }
+                    catch (e) {
+                        toast((e && e.message) || '실패', true);
+                    }
+                });
+                seg.append(b);
+            }
+            // 비활성이면 예외 설정은 남겨 둔다(복직 시 되살아나고, 지금 정리할 수도 있어야 하니) — 다만 '적용 중'이라고 말하지 않는다.
+            const why = dead ? '비활성 구성원 — 접속 불가'
+                : (r.override === null ? '정책 기본값' : (r.override ? '강제 켬 · 예외' : '강제 끔 · 예외'));
+            return el('div', { class: 'tm-row' + (r.override !== null ? ' exc' : '') + (dead ? ' dead' : '') }, el('div', { class: 'tm-who' }, el('span', { class: 'tm-name', text: r.display_name || r.id }), el('span', { class: 'tm-id', text: r.id }), dead ? el('span', { class: 'pill', text: '비활성' }) : null, r.kind !== 'human' ? el('span', { class: 'pill', text: r.kind === 'agent' ? 'AI' : '시스템' }) : null), el('div', { class: 'tm-state' }, el('span', { class: 'pill' + (r.effective ? ' tm-on' : ''), text: r.effective ? '적용 중' : '미적용' }), el('span', { class: 'tm-why', text: why })), seg);
+        };
+        listHost.replaceChildren(...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+    };
+    // 구성원별 예외는 **모달**로 — 폼에 인라인으로 깔면 구성원 수만큼 길어져(현재 42명) [저장] 이 화면 밖으로 밀린다.
+    //  폼엔 요약 한 줄(구성원 N명 · 예외 M명)만 남기고, 조정이 필요할 때만 연다.
+    let searchIn = null;
+    const openModal = () => {
+        searchIn = el('input', { type: 'search', class: 'tm-search', placeholder: '이름·id 검색', style: 'width:180px' });
+        searchIn.addEventListener('input', () => { if (listHost?.isConnected)
+            paintList(); });
+        listHost = el('div', { class: 'tm-list' + (dirty() ? ' tm-list-stale' : '') });
+        const note = dirty()
+            ? el('div', { class: 'tm-stale', text: '정책이 저장 전입니다 — 아래 실효 상태는 아직 옛 정책 기준이에요.' }) : null;
+        overlay(`구성원별 예외 — ${item.label || item.id}`, el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, ...inlineBold('**클릭 즉시 반영**됩니다(구성원 다음 세션부터). 예외를 두지 않으면 위 정책 기본값을 따릅니다.')), el('div', { class: 'tm-members-head' }, searchIn, el('span', { class: 'tm-when', style: 'margin-left:auto', text: '클릭 즉시 반영' })), note, listHost);
+        paintList();
+    };
+    openBtn.addEventListener('click', openModal);
+    clearBtn.addEventListener('click', async () => {
+        if (!confirm('이 스킬/훅의 구성원 예외를 전부 지울까요? 전원이 위 정책을 따르게 됩니다.'))
+            return;
+        try {
+            const r = await api('/api/ui/org/asset-prefs/clear', { method: 'POST', body: JSON.stringify({ target_kind: targetKind, ref_id: refId }) });
+            toast(`예외 ${r.cleared}건 해제됨`);
+            await reload();
+        }
+        catch (e) {
+            toast((e && e.message) || '실패', true);
+        }
+    });
+    const membersCard = isNew
+        ? el('p', { class: 'admin-hint', style: 'margin:10px 0 0', text: '먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.' })
+        : el('div', { class: 'tm-members' }, countEl, openBtn, clearBtn);
+    if (!isNew) {
+        countEl.textContent = '불러오는 중…';
+        openBtn.disabled = clearBtn.disabled = true;
+        void reload();
+    }
+    paintPolicy();
+    return {
+        node: el('div', { class: 'tm' }, el('div', { class: 'tm-policy' }, el('div', { class: 'tm-members-head' }, el('b', { text: '전원 (정책 기본값)' }), el('span', { class: 'tm-when', text: '[저장] 을 눌러야 반영' })), segBar, modeHint, targetRow), staleNote, membersCard),
+        enabled: enabledNow,
+        targetMembers: targetsPayload,
+        // 'some' 인데 목록이 비었으면 저장 거부 — 서버가 빈 배열을 '전원'으로 읽어 화면과 정반대가 된다.
+        validate: () => (mode === 'some' && !targetsNow().length ? '‘지정한 사람만’ 을 골랐으면 대상 구성원 id 를 하나 이상 적으세요 (비우면 전원이 됩니다).' : null),
+    };
+}
 // ── 커스텀 훅 — runtime 권한 ──
 function customHookEditor(detail, data) {
     const hooks = data.orgHooks || [];
@@ -3913,9 +4126,7 @@ function hookForm(root, h, data, detail, isNew) {
     const codeTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '#!/usr/bin/env node\n// 훅 입력은 stdin(JSON), 응답은 stdout / exit code' });
     codeTa.value = h.source_code || '';
     const timeoutIn = el('input', { type: 'number', value: String(h.timeout_sec || 10), min: '1', max: '120' });
-    const targetIn = el('input', { type: 'text', value: (h.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
-    const enChk = el('input', { type: 'checkbox' });
-    enChk.checked = h.enabled !== false;
+    const tm = targetMembersField('org_hook', h, isNew);
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
     const status = el('span', { class: 'admin-status' });
     saveBtn.addEventListener('click', async () => {
@@ -3923,12 +4134,16 @@ function hookForm(root, h, data, detail, isNew) {
             toast('id 필수', true);
             return;
         }
+        const bad = tm.validate();
+        if (bad) {
+            toast(bad, true);
+            return;
+        }
         if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?'))
             return;
         saveBtn.disabled = true;
         try {
-            const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-            const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: targets.length ? targets : null, enabled: enChk.checked };
+            const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: tm.targetMembers(), enabled: tm.enabled() };
             await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
             await loadAdmin(true);
             state.admin.hookSel = payload.id;
@@ -3956,15 +4171,16 @@ function hookForm(root, h, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }), field('id', idIn), field('표시 이름', labelIn), field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel), field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn), field('코드 (Node.js)', codeTa), field('타임아웃(초, 1~120)', timeoutIn), field('대상 구성원(비우면 전원 · 구성원이 본인 것 opt-in/out 가능)', targetIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
+    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }), field('id', idIn), field('표시 이름', labelIn), field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel), field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn), field('코드 (Node.js)', codeTa), field('타임아웃(초, 1~120)', timeoutIn), field('대상 구성원', tm.node), actions);
 }
-// ── 하네스 자산(스킬·서브에이전트·슬래시커맨드) — runtime 권한 ──
+// ── 스킬 · 서브에이전트 · 슬래시커맨드 (org_harness_asset) — runtime 권한 ──
+//  화면에서 '자산'이라 부르지 않는다(#859) — 식별자만 asset. 위 §용어 사전 참조.
 function harnessAssetEditor(detail, data) {
     const assets = data.orgHarnessAssets || [];
     const sel = state.admin.assetSel;
     const KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
     const listCol = el('div', { class: 'admin-sublist' });
-    listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 자산 추가',
+    listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
         onclick: () => { state.admin.assetSel = '__new__'; renderAdminDetail(detail, 'harness-assets', data); } }));
     for (const a of assets) {
         listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
@@ -3983,21 +4199,19 @@ function harnessAssetEditor(detail, data) {
     detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 function assetForm(root, a, data, detail, isNew) {
-    const idIn = el('input', { type: 'text', value: a.id, placeholder: '자산 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
+    const idIn = el('input', { type: 'text', value: a.id, placeholder: 'id (소문자/숫자/_-)', disabled: isNew ? null : '' });
     const labelIn = el('input', { type: 'text', value: a.label || '', placeholder: '표시 이름(선택)' });
     const kindSel = el('select', {}, ...[['skill', '스킬'], ['subagent', '서브에이전트'], ['command', '슬래시커맨드']].map(([v, t]) => el('option', { value: v, text: t })));
     kindSel.value = a.kind || 'skill';
     const harnessSel = el('select', {}, ...['all', 'claude', 'codex'].map((x) => el('option', { value: x, text: x })));
     harnessSel.value = a.harness || 'all';
-    const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이 자산을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
-    const bodyTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '자산 본문(마크다운) — 스킬 방법서 / 에이전트 시스템 프롬프트 / 커맨드 프롬프트' });
+    const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이것을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
+    const bodyTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '본문(마크다운) — 스킬 방법서 / 에이전트 시스템 프롬프트 / 커맨드 프롬프트' });
     bodyTa.value = a.body || '';
     const fmTa = el('textarea', { rows: '4', class: 'admin-ta', placeholder: '추가 frontmatter(JSON, 선택) — 예: {"model":"opus","allowed-tools":["Read","Grep"]}' });
     fmTa.value = (a.frontmatter && Object.keys(a.frontmatter).length) ? JSON.stringify(a.frontmatter, null, 2) : '';
-    const targetIn = el('input', { type: 'text', value: (a.target_members || []).join(', '), placeholder: '비우면 전원 · 특정 구성원만: id 쉼표구분(예: yoon, charles)' });
+    const tm = targetMembersField('harness_asset', a, isNew);
     const pairedIn = el('input', { type: 'text', value: a.paired_hook_id || '', placeholder: '짝훅 id(선택) — 위험 통제용 커스텀 훅' });
-    const enChk = el('input', { type: 'checkbox' });
-    enChk.checked = a.enabled !== false;
     const codexNote = el('p', { class: 'admin-hint' });
     const syncNote = () => {
         codexNote.textContent = (kindSel.value !== 'skill' && (harnessSel.value === 'codex' || harnessSel.value === 'all'))
@@ -4023,14 +4237,18 @@ function assetForm(root, a, data, detail, isNew) {
                 return;
             }
         }
-        const targets = targetIn.value.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-        if (!confirm('이 자산은 구성원 하네스에 배포되어 그들의 AI가 사용합니다. 스킬은 도구·셸을 실행할 수 있습니다. 저장할까요?'))
+        const bad = tm.validate();
+        if (bad) {
+            toast(bad, true);
+            return;
+        }
+        if (!confirm('구성원 하네스에 배포되어 그들의 AI가 사용합니다. 스킬은 도구·셸을 실행할 수 있습니다. 저장할까요?'))
             return;
         saveBtn.disabled = true;
         try {
             const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
                 description: descIn.value, body: bodyTa.value, frontmatter: fm,
-                target_members: targets.length ? targets : null, paired_hook_id: pairedIn.value.trim() || null, enabled: enChk.checked };
+                target_members: tm.targetMembers(), paired_hook_id: pairedIn.value.trim() || null, enabled: tm.enabled() };
             await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
             await loadAdmin(true);
             state.admin.assetSel = payload.id;
@@ -4045,7 +4263,7 @@ function assetForm(root, a, data, detail, isNew) {
     const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
     if (!isNew)
         actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
-                if (!confirm(`자산 '${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`))
+                if (!confirm(`'${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`))
                     return;
                 try {
                     await api('/api/ui/org/harness-asset/remove', { method: 'POST', body: JSON.stringify({ id: a.id }) });
@@ -4058,7 +4276,7 @@ function assetForm(root, a, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 이 자산은 구성원 하네스에 배포됩니다. 스킬은 도구·셸을 실행할 수 있어 훅과 같은 실행권한입니다 — 위험 통제는 짝훅으로.' }), field('id', idIn), field('표시 이름', labelIn), field('종류', kindSel), field('하네스', harnessSel), codexNote, field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn), field('본문(마크다운)', bodyTa), field('추가 frontmatter (JSON, 선택)', fmTa), field('대상 구성원(비우면 전원)', targetIn), field('짝훅 id(선택 — 위험 통제)', pairedIn), el('label', { class: 'admin-check' }, enChk, ' 활성'), actions);
+    root.replaceChildren(el('div', { class: 'warn-badge', text: '⚠ 여기서 정의한 것은 구성원 하네스에 배포됩니다. 스킬은 도구·셸을 실행할 수 있어 훅과 같은 실행권한입니다 — 위험 통제는 짝훅으로.' }), field('id', idIn), field('표시 이름', labelIn), field('종류', kindSel), field('하네스', harnessSel), codexNote, field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn), field('본문(마크다운)', bodyTa), field('추가 frontmatter (JSON, 선택)', fmTa), field('짝훅 id(선택 — 위험 통제)', pairedIn), field('대상 구성원', tm.node), actions);
 }
 // ── AI 도구(MCP 툴) — runtime 권한 ──
 function toolsEditor(detail, data) {
@@ -4324,9 +4542,9 @@ function deployCommands(gw, os) {
         {
             kind: 'uninstall',
             title: '제거',
-            note: '설치 자산을 영구 제거합니다(lively 영역만 — tmux 훅·셸 별칭 등 본인 설정은 그대로 보존). '
+            note: '설치 파일을 영구 제거합니다(lively 영역만 — tmux 훅·셸 별칭 등 본인 설정은 그대로 보존). '
                 + '미리 보려면 `lively uninstall --dry-run`. '
-                + '완전 차단하려면 관리자가 [구성원 ▸ 접속 열쇠] 에서 토큰을 회수해야 합니다.' + ifMissing,
+                + '완전 차단하려면 관리자가 [구성원 ▸ 접속 열쇠] 에서 그 열쇠의 접속을 해제해야 합니다.' + ifMissing,
             cmd: 'lively uninstall',
         },
     ];
@@ -5102,12 +5320,12 @@ async function renderUnmaskGrantPanel(panel, source, data) {
     if (grants.length) {
         for (const g of grants) {
             const exp = g.expires_at ? relTime(g.expires_at) + ' 만료' : '무기한';
-            rows.push(el('div', { class: 'item' }, el('span', { class: 'pill pill-warn', text: g.member_id }), el('span', { class: 'mini-meta', text: g.table_name + '.' + g.column_name }), el('span', { class: 'mini-meta', text: exp }), g.reason ? el('span', { class: 'mini-meta', text: '· ' + g.reason }) : null, el('button', { class: 'btn btn-ghost btn-sm spacer', text: '회수', onclick: async () => {
-                    if (!confirm(`${g.member_id} 의 ${g.table_name}.${g.column_name} 언마스크 권한을 회수할까요?`))
+            rows.push(el('div', { class: 'item' }, el('span', { class: 'pill pill-warn', text: g.member_id }), el('span', { class: 'mini-meta', text: g.table_name + '.' + g.column_name }), el('span', { class: 'mini-meta', text: exp }), g.reason ? el('span', { class: 'mini-meta', text: '· ' + g.reason }) : null, el('button', { class: 'btn btn-ghost btn-sm spacer', text: '권한 해제', onclick: async () => {
+                    if (!confirm(`${g.member_id} 의 ${g.table_name}.${g.column_name} 언마스크 권한을 해제할까요?`))
                         return;
                     try {
                         await api('/api/ui/org/db-source/unmask-grant/revoke', { method: 'POST', body: JSON.stringify({ id: g.id }) });
-                        toast('회수됨');
+                        toast('권한 해제됨');
                         renderUnmaskGrantPanel(panel, source, data);
                     }
                     catch (e) {
@@ -5381,7 +5599,7 @@ async function myLoginsSection(detail) {
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
 //  #893: 온보딩(#/start/harness)에 있던 걸 여기로 통합 — 하네스 관리는 상시라 관리탭이 정주소(온보딩은 링크).
 const HARNESS_KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드', hook: '훅' };
-// 라이블리 자산 본문(설명 전문 + md)을 모달로 — 로컬 자산은 서버에 본문 없음(메타만).
+// 라이블리가 배포한 스킬·훅 본문(설명 전문 + md)을 모달로 — 로컬 것은 서버에 본문 없음(메타만).
 async function showHarnessDetail(kind, id, name) {
     const box = overlay(name || id);
     const body = box.querySelector('.ov-box');
@@ -5415,17 +5633,17 @@ async function myAssetsSection(detail) {
             bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' }));
             return;
         }
-        // 관측된 내 컴퓨터들 + 표시 이름/하네스 호환 헬퍼 (라이블리 자산이 어느 PC에 깔렸는지 대조에 씀).
+        // 관측된 내 컴퓨터들 + 표시 이름/하네스 호환 헬퍼 (라이블리가 준 것이 어느 PC에 깔렸는지 대조에 씀).
         const machines = d.machines || [];
         const machineName = (m) => m.alias || m.host || '내 컴퓨터';
-        const compat = (ah, mh) => ah === 'all' || !mh || ah === mh; // 자산 하네스 vs 머신 하네스
+        const compat = (ah, mh) => ah === 'all' || !mh || ah === mh; // 배포분 하네스 vs 머신 하네스
         const mIndex = machines.map((m) => {
             const map = new Map();
             for (const a of (m.assets || []))
                 map.set(`${a.kind}:${a.id}`, a);
             return { m, map };
         });
-        // 라이블리 자산 1건이 각 PC 에 어떻게 있는지 칩으로. 훅=중앙 디스패치(배선된 PC 전부 실행), 스킬=파일 설치 대조.
+        // 라이블리가 준 것 1건이 각 PC 에 어떻게 있는지 칩으로. 훅=중앙 디스패치(배선된 PC 전부 실행), 스킬=파일 설치 대조.
         const pcChips = (it, kind) => {
             let missing = false;
             if (!it.effective)
@@ -5454,7 +5672,7 @@ async function myAssetsSection(detail) {
                 return { row: el('span', { class: 'admin-hint', text: '적용되는 PC 없음' }), missing };
             return { row: el('div', { class: 'pc-chips' }, ...chips), missing };
         };
-        // 라이블리 배포 자산 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 + 설치된 PC 칩.
+        // 라이블리 배포분 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 + 설치된 PC 칩.
         const livelyRow = (targetKind, it, kind) => {
             const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
             const seg = el('div', { style: 'display:flex; gap:4px; flex-shrink:0;' });
@@ -5501,7 +5719,7 @@ async function myAssetsSection(detail) {
         }
         if (anyMissing)
             rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 안 깔린 PC가 있어요. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동 설치돼요 (‘미설치’로 표시된 PC).'));
-        // ── 내 컴퓨터별: 내가 직접 만든 로컬 자산만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
+        // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
         if (machines.length) {
             rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터 (직접 만든 로컬 하네스)' }));
             for (const m of machines) {
@@ -5543,7 +5761,7 @@ async function myAssetsSection(detail) {
                 rows.push(head);
                 const own = (m.assets || []).filter((a) => a.overlap === 'local-only');
                 if (!own.length) {
-                    rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 자산은 없어요(라이블리가 준 것만 있어요).' }));
+                    rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 스킬·훅은 없어요(라이블리가 준 것만 있어요).' }));
                     continue;
                 }
                 for (const a of own) {

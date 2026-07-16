@@ -882,7 +882,7 @@ function openNodeManager(view) {
         body.replaceChildren(el('div', {}, howToggle, howBody), el('div', { style: 'margin-top:8px;font-weight:600' }, document.createTextNode('내 노드 '), el('button', { class: 'btn btn-ghost btn-sm', text: '↻', title: '새로고침', onclick: () => load() })), list);
     }
     async function del(n) {
-        if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n토큰이 회수되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).'))
+        if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n접속 열쇠가 해제되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).'))
             return;
         try {
             await api('/api/ui/nodes/' + encodeURIComponent(n.id), { method: 'DELETE' });

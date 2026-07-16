@@ -762,7 +762,7 @@ function openNodeManager(view) {
       list);
   }
   async function del(n) {
-    if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n토큰이 회수되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).')) return;
+    if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n접속 열쇠가 해제되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).')) return;
     try { await api('/api/ui/nodes/' + encodeURIComponent(n.id), { method: 'DELETE' }); toast('노드 삭제됨'); load(); renderTerminal(view); }
     catch (e) { toast('삭제 실패 — ' + e.message, true); }
   }

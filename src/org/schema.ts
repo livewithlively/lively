@@ -500,6 +500,17 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS write_tools JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: pull_tools — work-flag 가 '외부 맥락을 끌어왔다'로 볼 MCP 툴 이름 **prefix** 목록(#906). ──
+  // write_tools 와 달리 **비면 끔**(기본값이 곧 on): 노브 하나로 on/off + 범위를 함께 잡는다. 훅 내장 폴백 없음 —
+  //  게이트웨이 불가 시 pull_tools 부재 → 넛지 안 함(fail-safe: 넛지는 못 하는 쪽이 안전).
+  // 기본 'mcp__lively__ext__' = 라이블리 MCP 프록시 전 호출(읽기·쓰기).
+  //  ⚠ prefix 매칭이다(substring 아님) — 'ext__' 로 두면 서버명이 'context__…' 인 MCP 가 오탐된다.
+  //  ⚠ 현재 훅 matcher 가 mcp__lively__.* 라 **다른 서버 prefix 를 넣어도 훅이 그 호출을 못 본다**(구성원 자체설치 MCP
+  //   커버는 후속 — matcher 를 이 목록에서 파생시키는 설계가 선행돼야 한다. 넓히기만 하면 모든 MCP 호출마다 훅이 스폰된다).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS pull_tools JSONB NOT NULL DEFAULT '["mcp__lively__ext__"]'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: embedding_config — 벡터검색(#172) 추론 seam 설정. config-over-code(고객 모델 스왑). ──
   // 기본 {"provider":"off"} = 벡터 비활성(현행 grep/ILIKE 그대로). 켜면 OpenAI-compatible /v1/embeddings 로 임베딩.
   // 시크릿 금지: auth_env_ref 는 환경변수 '이름'만(키 값 아님 — org_db_source.auth_ref idiom). 정규화/해석은 src/v6/embedding-provider.ts.
@@ -729,7 +740,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
