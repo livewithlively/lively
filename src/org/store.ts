@@ -744,6 +744,7 @@ export interface OrgRuntimeConfig {
   pull_tools: string[]; // work-flag 가 '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix 목록(#906) — write_tools 와 달리 **비면 끔**
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
+  hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -752,9 +753,19 @@ export interface OrgRuntimeConfig {
 const strArrSafe = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
+// PreToolUse 결정 전파 정책(#892) — Claude Code 의 permissionDecision 값 집합.
+export const HOOK_RELAY_DECISIONS = ["deny", "defer", "ask", "allow"] as const;
+export type HookRelayDecision = (typeof HOOK_RELAY_DECISIONS)[number];
+export const DEFAULT_HOOK_RELAY_DECISIONS: HookRelayDecision[] = ["deny", "ask", "defer"];
+// 컬럼 부재(구 DB)·잡값이면 기본값으로 접는다 — 빈 배열은 '전파 안 함'이라는 의도된 상태라 그대로 둔다.
+const relayDecisionsSafe = (v: unknown): HookRelayDecision[] => {
+  if (!Array.isArray(v)) return DEFAULT_HOOK_RELAY_DECISIONS;
+  return v.filter((x): x is HookRelayDecision => HOOK_RELAY_DECISIONS.includes(x as HookRelayDecision));
+};
+
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -779,6 +790,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     pull_tools: strArrSafe(row?.pull_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
+    hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -799,6 +811,7 @@ export async function updateRuntimeConfig(
     pull_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
     storage_policy?: StoragePolicyPatch;
+    hook_relay_decisions?: HookRelayDecision[];
   },
   actor?: string,
   source?: string,
@@ -815,6 +828,9 @@ export async function updateRuntimeConfig(
   const allowedInternalHosts = patch.allowed_internal_hosts !== undefined ? patch.allowed_internal_hosts.map((s) => s.toLowerCase()) : before.allowed_internal_hosts;
   const writeTools = patch.write_tools !== undefined ? patch.write_tools : before.write_tools;
   const pullTools = patch.pull_tools !== undefined ? patch.pull_tools : before.pull_tools;
+  // #892 — before 는 이미 resolve 된 값이라 되써도 기본값이 굳는 문제가 없다(embedding/storage 와 달리
+  //  '미설정' 과 '기본값' 을 구분할 이유가 없는 단순 화이트리스트).
+  const relayDecisions = patch.hook_relay_decisions !== undefined ? patch.hook_relay_decisions : before.hook_relay_decisions;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
   //  (env 시드 부활 금지). ② embedding_config 를 안 건드린 저장은 DB '원본'을 유지 — before(resolved)를 되쓰면
@@ -838,17 +854,17 @@ export async function updateRuntimeConfig(
     storagePolicy = (raw.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? {};
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$14::jsonb,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
        allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, pull_tools=EXCLUDED.pull_tools, embedding_config=EXCLUDED.embedding_config,
-       storage_policy=EXCLUDED.storage_policy,
+       storage_policy=EXCLUDED.storage_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -1605,9 +1621,18 @@ export interface OrgHook {
   sort: number;
   version: number;
   content_hash: string | null;
+  health: Record<string, OrgHookHealth>; // #892: member_id → 마지막 실패. 정상이면 {} (실패 시에만 기록)
   created_by: string | null;
   updated_at: string | null;
   updated_by: string | null;
+}
+
+// 훅 실행 실패 1건(멤버 러너 보고, #892). 성공은 기록하지 않는다 — '조용한 죽음'만 드러내면 된다.
+export interface OrgHookHealth {
+  at: string;               // ISO
+  reason: string;           // crash | timeout | hash_mismatch | spawn_error
+  exit_code: number | null;
+  stderr: string;           // 꼬리 일부(진단용)
 }
 
 function mapHook(row: Record<string, unknown>): OrgHook {
@@ -1626,13 +1651,15 @@ function mapHook(row: Record<string, unknown>): OrgHook {
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     content_hash: (row.content_hash as string) ?? null,
+    health: (row.health && typeof row.health === "object" && !Array.isArray(row.health))
+      ? (row.health as Record<string, OrgHookHealth>) : {},
     created_by: (row.created_by as string) ?? null,
     updated_at: (row.updated_at as string) ?? null,
     updated_by: (row.updated_by as string) ?? null,
   };
 }
 
-const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, target_members, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, target_members, enabled, sort, version, content_hash, health, created_by, updated_at, updated_by";
 const HOOK_COLS_Q = HOOK_COLS.split(", ").map((c) => "h." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 export async function listOrgHooks(): Promise<OrgHook[]> {
@@ -1660,6 +1687,27 @@ export async function listEnabledHooks(harness?: string, memberId?: string | nul
 export async function getOrgHook(id: string): Promise<OrgHook | null> {
   const r = await itemsPool.query(`SELECT ${HOOK_COLS} FROM org_hook WHERE id=$1`, [id]);
   return r.rows[0] ? mapHook(r.rows[0]) : null;
+}
+
+// 멤버 러너가 보고한 훅 실행 실패를 health 에 기록(#892). 멤버당 마지막 1건만 — 멤버 수로 유계라 정리 불요.
+//  audit 은 남기지 않는다: 설정 변경이 아니라 런타임 텔레메트리이고, 크래시마다 감사로그를 채우면 노이즈다.
+//  존재하지 않는 hook_id 는 UPDATE 가 0행으로 조용히 무시한다(멤버가 임의 키를 심을 수 없다).
+export async function recordHookFailures(
+  memberId: string,
+  failures: { hook_id: string; reason: string; exit_code?: number | null; stderr?: string }[],
+): Promise<void> {
+  for (const f of failures) {
+    const entry: OrgHookHealth = {
+      at: new Date().toISOString(),
+      reason: f.reason,
+      exit_code: f.exit_code ?? null,
+      stderr: (f.stderr ?? "").slice(-800),
+    };
+    await itemsPool.query(
+      `UPDATE org_hook SET health = jsonb_set(COALESCE(health,'{}'::jsonb), ARRAY[$2::text], $3::jsonb, true) WHERE id=$1`,
+      [f.hook_id, memberId, JSON.stringify(entry)],
+    );
+  }
 }
 
 export interface OrgHookInput {
