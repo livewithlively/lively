@@ -16,4 +16,4 @@ case "$(uname -s)" in
     ;;
 esac
 rm -f "$HOME/.lively/node-agent.env"
-echo "· 접속정보 삭제됨 — 게이트웨이 쪽 토큰 회수는 웹/REST(POST /api/ui/nodes/<id>/rotate 또는 DELETE)로."
+echo "· 접속정보 삭제됨 — 게이트웨이 쪽 접속 해제는 웹/REST(POST /api/ui/nodes/<id>/rotate 또는 DELETE)로."

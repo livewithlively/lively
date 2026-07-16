@@ -312,7 +312,7 @@ async function planOrApply(
   try {
     activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
   } catch {
-    if (opts.apply) throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+    if (opts.apply) throw new HttpError(503, "세션 목록을 확인할 수 없어 정리를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
   }
 
   const pmap = await projectsByFolder();
@@ -362,7 +362,7 @@ const FOLDERS_IN = z.array(z.string().min(1).max(300)).min(1).max(40)
 
 const workspaceBatchCapabilities = (): Capability[] => [
   restOnly("org_workspace_analyze", "워크스페이스 일괄 분석(dry-run)",
-    "주어진 폴더들의 회수 가능량을 한 번에 계산한다 — **아무것도 지우지 않는다.** " +
+    "주어진 폴더들의 정리 가능량을 한 번에 계산한다 — **아무것도 지우지 않는다.** " +
     "**프로젝트 id 가 아니라 폴더**로 지정하므로, DB 에서 삭제된 고아 폴더와 이름 기반 옛 폴더도 다룬다(프로젝트별 REST 는 404 로 죽는다). " +
     "⚠ 한 번에 최대 40개 — 더 많으면 나눠서 호출한다(du 가 오래 걸리면 프록시가 끊는다). admin 전용.",
     [{ method: "POST", paths: ["/api/ui/org/workspace/analyze"], parse: (req) => ({ ...(req.body ?? {}) }) }],
@@ -370,11 +370,11 @@ const workspaceBatchCapabilities = (): Capability[] => [
       ({ dry_run: true, ...await planOrApply(input.folders, user, { apply: false, removeWorktree: false }) }),
     { folders: FOLDERS_IN }),
 
-  restOnly("org_workspace_reclaim", "워크스페이스 일괄 회수",
+  restOnly("org_workspace_reclaim", "워크스페이스 일괄 정리(파생물 삭제)",
     "주어진 폴더들에서 **재생성 가능한 파생물만** 실제로 지운다(node_modules·build·target·.gradle…). " +
     "소스·커밋·.env·data/ 는 절대 지우지 않고, 활성 세션이 붙어 있으면 그 폴더는 건너뛴다. " +
     "remove_worktree=true 여도 **푸시 완료 + 더티 없음**인 워크트리만 제거한다(아니면 이유를 남기고 유지). " +
-    "고아 폴더·이름 기반 옛 폴더도 회수한다. ⚠ 한 번에 최대 40개. admin 전용.",
+    "고아 폴더·이름 기반 옛 폴더도 정리한다. ⚠ 한 번에 최대 40개. admin 전용.",
     [{ method: "POST", paths: ["/api/ui/org/workspace/reclaim"], parse: (req) => ({ ...(req.body ?? {}) }) }],
     async (input: { folders: string[]; remove_worktree?: boolean }, user: LivelyUser) =>
       ({ dry_run: false, ...await planOrApply(input.folders, user, { apply: true, removeWorktree: !!input.remove_worktree }) }),
@@ -896,7 +896,7 @@ export const deliveryCapabilities: Capability[] = [
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const rawAssets = Array.isArray(input.assets) ? input.assets : [];
-      if (rawAssets.length > 500) throw new HttpError(400, "자산이 너무 많습니다(500 초과)"); // 스캐너 폭주 가드
+      if (rawAssets.length > 500) throw new HttpError(400, "항목이 너무 많습니다(500 초과)"); // 스캐너 폭주 가드
       const KINDS = new Set(["skill", "subagent", "command", "hook"]);
       const seen = new Set<string>();
       const assets = [] as { id: string; kind: string; managed: boolean }[];
@@ -1010,7 +1010,7 @@ export const deliveryCapabilities: Capability[] = [
       }
       // skill·subagent·command = org_harness_asset. 인증 멤버면 조회 OK(어차피 로컬로 배포되는 것 — redact 불요).
       const a = await getOrgHarnessAsset(id);
-      if (!a || !a.enabled) throw new HttpError(404, "자산이 없거나 비활성입니다");
+      if (!a || !a.enabled) throw new HttpError(404, "항목이 없거나 비활성입니다");
       return { id: a.id, kind: a.kind, label: a.label, description: a.description ?? null, body: a.body ?? "", frontmatter: a.frontmatter ?? null };
     }),
 
@@ -1082,7 +1082,7 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/git-credential/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, _user: LivelyUser) => ({ deleted: await deleteGitCredential(GATEWAY_OWNER, parseGitHost(input)) })),
 
-  restOnly("org_token_revoke", "토큰 회수",
+  restOnly("org_token_revoke", "접속 열쇠 해제",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -1368,7 +1368,7 @@ export const deliveryCapabilities: Capability[] = [
   //  ⚠ 무인 자동 삭제는 **없다**(설계 결정) — 이 화면은 보여주기만 하고, 지우는 건 사람이 버튼을 눌러야 한다.
   //  회수 실행은 기존 workspace_reclaim(POST /api/ui/v6/projects/:id/reclaim) 을 그대로 쓴다(안전선 재구현 금지).
   restOnly("org_workspace_status", "워크스페이스 사용량",
-    "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 회수 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",
+    "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 정리 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/workspace"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       // 진행 중(project/) + 완료 보관(legacy-project/) 둘 다 — done 처리는 폴더를 **이동**할 뿐 지우지 않는다.
@@ -1984,11 +1984,11 @@ export const deliveryCapabilities: Capability[] = [
   // ════════ 하네스 자산 CRUD (스킬·서브에이전트·슬래시커맨드 — runtime 권한) ════════
   //  훅과 같은 runtime 자산군이나 멤버 디스크에 파일로 materialize(하네스가 스캔해야 발견). 회수=fail-OPEN(capability —
   //  게이트웨이 블립에 스킬 상실 방지), 위험 enforcement 는 paired_hook(fail-CLOSED 런너)이 담당. 멤버 fetch=org_runner_assets(별도).
-  restRuntime("org_harness_assets", "하네스 자산 목록",
+  restRuntime("org_harness_assets", "스킬·서브에이전트·커맨드 목록",
     "조직 스킬·서브에이전트·슬래시커맨드 전체(본문 포함) — runtime 권한 전용. 멤버 materializer fetch 는 org_runner_assets(별도).",
     [{ method: "GET", paths: ["/api/ui/org/harness-assets"], parse: () => ({}) }],
     async () => ({ assets: await listOrgHarnessAssets(), meaning: MEANING["harness-asset"] })),
-  restRuntime("org_harness_asset_upsert", "하네스 자산 추가·수정",
+  restRuntime("org_harness_asset_upsert", "스킬·서브에이전트·커맨드 추가·수정",
     "구성원 하네스에 배포되는 스킬/서브에이전트/커맨드를 저장한다(runtime). 본문은 멤버 디스크에 materialize 되며 스킬은 도구·셸 실행권한을 가질 수 있다(위험 통제=짝훅).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
@@ -2016,8 +2016,8 @@ export const deliveryCapabilities: Capability[] = [
       }, wctx(user, ctx));
       return { asset, ...seedAssetSyncWarning(id) };
     }),
-  restRuntime("org_harness_asset_remove", "하네스 자산 제거",
-    "하네스 자산을 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
+  restRuntime("org_harness_asset_remove", "스킬·서브에이전트·커맨드 제거",
+    "스킬·서브에이전트·커맨드를 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       await removeOrgHarnessAsset(assertAssetId(input.id), wctx(user, ctx));
@@ -2043,8 +2043,8 @@ export const deliveryCapabilities: Capability[] = [
 
   // ── per-member 개인 오버라이드 (#699) — 관리자 일괄 조회·변경(runtime). 유효성=정책(enabled+target_members) 위 오버라이드. ──
   //  관리자는 대량 배포를 target_members(자산/훅 편집)로, 개별 예외/멤버 opt-in-out 은 아래 오버라이드로. 멤버 본인은 me/asset-pref.
-  restRuntime("org_asset_prefs", "자산 개인 오버라이드 목록",
-    "하네스 자산·훅의 멤버별 개인 오버라이드(on/off) 전체 — 관리탭 일괄 조회용. target_kind/ref_id/member_id 로 필터.",
+  restRuntime("org_asset_prefs", "스킬·훅 개인 오버라이드 목록",
+    "스킬·서브에이전트·커맨드·훅의 멤버별 개인 오버라이드(on/off) 전체 — 관리탭 일괄 조회용. target_kind/ref_id/member_id 로 필터.",
     [{ method: "GET", paths: ["/api/ui/org/asset-prefs"],
       parse: (req) => ({ target_kind: req.query.target_kind, ref_id: req.query.ref_id, member_id: req.query.member_id }) }],
     async (input: Record<string, unknown>) => {
@@ -2054,8 +2054,8 @@ export const deliveryCapabilities: Capability[] = [
       if (typeof input.member_id === "string" && input.member_id) filter.member_id = input.member_id.trim().toLowerCase();
       return { prefs: await listAssetPrefs(filter) };
     }),
-  restRuntime("org_asset_pref_set", "자산 개인 오버라이드 설정",
-    "특정 멤버의 자산/훅 개인 오버라이드를 설정(state=true=강제 on/false=강제 off)하거나 해제(clear=true=관리자 정책 기본값 복귀)한다.",
+  restRuntime("org_asset_pref_set", "스킬·훅 개인 오버라이드 설정",
+    "특정 멤버의 스킬/훅 개인 오버라이드를 설정(state=true=강제 on/false=강제 off)하거나 해제(clear=true=관리자 정책 기본값 복귀)한다.",
     [{ method: "POST", paths: ["/api/ui/org/asset-pref"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const targetKind = assertPrefKind(input.target_kind);
@@ -2077,7 +2077,7 @@ export const deliveryCapabilities: Capability[] = [
       return { sources: all.map(maskDbSource), allowedSecretRefs: cfg.allowed_db_secret_refs, meaning: MEANING["db-source"] };
     }),
   restOnly("org_db_source_upsert", "DB 데이터소스 추가·수정",
-    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(풀 회수).",
+    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const cfg = await getRuntimeConfig(); // host·auth_ref 화이트리스트 검증 공용(운영자 통제 경계)
@@ -2167,7 +2167,7 @@ export const deliveryCapabilities: Capability[] = [
       return { source: maskDbSource(src) };
     }),
   restOnly("org_db_source_remove", "DB 데이터소스 제거",
-    "DB 데이터소스를 제거한다(db_query 즉시 반영 — 풀 회수).",
+    "DB 데이터소스를 제거한다(db_query 즉시 반영 — 연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const name = slug(input.name, "name");
