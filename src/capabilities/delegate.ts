@@ -21,11 +21,13 @@ const run: Capability = {
   name: "delegate_run",
   title: "작업 위탁 실행",
   description:
-    "무거운 1회성 작업(풀빌드·대량 테스트·장기 스크립트 등)을 워커 노드나 중앙에 위탁한다. 서브에이전트를 소환하듯 쓴다 — " +
-    "기본(wait)은 완료까지 기다렸다 결과를 바로 돌려준다. **로컬 리소스가 부족하거나 다른 노드에 오프로드하는 게 나을 때 시도하라.** " +
-    "지금 가용 노드가 없으면 {no_capacity:true, reason}을 즉시 돌려주니 그때는 로컬에서 직접 실행하면 된다(무한 대기 안 함). " +
-    "queue:true 를 주면 적합 노드가 날 때까지 대기 등록(장기 잡). repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 를 자동 준비해 워커 cwd 로 주니 프롬프트에서 클론 지시 불필요), ref=기준 브랜치(예 main). " +
-    "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스와 대조), needs_docker·node(지정)·subpath. wait_sec=완료 대기 상한(기본 120s). 셸 세션은 `lively delegate` CLI 가 동형.",
+    "무거운 1회성 작업(풀빌드·대량 테스트·장기 스크립트 등)을 워커 노드나 중앙에 위탁한다. " +
+    "⚠ 위탁은 이 MCP 툴이 아니라 `lively delegate` CLI 를 Bash(run_in_background) 로 실행하라(이 툴은 기본 비활성). " +
+    "MCP 동기 호출은 하네스에서 인라인 블로킹이라, 긴 wait 는 게이트웨이 long-poll 이 transport keepalive 를 넘겨 응답을 잃는다 — 서버측 작업은 완주하지만 결과 회수에 실패한다. " +
+    "CLI 는 wait=false 로 접수 후 진행을 미러링해 그 함정이 없다(런북 delegate-background-cli-not-mcp-wait). " +
+    "가용 노드 없으면 {no_capacity:true, reason} 즉시 반환(무한 대기 안 함), queue:true=적합 노드 날 때까지 대기 등록(장기 잡). " +
+    "repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 자동 준비해 워커 cwd 로 — 프롬프트 클론 지시 불필요), ref=기준 브랜치(예 main), " +
+    "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스 대조), needs_docker·node(지정)·subpath, wait_sec=완료 대기 상한(기본 120s).",
   scope: "context",
   input: {
     prompt: z.string().min(1).max(20000),
