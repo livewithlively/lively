@@ -240,12 +240,21 @@ async function writeAddDir(targets) {
 }
 await writeAddDir(addDirTargets);
 
-// ── 4) 마커 기록(.lively/project.json) ──
+// ── 4) 마커 기록(.lively/project.json) — read→merge→write(위 --pull-only 분기와 같은 규율) ──
+//  ⚠ 통째 덮어쓰기 금지: 마커는 writer 가 여럿이고 **키가 분리**돼 있다 — 우리가 쓰는 project_id/last_pull/repos 외에
+//   서버측 writeProvisionMarker(project-provision.ts)가 'provisioned'(박스 클론/워크트리 경로)를 같은 파일에 쓴다.
+//   그쪽은 `{...prev}` 로 우리 키를 보존하는데(그래서 그 주석이 "충돌 없음·비파괴 — 그 반대도 성립"이라 단언한다),
+//   여기서 prev 없이 쓰면 그 단언이 깨지고 'provisioned' 가 조용히 증발한다. 모르는 키도 그대로 보존한다.
 const dotLively = path.join(projDir, ".lively");
+const markerFile = path.join(dotLively, "project.json");
+let marker = {};
+try { marker = JSON.parse(fs.readFileSync(markerFile, "utf8")); } catch { /* 신규/파손 */ }
+marker.project_id = Number(projectId);
+marker.last_pull = newest;
+marker.repos = usedRepos;
 await fsp.mkdir(dotLively, { recursive: true });
-await fsp.writeFile(path.join(dotLively, "project.json"),
-  JSON.stringify({ project_id: Number(projectId), last_pull: newest, repos: usedRepos }, null, 2) + "\n");
-log(`마커 기록: ${path.join(dotLively, "project.json")}`);
+await fsp.writeFile(markerFile, JSON.stringify(marker, null, 2) + "\n");
+log(`마커 기록: ${markerFile}`);
 
 // ── 5) 하네스 실행(프로젝트 폴더에서) ──
 // 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions, codex=--yolo).
