@@ -176,10 +176,11 @@ async function renderTerminal(view) {
   function draw() {
     // 헤더 우측 — [+ 새 세션] + (내 세션 0개면) 따라하기. data-tour 앵커 유지(#517 온보딩).
     const newBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'new-session', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) });
+    const nodeBtn = el('button', { class: 'btn btn-ghost', title: '내 PC·서버를 노드로 연결/관리(#869)', text: '🖥 노드', onclick: () => openNodeManager(view) });
     const tourBtn = ownedSessions.length === 0
       ? el('button', { class: 'btn btn-ghost', text: '🧭 따라하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() })
       : null;
-    headActions.replaceChildren(...[tourBtn, newBtn].filter(Boolean));
+    headActions.replaceChildren(...[tourBtn, nodeBtn, newBtn].filter(Boolean));
 
     // 상태 카운트 = 필터칩 겸 요약.
     const counts: any = { all: sessions.length, busy: 0, waiting: 0, idle: 0, offline: 0 };
@@ -688,6 +689,75 @@ function openTermCreateForm(cfg, view, onCreated?) {
           if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));
+}
+
+// 노드 관리(#869) — 내 PC·서버를 노드로 연결(상태·추가안내·토큰회전·활성토글·삭제). 등록 자체는 그 머신에서
+//  `lively node --daemon` 이 self-register 하므로, 여기선 '추가하는 법' 안내 + 이미 붙은 노드의 관리를 제공한다.
+function openNodeManager(view) {
+  const body = el('div', {});
+  const back = overlay('🖥 노드 관리', body);
+  const gw = location.origin;
+  const codeStyle = 'background:var(--bg-subtle,#0d1117);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
+
+  async function load() {
+    body.replaceChildren(el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
+    let nodes: any[] = [];
+    try { nodes = (await api('/api/ui/nodes')).nodes || []; }
+    catch (e) { body.replaceChildren(el('div', { class: 'caption', text: '노드를 불러오지 못했습니다: ' + e.message })); return; }
+
+    // '내 PC를 노드로 추가하는 법' — 접이식. lively node 가 self-register 하므로 웹 등록 폼 대신 안내.
+    const cmd = 'curl -fsSL ' + gw + '/cli | sh\nlively login\nlively node --daemon        # 부팅·로그인마다 자동 연결';
+    const codeEl = el('pre', { style: codeStyle, text: cmd });
+    const howBody = el('div', { style: 'display:none' },
+      el('div', { class: 'caption', text: '내 PC·서버(macOS·Linux)를 노드로 붙이면 그 머신의 터미널 세션을 여기서 만들고 관리하며, 위탁 워커로도 씁니다.' }),
+      codeEl,
+      el('div', {},
+        el('button', { class: 'btn btn-ghost btn-sm', text: '명령 복사', onclick: () => { try { navigator.clipboard.writeText(cmd).then(() => toast('명령 복사됨')).catch(() => toast('복사 실패', true)); } catch (_) { toast('복사 실패', true); } } }),
+        el('span', { class: 'caption', text: '  tmux 는 없으면 자동 설치됩니다. 등록되면 아래 목록에 나타납니다(새로고침).' })));
+    const howToggle = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 내 PC를 노드로 추가하는 법',
+      onclick: () => { howBody.style.display = howBody.style.display === 'none' ? '' : 'none'; } });
+
+    const list = el('div', { style: 'display:flex;flex-direction:column;gap:8px;margin-top:10px' });
+    if (!nodes.length) list.append(el('div', { class: 'caption', text: '아직 등록된 노드가 없습니다 — 위 안내대로 추가하세요.' }));
+    for (const n of nodes) {
+      const badge = el('span', { class: 'tsess-badge' + (n.online ? '' : ' danger'),
+        text: n.online ? '🟢 연결됨 · 세션 ' + (n.sessions || 0) : '⦿ 끊김' });
+      const acts = el('div', { style: 'display:flex;gap:6px;margin-left:auto' },
+        el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '활성화' : '비활성',
+          title: n.enabled === false ? '다시 연결 허용' : '연결 차단(다음 재연결부터 거부)', onclick: () => toggle(n) }),
+        el('button', { class: 'btn btn-ghost btn-sm', text: '토큰 회전',
+          title: '현재 토큰 폐기 — 유출 대응. 그 머신에서 lively node --daemon 재실행이 필요합니다.', onclick: () => rotate(n) }),
+        el('button', { class: 'btn btn-sm btn-danger', text: '삭제', onclick: () => del(n) }));
+      list.append(el('div', { class: 'card', style: 'display:flex;align-items:center;gap:10px;padding:10px 12px' },
+        el('span', { text: '🖥' }),
+        el('div', { style: 'min-width:0' },
+          el('div', { style: 'font-weight:600' }, document.createTextNode((n.name || n.id) + ' '),
+            el('span', { class: 'caption', text: n.kind === 'worker' ? '워커' : '멤버' })),
+          el('div', { class: 'caption', text: n.id })),
+        badge, acts));
+    }
+    body.replaceChildren(
+      el('div', {}, howToggle, howBody),
+      el('div', { style: 'margin-top:8px;font-weight:600' }, document.createTextNode('내 노드 '),
+        el('button', { class: 'btn btn-ghost btn-sm', text: '↻', title: '새로고침', onclick: () => load() })),
+      list);
+  }
+  async function del(n) {
+    if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n토큰이 회수되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).')) return;
+    try { await api('/api/ui/nodes/' + encodeURIComponent(n.id), { method: 'DELETE' }); toast('노드 삭제됨'); load(); renderTerminal(view); }
+    catch (e) { toast('삭제 실패 — ' + e.message, true); }
+  }
+  async function toggle(n) {
+    try { await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/enable', { method: 'POST', body: JSON.stringify({ enabled: n.enabled === false }) }); toast(n.enabled === false ? '활성화됨' : '비활성화됨'); load(); }
+    catch (e) { toast('변경 실패 — ' + e.message, true); }
+  }
+  async function rotate(n) {
+    if (!confirm('노드 "' + (n.name || n.id) + '" 의 토큰을 회전할까요?\n현재 토큰이 폐기돼 연결이 끊기고, 그 머신에서 lively node --daemon 을 다시 실행해야 합니다.')) return;
+    try { await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/rotate', { method: 'POST', body: '{}' }); toast('토큰 회전됨 — 그 머신에서 lively node --daemon 재실행'); load(); }
+    catch (e) { toast('회전 실패 — ' + e.message, true); }
+  }
+  load();
+  return back;
 }
 
 // 세션 수정 — 이름·초대 멤버만 변경 가능(소유자만, 서버가 강제). 작업폴더·하네스·모델·자동승인은
