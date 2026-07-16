@@ -325,6 +325,18 @@ async function cmdNode(rest) {
   rmSync(tgz, { force: true });
   const agentJs = join(NODE_AGENT_DIR, "agent.mjs");
   if (!existsSync(agentJs)) die("번들에 agent.mjs 가 없습니다.", 1);
+  // node-pty 네이티브(spawn-helper·*.node) 재서명(#869) — prebuilt 는 **linker-signed adhoc** 서명이라, 다른 맥으로
+  //  복사되면 일부 macOS(Darwin 25.3+ 실측)에서 서명 검증 실패 → exec 시 segfault(=웹터미널 attach 불가·fd 폭주).
+  //  로컬 머신용 adhoc 로 강제 재서명해 유효화한다(best-effort — codesign 없거나 실패해도 진행). 게이트웨이엔 무영향(노드 로컬만).
+  if (process.platform === "darwin") {
+    const nptyDir = join(NODE_AGENT_DIR, "node_modules", "node-pty", "prebuilds");
+    for (const arch of ["darwin-arm64", "darwin-x64"]) {
+      for (const bin of ["spawn-helper", "pty.node"]) {
+        const p = join(nptyDir, arch, bin);
+        if (existsSync(p)) { try { spawnSync("codesign", ["--force", "--sign", "-", p], { stdio: "ignore" }); } catch { /* codesign 없음 등 — 무시 */ } }
+      }
+    }
+  }
 
   // 3) 실행 — 데몬(상시화) 또는 foreground.
   if (daemon) return nodeInstallDaemon(agentJs, nodeId);
