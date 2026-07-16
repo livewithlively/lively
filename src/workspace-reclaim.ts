@@ -257,6 +257,22 @@ export async function planReclaim(
   return { worktree: wt, entries, reclaimableBytes, worktree_check, active_session: active };
 }
 
+// 워크트리를 회수했으면 마커(.lively/project.json)의 provisioned 에서 그 항목도 지운다(#918).
+//  provisioned 는 코드가 읽지 않는 기록 필드지만, 유일한 소비자인 **에이전트**가 그걸 보고 없는 경로로 간다
+//  (실측: 회수됐는데 마커에 남은 죽은 경로 3건). 회수와 기록이 어긋나면 마커가 거짓말을 하는 셈이라 여기서 맞춘다.
+//  워크트리는 project/<id>/<repo> 이므로 마커는 그 부모 폴더 — 프로젝트 폴더 밖 워크트리(위탁 등)면 마커가 없어 no-op.
+//  read→merge→write: 다른 writer 의 키(project_id·repos·last_pull)는 보존한다(마커는 writer 가 여럿·키가 분리돼 있다).
+async function dropProvisionedEntry(worktree: string): Promise<void> {
+  const file = path.join(path.dirname(worktree), ".lively", "project.json");
+  try {
+    const prev = JSON.parse(await fsp.readFile(file, "utf8")) as { provisioned?: { cwd?: string }[] };
+    if (!Array.isArray(prev.provisioned)) return;
+    const next = prev.provisioned.filter((r) => r?.cwd !== worktree);
+    if (next.length === prev.provisioned.length) return;   // 이 워크트리 항목이 애초에 없음 — 무기록
+    await fsp.writeFile(file, JSON.stringify({ ...prev, provisioned: next }, null, 2) + "\n");
+  } catch { /* 마커 없음·파손·권한 — 회수 자체는 이미 성공했으므로 조용히 넘어간다(best-effort) */ }
+}
+
 export interface ReclaimResult {
   removed: string[];
   freedBytes: number;
@@ -306,6 +322,7 @@ export async function applyReclaim(
       const r = await git(["worktree", "remove", plan.worktree], opts.repoRoot);
       if (r.ok) {
         worktreeRemoved = true;
+        await dropProvisionedEntry(plan.worktree);   // 마커가 죽은 경로를 가리키지 않도록(#918)
         logger.info({ wt: plan.worktree }, "워크트리 회수(푸시 완료·클린 확인)");
       } else {
         worktreeSkippedReason = `git worktree remove 실패: ${r.out}`;
