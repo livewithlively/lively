@@ -90,6 +90,9 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "# Knowledge Index",
   "",
   "## 컨텍스트 온톨로지 개념 (맥락, 카테고리, 프로젝트, 지식)",
+  // 이 한 줄은 라이블리 org 의 DB 섹션에만 있던 편집분을 코드 폴백으로 역이관한 것(#906) — 양쪽을 같게 유지한다.
+  //  DB 행이 진실이고 코드는 폴백인데, 편집이 DB 에만 쌓이면 코드 릴리스로 지침을 못 배달한다(#537 함정).
+  "라이브 데이터가 필요하면 MCP 툴(`knowledge_search`/`knowledge_grep`/`knowledge_get`, `category_*`, `db_query`, `project_*_v6`/`task_*_v6` 등)을 적극적으로 호출하여, 컨텍스트 온톨로지로부터 맥락(지식, 프로젝트 등)을 가져온다.",
   "",
   "**맥락(Context)** 은 일할 때 알아야 할 조직의 모든 것이다. 세 축으로 본다.",
   "",
