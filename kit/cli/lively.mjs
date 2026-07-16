@@ -980,7 +980,7 @@ async function cmdMcpLocal() {
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
 //  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
 async function cmdRepo(rest) {
-  const { repoList, repoWorktree, repoWorktreeRemove } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
+  const { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
   const ctx = {
     cwd: process.cwd(),
     sh: (cmd, args, opts = {}) => { const r = run(cmd, args, { quiet: true, allowFail: true, env: opts.env }); return { stdout: r.out, stderr: r.err, code: r.code }; },
@@ -1021,7 +1021,20 @@ async function cmdRepo(rest) {
       say("  " + dim(res.note));
       return;
     }
-    die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo worktree <repo> [--branch --ref --path]  ·  lively repo worktree remove <repo> [--force]`);
+    if (sub === "pin") {
+      const op = String(pos[0] || "").toLowerCase();
+      if (op === "remove" || op === "rm") {
+        const res = repoPinRemove(ctx, { repo: pos[1], path: o.path });
+        ok(`핀 제거: ${res.removed}`); return;
+      }
+      const repo = pos[0];
+      if (!repo) die("레포 이름이 필요합니다.  예: lively repo pin <repo> [--ref main] [--path .]");
+      const res = await repoPin(ctx, { repo, ref: o.ref, path: o.path });
+      ok(`핀: ${bold(res.pin)}  ${dim(`${res.repo}@${res.sha}${res.committed ? " · " + res.committed : ""}${res.reused ? " (재사용)" : ""}`)}`);
+      say("  " + dim(res.note));
+      return;
+    }
+    die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo pin <repo> [--ref]  ·  lively repo worktree <repo> [--branch --ref --path]  ·  … remove <repo> [--force]`);
   } catch (e) { die(e.message || String(e)); }
 }
 
@@ -1063,6 +1076,7 @@ ${bold("작업")}
   node                   이 PC 를 노드로 연결 — 웹에서 로컬 터미널 관리/위탁 ${dim("(foreground, Ctrl-C 로 종료)")}
       --daemon               상시화(부팅·로그인마다 자동) ${dim("macOS launchd · Linux systemd --user")}   ·   node stop  데몬 해제
   repo list              이 머신에서 뜰 수 있는 레포 + 로컬 상태
+  repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   지금 폴더에 워크트리 생성(코드 작업면) ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
 
 ${bold("옵션")}

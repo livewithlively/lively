@@ -13,7 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname, isAbsolute } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
@@ -61,6 +61,25 @@ function resolveWtPath(cwd, repo, p) {
   return isAbsolute(p) ? p : join(cwd, p);
 }
 
+// base 확보 — 로컬에 없으면 레지스트리 clone_url 로 clone, 있으면 fetch(refs 만; 워킹트리 미변경 = RO 규율).
+//  작업 워크트리(repoWorktree)·읽기전용 핀(repoPin) 공용 진입.
+async function ensureBase(ctx, repo, base) {
+  if (!isGitRepo(ctx, base)) {
+    const reg = await ctx.api("/api/ui/repos");
+    const row = (reg.domainmapRepos || []).find((r) => r && r.name === repo);
+    const url = row && row.clone_url;
+    if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
+    mkdirSync(dirname(base), { recursive: true });
+    const c = ctx.sh("git", ["clone", url, base], { allowFail: true });
+    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${(c.stderr || "").trim().split("\n")[0]}`);
+  } else {
+    ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
+  }
+}
+
+// 핀 경로 — 지정 없으면 OS 임시디렉터리(세션 임시물). 작업 워크트리와 섞이지 않게 별도 루트.
+const pinPathOf = (ctx, repo, p) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo));
+
 // 이 머신에서 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·브랜치·origin 대비 최신).
 export async function repoList(ctx) {
   const reg = await ctx.api("/api/ui/repos");
@@ -88,18 +107,8 @@ export async function repoWorktree(ctx, args) {
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
 
-  // ① base 확보 — 없으면 레지스트리 clone_url 로 clone, 있으면 fetch(refs 만; 워킹트리 미변경 = RO 규율).
-  if (!isGitRepo(ctx, base)) {
-    const reg = await ctx.api("/api/ui/repos");
-    const row = (reg.domainmapRepos || []).find((r) => r && r.name === repo);
-    const url = row && row.clone_url;
-    if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
-    mkdirSync(dirname(base), { recursive: true });
-    const c = ctx.sh("git", ["clone", url, base], { allowFail: true });
-    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${(c.stderr || "").trim().split("\n")[0]}`);
-  } else {
-    ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
-  }
+  // ① base 확보(clone or fetch) — 공용.
+  await ensureBase(ctx, repo, base);
 
   // ② 브랜치·ref 결정 — 프로젝트면 project/<id>, ref 지정 시 origin/<ref> 에서 분기.
   const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
@@ -123,6 +132,50 @@ export async function repoWorktree(ctx, args) {
 
   return { repo, worktree: wt, branch, base, ref: refBranch,
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
+}
+
+// 핀 안내문 — 규약을 반환값에 실어 나른다(스킬이 절차를 중복 서술하지 않아도 되도록).
+const pinNote = (pin, repo, sha) =>
+  `이후 이 레포의 코드 인용·grep 은 이 핀 경로에서만: ${pin} · 리포트·지식엔 경로가 아니라 '${repo}@${sha}' 로 앵커하라`
+  + `(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현) · 끝나면 repo_pin_remove 로 정리.`;
+
+// 코드 근거 분석용 **읽기전용 핀** — base 확보·fetch 후 origin/<ref> 를 **detached** 워크트리로 뜬다.
+//  작업 워크트리(repoWorktree)와 목적이 다르다: 브랜치 없음(--detach) = SHA 고정 = 분석 내내 아무도 못 움직임.
+//  stale 소스·작업 브랜치 오독·HEAD 드리프트로 잘못된 코드 근거 결론이 나오는 걸 막는다. 핀은 일회용 —
+//  영속 앵커는 경로가 아니라 반환 sha(리포트·지식에 repo@sha).
+export async function repoPin(ctx, args) {
+  const repo = String(args.repo || "").trim();
+  if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
+  const base = join(reposDir(), repo);
+  await ensureBase(ctx, repo, base);
+  const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+  const target = `origin/${refBranch}`;
+  const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
+  if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);
+  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+
+  // 이미 핀이 있으면 — 같은 SHA 면 재사용(멱등), 다르면 갈아끼운다(핀은 읽기전용 일회용이라 안전).
+  if (isGitRepo(ctx, pin)) {
+    const cur = ctx.sh("git", ["-C", pin, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim();
+    if (cur === sha) return { repo, pin, sha, ref: refBranch, base, reused: true, note: pinNote(pin, repo, sha) };
+    ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
+  }
+  mkdirSync(dirname(pin), { recursive: true });
+  const r = ctx.sh("git", ["-C", base, "worktree", "add", "--detach", pin, target], { allowFail: true });
+  if (r.code !== 0) throw new Error(`핀 생성 실패(${repo}@${target}): ${(r.stderr || "").trim().split("\n")[0]}`);
+  const committed = ctx.sh("git", ["-C", pin, "log", "-1", "--format=%ci"], { allowFail: true }).stdout.trim() || null;
+  return { repo, pin, sha, ref: refBranch, base, committed, reused: false, note: pinNote(pin, repo, sha) };
+}
+
+// 핀 제거 — 읽기전용 사본이라 항상 force(낙서가 있어도 버린다). base·작업 워크트리 무영향.
+export function repoPinRemove(ctx, args) {
+  const repo = String(args.repo || "").trim();
+  if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
+  const base = join(reposDir(), repo);
+  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+  const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
+  if (r.code !== 0) throw new Error(`핀 제거 실패: ${(r.stderr || "").trim().split("\n")[0]}`);
+  return { removed: pin };
 }
 
 // lively_*_repo_worktree 로 만든 워크트리 제거(base·다른 워크트리 무영향). 미커밋 변경 있으면 실패(force 로 강제).

@@ -47,7 +47,7 @@ import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { repoList, repoWorktree, repoWorktreeRemove } from "./repo-worktree-core.mjs"; // #900 코어 공유(CLI `lively repo` 와 동일)
+import { repoList, repoWorktree, repoWorktreeRemove, repoPin, repoPinRemove } from "./repo-worktree-core.mjs"; // #900 코어 공유(CLI `lively repo` 와 동일)
 
 const PROTOCOL = "2025-06-18";
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -170,6 +170,42 @@ registerTool({
     additionalProperties: false,
   },
   handler: (args, ctx) => ctx.text(`제거됨: ${repoWorktreeRemove(ctx, args).removed}`),
+});
+
+registerTool({
+  name: "lively_local_repo_pin",
+  title: "코드 근거 분석용 읽기전용 핀(SHA 고정)",
+  description: "코드를 근거로 판단하기 전(리뷰·분석·설계) **먼저 호출하라**. 대상 레포를 이 머신에 확보(없으면 clone·있으면 fetch)한 뒤 "
+    + "origin/<ref> 를 detached(브랜치 없음 = SHA 고정) 워크트리로 떠서 경로와 SHA 를 돌려준다. 이후 그 레포의 코드 인용·grep 은 "
+    + "반드시 이 핀 경로에서만 하라 — stale 클론·남의 작업 브랜치 오독·분석 중 HEAD 드리프트로 잘못된 코드 근거 결론이 나오는 걸 막는다. "
+    + "리포트·지식엔 경로가 아니라 repo@sha 로 앵커한다(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현). 끝나면 lively_local_repo_pin_remove.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
+      ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: origin 기본 브랜치(main 등)" },
+      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리(세션 임시물)" },
+    },
+    required: ["repo"],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx) => ctx.json(await repoPin(ctx, args)),
+});
+
+registerTool({
+  name: "lively_local_repo_pin_remove",
+  title: "핀 제거",
+  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      repo: { type: "string", description: "레포 이름" },
+      path: { type: "string", description: "핀 경로(생성 때 지정했다면 같은 값). 기본: 생성 때와 동일 기본값" },
+    },
+    required: ["repo"],
+    additionalProperties: false,
+  },
+  handler: (args, ctx) => ctx.text(`핀 제거됨: ${repoPinRemove(ctx, args).removed}`),
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

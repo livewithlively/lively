@@ -57,7 +57,9 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
   const builtin = await rpc1(S, "tools/list", {});
   const builtinNames = (builtin.result?.tools || []).map((t) => t.name);
   const BASELINE = builtinNames.length;
-  check("tools/list: 빌트인 레포 툴 3종", ["lively_local_repo_list", "lively_local_repo_worktree", "lively_local_repo_worktree_remove"].every((n) => builtinNames.includes(n)), builtinNames.join(","));
+  check("tools/list: 빌트인 레포 툴 5종(list·worktree·remove·pin·pin_remove)",
+    ["lively_local_repo_list", "lively_local_repo_worktree", "lively_local_repo_worktree_remove", "lively_local_repo_pin", "lively_local_repo_pin_remove"].every((n) => builtinNames.includes(n)),
+    builtinNames.join(","));
   check("tools/list: repo_worktree 스키마 repo required", (() => { const t = builtin.result.tools.find((x) => x.name === "lively_local_repo_worktree"); return !!(t && t.inputSchema?.required?.includes("repo")); })(), "no repo required");
 
   // 4) ★확장점★ — 배열에 항목 하나 추가하면 그게 곧 list/call 에 반영된다
