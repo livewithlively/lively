@@ -704,12 +704,14 @@ export async function linkKnowledge(fromName: string, toName: string, relation =
 export async function unlinkKnowledge(fromName: string, toName: string, relation: string, ctx?: WriteCtx): Promise<void> {
   // #907 본문 파생 엣지는 여기서 못 뗀다 — 본문이 SoT라 지워봐야 다음 저장·스윕이 되살린다(“지웠는데 살아나”).
   //  진짜 해제 방법(본문에서 [[…]] 제거)을 알려주는 게 조용히 되살아나는 것보다 정직하다. 사람·에이전트 공통 가드.
+  //  ⚠ 문구의 '허용' 은 load-bearing — rest-util wrap() 이 이 토큰으로 400 을 매핑한다(없으면 500 +
+  //   메시지가 'internal_error' 로 치환돼 이 안내가 통째로 사라진다). assertTreeParent·moveKnowledge 와 같은 idiom.
   const auto = await one(itemsPool,
     `SELECT 1 AS x FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3 AND origin='wikilink'`,
     [fromName, toName, relation]);
   if (auto) {
     throw new Error(
-      `이 연결은 '${fromName}' 본문의 [[${toName}]] 에서 자동 생성된 것이라 여기서 해제할 수 없습니다 — 본문에서 [[${toName}]] 를 지우면 연결도 사라집니다. (관계를 바꾸려면 knowledge_link 로 명시하세요.)`);
+      `'${fromName}' 본문의 [[${toName}]] 에서 자동 생성된 연결이라 여기서 해제가 허용되지 않습니다 — 본문에서 [[${toName}]] 를 지우면 연결도 사라집니다(관계를 바꾸려면 knowledge_link 로 명시하세요).`);
   }
   await itemsPool.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
   await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx);

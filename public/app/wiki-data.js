@@ -534,7 +534,7 @@ function knLinkRow(e, k, reload, incoming) {
     const row = el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name) }, el('span', { class: 'kn-link-rel kn-link-' + e.relation, text: KN_LINK_REL_LABEL[e.relation] || e.relation }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
     if (fromBody) {
         row.append(el('span', {
-            class: 'kn-link-rel kn-link-source', text: '본문',
+            class: 'kn-link-rel kn-link-auto', text: '본문',
             title: incoming
                 ? `'${e.title || e.name}' 본문의 [[${k.name}]] 에서 자동 생성된 연결입니다 — 그 문서의 본문에서 링크를 지우면 사라집니다.`
                 : `이 문서 본문의 [[${e.name}]] 에서 자동 생성된 연결입니다 — 본문에서 링크를 지우면 사라집니다.`,

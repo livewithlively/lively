@@ -1237,6 +1237,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .kn-link-rel { flex: none; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 5px; color: var(--blue-deep); background: var(--bg-punch); letter-spacing: -.2px; }
 .kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: #FCF1EF; }
 .kn-link-rel.kn-link-source { color: var(--ink-sub); background: var(--bg-tint-2); }
+/* #907 본문 [[…]] 파생 엣지 '본문' 배지 — 출처자료(kn-link-source)와 지금은 같은 톤이지만 별개 개념이라 클래스를 나눈다. */
+.kn-link-rel.kn-link-auto { color: var(--ink-sub); background: var(--bg-tint-2); }
 .kn-linkrow-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s; }
 .kn-linkrow:hover .kn-linkrow-x { opacity: 1; }
 .kn-linkrow-x:hover { background: #FDECEC; color: #D6453C; }

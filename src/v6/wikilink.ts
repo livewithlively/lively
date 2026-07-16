@@ -19,12 +19,22 @@ export const RE_WIKI = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
 
 /** 코드펜스(``` · ~~~) 블록과 인라인코드(`…`) **밖**의 산문 조각만 fn 으로 매핑해 다시 이어붙인다.
  *  코드 안의 [[…]] 는 링크가 아니라 예시다 — 설계문서가 문법을 설명하며 [[name]] 을 적고(#290 문서가 실제로 그렇다),
- *  터미널 문서엔 [[27,13]] 같은 이스케이프 시퀀스가 있다. 이걸 엣지로 만들면 그래프가 오염된다. */
+ *  터미널 문서엔 [[27,13]] 같은 이스케이프 시퀀스가 있다. 이걸 엣지로 만들면 그래프가 오염된다.
+ *
+ *  펜스는 CommonMark 대로 **같은 문자 + 열 때 이상의 길이**로만 닫힌다. 아무 펜스 마커나 토글하면
+ *  중첩 예시(~~~ 로 감싸 그 안에 ``` 블록을 보여주는 흔한 기법)에서 판정이 뒤집혀 안쪽 예시가 산문으로 새어
+ *  실제 엣지가 된다(#907 리뷰 지적 — 실측 재현). */
 export function mapProseSegments(md: string, fn: (seg: string) => string): string {
-  let inFence = false;
+  let fence: { ch: string; len: number } | null = null;
   return md.split("\n").map((line) => {
-    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return line; }
-    if (inFence) return line;
+    const m = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (m) {
+      const ch = m[1][0], len = m[1].length;
+      if (!fence) fence = { ch, len };                          // 열기
+      else if (ch === fence.ch && len >= fence.len) fence = null; // 같은 문자·길이 충족 → 닫기 (아니면 코드 내용)
+      return line;
+    }
+    if (fence) return line;
     const parts = line.split(/(`[^`]*`)/);          // 홀수 인덱스 = 인라인코드 → 건드리지 않는다.
     for (let i = 0; i < parts.length; i += 2) parts[i] = fn(parts[i]);
     return parts.join("");

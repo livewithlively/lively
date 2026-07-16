@@ -45,6 +45,22 @@ t("~~~ 펜스도 동일", () => {
   assert.deepEqual(extractWikiLinkTargets("~~~\n[[name]]\n~~~\n[[real]]"), ["real"]);
 });
 
+// 펜스는 같은 문자로만 닫힌다(CommonMark) — 아무 마커나 토글하면 중첩 예시의 안쪽이 산문으로 새어 진짜 엣지가 된다.
+t("중첩 펜스: ~~~ 안의 ``` 는 닫지 못한다(예시가 엣지로 새면 안 됨)", () => {
+  assert.deepEqual(
+    extractWikiLinkTargets("~~~\n문서 예시:\n```\n[[example-link]]\n```\n~~~\n뒤 [[real]]"),
+    ["real"]);
+});
+t("중첩 펜스: ``` 안의 ~~~ 도 동일", () => {
+  assert.deepEqual(extractWikiLinkTargets("```\n~~~\n[[example]]\n~~~\n```\n[[real]]"), ["real"]);
+});
+t("긴 펜스(````)는 짧은 ``` 로 닫히지 않는다", () => {
+  assert.deepEqual(extractWikiLinkTargets("````\n```\n[[example]]\n```\n````\n[[real]]"), ["real"]);
+});
+t("언어태그 붙은 펜스(```ts)도 펜스로 인식", () => {
+  assert.deepEqual(extractWikiLinkTargets("```ts\n// [[example]]\n```\n[[real]]"), ["real"]);
+});
+
 t("인라인코드 안의 [[…]] 는 문법 설명 — 무시", () => {
   assert.deepEqual(extractWikiLinkTargets("문법은 `[[name]]` 입니다. 예: [[real]]"), ["real"]);
 });
