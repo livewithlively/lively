@@ -6,9 +6,11 @@
 //   LIVELY_GATEWAY_URL=https://gw LIVELY_NODE_TOKEN=lvk_... node dist/node/agent.js
 import WebSocket from "ws";
 import os from "node:os";
+import path from "node:path";
+import fsp from "node:fs/promises";
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, killEmptyTmuxServer, SHARED_ROOT, type CreateInput,
+  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT, type CreateInput,
 } from "../terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal-pty.js";
 import type { LivelyUser } from "../context.js";
@@ -81,6 +83,16 @@ class ChanSocket implements AttachSocket {
 //  에이전트 재시작 시 비워지지만, 게이트웨이가 재연결 때 watchTask 로 재장전한다(복구 경로).
 const trackedTasks = new Map<number, TaskWatch>();
 
+// 세션 작업폴더(@box_dir) 기준 안전 경로(#875) — .. 탈출 거부. requireSub 면 base 자체(빈 경로)는 파일 op 대상 불가로 거부.
+async function nodeSessionAbs(id: string, sub: string, requireSub = false): Promise<{ base: string; abs: string }> {
+  const base = path.resolve(await sessionDir(id));
+  const rel = String(sub || "").replace(/^[/\\]+/, "");
+  const abs = path.resolve(base, rel);
+  if (abs !== base && !abs.startsWith(base + path.sep)) throw new Error("허용 경로를 벗어났습니다");
+  if (requireSub && (rel === "" || abs === base)) throw new Error("경로가 필요합니다");
+  return { base, abs };
+}
+
 // ── ops 디스패치 — 게이트웨이가 이미 정책(소유·초대 검증)을 끝냈다는 전제의 기계적 실행. ──
 //  user 는 게이트웨이가 넘긴 신원 그대로 tmux 메타(@box_owner)·소유자 확인(assertManage)에 쓰인다.
 async function runOp(op: string, args: Record<string, unknown>): Promise<unknown> {
@@ -115,6 +127,48 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     }
     case "gone": return sessionGone(String(args.id));
     case "label": return getSessionLabel(String(args.id));
+    // 노드 세션 파일 릴레이(#875) — @box_dir 봉쇄(.. 탈출 거부). 노드는 멤버 본인 머신(단일 유저)이라 OS-유저 격리 없이
+    //  plain fs. 인가는 게이트웨이(nodeCanAttach)가 이미 끝냈다는 전제(F7 — runOp 는 기계적 실행만).
+    case "fsLs": {
+      const { base, abs } = await nodeSessionAbs(String(args.id), String(args.sub ?? ""));
+      let ents; try { ents = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new Error("디렉터리 없음"); }
+      const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
+      for (const e of ents) {
+        if (e.name.startsWith(".")) continue;
+        const isDir = e.isDirectory();
+        let size = 0; if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
+        items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+      }
+      items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+      const rel = path.relative(base, abs);
+      return { path: rel, parent: rel ? (path.dirname(rel) === "." ? "" : path.dirname(rel)) : null, items };
+    }
+    case "fsRead": { // len=0 → stat만(크기 프리체크). 아니면 offset 부터 len 바이트 base64.
+      const { abs } = await nodeSessionAbs(String(args.id), String(args.path ?? ""), true);
+      let st; try { st = await fsp.stat(abs); } catch { throw new Error("파일 없음"); }
+      if (!st.isFile()) throw new Error("파일이 아닙니다");
+      const len = Number(args.len) || 0, offset = Number(args.offset) || 0;
+      if (len === 0) return { size: st.size, eof: st.size === 0, data: "" };
+      const fh = await fsp.open(abs, "r");
+      try {
+        const want = Math.min(len, Math.max(0, st.size - offset));
+        const buf = Buffer.alloc(want);
+        const { bytesRead } = want > 0 ? await fh.read(buf, 0, want, offset) : { bytesRead: 0 };
+        return { size: st.size, data: buf.subarray(0, bytesRead).toString("base64"), eof: offset + bytesRead >= st.size };
+      } finally { await fh.close(); }
+    }
+    case "fsWrite": { // 순차 청크 — offset 0=truncate write, >0=append.
+      const { abs } = await nodeSessionAbs(String(args.id), String(args.path ?? ""), true);
+      const buf = Buffer.from(String(args.data ?? ""), "base64");
+      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      if ((Number(args.offset) || 0) === 0) await fsp.writeFile(abs, buf); else await fsp.appendFile(abs, buf);
+      return { ok: true, path: abs };
+    }
+    case "fsMkdir": {
+      const { abs } = await nodeSessionAbs(String(args.id), String(args.sub ?? ""), true);
+      await fsp.mkdir(abs, { recursive: true });
+      return { ok: true };
+    }
     default: throw new Error(`unknown op: ${op}`);
   }
 }

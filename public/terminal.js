@@ -427,7 +427,6 @@ function scheduleAutosend() {
 //  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
 async function dropFileToAgent(file) {
   if (!file) return;
-  if (NODE_ID) { toast('원격 노드 세션은 파일 전달이 아직 지원되지 않습니다.', true); return; } // #869 후속(파일 릴레이)
   const pad = (n) => String(n).padStart(2, '0');
   const d = new Date();
   const stamp = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
@@ -710,8 +709,6 @@ async function loadDir(p) {
   curDir = p || '';
   const list = document.getElementById('exp-list');
   document.getElementById('exp-path').textContent = '/' + curDir;
-  // 노드 세션(#869) — 파일 API 는 아직 노드로 릴레이되지 않는다(후속 태스크). 서버도 403 으로 막지만 UX 는 안내로.
-  if (NODE_ID) { list.replaceChildren(el('div', { class: 'exp-item', text: '원격 노드 세션은 파일 탐색이 아직 지원되지 않습니다.' })); return; }
   list.replaceChildren(el('div', { class: 'exp-item', text: '불러오는 중…' }));
   let data;
   try { data = await api(sUrl('/ls?path=' + encodeURIComponent(curDir))); }
@@ -745,7 +742,6 @@ async function uploadFile(file, dir) {
   if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('' + res.status)); }
 }
 async function uploadMany(files, dir) {
-  if (NODE_ID) { toast('원격 노드 세션은 파일 업로드가 아직 지원되지 않습니다.', true); return; }
   for (const f of files) { try { await uploadFile(f, dir); toast('업로드: ' + f.name); } catch (e) { toast('업로드 실패: ' + f.name + ' — ' + e.message, true); } }
   loadDir(curDir);
 }
