@@ -123,7 +123,7 @@ const activityList: Capability = {
   title: "작업(activity) 목록",
   description:
     "작업(activity)을 최신순으로 조회한다(feature/fix/decision 등). 필터: author_person(누가)·author_agent(어떤 AI)·" +
-    "type·project_id(진척시킨 프로젝트/태스크)·repo. 사람×AI 작업현황의 원천.",
+    "type·project_id(진척시킨 프로젝트/태스크)·repo·session_id(어느 터미널 세션에서 — #852 역방향). 사람×AI 작업현황의 원천.",
   scope: "memory",
   input: {
     author_person: z.string().optional().describe("작성자(사람) 식별자로 필터"),
@@ -131,6 +131,7 @@ const activityList: Capability = {
     type: z.string().optional(),
     project_id: z.number().int().positive().optional().describe("이 프로젝트(task) id 를 진척시킨 작업만"),
     repo: z.string().optional(),
+    session_id: z.string().max(200).optional().describe("이 터미널 세션(box-…)에서 한 작업만 — #852 의 역방향 조회"),
     limit: z.number().int().min(1).max(200).optional(),
     offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 작업 이력 순회(#709)"),
   },
@@ -145,6 +146,7 @@ const activityList: Capability = {
         type: req.query.type ? String(req.query.type) : undefined,
         project_id: req.query.project_id ? Number(req.query.project_id) : undefined,
         repo: req.query.repo ? String(req.query.repo) : undefined,
+        session_id: req.query.session_id ? String(req.query.session_id) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : undefined,
         offset: req.query.offset ? Number(req.query.offset) : undefined,
       }),
@@ -152,7 +154,8 @@ const activityList: Capability = {
   },
   handler: async (input: any) => listActivities({
     author_person: input.author_person, author_agent: input.author_agent, type: input.type,
-    project_id: input.project_id, repo: input.repo, limit: input.limit, offset: input.offset,
+    project_id: input.project_id, repo: input.repo, session_id: input.session_id,
+    limit: input.limit, offset: input.offset,
   }),
 };
 

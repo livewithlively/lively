@@ -114,6 +114,8 @@ export async function init(): Promise<string> {
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_author_idx ON activity(author_person, author_agent);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_committed_idx ON activity(committed_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_repo_idx ON activity(repo_id);`);
+  // #852 session_id 역방향 조회('이 세션이 무슨 작업을 했나') — 여태 인덱스도 필터도 없어 사실상 쓰기 전용이었다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_session_idx ON activity(session_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_touch_target_idx ON activity_touch(target_kind, target_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS dash_watch_owner_idx ON dash_watch(owner);`);
   // summary — 비개발자도 한눈에 읽는 쉬운 한 줄(겉에 노출). title 은 기술 상세(펼침). 기존 DB 보강(신규 설치는 위 DDL).

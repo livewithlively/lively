@@ -122,6 +122,8 @@ export interface ListActivitiesFilter {
   type?: string;
   project_id?: number; // v6: 이 프로젝트(task)를 진척시킨 작업만 (구 task_ku=W ku 대체)
   repo?: string;
+  session_id?: string; // #852 역방향 — '이 터미널 세션이 무슨 작업을 했나'. session_id 는 여태 기록·반환만 되고
+                       //  거를 수가 없어 사실상 쓰기 전용이었다(인덱스도 없었음 → schema.ts activity_session_idx).
   limit?: number;
   offset?: number;   // #709 페이지네이션 — 최신 N건 너머 과거 이력 도달
 }
@@ -251,6 +253,7 @@ export async function listActivities(f: ListActivitiesFilter): Promise<any[]> {
   if (f.type) { args.push(f.type); where.push(`a.type=$${args.length}`); }
   if (f.repo) { args.push(f.repo); where.push(`a.repo_id=(SELECT id FROM repo WHERE name=$${args.length})`); }
   if (f.project_id) { args.push(f.project_id); where.push(`a.project_id=$${args.length}`); }
+  if (f.session_id) { args.push(f.session_id); where.push(`a.session_id=$${args.length}`); }
   const off = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);   // #709 페이지네이션
   args.push(lim); const limP = `$${args.length}`;
   args.push(off); const offP = `$${args.length}`;

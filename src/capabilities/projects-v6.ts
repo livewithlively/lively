@@ -267,7 +267,14 @@ const projectCreateV6: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    // 유효성 먼저(생성 전) — 잘못된 list_id/follow_up 으로 고아 프로젝트가 안 생기게.
+    // 유효성 먼저(생성 전) — 잘못된 folder/list_id/follow_up 으로 고아 프로젝트가 안 생기게. 순수검사(folder)를
+    //  DB 왕복(list_id/follow_up) 앞에 둔다.
+    // folder 는 여태 **쓸 때 검증이 없었다** — 범위 검사는 읽을 때(projectAbsPath)만 했다. 그런데 그 읽기 경로
+    //  (regenAgents → ensureAgentsMd → resolveProjectBase → projectAbsPath)는 아래 regenAgents 의 .catch 가 삼켜서,
+    //  범위 밖 folder(예: "/Users/me/code/myapp")로 만든 프로젝트는 **INSERT 만 성공**하고 AGENTS.md 는 영영 미생성,
+    //  /shared/manifest 는 영구 400(work.mjs 즉사) 이 된다 — 전부 무음. 읽기와 **같은 자**로 생성 전에 차단한다.
+    //  (folder 는 "게이트웨이 공유베이스 하위 project/<id>" 전용 — 로컬 절대경로는 .lively/project.json 마커의 몫.)
+    if (input.folder != null) projectAbsPath(String(input.folder));
     if (input.list_id != null && !(await getProjectListRow(input.list_id))) {
       throw new HttpError(400, `리스트(영역) #${input.list_id} 가 없습니다 — project_list_index_v6 로 확인하세요`);
     }
