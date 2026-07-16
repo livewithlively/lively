@@ -96,7 +96,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   app.get("/api/ui/notion-assets/:file", ...mw(null), wrap(async (req, res) => {
     const file = String(req.params.file ?? "");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
-      res.status(400).json({ error: "잘못된 자산 이름" }); return;
+      res.status(400).json({ error: "잘못된 첨부 파일 이름" }); return;
     }
     // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
     let dir = process.env.NOTION_ASSET_DIR || "";
@@ -108,14 +108,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
-    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "자산 없음" }); return; }
+    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "첨부 파일 없음" }); return; }
     const ext = (file.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
     const inlineType = ASSET_INLINE_TYPES[ext];
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "private, max-age=86400"); // 파일명이 내용 좌표(해시)라 하루 캐시 무해
     res.setHeader("Content-Type", inlineType ?? "application/octet-stream");
     res.setHeader("Content-Disposition", inlineType ? "inline" : `attachment; filename="${file}"`);
-    fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "자산 없음" }); }).pipe(res);
+    fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "첨부 파일 없음" }); }).pipe(res);
   }));
 
   for (const { cap, mount } of restMounts()) {
@@ -128,7 +128,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       }
       // B5: 회수 불가한 정적 토큰(AUTH_TOKENS_JSON)으로는 fleet 제어·정책 변경(admin/runtime) 금지(세션·DB 토큰은 허용).
       if (cap.scope && DANGEROUS_SCOPES.has(cap.scope) && user.tokenSource === "static") {
-        throw new HttpError(403, "정적 토큰으로는 관리/런타임 변경이 불가합니다 — 회수 가능한 발급 토큰(lvk_)을 사용하세요");
+        throw new HttpError(403, "정적 토큰으로는 관리/런타임 변경이 불가합니다 — 접속 해제할 수 있는 발급 토큰(lvk_)을 사용하세요");
       }
       // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
       res.setHeader("Cache-Control", "no-store");

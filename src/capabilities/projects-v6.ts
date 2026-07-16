@@ -190,7 +190,7 @@ const projectGrepV6: Capability = {
 const projectSearchV6: Capability = {
   name: "project_search",
   title: "프로젝트 검색(v6, 하이브리드)",
-  description: "프로젝트·태스크·서브태스크를 의미 기반 하이브리드 검색(벡터 임베딩 + 렉시컬 grep 을 RRF 로 융합). 자연어 질문·다른 표현도 회수(단어가 본문에 그대로 없어도). 임베딩 off 면 grep 폴백. 정확 토큰/정규식은 project_grep. level·list_id·status 로 좁힘. mode=snippets(기본)|names.",
+  description: "프로젝트·태스크·서브태스크를 의미 기반 하이브리드 검색(벡터 임베딩 + 렉시컬 grep 을 RRF 로 융합). 자연어 질문·다른 표현도 찾아냄(단어가 본문에 그대로 없어도). 임베딩 off 면 grep 폴백. 정확 토큰/정규식은 project_grep. level·list_id·status 로 좁힘. mode=snippets(기본)|names.",
   scope: "memory",
   input: {
     q: z.string().min(1),
@@ -848,9 +848,9 @@ const projectLinkProjectV6: Capability = {
 //  시크릿·로컬데이터는 보호, 미푸시·더티·활성세션이면 거부. 자세한 근거는 src/workspace-reclaim.ts 머리주석.
 const workspaceReclaim: Capability = {
   name: "workspace_reclaim",
-  title: "워크스페이스 회수 (프로젝트 마무리)",
+  title: "워크스페이스 정리 (프로젝트 마무리)",
   description:
-    "프로젝트 폴더에서 **재생성 가능한 것만** 회수한다 — 빌드 산출물·의존성(node_modules·build·target·.gradle·Pods…). " +
+    "프로젝트 폴더에서 **재생성 가능한 것만** 지운다 — 빌드 산출물·의존성(node_modules·build·target·.gradle·Pods…). " +
     "**기본은 dry-run**(아무것도 안 지우고 무엇을 지울지만 보고). apply=true 로 실제 실행. " +
     "remove_worktree=true 면 워크트리도 제거하되 **푸시 완료 + 미커밋 변경 없음**일 때만(아니면 이유를 말하고 거부). " +
     "활성 세션이 붙어 있으면 아무것도 하지 않는다. 시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 지우지 않는다. " +
@@ -872,7 +872,7 @@ const workspaceReclaim: Capability = {
   handler: async (input: { project_id: number; apply?: boolean; remove_worktree?: boolean }, user) => {
     const project = await getProject(input.project_id);
     if (!project) throw new HttpError(404, "프로젝트를 찾을 수 없습니다");
-    if (!project.folder) throw new HttpError(400, "이 프로젝트에는 워크스페이스 폴더가 없습니다(회수할 것이 없습니다)");
+    if (!project.folder) throw new HttpError(400, "이 프로젝트에는 워크스페이스 폴더가 없습니다(정리할 것이 없습니다)");
     const dir = projectAbsPath(project.folder); // project/<id> 또는 legacy-project/<id> 범위 밖이면 여기서 차단
 
     // 지금 살아있는 세션들의 작업 디렉터리 — 이 폴더 안에서 작업 중이면 회수를 통째로 막는다(빌드 중일 수 있다).
@@ -880,7 +880,7 @@ const workspaceReclaim: Capability = {
     try {
       activeSessionDirs = (await listSessions(user)).map((s) => s.dir).filter(Boolean) as string[];
     } catch { /* 세션 조회 실패 → 보수적으로 '활성 없음'이 아니라, 아래 planReclaim 이 못 막으므로 차단한다 */
-      throw new HttpError(503, "세션 목록을 확인할 수 없어 회수를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
+      throw new HttpError(503, "세션 목록을 확인할 수 없어 정리를 중단합니다(작업 중인 세션을 덮어쓸 위험)");
     }
 
     // 프로젝트 폴더 안의 git 레포(워크트리)들을 각각 계획한다 — 한 프로젝트에 여러 레포가 붙을 수 있다.
@@ -913,10 +913,10 @@ const workspaceReclaim: Capability = {
       project: { id: project.id, name: project.name, folder: project.folder },
       results,
       note: !repos.length
-        ? "이 프로젝트 폴더에는 git 레포(워크트리)가 없어 회수할 파생물이 없습니다 — 정상입니다(레포를 provision 하지 않은 프로젝트)."
+        ? "이 프로젝트 폴더에는 git 레포(워크트리)가 없어 정리할 파생물이 없습니다 — 정상입니다(레포를 provision 하지 않은 프로젝트)."
         : input.apply
-          ? "회수 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
-          : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 회수하려면 apply=true 로 다시 호출하세요.",
+          ? "정리 완료. 워크트리를 지웠다면 다시 필요할 때 provision(레포 클론/워크트리 생성)으로 복구된다."
+          : "dry-run 입니다 — 아무것도 지우지 않았습니다. 실제로 정리하려면 apply=true 로 다시 호출하세요.",
     };
   },
 };

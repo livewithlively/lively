@@ -41,12 +41,12 @@ const dbGrantList: Capability = {
   name: "db_unmask_grants",
   title: "raw-PII 언마스크 grant 목록",
   description:
-    "raw-PII 언마스크 권한(org_db_unmask_grant) 목록. 특정 멤버·소스로 필터, active=true 면 유효(미회수·미만료)만. 기본 전원 마스킹이며 이 grant 를 받은 멤버만 지정 컬럼을 raw 로 조회한다(db_query 가 per-user 집행).",
+    "raw-PII 언마스크 권한(org_db_unmask_grant) 목록. 특정 멤버·소스로 필터, active=true 면 유효(미해제·미만료)만. 기본 전원 마스킹이며 이 grant 를 받은 멤버만 지정 컬럼을 raw 로 조회한다(db_query 가 per-user 집행).",
   scope: "admin",
   input: {
     member: z.string().optional().describe("멤버 id 필터"),
     source: z.string().optional().describe("데이터소스 이름 필터"),
-    active: z.boolean().optional().describe("true=유효(미회수·미만료)만"),
+    active: z.boolean().optional().describe("true=유효(미해제·미만료)만"),
   },
   expose: {
     mcp: true,
@@ -109,8 +109,8 @@ const dbGrantCreate: Capability = {
 
 const dbGrantRevoke: Capability = {
   name: "db_unmask_grant_revoke",
-  title: "raw-PII 언마스크 grant 회수",
-  description: "언마스크 grant 를 회수한다(revoked_at 세팅 — 멱등). 저장 즉시(≤5s) db_query 에서 그 멤버의 해당 컬럼이 다시 마스킹된다.",
+  title: "raw-PII 언마스크 권한 해제",
+  description: "언마스크 grant 를 해제한다(revoked_at 세팅 — 멱등). 저장 즉시(≤5s) db_query 에서 그 멤버의 해당 컬럼이 다시 마스킹된다. 되돌릴 수 있다(재부여 가능).",
   scope: "admin",
   input: { id: z.union([z.string(), z.number()]).describe("grant id") },
   expose: {
