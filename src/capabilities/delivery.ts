@@ -7,9 +7,6 @@
 //   ② 유효 scope = intersection(토큰, 멤버 LIVE) — 강등·퇴사 즉시 무효(store.ts computeEffectiveScopes),
 //   ③ 모든 쓰기는 org_content_audit 에 누가(actor_kind: 사람/AI)·경로(channel: mcp/web)·before/after 감사(조회: org_audit_list).
 // 모든 응답에 '구성원에게 미치는 효과'(meaning) 가이드를 함께 실어 UI 가 의미를 인지시킨다.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Capability, CapabilityCtx } from "./types.js";
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
@@ -18,7 +15,7 @@ import { assertSafeJsonSchema } from "./dynamic-tools.js";
 import { refreshProxySnapshot } from "./mcp-proxy.js";
 import { broadcastToolListChanged } from "../mcp-sessions.js";
 import type { LivelyUser } from "../context.js";
-import { MEANING, PUBLISH_MEANING } from "../org/meaning.js";
+import { MEANING } from "../org/meaning.js";
 // 저장소·로그(#813) — 관리탭이 박스 디스크·로그를 보는 창구(고객 박스엔 우리가 SSH 로 못 들어간다).
 import { checkDisks } from "../health.js";
 import { listLogs } from "../log-janitor.js";
@@ -35,7 +32,7 @@ import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } fr
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
 import { listSessions } from "../terminal-sessions.js";
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
-import { previewMemberContext, runPublish, kitVersion } from "../org/publish.js";
+import { previewMemberContext, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { DEFAULT_SKILLS } from "../org/default-content.js"; // #878 시딩 스킬 편집 경고(seed_warning)
@@ -432,7 +429,7 @@ export const deliveryCapabilities: Capability[] = [
         members: memberRows, memory, tokens, runtimeConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
         orgHooks, orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
-        meaning: MEANING, publishMeaning: PUBLISH_MEANING, canEdit: isAdmin, canRuntime: isRuntime,
+        meaning: MEANING, canEdit: isAdmin, canRuntime: isRuntime,
       };
     }, true),
 
@@ -1120,24 +1117,6 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   // ── 발행(검증 + 산출 확인) ──
-  restOnly("org_publish_run", "발행 실행",
-    "DB→임시디렉토리 materialize→generator 로 발행 아티팩트를 만들어 검증한다(구성원은 curl /install 로 받는다).",
-    [{ method: "POST", paths: ["/api/ui/org/publish"], parse: (req) => req.body ?? {} }],
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), "lively-pubcheck-"));
-      try {
-        const res = await runPublish(dir, "claude");
-        return {
-          ok: res.ok,
-          artifactBytes: res.artifactBytes,
-          warning: res.warning ?? null,
-          meaning: PUBLISH_MEANING,
-        };
-      } finally {
-        await rm(dir, { recursive: true, force: true }).catch(() => { /* 임시디렉토리 정리 실패 무시 */ });
-      }
-    }),
-
   // ── 런타임 설정(훅 on/off · work-roots · 너지) ──
   restRead("org_runtime_config", "런타임 설정 조회",
     "훅 on/off·work-roots·writeback 너지문구 — 세션 훅이 동적 fetch(scope null, 멤버 토큰 OK).",

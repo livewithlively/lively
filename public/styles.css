@@ -334,7 +334,10 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .tm-seg-btn:hover { background: var(--bg-tint, #F1F5FC); }
 .tm-seg-btn.on { background: var(--blue); color: #fff; }
 .tm-hint { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; margin: 8px 0 0; }
-.tm-members { margin-top: 14px; }
+/* 폼에 남는 요약 한 줄 — 구성원 표 자체는 모달로 뺐다(42명을 인라인으로 깔면 [저장]이 화면 밖으로 밀린다) */
+.tm-members { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tm-members .tm-count { margin-right: auto; }
+.tm-list { max-height: 52vh; overflow-y: auto; }
 .tm-count { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
 .tm-search { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; width: 150px; }
 .tm-stale { padding: 8px 10px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #6b4e00; }
