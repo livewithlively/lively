@@ -398,10 +398,36 @@ try {
       `w(${JSON.stringify(join(box, ".claude.json"))}, JSON.stringify({mcpServers:{linear:{type:"http",url:"https://org.example/mcp"}}}));`, // 라이블리가 덮어쓴 상태 모사
       `backupUserMcp("linear");`,                                                             // 재호출 — 최초1회면 유저 원본 유지
     ].join("\n"));
-    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box }, stdio: "ignore" });
+    // ⚠ CLAUDE_CONFIG_DIR 를 명시적으로 비운다 — 안 그러면 개발자 셸의 값이 새어들어 엉뚱한 파일을 보게 된다.
+    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: "" }, stdio: "ignore" });
     let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
     check("⑰ backupUserMcp — 유저 원본 스냅샷 + 부재는 null + 최초1회(재설치 오염 방지)",
       !!(bak.linear && bak.linear.url === "https://user.example/mcp") && bak.notion === null, JSON.stringify(bak));
+    rmSync(box, { recursive: true, force: true });
+  }
+
+  // ⑰-b **프로필 격리(#346)에서 백업이 올바른 .claude.json 을 본다** — claude 는 `--scope user` 를
+  //   CLAUDE_CONFIG_DIR 밑에 쓴다(deploy/provision-profile.sh:37). $HOME 고정으로 읽으면 유저 원본을 못 보고
+  //   null 로 굳어 uninstall 이 유저의 linear 를 **자격증명째 지운다**(#744 갭 재발). 함정: $HOME 쪽에도 파일이
+  //   있는데 **다른 내용**이면 어느 쪽을 읽는지가 드러난다 → 두 파일을 다르게 둬서 못박는다.
+  {
+    const box = mkdtempSync(join(tmpdir(), "lively-bak-profile-"));
+    const prof = join(box, "profile-claude");
+    mkdirSync(join(box, ".lively"), { recursive: true });
+    mkdirSync(prof, { recursive: true });
+    // $HOME 쪽 — claude 가 **안 읽는** 파일(프로필 격리 시). 여기엔 linear 가 없다.
+    writeFileSync(join(box, ".claude.json"), JSON.stringify({ mcpServers: {} }));
+    // CLAUDE_CONFIG_DIR 쪽 — claude 가 **실제로 읽고 쓰는** 파일. 유저의 linear 가 여기 있다.
+    writeFileSync(join(prof, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user-profile.example/mcp" } } }));
+    const probe = join(box, "probe.mjs");
+    writeFileSync(probe, [
+      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `backupUserMcp("linear");`,
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
+    let bak = {}; try { bak = JSON.parse(readFileSync(join(box, ".lively", "mcp-user-backup.json"), "utf8")); } catch { /* */ }
+    check("⑰-b backupUserMcp — 프로필 격리(#346)에서 CLAUDE_CONFIG_DIR 의 .claude.json 을 본다",
+      !!(bak.linear && bak.linear.url === "https://user-profile.example/mcp"), JSON.stringify(bak));
     rmSync(box, { recursive: true, force: true });
   }
 

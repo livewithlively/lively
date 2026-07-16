@@ -563,9 +563,23 @@ function readMcpServers() {
 
 // 비파괴 라운드트립 — 유저가 라이블리 이전부터 쓰던 org-겹침 MCP(linear/notion 등)를 **덮어쓰기 전에** 스냅샷한다.
 //  uninstall(deregisterExtraMcp)이 이걸 읽어 원복 → 유저 원본이 살아난다. 안 하면 설치가 덮어쓰고 제거가 지워 영구 소실(#744 갭).
-//  claude 는 user 스코프 MCP 를 $HOME/.claude.json 의 mcpServers 에 쓴다(run() 이 ambient HOME 으로 claude 실행 = 여기 HOME).
+// claude 가 `--scope user` MCP 를 쓰는 파일 — **CLAUDE_CONFIG_DIR 가 있으면 그 밑**, 없으면 $HOME/.claude.json.
+//  self-update.mjs 의 claudeUserConfigPath 와 **같은 판정**이어야 한다(둘이 갈리면 백업/복원이 어긋난다).
+//  ⚠ 예전엔 $HOME 고정이었다("claude 는 $HOME/.claude.json 에 쓴다"는 주석까지 달고). 사실이 아니다 —
+//   프로필 격리(#346)에선 claude 가 CLAUDE_CONFIG_DIR 쪽을 쓴다(deploy/provision-profile.sh:37 이 명시).
+//   그래서 backupUserMcp 가 **유저 원본을 못 보고 null 로 굳어**, uninstall 이 "설치 전 없었음"으로 판단해
+//   유저의 linear/notion 을 자격증명째 지웠다 — 백업이 막으려던 #744 갭 그 자체.
+function claudeUserConfigPath() {
+  const cands = [];
+  if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
+  cands.push(join(HOME, ".claude.json"));
+  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* */ } }
+  return null;
+}
 function claudeUserMcp(name) {
-  try { return JSON.parse(readFileSync(join(HOME, ".claude.json"), "utf8"))?.mcpServers?.[name] ?? null; }
+  const p = claudeUserConfigPath();
+  if (!p) return null;   // 파일 자체가 없다 = 설치 전 유저 항목도 없었다
+  try { return JSON.parse(readFileSync(p, "utf8"))?.mcpServers?.[name] ?? null; }
   catch { return null; }
 }
 //  **최초 1회만** 스냅샷 — 이미 백업에 키가 있으면 스킵. 재설치/업데이트가 (이미 라이블리가 덮어쓴) 자기 항목을
