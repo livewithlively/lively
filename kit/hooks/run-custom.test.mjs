@@ -9,7 +9,7 @@
 //  ⚠ 최우선 불변식 = **러너는 무슨 일이 있어도 exit 0**(세션 불가침). 그 다음이 결정 전파·병합·정책이다.
 //  ⚠ 사양은 훅↔러너 사이의 payload 전달 규약을 정하지 않는다 → 여기 테스트 훅들은 stdin 을 읽지 않는다
 //    (미규정 규약에 테스트가 기대면, 사양이 아니라 구현을 고정하는 테스트가 된다).
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -329,10 +329,12 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
   //  ⚠ '무출력' 이 아니라 '생 텍스트 미유출' 을 단언한다: 사양 §F 가 "하네스가 무시할 출력도 실패다" 라
   //   요구하므로, 러너는 이 경우 (결정이 아니라) 실패 알림을 규격 JSON 으로 낼 수 있다. 결정이 안 걸리는 것과
   //   생 텍스트가 안 새는 것 둘 다 지키면 사양을 만족한다.
+  //  훅 id 가 뜨는 것까지 함께 본다 — '어딘가 안전한 데 떨어졌다'가 아니라 F4 와 **같은 bad_output 경로**로
+  //  흘렀음을 적극 확인한다(그래야 이 단언이 무르지 않다).
   let wellFormed = true;
   try { if (r.stdout.trim()) JSON.parse(r.stdout.trim()); } catch { wellFormed = false; }
-  wellFormed && !r.stdout.includes("deny this please")
-    ? ok("X1b JSON 아닌 텍스트는 하네스로 새지 않는다(무시)")
+  wellFormed && !r.stdout.includes("deny this please") && r.stdout.includes("chatty-hook")
+    ? ok("X1b JSON 아닌 텍스트는 하네스로 새지 않는다(무시 — 단, 실패로는 드러난다)")
     : bad("X1b 텍스트 무시", dbg(r));
 }
 {
@@ -407,6 +409,28 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
   answer(r)?.permissionDecisionReason === "tpl:b.txt:20"
     ? ok("A6 템플릿 속 import 줄이 CJS 훅을 ESM 으로 오분류하지 않는다")
     : bad("A6 템플릿 오분류", dbg(r));
+}
+
+{
+  // ⑤ **자가교정이 부작용을 두 번 내면 안 된다.** 훅은 파일을 쓰거나 POST 를 한다 — 두 번 돌면 두 번 일어난다.
+  //    재시도는 '파싱 실패 = 본문 미실행' 일 때만 안전한데, ESM 에 없는 `__dirname`·`module`·`require` 는
+  //    파싱이 아니라 **그 줄에 도달해서** 나는 런타임 오류다(앞줄의 I/O 는 이미 끝난 뒤다).
+  //    그래서 그런 오류는 재시도 신호로 쓰면 안 된다 — 이 테스트가 그 경계를 고정한다.
+  const sentinel = join(SANDBOX, "side-effect.log");
+  const src = 'import("node:fs").then((fs) => {\n'
+    + `  fs.appendFileSync(${JSON.stringify(sentinel)}, "ran\\n");\n`
+    + '  console.log(__dirname);\n' // ESM 에선 여기서 런타임 ReferenceError — 위 append 는 이미 실행됨
+    + '  process.stdout.write("never");\n'
+    + '});\n';
+  const r = run("PreToolUse", [{ id: "side-effect-hook", src }]);
+  let lines = 0;
+  try { lines = readFileSync(sentinel, "utf8").trim().split("\n").filter(Boolean).length; } catch { /* 미생성 */ }
+  lines === 1
+    ? ok("A7 자가교정이 훅의 부작용을 두 번 일으키지 않는다")
+    : bad("A7 부작용 중복", `부작용 ${lines}회 실행됨(1회여야 함) — ${dbg(r)}`);
+  r.status === 0
+    ? ok("A7b 그래도 세션은 안 막힌다")
+    : bad("A7b exit 0", dbg(r));
 }
 
 // ── §F 확장 — 하네스가 무시할 출력도 실패다 ──

@@ -4226,7 +4226,12 @@ function hookHealthCard(h) {
     const ids = Object.keys(health);
     if (!ids.length)
         return el('span', {});
-    const REASON = { crash: '실행 중 오류로 죽음', timeout: '타임아웃(시간 초과)', hash_mismatch: '무결성 해시 불일치 — 실행 안 함', spawn_error: '실행 자체 실패' };
+    const REASON = {
+        crash: '실행 중 오류로 죽음', timeout: '타임아웃(시간 초과)',
+        hash_mismatch: '무결성 해시 불일치 — 실행 안 함', spawn_error: '실행 자체 실패',
+        // 훅은 정상 종료했지만 출력이 결정으로 안 읽혀 하네스가 통째로 무시한 경우 — 죽은 것과 결과가 같다.
+        bad_output: '출력을 결정으로 읽을 수 없음 — 하네스가 무시함(게이트 안 걸림)',
+    };
     return el('div', { class: 'admin-subcard warn-badge-soft' }, el('h4', { text: '⚠ 이 훅이 구성원 컴퓨터에서 실패하고 있습니다 (' + ids.length + '대)' }), el('p', { class: 'admin-hint', text: '실패한 훅은 아무 효과가 없습니다 — 화면상 "활성"이어도 실제로는 동작하지 않습니다.' }), ...ids.map((m) => {
         const e = health[m] || {};
         return el('div', { class: 'mini-row' }, el('div', { class: 'mini-title', text: m + ' · ' + (REASON[e.reason] || e.reason || '알 수 없음') }), el('div', { class: 'mini-meta', text: (e.at ? new Date(e.at).toLocaleString() : '') + (e.exit_code != null ? ' · exit ' + e.exit_code : '') }), e.stderr ? el('pre', { class: 'admin-pre', text: String(e.stderr).slice(-400) }) : null);
