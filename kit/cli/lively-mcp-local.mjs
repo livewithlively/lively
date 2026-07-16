@@ -125,13 +125,22 @@ function registerTool(tool) { TOOLS.push(tool); return tool; }
 //   원본)는 규율상 pristine — 코어가 fetch 로 refs 만 갱신하고 origin/<ref> 에서 워크트리를 분기한다.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// alwaysLoad(list·worktree 2종) — 코드 작업의 '작업면 준비' 진입점이라 세션이 스스로 발견해야 한다.
+//  #918: 프로젝트 세션은 워크트리 없이 뜰 수 있고(레포 미연결이면 항상), 그때 이 둘을 못 찾으면 공유 base 를
+//  ls 로 더듬거나(#906) base 에서 직접 작업하는 사고로 간다. deferred 면 '툴이 있는 줄 알아야 검색한다'는
+//  순환이라 발견을 WIKI 인덱스 제목 한 줄의 운에 맡기게 된다 — 그래서 이 둘만 항상 싣는다.
+//  pin 계열은 pin-sources 스킬이 이름을 직접 알려주므로 deferred 로 둔다(스키마 상시 점유 최소화).
+const ALWAYS_LOAD = { "anthropic/alwaysLoad": true };
+
 registerTool({
   name: "lively_local_repo_list",
   title: "이 머신에서 워크트리 뜰 수 있는 레포",
   description: "관리탭에 등록된 레포 목록 + 이 머신 로컬 base 클론 상태(클론됨?·현재 브랜치·origin 대비 최신)를 반환한다. "
-    + "코드 작업을 시작하기 전에 '어떤 레포를 lively_local_repo_worktree 로 뜰 수 있는지' 확인하는 용도. "
+    + "코드 작업을 시작하기 전에 '어떤 레포를 lively_local_repo_worktree 로 뜰 수 있는지' 확인하는 용도 — "
+    + "프로젝트에 레포가 연결돼 있지 않아도(또는 cwd 에 코드가 없어도) 이걸로 후보를 확인할 수 있다. "
     + "base 는 pristine 공유 원본이니 직접 작업하지 말고 워크트리를 떠서 작업하라.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  _meta: ALWAYS_LOAD,
   handler: async (_args, ctx) => ctx.json(await repoList(ctx)),
 });
 
@@ -140,7 +149,8 @@ registerTool({
   title: "레포 워크트리를 cwd 에 생성(코드 작업 준비)",
   description: "등록된 레포의 최신 코드를 이 머신에 확보(로컬에 없으면 clone·있으면 fetch)한 뒤, 지정 경로(기본 cwd 하위 <repo>)에 "
     + "격리 브랜치로 git worktree 를 만든다. 반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 "
-    + "직접 작업하지 말 것. 프로젝트 세션이면 브랜치 기본값은 project/<id>. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라.",
+    + "직접 작업하지 말 것. 프로젝트 세션이면 브랜치 기본값은 project/<id>. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+    + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다).",
   inputSchema: {
     type: "object",
     properties: {
@@ -152,6 +162,7 @@ registerTool({
     required: ["repo"],
     additionalProperties: false,
   },
+  _meta: ALWAYS_LOAD,
   handler: async (args, ctx) => ctx.json(await repoWorktree(ctx, args)),
 });
 
@@ -234,8 +245,16 @@ async function handleCall(name, args) {
   return normalizeResult(out);
 }
 
+// _meta 는 MCP 표준 확장 슬롯 — 하네스별 힌트를 싣는다(모르는 하네스는 무시하므로 무해).
+//  현재 용도: anthropic/alwaysLoad(아래 레포 툴 2종) — Claude Code 의 tool search 가 기본 활성이라
+//  MCP 툴은 deferred(이름만 실리고 스키마는 ToolSearch 후)인데, 그 두 개만 항상 실리게 뺀다.
 function toolSpec(t) {
-  return { name: t.name, ...(t.title ? { title: t.title } : {}), description: t.description || "", inputSchema: t.inputSchema || { type: "object", properties: {} } };
+  return {
+    name: t.name, ...(t.title ? { title: t.title } : {}),
+    description: t.description || "",
+    inputSchema: t.inputSchema || { type: "object", properties: {} },
+    ...(t._meta ? { _meta: t._meta } : {}),
+  };
 }
 
 export function serveMcpLocal({ input = process.stdin, output = process.stdout } = {}) {
@@ -255,7 +274,13 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
           protocolVersion: (params && params.protocolVersion) || PROTOCOL,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "lively-local", version: readLively("kit-version") || "0.1.0" },
-          instructions: "라이블리 로컬 조작 도구 — 그 노트북에서만 되는 git·워크트리·로컬 파일 작업. 툴 이름은 lively_local_* .",
+          // instructions 는 tool search 가 켜진 하네스에서 '언제 이 툴들을 찾아야 하는지'를 알려주는 자리다
+          //  (deferred 툴은 이름만 실리므로 — pin 계열이 여기에 기댄다). repo_list·repo_worktree 는 _meta.alwaysLoad 로
+          //  스키마가 항상 실리지만, '언제 쓰는지'는 여기서 한 번 더 못박는다(#918: 워크트리 없이 뜬 세션의 첫 수).
+          instructions: "라이블리 로컬 조작 도구 — 그 노트북에서만 되는 git·워크트리·로컬 파일 작업. 툴 이름은 lively_local_* . "
+            + "코드를 만져야 하는데 지금 폴더에 레포가 없으면 그게 정상이다: lively_local_repo_list 로 후보를 보고 "
+            + "lively_local_repo_worktree 로 워크트리를 떠서 그 위에서 작업하라(공유 base 직접작업 금지). "
+            + "고치지 않고 읽기만 할 거면 lively_local_repo_pin 으로 SHA 고정 핀을 떠서 인용하라.",
         });
       } else if (method === "notifications/initialized" || method === "notifications/cancelled") {
         // 알림 — 응답 없음

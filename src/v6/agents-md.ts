@@ -1,5 +1,6 @@
 // ── AGENTS.md 생성 — 프로젝트 digest(자동) + 규칙(사람). 공유 폴더에 쓰며 동기화로 각 PC 에 전달. ──
-//  ⚠ 레포 '경로'는 절대 넣지 않는다(머신마다 달라 — 로컬 경로는 .lively/project.json). 여기엔 이름·메타·태스크 인덱스·조회 key 만.
+//  ⚠ 레포 '경로'는 절대 넣지 않는다(머신마다 달라). 여기엔 이름·메타·태스크 인덱스·조회 key + 코드 확보 '방법'(툴)만 —
+//   경로는 그 머신에서 lively_local_repo_worktree 가 해석한다(codeWorkSection).
 //  호출처: (1) project-routes 의 매니페스트/규칙 엔드포인트, (2) projects-v6 캐퍼빌리티(생성·상태·팀원·레포·카테고리 변경 직후).
 //  base 를 주면 그대로 쓰고, 안 주면 프로젝트 folder 를 해결(없으면 물리 폴더 생성)해서 쓴다 — 생성 직후에도 동작.
 import fsp from "node:fs/promises";
@@ -25,6 +26,26 @@ const CLOSEOUT_SECTION = [
   "절차·최신 인자(MCP `list_id`/`follow_up` 등)는 **`project-closeout` 스킬**을 따른다(마무리·done 처리 시 이 스킬을 invoke).",
 ].join("\n");
 
+// 코드 작업 진입 — 프로젝트 세션은 코드가 체크아웃되지 않은 폴더에서 뜬다(#918: 세션 생성이 워크트리를 만들지 않는다).
+//  그래서 '코드를 어떻게 확보하나'를 프로젝트 폴더에서 항상 알려준다. 이게 없으면 에이전트가 공유 base 를 ls 로 더듬거나
+//  (#906) base 에서 직접 작업하는 사고로 간다 — 발견을 전역 WIKI 인덱스 제목 한 줄의 운에 맡기지 않는다.
+//  repos 미연결 프로젝트도 대상이다: 사용자가 레포를 안 붙였을 뿐 코드가 필요할 수 있다(#918 자신이 그 케이스였다).
+//  마커(provisioned)를 1순위로 가리키지 않는다 — 명시적 provision 을 한 프로젝트에만 있고(실측 40% 결손), 워크트리가
+//  회수돼도 남아 죽은 경로를 가리킬 수 있다. 툴은 이미 뜬 워크트리를 재사용하므로 그냥 툴이 1순위다.
+function codeWorkSection(repos: string[]): string[] {
+  if (!repos.length) {
+    return ["## 코드 작업",
+      "이 프로젝트엔 연결된 레포가 없다. 코드가 필요하면 `lively_local_repo_list` 로 이 머신에서 뜰 수 있는 레포 후보를 확인하고, "
+      + "`lively_local_repo_worktree {repo}` 로 워크트리를 떠서 그 위에서 작업한다(공유 base 직접작업 금지). 어느 레포인지 애매하면 사용자에게 확인한다.",
+      "그 레포가 이 프로젝트의 코드가 맞으면 **`project_set_repos_v6 {id, repos}` 로 연결해 둔다** — 다음 세션이 후보를 다시 고르지 않고 "
+      + "여기서 이름을 바로 본다(연결은 전체 교체이므로 기존 목록에 더해서 넘긴다).", ""];
+  }
+  return ["## 관련 레포 (코드 작업)", ...repos.map((r) => `- ${r}`), "",
+    "코드를 만져야 하면 `lively_local_repo_worktree {repo}` 로 **워크트리를 떠서 그 위에서** 작업한다 — cwd 에 격리 브랜치로 몇 초 만에 생긴다.",
+    "이 세션이 코드 없는 폴더에서 떠 있는 건 정상이다(워크트리는 세션 생성이 아니라 그 툴이 만든다). 이미 뜬 워크트리가 있으면 툴이 그대로 재사용한다.",
+    "공유 base 레포(여러 워크트리의 pristine 부모 — 남의 작업이 체크아웃돼 있을 수 있다)에서 직접 작업·커밋·빌드 금지.", ""];
+}
+
 function buildProjectDigest(p: any): string {
   const L: string[] = [];
   L.push(`# ${p.name}   (프로젝트 #${p.id})`, "");
@@ -34,9 +55,7 @@ function buildProjectDigest(p: any): string {
   if (Array.isArray(p.members) && p.members.length) L.push(`- 멤버: ${p.members.map((m: any) => m.display_name || m.member_id).join(", ")}`);
   if (Array.isArray(p.categories) && p.categories.length) L.push(`- 카테고리(도메인): ${p.categories.map((c: any) => c.name || c.key).join(", ")}`);
   L.push(`- 전체/최신 조회: \`project_get_v6(${p.id})\` (lively MCP)`, "");
-  if (Array.isArray(p.repos) && p.repos.length) {
-    L.push("## 관련 레포", ...p.repos.map((r: string) => `- ${r}`), "- 이 머신의 로컬 경로(클론/워크트리)는 `.lively/project.json` 참조.", "");
-  }
+  L.push(...codeWorkSection(Array.isArray(p.repos) ? p.repos : []));
   if (p.description) L.push("## 개요", String(p.description), "");
   // 필요지식(required) — 이 프로젝트를 진행하기 전에 알아야 할 배경. AI 가 처음부터 무엇을 알아야 하는지 보고 시작한다(전문 X·드리프트 최소 → knowledge_get 포인터). 산출(produced)은 결과물이라 넣지 않는다.
   const reqK = ((p.knowledge && p.knowledge.required) || []) as any[];
