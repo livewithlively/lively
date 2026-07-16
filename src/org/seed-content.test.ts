@@ -78,7 +78,12 @@ const INJECTIONS = new Set(["always", "recalled"]);
     assert.ok(h, `pull 훅 '${id}' 이 시드에 없음`);
     const src = h!.source_code;
     assert.ok(/function syncMode\(/.test(src), `훅 '${id}' 에 syncMode 게이트가 없음 — 사용자 폴더 무음 파괴 위험(#905 §2)`);
-    assert.ok(/syncMode\([^)]*\)\s*===\s*"none"\)\s*return/.test(src),
+    // '정의됐나'와 '실제로 걸리나'를 따로 본다 — 정의만 있고 호출이 없으면 게이트는 장식이다.
+    //  ⚠ 여기는 게이트가 **사라진 것**을 잡는 트립와이어지 코드 모양을 강제하는 자리가 아니다. 한 줄로 쓰든
+    //   (if (syncMode(...) === "none")) 변수로 받든(const mode = syncMode(...)) 통과해야 한다 — 실제 동작 증명은
+    //   project-pull-gate.test.mjs 가 훅을 돌려서 한다(그게 이 계약의 진짜 게이트).
+    assert.ok(/(=|\()\s*syncMode\(/.test(src), `훅 '${id}' 이 syncMode 를 호출하지 않음 — 게이트가 정의만 되고 안 걸림`);
+    assert.ok(/===\s*"none"\)\s*return/.test(src),
       `훅 '${id}' 이 sync='none' 에서 조기 return 하지 않음 — 게이트가 선언만 되고 안 걸림`);
     assert.ok(/function livelyOwnedDir\(/.test(src),
       `훅 '${id}' 에 폴더소유권 fail-safe 폴백(livelyOwnedDir)이 없음 — sync 키 없는 구 마커가 fail-open 된다`);

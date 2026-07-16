@@ -149,12 +149,17 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   }));
 
   // 업로드(raw 스트림 → 임시파일 → rename). 취소·끊김이면 목적지는 손대지 않는다(#797 — upload-file.ts).
+  //  응답에 결과 mtime/size 를 싣는다(#905 C3): up-sync 훅은 올린 뒤 **로컬 mtime 을 이 값으로 맞추고 원장에
+  //  기준선으로 적어야** 다음 pull 이 "내가 올린 것"과 "남이 고친 것"을 구별한다. 이게 없으면 자기 push 를 남의
+  //  변경으로 오인해 영구 거짓충돌이 나거나(수렴 불가), 크기·시각 추측으로 동일성을 때려맞히다 **남의 최신본을
+  //  덮는다**(같은 바이트 크기 · 다른 내용은 흔하다). 기존 클라이언트는 이 필드를 무시하므로 하위호환.
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { base } = await projBase(Number(req.params.id));
     const abs = resolveIn(base, req.query.path, true);
     try { await receiveUpload(req, abs, MAX_UPLOAD, null); }
     catch (e) { const he = uploadError(e); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
-    res.json({ ok: true });
+    const st = await fsp.stat(abs).catch(() => null);
+    res.json({ ok: true, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}) });
   }));
 
   // 새 폴더 생성
