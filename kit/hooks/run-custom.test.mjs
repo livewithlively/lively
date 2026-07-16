@@ -325,8 +325,13 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
   decisionOf(r) === undefined && r.status === 0
     ? ok("X1 JSON 아닌 텍스트는 결정으로 취급하지 않는다")
     : bad("X1 텍스트≠결정", dbg(r));
-  // 사양의 "(무시)" 를 문자 그대로 읽은 검사 — PreToolUse 응답은 하네스 규격 JSON 이어야 하므로 생 텍스트가 새면 안 된다.
-  r.stdout.trim() === ""
+  // 사양의 "(무시)" — PreToolUse 응답은 하네스 규격 JSON 이어야 하므로 훅의 생 텍스트가 새면 안 된다.
+  //  ⚠ '무출력' 이 아니라 '생 텍스트 미유출' 을 단언한다: 사양 §F 가 "하네스가 무시할 출력도 실패다" 라
+  //   요구하므로, 러너는 이 경우 (결정이 아니라) 실패 알림을 규격 JSON 으로 낼 수 있다. 결정이 안 걸리는 것과
+  //   생 텍스트가 안 새는 것 둘 다 지키면 사양을 만족한다.
+  let wellFormed = true;
+  try { if (r.stdout.trim()) JSON.parse(r.stdout.trim()); } catch { wellFormed = false; }
+  wellFormed && !r.stdout.includes("deny this please")
     ? ok("X1b JSON 아닌 텍스트는 하네스로 새지 않는다(무시)")
     : bad("X1b 텍스트 무시", dbg(r));
 }
@@ -349,6 +354,83 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
   a?.permissionDecision === "deny" && why.includes("REASON-ONE") && why.includes("REASON-TWO")
     ? ok("X3 같은 deny 를 여럿이 내면 사유가 모두 보존된다")
     : bad("X3 동일 결정 사유 보존", dbg(r));
+}
+
+// ── §A 회귀 방어 — 모듈 타입 분류가 '코드가 아닌 것'에 속으면 안 된다 (적대검증에서 나온 실제 회귀) ──
+// 분류는 휴리스틱이라 틀릴 수 있는데, **틀린 대가가 훅 사망**이면 안 된다. 아래 넷은 전부 실제로 깨졌던/깨질
+// 수 있는 모양이다. 특히 ①은 이 변경 이전(항상 .mjs)엔 멀쩡히 돌던 훅이라, 못 잡으면 순수 회귀다.
+{
+  // ① 주석 속 require( 때문에 CJS 로 오분류 → top-level await 이 SyntaxError. '어제 되던 훅이 오늘 죽는다'.
+  const src = '// TODO: replace legacy require(...) calls with imports\n'
+    + 'const r = await Promise.resolve("ok");\n'
+    + 'process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",'
+    + 'permissionDecision:"deny",permissionDecisionReason:"tla:"+r}}));\n';
+  const r = run("PreToolUse", [{ id: "tla-comment-hook", src }]);
+  answer(r)?.permissionDecisionReason === "tla:ok"
+    ? ok("A3 주석 속 require( 가 ESM 훅을 CJS 로 오분류하지 않는다")
+    : bad("A3 주석 오분류", dbg(r));
+}
+{
+  // ② 반대 함정 — 주석만 지우면 문자열 속 "http://…" 가 줄 주석으로 보여 뒤의 진짜 require 를 먹어치운다
+  //    → ESM 으로 오분류 → #892 원래 버그가 그대로 부활한다. 문자열을 먼저 소비해야만 통과한다.
+  const src = 'const url = "http://example.com/x";\n'
+    + 'const path = require("node:path");\n'
+    + 'process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",'
+    + 'permissionDecision:"deny",permissionDecisionReason:"cjs:"+path.basename(url)}}));\n';
+  const r = run("PreToolUse", [{ id: "url-string-hook", src }]);
+  answer(r)?.permissionDecisionReason === "cjs:x"
+    ? ok("A4 문자열 속 // URL 이 CJS 훅을 ESM 으로 오분류하지 않는다")
+    : bad("A4 URL 문자열 오분류", dbg(r));
+}
+{
+  // ③ 분류가 그래도 틀리는 변두리(실행되지 않는 require + ESM 전용 문법) — 파싱 단계 실패는 본문이 한 줄도
+  //    안 돌았다는 뜻이라, 반대 확장자로 한 번 되돌려 살려낸다. 오분류의 대가가 사망이면 안 된다.
+  const src = 'const r = await Promise.resolve(1);\n'
+    + 'if (false) { require("node:fs"); }\n'
+    + 'process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",'
+    + 'permissionDecision:"deny",permissionDecisionReason:"rescued:"+r}}));\n';
+  const r = run("PreToolUse", [{ id: "ambiguous-hook", src }]);
+  answer(r)?.permissionDecisionReason === "rescued:1"
+    ? ok("A5 분류가 틀려도 파싱 실패면 반대 확장자로 자가교정된다")
+    : bad("A5 자가교정", dbg(r));
+}
+
+{
+  // ④ 템플릿 리터럴 안의 `import` 줄이 ESM 마커로 오인되면 CJS 훅이 .mjs 로 가 `require is not defined` 로 죽는다
+  //    = #892 원본 증상. 이건 **런타임** ReferenceError 라 자가교정(파싱 실패 전용)이 못 구한다 —
+  //    분류가 코드 아닌 것을 걷어내야만 통과한다. 즉 이 케이스가 stripNonCode 의 값을 단독으로 증명한다.
+  const src = 'const tpl = `\nimport x from "y";\n`;\n'
+    + 'const path = require("node:path");\n'
+    + 'process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",'
+    + 'permissionDecision:"deny",permissionDecisionReason:"tpl:"+path.basename("/a/b.txt")+":"+tpl.length}}));\n';
+  const r = run("PreToolUse", [{ id: "template-import-hook", src }]);
+  answer(r)?.permissionDecisionReason === "tpl:b.txt:20"
+    ? ok("A6 템플릿 속 import 줄이 CJS 훅을 ESM 으로 오분류하지 않는다")
+    : bad("A6 템플릿 오분류", dbg(r));
+}
+
+// ── §F 확장 — 하네스가 무시할 출력도 실패다 ──
+{
+  // 훅은 정상 종료했지만 JSON 앞에 로그가 섞여 하네스가 통째로 무시한다 → 관리자는 게이트가 걸린 줄 아는데
+  // 실제론 아무 일도 안 일어난다. 죽는 것과 결과가 같으므로 같이 드러나야 한다(#892 와 똑같은 조용한 무력화).
+  const src = 'console.log("checking policy...");\n' + decide({ decision: "deny", reason: "should have blocked" });
+  const r = run("PreToolUse", [{ id: "chatty-json-hook", src }]);
+  decisionOf(r) === undefined && r.stdout.includes("chatty-json-hook") && r.status === 0
+    ? ok("F4 결정으로 못 읽히는 출력도 실패로 드러난다(조용한 무력화 방지)")
+    : bad("F4 무시될 출력 보고", dbg(r));
+}
+{
+  // 러너는 툴콜마다 돈다 — 같은 훅의 같은 실패를 매번 알리면 고장난 훅 하나가 세션을 시끄럽게 만든다.
+  // 1회차엔 알리고, 곧이은 2회차엔 조용해야 한다(사양 §F 의 '최소 간격').
+  const hooks = [{ id: "always-broken-hook", src: 'throw new Error("boom");\n' }];
+  const first = run("PreToolUse", hooks);
+  const second = run("PreToolUse", hooks);
+  first.stdout.includes("always-broken-hook") && !second.stdout.includes("always-broken-hook")
+    ? ok("F5 같은 훅의 반복 실패는 매 툴콜마다 알리지 않는다(스로틀)")
+    : bad("F5 스로틀", `1회차=${JSON.stringify(first.stdout)} 2회차=${JSON.stringify(second.stdout)}`);
+  second.status === 0
+    ? ok("F5b 스로틀되어도 세션은 여전히 안 막힌다")
+    : bad("F5b 스로틀 exit 0", dbg(second));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

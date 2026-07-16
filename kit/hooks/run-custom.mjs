@@ -29,6 +29,7 @@ const LIVELY = join(HOME, ".lively");
 const GRACE_MS = 10 * 60 * 1000; // 게이트웨이 일시 다운 허용(최근 성공 캐시). 만료 후 fail-CLOSED.
 const FETCH_MS = 3000;
 const REPORT_MS = 1500;   // 훅 실패 보고(fire-and-forget) 상한 — 세션을 절대 기다리게 하지 않는다.
+const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 같은 훅 실패 재보고 최소 간격(툴콜마다 왕복하지 않기 위해).
 const STDERR_KEEP = 800;  // 보고에 싣는 stderr 꼬리 길이(진단엔 충분, 페이로드는 작게).
 // PreToolUse 결정 중 러너가 하네스로 전파할 값 — 게이트웨이 미제공/구버전이면 이 기본값.
 //  'allow' 는 기본 제외: 관리자 훅이 멤버의 권한 프롬프트(동의 UI)를 소리 없이 건너뛰게 하지 않는다.
@@ -83,6 +84,23 @@ async function fetchHooks() {
   finally { clearTimeout(t); }
 }
 
+// 같은 훅의 실패를 매 툴콜마다 보고하지 않도록 로컬 스로틀. 러너는 PreToolUse matcher '.*' 로 배선돼
+//  **모든 툴 호출마다** 돈다 — 훅 하나가 계속 깨져 있으면 스로틀 없이는 툴콜마다 왕복 1회 + 최대 REPORT_MS
+//  지연이 붙는다(고장난 훅이 세션을 느리게 만드는 꼴). 훅별 마지막 보고 시각만 남긴다(파일 1개, 유계).
+function throttleFailures(fails) {
+  const f = join(LIVELY, "hook-report-sent.json");
+  let sent = {};
+  try { sent = JSON.parse(readFileSync(f, "utf8")) || {}; } catch { /* 없으면 첫 보고 */ }
+  const now = Date.now();
+  const fresh = fails.filter((x) => !(typeof sent[x.hook_id] === "number" && now - sent[x.hook_id] < REPORT_THROTTLE_MS));
+  if (!fresh.length) return [];
+  for (const x of fresh) sent[x.hook_id] = now;
+  // 유계 유지 — 없어진 훅의 기록이 영원히 쌓이지 않게 만료분은 버린다.
+  for (const k of Object.keys(sent)) if (now - sent[k] > REPORT_THROTTLE_MS) delete sent[k];
+  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(f, JSON.stringify(sent), { mode: 0o600 }); } catch { /* 스로틀 실패는 무시(중복 보고가 세션을 막진 않는다) */ }
+  return fresh;
+}
+
 // 훅 실패를 게이트웨이에 보고(fire-and-forget) — 관리탭이 '이 훅이 어느 멤버 머신에서 죽는지' 보게 한다(#892 결함 C).
 //  실패했을 때만 호출되므로 정상 경로 비용 0. 보고 실패는 무시한다(관측이 세션을 막아선 안 된다).
 async function reportFailures(fails) {
@@ -119,18 +137,46 @@ function matches(hook, toolName) {
   try { return new RegExp(hook.matcher).test(toolName); } catch { return false; } // 깨진 매처 → 넓히지 말고 미실행
 }
 
+// 분류 전에 '코드가 아닌 것'(주석·문자열·템플릿)을 지운다. 주석 한 줄의 `require(` 때문에 멀쩡한 ESM 훅이
+//  .cjs 로 오분류되면 top-level await 이 SyntaxError 로 죽는다 — 어제 되던 훅이 오늘 깨지는 회귀다.
+//  ⚠ 주석만 지우면 안 된다: 문자열 안의 `"http://…"` 가 줄 주석으로 보여 뒷부분(진짜 require)을 통째로
+//   먹어버린다. 그래서 한 패스에서 문자열을 먼저 소비한다. 정규식 리터럴까지는 안 본다(아래 재시도가 받아냄).
+function stripNonCode(src) {
+  const s = String(src || "");
+  let out = "", i = 0;
+  while (i < s.length) {
+    const c = s[i], d = s[i + 1];
+    if (c === "/" && d === "/") { while (i < s.length && s[i] !== "\n") i++; continue; }
+    if (c === "/" && d === "*") { i += 2; while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) i++; i += 2; continue; }
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c; i++;
+      while (i < s.length && s[i] !== q) { if (s[i] === "\\") i++; i++; }
+      i++; out += q + q; continue; // 빈 리터럴로 대체 — 위치는 보존하되 내용은 분류에서 뺀다
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
 // 훅 소스의 모듈 타입 — 임시파일 확장자가 곧 Node 의 모듈 해석이다. CJS 소스(`require`)를 .mjs 로 쓰면
 //  `require is not defined in ES module scope` 로 첫 줄에서 즉사한다(#892: spec-blind guard/tracker 가 이렇게
 //  등록 이래 내내 죽어 있었다 — stdout 0바이트라 '아무 결정 안 함'과 구분되지 않았다).
 //  ESM 마커(최상위 import/export)가 있으면 .mjs, 없고 CJS 마커만 있으면 .cjs, 판단 불가면 .mjs(종전 기본값 유지).
+//  판단 불가를 .mjs 로 두는 게 중요하다 — 종전 동작과 같아서 '되던 훅'이 분류 때문에 깨지지 않는다.
 //  `.js` + Node 모듈 자동감지에 기대지 않는 이유: tmpdir 상위의 package.json `type` 에 좌우돼 비결정적이다.
 const ESM_MARK = /^[ \t]*(?:import[\s{*'"]|export[\s{*])/m;
 const CJS_MARK = /\brequire\s*\(|\bmodule\.exports\b|\bexports\./;
 function moduleExt(src) {
-  const s = String(src || "");
+  const s = stripNonCode(src);
   if (ESM_MARK.test(s)) return "mjs";
   return CJS_MARK.test(s) ? "cjs" : "mjs";
 }
+
+// 모듈 타입을 틀리게 골랐을 때 Node 가 내는 **파싱 단계** 오류들. 파싱에서 죽었다는 건 훅 본문이 단 한 줄도
+//  실행되지 않았다는 뜻이라, 반대 확장자로 딱 한 번 다시 돌려도 부작용이 두 번 일어날 수 없다(재시도 안전).
+//  ⚠ `require is not defined`(런타임 ReferenceError)는 여기 넣지 않는다 — 그건 이미 I/O 를 한 뒤에도 날 수 있어
+//   재시도하면 부작용이 중복된다. 그 경우는 오분류돼도 종전(.mjs 고정) 동작과 같아 더 나빠지지 않는다.
+const MODULE_MISMATCH = /Cannot use import statement outside a module|Unexpected token 'export'|await is only valid in async functions|Cannot use 'import\.meta' outside a module|__dirname is not defined|module is not defined in ES module scope/;
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
 //  '훅이 죽음'과 '훅이 출력 없음'이 구분 불가였고, 그래서 죽은 훅이 내내 발견되지 않았다.
@@ -138,7 +184,20 @@ function runHook(hook, stdin) {
   // content_hash 무결성 — 해시가 없거나(변조 캐시) source 와 불일치면 실행 안 함(fail-CLOSED hard-gate).
   const h = crypto.createHash("sha256").update(hook.source_code || "").digest("hex");
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
-  const tmp = join(tmpdir(), `lively-hook-${crypto.randomBytes(8).toString("hex")}.${moduleExt(hook.source_code)}`);
+  const first = moduleExt(hook.source_code);
+  const r = spawnHook(hook, stdin, first);
+  // 확장자를 틀리게 골라 **파싱 단계**에서 죽었으면 반대 확장자로 딱 한 번 다시. 파싱 실패 = 본문 미실행이라
+  //  부작용 중복이 없다. 분류는 휴리스틱이라 정규식 리터럴 같은 변두리에서 틀릴 수 있는데, 그때 훅을 죽이는 대신
+  //  자가교정한다(오분류의 비용이 '훅 사망'이면 안 된다 — 그게 #892 였다).
+  if (r.fail && MODULE_MISMATCH.test(r.fail.stderr || "")) {
+    const retry = spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs");
+    if (!retry.fail) return retry;
+  }
+  return r;
+}
+
+function spawnHook(hook, stdin, ext) {
+  const tmp = join(tmpdir(), `lively-hook-${crypto.randomBytes(8).toString("hex")}.${ext}`);
   try {
     writeFileSync(tmp, hook.source_code || "", { mode: 0o600 });
     const timeout = Math.min(Math.max(Number(hook.timeout_sec) || 10, 1), 120) * 1000;
@@ -182,12 +241,20 @@ function errorHeadline(stderr) {
 //  규칙은 Claude Code 공식과 동일: 가장 제한적인 결정이 이긴다(deny > defer > ask > allow),
 //  additionalContext 는 모든 훅 것을 모아 함께 전달. relay 는 org 정책 필터(기본 allow 제외).
 const RANK = { deny: 4, defer: 3, ask: 2, allow: 1 };
+
+// 훅 stdout 에서 hookSpecificOutput 을 꺼낸다. 하네스 계약상 PreToolUse 의 비JSON stdout 은 무시되므로,
+//  파싱 실패 = '이 훅은 하네스에 아무 말도 못 했다' 와 같다 → 호출부가 이걸 실패로 드러낸다.
+function hookOutputOf(raw) {
+  let j; try { j = JSON.parse(raw); } catch { return null; }
+  const h = j && j.hookSpecificOutput;
+  return (h && typeof h === "object" && !Array.isArray(h)) ? h : null;
+}
+
 function mergePreToolUse(outputs, relay) {
   let best = null; const reasons = []; const ctxs = [];
   for (const raw of outputs) {
-    let j; try { j = JSON.parse(raw); } catch { continue; } // 비JSON stdout 은 PreToolUse 에서 하네스도 무시 → 버린다
-    const h = j && j.hookSpecificOutput;
-    if (!h || typeof h !== "object") continue;
+    const h = hookOutputOf(raw);
+    if (!h) continue; // 비JSON stdout 은 PreToolUse 에서 하네스도 무시 → 버린다(호출부가 별도로 보고)
     if (h.additionalContext) ctxs.push(String(h.additionalContext));
     const d = h.permissionDecision;
     if (!d || !RANK[d] || !relay.includes(d)) continue; // 정책상 전파 안 하는 결정은 무시
@@ -220,7 +287,14 @@ async function main() {
   const outputs = []; const fails = [];
   for (const hk of hooks) {
     const { out, fail } = runHook(hk, stdin);
-    if (out && out.trim()) outputs.push(out.trim());
+    const trimmed = out && out.trim() ? out.trim() : "";
+    if (trimmed) outputs.push(trimmed);
+    // PreToolUse 에서 훅이 뭔가 뱉었는데 결정으로 못 읽히면(예: JSON 앞에 console.log 한 줄) 하네스는 그걸
+    //  통째로 무시한다 — 훅은 '성공'으로 끝났는데 게이트는 안 걸리는, #892 와 똑같은 조용한 무력화다.
+    //  크래시가 아니라 잡히지 않던 구멍이라 여기서 명시적으로 실패로 드러낸다.
+    if (!fail && EVENT === "PreToolUse" && trimmed && !hookOutputOf(trimmed)) {
+      fails.push({ hook_id: hk.id, reason: "bad_output", exit_code: null, stderr: trimmed.slice(0, STDERR_KEEP) });
+    }
     if (fail) {
       fails.push({ hook_id: hk.id, ...fail });
       // exit 0 을 유지하므로 이 stderr 는 하네스 디버그 로그로만 간다(`claude --debug`) — 세션엔 영향 없음.
@@ -234,15 +308,19 @@ async function main() {
       } catch { /* */ }
     }
   }
-  if (fails.length) await reportFailures(fails);
+  // 스로틀은 게이트웨이 보고와 사용자 알림 **둘 다**에 건다 — 러너는 툴콜마다 도므로, 스로틀이 없으면
+  //  고장난 훅 하나가 매 툴콜에 왕복 1회 + 배너 1개를 붙여 세션을 시끄럽고 느리게 만든다(위 stderr 는 예외:
+  //  디버그 로그행이라 공짜이고, 진단할 땐 매번 보이는 편이 낫다).
+  const notable = fails.length ? throttleFailures(fails) : [];
+  if (notable.length) await reportFailures(notable);
 
   // PreToolUse 는 결정 이벤트 — 파싱·병합해 단일 결정 JSON 으로 전파(exit 0 + JSON stdout = 하네스 계약).
   //  훅이 죽었으면 systemMessage 로 사용자에게도 알린다(조용한 죽음 방지 — 이 이벤트는 이미 JSON 출력이라 무위험).
   if (EVENT === "PreToolUse") {
     const decision = mergePreToolUse(outputs, relay);
     const payload = decision ? { hookSpecificOutput: decision } : {};
-    if (fails.length) payload.systemMessage = `Lively 커스텀 훅 실패: ${fails.map((f) => `${f.hook_id}(${f.reason})`).join(", ")}`;
-    if (decision || fails.length) process.stdout.write(JSON.stringify(payload) + "\n");
+    if (notable.length) payload.systemMessage = `Lively 커스텀 훅 실패: ${notable.map((f) => `${f.hook_id}(${f.reason})`).join(", ")}`;
+    if (decision || notable.length) process.stdout.write(JSON.stringify(payload) + "\n");
     return;
   }
   // SessionStart·UserPromptSubmit 의 stdout 은 컨텍스트로 주입(둘 다 Claude 가 raw stdout 을 additionalContext 로 받는 안전 이벤트).

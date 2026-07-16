@@ -4024,6 +4024,12 @@ function relayPolicyCard(data, detail) {
   const save = el('button', { class: 'btn btn-primary btn-sm', text: '정책 저장' });
   save.addEventListener('click', async () => {
     const picked = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.dataset.decision);
+    // deny 를 빼는 건 allow 를 켜는 것보다 위험하다 — 모든 PreToolUse 게이트가 조용히 무력해진다.
+    //  #892 자체가 'deny 가 조용히 전파를 멈춘' 사고였다. 그 상태를 클릭 한 번에 만들 수 있으면 안 된다.
+    if (!picked.includes('deny')
+      && !confirm(picked.length
+        ? 'deny 를 빼면 도구를 막는 훅(게이트)이 전부 무력해집니다 — 훅은 돌지만 아무것도 못 막습니다. 계속할까요?'
+        : '전부 해제하면 모든 PreToolUse 훅의 결정이 무시됩니다(게이트 전면 해제). 계속할까요?')) return;
     if (picked.includes('allow') && !confirm('allow 를 전파하면 관리자 훅이 구성원의 권한 프롬프트(동의 화면)를 건너뛸 수 있습니다. 계속할까요?')) return;
     save.disabled = true;
     try {

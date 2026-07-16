@@ -2005,11 +2005,15 @@ export const deliveryCapabilities: Capability[] = [
       const memberId = user?.userId || null;
       if (!memberId) return { ok: false }; // 익명 러너는 기록하지 않는다(신원 없는 텔레메트리는 무의미)
       const raw = Array.isArray(input.failures) ? input.failures : [];
+      // 보고자에게 실제로 배포된 훅만 받는다 — 아무 hook_id 나 쓰게 두면 자기와 무관한 훅의 건강판에
+      //  임의 텍스트를 남길 수 있다(표시 전용이라 피해는 작지만, GET 쪽과 스코프를 맞춰 두는 게 공짜다).
+      const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
+      const mine = new Set((await listEnabledHooks(harness, memberId)).map((h) => h.id));
       const failures = raw.slice(0, 20).flatMap((f) => { // 상한 — 한 번의 보고가 DB 를 밀지 못하게
         const o = f as Record<string, unknown>;
-        if (typeof o?.hook_id !== "string" || !o.hook_id) return [];
+        if (typeof o?.hook_id !== "string" || !mine.has(o.hook_id)) return [];
         return [{
-          hook_id: o.hook_id.slice(0, 64),
+          hook_id: o.hook_id,
           reason: typeof o.reason === "string" ? o.reason.slice(0, 32) : "unknown",
           exit_code: typeof o.exit_code === "number" ? o.exit_code : null,
           stderr: typeof o.stderr === "string" ? o.stderr : "",

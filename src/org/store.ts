@@ -1739,6 +1739,9 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
        label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, matcher=EXCLUDED.matcher,
        source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note,
        target_members=EXCLUDED.target_members, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,
+       -- 본문이 바뀌면 건강 기록을 비운다(#892): 옛 본문의 실패는 새 본문과 무관한데, 안 지우면 고친 뒤에도
+       -- '⚠ 실패' 배지가 영영 남아 지표를 못 믿게 된다(경보 피로). 본문이 그대로면(토글·라벨만 수정) 유지.
+       health=CASE WHEN org_hook.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN '{}'::jsonb ELSE org_hook.health END,
        version=org_hook.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [h.id, h.label ?? before?.label ?? null, harness, event, h.matcher ?? before?.matcher ?? null,
      sourceCode, h.timeout_sec ?? before?.timeout_sec ?? 10, h.note ?? before?.note ?? null,
