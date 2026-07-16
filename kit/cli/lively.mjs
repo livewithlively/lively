@@ -578,6 +578,17 @@ function registerClaudeMcp() {
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); failed++; }
 
+  // lively-local — 로컬 조작 stdio MCP(#899). 같은 CLI 가 서버(`lively mcp-local`).
+  //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-local.mjs 로
+  //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
+  run("claude", ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
+  try {
+    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    ok("MCP 등록: lively-local (stdio · 로컬조작)");
+    registered++;
+  } catch (e) { fail(`MCP 등록 실패(lively-local): ${e.message}`); failed++; }
+
   // 조직 추가 MCP 서버 — auth_env 는 환경변수 '이름' 간접참조(토큰 리터럴을 파일에 두지 않는다).
   for (const s of readMcpServers()) {
     if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
@@ -959,6 +970,13 @@ function cmdRun(rest) {
   child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
 }
 
+// `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
+//  서버 본체·툴 레지스트리는 lib/lively-mcp-local.mjs 에 있다 — 새 로컬 툴은 거기 TOOLS 배열에 추가한다(여긴 위임만).
+async function cmdMcpLocal() {
+  const { serveMcpLocal } = await import(new URL("./lively-mcp-local.mjs", import.meta.url));
+  await serveMcpLocal();
+}
+
 // 부트스트랩(curl … | sh)이 곧장 부르는 대화형 첫 설치 — 로그인 + 설치를 한 흐름으로.
 async function cmdSetup() {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
@@ -1045,6 +1063,8 @@ async function main() {
     case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
     // node — 이 PC 를 라이블리 노드로 연결(데몬 없이 foreground). 나머지 인자 원형 보존.
     case "node": return cmdNode(argv.slice(argv.indexOf("node") + 1));
+    // mcp-local — 로컬 조작 stdio MCP 서버(하네스가 spawn). stdin 이 닫힐 때까지 블로킹.
+    case "mcp-local": return cmdMcpLocal();
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:

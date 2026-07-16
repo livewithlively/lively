@@ -563,6 +563,9 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   mkdirSync(join(target, "cli"), { recursive: true });
   copyMjsWithHeader(kitAbs("cli/lively.mjs"), join(target, "cli", "lively.mjs"), "kit/cli/lively.mjs", orgLabel);
   copied.push("cli/lively.mjs");
+  // 로컬조작 stdio MCP 서버(#899) — lively.mjs 가 import. 번들 동봉 → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
+  copyMjsWithHeader(kitAbs("cli/lively-mcp-local.mjs"), join(target, "cli", "lively-mcp-local.mjs"), "kit/cli/lively-mcp-local.mjs", orgLabel);
+  copied.push("cli/lively-mcp-local.mjs");
 
   // 가이드 md(멤버가 번들에서 바로 읽음)
   for (const g of ["setup/사용가이드.md", "setup/온보딩.md"]) {

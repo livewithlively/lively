@@ -281,6 +281,10 @@ function installCli() {
   mkdirSync(bin, { recursive: true });
   copyFileSync(src, join(lib, "lively.mjs"));
   chmodSync(join(lib, "lively.mjs"), 0o755);
+  // 로컬조작 stdio MCP 서버(#899) — `lively mcp-local` 이 import 해 실행. lively.mjs 옆에 둔다.
+  //  번들에 없으면(구버전) 조용히 건너뜀 — 그럼 mcp-local 서브커맨드만 미동작(하위호환).
+  const mcpLocal = cloneAbs(join("cli", "lively-mcp-local.mjs"));
+  if (existsSync(mcpLocal)) { copyFileSync(mcpLocal, join(lib, "lively-mcp-local.mjs")); chmodSync(join(lib, "lively-mcp-local.mjs"), 0o755); }
   // 제거기 로컬 사본 — 로그아웃·오프라인 상태에서도 `lively uninstall` 이 되도록(제거는 언제나 가능해야 한다).
   const un = cloneAbs(join("setup", "user-uninstall.mjs"));
   if (existsSync(un)) { copyFileSync(un, join(lib, "user-uninstall.mjs")); chmodSync(join(lib, "user-uninstall.mjs"), 0o755); }

@@ -110,18 +110,21 @@ function uninstallClaudeSettings() {
   return removed;
 }
 
-// claude mcp remove lively — install 의 add 역연산. 자식 HOME 명시 주입(샌드박스 격리). idempotent.
+// claude mcp remove — install 의 add 역연산. 자식 HOME 명시 주입(샌드박스 격리). idempotent.
+//  lively(http 본체) + lively-local(stdio 로컬조작, #899) 둘 다 해제한다.
 function deregisterClaudeMcp() {
-  const cmd = ["mcp", "remove", "lively", "--scope", "user"];
-  if (DRY) { log(`  [dry-run] MCP 등록 해제 명령(미실행): HOME=${HOME} claude ${cmd.join(" ")}`); return; }
-  try {
-    execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
-    log("  ✓ claude mcp remove lively --scope user");
-  } catch (e) {
-    const m = String(e.stderr || e.stdout || e.message || "");
-    if (/not found|no.*server|존재하지|찾을 수 없/i.test(m)) log("  · claude mcp: lively 미등록(이미 해제됨) — 건너뜀");
-    else if (/command not found|ENOENT/i.test(m)) log("  ⚠️ claude CLI 미발견 — MCP 등록 해제 건너뜀(수동: claude mcp remove lively --scope user)");
-    else log(`  ⚠️ claude mcp remove 경고(무시 가능): ${m.split("\n")[0]}`);
+  for (const name of ["lively", "lively-local"]) {
+    const cmd = ["mcp", "remove", name, "--scope", "user"];
+    if (DRY) { log(`  [dry-run] MCP 등록 해제 명령(미실행): HOME=${HOME} claude ${cmd.join(" ")}`); continue; }
+    try {
+      execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+      log(`  ✓ claude mcp remove ${name} --scope user`);
+    } catch (e) {
+      const m = String(e.stderr || e.stdout || e.message || "");
+      if (/not found|no.*server|존재하지|찾을 수 없/i.test(m)) log(`  · claude mcp: ${name} 미등록(이미 해제됨) — 건너뜀`);
+      else if (/command not found|ENOENT/i.test(m)) log(`  ⚠️ claude CLI 미발견 — MCP 등록 해제 건너뜀(수동: claude mcp remove ${name} --scope user)`);
+      else log(`  ⚠️ claude mcp remove 경고(무시 가능): ${m.split("\n")[0]}`);
+    }
   }
 }
 
