@@ -53,9 +53,12 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
   // 2) 알림은 응답이 없어야(notifications/initialized)
   S.notify("notifications/initialized", {});
 
-  // 3) 빈 레지스트리 — 스캐폴드 상태에서 tools/list 는 정상적으로 빈 배열
-  const empty = await rpc1(S, "tools/list", {});
-  check("tools/list: 빈 레지스트리도 정상", Array.isArray(empty.result?.tools) && empty.result.tools.length === 0, JSON.stringify(empty.result));
+  // 3) 빌트인 레포 툴(#900) — repo_list·repo_worktree·repo_worktree_remove 3종이 기본 등록됨
+  const builtin = await rpc1(S, "tools/list", {});
+  const builtinNames = (builtin.result?.tools || []).map((t) => t.name);
+  const BASELINE = builtinNames.length;
+  check("tools/list: 빌트인 레포 툴 3종", ["lively_local_repo_list", "lively_local_repo_worktree", "lively_local_repo_worktree_remove"].every((n) => builtinNames.includes(n)), builtinNames.join(","));
+  check("tools/list: repo_worktree 스키마 repo required", (() => { const t = builtin.result.tools.find((x) => x.name === "lively_local_repo_worktree"); return !!(t && t.inputSchema?.required?.includes("repo")); })(), "no repo required");
 
   // 4) ★확장점★ — 배열에 항목 하나 추가하면 그게 곧 list/call 에 반영된다
   registerTool({
@@ -80,7 +83,7 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
 
   const list = await rpc1(S, "tools/list", {});
   const names = (list.result?.tools || []).map((t) => t.name);
-  check("tools/list: 추가한 툴 3개 노출", names.length === 3 && names.includes("lively_local_echo"), names.join(","));
+  check("tools/list: 추가한 툴 3개 노출(빌트인 위에 누적)", names.length === BASELINE + 3 && names.includes("lively_local_echo"), names.join(","));
   const echoSpec = list.result.tools.find((t) => t.name === "lively_local_echo");
   check("tools/list: spec 에 description·inputSchema", !!echoSpec.description && echoSpec.inputSchema?.type === "object", JSON.stringify(echoSpec));
   check("tools/list: title 투영", echoSpec.title === "에코", echoSpec.title);
@@ -97,6 +100,10 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
   // 7) 필수 인자 누락 → tool-error(isError), 프로토콜 error 아님
   const miss = await rpc1(S, "tools/call", { name: "lively_local_echo", arguments: {} });
   check("tools/call: 필수인자 누락 isError", miss.result?.isError === true && /필수 인자/.test(miss.result.content[0].text), JSON.stringify(miss.result));
+
+  // 7-b) 빌트인 repo_worktree 도 repo 누락 시 isError(스키마 검증이 빌트인에도 적용 — 네트워크/git 무접촉)
+  const wtMiss = await rpc1(S, "tools/call", { name: "lively_local_repo_worktree", arguments: {} });
+  check("repo_worktree: repo 누락 isError", wtMiss.result?.isError === true && /필수 인자/.test(wtMiss.result.content[0].text), JSON.stringify(wtMiss.result));
 
   // 8) 알 수 없는 툴 → isError
   const unk = await rpc1(S, "tools/call", { name: "nope", arguments: {} });

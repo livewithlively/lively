@@ -250,6 +250,21 @@ async function ensureBaseClone(
   }
 }
 
+// 작업용 공유 base(workspace/repos/<name>) 확보·최신화 — 없으면 clone, 있으면 FF. 워크트리 셀프서비스(lively_local_repo_worktree)
+//  의 최신 원본이자 scheduler 'refresh_bases' 주기 갱신의 per-repo 진입점(#900). ensureBaseClone(#458/#660) 공용 래퍼 —
+//  실패는 던지지 않고 status:'error' 로 담아, 전 repo 순회 배치가 한 레포 실패(인증·오프라인 등)로 멈추지 않게 한다.
+export async function ensureProvisionBase(
+  name: string, memberId?: string | null,
+): Promise<{ repo: string; status: "cloned" | "refreshed" | "error"; cloned: boolean; head: string | null; detail?: string }> {
+  try {
+    const { repoPath, cloned } = await ensureBaseClone(name, memberId ?? null, { allowClone: true });
+    const head = (await git(["rev-parse", "--short", "HEAD"], repoPath)).out.trim() || null;
+    return { repo: name, status: cloned ? "cloned" : "refreshed", cloned, head };
+  } catch (e) {
+    return { repo: name, status: "error", cloned: false, head: null, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // 위탁 태스크용 레포 provision(#869 P2 후속) — 공유 base(RO 원본) 확보 후, 태스크 전용 worktree 에 격리 브랜치로 체크아웃.
 //  워커 세션 cwd 는 이 worktree 다(base 직접작업 안 함 = RO 모델). ref 지정 시 그 upstream(origin/<ref>)에서 분기.
 //  중앙 노드·원격 노드가 각자 자기 호스트의 workspace/repos 에 클론(호스트별 로컬 복제본 — 미동기화, git remote 로 수렴).
