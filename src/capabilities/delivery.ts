@@ -2232,6 +2232,9 @@ export const deliveryCapabilities: Capability[] = [
         };
       });
       return { policy: { enabled: item.enabled, target_members: targetMembers, harness: item.harness }, members };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).describe("대상 종류"),
+      ref_id: z.string().describe("대상 스킬/훅 id"),
     }),
   restRuntime("org_asset_prefs_clear", "자산 오버라이드 일괄 해제",
     "자산/훅 1건의 구성원 오버라이드를 전부 제거해 전원이 관리자 정책(enabled+target_members)을 따르게 한다 — 관리탭 '전체 기본값 복귀'. 정책 자체는 안 건드린다.",
@@ -2240,6 +2243,9 @@ export const deliveryCapabilities: Capability[] = [
       const targetKind = assertPrefKind(input.target_kind);
       const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
       return { ok: true, cleared: await clearAssetPrefs(targetKind, refId, wctx(user, ctx)) };
+    }, {
+      target_kind: z.enum(["harness_asset", "org_hook"]).describe("대상 종류"),
+      ref_id: z.string().describe("대상 스킬/훅 id"),
     }),
 
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════
