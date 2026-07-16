@@ -10,7 +10,10 @@ import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-cont
 
 // 시딩 지식 본문 SoT — src/org/seed-knowledge/(#846: DB 캡처가 아니라 파일이 원본). dist 에서 도는 이
 //  테스트가 소스 파일을 읽어 default-content.ts(baked) 와 대조한다. dist/org → ../.. → repoRoot → src/org.
-const SEED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "org", "seed-knowledge");
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const SEED_DIR = path.join(REPO_ROOT, "src", "org", "seed-knowledge");
+// 시딩 훅 소스 SoT — kit/hooks/examples/<id>.org-hook.mjs (#905 P1-②: 지식과 같은 '파일이 원본' 모델).
+const HOOK_EX_DIR = path.join(REPO_ROOT, "kit", "hooks", "examples");
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
@@ -42,6 +45,45 @@ const INJECTIONS = new Set(["always", "recalled"]);
   }
   assert.ok(DEFAULT_HOOKS.length >= 6, `기대 훅 ≥6, 실제 ${DEFAULT_HOOKS.length}`);
   ok(`훅 ${DEFAULT_HOOKS.length}종 무결성(고유 id·event·source_code·harness)`);
+}
+
+// ── #905 P1-② 시딩 훅 SoT 동기화 가드 — default-content.ts 의 훅 소스 == kit/hooks/examples/<id>.org-hook.mjs. ──
+//  왜: 훅 본문의 SoT 가 여태 **라이브 DB** 였다(capture-default-content.mjs 가 org_hook 을 스냅샷). 그래서 훅 로직이
+//   코드리뷰·레포 diff 를 안 거치고 바뀌고, dev 박스에서 만진 상태가 고객 디폴트로 샜다(SEED_DISABLED 가 그 흉터).
+//   예제 파일이 있는 훅은 **레포 파일을 SoT** 로 뒤집는다 — 여기서 바이트 일치를 강제하므로, 옛 capture 가 DB
+//   본문으로 되돌리거나 default-content.ts 를 손으로 고치면 이 테스트가 깨져 알려준다.
+//   고치는 법: kit/hooks/examples/<id>.org-hook.mjs 편집 후 `node scripts/sync-seed-hooks.mjs`.
+//  예제 파일이 없는 훅(delegate-router 등)은 아직 DB 캡처본이 SoT — 대상 아님(파일을 만들면 자동 편입된다).
+{
+  let checked = 0;
+  for (const h of DEFAULT_HOOKS) {
+    const f = path.join(HOOK_EX_DIR, `${h.id}.org-hook.mjs`);
+    if (!fs.existsSync(f)) continue;
+    assert.equal(h.source_code, fs.readFileSync(f, "utf8"),
+      `훅 '${h.id}' 소스가 kit/hooks/examples/${h.id}.org-hook.mjs 와 다름 — 'node scripts/sync-seed-hooks.mjs' 를 실행하세요(default-content.ts 를 직접 고치지 말 것)`);
+    checked++;
+  }
+  assert.ok(checked >= 3, `예제 파일 기반 훅이 최소 3종이어야 함(project-pull·project-pull-turn·knowledge-recall), 실제 ${checked}`);
+  ok(`시딩 훅 ${checked}종이 kit/hooks/examples/ SoT 와 바이트 일치(하드에딧·DB 재오염 가드)`);
+}
+
+// ── #905 P1-② 공유폴더 pull 훅의 '쓰기 자격 게이트' 존재 강제 — 이게 빠지면 사용자 폴더가 조용히 파괴된다. ──
+//  배경: pull 훅은 cwd 에서 위로 40단계 마커를 찾아 **찾은 폴더에 서버 파일을 덮어쓰고 stdout 을 안 낸다**(무음).
+//   여태 안 터진 건 마커가 라이블리 소유 폴더에만 있었기 때문인데, `lively init`(C2a)은 **사용자 폴더에 마커를
+//   심는 게 존재 이유**라 그 불변식을 깬다. 그래서 마커 sync(none|pull|both) 게이트 + 폴더소유권 fail-safe 폴백이
+//   두 pull 훅 모두에 반드시 있어야 한다. 누가 게이트를 지우면 여기서 걸린다.
+{
+  for (const id of ["project-pull", "project-pull-turn"]) {
+    const h = DEFAULT_HOOKS.find((x) => x.id === id);
+    assert.ok(h, `pull 훅 '${id}' 이 시드에 없음`);
+    const src = h!.source_code;
+    assert.ok(/function syncMode\(/.test(src), `훅 '${id}' 에 syncMode 게이트가 없음 — 사용자 폴더 무음 파괴 위험(#905 §2)`);
+    assert.ok(/syncMode\([^)]*\)\s*===\s*"none"\)\s*return/.test(src),
+      `훅 '${id}' 이 sync='none' 에서 조기 return 하지 않음 — 게이트가 선언만 되고 안 걸림`);
+    assert.ok(/function livelyOwnedDir\(/.test(src),
+      `훅 '${id}' 에 폴더소유권 fail-safe 폴백(livelyOwnedDir)이 없음 — sync 키 없는 구 마커가 fail-open 된다`);
+  }
+  ok("pull 훅 2종에 쓰기 자격 게이트(syncMode + none 조기return + livelyOwnedDir 폴백) 존재");
 }
 
 // ── 스킬 무결성 + 짝훅 참조 해결(paired_hook_id → 실제 시드 훅) ──

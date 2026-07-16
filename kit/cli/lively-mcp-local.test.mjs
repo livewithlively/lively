@@ -61,6 +61,11 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
     ["lively_local_repo_list", "lively_local_repo_worktree", "lively_local_repo_worktree_remove", "lively_local_repo_pin", "lively_local_repo_pin_remove"].every((n) => builtinNames.includes(n)),
     builtinNames.join(","));
   check("tools/list: repo_worktree 스키마 repo required", (() => { const t = builtin.result.tools.find((x) => x.name === "lively_local_repo_worktree"); return !!(t && t.inputSchema?.required?.includes("repo")); })(), "no repo required");
+  // _meta.alwaysLoad(#918) — 코드 작업 진입점 2종만 스키마가 항상 실린다(나머지는 deferred 유지 = 컨텍스트 절약).
+  //  이 목록이 늘어나면 tool search 의 이점이 사라지므로 '정확히 2종'으로 고정 검증한다.
+  const alwaysOn = (builtin.result?.tools || []).filter((t) => t._meta?.["anthropic/alwaysLoad"] === true).map((t) => t.name).sort();
+  check("tools/list: _meta.alwaysLoad 는 repo_list·repo_worktree 2종뿐",
+    alwaysOn.join(",") === "lively_local_repo_list,lively_local_repo_worktree", alwaysOn.join(",") || "(없음)");
 
   // 4) ★확장점★ — 배열에 항목 하나 추가하면 그게 곧 list/call 에 반영된다
   registerTool({

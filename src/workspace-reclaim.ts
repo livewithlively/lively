@@ -14,9 +14,9 @@
 //  `build` 여도 그게 소스면 gitignore 에 없다(그러면 ①에서 걸러진다).
 //  allow-list 에 없는 gitignored 항목은 **지우지 않고 '미분류'로 보고**한다 — 관리자가 보고 판단한다.
 //
-// 워크트리 자체(#675 세션 워크트리와 달리 프로젝트 워크트리는 영속)는 **푸시 완료 + 더티 없음**일 때만 제거한다.
-//  그 조건이면 `git worktree add` 로 언제든 복구된다 = 진짜 '복구 가능한 것'. 하나라도 어긋나면 **거부하고 이유를 말한다.**
-//  (지식: workspace-storage-model-asset-vs-derived-cache)
+// 워크트리 자체(#675 세션 워크트리와 달리 프로젝트 워크트리는 영속)는 **커밋이 전부 원격에 있음 + 더티 없음**일 때만
+//  제거한다. 그 조건이면 `git worktree add` 로 언제든 복구된다 = 진짜 '복구 가능한 것'. 하나라도 어긋나면
+//  **거부하고 이유를 말한다.** (지식: workspace-storage-model-asset-vs-derived-cache)
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { execFile } from "node:child_process";
@@ -64,7 +64,8 @@ export interface WorktreeCheck {
   /** removable=false 인 이유(사람이 읽는 문장). */
   reason: string | null;
   dirty: boolean;
-  unpushed: number; // 원격에 없는 커밋 수 (-1 = upstream 없음 = 전부 미푸시로 간주)
+  /** 어떤 remote-tracking ref 에서도 안 닿는 커밋 수 (-1 = 세지 못했다 → 안전측으로 거부). */
+  unpushed: number;
   branch: string | null;
 }
 
@@ -154,23 +155,37 @@ export async function baseRepoOf(wt: string): Promise<string | undefined> {
   return path.dirname(common); // <base>/.git → <base>
 }
 
-/** 워크트리 제거가 안전한가 — **푸시 완료 + 더티 없음**일 때만. 하나라도 어긋나면 이유를 말하고 거부한다. */
+/** 워크트리 제거가 안전한가 — **커밋이 전부 원격에 있음 + 더티 없음**일 때만. 하나라도 어긋나면 이유를 말하고 거부한다. */
 export async function checkWorktree(wt: string): Promise<WorktreeCheck> {
   const st = await git(["status", "--porcelain"], wt);
-  if (!st.ok) return { removable: false, reason: "git 상태를 읽지 못했습니다(레포가 아니거나 손상)", dirty: false, unpushed: 0, branch: null };
+  if (!st.ok) return { removable: false, reason: "git 상태를 읽지 못했습니다(레포가 아니거나 손상)", dirty: false, unpushed: -1, branch: null };
   const dirty = st.out.trim().length > 0;
 
   const br = await git(["branch", "--show-current"], wt);
   const branch = br.ok ? br.out.trim() || null : null;
 
-  // upstream 이 없으면 '전부 미푸시'로 본다 — 원격에 없는 브랜치의 워크트리를 지우면 커밋이 사라진다.
-  let unpushed = -1;
-  const up = await git(["rev-list", "--count", "@{upstream}..HEAD"], wt);
-  if (up.ok) unpushed = Number(up.out.trim()) || 0;
+  // **커밋이 원격에 있나**를 직접 센다. 예전엔 upstream **설정**(`branch.*.merge`)이 있나를 물었는데, 그건 프록시일
+  //  뿐이고 우리 환경에선 대개 어긋난다 — 그래서 **안전한 워크트리를 거부**했다(#904 실측 → #922):
+  //   ① 우리 워크트리는 애초에 upstream 없이 만들어진다 — provisionProjectRepos 는 시작점 없이 `worktree add -b <branch>`
+  //      로 자르므로 추적이 안 붙는다(terminal-sessions.ts·kit/setup/work.mjs 도 동형).
+  //   ② 다른 이름으로 push 하는 게 정상이다 — `git push origin project/904:main` 이면 브랜치명이 달라 추적이 없다.
+  //  그 상태로 커밋이 origin/main 에 멀쩡히 올라가 있어도 "upstream 없음 = 전부 미푸시"로 단정해 거부했다.
+  //  `HEAD --not --remotes` = "HEAD 에서 닿지만 **어떤** remote-tracking ref 에서도 안 닿는 커밋" = 설정과 무관한 실제
+  //  안전 속성. 원격이 아예 없으면 히스토리 전체가 잡혀 거부된다(맞는 답 — 어디에도 안 올라갔다).
+  //  ⚠ 판정 전 fetch 로 stale 을 걷어내지 말 것 — 일괄 회수는 한 요청에 폴더 40개(delivery.ts)를 도므로 네트워크가
+  //   요청당 40+회가 되고, du 만으로도 이미 504 를 겪었다(#600). stale 노출은 `@{upstream}` 때도 같았다(그 자신이
+  //   remote-tracking ref) → 무회귀.
+  let unpushed = -1; // -1 = 세지 못함(레포 손상·커밋 0개) → 아래에서 거부
+  const rl = await git(["rev-list", "--count", "HEAD", "--not", "--remotes"], wt);
+  if (rl.ok) {
+    const n = Number(rl.out.trim());
+    // 파싱 실패(NaN)를 0 으로 흘리면 '전부 원격에 있음' = 제거 허용이 된다 — 못 셌으면 -1 로 남겨 거부한다.
+    if (Number.isInteger(n) && n >= 0) unpushed = n;
+  }
 
   if (dirty) return { removable: false, reason: "커밋하지 않은 변경이 있습니다 — 잃어버릴 수 있어 제거하지 않습니다", dirty, unpushed, branch };
-  if (unpushed < 0) return { removable: false, reason: "원격에 올라간 브랜치가 아닙니다(upstream 없음) — 커밋이 이 워크트리에만 있습니다", dirty, unpushed, branch };
-  if (unpushed > 0) return { removable: false, reason: `아직 push 하지 않은 커밋이 ${unpushed}개 있습니다`, dirty, unpushed, branch };
+  if (unpushed < 0) return { removable: false, reason: "커밋이 원격에 있는지 확인하지 못했습니다(git rev-list 실패) — 확인 전에는 제거하지 않습니다", dirty, unpushed, branch };
+  if (unpushed > 0) return { removable: false, reason: `원격 어디에도 없는 커밋이 ${unpushed}개 있습니다 — 박스를 재구축하면 사라집니다`, dirty, unpushed, branch };
   return { removable: true, reason: null, dirty, unpushed, branch };
 }
 
@@ -242,6 +257,22 @@ export async function planReclaim(
   return { worktree: wt, entries, reclaimableBytes, worktree_check, active_session: active };
 }
 
+// 워크트리를 회수했으면 마커(.lively/project.json)의 provisioned 에서 그 항목도 지운다(#918).
+//  provisioned 는 코드가 읽지 않는 기록 필드지만, 유일한 소비자인 **에이전트**가 그걸 보고 없는 경로로 간다
+//  (실측: 회수됐는데 마커에 남은 죽은 경로 3건). 회수와 기록이 어긋나면 마커가 거짓말을 하는 셈이라 여기서 맞춘다.
+//  워크트리는 project/<id>/<repo> 이므로 마커는 그 부모 폴더 — 프로젝트 폴더 밖 워크트리(위탁 등)면 마커가 없어 no-op.
+//  read→merge→write: 다른 writer 의 키(project_id·repos·last_pull)는 보존한다(마커는 writer 가 여럿·키가 분리돼 있다).
+async function dropProvisionedEntry(worktree: string): Promise<void> {
+  const file = path.join(path.dirname(worktree), ".lively", "project.json");
+  try {
+    const prev = JSON.parse(await fsp.readFile(file, "utf8")) as { provisioned?: { cwd?: string }[] };
+    if (!Array.isArray(prev.provisioned)) return;
+    const next = prev.provisioned.filter((r) => r?.cwd !== worktree);
+    if (next.length === prev.provisioned.length) return;   // 이 워크트리 항목이 애초에 없음 — 무기록
+    await fsp.writeFile(file, JSON.stringify({ ...prev, provisioned: next }, null, 2) + "\n");
+  } catch { /* 마커 없음·파손·권한 — 회수 자체는 이미 성공했으므로 조용히 넘어간다(best-effort) */ }
+}
+
 export interface ReclaimResult {
   removed: string[];
   freedBytes: number;
@@ -291,6 +322,7 @@ export async function applyReclaim(
       const r = await git(["worktree", "remove", plan.worktree], opts.repoRoot);
       if (r.ok) {
         worktreeRemoved = true;
+        await dropProvisionedEntry(plan.worktree);   // 마커가 죽은 경로를 가리키지 않도록(#918)
         logger.info({ wt: plan.worktree }, "워크트리 회수(푸시 완료·클린 확인)");
       } else {
         worktreeSkippedReason = `git worktree remove 실패: ${r.out}`;

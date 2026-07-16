@@ -67,6 +67,39 @@ export function folderVariants(folder: string): string[] {
   return out;
 }
 
+// ── 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 마커에 sync:"pull" 을 stamp. ──
+//  왜 서버가 해야 하나: pull 훅은 마커의 sync 로 '이 폴더에 서버 파일을 써도 되는가'를 판정하고, sync 가 없는
+//   구 마커는 **폴더 소유권**으로 폴백 판정한다. 그런데 그 폴백은 `~/lively/projects/<id>`(멤버 PC — work.mjs 가
+//   만드는 꼴이 고정)만 인정한다. 박스 폴더는 folder 값이 임의라 구조로 알아볼 수가 없다 — 실측: 286개 마커 중
+//   'project/관리탭 수정'·'project/오케이-3'·'legacy-project/프로젝트 탭 만들기' 등 12개가 id 가 아닌 이름 기반이다
+//   (project_create_v6 가 folder 를 받고 projectAbsPath 가 project/ 하위면 통과시키므로 신규도 그럴 수 있다).
+//   그렇다고 '부모가 project/ 면 소유'로 넓히면 사용자의 흔한 `~/projects/<무언가>` 가 걸려 무음 파괴가 난다.
+//   ⇒ 자기 폴더가 어디인지 아는 유일한 자(=서버)가 명시적으로 stamp 한다. 그 뒤 박스 폴더는 폴백에 의존하지 않는다.
+//  실패해도 파괴가 아니라 '그 폴더의 자동 pull 이 멈춤'(가시적·복구가능)이다 — 비가역 파괴보다 이 실패를 택한다.
+//  멱등: sync 가 이미 있으면 절대 안 건드린다(사람이 none 으로 꺼둔 걸 되살리지 않는다). 마커 없음·파손·권한실패는 건너뜀.
+export async function backfillMarkerSync(base: string = PROJECT_SHARED_BASE): Promise<{ scanned: number; stamped: number }> {
+  let scanned = 0, stamped = 0;
+  for (const sub of [PROJECT_SUBDIR, LEGACY_SUBDIR]) {
+    const dir = path.join(base, sub);
+    let entries: fs.Dirent[];
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; } // 하위폴더 자체가 없음
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const file = path.join(dir, e.name, ".lively", "project.json");
+      let raw: string;
+      try { raw = await fsp.readFile(file, "utf8"); } catch { continue; } // 마커 없는 폴더 — 대상 아님
+      scanned++;
+      let meta: Record<string, unknown>;
+      try { meta = JSON.parse(raw); } catch { continue; }                 // 파손 마커는 손대지 않는다
+      if (!meta || typeof meta !== "object" || !meta.project_id) continue;
+      if (typeof meta.sync === "string" && meta.sync.trim()) continue;    // 이미 명시 → 보존(멱등)
+      meta.sync = "pull";
+      try { await fsp.writeFile(file, JSON.stringify(meta, null, 2) + "\n"); stamped++; } catch { /* 권한 등 — 건너뜀 */ }
+    }
+  }
+  return { scanned, stamped };
+}
+
 // 완료(archive=true: project/ → legacy-project/) 또는 복귀(false: 반대)로 폴더 이동. 새 상대경로 반환.
 //  대상에 같은 이름 있으면 -2,-3 회피(덮어쓰기 금지). 원본 폴더가 없으면(이미 이동/삭제) 목표 경로만 관용 반환.
 export async function moveProjectFolder(folder: string, archive: boolean): Promise<string> {
