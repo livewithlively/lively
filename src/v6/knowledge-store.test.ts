@@ -6,7 +6,7 @@
 //  편집하면 is_wiki 가 false 로 떨어져 매 세션 WIKI 인덱스에서 소리없이 빠짐 → 발견·소환 트리거 상실.
 //  불변식: "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
 import assert from "node:assert/strict";
-import { resolveUpsertFacets } from "./knowledge-store.js";
+import { resolveUpsertFacets, resolveWikiLinkTargets } from "./knowledge-store.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -83,6 +83,63 @@ t("#592: 신규(before=null) → is_folder false·parent_name null 기본값", (
   const r = resolveUpsertFacets({}, null);
   assert.equal(r.isFolder, false);
   assert.equal(r.parentName, null);
+});
+
+// ── #907 본문 [[…]] → 엣지 해소. 아래 케이스는 전부 실 DB 에서 관측된 것이다(설계 근거 = 실측). ──
+//  불변식: "exact(작성자가 쓴 그대로) 우선 → slugify 폴백 → 없으면 미매칭 경고(저장은 성공)".
+const K = (...names: string[]): ReadonlySet<string> => new Set(names);
+
+t("#907: 정확한 name 은 그대로 해소", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["alpha"], K("alpha", "beta")),
+    { linked: ["alpha"], unmatched: [] });
+});
+t("#907: 미매칭은 경고로 — 예외 아님(붕 뜬 링크 알림)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["nope"], K("alpha")),
+    { linked: [], unmatched: ["nope"] });
+});
+t("#907: 표기가 흐트러지면 slugify 폴백('Some Title' → some-title)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["Some Title"], K("some-title")),
+    { linked: ["some-title"], unmatched: [] });
+});
+// ⚠ 회귀 방지 — slugify 가 strip→slice(64) 순서라 64자 절단 이름은 '-' 로 끝날 수 있다(실재: '작업-activity-…-폐기-',
+//  '배포-장애-수정-…-어니스트-'). 재슬러그화를 먼저 하면 꼬리 '-' 가 떨어져 **정확히 쓴 링크가 미매칭**된다.
+t("#907: 이름이 '-' 로 끝나는 실재 지식 — exact 우선이라 해소된다", () => {
+  const real = "배포-장애-수정-어니스트-";
+  assert.deepEqual(resolveWikiLinkTargets("from", [real], K(real)),
+    { linked: [real], unmatched: [] });
+});
+// ⚠ 회귀 방지 — 대소문자만 다른 동명 지식이 실재한다(2026-06-11-PM툴… / …-pm툴…, 같은 제목·둘 다 active).
+//  정규화를 먼저 태우면 작성자가 지목한 문서가 아닌 쪽에 엣지가 붙는다.
+t("#907: 대소문자 쌍둥이가 둘 다 있으면 exact(작성자 의도) 를 고른다", () => {
+  const upper = "2026-06-11-PM툴-설계결정", lower = "2026-06-11-pm툴-설계결정";
+  assert.deepEqual(resolveWikiLinkTargets("from", [upper], K(upper, lower)),
+    { linked: [upper], unmatched: [] });
+});
+t("#907: exact 가 없으면 slugify 로 대소문자 쌍둥이의 소문자 쪽에 붙는다", () => {
+  const lower = "2026-06-11-pm툴-설계결정";
+  assert.deepEqual(resolveWikiLinkTargets("from", ["2026-06-11-PM툴-설계결정"], K(lower)),
+    { linked: [lower], unmatched: [] });
+});
+t("#907: 자기 참조는 조용히 버린다(knowledge_link_noself_chk)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("alpha", ["alpha"], K("alpha")),
+    { linked: [], unmatched: [] });
+});
+t("#907: raw 와 slug 가 같은 문서로 접히면 1건(knowledge_link_uq)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["some-title", "Some Title"], K("some-title")),
+    { linked: ["some-title"], unmatched: [] });
+});
+t("#907: 같은 미매칭 이름이 여러 번 나와도 경고는 1건", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["nope", "nope"], K("alpha")),
+    { linked: [], unmatched: ["nope"] });
+});
+t("#907: 한글 이름은 slugify 가 보존한다(wikiSlug 였다면 뭉갠다 — 71건이 걸린 갈림길)", () => {
+  const ko = "런북-dev-8080-게이트웨이-빌드-재시작-context-ontology";
+  assert.deepEqual(resolveWikiLinkTargets("from", [ko], K(ko)),
+    { linked: [ko], unmatched: [] });
+});
+t("#907: pending 대상도 존재하면 링크(FK 는 존재만 요구 — '없음' 경고는 거짓말이 된다)", () => {
+  assert.deepEqual(resolveWikiLinkTargets("from", ["draft"], K("draft")),
+    { linked: ["draft"], unmatched: [] });
 });
 
 console.log(`\n${pass} passed`);

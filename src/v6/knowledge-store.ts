@@ -10,6 +10,7 @@ import {
   type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody,
   RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
+import { extractWikiLinkTargets } from "./wikilink.js";   // #907 본문 [[…]] → 자동 엣지(문법층은 순수 함수로 분리)
 
 // is_folder(#592) 포함 — 목록·트리가 폴더 행을 구분해야 해서 K_COLS 에 둔다(boolean 1개 = 가볍다).
 //  props_ui(#592)는 fields 와 같은 취급 — 목록엔 무겁고 상세엔 필수라 getKnowledge 에서만 SELECT.
@@ -247,10 +248,13 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
   if (cyc) throw new Error("순환 트리는 허용되지 않습니다 — 자신의 하위로는 이동할 수 없습니다");
 }
 
+// 반환에 wikilinks 를 얹는다(#907) — getKnowledge 가 categories/links 를 얹는 것과 같은 급의 파생 정보다.
+//  행 자체(감사·undo 입력)는 오염되지 않는다: auditKnowledge 는 이 아래에서 raw `after` 로 이미 기록된다.
+//  호출부는 응답에 실을 때 구조분해로 떼어낸다(knowledge_save) — 기존 호출부는 무시하면 그만이라 비파괴.
 export async function upsertKnowledge(
   input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
   ctx?: WriteCtx,
-): Promise<KnowledgeRow> {
+): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult }> {
   let name: string;
   if (input.name) {
     name = slugify(input.name);
@@ -322,7 +326,11 @@ export async function upsertKnowledge(
   if (catIds.length) await linkKnowledgeCategory(name, catIds[0], "confirmed", ctx);
   // 벡터검색(#172) — 임베딩 on 이면 본문 임베딩 갱신(best-effort, off=no-op, 실패해도 저장 성공 보존).
   await embedKnowledgeBestEffort(name, { title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
-  return after;
+  // #907 본문 [[…]] → 자동 엣지. 스토어 층에 두는 이유: 리비전 승인(knowledge-revision-store)·undo 등 **모든 upsert
+  //  writer** 가 본문을 바꾸면 엣지도 따라가야 한다(capability 에만 두면 그 경로들이 조용히 어긋난다).
+  //  미매칭은 예외가 아니라 경고다 — 호출부가 응답에 실어 붕 뜬 링크를 알린다(#907 목표2).
+  const wikilinks = await materializeWikiLinksBestEffort(name, input.body_md);
+  return wikilinks ? { ...after, wikilinks } : after;
 }
 
 // 얕은 lifecycle 조회 — 게이트 가드용(#783 자가승인 차단). getKnowledge 는 카테고리·링크·트리까지 조인해 무겁다.
@@ -681,7 +689,9 @@ export async function unlinkKnowledgeCategory(name: string, categoryId: number, 
 
 // ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
 //  relation=related(대칭)|refines|contradicts|depends_on. FK 가 양 끝 지식 존재를 보장(없으면 INSERT 거부 → capability 에서 클린 에러).
-export interface KnowledgeLinkRow { name: string; relation: string; title: string | null }
+//  origin(#907): 'user'=사람·에이전트가 명시 · 'wikilink'=본문 [[…]] 파생 · 'connector:<sys>'=커넥터 물질화.
+//   UI·해제 가드가 '이 엣지를 여기서 떼도 되나'를 판단해야 해서 조회에 싣는다(파생 엣지는 본문이 SoT다).
+export interface KnowledgeLinkRow { name: string; relation: string; title: string | null; origin: string }
 export async function linkKnowledge(fromName: string, toName: string, relation = "related", ctx?: WriteCtx): Promise<void> {
   if (fromName === toName) throw new Error("자기 자신과 링크할 수 없습니다");
   await itemsPool.query(
@@ -692,19 +702,143 @@ export async function linkKnowledge(fromName: string, toName: string, relation =
   await auditKnowledge(fromName, "link_knowledge", null, { to_name: toName, relation }, ctx);
 }
 export async function unlinkKnowledge(fromName: string, toName: string, relation: string, ctx?: WriteCtx): Promise<void> {
+  // #907 본문 파생 엣지는 여기서 못 뗀다 — 본문이 SoT라 지워봐야 다음 저장·스윕이 되살린다(“지웠는데 살아나”).
+  //  진짜 해제 방법(본문에서 [[…]] 제거)을 알려주는 게 조용히 되살아나는 것보다 정직하다. 사람·에이전트 공통 가드.
+  const auto = await one(itemsPool,
+    `SELECT 1 AS x FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3 AND origin='wikilink'`,
+    [fromName, toName, relation]);
+  if (auto) {
+    throw new Error(
+      `이 연결은 '${fromName}' 본문의 [[${toName}]] 에서 자동 생성된 것이라 여기서 해제할 수 없습니다 — 본문에서 [[${toName}]] 를 지우면 연결도 사라집니다. (관계를 바꾸려면 knowledge_link 로 명시하세요.)`);
+  }
   await itemsPool.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
   await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx);
 }
 // 양방향 — outgoing(이 지식이 가리키는) + incoming(이 지식을 가리키는 = 백링크). 비활성 지식은 제외.
 export async function listKnowledgeLinks(name: string): Promise<{ outgoing: KnowledgeLinkRow[]; incoming: KnowledgeLinkRow[] }> {
   const outgoing = await q(itemsPool,
-    `SELECT l.to_name AS name, l.relation, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.to_name
+    `SELECT l.to_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.to_name
      WHERE l.from_name=$1 AND k.lifecycle='active' ORDER BY l.relation, k.updated_at DESC`, [name]);
   const incoming = await q(itemsPool,
-    `SELECT l.from_name AS name, l.relation, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.from_name
+    `SELECT l.from_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.from_name
      WHERE l.to_name=$1 AND k.lifecycle='active' ORDER BY l.relation, k.updated_at DESC`, [name]);
   return { outgoing, incoming };
 }
+// ════════ #907 본문 [[위키링크]] → 자동 엣지(origin='wikilink'). **본문이 SoT**. ════════
+//  왜: [[…]] 를 본문에 적어도 엣지가 안 생겼다 — knowledge_link 를 따로 부르지 않으면 백링크·그래프뷰·recall
+//   그래프에서 관계가 통째로 유실된다(#869 마무리 중 실측으로 드러남). 착수 시점 실측: 활성 지식 본문의
+//   위키링크 939건 중 엣지가 있던 건 136건뿐 — 약 770건이 텍스트로만 존재했다.
+//  규율은 커넥터 물질화(#551 materializeNotionLinks)와 동형 — **자기 origin 엣지만** 지우고 본문에서 다시 만든다:
+//   · origin='wikilink' = 본문 파생(파생 상태) → 본문에서 [[x]] 를 빼면 다음 저장에 엣지도 사라진다(완전 동기화).
+//   · origin='user'(knowledge_link) = 사람·에이전트가 명시한 엣지 → 불가침. 같은 쌍을 수동 링크하면 linkKnowledge 가
+//     origin 을 'user' 로 승격시켜 이 재작성 DELETE 에서 빠진다 — 관계 타입 지정도 그 경로다.
+//  relation 은 전부 'related' — Obsidian 문법에 타입 관계가 없다(wikilink.ts 헤더 · https://obsidian.md/help/links).
+export interface WikiLinkResult { linked: string[]; unmatched: string[] }
+
+/** raw 대상 → 실제 knowledge.name 해소. **exact 우선 → slugify 폴백**(이 순서가 load-bearing):
+ *   · slugify 는 strip→slice(64) 순서라 64자에서 잘린 이름은 '-' 로 끝날 수 있다(실재 2건). 재슬러그화하면
+ *     그 꼬리 '-' 가 떨어져 **정확히 쓴 링크가 오히려 미매칭**된다.
+ *   · 대소문자만 다른 동명 지식이 실재한다(2026-06-11-PM툴… / …-pm툴…, 같은 제목·둘 다 active). 먼저 정규화하면
+ *     작성자가 지목한 문서가 아닌 쪽에 붙는다 — exact 가 있으면 그게 작성자의 의도다.
+ *  자기 자신은 버린다(knowledge_link_noself_chk 가 거부한다). existing 은 lifecycle 무관 전체 name —
+ *  FK 는 존재만 요구하고, pending 대상을 '없음'으로 경고하면 거짓 경고가 된다(승인되면 그대로 유효한 링크다). */
+export function resolveWikiLinkTargets(fromName: string, targets: string[], existing: ReadonlySet<string>): WikiLinkResult {
+  const linked: string[] = [], unmatched: string[] = [];
+  for (const raw of targets) {
+    const slug = slugify(raw);
+    const hit = existing.has(raw) ? raw : (existing.has(slug) ? slug : null);
+    if (!hit) { if (!unmatched.includes(raw)) unmatched.push(raw); continue; }
+    if (hit === fromName) continue;                       // 자기 참조 — 엣지 불가(CHECK). 조용히 버린다(오류 아님).
+    if (!linked.includes(hit)) linked.push(hit);          // raw 와 slug 가 같은 문서로 접히면 1건으로(knowledge_link_uq)
+  }
+  return { linked, unmatched };
+}
+
+/** origin='wikilink' 엣지 재작성 — from_name 것만 지우고 본문 해소분을 다시 넣는다(멱등·수렴형).
+ *  ON CONFLICT DO NOTHING = 같은 쌍의 'user' 엣지가 있으면 그대로 존중(사람 링크 불가침 — #551 idiom). */
+async function rewriteWikiLinkEdges(fromName: string, toNames: string[]): Promise<void> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND origin='wikilink'`, [fromName]);
+    if (toNames.length) {
+      await client.query(
+        `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
+         SELECT $1, t, 'related', 'wikilink', now(), now() FROM unnest($2::text[]) AS t
+         ON CONFLICT (from_name, to_name, relation) DO NOTHING`,
+        [fromName, toNames]);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** 한 지식의 본문 → origin='wikilink' 엣지 수렴. 미매칭 name 은 경고로 돌려준다(저장은 막지 않는다 — #907 목표2). */
+export async function materializeWikiLinks(name: string, bodyMd: string): Promise<WikiLinkResult> {
+  const targets = extractWikiLinkTargets(bodyMd ?? "");
+  // exact·slug 후보를 한 번에 조회(문서당 쿼리 1회). 링크가 없어도 재작성은 돈다 — 본문에서 지운 엣지를 떼야 하니까.
+  const cands = [...new Set(targets.flatMap((t) => [t, slugify(t)]))];
+  const rows = cands.length ? await q(itemsPool, `SELECT name FROM knowledge WHERE name = ANY($1)`, [cands]) : [];
+  const res = resolveWikiLinkTargets(name, targets, new Set(rows.map((r) => String((r as { name: string }).name))));
+  await rewriteWikiLinkEdges(name, res.linked);
+  return res;
+}
+
+/** upsert 경로용 — 실패해도 저장을 되돌리지 않는다(행은 이미 커밋됐다. 스윕이 수렴시킨다).
+ *  embedKnowledgeBestEffort 와 같은 급의 파생 상태 갱신이다. */
+async function materializeWikiLinksBestEffort(name: string, bodyMd: string): Promise<WikiLinkResult | undefined> {
+  try {
+    return await materializeWikiLinks(name, bodyMd);
+  } catch (e) {
+    console.warn(`[wikilink] '${name}' 자동 엣지 실패(best-effort, 스윕으로 보강): ${(e as Error)?.message}`);
+    return undefined;
+  }
+}
+
+/** #907 백필·유지보수 스윕 — 전 지식 본문의 [[…]] 를 전수 재계산해 origin='wikilink' 엣지를 수렴시킨다.
+ *  materializeNotionLinks 와 같은 수렴형(매번 전체 재작성 → 재실행·부분실행 안전):
+ *   · 붕 뜬 링크의 대상이 나중에 생기면 다음 스윕이 자동으로 엣지를 만든다(그래서 유지보수 잡이 필요하다).
+ *   · 단건 경로와 달리 name 집합을 한 번만 읽어 메모리에서 해소한다(문서당 쿼리 0). */
+export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number; edges: number; dangling: { name: string; targets: string[] }[] }> {
+  const all = await q(itemsPool, `SELECT name, body_md FROM knowledge`);
+  const existing = new Set(all.map((r) => String((r as { name: string }).name)));
+  const froms: string[] = [], tos: string[] = [];
+  const dangling: { name: string; targets: string[] }[] = [];
+  let docs = 0;
+  for (const row of all) {
+    const name = String((row as { name: string }).name);
+    const targets = extractWikiLinkTargets(String((row as { body_md?: string }).body_md ?? ""));
+    if (!targets.length) continue;
+    docs++;
+    const { linked, unmatched } = resolveWikiLinkTargets(name, targets, existing);
+    for (const to of linked) { froms.push(name); tos.push(to); }
+    if (unmatched.length) dangling.push({ name, targets: unmatched });
+  }
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`DELETE FROM knowledge_link WHERE origin='wikilink'`);
+    if (froms.length) {
+      await client.query(
+        `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
+         SELECT f, t, 'related', 'wikilink', now(), now() FROM unnest($1::text[], $2::text[]) AS x(f, t)
+         ON CONFLICT (from_name, to_name, relation) DO NOTHING`,
+        [froms, tos]);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return { docs, scanned: all.length, edges: froms.length, dangling };
+}
+
 // 지식→자료 인용(knowledge_source). relation=derived_from(증류)|cites(참조).
 export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(

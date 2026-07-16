@@ -528,7 +528,19 @@ function knNotionPropsPanel(k) {
 // 연결된 지식 한 줄(리스트, 옵시디언식) — [관계 pill][제목 전체폭·한 줄][✕ hover]. 행 전체 클릭=상세 이동.
 //  incoming=true 면 백링크(해제 방향 반전: from=상대, to=이 지식). reload = 부모 문서 재렌더 콜백.
 function knLinkRow(e, k, reload, incoming) {
+    // #907 본문 [[…]] 파생 엣지 — 본문이 SoT라 여기서 뗄 수 없다(서버도 거부). ✕ 대신 '본문' 표식을 달아
+    //  진짜 해제 방법을 알려준다. 백링크(incoming)면 [[…]] 는 **상대 문서** 본문에 있다 — 그쪽을 고쳐야 한다.
+    const fromBody = e.origin === 'wikilink';
     const row = el('a', { class: 'kn-linkrow', href: '#/k/' + encodeURIComponent(e.name) }, el('span', { class: 'kn-link-rel kn-link-' + e.relation, text: KN_LINK_REL_LABEL[e.relation] || e.relation }), el('span', { class: 'kn-linkrow-title', text: e.title || e.name }));
+    if (fromBody) {
+        row.append(el('span', {
+            class: 'kn-link-rel kn-link-source', text: '본문',
+            title: incoming
+                ? `'${e.title || e.name}' 본문의 [[${k.name}]] 에서 자동 생성된 연결입니다 — 그 문서의 본문에서 링크를 지우면 사라집니다.`
+                : `이 문서 본문의 [[${e.name}]] 에서 자동 생성된 연결입니다 — 본문에서 링크를 지우면 사라집니다.`,
+        }));
+        return row;
+    }
     if (hasMemoryScope()) {
         const x = el('button', { class: 'kn-linkrow-x', type: 'button', title: '연결 해제', text: '✕' });
         x.onclick = async (ev) => {

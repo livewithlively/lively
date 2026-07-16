@@ -8,7 +8,7 @@ import {
   listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
-  setKnowledgePropsUi, moveKnowledge,
+  setKnowledgePropsUi, moveKnowledge, type WikiLinkResult,
 } from "../v6/knowledge-store.js";
 import { getKnowledgeViewConfig, setKnowledgeViewConfig } from "../v6/view-config-store.js";
 import {
@@ -43,6 +43,17 @@ const SEED_SOURCE_PRESENT = fs.existsSync(
 function seedSyncWarning(name: string | null | undefined): { seed_warning?: string } {
   if (!SEED_SOURCE_PRESENT || !name || !SEEDED_KNOWLEDGE_NAMES.has(name)) return {};
   return { seed_warning: `⚠ '${name}' 은 신규 고객 게이트웨이에 시딩되는 런북입니다(#713). 고객이 받는 본문은 이 WIKI 가 아니라 src/org/seed-knowledge/${name}.md 의 각색 스냅샷이라 — 이 편집은 고객 박스에 자동 반영되지 않습니다. 절차가 바뀌었다면 그 파일도 갱신하세요(내부 [[링크]]·이슈번호·사내 명칭·타 고객사명은 빼고 고객 맥락으로) → 편집 후 \`node scripts/sync-seed-knowledge.mjs\`. 미갱신 시 고객은 옛 절차를 봅니다.` };
+}
+
+// ── #907 본문 [[위키링크]] 자동 엣지 결과 → 응답. 저장은 이미 성공했다 — 미매칭은 **경고**지 실패가 아니다(목표2).
+//  링크가 하나도 없으면 아무것도 싣지 않는다(대부분의 저장에 잡음을 더하지 않게).
+function wikiLinkInfo(w: WikiLinkResult | undefined): Record<string, unknown> {
+  if (!w || (!w.linked.length && !w.unmatched.length)) return {};
+  const info: Record<string, unknown> = { wikilinks: { linked: w.linked, unmatched: w.unmatched } };
+  if (w.unmatched.length) {
+    info.wikilink_warning = `⚠ 본문의 [[링크]] 중 ${w.unmatched.length}건이 실재하지 않는 지식을 가리켜 엣지를 만들지 못했습니다: ${w.unmatched.map((n) => `[[${n}]]`).join(", ")}. 저장은 정상 완료됐습니다 — 오타면 본문을 고치고, 아직 없는 지식이면 그대로 두세요(대상이 생기면 다음 스윕이 자동으로 잇습니다). 문법 예시로 적은 거라면 코드펜스·인라인코드 안에 넣으면 링크로 안 잡힙니다.`;
+  }
+  return info;
 }
 
 const knowledgeList: Capability = {
@@ -153,6 +164,9 @@ const knowledgeSave: Capability = {
   title: "지식 저장",
   description:
     "지식 전문 저장. **신규는 category(분류 key 1개 문자열) + type(page-type) 둘 다 필수(#290)** — type=decision|concept|how-to|reference|research|entity. 교차주제는 카테고리 복수태깅이 아니라 knowledge_link 로. provenance 포함(지식은 항상 recalled — '항상 주입'은 관리탭 '세션 주입' 섹션 문서로만, knowledge_set_wiki 로 인덱스 핀). name 없으면 자동 슬러그. " +
+    "**본문의 [[name]] 은 저장 시 자동으로 지식↔지식 엣지가 된다(#907)** — 관련 지식은 그냥 본문에 [[name]] 으로 적어라(knowledge_link 를 따로 부를 필요 없다). 본문이 진실이라 [[name]] 을 빼면 그 엣지도 사라진다. " +
+    "문법은 Obsidian 과 동일: [[name]] · [[name|표시글]]('|' 뒤는 표시 텍스트지 관계가 아니다) · [[name#헤딩]] · ![[name]]. 자동 엣지는 전부 relation=related — **related 가 아닌 관계(refines·contradicts·depends_on)는 knowledge_link 로 명시**하라(그 엣지는 본문과 무관하게 보존된다). 코드펜스·인라인코드 안의 [[…]] 는 링크로 잡히지 않는다(문법 예시를 쓸 때 유용). " +
+    "응답의 wikilink_warning 은 본문이 **없는 지식**을 가리켰다는 뜻이다(저장은 성공) — 오타면 고치고, 아직 없는 지식이면 그대로 둬도 대상이 생기는 대로 자동으로 이어진다. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
     "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
@@ -224,7 +238,8 @@ const knowledgeSave: Capability = {
       }
       // 서버 클램프: 에이전트가 lifecycle='active' 로 우회할 수 없다. 반대로 에이전트가 자진 pending 하면 존중(안전 방향).
       const lifecycle = (gate.create === "confirm" || input.lifecycle === "pending") ? "pending" : (input.lifecycle ?? "active");
-      const knowledge = await upsertKnowledge({ ...input, lifecycle }, writeCtx);
+      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...input, lifecycle }, writeCtx);
+      const wl = wikiLinkInfo(wikilinks);   // #907 자동 엣지 결과 — 응답 최상위로(knowledge 행에 섞지 않는다)
       const gateInfo = lifecycle === "pending"
         ? { action: "confirm", state: "pending", rule_id: gate.rule_id,
             note: "검토 대기(pending)로 저장됐습니다 — 사람이 승인하기 전까지 검색·세션주입·목록에 노출되지 않습니다(knowledge_get·knowledge_list(lifecycle='pending')로는 조회 가능). 같은 name 으로 다시 저장하면 이 초안이 갱신됩니다." }
@@ -234,10 +249,10 @@ const knowledgeSave: Capability = {
       if ((knowledge as any)?.version === 1) {
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY });
         if (similar.length) {
-          return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), ...wl, similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}) };
+      return { knowledge, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), ...wl };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -262,7 +277,8 @@ const knowledgeSave: Capability = {
         },
       };
     }
-    const knowledge = await upsertKnowledge(input, writeCtx);
+    const { wikilinks, ...knowledge } = await upsertKnowledge(input, writeCtx);
+    const wl = wikiLinkInfo(wikilinks);
     if (gate.update === "review") {
       // 본문은 즉시 반영(라이브 유지) — 사람은 사후에 diff 를 보고 확인 또는 되돌리기.
       const revision = await proposeRevision({
@@ -274,13 +290,14 @@ const knowledgeSave: Capability = {
       return {
         knowledge,
         ...seedSyncWarning(knowledge.name),
+        ...wl,
         gate: {
           action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다.",
         },
       };
     }
-    return { knowledge, ...seedSyncWarning(knowledge.name) };
+    return { knowledge, ...seedSyncWarning(knowledge.name), ...wl };
   },
 };
 

@@ -28,6 +28,10 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "connector_sync", label: "커넥터 sync (외부→우리)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
   { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
+  // #907 본문 [[위키링크]] → 지식 엣지 수렴. 저장 시 그 문서는 이미 수렴하니 이 잡의 값어치는 **시간이 푸는 것들**이다:
+  //  붕 뜬 링크의 대상이 나중에 생기거나(그때 저장을 다시 하지 않는다), 대상이 지워졌다 되살아나거나, 저장 중
+  //  best-effort 로 흘린 실패를 되잡는다. 전수 재계산(수렴형)이라 몇 번을 돌려도 같은 결과다.
+  { key: "wikilink_sweep", label: "지식 본문 [[위키링크]] → 엣지 수렴", params: [] },
   { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }] },
   // 최초 is 부트스트랩 — 결정론 사실(dm scan)을 파일로 뽑고 runbook-bootstrap-domains 를 세션에 주입(map_unmapped 동형). 유닛 0 인 신규 레포 콜드스타트용.
   { key: "bootstrap_is", label: "레포 is 최초 부트스트랩 (세션 주입)", params: [
@@ -86,6 +90,13 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     const name = params.repo;
     if (!name) return { status: "error", summary: { error: "params.repo 필요" } };
     return { status: "ok", summary: await refreshRepoFromGit(String(name), actor) };
+  }
+
+  if (job.action === "wikilink_sweep") {
+    const { sweepWikiLinks } = await import("./v6/knowledge-store.js");
+    const r = await sweepWikiLinks();
+    // dangling(붕 뜬 링크)은 건수만 요약에 — 전체 목록은 잡 요약을 비대하게 만든다(웹 '작업' 탭이 그대로 렌더한다).
+    return { status: "ok", summary: { scanned: r.scanned, docs: r.docs, edges: r.edges, dangling_docs: r.dangling.length } };
   }
 
   if (job.action === "refresh_bases") {
