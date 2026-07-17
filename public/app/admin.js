@@ -4974,31 +4974,173 @@ async function credentialsEditor(detail) {
     ];
     detail.replaceChildren(...cards);
 }
-// ── 내 서비스 로그인 — [내 프로필] 모달 안(#837). 개인 vault + OAuth 연결. 전 구성원. ──
-async function myCredentialsSection(host) {
-    host.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-    let mine = { credentials: [], encryption_ready: true };
-    let oauthConns = { connectors: [] };
+// ── 내 서비스 로그인 — 서비스별 탭(#762). 방식(OAuth/토큰) 대신 '어떤 서비스'로 묶어 비개발자도 직관적으로. ──
+//  탭 = 조직에 등록/연결된 서비스. [＋ 서비스 연결]에서 토큰형 서비스를 셀프 추가(OAuth 미등록 서비스는 관리자 몫).
+const LOGIN_SERVICES = [
+    { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 나로서 Notion 문서를 읽고 써요.' },
+    { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 나로서 Linear 이슈를 보고 만들어요.' },
+    { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 나로서 Slack 메시지를 검색·전송해요.' },
+    { key: 'google-gmail', label: 'Gmail', icon: '✉️', oauth: 'google-gmail', blurb: 'AI가 나로서 Gmail을 읽고 보내요.' },
+    { key: 'google-drive', label: 'Google Drive', icon: '📁', oauth: 'google-drive', blurb: 'AI가 나로서 Google Drive 파일을 읽어요.' },
+    { key: 'google-calendar', label: 'Google 캘린더', icon: '📅', oauth: 'google-calendar', blurb: 'AI가 나로서 일정을 봐요.' },
+    { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 나로서 GitHub 이슈·PR·레포를 다뤄요.' },
+    { key: 'gitlab', label: 'GitLab', icon: '🦊', token: 'gitlab_pat', blurb: 'AI가 나로서 GitLab MR·레포를 다뤄요.' },
+    { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 나로서 ClickUp 작업을 봐요.' },
+    { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 나로서 Figma 디자인을 읽어요.' },
+    { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 나로서 Prometheus 지표를 조회해요.' },
+];
+async function renderServiceTabs(host) {
+    host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0', text: '불러오는 중…' }));
+    let creds = { credentials: [] }, oauth = { connectors: [] };
     try {
-        mine = await api('/api/ui/me/credentials');
-        oauthConns = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
+        creds = await api('/api/ui/me/credentials');
+        oauth = await api('/api/ui/me/oauth/connectors').catch(() => ({ connectors: [] }));
     }
     catch (e) {
         host.replaceChildren(errorNote(e, '내 로그인을 불러오지 못했습니다'));
         return;
     }
-    const encReady = mine.encryption_ready !== false;
-    const kids = [];
-    if (!encReady)
-        kids.push(el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키가 없어 저장할 수 없습니다 — 관리자에게 요청하세요.' }));
-    // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
-    // #762 제목 중복 제거 — 페이지 헤더가 '내 서비스 로그인'이므로 이 수동 자격 카드는 방식(토큰·API 키)으로 구분.
-    const credCard = credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다.', (mine.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host));
-    credCard.style.marginTop = '0'; // .admin-stack 가 간격 담당 — credVaultCard 인라인 margin-top 무력화(#762)
-    kids.push(credCard);
-    if ((oauthConns.connectors || []).length)
-        kids.push(oauthConnectorsCard(oauthConns.connectors, () => myCredentialsSection(host)));
-    host.replaceChildren(...kids);
+    const oauthMap = new Map((oauth.connectors || []).map((c) => [c.server, c]));
+    const credMap = new Map((creds.credentials || []).filter((c) => c.kind !== 'aws_role_arn').map((c) => [c.kind, c]));
+    const isReg = (s) => !!((s.oauth && oauthMap.has(s.oauth)) || (s.token && credMap.has(s.token)));
+    const isOn = (s) => !!((s.oauth && oauthMap.get(s.oauth) && oauthMap.get(s.oauth).connected) || (s.token && credMap.get(s.token) && credMap.get(s.token).has_secret));
+    const tabs = LOGIN_SERVICES.filter(isReg);
+    const addable = LOGIN_SERVICES.filter((s) => !isReg(s) && s.token); // 토큰형은 셀프 추가 가능
+    const reload = () => renderServiceTabs(host);
+    if (!tabs.length) {
+        host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: '아직 연결한 서비스가 없어요. 아래에서 골라 연결해요.' }), addPanel(addable, reload));
+        return;
+    }
+    let active = tabs[0].key;
+    const tabBar = el('div', { class: 'chips svc-tabs' });
+    const body = el('div', { class: 'svc-tab-body' });
+    const draw = () => {
+        const mkTab = (key, label, icon, ok) => {
+            const b = el('button', { type: 'button', class: 'chip svc-tab' + (active === key ? ' on' : '') }, icon ? el('span', { class: 'svc-tab-ic', text: icon }) : null, el('span', { text: label }), ok ? el('span', { class: 'svc-tab-dot', title: '연결됨' }) : null);
+            b.onclick = () => { active = key; draw(); };
+            return b;
+        };
+        tabBar.replaceChildren(...tabs.map((s) => mkTab(s.key, s.label, s.icon, isOn(s))), mkTab('__add__', '＋ 서비스 연결', '', false));
+        if (active === '__add__')
+            body.replaceChildren(addPanel(addable, reload));
+        else
+            body.replaceChildren(servicePanel(tabs.find((x) => x.key === active) || tabs[0], oauthMap, credMap, reload));
+    };
+    host.replaceChildren(tabBar, body);
+    draw();
+}
+// 선택한 서비스 패널 — 상태 + 연결/해제(OAuth) 또는 토큰 상태/삭제/입력.
+function servicePanel(svc, oauthMap, credMap, reload) {
+    const oc = svc.oauth ? oauthMap.get(svc.oauth) : null;
+    const cred = svc.token ? credMap.get(svc.token) : null;
+    const on = !!((oc && oc.connected) || (cred && cred.has_secret));
+    const wrap = el('div', {}, el('div', { class: 'svc-panel-head' }, el('span', { class: 'svc-panel-ic', text: svc.icon }), el('span', { class: 'svc-panel-nm', text: svc.label }), el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: on ? '연결됨 ✓' : '미연결' })), el('p', { class: 'admin-hint', style: 'margin:6px 0 14px', text: svc.blurb }));
+    if (oc) {
+        const connectBtn = el('button', { class: 'btn btn-sm ' + (oc.connected ? 'btn-ghost' : 'btn-primary'), text: oc.connected ? '다시 연결' : '연결',
+            onclick: async () => {
+                try {
+                    const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+                    if (r.authorized) {
+                        toast('이미 연결됨');
+                        reload();
+                        return;
+                    }
+                    window.open(r.authorization_url, '_blank', 'noopener');
+                    toast('새 탭에서 로그인·동의하세요 — 완료 후 [새로고침]');
+                }
+                catch (e) {
+                    toast(e.message, true);
+                }
+            } });
+        const discBtn = oc.connected ? el('button', { class: 'btn-text', text: '연결 해제',
+            onclick: async () => { if (!confirm(svc.label + ' 연결을 해제할까요?'))
+                return; try {
+                await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+                toast('해제됨');
+                reload();
+            }
+            catch (e) {
+                toast(e.message, true);
+            } } }) : null;
+        wrap.append(el('div', { class: 'admin-actions', style: 'margin:0' }, connectBtn, discBtn, el('button', { class: 'btn-text', text: '새로고침', onclick: reload })));
+    }
+    if (svc.token) {
+        if (cred) {
+            wrap.append(el('div', { class: 'svc-item', style: 'margin-top:12px' }, el('span', { class: 'mini-meta', text: '토큰 등록됨 ✓' + (cred.scope_key ? ' · ' + cred.scope_key : '') }), el('span', { class: 'svc-item-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '삭제',
+                onclick: async () => { if (!confirm(svc.label + ' 토큰을 삭제할까요?'))
+                    return; try {
+                    await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: svc.token, scope_key: cred.scope_key || '' }) });
+                    toast('삭제됨');
+                    reload();
+                }
+                catch (e) {
+                    toast((e && e.message) || '삭제 실패', true);
+                } } }))));
+        }
+        else if (!oc) {
+            wrap.append(el('div', { style: 'margin-top:12px' }, svcTokenForm(svc.token, reload)));
+        }
+    }
+    return wrap;
+}
+// 추가 패널 — 지원하지만 아직 연결 안 한 서비스. [연결] 시 그 서비스 토큰 폼을 인라인으로 편다.
+function addPanel(addable, reload) {
+    const wrap = el('div', {});
+    if (!addable.length) {
+        wrap.append(el('p', { class: 'admin-hint', style: 'margin:0', text: '추가로 연결할 서비스가 없어요.' }));
+        return wrap;
+    }
+    const list = el('div', { class: 'svc-list' });
+    addable.forEach((s) => {
+        const btn = el('button', { class: 'btn btn-primary btn-sm', text: '연결' });
+        const row = el('div', { class: 'svc-item' }, el('span', { class: 'svc-panel-ic', style: 'font-size:19px', text: s.icon }), el('span', { class: 'svc-item-main' }, el('span', { class: 'mini-title', text: s.label }), el('span', { class: 'mini-meta', text: s.blurb })), el('span', { class: 'svc-item-actions' }, btn));
+        btn.onclick = () => {
+            const next = row.nextElementSibling;
+            if (next && next.classList.contains('svc-inline-form')) {
+                next.remove();
+                return;
+            }
+            row.after(el('div', { class: 'svc-inline-form', style: 'margin:-2px 0 2px' }, svcTokenForm(s.token, reload)));
+        };
+        list.append(row);
+    });
+    wrap.append(list);
+    wrap.append(el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'Google 등 OAuth로만 연결되는 서비스는 관리자가 조직에 등록하면 위 탭에 떠요.' }));
+    return wrap;
+}
+// 특정 종류(kind) 토큰 입력 폼 — CRED_KINDS 스펙 사용.
+function svcTokenForm(kind, reload) {
+    const spec = CRED_KINDS.find((x) => x.kind === kind);
+    if (!spec)
+        return el('div', {});
+    const scopeIn = el('input', { type: 'text', placeholder: spec.scopePh || '' });
+    const secretIn = el('input', { type: 'password', autocomplete: 'off', placeholder: spec.secretPh || '토큰 값 붙여넣기' });
+    const submit = el('button', { class: 'btn btn-primary btn-sm', text: '저장' });
+    const status = el('span', { class: 'admin-status' });
+    submit.addEventListener('click', async () => {
+        if (!secretIn.value.trim()) {
+            toast('토큰을 입력하세요', true);
+            return;
+        }
+        const payload = { kind: spec.kind, secret: secretIn.value };
+        if (spec.scope && scopeIn.value.trim())
+            payload.scope_key = scopeIn.value.trim();
+        if (spec.meta)
+            payload.meta = spec.meta;
+        submit.disabled = true;
+        status.textContent = '저장 중…';
+        try {
+            await api('/api/ui/me/credential', { method: 'POST', body: JSON.stringify(payload) });
+            toast('저장됨');
+            reload();
+        }
+        catch (e) {
+            status.textContent = '';
+            submit.disabled = false;
+            toast((e && e.message) || '저장 실패', true);
+        }
+    });
+    return el('div', { class: 'card', style: 'padding:14px' }, spec.scope ? field(spec.scope + '(선택)', scopeIn) : null, field(spec.secretLabel, secretIn), spec.help ? el('p', { class: 'admin-hint', style: 'margin:2px 0 0', text: spec.help }) : null, spec.docUrl ? el('a', { class: 'admin-hint', href: spec.docUrl, target: '_blank', rel: 'noopener', style: 'display:inline-block; margin:6px 0 0', text: '토큰 발급 페이지 열기 ↗' }) : null, el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status));
 }
 // 자격 목록 + 추가 폼 카드(me 또는 org). aws_role_arn 은 별도(awsRoleCard).
 function credVaultCard(owner, title, intro, creds, encReady, reload) {
@@ -5597,13 +5739,12 @@ async function myAiSection(detail) {
 }
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
-    // #762 정돈 — 페이지 헤더(내 서비스 로그인) 아래 3가지 방식을 같은 격의 서브카드로: git 인증 · 토큰·API 키 · OAuth 로그인.
-    const head = el('div', { class: 'card' }, sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'));
-    const gitCard = el('div', { class: 'card' }, el('h3', { class: 'admin-subhead', text: 'git 인증 (레포 접근)' }), el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
-    // #762 카드 간격 통일 — .admin-stack(flex column·gap)으로 모든 서브카드 사이 여백을 14px 로 균일화(전엔 0~12px 들쭉날쭉·붙음).
-    const vault = el('div', { class: 'admin-stack' });
-    detail.replaceChildren(el('div', { class: 'admin-stack' }, head, gitCard, vault));
-    await myCredentialsSection(vault);
+    // #762 서비스별 탭 재설계 — 헤더 + [서비스 로그인(탭)] + [레포 접근(개발자용)]. 방식(OAuth/토큰) 노출 안 함.
+    const head = el('div', { class: 'card' }, sectionTitle('내 서비스 로그인', 'AI가 **나로서** 아래 서비스들을 쓰게 로그인해 둬요 — 암호화되고 다른 사람에겐 안 보여요. 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 거예요.'));
+    const svcCard = el('div', { class: 'card' }); // 서비스별 탭이 여기 그려짐
+    const gitCard = el('div', { class: 'card' }, el('h3', { class: 'admin-subhead', text: '레포 접근 (개발자용)' }), el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: '코드 저장소(GitHub·GitLab)를 클론·푸시할 때 쓰는 SSH 키/토큰이에요. 코드를 안 다루면 신경 안 써도 돼요.' }), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
+    detail.replaceChildren(el('div', { class: 'admin-stack' }, head, svcCard, gitCard));
+    await renderServiceTabs(svcCard);
 }
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
 //  #893: 온보딩(#/start/harness)에 있던 걸 여기로 통합 — 하네스 관리는 상시라 관리탭이 정주소(온보딩은 링크).

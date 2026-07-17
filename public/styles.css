@@ -1110,6 +1110,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 /* 카드 세로 스택 — 서브카드 사이 여백을 균일하게(개별 카드 인라인 margin 의존 제거, #762). */
 .admin-stack { display: flex; flex-direction: column; gap: 14px; }
+/* 서비스별 탭(내 서비스 로그인, #762) — .chip 재사용한 탭 바 + 선택 서비스 패널. */
+.svc-tabs { margin-bottom: 16px; }
+.svc-tab { gap: 6px; }
+.svc-tab-ic { font-size: 15px; line-height: 1; }
+.svc-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint, #16C79A); }
+.chip.on .svc-tab-dot { background: #fff; }
+.svc-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.svc-panel-ic { font-size: 22px; line-height: 1; flex: none; }
+.svc-panel-nm { font-size: 16px; font-weight: 800; color: var(--ink); }
 .warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
 .builtin-toggles { margin-top: 10px; }
 .builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }
