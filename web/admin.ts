@@ -4706,8 +4706,10 @@ function oauthConnectorsCard(conns, reload) {
       c.note ? el('div', { class: 'mini-meta', text: c.note }) : null,
       el('div', { class: 'admin-actions' }, connectBtn, discBtn));
   });
+  // #762 me-logins 정돈 — '토큰·API 키' 카드(credVaultCard)와 heading 격을 맞춘다(둘 다 admin-subhead 서브카드).
   return el('div', { class: 'card' },
-    sectionTitle('OAuth 로그인', 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).'),
+    el('h3', { class: 'admin-subhead', text: 'OAuth 로그인' }),
+    el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).' }),
     el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })),
     ...rows);
 }
@@ -4778,7 +4780,8 @@ async function myCredentialsSection(host) {
   const kids: any[] = [];
   if (!encReady) kids.push(el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키가 없어 저장할 수 없습니다 — 관리자에게 요청하세요.' }));
   // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
-  kids.push(credVaultCard('me', '내 서비스 로그인', 'AI 가 나로서 그 서비스에 접근할 때 씁니다(예: GitLab MR 올리기, Slack 검색). 암호화 저장되고 다른 사람에게 보이지 않아요.',
+  // #762 제목 중복 제거 — 페이지 헤더가 '내 서비스 로그인'이므로 이 수동 자격 카드는 방식(토큰·API 키)으로 구분.
+  kids.push(credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다 — AI가 나로서 그 서비스를 씁니다. (OAuth로 연결하는 서비스는 아래 [OAuth 로그인]에서.)',
     (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host)));
   if ((oauthConns.connectors || []).length) kids.push(oauthConnectorsCard(oauthConns.connectors, () => myCredentialsSection(host)));
   host.replaceChildren(...kids);
@@ -5311,13 +5314,16 @@ async function myAiSection(detail) {
 
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
+  // #762 정돈 — 페이지 헤더(내 서비스 로그인) 아래 3가지 방식을 같은 격의 서브카드로: git 인증 · 토큰·API 키 · OAuth 로그인.
   const head = el('div', { class: 'card' },
-    sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'),
-    field('git 인증 (레포 접근)', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
-      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }))));
+    sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'));
+  const gitCard = el('div', { class: 'card' },
+    el('h3', { class: 'admin-subhead', text: 'git 인증 (레포 접근)' }),
+    el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }),
+    el('div', { class: 'admin-actions' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   const vault = el('div', {});
-  detail.replaceChildren(head, vault);
+  detail.replaceChildren(head, gitCard, vault);
   await myCredentialsSection(vault);
 }
 
