@@ -4805,7 +4805,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
           if (!confirm(`${kindLabel(c.kind)}${c.scope_key ? ' (' + c.scope_key + ')' : ''} 자격을 삭제할까요?`)) return;
           try { await api(base + '/delete', { method: 'POST', body: JSON.stringify({ kind: c.kind, scope_key: c.scope_key || '' }) }); toast('삭제됨'); reload(); }
           catch (e: any) { toast((e && e.message) || '삭제 실패', true); }
-        } })));
+        } }))));
     }
     rows.push(list);
   } else rows.push(el('p', { class: 'admin-hint', style: 'margin:0', text: '등록된 자격이 없습니다.' }));
