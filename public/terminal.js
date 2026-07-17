@@ -912,6 +912,65 @@ function openHelp() {
   document.body.append(back);
 }
 
+// '내 질문' — 이 세션에서 내가 Claude 에게 보낸 프롬프트를 최신순으로 모아 본다. 서버가 Claude Code 대화기록(transcript)에서
+//  사용자 발화만 뽑아 준다: GET /api/ui/terminal/sessions/:id/prompts → { prompts:[{text,ts}](오래된→최신), total, found }.
+//  (대시보드 카드의 openSessPrompts(#745)를 단독 터미널 페이지로 이식. 항목 클릭 시 그 질문을 클립보드로 복사.)
+function openMyPrompts() {
+  const head = el('div', { class: 'help-head' },
+    el('h3', { text: '💬 내 질문' }),
+    el('p', { class: 'help-intro', text: '이 세션에서 내가 보낸 질문을 최신 순으로. 항목을 클릭하면 복사돼요.' }));
+  const body = el('div', { class: 'help-body' }, el('div', { class: 'q-empty', text: '불러오는 중…' }));
+  const pop = el('div', { class: 'pop pop-help' },
+    el('button', { class: 'help-x', title: '닫기', text: '✕', onclick: () => back.remove() }),
+    head, body);
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+
+  const fmtWhen = (ts) => {
+    const d = new Date(ts); if (isNaN(d.getTime())) return '';
+    const s = (Date.now() - d.getTime()) / 1000;
+    if (s < 60) return '방금';
+    if (s < 3600) return Math.floor(s / 60) + '분 전';
+    if (s < 86400) return Math.floor(s / 3600) + '시간 전';
+    if (s < 604800) return Math.floor(s / 86400) + '일 전';
+    return d.toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' });
+  };
+
+  api(sUrl('/prompts')).then((d) => {
+    const prompts = (d && d.prompts) || [];
+    const total = (d && d.total) || prompts.length;
+    if (!prompts.length) {
+      body.replaceChildren(el('div', { class: 'q-empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
+      return;
+    }
+    const search = el('input', { class: 'q-search', type: 'search', placeholder: '이 세션의 질문 검색…' });
+    const cap = el('div', { class: 'q-cap' });
+    const list = el('div', { class: 'q-list' });
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      const terms = q ? q.split(/\s+/).filter(Boolean) : [];
+      const seq = prompts.map((p, i) => ({ p: p, num: i + 1 })).reverse(); // 최신 우선 + 원래 순번(#)
+      const shown = terms.length ? seq.filter((x) => { const t = x.p.text.toLowerCase(); return terms.every((w) => t.indexOf(w) >= 0); }) : seq;
+      cap.textContent = terms.length
+        ? (shown.length + ' / ' + total + '개 일치')
+        : (total + '개 질문 · 최신순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : ''));
+      list.replaceChildren();
+      if (!shown.length) { list.append(el('div', { class: 'q-empty', text: '일치하는 질문이 없어요.' })); return; }
+      shown.forEach((x) => {
+        list.append(el('div', { class: 'q-item', title: '클릭하면 복사', onclick: () => copyText(x.p.text) },
+          el('div', { class: 'q-meta' }, el('span', { class: 'q-num', text: '#' + x.num }), el('span', { class: 'q-when', text: fmtWhen(x.p.ts) })),
+          el('div', { class: 'q-text', text: x.p.text })));
+      });
+    };
+    search.addEventListener('input', draw);
+    body.replaceChildren(search, cap, list);
+    draw();
+  }).catch((e) => {
+    body.replaceChildren(el('div', { class: 'q-empty', text: '질문을 불러오지 못했어요 — ' + ((e && e.message) || e) }));
+  });
+}
+
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
 
@@ -970,6 +1029,7 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
+    el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 내가 보낸 질문 모아보기 (최신순)', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
