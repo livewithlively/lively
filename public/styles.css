@@ -7002,40 +7002,48 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 
 /* ============================================================
    맥락의 세 축 다이어그램(:::axes — 사용설명서 how-it-works).
-   카테고리(분류 컨테이너) 안에 지식(정적)⇄프로젝트(동적) 두 극이 담긴 구조.
+   카테고리(분류)를 정점으로, 아래를 '여러 필요 지식 → 프로젝트 → 여러 산출 지식' 흐름으로.
+   지식(정적)은 흐름 양끝(스택 카드 = 여러 개가 들고난다), 프로젝트(동적)는 가운데. (#762 흐름 복원 + 복수감)
    ============================================================ */
-.md-axes { margin: 24px 0 28px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
-.md-axes .md-axes-ic { flex: none; line-height: 1; font-size: 20px; }
-.md-axes .md-axes-nm { font-weight: 800; color: var(--ink); letter-spacing: -.2px; font-size: 14px; }
-.md-axes .md-axes-sub { display: block; font-weight: 600; color: var(--muted-2); font-size: 11.5px; margin-top: 1px; }
-.md-axes-txt { min-width: 0; }
+.md-axes { margin: 26px 0 30px; display: flex; flex-direction: column; align-items: center; }
+.md-axes .md-axes-ic { flex: none; line-height: 1; }
+.md-axes .md-axes-nm { font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.md-axes .md-axes-sub { font-weight: 600; color: var(--muted-2); }
 
-/* 카드(카테고리·지식·프로젝트 공통) */
-.md-axes-card { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 12px;
-  background: var(--bg); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(21,35,59,.04); }
-.md-axes-card.is-know { border-top: 3px solid var(--mint, #46c8a0); }   /* 지식 = 정적(민트) */
-.md-axes-card.is-proj { border-top: 3px solid var(--blue); }           /* 프로젝트 = 동적(파랑) */
+/* 정점 — 카테고리(지식·프로젝트를 담는 분류 컨테이너) */
+.md-axes-apex { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 999px;
+  background: var(--bg-tint); border: 1.5px solid var(--line-net, #d9dee6); }
+.md-axes-apex .md-axes-ic { font-size: 18px; }
+.md-axes-apex .md-axes-nm { font-size: 14.5px; }
+.md-axes-apex-hint { font-size: 12px; font-weight: 700; color: var(--muted-2); }
+.md-axes-stem { width: 2px; height: 20px; background: var(--line-net, #d9dee6); }
 
-/* 존 — 정적(카테고리+지식)·동적(프로젝트) */
-.md-axes-zone { display: flex; flex-direction: column; align-items: stretch; }
-.md-axes-zone.is-static { padding: 12px; border-radius: 16px; background: var(--bg-tint); border: 1.5px solid var(--line-net, #d9dee6); }
-.md-axes-zone.is-static .md-axes-card { min-width: 192px; }
-.md-axes-zlbl { text-align: center; margin-top: 9px; font-size: 11px; font-weight: 700; color: var(--muted-2); }
+/* 흐름 — 여러 필요 지식 → 프로젝트 → 여러 산출 지식 (정적 → 동적 → 정적) */
+.md-axes-flow { display: flex; align-items: stretch; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; }
+.md-axes-fnode { flex: 1 1 0; min-width: 150px; max-width: 235px; display: flex; flex-direction: column; gap: 6px;
+  padding: 15px 16px; border-radius: 14px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(21,35,59,.04); }
+.md-axes-fnode .md-axes-ic { font-size: 22px; }
+.md-axes-fnode .md-axes-nm { font-size: 14.5px; }
+.md-axes-fnode .md-axes-sub { font-size: 12px; line-height: 1.55; }
+/* 지식 = 정적(민트) · 프로젝트 = 동적(파랑). 필요 지식은 선택이라 점선으로 '없어도 됨'을 표시. */
+.md-axes-fnode.is-req  { border-style: dashed; border-color: color-mix(in srgb, var(--mint, #46c8a0) 50%, var(--line));
+  background: color-mix(in srgb, var(--mint, #46c8a0) 5%, var(--bg)); }
+.md-axes-fnode.is-prod { border-top: 3px solid var(--mint, #46c8a0); }
+.md-axes-fnode.is-dynamic { border-top: 3px solid var(--blue); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); }
+/* 스택 — 지식 노드 뒤로 카드 두 장이 비껴 보여 '여러 개'임을 드러낸다(필요/산출 둘 다). */
+.md-axes-fnode.is-stack { position: relative; }
+.md-axes-fnode.is-stack::before, .md-axes-fnode.is-stack::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; bottom: 0; border-radius: inherit;
+  background: var(--bg); border: 1px solid var(--line); z-index: -1; }
+.md-axes-fnode.is-stack::before { transform: translate(5px, 6px); }
+.md-axes-fnode.is-stack::after  { transform: translate(10px, 12px); opacity: .55; }
+.md-axes-fnode.is-req.is-stack::before, .md-axes-fnode.is-req.is-stack::after {
+  border-style: dashed; border-color: color-mix(in srgb, var(--mint, #46c8a0) 50%, var(--line)); }
+.md-axes-arrow { flex: none; align-self: center; font-size: 20px; font-weight: 800; color: var(--muted-2); }
 
-/* 카테고리 →분류해 담는다→ 지식 (정적 존 내부 수직 연결) */
-.md-axes-hold { display: flex; align-items: center; justify-content: center; padding: 8px 0; position: relative; }
-.md-axes-hold::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--line-net, #d9dee6); }
-.md-axes-hold-lbl { position: relative; font-size: 10.5px; font-weight: 700; color: var(--muted-2); background: var(--bg-tint); padding: 1px 7px; }
-
-/* 지식 ⟷ 프로젝트 — 필요 지식(꺼냄) / 산출 지식(되돌림) */
-.md-axes-conn { display: flex; flex-direction: column; gap: 9px; padding: 0 4px; }
-.md-axes-flow-lbl { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800; white-space: nowrap; }
-.md-axes-flow-lbl.is-req  { color: var(--blue); }
-.md-axes-flow-lbl.is-prod { color: var(--mint-deep, #16a37f); }
-.md-axes-arr { font-size: 17px; font-weight: 800; }
-
-/* 좁은 화면 — 세로 스택, 필요/산출은 가로 */
-@media (max-width: 700px) {
-  .md-axes { flex-direction: column; }
-  .md-axes-conn { flex-direction: row; gap: 16px; padding: 6px 0; }
+/* 좁은 화면 — 세로 스택, 화살표 90° 회전 */
+@media (max-width: 640px) {
+  .md-axes-flow { flex-direction: column; align-items: stretch; }
+  .md-axes-fnode { max-width: none; }
+  .md-axes-arrow { transform: rotate(90deg); }
 }
