@@ -296,26 +296,30 @@ function copyText(text, silent) {
   else execCopy(text);
   if (!silent) toast('복사됨');
 }
-// 드래그 선택 → 마우스 놓는 즉시 클립보드 복사(#252). Claude Code(마우스모드 1003)는 motion 리드로우로 선택을
-//  곧 지우므로, mouseup 캡처 단계에서 '아직 살아있는' 선택을 집어 바로 복사한다(Shift+드래그로 선택 시).
-//  셸 등 마우스 안 쓰는 화면에선 일반 드래그 선택도 그대로 복사(copy-on-select). http 비보안에선 execCommand 폴백.
-//  ⚠ 단, **드래그일 때만** 복사한다 — 더블클릭(단어)/트리플클릭(줄) 등 '클릭 선택'은 mouseup 을 타도 복사하지 않는다.
-//   (더블클릭 단어선택이 매번 사용자 클립보드를 덮어버려 불편하다는 요청 — mousedown→mouseup 사이 이동이 있어야 드래그로 본다.)
-function setupSelectionCopy() {
-  const host = panesEl || document.body;
-  let downX = 0, downY = 0, dragged = false;
-  host.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; dragged = false; }, true);
-  host.addEventListener('mousemove', (e) => {
-    if (!dragged && (e.buttons & 1) && (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4)) dragged = true;
-  }, true);
-  host.addEventListener('mouseup', () => {
-    if (!dragged) return; // 클릭(더블/트리플/싱글) 선택은 클립보드 안 덮음 — 드래그 선택만 copy-on-select
-    try { const sel = term.getSelection && term.getSelection(); if (sel && sel.trim()) copyText(sel); } catch (_) { /* noop */ }
-  }, true);
+// [#967] 클립보드 불변식: **사용자의 명시적 동작 없이는 절대 클립보드를 쓰지 않는다.**
+//  클립보드는 파괴적이다 — 한 번 덮이면 이전 내용이 소리 없이 사라진다. 그래서 쓰기 경로는 딱 둘:
+//   ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭. 그 외 자동 복사는 전부 제거했다.
+//  · 제거: 드래그 선택 → 놓는 즉시 자동 복사(#252 copy-on-select). 미세한 클릭드래그(4px)에도 클립보드가
+//    덮여 "엄한 걸 눌렀는데 복사됐다"의 주범이었다. 선택 자체는 그대로 되고, 복사만 명시적으로 한다.
+//  · 전환: OSC 52(아래) — 자동 쓰기 대신 '복사 확인' 배너로.
+// OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호(#252 에서
+//  tmux set-clipboard 로 전달받아 자동으로 썼다). [#967] 앱이 임의 시점에 보낼 수 있는 신호라(사용자는 왜
+//  복사됐는지 모름) 자동 쓰기를 중단하고, 하단 배너에서 사용자가 '복사'를 클릭한 경우에만 쓴다.
+let copyOfferEl = null, copyOfferTimer = null;
+function offerCopy(text) {
+  try { if (copyOfferEl) copyOfferEl.remove(); } catch (_) { /* noop */ }
+  clearTimeout(copyOfferTimer);
+  const short = text.replace(/\s+/g, ' ').trim();
+  const preview = short.slice(0, 42) + (short.length > 42 ? '…' : '');
+  const dismiss = () => { try { bar.remove(); } catch (_) { /* noop */ } if (copyOfferEl === bar) copyOfferEl = null; };
+  const bar = el('div', { style: 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:#333;color:#fff;padding:9px 12px 9px 16px;border-radius:10px;font-size:13px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,.35);max-width:min(640px,92vw)' },
+    el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0', text: '앱이 복사를 요청했어요 — “' + preview + '”' }),
+    el('button', { style: 'flex:0 0 auto;font:inherit;font-size:12.5px;font-weight:600;padding:5px 12px;border:0;border-radius:7px;background:#16C79A;color:#fff;cursor:pointer', text: '클립보드에 복사', onclick: () => { copyText(text); dismiss(); } }),
+    el('button', { style: 'flex:0 0 auto;font:inherit;font-size:12.5px;padding:5px 10px;border:0;border-radius:7px;background:rgba(255,255,255,.14);color:#fff;cursor:pointer', text: '무시', onclick: dismiss }));
+  copyOfferEl = bar;
+  document.body.append(bar);
+  copyOfferTimer = setTimeout(dismiss, 10000);
 }
-// OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호. 웹터미널+tmux+ssh
-//  너머에선 이게 사용자 브라우저 클립보드까지 안 닿아 'copied N chars' 떠도 실제론 비어있었다(#252). tmux
-//  set-clipboard on 으로 전달받아, 여기서 디코드해 브라우저 클립보드에 직접 쓴다 → Claude 네이티브 복사가 실동작.
 function setupOscClipboard() {
   try {
     term.parser.registerOscHandler(52, (data) => {
@@ -325,7 +329,7 @@ function setupOscClipboard() {
         if (b64 && b64 !== '?') {
           let text = '';
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
-          if (text) copyText(text, true); // 앱이 이미 'copied' 안내하므로 토스트는 생략
+          if (text) offerCopy(text); // [#967] 자동으로 안 쓴다 — 사용자가 배너에서 클릭해야 클립보드에 씀
         }
       } catch (_) { /* noop */ }
       return true; // 처리함(앱으로 다시 안 흘림)
@@ -551,6 +555,7 @@ function setupWheel() {
     } catch (_) { return { col: 1, row: 1 }; }
   };
   term.attachCustomWheelEventHandler((e) => {
+    cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 직접 휠을 굴리면 즉시 중단(#967)
     let alt = false, mouseOn = false;
     try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
@@ -893,9 +898,10 @@ function openHelp() {
         kb(['Ctrl C'], '멈춘·실행 중인 명령 강제 중단'),
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
       sec('복사',
-        kb(['드래그'], '글자를 선택하면 놓는 순간 자동 복사'),
-        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그')),
+        kb(['드래그 → ⌘/Ctrl C'], '드래그로 선택한 뒤 복사 — 자동 복사는 없어요(클립보드 안 덮임)'),
+        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택')),
       sec('도구 (오른쪽 위 버튼)',
+        tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
         tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
@@ -905,6 +911,158 @@ function openHelp() {
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
+}
+
+// ── 내 질문(#967) — 이 세션에서 클로드에게 보낸 질문 목록 + 클릭하면 그 질문 위치로 화면 이동 ──
+//  목록은 서버가 ~/.claude 트랜스크립트에서 추출(#745 /prompts 재사용, 노드 세션은 릴레이 #875).
+//  '위치로 이동'은 대화 기록이 어디에 있느냐에 따라 두 경로로 갈린다:
+//   · normal buffer(셸 등): 기록이 xterm 스크롤백에 있다 → 버퍼를 훑어 scrollToLine + 잠깐 하이라이트.
+//   · alt-screen + 앱 마우스모드(Claude Code — 실측: 웹세션 tmux alternate_on=1, 기록은 앱 내부 스크롤백):
+//     xterm 엔 현재 화면뿐이라 스크롤할 대상이 없다 → 휠업 이벤트를 앱에 보내 앱이 위로 스크롤하게 하면서
+//     화면을 readback 해 질문이 보이면 멈춘다(자동 탐색). 사용자가 키·휠을 건드리면 즉시 중단(사용자 우선).
+//  매칭은 공백 제거(stripWS) 문자열로 — 터미널 랩핑·"> " 프리픽스·연속행 들여쓰기가 끼어도 이어붙으면 잡힌다.
+const stripWS = (s) => String(s || '').replace(/\s+/g, '');
+function promptNeedles(text) {
+  const first = (String(text || '').split('\n').find((l) => l.trim()) || '');
+  const s = stripWS(first);
+  const out = [];
+  if (s.length >= 4) out.push(s.slice(0, 60));           // 기본: 첫 줄 앞 60자(공백 제거)
+  if (s.length > 24) out.push(s.slice(0, 24));           // 표시가 중간에 잘린 경우 대비 — 점점 짧은 프리픽스로 재시도
+  if (s.length > 12) out.push(s.slice(0, 12));
+  if (!out.length && s) out.push(s);
+  return [...new Set(out)];
+}
+// [from, from+count) 행 범위에서 needle 을 찾는다 — 행별 공백제거 문자열을 이어붙여 랩 경계 무관 매칭.
+//  같은 텍스트가 여러 번 보이면(에이전트가 질문을 인용하는 등) '>' 로 시작하는 행(클로드 질문 표시)을 우선.
+function findRowIn(from, count, needles) {
+  let b;
+  try { b = term.buffer.active; } catch (_) { return -1; }
+  const n = Math.max(0, Math.min(count, b.length - from));
+  if (!n) return -1;
+  const offs = new Array(n + 1); offs[0] = 0;
+  let big = '';
+  for (let i = 0; i < n; i++) {
+    const ln = b.getLine(from + i);
+    const t = ln ? stripWS(ln.translateToString(true)) : '';
+    big += t; offs[i + 1] = offs[i] + t.length;
+  }
+  const rowOf = (off) => { let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (offs[m] <= off) lo = m; else hi = m - 1; } return from + lo; };
+  for (const nd of needles) {
+    const rows = [];
+    let i = big.indexOf(nd);
+    while (i !== -1 && rows.length < 50) { rows.push(rowOf(i)); i = big.indexOf(nd, i + 1); }
+    if (!rows.length) continue;
+    const anchored = rows.find((y) => { const ln = b.getLine(y); const s = ln ? ln.translateToString(true).trimStart() : ''; return s.startsWith('>'); });
+    return anchored !== undefined ? anchored : rows[0];
+  }
+  return -1;
+}
+// 찾은 행을 잠깐 선택으로 하이라이트 — 자동 복사가 없으므로(#967 불변식) 선택해도 클립보드는 안 덮인다.
+function flashRow(y) {
+  try { term.clearSelection(); term.select(0, y, term.cols); setTimeout(() => { try { term.clearSelection(); } catch (_) { /* noop */ } }, 1600); } catch (_) { /* noop */ }
+}
+let promptSeek = null; // 진행 중 자동 탐색(동시에 하나만). 사용자 입력(onData·휠)이 오면 중단.
+function cancelPromptSeek(notice) {
+  if (!promptSeek) return;
+  promptSeek.stop = true; promptSeek = null;
+  if (notice) toast('질문 위치 이동을 중단했어요');
+}
+// alt-screen 앱(Claude Code)에 휠업을 보내며 질문을 찾는다. 못 찾으면 보낸 만큼 휠다운으로 원위치(하단 클램프라 초과 무해).
+function seekPromptInApp(needles) {
+  const seek = { stop: false, ticks: 0 };
+  promptSeek = seek;
+  const colC = Math.max(1, Math.ceil(term.cols / 2)), rowC = Math.max(1, Math.ceil(term.rows / 2));
+  const wheel = (btn, k) => { let s = ''; for (let i = 0; i < k; i++) s += '\x1b[<' + btn + ';' + colC + ';' + rowC + 'M'; sendInput(s); };
+  const visible = () => { try { const b = term.buffer.active; return findRowIn(b.baseY, term.rows, needles); } catch (_) { return -1; } };
+  // WAIT 는 재그림 왕복(send→tmux→%output→렌더) 여유 — 원격 노드 세션 RTT 포함(autosend 의 관찰과 동일 계열).
+  const BATCH = 6, WAIT = 110, MAX_BATCH = 600; // ≈3600틱 상한 — 그 안에 못 찾으면 포기(사용자는 언제든 키로 중단)
+  let unchanged = 0, last = '';
+  const finish = (foundRow) => {
+    if (foundRow >= 0) { if (promptSeek === seek) promptSeek = null; flashRow(foundRow); return; }
+    toast('화면 기록에서 이 질문을 찾지 못했어요 — 원래 위치로 돌아갑니다', true);
+    // 원위치 복귀(하단 클램프라 초과 무해). seek 를 유지한 채 되감아 사용자 입력이 오면 이것도 즉시 중단된다.
+    const back = (left) => {
+      if (left <= 0 || seek.stop) { if (promptSeek === seek) promptSeek = null; return; }
+      const k = Math.min(40, left); wheel(65, k); setTimeout(() => back(left - k), 30);
+    };
+    back(seek.ticks);
+  };
+  const step = (iter) => {
+    if (seek.stop) return;
+    const y = visible();
+    if (y >= 0) { finish(y); return; }
+    if (iter >= MAX_BATCH || unchanged >= 5) { finish(-1); return; } // ≈550ms 무변화 = 맨 위 도달(또는 앱 무응답)
+    wheel(64, BATCH); seek.ticks += BATCH;
+    setTimeout(() => {
+      if (seek.stop) return;
+      const cur = autosendReadScreen();
+      if (cur === last) unchanged++; else { unchanged = 0; last = cur; }
+      step(iter + 1);
+    }, WAIT);
+  };
+  toast('질문 위치로 이동 중… (아무 키나 누르면 중단)');
+  step(0);
+}
+function jumpToPrompt(text) {
+  cancelPromptSeek();
+  const needles = promptNeedles(text);
+  if (!needles.length) { toast('이 질문은 내용이 너무 짧아 위치를 찾을 수 없어요', true); return; }
+  let alt = false, mouseOn = false;
+  try { alt = term.buffer.active.type === 'alternate'; } catch (_) { /* noop */ }
+  try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+  if (!alt) { // 셸 등 — 기록이 xterm 스크롤백에 있다
+    const y = findRowIn(0, term.buffer.active.length, needles);
+    if (y < 0) { toast('화면 기록에서 이 질문을 찾지 못했어요 — 기록이 밀려났을 수 있어요', true); return; }
+    try { term.scrollToLine(Math.max(0, y - 2)); } catch (_) { /* noop */ }
+    flashRow(y);
+    return;
+  }
+  if (!mouseOn || sessionEnded || !ws || ws.readyState !== 1) { // alt 인데 휠 전달 불가(연결 끊김 등) — 보이는 화면만 확인
+    const b = term.buffer.active;
+    const y = findRowIn(b.baseY, term.rows, needles);
+    if (y >= 0) flashRow(y); else toast('지금 화면에선 이 질문을 찾지 못했어요 (세션 연결이 없어 스크롤 탐색 불가)', true);
+    return;
+  }
+  seekPromptInApp(needles);
+}
+function fmtAgo(ts) {
+  const ms = Date.parse(ts || ''); if (!ms) return '';
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return '방금'; if (s < 3600) return Math.floor(s / 60) + '분 전';
+  if (s < 86400) return Math.floor(s / 3600) + '시간 전'; return Math.floor(s / 86400) + '일 전';
+}
+async function openPrompts() {
+  const cap = el('div', { class: 'qp-cap', text: '질문을 불러오는 중…' });
+  const search = el('input', { class: 'qp-search', type: 'search', placeholder: '질문 검색…' });
+  const list = el('div', { class: 'qp-list' });
+  const pop = el('div', { class: 'pop pop-q' }, el('h3', { text: '💬 내 질문' }), search, cap, list,
+    el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() }));
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
+  document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.append(back);
+  setTimeout(() => { try { search.focus(); } catch (_) { /* noop */ } }, 0); // 터미널이 아니라 검색창이 키를 받게
+  let prompts = [], total = 0;
+  try {
+    const d = await api(sUrl('/prompts'));
+    prompts = (d && d.prompts) || []; total = (d && d.total) || prompts.length;
+    if (!prompts.length) { cap.textContent = (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.'; return; }
+  } catch (e) { cap.textContent = '질문을 불러오지 못했어요 — ' + e.message; return; }
+  const draw = () => {
+    const q = stripWS(search.value).toLowerCase();
+    list.replaceChildren();
+    let shown = 0;
+    prompts.slice().reverse().forEach((p) => { // 최신이 위(#745 팝업과 동일), #N=시간순 번호
+      if (q && stripWS(p.text).toLowerCase().indexOf(q) === -1) return;
+      shown++;
+      list.append(el('div', { class: 'qp-item', title: '클릭하면 터미널에서 이 질문 위치로 이동', onclick: () => { back.remove(); jumpToPrompt(p.text); } },
+        el('div', { class: 'qp-meta' }, el('span', { class: 'qp-num', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { text: fmtAgo(p.ts) })),
+        el('div', { class: 'qp-text', text: p.text })));
+    });
+    cap.textContent = q ? shown + '개 일치'
+      : total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '') + ' — 클릭하면 그 위치로 이동';
+  };
+  search.addEventListener('input', draw);
+  draw();
 }
 
 // ── 부팅 ──
@@ -965,6 +1123,7 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     titleEl,
     el('span', { class: 'spacer' }), statusEl,
+    el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));
@@ -1012,8 +1171,7 @@ async function boot() {
   setupPaste();
   setupWheel();
   setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
-  setupSelectionCopy();   // 드래그 선택 → 놓는 즉시 복사(#252)
-  setupOscClipboard();    // 앱 OSC52 클립보드 → 브라우저 클립보드(#252)
+  setupOscClipboard();    // 앱 OSC52 → '복사 확인' 배너(#967 — 자동 클립보드 쓰기 없음)
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
@@ -1023,6 +1181,7 @@ async function boot() {
 
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 현재 ws 를 참조해 전송.
   term.onData((d) => {
+    cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 입력하면 즉시 중단(#967 — 사용자 조작 우선)
     // Shift+Enter 승격: 이 keydown 이 낸 '\r' 을 '\x1b\r'(Option+Enter 와 동일 = 줄바꿈)로 바꿔 보낸다. 음절 등 다른 데이터는 그대로.
     if (shiftEnterPending && d === '\r') { shiftEnterPending = false; d = '\x1b\r'; }
     if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
