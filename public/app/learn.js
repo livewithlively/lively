@@ -40,7 +40,8 @@ const DOCS_NAV = [
         ] },
     { group: '레퍼런스', items: [
             { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
-            { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
+            // #762 '문서 안내(IA·규칙)'(plan) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제(라우트 리다이렉트도 renderLearnDocs 에서 제거).
+            // { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
         ] },
 ];
 function docsSidebar(active) {
