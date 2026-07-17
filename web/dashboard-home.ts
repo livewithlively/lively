@@ -1673,10 +1673,11 @@ async function fillActivity(zone) {
     ]);
   } catch (e) { zone.body.replaceChildren(errorNote(e, '작업 로그를 불러오지 못했습니다')); return; }
 
+  // 활동 로그는 닉네임 우선 표시(#762) — 닉네임 비었으면 이름(display_name) 폴백.
   const nameOf = (pid) => {
     if (!pid) return '';
     const m = people.find((x) => x.author_person === pid);
-    return (m && m.display_name) || pid;
+    return (m && (m.nickname || m.display_name)) || pid;
   };
   // #req R14 — 팀원(인물) 필터 제거 → '팀이 한 작업의 성격(유형)'으로 필터. 유형 = feature·fix·decision·docs·research·review·chore·other.
   const TYPE_ORDER = ['feature', 'fix', 'decision', 'docs', 'research', 'review', 'chore', 'other'];
@@ -1734,7 +1735,7 @@ async function fillNotifications(zone, projectsP) {
   try { projects = await projectsP; }
   catch (e) { zone.body.replaceChildren(errorNote(e, '알림을 불러오지 못했습니다')); return; }
   const people = await api('/api/ui/dash/people').then((d) => (d && d.people) || []).catch(() => []);
-  const nameOf = (pid) => { if (!pid) return ''; const m = people.find((x) => x.author_person === pid); return (m && m.display_name) || pid; };
+  const nameOf = (pid) => { if (!pid) return ''; const m = people.find((x) => x.author_person === pid); return (m && (m.nickname || m.display_name)) || pid; };
   const projById = new Map<any, any>(projects.map((p) => [p.id, p]));
   const myIds = new Set(projects.map((p) => p.id));
 

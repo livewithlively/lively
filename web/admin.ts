@@ -94,7 +94,7 @@ const ADMIN_SECTIONS = [
   //  모달은 **빠른 편집(프사·표시 이름)**만 남기고 나머지를 여기로 폈다. 저장 경로는 그대로다 —
   //  서버 me_profile_update 가 **부분 갱신(patch)** 이라(미전송 필드 보존) 화면을 쪼개도 한쪽이 다른쪽을 안 지운다.
   //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
-  { key: 'me-profile', label: '내 정보', meaning: null, group: 'me' },
+  // '내 정보'(프사·이름·닉네임·비번)는 관리에서 분리 — 우측 상단 프로필 클릭 시 팝업(openMyProfileModal, #762). 여기 nav엔 두지 않는다.
   { key: 'me-ai', label: 'AI 개인화', meaning: null, group: 'me' },
   { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
   { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
@@ -394,7 +394,8 @@ async function renderAdmin(view, sub) {
 //      제자리 갱신이 된다. ②는 nav 에 없으므로 URL 로는 도달하지 않는다 — SECTION_REMAP 이 먼저 걸러낸다.)
 function renderAdminDetail(detail, sel, data) {
   // ── ① nav 섹션 ──
-  if (sel === 'me-profile') return void myProfileSection(detail);
+  // '내 정보'는 관리에서 분리(#762) — 옛 링크(#/system/me-profile) 호환: 팝업 열고 안내만 남긴다.
+  if (sel === 'me-profile') { openMyProfileModal(); detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: "'내 정보'는 우측 상단 프로필 버튼을 눌러 편집해요." }))); return; }
   if (sel === 'me-ai') return void myAiSection(detail);
   if (sel === 'me-logins') return void myLoginsSection(detail);
   if (sel === 'me-assets') return void myAssetsSection(detail);
@@ -5171,21 +5172,33 @@ function applyMyProfileSaved(res, fallbackId) {
   if (ue) ue.replaceChildren(profileAvatar(m.avatar || null, label, (state.me && state.me.userId) || fallbackId, 'topbar-ava', { char: m.avatar_char, color: m.avatar_color }), el('span', { text: label }));
 }
 
-// ── [내 설정 ▸ 내 정보] — 아바타 · 표시 이름 · 이메일(읽기) · 비밀번호 ──
-async function myProfileSection(detail) {
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 정보를 불러오는 중')));
+// ── '내 정보' 팝업(#762) — 우측 상단 프로필 클릭 시 열림. 관리에서 분리. 아바타 · 이름 · 닉네임 · 이메일(읽기) · 비밀번호. ──
+//  닉네임은 표시 이름(이름)과 별개 필드 — 대시보드 활동 로그 등 캐주얼 표기에 쓰인다(비우면 이름 폴백).
+export async function openMyProfileModal(): Promise<void> {
+  const head = el('div', { class: 'ov-head' }, el('h3', { text: '내 정보' }));
+  const box = el('div', { class: 'ov-box', style: 'max-width:520px' }, head);
+  const back = el('div', { class: 'ov-back' }, box);
+  const close = () => back.remove();
+  head.append(el('button', { class: 'btn btn-ghost btn-sm', text: '닫기', onclick: close }));
+  back.addEventListener('click', (e: any) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', function esc(ev: any) { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', esc); } });
+  const bodyWrap = el('div', {}, skeleton('내 정보를 불러오는 중'));
+  box.append(bodyWrap);
+  document.body.append(back);
+
   let data: any;
   try { data = await api('/api/ui/me/profile'); }
-  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '내 정보를 불러오지 못했습니다'))); return; }
+  catch (e) { bodyWrap.replaceChildren(errorNote(e, '내 정보를 불러오지 못했습니다')); return; }
 
-  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '표시 이름 (비우면 이메일/아이디로 표시)' });
+  const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일/아이디로 표시)' });
+  const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (비우면 이름으로 표시)' });
   const ava = avatarEditor(data, nameIn);
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
     // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인화]가 지워지지 않는다.
-    const payload = { display_name: nameIn.value.trim(), ...ava.payload() };
+    const payload = { display_name: nameIn.value.trim(), nickname: nickIn.value.trim(), ...ava.payload() };
     try {
       const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
       applyMyProfileSaved(res, data.id);
@@ -5194,15 +5207,16 @@ async function myProfileSection(detail) {
     saveBtn.disabled = false;
   });
 
-  detail.replaceChildren(el('div', { class: 'card' },
-    sectionTitle('내 정보', '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.'),
+  bodyWrap.replaceChildren(
+    el('p', { class: 'admin-hint', style: 'margin:0 0 14px', text: '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.' }),
     field('프로필 사진', ava.node),
-    field('표시 이름', nameIn),
+    field('이름', nameIn),
+    field('닉네임 (활동 로그 등에 표시)', nickIn),
     data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null,
     data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
       el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
-    el('div', { class: 'admin-actions' }, saveBtn, status)));
+    el('div', { class: 'admin-actions' }, saveBtn, status));
 }
 
 // ── [내 설정 ▸ AI 개인화] — 개인 레이어(org_member.body_md). ──
