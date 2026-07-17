@@ -4700,17 +4700,18 @@ function oauthConnectorsCard(conns, reload) {
         try { await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: c.server }) }); toast('해제됨'); reload(); }
         catch (e) { toast(e.message, true); }
       } }) : null;
-    return el('div', { class: 'mini-row' },
-      el('div', { class: 'mini-title', text: c.server }, status),
-      c.note ? el('div', { class: 'mini-meta', text: c.note }) : null,
-      el('div', { class: 'admin-actions' }, connectBtn, discBtn));
+    return el('div', { class: 'svc-item' },
+      el('div', { class: 'svc-item-main' },
+        el('div', { class: 'mini-title', text: c.server }, status),
+        c.note ? el('div', { class: 'mini-meta', text: c.note }) : null),
+      el('div', { class: 'svc-item-actions' }, connectBtn, discBtn));
   });
-  // #762 me-logins 정돈 — '토큰·API 키' 카드(credVaultCard)와 heading 격을 맞춘다(둘 다 admin-subhead 서브카드).
+  // #762 me-logins 정돈 — '토큰·API 키' 카드(credVaultCard)와 heading·행 스타일을 맞춘다(둘 다 admin-subhead 서브카드 + svc-item 행).
   return el('div', { class: 'card' },
     el('h3', { class: 'admin-subhead', text: 'OAuth 로그인' }),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).' }),
-    el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })),
-    ...rows);
+    el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).' }),
+    el('div', { class: 'svc-list' }, ...rows),
+    el('div', { class: 'admin-actions', style: 'margin:12px 0 0' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })));
 }
 
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
@@ -4780,7 +4781,7 @@ async function myCredentialsSection(host) {
   if (!encReady) kids.push(el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키가 없어 저장할 수 없습니다 — 관리자에게 요청하세요.' }));
   // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
   // #762 제목 중복 제거 — 페이지 헤더가 '내 서비스 로그인'이므로 이 수동 자격 카드는 방식(토큰·API 키)으로 구분.
-  kids.push(credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다 — AI가 나로서 그 서비스를 씁니다. (OAuth로 연결하는 서비스는 아래 [OAuth 로그인]에서.)',
+  kids.push(credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다.',
     (mine.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host)));
   if ((oauthConns.connectors || []).length) kids.push(oauthConnectorsCard(oauthConns.connectors, () => myCredentialsSection(host)));
   host.replaceChildren(...kids);
@@ -4790,22 +4791,24 @@ async function myCredentialsSection(host) {
 function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds: any[], encReady: boolean, reload: () => void) {
   const base = owner === 'me' ? '/api/ui/me/credential' : '/api/ui/org/credential';
   const kindLabel = (k: string) => (CRED_KINDS.find((x) => x.kind === k)?.label || k);
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: intro })];
+  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: intro })];
 
-  // 등록된 자격 — 칩 + scope_key + 삭제(값 비노출).
+  // 등록된 자격 — 균일 보더 행(svc-item). 칩 + scope_key + 삭제(값 비노출).
   if (creds.length) {
+    const list = el('div', { class: 'svc-list' });
     for (const c of creds) {
-      rows.push(el('div', { class: 'card', style: 'padding:9px 12px; margin:6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;' },
+      list.append(el('div', { class: 'svc-item' },
         el('span', { class: 'pill pill-ok', text: kindLabel(c.kind) }),
         c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null,
         el('span', { class: 'mini-meta', text: c.has_secret ? '토큰 등록됨 ✓' : '토큰 없음' }),
-        el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '삭제', onclick: async () => {
+        el('span', { class: 'svc-item-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
           if (!confirm(`${kindLabel(c.kind)}${c.scope_key ? ' (' + c.scope_key + ')' : ''} 자격을 삭제할까요?`)) return;
           try { await api(base + '/delete', { method: 'POST', body: JSON.stringify({ kind: c.kind, scope_key: c.scope_key || '' }) }); toast('삭제됨'); reload(); }
           catch (e: any) { toast((e && e.message) || '삭제 실패', true); }
         } })));
     }
-  } else rows.push(el('p', { class: 'admin-hint', text: '등록된 자격이 없습니다.' }));
+    rows.push(list);
+  } else rows.push(el('p', { class: 'admin-hint', style: 'margin:0', text: '등록된 자격이 없습니다.' }));
 
   // ── 추가 폼 — kind 드롭다운 → 필요한 필드만 노출 ──
   const kindSel = el('select', {}, ...CRED_KINDS.map((k) => el('option', { value: k.kind, text: k.label })));

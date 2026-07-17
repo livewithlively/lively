@@ -1095,7 +1095,19 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .install-minter .btn { flex: none; white-space: nowrap; }
 
 /* 커스텀 훅 · AI 도구(런타임 권한) */
-.admin-subhead { font-size: 13px; font-weight: 800; color: var(--ink); margin: 18px 0 4px; }
+.admin-subhead { font-size: 15px; font-weight: 800; color: var(--ink); margin: 18px 0 6px; }
+/* 카드 첫 요소면 상단 여백은 카드 패딩이 맡는다 — 헤더(h2) 카드와 서브카드(h3) 상단 여백을 통일(#762). */
+.card > .admin-subhead:first-child { margin-top: 0; }
+/* 토글 칩(git 인증 팝업 SSH/HTTPS 등) — 무스타일(브라우저 기본) 교체(#762). */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
+.chip:hover { border-color: var(--muted-3); color: var(--ink); }
+.chip.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+/* 서비스 로그인 아이템 행(등록 자격·OAuth 커넥터 공통) — 카드 안 목록을 균일한 보더 행으로(#762). */
+.svc-list { display: flex; flex-direction: column; gap: 8px; }
+.svc-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.svc-item-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
 .builtin-toggles { margin-top: 10px; }
 .builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }
