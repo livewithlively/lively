@@ -12,6 +12,7 @@
 //   (.ob-*, .docs-*). 인라인 스타일·하드코딩 색 금지(그게 #/learn 과 이질감의 원인이었다). null 은 렌더 배열에서 걸러낸다.
 import { api, el, toast } from './core.js';
 import { docsEyebrow, docsShell } from './learn.js'; // 사용 가이드 사이드바 셸 — '직접 해보기 › 시작하기'가 이 페이지의 입구다
+import { isSectionDone, startGuideTour } from './guide-tour.js'; // #853 '프로젝트 체험' — 손수 하기 투어(project-do 코스) 시작·완료표시
 
 const ICON: Record<string, string> = { done: '✓', skipped: '—', todo: '○' };
 
@@ -167,4 +168,36 @@ export async function renderStartMigrate(view: any) {
           ' 으로 연 세션은 회사 서버에서 돌아갑니다 — 그래서 내 노트북에 있던 예전 환경을 볼 수 없습니다. 가져오시려면 내 컴퓨터에 설치한 뒤 거기서 도우미를 부르세요. 가져올 게 없다면 이 항목은 건너뛰셔도 됩니다.'),
         el('a', { class: 'btn btn-primary btn-sm', href: '#/start/setup', text: '내 컴퓨터에 설치하기 →' }))),
   );
+}
+
+
+// #/start/project — '프로젝트 체험'(#853): 프로젝트 흐름을 **진짜로 한 번 해보는** 손수 투어의 랜딩.
+//  옛 온보딩 4단계('프로젝트·코드 연결' 자동판정)를 대체한다 — 판정 대신 '해봤다'(투어 완주 표시)로 남는다.
+//  진행 자체는 guide-tour.ts 의 project-do 코스(pd-create → pd-detail)가 실제 화면 위에서 안내한다.
+export async function renderStartProject(view: any) {
+  const did = isSectionDone('project-do');
+  const head = [
+    docsEyebrow('start-project'),
+    el('h1', { class: 'docs-title', text: '프로젝트 체험' }),
+    el('p', { class: 'docs-lead', text: '라이블리에서 일이 굴러가는 한 바퀴를 직접 돌려봅니다 — 프로젝트를 만들고, 지식을 붙이고, AI 세션을 열고, 태스크를 쪼개고, 여러 태스크를 한 번에 AI 에게 맡기는 것까지.' }),
+  ];
+  const stepRow = (num: string, title: string, desc: string) => el('div', { class: 'guide-path-step' },
+    el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }),
+    el('div', { class: 'guide-path-body' },
+      el('div', { class: 'guide-path-title' }, el('span', { text: title })),
+      el('p', { class: 'guide-path-desc', text: desc })));
+  docsShell(view, 'start-project', ...head,
+    el('div', { class: 'guide-cards' },
+      el('div', { class: 'card' },
+        el('div', { class: 'card-head' }, el('h2', { text: '무엇을 해보나요' })),
+        el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 따라 합니다. 연습용 가짜가 아니라 진짜 프로젝트가 만들어져요 — 그대로 이어서 일해도 되고, 나중에 지워도 됩니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
+        did ? el('p', { class: 'admin-hint', text: '✓ 해봤어요 — 언제든 다시 돌아도 좋아요.' }) : null,
+        el('div', { class: 'guide-path' },
+          stepRow('1', '프로젝트 만들기', '보드에서 [＋ 프로젝트] — 이름 짓고 리스트를 골라 진짜 프로젝트를 하나 만듭니다.'),
+          stepRow('2', '지식 연결', '이 일에 필요한 회사 지식(WIKI)을 붙입니다 — AI 가 그걸 알고 시작해요.'),
+          stepRow('3', 'AI 세션 열기', '프로젝트 안에서 [＋ 새 세션] — 이 프로젝트 맥락을 다 아는 AI 작업 세션을 엽니다.'),
+          stepRow('4', '태스크 쪼개기', '[＋ 태스크]로 할 일을 나누고, Tab 으로 하위(서브태스크)까지 만들어 봅니다.'),
+          stepRow('5', '여러 태스크 한 번에 맡기기', '태스크 여러 개를 체크하고 [클로드로 실행] — 한 AI 세션에 묶어 통째로 맡깁니다.')),
+        el('div', { class: 'step-cta' },
+          el('button', { class: 'btn btn-primary', text: did ? '▶ 다시 해보기' : '▶ 따라하며 만들어보기', onclick: () => startGuideTour(['project-do']) })))));
 }

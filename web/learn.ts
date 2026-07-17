@@ -36,6 +36,7 @@ const DOCS_NAV = [
   //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
   { group: '직접 해보기', items: [
     { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
+    { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' },   // #853 — 프로젝트 한 바퀴 손수 투어(project-do)
     // #762 '내 AI 세션 생성'(#/learn/install) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제 + main.ts 라우트 렌더 복원.
     //  화면 컴포넌트(renderInstall)는 그대로 살아 있다(#/start/setup 이 재사용). 여기서 지운 건 '직접 해보기' 진입 링크뿐.
     // { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
