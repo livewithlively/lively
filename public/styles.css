@@ -1108,6 +1108,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .svc-item-main { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
+/* 카드 세로 스택 — 서브카드 사이 여백을 균일하게(개별 카드 인라인 margin 의존 제거, #762). */
+.admin-stack { display: flex; flex-direction: column; gap: 14px; }
 .warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
 .builtin-toggles { margin-top: 10px; }
 .builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }
