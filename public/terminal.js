@@ -299,17 +299,22 @@ function copyText(text, silent) {
 // 드래그 선택 → 마우스 놓는 즉시 클립보드 복사(#252). Claude Code(마우스모드 1003)는 motion 리드로우로 선택을
 //  곧 지우므로, mouseup 캡처 단계에서 '아직 살아있는' 선택을 집어 바로 복사한다(Shift+드래그로 선택 시).
 //  셸 등 마우스 안 쓰는 화면에선 일반 드래그 선택도 그대로 복사(copy-on-select). http 비보안에선 execCommand 폴백.
-//  ⚠ 단, **드래그일 때만** 복사한다 — 더블클릭(단어)/트리플클릭(줄) 등 '클릭 선택'은 mouseup 을 타도 복사하지 않는다.
-//   (더블클릭 단어선택이 매번 사용자 클립보드를 덮어버려 불편하다는 요청 — mousedown→mouseup 사이 이동이 있어야 드래그로 본다.)
+//  ⚠ 단, **명백한 드래그일 때만** 복사한다 — 더블클릭(단어)/트리플클릭(줄) 등 '클릭 선택'은 mouseup 을 타도 복사하지 않는다.
+//   (더블클릭 단어선택·클릭이 매번 사용자 클립보드를 덮어버려 불편하다는 요청. mousedown→mouseup 사이 이동이 있어야 드래그로 본다.)
+//   4px(=OS 클릭 슬롭)는 너무 낮아 살짝 흔들린 '클릭'도 1글자 선택→복사됐다 — 이동량 임계를 크게 올려 미세 흔들림을 배제한다.
+//   명백한 텍스트 선택(단어·줄 드래그)은 이 임계를 훨씬 넘으므로 그대로 copy-on-select 되고, 짧은 선택은 Ctrl/Cmd+C 로.
+const SELECT_DRAG_MIN = 18; // 맨해튼 이동량(px) — 이보다 작으면 클릭으로 보고 복사 안 함
 function setupSelectionCopy() {
   const host = panesEl || document.body;
-  let downX = 0, downY = 0, dragged = false;
-  host.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; dragged = false; }, true);
+  let downX = 0, downY = 0, moved = 0, pressing = false;
+  host.addEventListener('mousedown', (e) => { if (e.button !== 0) return; downX = e.clientX; downY = e.clientY; moved = 0; pressing = true; }, true);
   host.addEventListener('mousemove', (e) => {
-    if (!dragged && (e.buttons & 1) && (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4)) dragged = true;
+    if (pressing && (e.buttons & 1)) { const d = Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY); if (d > moved) moved = d; }
   }, true);
   host.addEventListener('mouseup', () => {
-    if (!dragged) return; // 클릭(더블/트리플/싱글) 선택은 클립보드 안 덮음 — 드래그 선택만 copy-on-select
+    const wasDrag = pressing && moved > SELECT_DRAG_MIN; // 클릭·미세 흔들림(≤18px)은 클립보드 안 덮음 — 명백한 드래그 선택만
+    pressing = false;
+    if (!wasDrag) return;
     try { const sel = term.getSelection && term.getSelection(); if (sel && sel.trim()) copyText(sel); } catch (_) { /* noop */ }
   }, true);
 }
