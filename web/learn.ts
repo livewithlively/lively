@@ -43,7 +43,8 @@ const DOCS_NAV = [
   ] },
   { group: '레퍼런스', items: [
     { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
-    { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
+    // #762 '문서 안내(IA·규칙)'(plan) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제(라우트 리다이렉트도 renderLearnDocs 에서 제거).
+    // { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
   ] },
 ];
 
@@ -231,6 +232,9 @@ function docsDecorate(root: any) {
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
 //  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
+  // #762 '문서 안내(IA·규칙)'(#/learn/docs/plan) 페이지 숨김(사용자 요청) — 개요로 리다이렉트. 원고(DOC_PAGES['plan'])는 보존.
+  //  복원: 이 줄 삭제 + learn.ts nav 의 plan 항목 주석 해제.
+  if (slug === 'plan') { location.replace('#/learn'); return; }
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
   const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
