@@ -117,13 +117,16 @@
     border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); color: var(--fg);
     font-family: ui-monospace, monospace; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 
-  /* '내 질문' 팝업 — 이 세션의 사용자 프롬프트 최신순 목록(#745 이식). pop-help 셸(스크롤·닫기) 재사용. */
+  /* '내 질문' 팝업 — 이 세션의 사용자 프롬프트 최신순 목록(#745 이식) + 클릭 시 그 위치로 이동(#967). pop-help 셸(스크롤·닫기) 재사용. */
   .q-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); font: inherit; font-size: 13px; margin: 6px 0; }
   .q-cap { font-size: 11.5px; color: var(--fg-dim); margin: 2px 0 8px; }
   .q-list { display: flex; flex-direction: column; gap: 6px; }
   .q-item { border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; cursor: pointer; background: var(--bg); transition: border-color .1s, background .1s; }
   .q-item:hover { border-color: var(--accent); background: var(--bg2); }
   .q-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+  .q-spacer { flex: 1; }
+  .q-copy { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); color: var(--fg-dim); cursor: pointer; }
+  .q-copy:hover { border-color: var(--accent); color: var(--accent); }
   .q-num { font-size: 11px; font-weight: 700; color: var(--accent); }
   .q-when { font-size: 11px; color: var(--fg-dim); }
   .q-text { font-size: 13px; line-height: 1.5; color: var(--fg); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
