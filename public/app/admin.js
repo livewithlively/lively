@@ -4997,7 +4997,9 @@ async function myCredentialsSection(host) {
         kids.push(el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키가 없어 저장할 수 없습니다 — 관리자에게 요청하세요.' }));
     // aws_role_arn 은 개인이 관리하지 않음(관리자가 오버라이드 할당) → 숨김. 재등록 불가한데 삭제만 뜨는 혼란 방지.
     // #762 제목 중복 제거 — 페이지 헤더가 '내 서비스 로그인'이므로 이 수동 자격 카드는 방식(토큰·API 키)으로 구분.
-    kids.push(credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다.', (mine.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host)));
+    const credCard = credVaultCard('me', '토큰·API 키 (직접 등록)', 'GitLab PAT 처럼 서비스에서 발급한 토큰·API 키를 직접 넣어 둡니다.', (mine.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => myCredentialsSection(host));
+    credCard.style.marginTop = '0'; // .admin-stack 가 간격 담당 — credVaultCard 인라인 margin-top 무력화(#762)
+    kids.push(credCard);
     if ((oauthConns.connectors || []).length)
         kids.push(oauthConnectorsCard(oauthConns.connectors, () => myCredentialsSection(host)));
     host.replaceChildren(...kids);
@@ -5617,8 +5619,9 @@ async function myLoginsSection(detail) {
     // #762 정돈 — 페이지 헤더(내 서비스 로그인) 아래 3가지 방식을 같은 격의 서브카드로: git 인증 · 토큰·API 키 · OAuth 로그인.
     const head = el('div', { class: 'card' }, sectionTitle('내 서비스 로그인', 'AI 가 **나로서** 외부 서비스(슬랙·깃랩·노션 등)에 접근할 때 쓸 내 로그인입니다. 암호화 저장되고 다른 사람에게 보이지 않아요. — 우리 게이트웨이에 접속하는 [접속 열쇠]와는 다른 것입니다.'));
     const gitCard = el('div', { class: 'card' }, el('h3', { class: 'admin-subhead', text: 'git 인증 (레포 접근)' }), el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: 'private 레포 클론·세션(shell·Claude) 안 git 에 쓸 SSH 키/토큰을 등록해요.' }), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
-    const vault = el('div', {});
-    detail.replaceChildren(head, gitCard, vault);
+    // #762 카드 간격 통일 — .admin-stack(flex column·gap)으로 모든 서브카드 사이 여백을 14px 로 균일화(전엔 0~12px 들쭉날쭉·붙음).
+    const vault = el('div', { class: 'admin-stack' });
+    detail.replaceChildren(el('div', { class: 'admin-stack' }, head, gitCard, vault));
     await myCredentialsSection(vault);
 }
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
