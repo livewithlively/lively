@@ -49,6 +49,8 @@ export async function initOrgSchema(): Promise<void> {
     -- avatar_char/color = 이미지 없을 때 쓰는 커스텀 글자/배경색(프로필 설정). null = 이니셜/해시색 자동.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_char TEXT;
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_color TEXT;
+    -- nickname = 표시 이름(display_name)과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기에 쓴다. null/'' = display_name 폴백.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS nickname TEXT;
     -- onboarding = 구성원 온보딩의 **보고된** 상태(#846/850). 형태:
     --   { "<step>": { "state": "done"|"skipped", "at": "<iso>", "by": "ai"|"self", "note": "…" } }
     -- ⚠ 자동 판정되는 것(MCP 호출 이력·자격 등록·레포 연결)은 **여기 저장하지 않는다** — 조회 시점에 라이브
