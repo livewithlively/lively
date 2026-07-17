@@ -8,7 +8,6 @@ import { field, overlay } from './admin.js';
 import { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmodal.js';
 import { saveTermCreatePrefs, termAutoApprovePref, termCreatePrefs } from './terminal.js';   // '실행 설정' 기억 공유(#673/#req — 세션 폼 프리필). 자동 승인 기억은 #782.
 import { createBlockEditor } from './block-editor.js';   // #730 본문(프로젝트/태스크) 노션형 블록 에디터 — 슬래시 명령·이미지 붙여넣기
-import { startTour } from './tour.js';   // #853 — '프로젝트·코드 연결' 온보딩 4단계 실습 스포트라이트 투어(startProjectRepoTour)
 
 
 // ════════════════════════════════════════════
@@ -3746,7 +3745,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
   let indentParent: any = null; // Tab 들여쓰기(#663) — 바로 위 프로젝트의 '태스크'로 만들 때 그 부모 {id,name}. Shift+Tab 해제.
   // 접힌 트리거 '＋' 를 그룹 헤더 상태점 열에 맞춘다(#613 후속) — 옛 트리거는 체크박스 자리(check-spacer) 가 없어
   //  '＋ 프로젝트' 가 헤더 파이 아이콘·라벨보다 왼쪽으로 어긋났다. 헤더 title-cell 과 동일한 선두 spacer 로 정렬.
-  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
+  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button', 'data-tour': 'pd-new-project' },   // #853 '프로젝트 체험' 투어 앵커
     el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '프로젝트 이름 입력 후 Enter (Esc 취소)', maxlength: '200', spellcheck: 'false', autocomplete: 'off' });
@@ -4154,7 +4153,7 @@ export function openProjectV2Form(reload, prefill?: any) {
   }
   // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
   const taskEd = npTaskEditor();
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기', 'data-tour': 'pd-create-btn' });   // #853 '프로젝트 체험' 투어 앵커
   // #758 만들고 바로 이 프로젝트에 내 AI 세션 열기 + 그 세션 실행 기본값 편집(기본값 = pjvBulkRunDefaultsModal 의 __new__ 전역 스코프).
   const runBtn = el('button', { class: 'btn btn-primary np-run', text: '만들고 AI세션 실행', title: '프로젝트를 만들고 바로 이 프로젝트에 내 AI 세션을 열어 새 탭으로 입장' });
   const defaultsBtn = el('button', { class: 'btn btn-ghost np-run-cfg', type: 'button', text: '기본값', title: 'AI세션 실행 기본값 — 실행기·모델·자동승인·워크트리 등' });
@@ -4908,7 +4907,6 @@ async function renderProjectV2Detail(view, idStr) {
   const meId = (state.me && (state.me.userId || state.me.email)) || '';
   // 삭제·팀원 수정은 '프로젝트 세부 설정' 팝업으로 이관 — 헤더 우측 액션은 설정 버튼만(권한 경계는 백엔드 403).
   const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
-    'data-tour': 'proj-settings',   // #853 스포트라이트 투어 앵커 — startProjectRepoTour ①
     onclick: () => openProjectSettings(id, p, reload, meId, V6_BASE) });
   // '내 컴퓨터에서 작업'은 헤더에서 빼고 터미널 세션의 '＋ 새 세션' 드롭다운으로 이관(내 컴퓨터 / 중앙 컴퓨터 선택) — projectTerminalSection.
   // (코멘트는 헤더 버튼이 아니라 본문↔태스크 사이의 '코멘트' 섹션이 진입점 — projectCommentsSection. 클릭=드로어.)
@@ -5155,7 +5153,7 @@ function projectKnowledgeSection(id, p, reload) {
 
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   // 섹션 액션 — 칼럼별 버튼 대신 우상단 단일 버튼 하나(#317). 관계(필요/산출)는 픽커 라디오에서 고른다.
-  const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
+  const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결', 'data-tour': 'pd-link-kn',   // #853 '프로젝트 체험' 투어 앵커
     title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
     onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
   card.append(el('div', { class: 'card-head' },
@@ -5790,7 +5788,6 @@ function openProjectSettings(id, p, reload, meId, base) {
     { emptyText: '선택 안 함' },
     () => api(B + id + '/repos', { method: 'POST', body: JSON.stringify({ repos: repoField.getSelected() }) }),
     '관련 레포 저장됨');
-  repoField.row.setAttribute('data-tour', 'proj-repos');   // #853 스포트라이트 투어 앵커 — startProjectRepoTour ②
   const memberField = autoField('팀원',
     (onChange) => memberPicker(((p.members) || []).map((m) => m.member_id), { onChange }),
     { emptyText: '나만 참여', avatars: true, maxChips: 6 },
@@ -5812,33 +5809,6 @@ function openProjectSettings(id, p, reload, meId, base) {
     // (필요/산출 지식 블록은 본문 아래 '지식 흐름' 섹션 projectKnowledgeSection 으로 이관 — #245.)
     // (참고 파일 블록은 본문 '공유 폴더' 섹션으로 일원화 — #246. 상태 블록은 메타 패널 상태 필드로 일원화 — #246.)
     projectDangerBlock(id, p, meId, back));
-}
-
-// #853 — '프로젝트·코드 연결'(온보딩 4단계) 실습 스포트라이트 투어. #/start 의 '지금 하기 →'가 내 프로젝트
-//  상세로 딥링크(?tour=repos)하면 main.ts projects2 라우트 훅이 이걸 켠다. ⚙ 세부설정 → 관련 레포 체크 → 완료를
-//  '한 페이지 안'에서 짚는다(세부설정은 해시 불변 in-page 오버레이라 투어 유지 — 라우트 이동은 endTour 를 부른다).
-export function startProjectRepoTour() {
-  startTour([
-    { // ① ⚙ 세부설정 열기 — 실제 버튼을 눌러야 진행(모달이 열려야 다음 타깃이 뜬다).
-      target: '[data-tour="proj-settings"]', placement: 'bottom', advanceOn: 'click', scrollIntoView: true,
-      title: '① 코드 저장소 붙이기',
-      body: '이 프로젝트에 코드 저장소(git 레포)를 붙이면 AI 가 그 코드 위에서 일합니다. ⚙ 세부 설정을 눌러 여세요.',
-    },
-    { // ② 관련 레포 체크 — 체크하면 autoField 가 자동 저장(POST /repos → set_repos 감사 → 4단계 자동완료).
-      target: '[data-tour="proj-repos"]', placement: 'top', scrollIntoView: true,
-      advanceWhen: () => !!document.querySelector('[data-tour="proj-repos"] input[type="checkbox"]:checked'),
-      title: '② 관련 레포 선택',
-      body: [
-        el('p', { class: 'tour-p', text: '연결할 레포를 체크하면 자동 저장돼요 — 그때부터 AI 세션이 이 프로젝트에서 그 코드를 열어 일합니다.' }),
-        el('p', { class: 'tour-p', style: 'opacity:.72', text: '목록이 비어 있으면, 관리자가 먼저 관리 ▸ 레포(git) 관리(#/system/repos)에 저장소를 등록해야 합니다.' }),
-      ],
-    },
-    { // ③ 완료 — 스포트라이트 없이 중앙 안내.
-      target: () => null, placement: 'center', ctaNext: '마치기',
-      title: '완료! 🎉',
-      body: '이제 이 프로젝트에 코드가 붙었어요. 시작하기(#/start)의 ‘프로젝트·코드 연결’ 단계가 완료로 바뀝니다.',
-    },
-  ]);
 }
 
 // ── '내 컴퓨터에서 작업' 모달 — 담당자가 본인 PC에서 이 프로젝트를 작업하도록 시작 명령을 만들어 준다. ──
@@ -8000,7 +7970,7 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
 function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
   const row = el('div', { class: 'pjv-addrow' });
   let indentParent: any = null; // Tab 들여쓰기 — 바로 위 상위태스크의 하위로 만들 때 그 부모 {id,name}. Shift+Tab 으로 해제.
-  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
+  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button', 'data-tour': 'pd-add-task' },   // #853 '프로젝트 체험' 투어 앵커
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
   // 생성 전 드래프트 — 담당자·마감·우선순위를 미리 지정해 생성 직후 한 번에 적용(클릭업식). 셀은 행과 동일.

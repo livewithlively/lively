@@ -30,20 +30,6 @@ async function exists(sql: string, params: unknown[]): Promise<boolean> {
   catch { return false; } // fail-open: 테이블 부재/오류 → 미완(안전 — '됐다'고 오인하지 않는다)
 }
 
-// 프로젝트·코드 연결 체험(#853) 투어의 대상 프로젝트 — 내가 속한 프로젝트 중 **레포 없는 것 우선**(할 일이 있는 곳).
-//  없으면 null(→ 보드로 폴백, 투어 없음). '지금 하기'가 이 프로젝트 상세로 딥링크되어 스포트라이트 투어를 켠다.
-async function firstProjectForRepoTour(memberId: string): Promise<number | null> {
-  try {
-    const r = await itemsPool.query(
-      `SELECT pm.project_id AS id
-         FROM project_member pm WHERE pm.member_id = $1
-        ORDER BY (SELECT count(*) FROM project_repo pr WHERE pr.project_id = pm.project_id) ASC,
-                 pm.project_id ASC LIMIT 1`, [memberId]);
-    const id = (r.rows[0] as { id?: number } | undefined)?.id;
-    return id == null ? null : Number(id);
-  } catch { return null; } // fail-open: 조회 실패 → null(보드 폴백)
-}
-
 // 조직이 얼마나 셋업됐는지 라이브 계산(items DB 카운트 + org-defaults 섹션). 시크릿 없음.
 export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
   const [identity, knowledge, categories, members, dbSources] = await Promise.all([
@@ -108,7 +94,7 @@ export function renderOnboardingBlock(status: OnboardingStatus): string {
 //  판정 우선순위: **자동 done > 보고(done/skipped) > todo**.
 //   자동 신호는 조회 시점 라이브 계산이라 진실을 이긴다 — 사용자가 skipped 로 꺼 뒀어도 실제로 연결했으면
 //   done 이다(거짓 진행률 방지). skipped 는 보고로만 설정된다(자동으로는 절대 skipped 가 안 된다).
-export const MEMBER_STEPS = ["connect", "migrate", "credentials", "repos"] as const;
+export const MEMBER_STEPS = ["connect", "migrate", "credentials"] as const; // repos 폐지(#853) — '프로젝트 체험' 투어로 대체
 export type MemberStepKey = (typeof MEMBER_STEPS)[number];
 export const isMemberStep = (v: unknown): v is MemberStepKey =>
   typeof v === "string" && (MEMBER_STEPS as readonly string[]).includes(v);
@@ -135,20 +121,12 @@ export interface MemberOnboardingStatus {
 }
 
 export async function computeMemberOnboarding(memberId: string): Promise<MemberOnboardingStatus> {
-  const [connected, hasCred, hasRepo, reported, repoTourPid] = await Promise.all([
+  const [connected, hasCred, reported] = await Promise.all([
     // AI 켜기 — 이 사람 **신원으로 MCP 툴이 실제 호출된 적 있나**. "claude mcp list 해보세요"라고 시키는
     //  것보다 강한 증거다(설치·인증·연결이 전부 성공해야 이 행이 남는다). 로컬/웹터미널 어느 쪽이든 잡힌다.
     exists("SELECT 1 FROM mcp_call_log WHERE actor=$1 AND ok LIMIT 1", [memberId]),
     exists("SELECT 1 FROM member_secret WHERE owner=$1 LIMIT 1", [`member:${memberId}`]),
-    // 프로젝트·코드 연결 — **내가 직접** 어떤 프로젝트에 레포를 붙인 적 있나(#853, 행동 기반).
-    //  옛 판정은 상태였다('레포 붙은 프로젝트에 초대만 돼도 done') → 남이 붙인 레포로 내 단계가 끝난 척 완료 표시.
-    //  이제 행동: 감사 로그에 **내 actor 로** 남은 set_repos(결과가 비어있지 않은) 가 있어야 완료.
-    //  (actor = 토큰 principal userId = memberId — 위 mcp_call_log 판정과 동일 키. before/after 는 JSONB.)
-    exists(`SELECT 1 FROM org_content_audit
-              WHERE entity='project' AND op='set_repos' AND actor=$1
-                AND jsonb_array_length(COALESCE(after->'repos','[]'::jsonb)) > 0 LIMIT 1`, [memberId]),
     getMemberOnboarding(memberId).catch((): Record<string, ReportedStep> => ({})), // fail-open
-    firstProjectForRepoTour(memberId),
   ]);
 
   const build = (
@@ -174,13 +152,7 @@ export async function computeMemberOnboarding(memberId: string): Promise<MemberO
       "#/start/migrate"),
     build("credentials", "외부 서비스 연결", false, hasCred,
       "AI 가 회사 서비스(깃랩·노션 등)를 대신 쓰려면 한 번 연결해 두면 됩니다.", "#/system"),
-    // '지금 하기'는 내 프로젝트 상세로 딥링크(?tour=repos)해 ⚙세부설정▸관련 레포까지 스포트라이트로 따라 하게 한다(#853).
-    //  속한 프로젝트가 없으면 보드로 폴백(투어 없음) + 안내 문구를 바꾼다.
-    build("repos", "프로젝트·코드 연결", false, hasRepo,
-      repoTourPid != null
-        ? "일할 프로젝트에 코드 저장소를 붙이면 AI 가 그 코드 위에서 일합니다. '지금 하기'로 ⚙ 세부설정 ▸ 관련 레포까지 따라 해 보세요."
-        : "먼저 프로젝트를 만든 뒤, 거기에 코드 저장소를 붙이면 AI 가 그 코드 위에서 일합니다.",
-      repoTourPid != null ? `#/projects2/p/${repoTourPid}?tour=repos` : "#/projects2"),
+    // '프로젝트·코드 연결'(repos) 단계는 폐지(#853) — '프로젝트 체험'(#/start/project) 손수-하기 투어로 대체.
   ];
 
   const countable = items.filter((i) => i.state !== "skipped");   // 건너뛴 건 분모에서 뺀다
