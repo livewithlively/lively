@@ -4,7 +4,7 @@ import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
-import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
+import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2, startProjectRepoTour } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';   // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 하네스 관리(#891)
@@ -130,7 +130,12 @@ async function route() {
       //  소속 프로젝트 페이지 위에 태스크 모달로 뜬다(pjvRenderTaskRoute).
       const sub2 = segs[1] || 'dashboard';
       document.body.dataset.route = (sub2 === 'p' || sub2 === 't') ? 'projects2-detail' : 'projects2-board';
-      if (segs[1] === 'p' && segs[2]) await renderProjectV2Detail(view, segs[2]);
+      if (segs[1] === 'p' && segs[2]) {
+        await renderProjectV2Detail(view, segs[2]);
+        // #853 — 시작하기 '프로젝트·코드 연결' 실습: ?tour=repos 로 들어오면 ⚙세부설정▸관련 레포 스포트라이트 투어를 켠다.
+        //  쿼리는 새로고침 재실행 방지로 조용히 제거(해시만 갱신). 세부설정 모달은 in-page 오버레이라 라우트 불변 → 투어 유지.
+        if (params.get('tour') === 'repos') { history.replaceState(null, '', '#/projects2/p/' + segs[2]); startProjectRepoTour(); }
+      }
       else if (segs[1] === 't' && segs[2]) await pjvRenderTaskRoute(view, segs[2]);
       else {
         let scopeKey: string | null = null;
