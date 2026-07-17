@@ -75,7 +75,10 @@ async function route() {
       }
     } else if (page === 'learn') {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
-      if (segs[1] === 'install') await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
+      // #762 '내 AI 세션 생성'(#/learn/install) 페이지 숨김(사용자 요청) — 사용 가이드 개요로 리다이렉트(옛 북마크 방어).
+      //  복원: 아래 redirect 두 줄을 `await renderInstall(view);` 로 되돌리고 learn.ts nav 의 install 항목 주석 해제.
+      //  (화면 컴포넌트 renderInstall 은 삭제하지 않았다 — #/start/setup 이 그대로 재사용 중.)
+      if (segs[1] === 'install') { location.replace('#/learn'); return; } // 숨김: #/learn/install → #/learn
       else if (segs[1] === 'tour') await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
       else if (segs[1] === 'menu') { location.replace('#/learn'); return; } // #/learn/menu 폐기 — 개요로 리다이렉트(옛 북마크·링크 방어)
       else if (segs[1] === 'docs') await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)

@@ -36,7 +36,9 @@ const DOCS_NAV = [
   //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
   { group: '직접 해보기', items: [
     { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
-    { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
+    // #762 '내 AI 세션 생성'(#/learn/install) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제 + main.ts 라우트 렌더 복원.
+    //  화면 컴포넌트(renderInstall)는 그대로 살아 있다(#/start/setup 이 재사용). 여기서 지운 건 '직접 해보기' 진입 링크뿐.
+    // { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
     { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
   ] },
   { group: '레퍼런스', items: [
@@ -528,7 +530,8 @@ async function renderLearnTour(view) {
     el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ',
       el('a', { href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }), ' · 내 컴퓨터 설치는 ',
-      el('a', { href: '#/learn/install', text: '내 AI 세션 생성' }), ' 에서.'));
+      // #762 '#/learn/install' 페이지 숨김 → 같은 설치 화면을 품은 '시작하기'(#/start)로 링크(복원 시 '#/learn/install'·'내 AI 세션 생성'으로 되돌리기).
+      el('a', { href: '#/start', text: '시작하기' }), ' 에서.'));
 
   docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
