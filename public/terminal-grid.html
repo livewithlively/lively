@@ -23,7 +23,18 @@
   .lay button { padding: 3px 9px; font-size: 13px; line-height: 1; }
   .lay button:disabled { opacity: .4; cursor: default; border-color: var(--border); }
   .lay .lay-val { min-width: 42px; text-align: center; font-size: 12px; color: var(--fg-dim); }
-  #grid { flex: 1; min-height: 0; display: grid; gap: 3px; padding: 3px; background: var(--border); }
+  #grid { flex: 1; min-height: 0; display: grid; gap: 3px; padding: 3px; background: var(--border); position: relative; }
+  /* 리사이즈 거터 — 셀 사이 경계(gap) 위에 얹은 얇은 드래그 핸들. 드래그하면 인접 트랙의 fr을 조절해 폭/높이 변경. */
+  .gutter { position: absolute; z-index: 4; }
+  .gutter::after { content: ''; position: absolute; background: transparent; border-radius: 2px; transition: background .1s; }
+  .gutter.v { width: 11px; cursor: col-resize; }
+  .gutter.v::after { top: 0; bottom: 0; left: 4px; width: 3px; }
+  .gutter.h { height: 11px; cursor: row-resize; }
+  .gutter.h::after { left: 0; right: 0; top: 4px; height: 3px; }
+  .gutter:hover::after, .gutter.drag::after { background: var(--accent); }
+  #grid.gutter-drag { user-select: none; }
+  #grid.gutter-drag .cell iframe { pointer-events: none; }
+  #grid.has-solo .gutter { display: none; }
   .cell { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); border-radius: 6px; overflow: hidden; position: relative; }
   .cell-head { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; font-size: 12px; color: var(--fg-dim); background: var(--bar); border-bottom: 1px solid var(--border); }
   .cell-head .lbl { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -103,14 +114,17 @@
   // 배치·순서 영속 — 이 세션 조합 기준(localStorage). 열 수와 셀 순서(orderVals)를 기억한다.
   var LKEY = 'lively_tgrid_layout_' + ids.slice().sort().join(',');
   var orderVals = ids.map(function (_, i) { return i; }); // orderVals[cellIndex] = CSS order(=시각적 위치)
+  var colFr = null, rowFr = null; // 열/행별 크기(fr). null이면 균등으로 초기화(applyLayout에서).
   try {
     var saved = JSON.parse(localStorage.getItem(LKEY) || 'null');
     if (saved) {
       if (saved.cols) cols = Math.min(n, Math.max(1, saved.cols));
       if (Array.isArray(saved.order) && saved.order.length === n) orderVals = saved.order.slice();
+      if (Array.isArray(saved.colFr)) colFr = saved.colFr.slice();
+      if (Array.isArray(saved.rowFr)) rowFr = saved.rowFr.slice();
     }
   } catch (e) { /* */ }
-  function persist() { try { localStorage.setItem(LKEY, JSON.stringify({ cols: cols, order: orderVals })); } catch (e) { /* */ } }
+  function persist() { try { localStorage.setItem(LKEY, JSON.stringify({ cols: cols, order: orderVals, colFr: colFr, rowFr: rowFr })); } catch (e) { /* */ } }
 
   var nodes = (p.get('nodes') || '').split(',');
   var frames = [], cells = [], current = 0, dragSrc = null;
@@ -167,13 +181,20 @@
   function applyOrders() { cells.forEach(function (c, i) { c.style.order = String(orderVals[i]); }); persist(); }
 
   // ── 배치(레이아웃) — 열 수로 grid 형태 전환. cols=1 세로 스택, cols=n 가로 한 줄, 그 사이는 격자. ──
+  function applyTemplate() {
+    if (grid.classList.contains('has-solo')) return; // has-solo는 CSS !important가 덮음
+    grid.style.gridTemplateColumns = colFr.map(function (f) { return f.toFixed(4) + 'fr'; }).join(' ');
+    grid.style.gridTemplateRows = rowFr.map(function (f) { return f.toFixed(4) + 'fr'; }).join(' ');
+  }
   function applyLayout() {
     cols = Math.min(n, Math.max(1, cols));
     rows = Math.ceil(n / cols);
-    if (!grid.classList.contains('has-solo')) {
-      grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
-      grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
-    }
+    // 열/행 수가 바뀌면 크기(fr)를 균등으로 리셋(트랙 개수가 달라짐). 복원값이 길이 맞으면 유지.
+    if (!colFr || colFr.length !== cols) colFr = Array.apply(null, { length: cols }).map(function () { return 1; });
+    if (!rowFr || rowFr.length !== rows) rowFr = Array.apply(null, { length: rows }).map(function () { return 1; });
+    applyTemplate();
+    buildGutters();
+    layoutGutters();
     document.getElementById('count').textContent = n + '개 세션 · ' + cols + '×' + rows;
     document.getElementById('lay-val').textContent = cols + '열';
     document.getElementById('lay-dec').disabled = cols <= 1;
@@ -182,6 +203,77 @@
   }
   document.getElementById('lay-dec').onclick = function () { cols--; applyLayout(); };
   document.getElementById('lay-inc').onclick = function () { cols++; applyLayout(); };
+
+  // ── 리사이즈 거터 — gap 위에 얇은 핸들을 얹고, 드래그하면 인접 두 트랙의 fr을 주고받아 폭/높이 조절 ──
+  //  절대배치(그리드 흐름에서 빠짐)라 셀 배치엔 영향 없음. 드래그 중엔 iframe pointer-events를 꺼 mousemove가 부모로 온다.
+  function buildGutters() {
+    Array.prototype.forEach.call(grid.querySelectorAll('.gutter'), function (g) { g.remove(); });
+    var i;
+    for (i = 0; i < cols - 1; i++) grid.appendChild(makeGutter('v', i));
+    for (i = 0; i < rows - 1; i++) grid.appendChild(makeGutter('h', i));
+  }
+  function makeGutter(axis, idx) {
+    var g = document.createElement('div'); g.className = 'gutter ' + axis;
+    g.title = (axis === 'v' ? '드래그해서 좌우 폭 조절' : '드래그해서 위아래 높이 조절') + ' (더블클릭=균등)';
+    g.addEventListener('mousedown', function (e) { startGutterDrag(e, axis, idx, g); });
+    g.addEventListener('dblclick', function () { // 균등 복귀
+      var fr = axis === 'v' ? colFr : rowFr; for (var k = 0; k < fr.length; k++) fr[k] = 1;
+      applyTemplate(); layoutGutters(); persist();
+    });
+    return g;
+  }
+  function trackPx(axis) {
+    var v = getComputedStyle(grid)[axis === 'v' ? 'gridTemplateColumns' : 'gridTemplateRows'];
+    return v.split(' ').map(parseFloat);
+  }
+  function layoutGutters() {
+    if (grid.classList.contains('has-solo')) return;
+    var gs = getComputedStyle(grid);
+    var gap = parseFloat(gs.columnGap || gs.gap) || 3;
+    var padL = parseFloat(gs.paddingLeft) || 0, padT = parseFloat(gs.paddingTop) || 0;
+    var colPx = trackPx('v'), rowPx = trackPx('h');
+    var contentH = grid.clientHeight - padT - (parseFloat(gs.paddingBottom) || 0);
+    var contentW = grid.clientWidth - padL - (parseFloat(gs.paddingRight) || 0);
+    var vs = grid.querySelectorAll('.gutter.v'), hs = grid.querySelectorAll('.gutter.h');
+    var x = padL, i;
+    for (i = 0; i < colPx.length - 1; i++) {
+      x += colPx[i];
+      if (vs[i]) { vs[i].style.left = (x + gap / 2 - 5.5) + 'px'; vs[i].style.top = padT + 'px'; vs[i].style.height = contentH + 'px'; }
+      x += gap;
+    }
+    var y = padT;
+    for (i = 0; i < rowPx.length - 1; i++) {
+      y += rowPx[i];
+      if (hs[i]) { hs[i].style.top = (y + gap / 2 - 5.5) + 'px'; hs[i].style.left = padL + 'px'; hs[i].style.width = contentW + 'px'; }
+      y += gap;
+    }
+  }
+  function startGutterDrag(e, axis, idx, gEl) {
+    e.preventDefault();
+    var fr = axis === 'v' ? colFr : rowFr;
+    var totalFr = fr.reduce(function (a, b) { return a + b; }, 0);
+    var totalPx = trackPx(axis).reduce(function (a, b) { return a + b; }, 0);
+    if (!totalPx) return;
+    var frPerPx = totalFr / totalPx;
+    var start = axis === 'v' ? e.clientX : e.clientY;
+    var f0 = fr[idx], f1 = fr[idx + 1], minF = 0.18;
+    grid.classList.add('gutter-drag'); gEl.classList.add('drag');
+    function onMove(ev) {
+      var d = ((axis === 'v' ? ev.clientX : ev.clientY) - start) * frPerPx;
+      var nf0 = f0 + d, nf1 = f1 - d;
+      if (nf0 < minF || nf1 < minF) return; // 한쪽이 너무 작아지면 멈춤
+      fr[idx] = nf0; fr[idx + 1] = nf1;
+      applyTemplate(); layoutGutters();
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('mouseup', onUp, true);
+      grid.classList.remove('gutter-drag'); gEl.classList.remove('drag'); persist();
+    }
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', onUp, true);
+  }
+  window.addEventListener('resize', layoutGutters);
 
   // ── 전체화면(솔로) 토글 — 한 셀만 그리드 전체로. 나머지는 CSS로 숨김(재로드 없음). ──
   function toggleSolo(i) { setSolo(cells[i].classList.contains('solo') ? -1 : i); }
