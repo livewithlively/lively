@@ -17,6 +17,12 @@
   #bar .spacer { flex: 1; }
   #bar button { font: inherit; font-size: 12.5px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bar); color: var(--fg); cursor: pointer; }
   #bar button:hover { border-color: var(--accent); }
+  /* 배치(레이아웃) 컨트롤 — 열 수를 바꿔 2×2 / 세로 스택(1열) / 가로 한 줄(N열) 등으로 라이브 전환. */
+  .lay { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 8px; }
+  .lay .lay-lbl { color: var(--fg-dim); font-size: 12px; margin-right: 2px; }
+  .lay button { padding: 3px 9px; font-size: 13px; line-height: 1; }
+  .lay button:disabled { opacity: .4; cursor: default; border-color: var(--border); }
+  .lay .lay-val { min-width: 42px; text-align: center; font-size: 12px; color: var(--fg-dim); }
   #grid { flex: 1; min-height: 0; display: grid; gap: 3px; padding: 3px; background: var(--border); }
   .cell { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); border-radius: 6px; overflow: hidden; position: relative; }
   .cell-head { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; font-size: 12px; color: var(--fg-dim); background: var(--bar); border-bottom: 1px solid var(--border); }
@@ -25,15 +31,27 @@
   .cell-head a { color: var(--fg-dim); text-decoration: none; font-size: 11.5px; white-space: nowrap; }
   .cell-head a:hover { color: var(--accent); }
   .cell iframe { flex: 1; width: 100%; border: 0; min-height: 0; background: #1e1e2e; }
-  .cell.active { box-shadow: inset 0 0 0 2px var(--accent); }        /* 지금 입력 중인 세션 강조(#req) */
-  /* 단독 열기(#req) — 셀 헤더 바를 없앤 대신(제목 중복·공간 제거) 호버 시 뜨는 코너 버튼. 세션명은 iframe(터미널) 자체 툴바가 이미 표시. */
-  .cell-pop { position: absolute; bottom: 7px; right: 9px; z-index: 5; font-size: 13px; line-height: 1; color: var(--fg-dim); background: var(--bar); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; text-decoration: none; opacity: 0; transition: opacity .12s, color .12s, border-color .12s; }
-  .cell:hover .cell-pop { opacity: .85; }
-  .cell-pop:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
+  .cell.active { box-shadow: inset 0 0 0 2px var(--accent); }        /* 지금 입력 중인 세션 강조 */
+  /* 셀 코너 도구모음 — 드래그 손잡이·전체화면·새 탭. 세션명은 iframe(터미널) 자체 툴바가 이미 표시하므로 제목 중복 안 함. */
+  .cell-tools { position: absolute; top: 6px; right: 6px; z-index: 5; display: flex; gap: 4px; opacity: .38; transition: opacity .12s; }
+  .cell:hover .cell-tools, .cell.active .cell-tools { opacity: .92; }
+  .cell-tools:hover { opacity: 1; }
+  .cell-tools > * { font: inherit; font-size: 12px; line-height: 1; color: var(--fg-dim); background: var(--bar); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; user-select: none; }
+  .cell-tools > *:hover { color: var(--accent); border-color: var(--accent); }
+  .cell-grip { cursor: grab; letter-spacing: -1px; }
+  .cell-grip:active { cursor: grabbing; }
+  /* 드래그 중엔 iframe이 dragover를 먹지 않도록 통과시켜 셀이 드롭 대상을 받게 한다. */
+  #grid.dragging .cell iframe { pointer-events: none; }
+  #grid.dragging .cell { user-select: none; }
+  .cell.drop-target { outline: 2px dashed var(--accent); outline-offset: -3px; }
+  .cell.dragging-src { opacity: .5; }
+  /* 전체화면(솔로) — 한 셀만 그리드 전체를 채우고 나머지는 감춘다(그리드 재배치·iframe 재로드 없음). */
+  #grid.has-solo { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
+  #grid.has-solo .cell:not(.solo) { display: none; }
   #empty { margin: auto; color: var(--fg-dim); font-size: 14px; }
-  /* 첫 진입 안내 팝업(#req) — 세션 이동 단축키 소개. '다시 보지 않기'로 localStorage 영속. */
+  /* 첫 진입 안내 팝업 — '다시 보지 않기' 체크 시 다시 안 뜸(localStorage 영속). */
   #help-ov { position: fixed; inset: 0; background: rgba(10,14,22,.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
-  #help-box { max-width: 430px; width: calc(100% - 32px); background: var(--bar); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 16px; box-shadow: 0 16px 48px rgba(10,14,22,.4); }
+  #help-box { max-width: 460px; width: calc(100% - 32px); background: var(--bar); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 16px; box-shadow: 0 16px 48px rgba(10,14,22,.4); }
   #help-box h2 { margin: 0 0 12px; font-size: 16px; }
   #help-box p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.65; color: var(--fg-dim); }
   #help-box kbd { font: inherit; font-size: 12px; font-weight: 700; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
@@ -49,6 +67,12 @@
   <span class="title">터미널 그리드</span>
   <span class="sub" id="count"></span>
   <span class="spacer"></span>
+  <span class="lay" id="lay" title="배치 — 열 수를 바꿔 2×2·세로 스택·가로 한 줄 등으로">
+    <span class="lay-lbl">배치</span>
+    <button id="lay-dec" title="열 수 줄이기 (세로로 길게)">−</button>
+    <span class="lay-val" id="lay-val">—</span>
+    <button id="lay-inc" title="열 수 늘리기 (가로로 넓게)">＋</button>
+  </span>
   <button id="btn-reload" title="모든 셀 새로고침">↻ 새로고침</button>
   <button id="btn-close" title="이 탭 닫기">닫기</button>
 </div>
@@ -63,43 +87,123 @@
   var n = ids.length;
   var cols = Math.max(1, parseInt(p.get('cols'), 10) || 0);
   var rows = Math.max(1, parseInt(p.get('rows'), 10) || 0);
-  // 안전 폴백 — cols/rows 없거나 부족하면 정사각형에 가깝게.
   if (!cols || !rows || cols * rows < n) { cols = Math.ceil(Math.sqrt(n || 1)); rows = Math.ceil((n || 1) / cols); }
 
   var grid = document.getElementById('grid');
-  document.getElementById('count').textContent = n ? (n + '개 세션 · ' + cols + '×' + rows) : '';
   document.title = n ? ('터미널 그리드 (' + n + ') · Lively Box') : '터미널 그리드';
 
-  if (!n) { grid.innerHTML = '<div id="empty">열 세션이 없습니다. 터미널 탭에서 세션을 선택해 다시 열어 주세요.</div>'; return; }
+  if (!n) {
+    document.getElementById('count').textContent = '';
+    document.getElementById('lay').style.display = 'none';
+    grid.innerHTML = '<div id="empty">열 세션이 없습니다. 터미널 탭에서 세션을 선택해 다시 열어 주세요.</div>';
+    return;
+  }
 
-  grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
-  grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
+  // 배치·순서 영속 — 이 세션 조합 기준(localStorage). 열 수와 셀 순서(orderVals)를 기억한다.
+  var LKEY = 'lively_tgrid_layout_' + ids.slice().sort().join(',');
+  var orderVals = ids.map(function (_, i) { return i; }); // orderVals[cellIndex] = CSS order(=시각적 위치)
+  try {
+    var saved = JSON.parse(localStorage.getItem(LKEY) || 'null');
+    if (saved) {
+      if (saved.cols) cols = Math.min(n, Math.max(1, saved.cols));
+      if (Array.isArray(saved.order) && saved.order.length === n) orderVals = saved.order.slice();
+    }
+  } catch (e) { /* */ }
+  function persist() { try { localStorage.setItem(LKEY, JSON.stringify({ cols: cols, order: orderVals })); } catch (e) { /* */ } }
 
-  var nodes = (p.get('nodes') || '').split(','); // 세션별 실행 노드(#869) — sessions 와 인덱스 정렬, 빈 값=중앙
-  var frames = [], cells = [], current = 0; // 세션 간 이동(#req)용 — iframe·셀 수집 + 현재 활성 셀
+  var nodes = (p.get('nodes') || '').split(',');
+  var frames = [], cells = [], current = 0, dragSrc = null;
+
   ids.forEach(function (id, i) {
     var label = labels[i] || id;
     var url = '/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(labels[i] || '')
       + ((nodes[i] || '').trim() ? '&node=' + encodeURIComponent(nodes[i].trim()) : '');
     var cell = document.createElement('div'); cell.className = 'cell';
-    var frame = document.createElement('iframe'); frame.src = url; frame.title = label; // 세션명은 터미널(iframe) 자체 툴바가 표시 — 그리드가 중복 표시 안 함
+    var frame = document.createElement('iframe'); frame.src = url; frame.title = label;
     frame.setAttribute('allow', 'clipboard-read; clipboard-write');
-    // 단독 열기 — 헤더 바 대신 호버 시 뜨는 코너 버튼(공간 절약).
-    var pop = document.createElement('a'); pop.className = 'cell-pop'; pop.href = url; pop.target = '_blank'; pop.rel = 'noopener'; pop.textContent = '↗'; pop.setAttribute('aria-label', (label ? label + ' — ' : '') + '이 세션만 새 탭으로'); pop.title = (label ? label + ' — ' : '') + '이 세션만 새 탭으로';
-    cell.appendChild(frame); cell.appendChild(pop);
+
+    // ── 셀 코너 도구모음: 드래그 손잡이 · 전체화면 토글 · 새 탭 ──
+    var tools = document.createElement('div'); tools.className = 'cell-tools';
+    var grip = document.createElement('span'); grip.className = 'cell-grip'; grip.setAttribute('draggable', 'true');
+    grip.textContent = '⠿'; grip.title = (label ? label + ' — ' : '') + '드래그해서 위치 바꾸기';
+    var fs = document.createElement('button'); fs.className = 'cell-fs'; fs.type = 'button';
+    fs.textContent = '⛶'; fs.title = '전체화면 (다시 누르면 원래 배치로)';
+    var pop = document.createElement('a'); pop.className = 'cell-pop'; pop.href = url; pop.target = '_blank'; pop.rel = 'noopener';
+    pop.textContent = '↗'; pop.title = (label ? label + ' — ' : '') + '이 세션만 새 탭으로';
+    tools.appendChild(grip); tools.appendChild(fs); tools.appendChild(pop);
+
+    cell.appendChild(frame); cell.appendChild(tools);
     grid.appendChild(cell);
     frames.push(frame); cells.push(cell);
+
+    // 전체화면 토글
+    fs.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); toggleSolo(i); });
+
+    // 드래그 재배치 — CSS order만 스왑(DOM 이동 없음 → iframe/세션 유지). iframe이 dragover를 먹지 않게 그리드에 dragging 클래스.
+    grip.addEventListener('dragstart', function (e) {
+      dragSrc = i; grid.classList.add('dragging'); cell.classList.add('dragging-src');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); } catch (_) { /* */ }
+    });
+    cell.addEventListener('dragover', function (e) {
+      if (dragSrc === null || dragSrc === i) return;
+      e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ }
+      cell.classList.add('drop-target');
+    });
+    cell.addEventListener('dragleave', function () { cell.classList.remove('drop-target'); });
+    cell.addEventListener('drop', function (e) {
+      e.preventDefault(); cell.classList.remove('drop-target');
+      if (dragSrc === null || dragSrc === i) return;
+      var t = orderVals[dragSrc]; orderVals[dragSrc] = orderVals[i]; orderVals[i] = t; // 두 셀의 시각 위치 스왑
+      applyOrders();
+    });
   });
+
+  document.addEventListener('dragend', function () {
+    dragSrc = null; grid.classList.remove('dragging');
+    cells.forEach(function (c) { c.classList.remove('drop-target'); c.classList.remove('dragging-src'); });
+  });
+
+  function applyOrders() { cells.forEach(function (c, i) { c.style.order = String(orderVals[i]); }); persist(); }
+
+  // ── 배치(레이아웃) — 열 수로 grid 형태 전환. cols=1 세로 스택, cols=n 가로 한 줄, 그 사이는 격자. ──
+  function applyLayout() {
+    cols = Math.min(n, Math.max(1, cols));
+    rows = Math.ceil(n / cols);
+    if (!grid.classList.contains('has-solo')) {
+      grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+      grid.style.gridTemplateRows = 'repeat(' + rows + ', minmax(0, 1fr))';
+    }
+    document.getElementById('count').textContent = n + '개 세션 · ' + cols + '×' + rows;
+    document.getElementById('lay-val').textContent = cols + '열';
+    document.getElementById('lay-dec').disabled = cols <= 1;
+    document.getElementById('lay-inc').disabled = cols >= n;
+    persist();
+  }
+  document.getElementById('lay-dec').onclick = function () { cols--; applyLayout(); };
+  document.getElementById('lay-inc').onclick = function () { cols++; applyLayout(); };
+
+  // ── 전체화면(솔로) 토글 — 한 셀만 그리드 전체로. 나머지는 CSS로 숨김(재로드 없음). ──
+  function toggleSolo(i) { setSolo(cells[i].classList.contains('solo') ? -1 : i); }
+  function setSolo(i) {
+    cells.forEach(function (c, k) {
+      var on = (k === i);
+      c.classList.toggle('solo', on);
+      var b = c.querySelector('.cell-fs');
+      if (b) { b.textContent = on ? '⛝' : '⛶'; b.title = on ? '원래 배치로 (전체화면 해제)' : '전체화면 (다시 누르면 원래 배치로)'; }
+    });
+    if (i >= 0) { grid.classList.add('has-solo'); setActive(i, true); }
+    else { grid.classList.remove('has-solo'); applyLayout(); }
+  }
+
+  applyOrders();
+  applyLayout();
 
   document.getElementById('btn-close').onclick = function () { window.close(); };
   document.getElementById('btn-reload').onclick = function () {
     [].forEach.call(grid.querySelectorAll('iframe'), function (f) { try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; } });
   };
 
-  // ── 세션 간 포커스 이동(#req) — Ctrl+Tab(다음)/Ctrl+Shift+Tab(이전) ──────────────────────────
-  //  각 셀은 그 자체가 xterm 터미널(same-origin iframe)이라 plain Tab 은 셸 자동완성용이라 못 쓴다.
-  //  부모가 각 iframe 문서에 **capture 단계** keydown 을 달아 xterm 보다 먼저 가로채 preventDefault → 다음 셀 포커스.
-  //  (Ctrl+Tab 을 브라우저 탭 전환으로 가로채는 브라우저에선 안 먹을 수 있어 — 그땐 셀 클릭으로 이동. 팝업에 안내.)
+  // ── 세션 간 포커스 이동 — Ctrl+Shift+→(다음)/Ctrl+Shift+←(이전). 시각적 배치 순서를 따른다. ──
   function setActive(i, focus) {
     if (i < 0 || i >= cells.length) return;
     current = i;
@@ -110,16 +214,22 @@
         var doc = frames[i].contentDocument;
         var ta = doc && (doc.querySelector('.xterm-helper-textarea') || doc.querySelector('textarea'));
         if (ta) ta.focus();
-      } catch (e) { /* same-origin 이 정상 — 접근 실패 시 조용히 무시 */ }
+      } catch (e) { /* same-origin 접근 실패 시 조용히 무시 */ }
     }
+  }
+  function visualSeq() {
+    var idx = cells.map(function (_, i) { return i; });
+    idx.sort(function (a, b) { return orderVals[a] - orderVals[b]; });
+    return idx;
   }
   function cycle(delta) {
     if (cells.length < 2) return;
-    setActive(((current + delta) % cells.length + cells.length) % cells.length, true);
+    var seq = visualSeq();
+    var pos = seq.indexOf(current); if (pos < 0) pos = 0;
+    var next = seq[((pos + delta) % seq.length + seq.length) % seq.length];
+    if (grid.classList.contains('has-solo')) setSolo(next); else setActive(next, true);
   }
   function onKey(e) {
-    // Ctrl+Shift+→(다음)/Ctrl+Shift+←(이전) — 셸 단어점프(Ctrl/Alt+화살표)·브라우저·OS(Mac Ctrl+화살표=스페이스전환) 어디에도
-    //  안 겹치는 조합. Ctrl+Tab/Ctrl+Shift+Tab 은 대부분 브라우저가 '탭 전환'으로 가로채 안 오지만, 되는 브라우저용 보너스로 함께 받는다.
     var delta = null;
     if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) delta = (e.key === 'ArrowRight' ? 1 : -1);
     else if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) delta = (e.shiftKey ? -1 : 1);
@@ -130,25 +240,26 @@
     var wire = function () {
       try {
         var doc = f.contentDocument; if (!doc) return;
-        doc.addEventListener('keydown', onKey, true);                          // xterm 보다 먼저 가로채기
-        doc.addEventListener('mousedown', function () { setActive(i, false); }, true); // 클릭한 세션을 현재로
+        doc.addEventListener('keydown', onKey, true);
+        doc.addEventListener('mousedown', function () { setActive(i, false); }, true);
       } catch (e) { /* */ }
     };
     f.addEventListener('load', wire);
     try { if (f.contentDocument && f.contentDocument.readyState === 'complete') wire(); } catch (e) { /* */ }
   });
-  setActive(0, false); // 첫 셀 강조(포커스는 사용자 클릭 전까지 뺏지 않음)
+  setActive(0, false);
 
-  // ── 첫 진입 안내 팝업(#req) — '다시 보지 않기' 체크 시 다시 안 뜸(localStorage 영속) ──────────────
+  // ── 첫 진입 안내 팝업 — '다시 보지 않기' 체크 시 다시 안 뜸(localStorage 영속) ──
   var HELP_KEY = 'lively_tgrid_nav_help_v1';
   if (localStorage.getItem(HELP_KEY) !== '1') {
     var ov = document.createElement('div'); ov.id = 'help-ov';
     ov.innerHTML =
       '<div id="help-box" role="dialog" aria-modal="true" aria-labelledby="help-t">'
-      + '<h2 id="help-t">여러 세션, 키보드로 오가기</h2>'
+      + '<h2 id="help-t">여러 세션 그리드 사용법</h2>'
       + '<p>지금 <b>' + n + '개 세션</b>이 한 그리드에 있어요. 한 세션에서 입력하다가 다음 세션으로 넘어가려면:</p>'
-      + '<p><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd> 다음 세션 &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←</kbd> 이전 세션</p>'
-      + '<p class="note">셀을 클릭해도 그 세션으로 이동해요. (셸 단어점프(Ctrl/Alt+화살표)·탭 자동완성과 안 겹치게 고른 조합이에요.)</p>'
+      + '<p><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd> 다음 세션 &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←</kbd> 이전 세션 &nbsp;(셀 클릭으로도 이동)</p>'
+      + '<p>· 상단 <b>배치</b> −/＋ 로 2×2·세로 스택·가로 한 줄 전환 · 셀 코너 <b>⛶</b> 전체화면 · <b>⠿</b> 끌어서 위치 바꾸기 · <b>↗</b> 새 탭</p>'
+      + '<p class="note">배치·위치는 이 브라우저에 기억돼 다음에도 그대로예요.</p>'
       + '<div class="help-row"><label><input type="checkbox" id="help-dontshow"> 다시 보지 않기</label>'
       + '<button class="help-close" id="help-close">닫기</button></div>'
       + '</div>';
@@ -158,7 +269,7 @@
       ov.remove();
     };
     document.getElementById('help-close').onclick = closeHelp;
-    ov.addEventListener('click', function (e) { if (e.target === ov) closeHelp(); });          // 배경 클릭 닫기
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeHelp(); });
     ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); closeHelp(); } });
     document.getElementById('help-close').focus();
   }
