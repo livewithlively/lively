@@ -652,6 +652,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .admin-status { font-size: 13px; font-weight: 600; color: var(--muted-head); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .admin-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 2px; }
 .admin-ta { width: 100%; min-height: 320px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.6; }
+/* 산문(코드 아님) 텍스트에어리어 — 예: AI 개인화 '추가 메모'. 코드에디터용 모노스페이스·320px 를 본문 글꼴·행수(rows) 기준으로 되돌린다(#762). */
+.admin-ta.admin-ta-prose { font-family: Pretendard, -apple-system, "Apple SD Gothic Neo", sans-serif; font-size: 14px; min-height: 0; }
 .admin-add { margin: 12px; }
 
 /* 편집 폼 필드 */

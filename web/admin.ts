@@ -5238,7 +5238,7 @@ async function myAiSection(detail) {
 
   const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
   const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 원준님 / 대표님 / 원준' });
-  const memoTa = el('textarea', { class: 'admin-ta', rows: '5', placeholder: 'AI가 더 알면 좋은 것을 자유롭게 — 나만의 규칙·선호·맥락. 비밀번호·토큰은 넣지 마세요(자동 차단).' });
+  const memoTa = el('textarea', { class: 'admin-ta admin-ta-prose', rows: '5', placeholder: 'AI가 더 알면 좋은 것을 자유롭게 — 나만의 규칙·선호·맥락. 비밀번호·토큰은 넣지 마세요(자동 차단).' });
   memoTa.value = pr.memo;
 
   const devSel = { v: pr.dev };
