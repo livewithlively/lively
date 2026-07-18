@@ -486,14 +486,22 @@ export async function renderWiki2(view: any, sub: string, params: URLSearchParam
     box.replaceChildren(skeleton('검증 대기 항목을 불러오는 중'));
     let items: W2Item[] = [];
     let canonN: number | null = null;
+    // 게이트 상태 — 빈 상태가 '왜 비었는지'를 말해야 한다(설계 빈 상태 A: 결함이 아니라 선택된 다이얼 상태).
+    //  정책 조회는 admin 전용이라 403 이면 null(판정 불가 — 일반 안내로 폴백).
+    let gateOn: boolean | null = null;
     try {
       const catQ = f.cat ? '&category=' + encodeURIComponent(f.cat) : '';
-      const [qItems, kc] = await Promise.all([
+      const [qItems, kc, pol] = await Promise.all([
         fetchQueue(),
         api('/api/ui/knowledge?limit=1' + catQ).catch(() => null),
+        api('/api/ui/org/ingest-policy').catch(() => null),
       ]);
       items = qItems;
       canonN = kc ? Number(kc.total ?? 0) : null;
+      if (pol) {
+        const ps = (pol.policies || []) as any[];
+        gateOn = ps.some((p) => p.enabled);   // 프리셋이든 세부 규칙이든 켜진 게 하나라도 있으면 게이트 작동 중
+      }
     } catch (e) {
       box.replaceChildren(errorNote(e, '검증 대기 항목을 불러오지 못했습니다 — 검토 권한(memory)이 필요합니다'));
       return;
@@ -556,9 +564,23 @@ export async function renderWiki2(view: any, sub: string, params: URLSearchParam
       const kids: any[] = [];
       kids.push(headEl('verify', waiting.length + applied.length, canonN, all.length));
       if (!ord.length) {
-        kids.push(el('div', { class: 'wk2-empty' },
-          el('div', { class: 'big' }, el('span', { class: 'wk2-okdot' }), el('span', { text: '검증할 것이 없습니다' })),
-          el('div', {}, el('span', { text: '최근 변화는 ' }), (() => { const a = el('a', { href: '#', text: '기록' }); a.onclick = (e: any) => { e.preventDefault(); syncHash('history'); void renderWiki2(view, 'history', new URLSearchParams('cat=' + f.cat)); }; return a; })(), el('span', { text: '에서 볼 수 있습니다.' }))));
+        const historyLink = () => { const a = el('a', { href: '#', text: '기록' }); a.onclick = (e: any) => { e.preventDefault(); syncHash('history'); void renderWiki2(view, 'history', new URLSearchParams('cat=' + f.cat)); }; return a; };
+        if (gateOn === false) {
+          // 빈 상태 A — 게이트 전부 auto: 대기가 비는 게 '정상 상태'임을 말한다(결함이 아니라 선택된 다이얼).
+          kids.push(el('div', { class: 'wk2-empty' },
+            el('div', { class: 'big', text: '지금은 모든 AI 변경이 검증 없이 즉시 반영되고 있습니다' }),
+            el('div', {},
+              el('span', { text: '사람 확인을 거치게 하려면 지식 검토 게이트를 켜세요 — ' }),
+              el('a', { href: '#/system/ingest-policy', text: '게이트 정책 설정 →' })),
+            el('div', { class: 'wk2-kbd', style: 'margin-top:8px' },
+              el('span', { text: '켜면 이후의 AI 신규·수정 제안이 여기 쌓이고, 승인해야 정본에 반영됩니다. 최근 변화는 ' }), historyLink(), el('span', { text: ' 에서.' }))));
+        } else {
+          kids.push(el('div', { class: 'wk2-empty' },
+            el('div', { class: 'big' }, el('span', { class: 'wk2-okdot' }), el('span', { text: '검증할 것이 없습니다' })),
+            el('div', {},
+              gateOn == null ? el('span', { text: '게이트가 꺼져 있으면 AI 변경이 검증 없이 바로 반영됩니다(관리자가 설정). ' }) : null,
+              el('span', { text: '최근 변화는 ' }), historyLink(), el('span', { text: '에서 볼 수 있습니다.' }))));
+        }
       } else {
         if (waiting.length) {
           kids.push(el('div', { class: 'wk2-sechead' }, el('span', { text: '검토 대기 — 승인해야 정본에 반영' }), el('span', { class: 'n', text: waiting.length + '건' })));
