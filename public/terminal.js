@@ -296,44 +296,20 @@ function copyText(text, silent) {
   else execCopy(text);
   if (!silent) toast('복사됨');
 }
-// [#967] 클립보드 불변식: **사용자의 명시적 동작 없이는 절대 클립보드를 쓰지 않는다.**
+// [#967→#762] 클립보드 불변식: **사용자의 명시적 동작 없이는 절대 클립보드를 쓰지 않는다.**
 //  클립보드는 파괴적이다 — 한 번 덮이면 이전 내용이 소리 없이 사라진다. 그래서 쓰기 경로는 딱 둘:
 //   ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭. 그 외 자동 복사는 전부 제거했다.
 //  · 제거: 드래그 선택 → 놓는 즉시 자동 복사(#252 copy-on-select). 미세한 클릭드래그(4px)에도 클립보드가
 //    덮여 "엄한 걸 눌렀는데 복사됐다"의 주범이었다. 선택 자체는 그대로 되고, 복사만 명시적으로 한다.
-//  · 전환: OSC 52(아래) — 자동 쓰기 대신 '복사 확인' 배너로.
-// OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호(#252 에서
-//  tmux set-clipboard 로 전달받아 자동으로 썼다). [#967] 앱이 임의 시점에 보낼 수 있는 신호라(사용자는 왜
-//  복사됐는지 모름) 자동 쓰기를 중단하고, 하단 배너에서 사용자가 '복사'를 클릭한 경우에만 쓴다.
-let copyOfferEl = null, copyOfferTimer = null;
-function offerCopy(text) {
-  try { if (copyOfferEl) copyOfferEl.remove(); } catch (_) { /* noop */ }
-  clearTimeout(copyOfferTimer);
-  const short = text.replace(/\s+/g, ' ').trim();
-  const preview = short.slice(0, 42) + (short.length > 42 ? '…' : '');
-  const dismiss = () => { try { bar.remove(); } catch (_) { /* noop */ } if (copyOfferEl === bar) copyOfferEl = null; };
-  const bar = el('div', { style: 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:#333;color:#fff;padding:9px 12px 9px 16px;border-radius:10px;font-size:13px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,.35);max-width:min(640px,92vw)' },
-    el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0', text: '앱이 복사를 요청했어요 — “' + preview + '”' }),
-    el('button', { style: 'flex:0 0 auto;font:inherit;font-size:12.5px;font-weight:600;padding:5px 12px;border:0;border-radius:7px;background:#16C79A;color:#fff;cursor:pointer', text: '클립보드에 복사', onclick: () => { copyText(text); dismiss(); } }),
-    el('button', { style: 'flex:0 0 auto;font:inherit;font-size:12.5px;padding:5px 10px;border:0;border-radius:7px;background:rgba(255,255,255,.14);color:#fff;cursor:pointer', text: '무시', onclick: dismiss }));
-  copyOfferEl = bar;
-  document.body.append(bar);
-  copyOfferTimer = setTimeout(dismiss, 10000);
-}
+//  · OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호(#252 에서
+//    tmux set-clipboard 로 전달받아 자동으로 썼다). #967 이 자동 쓰기 대신 '복사 확인' 배너로 완화했지만,
+//    배너조차 사용자가 원치 않는 시점(앱이 임의로 발신)에 떠서 거슬렸다(사용자 신고 #762) → **OSC52 는
+//    클립보드에 아무것도 하지 않고 그냥 삼킨다(배너도 제거).** 앱 발신 복사는 무시하고, 복사가 필요하면
+//    사용자가 위 두 경로(①②)로 직접 한다.
 function setupOscClipboard() {
   try {
-    term.parser.registerOscHandler(52, (data) => {
-      try {
-        const i = data.indexOf(';');
-        const b64 = i >= 0 ? data.slice(i + 1) : data;
-        if (b64 && b64 !== '?') {
-          let text = '';
-          try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
-          if (text) offerCopy(text); // [#967] 자동으로 안 쓴다 — 사용자가 배너에서 클릭해야 클립보드에 씀
-        }
-      } catch (_) { /* noop */ }
-      return true; // 처리함(앱으로 다시 안 흘림)
-    });
+    // OSC52 를 삼켜서(true) xterm 기본 동작·앱 재처리를 막되, 클립보드엔 손대지 않는다(자동복사·배너 전면 제거 #762).
+    term.parser.registerOscHandler(52, () => true);
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
@@ -1193,7 +1169,7 @@ async function boot() {
   setupPaste();
   setupWheel();
   setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
-  setupOscClipboard();    // 앱 OSC52 → '복사 확인' 배너(#967 — 자동 클립보드 쓰기 없음)
+  setupOscClipboard();    // 앱 OSC52 는 무시 — 클립보드 안 건드림(#762, 배너도 제거)
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
