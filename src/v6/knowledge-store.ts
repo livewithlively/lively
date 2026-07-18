@@ -140,6 +140,51 @@ export async function countKnowledge(f: KnowledgeFilter = {}): Promise<number> {
   return Number((row as { n?: number } | undefined)?.n ?? 0);
 }
 
+// ── #968 WIKI2 '기록' 피드 — 상태 스냅샷 파생(지식당 최신 1건). 이벤트 원장이 아니다(UI 가 그 사실을 말한다). ──
+//  activity_at = GREATEST(updated_at, last_synced_at): 미러 재싱크는 updated_at 을 안 움직이므로(원본이 진실)
+//   updated_at 단독 정렬이면 방금 싱크된 미러가 피드에 영영 안 뜬다 — 설계 확정 사항(#968 §5).
+//  lifecycle: active·archived 만 — pending(검토 대기)은 격리 원칙대로 피드에 싣지 않는다(검증 뷰가 큐로 보여준다).
+//  change_note: 가장 최근 '승인된' 리비전의 note 를, 그 처리가 현재 본문과 시간상 근접할 때만 싣는다
+//   (staged 승인 = reviewed_at ≈ updated_at / applied 작성 = created_at ≈ updated_at, 10분 창).
+//   근접하지 않으면 그 note 는 지금 본문의 설명이 아닐 수 있어 뺀다 — 없는 설명을 있는 척하지 않는다.
+export interface KnowledgeFeedFilter { days?: number; categoryId?: number; by?: string; limit?: number }
+export async function listKnowledgeFeed(f: KnowledgeFeedFilter = {}): Promise<Record<string, unknown>[]> {
+  const params: unknown[] = [];
+  let join = "";
+  if (f.categoryId != null) {
+    params.push(f.categoryId);
+    join = `JOIN knowledge_category kcf ON kcf.name=k.name AND kcf.category_id=$${params.length} AND kcf.state<>'rejected'`;
+  }
+  const wh: string[] = [`k.lifecycle IN ('active','archived')`, `k.is_folder = false`];
+  if (f.by === "human" || f.by === "ai") { params.push(f.by); wh.push(`k.confidence=$${params.length}`); }
+  const days = Math.min(Math.max(Number(f.days) || 14, 1), 90);
+  params.push(days);
+  wh.push(`GREATEST(k.updated_at, COALESCE(k.last_synced_at, k.updated_at)) > now() - make_interval(days => $${params.length}::int)`);
+  const limit = Math.min(Math.max(Number(f.limit) || 300, 1), 500);
+  params.push(limit);
+  return q(itemsPool, `
+    SELECT DISTINCT k.name, k.title, k.type, k.provenance, k.confidence, k.lifecycle, k.version,
+           k.updated_at, k.updated_by, k.last_synced_at, ${K_ICON_EXPR},
+           GREATEST(k.updated_at, COALESCE(k.last_synced_at, k.updated_at)) AS activity_at,
+           cat.key AS category_key, cat.name AS category_name,
+           rev.note AS change_note, rev.reviewed_by AS change_reviewed_by
+      FROM knowledge k ${join}
+      LEFT JOIN LATERAL (
+        SELECT cc.key, cc.name FROM knowledge_category kc2 JOIN category cc ON cc.id=kc2.category_id
+         WHERE kc2.name=k.name AND kc2.state<>'rejected' ORDER BY kc2.category_id LIMIT 1
+      ) cat ON true
+      LEFT JOIN LATERAL (
+        SELECT r.note, r.reviewed_by FROM knowledge_revision r
+         WHERE r.name=k.name AND r.status='approved' AND r.note IS NOT NULL
+           AND (abs(extract(epoch FROM (r.reviewed_at - k.updated_at))) < 600
+             OR abs(extract(epoch FROM (r.created_at  - k.updated_at))) < 600)
+         ORDER BY r.reviewed_at DESC LIMIT 1
+      ) rev ON true
+      WHERE ${wh.join(" AND ")}
+      ORDER BY activity_at DESC
+      LIMIT $${params.length}`, params) as Promise<Record<string, unknown>[]>;
+}
+
 export async function getKnowledge(name: string): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
   // fields 는 목록(K_COLS)엔 무겁고 상세엔 필수(#551 노션 속성 패널) — 상세 조회에서만 포함.
   //  props_ui(#592 항목 단위 속성 노출 오버라이드)도 fields 와 같은 취급(상세 전용).

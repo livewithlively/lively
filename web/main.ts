@@ -2,6 +2,7 @@
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
+import { refreshWiki2NavBadge, renderWiki2 } from './wiki2.js';   // #968 WIKI2 — 검증·기록(변화의 관제실)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
@@ -62,7 +63,8 @@ async function route() {
   //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
   const mainEl = document.querySelector('main');
   if (mainEl) mainEl.classList.toggle('doc-mode',
-    page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
+    page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash' || page === 'wiki2');   // #968 WIKI2 도 .kn-shell 전폭
+  void refreshWiki2NavBadge();   // #968 상단 WIKI2 배지(검토 대기 총계) — 내부 60s 스로틀, 실패는 조용히
   try {
     if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
@@ -106,6 +108,9 @@ async function route() {
     } else if (page === 'domainmap') {
       setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
+    } else if (page === 'wiki2') {
+      setActiveTab('wiki2'); // #968 WIKI2 — 변화의 관제실: 검증(#/wiki2) · 기록(#/wiki2/history)
+      await renderWiki2(view, segs[1] || '', params);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
       await renderWiki(view, segs[1] || '', params);
