@@ -469,26 +469,45 @@ function renderContainer(type, rest, bodyLines) {
       return frame;
     }
     case 'shot': {
-      // 주석 스크린샷(#853) — 실제 화면 캡처 위에 번호 핀을 얹고 아래 범례로 설명. 산만함 방지: 페이지당 1장·핀 소수.
-      //  속성: src=이미지 경로(필수) alt=대체텍스트. 본문 줄 = 핀 하나: 'x% | y% | 라벨 ~ 설명' (x·y 는 이미지 기준 %).
-      //  이미지는 정적 자산(공개 경로) — 캡처는 데이터 마스킹(예시 데이터 치환) 후 뜬다.
-      const pins = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::')
-        .map((l) => l.split('|').map((s) => s.trim()));
+      // 주석 스크린샷(#853) — 위에 **구획 박스**(영역을 감싼 색 사각형+번호)를 얹은 실제 화면, 아래에 **번호마다 1:1 상세 설명 카드**.
+      //  속성: src=이미지(필수) alt caption. 본문 = 구획 목록:
+      //    좌표줄  'left% | top% | width% | height% | 제목'   (전부 이미지 기준 %; 캡처 시 요소 실측)
+      //    상세줄  그 아래 들여쓴/일반 줄들 = 그 번호의 설명 문단(여러 줄 = 여러 문단). 다음 좌표줄 전까지.
+      //  박스·번호·상세 카드는 5색(is-cN)을 돌려 1:1로 색까지 맞춘다. 이미지는 데이터 마스킹된 정적 자산.
+      const items: any[] = [];
+      for (const raw of bodyLines) {
+        const t = (raw || '').trim();
+        if (!t || t === ':::') continue;
+        const isCoord = /^[\d.]+\s*\|/.test(t) && t.split('|').length >= 5;
+        if (isCoord) {
+          const parts = t.split('|').map((s) => s.trim());
+          const n = parts.map((c) => parseFloat(c));
+          // 제목에 '~' 가 있으면(구형식) 왼쪽=제목·오른쪽=첫 상세문단으로.
+          const titleRaw = parts.slice(4).join(' | ');
+          const [title, sub] = titleRaw.split('~').map((s) => s.trim());
+          items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [] });
+        } else if (items.length) {
+          items[items.length - 1].detail.push(t);
+        }
+      }
       const wrap = el('span', { class: 'md-shot-imgwrap' },
         el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
-      pins.forEach((p0, i) => {
-        const x = parseFloat(p0[0]), y = parseFloat(p0[1]);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        wrap.append(el('span', { class: 'md-shot-pin', style: `left:${x}%; top:${y}%`, 'aria-hidden': 'true', text: String(i + 1) }));
+      items.forEach((s0, i) => {
+        const box = [s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v));
+        if (box) wrap.append(el('span', { class: 'md-shot-box is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, 'aria-hidden': 'true' },
+          el('span', { class: 'md-shot-bnum', text: String(i + 1) })));
+        else if (Number.isFinite(s0.l) && Number.isFinite(s0.t)) wrap.append(el('span', { class: 'md-shot-pin is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%`, 'aria-hidden': 'true', text: String(i + 1) }));
       });
-      const legend = el('ol', { class: 'md-shot-legend' }, ...pins.map((p0) => {
-        const [nm, sub] = (p0[2] || '').split('~').map((s) => s.trim());
-        const li = el('li', { class: 'md-shot-leg' }, el('span', { class: 'md-shot-leg-nm' }, ...renderInline(nm || '')));
-        if (sub) li.append(el('span', { class: 'md-shot-leg-sub' }, ...renderInline(sub)));
-        return li;
+      const fig = el('figure', { class: 'md-shot' }, wrap);
+      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-shot-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
+      // 번호별 상세 카드(1:1) — 번호 배지 + 제목 + 설명 문단들.
+      const details = el('div', { class: 'md-shot-details' }, ...items.map((s0, i) => {
+        const main = el('div', { class: 'md-shot-dmain' }, el('div', { class: 'md-shot-dtitle' }, ...renderInline(s0.title || '')));
+        for (const d of s0.detail) if (d) main.append(el('p', { class: 'md-shot-dbody' }, ...renderInline(d)));
+        return el('div', { class: 'md-shot-detail is-c' + (i % 5) },
+          el('span', { class: 'md-shot-dnum', text: String(i + 1) }), main);
       }));
-      const fig = el('figure', { class: 'md-shot' }, wrap, legend);
-      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-fig-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
+      fig.append(details);
       return fig;
     }
     case 'axes': {

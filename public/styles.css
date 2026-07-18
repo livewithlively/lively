@@ -7215,20 +7215,35 @@ input.emb-num { width: 120px; flex: none; }
 @media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }
 
 /* ── #853 :::shot — 주석 스크린샷(실사 + 번호 핀 + 범례). 절제된 구성: 프레임·소수 핀·2열 범례. ── */
-.md-shot { margin: 16px 0 20px; display: flex; flex-direction: column; gap: 12px; }
+/* ── #853 :::shot — 위: 구획 박스 스크린샷 / 아래: 번호별 1:1 상세 카드. 본문 폭(800)을 넘겨 크게. ── */
+.md-shot { margin: 22px 0 26px; display: flex; flex-direction: column; gap: 14px;
+  width: min(1120px, calc(100vw - 300px)); }   /* breakout: 읽기 폭보다 넓게(우측 여백으로 확장) */
 .md-shot-imgwrap { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px;
-  overflow: hidden; box-shadow: 0 2px 10px rgba(21,35,59,.07); line-height: 0; }
+  overflow: hidden; box-shadow: 0 6px 22px rgba(21,35,59,.12); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
-.md-shot-pin { position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; border-radius: 50%;
-  background: var(--blue); color: #fff; font-size: 12px; font-weight: 800; line-height: 22px; text-align: center;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 28%, transparent), 0 1px 4px rgba(21,35,59,.35); }
-.md-shot-legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr;
-  gap: 6px 22px; counter-reset: shotleg; }
-.md-shot-leg { counter-increment: shotleg; display: flex; align-items: baseline; gap: 8px; font-size: 13px;
-  color: var(--ink); line-height: 1.5; min-width: 0; }
-.md-shot-leg::before { content: counter(shotleg); flex: none; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--blue); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center;
-  transform: translateY(2px); }
-.md-shot-leg-nm { font-weight: 700; white-space: nowrap; }
-.md-shot-leg-sub { color: var(--muted, #6b7a90); }
-@media (max-width: 760px) { .md-shot-legend { grid-template-columns: 1fr; } }
+/* 5색 팔레트 — 박스·번호·상세카드가 --sc 공유(1:1로 색까지 매칭). */
+.is-c0 { --sc: var(--blue, #2D6BF0); } .is-c1 { --sc: var(--mint-deep, #0FA37E); } .is-c2 { --sc: #C2822F; }
+.is-c3 { --sc: #7A5AF0; } .is-c4 { --sc: #D6584A; }
+/* 구획 박스 — 실제 영역을 감싼다(옅은 채움 + 뚜렷한 테두리 + 좌상단 번호 탭). */
+.md-shot-box { position: absolute; box-sizing: border-box; border: 2.5px solid var(--sc, var(--blue)); border-radius: 9px;
+  background: color-mix(in srgb, var(--sc, var(--blue)) 8%, transparent);
+  box-shadow: 0 1px 7px color-mix(in srgb, var(--sc, var(--blue)) 22%, transparent); }
+.md-shot-bnum { position: absolute; left: -2.5px; top: -2.5px; min-width: 26px; height: 26px; padding: 0 7px;
+  border-radius: 9px 3px 9px 3px; background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800;
+  line-height: 26px; text-align: center; box-shadow: 0 1px 4px rgba(21,35,59,.32); }
+.md-shot-pin { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%;
+  background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800; line-height: 26px; text-align: center;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sc, var(--blue)) 26%, transparent), 0 1px 4px rgba(21,35,59,.35); }
+.md-shot-cap { font-size: 12.5px; color: var(--muted, #6b7a90); margin: -2px 0 2px; }
+/* 번호별 상세 카드 — 스크린샷 번호와 1:1(번호·색 일치). */
+.md-shot-details { display: flex; flex-direction: column; gap: 10px; }
+.md-shot-detail { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
+  padding: 14px 18px; border: 1px solid var(--line); border-left: 4px solid var(--sc, var(--blue));
+  border-radius: 11px; background: var(--bg); }
+.md-shot-dnum { flex: none; width: 27px; height: 27px; border-radius: 8px; background: var(--sc, var(--blue));
+  color: #fff; font-size: 14px; font-weight: 800; line-height: 27px; text-align: center; }
+.md-shot-dmain { min-width: 0; }
+.md-shot-dtitle { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.45; }
+.md-shot-dbody { font-size: 14px; color: var(--ink-sub, #40506a); line-height: 1.65; margin: 6px 0 0; }
+.md-shot-dbody + .md-shot-dbody { margin-top: 5px; }
+@media (max-width: 1120px) { .md-shot { width: 100%; } }
