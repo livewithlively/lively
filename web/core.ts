@@ -468,6 +468,29 @@ function renderContainer(type, rest, bodyLines) {
       if (attrs.caption || summary) frame.append(el('figcaption', { class: 'md-fig-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
       return frame;
     }
+    case 'shot': {
+      // 주석 스크린샷(#853) — 실제 화면 캡처 위에 번호 핀을 얹고 아래 범례로 설명. 산만함 방지: 페이지당 1장·핀 소수.
+      //  속성: src=이미지 경로(필수) alt=대체텍스트. 본문 줄 = 핀 하나: 'x% | y% | 라벨 ~ 설명' (x·y 는 이미지 기준 %).
+      //  이미지는 정적 자산(공개 경로) — 캡처는 데이터 마스킹(예시 데이터 치환) 후 뜬다.
+      const pins = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::')
+        .map((l) => l.split('|').map((s) => s.trim()));
+      const wrap = el('span', { class: 'md-shot-imgwrap' },
+        el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
+      pins.forEach((p0, i) => {
+        const x = parseFloat(p0[0]), y = parseFloat(p0[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        wrap.append(el('span', { class: 'md-shot-pin', style: `left:${x}%; top:${y}%`, 'aria-hidden': 'true', text: String(i + 1) }));
+      });
+      const legend = el('ol', { class: 'md-shot-legend' }, ...pins.map((p0) => {
+        const [nm, sub] = (p0[2] || '').split('~').map((s) => s.trim());
+        const li = el('li', { class: 'md-shot-leg' }, el('span', { class: 'md-shot-leg-nm' }, ...renderInline(nm || '')));
+        if (sub) li.append(el('span', { class: 'md-shot-leg-sub' }, ...renderInline(sub)));
+        return li;
+      }));
+      const fig = el('figure', { class: 'md-shot' }, wrap, legend);
+      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-fig-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
+      return fig;
+    }
     case 'axes': {
       // 맥락의 세 축(#762, #853 재설계) — 본문의 3축(카테고리·지식·프로젝트)과 도식을 일치시킨다:
       //  카테고리(정점) 아래 [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧

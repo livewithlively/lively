@@ -7213,3 +7213,22 @@ input.emb-num { width: 120px; flex: none; }
 .md-axes-biar.to-l { color: var(--blue); }
 .md-axes-fnode.is-static { border-top: 3px solid var(--mint, #16C79A); }
 @media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }
+
+/* ── #853 :::shot — 주석 스크린샷(실사 + 번호 핀 + 범례). 절제된 구성: 프레임·소수 핀·2열 범례. ── */
+.md-shot { margin: 16px 0 20px; display: flex; flex-direction: column; gap: 12px; }
+.md-shot-imgwrap { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; box-shadow: 0 2px 10px rgba(21,35,59,.07); line-height: 0; }
+.md-shot-img { width: 100%; height: auto; display: block; }
+.md-shot-pin { position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; border-radius: 50%;
+  background: var(--blue); color: #fff; font-size: 12px; font-weight: 800; line-height: 22px; text-align: center;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 28%, transparent), 0 1px 4px rgba(21,35,59,.35); }
+.md-shot-legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 6px 22px; counter-reset: shotleg; }
+.md-shot-leg { counter-increment: shotleg; display: flex; align-items: baseline; gap: 8px; font-size: 13px;
+  color: var(--ink); line-height: 1.5; min-width: 0; }
+.md-shot-leg::before { content: counter(shotleg); flex: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--blue); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center;
+  transform: translateY(2px); }
+.md-shot-leg-nm { font-weight: 700; white-space: nowrap; }
+.md-shot-leg-sub { color: var(--muted, #6b7a90); }
+@media (max-width: 760px) { .md-shot-legend { grid-template-columns: 1fr; } }
