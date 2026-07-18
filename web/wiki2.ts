@@ -22,7 +22,7 @@ function wk2Styles(): void {
   rqEnsureStyles();   // diffView(.rq-diff/.rq-dl) 재사용분
   if (document.getElementById('wk2-styles')) return;
   document.head.appendChild(el('style', { id: 'wk2-styles', text: `
-.wk2-main{padding:20px 28px 40px;min-width:0}
+.wk2-main{padding:20px 28px 40px;min-width:0;flex:1}
 .wk2-board{max-width:1440px;margin:0 auto}
 .wk2-hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}
 .wk2-hero h2{font-size:19px;font-weight:800;margin:0}
@@ -33,6 +33,10 @@ function wk2Styles(): void {
 .wk2-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
 .wk2-grid.single{grid-template-columns:minmax(380px,640px)}
 .wk2-zone{background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.wk2-zhead-link{display:block;cursor:pointer;text-decoration:none;color:inherit}
+.wk2-zhead-link:hover .wk2-zh .nm{color:var(--blue-deep);text-decoration:underline}
+.wk2-zhead-link:hover .wk-ccard-cover{filter:brightness(1.03)}
+.wk2-zhead-link:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:12px}
 .wk2-zh{display:flex;align-items:baseline;gap:9px;padding:12px 16px 2px;min-width:0}
 .wk2-zh .nm{font-size:15.5px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
 .wk2-zh .own{font-size:10.5px;color:var(--ink-sub);border:1px solid var(--line);border-radius:999px;padding:0 7px;flex:none}
@@ -50,8 +54,10 @@ function wk2Styles(): void {
 .wk2-okdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mint,#0FB07E);margin-right:7px}
 .wk2-fu{padding:10px 16px 4px;flex:1}
 .wk2-fu .lb{font-size:10.5px;font-weight:800;letter-spacing:.05em;color:var(--muted-2);margin-bottom:4px}
-.wk2-fur{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--line-row);font-size:12.5px}
+.wk2-fur{display:flex;gap:8px;align-items:baseline;padding:5px 4px;margin:0 -4px;border-radius:6px;border-bottom:1px solid var(--line-row);font-size:12.5px;text-decoration:none;color:inherit}
 .wk2-fur:last-child{border-bottom:0}
+a.wk2-fur:hover{background:var(--bg-tint)}
+a.wk2-fur:hover .tx b{color:var(--blue-deep)}
 .wk2-fur .tx{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .wk2-fur .tx b{font-weight:650}
 .wk2-fur .tx .who{color:var(--ink-sub)}
@@ -473,14 +479,21 @@ export async function renderWiki2(view: any, sub: string, params: URLSearchParam
       if (!rows.length) fu.append(el('div', { class: 'wk2-fur' }, el('span', { class: 'tx', style: 'color:var(--muted-2)', text: '이번 주 변화 없음' })));
       for (const r of rows) {
         const L = feedLine(r);
-        fu.append(el('div', { class: 'wk2-fur' },
+        // 각 변화 행 = 그 지식 문서로 가는 링크(당연히 클릭되어야 하는 것). 새 탭(참조는 흐름을 끊지 않는다).
+        fu.append(el('a', { class: 'wk2-fur', href: '#/k/' + encodeURIComponent(r.name), target: '_blank', rel: 'noopener', title: r.title || r.name },
           wkTick({ confidence: r.confidence === 'human' ? 'human' : null, provenance: r.provenance === 'observed' ? 'observed' : null }),
           el('span', { class: 'tx' }, el('b', { text: r.title || r.name }), el('span', { text: ' — ' + L.sum }), L.who ? el('span', { class: 'who', text: ' · ' + L.who }) : null),
           el('span', { class: 'm', text: relTime(r.activity_at || r.updated_at) })));
       }
       const histA = el('a', { href: '#', text: '기록 →' });
       histA.onclick = (e: any) => { e.preventDefault(); f.cat = String(c.id); location.hash = hashFor('history'); };
-      return el('div', { class: 'wk2-zone' }, cover, head, todo, fu, el('div', { class: 'wk2-zf' }, el('span', { class: 'sp' }), histA));
+      // 커버+제목 = 이 카테고리로 드릴인(단일 카드 확장 — 최근 변화 더 보기). 링크처럼 동작.
+      const drill = () => { f.cat = String(c.id); location.hash = hashFor('board'); };
+      const topLink = el('div', { class: 'wk2-zhead-link', role: 'button', tabindex: '0',
+        title: (c.name || c.key) + ' — 이 카테고리만 보기' }, cover, head);
+      topLink.addEventListener('click', drill);
+      topLink.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); drill(); } });
+      return el('div', { class: 'wk2-zone' }, topLink, todo, fu, el('div', { class: 'wk2-zf' }, el('span', { class: 'sp' }), histA));
     };
 
     const grid = el('div', { class: 'wk2-grid' + (selCat ? ' single' : '') });
