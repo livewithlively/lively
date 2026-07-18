@@ -72,6 +72,28 @@
   #help-box label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--fg-dim); cursor: pointer; user-select: none; }
   #help-box .help-close { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 18px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; cursor: pointer; }
   #help-box .help-close:hover { filter: brightness(1.06); }
+  /* ── 통합 '내 질문' 검색 — 그리드의 모든 세션 프롬프트를 모아 검색, 클릭하면 그 세션으로 이동 ── */
+  #qs-ov { position: fixed; inset: 0; background: rgba(10,14,22,.55); display: flex; align-items: flex-start; justify-content: center; z-index: 10000; padding: 44px 16px; }
+  #qs-box { position: relative; display: flex; flex-direction: column; width: 680px; max-width: 100%; max-height: 84vh; background: var(--bar); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 16px 48px rgba(10,14,22,.4); overflow: hidden; }
+  #qs-box .qs-x { position: absolute; top: 9px; right: 11px; z-index: 1; background: transparent; border: 0; color: var(--fg-dim); font-size: 17px; line-height: 1; cursor: pointer; padding: 5px; }
+  #qs-box .qs-x:hover { color: var(--fg); }
+  #qs-head { padding: 16px 40px 10px 18px; border-bottom: 1px solid var(--border); }
+  #qs-head h2 { margin: 0 0 3px; font-size: 15px; }
+  #qs-head p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg-dim); }
+  #qs-search { margin: 12px 18px 0; padding: 9px 12px; font: inherit; font-size: 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg); outline: none; }
+  #qs-search:focus { border-color: var(--accent); }
+  #qs-cap { padding: 9px 18px 5px; font-size: 12px; color: var(--fg-dim); }
+  #qs-list { overflow-y: auto; padding: 2px 8px 10px; }
+  .qs-item { display: block; width: 100%; text-align: left; padding: 9px 10px; margin: 0; border: 0; border-radius: 9px; background: transparent; color: var(--fg); cursor: pointer; font: inherit; }
+  .qs-item:hover, .qs-item:focus { background: var(--bg); outline: none; }
+  .qs-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .qs-chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; color: #fff; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .qs-when { font-size: 11.5px; color: var(--fg-dim); }
+  .qs-text { font-size: 13px; line-height: 1.5; color: var(--fg); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .qs-empty { padding: 26px 18px; text-align: center; color: var(--fg-dim); font-size: 13px; }
+  /* 결과 클릭 시 그 셀을 잠깐 강조 — '어느 터미널인지' 눈에 확 들어오게 */
+  @keyframes qflash { 0%,100% { box-shadow: inset 0 0 0 2px var(--accent); } 30%,70% { box-shadow: inset 0 0 0 4px var(--accent), 0 0 0 4px rgba(22,163,127,.45); } }
+  .cell.qflash { animation: qflash 1.3s ease; }
 </style>
 </head>
 <body>
@@ -85,6 +107,7 @@
     <span class="lay-val" id="lay-val">—</span>
     <button id="lay-inc" title="열 수 늘리기 (가로로 넓게)">＋</button>
   </span>
+  <button id="btn-qsearch" title="그리드의 모든 세션에서 내가 보낸 질문을 통합 검색 — 어느 터미널에 했는지 찾아 바로 이동">🔎 내 질문</button>
   <button id="btn-reload" title="모든 셀 새로고침">↻ 새로고침</button>
   <button id="btn-close" title="이 탭 닫기">닫기</button>
 </div>
@@ -107,6 +130,7 @@
   if (!n) {
     document.getElementById('count').textContent = '';
     document.getElementById('lay').style.display = 'none';
+    document.getElementById('btn-qsearch').style.display = 'none';
     grid.innerHTML = '<div id="empty">열 세션이 없습니다. 터미널 탭에서 세션을 선택해 다시 열어 주세요.</div>';
     return;
   }
@@ -295,6 +319,107 @@
   document.getElementById('btn-reload').onclick = function () {
     [].forEach.call(grid.querySelectorAll('iframe'), function (f) { try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; } });
   };
+
+  // ── 그리드 통합 '내 질문' 검색 — 모든 셀의 세션에서 내가 보낸 질문을 한데 모아 검색, 누르면 그 세션(터미널)으로 이동 ──
+  //  같은 origin 이라 부모가 각 세션의 /prompts 를 직접 가져와(노드 세션은 &node= 릴레이) '어느 셀인지' 태그와 함께 합친다.
+  //  핵심 = '어느 터미널에 물어봤나': 결과마다 셀별 색 라벨 칩을 달고, 누르면 그 셀을 띄워 잠깐 강조 + 그 위치로 이동.
+  var QS_COLORS = ['#16a37f', '#e8842b', '#3b82f6', '#a855f7', '#e0457b', '#0ea5b7', '#6d8b1f', '#c2410c', '#7c3aed', '#0891b2'];
+  function qsColor(i) { return QS_COLORS[i % QS_COLORS.length]; }
+  function qsAuth() { var t = null; try { t = localStorage.getItem('lively_ui_token'); } catch (e) { /* */ } return t ? { Authorization: 'Bearer ' + t } : {}; }
+  function qsPromptsUrl(i) {
+    var u = '/api/ui/terminal/sessions/' + encodeURIComponent(ids[i]) + '/prompts';
+    var nd = (nodes[i] || '').trim(); if (nd) u += '?node=' + encodeURIComponent(nd);
+    return u;
+  }
+  function qsWhen(ts) {
+    var d = new Date(ts); if (isNaN(d.getTime())) return '';
+    var s = (Date.now() - d.getTime()) / 1000;
+    if (s < 60) return '방금';
+    if (s < 3600) return Math.floor(s / 60) + '분 전';
+    if (s < 86400) return Math.floor(s / 3600) + '시간 전';
+    if (s < 604800) return Math.floor(s / 86400) + '일 전';
+    return d.toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' });
+  }
+  function qsPulse(i) {
+    var c = cells[i]; if (!c) return;
+    c.classList.remove('qflash'); void c.offsetWidth; c.classList.add('qflash'); // reflow → 애니메이션 재시작
+    setTimeout(function () { c.classList.remove('qflash'); }, 1400);
+  }
+  var qsBusy = false;
+  function openGridPrompts() {
+    if (qsBusy) return; qsBusy = true;
+    var ov = document.createElement('div'); ov.id = 'qs-ov';
+    var box = document.createElement('div'); box.id = 'qs-box';
+    box.innerHTML =
+      '<button class="qs-x" title="닫기">✕</button>'
+      + '<div id="qs-head"><h2>💬 내 질문 — 그리드 전체 검색</h2>'
+      + '<p>이 그리드의 모든 세션에서 내가 보낸 질문을 한데 모아 찾습니다. 누르면 그 세션(터미널)으로 이동해요.</p></div>'
+      + '<input id="qs-search" type="search" placeholder="질문 검색 — 여러 단어는 모두 포함(AND). 세션 이름으로도 찾을 수 있어요…" autocomplete="off">'
+      + '<div id="qs-cap">불러오는 중…</div><div id="qs-list"></div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    var search = box.querySelector('#qs-search'), cap = box.querySelector('#qs-cap'), list = box.querySelector('#qs-list');
+    function close() { qsBusy = false; ov.remove(); }
+    box.querySelector('.qs-x').onclick = close;
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+    ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } }, true);
+
+    var items = [], failed = 0;
+    Promise.all(ids.map(function (id, i) {
+      return fetch(qsPromptsUrl(i), { headers: qsAuth(), credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          var ps = (d && d.prompts) || [];
+          if (!d || (!ps.length && !(d && d.found))) failed++;
+          ps.forEach(function (pp) {
+            var tms = Date.parse(pp.ts); if (isNaN(tms)) tms = 0;
+            items.push({ text: pp.text, ts: pp.ts, tms: tms, cell: i, label: labels[i] || ids[i] });
+          });
+        })
+        .catch(function () { failed++; });
+    })).then(function () {
+      items.sort(function (a, b) { return b.tms - a.tms; }); // 세션 교차 최신순
+      draw();
+      setTimeout(function () { try { search.focus(); } catch (e) { /* */ } }, 0);
+    });
+
+    function draw() {
+      var q = search.value.trim().toLowerCase();
+      var terms = q ? q.split(/\s+/).filter(Boolean) : [];
+      var shown = terms.length
+        ? items.filter(function (it) { var hay = (it.text + ' ' + it.label).toLowerCase(); return terms.every(function (w) { return hay.indexOf(w) >= 0; }); })
+        : items;
+      cap.textContent = terms.length
+        ? (shown.length + ' / ' + items.length + '개 일치')
+        : (n + '개 세션 · ' + items.length + '개 질문 · 최신순 — 클릭하면 그 세션으로 이동' + (failed ? ' (일부 세션은 기록 없음)' : ''));
+      list.textContent = '';
+      if (!items.length) { var e0 = document.createElement('div'); e0.className = 'qs-empty'; e0.textContent = '이 그리드의 세션에서 아직 보낸 질문을 찾지 못했어요.'; list.appendChild(e0); return; }
+      if (!shown.length) { var e1 = document.createElement('div'); e1.className = 'qs-empty'; e1.textContent = '일치하는 질문이 없어요.'; list.appendChild(e1); return; }
+      shown.slice(0, 300).forEach(function (it) {
+        var b = document.createElement('button'); b.className = 'qs-item'; b.type = 'button';
+        var meta = document.createElement('div'); meta.className = 'qs-meta';
+        var chip = document.createElement('span'); chip.className = 'qs-chip'; chip.style.background = qsColor(it.cell); chip.textContent = it.label;
+        var when = document.createElement('span'); when.className = 'qs-when'; when.textContent = qsWhen(it.ts);
+        meta.appendChild(chip); meta.appendChild(when);
+        var tx = document.createElement('div'); tx.className = 'qs-text'; tx.textContent = it.text;
+        b.appendChild(meta); b.appendChild(tx);
+        b.onclick = function () { go(it); };
+        list.appendChild(b);
+      });
+    }
+    function go(it) {
+      close();
+      var i = it.cell;
+      if (grid.classList.contains('has-solo')) setSolo(i); else setActive(i, true);
+      try { cells[i].scrollIntoView({ block: 'nearest' }); } catch (e) { /* */ }
+      qsPulse(i);
+      try {
+        var w = frames[i] && frames[i].contentWindow;
+        if (w && typeof w.livelyJumpToPrompt === 'function') w.livelyJumpToPrompt(it.text);
+      } catch (e) { /* cross-frame 접근 실패(구버전 iframe 등) 시 셀 강조까지만 */ }
+    }
+    search.addEventListener('input', draw);
+  }
+  document.getElementById('btn-qsearch').onclick = openGridPrompts;
 
   // ── 세션 간 포커스 이동 — Ctrl+Shift+→(다음)/Ctrl+Shift+←(이전). 시각적 배치 순서를 따른다. ──
   function setActive(i, focus) {

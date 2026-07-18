@@ -951,7 +951,7 @@ function seekPromptInApp(needles) {
   const wheel = (btn, k) => { let s = ''; for (let i = 0; i < k; i++) s += '\x1b[<' + btn + ';' + colC + ';' + rowC + 'M'; sendInput(s); };
   const visible = () => { try { const b = term.buffer.active; return findRowIn(b.baseY, term.rows, needles); } catch (_) { return -1; } };
   // WAIT 는 재그림 왕복(send→tmux→%output→렌더) 여유 — 원격 노드 세션 RTT 포함(autosend 의 관찰과 동일 계열).
-  const BATCH = 6, WAIT = 110, MAX_BATCH = 600; // ≈3600틱 상한 — 그 안에 못 찾으면 포기(사용자는 언제든 키로 중단)
+  const BATCH = 6, WAIT = 110, MAX_BATCH = 900; // ≈5400틱 상한 — 그 안에 못 찾으면 포기(사용자는 언제든 키로 중단)
   let unchanged = 0, last = '';
   const finish = (foundRow) => {
     if (foundRow >= 0) { if (promptSeek === seek) promptSeek = null; flashRow(foundRow); return; }
@@ -967,7 +967,7 @@ function seekPromptInApp(needles) {
     if (seek.stop) return;
     const y = visible();
     if (y >= 0) { finish(y); return; }
-    if (iter >= MAX_BATCH || unchanged >= 5) { finish(-1); return; } // ≈550ms 무변화 = 맨 위 도달(또는 앱 무응답)
+    if (iter >= MAX_BATCH || unchanged >= 8) { finish(-1); return; } // ≈880ms 무변화 = 맨 위 도달(또는 앱 무응답) — 스트리밍 중 조기 포기 방지 여유(#762)
     wheel(64, BATCH); seek.ticks += BATCH;
     setTimeout(() => {
       if (seek.stop) return;
@@ -1001,6 +1001,9 @@ function jumpToPrompt(text) {
   }
   seekPromptInApp(needles);
 }
+// 그리드(부모 프레임)의 통합검색이 '이 세션에서 물어본 질문'을 찾았을 때, 그 위치로 이동을 트리거한다.
+//  같은 origin 이라 부모(terminal-grid.html)가 이 iframe 의 window.livelyJumpToPrompt(text) 를 직접 호출한다.
+window.livelyJumpToPrompt = function (text) { try { jumpToPrompt(String(text || '')); } catch (_) { /* noop */ } };
 // '내 질문' 팝업 — #762(목록·검색, pop-help 셸)에 #967(클릭 = 그 질문 위치로 이동)을 얹었다.
 //  복사는 항목의 '복사' 버튼(명시적 클릭)으로만 — 위 클립보드 불변식과 일관.
 function openMyPrompts() {
