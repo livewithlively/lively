@@ -65,7 +65,7 @@ import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; //
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
 import { connectors } from "../connectors/index.js";
 import type { ConnectorUser } from "../connectors/types.js";
-import { resetConnectorConfigCache } from "../connectors/config.js";
+import { resetConnectorConfigCache, CONNECTOR_SPECS } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
@@ -1106,7 +1106,7 @@ export const deliveryCapabilities: Capability[] = [
       host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
     }),
 
-  restOnly("org_token_revoke", "접속 열쇠 해제",
+  restOnly("org_token_revoke", "접속 토큰 해제",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -1851,7 +1851,7 @@ export const deliveryCapabilities: Capability[] = [
 
       let users: ConnectorUser[];
       try { users = await conn.listUsers(); }
-      catch (e) { return { system, supported: true, error: `${system} 사용자 목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
+      catch (e) { return { system, supported: true, error: `${CONNECTOR_SPECS[system]?.label ?? system} 사용자 목록을 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
 
       const members = await listMembers();
       // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.

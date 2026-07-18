@@ -7070,3 +7070,146 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
   .md-axes-fnode { max-width: none; }
   .md-axes-arrow { transform: rotate(90deg); }
 }
+
+/* ── #853 가이드 도식 프리미티브 — :::fig(라벨 화살표 도식) · :::wire(화면 축소 모형) ──
+   결: .md-flow(칩)·.md-axes(노드 카드)와 같은 토큰. 화살표 색은 도메인맵 범례(--dmx-*)와 동일 의미. */
+.md-fig { margin: 14px 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.md-fig-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.md-fig-box { display: inline-flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0;
+  padding: 8px 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(21,35,59,.04); }
+.md-fig-nm { font-size: 13.5px; font-weight: 700; color: var(--ink); line-height: 1.4; }
+.md-fig-sub { font-size: 11.5px; color: var(--muted, #6b7a90); line-height: 1.45; }
+.md-fig-ar { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  min-width: 46px; flex: 0 1 auto; padding: 0 2px; align-self: center; }
+.md-fig-arlab { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.35; text-align: center; max-width: 180px; }
+.md-fig-arline { display: inline-flex; align-items: center; width: 100%; min-width: 38px; height: 0;
+  border-top: 2px solid var(--muted-2, #a6b2c8); position: relative; }
+.md-fig-arhead { position: absolute; right: -3px; top: -0.72em; font-size: 13px; font-weight: 800; color: var(--muted-2, #a6b2c8); }
+/* 화살표 의미색 — 도메인맵 범례와 동일(ok=일치·긍정 파랑 / viol=빨강 / should=주황 점선 / pend=회색 점선 / x=차단) */
+.md-fig-ar.is-ok .md-fig-arline { border-top-color: var(--blue); } .md-fig-ar.is-ok .md-fig-arhead { color: var(--blue); }
+.md-fig-ar.is-viol .md-fig-arline { border-top-color: #b0503f; } .md-fig-ar.is-viol .md-fig-arhead { color: #b0503f; }
+.md-fig-ar.is-should .md-fig-arline { border-top-style: dashed; border-top-color: #c2822f; } .md-fig-ar.is-should .md-fig-arhead { color: #c2822f; }
+.md-fig-ar.is-pend .md-fig-arline { border-top-style: dashed; } 
+.md-fig-ar.is-x .md-fig-arline { border-top-style: dashed; border-top-color: #b0503f; }
+.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; font-size: 12px; top: -0.8em; }
+.md-fig-cap { font-size: 12px; color: var(--muted, #6b7a90); margin-top: 2px; }
+/* fan — 소스 스택 → 공통 화살표 → 타깃 하나 */
+.md-fig-fan { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.md-fig-fansrcs { display: flex; flex-direction: column; gap: 6px; flex: 0 1 auto; min-width: 0; }
+.md-fig-fan > .md-fig-box { border-top: 3px solid var(--blue); background: color-mix(in srgb, var(--blue) 4%, var(--bg));
+  padding: 14px 18px; }
+.md-fig-fan .md-fig-ar { min-width: 64px; }
+@media (max-width: 700px) { .md-fig-row, .md-fig-fan { flex-direction: column; align-items: stretch; }
+  .md-fig-ar { transform: rotate(90deg); min-height: 34px; } }
+
+.md-wire { margin: 14px 0 16px; padding: 12px; border: 1px dashed var(--line); border-radius: 12px;
+  background: var(--bg-note, #f7f9fc); display: flex; flex-direction: column; gap: 8px; }
+.md-wire-row { display: flex; gap: 8px; align-items: stretch; }
+.md-wire-row.is-cols > .md-wire-box { flex: 1 1 0; min-width: 0; }
+.md-wire-box { border: 1px solid var(--line); border-radius: 9px; background: var(--bg); padding: 8px 11px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.md-wire-nm { font-size: 12.5px; font-weight: 700; color: var(--ink); line-height: 1.4; }
+.md-wire-sub { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.4; }
+.md-wire-box.is-hl { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent); }
+.md-wire-box > .md-wire-row { margin-top: 2px; }
+.md-wire > .md-fig-cap { margin: 0; }
+@media (max-width: 700px) { .md-wire-row.is-cols { flex-direction: column; } }
+
+/* ── #853 웨이브1 UI 수정 CSS (findings 기반 — 각 스니펫 주석에 finding 번호) ── */
+/* fix: 10 프로젝트 체험 CTA 강조 — btn-lg 급 확대 + 하단 중앙 + '약 3분·ESC 중단' 보조 문구 */
+.step-cta.step-cta-center { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.btn.btn-lg { padding: 12px 28px; font-size: 16px; }
+.step-cta .step-cta-hint { font-size: 12px; color: var(--muted, #7a8699); }
+
+/* fix: 16 인라인 링크 시각 구분 — .ob-banner-sub/.guide-lead 안 앵커가 본문과 같은 색·밑줄 없음 → 밑줄로 구분(코드 변경 불요, 기존 마크업 그대로) */
+.ob-banner-sub a, .guide-lead a { text-decoration: underline; text-underline-offset: 2px; }
+
+/* fix: 21 미선택 모드 카드 라디오 가시성 + hover 어포던스 (기존 .mode-card-radio 규칙(styles.css:1023) 뒤에 배치) */
+.mode-card-radio { border-color: #AEB6C2; }
+.mode-card:hover .mode-card-radio { border-color: var(--blue); }
+
+/* fix: 30 docs-quickstart 탭 3중 테두리 축소 — 내부 흰 패널의 테두리·둥근 모서리 제거, 탭 줄 아래 1px 구분선만 (기존 .md-tabs-body 규칙(styles.css:6874) 뒤에 배치) */
+.md-tabs-body { background: transparent; border: 0; border-radius: 0; padding: 14px 8px 6px; }
+.md-tabs-bar { border-bottom: 1px solid var(--line-net); }
+
+/* fix: 105 (review.ts #5) — 게이트 카드 통계 줄을 주의색 인포 스트립으로 승격(13px·건수 굵게, 상태문 바로 아래 배치) */
+.rq-gate-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 8px 12px; font-size: 13px; color: #6b4e00; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; }
+.rq-gate-note b { font-weight: 700; }
+
+/* fix: 108 (review.ts #8) — 게이트 꺼짐 시 드롭다운 라벨 흐림 + '게이트를 켜면 아래 선택이 적용됩니다' 캡션 */
+.rq-gate-opts.is-off .rq-opt-label { opacity: .45; }
+.rq-gate-caption { margin: 10px 0 0; font-size: 12px; color: var(--ink-sub); }
+
+/* fix: 109 (review.ts #9) — 지식 검토 정책 인트로 줄 길이 제한(2문단 분리와 세트) */
+.rq-intro { max-width: 78ch; }
+
+/* fix: 43 learn-overview '할 수 있는 것' 카드 그리드 — 행 높이를 내용 높이에 맞춤(오른쪽 카드 하단 빈 공간 제거) */
+.docs-featgrid { align-items: start; }
+
+/* fix: 20 커넥터 폼 비밀 입력창 전폭 — .field 안 text 입력(styles.css:662)과 동일 폭으로 통일, placeholder 잘림 해소(다른 커넥터 비밀 필드 공통 적용) */
+.field input[type="password"] { width: 100%; }
+
+/* fix: 37 팀 미선택 빈 상태 문구를 오른쪽 컬럼 수직·수평 중앙 정렬(admin.ts 에서 빈 상태 분기에만 admin-col-center 클래스 부착) */
+.admin-col-center { display: flex; align-items: center; justify-content: center; min-height: 100%; }
+.admin-col-center > .admin-hint { color: var(--ink-sub); text-align: center; }
+
+/* fix: 42 카테고리 행 오너 팀 드롭다운을 행 오른쪽(수정·삭제 앞) 한 열로 정렬 — 행마다 제각각이던 시작 위치 통일 */
+.wikicat-owner { margin-left: auto; }
+
+/* fix: 49 세션 주입 섹션 행(inj-piece)의 ▲▼·편집·삭제 4버튼이 항상 한 줄 유지 — 대신 설명 컬럼(inj-piece-body, flex:1 min-width:0)이 줄바꿈 */
+.inj-piece > .admin-actions { flex-shrink: 0; flex-wrap: nowrap; }
+
+/* fix: 51 PostToolUse 3개 필드의 저장 버튼을 자기 textarea 에 바짝 붙이고(우측 정렬) 필드 사이 간격은 키워 시각적 귀속 명확화 */
+.inj-moment .field { margin: 0 0 22px; }
+.inj-moment .field .admin-actions { margin: 4px 0 0; justify-content: flex-end; }
+
+/* note: finding 5/22/38 용어 통일에 따라 web/docs-content.ts 의 교차 참조 11곳도 '접속 열쇠'→'접속 토큰'으로 일괄 변경(조사 와→과, 를→을 보정 포함, 코드 주석은 유지). finding 40 의 위험 톤은 기존 .btn-text-danger(styles.css:1540)를 재사용해 추가 CSS 불요. */
+
+/* fix: 66 구성원 카드 이메일 잘림 — 카드 최소폭 확대(열 수 자연 감소, 전체 이메일은 title 호버로도 확인) */
+.admin-sublist-row .member-row { flex-basis: 250px; min-width: 230px; }
+
+/* fix: 71 좌측 목록 내부 스크롤 표시 — 마지막 행 잘림이 '목록 끝'으로 오해되지 않게 스크롤바 상시 노출 */
+.admin-two-cols .admin-sublist { scrollbar-width: thin; }
+.admin-two-cols .admin-sublist::-webkit-scrollbar { width: 6px; }
+.admin-two-cols .admin-sublist::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+/* fix: 94 레포 '삭제'(hard delete) 버튼 danger 톤 + '폐기'와 분리 간격 */
+.repo-del-btn { color: var(--danger, #D6453C); margin-left: 10px; }
+.repo-del-btn:hover { background: var(--bg-danger, #FDECEC); border-color: var(--danger, #D6453C); color: var(--danger, #D6453C); }
+
+/* fix: 102 btn-danger disabled 시 채도 낮춰 활성 버튼처럼 보이지 않게 (미설정 시 테스트/해제는 렌더 자체를 생략하도록 코드도 수정) */
+.btn-danger:disabled { background: var(--line); border-color: var(--line); color: var(--muted-2, #888); cursor: default; }
+
+/* fix: 96 용어집 등 docs 표 안 인라인 코드 칩(.env) — 상하 패딩 제거로 베이스라인·행간 정렬 */
+.docs-md table .md-code, .docs-body table .md-code { padding: 0 5px; line-height: inherit; vertical-align: baseline; }
+
+/* fix: 111 위변조 검증 버튼을 필터 바 우측 끝으로(같은 줄에 결과 표시) */
+.audit-bar .audit-verify { margin: 0 0 0 auto; }
+
+/* fix: 119·121 설정 폼 카드(AI 개인화·조직 정보) 읽기 줄 길이·입력폭 제한 */
+.admin-form-narrow p.admin-hint { max-width: 72ch; }
+.admin-form-narrow .field input[type="text"] { max-width: 560px; }
+
+/* fix: 132 임베딩 숫자 입력 3개 공통 고정 폭 */
+input.emb-num { width: 120px; flex: none; }
+
+/* fix: 135 좌측 목록 메타 줄 한 줄 말줄임(훅 id 가 단어 중간에서 꺾이지 않게) */
+.admin-sublist .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* fix: 138 행 액션의 '삭제' 버튼 danger 변형(붉은 텍스트 계열) */
+.btn-ghost-danger { color: var(--coral-text); }
+.btn-ghost-danger:hover { color: var(--coral); border-color: var(--coral); }
+
+/* fix: 151 로그 경로를 제목 아래 보조 행으로 — storage-calc 안 code 스타일 */
+.storage-calc code { font-size: 12px; color: var(--muted); word-break: break-all; background: none; padding: 0; }
+/* ── #853 axes 재설계 — 지식 ⇄ 프로젝트 양방향 흐름(필요/산출을 흐름 이름으로) ── */
+.md-axes-biflow { display: flex; flex-direction: column; gap: 10px; align-self: center; min-width: 150px; flex: 0 1 auto; }
+.md-axes-bi { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.md-axes-bilab { font-size: 11px; color: var(--muted, #6b7a90); white-space: nowrap; }
+.md-axes-biar { font-size: 18px; font-weight: 800; line-height: 1; }
+.md-axes-biar.to-r { color: var(--mint-deep, #0FA37E); }
+.md-axes-biar.to-l { color: var(--blue); }
+.md-axes-fnode.is-static { border-top: 3px solid var(--mint, #16C79A); }
+@media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }

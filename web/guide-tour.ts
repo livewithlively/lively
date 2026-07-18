@@ -298,7 +298,7 @@ const SCENES: any[] = [
           target: () => q('main .pjv-tasks-card .pjv-addrow-input') || q('main .pjv-tasks-card [data-tour="pd-add-task"]') || q('main .pjv-tasks-card'),
           scrollIntoView: true,
           advanceWhen: () => document.querySelectorAll('main .pjv-tasks-card .pjv-row-check:not(.pjv-group-check)').length >= 2,
-          title: '③ 태스크로 쪼개기',
+          title: '③ 태스크로 나누기',
           body: [
             el('p', { class: 'tour-p' }, b('[＋ 태스크]'), ' 를 누르고 이름 입력 후 Enter — ', b('두어 개'), ' 만들어 보세요.'),
             el('p', { class: 'tour-p' }, '입력 중 ', b('Tab'), ' 을 누르면 바로 위 태스크의 ', b('하위(서브태스크)'), ' 로 들어가요. 행을 더블클릭해도 하위를 추가할 수 있어요.'),

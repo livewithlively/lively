@@ -394,13 +394,87 @@ function renderContainer(type, rest, bodyLines) {
       });
       return box;
     }
+    case 'fig': {
+      // 라벨 화살표 도식(#853) — 줄 = 체인 한 행, 토큰 구분 '|': 박스('제목 ~ 부제') 또는 화살표('-> 라벨').
+      //  화살표 의미색(도메인맵 범례와 동일): ->ok 파랑 실선(일치·긍정) · ->viol 빨강 실선 · ->should 주황 점선
+      //  · ->pend 회색 점선 · ->x 차단(✕). kind=fan 이면 마지막 줄 '=> 타깃 ~ 부제 ~ 공통 화살표 라벨'로
+      //  위 줄들(소스 박스)이 전부 타깃 하나로 모인다. 캡션은 요약 텍스트(':::fig 캡션') 또는 caption= 속성.
+      const figBox = (t: string) => {
+        const [nm, sub] = t.split('~').map((s) => s.trim());
+        const b0 = el('span', { class: 'md-fig-box' }, el('span', { class: 'md-fig-nm' }, ...renderInline(nm || '')));
+        if (sub) b0.append(el('span', { class: 'md-fig-sub' }, ...renderInline(sub)));
+        return b0;
+      };
+      const figArrow = (t: string) => {
+        const m = /^->([a-z]*)\s*(.*)$/.exec(t.trim());
+        const ak = (m && m[1]) || '';
+        const lab = (m && m[2]) || '';
+        const ar = el('span', { class: 'md-fig-ar' + (ak ? ' is-' + ak : '') });
+        if (lab) ar.append(el('span', { class: 'md-fig-arlab' }, ...renderInline(lab)));
+        ar.append(el('span', { class: 'md-fig-arline', 'aria-hidden': 'true' },
+          el('span', { class: 'md-fig-arhead', text: ak === 'x' ? '✕' : '▸' })));
+        return ar;
+      };
+      const figRows = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::');
+      const fig = el('figure', { class: 'md-fig' });
+      if (attrs.kind === 'fan') {
+        const fm = /^=>\s*(.*)$/.exec(figRows[figRows.length - 1] || '');
+        const [tn, tsub, tlab] = ((fm && fm[1]) || '').split('~').map((s) => s.trim());
+        const fanAr = el('span', { class: 'md-fig-ar is-fan' });
+        if (tlab) fanAr.append(el('span', { class: 'md-fig-arlab' }, ...renderInline(tlab)));
+        fanAr.append(el('span', { class: 'md-fig-arline', 'aria-hidden': 'true' }, el('span', { class: 'md-fig-arhead', text: '▸' })));
+        fig.append(el('div', { class: 'md-fig-fan' },
+          el('div', { class: 'md-fig-fansrcs' }, ...figRows.slice(0, -1).map((r) => figBox(r))),
+          fanAr,
+          figBox((tn || '') + (tsub ? ' ~ ' + tsub : ''))));
+      } else {
+        for (const r of figRows) {
+          const row = el('div', { class: 'md-fig-row' });
+          for (const tok of r.split('|').map((s) => s.trim()).filter(Boolean)) row.append(tok.startsWith('->') ? figArrow(tok) : figBox(tok));
+          fig.append(row);
+        }
+      }
+      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-fig-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
+      return fig;
+    }
+    case 'wire': {
+      // 미니 와이어프레임(#853) — 화면 배치 축소 모형. 줄 = 가로 행, '|' = 그 행의 컬럼 박스, '~' = 박스 부제,
+      //  2칸 들여쓰기 = 직전 박스 '안'에 중첩, 'hl:' 접두 = 파랑 강조. 캡션은 요약 텍스트 또는 caption=.
+      const wRows = bodyLines.filter((l) => l.trim() && l.trim() !== ':::');
+      const frame = el('figure', { class: 'md-wire' });
+      const wBox = (txt: string) => {
+        let t = txt.trim();
+        const hl = t.startsWith('hl:');
+        if (hl) t = t.slice(3).trim();
+        const [nm, sub] = t.split('~').map((s) => s.trim());
+        const b0 = el('div', { class: 'md-wire-box' + (hl ? ' is-hl' : '') },
+          el('div', { class: 'md-wire-nm' }, ...renderInline(nm || '')));
+        if (sub) b0.append(el('div', { class: 'md-wire-sub' }, ...renderInline(sub)));
+        return b0;
+      };
+      const stack: any[] = [frame];
+      const levels: number[] = [-1];
+      for (const raw of wRows) {
+        const indent = (/^\s*/.exec(raw) || [''])[0].length;
+        while (levels.length > 1 && indent <= levels[levels.length - 1]) { stack.pop(); levels.pop(); }
+        const cols = raw.trim().split('|').map((s) => s.trim()).filter(Boolean);
+        const row = el('div', { class: 'md-wire-row' + (cols.length > 1 ? ' is-cols' : '') });
+        const boxes = cols.map(wBox);
+        row.append(...boxes);
+        stack[stack.length - 1].append(row);
+        stack.push(boxes[boxes.length - 1]);   // 다음 줄이 더 들여쓰면 마지막 박스 안으로
+        levels.push(indent);
+      }
+      if (attrs.caption || summary) frame.append(el('figcaption', { class: 'md-fig-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
+      return frame;
+    }
     case 'axes': {
-      // 맥락의 세 축 — 카테고리(분류)를 정점으로, 아래를 '여러 필요 지식 → 프로젝트 → 여러 산출 지식' 흐름으로 편다.
-      //  지식(정적)은 흐름 양끝(스택 카드 = 여러 개가 들고난다), 프로젝트(동적)는 가운데. 프로젝트 하나에 여러 지식이
-      //  들어가 일하며 여러 지식이 새로 나온다는 걸 시각화(#762). 본문 3줄 `이모지 | 이름 | 부제`.
+      // 맥락의 세 축(#762, #853 재설계) — 본문의 3축(카테고리·지식·프로젝트)과 도식을 일치시킨다:
+      //  카테고리(정점) 아래 [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧
+      //  '필요 지식(꺼내 씀)'과 '산출 지식(새로 남김)' — 필요/산출이 별도 요소가 아니라 흐름의 이름임을 그림이 말한다.
+      //  본문 3줄 `이모지 | 이름 | 부제`(카테고리/지식/프로젝트 순, 기존 원고 호환).
       const rows = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::').map((l) => l.split('|').map((s) => s.trim()));
       const cat = rows[0] || [], kn = rows[1] || [], pj = rows[2] || [];
-      const knIc = kn[0] || '📄', pjIc = pj[0] || '🔄';
       const apex = el('div', { class: 'md-axes-apex' },
         el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: cat[0] || '🗂' }),
         el('span', { class: 'md-axes-nm' }, ...renderInline(cat[1] || '카테고리')),
@@ -409,16 +483,20 @@ function renderContainer(type, rest, bodyLines) {
         el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: ic }),
         el('span', { class: 'md-axes-nm' }, ...renderInline(nm)),
         el('span', { class: 'md-axes-sub' }, ...renderInline(sub)));
-      const arrow = () => el('span', { class: 'md-axes-arrow', 'aria-hidden': 'true', text: '→' });
+      const biflow = el('div', { class: 'md-axes-biflow' },
+        el('span', { class: 'md-axes-bi' },
+          el('span', { class: 'md-axes-bilab', text: '필요 지식으로 꺼내 씀' }),
+          el('span', { class: 'md-axes-biar to-r', 'aria-hidden': 'true', text: '⟶' })),
+        el('span', { class: 'md-axes-bi' },
+          el('span', { class: 'md-axes-biar to-l', 'aria-hidden': 'true', text: '⟵' }),
+          el('span', { class: 'md-axes-bilab', text: '산출 지식으로 새로 남김' })));
       return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 세 축' },
         apex,
         el('span', { class: 'md-axes-stem', 'aria-hidden': 'true' }),
         el('div', { class: 'md-axes-flow' },
-          fnode(knIc, '필요 지식', '여러 개를 먼저 쥐고 시작 · 선택', 'is-req is-stack'),
-          arrow(),
-          fnode(pjIc, pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-dynamic'),
-          arrow(),
-          fnode(knIc, '산출 지식', '일이 새로 남기는 지식들 · WIKI에 쌓임', 'is-prod is-stack')));
+          fnode(kn[0] || '📄', kn[1] || '지식', kn[2] || '정적 · 이미 정해진 것', 'is-static is-stack'),
+          biflow,
+          fnode(pj[0] || '🔄', pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-dynamic')));
     }
     case 'synced': {
       const box = el('div', { class: 'md-synced' });

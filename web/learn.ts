@@ -278,8 +278,8 @@ function heroCard() {
   return el('div', { class: 'card guide-hero' },
     el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }),
     el('h2', { class: 'guide-hero-title' },
-      'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'),
-    el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
+      'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 맥락 저장소' }), '예요.'),
+    el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 범용 지식은 풍부하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
     // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
     el('div', { class: 'guide-cycle' },
       el('div', { class: 'guide-flow' },
@@ -287,17 +287,17 @@ function heroCard() {
         flowArrow(),
         flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'),
         flowArrow(),
-        flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'),
+        flowStep('zap', '바로 일 시작', 'AI가 회사 상황을 아는 상태로, 별도 설명 없이 바로 일을 시작합니다.'),
         flowArrow(),
-        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')),
+        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 기록합니다.')),
       el('div', { class: 'guide-loop' },
         el('span', { class: 'guide-loop-label' },
           el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }),
           el('b', { text: '남긴 지식은 다시 [모아두기]로' }),
-          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 더 정확해져요' })))),
+          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 받는 맥락이 정확해집니다' })))),
     el('div', { class: 'guide-remember' },
-      el('span', { class: 'guide-remember-key', text: '딱 한 줄' }),
-      el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
+      el('span', { class: 'guide-remember-key', text: '핵심 한 줄' }),
+      el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사의 모든 AI 세션이 더 정확한 맥락을 받고 시작합니다.' })));
 }
 
 // 작동 3단계 — 아이콘 + 제목 + 한 줄.
@@ -413,33 +413,33 @@ function kindsCard() {
       el('span', { class: 'kn-ex-meta-sep', text: '·' }),
       chip('kn-inject-recalled', '검색'),
       chip('kn-prov-authored', '저작')),
-    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 꼬리표 두 개(주입·출처)가 붙어요.' }));
+    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 속성 두 개(주입·출처)가 붙습니다.' }));
 
   // 축 1 — 주입(언제 AI에게 전달되나)
   const injAxis = el('div', { class: 'kn-axis' },
     el('div', { class: 'kn-axis-q', text: '주입 — 언제 AI에게 전달되나?' }),
     el('p', { class: 'kn-axis-sub', text: '이 지식이 AI 대화에 들어가는 시점.' }),
     knOpt(chip('kn-inject-always', '항상 주입'), '회사 규칙·페르소나처럼 모든 대화에 늘 자동으로 들어가요.', '추측으로 답하지 않기 — 근거 없으면 “잘 모르겠다”고 말한다'),
-    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 가만히 있다가, 관련된 일을 할 때 AI가 키워드로 찾아 꺼내 봐요.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
+    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 주입되지 않고, 관련된 일을 할 때 AI가 검색해 읽습니다.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
 
   // 축 2 — 출처(어디서 왔나)
   const provAxis = el('div', { class: 'kn-axis' },
     el('div', { class: 'kn-axis-q', text: '출처 — 어디서 왔나?' }),
     el('p', { class: 'kn-axis-sub', text: '이 지식의 원본이 어디 있나.' }),
     knOpt(chip('kn-prov-authored', '저작'), '이 안에서 직접 써넣은 지식. 원본이 여기 있어요.', '우리가 정리한 결정·런북·조사'),
-    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 같은 바깥 도구의 내용을 비춰 온 것. 원본·수정은 바깥에서 해요.', '미러된 노션 문서 · 클릭업 과업'));
+    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 등 외부 도구에서 동기화해 가져온 사본입니다. 원본 편집은 외부 도구에서 합니다.', '미러된 노션 문서 · 클릭업 과업'));
 
   return el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '조금 더: WIKI에 쌓이는 ‘지식 한 덩어리’란?' })),
     el('p', { class: 'guide-lead', text: 'WIKI에 담기는 지식은 제목과 내용으로 된 짧은 글 한 장이에요 — 메모 한 장, 문서 한 페이지 같은 거죠. 회사가 오래 기억해야 할 사실·결정·규칙·설명서가 한 덩어리씩 쌓입니다.' }),
     example,
-    el('p', { class: 'guide-kinds-q', text: '꼬리표 두 개는 각각 이런 질문에 답해요:' }),
+    el('p', { class: 'guide-kinds-q', text: '두 속성은 각각 이런 질문에 답합니다:' }),
     el('div', { class: 'kn-axis-grid' }, injAxis, provAxis),
     el('div', { class: 'guide-note' },
       el('span', { class: 'kn-chip kn-pin', text: '📌 인덱스' }),
-      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 깔려 모두가 바로 발견해요.')),
+      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 포함되어 모두가 바로 발견해요.')),
     el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '‘지금 진행 중인 ', el('b', { text: '할 일·과업' }),
-      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다뤄요 — WIKI는 ‘오래 남는 기록’만 담습니다.'),
+      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다룹니다 — WIKI에는 ‘오래 남는 기록’만 담습니다.'),
     el('p', { class: 'admin-hint', style: 'margin-top:6px' }, '실제 지식들은 ',
       el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), '에서 볼 수 있어요.'));
 }
@@ -457,11 +457,11 @@ function knOpt(chipEl, desc, ex) {
 function projectKnowledgeCard() {
   return el('div', { class: 'card', id: 'learn-required' },
     el('div', { class: 'card-head' }, el('h2', { text: '프로젝트에 ‘필요지식’을 연결하면 뭐가 좋나요' })),
-    el('p', { class: 'guide-lead', text: 'WIKI에 쌓인 지식은 [프로젝트]에서 ‘필요지식’으로 연결할 수 있어요. 어떤 일을 시작하기 전에 “이건 먼저 알아야 한다”는 지식을 골라 붙여두면, 그 프로젝트를 맡는 AI가 그 내용을 일일이 찾을 필요 없이 처음부터 손에 쥔 채로 일을 시작합니다.' }),
+    el('p', { class: 'guide-lead', text: 'WIKI에 쌓인 지식은 [프로젝트]에서 ‘필요지식’으로 연결할 수 있어요. 어떤 일을 시작하기 전에 “이건 먼저 알아야 한다”는 지식을 골라 붙여두면, 그 프로젝트를 맡는 AI가 그 내용을 검색으로 찾을 필요 없이 처음부터 아는 상태로 일을 시작합니다.' }),
     el('div', { class: 'guide-flow' },
       flowStep('book-open', '지식 고르기', '관련된 결정·규칙·자료를 그 프로젝트의 ‘필요지식’으로 연결해요.'),
       flowArrow(),
-      flowStep('send', '자동으로 손에', '그 프로젝트를 맡은 AI에게 그 지식이 처음부터 함께 전달돼요.'),
+      flowStep('send', '자동으로 전달', '그 프로젝트를 맡은 AI에게 그 지식이 처음부터 함께 전달돼요.'),
       flowArrow(),
       flowStep('zap', '헤매지 않고 시작', '배경을 다시 묻거나 모른 채 추측하지 않고, 팀의 결정대로 정확히 일해요.')),
     el('div', { class: 'guide-remember' },
@@ -509,10 +509,11 @@ async function renderLearnTour(view) {
 
   const intro = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '눌러보며 익혀요' })),
-    el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 처음부터 쭉 볼 수도 있고, 아래에서 원하는 섹션만 골라 볼 수도 있어요. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
-    isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 세 섹션을 모두 봤어요 — 언제든 다시 돌아도 좋아요.' }) : null,
+    el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 처음부터 쭉 볼 수도 있고, 아래에서 원하는 섹션만 골라 볼 수도 있어요. 언제든 화면 위 ✕ 버튼이나 ESC 키로 멈출 수 있어요.' }),
+    isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 세 섹션을 모두 봤어요 — 언제든 다시 볼 수 있어요.' }) : null,
     el('div', { class: 'step-cta' },
-      el('button', { class: 'btn btn-primary', text: '▶ 처음부터 쭉 보기 (프로젝트 → 도메인 맵 → WIKI, 약 3분)', onclick: () => startGuideTour() })));
+      el('button', { class: 'btn btn-primary', text: '▶ 처음부터 쭉 보기 (약 3분)', onclick: () => startGuideTour() })),
+    el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '프로젝트 → 도메인 맵 → WIKI 순서로 진행돼요.' }));
 
   // 섹션 한 줄(#780) — 골라 들어가는 게 주 동선이라 진입 버튼을 각 줄에 두고, 본 섹션은 ✓ 로 표시한다.
   //  pathStep 과 같은 시각 언어(번호·제목·설명). §0.5 채색 예산: 채운 파란 버튼은 위 '처음부터 쭉 보기' 하나뿐.
@@ -527,16 +528,17 @@ async function renderLearnTour(view) {
     el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })),
     el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }),
     el('div', { class: 'guide-path' },
-      courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'),
-      courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'),
+      courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 진행되는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 전달하는 \'필요지식\'.'),
+      courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 도메인 단위로 나뉘어 있는지, 하려던 것(should)과 실제(is)의 대조.'),
       courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
 
   const extra = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })),
-    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ',
-      el('a', { href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }), ' · 내 컴퓨터 설치는 ',
+    el('p', { class: 'admin-hint', text: 'AI 세션을 직접 만들어 첫 대화까지 해보는 실습 가이드는 별도로 있어요.' }),
+    el('div', { class: 'step-cta', style: 'margin-bottom:0' },
+      el('a', { class: 'btn btn-sm btn-ghost', href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }),
       // #762 '#/learn/install' 페이지 숨김 → 같은 설치 화면을 품은 '시작하기'(#/start)로 링크(복원 시 '#/learn/install'·'내 AI 세션 생성'으로 되돌리기).
-      el('a', { href: '#/start', text: '시작하기' }), ' 에서.'));
+      el('a', { class: 'btn btn-sm btn-ghost', href: '#/start', text: '내 컴퓨터에 설치하기 — 시작하기 →' })));
 
   docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
@@ -612,7 +614,7 @@ function modeCard(key, title, tag, audience, active, slot, data) {
 function webGuideNodes() {
   const callout = el('div', { class: 'card install-callout' },
     el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 설치하지 않습니다.' }),
-    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 준비돼 있어요. 브라우저만 있으면 바로 시작할 수 있습니다.' }));
+    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 실행되고, 회사 맥락·규칙도 거기에 이미 준비돼 있어요. 브라우저만 있으면 바로 시작할 수 있습니다.' }));
 
   // 따라하기 투어 — 홈(#/dashboard?tour=1)으로 이동하면서 스포트라이트를 켠다(main.ts → startDashboardSessionTour).
   //  눌러야 할 곳만 밝게 남기고 나머지를 덮은 뒤, 실제 버튼을 직접 누르며 한 단계씩 진행한다.
@@ -622,7 +624,7 @@ function webGuideNodes() {
     text: '홈에서 따라하며 만들기 →',
   });
   const newWinBtn = el('a', {
-    class: 'btn btn-ghost btn-sm', href: '#/dashboard?tour=1', target: '_blank', rel: 'noopener',
+    class: 'btn btn-ghost', href: '#/dashboard?tour=1', target: '_blank', rel: 'noopener',
     text: '새 창으로 열기 ↗',
   });
 
@@ -634,13 +636,13 @@ function webGuideNodes() {
     el('div', { class: 'step-list' },
       installStep(1, '홈에서 [+ 새 세션] 누르기',
         el('p', { class: 'step-p' }, '홈 가운데 ', el('b', { text: '「내 AI 세션」' }), ' 카드에서 ',
-          el('b', { text: '[+ 새 세션]' }), ' 을 누르면 만들기 창이 홈 위에 바로 떠요.')),
+          el('b', { text: '[+ 새 세션]' }), ' 을 누르면 만들기 창이 홈 화면 위에 바로 열려요.')),
       installStep(2, '작업 폴더와 AI를 고르고 이름 정하기',
         el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }),
-          '), 함께 일할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
-        el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })),
-      installStep(3, '[생성하기] → 바로 일 시키기',
-        el('p', { class: 'step-p', text: '[생성하기]를 누르면 새 탭에 세션 창이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
+          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
+        el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]를 그대로 두면 됩니다.' })),
+      installStep(3, '[생성하기] → 바로 요청 입력하기',
+        el('p', { class: 'step-p', text: '[생성하기]를 누르면 새 탭에 세션 창이 열려요. 거기에 요청할 내용을 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
         el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어요. 다음에 홈의 「내 AI 세션」에서 [열기]로 이어서 쓰면 됩니다.' }))));
 
   return [callout, steps];

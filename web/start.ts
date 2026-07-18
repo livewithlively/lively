@@ -144,7 +144,7 @@ export async function renderStartMigrate(view: any) {
   const head = [
     docsEyebrow('start'),
     el('h1', { class: 'docs-title', text: '예전에 쓰던 AI 환경 가져오기' }),
-    el('p', { class: 'docs-lead', text: '이 일은 AI 가 합니다 — 웹에서는 할 수 없어요(내 컴퓨터의 파일을 웹이 읽을 수 없으니까요).' }),
+    el('p', { class: 'docs-lead', text: '가져오기는 내 컴퓨터의 AI 가 진행합니다 — 웹은 내 컴퓨터의 파일을 읽을 수 없어서, 이 화면에서는 방법만 안내해요.' }),
   ];
   docsShell(view, 'start', ...head,
     el('div', { class: 'guide-cards' },
@@ -153,19 +153,19 @@ export async function renderStartMigrate(view: any) {
         el('div', { class: 'ob-banner-row' },
           el('span', { class: 'ob-banner-title' }, el('b', { text: '먼저, 내 컴퓨터에 라이블리가 설치돼 있어야 해요.' })),
           el('a', { class: 'ob-banner-go', href: '#/start/setup', text: '설치하기 →' })),
-        el('p', { class: 'ob-banner-sub' }, '‘온보딩 도와줘’ 는 라이블리가 내 컴퓨터의 AI(Claude Code·Codex)에 심어 두는 도우미예요. 그래서 ',
-          el('a', { href: '#/start/setup', text: '내 컴퓨터에 설치' }), ' 를 먼저 마쳐야 아래 말이 통합니다. 아직이라면 설치부터 하세요.')),
+        el('p', { class: 'ob-banner-sub' }, '‘온보딩 도와줘’ 는 라이블리를 설치할 때 내 컴퓨터의 AI(Claude Code·Codex)에 함께 추가되는 기능이에요. 그래서 ',
+          el('a', { href: '#/start/setup', text: '내 컴퓨터에 설치' }), '를 먼저 마쳐야 이 명령이 동작합니다. 아직이라면 설치부터 하세요.')),
       el('div', { class: 'card docs-card' },
         el('div', { class: 'card-head' }, el('h2', { text: '설치했다면 — 내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' })),
         el('div', { class: 'md-prompt' }, el('p', { class: 'md-p', text: '온보딩 도와줘' })),
-        el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽기만 해서 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 건드리지 않습니다(복사만 하고 지우지 않습니다). 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })),
+        el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽어서 목록으로 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 수정하거나 삭제하지 않습니다 — 위키로 올릴 때도 복사만 합니다. 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })),
       el('div', { class: 'card docs-card' },
-        el('div', { class: 'card-head' }, el('h2', { text: '“예전 기억이 사라졌어요”' })),
-        el('p', { class: 'guide-lead', style: 'margin:0', text: '사라지지 않았습니다. AI 의 작업 메모는 폴더마다 따로 저장돼서, 다른 폴더에서 켜면 안 보일 뿐입니다. 위 도우미가 다른 폴더에 있던 것까지 찾아서 보여줍니다.' })),
+        el('div', { class: 'card-head' }, el('h2', { text: '“예전 작업 메모가 사라졌어요”' })),
+        el('p', { class: 'guide-lead', style: 'margin:0', text: '사라지지 않았습니다. AI 의 작업 메모는 폴더마다 따로 저장돼서, 다른 폴더에서 켜면 안 보일 뿐입니다. ‘온보딩 도와줘’ 를 실행하면 다른 폴더에 저장된 작업 메모까지 찾아서 보여줍니다.' })),
       el('div', { class: 'card docs-card' },
         el('div', { class: 'card-head' }, el('h2', { text: '웹에서 AI 세션을 쓰고 계신가요?' })),
         el('p', { class: 'guide-lead', style: 'margin:0 0 12px' }, el('a', { href: '#/dashboard', text: '내 AI 세션' }),
-          ' 으로 연 세션은 회사 서버에서 돌아갑니다 — 그래서 내 노트북에 있던 예전 환경을 볼 수 없습니다. 가져오시려면 내 컴퓨터에 설치한 뒤 거기서 도우미를 부르세요. 가져올 게 없다면 이 항목은 건너뛰셔도 됩니다.'),
+          '에서 연 세션은 회사 서버에서 실행됩니다 — 그래서 내 노트북에 있던 예전 환경을 읽을 수 없습니다. 가져오시려면 내 컴퓨터에 라이블리를 설치한 뒤, 거기서 ‘온보딩 도와줘’ 라고 입력하세요. 가져올 게 없다면 이 항목은 건너뛰셔도 됩니다.'),
         el('a', { class: 'btn btn-primary btn-sm', href: '#/start/setup', text: '내 컴퓨터에 설치하기 →' }))),
   );
 }
@@ -179,7 +179,7 @@ export async function renderStartProject(view: any) {
   const head = [
     docsEyebrow('start-project'),
     el('h1', { class: 'docs-title', text: '프로젝트 체험' }),
-    el('p', { class: 'docs-lead', text: '라이블리에서 일이 굴러가는 한 바퀴를 직접 돌려봅니다 — 프로젝트를 만들고, 지식을 붙이고, AI 세션을 열고, 태스크를 쪼개고, 여러 태스크를 한 번에 AI 에게 맡기는 것까지.' }),
+    el('p', { class: 'docs-lead', text: '라이블리의 기본 작업 흐름을 처음부터 끝까지 직접 해봅니다 — 프로젝트를 만들고, 지식을 연결하고, AI 세션을 열고, 태스크를 나누고, 여러 태스크를 한 번에 AI 에게 맡기는 것까지.' }),
   ];
   const stepRow = (num: string, title: string, desc: string) => el('div', { class: 'guide-path-step' },
     el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }),
@@ -190,14 +190,15 @@ export async function renderStartProject(view: any) {
     el('div', { class: 'guide-cards' },
       el('div', { class: 'card' },
         el('div', { class: 'card-head' }, el('h2', { text: '무엇을 해보나요' })),
-        el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 따라 합니다. 연습용 가짜가 아니라 진짜 프로젝트가 만들어져요 — 그대로 이어서 일해도 되고, 나중에 지워도 됩니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
+        el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 따라 합니다. 연습용 데모가 아니라 실제 프로젝트가 만들어져요 — 그대로 이어서 일해도 되고, 나중에 지워도 됩니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
         did ? el('p', { class: 'admin-hint', text: '✓ 해봤어요 — 언제든 다시 돌아도 좋아요.' }) : null,
         el('div', { class: 'guide-path' },
-          stepRow('1', '프로젝트 만들기', '보드에서 [＋ 프로젝트] — 이름 짓고 리스트를 골라 진짜 프로젝트를 하나 만듭니다.'),
-          stepRow('2', '지식 연결', '이 일에 필요한 회사 지식(WIKI)을 붙입니다 — AI 가 그걸 알고 시작해요.'),
-          stepRow('3', 'AI 세션 열기', '프로젝트 안에서 [＋ 새 세션] — 이 프로젝트 맥락을 다 아는 AI 작업 세션을 엽니다.'),
-          stepRow('4', '태스크 쪼개기', '[＋ 태스크]로 할 일을 나누고, Tab 으로 하위(서브태스크)까지 만들어 봅니다.'),
-          stepRow('5', '여러 태스크 한 번에 맡기기', '태스크 여러 개를 체크하고 [클로드로 실행] — 한 AI 세션에 묶어 통째로 맡깁니다.')),
-        el('div', { class: 'step-cta' },
-          el('button', { class: 'btn btn-primary', text: did ? '▶ 다시 해보기' : '▶ 따라하며 만들어보기', onclick: () => startGuideTour(['project-do']) })))));
+          stepRow('1', '프로젝트 만들기', '보드에서 [＋ 프로젝트] — 이름을 정하고 리스트를 골라 프로젝트를 하나 만듭니다.'),
+          stepRow('2', '지식 연결', '이 일에 필요한 회사 지식(WIKI)을 연결합니다 — 연결한 지식은 이 프로젝트에서 여는 AI 세션에 자동으로 전달돼요.'),
+          stepRow('3', 'AI 세션 열기', '프로젝트 안에서 [＋ 새 세션] — 프로젝트 본문과 연결된 지식을 자동으로 받은 AI 작업 세션을 엽니다.'),
+          stepRow('4', '태스크 나누기', '[＋ 태스크]로 할 일을 나누고, Tab 으로 하위(서브태스크)까지 만들어 봅니다.'),
+          stepRow('5', '여러 태스크 한 번에 맡기기', '태스크 여러 개를 체크하고 [클로드로 실행] — 선택한 태스크 전부를 한 AI 세션에 묶어 한 번에 맡깁니다.')),
+        el('div', { class: 'step-cta step-cta-center' },
+          el('button', { class: 'btn btn-primary btn-lg', text: did ? '▶ 다시 해보기' : '▶ 따라하며 만들어보기', onclick: () => startGuideTour(['project-do']) }),
+          el('span', { class: 'step-cta-hint', text: '약 3분 · 언제든 ESC 로 중단' })))));
 }
