@@ -10,7 +10,7 @@
 import { api, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
-import { wkTick } from './wiki-ui.js';
+import { wkAurora, wkTick } from './wiki-ui.js'; // 오로라 커버(#764v2) — WIKI 홈 카테고리 카드와 같은 문법
 import { diffView, lineDiff, rqEnsureStyles } from './review.js';
 const TYPE_LABEL = {
     decision: '결정', concept: '개념', 'how-to': '런북', reference: '참조', research: '리서치', entity: '엔티티',
@@ -22,26 +22,23 @@ function wk2Styles() {
         return;
     document.head.appendChild(el('style', { id: 'wk2-styles', text: `
 .wk2-main{padding:20px 28px 40px;min-width:0}
+.wk2-board{max-width:1180px;margin:0 auto}
 .wk2-hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}
 .wk2-hero h2{font-size:19px;font-weight:800;margin:0}
 .wk2-hero .sum{font-size:13px;color:var(--ink-sub)}
 .wk2-hero .sum b{font-family:ui-monospace,monospace;color:var(--ink);font-variant-numeric:tabular-nums}
 .wk2-hero .sp{flex:1}
 .wk2-gateoff{margin:-6px 0 14px;font-size:12.5px;color:var(--ink-sub)}
-.wk2-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
-.wk2-grid.single{grid-template-columns:minmax(340px,720px)}
+.wk2-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}
+.wk2-grid.single{grid-template-columns:minmax(430px,760px)}
 .wk2-zone{background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
-.wk2-cover{position:relative;height:44px;overflow:hidden}
-.wk2-cover .wm{position:absolute;right:10px;top:-13px;font-size:58px;font-weight:800;opacity:.13;color:#0B1B3B;pointer-events:none}
-.wk2-cover.c-product{background:linear-gradient(105deg,var(--bg-punch,#E3ECFF),var(--bg-success,#DDF3EA) 70%)}
-.wk2-cover.c-business{background:linear-gradient(105deg,var(--bg-note,#FDEECF),var(--bg-tint,#FBE3C4) 70%)}
-.wk2-cover.c-system{background:linear-gradient(105deg,var(--bg-tint,#EEE9FB),var(--bg-punch,#E4E0F5) 70%)}
-.wk2-zh{display:flex;align-items:center;gap:9px;padding:11px 16px 2px}
-.wk2-zh .nm{font-size:15px;font-weight:800;color:var(--ink)}
-.wk2-zh .own{font-size:10.5px;color:var(--ink-sub);border:1px solid var(--line);border-radius:999px;padding:0 7px}
-.wk2-zh .sp{flex:1}
-.wk2-zh .m{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted-2)}
-.wk2-todo{margin:10px 14px 0;border:1px solid var(--line-note);background:var(--bg-note);border-radius:10px;padding:11px 13px}
+.wk2-zhead{padding:0 16px 0}
+.wk2-zh-row{display:flex;align-items:baseline;gap:9px;margin-top:8px;min-width:0}
+.wk2-zh-row .nm{font-size:15.5px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wk2-zh-row .own{font-size:10.5px;color:var(--ink-sub);border:1px solid var(--line);border-radius:999px;padding:0 7px;flex:none}
+.wk2-zh-row .sp{flex:1}
+.wk2-zh-row .m{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted-2);white-space:nowrap}
+.wk2-todo{margin:0 14px;border:1px solid var(--line-note);background:var(--bg-note);border-radius:10px;padding:11px 13px}
 .wk2-todo .lb{font-size:10.5px;font-weight:800;letter-spacing:.05em;color:var(--ink-note);margin-bottom:5px}
 .wk2-todo .q{font-size:13.5px;font-weight:650;color:var(--ink);line-height:1.5}
 .wk2-todo .qm{font-size:11.5px;color:var(--ink-sub);margin-top:3px}
@@ -468,8 +465,10 @@ export async function renderWiki2(view, sub, params) {
             const first = waiting[0] || applied[0] || null;
             const rows = feed.filter((r) => String(r.category_key || '') === key).slice(0, opts && opts.extended ? 8 : 3);
             const cn = canonN.get(key);
-            const cover = el('div', { class: 'wk2-cover c-' + (c.space || 'product') }, el('span', { class: 'wm', text: String(c.name || c.key).trim()[0] || '·' }));
-            const head = el('div', { class: 'wk2-zh' }, el('span', { class: 'nm', text: c.name || c.key }), mineKeys.includes(key) ? el('span', { class: 'own', text: '담당' }) : null, el('span', { class: 'sp' }), el('span', { class: 'm', text: (cn != null ? `정본 ${cn} · ` : '') + `이번 주 ${feed.filter((r) => String(r.category_key || '') === key).length}` }));
+            // 커버 = WIKI 홈 카테고리 카드와 동일 문법(#764v2 오로라 + 겹침 이니셜 타일) — 두 탭이 같은 얼굴.
+            const initial = (Array.from(String(c.name || c.key || '?').trim())[0] || '?').toUpperCase();
+            const cover = wkAurora(String(c.key || c.id), c.space, { cls: 'wk-ccard-cover', watermark: initial });
+            const head = el('div', { class: 'wk-ccard-body wk2-zhead' }, el('span', { class: 'wk-ccard-ic letter', 'aria-hidden': 'true', text: initial }), el('div', { class: 'wk2-zh-row' }, el('span', { class: 'nm', text: c.name || c.key }), mineKeys.includes(key) ? el('span', { class: 'own', text: '담당' }) : null, el('span', { class: 'sp' }), el('span', { class: 'm', text: (cn != null ? `정본 ${cn} · ` : '') + `이번 주 ${feed.filter((r) => String(r.category_key || '') === key).length}` })));
             let todo;
             if (first) {
                 const isAck = first.kind === 'edit' && first.mode === 'applied';
@@ -503,7 +502,7 @@ export async function renderWiki2(view, sub, params) {
             const today = feed.filter((r) => { const d = new Date(r.activity_at || r.updated_at); const n = new Date(); return d.toDateString() === n.toDateString(); });
             const histA = el('a', { href: '#', text: '전체 기록 →' });
             histA.onclick = (e) => { e.preventDefault(); f.cat = ''; location.hash = hashFor('history'); };
-            grid.append(el('div', { class: 'wk2-zone' }, el('div', { class: 'wk2-cover c-system' }, el('span', { class: 'wm', text: '외' })), el('div', { class: 'wk2-zh' }, el('span', { class: 'nm', text: '담당 외 대기' }), el('span', { class: 'sp' }), el('span', { class: 'm', text: outItems.length + '건' })), el('div', { class: 'wk2-todo' }, el('div', { class: 'lb', text: `다른 카테고리의 검토 대기 · ${outItems.length}` }), el('div', { class: 'q', text: first.note ? splitNote(first.note).sum : (first.kind === 'new' ? '신규 문서 제안' : '수정 제안') }), el('div', { class: 'qm' }, el('span', { text: `${first.title}${isAck ? ' — 이미 반영됨, 사후확인' : ''} · ${first.catName} · ` }), el('span', { class: 'm', text: `AI(${first.agent || first.who}) · ${relTime(first.at)}` })), el('div', { class: 'act' }, goBtn)), el('div', { class: 'wk2-fu' }, el('div', { class: 'lb', text: '조직 전체' }), el('div', { class: 'wk2-fur' }, el('span', { class: 'tx', text: `오늘 변화 ${today.length}건 · 미러 갱신 ${today.filter((r) => r.provenance === 'observed').length}건` }))), el('div', { class: 'wk2-zf' }, el('span', { class: 'sp' }), histA)));
+            grid.append(el('div', { class: 'wk2-zone' }, wkAurora('wiki2-out', 'system', { cls: 'wk-ccard-cover', watermark: '외' }), el('div', { class: 'wk-ccard-body wk2-zhead' }, el('span', { class: 'wk-ccard-ic letter', 'aria-hidden': 'true', text: '외' }), el('div', { class: 'wk2-zh-row' }, el('span', { class: 'nm', text: '담당 외 대기' }), el('span', { class: 'sp' }), el('span', { class: 'm', text: outItems.length + '건' }))), el('div', { class: 'wk2-todo' }, el('div', { class: 'lb', text: `다른 카테고리의 검토 대기 · ${outItems.length}` }), el('div', { class: 'q', text: first.note ? splitNote(first.note).sum : (first.kind === 'new' ? '신규 문서 제안' : '수정 제안') }), el('div', { class: 'qm' }, el('span', { text: `${first.title}${isAck ? ' — 이미 반영됨, 사후확인' : ''} · ${first.catName} · ` }), el('span', { class: 'm', text: `AI(${first.agent || first.who}) · ${relTime(first.at)}` })), el('div', { class: 'act' }, goBtn)), el('div', { class: 'wk2-fu' }, el('div', { class: 'lb', text: '조직 전체' }), el('div', { class: 'wk2-fur' }, el('span', { class: 'tx', text: `오늘 변화 ${today.length}건 · 미러 갱신 ${today.filter((r) => r.provenance === 'observed').length}건` }))), el('div', { class: 'wk2-zf' }, el('span', { class: 'sp' }), histA)));
         }
         kids.push(grid);
         // 그 외 카테고리 칩(전체 보기에서만).
@@ -911,7 +910,7 @@ export async function renderWiki2(view, sub, params) {
         box.replaceChildren(...kids);
     }
     async function repaint() {
-        const box = el('div', {});
+        const box = el('div', { class: 'wk2-board' }); // 전 뷰 1180px 컨테이너 — 와이드 화면에서 카드가 잘게 쪼개지지 않게(#764 wk-wide 동형)
         main.replaceChildren(box);
         if (mode === 'history')
             await paintHistory(box);
