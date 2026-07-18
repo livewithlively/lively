@@ -23,15 +23,15 @@ function wk2Styles(): void {
   if (document.getElementById('wk2-styles')) return;
   document.head.appendChild(el('style', { id: 'wk2-styles', text: `
 .wk2-main{padding:20px 28px 40px;min-width:0}
-.wk2-board{max-width:1180px;margin:0 auto}
+.wk2-board{max-width:1440px;margin:0 auto}
 .wk2-hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}
 .wk2-hero h2{font-size:19px;font-weight:800;margin:0}
 .wk2-hero .sum{font-size:13px;color:var(--ink-sub)}
 .wk2-hero .sum b{font-family:ui-monospace,monospace;color:var(--ink);font-variant-numeric:tabular-nums}
 .wk2-hero .sp{flex:1}
 .wk2-gateoff{margin:-6px 0 14px;font-size:12.5px;color:var(--ink-sub)}
-.wk2-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}
-.wk2-grid.single{grid-template-columns:minmax(430px,760px)}
+.wk2-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
+.wk2-grid.single{grid-template-columns:minmax(380px,640px)}
 .wk2-zone{background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
 .wk2-zhead{padding:0 16px 0}
 .wk2-zh-row{display:flex;align-items:baseline;gap:9px;margin-top:8px;min-width:0}
