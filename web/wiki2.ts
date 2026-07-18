@@ -33,13 +33,12 @@ function wk2Styles(): void {
 .wk2-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px}
 .wk2-grid.single{grid-template-columns:minmax(380px,640px)}
 .wk2-zone{background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
-.wk2-zhead{padding:0 16px 0}
-.wk2-zh-row{display:flex;align-items:baseline;gap:9px;margin-top:8px;min-width:0}
-.wk2-zh-row .nm{font-size:15.5px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wk2-zh-row .own{font-size:10.5px;color:var(--ink-sub);border:1px solid var(--line);border-radius:999px;padding:0 7px;flex:none}
-.wk2-zh-row .sp{flex:1}
-.wk2-zh-row .m{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted-2);white-space:nowrap}
-.wk2-todo{margin:0 14px;border:1px solid var(--line-note);background:var(--bg-note);border-radius:10px;padding:11px 13px}
+.wk2-zh{display:flex;align-items:baseline;gap:9px;padding:12px 16px 2px;min-width:0}
+.wk2-zh .nm{font-size:15.5px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+.wk2-zh .own{font-size:10.5px;color:var(--ink-sub);border:1px solid var(--line);border-radius:999px;padding:0 7px;flex:none}
+.wk2-zh .sp{flex:1}
+.wk2-zh .m{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted-2);white-space:nowrap;flex:none}
+.wk2-todo{margin:8px 14px 0;border:1px solid var(--line-note);background:var(--bg-note);border-radius:10px;padding:11px 13px}
 .wk2-todo .lb{font-size:10.5px;font-weight:800;letter-spacing:.05em;color:var(--ink-note);margin-bottom:5px}
 .wk2-todo .q{font-size:13.5px;font-weight:650;color:var(--ink);line-height:1.5}
 .wk2-todo .qm{font-size:11.5px;color:var(--ink-sub);margin-top:3px}
@@ -445,16 +444,14 @@ export async function renderWiki2(view: any, sub: string, params: URLSearchParam
       const first = waiting[0] || applied[0] || null;
       const rows = feed.filter((r) => String(r.category_key || '') === key).slice(0, opts && opts.extended ? 8 : 3);
       const cn = canonN.get(key);
-      // 커버 = WIKI 홈 카테고리 카드와 동일 문법(#764v2 오로라 + 겹침 이니셜 타일) — 두 탭이 같은 얼굴.
+      // 커버 = WIKI 홈 카테고리 카드와 동일 오로라(#764v2). 코너 워터마크가 이니셜을 담으므로 별도 아이콘 타일은 두지 않는다(중복·프로필처럼 보임).
       const initial = (Array.from(String(c.name || c.key || '?').trim())[0] || '?').toUpperCase();
       const cover = wkAurora(String(c.key || c.id), c.space, { cls: 'wk-ccard-cover', watermark: initial });
-      const head = el('div', { class: 'wk-ccard-body wk2-zhead' },
-        el('span', { class: 'wk-ccard-ic letter', 'aria-hidden': 'true', text: initial }),
-        el('div', { class: 'wk2-zh-row' },
-          el('span', { class: 'nm', text: c.name || c.key }),
-          mineKeys.includes(key) ? el('span', { class: 'own', text: '담당' }) : null,
-          el('span', { class: 'sp' }),
-          el('span', { class: 'm', text: (cn != null ? `정본 ${cn} · ` : '') + `이번 주 ${feed.filter((r) => String(r.category_key || '') === key).length}` })));
+      const head = el('div', { class: 'wk2-zh' },
+        el('span', { class: 'nm', text: c.name || c.key }),
+        mineKeys.includes(key) ? el('span', { class: 'own', text: '담당' }) : null,
+        el('span', { class: 'sp' }),
+        el('span', { class: 'm', text: (cn != null ? `정본 ${cn} · ` : '') + `이번 주 ${feed.filter((r) => String(r.category_key || '') === key).length}` }));
       let todo: any;
       if (first) {
         const isAck = first.kind === 'edit' && first.mode === 'applied';
@@ -500,9 +497,7 @@ export async function renderWiki2(view: any, sub: string, params: URLSearchParam
       histA.onclick = (e: any) => { e.preventDefault(); f.cat = ''; location.hash = hashFor('history'); };
       grid.append(el('div', { class: 'wk2-zone' },
         wkAurora('wiki2-out', 'system', { cls: 'wk-ccard-cover', watermark: '외' }),
-        el('div', { class: 'wk-ccard-body wk2-zhead' },
-          el('span', { class: 'wk-ccard-ic letter', 'aria-hidden': 'true', text: '외' }),
-          el('div', { class: 'wk2-zh-row' }, el('span', { class: 'nm', text: '담당 외 대기' }), el('span', { class: 'sp' }), el('span', { class: 'm', text: outItems.length + '건' }))),
+        el('div', { class: 'wk2-zh' }, el('span', { class: 'nm', text: '담당 외 대기' }), el('span', { class: 'sp' }), el('span', { class: 'm', text: outItems.length + '건' })),
         el('div', { class: 'wk2-todo' },
           el('div', { class: 'lb', text: `다른 카테고리의 검토 대기 · ${outItems.length}` }),
           el('div', { class: 'q', text: first.note ? splitNote(first.note).sum : (first.kind === 'new' ? '신규 문서 제안' : '수정 제안') }),
