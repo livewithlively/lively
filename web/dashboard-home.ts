@@ -383,6 +383,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   let mode = dashProjFilterDefault(); // 진행 중 | 전체 — 완료 프로젝트 포함 여부(기본값 ⚙ 개인화).
   let selectedListId: any;      // 선택된 리스트(아래 목록 필터). 기본=첫 리스트.
   let currentOrder: any[] = []; // 현재 표시 중인 리스트 순서(드래그 재정렬 기준).
+  const justCreated = new Set<number>(); // 이 화면에서 방금 만든 리스트 — 비어도 개요에 뜨게(#762 '만들었는데 안 보임' 방지).
   const draw = () => {
     const shown = mode === 'active' ? projects.filter((p) => !isDone(p)) : projects;
     zone.countEl.textContent = String(shown.length);
@@ -394,13 +395,15 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     // '내 프로젝트' 개요는 **내 프로젝트가 있는 리스트만** — 전체 조직 리스트를 다 노출하던 버그 수정.
     //  (예전 #req '빈 리스트도 노출'이 lists 전체에 과적용돼, 내 프로젝트 1개만 생겨도 관여 안 한 모든 열린 리스트가 카드로 떴다.
     //   새/빈 리스트는 프로젝트를 추가하면 byList 에 들어와 자동 등장하고, '＋ 새 리스트' 카드로 만들 수 있다.)
-    const base = [...lists.filter((l) => byList.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
+    // 내 프로젝트 있는 리스트(byList) + 이 화면에서 방금 만든 리스트(justCreated) — 새 리스트가 비어도 개요에 뜨게(#762).
+    const base = [...lists.filter((l) => byList.has(l.id) || justCreated.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
     currentOrder = dashApplyListOrder(base);
     // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
     const hiddenOv = dashOvHidden();
-    const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션
-    const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id)));
-    if (selectedListId === undefined || !byList.has(selectedListId) || hiddenOv.has(Number(selectedListId))) {
+    const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션 — 단, 방금 만든 리스트는 예외.
+    const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id) && !justCreated.has(Number(id))));
+    // 선택 리스트가 '보이는 목록'에 없을 때만 첫 카드로 폴백(방금 만든 빈 리스트 선택 유지).
+    if (selectedListId === undefined || !visibleOrder.some((id) => Number(id) === Number(selectedListId))) {
       selectedListId = visibleOrder.length ? visibleOrder[0] : currentOrder[0];
     }
     let gridEl;
@@ -449,7 +452,12 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         if (busy) return;
         if (!name) { showBtn(); return; }
         busy = true; input.disabled = true;
-        try { await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) }); toast('리스트를 추가했어요'); await reloadAll(); }
+        try {
+          const r: any = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) });
+          const newId = Number((r && (r.id || (r.list && r.list.id) || r.list_id)) || 0);
+          if (newId) { justCreated.add(newId); selectedListId = newId; } // 방금 만든 리스트를 개요에 띄우고 선택(비어도)
+          toast('리스트를 추가했어요'); await reloadAll();
+        }
         catch (e: any) { toast('실패 — ' + (e && e.message || e), true); busy = false; input.disabled = false; input.focus(); }
       };
       input.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } else if (e.key === 'Escape') { e.preventDefault(); showBtn(); } });
