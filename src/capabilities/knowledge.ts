@@ -9,6 +9,7 @@ import {
   linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
   setKnowledgePropsUi, moveKnowledge, type WikiLinkResult, appendBody, isDuplicateAppend,
+  listKnowledgeFeed,
 } from "../v6/knowledge-store.js";
 import { getKnowledgeViewConfig, setKnowledgeViewConfig } from "../v6/view-config-store.js";
 import {
@@ -18,6 +19,7 @@ import {
 import { resolveKnowledgeGate } from "../v6/knowledge-gate.js";
 import {
   proposeRevision, listRevisions, getRevision, approveRevision, rejectRevision, pendingRevisionFor, pendingStagedRevisionId, reviewQueueCounts,
+  reviewQueueCountsByCategory,
 } from "../v6/knowledge-revision-store.js";
 // #802 검토 대기 개인화 — '내 도메인' = 내 팀이 오너인 카테고리(me 의 team_owner_category_ids 와 같은 소스).
 import { memberCategories } from "../v6/team-store.js";
@@ -180,7 +182,8 @@ const knowledgeSave: Capability = {
     "**시딩 지식 경고(#846): 응답에 seed_warning 이 오면** 이 지식은 신규 고객 게이트웨이에 시딩되는 런북이라, 이 WIKI 편집은 고객이 받는 각색 스냅샷(src/org/seed-knowledge/…)에 자동 반영되지 않는다 — 안내대로 그 파일도 갱신하고, 그 사실을 사용자에게 알려라. " +
     "**append 모드(#921): 기존 문서에 내용을 보탤 땐 mode='append' 를 써라** — 이때 body_md 는 전문이 아니라 **덧붙일 조각**이고, 서버가 기존 본문 끝에 빈 줄로 잇는다. " +
     "전문을 읽어와(knowledge_get) 재조립해 통째로 되보내지 마라 — 원문이 그대로 보존되고(네가 재출력하며 생기는 요약·드리프트·누락이 없다) 전문이 컨텍스트를 오갈 일도 없다. " +
-    "기존 지식 전용(name 필수 · 신규는 mode 없이 만들고 · 외부 미러(observed)엔 불가), 응답엔 본문 전문 대신 증분 요약(appended)만 온다.",
+    "기존 지식 전용(name 필수 · 신규는 mode 없이 만들고 · 외부 미러(observed)엔 불가), 응답엔 본문 전문 대신 증분 요약(appended)만 온다. " +
+    "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드(WIKI2 검증)와 변화 기록에 그 문장이 그대로 표시된다.",
   scope: "memory",
   input: {
     name: z.string().max(64).optional(),
@@ -205,6 +208,8 @@ const knowledgeSave: Capability = {
       .describe("#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존."),
     mode: z.enum(["replace", "append"]).optional()
       .describe("#921 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화). append 는 기존 지식 전용(name 필수)."),
+    change_note: z.string().max(600).optional()
+      .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록(WIKI2)에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다."),
   },
   expose: {
     mcp: true,
@@ -239,6 +244,7 @@ const knowledgeSave: Capability = {
           is_folder,
           parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
           mode,                                                             // #921 replace(기본)|append
+          change_note: b.change_note ? String(b.change_note).slice(0, 600) : undefined,   // #968 변경 요약(검토 카드·기록)
         };
       } }],
   },
@@ -346,6 +352,7 @@ const knowledgeSave: Capability = {
         // #921 append 면 saveInput.body_md 는 '조각'이 아니라 base+조각 전문 — 승인(applyRevisionBody)이 전문 교체라 조각을 넣으면 문서가 날아간다.
         next: { title: input.title ?? null, body_md: String(saveInput.body_md ?? ""), summary: null, type: input.type ?? null },
         proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+        note: input.change_note ?? null,   // #968 변경 요약 — 검토 카드·변화 기록에 그대로 표시
       });
       return {
         knowledge: null,
@@ -366,6 +373,7 @@ const knowledgeSave: Capability = {
         base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
         next: { title: input.title ?? null, body_md: String(saveInput.body_md ?? ""), summary: null, type: input.type ?? null },
         proposed_by: writeCtx.actor, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+        note: input.change_note ?? null,   // #968 변경 요약
       });
       return {
         ...withBody(knowledge),
@@ -1014,7 +1022,38 @@ const reviewQueueSummary: Capability = {
     const cats = memberId ? await memberCategories(memberId).catch(() => []) : [];
     const owner = cats.filter((c) => c.owner);
     const counts = await reviewQueueCounts(owner.map((c) => c.category_id));
-    return { ...counts, mine_category_keys: owner.map((c) => c.key) };
+    // #968 by_category — WIKI2 사이드바(카테고리 트리) 배지용. 실패해도 총계는 살린다(추가 표면일 뿐).
+    const by_category = await reviewQueueCountsByCategory().catch(() => [] as { key: string | null; n: number }[]);
+    return { ...counts, mine_category_keys: owner.map((c) => c.key), by_category };
+  },
+};
+
+// ════════ #968 WIKI2 '기록' 피드 — 지식 변화의 파악 표면(검증 뷰의 짝). ════════
+//  상태 스냅샷 파생(지식당 최신 1건)이지 이벤트 원장이 아니다 — UI 가 그 한계를 그대로 말한다.
+//  activity_at = GREATEST(updated_at, last_synced_at): 미러 재싱크는 updated_at 을 안 움직이므로(원본이 진실)
+//  이 키가 아니면 방금 싱크된 미러가 피드에 안 뜬다. pending 은 격리 원칙대로 제외(검증 뷰가 큐로 보여준다).
+const wiki2Feed: Capability = {
+  name: "wiki2_feed",
+  title: "WIKI2 기록 피드",
+  description: "지식 변화 피드 — activity_at(=GREATEST(updated_at, last_synced_at)) 내림차순. 카테고리(id)·주체(human|ai)·기간(days)·limit 필터.",
+  scope: "memory",
+  input: {},
+  expose: {
+    mcp: false,   // 사람 파악 표면 — 에이전트는 knowledge_list(orderBy=updated_at)로 충분.
+    rest: [{ method: "GET", paths: ["/api/ui/wiki2/feed"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return {
+          days: query.days ? Number(query.days) : undefined,
+          categoryId: query.category ? Number(query.category) : undefined,   // knowledge_list 와 동일 규약(category=id)
+          by: query.by ? String(query.by) : undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any) => {
+    const entries = await listKnowledgeFeed(input);
+    return { entries };
   },
 };
 
@@ -1029,6 +1068,7 @@ export const knowledgeCapabilities: Capability[] = [
   knowledgeViewGet, knowledgeViewSet, knowledgeCommentReaction,   // #592 정적 경로 — /:name 계열보다 먼저
   knowledgeRevisions, knowledgeRevisionGet, knowledgeRevisionReview,   // #783 수정 검토 큐(/knowledge-revisions* — :name 과 다른 경로)
   reviewQueueSummary,   // #802 검토 대기 카운트(/review-queue/summary — 대시보드·nav 배지)
+  wiki2Feed,            // #968 WIKI2 기록 피드(/wiki2/feed — 정적 경로, :name 과 무충돌)
   knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
   knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)

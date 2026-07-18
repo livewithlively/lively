@@ -43,7 +43,8 @@ function hasScope(s) {
     return !!(state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes(s));
 }
 // 패널 전용 CSS 1회 주입(546KB styles.css 를 건드리지 않는 기존 관례 — admin.ts oaEnsureStyles 동형).
-function rqEnsureStyles() {
+//  export(#968): WIKI2 가 diffView(.rq-diff/.rq-dl)를 재사용하므로 그 스타일도 함께 필요하다.
+export function rqEnsureStyles() {
     if (document.getElementById('rq-styles'))
         return;
     document.head.appendChild(el('style', {
@@ -604,7 +605,8 @@ async function fillExpand(exp, it) {
 }
 // ── 줄단위 diff — 공통 prefix/suffix 를 깎고 가운데만 LCS(편집은 대개 국소적이라 창이 작다). ──
 //  가드: 남은 창이 800×800 을 넘으면 LCS 를 포기하고 블록 치환으로 폴백(브라우저 프리즈 방지).
-function lineDiff(aStr, bStr) {
+//  export(#968): WIKI2 검증 뷰가 같은 diff(변경 블록 파생·원문 비교 접힘)를 쓴다 — 알고리즘 두 벌 금지.
+export function lineDiff(aStr, bStr) {
     const a = String(aStr ?? '').split('\n'), b = String(bStr ?? '').split('\n');
     let s = 0;
     while (s < a.length && s < b.length && a[s] === b[s])
@@ -664,8 +666,8 @@ function lineDiff(aStr, bStr) {
         out.push({ t: ' ', s: b[k] });
     return out;
 }
-// 변경 주변 3줄만 — 긴 동일 구간은 접는다(스크롤 피로 감소).
-function diffView(before, after) {
+// 변경 주변 3줄만 — 긴 동일 구간은 접는다(스크롤 피로 감소). export(#968): WIKI2 '원문 비교' 접힘이 재사용.
+export function diffView(before, after) {
     const d = lineDiff(before, after);
     const CTX = 3;
     const keep = new Array(d.length).fill(false);
