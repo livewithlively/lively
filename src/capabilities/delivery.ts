@@ -22,6 +22,10 @@ import { listLogs } from "../log-janitor.js";
 import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import {
+  type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES,
+  KNOWN_HARNESSES, RETENTION_MAX_DAYS,
+} from "../org/session-share.js";
 import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../session-cache.js";
 // 경보 알림(#813) — 웹훅 URL 은 시크릿이라 값이 응답·감사에 절대 나가지 않는다(alerts.ts 머리주석 참조).
 import { loadAlertChannel, saveAlertChannel, removeAlertChannel, sendTestAlert } from "../alerts.js";
@@ -1156,6 +1160,7 @@ export const deliveryCapabilities: Capability[] = [
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
+        session_share?: SessionSharePatch;
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -1305,6 +1310,39 @@ export const deliveryCapabilities: Capability[] = [
           request_timeout_ms: timeoutMs,
         };
       }
+      // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. 잡값·미지원 하네스·범위초과는 여기서 400,
+      //  store 의 normalizeSessionShare 가 최종 방어. resume_policy 는 v1 고정이라 입력받지 않는다.
+      if (input.session_share !== undefined) {
+        const raw = input.session_share;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_share 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const p: SessionSharePatch = {};
+        // 🔴 enabled 는 **엄격 boolean**만 — 이건 조직 전체 대화 전문 캡처의 마스터 스위치다. Boolean(1)/Boolean("no")
+        //  같은 느슨한 coercion 은 순수 resolve 계층(=== true)·그 테스트가 지키는 불변식과 어긋난다(입력 경계에서 막는다).
+        if (s.enabled !== undefined) {
+          if (typeof s.enabled !== "boolean") throw new HttpError(400, "session_share.enabled 는 boolean 이어야 합니다");
+          p.enabled = s.enabled;
+        }
+        if (s.harnesses !== undefined) {
+          if (!Array.isArray(s.harnesses)) throw new HttpError(400, "session_share.harnesses 는 배열이어야 합니다");
+          const hs = s.harnesses.map((h) => str(h, "session_share.harnesses[]", 40).trim());
+          for (const h of hs) if (!KNOWN_HARNESSES.includes(h)) throw new HttpError(400, `session_share.harnesses 항목 '${h}' 는 ${KNOWN_HARNESSES.join("|")} 만 허용됩니다`);
+          p.harnesses = [...new Set(hs)];
+        }
+        if (s.scope !== undefined && !(SESSION_SHARE_SCOPES as readonly string[]).includes(String(s.scope))) throw new HttpError(400, `session_share.scope 는 ${SESSION_SHARE_SCOPES.join("|")} 만 허용됩니다`);
+        if (s.scope !== undefined) p.scope = String(s.scope) as SessionSharePatch["scope"];
+        if (s.store !== undefined && !(SESSION_SHARE_STORES as readonly string[]).includes(String(s.store))) throw new HttpError(400, `session_share.store 는 ${SESSION_SHARE_STORES.join("|")} 만 허용됩니다`);
+        if (s.store !== undefined) p.store = String(s.store) as SessionSharePatch["store"];
+        if (s.view_policy !== undefined && !(SESSION_SHARE_VIEW_POLICIES as readonly string[]).includes(String(s.view_policy))) throw new HttpError(400, `session_share.view_policy 는 ${SESSION_SHARE_VIEW_POLICIES.join("|")} 만 허용됩니다`);
+        if (s.view_policy !== undefined) p.view_policy = String(s.view_policy) as SessionSharePatch["view_policy"];
+        if (s.retention_days !== undefined) {
+          // null/'' 은 Number() 가 0(=무제한)으로 삼켜버린다 — '값 없음'이 조용히 '무제한'이 되면 안 된다. 명시 거부.
+          const n = (s.retention_days === null || s.retention_days === "") ? NaN : Number(s.retention_days);
+          if (!Number.isFinite(n) || n < 0 || n > RETENTION_MAX_DAYS) throw new HttpError(400, `session_share.retention_days 는 0~${RETENTION_MAX_DAYS} 정수여야 합니다(0=무제한)`);
+          p.retention_days = Math.floor(n);
+        }
+        patch.session_share = p;
+      }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
@@ -1318,6 +1356,10 @@ export const deliveryCapabilities: Capability[] = [
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
       pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
+      session_share: z.object({
+        enabled: z.boolean(), harnesses: z.array(z.string()), scope: z.enum(["main", "tree"]),
+        store: z.enum(["slim", "raw"]), retention_days: z.number(), view_policy: z.enum(["attach", "owner"]),
+      }).partial().optional().describe("세션이력 캡처 정책(#905 C1) — 기본 enabled=false. 관리탭 ▸ 세션 공유"),
       hook_relay_decisions: z.array(z.enum(["deny", "defer", "ask", "allow"])).optional()
         .describe("커스텀 훅(PreToolUse)의 결정 중 러너가 하네스로 전파할 값(#892). 기본 deny·ask·defer — 'allow' 는 멤버의 권한 프롬프트를 건너뛰므로 명시 opt-in. 비우면 전파 안 함(게이트 해제)"),
       // ⚠ 중첩 객체도 하위 키를 다 적어야 한다 — zod 는 미선언 하위 키를 strip 한다(#923).
