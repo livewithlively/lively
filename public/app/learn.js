@@ -22,17 +22,16 @@ const DOCS_NAV = [
             { key: 'overview', label: '라이블리 개요', href: '#/learn' },
             { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
         ] },
-    // 읽는 문서가 아니라 '직접 해서 시작하는' 것들 — 온보딩 입구·5분 따라하기·화면 위 투어(#780). '시작하기'(온보딩
+    // 읽는 문서가 아니라 '직접 해서 시작하는' 것들 — 온보딩 입구·예시·프로젝트 체험·화면 위 투어. '시작하기'(온보딩
     //  입구, #846/850)가 맨 위인 이유: 여기 없으면 홈 칩(미완일 때만)이 사라진 뒤 URL 직접 치는 것 말고 들어갈 길이 없다.
-    //  그룹명이 '직접 해보기'인 이유: 'AI 세션 체험'은 이 온보딩 페이지 자체의 이름이라 그룹명과 겹치면 안 된다. 페이지 H1(start.ts)과 라벨을 맞춘다(#762 '시작하기'→'AI 세션 체험').
+    //  #1000 URI 통일: 직접 해보기 그룹은 전부 #/start/* — '시작하기'(#/start) 아래로 examples·project·tour 를 모은다
+    //  (옛 #/learn/docs/examples · #/learn/tour 는 리다이렉트로 보존, main.ts). 첫 항목 라벨을 '시작하기'로 바꿔(옛 'AI
+    //  세션 체험') 그룹명 '직접 해보기'와 겹치지 않게 하고 페이지 H1(start.ts)과 맞춘다.
     { group: '직접 해보기', items: [
-            { key: 'start', label: 'AI 세션 체험', href: '#/start' },
-            { key: 'examples', label: '이런 걸 시켜보세요', href: '#/learn/docs/examples' }, // #853 — 세션에 무엇을 시킬지 예시 모음(구 '전체 사용 흐름' step-4 분리)
-            { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' }, // #853 — 프로젝트 한 바퀴 손수 투어(project-do)
-            // #762 '내 AI 세션 생성'(#/learn/install) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제 + main.ts 라우트 렌더 복원.
-            //  화면 컴포넌트(renderInstall)는 그대로 살아 있다(#/start/setup 이 재사용). 여기서 지운 건 진입 링크뿐.
-            // { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
-            { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
+            { key: 'start', label: '시작하기', href: '#/start' },
+            { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' }, // #853 세션에 무엇을 시킬지 예시 · #1000 URI #/start/*
+            { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' }, // #853 프로젝트 한 바퀴 손수 투어
+            { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' }, // #1000 #/learn/tour → #/start/tour
         ] },
     { group: '화면별 안내', items: [
             { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
@@ -465,16 +464,15 @@ async function renderInstall(view) {
     loadAdmin().then((data) => drawInstallGuide(slot, data))
         .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
 }
-// 설치 화면을 '팝업(모달)'으로 — 온보딩(#/start) '로컬에서 만들기'에서 호출. 페이지 이동 대신 그 자리에서 띄운다.
-//  사이드바 없이 설치 가이드(drawInstallGuide)만 담고, 헤더의 '전체보기 ↗'로 전체 페이지(#/start/setup)로 넘어갈 수 있다.
-//  프로젝트 상세 팝업(.pjv-pm)과 같은 셸을 재사용한다.
+// 설치 화면을 '팝업(모달)'으로 — #/start ② '내 컴퓨터에서도 쓰기'와 '예전 환경 가져오기'에서 호출. 페이지 이동 없이 그 자리에서.
+//  #1000: 설치는 모달이 유일 표면이다(옛 전체페이지 #/start/setup 은 폐지 → #/start 리다이렉트). 그래서 '전체보기 ↗' 링크를 없앴다.
+//  사이드바 없이 설치 가이드(drawInstallGuide)만 담는다. 프로젝트 상세 팝업(.pjv-pm)과 같은 셸을 재사용한다.
 function openInstallModal() {
     const back = el('div', { class: 'pjv-pm-back' });
     const box = el('div', { class: 'pjv-pm' });
     const bodyEl = el('div', { class: 'pjv-pm-body' });
-    const fullLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/start/setup', text: '전체보기 ↗', title: '설치 화면을 전체 페이지로 열기' });
     const closeBtn = el('button', { class: 'pjv-pm-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', text: '✕' });
-    box.append(el('div', { class: 'pjv-pm-head' }, fullLink, closeBtn), bodyEl);
+    box.append(el('div', { class: 'pjv-pm-head' }, el('b', { class: 'pjv-pm-title', text: '내 컴퓨터에 설치' }), closeBtn), bodyEl);
     back.append(box);
     let closed = false;
     const close = () => {
@@ -482,6 +480,7 @@ function openInstallModal() {
             return;
         closed = true;
         document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('hashchange', close);
         document.body.classList.remove('pjv-pm-open');
         back.remove();
     };
@@ -490,8 +489,9 @@ function openInstallModal() {
     back.addEventListener('mousedown', (e) => { if (e.target === back)
         close(); });
     closeBtn.onclick = (e) => { e.stopPropagation(); close(); };
-    fullLink.onclick = () => close(); // 전체 페이지로 나갈 땐 모달을 닫는다
     document.addEventListener('keydown', onKey, true);
+    // 모달엔 사이드바가 없어 라우팅(뒤로가기·딥링크)이 유일한 이탈 경로다 — 해시가 바뀌면 닫아 다음 화면 위에 남지 않게(#1000).
+    window.addEventListener('hashchange', close);
     document.body.append(back);
     document.body.classList.add('pjv-pm-open');
     const slot = el('div', { class: 'install-guide' }, skeleton('설치 안내를 준비하는 중'));

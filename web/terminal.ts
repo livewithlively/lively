@@ -930,7 +930,8 @@ function startTerminalTour(firstStep?, opts?) {
       target: '[data-tour="new-session"]',
       title: '① 새 세션 만들기',
       body: [el('p', { class: 'tour-p' }, '오른쪽 위 파란 ', el('b', { text: '[+ 새 세션]' }), ' 버튼을 눌러 주세요. 세션 만들기 창이 열립니다.')],
-      placement: 'bottom', advanceOn: 'click',
+      // scrollIntoView: 버튼이 뷰포트 밖이면 스포트라이트 구멍이 화면 밖이 돼 딤이 통째로 덮여 클릭이 막힌다(#1000).
+      placement: 'bottom', advanceOn: 'click', scrollIntoView: true,
     },
     {
       target: '[data-tour="label"]',
